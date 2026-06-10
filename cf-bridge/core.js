@@ -171,6 +171,17 @@ async function startServer(host, opts) {
 }
 function connectRelay(host, opts) {
     const WebSocket = require('ws');
+    let wsAgent = undefined;
+    if (opts.proxy) {
+        try {
+            const { HttpsProxyAgent } = require('https-proxy-agent');
+            wsAgent = new HttpsProxyAgent(opts.proxy);
+            host.log('bridge via proxy ' + opts.proxy);
+        }
+        catch (e) {
+            host.log('proxy agent load failed: ' + (e && e.message || e));
+        }
+    }
     let sock = null;
     let connected = false;
     let stopped = false;
@@ -183,7 +194,7 @@ function connectRelay(host, opts) {
         if (stopped)
             return;
         try {
-            sock = new WebSocket(wsUrl);
+            sock = new WebSocket(wsUrl, wsAgent ? { agent: wsAgent } : undefined);
         }
         catch {
             schedule();
