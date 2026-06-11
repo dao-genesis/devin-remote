@@ -1780,6 +1780,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ni" data-tab="playbooks" onclick="sw('playbooks')" title="Playbooks">📋</div>
 <div class="ni" data-tab="secrets" onclick="sw('secrets')" title="Secrets">🔑</div>
 <div class="ni" data-tab="integrations" onclick="sw('integrations')" title="Integrations">🔗</div>
+<div class="ni" data-tab="inject" onclick="sw('inject')" title="自动注入 Auto-Inject">💉</div>
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
 </nav>
@@ -1799,6 +1800,7 @@ ${orgName ? '<span class="b" style="background:#2d5a8a">' + mpEsc(orgName) + '</
 <div class="tv" id="v-playbooks"></div>
 <div class="tv" id="v-secrets"></div>
 <div class="tv" id="v-integrations"></div>
+<div class="tv" id="v-inject"></div>
 </div>
 <div class="ft" id="ft">
 <span><span class="dot off" id="ds"></span> Server</span>
@@ -1835,6 +1837,7 @@ const S={
   cf:{auth:${cfAuth}},
   bridge:${JSON.stringify(bridge || null)},
   inject:null,
+  injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],lastInjectedOrg:''},
   tab:'overview',
   data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]}
 };
@@ -1848,6 +1851,8 @@ function sw(t){
   // 帛书·「反者道之动也」— 认证策略根本修复
   // cog_ API Key → Devin API完全可用 → 加载真实数据
   // devin-session-token$ → 仅Codeium API → 显示创建API Key引导
+  // 自动注入模块: 无需 cog_ key, 直接拉 profile 配置 (账号无关意图)
+  if(t==='inject'){ cmd('getInjectProfile'); return; }
   if(t!=='overview'&&S.auth.loggedIn){
     const v=document.getElementById('v-'+t);
     if(v&&!v.dataset.loaded){
@@ -1866,24 +1871,7 @@ function sw(t){
   }
 }
 function rc(){if(S.tab==='overview')rO()}
-function submitCogKey(){
-  const input=document.getElementById('cogKeyInput');
-  const key=input?input.value.trim():'';
-  if(!key||!key.startsWith('cog_')){toast('请输入有效的 cog_ API Key',false);return;}
-  cmd('setCogApiKey',{key:key});
-}
-function submitCogKey2(){
-  const input=document.getElementById('cogKeyInput2');
-  const key=input?input.value.trim():'';
-  if(!key||!key.startsWith('cog_')){toast('请输入有效的 cog_ API Key',false);return;}
-  cmd('setCogApiKey',{key:key});
-}
-function submitCogKey3(){
-  const input=document.getElementById('cogKeyInput3');
-  const key=input?input.value.trim():'';
-  if(!key||!key.startsWith('cog_')){toast('请输入有效的 cog_ API Key',false);return;}
-  cmd('setCogApiKey',{key:key});
-}
+// 帛书·「为而弗恃」: API Key 全程底层自动获取, 面板永不出现手动输入 — 旧 submitCogKey* 已删
 function rO(){
   const v=document.getElementById('v-overview');
   if(!S.auth.loggedIn){
@@ -1922,7 +1910,7 @@ function hm(){document.getElementById('mo').classList.add('hid')}
 function doOk(){if(window._onOk&&window._onOk()!==false)hm()}
 function toast(msg,ok){const t=document.getElementById('toast');t.textContent=msg;t.className='toast '+(ok?'ok':'err');setTimeout(()=>t.classList.add('hid'),3000)}
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});Object.assign(S.cf,d.cf||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;usb();rc()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok)rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});Object.assign(S.cf,d.cf||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;usb();rc()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab);if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
@@ -1975,13 +1963,37 @@ function rSD(d){
   if(!d.ok){toast('Session detail failed',false);return}
   const s=d.session||{};const msgs=d.messages||[];
   const v=document.getElementById('v-sessions');if(!v)return;
+  const sid=s.devin_id||s.id||'';
   let h='<div style="margin-bottom:8px"><button class="btn sm ghost" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;sessions&#39;})">← Back</button></div>';
-  h+='<div class="card"><div class="cr"><span class="l">Title</span><span class="v">'+esc(s.title||'')+'</span></div><div class="cr"><span class="l">Status</span><span class="v">'+esc(s.status||'')+'</span></div><div class="cr"><span class="l">ID</span><span class="v" style="font-size:10px">'+esc(s.devin_id||s.id||'')+'</span></div></div>';
+  h+='<div class="card"><div class="cr"><span class="l">Title</span><span class="v">'+esc(s.title||'')+'</span></div><div class="cr"><span class="l">Status</span><span class="v">'+esc(s.status||'')+'</span></div><div class="cr"><span class="l">ID</span><span class="v" style="font-size:10px">'+esc(sid)+'</span></div></div>';
+  h+='<div class="br" style="margin:8px 0"><button class="btn sm primary" onclick="cmd(&#39;exportSession&#39;,{sessionId:&#39;'+esc(sid)+'&#39;,kind:&#39;conversation&#39;})">📥 提取对话</button><button class="btn sm" onclick="cmd(&#39;exportSession&#39;,{sessionId:&#39;'+esc(sid)+'&#39;,kind:&#39;worklog&#39;})">📋 完整工作日志</button></div>';
   msgs.forEach(m=>{
     const role=m.role||m.type||'';const content=m.content||m.text||m.message||'';
     const isUser=role==='user'||role==='human';
     h+='<div class="card" style="border-left:3px solid '+(isUser?'var(--accent)':'var(--success)')+'"><div style="font-size:10px;color:var(--muted);margin-bottom:4px">'+(isUser?'👤 User':'🤖 Devin')+'</div><div style="font-size:12px;white-space:pre-wrap;max-height:200px;overflow-y:auto">'+esc(typeof content==='string'?content:JSON.stringify(content,null,2))+'</div></div>';
   });
+  v.innerHTML=h;
+}
+// 自动注入自循环配置面板 — 帛书·「善建者不拔·善抱者不脱」
+// 初始配置一次, 账号随 IDE 切换, 系统据此 profile 自动注入新账号 + 清理旧账号
+function ipSave(){cmd('setInjectProfile',{enabled:S.injectProfile.enabled,autoCleanup:S.injectProfile.autoCleanup,secrets:S.injectProfile.secrets,knowledge:S.injectProfile.knowledge,playbooks:S.injectProfile.playbooks})}
+function ipToggle(field){S.injectProfile[field]=!S.injectProfile[field];ipSave();rInject()}
+function ipRemove(kind,idx){S.injectProfile[kind].splice(idx,1);ipSave();rInject()}
+function ipAddSecret(){sm('添加 Secret','<input id="m1" placeholder="名称 KEY" style="width:100%;margin:4px 0"><input id="m2" placeholder="值 value" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim(),val=document.getElementById('m2').value;if(!n)return false;S.injectProfile.secrets.push({name:n,value:val});ipSave();rInject()})}
+function ipAddKnowledge(){sm('添加 Knowledge','<input id="m1" placeholder="名称" style="width:100%;margin:4px 0"><textarea id="m2" placeholder="正文 body" style="width:100%;height:80px;margin:4px 0"></textarea><input id="m3" placeholder="触发 trigger (默认 Always)" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.knowledge.push({name:n,body:document.getElementById('m2').value,trigger:document.getElementById('m3').value.trim()||'Always'});ipSave();rInject()})}
+function ipAddPlaybook(){sm('添加 Playbook','<input id="m1" placeholder="标题 title" style="width:100%;margin:4px 0"><textarea id="m2" placeholder="正文 body" style="width:100%;height:80px;margin:4px 0"></textarea>',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.playbooks.push({title:n,body:document.getElementById('m2').value});ipSave();rInject()})}
+function rInject(){
+  const v=document.getElementById('v-inject');if(!v)return;
+  const p=S.injectProfile||{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[]};
+  const tgl=(on,fn)=>'<span onclick="'+fn+'" style="cursor:pointer;display:inline-block;width:40px;height:20px;border-radius:10px;background:'+(on?'var(--success)':'var(--muted)')+';position:relative;vertical-align:middle"><span style="position:absolute;top:2px;left:'+(on?'22px':'2px')+';width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s"></span></span>';
+  let h='<div class="st">自动注入自循环 · 无为而无不为</div>';
+  h+='<p style="font-size:11px;color:var(--muted);line-height:1.6;margin:4px 0 10px">初始配置一次, 此后账号随 IDE 登录自动切换时, 系统按此清单自动注入新账号, 并(默认)清理旧账号的同名注入。</p>';
+  h+='<div class="card"><div class="cr"><span class="l">启用自动注入</span><span class="v">'+tgl(p.enabled,'ipToggle(&#39;enabled&#39;)')+'</span></div><div class="cr"><span class="l">切账号时清理旧账号</span><span class="v">'+tgl(p.autoCleanup,'ipToggle(&#39;autoCleanup&#39;)')+'</span></div>'+(p.lastInjectedOrg?'<div class="cr"><span class="l">上次注入 org</span><span class="v" style="font-size:10px">'+esc(p.lastInjectedOrg)+'</span></div>':'')+'</div>';
+  const listSec=(title,kind,items,labelFn,addFn)=>{let s='<div class="st">'+title+' ('+items.length+')<button class="btn sm primary" style="float:right" onclick="'+addFn+'">+ 添加</button></div>';if(items.length){s+='<div class="card">';items.forEach((it,i)=>{s+='<div class="cr"><span class="l" style="font-size:12px">'+esc(labelFn(it))+'</span><span class="v"><button class="btn sm danger" onclick="ipRemove(&#39;'+kind+'&#39;,'+i+')">删</button></span></div>'});s+='</div>'}else{s+='<p style="font-size:11px;color:var(--muted);margin:4px 0 8px">（空）</p>'}return s};
+  h+=listSec('🔑 Secrets','secrets',p.secrets,it=>it.name,'ipAddSecret()');
+  h+=listSec('📚 Knowledge','knowledge',p.knowledge,it=>it.name,'ipAddKnowledge()');
+  h+=listSec('📋 Playbooks','playbooks',p.playbooks,it=>it.title,'ipAddPlaybook()');
+  h+='<div class="br" style="margin-top:10px"><button class="btn" onclick="cmd(&#39;importCurrentToInjectProfile&#39;)">⬇️ 导入当前账号现有项</button>'+(p.enabled?'<button class="btn primary" onclick="cmd(&#39;setInjectProfile&#39;,{enabled:true})">▶️ 立即应用到当前账号</button>':'')+'</div>';
   v.innerHTML=h;
 }
 usb();rc();
@@ -2082,7 +2094,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'setCogApiKey', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -2162,6 +2174,68 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 }
                 break;
             }
+            case 'exportSession': {
+                // 本地对话提取 (移植 dao-devin-export): kind=conversation 纯对话 / worklog 完整日志
+                const sessionId = msg.sessionId as string;
+                const kind = (msg.kind === 'worklog' ? 'worklog' : 'conversation') as 'conversation' | 'worklog';
+                if (!sessionId) { reply({ type: 'actionResult', command: 'exportSession', ok: false }); break; }
+                vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '提取会话对话…' }, async () => {
+                    const fp = await devinExportSession(sessionId, kind);
+                    if (fp) {
+                        try { const doc = await vscode.workspace.openTextDocument(fp); await vscode.window.showTextDocument(doc, { preview: false }); } catch { /* 守柔 */ }
+                        vscode.window.showInformationMessage('对话已提取: ' + fp);
+                    } else {
+                        vscode.window.showErrorMessage('对话提取失败 (事件流/消息均不可用)');
+                    }
+                    refreshReply({ type: 'actionResult', command: 'exportSession', ok: !!fp });
+                });
+                break;
+            }
+            case 'getInjectProfile': {
+                // 自动注入自循环配置: 返回当前 profile 给面板渲染
+                const p = loadInjectProfile();
+                reply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: p.knowledge, playbooks: p.playbooks, lastInjectedOrg: p.lastInjectedOrg } });
+                break;
+            }
+            case 'setInjectProfile': {
+                // 保存 profile (enabled/autoCleanup/items) — 守柔: 仅覆盖传入字段
+                const cur = loadInjectProfile();
+                const np: InjectProfile = {
+                    enabled: typeof msg.enabled === 'boolean' ? msg.enabled : cur.enabled,
+                    autoCleanup: typeof msg.autoCleanup === 'boolean' ? msg.autoCleanup : cur.autoCleanup,
+                    secrets: Array.isArray(msg.secrets) ? msg.secrets : cur.secrets,
+                    knowledge: Array.isArray(msg.knowledge) ? msg.knowledge : cur.knowledge,
+                    playbooks: Array.isArray(msg.playbooks) ? msg.playbooks : cur.playbooks,
+                    lastInjectedOrg: cur.lastInjectedOrg,
+                };
+                saveInjectProfile(np);
+                // enabled 且当前已登录 → 立即应用一次到当前 org (自循环起点)
+                if (np.enabled && ws.devinOrgId && ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$')) {
+                    vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '应用自动注入配置…' }, async () => {
+                        try { await runInjectProfileSelfLoop(); } catch { /* 守柔 */ }
+                        sidebarCloudPanel?.refresh();
+                    });
+                }
+                refreshReply({ type: 'actionResult', command: 'setInjectProfile', ok: true });
+                break;
+            }
+            case 'importCurrentToInjectProfile': {
+                // 把当前 org 现有 knowledge/playbooks 导入 profile (一次性配置, 守柔: secrets 仅导入名不导入值)
+                if (!devinCanUseApi()) { reply({ type: 'actionResult', command: 'importCurrentToInjectProfile', ok: false }); break; }
+                const cur = loadInjectProfile();
+                try {
+                    const kl = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1);
+                    if (kl.ok && kl.learnings) for (const k of kl.learnings) { const nm = k.name || ''; if (nm && !cur.knowledge.some(x => x.name === nm)) cur.knowledge.push({ name: nm, body: k.body || '', trigger: k.trigger_description || 'Always' }); }
+                } catch { /* 守柔 */ }
+                try {
+                    const pl = await devinListPlaybooks(ws.devinOrgId, ws.devinAuth1);
+                    if (pl.ok && pl.playbooks) for (const pb of pl.playbooks) { const ti = pb.title || ''; if (ti && !cur.playbooks.some(x => x.title === ti)) cur.playbooks.push({ title: ti, body: pb.body || '' }); }
+                } catch { /* 守柔 */ }
+                saveInjectProfile(cur);
+                reply({ type: 'injectProfile', profile: cur });
+                refreshReply({ type: 'actionResult', command: 'importCurrentToInjectProfile', ok: true });
+                break;
+            }
             case 'devinLogin': {
                 vscode.window.showInputBox({ prompt: 'Devin Cloud Email', placeHolder: 'user@example.com' }).then(email => {
                     if (!email) return;
@@ -2175,37 +2249,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 });
                 break;
             }
-            case 'setCogApiKey': {
-                // 帛书·「道生一」— 设置cog_ API Key，启用Devin API完整访问
-                const cogKey = (msg.key as string || '').trim();
-                if (!cogKey || !cogKey.startsWith('cog_')) {
-                    reply({ type: 'actionResult', command: 'setCogApiKey', ok: false });
-                    vscode.window.showErrorMessage('Invalid API Key: must start with cog_');
-                    break;
-                }
-                // 验证key — 尝试调用self端点
-                ws.devinApiKey = cogKey;
-                ws.devinApiServerUrl = '';
-                // 尝试获取org信息
-                try {
-                    const selfR = await devinJsonGet('https://api.devin.ai/v1/self', { Authorization: 'Bearer ' + cogKey });
-                    if (selfR.status === 200 && selfR.json) {
-                        const sj = selfR.json;
-                        if (sj.org_id) ws.devinOrgId = sj.org_id;
-                        if (sj.org_name) ws.devinOrgName = sj.org_name;
-                        vscode.window.showInformationMessage('Devin API Key 验证成功 — 完整API访问已启用！');
-                    } else {
-                        // 即使self端点不可用，仍然保存key
-                        vscode.window.showInformationMessage('Devin API Key 已保存 (状态: ' + selfR.status + ')');
-                    }
-                } catch {
-                    vscode.window.showInformationMessage('Devin API Key 已保存');
-                }
-                ws.devinSaveConfig();
-                // 清除已加载的tab数据，强制重新加载
-                refreshReply({ type: 'actionResult', command: 'setCogApiKey', ok: true });
-                break;
-            }
+            // 帛书·「为而弗恃」: cog_ API Key 全程底层自动获取(devinEnsureCogApiKey),
+            // 面板永不出现手动输入/设置 — 旧 setCogApiKey 处理器已删。
             case 'devinWindsurfAutoLogin': {
                 const ok = await devinAutoChain();
                 if (ok) { vscode.window.showInformationMessage('Devin Cloud 自动登录成功'); await devinFullInject(); sidebarCloudPanel?.refresh(); }
@@ -2987,6 +3032,8 @@ async function devinLogin(email: string, password: string, retryCount?: number):
     ws.devinUserId = userId || j2.userId || '';  // user-XXX — 路由官网注入 auth1_session.userId
     ws.devinQuota = quota;
     ws.devinSaveConfig();
+    // 账号实时同源 · 按邮箱持久化真 auth1 → 切回该账号即刻命中(路径A)
+    saveAccountAuth(email);
     // 底层自动获取 cog_ API Key — 用户无为, 系统无不为
     if (!apiKey.startsWith('cog_')) { try { await devinEnsureCogApiKey(orgId, auth1); } catch {} }
     // ws即唯一真源 — 无需同步
@@ -3082,6 +3129,53 @@ function findAccountPassword(email: string): string {
     return hit ? hit.password : '';
 }
 
+// ═══════════════════════════════════════════════════════════
+// 道法自然 · 账号实时同源 — 按邮箱持久化真 auth1
+// 帛书·五十四「善建者不拔·善抱者不脱」: 切回旧账号即刻命中, 永不串号。
+// ~/.dao/dao-accounts-auth.json = { [emailLower]: {auth1,orgId,...} }
+// ═══════════════════════════════════════════════════════════
+const ACCOUNTS_AUTH_FILE = path.join(DAO_DIR, 'dao-accounts-auth.json');
+interface SavedAccountAuth {
+    auth1: string; orgId: string; orgName: string; orgSlug: string;
+    userId: string; accountId: string; apiKey: string; apiServerUrl: string; savedAt: string;
+}
+function loadAccountsAuthStore(): Record<string, SavedAccountAuth> {
+    try { return JSON.parse(fs.readFileSync(ACCOUNTS_AUTH_FILE, 'utf8')) || {}; } catch { return {}; }
+}
+// 仅持久化【真 auth1_】令牌 — session-token 不存(守柔, 防污染登录态)
+function saveAccountAuth(email?: string): void {
+    const e = (email || ws.devinEmail || '').trim().toLowerCase();
+    if (!e || !ws.devinAuth1 || ws.devinAuth1.startsWith('devin-session-token$')) return;
+    try {
+        const store = loadAccountsAuthStore();
+        store[e] = {
+            auth1: ws.devinAuth1, orgId: ws.devinOrgId, orgName: ws.devinOrgName, orgSlug: ws.devinOrgSlug,
+            userId: ws.devinUserId, accountId: ws.devinAccountId,
+            apiKey: (ws.devinApiKey || '').startsWith('cog_') ? ws.devinApiKey : '',
+            apiServerUrl: ws.devinApiServerUrl, savedAt: new Date().toISOString(),
+        };
+        fs.mkdirSync(DAO_DIR, { recursive: true });
+        fs.writeFileSync(ACCOUNTS_AUTH_FILE, JSON.stringify(store, null, 2), 'utf8');
+    } catch { /* 守柔 */ }
+}
+function loadAccountAuth(email: string): SavedAccountAuth | null {
+    const e = (email || '').trim().toLowerCase();
+    if (!e) return null;
+    return loadAccountsAuthStore()[e] || null;
+}
+
+// 守柔 · 保留用户操作空间 — 账号同步 / 官网登录 的「自动 | 手动」模式
+function getAccountSyncMode(): 'auto' | 'manual' {
+    try { return vscode.workspace.getConfiguration('dao').get<string>('accountSyncMode', 'auto') === 'manual' ? 'manual' : 'auto'; } catch { return 'auto'; }
+}
+function getWebsiteLoginMode(): 'auto' | 'manual' {
+    try { return vscode.workspace.getConfiguration('dao').get<string>('websiteLoginMode', 'auto') === 'manual' ? 'manual' : 'auto'; } catch { return 'auto'; }
+}
+// 自动注入自循环: 切账号时是否自动清理旧 org 注入 (默认 true, 用户可关)
+function getInjectAutoCleanup(): boolean {
+    try { return vscode.workspace.getConfiguration('dao').get<boolean>('injectAutoCleanup', true) !== false; } catch { return true; }
+}
+
 // 据 IDE 注入的 session token 解析当前登录 email — GetUserStatus 权威 whoami
 // 帛书·「不出於戶以知天下」— session token JWT 只含 session_id, 必须经 API 解析
 async function resolveActiveEmailFromToken(token: string): Promise<{ email: string; accountId: string } | null> {
@@ -3103,54 +3197,83 @@ async function devinAutoChain(): Promise<boolean> {
     // 窗口 = 工作区 = 账号 — 一次认证，自动注入一切
     // ═══════════════════════════════════════════════════════════
 
-    // 路径0 (最优·本源): vscdb session token → email → 账号池 → 五步登录
-    // 帛书·「反者道之动」— IDE 注入的 session token 不能访问 app.devin.ai,
-    // 但能经 GetUserStatus 解析真实 email; 账号池据 email 查密码换 auth1。
+    // ═══ 本源·账号实时同源: 先确定 IDE 当前登录邮箱(权威主键, 一切以它为准) ═══
+    let currentIdeEmail = '';
+    let ideToken = '';
     try {
         const wsCreds0 = readWindsurfCredentials(true);
-        const tok0 = wsCreds0 && wsCreds0.apiKey ? wsCreds0.apiKey : '';
-        if (tok0 && tok0.startsWith('devin-session-token$')) {
-            let email0 = (wsCreds0 && wsCreds0.email) || '';
-            if (!email0) {
-                const resolved = await resolveActiveEmailFromToken(tok0);
-                if (resolved) email0 = resolved.email;
+        ideToken = (wsCreds0 && wsCreds0.apiKey) || '';
+        currentIdeEmail = (wsCreds0 && wsCreds0.email) || '';
+        if (!currentIdeEmail && ideToken && ideToken.startsWith('devin-session-token$')) {
+            const resolved = await resolveActiveEmailFromToken(ideToken);
+            if (resolved) currentIdeEmail = resolved.email;
+        }
+    } catch { /* 守柔 */ }
+    // 即刻反映当前 IDE 账号 — 即便后续换不到 auth1, 面板也显示正确账号(永不串号)
+    if (currentIdeEmail) ws.devinEmail = currentIdeEmail;
+
+    // 路径A (最快·自循环): 按邮箱持久化的真 auth1 命中 → 切回旧账号即刻复用, 无需重登
+    if (currentIdeEmail) {
+        try {
+            const saved = loadAccountAuth(currentIdeEmail);
+            if (saved && saved.auth1 && saved.orgId) {
+                ws.devinAuth1 = saved.auth1; ws.devinOrgId = saved.orgId;
+                ws.devinOrgName = saved.orgName || ''; ws.devinOrgSlug = saved.orgSlug || '';
+                ws.devinUserId = saved.userId || ''; ws.devinAccountId = saved.accountId || '';
+                ws.devinApiKey = saved.apiKey || ''; ws.devinApiServerUrl = saved.apiServerUrl || '';
+                ws.devinEmail = currentIdeEmail;
+                const quota = await devinFetchQuota(ws.devinApiKey || ws.devinAuth1);
+                if (quota) {
+                    ws.devinQuota = quota; ws.devinSaveConfig();
+                    if (!(ws.devinApiKey || '').startsWith('cog_')) { try { await devinEnsureCogApiKey(ws.devinOrgId, ws.devinAuth1); } catch {} }
+                    return true;
+                }
+                // 该邮箱的 auth1 已失效 → 清除, 继续走登录换新
+                ws.devinAuth1 = ''; ws.devinOrgId = ''; ws.devinApiKey = '';
             }
-            if (email0) {
-                const pw0 = findAccountPassword(email0);
-                if (pw0) {
-                    const lr = await devinLogin(email0, pw0);
-                    if (lr.ok) {
-                        vscode.window.showInformationMessage('Devin Cloud 自动登录成功 (账号池·' + email0 + ')');
-                        return true;
-                    }
+        } catch { /* 守柔 */ }
+    }
+
+    // 路径B (账号池五步登录): 据 IDE 邮箱查密码 → 换真 auth1 → 持久化(下次走路径A)
+    if (currentIdeEmail) {
+        try {
+            const pw0 = findAccountPassword(currentIdeEmail);
+            if (pw0) {
+                const lr = await devinLogin(currentIdeEmail, pw0);
+                if (lr.ok) {
+                    saveAccountAuth(currentIdeEmail);
+                    vscode.window.showInformationMessage('Devin Cloud 自动登录成功 (账号池·' + currentIdeEmail + ')');
+                    return true;
                 }
             }
-        }
-    } catch { /* 守柔 · 降级旧路径 */ }
+        } catch { /* 守柔 */ }
+    }
 
-    // 路径1: 已保存的凭证 — 验证是否仍然有效
+    // 路径C: 已保存的【本工作区】凭证 — 仅当邮箱与当前 IDE 账号一致才恢复(绝不串号)
+    // 帛书·「知止不殆」: IDE 账号已切走时, 决不退回旧账号的 auth1。
     try {
         const cfg = JSON.parse(fs.readFileSync(ws.configFile, 'utf8'));
-        if (cfg.devinAuth1 && cfg.devinOrgId) {
+        const cfgEmail = (cfg.devinEmail || '').trim().toLowerCase();
+        const sameAccount = !currentIdeEmail || cfgEmail === currentIdeEmail.trim().toLowerCase();
+        if (sameAccount && cfg.devinAuth1 && cfg.devinOrgId) {
             ws.devinAuth1 = cfg.devinAuth1;
             ws.devinOrgId = cfg.devinOrgId;
             ws.devinOrgName = cfg.devinOrgName || '';
             ws.devinOrgSlug = cfg.devinOrgSlug || '';
-            ws.devinEmail = cfg.devinEmail || '';
+            ws.devinEmail = cfg.devinEmail || currentIdeEmail || '';
             ws.devinSessionToken = cfg.devinSessionToken || '';
             ws.devinApiKey = cfg.devinApiKey || '';
             ws.devinApiServerUrl = cfg.devinApiServerUrl || '';
             ws.devinAccountId = cfg.devinAccountId || '';
+            ws.devinUserId = cfg.devinUserId || '';
             ws.devinQuota = cfg.devinQuota || null;
             // Verify token still valid — 帛书·七十一「知不知尚矣」
-            // 帛书·「大成若缺」— devin-session-token$ 仅Codeium API可用
-            // 用GetUserStatus验证（而非app.devin.ai/api，后者不接受此格式）
             const quota = await devinFetchQuota(ws.devinApiKey || ws.devinAuth1);
             if (quota) {
                 ws.devinQuota = quota;
-                // 底层补全 cog_ key — 持久凭证恢复后亦自动获取
-                if (ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$') && !(ws.devinApiKey || '').startsWith('cog_')) {
-                    try { await devinEnsureCogApiKey(ws.devinOrgId, ws.devinAuth1); } catch {}
+                if (ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$')) {
+                    saveAccountAuth(ws.devinEmail);
+                    if (!(ws.devinApiKey || '').startsWith('cog_')) { try { await devinEnsureCogApiKey(ws.devinOrgId, ws.devinAuth1); } catch {} }
                 }
                 return true;
             }
@@ -3167,6 +3290,7 @@ async function devinAutoChain(): Promise<boolean> {
             try {
                 const loginResult = await devinLogin(wsCreds.email, wsCreds.password);
                 if (loginResult.ok) {
+                    saveAccountAuth(wsCreds.email);
                     vscode.window.showInformationMessage('Devin Cloud 自动登录成功 (Windsurf凭证)');
                     return true;
                 }
@@ -3179,7 +3303,7 @@ async function devinAutoChain(): Promise<boolean> {
             try {
                 ws.devinApiKey = wsCreds.apiKey;
                 ws.devinApiServerUrl = '';
-                ws.devinEmail = wsCreds.email || '';
+                ws.devinEmail = wsCreds.email || currentIdeEmail || ws.devinEmail || '';
                 // 异步从 Codeium API 获取完整用户信息 — 帛书·「不出於戶以知天下」
                 const enriched = await enrichCredentialsFromCodeiumAPI(wsCreds.apiKey);
                 if (enriched) {
@@ -3271,6 +3395,7 @@ async function devinAutoChain(): Promise<boolean> {
                             ws.devinApiServerUrl = apiServerUrl;
                             ws.devinQuota = await devinFetchQuota(apiKey, apiServerUrl).catch(() => null);
                             ws.devinSaveConfig();
+                            saveAccountAuth(wsCreds.email);
                             vscode.window.showInformationMessage('Devin Cloud 自动登录成功 (Windsurf Token)');
                             return true;
                         }
@@ -3518,6 +3643,8 @@ function startCredentialSync() {
 
     credSyncTimer = setInterval(async () => {
         try {
+            // 守柔 · 手动模式 — 用户自控账号, 停止 IDE 跟随(保留操作空间)
+            if (getAccountSyncMode() === 'manual') return;
             // 强制刷新vscdb — 绕过缓存
             const freshCreds = readWindsurfCredentials(true);
             if (!freshCreds) return;
@@ -3562,7 +3689,12 @@ function startCredentialSync() {
                         sidebarCloudPanel?.refresh();
                         refreshDaoCloudMiddlePanel();
                     }
+                    // 注入自循环: 账号切换后, 把用户初始注入的 profile 应用到新账号 org,
+                    // 并(默认)清理旧账号 org 的旧注入 — 帛书·「善抱者不脱」
+                    try { await runInjectProfileSelfLoop(); } catch {}
                 } else {
+                    // 换不到 auth1 — 至少让面板显示当前 IDE 账号(不串号、不空白)
+                    if (newEmail) ws.devinEmail = newEmail;
                     sidebarCloudPanel?.refresh();
                 }
             }
@@ -3921,40 +4053,163 @@ async function devinGetSessionMessages(orgId: string, sessionId: string, auth1: 
     return { ok: false };
 }
 
-// 对话记录MD下载 — 帛书·五十四「修之天下·其德乃博」
-async function devinDownloadSessionMd(sessionId: string): Promise<string | null> {
-    if (!ws.devinAuth1 || !ws.devinOrgId) return null;
-    const detail = await devinGetSessionDetail(ws.devinOrgId, sessionId, ws.devinAuth1);
-    const msgs = await devinGetSessionMessages(ws.devinOrgId, sessionId, ws.devinAuth1);
-    if (!msgs.ok) return null;
-    const title = (detail.ok && detail.session?.title) || sessionId;
-    const lines: string[] = [
-        '# ' + title,
-        '',
-        '> Session: ' + sessionId,
-        '> Created: ' + (detail.ok && detail.session?.created_at ? new Date(detail.session.created_at).toLocaleString() : '—'),
-        '',
-    ];
-    const messages = msgs.messages || [];
-    for (const m of messages) {
-        const role = m.role || m.type || 'unknown';
-        const content = m.content || m.text || m.message || '';
-        if (role === 'user' || role === 'human') {
-            lines.push('## 👤 User', '', content, '');
-        } else if (role === 'assistant' || role === 'ai' || role === 'devin') {
-            lines.push('## 🤖 Devin', '', content, '');
+// ═══════════════════════════════════════════════════════════
+// 本地对话提取 · 移植自 dao-devin-export 1.3.2 — 帛书·「修之天下·其德乃博」
+// 事件流(event stream)是会话的唯一全息真源: 含 user/devin 消息 + 思考 +
+// shell 命令 + 文件编辑 + todo + 浏览器/电脑操作。比 /messages 端点深得多。
+// 用户无为: 一键提取本地对话/工作日志 markdown, 系统无不为。
+// ═══════════════════════════════════════════════════════════
+interface DaoEventItem { event_id?: string; type?: string; timestamp?: string; created_at_ms?: number; message?: any; [k: string]: any; }
+
+// 拉取并解析会话事件流 (SSE/ndjson) → 有序去重事件数组
+async function devinGetSessionEvents(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; events: DaoEventItem[] }> {
+    // 事件流仅 app.devin.ai/api 提供, auth1 直读
+    const url = DEVIN_APP + '/api/events/' + sessionId + '/stream';
+    const headers: any = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId, 'Accept': 'text/event-stream' };
+    let raw = '';
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await devinJsonGet(url, headers, 180000);
+        if (r.status === 200 && typeof r.text === 'string') { raw = r.text; break; }
+        if (attempt < 2) await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));
+    }
+    if (!raw) return { ok: false, events: [] };
+    const merged = new Map<string, DaoEventItem>();
+    const addEv = (ev: DaoEventItem) => {
+        if (!ev || !ev.type) return;
+        const eid = ev.event_id || `${ev.type}-${ev.timestamp}-${ev.created_at_ms}`;
+        if (!merged.has(eid)) merged.set(eid, ev);
+    };
+    let i = 0;
+    while (i < raw.length) {
+        while (i < raw.length && ' \r\n\t'.includes(raw[i])) i++;
+        if (i >= raw.length) break;
+        if (raw[i] === '{') {
+            let depth = 0, j = i, inStr = false, escaped = false;
+            for (; j < raw.length; j++) {
+                if (escaped) { escaped = false; continue; }
+                if (raw[j] === '\\' && inStr) { escaped = true; continue; }
+                if (raw[j] === '"') { inStr = !inStr; continue; }
+                if (inStr) continue;
+                if (raw[j] === '{') depth++;
+                if (raw[j] === '}') { depth--; if (depth === 0) { j++; break; } }
+            }
+            try { const obj = JSON.parse(raw.slice(i, j)); if (obj.result && Array.isArray(obj.result)) obj.result.forEach(addEv); else if (obj.type) addEv(obj); } catch { /* skip */ }
+            i = j;
         } else {
-            lines.push('## ' + role, '', typeof content === 'string' ? content : JSON.stringify(content, null, 2), '');
+            const lineEnd = raw.indexOf('\n', i);
+            const end = lineEnd === -1 ? raw.length : lineEnd;
+            const line = raw.slice(i, end).trim();
+            i = end + 1;
+            if (line.startsWith('data:')) {
+                const dataStr = line.slice(5).trim();
+                if (dataStr && dataStr !== '[DONE]') {
+                    try { const obj = JSON.parse(dataStr); if (obj.result && Array.isArray(obj.result)) obj.result.forEach(addEv); else if (obj.type) addEv(obj); } catch { /* skip */ }
+                }
+            }
         }
     }
-    const md = lines.join('\n');
-    // Save to ~/.dao/sessions/
+    const events = Array.from(merged.values());
+    events.sort((a, b) => (a.created_at_ms || 0) - (b.created_at_ms || 0));
+    return { ok: true, events };
+}
+
+function daoEvTs(ev: DaoEventItem): string {
+    if (ev.timestamp) return ev.timestamp;
+    if (ev.created_at_ms) return new Date(ev.created_at_ms).toISOString();
+    return '';
+}
+function daoExtractMessageText(v: unknown): string {
+    if (v == null) return '';
+    if (typeof v === 'string') return v;
+    if (Array.isArray(v)) return v.map((x) => daoExtractMessageText(x)).filter(Boolean).join('\n');
+    if (typeof v === 'object') {
+        const o = v as Record<string, unknown>;
+        if (typeof o.text === 'string') return o.text;
+        if (typeof o.message === 'string') return o.message;
+        if (o.content != null) return daoExtractMessageText(o.content);
+        return JSON.stringify(v, null, 2);
+    }
+    return String(v);
+}
+function daoAsText(v: unknown): string { if (v == null) return ''; if (typeof v === 'string') return v; return JSON.stringify(v, null, 2); }
+function daoClip(s: string, max: number): string { return s.length > max ? s.slice(0, max) + '\n...[truncated]' : s; }
+const DAO_TODO_MARK: Record<string, string> = { completed: '[x]', in_progress: '[~]', pending: '[ ]', cancelled: '[-]' };
+const DAO_SKIP_TYPES = new Set<string>(['terminal_update', 'is_typing', 'context_growth_update', 'iteration_checkpoint', 'acu_consumption_at_last_user_interaction', 'rules_injected', 'shell_process_completed_background']);
+
+// 纯对话转录 (user/devin 消息)
+function daoBuildConversation(title: string, sessionId: string, events: DaoEventItem[]): string {
+    const lines: string[] = ['# 对话记录 / Conversation: ' + title, 'Session: ' + sessionId, ''];
+    let turns = 0;
+    for (const ev of events) {
+        if (ev.type === 'user_message') { lines.push('\n## 👤 USER [' + daoEvTs(ev) + ']', daoExtractMessageText(ev.message)); turns++; }
+        else if (ev.type === 'devin_message') { lines.push('\n## 🤖 DEVIN [' + daoEvTs(ev) + ']', daoExtractMessageText(ev.message)); turns++; }
+    }
+    lines.splice(2, 0, 'Turns: ' + turns);
+    return lines.join('\n');
+}
+
+// 完整工作日志 (消息 + 思考 + 命令 + 编辑 + todo + 浏览器/电脑)
+function daoBuildWorklog(title: string, sessionId: string, events: DaoEventItem[]): string {
+    const lines: string[] = ['# Worklog: ' + title, 'Session: ' + sessionId, 'Events: ' + events.length, ''];
+    for (const ev of events) {
+        const t = ev.type || 'unknown';
+        if (DAO_SKIP_TYPES.has(t)) continue;
+        const time = daoEvTs(ev);
+        switch (t) {
+            case 'user_message': lines.push('\n## 👤 USER [' + time + ']', daoExtractMessageText(ev.message)); break;
+            case 'devin_message': lines.push('\n## 🤖 DEVIN [' + time + ']', daoExtractMessageText(ev.message)); break;
+            case 'devin_thoughts': { const dur = ev.thinking_duration_ms ? ' (' + Math.round(Number(ev.thinking_duration_ms) / 1000) + 's)' : ''; lines.push('\n### 💭 THINKING' + dur + ' [' + time + ']', daoClip(daoExtractMessageText(ev.message), 4000)); break; }
+            case 'todo_update': { const todos = (ev.todos as any[]) || []; if (todos.length) { lines.push('\n### 📋 TODO [' + time + ']'); for (const td of todos) lines.push('- ' + (DAO_TODO_MARK[td.status || ''] || '[ ]') + ' ' + daoAsText(td.content)); } break; }
+            case 'shell_process_started': { const dir = ev.starting_dir ? ' (cwd: ' + daoAsText(ev.starting_dir) + ')' : ''; lines.push('\n### 💻 COMMAND' + dir + ' [' + time + ']', '```bash', daoAsText(ev.command), '```'); break; }
+            case 'shell_process_completed': { const out = daoAsText(ev.output_trunc || ev.output); const code = ev.exit_code != null ? ' (exit ' + ev.exit_code + ')' : ''; if (out.trim()) { lines.push('_output' + code + ':_', '```', daoClip(out, 3000), '```'); } else if (code) lines.push('_command finished' + code + '_'); break; }
+            case 'multi_edit_result': case 'file_edit': case 'editor_action': { const fps = ((ev.file_updates as any[]) || []).map((f) => f.file_path).filter(Boolean); if (fps.length) lines.push('\n### ✏️ FILE EDIT [' + time + ']: ' + fps.join(', ')); break; }
+            case 'search_file_commands': { const cmds = (ev.search_commands as any[]) || []; const desc = cmds.map((c) => c.regex || c.path).filter(Boolean).join('; '); if (desc) lines.push('\n### 🔍 SEARCH [' + time + ']: ' + desc.slice(0, 200)); break; }
+            case 'computer_use': { const acts = (ev.actions as any[]) || []; const kinds = acts.map((a) => a.action_type).filter(Boolean).join(', '); lines.push('\n### 🖥️ COMPUTER [' + time + ']: ' + (kinds || 'action')); break; }
+            case 'browser_action': case 'browse': lines.push('\n### 🌐 BROWSER [' + time + ']: ' + daoAsText(ev.url || ev.action || ev.message).slice(0, 200)); break;
+            case 'status_update': case 'activity': lines.push('\n_[' + time + '] ' + daoAsText(ev.message || ev.status).slice(0, 300) + '_'); break;
+            case 'play': lines.push('\n--- [' + time + '] ▶️ **RESUMED**' + (ev.username ? ' by ' + daoAsText(ev.username) : '') + ' ---'); break;
+            case 'suspend': case 'resume': lines.push('\n--- [' + time + '] **' + t.toUpperCase() + '** ---'); break;
+            default: { const msg = ev.message || ev.content || ev.text; if (msg) lines.push('\n### [' + t + '] [' + time + ']', daoClip(daoExtractMessageText(msg), 2000)); break; }
+        }
+    }
+    return lines.join('\n');
+}
+
+function daoSafeName(s: string, maxLen = 60): string { return s.replace(/[<>:"/\\|?*\x00-\x1f\n\r]/g, '_').slice(0, maxLen).replace(/[. ]+$/, '') || 'untitled'; }
+
+// 一键提取会话 → 本地 markdown (kind: conversation 纯对话 / worklog 完整日志)
+async function devinExportSession(sessionId: string, kind: 'conversation' | 'worklog' = 'conversation'): Promise<string | null> {
+    if (!ws.devinAuth1 || !ws.devinOrgId) return null;
+    const detail = await devinGetSessionDetail(ws.devinOrgId, sessionId, ws.devinAuth1);
+    const title = (detail.ok && detail.session?.title) || sessionId;
+    const evRes = await devinGetSessionEvents(ws.devinOrgId, sessionId, ws.devinAuth1);
+    let md: string;
+    if (evRes.ok && evRes.events.length) {
+        md = kind === 'worklog' ? daoBuildWorklog(title, sessionId, evRes.events) : daoBuildConversation(title, sessionId, evRes.events);
+    } else {
+        // 降级: 事件流不可用 → 退回 /messages 端点 (守柔)
+        const msgs = await devinGetSessionMessages(ws.devinOrgId, sessionId, ws.devinAuth1);
+        if (!msgs.ok) return null;
+        const lines: string[] = ['# ' + title, '', '> Session: ' + sessionId, ''];
+        for (const m of (msgs.messages || [])) {
+            const role = m.role || m.type || 'unknown';
+            const content = m.content || m.text || m.message || '';
+            if (role === 'user' || role === 'human') lines.push('## 👤 User', '', daoAsText(content), '');
+            else if (role === 'assistant' || role === 'ai' || role === 'devin') lines.push('## 🤖 Devin', '', daoAsText(content), '');
+            else lines.push('## ' + role, '', daoAsText(content), '');
+        }
+        md = lines.join('\n');
+    }
     const sessionDir = path.join(DAO_DIR, 'sessions');
-    try { fs.mkdirSync(sessionDir, { recursive: true }); } catch {}
-    const safeName = title.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 60);
-    const filePath = path.join(sessionDir, safeName + '_' + sessionId.substring(0, 8) + '.md');
-    try { fs.writeFileSync(filePath, md, 'utf8'); } catch {}
+    try { fs.mkdirSync(sessionDir, { recursive: true }); } catch { /* 守柔 */ }
+    const filePath = path.join(sessionDir, daoSafeName(title) + '_' + sessionId.substring(0, 8) + (kind === 'worklog' ? '.worklog' : '') + '.md');
+    try { fs.writeFileSync(filePath, md, 'utf8'); } catch { /* 守柔 */ }
     return filePath;
+}
+
+// 对话记录MD下载 — 帛书·五十四「修之天下·其德乃博」(默认纯对话, 自动走事件流深提取)
+async function devinDownloadSessionMd(sessionId: string): Promise<string | null> {
+    return await devinExportSession(sessionId, 'conversation');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4110,6 +4365,85 @@ async function devinFullInject(): Promise<boolean> {
     } finally {
         ws.devinInjecting = false;
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 道法自然 · 自动注入自循环 — 帛书·「善建者不拔·善抱者不脱」
+// 用户初始配置一次 inject-profile → 此后无论账号怎么切, 系统自动把同一份
+// 注入应用到新账号 org; 默认自动清理旧账号 org 的旧注入(用户可关闭)。
+// 守柔: enabled=false 即纯手动, 系统不自动注入。
+// ~/.dao/dao-inject-profile.json
+// ═══════════════════════════════════════════════════════════
+const INJECT_PROFILE_FILE = path.join(DAO_DIR, 'dao-inject-profile.json');
+interface InjectProfileItemS { name: string; value: string }
+interface InjectProfileItemK { name: string; body: string; trigger?: string }
+interface InjectProfileItemP { title: string; body: string }
+interface InjectProfile {
+    enabled: boolean;
+    autoCleanup: boolean;
+    secrets: InjectProfileItemS[];
+    knowledge: InjectProfileItemK[];
+    playbooks: InjectProfileItemP[];
+    lastInjectedOrg: string;
+}
+function loadInjectProfile(): InjectProfile {
+    try {
+        const j = JSON.parse(fs.readFileSync(INJECT_PROFILE_FILE, 'utf8'));
+        return {
+            enabled: !!j.enabled,
+            autoCleanup: j.autoCleanup !== false,
+            secrets: Array.isArray(j.secrets) ? j.secrets : [],
+            knowledge: Array.isArray(j.knowledge) ? j.knowledge : [],
+            playbooks: Array.isArray(j.playbooks) ? j.playbooks : [],
+            lastInjectedOrg: j.lastInjectedOrg || '',
+        };
+    } catch {
+        return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], lastInjectedOrg: '' };
+    }
+}
+function saveInjectProfile(p: InjectProfile): void {
+    try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(INJECT_PROFILE_FILE, JSON.stringify(p, null, 2), 'utf8'); } catch { /* 守柔 */ }
+}
+// 从按邮箱持久化的 store 里找某 org 仍可用的 auth1 — 用于清理旧 org 注入
+function findAuth1ForOrg(orgId: string): string {
+    if (!orgId) return '';
+    const store = loadAccountsAuthStore();
+    for (const e of Object.keys(store)) { if (store[e] && store[e].orgId === orgId && store[e].auth1) return store[e].auth1; }
+    return '';
+}
+async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
+    for (const s of p.secrets) { if (s && s.name) { try { await devinUpsertSecret(orgId, s.name, s.value || '', auth1); } catch { /* 守柔 */ } } }
+    for (const k of p.knowledge) { if (k && k.name) { try { await devinUpsertKnowledge(orgId, k.name, k.body || '', k.trigger || 'Always', auth1); } catch { /* 守柔 */ } } }
+    for (const pb of p.playbooks) { if (pb && pb.title) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1); } catch { /* 守柔 */ } } }
+}
+async function cleanupInjectProfileFromOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
+    for (const s of p.secrets) { if (s && s.name) { try { await devinDeleteSecret(orgId, s.name, auth1); } catch { /* 守柔 */ } } }
+    try {
+        const kl = await devinListKnowledge(orgId, auth1);
+        if (kl.ok && kl.learnings) for (const k of kl.learnings) { if (p.knowledge.some(x => x.name === k.name) && k.id) { try { await devinDeleteKnowledge(orgId, String(k.id), auth1); } catch { /* 守柔 */ } } }
+    } catch { /* 守柔 */ }
+    try {
+        const pl = await devinListPlaybooks(orgId, auth1);
+        if (pl.ok && pl.playbooks) for (const pb of pl.playbooks) { if (p.playbooks.some(x => x.title === pb.title) && pb.id) { try { await devinDeletePlaybook(orgId, String(pb.id), auth1); } catch { /* 守柔 */ } } }
+    } catch { /* 守柔 */ }
+}
+// 账号切换后调用: 应用 profile 到新 org + (默认)清理旧 org — 自循环核心
+async function runInjectProfileSelfLoop(): Promise<void> {
+    const p = loadInjectProfile();
+    if (!p.enabled) return;
+    if (!ws.devinOrgId || !ws.devinAuth1 || ws.devinAuth1.startsWith('devin-session-token$')) return;
+    const hasItems = p.secrets.length || p.knowledge.length || p.playbooks.length;
+    if (!hasItems) return;
+    // 1. 默认清理旧 org 的旧注入 — 帛书·「将欲去之·必故与之」(用户可关 autoCleanup)
+    if (p.autoCleanup && getInjectAutoCleanup() && p.lastInjectedOrg && p.lastInjectedOrg !== ws.devinOrgId) {
+        const oldAuth1 = findAuth1ForOrg(p.lastInjectedOrg);
+        if (oldAuth1) { try { await cleanupInjectProfileFromOrg(p.lastInjectedOrg, oldAuth1, p); } catch { /* 守柔 */ } }
+    }
+    // 2. 应用到当前 org
+    await applyInjectProfileToOrg(ws.devinOrgId, ws.devinAuth1, p);
+    // 3. 记录 lastInjectedOrg → 下次切换据此清理
+    p.lastInjectedOrg = ws.devinOrgId;
+    saveInjectProfile(p);
 }
 
 function buildDevinKnowledge(url: string, token: string): string {
@@ -4594,7 +4928,9 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         // 注入认证桥接脚本 — 帛书·五十二「见小曰明·守柔曰强」
                         // 无为而无以为: 自动注入Cookie → Devin SPA自动识别登录态
                         // 守柔: 仅当持真 auth1_ 令牌时注入; session-token 注入会污染 auth1_session → 反致登录态崩坏
-                        const injA1 = (ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$')) ? ws.devinAuth1 : '';
+                        // 手动模式(websiteLoginMode=manual): 不注入认证, 用户打开官网后自行登录
+                        const websiteAutoLogin = getWebsiteLoginMode() === 'auto';
+                        const injA1 = (websiteAutoLogin && ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$')) ? ws.devinAuth1 : '';
                         const authBridge = `<script>
 // Dao Auth Bridge — 帛书·五十二「见小曰明·守柔曰强」
 // 自动注入认证到Devin页面 — 无为而无以为
