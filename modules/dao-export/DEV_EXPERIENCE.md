@@ -13,6 +13,7 @@
 | 事件流大会话被 180s 硬上限截断 | 上限提至 600s/512MB，1MB 大块读取，列表拼接避免 bytes O(n²) 累加，每 5s 打印接收进度 |
 | accounts.md `email:password` 格式解析不出 | parser 同时支持空格与冒号分隔 |
 | 中文打印崩溃(Windows) | `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')` |
+| 141 本机下载全部失败 WinError 10060 | 实测：app.devin.ai API 可达，但 presigned S3 下载域名被 141 所在网络屏蔽/不可达（并发+重试也无法穿透）——这是原始「卡 30 分钟」的环境根因之一。解法：在 141 设 HTTPS_PROXY（urllib 自动读取）或走能达 S3 的网络/VPN；或在可达 S3 的机器（如 Devin VM）跑导出后回传 |
 
 ## VSIX 插件开发
 
@@ -23,6 +24,7 @@
 | vsce LICENSE 提示交互阻塞 | `echo y | vsce package --no-dependencies` |
 | 零运行时依赖 | 纯 Node stdlib: https 请求 + zlib 自实现 ZIP writer (crc32 + local/central headers) |
 | 登录态持久化 | `context.globalState` 存 token+org，激活时恢复 |
+| Agent Bridge (v1.2.0) | 插件内 Node stdlib http 服务，仅监听 127.0.0.1:7848（占用则 +1 顺延），Bearer token 鉴权（随机生成存 globalState），暴露全部功能；`DAO: Export Agent Bridge Doc (MD)` 实时生成接入文档；需 package.json 加 `onStartupFinished` 激活事件使插件随 VS Code 启动 |
 
 ## 本虚拟机环境（Devin VM, Windows Server 2022）
 

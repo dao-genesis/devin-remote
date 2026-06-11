@@ -1,56 +1,52 @@
-# DAO Devin Export VSIX — 测试报告
+# DAO Devin Export v1.2.0 — 全链路实测报告（Devin 自身 VM）
 
-**结果: 全部通过** (4/4 测试)
+日期: 2026-06-11 ｜ 环境: Devin VM (Windows Server 2022) + VS Code 1.123 ｜ 账号: lbvpkv87845410@gmail.com
 
-## 插件信息
-- 文件: `dao-devin-export-1.0.0.vsix` (22.6 KB, 零运行时依赖)
-- 已部署: 本机 VS Code + 141台式机 `E:\DAO_ARCHIVE\dao-devin-export-1.0.0.vsix`
-- 源码: `E:\DAO_ARCHIVE\dao-vsix-source.zip`
+## 结果总览
 
-## 测试结果
+| 测试 | 结果 |
+|---|---|
+| 插件安装 + 登录 + 70/70 会话列出 | 通过 |
+| UI 导出 323 文件长会话（原卡死 30+ 分钟） | 通过：3.0MB ZIP 数秒完成，377 条目完整性校验 OK |
+| 导出MD（实时 Agent 接入文档） | 通过：含实时端口 7848 + token + 全部接口示例 |
+| Agent Bridge HTTP API 全端点 | 通过（见下） |
+| 错误 token 拒绝 | 通过：401 invalid token |
 
-### 1. 登录面板 — PASS
-侧边栏活动图标(☯)打开后显示 道法自然·Devin Export 登录表单。
+## Bridge API 实测明细
 
-![登录面板](C:\Users\Administrator\screenshots\screenshot_41337755e1d546268d8886dadf2fec11.png)
+- `GET /api/ping` → ok（免鉴权探活）
+- `GET /api/status` → version 1.2.0, loggedIn, 70 sessions cached
+- `GET /api/sessions` → 70 条
+- `GET /api/session/{id}` / `/events` / `/worklog` / `/changes` / `/keys` → 2469 events / 48 changes / 323 keys
+- `GET /api/account/playbooks|knowledge|secrets|org` → 全部返回真实数据
+- `POST /api/session/{id}/export` → 3,170,429 字节 ZIP 落盘，耗时 **3.7 秒**
 
-### 2. 登录 + Session 同步 — PASS
-账号 lcld26815946@gmail.com 登录成功，同步全部 **104/104 sessions**，含标题、状态徽章、日期、每条目 `⬇ ZIP` 按钮。
+## 证据截图
 
-![Session列表](C:\Users\Administrator\screenshots\screenshot_1c8b387091064d258a63afd42ff29686.png)
+登录后会话列表（70/70）:
+![sessions](C:\Users\Administrator\screenshots\screenshot_32b89855932b47bbba46d9244408ca6b.png)
 
-### 3. Session 详情 5 标签页 — PASS
-点击 session 打开详情面板：
-- **概览**: 202事件 / 0用户消息 / 2 Devin消息 / 9变更文件 / 33云端产出文件 + 完整元数据
-- **对话**: 完整消息流 + 文件编辑事件
-- **Worklog**: 可读工作日志（含 devin_thoughts）
-- **Changes**: 9 个最终变更文件路径
-- **原始数据**: 完整事件 JSON
+长会话详情（2469 事件 / 323 云端文件）:
+![detail](C:\Users\Administrator\screenshots\screenshot_11e415846d144527bd0a61b7b0223c24.png)
 
-![概览](C:\Users\Administrator\screenshots\screenshot_228c9b0a7d2f451da49fd7a829988af9.png)
-![对话](C:\Users\Administrator\screenshots\screenshot_83a1cf9b85a446dba7d9384f9ddaac6c.png)
-![Worklog](C:\Users\Administrator\screenshots\screenshot_bb9584c47ae94410ad85c3198f8fdbed.png)
-![Changes](C:\Users\Administrator\screenshots\screenshot_469d534fe5704361b7abfe1ed70b6556.png)
+UI 导出完成提示（3.0 MB）:
+![export](C:\Users\Administrator\screenshots\screenshot_35a11f528f174da4a9791238abe38dac.png)
 
-### 4. 一键导出 ZIP — PASS
-点击「导出 ZIP (一切底层数据)」→ 保存对话框 → 导出到 Downloads。
-ZIP 校验: **48 entries, 0 损坏**，包含:
-- `session_info.json` (完整元数据)
-- `events.json` (202 事件，去重合并)
-- `worklog.md`
-- `cloud_files/` (33 个云端产出文件实际内容 + 索引)
-- `changes/` (9 个最终变更文件 + 索引)
-- `EXPORT_MANIFEST.json`
+导出MD 实时接入文档 + 终端调用 Bridge（70 sessions via Agent Bridge）:
+![bridge](C:\Users\Administrator\screenshots\screenshot_58d49e3cd2a745b386f7b6d090c51287.png)
 
-![导出对话框](C:\Users\Administrator\screenshots\screenshot_81b37af28dbc4f128b441d7685831355.png)
+## 141 本机后台测试结论（重要发现）
 
-### 附加: 搜索过滤 — PASS
-搜索框过滤 sessions 实时生效。
+E:\DAO_EXPORT_TEST_LOG.txt 显示：API（登录/会话/事件流/账号级数据）全部成功，但 **全部 419 个文件下载失败 WinError 10060**——141 所在网络屏蔽/不可达 presigned S3 下载域名。这是原始「卡 30 分钟只下载一部分」的环境根因之一（代码串行+无重试是另一半）。
 
-## 第二账号验证
-beasley856439@gmail.com 登录 API 验证通过 (org marpriceo9, 70 sessions)。
+解法（任选）：
+1. 在 141 设 `HTTPS_PROXY` 环境变量（脚本 urllib 自动读取）走可达 S3 的代理/VPN
+2. 在可达 S3 的机器（如 Devin VM / 179）跑导出后回传 141
 
-## 备用命令
-- `DAO: Export ALL Sessions` — 批量导出账号全部 sessions 到指定目录
-- `DAO: Login / Logout / Refresh` — 命令面板操作
-- 登录态保存在 globalState，重启 VS Code 免登录
+## 已回写 141（MD5 全部校验一致）
+
+- dao-devin-export-1.2.0.vsix（并已在 141 VS Code 安装成功）
+- dao-vsix-source.zip（v1.2.0 完整源码）
+- README.md / dao-vsix-README.md / DEV_EXPERIENCE.md（含上述新坑+解法）
+
+无为而无不为 道法自然
