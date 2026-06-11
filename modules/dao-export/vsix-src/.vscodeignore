@@ -1,0 +1,11 @@
+src/**
+tsconfig.json
+node_modules/**
+.gitignore
+**/*.map
+test_core.js
+test_export.zip
+test_long_session.zip
+test_long_session.js
+test_core.js
+*.vsix
