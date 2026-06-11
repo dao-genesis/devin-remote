@@ -3333,6 +3333,10 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
         if ($eaPPreset) $eaPPreset.value='';
         $eaProvForm.classList.remove('show');
         eaLoad();
+        // ★ v9.9.262 · 首provider自动默认路由反馈 · SWE 1.6 Fast 已接通该渠道
+        if (r.autoRoute) {
+          try { $eaInfo.textContent = '\u2714 \u9ed8\u8ba4\u8def\u7531 SWE 1.6 Fast \u2192 '+r.autoRoute; } catch(e){}
+        }
       } else { $eaInfo.textContent = '\u2716 '+(r.error||'fail'); }
     });
   });
