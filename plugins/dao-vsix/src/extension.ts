@@ -196,6 +196,15 @@ let ws: WorkspaceState;
 let statusBarItem: vscode.StatusBarItem;
 // 帛书·二十五「道法自然」— 扩展安装路径 · 供读取捆绑的规则文本
 let _daoExtPath: string = '';
+// ═══════════════════════════════════════════════════════════
+// 道法自然 · 实时凭证同步 — 帛书·「不出於戶以知天下」
+// RT Flow同源机制: 每5秒轮询vscdb，检测账号切换，自动同步
+// 窗口 = 账号 — 账号切换即刻同步，无为而无不为
+// ═══════════════════════════════════════════════════════════
+let credSyncTimer: ReturnType<typeof setInterval> | null = null;
+let lastSyncedApiKey: string = '';
+let lastSyncedEmail: string = '';
+const CRED_SYNC_INTERVAL = 5000; // 5秒轮询 — RT Flow同源频率
 // 帛书规则缓存 (你本无名…道德经/阴符经 7758字) — 一次读取，缓存复用
 let _daoRulesCache: string | null = null;
 function getDaoRulesText(): string {
@@ -215,8 +224,8 @@ function getDaoRulesText(): string {
     return '';
 }
 
-// CF全局凭证 — 一机一CF账号，所有窗口共享
-// 帛书·三十九「致数与无与」— 全局唯一，不重复声明
+// CF全局凭证 — 已迁移至 dao-bridge 插件
+// 帛书·三十九「致数与无与」— 保留声明兼容旧引用
 let cfApiToken = '';
 let cfAccountId = '';
 let cfDeploying = false;
@@ -288,6 +297,9 @@ export async function activate(context: vscode.ExtensionContext) {
             } else {
                 sidebarCloudPanel?.refresh();
             }
+            // Step 4: 启动实时凭证同步 — RT Flow同源机制
+            // 帛书·「反者道之动」— 轮询vscdb，检测账号切换
+            startCredentialSync();
         });
     }
     context.subscriptions.push(
@@ -297,7 +309,9 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('dao.showInfo', showWorkspaceInfo),
         vscode.commands.registerCommand('dao.copyConnection', copyConnection),
         vscode.commands.registerCommand('dao.regenerateToken', regenerateToken),
-        vscode.commands.registerCommand('dao.cfLogin', () => wranglerLogin().then(ok => { if (ok) autoDeployRelay(); })),
+        vscode.commands.registerCommand('dao.cfLogin', () => {
+            vscode.window.showInformationMessage('CloudFlare 功能已迁移至 DAO Bridge 插件，请使用 DAO Bridge 面板操作');
+        }),
         vscode.commands.registerCommand('dao.devinLogin', () => {
             vscode.window.showInputBox({ prompt: 'Devin Cloud Email', placeHolder: 'user@example.com' }).then(email => {
                 if (!email) return;
@@ -311,7 +325,9 @@ export async function activate(context: vscode.ExtensionContext) {
             });
         }),
         vscode.commands.registerCommand('dao.devinInject', () => devinFullInject()),
-        vscode.commands.registerCommand('dao.cfDeploy', () => autoDeployRelay()),
+        vscode.commands.registerCommand('dao.cfDeploy', () => {
+            vscode.window.showInformationMessage('CloudFlare 部署功能已迁移至 DAO Bridge 插件');
+        }),
         vscode.commands.registerCommand('dao.devinQuota', () => {
             if (!ws.devinApiKey) { vscode.window.showWarningMessage('Not logged into Devin Cloud'); return; }
             devinFetchQuota(ws.devinApiKey, ws.devinApiServerUrl).then(q => {
@@ -358,19 +374,34 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('dao.openCloudPanel', () => showDaoCloudMiddlePanel(context)),
         vscode.commands.registerCommand('dao.toggleCloudPanel', () => toggleDaoCloudMiddlePanel(context)),
         vscode.commands.registerCommand('dao.devinCloudBrowser', () => {
-            // 帛书·「天下之至柔驰骋于天下之致坚」— simpleBrowser共享Electron session
-            // 直接用simpleBrowser打开app.devin.ai — 自动携带Auth0 Cookie
-            if (!ws.devinAuth1) {
-                vscode.window.showWarningMessage('请先登录 Devin Cloud');
+            // 帛书·「天下之至柔驰骋于天下之致坚」— 反向代理自动注入认证
+            // 通过本地反向代理路由官网 — 自动注入Cookie/Token，无需GUI登录
+            if (!ws.port) {
+                vscode.window.showWarningMessage('DAO 服务器未启动');
                 return;
             }
-            try { vscode.commands.executeCommand('simpleBrowser.show', DEVIN_APP); }
+            const proxyUrl = `http://localhost:${ws.port}/devin-cloud/`;
+            try {
+                if (ws.devinAuth1) {
+                    // 已认证 — 通过反向代理路由，自动注入Cookie
+                    vscode.commands.executeCommand('simpleBrowser.show', proxyUrl);
+                } else {
+                    // 未认证 — 直接打开，依赖Electron session
+                    vscode.commands.executeCommand('simpleBrowser.show', DEVIN_APP);
+                }
+            }
             catch { vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP)); }
         }),
         vscode.commands.registerCommand('dao.devinCloudPanel', () => {
-            // 帛书·「天下之至柔驰骋于天下之致坚」— simpleBrowser共享Electron session
-            try { vscode.commands.executeCommand('simpleBrowser.show', DEVIN_APP); }
-            catch { vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP)); }
+            // 帛书·「天下之至柔驰骋于天下之致坚」— 反向代理自动注入认证
+            if (ws.port && ws.devinAuth1) {
+                const proxyUrl = `http://localhost:${ws.port}/devin-cloud/`;
+                try { vscode.commands.executeCommand('simpleBrowser.show', proxyUrl); }
+                catch { vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP)); }
+            } else {
+                try { vscode.commands.executeCommand('simpleBrowser.show', DEVIN_APP); }
+                catch { vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP)); }
+            }
         }),
         vscode.commands.registerCommand('dao.openDashboard', () => {
             vscode.commands.executeCommand('workbench.view.extension.devin-cloud-container');
@@ -762,6 +793,7 @@ function unregisterWorkspace() {
 }
 
 export function deactivate() {
+    stopCredentialSync();
     stopServer();
     unregisterInstance();
     unregisterConnection();
@@ -795,10 +827,7 @@ function connectRelay(port: number, token: string) {
     const urls = relayCfg.urls;
     if (urls.length === 0) {
         ws.relayConnecting = false;
-        // 道法自然：无中继URL → 自动部署
-        autoDeployRelay().then(ok => {
-            if (ok) connectRelay(port, token);
-        });
+        // 道法自然：无中继URL → 提示用户使用 DAO Bridge 插件
         return;
     }
     const sessionId = ws.getOrCreateSessionId();
@@ -1443,12 +1472,14 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                         break;
                     }
                     case 'cfLogin': {
-                        wranglerLogin().then(ok => { if (ok) autoDeployRelay().then(() => this.refresh()); else this.refresh(); });
+                        vscode.window.showInformationMessage('CloudFlare 功能已迁移至 DAO Bridge 插件');
+                        this.refresh();
                         reply({ ok: true });
                         break;
                     }
                     case 'cfDeploy': {
-                        autoDeployRelay().then(() => this.refresh());
+                        vscode.window.showInformationMessage('CloudFlare 部署已迁移至 DAO Bridge 插件');
+                        this.refresh();
                         reply({ ok: true });
                         break;
                     }
@@ -1494,16 +1525,22 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                         break;
                     }
                     case 'openDevinPage': {
-                        // 帛书·「天下之至柔驰骋于天下之致坚」— simpleBrowser共享Electron session
-                        // 直接打开 app.devin.ai — simpleBrowser 自动携带 Electron 的 Auth0 Cookie
-                        // 不再通过反向代理（代理注入的 devin-session-token$ Cookie 无效）
+                        // 帛书·「天下之至柔驰骋于天下之致坚」— 反向代理自动注入认证
+                        // 通过本地反向代理路由官网 — Cookie/Token自动注入
                         const page = msg.page || 'home';
-                        const urls: Record<string, string> = {
-                            home: DEVIN_APP, sessions: DEVIN_APP + '/sessions',
-                            knowledge: DEVIN_APP + '/knowledge', playbooks: DEVIN_APP + '/playbooks',
-                            secrets: DEVIN_APP + '/settings/secrets', integrations: DEVIN_APP + '/settings/integrations',
+                        const pagePaths: Record<string, string> = {
+                            home: '', sessions: '/sessions',
+                            knowledge: '/knowledge', playbooks: '/playbooks',
+                            secrets: '/settings/secrets', integrations: '/settings/integrations',
                         };
-                        const targetUrl = urls[page] || DEVIN_APP;
+                        const pagePath = pagePaths[page] || '';
+                        let targetUrl: string;
+                        if (ws.port && ws.devinAuth1) {
+                            // 已认证 + 服务器运行 → 走反向代理路由(自动注入Cookie)
+                            targetUrl = `http://localhost:${ws.port}/devin-cloud${pagePath}`;
+                        } else {
+                            targetUrl = DEVIN_APP + pagePath;
+                        }
                         try { vscode.commands.executeCommand('simpleBrowser.show', targetUrl); }
                         catch { vscode.env.openExternal(vscode.Uri.parse(targetUrl)); }
                         reply({ ok: true });
@@ -2281,14 +2318,13 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'cfLogin': {
-                const ok = await wranglerLogin();
-                if (ok) await autoDeployRelay();
-                refreshReply({ type: 'actionResult', ok });
+                vscode.window.showInformationMessage('CloudFlare 功能已迁移至 DAO Bridge 插件');
+                refreshReply({ type: 'actionResult', ok: false });
                 break;
             }
             case 'cfDeploy': {
-                const ok = await autoDeployRelay();
-                refreshReply({ type: 'actionResult', ok });
+                vscode.window.showInformationMessage('CloudFlare 部署已迁移至 DAO Bridge 插件');
+                refreshReply({ type: 'actionResult', ok: false });
                 break;
             }
             case 'startServer': {
@@ -2344,11 +2380,11 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
 }
 
 // ═══════════════════════════════════════════════════════════
-// 器 · Cloudflare Auto-Deploy — 道法自然：复用wrangler认证
-// 天得一以清 — wrangler OAuth Token → 自动部署DO Relay
 // ═══════════════════════════════════════════════════════════
-
-// CF globals already declared at top (cfApiToken, cfAccountId, cfDeploying)
+// 器 · Cloudflare 功能已迁移至 dao-bridge 插件
+// 帛书·「始制有名」— CF公网穿透由专用插件处理
+// 以下为兼容性存根，实际功能请使用 DAO Bridge 插件
+// ═══════════════════════════════════════════════════════════
 
 function readWranglerAuth(): { oauth_token: string; refresh_token: string; expiration_time: string; expired: boolean } | null {
     const paths = [
@@ -3301,6 +3337,79 @@ function findNestedValue(obj: any, keys: string[]): string {
         }
     }
     return '';
+}
+
+// ═══════════════════════════════════════════════════════════
+// 道法自然 · 实时凭证同步引擎 — 帛书·「不出於戶以知天下」
+// RT Flow 3.16.0 同源: 轮询vscdb → 检测账号切换 → 自动重链
+// 反者道之动: 用户切号 → vscdb变化 → 检测差异 → 自动同步
+// 无为而无不为: 用户零操作，如流水般自然
+// ═══════════════════════════════════════════════════════════
+
+function startCredentialSync() {
+    if (credSyncTimer) return;
+    // 记录初始状态
+    lastSyncedApiKey = ws.devinApiKey || ws.devinAuth1 || '';
+    lastSyncedEmail = ws.devinEmail || '';
+
+    credSyncTimer = setInterval(async () => {
+        try {
+            // 强制刷新vscdb — 绕过缓存
+            const freshCreds = readWindsurfCredentials(true);
+            if (!freshCreds) return;
+
+            const newApiKey = freshCreds.apiKey || '';
+            const newEmail = freshCreds.email || '';
+
+            // 检测账号切换: apiKey或email变化
+            if (newApiKey && (newApiKey !== lastSyncedApiKey || newEmail !== lastSyncedEmail)) {
+                lastSyncedApiKey = newApiKey;
+                lastSyncedEmail = newEmail;
+
+                // 账号已切换 — 清除旧态，重新链接
+                ws.devinAuth1 = '';
+                ws.devinOrgId = '';
+                ws.devinOrgName = '';
+                ws.devinOrgSlug = '';
+                ws.devinSessionToken = '';
+                ws.devinApiKey = '';
+                ws.devinApiServerUrl = '';
+                ws.devinAccountId = '';
+                ws.devinQuota = null;
+                ws.devinEmail = '';
+
+                ws.devinAutoSyncing = true;
+                sidebarCloudPanel?.refresh();
+
+                const ok = await devinAutoChain();
+                ws.devinAutoSyncing = false;
+
+                if (ok) {
+                    // 同步成功 — 更新已知状态
+                    lastSyncedApiKey = ws.devinApiKey || ws.devinAuth1 || '';
+                    lastSyncedEmail = ws.devinEmail || '';
+                    sidebarCloudPanel?.refresh();
+                    refreshDaoCloudMiddlePanel();
+                    updateStatusBar();
+                    // 自动注入
+                    if (ws.port && ws.devinAuth1 && ws.devinOrgId) {
+                        await devinFullInject();
+                        sidebarCloudPanel?.refresh();
+                        refreshDaoCloudMiddlePanel();
+                    }
+                } else {
+                    sidebarCloudPanel?.refresh();
+                }
+            }
+        } catch {}
+    }, CRED_SYNC_INTERVAL);
+}
+
+function stopCredentialSync() {
+    if (credSyncTimer) {
+        clearInterval(credSyncTimer);
+        credSyncTimer = null;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
