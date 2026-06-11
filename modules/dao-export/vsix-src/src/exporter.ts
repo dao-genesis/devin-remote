@@ -4,7 +4,7 @@
  */
 import * as api from './api';
 import { ZipWriter } from './zip';
-import { buildWorklog, extractChanges, safeName } from './worklog';
+import { buildWorklog, buildConversation, extractConversation, extractChanges, safeName } from './worklog';
 
 export interface ExportProgress {
   (message: string, increment?: number): void;
@@ -45,9 +45,12 @@ export async function exportSessionToZip(
   zip.addFile(`${base}/events.json`, JSON.stringify(events, null, 2));
   progress(`已获取 ${events.length} 个事件`, 10);
 
-  // 3. Worklog
+  // 3. Worklog (full activity) + clean conversation transcript
   const worklog = buildWorklog(title, devinId, events);
   zip.addFile(`${base}/worklog.md`, worklog);
+  const conversationTurns = extractConversation(events);
+  zip.addFile(`${base}/conversation.md`, buildConversation(title, devinId, events));
+  zip.addFile(`${base}/conversation.json`, JSON.stringify(conversationTurns, null, 2));
 
   // 4. All cloud files (every contents_key ever seen)
   progress('解析所有云端文件 key...', 5);
@@ -112,9 +115,10 @@ export async function exportSessionToZip(
     title,
     exported_at: new Date().toISOString(),
     events_count: events.length,
+    conversation_turns: conversationTurns.length,
     cloud_files_count: allKeys.length,
     changes_count: changes.length,
-    exporter: 'DAO Devin Export VSIX v1.0.0',
+    exporter: 'DAO Devin Export VSIX v1.3.2',
   }, null, 2));
 
   progress('打包 ZIP...', 10);

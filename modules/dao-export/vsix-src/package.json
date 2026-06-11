@@ -2,7 +2,7 @@
   "name": "dao-devin-export",
   "displayName": "DAO Devin Export — 道法自然",
   "description": "Devin AI 全量数据导出插件。登录后查看所有对话历史、worklog、changes，一键导出全部产出成果。",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "publisher": "dao-natural",
   "engines": {
     "vscode": "^1.80.0"

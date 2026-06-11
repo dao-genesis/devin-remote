@@ -12,7 +12,7 @@
 |---|---|
 | `BACKEND_GUIDE.md` | ★ 核心 · 纯后端实现指南：完整 API 逆向 + 认证流 + 数据流，照此可从零实现一切 |
 | `dao_export_all.py` | ★ 零依赖 Python 导出脚本（v2 高速版：16 路并发下载 + 重试 + 断点续传；实测 70 会话/7173 事件/706 文件 ≈ 58 秒全量导出） |
-| `dao-devin-export-1.3.1.vsix` | ★ VS Code 插件成品（最新 v1.3.1：会话列表 `/sessions` 备用端点 + 事件流重试 + gzip 自动解压 + 失败显式报错，不再静默空白） |
+| `dao-devin-export-1.3.2.vsix` | ★ VS Code 插件成品（最新 v1.3.2：按**真实事件类型**完整提取对话记录 + 独立 `conversation.md`/`.json` 转录；含 v1.3.1 健壮性修复） |
 | `vsix-src/` | ★ 插件完整 TypeScript 源码（可直接 `npm i && npm run package` 重新打包） |
 | `dao-vsix-source.zip` | 插件完整 TypeScript 源码（与 `vsix-src/` 一致的打包快照） |
 | `dao-vsix-README.md` | 插件使用文档 |
@@ -30,7 +30,16 @@ python dao_export_all.py --email xxx@gmail.com --password xxx
 python dao_export_all.py --accounts accounts.md
 ```
 
-VSIX 安装: `code --install-extension dao-devin-export-1.3.1.vsix`
+VSIX 安装: `code --install-extension dao-devin-export-1.3.2.vsix`
+
+## v1.3.2 对话记录提取完善（2026-06-11）—— 「彻底提取一切对话内容」
+
+问题：旧版 worklog / 「对话」标签按**猜测的事件类型名**（`command`/`file_edit`/`plan`…）匹配，而真实事件流用的是 `devin_thoughts`/`shell_process_started`/`multi_edit_result`/`computer_use`/`todo_update`/`search_file_commands` 等 —— 名字对不上，导致 Devin 的思考、命令、文件编辑、计算机操作、TODO 等**大量内容被静默丢弃**。
+
+- 提取逻辑改用**真实事件类型**，单会话覆盖实测：💭 思考 737 + 💻 命令 306（含 exit code/输出）+ 📋 TODO 27 + 🔍 搜索 72 + 🖥️ 计算机 150 + ✏️ 文件编辑 229，worklog 从 ~0.59MB 增至 ~0.98MB。
+- 导出新增 **`conversation.md`**（仅 user/devin 消息的干净对话转录）+ **`conversation.json`**（结构化 `[{role,time,text}]`），即「对话记录提取」的直接产物。
+- `extractMessageText` 健壮解析消息：字符串 / `{text}` / `{content}` / `[{type,text}]` 数组，避免把结构化消息直接 JSON dump 给用户。
+- 噪声事件（`terminal_update`/`is_typing`/`context_growth_update` 等）在 worklog 中跳过。
 
 ## v1.3.1 健壮性修复（2026-06-11）—— 「登录成功却看不到任何对话记录」
 

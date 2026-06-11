@@ -144,11 +144,21 @@ function renderConversation(el) {
       html += '<div class="msg user"><div class="who">👤 USER · ' + esc(time) + '</div>' + esc(msgText(ev)) + '</div>';
     } else if (t === 'devin_message') {
       html += '<div class="msg devin"><div class="who">🤖 DEVIN · ' + esc(time) + '</div>' + esc(msgText(ev)) + '</div>';
-    } else if (t === 'command' || t === 'shell_command') {
-      html += '<div class="evt cmd">$ ' + esc(String(ev.command || ev.message || '').slice(0, 500)) + '</div>';
-    } else if (t === 'plan_update' || t === 'plan') {
-      html += '<div class="evt">📋 计划更新</div>';
-    } else if (ev.file_updates && ev.file_updates.length) {
+    } else if (t === 'devin_thoughts') {
+      const dur = ev.thinking_duration_ms ? ' (' + Math.round(Number(ev.thinking_duration_ms) / 1000) + 's)' : '';
+      html += '<div class="evt">💭 ' + esc(msgText(ev).slice(0, 600)) + esc(dur) + '</div>';
+    } else if (t === 'todo_update' && ev.todos && ev.todos.length) {
+      const marks = { completed: '✓', in_progress: '⟳', pending: '·', cancelled: '✗' };
+      html += '<div class="evt">📋 ' + ev.todos.map(td =>
+        (marks[td.status] || '·') + ' ' + esc(String(td.content || ''))).join('<br>') + '</div>';
+    } else if (t === 'shell_process_started') {
+      html += '<div class="evt cmd">$ ' + esc(String(ev.command || '').slice(0, 500)) + '</div>';
+    } else if (t === 'search_file_commands' && ev.search_commands) {
+      const d = ev.search_commands.map(c => c.regex || c.path).filter(Boolean).join('; ');
+      html += '<div class="evt">🔍 ' + esc(d.slice(0, 200)) + '</div>';
+    } else if (t === 'computer_use' && ev.actions) {
+      html += '<div class="evt">🖥️ ' + esc(ev.actions.map(a => a.action_type).filter(Boolean).join(', ')) + '</div>';
+    } else if ((t === 'multi_edit_result' || t === 'file_edit') && ev.file_updates && ev.file_updates.length) {
       html += '<div class="evt">✏️ ' + esc(ev.file_updates.map(f => f.file_path).join(', ').slice(0, 300)) + '</div>';
     }
   }
@@ -156,10 +166,20 @@ function renderConversation(el) {
 }
 
 function msgText(ev) {
-  const m = ev.message;
+  return extractText(ev.message);
+}
+
+function extractText(m) {
+  if (m == null) return '';
   if (typeof m === 'string') return m;
-  if (m && m.text) return m.text;
-  return JSON.stringify(m);
+  if (Array.isArray(m)) return m.map(extractText).filter(Boolean).join('\\n');
+  if (typeof m === 'object') {
+    if (typeof m.text === 'string') return m.text;
+    if (typeof m.message === 'string') return m.message;
+    if (m.content != null) return extractText(m.content);
+    return JSON.stringify(m);
+  }
+  return String(m);
 }
 
 function renderWorklog(el) {
