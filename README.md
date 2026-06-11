@@ -21,7 +21,7 @@ devin-remote/
 │
 ├── agent.ps1 / dao-call.ps1      # ★ 冷启动 · 传输层（GitHub Issues = 无感邮箱）
 ├── dao-exec.sh                   # Linux/Mac 控制端
-├── tools/                        # 冷启动脚本（一键部署/同步到 141）
+├── tools/                        # 冷启动脚本（一键部署/同步/rt-flow 辅助插件）
 │
 ├── plugins/cf-daohub/            # Cloudflare 云代理 + Python Agent 守护
 │
