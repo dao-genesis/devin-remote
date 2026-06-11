@@ -209,21 +209,25 @@ export function activate(context: vscode.ExtensionContext) {
     });
     if (!uri) { return; }
 
-    await vscode.window.withProgress({
+    const bytes = await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
       title: `导出 ${title.slice(0, 30)}`,
       cancellable: false,
     }, async (prog) => {
       const zipBuf = await exportSessionToZip(auth!, devinId, title,
         (message, increment) => prog.report({ message, increment }));
+      prog.report({ message: '写入磁盘...' });
       fs.writeFileSync(uri.fsPath, zipBuf);
-      const mb = (zipBuf.length / 1024 / 1024).toFixed(1);
-      const open = await vscode.window.showInformationMessage(
-        `导出完成: ${path.basename(uri.fsPath)} (${mb} MB)`, '打开文件夹');
-      if (open) {
-        vscode.commands.executeCommand('revealFileInOS', uri);
-      }
+      return zipBuf.length;
     });
+    // Show completion outside withProgress so the progress notification closes
+    // first (otherwise it stays stuck on the last "打包 ZIP" message).
+    const mb = (bytes / 1024 / 1024).toFixed(1);
+    const open = await vscode.window.showInformationMessage(
+      `导出完成: ${path.basename(uri.fsPath)} (${mb} MB)`, '打开文件夹');
+    if (open) {
+      vscode.commands.executeCommand('revealFileInOS', uri);
+    }
   }
 
   async function pickAndExport() {

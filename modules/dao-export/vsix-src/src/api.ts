@@ -7,14 +7,108 @@ import * as https from 'https';
 import * as http from 'http';
 import * as url from 'url';
 import * as zlib from 'zlib';
+import * as tls from 'tls';
+import * as net from 'net';
 
 let LOGIN_URL = 'https://windsurf.com/_devin-auth/password/login';
 let API_BASE = 'https://app.devin.ai/api';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
-let DOWNLOAD_CONCURRENCY = 12;
-let PRESIGN_CONCURRENCY = 6;
+let DOWNLOAD_CONCURRENCY = 24;
+let PRESIGN_CONCURRENCY = 8;
 let DOWNLOAD_RETRIES_CFG = 3;
 let DOWNLOAD_TIMEOUT_CFG = 45000;
+
+/**
+ * 连接复用 (HTTP keep-alive) —— 高延迟链路下的根本性能杠杆。
+ * 旧版每个文件都新建 TCP+TLS 连接，在国内→AWS 这类高 RTT 链路上，光
+ * TLS 握手就要多个往返；几百个文件的握手开销线性叠加 → 卡到几分钟甚至更久。
+ * 复用连接后，整批下载只付出 (并发数) 次握手，其余请求走已暖的连接，几乎只剩传输时间。
+ */
+let directHttpsAgent: https.Agent | null = null;
+let directHttpAgent: http.Agent | null = null;
+const proxyTunnelAgents = new Map<string, https.Agent>();
+
+function agentMaxSockets(): number {
+  return Math.max(DOWNLOAD_CONCURRENCY, PRESIGN_CONCURRENCY) + 4;
+}
+
+/** Reset pooled agents so a settings change (concurrency) takes effect. */
+function resetAgents(): void {
+  directHttpsAgent?.destroy();
+  directHttpAgent?.destroy();
+  proxyTunnelAgents.forEach((a) => a.destroy());
+  directHttpsAgent = null;
+  directHttpAgent = null;
+  proxyTunnelAgents.clear();
+}
+
+function directAgent(isHttps: boolean): https.Agent | http.Agent {
+  if (isHttps) {
+    if (!directHttpsAgent) {
+      directHttpsAgent = new https.Agent({
+        keepAlive: true, keepAliveMsecs: 15000,
+        maxSockets: agentMaxSockets(), scheduling: 'lifo',
+      });
+    }
+    return directHttpsAgent;
+  }
+  if (!directHttpAgent) {
+    directHttpAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: agentMaxSockets() });
+  }
+  return directHttpAgent;
+}
+
+/**
+ * Keep-alive HTTPS agent that tunnels through an HTTP proxy via CONNECT and then
+ * pools the established TLS sockets for reuse (keyed per target host by the base
+ * Agent). This brings connection reuse to the proxied path too — the common
+ * "local proxy (clash/v2ray) → AWS" setup — not just direct connections.
+ */
+class ProxyTunnelAgent extends https.Agent {
+  proxyHost: string;
+  proxyPort: number;
+  constructor(proxyHost: string, proxyPort: number, opts: https.AgentOptions) {
+    super(opts);
+    this.proxyHost = proxyHost;
+    this.proxyPort = proxyPort;
+  }
+}
+// Assigned on the prototype (not as a typed override) because Node's Agent
+// createConnection callback signature isn't structurally compatible with our
+// net.Socket-typed callback — the runtime contract is identical.
+(ProxyTunnelAgent.prototype as unknown as {
+  createConnection: (options: { host?: string; port?: number }, cb: (err: Error | null, socket?: net.Socket) => void) => void;
+}).createConnection = function (this: ProxyTunnelAgent, options, cb) {
+  const targetHost = options.host || '';
+  const targetPort = options.port || 443;
+  const connectReq = http.request({
+    host: this.proxyHost, port: this.proxyPort, method: 'CONNECT',
+    path: `${targetHost}:${targetPort}`, headers: { Host: `${targetHost}:${targetPort}` },
+  });
+  connectReq.on('connect', (res, socket) => {
+    if (res.statusCode !== 200) { socket.destroy(); cb(new Error(`proxy CONNECT ${res.statusCode}`)); return; }
+    const tlsSocket = tls.connect(
+      { socket, servername: targetHost, rejectUnauthorized: false },
+      () => cb(null, tlsSocket),
+    );
+    tlsSocket.on('error', (e) => cb(e));
+  });
+  connectReq.on('error', cb);
+  connectReq.on('timeout', () => { connectReq.destroy(); cb(new Error('proxy connect timeout')); });
+  connectReq.end();
+};
+
+function proxyTunnelAgent(proxy: url.URL): https.Agent {
+  const key = `${proxy.hostname}:${proxy.port || 80}`;
+  let agent = proxyTunnelAgents.get(key);
+  if (!agent) {
+    agent = new ProxyTunnelAgent(proxy.hostname, parseInt(proxy.port || '80', 10), {
+      keepAlive: true, keepAliveMsecs: 15000, maxSockets: agentMaxSockets(), scheduling: 'lifo',
+    });
+    proxyTunnelAgents.set(key, agent);
+  }
+  return agent;
+}
 
 /** Apply soft-coded settings from VS Code configuration or env. */
 export function applySettings(cfg?: {
@@ -28,6 +122,8 @@ export function applySettings(cfg?: {
   if (cfg?.presignConcurrency && cfg.presignConcurrency > 0) { PRESIGN_CONCURRENCY = cfg.presignConcurrency; }
   if (cfg?.downloadRetries && cfg.downloadRetries > 0) { DOWNLOAD_RETRIES_CFG = cfg.downloadRetries; }
   if (cfg?.downloadTimeout && cfg.downloadTimeout > 0) { DOWNLOAD_TIMEOUT_CFG = cfg.downloadTimeout; }
+  // Concurrency may have changed → rebuild pooled agents with the new maxSockets.
+  resetAgents();
 }
 
 export function getSettings() {
@@ -86,12 +182,20 @@ export interface FileUpdate {
   action_type?: string;
 }
 
-function request(targetUrl: string, options: {
+interface RawResponse { status: number; headers: http.IncomingHttpHeaders; buf: Buffer; }
+
+/**
+ * Single low-level request path used by BOTH json requests and binary file
+ * downloads. Always routes through a pooled keep-alive agent (direct or
+ * proxy-tunnel) so connections are reused across the whole export — the core
+ * fix for "many files = many TLS handshakes = minutes" on high-latency links.
+ */
+function doRequest(targetUrl: string, options: {
   method?: string;
   headers?: Record<string, string>;
   body?: string;
   timeout?: number;
-}): Promise<{ status: number; body: string }> {
+}): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(targetUrl);
     const proxy = getProxyForUrl(targetUrl);
@@ -103,67 +207,53 @@ function request(targetUrl: string, options: {
     const onResponse = (res: http.IncomingMessage) => {
       const chunks: Buffer[] = [];
       res.on('data', (chunk: Buffer) => chunks.push(chunk));
-      res.on('end', () => {
-        let buf = Buffer.concat(chunks);
-        // Some proxies/CDNs compress responses even when we don't ask. Decompress
-        // so JSON.parse downstream doesn't silently choke on binary and return [].
-        const enc = String(res.headers['content-encoding'] || '').toLowerCase();
-        try {
-          if (enc === 'gzip') { buf = zlib.gunzipSync(buf); }
-          else if (enc === 'deflate') { buf = zlib.inflateSync(buf); }
-          else if (enc === 'br') { buf = zlib.brotliDecompressSync(buf); }
-        } catch { /* fall back to raw bytes */ }
-        resolve({ status: res.statusCode || 0, body: buf.toString('utf-8') });
-      });
+      res.on('end', () => resolve({ status: res.statusCode || 0, headers: res.headers, buf: Buffer.concat(chunks) }));
+      res.on('error', reject);
     };
 
-    if (proxy && isHttps) {
-      // CONNECT tunnel through proxy
-      const connectReq = http.request({
-        hostname: proxy.hostname, port: parseInt(proxy.port || '80', 10),
-        method: 'CONNECT', path: `${parsed.hostname}:${parsed.port || 443}`,
-        timeout: tout,
-      });
-      connectReq.on('connect', (_res, socket) => {
-        const req = https.request({
-          hostname: parsed.hostname,
-          port: parseInt(parsed.port || '443', 10),
-          path: parsed.pathname + parsed.search,
-          method, headers: hdrs, timeout: tout,
-          createConnection: (() => socket) as any, agent: false, rejectUnauthorized: false,
-        } as any, onResponse);
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-        if (options.body) { req.write(options.body); }
-        req.end();
-      });
-      connectReq.on('error', reject);
-      connectReq.on('timeout', () => { connectReq.destroy(); reject(new Error('proxy connect timeout')); });
-      connectReq.end();
-    } else if (proxy && !isHttps) {
-      // Plain proxy
-      const req = http.request({
-        hostname: proxy.hostname, port: parseInt(proxy.port || '80', 10),
+    let req: http.ClientRequest;
+    if (proxy && !isHttps) {
+      // Plain (non-TLS) target through proxy — rare; keep direct proxy request.
+      req = http.request({
+        host: proxy.hostname, port: parseInt(proxy.port || '80', 10),
         path: targetUrl, method, headers: hdrs, timeout: tout,
       }, onResponse);
-      req.on('error', reject);
-      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-      if (options.body) { req.write(options.body); }
-      req.end();
     } else {
-      // Direct connection
+      // Direct or proxied HTTPS — both go through a pooled keep-alive agent.
+      const agent = (proxy && isHttps) ? proxyTunnelAgent(proxy) : directAgent(isHttps);
       const mod = isHttps ? https : http;
-      const req = mod.request({
-        hostname: parsed.hostname,
-        port: parsed.port || (isHttps ? 443 : 80),
+      req = mod.request({
+        host: parsed.hostname,
+        port: parsed.port ? parseInt(parsed.port, 10) : (isHttps ? 443 : 80),
         path: parsed.pathname + parsed.search,
-        method, headers: hdrs, timeout: tout, rejectUnauthorized: false,
-      }, onResponse);
-      req.on('error', reject);
-      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-      if (options.body) { req.write(options.body); }
-      req.end();
+        method, headers: hdrs, timeout: tout,
+        agent, rejectUnauthorized: false,
+      } as https.RequestOptions, onResponse);
     }
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    if (options.body) { req.write(options.body); }
+    req.end();
+  });
+}
+
+function request(targetUrl: string, options: {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  timeout?: number;
+}): Promise<{ status: number; body: string }> {
+  return doRequest(targetUrl, options).then(({ status, headers, buf }) => {
+    // Some proxies/CDNs compress responses even when we don't ask. Decompress
+    // so JSON.parse downstream doesn't silently choke on binary and return [].
+    const enc = String(headers['content-encoding'] || '').toLowerCase();
+    let out = buf;
+    try {
+      if (enc === 'gzip') { out = zlib.gunzipSync(buf); }
+      else if (enc === 'deflate') { out = zlib.inflateSync(buf); }
+      else if (enc === 'br') { out = zlib.brotliDecompressSync(buf); }
+    } catch { /* fall back to raw bytes */ }
+    return { status, body: out.toString('utf-8') };
   });
 }
 
@@ -438,53 +528,16 @@ export async function downloadFileWithRetry(
 }
 
 export async function downloadFile(targetUrl: string, headers?: Record<string, string>): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const parsed = new URL(targetUrl);
-    const proxy = getProxyForUrl(targetUrl);
-    const isHttps = parsed.protocol === 'https:';
-    const hdrs: Record<string, string> = headers || {};
-    const tout = DOWNLOAD_TIMEOUT_CFG;
-
-    const onResponse = (res: http.IncomingMessage) => {
-      const chunks: Buffer[] = [];
-      res.on('data', (chunk: Buffer) => chunks.push(chunk));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-    };
-
-    if (proxy && isHttps) {
-      const connectReq = http.request({
-        hostname: proxy.hostname, port: parseInt(proxy.port || '80', 10),
-        method: 'CONNECT', path: `${parsed.hostname}:${parsed.port || 443}`,
-        timeout: tout,
-      });
-      connectReq.on('connect', (_res, socket) => {
-        const req = https.request({
-          hostname: parsed.hostname, port: parseInt(parsed.port || '443', 10),
-          path: parsed.pathname + parsed.search,
-          method: 'GET', headers: hdrs, timeout: tout,
-          createConnection: (() => socket) as any, agent: false, rejectUnauthorized: false,
-        } as any, onResponse);
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-        req.end();
-      });
-      connectReq.on('error', reject);
-      connectReq.on('timeout', () => { connectReq.destroy(); reject(new Error('proxy connect timeout')); });
-      connectReq.end();
-    } else {
-      const mod = isHttps ? https : http;
-      const req = mod.request({
-        hostname: parsed.hostname,
-        port: parsed.port || (isHttps ? 443 : 80),
-        path: parsed.pathname + parsed.search,
-        method: 'GET', headers: hdrs, timeout: tout,
-        rejectUnauthorized: false,
-      }, onResponse);
-      req.on('error', reject);
-      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-      req.end();
-    }
+  const { status, buf } = await doRequest(targetUrl, {
+    method: 'GET', headers: headers || {}, timeout: DOWNLOAD_TIMEOUT_CFG,
   });
+  // S3/CloudFront errors (expired URL, 403, 5xx) come back with an XML/HTML body
+  // and HTTP 200 was previously assumed — so error pages got saved AS the file and
+  // never retried. Reject on non-2xx so downloadFileWithRetry can actually retry.
+  if (status < 200 || status >= 300) {
+    throw new Error(`download HTTP ${status}: ${buf.slice(0, 200).toString('utf-8')}`);
+  }
+  return buf;
 }
 
 export function extractAllKeys(events: EventItem[]): string[] {
