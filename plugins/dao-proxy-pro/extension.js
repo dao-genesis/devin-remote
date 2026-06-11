@@ -1,5 +1,8 @@
-// extension.js · dao-proxy-pro v9.9.260 · 道法自然 · ACP适配 · 反者道之动 · 印222
+// extension.js · dao-proxy-pro v9.9.269 · 道法自然 · ACP适配 · 反者道之动 · 印222
 // v9.9.260 · 同步Min v9.9.60提示词策略 · 繁体化 · 损之又损(去嘱留经) · 经文自足
+// v9.9.267 · ③模型路由 模板字面量内正则反斜杠折叠修复(字符类替代 \/ \s)
+// v9.9.268 · 三模块面板 window.confirm/alert 被 webview 屏蔽 → 自带 _daoConfirm/_daoToast 弹层
+// v9.9.269 · 悬浮面板(本源观照)同样自带 _daoConfirm/_daoToast,7 处 confirm() 改为弹层(断线/解锁/删渠/清空/回退)
 //
 // 道德经 · 第四十章: "反者道之动, 弱者道之用."
 // 道德经 · 第四十八章: "为道日损. 损之又损, 以至于无为."
@@ -3108,6 +3111,34 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
     return fetch(_BASE + p, {method:'DELETE',cache:'no-store'}).then(function(r){return r.json();});
   }
 
+  // ── 自带确认弹层 (VS Code webview 屏蔽 window.confirm/alert) ──
+  function _daoToast(msg) {
+    var t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = 'position:fixed;left:50%;top:16px;transform:translateX(-50%);background:rgba(40,40,46,0.97);color:#e6e6e6;border:1px solid rgba(128,128,128,0.4);border-radius:6px;padding:8px 14px;font-size:12px;z-index:99999;box-shadow:0 4px 16px rgba(0,0,0,0.5);max-width:80%;';
+    document.body.appendChild(t);
+    setTimeout(function(){ if (t.parentNode) t.parentNode.removeChild(t); }, 2600);
+  }
+  function _daoConfirm(msg) {
+    return new Promise(function(resolve) {
+      var done = false;
+      function close(v){ if (done) return; done = true; if (ov.parentNode) ov.parentNode.removeChild(ov); resolve(v); }
+      var ov = document.createElement('div');
+      ov.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:99998;display:flex;align-items:center;justify-content:center;';
+      var box = document.createElement('div');
+      box.style.cssText = 'background:#26262c;color:#e6e6e6;border:1px solid rgba(128,128,128,0.4);border-radius:8px;padding:16px 18px;max-width:78%;box-shadow:0 8px 28px rgba(0,0,0,0.6);';
+      var m = document.createElement('div'); m.textContent = msg; m.style.cssText = 'font-size:13px;margin-bottom:14px;line-height:1.5;';
+      var row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+      var bc = document.createElement('button'); bc.textContent = '\u53d6\u6d88'; bc.style.cssText = 'background:rgba(128,128,128,0.2);color:#e6e6e6;border:1px solid rgba(128,128,128,0.4);border-radius:5px;padding:5px 14px;font-size:12px;cursor:pointer;';
+      var bo = document.createElement('button'); bo.textContent = '\u786e\u8ba4'; bo.style.cssText = 'background:#b84a4a;color:#fff;border:none;border-radius:5px;padding:5px 14px;font-size:12px;cursor:pointer;';
+      bc.addEventListener('click', function(){ close(false); });
+      bo.addEventListener('click', function(){ close(true); });
+      ov.addEventListener('click', function(e){ if (e.target === ov) close(false); });
+      row.appendChild(bc); row.appendChild(bo); box.appendChild(m); box.appendChild(row); ov.appendChild(box);
+      document.body.appendChild(ov);
+    });
+  }
+
   // ── toggle ──
   $eaToggle.addEventListener('click', function() {
     _eaOpen = !_eaOpen;
@@ -3185,7 +3216,7 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
             var uid=this.getAttribute('data-uid');
             var gUids=(this.getAttribute('data-uids')||uid).split(',').filter(Boolean);
             var wired=gUids.filter(function(u){return !!_eaWireMap[u];});
-            if(wired.length>0){if(confirm('\u65ad\u5f00 '+f.label+' \u5168\u90e8'+wired.length+'\u6761\u8def\u7531?')){Promise.all(wired.map(function(u){return fDel('/origin/ea/route/'+encodeURIComponent(u));})).then(function(){_eaSelLeft=null;eaLoad();$eaInfo.textContent='\u2716 \u5df2\u65ad\u5f00 '+wired.length+'\u6761';});}return;}
+            if(wired.length>0){_daoConfirm('\u65ad\u5f00 '+f.label+' \u5168\u90e8'+wired.length+'\u6761\u8def\u7531?').then(function(ok){if(!ok)return;Promise.all(wired.map(function(u){return fDel('/origin/ea/route/'+encodeURIComponent(u));})).then(function(){_eaSelLeft=null;eaLoad();$eaInfo.textContent='\u2716 \u5df2\u65ad\u5f00 '+wired.length+'\u6761';});});return;}
             if(_eaSelLeft===uid){_eaSelLeft=null;eaRender();return;}
             _eaSelLeft=uid;
             if(_eaSelRight){eaAutoConnect();}else{eaRender();}
@@ -3232,7 +3263,7 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
           if(m.isNew){var nb=document.createElement('span');nb.className='ea-status-badge new';nb.textContent='N';nb.title='New';el.appendChild(nb);}
           if(m.isRecommended){var rb=document.createElement('span');rb.className='ea-status-badge recommended';rb.textContent='\u2714';rb.title='Recommended';el.appendChild(rb);}
           if(anyProt&&!isWired){var pb=document.createElement('span');pb.className='ea-prot-badge';pb.textContent='\u9501';pb.title='\u4fdd\u62a4(\u70b9\u51fb\u89e3\u9501)';el.appendChild(pb);
-            pb.addEventListener('click',function(e){e.stopPropagation();if(confirm('\u89e3\u9501 '+base+' (全部'+uids.length+'档)?')){Promise.all(uids.map(function(u){return fPost('/origin/ea/model-unlock',{modelUid:u,unlock:true});})).then(function(){eaLoad();});}});
+            pb.addEventListener('click',function(e){e.stopPropagation();_daoConfirm('\u89e3\u9501 '+base+' (全部'+uids.length+'档)?').then(function(ok){if(!ok)return;Promise.all(uids.map(function(u){return fPost('/origin/ea/model-unlock',{modelUid:u,unlock:true});})).then(function(){eaLoad();});});});
           }
           if(isWired){var wb=document.createElement('span');wb.className='ea-wire-badge';wb.textContent='\u2713'+(tiers.length>1?wiredUids.length+'/'+tiers.length:'');wb.title='\u5df2\u8fde\u7ebf '+wiredUids.length+'/'+tiers.length+' (\u70b9\u51fb\u65ad\u5f00\u5168\u90e8)';el.appendChild(wb);}
           el.title=base+(tiers.length>1?' \u00b7 '+tiers.length+'档: '+uids.map(function(u){return _tierLabel(u,base);}).join('/'):'')+(m.providerName?' ['+m.providerName+']':'')+(isWired?' \u00b7 \u5df2\u8fde\u7ebf '+wiredUids.length+'/'+tiers.length:'')+(anyProt?' \u00b7 \u4fdd\u62a4':'');
@@ -3240,7 +3271,7 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
             var uid=this.getAttribute('data-uid');
             var gUids=(this.getAttribute('data-uids')||uid).split(',');
             var wired=gUids.filter(function(u){return !!_eaWireMap[u];});
-            if(wired.length>0){if(confirm('\u65ad\u5f00 '+base+' 全部'+wired.length+'条路由?')){Promise.all(wired.map(function(u){return fDel('/origin/ea/route/'+encodeURIComponent(u));})).then(function(){_eaSelLeft=null;eaLoad();$eaInfo.textContent='\u2716 \u5df2\u65ad\u5f00 '+wired.length+'条';});}return;}
+            if(wired.length>0){_daoConfirm('\u65ad\u5f00 '+base+' 全部'+wired.length+'条路由?').then(function(ok){if(!ok)return;Promise.all(wired.map(function(u){return fDel('/origin/ea/route/'+encodeURIComponent(u));})).then(function(){_eaSelLeft=null;eaLoad();$eaInfo.textContent='\u2716 \u5df2\u65ad\u5f00 '+wired.length+'条';});});return;}
             if(_eaSelLeft===uid){_eaSelLeft=null;eaRender();return;}
             _eaSelLeft=uid;
             if(_eaSelRight){eaAutoConnect();}else{eaRender();}
@@ -3281,7 +3312,7 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
         el.addEventListener('click',function(){
           var key=this.getAttribute('data-key');
           // ★ v9.9.98 · 点击已连线右侧模型 → 断线
-          if(isWired){if(confirm('\u65ad\u5f00 '+rm.prov+'/'+rm.model+'?')){fDel('/origin/ea/route/'+encodeURIComponent(rm.wiredUid)).then(function(r){if(r.ok){_eaSelRight=null;eaLoad();$eaInfo.textContent='\u2716 \u5df2\u65ad\u5f00';}});}return;}
+          if(isWired){_daoConfirm('\u65ad\u5f00 '+rm.prov+'/'+rm.model+'?').then(function(ok){if(!ok)return;fDel('/origin/ea/route/'+encodeURIComponent(rm.wiredUid)).then(function(r){if(r.ok){_eaSelRight=null;eaLoad();$eaInfo.textContent='\u2716 \u5df2\u65ad\u5f00';}});});return;}
           if(_eaSelRight===key){_eaSelRight=null;eaRender();return;}
           _eaSelRight=key;
           if(_eaSelLeft){eaAutoConnect();}else{eaRender();}
@@ -3300,7 +3331,7 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
       $eaProvList.appendChild(pi);
     }
     $eaProvList.querySelectorAll('.ea-del-prov').forEach(function(btn){
-      btn.addEventListener('click',function(){var n=this.getAttribute('data-prov');if(confirm('\u5220\u9664Provider '+n+'?')){fDel('/origin/ea/provider/'+encodeURIComponent(n)).then(function(r){if(r.ok)eaLoad();});}});
+      btn.addEventListener('click',function(){var n=this.getAttribute('data-prov');_daoConfirm('\u5220\u9664Provider '+n+'?').then(function(ok){if(!ok)return;fDel('/origin/ea/provider/'+encodeURIComponent(n)).then(function(r){if(r.ok)eaLoad();});});});
     });
     // ★ v9.9.102 · Provider 编辑（CRUD 补全）
     $eaProvList.querySelectorAll('.ea-edit-prov').forEach(function(btn){
@@ -3449,9 +3480,11 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
     if (!_eaData || !_eaData.routes) return;
     var uids = Object.keys(_eaData.routes);
     if (uids.length === 0) { $eaInfo.textContent = '\u65e0\u8def\u7531'; return; }
-    if (!confirm('\u6e05\u7a7a\u6240\u6709 '+uids.length+' \u6761\u8def\u7531?')) return;
+    _daoConfirm('\u6e05\u7a7a\u6240\u6709 '+uids.length+' \u6761\u8def\u7531?').then(function(ok){
+    if(!ok)return;
     var proms = uids.map(function(uid){ return fDel('/origin/ea/route/'+encodeURIComponent(uid)); });
     Promise.all(proms).then(function(){ _eaSelLeft=null;_eaSelRight=null;eaLoad(); });
+    });
   });
 
   // ★ v9.9.97 · 热切换回退官方 · 反者道之动 · 一键回退
@@ -3461,10 +3494,12 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
       if (!_eaData || !_eaData.routes) return;
       var uids = Object.keys(_eaData.routes);
       if (uids.length === 0) { $eaInfo.textContent = '\u65e0\u8def\u7531\u53ef\u56de\u9000'; return; }
-      if (!confirm('\u70ed\u5207\u6362\u56de\u9000\u5b98\u65b9: \u5173\u95ed '+uids.length+' \u6761\u8def\u7531?')) return;
+      _daoConfirm('\u70ed\u5207\u6362\u56de\u9000\u5b98\u65b9: \u5173\u95ed '+uids.length+' \u6761\u8def\u7531?').then(function(ok){
+      if(!ok)return;
       $eaInfo.textContent = '\u23ea \u56de\u9000\u4e2d...';
       var proms = uids.map(function(uid){ return fPost('/origin/ea/route-toggle',{modelUid:uid,enabled:false}); });
       Promise.all(proms).then(function(){ _eaSelLeft=null;_eaSelRight=null;eaLoad(); $eaInfo.textContent = '\u23ea \u5df2\u56de\u9000\u5b98\u65b9'; });
+      });
     });
   }
 
@@ -4715,9 +4750,10 @@ function getEaConfigHtml(port, nonce) {
       btn.addEventListener('click', function(e) {
         e.stopPropagation();
         var n = this.getAttribute('data-del');
-        if (confirm('删除渠道 ' + n + '? (关联路由也会删除)')) {
+        _daoConfirm('删除渠道 ' + n + '? (关联路由也会删除)').then(function(ok2) {
+          if (!ok2) return;
           fDel('/origin/ea/provider/' + encodeURIComponent(n)).then(function(r) { if (r.ok) loadConfig(); });
-        }
+        });
       });
     });
     box.querySelectorAll('[data-edit]').forEach(function(btn) {
@@ -4784,9 +4820,10 @@ function getEaConfigHtml(port, nonce) {
           var keys = [];
           uds.forEach(function(x){ var k = _routeKeyFor(x); if (k && keys.indexOf(k) < 0) keys.push(k); });
           if (keys.length > 0) {
-            if (confirm('断开 ' + f.label + ' 全部 ' + keys.length + ' 条路由?')) {
+            _daoConfirm('断开 ' + f.label + ' 全部 ' + keys.length + ' 条路由?').then(function(ok2) {
+              if (!ok2) return;
               Promise.all(keys.map(function(k){ return fDel('/origin/ea/route/' + encodeURIComponent(k)); })).then(function(){ loadConfig(); });
-            }
+            });
           } else {
             openRouteModal(u);
           }
@@ -4819,9 +4856,10 @@ function getEaConfigHtml(port, nonce) {
         header.querySelector('.btn.del').addEventListener('click', function(e) {
           e.stopPropagation();
           var pName = this.getAttribute('data-prov');
-          if (confirm('删除 provider ' + pName + '? (关联路由也会删除)')) {
+          _daoConfirm('删除 provider ' + pName + '? (关联路由也会删除)').then(function(ok2) {
+            if (!ok2) return;
             fDel('/origin/ea/provider/' + encodeURIComponent(pName)).then(function(r) { if (r.ok) loadConfig(); });
-          }
+          });
         });
       }
 
@@ -4938,7 +4976,7 @@ function getEaConfigHtml(port, nonce) {
     _PRESETS.forEach(function(p, i) {
       var opt = document.createElement('option');
       opt.value = String(i);
-      opt.textContent = p.n + ' (' + p.u.replace(/^https?:\/\//, '') + ')';
+      opt.textContent = p.n + ' (' + p.u.replace(/^https?:[/][/]/, '') + ')';
       sel.appendChild(opt);
     });
     var apply = document.getElementById('btnApplyPreset');
@@ -4947,7 +4985,7 @@ function getEaConfigHtml(port, nonce) {
       if (v === '') return;
       var p = _PRESETS[parseInt(v, 10)];
       if (!p) return;
-      document.getElementById('provName').value = p.n.toLowerCase().replace(/\s+/g, '-');
+      document.getElementById('provName').value = p.n.toLowerCase().replace(/[ ]+/g, '-');
       document.getElementById('provUrl').value = p.u;
       document.getElementById('provModels').value = p.m;
       document.getElementById('provKey').focus();
@@ -4960,7 +4998,7 @@ function getEaConfigHtml(port, nonce) {
     var url = document.getElementById('provUrl').value.trim();
     var key = document.getElementById('provKey').value.trim();
     var modelsRaw = document.getElementById('provModels').value.trim();
-    if (!name || !url) { alert('名称和 URL 必填'); return; }
+    if (!name || !url) { _daoToast('名称和 URL 必填'); return; }
     var cfg = { baseUrl: url, apiKey: key };
     if (modelsRaw) cfg.models = modelsRaw.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
     fPost('/origin/ea/provider', { name: name, cfg: cfg })
@@ -4972,9 +5010,9 @@ function getEaConfigHtml(port, nonce) {
           document.getElementById('provModels').value = '';
           loadConfig();
         } else {
-          alert('添加失败: ' + (r.error || 'unknown'));
+          _daoToast('添加失败: ' + (r.error || 'unknown'));
         }
-      }).catch(function(e) { alert('请求失败: ' + e.message); });
+      }).catch(function(e) { _daoToast('请求失败: ' + e.message); });
   });
 
   // ── 探测健康 ──
@@ -5019,6 +5057,43 @@ function getEaConfigHtml(port, nonce) {
     });
   }
 
+  // ── webview 安全替代: VS Code webview 禁用 window.confirm/alert ──
+  function _daoToast(msg) {
+    var t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = 'position:fixed;left:50%;top:16px;transform:translateX(-50%);background:rgba(40,40,46,0.97);color:#e6e6e6;border:1px solid rgba(128,128,128,0.4);border-radius:6px;padding:8px 14px;font-size:12px;z-index:99999;box-shadow:0 4px 16px rgba(0,0,0,0.5);max-width:80%;';
+    document.body.appendChild(t);
+    setTimeout(function(){ if (t.parentNode) t.parentNode.removeChild(t); }, 2600);
+  }
+  function _daoConfirm(msg) {
+    return new Promise(function(resolve) {
+      var ov = document.createElement('div');
+      ov.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:99998;display:flex;align-items:center;justify-content:center;';
+      var box = document.createElement('div');
+      box.style.cssText = 'background:#26262c;color:#e6e6e6;border:1px solid rgba(128,128,128,0.4);border-radius:8px;padding:16px 18px;max-width:78%;box-shadow:0 8px 28px rgba(0,0,0,0.6);';
+      var p = document.createElement('div');
+      p.textContent = msg;
+      p.style.cssText = 'font-size:13px;margin-bottom:14px;line-height:1.5;';
+      var btns = document.createElement('div');
+      btns.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+      var cancel = document.createElement('button');
+      cancel.textContent = '取消';
+      cancel.style.cssText = 'padding:5px 14px;font-size:12px;border-radius:4px;border:1px solid rgba(128,128,128,0.4);background:transparent;color:#e6e6e6;cursor:pointer;';
+      var ok = document.createElement('button');
+      ok.textContent = '确认';
+      ok.style.cssText = 'padding:5px 14px;font-size:12px;border-radius:4px;border:1px solid #c0392b;background:#c0392b;color:#fff;cursor:pointer;';
+      function close(v){ if (ov.parentNode) ov.parentNode.removeChild(ov); resolve(v); }
+      cancel.addEventListener('click', function(){ close(false); });
+      ok.addEventListener('click', function(){ close(true); });
+      ov.addEventListener('click', function(e){ if (e.target === ov) close(false); });
+      btns.appendChild(cancel); btns.appendChild(ok);
+      box.appendChild(p); box.appendChild(btns);
+      ov.appendChild(box);
+      document.body.appendChild(ov);
+      ok.focus();
+    });
+  }
+
   function openRouteModal(uid, provName, extModel) {
     var modal = document.getElementById('routeModal');
     document.getElementById('routeModelUid').value = uid || '';
@@ -5059,7 +5134,7 @@ function getEaConfigHtml(port, nonce) {
     var model = document.getElementById('routeExtModel').value.trim();
     var maxTokens = parseInt(document.getElementById('routeMaxTokens').value) || 16384;
     var thinking = document.getElementById('routeThinking').checked;
-    if (!uid || !prov || !model) { alert('所有字段必填'); return; }
+    if (!uid || !prov || !model) { _daoToast('所有字段必填'); return; }
     fPost('/origin/ea/route', {
       modelUid: uid,
       route: { provider: prov, model: model, maxOutputTokens: maxTokens, thinkingEnabled: thinking }
@@ -5068,9 +5143,9 @@ function getEaConfigHtml(port, nonce) {
         document.getElementById('routeModal').classList.remove('show');
         loadConfig();
       } else {
-        alert('保存失败: ' + (r.error || 'unknown'));
+        _daoToast('保存失败: ' + (r.error || 'unknown'));
       }
-    }).catch(function(e) { alert('请求失败: ' + e.message); });
+    }).catch(function(e) { _daoToast('请求失败: ' + e.message); });
   });
 
   document.getElementById('routeCancel').addEventListener('click', function() {

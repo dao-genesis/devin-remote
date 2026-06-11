@@ -57,9 +57,17 @@ devin-desktop --install-extension <name>-<ver>.vsix --force
 devin-desktop --list-extensions     # 验证
 ```
 - 免构建捷径：`00_.../artifacts/` 里有四个最新 VSIX，直接 `--install-extension`。
+- **坑（vsce 交互提示）**：`vsce package` 会就「`*` 激活事件 / 缺 LICENSE / 缺 .vscodeignore」连问三次 `[y/N]`。非交互环境会卡住——要么逐个 `y` 应答，要么加 `--allow-star-activation --allow-missing-repository` 并提供 `.vscodeignore` 以减少提示。
+- **改完务必 `node --check extension.js`**，并对**渲染后的 webview 内联脚本**再校验一次（见 §4「webview 两大陷阱」）。
 
 ## 4. 编辑器内验证要点
 - proxy-pro：活动栏「本源观照」面板渲染、帛书 SP 注入字数、模式/路由切换提示弹出即「活」。
+- **③模型路由 数据源**：webview 必须读后端 `http://127.0.0.1:8937/origin/ea/overview`（49 家族归一 + builtin-stub 测试通道置首），**勿**用旧扁平 `/origin/ea/config`+`/origin/model_catalog`（左栏会变扁平列表 + 首项怪名、右栏无测试通道）。
+
+### webview 两大陷阱（v9.9.267 / v9.9.268-269 修复，务必回归）
+1. **模板字面量内正则反斜杠折叠**：webview HTML 由反引号模板字符串生成，串内正则的单反斜杠会在插值时被吞——`/^https?:\/\//` 渲染成 `/^https?:///`（语法错误，整段 IIFE 抛错→面板「加载中」不动）。**改用字符类**：`/^https?:[/][/]/`、`/[ ]+/g`（Unicode `\uXXXX` 不受影响，可保留）。
+2. **window.confirm/alert/prompt 被 VS Code webview 静默屏蔽**：返回假值、动作静默失效（如双击断线无反应）。**自带弹层**：`_daoConfirm(msg)`(Promise+遮罩+取消/确认)、`_daoToast(msg)`(2.6s 浮层)。三模块面板(getEaConfigHtml)与悬浮面板(getEssenceHtml)**各自**都要定义并替换全部 `confirm()/alert()`。
+- 渲染校验法：抽出 `<script>` 块、把 `${...}` 占位、用反引号包裹 `eval` 模拟模板插值（还原 `\uXXXX`/`\/` 折叠），再 `new vm.Script()` 解析（参见 `tools/render_check.js`，可直接 `node tools/render_check.js`）。
 - dao-vsix：全功能面板 Sessions 拉到真实会话（曾实测 104 条）、内网穿透 board 显示隧道 URL。
 - dao-bridge：随 IDE 启动自动起隧道；集成终端 curl 公网 URL 返回 `{status:ok,workspace:...}`；关窗隧道消失（CF 530）。
 - LSP「connection to server is erroring」在反代 invert 模式下是**预期现象**（代理拦截出站），与插件无关。
@@ -75,3 +83,8 @@ devin-desktop --list-extensions     # 验证
 
 ## 6. 一键脚本
 `powershell -ExecutionPolicy Bypass -File .\06_bootstrap.ps1`（环境检查→IDE检查→装四插件→验证）。
+
+## 7. 冷启动本源次序 & 易失文件（反者道之动）
+- **次序**：先把 Devin Desktop **装到本 VM**（§1）→ 再做全部配置/登录/装插件（§2-3）→ 再在编辑器内推进验证（§4）。先装后配，无为而无不为。
+- **易失目录**：进程重启会清空 `/tmp`（如 `/tmp/devin-recordings/*.mp4` 录屏会丢）。需要留存的产物（录屏、构建件、脚本）一律落到 `C:\Users\Administrator` 或仓库内持久路径，**勿**留在临时目录。
+- **后端**：proxy-pro 后端常驻 `127.0.0.1:8937`；重启后需重新拉起。`curl /origin/ea/overview` 应返回 `ok=true`、`official_families.length=49`、`providers=[builtin-stub,deepseek,anthropic,openai]`。

@@ -2,7 +2,7 @@
   "name": "dao-proxy-pro",
   "displayName": "道Agent Pro · 外接API · 反者道之动",
   "description": "v9.9.260 · 模型解锁(执大象天下往) + ACP适配: stdio中间人代理(印222) + 最上游SP同源 + 三协议SSE + LSP模拟器 + 工具白名单 · 反者道之动",
-  "version": "9.9.266",
+  "version": "9.9.269",
   "publisher": "dao-agi",
   "license": "Apache-2.0",
   "engines": {
