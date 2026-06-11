@@ -194,6 +194,26 @@ class WorkspaceState {
 // 全局唯一实例 — 每个VSCode窗口一个
 let ws: WorkspaceState;
 let statusBarItem: vscode.StatusBarItem;
+// 帛书·二十五「道法自然」— 扩展安装路径 · 供读取捆绑的规则文本
+let _daoExtPath: string = '';
+// 帛书规则缓存 (你本无名…道德经/阴符经 7758字) — 一次读取，缓存复用
+let _daoRulesCache: string | null = null;
+function getDaoRulesText(): string {
+    if (_daoRulesCache !== null) return _daoRulesCache;
+    const candidates = [
+        _daoExtPath ? path.join(_daoExtPath, 'media', 'dao-rules.md') : '',
+        path.join(__dirname, '..', 'media', 'dao-rules.md'),
+        path.join(__dirname, 'media', 'dao-rules.md'),
+    ].filter(Boolean);
+    for (const p of candidates) {
+        try {
+            const t = fs.readFileSync(p, 'utf8').trim();
+            if (t && t.length > 100) { _daoRulesCache = t; return t; }
+        } catch { /* 道法自然·守柔 */ }
+    }
+    _daoRulesCache = '';
+    return '';
+}
 
 // CF全局凭证 — 一机一CF账号，所有窗口共享
 // 帛书·三十九「致数与无与」— 全局唯一，不重复声明
@@ -217,6 +237,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // ═══════════════════════════════════════════════════════════
     const cloudPanel = new DaoCloudPanel(context.extensionUri);
     sidebarCloudPanel = cloudPanel;
+    // 帛书·二十五「道法自然」— 记录扩展路径 · 供读取捆绑规则文本(dao-rules.md)
+    try { _daoExtPath = context.extensionPath; } catch { /* 守柔 */ }
 
     // ═══════════════════════════════════════════════════════════
     // 道法自然 · 零配置自动链 — 帛书·六十二「道者万物之注」
@@ -1605,8 +1627,17 @@ function mpEsc(s: string): string {
     return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// 读取 dao-bridge 插件产出的工作区隧道状态 (~/.dao/bridge/conn.json)
+function readBridgeConn(): any {
+    try {
+        const p = path.join(os.homedir(), '.dao', 'bridge', 'conn.json');
+        const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+        return { url: c.url || '', workspace: c.workspace || '', root: c.root || '', host: c.host || '', updated: c.updated || '', port: c.port || 0 };
+    } catch { return null; }
+}
+
 function getDaoCloudMiddlePanelHtml(st: any): string {
-    const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, cfAuth, injecting } = st;
+    const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, cfAuth, injecting, bridge } = st;
     // 帛书·「道生一，一生二，二生三，三生万物」
     // Overview: Codeium API 数据（已工作 — devin-session-token$ 对 Codeium API 有效）
     // Sessions/Knowledge/Secrets/Integrations: simpleBrowser 打开 app.devin.ai（共享 Electron session）
@@ -1747,6 +1778,7 @@ const S={
     hostname:'${mpEsc(hostname)}'
   },
   cf:{auth:${cfAuth}},
+  bridge:${JSON.stringify(bridge || null)},
   inject:null,
   tab:'overview',
   data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]}
@@ -1816,13 +1848,26 @@ function rO(){
     ih='<div class="st">注入状态</div><div class="card"><div class="cr"><span class="l"><span class="tag secret">S</span> Secret</span><span class="v" style="color:'+(i.secret?'var(--success)':'var(--danger)')+'">'+(i.secret?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag knowledge">K</span> Knowledge</span><span class="v" style="color:'+(i.knowledge?'var(--success)':'var(--danger)')+'">'+(i.knowledge?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag playbook">P</span> Playbook</span><span class="v" style="color:'+(i.playbook?'var(--success)':'var(--danger)')+'">'+(i.playbook?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag git">G</span> Git</span><span class="v" style="color:'+(i.git?'var(--success)':'var(--danger)')+'">'+(i.git?'✓':'✗')+'</span></div></div>';
   }
   v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+(S.auth.canUseApi?'':qh?'':'<div class="st">Devin API Key</div><div class="card"><p style="font-size:11px;color:var(--warn);margin-bottom:8px">⚠ 当前认证 (devin-session-token$) 仅对 Codeium API 有效，Devin API 返回 403。</p><p style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5">需要 cog_ 前缀的 API Key 才能在此面板显示 Sessions、Knowledge 等数据。</p><div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;font-size:11px;line-height:1.5"><div style="color:var(--accent);font-weight:600;margin-bottom:4px">📋 创建 API Key 步骤：</div><div style="color:var(--fg)">1. 打开 <a href="#" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;});return false" style="color:var(--accent)">app.devin.ai/settings</a></div><div style="color:var(--fg)">2. 点击 <b>Service Users</b></div><div style="color:var(--fg)">3. <b>Create Service User</b> → 选择 <b>Member</b></div><div style="color:var(--fg)">4. 点击 <b>Generate API Key</b></div><div style="color:var(--fg)">5. 复制 <b>cog_</b> 开头的 Key</div></div><input id="cogKeyInput3" type="password" placeholder="粘贴 cog_ API Key..." style="width:100%;padding:6px 10px;background:var(--input);color:var(--input-fg);border:1px solid var(--input-border);border-radius:4px;font-size:12px;box-sizing:border-box;margin-bottom:8px"><div class="br"><button class="btn primary" onclick="submitCogKey3()">🔑 设置 API Key</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;})">🌐 打开 Settings</button></div></div>')+qh+ih+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div><div class="cr"><span class="l">CF</span><span class="v" style="color:'+(S.cf.auth?'var(--success)':'var(--muted)')+'">'+(S.cf.auth?'✓ 已认证':'✗ 未认证')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+(S.cf.auth?'':'<button class="btn warn" onclick="cmd(&#39;cfLogin&#39;)">☁️ CF 登录</button>')+'<button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
+  try{v.innerHTML+=rBridge();}catch(e){}
+}
+function rBridge(){
+  var b=S.bridge;var head='<div class="st">内网穿透 · DAO Bridge</div>';
+  if(!b){return head+'<div class="card"><div class="cr"><span class="l">状态</span><span class="v" style="color:var(--muted)">未运行 · 安装/启动 dao-bridge 插件后自动打通当前工作区</span></div></div>';}
+  var on=!!b.url;
+  var rows='<div class="cr"><span class="l">状态</span><span class="v" style="color:'+(on?'var(--success)':'var(--warn)')+'">'+(on?'✓ 已打通':'隧道离线')+'</span></div>';
+  if(b.url)rows+='<div class="cr"><span class="l">公网 URL</span><span class="v" style="font-size:10px">'+esc(b.url)+'</span></div>';
+  if(b.workspace)rows+='<div class="cr"><span class="l">工作区</span><span class="v">'+esc(b.workspace)+'</span></div>';
+  if(b.root)rows+='<div class="cr"><span class="l">根目录</span><span class="v" style="font-size:10px">'+esc(b.root)+'</span></div>';
+  if(b.updated)rows+='<div class="cr"><span class="l">更新于</span><span class="v" style="font-size:10px">'+esc(b.updated)+'</span></div>';
+  var btns='<div class="br">'+(b.url?'<button class="btn sm" onclick="cmd(&#39;copyBridgeUrl&#39;)">复制 URL</button>':'')+'<button class="btn sm ghost" onclick="cmd(&#39;openBridgeMd&#39;)">打开 MD</button></div>';
+  return head+'<div class="card">'+rows+btns+'</div>';
 }
 function sm(title,bodyHtml,onOk){document.getElementById('mc').innerHTML='<h3>'+title+'</h3>'+bodyHtml+'<div class="mb"><button class="btn ghost" onclick="hm()">取消</button><button class="btn primary" onclick="doOk()">确定</button></div>';document.getElementById('mo').classList.remove('hid');window._onOk=onOk}
 function hm(){document.getElementById('mo').classList.add('hid')}
 function doOk(){if(window._onOk&&window._onOk()!==false)hm()}
 function toast(msg,ok){const t=document.getElementById('toast');t.textContent=msg;t.className='toast '+(ok?'ok':'err');setTimeout(()=>t.classList.add('hid'),3000)}
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});Object.assign(S.cf,d.cf||{});S.inject=d.inject||S.inject;usb();rc()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok)rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});Object.assign(S.cf,d.cf||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;usb();rc()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok)rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab);if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
@@ -1943,6 +1988,7 @@ function getPanelState() {
         hostname: os.hostname(),
         cfAuth: !!cfApiToken,
         injecting: ws.devinInjecting,
+        bridge: readBridgeConn(),
     };
 }
 
@@ -1968,6 +2014,7 @@ function refreshDaoCloudMiddlePanel() {
         hostname: os.hostname(),
     };
     data.cf = { authenticated: !!cfApiToken };
+    data.bridge = readBridgeConn();
     // Inject state
     try {
         const s = JSON.parse(fs.readFileSync(ws.injectStateFile, 'utf8'));
@@ -1980,13 +2027,28 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'setCogApiKey', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'cfLogin', 'cfDeploy', 'openBrowser', 'openDevinPage', 'copy'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'setCogApiKey', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'cfLogin', 'cfDeploy', 'openBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
     }
     try {
         switch (msg.command) {
+            case 'copyBridgeUrl': {
+                const c = readBridgeConn();
+                await vscode.env.clipboard.writeText((c && c.url) || '');
+                reply({ type: 'actionResult', command: 'copyBridgeUrl', ok: !!(c && c.url) });
+                break;
+            }
+            case 'openBridgeMd': {
+                try {
+                    const p = path.join(os.homedir(), '.dao', 'bridge', 'workspace.md');
+                    const doc = await vscode.workspace.openTextDocument(p);
+                    await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+                    reply({ type: 'actionResult', command: 'openBridgeMd', ok: true });
+                } catch (e) { reply({ type: 'actionResult', command: 'openBridgeMd', ok: false }); }
+                break;
+            }
             case 'loadTabData': {
                 // 帛书·「反者道之动也」— 认证策略根本修复
                 // cog_ API Key → Devin API完全可用 → 加载真实数据
@@ -3725,6 +3787,19 @@ async function devinFullInject(): Promise<boolean> {
         // Upsert Playbook
         const pb = buildDevinPlaybook(url, token);
         const pl = await devinUpsertPlaybook(ws.devinOrgId, 'Operate Local Environment via Dao', pb, ws.devinAuth1);
+        // ★ 帛书规则板块 (板块二) · 你本无名…道德经/阴符经 · 删旧注新(upsert) · 道法自然
+        let rulesOk = true;
+        const rulesText = getDaoRulesText();
+        if (rulesText) {
+            const rk = await devinUpsertKnowledge(
+                ws.devinOrgId,
+                '道法约束·帛书规则',
+                rulesText,
+                'Always — 你本无名 名可名也 非恒名也 所遵从之一切均来自下述帛书《老子》道藏《阴符经》',
+                ws.devinAuth1,
+            );
+            rulesOk = rk.ok;
+        }
         // Inject GitHub PAT if available
         const cfg = getDaoConfig();
         const githubPat = (cfg as any).githubPat || process.env.DAO_GITHUB_PAT || '';
@@ -3737,7 +3812,7 @@ async function devinFullInject(): Promise<boolean> {
         // Save inject state — 帛书·三十九「致数与无与」per-workspace + 全局注册表
         const state = {
             email: ws.devinEmail, orgId: ws.devinOrgId, orgName: ws.devinOrgName,
-            secret: sec.ok, knowledge: kn.ok, playbook: pl.ok, git: gitOk,
+            secret: sec.ok, knowledge: kn.ok, playbook: pl.ok, rules: rulesOk, git: gitOk,
             quota: ws.devinQuota, timestamp: new Date().toISOString()
         };
         // Per-workspace注入状态 — 窗口专属
@@ -3751,11 +3826,11 @@ async function devinFullInject(): Promise<boolean> {
             allInjections.push(Object.assign({}, state, { workspaceKey: ws.workspaceKey, pid: process.pid }));
             fs.writeFileSync(globalInjectFile, JSON.stringify(allInjections, null, 2), 'utf8');
         } catch {}
-        const allOk = sec.ok && kn.ok && pl.ok;
+        const allOk = sec.ok && kn.ok && pl.ok && rulesOk;
         if (allOk) {
-            vscode.window.showInformationMessage('Dao inject complete: Secret ✓ Knowledge ✓ Playbook ✓' + (gitOk ? ' Git ✓' : ''));
+            vscode.window.showInformationMessage('Dao inject complete: Secret ✓ Knowledge ✓ Playbook ✓ 帛书规则 ✓' + (gitOk ? ' Git ✓' : ''));
         } else {
-            vscode.window.showWarningMessage('Dao inject partial: Secret=' + (sec.ok ? '✓' : '✗') + ' Knowledge=' + (kn.ok ? '✓' : '✗') + ' Playbook=' + (pl.ok ? '✓' : '✗'));
+            vscode.window.showWarningMessage('Dao inject partial: Secret=' + (sec.ok ? '✓' : '✗') + ' Knowledge=' + (kn.ok ? '✓' : '✗') + ' Playbook=' + (pl.ok ? '✓' : '✗') + ' 帛书规则=' + (rulesOk ? '✓' : '✗'));
         }
         return allOk;
     } finally {
