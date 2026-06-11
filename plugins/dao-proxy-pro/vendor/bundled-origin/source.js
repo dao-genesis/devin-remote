@@ -2646,6 +2646,17 @@ function handleControl(req, res) {
         canon_valid: [..._CANON_VALID],
         self_size: _SELF_SIZE,
         self_file: __filename,
+        // v9.9.263 · 真解锁 · GetUserStatus 去 Pro 锁实证计数
+        real_unlock: {
+          enabled: _isModelUnlockEnabled(),
+          calls: _unlockStats.calls,
+          dropped_total: _unlockStats.dropped_total,
+          last_dropped: _unlockStats.last_dropped,
+          unlock4_total: _unlockStats.unlock4_total,
+          last_unlock4: _unlockStats.last_unlock4,
+          last_at: _unlockStats.last_at,
+          last_bytes: _unlockStats.last_bytes,
+        },
         // v9.9.21 · 唯变所适 · 让位标志 · ext-host 见 quitted=true 不再 require 起
         quitted: _quitSignaled,
         // v7.2 · 用户实时编辑提示词状态 (人法地, 地法天, 天法道, 道法自然)
@@ -3854,6 +3865,206 @@ function _isModelUnlockEnabled() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════
+// ★ v9.9.263 · 真解锁 · 反者道之动 · 弱者道之用
+//   GetUserStatus 响应 = application/proto + gzip · 非 JSON
+//   Pro 锁 = 每模型下 field 33 (wt=2, <500B) 内含 "Upgrade to Pro" 徽标
+//   损之 (去 field 33) → 模型即可选 · 为道者日损 · 损之又损以至无为
+//   零依赖 protobuf 改写: 仅丢弃含徽标之 field 33 · 余皆原样回灌
+// ═══════════════════════════════════════════════════════════
+const _PRO_BADGE = Buffer.from("Upgrade to Pro");
+const _unlockStats = { calls: 0, dropped_total: 0, last_dropped: 0, unlock4_total: 0, last_unlock4: 0, last_at: 0, last_bytes: "" };
+function _pbReadVarint(buf, i) {
+  let shift = 0,
+    result = 0;
+  while (true) {
+    const x = buf[i];
+    i += 1;
+    result += (x & 0x7f) * Math.pow(2, shift);
+    if (!(x & 0x80)) break;
+    shift += 7;
+  }
+  return [result, i];
+}
+function _pbEncVarint(v) {
+  const out = [];
+  while (true) {
+    const b = v & 0x7f;
+    v = Math.floor(v / 128);
+    if (v) out.push(b | 0x80);
+    else {
+      out.push(b);
+      break;
+    }
+  }
+  return Buffer.from(out);
+}
+function _pbTag(field, wt) {
+  return _pbEncVarint((field << 3) | wt);
+}
+function _pbParseOk(buf) {
+  let i = 0;
+  const n = buf.length;
+  if (n === 0) return false;
+  try {
+    while (i < n) {
+      let tag;
+      [tag, i] = _pbReadVarint(buf, i);
+      const wt = tag & 7;
+      if (wt === 0) {
+        [, i] = _pbReadVarint(buf, i);
+      } else if (wt === 2) {
+        let ln;
+        [ln, i] = _pbReadVarint(buf, i);
+        if (i + ln > n) return false;
+        i += ln;
+      } else if (wt === 5) i += 4;
+      else if (wt === 1) i += 8;
+      else return false;
+    }
+    return i === n;
+  } catch {
+    return false;
+  }
+}
+// ★ v9.9.264 · 真·门控 · field 4 (varint=1) = Pro 锁标志 (70 模型全相关验证)
+//   徽标 field 33 仅为文案 · field 4 才是右侧真 Cascade 面板置灰之根
+//   损之又损: 模型项内 去 field 4 (解灰可选) + 去 field 33 (去徽标)
+//   仅对"模型项"(含 field33 徽标者) 施治 · 余处 field 4 不动 · 利而不害
+function _pbIsModelEntry(buf) {
+  let i = 0;
+  const n = buf.length;
+  try {
+    while (i < n) {
+      let tag;
+      [tag, i] = _pbReadVarint(buf, i);
+      const field = tag >> 3;
+      const wt = tag & 7;
+      if (wt === 0) {
+        [, i] = _pbReadVarint(buf, i);
+      } else if (wt === 2) {
+        let ln;
+        [ln, i] = _pbReadVarint(buf, i);
+        const sub = buf.slice(i, i + ln);
+        i += ln;
+        if (field === 33 && ln < 500 && sub.indexOf(_PRO_BADGE) >= 0) return true;
+      } else if (wt === 5) i += 4;
+      else if (wt === 1) i += 8;
+      else return false;
+    }
+  } catch {}
+  return false;
+}
+// 模型项治理: 去 field 4 (Pro 锁) + 去 field 33 (徽标) · 余字段原样
+function _pbStripModelEntry(buf, stats) {
+  const out = [];
+  let i = 0;
+  const n = buf.length;
+  while (i < n) {
+    let tag;
+    [tag, i] = _pbReadVarint(buf, i);
+    const field = tag >> 3;
+    const wt = tag & 7;
+    if (wt === 0) {
+      let v;
+      [v, i] = _pbReadVarint(buf, i);
+      if (field === 4 && v === 1) {
+        stats.unlock4 = (stats.unlock4 || 0) + 1;
+        continue; // 损 · 去 Pro 锁门控 → 解灰可选
+      }
+      out.push(_pbTag(field, 0), _pbEncVarint(v));
+    } else if (wt === 2) {
+      let ln;
+      [ln, i] = _pbReadVarint(buf, i);
+      const sub = buf.slice(i, i + ln);
+      i += ln;
+      if (field === 33 && ln < 500 && sub.indexOf(_PRO_BADGE) >= 0) {
+        stats.dropped += 1;
+        continue; // 损 · 去徽标文案
+      }
+      out.push(_pbTag(field, 2), _pbEncVarint(sub.length), sub);
+    } else if (wt === 5) {
+      out.push(_pbTag(field, 5), buf.slice(i, i + 4));
+      i += 4;
+    } else if (wt === 1) {
+      out.push(_pbTag(field, 1), buf.slice(i, i + 8));
+      i += 8;
+    } else {
+      return buf;
+    }
+  }
+  return Buffer.concat(out);
+}
+// 递归丢弃含 Pro 徽标之 field 33 (proven: unlock_transform.py · 同 1.110.1 线格)
+function _pbDropProBadge(buf, stats) {
+  const out = [];
+  let i = 0;
+  const n = buf.length;
+  while (i < n) {
+    let tag;
+    [tag, i] = _pbReadVarint(buf, i);
+    const field = tag >> 3;
+    const wt = tag & 7;
+    if (wt === 0) {
+      let v;
+      [v, i] = _pbReadVarint(buf, i);
+      out.push(_pbTag(field, 0), _pbEncVarint(v));
+    } else if (wt === 2) {
+      let ln;
+      [ln, i] = _pbReadVarint(buf, i);
+      const sub = buf.slice(i, i + ln);
+      i += ln;
+      if (field === 33 && ln < 500 && sub.indexOf(_PRO_BADGE) >= 0) {
+        stats.dropped += 1;
+        continue; // 损之 · 去 Pro 锁
+      }
+      // ★ v9.9.264 · 模型项(含徽标者) → 去 field4 Pro锁 + 去徽标 · 否则常规递归
+      const newsub = _pbIsModelEntry(sub)
+        ? _pbStripModelEntry(sub, stats)
+        : _pbParseOk(sub) && sub.length > 0
+          ? _pbDropProBadge(sub, stats)
+          : sub;
+      out.push(_pbTag(field, 2), _pbEncVarint(newsub.length), newsub);
+    } else if (wt === 5) {
+      out.push(_pbTag(field, 5), buf.slice(i, i + 4));
+      i += 4;
+    } else if (wt === 1) {
+      out.push(_pbTag(field, 1), buf.slice(i, i + 8));
+      i += 8;
+    } else {
+      // 未知 wire type · 不可解 · 原样返回保安全
+      return buf;
+    }
+  }
+  return Buffer.concat(out);
+}
+// 入口: 对 gzip(proto) GetUserStatus body 做真解锁 · 失败则原样返回 (利而不害)
+function _unlockUserStatusBody(bodyBuf, contentEncoding, rid) {
+  try {
+    const isGz = bodyBuf.length > 2 && bodyBuf[0] === 0x1f && bodyBuf[1] === 0x8b;
+    const data = isGz ? zlib.gunzipSync(bodyBuf) : bodyBuf;
+    if (data.indexOf(_PRO_BADGE) < 0) return null; // 无锁可解
+    const stats = { dropped: 0, unlock4: 0 };
+    const out = _pbDropProBadge(data, stats);
+    if (stats.dropped === 0 || !_pbParseOk(out)) return null;
+    const finalBuf = isGz ? zlib.gzipSync(out) : out;
+    _unlockStats.calls += 1;
+    _unlockStats.dropped_total += stats.dropped;
+    _unlockStats.last_dropped = stats.dropped;
+    _unlockStats.unlock4_total += stats.unlock4 || 0;
+    _unlockStats.last_unlock4 = stats.unlock4 || 0;
+    _unlockStats.last_at = Date.now();
+    _unlockStats.last_bytes = `${data.length}->${out.length} gz ${bodyBuf.length}->${finalBuf.length}`;
+    log(
+      `#${rid} [真解锁] GetUserStatus 去 Pro锁(field4) ${stats.unlock4} 项 + 去徽标 ${stats.dropped} 项 · ${data.length}→${out.length}B (gz ${bodyBuf.length}→${finalBuf.length})`,
+    );
+    return finalBuf;
+  } catch (e) {
+    log(`#${rid} [真解锁] 失败 → 原样透传: ${e.message}`);
+    return null;
+  }
+}
+
 // 初始加载
 _loadFullModelCatalog();
 
@@ -4217,6 +4428,50 @@ function proxyToCloud(req, res, overrideBody, _rid) {
       if (h2resHeaders) {
         for (const [k, v] of Object.entries(h2resHeaders)) {
           if (!k.startsWith(":")) resHeaders[k] = v;
+        }
+      }
+      // ★ v9.9.263 · 真解锁 · GetUserStatus(proto/gzip) 缓冲改写去 Pro 锁 · 非直透
+      //   反者道之动: 损模型下 field 33 Pro 徽标 → 全模型即可选
+      {
+        const _rpcPathU = route.path || req.url || "";
+        const _ctU = (h2resHeaders && h2resHeaders["content-type"]) || "";
+        const _ceU = (h2resHeaders && h2resHeaders["content-encoding"]) || "";
+        if (
+          _isModelUnlockEnabled() &&
+          status === 200 &&
+          /GetUserStatus/i.test(_rpcPathU) &&
+          /proto/i.test(_ctU)
+        ) {
+          let _ub = [],
+            _un = 0;
+          const _ubMax = 4 * 1024 * 1024;
+          upStream.on("data", (c) => {
+            if (_un < _ubMax) {
+              _ub.push(c);
+              _un += c.length;
+            }
+          });
+          upStream.on("end", () => {
+            try {
+              const orig = Buffer.concat(_ub);
+              const unlocked = _unlockUserStatusBody(orig, _ceU, _rid || "?");
+              const outBuf = unlocked || orig;
+              const h = { ...resHeaders };
+              delete h["content-length"];
+              h["content-length"] = String(outBuf.length);
+              res.writeHead(status, h);
+              res.end(outBuf);
+            } catch (e) {
+              log(`#${_rid} [真解锁] 写回失败 → 502: ${e.message}`);
+              try {
+                if (!res.headersSent) {
+                  res.writeHead(502);
+                  res.end();
+                }
+              } catch {}
+            }
+          });
+          return; // 已接管 · 不再 pipe
         }
       }
       try {

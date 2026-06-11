@@ -4556,8 +4556,12 @@ function getEaConfigHtml(port, nonce) {
   var _health = {};
   var _selectedLeft = null;
   var _selectedRight = null;
+  // ★ v9.9.263 · 全量官方模型目录 (真解锁后从 GetUserStatus 实证提取 · ~108)
+  //   反者道之动: 左侧不再着相于硬编码小堆 · 万物并育而不相害
+  var _catalog = [];          // [{modelUid,label,provider,...}]
+  var _catalogLabel = {};     // uid -> label
 
-  // ── 已知官方模型列表 (Windsurf 常见) ──
+  // ── 已知官方模型列表 (目录未载时的兜底 · 利而不害) ──
   var KNOWN_OFFICIAL_MODELS = [
     'MODEL_SWE_1_6', 'MODEL_SWE_1_6_FAST',
     'swe-1-6', 'swe-1-6-fast',
@@ -4565,9 +4569,26 @@ function getEaConfigHtml(port, nonce) {
     'gpt-5-4-low', 'gpt-5-4-high', 'gpt-5-4-xhigh',
   ];
 
+  // ── 加载全量模型目录 (真解锁后实证 · 失败则空表兜底) ──
+  function loadCatalog() {
+    return fJson('/origin/model_catalog').then(function(d) {
+      if (d && d.ok && Array.isArray(d.models)) {
+        _catalog = d.models;
+        _catalogLabel = {};
+        for (var i = 0; i < _catalog.length; i++) {
+          _catalogLabel[_catalog[i].modelUid] = _catalog[i].label || _catalog[i].modelUid;
+        }
+      }
+    }).catch(function() { /* 目录未载 · 退兜底 */ });
+  }
+
   // ── 加载配置 ──
   function loadConfig() {
-    return fJson('/origin/ea/config').then(function(cfg) {
+    return Promise.all([
+      fJson('/origin/ea/config'),
+      loadCatalog(),
+    ]).then(function(arr) {
+      var cfg = arr[0];
       _config = cfg;
       _providers = cfg.providers || {};
       _routes = (cfg.daoRoutes && cfg.daoRoutes.routes) || {};
@@ -4602,12 +4623,19 @@ function getEaConfigHtml(port, nonce) {
       if (uid.startsWith('MODEL_')) return uid;
       return 'MODEL_' + uid.replace(/-/g, '_').toUpperCase();
     }
-    // 先加路由表中的 (优先显示)
+    // 先加路由表中的 (优先显示 · 已配路由置顶)
     for (var uid in _routes) {
       var nk = _normKey(uid);
       if (!seen.has(nk)) { seen.add(nk); models.push(uid); }
     }
-    // 再加已知的
+    // ★ v9.9.263 · 再加全量官方目录 (真解锁实证 ~108) · 一大堆而非小堆
+    for (var c = 0; c < _catalog.length; c++) {
+      var cu = _catalog[c].modelUid;
+      if (!cu) continue;
+      var nkc = _normKey(cu);
+      if (!seen.has(nkc)) { seen.add(nkc); models.push(cu); }
+    }
+    // 末尾兜底: 目录未载时仍显已知模型
     for (var i = 0; i < KNOWN_OFFICIAL_MODELS.length; i++) {
       var nk2 = _normKey(KNOWN_OFFICIAL_MODELS[i]);
       if (!seen.has(nk2)) {
@@ -4623,13 +4651,15 @@ function getEaConfigHtml(port, nonce) {
       div.className = 'model-item' + (_selectedLeft === uid ? ' selected' : '');
       var dotClass = route ? 'routed' : 'unrouted';
       var target = route ? (route.provider + '/' + route.model) : '';
+      var disp = _catalogLabel[uid] || uid;
       div.innerHTML = '<span class="dot ' + dotClass + '"></span>' +
-        '<span class="name">' + uid + '</span>' +
+        '<span class="name" title="' + uid + '">' + disp + '</span>' +
         (target ? '<span class="target">' + target + '</span>' : '');
       div.setAttribute('data-uid', uid);
       div.addEventListener('click', function() {
         _selectedLeft = this.getAttribute('data-uid');
         render();
+        maybeAutoRoute();
       });
       div.addEventListener('dblclick', function() {
         var u = this.getAttribute('data-uid');
@@ -4686,6 +4716,7 @@ function getEaConfigHtml(port, nonce) {
         div.addEventListener('click', function() {
           _selectedRight = this.getAttribute('data-prov') + '/' + this.getAttribute('data-model');
           render();
+          maybeAutoRoute();
         });
         div.addEventListener('dblclick', function() {
           // 双击外接模型 → 快速创建路由
@@ -4802,6 +4833,34 @@ function getEaConfigHtml(port, nonce) {
   });
 
   // ── 路由弹窗 ──
+  // ★ v9.9.263 · 自连 · 左右各选一 → 自创路由 (早期设计 · 无为而无不为)
+  //   不再需双击开模态 · 选完即路· 选完即现连线
+  function maybeAutoRoute() {
+    if (!_selectedLeft || !_selectedRight) return;
+    var left = _selectedLeft;
+    var right = _selectedRight;
+    var slash = right.indexOf('/');
+    var prov = slash >= 0 ? right.slice(0, slash) : right;
+    var model = slash >= 0 ? right.slice(slash + 1) : right;
+    var st = document.getElementById('statusText');
+    if (st) st.textContent = '路由中: ' + left + ' → ' + right + ' …';
+    fPost('/origin/ea/route', {
+      modelUid: left,
+      route: { provider: prov, model: model, maxOutputTokens: 16384, thinkingEnabled: false }
+    }).then(function(r) {
+      if (r && r.ok) {
+        _selectedLeft = null;
+        _selectedRight = null;
+        if (st) st.textContent = '✔ 已路由 ' + left + ' → ' + right;
+        loadConfig();
+      } else {
+        if (st) st.textContent = '路由失败: ' + ((r && r.error) || 'unknown');
+      }
+    }).catch(function(e) {
+      if (st) st.textContent = '路由请求失败: ' + e.message;
+    });
+  }
+
   function openRouteModal(uid, provName, extModel) {
     var modal = document.getElementById('routeModal');
     document.getElementById('routeModelUid').value = uid || '';
