@@ -12,8 +12,9 @@
 |---|---|
 | `BACKEND_GUIDE.md` | ★ 核心 · 纯后端实现指南：完整 API 逆向 + 认证流 + 数据流，照此可从零实现一切 |
 | `dao_export_all.py` | ★ 零依赖 Python 导出脚本（v2 高速版：16 路并发下载 + 重试 + 断点续传；实测 70 会话/7173 事件/706 文件 ≈ 58 秒全量导出） |
-| `dao-devin-export-1.3.0.vsix` | VS Code 插件成品（v1.2.0：高速下载引擎 + Agent Bridge HTTP API + 导出MD 实时接入文档；后端 Agent 可直接调 HTTP 使用全部功能） |
-| `dao-vsix-source.zip` | 插件完整 TypeScript 源码 |
+| `dao-devin-export-1.3.1.vsix` | ★ VS Code 插件成品（最新 v1.3.1：会话列表 `/sessions` 备用端点 + 事件流重试 + gzip 自动解压 + 失败显式报错，不再静默空白） |
+| `vsix-src/` | ★ 插件完整 TypeScript 源码（可直接 `npm i && npm run package` 重新打包） |
+| `dao-vsix-source.zip` | 插件完整 TypeScript 源码（与 `vsix-src/` 一致的打包快照） |
 | `dao-vsix-README.md` | 插件使用文档 |
 | `DEV_EXPERIENCE.md` | 核心开发经验（坑+解法，全部实战验证） |
 | `SESSION_PROCESS.md` | 本对话(构建本系统的Devin会话)全过程记录 |
@@ -29,7 +30,17 @@ python dao_export_all.py --email xxx@gmail.com --password xxx
 python dao_export_all.py --accounts accounts.md
 ```
 
-VSIX 安装: `code --install-extension dao-devin-export-1.3.0.vsix`
+VSIX 安装: `code --install-extension dao-devin-export-1.3.1.vsix`
+
+## v1.3.1 健壮性修复（2026-06-11）—— 「登录成功却看不到任何对话记录」
+
+根因：插件取数路径在网络/代理异常时**静默吞掉错误**，使「拉取失败（empty）」与「确实没有数据（empty）」无法区分，表现为登录成功但会话列表/对话记录空白且无任何提示。
+
+- `listSessions`：主端点 `org-{bare}/v2sessions` 失败或返回异常结构时，**回退 `/sessions`**（与 `dao_export_all.py` 对齐）；两者皆失败则**抛出带原因的错误**，不再静默返回 `[]`。
+- `getEventStream`：流式端点最易在慢速/代理链路上失败 —— 增加 **3 次重试 + 退避**；非 200 显式报错。
+- `request`：响应若被代理/CDN 压缩（gzip/deflate/br）**自动解压**，避免 `JSON.parse` 静默失败。
+- 登录与取会话**分离**：登录成功但取会话失败时提示「已登录，但获取会话失败（点 ⟳ 重试）」而非误报「登录失败」；恢复登录态时的瞬时失败不再静默登出。
+- 详情页「对话」标签：事件流获取失败时直接显示 **⚠️ 失败原因 + 代理配置提示**，而非空白。
 
 ## v1.3.0 软编码与软适配（2026-06-11）
 
