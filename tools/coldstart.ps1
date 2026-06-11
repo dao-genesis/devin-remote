@@ -16,7 +16,7 @@ param(
     [switch]$SkipClone
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'   # git writes progress to stderr; only fail on explicit checks
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $sw = [Diagnostics.Stopwatch]::StartNew()
 function Step($m) { Write-Host ("[{0:mm\:ss}] {1}" -f $sw.Elapsed, $m) -ForegroundColor Cyan }
@@ -44,12 +44,13 @@ if (-not $SkipInstall -and -not (Test-Path $devinExe)) {
 if (-not $SkipClone) {
     if (Test-Path "$WorkDir\.git") {
         Step 'Updating existing archive clone'
-        git -C $WorkDir fetch origin $ArchiveBranch 2>&1 | Out-Null
-        git -C $WorkDir checkout $ArchiveBranch 2>&1 | Out-Null
-        git -C $WorkDir pull --ff-only origin $ArchiveBranch 2>&1 | Out-Null
+        cmd /c "git -C `"$WorkDir`" fetch origin $ArchiveBranch 2>&1" | Out-Null
+        cmd /c "git -C `"$WorkDir`" checkout $ArchiveBranch 2>&1" | Out-Null
+        cmd /c "git -C `"$WorkDir`" pull --ff-only origin $ArchiveBranch 2>&1" | Out-Null
     } else {
         Step "Cloning $ArchiveBranch branch -> $WorkDir"
-        git clone --branch $ArchiveBranch --single-branch $RepoUrl $WorkDir 2>&1 | Out-Null
+        cmd /c "git clone --branch $ArchiveBranch --single-branch $RepoUrl `"$WorkDir`" 2>&1" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'archive clone failed' }
     }
 }
 
