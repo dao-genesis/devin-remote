@@ -3,6 +3,32 @@
 > 把「装 Devin Desktop → 真账号登录 → 构建/安装四插件 VSIX → 编辑器内验证」这条最耗时的冷启动长链路，
 > 在全新云 VM（Windows Server 2022 / devinbox）上完整趟通。照此可把数小时压到几十分钟。
 
+## ⚡ 快速通道（2026-06-11 起，目标 <5 分钟）
+
+**不再需要通过中继逐块读取 141 的 E 盘。** E:\DAO_ARCHIVE 已完整同步到本仓库的 **`archive` 分支**（隐私数据除外，见 .gitignore），新 VM 冷启动只需一条命令：
+
+```powershell
+git clone --branch main https://github.com/zhouyoukang1234-spec/devin-remote.git $env:USERPROFILE\repos\devin-remote
+powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\tools\coldstart.ps1
+```
+
+`tools/coldstart.ps1` 自动完成：
+1. 通过更新 API `https://windsurf-stable.codeium.com/api/update/win32-x64-user/stable/latest` 解析**最新版** Devin Desktop 安装包 URL → 下载 → `/VERYSILENT` 静默安装（无 GUI 点击）。
+2. `git clone --branch archive --single-branch` 拉取 E:\DAO_ARCHIVE 全量镜像（含 `00_*/artifacts/` 预构建 VSIX）。
+3. `devin-desktop --install-extension` 批量装全部插件（自动取每个插件最新版本号）。
+4. 应用 `devin_user_settings.json` 用户设置，`--list-extensions` 验证。
+
+剩余唯一手动步骤：账号登录（rt-flow 切号；账号池在 141 本地，不入仓库）。
+
+### 141 ↔ GitHub 持续同步
+- 141 桌面机**可以直连 GitHub**：走本机 vortex 代理 `http://127.0.0.1:7890`。两个关键坑：
+  1. relay agent 环境带 `NO_PROXY=*`，libcurl 会静默绕过 http.proxy → 脚本里必须先 `$env:NO_PROXY=''`；
+  2. openssl TLS 后端经代理频繁被重置 → 用 `http.sslBackend=schannel` + 重试循环。
+- 同步脚本：`tools/sync-dao-archive.ps1`（双向：fetch+merge 再 commit+push，带重试）；
+  `tools/install-sync-task.ps1` 注册计划任务，每 30 分钟自动同步。
+- 隐私排除（E:\DAO_ARCHIVE\.gitignore）：`*账资*`、`**/accounts.md`、`**/10_accounts.md`、`**/secrets.json`、cookie/token 扫描结果、`*.pem/*.key/.env`。
+- 推送认证：`git remote set-url --push origin https://<PAT>@github.com/...`（注意：**纯 PAT 形式**，`x-access-token:` 前缀会被拒）；141 上 wincredman 坏，需 `credential.helper ''`。
+
 ## 0. 环境底座
 - OS：Windows Server 2022；Home：`C:\Users\Administrator`；Node 20.x + npm 预装；git 就绪。
 - 打包 VSIX：优先复用 `dao-vsix/node_modules/.bin/vsce`（新版 `@vscode/vsce`）；旧 vsce 2.15.0 不认 `--skip-license`，勿用。
@@ -38,8 +64,8 @@ devin-desktop --list-extensions     # 验证
 - dao-bridge：随 IDE 启动自动起隧道；集成终端 curl 公网 URL 返回 `{status:ok,workspace:...}`；关窗隧道消失（CF 530）。
 - LSP「connection to server is erroring」在反代 invert 模式下是**预期现象**（代理拦截出站），与插件无关。
 
-## 5. 141 ↔ 云VM 传输（中继 + base64 无损）
-- 141（DESKTOP-MASTER）**无法直连 GitHub**；与云 VM 间走 **workers.dev 中继 + 分块 base64**。
+## 5. 141 ↔ 云VM 传输（中继 + base64 无损）【已被快速通道取代，仅作 fallback】
+- ~~141（DESKTOP-MASTER）无法直连 GitHub~~ → **已推翻**：141 走本机 7890 代理可直连 GitHub（见顶部快速通道）。中继 base64 仅在代理失效时作为兜底。
 - **核心坑**：经中继 `-CmdFile` 下发的 PowerShell 脚本里，**中文字符串字面量会被破坏**（New-Item 报路径非法）。
   - 解：脚本**只用 ASCII**；要写中文内容的文件，用 `base64(UTF8 bytes)` 内嵌后 `[IO.File]::WriteAllBytes` 落地；
   - 要操作中文命名目录，用 ASCII 前缀通配（如 `00_*`）解析出对象再 `-LiteralPath`，**不要手打中文路径**。
