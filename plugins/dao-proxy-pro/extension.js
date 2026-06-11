@@ -4515,14 +4515,24 @@ function getEaConfigHtml(port, nonce) {
 
   <!-- ② 渠道配置 (CC-Switch 风) -->
   <div class="dao-pane" id="paneProvider">
+    <!-- 预设快加 (cc-switch 预设库) -->
+    <div class="provider-bar" style="margin-bottom:4px">
+      <select id="presetSelect" style="flex:1;min-width:120px;padding:3px 6px;font-size:11px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-input-background,rgba(0,0,0,0.12));color:var(--vscode-input-foreground,var(--vscode-foreground));font-family:inherit;outline:none">
+        <option value="">— 选择预设渠道 (cc-switch) —</option>
+      </select>
+      <button class="btn add" id="btnApplyPreset" title="填入下方表单">填入预设</button>
+    </div>
     <!-- Provider 输入 -->
     <div class="provider-bar">
       <input id="provName" placeholder="名称 (如 deepseek)" style="flex:0.5;min-width:60px">
       <input id="provUrl" placeholder="Base URL (如 https://api.deepseek.com)" style="flex:2">
       <input id="provKey" type="password" placeholder="API Key" style="flex:1">
+      <input id="provModels" placeholder="模型 (逗号分隔, 可空)" style="flex:1.2">
       <button class="btn add" id="btnAddProv" title="添加 Provider">+ 添加</button>
       <button class="btn probe" id="btnProbe" title="探测所有 Provider 健康">探测</button>
     </div>
+    <!-- 已配渠道列表 (cc-switch 风) -->
+    <div id="channelList" style="flex:1;overflow-y:auto;margin-top:4px"></div>
   </div>
 
   <!-- ③ 模型路由 (官方 ↔ 第三方 连线) -->
@@ -4603,47 +4613,47 @@ function getEaConfigHtml(port, nonce) {
 
   // ── 状态 ──
   var _config = null;
-  var _providers = {};
+  var _providers = {};        // overview.providers (含内置 builtin-stub 测试通道)
   var _routes = {};
   var _health = {};
   var _selectedLeft = null;
   var _selectedRight = null;
-  // ★ v9.9.263 · 全量官方模型目录 (真解锁后从 GetUserStatus 实证提取 · ~108)
-  //   反者道之动: 左侧不再着相于硬编码小堆 · 万物并育而不相害
-  var _catalog = [];          // [{modelUid,label,provider,...}]
-  var _catalogLabel = {};     // uid -> label
+  // ★ v9.9.266 · 三模块面板 ③模型路由 与悬浮面板 eaRender 同源:
+  //   统一走 /origin/ea/overview → official_families (49 家族·档位归一) + providers(首项=测试通道)
+  //   反者道之动: 左侧不再着相于扁平 catalog 怪名 · 万物并育而不相害
+  var _families = [];         // official_families: [{familyUid,label,provider,members:[{modelUid,tier,isDefault}],isNew,isRecommended}]
+  var _tierGroups = {};       // primaryUid -> [memberUids]  (一族多档共用一条路由作用域)
 
-  // ── 已知官方模型列表 (目录未载时的兜底 · 利而不害) ──
-  var KNOWN_OFFICIAL_MODELS = [
-    'MODEL_SWE_1_6', 'MODEL_SWE_1_6_FAST',
-    'swe-1-6', 'swe-1-6-fast',
-    'claude-opus-4-6-thinking', 'claude-sonnet-4-6-thinking',
-    'gpt-5-4-low', 'gpt-5-4-high', 'gpt-5-4-xhigh',
+  // ── cc-switch 预设库 (与悬浮面板 _EA_PRESETS 同步) ──
+  var _PRESETS = [
+    {n:'DeepSeek',t:'openai',u:'https://api.deepseek.com/v1',m:'deepseek-chat, deepseek-reasoner'},
+    {n:'Zhipu GLM',t:'openai',u:'https://open.bigmodel.cn/api/paas/v4',m:'glm-4.6'},
+    {n:'Kimi',t:'openai',u:'https://api.moonshot.cn/v1',m:'kimi-k2-5'},
+    {n:'Bailian',t:'openai',u:'https://dashscope.aliyuncs.com/compatible-mode/v1',m:'qwen3-coder-plus'},
+    {n:'SiliconFlow',t:'openai',u:'https://api.siliconflow.cn/v1',m:'deepseek-ai/DeepSeek-V3'},
+    {n:'MiniMax',t:'openai',u:'https://api.minimaxi.com/v1',m:'MiniMax-M2'},
+    {n:'ModelScope',t:'openai',u:'https://api-inference.modelscope.cn/v1',m:'Qwen/Qwen3-Coder-480B-A35B-Instruct'},
+    {n:'OpenRouter',t:'openai',u:'https://openrouter.ai/api/v1',m:'anthropic/claude-sonnet-4.6'},
+    {n:'AiHubMix',t:'openai',u:'https://aihubmix.com/v1',m:'gpt-4o'},
+    {n:'OpenAI',t:'openai',u:'https://api.openai.com/v1',m:'gpt-4o, gpt-4o-mini'},
+    {n:'Anthropic',t:'anthropic',u:'https://api.anthropic.com',m:'claude-sonnet-4-6, claude-opus-4-6'},
   ];
 
-  // ── 加载全量模型目录 (真解锁后实证 · 失败则空表兜底) ──
-  function loadCatalog() {
-    return fJson('/origin/model_catalog').then(function(d) {
-      if (d && d.ok && Array.isArray(d.models)) {
-        _catalog = d.models;
-        _catalogLabel = {};
-        for (var i = 0; i < _catalog.length; i++) {
-          _catalogLabel[_catalog[i].modelUid] = _catalog[i].label || _catalog[i].modelUid;
-        }
-      }
-    }).catch(function() { /* 目录未载 · 退兜底 */ });
+  // ── provider 名 → 友好显示 (与 eaRender _provLabel 同) ──
+  function _provLabel(p) {
+    p = String(p || '').replace(/^MODEL_PROVIDER_/, '');
+    var M = {ANTHROPIC:'Claude',OPENAI:'GPT',GOOGLE:'Gemini',WINDSURF:'Windsurf',XAI:'Grok',DEEPSEEK:'DeepSeek',MOONSHOT:'Kimi',MOONSHOT_AI:'Kimi',FIREWORKS:'Fireworks',ZHIPU:'GLM',ZHIPU_AI:'GLM',MINIMAX:'Minimax'};
+    return M[p] || (p ? p.charAt(0) + p.slice(1).toLowerCase() : 'Other');
   }
 
-  // ── 加载配置 ──
+  // ── 加载配置 · v9.9.266 一站式 overview (与悬浮面板同源) ──
   function loadConfig() {
-    return Promise.all([
-      fJson('/origin/ea/config'),
-      loadCatalog(),
-    ]).then(function(arr) {
-      var cfg = arr[0];
-      _config = cfg;
-      _providers = cfg.providers || {};
-      _routes = (cfg.daoRoutes && cfg.daoRoutes.routes) || {};
+    return fJson('/origin/ea/overview').then(function(d) {
+      if (!d || !d.ok) throw new Error('overview 未就绪');
+      _config = d;
+      _providers = d.providers || {};
+      _routes = d.routes || {};
+      _families = d.official_families || [];
       render();
     }).catch(function(e) {
       document.getElementById('statusText').textContent = '加载失败: ' + e.message;
@@ -4652,117 +4662,178 @@ function getEaConfigHtml(port, nonce) {
 
   // ── 渲染 ──
   function render() {
-    renderProviders();
+    renderChannels();
     renderLeft();
     renderRight();
     renderWires();
     renderStatus();
   }
 
-  function renderProviders() {
-    // Provider 输入区不需要额外渲染 · 但可以更新状态
+  // ── 路由命中判定: uid 双形归一 (MODEL_X_Y ↔ x-y 视为同一) ──
+  function _norm(uid) { return String(uid || '').replace(/^MODEL_/, '').replace(/_/g, '-').toLowerCase(); }
+  function _routeKeyFor(uid) {
+    var n = _norm(uid), ks = Object.keys(_routes);
+    for (var i = 0; i < ks.length; i++) { if (_norm(ks[i]) === n) return ks[i]; }
+    return null;
+  }
+  function _routeFor(uid) { var k = _routeKeyFor(uid); return k ? _routes[k] : null; }
+
+  // ── ② 渠道配置: cc-switch 风已配渠道列表 (内置测试通道置顶·不可删) ──
+  function renderChannels() {
+    var box = document.getElementById('channelList');
+    if (!box) return;
+    box.innerHTML = '';
+    var names = Object.keys(_providers);
+    if (names.length === 0) {
+      box.innerHTML = '<div style="opacity:0.4;font-style:italic;padding:6px">暂无渠道 · 选预设或手动添加</div>';
+      return;
+    }
+    names.forEach(function(name) {
+      var p = _providers[name] || {};
+      var builtin = !!p._builtin;
+      var disp = p._label || name;
+      var alive = _health[name] && _health[name].alive;
+      var dotColor = builtin ? '#6bb86b' : (alive ? '#6bb86b' : (_health[name] ? '#e08080' : 'rgba(128,128,128,0.4)'));
+      var mods = (p.models || p._models || []).join(', ');
+      var row = document.createElement('div');
+      row.className = 'model-item';
+      row.style.cssText = 'align-items:flex-start;padding:6px;margin-bottom:4px;border:1px solid rgba(128,128,128,0.18);border-radius:4px;';
+      var html = '<span class="dot" style="background:' + dotColor + ';margin-top:4px"></span>' +
+        '<span style="flex:1;overflow:hidden">' +
+          '<span style="font-weight:600">' + disp + (builtin ? ' <span style="opacity:0.5;font-weight:400">· 内置</span>' : '') + '</span>' +
+          '<div style="font-size:9px;opacity:0.55;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (p.baseUrl || '') + '</div>' +
+          (mods ? '<div style="font-size:9px;opacity:0.5">' + mods + '</div>' : '') +
+        '</span>';
+      if (!builtin) {
+        html += '<span class="btn" data-edit="' + name + '" style="padding:1px 5px;font-size:10px;margin-right:3px" title="编辑">✎</span>' +
+          '<span class="btn del" data-del="' + name + '" title="删除">x</span>';
+      }
+      row.innerHTML = html;
+      box.appendChild(row);
+    });
+    box.querySelectorAll('[data-del]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var n = this.getAttribute('data-del');
+        if (confirm('删除渠道 ' + n + '? (关联路由也会删除)')) {
+          fDel('/origin/ea/provider/' + encodeURIComponent(n)).then(function(r) { if (r.ok) loadConfig(); });
+        }
+      });
+    });
+    box.querySelectorAll('[data-edit]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var n = this.getAttribute('data-edit');
+        var p = _providers[n] || {};
+        document.getElementById('provName').value = n;
+        document.getElementById('provUrl').value = p.baseUrl || '';
+        document.getElementById('provKey').value = '';
+        document.getElementById('provModels').value = (p.models || p._models || []).join(', ');
+      });
+    });
   }
 
   function renderLeft() {
     var container = document.getElementById('officialModels');
     container.innerHTML = '';
-    // 合并: 已知官方模型 + 路由表中出现的模型
-    // ★ v9.9.90-fix · 去重规范化形式: MODEL_X_Y 和 x-y 是同一模型 · 只显示一种
-    var seen = new Set();
-    var models = [];
-    function _normKey(uid) {
-      // 统一为 MODEL_ 大写形式做去重
-      if (uid.startsWith('MODEL_')) return uid;
-      return 'MODEL_' + uid.replace(/-/g, '_').toUpperCase();
+    _tierGroups = {};
+    // ★ v9.9.266 · 档位归一: 一族一项 (同 Cascade 顶层) · 按 provider 分组标题
+    if (!_families || _families.length === 0) {
+      container.innerHTML = '<div style="opacity:0.4;font-style:italic;padding:6px">加载中...</div>';
+      return;
     }
-    // 先加路由表中的 (优先显示 · 已配路由置顶)
-    for (var uid in _routes) {
-      var nk = _normKey(uid);
-      if (!seen.has(nk)) { seen.add(nk); models.push(uid); }
-    }
-    // ★ v9.9.263 · 再加全量官方目录 (真解锁实证 ~108) · 一大堆而非小堆
-    for (var c = 0; c < _catalog.length; c++) {
-      var cu = _catalog[c].modelUid;
-      if (!cu) continue;
-      var nkc = _normKey(cu);
-      if (!seen.has(nkc)) { seen.add(nkc); models.push(cu); }
-    }
-    // 末尾兜底: 目录未载时仍显已知模型
-    for (var i = 0; i < KNOWN_OFFICIAL_MODELS.length; i++) {
-      var nk2 = _normKey(KNOWN_OFFICIAL_MODELS[i]);
-      if (!seen.has(nk2)) {
-        seen.add(nk2);
-        models.push(KNOWN_OFFICIAL_MODELS[i]);
-      }
-    }
-    for (var j = 0; j < models.length; j++) {
-      var uid = models[j];
-      // ★ v9.9.90-fix · 查路由时同时检查规范化形式
-      var route = _routes[uid] || _routes[_normKey(uid)] || _routes[uid.replace(/^MODEL_/, '').replace(/_/g, '-').toLowerCase()];
-      var div = document.createElement('div');
-      div.className = 'model-item' + (_selectedLeft === uid ? ' selected' : '');
-      var dotClass = route ? 'routed' : 'unrouted';
-      var target = route ? (route.provider + '/' + route.model) : '';
-      var disp = _catalogLabel[uid] || uid;
-      div.innerHTML = '<span class="dot ' + dotClass + '"></span>' +
-        '<span class="name" title="' + uid + '">' + disp + '</span>' +
-        (target ? '<span class="target">' + target + '</span>' : '');
-      div.setAttribute('data-uid', uid);
-      div.addEventListener('click', function() {
-        _selectedLeft = this.getAttribute('data-uid');
-        render();
-        maybeAutoRoute();
-      });
-      div.addEventListener('dblclick', function() {
-        var u = this.getAttribute('data-uid');
-        if (_routes[u]) {
-          // 双击已路由 → 删除路由
-          if (confirm('删除路由 ' + u + '?')) {
-            fDel('/origin/ea/route/' + encodeURIComponent(u)).then(function(r) {
-              if (r.ok) loadConfig();
-            });
-          }
-        } else {
-          // 双击未路由 → 添加路由
-          openRouteModal(u);
+    var groups = {}, order = [];
+    _families.forEach(function(f) {
+      var pl = _provLabel(f.provider);
+      if (!groups[pl]) { groups[pl] = []; order.push(pl); }
+      groups[pl].push(f);
+    });
+    order.forEach(function(pl) {
+      var head = document.createElement('div');
+      head.style.cssText = 'font-size:10px;opacity:0.5;margin:6px 0 2px;font-weight:600;';
+      head.textContent = pl + ' (' + groups[pl].length + ')';
+      container.appendChild(head);
+      groups[pl].forEach(function(f) {
+        var uids = f.members.map(function(mm){ return mm.modelUid; }).filter(Boolean);
+        var defMember = f.members.filter(function(mm){ return mm.isDefault; })[0] || f.members[0];
+        var primary = (defMember && defMember.modelUid) || uids[0] || f.familyUid;
+        _tierGroups[primary] = uids;
+        var wiredUids = uids.filter(function(u){ return !!_routeFor(u); });
+        var isWired = wiredUids.length > 0;
+        var route = isWired ? _routeFor(wiredUids[0]) : null;
+        var target = route ? (route.provider + '/' + route.model) : '';
+        var div = document.createElement('div');
+        div.className = 'model-item' + (_selectedLeft === primary ? ' selected' : '');
+        div.setAttribute('data-uid', primary);
+        div.setAttribute('data-uids', uids.join(','));
+        var html = '<span class="dot ' + (isWired ? 'routed' : 'unrouted') + '"></span>' +
+          '<span class="name" title="' + f.label + (f.members.length > 1 ? ' · ' + f.members.length + '档' : '') + '">' + f.label + '</span>';
+        if (f.members.length > 1) {
+          html += '<span class="target" title="' + f.members.map(function(mm){ return (mm.tier || 'base') + (_routeFor(mm.modelUid) ? ' ✓' : ''); }).join(' · ') + '">×' + f.members.length + '</span>';
         }
+        if (target) html += '<span class="target">' + target + '</span>';
+        div.innerHTML = html;
+        div.addEventListener('click', function() {
+          _selectedLeft = this.getAttribute('data-uid');
+          render();
+          maybeAutoRoute();
+        });
+        div.addEventListener('dblclick', function() {
+          var u = this.getAttribute('data-uid');
+          var uds = (this.getAttribute('data-uids') || u).split(',').filter(Boolean);
+          var keys = [];
+          uds.forEach(function(x){ var k = _routeKeyFor(x); if (k && keys.indexOf(k) < 0) keys.push(k); });
+          if (keys.length > 0) {
+            if (confirm('断开 ' + f.label + ' 全部 ' + keys.length + ' 条路由?')) {
+              Promise.all(keys.map(function(k){ return fDel('/origin/ea/route/' + encodeURIComponent(k)); })).then(function(){ loadConfig(); });
+            }
+          } else {
+            openRouteModal(u);
+          }
+        });
+        container.appendChild(div);
       });
-      container.appendChild(div);
-    }
+    });
   }
 
   function renderRight() {
     var container = document.getElementById('externalModels');
     container.innerHTML = '';
+    // ★ v9.9.266 · 外接首项 = 内置测试通道(builtin-stub) · 其余 = 用户渠道 · 与悬浮面板同
     for (var name in _providers) {
-      var prov = _providers[name];
-      var models = prov.models || [];
+      var prov = _providers[name] || {};
+      var builtin = !!prov._builtin;
+      var disp = prov._label || name;
+      var models = prov.models || prov._models || [];
       // Provider 标题
       var header = document.createElement('div');
       header.style.cssText = 'font-size:10px;opacity:0.5;margin:4px 0 2px;display:flex;align-items:center;gap:4px;';
-      var hDot = _health[name] && _health[name].alive ? '#6bb86b' : (_health[name] ? '#e08080' : 'rgba(128,128,128,0.3)');
-      header.innerHTML = '<span style="width:6px;height:6px;border-radius:50%;background:' + hDot + ';flex-shrink:0"></span>' +
-        '<span style="flex:1">' + name + '</span>' +
-        '<button class="btn del" data-prov="' + name + '" title="删除 ' + name + '">x</button>';
+      var hDot = builtin ? '#6bb86b' : (_health[name] && _health[name].alive ? '#6bb86b' : (_health[name] ? '#e08080' : 'rgba(128,128,128,0.3)'));
+      var hHtml = '<span style="width:6px;height:6px;border-radius:50%;background:' + hDot + ';flex-shrink:0"></span>' +
+        '<span style="flex:1">' + disp + (builtin ? ' · 内置' : '') + '</span>';
+      if (!builtin) hHtml += '<button class="btn del" data-prov="' + name + '" title="删除 ' + name + '">x</button>';
+      header.innerHTML = hHtml;
       container.appendChild(header);
 
-      // 删除 provider
-      header.querySelector('.btn.del').addEventListener('click', function(e) {
-        e.stopPropagation();
-        var pName = this.getAttribute('data-prov');
-        if (confirm('删除 provider ' + pName + '? (关联路由也会删除)')) {
-          fDel('/origin/ea/provider/' + encodeURIComponent(pName)).then(function(r) {
-            if (r.ok) loadConfig();
-          });
-        }
-      });
+      if (!builtin) {
+        header.querySelector('.btn.del').addEventListener('click', function(e) {
+          e.stopPropagation();
+          var pName = this.getAttribute('data-prov');
+          if (confirm('删除 provider ' + pName + '? (关联路由也会删除)')) {
+            fDel('/origin/ea/provider/' + encodeURIComponent(pName)).then(function(r) { if (r.ok) loadConfig(); });
+          }
+        });
+      }
 
       // 模型列表
       for (var i = 0; i < models.length; i++) {
         var m = models[i];
+        var key = name + '/' + m;
+        var wired = false;
+        for (var ru in _routes) { var rt = _routes[ru]; if (rt && rt.provider === name && rt.model === m) { wired = true; break; } }
         var div = document.createElement('div');
-        div.className = 'model-item';
-        div.innerHTML = '<span class="dot routed"></span><span class="name">' + m + '</span>';
+        div.className = 'model-item' + (_selectedRight === key ? ' selected' : '');
+        div.innerHTML = '<span class="dot ' + (wired ? 'routed' : 'unrouted') + '"></span><span class="name">' + m + '</span>';
         div.setAttribute('data-prov', name);
         div.setAttribute('data-model', m);
         div.addEventListener('click', function() {
@@ -4771,14 +4842,13 @@ function getEaConfigHtml(port, nonce) {
           maybeAutoRoute();
         });
         div.addEventListener('dblclick', function() {
-          // 双击外接模型 → 快速创建路由
           openRouteModal(null, this.getAttribute('data-prov'), this.getAttribute('data-model'));
         });
         container.appendChild(div);
       }
 
-      // 如果没有模型列表 · 显示 "探测" 按钮
-      if (models.length === 0) {
+      // 如果没有模型列表 · 显示 "探测" 按钮 (内置测试通道无需探测)
+      if (models.length === 0 && !builtin) {
         var probeBtn = document.createElement('button');
         probeBtn.className = 'btn probe';
         probeBtn.style.cssText = 'font-size:9px;margin:2px 0 4px;padding:1px 6px;';
@@ -4815,8 +4885,17 @@ function getEaConfigHtml(port, nonce) {
     for (var uid in _routes) {
       var route = _routes[uid];
       if (!route || !route.provider) continue;
-      // 找左侧节点
+      // 找左侧节点: 路由 uid 可能落在家族任一档位成员上 → 匹配 data-uids 含该 uid 的家族项
       var leftEl = document.querySelector('.wire-col.left .model-item[data-uid="' + uid + '"]');
+      if (!leftEl) {
+        var lis = document.querySelectorAll('.wire-col.left .model-item');
+        for (var li = 0; li < lis.length; li++) {
+          var uds = (lis[li].getAttribute('data-uids') || '').split(',');
+          var hit = false;
+          for (var ui = 0; ui < uds.length; ui++) { if (_norm(uds[ui]) === _norm(uid)) { hit = true; break; } }
+          if (hit) { leftEl = lis[li]; break; }
+        }
+      }
       // 找右侧节点 (provider标题或模型)
       var rightEl = document.querySelector('.wire-col.right .model-item[data-prov="' + route.provider + '"][data-model="' + route.model + '"]');
       if (!rightEl) rightEl = document.querySelector('.wire-col.right .model-item[data-prov="' + route.provider + '"]');
@@ -4847,23 +4926,50 @@ function getEaConfigHtml(port, nonce) {
     bar.innerHTML =
       '<span class="pill">Provider ' + provCount + '</span>' +
       '<span class="pill">路由 ' + routedCount + '/' + routeCount + '</span>' +
-      '<span class="pill">就绪 ' + (_config && _config._runtime && _config._runtime.ready ? '是' : '否') + '</span>' +
+      '<span class="pill">就绪 ' + (_config && (_config.router_ready || _config.ea_running) ? '是' : '否') + '</span>' +
       '<span style="flex:1"></span>' +
       '<span style="font-size:9px;opacity:0.4">双击=编辑 · 左=官方 · 右=外接</span>';
   }
+
+  // ── cc-switch 预设填充 ──
+  (function() {
+    var sel = document.getElementById('presetSelect');
+    if (!sel) return;
+    _PRESETS.forEach(function(p, i) {
+      var opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = p.n + ' (' + p.u.replace(/^https?:\/\//, '') + ')';
+      sel.appendChild(opt);
+    });
+    var apply = document.getElementById('btnApplyPreset');
+    if (apply) apply.addEventListener('click', function() {
+      var v = sel.value;
+      if (v === '') return;
+      var p = _PRESETS[parseInt(v, 10)];
+      if (!p) return;
+      document.getElementById('provName').value = p.n.toLowerCase().replace(/\s+/g, '-');
+      document.getElementById('provUrl').value = p.u;
+      document.getElementById('provModels').value = p.m;
+      document.getElementById('provKey').focus();
+    });
+  })();
 
   // ── 添加 Provider ──
   document.getElementById('btnAddProv').addEventListener('click', function() {
     var name = document.getElementById('provName').value.trim();
     var url = document.getElementById('provUrl').value.trim();
     var key = document.getElementById('provKey').value.trim();
+    var modelsRaw = document.getElementById('provModels').value.trim();
     if (!name || !url) { alert('名称和 URL 必填'); return; }
-    fPost('/origin/ea/provider', { name: name, cfg: { baseUrl: url, apiKey: key } })
+    var cfg = { baseUrl: url, apiKey: key };
+    if (modelsRaw) cfg.models = modelsRaw.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+    fPost('/origin/ea/provider', { name: name, cfg: cfg })
       .then(function(r) {
         if (r.ok) {
           document.getElementById('provName').value = '';
           document.getElementById('provUrl').value = '';
           document.getElementById('provKey').value = '';
+          document.getElementById('provModels').value = '';
           loadConfig();
         } else {
           alert('添加失败: ' + (r.error || 'unknown'));
