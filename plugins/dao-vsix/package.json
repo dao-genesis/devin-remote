@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "1.0.9",
+  "version": "1.1.0",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -68,13 +68,13 @@
         },
         "dao.autoTunnel": {
           "type": "boolean",
-          "default": true,
-          "description": "Auto-start CF Tunnel if cloudflared found"
+          "default": false,
+          "description": "Auto-start CF Tunnel (DEPRECATED — public tunneling moved to dao-bridge plugin)"
         },
         "dao.autoDownload": {
           "type": "boolean",
-          "default": true,
-          "description": "Auto-download cloudflared if not found"
+          "default": false,
+          "description": "Auto-download cloudflared (DEPRECATED — use dao-bridge plugin)"
         },
         "dao.githubPat": {
           "type": "string",
@@ -93,8 +93,8 @@
         },
         "dao.autoBridge": {
           "type": "boolean",
-          "default": true,
-          "description": "Auto-connect WebSocket relay bridge on server start"
+          "default": false,
+          "description": "Auto-connect WebSocket relay bridge (DEPRECATED — public tunneling moved to dao-bridge plugin)"
         },
         "dao.devinAutoSync": {
           "type": "boolean",
@@ -127,14 +127,6 @@
       {
         "command": "dao.regenerateToken",
         "title": "Dao: Regenerate Token"
-      },
-      {
-        "command": "dao.cfLogin",
-        "title": "Dao: Cloudflare Login & Deploy Relay"
-      },
-      {
-        "command": "dao.cfDeploy",
-        "title": "Dao: Deploy Cloudflare Relay"
       },
       {
         "command": "dao.devinLogin",

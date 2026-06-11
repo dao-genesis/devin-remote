@@ -197,7 +197,28 @@ async function injectGitHubPAT(orgId, pat, auth1) {
   if (r.status === 400 && r.text && r.text.includes("already registered")) {
     return { ok: false, alreadyRegistered: true, error: "该组织已有GitHub App安装, 将尝试连接现有安装" };
   }
+  if (r.status === 400 && r.text && r.text.toLowerCase().includes("invalid pat")) {
+    return { ok: false, invalidPat: true, error: "PAT 无效或已过期" };
+  }
   return { ok: false, error: r.text ? r.text.slice(0, 200) : "status=" + r.status };
+}
+
+// ═══ 仓库可达性核验 · 见其本 ═══
+// 连接成功的真凭实据 = 该 org 能否列出目标 GitHub 仓库。
+// 返回扁平化 full_name 列表 (后端按 gh_org 分组, 此处摊平)。
+async function getAccessibleRepos(orgId, auth1) {
+  var bareOrgId = orgId.replace(/^org-/, "");
+  var r = await jsonGet(DEVIN + "/api/org-" + bareOrgId + "/integrations/github/repos", {
+    Authorization: "Bearer " + auth1, "x-cog-org-id": orgId,
+  });
+  if (r.status !== 200 || !r.json) return { ok: false, repos: [], error: "status=" + r.status };
+  var groups = Array.isArray(r.json) ? r.json : (r.json.repos || r.json.repositories || []);
+  var flat = [];
+  groups.forEach(function (g) {
+    if (g && g.gh_repos) { g.gh_repos.forEach(function (rp) { if (rp && rp.full_name) flat.push(rp.full_name); }); }
+    else if (g && (g.full_name || g.name)) { flat.push(g.full_name || g.name); }
+  });
+  return { ok: true, repos: flat };
 }
 
 // 断开GitHub连接 — 先用name+host, 回退到orgId前缀
@@ -299,9 +320,52 @@ function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 // ═══ 状态持久化 ═══
 var STATE_FILE = path.join(os.homedir(), ".devin-git-auth.json");
 
+// ═══ 共享凭据池 · 道生一 · 与 dao-vsix 同源 ═══
+// ~/.dao/accounts.json  (email->password) 与 ~/.dao/git-pats.json (PAT) 由 dao 全家桶共用。
+// 密码仅驻内存(_daoPasswords), 永不写入 STATE_FILE。用户无需手动输入任何账号/PAT。
+var DAO_DIR = path.join(os.homedir(), ".dao");
+var DAO_ACCOUNTS_FILE = path.join(DAO_DIR, "accounts.json");
+var DAO_PATS_FILE = path.join(DAO_DIR, "git-pats.json");
+var _daoPasswords = {};   // email -> password (内存)
+var _daoDefaultPat = null;
+var _daoPatOverrides = {}; // email -> pat
+
+function loadDaoPool() {
+  // 账号池
+  var pooled = [];
+  try {
+    var raw = JSON.parse(fs.readFileSync(DAO_ACCOUNTS_FILE, "utf8"));
+    var list = Array.isArray(raw) ? raw : (raw.accounts || []);
+    list.forEach(function (a) {
+      if (a && a.email && a.password) { _daoPasswords[a.email] = a.password; pooled.push(a.email); }
+    });
+  } catch (e) {}
+  // PAT池
+  try {
+    var pj = JSON.parse(fs.readFileSync(DAO_PATS_FILE, "utf8"));
+    _daoDefaultPat = pj.defaultPat || pj.pat || null;
+    _daoPatOverrides = pj.overrides || {};
+  } catch (e) {}
+  return pooled;
+}
+
+// 解析某账号应使用的 PAT: 优先 email 覆盖, 回退默认池 PAT
+function patFor(email) { return _daoPatOverrides[email] || _daoDefaultPat || null; }
+// 解析某账号密码: state 内不存密码, 故统一从内存池取
+function passwordFor(email, acct) { return (acct && acct.password) || _daoPasswords[email] || null; }
+
 function loadState() {
-  try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch (e) {}
-  return { accounts: {}, pat: null, meta: { created: new Date().toISOString() } };
+  var st;
+  try { st = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch (e) {}
+  if (!st) st = { accounts: {}, pat: null, meta: { created: new Date().toISOString() } };
+  if (!st.accounts) st.accounts = {};
+  // 合并 dao 账号池: 池中每个账号自动登记(密码不入盘), 用户零输入即可批量连接。
+  var pooled = loadDaoPool();
+  pooled.forEach(function (email) {
+    if (!st.accounts[email]) st.accounts[email] = { email: email, fromPool: true };
+  });
+  if (!st.pat && _daoDefaultPat) st.pat = _daoDefaultPat;
+  return st;
 }
 function saveState(state) {
   if (!state.meta) state.meta = {};
@@ -777,11 +841,13 @@ window.addEventListener('message', function(event) {
       document.getElementById('btnBatchConnect').disabled = false;
       if (msg.ok && msg.results) {
         var okCount = msg.results.filter(function(r){return r.ok;}).length;
+        var stuckCount = msg.results.filter(function(r){return r.stuck;}).length;
         var failCount = msg.results.length - okCount;
-        document.getElementById('batchStatus').textContent = '完成: '+okCount+'成功 / '+failCount+'失败';
+        document.getElementById('batchStatus').textContent = '完成: '+okCount+'连通 / '+failCount+'失败'+(stuckCount?(' (其中'+stuckCount+'幽灵态)'):'');
         msg.results.forEach(function(r) {
-          if (r.ok) { log('批量 '+r.email+': 成功 ['+( r.method||'already')+']','ok'); }
-          else { log('批量 '+r.email+': 失败 — '+(r.error||'')+(r.userCode?' 设备码:'+r.userCode:''),'err'); }
+          if (r.ok) { log('批量 '+r.email+': 连通 ['+(r.method||'already')+']'+(r.repoCount!==undefined?(' 可达仓库 '+r.repoCount):''),'ok'); }
+          else if (r.stuck) { log('批量 '+r.email+': 幽灵态 — '+(r.error||''),'warn'); }
+          else { log('批量 '+r.email+': 失败 — '+(r.error||''),'err'); }
         });
         // 刷新列表
         Object.keys(saved).forEach(function(em) {
@@ -1069,14 +1135,14 @@ async function handleMessage(msg) {
       // ═══ 连接Git · 弱者道之用 · 道法自然 ═══
       // gh_cli设备码认证 — Devin官方前端方式, 对所有账号有效
       try {
-        var pat = msg.pat;
+        var pat = msg.pat || patFor(msg.email);
         var acct = _state.accounts[msg.email];
         // auth1过期时自动重新登录
         var auth1 = _authCache[msg.email];
-        if (!auth1 && acct && acct.password) {
+        if (!auth1 && passwordFor(msg.email, acct)) {
           _log('connectGit: auth1过期, 自动重新登录...');
           try {
-            var lr = await devinLogin(msg.email, acct.password);
+            var lr = await devinLogin(msg.email, passwordFor(msg.email, acct));
             auth1 = lr.auth1;
             _authCache[msg.email] = auth1;
             var pr = await devinPostAuth(auth1);
@@ -1104,8 +1170,28 @@ async function handleMessage(msg) {
             _state.accounts[msg.email].secret = true;
             _state.accounts[msg.email].gitCount = (_state.accounts[msg.email].gitCount || 0) + 1;
             saveState(_state);
-            postMsg({ command: "connectResult", ok: true });
+            var repoR0 = await getAccessibleRepos(acct.orgId, auth1);
+            postMsg({ command: "connectResult", ok: true, repoCount: repoR0.ok ? repoR0.repos.length : undefined });
             break;
+          }
+          if (patR.invalidPat) {
+            postMsg({ command: "connectResult", ok: false, error: "PAT 无效或已过期, 请更新 ~/.dao/git-pats.json" });
+            break;
+          }
+          // "已注册" — 多半是该 org 已绑定同一 GitHub 账号。先核实现有连接, 若已连通即成功。
+          if (patR.alreadyRegistered) {
+            var gcChk = await checkGitConnections(acct.orgId, auth1);
+            if (gcChk.ok && gcChk.count > 0) {
+              var repoR1 = await getAccessibleRepos(acct.orgId, auth1);
+              _state.accounts[msg.email].git = true;
+              _state.accounts[msg.email].gitType = (gcChk.connections[0] || {}).type || "github_individual_token";
+              _state.accounts[msg.email].gitCount = gcChk.count;
+              saveState(_state);
+              postMsg({ command: "connectResult", ok: true, already: true, repoCount: repoR1.ok ? repoR1.repos.length : undefined });
+              break;
+            }
+            // 注册标记存在但无任何连接 = 后端幽灵态, PAT 通道无法清除 → 转 gh_cli 设备码兜底。
+            _log('connectGit: 已注册但0连接(幽灵态), 转 gh_cli 设备码');
           }
           _log('connectGit: PAT注入失败, 切换gh_cli设备码认证');
         }
@@ -1253,7 +1339,7 @@ async function handleMessage(msg) {
     // 多个Devin AI账号 → 一个GitHub仓库: PAT注入 + 断开重连 + 强制覆盖
     case "batchConnect":
       try {
-        var pat = msg.pat || _state.pat;
+        var pat = msg.pat || _state.pat || _daoDefaultPat;
         if (!pat) {
           postMsg({ command: "batchResult", ok: false, error: "需要 GitHub PAT (ghp_...)" });
           break;
@@ -1274,8 +1360,8 @@ async function handleMessage(msg) {
           try {
             // 确保有auth1
             var bAuth1 = _authCache[bEmail];
-            if (!bAuth1 && bAcct.password) {
-              var bLr = await devinLogin(bEmail, bAcct.password);
+            if (!bAuth1 && passwordFor(bEmail, bAcct)) {
+              var bLr = await devinLogin(bEmail, passwordFor(bEmail, bAcct));
               bAuth1 = bLr.auth1;
               _authCache[bEmail] = bAuth1;
               var bPr = await devinPostAuth(bAuth1);
@@ -1287,91 +1373,66 @@ async function handleMessage(msg) {
               continue;
             }
 
-            // 检查当前状态
+            // 检查当前状态 — 已连接则核验仓库可达性后直接记成功
             var bGc = await checkGitConnections(bAcct.orgId, bAuth1);
             if (bGc.ok && bGc.count > 0) {
-              // 已连接 — 检查是否连接到目标仓库
-              results.push({ email: bEmail, ok: true, already: true, connections: bGc.count });
+              var bRepo0 = await getAccessibleRepos(bAcct.orgId, bAuth1);
+              results.push({ email: bEmail, ok: true, already: true, connections: bGc.count, repoCount: bRepo0.ok ? bRepo0.repos.length : undefined });
               bAcct.git = true;
               bAcct.gitCount = bGc.count;
+              bAcct.gitType = (bGc.connections[0] || {}).type || bAcct.gitType;
               saveState(_state);
               continue;
             }
 
-            // 未连接 — 尝试PAT注入
+            // 未连接 — 尝试PAT注入(个人令牌通道, 对全新 org 即时生效)
             _log('batchConnect: PAT注入 ' + bEmail);
             var bPatR = await injectGitHubPAT(bAcct.orgId, pat, bAuth1);
             if (bPatR.ok) {
               try { await injectSecret(bAcct.orgId, "GITHUB_PAT", pat, bAuth1); } catch (e) {}
+              var bRepo1 = await getAccessibleRepos(bAcct.orgId, bAuth1);
               bAcct.git = true;
               bAcct.gitType = "github_individual_token";
               bAcct.secret = true;
               bAcct.gitCount = (bAcct.gitCount || 0) + 1;
               saveState(_state);
-              results.push({ email: bEmail, ok: true, method: "pat" });
+              results.push({ email: bEmail, ok: true, method: "pat", repoCount: bRepo1.ok ? bRepo1.repos.length : undefined });
               continue;
             }
 
-            // PAT注入失败(已有安装) — 断开旧连接再重连
+            if (bPatR.invalidPat) {
+              results.push({ email: bEmail, ok: false, error: "PAT 无效或已过期" });
+              continue;
+            }
+
+            // PAT注入返回"已注册" — 先断开残留连接再重注入一次
             if (bPatR.alreadyRegistered) {
-              _log('batchConnect: 已有连接，断开后重连 ' + bEmail);
+              _log('batchConnect: 已注册, 断开后重注入 ' + bEmail);
               await robustDisconnectGit(bEmail, bAuth1, bAcct.orgId);
               await sleep(2000);
-
-              // 重试PAT注入
               var bPatR2 = await injectGitHubPAT(bAcct.orgId, pat, bAuth1);
               if (bPatR2.ok) {
                 try { await injectSecret(bAcct.orgId, "GITHUB_PAT", pat, bAuth1); } catch (e) {}
+                var bRepo2 = await getAccessibleRepos(bAcct.orgId, bAuth1);
                 bAcct.git = true;
                 bAcct.gitType = "github_individual_token";
                 bAcct.secret = true;
                 bAcct.gitCount = (bAcct.gitCount || 0) + 1;
                 saveState(_state);
-                results.push({ email: bEmail, ok: true, method: "disconnect+pat" });
+                results.push({ email: bEmail, ok: true, method: "disconnect+pat", repoCount: bRepo2.ok ? bRepo2.repos.length : undefined });
                 continue;
               }
-
-              // gh_cli设备码 — 最后手段
-              _log('batchConnect: 尝试gh_cli设备码 ' + bEmail);
-              var bCodeR = await ghCliRequestCode(bAcct.orgId, bAuth1);
-              if (bCodeR.ok) {
-                // 自动使用GitHub PAT来授权设备码 (自动化无GUI)
-                var deviceAuthorized = false;
-                try {
-                  // 用PAT直接调GitHub API授权设备码
-                  var scopeR = await rawRequest("POST", "https://github.com/login/oauth/authorize_device",
-                    { "Accept": "application/json", "Content-Type": "application/json" },
-                    JSON.stringify({ user_code: bCodeR.userCode }),
-                    { timeoutMs: 10000, forceDirect: true });
-                  if (scopeR.status === 200) deviceAuthorized = true;
-                } catch (e) {}
-
-                if (!deviceAuthorized) {
-                  // 无法自动授权 — 记录设备码供用户手动验证
-                  results.push({ email: bEmail, ok: false, method: "device_code", userCode: bCodeR.userCode, verificationUri: bCodeR.verificationUri });
-                  continue;
-                }
-
-                // 轮询等待
-                for (var bpi = 0; bpi < 12; bpi++) {
-                  await sleep(5000);
-                  var bSt = await ghCliPollState(bAcct.orgId, bAuth1);
-                  if (bSt.ok && bSt.oauth && bSt.oauth !== null && bSt.oauth !== "null") {
-                    bAcct.git = true;
-                    bAcct.gitType = "github_app";
-                    bAcct.gitCount = (bAcct.gitCount || 0) + 1;
-                    saveState(_state);
-                    results.push({ email: bEmail, ok: true, method: "device_code" });
-                    deviceAuthorized = true;
-                    break;
-                  }
-                }
-                if (!deviceAuthorized) {
-                  results.push({ email: bEmail, ok: false, error: "设备码验证超时" });
-                }
-              } else {
-                results.push({ email: bEmail, ok: false, error: "gh_cli失败: " + (bCodeR.error || "").slice(0, 60) });
+              // 断开后仍"已注册" — 再核验是否其实已有连接(最终一致性延迟)
+              var bGc2 = await checkGitConnections(bAcct.orgId, bAuth1);
+              if (bGc2.ok && bGc2.count > 0) {
+                var bRepo3 = await getAccessibleRepos(bAcct.orgId, bAuth1);
+                bAcct.git = true; bAcct.gitCount = bGc2.count; saveState(_state);
+                results.push({ email: bEmail, ok: true, already: true, connections: bGc2.count, repoCount: bRepo3.ok ? bRepo3.repos.length : undefined });
+                continue;
               }
+              // 注册标记存在 + 0连接 + 断开无效 = 后端幽灵态, 任何 API 通道均无法清除。
+              // 如实上报, 不以设备码 GUI 兜底(用户要求零 GUI, 且无法自动完成)。
+              results.push({ email: bEmail, ok: false, stuck: true, error: "后端幽灵态(已注册但0连接, API不可清除)" });
             } else {
               results.push({ email: bEmail, ok: false, error: "PAT注入失败: " + (bPatR.error || "").slice(0, 60) });
             }
