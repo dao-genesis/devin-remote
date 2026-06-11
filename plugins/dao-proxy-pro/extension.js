@@ -3542,6 +3542,59 @@ function ensureIconSvg() {
 
 // ═══════════════════════════ activate / deactivate ═══════════════════════════
 let _essenceProvider = null;
+// ★ 状态栏入口 · 五十二章「既得其母 以知其子」· 三模块面板唯一开门处
+let _statusBarItem = null;
+// ★ 模型解锁 · 首装即自化 · 全109模型现于选择器 (三十七章「万物将自化」)
+let _modelUnlockDone = false;
+
+// ★ 自动模型解锁 · 反代就位后调 /origin/model_unlock · 幂等 · 首装即全模可选
+async function autoModelUnlock(port, attempt) {
+  attempt = attempt || 0;
+  if (_modelUnlockDone || !port) return;
+  try {
+    const status = await httpGetJson(
+      `http://127.0.0.1:${port}/origin/model_unlock`,
+      2000,
+    );
+    if (status && status.enabled === true) {
+      _modelUnlockDone = true;
+      L.info("modelUnlock", "已处解锁态 · 全模型自现 · 不复行");
+      return;
+    }
+    const result = await httpPostJson(
+      `http://127.0.0.1:${port}/origin/model_unlock`,
+      { enabled: true },
+      2500,
+    );
+    if (result && result.ok) {
+      _modelUnlockDone = true;
+      L.info(
+        "modelUnlock",
+        `首装自动解锁 ✅ · ${result.catalog_size || 0} 模型入选择器 · 执大象 天下往`,
+      );
+    } else if (attempt < 5) {
+      setTimeout(() => autoModelUnlock(port, attempt + 1), 3000);
+    }
+  } catch (e) {
+    if (attempt < 5) {
+      setTimeout(() => autoModelUnlock(port, attempt + 1), 3000);
+    } else {
+      L.warn("modelUnlock", `自动解锁未成 (${attempt}): ${e && e.message}`);
+    }
+  }
+}
+
+// ★ 状态栏入口刷新 · 显模式/端口 · 点击开三模块中央面板
+function refreshStatusBar() {
+  if (!_statusBarItem) return;
+  const mode = _cachedMode === "passthrough" ? "官" : "道";
+  const port = _cachedPort || "—";
+  _statusBarItem.text = `$(circuit-board) 道Agent Pro · ${mode}`;
+  _statusBarItem.tooltip =
+    `道Agent Pro · 模式=${_cachedMode || "invert"} · 端口=${port}\n` +
+    `点击打开「本源观照 / 渠道配置 / 模型路由」三模块面板`;
+  _statusBarItem.show();
+}
 
 function activate(ctx) {
   _activateTs = Date.now();
@@ -3725,6 +3778,23 @@ function activate(ctx) {
         },
       ),
     );
+
+    // ★ 状态栏入口 (右下角) · 仿 rt-flow · 点击开三模块中央面板
+    // 五十二章「既得其母 以知其子」· 解「面板无处可开」之疾
+    _statusBarItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Right,
+      100,
+    );
+    _statusBarItem.command = "dao.eaConfig";
+    refreshStatusBar();
+    ctx.subscriptions.push(_statusBarItem);
+
+    // ★ 首装即自化 · 反代就位后自动解锁全模型 (含retry · 渡proxy启动窗)
+    // 三十七章「侯王若能守之 万物将自化」· 解「装后仅 SWE1.6」之疾
+    setTimeout(() => {
+      autoModelUnlock(_cachedPort);
+      refreshStatusBar();
+    }, 8000);
 
     // v9.4.2 · 自 focus dao-container · 强制 resolveWebviewView 触发 · SSR 帛书立现
     // 三十七章: 道恒无名 · 侯王若能守之 · 万物将自化
@@ -4241,6 +4311,34 @@ function getEaConfigHtml(port, nonce) {
     font-size: 12px; line-height: 1.5;
     display: flex; flex-direction: column; padding: 8px;
   }
+  /* ── 三模块 Tab 栏 ── */
+  .dao-tabs {
+    display: flex; gap: 4px; margin-bottom: 8px;
+    border-bottom: 1px solid rgba(128,128,128,0.25); padding-bottom: 6px;
+  }
+  .dao-tab {
+    padding: 5px 12px; font-size: 12px; cursor: pointer; user-select: none;
+    border: 1px solid rgba(128,128,128,0.25); border-radius: 4px;
+    background: transparent; color: var(--vscode-foreground); opacity: 0.7;
+    font-family: inherit;
+  }
+  .dao-tab:hover { opacity: 1; }
+  .dao-tab.active {
+    opacity: 1; font-weight: 600;
+    background: var(--vscode-button-background, rgba(0,127,212,0.25));
+    color: var(--vscode-button-foreground, var(--vscode-foreground));
+    border-color: var(--vscode-focusBorder, #007fd4);
+  }
+  .dao-pane { display: none; flex-direction: column; flex: 1; min-height: 0; }
+  .dao-pane.active { display: flex; }
+  /* ── 本源观照 (①) ── */
+  .essence-card {
+    padding: 14px; border-radius: 6px; margin-bottom: 10px;
+    background: rgba(0,0,0,0.08); border: 1px solid rgba(128,128,128,0.2);
+  }
+  .essence-card h3 { font-size: 14px; margin-bottom: 8px; }
+  .essence-card p { opacity: 0.75; margin-bottom: 10px; font-size: 12px; }
+  .essence-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   /* ── 顶部: Provider 输入 ── */
   .provider-bar {
     display: flex; gap: 4px; align-items: center; flex-wrap: wrap;
@@ -4339,26 +4437,56 @@ function getEaConfigHtml(port, nonce) {
 </style>
 </head>
 <body data-port="${proxyPort}">
-  <!-- Provider 输入 -->
-  <div class="provider-bar">
-    <input id="provName" placeholder="名称 (如 deepseek)" style="flex:0.5;min-width:60px">
-    <input id="provUrl" placeholder="Base URL (如 https://api.deepseek.com)" style="flex:2">
-    <input id="provKey" type="password" placeholder="API Key" style="flex:1">
-    <button class="btn add" id="btnAddProv" title="添加 Provider">+ 添加</button>
-    <button class="btn probe" id="btnProbe" title="探测所有 Provider 健康">探测</button>
+  <!-- ── 三模块 Tab 栏 ── -->
+  <div class="dao-tabs">
+    <button class="dao-tab active" data-pane="paneEssence">① 本源观照</button>
+    <button class="dao-tab" data-pane="paneProvider">② 渠道配置</button>
+    <button class="dao-tab" data-pane="paneRouter">③ 模型路由</button>
   </div>
 
-  <!-- 连线图 -->
-  <div class="wire-container" id="wireContainer" style="position:relative;">
-    <div class="wire-col left" id="leftCol">
-      <h3>官方模型</h3>
-      <div id="officialModels"></div>
+  <!-- ① 本源观照 (IDE 左侧复刻) -->
+  <div class="dao-pane active" id="paneEssence">
+    <div class="essence-card">
+      <h3>本源观照 · 道法自然</h3>
+      <p>本模块复刻 IDE 左侧「本源观照」面板，承载底层提示词隔离替换、帛书《老子》《阴符经》本源注入与通路状态。点击下方按钮在侧栏展开完整视图，或在浏览器查看真实注入的 System Prompt。</p>
+      <div class="essence-actions">
+        <button class="btn add" id="btnOpenEssence">在侧栏展开完整本源观照</button>
+        <button class="btn" id="btnOpenPreview">浏览器查看真实 SP</button>
+        <button class="btn" id="btnModelStatus">查看全量模型目录</button>
+      </div>
     </div>
-    <div class="wire-col right" id="rightCol">
-      <h3>外接模型</h3>
-      <div id="externalModels"></div>
+    <div class="essence-card">
+      <h3>通路探测 · 默认 SWE 1.6</h3>
+      <p>未接外接 API 时，SWE 1.6（基础版）作静态通道探测：发消息若得固定回执，即证此路已通。接入第一个外接 API 后，SWE 1.6 Fast 自动路由至该模型；其余可在「③ 模型路由」手动连线官方/第三方模型，两类渠道并行不悖。</p>
     </div>
-    <svg class="wire-svg" id="wireSvg"></svg>
+  </div>
+
+  <!-- ② 渠道配置 (CC-Switch 风) -->
+  <div class="dao-pane" id="paneProvider">
+    <!-- Provider 输入 -->
+    <div class="provider-bar">
+      <input id="provName" placeholder="名称 (如 deepseek)" style="flex:0.5;min-width:60px">
+      <input id="provUrl" placeholder="Base URL (如 https://api.deepseek.com)" style="flex:2">
+      <input id="provKey" type="password" placeholder="API Key" style="flex:1">
+      <button class="btn add" id="btnAddProv" title="添加 Provider">+ 添加</button>
+      <button class="btn probe" id="btnProbe" title="探测所有 Provider 健康">探测</button>
+    </div>
+  </div>
+
+  <!-- ③ 模型路由 (官方 ↔ 第三方 连线) -->
+  <div class="dao-pane" id="paneRouter">
+    <!-- 连线图 -->
+    <div class="wire-container" id="wireContainer" style="position:relative;">
+      <div class="wire-col left" id="leftCol">
+        <h3>官方模型</h3>
+        <div id="officialModels"></div>
+      </div>
+      <div class="wire-col right" id="rightCol">
+        <h3>外接模型</h3>
+        <div id="externalModels"></div>
+      </div>
+      <svg class="wire-svg" id="wireSvg"></svg>
+    </div>
   </div>
 
   <!-- 路由编辑弹窗 -->
@@ -4738,6 +4866,30 @@ function getEaConfigHtml(port, nonce) {
   // ── 自动刷新 ──
   setInterval(function() { loadConfig(); }, 5000);
 
+  // ── 三模块 Tab 切换 + 扩展宿主桥 ──
+  var _vscode = (typeof acquireVsCodeApi === 'function') ? acquireVsCodeApi() : null;
+  function postMsg(t) { if (_vscode) _vscode.postMessage({ type: t }); }
+  var _tabs = document.querySelectorAll('.dao-tab');
+  for (var ti = 0; ti < _tabs.length; ti++) {
+    _tabs[ti].addEventListener('click', function() {
+      var pane = this.getAttribute('data-pane');
+      for (var k = 0; k < _tabs.length; k++) { _tabs[k].classList.remove('active'); }
+      this.classList.add('active');
+      var panes = document.querySelectorAll('.dao-pane');
+      for (var j = 0; j < panes.length; j++) {
+        if (panes[j].id === pane) { panes[j].classList.add('active'); }
+        else { panes[j].classList.remove('active'); }
+      }
+      if (pane === 'paneRouter') { try { renderWires(); } catch (e) {} }
+    });
+  }
+  var _be = document.getElementById('btnOpenEssence');
+  if (_be) _be.addEventListener('click', function() { postMsg('focusEssence'); });
+  var _bp = document.getElementById('btnOpenPreview');
+  if (_bp) _bp.addEventListener('click', function() { postMsg('openPreview'); });
+  var _bm = document.getElementById('btnModelStatus');
+  if (_bm) _bm.addEventListener('click', function() { postMsg('modelStatus'); });
+
   // ── 初始加载 ──
   loadConfig();
   // 首次探测健康
@@ -4757,7 +4909,7 @@ async function cmdEaConfig() {
   try {
     const panel = vscode.window.createWebviewPanel(
       "dao.eaConfig",
-      "道 · 外接API 热配置",
+      "道 · 三模块面板 (本源观照·渠道配置·模型路由)",
       vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -4769,6 +4921,23 @@ async function cmdEaConfig() {
     );
     const N = _genNonce();
     panel.webview.html = getEaConfigHtml(_cachedPort, N);
+    // ★ 三模块面板 → 扩展宿主消息桥 · 本源观照(①)开侧栏 · 浏览器真SP · 全模目录
+    panel.webview.onDidReceiveMessage((msg) => {
+      try {
+        if (!msg || !msg.type) return;
+        if (msg.type === "focusEssence") {
+          vscode.commands.executeCommand(
+            "workbench.view.extension.dao-container",
+          );
+        } else if (msg.type === "openPreview") {
+          cmdOpenPreview();
+        } else if (msg.type === "modelStatus") {
+          cmdModelUnlockStatus();
+        }
+      } catch (e) {
+        L.warn("eaConfig", `msg handle fail: ${e && e.message}`);
+      }
+    });
     L.info("eaConfig", `webview panel opened · port=${_cachedPort}`);
   } catch (e) {
     L.error("eaConfig", `open fail: ${e.message}`);
