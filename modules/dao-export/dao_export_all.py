@@ -37,19 +37,32 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-# === SSL + Proxy immunity ===
-for k in ('HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'):
-    os.environ.pop(k, None)
-os.environ['NO_PROXY'] = '*'
-
+# === SSL + 软适配代理 ===
+# 代理策略（软编码，适配一切环境）：
+#   --proxy URL  → 强制走指定代理
+#   --no-proxy   → 强制直连
+#   默认        → 自动检测系统/环境代理（Windows 注册表 + HTTPS_PROXY 等环境变量），有则用、无则直连
 _ctx = ssl.create_default_context()
 _ctx.check_hostname = False
 _ctx.verify_mode = ssl.CERT_NONE
-_opener = urllib.request.build_opener(
-    urllib.request.ProxyHandler({}),
-    urllib.request.HTTPSHandler(context=_ctx),
-)
-urllib.request.install_opener(_opener)
+
+def setup_network(proxy=None, no_proxy=False):
+    """软适配网络层：按用户环境自动选择直连/代理。"""
+    if no_proxy:
+        ph = urllib.request.ProxyHandler({})
+        mode = "直连 (强制)"
+    elif proxy:
+        ph = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        mode = f"代理 {proxy}"
+    else:
+        detected = urllib.request.getproxies()  # 环境变量 + Windows 注册表自动检测
+        ph = urllib.request.ProxyHandler(detected if detected else {})
+        mode = f"自动检测到代理 {detected}" if detected else "直连 (未检测到代理)"
+    opener = urllib.request.build_opener(ph, urllib.request.HTTPSHandler(context=_ctx))
+    urllib.request.install_opener(opener)
+    return mode
+
+setup_network()  # 默认先装自动检测模式，main() 解析参数后可覆盖
 
 # === Constants ===
 LOGIN_URL = "https://windsurf.com/_devin-auth/password/login"
@@ -810,8 +823,13 @@ def main():
     parser.add_argument("--filter", help="过滤会话关键词")
     parser.add_argument("--max-sessions", type=int, default=0, help="最大导出会话数 (0=全部)")
     parser.add_argument("--workers", type=int, default=DOWNLOAD_WORKERS, help=f"并发下载线程数 (默认 {DOWNLOAD_WORKERS})")
+    parser.add_argument("--proxy", help="强制使用代理 (如 http://127.0.0.1:7890)；留空自动检测系统/环境代理")
+    parser.add_argument("--no-proxy", action="store_true", help="强制直连，忽略一切代理")
 
     args = parser.parse_args()
+
+    mode = setup_network(args.proxy, args.no_proxy)
+    print(f"网络模式: {mode}", flush=True)
 
     DOWNLOAD_WORKERS = max(1, args.workers)
 

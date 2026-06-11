@@ -20,11 +20,13 @@
   - `changes/` — 全部改动文件的最终状态（保留目录结构）
   - `EXPORT_MANIFEST.json` — 导出清单
 - **批量导出**: 命令 `DAO: Export ALL Sessions` 一次导出账号全部 sessions
+- **Agent Bridge (v1.2.0)**: 插件启动即在本地 127.0.0.1:7848 起 HTTP API（token 鉴权），暴露全部底层功能——会话列表/事件流/worklog/changes/云端文件/一键 ZIP 导出/账号级 playbooks·knowledge·secrets·org。后端 Agent 直接调 HTTP 即可使用所有模块，无需任何文档或依赖。命令：`DAO: Start/Stop Agent Bridge`
+- **导出MD (v1.2.0)**: 命令 `DAO: Export Agent Bridge Doc (MD)` 实时生成接入文档（当前端口、token、全部接口、curl/PowerShell 示例），粘贴给任意 Agent 即可立刻接入正在运行的插件
 
 ## 安装
 
 ```
-code --install-extension dao-devin-export-1.1.0.vsix
+code --install-extension dao-devin-export-1.3.0.vsix
 ```
 
 ## 使用
@@ -40,5 +42,6 @@ code --install-extension dao-devin-export-1.1.0.vsix
 - API: windsurf.com 登录 → app.devin.ai sessions/events/presigned-url
 - Token 保存在 VS Code globalState
 - 高速下载引擎（v1.1.0）：cloud_files 与 changes 均为 12 路并发下载 + 每文件 3 次重试（45s 超时），presigned-url 批量解析 6 路并发——实测 323 文件会话从卡死 30+ 分钟降至约 3 秒
+- Agent Bridge（v1.2.0）：Node stdlib http，仅监听 127.0.0.1，token 每次自动生成并持久化（globalState），全部端点见 `GET /api/status` 或导出的 MD 文档；实测 API 一键导出 323 文件会话 3.7 秒
 
 无为而无不为 道法自然
