@@ -866,6 +866,21 @@ function init({ log, configPath }) {
       _routes[uid] = t;
     }
 
+    // ★ v9.9.270 · 两条基础默认连线 · 幂等补全(不覆盖用户已有)
+    //   线1: SWE 1.6 基础版 → 测试通道(builtin-stub) · 默认即通·验证通路
+    //   线2: SWE 1.6 Fast → 外接首项(deepseek) · 已在配置中
+    //   道法自然: 用户首见即有两线 · 无为而无不为
+    if (!_routes["MODEL_SWE_1_6"]) {
+      _routes["MODEL_SWE_1_6"] = {
+        provider: "builtin-stub",
+        model: "stub-transport-test",
+        _label: "SWE 1.6 基础版 → 测试通道(固定返回·验证通路)",
+        maxOutputTokens: 4096,
+        _seeded: true,
+      };
+      _log("[dao-router] 补默认基础连线: MODEL_SWE_1_6 → 测试通道(builtin-stub)");
+    }
+
     // 加载 providers
     _providers = _cfg.providers || {};
 

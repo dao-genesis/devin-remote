@@ -3,6 +3,7 @@
 // v9.9.267 · ③模型路由 模板字面量内正则反斜杠折叠修复(字符类替代 \/ \s)
 // v9.9.268 · 三模块面板 window.confirm/alert 被 webview 屏蔽 → 自带 _daoConfirm/_daoToast 弹层
 // v9.9.269 · 悬浮面板(本源观照)同样自带 _daoConfirm/_daoToast,7 处 confirm() 改为弹层(断线/解锁/删渠/清空/回退)
+// v9.9.274 · ③模型路由 活捕家族按厂商分组(source.js _inferFamilyProvider): Claude/GPT/Gemini/Kimi/Windsurf… 不再统归 Other · 实机实测闭环
 //
 // 道德经 · 第四十章: "反者道之动, 弱者道之用."
 // 道德经 · 第四十八章: "为道日损. 损之又损, 以至于无为."
@@ -163,6 +164,11 @@ let _cachedAnchored = false;
 let _cachedMode = "invert";
 let _activateTs = 0; // v9.9.36 · ext-host 生命周期追踪 · smart deactivate
 let _deferredAnchorTimer = null; // v9.9.36 · 延迟锚定计时器 · 渡过 Installation Modified 危窗
+// ★ v9.9.272 · 软编码适配一切环境 · 柔弱胜刚强 · 失败安全
+let _proxyHealthy = false; // 仅当本地/远端 dao 反代确认存活时为 true · 失败安全门控
+let _livePort = null; // 实际绑定端口 (软编码 · 可能为 OS 分配的空闲端口)
+let _extContext = null; // 扩展上下文 · 用于推导本实例 settings.json 路径 (跨产品名)
+let _lastLsRestart = 0; // LS 重启去抖时间戳 · 防多实例重启风暴
 
 // ═══════════════════════════ ACP 模式 (印222) ═══════════════════════════
 // v9.9.200 · 道法自然 · 反者道之动 · 新版 Devin Desktop 架构适配
@@ -216,6 +222,12 @@ function resolvePort() {
 }
 
 function cfg() {
+  // ★ v9.9.272 · 反代已健康则锁定实际端口 · 不让 FNV 重算覆盖 (webview/锚定取真端口)
+  if (_proxyHealthy && Number.isFinite(_livePort)) {
+    _cachedPort = _livePort;
+    _cachedProxyUrl = `http://127.0.0.1:${_cachedPort}`;
+    return { port: _cachedPort };
+  }
   _cachedPort = resolvePort();
   _cachedProxyUrl = `http://127.0.0.1:${_cachedPort}`;
   return { port: _cachedPort };
@@ -266,6 +278,15 @@ function maybeRewriteLsArgs(command, args) {
   // 道义: 四十章「反也者 道之动也」· 印222之判反 · 今正之
   if (false && _acpMode) {
     L.info("spawn-hook", `ACP模式: 跳过 LS args 重写 · SP由stdio代理处理`);
+    return false;
+  }
+  // ★ v9.9.272 · 失败安全门控 (柔弱胜刚强) · 仅当 dao 反代确认存活时才改写 LS
+  // 真因(141实证): 反代未绑定/端口被异族(Devin自身)占用时 · 旧版无条件改写
+  //   → LS 指向死端口 → 官方模型(SWE-1.6 Slow)一发即回弹 · 推理链路全断
+  // 真治: 反代不健康则原样直通 · "至少和没装插件一样能用" · 官方永不被弄坏
+  // 道义: 七十六章「柔弱者生之徒」· 七十八章「弱之胜强 · 柔之胜刚」
+  if (!_proxyHealthy) {
+    L.info("spawn-hook", `proxy 未就绪/不健康 → 不改写 LS args · 官方直通 (fail-safe)`);
     return false;
   }
   // v9.9.38 · 去 _cachedAnchored 门控 · 无条件重写 · 治多窗口竞态
@@ -570,6 +591,117 @@ function _isRemoteStale(remoteSelfFile) {
   return remoteSelfFile.toLowerCase() !== expected;
 }
 
+// ═══════════════════════════ v9.9.272 · 软编码端口 · 失败安全 ═══════════════════════════
+// 七十八章「天下莫柔弱于水 · 而攻坚强者莫之能胜」· 不争固定端口 · 唯变所适
+function _publishPort(port) {
+  try {
+    const dir = path.join(os.homedir(), ".dao");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "origin-port.json"),
+      JSON.stringify({
+        port,
+        pid: process.pid,
+        version: PKG_VERSION,
+        user: os.userInfo().username,
+        at: Date.now(),
+      }),
+      "utf8",
+    );
+  } catch {}
+}
+
+// OS 分配空闲端口 (port:0) · 当 FNV 段被 Devin 自身/多实例占满时让位避撞
+async function _ephemeralBind(srcPath, mode) {
+  const mod = require(srcPath);
+  if (typeof mod.start !== "function") throw new Error("源.js 无 start() 导出");
+  const h = await mod.start({
+    port: 0,
+    host: "127.0.0.1",
+    mode: mode || "passthrough",
+  });
+  _proxyHandle = h;
+  _cachedPort = h.port;
+  _livePort = h.port;
+  _proxyHealthy = true;
+  _cachedProxyUrl = `http://127.0.0.1:${h.port}`;
+  _publishPort(h.port);
+  return h;
+}
+
+// v9.9.272 · 能力探针 · 远端反代是否提供 ea/* 接口 (模型路由/渠道面板所需)
+//   真因(141实证): 遗留 dao-proxy-min-9.9.64 与 pro 同算 FNV 端口 8937 · min 只有 /origin/ping
+//   无 /origin/ea/* → pro 若将就复用 min → 面板 /origin/ea/overview 一律 404「加载失败」
+//   真治: 不只看 self_file · 直接探 ea 能力 · 不兼容则不复用 · 自绑全功能后端 (柔弱胜刚强)
+async function _remoteServesEa(port) {
+  try {
+    const r = await httpGetJson(
+      `http://127.0.0.1:${port}/origin/ea/status`,
+      1500,
+    );
+    return !!(r && (r.ok === true || r.routes !== undefined));
+  } catch {
+    return false;
+  }
+}
+
+// 远端是否「不兼容」: 非最新 source.js (stale) 或 不提供 ea 能力 (旧/极简变体)
+async function _remoteIncompatible(port, selfFile) {
+  if (_isRemoteStale(selfFile)) return true;
+  if (!(await _remoteServesEa(port))) return true;
+  return false;
+}
+
+// 多窗口收敛 · 复用已发布的 dao 反代端口 (任一窗口先绑则余者共用 · 单一锚点)
+// 真因(141实证): 全实例共享 %APPDATA%\Devin\User\settings.json · 若各绑独立空闲端口
+//   则锚点互踩 → 故须收敛至单一端口 · 七十三章「不召而自来」
+async function _reusePublishedProxy(mode) {
+  try {
+    const f = path.join(os.homedir(), ".dao", "origin-port.json");
+    if (!fs.existsSync(f)) return null;
+    const j = JSON.parse(fs.readFileSync(f, "utf8"));
+    const p = j && j.port;
+    if (!Number.isFinite(p)) return null;
+    const ping = await httpGetJson(`http://127.0.0.1:${p}/origin/ping`, 1500);
+    if (
+      ping &&
+      ping.ok &&
+      (ping.mode === "invert" || ping.mode === "passthrough")
+    ) {
+      // ★ v9.9.272 · 仅复用「兼容且最新」的反代 · 否则不复用(回退自绑全功能后端)
+      if (await _remoteIncompatible(p, ping.self_file)) {
+        L.warn(
+          "proxy",
+          `published :${p} 不兼容(stale/无ea) → 不复用 · 自绑全功能后端`,
+        );
+        return null;
+      }
+      _proxyHandle = _createRemoteHandle(p, ping.mode);
+      _cachedPort = p;
+      _livePort = p;
+      _proxyHealthy = true;
+      _cachedProxyUrl = `http://127.0.0.1:${p}`;
+      L.info("proxy", `reuse published dao proxy :${p} (多窗口收敛)`);
+      return _proxyHandle;
+    }
+  } catch {}
+  return null;
+}
+
+// LS 重启去抖 · 仅当锚点真变更时收敛 · 防多实例重启风暴
+function _maybeRestartLS(reason) {
+  const now = Date.now();
+  if (now - _lastLsRestart < 20000) {
+    L.info("restart-ls", `skip (debounce 20s) · ${reason}`);
+    return;
+  }
+  _lastLsRestart = now;
+  L.info("restart-ls", `trigger · ${reason}`);
+  try {
+    forceRestartLS();
+  } catch {}
+}
+
 async function proxyStart(port, mode, _retried, _altAttempts) {
   if (_proxyHandle) return _proxyHandle;
   const srcPath = findSourceJs();
@@ -584,17 +716,15 @@ async function proxyStart(port, mode, _retried, _altAttempts) {
       host: "127.0.0.1",
       mode: mode || "passthrough",
     });
-    // ★ v9.9.261 · EACCES 回退: 实际端口可能不同于 FNV 计算
-    if (port !== _cachedPort) {
-      L.info(
-        "proxy",
-        `port fallback: ${_cachedPort} → ${_proxyHandle.port} (EACCES回避)`,
-      );
-      _cachedPort = _proxyHandle.port;
-    }
+    // ★ v9.9.272 · 绑定成功 → 标记健康 · 记录实际端口 · 发布端口 (软编码)
+    _cachedPort = _proxyHandle.port;
+    _livePort = _proxyHandle.port;
+    _proxyHealthy = true;
+    _cachedProxyUrl = `http://127.0.0.1:${_cachedPort}`;
+    _publishPort(_cachedPort);
     L.info(
       "proxy",
-      `started :${_proxyHandle.port} src=${srcPath} mode=${_proxyHandle.getMode()}`,
+      `started :${_proxyHandle.port} src=${srcPath} mode=${_proxyHandle.getMode()} · healthy`,
     );
     return _proxyHandle;
   } catch (e) {
@@ -612,8 +742,18 @@ async function proxyStart(port, mode, _retried, _altAttempts) {
         );
         return proxyStart(altPort, mode, _retried, attempts + 1);
       }
-      L.error("proxy", `port :${port} EACCES · 20次回退均失败 · 放弃`);
-      throw e;
+      L.error("proxy", `port :${port} EACCES · 20次回退均失败 · 改绑空闲端口`);
+      try {
+        const reused = await _reusePublishedProxy(mode);
+        if (reused) return reused;
+        const h = await _ephemeralBind(srcPath, mode);
+        L.info("proxy", `ephemeral bind :${h.port} (EACCES 穷尽后避让 · 软编码)`);
+        return h;
+      } catch (e2) {
+        L.error("proxy", `ephemeral bind 亦失败: ${e2.message}`);
+        _proxyHealthy = false;
+        throw e;
+      }
     }
     if (
       e.code === "EADDRINUSE" ||
@@ -629,12 +769,13 @@ async function proxyStart(port, mode, _retried, _altAttempts) {
         ping.ok &&
         (ping.mode === "invert" || ping.mode === "passthrough")
       ) {
-        // v9.9.21 · 检远端 self_file 是否最新 · 旧则让位
+        // v9.9.21/272 · 检远端是否「不兼容」(非最新 self_file 或 无 ea 能力) · 不兼容则让位
         // 二十二章「夫唯不争 故莫能与之争」 · 七十六章「兵强则不胜」
-        if (!_retried && _isRemoteStale(ping.self_file)) {
+        const incompatible = await _remoteIncompatible(port, ping.self_file);
+        if (incompatible && !_retried) {
           L.warn(
             "proxy",
-            `remote stale self_file=${ping.self_file} → POST /_quit · 让位重起`,
+            `remote 不兼容(stale/无ea) self_file=${ping.self_file} → POST /_quit · 让位重起`,
           );
           await httpPostJson(
             `http://127.0.0.1:${port}/origin/_quit`,
@@ -645,15 +786,55 @@ async function proxyStart(port, mode, _retried, _altAttempts) {
           await new Promise((r) => setTimeout(r, 1500));
           return proxyStart(port, mode, true); // 一次重试 · 防递归无限
         }
+        // ★ v9.9.272 · 不兼容且劝退无效(旧/极简反代不实现 /_quit) → 不将就复用
+        //   改绑空闲端口跑「自家全功能后端」· 面板 ea 接口可用 · 锚点跟随活端口
+        //   真因(141实证): min-9.9.64 不实现 /_quit → 旧版重试后将就复用 → 面板永 404
+        if (incompatible) {
+          L.warn(
+            "proxy",
+            `remote :${port} 不兼容且不让位 → 自绑全功能后端(空闲端口) · 软编码避让`,
+          );
+          try {
+            const h = await _ephemeralBind(srcPath, mode);
+            L.info("proxy", `ephemeral bind :${h.port} (避让不兼容反代 · 柔弱胜刚强)`);
+            return h;
+          } catch (e3) {
+            L.error("proxy", `ephemeral bind 失败: ${e3.message} · 退而复用远端`);
+            // 兜底: 实在绑不上才复用(至少 ping 可用) · 但面板可能受限
+          }
+        }
         L.info(
           "proxy",
           `port :${port} live remote (mode=${ping.mode} · ver=${(ping.features || {}).mode || "?"}) → remote handle`,
         );
         _proxyHandle = _createRemoteHandle(port, ping.mode);
+        _cachedPort = port;
+        _livePort = port;
+        _proxyHealthy = true;
+        _cachedProxyUrl = `http://127.0.0.1:${port}`;
+        _publishPort(port);
         return _proxyHandle;
       }
-      L.warn("proxy", `port :${port} 占且非反代 · 返 null (本窗口直连)`);
-      return null;
+      // ★ v9.9.272 · 异族占用 (Devin 自身服务/多实例) → 让 · 改绑 OS 空闲端口
+      // 真因(141实证): 15+ Devin 实例占满 8889-8988 FNV 段 → 反代无处可绑
+      //   → 旧版 return null 弃守 → webview 仍 fetch 死端口 → "加载失败 HTTP 404"
+      // 真治: 不争固定端口 · port:0 让 OS 择空闲端口 (通常 4xxxx+ · 必不撞 Devin)
+      // 道义: 三十六章「将欲夺之 必固予之」· 七十八章「天下莫柔弱于水」
+      L.warn("proxy", `port :${port} 占且非 dao 反代(异族) → 让 · 改绑空闲端口 (port:0 软编码)`);
+      try {
+        const reused = await _reusePublishedProxy(mode);
+        if (reused) return reused;
+        const h = await _ephemeralBind(srcPath, mode);
+        L.info("proxy", `ephemeral bind :${h.port} (异族避让 · 柔弱胜刚强)`);
+        return h;
+      } catch (e2) {
+        L.error(
+          "proxy",
+          `ephemeral bind 亦失败: ${e2.message} · 返 null (官方直通)`,
+        );
+        _proxyHealthy = false;
+        return null;
+      }
     }
     throw e;
   }
@@ -707,7 +888,33 @@ function proxyGetMode() {
 // ═══════════════════════════ settings 锚 ═══════════════════════════
 // 双保险: VS Code API (内存) + 直写 settings.json (磁盘持久化)
 // Windsurf 可能拦截 codeium.* 的 API 写入 · 直写文件兜底
+// v9.9.272 · 软编码定位本实例 settings.json · 跨产品名(Windsurf/devin/Devin*)
+// 真因(141实证): 旧版锚死 "Windsurf" · 但 Devin Desktop 用 %APPDATA%\devin\User\
+//   → 写错文件 / 残留陈旧锚点 8937 指向死端口 → 官方推理全断
+// 真治: 由扩展 globalStorageUri 上溯至本实例 User 目录 · 唯变所适
+function _settingsJsonFromCtx() {
+  try {
+    const gs =
+      _extContext &&
+      _extContext.globalStorageUri &&
+      _extContext.globalStorageUri.fsPath;
+    if (!gs) return null;
+    let cur = gs;
+    for (let i = 0; i < 6; i++) {
+      const parent = path.dirname(cur);
+      if (path.basename(cur).toLowerCase() === "globalstorage") {
+        return path.join(parent, "settings.json"); // parent === <userData>/User
+      }
+      if (parent === cur) break;
+      cur = parent;
+    }
+  } catch {}
+  return null;
+}
+
 function _settingsJsonPath() {
+  const ctx = _settingsJsonFromCtx();
+  if (ctx) return ctx;
   const plat = process.platform;
   let base;
   if (plat === "win32") base = process.env.APPDATA;
@@ -740,6 +947,14 @@ function _writeSettingsJson(fp, json) {
 }
 
 async function setAnchor(port) {
+  // ★ v9.9.272 · 失败安全 · 仅当反代确认健康时才锚定 · 否则清锚(还官方直通)
+  if (!_proxyHealthy) {
+    L.warn("anchor", `proxy 不健康 → 拒绝锚定 :${port} · 改为清锚(官方直通 fail-safe)`);
+    try {
+      await clearAnchor();
+    } catch {}
+    return;
+  }
   const url = `http://127.0.0.1:${port}`;
 
   // v9.9.36 · 道法自然 · 损之又损 · 四十八章
@@ -773,6 +988,7 @@ async function setAnchor(port) {
         json["codeium.inferenceApiServerUrl"] = url;
         if (_writeSettingsJson(sp, json)) {
           L.info("anchor", `file set ${url} → ${sp}`);
+          _maybeRestartLS(`anchor → ${url} (收敛 LS 至健康反代)`);
         }
       } else {
         L.warn("anchor", `settings.json unreadable: ${sp}`);
@@ -820,16 +1036,27 @@ async function clearAnchor() {
     L.warn("anchor", `API clear fail: ${e.message}`);
   }
 
-  // 方法2: 直写 settings.json
+  // 方法2: 直写 settings.json · v9.9.272 · 真清才重启 LS (收敛官方直通)
   const sp = _settingsJsonPath();
   const json = _readSettingsJson(sp);
   if (json) {
-    delete json["codeium.apiServerUrl"];
-    delete json["codeium.inferenceApiServerUrl"];
-    delete json[BACKUP_KEY_API];
-    delete json[BACKUP_KEY_INFER];
-    _writeSettingsJson(sp, json);
-    L.info("anchor", `file cleared → ${sp}`);
+    let _changed = false;
+    for (const k of [
+      "codeium.apiServerUrl",
+      "codeium.inferenceApiServerUrl",
+      BACKUP_KEY_API,
+      BACKUP_KEY_INFER,
+    ]) {
+      if (k in json) {
+        delete json[k];
+        _changed = true;
+      }
+    }
+    if (_changed) {
+      _writeSettingsJson(sp, json);
+      L.info("anchor", `file cleared → ${sp}`);
+      _maybeRestartLS("anchor cleared → 官方直通");
+    }
   }
 
   _cachedAnchored = false;
@@ -2489,90 +2716,6 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
   #canonSelect { font-size: 10px; padding: 1px 2px; border: 1px solid rgba(128,128,128,0.3); background: var(--vscode-dropdown-background, rgba(0,0,0,0.2)); color: var(--vscode-dropdown-foreground, var(--vscode-foreground)); border-radius: 3px; cursor: pointer; outline: none; font-family: inherit; max-width: 96px; margin-left: 4px; }
   #canonSelect:focus { border-color: var(--vscode-focusBorder, #007fd4); }
   #canonSelect option { background: var(--vscode-dropdown-listBackground, #252526); color: var(--vscode-dropdown-foreground, #ccc); }
-  /* ★ v9.9.94 · 外接API面板 · 五十七章「我无为也 而民自化」· 正本清源重写 */
-  .ea-bar { display: flex; gap: 4px; align-items: center; margin: 2px 0; flex: 0 0 auto; font-size: 10px; flex-wrap: wrap; }
-  .ea-toggle { padding: 1px 6px; font-size: 10px; border: 1px solid rgba(128,128,128,0.3); background: transparent; color: var(--vscode-foreground); cursor: pointer; border-radius: 2px; font-family: inherit; opacity: 0.55; line-height: 1.3; }
-  .ea-toggle:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15)); }
-  .ea-toggle.active { opacity: 1; border-color: #6bb86b; color: #6bb86b; background: rgba(107,184,107,0.1); }
-  .ea-badge { font-size: 9px; padding: 0 4px; border-radius: 2px; background: rgba(107,184,107,0.15); color: #6bb86b; border: 1px solid rgba(107,184,107,0.25); }
-  .ea-badge.off { background: rgba(128,128,128,0.1); color: #888; border-color: rgba(128,128,128,0.2); }
-  .ea-panel { display: none; flex-direction: column; gap: 4px; margin: 2px 0; padding: 5px 7px; border: 1px solid rgba(128,128,128,0.2); border-radius: 3px; background: rgba(0,0,0,0.06); max-height: 360px; overflow-y: auto; font-size: 10px; }
-  .ea-panel.show { display: flex; }
-  .ea-wire-wrap { display: flex; gap: 0; align-items: stretch; position: relative; min-height: 120px; }
-  .ea-col { flex: 1; min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
-  .ea-left { padding-right: 4px; }
-  .ea-right { padding-left: 4px; }
-  .ea-col-head { display: flex; align-items: center; gap: 4px; margin-bottom: 3px; }
-  .ea-col-title { font-size: 9px; opacity: 0.6; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-  .ea-col-sub { font-size: 8px; opacity: 0.35; }
-  .ea-col-list { flex: 1; overflow-y: auto; max-height: 200px; }
-  .ea-wires { flex: 0 0 28px; min-width: 28px; overflow: visible; pointer-events: none; }
-  .ea-wire { fill: none; stroke: #6bb86b; stroke-width: 1.5; stroke-dasharray: 4 2; opacity: 0.7; }
-  .ea-wire.err { stroke: #e08080; }
-  .ea-wire.pending { stroke: #4fc1ff; stroke-dasharray: 2 2; animation: ea-wire-blink 0.8s infinite; }
-  @keyframes ea-wire-blink { 0%,100%{opacity:0.3} 50%{opacity:1} }
-  .ea-family { font-size: 8px; opacity: 0.4; margin: 3px 0 1px; font-weight: 600; letter-spacing: 0.3px; border-bottom: 1px solid rgba(128,128,128,0.15); padding-bottom: 1px; }
-  .ea-model { padding: 1px 5px; margin: 1px 0; border-radius: 2px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: inherit; font-size: 10px; line-height: 1.5; border: 1px solid transparent; transition: all 0.1s; display: flex; align-items: center; gap: 3px; }
-  .ea-model:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15)); }
-  .ea-model.sel { border-color: var(--vscode-textLink-foreground, #4fc1ff); background: rgba(79,193,255,0.1); }
-  .ea-model.routed { color: #6bb86b; }
-  .ea-model.protected { color: #d4a017; }
-  .ea-model.protected .ea-prot-badge { display: inline-block; }
-  .ea-prot-badge { display: none; font-size: 7px; padding: 0 2px; border-radius: 2px; background: rgba(212,160,23,0.2); color: #d4a017; font-weight: 700; flex-shrink: 0; }
-  .ea-route-toggle { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 2px; font-size: 8px; cursor: pointer; border: 1px solid rgba(128,128,128,0.3); background: transparent; color: var(--vscode-foreground); margin-left: auto; flex-shrink: 0; transition: all 0.1s; padding: 0; line-height: 1; }
-  .ea-route-toggle:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15)); }
-  .ea-route-toggle.on { border-color: #6bb86b; color: #6bb86b; background: rgba(107,184,107,0.1); }
-  .ea-route-toggle.off { border-color: #e08080; color: #e08080; background: rgba(224,128,128,0.1); }
-  .ea-tier { font-size: 8px; padding: 0 3px; border-radius: 2px; font-weight: 700; letter-spacing: 0.3px; margin-left: 4px; }
-  .ea-tier.pro { background: rgba(107,184,107,0.15); color: #6bb86b; border: 1px solid rgba(107,184,107,0.25); }
-  .ea-tier.trial { background: rgba(79,193,255,0.15); color: #4fc1ff; border: 1px solid rgba(79,193,255,0.25); }
-  .ea-tier.free { background: rgba(128,128,128,0.1); color: #888; border: 1px solid rgba(128,128,128,0.2); }
-  .ea-tier.unknown { background: rgba(128,128,128,0.1); color: #888; border: 1px solid rgba(128,128,128,0.2); }
-  .ea-tier-fold { font-size: 8px; padding: 0 3px; border-radius: 2px; margin-left: 3px; background: rgba(212,160,23,0.15); color: #d4a017; border: 1px solid rgba(212,160,23,0.3); font-weight: 700; flex: 0 0 auto; }
-  .ea-route-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: #6bb86b; flex-shrink: 0; }
-  .ea-route-dot.off { background: #888; opacity: 0.3; }
-  .ea-wire-badge { font-size: 7px; padding: 0 2px; border-radius: 2px; background: rgba(107,184,107,0.2); color: #6bb86b; font-weight: 700; flex-shrink: 0; cursor: pointer; }
-  .ea-wire-badge:hover { background: rgba(224,128,128,0.2); color: #e08080; }
-  .ea-prov-tag { font-size: 7px; padding: 0 2px; border-radius: 2px; background: rgba(212,160,23,0.15); color: #d4a017; font-weight: 600; flex-shrink: 0; opacity: 0.7; }
-  .ea-status-badge { font-size: 7px; padding: 0 2px; border-radius: 2px; font-weight: 700; flex-shrink: 0; line-height: 1.4; }
-  .ea-status-badge.premium { background: rgba(255,193,7,0.2); color: #ffc107; }
-  .ea-status-badge.beta { background: rgba(66,133,244,0.2); color: #4285f4; }
-  .ea-status-badge.new { background: rgba(52,168,83,0.2); color: #34a853; }
-  .ea-status-badge.recommended { background: rgba(52,168,83,0.15); color: #34a853; }
-  .ea-src-badge { font-size: 7px; padding: 0 2px; border-radius: 2px; font-weight: 700; line-height: 1.4; flex-shrink: 0; }
-  .ea-src-rpc { background: #1a6b3c; color: #fff; }
-  .ea-src-seen { background: #5a5a8a; color: #ddd; }
-  .ea-src-account { background: #3a5a8a; color: #b0d0ff; }
-  .ea-src-fallback { background: #5a5a5a; color: #aaa; }
-  .ea-model.wired { border-left: 2px solid #6bb86b; padding-left: 3px; }
-  .ea-model.wired.err { border-left-color: #e08080; }
-  .ea-model.wire-pending { border-left: 2px solid #4fc1ff; padding-left: 3px; animation: ea-wire-blink 0.8s infinite; }
-  .ea-toolbar { display: flex; gap: 3px; align-items: center; margin-top: 3px; flex-wrap: wrap; }
-  .ea-btn { padding: 1px 6px; font-size: 9px; border: 1px solid rgba(128,128,128,0.3); background: transparent; color: var(--vscode-foreground); cursor: pointer; border-radius: 2px; font-family: inherit; line-height: 1.4; }
-  .ea-btn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15)); }
-  .ea-btn.add { border-color: #6bb86b; color: #6bb86b; }
-  .ea-btn.del { border-color: #e08080; color: #e08080; }
-  .ea-btn.warn { border-color: #d4a017; color: #d4a017; }
-  .ea-prov-form { display: none; gap: 4px; align-items: center; margin-top: 3px; flex-wrap: wrap; padding: 4px 5px; border: 1px dashed rgba(107,184,107,0.3); border-radius: 3px; background: rgba(107,184,107,0.03); }
-  .ea-prov-form.show { display: flex; }
-  .ea-prov-form label { font-size: 9px; opacity: 0.5; min-width: 28px; }
-  .ea-prov-form input, .ea-prov-form select { font-size: 10px; padding: 1px 4px; border: 1px solid rgba(128,128,128,0.3); border-radius: 2px; background: var(--vscode-input-background, rgba(0,0,0,0.12)); color: var(--vscode-input-foreground, var(--vscode-foreground)); outline: none; font-family: monospace; }
-  .ea-prov-form input:focus, .ea-prov-form select:focus { border-color: var(--vscode-focusBorder, #007fd4); }
-  .ea-prov-form .ea-p-name { width: 60px; }
-  .ea-prov-form .ea-p-url { width: 130px; }
-  .ea-prov-form .ea-p-key { width: 90px; }
-  .ea-route-form { display: none; gap: 4px; align-items: center; margin-top: 3px; flex-wrap: wrap; padding: 4px 5px; border: 1px dashed rgba(79,193,255,0.3); border-radius: 3px; background: rgba(79,193,255,0.03); }
-  .ea-route-form.show { display: flex; }
-  .ea-route-form label { font-size: 9px; opacity: 0.5; }
-  .ea-route-form input { font-size: 10px; padding: 1px 3px; border: 1px solid rgba(128,128,128,0.3); border-radius: 2px; background: var(--vscode-input-background, rgba(0,0,0,0.12)); color: var(--vscode-input-foreground, var(--vscode-foreground)); outline: none; width: 55px; font-family: monospace; }
-  .ea-info { font-size: 9px; opacity: 0.5; margin-left: auto; }
-  .ea-prov-item { display: flex; align-items: center; gap: 3px; margin: 1px 0; padding: 1px 4px; border-radius: 2px; font-family: monospace; font-size: 10px; }
-  .ea-prov-item:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15)); }
-  .ea-prov-item .ea-prov-name { color: #d4a017; font-weight: 600; }
-  .ea-prov-item .ea-prov-url { opacity: 0.4; font-size: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80px; }
-  .ea-prov-item .ea-del-prov { margin-left: auto; opacity: 0; cursor: pointer; color: #e08080; font-size: 9px; }
-  .ea-prov-item:hover .ea-del-prov { opacity: 0.7; }
-  .ea-prov-item .ea-del-prov:hover { opacity: 1; }
 </style>
 </head>
 <body data-port="${proxyPort}">
@@ -2587,54 +2730,6 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
       <option value="yinfu">\u9053\u85cf\u300a\u9634\u7b26\u7ecf\u300b</option>
     </select>
     <span id="customBadge"></span>
-  </div>
-  <!-- ★ v9.9.94 · 外接API面板 · 五十七章「我无为也 而民自化」· 正本清源重写 -->
-  <div class="ea-bar">
-    <button class="ea-toggle" id="eaToggle" title="\u5916\u63a5API\u8def\u7531">\u2b21</button>
-    <span class="ea-badge off" id="eaBadge" title="\u65e0\u8def\u7531">0</span>
-    <span class="ea-tier unknown" id="eaTier" title="\u8d26\u53f7\u5c42\u7ea7">\u2022</span>
-    <span class="ea-info" id="eaInfo"></span>
-  </div>
-  <div class="ea-panel" id="eaPanel">
-    <div class="ea-wire-wrap" id="eaWireWrap">
-      <div class="ea-col ea-left" id="eaLeftWrap">
-        <div class="ea-col-head"><span class="ea-col-title">\u672c\u673a\u6a21\u578b</span><span class="ea-col-sub" id="eaLeftCount"></span></div>
-        <div class="ea-col-list" id="eaLeft"></div>
-      </div>
-      <svg class="ea-wires" id="eaWires" xmlns="http://www.w3.org/2000/svg"></svg>
-      <div class="ea-col ea-right" id="eaRightWrap">
-        <div class="ea-col-head"><span class="ea-col-title">\u5916\u63a5\u6a21\u578b</span><span class="ea-col-sub" id="eaRightCount"></span></div>
-        <div class="ea-col-list" id="eaRight"></div>
-      </div>
-    </div>
-    <div class="ea-toolbar">
-      <button class="ea-btn add" id="eaAddProv" title="\u6dfb\u52a0Provider">+P</button>
-      <button class="ea-btn" id="eaProbe" title="\u63a2\u6d4b\u5065\u5eb7">\u63a2</button>
-      <button class="ea-btn" id="eaDiscover" title="\u53d1\u73b0\u6a21\u578b(RPC\u5b9e\u8bc1)" style="border-color:#4fc1ff;color:#4fc1ff">\u53d1</button>
-      <button class="ea-btn" id="eaTestChat" title="\u5168\u94fe\u8def\u6d4b\u8bd5" style="border-color:#d4a017;color:#d4a017">\u6d4b</button>
-      <button class="ea-btn" id="eaFallback" title="\u70ed\u5207\u6362\u56de\u9000\u5b98\u65b9(\u5173\u95ed\u6240\u6709\u8def\u7531)" style="border-color:#e08080;color:#e08080">\u23ea</button>
-      <button class="ea-btn del" id="eaClearRoutes" title="\u6e05\u7a7a\u6240\u6709\u8def\u7531">\u2716R</button>
-    </div>
-    <div id="eaProvList"></div>
-    <div class="ea-prov-form" id="eaProvForm">
-      <label>\u9884\u8bbe</label><select id="eaPPreset" title="cc-switch \u98ce\u683c\u9884\u8bbe \u00b7 \u9009\u540e\u81ea\u52a8\u586b\u5165"></select>
-      <label>\u7c7b</label><select id="eaPType" title="Provider\u7c7b\u578b">
-        <option value="openai">OpenAI</option>
-        <option value="anthropic">Anthropic</option>
-        <option value="custom">Custom</option>
-      </select>
-      <label>\u540d</label><input id="eaPName" class="ea-p-name" placeholder="\u540d\u79f0" title="Provider\u540d\u79f0">
-      <label>URL</label><input id="eaPUrl" class="ea-p-url" placeholder="https://api.example.com/v1" title="API Base URL">
-      <label>Key</label><input id="eaPKey" class="ea-p-key" placeholder="sk-..." title="API Key">
-      <label>\u6a21</label><input id="eaPModels" class="ea-p-url" placeholder="model-a, model-b" title="\u6a21\u578b\u5217\u8868(\u9017\u53f7\u5206\u9694)">
-      <button class="ea-btn add" id="eaProvSave" title="\u4fdd\u5b58Provider">\u2714</button>
-      <button class="ea-btn" id="eaProvCancel" title="\u53d6\u6d88">\u2716</button>
-    </div>
-    <div class="ea-route-form" id="eaRouteForm">
-      <label>maxT</label><input id="eaRMaxTok" value="16384" title="maxOutputTokens">
-      <button class="ea-btn add" id="eaRouteSave" title="\u786e\u8ba4\u8fde\u7ebf">\u2714 \u8fde</button>
-      <button class="ea-btn" id="eaRouteCancel" title="\u53d6\u6d88">\u2716</button>
-    </div>
   </div>
   <div class="stat" id="stat"></div>
   <pre id="sp" class="quiet">\uff08\u5f85\u9996\u6b21\u5bf9\u8bdd\uff09</pre>
@@ -3053,544 +3148,6 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
     }
   });
 
-  // ═══════════════════════════════════════════════════════════
-  // ★ v9.9.94 · 外接API面板 · 五十七章「我无为也 而民自化」· 正本清源重写
-  // ═══════════════════════════════════════════════════════════
-  var $eaToggle = document.getElementById('eaToggle');
-  var $eaBadge = document.getElementById('eaBadge');
-  var $eaPanel = document.getElementById('eaPanel');
-  var $eaLeft = document.getElementById('eaLeft');
-  var $eaRight = document.getElementById('eaRight');
-  var $eaWires = document.getElementById('eaWires');
-  var $eaWireWrap = document.getElementById('eaWireWrap');
-  var $eaLeftWrap = document.getElementById('eaLeftWrap');
-  var $eaRightWrap = document.getElementById('eaRightWrap');
-  var $eaLeftCount = document.getElementById('eaLeftCount');
-  var $eaRightCount = document.getElementById('eaRightCount');
-  var $eaInfo = document.getElementById('eaInfo');
-  var $eaAddProv = document.getElementById('eaAddProv');
-  var $eaProbe = document.getElementById('eaProbe');
-  var $eaClearRoutes = document.getElementById('eaClearRoutes');
-  var $eaProvList = document.getElementById('eaProvList');
-  var $eaProvForm = document.getElementById('eaProvForm');
-  var $eaPType = document.getElementById('eaPType');
-  var $eaPName = document.getElementById('eaPName');
-  var $eaPUrl = document.getElementById('eaPUrl');
-  var $eaPKey = document.getElementById('eaPKey');
-  var $eaProvSave = document.getElementById('eaProvSave');
-  var $eaProvCancel = document.getElementById('eaProvCancel');
-  var $eaRouteForm = document.getElementById('eaRouteForm');
-  var $eaRMaxTok = document.getElementById('eaRMaxTok');
-  var $eaRouteSave = document.getElementById('eaRouteSave');
-  var $eaRouteCancel = document.getElementById('eaRouteCancel');
-  var _eaOpen = false;
-  var _eaData = null;
-  var _eaSelLeft = null;   // selected left model uid
-  var _eaSelRight = null;  // selected right model key (prov/model)
-  var _eaWireMap = {};     // uid → { rightKey, status } for visual wires
-  // 模型家族分组 · 二十八章「朴散则为器」
-  var _MF = [
-    {p:'claude',l:'Claude'},{p:'gpt',l:'GPT'},{p:'gemini',l:'Gemini'},
-    {p:'deepseek',l:'DeepSeek'},{p:'qwen',l:'Qwen'},{p:'swe',l:'SWE'},
-    {p:'grok',l:'Grok'},{p:'kimi',l:'Kimi'}
-  ];
-  function _mFam(uid){for(var i=0;i<_MF.length;i++){if(uid.startsWith(_MF[i].p))return _MF[i].l;}return'Other';}
-  // ★ v9.9.102 · 同模型多档位折叠 · 万物归一 · 档位后缀 → 基名
-  var _TIER_RE = /-(low|medium|high|xhigh|minimal|fast|slow|thinking)$/;
-  function _tierBase(uid){var b=String(uid||'');while(_TIER_RE.test(b))b=b.replace(_TIER_RE,'');return b;}
-  function _tierLabel(uid,base){var t=String(uid).slice(base.length).replace(/^-/,'');return t||'base';}
-  var _eaTierGroups = {};  // primaryUid → [all tier uids]
-
-  function fPost(p, body) {
-    return fetch(_BASE + p, {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(body), cache: 'no-store'
-    }).then(function(r){return r.json();});
-  }
-  function fDel(p) {
-    return fetch(_BASE + p, {method:'DELETE',cache:'no-store'}).then(function(r){return r.json();});
-  }
-
-  // ── 自带确认弹层 (VS Code webview 屏蔽 window.confirm/alert) ──
-  function _daoToast(msg) {
-    var t = document.createElement('div');
-    t.textContent = msg;
-    t.style.cssText = 'position:fixed;left:50%;top:16px;transform:translateX(-50%);background:rgba(40,40,46,0.97);color:#e6e6e6;border:1px solid rgba(128,128,128,0.4);border-radius:6px;padding:8px 14px;font-size:12px;z-index:99999;box-shadow:0 4px 16px rgba(0,0,0,0.5);max-width:80%;';
-    document.body.appendChild(t);
-    setTimeout(function(){ if (t.parentNode) t.parentNode.removeChild(t); }, 2600);
-  }
-  function _daoConfirm(msg) {
-    return new Promise(function(resolve) {
-      var done = false;
-      function close(v){ if (done) return; done = true; if (ov.parentNode) ov.parentNode.removeChild(ov); resolve(v); }
-      var ov = document.createElement('div');
-      ov.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:99998;display:flex;align-items:center;justify-content:center;';
-      var box = document.createElement('div');
-      box.style.cssText = 'background:#26262c;color:#e6e6e6;border:1px solid rgba(128,128,128,0.4);border-radius:8px;padding:16px 18px;max-width:78%;box-shadow:0 8px 28px rgba(0,0,0,0.6);';
-      var m = document.createElement('div'); m.textContent = msg; m.style.cssText = 'font-size:13px;margin-bottom:14px;line-height:1.5;';
-      var row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
-      var bc = document.createElement('button'); bc.textContent = '\u53d6\u6d88'; bc.style.cssText = 'background:rgba(128,128,128,0.2);color:#e6e6e6;border:1px solid rgba(128,128,128,0.4);border-radius:5px;padding:5px 14px;font-size:12px;cursor:pointer;';
-      var bo = document.createElement('button'); bo.textContent = '\u786e\u8ba4'; bo.style.cssText = 'background:#b84a4a;color:#fff;border:none;border-radius:5px;padding:5px 14px;font-size:12px;cursor:pointer;';
-      bc.addEventListener('click', function(){ close(false); });
-      bo.addEventListener('click', function(){ close(true); });
-      ov.addEventListener('click', function(e){ if (e.target === ov) close(false); });
-      row.appendChild(bc); row.appendChild(bo); box.appendChild(m); box.appendChild(row); ov.appendChild(box);
-      document.body.appendChild(ov);
-    });
-  }
-
-  // ── toggle ──
-  $eaToggle.addEventListener('click', function() {
-    _eaOpen = !_eaOpen;
-    $eaPanel.classList.toggle('show', _eaOpen);
-    $eaToggle.classList.toggle('active', _eaOpen);
-    $eaToggle.textContent = _eaOpen ? '\u2b22' : '\u2b21';
-    if (_eaOpen) eaLoad();
-  });
-
-  // ── load overview + account info (v9.9.97) ──
-  function eaLoad() {
-    fJson('/origin/ea/overview').then(function(d) {
-      if (!d || !d.ok) { $eaInfo.textContent = '\u2716'; return; }
-      _eaData = d;
-      // ★ v9.9.97 · 并行获取账号信息
-      fJson('/origin/ea/account-info').then(function(ai) {
-        if (ai && ai.ok) { _eaData.account_tier = ai.tier; }
-        eaRender();
-      }).catch(function() { eaRender(); });
-    }).catch(function() { $eaInfo.textContent = '\u2716 \u7f51\u7edc'; });
-  }
-
-  // ── render · v9.9.98 · 连线面板 · 点左+点右=连线 · 点已连线=断线 ──
-  function eaRender() {
-    if (!_eaData) return;
-    var d = _eaData, rc = d.route_count||0;
-    $eaBadge.textContent = rc;
-    $eaBadge.className = 'ea-badge'+(rc>0?'':' off');
-    $eaBadge.title = rc>0?rc+'\u6761\u8def\u7531':'\u65e0\u8def\u7531';
-    var tierEl = document.getElementById('eaTier');
-    if (tierEl && d.account_tier) { tierEl.textContent = d.account_tier.toUpperCase(); tierEl.className = 'ea-tier ' + d.account_tier; tierEl.title = '\u8d26\u53f7: ' + d.account_tier; }
-    // ★ v9.9.98 · build wireMap from routes
-    var routes = d.routes || {};
-    _eaWireMap = {};
-    for (var uid in routes) { var rt = routes[uid]; _eaWireMap[uid] = { rightKey: (rt.provider||'?') + '/' + (rt.model||'?'), status: 'ok' }; }
-    // ★ v9.9.102 · 路由双形归一：MODEL_GPT_5_4_LOW ↔ gpt-5-4-low 同视为已连
-    for (var ruid in routes) {
-      if (/^MODEL_/.test(ruid)) {
-        var norm = ruid.replace(/^MODEL_/, '').toLowerCase().replace(/_/g, '-');
-        if (!_eaWireMap[norm]) _eaWireMap[norm] = _eaWireMap[ruid];
-      }
-    }
-    // ── LEFT: 官方模型 · v9.9.265 · 档位归一(一族一项,同 Cascade 顶层) ──
-    $eaLeft.innerHTML = '';
-    _eaTierGroups = {};
-    var _fams = d.official_families || [];
-    if (_fams.length > 0) {
-      if ($eaLeftCount) $eaLeftCount.textContent = _fams.length;
-      function _provLabel(p){p=String(p||'').replace(/^MODEL_PROVIDER_/,'');var M={ANTHROPIC:'Claude',OPENAI:'GPT',GOOGLE:'Gemini',WINDSURF:'Windsurf',XAI:'Grok',DEEPSEEK:'DeepSeek',MOONSHOT:'Kimi',MOONSHOT_AI:'Kimi',FIREWORKS:'Fireworks',ZHIPU:'GLM',ZHIPU_AI:'GLM',MINIMAX:'Minimax'};return M[p]||(p?p.charAt(0)+p.slice(1).toLowerCase():'Other');}
-      var _pg = {}, _po = [];
-      _fams.forEach(function(f){var pl=_provLabel(f.provider);if(!_pg[pl]){_pg[pl]=[];_po.push(pl);}_pg[pl].push(f);});
-      _po.forEach(function(pl){
-        var list = _pg[pl];
-        var fe=document.createElement('div');fe.className='ea-family';fe.textContent=pl+' ('+list.length+')';$eaLeft.appendChild(fe);
-        list.forEach(function(f){
-          var uids = f.members.map(function(mm){return mm.modelUid;}).filter(Boolean);
-          var defMember = f.members.filter(function(mm){return mm.isDefault;})[0] || f.members[0];
-          var primary = (defMember && defMember.modelUid) || uids[0] || f.familyUid;
-          _eaTierGroups[primary] = uids;
-          var wiredUids = uids.filter(function(u){return !!_eaWireMap[u];});
-          var isWired = wiredUids.length > 0;
-          var isPending = _eaSelLeft===primary && _eaSelRight;
-          var el=document.createElement('div');
-          el.className='ea-model'+(isWired?' wired':'')+(isPending?' wire-pending':'')+(_eaSelLeft===primary&&!isPending?' sel':'');
-          el.setAttribute('data-uid', primary);
-          el.setAttribute('data-uids', uids.join(','));
-          var dot=document.createElement('span');dot.className='ea-route-dot'+(isWired?'':' off');el.appendChild(dot);
-          var txt=document.createElement('span');txt.textContent=f.label;txt.style.flex='1 1 auto';txt.style.overflow='hidden';txt.style.textOverflow='ellipsis';el.appendChild(txt);
-          if(f.members.length>1){var tb=document.createElement('span');tb.className='ea-tier-fold';tb.textContent='\u00d7'+f.members.length;tb.title=f.members.map(function(mm){return (mm.tier||'base')+(_eaWireMap[mm.modelUid]?' \u2713':'');}).join(' \u00b7 ');el.appendChild(tb);}
-          if(f.isNew){var nb=document.createElement('span');nb.className='ea-status-badge new';nb.textContent='N';nb.title='New';el.appendChild(nb);}
-          if(f.isRecommended){var rb=document.createElement('span');rb.className='ea-status-badge recommended';rb.textContent='\u2714';rb.title='Recommended';el.appendChild(rb);}
-          if(isWired){var wb=document.createElement('span');wb.className='ea-wire-badge';wb.textContent='\u2713'+(f.members.length>1?wiredUids.length+'/'+f.members.length:'');wb.title='\u5df2\u8fde\u7ebf '+wiredUids.length+'/'+f.members.length;el.appendChild(wb);}
-          el.title=f.label+(f.members.length>1?' \u00b7 '+f.members.length+'\u6863':'')+(isWired?' \u00b7 \u5df2\u8fde\u7ebf':'');
-          el.addEventListener('click',function(){
-            var uid=this.getAttribute('data-uid');
-            var gUids=(this.getAttribute('data-uids')||uid).split(',').filter(Boolean);
-            var wired=gUids.filter(function(u){return !!_eaWireMap[u];});
-            if(wired.length>0){_daoConfirm('\u65ad\u5f00 '+f.label+' \u5168\u90e8'+wired.length+'\u6761\u8def\u7531?').then(function(ok){if(!ok)return;Promise.all(wired.map(function(u){return fDel('/origin/ea/route/'+encodeURIComponent(u));})).then(function(){_eaSelLeft=null;eaLoad();$eaInfo.textContent='\u2716 \u5df2\u65ad\u5f00 '+wired.length+'\u6761';});});return;}
-            if(_eaSelLeft===uid){_eaSelLeft=null;eaRender();return;}
-            _eaSelLeft=uid;
-            if(_eaSelRight){eaAutoConnect();}else{eaRender();}
-          });
-          $eaLeft.appendChild(el);
-        });
-      });
-    } else {
-    // ── 回退: 旧 seen 模型源 (catalog 未就绪时) ──
-    var models = d.available_models || d.seen_models || [];
-    if ($eaLeftCount) $eaLeftCount.textContent = models.length ? models.length : '';
-    if (models.length === 0) {
-      $eaLeft.innerHTML = '<div style="opacity:0.4;font-style:italic">\u52a0\u8f7d\u4e2d...</div>';
-    } else {
-      var groups = {};
-      models.forEach(function(m){var f=m.family||_mFam(m.uid);if(!groups[f])groups[f]=[];groups[f].push(m);});
-      // ★ v9.9.102 · 同模型多档位折叠为单卡 · 连/断作用于全部档位
-      _eaTierGroups = {};
-      _MF.map(function(f){return f.l}).concat(['GLM','Minimax','Other']).forEach(function(fam){
-        if(!groups[fam])return;
-        var bases = {}, order = [];
-        groups[fam].forEach(function(m){var b=_tierBase(m.uid);if(!bases[b]){bases[b]=[];order.push(b);}bases[b].push(m);});
-        var fe=document.createElement('div');fe.className='ea-family';fe.textContent=fam+' ('+order.length+')';$eaLeft.appendChild(fe);
-        order.forEach(function(base){
-          var tiers = bases[base];
-          var m = tiers[0];
-          var uids = tiers.map(function(t){return t.uid;});
-          _eaTierGroups[m.uid] = uids;
-          var wiredUids = uids.filter(function(u){return !!_eaWireMap[u];});
-          var isWired = wiredUids.length > 0;
-          var anyProt = tiers.some(function(t){return t.protected;});
-          var isPending = _eaSelLeft===m.uid && _eaSelRight;
-          var el=document.createElement('div');
-          el.className='ea-model'+(isWired?' wired':'')+(anyProt&&!isWired?' protected':'')+(isPending?' wire-pending':'')+(_eaSelLeft===m.uid&&!isPending?' sel':'');
-          el.setAttribute('data-uid', m.uid);
-          el.setAttribute('data-uids', uids.join(','));
-          var dot=document.createElement('span');dot.className='ea-route-dot'+(isWired?'':' off');el.appendChild(dot);
-          var txt=document.createElement('span');txt.textContent=(tiers.length>1?base:(m.displayName||m.uid));txt.style.flex='1 1 auto';txt.style.overflow='hidden';txt.style.textOverflow='ellipsis';el.appendChild(txt);
-          if(tiers.length>1){var tb=document.createElement('span');tb.className='ea-tier-fold';tb.textContent='\u00d7'+tiers.length;tb.title=uids.map(function(u){return _tierLabel(u,base)+(_eaWireMap[u]?' \u2713':'');}).join(' \u00b7 ');el.appendChild(tb);}
-          // ★ v9.9.101 · 模型状态徽章 (provider/isPremium/isBeta/isNew/isRecommended)
-          if(m.providerName&&m.providerName!=='UNSPECIFIED'&&m.providerName!=='WINDSURF'){var pt=document.createElement('span');pt.className='ea-prov-tag';pt.textContent=m.providerName.substring(0,4);pt.title=m.providerName;el.appendChild(pt);}
-          if(m.isPremium){var ppb=document.createElement('span');ppb.className='ea-status-badge premium';ppb.textContent='\u2605';ppb.title='Premium';el.appendChild(ppb);}
-          if(m.isBeta){var bb=document.createElement('span');bb.className='ea-status-badge beta';bb.textContent='\u03b2';bb.title='Beta';el.appendChild(bb);}
-          if(m.isNew){var nb=document.createElement('span');nb.className='ea-status-badge new';nb.textContent='N';nb.title='New';el.appendChild(nb);}
-          if(m.isRecommended){var rb=document.createElement('span');rb.className='ea-status-badge recommended';rb.textContent='\u2714';rb.title='Recommended';el.appendChild(rb);}
-          if(anyProt&&!isWired){var pb=document.createElement('span');pb.className='ea-prot-badge';pb.textContent='\u9501';pb.title='\u4fdd\u62a4(\u70b9\u51fb\u89e3\u9501)';el.appendChild(pb);
-            pb.addEventListener('click',function(e){e.stopPropagation();_daoConfirm('\u89e3\u9501 '+base+' (全部'+uids.length+'档)?').then(function(ok){if(!ok)return;Promise.all(uids.map(function(u){return fPost('/origin/ea/model-unlock',{modelUid:u,unlock:true});})).then(function(){eaLoad();});});});
-          }
-          if(isWired){var wb=document.createElement('span');wb.className='ea-wire-badge';wb.textContent='\u2713'+(tiers.length>1?wiredUids.length+'/'+tiers.length:'');wb.title='\u5df2\u8fde\u7ebf '+wiredUids.length+'/'+tiers.length+' (\u70b9\u51fb\u65ad\u5f00\u5168\u90e8)';el.appendChild(wb);}
-          el.title=base+(tiers.length>1?' \u00b7 '+tiers.length+'档: '+uids.map(function(u){return _tierLabel(u,base);}).join('/'):'')+(m.providerName?' ['+m.providerName+']':'')+(isWired?' \u00b7 \u5df2\u8fde\u7ebf '+wiredUids.length+'/'+tiers.length:'')+(anyProt?' \u00b7 \u4fdd\u62a4':'');
-          el.addEventListener('click',function(){
-            var uid=this.getAttribute('data-uid');
-            var gUids=(this.getAttribute('data-uids')||uid).split(',');
-            var wired=gUids.filter(function(u){return !!_eaWireMap[u];});
-            if(wired.length>0){_daoConfirm('\u65ad\u5f00 '+base+' 全部'+wired.length+'条路由?').then(function(ok){if(!ok)return;Promise.all(wired.map(function(u){return fDel('/origin/ea/route/'+encodeURIComponent(u));})).then(function(){_eaSelLeft=null;eaLoad();$eaInfo.textContent='\u2716 \u5df2\u65ad\u5f00 '+wired.length+'条';});});return;}
-            if(_eaSelLeft===uid){_eaSelLeft=null;eaRender();return;}
-            _eaSelLeft=uid;
-            if(_eaSelRight){eaAutoConnect();}else{eaRender();}
-          });
-          $eaLeft.appendChild(el);
-        });
-      });
-    }
-    }
-    // ── RIGHT: 外接模型 ──
-    $eaRight.innerHTML = '';
-    var providers=d.providers||{}, hasRight=false;
-    var rightModels = [];
-    for(var pn in providers){var p=providers[pn];
-      var pMods = p.models || p._models;
-      var pDisp = (p && p._label) ? p._label : pn;
-      if(pMods&&pMods.length>0){pMods.forEach(function(mn){
-        var key=pn+'/'+mn, wiredUid=null;
-        for(var u in _eaWireMap){if(_eaWireMap[u].rightKey===key){wiredUid=u;break;}}
-        rightModels.push({key:key,prov:pn,provDisp:pDisp,model:mn,wiredUid:wiredUid});
-      });}
-    }
-    if ($eaRightCount) $eaRightCount.textContent = rightModels.length ? rightModels.length : '';
-    if(rightModels.length===0){
-      $eaRight.innerHTML='<div style="opacity:0.4;font-style:italic">\u6dfb\u52a0Provider\u540e\u663e\u73b0</div>';
-    } else {
-      rightModels.forEach(function(rm){
-        var isWired=!!rm.wiredUid;
-        var isPending=_eaSelRight===rm.key&&_eaSelLeft;
-        var el=document.createElement('div');
-        el.className='ea-model'+(isWired?' wired':'')+(isPending?' wire-pending':'')+(_eaSelRight===rm.key&&!isPending?' sel':'');
-        el.setAttribute('data-key',rm.key);el.setAttribute('data-prov',rm.prov);el.setAttribute('data-model',rm.model);
-        var dot=document.createElement('span');dot.className='ea-route-dot'+(isWired?'':' off');el.appendChild(dot);
-        var txt=document.createElement('span');txt.textContent=rm.model;txt.style.flex='1 1 auto';txt.style.overflow='hidden';txt.style.textOverflow='ellipsis';el.appendChild(txt);
-        if(isWired){var wb=document.createElement('span');wb.className='ea-wire-badge';wb.textContent='\u2713';wb.title='\u5df2\u8fde\u7ebf(\u70b9\u51fb\u65ad\u5f00)';el.appendChild(wb);}
-        var provTag=document.createElement('span');provTag.className='ea-prov-tag';provTag.textContent=rm.provDisp;el.appendChild(provTag);
-        el.title=rm.provDisp+'/'+rm.model+(isWired?' \u00b7 \u5df2\u8fde\u7ebf':'');
-        el.addEventListener('click',function(){
-          var key=this.getAttribute('data-key');
-          // ★ v9.9.98 · 点击已连线右侧模型 → 断线
-          if(isWired){_daoConfirm('\u65ad\u5f00 '+rm.prov+'/'+rm.model+'?').then(function(ok){if(!ok)return;fDel('/origin/ea/route/'+encodeURIComponent(rm.wiredUid)).then(function(r){if(r.ok){_eaSelRight=null;eaLoad();$eaInfo.textContent='\u2716 \u5df2\u65ad\u5f00';}});});return;}
-          if(_eaSelRight===key){_eaSelRight=null;eaRender();return;}
-          _eaSelRight=key;
-          if(_eaSelLeft){eaAutoConnect();}else{eaRender();}
-        });
-        $eaRight.appendChild(el);hasRight=true;
-      });
-    }
-    // ── SVG WIRES ──
-    eaDrawWires();
-    // ── provider list ──
-    $eaProvList.innerHTML='';
-    for(var pn in providers){var p=providers[pn];
-      if(p&&p._builtin)continue; // 测试通道为内置·不可编辑/删除
-      var pi=document.createElement('div');pi.className='ea-prov-item';
-      pi.innerHTML='<span class="ea-prov-name">'+pn+'</span><span class="ea-prov-url">'+(p.baseUrl||'')+'</span><span class="ea-edit-prov" data-prov="'+pn+'" title="\u7f16\u8f91" style="cursor:pointer;opacity:0.6;margin-right:4px">\u270e</span><span class="ea-del-prov" data-prov="'+pn+'">\u2716</span>';
-      $eaProvList.appendChild(pi);
-    }
-    $eaProvList.querySelectorAll('.ea-del-prov').forEach(function(btn){
-      btn.addEventListener('click',function(){var n=this.getAttribute('data-prov');_daoConfirm('\u5220\u9664Provider '+n+'?').then(function(ok){if(!ok)return;fDel('/origin/ea/provider/'+encodeURIComponent(n)).then(function(r){if(r.ok)eaLoad();});});});
-    });
-    // ★ v9.9.102 · Provider 编辑（CRUD 补全）
-    $eaProvList.querySelectorAll('.ea-edit-prov').forEach(function(btn){
-      btn.addEventListener('click',function(){
-        var n=this.getAttribute('data-prov');
-        var p=(_eaData&&_eaData.providers&&_eaData.providers[n])||{};
-        _eaOpenProvForm({name:n,baseUrl:p.baseUrl,apiKey:p.apiKey,type:p.type,models:p.models||p._models});
-      });
-    });
-    var pc=Object.keys(providers).length;
-    $eaInfo.textContent='P'+pc+' R'+rc+(d.ea_running?' \u2713':'');
-  }
-
-  // ── add provider (v9.9.94: +type) · v9.9.102: cc-switch 预设 + 编辑 ──
-  // ★ v9.9.102 · cc-switch 风格 Provider 预设库（baseUrl/默认模型取自 cc-switch presets）
-  var _EA_PRESETS = [
-    {n:'DeepSeek',t:'openai',u:'https://api.deepseek.com/v1',m:'deepseek-chat, deepseek-reasoner'},
-    {n:'Zhipu GLM',t:'openai',u:'https://open.bigmodel.cn/api/paas/v4',m:'glm-4.6'},
-    {n:'Kimi',t:'openai',u:'https://api.moonshot.cn/v1',m:'kimi-k2-5'},
-    {n:'Bailian',t:'openai',u:'https://dashscope.aliyuncs.com/compatible-mode/v1',m:'qwen3-coder-plus'},
-    {n:'SiliconFlow',t:'openai',u:'https://api.siliconflow.cn/v1',m:'deepseek-ai/DeepSeek-V3'},
-    {n:'MiniMax',t:'openai',u:'https://api.minimaxi.com/v1',m:'MiniMax-M2'},
-    {n:'ModelScope',t:'openai',u:'https://api-inference.modelscope.cn/v1',m:'Qwen/Qwen3-Coder-480B-A35B-Instruct'},
-    {n:'OpenRouter',t:'openai',u:'https://openrouter.ai/api/v1',m:'anthropic/claude-sonnet-4.6'},
-    {n:'AiHubMix',t:'openai',u:'https://aihubmix.com/v1',m:'gpt-4o'},
-    {n:'OpenAI',t:'openai',u:'https://api.openai.com/v1',m:'gpt-4o, gpt-4o-mini'},
-    {n:'Anthropic',t:'anthropic',u:'https://api.anthropic.com',m:'claude-sonnet-4-6, claude-opus-4-6'},
-    {n:'Gemini',t:'openai',u:'https://generativelanguage.googleapis.com/v1beta/openai',m:'gemini-2.5-pro, gemini-2.5-flash'},
-    {n:'xAI Grok',t:'openai',u:'https://api.x.ai/v1',m:'grok-3-mini'},
-    {n:'Volcengine \u706b\u5c71',t:'openai',u:'https://ark.cn-beijing.volces.com/api/v3',m:'deepseek-v3-250324'},
-    {n:'Z.AI Coding',t:'openai',u:'https://api.z.ai/api/coding/paas/v4',m:'glm-4.6'},
-    {n:'Novita',t:'openai',u:'https://api.novita.ai/openai',m:'deepseek/deepseek-v3'},
-    {n:'NVIDIA NIM',t:'openai',u:'https://integrate.api.nvidia.com/v1',m:'deepseek-ai/deepseek-r1'},
-    {n:'StepFun \u9636\u8dc3',t:'openai',u:'https://api.stepfun.com/v1',m:'step-2-16k'},
-    {n:'TheRouter',t:'openai',u:'https://api.therouter.ai/v1',m:'deepseek-v3'},
-    {n:'NewAPI/\u81ea\u5efa',t:'custom',u:'',m:''}
-  ];
-  var $eaPPreset = document.getElementById('eaPPreset');
-  var $eaPModels = document.getElementById('eaPModels');
-  if ($eaPPreset) {
-    var op0 = document.createElement('option'); op0.value=''; op0.textContent='\u2014'; $eaPPreset.appendChild(op0);
-    _EA_PRESETS.forEach(function(p,i){ var op=document.createElement('option'); op.value=String(i); op.textContent=p.n; $eaPPreset.appendChild(op); });
-    $eaPPreset.addEventListener('change', function(){
-      var p = _EA_PRESETS[parseInt(this.value)];
-      if (!p) return;
-      $eaPName.value = p.n.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
-      $eaPUrl.value = p.u; $eaPType.value = p.t;
-      if ($eaPModels) $eaPModels.value = p.m;
-      $eaPKey.focus();
-    });
-  }
-  function _eaOpenProvForm(prefill) {
-    $eaProvForm.classList.add('show');
-    $eaRouteForm.classList.remove('show');
-    if (prefill) {
-      $eaPName.value = prefill.name || '';
-      $eaPUrl.value = prefill.baseUrl || '';
-      $eaPKey.value = prefill.apiKey || '';
-      $eaPType.value = prefill.type === 'anthropic' ? 'anthropic' : (prefill.type === 'custom' ? 'custom' : 'openai');
-      if ($eaPModels) $eaPModels.value = (prefill.models||[]).join(', ');
-      $eaPKey.focus();
-    } else { $eaPName.focus(); }
-  }
-  $eaAddProv.addEventListener('click', function() {
-    if ($eaProvForm.classList.contains('show')) { $eaProvForm.classList.remove('show'); return; }
-    _eaOpenProvForm(null);
-  });
-  $eaProvSave.addEventListener('click', function() {
-    var name = $eaPName.value.trim();
-    var url = $eaPUrl.value.trim();
-    var key = $eaPKey.value.trim();
-    var type = $eaPType.value;
-    if (!name || !url) return;
-    var cfg = { baseUrl: url, apiKey: key, type: type };
-    if ($eaPModels && $eaPModels.value.trim()) {
-      cfg.models = $eaPModels.value.split(',').map(function(s){return s.trim();}).filter(Boolean);
-    }
-    fPost('/origin/ea/provider', { name: name, cfg: cfg }).then(function(r) {
-      if (r.ok) {
-        $eaPName.value='';$eaPUrl.value='';$eaPKey.value='';
-        if ($eaPModels) $eaPModels.value='';
-        if ($eaPPreset) $eaPPreset.value='';
-        $eaProvForm.classList.remove('show');
-        eaLoad();
-        // ★ v9.9.262 · 首provider自动默认路由反馈 · SWE 1.6 Fast 已接通该渠道
-        if (r.autoRoute) {
-          try { $eaInfo.textContent = '\u2714 \u9ed8\u8ba4\u8def\u7531 SWE 1.6 Fast \u2192 '+r.autoRoute; } catch(e){}
-        }
-      } else { $eaInfo.textContent = '\u2716 '+(r.error||'fail'); }
-    });
-  });
-  $eaProvCancel.addEventListener('click', function() { $eaProvForm.classList.remove('show'); });
-
-  // ── probe ──
-  $eaProbe.addEventListener('click', function() {
-    $eaInfo.textContent = '\u63a2\u6d4b\u4e2d...';
-    fPost('/origin/ea/probe', {}).then(function(r) {
-      if (r.ok && r.providers) {
-        if (_eaData && _eaData.providers) {
-          for (var pn in r.providers) {
-            if (_eaData.providers[pn]) {
-              _eaData.providers[pn]._healthy = r.providers[pn].healthy;
-              _eaData.providers[pn]._models = r.providers[pn].models || [];
-            }
-          }
-        }
-        eaRender();
-        $eaInfo.textContent = '\u2714 \u63a2\u6d4b\u5b8c';
-      } else { $eaInfo.textContent = '\u2716 \u63a2\u6d4b\u5931\u8d25'; }
-    }).catch(function() { $eaInfo.textContent = '\u2716 \u7f51\u7edc'; });
-  });
-
-  // ── v9.9.95 · discover models (RPC实证) ──
-  var $eaDiscover = document.getElementById('eaDiscover');
-  $eaDiscover.addEventListener('click', function() {
-    $eaInfo.textContent = '\u53d1\u73b0\u4e2d...';
-    fJson('/origin/ea/discover-models').then(function(r) {
-      if (r && r.ok) {
-        $eaInfo.textContent = '\u2714 RPC:'+r.sources.rpc+' Seen:'+r.sources.seen+' \u5171'+r.count;
-        if (_eaData) {
-          _eaData.available_models = r.models;
-          _eaData.seen_models = r.models;
-          eaRender();
-        }
-      } else { $eaInfo.textContent = '\u2716 \u53d1\u73b0\u5931\u8d25'; }
-    }).catch(function() { $eaInfo.textContent = '\u2716 \u7f51\u7edc'; });
-  });
-
-  // ── v9.9.95 · test chat (全链路) ──
-  var $eaTestChat = document.getElementById('eaTestChat');
-  $eaTestChat.addEventListener('click', function() {
-    if (!_eaSelLeft) { $eaInfo.textContent = '\u8bf7\u5148\u9009\u62e9\u5de6\u4fa7\u6a21\u578b'; return; }
-    if (!_eaData || !_eaData.routes || !_eaData.routes[_eaSelLeft]) { $eaInfo.textContent = '\u8be5\u6a21\u578b\u65e0\u8def\u7531'; return; }
-    $eaInfo.textContent = '\u6d4b\u8bd5\u4e2d...';
-    fPost('/origin/ea/test-chat', { modelUid: _eaSelLeft, message: 'ping' }).then(function(r) {
-      if (r && r.ok) {
-        $eaInfo.textContent = '\u2714 '+r.provider+'/'+r.model+' '+r.elapsed_ms+'ms '+(r.content?r.content.substring(0,30):'');
-      } else {
-        $eaInfo.textContent = '\u2716 '+(r&&r.error?r.error:'\u6d4b\u8bd5\u5931\u8d25');
-      }
-    }).catch(function() { $eaInfo.textContent = '\u2716 \u7f51\u7edc'; });
-  });
-
-  // ── clear all routes ──
-  $eaClearRoutes.addEventListener('click', function() {
-    if (!_eaData || !_eaData.routes) return;
-    var uids = Object.keys(_eaData.routes);
-    if (uids.length === 0) { $eaInfo.textContent = '\u65e0\u8def\u7531'; return; }
-    _daoConfirm('\u6e05\u7a7a\u6240\u6709 '+uids.length+' \u6761\u8def\u7531?').then(function(ok){
-    if(!ok)return;
-    var proms = uids.map(function(uid){ return fDel('/origin/ea/route/'+encodeURIComponent(uid)); });
-    Promise.all(proms).then(function(){ _eaSelLeft=null;_eaSelRight=null;eaLoad(); });
-    });
-  });
-
-  // ★ v9.9.97 · 热切换回退官方 · 反者道之动 · 一键回退
-  var $eaFallback = document.getElementById('eaFallback');
-  if ($eaFallback) {
-    $eaFallback.addEventListener('click', function() {
-      if (!_eaData || !_eaData.routes) return;
-      var uids = Object.keys(_eaData.routes);
-      if (uids.length === 0) { $eaInfo.textContent = '\u65e0\u8def\u7531\u53ef\u56de\u9000'; return; }
-      _daoConfirm('\u70ed\u5207\u6362\u56de\u9000\u5b98\u65b9: \u5173\u95ed '+uids.length+' \u6761\u8def\u7531?').then(function(ok){
-      if(!ok)return;
-      $eaInfo.textContent = '\u23ea \u56de\u9000\u4e2d...';
-      var proms = uids.map(function(uid){ return fPost('/origin/ea/route-toggle',{modelUid:uid,enabled:false}); });
-      Promise.all(proms).then(function(){ _eaSelLeft=null;_eaSelRight=null;eaLoad(); $eaInfo.textContent = '\u23ea \u5df2\u56de\u9000\u5b98\u65b9'; });
-      });
-    });
-  }
-
-  // ★ v9.9.98 · 自动连线: 左+右都选中 → 自动创建路由 · 无为而无不为
-  function eaAutoConnect() {
-    if (!_eaSelLeft || !_eaSelRight) return;
-    var parts = _eaSelRight.split('/');
-    if (parts.length < 2) { $eaInfo.textContent = '\u2716 \u8bf7\u9009\u5916\u63a5\u6a21\u578b'; return; }
-    var provName = parts[0], modelName = parts.slice(1).join('/');
-    var maxTok = parseInt($eaRMaxTok.value) || 16384;
-    // ★ v9.9.102 · 折叠组连线 → 全部档位一并路由
-    var gUids = _eaTierGroups[_eaSelLeft] || [_eaSelLeft];
-    $eaInfo.textContent = '\u27a1 \u8fde\u7ebf\u4e2d... ('+gUids.length+')';
-    Promise.all(gUids.map(function(u){
-      return fPost('/origin/ea/route', {
-        modelUid: u,
-        route: { provider: provName, model: modelName, maxOutputTokens: maxTok }
-      });
-    })).then(function(rs) {
-      var okN = rs.filter(function(r){return r&&r.ok;}).length;
-      if (okN > 0) {
-        _eaSelLeft = null; _eaSelRight = null;
-        eaLoad();
-        $eaInfo.textContent = '\u2714 \u8fde\u7ebf\u6210\u529f '+okN+'/'+gUids.length;
-      } else {
-        $eaInfo.textContent = '\u2716 '+((rs[0]&&rs[0].error)||'\u8fde\u7ebf\u5931\u8d25');
-        // ★ v9.9.98 · 连线失败 → 报错不回退 · 用户可见
-        eaRender();
-      }
-    }).catch(function() { $eaInfo.textContent = '\u2716 \u7f51\u7edc\u9519\u8bef'; });
-  }
-
-  // ★ v9.9.98 · SVG连线绘制 · 大象无形 · 线从左到右
-  function eaDrawWires() {
-    if (!$eaWires) return;
-    $eaWires.innerHTML = '';
-    var wrapRect = $eaWireWrap.getBoundingClientRect();
-    if (wrapRect.width < 10) return;
-    $eaWires.setAttribute('width', wrapRect.width);
-    $eaWires.setAttribute('height', wrapRect.height);
-    // ★ v9.9.102 · 折叠卡：非主 uid 的连线回溯到所属折叠块
-    function _leftElFor(uid) {
-      var el = $eaLeft.querySelector('[data-uid="'+uid+'"]');
-      if (el) return el;
-      var all = $eaLeft.querySelectorAll('[data-uids]');
-      for (var i = 0; i < all.length; i++) {
-        if ((','+all[i].getAttribute('data-uids')+',').indexOf(','+uid+',') >= 0) return all[i];
-      }
-      return null;
-    }
-    var _drawn = {};
-    for (var uid in _eaWireMap) {
-      var wire = _eaWireMap[uid];
-      var leftEl = _leftElFor(uid);
-      if (leftEl) { var dk = leftEl.getAttribute('data-uid')+'>'+wire.rightKey; if (_drawn[dk]) continue; _drawn[dk] = 1; }
-      var rightEl = $eaRight.querySelector('[data-key="'+wire.rightKey+'"]');
-      if (!leftEl || !rightEl) continue;
-      var lr = leftEl.getBoundingClientRect();
-      var rr = rightEl.getBoundingClientRect();
-      var x1 = lr.right - wrapRect.left;
-      var y1 = lr.top + lr.height/2 - wrapRect.top;
-      var x2 = rr.left - wrapRect.left;
-      var y2 = rr.top + rr.height/2 - wrapRect.top;
-      var mx = (x1 + x2) / 2;
-      var path = document.createElementNS('http://www.w3.org/2000/svg','path');
-      path.setAttribute('d','M'+x1+','+y1+' C'+mx+','+y1+' '+mx+','+y2+' '+x2+','+y2);
-      path.setAttribute('class','ea-wire'+(wire.status==='err'?' err':''));
-      $eaWires.appendChild(path);
-    }
-    // pending wire (selection in progress)
-    if (_eaSelLeft && _eaSelRight) {
-      var leftEl = _leftElFor(_eaSelLeft);
-      var rightEl = $eaRight.querySelector('[data-key="'+_eaSelRight+'"]');
-      if (leftEl && rightEl) {
-        var lr = leftEl.getBoundingClientRect();
-        var rr = rightEl.getBoundingClientRect();
-        var x1 = lr.right - wrapRect.left;
-        var y1 = lr.top + lr.height/2 - wrapRect.top;
-        var x2 = rr.left - wrapRect.left;
-        var y2 = rr.top + rr.height/2 - wrapRect.top;
-        var mx = (x1 + x2) / 2;
-        var path = document.createElementNS('http://www.w3.org/2000/svg','path');
-        path.setAttribute('d','M'+x1+','+y1+' C'+mx+','+y1+' '+mx+','+y2+' '+x2+','+y2);
-        path.setAttribute('class','ea-wire pending');
-        $eaWires.appendChild(path);
-      }
-    }
-  }
-
-  // ── periodic refresh ──
-  setInterval(function() { if (_eaOpen) eaLoad(); }, 15000);
 
   // boot · v9.7.6 · 执今之道 · boot 即拉 getCustomSP 预装 lastSP (帛书本源) · tape 空亦可编辑
   pingPull();
@@ -3607,7 +3164,7 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
   setInterval(function() { vsc.postMessage({ command: 'refresh' }); }, 15000);
   // v9.9.20 jiqi · IIFE 全跑通 · 至此即活 · 上报 boot-done 标记
   // v9.9.22 · 加 canonChanged listener · 切经文真联动
-  _wdbg('boot-done', 'boot', { listeners: 'btnDao,btnOff,canon,editToggle,editSave,editReload,editReset,eaToggle,eaAddProv,eaProbe,eaClearRoutes,eaConn,message[data,customSP,canonChanged]', ver: '9.9.94' });
+  _wdbg('boot-done', 'boot', { listeners: 'btnDao,btnOff,canon,editToggle,editSave,editReload,editReset,message[data,customSP,canonChanged]', ver: '9.9.270' });
 })();
 </script>
 </body>
@@ -3685,6 +3242,7 @@ function refreshStatusBar() {
 
 function activate(ctx) {
   _activateTs = Date.now();
+  _extContext = ctx;
   try {
     cfg();
     _cachedAnchored = isAnchored();
@@ -3919,7 +3477,12 @@ function activate(ctx) {
       proxyStart(_cachedPort, _cachedMode || "invert")
         .then((handle) => {
           if (!handle) {
-            L.warn("activate", "ACP+HTTP: 端口占且非反代 · watchdog 将重试");
+            L.warn(
+              "activate",
+              "ACP+HTTP: 反代无法绑定 · 清锚还官方(fail-safe) · watchdog 重试",
+            );
+            _proxyHealthy = false;
+            clearAnchor().catch(() => {});
             return;
           }
           proxySetMode(_cachedMode || "invert");
@@ -3954,15 +3517,18 @@ function activate(ctx) {
       proxyStart(_cachedPort, _cachedMode || "invert")
         .then((handle) => {
           if (!handle) {
-            // v9.9.38 · 不清锚 · spawn hook 已无条件重写 · watchdog 后续会重试
+            // v9.9.272 · 失败安全 · 反代无法绑定 → 清锚还官方 · watchdog 重试
             L.warn(
               "activate",
-              "auto-restore: 端口占且非反代 · spawn hook 仍工作 · watchdog 将重试",
+              "auto-restore: 反代无法绑定 · 清锚还官方(fail-safe) · watchdog 将重试",
             );
+            _proxyHealthy = false;
+            clearAnchor().catch(() => {});
             return;
           }
           proxySetMode(_cachedMode || "invert");
-          L.info("activate", "auto-restore done");
+          setAnchor(_cachedPort).catch(() => {});
+          L.info("activate", `auto-restore done · 锚定实际端口 :${_cachedPort}`);
         })
         .catch((e) => {
           L.error("activate", `auto-restore fail: ${e.message}`);
@@ -3990,12 +3556,14 @@ function activate(ctx) {
           return;
         }
         if (!handle) {
-          // v9.9.38 · 不跳过 · spawn hook 已无条件重写 · watchdog 后续会重试
+          // v9.9.272 · 失败安全 · 反代无法绑定 → 清锚还官方 · 不写陈旧锚点
           L.warn(
             "activate",
-            "first-run: 端口占且非反代 · spawn hook 仍工作 · watchdog 将重试",
+            "first-run: 反代无法绑定 · 清锚还官方(fail-safe) · watchdog 将重试",
           );
-          // 仍然设内存锚 + 延迟文件锚 · 确保一致性
+          _proxyHealthy = false;
+          clearAnchor().catch(() => {});
+          return;
         }
         proxySetMode(_cachedMode || "invert");
         // 内存先锚 · spawn hook 立即生效 · 文件延后
@@ -4068,7 +3636,12 @@ function activate(ctx) {
           );
           if (handle) {
             proxySetMode(_cachedMode || "invert");
-            L.info("watchdog", "proxy 复活");
+            setAnchor(_cachedPort).catch(() => {});
+            L.info("watchdog", `proxy 复活 · 锚定 :${_cachedPort}`);
+          } else {
+            L.warn("watchdog", "proxy 重起失败 · 清锚还官方(fail-safe)");
+            _proxyHealthy = false;
+            clearAnchor().catch(() => {});
           }
         } catch (e) {
           L.error("watchdog", `tick err: ${e.message}`);
@@ -4531,20 +4104,32 @@ function getEaConfigHtml(port, nonce) {
     <button class="dao-tab" data-pane="paneRouter">③ 模型路由</button>
   </div>
 
-  <!-- ① 本源观照 (IDE 左侧复刻) -->
+  <!-- ① 本源观照 (IDE 左侧复刻 · 道/官/编 + 经文 + 本源体池 · 与左侧完全一致) -->
   <div class="dao-pane active" id="paneEssence">
-    <div class="essence-card">
-      <h3>本源观照 · 道法自然</h3>
-      <p>本模块复刻 IDE 左侧「本源观照」面板，承载底层提示词隔离替换、帛书《老子》《阴符经》本源注入与通路状态。点击下方按钮在侧栏展开完整视图，或在浏览器查看真实注入的 System Prompt。</p>
-      <div class="essence-actions">
-        <button class="btn add" id="btnOpenEssence">在侧栏展开完整本源观照</button>
-        <button class="btn" id="btnOpenPreview">浏览器查看真实 SP</button>
-        <button class="btn" id="btnModelStatus">查看全量模型目录</button>
-      </div>
+    <div style="display:flex;align-items:center;gap:4px;padding:4px 2px;border-bottom:1px solid rgba(128,128,128,0.18);flex-wrap:wrap">
+      <span id="e1Dots" title="Proxy·Capture·Mode" style="width:8px;height:8px;border-radius:50%;background:rgba(128,128,128,0.4);display:inline-block"></span>
+      <button class="btn" id="e1Dao" title="道Agent·帛书前置" style="padding:2px 8px;font-weight:600">道</button>
+      <button class="btn" id="e1Off" title="官方Agent·透传" style="padding:2px 8px">官</button>
+      <button class="btn" id="e1Edit" title="编辑注入 SP" style="padding:2px 8px">编</button>
+      <select id="e1Canon" title="经藏切换·两经归一·道生一" style="font-size:11px;padding:2px 4px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-dropdown-background,rgba(0,0,0,0.2));color:var(--vscode-dropdown-foreground,var(--vscode-foreground));outline:none;font-family:inherit">
+        <option value="laozi+yinfu">帛书老子+道藏阴符经</option>
+        <option value="laozi">帛书《老子》</option>
+        <option value="yinfu">道藏《阴符经》</option>
+      </select>
+      <span id="e1Badge" style="font-size:10px;opacity:0.6"></span>
+      <button class="btn" id="e1Open" style="margin-left:auto" title="在侧栏展开完整本源观照">↗ 侧栏</button>
     </div>
-    <div class="essence-card">
-      <h3>通路探测 · 默认 SWE 1.6</h3>
-      <p>未接外接 API 时，SWE 1.6（基础版）作静态通道探测：发消息若得固定回执，即证此路已通。接入第一个外接 API 后，SWE 1.6 Fast 自动路由至该模型；其余可在「③ 模型路由」手动连线官方/第三方模型，两类渠道并行不悖。</p>
+    <div id="e1Stat" style="font-size:10px;opacity:0.65;padding:4px 2px">本源观照 · 加载中…</div>
+    <pre id="e1Sp" style="flex:1;overflow:auto;margin:0;padding:8px;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));border-radius:4px;opacity:0.55">（待首次对话或加载）</pre>
+    <div id="e1EditArea" style="display:none;margin-top:4px">
+      <div style="font-size:10px;opacity:0.6;margin:4px 0">编此 · 改道 agent 注入 LLM 之 SP (帛书德道经) · Ctrl+Enter 保存 · Esc 关</div>
+      <textarea id="e1EditText" placeholder="编辑道 agent 模式注入 LLM 之核心 SP · 保存后下次 chat 即生效" style="width:100%;min-height:140px;box-sizing:border-box;font-size:11px;font-family:var(--vscode-editor-font-family,monospace);padding:6px;border:1px solid rgba(128,128,128,0.3);border-radius:4px;background:var(--vscode-input-background,rgba(0,0,0,0.12));color:var(--vscode-input-foreground,var(--vscode-foreground));outline:none;resize:vertical"></textarea>
+      <div style="display:flex;gap:4px;margin-top:4px;align-items:center">
+        <button class="btn add" id="e1Save" title="保存注入 (Ctrl+Enter)">✔ 注入</button>
+        <button class="btn" id="e1Reload" title="重载当前 LLM 实收 SP (不保存)">载</button>
+        <button class="btn" id="e1Reset" title="清 _customSP · 回默认道德经路径">✖ 归道</button>
+        <span id="e1EditStatus" style="font-size:10px;opacity:0.6"></span>
+      </div>
     </div>
   </div>
 
@@ -4568,6 +4153,16 @@ function getEaConfigHtml(port, nonce) {
     </div>
     <!-- 已配渠道列表 (cc-switch 风) -->
     <div id="channelList" style="flex:1;overflow-y:auto;margin-top:4px"></div>
+    <!-- ★ v9.9.270 · Agent 交接指挥文档 (实时更新 · 点击下载) -->
+    <div style="border-top:1px solid rgba(128,128,128,0.2);margin-top:6px;padding-top:6px">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span style="font-weight:600;font-size:11px">📄 Agent 交接指挥文档</span>
+        <span style="font-size:10px;opacity:0.55">实时反映当前渠道/路由状态 · 交给官方/任意 Agent 即可热配置一切</span>
+        <button class="btn add" id="btnDownloadHandoff" style="margin-left:auto" title="下载 dao-proxy-pro-handoff.md">⬇ 下载 MD</button>
+        <button class="btn" id="btnPreviewHandoff" title="预览/刷新文档">预览</button>
+      </div>
+      <pre id="handoffPreview" style="display:none;max-height:200px;overflow:auto;margin:6px 0 0;padding:8px;font-size:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));border-radius:4px"></pre>
+    </div>
   </div>
 
   <!-- ③ 模型路由 (官方 ↔ 第三方 连线) -->
@@ -4661,6 +4256,7 @@ function getEaConfigHtml(port, nonce) {
 
   // ── cc-switch 预设库 (与悬浮面板 _EA_PRESETS 同步) ──
   var _PRESETS = [
+    {n:'FreeModel(CC)',t:'anthropic',u:'https://cc.freemodel.dev',m:'claude-opus-4-8, claude-opus-4-7, claude-fable-5, claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5-20251001'},
     {n:'DeepSeek',t:'openai',u:'https://api.deepseek.com/v1',m:'deepseek-chat, deepseek-reasoner'},
     {n:'Zhipu GLM',t:'openai',u:'https://open.bigmodel.cn/api/paas/v4',m:'glm-4.6'},
     {n:'Kimi',t:'openai',u:'https://api.moonshot.cn/v1',m:'kimi-k2-5'},
@@ -4682,16 +4278,27 @@ function getEaConfigHtml(port, nonce) {
   }
 
   // ── 加载配置 · v9.9.266 一站式 overview (与悬浮面板同源) ──
+  // v9.9.272 · 失败安全 · 后端启动期/端口未就绪自动重试 · 不硬报 404
+  //   柔弱胜刚强: 后端不可用时官方模型仍正常 · 面板只提示"启动中"而非"加载失败"
+  var _loadTries = 0;
   function loadConfig() {
     return fJson('/origin/ea/overview').then(function(d) {
       if (!d || !d.ok) throw new Error('overview 未就绪');
+      _loadTries = 0;
       _config = d;
       _providers = d.providers || {};
       _routes = d.routes || {};
       _families = d.official_families || [];
       render();
     }).catch(function(e) {
-      document.getElementById('statusText').textContent = '加载失败: ' + e.message;
+      _loadTries++;
+      var st = document.getElementById('statusText');
+      if (_loadTries <= 20) {
+        if (st) st.textContent = '后端启动中 · 自动重试(' + _loadTries + ')…';
+        setTimeout(loadConfig, 1500);
+      } else if (st) {
+        st.textContent = '后端未就绪 · 官方模型不受影响 (' + e.message + ')';
+      }
     });
   }
 
@@ -5175,12 +4782,96 @@ function getEaConfigHtml(port, nonce) {
       if (pane === 'paneRouter') { try { renderWires(); } catch (e) {} }
     });
   }
-  var _be = document.getElementById('btnOpenEssence');
-  if (_be) _be.addEventListener('click', function() { postMsg('focusEssence'); });
-  var _bp = document.getElementById('btnOpenPreview');
-  if (_bp) _bp.addEventListener('click', function() { postMsg('openPreview'); });
-  var _bm = document.getElementById('btnModelStatus');
-  if (_bm) _bm.addEventListener('click', function() { postMsg('modelStatus'); });
+  // ═══ ① 本源观照 · IDE 左侧复刻 (道/官/编 + 经文 + 本源体池 · 与左侧同源) ═══
+  function _e1El(id) { return document.getElementById(id); }
+  var _e1Mode = 'invert';
+  var _e1EditOpen = false;
+  function _e1SetMode(m) {
+    _e1Mode = m;
+    var d = _e1El('e1Dao'), o = _e1El('e1Off');
+    if (d) d.classList.toggle('add', m === 'invert');
+    if (o) o.classList.toggle('add', m !== 'invert');
+    var dots = _e1El('e1Dots');
+    if (dots) dots.style.background = (m === 'invert') ? '#6bb86b' : '#d9a441';
+  }
+  function _e1LoadPreview() {
+    fJson('/origin/preview').then(function(d) {
+      if (!d || !d.ok) return;
+      var sp = _e1El('e1Sp');
+      var body = d.after || d.before || '';
+      if (sp) {
+        sp.textContent = body || '（待首次对话或加载 · 发一条消息即捕获真实注入）';
+        sp.style.opacity = body ? '1' : '0.55';
+      }
+      var stat = _e1El('e1Stat');
+      if (stat) stat.textContent = '模式 ' + (d.mode || '-') + ' · 本源体 ' + (d.after_chars || 0) + ' 字 · 帛书头 ' + (d.tao_header_chars || 0) + ' · ' + (d.custom_sp ? ('自定义 ' + d.custom_sp_chars + ' 字') : '默认道德经路径');
+      var badge = _e1El('e1Badge');
+      if (badge) badge.textContent = d.custom_sp ? '✎ 自定义' : '';
+    }).catch(function() {});
+  }
+  function _e1LoadState() {
+    fJson('/origin/mode').then(function(d) { if (d && d.mode) _e1SetMode(d.mode); }).catch(function() {});
+    fJson('/origin/canon').then(function(d) { if (d && d.canon) { var s = _e1El('e1Canon'); if (s) s.value = d.canon; } }).catch(function() {});
+    _e1LoadPreview();
+  }
+  (function _e1Wire() {
+    var d = _e1El('e1Dao'), o = _e1El('e1Off'), e = _e1El('e1Edit'), c = _e1El('e1Canon');
+    if (d) d.addEventListener('click', function() { _e1SetMode('invert'); fPost('/origin/mode', { mode: 'invert' }).then(_e1LoadPreview).catch(function() {}); });
+    if (o) o.addEventListener('click', function() { _e1SetMode('passthrough'); fPost('/origin/mode', { mode: 'passthrough' }).then(_e1LoadPreview).catch(function() {}); });
+    if (c) c.addEventListener('change', function() { fPost('/origin/canon', { canon: c.value }).then(_e1LoadPreview).catch(function() {}); });
+    var tx = _e1El('e1EditText'), st = _e1El('e1EditStatus');
+    if (e) e.addEventListener('click', function() {
+      _e1EditOpen = !_e1EditOpen;
+      var area = _e1El('e1EditArea'); if (area) area.style.display = _e1EditOpen ? 'block' : 'none';
+      if (_e1EditOpen) {
+        fJson('/origin/custom_sp').then(function(cs) {
+          if (!tx) return;
+          if (cs && cs.sp) tx.value = cs.sp;
+          else fJson('/origin/preview').then(function(p) { if (p && (p.after || p.before)) tx.value = p.after || p.before; }).catch(function() {});
+        }).catch(function() {});
+      }
+    });
+    function _e1Save() {
+      if (!tx) return;
+      fPost('/origin/custom_sp', { sp: tx.value }).then(function() { if (st) st.textContent = '已注入 · 下次 chat 生效'; _e1LoadPreview(); }).catch(function(er) { if (st) st.textContent = '失败: ' + er.message; });
+    }
+    var sv = _e1El('e1Save'), rl = _e1El('e1Reload'), rs = _e1El('e1Reset');
+    if (sv) sv.addEventListener('click', _e1Save);
+    if (rl) rl.addEventListener('click', function() { fJson('/origin/preview').then(function(p) { if (tx && (p.after || p.before)) tx.value = p.after || p.before; if (st) st.textContent = '已载实收 SP (未保存)'; }).catch(function() {}); });
+    if (rs) rs.addEventListener('click', function() { fDel('/origin/custom_sp').then(function() { if (tx) tx.value = ''; if (st) st.textContent = '已归道 · 回默认路径'; _e1LoadPreview(); }).catch(function() {}); });
+    if (tx) tx.addEventListener('keydown', function(ev) {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') { ev.preventDefault(); _e1Save(); }
+      else if (ev.key === 'Escape') { _e1EditOpen = false; var area = _e1El('e1EditArea'); if (area) area.style.display = 'none'; }
+    });
+    var op = _e1El('e1Open'); if (op) op.addEventListener('click', function() { postMsg('focusEssence'); });
+  })();
+  _e1LoadState();
+  setInterval(function() { var pe = document.getElementById('paneEssence'); if (pe && pe.classList.contains('active')) _e1LoadPreview(); }, 6000);
+
+  // ═══ ② Agent 交接指挥文档 · 实时生成 · 下载 / 预览 ═══
+  function _fetchHandoff() {
+    return fetch(_BASE + '/origin/ea/handoff.md', { cache: 'no-store' })
+      .then(function(r) { if (!r.ok) throw new Error('http ' + r.status); return r.text(); });
+  }
+  var _dh = _e1El('btnDownloadHandoff'), _ph = _e1El('btnPreviewHandoff');
+  if (_dh) _dh.addEventListener('click', function() {
+    _fetchHandoff().then(function(md) {
+      if (_vscode) { _vscode.postMessage({ type: 'saveHandoff', content: md }); return; }
+      try {
+        var blob = new Blob([md], { type: 'text/markdown' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = 'dao-proxy-pro-handoff.md';
+        document.body.appendChild(a); a.click();
+        setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 1000);
+      } catch (e2) {}
+    }).catch(function(e) { try { _daoToast('下载失败: ' + e.message); } catch (_) {} });
+  });
+  if (_ph) _ph.addEventListener('click', function() {
+    var pre = _e1El('handoffPreview');
+    _fetchHandoff().then(function(md) { if (pre) { pre.textContent = md; pre.style.display = 'block'; } })
+      .catch(function(e) { if (pre) { pre.textContent = '预览失败: ' + e.message; pre.style.display = 'block'; } });
+  });
 
   // ── 初始加载 ──
   loadConfig();
@@ -5194,6 +4885,33 @@ function getEaConfigHtml(port, nonce) {
 </script>
 </body>
 </html>`;
+}
+
+// ★ v9.9.270 · 保存 Agent 交接指挥文档 (webview 下载按钮 → 宿主存盘)
+async function _saveHandoffDoc(content) {
+  try {
+    const def = vscode.Uri.file(
+      require("path").join(
+        require("os").homedir(),
+        "dao-proxy-pro-handoff.md",
+      ),
+    );
+    const uri = await vscode.window.showSaveDialog({
+      defaultUri: def,
+      filters: { Markdown: ["md"] },
+      saveLabel: "保存交接文档",
+    });
+    if (!uri) return;
+    await vscode.workspace.fs.writeFile(
+      uri,
+      Buffer.from(content || "", "utf8"),
+    );
+    vscode.window.showInformationMessage(
+      `交接文档已保存: ${uri.fsPath}`,
+    );
+  } catch (e) {
+    vscode.window.showErrorMessage(`交接文档保存失败: ${e && e.message}`);
+  }
 }
 
 // ★ v9.9.90 · 外接api 热配置面板命令
@@ -5225,6 +4943,8 @@ async function cmdEaConfig() {
           cmdOpenPreview();
         } else if (msg.type === "modelStatus") {
           cmdModelUnlockStatus();
+        } else if (msg.type === "saveHandoff") {
+          _saveHandoffDoc(msg.content || "");
         }
       } catch (e) {
         L.warn("eaConfig", `msg handle fail: ${e && e.message}`);
