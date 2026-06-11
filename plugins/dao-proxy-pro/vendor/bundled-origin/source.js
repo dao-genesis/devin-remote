@@ -3643,6 +3643,31 @@ function handleControl(req, res) {
           return;
         }
         const provName = route.provider;
+        // ★ builtin-stub · 内建测试通道 · 固定返回 · 无外发HTTP
+        //   道义: 三十五章「执大象 天下往 往而不害」· 传输层桩验证通路
+        //   根因: builtin-stub 是虚拟provider · 不在 providers 配置中
+        //   旧逻辑在此误报 "provider builtin-stub not found" → 官方SWE 1.6标准路径无法自测
+        //   修复: 短路返回桩响应 · 与 dao_router._builtinStubResponse 文本一致
+        if (provName === "builtin-stub") {
+          res.end(
+            JSON.stringify({
+              ok: true,
+              modelUid,
+              provider: "builtin-stub",
+              model: route.model || "stub-transport-test",
+              status: 200,
+              elapsed_ms: 0,
+              content: "道可道也 非恒道也 · 传输层得一 · stub响应正常",
+              usage: {
+                prompt_tokens: 10,
+                completion_tokens: 20,
+                total_tokens: 30,
+              },
+              builtin: true,
+            }),
+          );
+          return;
+        }
         const provCfg = (routeCfg.providers || {})[provName];
         if (!provCfg) {
           res.end(
