@@ -12,8 +12,8 @@
 |---|---|---|---|
 | **dao-proxy-pro** | 9.9.261 | ✅ 完成+验证 | 底层隔离替换提示词(帛书SP) + 外接第三方模型路由进 Cascade；#4 真实 DeepSeek 3 层 E2E 全过 |
 | **dao-vsix** | 1.0.9 | ✅ 完成+live | Hub 面板(Sessions/Knowledge/Playbook/Secret/Git) + 帛书规则板块 + **内网穿透板块** + 官网路由 |
-| **devin-git-auth** | 2.0.0 | ⏸ 本轮跳过 | 多 Devin 账号绑一个 GitHub(16 账号已绑同一 App)；用户指令暂不推进 |
-| **dao-bridge** | 2.0.0 | ✅ 完成+live | **专穿当前工作区**(非整机) + 随窗口启停 + 实时 MD 文档 |
+| **devin-git-auth** | 2.0.0 | 🟡 VSIX 可构建 | 多 Devin 账号绑一个 GitHub(16 账号已绑同一 App)；本会话已补齐 `media/` 图标并 `vsce package` 出 `devin-git-auth-2.0.0.vsix`，已装入 Devin Desktop；活跃协同待凭证 live |
+| **dao-bridge** | 2.1.0 | ✅ 完成+live | **专穿当前工作区**(非整机) + 随窗口启停 + 实时 MD 文档；2.1.0 修复 cloudflared 缺失自动下载 + 命名隧道配置 |
 
 详细验证见 `docs/LIVE_TEST_2026-06-11.md` 与 `docs/REARCH_2026-06-10.md`。
 
@@ -78,8 +78,10 @@ cd C:\Users\Administrator\plugins\cf-daohub\dao-bridge-ext
 ```powershell
 $cli = "$env:LOCALAPPDATA\Programs\Devin\bin\devin-desktop.cmd"
 & $cli --install-extension "C:\...\dao-vsix-1.0.9.vsix" --force
-& $cli --install-extension "C:\...\dao-bridge-2.0.0.vsix" --force
+& $cli --install-extension "C:\...\dao-bridge-2.1.0.vsix" --force
+& $cli --install-extension "C:\...\devin-git-auth-2.0.0.vsix" --force
 # 然后重启/重载 Devin Desktop 窗口生效
+# 冷启动注：archive 分支目前仅 .gitignore（预构建产物未推上），故从 main 的 VSIX/源码安装；git-auth 无预构建 VSIX 需现场 `vsce package`。
 ```
 
 ---
@@ -110,11 +112,13 @@ $cli = "$env:LOCALAPPDATA\Programs\Devin\bin\devin-desktop.cmd"
   ```
   以及 webview 的 `esc()` 必须**自包含**（不能调服务端 `mpEsc`）。
 
-### 3.3 dao-bridge 2.0.0 （本轮重写，重点）
-- 文件：`cf-daohub/dao-bridge-ext/extension.js`（~370 行，纯 JS）+ `package.json`(v2.0.0) + `media/icon.svg`。
+### 3.3 dao-bridge 2.1.0 （本轮重写 + 2.1.0 修复，重点）
+- 文件：`cf-daohub/dao-bridge-ext/extension.js`（~440 行，纯 JS）+ `package.json`(v2.1.0) + `media/icon.svg`。
 - **不再穿透整机，只穿当前工作区**：`WorkspaceServer` 本地 HTTP(随机端口)，`/api/{health,info,exec,ls,read,write}`；`withinRoot()` 把所有路径操作限定在工作区根（越权 403，无 Token 401）。
 - **生命周期**：`activate`(onStartupFinished)→启隧道；`deactivate`(关窗)→杀 cloudflared + 关 server。✅ 实测关 IDE 后公网返回 CF 530。
-- **cloudflared**：`findCloudflared` 顺序 = 配置 → `~/.dao/bin` → `~/dao/bin` → 扩展 bin → PATH → 否则从 GitHub latest 下载。本机实际在 `C:\Users\Administrator\dao\bin\cloudflared.exe`。
+- **cloudflared**：`findCloudflared` 顺序 = 配置 → `~/.dao/bin` → `~/dao/bin` → 扩展 bin → PATH(`where`/`command -v` 探测) → 缺失则从 GitHub latest 下载。
+- **⚠ 2.1.0 关键修复（cloudflared 缺失隧道起不来）**：旧版 `findCloudflared` 末尾直接返回 `"cloudflared.exe"` 交给 `cp.spawn`；缺失二进制时 spawn **只异步 emit `error`、不抛同步异常**，外层 `try/catch` 形同虚设、`downloadCloudflared()` 兜底永不触发 → 全新 VM（无 cloudflared）`url` 恒为空、隧道永远起不来。2.1.0 改为：`findCloudflared` 缺失返回空串 → `start()` 先 await `downloadCloudflared()` 再 spawn，并加异步 `error` 重试。本会话全新 VM 实测通过（自动下载→quick tunnel→公网 `/api/exec` 200、无 token 401）。
+- **命名隧道（稳定 URL）配置**：新增 `daoBridge.tunnelToken`/`hostname`/`localPort`。填连接器 Token 切为 `cloudflared tunnel run --token`（与 quick tunnel 互斥）；留空=原 quick tunnel（零回归）。命名隧道分支待真实 CF token + 面板 ingress live 复验。
   - **关键 flag `--protocol http2`**：本类云 VM 封 QUIC/UDP，默认 quic 会 `failed to dial to edge`→CF 1033。http2 强制 TCP 回退后边缘正常路由。**勿删此 flag**。
 - **产物（每次启动删旧注新）**：
   - `~/.dao/bridge/conn.json`：`{url, token, local_url, port, workspace, root, host, updated}`
