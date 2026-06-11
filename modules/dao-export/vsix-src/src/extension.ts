@@ -54,7 +54,11 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerWebviewViewProvider('daoDevinSessions', sidebarProvider),
     vscode.commands.registerCommand('daoDevin.login', () => promptLogin()),
     vscode.commands.registerCommand('daoDevin.logout', () => doLogout()),
-    vscode.commands.registerCommand('daoDevin.refresh', () => refreshSessions()),
+    vscode.commands.registerCommand('daoDevin.refresh', () => refreshSessions().catch((e) => {
+      sidebarProvider.update();
+      sidebarProvider.setStatus(`获取会话失败（点 ⟳ 重试）: ${e}`);
+      vscode.window.showErrorMessage(`获取会话失败: ${e}`);
+    })),
     vscode.commands.registerCommand('daoDevin.exportSession', () => pickAndExport()),
     vscode.commands.registerCommand('daoDevin.exportAll', () => exportAllSessions()),
     vscode.commands.registerCommand('daoDevin.startBridge', () => startBridge(true)),
