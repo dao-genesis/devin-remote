@@ -3150,8 +3150,51 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
         if (!_eaWireMap[norm]) _eaWireMap[norm] = _eaWireMap[ruid];
       }
     }
-    // ── LEFT: 本机模型 ──
+    // ── LEFT: 官方模型 · v9.9.265 · 档位归一(一族一项,同 Cascade 顶层) ──
     $eaLeft.innerHTML = '';
+    _eaTierGroups = {};
+    var _fams = d.official_families || [];
+    if (_fams.length > 0) {
+      if ($eaLeftCount) $eaLeftCount.textContent = _fams.length;
+      function _provLabel(p){p=String(p||'').replace(/^MODEL_PROVIDER_/,'');var M={ANTHROPIC:'Claude',OPENAI:'GPT',GOOGLE:'Gemini',WINDSURF:'Windsurf',XAI:'Grok',DEEPSEEK:'DeepSeek',MOONSHOT:'Kimi',MOONSHOT_AI:'Kimi',FIREWORKS:'Fireworks',ZHIPU:'GLM',ZHIPU_AI:'GLM',MINIMAX:'Minimax'};return M[p]||(p?p.charAt(0)+p.slice(1).toLowerCase():'Other');}
+      var _pg = {}, _po = [];
+      _fams.forEach(function(f){var pl=_provLabel(f.provider);if(!_pg[pl]){_pg[pl]=[];_po.push(pl);}_pg[pl].push(f);});
+      _po.forEach(function(pl){
+        var list = _pg[pl];
+        var fe=document.createElement('div');fe.className='ea-family';fe.textContent=pl+' ('+list.length+')';$eaLeft.appendChild(fe);
+        list.forEach(function(f){
+          var uids = f.members.map(function(mm){return mm.modelUid;}).filter(Boolean);
+          var defMember = f.members.filter(function(mm){return mm.isDefault;})[0] || f.members[0];
+          var primary = (defMember && defMember.modelUid) || uids[0] || f.familyUid;
+          _eaTierGroups[primary] = uids;
+          var wiredUids = uids.filter(function(u){return !!_eaWireMap[u];});
+          var isWired = wiredUids.length > 0;
+          var isPending = _eaSelLeft===primary && _eaSelRight;
+          var el=document.createElement('div');
+          el.className='ea-model'+(isWired?' wired':'')+(isPending?' wire-pending':'')+(_eaSelLeft===primary&&!isPending?' sel':'');
+          el.setAttribute('data-uid', primary);
+          el.setAttribute('data-uids', uids.join(','));
+          var dot=document.createElement('span');dot.className='ea-route-dot'+(isWired?'':' off');el.appendChild(dot);
+          var txt=document.createElement('span');txt.textContent=f.label;txt.style.flex='1 1 auto';txt.style.overflow='hidden';txt.style.textOverflow='ellipsis';el.appendChild(txt);
+          if(f.members.length>1){var tb=document.createElement('span');tb.className='ea-tier-fold';tb.textContent='\u00d7'+f.members.length;tb.title=f.members.map(function(mm){return (mm.tier||'base')+(_eaWireMap[mm.modelUid]?' \u2713':'');}).join(' \u00b7 ');el.appendChild(tb);}
+          if(f.isNew){var nb=document.createElement('span');nb.className='ea-status-badge new';nb.textContent='N';nb.title='New';el.appendChild(nb);}
+          if(f.isRecommended){var rb=document.createElement('span');rb.className='ea-status-badge recommended';rb.textContent='\u2714';rb.title='Recommended';el.appendChild(rb);}
+          if(isWired){var wb=document.createElement('span');wb.className='ea-wire-badge';wb.textContent='\u2713'+(f.members.length>1?wiredUids.length+'/'+f.members.length:'');wb.title='\u5df2\u8fde\u7ebf '+wiredUids.length+'/'+f.members.length;el.appendChild(wb);}
+          el.title=f.label+(f.members.length>1?' \u00b7 '+f.members.length+'\u6863':'')+(isWired?' \u00b7 \u5df2\u8fde\u7ebf':'');
+          el.addEventListener('click',function(){
+            var uid=this.getAttribute('data-uid');
+            var gUids=(this.getAttribute('data-uids')||uid).split(',').filter(Boolean);
+            var wired=gUids.filter(function(u){return !!_eaWireMap[u];});
+            if(wired.length>0){if(confirm('\u65ad\u5f00 '+f.label+' \u5168\u90e8'+wired.length+'\u6761\u8def\u7531?')){Promise.all(wired.map(function(u){return fDel('/origin/ea/route/'+encodeURIComponent(u));})).then(function(){_eaSelLeft=null;eaLoad();$eaInfo.textContent='\u2716 \u5df2\u65ad\u5f00 '+wired.length+'\u6761';});}return;}
+            if(_eaSelLeft===uid){_eaSelLeft=null;eaRender();return;}
+            _eaSelLeft=uid;
+            if(_eaSelRight){eaAutoConnect();}else{eaRender();}
+          });
+          $eaLeft.appendChild(el);
+        });
+      });
+    } else {
+    // ── 回退: 旧 seen 模型源 (catalog 未就绪时) ──
     var models = d.available_models || d.seen_models || [];
     if ($eaLeftCount) $eaLeftCount.textContent = models.length ? models.length : '';
     if (models.length === 0) {
@@ -3206,16 +3249,18 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
         });
       });
     }
+    }
     // ── RIGHT: 外接模型 ──
     $eaRight.innerHTML = '';
     var providers=d.providers||{}, hasRight=false;
     var rightModels = [];
     for(var pn in providers){var p=providers[pn];
       var pMods = p.models || p._models;
+      var pDisp = (p && p._label) ? p._label : pn;
       if(pMods&&pMods.length>0){pMods.forEach(function(mn){
         var key=pn+'/'+mn, wiredUid=null;
         for(var u in _eaWireMap){if(_eaWireMap[u].rightKey===key){wiredUid=u;break;}}
-        rightModels.push({key:key,prov:pn,model:mn,wiredUid:wiredUid});
+        rightModels.push({key:key,prov:pn,provDisp:pDisp,model:mn,wiredUid:wiredUid});
       });}
     }
     if ($eaRightCount) $eaRightCount.textContent = rightModels.length ? rightModels.length : '';
@@ -3231,8 +3276,8 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
         var dot=document.createElement('span');dot.className='ea-route-dot'+(isWired?'':' off');el.appendChild(dot);
         var txt=document.createElement('span');txt.textContent=rm.model;txt.style.flex='1 1 auto';txt.style.overflow='hidden';txt.style.textOverflow='ellipsis';el.appendChild(txt);
         if(isWired){var wb=document.createElement('span');wb.className='ea-wire-badge';wb.textContent='\u2713';wb.title='\u5df2\u8fde\u7ebf(\u70b9\u51fb\u65ad\u5f00)';el.appendChild(wb);}
-        var provTag=document.createElement('span');provTag.className='ea-prov-tag';provTag.textContent=rm.prov;el.appendChild(provTag);
-        el.title=rm.prov+'/'+rm.model+(isWired?' \u00b7 \u5df2\u8fde\u7ebf':'');
+        var provTag=document.createElement('span');provTag.className='ea-prov-tag';provTag.textContent=rm.provDisp;el.appendChild(provTag);
+        el.title=rm.provDisp+'/'+rm.model+(isWired?' \u00b7 \u5df2\u8fde\u7ebf':'');
         el.addEventListener('click',function(){
           var key=this.getAttribute('data-key');
           // ★ v9.9.98 · 点击已连线右侧模型 → 断线
@@ -3249,6 +3294,7 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
     // ── provider list ──
     $eaProvList.innerHTML='';
     for(var pn in providers){var p=providers[pn];
+      if(p&&p._builtin)continue; // 测试通道为内置·不可编辑/删除
       var pi=document.createElement('div');pi.className='ea-prov-item';
       pi.innerHTML='<span class="ea-prov-name">'+pn+'</span><span class="ea-prov-url">'+(p.baseUrl||'')+'</span><span class="ea-edit-prov" data-prov="'+pn+'" title="\u7f16\u8f91" style="cursor:pointer;opacity:0.6;margin-right:4px">\u270e</span><span class="ea-del-prov" data-prov="'+pn+'">\u2716</span>';
       $eaProvList.appendChild(pi);
@@ -3284,6 +3330,12 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
     {n:'Anthropic',t:'anthropic',u:'https://api.anthropic.com',m:'claude-sonnet-4-6, claude-opus-4-6'},
     {n:'Gemini',t:'openai',u:'https://generativelanguage.googleapis.com/v1beta/openai',m:'gemini-2.5-pro, gemini-2.5-flash'},
     {n:'xAI Grok',t:'openai',u:'https://api.x.ai/v1',m:'grok-3-mini'},
+    {n:'Volcengine \u706b\u5c71',t:'openai',u:'https://ark.cn-beijing.volces.com/api/v3',m:'deepseek-v3-250324'},
+    {n:'Z.AI Coding',t:'openai',u:'https://api.z.ai/api/coding/paas/v4',m:'glm-4.6'},
+    {n:'Novita',t:'openai',u:'https://api.novita.ai/openai',m:'deepseek/deepseek-v3'},
+    {n:'NVIDIA NIM',t:'openai',u:'https://integrate.api.nvidia.com/v1',m:'deepseek-ai/deepseek-r1'},
+    {n:'StepFun \u9636\u8dc3',t:'openai',u:'https://api.stepfun.com/v1',m:'step-2-16k'},
+    {n:'TheRouter',t:'openai',u:'https://api.therouter.ai/v1',m:'deepseek-v3'},
     {n:'NewAPI/\u81ea\u5efa',t:'custom',u:'',m:''}
   ];
   var $eaPPreset = document.getElementById('eaPPreset');
@@ -3542,6 +3594,59 @@ function ensureIconSvg() {
 
 // ═══════════════════════════ activate / deactivate ═══════════════════════════
 let _essenceProvider = null;
+// ★ 状态栏入口 · 五十二章「既得其母 以知其子」· 三模块面板唯一开门处
+let _statusBarItem = null;
+// ★ 模型解锁 · 首装即自化 · 全109模型现于选择器 (三十七章「万物将自化」)
+let _modelUnlockDone = false;
+
+// ★ 自动模型解锁 · 反代就位后调 /origin/model_unlock · 幂等 · 首装即全模可选
+async function autoModelUnlock(port, attempt) {
+  attempt = attempt || 0;
+  if (_modelUnlockDone || !port) return;
+  try {
+    const status = await httpGetJson(
+      `http://127.0.0.1:${port}/origin/model_unlock`,
+      2000,
+    );
+    if (status && status.enabled === true) {
+      _modelUnlockDone = true;
+      L.info("modelUnlock", "已处解锁态 · 全模型自现 · 不复行");
+      return;
+    }
+    const result = await httpPostJson(
+      `http://127.0.0.1:${port}/origin/model_unlock`,
+      { enabled: true },
+      2500,
+    );
+    if (result && result.ok) {
+      _modelUnlockDone = true;
+      L.info(
+        "modelUnlock",
+        `首装自动解锁 ✅ · ${result.catalog_size || 0} 模型入选择器 · 执大象 天下往`,
+      );
+    } else if (attempt < 5) {
+      setTimeout(() => autoModelUnlock(port, attempt + 1), 3000);
+    }
+  } catch (e) {
+    if (attempt < 5) {
+      setTimeout(() => autoModelUnlock(port, attempt + 1), 3000);
+    } else {
+      L.warn("modelUnlock", `自动解锁未成 (${attempt}): ${e && e.message}`);
+    }
+  }
+}
+
+// ★ 状态栏入口刷新 · 显模式/端口 · 点击开三模块中央面板
+function refreshStatusBar() {
+  if (!_statusBarItem) return;
+  const mode = _cachedMode === "passthrough" ? "官" : "道";
+  const port = _cachedPort || "—";
+  _statusBarItem.text = `$(circuit-board) 道Agent Pro · ${mode}`;
+  _statusBarItem.tooltip =
+    `道Agent Pro · 模式=${_cachedMode || "invert"} · 端口=${port}\n` +
+    `点击打开「本源观照 / 渠道配置 / 模型路由」三模块面板`;
+  _statusBarItem.show();
+}
 
 function activate(ctx) {
   _activateTs = Date.now();
@@ -3725,6 +3830,23 @@ function activate(ctx) {
         },
       ),
     );
+
+    // ★ 状态栏入口 (右下角) · 仿 rt-flow · 点击开三模块中央面板
+    // 五十二章「既得其母 以知其子」· 解「面板无处可开」之疾
+    _statusBarItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Right,
+      100,
+    );
+    _statusBarItem.command = "dao.eaConfig";
+    refreshStatusBar();
+    ctx.subscriptions.push(_statusBarItem);
+
+    // ★ 首装即自化 · 反代就位后自动解锁全模型 (含retry · 渡proxy启动窗)
+    // 三十七章「侯王若能守之 万物将自化」· 解「装后仅 SWE1.6」之疾
+    setTimeout(() => {
+      autoModelUnlock(_cachedPort);
+      refreshStatusBar();
+    }, 8000);
 
     // v9.4.2 · 自 focus dao-container · 强制 resolveWebviewView 触发 · SSR 帛书立现
     // 三十七章: 道恒无名 · 侯王若能守之 · 万物将自化
@@ -4241,6 +4363,34 @@ function getEaConfigHtml(port, nonce) {
     font-size: 12px; line-height: 1.5;
     display: flex; flex-direction: column; padding: 8px;
   }
+  /* ── 三模块 Tab 栏 ── */
+  .dao-tabs {
+    display: flex; gap: 4px; margin-bottom: 8px;
+    border-bottom: 1px solid rgba(128,128,128,0.25); padding-bottom: 6px;
+  }
+  .dao-tab {
+    padding: 5px 12px; font-size: 12px; cursor: pointer; user-select: none;
+    border: 1px solid rgba(128,128,128,0.25); border-radius: 4px;
+    background: transparent; color: var(--vscode-foreground); opacity: 0.7;
+    font-family: inherit;
+  }
+  .dao-tab:hover { opacity: 1; }
+  .dao-tab.active {
+    opacity: 1; font-weight: 600;
+    background: var(--vscode-button-background, rgba(0,127,212,0.25));
+    color: var(--vscode-button-foreground, var(--vscode-foreground));
+    border-color: var(--vscode-focusBorder, #007fd4);
+  }
+  .dao-pane { display: none; flex-direction: column; flex: 1; min-height: 0; }
+  .dao-pane.active { display: flex; }
+  /* ── 本源观照 (①) ── */
+  .essence-card {
+    padding: 14px; border-radius: 6px; margin-bottom: 10px;
+    background: rgba(0,0,0,0.08); border: 1px solid rgba(128,128,128,0.2);
+  }
+  .essence-card h3 { font-size: 14px; margin-bottom: 8px; }
+  .essence-card p { opacity: 0.75; margin-bottom: 10px; font-size: 12px; }
+  .essence-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   /* ── 顶部: Provider 输入 ── */
   .provider-bar {
     display: flex; gap: 4px; align-items: center; flex-wrap: wrap;
@@ -4339,26 +4489,56 @@ function getEaConfigHtml(port, nonce) {
 </style>
 </head>
 <body data-port="${proxyPort}">
-  <!-- Provider 输入 -->
-  <div class="provider-bar">
-    <input id="provName" placeholder="名称 (如 deepseek)" style="flex:0.5;min-width:60px">
-    <input id="provUrl" placeholder="Base URL (如 https://api.deepseek.com)" style="flex:2">
-    <input id="provKey" type="password" placeholder="API Key" style="flex:1">
-    <button class="btn add" id="btnAddProv" title="添加 Provider">+ 添加</button>
-    <button class="btn probe" id="btnProbe" title="探测所有 Provider 健康">探测</button>
+  <!-- ── 三模块 Tab 栏 ── -->
+  <div class="dao-tabs">
+    <button class="dao-tab active" data-pane="paneEssence">① 本源观照</button>
+    <button class="dao-tab" data-pane="paneProvider">② 渠道配置</button>
+    <button class="dao-tab" data-pane="paneRouter">③ 模型路由</button>
   </div>
 
-  <!-- 连线图 -->
-  <div class="wire-container" id="wireContainer" style="position:relative;">
-    <div class="wire-col left" id="leftCol">
-      <h3>官方模型</h3>
-      <div id="officialModels"></div>
+  <!-- ① 本源观照 (IDE 左侧复刻) -->
+  <div class="dao-pane active" id="paneEssence">
+    <div class="essence-card">
+      <h3>本源观照 · 道法自然</h3>
+      <p>本模块复刻 IDE 左侧「本源观照」面板，承载底层提示词隔离替换、帛书《老子》《阴符经》本源注入与通路状态。点击下方按钮在侧栏展开完整视图，或在浏览器查看真实注入的 System Prompt。</p>
+      <div class="essence-actions">
+        <button class="btn add" id="btnOpenEssence">在侧栏展开完整本源观照</button>
+        <button class="btn" id="btnOpenPreview">浏览器查看真实 SP</button>
+        <button class="btn" id="btnModelStatus">查看全量模型目录</button>
+      </div>
     </div>
-    <div class="wire-col right" id="rightCol">
-      <h3>外接模型</h3>
-      <div id="externalModels"></div>
+    <div class="essence-card">
+      <h3>通路探测 · 默认 SWE 1.6</h3>
+      <p>未接外接 API 时，SWE 1.6（基础版）作静态通道探测：发消息若得固定回执，即证此路已通。接入第一个外接 API 后，SWE 1.6 Fast 自动路由至该模型；其余可在「③ 模型路由」手动连线官方/第三方模型，两类渠道并行不悖。</p>
     </div>
-    <svg class="wire-svg" id="wireSvg"></svg>
+  </div>
+
+  <!-- ② 渠道配置 (CC-Switch 风) -->
+  <div class="dao-pane" id="paneProvider">
+    <!-- Provider 输入 -->
+    <div class="provider-bar">
+      <input id="provName" placeholder="名称 (如 deepseek)" style="flex:0.5;min-width:60px">
+      <input id="provUrl" placeholder="Base URL (如 https://api.deepseek.com)" style="flex:2">
+      <input id="provKey" type="password" placeholder="API Key" style="flex:1">
+      <button class="btn add" id="btnAddProv" title="添加 Provider">+ 添加</button>
+      <button class="btn probe" id="btnProbe" title="探测所有 Provider 健康">探测</button>
+    </div>
+  </div>
+
+  <!-- ③ 模型路由 (官方 ↔ 第三方 连线) -->
+  <div class="dao-pane" id="paneRouter">
+    <!-- 连线图 -->
+    <div class="wire-container" id="wireContainer" style="position:relative;">
+      <div class="wire-col left" id="leftCol">
+        <h3>官方模型</h3>
+        <div id="officialModels"></div>
+      </div>
+      <div class="wire-col right" id="rightCol">
+        <h3>外接模型</h3>
+        <div id="externalModels"></div>
+      </div>
+      <svg class="wire-svg" id="wireSvg"></svg>
+    </div>
   </div>
 
   <!-- 路由编辑弹窗 -->
@@ -4428,8 +4608,12 @@ function getEaConfigHtml(port, nonce) {
   var _health = {};
   var _selectedLeft = null;
   var _selectedRight = null;
+  // ★ v9.9.263 · 全量官方模型目录 (真解锁后从 GetUserStatus 实证提取 · ~108)
+  //   反者道之动: 左侧不再着相于硬编码小堆 · 万物并育而不相害
+  var _catalog = [];          // [{modelUid,label,provider,...}]
+  var _catalogLabel = {};     // uid -> label
 
-  // ── 已知官方模型列表 (Windsurf 常见) ──
+  // ── 已知官方模型列表 (目录未载时的兜底 · 利而不害) ──
   var KNOWN_OFFICIAL_MODELS = [
     'MODEL_SWE_1_6', 'MODEL_SWE_1_6_FAST',
     'swe-1-6', 'swe-1-6-fast',
@@ -4437,9 +4621,26 @@ function getEaConfigHtml(port, nonce) {
     'gpt-5-4-low', 'gpt-5-4-high', 'gpt-5-4-xhigh',
   ];
 
+  // ── 加载全量模型目录 (真解锁后实证 · 失败则空表兜底) ──
+  function loadCatalog() {
+    return fJson('/origin/model_catalog').then(function(d) {
+      if (d && d.ok && Array.isArray(d.models)) {
+        _catalog = d.models;
+        _catalogLabel = {};
+        for (var i = 0; i < _catalog.length; i++) {
+          _catalogLabel[_catalog[i].modelUid] = _catalog[i].label || _catalog[i].modelUid;
+        }
+      }
+    }).catch(function() { /* 目录未载 · 退兜底 */ });
+  }
+
   // ── 加载配置 ──
   function loadConfig() {
-    return fJson('/origin/ea/config').then(function(cfg) {
+    return Promise.all([
+      fJson('/origin/ea/config'),
+      loadCatalog(),
+    ]).then(function(arr) {
+      var cfg = arr[0];
       _config = cfg;
       _providers = cfg.providers || {};
       _routes = (cfg.daoRoutes && cfg.daoRoutes.routes) || {};
@@ -4474,12 +4675,19 @@ function getEaConfigHtml(port, nonce) {
       if (uid.startsWith('MODEL_')) return uid;
       return 'MODEL_' + uid.replace(/-/g, '_').toUpperCase();
     }
-    // 先加路由表中的 (优先显示)
+    // 先加路由表中的 (优先显示 · 已配路由置顶)
     for (var uid in _routes) {
       var nk = _normKey(uid);
       if (!seen.has(nk)) { seen.add(nk); models.push(uid); }
     }
-    // 再加已知的
+    // ★ v9.9.263 · 再加全量官方目录 (真解锁实证 ~108) · 一大堆而非小堆
+    for (var c = 0; c < _catalog.length; c++) {
+      var cu = _catalog[c].modelUid;
+      if (!cu) continue;
+      var nkc = _normKey(cu);
+      if (!seen.has(nkc)) { seen.add(nkc); models.push(cu); }
+    }
+    // 末尾兜底: 目录未载时仍显已知模型
     for (var i = 0; i < KNOWN_OFFICIAL_MODELS.length; i++) {
       var nk2 = _normKey(KNOWN_OFFICIAL_MODELS[i]);
       if (!seen.has(nk2)) {
@@ -4495,13 +4703,15 @@ function getEaConfigHtml(port, nonce) {
       div.className = 'model-item' + (_selectedLeft === uid ? ' selected' : '');
       var dotClass = route ? 'routed' : 'unrouted';
       var target = route ? (route.provider + '/' + route.model) : '';
+      var disp = _catalogLabel[uid] || uid;
       div.innerHTML = '<span class="dot ' + dotClass + '"></span>' +
-        '<span class="name">' + uid + '</span>' +
+        '<span class="name" title="' + uid + '">' + disp + '</span>' +
         (target ? '<span class="target">' + target + '</span>' : '');
       div.setAttribute('data-uid', uid);
       div.addEventListener('click', function() {
         _selectedLeft = this.getAttribute('data-uid');
         render();
+        maybeAutoRoute();
       });
       div.addEventListener('dblclick', function() {
         var u = this.getAttribute('data-uid');
@@ -4558,6 +4768,7 @@ function getEaConfigHtml(port, nonce) {
         div.addEventListener('click', function() {
           _selectedRight = this.getAttribute('data-prov') + '/' + this.getAttribute('data-model');
           render();
+          maybeAutoRoute();
         });
         div.addEventListener('dblclick', function() {
           // 双击外接模型 → 快速创建路由
@@ -4674,6 +4885,34 @@ function getEaConfigHtml(port, nonce) {
   });
 
   // ── 路由弹窗 ──
+  // ★ v9.9.263 · 自连 · 左右各选一 → 自创路由 (早期设计 · 无为而无不为)
+  //   不再需双击开模态 · 选完即路· 选完即现连线
+  function maybeAutoRoute() {
+    if (!_selectedLeft || !_selectedRight) return;
+    var left = _selectedLeft;
+    var right = _selectedRight;
+    var slash = right.indexOf('/');
+    var prov = slash >= 0 ? right.slice(0, slash) : right;
+    var model = slash >= 0 ? right.slice(slash + 1) : right;
+    var st = document.getElementById('statusText');
+    if (st) st.textContent = '路由中: ' + left + ' → ' + right + ' …';
+    fPost('/origin/ea/route', {
+      modelUid: left,
+      route: { provider: prov, model: model, maxOutputTokens: 16384, thinkingEnabled: false }
+    }).then(function(r) {
+      if (r && r.ok) {
+        _selectedLeft = null;
+        _selectedRight = null;
+        if (st) st.textContent = '✔ 已路由 ' + left + ' → ' + right;
+        loadConfig();
+      } else {
+        if (st) st.textContent = '路由失败: ' + ((r && r.error) || 'unknown');
+      }
+    }).catch(function(e) {
+      if (st) st.textContent = '路由请求失败: ' + e.message;
+    });
+  }
+
   function openRouteModal(uid, provName, extModel) {
     var modal = document.getElementById('routeModal');
     document.getElementById('routeModelUid').value = uid || '';
@@ -4738,6 +4977,30 @@ function getEaConfigHtml(port, nonce) {
   // ── 自动刷新 ──
   setInterval(function() { loadConfig(); }, 5000);
 
+  // ── 三模块 Tab 切换 + 扩展宿主桥 ──
+  var _vscode = (typeof acquireVsCodeApi === 'function') ? acquireVsCodeApi() : null;
+  function postMsg(t) { if (_vscode) _vscode.postMessage({ type: t }); }
+  var _tabs = document.querySelectorAll('.dao-tab');
+  for (var ti = 0; ti < _tabs.length; ti++) {
+    _tabs[ti].addEventListener('click', function() {
+      var pane = this.getAttribute('data-pane');
+      for (var k = 0; k < _tabs.length; k++) { _tabs[k].classList.remove('active'); }
+      this.classList.add('active');
+      var panes = document.querySelectorAll('.dao-pane');
+      for (var j = 0; j < panes.length; j++) {
+        if (panes[j].id === pane) { panes[j].classList.add('active'); }
+        else { panes[j].classList.remove('active'); }
+      }
+      if (pane === 'paneRouter') { try { renderWires(); } catch (e) {} }
+    });
+  }
+  var _be = document.getElementById('btnOpenEssence');
+  if (_be) _be.addEventListener('click', function() { postMsg('focusEssence'); });
+  var _bp = document.getElementById('btnOpenPreview');
+  if (_bp) _bp.addEventListener('click', function() { postMsg('openPreview'); });
+  var _bm = document.getElementById('btnModelStatus');
+  if (_bm) _bm.addEventListener('click', function() { postMsg('modelStatus'); });
+
   // ── 初始加载 ──
   loadConfig();
   // 首次探测健康
@@ -4757,7 +5020,7 @@ async function cmdEaConfig() {
   try {
     const panel = vscode.window.createWebviewPanel(
       "dao.eaConfig",
-      "道 · 外接API 热配置",
+      "道 · 三模块面板 (本源观照·渠道配置·模型路由)",
       vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -4769,6 +5032,23 @@ async function cmdEaConfig() {
     );
     const N = _genNonce();
     panel.webview.html = getEaConfigHtml(_cachedPort, N);
+    // ★ 三模块面板 → 扩展宿主消息桥 · 本源观照(①)开侧栏 · 浏览器真SP · 全模目录
+    panel.webview.onDidReceiveMessage((msg) => {
+      try {
+        if (!msg || !msg.type) return;
+        if (msg.type === "focusEssence") {
+          vscode.commands.executeCommand(
+            "workbench.view.extension.dao-container",
+          );
+        } else if (msg.type === "openPreview") {
+          cmdOpenPreview();
+        } else if (msg.type === "modelStatus") {
+          cmdModelUnlockStatus();
+        }
+      } catch (e) {
+        L.warn("eaConfig", `msg handle fail: ${e && e.message}`);
+      }
+    });
     L.info("eaConfig", `webview panel opened · port=${_cachedPort}`);
   } catch (e) {
     L.error("eaConfig", `open fail: ${e.message}`);

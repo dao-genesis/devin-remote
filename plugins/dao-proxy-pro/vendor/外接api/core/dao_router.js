@@ -820,6 +820,12 @@ function init({ log, configPath }) {
           _说明:
             "只路由SWE 1.6 Fast → deepseek · 不在表中→官方透传 · 填apiKey后启用provider",
           routes: {
+            MODEL_SWE_1_6: {
+              provider: "builtin-stub",
+              model: "stub-transport-test",
+              _label: "SWE 1.6 标准版 → 测试通道(固定返回·验证通路)",
+              maxOutputTokens: 4096,
+            },
             MODEL_SWE_1_6_FAST: {
               provider: "deepseek",
               model: "deepseek-reasoner",
