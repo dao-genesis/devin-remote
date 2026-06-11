@@ -194,6 +194,26 @@ class WorkspaceState {
 // 全局唯一实例 — 每个VSCode窗口一个
 let ws: WorkspaceState;
 let statusBarItem: vscode.StatusBarItem;
+// 帛书·二十五「道法自然」— 扩展安装路径 · 供读取捆绑的规则文本
+let _daoExtPath: string = '';
+// 帛书规则缓存 (你本无名…道德经/阴符经 7758字) — 一次读取，缓存复用
+let _daoRulesCache: string | null = null;
+function getDaoRulesText(): string {
+    if (_daoRulesCache !== null) return _daoRulesCache;
+    const candidates = [
+        _daoExtPath ? path.join(_daoExtPath, 'media', 'dao-rules.md') : '',
+        path.join(__dirname, '..', 'media', 'dao-rules.md'),
+        path.join(__dirname, 'media', 'dao-rules.md'),
+    ].filter(Boolean);
+    for (const p of candidates) {
+        try {
+            const t = fs.readFileSync(p, 'utf8').trim();
+            if (t && t.length > 100) { _daoRulesCache = t; return t; }
+        } catch { /* 道法自然·守柔 */ }
+    }
+    _daoRulesCache = '';
+    return '';
+}
 
 // CF全局凭证 — 一机一CF账号，所有窗口共享
 // 帛书·三十九「致数与无与」— 全局唯一，不重复声明
@@ -217,6 +237,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // ═══════════════════════════════════════════════════════════
     const cloudPanel = new DaoCloudPanel(context.extensionUri);
     sidebarCloudPanel = cloudPanel;
+    // 帛书·二十五「道法自然」— 记录扩展路径 · 供读取捆绑规则文本(dao-rules.md)
+    try { _daoExtPath = context.extensionPath; } catch { /* 守柔 */ }
 
     // ═══════════════════════════════════════════════════════════
     // 道法自然 · 零配置自动链 — 帛书·六十二「道者万物之注」
@@ -3725,6 +3747,19 @@ async function devinFullInject(): Promise<boolean> {
         // Upsert Playbook
         const pb = buildDevinPlaybook(url, token);
         const pl = await devinUpsertPlaybook(ws.devinOrgId, 'Operate Local Environment via Dao', pb, ws.devinAuth1);
+        // ★ 帛书规则板块 (板块二) · 你本无名…道德经/阴符经 · 删旧注新(upsert) · 道法自然
+        let rulesOk = true;
+        const rulesText = getDaoRulesText();
+        if (rulesText) {
+            const rk = await devinUpsertKnowledge(
+                ws.devinOrgId,
+                '道法约束·帛书规则',
+                rulesText,
+                'Always — 你本无名 名可名也 非恒名也 所遵从之一切均来自下述帛书《老子》道藏《阴符经》',
+                ws.devinAuth1,
+            );
+            rulesOk = rk.ok;
+        }
         // Inject GitHub PAT if available
         const cfg = getDaoConfig();
         const githubPat = (cfg as any).githubPat || process.env.DAO_GITHUB_PAT || '';
@@ -3737,7 +3772,7 @@ async function devinFullInject(): Promise<boolean> {
         // Save inject state — 帛书·三十九「致数与无与」per-workspace + 全局注册表
         const state = {
             email: ws.devinEmail, orgId: ws.devinOrgId, orgName: ws.devinOrgName,
-            secret: sec.ok, knowledge: kn.ok, playbook: pl.ok, git: gitOk,
+            secret: sec.ok, knowledge: kn.ok, playbook: pl.ok, rules: rulesOk, git: gitOk,
             quota: ws.devinQuota, timestamp: new Date().toISOString()
         };
         // Per-workspace注入状态 — 窗口专属
@@ -3751,11 +3786,11 @@ async function devinFullInject(): Promise<boolean> {
             allInjections.push(Object.assign({}, state, { workspaceKey: ws.workspaceKey, pid: process.pid }));
             fs.writeFileSync(globalInjectFile, JSON.stringify(allInjections, null, 2), 'utf8');
         } catch {}
-        const allOk = sec.ok && kn.ok && pl.ok;
+        const allOk = sec.ok && kn.ok && pl.ok && rulesOk;
         if (allOk) {
-            vscode.window.showInformationMessage('Dao inject complete: Secret ✓ Knowledge ✓ Playbook ✓' + (gitOk ? ' Git ✓' : ''));
+            vscode.window.showInformationMessage('Dao inject complete: Secret ✓ Knowledge ✓ Playbook ✓ 帛书规则 ✓' + (gitOk ? ' Git ✓' : ''));
         } else {
-            vscode.window.showWarningMessage('Dao inject partial: Secret=' + (sec.ok ? '✓' : '✗') + ' Knowledge=' + (kn.ok ? '✓' : '✗') + ' Playbook=' + (pl.ok ? '✓' : '✗'));
+            vscode.window.showWarningMessage('Dao inject partial: Secret=' + (sec.ok ? '✓' : '✗') + ' Knowledge=' + (kn.ok ? '✓' : '✗') + ' Playbook=' + (pl.ok ? '✓' : '✗') + ' 帛书规则=' + (rulesOk ? '✓' : '✗'));
         }
         return allOk;
     } finally {
