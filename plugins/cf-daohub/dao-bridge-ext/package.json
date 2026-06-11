@@ -1,8 +1,8 @@
 {
   "name": "dao-bridge",
-  "displayName": "DAO Bridge · 内网穿透",
-  "description": "专门穿透当前 Devin Desktop 窗口的工作区：随 IDE 启停，登录 Cloudflare 即一键打通，每次启动产出实时 MD 文档供云端 Agent 接入。",
-  "version": "2.1.0",
+  "displayName": "DAO Bridge · 公网穿透",
+  "description": "一键公网穿透：输入 CloudFlare 账号即自动打通整台机器。三模块：实时状态 + 云端Agent接入MD + 本地Agent配置MD。道法自然 · 无为而无不为。",
+  "version": "3.0.0",
   "publisher": "dao",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Other"],
@@ -17,21 +17,24 @@
     },
     "views": {
       "daoBridge": [
-        { "type": "webview", "id": "daoBridgeView", "name": "工作区穿透" }
+        { "type": "webview", "id": "daoBridgeView", "name": "公网穿透" }
       ]
     },
     "commands": [
-      { "command": "daoBridge.restart", "title": "DAO Bridge: 重启工作区隧道" },
-      { "command": "daoBridge.openMd", "title": "DAO Bridge: 打开实时 MD 文档" }
+      { "command": "daoBridge.restart", "title": "DAO Bridge: 重启隧道" },
+      { "command": "daoBridge.openMd", "title": "DAO Bridge: 打开云端Agent接入文档" },
+      { "command": "daoBridge.exportCloudMd", "title": "DAO Bridge: 导出云端Agent MD" },
+      { "command": "daoBridge.exportLocalMd", "title": "DAO Bridge: 导出本地Agent配置MD" }
     ],
     "configuration": {
       "title": "DAO Bridge",
       "properties": {
-        "daoBridge.cloudflaredPath": { "type": "string", "default": "", "description": "cloudflared.exe 路径 (留空则自动探测 ~/.dao/bin、PATH 或自动下载)" },
-        "daoBridge.cfApiToken": { "type": "string", "default": "", "description": "(可选) Cloudflare API Token，用于显示账号信息；quick tunnel 不需要" },
-        "daoBridge.tunnelToken": { "type": "string", "default": "", "description": "(可选) Cloudflare 命名隧道连接器 Token (cloudflared tunnel run --token)。填入后切换为命名隧道·稳定 URL；留空则用临时 quick tunnel。" },
-        "daoBridge.hostname": { "type": "string", "default": "", "description": "(命名隧道) 你在 Cloudflare 面板为该隧道配置的公网主机名（如 dao.example.com），用作稳定公网 URL。" },
-        "daoBridge.localPort": { "type": "number", "default": 0, "description": "(命名隧道) 本地工作区服务固定端口，CF 面板 ingress 需指向 http://127.0.0.1:<此端口>。0 表示随机（仅 quick tunnel 适用）。" }
+        "daoBridge.cloudflaredPath": { "type": "string", "default": "", "description": "cloudflared 路径 (留空自动探测/下载)" },
+        "daoBridge.cfApiToken": { "type": "string", "default": "", "description": "(可选) Cloudflare API Token" },
+        "daoBridge.tunnelToken": { "type": "string", "default": "", "description": "(可选) 命名隧道Token (cloudflared tunnel run --token)。填入后用稳定URL；留空用临时quick tunnel。" },
+        "daoBridge.hostname": { "type": "string", "default": "", "description": "(命名隧道) 公网主机名，如 dao.example.com" },
+        "daoBridge.localPort": { "type": "number", "default": 0, "description": "本地服务固定端口 (0=随机)" },
+        "daoBridge.accessToken": { "type": "string", "default": "", "description": "(可选) 额外访问Token — 本地Agent可用此Token接入" }
       }
     }
   }
