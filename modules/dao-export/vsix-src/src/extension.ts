@@ -148,19 +148,24 @@ export function activate(context: vscode.ExtensionContext) {
             const [info, evts] = await Promise.all([
               api.getSessionInfo(auth, devinId).catch((e) => ({ error: String(e) })),
               (async () => {
-                // Try the stream first, then first-load. Only report a problem if
-                // BOTH fail — silently swallowing both made empty (network) look
-                // identical to empty (no events), the core "no conversation" bug.
-                try {
-                  return await api.getEventStream(auth, devinId);
-                } catch (streamErr) {
+                // Try the stream, then first-load. Fall back on EMPTY too, not just on
+                // a thrown error: a dead/proxied base can return a 200 HTML page that
+                // parses to zero events without throwing. Only when BOTH yield nothing
+                // AND at least one errored do we surface eventsError — silently
+                // swallowing both was the core "no conversation records" bug.
+                let streamErr: unknown; let firstErr: unknown;
+                let evts: api.EventItem[] = [];
+                try { evts = await api.getEventStream(auth, devinId); } catch (e) { streamErr = e; }
+                if (evts.length === 0) {
                   try {
-                    return await api.getFirstLoad(auth, devinId);
-                  } catch (firstErr) {
-                    eventsError = `事件流获取失败: ${String(streamErr)} / 备选 first-load: ${String(firstErr)}`;
-                    return [] as api.EventItem[];
-                  }
+                    const fl = await api.getFirstLoad(auth, devinId);
+                    if (fl.length) { evts = fl; }
+                  } catch (e) { firstErr = e; }
                 }
+                if (evts.length === 0 && (streamErr || firstErr)) {
+                  eventsError = `事件流获取失败: ${streamErr ? String(streamErr) : '返回空'} / first-load: ${firstErr ? String(firstErr) : '返回空'}`;
+                }
+                return evts;
               })(),
             ]);
             const worklog = buildWorklog(session.title || devinId, devinId, evts);

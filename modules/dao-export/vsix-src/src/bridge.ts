@@ -183,17 +183,23 @@ export class AgentBridge {
     }
 
     async function loadEvents(a: api.AuthState, devinId: string): Promise<api.EventItem[]> {
-      // Surface a real error when BOTH endpoints fail, so the bridge returns 500
-      // with the cause instead of a misleading empty 200.
-      try {
-        return await api.getEventStream(a, devinId);
-      } catch (streamErr) {
+      // Fall back on EMPTY too (a dead/proxied base can return 200 HTML → zero
+      // events without throwing). Throw a real error when BOTH yield nothing AND
+      // at least one errored, so the bridge returns 500 with the cause instead of
+      // a misleading empty 200.
+      let streamErr: unknown; let firstErr: unknown;
+      let evts: api.EventItem[] = [];
+      try { evts = await api.getEventStream(a, devinId); } catch (e) { streamErr = e; }
+      if (evts.length === 0) {
         try {
-          return await api.getFirstLoad(a, devinId);
-        } catch (firstErr) {
-          throw new Error(`事件流获取失败: ${String(streamErr)} / 备选 first-load: ${String(firstErr)}`);
-        }
+          const fl = await api.getFirstLoad(a, devinId);
+          if (fl.length) { evts = fl; }
+        } catch (e) { firstErr = e; }
       }
+      if (evts.length === 0 && (streamErr || firstErr)) {
+        throw new Error(`事件流获取失败: ${streamErr ? String(streamErr) : '返回空'} / first-load: ${firstErr ? String(firstErr) : '返回空'}`);
+      }
+      return evts;
     }
   }
 
