@@ -1,0 +1,215 @@
+{
+  "name": "dao-vsix",
+  "displayName": "Dao â€” Workspace as Server",
+  "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
+  "version": "1.0.7",
+  "publisher": "dao",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dao-container",
+          "title": "Dao â€” Workspace as Server",
+          "icon": "media/icon.svg"
+        },
+        {
+          "id": "devin-cloud-container",
+          "title": "Devin Cloud",
+          "icon": "media/devin-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "dao-container": [],
+      "devin-cloud-container": [
+        {
+          "id": "dao.cloudPanel",
+          "name": "Devin Cloud",
+          "type": "webview"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "dao.cloudPanel",
+        "contents": "Devin Cloud Panel is starting..."
+      }
+    ],
+    "configuration": {
+      "title": "Dao",
+      "properties": {
+        "dao.port": {
+          "type": "number",
+          "default": 9920,
+          "description": "Base port for HTTP server (auto-increment if occupied)"
+        },
+        "dao.token": {
+          "type": "string",
+          "default": "",
+          "description": "Auth token (auto-generated if empty)"
+        },
+        "dao.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-start server on activation"
+        },
+        "dao.autoTunnel": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-start CF Tunnel if cloudflared found"
+        },
+        "dao.autoDownload": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-download cloudflared if not found"
+        },
+        "dao.githubPat": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub PAT for Gist auto-update (optional)"
+        },
+        "dao.gistId": {
+          "type": "string",
+          "default": "",
+          "description": "Gist ID for connection info auto-update (optional)"
+        },
+        "dao.relayUrl": {
+          "type": "string",
+          "default": "",
+          "description": "WebSocket relay URL(s), comma-separated"
+        },
+        "dao.autoBridge": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-connect WebSocket relay bridge on server start"
+        },
+        "dao.devinAutoSync": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-sync Windsurf credentials to Devin Cloud on startup"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "dao.startServer",
+        "title": "Dao: Start Server"
+      },
+      {
+        "command": "dao.stopServer",
+        "title": "Dao: Stop Server"
+      },
+      {
+        "command": "dao.showPort",
+        "title": "Dao: Show Port & URL"
+      },
+      {
+        "command": "dao.showInfo",
+        "title": "Dao: Show Workspace Info"
+      },
+      {
+        "command": "dao.copyConnection",
+        "title": "Dao: Copy Connection Info"
+      },
+      {
+        "command": "dao.regenerateToken",
+        "title": "Dao: Regenerate Token"
+      },
+      {
+        "command": "dao.cfLogin",
+        "title": "Dao: Cloudflare Login & Deploy Relay"
+      },
+      {
+        "command": "dao.cfDeploy",
+        "title": "Dao: Deploy Cloudflare Relay"
+      },
+      {
+        "command": "dao.devinLogin",
+        "title": "Dao: Login Devin Cloud"
+      },
+      {
+        "command": "dao.devinInject",
+        "title": "Dao: Auto-Inject to Devin Cloud"
+      },
+      {
+        "command": "dao.devinQuota",
+        "title": "Dao: Refresh Devin Quota"
+      },
+      {
+        "command": "dao.devinGitConnect",
+        "title": "Dao: Connect GitHub PAT to Devin"
+      },
+      {
+        "command": "dao.devinSessionCreate",
+        "title": "Dao: Create Devin Session"
+      },
+      {
+        "command": "dao.devinLogout",
+        "title": "Dao: Logout Devin Cloud"
+      },
+      {
+        "command": "dao.devinWindsurfAutoLogin",
+        "title": "Dao: Windsurf Auto-Login to Devin Cloud"
+      },
+      {
+        "command": "dao.devinCloudBrowser",
+        "title": "Dao: Devin Cloud Browser"
+      },
+      {
+        "command": "dao.devinCloudPanel",
+        "title": "Dao: Devin Cloud Embedded Panel"
+      },
+      {
+        "command": "dao.openDashboard",
+        "title": "Dao: Open Dashboard"
+      },
+      {
+        "command": "dao.openCloudPanel",
+        "title": "Dao: Open Devin Cloud Panel"
+      },
+      {
+        "command": "dao.toggleCloudPanel",
+        "title": "Dao: Toggle Devin Cloud Panel"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "dao.openDashboard",
+          "when": "true"
+        },
+        {
+          "command": "dao.toggleCloudPanel",
+          "when": "true"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node ./build.js",
+    "compile": "node ./build.js"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^3.9.2",
+    "sucrase": "^3.35.1",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

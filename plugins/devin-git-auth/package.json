@@ -1,0 +1,46 @@
+{
+  "name": "devin-git-auth",
+  "displayName": "Devin Git Auth",
+  "description": "Devin AI GitHub authentication manager · 道法自然 · 无为而无不为",
+  "version": "2.0.0",
+  "publisher": "devaid",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["AI", "Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "devin-git-container",
+          "title": "Git Auth",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "devin-git-container": [
+        {
+          "id": "devin-git.panel",
+          "name": "GitHub Auth",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "devin-git.openPanel",
+        "title": "Open Git Auth Panel",
+        "category": "Devin Git"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhouyoukang/windsurf-assistant.git"
+  }
+}

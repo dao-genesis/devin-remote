@@ -1,0 +1,36 @@
+{
+  "name": "dao-bridge",
+  "displayName": "DAO Bridge · 内网穿透",
+  "description": "通过 Cloudflare workers.dev 中继打通本地/内网机器：exec/ls/read/write/info 全链路。登录 Cloudflare 账号即可一键连通。",
+  "version": "1.0.0",
+  "publisher": "dao",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onView:daoBridgeView", "onStartupFinished"],
+  "main": "./extension.js",
+  "repository": { "type": "git", "url": "https://github.com/zhouyoukang/dao-bridge" },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "daoBridge", "title": "DAO Bridge", "icon": "media/icon.svg" }
+      ]
+    },
+    "views": {
+      "daoBridge": [
+        { "type": "webview", "id": "daoBridgeView", "name": "内网穿透" }
+      ]
+    },
+    "commands": [
+      { "command": "daoBridge.refresh", "title": "DAO Bridge: 刷新连接状态" },
+      { "command": "daoBridge.exec", "title": "DAO Bridge: 远程执行命令" }
+    ],
+    "configuration": {
+      "title": "DAO Bridge",
+      "properties": {
+        "daoBridge.relayUrl": { "type": "string", "default": "https://dao-relay-do.zhouyoukang.workers.dev", "description": "Cloudflare Worker 中继 URL" },
+        "daoBridge.session": { "type": "string", "default": "141", "description": "目标会话/主机标识" },
+        "daoBridge.token": { "type": "string", "default": "", "description": "中继鉴权 token (Bearer)" }
+      }
+    }
+  }
+}

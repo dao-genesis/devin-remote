@@ -1,0 +1,14 @@
+{
+  "name": "dao-bridge-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "dao-bridge standalone backend: outbound WS bridge to Cloudflare Worker+DurableObject relay, stable *.workers.dev reachability for a local machine.",
+  "main": "agent.js",
+  "scripts": {
+    "start": "node agent.js"
+  },
+  "dependencies": {
+    "https-proxy-agent": "^7.0.5",
+    "ws": "^8.18.0"
+  }
+}
