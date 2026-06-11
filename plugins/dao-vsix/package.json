@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -100,6 +100,31 @@
           "type": "boolean",
           "default": true,
           "description": "Auto-sync Windsurf credentials to Devin Cloud on startup"
+        },
+        "dao.accountSyncMode": {
+          "type": "string",
+          "enum": ["auto", "manual"],
+          "enumDescriptions": [
+            "自动: 面板账号实时跟随 IDE(Windsurf) 当前登录账号",
+            "手动: 不跟随 IDE, 由用户自行登录指定账号(账号对不上时用)"
+          ],
+          "default": "auto",
+          "description": "账号同步模式 — 自动实时同源 IDE 账号 / 手动自控 (守柔, 保留操作空间)"
+        },
+        "dao.websiteLoginMode": {
+          "type": "string",
+          "enum": ["auto", "manual"],
+          "enumDescriptions": [
+            "自动: 路由官网时深层注入 auth1 自动登录对应账号",
+            "手动: 不注入, 打开官网后由用户自行登录"
+          ],
+          "default": "auto",
+          "description": "路由官网登录模式 — 自动深层注入登录 / 手动登录 (守柔, 保留操作空间)"
+        },
+        "dao.injectAutoCleanup": {
+          "type": "boolean",
+          "default": true,
+          "description": "自动注入自循环: 切换账号时, 默认自动清理旧账号 org 的旧注入 (关闭则保留)"
         }
       }
     },
