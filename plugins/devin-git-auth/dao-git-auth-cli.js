@@ -43,6 +43,14 @@ if (!dao) {
   process.exit(1);
 }
 
+// ═══ 换登引擎 — engine/runSwitch.js 提供纯API的「断旧→登录→装App移绑」闭环 ═══
+// 道法自然·取之尽珠玉: 复刻 Devin 官网「Continue with GitHub」OAuth + GitHub App
+// installation-callback 的规范路径。它走的是官网同一条链路, 故天然不撞「already
+// registered」后端幽灵态——这正是设备码/PAT 注入路径此前无法突破的根因。
+var engine = null, _engErr = "";
+try { engine = require(path.join(__dirname, "engine", "runSwitch.js")); }
+catch (e) { _engErr = e.message; }
+
 // ═══ 状态持久化 ═══
 var STATE_FILE = path.join(os.homedir(), ".devin-git-auth.json");
 
@@ -459,6 +467,82 @@ function updateConnectState(email, cred, git, gitType, secret) {
   saveState(state);
 }
 
+// ═══ 命令5: switch-git · 反者道之动 · 纯API换登闭环(突破 already registered 幽灵态) ═══
+// 既得其母以知其子: Devin 账号定 org, GitHub 工作区账号定要归一连接的那一个 Git。
+// 引擎顺序: 并行[断开上次会话旧连接] + [登录 Devin] → 装 GitHub App 到 org(可移动抢绑)。
+async function cmdSwitchGit(opts) {
+  if (!engine || !engine.runSwitch) {
+    log("换登引擎不可用: " + (_engErr || "engine/runSwitch.js 缺失"), "err");
+    log("回退建议: 改用 connect-git --auto-approve(设备码路径)。", "warn");
+    process.exit(1);
+  }
+  // Devin 登录账号: 显式 --email/--password, 否则取 ~/.dao/accounts.json 首个。
+  var email = opts.email, password = opts.password;
+  if (!email || !password) {
+    try {
+      var aj = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".dao", "accounts.json"), "utf8"));
+      var a0 = (aj.accounts || aj)[0];
+      if (a0) { email = email || a0.email; password = password || a0.password; }
+    } catch (e) {}
+  }
+  if (!email || !password) { log("缺少 Devin 登录凭证(--email/--password 或 ~/.dao/accounts.json)", "err"); process.exit(1); }
+
+  // GitHub 工作区账号(要归一连接的那一个 Git): --gh-user/... 或 ~/.dao/github-creds.json。
+  var gh = loadGithubCreds(opts);
+  var workspace = gh ? { username: gh.user, password: gh.pass, totp: gh.totp } : undefined;
+  if (!workspace) log("未提供 GitHub 工作区账号, 仅登录 Devin(不连 Git)。如需连接请给 --gh-user/--gh-pass/--gh-totp", "warn");
+
+  // prevSession: 上次换登落盘的会话, 用于「先断旧连接」。
+  var st = loadState();
+  var prevSession = st.lastSession && st.lastSession.token ? st.lastSession : undefined;
+  if (prevSession) log("检测到上次会话(org=" + prevSession.orgId + "), 将先断开其旧 GitHub 连接");
+
+  var proxy = "";
+  if (opts.proxy) proxy = opts.proxy.indexOf("://") >= 0 ? opts.proxy : "http://" + opts.proxy;
+
+  log("switch-git 启动 — Devin=" + email + (workspace ? " · GitHub工作区=" + workspace.username : "") + (opts.org ? " · org=" + opts.org : ""));
+
+  var params = {
+    devinUrl: opts["devin-url"] || "https://app.devin.ai",
+    username: email,
+    password: password,
+    totp: opts["devin-totp"] || "",
+    org: opts.org || "",
+    proxy: proxy,
+    insecureTLS: !!(opts.insecure || opts["insecure-tls"]),
+    prevSession: prevSession,
+    workspace: workspace,
+    githubCookies: (st.lastSession && st.lastSession.github_cookies) || {},
+  };
+
+  var result = await new Promise(function (resolve) {
+    var handle = engine.runSwitch(params, function (ev) {
+      if (ev.type === "log") { console.log("   " + ev.msg); }
+      else if (ev.type === "result") { resolve(ev); }
+    });
+    handle.done.then(function (r) { if (r) resolve(r); }).catch(function (e) { resolve({ success: false, error: String(e) }); });
+  });
+
+  if (result.success) {
+    log("换登成功 — user_id=" + result.user_id + " org=" + (result.org_name || result.org_id), "ok");
+    if (result.github_connected) {
+      log("GitHub 已连接: " + result.github_connected_name + " (可见 " + result.github_repo_count + " 个仓库)", "ok");
+    } else if (workspace) {
+      log("Devin 登录成功但 GitHub 未连接: " + (result.error || "(无详情)"), "warn");
+    }
+    // 落盘本次会话, 供下次 switch-git 先断旧连接(闭环·自循环)。
+    st.lastSession = {
+      token: result.token, orgId: result.org_id, orgName: result.org_name,
+      workspaceGithub: result.github_connected_name || (workspace && workspace.username) || "",
+      github_cookies: result.github_cookies || {},
+    };
+    saveState(st);
+  } else {
+    log("换登失败: " + (result.error || "未知"), "err");
+    process.exitCode = 2;
+  }
+}
+
 // ═══ 帮助 ═══
 function showHelp() {
   console.log([
@@ -474,6 +558,7 @@ function showHelp() {
     "  read-status      读取当前Git连接+Secret状态",
     "  disconnect-git   健壮断开所有Git连接+OAuth",
     "  connect-git      多层策略连接Git (PAT→App→URL)",
+    "  switch-git       纯API换登闭环: 断旧→登录Devin→装GitHub App(移动抢绑, 突破 already-registered 幽灵态) ★推荐",
     "  full-auto        全自动: 读状态→断开→连接",
     "",
     "选项:",
@@ -485,8 +570,12 @@ function showHelp() {
     "  --auto-approve   经既有 Chrome(CDP) 自动填设备码并授权",
     "  --cdp URL        Chrome CDP 端点 (默认 http://localhost:29229)",
     "  --gh-user/--gh-pass/--gh-totp  GitHub 登录凭证(留空则读 ~/.dao/github-creds.json 或用浏览器既有登录)",
+    "  --org NAME       switch-git: 绑定目标 org(留空默认用 GitHub 工作区账号名)",
+    "  --devin-totp S   switch-git: Devin 账号若开启 2FA 的 TOTP 密钥",
+    "  --insecure       switch-git: 关闭 TLS 校验(自签/拦截代理兜底)",
     "",
     "示例:",
+    "  node dao-git-auth-cli.js switch-git --email a@b.com --password xxx --gh-user u --gh-pass p --gh-totp SECRET",
     "  node dao-git-auth-cli.js read-status --email a@b.com --password xxx",
     "  node dao-git-auth-cli.js connect-git --email a@b.com --password xxx --pat ghp_xxx",
     "  node dao-git-auth-cli.js connect-git --email a@b.com --password xxx --auto-approve",
@@ -526,6 +615,9 @@ async function main() {
       break;
     case "connect-git":
       await cmdConnectGit(opts);
+      break;
+    case "switch-git":
+      await cmdSwitchGit(opts);
       break;
     case "full-auto":
       await cmdFullAuto(opts);
