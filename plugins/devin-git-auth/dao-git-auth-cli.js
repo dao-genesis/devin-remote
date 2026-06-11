@@ -26,15 +26,20 @@ var path = require("path");
 var os = require("os");
 
 // ═══ 核心依赖 — dao-auth.js 提供认证链和注入API ═══
-var DAO_AUTH_PATH = process.env.DAO_AUTH_PATH ||
-  path.join(__dirname, "..", "网页端", "core", "dao-auth.js");
-var dao;
-try {
-  dao = require(DAO_AUTH_PATH);
-} catch (e) {
-  console.error("✗ 无法加载 dao-auth.js: " + e.message);
-  console.error("  请确保路径正确: " + DAO_AUTH_PATH);
-  console.error("  或设置环境变量 DAO_AUTH_PATH");
+// 既得其母, 以知其子: 优先同目录(自洽随包), 回退历史路径/环境变量。
+var DAO_AUTH_CANDIDATES = [
+  process.env.DAO_AUTH_PATH,
+  path.join(__dirname, "dao-auth.js"),
+  path.join(__dirname, "..", "网页端", "core", "dao-auth.js"),
+].filter(Boolean);
+var dao = null, _daoErr = "";
+for (var _ci = 0; _ci < DAO_AUTH_CANDIDATES.length; _ci++) {
+  try { dao = require(DAO_AUTH_CANDIDATES[_ci]); break; }
+  catch (e) { _daoErr = e.message; }
+}
+if (!dao) {
+  console.error("✗ 无法加载 dao-auth.js: " + _daoErr);
+  console.error("  尝试路径: " + DAO_AUTH_CANDIDATES.join(", "));
   process.exit(1);
 }
 
@@ -79,6 +84,39 @@ function log(msg, type) {
 }
 
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+// ═══ 设备码自动批准 — 取之尽珠玉 · 经既有 Chrome CDP 自动填码授权 ═══
+// 凭证优先级: 显式 --gh-user/--gh-pass/--gh-totp > ~/.dao/github-creds.json 首个账号。
+// 若浏览器已登录目标 GitHub, 则无需凭证(多 Devin 归一 Git 时仅首次登录一次)。
+function loadGithubCreds(opts) {
+  if (opts["gh-user"] && opts["gh-pass"]) {
+    return { user: opts["gh-user"], pass: opts["gh-pass"], totp: opts["gh-totp"] || "" };
+  }
+  try {
+    var p = path.join(os.homedir(), ".dao", "github-creds.json");
+    var j = JSON.parse(fs.readFileSync(p, "utf8"));
+    var arr = Array.isArray(j) ? j : (j.accounts || Object.values(j));
+    var a = arr && arr[0];
+    if (a) return { user: a.username || a.user || a.login || a.email, pass: a.password || a.pass, totp: a.totp || a.totpSecret || a.otp_secret || "" };
+  } catch (e) {}
+  return null;
+}
+function autoApproveDevice(userCode, opts) {
+  return new Promise(function (resolve) {
+    var cp = require("child_process");
+    var approver = path.join(__dirname, "..", "..", "tools", "gh-approve", "approve.js");
+    if (!fs.existsSync(approver)) { log("自动批准器缺失: " + approver, "warn"); return resolve(false); }
+    var args = [approver, "--code", userCode];
+    var cdp = opts.cdp || process.env.DAO_CDP || "http://localhost:29229";
+    args.push("--cdp", cdp);
+    var creds = loadGithubCreds(opts);
+    if (creds) { args.push("--gh-user", creds.user, "--gh-pass", creds.pass); if (creds.totp) args.push("--gh-totp", creds.totp); }
+    log("自动批准设备码(CDP " + cdp + ")...");
+    var child = cp.spawn(process.execPath, args, { stdio: ["ignore", "inherit", "inherit"] });
+    child.on("close", function (code) { resolve(code === 0); });
+    child.on("error", function (e) { log("批准器异常: " + e.message, "warn"); resolve(false); });
+  });
+}
 
 // ═══ 认证 — 两步得一 ═══
 async function getCredentials(email, password) {
@@ -269,6 +307,10 @@ async function cmdConnectGit(opts) {
     log("设备码: " + userCode, "ok");
     log("请在浏览器中打开: " + verifyUri, "warn");
     log("输入设备码: " + userCode, "warn");
+    // 无为而无不为: --auto-approve 经既有 Chrome 自动填码授权(多 Devin 归一 Git)
+    if (opts["auto-approve"]) {
+      try { await autoApproveDevice(userCode, opts); } catch (e) { log("自动批准失败, 转人工: " + e.message, "warn"); }
+    }
     log("等待验证(每" + interval + "秒轮询, 最多3分钟)...");
 
     var maxPolls = Math.floor(180 / interval);
@@ -288,11 +330,23 @@ async function cmdConnectGit(opts) {
             return;
           }
           if (stR.json.error && stR.json.error !== null) {
-            log("gh_cli错误: " + stR.json.error, "err");
-            if (String(stR.json.error).indexOf("expired") >= 0) {
+            var errStr = String(stR.json.error);
+            if (errStr.indexOf("expired") >= 0) {
+              log("gh_cli错误: " + errStr, "err");
               log("设备码过期, 请重新运行", "warn");
               return;
             }
+            // 守柔·知止: "already registered" 为 Devin 后端 org 级幽灵记录,
+            // 经实测 OAuth断开/连接删除/PAT删除/GitHub App卸载/各DELETE端点均无法清除。
+            // 不再空轮3分钟刷屏, 即时如实降级并给出可行建议。
+            if (errStr.toLowerCase().indexOf("already registered") >= 0) {
+              log("gh_cli错误: " + errStr, "err");
+              log("该 org 后端存在不可经API清除的 GitHub 集成幽灵态(git-connections 为空但仍判定已注册)。", "warn");
+              log("浏览器侧授权已成功, 但 Devin 后端拒绝二次注册。建议: 改用全新 Devin org, 或联系 Devin 后端清除该 org 的 github 集成记录。", "warn");
+              return;
+            }
+            // 其它错误: 仅首次打印, 避免刷屏
+            if (pi === 0 || pi % 6 === 0) log("gh_cli错误: " + errStr, "err");
           }
         }
       } catch (e) {}
@@ -428,10 +482,14 @@ function showHelp() {
     "  --pat GHP_PAT    GitHub PAT (connect-git用)",
     "  --proxy H:P      代理地址 (默认读DAO_PROXY_HOST/PORT)",
     "  --no-proxy       禁用代理",
+    "  --auto-approve   经既有 Chrome(CDP) 自动填设备码并授权",
+    "  --cdp URL        Chrome CDP 端点 (默认 http://localhost:29229)",
+    "  --gh-user/--gh-pass/--gh-totp  GitHub 登录凭证(留空则读 ~/.dao/github-creds.json 或用浏览器既有登录)",
     "",
     "示例:",
     "  node dao-git-auth-cli.js read-status --email a@b.com --password xxx",
     "  node dao-git-auth-cli.js connect-git --email a@b.com --password xxx --pat ghp_xxx",
+    "  node dao-git-auth-cli.js connect-git --email a@b.com --password xxx --auto-approve",
     "  node dao-git-auth-cli.js full-auto --email a@b.com --password xxx --pat ghp_xxx",
     "",
   ].join("\n"));

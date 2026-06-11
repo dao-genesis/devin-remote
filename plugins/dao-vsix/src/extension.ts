@@ -1857,10 +1857,10 @@ function sw(t){
         v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗'}[t]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations'}[t]+'</h3><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
         cmd('loadTabData',{tab:t});
       } else {
-        // ★ 没有cog_ key → 显示创建API Key引导
+        // ★ 无 auth1 (仅 session-token) → 底层自动获取凭证, 用户无需手动 API Key
         const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations'};
         const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗'};
-        v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[t]||'🌐')+'</div><h3>'+tabNames[t]+'</h3><p style="margin:8px 0;color:var(--warn);font-size:13px">⚠ 需要 Devin API Key (cog_) 才能在此面板显示数据</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6;margin-bottom:12px">当前认证方式 (devin-session-token$) 仅对 Codeium API 有效，Devin API 返回 403。需要创建 cog_ 前缀的 API Key。</p><div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:12px;margin:8px 0;text-align:left;font-size:11px;line-height:1.6"><div style="color:var(--accent);font-weight:600;margin-bottom:6px">📋 创建 API Key 步骤：</div><div style="color:var(--fg)">1. 打开 <a href="#" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;});return false" style="color:var(--accent)">app.devin.ai/settings</a></div><div style="color:var(--fg)">2. 点击 <b>Service Users</b></div><div style="color:var(--fg)">3. 点击 <b>Create Service User</b></div><div style="color:var(--fg)">4. 选择 <b>Member</b> 角色</div><div style="color:var(--fg)">5. 点击 <b>Generate API Key</b></div><div style="color:var(--fg)">6. 复制 cog_ 开头的 Key</div></div><div style="margin-top:8px"><input id="cogKeyInput" type="password" placeholder="粘贴 cog_ API Key..." style="width:100%;padding:6px 10px;background:var(--input);color:var(--input-fg);border:1px solid var(--input-border);border-radius:4px;font-size:12px;box-sizing:border-box"></div><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="submitCogKey()">🔑 设置 API Key</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;})">🌐 打开 Settings</button></div></div>';
+        v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[t]||'🌐')+'</div><h3>'+tabNames[t]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6;margin-bottom:12px">账号凭证将随 IDE 登录状态自动同步, 无需手动操作。若长时间未就绪, 可重试自动登录或手动切换账号。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
       }
     }
   }
@@ -1902,7 +1902,7 @@ function rO(){
     const i=S.inject;
     ih='<div class="st">注入状态</div><div class="card"><div class="cr"><span class="l"><span class="tag secret">S</span> Secret</span><span class="v" style="color:'+(i.secret?'var(--success)':'var(--danger)')+'">'+(i.secret?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag knowledge">K</span> Knowledge</span><span class="v" style="color:'+(i.knowledge?'var(--success)':'var(--danger)')+'">'+(i.knowledge?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag playbook">P</span> Playbook</span><span class="v" style="color:'+(i.playbook?'var(--success)':'var(--danger)')+'">'+(i.playbook?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag git">G</span> Git</span><span class="v" style="color:'+(i.git?'var(--success)':'var(--danger)')+'">'+(i.git?'✓':'✗')+'</span></div></div>';
   }
-  v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+(S.auth.canUseApi?'':qh?'':'<div class="st">Devin API Key</div><div class="card"><p style="font-size:11px;color:var(--warn);margin-bottom:8px">⚠ 当前认证 (devin-session-token$) 仅对 Codeium API 有效，Devin API 返回 403。</p><p style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5">需要 cog_ 前缀的 API Key 才能在此面板显示 Sessions、Knowledge 等数据。</p><div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;font-size:11px;line-height:1.5"><div style="color:var(--accent);font-weight:600;margin-bottom:4px">📋 创建 API Key 步骤：</div><div style="color:var(--fg)">1. 打开 <a href="#" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;});return false" style="color:var(--accent)">app.devin.ai/settings</a></div><div style="color:var(--fg)">2. 点击 <b>Service Users</b></div><div style="color:var(--fg)">3. <b>Create Service User</b> → 选择 <b>Member</b></div><div style="color:var(--fg)">4. 点击 <b>Generate API Key</b></div><div style="color:var(--fg)">5. 复制 <b>cog_</b> 开头的 Key</div></div><input id="cogKeyInput3" type="password" placeholder="粘贴 cog_ API Key..." style="width:100%;padding:6px 10px;background:var(--input);color:var(--input-fg);border:1px solid var(--input-border);border-radius:4px;font-size:12px;box-sizing:border-box;margin-bottom:8px"><div class="br"><button class="btn primary" onclick="submitCogKey3()">🔑 设置 API Key</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;})">🌐 打开 Settings</button></div></div>')+qh+ih+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
+  v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+ih+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
   try{v.innerHTML+=rBridge();}catch(e){}
 }
 function rBridge(){
@@ -1931,7 +1931,7 @@ function rT(tab,items,err,fallbackProxy){
     const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗'};
     if(err==='需要 cog_ API Key'||fallbackProxy){
       // ★ 需要cog_ key — 显示创建引导
-      v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--warn);font-size:13px">⚠ 需要 Devin API Key (cog_) 才能加载 '+tabNames[tab]+'</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6">当前认证 (devin-session-token$) 仅对 Codeium API 有效。Devin API 需要 cog_ 前缀的 API Key。</p><div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;margin:8px 0;text-align:left;font-size:11px;line-height:1.5"><div style="color:var(--accent);font-weight:600;margin-bottom:4px">📋 创建步骤：</div><div>1. 打开 <a href="#" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;});return false" style="color:var(--accent)">app.devin.ai/settings</a> → Service Users</div><div>2. Create Service User → Member → Generate API Key</div><div>3. 复制 cog_ 开头的 Key</div></div><div style="margin-top:8px"><input id="cogKeyInput2" type="password" placeholder="粘贴 cog_ API Key..." style="width:100%;padding:5px 8px;background:var(--input);color:var(--input-fg);border:1px solid var(--input-border);border-radius:4px;font-size:12px;box-sizing:border-box"></div><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="submitCogKey2()">🔑 设置 API Key</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;})">🌐 打开 Settings</button></div></div>';
+      v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6">账号凭证随 IDE 登录状态自动同步, 无需手动 API Key。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
     } else {
       // 其他错误
       v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--danger);font-size:12px">Error: '+esc(err||'Unknown')+'</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳ 重试</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 在 Devin Cloud 中打开</button></div></div>';
@@ -2211,6 +2211,31 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 if (ok) { vscode.window.showInformationMessage('Devin Cloud 自动登录成功'); await devinFullInject(); sidebarCloudPanel?.refresh(); }
                 else vscode.window.showErrorMessage('自动登录失败');
                 refreshReply({ type: 'actionResult', command: 'devinWindsurfAutoLogin', ok });
+                break;
+            }
+            case 'devinAutoAcquire': {
+                // 道法自然 · 底层自动获取凭证 — 重跑自动链 + 自动补全 cog_ key, 用户无需 API Key
+                let ok = await devinAutoChain();
+                if (ok && ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$')) {
+                    try { await devinEnsureCogApiKey(ws.devinOrgId, ws.devinAuth1); } catch {}
+                }
+                if (ok) { vscode.window.showInformationMessage('Devin Cloud 凭证已自动获取'); await devinFullInject(); sidebarCloudPanel?.refresh(); }
+                else vscode.window.showWarningMessage('未能自动获取凭证 — 账号池可能缺少当前 IDE 登录邮箱的密码, 可手动登录');
+                refreshReply({ type: 'actionResult', command: 'devinAutoAcquire', ok });
+                break;
+            }
+            case 'devinManualLogin': {
+                // 保留用户操作空间 — 手动登录其他账户
+                vscode.window.showInputBox({ prompt: 'Devin Cloud Email (手动登录)', placeHolder: 'user@example.com' }).then(email => {
+                    if (!email) return;
+                    vscode.window.showInputBox({ prompt: 'Devin Cloud Password', password: true }).then(async pw => {
+                        if (!pw) return;
+                        const r = await devinLogin(email, pw);
+                        if (r.ok) { vscode.window.showInformationMessage('手动登录成功 (' + email + ')'); await devinFullInject(); sidebarCloudPanel?.refresh(); }
+                        else vscode.window.showErrorMessage('手动登录失败: ' + (r.error || ''));
+                        refreshReply({ type: 'actionResult', command: 'devinManualLogin', ok: r.ok });
+                    });
+                });
                 break;
             }
             case 'devinLogout': {
@@ -2962,6 +2987,8 @@ async function devinLogin(email: string, password: string, retryCount?: number):
     ws.devinUserId = userId || j2.userId || '';  // user-XXX — 路由官网注入 auth1_session.userId
     ws.devinQuota = quota;
     ws.devinSaveConfig();
+    // 底层自动获取 cog_ API Key — 用户无为, 系统无不为
+    if (!apiKey.startsWith('cog_')) { try { await devinEnsureCogApiKey(orgId, auth1); } catch {} }
     // ws即唯一真源 — 无需同步
     return { ok: true, auth1, userId };
 }
@@ -2969,6 +2996,35 @@ async function devinLogin(email: string, password: string, retryCount?: number):
 function devinSaveConfig() {
     // 帛书·三十九「致数与无与」— 委托WorkspaceState持久化
     ws.saveState();
+}
+
+// ═══════════════════════════════════════════════════════════
+// 道法自然 · cog_ API Key 底层自动获取 — 帛书·「为而弗恃·长而弗宰」
+// 用户永不需手动创建/粘贴 API Key: 持 auth1 直接经 service-users 端点
+// 自动生成一枚 cog_ 服务密钥 (角色 member), 落盘复用。无为而无不为。
+// POST /api/organizations/{org}/service-users {name, role} → {token: "cog_..."}
+// ═══════════════════════════════════════════════════════════
+async function devinEnsureCogApiKey(orgId: string, auth1: string): Promise<string> {
+    // 已有 cog_ 则直接复用 — 知止不殆
+    if ((ws.devinApiKey || '').startsWith('cog_')) return ws.devinApiKey;
+    if (!orgId || !auth1) return '';
+    try {
+        // 先查现有服务用户 — 若曾自建过则尝试复用(避免无限增生)
+        const name = 'dao-auto';
+        const r = await devinJsonPost(DEVIN_APP + '/api/organizations/' + orgId + '/service-users',
+            { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId, 'Content-Type': 'application/json' },
+            { name, role: 'member' });
+        if (r.status === 200 || r.status === 201) {
+            const j = r.json || {};
+            const tok = j.token || j.api_key || j.apiKey || '';
+            if (tok && tok.startsWith('cog_')) {
+                ws.devinApiKey = tok;
+                ws.devinSaveConfig();
+                return tok;
+            }
+        }
+    } catch { /* 守柔 · 降级 auth1 */ }
+    return '';
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -3092,6 +3148,10 @@ async function devinAutoChain(): Promise<boolean> {
             const quota = await devinFetchQuota(ws.devinApiKey || ws.devinAuth1);
             if (quota) {
                 ws.devinQuota = quota;
+                // 底层补全 cog_ key — 持久凭证恢复后亦自动获取
+                if (ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$') && !(ws.devinApiKey || '').startsWith('cog_')) {
+                    try { await devinEnsureCogApiKey(ws.devinOrgId, ws.devinAuth1); } catch {}
+                }
                 return true;
             }
             // Token expired → 清除，尝试其他路径
@@ -4533,6 +4593,8 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
 
                         // 注入认证桥接脚本 — 帛书·五十二「见小曰明·守柔曰强」
                         // 无为而无以为: 自动注入Cookie → Devin SPA自动识别登录态
+                        // 守柔: 仅当持真 auth1_ 令牌时注入; session-token 注入会污染 auth1_session → 反致登录态崩坏
+                        const injA1 = (ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$')) ? ws.devinAuth1 : '';
                         const authBridge = `<script>
 // Dao Auth Bridge — 帛书·五十二「见小曰明·守柔曰强」
 // 自动注入认证到Devin页面 — 无为而无以为
@@ -4542,7 +4604,7 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
     //    经真机抓取确认: Devin SPA 的登录态唯一真源是 localStorage['auth1_session']
     //    = {"token":"auth1_...","userId":"user-..."}  — SPA 据此判定已登录, 否则跳转 /auth/login
     //    一并注入 org 相关键, 免去二次解析跳转。
-    var __a1 = '${ws.devinAuth1}';
+    var __a1 = '${injA1}';
     var __uid = '${ws.devinUserId}';
     var __org = '${ws.devinOrgId}';
     if (__a1) {
@@ -4567,7 +4629,7 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
       var newUrl = url.split('https://app.devin.ai').join('');
       opts = opts || {};
       if (needAuthHdr(newUrl) && typeof opts.headers === 'object' && opts.headers && !Array.isArray(opts.headers)) {
-        if (!opts.headers['Authorization']) opts.headers['Authorization'] = 'Bearer ${ws.devinAuth1}';
+        if (!opts.headers['Authorization']) opts.headers['Authorization'] = 'Bearer ${injA1}';
         if (!opts.headers['x-cog-org-id']) opts.headers['x-cog-org-id'] = '${ws.devinOrgId}';
       }
       return origFetch.call(this, newUrl, opts);
@@ -4577,12 +4639,12 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
       // XHR.open 方法显式传入, 不会丢失; 仅改写绝对 app.devin.ai → 根路径
       var newUrl = (typeof url === 'string') ? url.split('https://app.devin.ai').join('') : url;
       var result = origXHR.apply(this, [method, newUrl].concat(Array.prototype.slice.call(arguments, 2)));
-      if (needAuthHdr(newUrl)) { try { this.setRequestHeader('Authorization', 'Bearer ${ws.devinAuth1}'); this.setRequestHeader('x-cog-org-id', '${ws.devinOrgId}'); } catch(e) {} }
+      if (needAuthHdr(newUrl)) { try { this.setRequestHeader('Authorization', 'Bearer ${injA1}'); this.setRequestHeader('x-cog-org-id', '${ws.devinOrgId}'); } catch(e) {} }
       return result;
     };
     // 4. postMessage通信 — 与父窗口(IDE)同步状态
     if (window.parent !== window) {
-      window.parent.postMessage({type:'dao-auth',auth1:'${ws.devinAuth1}',orgId:'${ws.devinOrgId}',email:'${ws.devinEmail}'}, '*');
+      window.parent.postMessage({type:'dao-auth',auth1:'${injA1}',orgId:'${ws.devinOrgId}',email:'${ws.devinEmail}'}, '*');
     }
     // 5. 通知父窗口加载成功
     if (window.parent !== window) {
