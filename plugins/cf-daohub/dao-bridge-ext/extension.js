@@ -44,8 +44,14 @@ function findCloudflared(ctx) {
   for (const c of cloudflaredCandidates(ctx)) {
     try { if (c.indexOf(path.sep) >= 0 && fs.existsSync(c)) return c; } catch (e) {}
   }
-  // PATH 兜底：直接返回名字，spawn 时由系统解析
-  return "cloudflared.exe";
+  // PATH 探测：cp.spawn 对缺失二进制只异步 emit 'error' 不抛同步异常，故必须
+  // 先确认 PATH 上确有 cloudflared，否则返回空串让调用方走下载兜底（道法自然·先察而后动）。
+  try {
+    const probe = process.platform === "win32" ? "where cloudflared" : "command -v cloudflared";
+    const out = cp.execSync(probe, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(/\r?\n/)[0];
+    if (out && fs.existsSync(out)) return out;
+  } catch (e) {}
+  return "";
 }
 function downloadCloudflared() {
   return new Promise((resolve) => {
@@ -103,7 +109,7 @@ class WorkspaceServer {
     this.server = null;
     this.port = 0;
   }
-  start() {
+  start(fixedPort) {
     return new Promise((resolve, reject) => {
       const ws = workspaceInfo();
       const auth = (req) => {
@@ -157,7 +163,8 @@ class WorkspaceServer {
         });
       });
       this.server.on("error", reject);
-      this.server.listen(0, "127.0.0.1", () => { this.port = this.server.address().port; resolve(this.port); });
+      // 命名隧道需固定本地端口（CF 面板 ingress 指向固定端口）；quick tunnel 用随机端口。
+      this.server.listen(fixedPort || 0, "127.0.0.1", () => { this.port = this.server.address().port; resolve(this.port); });
     });
   }
   stop() { try { this.server && this.server.close(); } catch (e) {} this.server = null; }
@@ -175,34 +182,63 @@ class Bridge {
     this.startedAt = null;
     this.onUpdate = null;
     this.lastErr = "";
+    this.mode = "quick";   // quick(临时 *.trycloudflare.com) | named(命名隧道·稳定 URL)
+    this._retried = false;
   }
   mdPath() { return path.join(daoDir(), "workspace.md"); }
   connPath() { return path.join(daoDir(), "conn.json"); }
 
   async start() {
     this.startedAt = new Date();
-    const port = await this.srv.start();
-    const bin = findCloudflared(this.ctx);
+    this._retried = false;
+    const cfg = vscode.workspace.getConfiguration("daoBridge");
+    const tunnelToken = String(cfg.get("tunnelToken") || "").trim();
+    const hostname = String(cfg.get("hostname") || "").trim();
+    const fixedPort = parseInt(cfg.get("localPort"), 10) || 0;
+    this.mode = tunnelToken ? "named" : "quick";
+    const port = await this.srv.start(this.mode === "named" ? fixedPort : 0);
+
+    // cloudflared 定位：磁盘 → PATH → 缺失则下载兜底。
+    // 关键修复：旧版直接把缺失二进制名交给 spawn，缺失时只异步 emit 'error'，
+    // 同步 try/catch 形同虚设、下载兜底永不触发（全新 VM 上隧道永远起不来）。
+    let bin = findCloudflared(this.ctx);
+    if (!bin) { this.lastErr = "cloudflared 缺失，正在下载…"; this.notify(); bin = await downloadCloudflared(); }
+    if (!bin) { this.lastErr = "cloudflared 不可用（PATH 探测 + 下载均失败）"; this.writeArtifacts(); this.notify(); return ""; }
+
     // --protocol http2：QUIC/UDP 被防火墙拦截的网络下仍可打通 (避免边缘 1033)
-    const args = ["tunnel", "--no-autoupdate", "--protocol", "http2", "--url", "http://127.0.0.1:" + port];
+    const args = this.mode === "named"
+      ? ["tunnel", "--no-autoupdate", "--protocol", "http2", "run", "--token", tunnelToken]  // 命名隧道：稳定 URL（ingress 在 CF 面板配置指向 http://127.0.0.1:<localPort>）
+      : ["tunnel", "--no-autoupdate", "--protocol", "http2", "--url", "http://127.0.0.1:" + port]; // quick tunnel：临时 *.trycloudflare.com
+
+    // 命名隧道无法从输出解析公网 URL（由面板 ingress 决定）→ 用配置的 hostname 作稳定 URL。
+    if (this.mode === "named" && hostname) this.url = /^https?:\/\//.test(hostname) ? hostname : ("https://" + hostname);
+
     let started = () => {};
     const ready = new Promise((r) => (started = r));
     const spawnIt = (binPath) => {
       this.proc = cp.spawn(binPath, args, { windowsHide: true });
       const onData = (buf) => {
         const s = buf.toString();
-        const m = s.match(TRY_RE);
-        if (m && !this.url) { this.url = m[0]; this.writeArtifacts(); this.notify(); started(); }
+        if (this.mode === "named") {
+          // 命名隧道：连接注册日志即视为就绪（公网 URL = 配置 hostname）
+          if (/Registered tunnel connection|Connection [0-9a-f-]+ registered/i.test(s)) { this.writeArtifacts(); this.notify(); started(); }
+        } else {
+          const m = s.match(TRY_RE);
+          if (m && !this.url) { this.url = m[0]; this.writeArtifacts(); this.notify(); started(); }
+        }
       };
       this.proc.stdout.on("data", onData);
       this.proc.stderr.on("data", onData);
-      this.proc.on("error", (e) => { this.lastErr = String(e && e.message); this.notify(); });
-      this.proc.on("exit", () => { this.url = ""; this.notify(); });
+      this.proc.on("error", async (e) => {
+        this.lastErr = String(e && e.message);
+        // spawn 失败兜底：尝试下载一次再 spawn（异步 error 路径）
+        if (!this._retried) { this._retried = true; const dl = await downloadCloudflared(); if (dl) { spawnIt(dl); return; } }
+        this.notify();
+      });
+      this.proc.on("exit", () => { if (this.mode !== "named") this.url = ""; this.notify(); });
     };
-    try { spawnIt(bin); } catch (e) {
-      const dl = await downloadCloudflared();
-      if (dl) spawnIt(dl); else { this.lastErr = "cloudflared 不可用"; }
-    }
+    spawnIt(bin);
+
     // 写一次初始 MD (即使 URL 未就绪，先记录工作区)
     this.writeArtifacts();
     // 最多等 25s 拿 URL
@@ -214,7 +250,7 @@ class Bridge {
 
   notify() { try { this.onUpdate && this.onUpdate(this.state()); } catch (e) {} }
   state() {
-    return { url: this.url, port: this.srv.port, token: this.srv.token, ws: workspaceInfo(), startedAt: this.startedAt, lastErr: this.lastErr, mdPath: this.mdPath() };
+    return { url: this.url, port: this.srv.port, token: this.srv.token, ws: workspaceInfo(), startedAt: this.startedAt, lastErr: this.lastErr, mdPath: this.mdPath(), mode: this.mode };
   }
 
   // 删旧注新：每次启动覆盖写单一 MD + conn.json
@@ -232,9 +268,12 @@ class Bridge {
       "URL:   " + (this.url || "(隧道启动中…)"),
       "Token: " + this.srv.token,
       "Auth:  Authorization: Bearer <Token>",
+      "Mode:  " + (this.mode === "named" ? "named (命名隧道·稳定 URL)" : "quick (临时 URL)"),
       "```",
       "",
-      "_Quick Tunnel URL 每次启动会变化；始终以本文档最新值为准。_",
+      (this.mode === "named"
+        ? "_命名隧道：URL 由你 Cloudflare 账号的 ingress 决定，稳定不变。_"
+        : "_Quick Tunnel URL 每次启动会变化；始终以本文档最新值为准。_"),
       "",
       "## 工作区信息",
       "",
