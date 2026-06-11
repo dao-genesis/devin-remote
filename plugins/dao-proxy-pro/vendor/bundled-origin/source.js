@@ -3490,6 +3490,17 @@ function handleControl(req, res) {
     const cfg = _eaRuntimeMod ? _eaRuntimeMod.hotGetConfig() : {};
     const providers = cfg.providers || {};
     const safe = {};
+    // ★ v9.9.265 · 测试通道(builtin-stub) · 内置外接首项 · 固定返回·验证通路
+    //   道德经 八十一章「信言不美」· 不接外网, 返固定帧, 证 proxy→router 通路已打通
+    safe["builtin-stub"] = {
+      _builtin: true,
+      _label: "测试通道",
+      type: "mock",
+      baseUrl: "(内置·固定返回·验证通路)",
+      models: ["stub-transport-test"],
+      enabled: true,
+      apiKey: "(无需)",
+    };
     for (const [name, p] of Object.entries(providers)) {
       safe[name] = Object.assign({}, p);
       if (safe[name].apiKey)
@@ -3504,6 +3515,7 @@ function handleControl(req, res) {
         ok: true,
         available_models: models, // ★ v9.9.94 · 替代 seen_models
         seen_models: models, // 兼容旧前端
+        official_families: _getOfficialFamilies(), // ★ v9.9.265 · 左侧全量官方·档位归一
         providers: safe,
         routes,
         route_count: Object.keys(routes).length,
@@ -3854,6 +3866,51 @@ function _loadFullModelCatalog() {
     log(`[model-unlock] 目录加载失败: ${e.message}`);
     return null;
   }
+}
+
+// ★ v9.9.265 · 档位归一 · 朴散则为器,圣人用则为官长,夫大制无割
+//   左侧官方模型按「家族」归一: 一族一项(同 Cascade 顶层显示),
+//   去 Low/Medium/High/Thinking 等二级档位 · 各档 modelUid 全收于 members
+//   供前端连线: 选一族 → 路由全族各档 modelUid · 利而不害
+function _getOfficialFamilies() {
+  const cat = _fullModelCatalog || _loadFullModelCatalog();
+  if (!cat || !cat.length) return [];
+  const fams = new Map(); // key → family
+  const order = [];
+  for (const m of cat) {
+    const mi = m.modelInfo || {};
+    const fmeta = m.modelFamilyMetadata || {};
+    const fu = mi.modelFamilyUid || null;
+    let label = fmeta.modelFamilyLabel || null;
+    // 无家族标签者(如 adaptive) 独立成项, 用自身 label · 不与他者混并
+    const key = fu || ("__solo__" + (m.modelUid || m.label));
+    if (!label) label = m.label || m.modelUid || key;
+    if (!fams.has(key)) {
+      fams.set(key, {
+        familyUid: fu || key,
+        label,
+        provider: m.provider || mi.provider || "",
+        isRecommended: !!m.isRecommended,
+        isNew: !!m.isNew,
+        members: [],
+      });
+      order.push(key);
+    }
+    const fam = fams.get(key);
+    // 档位名: 整 label 去掉家族前缀 → 余下即档位(Medium/Low Thinking...)
+    let tier = String(m.label || "");
+    if (label && tier.indexOf(label) === 0)
+      tier = tier.slice(label.length).trim();
+    fam.members.push({
+      modelUid: m.modelUid,
+      label: m.label,
+      tier: tier || "base",
+      isDefault: !!m.isDefaultModelInFamily,
+    });
+    if (m.isRecommended) fam.isRecommended = true;
+    if (m.isNew) fam.isNew = true;
+  }
+  return order.map((k) => fams.get(k));
 }
 
 function _isModelUnlockEnabled() {

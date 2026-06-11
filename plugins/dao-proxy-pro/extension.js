@@ -3150,8 +3150,51 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
         if (!_eaWireMap[norm]) _eaWireMap[norm] = _eaWireMap[ruid];
       }
     }
-    // ── LEFT: 本机模型 ──
+    // ── LEFT: 官方模型 · v9.9.265 · 档位归一(一族一项,同 Cascade 顶层) ──
     $eaLeft.innerHTML = '';
+    _eaTierGroups = {};
+    var _fams = d.official_families || [];
+    if (_fams.length > 0) {
+      if ($eaLeftCount) $eaLeftCount.textContent = _fams.length;
+      function _provLabel(p){p=String(p||'').replace(/^MODEL_PROVIDER_/,'');var M={ANTHROPIC:'Claude',OPENAI:'GPT',GOOGLE:'Gemini',WINDSURF:'Windsurf',XAI:'Grok',DEEPSEEK:'DeepSeek',MOONSHOT:'Kimi',MOONSHOT_AI:'Kimi',FIREWORKS:'Fireworks',ZHIPU:'GLM',ZHIPU_AI:'GLM',MINIMAX:'Minimax'};return M[p]||(p?p.charAt(0)+p.slice(1).toLowerCase():'Other');}
+      var _pg = {}, _po = [];
+      _fams.forEach(function(f){var pl=_provLabel(f.provider);if(!_pg[pl]){_pg[pl]=[];_po.push(pl);}_pg[pl].push(f);});
+      _po.forEach(function(pl){
+        var list = _pg[pl];
+        var fe=document.createElement('div');fe.className='ea-family';fe.textContent=pl+' ('+list.length+')';$eaLeft.appendChild(fe);
+        list.forEach(function(f){
+          var uids = f.members.map(function(mm){return mm.modelUid;}).filter(Boolean);
+          var defMember = f.members.filter(function(mm){return mm.isDefault;})[0] || f.members[0];
+          var primary = (defMember && defMember.modelUid) || uids[0] || f.familyUid;
+          _eaTierGroups[primary] = uids;
+          var wiredUids = uids.filter(function(u){return !!_eaWireMap[u];});
+          var isWired = wiredUids.length > 0;
+          var isPending = _eaSelLeft===primary && _eaSelRight;
+          var el=document.createElement('div');
+          el.className='ea-model'+(isWired?' wired':'')+(isPending?' wire-pending':'')+(_eaSelLeft===primary&&!isPending?' sel':'');
+          el.setAttribute('data-uid', primary);
+          el.setAttribute('data-uids', uids.join(','));
+          var dot=document.createElement('span');dot.className='ea-route-dot'+(isWired?'':' off');el.appendChild(dot);
+          var txt=document.createElement('span');txt.textContent=f.label;txt.style.flex='1 1 auto';txt.style.overflow='hidden';txt.style.textOverflow='ellipsis';el.appendChild(txt);
+          if(f.members.length>1){var tb=document.createElement('span');tb.className='ea-tier-fold';tb.textContent='\u00d7'+f.members.length;tb.title=f.members.map(function(mm){return (mm.tier||'base')+(_eaWireMap[mm.modelUid]?' \u2713':'');}).join(' \u00b7 ');el.appendChild(tb);}
+          if(f.isNew){var nb=document.createElement('span');nb.className='ea-status-badge new';nb.textContent='N';nb.title='New';el.appendChild(nb);}
+          if(f.isRecommended){var rb=document.createElement('span');rb.className='ea-status-badge recommended';rb.textContent='\u2714';rb.title='Recommended';el.appendChild(rb);}
+          if(isWired){var wb=document.createElement('span');wb.className='ea-wire-badge';wb.textContent='\u2713'+(f.members.length>1?wiredUids.length+'/'+f.members.length:'');wb.title='\u5df2\u8fde\u7ebf '+wiredUids.length+'/'+f.members.length;el.appendChild(wb);}
+          el.title=f.label+(f.members.length>1?' \u00b7 '+f.members.length+'\u6863':'')+(isWired?' \u00b7 \u5df2\u8fde\u7ebf':'');
+          el.addEventListener('click',function(){
+            var uid=this.getAttribute('data-uid');
+            var gUids=(this.getAttribute('data-uids')||uid).split(',').filter(Boolean);
+            var wired=gUids.filter(function(u){return !!_eaWireMap[u];});
+            if(wired.length>0){if(confirm('\u65ad\u5f00 '+f.label+' \u5168\u90e8'+wired.length+'\u6761\u8def\u7531?')){Promise.all(wired.map(function(u){return fDel('/origin/ea/route/'+encodeURIComponent(u));})).then(function(){_eaSelLeft=null;eaLoad();$eaInfo.textContent='\u2716 \u5df2\u65ad\u5f00 '+wired.length+'\u6761';});}return;}
+            if(_eaSelLeft===uid){_eaSelLeft=null;eaRender();return;}
+            _eaSelLeft=uid;
+            if(_eaSelRight){eaAutoConnect();}else{eaRender();}
+          });
+          $eaLeft.appendChild(el);
+        });
+      });
+    } else {
+    // ── 回退: 旧 seen 模型源 (catalog 未就绪时) ──
     var models = d.available_models || d.seen_models || [];
     if ($eaLeftCount) $eaLeftCount.textContent = models.length ? models.length : '';
     if (models.length === 0) {
@@ -3206,16 +3249,18 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
         });
       });
     }
+    }
     // ── RIGHT: 外接模型 ──
     $eaRight.innerHTML = '';
     var providers=d.providers||{}, hasRight=false;
     var rightModels = [];
     for(var pn in providers){var p=providers[pn];
       var pMods = p.models || p._models;
+      var pDisp = (p && p._label) ? p._label : pn;
       if(pMods&&pMods.length>0){pMods.forEach(function(mn){
         var key=pn+'/'+mn, wiredUid=null;
         for(var u in _eaWireMap){if(_eaWireMap[u].rightKey===key){wiredUid=u;break;}}
-        rightModels.push({key:key,prov:pn,model:mn,wiredUid:wiredUid});
+        rightModels.push({key:key,prov:pn,provDisp:pDisp,model:mn,wiredUid:wiredUid});
       });}
     }
     if ($eaRightCount) $eaRightCount.textContent = rightModels.length ? rightModels.length : '';
@@ -3231,8 +3276,8 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
         var dot=document.createElement('span');dot.className='ea-route-dot'+(isWired?'':' off');el.appendChild(dot);
         var txt=document.createElement('span');txt.textContent=rm.model;txt.style.flex='1 1 auto';txt.style.overflow='hidden';txt.style.textOverflow='ellipsis';el.appendChild(txt);
         if(isWired){var wb=document.createElement('span');wb.className='ea-wire-badge';wb.textContent='\u2713';wb.title='\u5df2\u8fde\u7ebf(\u70b9\u51fb\u65ad\u5f00)';el.appendChild(wb);}
-        var provTag=document.createElement('span');provTag.className='ea-prov-tag';provTag.textContent=rm.prov;el.appendChild(provTag);
-        el.title=rm.prov+'/'+rm.model+(isWired?' \u00b7 \u5df2\u8fde\u7ebf':'');
+        var provTag=document.createElement('span');provTag.className='ea-prov-tag';provTag.textContent=rm.provDisp;el.appendChild(provTag);
+        el.title=rm.provDisp+'/'+rm.model+(isWired?' \u00b7 \u5df2\u8fde\u7ebf':'');
         el.addEventListener('click',function(){
           var key=this.getAttribute('data-key');
           // ★ v9.9.98 · 点击已连线右侧模型 → 断线
@@ -3249,6 +3294,7 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
     // ── provider list ──
     $eaProvList.innerHTML='';
     for(var pn in providers){var p=providers[pn];
+      if(p&&p._builtin)continue; // 测试通道为内置·不可编辑/删除
       var pi=document.createElement('div');pi.className='ea-prov-item';
       pi.innerHTML='<span class="ea-prov-name">'+pn+'</span><span class="ea-prov-url">'+(p.baseUrl||'')+'</span><span class="ea-edit-prov" data-prov="'+pn+'" title="\u7f16\u8f91" style="cursor:pointer;opacity:0.6;margin-right:4px">\u270e</span><span class="ea-del-prov" data-prov="'+pn+'">\u2716</span>';
       $eaProvList.appendChild(pi);
@@ -3284,6 +3330,12 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
     {n:'Anthropic',t:'anthropic',u:'https://api.anthropic.com',m:'claude-sonnet-4-6, claude-opus-4-6'},
     {n:'Gemini',t:'openai',u:'https://generativelanguage.googleapis.com/v1beta/openai',m:'gemini-2.5-pro, gemini-2.5-flash'},
     {n:'xAI Grok',t:'openai',u:'https://api.x.ai/v1',m:'grok-3-mini'},
+    {n:'Volcengine \u706b\u5c71',t:'openai',u:'https://ark.cn-beijing.volces.com/api/v3',m:'deepseek-v3-250324'},
+    {n:'Z.AI Coding',t:'openai',u:'https://api.z.ai/api/coding/paas/v4',m:'glm-4.6'},
+    {n:'Novita',t:'openai',u:'https://api.novita.ai/openai',m:'deepseek/deepseek-v3'},
+    {n:'NVIDIA NIM',t:'openai',u:'https://integrate.api.nvidia.com/v1',m:'deepseek-ai/deepseek-r1'},
+    {n:'StepFun \u9636\u8dc3',t:'openai',u:'https://api.stepfun.com/v1',m:'step-2-16k'},
+    {n:'TheRouter',t:'openai',u:'https://api.therouter.ai/v1',m:'deepseek-v3'},
     {n:'NewAPI/\u81ea\u5efa',t:'custom',u:'',m:''}
   ];
   var $eaPPreset = document.getElementById('eaPPreset');
