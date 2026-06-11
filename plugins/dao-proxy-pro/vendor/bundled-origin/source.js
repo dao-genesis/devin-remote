@@ -3516,6 +3516,9 @@ function handleControl(req, res) {
         available_models: models, // ★ v9.9.94 · 替代 seen_models
         seen_models: models, // 兼容旧前端
         official_families: _getOfficialFamilies(), // ★ v9.9.265 · 左侧全量官方·档位归一
+        families_source: _officialFamiliesSource(), // ★ v9.9.270 · live=右侧实捕·static=静态目录
+        live_models_at: _liveModelCapture.at || 0,
+        live_models_count: (_liveModelCapture.models || []).length,
         providers: safe,
         routes,
         route_count: Object.keys(routes).length,
@@ -3523,6 +3526,50 @@ function handleControl(req, res) {
         ea_running: _ea ? _ea.isRunning() : false,
       }),
     );
+    return true;
+  }
+
+  // ★ v9.9.270 · GET /origin/ea/live-models · 活捕调试 · 右侧 Cascade 实捕模型项
+  //   含原始候选串(raw) 供校验启发析名是否准 · 道法自然·实时映射
+  if (u.pathname === "/origin/ea/live-models" && req.method === "GET") {
+    res.end(
+      JSON.stringify({
+        ok: true,
+        source: _officialFamiliesSource(),
+        at: _liveModelCapture.at || 0,
+        calls: _liveModelCapture.calls || 0,
+        model_count: (_liveModelCapture.models || []).length,
+        family_count: (_liveModelCapture.families || []).length,
+        models: (_liveModelCapture.models || []).map((m) => ({
+          uid: m.uid,
+          label: m.label,
+          familyUid: m.familyUid,
+          familyLabel: m.familyLabel,
+        })),
+        families: _liveModelCapture.families || [],
+        raw: _liveModelCapture.raw || [],
+      }),
+    );
+    return true;
+  }
+
+  // ★ v9.9.270 · GET /origin/ea/handoff.md · 实时交接指挥文档 (Markdown)
+  //   交给运行中的官方/任意 Agent · 照此热推进·热修改·热配置一切
+  //   内容: 当前状态(渠道/路由/模型源) + 全量热配置 API + curl 范例
+  //   道法自然: 太上下知有之 · 底层全开放 · Agent 可辅助用户配置一切
+  if (u.pathname === "/origin/ea/handoff.md" && req.method === "GET") {
+    let md = "";
+    try {
+      md = _buildHandoffMd();
+    } catch (e) {
+      md = "# dao-proxy-pro · 交接文档生成失败\n\n" + (e && e.message);
+    }
+    res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="dao-proxy-pro-handoff.md"',
+    );
+    res.end(md);
     return true;
   }
 
@@ -3872,7 +3919,149 @@ function _loadFullModelCatalog() {
 //   左侧官方模型按「家族」归一: 一族一项(同 Cascade 顶层显示),
 //   去 Low/Medium/High/Thinking 等二级档位 · 各档 modelUid 全收于 members
 //   供前端连线: 选一族 → 路由全族各档 modelUid · 利而不害
+// ★ v9.9.270 · 活捕优先: 右侧 Cascade 实捕模型项(<10min) → 真·1:1 实时映射
+//   无活捕(IDE 未触发 GetUserStatus) 则退回静态目录 · 利而不害
+function _officialFamiliesSource() {
+  const fresh =
+    _liveModelCapture &&
+    _liveModelCapture.families &&
+    _liveModelCapture.families.length > 0 &&
+    Date.now() - _liveModelCapture.at < 30 * 60 * 1000;
+  return fresh ? "live" : "static";
+}
+// ★ v9.9.270 · 生成实时交接指挥文档 (Markdown) · 供官方/任意 Agent 热配置
+function _buildHandoffMd() {
+  const cfg = _eaRuntimeMod ? _eaRuntimeMod.hotGetConfig() : {};
+  const providers = (cfg && cfg.providers) || {};
+  const routes = (cfg && cfg.daoRoutes && cfg.daoRoutes.routes) || {};
+  const fams = _getOfficialFamilies();
+  const src = _officialFamiliesSource();
+  const now = new Date().toISOString();
+  const L = [];
+  L.push("# dao-proxy-pro · 实时交接指挥文档 (Agent Handoff)");
+  L.push("");
+  L.push("> 道法自然 · 无为而无不为 · 本插件运行于设备内部, 全部能力对 Agent 开放.");
+  L.push("> 把本文件交给运行中的官方/任意 Agent, 它即可照此**热推进·热修改·热配置**路由与渠道, 无需重启.");
+  L.push("");
+  L.push("- 生成时间: `" + now + "`");
+  L.push("- 控制面 Base URL: `http://127.0.0.1:8937`");
+  L.push("- 模型源: `" + src + "` (live=右侧 Cascade 实时捕获 / static=内置目录)");
+  L.push(
+    "- 官方家族数: `" +
+      (fams ? fams.length : 0) +
+      "` · 实捕模型数: `" +
+      ((_liveModelCapture.models || []).length) +
+      "`",
+  );
+  L.push("");
+  L.push("## 一、当前渠道 (providers)");
+  L.push("");
+  L.push("| 名称 | 启用 | 协议 | baseUrl | 模型 |");
+  L.push("| --- | --- | --- | --- | --- |");
+  for (const [name, p] of Object.entries(providers)) {
+    L.push(
+      "| `" +
+        name +
+        "` | " +
+        (p.enabled ? "✓" : "✗") +
+        " | " +
+        (p.protocol || p.type || "auto") +
+        " | " +
+        (p.baseUrl || "") +
+        " | " +
+        ((p.models || []).join(", ") || "-") +
+        " |",
+    );
+  }
+  L.push("");
+  L.push("## 二、当前路由 (routes · 官方模型 → 渠道)");
+  L.push("");
+  L.push("| 官方模型 UID | → 渠道 | → 渠道模型 | 备注 |");
+  L.push("| --- | --- | --- | --- |");
+  for (const [uid, r] of Object.entries(routes)) {
+    if (uid.startsWith("_")) continue;
+    L.push(
+      "| `" +
+        uid +
+        "` | `" +
+        (r.provider || "") +
+        "` | `" +
+        (r.model || "") +
+        "` | " +
+        (r._label || "") +
+        " |",
+    );
+  }
+  L.push("");
+  L.push("## 三、热配置 API (Agent 可直接调用 · 即时生效·不重启)");
+  L.push("");
+  L.push("### 读取");
+  L.push("- `GET /origin/ea/overview` — 一站式: 官方家族 + 渠道 + 路由 + 模型源");
+  L.push("- `GET /origin/ea/live-models` — 右侧 Cascade 实捕模型 (含原始候选串, 校验用)");
+  L.push("- `GET /origin/ea/config` — 完整配置 · `GET /origin/ea/routes` · `GET /origin/ea/providers`");
+  L.push("- `GET /origin/ea/handoff.md` — 本文件 (实时刷新)");
+  L.push("");
+  L.push("### 热配渠道");
+  L.push("```bash");
+  L.push("# 新增/更新渠道 (apiKey 填入即启用)");
+  L.push('curl -X POST http://127.0.0.1:8937/origin/ea/provider \\');
+  L.push("  -H 'Content-Type: application/json' \\");
+  L.push(
+    "  -d '" +
+      JSON.stringify({
+        name: "freemodel",
+        config: {
+          enabled: true,
+          apiKey: "fe_oa_***",
+          baseUrl: "https://cc.freemodel.dev",
+          models: ["claude-sonnet-4", "deepseek-v3"],
+          type: "openai-compatible",
+          protocol: "openai-chat",
+        },
+      }) +
+      "'",
+  );
+  L.push("# 删除渠道");
+  L.push("curl -X DELETE http://127.0.0.1:8937/origin/ea/provider/freemodel");
+  L.push("```");
+  L.push("");
+  L.push("### 热配路由 (官方模型 → 渠道)");
+  L.push("```bash");
+  L.push('curl -X POST http://127.0.0.1:8937/origin/ea/route \\');
+  L.push("  -H 'Content-Type: application/json' \\");
+  L.push(
+    "  -d '" +
+      JSON.stringify({
+        modelUid: "MODEL_SWE_1_6_FAST",
+        route: {
+          provider: "freemodel",
+          model: "deepseek-v3",
+          maxOutputTokens: 32768,
+          thinkingEnabled: true,
+        },
+      }) +
+      "'",
+  );
+  L.push("# 删除路由");
+  L.push("curl -X DELETE http://127.0.0.1:8937/origin/ea/route/MODEL_SWE_1_6_FAST");
+  L.push("```");
+  L.push("");
+  L.push("### 其他");
+  L.push("- `POST /origin/ea/config` — 批量写配置 (body 为完整 config 对象)");
+  L.push("- `POST /origin/ea/reload` — 重载配置 · `POST /origin/ea/probe` — 探活渠道");
+  L.push("- `POST /origin/ea/test-chat` — 冒烟测试某渠道连通性");
+  L.push("");
+  L.push("## 四、两条基础默认连线");
+  L.push("1. `MODEL_SWE_1_6` (SWE 1.6 基础版) → `builtin-stub` 测试通道 (固定返回·验证通路)");
+  L.push("2. `MODEL_SWE_1_6_FAST` (SWE 1.6 Fast) → 外接首项 (默认 `deepseek`, 填 key 后生效)");
+  L.push("");
+  L.push("---");
+  L.push("_本文件由 /origin/ea/handoff.md 实时生成 · 反映插件当前真实状态 · v9.9.270_");
+  return L.join("\n");
+}
+
 function _getOfficialFamilies() {
+  if (_officialFamiliesSource() === "live") return _liveModelCapture.families;
   const cat = _fullModelCatalog || _loadFullModelCatalog();
   if (!cat || !cat.length) return [];
   const fams = new Map(); // key → family
@@ -4076,7 +4265,16 @@ function _pbDropProBadge(buf, stats) {
         continue; // 损之 · 去 Pro 锁
       }
       // ★ v9.9.264 · 模型项(含徽标者) → 去 field4 Pro锁 + 去徽标 · 否则常规递归
-      const newsub = _pbIsModelEntry(sub)
+      const _isModel = _pbIsModelEntry(sub);
+      // ★ v9.9.270 · 活捕: 模型项真名 → 实时映射右侧 Cascade 可选模型
+      if (_isModel) {
+        try {
+          stats.models = stats.models || [];
+          const meta = _pbExtractModelEntry(sub);
+          if (meta) stats.models.push(meta);
+        } catch {}
+      }
+      const newsub = _isModel
         ? _pbStripModelEntry(sub, stats)
         : _pbParseOk(sub) && sub.length > 0
           ? _pbDropProBadge(sub, stats)
@@ -4095,15 +4293,249 @@ function _pbDropProBadge(buf, stats) {
   }
   return Buffer.concat(out);
 }
+// ═══════════════════════════════════════════════════════════
+// ★ v9.9.270 · 真·1:1 · 实时映射右侧 Cascade 可选模型
+//   GetUserStatus 解锁同一遍 · 顺手捕获每个"模型项"的真名(uid/label/family)
+//   → _liveModelCapture · _getOfficialFamilies 优先取活捕(无则退静态目录)
+//   道法自然: 右侧能选什么 · 左侧就映什么 · 实时更新·无为而无不为
+// ═══════════════════════════════════════════════════════════
+let _liveModelCapture = { at: 0, calls: 0, models: [], families: [], raw: [] };
+
+// 从模型项 proto buffer 递归收集所有可打印字符串(带 field/depth) · field 字段无关·靠模式判型
+function _pbCollectStrings(buf, depth, acc) {
+  let i = 0;
+  const n = buf.length;
+  try {
+    while (i < n) {
+      let tag;
+      [tag, i] = _pbReadVarint(buf, i);
+      const field = tag >> 3;
+      const wt = tag & 7;
+      if (wt === 0) {
+        let v;
+        [v, i] = _pbReadVarint(buf, i);
+        acc.push({ field, depth, num: v });
+      } else if (wt === 2) {
+        let ln;
+        [ln, i] = _pbReadVarint(buf, i);
+        const sub = buf.slice(i, i + ln);
+        i += ln;
+        if (field === 33) continue; // 去 Pro 徽标文案 · 不入候选
+        const s = sub.toString("utf8");
+        const printable = ln > 0 && ln < 200 && /^[\x20-\x7e]+$/.test(s);
+        if (printable) acc.push({ field, depth, s });
+        else if (depth < 4 && ln > 1 && _pbParseOk(sub))
+          _pbCollectStrings(sub, depth + 1, acc);
+      } else if (wt === 5) i += 4;
+      else if (wt === 1) i += 8;
+      else return;
+    }
+  } catch {}
+}
+
+// uid 形: 小写·含连字/点·含数字 (claude-opus-4-7-medium / kimi-k2-6)
+const _UID_RE = /^[a-z0-9]+([-.][a-z0-9]+)+$/;
+function _looksLikeEnumOrUrl(s) {
+  return (
+    s.indexOf("://") >= 0 ||
+    /^MODEL_/.test(s) ||
+    /_(TYPE|PROVIDER|TIER|PRICING|STATUS|OPTION|SPECIAL|CREDIT)_?/.test(s) ||
+    /^[A-Z][A-Z0-9_]{3,}$/.test(s)
+  );
+}
+// 单从模型项 buffer 析出 {uid,label,familyUid,familyLabel} · 启发式·宽容
+function _pbExtractModelEntry(buf) {
+  const acc = [];
+  _pbCollectStrings(buf, 0, acc);
+  const strs = acc.filter((x) => typeof x.s === "string");
+  let uid = null,
+    famUid = null,
+    label = null,
+    famLabel = null;
+  // uid: 浅层·连字形·含数字·无点 (modelUid 用连字 claude-opus-4-7-medium)
+  for (const x of strs) {
+    if (
+      x.depth <= 1 &&
+      _UID_RE.test(x.s) &&
+      /[0-9]/.test(x.s) &&
+      x.s.indexOf(".") < 0 &&
+      !uid
+    )
+      uid = x.s;
+  }
+  // familyUid: uid 形且为 modelUid 之前缀(归一点/连字后) · 或含点形 · 短于 modelUid
+  //   ★ v9.9.271 · 取最具体族形: 优先含点(规范族 gpt-5.5/claude-opus-4.8), 再取最长前缀
+  //   (弃"首个前缀"旧法, 否则 gpt-5.5/5.2/5.1 误并入 gpt-5)
+  const _nu = (s) => String(s || "").replace(/\./g, "-").toLowerCase();
+  {
+    let bestScore = -1;
+    for (const x of strs) {
+      const s = x.s;
+      if (!_UID_RE.test(s) || s === uid) continue;
+      const ns = _nu(s);
+      const isPrefix = uid && _nu(uid).indexOf(ns) === 0 && ns.length < _nu(uid).length;
+      if (!isPrefix && s.indexOf(".") < 0) continue;
+      const score = ns.length + (s.indexOf(".") >= 0 ? 1000 : 0); // 含点优先 · 再比长
+      if (score > bestScore) {
+        bestScore = score;
+        famUid = s;
+      }
+    }
+  }
+  // label / familyLabel: 人读串(有空格或含大写+数字) · 非枚举·非 uid·非 harness 词
+  const humans = strs
+    .map((x) => x.s)
+    .filter(
+      (s) =>
+        /[A-Za-z]/.test(s) &&
+        !_looksLikeEnumOrUrl(s) &&
+        !_UID_RE.test(s) &&
+        !/^[a-z]+(-[a-z]+)+$/.test(s) && // harness 词 strawberry-pancake
+        (/\s/.test(s) || /[A-Z].*[0-9]/.test(s) || /[a-z][A-Z]/.test(s)),
+    );
+  // ★ v9.9.271 · 名实归一: 真档名(Claude Opus 4.8 Medium)归一后 === modelUid;
+  //   族名(Claude Opus 4.8)归一后 === familyUid · 故以 uid 为锚选人读串,
+  //   弃"最长串"之旧法(它会误取 UI 提示 "Higher effort consumes more tokens" 等长句)
+  const _normLbl = (s) =>
+    String(s || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  // token 多重集: 容词序之异(uid claude-5-fable ↔ 显名 Claude Fable 5)
+  const _toks = (s) => _normLbl(s).split("-").filter(Boolean);
+  const _subMulti = (a, b) => {
+    const m = Object.create(null);
+    for (const t of b) m[t] = (m[t] || 0) + 1;
+    for (const t of a) {
+      if (!m[t]) return false;
+      m[t]--;
+    }
+    return true;
+  };
+  // 以 uid token 集为锚, 取"token 超集且额外最少"之人读串 = 规范全显名
+  const _pickByUid = (anchor) => {
+    if (!anchor) return null;
+    const at = _toks(anchor);
+    if (!at.length) return null;
+    const ms = humans.filter((h) => _subMulti(at, _toks(h)));
+    ms.sort((a, b) => _toks(a).length - _toks(b).length);
+    return ms[0] || null;
+  };
+  // label: 整档显名(Claude Opus 4.8 Medium / GPT-5.5 Low Thinking)
+  label = _pickByUid(uid);
+  // familyLabel: 族显名(Claude Opus 4.8 / Claude Fable 5 / GPT-5.5)
+  famLabel = _pickByUid(famUid);
+  // 兜底: 无锚命中则由 uid 美化(绝不取 UI 提示长句)
+  if (!label) label = uid ? _prettyUid(uid) : null;
+  if (!famLabel) famLabel = famUid ? _prettyUid(famUid) : label;
+  if (!uid && !label) return null;
+  return {
+    uid: uid || (label ? label.toLowerCase().replace(/[^a-z0-9]+/g, "-") : ""),
+    label: label || uid,
+    familyUid: famUid || null,
+    familyLabel: famLabel || label || uid,
+    _cands: strs.map((x) => x.s).slice(0, 24), // 调试: 原始候选串
+  };
+}
+
+// uid → 人读族名 美化 (claude-opus-4.8 → Claude Opus 4.8 · 兜底用)
+function _prettyUid(u) {
+  const BR = {
+    claude: "Claude", gpt: "GPT", swe: "SWE", kimi: "Kimi", gemini: "Gemini",
+    grok: "Grok", xai: "xAI", deepseek: "DeepSeek", qwen: "Qwen", glm: "GLM",
+    opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable",
+    codex: "Codex", flash: "Flash", pro: "Pro", max: "Max", mini: "Mini",
+    fast: "Fast", low: "Low", medium: "Medium", high: "High", thinking: "Thinking",
+  };
+  return String(u || "")
+    .split("-")
+    .map((t) =>
+      BR[t] || (/[0-9]/.test(t) ? t : t.charAt(0).toUpperCase() + t.slice(1)),
+    )
+    .join(" ")
+    .trim();
+}
+
+// 名 → provider 键归一 (与 eaRender _provLabel 表对齐 · 左侧按厂商分组)
+// ★ v9.9.274 · 活捕家族不再统归 Other · 由族名/uid 推厂商 → Claude/GPT/Gemini/Kimi/Windsurf…
+function _inferFamilyProvider(label, uid) {
+  const t = (String(label || "") + " " + String(uid || "")).toLowerCase();
+  if (/claude/.test(t)) return "ANTHROPIC";
+  if (/gemini/.test(t)) return "GOOGLE";
+  if (/grok/.test(t)) return "XAI";
+  if (/deepseek/.test(t)) return "DEEPSEEK";
+  if (/kimi|moonshot/.test(t)) return "MOONSHOT";
+  if (/(^|[^a-z])glm([^a-z]|$)|zhipu/.test(t)) return "ZHIPU";
+  if (/minimax/.test(t)) return "MINIMAX";
+  if (/qwen/.test(t)) return "QWEN";
+  if (/(^|[^a-z])(gpt|o3|o4)([^a-z]|$)|openai/.test(t)) return "OPENAI";
+  if (/swe|cascade|windsurf/.test(t)) return "WINDSURF";
+  return "";
+}
+
+// 由活捕模型项构建家族归一结构 (与 _getOfficialFamilies 静态结构同形)
+function _buildLiveFamilies(models) {
+  const fams = new Map();
+  const order = [];
+  for (const m of models) {
+    if (!m || !m.uid) continue;
+    // ★ v9.9.271 · 真模型 uid 必含版本数字(claude-opus-4-8-medium·gpt-5-5-low);
+    //   弃无数字之伪项(UI 提示误析 cached-input·higher-effort-… 不成家族)
+    if (!/[0-9]/.test(m.uid)) continue;
+    const key = m.familyUid || m.familyLabel || m.label || m.uid;
+    const flabel = m.familyLabel || m.label || m.uid;
+    if (!fams.has(key)) {
+      fams.set(key, {
+        familyUid: m.familyUid || key,
+        label: flabel,
+        provider: _inferFamilyProvider(flabel, m.familyUid || key),
+        isRecommended: false,
+        isNew: false,
+        members: [],
+      });
+      order.push(key);
+    }
+    const fam = fams.get(key);
+    let tier = String(m.label || "");
+    if (flabel && tier.indexOf(flabel) === 0) tier = tier.slice(flabel.length).trim();
+    if (!fam.members.some((x) => x.modelUid === m.uid))
+      fam.members.push({
+        modelUid: m.uid,
+        label: m.label,
+        tier: tier || "base",
+        isDefault: false,
+      });
+  }
+  return order.map((k) => fams.get(k));
+}
+
 // 入口: 对 gzip(proto) GetUserStatus body 做真解锁 · 失败则原样返回 (利而不害)
 function _unlockUserStatusBody(bodyBuf, contentEncoding, rid) {
   try {
     const isGz = bodyBuf.length > 2 && bodyBuf[0] === 0x1f && bodyBuf[1] === 0x8b;
     const data = isGz ? zlib.gunzipSync(bodyBuf) : bodyBuf;
     if (data.indexOf(_PRO_BADGE) < 0) return null; // 无锁可解
-    const stats = { dropped: 0, unlock4: 0 };
+    const stats = { dropped: 0, unlock4: 0, models: [] };
     const out = _pbDropProBadge(data, stats);
     if (stats.dropped === 0 || !_pbParseOk(out)) return null;
+    // ★ v9.9.270 · 活捕落库: 模型项真名 → 实时家族归一 (右侧能选什么·左侧映什么)
+    try {
+      if (stats.models && stats.models.length) {
+        _liveModelCapture = {
+          at: Date.now(),
+          calls: (_liveModelCapture.calls || 0) + 1,
+          models: stats.models,
+          families: _buildLiveFamilies(stats.models),
+          raw: stats.models.slice(0, 6).map((m) => ({
+            uid: m.uid,
+            label: m.label,
+            familyUid: m.familyUid,
+            familyLabel: m.familyLabel,
+            cands: m._cands,
+          })),
+        };
+      }
+    } catch {}
     const finalBuf = isGz ? zlib.gzipSync(out) : out;
     _unlockStats.calls += 1;
     _unlockStats.dropped_total += stats.dropped;
