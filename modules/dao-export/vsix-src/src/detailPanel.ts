@@ -97,7 +97,7 @@ function render() {
 
 function renderOverview(el) {
   const info = data.info || {};
-  const userMsgs = data.events.filter(e => e.type === 'user_message').length;
+  const userMsgs = data.events.filter(e => e.type === 'user_message' || e.type === 'initial_user_message' || e.type === 'user_question_answered').length;
   const devinMsgs = data.events.filter(e => e.type === 'devin_message').length;
   let html = '<div class="stat-grid">';
   html += stat(data.events.length, '总事件数');
@@ -140,8 +140,11 @@ function renderConversation(el) {
   for (const ev of data.events) {
     const t = ev.type || '';
     const time = ev.timestamp || (ev.created_at_ms ? new Date(ev.created_at_ms).toISOString() : '');
-    if (t === 'user_message') {
+    if (t === 'user_message' || t === 'initial_user_message') {
       html += '<div class="msg user"><div class="who">👤 USER · ' + esc(time) + '</div>' + esc(msgText(ev)) + '</div>';
+    } else if (t === 'user_question_answered') {
+      const ans = (ev.answers || []).map(a => (a && (a.other_text || (Array.isArray(a.selected) ? a.selected.join('; ') : '') || a.text)) || '').filter(Boolean).join('\\n');
+      if (ans) { html += '<div class="msg user"><div class="who">👤 USER（回答）· ' + esc(time) + '</div>' + esc(ans) + '</div>'; }
     } else if (t === 'devin_message') {
       html += '<div class="msg devin"><div class="who">🤖 DEVIN · ' + esc(time) + '</div>' + esc(msgText(ev)) + '</div>';
     } else if (t === 'devin_thoughts') {

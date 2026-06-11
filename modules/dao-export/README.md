@@ -12,7 +12,7 @@
 |---|---|
 | `BACKEND_GUIDE.md` | ★ 核心 · 纯后端实现指南：完整 API 逆向 + 认证流 + 数据流，照此可从零实现一切 |
 | `dao_export_all.py` | ★ 零依赖 Python 导出脚本（v2 高速版：16 路并发下载 + 重试 + 断点续传；实测 70 会话/7173 事件/706 文件 ≈ 58 秒全量导出） |
-| `dao-devin-export-1.3.2.vsix` | ★ VS Code 插件成品（最新 v1.3.2：按**真实事件类型**完整提取对话记录 + 独立 `conversation.md`/`.json` 转录；含 v1.3.1 健壮性修复） |
+| `dao-devin-export-1.3.3.vsix` | ★ VS Code 插件成品（最新 v1.3.3：**连接复用 keep-alive 根治高延迟链路下载慢** + 导出内容**人/Agent 双向重构**：README 索引 + session.json 结构化 + 像官网一样的 conversation.md；含 v1.3.2 完整事件提取） |
 | `vsix-src/` | ★ 插件完整 TypeScript 源码（可直接 `npm i && npm run package` 重新打包） |
 | `dao-vsix-source.zip` | 插件完整 TypeScript 源码（与 `vsix-src/` 一致的打包快照） |
 | `dao-vsix-README.md` | 插件使用文档 |
@@ -30,7 +30,22 @@ python dao_export_all.py --email xxx@gmail.com --password xxx
 python dao_export_all.py --accounts accounts.md
 ```
 
-VSIX 安装: `code --install-extension dao-devin-export-1.3.2.vsix`
+VSIX 安装: `code --install-extension dao-devin-export-1.3.3.vsix`
+
+## v1.3.3 下载根治 + 人/Agent 双向重构（2026-06-11）—— 「道法自然，导出即闭环」
+
+### ① 下载慢的根因与根治（高延迟链路）
+- **根因**：本地（如国内→AWS）下载几百文件要 10+ 分钟，并非代码慢，而是**每个文件都新建一条 TCP+TLS 连接**（无 keep-alive）。高 RTT 链路下每次 TLS 握手要多个往返，几百个文件握手开销线性叠加 → 卡几分钟甚至更久。VM 低延迟链路上同样代码下载 323 文件仅 ~1.9s，掩盖了该问题。
+- **根治**：底层统一连接复用 keep-alive 连接池。直连走单例 `https.Agent({keepAlive,maxSockets})`；**本地代理→AWS** 场景走自研 `ProxyTunnelAgent`（CONNECT 隧道建立后池化复用 TLS socket）。整批下载只付出 (并发数) 次握手，其余请求走已暖连接，几乎只剩传输时间。
+- **辅以**：下载/presign 并发提到 24/8；下载显式**状态码校验**（非 2xx 抛错，旧版把 S3 错误页当文件存盘且不重试）；**按 contents_key 去重**（云端文件阶段下好的 buffer，changes 阶段直接复用，不二次下载）。
+- **实测（同一批 323 文件，VM）**：无 keep-alive 1557ms → keep-alive 796ms → keep-alive+并发24 **589ms（2.6×）**；端到端全量导出（取事件+下载+打包）1.56s。链路延迟越高，倍数越大。
+
+### ② 导出内容人/Agent 双向重构
+- **新增 `README.md`（人+Agent 索引）**：YAML front-matter（devin_id/状态/计数）+ 概览 + **原始需求**（首条 user prompt）+ PR/录屏/产出文件表/最终 TODO/阻塞 + **文件地图**。人读如会话主页，Agent 先解析 front-matter 再按图索骥。
+- **新增 `session.json`（Agent 单文件全量）**：`schema: dao-export/session@2`，含 meta、original_request、全部 message 轮次、stats、produced_files（带 zip 内路径）、cloud_files（key→path）、recordings、blockers。
+- **对话提取补全**：旧版只取 `user_message`/`devin_message`，**漏掉了最重要的首条 `initial_user_message` 和用户对提问的回答 `user_question_answered`** —— 现已全部纳入 conversation 与详情页。
+- **conversation.md 像官网**：消息醒目呈现，消息之间的过程（命令/编辑/搜索/TODO）折叠进 `<details>` 摘要，不再淹没在流水账里。
+- **cloud_files 可导航**：按真实文件名 basename 命名（而非纯 hash），`_index.json` 保留完整 key→path 映射。
 
 ## v1.3.2 对话记录提取完善（2026-06-11）—— 「彻底提取一切对话内容」
 
