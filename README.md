@@ -51,11 +51,11 @@ devin-remote/
 
 **VSIX**: `plugins/devin-git-auth/devin-git-auth-2.1.0.vsix` · **源码**: `plugins/devin-git-auth/extension.js`
 
-### dao-proxy-pro v9.9.271 · 提示词隔离 + 外接路由
+### dao-proxy-pro v9.9.274 · 提示词隔离 + 外接路由
 
 底层拦截 IDE AI 请求，隔离替换提示词（道藏规则 + 用户自定义注入），外接第三方模型路由。vendor 目录含 LSP 模拟器、适应性路由、预算控制、三模块面板（49 家模型归一 + 测通）。
 
-**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.271.vsix`
+**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.274.vsix`
 
 ---
 
@@ -69,7 +69,7 @@ devin-remote/
 
 [→ 完整文档](modules/vm-replica/README.md) · 48 文件（6 需求/架构文档 + 47 MCP 客户端脚本 + 17 实践截图）
 
-### dao-export · Devin AI 全量对话导出
+### dao-export v1.3.3 · Devin AI 全量对话导出
 
 用户仅需邮箱+密码，导出 Devin 账号内一切（会话/事件/云端文件/Playbooks/Knowledge/Secrets）。
 
@@ -77,9 +77,11 @@ devin-remote/
 python dao_export_all.py --email xxx@gmail.com --password xxx
 ```
 
-16 路并发 + 重试 + 断点续传。实测 70 会话/7173 事件/706 文件 ≈ 58 秒全量。
+16 路并发 + keepalive 连接复用 + 重试 + 断点续传。VSIX 侧边栏实时进度 + 按需加载 worklog 分页。
 
-> [→ 完整文档](modules/dao-export/README.md) · 含 VSIX 插件 + API 逆向指南
+**VSIX**: `modules/dao-export/dao-devin-export-1.3.3.vsix`
+
+> [→ 完整文档](modules/dao-export/README.md) · 含 VSIX 源码 + API 逆向指南
 
 ---
 
