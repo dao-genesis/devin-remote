@@ -35,21 +35,21 @@ devin-remote/
 
 ### dao-vsix v1.1.0 · Devin 全功能面板 + 路由官网
 
-核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传，`/org/<slug>` 直渲染认证态）。登录实时同步：修掉 `substring(20)` 一字符偏差 + 账号池解析链，面板随主账号实时跟随。CloudFlare 用户界面整体移出（公网穿透交给 dao-bridge）。
+核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传）。零输入获取 cog_ API Key（POST /service-users + auth1 自动换取），彻底移除面板所有手动 API Key 输入/引导。官网注入加固：session-token 与 auth1 严格隔离。补回缺失的 build.js。登录实时同步修复 + 账号池解析链。
 
 **VSIX**: `plugins/dao-vsix/dao-vsix-1.1.0.vsix` · **源码**: `plugins/dao-vsix/src/extension.ts`
 
 ### dao-bridge v3.0.0 · 工作区内网穿透
 
-随 IDE 窗口启停，专穿当前工作区。Quick 隧道（`*.trycloudflare.com`）与 Named 隧道（稳定域名，需 `tunnelToken` 配置）。路径越界守卫，本地 HTTP 六端点。v3.0.0 重新打包 —— 源码早是三模块新版，安装包终于对齐。
+重构为零/最小输入：quick tunnel 默认模式 + 凭证自动加载（`~/.dao/` 目录）+ 命名隧道 token 持久化 + 修正误导 UI（不再暗示必须填 token）。随 IDE 窗口启停，专穿当前工作区。
 
 **VSIX**: `plugins/cf-daohub/dao-bridge-ext/dao-bridge-3.0.0.vsix` · **源码**: `plugins/cf-daohub/dao-bridge-ext/extension.js`
 
-### devin-git-auth v2.1.0 · 多账号 GitHub 认证
+### devin-git-auth v2.2.0 · 多账号 GitHub 认证
 
-零输入：自动加载 `~/.dao/accounts.json` 账号池 + `~/.dao/git-pats.json` PAT。"already registered" 智能处理 + 仓库可达性核验。全 13 账号实测：9/13 可访问 `devin-remote`（10 个已连通），余 3 个卡在后端"已注册但 0 连接"幽灵态 —— PAT 删除/集成删除/官方 UI 均无法清除，如实诊断、不做假兜底。
+零输入：自动加载 `~/.dao/accounts.json` 账号池 + `~/.dao/git-pats.json` PAT。"already registered" 智能处理 + 仓库可达性核验。全 13 账号实测：9/13 可访问 `devin-remote`（10 个已连通），余 3 个卡在后端"已注册但 0 连接"幽灵态 —— 如实诊断、不做假兜底。
 
-**VSIX**: `plugins/devin-git-auth/devin-git-auth-2.1.0.vsix` · **源码**: `plugins/devin-git-auth/extension.js`
+**VSIX**: `plugins/devin-git-auth/devin-git-auth-2.2.0.vsix` · **源码**: `plugins/devin-git-auth/extension.js`
 
 ### dao-proxy-pro v9.9.274 · 提示词隔离 + 外接路由
 
