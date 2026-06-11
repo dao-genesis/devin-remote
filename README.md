@@ -33,29 +33,29 @@ devin-remote/
 
 ## ① 四核心插件 — plugins/
 
-### dao-vsix v1.0.9 · Devin 全功能面板
+### dao-vsix v1.1.0 · Devin 全功能面板 + 路由官网
 
-IDE 即服务器。本地 HTTP API 覆盖 `/api/exec|file|read|write|ls|git|terminals|sessions|knowledge|secrets` 等 30+ 端点。内嵌 `app.devin.ai` iframe 双面板，代理自适应（自动探测 VPN 代理端口），帛书规则自动注入。
+核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传，`/org/<slug>` 直渲染认证态）。登录实时同步：修掉 `substring(20)` 一字符偏差 + 账号池解析链，面板随主账号实时跟随。CloudFlare 用户界面整体移出（公网穿透交给 dao-bridge）。
 
-**VSIX**: `plugins/dao-vsix/dao-vsix-1.0.9.vsix` · **源码**: `plugins/dao-vsix/src/extension.ts`
+**VSIX**: `plugins/dao-vsix/dao-vsix-1.1.0.vsix` · **源码**: `plugins/dao-vsix/src/extension.ts`
 
-### dao-bridge v2.1.0 · 工作区内网穿透
+### dao-bridge v3.0.0 · 工作区内网穿透
 
-随 IDE 窗口启停，专穿当前工作区。Quick 隧道（`*.trycloudflare.com`）与 Named 隧道（稳定域名，需 `tunnelToken` 配置）。路径越界守卫，本地 HTTP 六端点。**v2.1.0 修复**：`findCloudflared()` 用 `execSync` 预探测 PATH，解决 `cp.spawn` 异步 error 导致下载兜底死代码。
+随 IDE 窗口启停，专穿当前工作区。Quick 隧道（`*.trycloudflare.com`）与 Named 隧道（稳定域名，需 `tunnelToken` 配置）。路径越界守卫，本地 HTTP 六端点。v3.0.0 重新打包 —— 源码早是三模块新版，安装包终于对齐。
 
-**VSIX**: `plugins/cf-daohub/dao-bridge-ext/dao-bridge-2.1.0.vsix` · **源码**: `plugins/cf-daohub/dao-bridge-ext/extension.js`
+**VSIX**: `plugins/cf-daohub/dao-bridge-ext/dao-bridge-3.0.0.vsix` · **源码**: `plugins/cf-daohub/dao-bridge-ext/extension.js`
 
-### devin-git-auth v2.0.0 · 多账号 GitHub 认证
+### devin-git-auth v2.1.0 · 多账号 GitHub 认证
 
-16 个 Devin 账号统一注册同一 GitHub App。5 步登录链 + PAT 保存/断开 + `gh_cli` 设备流 + TOTP 真实授权。三按钮面板（读取状态/断开 Git/连接 Git）。组织级 Git 连接待后端 `oauth` 写入落地。
+零输入：自动加载 `~/.dao/accounts.json` 账号池 + `~/.dao/git-pats.json` PAT。"already registered" 智能处理 + 仓库可达性核验。全 13 账号实测：9/13 可访问 `devin-remote`（10 个已连通），余 3 个卡在后端"已注册但 0 连接"幽灵态 —— PAT 删除/集成删除/官方 UI 均无法清除，如实诊断、不做假兜底。
 
-**VSIX**: `plugins/devin-git-auth/devin-git-auth-2.0.0.vsix` · **源码**: `plugins/devin-git-auth/extension.js`
+**VSIX**: `plugins/devin-git-auth/devin-git-auth-2.1.0.vsix` · **源码**: `plugins/devin-git-auth/extension.js`
 
-### dao-proxy-pro v9.9.265 · 提示词隔离 + 外接路由
+### dao-proxy-pro v9.9.271 · 提示词隔离 + 外接路由
 
-底层拦截 IDE AI 请求，隔离替换提示词（道藏规则 + 用户自定义注入），外接第三方模型路由。vendor 目录含 LSP 模拟器、适应性路由、预算控制。
+底层拦截 IDE AI 请求，隔离替换提示词（道藏规则 + 用户自定义注入），外接第三方模型路由。vendor 目录含 LSP 模拟器、适应性路由、预算控制、三模块面板（49 家模型归一 + 测通）。
 
-**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.265.vsix`
+**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.271.vsix`
 
 ---
 
