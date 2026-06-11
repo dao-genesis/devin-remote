@@ -3921,13 +3921,17 @@ function _loadFullModelCatalog() {
 //   供前端连线: 选一族 → 路由全族各档 modelUid · 利而不害
 // ★ v9.9.270 · 活捕优先: 右侧 Cascade 实捕模型项(<10min) → 真·1:1 实时映射
 //   无活捕(IDE 未触发 GetUserStatus) 则退回静态目录 · 利而不害
-function _officialFamiliesSource() {
-  const fresh =
+function _liveFresh() {
+  return !!(
     _liveModelCapture &&
     _liveModelCapture.families &&
     _liveModelCapture.families.length > 0 &&
-    Date.now() - _liveModelCapture.at < 30 * 60 * 1000;
-  return fresh ? "live" : "static";
+    Date.now() - _liveModelCapture.at < 30 * 60 * 1000
+  );
+}
+// ★ v9.9.275 · 全量静态为底·活捕并入 → 源恒含全部官方; live 仅作叠加标记
+function _officialFamiliesSource() {
+  return _liveFresh() ? "merged" : "static";
 }
 // ★ v9.9.270 · 生成实时交接指挥文档 (Markdown) · 供官方/任意 Agent 热配置
 function _buildHandoffMd() {
@@ -4060,8 +4064,8 @@ function _buildHandoffMd() {
   return L.join("\n");
 }
 
-function _getOfficialFamilies() {
-  if (_officialFamiliesSource() === "live") return _liveModelCapture.families;
+// 全量静态目录 → 家族归一 (一族一项·档位收于 members)
+function _buildStaticFamilies() {
   const cat = _fullModelCatalog || _loadFullModelCatalog();
   if (!cat || !cat.length) return [];
   const fams = new Map(); // key → family
@@ -4100,6 +4104,43 @@ function _getOfficialFamilies() {
     if (m.isNew) fam.isNew = true;
   }
   return order.map((k) => fams.get(k));
+}
+
+// ★ v9.9.275 · 利而不害·只增不减: 左侧官方模型恒以全量静态目录为底,
+//   活捕新鲜时并入实捕(命中则标记 live·补全档位; 实捕独有则追加),
+//   绝不因活捕而令左侧官方模型变少 · 万物并育而不相害
+function _getOfficialFamilies() {
+  const staticFams = _buildStaticFamilies();
+  const live = _liveFresh() ? _liveModelCapture.families || [] : [];
+  if (!live.length) return staticFams;
+  const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const out = staticFams.map((f) =>
+    Object.assign({}, f, { members: f.members.slice() }),
+  );
+  const idx = new Map();
+  out.forEach((f, i) => {
+    if (f.familyUid) idx.set(norm(f.familyUid), i);
+    if (f.label) idx.set(norm(f.label), i);
+  });
+  for (const lf of live) {
+    let hit = -1;
+    if (idx.has(norm(lf.familyUid))) hit = idx.get(norm(lf.familyUid));
+    else if (idx.has(norm(lf.label))) hit = idx.get(norm(lf.label));
+    if (hit >= 0) {
+      out[hit].live = true;
+      for (const mem of lf.members || []) {
+        if (!out[hit].members.some((x) => x.modelUid === mem.modelUid))
+          out[hit].members.push(mem);
+      }
+    } else {
+      const nf = Object.assign({}, lf, { live: true, liveOnly: true });
+      out.push(nf);
+      const at = out.length - 1;
+      if (nf.familyUid) idx.set(norm(nf.familyUid), at);
+      if (nf.label) idx.set(norm(nf.label), at);
+    }
+  }
+  return out;
 }
 
 function _isModelUnlockEnabled() {
