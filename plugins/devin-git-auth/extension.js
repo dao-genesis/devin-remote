@@ -21,6 +21,49 @@ const DEVIN = "https://app.devin.ai";
 const HTTP_TIMEOUT = 15000;
 const PAT_TIMEOUT = 30000;
 
+// ═══ 换登引擎 — engine/runSwitch.js · 纯API「断旧→登录→装GitHub App移绑」闭环 ═══
+// 道法自然·取之尽珠玉: 复刻官网「Continue with GitHub」OAuth + installation-callback
+// 规范路径, 天然不撞 already-registered 后端幽灵态(设备码/PAT 注入路径无法突破的根因)。
+var _switchEngine = null;
+try { _switchEngine = require(path.join(__dirname, "engine", "runSwitch.js")); }
+catch (e) { _switchEngine = null; }
+
+// GitHub 工作区账号(要归一连接的那一个 Git): ~/.dao/github-creds.json 首个。
+function loadWorkspaceGithub() {
+  try {
+    var j = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".dao", "github-creds.json"), "utf8"));
+    var arr = Array.isArray(j) ? j : (j.accounts || Object.values(j));
+    var a = arr && arr[0];
+    if (a && (a.username || a.user || a.login)) {
+      return { username: a.username || a.user || a.login, password: a.password || a.pass || "", totp: a.totp || a.totpSecret || a.otp_secret || "" };
+    }
+  } catch (e) {}
+  return null;
+}
+
+// 用换登引擎做规范 GitHub App 绑定(返回 {ok, repoCount, name, error})。
+function engineSwitchConnect(devinEmail, devinPassword, workspace) {
+  return new Promise(function (resolve) {
+    if (!_switchEngine || !_switchEngine.runSwitch) { return resolve({ ok: false, error: "engine_unavailable" }); }
+    var prx = currentProxy();
+    var params = {
+      devinUrl: DEVIN, username: devinEmail, password: devinPassword, totp: "", org: "",
+      proxy: prx ? ("http://" + prx.host + ":" + prx.port) : "",
+      insecureTLS: false, workspace: workspace,
+    };
+    var handle = _switchEngine.runSwitch(params, function (ev) {
+      if (ev.type === "log") { _log("[engine] " + ev.msg); }
+      else if (ev.type === "result") {
+        resolve({ ok: !!ev.success && !!ev.github_connected, success: !!ev.success,
+          repoCount: ev.github_repo_count, name: ev.github_connected_name, error: ev.error || "" });
+      }
+    });
+    handle.done.then(function (r) {
+      if (r) resolve({ ok: !!r.success && !!r.github_connected, success: !!r.success, repoCount: r.github_repo_count, name: r.github_connected_name, error: r.error || "" });
+    }).catch(function (e) { resolve({ ok: false, error: String(e) }); });
+  });
+}
+
 // ═══ 代理自适应 ═══
 var PROXY_HOST = null, PROXY_PORT = null, _proxyTested = false;
 var PROXY_DOMAINS = ["app.devin.ai","windsurf.com","register.windsurf.com","server.codeium.com"];
@@ -1157,6 +1200,27 @@ async function handleMessage(msg) {
         if (!acct || !acct.orgId) {
           postMsg({ command: "connectResult", ok: false, error: "账号数据缺失, 请重新登录" });
           break;
+        }
+
+        // ═══ Step0: 换登引擎规范绑定 (推荐 · 突破 already-registered 幽灵态) ═══
+        // 取之尽珠玉: 有 GitHub 工作区凭证时, 走官网同款 GitHub App installation-callback
+        // 移绑路径, 不撞后端幽灵态。失败再退回 PAT / 设备码。
+        var _ws = loadWorkspaceGithub();
+        var _devinPwd = passwordFor(msg.email, acct);
+        if (_switchEngine && _ws && _ws.password && _devinPwd) {
+          _log('connectGit: Step0 换登引擎规范绑定(GitHub工作区=' + _ws.username + ')...');
+          try {
+            var engR = await engineSwitchConnect(msg.email, _devinPwd, _ws);
+            if (engR.ok) {
+              _state.accounts[msg.email].git = true;
+              _state.accounts[msg.email].gitType = "github_app";
+              _state.accounts[msg.email].gitCount = (_state.accounts[msg.email].gitCount || 0) + 1;
+              saveState(_state);
+              postMsg({ command: "connectResult", ok: true, repoCount: engR.repoCount, engine: true });
+              break;
+            }
+            _log('connectGit: Step0 引擎未连成(' + (engR.error || '') + '), 退回 PAT/设备码');
+          } catch (e) { _log('connectGit: Step0 引擎异常: ' + e.message + ', 退回 PAT/设备码'); }
         }
 
         // ═══ Step1: PAT注入 (快速尝试, 仅全新组织有效) ═══

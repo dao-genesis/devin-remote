@@ -121,6 +121,25 @@ function loadCfCredentials() {
   try { return JSON.parse(fs.readFileSync(credFile, "utf8")); } catch (e) {}
   return null;
 }
+
+// 守母: 命名隧道配置从 ~/.dao 凭证库自动加载 — 用户无需触碰 IDE 设置
+// 来源(优先级): ~/.dao/bridge/named-tunnel.json → ~/.dao/dao-config.json
+// 字段: cfTunnelToken/tunnelToken, cfHostname/hostname
+function loadDaoTunnelConfig() {
+  const out = { token: "", hostname: "" };
+  const files = [
+    path.join(daoDir(), "named-tunnel.json"),
+    path.join(daoGlobalDir(), "dao-config.json"),
+  ];
+  for (const f of files) {
+    try {
+      const j = JSON.parse(fs.readFileSync(f, "utf8"));
+      if (!out.token) out.token = String(j.cfTunnelToken || j.tunnelToken || "").trim();
+      if (!out.hostname) out.hostname = String(j.cfHostname || j.hostname || "").trim();
+    } catch (e) {}
+  }
+  return out;
+}
 function saveCfCredentials(creds) {
   const credFile = path.join(daoDir(), "cf-credentials.json");
   fs.writeFileSync(credFile, JSON.stringify(creds, null, 2), "utf8");
@@ -368,9 +387,12 @@ class Bridge {
     this.startedAt = new Date();
     this._retried = false;
     const cfg = vscode.workspace.getConfiguration("daoBridge");
-    const tunnelToken = String(cfg.get("tunnelToken") || "").trim();
-    const hostname = String(cfg.get("hostname") || "").trim();
+    let tunnelToken = String(cfg.get("tunnelToken") || "").trim();
+    let hostname = String(cfg.get("hostname") || "").trim();
+    // 守母: IDE 设置为空时自动从 ~/.dao 凭证库取命名隧道配置 — 零设置项介入
+    if (!tunnelToken) { const dc = loadDaoTunnelConfig(); if (dc.token) tunnelToken = dc.token; if (!hostname && dc.hostname) hostname = dc.hostname; }
     const fixedPort = parseInt(cfg.get("localPort"), 10) || 0;
+    // 无名之樸: 无令牌即走零配置 quick 隧道(无需任何账号/Token), 即开即用
     this.mode = tunnelToken ? "named" : "quick";
     const port = await this.srv.start(this.mode === "named" ? (fixedPort || 9910) : 0);
 
@@ -459,7 +481,17 @@ class Bridge {
       saveCfCredentials(this.cfCredentials);
       return { ok: true, message: "CloudFlare Global API Key 验证成功" };
     }
-    return { ok: false, message: "CloudFlare 验证失败 — 请检查 email 和 API Key/Token" };
+    // 守柔: 既非 API Token 也非 Global Key, 但形似 cloudflared 命名隧道令牌(长 base64/JWT)
+    // → 持久化到 ~/.dao/bridge/named-tunnel.json, 下次重启自动以命名隧道(固定域名)启动
+    const tok = String(apiKeyOrToken || "").trim();
+    if (tok.length >= 100 && /^[A-Za-z0-9_\-=.]+$/.test(tok)) {
+      try {
+        fs.writeFileSync(path.join(daoDir(), "named-tunnel.json"),
+          JSON.stringify({ cfTunnelToken: tok, email, savedAt: new Date().toISOString() }, null, 2), "utf8");
+        return { ok: true, message: "已保存命名隧道令牌 — 点击「重启隧道」即以固定域名启动" };
+      } catch (e) {}
+    }
+    return { ok: false, message: "CloudFlare 验证失败 — 请检查 email 和 API Key/Token（如仅用快速隧道则无需填写）" };
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -751,6 +783,7 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <!-- 模块1: 实时状态 -->
 <h3>☯ 公网穿透状态</h3>
 <div><span id="dot" class="dot"></span><span id="stat">启动中…</span></div>
+<div class="muted" style="margin-top:4px">无名之樸 · 插件启动即自动打通整机公网穿透，<b>零配置、无需任何账号</b>。</div>
 <div class="card">
   <div class="lbl">公网 URL</div><div id="url" class="url">—</div>
   <div class="lbl">工作区</div><div id="ws" class="val">—</div>
@@ -763,14 +796,15 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   </div>
 </div>
 
-<!-- 模块2: CloudFlare 登录 -->
+<!-- 模块2: CloudFlare 命名隧道 (可选) -->
 <div class="section">
-<h3>🔑 CloudFlare 账号</h3>
-<div id="cfStatus" class="muted">未登录</div>
+<h3>🔑 命名隧道 · 固定域名（可选）</h3>
+<div class="muted">默认快速隧道已可用，<b>无需登录</b>。仅当你想要<b>固定不变的公网域名</b>时，才需配置 CloudFlare 命名隧道令牌（也可放入 <code>~/.dao/dao-config.json</code> 的 <code>cfTunnelToken</code> 自动加载）。</div>
+<div id="cfStatus" class="muted" style="margin-top:4px">未配置（使用零配置快速隧道）</div>
 <div id="cfLoginForm">
-  <input id="cfEmail" type="email" placeholder="CloudFlare Email">
-  <input id="cfKey" type="password" placeholder="API Token 或 Global API Key">
-  <button onclick="send('cfLogin',null,{email:v('cfEmail'),key:v('cfKey')})">登录 CloudFlare</button>
+  <input id="cfEmail" type="email" placeholder="CloudFlare Email（可选）">
+  <input id="cfKey" type="password" placeholder="Tunnel Token / API Token（可选）">
+  <button onclick="send('cfLogin',null,{email:v('cfEmail'),key:v('cfKey')})">保存 CloudFlare 凭证</button>
 </div>
 <button onclick="send('openCf')" style="margin-top:4px;background:var(--vscode-textLink-foreground)">打开 CloudFlare 控制台</button>
 </div>
