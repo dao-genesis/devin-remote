@@ -3497,9 +3497,40 @@ function hotAddProvider(name, cfg) {
     `[dao-router] [热] 添加provider: ${name} type=${cfg.type} url=${cfg.baseUrl || "?"}`,
   );
 
+  // ★ v9.9.262 · 首个 provider 自动默认路由 · 道法自然 · 无为而无不为
+  //   用户首次添加第三方 provider 时 · 若 SWE 1.6 Fast 尚未路由 ·
+  //   则自动把 MODEL_SWE_1_6_FAST 路由到该 provider 的第一个模型 (仅一个)。
+  //   其余模型仍走官方 Cascade · 已存在路由则不覆盖 (尊重用户手动配置)。
+  let autoRoute = null;
+  const _hasSweFast =
+    !!_routes["MODEL_SWE_1_6_FAST"] || !!_routes["swe-1-6-fast"];
+  if (!_hasSweFast && merged.enabled !== false) {
+    const m =
+      merged.defaultModel ||
+      (Array.isArray(merged.models) && merged.models.length
+        ? merged.models[0]
+        : null);
+    if (m) {
+      const rc = {
+        provider: name,
+        model: m,
+        _label: `SWE 1.6 Fast → ${name}/${m} (默认)`,
+        maxOutputTokens: 32768,
+        _autoDefault: true,
+      };
+      _routes["MODEL_SWE_1_6_FAST"] = rc;
+      _routes["swe-1-6-fast"] = rc;
+      _ready = true;
+      autoRoute = `${name}/${m}`;
+      _log(
+        `[dao-router] [热] 首provider自动默认路由: MODEL_SWE_1_6_FAST → ${name}/${m}`,
+      );
+    }
+  }
+
   // ★ 持久化到配置.json
   _hotSaveConfig();
-  return { ok: true };
+  return { ok: true, autoRoute };
 }
 
 /**
