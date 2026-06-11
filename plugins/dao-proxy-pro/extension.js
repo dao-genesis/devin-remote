@@ -4,6 +4,7 @@
 // v9.9.268 · 三模块面板 window.confirm/alert 被 webview 屏蔽 → 自带 _daoConfirm/_daoToast 弹层
 // v9.9.269 · 悬浮面板(本源观照)同样自带 _daoConfirm/_daoToast,7 处 confirm() 改为弹层(断线/解锁/删渠/清空/回退)
 // v9.9.274 · ③模型路由 活捕家族按厂商分组(source.js _inferFamilyProvider): Claude/GPT/Gemini/Kimi/Windsurf… 不再统归 Other · 实机实测闭环
+// v9.9.275 · ③左侧官方模型「只增不减」: 恒以全量静态目录为底(49族/108型),活捕新鲜则并入标记 live·补全档位·实捕独有则追加 → 绝不因活捕令官方变少(_getOfficialFamilies 全量并入) · 利而不害
 //
 // 道德经 · 第四十章: "反者道之动, 弱者道之用."
 // 道德经 · 第四十八章: "为道日损. 损之又损, 以至于无为."
