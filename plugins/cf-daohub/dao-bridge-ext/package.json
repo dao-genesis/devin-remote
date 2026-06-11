@@ -1,12 +1,12 @@
 {
   "name": "dao-bridge",
   "displayName": "DAO Bridge · 内网穿透",
-  "description": "通过 Cloudflare workers.dev 中继打通本地/内网机器：exec/ls/read/write/info 全链路。登录 Cloudflare 账号即可一键连通。",
-  "version": "1.0.0",
+  "description": "专门穿透当前 Devin Desktop 窗口的工作区：随 IDE 启停，登录 Cloudflare 即一键打通，每次启动产出实时 MD 文档供云端 Agent 接入。",
+  "version": "2.0.0",
   "publisher": "dao",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Other"],
-  "activationEvents": ["onView:daoBridgeView", "onStartupFinished"],
+  "activationEvents": ["onStartupFinished"],
   "main": "./extension.js",
   "repository": { "type": "git", "url": "https://github.com/zhouyoukang/dao-bridge" },
   "contributes": {
@@ -17,19 +17,18 @@
     },
     "views": {
       "daoBridge": [
-        { "type": "webview", "id": "daoBridgeView", "name": "内网穿透" }
+        { "type": "webview", "id": "daoBridgeView", "name": "工作区穿透" }
       ]
     },
     "commands": [
-      { "command": "daoBridge.refresh", "title": "DAO Bridge: 刷新连接状态" },
-      { "command": "daoBridge.exec", "title": "DAO Bridge: 远程执行命令" }
+      { "command": "daoBridge.restart", "title": "DAO Bridge: 重启工作区隧道" },
+      { "command": "daoBridge.openMd", "title": "DAO Bridge: 打开实时 MD 文档" }
     ],
     "configuration": {
       "title": "DAO Bridge",
       "properties": {
-        "daoBridge.relayUrl": { "type": "string", "default": "https://dao-relay-do.zhouyoukang.workers.dev", "description": "Cloudflare Worker 中继 URL" },
-        "daoBridge.session": { "type": "string", "default": "141", "description": "目标会话/主机标识" },
-        "daoBridge.token": { "type": "string", "default": "", "description": "中继鉴权 token (Bearer)" }
+        "daoBridge.cloudflaredPath": { "type": "string", "default": "", "description": "cloudflared.exe 路径 (留空则自动探测 ~/.dao/bin、PATH 或自动下载)" },
+        "daoBridge.cfApiToken": { "type": "string", "default": "", "description": "(可选) Cloudflare API Token，用于显示账号信息；quick tunnel 不需要" }
       }
     }
   }
