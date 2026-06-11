@@ -318,9 +318,6 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('dao.showInfo', showWorkspaceInfo),
         vscode.commands.registerCommand('dao.copyConnection', copyConnection),
         vscode.commands.registerCommand('dao.regenerateToken', regenerateToken),
-        vscode.commands.registerCommand('dao.cfLogin', () => {
-            vscode.window.showInformationMessage('CloudFlare 功能已迁移至 DAO Bridge 插件，请使用 DAO Bridge 面板操作');
-        }),
         vscode.commands.registerCommand('dao.devinLogin', () => {
             vscode.window.showInputBox({ prompt: 'Devin Cloud Email', placeHolder: 'user@example.com' }).then(email => {
                 if (!email) return;
@@ -334,9 +331,6 @@ export async function activate(context: vscode.ExtensionContext) {
             });
         }),
         vscode.commands.registerCommand('dao.devinInject', () => devinFullInject()),
-        vscode.commands.registerCommand('dao.cfDeploy', () => {
-            vscode.window.showInformationMessage('CloudFlare 部署功能已迁移至 DAO Bridge 插件');
-        }),
         vscode.commands.registerCommand('dao.devinQuota', () => {
             if (!ws.devinApiKey) { vscode.window.showWarningMessage('Not logged into Devin Cloud'); return; }
             devinFetchQuota(ws.devinApiKey, ws.devinApiServerUrl).then(q => {
@@ -1507,18 +1501,6 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                         reply({ ok: true });
                         break;
                     }
-                    case 'cfLogin': {
-                        vscode.window.showInformationMessage('CloudFlare 功能已迁移至 DAO Bridge 插件');
-                        this.refresh();
-                        reply({ ok: true });
-                        break;
-                    }
-                    case 'cfDeploy': {
-                        vscode.window.showInformationMessage('CloudFlare 部署已迁移至 DAO Bridge 插件');
-                        this.refresh();
-                        reply({ ok: true });
-                        break;
-                    }
                     case 'startServer': {
                         vscode.commands.executeCommand('dao.startServer');
                         setTimeout(() => this.refresh(), 2000);
@@ -1920,7 +1902,7 @@ function rO(){
     const i=S.inject;
     ih='<div class="st">注入状态</div><div class="card"><div class="cr"><span class="l"><span class="tag secret">S</span> Secret</span><span class="v" style="color:'+(i.secret?'var(--success)':'var(--danger)')+'">'+(i.secret?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag knowledge">K</span> Knowledge</span><span class="v" style="color:'+(i.knowledge?'var(--success)':'var(--danger)')+'">'+(i.knowledge?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag playbook">P</span> Playbook</span><span class="v" style="color:'+(i.playbook?'var(--success)':'var(--danger)')+'">'+(i.playbook?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag git">G</span> Git</span><span class="v" style="color:'+(i.git?'var(--success)':'var(--danger)')+'">'+(i.git?'✓':'✗')+'</span></div></div>';
   }
-  v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+(S.auth.canUseApi?'':qh?'':'<div class="st">Devin API Key</div><div class="card"><p style="font-size:11px;color:var(--warn);margin-bottom:8px">⚠ 当前认证 (devin-session-token$) 仅对 Codeium API 有效，Devin API 返回 403。</p><p style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5">需要 cog_ 前缀的 API Key 才能在此面板显示 Sessions、Knowledge 等数据。</p><div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;font-size:11px;line-height:1.5"><div style="color:var(--accent);font-weight:600;margin-bottom:4px">📋 创建 API Key 步骤：</div><div style="color:var(--fg)">1. 打开 <a href="#" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;});return false" style="color:var(--accent)">app.devin.ai/settings</a></div><div style="color:var(--fg)">2. 点击 <b>Service Users</b></div><div style="color:var(--fg)">3. <b>Create Service User</b> → 选择 <b>Member</b></div><div style="color:var(--fg)">4. 点击 <b>Generate API Key</b></div><div style="color:var(--fg)">5. 复制 <b>cog_</b> 开头的 Key</div></div><input id="cogKeyInput3" type="password" placeholder="粘贴 cog_ API Key..." style="width:100%;padding:6px 10px;background:var(--input);color:var(--input-fg);border:1px solid var(--input-border);border-radius:4px;font-size:12px;box-sizing:border-box;margin-bottom:8px"><div class="br"><button class="btn primary" onclick="submitCogKey3()">🔑 设置 API Key</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;})">🌐 打开 Settings</button></div></div>')+qh+ih+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div><div class="cr"><span class="l">CF</span><span class="v" style="color:'+(S.cf.auth?'var(--success)':'var(--muted)')+'">'+(S.cf.auth?'✓ 已认证':'✗ 未认证')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+(S.cf.auth?'':'<button class="btn warn" onclick="cmd(&#39;cfLogin&#39;)">☁️ CF 登录</button>')+'<button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
+  v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+(S.auth.canUseApi?'':qh?'':'<div class="st">Devin API Key</div><div class="card"><p style="font-size:11px;color:var(--warn);margin-bottom:8px">⚠ 当前认证 (devin-session-token$) 仅对 Codeium API 有效，Devin API 返回 403。</p><p style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5">需要 cog_ 前缀的 API Key 才能在此面板显示 Sessions、Knowledge 等数据。</p><div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;font-size:11px;line-height:1.5"><div style="color:var(--accent);font-weight:600;margin-bottom:4px">📋 创建 API Key 步骤：</div><div style="color:var(--fg)">1. 打开 <a href="#" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;});return false" style="color:var(--accent)">app.devin.ai/settings</a></div><div style="color:var(--fg)">2. 点击 <b>Service Users</b></div><div style="color:var(--fg)">3. <b>Create Service User</b> → 选择 <b>Member</b></div><div style="color:var(--fg)">4. 点击 <b>Generate API Key</b></div><div style="color:var(--fg)">5. 复制 <b>cog_</b> 开头的 Key</div></div><input id="cogKeyInput3" type="password" placeholder="粘贴 cog_ API Key..." style="width:100%;padding:6px 10px;background:var(--input);color:var(--input-fg);border:1px solid var(--input-border);border-radius:4px;font-size:12px;box-sizing:border-box;margin-bottom:8px"><div class="br"><button class="btn primary" onclick="submitCogKey3()">🔑 设置 API Key</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;settings&#39;})">🌐 打开 Settings</button></div></div>')+qh+ih+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
   try{v.innerHTML+=rBridge();}catch(e){}
 }
 function rBridge(){
@@ -2100,7 +2082,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'setCogApiKey', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'cfLogin', 'cfDeploy', 'openBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'setCogApiKey', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -2351,16 +2333,6 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const r = await devinUpsertSecret(ws.devinOrgId, name, value, ws.devinAuth1);
                 if (r.ok) vscode.window.showInformationMessage('Secret created: ' + name);
                 refreshReply({ type: 'actionResult', command: 'devinCreateSecret', ok: r.ok });
-                break;
-            }
-            case 'cfLogin': {
-                vscode.window.showInformationMessage('CloudFlare 功能已迁移至 DAO Bridge 插件');
-                refreshReply({ type: 'actionResult', ok: false });
-                break;
-            }
-            case 'cfDeploy': {
-                vscode.window.showInformationMessage('CloudFlare 部署已迁移至 DAO Bridge 插件');
-                refreshReply({ type: 'actionResult', ok: false });
                 break;
             }
             case 'startServer': {
