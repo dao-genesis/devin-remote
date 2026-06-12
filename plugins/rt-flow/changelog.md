@@ -2,6 +2,26 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.0.2 (2026-06-12) · 实践中解构 · 真账号实跑修正
+
+> *不出于户以知天下，其出也弥远其知弥少；圣人不行而知* —— 但本版反其道：以真账号实跑，把"声称可达"逐条证伪/证实。
+
+### 实跑发现并修复的真实缺陷
+- **`createSession` 此前根本跑不通**：内部 API `/api/sessions` 校验字段为 `user_message`（非 `prompt`），旧实现 422。
+  修复：payload 同时带 `user_message` 与 `prompt`。用真号 `lcld26815946`（约 $13 额度）实跑创建成功，
+  会话 `devin-acf000ac…` 真实运行并回复（14 事件，含 Agent 实答），并在 Devin Desktop 原生列表与插件总览以 `[运行]` 实时显示。
+- **版本页脚写死 4.0.0**，与 `package.json` 不一致 → 统一为 **4.0.2**。
+- **`sendMessage` 端点错误**（旧：`app.devin.ai/api/session/{id}/message`，实测 404）。逐路由实跑确证：
+  - `app.devin.ai/api` 下 `/session|/sessions × /message|/messages|/send|/reply` 全部 **404**（内部 API 无此 REST 路由）。
+  - `api.devin.ai/v1/sessions/{id}/messages` **404**；`api.devin.ai/v1/session/{id}/message` **403**（路由存在·凭证不符）。
+  - 结论：正确端点为公开 API `POST {v1Base}/session/{id}/message {message}`，且仅认 Devin API Key（`apk_…`）；
+    会话登录态 `auth1` 与自动铸的 `cog_` service-user token 均被公开 API 拒（403）。
+  修复：`sendMessage` 改打公开 v1 端点，接受 `opts.apiKey || CFG.apiKey`；无 Key 时**不臆造成功**，直接回报需配置 API Key。
+
+### 实测验证 (真账号 · 不打印凭证)
+- 总览实时：对话 105 · 运行 1 · 知识库 252 · 剧本 160 · 密钥 2 · Git 1；额度随运行实时下降（12.862→12.846）。
+- 全部备份真实落盘 **105 个对话 ZIP**（含新建 session）；`unlockBackup` 实跑解出新会话 3 文件（`_meta.json`/`对话_agent.json`/`对话_人类可读.md`），MD 含真实问答正文与 `eventCount`。
+
 ## v4.0.1 (2026-06-12) · 反者道之动 · 真链路补全
 
 > *反者道之动也* —— 对照本源需求反向审计，补齐写接口与备份浏览闭环。
