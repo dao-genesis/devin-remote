@@ -2,6 +2,33 @@
 
 > **5 插件 + 2 模块 + 1 人启动**。GitHub Issues Comments = 无感传输层。
 
+[![Release](https://img.shields.io/github/v/release/zhouyoukang1234-spec/devin-remote?label=release&color=2ea44f)](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)
+&nbsp;5 插件 + 2 模块 + 1 人启动&nbsp;·&nbsp;[全部下载 ↓](#下载--快速安装)&nbsp;·&nbsp;[人启动](bootstrap/README.md)
+
+---
+
+## 下载 · 快速安装
+
+**一键冷启动**（自动装 Devin Desktop + 全部插件）：
+
+```powershell
+git clone https://github.com/zhouyoukang1234-spec/devin-remote.git $env:USERPROFILE\repos\devin-remote
+powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\tools\coldstart.ps1
+```
+
+**单独下载**（点链接直接拿 VSIX → `devin-desktop --install-extension <vsix> --force`）：
+
+| 板块 | 版本 | 下载 |
+|------|------|------|
+| ① dao-vsix · 全功能面板 | 1.2.1 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-vsix-1.2.1.vsix) |
+| ② dao-bridge · 内网穿透 | 3.0.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-bridge-3.0.0.vsix) |
+| ③ devin-git-auth · 多账号 Git | 2.3.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/devin-git-auth-2.3.0.vsix) |
+| ④ dao-proxy-pro · 模型路由 | 9.9.277 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-proxy-pro-9.9.277.vsix) |
+| ⑤ rt-flow · Cloud 备份/wipe | 4.1.2 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/rt-flow-4.1.2.vsix) |
+| 模块 · dao-export · 全量导出 | 1.3.3 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-devin-export-1.3.3.vsix) |
+
+> 全部资产见 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)。vm-replica 模块为纯源码/文档，见 [`modules/vm-replica/`](modules/vm-replica/)。
+
 ---
 
 ## 架构全貌 · 5 + 2 + 1
