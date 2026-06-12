@@ -17,6 +17,11 @@
   - 结论：正确端点为公开 API `POST {v1Base}/session/{id}/message {message}`，且仅认 Devin API Key（`apk_…`）；
     会话登录态 `auth1` 与自动铸的 `cog_` service-user token 均被公开 API 拒（403）。
   修复：`sendMessage` 改打公开 v1 端点，接受 `opts.apiKey || CFG.apiKey`；无 Key 时**不臆造成功**，直接回报需配置 API Key。
+- **解锁后「打开文件夹」实测弹原生错误框**（GUI 实跑：解压成功·toast `已解锁 3 个文件`，但随即弹
+  *"An error occurred opening an external program. Failed to open: The system cannot find the file specified. (0x2)"*）。
+  根因：`devinUnlockBackup` 用 `vscode.env.openExternal(Uri.file(目录))` 打开解压目录，explorer 启动失败时 VS Code 自弹原生错误框，`try/catch` 吞不住。
+  修复：改用 `vscode.commands.executeCommand("revealFileInOS", uri)`（在系统文件管理器中定位目录·无原生错误框）；
+  并把解压目录写进成功 toast（`已解锁 N 个文件 → <outDir>`），即使定位失败用户也知文件落点。
 
 ### 实测验证 (真账号 · 不打印凭证)
 - 总览实时：对话 105 · 运行 1 · 知识库 252 · 剧本 160 · 密钥 2 · Git 1；额度随运行实时下降（12.862→12.846）。
