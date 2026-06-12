@@ -375,7 +375,7 @@ async function robustDisconnectGit(email, auth1, orgId) {
       var c = gc.connections[i];
       var cName = c.name || c.installation_name || "github";
       var cHost = c.host || "github.com";
-      var cId = c.id || c.git_connection_id || null;
+      var cId = c.id || c.git_connection_id || c.connection_id || null;
       logs.push("连接[" + i + "]: " + cName + " @ " + cHost + " type=" + (c.type || "?"));
 
       // 断开 name+host
@@ -402,6 +402,26 @@ async function robustDisconnectGit(email, auth1, orgId) {
   // 3. 删除 GITHUB_PAT 密钥 · 彻底解绑(删后零关联): Git连接+OAuth用户+认证密钥 全清
   var secDelR = await deleteSecret(orgId, "GITHUB_PAT", auth1);
   logs.push("删除GITHUB_PAT密钥: " + (secDelR.ok ? (secDelR.missing ? "无需(不存在)" : "OK") : "FAIL " + (secDelR.error || "").slice(0, 60)));
+
+  // 4. 校验并扫除残留连接 · 真解绑须连接数归零(弱者道之用, 反复至成)
+  // 刚创建的连接在首次断开时可能尚未可删(瞬态), 故 settle 后复查, 按 id 逐个强删, 最多 3 轮。
+  for (var attempt = 0; attempt < 3; attempt++) {
+    await sleep(800);
+    var vc = await checkGitConnections(orgId, auth1);
+    if (!vc.ok) { logs.push("复查连接失败: " + (vc.error || "")); break; }
+    if (vc.count === 0) { logs.push("复查: 连接已归零"); break; }
+    logs.push("复查[轮" + (attempt + 1) + "]: 残留 " + vc.count + " 个, 强删");
+    for (var j = 0; j < vc.connections.length; j++) {
+      var rc = vc.connections[j];
+      var rcName = rc.name || rc.installation_name || "github";
+      var rcId = rc.id || rc.git_connection_id || rc.connection_id || null;
+      try { await disconnectGitHubConnection(orgId, rcName, rc.host || "github.com", auth1); } catch (e) {}
+      if (rcId) {
+        var rr = await disconnectGitHubPAT(orgId, rcId, auth1);
+        logs.push("  强删 " + rcName + "(" + (rc.type || "?") + "): " + (rr.ok ? "OK" : "FAIL"));
+      }
+    }
+  }
 
   return logs;
 }
