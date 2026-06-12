@@ -3655,11 +3655,17 @@ async function devinListSessions(orgId: string, auth1: string, limit?: number): 
     const bareOrgId = orgId.replace(/^org-/, '');
     let url = DEVIN_APP + '/api/org-' + bareOrgId + '/v2sessions';
     if (limit) url += (url.includes('?') ? '&' : '?') + 'limit=' + limit;
-    const r = await devinJsonGet(url, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-    if (r.status === 200) {
-        const j = r.json || {};
-        const arr = Array.isArray(j.result) ? j.result : (Array.isArray(j.sessions) ? j.sessions : (Array.isArray(j) ? j : []));
-        return { ok: true, sessions: arr };
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    // 帛书·「无为而无不为」— v2sessions 首载经代理偶发超时；守柔重试两次, 让首屏自成而无需手动重试。
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await devinJsonGet(url, H, 30000);
+        if (r.status === 200) {
+            const j = r.json || {};
+            const arr = Array.isArray(j.result) ? j.result : (Array.isArray(j.sessions) ? j.sessions : (Array.isArray(j) ? j : []));
+            return { ok: true, sessions: arr };
+        }
+        if (r.status && r.status !== 0 && r.status !== 502 && r.status !== 503 && r.status !== 504) break;
+        await new Promise(res => setTimeout(res, 600));
     }
     return { ok: false };
 }
