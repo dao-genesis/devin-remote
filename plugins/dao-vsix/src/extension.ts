@@ -1865,7 +1865,7 @@ const S={
   },
   bridge:${JSON.stringify(bridge || null)},
   inject:null,
-  injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],lastInjectedOrg:''},
+  injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],messageLimit:null,lastInjectedOrg:''},
   tab:'overview',
   data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]}
 };
@@ -2015,15 +2015,18 @@ function rSD(d){
 }
 // 自动注入自循环配置面板 — 帛书·「善建者不拔·善抱者不脱」
 // 初始配置一次, 账号随 IDE 切换, 系统据此 profile 自动注入新账号 + 清理旧账号
-function ipSave(){cmd('setInjectProfile',{enabled:S.injectProfile.enabled,autoCleanup:S.injectProfile.autoCleanup,secrets:S.injectProfile.secrets,knowledge:S.injectProfile.knowledge,playbooks:S.injectProfile.playbooks})}
+function ipSave(){cmd('setInjectProfile',{enabled:S.injectProfile.enabled,autoCleanup:S.injectProfile.autoCleanup,secrets:S.injectProfile.secrets,knowledge:S.injectProfile.knowledge,playbooks:S.injectProfile.playbooks,mcps:S.injectProfile.mcps,messageLimit:S.injectProfile.messageLimit})}
 function ipToggle(field){S.injectProfile[field]=!S.injectProfile[field];ipSave();rInject()}
 function ipRemove(kind,idx){S.injectProfile[kind].splice(idx,1);ipSave();rInject()}
 function ipAddSecret(){sm('添加 Secret','<input id="m1" placeholder="名称 KEY" style="width:100%;margin:4px 0"><input id="m2" placeholder="值 value" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim(),val=document.getElementById('m2').value;if(!n)return false;S.injectProfile.secrets.push({name:n,value:val});ipSave();rInject()})}
 function ipAddKnowledge(){sm('添加 Knowledge','<input id="m1" placeholder="名称" style="width:100%;margin:4px 0"><textarea id="m2" placeholder="正文 body" style="width:100%;height:80px;margin:4px 0"></textarea><input id="m3" placeholder="触发 trigger (默认 Always)" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.knowledge.push({name:n,body:document.getElementById('m2').value,trigger:document.getElementById('m3').value.trim()||'Always'});ipSave();rInject()})}
 function ipAddPlaybook(){sm('添加 Playbook','<input id="m1" placeholder="标题 title" style="width:100%;margin:4px 0"><textarea id="m2" placeholder="正文 body" style="width:100%;height:80px;margin:4px 0"></textarea>',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.playbooks.push({title:n,body:document.getElementById('m2').value});ipSave();rInject()})}
+function ipAddMcp(){sm('钉住 MCP (切号自动注入)','<input id="m1" placeholder="名称 name (如 GitHub MCP)" style="width:100%;margin:4px 0"><select id="m2" style="width:100%;margin:4px 0"><option value="HTTP">HTTP / SSE (远程 URL)</option><option value="STDIO">STDIO (command/args)</option></select><input id="m3" placeholder="URL (HTTP) 或 command (STDIO, 如 npx)" style="width:100%;margin:4px 0"><input id="m4" placeholder="args 空格分隔 (STDIO) / Authorization 头值 (HTTP)" style="width:100%;margin:4px 0"><input id="m5" placeholder="简介 short_description (可选)" style="width:100%;margin:4px 0"><p style="font-size:10px;color:var(--muted);margin:4px 0">提示: 点下方预设可一键填 GitHub MCP</p><button class="btn sm" onclick="ipMcpPreset(&#39;github&#39;)">GitHub MCP 预设</button>',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;const tr=document.getElementById('m2').value;const f3=document.getElementById('m3').value.trim();const f4=document.getElementById('m4').value.trim();const sd=document.getElementById('m5').value.trim();const m={name:n,transport:tr,short_description:sd};if(tr==='STDIO'){m.command=f3;m.args=f4?f4.split(' ').filter(Boolean):[];m.env_variables=[]}else{m.url=f3;if(f4)m.headers={Authorization:f4}}S.injectProfile.mcps.push(m);ipSave();rInject()})}
+function ipMcpPreset(kind){if(kind==='github'){const a=document.getElementById('m1'),b=document.getElementById('m2'),c=document.getElementById('m3'),d=document.getElementById('m5');if(a)a.value='GitHub MCP';if(b)b.value='HTTP';if(c)c.value='https://api.githubcopilot.com/mcp/';if(d)d.value='GitHub official remote MCP'}}
+function ipSetLimit(){const cur=(S.injectProfile.messageLimit==null?'':S.injectProfile.messageLimit);sm('设定单条额度上限 (max_credits)','<input id="m1" type="number" placeholder="如 30; 留空=不管理" value="'+cur+'" style="width:100%;margin:4px 0">',function(){const raw=document.getElementById('m1').value.trim();S.injectProfile.messageLimit=(raw===''?null:Number(raw));ipSave();rInject()})}
 function rInject(){
   const v=document.getElementById('v-inject');if(!v)return;
-  const p=S.injectProfile||{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[]};
+  const p=S.injectProfile||{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],messageLimit:null};
   const tgl=(on,fn)=>'<span onclick="'+fn+'" style="cursor:pointer;display:inline-block;width:40px;height:20px;border-radius:10px;background:'+(on?'var(--success)':'var(--muted)')+';position:relative;vertical-align:middle"><span style="position:absolute;top:2px;left:'+(on?'22px':'2px')+';width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s"></span></span>';
   let h='<div class="st">自动注入自循环 · 无为而无不为</div>';
   h+='<p style="font-size:11px;color:var(--muted);line-height:1.6;margin:4px 0 10px">初始配置一次, 此后账号随 IDE 登录自动切换时, 系统按此清单自动注入新账号, 并(默认)清理旧账号的同名注入。</p>';
@@ -2032,7 +2035,10 @@ function rInject(){
   h+=listSec('🔑 Secrets','secrets',p.secrets,it=>it.name,'ipAddSecret()');
   h+=listSec('📚 Knowledge','knowledge',p.knowledge,it=>it.name,'ipAddKnowledge()');
   h+=listSec('📋 Playbooks','playbooks',p.playbooks,it=>it.title,'ipAddPlaybook()');
-  h+='<div class="br" style="margin-top:10px"><button class="btn" onclick="cmd(&#39;importCurrentToInjectProfile&#39;)">⬇️ 导入当前账号现有项</button>'+(p.enabled?'<button class="btn primary" onclick="cmd(&#39;setInjectProfile&#39;,{enabled:true})">▶️ 立即应用到当前账号</button>':'')+'</div>';
+  h+=listSec('🔌 MCP (钉住)','mcps',p.mcps||[],it=>it.name+' · '+(it.transport||'STDIO'),'ipAddMcp()');
+  h+='<div class="st">⚖️ 单条额度上限<button class="btn sm primary" style="float:right" onclick="ipSetLimit()">设定</button></div>';
+  h+='<div class="card"><div class="cr"><span class="l" style="font-size:12px">期望 max_credits</span><span class="v">'+((p.messageLimit==null)?'<span style="color:var(--muted)">不管理</span>':'$'+esc(String(p.messageLimit)))+'</span></div></div>';
+  h+='<div class="br" style="margin-top:10px"><button class="btn" onclick="cmd(&#39;importCurrentToInjectProfile&#39;)">⬇️ 导入当前账号现有项</button>'+(p.enabled?'<button class="btn primary" onclick="cmd(&#39;setInjectProfile&#39;,{enabled:true})">▶️ 立即应用到当前账号</button><button class="btn" onclick="cmd(&#39;applyInjectProfileToAll&#39;)">👥 注入到所有账号</button>':'')+'</div>';
   v.innerHTML=h;
 }
 usb();rc();
@@ -2254,7 +2260,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'getInjectProfile': {
                 // 自动注入自循环配置: 返回当前 profile 给面板渲染
                 const p = loadInjectProfile();
-                reply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: p.knowledge, playbooks: p.playbooks, lastInjectedOrg: p.lastInjectedOrg } });
+                reply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: p.knowledge, playbooks: p.playbooks, mcps: p.mcps, messageLimit: p.messageLimit, lastInjectedOrg: p.lastInjectedOrg } });
                 break;
             }
             case 'setInjectProfile': {
@@ -2266,6 +2272,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     secrets: Array.isArray(msg.secrets) ? msg.secrets : cur.secrets,
                     knowledge: Array.isArray(msg.knowledge) ? msg.knowledge : cur.knowledge,
                     playbooks: Array.isArray(msg.playbooks) ? msg.playbooks : cur.playbooks,
+                    mcps: Array.isArray(msg.mcps) ? msg.mcps : cur.mcps,
+                    messageLimit: (typeof msg.messageLimit === 'number') ? msg.messageLimit : (msg.messageLimit === null ? null : cur.messageLimit),
                     lastInjectedOrg: cur.lastInjectedOrg,
                 };
                 saveInjectProfile(np);
@@ -2294,6 +2302,17 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 saveInjectProfile(cur);
                 reply({ type: 'injectProfile', profile: cur });
                 refreshReply({ type: 'actionResult', command: 'importCurrentToInjectProfile', ok: true });
+                break;
+            }
+            case 'applyInjectProfileToAll': {
+                // 多账号 · 把期望态一次性注入账号池里所有已存 auth1 的账号 org
+                vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '多账号注入期望态…' }, async () => {
+                    let r: { ok: boolean; total: number; injected: number } = { ok: false, total: 0, injected: 0 };
+                    try { r = await applyInjectProfileToAllAccounts(); } catch { /* 守柔 */ }
+                    vscode.window.showInformationMessage('多账号注入完成: ' + r.injected + '/' + r.total + ' 账号');
+                    sidebarCloudPanel?.refresh();
+                    refreshReply({ type: 'actionResult', command: 'applyInjectProfileToAll', ok: r.ok });
+                });
                 break;
             }
             case 'devinLogin': {
@@ -4232,13 +4251,23 @@ const INJECT_PROFILE_FILE = path.join(DAO_DIR, 'dao-inject-profile.json');
 interface InjectProfileItemS { name: string; value: string }
 interface InjectProfileItemK { name: string; body: string; trigger?: string }
 interface InjectProfileItemP { title: string; body: string }
+// 钉住的 MCP — 切账号即幂等注入到新 org (如 GitHub MCP / 本地 141 HTTP MCP)
+interface InjectProfileItemM {
+    name: string; slug?: string; transport?: string; short_description?: string;
+    command?: string; args?: string[]; env_variables?: any[]; url?: string; headers?: any;
+}
 interface InjectProfile {
     enabled: boolean;
     autoCleanup: boolean;
     secrets: InjectProfileItemS[];
     knowledge: InjectProfileItemK[];
     playbooks: InjectProfileItemP[];
+    mcps: InjectProfileItemM[];
+    messageLimit: number | null;
     lastInjectedOrg: string;
+}
+function mcpSlug(m: InjectProfileItemM): string {
+    return String(m.slug || m.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 function loadInjectProfile(): InjectProfile {
     try {
@@ -4249,10 +4278,12 @@ function loadInjectProfile(): InjectProfile {
             secrets: Array.isArray(j.secrets) ? j.secrets : [],
             knowledge: Array.isArray(j.knowledge) ? j.knowledge : [],
             playbooks: Array.isArray(j.playbooks) ? j.playbooks : [],
+            mcps: Array.isArray(j.mcps) ? j.mcps : [],
+            messageLimit: (typeof j.messageLimit === 'number') ? j.messageLimit : null,
             lastInjectedOrg: j.lastInjectedOrg || '',
         };
     } catch {
-        return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], lastInjectedOrg: '' };
+        return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], mcps: [], messageLimit: null, lastInjectedOrg: '' };
     }
 }
 function saveInjectProfile(p: InjectProfile): void {
@@ -4269,6 +4300,22 @@ async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectPr
     for (const s of p.secrets) { if (s && s.name) { try { await devinUpsertSecret(orgId, s.name, s.value || '', auth1); } catch { /* 守柔 */ } } }
     for (const k of p.knowledge) { if (k && k.name) { try { await devinUpsertKnowledge(orgId, k.name, k.body || '', k.trigger || 'Always', auth1); } catch { /* 守柔 */ } } }
     for (const pb of p.playbooks) { if (pb && pb.title) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1); } catch { /* 守柔 */ } } }
+    // 钉住的 MCP — 幂等: 已存在(按 slug)则跳过, 否则追录到该 org
+    if (p.mcps && p.mcps.length) {
+        let existing: Set<string> = new Set();
+        try {
+            const inst = await devinListMcpInstallations(orgId, auth1);
+            if (inst.ok && inst.items) for (const it of inst.items) existing.add(String((it.name || '').replace(/^★ /, '')).toLowerCase());
+        } catch { /* 守柔 */ }
+        for (const m of p.mcps) {
+            if (!m || !m.name) continue;
+            const slug = mcpSlug(m);
+            if (existing.has(String(m.name).toLowerCase()) || existing.has(slug)) continue;
+            try { await devinAddCustomMcp(orgId, Object.assign({}, m, { slug }), auth1); } catch { /* 守柔 */ }
+        }
+    }
+    // 期望的单条额度上限
+    if (typeof p.messageLimit === 'number') { try { await devinSetMessageLimit(orgId, p.messageLimit, auth1); } catch { /* 守柔 */ } }
 }
 async function cleanupInjectProfileFromOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
     for (const s of p.secrets) { if (s && s.name) { try { await devinDeleteSecret(orgId, s.name, auth1); } catch { /* 守柔 */ } } }
@@ -4280,13 +4327,24 @@ async function cleanupInjectProfileFromOrg(orgId: string, auth1: string, p: Inje
         const pl = await devinListPlaybooks(orgId, auth1);
         if (pl.ok && pl.playbooks) for (const pb of pl.playbooks) { if (p.playbooks.some(x => x.title === pb.title) && pb.id) { try { await devinDeletePlaybook(orgId, String(pb.id), auth1); } catch { /* 守柔 */ } } }
     } catch { /* 守柔 */ }
+    if (p.mcps && p.mcps.length) {
+        try {
+            const inst = await devinListMcpInstallations(orgId, auth1);
+            if (inst.ok && inst.items) for (const it of inst.items) {
+                const nm = String((it.name || '').replace(/^★ /, '')).toLowerCase();
+                if (p.mcps.some(x => String(x.name).toLowerCase() === nm || mcpSlug(x) === nm) && it.id) {
+                    try { await devinDeleteMcp(orgId, String(it.id), auth1); } catch { /* 守柔 */ }
+                }
+            }
+        } catch { /* 守柔 */ }
+    }
 }
 // 账号切换后调用: 应用 profile 到新 org + (默认)清理旧 org — 自循环核心
 async function runInjectProfileSelfLoop(): Promise<void> {
     const p = loadInjectProfile();
     if (!p.enabled) return;
     if (!ws.devinOrgId || !ws.devinAuth1 || ws.devinAuth1.startsWith('devin-session-token$')) return;
-    const hasItems = p.secrets.length || p.knowledge.length || p.playbooks.length;
+    const hasItems = p.secrets.length || p.knowledge.length || p.playbooks.length || p.mcps.length || typeof p.messageLimit === 'number';
     if (!hasItems) return;
     // 1. 默认清理旧 org 的旧注入 — 帛书·「将欲去之·必故与之」(用户可关 autoCleanup)
     if (p.autoCleanup && getInjectAutoCleanup() && p.lastInjectedOrg && p.lastInjectedOrg !== ws.devinOrgId) {
@@ -4298,6 +4356,26 @@ async function runInjectProfileSelfLoop(): Promise<void> {
     // 3. 记录 lastInjectedOrg → 下次切换据此清理
     p.lastInjectedOrg = ws.devinOrgId;
     saveInjectProfile(p);
+}
+
+// 多账号 · 一次性把期望态注入到账号池里所有已存 auth1 的账号 org
+// 帛书·「既以为人己愈有·既以予人己愈多」— 不必逐个手动切号
+async function applyInjectProfileToAllAccounts(): Promise<{ ok: boolean; total: number; injected: number; results: { email: string; ok: boolean }[] }> {
+    const p = loadInjectProfile();
+    const store = loadAccountsAuthStore();
+    const emails = Object.keys(store);
+    const results: { email: string; ok: boolean }[] = [];
+    // 去重 org: 同 org 多邮箱只注一次
+    const doneOrgs = new Set<string>();
+    for (const e of emails) {
+        const a = store[e];
+        if (!a || !a.auth1 || a.auth1.startsWith('devin-session-token$') || !a.orgId) { results.push({ email: e, ok: false }); continue; }
+        if (doneOrgs.has(a.orgId)) { results.push({ email: e, ok: true }); continue; }
+        try { await applyInjectProfileToOrg(a.orgId, a.auth1, p); doneOrgs.add(a.orgId); results.push({ email: e, ok: true }); }
+        catch { results.push({ email: e, ok: false }); }
+    }
+    const injected = results.filter(r => r.ok).length;
+    return { ok: injected > 0, total: emails.length, injected, results };
 }
 
 function buildDevinKnowledge(url: string, token: string): string {
