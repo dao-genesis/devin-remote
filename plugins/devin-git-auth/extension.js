@@ -307,6 +307,51 @@ async function injectSecret(orgId, name, value, auth1) {
   return { ok: false, error: r.text ? r.text.slice(0, 100) : String(r.status) };
 }
 
+// ═══ 注入 GITHUB_PAT Secret 并校验落库 · 返回真实结果 ═══
+// 归一须含认证资料: Secret 必须真正写入后端, 不可乐观置位。
+// Secret 存储有写后复制延迟: 注入后须 settle 再校验, 且需「连续两次」读到才算稳态落库,
+// 避免读到尚未持久化的瞬态副本(批量高并发下会出现注入成功→稍后丢失)。
+async function ensureGithubPatSecret(orgId, pat, auth1) {
+  var bareOrgId = orgId.replace(/^org-/, "");
+  async function _hasSecret() {
+    var r = await jsonGet(DEVIN + "/api/org-" + bareOrgId + "/secrets",
+      { Authorization: "Bearer " + auth1, "x-cog-org-id": orgId });
+    if (r.status !== 200 || !r.json) return false;
+    var secrets = Array.isArray(r.json) ? r.json : (r.json.secrets || []);
+    return !!secrets.find(function (s) { return s.key === "GITHUB_PAT" || s.name === "GITHUB_PAT"; });
+  }
+  for (var attempt = 0; attempt < 3; attempt++) {
+    try { await injectSecret(orgId, "GITHUB_PAT", pat, auth1); } catch (e) {}
+    await sleep(1200); // settle: 等待写入持久化
+    try {
+      // 连续两次确认(间隔), 排除尚未落库的瞬态副本
+      if (await _hasSecret()) { await sleep(600); if (await _hasSecret()) return true; }
+    } catch (e) {}
+    await sleep(800);
+  }
+  return false;
+}
+
+// ═══ 删除组织 Secret · 彻底解绑(删后零关联) ═══
+async function deleteSecret(orgId, name, auth1) {
+  var bareOrgId = orgId.replace(/^org-/, "");
+  // 先列出 secrets, 定位匹配项
+  var listR = await jsonGet(DEVIN + "/api/org-" + bareOrgId + "/secrets",
+    { Authorization: "Bearer " + auth1, "x-cog-org-id": orgId });
+  if (listR.status !== 200 || !listR.json) return { ok: false, error: "list_failed status=" + listR.status };
+  var secrets = Array.isArray(listR.json) ? listR.json : (listR.json.secrets || []);
+  var hit = secrets.find(function (s) { return s.key === name || s.name === name; });
+  if (!hit) return { ok: true, missing: true };
+  var sid = hit.id || hit.secret_id;
+  if (!sid) return { ok: false, error: "no_secret_id" };
+  // 正确端点: DELETE /api/secrets/{id} (secret id 全局唯一, 路径不含 org)
+  var r = await jsonDelete(DEVIN + "/api/secrets/" + encodeURIComponent(sid), {
+    Authorization: "Bearer " + auth1, "x-cog-org-id": orgId,
+  });
+  if (r.status === 200 || r.status === 204 || r.status === 404) return { ok: true };
+  return { ok: false, error: "status=" + r.status };
+}
+
 // ═══ GitHub API · 用PAT直接查App安装 ═══
 async function getGitHubAppInstallations(pat) {
   var r = await rawRequest("GET", "https://api.github.com/user/installations",
@@ -330,7 +375,7 @@ async function robustDisconnectGit(email, auth1, orgId) {
       var c = gc.connections[i];
       var cName = c.name || c.installation_name || "github";
       var cHost = c.host || "github.com";
-      var cId = c.id || c.git_connection_id || null;
+      var cId = c.id || c.git_connection_id || c.connection_id || null;
       logs.push("连接[" + i + "]: " + cName + " @ " + cHost + " type=" + (c.type || "?"));
 
       // 断开 name+host
@@ -354,6 +399,54 @@ async function robustDisconnectGit(email, auth1, orgId) {
   var userDisR = await disconnectGitHubUser(auth1, orgId);
   logs.push("断开OAuth用户: " + (userDisR.ok ? "OK" : "FAIL " + (userDisR.error || "").slice(0, 60)));
 
+  // 3. 删除 GITHUB_PAT 密钥 · 彻底解绑(删后零关联): Git连接+OAuth用户+认证密钥 全清
+  var secDelR = await deleteSecret(orgId, "GITHUB_PAT", auth1);
+  logs.push("删除GITHUB_PAT密钥: " + (secDelR.ok ? (secDelR.missing ? "无需(不存在)" : "OK") : "FAIL " + (secDelR.error || "").slice(0, 60)));
+
+  // 4. 校验并扫除残留连接 · 真解绑须连接数归零(弱者道之用, 反复至成)
+  // 刚创建的连接在首次断开时可能尚未可删(瞬态), 故 settle 后复查, 按 id 逐个强删, 最多 3 轮。
+  for (var attempt = 0; attempt < 3; attempt++) {
+    await sleep(800);
+    var vc = await checkGitConnections(orgId, auth1);
+    if (!vc.ok) { logs.push("复查连接失败: " + (vc.error || "")); break; }
+    if (vc.count === 0) { logs.push("复查: 连接已归零"); break; }
+    logs.push("复查[轮" + (attempt + 1) + "]: 残留 " + vc.count + " 个, 强删");
+    for (var j = 0; j < vc.connections.length; j++) {
+      var rc = vc.connections[j];
+      var rcName = rc.name || rc.installation_name || "github";
+      var rcId = rc.id || rc.git_connection_id || rc.connection_id || null;
+      try { await disconnectGitHubConnection(orgId, rcName, rc.host || "github.com", auth1); } catch (e) {}
+      if (rcId) {
+        var rr = await disconnectGitHubPAT(orgId, rcId, auth1);
+        logs.push("  强删 " + rcName + "(" + (rc.type || "?") + "): " + (rr.ok ? "OK" : "FAIL"));
+      }
+    }
+  }
+
+  return logs;
+}
+
+// ═══ 切换后清理残留连接 · 自由切换须干净(A→B 后不留 A) ═══
+// 引擎换绑(github_app)会留下旧的 PAT(github_individual_token)连接, 须按 connection_id 逐个删除,
+// 只保留目标连接(keepName)。否则 A→B 切换后后端仍残留 A, 非真切换。
+async function cleanupStaleConnections(orgId, auth1, keepName) {
+  var logs = [];
+  try {
+    var gc = await checkGitConnections(orgId, auth1);
+    if (!gc.ok || !gc.connections) return logs;
+    for (var i = 0; i < gc.connections.length; i++) {
+      var c = gc.connections[i];
+      var cName = c.name || c.installation_name || "";
+      var cId = c.id || c.git_connection_id || c.connection_id || null;
+      if (keepName && cName === keepName) continue; // 保留目标连接
+      // 先按 name+host 断, 再按 connection_id 删(PAT 连接须 id 才能真正删除)
+      try { await disconnectGitHubConnection(orgId, cName, c.host || "github.com", auth1); } catch (e) {}
+      if (cId) {
+        var r = await disconnectGitHubPAT(orgId, cId, auth1);
+        logs.push("清理残留 " + cName + "(" + (c.type || "?") + "): " + (r.ok ? "OK" : "FAIL"));
+      }
+    }
+  } catch (e) { logs.push("cleanup异常 " + e.message); }
   return logs;
 }
 
@@ -937,9 +1030,9 @@ window.addEventListener('message', function(event) {
       resetCoreBtns();
       mergeSaved(msg.email, { busy:false });
       if (msg.ok) {
-        log('Git连接成功: '+(msg.email||'')+(msg.repoCount!==undefined?(' 可达仓库 '+msg.repoCount):''),'ok');
-        mergeSaved(msg.email, { git:true, gitType:msg.gitType||'github_app', secret:true, gitChecked:true, gitCount:(saved[msg.email]&&saved[msg.email].gitCount)||1, repoCount: msg.repoCount });
-        if (cur && cur.email === msg.email) { cur.git=true; cur.gitType=msg.gitType||'github_app'; cur.secret=true; }
+        log('Git连接成功: '+(msg.email||'')+(msg.githubUsername?(' → @'+msg.githubUsername):'')+(msg.repoCount!==undefined?(' 可达仓库 '+msg.repoCount):''),'ok');
+        mergeSaved(msg.email, { git:true, gitType:msg.gitType||'github_app', secret:(msg.secret!==undefined?msg.secret:true), gitChecked:true, gitCount:msg.gitCount||(saved[msg.email]&&saved[msg.email].gitCount)||1, repoCount: msg.repoCount, githubUsername: msg.githubUsername||(saved[msg.email]&&saved[msg.email].githubUsername)||null });
+        if (cur && cur.email === msg.email) { cur.git=true; cur.gitType=msg.gitType||'github_app'; if(msg.githubUsername)cur.githubUsername=msg.githubUsername; if(msg.repoCount!==undefined)cur.repoCount=msg.repoCount; }
         render();
       } else {
         if (msg.error && msg.error.indexOf('设备码') >= 0) log(msg.error, 'warn');
@@ -1243,6 +1336,11 @@ async function fetchFullStatus(email, auth1, orgId) {
     }
   } catch (e) {}
 
+  // 归一可见: PAT 个人令牌连接无 OAuth 用户(githubUsername 为空), 但连接名(gitName)即所绑 GitHub
+  // 账号/组织(如 zhouyoukang1234-spec / hdougle)。回退用 gitName 展示, 让「绑到哪个 GitHub」一目了然,
+  // A→B 切换在列表/详情中即可肉眼可辨。
+  if (!result.githubUsername && result.gitName) result.githubUsername = result.gitName;
+
   try {
     var bareOrgId2 = orgId.replace(/^org-/, "");
     var secR = await jsonGet(DEVIN + "/api/org-" + bareOrgId2 + "/secrets",
@@ -1393,21 +1491,27 @@ async function handleMessage(msg) {
           break;
         }
 
-        // ═══ Step0: 换登引擎规范绑定 (推荐 · 突破 already-registered 幽灵态) ═══
-        // 取之尽珠玉: 有 GitHub 工作区凭证时, 走官网同款 GitHub App installation-callback
-        // 移绑路径, 不撞后端幽灵态。失败再退回 PAT / 设备码。
+        // ═══ Step0: 换登引擎规范绑定 (仅在「未配置 PAT」时作为归一目标) ═══
+        // 弱者道之用: PAT 是 UI 标注的「归一连接目标」, 配置了 PAT 即优先走 PAT(Step1),
+        // 与批量连接(batchConnect)行为一致 — 多个 Devin 账号归一到 PAT 所属的同一 GitHub。
+        // 未配置 PAT 时, 才用工作区 GitHub 凭证走官网同款 OAuth + App installation-callback。
         var _ws = loadWorkspaceGithub();
         var _devinPwd = passwordFor(msg.email, acct);
-        if (_switchEngine && _ws && _ws.password && _devinPwd) {
+        if (!pat && _switchEngine && _ws && _ws.password && _devinPwd) {
           _log('connectGit: Step0 换登引擎规范绑定(GitHub工作区=' + _ws.username + ')...');
           try {
             var engR = await engineSwitchConnect(msg.email, _devinPwd, _ws);
             if (engR.ok) {
+              // 干净切换: 引擎换绑后清理残留旧连接(如旧 PAT), 只保留新目标 engR.name
+              var cleanupLogs = await cleanupStaleConnections(acct.orgId, auth1, engR.name);
+              if (cleanupLogs.length) _log('connectGit: Step0 ' + cleanupLogs.join(' | '));
+              var engGc = await checkGitConnections(acct.orgId, auth1);
               _state.accounts[msg.email].git = true;
               _state.accounts[msg.email].gitType = "github_app";
-              _state.accounts[msg.email].gitCount = (_state.accounts[msg.email].gitCount || 0) + 1;
+              _state.accounts[msg.email].gitCount = (engGc.ok && engGc.count) ? engGc.count : 1;
+              _state.accounts[msg.email].githubUsername = engR.name || null;
               saveState(_state);
-              postMsg({ command: "connectResult", email: msg.email, ok: true, repoCount: engR.repoCount, engine: true });
+              postMsg({ command: "connectResult", email: msg.email, ok: true, repoCount: engR.repoCount, engine: true, gitType: "github_app", githubUsername: engR.name || null, gitCount: _state.accounts[msg.email].gitCount });
               break;
             }
             _log('connectGit: Step0 引擎未连成(' + (engR.error || '') + '), 退回 PAT/设备码');
@@ -1419,14 +1523,17 @@ async function handleMessage(msg) {
           _log('connectGit: Step1 PAT注入(快速尝试)...');
           var patR = await injectGitHubPAT(acct.orgId, pat, auth1);
           if (patR.ok) {
-            try { await injectSecret(acct.orgId, "GITHUB_PAT", pat, auth1); } catch (e) {}
+            var secOk = await ensureGithubPatSecret(acct.orgId, pat, auth1);
+            var patGc = await checkGitConnections(acct.orgId, auth1);
+            var patName = (patGc.ok && patGc.connections[0]) ? (patGc.connections[0].name || patGc.connections[0].installation_name) : null;
             _state.accounts[msg.email].git = true;
             _state.accounts[msg.email].gitType = "github_individual_token";
-            _state.accounts[msg.email].secret = true;
-            _state.accounts[msg.email].gitCount = (_state.accounts[msg.email].gitCount || 0) + 1;
+            _state.accounts[msg.email].secret = secOk;
+            _state.accounts[msg.email].gitCount = (patGc.ok && patGc.count) ? patGc.count : ((_state.accounts[msg.email].gitCount || 0) + 1);
+            _state.accounts[msg.email].githubUsername = patName;
             saveState(_state);
             var repoR0 = await getAccessibleRepos(acct.orgId, auth1);
-            postMsg({ command: "connectResult", email: msg.email, ok: true, repoCount: repoR0.ok ? repoR0.repos.length : undefined });
+            postMsg({ command: "connectResult", email: msg.email, ok: true, repoCount: repoR0.ok ? repoR0.repos.length : undefined, gitType: "github_individual_token", secret: secOk, githubUsername: patName, gitCount: _state.accounts[msg.email].gitCount });
             break;
           }
           if (patR.invalidPat) {
@@ -1584,6 +1691,20 @@ async function handleMessage(msg) {
       break;
 
     case "removeAccount":
+      // 删除前彻底解绑: 断开 Git 连接 + OAuth 用户 + GITHUB_PAT 密钥, 确保删后该 Devin 与 GitHub 零关联
+      try {
+        var rmAcct = _state.accounts[msg.email];
+        var rmAuth = _authCache[msg.email];
+        if (rmAcct && rmAcct.orgId && (rmAcct.git || rmAcct.secret)) {
+          if (!rmAuth && passwordFor(msg.email, rmAcct)) {
+            try { var rmLr = await devinLogin(msg.email, passwordFor(msg.email, rmAcct)); rmAuth = rmLr.auth1; } catch (e) {}
+          }
+          if (rmAuth) {
+            var rmLogs = await robustDisconnectGit(msg.email, rmAuth, rmAcct.orgId);
+            rmLogs.forEach(function (l) { _log('removeAccount 解绑 ' + msg.email + ': ' + l); });
+          }
+        }
+      } catch (e) { _log('removeAccount 删除前解绑异常: ' + e.message); }
       delete _state.accounts[msg.email];
       delete _authCache[msg.email];
       saveState(_state);
@@ -1645,11 +1766,11 @@ async function handleMessage(msg) {
             _log('batchConnect: PAT注入 ' + bEmail);
             var bPatR = await injectGitHubPAT(bAcct.orgId, pat, bAuth1);
             if (bPatR.ok) {
-              try { await injectSecret(bAcct.orgId, "GITHUB_PAT", pat, bAuth1); } catch (e) {}
+              var bSecOk1 = await ensureGithubPatSecret(bAcct.orgId, pat, bAuth1);
               var bRepo1 = await getAccessibleRepos(bAcct.orgId, bAuth1);
               bAcct.git = true;
               bAcct.gitType = "github_individual_token";
-              bAcct.secret = true;
+              bAcct.secret = bSecOk1;
               bAcct.gitCount = (bAcct.gitCount || 0) + 1;
               saveState(_state);
               results.push({ email: bEmail, ok: true, method: "pat", repoCount: bRepo1.ok ? bRepo1.repos.length : undefined });
@@ -1668,11 +1789,11 @@ async function handleMessage(msg) {
               await sleep(2000);
               var bPatR2 = await injectGitHubPAT(bAcct.orgId, pat, bAuth1);
               if (bPatR2.ok) {
-                try { await injectSecret(bAcct.orgId, "GITHUB_PAT", pat, bAuth1); } catch (e) {}
+                var bSecOk2 = await ensureGithubPatSecret(bAcct.orgId, pat, bAuth1);
                 var bRepo2 = await getAccessibleRepos(bAcct.orgId, bAuth1);
                 bAcct.git = true;
                 bAcct.gitType = "github_individual_token";
-                bAcct.secret = true;
+                bAcct.secret = bSecOk2;
                 bAcct.gitCount = (bAcct.gitCount || 0) + 1;
                 saveState(_state);
                 results.push({ email: bEmail, ok: true, method: "disconnect+pat", repoCount: bRepo2.ok ? bRepo2.repos.length : undefined });
@@ -1791,10 +1912,27 @@ async function handleMessage(msg) {
     case "removeBatch":
       try {
         var rmEmails = Array.isArray(msg.emails) ? msg.emails : [];
-        rmEmails.forEach(function (e) { delete _state.accounts[e]; delete _authCache[e]; });
+        for (var rbi = 0; rbi < rmEmails.length; rbi++) {
+          var rbEmail = rmEmails[rbi];
+          var rbAcct = _state.accounts[rbEmail];
+          var rbAuth = _authCache[rbEmail];
+          // 删除前彻底解绑(同 removeAccount), 确保删后零关联
+          if (rbAcct && rbAcct.orgId && (rbAcct.git || rbAcct.secret)) {
+            if (!rbAuth && passwordFor(rbEmail, rbAcct)) {
+              try { var rbLr = await devinLogin(rbEmail, passwordFor(rbEmail, rbAcct)); rbAuth = rbLr.auth1; } catch (e) {}
+            }
+            if (rbAuth) {
+              try {
+                var rbLogs = await robustDisconnectGit(rbEmail, rbAuth, rbAcct.orgId);
+                rbLogs.forEach(function (l) { _log('removeBatch 解绑 ' + rbEmail + ': ' + l); });
+              } catch (e) { _log('removeBatch 解绑异常 ' + rbEmail + ': ' + e.message); }
+            }
+          }
+          delete _state.accounts[rbEmail]; delete _authCache[rbEmail];
+        }
         saveState(_state);
         rmEmails.forEach(function (e) { postMsg({ command: "removeAccountResult", ok: true, email: e }); });
-        _log('removeBatch 删除 ' + rmEmails.length + ' 个账号');
+        _log('removeBatch 删除 ' + rmEmails.length + ' 个账号(已彻底解绑)');
       } catch (e) {
         postMsg({ command: "error", error: e.message });
       }
@@ -1886,13 +2024,6 @@ async function handleMessage(msg) {
       } catch (e) {
         postMsg({ command: "batchLoginResult", ok: false, error: e.message });
       }
-      break;
-
-    case "removeAccount":
-      delete _state.accounts[msg.email];
-      delete _authCache[msg.email];
-      saveState(_state);
-      postMsg({ command: "removeAccountResult", ok: true, email: msg.email });
       break;
   }
   } catch (e) {

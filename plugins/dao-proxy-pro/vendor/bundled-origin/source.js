@@ -3678,21 +3678,53 @@ function handleControl(req, res) {
           );
           return;
         }
-        // 构造OpenAI兼容请求
+        // ★ 协议感知: anthropic 走 /v1/messages + x-api-key + content[].text; 否则 OpenAI chat
+        //   道义: 二十八章「为天下式」· 后端最小化验证须按渠道真实协议 · 名实相符
+        //   旧逻辑硬编 OpenAI 格式 → anthropic 渠道(如 freemodel claude 系)自检必误判
+        const _proto =
+          provCfg.protocol ||
+          (provCfg.type === "anthropic" ? "anthropic" : "") ||
+          (/\/v1\/messages/i.test(provCfg.completionPath || "")
+            ? "anthropic"
+            : "") ||
+          (String(route.model || "")
+            .toLowerCase()
+            .startsWith("claude")
+            ? "anthropic"
+            : "") ||
+          "openai-chat";
+        const _isAnthropic = _proto === "anthropic";
         const baseUrl = (provCfg.baseUrl || "").replace(/\/$/, "");
-        const completionPath = provCfg.completionPath || "/v1/chat/completions";
+        const completionPath =
+          provCfg.completionPath ||
+          (_isAnthropic ? "/v1/messages" : "/v1/chat/completions");
         const testUrl = new URL(baseUrl + completionPath);
         const isHttps = testUrl.protocol === "https:";
         const mod = isHttps ? https : http;
-        const testPayload = JSON.stringify({
-          model: route.model || modelUid,
-          messages: [{ role: "user", content: message }],
-          max_tokens: route.maxOutputTokens || 50,
-          stream: false,
-        });
+        const testPayload = JSON.stringify(
+          _isAnthropic
+            ? {
+                model: route.model || modelUid,
+                max_tokens: route.maxOutputTokens || 50,
+                messages: [{ role: "user", content: message }],
+                stream: false,
+              }
+            : {
+                model: route.model || modelUid,
+                messages: [{ role: "user", content: message }],
+                max_tokens: route.maxOutputTokens || 50,
+                stream: false,
+              },
+        );
         const testHeaders = { "Content-Type": "application/json" };
-        if (provCfg.apiKey)
-          testHeaders["Authorization"] = "Bearer " + provCfg.apiKey;
+        if (provCfg.apiKey) {
+          if (_isAnthropic) {
+            testHeaders["x-api-key"] = provCfg.apiKey;
+            testHeaders["anthropic-version"] = "2023-06-01";
+          } else {
+            testHeaders["Authorization"] = "Bearer " + provCfg.apiKey;
+          }
+        }
         const startTime = Date.now();
         const testReq = mod.request(
           {
@@ -3714,12 +3746,33 @@ function handleControl(req, res) {
               const elapsed = Date.now() - startTime;
               try {
                 const parsed = JSON.parse(data);
-                const content =
-                  parsed.choices &&
-                  parsed.choices[0] &&
-                  parsed.choices[0].message
-                    ? parsed.choices[0].message.content
-                    : null;
+                // ★ 协议感知解析: OpenAI choices[].message.content; anthropic content[].text
+                let content = null;
+                let reasoning = null;
+                let finishReason = null;
+                const ch0 = parsed.choices && parsed.choices[0];
+                if (ch0 && ch0.message) {
+                  content = ch0.message.content;
+                  // ★ 推理模型 (deepseek-v4 / mimo reasoner) 把输出放 reasoning_content;
+                  //   max_tokens 不足时 content 为空 · finish_reason=length · 须surface以免误判"空响应=失败"
+                  reasoning = ch0.message.reasoning_content || null;
+                  finishReason = ch0.finish_reason || null;
+                } else if (Array.isArray(parsed.content)) {
+                  content = parsed.content
+                    .filter(
+                      (b) =>
+                        b && b.type === "text" && typeof b.text === "string",
+                    )
+                    .map((b) => b.text)
+                    .join("");
+                  finishReason = parsed.stop_reason || null;
+                }
+                // content 空但有 reasoning(被length截断) → 用 reasoning 兜底展示 · 标记截断
+                const truncatedReasoning =
+                  (!content || content.length === 0) &&
+                  !!reasoning &&
+                  finishReason === "length";
+                if (truncatedReasoning) content = reasoning;
                 const usage = parsed.usage || null;
                 res.end(
                   JSON.stringify({
@@ -3730,6 +3783,8 @@ function handleControl(req, res) {
                     status: testRes.statusCode,
                     elapsed_ms: elapsed,
                     content: content ? content.substring(0, 200) : null,
+                    finish_reason: finishReason,
+                    truncated_reasoning: truncatedReasoning || undefined,
                     usage,
                     raw_length: data.length,
                   }),

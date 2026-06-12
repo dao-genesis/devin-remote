@@ -1297,6 +1297,40 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
             return await devinDeletePlaybook(ws.devinOrgId, id, ws.devinAuth1);
         }
+        case '/api/devin/usage/limit': {
+            // 调整单条消息/会话额度上限 — body:{maxCredits}
+            const ulb = await readBody(req);
+            const { maxCredits } = JSON.parse(ulb || '{}');
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            if (typeof maxCredits !== 'number') return { ok: false, error: 'maxCredits (number) required' };
+            return await devinSetMessageLimit(ws.devinOrgId, maxCredits, ws.devinAuth1);
+        }
+        case '/api/devin/mcp/installations': {
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            return await devinListMcpInstallations(ws.devinOrgId, ws.devinAuth1);
+        }
+        case '/api/devin/mcp/add': {
+            // 追录自定义 MCP — body: {name, transport, command/args/env_variables | url/headers, ...}
+            const mab = await readBody(req);
+            const spec = JSON.parse(mab || '{}');
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            if (!spec.name) return { ok: false, error: 'name required' };
+            return await devinAddCustomMcp(ws.devinOrgId, spec, ws.devinAuth1);
+        }
+        case '/api/devin/mcp/delete': {
+            const mdb = await readBody(req);
+            const { id } = JSON.parse(mdb || '{}');
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            if (!id) return { ok: false, error: 'id required' };
+            return await devinDeleteMcp(ws.devinOrgId, id, ws.devinAuth1);
+        }
+        case '/api/devin/session/delete': {
+            const sdb = await readBody(req);
+            const { id } = JSON.parse(sdb || '{}');
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            if (!id) return { ok: false, error: 'session id required' };
+            return await devinDeleteSession(ws.devinOrgId, id, ws.devinAuth1);
+        }
         case '/api/devin/git/connections': {
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
             return await devinCheckGitConnections(ws.devinOrgId, ws.devinAuth1);
@@ -1568,7 +1602,7 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                                 else if (tab === 'knowledge') { result = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.learnings : [] }); }
                                 else if (tab === 'playbooks') { result = await devinListPlaybooks(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.playbooks : [] }); }
                                 else if (tab === 'secrets') { result = await devinListSecrets(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.secrets : [] }); }
-                                else if (tab === 'integrations') { result = await devinCheckGitConnections(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.connections : [] }); }
+                                else if (tab === 'integrations') { result = await devinListIntegrations(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.connections : [] }); }
                                 else reply({ ok: false, error: 'unknown tab' });
                             } catch (e: any) { reply({ ok: false, error: e.message }); }
                         } else {
@@ -1767,6 +1801,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ni" data-tab="playbooks" onclick="sw('playbooks')" title="Playbooks">📋</div>
 <div class="ni" data-tab="secrets" onclick="sw('secrets')" title="Secrets">🔑</div>
 <div class="ni" data-tab="integrations" onclick="sw('integrations')" title="Integrations">🔗</div>
+<div class="ni" data-tab="usage" onclick="sw('usage')" title="Usage 用量">📊</div>
+<div class="ni" data-tab="org" onclick="sw('org')" title="组织成员 Members">🏢</div>
+<div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器">🧩</div>
+<div class="ni" data-tab="automations" onclick="sw('automations')" title="Automations 自动化">⚙️</div>
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="自动注入 Auto-Inject">💉</div>
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
@@ -1787,6 +1825,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="tv" id="v-playbooks"></div>
 <div class="tv" id="v-secrets"></div>
 <div class="tv" id="v-integrations"></div>
+<div class="tv" id="v-usage"></div>
+<div class="tv" id="v-org"></div>
+<div class="tv" id="v-mcp"></div>
+<div class="tv" id="v-automations"></div>
 <div class="tv" id="v-inject"></div>
 </div>
 <div class="ft" id="ft">
@@ -1823,7 +1865,7 @@ const S={
   },
   bridge:${JSON.stringify(bridge || null)},
   inject:null,
-  injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],lastInjectedOrg:''},
+  injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],messageLimit:null,lastInjectedOrg:''},
   tab:'overview',
   data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]}
 };
@@ -1845,12 +1887,12 @@ function sw(t){
       v.dataset.loaded='1';
       if(S.auth.canUseApi){
         // ★ 有cog_ key → 尝试API加载
-        v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗'}[t]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations'}[t]+'</h3><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
+        v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[t]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'}[t]+'</h3><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
         cmd('loadTabData',{tab:t});
       } else {
         // ★ 无 auth1 (仅 session-token) → 底层自动获取凭证, 用户无需手动 API Key
-        const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations'};
-        const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗'};
+        const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'};
+        const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'};
         v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[t]||'🌐')+'</div><h3>'+tabNames[t]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6;margin-bottom:12px">账号凭证将随 IDE 登录状态自动同步, 无需手动操作。若长时间未就绪, 可重试自动登录或手动切换账号。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
       }
     }
@@ -1903,8 +1945,8 @@ function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab);if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
   if(fallbackProxy||err){
-    const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations'};
-    const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗'};
+    const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'};
+    const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'};
     if(err==='需要 cog_ API Key'||fallbackProxy){
       // ★ 需要cog_ key — 显示创建引导
       v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6">账号凭证随 IDE 登录状态自动同步, 无需手动 API Key。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
@@ -1914,7 +1956,7 @@ function rT(tab,items,err,fallbackProxy){
     }
     return;
   }
-  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗'}[tab]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations'}[tab]+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
+  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[tab]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'}[tab]+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
   // ★ v1.0.1 · 各tab添加新建按钮 · 帛书·「道生一·一生二」
   const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>'};
   let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
@@ -1941,8 +1983,17 @@ function rT(tab,items,err,fallbackProxy){
     });
   }else if(tab==='integrations'){
     items.forEach(c=>{
-      const id=c.id||c.connection_id||'';const provider=c.provider||c.name||'GitHub';const login=c.login||c.username||'';
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(provider)+'</span><span class="v"><span class="tag git">G</span></span></div>'+(login?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(login)+'</div>':'')+'<div class="br" style="margin-top:4px"><button class="btn sm danger" onclick="cmd(&#39;devinDisconnectGit&#39;,{connectionId:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
+      const id=c.id||c.connection_id||'';const provider=c.provider||c.name||'GitHub';const login=c.login||c.username||c.detail||'';
+      const connected=c.connected!==undefined?c.connected:!!id;
+      const statusHtml=connected?'<span style="color:var(--success)">● Connected</span>':'<span style="color:var(--muted)">○ Not connected</span>';
+      const delBtn=(c.kind==='git'&&id)?'<div class="br" style="margin-top:4px"><button class="btn sm danger" onclick="cmd(&#39;devinDisconnectGit&#39;,{connectionId:&#39;'+esc(String(id))+'&#39;})">🗑 断开</button></div>':'';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(provider)+'</span><span class="v" style="font-size:11px">'+statusHtml+'</span></div>'+(login?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(login)+'</div>':'')+delBtn+'</div>';
+    });
+  }else if(tab==='usage'||tab==='org'||tab==='mcp'||tab==='automations'){
+    items.forEach(it=>{
+      const nm=it.name||it.title||'';const dt=it.detail||'';
+      const st=it.connected!==undefined?(it.connected?'<span style="color:var(--success)">● on</span>':'<span style="color:var(--muted)">○ off</span>'):'';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'</div>';
     });
   }
   v.innerHTML=h;
@@ -1964,15 +2015,18 @@ function rSD(d){
 }
 // 自动注入自循环配置面板 — 帛书·「善建者不拔·善抱者不脱」
 // 初始配置一次, 账号随 IDE 切换, 系统据此 profile 自动注入新账号 + 清理旧账号
-function ipSave(){cmd('setInjectProfile',{enabled:S.injectProfile.enabled,autoCleanup:S.injectProfile.autoCleanup,secrets:S.injectProfile.secrets,knowledge:S.injectProfile.knowledge,playbooks:S.injectProfile.playbooks})}
+function ipSave(){cmd('setInjectProfile',{enabled:S.injectProfile.enabled,autoCleanup:S.injectProfile.autoCleanup,secrets:S.injectProfile.secrets,knowledge:S.injectProfile.knowledge,playbooks:S.injectProfile.playbooks,mcps:S.injectProfile.mcps,messageLimit:S.injectProfile.messageLimit})}
 function ipToggle(field){S.injectProfile[field]=!S.injectProfile[field];ipSave();rInject()}
 function ipRemove(kind,idx){S.injectProfile[kind].splice(idx,1);ipSave();rInject()}
 function ipAddSecret(){sm('添加 Secret','<input id="m1" placeholder="名称 KEY" style="width:100%;margin:4px 0"><input id="m2" placeholder="值 value" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim(),val=document.getElementById('m2').value;if(!n)return false;S.injectProfile.secrets.push({name:n,value:val});ipSave();rInject()})}
 function ipAddKnowledge(){sm('添加 Knowledge','<input id="m1" placeholder="名称" style="width:100%;margin:4px 0"><textarea id="m2" placeholder="正文 body" style="width:100%;height:80px;margin:4px 0"></textarea><input id="m3" placeholder="触发 trigger (默认 Always)" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.knowledge.push({name:n,body:document.getElementById('m2').value,trigger:document.getElementById('m3').value.trim()||'Always'});ipSave();rInject()})}
 function ipAddPlaybook(){sm('添加 Playbook','<input id="m1" placeholder="标题 title" style="width:100%;margin:4px 0"><textarea id="m2" placeholder="正文 body" style="width:100%;height:80px;margin:4px 0"></textarea>',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.playbooks.push({title:n,body:document.getElementById('m2').value});ipSave();rInject()})}
+function ipAddMcp(){sm('钉住 MCP (切号自动注入)','<input id="m1" placeholder="名称 name (如 GitHub MCP)" style="width:100%;margin:4px 0"><select id="m2" style="width:100%;margin:4px 0"><option value="HTTP">HTTP / SSE (远程 URL)</option><option value="STDIO">STDIO (command/args)</option></select><input id="m3" placeholder="URL (HTTP) 或 command (STDIO, 如 npx)" style="width:100%;margin:4px 0"><input id="m4" placeholder="args 空格分隔 (STDIO) / Authorization 头值 (HTTP)" style="width:100%;margin:4px 0"><input id="m5" placeholder="简介 short_description (可选)" style="width:100%;margin:4px 0"><p style="font-size:10px;color:var(--muted);margin:4px 0">提示: 点下方预设可一键填 GitHub MCP</p><button class="btn sm" onclick="ipMcpPreset(&#39;github&#39;)">GitHub MCP 预设</button>',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;const tr=document.getElementById('m2').value;const f3=document.getElementById('m3').value.trim();const f4=document.getElementById('m4').value.trim();const sd=document.getElementById('m5').value.trim();const m={name:n,transport:tr,short_description:sd};if(tr==='STDIO'){m.command=f3;m.args=f4?f4.split(' ').filter(Boolean):[];m.env_variables=[]}else{m.url=f3;if(f4)m.headers={Authorization:f4}}S.injectProfile.mcps.push(m);ipSave();rInject()})}
+function ipMcpPreset(kind){if(kind==='github'){const a=document.getElementById('m1'),b=document.getElementById('m2'),c=document.getElementById('m3'),d=document.getElementById('m5');if(a)a.value='GitHub MCP';if(b)b.value='HTTP';if(c)c.value='https://api.githubcopilot.com/mcp/';if(d)d.value='GitHub official remote MCP'}}
+function ipSetLimit(){const cur=(S.injectProfile.messageLimit==null?'':S.injectProfile.messageLimit);sm('设定单条额度上限 (max_credits)','<input id="m1" type="number" placeholder="如 30; 留空=不管理" value="'+cur+'" style="width:100%;margin:4px 0">',function(){const raw=document.getElementById('m1').value.trim();S.injectProfile.messageLimit=(raw===''?null:Number(raw));ipSave();rInject()})}
 function rInject(){
   const v=document.getElementById('v-inject');if(!v)return;
-  const p=S.injectProfile||{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[]};
+  const p=S.injectProfile||{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],messageLimit:null};
   const tgl=(on,fn)=>'<span onclick="'+fn+'" style="cursor:pointer;display:inline-block;width:40px;height:20px;border-radius:10px;background:'+(on?'var(--success)':'var(--muted)')+';position:relative;vertical-align:middle"><span style="position:absolute;top:2px;left:'+(on?'22px':'2px')+';width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s"></span></span>';
   let h='<div class="st">自动注入自循环 · 无为而无不为</div>';
   h+='<p style="font-size:11px;color:var(--muted);line-height:1.6;margin:4px 0 10px">初始配置一次, 此后账号随 IDE 登录自动切换时, 系统按此清单自动注入新账号, 并(默认)清理旧账号的同名注入。</p>';
@@ -1981,7 +2035,10 @@ function rInject(){
   h+=listSec('🔑 Secrets','secrets',p.secrets,it=>it.name,'ipAddSecret()');
   h+=listSec('📚 Knowledge','knowledge',p.knowledge,it=>it.name,'ipAddKnowledge()');
   h+=listSec('📋 Playbooks','playbooks',p.playbooks,it=>it.title,'ipAddPlaybook()');
-  h+='<div class="br" style="margin-top:10px"><button class="btn" onclick="cmd(&#39;importCurrentToInjectProfile&#39;)">⬇️ 导入当前账号现有项</button>'+(p.enabled?'<button class="btn primary" onclick="cmd(&#39;setInjectProfile&#39;,{enabled:true})">▶️ 立即应用到当前账号</button>':'')+'</div>';
+  h+=listSec('🔌 MCP (钉住)','mcps',p.mcps||[],it=>it.name+' · '+(it.transport||'STDIO'),'ipAddMcp()');
+  h+='<div class="st">⚖️ 单条额度上限<button class="btn sm primary" style="float:right" onclick="ipSetLimit()">设定</button></div>';
+  h+='<div class="card"><div class="cr"><span class="l" style="font-size:12px">期望 max_credits</span><span class="v">'+((p.messageLimit==null)?'<span style="color:var(--muted)">不管理</span>':'$'+esc(String(p.messageLimit)))+'</span></div></div>';
+  h+='<div class="br" style="margin-top:10px"><button class="btn" onclick="cmd(&#39;importCurrentToInjectProfile&#39;)">⬇️ 导入当前账号现有项</button>'+(p.enabled?'<button class="btn primary" onclick="cmd(&#39;setInjectProfile&#39;,{enabled:true})">▶️ 立即应用到当前账号</button><button class="btn" onclick="cmd(&#39;applyInjectProfileToAll&#39;)">👥 注入到所有账号</button>':'')+'</div>';
   v.innerHTML=h;
 }
 usb();rc();
@@ -2129,8 +2186,31 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             if (result.ok) reply({ type: 'tabData', tab, items: result.secrets || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'integrations') {
-                            result = await devinCheckGitConnections(ws.devinOrgId, ws.devinAuth1);
+                            result = await devinListIntegrations(ws.devinOrgId, ws.devinAuth1);
                             if (result.ok) reply({ type: 'tabData', tab, items: result.connections || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'usage') {
+                            result = await devinGetUsage(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'org') {
+                            result = await devinListMembers(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'mcp') {
+                            // 官网 MCP = 市场目录(servers) + 本组织自定义安装(installations); 二者合并呈现
+                            const [cat, inst] = await Promise.all([
+                                devinListMcpServers(ws.devinOrgId, ws.devinAuth1),
+                                devinListMcpInstallations(ws.devinOrgId, ws.devinAuth1),
+                            ]);
+                            const installed = (inst.items || []).map((m: any) => Object.assign({}, m, { name: '★ ' + m.name }));
+                            const merged = installed.concat(cat.items || []);
+                            result = { ok: cat.ok || inst.ok };
+                            if (result.ok) reply({ type: 'tabData', tab, items: merged });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'automations') {
+                            result = await devinListAutomations(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else {
                             reply({ type: 'tabData', tab, items: [], error: 'Unknown tab' });
@@ -2180,7 +2260,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'getInjectProfile': {
                 // 自动注入自循环配置: 返回当前 profile 给面板渲染
                 const p = loadInjectProfile();
-                reply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: p.knowledge, playbooks: p.playbooks, lastInjectedOrg: p.lastInjectedOrg } });
+                reply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: p.knowledge, playbooks: p.playbooks, mcps: p.mcps, messageLimit: p.messageLimit, lastInjectedOrg: p.lastInjectedOrg } });
                 break;
             }
             case 'setInjectProfile': {
@@ -2192,6 +2272,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     secrets: Array.isArray(msg.secrets) ? msg.secrets : cur.secrets,
                     knowledge: Array.isArray(msg.knowledge) ? msg.knowledge : cur.knowledge,
                     playbooks: Array.isArray(msg.playbooks) ? msg.playbooks : cur.playbooks,
+                    mcps: Array.isArray(msg.mcps) ? msg.mcps : cur.mcps,
+                    messageLimit: (typeof msg.messageLimit === 'number') ? msg.messageLimit : (msg.messageLimit === null ? null : cur.messageLimit),
                     lastInjectedOrg: cur.lastInjectedOrg,
                 };
                 saveInjectProfile(np);
@@ -2220,6 +2302,17 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 saveInjectProfile(cur);
                 reply({ type: 'injectProfile', profile: cur });
                 refreshReply({ type: 'actionResult', command: 'importCurrentToInjectProfile', ok: true });
+                break;
+            }
+            case 'applyInjectProfileToAll': {
+                // 多账号 · 把期望态一次性注入账号池里所有已存 auth1 的账号 org
+                vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '多账号注入期望态…' }, async () => {
+                    let r: { ok: boolean; total: number; injected: number } = { ok: false, total: 0, injected: 0 };
+                    try { r = await applyInjectProfileToAllAccounts(); } catch { /* 守柔 */ }
+                    vscode.window.showInformationMessage('多账号注入完成: ' + r.injected + '/' + r.total + ' 账号');
+                    sidebarCloudPanel?.refresh();
+                    refreshReply({ type: 'actionResult', command: 'applyInjectProfileToAll', ok: r.ok });
+                });
                 break;
             }
             case 'devinLogin': {
@@ -3617,44 +3710,58 @@ async function devinCreateSession(orgId: string, userMessage: string, auth1: str
 }
 
 async function devinListSessions(orgId: string, auth1: string, limit?: number): Promise<{ ok: boolean; sessions?: any[] }> {
-    // ★ v1.0.2 · 帛书·「反者道之动也」— v2sessions端点（auth1可用）
-    const useV1Api = (ws.devinApiKey || '').startsWith('cog_');
-    const apiKey = useV1Api ? ws.devinApiKey : auth1;
+    // 帛书·「去彼取此」— 自助账号的 cog_ key 不被 api.devin.ai 接受(404)；
+    // auth1 直读 app.devin.ai/v2sessions 对所有账号恒可用，与 Secret/Knowledge/Playbook 同源。
     const bareOrgId = orgId.replace(/^org-/, '');
-    let url = useV1Api ? `https://api.devin.ai/v1/org/${orgId}/sessions` : DEVIN_APP + '/api/org-' + bareOrgId + '/v2sessions';
+    let url = DEVIN_APP + '/api/org-' + bareOrgId + '/v2sessions';
     if (limit) url += (url.includes('?') ? '&' : '?') + 'limit=' + limit;
-    const headers: any = { Authorization: 'Bearer ' + apiKey };
-    if (!useV1Api) headers['x-cog-org-id'] = orgId;
-    const r = await devinJsonGet(url, headers);
-    if (r.status === 200) {
-        const j = r.json || {};
-        // v2sessions returns {result:[...]}; v1 returns {sessions:[...]}
-        const arr = Array.isArray(j.result) ? j.result : (Array.isArray(j.sessions) ? j.sessions : (Array.isArray(j) ? j : []));
-        return { ok: true, sessions: arr };
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    // 帛书·「无为而无不为」— v2sessions 首载经代理偶发超时；守柔重试两次, 让首屏自成而无需手动重试。
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await devinJsonGet(url, H, 30000);
+        if (r.status === 200) {
+            const j = r.json || {};
+            const arr = Array.isArray(j.result) ? j.result : (Array.isArray(j.sessions) ? j.sessions : (Array.isArray(j) ? j : []));
+            return { ok: true, sessions: arr };
+        }
+        if (r.status && r.status !== 0 && r.status !== 502 && r.status !== 503 && r.status !== 504) break;
+        await new Promise(res => setTimeout(res, 600));
     }
     return { ok: false };
 }
 
 async function devinGetSessionDetail(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; session?: any }> {
-    const useV1Api = (ws.devinApiKey || '').startsWith('cog_');
-    const apiKey = useV1Api ? ws.devinApiKey : auth1;
-    const url = useV1Api ? `https://api.devin.ai/v1/org/${orgId}/sessions/${sessionId}` : DEVIN_APP + '/api/sessions/' + sessionId;
-    const headers: any = { Authorization: 'Bearer ' + apiKey };
-    if (!useV1Api) headers['x-cog-org-id'] = orgId;
-    const r = await devinJsonGet(url, headers);
+    const r = await devinJsonGet(DEVIN_APP + '/api/sessions/' + sessionId, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status === 200) return { ok: true, session: r.json };
     return { ok: false };
 }
 
 async function devinGetSessionMessages(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; messages?: any[] }> {
-    const useV1Api = (ws.devinApiKey || '').startsWith('cog_');
-    const apiKey = useV1Api ? ws.devinApiKey : auth1;
-    const url = useV1Api ? `https://api.devin.ai/v1/org/${orgId}/sessions/${sessionId}/messages` : DEVIN_APP + '/api/sessions/' + sessionId + '/messages';
-    const headers: any = { Authorization: 'Bearer ' + apiKey };
-    if (!useV1Api) headers['x-cog-org-id'] = orgId;
-    const r = await devinJsonGet(url, headers);
+    // /api/sessions/<id>/messages 对自助账号 404；守柔兜底：失败即空，不阻塞详情渲染。
+    const r = await devinJsonGet(DEVIN_APP + '/api/sessions/' + sessionId + '/messages', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status === 200) { const j = r.json || {}; return { ok: true, messages: Array.isArray(j.messages) ? j.messages : (Array.isArray(j) ? j : []) }; }
-    return { ok: false };
+    return { ok: true, messages: [] };
+}
+
+// 删除会话 (单条): 官网 Sessions 页删除 → auth1 直删。多端点候选 + 归档兜底, 守柔。
+async function devinDeleteSession(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; status?: number; archived?: boolean }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    const candidates = [
+        DEVIN_APP + '/api/sessions/' + sessionId,
+        DEVIN_APP + '/api/org-' + bareOrgId + '/sessions/' + sessionId,
+    ];
+    let last = 0;
+    for (const url of candidates) {
+        const r = await devinJsonDelete(url, H);
+        last = r.status;
+        if (r.status === 200 || r.status === 204) return { ok: true, status: r.status };
+    }
+    for (const url of candidates) {
+        const r = await devinJsonPost(url, H, { archived: true });
+        if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status, archived: true };
+    }
+    return { ok: false, status: last };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -3833,6 +3940,168 @@ async function devinCheckGitConnections(orgId: string, auth1: string): Promise<{
     return { ok: false, connections: [], count: 0 };
 }
 
+// 帛书·「万物负阴而抱阳」— Integrations 状态盘:
+// 聚合官网所有集成提供商状态(GitHub/GitLab/Bitbucket/Azure DevOps/Slack/Jira)+ MCP 服务器,
+// 并将 git-connections-metadata 的真实连接(含可断开 id)并入对应提供商行。auth1 直读, 恒可用。
+async function devinListIntegrations(orgId: string, auth1: string): Promise<{ ok: boolean; connections?: any[] }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    const base = DEVIN_APP + '/api/org-' + bareOrgId;
+    const byName = new Map<string, any>();
+    const set = (name: string, kind: string) => { const k = name.toLowerCase(); if (!byName.has(k)) byName.set(k, { name, connected: false, detail: '', kind, id: '' }); return byName.get(k); };
+    // 1) 真实 git 连接(可断开)
+    try {
+        const gc = await devinJsonGet(DEVIN_APP + '/api/organizations/' + orgId + '/git-connections-metadata', H);
+        if (gc.status === 200) {
+            const arr = Array.isArray(gc.json) ? gc.json : (gc.json && gc.json.connections ? gc.json.connections : []);
+            arr.forEach((c: any) => { const row = set(c.provider || c.name || 'Git', 'git'); row.connected = true; row.id = c.id || c.connection_id || ''; row.detail = c.login || c.username || c.account_login || row.detail; });
+        }
+    } catch { /* 守柔 */ }
+    // 2) 提供商状态
+    const providers: Array<[string, string, (j: any) => boolean]> = [
+        ['GitHub', '/integrations/github', (j) => Array.isArray(j) ? j.length > 0 : !!j],
+        ['GitLab', '/integrations/gitlab', (j) => Array.isArray(j) ? j.length > 0 : !!j],
+        ['Bitbucket', '/integrations/bitbucket', (j) => Array.isArray(j) ? j.length > 0 : !!j],
+        ['Azure DevOps', '/integrations/azure-devops', (j) => !!(j && Array.isArray(j.connections) && j.connections.length)],
+        ['Slack', '/integrations/slack/status', (j) => !!(j && j.connection)],
+        ['Jira', '/integrations/jira/status', (j) => !!(j && j.integration)],
+    ];
+    await Promise.all(providers.map(async ([label, path, isConn]) => {
+        try {
+            const r = await devinJsonGet(base + path, H);
+            if (r.status === 200) { const row = set(label, 'provider'); if (isConn(r.json)) row.connected = true; }
+        } catch { /* 守柔 */ }
+    }));
+    // 3) MCP 服务器
+    try {
+        const mcp = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', H);
+        if (mcp.status === 200 && Array.isArray(mcp.json)) { const row = set('MCP Servers', 'mcp'); row.connected = mcp.json.length > 0; row.detail = mcp.json.length + ' available'; }
+    } catch { /* 守柔 */ }
+    return { ok: true, connections: [...byName.values()] };
+}
+
+// 帛书·「既得其母，以知其子」— 补全官网模块: Usage / Org 成员 / MCP / Automations
+// 全部 auth1 直读 app.devin.ai, 与账号实时同步; 切号即整体跟随。
+async function devinGetUsage(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    const base = DEVIN_APP + '/api/org-' + bareOrgId + '/billing/usage';
+    const [stats, limits] = await Promise.all([devinJsonGet(base + '/stats', H), devinJsonGet(base + '/limits', H)]);
+    const s = (stats.status === 200 && stats.json) ? stats.json : {};
+    const l = (limits.status === 200 && limits.json) ? limits.json : {};
+    const num = (v: any) => (v === null || v === undefined) ? '—' : String(v);
+    const items = [
+        { name: '订阅状态 Subscription', detail: num(s.subscription_status) },
+        { name: '可用 ACU Available', detail: num(s.available_acus) },
+        { name: '本周期已用 ACU Used', detail: num(s.cycle_total_acu_usage) },
+        { name: '余额 Balance', detail: num(s.balance) },
+        { name: '超额阈值 Overage threshold', detail: num(s.overage_threshold) },
+        { name: '当前超额 Current overage', detail: num(s.current_overage) },
+        { name: '单会话 ACU 上限 Max ACU/session', detail: num(l.max_acu_limit) },
+        { name: '周期 Cycle', detail: (s.cycle_start ? new Date(s.cycle_start).toLocaleDateString() : '—') + ' → ' + (s.cycle_end ? new Date(s.cycle_end).toLocaleDateString() : '—') },
+    ];
+    return { ok: stats.status === 200 || limits.status === 200, items };
+}
+
+async function devinListMembers(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const r = await devinJsonGet(DEVIN_APP + '/api/organizations/' + orgId + '/members', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [] };
+    const arr = Array.isArray(r.json) ? r.json : [];
+    const items = arr.map((m: any) => ({
+        name: m.preferred_name || m.name || m.email || 'Member',
+        detail: (m.email || '') + (Array.isArray(m.roles) && m.roles.length ? '  ·  ' + m.roles.map((x: any) => x.label || x.id).join(', ') : ''),
+    }));
+    return { ok: true, items };
+}
+
+async function devinListMcpServers(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const r = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [] };
+    const arr = Array.isArray(r.json) ? r.json : [];
+    const items = arr.map((m: any) => ({
+        name: m.name || m.slug || m.server_id || 'MCP',
+        detail: (m.short_description || m.description || '').toString().substring(0, 120),
+        connected: !!(m.is_connected || m.connected || m.status === 'connected'),
+    }));
+    return { ok: true, items };
+}
+
+// 帛书·「天下之物生於有」— 官网即一切, 以下端点皆由 Chrome CDP 实操官网时抓得:
+//   单条消息额度 POST /api/org-<bare>/billing/usage/limits {max_credits}
+//   自定义 MCP   GET/POST /api/mcp/installations · DELETE /api/mcp/installations/mcp-installation-<id>
+// 面板为官网下游镜像: 同源 auth1 直读直写, 账号切换即整体跟随。
+
+// 调整单条会话/消息的额度上限 (Usage & limits 页那个可调数字)
+async function devinSetMessageLimit(orgId: string, maxCredits: number, auth1: string): Promise<{ ok: boolean; status?: number }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const r = await devinJsonPost(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/usage/limits',
+        { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId }, { max_credits: maxCredits });
+    return { ok: r.status === 200 || r.status === 201 || r.status === 204, status: r.status };
+}
+
+// 列出本组织已安装的自定义 MCP (与官网 Connections 一致)
+async function devinListMcpInstallations(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const r = await devinJsonGet(DEVIN_APP + '/api/mcp/installations', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [] };
+    const arr = Array.isArray(r.json) ? r.json : (Array.isArray(r.json && r.json.installations) ? r.json.installations : []);
+    const items = arr.map((m: any) => ({
+        name: m.name || m.slug || 'MCP',
+        detail: (m.short_description || m.description || '').toString().substring(0, 120),
+        id: m.id || m.installation_id || '',
+        transport: m.transport || '',
+        connected: m.is_enabled !== false,
+    }));
+    return { ok: true, items };
+}
+
+// 追录: 把一个自定义 MCP 直接注册进官网 (STDIO: command/args/env; HTTP/SSE: url)
+async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promise<{ ok: boolean; status?: number; id?: string }> {
+    const name = String(spec.name || '').trim();
+    const slug = String(spec.slug || name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const transport = (spec.transport || 'STDIO').toUpperCase();
+    const payload: any = {
+        name, slug,
+        short_description: spec.short_description || '',
+        description: spec.description || '',
+        transport,
+        is_enabled: spec.is_enabled !== false,
+        icon: spec.icon || '',
+        installation_scope: spec.installation_scope || 'org',
+    };
+    if (transport === 'STDIO') {
+        payload.command = spec.command || '';
+        payload.args = Array.isArray(spec.args) ? spec.args : [];
+        payload.env_variables = Array.isArray(spec.env_variables) ? spec.env_variables : [];
+    } else {
+        // HTTP / SSE: 远程 URL + 可选鉴权头 (用于追录本地 141 经 dao-relay 暴露的公网端点)
+        payload.url = spec.url || '';
+        if (spec.headers) payload.headers = spec.headers;
+    }
+    const r = await devinJsonPost(DEVIN_APP + '/api/mcp/installations',
+        { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId }, payload);
+    const j = r.json || {};
+    return { ok: r.status === 200 || r.status === 201, status: r.status, id: j.id || j.installation_id };
+}
+
+// 删除自定义 MCP (id 需带 mcp-installation- 前缀; 自动补全)
+async function devinDeleteMcp(orgId: string, installationId: string, auth1: string): Promise<{ ok: boolean; status?: number }> {
+    const id = installationId.startsWith('mcp-installation-') ? installationId : 'mcp-installation-' + installationId.replace(/^mcp-installation-/, '');
+    const r = await devinJsonDelete(DEVIN_APP + '/api/mcp/installations/' + id, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    return { ok: r.status === 200 || r.status === 204 || r.status === 404, status: r.status };
+}
+
+async function devinListAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/automations', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [] };
+    const arr = Array.isArray(r.json) ? r.json : [];
+    const items = arr.map((a: any) => {
+        const trig = Array.isArray(a.triggers) && a.triggers[0] ? (a.triggers[0].event_type || '') : '';
+        return { name: a.name || a.automation_id || 'Automation', detail: trig, connected: a.enabled !== false };
+    });
+    return { ok: true, items };
+}
+
 async function devinDisconnectGit(orgId: string, connectionId: string, auth1: string): Promise<{ ok: boolean }> {
     const r = await devinJsonDelete(DEVIN_APP + '/api/organizations/' + orgId + '/git-connections/' + connectionId, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     return { ok: r.status === 200 || r.status === 204 || r.status === 404 };
@@ -3982,13 +4251,23 @@ const INJECT_PROFILE_FILE = path.join(DAO_DIR, 'dao-inject-profile.json');
 interface InjectProfileItemS { name: string; value: string }
 interface InjectProfileItemK { name: string; body: string; trigger?: string }
 interface InjectProfileItemP { title: string; body: string }
+// 钉住的 MCP — 切账号即幂等注入到新 org (如 GitHub MCP / 本地 141 HTTP MCP)
+interface InjectProfileItemM {
+    name: string; slug?: string; transport?: string; short_description?: string;
+    command?: string; args?: string[]; env_variables?: any[]; url?: string; headers?: any;
+}
 interface InjectProfile {
     enabled: boolean;
     autoCleanup: boolean;
     secrets: InjectProfileItemS[];
     knowledge: InjectProfileItemK[];
     playbooks: InjectProfileItemP[];
+    mcps: InjectProfileItemM[];
+    messageLimit: number | null;
     lastInjectedOrg: string;
+}
+function mcpSlug(m: InjectProfileItemM): string {
+    return String(m.slug || m.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 function loadInjectProfile(): InjectProfile {
     try {
@@ -3999,10 +4278,12 @@ function loadInjectProfile(): InjectProfile {
             secrets: Array.isArray(j.secrets) ? j.secrets : [],
             knowledge: Array.isArray(j.knowledge) ? j.knowledge : [],
             playbooks: Array.isArray(j.playbooks) ? j.playbooks : [],
+            mcps: Array.isArray(j.mcps) ? j.mcps : [],
+            messageLimit: (typeof j.messageLimit === 'number') ? j.messageLimit : null,
             lastInjectedOrg: j.lastInjectedOrg || '',
         };
     } catch {
-        return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], lastInjectedOrg: '' };
+        return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], mcps: [], messageLimit: null, lastInjectedOrg: '' };
     }
 }
 function saveInjectProfile(p: InjectProfile): void {
@@ -4019,6 +4300,22 @@ async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectPr
     for (const s of p.secrets) { if (s && s.name) { try { await devinUpsertSecret(orgId, s.name, s.value || '', auth1); } catch { /* 守柔 */ } } }
     for (const k of p.knowledge) { if (k && k.name) { try { await devinUpsertKnowledge(orgId, k.name, k.body || '', k.trigger || 'Always', auth1); } catch { /* 守柔 */ } } }
     for (const pb of p.playbooks) { if (pb && pb.title) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1); } catch { /* 守柔 */ } } }
+    // 钉住的 MCP — 幂等: 已存在(按 slug)则跳过, 否则追录到该 org
+    if (p.mcps && p.mcps.length) {
+        let existing: Set<string> = new Set();
+        try {
+            const inst = await devinListMcpInstallations(orgId, auth1);
+            if (inst.ok && inst.items) for (const it of inst.items) existing.add(String((it.name || '').replace(/^★ /, '')).toLowerCase());
+        } catch { /* 守柔 */ }
+        for (const m of p.mcps) {
+            if (!m || !m.name) continue;
+            const slug = mcpSlug(m);
+            if (existing.has(String(m.name).toLowerCase()) || existing.has(slug)) continue;
+            try { await devinAddCustomMcp(orgId, Object.assign({}, m, { slug }), auth1); } catch { /* 守柔 */ }
+        }
+    }
+    // 期望的单条额度上限
+    if (typeof p.messageLimit === 'number') { try { await devinSetMessageLimit(orgId, p.messageLimit, auth1); } catch { /* 守柔 */ } }
 }
 async function cleanupInjectProfileFromOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
     for (const s of p.secrets) { if (s && s.name) { try { await devinDeleteSecret(orgId, s.name, auth1); } catch { /* 守柔 */ } } }
@@ -4030,13 +4327,24 @@ async function cleanupInjectProfileFromOrg(orgId: string, auth1: string, p: Inje
         const pl = await devinListPlaybooks(orgId, auth1);
         if (pl.ok && pl.playbooks) for (const pb of pl.playbooks) { if (p.playbooks.some(x => x.title === pb.title) && pb.id) { try { await devinDeletePlaybook(orgId, String(pb.id), auth1); } catch { /* 守柔 */ } } }
     } catch { /* 守柔 */ }
+    if (p.mcps && p.mcps.length) {
+        try {
+            const inst = await devinListMcpInstallations(orgId, auth1);
+            if (inst.ok && inst.items) for (const it of inst.items) {
+                const nm = String((it.name || '').replace(/^★ /, '')).toLowerCase();
+                if (p.mcps.some(x => String(x.name).toLowerCase() === nm || mcpSlug(x) === nm) && it.id) {
+                    try { await devinDeleteMcp(orgId, String(it.id), auth1); } catch { /* 守柔 */ }
+                }
+            }
+        } catch { /* 守柔 */ }
+    }
 }
 // 账号切换后调用: 应用 profile 到新 org + (默认)清理旧 org — 自循环核心
 async function runInjectProfileSelfLoop(): Promise<void> {
     const p = loadInjectProfile();
     if (!p.enabled) return;
     if (!ws.devinOrgId || !ws.devinAuth1 || ws.devinAuth1.startsWith('devin-session-token$')) return;
-    const hasItems = p.secrets.length || p.knowledge.length || p.playbooks.length;
+    const hasItems = p.secrets.length || p.knowledge.length || p.playbooks.length || p.mcps.length || typeof p.messageLimit === 'number';
     if (!hasItems) return;
     // 1. 默认清理旧 org 的旧注入 — 帛书·「将欲去之·必故与之」(用户可关 autoCleanup)
     if (p.autoCleanup && getInjectAutoCleanup() && p.lastInjectedOrg && p.lastInjectedOrg !== ws.devinOrgId) {
@@ -4048,6 +4356,26 @@ async function runInjectProfileSelfLoop(): Promise<void> {
     // 3. 记录 lastInjectedOrg → 下次切换据此清理
     p.lastInjectedOrg = ws.devinOrgId;
     saveInjectProfile(p);
+}
+
+// 多账号 · 一次性把期望态注入到账号池里所有已存 auth1 的账号 org
+// 帛书·「既以为人己愈有·既以予人己愈多」— 不必逐个手动切号
+async function applyInjectProfileToAllAccounts(): Promise<{ ok: boolean; total: number; injected: number; results: { email: string; ok: boolean }[] }> {
+    const p = loadInjectProfile();
+    const store = loadAccountsAuthStore();
+    const emails = Object.keys(store);
+    const results: { email: string; ok: boolean }[] = [];
+    // 去重 org: 同 org 多邮箱只注一次
+    const doneOrgs = new Set<string>();
+    for (const e of emails) {
+        const a = store[e];
+        if (!a || !a.auth1 || a.auth1.startsWith('devin-session-token$') || !a.orgId) { results.push({ email: e, ok: false }); continue; }
+        if (doneOrgs.has(a.orgId)) { results.push({ email: e, ok: true }); continue; }
+        try { await applyInjectProfileToOrg(a.orgId, a.auth1, p); doneOrgs.add(a.orgId); results.push({ email: e, ok: true }); }
+        catch { results.push({ email: e, ok: false }); }
+    }
+    const injected = results.filter(r => r.ok).length;
+    return { ok: injected > 0, total: emails.length, injected, results };
 }
 
 function buildDevinKnowledge(url: string, token: string): string {
