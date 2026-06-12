@@ -1568,7 +1568,7 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                                 else if (tab === 'knowledge') { result = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.learnings : [] }); }
                                 else if (tab === 'playbooks') { result = await devinListPlaybooks(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.playbooks : [] }); }
                                 else if (tab === 'secrets') { result = await devinListSecrets(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.secrets : [] }); }
-                                else if (tab === 'integrations') { result = await devinCheckGitConnections(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.connections : [] }); }
+                                else if (tab === 'integrations') { result = await devinListIntegrations(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.connections : [] }); }
                                 else reply({ ok: false, error: 'unknown tab' });
                             } catch (e: any) { reply({ ok: false, error: e.message }); }
                         } else {
@@ -1941,8 +1941,11 @@ function rT(tab,items,err,fallbackProxy){
     });
   }else if(tab==='integrations'){
     items.forEach(c=>{
-      const id=c.id||c.connection_id||'';const provider=c.provider||c.name||'GitHub';const login=c.login||c.username||'';
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(provider)+'</span><span class="v"><span class="tag git">G</span></span></div>'+(login?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(login)+'</div>':'')+'<div class="br" style="margin-top:4px"><button class="btn sm danger" onclick="cmd(&#39;devinDisconnectGit&#39;,{connectionId:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
+      const id=c.id||c.connection_id||'';const provider=c.provider||c.name||'GitHub';const login=c.login||c.username||c.detail||'';
+      const connected=c.connected!==undefined?c.connected:!!id;
+      const statusHtml=connected?'<span style="color:var(--success)">● Connected</span>':'<span style="color:var(--muted)">○ Not connected</span>';
+      const delBtn=(c.kind==='git'&&id)?'<div class="br" style="margin-top:4px"><button class="btn sm danger" onclick="cmd(&#39;devinDisconnectGit&#39;,{connectionId:&#39;'+esc(String(id))+'&#39;})">🗑 断开</button></div>':'';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(provider)+'</span><span class="v" style="font-size:11px">'+statusHtml+'</span></div>'+(login?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(login)+'</div>':'')+delBtn+'</div>';
     });
   }
   v.innerHTML=h;
@@ -2129,7 +2132,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             if (result.ok) reply({ type: 'tabData', tab, items: result.secrets || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'integrations') {
-                            result = await devinCheckGitConnections(ws.devinOrgId, ws.devinAuth1);
+                            result = await devinListIntegrations(ws.devinOrgId, ws.devinAuth1);
                             if (result.ok) reply({ type: 'tabData', tab, items: result.connections || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else {
@@ -3617,18 +3620,14 @@ async function devinCreateSession(orgId: string, userMessage: string, auth1: str
 }
 
 async function devinListSessions(orgId: string, auth1: string, limit?: number): Promise<{ ok: boolean; sessions?: any[] }> {
-    // ★ v1.0.2 · 帛书·「反者道之动也」— v2sessions端点（auth1可用）
-    const useV1Api = (ws.devinApiKey || '').startsWith('cog_');
-    const apiKey = useV1Api ? ws.devinApiKey : auth1;
+    // 帛书·「去彼取此」— 自助账号的 cog_ key 不被 api.devin.ai 接受(404)；
+    // auth1 直读 app.devin.ai/v2sessions 对所有账号恒可用，与 Secret/Knowledge/Playbook 同源。
     const bareOrgId = orgId.replace(/^org-/, '');
-    let url = useV1Api ? `https://api.devin.ai/v1/org/${orgId}/sessions` : DEVIN_APP + '/api/org-' + bareOrgId + '/v2sessions';
+    let url = DEVIN_APP + '/api/org-' + bareOrgId + '/v2sessions';
     if (limit) url += (url.includes('?') ? '&' : '?') + 'limit=' + limit;
-    const headers: any = { Authorization: 'Bearer ' + apiKey };
-    if (!useV1Api) headers['x-cog-org-id'] = orgId;
-    const r = await devinJsonGet(url, headers);
+    const r = await devinJsonGet(url, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status === 200) {
         const j = r.json || {};
-        // v2sessions returns {result:[...]}; v1 returns {sessions:[...]}
         const arr = Array.isArray(j.result) ? j.result : (Array.isArray(j.sessions) ? j.sessions : (Array.isArray(j) ? j : []));
         return { ok: true, sessions: arr };
     }
@@ -3636,25 +3635,16 @@ async function devinListSessions(orgId: string, auth1: string, limit?: number): 
 }
 
 async function devinGetSessionDetail(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; session?: any }> {
-    const useV1Api = (ws.devinApiKey || '').startsWith('cog_');
-    const apiKey = useV1Api ? ws.devinApiKey : auth1;
-    const url = useV1Api ? `https://api.devin.ai/v1/org/${orgId}/sessions/${sessionId}` : DEVIN_APP + '/api/sessions/' + sessionId;
-    const headers: any = { Authorization: 'Bearer ' + apiKey };
-    if (!useV1Api) headers['x-cog-org-id'] = orgId;
-    const r = await devinJsonGet(url, headers);
+    const r = await devinJsonGet(DEVIN_APP + '/api/sessions/' + sessionId, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status === 200) return { ok: true, session: r.json };
     return { ok: false };
 }
 
 async function devinGetSessionMessages(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; messages?: any[] }> {
-    const useV1Api = (ws.devinApiKey || '').startsWith('cog_');
-    const apiKey = useV1Api ? ws.devinApiKey : auth1;
-    const url = useV1Api ? `https://api.devin.ai/v1/org/${orgId}/sessions/${sessionId}/messages` : DEVIN_APP + '/api/sessions/' + sessionId + '/messages';
-    const headers: any = { Authorization: 'Bearer ' + apiKey };
-    if (!useV1Api) headers['x-cog-org-id'] = orgId;
-    const r = await devinJsonGet(url, headers);
+    // /api/sessions/<id>/messages 对自助账号 404；守柔兜底：失败即空，不阻塞详情渲染。
+    const r = await devinJsonGet(DEVIN_APP + '/api/sessions/' + sessionId + '/messages', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status === 200) { const j = r.json || {}; return { ok: true, messages: Array.isArray(j.messages) ? j.messages : (Array.isArray(j) ? j : []) }; }
-    return { ok: false };
+    return { ok: true, messages: [] };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -3831,6 +3821,46 @@ async function devinCheckGitConnections(orgId: string, auth1: string): Promise<{
         return { ok: true, connections: conns, count: conns.length };
     }
     return { ok: false, connections: [], count: 0 };
+}
+
+// 帛书·「万物负阴而抱阳」— Integrations 状态盘:
+// 聚合官网所有集成提供商状态(GitHub/GitLab/Bitbucket/Azure DevOps/Slack/Jira)+ MCP 服务器,
+// 并将 git-connections-metadata 的真实连接(含可断开 id)并入对应提供商行。auth1 直读, 恒可用。
+async function devinListIntegrations(orgId: string, auth1: string): Promise<{ ok: boolean; connections?: any[] }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    const base = DEVIN_APP + '/api/org-' + bareOrgId;
+    const byName = new Map<string, any>();
+    const set = (name: string, kind: string) => { const k = name.toLowerCase(); if (!byName.has(k)) byName.set(k, { name, connected: false, detail: '', kind, id: '' }); return byName.get(k); };
+    // 1) 真实 git 连接(可断开)
+    try {
+        const gc = await devinJsonGet(DEVIN_APP + '/api/organizations/' + orgId + '/git-connections-metadata', H);
+        if (gc.status === 200) {
+            const arr = Array.isArray(gc.json) ? gc.json : (gc.json && gc.json.connections ? gc.json.connections : []);
+            arr.forEach((c: any) => { const row = set(c.provider || c.name || 'Git', 'git'); row.connected = true; row.id = c.id || c.connection_id || ''; row.detail = c.login || c.username || c.account_login || row.detail; });
+        }
+    } catch { /* 守柔 */ }
+    // 2) 提供商状态
+    const providers: Array<[string, string, (j: any) => boolean]> = [
+        ['GitHub', '/integrations/github', (j) => Array.isArray(j) ? j.length > 0 : !!j],
+        ['GitLab', '/integrations/gitlab', (j) => Array.isArray(j) ? j.length > 0 : !!j],
+        ['Bitbucket', '/integrations/bitbucket', (j) => Array.isArray(j) ? j.length > 0 : !!j],
+        ['Azure DevOps', '/integrations/azure-devops', (j) => !!(j && Array.isArray(j.connections) && j.connections.length)],
+        ['Slack', '/integrations/slack/status', (j) => !!(j && j.connection)],
+        ['Jira', '/integrations/jira/status', (j) => !!(j && j.integration)],
+    ];
+    await Promise.all(providers.map(async ([label, path, isConn]) => {
+        try {
+            const r = await devinJsonGet(base + path, H);
+            if (r.status === 200) { const row = set(label, 'provider'); if (isConn(r.json)) row.connected = true; }
+        } catch { /* 守柔 */ }
+    }));
+    // 3) MCP 服务器
+    try {
+        const mcp = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', H);
+        if (mcp.status === 200 && Array.isArray(mcp.json)) { const row = set('MCP Servers', 'mcp'); row.connected = mcp.json.length > 0; row.detail = mcp.json.length + ' available'; }
+    } catch { /* 守柔 */ }
+    return { ok: true, connections: [...byName.values()] };
 }
 
 async function devinDisconnectGit(orgId: string, connectionId: string, auth1: string): Promise<{ ok: boolean }> {
