@@ -2,7 +2,7 @@
 	"name": "rt-flow",
 	"displayName": "Runtime Flow",
 	"description": "Runtime flow management · adaptive scheduling · Devin Cloud 第五板块 (对话导出/增量备份/运行追踪/水过无痕清理)",
-	"version": "4.0.2",
+	"version": "4.1.0",
 	"publisher": "devaid",
 	"repository": {
 		"type": "git",
