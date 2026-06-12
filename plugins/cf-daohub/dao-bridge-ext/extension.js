@@ -18,7 +18,7 @@ const cp = require("child_process");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TRY_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-const BRIDGE_VERSION = "3.0.0";
+const BRIDGE_VERSION = "3.1.0";
 
 function daoDir() {
   const d = path.join(os.homedir(), ".dao", "bridge");
@@ -32,23 +32,82 @@ function daoGlobalDir() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// cloudflared 定位 + 自动下载
+// 代理探测 — 帛书·「以其善下之」
+// 国内网络: 优先用本机已有代理(clash/v2ray)穿透 GFW; 不依赖用户手填
+// 顺序: 显式配置 → 环境变量 → 常见本地代理端口探测
 // ═══════════════════════════════════════════════════════════
+
+const COMMON_PROXY_PORTS = [7890, 7897, 10809, 1080, 8889, 2080, 10808];
+
+function probeLocalProxy() {
+  for (const port of COMMON_PROXY_PORTS) {
+    try {
+      // 同步探测 TCP 端口是否监听 (Windows: PowerShell; *nix: /dev/tcp 不可靠故用 node net 同步替代)
+      const r = cp.spawnSync(process.platform === "win32" ? "powershell" : "bash",
+        process.platform === "win32"
+          ? ["-NoProfile", "-Command", `(Test-NetConnection 127.0.0.1 -Port ${port} -WarningAction SilentlyContinue).TcpTestSucceeded`]
+          : ["-c", `(exec 3<>/dev/tcp/127.0.0.1/${port}) 2>/dev/null && echo True || echo False`],
+        { timeout: 3000, encoding: "utf8" });
+      if (r.stdout && /true/i.test(r.stdout)) return "http://127.0.0.1:" + port;
+    } catch (e) {}
+  }
+  return "";
+}
+
+let _proxyCache = null;
+function detectProxy() {
+  if (_proxyCache !== null) return _proxyCache;
+  const cfg = vscode.workspace.getConfiguration("daoBridge");
+  const explicit = String(cfg.get("proxyUrl") || "").trim();
+  const autoProbe = cfg.get("autoProxy") !== false; // 默认开启
+  let proxy = explicit
+    || process.env.HTTPS_PROXY || process.env.https_proxy
+    || process.env.HTTP_PROXY || process.env.http_proxy
+    || process.env.ALL_PROXY || process.env.all_proxy
+    || "";
+  proxy = String(proxy).trim();
+  if (!proxy && autoProbe) proxy = probeLocalProxy();
+  _proxyCache = proxy || "";
+  return _proxyCache;
+}
+
+// 给 cloudflared 子进程注入代理环境 — 帛书·「無有入於無間」
+// 关键: relay agent 会导出 NO_PROXY=* 致 libcurl/cloudflared 静默绕过代理, 必须先清空
+function spawnEnv(proxy) {
+  const env = Object.assign({}, process.env);
+  delete env.NO_PROXY; delete env.no_proxy;
+  if (proxy) {
+    env.HTTPS_PROXY = proxy; env.https_proxy = proxy;
+    env.HTTP_PROXY = proxy; env.http_proxy = proxy;
+    env.ALL_PROXY = proxy; env.all_proxy = proxy;
+  }
+  return env;
+}
+
+// ═══════════════════════════════════════════════════════════
+// cloudflared 定位 + 自动下载 — 帛书·「整个体系自带, 不依赖用户网络」
+// 优先级: 插件内置 bin/ → ~/.dao/bin → 显式配置 → PATH → 多镜像下载(含国内)
+// ═══════════════════════════════════════════════════════════
+
+const CF_BIN_NAME = process.platform === "win32" ? "cloudflared.exe" : "cloudflared";
 
 function cloudflaredCandidates(ctx) {
   const cfgPath = vscode.workspace.getConfiguration("daoBridge").get("cloudflaredPath") || "";
   return [
     cfgPath,
+    // 插件自带(随 VSIX 分发, 离线即用) — 帛书·「大丈夫居其厚」
+    ctx ? path.join(ctx.extensionPath, "bin", CF_BIN_NAME) : "",
+    ctx ? path.join(ctx.extensionPath, "bin", "cloudflared.exe") : "",
+    ctx ? path.join(ctx.extensionPath, "bin", "cloudflared") : "",
     path.join(os.homedir(), ".dao", "bin", "cloudflared.exe"),
     path.join(os.homedir(), ".dao", "bin", "cloudflared"),
-    ctx ? path.join(ctx.extensionPath, "bin", "cloudflared.exe") : "",
     "cloudflared.exe",
     "cloudflared",
   ].filter(Boolean);
 }
 function findCloudflared(ctx) {
   for (const c of cloudflaredCandidates(ctx)) {
-    try { if (c.indexOf(path.sep) >= 0 && fs.existsSync(c)) return c; } catch (e) {}
+    try { if (c.indexOf(path.sep) >= 0 && fs.existsSync(c) && fs.statSync(c).size > 1000000) return c; } catch (e) {}
   }
   try {
     const probe = process.platform === "win32" ? "where cloudflared" : "command -v cloudflared";
@@ -57,27 +116,108 @@ function findCloudflared(ctx) {
   } catch (e) {}
   return "";
 }
-function downloadCloudflared() {
+
+// cloudflared 官方资产名(按平台/架构)
+function cfAssetName() {
+  const p = process.platform, a = process.arch;
+  if (p === "win32") return a === "arm64" ? "cloudflared-windows-arm64.exe" : "cloudflared-windows-amd64.exe";
+  if (p === "darwin") return a === "arm64" ? "cloudflared-darwin-arm64.tgz" : "cloudflared-darwin-amd64.tgz";
+  // linux
+  if (a === "arm64") return "cloudflared-linux-arm64";
+  if (a === "arm") return "cloudflared-linux-arm";
+  return "cloudflared-linux-amd64";
+}
+
+// 镜像列表 — 帛书·「水善利万物」: 直连 → 国内 GitHub 加速镜像 多路并举
+function downloadMirrors(asset) {
+  const ghPath = "https://github.com/cloudflare/cloudflared/releases/latest/download/" + asset;
+  return [
+    ghPath,
+    "https://ghfast.top/" + ghPath,
+    "https://gh-proxy.com/" + ghPath,
+    "https://mirror.ghproxy.com/" + ghPath,
+    "https://ghproxy.net/" + ghPath,
+    "https://gh.ddlc.top/" + ghPath,
+  ];
+}
+
+function httpDownload(url, dst, proxy) {
   return new Promise((resolve) => {
-    const isWin = process.platform === "win32";
-    const dst = path.join(os.homedir(), ".dao", "bin", isWin ? "cloudflared.exe" : "cloudflared");
-    try { fs.mkdirSync(path.dirname(dst), { recursive: true }); } catch (e) {}
-    if (fs.existsSync(dst)) return resolve(dst);
-    const url = isWin
-      ? "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
-      : "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64";
-    const get = (u) => https.get(u, { headers: { "User-Agent": UA } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) { res.resume(); return get(res.headers.location); }
-      if (res.statusCode !== 200) { res.resume(); return resolve(""); }
-      const f = fs.createWriteStream(dst);
+    const tmp = dst + ".part-" + crypto.randomBytes(4).toString("hex");
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return; settled = true;
+      if (ok) { try { fs.renameSync(tmp, dst); } catch (e) { ok = false; } }
+      if (!ok) { try { fs.unlinkSync(tmp); } catch (e) {} }
+      resolve(ok);
+    };
+    const sink = (res, retryFn, depth) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume(); return retryFn(res.headers.location, depth + 1);
+      }
+      if (res.statusCode !== 200) { res.resume(); return done(false); }
+      const f = fs.createWriteStream(tmp);
       res.pipe(f);
       f.on("finish", () => f.close(() => {
-        if (!isWin) try { fs.chmodSync(dst, 0o755); } catch (e) {}
-        resolve(dst);
+        try { if (fs.statSync(tmp).size < 1000000) return done(false); } // 损坏/HTML 错误页
+        catch (e) { return done(false); }
+        done(true);
       }));
-    });
-    get(url).on("error", () => resolve(""));
+      f.on("error", () => done(false));
+    };
+    const get = (u, depth) => {
+      if (depth > 6) return done(false);
+      let opts;
+      try { opts = new URL(u); } catch (e) { return done(false); }
+      // 有代理且目标为 https: 走 HTTP CONNECT 隧道 — 帛书·「無有入於無間」
+      if (proxy && opts.protocol === "https:") {
+        let px; try { px = new URL(proxy); } catch (e) { px = null; }
+        if (px) {
+          const conn = http.request({
+            host: px.hostname, port: px.port || 80, method: "CONNECT",
+            path: opts.hostname + ":" + (opts.port || 443),
+            headers: { Host: opts.hostname + ":" + (opts.port || 443), "User-Agent": UA },
+            timeout: 60000,
+          });
+          conn.on("connect", (resp, socket) => {
+            if (resp.statusCode !== 200) { socket.destroy(); return done(false); }
+            const req2 = https.get({ hostname: opts.hostname, port: opts.port || 443, path: opts.pathname + opts.search, socket, agent: false, headers: { "User-Agent": UA }, timeout: 60000 },
+              (res) => sink(res, get, depth));
+            req2.on("error", () => done(false));
+            req2.setTimeout(60000, () => { req2.destroy(); done(false); });
+          });
+          conn.on("error", () => done(false));
+          conn.setTimeout(60000, () => { conn.destroy(); done(false); });
+          conn.end();
+          return;
+        }
+      }
+      const mod = opts.protocol === "http:" ? http : https;
+      const req = mod.get({ hostname: opts.hostname, port: opts.port || (opts.protocol === "http:" ? 80 : 443), path: opts.pathname + opts.search, headers: { "User-Agent": UA }, timeout: 60000 },
+        (res) => sink(res, get, depth));
+      req.on("error", () => done(false));
+      req.setTimeout(60000, () => { req.destroy(); done(false); });
+    };
+    get(url, 0);
   });
+}
+
+async function downloadCloudflared(onProgress) {
+  const dst = path.join(os.homedir(), ".dao", "bin", CF_BIN_NAME);
+  try { fs.mkdirSync(path.dirname(dst), { recursive: true }); } catch (e) {}
+  try { if (fs.existsSync(dst) && fs.statSync(dst).size > 1000000) return dst; } catch (e) {}
+  const asset = cfAssetName();
+  const proxy = detectProxy();
+  const mirrors = downloadMirrors(asset);
+  for (let i = 0; i < mirrors.length; i++) {
+    try { onProgress && onProgress("下载 cloudflared … 镜像 " + (i + 1) + "/" + mirrors.length); } catch (e) {}
+    const ok = await httpDownload(mirrors[i], dst, proxy);
+    if (ok) {
+      if (process.platform !== "win32") { try { fs.chmodSync(dst, 0o755); } catch (e) {} }
+      return dst;
+    }
+  }
+  return "";
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -374,7 +514,11 @@ class Bridge {
     this.onUpdate = null;
     this.lastErr = "";
     this.mode = "quick";
-    this._retried = false;
+    this.protocol = "";
+    this.proxy = "";
+    this.cfBin = "";
+    this.attemptLog = [];
+    this._starting = false;
     this.cfCredentials = loadCfCredentials();
     this.srv._bridgeRef = this;
   }
@@ -383,58 +527,106 @@ class Bridge {
   connPath() { return path.join(daoDir(), "conn.json"); }
   globalConnPath() { return path.join(daoGlobalDir(), "cf-hub-conn.json"); }
 
+  // ═══════════════════════════════════════════════════════════
+  // 启动 — 帛书·「反者道之动也，弱者道之用也」
+  // 自动回退链(用户最小输入, 系统无不为):
+  //   ① 命名隧道(用户 Cloudflare 通道·固定域名) — 若配置了 token
+  //   ② 原生快速隧道(无账号·trycloudflare) — 永远兜底
+  //   每档再做 quic↔http2 协议回退(国内/GFW 优先 http2 走代理)
+  // 任一档打通即停; 全失败才如实报错。绝不卡死在某一种模式。
+  // ═══════════════════════════════════════════════════════════
   async start() {
-    this.startedAt = new Date();
-    this._retried = false;
-    const cfg = vscode.workspace.getConfiguration("daoBridge");
-    let tunnelToken = String(cfg.get("tunnelToken") || "").trim();
-    let hostname = String(cfg.get("hostname") || "").trim();
-    // 守母: IDE 设置为空时自动从 ~/.dao 凭证库取命名隧道配置 — 零设置项介入
-    if (!tunnelToken) { const dc = loadDaoTunnelConfig(); if (dc.token) tunnelToken = dc.token; if (!hostname && dc.hostname) hostname = dc.hostname; }
-    const fixedPort = parseInt(cfg.get("localPort"), 10) || 0;
-    // 无名之樸: 无令牌即走零配置 quick 隧道(无需任何账号/Token), 即开即用
-    this.mode = tunnelToken ? "named" : "quick";
-    const port = await this.srv.start(this.mode === "named" ? (fixedPort || 9910) : 0);
+    if (this._starting) return this.url;
+    this._starting = true;
+    try {
+      this.startedAt = new Date();
+      this.url = ""; this.lastErr = ""; this.attemptLog = [];
+      const cfg = vscode.workspace.getConfiguration("daoBridge");
+      let tunnelToken = String(cfg.get("tunnelToken") || "").trim();
+      let hostname = String(cfg.get("hostname") || "").trim();
+      // 守母: IDE 设置为空时自动从 ~/.dao 凭证库取命名隧道配置 — 零设置项介入
+      if (!tunnelToken) { const dc = loadDaoTunnelConfig(); if (dc.token) tunnelToken = dc.token; if (!hostname && dc.hostname) hostname = dc.hostname; }
+      const fixedPort = parseInt(cfg.get("localPort"), 10) || 0;
 
-    let bin = findCloudflared(this.ctx);
-    if (!bin) { this.lastErr = "cloudflared 缺失，正在自动下载…"; this.notify(); bin = await downloadCloudflared(); }
-    if (!bin) { this.lastErr = "cloudflared 不可用（PATH + 下载均失败）"; this.writeArtifacts(); this.notify(); return ""; }
+      // cloudflared: 内置优先, 缺失则多镜像下载(含国内加速) — 不依赖用户网络/手动安装
+      let bin = findCloudflared(this.ctx);
+      if (!bin) { this.lastErr = "cloudflared 缺失，正在内置/下载…"; this.notify(); bin = await downloadCloudflared((m) => { this.lastErr = m; this.notify(); }); }
+      if (!bin) { this.lastErr = "cloudflared 不可用（内置缺失 + 多镜像下载均失败）— 请检查网络或在设置填 cloudflaredPath"; this.writeArtifacts(); this.notify(); return ""; }
+      this.cfBin = bin;
 
-    const args = this.mode === "named"
-      ? ["tunnel", "--no-autoupdate", "--protocol", "http2", "run", "--token", tunnelToken]
-      : ["tunnel", "--no-autoupdate", "--protocol", "http2", "--url", "http://127.0.0.1:" + port];
+      const proxy = detectProxy();
+      this.proxy = proxy;
+      const port = await this.srv.start(tunnelToken ? (fixedPort || 9910) : (fixedPort || 0));
 
-    if (this.mode === "named" && hostname) this.url = /^https?:\/\//.test(hostname) ? hostname : ("https://" + hostname);
+      // 协议: http2 优先 — TCP/443, 穿透性最强(代理/GFW/企业网友好)。
+      // 实测多数网络(含国内、本测试机)UDP/7844 被封, quic 必失败; cloudflared 自身亦会
+      // quic→http2 预检回退, 故直接 http2 最快最稳。quic 仅作兜底(极少数仅放行 UDP 的网络)。
+      const attempts = [];
+      if (tunnelToken) attempts.push({ mode: "named", proto: "http2", tunnelToken, hostname });
+      attempts.push({ mode: "quick", proto: "http2", port });
+      if (tunnelToken) attempts.push({ mode: "named", proto: "quic", tunnelToken, hostname });
+      attempts.push({ mode: "quick", proto: "quic", port });
 
-    let started = () => {};
-    const ready = new Promise((r) => (started = r));
-    const spawnIt = (binPath) => {
-      this.proc = cp.spawn(binPath, args, { windowsHide: true });
+      for (const a of attempts) {
+        this.mode = a.mode; this.protocol = a.proto; this.notify();
+        const ok = await this._runAttempt(bin, a, port, proxy);
+        this.attemptLog.push({ mode: a.mode, proto: a.proto, ok, url: ok ? this.url : "" });
+        if (ok) { this.writeArtifacts(); this.notify(); return this.url; }
+        try { if (this.proc) this.proc.kill(); } catch (e) {}
+        this.proc = null;
+      }
+      this.lastErr = "全部回退均失败（" + attempts.map((a) => a.mode + "/" + a.proto).join(" → ") + "）"
+        + (proxy ? " · 已尝试代理 " + proxy : " · 未发现可用代理") + " — 疑似网络/GFW 阻断 Cloudflare 边缘";
+      this.writeArtifacts(); this.notify();
+      return "";
+    } finally { this._starting = false; }
+  }
+
+  // 单次尝试: spawn cloudflared, 等待"已就绪"信号或超时
+  _runAttempt(bin, a, port, proxy) {
+    return new Promise((resolve) => {
+      this.url = a.mode === "named" && a.hostname
+        ? (/^https?:\/\//.test(a.hostname) ? a.hostname : "https://" + a.hostname) : "";
+      const args = a.mode === "named"
+        ? ["tunnel", "--no-autoupdate", "--protocol", a.proto, "run", "--token", a.tunnelToken]
+        : ["tunnel", "--no-autoupdate", "--protocol", a.proto, "--url", "http://127.0.0.1:" + port];
+      let settled = false;
+      let registered = false; // 真正与边缘建立连接(而非仅打印 URL)
+      const REG_RE = /Registered tunnel connection|Connection [0-9a-f-]+ registered|Updated to new configuration/i;
+      // 硬失败信号: 预检全失败 / 边缘不可达 — 立即放弃本档, 不空等超时
+      const HARD_FAIL_RE = /failed to connect to the edge|hard_fail=true|no more connections active and exiting|context canceled|Unauthorized|tunnel credentials|token is invalid|invalid tunnel/i;
+      const finish = (ok) => { if (settled) return; settled = true; clearTimeout(timer); resolve(ok); };
+      let proc;
+      try { proc = cp.spawn(bin, args, { windowsHide: true, env: spawnEnv(proxy) }); }
+      catch (e) { this.lastErr = String(e && e.message); return finish(false); }
+      this.proc = proc;
       const onData = (buf) => {
         const s = buf.toString();
-        if (this.mode === "named") {
-          if (/Registered tunnel connection|Connection [0-9a-f-]+ registered/i.test(s)) { this.writeArtifacts(); this.notify(); started(); }
-        } else {
-          const m = s.match(TRY_RE);
-          if (m && !this.url) { this.url = m[0]; this.writeArtifacts(); this.notify(); started(); }
+        // 快速隧道: 先捕获临时 URL(但此时尚未连通, 不能据此判成功)
+        if (a.mode !== "named") { const m = s.match(TRY_RE); if (m && !this.url) { this.url = m[0]; this.notify(); } }
+        // 唯一可信的"已就绪"信号: 边缘连接真正注册成功(named/quick 同理)
+        if (REG_RE.test(s)) {
+          registered = true;
+          if (a.mode === "named" || this.url) finish(true);
+        }
+        if (HARD_FAIL_RE.test(s)) {
+          const line = (s.match(HARD_FAIL_RE) || [s])[0];
+          this.lastErr = String(line).slice(0, 220);
+          if (!registered) finish(false);
+        } else if (/failed to|error=|unable to|connection refused|timeout/i.test(s)) {
+          const line = s.trim().split(/\r?\n/).slice(-1)[0];
+          if (line) this.lastErr = line.slice(0, 220);
         }
       };
-      this.proc.stdout.on("data", onData);
-      this.proc.stderr.on("data", onData);
-      this.proc.on("error", async (e) => {
-        this.lastErr = String(e && e.message);
-        if (!this._retried) { this._retried = true; const dl = await downloadCloudflared(); if (dl) { spawnIt(dl); return; } }
-        this.notify();
+      try { proc.stdout.on("data", onData); proc.stderr.on("data", onData); } catch (e) {}
+      proc.on("error", (e) => { this.lastErr = String(e && e.message); finish(false); });
+      proc.on("exit", (code) => {
+        if (!settled) { this.lastErr = "cloudflared 退出(code=" + code + ", " + a.mode + "/" + a.proto + ")"; finish(false); }
+        else if (a.mode !== "named") { this.url = ""; this.notify(); }
       });
-      this.proc.on("exit", () => { if (this.mode !== "named") this.url = ""; this.notify(); });
-    };
-    spawnIt(bin);
-
-    this.writeArtifacts();
-    await Promise.race([ready, new Promise((r) => setTimeout(r, 25000))]);
-    this.writeArtifacts();
-    this.notify();
-    return this.url;
+      // http2 直连含预检+注册约需 8~18s; quic 在被封网络上必超时, 给足回退时间
+      const timer = setTimeout(() => finish(registered && (a.mode === "named" || !!this.url)), a.proto === "quic" ? 26000 : 22000);
+    });
   }
 
   notify() { try { this.onUpdate && this.onUpdate(this.state()); } catch (e) {} }
@@ -442,8 +634,9 @@ class Bridge {
     return {
       url: this.url, port: this.srv.port, token: this.srv.token,
       ws: workspaceInfo(), startedAt: this.startedAt, lastErr: this.lastErr,
-      mdPath: this.mdPath(), mode: this.mode, version: BRIDGE_VERSION,
-      cfLoggedIn: !!(this.cfCredentials && this.cfCredentials.apiToken),
+      mdPath: this.mdPath(), mode: this.mode, protocol: this.protocol, version: BRIDGE_VERSION,
+      proxy: this.proxy, attempts: this.attemptLog,
+      cfLoggedIn: !!(this.cfCredentials && (this.cfCredentials.apiToken || this.cfCredentials.globalApiKey || this.cfCredentials.tunnelToken)),
       cfEmail: this.cfCredentials ? this.cfCredentials.email || "" : "",
       agentCount: this.srv.agentRegistry.size,
     };
@@ -495,6 +688,87 @@ class Bridge {
   }
 
   // ═══════════════════════════════════════════════════════════
+  // 退出账号 / 重置为无账号模式 — 帛书·「为学者日益，闻道者日损。损之又损，以至于无为」
+  // 清除全部 CloudFlare 账号/令牌残留(含「之前添加过账号」的 cloudflared cert),
+  // 回到零配置原生快速隧道。清除前先备份到 ~/.dao/bridge/reset-backup-<ts>/, 不臆造、不误删。
+  // ═══════════════════════════════════════════════════════════
+  async resetAccount() {
+    const removed = [];
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupDir = path.join(daoDir(), "reset-backup-" + ts);
+    const backup = (src) => {
+      try {
+        if (!fs.existsSync(src)) return false;
+        fs.mkdirSync(backupDir, { recursive: true });
+        fs.copyFileSync(src, path.join(backupDir, path.basename(src)));
+        fs.unlinkSync(src);
+        removed.push(src);
+        return true;
+      } catch (e) { return false; }
+    };
+    // ① dao 自管的命名隧道令牌 / CF 凭证
+    backup(path.join(daoDir(), "named-tunnel.json"));
+    backup(path.join(daoDir(), "cf-credentials.json"));
+    // ② dao-config.json 里若写了 cfTunnelToken/cfHostname → 抹掉这些字段(保留其余)
+    try {
+      const dc = path.join(daoGlobalDir(), "dao-config.json");
+      if (fs.existsSync(dc)) {
+        const j = JSON.parse(fs.readFileSync(dc, "utf8"));
+        let touched = false;
+        for (const k of ["cfTunnelToken", "tunnelToken", "cfHostname", "hostname"]) if (k in j) { delete j[k]; touched = true; }
+        if (touched) { fs.writeFileSync(dc, JSON.stringify(j, null, 2), "utf8"); removed.push(dc + "(字段)"); }
+      }
+    } catch (e) {}
+    // ③ cloudflared 浏览器登录残留(cert.pem + 隧道凭证 json) — 「之前添加过账号」的根因常在此
+    try {
+      const cfHome = path.join(os.homedir(), ".cloudflared");
+      if (fs.existsSync(cfHome)) {
+        for (const f of fs.readdirSync(cfHome)) {
+          if (f === "cert.pem" || /\.json$/i.test(f)) backup(path.join(cfHome, f));
+        }
+      }
+    } catch (e) {}
+    // ④ IDE 设置项清空(全局)
+    try {
+      const cfg = vscode.workspace.getConfiguration("daoBridge");
+      for (const k of ["tunnelToken", "hostname", "cfApiToken"]) {
+        try { await cfg.update(k, "", vscode.ConfigurationTarget.Global); } catch (e) {}
+      }
+    } catch (e) {}
+    this.cfCredentials = null;
+    this.notify();
+    return { ok: true, message: "已退出账号并清空全部凭证残留" + (removed.length ? "（备份于 " + backupDir + "）" : ""), removed };
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 用浏览器登录 Cloudflare(GitHub 账号亦可) → cert.pem — 帛书·「太上，下知有之」
+  // 仅适用于"已有自有域名"的用户(想要固定公网域名)。无域名用户无需此步, 默认快速隧道即用。
+  // ═══════════════════════════════════════════════════════════
+  cfTunnelLogin() {
+    return new Promise((resolve) => {
+      const bin = this.cfBin || findCloudflared(this.ctx);
+      if (!bin) return resolve({ ok: false, message: "cloudflared 不可用" });
+      const cert = path.join(os.homedir(), ".cloudflared", "cert.pem");
+      let proc;
+      try { proc = cp.spawn(bin, ["tunnel", "login"], { windowsHide: true, env: spawnEnv(this.proxy || detectProxy()) }); }
+      catch (e) { return resolve({ ok: false, message: String(e && e.message) }); }
+      let opened = false;
+      const onData = (buf) => {
+        const s = buf.toString();
+        const m = s.match(/https:\/\/dash\.cloudflare\.com\/[^\s]+/i);
+        if (m && !opened) { opened = true; try { vscode.env.openExternal(vscode.Uri.parse(m[0])); } catch (e) {} }
+      };
+      try { proc.stdout.on("data", onData); proc.stderr.on("data", onData); } catch (e) {}
+      // 轮询 cert.pem 出现(用户在浏览器授权后 cloudflared 写出)
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        if (fs.existsSync(cert)) { clearInterval(iv); try { proc.kill(); } catch (e) {} resolve({ ok: true, message: "Cloudflare 浏览器登录成功（已获取 cert.pem）" }); }
+        else if (Date.now() - t0 > 180000) { clearInterval(iv); try { proc.kill(); } catch (e) {} resolve({ ok: false, message: "登录超时（180s 内未完成浏览器授权）" }); }
+      }, 1500);
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════
   // MD文档生成 — 帛书·「始制有名」
   // ═══════════════════════════════════════════════════════════
 
@@ -512,7 +786,7 @@ class Bridge {
       "URL:   " + (this.url || "(隧道启动中…)"),
       "Token: " + this.srv.token,
       "Auth:  Authorization: Bearer <Token>",
-      "Mode:  " + (this.mode === "named" ? "named (命名隧道·稳定 URL)" : "quick (临时 URL)"),
+      "Mode:  " + (this.mode === "named" ? "named (命名隧道·稳定 URL)" : "quick (临时 URL)") + (this.protocol ? " · proto=" + this.protocol : "") + (this.proxy ? " · proxy=" + this.proxy : ""),
       "```",
       "",
       "## 机器信息",
@@ -724,13 +998,30 @@ class BridgeViewProvider {
     if (m.op === "cfLogin") {
       const email = m.email || "";
       const key = m.key || "";
-      if (!email || !key) {
-        this.post({ type: "result", op: "cfLogin", ok: false, text: "请输入 email 和 API Key/Token" });
+      if (!key) {
+        this.post({ type: "result", op: "cfLogin", ok: false, text: "请填入 隧道 Token / API Token（email 可选）" });
         return;
       }
       const r = await this.bridge.loginCloudFlare(email, key);
       this.post({ type: "result", op: "cfLogin", ok: r.ok, text: r.message });
-      if (r.ok) this.post({ type: "state", state: this.bridge.state() });
+      if (r.ok) { this.bridge.stop(); const url = await this.bridge.start(); this.post({ type: "result", op: "cfLogin", ok: !!url, text: r.message + " · " + (url ? "已按用户通道打通" : "用户通道未通已回退") }); }
+      this.post({ type: "state", state: this.bridge.state() });
+      return;
+    }
+    if (m.op === "cfBrowserLogin") {
+      this.post({ type: "result", op: "cfBrowserLogin", ok: true, text: "正在打开浏览器登录 Cloudflare（GitHub 账号亦可）…完成授权后自动检测" });
+      const r = await this.bridge.cfTunnelLogin();
+      this.post({ type: "result", op: "cfBrowserLogin", ok: r.ok, text: r.message });
+      this.post({ type: "state", state: this.bridge.state() });
+      return;
+    }
+    if (m.op === "logout") {
+      const r = await this.bridge.resetAccount();
+      this.post({ type: "result", op: "logout", ok: r.ok, text: r.message });
+      this.bridge.stop();
+      const url = await this.bridge.start();
+      this.post({ type: "result", op: "logout", ok: true, text: r.message + " · 已回到无账号快速隧道" + (url ? "：" + url : "（启动中）") });
+      this.post({ type: "state", state: this.bridge.state() });
       return;
     }
     if (m.op === "openCf") { vscode.env.openExternal(vscode.Uri.parse("https://one.dash.cloudflare.com")); return; }
@@ -787,7 +1078,8 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <div class="card">
   <div class="lbl">公网 URL</div><div id="url" class="url">—</div>
   <div class="lbl">工作区</div><div id="ws" class="val">—</div>
-  <div class="lbl">端口 / 模式</div><div id="mode" class="val">—</div>
+  <div class="lbl">端口 / 模式 / 协议</div><div id="mode" class="val">—</div>
+  <div class="lbl">代理 / 回退链</div><div id="net" class="val">—</div>
   <div class="lbl">在线Agent</div><div id="agents" class="val">0</div>
   <div class="row" style="margin-top:6px">
     <button onclick="send('copyUrl')">复制URL</button>
@@ -804,8 +1096,11 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <div id="cfLoginForm">
   <input id="cfEmail" type="email" placeholder="CloudFlare Email（可选）">
   <input id="cfKey" type="password" placeholder="Tunnel Token / API Token（可选）">
-  <button onclick="send('cfLogin',null,{email:v('cfEmail'),key:v('cfKey')})">保存 CloudFlare 凭证</button>
+  <button onclick="send('cfLogin',null,{email:v('cfEmail'),key:v('cfKey')})">保存并切到用户通道</button>
+  <div class="muted" style="margin-top:6px">没有 token？用浏览器登录 Cloudflare（<b>可用 GitHub 账号</b>，需自有域名才有固定域名）：</div>
+  <button onclick="send('cfBrowserLogin')">🌐 用浏览器登录 Cloudflare</button>
 </div>
+<button id="logoutBtn" onclick="if(confirm('退出账号并清空全部 Cloudflare 凭证残留(含 cloudflared 登录 cert)，回到无账号快速隧道？'))send('logout')" style="margin-top:6px;background:#a33;display:none">退出账号 / 重置为无账号模式</button>
 <button onclick="send('openCf')" style="margin-top:4px;background:var(--vscode-textLink-foreground)">打开 CloudFlare 控制台</button>
 </div>
 
@@ -841,11 +1136,15 @@ window.addEventListener('message',(e)=>{const m=e.data;
     document.getElementById('stat').textContent=on?'已打通 · 公网在线':(s.lastErr?(''+s.lastErr):'隧道启动中…');
     document.getElementById('url').textContent=s.url||'—';
     document.getElementById('ws').textContent=s.ws?(s.ws.name+' · '+s.ws.root):'—';
-    document.getElementById('mode').textContent=':'+s.port+' / '+s.mode;
+    document.getElementById('mode').textContent=':'+s.port+' / '+s.mode+(s.protocol?' / '+s.protocol:'');
+    var chain=(s.attempts||[]).map(function(a){return a.mode+'/'+a.proto+(a.ok?'✓':'✗');}).join(' → ');
+    document.getElementById('net').textContent=(s.proxy?('代理 '+s.proxy):'直连(无代理)')+(chain?(' · '+chain):'');
     document.getElementById('agents').textContent=String(s.agentCount||0);
+    var loggedIn=!!(s.cfLoggedIn||s.mode==='named');
+    document.getElementById('logoutBtn').style.display=loggedIn?'block':'none';
     const cfSt=document.getElementById('cfStatus');
-    if(s.cfLoggedIn){cfSt.textContent='✓ 已登录: '+s.cfEmail;cfSt.style.color='#3fb950';document.getElementById('cfLoginForm').style.display='none';}
-    else{cfSt.textContent='未登录';cfSt.style.color='';document.getElementById('cfLoginForm').style.display='block';}
+    if(loggedIn){cfSt.textContent='✓ 用户通道'+(s.cfEmail?(' · '+s.cfEmail):'')+(s.mode==='named'?'（命名隧道运行中）':'');cfSt.style.color='#3fb950';document.getElementById('cfLoginForm').style.display='none';}
+    else{cfSt.textContent='未登录（零配置快速隧道）';cfSt.style.color='';document.getElementById('cfLoginForm').style.display='block';}
   }
   if(m.type==='result'){out.className='';out.textContent='['+m.op+'] '+(m.ok?'✓':'✗')+' '+(m.text||'');}
 });
@@ -867,9 +1166,14 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand("daoBridge.openMd", async () => { const d = await vscode.workspace.openTextDocument(_bridge.mdPath()); vscode.window.showTextDocument(d); }));
   context.subscriptions.push(vscode.commands.registerCommand("daoBridge.exportCloudMd", async () => { await vscode.env.clipboard.writeText(_bridge.generateCloudAgentMd()); vscode.window.showInformationMessage("已复制云端Agent MD"); }));
   context.subscriptions.push(vscode.commands.registerCommand("daoBridge.exportLocalMd", async () => { await vscode.env.clipboard.writeText(_bridge.generateLocalAgentMd()); vscode.window.showInformationMessage("已复制本地Agent MD"); }));
+  context.subscriptions.push(vscode.commands.registerCommand("daoBridge.logout", async () => {
+    const r = await _bridge.resetAccount();
+    _bridge.stop(); await _bridge.start();
+    vscode.window.showInformationMessage("DAO Bridge: " + r.message + " · 已回到无账号快速隧道");
+  }));
   context.subscriptions.push({ dispose: () => { try { _bridge.stop(); } catch (e) {} } });
   // 自动启动 — 插件激活即穿透
   _bridge.start().then((url) => { if (url) vscode.window.setStatusBarMessage("DAO Bridge 已打通: " + url, 8000); });
 }
 function deactivate() { try { if (_bridge) _bridge.stop(); } catch (e) {} }
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, Bridge, detectProxy, downloadCloudflared, findCloudflared };

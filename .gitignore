@@ -12,3 +12,10 @@
 # 依赖 / 构建产物
 node_modules/
 *.log
+
+# cloudflared 二进制（自带打包用, 体积大不入库; 由 tools/fetch-cloudflared.js 拉取）
+**/dao-bridge-ext/bin/cloudflared
+**/dao-bridge-ext/bin/cloudflared.exe
+**/dao-bridge-ext/bin/*.tgz
+# 自包含 bundled VSIX（含二进制, 走 Release 分发, 不入库）
+*-bundled.vsix
