@@ -233,11 +233,6 @@ function getDaoRulesText(): string {
     return '';
 }
 
-// CF全局凭证 — 已迁移至 dao-bridge 插件
-// 帛书·三十九「致数与无与」— 保留声明兼容旧引用
-let cfApiToken = '';
-let cfAccountId = '';
-let cfDeploying = false;
 
 export async function activate(context: vscode.ExtensionContext) {
     // 初始化每窗口专属状态
@@ -266,12 +261,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Step 0: 检测代理隧道 — 在所有网络请求之前
     detectProxyPort();
-    // Load CF global credentials
-    try {
-        const cfg = JSON.parse(fs.readFileSync(GLOBAL_CONFIG_FILE, 'utf8'));
-        if (cfg.cfApiToken) cfApiToken = cfg.cfApiToken;
-        if (cfg.cfAccountId) cfAccountId = cfg.cfAccountId;
-    } catch {}
 
     // Step 0.5: 预读 vscdb 凭证缓存 — 避免后续 UI 刷新时阻塞
     // 帛书·五十四「善建者不拔」— 一次读取，缓存复用
@@ -819,7 +808,7 @@ function getRelayConfig(): { urls: string[] } {
         if (f.relayUrl) return { urls: f.relayUrl.split(',').map((u: string) => u.trim()).filter(Boolean) };
         if (f.relayUrls?.length) return { urls: f.relayUrls };
     } catch {}
-    // 道法自然：无中继配置 → 返回空，触发autoDeployRelay
+    // 道法自然：无中继配置 → 返回空，仅本地运行
     return { urls: [] };
 }
 
@@ -1610,7 +1599,6 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
         const orgName = ws.devinOrgName || ws.devinOrgSlug || '';
         let hasWindsurfCreds = false;
         try { hasWindsurfCreds = !!readWindsurfCredentials(); } catch {}
-        const cfStatus = cfApiToken ? '✓' : '✗';
         const relayStatus = ws.relayConnected ? '✓' : '✗';
 
         // Compact sidebar — full panel opens in editor area
@@ -1654,7 +1642,6 @@ ${syncing ? `
 <div class="card">
   <div class="row"><span class="lbl">⚡ Server</span><span class="val ${ws.port ? 'ok' : 'err'}">${ws.port ? ':' + ws.port : 'off'}</span></div>
   <div class="row"><span class="lbl">☁️ Relay</span><span class="val ${ws.relayConnected ? 'ok' : 'err'}">${relayStatus}</span></div>
-  <div class="row"><span class="lbl">🔑 CF</span><span class="val ${cfApiToken ? 'ok' : 'err'}">${cfStatus}</span></div>
 </div>
 <button class="btn primary" onclick="cmd('openCloudPanel')">🤖 打开 Devin Cloud 全功能面板</button>
 ${loggedIn ? '<button class="btn" onclick="cmd(&#39;devinCloudPanel&#39;)" style="margin-top:4px;background:#0e639c">🌐 打开 Devin 官网</button>' : ''}
@@ -1692,7 +1679,7 @@ function readBridgeConn(): any {
 }
 
 function getDaoCloudMiddlePanelHtml(st: any): string {
-    const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, cfAuth, injecting, bridge } = st;
+    const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, injecting, bridge } = st;
     // 帛书·「道生一，一生二，二生三，三生万物」
     // Overview: Codeium API 数据（已工作 — devin-session-token$ 对 Codeium API 有效）
     // Sessions/Knowledge/Secrets/Integrations: simpleBrowser 打开 app.devin.ai（共享 Electron session）
@@ -1834,7 +1821,6 @@ const S={
     relayUrl:'${mpEsc(relayUrl)}',
     hostname:'${mpEsc(hostname)}'
   },
-  cf:{auth:${cfAuth}},
   bridge:${JSON.stringify(bridge || null)},
   inject:null,
   injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],lastInjectedOrg:''},
@@ -1912,7 +1898,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});Object.assign(S.cf,d.cf||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab);if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
@@ -2055,7 +2041,6 @@ function getPanelState() {
         relay: ws.relayConnected,
         relayUrl: ws.publicUrl || '',
         hostname: os.hostname(),
-        cfAuth: !!cfApiToken,
         injecting: ws.devinInjecting,
         bridge: readBridgeConn(),
     };
@@ -2082,7 +2067,6 @@ function refreshDaoCloudMiddlePanel() {
         relayUrl: ws.publicUrl || '',
         hostname: os.hostname(),
     };
-    data.cf = { authenticated: !!cfApiToken };
     data.bridge = readBridgeConn();
     // Inject state
     try {
@@ -2457,400 +2441,6 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     } catch (e: any) {
         reply({ type: 'error', msg: e.message || String(e) });
     }
-}
-
-// ═══════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════
-// 器 · Cloudflare 功能已迁移至 dao-bridge 插件
-// 帛书·「始制有名」— CF公网穿透由专用插件处理
-// 以下为兼容性存根，实际功能请使用 DAO Bridge 插件
-// ═══════════════════════════════════════════════════════════
-
-function readWranglerAuth(): { oauth_token: string; refresh_token: string; expiration_time: string; expired: boolean } | null {
-    const paths = [
-        path.join(os.homedir(), '.wrangler', 'config', 'default.toml'),
-        path.join(process.env.APPDATA || '', 'xdg.config', '.wrangler', 'config', 'default.toml'),
-        path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), '.wrangler', 'config', 'default.toml'),
-    ];
-    for (const p of paths) {
-        try {
-            if (fs.existsSync(p)) {
-                const c = fs.readFileSync(p, 'utf8');
-                const om = c.match(/oauth_token\s*=\s*"([^"]+)"/);
-                const rm = c.match(/refresh_token\s*=\s*"([^"]+)"/);
-                const em = c.match(/expiration_time\s*=\s*"([^"]+)"/);
-                if (om) {
-                    const exp = em ? new Date(em[1]) : null;
-                    return { oauth_token: om[1], refresh_token: rm ? rm[1] : '', expiration_time: em ? em[1] : '', expired: exp ? exp < new Date() : false };
-                }
-            }
-        } catch {}
-    }
-    return null;
-}
-
-// ═══════════════════════════════════════════════════════════
-// 道 · CF OAuth Token自动刷新 — 帛书·五十八「祸兮福之所倚」
-// refresh_token已读取但从未使用 → 本源断裂点#1
-// 自动刷新: 过期检测 → refresh_token换新oauth_token → 无为自持
-// ═══════════════════════════════════════════════════════════
-
-async function cfRefreshOAuthToken(refreshToken: string): Promise<string | null> {
-    // CF OAuth refresh endpoint — wrangler uses the same mechanism
-    return new Promise((resolve) => {
-        const postData = JSON.stringify({
-            grant_type: 'refresh_token',
-            refresh_token: refreshToken,
-            client_id: '54d11594-84e4-41aa-b4a0-2e5fa20c7f5e',  // wrangler's public client_id
-        });
-        const req = https.request({
-            hostname: 'dash.cloudflare.com',
-            path: '/oauth2/token',
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(postData),
-            },
-            timeout: 15000,
-            rejectUnauthorized: true,
-        }, (res) => {
-            let data = '';
-            res.on('data', (c: Buffer) => data += c.toString());
-            res.on('end', () => {
-                try {
-                    const r = JSON.parse(data);
-                    if (r.access_token) {
-                        // Update wrangler config with new token
-                        cfUpdateWranglerAuth(r.access_token, r.refresh_token || refreshToken, r.expires_in);
-                        resolve(r.access_token);
-                    } else {
-                        resolve(null);
-                    }
-                } catch { resolve(null); }
-            });
-        });
-        req.on('error', () => resolve(null));
-        req.on('timeout', () => { req.destroy(); resolve(null); });
-        req.write(postData);
-        req.end();
-    });
-}
-
-function cfUpdateWranglerAuth(newOAuthToken: string, newRefreshToken: string, expiresInSec: number): void {
-    const paths = [
-        path.join(os.homedir(), '.wrangler', 'config', 'default.toml'),
-        path.join(process.env.APPDATA || '', 'xdg.config', '.wrangler', 'config', 'default.toml'),
-        path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), '.wrangler', 'config', 'default.toml'),
-    ];
-    for (const p of paths) {
-        try {
-            if (fs.existsSync(p)) {
-                let c = fs.readFileSync(p, 'utf8');
-                const expTime = new Date(Date.now() + expiresInSec * 1000).toISOString();
-                c = c.replace(/oauth_token\s*=\s*"[^"]*"/, `oauth_token = "${newOAuthToken}"`);
-                c = c.replace(/refresh_token\s*=\s*"[^"]*"/, `refresh_token = "${newRefreshToken}"`);
-                c = c.replace(/expiration_time\s*=\s*"[^"]*"/, `expiration_time = "${expTime}"`);
-                fs.writeFileSync(p, c, 'utf8');
-                return;
-            }
-        } catch {}
-    }
-}
-
-async function cfGetValidToken(): Promise<string | null> {
-    // 1. Check saved config token
-    try {
-        const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-        if (cfg.cfApiToken) {
-            // Verify it still works
-            const userCheck = await cfApiRequestRaw(cfg.cfApiToken, 'user', 'GET');
-            if (userCheck && userCheck.result) return cfg.cfApiToken;
-            // Token invalid — try refresh
-        }
-    } catch {}
-
-    // 2. Check wrangler OAuth token — auto-refresh if expired
-    const wa = readWranglerAuth();
-    if (wa && wa.oauth_token) {
-        if (!wa.expired) {
-            const userCheck = await cfApiRequestRaw(wa.oauth_token, 'user', 'GET');
-            if (userCheck && userCheck.result) return wa.oauth_token;
-        }
-        // Token expired or invalid — try refresh_token
-        if (wa.refresh_token) {
-            const newToken = await cfRefreshOAuthToken(wa.refresh_token);
-            if (newToken) {
-                const userCheck = await cfApiRequestRaw(newToken, 'user', 'GET');
-                if (userCheck && userCheck.result) return newToken;
-            }
-        }
-    }
-
-    return null;
-}
-
-function cfApiRequestRaw(apiToken: string, pathStr: string, method: string): Promise<any> {
-    return new Promise((resolve) => {
-        const req = https.request({
-            hostname: 'api.cloudflare.com',
-            path: '/client/v4/' + pathStr,
-            method: method,
-            headers: { 'Authorization': 'Bearer ' + apiToken, 'Content-Type': 'application/json' }
-        }, (res) => {
-            let data = '';
-            res.on('data', (c: Buffer) => data += c.toString());
-            res.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve({ success: false }); } });
-        });
-        req.on('error', () => resolve(null));
-        req.end();
-    });
-}
-
-function cfApiRequest(apiToken: string, accountId: string, pathStr: string, method: string, body?: string, extraHeaders?: any): Promise<any> {
-    return new Promise((resolve) => {
-        const options: any = {
-            hostname: 'api.cloudflare.com',
-            path: '/client/v4/accounts/' + accountId + '/' + pathStr,
-            method: method,
-            headers: { 'Authorization': 'Bearer ' + apiToken, ...(extraHeaders || {}) }
-        };
-        if (body && typeof body === 'string') {
-            options.headers['Content-Length'] = Buffer.byteLength(body);
-        }
-        const req = https.request(options, (res) => {
-            let data = '';
-            res.on('data', (c: Buffer) => data += c.toString());
-            res.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve({ success: false, raw: data }); } });
-        });
-        req.on('error', () => resolve(null));
-        if (body) req.write(body);
-        req.end();
-    });
-}
-
-async function wranglerLogin(): Promise<boolean> {
-    const { execFile } = require('child_process') as typeof import('child_process');
-    const execAsync = (cmd: string, args: string[], opts: any) => new Promise<string>((resolve, reject) => {
-        execFile(cmd, args, opts, (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    });
-    let wranglerCmd = 'wrangler';
-    try {
-        await execAsync('wrangler', ['--version'], { timeout: 10000 });
-    } catch {
-        vscode.window.showInformationMessage('Installing wrangler CLI...');
-        try {
-            await execAsync('npm', ['install', '-g', 'wrangler'], { timeout: 60000 });
-        } catch {
-            wranglerCmd = 'npx wrangler';
-        }
-    }
-    // Check if already logged in
-    try {
-        const whoami = await execAsync(wranglerCmd, ['whoami'], { timeout: 10000 });
-        if (whoami.includes('logged in') || whoami.includes('Account ID')) return true;
-    } catch {}
-    // Prompt user for browser OAuth — 帛书·「天下之至柔」— 浏览器交互，用户可操作
-    const choice = await vscode.window.showInformationMessage(
-        'Dao needs Cloudflare authorization (free account OK). Browser will open → click "Allow"',
-        'Login Now', 'Cancel'
-    );
-    if (choice !== 'Login Now') return false;
-    try {
-        // 帛书·「将欲拾之必故张之」— 先打开浏览器让用户操作
-        const term = vscode.window.createTerminal('CF Login');
-        term.sendText(wranglerCmd + ' login');
-        term.show();
-        // 等待用户完成登录
-        const loggedIn = await vscode.window.showInformationMessage(
-            'After completing Cloudflare login in the terminal, click "Done"',
-            'Done', 'Cancel'
-        );
-        if (loggedIn === 'Done') {
-            try {
-                const check = await execAsync(wranglerCmd, ['whoami'], { timeout: 10000 });
-                return check.includes('logged in') || check.includes('Account ID');
-            } catch { return false; }
-        }
-        return false;
-    } catch {
-        return false;
-    }
-}
-
-async function autoDeployRelay(): Promise<boolean> {
-    if (cfDeploying) return false;
-    cfDeploying = true;
-    try {
-        // 道 · 自动获取有效Token — 含OAuth自动刷新
-        // 不再手动3步检测 → cfGetValidToken统一处理过期/刷新/验证
-        let cfToken = await cfGetValidToken();
-        let accountId = '';
-        try {
-            const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-            accountId = cfg.cfAccountId || '';
-        } catch {}
-
-        // 获取accountId
-        if (cfToken && !accountId) {
-            const accounts = await cfApiRequestRaw(cfToken, 'accounts', 'GET');
-            if (accounts && accounts.result && accounts.result.length > 0) {
-                accountId = accounts.result[0].id;
-            }
-        }
-
-        // 仍然无Token → wrangler login（唯一手动步骤）
-        if (!cfToken || !accountId) {
-            const ok = await wranglerLogin();
-            if (!ok) return false;
-            cfToken = await cfGetValidToken();
-            if (cfToken && !accountId) {
-                const accounts = await cfApiRequestRaw(cfToken, 'accounts', 'GET');
-                if (accounts && accounts.result && accounts.result.length > 0) {
-                    accountId = accounts.result[0].id;
-                }
-            }
-        }
-
-        if (!cfToken || !accountId) return false;
-        cfApiToken = cfToken;
-        cfAccountId = accountId;
-
-        // 4. Deploy Worker
-        const relayUrl = await deployWorkersRelay(cfToken, accountId);
-        if (!relayUrl) return false;
-
-        // 5. Save config
-        try {
-            const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-            cfg.relayUrl = relayUrl;
-            cfg.cfApiToken = cfToken;
-            cfg.cfAccountId = accountId;
-            fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf8');
-        } catch {
-            fs.writeFileSync(CONFIG_FILE, JSON.stringify({ relayUrl, cfApiToken: cfToken, cfAccountId: accountId }, null, 2), 'utf8');
-        }
-        vscode.window.showInformationMessage('Dao relay deployed: ' + relayUrl);
-        return true;
-    } finally {
-        cfDeploying = false;
-    }
-}
-
-async function deployWorkersRelay(apiToken: string, accountId: string): Promise<string | null> {
-    // Get workers.dev subdomain
-    const subdomainResult = await cfApiRequest(apiToken, accountId, 'workers/subdomain', 'GET');
-    const subdomain = subdomainResult?.result?.subdomain;
-    if (!subdomain) {
-        vscode.window.showErrorMessage('Failed to get workers.dev subdomain');
-        return null;
-    }
-
-    // Check if worker already exists — reuse if so
-    const existing = await cfApiRequest(apiToken, accountId, 'workers/scripts/dao-relay-do', 'GET');
-    if (existing && existing.success) {
-        // Worker exists, just return URL
-        return 'https://dao-relay-do.' + subdomain + '.workers.dev';
-    }
-
-    // Deploy new worker via wrangler CLI (more reliable than raw API for DO)
-    const { execSync } = require('child_process');
-    const wranglerToml = [
-        'name = "dao-relay-do"',
-        'main = "dao-relay-do.js"',
-        'compatibility_date = "2024-01-01"',
-        '',
-        '[durable_objects]',
-        'bindings = [{ name = "DAO_RELAY", class_name = "DaoRelayDO" }]',
-        '',
-        '[[migrations]]',
-        'tag = "v9"',
-        'new_sqlite_classes = ["DaoRelayDO"]'
-    ].join('\n');
-
-    // Write wrangler.toml + copy relay script to temp dir
-    const tmpDir = path.join(os.tmpdir(), 'dao-deploy-' + Date.now());
-    fs.mkdirSync(tmpDir, { recursive: true });
-    try {
-        fs.writeFileSync(path.join(tmpDir, 'wrangler.toml'), wranglerToml, 'utf8');
-        // Copy relay script from bundled location or C:\dao
-        const relaySrcPaths = [
-            path.join(path.dirname(__dirname), 'dao-relay-do.js'),  // VSIX root
-            path.join('C:\\dao', 'dao-relay-do.js'),                // C:\dao
-        ];
-        let relaySrc = '';
-        for (const p of relaySrcPaths) {
-            if (fs.existsSync(p)) { relaySrc = p; break; }
-        }
-        if (relaySrc) {
-            fs.copyFileSync(relaySrc, path.join(tmpDir, 'dao-relay-do.js'));
-        } else {
-            // Inline minimal relay script
-            fs.writeFileSync(path.join(tmpDir, 'dao-relay-do.js'), getBundledRelayScript(), 'utf8');
-        }
-
-        vscode.window.showInformationMessage('Deploying Dao relay to Cloudflare...');
-        const result = execSync('npx wrangler deploy 2>&1', { cwd: tmpDir, encoding: 'utf8', timeout: 60000, env: { ...process.env, CLOUDFLARE_API_TOKEN: apiToken } });
-        if (result.includes('Deployed') || result.includes('dao-relay-do')) {
-            return 'https://dao-relay-do.' + subdomain + '.workers.dev';
-        }
-        return null;
-    } catch (e: any) {
-        vscode.window.showErrorMessage('Deploy failed: ' + (e.message || e).substring(0, 200));
-        return null;
-    } finally {
-        try { fs.rmSync(tmpDir, { recursive: true }); } catch {}
-    }
-}
-
-function getBundledRelayScript(): string {
-    // DO relay with token verification — 道法自然: 最小化安全，零用户负担
-    // Token在WebSocket连接时注册，后续HTTP relay请求必须携带相同token
-    return `import { DurableObject } from 'cloudflare:workers';
-export class DaoRelayDO extends DurableObject {
-  constructor(ctx, env) { super(ctx, env); this.sessions = []; this.tokens = new Map(); }
-  async fetch(req) {
-    const url = new URL(req.url);
-    if (url.pathname === '/health') return Response.json({ service: 'dao-relay-do', version: '9.0.0', engine: 'cloudflare-durable-object', auth: 'token' });
-    if (url.pathname === '/connect' && req.headers.get('Upgrade') === 'websocket') {
-      const token = url.searchParams.get('token') || '';
-      const pair = new WebSocketPair(); const [c, s] = [pair[0], pair[1]];
-      this.ctx.acceptWebSocket(s);
-      const sid = crypto.randomUUID();
-      this.sessions.push({ ws: s, token, sid });
-      this.tokens.set(sid, token);
-      s.addEventListener('message', (e) => { try { const m = JSON.parse(e.data); if (m.type === 'ping') s.send(JSON.stringify({ type: 'pong', sid })); } catch {} });
-      s.addEventListener('close', () => { this.sessions = this.sessions.filter(x => x.sid !== sid); this.tokens.delete(sid); });
-      return new Response(null, { status: 101, webSocket: c });
-    }
-    if (url.pathname.startsWith('/relay/')) {
-      // Token verification — 道法自然: relay层认证，不增加用户操作
-      const authHeader = req.headers.get('Authorization') || '';
-      const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : '';
-      const urlToken = url.searchParams.get('master_token') || '';
-      const providedToken = bearerToken || urlToken;
-      if (!providedToken) return Response.json({ error: 'unauthorized', hint: 'Bearer token required' }, { status: 401 });
-      // Check if token matches any registered session
-      const validTokens = [...this.tokens.values()];
-      if (validTokens.length > 0 && !validTokens.includes(providedToken)) {
-        return Response.json({ error: 'forbidden', hint: 'token not registered' }, { status: 403 });
-      }
-      const msg = await req.text(); let body; try { body = JSON.parse(msg); } catch { body = {}; }
-      const activeSessions = this.sessions.filter(x => x.ws.readyState === 1);
-      for (const s of activeSessions) { try { s.ws.send(JSON.stringify({ type: 'request', id: crypto.randomUUID(), method: body.method || 'GET', path: body.path || '/', headers: body.headers || {}, body: body.body || '' })); } catch {} }
-      return Response.json({ ok: true, forwarded: activeSessions.length });
-    }
-    return Response.json({ error: 'not found' }, { status: 404 });
-  }
-}
-export default {
-  async fetch(req, env) {
-    const url = new URL(req.url);
-    if (url.pathname === '/health') return Response.json({ service: 'dao-relay-do', version: '9.0.0', auth: 'token' });
-    const sessionId = url.pathname.split('/')[2] || 'default';
-    const id = env.DAO_RELAY.idFromName(sessionId);
-    return env.DAO_RELAY.get(id).fetch(req);
-  }
-};`;
 }
 
 // ═══════════════════════════════════════════════════════════
