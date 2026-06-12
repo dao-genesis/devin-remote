@@ -3530,10 +3530,16 @@ function hotAddProvider(name, cfg) {
       cfg.type = "bedrock";
     else cfg.type = "openai-compatible"; // 默认
   }
-  // ★ 自动推断 completionPath
+  // ★ 自动推断 completionPath · 防 baseUrl 已含 /vN 时重复拼 /v1 → /v1/v1/chat/completions 404
+  //   道义: 二十二章「曲则全」· baseUrl 多形(含/不含版本段) · 归一方得真路 (与 _modelsUrlFor 同源)
   if (!cfg.completionPath) {
-    if (cfg.type === "anthropic") cfg.completionPath = "/v1/messages";
-    else cfg.completionPath = "/v1/chat/completions";
+    const _baseHasVer = /\/v\d+\/?$/i.test(String(cfg.baseUrl || ""));
+    if (cfg.type === "anthropic")
+      cfg.completionPath = _baseHasVer ? "/messages" : "/v1/messages";
+    else
+      cfg.completionPath = _baseHasVer
+        ? "/chat/completions"
+        : "/v1/chat/completions";
   }
   // ★ 默认 streamMode
   if (!cfg.streamMode) cfg.streamMode = "stream";
