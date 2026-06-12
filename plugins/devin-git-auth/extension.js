@@ -360,6 +360,54 @@ async function robustDisconnectGit(email, auth1, orgId) {
 // ═══ 工具 ═══
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+// ═══ 多格式账号解析 · 万法识号 · 帛书「道生一·一生二·二生三·三生万物」═══
+// 支持: email password / email:password / email----password / email|password
+//       email,password / email\tpassword / {"email":..,"password":..} (JSON)
+// 自动去重(按 email), 跳过无密码或无效行。
+function parseBatchAccounts(text) {
+  var out = [];
+  var seen = {};
+  function push(email, password) {
+    email = String(email || "").trim().toLowerCase();
+    password = String(password || "").trim();
+    if (!email || !password || email.indexOf("@") < 0 || seen[email]) return;
+    seen[email] = true;
+    out.push({ email: email, password: password });
+  }
+  // 先尝试整体 JSON 数组
+  try {
+    var asJson = JSON.parse(text);
+    var arr = Array.isArray(asJson) ? asJson : (asJson && asJson.accounts) ? asJson.accounts : null;
+    if (arr) { arr.forEach(function (a) { if (a) push(a.email || a.user || a.login, a.password || a.pass); }); if (out.length) return out; }
+  } catch (e) {}
+
+  var lines = String(text || "").split(/\r?\n/);
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+    // 单行 JSON
+    if (line[0] === "{") {
+      try { var j = JSON.parse(line); push(j.email || j.user || j.login, j.password || j.pass); continue; } catch (e) {}
+    }
+    // 分隔符择优: ---- | 制表 ,(逗号) :(冒号) 空格 — 仅在第一个出现处切一刀,
+    // 余下整体作密码(允许密码内含分隔字符)。
+    var sep = null;
+    if (line.indexOf("----") >= 0) sep = "----";
+    else if (line.indexOf("|") >= 0) sep = "|";
+    else if (line.indexOf("\t") >= 0) sep = "\t";
+    else if (line.indexOf(",") >= 0 && line.indexOf(":") < 0) sep = ",";
+    else if (line.indexOf(":") >= 0) sep = ":";
+    else if (/\s/.test(line)) sep = " ";
+    if (sep) {
+      var idx = sep === " " ? line.search(/\s/) : line.indexOf(sep);
+      var em = line.slice(0, idx).trim();
+      var pw = line.slice(idx + sep.length).trim();
+      push(em, pw);
+    }
+  }
+  return out;
+}
+
 // ═══ 状态持久化 ═══
 var STATE_FILE = path.join(os.homedir(), ".devin-git-auth.json");
 
@@ -444,18 +492,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .stit{font-size:13px;font-weight:600;margin-bottom:10px;color:var(--ac);display:flex;align-items:center;gap:6px}
 .stit::before{content:'';width:3px;height:13px;background:var(--ac);border-radius:2px}
 label{display:block;font-size:11px;color:var(--tx2);margin-bottom:3px}
-input{width:100%;padding:7px 10px;background:var(--bg);border:1px solid var(--bd);border-radius:var(--r);color:var(--tx);font-size:13px;outline:none;transition:border-color .2s}
-input:focus{border-color:var(--ac)}
-input::placeholder{color:var(--tx2)}
+input,textarea{width:100%;padding:7px 10px;background:var(--bg);border:1px solid var(--bd);border-radius:var(--r);color:var(--tx);font-size:13px;outline:none;transition:border-color .2s}
+input:focus,textarea:focus{border-color:var(--ac)}
+input::placeholder,textarea::placeholder{color:var(--tx2)}
+textarea{resize:vertical;min-height:74px;font-family:'Cascadia Code',monospace;font-size:11px;line-height:1.5}
 .ig{margin-bottom:8px}
-.row{display:flex;gap:8px}.row>*{flex:1}
+.row2{display:flex;gap:8px}.row2>*{flex:1}
 button{padding:7px 14px;border:none;border-radius:var(--r);font-size:12px;font-weight:500;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 button:disabled{opacity:.4;cursor:not-allowed}
 .bp{background:var(--ac);color:#1e1e2e}.bp:hover:not(:disabled){background:#74c7ec}
 .bd{background:var(--rd);color:#1e1e2e}.bd:hover:not(:disabled){background:#eba0ac}
 .bg{background:transparent;border:1px solid var(--bd);color:var(--tx)}.bg:hover:not(:disabled){border-color:var(--ac);color:var(--ac)}
 .brow{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-/* 三按钮并排 — 核心操作区 */
 .core-btns{display:flex;gap:6px;margin-top:10px}
 .core-btns button{flex:1;padding:8px 6px;font-size:11px;font-weight:600;justify-content:center}
 .badge{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:500}
@@ -464,35 +512,57 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .b-warn{background:rgba(249,226,175,.15);color:var(--yl)}
 .b-idle{background:rgba(127,132,156,.15);color:var(--tx2)}
 .card{background:var(--bg);border:1px solid var(--bd);border-radius:var(--r);padding:8px;margin-top:6px}
-.card .ct{font-weight:600;color:var(--ac);font-size:11px}
-.card .cd{color:var(--tx2);font-size:11px;margin-top:2px}
 .log{background:var(--bg);border:1px solid var(--bd);border-radius:var(--r);padding:8px;margin-top:6px;max-height:180px;overflow-y:auto;font-family:'Cascadia Code',monospace;font-size:10px;line-height:1.5}
 .ll{white-space:pre-wrap;word-break:break-all}
 .lo{color:var(--gn)}.le{color:var(--rd)}.li{color:var(--tx2)}.lw{color:var(--yl)}
-.alist{margin-top:6px}
-.ai{display:flex;align-items:center;justify-content:space-between;padding:7px 9px;background:var(--bg);border:1px solid var(--bd);border-radius:var(--r);margin-bottom:5px;cursor:pointer;transition:border-color .2s}
-.ai:hover{border-color:var(--ac)}
-.ai.active{border-color:var(--ac);background:rgba(137,180,250,.08)}
-.ae{font-size:11px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
-.as{display:flex;gap:3px;align-items:center;flex-shrink:0}
 .spin{width:12px;height:12px;border:2px solid var(--bd);border-top-color:var(--ac);border-radius:50%;animation:spin .6s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
 .hidden{display:none}
 .ps{font-size:10px;color:var(--tx2);margin-top:3px}
 .divider{height:1px;background:var(--bd);margin:8px 0}
-/* 状态信息区 */
 .status-grid{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:11px;margin-top:6px}
 .status-grid .sk{color:var(--tx2);text-align:right}
 .status-grid .sv{color:var(--tx);word-break:break-all}
+/* ═══ 统计条 ═══ */
+.statbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--tx2);margin-bottom:8px}
+.statbar b{color:var(--tx)}
+.statbar .s-ok b{color:var(--gn)}
+.statbar .s-no b{color:var(--yl)}
+/* ═══ 批量操作栏 ═══ */
+.batch-bar{display:none;background:rgba(137,180,250,.1);border:1px solid var(--ac);border-radius:var(--r);padding:6px 10px;margin-bottom:8px;font-size:11px;align-items:center;gap:6px;flex-wrap:wrap}
+.batch-bar.visible{display:flex}
+.batch-bar .bc{flex:1;min-width:90px}
+.batch-bar .bc b{color:var(--ac);font-size:13px}
+.batch-bar button{padding:3px 9px;font-size:11px}
+/* ═══ 添加账号面板 ═══ */
+.add-head{display:flex;justify-content:space-between;align-items:center;cursor:pointer;font-size:13px;font-weight:600;color:var(--ac)}
+.add-body{display:none;margin-top:8px}
+.add-body.open{display:block}
+.add-hint{font-size:10px;color:var(--tx2);margin-top:4px}
+/* ═══ 账号列表 ═══ */
+.alist{margin-top:4px}
+.arow{display:flex;align-items:center;gap:7px;padding:7px 8px;background:var(--bg);border:1px solid var(--bd);border-radius:var(--r);margin-bottom:5px;user-select:none;transition:border-color .15s,background .15s}
+.arow:hover{border-color:var(--ac)}
+.arow.active{border-color:var(--ac);box-shadow:inset 2px 0 0 var(--ac)}
+.arow.sel{background:rgba(137,180,250,.12);border-color:var(--ac)}
+.arow.busy{opacity:.6}
+.arow .chk{width:14px;height:14px;cursor:pointer;flex-shrink:0}
+.arow .ainfo{flex:1;min-width:0;cursor:pointer}
+.arow .ae{font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arow .am{font-size:10px;color:var(--tx2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;gap:5px;flex-wrap:wrap;margin-top:1px}
+.arow .acts{display:flex;gap:3px;flex-shrink:0}
+.arow .acts button{padding:3px 6px;font-size:10px}
+.gdot{width:7px;height:7px;border-radius:50%;display:inline-block;flex-shrink:0}
+.gdot.on{background:var(--gn)}.gdot.off{background:var(--yl)}.gdot.unk{background:var(--tx2)}
 </style>
 </head>
 <body>
 
 <!-- ═══ PAT ═══ -->
 <div class="sec">
-  <div class="stit">GitHub PAT</div>
+  <div class="stit">GitHub PAT · 归一连接目标</div>
   <div class="ig">
-    <label>Personal Access Token</label>
+    <label>Personal Access Token (用于批量连接同一 GitHub)</label>
     <input type="password" id="patInput" placeholder="ghp_xxxxxxxxxxxx">
   </div>
   <div class="brow">
@@ -502,49 +572,62 @@ button:disabled{opacity:.4;cursor:not-allowed}
   <div class="ps" id="proxyStatus">代理: 检测中...</div>
 </div>
 
-<!-- ═══ 账号认证 ═══ -->
+<!-- ═══ 添加账号 · 多格式粘贴 ═══ -->
 <div class="sec">
-  <div class="stit">账号认证</div>
-  <div class="row">
+  <div class="add-head" id="addHead"><span>+ 添加账号 (Devin)</span><span id="addArrow">▼</span></div>
+  <div class="add-body" id="addBody">
+    <textarea id="addInput" placeholder="一次粘贴多个账号 · 自动识别格式：&#10;email password&#10;email:password&#10;email----password&#10;email|password / email,password&#10;{&quot;email&quot;:&quot;x&quot;,&quot;password&quot;:&quot;y&quot;}"></textarea>
+    <div class="brow">
+      <button class="bp" id="btnAddBatch">添加并登录</button>
+      <button class="bg" id="btnExportAll" style="margin-left:auto">复制全部</button>
+    </div>
+    <div class="add-hint">道生一·一生二·二生三 — 多账号一次入池，重复自动跳过</div>
+  </div>
+  <div class="divider"></div>
+  <div class="row2">
     <div class="ig"><label>邮箱</label><input type="email" id="emailInput" placeholder="user@example.com"></div>
     <div class="ig"><label>密码</label><input type="password" id="passwordInput" placeholder="密码"></div>
   </div>
   <div class="brow">
-    <button class="bp" id="btnLogin">登录认证</button>
+    <button class="bp" id="btnLogin">登录单个</button>
     <button class="bg" id="btnClear">清空</button>
   </div>
 </div>
 
-<!-- ═══ Git操作 · 三按钮始终可见 ═══ -->
-<div class="sec" id="statusSection">
-  <div class="stit">Git 操作</div>
-  <div id="accountInfo" style="color:var(--tx2);font-size:11px">请先登录账号</div>
-  <div class="divider"></div>
-  <div id="gitStatus"></div>
-  <!-- 三按钮并排 · 道法自然 · 始终可见 -->
-  <div class="core-btns">
-    <button class="bp" id="btnRead" disabled>读取状态</button>
-    <button class="bd" id="btnDisconnect" disabled>断开Git</button>
-    <button class="bg" id="btnConnect" disabled>连接Git</button>
-  </div>
-</div>
-
-<!-- ═══ 批量操作 · 突破一切阻碍 ═══ -->
+<!-- ═══ 账号列表 + 多选 + 批量 ═══ -->
 <div class="sec">
-  <div class="stit">批量操作 · 多账号→单仓库</div>
-  <div style="color:var(--tx2);font-size:11px;margin-bottom:6px">一键将所有已登录账号连接到同一GitHub仓库(使用上方PAT)</div>
+  <div class="stit">账号列表</div>
+  <div class="statbar" id="statBar"></div>
+  <div class="batch-bar" id="batchBar">
+    <span class="bc">已选 <b id="batchCount">0</b> 个</span>
+    <button class="bp" id="btnBatchConnectSel">连接Git</button>
+    <button class="bd" id="btnBatchDisconnectSel">断开Git</button>
+    <button class="bg" id="btnBatchVerifySel">读取</button>
+    <button class="bd" id="btnBatchRemoveSel">删除</button>
+    <button class="bg" id="btnClearSel">取消</button>
+  </div>
+  <div class="add-hint" style="margin:0 0 6px 0">Shift+点击=范围选 · 按住拖动=连选 · 点击行=查看详情</div>
+  <div class="alist" id="accountList">
+    <div style="color:var(--tx2);font-size:11px;">暂无账号</div>
+  </div>
   <div class="brow">
-    <button class="bp" id="btnBatchConnect">⚡ 批量连接Git</button>
-    <button class="bg" id="btnBatchLogin">📋 批量导入</button>
+    <button class="bg" id="btnSelectAll">全选</button>
+    <button class="bp" id="btnBatchConnectAll">⚡ 全部连接到同一 GitHub</button>
+    <button class="bd" id="btnBatchDisconnectAll">⛓ 全部断开 Git</button>
   </div>
   <div id="batchStatus" style="margin-top:6px;font-size:11px;color:var(--tx2)"></div>
 </div>
 
-<!-- ═══ 已保存账号 ═══ -->
-<div class="sec">
-  <div class="stit">已认证账号</div>
-  <div class="alist" id="accountList">
-    <div style="color:var(--tx2);font-size:11px;">暂无账号</div>
+<!-- ═══ 当前账号 Git 详情 ═══ -->
+<div class="sec" id="statusSection">
+  <div class="stit">当前账号 · Git 操作</div>
+  <div id="accountInfo" style="color:var(--tx2);font-size:11px">点击上方任意账号查看详情</div>
+  <div class="divider"></div>
+  <div id="gitStatus"></div>
+  <div class="core-btns">
+    <button class="bp" id="btnRead" disabled>读取状态</button>
+    <button class="bd" id="btnDisconnect" disabled>断开Git</button>
+    <button class="bg" id="btnConnect" disabled>连接Git</button>
   </div>
 </div>
 
@@ -556,13 +639,16 @@ button:disabled{opacity:.4;cursor:not-allowed}
 
 <script nonce="${nonce}">
 // ═══════════════════════════════════════════════════════════
-// 前端 · 道法自然 · 三按钮并排 · 无为而无不为
+// 前端 · 道法自然 · 参照 rt-flow 账号面板 · 多选/批量
 // ═══════════════════════════════════════════════════════════
-
 const vscode = acquireVsCodeApi();
 
-let cur = null;   // 当前账号完整信息
-let saved = {};   // email -> { email, orgId, orgName, git, gitType, gitName, gitOwner, secret, lastCheck }
+let cur = null;        // 当前选中账号完整信息
+let saved = {};        // email -> 账号摘要
+let order = [];        // email 顺序(用于 index/范围选)
+let selected = new Set(); // 选中的 email
+let lastSelIdx = -1;
+let dragSel = false, dragVal = false;
 
 // ─── 日志 ───
 function log(msg, type) {
@@ -573,7 +659,6 @@ function log(msg, type) {
   area.scrollTop = area.scrollHeight;
 }
 
-// ─── 禁用/启用三按钮 ───
 function setCoreBtns(disabled) {
   document.getElementById('btnRead').disabled = disabled;
   document.getElementById('btnDisconnect').disabled = disabled;
@@ -607,88 +692,107 @@ function clearInputs() {
   document.getElementById('passwordInput').value = '';
 }
 
-// ─── 核心1: 读取状态 ───
+// ─── 核心: 读取/断开/连接 ───
 function readStatus() {
-  if (!cur) { log('请先登录账号','err'); return; }
+  if (!cur) { log('请先选中账号','err'); return; }
   setCoreBtns(true);
   document.getElementById('btnRead').innerHTML = '<span class="spin"></span> 读取中';
-  log('读取当前账号状态...','info');
+  log('读取账号状态: '+cur.email,'info');
   vscode.postMessage({command:'readStatus',email:cur.email});
 }
-
-// ─── 核心2: 断开Git ───
 function disconnectGit() {
-  if (!cur) { log('请先登录账号','err'); return; }
+  if (!cur) { log('请先选中账号','err'); return; }
   setCoreBtns(true);
   document.getElementById('btnDisconnect').innerHTML = '<span class="spin"></span> 断开中';
-  log('断开当前Git连接...','warn');
+  log('断开Git连接: '+cur.email,'warn');
   vscode.postMessage({command:'disconnectGit',email:cur.email});
 }
-
-// ─── 核心3: 连接Git ───
 function connectGit() {
-  if (!cur) { log('请先登录账号','err'); return; }
+  if (!cur) { log('请先选中账号','err'); return; }
   const pat = document.getElementById('patInput').value.trim();
   if (!pat) { log('请先填写PAT','err'); setCoreBtns(false); return; }
   setCoreBtns(true);
   document.getElementById('btnConnect').innerHTML = '<span class="spin"></span> 连接中';
-  log('用当前PAT连接GitHub...','info');
+  log('连接GitHub: '+cur.email,'info');
   vscode.postMessage({command:'connectGit',email:cur.email,pat:pat});
 }
 
-// ─── 选中账号 ───
+// ─── 选中/移除单账号 ───
 function selectAcct(email) {
-  log('选中: '+email,'info');
+  log('查看: '+email,'info');
   vscode.postMessage({command:'selectAccount',email:email});
 }
-
-// ─── 移除账号 ───
 function removeAcct(email) {
   log('移除: '+email,'warn');
   vscode.postMessage({command:'removeAccount',email:email});
 }
 
+// ─── 多选辅助 ───
+function selIdx() { return order.map(function(e,i){return selected.has(e)?i:-1;}).filter(function(i){return i>=0;}); }
+function setSel(i, v) {
+  const email = order[i]; if (!email) return;
+  if (v) selected.add(email); else selected.delete(email);
+}
+function applyRange(a, b, v) {
+  const lo = Math.min(a,b), hi = Math.max(a,b);
+  for (let j=lo;j<=hi;j++) setSel(j, v);
+}
+function updateBatchBar() {
+  document.getElementById('batchCount').textContent = selected.size;
+  document.getElementById('batchBar').classList.toggle('visible', selected.size>0);
+  // 同步 DOM 选中态
+  document.querySelectorAll('.arow').forEach(function(r){
+    const em = r.dataset.email;
+    const on = selected.has(em);
+    r.classList.toggle('sel', on);
+    const c = r.querySelector('.chk'); if (c) c.checked = on;
+  });
+}
+function clearSelection() { selected.clear(); updateBatchBar(); }
+function selectAll() {
+  if (selected.size === order.length) selected.clear();
+  else order.forEach(function(e){ selected.add(e); });
+  updateBatchBar();
+}
+
 // ─── 渲染 ───
-function render() {
-  renderStatus();
-  renderList();
+function render() { renderStat(); renderList(); renderStatus(); }
+
+function renderStat() {
+  const emails = Object.keys(saved);
+  let conn = 0, no = 0;
+  emails.forEach(function(e){ if (saved[e].git) conn++; else no++; });
+  document.getElementById('statBar').innerHTML =
+    '<span>共 <b>'+emails.length+'</b> 账号</span>' +
+    '<span class="s-ok">已连 <b>'+conn+'</b></span>' +
+    '<span class="s-no">未连 <b>'+no+'</b></span>';
 }
 
 function renderStatus() {
-  const sec = document.getElementById('statusSection');
   const info = document.getElementById('accountInfo');
   const gs = document.getElementById('gitStatus');
-
   if (!cur) {
-    info.innerHTML = '<div style="color:var(--tx2);font-size:11px">请先登录账号</div>';
+    info.innerHTML = '<div style="color:var(--tx2);font-size:11px">点击上方任意账号查看详情</div>';
     gs.innerHTML = '';
     setCoreBtns(true);
     return;
   }
   setCoreBtns(false);
-
-  // 账号信息
   let h = '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">';
   h += '<span style="font-weight:600;font-size:12px">' + esc(cur.email) + '</span>';
   if (cur.orgName) h += '<span class="badge b-idle">' + esc(cur.orgName) + '</span>';
-  if (cur.orgId) h += '<span class="badge b-idle" style="font-size:9px">' + esc(cur.orgId.slice(0,12)) + '...</span>';
+  if (cur.orgId) h += '<span class="badge b-idle" style="font-size:9px">' + esc(String(cur.orgId).slice(0,12)) + '...</span>';
   h += '</div>';
   info.innerHTML = h;
 
-  // Git状态 — 用grid清晰展示
   h = '';
   if (!cur.gitChecked) {
     h += '<div style="color:var(--tx2);font-size:11px">点击「读取状态」查看详情</div>';
   } else {
     h += '<div class="status-grid">';
-    // Git连接
     h += '<span class="sk">Git连接:</span>';
-    if (cur.git && cur.gitCount > 0) {
-      h += '<span class="sv" style="color:var(--gn)">已连接 (' + cur.gitCount + '个)</span>';
-    } else {
-      h += '<span class="sv" style="color:var(--yl)">未连接</span>';
-    }
-    // 连接详情
+    if (cur.git && cur.gitCount > 0) h += '<span class="sv" style="color:var(--gn)">已连接 (' + cur.gitCount + '个)</span>';
+    else h += '<span class="sv" style="color:var(--yl)">未连接</span>';
     if (cur.gitDetails && cur.gitDetails.length > 0) {
       cur.gitDetails.forEach(function(c, i) {
         var t = c.type || '';
@@ -697,37 +801,11 @@ function renderStatus() {
         h += '<span class="sv">' + esc(label) + ' — ' + esc(c.name||c.installation_name||'-') + (c.github_username ? ' @'+esc(c.github_username) : '') + '</span>';
       });
     }
-    // PAT叠加
-    if (cur.hasPAT !== undefined) {
-      h += '<span class="sk">PAT叠加:</span>';
-      h += '<span class="sv">' + (cur.hasPAT ? '<span style="color:var(--gn)">✓ 有</span>' : '<span style="color:var(--tx2)">✗ 无</span>') + '</span>';
-    }
-    // 个人PAT
-    if (cur.isIndividualPAT !== undefined) {
-      h += '<span class="sk">个人PAT:</span>';
-      h += '<span class="sv">' + (cur.isIndividualPAT ? '<span style="color:var(--gn)">✓</span>' : '<span style="color:var(--tx2)">✗</span>') + '</span>';
-    }
-    // App安装
-    if (cur.appInstallationId) {
-      h += '<span class="sk">App安装:</span>';
-      h += '<span class="sv" style="color:var(--yl)">#' + esc(String(cur.appInstallationId)) + ' (组织级共享)</span>';
-    }
-    // OAuth
-    if (cur.isOAuthConnected !== undefined) {
-      h += '<span class="sk">OAuth:</span>';
-      h += '<span class="sv">' + (cur.isOAuthConnected ? '<span style="color:var(--gn)">已连接</span>' : '<span style="color:var(--tx2)">未连接</span>') + '</span>';
-    }
-    // GitHub用户
-    if (cur.githubUsername) {
-      h += '<span class="sk">GitHub:</span>';
-      h += '<span class="sv">' + esc(cur.githubUsername) + '</span>';
-    }
-    // 提交邮箱
-    if (cur.commitEmail) {
-      h += '<span class="sk">提交邮箱:</span>';
-      h += '<span class="sv">' + esc(cur.commitEmail) + '</span>';
-    }
-    // Secret
+    if (cur.githubUsername) { h += '<span class="sk">GitHub:</span><span class="sv">' + esc(cur.githubUsername) + '</span>'; }
+    if (cur.repoCount !== undefined && cur.repoCount !== null) { h += '<span class="sk">可达仓库:</span><span class="sv">' + cur.repoCount + ' 个</span>'; }
+    if (cur.appInstallationId) { h += '<span class="sk">App安装:</span><span class="sv" style="color:var(--yl)">#' + esc(String(cur.appInstallationId)) + ' (组织级)</span>'; }
+    if (cur.isOAuthConnected !== undefined) { h += '<span class="sk">OAuth:</span><span class="sv">' + (cur.isOAuthConnected ? '<span style="color:var(--gn)">已连接</span>' : '<span style="color:var(--tx2)">未连接</span>') + '</span>'; }
+    if (cur.commitEmail) { h += '<span class="sk">提交邮箱:</span><span class="sv">' + esc(cur.commitEmail) + '</span>'; }
     h += '<span class="sk">Secret:</span>';
     h += '<span class="sv">' + (cur.secret ? '<span style="color:var(--gn)">✓ GITHUB_PAT</span>' : '<span style="color:var(--tx2)">✗ 无</span>') + '</span>';
     h += '</div>';
@@ -737,36 +815,54 @@ function renderStatus() {
 
 function renderList() {
   const list = document.getElementById('accountList');
-  const emails = Object.keys(saved);
-  if (emails.length === 0) {
+  order = Object.keys(saved);
+  if (order.length === 0) {
     list.innerHTML = '<div style="color:var(--tx2);font-size:11px">暂无账号</div>';
+    // 清理失效选择
+    selected.forEach(function(e){ if (!saved[e]) selected.delete(e); });
+    updateBatchBar();
     return;
   }
   let h = '';
-  emails.forEach(function(email) {
+  order.forEach(function(email, i) {
     const a = saved[email];
     const isActive = cur && cur.email === email;
-    h += '<div class="ai'+(isActive?' active':'')+'" data-email="'+escA(email)+'">';
-    h += '<div class="ae">'+esc(email)+'</div>';
-    h += '<div class="as">';
-    if (a.git) h += '<span class="badge b-ok">Git</span>';
-    else h += '<span class="badge b-warn">无Git</span>';
-    if (a.secret) h += '<span class="badge b-ok">Sec</span>';
-    h += '<button class="bd" style="padding:1px 5px;font-size:9px" data-remove-email="'+escA(email)+'">x</button>';
+    const isSel = selected.has(email);
+    const dotCls = a.gitChecked === undefined && a.git === undefined ? 'unk' : (a.git ? 'on' : 'off');
+    h += '<div class="arow'+(isActive?' active':'')+(isSel?' sel':'')+(a.busy?' busy':'')+'" data-i="'+i+'" data-email="'+escA(email)+'">';
+    h += '<input type="checkbox" class="chk" data-i="'+i+'"'+(isSel?' checked':'')+'>';
+    h += '<div class="ainfo" data-select="'+escA(email)+'">';
+    h += '<div class="ae">'+(a.busy?'<span class="spin"></span> ':'')+esc(email)+'</div>';
+    h += '<div class="am">';
+    h += '<span><span class="gdot '+dotCls+'"></span> '+(a.git?('Git·'+(a.gitCount||1)):'无Git')+'</span>';
+    if (a.githubUsername) h += '<span>@'+esc(a.githubUsername)+'</span>';
+    if (a.orgName) h += '<span>'+esc(a.orgName)+'</span>';
+    if (a.secret) h += '<span style="color:var(--gn)">Sec</span>';
+    if (a.fromPool && !a.orgId) h += '<span style="color:var(--tx2)">池(未登录)</span>';
+    h += '</div></div>';
+    h += '<div class="acts">';
+    h += '<button class="bg" data-conn="'+escA(email)+'" title="连接Git">⚡</button>';
+    h += '<button class="bd" data-disc="'+escA(email)+'" title="断开Git">⛓</button>';
+    h += '<button class="bd" data-remove="'+escA(email)+'" title="删除">×</button>';
     h += '</div></div>';
   });
   list.innerHTML = h;
+  updateBatchBar();
 }
 
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function escA(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-// ─── 恢复三按钮文字 ───
 function resetCoreBtns() {
   setCoreBtns(false);
   document.getElementById('btnRead').innerHTML = '读取状态';
   document.getElementById('btnDisconnect').innerHTML = '断开Git';
   document.getElementById('btnConnect').innerHTML = '连接Git';
+}
+
+function mergeSaved(email, patch) {
+  if (!saved[email]) saved[email] = { email: email };
+  Object.assign(saved[email], patch);
 }
 
 // ─── 消息处理 ───
@@ -776,17 +872,17 @@ window.addEventListener('message', function(event) {
 
     case 'loginResult':
       document.getElementById('btnLogin').disabled = false;
-      document.getElementById('btnLogin').innerHTML = '登录认证';
+      document.getElementById('btnLogin').innerHTML = '登录单个';
       if (msg.ok) {
         cur = msg.account;
         log('认证成功: '+msg.account.email,'ok');
-        saved[msg.account.email] = {
+        mergeSaved(msg.account.email, {
           email: msg.account.email, orgId: msg.account.orgId, orgName: msg.account.orgName,
-          git: msg.account.git||false, gitType: msg.account.gitType||null, gitName: msg.account.gitName||null,
-          gitOwner: msg.account.gitOwner||null, secret: msg.account.secret||false,
-          gitCount: msg.account.gitCount||0,
-          lastCheck: new Date().toISOString(),
-        };
+          git: msg.account.git||false, gitType: msg.account.gitType||null,
+          gitCount: msg.account.gitCount||0, secret: msg.account.secret||false,
+          githubUsername: msg.account.githubUsername||null, repoCount: msg.account.repoCount,
+          gitChecked: true, busy: false, lastCheck: new Date().toISOString(),
+        });
         render();
       } else {
         log('认证失败: '+msg.error,'err');
@@ -797,58 +893,61 @@ window.addEventListener('message', function(event) {
       log('内部错误: '+msg.error,'err');
       resetCoreBtns();
       var loginBtn = document.getElementById('btnLogin');
-      if (loginBtn) { loginBtn.disabled = false; loginBtn.innerHTML = '登录认证'; }
+      if (loginBtn) { loginBtn.disabled = false; loginBtn.innerHTML = '登录单个'; }
       break;
 
     case 'statusResult':
       if (cur && msg.email === cur.email) {
         Object.assign(cur, msg.status);
-        if (saved[msg.email]) {
-          Object.assign(saved[msg.email], {
-            git: cur.git, gitType: cur.gitType, gitName: cur.gitName,
-            gitOwner: cur.gitOwner, secret: cur.secret,
-            gitCount: cur.gitCount||0,
-            isOAuthConnected: cur.isOAuthConnected,
-            lastCheck: new Date().toISOString(),
-          });
-        }
         render();
-        log('状态已刷新','ok');
+        log('状态已刷新: '+msg.email,'ok');
       }
+      mergeSaved(msg.email, {
+        git: msg.status.git, gitType: msg.status.gitType, gitCount: msg.status.gitCount||0,
+        secret: msg.status.secret, githubUsername: msg.status.githubUsername,
+        repoCount: msg.status.repoCount, gitChecked: true, busy: false,
+        orgName: msg.status.orgName, orgId: msg.status.orgId,
+      });
+      renderStat(); renderList();
       resetCoreBtns();
       break;
 
     case 'disconnectResult':
       resetCoreBtns();
+      mergeSaved(msg.email, { busy:false });
       if (msg.ok) {
-        log('Git已断开!','ok');
-        if (cur) { cur.git = false; cur.gitCount = 0; cur.gitDetails = []; cur.gitType = null; cur.gitName = null; cur.secret = false; }
-        // 自动刷新确认
-        setTimeout(function(){ readStatus(); }, 2000);
+        log('Git已断开: '+(msg.email||''),'ok');
+        mergeSaved(msg.email, { git:false, gitCount:0, gitType:null, secret:false, githubUsername:null, repoCount:0, gitChecked:true });
+        if (cur && cur.email === msg.email) { cur.git=false; cur.gitCount=0; cur.gitDetails=[]; cur.gitType=null; cur.secret=false; }
+        render();
       } else {
-        log('断开失败: '+msg.error,'err');
+        log('断开失败: '+(msg.email||'')+' — '+msg.error,'err');
       }
       break;
 
     case 'connectResult':
       resetCoreBtns();
+      mergeSaved(msg.email, { busy:false });
       if (msg.ok) {
-        log('Git连接成功!','ok');
-        if (cur) { cur.git = true; cur.gitType = 'github_app'; cur.secret = true; }
-        setTimeout(function(){ readStatus(); }, 2000);
+        log('Git连接成功: '+(msg.email||'')+(msg.repoCount!==undefined?(' 可达仓库 '+msg.repoCount):''),'ok');
+        mergeSaved(msg.email, { git:true, gitType:msg.gitType||'github_app', secret:true, gitChecked:true, gitCount:(saved[msg.email]&&saved[msg.email].gitCount)||1, repoCount: msg.repoCount });
+        if (cur && cur.email === msg.email) { cur.git=true; cur.gitType=msg.gitType||'github_app'; cur.secret=true; }
+        render();
       } else {
-        // 设备码等待 — 显示为醒目提示而非错误
-        if (msg.error && msg.error.indexOf('设备码') >= 0) {
-          log(msg.error, 'warn');
-        } else {
-          log('连接失败: '+msg.error,'err');
-        }
+        if (msg.error && msg.error.indexOf('设备码') >= 0) log(msg.error, 'warn');
+        else log('连接失败: '+(msg.email||'')+' — '+msg.error,'err');
       }
       break;
 
     case 'selectAccountResult':
       if (msg.ok) {
         cur = msg.account;
+        mergeSaved(msg.account.email, {
+          git: msg.account.git, gitCount: msg.account.gitCount||0, gitType: msg.account.gitType,
+          secret: msg.account.secret, githubUsername: msg.account.githubUsername,
+          repoCount: msg.account.repoCount, orgId: msg.account.orgId, orgName: msg.account.orgName,
+          gitChecked: msg.account.gitChecked, busy:false,
+        });
         log('已选中: '+msg.account.email,'info');
         render();
       } else {
@@ -859,6 +958,7 @@ window.addEventListener('message', function(event) {
     case 'removeAccountResult':
       if (msg.ok) {
         delete saved[msg.email];
+        selected.delete(msg.email);
         if (cur && cur.email === msg.email) cur = null;
         log('已移除: '+msg.email,'info');
         render();
@@ -872,61 +972,63 @@ window.addEventListener('message', function(event) {
     case 'initState':
       saved = msg.accounts || {};
       if (msg.pat) document.getElementById('patInput').value = msg.pat;
+      render();
+      break;
+
+    case 'accountBusy':
+      mergeSaved(msg.email, { busy: !!msg.busy });
       renderList();
       break;
 
     case 'batchProgress':
-      document.getElementById('batchStatus').textContent = '['+msg.index+'/'+msg.total+'] '+msg.email+' '+msg.status;
-      log('批量['+msg.index+'/'+msg.total+'] '+msg.email+' → '+msg.status,'info');
+      document.getElementById('batchStatus').textContent = '['+(msg.index+1)+'/'+msg.total+'] '+msg.email+' '+msg.status;
+      log('批量['+(msg.index+1)+'/'+msg.total+'] '+msg.email+' → '+msg.status,'info');
       break;
 
     case 'batchResult':
-      document.getElementById('btnBatchConnect').disabled = false;
-      if (msg.ok && msg.results) {
+      if (msg.results) {
         var okCount = msg.results.filter(function(r){return r.ok;}).length;
         var stuckCount = msg.results.filter(function(r){return r.stuck;}).length;
         var failCount = msg.results.length - okCount;
-        document.getElementById('batchStatus').textContent = '完成: '+okCount+'连通 / '+failCount+'失败'+(stuckCount?(' (其中'+stuckCount+'幽灵态)'):'');
+        document.getElementById('batchStatus').textContent = (msg.label||'完成')+': '+okCount+'成功 / '+failCount+'失败'+(stuckCount?(' (其中'+stuckCount+'幽灵态)'):'');
         msg.results.forEach(function(r) {
-          if (r.ok) { log('批量 '+r.email+': 连通 ['+(r.method||'already')+']'+(r.repoCount!==undefined?(' 可达仓库 '+r.repoCount):''),'ok'); }
+          if (r.ok) { log('批量 '+r.email+': 成功'+(r.method?(' ['+r.method+']'):'')+(r.repoCount!==undefined?(' 仓库 '+r.repoCount):''),'ok'); mergeSaved(r.email, r.disconnect?{git:false,gitCount:0,gitType:null,secret:false,gitChecked:true}:{git:true,gitCount:r.connections||1,gitChecked:true,secret:true,repoCount:r.repoCount}); }
           else if (r.stuck) { log('批量 '+r.email+': 幽灵态 — '+(r.error||''),'warn'); }
           else { log('批量 '+r.email+': 失败 — '+(r.error||''),'err'); }
+          mergeSaved(r.email, { busy:false });
         });
-        // 刷新列表
-        Object.keys(saved).forEach(function(em) {
-          var match = msg.results.find(function(r){return r.email===em;});
-          if (match && match.ok) saved[em].git = true;
-        });
-        renderList();
+        render();
       } else {
         document.getElementById('batchStatus').textContent = '批量失败: '+(msg.error||'');
-        log('批量连接失败: '+(msg.error||''),'err');
+        log('批量失败: '+(msg.error||''),'err');
+      }
+      ['btnBatchConnectSel','btnBatchDisconnectSel','btnBatchVerifySel','btnBatchConnectAll','btnBatchDisconnectAll'].forEach(function(id){var b=document.getElementById(id);if(b)b.disabled=false;});
+      break;
+
+    case 'addBatchResult':
+      document.getElementById('btnAddBatch').disabled = false;
+      document.getElementById('btnAddBatch').innerHTML = '添加并登录';
+      if (msg.results) {
+        var ok2 = msg.results.filter(function(r){return r.ok;}).length;
+        document.getElementById('batchStatus').textContent = '添加: '+ok2+'/'+msg.results.length+' 登录成功';
+        msg.results.forEach(function(r) {
+          if (r.ok) { log('添加 '+r.email+': 成功 [git='+r.git+']','ok'); mergeSaved(r.email, {email:r.email,orgId:r.orgId,orgName:r.orgName,git:r.git,gitCount:r.gitCount||0,secret:r.secret,gitChecked:true,busy:false}); }
+          else { log('添加 '+r.email+': 失败 — '+r.error,'err'); }
+        });
+        document.getElementById('addInput').value = '';
+        render();
+      } else {
+        log('添加失败: '+(msg.error||''),'err');
       }
       break;
 
-    case 'batchLoginResult':
-      document.getElementById('btnBatchLogin').disabled = false;
-      if (msg.ok && msg.results) {
-        var okCount2 = msg.results.filter(function(r){return r.ok;}).length;
-        document.getElementById('batchStatus').textContent = '批量登录: '+okCount2+'/'+msg.results.length+'成功';
-        msg.results.forEach(function(r) {
-          if (r.ok) {
-            log('登录 '+r.email+': 成功 [orgId='+r.orgId+' git='+r.git+']','ok');
-            saved[r.email] = { email:r.email, orgId:r.orgId, git:r.git };
-          } else {
-            log('登录 '+r.email+': 失败 — '+r.error,'err');
-          }
-        });
-        renderList();
-      } else {
-        document.getElementById('batchStatus').textContent = '批量登录失败: '+(msg.error||'');
-        log('批量登录失败: '+(msg.error||''),'err');
-      }
+    case 'exportAccounts':
+      log('已复制 '+(msg.count||0)+' 个账号到剪贴板','ok');
       break;
   }
 });
 
-// ─── 事件绑定 · CSP合规 · 不用onclick ───
+// ─── 事件绑定 · CSP合规 ───
 document.getElementById('btnSavePAT').addEventListener('click', savePAT);
 document.getElementById('btnToggleVis').addEventListener('click', toggleVis);
 document.getElementById('btnLogin').addEventListener('click', doLogin);
@@ -934,48 +1036,117 @@ document.getElementById('btnClear').addEventListener('click', clearInputs);
 document.getElementById('btnRead').addEventListener('click', readStatus);
 document.getElementById('btnDisconnect').addEventListener('click', disconnectGit);
 document.getElementById('btnConnect').addEventListener('click', connectGit);
-document.getElementById('btnClearLog').addEventListener('click', function() {
-  document.getElementById('logArea').innerHTML = '';
+document.getElementById('btnClearLog').addEventListener('click', function() { document.getElementById('logArea').innerHTML = ''; });
+
+// 添加账号面板折叠
+document.getElementById('addHead').addEventListener('click', function() {
+  const b = document.getElementById('addBody');
+  b.classList.toggle('open');
+  document.getElementById('addArrow').textContent = b.classList.contains('open') ? '▲' : '▼';
 });
-// 批量操作
-document.getElementById('btnBatchConnect').addEventListener('click', function() {
-  const pat = document.getElementById('patInput').value.trim();
-  if (!pat) { log('请先填写 PAT','err'); return; }
-  log('批量连接: 将所有已登录账号连接到GitHub...','info');
-  document.getElementById('batchStatus').textContent = '批量连接中...';
-  document.getElementById('btnBatchConnect').disabled = true;
-  vscode.postMessage({command:'batchConnect',pat:pat});
+document.getElementById('btnAddBatch').addEventListener('click', function() {
+  const t = document.getElementById('addInput').value.trim();
+  if (!t) { log('请粘贴账号','err'); return; }
+  document.getElementById('btnAddBatch').disabled = true;
+  document.getElementById('btnAddBatch').innerHTML = '<span class="spin"></span> 登录中...';
+  log('批量添加并登录...','info');
+  vscode.postMessage({command:'addBatch',text:t});
 });
-document.getElementById('btnBatchLogin').addEventListener('click', function() {
-  // 弹出输入框让用户粘贴批量账号
-  var inputStr = prompt('请粘贴账号列表(格式: email:password 每行一个)');
-  if (!inputStr) return;
-  var lines = inputStr.split('\\n').filter(function(l){return l.trim();});
-  var accounts = [];
-  lines.forEach(function(l) {
-    var parts = l.trim().split(':');
-    if (parts.length >= 2) {
-      accounts.push({ email: parts[0].trim(), password: parts.slice(1).join(':').trim() });
-    }
-  });
-  if (accounts.length === 0) { log('无有效账号','err'); return; }
-  log('批量登录: '+accounts.length+' 个账号','info');
-  document.getElementById('batchStatus').textContent = '批量登录 '+accounts.length+' 个账号...';
-  document.getElementById('btnBatchLogin').disabled = true;
-  vscode.postMessage({command:'batchLogin',accounts:accounts});
+document.getElementById('btnExportAll').addEventListener('click', function() {
+  vscode.postMessage({command:'exportAccounts'});
 });
 
-// 账号列表事件委托
-document.getElementById('accountList').addEventListener('click', function(e) {
-  var removeBtn = e.target.closest('[data-remove-email]');
-  if (removeBtn) {
-    e.stopPropagation();
-    removeAcct(removeBtn.dataset.removeEmail);
-    return;
-  }
-  var item = e.target.closest('.ai');
-  if (item && item.dataset.email) {
-    selectAcct(item.dataset.email);
+// 全选/批量
+document.getElementById('btnSelectAll').addEventListener('click', selectAll);
+document.getElementById('btnClearSel').addEventListener('click', clearSelection);
+document.getElementById('btnBatchConnectSel').addEventListener('click', function() {
+  const ix = selIdx(); if (!ix.length) { log('先勾选账号','err'); return; }
+  const pat = document.getElementById('patInput').value.trim();
+  if (!pat) { log('请先填写PAT','err'); return; }
+  const emails = ix.map(function(i){return order[i];});
+  this.disabled = true;
+  document.getElementById('batchStatus').textContent = '批量连接 '+emails.length+' 个账号...';
+  vscode.postMessage({command:'batchConnect',emails:emails,pat:pat});
+});
+document.getElementById('btnBatchDisconnectSel').addEventListener('click', function() {
+  const ix = selIdx(); if (!ix.length) { log('先勾选账号','err'); return; }
+  const emails = ix.map(function(i){return order[i];});
+  this.disabled = true;
+  document.getElementById('batchStatus').textContent = '批量断开 '+emails.length+' 个账号...';
+  vscode.postMessage({command:'batchDisconnect',emails:emails});
+});
+document.getElementById('btnBatchVerifySel').addEventListener('click', function() {
+  const ix = selIdx(); if (!ix.length) { log('先勾选账号','err'); return; }
+  const emails = ix.map(function(i){return order[i];});
+  this.disabled = true;
+  document.getElementById('batchStatus').textContent = '批量读取 '+emails.length+' 个账号...';
+  vscode.postMessage({command:'batchVerify',emails:emails});
+});
+document.getElementById('btnBatchRemoveSel').addEventListener('click', function() {
+  const ix = selIdx(); if (!ix.length) { log('先勾选账号','err'); return; }
+  const emails = ix.map(function(i){return order[i];});
+  vscode.postMessage({command:'removeBatch',emails:emails});
+});
+document.getElementById('btnBatchConnectAll').addEventListener('click', function() {
+  const pat = document.getElementById('patInput').value.trim();
+  if (!pat) { log('请先填写PAT','err'); return; }
+  const emails = Object.keys(saved);
+  if (!emails.length) { log('无账号','err'); return; }
+  this.disabled = true;
+  document.getElementById('batchStatus').textContent = '全部连接 '+emails.length+' 个账号...';
+  vscode.postMessage({command:'batchConnect',emails:emails,pat:pat});
+});
+document.getElementById('btnBatchDisconnectAll').addEventListener('click', function() {
+  const emails = Object.keys(saved);
+  if (!emails.length) { log('无账号','err'); return; }
+  this.disabled = true;
+  document.getElementById('batchStatus').textContent = '全部断开 '+emails.length+' 个账号...';
+  vscode.postMessage({command:'batchDisconnect',emails:emails});
+});
+
+// ─── 账号列表 · 点击/多选/拖动 ───
+const listEl = document.getElementById('accountList');
+function rowEmailFromEvent(e) {
+  const r = e.target.closest('.arow');
+  return r ? r.dataset.email : null;
+}
+listEl.addEventListener('click', function(e) {
+  var connBtn = e.target.closest('[data-conn]');
+  if (connBtn) { e.stopPropagation(); const pat=document.getElementById('patInput').value.trim(); if(!pat){log('请先填写PAT','err');return;} mergeSaved(connBtn.dataset.conn,{busy:true}); renderList(); vscode.postMessage({command:'connectGit',email:connBtn.dataset.conn,pat:pat}); return; }
+  var discBtn = e.target.closest('[data-disc]');
+  if (discBtn) { e.stopPropagation(); mergeSaved(discBtn.dataset.disc,{busy:true}); renderList(); vscode.postMessage({command:'disconnectGit',email:discBtn.dataset.disc}); return; }
+  var rmBtn = e.target.closest('[data-remove]');
+  if (rmBtn) { e.stopPropagation(); removeAcct(rmBtn.dataset.remove); return; }
+  var infoEl = e.target.closest('[data-select]');
+  if (infoEl) { selectAcct(infoEl.dataset.select); return; }
+});
+// 拖动多选 + Shift 范围选
+listEl.addEventListener('mousedown', function(e) {
+  if (e.button !== 0) return;
+  if (e.target.closest('.acts,button,input.chk')) return; // 按钮/复选框走原生
+  const r = e.target.closest('.arow'); if (!r) return;
+  const i = parseInt(r.dataset.i); if (!Number.isFinite(i)) return;
+  e.preventDefault();
+  const em = order[i];
+  const v = !selected.has(em);
+  if (e.shiftKey && lastSelIdx >= 0) applyRange(lastSelIdx, i, v);
+  else { setSel(i, v); lastSelIdx = i; }
+  dragSel = true; dragVal = v;
+  updateBatchBar();
+});
+listEl.addEventListener('mouseover', function(e) {
+  if (!dragSel) return;
+  const r = e.target.closest('.arow'); if (!r) return;
+  const i = parseInt(r.dataset.i); if (!Number.isFinite(i)) return;
+  setSel(i, dragVal);
+  updateBatchBar();
+});
+document.addEventListener('mouseup', function(){ dragSel = false; });
+// 复选框原生切换
+listEl.addEventListener('change', function(e) {
+  if (e.target.classList.contains('chk')) {
+    const i = parseInt(e.target.dataset.i);
+    if (Number.isFinite(i)) { setSel(i, e.target.checked); lastSelIdx = i; updateBatchBar(); }
   }
 });
 
@@ -1014,6 +1185,7 @@ async function fetchFullStatus(email, auth1, orgId) {
     gitType: null, gitName: null, gitOwner: null,
     hasPAT: false, isIndividualPAT: false, appInstallationId: null,
     githubUsername: null, commitEmail: null, isOAuthConnected: false, secret: false,
+    repoCount: null,
   };
 
   try {
@@ -1028,6 +1200,13 @@ async function fetchFullStatus(email, auth1, orgId) {
         result.gitName = c.name || c.installation_name || null;
         result.gitOwner = c.github_username || c.login || null;
       }
+    }
+  } catch (e) {}
+
+  try {
+    if (result.git) {
+      var repoR = await getAccessibleRepos(orgId, auth1);
+      if (repoR.ok) result.repoCount = repoR.repos.length;
     }
   } catch (e) {}
 
@@ -1149,7 +1328,7 @@ async function handleMessage(msg) {
         var auth1 = _authCache[msg.email];
         var acct = _state.accounts[msg.email];
         if (!auth1 || !acct || !acct.orgId) {
-          postMsg({ command: "disconnectResult", ok: false, error: "需要重新登录" });
+          postMsg({ command: "disconnectResult", email: msg.email, ok: false, error: "需要重新登录" });
           break;
         }
         var logs = await robustDisconnectGit(msg.email, auth1, acct.orgId);
@@ -1167,10 +1346,10 @@ async function handleMessage(msg) {
         _state.accounts[msg.email].secret = false;
         saveState(_state);
 
-        postMsg({ command: "disconnectResult", ok: true });
+        postMsg({ command: "disconnectResult", email: msg.email, ok: true });
       } catch (e) {
         _log('disconnectGit FAILED: ' + e.message);
-        postMsg({ command: "disconnectResult", ok: false, error: e.message });
+        postMsg({ command: "disconnectResult", email: msg.email, ok: false, error: e.message });
       }
       break;
 
@@ -1193,12 +1372,12 @@ async function handleMessage(msg) {
             acct.orgName = pr.orgName;
             _log('connectGit: 重新登录成功');
           } catch (e) {
-            postMsg({ command: "connectResult", ok: false, error: "登录失败: " + e.message });
+            postMsg({ command: "connectResult", email: msg.email, ok: false, error: "登录失败: " + e.message });
             break;
           }
         }
         if (!acct || !acct.orgId) {
-          postMsg({ command: "connectResult", ok: false, error: "账号数据缺失, 请重新登录" });
+          postMsg({ command: "connectResult", email: msg.email, ok: false, error: "账号数据缺失, 请重新登录" });
           break;
         }
 
@@ -1216,7 +1395,7 @@ async function handleMessage(msg) {
               _state.accounts[msg.email].gitType = "github_app";
               _state.accounts[msg.email].gitCount = (_state.accounts[msg.email].gitCount || 0) + 1;
               saveState(_state);
-              postMsg({ command: "connectResult", ok: true, repoCount: engR.repoCount, engine: true });
+              postMsg({ command: "connectResult", email: msg.email, ok: true, repoCount: engR.repoCount, engine: true });
               break;
             }
             _log('connectGit: Step0 引擎未连成(' + (engR.error || '') + '), 退回 PAT/设备码');
@@ -1235,11 +1414,11 @@ async function handleMessage(msg) {
             _state.accounts[msg.email].gitCount = (_state.accounts[msg.email].gitCount || 0) + 1;
             saveState(_state);
             var repoR0 = await getAccessibleRepos(acct.orgId, auth1);
-            postMsg({ command: "connectResult", ok: true, repoCount: repoR0.ok ? repoR0.repos.length : undefined });
+            postMsg({ command: "connectResult", email: msg.email, ok: true, repoCount: repoR0.ok ? repoR0.repos.length : undefined });
             break;
           }
           if (patR.invalidPat) {
-            postMsg({ command: "connectResult", ok: false, error: "PAT 无效或已过期, 请更新 ~/.dao/git-pats.json" });
+            postMsg({ command: "connectResult", email: msg.email, ok: false, error: "PAT 无效或已过期, 请更新 ~/.dao/git-pats.json" });
             break;
           }
           // "已注册" — 多半是该 org 已绑定同一 GitHub 账号。先核实现有连接, 若已连通即成功。
@@ -1251,7 +1430,7 @@ async function handleMessage(msg) {
               _state.accounts[msg.email].gitType = (gcChk.connections[0] || {}).type || "github_individual_token";
               _state.accounts[msg.email].gitCount = gcChk.count;
               saveState(_state);
-              postMsg({ command: "connectResult", ok: true, already: true, repoCount: repoR1.ok ? repoR1.repos.length : undefined });
+              postMsg({ command: "connectResult", email: msg.email, ok: true, already: true, repoCount: repoR1.ok ? repoR1.repos.length : undefined });
               break;
             }
             // 注册标记存在但无任何连接 = 后端幽灵态, PAT 通道无法清除 → 转 gh_cli 设备码兜底。
@@ -1271,7 +1450,7 @@ async function handleMessage(msg) {
           // 打开GitHub设备验证页面
           vscode.commands.executeCommand('vscode.open', vscode.Uri.parse(codeR.verificationUri));
           // 通知用户输入设备码
-          postMsg({ command: "connectResult", ok: false, error: "设备码: " + codeR.userCode + " — 请在浏览器中输入此代码, 完成后自动连接" });
+          postMsg({ command: "connectResult", email: msg.email, ok: false, error: "设备码: " + codeR.userCode + " — 请在浏览器中输入此代码, 完成后自动连接" });
 
           // 后台轮询: 每5秒检查gh_cli/state, 最多3分钟
           _log('connectGit: 开始轮询gh_cli/state...');
@@ -1293,7 +1472,7 @@ async function handleMessage(msg) {
                   _state.accounts[msg.email].secret = !!pat;
                   _state.accounts[msg.email].gitCount = (_state.accounts[msg.email].gitCount || 0) + 1;
                   saveState(_state);
-                  postMsg({ command: "connectResult", ok: true });
+                  postMsg({ command: "connectResult", email: msg.email, ok: true });
                   break;
                 }
                 // 检查错误
@@ -1305,7 +1484,7 @@ async function handleMessage(msg) {
                     var codeR2 = await ghCliRequestCode(acct.orgId, auth1);
                     if (codeR2.ok) {
                       vscode.commands.executeCommand('vscode.open', vscode.Uri.parse(codeR2.verificationUri));
-                      postMsg({ command: "connectResult", ok: false, error: "设备码已更新: " + codeR2.userCode + " — 请在浏览器中输入新代码" });
+                      postMsg({ command: "connectResult", email: msg.email, ok: false, error: "设备码已更新: " + codeR2.userCode + " — 请在浏览器中输入新代码" });
                     }
                   }
                 }
@@ -1321,7 +1500,7 @@ async function handleMessage(msg) {
                   _state.accounts[msg.email].secret = !!pat;
                   _state.accounts[msg.email].gitCount = (_state.accounts[msg.email].gitCount || 0) + 1;
                   saveState(_state);
-                  postMsg({ command: "connectResult", ok: true });
+                  postMsg({ command: "connectResult", email: msg.email, ok: true });
                   break;
                 }
               }
@@ -1342,7 +1521,7 @@ async function handleMessage(msg) {
           } else {
             vscode.commands.executeCommand('vscode.open', vscode.Uri.parse("https://github.com/apps/devin-ai-integration/installations/new"));
           }
-          postMsg({ command: "connectResult", ok: false, error: "已打开GitHub授权页面 — 请在浏览器中完成授权" });
+          postMsg({ command: "connectResult", email: msg.email, ok: false, error: "已打开GitHub授权页面 — 请在浏览器中完成授权" });
           // 轮询等待连接
           for (var pi2 = 0; pi2 < 36; pi2++) {
             await sleep(5000);
@@ -1355,7 +1534,7 @@ async function handleMessage(msg) {
                 _state.accounts[msg.email].secret = !!pat;
                 _state.accounts[msg.email].gitCount = (_state.accounts[msg.email].gitCount || 0) + 1;
                 saveState(_state);
-                postMsg({ command: "connectResult", ok: true });
+                postMsg({ command: "connectResult", email: msg.email, ok: true });
                 break;
               }
             } catch (e) {}
@@ -1363,7 +1542,7 @@ async function handleMessage(msg) {
         }
       } catch (e) {
         _log('connectGit FAILED: ' + e.message);
-        postMsg({ command: "connectResult", ok: false, error: e.message });
+        postMsg({ command: "connectResult", email: msg.email, ok: false, error: e.message });
       }
       break;
 
@@ -1409,7 +1588,7 @@ async function handleMessage(msg) {
           break;
         }
         var accounts = _state.accounts || {};
-        var emails = Object.keys(accounts);
+        var emails = (Array.isArray(msg.emails) && msg.emails.length) ? msg.emails.filter(function (e) { return accounts[e]; }) : Object.keys(accounts);
         if (emails.length === 0) {
           postMsg({ command: "batchResult", ok: false, error: "无已登录账号" });
           break;
@@ -1419,6 +1598,7 @@ async function handleMessage(msg) {
           var bEmail = emails[bi];
           var bAcct = accounts[bEmail];
           _log('batchConnect [' + (bi+1) + '/' + emails.length + '] ' + bEmail);
+          postMsg({ command: "accountBusy", email: bEmail, busy: true });
           postMsg({ command: "batchProgress", index: bi, total: emails.length, email: bEmail, status: "processing" });
 
           try {
@@ -1504,11 +1684,158 @@ async function handleMessage(msg) {
             results.push({ email: bEmail, ok: false, error: e.message });
           }
         }
-        postMsg({ command: "batchResult", ok: true, results: results });
+        postMsg({ command: "batchResult", ok: true, label: "批量连接", results: results });
         _log('batchConnect 完成: ' + JSON.stringify(results.map(function(r) { return r.email + ':' + (r.ok ? 'OK' : 'FAIL'); })));
       } catch (e) {
         _log('batchConnect FAILED: ' + e.message);
         postMsg({ command: "batchResult", ok: false, error: e.message });
+      }
+      break;
+
+    // ═══ 批量断开 · 水过无痕 · 帛书·「损之又损·以至于无为」═══
+    // 对选中(或全部)账号批量断开 Git 连接
+    case "batchDisconnect":
+      try {
+        var dAccounts = _state.accounts || {};
+        var dEmails = (Array.isArray(msg.emails) && msg.emails.length) ? msg.emails.filter(function (e) { return dAccounts[e]; }) : Object.keys(dAccounts);
+        if (dEmails.length === 0) { postMsg({ command: "batchResult", ok: false, error: "无账号" }); break; }
+        var dResults = [];
+        for (var di = 0; di < dEmails.length; di++) {
+          var dEmail = dEmails[di];
+          var dAcct = dAccounts[dEmail];
+          postMsg({ command: "accountBusy", email: dEmail, busy: true });
+          postMsg({ command: "batchProgress", index: di, total: dEmails.length, email: dEmail, status: "disconnecting" });
+          try {
+            var dAuth1 = _authCache[dEmail];
+            if (!dAuth1 && passwordFor(dEmail, dAcct)) {
+              var dLr = await devinLogin(dEmail, passwordFor(dEmail, dAcct));
+              dAuth1 = dLr.auth1; _authCache[dEmail] = dAuth1;
+              var dPr = await devinPostAuth(dAuth1);
+              dAcct.orgId = dPr.orgId; dAcct.orgName = dPr.orgName;
+            }
+            if (!dAuth1 || !dAcct.orgId) { dResults.push({ email: dEmail, ok: false, error: "无法登录" }); continue; }
+            var dLogs = await robustDisconnectGit(dEmail, dAuth1, dAcct.orgId);
+            dLogs.forEach(function (l) { _log('batchDisconnect ' + dEmail + ': ' + l); });
+            await sleep(800);
+            var dGc = await checkGitConnections(dAcct.orgId, dAuth1);
+            var stillConnected = dGc.ok && dGc.count > 0;
+            dAcct.git = stillConnected; dAcct.gitCount = stillConnected ? dGc.count : 0;
+            if (!stillConnected) { dAcct.gitType = null; dAcct.secret = false; dAcct._connectionId = null; }
+            saveState(_state);
+            dResults.push({ email: dEmail, ok: !stillConnected, disconnect: true, error: stillConnected ? "断开后仍有连接(后端幽灵态)" : "", stuck: stillConnected });
+          } catch (e) {
+            dResults.push({ email: dEmail, ok: false, disconnect: true, error: e.message });
+          }
+        }
+        postMsg({ command: "batchResult", ok: true, label: "批量断开", results: dResults });
+        _log('batchDisconnect 完成: ' + JSON.stringify(dResults.map(function(r){return r.email+':'+(r.ok?'OK':'FAIL');})));
+      } catch (e) {
+        postMsg({ command: "batchResult", ok: false, error: e.message });
+      }
+      break;
+
+    // ═══ 批量读取状态 · 见小曰明 ═══
+    case "batchVerify":
+      try {
+        var vAccounts = _state.accounts || {};
+        var vEmails = (Array.isArray(msg.emails) && msg.emails.length) ? msg.emails.filter(function (e) { return vAccounts[e]; }) : Object.keys(vAccounts);
+        if (vEmails.length === 0) { postMsg({ command: "batchResult", ok: false, error: "无账号" }); break; }
+        var vResults = [];
+        for (var vi = 0; vi < vEmails.length; vi++) {
+          var vEmail = vEmails[vi];
+          var vAcct = vAccounts[vEmail];
+          postMsg({ command: "accountBusy", email: vEmail, busy: true });
+          postMsg({ command: "batchProgress", index: vi, total: vEmails.length, email: vEmail, status: "reading" });
+          try {
+            var vAuth1 = _authCache[vEmail];
+            if (!vAuth1 && passwordFor(vEmail, vAcct)) {
+              var vLr = await devinLogin(vEmail, passwordFor(vEmail, vAcct));
+              vAuth1 = vLr.auth1; _authCache[vEmail] = vAuth1;
+              var vPr = await devinPostAuth(vAuth1);
+              vAcct.orgId = vPr.orgId; vAcct.orgName = vPr.orgName;
+            }
+            if (!vAuth1 || !vAcct.orgId) { vResults.push({ email: vEmail, ok: false, error: "无法登录" }); continue; }
+            var vStatus = await fetchFullStatus(vEmail, vAuth1, vAcct.orgId);
+            Object.assign(vAcct, {
+              git: vStatus.git, gitType: vStatus.gitType, gitName: vStatus.gitName,
+              gitOwner: vStatus.gitOwner, secret: vStatus.secret, gitCount: vStatus.gitCount || 0,
+              lastCheck: new Date().toISOString(),
+            });
+            saveState(_state);
+            // 推送单账号最新状态(含 githubUsername/repoCount), 前端按 email 合并
+            postMsg({ command: "statusResult", email: vEmail, status: Object.assign({ orgName: vAcct.orgName }, vStatus) });
+            vResults.push({ email: vEmail, ok: true, connections: vStatus.gitCount, repoCount: vStatus.repoCount });
+          } catch (e) {
+            vResults.push({ email: vEmail, ok: false, error: e.message });
+          }
+        }
+        postMsg({ command: "batchResult", ok: true, label: "批量读取", results: vResults });
+      } catch (e) {
+        postMsg({ command: "batchResult", ok: false, error: e.message });
+      }
+      break;
+
+    // ═══ 批量删除账号 ═══
+    case "removeBatch":
+      try {
+        var rmEmails = Array.isArray(msg.emails) ? msg.emails : [];
+        rmEmails.forEach(function (e) { delete _state.accounts[e]; delete _authCache[e]; });
+        saveState(_state);
+        rmEmails.forEach(function (e) { postMsg({ command: "removeAccountResult", ok: true, email: e }); });
+        _log('removeBatch 删除 ' + rmEmails.length + ' 个账号');
+      } catch (e) {
+        postMsg({ command: "error", error: e.message });
+      }
+      break;
+
+    // ═══ 添加账号 · 多格式粘贴解析 · 万法识号 ═══
+    case "addBatch":
+      try {
+        var parsed = parseBatchAccounts(msg.text || "");
+        if (parsed.length === 0) { postMsg({ command: "addBatchResult", error: "未识别到有效账号(支持 email password / email:password / JSON)" }); break; }
+        var addResults = [];
+        for (var ai = 0; ai < parsed.length; ai++) {
+          var aa = parsed[ai];
+          postMsg({ command: "batchProgress", index: ai, total: parsed.length, email: aa.email, status: "logging_in" });
+          try {
+            await autoDetectProxy();
+            var ars = await devinLogin(aa.email, aa.password);
+            var aps = await devinPostAuth(ars.auth1);
+            _authCache[aa.email] = ars.auth1;
+            var astatus = await fetchFullStatus(aa.email, ars.auth1, aps.orgId);
+            if (!_state.accounts) _state.accounts = {};
+            _state.accounts[aa.email] = {
+              email: aa.email, orgId: aps.orgId, orgName: aps.orgName, password: aa.password,
+              git: astatus.git, gitType: astatus.gitType, gitName: astatus.gitName,
+              gitOwner: astatus.gitOwner, secret: astatus.secret, gitCount: astatus.gitCount || 0,
+              lastCheck: new Date().toISOString(),
+            };
+            _daoPasswords[aa.email] = aa.password;
+            saveState(_state);
+            addResults.push({ email: aa.email, ok: true, orgId: aps.orgId, orgName: aps.orgName, git: astatus.git, gitCount: astatus.gitCount || 0, secret: astatus.secret });
+          } catch (e) {
+            addResults.push({ email: aa.email, ok: false, error: e.message });
+          }
+          if (ai < parsed.length - 1) await sleep(1500);
+        }
+        postMsg({ command: "addBatchResult", results: addResults });
+      } catch (e) {
+        postMsg({ command: "addBatchResult", error: e.message });
+      }
+      break;
+
+    // ═══ 复制全部账号到剪贴板 ═══
+    case "exportAccounts":
+      try {
+        var expEmails = Object.keys(_state.accounts || {});
+        var lines = expEmails.map(function (e) {
+          var p = passwordFor(e, _state.accounts[e]) || "";
+          return p ? (e + ":" + p) : e;
+        });
+        await vscode.env.clipboard.writeText(lines.join("\n"));
+        postMsg({ command: "exportAccounts", count: expEmails.length });
+      } catch (e) {
+        postMsg({ command: "error", error: e.message });
       }
       break;
 
@@ -1596,6 +1923,19 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand("devin-git.openPanel", function () {
       vscode.commands.executeCommand("workbench.view.extension.devin-git-container");
+    })
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("devin-git.refresh", function () {
+      // 重载账号池(~/.dao/accounts.json) → 合并入 state → 重推 initState
+      var pooled = loadDaoPool();
+      if (!_state.accounts) _state.accounts = {};
+      pooled.forEach(function (email) {
+        if (!_state.accounts[email]) _state.accounts[email] = { email: email, fromPool: true };
+      });
+      if (!_state.pat && _daoDefaultPat) _state.pat = _daoDefaultPat;
+      postMsg({ command: "initState", accounts: _state.accounts || {}, pat: _state.pat || null });
+      vscode.window.showInformationMessage("Devin Git Auth: 账号池已刷新 (" + Object.keys(_state.accounts).length + " 个账号)");
     })
   );
 }
