@@ -7974,7 +7974,7 @@ function _dvSaveOpen(s){try{const st=vscode.getState()||{};vscode.setState({...s
 function dv(i){_clickFb(event);const d=document.getElementById('dvDetail'+i);if(!d)return;const em=(d.dataset.email||'');const open=_dvOpenSet();if(d.classList.contains('open')){d.classList.remove('open');d.innerHTML='';open.delete(em);_dvSaveOpen(open);return;}d.classList.add('open');d.innerHTML='<span style="color:#888">登录并拉取 Devin Cloud 概览…</span>';open.add(em);_dvSaveOpen(open);vscode.postMessage({type:'devinExpand',index:i});}
 function wp(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:'devinWipe',index:i,indices:ix});}
 function dvBackup(i){vscode.postMessage({type:'devinBackupAccount',index:i});}
-function dvSetTag(i){const cur=prompt('为该账号设置标签(防搞混)，留空清除：');if(cur===null)return;vscode.postMessage({type:'devinSetTag',index:i,tag:cur});}
+function dvSetTag(i){vscode.postMessage({type:'devinSetTag',index:i});}
 function dvExportMd(){vscode.postMessage({type:'devinExportMd',indices:_selIx()});}
 function dvBackupAll(){vscode.postMessage({type:'devinBackupAll',indices:_selIx()});}
 function dvWipeSel(){const ix=_selIx();if(!ix.length){showToast('\\u2717 先勾选账号');return;}vscode.postMessage({type:'devinWipe',indices:ix});}
@@ -9365,14 +9365,23 @@ async function handleWebviewMessage(msg) {
         _broadcastUI();
         break;
       }
-      // 设置账号标签 (防搞混)
+      // 设置账号标签 (防搞混) · 用扩展宿主 showInputBox (webview prompt 被屏蔽)
       case "devinSetTag": {
         const acc = _store.accounts[msg.index];
-        if (acc && acc.email) {
-          devinCloud.setTag(acc.email, msg.tag || "");
-          _toast("\u2713 标签已" + (msg.tag ? "设置" : "清除"));
-          _broadcastUI();
+        if (!acc || !acc.email) break;
+        let tag = msg.tag;
+        if (typeof tag !== "string") {
+          tag = await vscode.window.showInputBox({
+            title: "Devin Cloud 账号标签",
+            prompt: "为 " + acc.email + " 设置标签(防搞混)，留空清除：",
+            value: devinCloud.getTag(acc.email) || "",
+            ignoreFocusOut: true,
+          });
+          if (tag === undefined) break; // 用户取消
         }
+        devinCloud.setTag(acc.email, tag || "");
+        _toast("\u2713 标签已" + (tag ? "设置" : "清除"));
+        _broadcastUI();
         break;
       }
       // 导出 MD 操作指令 (给本地 Agent)

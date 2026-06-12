@@ -44,6 +44,9 @@ Devin Cloud 能力皆走后端接口。新增 `devin_cloud.js`（零依赖单模
 ### 新增配置
 `wam.devinCloudAutoBackup` · `wam.devinCloudAutoBackupIntervalMin` · `wam.devinCloudBackupDir` · `wam.devinCloudRunPollMin`
 
+### 修订（e2e 实测后）
+- 账号标签：原 webview `prompt()` 被 VS Code webview 屏蔽（无输入框）→ 改走扩展宿主 `showInputBox`，预填当前标签、可清除。
+
 ## v3.13.0 (2026-06-28) · Devin Desktop 自适应 · 万法归宗 · 当前
 
 > *道常无为而无不为 · 侯王若能守之 · 万物将自化* —— 币书《老子》道经
