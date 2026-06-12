@@ -239,6 +239,12 @@ async function cmdDisconnectGit(opts) {
   log("断开OAuth: " + (userDisR.ok ? "OK" : "FAIL " + (userDisR.error || "").slice(0, 60)),
     userDisR.ok ? "ok" : "err");
 
+  // 2.5 删除 GITHUB_PAT 密钥 (彻底解绑·删后零关联)
+  log("删除GITHUB_PAT密钥...");
+  var secDelR = await dao.deleteSecret(cred.orgId, "GITHUB_PAT", cred.auth1);
+  log("删除Secret: " + (secDelR.ok ? (secDelR.missing ? "无需(不存在)" : "OK") : "FAIL " + (secDelR.error || "").slice(0, 60)),
+    secDelR.ok ? "ok" : "err");
+
   // 3. 等待生效
   log("等待2秒让服务端生效...");
   await sleep(2000);

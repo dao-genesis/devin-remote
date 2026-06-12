@@ -2,7 +2,7 @@
   "name": "devin-git-auth",
   "displayName": "Devin Git Auth",
   "description": "Devin AI 多账号 GitHub 认证管理 · 账号列表/多选/批量连接断开 · 道法自然 · 无为而无不为",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "publisher": "devaid",
   "license": "MIT",
   "icon": "media/icon.png",
