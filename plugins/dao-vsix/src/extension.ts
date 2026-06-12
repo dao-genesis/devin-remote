@@ -18,6 +18,7 @@ import * as vscode from 'vscode';
 // CF全局共享(一机一CF账号) + 每工作区独立(一窗口一Devin账号)
 // 帛书·三十九「致数与无与」— 不欲禄禄若玉 珞珞若石
 // ═══════════════════════════════════════════════════════════
+const EXT_VERSION = '1.2.8';
 const DAO_DIR = path.join(os.homedir(), '.dao');
 const GLOBAL_CONFIG_FILE = path.join(DAO_DIR, 'dao-config.json');  // CF全局凭证
 const CONFIG_FILE = GLOBAL_CONFIG_FILE;  // 别名 — 道法自然：一即一切
@@ -1027,7 +1028,8 @@ function isAppProxyPassthrough(route: string): boolean {
         const daoApiPrefixes = ['/api/health', '/api/connection', '/api/workspace', '/api/exec',
             '/api/command', '/api/file', '/api/write', '/api/search', '/api/edit', '/api/ls',
             '/api/terminal', '/api/diagnostics', '/api/definitions', '/api/references', '/api/symbols',
-            '/api/git/', '/api/agents', '/api/commands', '/api/tools', '/api/devin', '/api/workspaces'];
+            '/api/git/', '/api/agents', '/api/commands', '/api/tools', '/api/devin', '/api/workspaces',
+            '/api/agent-doc', '/api/manifest'];
         return !daoApiPrefixes.some(p => route === p || route.startsWith(p + '/') || route === p.replace(/\/$/, ''));
     }
     // 帛书·「执天之行」官网根挂载: dao 自身 HTTP 仅占用 /api/*, 故其余所有根路径
@@ -1050,7 +1052,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     switch (route) {
         case '/api/health': {
             return {
-                status: 'ok', service: 'dao-vsix', version: '1.0.0',
+                status: 'ok', service: 'dao-vsix', version: EXT_VERSION,
                 workspace: vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [],
                 activeEditor: vscode.window.activeTextEditor?.document.uri.fsPath || null,
                 diagnostics_count: vscode.languages.getDiagnostics().length,
@@ -1384,6 +1386,14 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             // 全局workspace注册表 — 列出所有窗口的账号映射
             return updateWorkspaceRegistry();
         }
+        case '/api/agent-doc': {
+            // 江海善下之 — 把插件本体暴露给本机 Agent: markdown 操作契约
+            return { ok: true, markdown: buildAgentApiDoc(), version: EXT_VERSION };
+        }
+        case '/api/manifest': {
+            // 机器可读能力清单 — 本机 Agent 自动发现可操作接口
+            return buildAgentManifest();
+        }
         // ═══════════════════════════════════════════════════════════
         // 双面板 · 反向代理 — 帛书·四十一「反者道之动」
         // /devin-cloud/* → https://app.devin.ai/*
@@ -1613,6 +1623,53 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                         }
                         break;
                     }
+                    case 'setSyncMode': {
+                        // 守柔 · 自动(跟随IDE) ↔ 手动(独立) 切换
+                        const newMode = msg.mode === 'manual' ? 'manual' : 'auto';
+                        await setAccountSyncMode(newMode);
+                        if (newMode === 'auto') {
+                            // 切回自动 → 立即重新对齐 IDE 当前账号
+                            lastSyncedApiKey = ''; lastSyncedEmail = '';
+                            vscode.window.showInformationMessage('账号模式: 自动 · 重新跟随 IDE 账号…');
+                            (async () => { try { const ok = await devinAutoChain(); if (ok) { await devinFullInject(); } } catch {} this.refresh(); refreshDaoCloudMiddlePanel(); })();
+                        } else {
+                            vscode.window.showInformationMessage('账号模式: 手动 · 面板不再跟随 IDE, 可独立登录任意账号');
+                        }
+                        this.refresh();
+                        reply({ ok: true, mode: newMode });
+                        break;
+                    }
+                    case 'devinManualLogin': {
+                        // 手动模式 · 独立登录任意账号 (自动切到 manual, 避免被 IDE 跟随覆盖)
+                        await setAccountSyncMode('manual');
+                        const email = await vscode.window.showInputBox({ prompt: 'Devin Cloud Email (手动登录)', placeHolder: 'user@example.com' });
+                        if (email) {
+                            const password = await vscode.window.showInputBox({ prompt: 'Devin Cloud 密码', password: true });
+                            if (password) {
+                                const r = await devinLogin(email, password);
+                                if (r.ok) { vscode.window.showInformationMessage('手动登录成功 (' + email + ')'); await devinFullInject(); }
+                                else vscode.window.showErrorMessage('手动登录失败: ' + (r.error || ''));
+                            }
+                        }
+                        this.refresh(); refreshDaoCloudMiddlePanel();
+                        reply({ ok: true });
+                        break;
+                    }
+                    case 'exportAgentDoc': {
+                        // 江海善下之 — 导出插件本体操作契约 MD, 供本机其他 Agent 使用
+                        try {
+                            const outPath = await exportAgentDocToFile();
+                            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(outPath));
+                            await vscode.window.showTextDocument(doc, { preview: false });
+                            vscode.env.clipboard.writeText(outPath);
+                            vscode.window.showInformationMessage('已导出 Agent 操作契约: ' + outPath + ' (路径已复制) · 也可 GET /api/agent-doc');
+                            reply({ ok: true, path: outPath });
+                        } catch (e: any) {
+                            vscode.window.showErrorMessage('导出失败: ' + (e?.message || e));
+                            reply({ ok: false, error: e?.message });
+                        }
+                        break;
+                    }
                     default:
                         reply({ ok: false, error: 'unknown command' });
                 }
@@ -1634,6 +1691,7 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
         let hasWindsurfCreds = false;
         try { hasWindsurfCreds = !!readWindsurfCredentials(); } catch {}
         const relayStatus = ws.relayConnected ? '✓' : '✗';
+        const mode = getAccountSyncMode();
 
         // Compact sidebar — full panel opens in editor area
         return `<!DOCTYPE html>
@@ -1674,12 +1732,18 @@ ${syncing ? `
 </div>
 `}
 <div class="card">
+  <div class="row"><span class="lbl">🔗 账号模式</span><span class="val ${mode === 'manual' ? 'sync' : 'ok'}">${mode === 'manual' ? '✋ 手动(独立)' : '🔄 自动(跟随IDE)'}</span></div>
+  <button class="btn" onclick="cmd('setSyncMode',{mode:'${mode === 'manual' ? 'auto' : 'manual'}'})">${mode === 'manual' ? '↩️ 切回自动 · 跟随 IDE 账号' : '✋ 切到手动 · 面板独立登录'}</button>
+  ${mode === 'manual' ? '<button class="btn" style="background:#0e639c;margin-top:4px" onclick="cmd(&#39;devinManualLogin&#39;)">👤 登录其他账户</button>' : ''}
+</div>
+<div class="card">
   <div class="row"><span class="lbl">⚡ Server</span><span class="val ${ws.port ? 'ok' : 'err'}">${ws.port ? ':' + ws.port : 'off'}</span></div>
   <div class="row"><span class="lbl">☁️ Relay</span><span class="val ${ws.relayConnected ? 'ok' : 'err'}">${relayStatus}</span></div>
 </div>
 <button class="btn primary" onclick="cmd('openCloudPanel')">🤖 打开 Devin Cloud 全功能面板</button>
 ${loggedIn ? '<button class="btn" onclick="cmd(&#39;devinCloudPanel&#39;)" style="margin-top:4px;background:#0e639c">🌐 打开 Devin 官网</button>' : ''}
 ${loggedIn ? '<button class="btn" onclick="cmd(&#39;devinInject&#39;)" style="margin-top:4px">💉 一键注入</button>' : ''}
+<button class="btn" onclick="cmd('exportAgentDoc')" style="margin-top:4px" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button>
 <script>
 const vscode = acquireVsCodeApi();
 function cmd(c, d) { vscode.postMessage(Object.assign({command: c}, d || {})); }
@@ -1918,7 +1982,7 @@ function rO(){
     const i=S.inject;
     ih='<div class="st">注入状态</div><div class="card"><div class="cr"><span class="l"><span class="tag secret">S</span> Secret</span><span class="v" style="color:'+(i.secret?'var(--success)':'var(--danger)')+'">'+(i.secret?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag knowledge">K</span> Knowledge</span><span class="v" style="color:'+(i.knowledge?'var(--success)':'var(--danger)')+'">'+(i.knowledge?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag playbook">P</span> Playbook</span><span class="v" style="color:'+(i.playbook?'var(--success)':'var(--danger)')+'">'+(i.playbook?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag git">G</span> Git</span><span class="v" style="color:'+(i.git?'var(--success)':'var(--danger)')+'">'+(i.git?'✓':'✗')+'</span></div></div>';
   }
-  v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+ih+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
+  v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+ih+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
   try{v.innerHTML+=rBridge();}catch(e){}
 }
 function rBridge(){
@@ -2360,6 +2424,34 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                         refreshReply({ type: 'actionResult', command: 'devinManualLogin', ok: r.ok });
                     });
                 });
+                break;
+            }
+            case 'toggleSyncMode': {
+                const cur = getAccountSyncMode();
+                const next = cur === 'manual' ? 'auto' : 'manual';
+                await setAccountSyncMode(next);
+                if (next === 'auto') {
+                    lastSyncedApiKey = ''; lastSyncedEmail = '';
+                    vscode.window.showInformationMessage('账号模式: 自动 · 重新跟随 IDE 账号…');
+                    (async () => { try { const ok = await devinAutoChain(); if (ok) await devinFullInject(); } catch {} sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); })();
+                } else {
+                    vscode.window.showInformationMessage('账号模式: 手动 · 面板不再跟随 IDE, 可独立登录任意账号 (点 "手动登录其他账户")');
+                }
+                sidebarCloudPanel?.refresh();
+                refreshReply({ type: 'actionResult', command: 'toggleSyncMode', ok: true, mode: next });
+                break;
+            }
+            case 'exportAgentDoc': {
+                let okExp = false; let outPath = '';
+                try {
+                    outPath = await exportAgentDocToFile();
+                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(outPath));
+                    await vscode.window.showTextDocument(doc, { preview: false });
+                    vscode.env.clipboard.writeText(outPath);
+                    vscode.window.showInformationMessage('已导出 Agent 操作契约: ' + outPath + ' (路径已复制) · 也可 GET /api/agent-doc');
+                    okExp = true;
+                } catch (e: any) { vscode.window.showErrorMessage('导出失败: ' + (e?.message || e)); }
+                refreshReply({ type: 'actionResult', command: 'exportAgentDoc', ok: okExp, path: outPath });
                 break;
             }
             case 'devinLogout': {
@@ -2856,9 +2948,188 @@ function getAccountSyncMode(): 'auto' | 'manual' {
 function getWebsiteLoginMode(): 'auto' | 'manual' {
     try { return vscode.workspace.getConfiguration('dao').get<string>('websiteLoginMode', 'auto') === 'manual' ? 'manual' : 'auto'; } catch { return 'auto'; }
 }
+// 守柔 · 写入账号同步模式 (auto|manual) — 供面板 UI 开关
+async function setAccountSyncMode(mode: 'auto' | 'manual'): Promise<void> {
+    try { await vscode.workspace.getConfiguration('dao').update('accountSyncMode', mode, vscode.ConfigurationTarget.Global); } catch { /* 守柔 */ }
+}
 // 自动注入自循环: 切账号时是否自动清理旧 org 注入 (默认 true, 用户可关)
 function getInjectAutoCleanup(): boolean {
     try { return vscode.workspace.getConfiguration('dao').get<boolean>('injectAutoCleanup', true) !== false; } catch { return true; }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 江海所以能为百谷王者，以其善下之 — 插件本体对本机 Agent 暴露
+// 导出一份 MD 文档: 实时运行态 + 后端全部可操作 API 契约 + 调用示例
+// 本机其他 Agent 读此文档即可经 :PORT 后端接口完美操作本插件、替用户配置一切
+// ═══════════════════════════════════════════════════════════
+interface AgentApiEndpoint { method: string; path: string; body?: string; desc: string; }
+function agentApiCatalog(): { group: string; items: AgentApiEndpoint[] }[] {
+    return [
+        { group: '状态 / 运行态 (无需登录)', items: [
+            { method: 'GET', path: '/api/health', desc: '服务存活、端口、版本、relay、uptime' },
+            { method: 'GET', path: '/api/connection', desc: '本机连接信息 (url/token/port/hostname)' },
+            { method: 'GET', path: '/api/devin/state', desc: '当前窗口完整 Devin Cloud 状态 (邮箱/org/凭证是否就绪/配额)' },
+            { method: 'GET', path: '/api/devin/status', desc: '登录态 + org + 凭证类型' },
+            { method: 'GET', path: '/api/workspaces', desc: '本机所有 IDE 窗口 ↔ 账号映射注册表' },
+            { method: 'GET', path: '/api/agent-doc', desc: '本文档 (markdown 文本)' },
+            { method: 'GET', path: '/api/manifest', desc: '机器可读的能力清单 (JSON)' },
+        ]},
+        { group: '账号 (登录 / 配额)', items: [
+            { method: 'POST', path: '/api/devin/login', body: '{"email":"..","password":".."}', desc: '手动登录指定账号 (换取 auth1)' },
+            { method: 'GET', path: '/api/devin/quota', desc: '刷新并返回配额' },
+        ]},
+        { group: 'Sessions (会话 · 读 + 反向操作)', items: [
+            { method: 'GET', path: '/api/devin/sessions?limit=50', desc: '列出会话' },
+            { method: 'POST', path: '/api/devin/session/create', body: '{"message":"..","opts":{}}', desc: '新建会话并发送 prompt' },
+            { method: 'GET', path: '/api/devin/session/detail?id=devin-xxx', desc: '会话详情' },
+            { method: 'GET', path: '/api/devin/session/messages?id=devin-xxx', desc: '会话消息' },
+            { method: 'GET', path: '/api/devin/session/download?id=devin-xxx', desc: '导出会话为 md' },
+            { method: 'POST', path: '/api/devin/session/delete', body: '{"id":"devin-xxx"}', desc: '删除/归档会话' },
+        ]},
+        { group: 'Secrets (读 + 反向注入/替换/删除)', items: [
+            { method: 'GET', path: '/api/devin/secrets', desc: '列出 secrets' },
+            { method: 'POST', path: '/api/devin/secrets/inject', body: '{"name":"..","value":"..","upsert":true}', desc: '注入; upsert=true 时有则替换无则新增' },
+            { method: 'POST', path: '/api/devin/secrets/delete', body: '{"name":".."}', desc: '删除 secret' },
+        ]},
+        { group: 'Knowledge (读 + 反向注入/替换/删除)', items: [
+            { method: 'GET', path: '/api/devin/knowledge', desc: '列出 knowledge' },
+            { method: 'POST', path: '/api/devin/knowledge/inject', body: '{"name":"..","body":"..","triggerDescription":"..","upsert":true}', desc: '注入; upsert 有则替换无则新增' },
+            { method: 'POST', path: '/api/devin/knowledge/delete', body: '{"id":".."}', desc: '删除 knowledge' },
+        ]},
+        { group: 'Playbooks (读 + 反向注入/替换/删除)', items: [
+            { method: 'GET', path: '/api/devin/playbooks', desc: '列出 playbooks' },
+            { method: 'POST', path: '/api/devin/playbooks/inject', body: '{"title":"..","body":"..","upsert":true}', desc: '注入; upsert 有则替换无则新增' },
+            { method: 'POST', path: '/api/devin/playbooks/delete', body: '{"id":".."}', desc: '删除 playbook' },
+        ]},
+        { group: 'MCP (读 + 追录/删除)', items: [
+            { method: 'GET', path: '/api/devin/mcp/installations', desc: '列出已安装 MCP' },
+            { method: 'POST', path: '/api/devin/mcp/add', body: '{"name":"GitHub MCP","transport":"HTTP","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer .."}}', desc: '追录自定义 MCP (HTTP/SSE 或 STDIO: command/args/env_variables)' },
+            { method: 'POST', path: '/api/devin/mcp/delete', body: '{"id":"mcp-installation-.."}', desc: '删除 MCP 安装' },
+        ]},
+        { group: '额度 / 集成 / 全量注入', items: [
+            { method: 'POST', path: '/api/devin/usage/limit', body: '{"maxCredits":30}', desc: '设单条消息额度上限 (max_credits)' },
+            { method: 'GET', path: '/api/devin/git/connections', desc: 'Git 集成连接状态' },
+            { method: 'POST', path: '/api/devin/git/connect', body: '{"pat":"ghp_.."}', desc: '连接 GitHub PAT' },
+            { method: 'POST', path: '/api/devin/git/disconnect', body: '{"connectionId":".."}', desc: '断开 Git 集成' },
+            { method: 'POST', path: '/api/devin/inject', desc: '一键全量注入 (Secret/Knowledge/Playbook/规则)' },
+        ]},
+        { group: 'IDE 控制 (本机工作区)', items: [
+            { method: 'POST', path: '/api/exec', body: '{"cmd":"ls"}', desc: '在 IDE 终端执行命令并回收输出' },
+            { method: 'GET', path: '/api/file?path=/abs/path', desc: '读文件' },
+            { method: 'POST', path: '/api/write', body: '{"path":"/abs","content":".."}', desc: '写文件' },
+            { method: 'POST', path: '/api/search', body: '{"pattern":"**/*.ts"}', desc: '搜索文件' },
+            { method: 'GET', path: '/api/workspace', desc: '工作区/打开编辑器/诊断' },
+        ]},
+    ];
+}
+
+function buildAgentApiDoc(): string {
+    const base = ws.publicUrl || ('http://localhost:' + (ws.port || 9920));
+    const fence = '\u0060\u0060\u0060';
+    const L: string[] = [];
+    const now = new Date().toISOString();
+    L.push('# dao-vsix · 本机 Agent 操作契约 (Agent Operating Manifest)');
+    L.push('');
+    L.push('> 江海所以能为百谷王者，以其善下之。本插件把「用户在面板里能做的一切」全部以本地 HTTP 接口暴露在本机，');
+    L.push('> 任何本机 Agent 读完本文档即可经下述接口**完美操作本插件**、替用户读取/反向注入/替换/清除 Devin 账号里的所有模块配置。');
+    L.push('');
+    L.push('导出时间: `' + now + '`  ·  插件版本: `' + (EXT_VERSION) + '`');
+    L.push('');
+    L.push('## 1. 连接与鉴权');
+    L.push('');
+    L.push('- Base URL: `' + base + '`' + (ws.relayConnected && ws.publicUrl ? ' (公网 relay)' : ' (本机回环)'));
+    L.push('- 鉴权: 每个请求带 `Authorization: Bearer <TOKEN>` 头，或在 URL 加 `?master_token=<TOKEN>`。');
+    L.push('- 当前 TOKEN: `' + (ws.token || '(server 未启动)') + '`');
+    L.push('- TOKEN 持久化于: `' + (ws.tokenFile || '~/.dao/workspaces/<key>/token') + '`');
+    L.push('- 回环只读豁免(无需 token): `/api/health`、`/api/workspace`、`/api/agents`。其余需 token。');
+    L.push('- 全部返回 JSON。写操作多支持 `upsert`(有则替换、无则新增) — 即「账号变来变去都能注入/替换」。');
+    L.push('');
+    L.push('## 2. 实时运行态 (导出瞬时快照)');
+    L.push('');
+    L.push(fence + 'json');
+    L.push(JSON.stringify({
+        loggedIn: !!ws.devinAuth1,
+        accountSyncMode: getAccountSyncMode(),
+        websiteLoginMode: getWebsiteLoginMode(),
+        devinEmail: ws.devinEmail || '',
+        devinOrgName: ws.devinOrgName || ws.devinOrgSlug || '',
+        devinOrgId: ws.devinOrgId || '',
+        auth1Ready: !!ws.devinAuth1,
+        port: ws.port || 0,
+        relay: ws.relayConnected ? (ws.publicUrl || 'connected') : 'local',
+        quota: ws.devinQuota || null,
+        injectProfile: (() => { try { const p = loadInjectProfile(); return { enabled: p.enabled, mcps: p.mcps.map(m => m.name), messageLimit: p.messageLimit, secrets: p.secrets.length, knowledge: p.knowledge.length, playbooks: p.playbooks.length }; } catch { return null; } })()
+    }, null, 2));
+    L.push(fence);
+    L.push('');
+    L.push('> 上述为导出瞬时值。实时值请随时 `GET /api/devin/state`。');
+    L.push('');
+    L.push('## 3. 后端接口目录');
+    L.push('');
+    for (const g of agentApiCatalog()) {
+        L.push('### ' + g.group);
+        L.push('');
+        L.push('| Method | Path | Body | 说明 |');
+        L.push('| --- | --- | --- | --- |');
+        for (const e of g.items) {
+            L.push('| `' + e.method + '` | `' + e.path + '` | ' + (e.body ? '`' + e.body + '`' : '—') + ' | ' + e.desc + ' |');
+        }
+        L.push('');
+    }
+    L.push('## 4. 调用示例 (curl)');
+    L.push('');
+    L.push(fence + 'bash');
+    L.push('BASE="' + base + '"');
+    L.push('TOK="' + (ws.token || 'YOUR_TOKEN') + '"');
+    L.push('# 读取当前账号 knowledge');
+    L.push('curl -s "$BASE/api/devin/knowledge" -H "Authorization: Bearer $TOK"');
+    L.push('# 反向注入(有则替换无则新增)一条 knowledge');
+    L.push('curl -s -X POST "$BASE/api/devin/knowledge/inject" -H "Authorization: Bearer $TOK" \\');
+    L.push('  -H "Content-Type: application/json" \\');
+    L.push('  -d \'{"name":"Deploy Guide","body":"...","triggerDescription":"when deploying","upsert":true}\'');
+    L.push('# 钉一个 GitHub MCP 到当前账号');
+    L.push('curl -s -X POST "$BASE/api/devin/mcp/add" -H "Authorization: Bearer $TOK" \\');
+    L.push('  -H "Content-Type: application/json" \\');
+    L.push('  -d \'{"name":"GitHub MCP","transport":"HTTP","url":"https://api.githubcopilot.com/mcp/"}\'');
+    L.push('# 设单条消息额度上限为 30');
+    L.push('curl -s -X POST "$BASE/api/devin/usage/limit" -H "Authorization: Bearer $TOK" \\');
+    L.push('  -H "Content-Type: application/json" -d \'{"maxCredits":30}\'');
+    L.push(fence);
+    L.push('');
+    L.push('## 5. 给 Agent 的使用建议');
+    L.push('');
+    L.push('1. 先 `GET /api/devin/state` 确认 `auth1Ready=true` 且 `devinEmail` 是目标账号。');
+    L.push('2. 配置类写操作一律带 `upsert:true`，实现幂等(账号切换也安全)。');
+    L.push('3. 账号是否跟随 IDE 由 `accountSyncMode` 决定(auto=跟随, manual=用户自控)。需独立操作某账号时先确保 manual 或显式 `POST /api/devin/login`。');
+    L.push('4. 所有操作都对应官网真实后端，写入后可在 app.devin.ai 对应页面核验。');
+    L.push('');
+    return L.join('\n');
+}
+
+function buildAgentManifest(): any {
+    return {
+        ok: true,
+        service: 'dao-vsix',
+        version: EXT_VERSION,
+        generatedAt: new Date().toISOString(),
+        baseUrl: ws.publicUrl || ('http://localhost:' + (ws.port || 9920)),
+        auth: { scheme: 'Bearer', header: 'Authorization', queryParam: 'master_token', token: ws.token || '' },
+        state: {
+            loggedIn: !!ws.devinAuth1, accountSyncMode: getAccountSyncMode(), websiteLoginMode: getWebsiteLoginMode(),
+            devinEmail: ws.devinEmail || '', devinOrgId: ws.devinOrgId || '', devinOrgName: ws.devinOrgName || ws.devinOrgSlug || '',
+            port: ws.port || 0, relay: ws.relayConnected ? 'connected' : 'local'
+        },
+        endpoints: agentApiCatalog().flatMap(g => g.items.map(e => ({ group: g.group, method: e.method, path: e.path, body: e.body || null, desc: e.desc })))
+    };
+}
+
+// 导出 Agent 文档到本机文件并打开 — 帛书·「善下之」
+async function exportAgentDocToFile(): Promise<string> {
+    const md = buildAgentApiDoc();
+    const outPath = path.join(DAO_DIR, 'dao-agent-api.md');
+    try { fs.mkdirSync(DAO_DIR, { recursive: true }); } catch { /* 守柔 */ }
+    fs.writeFileSync(outPath, md, 'utf8');
+    return outPath;
 }
 
 // 据 IDE 注入的 session token 解析当前登录 email — GetUserStatus 权威 whoami
