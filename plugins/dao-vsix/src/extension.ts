@@ -1568,7 +1568,7 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                                 else if (tab === 'knowledge') { result = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.learnings : [] }); }
                                 else if (tab === 'playbooks') { result = await devinListPlaybooks(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.playbooks : [] }); }
                                 else if (tab === 'secrets') { result = await devinListSecrets(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.secrets : [] }); }
-                                else if (tab === 'integrations') { result = await devinCheckGitConnections(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.connections : [] }); }
+                                else if (tab === 'integrations') { result = await devinListIntegrations(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.connections : [] }); }
                                 else reply({ ok: false, error: 'unknown tab' });
                             } catch (e: any) { reply({ ok: false, error: e.message }); }
                         } else {
@@ -1767,6 +1767,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ni" data-tab="playbooks" onclick="sw('playbooks')" title="Playbooks">📋</div>
 <div class="ni" data-tab="secrets" onclick="sw('secrets')" title="Secrets">🔑</div>
 <div class="ni" data-tab="integrations" onclick="sw('integrations')" title="Integrations">🔗</div>
+<div class="ni" data-tab="usage" onclick="sw('usage')" title="Usage 用量">📊</div>
+<div class="ni" data-tab="org" onclick="sw('org')" title="组织成员 Members">🏢</div>
+<div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器">🧩</div>
+<div class="ni" data-tab="automations" onclick="sw('automations')" title="Automations 自动化">⚙️</div>
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="自动注入 Auto-Inject">💉</div>
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
@@ -1787,6 +1791,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="tv" id="v-playbooks"></div>
 <div class="tv" id="v-secrets"></div>
 <div class="tv" id="v-integrations"></div>
+<div class="tv" id="v-usage"></div>
+<div class="tv" id="v-org"></div>
+<div class="tv" id="v-mcp"></div>
+<div class="tv" id="v-automations"></div>
 <div class="tv" id="v-inject"></div>
 </div>
 <div class="ft" id="ft">
@@ -1845,12 +1853,12 @@ function sw(t){
       v.dataset.loaded='1';
       if(S.auth.canUseApi){
         // ★ 有cog_ key → 尝试API加载
-        v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗'}[t]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations'}[t]+'</h3><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
+        v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[t]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'}[t]+'</h3><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
         cmd('loadTabData',{tab:t});
       } else {
         // ★ 无 auth1 (仅 session-token) → 底层自动获取凭证, 用户无需手动 API Key
-        const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations'};
-        const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗'};
+        const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'};
+        const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'};
         v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[t]||'🌐')+'</div><h3>'+tabNames[t]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6;margin-bottom:12px">账号凭证将随 IDE 登录状态自动同步, 无需手动操作。若长时间未就绪, 可重试自动登录或手动切换账号。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
       }
     }
@@ -1903,8 +1911,8 @@ function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab);if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
   if(fallbackProxy||err){
-    const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations'};
-    const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗'};
+    const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'};
+    const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'};
     if(err==='需要 cog_ API Key'||fallbackProxy){
       // ★ 需要cog_ key — 显示创建引导
       v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6">账号凭证随 IDE 登录状态自动同步, 无需手动 API Key。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
@@ -1914,7 +1922,7 @@ function rT(tab,items,err,fallbackProxy){
     }
     return;
   }
-  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗'}[tab]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations'}[tab]+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
+  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[tab]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'}[tab]+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
   // ★ v1.0.1 · 各tab添加新建按钮 · 帛书·「道生一·一生二」
   const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>'};
   let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
@@ -1941,8 +1949,17 @@ function rT(tab,items,err,fallbackProxy){
     });
   }else if(tab==='integrations'){
     items.forEach(c=>{
-      const id=c.id||c.connection_id||'';const provider=c.provider||c.name||'GitHub';const login=c.login||c.username||'';
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(provider)+'</span><span class="v"><span class="tag git">G</span></span></div>'+(login?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(login)+'</div>':'')+'<div class="br" style="margin-top:4px"><button class="btn sm danger" onclick="cmd(&#39;devinDisconnectGit&#39;,{connectionId:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
+      const id=c.id||c.connection_id||'';const provider=c.provider||c.name||'GitHub';const login=c.login||c.username||c.detail||'';
+      const connected=c.connected!==undefined?c.connected:!!id;
+      const statusHtml=connected?'<span style="color:var(--success)">● Connected</span>':'<span style="color:var(--muted)">○ Not connected</span>';
+      const delBtn=(c.kind==='git'&&id)?'<div class="br" style="margin-top:4px"><button class="btn sm danger" onclick="cmd(&#39;devinDisconnectGit&#39;,{connectionId:&#39;'+esc(String(id))+'&#39;})">🗑 断开</button></div>':'';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(provider)+'</span><span class="v" style="font-size:11px">'+statusHtml+'</span></div>'+(login?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(login)+'</div>':'')+delBtn+'</div>';
+    });
+  }else if(tab==='usage'||tab==='org'||tab==='mcp'||tab==='automations'){
+    items.forEach(it=>{
+      const nm=it.name||it.title||'';const dt=it.detail||'';
+      const st=it.connected!==undefined?(it.connected?'<span style="color:var(--success)">● on</span>':'<span style="color:var(--muted)">○ off</span>'):'';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'</div>';
     });
   }
   v.innerHTML=h;
@@ -2129,8 +2146,24 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             if (result.ok) reply({ type: 'tabData', tab, items: result.secrets || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'integrations') {
-                            result = await devinCheckGitConnections(ws.devinOrgId, ws.devinAuth1);
+                            result = await devinListIntegrations(ws.devinOrgId, ws.devinAuth1);
                             if (result.ok) reply({ type: 'tabData', tab, items: result.connections || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'usage') {
+                            result = await devinGetUsage(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'org') {
+                            result = await devinListMembers(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'mcp') {
+                            result = await devinListMcpServers(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'automations') {
+                            result = await devinListAutomations(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else {
                             reply({ type: 'tabData', tab, items: [], error: 'Unknown tab' });
@@ -3617,44 +3650,37 @@ async function devinCreateSession(orgId: string, userMessage: string, auth1: str
 }
 
 async function devinListSessions(orgId: string, auth1: string, limit?: number): Promise<{ ok: boolean; sessions?: any[] }> {
-    // ★ v1.0.2 · 帛书·「反者道之动也」— v2sessions端点（auth1可用）
-    const useV1Api = (ws.devinApiKey || '').startsWith('cog_');
-    const apiKey = useV1Api ? ws.devinApiKey : auth1;
+    // 帛书·「去彼取此」— 自助账号的 cog_ key 不被 api.devin.ai 接受(404)；
+    // auth1 直读 app.devin.ai/v2sessions 对所有账号恒可用，与 Secret/Knowledge/Playbook 同源。
     const bareOrgId = orgId.replace(/^org-/, '');
-    let url = useV1Api ? `https://api.devin.ai/v1/org/${orgId}/sessions` : DEVIN_APP + '/api/org-' + bareOrgId + '/v2sessions';
+    let url = DEVIN_APP + '/api/org-' + bareOrgId + '/v2sessions';
     if (limit) url += (url.includes('?') ? '&' : '?') + 'limit=' + limit;
-    const headers: any = { Authorization: 'Bearer ' + apiKey };
-    if (!useV1Api) headers['x-cog-org-id'] = orgId;
-    const r = await devinJsonGet(url, headers);
-    if (r.status === 200) {
-        const j = r.json || {};
-        // v2sessions returns {result:[...]}; v1 returns {sessions:[...]}
-        const arr = Array.isArray(j.result) ? j.result : (Array.isArray(j.sessions) ? j.sessions : (Array.isArray(j) ? j : []));
-        return { ok: true, sessions: arr };
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    // 帛书·「无为而无不为」— v2sessions 首载经代理偶发超时；守柔重试两次, 让首屏自成而无需手动重试。
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await devinJsonGet(url, H, 30000);
+        if (r.status === 200) {
+            const j = r.json || {};
+            const arr = Array.isArray(j.result) ? j.result : (Array.isArray(j.sessions) ? j.sessions : (Array.isArray(j) ? j : []));
+            return { ok: true, sessions: arr };
+        }
+        if (r.status && r.status !== 0 && r.status !== 502 && r.status !== 503 && r.status !== 504) break;
+        await new Promise(res => setTimeout(res, 600));
     }
     return { ok: false };
 }
 
 async function devinGetSessionDetail(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; session?: any }> {
-    const useV1Api = (ws.devinApiKey || '').startsWith('cog_');
-    const apiKey = useV1Api ? ws.devinApiKey : auth1;
-    const url = useV1Api ? `https://api.devin.ai/v1/org/${orgId}/sessions/${sessionId}` : DEVIN_APP + '/api/sessions/' + sessionId;
-    const headers: any = { Authorization: 'Bearer ' + apiKey };
-    if (!useV1Api) headers['x-cog-org-id'] = orgId;
-    const r = await devinJsonGet(url, headers);
+    const r = await devinJsonGet(DEVIN_APP + '/api/sessions/' + sessionId, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status === 200) return { ok: true, session: r.json };
     return { ok: false };
 }
 
 async function devinGetSessionMessages(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; messages?: any[] }> {
-    const useV1Api = (ws.devinApiKey || '').startsWith('cog_');
-    const apiKey = useV1Api ? ws.devinApiKey : auth1;
-    const url = useV1Api ? `https://api.devin.ai/v1/org/${orgId}/sessions/${sessionId}/messages` : DEVIN_APP + '/api/sessions/' + sessionId + '/messages';
-    const headers: any = { Authorization: 'Bearer ' + apiKey };
-    if (!useV1Api) headers['x-cog-org-id'] = orgId;
-    const r = await devinJsonGet(url, headers);
+    // /api/sessions/<id>/messages 对自助账号 404；守柔兜底：失败即空，不阻塞详情渲染。
+    const r = await devinJsonGet(DEVIN_APP + '/api/sessions/' + sessionId + '/messages', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status === 200) { const j = r.json || {}; return { ok: true, messages: Array.isArray(j.messages) ? j.messages : (Array.isArray(j) ? j : []) }; }
-    return { ok: false };
+    return { ok: true, messages: [] };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -3831,6 +3857,104 @@ async function devinCheckGitConnections(orgId: string, auth1: string): Promise<{
         return { ok: true, connections: conns, count: conns.length };
     }
     return { ok: false, connections: [], count: 0 };
+}
+
+// 帛书·「万物负阴而抱阳」— Integrations 状态盘:
+// 聚合官网所有集成提供商状态(GitHub/GitLab/Bitbucket/Azure DevOps/Slack/Jira)+ MCP 服务器,
+// 并将 git-connections-metadata 的真实连接(含可断开 id)并入对应提供商行。auth1 直读, 恒可用。
+async function devinListIntegrations(orgId: string, auth1: string): Promise<{ ok: boolean; connections?: any[] }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    const base = DEVIN_APP + '/api/org-' + bareOrgId;
+    const byName = new Map<string, any>();
+    const set = (name: string, kind: string) => { const k = name.toLowerCase(); if (!byName.has(k)) byName.set(k, { name, connected: false, detail: '', kind, id: '' }); return byName.get(k); };
+    // 1) 真实 git 连接(可断开)
+    try {
+        const gc = await devinJsonGet(DEVIN_APP + '/api/organizations/' + orgId + '/git-connections-metadata', H);
+        if (gc.status === 200) {
+            const arr = Array.isArray(gc.json) ? gc.json : (gc.json && gc.json.connections ? gc.json.connections : []);
+            arr.forEach((c: any) => { const row = set(c.provider || c.name || 'Git', 'git'); row.connected = true; row.id = c.id || c.connection_id || ''; row.detail = c.login || c.username || c.account_login || row.detail; });
+        }
+    } catch { /* 守柔 */ }
+    // 2) 提供商状态
+    const providers: Array<[string, string, (j: any) => boolean]> = [
+        ['GitHub', '/integrations/github', (j) => Array.isArray(j) ? j.length > 0 : !!j],
+        ['GitLab', '/integrations/gitlab', (j) => Array.isArray(j) ? j.length > 0 : !!j],
+        ['Bitbucket', '/integrations/bitbucket', (j) => Array.isArray(j) ? j.length > 0 : !!j],
+        ['Azure DevOps', '/integrations/azure-devops', (j) => !!(j && Array.isArray(j.connections) && j.connections.length)],
+        ['Slack', '/integrations/slack/status', (j) => !!(j && j.connection)],
+        ['Jira', '/integrations/jira/status', (j) => !!(j && j.integration)],
+    ];
+    await Promise.all(providers.map(async ([label, path, isConn]) => {
+        try {
+            const r = await devinJsonGet(base + path, H);
+            if (r.status === 200) { const row = set(label, 'provider'); if (isConn(r.json)) row.connected = true; }
+        } catch { /* 守柔 */ }
+    }));
+    // 3) MCP 服务器
+    try {
+        const mcp = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', H);
+        if (mcp.status === 200 && Array.isArray(mcp.json)) { const row = set('MCP Servers', 'mcp'); row.connected = mcp.json.length > 0; row.detail = mcp.json.length + ' available'; }
+    } catch { /* 守柔 */ }
+    return { ok: true, connections: [...byName.values()] };
+}
+
+// 帛书·「既得其母，以知其子」— 补全官网模块: Usage / Org 成员 / MCP / Automations
+// 全部 auth1 直读 app.devin.ai, 与账号实时同步; 切号即整体跟随。
+async function devinGetUsage(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    const base = DEVIN_APP + '/api/org-' + bareOrgId + '/billing/usage';
+    const [stats, limits] = await Promise.all([devinJsonGet(base + '/stats', H), devinJsonGet(base + '/limits', H)]);
+    const s = (stats.status === 200 && stats.json) ? stats.json : {};
+    const l = (limits.status === 200 && limits.json) ? limits.json : {};
+    const num = (v: any) => (v === null || v === undefined) ? '—' : String(v);
+    const items = [
+        { name: '订阅状态 Subscription', detail: num(s.subscription_status) },
+        { name: '可用 ACU Available', detail: num(s.available_acus) },
+        { name: '本周期已用 ACU Used', detail: num(s.cycle_total_acu_usage) },
+        { name: '余额 Balance', detail: num(s.balance) },
+        { name: '超额阈值 Overage threshold', detail: num(s.overage_threshold) },
+        { name: '当前超额 Current overage', detail: num(s.current_overage) },
+        { name: '单会话 ACU 上限 Max ACU/session', detail: num(l.max_acu_limit) },
+        { name: '周期 Cycle', detail: (s.cycle_start ? new Date(s.cycle_start).toLocaleDateString() : '—') + ' → ' + (s.cycle_end ? new Date(s.cycle_end).toLocaleDateString() : '—') },
+    ];
+    return { ok: stats.status === 200 || limits.status === 200, items };
+}
+
+async function devinListMembers(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const r = await devinJsonGet(DEVIN_APP + '/api/organizations/' + orgId + '/members', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [] };
+    const arr = Array.isArray(r.json) ? r.json : [];
+    const items = arr.map((m: any) => ({
+        name: m.preferred_name || m.name || m.email || 'Member',
+        detail: (m.email || '') + (Array.isArray(m.roles) && m.roles.length ? '  ·  ' + m.roles.map((x: any) => x.label || x.id).join(', ') : ''),
+    }));
+    return { ok: true, items };
+}
+
+async function devinListMcpServers(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const r = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [] };
+    const arr = Array.isArray(r.json) ? r.json : [];
+    const items = arr.map((m: any) => ({
+        name: m.name || m.slug || m.server_id || 'MCP',
+        detail: (m.short_description || m.description || '').toString().substring(0, 120),
+        connected: !!(m.is_connected || m.connected || m.status === 'connected'),
+    }));
+    return { ok: true, items };
+}
+
+async function devinListAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/automations', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [] };
+    const arr = Array.isArray(r.json) ? r.json : [];
+    const items = arr.map((a: any) => {
+        const trig = Array.isArray(a.triggers) && a.triggers[0] ? (a.triggers[0].event_type || '') : '';
+        return { name: a.name || a.automation_id || 'Automation', detail: trig, connected: a.enabled !== false };
+    });
+    return { ok: true, items };
 }
 
 async function devinDisconnectGit(orgId: string, connectionId: string, auth1: string): Promise<{ ok: boolean }> {
