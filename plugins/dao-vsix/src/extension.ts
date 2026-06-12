@@ -373,28 +373,17 @@ export async function activate(context: vscode.ExtensionContext) {
                 vscode.window.showWarningMessage('DAO 服务器未启动');
                 return;
             }
-            const proxyUrl = `http://localhost:${ws.port}/devin-cloud/`;
-            try {
-                if (ws.devinAuth1) {
-                    // 已认证 — 通过反向代理路由，自动注入Cookie
-                    vscode.commands.executeCommand('simpleBrowser.show', proxyUrl);
-                } else {
-                    // 未认证 — 直接打开，依赖Electron session
-                    vscode.commands.executeCommand('simpleBrowser.show', DEVIN_APP);
-                }
-            }
-            catch { vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP)); }
+            // 帛书·「执天之行」官网根挂载 — 经反代根路径(/)路由, SPA 客户端路由方能正确匹配
+            // (/devin-cloud/ 前缀非 SPA 真实路由 → 404); 持 auth1 时经 localStorage 注入自动登录
+            const proxyUrl = daoRoutedWebUrl('');
+            try { vscode.commands.executeCommand('simpleBrowser.show', proxyUrl); }
+            catch { vscode.env.openExternal(vscode.Uri.parse(proxyUrl)); }
         }),
         vscode.commands.registerCommand('dao.devinCloudPanel', () => {
             // 帛书·「天下之至柔驰骋于天下之致坚」— 反向代理自动注入认证
-            if (ws.port && ws.devinAuth1) {
-                const proxyUrl = `http://localhost:${ws.port}/devin-cloud/`;
-                try { vscode.commands.executeCommand('simpleBrowser.show', proxyUrl); }
-                catch { vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP)); }
-            } else {
-                try { vscode.commands.executeCommand('simpleBrowser.show', DEVIN_APP); }
-                catch { vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP)); }
-            }
+            const proxyUrl = daoRoutedWebUrl('');
+            try { vscode.commands.executeCommand('simpleBrowser.show', proxyUrl); }
+            catch { vscode.env.openExternal(vscode.Uri.parse(proxyUrl)); }
         }),
         vscode.commands.registerCommand('dao.openDashboard', () => {
             vscode.commands.executeCommand('workbench.view.extension.devin-cloud-container');
@@ -1585,13 +1574,8 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                             secrets: '/settings/secrets', integrations: '/settings/integrations',
                         };
                         const pagePath = pagePaths[page] || '';
-                        let targetUrl: string;
-                        if (ws.port && ws.devinAuth1) {
-                            // 已认证 + 服务器运行 → 走反向代理路由(自动注入Cookie)
-                            targetUrl = `http://localhost:${ws.port}/devin-cloud${pagePath}`;
-                        } else {
-                            targetUrl = DEVIN_APP + pagePath;
-                        }
+                        // 经反代根路径路由(/、/sessions ...) — SPA 客户端路由正确匹配 + 自动注入登录
+                        const targetUrl = daoRoutedWebUrl(pagePath);
                         try { vscode.commands.executeCommand('simpleBrowser.show', targetUrl); }
                         catch { vscode.env.openExternal(vscode.Uri.parse(targetUrl)); }
                         reply({ ok: true });
@@ -2597,23 +2581,22 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'openBrowser': {
-                // 帛书·「天下之至柔驰骋于天下之致坚」— simpleBrowser共享Electron session
-                // 直接用simpleBrowser打开app.devin.ai — 自动携带Auth0 Cookie
-                try { vscode.commands.executeCommand('simpleBrowser.show', DEVIN_APP); }
-                catch { vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP)); }
+                // 帛书·「执天之行」官网根挂载 — 经反代根路径(/)路由 app.devin.ai,
+                // 持 auth1 时 localStorage 注入 auth1_session → 自动登录, 无需手动/OAuth
+                const targetUrl = daoRoutedWebUrl('');
+                try { vscode.commands.executeCommand('simpleBrowser.show', targetUrl); }
+                catch { vscode.env.openExternal(vscode.Uri.parse(targetUrl)); }
                 break;
             }
             case 'openDevinPage': {
-                // 帛书·「天下之至柔驰骋于天下之致坚」— simpleBrowser共享Electron session
-                // 直接打开 app.devin.ai — simpleBrowser 自动携带 Electron 的 Auth0 Cookie
-                // 不再通过反向代理（代理注入的 devin-session-token$ Cookie 无效）
+                // 帛书·「执天之行」官网根挂载 — 经反代根路径路由, auth1 localStorage 注入自动登录
                 const page = msg.page || 'home';
-                const urls: Record<string, string> = {
-                    home: DEVIN_APP, sessions: DEVIN_APP + '/sessions',
-                    knowledge: DEVIN_APP + '/knowledge', playbooks: DEVIN_APP + '/playbooks',
-                    secrets: DEVIN_APP + '/settings/secrets', integrations: DEVIN_APP + '/settings/integrations',
+                const pagePaths: Record<string, string> = {
+                    home: '', sessions: '/sessions',
+                    knowledge: '/knowledge', playbooks: '/playbooks',
+                    secrets: '/settings/secrets', integrations: '/settings/integrations',
                 };
-                const targetUrl = urls[page] || DEVIN_APP;
+                const targetUrl = daoRoutedWebUrl(pagePaths[page] || '');
                 try { vscode.commands.executeCommand('simpleBrowser.show', targetUrl); }
                 catch { vscode.env.openExternal(vscode.Uri.parse(targetUrl)); }
                 break;
@@ -2646,6 +2629,16 @@ const DEVIN_URL_LOGIN = DEVIN_WINDSURF + '/_devin-auth/password/login';
 const DEVIN_URL_POSTAUTH = DEVIN_WINDSURF + '/_backend/exa.seat_management_pb.SeatManagementService/WindsurfPostAuth';
 const DEVIN_URL_DEVIN_POST_AUTH = DEVIN_APP + '/api/users/post-auth';
 const DEVIN_URL_REGISTER = 'https://register.windsurf.com/exa.seat_management_pb.SeatManagementService/RegisterUser';
+
+// 帛书·「执天之行」官网根挂载 — 路由官网统一入口
+// 官网为 Vite SPA, 经本地反代根路径(/)透传 app.devin.ai; SPA 客户端路由据真实 pathname 工作,
+// 故 /devin-cloud/ 子路径前缀非 SPA 真实路由 → 渲染 404。持 auth1 + 服务器运行时经反代根路径
+// (auth bridge 注入 localStorage['auth1_session'])自动登录; 否则回退官网直连(依赖 Electron session)。
+function daoRoutedWebUrl(pagePath: string = ''): string {
+    const p = (pagePath && pagePath !== '/') ? pagePath : '';
+    if (ws.port && ws.devinAuth1) return `http://localhost:${ws.port}${p || '/'}`;
+    return DEVIN_APP + p;
+}
 const DEVIN_URL_GET_USER_STATUS = [
     'https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus',
     'https://server.self-serve.windsurf.com/exa.seat_management_pb.SeatManagementService/GetUserStatus',
@@ -4792,7 +4785,8 @@ function devinCloudPanel(context: vscode.ExtensionContext): void {
         } else if (msg.command === 'navigate') {
             // iframe内导航请求 → 代理层处理
             const targetPath = msg.path || '/';
-            panel.webview.html = getDevinCloudPanelHtml(`${localBase}/devin-cloud${targetPath}`, localBase);
+            // 经反代根路径路由 — SPA 客户端路由据真实 pathname 工作(/devin-cloud 前缀 → 404)
+            panel.webview.html = getDevinCloudPanelHtml(`${localBase}${targetPath}`, localBase);
         } else if (msg.command === 'authSync') {
             // iframe认证状态同步 — 帛书·五十二「见小曰明·守柔曰强」
             // iframe中的Devin SPA可能更新了认证状态，同步回主扩展
