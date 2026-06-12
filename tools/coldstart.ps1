@@ -42,6 +42,21 @@ if (-not $SkipInstall -and -not (Test-Path $devinExe)) {
 }
 if (-not (Test-Path $devinCli)) { throw "devin-desktop CLI not found: $devinCli" }
 
+# ---------- 1.5 Build the gitignored dao-vsix VSIX if absent ----------
+# dao-vsix ships only its TypeScript source (out/, node_modules/, *.vsix are gitignored),
+# so on a fresh clone we transpile + package it before the install loop can find it.
+$daoVsixDir = Join-Path $repoRoot 'plugins\dao-vsix'
+if ((Test-Path $daoVsixDir) -and -not (Get-ChildItem -Path $daoVsixDir -Filter *.vsix -File)) {
+    Step 'Building dao-vsix VSIX (TS transpile + package)'
+    Push-Location $daoVsixDir
+    try {
+        if (-not (Test-Path 'node_modules')) { & npm install --no-audit --no-fund 2>&1 | Select-Object -Last 1 }
+        & node ./build.js
+        & npx --yes @vscode/vsce package --allow-missing-repository --skip-license 2>&1 | Select-Object -Last 1
+    } finally { Pop-Location }
+    if (-not (Get-ChildItem -Path $daoVsixDir -Filter *.vsix -File)) { throw 'dao-vsix build failed (no VSIX produced)' }
+}
+
 # ---------- 2. Install plugins straight from the repo ----------
 # 5 plugins under plugins/ + the dao-export module VSIX. Each dir keeps only its latest VSIX
 # (older versions were pruned), so a flat search picks the right build with no version parsing.

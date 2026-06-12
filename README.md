@@ -31,6 +31,23 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\too
 
 ---
 
+## 📹 操作视频教程 · 小白向（一看就明白）
+
+> 每个视频均在真实虚拟机上实测录制，含分步标注与通过断言。点击观看（GitHub 内置播放器）。
+
+| 板块 | 操作视频 | 一句话演示内容 |
+|------|------|------|
+| ① dao-vsix | [▶ 观看](docs/tutorials/videos/01_dao-vsix.mp4) | 打开全功能面板 → 邮箱密码登录拿 auth1 → 106 会话/175 Playbook → 本地 API :9920 |
+| ② dao-bridge | [▶ 观看](docs/tutorials/videos/02_dao-bridge.mp4) | 一键打通公网 → 得到 Cloudflare 公网地址 → 公网 health 实测通 |
+| ③ devin-git-auth | [▶ 观看](docs/tutorials/videos/03_devin-git-auth.mp4) | 存 GitHub PAT → 加 Devin 账号 → 一键「全部连接到同一 GitHub」 |
+| ④ dao-proxy-pro | [▶ 观看](docs/tutorials/videos/04_dao-proxy-pro.mp4) | 本源观照面板（注入底层提示词）→ 多模型家族路由后端 |
+| ⑤ rt-flow | [▶ 观看](docs/tutorials/videos/05_rt-flow.mp4) | 多账号实时额度 → 一键全部备份 → 本地对话 ZIP 留底 |
+| 模块 dao-export | [▶ 观看](docs/tutorials/videos/06_dao-export.mp4) | 邮箱+密码 → 导出账号级数据 + 全部 106/106 会话 |
+
+> 配套图文：[**小白上手指南**](docs/tutorials/小白上手指南.md)（冷启动 + 6 插件分步 + 排错速查）。
+
+---
+
 ## 架构全貌 · 5 + 2 + 1
 
 ```
@@ -62,25 +79,25 @@ devin-remote/
 
 核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传）。零输入获取 cog_ API Key（POST /service-users + auth1 自动换取），彻底移除面板所有手动 API Key 输入/引导。v1.2.0：增补测试聊天内置存根通道，与 dao-proxy-pro v9.9.276 配套。官网注入加固：session-token 与 auth1 严格隔离。
 
-**VSIX**: 见 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)（本插件 VSIX 已 gitignore，`npm run compile && vsce package` 现产） · **源码**: `plugins/dao-vsix/src/extension.ts`
+**VSIX**: 见 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)（本插件 VSIX 已 gitignore，`npm run compile && vsce package` 现产） · **源码**: `plugins/dao-vsix/src/extension.ts` · **📹 视频**: [▶ 小白教程](docs/tutorials/videos/01_dao-vsix.mp4)
 
 ### dao-bridge v3.0.0 · 工作区内网穿透
 
 重构为零/最小输入：quick tunnel 默认模式 + 凭证自动加载（`~/.dao/` 目录）+ 命名隧道 token 持久化 + 修正误导 UI（不再暗示必须填 token）。随 IDE 窗口启停，专穿当前工作区。
 
-**VSIX**: `plugins/cf-daohub/dao-bridge-ext/dao-bridge-3.0.0.vsix` · **源码**: `plugins/cf-daohub/dao-bridge-ext/extension.js`
+**VSIX**: `plugins/cf-daohub/dao-bridge-ext/dao-bridge-3.0.0.vsix` · **源码**: `plugins/cf-daohub/dao-bridge-ext/extension.js` · **📹 视频**: [▶ 小白教程](docs/tutorials/videos/02_dao-bridge.mp4)
 
 ### devin-git-auth v2.3.2 · 多账号 GitHub 认证
 
 零输入：自动加载 `~/.dao/accounts.json` 账号池 + `~/.dao/git-pats.json` PAT。"already registered" 智能处理 + 仓库可达性核验。全 13 账号实测：9/13 可访问 `devin-remote`（10 个已连通），余 3 个卡在后端"已注册但 0 连接"幽灵态 —— 如实诊断、不做假兜底。
 
-**VSIX**: `plugins/devin-git-auth/devin-git-auth-2.3.2.vsix` · **源码**: `plugins/devin-git-auth/extension.js`
+**VSIX**: `plugins/devin-git-auth/devin-git-auth-2.3.2.vsix` · **源码**: `plugins/devin-git-auth/extension.js` · **📹 视频**: [▶ 小白教程](docs/tutorials/videos/03_devin-git-auth.mp4)
 
 ### dao-proxy-pro v9.9.277 · 提示词隔离 + 外接路由
 
 底层拦截 IDE AI 请求，隔离替换提示词（道藏规则 + 用户自定义注入），外接第三方模型路由。vendor 目录含 LSP 模拟器、适应性路由、预算控制、三模块面板（49 家模型归一 + 测通）。v9.9.277：修复「渠道配置永远红点」——无 healthCheck 的用户渠道探活返回 `alive:null` 被渲染成红点；探活改为「带 Bearer 鉴权的 /models 探测」（HTTP 200 即绿、自动回填模型），并修复 baseUrl 已含 `/v1` 时模型探测拼成 `/v1/v1/models` 404；前端加 key 即自动探活+拿模型+变绿。
 
-**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.277.vsix`
+**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.277.vsix` · **📹 视频**: [▶ 小白教程](docs/tutorials/videos/04_dao-proxy-pro.mp4)
 
 ### rt-flow v4.1.2 · Devin Cloud 接入（备份 + 回归本源）⭐新
 
@@ -91,7 +108,7 @@ devin-remote/
 
 > 实测修复多个「臆造成功」缺陷：剧本/密钥删除端点纠正（`/api/playbooks|secrets/{id}`）、会话改归档（平台不支持硬删）、Git 改用 `git-permissions` 真撤授权（连接元数据平台无删除端点，如实回报）。
 
-**VSIX**: `plugins/rt-flow/rt-flow-4.1.2.vsix` · **底层**: `plugins/rt-flow/devin_cloud.js` · **变更史**: `plugins/rt-flow/changelog.md`
+**VSIX**: `plugins/rt-flow/rt-flow-4.1.2.vsix` · **底层**: `plugins/rt-flow/devin_cloud.js` · **变更史**: `plugins/rt-flow/changelog.md` · **📹 视频**: [▶ 小白教程](docs/tutorials/videos/05_rt-flow.mp4)
 
 ---
 
@@ -115,7 +132,7 @@ python dao_export_all.py --email xxx@gmail.com --password xxx
 
 16 路并发 + keepalive 连接复用 + 重试 + 断点续传。VSIX 侧边栏实时进度 + 按需加载 worklog 分页。
 
-**VSIX**: `modules/dao-export/dao-devin-export-1.3.3.vsix`
+**VSIX**: `modules/dao-export/dao-devin-export-1.3.3.vsix` · **📹 视频**: [▶ 小白教程](docs/tutorials/videos/06_dao-export.mp4)
 
 > [→ 完整文档](modules/dao-export/README.md) · 含 VSIX 源码 + API 逆向指南
 
