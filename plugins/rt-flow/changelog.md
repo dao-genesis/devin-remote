@@ -2,6 +2,29 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.1.2 (2026-06-12) · Git 断开正本清源 · 不臆造成功(前端 bundle 实证)
+
+> *知不知，尚矣；不知不知，病矣。* —— 旧码"臆造成功"是病, 病病乃不病。
+
+### 实测发现(GUI 一键备份并清空 lhfsrb → 复查 Git 仍在)
+- `disconnectGit` 旧码试三个 `/git-connections/{id}` 形态(org-scoped/裸 id/org-bare),
+  **真号实跑全部恒 404/405** —— 唯一 404 还被当"已删"(幂等)→ 实为臆造: 啥也没断, 却记成功。
+- 道法自然·从根本审: 拉取 Devin 前端 414 个 chunk, 逐函数审 `useQuery-*.js` 的 git API 全集:
+  - 列连接: `GET /organizations/{orgId}/git-connections-metadata` (只读·GET)
+  - 列仓库授权: `GET /{orgId}/integrations/git-permissions?connection_id={cid}`
+  - 删仓库授权: `DELETE /{orgId}/integrations/git-permissions/{permId}` → `{success:true}` (真删)
+  - OAuth 断开: `DELETE /integrations/github/user` · `DELETE /integrations/gitlab/user`
+  - **平台无"按 id 删 git 连接"端点**; `github_individual_token`(PAT) 连接的元数据记录删不掉。
+
+### 修 · 真删可删·残留如实报(不臆造)
+- `disconnectGit(auth, conn)`: 改用实证端点 ——
+  1) 列并删该连接全部 `git-permissions`(真实移除仓库访问权·返 `{success:true}`);
+  2) 调 provider 级断开(OAuth 真断·PAT 幂等无害);
+  3) 复查 `git-connections-metadata`: 连接消失→`removed:true`(真断); 残留(PAT 典型)→
+     `ok:false` 并如实回报 `permissionsRemoved` + note(PAT 本体须在 GitHub 端撤销)。
+- 真号验证(lkwpv1740858777·PAT·2 授权): 授权 **2→0**(实删·复查确认), 连接元数据残留并如实标注。
+- 新增 `listGitPermissions`/`deleteGitPermission` 导出; `wipeAccount.gitConnections` 增 `permissionsRemoved` 计数。
+
 ## v4.1.1 (2026-06-12) · 快照健壮化 · 一条失败不毁全局(GUI 实测揪出)
 
 > *合抱之木，生于毫末；九成之台，作于累土* —— 一条端点抖动，本不该毁掉整份留底。

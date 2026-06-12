@@ -563,21 +563,58 @@ async function deleteSecret(auth, idOrName) {
   if (r.status === 404 && r2.status === 404) return { ok: true, status: 404 };
   return { ok: false, status: r.status };
 }
-async function disconnectGit(auth, connectionId) {
-  // 多端点形态兜底 (org-scoped 与裸 id 形态), 命中 2xx 即真断开。
-  const urls = [
-    CFG.apiBase + "/organizations/" + auth.orgId + "/git-connections/" + connectionId,
-    CFG.apiBase + "/git-connections/" + connectionId,
-    CFG.apiBase + "/org-" + auth.orgBare + "/git-connections/" + connectionId,
-  ];
-  let last = 0;
-  for (const url of urls) {
-    const r = await jsonRequest("DELETE", url, authHeaders(auth));
-    last = r.status;
-    if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status };
-  }
-  if (last === 404) return { ok: true, status: 404 };
-  return { ok: false, status: last };
+// 某连接的仓库授权(git-permissions)列举/删除 —— 端点取自前端 useQuery bundle 实证。
+async function listGitPermissions(auth, connectionId) {
+  const r = await jsonRequest("GET", CFG.apiBase + "/" + auth.orgId + "/integrations/git-permissions?connection_id=" + encodeURIComponent(connectionId), authHeaders(auth));
+  return r.status === 200 ? asArray(r.json, "data", "permissions") : [];
+}
+async function deleteGitPermission(auth, permId) {
+  const r = await jsonRequest("DELETE", CFG.apiBase + "/" + auth.orgId + "/integrations/git-permissions/" + permId, authHeaders(auth));
+  return { ok: r.status >= 200 && r.status < 300, status: r.status };
+}
+// 实跑确证(前端 bundle 逐函数审 + 真号 lhfsrb 验证): Devin 无"按 id 删 git 连接"端点。
+//   旧码三个 /git-connections/{id} 形态恒 404/405 → 实为臆造(根本啥也没删, 却记成功)。
+//   真实可用端点(取自前端 useQuery-*.js):
+//     · 列仓库授权: GET    /{orgId}/integrations/git-permissions?connection_id={cid}
+//     · 删仓库授权: DELETE /{orgId}/integrations/git-permissions/{permId}  (返 {success:true}·真删)
+//     · OAuth 断开: DELETE /integrations/github/user · /integrations/gitlab/user
+//   但 github_individual_token(PAT) 连接的"元数据记录"平台不提供删除端点(复查仍在)。
+//   故能做且该做的: 真删其全部仓库授权(实移除访问权), 复查连接元数据是否消失:
+//     消失→真断开(removed); 残留(PAT 典型)→如实回报已清授权数, 不臆造成功。
+async function disconnectGit(auth, conn) {
+  const cid = (conn && (conn.id || conn.connection_id)) || conn;
+  const type = String((conn && (conn.type || conn.provider)) || "").toLowerCase();
+  const host = String((conn && conn.host) || "").toLowerCase();
+  // 1) 清空该连接全部仓库授权 (真实移除访问权)
+  let permsRemoved = 0;
+  try {
+    const perms = await listGitPermissions(auth, cid);
+    for (const p of perms) {
+      const pid = p.git_permission_id || p.id;
+      if (!pid) continue;
+      if ((await deleteGitPermission(auth, pid)).ok) permsRemoved++;
+    }
+  } catch (_) { /* 授权列举失败不阻断后续 */ }
+  // 2) provider 级断开 (OAuth 类真断开; PAT 类幂等无害)
+  let provStatus = 0;
+  const provUrl = (type.indexOf("gitlab") >= 0 || host.indexOf("gitlab") >= 0)
+    ? CFG.apiBase + "/integrations/gitlab/user"
+    : CFG.apiBase + "/integrations/github/user";
+  try { provStatus = (await jsonRequest("DELETE", provUrl, authHeaders(auth))).status; } catch (_) {}
+  // 3) 复查连接元数据是否真消失 (不臆造)
+  let gone = false;
+  try {
+    const after = (await getGitConnections(auth)).connections || [];
+    gone = !after.some((c2) => (c2.id || c2.connection_id) === cid);
+  } catch (_) {}
+  if (gone) return { ok: true, status: 200, removed: true, permissionsRemoved: permsRemoved };
+  return {
+    ok: false,
+    status: provStatus || 0,
+    removed: false,
+    permissionsRemoved: permsRemoved,
+    note: "PAT(individual_token)连接元数据平台未开放删除端点; 已清除其仓库授权 " + permsRemoved + " 条; PAT 本体须在 GitHub 端撤销",
+  };
 }
 // 清理会话: 实跑确证 Devin 平台不支持硬删除对话
 //   (OPTIONS /api/sessions/{id} → Allow: GET; DELETE → 405)。
@@ -628,7 +665,7 @@ async function wipeAccount(auth, opts) {
     knowledge: { found: 0, deleted: 0, failed: 0 },
     playbooks: { found: 0, deleted: 0, failed: 0 },
     secrets: { found: 0, deleted: 0, failed: 0 },
-    gitConnections: { found: 0, deleted: 0, failed: 0 },
+    gitConnections: { found: 0, deleted: 0, failed: 0, permissionsRemoved: 0 },
     native: { knowledge: 0, playbooks: 0 }, // 本源默认(保留·不删)
     errors: [],
   };
@@ -670,9 +707,11 @@ async function wipeAccount(auth, opts) {
   for (const c of conns) {
     const id = c.id || c.connection_id;
     if (!id) { report.gitConnections.failed++; continue; }
-    const r = await disconnectGit(auth, id);
-    r.ok ? report.gitConnections.deleted++ : (report.gitConnections.failed++, report.errors.push("git:" + id + ":" + r.status));
-    prog("断开 Git 连接 " + report.gitConnections.deleted + "/" + conns.length);
+    const r = await disconnectGit(auth, c);
+    report.gitConnections.permissionsRemoved += r.permissionsRemoved || 0;
+    if (r.ok) report.gitConnections.deleted++;
+    else { report.gitConnections.failed++; report.errors.push("git:" + id + ":" + (r.note || r.status)); }
+    prog("断开 Git 连接 " + report.gitConnections.deleted + "/" + conns.length + (r.permissionsRemoved ? "(清授权" + r.permissionsRemoved + ")" : ""));
   }
   for (const s of secrets) {
     const r = await deleteSecret(auth, s.id || s.name);
@@ -1347,6 +1386,8 @@ module.exports = {
   deletePlaybook,
   deleteSecret,
   disconnectGit,
+  listGitPermissions,
+  deleteGitPermission,
   deleteSession,
   wipeAccount,
   // backup
