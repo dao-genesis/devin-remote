@@ -563,21 +563,58 @@ async function deleteSecret(auth, idOrName) {
   if (r.status === 404 && r2.status === 404) return { ok: true, status: 404 };
   return { ok: false, status: r.status };
 }
-async function disconnectGit(auth, connectionId) {
-  // 多端点形态兜底 (org-scoped 与裸 id 形态), 命中 2xx 即真断开。
-  const urls = [
-    CFG.apiBase + "/organizations/" + auth.orgId + "/git-connections/" + connectionId,
-    CFG.apiBase + "/git-connections/" + connectionId,
-    CFG.apiBase + "/org-" + auth.orgBare + "/git-connections/" + connectionId,
-  ];
-  let last = 0;
-  for (const url of urls) {
-    const r = await jsonRequest("DELETE", url, authHeaders(auth));
-    last = r.status;
-    if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status };
-  }
-  if (last === 404) return { ok: true, status: 404 };
-  return { ok: false, status: last };
+// 某连接的仓库授权(git-permissions)列举/删除 —— 端点取自前端 useQuery bundle 实证。
+async function listGitPermissions(auth, connectionId) {
+  const r = await jsonRequest("GET", CFG.apiBase + "/" + auth.orgId + "/integrations/git-permissions?connection_id=" + encodeURIComponent(connectionId), authHeaders(auth));
+  return r.status === 200 ? asArray(r.json, "data", "permissions") : [];
+}
+async function deleteGitPermission(auth, permId) {
+  const r = await jsonRequest("DELETE", CFG.apiBase + "/" + auth.orgId + "/integrations/git-permissions/" + permId, authHeaders(auth));
+  return { ok: r.status >= 200 && r.status < 300, status: r.status };
+}
+// 实跑确证(前端 bundle 逐函数审 + 真号 lhfsrb 验证): Devin 无"按 id 删 git 连接"端点。
+//   旧码三个 /git-connections/{id} 形态恒 404/405 → 实为臆造(根本啥也没删, 却记成功)。
+//   真实可用端点(取自前端 useQuery-*.js):
+//     · 列仓库授权: GET    /{orgId}/integrations/git-permissions?connection_id={cid}
+//     · 删仓库授权: DELETE /{orgId}/integrations/git-permissions/{permId}  (返 {success:true}·真删)
+//     · OAuth 断开: DELETE /integrations/github/user · /integrations/gitlab/user
+//   但连接"元数据记录"本身平台不提供删除端点(PAT 与 github_app 均复查仍在)。
+//   故能做且该做的: 真删其全部仓库授权(实移除访问权), 复查连接元数据是否消失:
+//     消失→真断开(removed); 残留(PAT 典型)→如实回报已清授权数, 不臆造成功。
+async function disconnectGit(auth, conn) {
+  const cid = (conn && (conn.id || conn.connection_id)) || conn;
+  const type = String((conn && (conn.type || conn.provider)) || "").toLowerCase();
+  const host = String((conn && conn.host) || "").toLowerCase();
+  // 1) 清空该连接全部仓库授权 (真实移除访问权)
+  let permsRemoved = 0;
+  try {
+    const perms = await listGitPermissions(auth, cid);
+    for (const p of perms) {
+      const pid = p.git_permission_id || p.id;
+      if (!pid) continue;
+      if ((await deleteGitPermission(auth, pid)).ok) permsRemoved++;
+    }
+  } catch (_) { /* 授权列举失败不阻断后续 */ }
+  // 2) provider 级断开 (OAuth 类真断开; PAT 类幂等无害)
+  let provStatus = 0;
+  const provUrl = (type.indexOf("gitlab") >= 0 || host.indexOf("gitlab") >= 0)
+    ? CFG.apiBase + "/integrations/gitlab/user"
+    : CFG.apiBase + "/integrations/github/user";
+  try { provStatus = (await jsonRequest("DELETE", provUrl, authHeaders(auth))).status; } catch (_) {}
+  // 3) 复查连接元数据是否真消失 (不臆造)
+  let gone = false;
+  try {
+    const after = (await getGitConnections(auth)).connections || [];
+    gone = !after.some((c2) => (c2.id || c2.connection_id) === cid);
+  } catch (_) {}
+  if (gone) return { ok: true, status: 200, removed: true, permissionsRemoved: permsRemoved };
+  return {
+    ok: false,
+    status: provStatus || 0,
+    removed: false,
+    permissionsRemoved: permsRemoved,
+    note: "连接(" + (type || "unknown") + ")元数据平台未开放删除端点; 已清除其仓库授权 " + permsRemoved + " 条(访问权已撤)" + (type.indexOf("individual_token") >= 0 ? "; PAT 本体须在 GitHub 端撤销" : ""),
+  };
 }
 // 清理会话: 实跑确证 Devin 平台不支持硬删除对话
 //   (OPTIONS /api/sessions/{id} → Allow: GET; DELETE → 405)。
@@ -628,7 +665,7 @@ async function wipeAccount(auth, opts) {
     knowledge: { found: 0, deleted: 0, failed: 0 },
     playbooks: { found: 0, deleted: 0, failed: 0 },
     secrets: { found: 0, deleted: 0, failed: 0 },
-    gitConnections: { found: 0, deleted: 0, failed: 0 },
+    gitConnections: { found: 0, deleted: 0, failed: 0, permissionsRemoved: 0 },
     native: { knowledge: 0, playbooks: 0 }, // 本源默认(保留·不删)
     errors: [],
   };
@@ -670,9 +707,11 @@ async function wipeAccount(auth, opts) {
   for (const c of conns) {
     const id = c.id || c.connection_id;
     if (!id) { report.gitConnections.failed++; continue; }
-    const r = await disconnectGit(auth, id);
-    r.ok ? report.gitConnections.deleted++ : (report.gitConnections.failed++, report.errors.push("git:" + id + ":" + r.status));
-    prog("断开 Git 连接 " + report.gitConnections.deleted + "/" + conns.length);
+    const r = await disconnectGit(auth, c);
+    report.gitConnections.permissionsRemoved += r.permissionsRemoved || 0;
+    if (r.ok) report.gitConnections.deleted++;
+    else { report.gitConnections.failed++; report.errors.push("git:" + id + ":" + (r.note || r.status)); }
+    prog("断开 Git 连接 " + report.gitConnections.deleted + "/" + conns.length + (r.permissionsRemoved ? "(清授权" + r.permissionsRemoved + ")" : ""));
   }
   for (const s of secrets) {
     const r = await deleteSecret(auth, s.id || s.name);
@@ -956,19 +995,33 @@ async function snapshotAccountData(auth, opts) {
   ensureDir(snapDir);
 
   prog("快照: 拉取账号数据…");
+  // 单条失败不毁全局: 每条带重试·失败如实记录, 有几条存几条 (allSettled 语义·不臆造)。
+  // 旧码用 Promise.all → 任一端点瞬时失败(批量并发 429/抖动)即抛错, 整份快照丢失留下空目录。
+  const snapErrors = [];
+  const _settle = async (label, fn) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { return await fn(); }
+      catch (e) {
+        if (attempt === 2) { snapErrors.push(label + ": " + String((e && e.message) || e)); return null; }
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
+    }
+    return null;
+  };
   const [kn, pb, sec, git, billing, sess] = await Promise.all([
-    listKnowledge(auth),
-    listPlaybooks(auth),
-    listSecrets(auth),
-    getGitConnections(auth),
-    getBilling(auth),
-    listSessions(auth, 1000),
+    _settle("知识库", () => listKnowledge(auth)),
+    _settle("剧本", () => listPlaybooks(auth)),
+    _settle("密钥", () => listSecrets(auth)),
+    _settle("Git连接", () => getGitConnections(auth)),
+    _settle("额度", () => getBilling(auth)),
+    _settle("会话清单", () => listSessions(auth, 1000)),
   ]);
-  const learnings = kn.learnings || [];
-  const playbooks = pb.playbooks || [];
-  const secrets = sec.secrets || [];
-  const conns = git.connections || [];
-  const sessions = sess.sessions || [];
+  const learnings = (kn && kn.learnings) || [];
+  const playbooks = (pb && pb.playbooks) || [];
+  const secrets = (sec && sec.secrets) || [];
+  const conns = (git && git.connections) || [];
+  const sessions = (sess && sess.sessions) || [];
+  const billingObj = (billing && billing.billing) || {};
 
   // 知识库: 每条一份正文 MD + 汇总 index (机器可读)
   if (learnings.length) {
@@ -1022,7 +1075,7 @@ async function snapshotAccountData(auth, opts) {
   writeJson(path.join(snapDir, "密钥.json"), secrets);
   writeJson(path.join(snapDir, "git连接.json"), conns);
   writeJson(path.join(snapDir, "会话清单.json"), sessions);
-  writeJson(path.join(snapDir, "额度.json"), billing.billing || {});
+  writeJson(path.join(snapDir, "额度.json"), billingObj);
 
   const counts = {
     sessions: sessions.length,
@@ -1031,13 +1084,16 @@ async function snapshotAccountData(auth, opts) {
     secrets: secrets.length,
     gitConnections: conns.length,
   };
+  const partial = snapErrors.length > 0;
   writeJson(path.join(snapDir, "_manifest.json"), {
     schema: "rt-flow.devin-cloud.account-snapshot/1",
     account: auth.email,
     orgId: auth.orgId,
     snapshotAt: new Date().toISOString(),
     counts,
-    billing: billing.billing || null,
+    billing: billingObj,
+    partial,
+    errors: snapErrors,
   });
   const summaryMd = [
     "# 账号本源快照 · " + auth.email,
@@ -1055,20 +1111,24 @@ async function snapshotAccountData(auth, opts) {
     "| 密钥 | " + counts.secrets + " |",
     "| Git 连接 | " + counts.gitConnections + " |",
     "",
+    partial ? "> ⚠ 部分留底: 以下条目拉取失败(已记录, 其余如实留底):\n>\n" + snapErrors.map((e) => ">  - " + e).join("\n") + "\n" : "",
     "> 对话正文 ZIP 见同级目录 `<ID末8位>_<标题>.zip`; 知识库/剧本正文见本快照 `知识库/` `剧本/` 子目录。",
   ].join("\n");
   try { fs.writeFileSync(path.join(snapDir, "账号快照.md"), summaryMd); } catch {}
 
-  prog("快照完成: 知识" + counts.knowledge + " 剧本" + counts.playbooks + " 密钥" + counts.secrets + " Git" + counts.gitConnections);
-  return { ok: true, account: auth.email, dir: snapDir, counts };
+  prog("快照" + (partial ? "(部分)" : "完成") + ": 知识" + counts.knowledge + " 剧本" + counts.playbooks + " 密钥" + counts.secrets + " Git" + counts.gitConnections);
+  return { ok: true, account: auth.email, dir: snapDir, counts, partial, errors: snapErrors };
 }
 
 // 完整本源备份 = 会话 ZIP(增量) + 账号数据全量快照. 供「备份并清空」一步到位。
 async function backupAccountFull(auth, opts) {
   opts = opts || {};
-  const conversations = await backupAccount(auth, opts);
+  // 对话备份失败(瞬时抖动/超时)不应连累数据快照 —— 两段相互独立, 各自尽力留底。
+  let conversations = null, convError = null;
+  try { conversations = await backupAccount(auth, opts); }
+  catch (e) { convError = String((e && e.message) || e); }
   const snapshot = await snapshotAccountData(auth, opts);
-  return { ok: true, account: auth.email, conversations, snapshot };
+  return { ok: true, account: auth.email, conversations, convError, snapshot };
 }
 
 // ═══ 备份浏览 + 快速解锁(解压) ════════════════════════════════════════════
@@ -1326,6 +1386,8 @@ module.exports = {
   deletePlaybook,
   deleteSecret,
   disconnectGit,
+  listGitPermissions,
+  deleteGitPermission,
   deleteSession,
   wipeAccount,
   // backup

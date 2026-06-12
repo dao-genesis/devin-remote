@@ -2,6 +2,47 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.1.2 (2026-06-12) · Git 断开正本清源 · 不臆造成功(前端 bundle 实证)
+
+> *知不知，尚矣；不知不知，病矣。* —— 旧码"臆造成功"是病, 病病乃不病。
+
+### 实测发现(GUI 一键备份并清空 lhfsrb → 复查 Git 仍在)
+- `disconnectGit` 旧码试三个 `/git-connections/{id}` 形态(org-scoped/裸 id/org-bare),
+  **真号实跑全部恒 404/405** —— 唯一 404 还被当"已删"(幂等)→ 实为臆造: 啥也没断, 却记成功。
+- 道法自然·从根本审: 拉取 Devin 前端 414 个 chunk, 逐函数审 `useQuery-*.js` 的 git API 全集:
+  - 列连接: `GET /organizations/{orgId}/git-connections-metadata` (只读·GET)
+  - 列仓库授权: `GET /{orgId}/integrations/git-permissions?connection_id={cid}`
+  - 删仓库授权: `DELETE /{orgId}/integrations/git-permissions/{permId}` → `{success:true}` (真删)
+  - OAuth 断开: `DELETE /integrations/github/user` · `DELETE /integrations/gitlab/user`
+  - **平台无"按 id 删 git 连接"端点**; 连接元数据记录本身删不掉(PAT 与 github_app 均如此)。
+
+### 修 · 真删可删·残留如实报(不臆造)
+- `disconnectGit(auth, conn)`: 改用实证端点 ——
+  1) 列并删该连接全部 `git-permissions`(真实移除仓库访问权·返 `{success:true}`);
+  2) 调 provider 级断开(OAuth 真断·PAT 幂等无害);
+  3) 复查 `git-connections-metadata`: 连接消失→`removed:true`(真断); 残留(PAT 典型)→
+     `ok:false` 并如实回报 `permissionsRemoved` + note(PAT 本体须在 GitHub 端撤销)。
+- 真号验证(lkwpv1740858777·PAT·2 授权): 授权 **2→0**(实删·复查确认), 连接元数据残留并如实标注。
+- 集成全链路实跑(lcrlpjt52958·github_app): `backupAccountFull`(快照 7知识/34剧本/1密钥/1Git·零误·先留底) → `wipeAccount`:
+  知识 **4/4**、剧本 **2/2**、密钥 **1/1** 真删; Git 授权 **1→0**(访问权实撤), 连接元数据残留如实回报;
+  本源默认完整保留(3 内置知识 + 32 社区剧本)。
+- 新增 `listGitPermissions`/`deleteGitPermission` 导出; `wipeAccount.gitConnections` 增 `permissionsRemoved` 计数。
+
+## v4.1.1 (2026-06-12) · 快照健壮化 · 一条失败不毁全局(GUI 实测揪出)
+
+> *合抱之木，生于毫末；九成之台，作于累土* —— 一条端点抖动，本不该毁掉整份留底。
+
+### 实测发现(Devin Desktop 冷启动·12 账号库 GUI 全部备份)
+- 12 账号批量备份: **10/12 快照正常(各 10 文件)**, 但 2 个失败:
+  - 活跃账号 `lcld`(105 对话): 快照目录创建但**空(0 文件)** —— `snapshotAccountData` 用 `Promise.all`, 六个 list 端点任一在并发批量下瞬时失败(抖动/限流)即抛错, 整份快照丢失只留空目录。
+  - `likhh`(74 对话): **无快照目录** —— `backupAccountFull` 先备份对话再快照, 对话备份抛错则快照根本没机会跑。
+- 单独 node 复跑两账号均成功(280/173/2 · 4/33/1), 证实为并发瞬时失败, 非逻辑错。
+
+### 修复 · 各自尽力·不臆造
+- `snapshotAccountData`: `Promise.all` → 每条 `_settle`(带 3 次重试+退避·allSettled 语义)。一条失败只记 `snapErrors` 并续跑, 有几条存几条; `_manifest.json`/`账号快照.md` 写入 `partial`+`errors` 如实标注。空目录缺陷消除(必有 manifest/index 留底)。
+- `backupAccountFull`: 对话备份与数据快照解耦 —— 对话备份抛错不再连累快照, 各自留底, 回传 `convError`。
+- 实测复跑: lcld/likhh 均产出完整 10 文件快照·零错误。
+
 ## v4.1.0 (2026-06-12) · 各方面数据存好 · 备份并清空一步到位
 
 > *既得其母，以知其子，复守其母，没身不殆* —— 留底为母，清空为子；先留母后去子，账号可复。
