@@ -33,11 +33,11 @@ devin-remote/
 
 ## ① 四核心插件 — plugins/
 
-### dao-vsix v1.1.0 · Devin 全功能面板 + 路由官网
+### dao-vsix v1.2.0 · Devin 全功能面板 + 路由官网
 
-核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传）。零输入获取 cog_ API Key（POST /service-users + auth1 自动换取），彻底移除面板所有手动 API Key 输入/引导。官网注入加固：session-token 与 auth1 严格隔离。补回缺失的 build.js。登录实时同步修复 + 账号池解析链。
+核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传）。零输入获取 cog_ API Key（POST /service-users + auth1 自动换取），彻底移除面板所有手动 API Key 输入/引导。v1.2.0：增补测试聊天内置存根通道，与 dao-proxy-pro v9.9.276 配套。官网注入加固：session-token 与 auth1 严格隔离。
 
-**VSIX**: `plugins/dao-vsix/dao-vsix-1.1.0.vsix` · **源码**: `plugins/dao-vsix/src/extension.ts`
+**VSIX**: `plugins/dao-vsix/dao-vsix-1.2.0.vsix` · **源码**: `plugins/dao-vsix/src/extension.ts`
 
 ### dao-bridge v3.0.0 · 工作区内网穿透
 
@@ -51,11 +51,11 @@ devin-remote/
 
 **VSIX**: `plugins/devin-git-auth/devin-git-auth-2.2.0.vsix` · **源码**: `plugins/devin-git-auth/extension.js`
 
-### dao-proxy-pro v9.9.274 · 提示词隔离 + 外接路由
+### dao-proxy-pro v9.9.276 · 提示词隔离 + 外接路由
 
-底层拦截 IDE AI 请求，隔离替换提示词（道藏规则 + 用户自定义注入），外接第三方模型路由。vendor 目录含 LSP 模拟器、适应性路由、预算控制、三模块面板（49 家模型归一 + 测通）。
+底层拦截 IDE AI 请求，隔离替换提示词（道藏规则 + 用户自定义注入），外接第三方模型路由。v9.9.276：测试聊天支持内置存根通道。vendor 目录含 LSP 模拟器、适应性路由、预算控制、三模块面板（49 家模型归一 + 测通）。
 
-**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.274.vsix`
+**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.276.vsix`
 
 ---
 
