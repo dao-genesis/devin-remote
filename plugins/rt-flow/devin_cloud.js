@@ -732,7 +732,7 @@ function backupStateKey(auth, devinId) {
 }
 async function backupOneConversation(auth, sess, accountDir, opts) {
   opts = opts || {};
-  const devinId = sess.devin_id || sess.session_id || sess.id;
+  const devinId = sess.devin_id || sess.devinId || sess.session_id || sess.id;
   const title = sess.title || sess.name || "未命名";
   const events = await getEventStream(auth, devinId);
 
