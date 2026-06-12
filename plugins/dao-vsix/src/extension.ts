@@ -213,7 +213,7 @@ let _daoExtPath: string = '';
 let credSyncTimer: ReturnType<typeof setInterval> | null = null;
 let lastSyncedApiKey: string = '';
 let lastSyncedEmail: string = '';
-const CRED_SYNC_INTERVAL = 5000; // 5秒轮询 — RT Flow同源频率
+const CRED_SYNC_INTERVAL = 2500; // 2.5秒轮询 — RT Flow同源频率(实时跟随切号)
 // 帛书规则缓存 (你本无名…道德经/阴符经 7758字) — 一次读取，缓存复用
 let _daoRulesCache: string | null = null;
 function getDaoRulesText(): string {
@@ -1788,7 +1788,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="hd">
 <span class="t">Devin Cloud</span>
 <span class="b ${loggedIn ? 'ok' : 'off'}" id="ab">${loggedIn ? '✓ ' + mpEsc(email.split('@')[0]) : '未连接'}</span>
-${orgName ? '<span class="b" style="background:#2d5a8a">' + mpEsc(orgName) + '</span>' : ''}
+<span class="b" id="ob" style="background:#2d5a8a${orgName ? '' : ';display:none'}">${mpEsc(orgName)}</span>
 <span class="sp"></span>
 <button class="hb" onclick="cmd('openBrowser')">🌐 官网</button>
 <button class="hb" onclick="cmd('refresh')">⟳</button>
@@ -1910,7 +1910,9 @@ function hm(){document.getElementById('mo').classList.add('hid')}
 function doOk(){if(window._onOk&&window._onOk()!==false)hm()}
 function toast(msg,ok){const t=document.getElementById('toast');t.textContent=msg;t.className='toast '+(ok?'ok':'err');setTimeout(()=>t.classList.add('hid'),3000)}
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});Object.assign(S.cf,d.cf||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;usb();rc()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+// 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
+function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});Object.assign(S.cf,d.cf||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab);if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
@@ -3203,11 +3205,18 @@ async function devinAutoChain(): Promise<boolean> {
     try {
         const wsCreds0 = readWindsurfCredentials(true);
         ideToken = (wsCreds0 && wsCreds0.apiKey) || '';
-        currentIdeEmail = (wsCreds0 && wsCreds0.email) || '';
-        if (!currentIdeEmail && ideToken && ideToken.startsWith('devin-session-token$')) {
-            const resolved = await resolveActiveEmailFromToken(ideToken);
-            if (resolved) currentIdeEmail = resolved.email;
+        const regexEmail = (wsCreds0 && wsCreds0.email) || '';
+        // 权威 whoami: session token 必经 GetUserStatus 解析当前登录 email。
+        // 帛书·「不出於戶以知天下」— 决不信任 vscdb 全二进制正则:
+        // 切号后旧账号 windsurf_auth-<旧email>-usages 残留, 正则取第一个匹配可能命中旧账号 → 串号。
+        if (ideToken && ideToken.startsWith('devin-session-token$')) {
+            try {
+                const resolved = await resolveActiveEmailFromToken(ideToken);
+                if (resolved && resolved.email) currentIdeEmail = resolved.email;
+            } catch { /* 守柔 */ }
         }
+        // 兜底: API 不可达时才退回正则邮箱(聊胜于无, 不阻断流程)
+        if (!currentIdeEmail) currentIdeEmail = regexEmail;
     } catch { /* 守柔 */ }
     // 即刻反映当前 IDE 账号 — 即便后续换不到 auth1, 面板也显示正确账号(永不串号)
     if (currentIdeEmail) ws.devinEmail = currentIdeEmail;
@@ -3671,7 +3680,9 @@ function startCredentialSync() {
                 ws.devinEmail = '';
 
                 ws.devinAutoSyncing = true;
+                // 即刻清掉顶部旧账号徽章 — 不让用户看到老旧态(帛书·「反者道之动」)
                 sidebarCloudPanel?.refresh();
+                refreshDaoCloudMiddlePanel();
 
                 const ok = await devinAutoChain();
                 ws.devinAutoSyncing = false;
@@ -3694,8 +3705,11 @@ function startCredentialSync() {
                     try { await runInjectProfileSelfLoop(); } catch {}
                 } else {
                     // 换不到 auth1 — 至少让面板显示当前 IDE 账号(不串号、不空白)
-                    if (newEmail) ws.devinEmail = newEmail;
+                    // devinAutoChain 已把 ws.devinEmail 置为权威 whoami 邮箱; 这里仅兜底
+                    if (!ws.devinEmail && newEmail) ws.devinEmail = newEmail;
                     sidebarCloudPanel?.refresh();
+                    refreshDaoCloudMiddlePanel();
+                    updateStatusBar();
                 }
             }
         } catch {}
