@@ -20,9 +20,9 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\too
 
 | 板块 | 版本 | 下载 |
 |------|------|------|
-| ① dao-vsix · 全功能面板 | 1.2.1 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-vsix-1.2.1.vsix) |
+| ① dao-vsix · 全功能面板 | 1.2.7 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-vsix-1.2.7.vsix) |
 | ② dao-bridge · 内网穿透 | 3.0.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-bridge-3.0.0.vsix) |
-| ③ devin-git-auth · 多账号 Git | 2.3.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/devin-git-auth-2.3.0.vsix) |
+| ③ devin-git-auth · 多账号 Git | 2.3.2 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/devin-git-auth-2.3.2.vsix) |
 | ④ dao-proxy-pro · 模型路由 | 9.9.277 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-proxy-pro-9.9.277.vsix) |
 | ⑤ rt-flow · Cloud 备份/wipe | 4.1.2 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/rt-flow-4.1.2.vsix) |
 | 模块 · dao-export · 全量导出 | 1.3.3 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-devin-export-1.3.3.vsix) |
@@ -61,11 +61,11 @@ devin-remote/
 
 ## ① 五核心插件 — plugins/
 
-### dao-vsix v1.2.1 · Devin 全功能面板 + 路由官网
+### dao-vsix v1.2.7 · Devin 全功能面板 + 路由官网
 
 核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传）。零输入获取 cog_ API Key（POST /service-users + auth1 自动换取），彻底移除面板所有手动 API Key 输入/引导。v1.2.0：增补测试聊天内置存根通道，与 dao-proxy-pro v9.9.276 配套。官网注入加固：session-token 与 auth1 严格隔离。
 
-**VSIX**: `plugins/dao-vsix/dao-vsix-1.2.1.vsix` · **源码**: `plugins/dao-vsix/src/extension.ts`
+**VSIX**: 见 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)（本插件 VSIX 已 gitignore，`npm run compile && vsce package` 现产） · **源码**: `plugins/dao-vsix/src/extension.ts`
 
 ### dao-bridge v3.0.0 · 工作区内网穿透
 
@@ -73,11 +73,11 @@ devin-remote/
 
 **VSIX**: `plugins/cf-daohub/dao-bridge-ext/dao-bridge-3.0.0.vsix` · **源码**: `plugins/cf-daohub/dao-bridge-ext/extension.js`
 
-### devin-git-auth v2.3.0 · 多账号 GitHub 认证
+### devin-git-auth v2.3.2 · 多账号 GitHub 认证
 
 零输入：自动加载 `~/.dao/accounts.json` 账号池 + `~/.dao/git-pats.json` PAT。"already registered" 智能处理 + 仓库可达性核验。全 13 账号实测：9/13 可访问 `devin-remote`（10 个已连通），余 3 个卡在后端"已注册但 0 连接"幽灵态 —— 如实诊断、不做假兜底。
 
-**VSIX**: `plugins/devin-git-auth/devin-git-auth-2.3.0.vsix` · **源码**: `plugins/devin-git-auth/extension.js`
+**VSIX**: `plugins/devin-git-auth/devin-git-auth-2.3.2.vsix` · **源码**: `plugins/devin-git-auth/extension.js`
 
 ### dao-proxy-pro v9.9.277 · 提示词隔离 + 外接路由
 
