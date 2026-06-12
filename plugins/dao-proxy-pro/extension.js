@@ -4335,8 +4335,12 @@ function getEaConfigHtml(port, nonce) {
       var p = _providers[name] || {};
       var builtin = !!p._builtin;
       var disp = p._label || name;
-      var alive = _health[name] && _health[name].alive;
-      var dotColor = builtin ? '#6bb86b' : (alive ? '#6bb86b' : (_health[name] ? '#e08080' : 'rgba(128,128,128,0.4)'));
+      var h = _health[name];
+      var alive = h && h.alive === true;
+      // 绿=探活通; 红=探活失败(key无效/不可达); 灰=尚未探测或结果未知(alive==null)
+      var dotColor = builtin ? '#6bb86b'
+        : (alive ? '#6bb86b'
+          : ((h && h.alive === false) ? '#e08080' : 'rgba(128,128,128,0.4)'));
       var mods = (p.models || p._models || []).join(', ');
       var row = document.createElement('div');
       row.className = 'model-item';
@@ -4609,6 +4613,8 @@ function getEaConfigHtml(port, nonce) {
     if (!name || !url) { _daoToast('名称和 URL 必填'); return; }
     var cfg = { baseUrl: url, apiKey: key };
     if (modelsRaw) cfg.models = modelsRaw.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+    var btnAdd = this;
+    btnAdd.textContent = '添加中…';
     fPost('/origin/ea/provider', { name: name, cfg: cfg })
       .then(function(r) {
         if (r.ok) {
@@ -4616,24 +4622,34 @@ function getEaConfigHtml(port, nonce) {
           document.getElementById('provUrl').value = '';
           document.getElementById('provKey').value = '';
           document.getElementById('provModels').value = '';
-          loadConfig();
+          // ★ 加 key 即自动探活 + 自动拿模型 → 通则变绿 (无需手点"探测")
+          btnAdd.textContent = '探活中…';
+          _autoProbe().then(function() {
+            return loadConfig();
+          }).then(function() {
+            btnAdd.textContent = '+ 添加';
+            var hh = _health[name];
+            if (hh && hh.alive === true) _daoToast('渠道 ' + name + ' 已连通 · 绿');
+            else if (hh && hh.alive === false) _daoToast('渠道 ' + name + ' 探活失败 · 检查 apiKey/URL');
+          });
         } else {
+          btnAdd.textContent = '+ 添加';
           _daoToast('添加失败: ' + (r.error || 'unknown'));
         }
-      }).catch(function(e) { _daoToast('请求失败: ' + e.message); });
+      }).catch(function(e) { btnAdd.textContent = '+ 添加'; _daoToast('请求失败: ' + e.message); });
   });
 
-  // ── 探测健康 ──
+  // ── 探测健康 (统一入口 · 加渠道/手点/首载共用) ──
+  function _autoProbe() {
+    return fPost('/origin/ea/probe', {}).then(function(r) {
+      if (r.ok && r.providers) { _health = r.providers; render(); }
+      return r;
+    }).catch(function() { return null; });
+  }
   document.getElementById('btnProbe').addEventListener('click', function() {
     var btn = this;
     btn.textContent = '探测中...';
-    fPost('/origin/ea/probe', {}).then(function(r) {
-      if (r.ok && r.providers) {
-        _health = r.providers;
-        render();
-      }
-      btn.textContent = '探测';
-    }).catch(function() { btn.textContent = '探测'; });
+    _autoProbe().then(function() { btn.textContent = '探测'; });
   });
 
   // ── 路由弹窗 ──
@@ -4876,12 +4892,8 @@ function getEaConfigHtml(port, nonce) {
 
   // ── 初始加载 ──
   loadConfig();
-  // 首次探测健康
-  setTimeout(function() {
-    fPost('/origin/ea/probe', {}).then(function(r) {
-      if (r.ok && r.providers) { _health = r.providers; render(); }
-    }).catch(function() {});
-  }, 1000);
+  // 首次探测健康 (统一走 _autoProbe)
+  setTimeout(function() { _autoProbe(); }, 1000);
 })();
 </script>
 </body>

@@ -51,11 +51,11 @@ devin-remote/
 
 **VSIX**: `plugins/devin-git-auth/devin-git-auth-2.2.0.vsix` · **源码**: `plugins/devin-git-auth/extension.js`
 
-### dao-proxy-pro v9.9.276 · 提示词隔离 + 外接路由
+### dao-proxy-pro v9.9.277 · 提示词隔离 + 外接路由
 
-底层拦截 IDE AI 请求，隔离替换提示词（道藏规则 + 用户自定义注入），外接第三方模型路由。v9.9.276：测试聊天支持内置存根通道。vendor 目录含 LSP 模拟器、适应性路由、预算控制、三模块面板（49 家模型归一 + 测通）。
+底层拦截 IDE AI 请求，隔离替换提示词（道藏规则 + 用户自定义注入），外接第三方模型路由。vendor 目录含 LSP 模拟器、适应性路由、预算控制、三模块面板（49 家模型归一 + 测通）。v9.9.277：修复「渠道配置永远红点」——无 healthCheck 的用户渠道探活返回 `alive:null` 被渲染成红点；探活改为「带 Bearer 鉴权的 /models 探测」（HTTP 200 即绿、自动回填模型），并修复 baseUrl 已含 `/v1` 时模型探测拼成 `/v1/v1/models` 404；前端加 key 即自动探活+拿模型+变绿。
 
-**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.276.vsix`
+**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.277.vsix`
 
 ---
 

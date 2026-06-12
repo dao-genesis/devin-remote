@@ -1979,13 +1979,26 @@ function _checkHealth(name, healthUrl) {
       return resolve(false);
     }
     const mod = u.protocol === "https:" ? https : http;
+    // ★ 健康探测需带鉴权: 第三方模型站 /v1/models 多需 Bearer · 无 key 必 401 → 误判 DEAD(红点)
+    //   道义: 三十九章「得一以宁」· 得 apiKey 之全方能验真
+    const headers = { Accept: "application/json" };
+    const provCfg = _providers[name];
+    if (provCfg && provCfg.apiKey && !/\*{2,}/.test(provCfg.apiKey)) {
+      headers["Authorization"] = "Bearer " + provCfg.apiKey;
+      if (provCfg.type === "anthropic") {
+        headers["x-api-key"] = provCfg.apiKey;
+        headers["anthropic-version"] = "2023-06-01";
+      }
+    }
     const req = mod.request(
       {
         hostname: u.hostname,
         port: parseInt(u.port || (u.protocol === "https:" ? "443" : "80")),
-        path: u.pathname,
+        path: u.pathname + (u.search || ""),
         method: "GET",
-        timeout: 3000,
+        headers,
+        timeout: 5000,
+        rejectUnauthorized: false,
       },
       (res) => {
         res.resume();
@@ -3436,27 +3449,56 @@ function resetHealthCache() {
   _log("[dao-router] 健康缓存已清空");
 }
 
-/** 主动探测所有provider健康 · 热重载后立即执行 */
+/**
+ * 拼出 provider 的模型列表 URL · 防 baseUrl 已含 /vN 时重复拼 /v1 → /v1/v1/models 404
+ *   道义: 二十二章「曲则全」· baseUrl 多形(含/不含版本段) · 归一方得真路
+ */
+function _modelsUrlFor(cfg) {
+  const base = String(cfg.baseUrl || _gatewayUrl).replace(/\/+$/, "");
+  // baseUrl 已以 /v1 /v2 ... 结尾 → 仅补 /models; 否则补 /v1/models
+  if (/\/v\d+$/i.test(base)) return base + "/models";
+  return base + "/v1/models";
+}
+
+/** 主动探测所有provider健康 · 热重载后立即执行
+ *  无显式 healthCheck 的渠道(用户新加渠道默认即此) → 走「带鉴权的 /models 探测」:
+ *    HTTP 200 ⇒ key 有效 + 可列模型 ⇒ ALIVE(绿点); 401/403/超时 ⇒ DEAD(红点).
+ *  探活成功且渠道未配 models 时顺手回填 → 满足「加 key 即自动拿模型」.
+ */
 async function probeAllProviders() {
   const results = {};
   for (const [name, cfg] of Object.entries(_providers)) {
-    if (!cfg.healthCheck) {
-      results[name] = { alive: null, reason: "no healthCheck" };
+    // 内置桩通道无需出网探测
+    if (cfg._builtin || name === "builtin-stub") {
+      results[name] = { alive: true, builtin: true };
       continue;
     }
-    let hcUrl = cfg.healthCheck;
-    if (hcUrl.startsWith("/")) {
-      const base = cfg.baseUrl || _gatewayUrl;
-      try {
-        const baseU = new URL(base);
-        hcUrl = `${baseU.protocol}//${baseU.hostname}:${baseU.port || (baseU.protocol === "https:" ? "443" : "80")}${hcUrl}`;
-      } catch {
-        hcUrl = `http://127.0.0.1:7788${hcUrl}`;
+    let hcUrl;
+    if (cfg.healthCheck) {
+      hcUrl = cfg.healthCheck;
+      if (hcUrl.startsWith("/")) {
+        const base = cfg.baseUrl || _gatewayUrl;
+        try {
+          const baseU = new URL(base);
+          hcUrl = `${baseU.protocol}//${baseU.hostname}:${baseU.port || (baseU.protocol === "https:" ? "443" : "80")}${hcUrl}`;
+        } catch {
+          hcUrl = `http://127.0.0.1:7788${hcUrl}`;
+        }
       }
+    } else {
+      // 默认探活端点 = 带鉴权的模型列表 (与「探测模型」同源)
+      hcUrl = _modelsUrlFor(cfg);
     }
     const alive = await _checkHealth(name, hcUrl);
     results[name] = { alive, url: hcUrl };
     _log(`[dao-router] probe ${name}: ${alive ? "ALIVE" : "DEAD"} · ${hcUrl}`);
+    // 探活成功 + 未配模型 → 顺手拉取一次模型列表回填 (best-effort · 不阻塞探活结果)
+    if (alive && !(Array.isArray(cfg.models) && cfg.models.length > 0)) {
+      try {
+        const m = await hotListProviderModels(name);
+        if (m && m.ok && Array.isArray(m.models)) results[name].models = m.models;
+      } catch {}
+    }
   }
   return results;
 }
@@ -3795,10 +3837,9 @@ async function hotListProviderModels(providerName) {
     return { ok: true, models: provCfg.models, source: "config" };
   }
 
-  // 2. 尝试 /v1/models 探测
+  // 2. 尝试 /models 探测 (智能拼接 · 防 baseUrl 已含 /vN 时 → /v1/v1/models 404)
   try {
-    const baseUrl = provCfg.baseUrl || _gatewayUrl;
-    const modelsUrl = new URL(baseUrl.replace(/\/$/, "") + "/v1/models");
+    const modelsUrl = new URL(_modelsUrlFor(provCfg));
     const isHttps = modelsUrl.protocol === "https:";
     const mod = isHttps ? https : http;
     const headers = {};
