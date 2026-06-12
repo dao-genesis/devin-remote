@@ -1297,6 +1297,40 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
             return await devinDeletePlaybook(ws.devinOrgId, id, ws.devinAuth1);
         }
+        case '/api/devin/usage/limit': {
+            // 调整单条消息/会话额度上限 — body:{maxCredits}
+            const ulb = await readBody(req);
+            const { maxCredits } = JSON.parse(ulb || '{}');
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            if (typeof maxCredits !== 'number') return { ok: false, error: 'maxCredits (number) required' };
+            return await devinSetMessageLimit(ws.devinOrgId, maxCredits, ws.devinAuth1);
+        }
+        case '/api/devin/mcp/installations': {
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            return await devinListMcpInstallations(ws.devinOrgId, ws.devinAuth1);
+        }
+        case '/api/devin/mcp/add': {
+            // 追录自定义 MCP — body: {name, transport, command/args/env_variables | url/headers, ...}
+            const mab = await readBody(req);
+            const spec = JSON.parse(mab || '{}');
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            if (!spec.name) return { ok: false, error: 'name required' };
+            return await devinAddCustomMcp(ws.devinOrgId, spec, ws.devinAuth1);
+        }
+        case '/api/devin/mcp/delete': {
+            const mdb = await readBody(req);
+            const { id } = JSON.parse(mdb || '{}');
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            if (!id) return { ok: false, error: 'id required' };
+            return await devinDeleteMcp(ws.devinOrgId, id, ws.devinAuth1);
+        }
+        case '/api/devin/session/delete': {
+            const sdb = await readBody(req);
+            const { id } = JSON.parse(sdb || '{}');
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            if (!id) return { ok: false, error: 'session id required' };
+            return await devinDeleteSession(ws.devinOrgId, id, ws.devinAuth1);
+        }
         case '/api/devin/git/connections': {
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
             return await devinCheckGitConnections(ws.devinOrgId, ws.devinAuth1);
@@ -2158,8 +2192,15 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'mcp') {
-                            result = await devinListMcpServers(ws.devinOrgId, ws.devinAuth1);
-                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            // 官网 MCP = 市场目录(servers) + 本组织自定义安装(installations); 二者合并呈现
+                            const [cat, inst] = await Promise.all([
+                                devinListMcpServers(ws.devinOrgId, ws.devinAuth1),
+                                devinListMcpInstallations(ws.devinOrgId, ws.devinAuth1),
+                            ]);
+                            const installed = (inst.items || []).map((m: any) => Object.assign({}, m, { name: '★ ' + m.name }));
+                            const merged = installed.concat(cat.items || []);
+                            result = { ok: cat.ok || inst.ok };
+                            if (result.ok) reply({ type: 'tabData', tab, items: merged });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'automations') {
                             result = await devinListAutomations(ws.devinOrgId, ws.devinAuth1);
@@ -3683,6 +3724,27 @@ async function devinGetSessionMessages(orgId: string, sessionId: string, auth1: 
     return { ok: true, messages: [] };
 }
 
+// 删除会话 (单条): 官网 Sessions 页删除 → auth1 直删。多端点候选 + 归档兜底, 守柔。
+async function devinDeleteSession(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; status?: number; archived?: boolean }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    const candidates = [
+        DEVIN_APP + '/api/sessions/' + sessionId,
+        DEVIN_APP + '/api/org-' + bareOrgId + '/sessions/' + sessionId,
+    ];
+    let last = 0;
+    for (const url of candidates) {
+        const r = await devinJsonDelete(url, H);
+        last = r.status;
+        if (r.status === 200 || r.status === 204) return { ok: true, status: r.status };
+    }
+    for (const url of candidates) {
+        const r = await devinJsonPost(url, H, { archived: true });
+        if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status, archived: true };
+    }
+    return { ok: false, status: last };
+}
+
 // ═══════════════════════════════════════════════════════════
 // 本地对话提取 · 移植自 dao-devin-export 1.3.2 — 帛书·「修之天下·其德乃博」
 // 事件流(event stream)是会话的唯一全息真源: 含 user/devin 消息 + 思考 +
@@ -3943,6 +4005,70 @@ async function devinListMcpServers(orgId: string, auth1: string): Promise<{ ok: 
         connected: !!(m.is_connected || m.connected || m.status === 'connected'),
     }));
     return { ok: true, items };
+}
+
+// 帛书·「天下之物生於有」— 官网即一切, 以下端点皆由 Chrome CDP 实操官网时抓得:
+//   单条消息额度 POST /api/org-<bare>/billing/usage/limits {max_credits}
+//   自定义 MCP   GET/POST /api/mcp/installations · DELETE /api/mcp/installations/mcp-installation-<id>
+// 面板为官网下游镜像: 同源 auth1 直读直写, 账号切换即整体跟随。
+
+// 调整单条会话/消息的额度上限 (Usage & limits 页那个可调数字)
+async function devinSetMessageLimit(orgId: string, maxCredits: number, auth1: string): Promise<{ ok: boolean; status?: number }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const r = await devinJsonPost(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/usage/limits',
+        { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId }, { max_credits: maxCredits });
+    return { ok: r.status === 200 || r.status === 201 || r.status === 204, status: r.status };
+}
+
+// 列出本组织已安装的自定义 MCP (与官网 Connections 一致)
+async function devinListMcpInstallations(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const r = await devinJsonGet(DEVIN_APP + '/api/mcp/installations', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [] };
+    const arr = Array.isArray(r.json) ? r.json : (Array.isArray(r.json && r.json.installations) ? r.json.installations : []);
+    const items = arr.map((m: any) => ({
+        name: m.name || m.slug || 'MCP',
+        detail: (m.short_description || m.description || '').toString().substring(0, 120),
+        id: m.id || m.installation_id || '',
+        transport: m.transport || '',
+        connected: m.is_enabled !== false,
+    }));
+    return { ok: true, items };
+}
+
+// 追录: 把一个自定义 MCP 直接注册进官网 (STDIO: command/args/env; HTTP/SSE: url)
+async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promise<{ ok: boolean; status?: number; id?: string }> {
+    const name = String(spec.name || '').trim();
+    const slug = String(spec.slug || name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const transport = (spec.transport || 'STDIO').toUpperCase();
+    const payload: any = {
+        name, slug,
+        short_description: spec.short_description || '',
+        description: spec.description || '',
+        transport,
+        is_enabled: spec.is_enabled !== false,
+        icon: spec.icon || '',
+        installation_scope: spec.installation_scope || 'org',
+    };
+    if (transport === 'STDIO') {
+        payload.command = spec.command || '';
+        payload.args = Array.isArray(spec.args) ? spec.args : [];
+        payload.env_variables = Array.isArray(spec.env_variables) ? spec.env_variables : [];
+    } else {
+        // HTTP / SSE: 远程 URL + 可选鉴权头 (用于追录本地 141 经 dao-relay 暴露的公网端点)
+        payload.url = spec.url || '';
+        if (spec.headers) payload.headers = spec.headers;
+    }
+    const r = await devinJsonPost(DEVIN_APP + '/api/mcp/installations',
+        { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId }, payload);
+    const j = r.json || {};
+    return { ok: r.status === 200 || r.status === 201, status: r.status, id: j.id || j.installation_id };
+}
+
+// 删除自定义 MCP (id 需带 mcp-installation- 前缀; 自动补全)
+async function devinDeleteMcp(orgId: string, installationId: string, auth1: string): Promise<{ ok: boolean; status?: number }> {
+    const id = installationId.startsWith('mcp-installation-') ? installationId : 'mcp-installation-' + installationId.replace(/^mcp-installation-/, '');
+    const r = await devinJsonDelete(DEVIN_APP + '/api/mcp/installations/' + id, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    return { ok: r.status === 200 || r.status === 204 || r.status === 404, status: r.status };
 }
 
 async function devinListAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
