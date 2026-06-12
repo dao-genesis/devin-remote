@@ -535,8 +535,16 @@ async function deleteKnowledge(auth, id) {
   return { ok: okDelete(r.status), status: r.status };
 }
 async function deletePlaybook(auth, id) {
-  const r = await jsonRequest("DELETE", CFG.apiBase + "/org-" + auth.orgBare + "/playbooks/" + id, authHeaders(auth));
-  return { ok: okDelete(r.status), status: r.status };
+  // 实跑确证: 正确端点为 DELETE /api/playbooks/{id} (返 200·真删)。
+  // 旧端点 /api/org-{bare}/playbooks/{id} 恒返 404, 被 okDelete 误判为"已删"→ 臆造成功。
+  let r = await jsonRequest("DELETE", CFG.apiBase + "/playbooks/" + id, authHeaders(auth));
+  if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status };
+  // 兜底: 旧 org 作用域端点 (唯变所适)
+  const r2 = await jsonRequest("DELETE", CFG.apiBase + "/org-" + auth.orgBare + "/playbooks/" + id, authHeaders(auth));
+  if (r2.status >= 200 && r2.status < 300) return { ok: true, status: r2.status };
+  // 两端点均 404 视为"已不存在"(幂等)
+  if (r.status === 404 && r2.status === 404) return { ok: true, status: 404 };
+  return { ok: false, status: r.status };
 }
 async function deleteSecret(auth, idOrName) {
   let id = idOrName;
@@ -546,36 +554,69 @@ async function deleteSecret(auth, idOrName) {
     if (!hit) return { ok: true, status: 404 };
     id = hit.id;
   }
-  const r = await jsonRequest("DELETE", CFG.apiBase + "/org-" + auth.orgBare + "/secrets/" + id, authHeaders(auth));
-  return { ok: okDelete(r.status), status: r.status };
+  // 实跑确证: 正确端点为 DELETE /api/secrets/{id} (返 200·真删)。
+  // 旧端点 /api/org-{bare}/secrets/{id} 恒返 404, 被 okDelete 误判为"已删"→ 臆造成功。
+  let r = await jsonRequest("DELETE", CFG.apiBase + "/secrets/" + id, authHeaders(auth));
+  if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status };
+  const r2 = await jsonRequest("DELETE", CFG.apiBase + "/org-" + auth.orgBare + "/secrets/" + id, authHeaders(auth));
+  if (r2.status >= 200 && r2.status < 300) return { ok: true, status: r2.status };
+  if (r.status === 404 && r2.status === 404) return { ok: true, status: 404 };
+  return { ok: false, status: r.status };
 }
 async function disconnectGit(auth, connectionId) {
-  const r = await jsonRequest("DELETE", CFG.apiBase + "/organizations/" + auth.orgId + "/git-connections/" + connectionId, authHeaders(auth));
-  return { ok: okDelete(r.status), status: r.status };
+  // 多端点形态兜底 (org-scoped 与裸 id 形态), 命中 2xx 即真断开。
+  const urls = [
+    CFG.apiBase + "/organizations/" + auth.orgId + "/git-connections/" + connectionId,
+    CFG.apiBase + "/git-connections/" + connectionId,
+    CFG.apiBase + "/org-" + auth.orgBare + "/git-connections/" + connectionId,
+  ];
+  let last = 0;
+  for (const url of urls) {
+    const r = await jsonRequest("DELETE", url, authHeaders(auth));
+    last = r.status;
+    if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status };
+  }
+  if (last === 404) return { ok: true, status: 404 };
+  return { ok: false, status: last };
 }
-// 删除会话: 尝试多种已知端点形态 (唯变所适 · 端点变动时仍能命中其一)
+// 清理会话: 实跑确证 Devin 平台不支持硬删除对话
+//   (OPTIONS /api/sessions/{id} → Allow: GET; DELETE → 405)。
+//   平台支持的"移出仪表盘"机制是归档: POST /api/sessions/{id}/archive (返 200)。
+//   对话正文已在清空前本地留底, 故归档即"水过无痕"。archived:true 如实标注。
 async function deleteSession(auth, devinId) {
+  const r = await jsonRequest("POST", CFG.apiBase + "/sessions/" + devinId + "/archive", authHeaders(auth), {});
+  if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status, archived: true };
+  // 兜底: 旧硬删除端点形态 (平台若日后开放硬删除则命中)
   const candidates = [
     CFG.apiBase + "/sessions/" + devinId,
     CFG.apiBase + "/org-" + auth.orgBare + "/sessions/" + devinId,
-    CFG.apiBase + "/devin/" + devinId,
   ];
-  let last = 0;
+  let last = r.status;
   for (const url of candidates) {
-    const r = await jsonRequest("DELETE", url, authHeaders(auth));
-    last = r.status;
-    if (okDelete(r.status)) return { ok: true, status: r.status };
-  }
-  // 删不掉则尝试归档 (软删除)
-  for (const url of candidates) {
-    const r = await jsonRequest("PATCH", url, authHeaders(auth), { archived: true, status: "archived" });
-    if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status, archived: true };
+    const d = await jsonRequest("DELETE", url, authHeaders(auth));
+    last = d.status;
+    if (d.status >= 200 && d.status < 300) return { ok: true, status: d.status };
   }
   return { ok: false, status: last };
 }
 
-// 水过无痕: 删除某账号在 Devin Cloud 的全部使用痕迹 → 回到未使用原始态
-// dryRun=true 只统计不删除 (先把所有东西找出来) · onProgress(msg) 实时回报
+// 区分"用户自有数据" vs "Devin 本源默认"(社区剧本 / 内置知识)。
+// 实跑确证: 新账号本源自带 3 条 builtin 知识(note_type=builtin·can_write=false·删返 403)
+//   + 32 个 community 剧本(access=community·org_id=Cognition clerk-org·删返 404)。
+// 这些本源默认删不掉, 也不该删 —— "回归本源"即保留它们。只清用户自建数据。
+function isUserKnowledge(k) {
+  return !!k && k.note_type !== "builtin" && k.is_default_note !== true && k.can_write !== false;
+}
+function isUserPlaybook(p, auth) {
+  if (!p) return false;
+  if (p.access === "community") return false; // Cognition 社区共享剧本
+  if (p.org_id && auth && auth.orgId && p.org_id !== auth.orgId) return false; // 非本组织
+  return true;
+}
+
+// 水过无痕: 删除某账号在 Devin Cloud 的全部"用户自建"使用痕迹 → 回到本源(默认)态。
+// dryRun=true 只统计不删除 (先把所有东西找出来) · onProgress(msg) 实时回报。
+// found 仅计可删的用户数据; 本源默认(社区剧本/内置知识)记入 native.* 不删不臆造。
 async function wipeAccount(auth, opts) {
   opts = opts || {};
   const dry = !!opts.dryRun;
@@ -588,6 +629,7 @@ async function wipeAccount(auth, opts) {
     playbooks: { found: 0, deleted: 0, failed: 0 },
     secrets: { found: 0, deleted: 0, failed: 0 },
     gitConnections: { found: 0, deleted: 0, failed: 0 },
+    native: { knowledge: 0, playbooks: 0 }, // 本源默认(保留·不删)
     errors: [],
   };
 
@@ -600,10 +642,15 @@ async function wipeAccount(auth, opts) {
     getGitConnections(auth),
   ]);
   const sessions = sess.sessions || [];
-  const learnings = kn.learnings || [];
-  const playbooks = pb.playbooks || [];
+  const allLearnings = kn.learnings || [];
+  const allPlaybooks = pb.playbooks || [];
   const secrets = sec.secrets || [];
   const conns = git.connections || [];
+  // 仅清用户自建; 本源默认单独计数保留
+  const learnings = allLearnings.filter(isUserKnowledge);
+  const playbooks = allPlaybooks.filter((p) => isUserPlaybook(p, auth));
+  report.native.knowledge = allLearnings.length - learnings.length;
+  report.native.playbooks = allPlaybooks.length - playbooks.length;
   report.sessions.found = sessions.length;
   report.knowledge.found = learnings.length;
   report.playbooks.found = playbooks.length;
@@ -612,8 +659,9 @@ async function wipeAccount(auth, opts) {
 
   if (dry) {
     prog(
-      "扫描完成: 对话" + sessions.length + " 知识库" + learnings.length +
-      " 剧本" + playbooks.length + " 密钥" + secrets.length + " Git" + conns.length,
+      "扫描完成(可清理): 对话" + sessions.length + " 知识库" + learnings.length +
+      " 剧本" + playbooks.length + " 密钥" + secrets.length + " Git" + conns.length +
+      " · 本源默认保留: 知识" + report.native.knowledge + " 剧本" + report.native.playbooks,
     );
     return report;
   }
@@ -889,6 +937,140 @@ async function backupAccount(auth, opts) {
   return result;
 }
 
+// ═══ 账号数据全量快照 (知识库/剧本/密钥/Git/额度/会话清单) ════════════════════
+// 对话正文走 backupAccount 的 ZIP; 此处补齐"各方面的数据" —— 知识库正文、剧本正文、
+// 密钥元数据(含加密值·不解密)、Git 连接、额度、会话清单 —— 全部留底本地。
+// 供「水过无痕」前一键留底, 使账号可在清空后仍可回溯。
+// 写入: <root>/<账号名>/_账号快照_<YYYYMMDDHHmmss>/
+function _snapStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+async function snapshotAccountData(auth, opts) {
+  opts = opts || {};
+  const root = opts.targetDir || DC_BACKUP_DEFAULT;
+  const prog = typeof opts.onProgress === "function" ? opts.onProgress : () => {};
+  const accountDir = path.join(root, safeName(auth.email, 80));
+  const snapDir = path.join(accountDir, "_账号快照_" + _snapStamp());
+  ensureDir(snapDir);
+
+  prog("快照: 拉取账号数据…");
+  const [kn, pb, sec, git, billing, sess] = await Promise.all([
+    listKnowledge(auth),
+    listPlaybooks(auth),
+    listSecrets(auth),
+    getGitConnections(auth),
+    getBilling(auth),
+    listSessions(auth, 1000),
+  ]);
+  const learnings = kn.learnings || [];
+  const playbooks = pb.playbooks || [];
+  const secrets = sec.secrets || [];
+  const conns = git.connections || [];
+  const sessions = sess.sessions || [];
+
+  // 知识库: 每条一份正文 MD + 汇总 index (机器可读)
+  if (learnings.length) {
+    const knDir = path.join(snapDir, "知识库");
+    ensureDir(knDir);
+    learnings.forEach((k, i) => {
+      const nm = safeName(k.name || k.title || "note", 60);
+      const md = [
+        "# " + (k.name || k.title || "(未命名)"),
+        "",
+        "- id: " + (k.id || ""),
+        "- 触发: " + (k.trigger_description || ""),
+        "- 类型: " + (k.note_type || ""),
+        "- 创建: " + (k.created_at || ""),
+        "",
+        "---",
+        "",
+        String(k.body || ""),
+      ].join("\n");
+      try { fs.writeFileSync(path.join(knDir, (i + 1) + "_" + nm + ".md"), md); } catch {}
+    });
+  }
+  writeJson(path.join(snapDir, "知识库_index.json"), learnings);
+
+  // 剧本: 每条一份正文 MD (含 examples) + 汇总 index
+  if (playbooks.length) {
+    const pbDir = path.join(snapDir, "剧本");
+    ensureDir(pbDir);
+    playbooks.forEach((p, i) => {
+      const nm = safeName(p.title || "playbook", 60);
+      const md = [
+        "# " + (p.title || "(未命名)"),
+        "",
+        "- id: " + (p.id || ""),
+        "- 状态: " + (p.status || ""),
+        "- 更新: " + (p.updated_at || ""),
+        "",
+        "---",
+        "",
+        String(p.body || ""),
+        Array.isArray(p.examples) && p.examples.length
+          ? "\n\n## examples\n\n```json\n" + JSON.stringify(p.examples, null, 2) + "\n```"
+          : "",
+      ].join("\n");
+      try { fs.writeFileSync(path.join(pbDir, (i + 1) + "_" + nm + ".md"), md); } catch {}
+    });
+  }
+  writeJson(path.join(snapDir, "剧本_index.json"), playbooks);
+
+  // 密钥(含加密值/元数据·不解密) · Git 连接 · 会话清单 · 额度
+  writeJson(path.join(snapDir, "密钥.json"), secrets);
+  writeJson(path.join(snapDir, "git连接.json"), conns);
+  writeJson(path.join(snapDir, "会话清单.json"), sessions);
+  writeJson(path.join(snapDir, "额度.json"), billing.billing || {});
+
+  const counts = {
+    sessions: sessions.length,
+    knowledge: learnings.length,
+    playbooks: playbooks.length,
+    secrets: secrets.length,
+    gitConnections: conns.length,
+  };
+  writeJson(path.join(snapDir, "_manifest.json"), {
+    schema: "rt-flow.devin-cloud.account-snapshot/1",
+    account: auth.email,
+    orgId: auth.orgId,
+    snapshotAt: new Date().toISOString(),
+    counts,
+    billing: billing.billing || null,
+  });
+  const summaryMd = [
+    "# 账号本源快照 · " + auth.email,
+    "",
+    "- 快照时间: " + new Date().toISOString(),
+    "- orgId: " + auth.orgId,
+    "",
+    "## 数据统计",
+    "",
+    "| 类别 | 数量 |",
+    "|------|------|",
+    "| 对话 | " + counts.sessions + " |",
+    "| 知识库 | " + counts.knowledge + " |",
+    "| 剧本 | " + counts.playbooks + " |",
+    "| 密钥 | " + counts.secrets + " |",
+    "| Git 连接 | " + counts.gitConnections + " |",
+    "",
+    "> 对话正文 ZIP 见同级目录 `<ID末8位>_<标题>.zip`; 知识库/剧本正文见本快照 `知识库/` `剧本/` 子目录。",
+  ].join("\n");
+  try { fs.writeFileSync(path.join(snapDir, "账号快照.md"), summaryMd); } catch {}
+
+  prog("快照完成: 知识" + counts.knowledge + " 剧本" + counts.playbooks + " 密钥" + counts.secrets + " Git" + counts.gitConnections);
+  return { ok: true, account: auth.email, dir: snapDir, counts };
+}
+
+// 完整本源备份 = 会话 ZIP(增量) + 账号数据全量快照. 供「备份并清空」一步到位。
+async function backupAccountFull(auth, opts) {
+  opts = opts || {};
+  const conversations = await backupAccount(auth, opts);
+  const snapshot = await snapshotAccountData(auth, opts);
+  return { ok: true, account: auth.email, conversations, snapshot };
+}
+
 // ═══ 备份浏览 + 快速解锁(解压) ════════════════════════════════════════════
 // 列出备份根下「账号 → 对话 ZIP」树, 供前端浏览。
 function listBackups(root) {
@@ -1000,13 +1182,14 @@ function buildAgentMd(ctx) {
   L.push("- 增量: 比较本次事件数与上次 `eventCount`，相同则跳过；事件增长则重备(追加新事件)。");
   L.push("- 浏览/解锁: 列出 `<root>/<账号>/*.zip`；解锁=本地 inflate 解压到同名文件夹 (零依赖)。");
   L.push("");
-  L.push("## 3. 水过无痕 (一键清理 → 账号回到未使用态)");
-  L.push("先列出再逐个删除 (顺序: Git→密钥→剧本→知识库→对话):");
-  L.push("- `DELETE /api/organizations/{org_id}/git-connections/{connectionId}`");
-  L.push("- `DELETE /api/org-{bare}/secrets/{secretId}`");
-  L.push("- `DELETE /api/org-{bare}/playbooks/{playbookId}`");
-  L.push("- `DELETE /api/org-{bare}/learning/{knowledgeId}`");
-  L.push("- `DELETE /api/sessions/{devinId}` (备 `/api/org-{bare}/sessions/{devinId}`；删不掉则 PATCH archived)");
+  L.push("## 3. 水过无痕 (一键清理 → 账号回到本源默认态)");
+  L.push("先列出再逐个删除 (顺序: Git→密钥→剧本→知识库→对话)。只清用户自建; 本源默认(社区剧本/内置知识)删不掉也不删:");
+  L.push("- 密钥: `DELETE /api/secrets/{secretId}` (实跑确证·返 200; 旧 `/api/org-{bare}/secrets/{id}` 恒 404)");
+  L.push("- 剧本: `DELETE /api/playbooks/{playbookId}` (实跑确证·返 200; 旧 `/api/org-{bare}/playbooks/{id}` 恒 404)");
+  L.push("- 知识库: `DELETE /api/org-{bare}/learning/{knowledgeId}` (返 200; builtin 内置知识返 403 不可删)");
+  L.push("- 对话: `POST /api/sessions/{devinId}/archive` (平台不支持硬删除·DELETE 返 405; 归档=移出仪表盘)");
+  L.push("- Git 连接: 元数据 `GET /api/organizations/{org_id}/git-connections-metadata` 只读(Allow:GET); 断开端点待实测");
+  L.push("- 用户/本源区分: 剧本 `org_id===本组织 && access!=='community'`; 知识 `note_type==='user'`");
   L.push("");
   if (accounts.length) {
     L.push("## 4. 目标账号");
@@ -1148,6 +1331,8 @@ module.exports = {
   // backup
   backupAccount,
   backupOneConversation,
+  snapshotAccountData,
+  backupAccountFull,
   listBackups,
   unlockBackup,
   // tags

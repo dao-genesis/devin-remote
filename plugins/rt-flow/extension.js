@@ -747,7 +747,7 @@ const devinCloud = require("./devin_cloud");
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.0.2";
+const VERSION = "4.1.0";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -9347,9 +9347,11 @@ async function handleWebviewMessage(msg) {
           const r = await _dvAuthFor(i);
           if (!r.ok) continue;
           try {
-            const res = await devinCloud.backupAccount(r.auth, { targetDir: dir, incremental: true });
+            const fb = await devinCloud.backupAccountFull(r.auth, { targetDir: dir, incremental: true });
+            const res = fb.conversations || { backedUp: 0, skipped: 0 };
+            const sc = (fb.snapshot && fb.snapshot.counts) || {};
             done++;
-            _toast("\u23F3 " + r.email.split("@")[0] + ": 新" + res.backedUp + " 跳过" + res.skipped + " (" + done + "/" + idx.length + ")");
+            _toast("\u23F3 " + r.email.split("@")[0] + ": 对话新" + res.backedUp + "/跳" + res.skipped + " 知识" + (sc.knowledge || 0) + " 剧本" + (sc.playbooks || 0) + " (" + done + "/" + idx.length + ")");
           } catch {}
         }
         _toast("\u2713 批量备份完成 " + done + "/" + idx.length + " → " + dir);
@@ -9383,44 +9385,62 @@ async function handleWebviewMessage(msg) {
         const summary = good
           .map(
             (s) =>
-              "• " + s.email + ": 对话" + s.rep.sessions.found + " 知识库" + s.rep.knowledge.found +
-              " 剧本" + s.rep.playbooks.found + " 密钥" + s.rep.secrets.found + " Git" + s.rep.gitConnections.found,
+              "• " + s.email + ": 待清(用户数据) 对话" + s.rep.sessions.found + " 知识库" + s.rep.knowledge.found +
+              " 剧本" + s.rep.playbooks.found + " 密钥" + s.rep.secrets.found + " Git" + s.rep.gitConnections.found +
+              ((s.rep.native && (s.rep.native.knowledge || s.rep.native.playbooks))
+                ? "  [本源默认保留: 内置知识" + s.rep.native.knowledge + " 社区剧本" + s.rep.native.playbooks + "]"
+                : ""),
           )
           .join("\n");
         const pick = await vscode.window.showWarningMessage(
-          "【水过无痕·不可逆】将永久删除以下账号在 Devin Cloud 的全部痕迹(对话/知识库/剧本/密钥/Git 连接)，使账号回到未使用态。\n\n" +
+          "【水过无痕·不可逆】将永久删除以下账号在 Devin Cloud 的全部痕迹(对话/知识库/剧本/密钥/Git 连接)，使账号回到未使用本源态。\n\n" +
             summary +
-            "\n\n确认仅用于已用尽额度、不再需要的账号。是否继续？",
+            "\n\n推荐「备份并清空」：先把对话正文+知识库/剧本/密钥/Git 全量留底本地，再一键清空回归本源。\n仅用于已用尽额度、不再需要的账号。",
           { modal: true },
-          "确认清理",
-          "建议先备份再清理",
+          "备份并清空(回归本源)",
+          "仅清空(不备份)",
         );
-        if (pick === "建议先备份再清理") {
-          const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
-          for (const s of good) {
-            try {
-              await devinCloud.backupAccount(s.auth, { targetDir: dir, incremental: true, onProgress: (m) => _toast("\u23F3 备份 " + m) });
-            } catch {}
-          }
-          _toast("\u2713 已先备份，请再次点击清理以执行删除");
-          break;
-        }
-        if (pick !== "确认清理") {
+        if (pick !== "备份并清空(回归本源)" && pick !== "仅清空(不备份)") {
           _toast("已取消清理");
           break;
         }
+        // 1.5 备份并清空: 先全量留底 (对话 ZIP + 账号数据快照), 再清空
+        if (pick === "备份并清空(回归本源)") {
+          const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+          for (const s of good) {
+            _toast("\u23F3 留底 " + s.email.split("@")[0] + " …");
+            try {
+              const fb = await devinCloud.backupAccountFull(s.auth, { targetDir: dir, incremental: true, onProgress: (m) => _toast("\u23F3 " + m) });
+              const sc = (fb.snapshot && fb.snapshot.counts) || {};
+              _toast("\u2713 已留底 " + s.email.split("@")[0] + ": 对话" + (fb.conversations ? fb.conversations.backedUp + fb.conversations.skipped : 0) + " 知识" + (sc.knowledge || 0) + " 剧本" + (sc.playbooks || 0) + " 密钥" + (sc.secrets || 0));
+            } catch (e) {
+              const stop = await vscode.window.showWarningMessage(
+                "[" + s.email + "] 留底失败: " + String((e && e.message) || e) + "\n仍要继续清空该账号吗？(数据将无法恢复)",
+                { modal: true },
+                "跳过此账号",
+                "仍要清空",
+              );
+              if (stop !== "仍要清空") { s._skip = true; }
+            }
+          }
+        }
         // 2. 执行删除
         for (const s of good) {
+          if (s._skip) { _toast("\u23ED 跳过 " + s.email.split("@")[0] + " (留底失败)"); continue; }
           _toast("\u23F3 清理 " + s.email.split("@")[0] + " …");
           try {
             const rep = await devinCloud.wipeAccount(s.auth, { onProgress: (m) => _toast("\u23F3 " + m) });
             _toast(
-              "\u2713 " + s.email.split("@")[0] + " 已清理: 对话" + rep.sessions.deleted + "/" + rep.sessions.found +
-                " 知识库" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted + " Git" + rep.gitConnections.deleted,
+              "\u2713 " + s.email.split("@")[0] + " 已回归本源: 对话归档" + rep.sessions.deleted + "/" + rep.sessions.found +
+                " 知识库" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted +
+                (rep.gitConnections.found ? " Git" + rep.gitConnections.deleted + "/" + rep.gitConnections.found : "") +
+                (rep.errors.length ? " · " + rep.errors.length + " 项失败" : ""),
             );
             _notify(
               rep.errors.length ? "warn" : "info",
-              "[" + s.email + "] 水过无痕完成 · 删对话 " + rep.sessions.deleted + "/" + rep.sessions.found +
+              "[" + s.email + "] 水过无痕 · 对话归档 " + rep.sessions.deleted + "/" + rep.sessions.found +
+                " 知识" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted +
+                " · 本源默认保留(内置知识" + rep.native.knowledge + "/社区剧本" + rep.native.playbooks + ")" +
                 (rep.errors.length ? " · " + rep.errors.length + " 项失败" : ""),
             );
           } catch (e) {
