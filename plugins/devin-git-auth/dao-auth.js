@@ -131,10 +131,24 @@ async function injectSecret(orgId, name, value, auth1) {
   return { ok: false, error: r.text ? r.text.slice(0, 100) : String(r.status) };
 }
 
+// 删除组织 Secret · 彻底解绑(删后零关联)。端点: DELETE /api/secrets/{id}
+async function deleteSecret(orgId, name, auth1) {
+  const l = await listSecrets(orgId, auth1);
+  if (!l.ok) return { ok: false, error: l.error || "list_failed" };
+  const hit = (l.secrets || []).find(function (s) { return s.key === name || s.name === name; });
+  if (!hit) return { ok: true, missing: true };
+  const sid = hit.id || hit.secret_id;
+  if (!sid) return { ok: false, error: "no_secret_id" };
+  const r = await jsonDelete(DEVIN + "/api/secrets/" + encodeURIComponent(sid),
+    { Authorization: "Bearer " + auth1, "x-cog-org-id": orgId });
+  if (r.status === 200 || r.status === 204 || r.status === 404) return { ok: true };
+  return { ok: false, error: r.text ? r.text.slice(0, 100) : String(r.status) };
+}
+
 module.exports = {
   WINDSURF, DEVIN,
   rawRequest, jsonGet, jsonPost, jsonDelete, sleep,
   devinLogin, devinPostAuth,
   checkGitConnections, listSecrets,
-  injectGitHubPAT, injectSecret,
+  injectGitHubPAT, injectSecret, deleteSecret,
 };
