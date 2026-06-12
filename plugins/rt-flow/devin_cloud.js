@@ -578,7 +578,7 @@ async function deleteGitPermission(auth, permId) {
 //     · 列仓库授权: GET    /{orgId}/integrations/git-permissions?connection_id={cid}
 //     · 删仓库授权: DELETE /{orgId}/integrations/git-permissions/{permId}  (返 {success:true}·真删)
 //     · OAuth 断开: DELETE /integrations/github/user · /integrations/gitlab/user
-//   但 github_individual_token(PAT) 连接的"元数据记录"平台不提供删除端点(复查仍在)。
+//   但连接"元数据记录"本身平台不提供删除端点(PAT 与 github_app 均复查仍在)。
 //   故能做且该做的: 真删其全部仓库授权(实移除访问权), 复查连接元数据是否消失:
 //     消失→真断开(removed); 残留(PAT 典型)→如实回报已清授权数, 不臆造成功。
 async function disconnectGit(auth, conn) {
@@ -613,7 +613,7 @@ async function disconnectGit(auth, conn) {
     status: provStatus || 0,
     removed: false,
     permissionsRemoved: permsRemoved,
-    note: "PAT(individual_token)连接元数据平台未开放删除端点; 已清除其仓库授权 " + permsRemoved + " 条; PAT 本体须在 GitHub 端撤销",
+    note: "连接(" + (type || "unknown") + ")元数据平台未开放删除端点; 已清除其仓库授权 " + permsRemoved + " 条(访问权已撤)" + (type.indexOf("individual_token") >= 0 ? "; PAT 本体须在 GitHub 端撤销" : ""),
   };
 }
 // 清理会话: 实跑确证 Devin 平台不支持硬删除对话

@@ -14,7 +14,7 @@
   - 列仓库授权: `GET /{orgId}/integrations/git-permissions?connection_id={cid}`
   - 删仓库授权: `DELETE /{orgId}/integrations/git-permissions/{permId}` → `{success:true}` (真删)
   - OAuth 断开: `DELETE /integrations/github/user` · `DELETE /integrations/gitlab/user`
-  - **平台无"按 id 删 git 连接"端点**; `github_individual_token`(PAT) 连接的元数据记录删不掉。
+  - **平台无"按 id 删 git 连接"端点**; 连接元数据记录本身删不掉(PAT 与 github_app 均如此)。
 
 ### 修 · 真删可删·残留如实报(不臆造)
 - `disconnectGit(auth, conn)`: 改用实证端点 ——
@@ -23,6 +23,9 @@
   3) 复查 `git-connections-metadata`: 连接消失→`removed:true`(真断); 残留(PAT 典型)→
      `ok:false` 并如实回报 `permissionsRemoved` + note(PAT 本体须在 GitHub 端撤销)。
 - 真号验证(lkwpv1740858777·PAT·2 授权): 授权 **2→0**(实删·复查确认), 连接元数据残留并如实标注。
+- 集成全链路实跑(lcrlpjt52958·github_app): `backupAccountFull`(快照 7知识/34剧本/1密钥/1Git·零误·先留底) → `wipeAccount`:
+  知识 **4/4**、剧本 **2/2**、密钥 **1/1** 真删; Git 授权 **1→0**(访问权实撤), 连接元数据残留如实回报;
+  本源默认完整保留(3 内置知识 + 32 社区剧本)。
 - 新增 `listGitPermissions`/`deleteGitPermission` 导出; `wipeAccount.gitConnections` 增 `permissionsRemoved` 计数。
 
 ## v4.1.1 (2026-06-12) · 快照健壮化 · 一条失败不毁全局(GUI 实测揪出)
