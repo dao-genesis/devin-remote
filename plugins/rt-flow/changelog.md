@@ -2,6 +2,32 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.2.0 (2026-06-12) · 三板块统一 · 整合 devin-git-auth 核心 (Cascade + Devin Cloud + Git)
+
+> *物无非彼，物无非是。* —— 三板归一, 太上下知有之: 前端最小化, 后端最大化。
+
+### 新增 · 第三板块 Git(GitHub) 归一连接 (整合 devin-git-auth v2.3.2 核心)
+- 新 `devin_git.js` (零 vscode 依赖, 复用 `devin_cloud` 传输层 rawRequest/jsonRequest/proxy):
+  移植 git-auth 核心后端 —— `injectGitHubPAT` / `ensureGithubPatSecret`(注入+双读确认) /
+  `getGitHubUser` / `getAccessibleRepos` / `deleteSecret`(真删) / `connectWithPat` /
+  `gitStatus`(下拉只读快照) / `robustDisconnectGit`(复查扫除·真解绑) / `patFor`(共享 ~/.dao 池)。
+- `robustDisconnectGit` 保留 v2.3.2 复查扫除环(3 轮 800ms settle, 重查→按 id 强删残留)→ 真解绑。
+- 前端最小变动: 账号下拉 Devin Cloud 概览内嵌 `Git · GitHub` 区块 —— 显示 @身份/仓库数/Sec 指示,
+  一个 PAT 输入框 + 连接Git/断开Git 两按钮; 与原 cascade/Devin Cloud 板块共存。
+- 共享凭据池: `~/.dao/git-pats.json`(defaultPat + overrides) 与 devin-git-auth/切号插件一致。
+
+### 修 · bug1 拉取失败(TLS socket disconnected)
+- `rawRequest` 增瞬态错误指数退避重试(3 次, 500/1000/2000ms; 14+ 错误码判定 TLS/ECONNRESET/超时等)。
+- `accountOverview` 由 `Promise.all` 改 `Promise.allSettled`: 任一子端点瞬态失败不再毁整份概览。
+
+### 修 · bug2 账号下拉 Devin Cloud 内容被回弹/不显示
+- host 侧 `_dvOpenEmails` 集记录开合 + `_dvOverviewCache`(90s TTL)缓存概览/Git 状态;
+  周期扫描重建 webview 时按缓存预填已展开行 → 下拉保持展开、内容秒回, 不再回弹/闪烁。
+
+### 实测(真实 Devin Desktop 3.1.7 · 录屏 + API 交叉验证)
+- 概览加载无 TLS 拉取失败; 连接 lwsfx → @zhouyoukang1234-spec · 26 仓库 · Sec✓(概览同步 Git1/密钥1);
+  断开 → 连接归零、密钥删(API 交叉验证 connections=0/secret=false); 静置 30s 经重建不回弹。
+
 ## v4.1.2 (2026-06-12) · Git 断开正本清源 · 不臆造成功(前端 bundle 实证)
 
 > *知不知，尚矣；不知不知，病矣。* —— 旧码"臆造成功"是病, 病病乃不病。

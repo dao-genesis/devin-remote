@@ -259,6 +259,7 @@ const crypto = require("node:crypto");
 const { URL } = require("node:url");
 // 第五板块 · Devin Cloud 接入底层 (对话提取/备份/追踪/水过无痕清理)
 const devinCloud = require("./devin_cloud");
+const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (整合 devin-git-auth 核心)
 
 // ═══ § 1 · 万法之资 ═══
 // v2.5.5 · 真根因 · ideVersion 能力协商 (2026-05-04 probe 实证):
@@ -747,7 +748,7 @@ const devinCloud = require("./devin_cloud");
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.1.2";
+const VERSION = "4.2.0";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -7699,7 +7700,7 @@ function buildHtml() {
         <button class="b rm" onclick="rm(${i})" title="删除">&times;</button>
       </span>
     </div>
-    <div class="dv-detail" id="dvDetail${i}" data-i="${i}" data-email="${_esc(a.email.toLowerCase())}"></div>`;
+    <div class="dv-detail${_dvOpenEmails.has(a.email.toLowerCase()) ? " open" : ""}" id="dvDetail${i}" data-i="${i}" data-email="${_esc(a.email.toLowerCase())}">${(() => { const cc = _dvCacheFresh(a.email); return _dvOpenEmails.has(a.email.toLowerCase()) && cc ? _dvOverviewHtml(cc.ov, i, cc.gitSt) : ""; })()}</div>`;
   }
   const cc = stats.checkedCount;
   const poolPct =
@@ -7842,6 +7843,16 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-detail .dv-sess .st.finished{color:#888;background:#222}
 .dv-detail .dv-sess .tt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dv-detail .dv-acts{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+.dv-git{margin:5px 0;padding:5px 6px;background:#0d1a14;border:1px solid #1f3a2a;border-radius:4px}
+.dv-git-h{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:5px}
+.dv-git-tag{color:#4ec9b0;font-size:10px;font-weight:bold}
+.dv-git-id{color:#9cdcfe;font-size:10px;background:#16232c;border:1px solid #244;border-radius:3px;padding:1px 5px}
+.dv-git-meta{color:#888;font-size:10px}
+.dv-git-meta.ok{color:#4ec9b0}
+.dv-git-meta.no{color:#c87a7a}
+.dv-git-acts{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.dv-git-pat{flex:1;min-width:120px;background:#0a0f0c;border:1px solid #2a3a2a;color:#cdd;border-radius:3px;padding:2px 6px;font-size:10px;font-family:monospace}
+.dv-git-pat:focus{outline:none;border-color:#4ec9b0}
 .dv-tb{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0;align-items:center}
 .b.sk{background:transparent;color:#666;font-size:12px}.b.sk:hover{color:#f0c674}
 .b.vf,.b.cp{background:#333;color:var(--blue)}.b.vf:hover,.b.cp:hover{background:#444}
@@ -7971,7 +7982,9 @@ function setMode(m){vscode.postMessage({type:'setMode',mode:m});}
 // ── 第五板块 · Devin Cloud 前端 (最小化) ──
 function _dvOpenSet(){try{return new Set((vscode.getState()||{}).dvOpen||[]);}catch(e){return new Set();}}
 function _dvSaveOpen(s){try{const st=vscode.getState()||{};vscode.setState({...st,dvOpen:[...s]});}catch(e){}}
-function dv(i){_clickFb(event);const d=document.getElementById('dvDetail'+i);if(!d)return;const em=(d.dataset.email||'');const open=_dvOpenSet();if(d.classList.contains('open')){d.classList.remove('open');d.innerHTML='';open.delete(em);_dvSaveOpen(open);return;}d.classList.add('open');d.innerHTML='<span style="color:#888">登录并拉取 Devin Cloud 概览…</span>';open.add(em);_dvSaveOpen(open);vscode.postMessage({type:'devinExpand',index:i});}
+function dv(i){_clickFb(event);const d=document.getElementById('dvDetail'+i);if(!d)return;const em=(d.dataset.email||'');const open=_dvOpenSet();if(d.classList.contains('open')){d.classList.remove('open');d.innerHTML='';open.delete(em);_dvSaveOpen(open);vscode.postMessage({type:'dvCollapse',index:i});return;}d.classList.add('open');if(!d.innerHTML.trim())d.innerHTML='<span style="color:#888">登录并拉取 Devin Cloud 概览…</span>';open.add(em);_dvSaveOpen(open);vscode.postMessage({type:'devinExpand',index:i});}
+function gitConnect(i){_clickFb(event);const el=document.getElementById('gitPat'+i);const pat=el?el.value.trim():'';vscode.postMessage({type:'gitConnect',index:i,pat:pat});if(el)el.value='';}
+function gitDisconnect(i){_clickFb(event);vscode.postMessage({type:'gitDisconnect',index:i});}
 function wp(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:'devinWipe',index:i,indices:ix});}
 function dvBackup(i){vscode.postMessage({type:'devinBackupAccount',index:i});}
 function dvCreate(i){vscode.postMessage({type:'devinCreateSession',index:i});}
@@ -8003,7 +8016,7 @@ document.addEventListener('change',e=>{if(e.target.classList.contains('chk')){co
 // v3.11.2 · 多选持久化复位 — 重建后立即按 email 恢复 checked + .sel + batchBar 计数
 try{_restoreSel();updateBatchBar();}catch(e){}
 // 第五板块: 重建后自动重开之前展开的 Devin Cloud 下拉 + 请求运行状态
-try{const op=_dvOpenSet();document.querySelectorAll('.dv-detail').forEach(d=>{const em=(d.dataset.email||'');if(op.has(em)){const i=parseInt(d.dataset.i);if(Number.isFinite(i)){d.classList.add('open');d.innerHTML='<span style="color:#888">拉取 Devin Cloud 概览…</span>';vscode.postMessage({type:'devinExpand',index:i});}}});vscode.postMessage({type:'devinRunPoll'});}catch(e){}
+try{const op=_dvOpenSet();document.querySelectorAll('.dv-detail').forEach(d=>{const em=(d.dataset.email||'');if(op.has(em)){const i=parseInt(d.dataset.i);if(Number.isFinite(i)){d.classList.add('open');if(!d.innerHTML.trim())d.innerHTML='<span style="color:#888">拉取 Devin Cloud 概览…</span>';vscode.postMessage({type:'devinExpand',index:i});}}});vscode.postMessage({type:'devinRunPoll'});}catch(e){}
 // Fix4: 恢复 conv 区块 collapsed 状态
 try{if(localStorage.getItem('dao-conv-collapsed')==='1'){const cb=document.getElementById('convBody');const ca=document.getElementById('convArrow');if(cb){cb.classList.add('collapsed');if(ca)ca.textContent='\u25BC';}}}catch(e){}})();
 window.addEventListener('message',e=>{const m=e.data;
@@ -8012,6 +8025,7 @@ if(m.type==='switching'){const r=document.querySelector('.row[data-i=\"'+m.index
 if(m.type==='verifying'){const r=document.querySelector('.row[data-i=\"'+m.index+'\"]');if(r){r.classList.add('verifying');}}
 if(m.type==='quotaChange'){const r=document.querySelector('.row[data-email=\"'+(m.email||'').toLowerCase()+'\"]');if(r){r.classList.add('quota-flash');setTimeout(()=>r.classList.remove('quota-flash'),700);}}
 if(m.type==='devinOverview'){const d=document.getElementById('dvDetail'+m.index);if(d&&d.classList.contains('open')){d.innerHTML=m.html||'';}}
+if(m.type==='gitDone'){const d=document.getElementById('dvDetail'+m.index);if(d&&d.classList.contains('open')){vscode.postMessage({type:'devinExpand',index:m.index,refresh:true});}}
 if(m.type==='devinRunStatus'&&Array.isArray(m.items)){document.querySelectorAll('.dv-run').forEach(el=>{const ex=el.querySelector('.run');if(ex)ex.remove();});m.items.forEach(it=>{const el=document.querySelector('.dv-run[data-email="'+(it.email||'').toLowerCase()+'"]');if(el&&it.running>0){const s=document.createElement('span');s.className='run';s.textContent='\\u25CF 运行'+it.running;s.title=(it.titles||[]).join(' | ');el.insertBefore(s,el.firstChild);}});}
 if(m.type==='convUpdate'&&m.html){const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}}}}
 if(m.type==='devinBackupTree'){_dvShowBackups(m.tree);}
@@ -8048,8 +8062,18 @@ async function _dvAuthFor(i) {
     return { ok: false, error: String((e && e.message) || e), email: acc.email };
   }
 }
-// 账号概览 → 下拉框 HTML (对话着重 · 知识库/Git/额度 简要)
-function _dvOverviewHtml(ov, i) {
+// ═══ 第三板块 · Git 下拉框状态缓存 + 开合追踪 (根治"回弹": 全量重建 webview 时按缓存预填) ═══
+// _dvOpenEmails: 当前展开的账号 email 集合 (host 侧权威, 渲染时据此预填 open + 内容)
+// _dvOverviewCache: email → {ov, gitSt, ts} 概览数据缓存; 渲染时用当前 index 重生 HTML (索引不串)
+const _dvOpenEmails = new Set();
+const _dvOverviewCache = new Map();
+const DV_CACHE_TTL = 90000; // 90s 内复用缓存, 避免每次扫描 tick 重新登录/拉取
+function _dvCacheFresh(email) {
+  const c = _dvOverviewCache.get(String(email || "").toLowerCase());
+  return c && Date.now() - c.ts < DV_CACHE_TTL ? c : null;
+}
+// 账号概览 → 下拉框 HTML (对话着重 · 知识库/Git/额度 简要 + Git 板块归一连接)
+function _dvOverviewHtml(ov, i, gitSt) {
   const c = ov.counts || {};
   const tag = devinCloud.getTag(ov.email);
   const credits =
@@ -8066,6 +8090,8 @@ function _dvOverviewHtml(ov, i) {
   h += '<span class="dv-stat">Git ' + (c.gitConnections || 0) + "</span>";
   if (credits) h += '<span class="dv-stat">' + _esc(credits) + "</span>";
   h += "</div>";
+  // ── Git(GitHub) 板块 · 最小化前端: 身份/仓库/密钥 一行 + PAT 输入 + 连接/断开 ──
+  h += _dvGitSectionHtml(i, gitSt, ov.email);
   const sess = (ov.sessions || []).slice(0, 40);
   if (!sess.length) h += '<div style="color:#666">（无对话）</div>';
   for (const s of sess) {
@@ -8085,6 +8111,29 @@ function _dvOverviewHtml(ov, i) {
     '<button class="conv-btn conv-btn-s" onclick="wp(' + i + ')" title="水过无痕清理本账号">&#127754; 水过无痕</button>' +
     "</div>";
   return h;
+}
+// Git 板块 HTML (整合 devin-git-auth · 最小化前端变动): 已绑身份 + 仓库数 + 密钥 + PAT 输入 + 连/断按钮
+function _dvGitSectionHtml(i, gitSt, email) {
+  const has = gitSt && (gitSt.connections > 0 || gitSt.login);
+  const hasPat = !!devinGit.patFor(email);
+  let g = '<div class="dv-git">';
+  g += '<div class="dv-git-h"><span class="dv-git-tag">Git · GitHub</span>';
+  if (has) {
+    g += '<span class="dv-git-id" title="已绑定 GitHub 身份">@' + _esc(gitSt.login || (gitSt.connNames || [])[0] || "github") + "</span>";
+    g += '<span class="dv-git-meta">' + (gitSt.repoCount || 0) + " 仓库</span>";
+    g += '<span class="dv-git-meta ' + (gitSt.secret ? "ok" : "no") + '">' + (gitSt.secret ? "Sec✓" : "无Sec") + "</span>";
+  } else if (gitSt) {
+    g += '<span class="dv-git-meta no">未连接</span>';
+  } else {
+    g += '<span class="dv-git-meta" style="color:#666">…</span>';
+  }
+  g += "</div>";
+  g += '<div class="dv-git-acts">';
+  g += '<input class="dv-git-pat" id="gitPat' + i + '" type="password" placeholder="' + (hasPat ? "PAT 已就绪(留空用默认)" : "ghp_… GitHub PAT") + '" autocomplete="off" />';
+  g += '<button class="conv-btn conv-btn-s" onclick="gitConnect(' + i + ')" title="用 PAT 把此 Devin 账号归一连接到 GitHub 仓库(注入 PAT + 落库密钥 + 核验)">&#128279; 连接Git</button>';
+  g += '<button class="conv-btn conv-btn-s" onclick="gitDisconnect(' + i + ')" title="真解绑: 撤连接 + 断 OAuth 用户 + 删 GITHUB_PAT 密钥, 连接数归零">&#9986; 断开Git</button>';
+  g += "</div></div>";
+  return g;
 }
 // 轻量轮询: 仅对「已登录(缓存内)」账号查运行中对话 → 不强行登录全部 (无为)
 async function _dvRunPoll() {
@@ -9292,6 +9341,15 @@ async function handleWebviewMessage(msg) {
       // ═══ 第五板块 · Devin Cloud 消息处理 ═══
       // 展开账号下拉 → 登录 + 拉取概览 → 回传 HTML
       case "devinExpand": {
+        const acc0 = _store.accounts[msg.index];
+        const email0 = acc0 && acc0.email ? acc0.email.toLowerCase() : "";
+        if (email0) _dvOpenEmails.add(email0); // host 侧记录开合, 渲染时据此预填(根治回弹)
+        // 缓存新鲜 → 立即回传(无网络·无闪烁); 否则登录拉取
+        const cached = _dvCacheFresh(email0);
+        if (cached) {
+          _broadcastMsg({ type: "devinOverview", index: msg.index, html: _dvOverviewHtml(cached.ov, msg.index, cached.gitSt) });
+          if (!msg.refresh) { _dvRunPoll().catch(() => {}); break; }
+        }
         const r = await _dvAuthFor(msg.index);
         if (!r.ok) {
           _broadcastMsg({
@@ -9302,8 +9360,13 @@ async function handleWebviewMessage(msg) {
           break;
         }
         try {
-          const ov = await devinCloud.accountOverview(r.auth);
-          _broadcastMsg({ type: "devinOverview", index: msg.index, html: _dvOverviewHtml(ov, msg.index) });
+          // Devin Cloud 概览 + Git 板块状态 并行拉取; Git 失败不阻断概览(allSettled 形态)
+          const [ov, gitSt] = await Promise.all([
+            devinCloud.accountOverview(r.auth),
+            devinGit.gitStatus(r.auth).catch(() => null),
+          ]);
+          _dvOverviewCache.set(email0, { ov, gitSt, ts: Date.now() });
+          _broadcastMsg({ type: "devinOverview", index: msg.index, html: _dvOverviewHtml(ov, msg.index, gitSt) });
           // 顺带刷新运行状态标记
           _dvRunPoll().catch(() => {});
         } catch (e) {
@@ -9313,6 +9376,55 @@ async function handleWebviewMessage(msg) {
             html: '<span style="color:#f44">拉取失败: ' + _esc(String((e && e.message) || e)) + "</span>",
           });
         }
+        break;
+      }
+      // 折叠下拉 → host 侧移除开合记录(渲染时不再预填)
+      case "dvCollapse": {
+        const accC = _store.accounts[msg.index];
+        if (accC && accC.email) _dvOpenEmails.delete(accC.email.toLowerCase());
+        break;
+      }
+      // ═══ 第三板块 · Git(GitHub) 归一连接 / 真解绑 ═══
+      case "gitConnect": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        const email = r.email.toLowerCase();
+        const pat = (msg.pat && String(msg.pat).trim()) || devinGit.patFor(r.email);
+        if (!pat) { _toast("\u2717 无 PAT · 请在输入框填 ghp_… 或配置 ~/.dao/git-pats.json"); break; }
+        _toast("\u23F3 连接 Git: " + email.split("@")[0] + " …");
+        try {
+          const res = await devinGit.connectWithPat(r.auth, pat);
+          if (res.ok) {
+            _toast("\u2713 已连接 @" + (res.login || "github") + " · " + res.repoCount + " 仓库" + (res.secret ? " · Sec\u2713" : ""));
+            _notify("info", "[" + r.email + "] Git 归一连接 @" + (res.login || "?") + " · " + res.repoCount + " 仓库 · 连接" + res.connections + (res.secret ? " · 密钥已落库" : ""));
+          } else if (res.invalidPat) {
+            _toast("\u2717 PAT 无效或已过期");
+          } else {
+            _toast("\u2717 连接未生效: " + (res.error || "0 连接/0 仓库"));
+          }
+        } catch (e) {
+          _toast("\u2717 连接异常: " + String((e && e.message) || e));
+        }
+        _dvOverviewCache.delete(email); // 失效缓存 → 下次展开拉新状态
+        _broadcastMsg({ type: "gitDone", index: msg.index });
+        break;
+      }
+      case "gitDisconnect": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        const email = r.email.toLowerCase();
+        _toast("\u23F3 断开 Git: " + email.split("@")[0] + " …(复查扫除·真解绑)");
+        try {
+          const logs = await devinGit.robustDisconnectGit(r.auth);
+          const zeroed = logs.some((l) => l.indexOf("连已归零") >= 0 || l.indexOf("连接已归零") >= 0);
+          _toast(zeroed ? "\u2713 已真解绑 · 连接归零 · 密钥已删" : "\u2713 已断开 Git(详见日志)");
+          _notify("info", "[" + r.email + "] Git 断开: " + (zeroed ? "真解绑(连接归零·密钥删)" : "已处理"));
+          log("[git] disconnect " + email + "\n  " + logs.join("\n  "));
+        } catch (e) {
+          _toast("\u2717 断开异常: " + String((e && e.message) || e));
+        }
+        _dvOverviewCache.delete(email);
+        _broadcastMsg({ type: "gitDone", index: msg.index });
         break;
       }
       // 备份单账号全部对话 (增量)
