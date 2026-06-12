@@ -302,6 +302,39 @@ async function getSessionDetail(auth, devinId) {
   return r.status === 200 ? r.json || {} : {};
 }
 
+// ═══ Cloud 写入 (代替用户发起对话) ═══════════════════════════════════════════
+// 发起一个新的 Devin Cloud 对话 (session)。prompt 为首条用户消息。
+// opts: { title, tags, playbookId, repos, sessionSecrets, idempotencyKey }
+async function createSession(auth, prompt, opts) {
+  opts = opts || {};
+  const payload = { prompt: String(prompt || "") };
+  if (opts.title) payload.title = opts.title;
+  if (opts.tags) payload.tags = opts.tags;
+  if (opts.playbookId) payload.playbook_id = opts.playbookId;
+  if (opts.repos) payload.repos = opts.repos;
+  if (opts.sessionSecrets) payload.session_secrets = opts.sessionSecrets;
+  if (opts.idempotencyKey) payload.idempotency_key = opts.idempotencyKey;
+  const r = await jsonRequest("POST", CFG.apiBase + "/sessions", authHeaders(auth), payload);
+  if (r.status === 200 || r.status === 201) {
+    const j = r.json || {};
+    return { ok: true, devinId: j.devin_id || j.session_id || j.id, isNewSession: j.is_new_session, createdAt: j.created_at, raw: j };
+  }
+  return { ok: false, status: r.status, error: "createSession HTTP " + r.status + ": " + (r.text || "").slice(0, 160) };
+}
+
+// 向已有对话追加一条用户消息 (继续对话 → 触发新事件/更新)。
+// 采用 Devin 官方公开 API 端点形态: POST /session/{id}/message  {message}
+// 注: 在已用尽额度/已结束的会话上无法实跑验证 (会返回 404/403)。
+async function sendMessage(auth, devinId, message) {
+  const r = await jsonRequest(
+    "POST",
+    CFG.apiBase + "/session/" + devinId + "/message",
+    authHeaders(auth),
+    { message: String(message || "") },
+  );
+  return { ok: r.status >= 200 && r.status < 300, status: r.status, raw: r.json, text: (r.text || "").slice(0, 200) };
+}
+
 // 事件流 (SSE/ndjson/json 混合) → 去重排序后的事件数组
 async function getEventStream(auth, devinId) {
   const url = CFG.apiBase + "/events/" + devinId + "/stream";
@@ -732,7 +765,7 @@ function backupStateKey(auth, devinId) {
 }
 async function backupOneConversation(auth, sess, accountDir, opts) {
   opts = opts || {};
-  const devinId = sess.devin_id || sess.session_id || sess.id;
+  const devinId = sess.devin_id || sess.devinId || sess.session_id || sess.id;
   const title = sess.title || sess.name || "未命名";
   const events = await getEventStream(auth, devinId);
 
@@ -831,6 +864,60 @@ async function backupAccount(auth, opts) {
   return result;
 }
 
+// ═══ 备份浏览 + 快速解锁(解压) ════════════════════════════════════════════
+// 列出备份根下「账号 → 对话 ZIP」树, 供前端浏览。
+function listBackups(root) {
+  root = root || DC_BACKUP_DEFAULT;
+  const out = { root, accounts: [] };
+  let dirs = [];
+  try { dirs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return out; }
+  for (const d of dirs) {
+    const accDir = path.join(root, d.name);
+    let files = [];
+    try { files = fs.readdirSync(accDir).filter((f) => f.toLowerCase().endsWith(".zip")); } catch {}
+    const convs = files.map((f) => {
+      let size = 0, mtime = 0;
+      try { const st = fs.statSync(path.join(accDir, f)); size = st.size; mtime = st.mtimeMs; } catch {}
+      return { name: f, path: path.join(accDir, f), size, mtime };
+    }).sort((a, b) => b.mtime - a.mtime);
+    out.accounts.push({ account: d.name, dir: accDir, count: convs.length, conversations: convs });
+  }
+  out.accounts.sort((a, b) => b.count - a.count);
+  return out;
+}
+
+// 解锁(解压)一个对话 ZIP → 同名文件夹, 返回解压目录。用本地 zlib inflate, 零外部依赖。
+function unlockBackup(zipPath, opts) {
+  opts = opts || {};
+  if (!fs.existsSync(zipPath)) return { ok: false, error: "ZIP 不存在: " + zipPath };
+  const outDir = opts.outDir || zipPath.replace(/\.zip$/i, "");
+  ensureDir(outDir);
+  const buf = fs.readFileSync(zipPath);
+  const sig = Buffer.from([0x50, 0x4b, 0x01, 0x02]); // central directory header
+  let i = 0, count = 0;
+  while ((i = buf.indexOf(sig, i)) !== -1) {
+    const method = buf.readUInt16LE(i + 10);
+    const compSize = buf.readUInt32LE(i + 20);
+    const nameLen = buf.readUInt16LE(i + 28);
+    const extraLen = buf.readUInt16LE(i + 30);
+    const commentLen = buf.readUInt16LE(i + 32);
+    const lho = buf.readUInt32LE(i + 42); // local header offset
+    const name = buf.slice(i + 46, i + 46 + nameLen).toString("utf8");
+    // local header: 30 + nameLen + extraLen → data
+    const lNameLen = buf.readUInt16LE(lho + 26);
+    const lExtraLen = buf.readUInt16LE(lho + 28);
+    const dataStart = lho + 30 + lNameLen + lExtraLen;
+    const comp = buf.slice(dataStart, dataStart + compSize);
+    let data;
+    try { data = method === 8 ? zlib.inflateRawSync(comp) : comp; } catch { data = comp; }
+    const dest = path.join(outDir, name);
+    if (name.endsWith("/")) { ensureDir(dest); }
+    else { ensureDir(path.dirname(dest)); fs.writeFileSync(dest, data); count++; }
+    i += 46 + nameLen + extraLen + commentLen;
+  }
+  return { ok: true, outDir, files: count };
+}
+
 // ═══ 账号标签 (防搞混) ════════════════════════════════════════════════════
 function getTag(email) {
   return (readJson(DC_TAGS_FILE, {})[String(email).toLowerCase()] || "");
@@ -877,10 +964,16 @@ function buildAgentMd(ctx) {
   L.push("- Git 连接: `GET /api/organizations/{org_id}/git-connections-metadata`");
   L.push("- 额度: `GET /api/{org_id}/billing/status`");
   L.push("");
+  L.push("## 1b. 写入 (代替用户发起/续写对话)");
+  L.push("- 发起对话: `POST /api/sessions` body `{prompt, title?, tags?, playbook_id?, repos?}` → `{devin_id, is_new_session, created_at}`");
+  L.push("- 续写对话: `POST /api/session/{devinId}/message` body `{message}` (官方公开 API 形态)");
+  L.push("- 发起后用 §1 的对话详情/事件流轮询即可实时观测运行状态、事件增长。");
+  L.push("");
   L.push("## 2. 备份 (Devin Cloud 结构 · 增量)");
   L.push("- 目录: `" + backupRoot + "/<账号名>/<devinId末8位>_<对话名>.zip`");
   L.push("- 每个 zip: `对话_人类可读.md` + `对话_agent.json` + `files/<产出文件>` + `_meta.json`");
-  L.push("- 增量: 比较本次事件数与上次 `eventCount`，相同则跳过 (同源不重复)");
+  L.push("- 增量: 比较本次事件数与上次 `eventCount`，相同则跳过；事件增长则重备(追加新事件)。");
+  L.push("- 浏览/解锁: 列出 `<root>/<账号>/*.zip`；解锁=本地 inflate 解压到同名文件夹 (零依赖)。");
   L.push("");
   L.push("## 3. 水过无痕 (一键清理 → 账号回到未使用态)");
   L.push("先列出再逐个删除 (顺序: Git→密钥→剧本→知识库→对话):");
@@ -1009,6 +1102,9 @@ module.exports = {
   listSessions,
   getSessionDetail,
   getEventStream,
+  // writes (代替用户发起/续写对话)
+  createSession,
+  sendMessage,
   listKnowledge,
   listPlaybooks,
   listSecrets,
@@ -1027,6 +1123,8 @@ module.exports = {
   // backup
   backupAccount,
   backupOneConversation,
+  listBackups,
+  unlockBackup,
   // tags
   getTag,
   setTag,

@@ -2,6 +2,29 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.0.1 (2026-06-12) · 反者道之动 · 真链路补全
+
+> *反者道之动也* —— 对照本源需求反向审计，补齐写接口与备份浏览闭环。
+
+### 新增后端写接口 (代替用户发起对话)
+- `createSession(auth, prompt, opts)` → `POST /api/sessions {prompt,title?,...}`；
+  实测端点正确（账号有额度即可发起；当前账号池全部 `out_of_quota`，返回 403 证明端点可达）。
+- `sendMessage(auth, devinId, message)` → `POST /api/session/{id}/message {message}`（官方公开 API 形态）。
+
+### 备份浏览 + 一键解锁 (原仅打开文件夹)
+- `listBackups(root)` 列出「账号→对话ZIP」树（大小/时间）。
+- `unlockBackup(zipPath)` 本地 `zlib.inflateRawSync` 解压到同名文件夹（零依赖），实测 1 个 ZIP 解出 56 文件。
+- 前端「📁 浏览备份」按钮 → 模态列表 → 每条「🔓 解锁」。
+
+### 前端最小增量
+- 账号下拉操作行新增「☁ 发起对话」「📁 浏览备份」按钮。
+- 导出 MD 文档补充 §1b 写接口与备份浏览/解锁说明。
+
+### 实测验证 (真实账号 · 不打印凭证)
+- classifySession 对 70 个真实对话分类正确 (全 finished)。
+- 增量备份「事件增长→重备追加」分支：降 high-water mark 模拟新增 → 正确重备 → 再跑跳过。
+- 备份浏览/解锁全通；清理历史遗留的 `:undefined` 备份状态条目。
+
 ## v4.0.0 (2026-06-12) · 第五板块 · Devin Cloud 接入 · 无为而无不为
 
 > *为学日益，闻道日损 —— 后端尽开，前端至简*
@@ -43,6 +66,9 @@ Devin Cloud 能力皆走后端接口。新增 `devin_cloud.js`（零依赖单模
 
 ### 新增配置
 `wam.devinCloudAutoBackup` · `wam.devinCloudAutoBackupIntervalMin` · `wam.devinCloudBackupDir` · `wam.devinCloudRunPollMin`
+
+### 修订（e2e 实测后）
+- 账号标签：原 webview `prompt()` 被 VS Code webview 屏蔽（无输入框）→ 改走扩展宿主 `showInputBox`，预填当前标签、可清除。
 
 ## v3.13.0 (2026-06-28) · Devin Desktop 自适应 · 万法归宗 · 当前
 

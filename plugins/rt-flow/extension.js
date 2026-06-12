@@ -7974,7 +7974,10 @@ function _dvSaveOpen(s){try{const st=vscode.getState()||{};vscode.setState({...s
 function dv(i){_clickFb(event);const d=document.getElementById('dvDetail'+i);if(!d)return;const em=(d.dataset.email||'');const open=_dvOpenSet();if(d.classList.contains('open')){d.classList.remove('open');d.innerHTML='';open.delete(em);_dvSaveOpen(open);return;}d.classList.add('open');d.innerHTML='<span style="color:#888">登录并拉取 Devin Cloud 概览…</span>';open.add(em);_dvSaveOpen(open);vscode.postMessage({type:'devinExpand',index:i});}
 function wp(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:'devinWipe',index:i,indices:ix});}
 function dvBackup(i){vscode.postMessage({type:'devinBackupAccount',index:i});}
-function dvSetTag(i){const cur=prompt('为该账号设置标签(防搞混)，留空清除：');if(cur===null)return;vscode.postMessage({type:'devinSetTag',index:i,tag:cur});}
+function dvCreate(i){vscode.postMessage({type:'devinCreateSession',index:i});}
+function dvBrowse(){vscode.postMessage({type:'devinBrowseBackups'});}
+function dvUnlock(p){vscode.postMessage({type:'devinUnlockBackup',zipPath:p});}
+function dvSetTag(i){vscode.postMessage({type:'devinSetTag',index:i});}
 function dvExportMd(){vscode.postMessage({type:'devinExportMd',indices:_selIx()});}
 function dvBackupAll(){vscode.postMessage({type:'devinBackupAll',indices:_selIx()});}
 function dvWipeSel(){const ix=_selIx();if(!ix.length){showToast('\\u2717 先勾选账号');return;}vscode.postMessage({type:'devinWipe',indices:ix});}
@@ -8011,7 +8014,9 @@ if(m.type==='quotaChange'){const r=document.querySelector('.row[data-email=\"'+(
 if(m.type==='devinOverview'){const d=document.getElementById('dvDetail'+m.index);if(d&&d.classList.contains('open')){d.innerHTML=m.html||'';}}
 if(m.type==='devinRunStatus'&&Array.isArray(m.items)){document.querySelectorAll('.dv-run').forEach(el=>{const ex=el.querySelector('.run');if(ex)ex.remove();});m.items.forEach(it=>{const el=document.querySelector('.dv-run[data-email="'+(it.email||'').toLowerCase()+'"]');if(el&&it.running>0){const s=document.createElement('span');s.className='run';s.textContent='\\u25CF 运行'+it.running;s.title=(it.titles||[]).join(' | ');el.insertBefore(s,el.firstChild);}});}
 if(m.type==='convUpdate'&&m.html){const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}}}}
+if(m.type==='devinBackupTree'){_dvShowBackups(m.tree);}
 });
+function _dvShowBackups(tree){let ov=document.getElementById('dvBkOverlay');if(ov)ov.remove();ov=document.createElement('div');ov.id='dvBkOverlay';ov.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';const box=document.createElement('div');box.style.cssText='background:#1e1e1e;border:1px solid #444;border-radius:6px;max-width:90%;max-height:80%;overflow:auto;padding:14px 16px;min-width:340px;';let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b>\\u128193 Devin Cloud 备份浏览</b><span style="cursor:pointer;color:#888" onclick="document.getElementById(\\'dvBkOverlay\\').remove()">\\u2715</span></div>';if(!tree||!tree.accounts||!tree.accounts.length){html+='<div style="color:#888">暂无备份。先用「导出全部对话」备份。</div>';}else{html+='<div style="color:#888;font-size:11px;margin-bottom:6px">'+(tree.root||'')+'</div>';for(const a of tree.accounts){html+='<div style="margin-top:8px"><b>'+a.account+'</b> <span style="color:#888">('+a.count+' 个对话)</span></div>';for(const c of a.conversations){const kb=(c.size/1024).toFixed(0);html+='<div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px solid #333"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px" title="'+c.name+'">'+c.name+' <span style="color:#666">'+kb+'KB</span></span><button class="conv-btn conv-btn-s" onclick="dvUnlock(this.dataset.p)" data-p="'+c.path.replace(/"/g,'&quot;')+'">\\u128275 解锁</button></div>';}}}box.innerHTML=html;ov.appendChild(box);ov.addEventListener('click',ev=>{if(ev.target===ov)ov.remove();});document.body.appendChild(ov);}
 </script></body></html>`;
 }
 
@@ -8074,6 +8079,8 @@ function _dvOverviewHtml(ov, i) {
   h +=
     '<div class="dv-acts">' +
     '<button class="conv-btn" onclick="dvBackup(' + i + ')" title="增量备份本账号全部对话">&#128190; 导出全部对话</button>' +
+    '<button class="conv-btn conv-btn-s" onclick="dvCreate(' + i + ')" title="代替我在此账号发起一个新 Devin Cloud 对话">&#9729; 发起对话</button>' +
+    '<button class="conv-btn conv-btn-s" onclick="dvBrowse()" title="浏览备份文件夹·一键解锁(解压)对话ZIP">&#128193; 浏览备份</button>' +
     '<button class="conv-btn conv-btn-s" onclick="dvSetTag(' + i + ')">&#127991;&#65039; 标签' + (tag ? "：" + _esc(tag) : "") + "</button>" +
     '<button class="conv-btn conv-btn-s" onclick="wp(' + i + ')" title="水过无痕清理本账号">&#127754; 水过无痕</button>' +
     "</div>";
@@ -9210,6 +9217,60 @@ async function handleWebviewMessage(msg) {
         }
         break;
       }
+      // v4.0 · Devin Cloud 备份浏览 (账号→对话ZIP 树) · 道法自然
+      case "devinBrowseBackups": {
+        try {
+          const root = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+          const tree = devinCloud.listBackups(root);
+          _broadcastMsg({ type: "devinBackupTree", tree });
+        } catch (e) {
+          _toast("\u2717 浏览备份失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.0 · 一键解锁(解压)某个对话备份 ZIP → 同名文件夹并打开
+      case "devinUnlockBackup": {
+        try {
+          const res = devinCloud.unlockBackup(msg.zipPath, {});
+          if (res.ok) {
+            _toast("\u2713 已解锁 " + res.files + " 个文件");
+            try { await vscode.env.openExternal(vscode.Uri.file(res.outDir)); } catch {}
+          } else {
+            _toast("\u2717 解锁失败: " + (res.error || "未知"));
+          }
+        } catch (e) {
+          _toast("\u2717 解锁失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.0 · 代替用户发起一个 Devin Cloud 对话 (createSession)
+      case "devinCreateSession": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        let prompt = msg.prompt;
+        if (typeof prompt !== "string") {
+          prompt = await vscode.window.showInputBox({
+            title: "Devin Cloud · 代替我发起对话",
+            prompt: "输入要发给 [" + r.email + "] 的首条消息：",
+            ignoreFocusOut: true,
+          });
+          if (prompt === undefined) break;
+        }
+        _toast("\u23F3 发起对话…");
+        try {
+          const res = await devinCloud.createSession(r.auth, prompt, { title: msg.title });
+          if (res.ok) {
+            _toast("\u2713 已发起: " + res.devinId);
+            _notify("info", "[" + r.email + "] 已发起新对话 " + res.devinId);
+            _dvRunPoll().catch(() => {});
+          } else {
+            _toast("\u2717 发起失败: " + (res.error || res.status));
+          }
+        } catch (e) {
+          _toast("\u2717 发起失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
       // v4.0 · 导出对话目录为 MD · 道法自然
       case "exportConvMd": {
         const mdResult = _exportConversationsMd();
@@ -9365,14 +9426,23 @@ async function handleWebviewMessage(msg) {
         _broadcastUI();
         break;
       }
-      // 设置账号标签 (防搞混)
+      // 设置账号标签 (防搞混) · 用扩展宿主 showInputBox (webview prompt 被屏蔽)
       case "devinSetTag": {
         const acc = _store.accounts[msg.index];
-        if (acc && acc.email) {
-          devinCloud.setTag(acc.email, msg.tag || "");
-          _toast("\u2713 标签已" + (msg.tag ? "设置" : "清除"));
-          _broadcastUI();
+        if (!acc || !acc.email) break;
+        let tag = msg.tag;
+        if (typeof tag !== "string") {
+          tag = await vscode.window.showInputBox({
+            title: "Devin Cloud 账号标签",
+            prompt: "为 " + acc.email + " 设置标签(防搞混)，留空清除：",
+            value: devinCloud.getTag(acc.email) || "",
+            ignoreFocusOut: true,
+          });
+          if (tag === undefined) break; // 用户取消
         }
+        devinCloud.setTag(acc.email, tag || "");
+        _toast("\u2713 标签已" + (tag ? "设置" : "清除"));
+        _broadcastUI();
         break;
       }
       // 导出 MD 操作指令 (给本地 Agent)
