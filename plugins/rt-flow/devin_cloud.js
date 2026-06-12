@@ -28,6 +28,11 @@ const DC_BACKUP_DEFAULT = path.join(WAM_DIR, "devin_cloud_backups");
 const CFG = {
   loginUrl: "https://windsurf.com/_devin-auth/password/login",
   apiBase: "https://app.devin.ai/api",
+  // 续写消息走官方公开 API (app.devin.ai/api 无此 REST 路由; 实测全部 404)。
+  // 实测: api.devin.ai/v1/session/{id}/message 返回 403 (路由存在·凭证不符),
+  // 其余 /v1/sessions/{id}/messages 返回 404 → 确证正确端点为单数 /session/{id}/message。
+  v1Base: "https://api.devin.ai/v1",
+  apiKey: "", // Devin 官方 API Key (apk_...); 续写消息所需, 会话登录态 auth1 不被公开 API 接受。
   ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) rt-flow-devin-cloud",
   authTtlMs: 12 * 60 * 60 * 1000, // 登录态缓存 12h
   reqTimeoutMs: 30000,
@@ -307,7 +312,9 @@ async function getSessionDetail(auth, devinId) {
 // opts: { title, tags, playbookId, repos, sessionSecrets, idempotencyKey }
 async function createSession(auth, prompt, opts) {
   opts = opts || {};
-  const payload = { prompt: String(prompt || "") };
+  // app.devin.ai 内部 API 的 /sessions 校验字段为 user_message (非 prompt);
+  // 两个都带上以兼容内部/公开两套契约 (实跑 422 揭示: body.user_message required)。
+  const payload = { user_message: String(prompt || ""), prompt: String(prompt || "") };
   if (opts.title) payload.title = opts.title;
   if (opts.tags) payload.tags = opts.tags;
   if (opts.playbookId) payload.playbook_id = opts.playbookId;
@@ -323,16 +330,34 @@ async function createSession(auth, prompt, opts) {
 }
 
 // 向已有对话追加一条用户消息 (继续对话 → 触发新事件/更新)。
-// 采用 Devin 官方公开 API 端点形态: POST /session/{id}/message  {message}
-// 注: 在已用尽额度/已结束的会话上无法实跑验证 (会返回 404/403)。
-async function sendMessage(auth, devinId, message) {
+// 端点经实测确证为官方公开 API: POST {v1Base}/session/{id}/message  {message}
+//   - app.devin.ai/api 下所有形态 (/session|/sessions ·/message|/messages) 实测均 404, 即内部 API 无此 REST 路由。
+//   - api.devin.ai/v1/sessions/{id}/messages 实测 404 (无此路由); /session/{id}/message 实测 403 (路由存在·凭证不符) → 端点正确。
+//   - 鉴权: 公开 API 仅认 Devin API Key (apk_...); 会话登录态 auth1 / cog_ service-user 均被拒 (403)。
+//     故 opts.apiKey || CFG.apiKey 缺省时不臆造成功, 直接回报需配置 API Key。
+async function sendMessage(auth, devinId, message, opts) {
+  opts = opts || {};
+  const apiKey = opts.apiKey || CFG.apiKey || "";
+  if (!apiKey) {
+    return {
+      ok: false,
+      status: 0,
+      error: "续写消息需配置 Devin API Key (apk_...); 会话登录态不被公开 API 接受。请在设置 devinCloudApiKey 或 opts.apiKey 后重试。",
+    };
+  }
   const r = await jsonRequest(
     "POST",
-    CFG.apiBase + "/session/" + devinId + "/message",
-    authHeaders(auth),
+    CFG.v1Base + "/session/" + devinId + "/message",
+    { Authorization: "Bearer " + apiKey, "Content-Type": "application/json", "User-Agent": CFG.ua },
     { message: String(message || "") },
   );
-  return { ok: r.status >= 200 && r.status < 300, status: r.status, raw: r.json, text: (r.text || "").slice(0, 200) };
+  return {
+    ok: r.status >= 200 && r.status < 300,
+    status: r.status,
+    raw: r.json,
+    text: (r.text || "").slice(0, 200),
+    error: r.status >= 200 && r.status < 300 ? undefined : "sendMessage HTTP " + r.status + ": " + (r.text || "").slice(0, 160),
+  };
 }
 
 // 事件流 (SSE/ndjson/json 混合) → 去重排序后的事件数组

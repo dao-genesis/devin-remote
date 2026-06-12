@@ -747,7 +747,7 @@ const devinCloud = require("./devin_cloud");
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.0.0";
+const VERSION = "4.0.2";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -9233,8 +9233,12 @@ async function handleWebviewMessage(msg) {
         try {
           const res = devinCloud.unlockBackup(msg.zipPath, {});
           if (res.ok) {
-            _toast("\u2713 已解锁 " + res.files + " 个文件");
-            try { await vscode.env.openExternal(vscode.Uri.file(res.outDir)); } catch {}
+            _toast("\u2713 已解锁 " + res.files + " 个文件 → " + res.outDir);
+            // revealFileInOS 在系统文件管理器中定位解压目录; 比 openExternal(dir)
+            // 更稳妥 — 后者在 explorer 启动失败时会弹出原生错误框 (实测 0x2)。
+            try {
+              await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(res.outDir));
+            } catch {}
           } else {
             _toast("\u2717 解锁失败: " + (res.error || "未知"));
           }
