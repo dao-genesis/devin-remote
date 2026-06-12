@@ -3460,6 +3460,46 @@ function _modelsUrlFor(cfg) {
   return base + "/v1/models";
 }
 
+// ★ 非对话模型名特征 (语音/向量/重排/图像/审核) · 自动发现时剔除
+//   道义: 二十七章「善行无辙迹」· 自动回填只取可对话之模 · 不把 tts/asr/embedding 当对话模型路由 (必失败)
+const _NON_CHAT_RE =
+  /(^|[-_/.])(tts|asr|stt|whisper|voice|voiceclone|voicedesign|audio|speech|realtime|embed|embedding|embeddings|rerank|reranker|image|images|dall-?e|vision-ocr|ocr|moderation|guard|guardrail)([-_/.]|$)/i;
+function _isChatModel(id) {
+  if (!id || typeof id !== "string") return false;
+  return !_NON_CHAT_RE.test(id);
+}
+
+// ★ 从 /models 的 supported_endpoint_types 自识协议 · 仅在 provider 未显式指定 protocol 时生效
+//   道义: 道法自然 · 不着相于配置 · 从云端实证模型能力自识协议 (如 freemodel claude 系 → anthropic)
+function _autoDetectProtocolFromModels(provCfg, dataArr) {
+  if (!provCfg || provCfg.protocol) return; // 已显式指定 → 尊重用户
+  let anyAnthropic = false;
+  let anyOpenAI = false;
+  for (const m of dataArr) {
+    const types = Array.isArray(m && m.supported_endpoint_types)
+      ? m.supported_endpoint_types.map((s) => String(s).toLowerCase())
+      : [];
+    if (types.includes("anthropic")) anyAnthropic = true;
+    if (
+      types.includes("openai") ||
+      types.includes("chat") ||
+      types.includes("openai-chat") ||
+      types.includes("chat_completion") ||
+      types.includes("chat.completions")
+    )
+      anyOpenAI = true;
+  }
+  if (anyAnthropic && !anyOpenAI) {
+    provCfg.protocol = "anthropic";
+    provCfg.type = "anthropic";
+    const baseHasVer = /\/v\d+\/?$/i.test(String(provCfg.baseUrl || ""));
+    provCfg.completionPath = baseHasVer ? "/messages" : "/v1/messages";
+    _log(
+      `[dao-router] [discover] ${provCfg.baseUrl || "?"} · 模型自识为 anthropic 协议 → completionPath=${provCfg.completionPath}`,
+    );
+  }
+}
+
 /** 主动探测所有provider健康 · 热重载后立即执行
  *  无显式 healthCheck 的渠道(用户新加渠道默认即此) → 走「带鉴权的 /models 探测」:
  *    HTTP 200 ⇒ key 有效 + 可列模型 ⇒ ALIVE(绿点); 401/403/超时 ⇒ DEAD(红点).
@@ -3880,11 +3920,24 @@ async function hotListProviderModels(providerName) {
     if (body) {
       const parsed = JSON.parse(body);
       if (parsed.data && Array.isArray(parsed.data)) {
-        const models = parsed.data.map((m) => m.id).filter(Boolean);
+        const all = parsed.data.filter((m) => m && m.id);
+        // ★ 协议自检: 模型 supported_endpoint_types 含 anthropic 且无 openai → provider 用 anthropic 协议
+        _autoDetectProtocolFromModels(provCfg, all);
+        // ★ 仅取「可对话」模型 (剔除 tts/asr/embedding/rerank/image 等非对话模型);
+        //   若过滤后为空 (provider 全是特殊模型) → 回退取全部 · 不致空列表
+        const chat = all.filter((m) => _isChatModel(m.id));
+        const picked = chat.length > 0 ? chat : all;
+        const models = picked.map((m) => m.id);
         if (models.length > 0) {
           // 缓存到 provider 配置
           provCfg.models = models;
-          return { ok: true, models, source: "probe" };
+          return {
+            ok: true,
+            models,
+            source: "probe",
+            protocol: provCfg.protocol || undefined,
+            filtered: all.length - models.length,
+          };
         }
       }
     }
