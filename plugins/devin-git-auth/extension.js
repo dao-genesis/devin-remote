@@ -649,6 +649,11 @@ let order = [];        // email 顺序(用于 index/范围选)
 let selected = new Set(); // 选中的 email
 let lastSelIdx = -1;
 let dragSel = false, dragVal = false;
+let _addOpen = false;
+
+// ─── 选择/面板状态持久化(参照 rt-flow · 跨 webview 重载保持) ───
+try { var _st0 = (vscode.getState && vscode.getState()) || null; if (_st0) { if (_st0.sel && _st0.sel.length) _st0.sel.forEach(function(e){ selected.add(e); }); _addOpen = !!_st0.addOpen; } } catch (_) {}
+function persistUI() { try { vscode.setState({ sel: Array.from(selected), addOpen: _addOpen }); } catch (_) {} }
 
 // ─── 日志 ───
 function log(msg, type) {
@@ -740,6 +745,7 @@ function applyRange(a, b, v) {
 function updateBatchBar() {
   document.getElementById('batchCount').textContent = selected.size;
   document.getElementById('batchBar').classList.toggle('visible', selected.size>0);
+  persistUI();
   // 同步 DOM 选中态
   document.querySelectorAll('.arow').forEach(function(r){
     const em = r.dataset.email;
@@ -816,6 +822,8 @@ function renderStatus() {
 function renderList() {
   const list = document.getElementById('accountList');
   order = Object.keys(saved);
+  // 清理失效选择(账号已被删除/未加载)
+  selected.forEach(function(e){ if (!saved[e]) selected.delete(e); });
   if (order.length === 0) {
     list.innerHTML = '<div style="color:var(--tx2);font-size:11px">暂无账号</div>';
     // 清理失效选择
@@ -1042,8 +1050,12 @@ document.getElementById('btnClearLog').addEventListener('click', function() { do
 document.getElementById('addHead').addEventListener('click', function() {
   const b = document.getElementById('addBody');
   b.classList.toggle('open');
-  document.getElementById('addArrow').textContent = b.classList.contains('open') ? '▲' : '▼';
+  _addOpen = b.classList.contains('open');
+  document.getElementById('addArrow').textContent = _addOpen ? '▲' : '▼';
+  persistUI();
 });
+// 恢复添加面板折叠状态
+(function(){ const b=document.getElementById('addBody'); if (_addOpen && b) { b.classList.add('open'); document.getElementById('addArrow').textContent='▲'; } })();
 document.getElementById('btnAddBatch').addEventListener('click', function() {
   const t = document.getElementById('addInput').value.trim();
   if (!t) { log('请粘贴账号','err'); return; }
