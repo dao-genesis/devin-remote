@@ -37,6 +37,8 @@ const CFG = {
   authTtlMs: 12 * 60 * 60 * 1000, // 登录态缓存 12h
   reqTimeoutMs: 30000,
   streamTimeoutMs: 180000,
+  maxRetries: 3, // 瞬态网络错误(TLS socket 断/ECONNRESET/超时)自动重试次数 (弱者道之用·反复至成)
+  retryBaseMs: 500, // 重试退避基数 (指数: 500/1000/2000ms)
   downloadTimeoutMs: 120000,
   downloadConcurrency: 16,
   presignConcurrency: 8,
@@ -94,7 +96,43 @@ function proxyForUrl(targetUrl) {
   }
 }
 
-function rawRequest(method, targetUrl, headers, body, timeoutMs) {
+// 瞬态错误判定: TLS 握手前 socket 断开 / 连接重置 / 超时 / DNS 抖动 等可重试
+function _isTransientErr(e) {
+  const m = String((e && (e.message || e.code)) || e || "").toLowerCase();
+  return (
+    m.includes("socket disconnected") || // "Client network socket disconnected before secure TLS connection was established"
+    m.includes("econnreset") ||
+    m.includes("econnrefused") ||
+    m.includes("etimedout") ||
+    m.includes("timeout") ||
+    m.includes("eai_again") ||
+    m.includes("enotfound") ||
+    m.includes("epipe") ||
+    m.includes("ehostunreach") ||
+    m.includes("enetunreach") ||
+    m.includes("socket hang up") ||
+    m.includes("tls")
+  );
+}
+function _sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+// 善行无辙迹: 瞬态网络错误指数退避重试, 一次性彻底错误(bad_url 等)立即上抛。
+async function rawRequest(method, targetUrl, headers, body, timeoutMs) {
+  const max = Math.max(0, CFG.maxRetries | 0);
+  let lastErr;
+  for (let attempt = 0; attempt <= max; attempt++) {
+    try {
+      return await _rawRequestOnce(method, targetUrl, headers, body, timeoutMs);
+    } catch (e) {
+      lastErr = e;
+      if (attempt >= max || !_isTransientErr(e)) break;
+      await _sleep(CFG.retryBaseMs * Math.pow(2, attempt));
+    }
+  }
+  throw lastErr;
+}
+function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs) {
   return new Promise((resolve, reject) => {
     let u;
     try {
@@ -462,7 +500,9 @@ async function getBilling(auth) {
 
 // 账号本源概览 (下拉框用): 对话(着重) + 知识库/剧本/密钥/Git/额度 简要
 async function accountOverview(auth) {
-  const [sessions, knowledge, playbooks, secrets, git, billing] = await Promise.all([
+  // 大成若缺: 任一子端点瞬态失败不应毁整份概览。allSettled 逐个降级,
+  // rejected 项返回空结果(同各 list 的 ok:false 形态), 只要有一个成功即有概览。
+  const settled = await Promise.allSettled([
     listSessions(auth),
     listKnowledge(auth),
     listPlaybooks(auth),
@@ -470,6 +510,13 @@ async function accountOverview(auth) {
     getGitConnections(auth),
     getBilling(auth),
   ]);
+  const v = (i, fallback) => (settled[i].status === "fulfilled" ? settled[i].value : fallback);
+  const sessions = v(0, { sessions: [] });
+  const knowledge = v(1, { learnings: [] });
+  const playbooks = v(2, { playbooks: [] });
+  const secrets = v(3, { secrets: [] });
+  const git = v(4, { connections: [] });
+  const billing = v(5, { billing: null });
   const ss = sessions.sessions || [];
   return {
     email: auth.email,
@@ -1407,4 +1454,8 @@ module.exports = {
   ZipWriter,
   safeName,
   runPool,
+  // 低层传输(供 devin_git 等同源复用 · 统一代理/TLS 重试于一处)
+  rawRequest,
+  jsonRequest,
+  proxyForUrl,
 };
