@@ -91,28 +91,45 @@ function spawnEnv(proxy) {
 
 const CF_BIN_NAME = process.platform === "win32" ? "cloudflared.exe" : "cloudflared";
 
+// 真二进制判定 — 帛书·「質真如渝」: 排除 npm/choco 包装脚本(.cmd/.ps1/无扩展名 shim, 仅几百字节),
+// cp.spawn(无 shell) 无法执行此类 shim → 正是 141 台式机隧道无法启动的根因。
+function isRealCloudflared(p) {
+  try {
+    if (!p || p.indexOf(path.sep) < 0 || !fs.existsSync(p)) return false;
+    const st = fs.statSync(p);
+    if (!st.isFile() || st.size < 1000000) return false; // 真二进制 ≈50MB; shim 仅几百字节
+    if (process.platform === "win32" && !/\.exe$/i.test(p)) return false; // Windows 必须是 .exe(可被 CreateProcess 执行)
+    return true;
+  } catch (e) { return false; }
+}
 function cloudflaredCandidates(ctx) {
   const cfgPath = vscode.workspace.getConfiguration("daoBridge").get("cloudflaredPath") || "";
+  const home = os.homedir();
+  const appdata = process.env.APPDATA || path.join(home, "AppData", "Roaming");
   return [
     cfgPath,
     // 插件自带(随 VSIX 分发, 离线即用) — 帛书·「大丈夫居其厚」
     ctx ? path.join(ctx.extensionPath, "bin", CF_BIN_NAME) : "",
     ctx ? path.join(ctx.extensionPath, "bin", "cloudflared.exe") : "",
     ctx ? path.join(ctx.extensionPath, "bin", "cloudflared") : "",
-    path.join(os.homedir(), ".dao", "bin", "cloudflared.exe"),
-    path.join(os.homedir(), ".dao", "bin", "cloudflared"),
+    path.join(home, ".dao", "bin", "cloudflared.exe"),
+    path.join(home, ".dao", "bin", "cloudflared"),
+    // npm/choco/winget 全局安装时缓存的真二进制(非 shim) — 帛书·「善用人者為之下」
+    path.join(appdata, "npm", "node_modules", "cloudflared", "bin", "cloudflared.exe"),
+    path.join(appdata, "npm", "node_modules", "cloudflared", "bin", "cloudflared"),
     "cloudflared.exe",
     "cloudflared",
   ].filter(Boolean);
 }
 function findCloudflared(ctx) {
   for (const c of cloudflaredCandidates(ctx)) {
-    try { if (c.indexOf(path.sep) >= 0 && fs.existsSync(c) && fs.statSync(c).size > 1000000) return c; } catch (e) {}
+    if (isRealCloudflared(c)) return c;
   }
+  // PATH 兜底: 遍历 where/command -v 全部结果, 跳过 shim, 只取真二进制
   try {
-    const probe = process.platform === "win32" ? "where cloudflared" : "command -v cloudflared";
-    const out = cp.execSync(probe, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(/\r?\n/)[0];
-    if (out && fs.existsSync(out)) return out;
+    const probe = process.platform === "win32" ? "where cloudflared" : "command -v cloudflared 2>/dev/null; which -a cloudflared 2>/dev/null";
+    const lines = cp.execSync(probe, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(/\r?\n/);
+    for (const ln of lines) { const p = ln.trim(); if (isRealCloudflared(p)) return p; }
   } catch (e) {}
   return "";
 }
