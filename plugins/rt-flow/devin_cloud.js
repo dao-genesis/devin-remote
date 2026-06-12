@@ -956,19 +956,33 @@ async function snapshotAccountData(auth, opts) {
   ensureDir(snapDir);
 
   prog("快照: 拉取账号数据…");
+  // 单条失败不毁全局: 每条带重试·失败如实记录, 有几条存几条 (allSettled 语义·不臆造)。
+  // 旧码用 Promise.all → 任一端点瞬时失败(批量并发 429/抖动)即抛错, 整份快照丢失留下空目录。
+  const snapErrors = [];
+  const _settle = async (label, fn) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { return await fn(); }
+      catch (e) {
+        if (attempt === 2) { snapErrors.push(label + ": " + String((e && e.message) || e)); return null; }
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
+    }
+    return null;
+  };
   const [kn, pb, sec, git, billing, sess] = await Promise.all([
-    listKnowledge(auth),
-    listPlaybooks(auth),
-    listSecrets(auth),
-    getGitConnections(auth),
-    getBilling(auth),
-    listSessions(auth, 1000),
+    _settle("知识库", () => listKnowledge(auth)),
+    _settle("剧本", () => listPlaybooks(auth)),
+    _settle("密钥", () => listSecrets(auth)),
+    _settle("Git连接", () => getGitConnections(auth)),
+    _settle("额度", () => getBilling(auth)),
+    _settle("会话清单", () => listSessions(auth, 1000)),
   ]);
-  const learnings = kn.learnings || [];
-  const playbooks = pb.playbooks || [];
-  const secrets = sec.secrets || [];
-  const conns = git.connections || [];
-  const sessions = sess.sessions || [];
+  const learnings = (kn && kn.learnings) || [];
+  const playbooks = (pb && pb.playbooks) || [];
+  const secrets = (sec && sec.secrets) || [];
+  const conns = (git && git.connections) || [];
+  const sessions = (sess && sess.sessions) || [];
+  const billingObj = (billing && billing.billing) || {};
 
   // 知识库: 每条一份正文 MD + 汇总 index (机器可读)
   if (learnings.length) {
@@ -1022,7 +1036,7 @@ async function snapshotAccountData(auth, opts) {
   writeJson(path.join(snapDir, "密钥.json"), secrets);
   writeJson(path.join(snapDir, "git连接.json"), conns);
   writeJson(path.join(snapDir, "会话清单.json"), sessions);
-  writeJson(path.join(snapDir, "额度.json"), billing.billing || {});
+  writeJson(path.join(snapDir, "额度.json"), billingObj);
 
   const counts = {
     sessions: sessions.length,
@@ -1031,13 +1045,16 @@ async function snapshotAccountData(auth, opts) {
     secrets: secrets.length,
     gitConnections: conns.length,
   };
+  const partial = snapErrors.length > 0;
   writeJson(path.join(snapDir, "_manifest.json"), {
     schema: "rt-flow.devin-cloud.account-snapshot/1",
     account: auth.email,
     orgId: auth.orgId,
     snapshotAt: new Date().toISOString(),
     counts,
-    billing: billing.billing || null,
+    billing: billingObj,
+    partial,
+    errors: snapErrors,
   });
   const summaryMd = [
     "# 账号本源快照 · " + auth.email,
@@ -1055,20 +1072,24 @@ async function snapshotAccountData(auth, opts) {
     "| 密钥 | " + counts.secrets + " |",
     "| Git 连接 | " + counts.gitConnections + " |",
     "",
+    partial ? "> ⚠ 部分留底: 以下条目拉取失败(已记录, 其余如实留底):\n>\n" + snapErrors.map((e) => ">  - " + e).join("\n") + "\n" : "",
     "> 对话正文 ZIP 见同级目录 `<ID末8位>_<标题>.zip`; 知识库/剧本正文见本快照 `知识库/` `剧本/` 子目录。",
   ].join("\n");
   try { fs.writeFileSync(path.join(snapDir, "账号快照.md"), summaryMd); } catch {}
 
-  prog("快照完成: 知识" + counts.knowledge + " 剧本" + counts.playbooks + " 密钥" + counts.secrets + " Git" + counts.gitConnections);
-  return { ok: true, account: auth.email, dir: snapDir, counts };
+  prog("快照" + (partial ? "(部分)" : "完成") + ": 知识" + counts.knowledge + " 剧本" + counts.playbooks + " 密钥" + counts.secrets + " Git" + counts.gitConnections);
+  return { ok: true, account: auth.email, dir: snapDir, counts, partial, errors: snapErrors };
 }
 
 // 完整本源备份 = 会话 ZIP(增量) + 账号数据全量快照. 供「备份并清空」一步到位。
 async function backupAccountFull(auth, opts) {
   opts = opts || {};
-  const conversations = await backupAccount(auth, opts);
+  // 对话备份失败(瞬时抖动/超时)不应连累数据快照 —— 两段相互独立, 各自尽力留底。
+  let conversations = null, convError = null;
+  try { conversations = await backupAccount(auth, opts); }
+  catch (e) { convError = String((e && e.message) || e); }
   const snapshot = await snapshotAccountData(auth, opts);
-  return { ok: true, account: auth.email, conversations, snapshot };
+  return { ok: true, account: auth.email, conversations, convError, snapshot };
 }
 
 // ═══ 备份浏览 + 快速解锁(解压) ════════════════════════════════════════════
