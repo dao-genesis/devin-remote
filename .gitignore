@@ -1,0 +1,14 @@
+# 隐私 · 凭证（绝不入库）—— 道法自然·去彼取此
+**/accounts.md
+**/10_accounts.md
+*账资*
+**/secrets.json
+**/git-pats.json
+*.pem
+*.key
+.env
+.env.*
+
+# 依赖 / 构建产物
+node_modules/
+*.log

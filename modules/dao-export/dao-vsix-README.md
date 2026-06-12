@@ -26,7 +26,7 @@
 ## 安装
 
 ```
-code --install-extension dao-devin-export-1.3.0.vsix
+code --install-extension dao-devin-export-1.3.3.vsix
 ```
 
 ## 使用

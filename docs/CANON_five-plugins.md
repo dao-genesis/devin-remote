@@ -1,17 +1,18 @@
-# 四插件 CANON · 正本清源（道法自然）
+# 五插件 CANON · 正本清源（道法自然）
 
-> `E:\DAO_ARCHIVE` 的核心永远是**四个插件**。它们同依赖一个软件本体（Devin Desktop = Windsurf 同源），
+> 核心是**五个插件**。它们同依赖一个软件本体（Devin Desktop = Windsurf 同源），
 > 各自独立的 VSIX 扩展，可并行构建/安装/测试，「道并行而不相悖」。
-> 当前权威源码在归档顶层各插件目录，与 GitHub `devin-remote` main 一致。
+> 当前权威源码在 `plugins/` 各插件目录，与 GitHub `devin-remote` main 一致。
 
 ## 总览
 
 | # | 插件 | 本质 | 归档目录 | 当前版本 | 状态 |
 |---|------|------|----------|----------|------|
-| 1 | **dao-proxy-pro** | 底层提示词隔离替换 + 外接第三方模型路由进 Windsurf/Cascade | `dao-proxy-pro/` | 9.9.261 | #1–#4 全实现+验证 |
-| 2 | **dao-vsix** | Devin 全功能面板（会话/知识库/Playbook/Secret）+ 路由官网 + 内嵌 git/穿透板块 + 启动注入帛书规则 | `dao-vsix/` | 1.0.9 | 主体完成；官网自动登录待 live 复验 |
-| 3 | **dao-bridge** | 工作区专属内网穿透（随 IDE 启停 + 实时 MD + Cloudflare 隧道） | `dao-bridge/` | 2.1.0 | live E2E 通过；2.1.0 修复 cloudflared 缺失自动下载 + 命名隧道（稳定 URL）配置支持 |
-| 4 | **devin-git-auth** | 多个 Devin 账号绑定到同一 GitHub 仓库协同 | `devin-git-auth/` | 2.0.0 | 绑定目标态达成；VSIX 已可构建安装；活跃协同待打通 |
+| 1 | **dao-proxy-pro** | 底层提示词隔离替换 + 外接第三方模型路由进 Windsurf/Cascade | `dao-proxy-pro/` | 9.9.277 | #1–#4 全实现+验证 |
+| 2 | **dao-vsix** | Devin 全功能面板（会话/知识库/Playbook/Secret）+ 路由官网 + 内嵌 git/穿透板块 + 启动注入帛书规则 | `dao-vsix/` | 1.2.1 | 主体完成；官网自动登录待 live 复验 |
+| 3 | **dao-bridge** | 工作区专属内网穿透（随 IDE 启停 + 实时 MD + Cloudflare 隧道） | `dao-bridge-ext/` | 3.0.0 | live E2E 通过；随 IDE 启停 + 命名隧道（稳定 URL）配置支持 |
+| 4 | **devin-git-auth** | 多个 Devin 账号绑定到同一 GitHub 仓库协同 | `devin-git-auth/` | 2.3.0 | 绑定目标态达成；VSIX 已可构建安装；活跃协同待打通 |
+| 5 | **rt-flow** | Devin Cloud 接入：批量/自动对话备份 + 全量数据快照 + 一键回归本源(wipe) | `rt-flow/` | 4.1.2 | 12/12 批量备份 + 一键 wipe 全链路真号验证 |
 
 ## 逐插件本源需求（底层驱动力）
 
@@ -36,7 +37,13 @@
 - 多个 Devin 账号统一鉴权、共享同一 GitHub 仓库，协同开发。
 - 已达成：16 账号统一注册到同一 GitHub App。待打通：刷新「全新活跃 OAuth 连接」并验证多账号共享同一仓库的活跃协同（需 github.com 网页登录 / 设备码——账号资源里有两个测试 GitHub 账号 + TOTP 可用）。
 
+### ⑤ rt-flow
+- 零依赖 `devin_cloud.js` 底层封装 Devin Cloud 全部 API（邮箱+密码→auth1 登录、概览、对话追踪、CRUD、备份、wipe），不依赖浏览器 OAuth 回跳。
+- **对话备份（批量 + 自动）**：增量 ZIP 备份对话 + `snapshotAccountData` 全量数据快照（知识库/剧本正文 + 密钥/Git/会话/额度元数据）。快照逐条 `_settle` 重试，一条端点失败不毁整份（`partial`/`errors` 如实标注），与 dao-export 模块端点逆向经验互通。
+- **一键回归本源（wipe）**：先 `backupAccountFull` 本地留底，再清空账号全部用户数据（对话归档 + 知识/剧本/密钥真删 + Git 授权撤销），**保留 Devin 本源默认**（3 内置知识 + 32 社区剧本）。
+- 实践戒律：区分「用户数据」与「本源默认」，删除端点必须真号实跑确证（曾揪出多个把 404 当成功的「臆造成功」缺陷），残留如实回报、绝不臆造。
+
 ## 告诫下一个 agent
 
-- 四插件正本就在归档顶层四个目录 + GitHub `devin-remote`。不要把旁支仓库当主线翻找。
+- 五插件正本就在 `plugins/` 五个目录 + GitHub `devin-remote`。不要把旁支仓库当主线翻找。
 - 提示词以「已隔离替换」状态为准（帛书《老子》道德经 + 道藏《阴符经》），见各插件内 `media/dao-rules.md` 与 proxy-pro vendor。

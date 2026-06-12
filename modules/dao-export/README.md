@@ -14,12 +14,10 @@
 | `dao_export_all.py` | ★ 零依赖 Python 导出脚本（v2 高速版：16 路并发下载 + 重试 + 断点续传；实测 70 会话/7173 事件/706 文件 ≈ 58 秒全量导出） |
 | `dao-devin-export-1.3.3.vsix` | ★ VS Code 插件成品（最新 v1.3.3：**连接复用 keep-alive 根治高延迟链路下载慢** + 导出内容**人/Agent 双向重构**：README 索引 + session.json 结构化 + 像官网一样的 conversation.md；含 v1.3.2 完整事件提取） |
 | `vsix-src/` | ★ 插件完整 TypeScript 源码（可直接 `npm i && npm run package` 重新打包） |
-| `dao-vsix-source.zip` | 插件完整 TypeScript 源码（与 `vsix-src/` 一致的打包快照） |
 | `dao-vsix-README.md` | 插件使用文档 |
 | `DEV_EXPERIENCE.md` | 核心开发经验（坑+解法，全部实战验证） |
 | `SESSION_PROCESS.md` | 本对话(构建本系统的Devin会话)全过程记录 |
 | `TEST_REPORT.md` | 端到端测试报告(4/4通过) |
-| `accounts.md` | 测试账号 |
 
 ## 最简用法
 
