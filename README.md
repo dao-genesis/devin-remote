@@ -50,11 +50,8 @@ devin-remote/
 ├── bootstrap/                    # ★ 1 人启动（冷启动板块：装 IDE→秒登账号→装插件→开发）
 │   └── README.md                 #   人启动总纲 + 经验教训 + 三类 token 辨析
 │
-├── agent.ps1 / dao-call.ps1      # 传输层（GitHub Issues = 无感邮箱）
-├── dao-exec.sh                   # Linux/Mac 控制端
-├── tools/                        # 冷启动/同步脚本（coldstart.ps1 · sync · pack-vsix）
-├── plugins/cf-daohub/            # Cloudflare 云代理 + Python Agent 守护
-└── docs/                         # 正典文档（CANON · AUDIT · 实测验证 · 冷启动 Runbook）
+├── tools/                        # 冷启动/同步脚本（coldstart.ps1 · pack-vsix）
+└── docs/                         # 正典文档（CANON 五插件规范 · 实测验证 · 冷启动 Runbook）
 ```
 
 ---
@@ -139,40 +136,7 @@ python dao_export_all.py --email xxx@gmail.com --password xxx
 
 ---
 
-## ④ 传输层（GitHub Issues = 无感邮箱）
-
-```
-dao-call ──POST──> GitHub Issue Comment (dao-cmd:base64)
-                        │
-agent.ps1 ──GET──poll───┘  ← If-Modified-Since: 304=free（不计配额）
-                        │
-agent.ps1 ──POST──> GitHub Issue Comment (dao-result:base64)
-```
-
-**一行启动 Agent**（被控端）：
-```powershell
-$env:DAO_TOKEN='ghp_xxx'; irm https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/agent.ps1 | iex
-```
-
-**控制端**：
-```powershell
-# PowerShell
-$env:DAO_TOKEN='ghp_xxx'; . .\dao-call.ps1
-dao 141 hostname      # 执行命令
-dao-shot 141          # 截屏
-dao-sys 141           # 系统信息
-
-# Bash
-DAO_TOKEN=ghp_xxx ./dao-exec.sh -a 141 hostname
-```
-
-**Mailbox**：每个 Agent 对应一个 GitHub Issue（`mailbox-<COMPUTERNAME>`），标签 `dao-mailbox`。1 次 API 调用发现所有邮箱。
-
-> 人启动板块：[bootstrap/README.md](bootstrap/README.md) · 历史长版 Runbook：[docs/RUNBOOK_coldstart.md](docs/RUNBOOK_coldstart.md)
-
----
-
-## ⑤ 实测状态
+## ④ 实测状态
 
 | 插件 | 状态 | 说明 |
 |------|------|------|
@@ -183,17 +147,3 @@ DAO_TOKEN=ghp_xxx ./dao-exec.sh -a 141 hostname
 | rt-flow | ✅ 实测验证 | 12/12 批量备份 + 一键 wipe 全链路真号验证（备份留底→用户数据清零→本源默认保留） |
 
 > 实测详情：[docs/LIVE_VERIFICATION_2026-06-11.md](docs/LIVE_VERIFICATION_2026-06-11.md) · 五插件规范：[docs/CANON_five-plugins.md](docs/CANON_five-plugins.md)
-
----
-
-## ⑥ 环境变量
-
-| 变量 | 说明 | 默认 |
-|------|------|------|
-| `DAO_TOKEN` | GitHub PAT (classic, repo scope) | 交互输入 |
-| `DAO_REPO` | owner/repo | `zhouyoukang1234-spec/devin-remote` |
-| `DAO_POLL` | agent 轮询间隔(秒) | `10` |
-| `DAO_PROXY` | HTTP 代理 | 无 |
-| `DAO_TIMEOUT` | 等结果超时(秒) | `120` |
-
-**304 不计配额**：agent 轮询带 `If-Modified-Since`，无新命令时返回 304（免费）。60/hr 限制下可持续运行。
