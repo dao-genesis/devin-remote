@@ -189,6 +189,7 @@ function _routeDiag(msg) {
   } catch {}
 }
 let _substituteEnabled = false; // 全局开关: substitute模式默认关闭(需用户有目标模型权限)
+let _familyTierExtend = false; // ★ 同族档位延伸: 连一档即覆盖全族 · 默认关 · 显式逐档路由为本
 let _wire = null; // cascade_wire.js (lazy load)
 
 // ════════════════════════════════════════════════════════════════
@@ -890,6 +891,16 @@ function init({ log, configPath }) {
       _log("[dao-router]   substitute模式: 关闭 (substituteEnabled=false)");
     }
 
+    // ★ 同族档位自动延伸开关 (连一档即覆盖全族) · 默认关闭 · 守「显式逐档路由」之本
+    //   关(默认): swe-1-6-slow 等未显式连线者保持官方原生直通 (用户旨意: slow→官方)
+    //   开: 同族任一档位被显式连线 → 全族档位归一其渠道 (适配 Cascade 默认下发档位错配)
+    //   道义: 二十一章「名实相符」· 前端所见即后端所路 · 不暗自吞并
+    _familyTierExtend = dr.familyTierExtend === true;
+    _log(
+      "[dao-router]   同族档位延伸: " +
+        (_familyTierExtend ? "开 (连一档覆盖全族)" : "关 (显式逐档路由)"),
+    );
+
     // ★ v9.9.88 · MCP 工具过滤开关 (移植自 EXE ALLOW_MCP_TOOLS)
     //   默认 true: 允许 mcp\d+_ 前缀的工具传给上游模型
     //   设为 false: 仅传 _KNOWN_TOOL_NAMES 白名单内的工具
@@ -1115,6 +1126,9 @@ function _normalizeModelUid(uid) {
   //   关键: 自动播种(_seeded)的 MODEL_SWE_1_6 测试桩不得吞并兄弟档位 →
   //         swe-1-6-slow 等未显式连线者保持官方透传(免费原生·用户旨意)
   //   仅当精确/形态匹配皆未命中, 且族基名被用户"显式"(非_seeded)连线时方触发
+  //   ★ 仅在 daoRoutes.familyTierExtend=true 时启用 · 默认关 · 守「显式逐档路由」之本
+  //     (用户旨意: slow→官方原生直通 · 不被同族 fast 连线自动吞并)
+  if (_familyTierExtend) {
   const base = _stripVariantSuffix(uid);
   if (base && base !== uid) {
     // ★ v9.9.284 · 真实可路由判定: 非播种 + 非桩/替身 + 未禁用
@@ -1172,6 +1186,7 @@ function _normalizeModelUid(uid) {
       return (_realSib.length ? _realSib : _sibs)[0];
     }
   }
+  } // end if(_familyTierExtend) · 同族档位延伸
   // 4) ★ v9.9.59 · 通配符兜底: * → 任何未知模型自动路由
   if (_routes["*"]) return "*";
   return uid; // 无法规范化则原样返回
@@ -3618,40 +3633,193 @@ function _autoDetectProtocolFromModels(provCfg, dataArr) {
   }
 }
 
+// ★ 渠道级错误/拒绝模式 · 区别于「内容拒绝」(resilience.matchesRefusal 处理模型内容层)
+//   这些是网关/渠道层的「伪成功」(HTTP 200 却是拒绝文案) 或鉴权失败文案
+//   根因(实证): freemodel 返回 HTTP 200 + "Access Denied...official client only" →
+//     仅看状态码必误判为通(绿点) · 须看响应体方知其不通
+//   道义: 二十一章「名实相符」· 通则言通 · 不通则明言其不通
+const _CHANNEL_ERR_PATTERNS = [
+  /access denied/i,
+  /restricted to authorized/i,
+  /official[^.]{0,40}client only/i,
+  /unauthorized (?:client|tooling|access|use)/i,
+  /service unavailable/i,
+  /invalid api key/i,
+  /incorrect api key/i,
+  /authentication[^.]{0,20}fail/i,
+  /permission denied/i,
+  /insufficient (?:quota|balance|credit|funds)/i,
+  /quota[^.]{0,20}exceed/i,
+  /account[^.]{0,30}suspend/i,
+  /violation of the terms/i,
+];
+
+/**
+ * 渠道响应分类 · 实证渠道是否真通 (不止看 HTTP 码 · 还看响应体伪成功/拒绝文案)
+ *   返回 { ok, reason } · ok=false 时 reason 简述不通之因 (供前端展示给用户)
+ *   道义: 七十一章「知不知 尚矣」· 知其不通方能明言其不通
+ */
+function classifyChannelResponse(status, text) {
+  const snippet = (typeof text === "string" ? text : "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+  if (typeof status === "number" && status >= 400) {
+    return { ok: false, reason: `HTTP ${status}` + (snippet ? ` · ${snippet}` : "") };
+  }
+  for (const p of _CHANNEL_ERR_PATTERNS) {
+    if (p.test(text || "")) {
+      return { ok: false, reason: `渠道拒绝/伪成功 · ${snippet}` };
+    }
+  }
+  return { ok: true, reason: "" };
+}
+
+/**
+ * 实证探活 · 发一条最小真实 chat 请求 · 端到端验渠道是否真通
+ *   不止探 /models (仅证 key 有效) · 更探真实推理是否被拒
+ *   (如 freemodel: /models=200 却 chat 返回 Access Denied · github: /models=404 却 chat 通)
+ *   道义: 四十八章「损之又损」· 损去表层探测之伪 · 直取真发之实
+ */
+function _verifyProviderChat(name, cfg) {
+  return new Promise((resolve) => {
+    const model =
+      (Array.isArray(cfg.models) && cfg.models[0]) || cfg.model || name;
+    const proto =
+      cfg.protocol ||
+      (cfg.type === "anthropic" ? "anthropic" : "") ||
+      (/\/v1\/messages/i.test(cfg.completionPath || "") ? "anthropic" : "") ||
+      (String(model).toLowerCase().startsWith("claude") ? "anthropic" : "") ||
+      "openai-chat";
+    const isAnthropic = proto === "anthropic";
+    const base = String(cfg.baseUrl || _gatewayUrl).replace(/\/$/, "");
+    const cpath =
+      cfg.completionPath || (isAnthropic ? "/v1/messages" : "/v1/chat/completions");
+    let u;
+    try {
+      u = new URL(base + cpath);
+    } catch (e) {
+      return resolve({ alive: false, reason: "baseUrl 非法: " + e.message, model });
+    }
+    const mod = u.protocol === "https:" ? https : http;
+    const payload = JSON.stringify({
+      model,
+      max_tokens: 8,
+      messages: [{ role: "user", content: "ping" }],
+      stream: false,
+    });
+    const headers = {
+      "Content-Type": "application/json",
+      "Content-Length": String(Buffer.byteLength(payload)),
+    };
+    if (cfg.apiKey && !/\*{2,}/.test(cfg.apiKey)) {
+      if (isAnthropic) {
+        headers["x-api-key"] = cfg.apiKey;
+        headers["anthropic-version"] = "2023-06-01";
+      } else {
+        headers["Authorization"] = "Bearer " + cfg.apiKey;
+      }
+    }
+    const t0 = Date.now();
+    const req = mod.request(
+      {
+        hostname: u.hostname,
+        port: parseInt(u.port || (u.protocol === "https:" ? "443" : "80")),
+        path: u.pathname + (u.search || ""),
+        method: "POST",
+        headers,
+        timeout: 12000,
+        rejectUnauthorized: false,
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          let content = "";
+          try {
+            const j = JSON.parse(data);
+            const ch0 = j.choices && j.choices[0];
+            if (ch0 && ch0.message)
+              content = ch0.message.content || ch0.message.reasoning_content || "";
+            else if (Array.isArray(j.content))
+              content = j.content
+                .filter((b) => b && b.type === "text")
+                .map((b) => b.text)
+                .join("");
+            if (j.error)
+              content =
+                typeof j.error === "string"
+                  ? j.error
+                  : j.error.message || JSON.stringify(j.error);
+          } catch {
+            content = data;
+          }
+          const verdict = classifyChannelResponse(res.statusCode, content || data);
+          resolve({
+            alive: verdict.ok,
+            reason: verdict.reason,
+            status: res.statusCode,
+            model,
+            elapsed_ms: Date.now() - t0,
+            sample: (content || "").replace(/\s+/g, " ").trim().slice(0, 80),
+          });
+        });
+      },
+    );
+    req.on("error", (e) =>
+      resolve({ alive: false, reason: "连接错误 · " + e.message, model }),
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      resolve({ alive: false, reason: "超时 (12s)", model });
+    });
+    req.end(payload);
+  });
+}
+
 /** 主动探测所有provider健康 · 热重载后立即执行
- *  无显式 healthCheck 的渠道(用户新加渠道默认即此) → 走「带鉴权的 /models 探测」:
- *    HTTP 200 ⇒ key 有效 + 可列模型 ⇒ ALIVE(绿点); 401/403/超时 ⇒ DEAD(红点).
- *  探活成功且渠道未配 models 时顺手回填 → 满足「加 key 即自动拿模型」.
+ *  ★ 实证探活 (v9.9.285): 发一条最小真实 chat · 端到端验渠道真伪
+ *    旧法只 GET /models + 看状态码 → 双向误判:
+ *      freemodel /models=200 但 chat 被拒(Access Denied) → 误报 ALIVE(假阳)
+ *      github   /models=404 但 chat 实通                → 误报 DEAD (假阴)
+ *    新法直发 chat · 看状态码 + 响应体拒绝文案 → 名实相符
  */
 async function probeAllProviders() {
   const results = {};
   for (const [name, cfg] of Object.entries(_providers)) {
     // 内置桩通道无需出网探测
     if (cfg._builtin || name === "builtin-stub") {
-      results[name] = { alive: true, builtin: true };
+      results[name] = { alive: true, builtin: true, reason: "内置桩 · 固定返回" };
+      _healthCache[name] = { alive: true, reason: "builtin", ts: Date.now() };
       continue;
     }
-    let hcUrl;
-    if (cfg.healthCheck) {
-      hcUrl = cfg.healthCheck;
-      if (hcUrl.startsWith("/")) {
-        const base = cfg.baseUrl || _gatewayUrl;
-        try {
-          const baseU = new URL(base);
-          hcUrl = `${baseU.protocol}//${baseU.hostname}:${baseU.port || (baseU.protocol === "https:" ? "443" : "80")}${hcUrl}`;
-        } catch {
-          hcUrl = `http://127.0.0.1:7788${hcUrl}`;
-        }
-      }
-    } else {
-      // 默认探活端点 = 带鉴权的模型列表 (与「探测模型」同源)
-      hcUrl = _modelsUrlFor(cfg);
+    if (cfg.enabled === false) {
+      results[name] = { alive: false, reason: "已禁用 (enabled=false)" };
+      _healthCache[name] = { alive: false, reason: "disabled", ts: Date.now() };
+      continue;
     }
-    const alive = await _checkHealth(name, hcUrl);
-    results[name] = { alive, url: hcUrl };
-    _log(`[dao-router] probe ${name}: ${alive ? "ALIVE" : "DEAD"} · ${hcUrl}`);
-    // 探活成功 + 未配模型 → 顺手拉取一次模型列表回填 (best-effort · 不阻塞探活结果)
-    if (alive && !(Array.isArray(cfg.models) && cfg.models.length > 0)) {
+    const v = await _verifyProviderChat(name, cfg);
+    results[name] = {
+      alive: v.alive,
+      reason: v.reason || (v.alive ? "通" : "不通"),
+      status: v.status,
+      model: v.model,
+      elapsed_ms: v.elapsed_ms,
+      sample: v.sample,
+    };
+    _healthCache[name] = {
+      alive: v.alive,
+      reason: v.reason,
+      status: v.status,
+      ts: Date.now(),
+    };
+    _log(
+      `[dao-router] probe(chat) ${name}: ${v.alive ? "ALIVE" : "DEAD"}` +
+        (v.reason ? ` · ${v.reason}` : "") +
+        ` · model=${v.model}`,
+    );
+    // 探活成功 + 未配模型 → 顺手拉取一次模型列表回填 (best-effort)
+    if (v.alive && !(Array.isArray(cfg.models) && cfg.models.length > 0)) {
       try {
         const m = await hotListProviderModels(name);
         if (m && m.ok && Array.isArray(m.models)) results[name].models = m.models;
@@ -3659,6 +3827,23 @@ async function probeAllProviders() {
     }
   }
   return results;
+}
+
+/** 最近一次探活快照 (非阻塞 · 供 overview 即时展示渠道连通+原因 · 不重新出网)
+ *   道义: 四十七章「不出于户 以知天下」· 缓存即知 · 不扰真流
+ */
+function healthSnapshot() {
+  const out = {};
+  for (const [k, v] of Object.entries(_healthCache)) {
+    if (/^_resolve_/.test(k)) continue;
+    out[k] = {
+      alive: !!v.alive,
+      reason: v.reason || "",
+      status: v.status,
+      ts: v.ts,
+    };
+  }
+  return out;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -4235,6 +4420,8 @@ module.exports = {
   patchModelUid,
   resetHealthCache,
   probeAllProviders,
+  classifyChannelResponse,
+  healthSnapshot,
   // ★ 热配置 API · 道法自然
   hotAddProvider,
   hotRemoveProvider,

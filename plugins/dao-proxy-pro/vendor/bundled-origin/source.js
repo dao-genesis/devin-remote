@@ -3510,6 +3510,16 @@ function handleControl(req, res) {
     const status = _eaRuntimeMod
       ? _eaRuntimeMod.routerStatus()
       : { ready: false, count: 0 };
+    // ★ v9.9.285 · 渠道连通快照(非阻塞·最近一次实证探活结果) · 名实相符
+    //   每个 provider 注入 health{alive,reason,status} → 前端如实展示通/不通+原因
+    //   坏的渠道(如 freemodel Access Denied)直书错误·不再伪装成功
+    const health =
+      _eaRuntimeMod && _eaRuntimeMod.hotHealthSnapshot
+        ? _eaRuntimeMod.hotHealthSnapshot()
+        : {};
+    for (const [name, h] of Object.entries(health)) {
+      if (safe[name]) safe[name].health = h;
+    }
     res.end(
       JSON.stringify({
         ok: true,
@@ -3520,9 +3530,12 @@ function handleControl(req, res) {
         live_models_at: _liveModelCapture.at || 0,
         live_models_count: (_liveModelCapture.models || []).length,
         providers: safe,
+        health, // ★ v9.9.285 · 渠道连通快照(POST /origin/ea/probe 刷新)
         routes,
         route_count: Object.keys(routes).length,
         router_ready: status.ready,
+        family_tier_extend:
+          !!(cfg.daoRoutes && cfg.daoRoutes.familyTierExtend), // ★ 同族档位延伸开关
         ea_running: _ea ? _ea.isRunning() : false,
       }),
     );
@@ -3785,9 +3798,20 @@ function handleControl(req, res) {
                   finishReason === "length";
                 if (truncatedReasoning) content = reasoning;
                 const usage = parsed.usage || null;
+                // ★ v9.9.285 · 实证渠道真伪: HTTP码 + 响应体伪成功/拒绝文案
+                //   根因: freemodel 返回 200 + "Access Denied" · 旧逻辑误报 ok:true
+                //   治: 同一分类器辨伪成功 → ok:false + channel_reason 明言不通之因
+                const _verdict =
+                  _eaRuntimeMod && _eaRuntimeMod.classifyChannelResponse
+                    ? _eaRuntimeMod.classifyChannelResponse(
+                        testRes.statusCode,
+                        content || data,
+                      )
+                    : { ok: testRes.statusCode < 400, reason: "" };
                 res.end(
                   JSON.stringify({
-                    ok: true,
+                    ok: _verdict.ok,
+                    channel_reason: _verdict.ok ? undefined : _verdict.reason,
                     modelUid,
                     provider: provName,
                     model: route.model,
@@ -3801,9 +3825,18 @@ function handleControl(req, res) {
                   }),
                 );
               } catch (e) {
+                // ★ v9.9.285 · 非JSON响应(如纯文本 Access Denied)亦须实证渠道真伪
+                const _verdict =
+                  _eaRuntimeMod && _eaRuntimeMod.classifyChannelResponse
+                    ? _eaRuntimeMod.classifyChannelResponse(
+                        testRes.statusCode,
+                        data,
+                      )
+                    : { ok: testRes.statusCode < 400, reason: "" };
                 res.end(
                   JSON.stringify({
-                    ok: true,
+                    ok: _verdict.ok,
+                    channel_reason: _verdict.ok ? undefined : _verdict.reason,
                     modelUid,
                     provider: provName,
                     model: route.model,
@@ -4144,14 +4177,31 @@ function _buildHandoffMd() {
   L.push("### 其他");
   L.push("- `POST /origin/ea/config` — 批量写配置 (body 为完整 config 对象)");
   L.push("- `POST /origin/ea/reload` — 重载配置 · `POST /origin/ea/probe` — 探活渠道");
-  L.push("- `POST /origin/ea/test-chat` — 冒烟测试某渠道连通性");
+  L.push("- `POST /origin/ea/test-chat` — 冒烟测试某渠道连通性 (body: `{modelUid, message}`)");
   L.push("");
-  L.push("## 四、两条基础默认连线");
-  L.push("1. `MODEL_SWE_1_6` (SWE 1.6 基础版) → `builtin-stub` 测试通道 (固定返回·验证通路)");
-  L.push("2. `MODEL_SWE_1_6_FAST` (SWE 1.6 Fast) → 外接首项 (默认 `deepseek`, 填 key 后生效)");
+  L.push("### ★ v9.9.285 · 渠道实证探活 (名实相符·坏渠道直书错误)");
+  L.push("- `POST /origin/ea/probe` 改为发**最小真实 chat 请求**端到端验证, 不再仅探 `/models`+看状态码.");
+  L.push("  - 返回每渠道 `{alive, reason, status, model, elapsed_ms, sample}`.");
+  L.push("  - 杜绝双向误判: freemodel `/models`=200 却 chat 被拒(Access Denied) → 旧报 ALIVE(假阳);");
+  L.push("    github `/models`=404 却 chat 实通 → 旧报 DEAD(假阴). 新法皆如实判定.");
+  L.push("- `GET /origin/ea/overview` 注入 `health` 快照 + 每个 `providers[name].health{alive,reason,status}`");
+  L.push("  → 前端如实展示渠道**通/不通 + 不通原因**; `family_tier_extend` 字段反映档位延伸开关.");
+  L.push("- `POST /origin/ea/test-chat` 辨**伪成功**: 200 但响应体含拒绝文案(如 Access Denied) → `ok:false` + `channel_reason`.");
+  L.push("");
+  L.push("### ★ v9.9.285 · 同族档位延伸开关 (默认关·显式逐档路由为本)");
+  L.push("- `daoRoutes.familyTierExtend`(默认 `false`): 关时**逐档显式路由**, 仅显式连线的档位被路由;");
+  L.push("  未连档位(如 `swe-1-6-slow`)保持**官方原生直通**, 不被同族 `fast` 连线自动吞并.");
+  L.push("- 设 `true` 时启用「连一档即覆盖全族」: 同族任一档位被显式连线 → 全族档位归一其渠道");
+  L.push("  (适配 Cascade 默认下发档位与 UI 所连档位错配的场景).");
+  L.push("");
+  L.push("## 四、SWE-1.6 默认连线 (本源规格)");
+  L.push("1. `MODEL_SWE_1_6` (基础版) → `builtin-stub` 测试通道 (固定返回·验证通路)");
+  L.push("2. `swe-1-6-slow` (Slow) → **官方原生直通** (不路由·留官方)");
+  L.push("3. `swe-1-6-fast` / `MODEL_SWE_1_6_FAST` (Fast) → `deepseek` (全链路打通)");
+  L.push("4. GitHub Models (`gpt-4.1` / `gpt-4o` 等) → `github` 渠道 (PAT 作 key)");
   L.push("");
   L.push("---");
-  L.push("_本文件由 /origin/ea/handoff.md 实时生成 · 反映插件当前真实状态 · v9.9.270_");
+  L.push("_本文件由 /origin/ea/handoff.md 实时生成 · 反映插件当前真实状态 · v9.9.285_");
   return L.join("\n");
 }
 
