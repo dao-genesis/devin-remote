@@ -387,6 +387,20 @@ async function hotProbeAllProviders() {
   return R ? R.probeAllProviders() : {};
 }
 
+// ★ v9.9.285 · 最近一次探活快照 (非阻塞) · 供 overview 即时展示渠道连通+原因
+function hotHealthSnapshot() {
+  const R = _getRouterModule();
+  return R && R.healthSnapshot ? R.healthSnapshot() : {};
+}
+
+// ★ v9.9.285 · 渠道响应分类器透传 · 供 test-chat 实证渠道伪成功/拒绝
+function classifyChannelResponse(status, text) {
+  const R = _getRouterModule();
+  return R && R.classifyChannelResponse
+    ? R.classifyChannelResponse(status, text)
+    : { ok: true, reason: "" };
+}
+
 // ★ v9.9.92-fix · 获取 wire 模块 · 供 source.js 构建 Connect-RPC 错误帧
 //   道义: 三十九章「得一以宁」· 得 wire 方能构建正确帧格式
 function getWire() {
@@ -472,6 +486,8 @@ module.exports = {
   hotListProviderModels,
   hotResetHealthCache,
   hotProbeAllProviders,
+  hotHealthSnapshot,
+  classifyChannelResponse,
   // ★ v9.9.97 · 保护模型 API
   unlockModel,
   isModelProtected,
