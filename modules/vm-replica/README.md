@@ -32,6 +32,7 @@
 | `mcp_server.py` | **MCP Server**。stdio JSON-RPC，把守护能力做成与 Devin 自身 computer 工具对齐的工具集。 |
 | `vmctl.py` | 命令行客户端（调试用）：`python vmctl.py vm.list` 等。 |
 | `deploy_host.py` | **一次性宿主准备**：部署内层代理、设置 `AllowSavedCredentials` 委派、开启 RDP。 |
+| `build_exe.py` | **冻结成独立 EXE**（PyInstaller）：把 inner/host/mcp 三层打包成无 Python 依赖的单文件 exe，用于注入任意用户 Windows（见二·B）。 |
 | `config.sample.json` | 守护配置样例（落地为 `C:\ProgramData\dao_vm\config.json`）。 |
 | `recover-bootsafe.bat` | **带外恢复脚本**。开机进不去桌面 / RDP 崩溃 / 自动重启时，管理员双击即恢复 boot-safe 本源态。 |
 | `vm_agent.py`（旧） | dao-bridge 直代理的单账号内层代理变体（含 mss/pyautogui 录屏）。保留供桥式单机用。 |
@@ -65,6 +66,35 @@ python mcp_server.py
 > **GUI 应用务必用 `vm.launch`（或 `vm.exec ... detach=true`）**，不要用 `vm.exec`。
 > `vm.exec` 会捕获 stdio 并等待进程结束 —— 启动 notepad / chrome 这类长存 GUI 进程会一直
 > 阻塞到超时。`vm.launch` 以 `DETACHED_PROCESS` 即发即走，立即返回 pid（实测 0.03s）。
+
+---
+
+## 二·B、基础 EXE 构建 + 任意 Windows 一键注入（无需 Python）
+
+三层均为**纯标准库 + ctypes**，可用 PyInstaller 冻结成单文件 exe，这样即使目标机
+**没有装 Python** 也能高效注入：
+
+```powershell
+# 构建（一次，在任意装有 Python+PyInstaller 的机器上）
+pip install pyinstaller
+python build_exe.py            # 产出 dist\dao_inner_agent.exe / dao_host_daemon.exe / dao_mcp_server.exe
+```
+
+| 产物 EXE | 来源 | 作用 |
+|---|---|---|
+| `dao_inner_agent.exe` | `vm_inner_agent.py` | 会话内代理（截图/输入/exec/文件） |
+| `dao_host_daemon.exe` | `vm_host_daemon.py` | console 内 VM 生命周期管理 |
+| `dao_mcp_server.exe` | `mcp_server.py` | agent 的 stdio MCP 工具层 |
+
+**任意用户 Windows 注入流程（全程无 Python）：**
+
+1. 拷贝 `dao_host_daemon.exe` + `dao_inner_agent.exe` 到目标机 `C:\dao_vm\`（config 的 `inner_exe`
+   默认指向此路径；守护会**优先用 exe**、未装 Python 也能拉起会话内代理）。
+2. 在 console 会话里跑 `dao_host_daemon.exe`（首次会生成 `config.json` 并写入随机 token）。
+3. 把 `dao_mcp_server.exe` 作为 stdio MCP server 挂到 agent 的 MCP 客户端 —— 之后就能用
+   `vm_create / vm_exec / vm_screenshot / vm_type …` 等 24 个工具操作该机的 RDP「VM」。
+
+> Windows 10/11 需多开时，再叠加「会话内按需加载 rdpwrap」（绝不挂 ServiceDll，见第三节）。
 
 ### 并发 VM 数受 Windows RDP 许可约束（不是本模块的限制）
 
@@ -127,6 +157,8 @@ RDP 许可限制**，与本代码无关：
 | `vm.activate` + `vm.type "道法自然…"` | ✅ Unicode/中文正确输入到 VM 内 Notepad |
 | `mcp_server.py` stdio | ✅ initialize / tools/list(24) / vm_exec / vm_screenshot(image) 全通过 |
 | **全工具面硬验证（24 工具）** | ✅ **25/25 PASS** — exec/launch/detach、file_write/read/append（CJK 字节级一致）、screenshot(PNG)、ui_info、activate、type(CJK)/key/hold_key、click/double/right/mouse_move/drag/scroll、desktop_info、vm.list/sessions/host.activate_rdp |
+| **MCP 工具层（真 stdio JSON-RPC）** | ✅ **19/19 PASS** — 以真实 MCP 协议起 `mcp_server.py`：initialize / notifications/initialized / tools/list(24) / 逐个 `tools/call` 实操 VM（含 screenshot 返回 image content） |
+| **全 EXE 链（无 Python 运行时）** | ✅ `dao_host_daemon.exe`(session1) → 环回 RDP → `dao_inner_agent.exe`(VM 会话) → 由 `dao_mcp_server.exe` 驱动：whoami=`devinbox\\vmexe`、launch notepad、type CJK、screenshot 均通 |
 
 > 实测中发现并修复的缺陷：
 > 1. `vm.exec` 启动 GUI 应用会阻塞到超时 → 新增 `vm.launch` / `detach=true` 非阻塞模式

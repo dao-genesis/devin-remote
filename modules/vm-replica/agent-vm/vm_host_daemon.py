@@ -286,7 +286,8 @@ def destroy_vm(name, delete_user=True):
     # Safety: never log off or delete an ATTACHED account (a real user-owned session).
     # Attached VMs can only be detached (inner-agent task removed), leaving the user intact.
     if vms.get(name, {}).get('attached'):
-        ps_run(f"Unregister-ScheduledTask -TaskName 'dao_agent_{name}' -Confirm:$false -ErrorAction SilentlyContinue")
+        ps_run(f"Unregister-ScheduledTask -TaskName 'dao_agent_{name}' -Confirm:$false -ErrorAction SilentlyContinue; "
+               f"Remove-Item 'C:\\dao_vm\\start_{name}.bat' -Force -ErrorAction SilentlyContinue")
         vms.pop(name, None)
         return {'ok': True, 'name': name, 'detached': True,
                 'note': 'attached account preserved (no logoff, no user delete)'}
@@ -297,6 +298,7 @@ if ($s) {{ $id = ($s -replace '\\s+',' ').Trim().Split(' ')[2]; logoff $id 2>$nu
     if delete_user:
         ps_run(f"Unregister-ScheduledTask -TaskName 'dao_agent_{name}' -Confirm:$false -ErrorAction SilentlyContinue; "
                f"Remove-LocalUser -Name '{name}' -ErrorAction SilentlyContinue; "
+               f"Remove-Item 'C:\\dao_vm\\start_{name}.bat' -Force -ErrorAction SilentlyContinue; "
                f"Get-CimInstance Win32_UserProfile | Where-Object {{ $_.LocalPath -like '*\\{name}*' }} | Remove-CimInstance -ErrorAction SilentlyContinue")
     vms.pop(name, None)
     return {'ok': True, 'name': name, 'destroyed': True}
