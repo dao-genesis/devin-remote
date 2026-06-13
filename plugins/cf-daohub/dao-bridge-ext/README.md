@@ -2,6 +2,17 @@
 
 随 IDE 启停，**插件启动即自动打通整机公网穿透**，零配置、无需任何账号。道法自然 · 无为而无不为。
 
+## local-agent 深度控制 HTTP API（v3.2.0）
+把原本仅 UI 可用的命令暴露为 HTTP 端点，本地 Agent（读 `local-agent-access.md`）无需 VS Code UI 即可全量驱动插件底层：
+
+- `POST /api/bridge/restart` — `stop()+start()`，换新的 quick-tunnel 公网地址
+- `POST /api/account/logout` — `resetAccount()` 后重启 → 回到无账号 quick tunnel
+- `POST /api/export/refresh` — `writeArtifacts()`，返回 `cloud_md+local_md+paths`
+- `POST /api/self/reload` — `reloadWindow()` 热加载新 `extension.js`
+- `GET  /api/attempt-log` — 回退链诊断（mode/proto/attempts）
+
+并修正：`/api/ls`、`/api/read` 在 ENOENT 时返回 **404**（而非 500）；`/api/config` POST 持久化 `cloudflaredPath`。
+
 ## 稳定性 · 自动回退链（v3.1.0）
 启动按下列顺序自动尝试，任一档打通即停，绝不卡死在某一种模式：
 

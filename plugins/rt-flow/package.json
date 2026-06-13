@@ -2,7 +2,7 @@
 	"name": "rt-flow",
 	"displayName": "Runtime Flow",
 	"description": "Runtime flow management · adaptive scheduling · 三板块统一: Cascade + Devin Cloud + Git(GitHub PAT 归一连接)",
-	"version": "4.4.1",
+	"version": "4.6.1",
 	"publisher": "devaid",
 	"repository": {
 		"type": "git",
@@ -167,6 +167,11 @@
 				"command": "wam.devinWipeAccount",
 				"title": "Devin Cloud: Wipe Account (water-trace cleanup)",
 				"category": "RT Flow"
+			},
+			{
+				"command": "wam.devinSetBackupDir",
+				"title": "Devin Cloud: Set Backup Folder (v4.6.0 · 独立于 Cascade)",
+				"category": "RT Flow"
 			}
 		],
 		"configuration": {
@@ -179,8 +184,28 @@
 				},
 				"wam.devinCloudAutoBackup": {
 					"type": "boolean",
-					"default": false,
-					"description": "第五板块 · 开启 Devin Cloud 对话自动增量备份 (仅备份已登录账号·运行/更新过的对话不重复备份)"
+					"default": true,
+					"description": "v4.6.0 · 默认开 · Devin Cloud 对话自动增量备份 (账号库内所有可登录账号·运行/更新过的对话增量备份·同源不重复)"
+				},
+				"wam.lockByDefault": {
+					"type": "boolean",
+					"default": true,
+					"description": "v4.6.0 · 账号锁默认锁定 (反者道之动). true=新账号默认🔒锁定·自动切号被禁止·用户主动🔓解锁后该号才进入自动切号候选 (用户主权·防意外切号). false=旧行为(默认解锁·自动切号开)"
+				},
+				"wam.devinCloudPreload": {
+					"type": "boolean",
+					"default": true,
+					"description": "v4.6.0 · Devin Cloud 概览预加载 (太上下知有之). true=插件启动后后台预登录账号库内所有可登录账号并预拉概览/Git/运行状态入缓存·展开账号秒开无需等待·之后增量刷新. false=旧行为(点击账号才登录拉取)"
+				},
+				"wam.devinCloudPreloadConcurrency": {
+					"type": "number",
+					"default": 3,
+					"description": "v4.6.0 · Devin Cloud 预加载并发数 (1-6·默认3). 预加载/增量刷新时同时登录拉取的账号数·避免触发后端速率限制"
+				},
+				"wam.devinCloudPreloadRefreshMin": {
+					"type": "number",
+					"default": 5,
+					"description": "v4.6.0 · Devin Cloud 预加载增量刷新周期 (分钟·默认5·最小1·0=只预加载不周期刷新). 周期性增量刷新已缓存账号的概览/运行状态"
 				},
 				"wam.devinCloudAutoBackupIntervalMin": {
 					"type": "number",
@@ -210,8 +235,33 @@
 				},
 				"wam.devinCloudAutoCleanupThreshold": {
 					"type": "number",
+					"default": 1,
+					"description": "v4.5.0 · 自动清理额度阈值 (美元·默认1·须≤自动备份阈值). 额度 ≤ 此值且全量备份成功后, 自动执行水过无痕(先全量备份本地留底→再删全部对话/知识/剧本/密钥+断Git)"
+				},
+				"wam.devinCloudConvQuotaCap": {
+					"type": "boolean",
+					"default": false,
+					"description": "v4.5.0 · 对话额度上限 (per-conversation quota cap · 知止不殆). 开启后实时跟踪各账号余额, 自动算出每对话使用额度上限=余额-缓冲; 余额≤停止阈值时自动中停运行中对话, 防耗尽"
+				},
+				"wam.devinCloudConvQuotaBuffer": {
+					"type": "number",
 					"default": 3,
-					"description": "v4.4.0 · 自动清理额度阈值 (美元·默认3·须≤自动备份阈值). 低于此值且备份完成后自动执行水过无痕"
+					"description": "v4.5.0 · 对话额度上限缓冲 (美元·默认3). 每对话上限 = 账号实时余额 - 此缓冲 (余额$70→上限$67, $55→$52). 随余额下降实时下调"
+				},
+				"wam.devinCloudConvStopThreshold": {
+					"type": "number",
+					"default": 3,
+					"description": "v4.5.0 · 对话中停阈值 (美元·默认3). 账号余额 ≤ 此值时自动中停其运行中对话 (知止·防耗尽)"
+				},
+				"wam.devinCloudConvPollActiveSec": {
+					"type": "number",
+					"default": 30,
+					"description": "v4.5.0 · 对话上限·使用中轮询周期 (秒·默认30·最小10). 仅当账号确认使用中(余额下降或有运行对话)时提速轮询"
+				},
+				"wam.devinCloudConvPollIdleMin": {
+					"type": "number",
+					"default": 30,
+					"description": "v4.5.0 · 对话上限·空闲轮询周期 (分钟·默认30·最小1). 日常无谓频繁, 仅周期性确认是否进入使用中"
 				},
 				"wam.devinCloudRunPollMin": {
 					"type": "number",

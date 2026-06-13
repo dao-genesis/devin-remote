@@ -21,10 +21,10 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\too
 | 板块 | 版本 | 下载 |
 |------|------|------|
 | ① dao-vsix · 全功能面板 | 1.3.2 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-vsix-1.3.2.vsix) |
-| ② dao-bridge · 内网穿透 | 3.1.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-bridge-3.1.0.vsix) |
+| ② dao-bridge · 内网穿透 | 3.2.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-bridge-3.2.0.vsix) |
 | ③ devin-git-auth · 多账号 Git | 2.3.2 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/devin-git-auth-2.3.2.vsix) |
-| ④ dao-proxy-pro · 模型路由 | 9.9.277 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-proxy-pro-9.9.277.vsix) |
-| ⑤ rt-flow · Cloud 备份/wipe | 4.4.1 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/rt-flow-4.4.1.vsix) |
+| ④ dao-proxy-pro · 模型路由 | 9.9.283 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-proxy-pro-9.9.283.vsix) |
+| ⑤ rt-flow · Cloud 备份/wipe/对话上限 | 4.5.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/rt-flow-4.5.0.vsix) |
 | 模块 · dao-export · 全量导出 | 1.3.3 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-devin-export-1.3.3.vsix) |
 
 > 全部资产见 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)。vm-replica 模块为纯源码/文档，见 [`modules/vm-replica/`](modules/vm-replica/)。
@@ -92,15 +92,15 @@ devin-remote/
 
 ### dao-vsix v1.3.2 · Devin 全功能面板 + 路由官网 + 内网穿透集成
 
-核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传）。零输入获取 cog_ API Key（POST /service-users + auth1 自动换取），彻底移除面板所有手动 API Key 输入/引导。v1.2.0：增补测试聊天内置存根通道，与 dao-proxy-pro v9.9.276 配套。官网注入加固：session-token 与 auth1 严格隔离。
+核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传）。零输入获取 cog_ API Key（POST /service-users + auth1 自动换取），彻底移除面板所有手动 API Key 输入/引导。v1.2.0：增补测试聊天内置存根通道，与 dao-proxy-pro v9.9.283 配套。官网注入加固：session-token 与 auth1 严格隔离。
 
 **VSIX**: 见 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)（本插件 VSIX 已 gitignore，`npm run compile && vsce package` 现产） · **源码**: `plugins/dao-vsix/src/extension.ts` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/194e1211-739d-494c-9cf2-ff016672485d)
 
-### dao-bridge v3.1.0 · 工作区内网穿透
+### dao-bridge v3.2.0 · 工作区内网穿透
 
-重构为零/最小输入：quick tunnel 默认模式 + 凭证自动加载（`~/.dao/` 目录）+ 命名隧道 token 持久化 + 修正误导 UI（不再暗示必须填 token）。随 IDE 窗口启停，专穿当前工作区。
+重构为零/最小输入：quick tunnel 默认模式 + 凭证自动加载（`~/.dao/` 目录）+ 命名隧道 token 持久化 + 修正误导 UI（不再暗示必须填 token）。随 IDE 窗口启停，专穿当前工作区。v3.2.0：新增 local-agent 深度控制 HTTP API + 修正 cloudflared 二进制解析的 ENOENT 404（绕过 npm/choco shim，直取真实可执行）。
 
-**VSIX**: `plugins/cf-daohub/dao-bridge-ext/dao-bridge-3.1.0.vsix` · **源码**: `plugins/cf-daohub/dao-bridge-ext/extension.js` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/8c4aec08-8357-44f2-a169-d44c8d055dd3)
+**VSIX**: `plugins/cf-daohub/dao-bridge-ext/dao-bridge-3.2.0.vsix` · **源码**: `plugins/cf-daohub/dao-bridge-ext/extension.js` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/8c4aec08-8357-44f2-a169-d44c8d055dd3)
 
 ### devin-git-auth v2.3.2 · 多账号 GitHub 认证
 
@@ -108,22 +108,23 @@ devin-remote/
 
 **VSIX**: `plugins/devin-git-auth/devin-git-auth-2.3.2.vsix` · **源码**: `plugins/devin-git-auth/extension.js` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/ae892f4c-90d4-46df-a0c6-2ca9006b9498)
 
-### dao-proxy-pro v9.9.277 · 提示词隔离 + 外接路由
+### dao-proxy-pro v9.9.283 · 提示词隔离 + 外接路由
 
-底层拦截 IDE AI 请求，隔离替换提示词（道藏规则 + 用户自定义注入），外接第三方模型路由。vendor 目录含 LSP 模拟器、适应性路由、预算控制、三模块面板（49 家模型归一 + 测通）。v9.9.277：修复「渠道配置永远红点」——无 healthCheck 的用户渠道探活返回 `alive:null` 被渲染成红点；探活改为「带 Bearer 鉴权的 /models 探测」（HTTP 200 即绿、自动回填模型），并修复 baseUrl 已含 `/v1` 时模型探测拼成 `/v1/v1/models` 404；前端加 key 即自动探活+拿模型+变绿。
+底层拦截 IDE AI 请求，隔离替换提示词（道藏规则 + 用户自定义注入），外接第三方模型路由。vendor 目录含 LSP 模拟器、适应性路由、预算控制、三模块面板（49 家模型归一 + 测通）。v9.9.277：修复「渠道配置永远红点」——探活改为「带 Bearer 鉴权的 /models 探测」（HTTP 200 即绿、自动回填模型），并修复 baseUrl 已含 `/v1` 时模型探测拼成 `/v1/v1/models` 404。v9.9.282~283：**模型家族级路由（tier-agnostic）**——只要用户显式连接了某家族的任一层级（如 `swe-1-6-fast→deepseek`），该家族全部层级（含 Cascade 默认发的 `swe-1-6-slow`）都路由到同一渠道，不再 501 回弹；纯 seeded 桩家族不被劫持。并导出 `resolveRoute()` 使 test-chat 诊断走真实路由表（不再误报「route config not found」）。
 
-**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.277.vsix` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/7094683e-c9f3-4461-96f6-fadd15c0aabf)
+**VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.283.vsix` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/7094683e-c9f3-4461-96f6-fadd15c0aabf)
 
-### rt-flow v4.4.1 · Devin Cloud 接入（备份 + 回归本源）⭐新
+### rt-flow v4.5.0 · Devin Cloud 接入（备份 + 回归本源 + 对话额度上限）⭐新
 
-第五板块，零依赖 `devin_cloud.js` 底层封装 Devin Cloud 全部 API（邮箱+密码→auth1 登录、概览、对话追踪、CRUD、备份、wipe）。两大核心模块：
+第五板块，零依赖 `devin_cloud.js` 底层封装 Devin Cloud 全部 API（邮箱+密码→auth1 登录、概览、对话追踪、CRUD、备份、wipe）。三大核心模块：
 
-- **对话备份（批量 + 自动）**：增量 ZIP 备份对话 + `snapshotAccountData` 全量数据快照（知识库/剧本正文 + 密钥/Git/会话/额度元数据全量留底）。快照逐条 `_settle` 重试，一条端点失败不毁整份（`partial`/`errors` 如实标注），批量 12 账号并发实测 12/12。
+- **对话备份（批量 + 自动）**：增量 ZIP/文件夹备份对话 + `snapshotAccountData` 全量数据快照（知识库/剧本正文 + 密钥/Git/会话/额度元数据全量留底）。快照逐条 `_settle` 重试，一条端点失败不毁整份（`partial`/`errors` 如实标注），批量 12 账号并发实测 12/12。
 - **一键回归本源（wipe）**：先 `backupAccountFull` 本地留底，再清空账号全部用户数据（对话归档 + 知识/剧本/密钥真删 + Git 授权撤销），**保留 Devin 本源默认**（3 内置知识 + 32 社区剧本）。区分「用户数据」与「本源默认」，不误删、不臆造成功。
+- **对话额度上限（v4.5.0·知止不殆）**：每对话使用额度上限 = 账号实时余额 − 缓冲（默 $3）；余额 $70→上限 $67、$55→$52，随余额下降实时跟随、与官网每刀额度同步（精确到分）。账号确认使用中（余额下降或有运行对话）才提速轮询；余额 ≤ 停止阈值（默 $3）自动**中停**运行中对话。自动清理阈值默认 $3→**$1**（额度 ≤ $1 先全量备份成功→再水过无痕）。
 
-> 实测修复多个「臆造成功」缺陷：剧本/密钥删除端点纠正（`/api/playbooks|secrets/{id}`）、会话改归档（平台不支持硬删）、Git 改用 `git-permissions` 真撤授权（连接元数据平台无删除端点，如实回报）。
+> 实测修复多个「臆造成功」缺陷：剧本/密钥删除端点纠正（`/api/playbooks|secrets/{id}`）、会话改归档（平台不支持硬删）、Git 改用 `git-permissions` 真撤授权（连接元数据平台无删除端点，如实回报）；`stopSession` 同理按候选端点实探、不臆造成功。
 
-**VSIX**: `plugins/rt-flow/rt-flow-4.4.1.vsix` · **底层**: `plugins/rt-flow/devin_cloud.js` · **变更史**: `plugins/rt-flow/changelog.md` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/9ec20452-cb5f-4423-9204-f06088f75079)
+**VSIX**: `plugins/rt-flow/rt-flow-4.5.0.vsix` · **底层**: `plugins/rt-flow/devin_cloud.js` · **变更史**: `plugins/rt-flow/changelog.md` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/9ec20452-cb5f-4423-9204-f06088f75079)
 
 ---
 
