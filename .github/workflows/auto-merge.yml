@@ -1,0 +1,65 @@
+name: Auto-merge clean PRs
+
+# 道法自然：无冲突的 PR 自动合并进 main，有冲突的留待人工解决。
+# 触发：PR 开启/更新/重开/转就绪 时自动判定；亦可手动 workflow_dispatch 扫描全部开放 PR。
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.draft == false &&
+       github.event.pull_request.base.ref == 'main' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    steps:
+      - name: Merge mergeable PR(s)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            let numbers = [];
+            if (context.eventName === 'workflow_dispatch') {
+              const prs = await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'open', base: 'main', per_page: 100,
+              });
+              numbers = prs
+                .filter(p => !p.draft && p.head.repo && p.head.repo.full_name === `${owner}/${repo}`)
+                .map(p => p.number);
+            } else {
+              numbers = [context.payload.pull_request.number];
+            }
+
+            for (const number of numbers) {
+              // GitHub computes `mergeable` asynchronously; poll until known.
+              let pr = null;
+              for (let i = 0; i < 10; i++) {
+                pr = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
+                if (pr.mergeable !== null) break;
+                await new Promise(r => setTimeout(r, 4000));
+              }
+              if (!pr || pr.state !== 'open') { core.info(`#${number}: not open, skip`); continue; }
+              if (pr.draft) { core.info(`#${number}: draft, skip`); continue; }
+              if (pr.mergeable === false) { core.info(`#${number}: has conflicts, leaving for manual resolution`); continue; }
+              if (pr.mergeable !== true) { core.info(`#${number}: mergeability still unknown, skip this run`); continue; }
+              try {
+                await github.rest.pulls.merge({ owner, repo, pull_number: number, merge_method: 'merge' });
+                core.notice(`#${number}: merged into main`);
+              } catch (e) {
+                core.warning(`#${number}: merge failed (${e.status}) ${e.message}`);
+              }
+            }
