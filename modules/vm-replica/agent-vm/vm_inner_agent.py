@@ -14,6 +14,7 @@ Design goals vs v1:
 """
 import http.server, json, subprocess, os, sys, base64, ctypes, ctypes.wintypes
 import struct, threading, time, traceback, zlib, socketserver
+import socket, urllib.request, urllib.parse
 
 PORT  = int(os.environ.get('VM_AGENT_PORT', '9001'))
 TOKEN = os.environ.get('VM_AGENT_TOKEN', '')          # '' => no auth (loopback only)
@@ -530,6 +531,22 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             return {'ok': True, 'foreground': foreground_info()}
         elif action == 'ui_info':
             return {'windows': list_windows()}
+        elif action == 'ui_tree':
+            h = (find_window(body.get('title'), body.get('hwnd'))
+                 if (body.get('title') or body.get('hwnd')) else user32.GetForegroundWindow())
+            if not h:
+                return {'ok': False, 'error': 'no root window'}
+            return {'ok': True, 'root': ui_tree(h, int(body.get('max_depth', 6)))}
+        elif action == 'browser_launch':
+            return browser_launch(body.get('url'))
+        elif action == 'browser_navigate':
+            return browser_navigate(body.get('url', ''))
+        elif action == 'browser_eval':
+            return browser_eval(body.get('expression', body.get('js', '')))
+        elif action == 'browser_screenshot':
+            return browser_screenshot()
+        elif action == 'browser_targets':
+            return browser_targets()
         elif action == 'health':
             return {'status': 'ok', 'role': 'inner_agent',
                     'user': os.environ.get('USERNAME', '?'), 'port': PORT}
@@ -551,6 +568,219 @@ def list_windows():
         return True
     user32.EnumWindows(WNDENUMPROC(cb), 0)
     return windows
+
+# ====== UIA-ish control tree (pure ctypes; direct-child walk, no deps) ======
+user32.GetClassNameW.argtypes = [_VP, _wt.LPWSTR, ctypes.c_int]
+user32.GetDlgCtrlID.argtypes = [_VP]
+user32.GetWindow.restype = _VP; user32.GetWindow.argtypes = [_VP, _wt.UINT]
+user32.SendMessageW.restype = ctypes.c_long
+user32.SendMessageW.argtypes = [_VP, _wt.UINT, _wt.WPARAM, _VP]
+GW_CHILD = 5; GW_HWNDNEXT = 2
+WM_GETTEXT = 0x000D; WM_GETTEXTLENGTH = 0x000E
+
+def _cls(h):
+    b = ctypes.create_unicode_buffer(256); user32.GetClassNameW(h, b, 256); return b.value
+
+def _ctrl_text(h):
+    n = user32.GetWindowTextLengthW(h)
+    if n <= 0:  # controls (buttons/edits) often need WM_GETTEXT instead
+        n = user32.SendMessageW(h, WM_GETTEXTLENGTH, 0, None)
+        if n <= 0:
+            return ''
+        b = ctypes.create_unicode_buffer(n + 1)
+        user32.SendMessageW(h, WM_GETTEXT, n + 1, ctypes.cast(b, _VP)); return b.value
+    b = ctypes.create_unicode_buffer(n + 1); user32.GetWindowTextW(h, b, n + 1); return b.value
+
+def _hrect(h):
+    r = ctypes.wintypes.RECT(); user32.GetWindowRect(h, ctypes.byref(r))
+    return [r.left, r.top, r.right, r.bottom]
+
+def _direct_children(h):
+    out = []; c = user32.GetWindow(h, GW_CHILD)
+    while c:
+        out.append(c); c = user32.GetWindow(c, GW_HWNDNEXT)
+    return out
+
+def ui_tree(root, max_depth=6):
+    def node(h, depth):
+        d = {'hwnd': int(h), 'class': _cls(h), 'text': _ctrl_text(h),
+             'id': int(user32.GetDlgCtrlID(h)), 'rect': _hrect(h),
+             'visible': bool(user32.IsWindowVisible(h))}
+        if depth > 0:
+            kids = [node(c, depth - 1) for c in _direct_children(h)]
+            if kids:
+                d['children'] = kids
+        return d
+    return node(root, max_depth)
+
+# ====== Chrome/Edge CDP (browser parity with Devin's browser_console) ======
+# Minimal stdlib WebSocket + DevTools client => keeps the zero-dep / freezable
+# invariant (no websocket-client / playwright needed).
+_BROWSER_CANDIDATES = [
+    r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+    r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
+    r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+    r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+]
+DEBUG_PORT = PORT + 200          # unique per VM (loopback ports are machine-wide)
+_USER_DATA = os.path.join(os.environ.get('TEMP', r'C:\Windows\Temp'), f'dao_vm_browser_{PORT}')
+
+def _find_browser():
+    for p in _BROWSER_CANDIDATES:
+        if os.path.exists(p):
+            return p
+    return None
+
+def _cdp_http(path, method='GET'):
+    req = urllib.request.Request(f'http://127.0.0.1:{DEBUG_PORT}/json{path}', method=method)
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = r.read().decode('utf-8')
+    try:
+        return json.loads(data)
+    except Exception:
+        return data
+
+class _CDP:
+    """Tiny CDP client over a raw stdlib WebSocket (client frames masked)."""
+    def __init__(self, ws_url, timeout=30):
+        u = urllib.parse.urlparse(ws_url)
+        self.sock = socket.create_connection((u.hostname, u.port or 80), timeout=timeout)
+        self.sock.settimeout(timeout)
+        key = base64.b64encode(os.urandom(16)).decode()
+        hs = (f'GET {u.path} HTTP/1.1\r\nHost: {u.hostname}:{u.port}\r\n'
+              f'Upgrade: websocket\r\nConnection: Upgrade\r\n'
+              f'Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n')
+        self.sock.sendall(hs.encode())
+        self._buf = b''
+        while b'\r\n\r\n' not in self._buf:
+            self._buf += self.sock.recv(4096)
+        self._buf = self._buf.split(b'\r\n\r\n', 1)[1]
+        self._id = 0
+
+    def _rd(self, n):
+        while len(self._buf) < n:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise IOError('ws closed')
+            self._buf += chunk
+        d, self._buf = self._buf[:n], self._buf[n:]
+        return d
+
+    def _send(self, text):
+        data = text.encode('utf-8'); n = len(data); mask = os.urandom(4)
+        hdr = bytearray([0x81])
+        if n < 126:
+            hdr.append(0x80 | n)
+        elif n < 65536:
+            hdr.append(0x80 | 126); hdr += struct.pack('>H', n)
+        else:
+            hdr.append(0x80 | 127); hdr += struct.pack('>Q', n)
+        hdr += mask
+        self.sock.sendall(bytes(hdr) + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+
+    def _recv_msg(self):
+        chunks = []
+        while True:
+            b0, b1 = self._rd(2)
+            fin = b0 & 0x80; opcode = b0 & 0x0f; ln = b1 & 0x7f
+            if ln == 126:
+                ln = struct.unpack('>H', self._rd(2))[0]
+            elif ln == 127:
+                ln = struct.unpack('>Q', self._rd(8))[0]
+            payload = self._rd(ln) if ln else b''
+            if opcode == 0x8:
+                raise IOError('ws closed by peer')
+            if opcode in (0x9, 0xA):   # ping/pong control frames
+                continue
+            chunks.append(payload)
+            if fin:
+                return b''.join(chunks)
+
+    def call(self, method, params=None):
+        self._id += 1; mid = self._id
+        self._send(json.dumps({'id': mid, 'method': method, 'params': params or {}}))
+        while True:
+            msg = json.loads(self._recv_msg().decode('utf-8'))
+            if msg.get('id') == mid:
+                return {'error': msg['error']} if 'error' in msg else msg.get('result', {})
+
+    def close(self):
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+def browser_launch(url=None):
+    exe = _find_browser()
+    if not exe:
+        return {'ok': False, 'error': 'no chrome/edge installed'}
+    try:
+        _cdp_http('/version'); up = True
+    except Exception:
+        up = False
+    if not up:
+        args = [exe, f'--remote-debugging-port={DEBUG_PORT}', f'--user-data-dir={_USER_DATA}',
+                '--no-first-run', '--no-default-browser-check', '--remote-allow-origins=*']
+        if url:
+            args.append(url)
+        subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, creationflags=0x00000008 | 0x00000200)
+        ver = None
+        for _ in range(40):
+            time.sleep(0.5)
+            try:
+                ver = _cdp_http('/version'); break
+            except Exception:
+                ver = None
+        if not ver:
+            return {'ok': False, 'error': 'browser started but CDP endpoint never came up'}
+    elif url:
+        browser_navigate(url)
+    ver = _cdp_http('/version')
+    return {'ok': True, 'port': DEBUG_PORT, 'browser': os.path.basename(exe),
+            'version': ver.get('Browser') if isinstance(ver, dict) else None}
+
+def _page_target(create_url=None):
+    targets = _cdp_http('/list')
+    pages = [t for t in targets if t.get('type') == 'page'] if isinstance(targets, list) else []
+    if not pages:
+        pages = [_cdp_http(f'/new?url={urllib.parse.quote(create_url or "about:blank")}', method='PUT')]
+    return pages[0]
+
+def browser_navigate(url):
+    pg = _page_target(url); ws = _CDP(pg['webSocketDebuggerUrl'])
+    try:
+        ws.call('Page.enable'); r = ws.call('Page.navigate', {'url': url})
+        return {'ok': 'error' not in r, 'targetId': pg.get('id'), 'url': url,
+                'frameId': r.get('frameId'), 'error': r.get('error')}
+    finally:
+        ws.close()
+
+def browser_eval(expression):
+    pg = _page_target(); ws = _CDP(pg['webSocketDebuggerUrl'])
+    try:
+        r = ws.call('Runtime.evaluate', {'expression': expression,
+                                         'returnByValue': True, 'awaitPromise': True})
+        if 'error' in r:
+            return {'ok': False, 'error': r['error']}
+        res = r.get('result', {}); exc = r.get('exceptionDetails')
+        return {'ok': exc is None, 'type': res.get('type'), 'value': res.get('value'),
+                'description': res.get('description'),
+                'exception': exc.get('text') if exc else None}
+    finally:
+        ws.close()
+
+def browser_screenshot():
+    pg = _page_target(); ws = _CDP(pg['webSocketDebuggerUrl'])
+    try:
+        ws.call('Page.enable'); r = ws.call('Page.captureScreenshot', {'format': 'png'})
+        return {'ok': 'data' in r, 'format': 'png', 'image_base64': r.get('data'),
+                'error': r.get('error')}
+    finally:
+        ws.close()
+
+def browser_targets():
+    return {'ok': True, 'targets': _cdp_http('/list')}
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True

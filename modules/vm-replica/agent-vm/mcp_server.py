@@ -70,6 +70,21 @@ TOOLS = {
                         *(_vm({'title': {'type': S}}))),
     'vm_foreground':   ('vm.foreground',   'Get the current foreground window (hwnd/title) in the VM session.', *(_vm())),
     'vm_sessions':     ('vm.sessions',     'List Windows sessions (quser) on the host.', {}, []),
+    'vm_ui_tree':      ('vm.ui_tree',      'Dump the control tree (class/text/rect/ctrlId/visible) under a window; foreground window if none given. Element-level grounding.',
+                        *(_vm({'title': {'type': S}, 'hwnd': {'type': I}, 'max_depth': {'type': I}}, req=False))),
+    'vm_browser_launch':     ('vm.browser_launch',     'Launch/ensure Chrome or Edge inside the VM with CDP remote-debugging; optional initial url.',
+                        *(_vm({'url': {'type': S}}, req=False))),
+    'vm_browser_navigate':   ('vm.browser_navigate',   'Navigate the VM browser to a URL (CDP Page.navigate).',
+                        *(_vm({'url': {'type': S}}))),
+    'vm_browser_eval':       ('vm.browser_eval',       'Evaluate JavaScript in the VM browser page and return the value (CDP Runtime.evaluate). Parity with Devin browser_console.',
+                        *(_vm({'expression': {'type': S}}))),
+    'vm_browser_screenshot': ('vm.browser_screenshot', 'Capture the VM browser page as PNG (CDP Page.captureScreenshot).', *(_vm())),
+    'vm_browser_targets':    ('vm.browser_targets',    'List CDP targets (open tabs) in the VM browser.', *(_vm())),
+    'vm_snapshot':     ('vm.snapshot',     'Snapshot the VM user profile (robocopy backup-mode mirror). Devin blueprint/snapshot analog. Optional tag/path.',
+                        *(_vm({'tag': {'type': S}, 'path': {'type': S}}, req=False))),
+    'vm_restore':      ('vm.restore',      'Restore a VM profile snapshot by tag (tag required).',
+                        *(_vm({'tag': {'type': S}, 'path': {'type': S}}, req=False))),
+    'vm_snapshots':    ('vm.snapshots',    'List snapshot tags for a VM.', *(_vm())),
 }
 
 def tool_schema():
@@ -86,10 +101,12 @@ def call_tool(name, args):
     args = dict(args or {})
     # daemon proxy expects 'vm' for the target; lifecycle uses 'name'
     res = daemon(action, **args)
-    if name == 'vm_screenshot' and res.get('image_base64'):
+    if name in ('vm_screenshot', 'vm_browser_screenshot') and res.get('image_base64'):
+        meta = (f"{res.get('width')}x{res.get('height')} {res.get('size')}B {res.get('format')}"
+                if name == 'vm_screenshot' else 'browser page (png)')
         return {'content': [
             {'type': 'image', 'data': res['image_base64'], 'mimeType': 'image/png'},
-            {'type': 'text', 'text': f"{res.get('width')}x{res.get('height')} {res.get('size')}B {res.get('format')}"}]}
+            {'type': 'text', 'text': meta}]}
     is_err = bool(res.get('error'))
     return {'content': [{'type': 'text', 'text': json.dumps(res, ensure_ascii=False)}], 'isError': is_err}
 

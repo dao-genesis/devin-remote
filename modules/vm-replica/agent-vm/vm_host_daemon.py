@@ -321,6 +321,55 @@ def list_vms():
     return {'vms': {k: {kk: vv for kk, vv in v.items() if kk != 'password'} for k, v in vms.items()},
             'sessions': out}
 
+SNAP_ROOT = r'C:\dao_vm\snapshots'
+
+def _vm_profile(name):
+    return os.path.join(r'C:\Users', name)
+
+def snapshot_vm(name, tag=None, path=None):
+    """Profile-level snapshot (Devin blueprint/snapshot analog). robocopy /B (backup
+    mode, admin) mirrors even locked files; best on a logged-off VM but works live."""
+    if not name:
+        return {'error': 'name required'}
+    tag = (tag or time.strftime('%Y%m%d-%H%M%S')).replace(' ', '_').replace(':', '')
+    src = path or _vm_profile(name)
+    dst = os.path.join(SNAP_ROOT, name, tag)
+    ps = (f"$ErrorActionPreference='SilentlyContinue';"
+          f"New-Item -ItemType Directory -Path '{dst}' -Force | Out-Null;"
+          f"robocopy '{src}' '{dst}' /MIR /B /XJ /R:1 /W:1 /NFL /NDL /NP /NJH /NS /NC | Out-Null;"
+          f"$rc=$LASTEXITCODE;"
+          f"$m=Get-ChildItem -Path '{dst}' -Recurse -File -Force | Measure-Object -Property Length -Sum;"
+          f"[pscustomobject]@{{rc=$rc;files=[int]$m.Count;bytes=[int64]$m.Sum}} | ConvertTo-Json -Compress")
+    out, err, _ = ps_run(ps, timeout=600)
+    try:
+        d = json.loads(out.strip().splitlines()[-1])
+    except Exception:
+        return {'ok': False, 'error': 'snapshot failed', 'raw': out[:400], 'stderr': err[:400]}
+    return {'ok': d.get('rc', 16) < 8, 'name': name, 'tag': tag, 'src': src, 'dst': dst,
+            'rc': d.get('rc'), 'files': d.get('files'), 'bytes': d.get('bytes')}
+
+def restore_vm(name, tag, path=None):
+    if not (name and tag):
+        return {'error': 'name and tag required'}
+    src = os.path.join(SNAP_ROOT, name, tag)
+    if not os.path.isdir(src):
+        return {'ok': False, 'error': 'no such snapshot', 'name': name, 'tag': tag}
+    dst = path or _vm_profile(name)
+    ps = (f"robocopy '{src}' '{dst}' /MIR /B /XJ /R:1 /W:1 /NFL /NDL /NP /NJH /NS /NC | Out-Null;"
+          f"$LASTEXITCODE")
+    out, err, _ = ps_run(ps, timeout=600)
+    try:
+        rc = int(out.strip().splitlines()[-1])
+    except Exception:
+        rc = 16
+    return {'ok': rc < 8, 'rc': rc, 'name': name, 'tag': tag, 'restored_to': dst,
+            'stderr': err[:400] if rc >= 8 else None}
+
+def list_snapshots(name):
+    root = os.path.join(SNAP_ROOT, name)
+    snaps = sorted(os.listdir(root)) if os.path.isdir(root) else []
+    return {'ok': True, 'name': name, 'snapshots': snaps}
+
 def proxy(name, body):
     if name not in vms:
         # allow attach-by-port if known
@@ -371,6 +420,12 @@ class HostHandler(http.server.BaseHTTPRequestHandler):
             return {'status': 'ok', 'role': 'host_daemon'}
         if action == 'host.activate_rdp':
             return ensure_rdp_active(body.get('target'), body.get('offscreen', True))
+        if action == 'vm.snapshot':
+            return snapshot_vm(body.get('name', body.get('vm', '')), body.get('tag'), body.get('path'))
+        if action == 'vm.restore':
+            return restore_vm(body.get('name', body.get('vm', '')), body.get('tag', ''), body.get('path'))
+        if action == 'vm.snapshots':
+            return list_snapshots(body.get('name', body.get('vm', '')))
         if action.startswith('vm.'):
             name = body.get('vm', body.get('name', ''))
             inner = dict(body); inner['action'] = action.replace('vm.', '', 1)

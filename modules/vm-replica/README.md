@@ -15,7 +15,7 @@
  MCP 客户端 (Devin / Claude / Cursor)        ← 任何 MCP-compatible agent
         │  stdio JSON-RPC 2.0
         ▼
- mcp_server.py        把 24 个 vm_* 工具暴露为 MCP（纯 stdlib，可冻结成 exe）
+ mcp_server.py        把 33 个 vm_* 工具暴露为 MCP（纯 stdlib，可冻结成 exe）
         │  HTTP + Bearer (127.0.0.1:9000)
         ▼
  vm_host_daemon.py    宿主守护：vm.create / attach / destroy / list + 代理一切操作
@@ -35,8 +35,9 @@
 | `build_exe.py` | **冻结成独立 EXE**（PyInstaller）：把 inner/host/mcp 三层打包成无 Python 依赖的单文件 exe，用于注入任意用户 Windows（见二·B）。 |
 | `config.sample.json` | 守护配置样例（落地为 `C:\ProgramData\dao_vm\config.json`）。 |
 | `recover-bootsafe.bat` | **带外恢复脚本**。开机进不去桌面 / RDP 崩溃 / 自动重启时，管理员双击即恢复 boot-safe 本源态。 |
-| `vm_agent.py`（旧） | dao-bridge 直代理的单账号内层代理变体（含 mss/pyautogui 录屏）。保留供桥式单机用。 |
-| `connector.py` / `daovm-up.ps1`（旧） | 早期「单账号 at-logon 自启 + mstsc 对话框自动点」方案，仅留作参考；已被 host daemon 取代（见下方安全红线）。 |
+| `archive_practice/`（旧） | 早期/备用实现归档（`vm_agent.py` / `connector.py` / `daovm-up.ps1`）：单账号 at-logon 自启 + mstsc 对话框自动点等方案，已被 host daemon 取代，仅留作参考。详见该目录 README。 |
+| `../vendor/playwright-mcp` | **直接复制**的真实 Playwright MCP（@playwright/mcp）。经 `--cdp-endpoint` 连到 inner agent `browser_launch` 暴露的 VM 浏览器 CDP 端点，让 agent 用 Playwright 全套真实工具操作 VM 浏览器（非复刻）。 |
+| `../vendor/mcp-servers` | **直接复制**的 modelcontextprotocol/servers（filesystem/git/fetch/memory/...），对位 Devin 文件/Git/抓取工具面的官方实现。 |
 
 ---
 
@@ -59,9 +60,34 @@ python vmctl.py vm.screenshot  vm=vm01                        # 返回 PNG base6
 python vmctl.py vm.type        vm=vm01 text="道法自然"         # 支持中文/Unicode
 python vmctl.py vm.list
 
+# 浏览器（P0）：在 VM 会话内起 Chrome/Edge 并暴露 CDP，然后操作它
+python vmctl.py vm.browser_launch   vm=vm01 url="https://example.com"
+python vmctl.py vm.browser_navigate vm=vm01 url="https://bing.com"
+python vmctl.py vm.browser_eval     vm=vm01 expression="document.title"
+python vmctl.py vm.ui_tree          vm=vm01                       # 元素树 grounding（P2）
+python vmctl.py vm.snapshot         vm=vm01 tag=base               # profile 快照（P1）
+python vmctl.py vm.restore          vm=vm01 tag=base               # 回滚到快照
+
 # MCP 接入：把 mcp_server.py 作为 stdio MCP server 挂到任意 MCP 客户端
 python mcp_server.py
 ```
+
+### 浏览器：直接「拿来」真实 Playwright MCP（非复刻）
+
+`vm.browser_*` 是**纯零依赖**的 CDP 实现，用于无 Node 的纯 EXE 注入场景作兜底。
+当目标机有 Node 时，**首选直接复制进 `vendor/playwright-mcp` 的真实 Playwright MCP**：
+inner agent 的 `vm.browser_launch` 在 VM 会话内以 `--remote-debugging-port=<DEBUG_PORT>`
+（`DEBUG_PORT = base_port + 200`，loopback 全机可达）起浏览器并返回该端点，真实 Playwright MCP
+直接连上即得 23 个原生工具（navigate/click/snapshot/fill/...）：
+
+```powershell
+python vmctl.py vm.browser_launch vm=vm01    # 返回 {port: <DEBUG_PORT>}
+cd ../vendor/playwright-mcp && npm install
+node cli.js --cdp-endpoint http://127.0.0.1:<DEBUG_PORT>
+#  或免安装： npx @playwright/mcp@latest --cdp-endpoint http://127.0.0.1:<DEBUG_PORT>
+```
+
+详见 `../vendor/VENDOR.md`。
 
 > **GUI 应用务必用 `vm.launch`（或 `vm.exec ... detach=true`）**，不要用 `vm.exec`。
 > `vm.exec` 会捕获 stdio 并等待进程结束 —— 启动 notepad / chrome 这类长存 GUI 进程会一直
@@ -92,7 +118,7 @@ python build_exe.py            # 产出 dist\dao_inner_agent.exe / dao_host_daem
    默认指向此路径；守护会**优先用 exe**、未装 Python 也能拉起会话内代理）。
 2. 在 console 会话里跑 `dao_host_daemon.exe`（首次会生成 `config.json` 并写入随机 token）。
 3. 把 `dao_mcp_server.exe` 作为 stdio MCP server 挂到 agent 的 MCP 客户端 —— 之后就能用
-   `vm_create / vm_exec / vm_screenshot / vm_type …` 等 24 个工具操作该机的 RDP「VM」。
+   `vm_create / vm_exec / vm_screenshot / vm_type / vm_browser_* / vm_ui_tree / vm_snapshot …` 等 33 个工具操作该机的 RDP「VM」。
 
 > Windows 10/11 需多开时，再叠加「会话内按需加载 rdpwrap」（绝不挂 ServiceDll，见第三节）。
 
@@ -159,6 +185,11 @@ RDP 许可限制**，与本代码无关：
 | **全工具面硬验证（24 工具）** | ✅ **25/25 PASS** — exec/launch/detach、file_write/read/append（CJK 字节级一致）、screenshot(PNG)、ui_info、activate、type(CJK)/key/hold_key、click/double/right/mouse_move/drag/scroll、desktop_info、vm.list/sessions/host.activate_rdp |
 | **MCP 工具层（真 stdio JSON-RPC）** | ✅ **19/19 PASS** — 以真实 MCP 协议起 `mcp_server.py`：initialize / notifications/initialized / tools/list(24) / 逐个 `tools/call` 实操 VM（含 screenshot 返回 image content） |
 | **全 EXE 链（无 Python 运行时）** | ✅ `dao_host_daemon.exe`(session1) → 环回 RDP → `dao_inner_agent.exe`(VM 会话) → 由 `dao_mcp_server.exe` 驱动：whoami=`devinbox\\vmexe`、launch notepad、type CJK、screenshot 均通 |
+| **P0 浏览器 · 真实 Playwright MCP（直接拿来）** | ✅ `vm.browser_launch` 在 VM 起 Edge(Edg/149) 暴露 CDP(9201) → `vendor/playwright-mcp` 真实 Playwright MCP `--cdp-endpoint` 连上：initialize server=`Playwright`、**23 个真实工具**、`browser_navigate`(example.com)+`browser_snapshot`(无障碍树) 全过 |
+| **P0 浏览器 · 零依赖兜底（无 Node）** | ✅ `vm.browser_eval` 返回实时页面标题、`vm.browser_navigate`/`vm.browser_targets` 正常（自写 stdlib WebSocket+CDP，可冻结 EXE） |
+| **P1 快照/恢复** | ✅ `vm.snapshot`(robocopy /B 镜像)→`vm.restore` 实测：删文件+加文件后 restore 完全回滚，字节级一致；`vm.snapshots` 列出 tag |
+| **P2 元素树 grounding** | ✅ `vm.ui_tree` 返回控件树（class/text/rect/ctrlId/visible），含 WM_GETTEXT 取按钮/编辑框文本 |
+| **MCP 层（33 工具）** | ✅ tools/list=33，9 个新工具（vm_browser_* / vm_ui_tree / vm_snapshot* ）全部注册且 `tools/call` 端到端可调 |
 
 > 实测中发现并修复的缺陷：
 > 1. `vm.exec` 启动 GUI 应用会阻塞到超时 → 新增 `vm.launch` / `detach=true` 非阻塞模式
