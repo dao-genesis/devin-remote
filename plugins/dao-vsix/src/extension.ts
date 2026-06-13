@@ -18,7 +18,7 @@ import * as vscode from 'vscode';
 // CF全局共享(一机一CF账号) + 每工作区独立(一窗口一Devin账号)
 // 帛书·三十九「致数与无与」— 不欲禄禄若玉 珞珞若石
 // ═══════════════════════════════════════════════════════════
-const EXT_VERSION = '1.2.8';
+const EXT_VERSION = '1.3.0';
 const DAO_DIR = path.join(os.homedir(), '.dao');
 const GLOBAL_CONFIG_FILE = path.join(DAO_DIR, 'dao-config.json');  // CF全局凭证
 const CONFIG_FILE = GLOBAL_CONFIG_FILE;  // 别名 — 道法自然：一即一切
@@ -1018,7 +1018,7 @@ function isAppProxyPassthrough(route: string): boolean {
             '/api/command', '/api/file', '/api/write', '/api/search', '/api/edit', '/api/ls',
             '/api/terminal', '/api/diagnostics', '/api/definitions', '/api/references', '/api/symbols',
             '/api/git/', '/api/agents', '/api/commands', '/api/tools', '/api/devin', '/api/workspaces',
-            '/api/agent-doc', '/api/manifest'];
+            '/api/agent-doc', '/api/manifest', '/api/bridge-state'];
         return !daoApiPrefixes.some(p => route === p || route.startsWith(p + '/') || route === p.replace(/\/$/, ''));
     }
     // 帛书·「执天之行」官网根挂载: dao 自身 HTTP 仅占用 /api/*, 故其余所有根路径
@@ -1178,6 +1178,9 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             const repo = gitApi.repositories[0];
             if (!repo) return { error: 'no git repo' };
             return { head: repo.state.HEAD?.name, ahead: repo.state.HEAD?.ahead, behind: repo.state.HEAD?.behind, changes: repo.state.workingTreeChanges.length, staged: repo.state.indexChanges.length, mergeConflicts: repo.state.mergeChanges.length };
+        }
+        case '/api/bridge-state': {
+            return bridgeGetState();
         }
         case '/api/agents': {
             return { agents: [{ id: os.hostname(), hostname: os.hostname(), ip: '127.0.0.1', os: `${os.type()} ${os.release()}`, user: os.userInfo().username, agent_version: '1.0.0', status: 'online', connected_at: new Date(ws.startTime).toISOString(), last_heartbeat: new Date().toISOString(), pending_commands: 0, completed_commands: 0, workspace: vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [], port: ws.port, publicUrl: ws.publicUrl }], count: 1 };
@@ -1763,6 +1766,260 @@ function readBridgeConn(): any {
     } catch { return null; }
 }
 
+// ═══════════════════════════════════════════════════════════
+// Bridge 集成模块 — 帛书·「天下之至柔驰骋于天下之致坚」
+// 内网穿透一体化: cloudflared管理 + MD生成 + Knowledge注入
+// ═══════════════════════════════════════════════════════════
+const BRIDGE_DIR = path.join(os.homedir(), '.dao', 'bridge');
+let bridgeProc: any = null;
+let bridgeUrl: string = '';
+let bridgeToken: string = '';
+
+function bridgeEnsureDir() { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); }
+
+function bridgeSaveNamedToken(token: string) {
+    bridgeEnsureDir();
+    fs.writeFileSync(path.join(BRIDGE_DIR, 'tunnel-token'), token, 'utf8');
+}
+
+function bridgeReadNamedToken(): string {
+    try { return fs.readFileSync(path.join(BRIDGE_DIR, 'tunnel-token'), 'utf8').trim(); } catch { return ''; }
+}
+
+function bridgeFindCloudflared(): string {
+    const { execSync } = require('child_process');
+    // 1. Check PATH
+    try {
+        const w = execSync('where cloudflared', { encoding: 'utf8', timeout: 5000 }).trim().split('\n')[0];
+        if (w && fs.existsSync(w.trim())) return w.trim();
+    } catch {}
+    // 2. Common locations
+    const candidates = [
+        path.join(os.homedir(), '.dao', 'bin', 'cloudflared.exe'),
+        path.join(os.homedir(), '.dao', 'bin', 'cloudflared'),
+        'C:\\Program Files\\cloudflared\\cloudflared.exe',
+        'C:\\cloudflared\\cloudflared.exe',
+        '/usr/local/bin/cloudflared',
+        '/usr/bin/cloudflared',
+    ];
+    for (const c of candidates) {
+        if (fs.existsSync(c)) return c;
+    }
+    return 'cloudflared'; // fallback to PATH
+}
+
+async function bridgeStartTunnel(named: boolean) {
+    const { spawn } = require('child_process');
+    bridgeEnsureDir();
+    if (bridgeProc) { try { bridgeProc.kill(); } catch {} bridgeProc = null; }
+    if (!bridgeToken) bridgeToken = crypto.randomBytes(24).toString('hex');
+    const cfPath = bridgeFindCloudflared();
+    const targetPort = ws.port || 9920;
+    const localUrl = `http://127.0.0.1:${targetPort}`;
+    let args: string[];
+    if (named) {
+        const tok = bridgeReadNamedToken();
+        args = ['tunnel', 'run', '--token', tok];
+    } else {
+        args = ['tunnel', '--url', localUrl, '--no-autoupdate'];
+    }
+    bridgeProc = spawn(cfPath, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: false });
+    let urlCaptured = false;
+    const handleOutput = (data: Buffer) => {
+        const line = data.toString();
+        if (!urlCaptured) {
+            const m = line.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+            if (m) {
+                bridgeUrl = m[0];
+                urlCaptured = true;
+                bridgeSaveConnJson();
+                bridgeWriteArtifacts();
+                refreshDaoCloudMiddlePanel();
+                vscode.window.showInformationMessage(`Bridge 已打通: ${bridgeUrl}`);
+            }
+        }
+    };
+    bridgeProc.stdout?.on('data', handleOutput);
+    bridgeProc.stderr?.on('data', handleOutput);
+    bridgeProc.on('exit', () => { bridgeProc = null; bridgeUrl = ''; bridgeSaveConnJson(); refreshDaoCloudMiddlePanel(); });
+}
+
+function bridgeStopTunnel() {
+    if (bridgeProc) { try { bridgeProc.kill(); } catch {} bridgeProc = null; }
+    bridgeUrl = '';
+    bridgeSaveConnJson();
+    refreshDaoCloudMiddlePanel();
+}
+
+function bridgeSaveConnJson() {
+    bridgeEnsureDir();
+    const wsInfo = { name: vscode.workspace.workspaceFolders?.[0]?.name || '', root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '' };
+    const data = {
+        url: bridgeUrl, token: bridgeToken || ws.token,
+        local_url: 'http://127.0.0.1:' + (ws.port || 9920),
+        port: ws.port || 9920, workspace: wsInfo.name, root: wsInfo.root,
+        host: os.hostname(), updated: new Date().toISOString(), version: EXT_VERSION,
+    };
+    fs.writeFileSync(path.join(BRIDGE_DIR, 'conn.json'), JSON.stringify(data, null, 2), 'utf8');
+    // Also write to global location for other extensions
+    try { fs.writeFileSync(path.join(BRIDGE_DIR, 'connection.json'), JSON.stringify(data, null, 2), 'utf8'); } catch {}
+}
+
+function bridgeWriteArtifacts() {
+    bridgeEnsureDir();
+    fs.writeFileSync(path.join(BRIDGE_DIR, 'cloud-agent.md'), bridgeGenerateCloudMd(), 'utf8');
+    fs.writeFileSync(path.join(BRIDGE_DIR, 'local-agent.md'), bridgeGenerateLocalMd(), 'utf8');
+    fs.writeFileSync(path.join(BRIDGE_DIR, 'workspace.md'), bridgeGenerateCloudMd(), 'utf8');
+}
+
+function bridgeGenerateCloudMd(): string {
+    const wsInfo = { name: vscode.workspace.workspaceFolders?.[0]?.name || 'workspace', root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', host: os.hostname() };
+    const ts = new Date().toISOString();
+    const tok = bridgeToken || ws.token;
+    const url = bridgeUrl || '(未连接)';
+    return [
+        '# ☯ DAO Bridge · 云端Agent远程操作文档',
+        '',
+        '> 本文档供云端Agent(Devin Cloud等)读取，用于通过内网穿透远程操作用户本地电脑。',
+        '> **端口和URL会随隧道重启而变化，以本文档为准。**',
+        '',
+        '## 接入信息',
+        '',
+        '```',
+        `公网URL: ${url}`,
+        `Token:   ${tok}`,
+        `Auth:    Authorization: Bearer ${tok}`,
+        '```',
+        '',
+        '## 当前状态',
+        '',
+        '| 项 | 值 |',
+        '|---|---|',
+        `| 公网URL | ${url} |`,
+        `| 本地端口 | ${ws.port || 9920} |`,
+        `| 工作区 | ${wsInfo.name} |`,
+        `| 根目录 | ${wsInfo.root} |`,
+        `| 主机 | ${wsInfo.host} |`,
+        `| 更新于 | ${ts} |`,
+        '',
+        '## API 参考',
+        '',
+        `所有请求 Header: \`Authorization: Bearer ${tok}\``,
+        '',
+        '| 方法 | 路径 | Body | 说明 |',
+        '|---|---|---|---|',
+        '| GET | `/api/health` | - | 存活 (免鉴权) |',
+        '| GET | `/api/connection` | - | 连接信息 |',
+        '| GET | `/api/workspace` | - | 工作区信息 |',
+        '| GET | `/api/bridge-state` | - | 隧道状态 |',
+        '| POST | `/api/exec` | `{cmd,timeout}` | 执行命令 |',
+        '| POST | `/api/ls` | `{path}` | 列目录 |',
+        '| POST | `/api/file` | `{path}` | 读文件 |',
+        '| POST | `/api/write` | `{path,content}` | 写文件 |',
+        '| POST | `/api/search` | `{query,path}` | 搜索文件 |',
+        '| POST | `/api/edit` | `{path,edits}` | 编辑文件 |',
+        '',
+        '## Python SDK',
+        '',
+        '```python',
+        'import urllib.request, json, ssl, os',
+        "for k in ('HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy'): os.environ.pop(k,None)",
+        "os.environ['NO_PROXY']='*'",
+        'ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE',
+        'urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=ctx)))',
+        `URL="${url}"`,
+        `TOKEN="${tok}"`,
+        'def api(m,p,body=None,t=30):',
+        '    d=json.dumps(body).encode() if body else None',
+        '    req=urllib.request.Request(f"{URL}{p}",data=d,headers={"Authorization":f"Bearer {TOKEN}","Content-Type":"application/json"},method=m)',
+        '    return json.loads(urllib.request.urlopen(req,timeout=t).read())',
+        'print(api("GET","/api/health"))',
+        'print(api("POST","/api/exec",{"cmd":"hostname"}))',
+        '```',
+        '',
+        '*道法自然 · 无为而无不为*',
+    ].join('\n');
+}
+
+function bridgeGenerateLocalMd(): string {
+    const wsInfo = { name: vscode.workspace.workspaceFolders?.[0]?.name || 'workspace', root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', host: os.hostname() };
+    const ts = new Date().toISOString();
+    const tok = bridgeToken || ws.token;
+    return [
+        '# ☯ DAO Bridge · 本地Agent配置接口文档',
+        '',
+        '> 本文档供本机其他Agent(如Devin、Cursor等)读取，用于接入和配置 DAO Bridge 插件。',
+        '',
+        '## 本地接入',
+        '',
+        '```',
+        `Local URL: http://127.0.0.1:${ws.port || 9920}`,
+        `Token:     ${tok}`,
+        `Auth:      Authorization: Bearer <Token>`,
+        '```',
+        '',
+        '## 可用API',
+        '',
+        '| 方法 | 路径 | 说明 |',
+        '|---|---|---|',
+        '| GET | `/api/health` | 存活检查(免鉴权) |',
+        '| GET | `/api/connection` | 连接信息 |',
+        '| GET | `/api/workspace` | 工作区信息 |',
+        '| GET | `/api/bridge-state` | 隧道完整状态 |',
+        '| POST | `/api/exec` | 执行命令 |',
+        '| POST | `/api/ls` | 列目录 |',
+        '| POST | `/api/file` | 读文件 |',
+        '| POST | `/api/write` | 写文件 |',
+        '',
+        '## 当前状态',
+        '',
+        '| 项 | 值 |',
+        '|---|---|',
+        `| 公网URL | ${bridgeUrl || '(未连接)'} |`,
+        `| 本地端口 | ${ws.port || 9920} |`,
+        `| 工作区 | ${wsInfo.name} |`,
+        `| 主机 | ${wsInfo.host} |`,
+        `| 更新于 | ${ts} |`,
+        '',
+        '*道法自然 · 无为而无不为*',
+    ].join('\n');
+}
+
+async function bridgeInjectKnowledge(): Promise<boolean> {
+    if (!ws.devinAuth1 || !ws.devinOrgId) return false;
+    const md = bridgeGenerateCloudMd();
+    const knowledgeName = 'DAO Bridge 内网穿透远程操作文档';
+    const trigger = '涉及所有远程操作本地电脑的需求时都触发';
+    // Delete existing if present, then create fresh (帛书·三十六「将欲拾之·必故张之」)
+    try {
+        const listResult = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1);
+        if (listResult.ok && listResult.learnings) {
+            const existing = listResult.learnings.find((k: any) => k.name === knowledgeName || (k.trigger_description || '').includes('远程操作本地电脑'));
+            if (existing) {
+                await devinDeleteKnowledge(ws.devinOrgId, existing.id, ws.devinAuth1);
+            }
+        }
+        const r = await devinInjectKnowledge(ws.devinOrgId, knowledgeName, md, trigger, ws.devinAuth1);
+        return r.ok;
+    } catch { return false; }
+}
+
+// Bridge API route handler (exposed via /api/bridge-state)
+function bridgeGetState(): any {
+    return {
+        connected: !!bridgeUrl,
+        url: bridgeUrl,
+        token: bridgeToken || ws.token,
+        localPort: ws.port || 9920,
+        localUrl: `http://127.0.0.1:${ws.port || 9920}`,
+        host: os.hostname(),
+        workspace: vscode.workspace.workspaceFolders?.[0]?.name || '',
+        root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
+        updated: new Date().toISOString(),
+        version: EXT_VERSION,
+    };
+}
+
 function getDaoCloudMiddlePanelHtml(st: any): string {
     const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, injecting, bridge } = st;
     // 帛书·「道生一，一生二，二生三，三生万物」
@@ -1856,6 +2113,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ni" data-tab="org" onclick="sw('org')" title="组织成员 Members">🏢</div>
 <div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器">🧩</div>
 <div class="ni" data-tab="automations" onclick="sw('automations')" title="Automations 自动化">⚙️</div>
+<div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网穿透 DAO Bridge">🌐</div>
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="自动注入 Auto-Inject">💉</div>
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
@@ -1880,6 +2138,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="tv" id="v-org"></div>
 <div class="tv" id="v-mcp"></div>
 <div class="tv" id="v-automations"></div>
+<div class="tv" id="v-bridge"></div>
 <div class="tv" id="v-inject"></div>
 </div>
 <div class="ft" id="ft">
@@ -1932,6 +2191,7 @@ function sw(t){
   // devin-session-token$ → 仅Codeium API → 显示创建API Key引导
   // 自动注入模块: 无需 cog_ key, 直接拉 profile 配置 (账号无关意图)
   if(t==='inject'){ cmd('getInjectProfile'); return; }
+  if(t==='bridge'){ rBridgeFull(); return; }
   if(t!=='overview'&&S.auth.loggedIn){
     const v=document.getElementById('v-'+t);
     if(v&&!v.dataset.loaded){
@@ -1949,7 +2209,45 @@ function sw(t){
     }
   }
 }
-function rc(){if(S.tab==='overview')rO()}
+function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull()}
+function rBridgeFull(){
+  var v=document.getElementById('v-bridge');if(!v)return;
+  var b=S.bridge;
+  var h='<div class="st">内网穿透 · DAO Bridge (集成)</div>';
+  if(!b||!b.url){
+    h+='<div class="card"><div class="cr"><span class="l">隧道状态</span><span class="v" style="color:var(--warn)">未连接</span></div>';
+    h+='<div class="cr"><span class="l">说明</span><span class="v" style="font-size:11px;color:var(--muted)">点击下方按钮启动内网穿透隧道，云端Agent即可远程操作本机</span></div></div>';
+    h+='<div class="br"><button class="btn primary" onclick="cmd(&#39;bridgeStart&#39;)">▶ 启动隧道</button>';
+    h+='<button class="btn" onclick="cmd(&#39;bridgeStartNamed&#39;)">🔗 命名隧道</button></div>';
+  } else {
+    h+='<div class="card"><div class="cr"><span class="l">状态</span><span class="v" style="color:var(--success)">✓ 已打通</span></div>';
+    h+='<div class="cr"><span class="l">公网 URL</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(b.url)+'</span></div>';
+    if(b.port)h+='<div class="cr"><span class="l">本地端口</span><span class="v">'+b.port+'</span></div>';
+    if(b.workspace)h+='<div class="cr"><span class="l">工作区</span><span class="v">'+esc(b.workspace)+'</span></div>';
+    if(b.host)h+='<div class="cr"><span class="l">主机</span><span class="v">'+esc(b.host)+'</span></div>';
+    if(b.updated)h+='<div class="cr"><span class="l">更新于</span><span class="v" style="font-size:10px">'+esc(b.updated)+'</span></div>';
+    h+='</div>';
+    h+='<div class="br"><button class="btn sm" onclick="cmd(&#39;copyBridgeUrl&#39;)">📋 复制URL</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;bridgeExportCloudMd&#39;)">☁ 云端Agent MD</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;bridgeExportLocalMd&#39;)">💻 本地Agent MD</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入Knowledge</button>';
+    h+='<button class="btn sm danger" onclick="cmd(&#39;bridgeStop&#39;)">⏹ 停止</button></div>';
+  }
+  h+='<div class="st" style="margin-top:16px">API 参考</div>';
+  h+='<div class="card" style="font-size:11px;line-height:1.8"><code>Authorization: Bearer &lt;token&gt;</code><br><br>';
+  h+='<table style="width:100%;font-size:11px;border-collapse:collapse">';
+  h+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:2px 4px;color:var(--muted)">GET</td><td>/api/health</td><td style="color:var(--muted)">存活(免鉴权)</td></tr>';
+  h+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:2px 4px;color:var(--muted)">POST</td><td>/api/exec</td><td style="color:var(--muted)">执行命令</td></tr>';
+  h+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:2px 4px;color:var(--muted)">POST</td><td>/api/read</td><td style="color:var(--muted)">读文件</td></tr>';
+  h+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:2px 4px;color:var(--muted)">POST</td><td>/api/write</td><td style="color:var(--muted)">写文件</td></tr>';
+  h+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:2px 4px;color:var(--muted)">POST</td><td>/api/ls</td><td style="color:var(--muted)">列目录</td></tr>';
+  h+='<tr><td style="padding:2px 4px;color:var(--muted)">GET</td><td>/api/bridge-state</td><td style="color:var(--muted)">隧道状态</td></tr>';
+  h+='</table></div>';
+  h+='<div class="st" style="margin-top:16px">Knowledge 自动注入</div>';
+  h+='<div class="card"><div class="cr"><span class="l">触发条件</span><span class="v" style="font-size:11px">涉及所有远程操作本地电脑的需求时都触发</span></div>';
+  h+='<div class="cr"><span class="l">自动更新</span><span class="v" style="color:var(--success)">✓ 端口/URL变化时自动同步</span></div></div>';
+  v.innerHTML=h;
+}
 // 帛书·「为而弗恃」: API Key 全程底层自动获取, 面板永不出现手动输入 — 旧 submitCogKey* 已删
 function rO(){
   const v=document.getElementById('v-overview');
@@ -2188,7 +2486,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -2606,6 +2904,51 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             }
             case 'refresh': {
                 refreshDaoCloudMiddlePanel();
+                break;
+            }
+            // ═══ Bridge 集成命令 — 帛书·「天下之至柔驰骋于天下之致坚」═══
+            case 'bridgeStart': {
+                await bridgeStartTunnel(false);
+                refreshReply({ type: 'actionResult', command: 'bridgeStart', ok: true });
+                break;
+            }
+            case 'bridgeStartNamed': {
+                const token = await vscode.window.showInputBox({ prompt: '命名隧道 Token (cloudflared tunnel run --token)', placeHolder: 'eyJ...' });
+                if (token) {
+                    bridgeSaveNamedToken(token);
+                    await bridgeStartTunnel(true);
+                    refreshReply({ type: 'actionResult', command: 'bridgeStartNamed', ok: true });
+                }
+                break;
+            }
+            case 'bridgeStop': {
+                bridgeStopTunnel();
+                refreshReply({ type: 'actionResult', command: 'bridgeStop', ok: true });
+                break;
+            }
+            case 'bridgeExportCloudMd': {
+                const md = bridgeGenerateCloudMd();
+                const mdPath = path.join(os.homedir(), '.dao', 'bridge', 'cloud-agent.md');
+                fs.mkdirSync(path.dirname(mdPath), { recursive: true });
+                fs.writeFileSync(mdPath, md, 'utf8');
+                const doc = await vscode.workspace.openTextDocument(mdPath);
+                await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+                reply({ type: 'actionResult', command: 'bridgeExportCloudMd', ok: true });
+                break;
+            }
+            case 'bridgeExportLocalMd': {
+                const md = bridgeGenerateLocalMd();
+                const mdPath = path.join(os.homedir(), '.dao', 'bridge', 'local-agent.md');
+                fs.mkdirSync(path.dirname(mdPath), { recursive: true });
+                fs.writeFileSync(mdPath, md, 'utf8');
+                const doc = await vscode.workspace.openTextDocument(mdPath);
+                await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+                reply({ type: 'actionResult', command: 'bridgeExportLocalMd', ok: true });
+                break;
+            }
+            case 'bridgeInjectKnowledge': {
+                const injected = await bridgeInjectKnowledge();
+                reply({ type: 'actionResult', command: 'bridgeInjectKnowledge', ok: injected });
                 break;
             }
         }
