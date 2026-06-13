@@ -1117,7 +1117,17 @@ function _normalizeModelUid(uid) {
   //   仅当精确/形态匹配皆未命中, 且族基名被用户"显式"(非_seeded)连线时方触发
   const base = _stripVariantSuffix(uid);
   if (base && base !== uid) {
-    const _real = (k) => _routes[k] && !_routes[k]._seeded;
+    // ★ v9.9.284 · 真实可路由判定: 非播种 + 非桩/替身 + 未禁用
+    //   关键(VM实证): 族基名若为 builtin-stub 基线档(MODEL_SWE_1_6→测试桩)·
+    //     不得吞并 slow/fast/lite 变体之真实聊天流 → 让其落入 3.6 择优真实渠道
+    const _real = (k) => {
+      const r = _routes[k];
+      if (!r || r._seeded) return false;
+      if (r.provider === "builtin-stub" || r.provider === "substitute")
+        return false;
+      if (r.enabled === false) return false;
+      return true;
+    };
     if (_real(base)) return base;
     if (!base.startsWith("MODEL_")) {
       const baseModelKey = "MODEL_" + base.replace(/-/g, "_").toUpperCase();
@@ -1142,7 +1152,25 @@ function _normalizeModelUid(uid) {
     const _sibs = Object.keys(_routes)
       .filter((k) => _routes[k] && !_routes[k]._seeded && _familyCanon(k) === _qFam)
       .sort();
-    if (_sibs.length) return _sibs[0];
+    if (_sibs.length) {
+      // ★ v9.9.284 · 兄弟档位择优 (VM实证修正): 真实外接渠道 > builtin-stub/substitute
+      //   真因: 旧逻辑取 _sibs.sort()[0] (字典序) · 若同族存在 builtin-stub 基线档
+      //     (如 MODEL_SWE_1_6 且非_seeded) · 它排在 MODEL_SWE_1_6_FAST 之前 → 真实
+      //     聊天被导到桩(固定返回) · 而非用户连的 deepseek。141 仅因该桩恰为 _seeded
+      //     被剔除才侥幸正确 · 配置稍变即暴露。
+      //   治: 优先选"真实外接 provider 且 enabled"之兄弟档 · 无则回落任一兄弟档
+      //   道义: 二十七章「善救物·故无弃物」· 桩仅验通路·不夺真流
+      const _realSib = _sibs.filter((k) => {
+        const p = _routes[k].provider;
+        return (
+          p &&
+          p !== "builtin-stub" &&
+          p !== "substitute" &&
+          _routes[k].enabled !== false
+        );
+      });
+      return (_realSib.length ? _realSib : _sibs)[0];
+    }
   }
   // 4) ★ v9.9.59 · 通配符兜底: * → 任何未知模型自动路由
   if (_routes["*"]) return "*";
