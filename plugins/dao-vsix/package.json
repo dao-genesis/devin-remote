@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "1.2.8",
+  "version": "1.2.9",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -93,7 +93,10 @@
         },
         "dao.accountSyncMode": {
           "type": "string",
-          "enum": ["auto", "manual"],
+          "enum": [
+            "auto",
+            "manual"
+          ],
           "enumDescriptions": [
             "自动: 面板账号实时跟随 IDE(Windsurf) 当前登录账号",
             "手动: 不跟随 IDE, 由用户自行登录指定账号(账号对不上时用)"
@@ -103,7 +106,10 @@
         },
         "dao.websiteLoginMode": {
           "type": "string",
-          "enum": ["auto", "manual"],
+          "enum": [
+            "auto",
+            "manual"
+          ],
           "enumDescriptions": [
             "自动: 路由官网时深层注入 auth1 自动登录对应账号",
             "手动: 不注入, 打开官网后由用户自行登录"
