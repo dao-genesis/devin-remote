@@ -1,8 +1,8 @@
 {
   "name": "dao-proxy-pro",
   "displayName": "道Agent Pro · 外接API · 反者道之动",
-  "description": "v9.9.281 · 三模块面板: ①本源观照(道官编+经文+本源体池) + ③官方模型↔右侧Cascade 1:1活捕映射+连线路由 + ②cc-switch渠道+freemodel+加key即探活拿模型 + Agent热配置交接MD · v9.9.281 test-chat多字节修复: Content-Length按字节计(非字符数)·中文消息不再被截断·上游不再400 · v9.9.280档位语义修正: 自动播种基础桩(MODEL_SWE_1_6)不吞兄弟档位·未连线档位(swe-1-6-slow)守官方透传免费原生·用户显式连线的族仍覆盖其档位变体 · v9.9.278配置持久化: 用户级 ~/.codeium/dao-byok 首启即播种接管(凭据绝不入库·升级重装不失) · 反者道之动",
-  "version": "9.9.281",
+  "description": "v9.9.283 · 三模块面板: ①本源观照(道官编+经文+本源体池) + ③官方模型↔右侧Cascade 1:1活捕映射+连线路由 + ②cc-switch渠道+freemodel+加key即探活拿模型 + Agent热配置交接MD · v9.9.283 test-chat诊断照真源: 新增 dao_router.resolveRoute() 与真实推理路径(route())同一张 _routes 表·test-chat改用之·彻底消除\"swe-1-6-slow 实际可路由却误报 route config not found\"(旧逻辑直查持久化config且 _normalizeModelUid 未导出) · v9.9.282 同族兄弟档位路由(连一档即覆盖全族): 用户仅连 swe-1-6-fast→渠道 时·发消息默认下发的 swe-1-6-slow 亦归一同渠道·彻底消除\"档位对不上→走官方→501回弹\"·完成 v9.9.280 族级语义(纯播种桩族仍守官方原生) · v9.9.281 test-chat多字节修复: Content-Length按字节计(非字符数)·中文消息不再被截断·上游不再400 · v9.9.278配置持久化: 用户级 ~/.codeium/dao-byok 首启即播种接管(凭据绝不入库·升级重装不失) · 反者道之动",
+  "version": "9.9.283",
   "publisher": "dao-agi",
   "license": "Apache-2.0",
   "engines": {
