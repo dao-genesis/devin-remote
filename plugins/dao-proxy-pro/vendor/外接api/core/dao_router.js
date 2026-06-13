@@ -1174,6 +1174,22 @@ function shouldRoute(modelUid) {
 }
 
 /**
+ * ★ v9.9.283 · 路由解析(对外暴露) · 与 route()/shouldRoute() 同源解析
+ *   返回内部 _routes 真实命中目标 · 供 test-chat 等诊断按"真路由"显示
+ *   真因: 旧 test-chat 直查持久化 config.daoRoutes.routes · 不经 _normalizeModelUid
+ *     → 同族兄弟档位(如 swe-1-6-slow)虽 shouldRoute=true 却被误报"route config not found"
+ *   治: 诊断改用本函数 · 与真实推理路径同一张 _routes 表 · 名实相符
+ *   道义: 二十一章「其名不去·以顺众父」· 二十五章「道法自然」
+ */
+function resolveRoute(modelUid) {
+  if (typeof modelUid !== "string") return null;
+  const normalized = _normalizeModelUid(modelUid);
+  const r = _routes[normalized];
+  if (!r) return null;
+  return { modelUid, normalized, provider: r.provider, model: r.model, route: r };
+}
+
+/**
  * 路由执行: GetChatMessage → 第三方API
  *
  * @param {http.IncomingMessage}  req      - 原始请求 (用于 close 监听)
@@ -4184,6 +4200,7 @@ module.exports = {
   isReady,
   extractModelUid,
   shouldRoute,
+  resolveRoute,
   route,
   status,
   getSubstitution,

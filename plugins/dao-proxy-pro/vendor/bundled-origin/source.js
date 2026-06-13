@@ -3624,9 +3624,17 @@ function handleControl(req, res) {
           return;
         }
         // 获取路由目标
+        //   ★ v9.9.283 · 经 router.resolveRoute 解析 · 与真实推理路径(route())同一张 _routes 表
+        //     真因: 旧逻辑直查持久化 config.daoRoutes.routes 且 router._normalizeModelUid 未导出
+        //       → 同族兄弟档位(swe-1-6-slow)shouldRoute=true 却在此误报 "route config not found"
+        //     治: 优先用 resolveRoute(真源) · 回退持久化config(老router兼容)
+        //   道义: 二十一章「其名不去·以顺众父」· 名实相符
         const routeCfg = _eaRuntimeMod ? _eaRuntimeMod.hotGetConfig() : {};
         const routes = (routeCfg.daoRoutes && routeCfg.daoRoutes.routes) || {};
+        const resolved =
+          router && router.resolveRoute ? router.resolveRoute(modelUid) : null;
         const route =
+          (resolved && resolved.route) ||
           routes[modelUid] ||
           routes[
             router._normalizeModelUid
