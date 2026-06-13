@@ -2,6 +2,37 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.4.0 (2026-06-13) · 文件夹备份 · HTML/MD双视图 · 自动备份阈值 · 自动清理 · 道法自然
+
+> *天下之物生于有，有生于无。* —— 备份从ZIP进化为文件夹，HTML可视化让用户如临其境，MD让AI一目了然；额度阈值驱动自动备份与清理，无为而无不为。
+
+### 新增 · 文件夹备份 (ZIP→文件夹 · HTML/MD双视图 · devin_cloud.js)
+- 备份结构从 ZIP 进化为文件夹: `<账号名>/<对话名称_ID末8位>/`
+  - `对话.html` — 用户看: 与 Devin AI 网页一致的暗色主题可视化呈现 (用户/AI/工具/思考 四类消息各有标识色)
+  - `对话.md` — AI 看: Markdown 纯文本, 可直接喂给 Agent 或作文档引用
+  - `对话_agent.json` — 全量机器可读: 全部事件 + 产出文件索引
+  - `_meta.json` — 元数据 (devinId/标题/事件数/时间戳/账号)
+  - `files/` — 产出文件 (源码/日志/截图等完整留底)
+- 新 `buildConversationHtml()`: CSS 暗色主题 · 用户👤/AI🤖/工具🔧/思考💭 四类气泡 · 工具调用可展开详情 · 响应式布局
+- 新 `backupOneConversationFolder()` / `backupAccountFolders()` / `backupAccountFullFolders()`: 文件夹版增量备份全链路
+- 备份模式可配置: `wam.devinCloudBackupMode` = `folder`(默认·推荐) 或 `zip`(兼容旧版)
+- 前端工具栏新增模式切换下拉: 实时切换 文件夹/ZIP 模式
+- `listBackups()` 同时识别 ZIP 和文件夹备份, 前端浏览面板统一展示
+
+### 新增 · 自动备份额度阈值 (额度驱动 · 无为而无不为)
+- `wam.devinCloudAutoBackupThreshold` (默 $3): 账号额度低于此阈值时, 自动触发全量备份(非增量)
+- 定时轮询时自动检测各账号 billing 额度, 低于阈值 → 全量备份 + 账号数据快照 (知识库/剧本/密钥/Git)
+- 前端工具栏新增阈值输入框: `$` + 数字输入, 实时调整阈值
+
+### 新增 · 自动清理 (备份→清理→回归本源 · 水过无痕)
+- `wam.devinCloudAutoCleanup` (默 false): 开启后, 额度低于阈值且备份完成 → 自动执行水过无痕(删对话/知识/剧本/密钥/Git)
+- `wam.devinCloudAutoCleanupThreshold` (默 $3): 自动清理的额度阈值
+- 前端工具栏新增「自动清理」开关: checkbox 一键开关
+- 自动清理含 `robustDisconnectGit`: Git 连接彻底断开, 回归完全本源态
+
+### 强化 · 批量备份 / 备份并清空 支持新模式
+- `devinBackupAll` / `devinWipe(备份并清空)` 均自动检测 `devinCloudBackupMode` 配置, 使用对应模式备份
+
 ## v4.3.0 (2026-06-12) · 批量归一 · 多 Devin 绑同一 GitHub · Devin Cloud 板块可查看 · 一键清除真解绑
 
 > *为学者日益，为道者日损。* —— 底层功能推进到底(日益)，用户操作四两拨千斤(日损)；用户近于无为无感，系统无不为。
