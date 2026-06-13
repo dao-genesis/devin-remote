@@ -39,6 +39,8 @@ const CFG = {
   streamTimeoutMs: 180000,
   maxRetries: 3, // 瞬态网络错误(TLS socket 断/ECONNRESET/超时)自动重试次数 (弱者道之用·反复至成)
   retryBaseMs: 500, // 重试退避基数 (指数: 500/1000/2000ms)
+  rateLimitMaxRetries: 6, // HTTP 429 限流重试次数 (多账号预载/普查最易撞限流·退避后必复)
+  retryMaxDelayMs: 30000, // 单次退避上限 (Retry-After 过大时封顶, 不无限等)
   downloadTimeoutMs: 120000,
   downloadConcurrency: 16,
   presignConcurrency: 8,
@@ -117,16 +119,50 @@ function _isTransientErr(e) {
 function _sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
+// HTTP 状态码层面的可重试判定 (网络层无错·服务端限流/暂不可用):
+//   429 限流 → 任意方法皆安全重试 (请求被拒·未被处理, 退避后重发恒幂等);
+//   502/503/504 网关/不可用 → 仅幂等方法 (GET/HEAD) 重试, 避免对非幂等变更重复提交。
+function _isRetryableStatus(status, method) {
+  if (status === 429) return true;
+  if (status === 502 || status === 503 || status === 504) {
+    const m = String(method || "").toUpperCase();
+    return m === "GET" || m === "HEAD";
+  }
+  return false;
+}
+// 退避时长: 优先遵从服务端 Retry-After (秒数或 HTTP-date), 取不到则指数退避 + 抖动。
+//   抖动 (jitter) 分散「并发预载 N 账号同时撞 429 → 同时重试」的二次冲击 (绝利一源)。
+function _retryDelayMs(headers, attempt) {
+  const cap = CFG.retryMaxDelayMs | 0 || 30000;
+  const ra = headers && (headers["retry-after"] || headers["Retry-After"]);
+  if (ra != null && ra !== "") {
+    const secs = parseInt(ra, 10);
+    if (Number.isFinite(secs) && String(secs) === String(ra).trim()) return Math.min(Math.max(0, secs) * 1000, cap);
+    const when = Date.parse(ra);
+    if (Number.isFinite(when)) return Math.max(0, Math.min(when - Date.now(), cap));
+  }
+  const base = CFG.retryBaseMs * Math.pow(2, attempt);
+  return Math.min(base + Math.floor(Math.random() * CFG.retryBaseMs), cap);
+}
 // 善行无辙迹: 瞬态网络错误指数退避重试, 一次性彻底错误(bad_url 等)立即上抛。
 async function rawRequest(method, targetUrl, headers, body, timeoutMs) {
-  const max = Math.max(0, CFG.maxRetries | 0);
+  const maxNet = Math.max(0, CFG.maxRetries | 0);
+  const maxRl = Math.max(0, CFG.rateLimitMaxRetries | 0);
+  const max = Math.max(maxNet, maxRl);
   let lastErr;
   for (let attempt = 0; attempt <= max; attempt++) {
     try {
-      return await _rawRequestOnce(method, targetUrl, headers, body, timeoutMs);
+      const res = await _rawRequestOnce(method, targetUrl, headers, body, timeoutMs);
+      // 429/5xx: 状态码层面的暂时性故障 — 退避后重试 (遵从 Retry-After), 而非当作
+      // 「请求已失败」直接上抛。这正是多账号预载/普查时 login 误报 LOGIN_FAIL 的根因。
+      if (_isRetryableStatus(res.status, method) && attempt < maxRl) {
+        await _sleep(_retryDelayMs(res.headers, attempt));
+        continue;
+      }
+      return res;
     } catch (e) {
       lastErr = e;
-      if (attempt >= max || !_isTransientErr(e)) break;
+      if (attempt >= maxNet || !_isTransientErr(e)) break;
       await _sleep(CFG.retryBaseMs * Math.pow(2, attempt));
     }
   }
@@ -1864,4 +1900,8 @@ module.exports = {
   rawRequest,
   jsonRequest,
   proxyForUrl,
+  // 重试判定 (可单测 · 限流/暂时性故障韧性)
+  _isRetryableStatus,
+  _retryDelayMs,
+  _isTransientErr,
 };
