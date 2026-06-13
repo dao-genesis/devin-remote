@@ -19,3 +19,7 @@ node_modules/
 **/dao-bridge-ext/bin/*.tgz
 # 自包含 bundled VSIX（含二进制, 走 Release 分发, 不入库）
 *-bundled.vsix
+
+# Python 运行缓存 — rt-flow/dao-export 脚本产物
+__pycache__/
+*.pyc
