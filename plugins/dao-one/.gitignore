@@ -1,0 +1,7 @@
+# 构建产物 (由 build.js 从三兄弟插件目录组装) — 不入仓库, 保持 PR 清爽
+vendor-vsix/
+vendor-proxy/
+vendor-flow/
+node_modules/
+*.vsix
+out/

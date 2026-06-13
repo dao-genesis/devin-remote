@@ -1,0 +1,11 @@
+# vsce 打包排除 (dev/元数据)。vendor-* 与 node_modules/ws 必须随包 → 不在此列。
+.gitignore
+.vscodeignore
+build.js
+gen-manifest.js
+README.md
+**/*.ts
+**/*.map
+**/.vscode/**
+node_modules/.bin/**
+node_modules/sucrase/**
