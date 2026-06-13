@@ -1,31 +1,128 @@
-# 20_多RDP虚拟机化_VM_REPLICA · 为下一个 Agent 铺路
+# vm-replica · 多 RDP 虚拟机化
 
-> 「执大象，天下往。」本文件夹是 **需求解构 + 资料整合 + 架构探讨** 的完整准备，
-> 下一个 agent 看到此文件夹即可直接开始实践。本阶段不做实现，只铺路到底。
+> 「太上，下知有之。」让云端 Agent 像操作自己的 Devin VM 一样，平滑地把宿主机上**另一个
+> Windows 账号的 RDP 会话当成一台虚拟机**来全权操作 —— 截图 / 鼠标 / 键盘 / shell / 文件，
+> 与宿主主控（console）会话完全隔离、互不干扰。
 
-## 本源目标
+本目录从「只铺路、不实现」升级为 **已落地 + 已端到端实测**。下面先讲怎么用，再讲架构、
+安全红线（开机锁死根因与永久修复），最后是实测证据。
 
-在 141 台式机上复刻 Devin 操作自身虚拟机的全链路能力，但底座换成 **Windows 多 RDP**：
+---
 
-1. 141 通过 Windows 远程桌面远程**自身的其他 Windows 账号**（多账号并行，互不干扰）
-2. 其他账号 = 类虚拟机：相对隔离、完整 GUI、独立开发环境
-3. 抽离操作层：像 Devin 操作自己虚拟机一样，全链路程序化操作这些"虚拟机"
-   （新建账号 → 连接 RDP → 操作 GUI → shell/文件/浏览器 一切）
+## 一、三层架构（已实现）
 
-## 文档索引（按序阅读）
+```
+ MCP 客户端 (Devin / Claude / Cursor)        ← 任何 MCP-compatible agent
+        │  stdio JSON-RPC 2.0
+        ▼
+ mcp_server.py        把 24 个 vm_* 工具暴露为 MCP（纯 stdlib，可冻结成 exe）
+        │  HTTP + Bearer (127.0.0.1:9000)
+        ▼
+ vm_host_daemon.py    宿主守护：vm.create / attach / destroy / list + 代理一切操作
+        │  HTTP + Bearer (127.0.0.1:900N，每个 VM 一个端口)
+        ▼
+ vm_inner_agent.py    跑在每个账号 RDP 会话内部：exec / screenshot(PNG) / 输入 / 文件
+                      纯 stdlib + ctypes Win32，零外部依赖
+```
+
+| 文件 | 角色 |
+|---|---|
+| `vm_inner_agent.py` | **会话内代理**。运行在目标账号的交互式 RDP 会话里，HTTP API 暴露 `exec / launch / file_* / screenshot / click / type / key / drag / scroll / ui_info / activate`。仅绑 `127.0.0.1` + Bearer。纯标准库，无需 pip 安装。 |
+| `vm_host_daemon.py` | **宿主守护**。在 console 会话内以管理员运行（mstsc 需要交互桌面渲染）。负责建账号、环回 RDP 拉起会话、把会话移到屏外但保持 active、注册会话内代理任务，并把所有 `vm.*` 操作代理给对应内层代理。 |
+| `mcp_server.py` | **MCP Server**。stdio JSON-RPC，把守护能力做成与 Devin 自身 computer 工具对齐的工具集。 |
+| `vmctl.py` | 命令行客户端（调试用）：`python vmctl.py vm.list` 等。 |
+| `deploy_host.py` | **一次性宿主准备**：部署内层代理、设置 `AllowSavedCredentials` 委派、开启 RDP。 |
+| `config.sample.json` | 守护配置样例（落地为 `C:\ProgramData\dao_vm\config.json`）。 |
+| `recover-bootsafe.bat` | **带外恢复脚本**。开机进不去桌面 / RDP 崩溃 / 自动重启时，管理员双击即恢复 boot-safe 本源态。 |
+| `vm_agent.py`（旧） | dao-bridge 直代理的单账号内层代理变体（含 mss/pyautogui 录屏）。保留供桥式单机用。 |
+| `connector.py` / `daovm-up.ps1`（旧） | 早期「单账号 at-logon 自启 + mstsc 对话框自动点」方案，仅留作参考；已被 host daemon 取代（见下方安全红线）。 |
+
+---
+
+## 二、用法
+
+```powershell
+# 0) 一次性宿主准备（管理员，在 console 交互会话里）
+python deploy_host.py
+
+# 1) 起宿主守护（前台运行可看日志；token 自动生成并写入 config.json）
+python vm_host_daemon.py
+
+# 2) 创建一台「VM」（建账号 + 环回 RDP + 会话内代理）
+python vmctl.py vm.create name=vm01 password='Strong#Pass1'
+
+# 3) 像操作 Devin 自己的 VM 一样操作它
+python vmctl.py vm.exec        vm=vm01 command="whoami"
+python vmctl.py vm.launch      vm=vm01 command="notepad"      # GUI 应用用 launch（非阻塞）
+python vmctl.py vm.screenshot  vm=vm01                        # 返回 PNG base64
+python vmctl.py vm.type        vm=vm01 text="道法自然"         # 支持中文/Unicode
+python vmctl.py vm.list
+
+# MCP 接入：把 mcp_server.py 作为 stdio MCP server 挂到任意 MCP 客户端
+python mcp_server.py
+```
+
+> **GUI 应用务必用 `vm.launch`（或 `vm.exec ... detach=true`）**，不要用 `vm.exec`。
+> `vm.exec` 会捕获 stdio 并等待进程结束 —— 启动 notepad / chrome 这类长存 GUI 进程会一直
+> 阻塞到超时。`vm.launch` 以 `DETACHED_PROCESS` 即发即走，立即返回 pid（实测 0.03s）。
+
+---
+
+## 三、安全红线 · 开机锁死根因与永久修复 ★必读
+
+历史上这台 141 台式机反复出现「突然重启 + 进不去桌面，要再重启一次才能登录」。**根因已用
+事件日志铁证定位**：
+
+> `TermService` 的 `ServiceDll` 被指向了 `rdpwrap.dll`。该 DLL 在此 build（26100.x）上
+> 崩溃循环 —— 系统日志连续 `event 7031`（Remote Desktop Services terminated …
+> done this 1,2,3,4,5 times），SCM 升级到「重启计算机」恢复动作，最终 `event 1074`
+> winlogon 以 SYSTEM 重启整机（伴随 6008/41 非正常关机）。开机时会话管理器加载
+> rdpwrap 作为 ServiceDll 失败 → 登录链初始化失败 → RPC server unavailable / 进不了桌面。
+
+**永久修复（`recover-bootsafe.bat` 已固化，并作为默认本源态）：**
+
+1. `ServiceDll` 永远 = 原生 `%SystemRoot%\System32\termsrv.dll`（开机 100% 可靠）。
+2. `fSingleSessionPerUser=1`（原生单会话默认）。
+3. SCM 失败恢复 = **只重启服务、永不重启计算机**（`sc failure TermService … restart/…`）。
+4. 禁用一切 DAO 注入的 **at-logon 自启任务**（DaoVMAgent / DaoVMConnector / …）。
+
+**因此本模块的硬规则：**
+
+- ❌ **绝不**把 rdpwrap.dll 长期挂为 `ServiceDll`。
+- ❌ **绝不**安装「开机/登录即自动跑 mstsc / 改 RDP」的 at-logon 自启任务。
+- ✅ 多会话能力**按需**获得：
+  - **Windows Server**（如本仓库的实测 VM）：**原生支持多会话**，根本不需要 rdpwrap。
+  - **Windows 10/11**：需要时在会话内**临时加载** rdpwrap 补丁、用完即撤，绝不持久化为 ServiceDll。
+- ✅ `vm_host_daemon` 默认只在 console 会话内手动起，不随机器自启；console 主会话始终保持纯净。
+
+---
+
+## 四、实测证据（在 Devin 自己的 Windows Server 2022 VM 上端到端验证）
+
+按用户方针「先恢复 141 到本源，再全程在 Devin 自己的 VM 上实践一切」，本实现完全在 Devin VM
+上验证，**不依赖也不打扰 141**：
+
+| 验证项 | 结果 |
+|---|---|
+| `vm.create vm01` 环回 RDP（127.0.0.2，原生多会话，**无 rdpwrap**） | ✅ vm01 成为独立 Active 会话（session 2），console（session 1）不受干扰 |
+| `vm.exec whoami` | ✅ 返回 `devinbox\vmtest`（证明在隔离会话内执行） |
+| `vm.screenshot` | ✅ 返回该会话**自身桌面**的真实 PNG（非黑屏，1280×800） |
+| `vm.launch notepad / calc` | ✅ 0.03s 非阻塞返回，应用在 VM 会话内打开 |
+| `vm.activate` + `vm.type "道法自然…"` | ✅ Unicode/中文正确输入到 VM 内 Notepad |
+| `mcp_server.py` stdio | ✅ initialize / tools/list(24) / vm_exec / vm_screenshot(image) 全通过 |
+
+> 实测中发现并修复的缺陷：`vm.exec` 启动 GUI 应用会阻塞到超时 → 新增 `vm.launch` /
+> `detach=true` 非阻塞模式（`DETACHED_PROCESS`，不继承 stdio 管道）。
+
+---
+
+## 五、铺路文档（背景资料，按序阅读）
 
 | 文档 | 内容 |
 |---|---|
-| `01_需求解构.md` | 需求的完整解构：分层、边界、验收标准 |
-| `02_Windows多RDP基础.md` | 多 RDP 基础设施全资料：原生/RDPWrap/termsrv 补丁/账号管理/连接 |
-| `03_Devin虚拟机全链路逆向参考.md` | Devin 自身 VM 操作架构逆向（参考复刻的蓝本）+ 150-Kernel 成果索引 |
-| `04_GitHub项目调研.md` | OpenHands / UFO / OmniParser / Windows-Use / FreeRDP 等全部相关项目 |
-| `05_架构探讨.md` | ★ 核心 · MCP vs 脚本 vs exe vs VSIX 全分析 + 推荐架构 + 全链路设计 |
+| `01_需求解构.md` | 需求分层、边界、验收标准 |
+| `02_Windows多RDP基础.md` | 原生 / RDPWrap / termsrv 补丁 / 账号管理 / 连接 |
+| `03_Devin虚拟机全链路逆向参考.md` | Devin 自身 VM 操作架构逆向（复刻蓝本） |
+| `04_GitHub项目调研.md` | OpenHands / UFO / OmniParser / FreeRDP 等 |
+| `05_架构探讨.md` | MCP vs 脚本 vs exe vs VSIX 分析 + 推荐架构 |
 | `06_下一个Agent行动指南.md` | 分阶段落地路线图 + 验证清单 |
-
-## 一句话结论（详见 05）
-
-**底座 = 常驻 exe/服务（Python/Node 守护进程，扩展现有 agent_dao.py），
-操作层 = MCP Server 暴露工具集（create_vm / rdp_connect / screenshot / click / type / exec / file），
-RDP 自动化 = FreeRDP + Windows API（UIA）+ 截图视觉，
-GUI 智能 = 参考 UFO/OmniParser 的混合 UIA+视觉方案。**
