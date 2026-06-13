@@ -603,6 +603,32 @@ async function listRunningSessions(auth) {
   }));
 }
 
+// v4.5.0 · 中停运行中对话 (对话额度上限触发 · 知止不殆 · 道法自然)
+// Devin Cloud 未公开"停止/暂停会话"的 REST 路由; 此处按候选端点逐个实探,
+// 命中 2xx 即真中停; 全部非 2xx 则如实回报 stopped:false + 各端点状态 (不臆造成功)。
+// 调用方据 stopped 真值决定后续 (绝不据未验证的"假成功"误导用户)。
+async function stopSession(auth, devinId) {
+  const candidates = [
+    CFG.apiBase + "/sessions/" + devinId + "/stop",
+    CFG.apiBase + "/sessions/" + devinId + "/pause",
+    CFG.apiBase + "/sessions/" + devinId + "/sleep",
+    CFG.apiBase + "/sessions/" + devinId + "/cancel",
+  ];
+  const tried = [];
+  for (const url of candidates) {
+    try {
+      const r = await jsonRequest("POST", url, authHeaders(auth), {});
+      tried.push({ url, status: r.status });
+      if (r.status >= 200 && r.status < 300) {
+        return { ok: true, stopped: true, endpoint: url, status: r.status, tried };
+      }
+    } catch (e) {
+      tried.push({ url, error: String((e && e.message) || e) });
+    }
+  }
+  return { ok: false, stopped: false, tried, error: "无可用中停端点 (全部非 2xx)" };
+}
+
 // ═══ 删除接口全集 (水过无痕底层) ══════════════════════════════════════════
 function okDelete(status) {
   return status === 200 || status === 202 || status === 204 || status === 404;
@@ -1763,6 +1789,7 @@ module.exports = {
   accountOverview,
   classifySession,
   listRunningSessions,
+  stopSession,
   // deletes / wipe
   deleteKnowledge,
   deletePlaybook,
