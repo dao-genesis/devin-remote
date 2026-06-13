@@ -1046,6 +1046,35 @@ function extractModelUid(rawBody, isJSON) {
   }
 }
 
+// ★ v9.9.279 · 服务档位变体后缀 · 同一模型族多档位下发不同 uid
+//   Windsurf 实测下发 uid 带档位后缀 (swe-1-6-slow / swe-1-6-fast ...) ·
+//   皆属同一模型族 swe-1-6 · 用户在③模型路由连族即应覆盖其全部档位
+const _VARIANT_SUFFIXES = [
+  "slow",
+  "fast",
+  "lite",
+  "pro",
+  "mini",
+  "thinking",
+  "reasoning",
+  "high",
+  "low",
+  "medium",
+];
+
+// 剥离档位后缀 → 模型族基名 (兼容 - 与 _ 两种分隔)
+//   swe-1-6-slow → swe-1-6 · MODEL_SWE_1_6_SLOW → MODEL_SWE_1_6
+function _stripVariantSuffix(uid) {
+  if (!uid || typeof uid !== "string") return uid;
+  const lower = uid.toLowerCase();
+  for (const v of _VARIANT_SUFFIXES) {
+    if (lower.endsWith("-" + v) || lower.endsWith("_" + v)) {
+      return uid.slice(0, uid.length - (v.length + 1));
+    }
+  }
+  return uid;
+}
+
 /**
  * modelUid 规范化 · DEFECT11 根治
  *   Windsurf modelUid 格式不一致:
@@ -1069,6 +1098,23 @@ function _normalizeModelUid(uid) {
       .replace(/_/g, "-")
       .toLowerCase();
     if (_routes[lowerKey]) return lowerKey;
+  }
+  // 3.5) ★ v9.9.279 · 档位变体兜底 · 剥离 -slow/-fast 等后缀退族基名再匹配
+  //   道义: 二十五章「道法自然」· 名异而实同 · 守族之常
+  //   仅当精确/形态匹配皆未命中, 且族基名已被用户显式连线时方触发
+  const base = _stripVariantSuffix(uid);
+  if (base && base !== uid) {
+    if (_routes[base]) return base;
+    if (!base.startsWith("MODEL_")) {
+      const baseModelKey = "MODEL_" + base.replace(/-/g, "_").toUpperCase();
+      if (_routes[baseModelKey]) return baseModelKey;
+    } else {
+      const baseLowerKey = base
+        .replace(/^MODEL_/, "")
+        .replace(/_/g, "-")
+        .toLowerCase();
+      if (_routes[baseLowerKey]) return baseLowerKey;
+    }
   }
   // 4) ★ v9.9.59 · 通配符兜底: * → 任何未知模型自动路由
   if (_routes["*"]) return "*";

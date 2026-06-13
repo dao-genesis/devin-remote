@@ -272,7 +272,7 @@ async function runProtocolCheck() {
       const wire = require(wirePath);
       const hasEncode = typeof wire.encodeString === "function";
       const hasBuild = typeof wire.buildFrame === "function";
-      const hasParse = typeof wire.parseFrame === "function";
+      const hasParse = typeof wire.parseFrames === "function";
       checks.push({
         name: "cascade_wire.js 编解码",
         pass: hasEncode && hasBuild && hasParse,
@@ -379,6 +379,99 @@ async function runProtocolCheck() {
   }
 }
 
+// ─── L2.5: 档位变体路由规范化 (v9.9.279) ──
+//   族连线即覆盖其全部档位变体 · swe-1-6 ⊇ swe-1-6-slow / swe-1-6-fast ...
+async function runNormalizeCheck() {
+  console.log(header("\n═══════════════════════════════════════════"));
+  console.log(header("  L2.5 · 档位变体路由规范化 (族⊇档位)"));
+  console.log(header("═══════════════════════════════════════════\n"));
+
+  const os = require("os");
+  const routerPath = path.join(__dirname, "dao_router.js");
+  let router;
+  try {
+    delete require.cache[require.resolve(routerPath)];
+    router = require(routerPath);
+  } catch (e) {
+    console.log(fail(`dao_router.js 加载失败: ${e.message}`));
+    totalFail++;
+    return;
+  }
+
+  // 临时配置: 仅连模型族 MODEL_SWE_1_6 → deepseek (不写任何档位变体 key)
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dao-norm-"));
+  const cfgPath = path.join(tmpDir, "配置.json");
+  fs.writeFileSync(
+    cfgPath,
+    JSON.stringify({
+      providers: {
+        deepseek: {
+          enabled: true,
+          apiKey: "test-key",
+          baseUrl: "https://api.deepseek.com/v1",
+          models: ["deepseek-v4-flash"],
+          noProviderPrefix: true,
+          completionPath: "/chat/completions",
+          type: "openai-compatible",
+        },
+      },
+      daoRoutes: {
+        enabled: true,
+        substituteEnabled: false,
+        routes: {
+          MODEL_SWE_1_6: { provider: "deepseek", model: "deepseek-v4-flash" },
+        },
+      },
+    }),
+    "utf8",
+  );
+
+  try {
+    router.init({ log: () => {}, configPath: cfgPath });
+  } catch (e) {
+    console.log(fail(`router.init 失败: ${e.message}`));
+    totalFail++;
+    return;
+  }
+
+  // 应路由 (族基名已连线 → 档位变体皆覆盖)
+  const shouldTrue = [
+    "MODEL_SWE_1_6",
+    "swe-1-6",
+    "swe-1-6-slow",
+    "swe-1-6-fast",
+    "MODEL_SWE_1_6_SLOW",
+    "MODEL_SWE_1_6_FAST",
+  ];
+  // 不应路由 (无连线 · 未配通配符)
+  const shouldFalse = ["claude-sonnet-4-5", "gpt-4o", "gemini-2-5-pro-slow"];
+
+  for (const uid of shouldTrue) {
+    const r = router.shouldRoute(uid);
+    if (r === true) {
+      console.log(ok(`shouldRoute(${uid}) = true`));
+      totalPass++;
+    } else {
+      console.log(fail(`shouldRoute(${uid}) 期望 true 实得 ${r}`));
+      totalFail++;
+    }
+  }
+  for (const uid of shouldFalse) {
+    const r = router.shouldRoute(uid);
+    if (r === false) {
+      console.log(ok(`shouldRoute(${uid}) = false`));
+      totalPass++;
+    } else {
+      console.log(fail(`shouldRoute(${uid}) 期望 false 实得 ${r}`));
+      totalFail++;
+    }
+  }
+
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch {}
+}
+
 // ─── 主入口 ──
 async function main() {
   const start = Date.now();
@@ -392,6 +485,9 @@ async function main() {
   } else {
     // L1-L5: LSP模拟器
     await runLspSimulator();
+
+    // L2.5: 档位变体路由规范化 (秒级 · 始终运行)
+    await runNormalizeCheck();
 
     // 协议验证 (非quick模式)
     if (!optQuick) {

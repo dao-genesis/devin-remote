@@ -1,8 +1,8 @@
 {
   "name": "dao-proxy-pro",
   "displayName": "道Agent Pro · 外接API · 反者道之动",
-  "description": "v9.9.270 · 三模块面板重构: ①本源观照复刻左侧(道官编+经文+本源体池) + ③官方模型与右侧Cascade 1:1实时活捕映射 + 两条默认连线 + ②cc-switch渠道+freemodel + Agent热配置交接MD文档 + v9.9.271活捕名实归一(token多重集锚定·去 UI 提示污染) · 反者道之动",
-  "version": "9.9.277",
+  "description": "v9.9.279 · 三模块面板: ①本源观照(道官编+经文+本源体池) + ③官方模型↔右侧Cascade 1:1活捕映射+连线路由 + ②cc-switch渠道+freemodel+加key即探活拿模型 + Agent热配置交接MD · v9.9.279档位变体路由修复: 连模型族即覆盖其全部服务档位(swe-1-6 ⊇ swe-1-6-slow/-fast) · v9.9.278配置持久化: 用户级 ~/.codeium/dao-byok 首启即播种接管(凭据绝不入库·升级重装不失) · 反者道之动",
+  "version": "9.9.279",
   "publisher": "dao-agi",
   "license": "Apache-2.0",
   "engines": {

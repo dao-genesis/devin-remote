@@ -47,12 +47,30 @@ function _resolveConfigPath() {
   ) {
     return path.resolve(process.env.DAO_BYOK_CONFIG);
   }
+  const bundledCfg = path.join(CORE_DIR, "配置.json");
+  const bundledTpl = path.join(CORE_DIR, "_默认配置.json");
   const home = process.env.USERPROFILE || process.env.HOME || "";
   if (home) {
-    const userCfg = path.join(home, ".codeium", "dao-byok", "配置.json");
+    const userDir = path.join(home, ".codeium", "dao-byok");
+    const userCfg = path.join(userDir, "配置.json");
     if (fs.existsSync(userCfg)) return userCfg;
+    // 用户级配置不存在 → 即刻于用户级播种并接管 · 跨 VSIX install 持久
+    //   反者道之动: 凭据/渠道安于本机 ~/.codeium · 绝不入库 · 升级重装不失
+    //   播种优先 bundled 配置.json (含预设渠道·迁移既有态), 退 _默认配置.json (无凭据模板)
+    try {
+      fs.mkdirSync(userDir, { recursive: true });
+      const seed = fs.existsSync(bundledCfg)
+        ? bundledCfg
+        : fs.existsSync(bundledTpl)
+          ? bundledTpl
+          : null;
+      if (seed) fs.copyFileSync(seed, userCfg);
+      // 即便无模板亦返回用户路径 · dao_router.init 会内嵌兜底生成于此
+      return userCfg;
+    } catch (_e) {
+      // 用户级创建失败 (权限等) → 退回 bundled 只读兜底
+    }
   }
-  const bundledCfg = path.join(CORE_DIR, "配置.json");
   if (fs.existsSync(bundledCfg)) return bundledCfg;
   return bundledCfg; // 默认 (dao_router init 会自动生成模板)
 }
