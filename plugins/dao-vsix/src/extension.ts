@@ -85,6 +85,7 @@ class WorkspaceState {
     devinEmail: string = '';
     devinSessionToken: string = '';
     devinApiKey: string = '';
+    devinWindsurfKey: string = '';  // 注册得到的 windsurf/codeium 风格密钥 — GetUserStatus 额度查询专用(cog_ 不被座席服务接受)
     devinApiServerUrl: string = '';
     devinAccountId: string = '';
     devinUserId: string = '';  // user-XXX — 路由官网 auth1_session 所需
@@ -133,6 +134,7 @@ class WorkspaceState {
             this.devinEmail = cfg.devinEmail || '';
             this.devinSessionToken = cfg.devinSessionToken || '';
             this.devinApiKey = cfg.devinApiKey || '';
+            this.devinWindsurfKey = cfg.devinWindsurfKey || '';
             this.devinApiServerUrl = cfg.devinApiServerUrl || '';
             this.devinAccountId = cfg.devinAccountId || '';
             this.devinUserId = cfg.devinUserId || '';
@@ -154,6 +156,7 @@ class WorkspaceState {
                 devinEmail: this.devinEmail,
                 devinSessionToken: this.devinSessionToken,
                 devinApiKey: this.devinApiKey,
+                devinWindsurfKey: this.devinWindsurfKey,
                 devinApiServerUrl: this.devinApiServerUrl,
                 devinAccountId: this.devinAccountId,
                 devinUserId: this.devinUserId,
@@ -1244,8 +1247,9 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         case '/api/devin/quota': {
             if (!ws.devinApiKey) return { ok: false, error: 'not logged in' };
             const q = await devinFetchQuota(ws.devinApiKey, ws.devinApiServerUrl);
-            ws.devinQuota = q; ws.devinSaveConfig();
-            return { ok: !!q, quota: q };
+            // 刷新失败(q 为空)时不得抹掉登录时已取得的好额度 — 守柔, 保旧值
+            if (q) { ws.devinQuota = q; ws.devinSaveConfig(); }
+            return { ok: !!q, quota: q || ws.devinQuota };
         }
         case '/api/devin/sessions': {
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
@@ -1534,7 +1538,7 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                         break;
                     }
                     case 'devinRefreshQuota': {
-                        if (ws.devinApiKey) { const q = await devinFetchQuota(ws.devinApiKey, ws.devinApiServerUrl); ws.devinQuota = q; ws.devinSaveConfig(); }
+                        if (ws.devinApiKey) { const q = await devinFetchQuota(ws.devinApiKey, ws.devinApiServerUrl); if (q) { ws.devinQuota = q; ws.devinSaveConfig(); } }
                         this.refresh();
                         reply({ ok: true });
                         break;
@@ -2790,7 +2794,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'devinRefreshQuota': {
                 // 优先用API Key，其次用auth1作为Bearer token
                 const quotaKey = ws.devinApiKey || ws.devinAuth1;
-                if (quotaKey) { const q = await devinFetchQuota(quotaKey, ws.devinApiServerUrl); ws.devinQuota = q; ws.devinSaveConfig(); }
+                if (quotaKey) { const q = await devinFetchQuota(quotaKey, ws.devinApiServerUrl); if (q) { ws.devinQuota = q; ws.devinSaveConfig(); } }
                 sidebarCloudPanel?.refresh();
                 refreshReply({ type: 'actionResult', command: 'devinRefreshQuota', ok: !!ws.devinQuota });
                 break;
@@ -3184,6 +3188,8 @@ async function devinLogin(email: string, password: string, retryCount?: number):
     ws.devinEmail = email;
     ws.devinSessionToken = sessionToken;
     ws.devinApiKey = apiKey;
+    // 留存 windsurf 风格密钥(注册所得) — 额度查询(GetUserStatus)只认它, 不认随后生成的 cog_
+    ws.devinWindsurfKey = (apiKey && !apiKey.startsWith('cog_')) ? apiKey : ws.devinWindsurfKey;
     ws.devinApiServerUrl = apiServerUrl;
     ws.devinAccountId = j2.accountId || '';
     ws.devinUserId = userId || j2.userId || '';  // user-XXX — 路由官网注入 auth1_session.userId
@@ -4108,17 +4114,21 @@ async function enrichCredentialsFromCodeiumAPI(apiKey: string): Promise<{ email:
 // ═══════════════════════════════════════════════════════════
 
 async function devinFetchQuota(apiKey: string, apiServerUrl?: string): Promise<any> {
-    if (!apiKey) return null;
-    const tries: string[] = [];
-    if (apiServerUrl) tries.push(apiServerUrl.replace(/\/+$/, '') + '/exa.seat_management_pb.SeatManagementService/GetUserStatus');
-    for (const u of DEVIN_URL_GET_USER_STATUS) { if (!tries.includes(u)) tries.push(u); }
-    const metadata = { ideName: 'windsurf', ideVersion: '1.99.0', extensionName: 'windsurf', extensionVersion: '1.99.0', apiKey, sessionId: crypto.randomUUID(), requestId: '1', locale: 'en', os: 'windows' };
-    for (const url of tries) {
-        try {
-            const r = await devinJsonPost(url, { 'Connect-Protocol-Version': '1', 'X-Api-Key': apiKey }, { metadata }, 8000);
-            if (r.status >= 200 && r.status < 300 && r.json) return devinParsePlanStatus(r.json);
-            if (r.status === 401 || r.status === 400) break;
-        } catch {}
+    // GetUserStatus(windsurf/codeium 座席服务) 只认 windsurf 风格密钥; cog_ 会被拒。
+    // 登录后 ws.devinApiKey 常被换成 cog_, 故额度查询优先用注册留存的 windsurf key。
+    const statusKey = (apiKey && !apiKey.startsWith('cog_')) ? apiKey : (ws.devinWindsurfKey || '');
+    if (statusKey) {
+        const tries: string[] = [];
+        if (apiServerUrl) tries.push(apiServerUrl.replace(/\/+$/, '') + '/exa.seat_management_pb.SeatManagementService/GetUserStatus');
+        for (const u of DEVIN_URL_GET_USER_STATUS) { if (!tries.includes(u)) tries.push(u); }
+        const metadata = { ideName: 'windsurf', ideVersion: '1.99.0', extensionName: 'windsurf', extensionVersion: '1.99.0', apiKey: statusKey, sessionId: crypto.randomUUID(), requestId: '1', locale: 'en', os: 'windows' };
+        for (const url of tries) {
+            try {
+                const r = await devinJsonPost(url, { 'Connect-Protocol-Version': '1', 'X-Api-Key': statusKey }, { metadata }, 8000);
+                if (r.status >= 200 && r.status < 300 && r.json) return devinParsePlanStatus(r.json);
+                if (r.status === 401 || r.status === 400) break;
+            } catch {}
+        }
     }
     // Fallback: Devin billing API
     if (ws.devinAuth1 && ws.devinOrgId) {
