@@ -20,7 +20,7 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\too
 
 | 板块 | 版本 | 下载 |
 |------|------|------|
-| ① dao-vsix · 全功能面板 | 1.3.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-vsix-1.3.0.vsix) |
+| ① dao-vsix · 全功能面板 | 1.3.1 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-vsix-1.3.1.vsix) |
 | ② dao-bridge · 内网穿透 | 3.1.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-bridge-3.1.0.vsix) |
 | ③ devin-git-auth · 多账号 Git | 2.3.2 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/devin-git-auth-2.3.2.vsix) |
 | ④ dao-proxy-pro · 模型路由 | 9.9.277 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-proxy-pro-9.9.277.vsix) |
@@ -90,7 +90,7 @@ devin-remote/
 
 ## ① 五核心插件 — plugins/
 
-### dao-vsix v1.3.0 · Devin 全功能面板 + 路由官网 + 内网穿透集成
+### dao-vsix v1.3.1 · Devin 全功能面板 + 路由官网 + 内网穿透集成
 
 核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传）。零输入获取 cog_ API Key（POST /service-users + auth1 自动换取），彻底移除面板所有手动 API Key 输入/引导。v1.2.0：增补测试聊天内置存根通道，与 dao-proxy-pro v9.9.276 配套。官网注入加固：session-token 与 auth1 严格隔离。
 

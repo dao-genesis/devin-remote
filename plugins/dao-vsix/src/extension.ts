@@ -23,7 +23,7 @@ const EXT_VERSION: string = (() => {
     for (const p of [path.join(__dirname, '..', 'package.json'), path.join(__dirname, 'package.json')]) {
         try { const v = JSON.parse(fs.readFileSync(p, 'utf8')).version; if (v) return String(v); } catch { /* 守柔 */ }
     }
-    return '1.3.0';
+    return '1.3.1';
 })();
 const DAO_DIR = path.join(os.homedir(), '.dao');
 const GLOBAL_CONFIG_FILE = path.join(DAO_DIR, 'dao-config.json');  // CF全局凭证
@@ -39,6 +39,24 @@ const ACCOUNTS_TXT = path.join(DAO_DIR, 'accounts.txt');
 // SESSION_FILE removed — per-workspace: ws.sessionFile
 const PROXY_PORTS = [7890, 10809, 7891, 1080, 10808, 8080, 8118];
 let detectedProxyPort = 0;
+
+// ═══════════════════════════════════════════════════════════
+// 道 · 玄牝之门用之不堇 — 上游连接复用(keep-alive)
+// 免每请求重握手 → 官网导航/配置点击提速(原每次新建 TCP+TLS)
+// ═══════════════════════════════════════════════════════════
+const upstreamHttpAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 24 });
+const upstreamHttpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 24, rejectUnauthorized: false });
+// 执今之道见小曰明 — Vite 内容哈希静态资源(/assets/*)内存缓存
+// 哈希变则键变 → 永不陈旧; 免重复穿隧道 → 二次导航秒开
+const staticAssetCache = new Map<string, { status: number; headers: any; body: string; contentType: string; binary?: boolean }>();
+const STATIC_CACHE_MAX = 256;
+function staticCachePut(key: string, val: { status: number; headers: any; body: string; contentType: string; binary?: boolean }) {
+    if (staticAssetCache.size >= STATIC_CACHE_MAX) {
+        const first = staticAssetCache.keys().next().value;
+        if (first !== undefined) staticAssetCache.delete(first);
+    }
+    staticAssetCache.set(key, val);
+}
 
 // ═══════════════════════════════════════════════════════════
 // 器 · WorkspaceState — 每窗口专属状态
@@ -86,10 +104,16 @@ class WorkspaceState {
 
     init() {
         // Derive workspace key from first workspace folder
+        // 道·「鸡犬相闻·民至老死不相往来」— 每窗口独立隔离键:
+        //   有工作区 → 用文件夹路径(稳定持久, 同一仓库重开复用账号)
+        //   无工作区 → 用 vscode.env.sessionId(每窗口唯一), 避免两个无文件夹窗口
+        //              共用 'no-workspace' 键 → 账号互串(隔离边界被击穿)
         const wsFolders = vscode.workspace.workspaceFolders;
+        let sessionSuffix = '';
+        try { sessionSuffix = vscode.env.sessionId || ''; } catch {}
         const wsPath = wsFolders && wsFolders.length > 0
             ? wsFolders[0].uri.fsPath
-            : 'no-workspace';
+            : ('no-workspace-' + sessionSuffix);
         this.workspaceKey = crypto.createHash('sha256').update(wsPath).digest('hex').substring(0, 12);
         this.workspaceDir = path.join(DAO_DIR, 'workspaces', this.workspaceKey);
         fs.mkdirSync(this.workspaceDir, { recursive: true });
@@ -2588,7 +2612,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     const msgs = await devinGetSessionMessages(ws.devinOrgId, sessionId, ws.devinAuth1);
                     reply({ type: 'sessionDetail', ok: detail.ok, session: detail.session, messages: msgs.ok ? msgs.messages : [] });
                 } else {
-                    const sessionUrl = DEVIN_APP + '/sessions/' + sessionId;
+                    const sessionUrl = daoRoutedWebUrl('/sessions/' + sessionId);
                     try { vscode.commands.executeCommand('simpleBrowser.show', sessionUrl); }
                     catch { vscode.env.openExternal(vscode.Uri.parse(sessionUrl)); }
                     reply({ type: 'sessionDetail', ok: true, session: { devin_id: sessionId }, messages: [] });
@@ -2781,7 +2805,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 帛书·「天下之至柔驰骋于天下之致坚」— simpleBrowser共享Electron session
                 // API不可用 → 在simpleBrowser中打开session页面
                 if (msg.sessionId) {
-                    const sessionUrl = DEVIN_APP + '/sessions/' + msg.sessionId;
+                    const sessionUrl = daoRoutedWebUrl('/sessions/' + msg.sessionId);
                     try { vscode.commands.executeCommand('simpleBrowser.show', sessionUrl); }
                     catch { vscode.env.openExternal(vscode.Uri.parse(sessionUrl)); }
                     vscode.window.showInformationMessage('已在 Simple Browser 中打开 Session 页面');
@@ -4794,7 +4818,7 @@ async function devinAssistedInject(url: string, token: string): Promise<boolean>
     } catch {}
     try { await vscode.env.clipboard.writeText(token); } catch {}
     try { if (bundleFile) { const doc = await vscode.workspace.openTextDocument(bundleFile); await vscode.window.showTextDocument(doc, { preview: false }); } } catch {}
-    try { vscode.commands.executeCommand('simpleBrowser.show', DEVIN_APP + '/settings/secrets'); }
+    try { vscode.commands.executeCommand('simpleBrowser.show', daoRoutedWebUrl('/settings/secrets')); }
     catch { try { vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP + '/settings/secrets')); } catch {} }
     vscode.window.showInformationMessage('Windsurf Token 模式: 已生成注入包并复制 Token 到剪贴板。注入包: ' + bundleFile + ' — 按其中标题粘贴到已打开的 Devin Cloud 页面即可（或生成 cog_ Key 恢复全自动）。');
     return true;
@@ -5147,9 +5171,9 @@ function devinCloudPanel(context: vscode.ExtensionContext): void {
         if (msg.command === 'refresh') {
             panel.webview.html = getDevinCloudPanelHtml(proxyUrl, localBase);
         } else if (msg.command === 'openSimpleBrowser') {
-            // 降级到路径α
+            // 降级到路径α — 经本窗口代理(每窗口独立账号), 未登录时 daoRoutedWebUrl 回落真源
             try {
-                vscode.commands.executeCommand('simpleBrowser.show', DEVIN_APP);
+                vscode.commands.executeCommand('simpleBrowser.show', daoRoutedWebUrl(''));
             } catch {
                 vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP));
             }
@@ -5381,6 +5405,14 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
     const isPageRequest = !targetPath.match(/\.(js|css|png|jpg|svg|ico|woff2?|ttf|eot|map|json|wasm)(\?|$)/i);
     const isApiRequest = targetPath.startsWith('/api/');
 
+    // 道·「不辱以靜」— 仅对内容哈希的不变资源(/assets/*)缓存: 哈希变则键变, 绝不陈旧
+    const isImmutableAsset = /\/assets\/.+\.(js|css|woff2?|ttf|png|jpg|jpeg|svg|ico|wasm)(\?|$)/i.test(targetPath);
+    const cacheKey = mode + '|' + targetPath;
+    if (isImmutableAsset && (req.method || 'GET') === 'GET') {
+        const hit = staticAssetCache.get(cacheKey);
+        if (hit) return { _proxy: true, status: hit.status, headers: hit.headers, body: hit.body, contentType: hit.contentType, binary: hit.binary };
+    }
+
     // 帛书·「执天之行」: 预读请求体 — 必须在 https.request 之前读取并据此设 Content-Length。
     // 否则 proxyReq.write 无 Content-Length 走 chunked 编码, app.devin.ai 网关挂起 → 15s 超时。
     // 在 makeRequest 内 await readBody 还会与 https 建连时序竞态, 故统一前置一次读取。
@@ -5401,6 +5433,7 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                 timeout: 15000,
             };
             if (!isProxyTunnel) options.rejectUnauthorized = false;
+            options.agent = isProxyTunnel ? upstreamHttpAgent : upstreamHttpsAgent;
             // 代理隧道用http.request(127.0.0.1不是TLS!)，直连用https.request
             const proxyReq = (isProxyTunnel ? http.request : https.request)(options, (proxyRes: any) => {
                 // 缺陷4修复: 处理3xx重定向 — 改写Location头指向代理
@@ -5453,30 +5486,21 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                 // 收集完整响应体
                 const chunks: Buffer[] = [];
                 proxyRes.on('data', (chunk: Buffer) => chunks.push(chunk));
-                proxyRes.on('end', () => {
+                proxyRes.on('end', async () => {
                     const rawBody = Buffer.concat(chunks);
                     const localBase = `http://localhost:${ws.port}`;
+                    const okCache = isImmutableAsset && proxyRes.statusCode === 200;
 
-                    // 缺陷10: 如果内容被压缩，尝试解压gzip
-                    let decodedBody: Buffer;
-                    if (contentEncoding === 'gzip') {
-                        try {
-                            const zlib = require('zlib');
-                            decodedBody = zlib.gunzipSync(rawBody);
-                        } catch { decodedBody = rawBody; }
-                    } else if (contentEncoding === 'br') {
-                        try {
-                            const zlib = require('zlib');
-                            decodedBody = zlib.brotliDecompressSync(rawBody);
-                        } catch { decodedBody = rawBody; }
-                    } else if (contentEncoding === 'deflate') {
-                        try {
-                            const zlib = require('zlib');
-                            decodedBody = zlib.inflateSync(rawBody);
-                        } catch { decodedBody = rawBody; }
-                    } else {
-                        decodedBody = rawBody;
-                    }
+                    // 道·「不言之教·无为之益」— 解压改异步, 移出扩展宿主事件循环
+                    //   原 gunzipSync/brotliDecompressSync 对数 MB bundle 同步阻塞主线程
+                    //   → 解压期间本地服务无法响应 → 点 IDE 时内嵌网页"卡死点不动"。异步根治。
+                    const zlib = require('zlib');
+                    const decodedBody: Buffer = await new Promise<Buffer>((res) => {
+                        if (contentEncoding === 'gzip') zlib.gunzip(rawBody, (e: any, b: Buffer) => res(e ? rawBody : b));
+                        else if (contentEncoding === 'br') zlib.brotliDecompress(rawBody, (e: any, b: Buffer) => res(e ? rawBody : b));
+                        else if (contentEncoding === 'deflate') zlib.inflate(rawBody, (e: any, b: Buffer) => res(e ? rawBody : b));
+                        else res(rawBody);
+                    });
 
                     if (isHtml && isPageRequest) {
                         // HTML页面: 改写绝对URL + 注入认证脚本
@@ -5589,6 +5613,8 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         let js = decodedBody.toString('utf8');
                         js = js.replace(/https:\/\/app\.devin\.ai\//g, `${localBase}/devin-cloud/`);
                         js = js.replace(/https:\/\/app\.devin\.ai(?!\/)/g, `${localBase}/devin-cloud`);
+                        if (okCache) safeHeaders['Cache-Control'] = 'public, max-age=31536000, immutable';
+                        if (okCache) staticCachePut(cacheKey, { status: 200, headers: safeHeaders, body: js, contentType });
                         resolve({
                             _proxy: true,
                             status: proxyRes.statusCode,
@@ -5597,12 +5623,15 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                             contentType,
                         });
                     } else {
-                        // 其他资源: 直接透传
+                        // 其他资源(css/字体/图片等): 直接透传; 不变资源入缓存
+                        const b64 = decodedBody.toString('base64');
+                        if (okCache) safeHeaders['Cache-Control'] = 'public, max-age=31536000, immutable';
+                        if (okCache) staticCachePut(cacheKey, { status: 200, headers: safeHeaders, body: b64, contentType, binary: true });
                         resolve({
                             _proxy: true,
                             status: proxyRes.statusCode,
                             headers: safeHeaders,
-                            body: decodedBody.toString('base64'),
+                            body: b64,
                             contentType,
                             binary: true,
                         });
@@ -5639,8 +5668,8 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
             'User-Agent': DEVIN_UA,
             'Accept': req.headers?.['accept'] || '*/*',
             'Host': u.hostname,
-            // 缺陷10修复: 要求上游发送未压缩内容，否则无法改写
-            'Accept-Encoding': 'identity',
+            // 道·「反者道之动」: 上游 gzip 压缩传输(穿隧更快), 代理内解压后再改写
+            'Accept-Encoding': 'gzip',
         };
         // 请求体: 转发 Content-Type 并据 reqBody 设 Content-Length(关键 — 见上)
         if (reqBody) {
