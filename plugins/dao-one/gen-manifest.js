@@ -15,6 +15,10 @@ for (const src of [vsix, proxy, flow])
   for (const c of (src.contributes && src.contributes.commands) || [])
     if (!cmdMap.has(c.command)) cmdMap.set(c.command, c);
 const commands = [...cmdMap.values()];
+// 归一自有命令
+commands.unshift(
+  { command: "dao.one.refresh", title: "道·归一: 刷新驾驶舱" },
+);
 
 // configuration: 三段并存 (数组形式,各自 title) — 规避 key 合并冲突
 function asConfigArray(src, fallbackTitle) {
@@ -39,8 +43,8 @@ const manifest = {
   name: "dao-one",
   displayName: "道 · 归一 (Dao One)",
   description:
-    "三归一超级插件本体: 全功能面板(dao-vsix) + 提示词隔离·外接模型路由(dao-proxy-pro) + Devin Cloud 多账号/备份/回归本源(rt-flow)。装一个,得全部。大道至简,无为而无不为。",
-  version: "1.0.0",
+    "归一超级插件本体: 单一驾驶舱按'意图'统御全功能面板(dao-vsix)+提示词隔离·外接模型路由(dao-proxy-pro)+Devin Cloud 多账号/备份/回归本源(rt-flow)。三引擎隐形协作,用户无感无为,系统无不为。大道至简,道法自然。",
+  version: "2.0.0",
   publisher: "dao",
   license: "Apache-2.0",
   icon: "media/icon.png",
@@ -60,10 +64,10 @@ const manifest = {
       ],
     },
     views: {
+      // 归一: 仅暴露单一驾驶舱。三引擎各自的侧栏视图(dao.cloudPanel/dao.essence/
+      // wam.panel)不在此声明 → 不渲染(headless),用户只见「一」。
       "dao-one": [
-        { id: "dao.cloudPanel", name: "① 面板 · Devin", type: "webview" },
-        { id: "dao.essence", name: "② 路由 · 本源观照", type: "webview" },
-        { id: "wam.panel", name: "③ Cloud · 备份/账号", type: "webview" },
+        { id: "dao.one", name: "道 · 归一", type: "webview" },
       ],
     },
     commands,
