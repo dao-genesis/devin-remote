@@ -748,7 +748,7 @@ const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.4.0";
+const VERSION = "4.4.1";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -8291,22 +8291,10 @@ async function _dvAutoBackupRun() {
     }
   }
 }
-// v4.4.0: 从 billing 对象提取总额度(美元) · 返回 null 表示无法获取
+// v4.4.0: 从 billing 提取可用余额(美元) · 委托 devin_cloud.billingBalance(可单测·实测字段)
+// 返回 null = 无法判定 → 调用方据此跳过破坏性自动清理(防误删健康号)
 function _billingTotalDollars(billing) {
-  if (!billing) return null;
-  const b = billing.billing || billing;
-  // Devin billing API 返回 overage_credits / prompt_credits / flow_credits 等字段
-  const prompt = +(b.prompt_credits || b.promptCredits || 0);
-  const flow = +(b.flow_credits || b.flowCredits || 0);
-  const overage = +(b.overage_credits || b.overageCredits || 0);
-  const total = prompt + flow + overage;
-  // credits 转美元: 1 credit ≈ $0.01 (近似)
-  if (total > 0) return total / 100;
-  // 百分比 fallback
-  const d = +(b.daily_percent || b.dailyPercent || b.D || 0);
-  const w = +(b.weekly_percent || b.weeklyPercent || b.W || 0);
-  if (d === 0 && w === 0) return 0;
-  return null; // 无法确定美元数
+  return devinCloud.billingBalance(billing);
 }
 
 // v4.0 · 导出对话备份目录为 MD 文档 · 道法自然 · 万物负阴而抱阳
