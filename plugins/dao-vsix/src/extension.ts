@@ -508,7 +508,11 @@ async function startServer(context: vscode.ExtensionContext) {
         const route = url.pathname;
 
         try {
-            const result = await handleRouteInternal(route, url, req, ws.token);
+            const result = await handleRouteInternal(route, url, req, ws.token, res);
+            // 道·「天下之至柔驰骋于天下之致坚」— SSE 流式直通: 代理已边到边写入 res, 此处直接收束
+            if (result && result._streamed) {
+                return;
+            }
             // 双面板代理路由 — 返回原始HTML/JS/binary，不是JSON
             if (result && result._proxy) {
                 const headers: Record<string, string> = {};
@@ -1058,14 +1062,14 @@ function isAppProxyPassthrough(route: string): boolean {
     return true;
 }
 
-async function handleRouteInternal(route: string, url: URL, req: any, token: string): Promise<any> {
+async function handleRouteInternal(route: string, url: URL, req: any, token: string, res?: any): Promise<any> {
     // 认证检查（relay请求也需认证，devin-cloud代理有自己的认证）
     const needAuth = !route.startsWith('/api/health') && !route.startsWith('/devin-cloud/') && !isAppProxyPassthrough(route);
     if (needAuth && !checkAuth(req)) throw new Error('unauthorized');
 
     // 官网 SPA 根路径资源/接口 → 透传 app.devin.ai
     if (isAppProxyPassthrough(route)) {
-        return await devinCloudProxyRoute('/devin-cloud' + route, url, req, 'devin');
+        return await devinCloudProxyRoute('/devin-cloud' + route, url, req, 'devin', res);
     }
 
     switch (route) {
@@ -1429,19 +1433,19 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         default: {
             // 缺陷10修复: 长前缀必须先检查，否则 /devin-cloud-ws-register/ 会匹配 /devin-cloud-ws/
             if (route.startsWith('/devin-cloud-ws-register/')) {
-                return await devinCloudProxyRoute(route, url, req, 'register');
+                return await devinCloudProxyRoute(route, url, req, 'register', res);
             }
             if (route.startsWith('/devin-cloud-ws-cdn/')) {
-                return await devinCloudProxyRoute(route, url, req, 'codeium');
+                return await devinCloudProxyRoute(route, url, req, 'codeium', res);
             }
             if (route.startsWith('/devin-cloud-ws-ss/')) {
-                return await devinCloudProxyRoute(route, url, req, 'self-serve');
+                return await devinCloudProxyRoute(route, url, req, 'self-serve', res);
             }
             if (route.startsWith('/devin-cloud-ws/')) {
-                return await devinCloudProxyRoute(route, url, req, 'windsurf');
+                return await devinCloudProxyRoute(route, url, req, 'windsurf', res);
             }
             if (route.startsWith('/devin-cloud/')) {
-                return await devinCloudProxyRoute(route, url, req, 'devin');
+                return await devinCloudProxyRoute(route, url, req, 'devin', res);
             }
             throw new Error('not found');
         }
@@ -5363,7 +5367,7 @@ setTimeout(function() {
 // 道法自然: 代理层无为 — 只做三件事，其余原样透传
 // ═══════════════════════════════════════════════════════════
 
-async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: string = 'devin'): Promise<any> {
+async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: string = 'devin', res?: any): Promise<any> {
     // 帛书·「天下之至柔驰骋于天下之致坚」— 反向代理不需要Devin API认证
     // 代理只做三件事: 剥安全头 + 改写URL + 透传请求
     // Devin SPA通过Auth0认证 — 代理只是透传，不需要Bearer token
@@ -5487,6 +5491,46 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                     // 移除content-length，因为改写后长度变化
                     if (kl === 'content-length') continue;
                     safeHeaders[k] = v as string | string[];
+                }
+
+                // 道·「天下之至柔，驰骋于天下之致坚；无有入于无间」— SSE 流式直通(诚实待办兑现)
+                //   text/event-stream 不可缓冲: 旧路径 chunks.push→end 收齐才返回,
+                //   对永不关闭的 SSE 流 = 永远收不到 end → 内嵌页"Reconnecting..."空转。
+                //   现: 边到边裸管道直送 res, 取消 15s 空闲超时, 关流即断上游, 不改写不解码。
+                const isEventStream = contentType.includes('text/event-stream');
+                if (isEventStream && res && !res.headersSent && !res.writableEnded) {
+                    const streamHeaders: Record<string, string> = {};
+                    // 道·「不贰」— 显式头去重: 上游小写键(content-type)与下设大写键(Content-Type)
+                    //   并存会被 Node 合并成逗号串(no-cache,no-cache,no-transform), 故按小写名跳过下面会重设的键
+                    const reservedLower = new Set(['content-length', 'content-type', 'cache-control', 'connection', 'x-accel-buffering']);
+                    for (const [k, v] of Object.entries(safeHeaders)) {
+                        if (reservedLower.has(k.toLowerCase())) continue;
+                        streamHeaders[k] = Array.isArray(v) ? v.join(', ') : (v as string);
+                    }
+                    streamHeaders['Content-Type'] = contentType || 'text/event-stream';
+                    streamHeaders['Cache-Control'] = 'no-cache, no-transform';
+                    streamHeaders['Connection'] = 'keep-alive';
+                    streamHeaders['X-Accel-Buffering'] = 'no';
+                    // SSE 长连接靠事件/心跳维持 — 取消上游 15s 空闲超时, 否则被 proxyReq.on('timeout') 掐断
+                    try { proxyReq.setTimeout(0); } catch {}
+                    try { if (proxyRes.socket) proxyRes.socket.setTimeout(0); } catch {}
+                    res.writeHead(proxyRes.statusCode || 200, streamHeaders);
+                    if (typeof res.flushHeaders === 'function') { try { res.flushHeaders(); } catch {} }
+                    // 上游极少压缩 SSE; 若压缩则流式解码后直通, 否则裸管道
+                    const zlibS = require('zlib');
+                    let src: any = proxyRes;
+                    if (contentEncoding === 'gzip') src = proxyRes.pipe(zlibS.createGunzip());
+                    else if (contentEncoding === 'deflate') src = proxyRes.pipe(zlibS.createInflate());
+                    else if (contentEncoding === 'br') src = proxyRes.pipe(zlibS.createBrotliDecompress());
+                    src.on('data', (chunk: Buffer) => { try { res.write(chunk); } catch {} });
+                    const endStream = () => { try { res.end(); } catch {} };
+                    src.on('end', endStream);
+                    src.on('error', endStream);
+                    proxyRes.on('error', endStream);
+                    // 客户端(webview)关闭 → 断开上游, 释放连接
+                    res.on('close', () => { try { proxyReq.destroy(); } catch {} });
+                    resolve({ _streamed: true });
+                    return;
                 }
 
                 // 收集完整响应体
