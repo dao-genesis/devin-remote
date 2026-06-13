@@ -23,7 +23,7 @@ const EXT_VERSION: string = (() => {
     for (const p of [path.join(__dirname, '..', 'package.json'), path.join(__dirname, 'package.json')]) {
         try { const v = JSON.parse(fs.readFileSync(p, 'utf8')).version; if (v) return String(v); } catch { /* 守柔 */ }
     }
-    return '1.3.1';
+    return '1.3.2';
 })();
 const DAO_DIR = path.join(os.homedir(), '.dao');
 const GLOBAL_CONFIG_FILE = path.join(DAO_DIR, 'dao-config.json');  // CF全局凭证
@@ -3011,8 +3011,15 @@ const DEVIN_URL_REGISTER = 'https://register.windsurf.com/exa.seat_management_pb
 // 故 /devin-cloud/ 子路径前缀非 SPA 真实路由 → 渲染 404。持 auth1 + 服务器运行时经反代根路径
 // (auth bridge 注入 localStorage['auth1_session'])自动登录; 否则回退官网直连(依赖 Electron session)。
 function daoRoutedWebUrl(pagePath: string = ''): string {
+    // 道·「物无非彼·物无非是」— 每窗口路由选择须与认证注入闸门一致(见 authBridge·injA1):
+    //   仅当持「真 auth1_」(非 Windsurf devin-session-token$)时, 经本窗口反代(localhost:port)
+    //   注入 localStorage 登录态 → SPA 自动登录 + 每窗口独立账号隔离(鸡犬相闻·民至老死不相往来)。
+    //   若仅 Windsurf session-token / 无令牌: 反代注入被禁(session-token 会污染登录态) → 经代理
+    //   官网必跳 /auth/login。故此时回落官网直连(simpleBrowser 共享 Electron 真 Auth0 会话, 已登录)。
+    //   如此: 手动登录窗口=隔离且自动登录; 自动/Windsurf 窗口=直连可用, 两者皆无登录墙。
     const p = (pagePath && pagePath !== '/') ? pagePath : '';
-    if (ws.port && ws.devinAuth1) return `http://localhost:${ws.port}${p || '/'}`;
+    const hasInjectableAuth1 = !!ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$');
+    if (ws.port && hasInjectableAuth1) return `http://localhost:${ws.port}${p || '/'}`;
     return DEVIN_APP + p;
 }
 const DEVIN_URL_GET_USER_STATUS = [
@@ -5171,7 +5178,6 @@ function devinCloudPanel(context: vscode.ExtensionContext): void {
         if (msg.command === 'refresh') {
             panel.webview.html = getDevinCloudPanelHtml(proxyUrl, localBase);
         } else if (msg.command === 'openSimpleBrowser') {
-            // 降级到路径α — 经本窗口代理(每窗口独立账号), 未登录时 daoRoutedWebUrl 回落真源
             try {
                 vscode.commands.executeCommand('simpleBrowser.show', daoRoutedWebUrl(''));
             } catch {
