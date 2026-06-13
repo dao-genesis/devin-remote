@@ -1075,6 +1075,17 @@ function _stripVariantSuffix(uid) {
   return uid;
 }
 
+// ★ 模型族规范名 · 去 MODEL_ 前缀 + 统一连字符 + 小写 + 剥档位后缀
+//   swe-1-6-slow / swe-1-6-fast / MODEL_SWE_1_6_FAST / MODEL_SWE_1_6 → "swe-1-6"
+//   用于"连一档即覆盖全族"的同族匹配 · 道义: 二十五章「道法自然·名异实同」
+function _familyCanon(uid) {
+  if (!uid || typeof uid !== "string") return "";
+  let s = uid;
+  if (s.startsWith("MODEL_")) s = s.slice("MODEL_".length);
+  s = s.replace(/_/g, "-").toLowerCase();
+  return _stripVariantSuffix(s);
+}
+
 /**
  * modelUid 规范化 · DEFECT11 根治
  *   Windsurf modelUid 格式不一致:
@@ -1118,6 +1129,20 @@ function _normalizeModelUid(uid) {
         .toLowerCase();
       if (_real(baseLowerKey)) return baseLowerKey;
     }
+  }
+  // 3.6) ★ v9.9.282 · 同族兄弟档位匹配 · 连一档即覆盖全族 (软编码·为变所适)
+  //   真因(141实证): 用户在UI仅连 swe-1-6-fast → deepseek · 但发消息时
+  //     Windsurf 默认下发 swe-1-6-slow · 档位对不上 → 不路由 → 走官方 → 501回弹
+  //   旧逻辑(3.5)仅认"族基名本身"被连线 · 不认"兄弟档位"被连线 → 漏判
+  //   治: 只要同族任一档位被用户"显式"(非_seeded)连线 · 则全族档位归一其渠道
+  //   守常: 仅延伸"用户已连"之族 · 纯播种桩族(无真路由)仍保官方原生直通
+  //   道义: 二十八章「朴散为器·大制无割」· 四十八章「损之又损·以至无为而无不为」
+  const _qFam = _familyCanon(uid);
+  if (_qFam) {
+    const _sibs = Object.keys(_routes)
+      .filter((k) => _routes[k] && !_routes[k]._seeded && _familyCanon(k) === _qFam)
+      .sort();
+    if (_sibs.length) return _sibs[0];
   }
   // 4) ★ v9.9.59 · 通配符兜底: * → 任何未知模型自动路由
   if (_routes["*"]) return "*";
