@@ -10258,6 +10258,30 @@ class Engine {
           " \uD83D\uDD12" +
           _tS.lock,
       );
+      // v4.6.1 · 锁反转副作用修正 (反者道之动 · 无为非无能)
+      //   lockByDefault=true 后, 账号默认🔒锁定 ⇒ getSortedIndices 天然排除 ⇒ order 可能为空.
+      //   旧法此时落到尾部 "所有账号都失败" 红错, 与事实相悖(登录其实成功·只是无解锁候选),
+      //   正是用户所诉"状态弹错". 此处先辨因: 全锁=预期态(用户主权)·仅 log 不惊扰;
+      //   真无可登录账号=温和提示; 二者皆非红错.
+      if (order.length === 0) {
+        const others = this.store.accounts.filter(
+          (_, i) => i !== this.store.activeIdx,
+        );
+        const loginable = others.filter((a) => a && a.password);
+        const lockedCnt = loginable.filter((a) => a.skipAutoSwitch).length;
+        if (loginable.length > 0 && lockedCnt === loginable.length) {
+          log(
+            "rotate: 0 候选 · " +
+              lockedCnt +
+              " 个可登录账号均🔒锁定(lockByDefault) · 属预期·非错误 · 面板🔓解锁后启用自动切号",
+          );
+          return { ok: false, stage: "all-locked" };
+        }
+        if (loginable.length === 0) {
+          _notify("warn", "WAM: 无可登录账号 (账号库为空或缺密码)");
+          return { ok: false, stage: "no-loginable" };
+        }
+      }
       // v2.4.13b · rate-limit 早停 (知止所以不殆)
       //   Devin 返回 "Rate limit exceeded" 是 IP/device 级 · 全号都会 fail
       //   继续 for-loop 会把所有 73 可用号都失败 3 次入 15min 黑
