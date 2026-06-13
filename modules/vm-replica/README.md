@@ -66,6 +66,22 @@ python mcp_server.py
 > `vm.exec` 会捕获 stdio 并等待进程结束 —— 启动 notepad / chrome 这类长存 GUI 进程会一直
 > 阻塞到超时。`vm.launch` 以 `DETACHED_PROCESS` 即发即走，立即返回 pid（实测 0.03s）。
 
+### 并发 VM 数受 Windows RDP 许可约束（不是本模块的限制）
+
+架构本身支持任意多台 VM（每台一个端口、一个内层代理）。**同时在线的 VM 数量受宿主 OS 的
+RDP 许可限制**，与本代码无关：
+
+| 宿主 | 并发远程会话上限 | 突破方式 |
+|---|---|---|
+| Windows Server **未装 RDS 角色** | 管理模式 **2 个**远程会话（+1 控制台） | 安装 RD Session Host 角色 + RDS CAL |
+| Windows 10/11 | 原生 **1 个** | 会话内**按需**加载 rdpwrap 多会话补丁（绝不挂 ServiceDll，见下） |
+
+> 实测铁证：在本仓库的 Server 2022（未装 RDS）上创建第 2 台 VM 时，`vm02` 已**认证成功**
+> （RemoteConnectionManager event 1149），但会话仲裁后在登录前被断开（LocalSessionManager
+> event 41→40，无 event 21 logon succeeded）—— 正是管理模式 2 会话上限。单台 VM 全部 24
+> 工具实测 25/25 通过。`ensure_rdp_active` 已支持「保活全部匹配的 mstsc 窗口」，在许可放开
+> （RDS / rdpwrap）的宿主上即可多台 VM 并发。
+
 ---
 
 ## 三、安全红线 · 开机锁死根因与永久修复 ★必读
@@ -91,7 +107,7 @@ python mcp_server.py
 - ❌ **绝不**把 rdpwrap.dll 长期挂为 `ServiceDll`。
 - ❌ **绝不**安装「开机/登录即自动跑 mstsc / 改 RDP」的 at-logon 自启任务。
 - ✅ 多会话能力**按需**获得：
-  - **Windows Server**（如本仓库的实测 VM）：**原生支持多会话**，根本不需要 rdpwrap。
+  - **Windows Server**（如本仓库的实测 VM）：原生支持远程会话、无需 rdpwrap（管理模式并发上限 2，见上「并发」节）。
   - **Windows 10/11**：需要时在会话内**临时加载** rdpwrap 补丁、用完即撤，绝不持久化为 ServiceDll。
 - ✅ `vm_host_daemon` 默认只在 console 会话内手动起，不随机器自启；console 主会话始终保持纯净。
 
@@ -110,9 +126,13 @@ python mcp_server.py
 | `vm.launch notepad / calc` | ✅ 0.03s 非阻塞返回，应用在 VM 会话内打开 |
 | `vm.activate` + `vm.type "道法自然…"` | ✅ Unicode/中文正确输入到 VM 内 Notepad |
 | `mcp_server.py` stdio | ✅ initialize / tools/list(24) / vm_exec / vm_screenshot(image) 全通过 |
+| **全工具面硬验证（24 工具）** | ✅ **25/25 PASS** — exec/launch/detach、file_write/read/append（CJK 字节级一致）、screenshot(PNG)、ui_info、activate、type(CJK)/key/hold_key、click/double/right/mouse_move/drag/scroll、desktop_info、vm.list/sessions/host.activate_rdp |
 
-> 实测中发现并修复的缺陷：`vm.exec` 启动 GUI 应用会阻塞到超时 → 新增 `vm.launch` /
-> `detach=true` 非阻塞模式（`DETACHED_PROCESS`，不继承 stdio 管道）。
+> 实测中发现并修复的缺陷：
+> 1. `vm.exec` 启动 GUI 应用会阻塞到超时 → 新增 `vm.launch` / `detach=true` 非阻塞模式
+>    （`DETACHED_PROCESS`，不继承 stdio 管道）。
+> 2. `ensure_rdp_active` 原先只保活**第一个** mstsc 窗口 → 改为保活**全部**匹配窗口，
+>    使许可放开的宿主上多台 VM 会话都能持续可操作。
 
 ---
 

@@ -67,24 +67,28 @@ def ensure_rdp_active(target=None, offscreen=True):
             b = ctypes.create_unicode_buffer(n + 1); u.GetWindowTextW(h, b, n + 1); return b.value
         def _cls(h):
             b = ctypes.create_unicode_buffer(256); u.GetClassNameW(h, b, 256); return b.value
-        found = {'h': 0, 'iconic': None, 'title': ''}
+        # Manage EVERY mstsc window for <target>: with multiple concurrent VMs they all
+        # connect to the same loopback target, so each VM has its own client window and
+        # each must be kept un-suppressed (otherwise only one session stays operable).
+        found = []
         def cb(h, _):
             if 'TscShellContainerClass' in _cls(h) and target in _title(h):
-                found['h'] = int(h); found['iconic'] = bool(u.IsIconic(h)); found['title'] = _title(h)
-                return 0
+                found.append({'h': int(h), 'iconic': bool(u.IsIconic(h)), 'title': _title(h)})
             return 1
         u.EnumWindows(EnumProc(cb), 0)
-        if not found['h']:
+        if not found:
             return {'ok': False, 'error': f'no mstsc window for {target}'}
-        h = ctypes.c_void_p(found['h'])
-        if found['iconic']:
-            u.ShowWindow(h, 9)   # SW_RESTORE -> un-suppress the session
-        u.ShowWindow(h, 5)       # SW_SHOWNORMAL
-        if offscreen:
-            # SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE -> move only, keep z-order & focus
-            u.SetWindowPos(h, None, -4000, 0, 0, 0, 0x1 | 0x4 | 0x10)
-        return {'ok': True, 'hwnd': found['h'], 'was_iconic': found['iconic'],
-                'title': found['title'], 'target': target, 'offscreen': offscreen}
+        for i, w in enumerate(found):
+            h = ctypes.c_void_p(w['h'])
+            if w['iconic']:
+                u.ShowWindow(h, 9)   # SW_RESTORE -> un-suppress the session
+            u.ShowWindow(h, 5)       # SW_SHOWNORMAL
+            if offscreen:
+                # SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE -> move only, keep z-order & focus.
+                # Stagger x so stacked client windows don't fully overlap off-screen.
+                u.SetWindowPos(h, None, -4000 - i * 120, 0, 0, 0, 0x1 | 0x4 | 0x10)
+        return {'ok': True, 'managed': len(found), 'target': target, 'offscreen': offscreen,
+                'windows': found}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
 
