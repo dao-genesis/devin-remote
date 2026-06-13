@@ -9815,11 +9815,18 @@ async function handleWebviewMessage(msg) {
         _toast("\u23F3 连接 Git: " + email.split("@")[0] + " …");
         try {
           const res = await devinGit.connectWithPat(r.auth, pat);
-          if (res.ok) {
+          if (res.appConn) {
+            // 已连到「别的 GitHub 身份」(经 App·非本 PAT 主) — 如实告知需上官网移除后再归一, 不冒充已连本仓
+            _toast("\u26A0 该号经 GitHub App 连到 @" + res.appConn.name + "(" + res.appConn.repos + "仓) · 非本 PAT 主");
+            _notify("warn", "[" + r.email + "] 连到别的 GitHub 身份 @" + res.appConn.name + " — 经 App 的连接断后不可经 API 复原。如需归一到本 PAT 主, 请在 app.devin.ai 该组织 Settings→Integrations 移除该 GitHub App 后再连。");
+          } else if (res.ok) {
             _toast("\u2713 已连接 @" + (res.login || "github") + " · " + res.repoCount + " 仓库" + (res.secret ? " · Sec\u2713" : ""));
             _notify("info", "[" + r.email + "] Git 归一连接 @" + (res.login || "?") + " · " + res.repoCount + " 仓库 · 连接" + res.connections + (res.secret ? " · 密钥已落库" : ""));
           } else if (res.invalidPat) {
             _toast("\u2717 PAT 无效或已过期");
+          } else if (res.ghost) {
+            _toast("\u2717 平台孤儿态: 已注册却无连接 · 需上官网移除 GitHub 后重连");
+            _notify("warn", "[" + r.email + "] " + (res.error || "平台侧孤儿注册·API 不可清"));
           } else {
             _toast("\u2717 连接未生效: " + (res.error || "0 连接/0 仓库"));
           }
@@ -9837,9 +9844,10 @@ async function handleWebviewMessage(msg) {
         _toast("\u23F3 断开 Git: " + email.split("@")[0] + " …(复查扫除·真解绑)");
         try {
           const logs = await devinGit.robustDisconnectGit(r.auth);
-          const zeroed = logs.some((l) => l.indexOf("连已归零") >= 0 || l.indexOf("连接已归零") >= 0);
-          _toast(zeroed ? "\u2713 已真解绑 · 连接归零 · 密钥已删" : "\u2713 已断开 Git(详见日志)");
-          _notify("info", "[" + r.email + "] Git 断开: " + (zeroed ? "真解绑(连接归零·密钥删)" : "已处理"));
+          const cleared = logs.some((l) => l.indexOf("已真水过无痕") >= 0);
+          const residual = logs.find((l) => l.indexOf("仍残留") >= 0) || "";
+          _toast(cleared ? "\u2713 已真水过无痕 · 身份/仓库/连接/密钥皆空" : ("\u26A0 已断开但仍有残留 · " + (residual ? residual.replace(/^.*仍残留/, "残留") : "详见日志")));
+          _notify(cleared ? "info" : "warn", "[" + r.email + "] Git 断开: " + (cleared ? "真水过无痕(身份/仓库/连接/密钥皆空)" : "仍残留 — " + (residual || "需上官网撤销 GitHub App 授权")));
           log("[git] disconnect " + email + "\n  " + logs.join("\n  "));
         } catch (e) {
           _toast("\u2717 断开异常: " + String((e && e.message) || e));
@@ -9854,7 +9862,7 @@ async function handleWebviewMessage(msg) {
         if (!idx.length) { _toast("\u2717 请先勾选账号"); break; }
         const sharedPat = (msg.pat && String(msg.pat).trim()) || "";
         _toast("\u23F3 批量连 Git " + idx.length + " 账号 → 同一 GitHub …");
-        let ok = 0, fail = 0; const fails = [];
+        let ok = 0, fail = 0, warn = 0; const fails = [];
         for (const i of idx) {
           const r = await _dvAuthFor(i);
           if (!r.ok) { fail++; fails.push((r.email || "?") + ":登录失败"); continue; }
@@ -9862,16 +9870,20 @@ async function handleWebviewMessage(msg) {
           if (!pat) { fail++; fails.push(r.email + ":无PAT"); continue; }
           try {
             const res = await devinGit.connectWithPat(r.auth, pat);
-            if (res.ok) {
+            if (res.appConn) {
+              warn++; fails.push(r.email + ":连到别的身份@" + res.appConn.name + "(需上官网移除App后归一)");
+            } else if (res.ok) {
               ok++;
-              _toast("\u23F3 [" + (ok + fail) + "/" + idx.length + "] " + r.email.split("@")[0] + " → @" + (res.login || "?") + " " + res.repoCount + "仓");
+              _toast("\u23F3 [" + (ok + fail + warn) + "/" + idx.length + "] " + r.email.split("@")[0] + " → @" + (res.login || "?") + " " + res.repoCount + "仓");
+            } else if (res.ghost) {
+              fail++; fails.push(r.email + ":平台孤儿态(已注册无连接·需上官网移除GitHub后重连)");
             } else { fail++; fails.push(r.email + ":" + (res.invalidPat ? "PAT无效" : (res.error || "未生效"))); }
           } catch (e) { fail++; fails.push(r.email + ":" + String((e && e.message) || e)); }
           _dvOverviewCache.delete(r.email.toLowerCase());
         }
-        _toast((fail ? "\u26A0" : "\u2713") + " 批量连 Git: 成功 " + ok + " · 失败 " + fail + "/" + idx.length);
-        _notify("info", "批量归一连接 GitHub: 成功 " + ok + " · 失败 " + fail + "/" + idx.length + (fails.length ? ("\n失败明细: " + fails.join("; ")) : ""));
-        log("[git] batch-connect ok=" + ok + " fail=" + fail + (fails.length ? "\n  " + fails.join("\n  ") : ""));
+        _toast((fail || warn ? "\u26A0" : "\u2713") + " 批量连 Git: 归一 " + ok + " · 异身份 " + warn + " · 失败 " + fail + "/" + idx.length);
+        _notify("info", "批量归一连接 GitHub: 归一到本 PAT 主 " + ok + " · 连到别的身份 " + warn + " · 失败 " + fail + "/" + idx.length + (fails.length ? ("\n明细: " + fails.join("; ")) : ""));
+        log("[git] batch-connect ok=" + ok + " warn=" + warn + " fail=" + fail + (fails.length ? "\n  " + fails.join("\n  ") : ""));
         _broadcastMsg({ type: "gitBatchDone" });
         break;
       }
