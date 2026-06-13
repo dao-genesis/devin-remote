@@ -20,11 +20,11 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\too
 
 | 板块 | 版本 | 下载 |
 |------|------|------|
-| ① dao-vsix · 全功能面板 | 1.2.7 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-vsix-1.2.7.vsix) |
-| ② dao-bridge · 内网穿透 | 3.0.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-bridge-3.0.0.vsix) |
+| ① dao-vsix · 全功能面板 | 1.3.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-vsix-1.3.0.vsix) |
+| ② dao-bridge · 内网穿透 | 3.1.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-bridge-3.1.0.vsix) |
 | ③ devin-git-auth · 多账号 Git | 2.3.2 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/devin-git-auth-2.3.2.vsix) |
 | ④ dao-proxy-pro · 模型路由 | 9.9.277 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-proxy-pro-9.9.277.vsix) |
-| ⑤ rt-flow · Cloud 备份/wipe | 4.1.2 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/rt-flow-4.1.2.vsix) |
+| ⑤ rt-flow · Cloud 备份/wipe | 4.4.1 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/rt-flow-4.4.1.vsix) |
 | 模块 · dao-export · 全量导出 | 1.3.3 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-devin-export-1.3.3.vsix) |
 
 > 全部资产见 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)。vm-replica 模块为纯源码/文档，见 [`modules/vm-replica/`](modules/vm-replica/)。
@@ -90,17 +90,17 @@ devin-remote/
 
 ## ① 五核心插件 — plugins/
 
-### dao-vsix v1.2.7 · Devin 全功能面板 + 路由官网
+### dao-vsix v1.3.0 · Devin 全功能面板 + 路由官网 + 内网穿透集成
 
 核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传）。零输入获取 cog_ API Key（POST /service-users + auth1 自动换取），彻底移除面板所有手动 API Key 输入/引导。v1.2.0：增补测试聊天内置存根通道，与 dao-proxy-pro v9.9.276 配套。官网注入加固：session-token 与 auth1 严格隔离。
 
 **VSIX**: 见 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)（本插件 VSIX 已 gitignore，`npm run compile && vsce package` 现产） · **源码**: `plugins/dao-vsix/src/extension.ts` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/194e1211-739d-494c-9cf2-ff016672485d)
 
-### dao-bridge v3.0.0 · 工作区内网穿透
+### dao-bridge v3.1.0 · 工作区内网穿透
 
 重构为零/最小输入：quick tunnel 默认模式 + 凭证自动加载（`~/.dao/` 目录）+ 命名隧道 token 持久化 + 修正误导 UI（不再暗示必须填 token）。随 IDE 窗口启停，专穿当前工作区。
 
-**VSIX**: `plugins/cf-daohub/dao-bridge-ext/dao-bridge-3.0.0.vsix` · **源码**: `plugins/cf-daohub/dao-bridge-ext/extension.js` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/8c4aec08-8357-44f2-a169-d44c8d055dd3)
+**VSIX**: `plugins/cf-daohub/dao-bridge-ext/dao-bridge-3.1.0.vsix` · **源码**: `plugins/cf-daohub/dao-bridge-ext/extension.js` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/8c4aec08-8357-44f2-a169-d44c8d055dd3)
 
 ### devin-git-auth v2.3.2 · 多账号 GitHub 认证
 
@@ -114,7 +114,7 @@ devin-remote/
 
 **VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.277.vsix` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/7094683e-c9f3-4461-96f6-fadd15c0aabf)
 
-### rt-flow v4.1.2 · Devin Cloud 接入（备份 + 回归本源）⭐新
+### rt-flow v4.4.1 · Devin Cloud 接入（备份 + 回归本源）⭐新
 
 第五板块，零依赖 `devin_cloud.js` 底层封装 Devin Cloud 全部 API（邮箱+密码→auth1 登录、概览、对话追踪、CRUD、备份、wipe）。两大核心模块：
 
@@ -123,7 +123,7 @@ devin-remote/
 
 > 实测修复多个「臆造成功」缺陷：剧本/密钥删除端点纠正（`/api/playbooks|secrets/{id}`）、会话改归档（平台不支持硬删）、Git 改用 `git-permissions` 真撤授权（连接元数据平台无删除端点，如实回报）。
 
-**VSIX**: `plugins/rt-flow/rt-flow-4.1.2.vsix` · **底层**: `plugins/rt-flow/devin_cloud.js` · **变更史**: `plugins/rt-flow/changelog.md` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/9ec20452-cb5f-4423-9204-f06088f75079)
+**VSIX**: `plugins/rt-flow/rt-flow-4.4.1.vsix` · **底层**: `plugins/rt-flow/devin_cloud.js` · **变更史**: `plugins/rt-flow/changelog.md` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/9ec20452-cb5f-4423-9204-f06088f75079)
 
 ---
 

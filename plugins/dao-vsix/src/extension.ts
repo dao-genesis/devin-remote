@@ -18,7 +18,13 @@ import * as vscode from 'vscode';
 // CF全局共享(一机一CF账号) + 每工作区独立(一窗口一Devin账号)
 // 帛书·三十九「致数与无与」— 不欲禄禄若玉 珞珞若石
 // ═══════════════════════════════════════════════════════════
-const EXT_VERSION = '1.3.0';
+// 版本号 — 帛书·「自知者明」— 唯一真源取自 package.json，杜绝常量漂移（一劳永逸）
+const EXT_VERSION: string = (() => {
+    for (const p of [path.join(__dirname, '..', 'package.json'), path.join(__dirname, 'package.json')]) {
+        try { const v = JSON.parse(fs.readFileSync(p, 'utf8')).version; if (v) return String(v); } catch { /* 守柔 */ }
+    }
+    return '1.3.0';
+})();
 const DAO_DIR = path.join(os.homedir(), '.dao');
 const GLOBAL_CONFIG_FILE = path.join(DAO_DIR, 'dao-config.json');  // CF全局凭证
 const CONFIG_FILE = GLOBAL_CONFIG_FILE;  // 别名 — 道法自然：一即一切
