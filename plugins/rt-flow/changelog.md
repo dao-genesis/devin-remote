@@ -2,6 +2,56 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.6.1 (2026-06-13) · 锁反转副作用修正 (无为非无能)
+
+> 在便携 VSCode 内以 21 真实账号冷启动实测时发现: 锁反转(问③)上线后, 账号默认🔒锁定 ⇒ `getSortedIndices` 天然排除全部 ⇒ 启动 `rotate()` 候选为 0 ⇒ 旧代码落到尾部误报红色 `所有账号都失败`(实则登录全部成功·仅按设计无解锁候选)。此正是用户所诉「状态弹错」之一类。
+
+### 修正 `Engine.rotate()`
+- `order.length === 0` 时先辨因, 不再一概红错:
+  - 可登录账号(有密码)全部🔒锁定 → 属预期态(用户主权), 仅 `log`、不弹错、返回 `{ok:false, stage:"all-locked"}`。
+  - 确无可登录账号(账号库空/缺密码) → 温和 `warn` 提示, 返回 `stage:"no-loginable"`。
+  - 仅当确有候选却登录全失败时, 方保留原 `所有账号都失败` 红错。
+- 实测: 21 账号冷启动, 日志显示 `rotate: 0 候选 · 21 个可登录账号均🔒锁定(lockByDefault) · 属预期·非错误`, 不再误报; 预加载+验证 21/21 ✓。
+
+## v4.6.0 (2026-06-13) · 状态实时 · 概览预载 · 锁反 · 备份分流 · Git 真断 (道法自然 · 太上下知有之)
+
+> 反者道之动 —— 七症一并推进: 让中途任何停顿都前端可见, 概览秒开, 默认锁定保用户主权, 水过无痕真断 GitHub。
+
+### 问题① 对话状态实时显示 (五态细分)
+- `classifySession` 由 4 态扩为 5 态: `running`(运行) · `awaiting`(等待用户输入·中途停顿) · `blocked`(额度耗尽/出错/卡死) · `finished` · `idle`。
+- `listRunningSessions` 现返回所有「活跃·需关注」会话 (运行/等待/卡住), 各带 `statusClass`。
+- 账号行 `.dv-run` 同时显示 运行/待输入/卡住 三色徽标; 概览头部与每对话行细分着色。
+- 通知去抖: 进入 `awaiting`/`blocked` 各推一次 (等待你输入 / 疑似卡住·额度超限)。
+
+### 问题② 概览预加载 + 增量刷新 (彻底消除点击后加载耗时)
+- `_dvPreloadAll`: 启动后台对账号库内全部「有密码」账号并发(`devinCloudPreloadConcurrency` 默3)登录 + 预拉概览/Git → 入 `_dvOverviewCache`, 展开秒开。
+- `_dvStartPreload`: 启动后约 8s 首次预加载, 之后每 `devinCloudPreloadRefreshMin`(默5min) 增量刷新; 缓存新鲜(<90s)则跳过。
+- 预加载后 `cachedEmails` 覆盖全账号 → 状态轮询/自动备份等效全账号。
+- 新配置: `wam.devinCloudPreload`(默true) · `wam.devinCloudPreloadConcurrency`(默3) · `wam.devinCloudPreloadRefreshMin`(默5)。
+
+### 问题③ 锁默认锁定 (反者道之动) + 自动备份默认开
+- `wam.lockByDefault`(默true): 新账号缺省 🔒锁定 (禁自动切号), 用户主动 🔓解锁后该号才入自动切号候选。显式记录两态。
+- `wam.devinCloudAutoBackup` 默认 false → **true** (账号库内对话自动增量备份)。
+
+### 问题④ Devin Cloud 独立备份配置 (与 Cascade 分流)
+- 对话追踪面板底部新增「☁ Devin Cloud · 对话追踪 + 备份」独立板块 (紧邻 Cascade 备份配置)。
+- 新增「Devin Cloud 备份配置」按钮 + `devinSelectBackupDir` 消息: 选目录写 `wam.devinCloudBackupDir`(独立于 Cascade `conversationBackupDir`), 已有备份自动迁移, 即时全量备份一次。
+
+### 问题⑤ 对话追踪复用 (Cascade + Devin Cloud)
+- `_dvStatusAgg` 聚合各号活跃对话, `_dvRunPoll` 每轮写入并 `_broadcastConvSection` 增量刷新追踪面板。
+- 追踪面板 Devin Cloud 子板块复用同一 UI 风格 (运行/待输入/卡住汇总 + 逐条 账号·标题)。
+
+### 问题⑥ 连接 Git 多端点实探 (唯变所适)
+- `injectGitHubPAT` 由单端点单字段, 改为 (端点×body字段) 候选逐个实探, 命中首个 2xx 即真注入; 全部非 2xx 才如实回报 (区分 PAT无效/已注册)。
+- 批量连接沿用 `connectWithPat` (多账号 → 同一 GitHub), 核验可达仓库为真凭据。
+
+### 问题⑦ 水过无痕真断 GitHub (终态核验)
+- `disconnectGitHubUser` 由单端点改为账号级/组织级多候选全走一遍。
+- `robustDisconnectGit` 收尾增加 `_verifyGitCleared` 终核 (身份 login 空 + 可达仓库 0 + 连接 0 + 无 GITHUB_PAT 密钥), 未净则二次断身份并如实报明残留 (提示上官网手动撤销 GitHub App 授权), **不臆造已断净**。
+- 批量断开 / 一键清理均以终核结果为真解绑判据并反馈用户。
+
+> 实测说明: 问题⑥⑦ 的端点候选已就位, 但「真正连上/真正断净」需用真实 Devin Cloud 账号 + GitHub PAT 上官网核验 (本机无凭据, 终核会如实报明残留, 不虚标成功)。
+
 ## v4.5.0 (2026-06-13) · 对话额度上限 · 知止不殆 · 余额精确到分 (道法自然 · 顺其自然·推进到底)
 
 > *知足不辱，知止不殆，可以长久。* —— 每对话使用额度有上限，余额近底自动中停，先备份再清理；与官网每刀额度同步，精确到分。
