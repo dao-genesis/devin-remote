@@ -180,3 +180,9 @@ python dao_export_all.py --email xxx@gmail.com --password xxx
 | rt-flow | ✅ 实测验证 | 12/12 批量备份 + 一键 wipe 全链路真号验证（备份留底→用户数据清零→本源默认保留） |
 
 > 实测详情：[docs/LIVE_VERIFICATION_2026-06-11.md](docs/LIVE_VERIFICATION_2026-06-11.md) · 五插件规范：[docs/CANON_five-plugins.md](docs/CANON_five-plugins.md)
+
+---
+
+## PR 自动合并（道法自然）
+
+本仓库配置了 [`.github/workflows/auto-merge.yml`](.github/workflows/auto-merge.yml)：向 `main` 提交的 PR，只要**无冲突（mergeable）即自动合并**，无需人工同意；**有冲突则自动跳过**，留待人工解决。
