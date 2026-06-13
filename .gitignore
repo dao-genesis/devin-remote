@@ -23,3 +23,15 @@ node_modules/
 # Python 运行缓存 — rt-flow/dao-export 脚本产物
 __pycache__/
 *.pyc
+
+# PyInstaller 冻结产物（体积大, 由 build_exe.py 本地构建, 不入库）
+**/agent-vm/dist/
+**/agent-vm/build/
+*.spec
+*.exe
+
+# vendored MCP 模块的构建产物（源码入库, 产物本地 npm/uv build, 不入库）
+**/vendor/**/lib/
+**/vendor/**/dist/
+**/vendor/**/.venv/
+*.tsbuildinfo

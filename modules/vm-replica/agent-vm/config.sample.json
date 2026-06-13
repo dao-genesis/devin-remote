@@ -1,0 +1,12 @@
+{
+  "host_port": 9000,
+  "base_port": 9001,
+  "token": "REPLACE_WITH_secrets.token_hex(16)_OR_LEAVE_BLANK_TO_AUTOGEN",
+  "python_exe": "C:\\devin\\python\\python.exe",
+  "inner_script": "C:\\dao_vm\\vm_inner_agent.py",
+  "inner_exe": "C:\\dao_vm\\dao_inner_agent.exe",
+  "rdp_target": "127.0.0.2",
+  "default_password": "REPLACE_WITH_A_STRONG_PASSWORD",
+  "keepalive": true,
+  "keepalive_secs": 5
+}
