@@ -33,6 +33,28 @@ function authHeaders(auth, extra) {
 function bare(auth) {
   return auth.orgBare || String(auth.orgId || "").replace(/^org-/, "");
 }
+
+// ═══ 已注册态分流 (纯函数 · 可单测 · 不臆造·不强为) ══════════════════════════
+// 当 injectGitHubPAT 回报 alreadyRegistered 时, 依据「PAT 主身份 / 现有连接 / 是否有可达仓库」
+// 判定唯一安全动作。抽为纯函数, 使决策可脱离网络被单测穷举 (实测教训→回归护栏):
+//   existing: 已归一到本 PAT 主且有仓库 → 幂等成功·不动;
+//   ghost:    已注册却无任何连接 → 平台孤儿态·API 不可清·如实回报;
+//   reinject: individual_token 连到别身份 / 或 0 仓库陈旧 → 可断净重注入复活 (实测安全);
+//   app:      github_app(OAuth) 连接 → 绝不主动断 (断后标记不清·落孤儿态)·如实回报上官网移除。
+function classifyRegisteredState({ ownerLogin, connections, hasRepos } = {}) {
+  const list = Array.isArray(connections) ? connections : [];
+  const first = list[0] || {};
+  const curName = String(first.name || "").toLowerCase();
+  const owner = String(ownerLogin || "").toLowerCase();
+  const sameOwner = !!owner && !!curName && curName === owner;
+  const allIndividual =
+    list.length > 0 &&
+    list.every((c) => /individual/.test(String((c && c.type) || "").toLowerCase()));
+  if (hasRepos && sameOwner) return "existing";
+  if (list.length === 0) return "ghost";
+  if (allIndividual) return "reinject";
+  return "app";
+}
 async function jGet(auth, url, timeoutMs) {
   return cloud.jsonRequest("GET", url, authHeaders(auth), null, timeoutMs);
 }
@@ -338,15 +360,13 @@ async function connectWithPat(auth, pat) {
     const repos0 = await getAccessibleRepos(auth).catch(() => ({ repos: [] }));
     const list0 = conns0.connections || [];
     const first = list0[0] || {};
-    const curName = (first.name || "").toLowerCase();
     const hasRepos = (repos0.repos || []).length > 0;
-    const sameOwner = owner && curName && curName === owner.toLowerCase();
-    const allIndividual = list0.length > 0 && list0.every((c) => /individual/.test((c.type || "").toLowerCase()));
-    if (hasRepos && sameOwner) {
+    const action = classifyRegisteredState({ ownerLogin: owner, connections: list0, hasRepos });
+    if (action === "existing") {
       inj = { ok: true, via: "existing" };                 // (a) 已归一到本 PAT 主且有仓库 → 幂等成功
-    } else if (list0.length === 0) {
+    } else if (action === "ghost") {
       ghost = true;                                         // (d) 无连接却已注册 → 平台孤儿态, API 不可清
-    } else if (allIndividual) {
+    } else if (action === "reinject") {
       // (b/c) individual_token: 连到别的身份 / 或 0 仓库陈旧 → 断净重注入 (实测安全可复活)
       await _disconnectAllConnections(auth);
       try { await disconnectGitHubUser(auth); } catch (e) {}
@@ -454,6 +474,7 @@ module.exports = {
   ensureGithubPatSecret,
   deleteSecret,
   connectWithPat,
+  classifyRegisteredState,
   // disconnect
   disconnectGitHubConnection,
   disconnectGitHubUser,
