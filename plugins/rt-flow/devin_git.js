@@ -126,15 +126,40 @@ async function deleteSecret(auth, name) {
 }
 
 // ═══ PAT 注入 / OAuth ════════════════════════════════════════════════════════
+// v4.6.0 · 唯变所适 (问题⑥: 连接 Git 无效): 单一端点+单一字段名易因后端契约漂移而静默失败。
+//   按候选 (端点 × body 字段) 逐个实探, 命中首个 2xx 即真注入; 全部非 2xx 才如实回报。
+//   端点候选: /{orgId}/… · /org-{bare}/… · /integrations/…(无 org)
+//   字段候选: pat · personal_access_token · token · github_pat (不同版本契约)
 async function injectGitHubPAT(auth, pat) {
-  const r = await jPost(auth, API + "/" + auth.orgId + "/integrations/github/pat", { pat }, 60000);
-  if (r.status === 200 || r.status === 201) return { ok: true };
-  const t = (r.text || "").toLowerCase();
-  if (r.status === 400 && t.includes("already registered"))
-    return { ok: false, alreadyRegistered: true, error: "该组织已有 GitHub App 安装, 将尝试连接现有安装" };
-  if (r.status === 400 && t.includes("invalid pat"))
-    return { ok: false, invalidPat: true, error: "PAT 无效或已过期" };
-  return { ok: false, error: (r.text || "").slice(0, 200) || "status=" + r.status };
+  const eps = [
+    API + "/" + auth.orgId + "/integrations/github/pat",
+    API + "/org-" + bare(auth) + "/integrations/github/pat",
+    API + "/organizations/" + auth.orgId + "/integrations/github/pat",
+    API + "/integrations/github/pat",
+  ];
+  const bodies = [
+    { pat },
+    { personal_access_token: pat },
+    { token: pat },
+    { github_pat: pat },
+  ];
+  let alreadyRegistered = false, invalidPat = false, lastErr = "";
+  for (const url of eps) {
+    for (const body of bodies) {
+      let r;
+      try { r = await jPost(auth, url, body, 60000); } catch (e) { lastErr = (e && e.message) || "post err"; continue; }
+      if (r.status === 200 || r.status === 201) return { ok: true, via: url };
+      const t = (r.text || "").toLowerCase();
+      if (r.status === 400 && t.includes("already registered")) { alreadyRegistered = true; continue; }
+      if (r.status === 400 && (t.includes("invalid pat") || t.includes("invalid token") || t.includes("bad credentials"))) { invalidPat = true; continue; }
+      // 404/405 = 端点/字段不对, 换下一个候选; 其它状态记录后继续
+      if (r.status !== 404 && r.status !== 405 && r.status !== 422)
+        lastErr = (r.text || "").slice(0, 160) || "status=" + r.status;
+    }
+  }
+  if (invalidPat) return { ok: false, invalidPat: true, error: "PAT 无效/已过期/权限不足 (需 repo 权限)" };
+  if (alreadyRegistered) return { ok: false, alreadyRegistered: true, error: "该组织已有 GitHub App 安装, 将尝试连接现有安装" };
+  return { ok: false, error: lastErr || "所有候选端点均未注入成功(检查 PAT 权限与网络)" };
 }
 
 // ═══ 断开族 ════════════════════════════════════════════════════════════════
@@ -150,10 +175,28 @@ async function disconnectGitHubConnection(auth, connectionName, host) {
   }
   return { ok: false, status: r.status, error: (r.text || "").slice(0, 200) };
 }
+// v4.6.0 · 真断 GitHub 身份/OAuth (问题⑦: 水过无痕后仍残留可发消息 ⇒ 身份层未断)。
+//   单端点不足以断净: GitHub 身份可能落在 账号级(/integrations/github/user) 或
+//   组织级(/org-{bare}/integrations/github) 或 App 安装层。逐候选实探, 任一 2xx 即记成功,
+//   并全部走一遍 (而非命中即停) 以确保各层都被尝试断开。
 async function disconnectGitHubUser(auth) {
-  const r = await jDelete(auth, API + "/integrations/github/user");
-  if (r.status === 200 || r.status === 204) return { ok: true };
-  return { ok: false, status: r.status, error: (r.text || "").slice(0, 200) };
+  const eps = [
+    API + "/integrations/github/user",
+    API + "/integrations/github",
+    API + "/org-" + bare(auth) + "/integrations/github/user",
+    API + "/org-" + bare(auth) + "/integrations/github",
+    API + "/" + auth.orgId + "/integrations/github/user",
+    API + "/" + auth.orgId + "/integrations/github",
+  ];
+  let any = false, lastStatus = 0, lastErr = "";
+  for (const url of eps) {
+    let r;
+    try { r = await jDelete(auth, url); } catch (e) { lastErr = (e && e.message) || "del err"; continue; }
+    lastStatus = r.status;
+    if (r.status === 200 || r.status === 204) { any = true; continue; }
+    if (r.status !== 404 && r.status !== 405) lastErr = (r.text || "").slice(0, 160) || "status=" + r.status;
+  }
+  return any ? { ok: true } : { ok: false, status: lastStatus, error: lastErr };
 }
 async function disconnectGitHubPAT(auth, connectionId) {
   const r = await jDelete(auth, API + "/" + auth.orgId + "/integrations/github/pat?connection_id=" + connectionId);
@@ -206,7 +249,39 @@ async function robustDisconnectGit(auth) {
       }
     }
   }
+  // v4.6.0 · 终态核验 (问题⑦): 身份/仓库/密钥三者皆空才算真水过无痕。
+  //   仍残留则二次断身份 + 报明残留, 不臆造"已断净"。
+  try {
+    await sleep(600);
+    let fin = await _verifyGitCleared(auth);
+    if (!fin.cleared) {
+      logs.push("终核: 残留 " + fin.desc + " → 二次断身份");
+      try { await disconnectGitHubUser(auth); } catch (e) {}
+      await sleep(800);
+      fin = await _verifyGitCleared(auth);
+    }
+    logs.push(fin.cleared ? "终核: 已真水过无痕(身份/仓库/连接/密钥皆空)" : "终核: 仍残留 " + fin.desc + " (需上官网手动撤销 GitHub App 授权)");
+  } catch (e) { logs.push("终核异常: " + (e && e.message)); }
   return logs;
+}
+// v4.6.0 · 核验 GitHub 是否真断净: 身份 login 空 + 可达仓库 0 + 连接 0 + 无 PAT 密钥
+async function _verifyGitCleared(auth) {
+  const [user, repos, conns, sec] = await Promise.all([
+    getGitHubUser(auth).catch(() => ({ ok: false, login: "" })),
+    getAccessibleRepos(auth).catch(() => ({ ok: false, repos: [] })),
+    checkGitConnections(auth).catch(() => ({ ok: false, count: 0 })),
+    hasGithubPatSecret(auth).catch(() => false),
+  ]);
+  const login = user.login || "";
+  const repoCount = (repos.repos || []).length;
+  const connCount = conns.count || 0;
+  const cleared = !login && repoCount === 0 && connCount === 0 && !sec;
+  const parts = [];
+  if (login) parts.push("身份@" + login);
+  if (repoCount) parts.push(repoCount + "仓库");
+  if (connCount) parts.push(connCount + "连接");
+  if (sec) parts.push("GITHUB_PAT密钥");
+  return { cleared, desc: parts.join("/") || "无", login, repoCount, connCount, secret: !!sec };
 }
 
 // 切换后清理残留 · 自由切换须干净(A→B 后不留 A), 只保留 keepName
@@ -325,6 +400,7 @@ module.exports = {
   disconnectGitHubUser,
   disconnectGitHubPAT,
   robustDisconnectGit,
+  _verifyGitCleared,
   cleanupStaleConnections,
   // pat pool
   loadPatPool,
