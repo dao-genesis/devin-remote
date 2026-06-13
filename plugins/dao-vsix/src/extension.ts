@@ -1260,10 +1260,13 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         }
         case '/api/devin/knowledge/inject': {
             const kb = await readBody(req);
-            const { name, body: kBody, triggerDescription, upsert } = JSON.parse(kb);
+            const kp = JSON.parse(kb);
+            const { name, body: kBody, upsert } = kp;
+            // 帛书·「善救人, 故无弃人」— 兼容三种触发字段名, 缺省 Always (上游必填, 缺则 422)
+            const trig = kp.triggerDescription || kp.trigger || kp.trigger_description || 'Always';
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
-            if (upsert) return await devinUpsertKnowledge(ws.devinOrgId, name, kBody, triggerDescription, ws.devinAuth1);
-            return await devinInjectKnowledge(ws.devinOrgId, name, kBody, triggerDescription, ws.devinAuth1);
+            if (upsert) return await devinUpsertKnowledge(ws.devinOrgId, name, kBody, trig, ws.devinAuth1);
+            return await devinInjectKnowledge(ws.devinOrgId, name, kBody, trig, ws.devinAuth1);
         }
         case '/api/devin/knowledge/delete': {
             const kdb = await readBody(req);
@@ -3850,32 +3853,28 @@ function devinJsonDelete(targetUrl: string, headers: any, timeoutMs?: number): P
     return new Promise((resolve) => {
         const u = new URL(targetUrl);
         const needsProxy = u.hostname === 'app.devin.ai' || u.hostname.endsWith('windsurf.com');
-        const makeDirectRequest = (hostname: string, port: number, reqPath: string, h: any) => {
-            const req = https.request({ hostname, port, path: reqPath, method: 'DELETE', headers: h, timeout: timeoutMs || 15000, rejectUnauthorized: false }, (res) => {
+        // 帛书·「反者道之动」— 直连优先, 仅连不通(status 0)时降级走本地代理。
+        // 与 devinJsonGet/Post 同构: detectedProxyPort 误检不再吞掉 DELETE。
+        const makeRequest = (hostname: string, port: number, reqPath: string, h: any) => {
+            const mod: any = hostname === '127.0.0.1' ? http : https;
+            const req = mod.request({ hostname, port, path: reqPath, method: 'DELETE', headers: h, timeout: timeoutMs || 15000, rejectUnauthorized: false }, (res: any) => {
                 let d = '';
                 res.on('data', (c: Buffer) => d += c.toString());
                 res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(d), text: d }); } catch { resolve({ status: res.statusCode, json: null, text: d }); } });
             });
-            req.on('error', (e) => resolve({ status: 0, json: null, text: e.message }));
-            req.on('timeout', () => { req.destroy(); resolve({ status: 0, json: null, text: 'timeout' }); });
-            req.end();
-        };
-        const makeProxyRequest = (proxyPort: number, fullUrl: string, h: any) => {
-            // 代理隧道: http.request → 127.0.0.1 HTTP代理 (不是TLS!)
-            const req = http.request({ hostname: '127.0.0.1', port: proxyPort, path: fullUrl, method: 'DELETE', headers: h, timeout: timeoutMs || 15000 }, (res) => {
-                let d = '';
-                res.on('data', (c: Buffer) => d += c.toString());
-                res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(d), text: d }); } catch { resolve({ status: res.statusCode, json: null, text: d }); } });
-            });
-            req.on('error', (e) => resolve({ status: 0, json: null, text: e.message }));
+            req.on('error', (e: Error) => resolve({ status: 0, json: null, text: e.message }));
             req.on('timeout', () => { req.destroy(); resolve({ status: 0, json: null, text: 'timeout' }); });
             req.end();
         };
         const reqHeaders = Object.assign({ Accept: 'application/json', 'User-Agent': DEVIN_UA }, headers || {});
+        const direct = () => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders);
+        const viaProxy = () => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }));
+        const origResolve = resolve;
         if (needsProxy && detectedProxyPort) {
-            makeProxyRequest(detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }));
+            resolve = ((r: any) => { if (r && r.status === 0) { resolve = origResolve; viaProxy(); } else { origResolve(r); } }) as any;
+            direct();
         } else {
-            makeDirectRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders);
+            direct();
         }
     });
 }
@@ -3888,9 +3887,9 @@ async function devinDeleteKnowledge(orgId: string, id: string, auth1: string): P
 }
 
 async function devinDeletePlaybook(orgId: string, id: string, auth1: string): Promise<{ ok: boolean }> {
-    const bareOrgId = orgId.replace(/^org-/, '');
-    const r = await devinJsonDelete(DEVIN_APP + '/api/org-' + bareOrgId + '/playbooks/' + id, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-    return { ok: r.status === 200 || r.status === 204 || r.status === 404 };
+    // playbook 资源为全局路由 /api/playbooks/<id> (非 org 作用域; org 作用域返回 404)
+    const r = await devinJsonDelete(DEVIN_APP + '/api/playbooks/' + id, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    return { ok: r.status === 200 || r.status === 204 };
 }
 
 
@@ -3898,14 +3897,16 @@ async function devinDeleteSecret(orgId: string, name: string, auth1: string): Pr
     const list = await devinListSecrets(orgId, auth1);
     if (list.ok && list.secrets) {
         for (const s of list.secrets) {
-            if (s.name === name && s.id) {
-                const bareOrgId = orgId.replace(/^org-/, '');
-                const r = await devinJsonDelete(DEVIN_APP + '/api/org-' + bareOrgId + '/secrets/' + s.id, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-                return { ok: r.status === 200 || r.status === 204 || r.status === 404 };
+            // 上游 secret 列表字段为 key (非 name); 兼容两者方能命中
+            if ((s.key || s.name) === name && s.id) {
+                // secret 资源为全局路由 /api/secrets/<id> (非 org 作用域)
+                const r = await devinJsonDelete(DEVIN_APP + '/api/secrets/' + s.id, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+                return { ok: r.status === 200 || r.status === 204 };
             }
         }
     }
-    return { ok: true };
+    // 帛书·「信言不美」— 未命中即如实报失败, 不以 ok:true 掩盖 (此前的伪成功掩码)
+    return { ok: false };
 }
 // DeleteThenCreate — 帛书·四十「反者道之动」
 // 先删旧→再建新 = 永远不会stale URL
@@ -4305,16 +4306,22 @@ async function devinSetMessageLimit(orgId: string, maxCredits: number, auth1: st
 
 // 列出本组织已安装的自定义 MCP (与官网 Connections 一致)
 async function devinListMcpInstallations(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
-    const r = await devinJsonGet(DEVIN_APP + '/api/mcp/installations', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    // 实测官网真实端点为 GET /api/mcp/servers (旧 /api/mcp/installations GET 返回 405)。
+    // 返回项主键为 server_id; 本组织自助安装的自定义 MCP 其 server_id 以 mcp-installation- 起始,
+    // marketplace 目录项则以 mcp-marketplace-server- 起始 — 面板「已安装」只取前者。
+    const r = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status !== 200) return { ok: false, items: [] };
-    const arr = Array.isArray(r.json) ? r.json : (Array.isArray(r.json && r.json.installations) ? r.json.installations : []);
-    const items = arr.map((m: any) => ({
-        name: m.name || m.slug || 'MCP',
-        detail: (m.short_description || m.description || '').toString().substring(0, 120),
-        id: m.id || m.installation_id || '',
-        transport: m.transport || '',
-        connected: m.is_enabled !== false,
-    }));
+    const j = r.json || {};
+    const arr = Array.isArray(j) ? j : (Array.isArray(j.servers) ? j.servers : (Array.isArray(j.installations) ? j.installations : []));
+    const items = arr
+        .filter((m: any) => String(m.server_id || m.id || '').startsWith('mcp-installation-'))
+        .map((m: any) => ({
+            name: m.name || m.slug || 'MCP',
+            detail: (m.short_description || m.description || '').toString().substring(0, 120),
+            id: m.server_id || m.id || m.installation_id || '',
+            transport: m.transport || '',
+            connected: m.is_enabled !== false,
+        }));
     return { ok: true, items };
 }
 
@@ -4351,7 +4358,7 @@ async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promi
 async function devinDeleteMcp(orgId: string, installationId: string, auth1: string): Promise<{ ok: boolean; status?: number }> {
     const id = installationId.startsWith('mcp-installation-') ? installationId : 'mcp-installation-' + installationId.replace(/^mcp-installation-/, '');
     const r = await devinJsonDelete(DEVIN_APP + '/api/mcp/installations/' + id, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-    return { ok: r.status === 200 || r.status === 204 || r.status === 404, status: r.status };
+    return { ok: r.status === 200 || r.status === 204, status: r.status };
 }
 
 async function devinListAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
@@ -4367,8 +4374,25 @@ async function devinListAutomations(orgId: string, auth1: string): Promise<{ ok:
 }
 
 async function devinDisconnectGit(orgId: string, connectionId: string, auth1: string): Promise<{ ok: boolean }> {
-    const r = await devinJsonDelete(DEVIN_APP + '/api/organizations/' + orgId + '/git-connections/' + connectionId, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-    return { ok: r.status === 200 || r.status === 204 || r.status === 404 };
+    // 帛书·「反者道之动」— 实测官网断连真实端点:
+    // GitHub PAT(individual token) 走 /api/org-<bare>/integrations/github/pat?connection_id=<id>
+    // (旧 /api/organizations/<org>/git-connections/<id> 仅 GET, DELETE 返回 405 → 之前断连静默失败)
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const headers = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    // 按连接类型选端点: 先查列表拿 type/host
+    let connType = '';
+    try {
+        const lst = await devinCheckGitConnections(orgId, auth1);
+        const hit = (lst.connections || []).find((c: any) => (c.id || c.connection_id) === connectionId);
+        if (hit) connType = String(hit.type || '');
+    } catch { /* 容错: 默认按 github pat 处理 */ }
+    const qs = '?connection_id=' + encodeURIComponent(connectionId);
+    let path: string;
+    if (connType.indexOf('gitlab') >= 0) path = '/api/org-' + bareOrgId + '/integrations/gitlab/pat' + qs;
+    else if (connType.indexOf('bitbucket') >= 0) path = '/api/org-' + bareOrgId + '/integrations/bitbucket/pat' + qs;
+    else path = '/api/org-' + bareOrgId + '/integrations/github/pat' + qs; // github_individual_token / github_token 默认
+    const r = await devinJsonDelete(DEVIN_APP + path, headers);
+    return { ok: r.status === 200 || r.status === 204 };
 }
 
 async function devinConnectGitHub(orgId: string, pat: string, auth1: string): Promise<{ ok: boolean; existed?: boolean }> {
@@ -5140,11 +5164,21 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
     var __a1 = '${injA1}';
     var __uid = '${ws.devinUserId}';
     var __org = '${ws.devinOrgId}';
+    var __orgName = '${(ws.devinOrgName || '').replace(/['\\\\]/g, '')}';
     if (__a1) {
       localStorage.setItem('auth1_session', JSON.stringify({ token: __a1, userId: __uid }));
       localStorage.setItem('migrated-to-unscoped-auth0-token-2025-12-18', 'true');
       if (__uid) localStorage.setItem('known-org-ids-' + __uid, JSON.stringify([__org]));
       if (__org) localStorage.setItem('last-internal-org-for-external-org-v1-null', __org);
+      // 帛书·「为之于其未有·治之于其未乱」— /settings 子路由(knowledge/playbooks/secrets)守卫
+      //   检查 post-auth 完成标记键 post-auth-v3-null-<uid>-org_name-<orgName>; 缺失即跳 /auth/login
+      //   去跑 post-auth(竞态/跨 origin 时此键不存在 → 深层路由反复跳登录)。直接种入即闭环。
+      if (__org && __uid && __orgName) {
+        var __paKey = 'post-auth-v3-null-' + __uid + '-org_name-' + __orgName;
+        if (!localStorage.getItem(__paKey)) {
+          localStorage.setItem(__paKey, JSON.stringify({ externalOrgId: null, userId: __uid, internalOrgId: __org, orgName: __orgName, result: { resolved_external_org_id: null, org_id: __org, org_name: __orgName, is_valid_resource: true } }));
+        }
+      }
     }
     // 2. Cookie 标记 — SPA 检查 webapp_logged_in 决定是否显示登录页
     document.cookie = 'webapp_logged_in=true; path=/; max-age=31536000; SameSite=Lax';
@@ -5186,7 +5220,14 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
   } catch(e){}
 })();
 </script>`;
-                        html = html.replace('</head>', authBridge + '</head>');
+                        // 帛书·「为之于其未有·治之于其未乱」— 认证桥接须在 SPA 任何引导脚本之前执行,
+                        // 否则路由守卫可能先于 auth1_session 注入而读到空登录态 → 竞态跳转 /auth/login。
+                        // 故注入于 <head> 起始(紧随 charset meta), 而非 </head> 之前。
+                        if (/<head[^>]*>/i.test(html)) {
+                            html = html.replace(/(<head[^>]*>)/i, '$1' + authBridge);
+                        } else {
+                            html = html.replace('</head>', authBridge + '</head>');
+                        }
                         resolve({
                             _proxy: true,
                             status: proxyRes.statusCode,
