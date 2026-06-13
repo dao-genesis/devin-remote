@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as vscode from 'vscode';
+import * as cp from 'child_process';
 
 // ═══════════════════════════════════════════════════════════
 // 道 · 常量 — 天得一以清 地得一以寧
@@ -239,6 +240,9 @@ export async function activate(context: vscode.ExtensionContext) {
     // 初始化每窗口专属状态
     ws = new WorkspaceState();
     ws.init();
+
+    // BridgeManager 初始化 — 帛书·「天下之至柔驰骋于天下之致坚」
+    bridgeManager.init(context);
 
     // Status bar
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -1857,6 +1861,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器">🧩</div>
 <div class="ni" data-tab="automations" onclick="sw('automations')" title="Automations 自动化">⚙️</div>
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="自动注入 Auto-Inject">💉</div>
+<div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网穿透 DAO Bridge">🌉</div>
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
 </nav>
@@ -1881,6 +1886,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="tv" id="v-mcp"></div>
 <div class="tv" id="v-automations"></div>
 <div class="tv" id="v-inject"></div>
+<div class="tv" id="v-bridge"></div>
 </div>
 <div class="ft" id="ft">
 <span><span class="dot off" id="ds"></span> Server</span>
@@ -1915,6 +1921,7 @@ const S={
     hostname:'${mpEsc(hostname)}'
   },
   bridge:${JSON.stringify(bridge || null)},
+  bridgeAutoInject:false,
   inject:null,
   injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],messageLimit:null,lastInjectedOrg:''},
   tab:'overview',
@@ -1949,7 +1956,7 @@ function sw(t){
     }
   }
 }
-function rc(){if(S.tab==='overview')rO()}
+function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull()}
 // 帛书·「为而弗恃」: API Key 全程底层自动获取, 面板永不出现手动输入 — 旧 submitCogKey* 已删
 function rO(){
   const v=document.getElementById('v-overview');
@@ -1984,6 +1991,74 @@ function rBridge(){
   var btns='<div class="br">'+(b.url?'<button class="btn sm" onclick="cmd(&#39;copyBridgeUrl&#39;)">复制 URL</button>':'')+'<button class="btn sm ghost" onclick="cmd(&#39;openBridgeMd&#39;)">打开 MD</button></div>';
   return head+'<div class="card">'+rows+btns+'</div>';
 }
+// ═══════════════════════════════════════════════════════════
+// 内网穿透全功能页 — 帛书·「天下之至柔驰骋于天下之致坚」
+// ═══════════════════════════════════════════════════════════
+function rBridgeFull(){
+  var v=document.getElementById('v-bridge');if(!v)return;
+  var b=S.bridge||{};
+  var on=!!(b&&b.url);
+  var h='<div style="padding:12px;overflow-y:auto;height:100%">';
+  h+='<div class="st">内网穿透 · DAO Bridge</div>';
+  // 状态卡片
+  h+='<div class="card">';
+  h+='<div class="cr"><span class="l">隧道状态</span><span class="v" style="color:'+(on?'var(--success)':'var(--warn)')+'">'+(on?'✓ 已打通 · 公网可达':'⚠ 离线 · 等待隧道启动')+'</span></div>';
+  if(b.url)h+='<div class="cr"><span class="l">公网 URL</span><span class="v" style="font-size:11px;word-break:break-all;cursor:pointer" onclick="cmd(&#39;copyBridgeUrl&#39;)" title="点击复制">'+esc(b.url)+'</span></div>';
+  if(b.localUrl||b.port)h+='<div class="cr"><span class="l">本地端口</span><span class="v">'+(b.localUrl||('http://127.0.0.1:'+b.port))+'</span></div>';
+  if(b.mode)h+='<div class="cr"><span class="l">隧道模式</span><span class="v">'+esc(b.mode==='named'?'命名隧道 (固定域名)':'快速隧道 (临时URL)')+'</span></div>';
+  if(b.workspace)h+='<div class="cr"><span class="l">工作区</span><span class="v">'+esc(b.workspace)+'</span></div>';
+  if(b.host)h+='<div class="cr"><span class="l">主机</span><span class="v">'+esc(b.host)+'</span></div>';
+  if(b.root)h+='<div class="cr"><span class="l">根目录</span><span class="v" style="font-size:10px">'+esc(b.root)+'</span></div>';
+  if(b.version)h+='<div class="cr"><span class="l">版本</span><span class="v">'+esc(b.version)+'</span></div>';
+  if(b.updated)h+='<div class="cr"><span class="l">更新时间</span><span class="v" style="font-size:10px">'+esc(b.updated)+'</span></div>';
+  h+='</div>';
+  // 操作按钮
+  h+='<div class="st">隧道操作</div>';
+  h+='<div class="br">';
+  h+='<button class="btn primary" onclick="cmd(&#39;bridgeRestart&#39;)">🔄 重启隧道</button>';
+  h+='<button class="btn" onclick="cmd(&#39;bridgeStop&#39;)">⏹ 停止</button>';
+  if(b.url)h+='<button class="btn" onclick="cmd(&#39;copyBridgeUrl&#39;)">📋 复制 URL</button>';
+  h+='<button class="btn" onclick="cmd(&#39;bridgeHealth&#39;)">💓 健康检查</button>';
+  h+='</div>';
+  // MD文档
+  h+='<div class="st">文档导出</div>';
+  h+='<div class="br">';
+  h+='<button class="btn" onclick="cmd(&#39;bridgeExportCloudMd&#39;)">☁️ 云端Agent接入MD</button>';
+  h+='<button class="btn" onclick="cmd(&#39;bridgeExportLocalMd&#39;)">💻 本地Agent配置MD</button>';
+  h+='<button class="btn ghost" onclick="cmd(&#39;openBridgeMd&#39;)">📄 打开MD文件</button>';
+  h+='</div>';
+  // Knowledge 自动注入
+  h+='<div class="st">Knowledge 自动注入</div>';
+  h+='<div class="card">';
+  h+='<div class="cr"><span class="l">自动注入</span><span class="v">'+(S.bridgeAutoInject?'<span style="color:var(--success)">✓ 已开启</span>':'<span style="color:var(--muted)">未开启</span>')+'</span></div>';
+  h+='<div style="padding:4px 8px;font-size:11px;color:var(--muted)">开启后，隧道URL变化时自动将接入文档注入到 Devin Knowledge</div>';
+  h+='</div>';
+  h+='<div class="br">';
+  h+='<button class="btn '+(S.bridgeAutoInject?'danger':'primary')+'" onclick="cmd(&#39;bridgeToggleAutoInject&#39;)">'+(S.bridgeAutoInject?'关闭自动注入':'开启自动注入')+'</button>';
+  h+='<button class="btn" onclick="cmd(&#39;bridgeInjectNow&#39;)">立即注入 Knowledge</button>';
+  h+='</div>';
+  // Cloudflare 账号
+  h+='<div class="st">Cloudflare 账号</div>';
+  h+='<div class="card">';
+  var hasCf=!!(b.cfEmail||b.cfToken);
+  h+='<div class="cr"><span class="l">状态</span><span class="v" style="color:'+(hasCf?'var(--success)':'var(--muted)')+'">'+(hasCf?'✓ 已配置':'无账号 · 使用快速隧道')+'</span></div>';
+  if(b.cfEmail)h+='<div class="cr"><span class="l">邮箱</span><span class="v">'+esc(b.cfEmail)+'</span></div>';
+  h+='</div>';
+  h+='<div class="br">';
+  h+='<button class="btn" onclick="sm(&#39;Cloudflare 登录&#39;,&#39;<div style=\\x22padding:8px\\x22><p style=\\x22margin-bottom:8px;font-size:11px;color:var(--muted)\\x22>输入隧道Token以使用固定域名(可选)</p><input id=\\x22cf-token\\x22 class=\\x22inp\\x22 placeholder=\\x22Tunnel Token / API Token\\x22 style=\\x22margin-bottom:6px\\x22><input id=\\x22cf-email\\x22 class=\\x22inp\\x22 placeholder=\\x22Email (可选)\\x22></div>&#39;,function(){var t=document.getElementById(\\x22cf-token\\x22).value;if(t)cmd(\\x22bridgeCfLogin\\x22,{token:t,email:document.getElementById(\\x22cf-email\\x22).value});return true})">🔑 配置 CF 账号</button>';
+  h+='<button class="btn ghost" onclick="cmd(&#39;bridgeCfLogout&#39;)">退出 CF 账号</button>';
+  h+='</div>';
+  // API 参考
+  h+='<div class="st">API 端点参考</div>';
+  h+='<div class="card" style="padding:8px">';
+  h+='<table style="width:100%;font-size:11px;border-collapse:collapse">';
+  h+='<tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:2px 4px">方法</th><th style="text-align:left;padding:2px 4px">路径</th><th style="text-align:left;padding:2px 4px">说明</th></tr>';
+  var apis=[['GET','/api/health','存活(免鉴权)'],['GET','/api/info','工作区信息'],['GET','/api/agents','在线Agent列表'],['GET','/api/bridge-state','隧道状态'],['POST','/api/exec-sync','{cmd,timeout} 同步执行'],['POST','/api/ls','{path} 列目录'],['POST','/api/read','{path} 读文件'],['POST','/api/write','{path,content} 写文件'],['GET','/api/export-cloud-md','导出云端MD'],['GET','/api/export-local-md','导出本地MD']];
+  for(var i=0;i<apis.length;i++)h+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:2px 4px;color:var(--accent)">'+apis[i][0]+'</td><td style="padding:2px 4px;font-family:monospace">'+apis[i][1]+'</td><td style="padding:2px 4px;color:var(--muted)">'+apis[i][2]+'</td></tr>';
+  h+='</table></div>';
+  h+='</div>';
+  v.innerHTML=h;
+}
 function sm(title,bodyHtml,onOk){document.getElementById('mc').innerHTML='<h3>'+title+'</h3>'+bodyHtml+'<div class="mb"><button class="btn ghost" onclick="hm()">取消</button><button class="btn primary" onclick="doOk()">确定</button></div>';document.getElementById('mo').classList.remove('hid');window._onOk=onOk}
 function hm(){document.getElementById('mo').classList.add('hid')}
 function doOk(){if(window._onOk&&window._onOk()!==false)hm()}
@@ -1991,7 +2066,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.bridgeAutoInject!==undefined)S.bridgeAutoInject=d.bridgeAutoInject;uhd();usb();rc()}else if(d.type==='bridgeState'){S.bridge=d.bridge||{};if(d.bridgeAutoInject!==undefined)S.bridgeAutoInject=d.bridgeAutoInject;if(S.tab==='bridge')rBridgeFull();if(S.tab==='overview')rO()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab);if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
@@ -2090,6 +2165,20 @@ function rInject(){
   h+='<div class="st">⚖️ 单条额度上限<button class="btn sm primary" style="float:right" onclick="ipSetLimit()">设定</button></div>';
   h+='<div class="card"><div class="cr"><span class="l" style="font-size:12px">期望 max_credits</span><span class="v">'+((p.messageLimit==null)?'<span style="color:var(--muted)">不管理</span>':'$'+esc(String(p.messageLimit)))+'</span></div></div>';
   h+='<div class="br" style="margin-top:10px"><button class="btn" onclick="cmd(&#39;importCurrentToInjectProfile&#39;)">⬇️ 导入当前账号现有项</button>'+(p.enabled?'<button class="btn primary" onclick="cmd(&#39;setInjectProfile&#39;,{enabled:true})">▶️ 立即应用到当前账号</button><button class="btn" onclick="cmd(&#39;applyInjectProfileToAll&#39;)">👥 注入到所有账号</button>':'')+'</div>';
+  // ═══════════════════════════════════════════════════════════
+  // 道法自然·三模块提示词注入 — proxy-pro 隔离替换底层提示词
+  // ═══════════════════════════════════════════════════════════
+  h+='<div class="st" style="margin-top:16px">☯ 道法自然 · 三模块提示词注入</div>';
+  h+='<p style="font-size:11px;color:var(--muted);line-height:1.6;margin:4px 0 10px">将帛书《道德经》和道藏《阴符经》经文作为 Knowledge + Playbook 注入到 Devin Cloud。</p>';
+  h+='<div class="card">';
+  h+='<div class="cr"><span class="l">模块一 · 帛書老子《道德經》</span><span class="v"><button class="btn sm" onclick="cmd(&#39;daoRulesInject&#39;,{module:&#39;daodejing&#39;})">注入</button></span></div>';
+  h+='<div class="cr"><span class="l">模块二 · 道藏《陰符經》</span><span class="v"><button class="btn sm" onclick="cmd(&#39;daoRulesInject&#39;,{module:&#39;yinfujing&#39;})">注入</button></span></div>';
+  h+='<div class="cr"><span class="l">模块三 · 道德經 + 陰符經（全）</span><span class="v"><button class="btn sm primary" onclick="cmd(&#39;daoRulesInject&#39;,{module:&#39;all&#39;})">注入</button></span></div>';
+  h+='</div>';
+  h+='<div class="br" style="margin-top:6px">';
+  h+='<button class="btn" onclick="cmd(&#39;daoRulesInject&#39;,{module:&#39;all&#39;,includePlaybook:true})">📋 注入 Knowledge + Playbook</button>';
+  h+='<button class="btn ghost" onclick="cmd(&#39;daoRulesPreview&#39;)">预览经文</button>';
+  h+='</div>';
   v.innerHTML=h;
 }
 usb();rc();
@@ -2175,7 +2264,8 @@ function refreshDaoCloudMiddlePanel() {
         relayUrl: ws.publicUrl || '',
         hostname: os.hostname(),
     };
-    data.bridge = readBridgeConn();
+    data.bridge = bridgeManager ? bridgeManager.state() : readBridgeConn();
+    data.bridgeAutoInject = bridgeManager ? bridgeManager.autoInjectEnabled : false;
     // Inject state
     try {
         const s = JSON.parse(fs.readFileSync(ws.injectStateFile, 'utf8'));
@@ -2184,11 +2274,527 @@ function refreshDaoCloudMiddlePanel() {
     daoCloudMiddlePanel.webview.postMessage(data);
 }
 
+// ═══════════════════════════════════════════════════════════
+// BridgeManager — 内网穿透核心 · 帛书·「天下之至柔驰骋于天下之致坚」
+// cloudflared 隧道生命周期管理 + MD文档生成 + Knowledge自动注入
+// ═══════════════════════════════════════════════════════════
+const BRIDGE_DIR = path.join(os.homedir(), '.dao', 'bridge');
+const BRIDGE_CONN_FILE = path.join(BRIDGE_DIR, 'conn.json');
+const BRIDGE_AUTO_INJECT_FILE = path.join(BRIDGE_DIR, 'auto-inject.json');
+const CF_BIN_NAME = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
+const TRY_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
+const BRIDGE_VERSION = '3.1.0';
+const COMMON_PROXY_PORTS = [7890, 7897, 10809, 1080, 8889, 2080, 10808];
+
+class BridgeManager {
+    url: string = '';
+    mode: string = 'quick';
+    proc: cp.ChildProcess | null = null;
+    cfBin: string = '';
+    proxy: string = '';
+    port: number = 0;
+    server: http.Server | null = null;
+    token: string = '';
+    lastErr: string = '';
+    autoInjectEnabled: boolean = false;
+    private lastInjectedUrl: string = '';
+    private ctx: vscode.ExtensionContext | null = null;
+
+    init(ctx: vscode.ExtensionContext) {
+        this.ctx = ctx;
+        try { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); } catch {}
+        this.loadToken();
+        this.loadAutoInjectState();
+        this.proxy = this.detectProxy();
+        this.cfBin = this.findCloudflared();
+    }
+
+    private loadToken() {
+        try {
+            const c = JSON.parse(fs.readFileSync(BRIDGE_CONN_FILE, 'utf8'));
+            if (c.token) this.token = c.token;
+        } catch {}
+        if (!this.token) this.token = crypto.randomBytes(16).toString('hex');
+    }
+
+    loadAutoInjectState() {
+        try {
+            const s = JSON.parse(fs.readFileSync(BRIDGE_AUTO_INJECT_FILE, 'utf8'));
+            this.autoInjectEnabled = !!s.enabled;
+        } catch { this.autoInjectEnabled = false; }
+    }
+
+    saveAutoInjectState() {
+        try {
+            fs.writeFileSync(BRIDGE_AUTO_INJECT_FILE, JSON.stringify({ enabled: this.autoInjectEnabled }, null, 2), 'utf8');
+        } catch {}
+    }
+
+    private detectProxy(): string {
+        const envProxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || '';
+        if (envProxy) return envProxy;
+        for (const p of COMMON_PROXY_PORTS) {
+            try {
+                const r = cp.spawnSync(process.platform === 'win32' ? 'powershell' : 'bash',
+                    process.platform === 'win32'
+                        ? ['-NoProfile', '-Command', `(Test-NetConnection 127.0.0.1 -Port ${p} -WarningAction SilentlyContinue).TcpTestSucceeded`]
+                        : ['-c', `(exec 3<>/dev/tcp/127.0.0.1/${p}) 2>/dev/null && echo True || echo False`],
+                    { timeout: 3000, encoding: 'utf8' });
+                if (r.stdout && /true/i.test(r.stdout)) return 'http://127.0.0.1:' + p;
+            } catch {}
+        }
+        return '';
+    }
+
+    private findCloudflared(): string {
+        const candidates = [
+            this.ctx ? path.join(this.ctx.extensionPath, 'bin', CF_BIN_NAME) : '',
+            path.join(os.homedir(), '.dao', 'bin', 'cloudflared.exe'),
+            path.join(os.homedir(), '.dao', 'bin', 'cloudflared'),
+        ].filter(Boolean);
+        for (const c of candidates) {
+            try { if (fs.existsSync(c) && fs.statSync(c).size > 1000000) return c; } catch {}
+        }
+        try {
+            const probe = process.platform === 'win32' ? 'where cloudflared' : 'command -v cloudflared';
+            const out = cp.execSync(probe, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().split(/\r?\n/)[0];
+            if (out && fs.existsSync(out)) return out;
+        } catch {}
+        return '';
+    }
+
+    private spawnEnv(): NodeJS.ProcessEnv {
+        const env = Object.assign({}, process.env);
+        delete env.NO_PROXY; delete env.no_proxy;
+        if (this.proxy) {
+            env.HTTPS_PROXY = this.proxy; env.https_proxy = this.proxy;
+            env.HTTP_PROXY = this.proxy; env.http_proxy = this.proxy;
+        }
+        return env;
+    }
+
+    private startLocalServer(): Promise<number> {
+        return new Promise((resolve, reject) => {
+            const wsInfo = this.workspaceInfo();
+            this.server = http.createServer((req, res) => {
+                if (req.method === 'OPTIONS') {
+                    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' });
+                    return res.end();
+                }
+                const u = new URL(req.url || '/', 'http://x');
+                const p = u.pathname;
+                const send = (code: number, obj: any) => {
+                    const b = Buffer.from(JSON.stringify(obj));
+                    res.writeHead(code, { 'Content-Type': 'application/json', 'Content-Length': b.length, 'Access-Control-Allow-Origin': '*' });
+                    res.end(b);
+                };
+                const auth = () => {
+                    const h = req.headers['authorization'] || '';
+                    return h === 'Bearer ' + this.token;
+                };
+                if (p === '/api/health') return send(200, { status: 'ok', service: 'dao-bridge', version: BRIDGE_VERSION, host: wsInfo.host, workspace: wsInfo.name });
+                if (p === '/api/export-cloud-md') { res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8' }); return res.end(this.generateCloudAgentMd()); }
+                if (p === '/api/export-local-md') { res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8' }); return res.end(this.generateLocalAgentMd()); }
+                if (!auth()) return send(401, { error: 'unauthorized' });
+                if (p === '/api/info') return send(200, wsInfo);
+                if (p === '/api/bridge-state') return send(200, this.state());
+                // exec-sync
+                if (p === '/api/exec-sync' && req.method === 'POST') {
+                    let body = '';
+                    req.on('data', (c: Buffer) => body += c);
+                    req.on('end', () => {
+                        try {
+                            const { cmd, timeout } = JSON.parse(body);
+                            const r = cp.execSync(cmd, { timeout: (timeout || 30) * 1000, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+                            send(200, { ok: true, stdout: r });
+                        } catch (e: any) { send(500, { ok: false, error: e.message, stderr: e.stderr }); }
+                    });
+                    return;
+                }
+                // read file
+                if (p === '/api/read' && req.method === 'POST') {
+                    let body = '';
+                    req.on('data', (c: Buffer) => body += c);
+                    req.on('end', () => {
+                        try {
+                            const { path: fp } = JSON.parse(body);
+                            const content = fs.readFileSync(fp, 'utf8');
+                            send(200, { ok: true, content });
+                        } catch (e: any) { send(500, { ok: false, error: e.message }); }
+                    });
+                    return;
+                }
+                // write file
+                if (p === '/api/write' && req.method === 'POST') {
+                    let body = '';
+                    req.on('data', (c: Buffer) => body += c);
+                    req.on('end', () => {
+                        try {
+                            const { path: fp, content } = JSON.parse(body);
+                            fs.mkdirSync(path.dirname(fp), { recursive: true });
+                            fs.writeFileSync(fp, content, 'utf8');
+                            send(200, { ok: true });
+                        } catch (e: any) { send(500, { ok: false, error: e.message }); }
+                    });
+                    return;
+                }
+                // ls
+                if (p === '/api/ls' && req.method === 'POST') {
+                    let body = '';
+                    req.on('data', (c: Buffer) => body += c);
+                    req.on('end', () => {
+                        try {
+                            const { path: fp } = JSON.parse(body);
+                            const items = fs.readdirSync(fp).map(f => {
+                                const st = fs.statSync(path.join(fp, f));
+                                return { name: f, type: st.isDirectory() ? 'dir' : 'file', size: st.size };
+                            });
+                            send(200, { ok: true, items });
+                        } catch (e: any) { send(500, { ok: false, error: e.message }); }
+                    });
+                    return;
+                }
+                send(404, { error: 'not found' });
+            });
+            const tryPort = (p: number) => {
+                this.server!.listen(p, '0.0.0.0', () => { this.port = p; resolve(p); });
+                this.server!.on('error', () => { if (p < 9999) tryPort(p + 1); else reject(new Error('no port')); });
+            };
+            tryPort(9910);
+        });
+    }
+
+    async restart(): Promise<string> {
+        this.stop();
+        await this.startLocalServer();
+        // Load named tunnel config
+        const tunnelCfg = this.loadTunnelConfig();
+        if (tunnelCfg.token) {
+            this.mode = 'named';
+            return this.startNamedTunnel(tunnelCfg.token);
+        }
+        return this.startQuickTunnel();
+    }
+
+    private loadTunnelConfig(): { token: string; hostname: string } {
+        const out = { token: '', hostname: '' };
+        const files = [
+            path.join(BRIDGE_DIR, 'named-tunnel.json'),
+            path.join(os.homedir(), '.dao', 'dao-config.json'),
+        ];
+        for (const f of files) {
+            try {
+                const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+                if (!out.token) out.token = String(j.cfTunnelToken || j.tunnelToken || '').trim();
+                if (!out.hostname) out.hostname = String(j.cfHostname || j.hostname || '').trim();
+            } catch {}
+        }
+        // Also check IDE settings
+        try {
+            const cfg = vscode.workspace.getConfiguration('daoBridge');
+            if (!out.token) out.token = String(cfg.get('tunnelToken') || '').trim();
+            if (!out.hostname) out.hostname = String(cfg.get('hostname') || '').trim();
+        } catch {}
+        return out;
+    }
+
+    private startQuickTunnel(): Promise<string> {
+        return new Promise((resolve) => {
+            if (!this.cfBin) { this.lastErr = 'cloudflared not found'; resolve(''); return; }
+            this.mode = 'quick';
+            const args = ['tunnel', '--url', `http://127.0.0.1:${this.port}`, '--no-autoupdate'];
+            this.proc = cp.spawn(this.cfBin, args, { windowsHide: true, env: this.spawnEnv() });
+            let found = false;
+            const onData = (buf: Buffer) => {
+                const s = buf.toString();
+                const m = s.match(TRY_RE);
+                if (m && !found) {
+                    found = true;
+                    this.url = m[0];
+                    this.writeArtifacts();
+                    this.onUrlChange();
+                    resolve(this.url);
+                }
+            };
+            this.proc.stdout?.on('data', onData);
+            this.proc.stderr?.on('data', onData);
+            this.proc.on('exit', () => { if (!found) { this.lastErr = 'cloudflared exited before URL'; resolve(''); } });
+            setTimeout(() => { if (!found) { this.lastErr = 'timeout waiting for URL'; resolve(''); } }, 30000);
+        });
+    }
+
+    private startNamedTunnel(token: string): Promise<string> {
+        return new Promise((resolve) => {
+            if (!this.cfBin) { this.lastErr = 'cloudflared not found'; resolve(''); return; }
+            this.mode = 'named';
+            const args = ['tunnel', 'run', '--token', token];
+            this.proc = cp.spawn(this.cfBin, args, { windowsHide: true, env: this.spawnEnv() });
+            const cfg = this.loadTunnelConfig();
+            if (cfg.hostname) {
+                this.url = 'https://' + cfg.hostname;
+                this.writeArtifacts();
+                this.onUrlChange();
+            }
+            this.proc.on('exit', () => { this.url = ''; });
+            setTimeout(() => resolve(this.url), 3000);
+        });
+    }
+
+    stop() {
+        try { if (this.proc) this.proc.kill(); } catch {}
+        this.proc = null;
+        try { if (this.server) this.server.close(); } catch {}
+        this.server = null;
+        this.url = '';
+        this.port = 0;
+    }
+
+    state(): any {
+        const wsInfo = this.workspaceInfo();
+        return {
+            url: this.url,
+            localUrl: this.port ? 'http://127.0.0.1:' + this.port : '',
+            port: this.port,
+            mode: this.mode,
+            workspace: wsInfo.name,
+            root: wsInfo.root,
+            host: wsInfo.host,
+            version: BRIDGE_VERSION,
+            updated: new Date().toISOString(),
+            cfEmail: this.getCfEmail(),
+            cfToken: this.hasCfToken(),
+        };
+    }
+
+    private workspaceInfo() {
+        const folders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
+        const root = folders[0] || os.homedir();
+        return {
+            name: vscode.workspace.name || (folders[0] ? path.basename(folders[0]) : '(无工作区)'),
+            root, folders,
+            host: os.hostname(),
+            user: os.userInfo().username,
+            platform: `${os.platform()} ${os.release()}`,
+            ide: vscode.env.appName,
+            ideVersion: vscode.version,
+        };
+    }
+
+    private writeArtifacts() {
+        try { fs.writeFileSync(path.join(BRIDGE_DIR, 'workspace.md'), this.generateCloudAgentMd(), 'utf8'); } catch {}
+        try { fs.writeFileSync(path.join(BRIDGE_DIR, 'local-agent.md'), this.generateLocalAgentMd(), 'utf8'); } catch {}
+        const connData = {
+            url: this.url, token: this.token, local_url: 'http://127.0.0.1:' + this.port,
+            port: this.port, workspace: this.workspaceInfo().name, root: this.workspaceInfo().root,
+            host: this.workspaceInfo().host, updated: new Date().toISOString(), version: BRIDGE_VERSION,
+        };
+        try { fs.writeFileSync(BRIDGE_CONN_FILE, JSON.stringify(connData, null, 2), 'utf8'); } catch {}
+    }
+
+    generateCloudAgentMd(): string {
+        const wsInfo = this.workspaceInfo();
+        const ts = new Date().toISOString();
+        return [
+            '# ☯ DAO Bridge · 云端Agent接入文档', '',
+            '> 道法自然 · 本文档自动生成。把它发给云端 Agent 即可接到当前机器。', '',
+            '## 接入点', '', '```',
+            'URL:   ' + (this.url || '(隧道启动中…)'),
+            'Token: ' + this.token,
+            'Auth:  Authorization: Bearer <Token>',
+            'Mode:  ' + (this.mode === 'named' ? 'named (命名隧道·稳定 URL)' : 'quick (临时 URL)'),
+            '```', '',
+            '## 机器信息', '', '| 项 | 值 |', '|---|---|',
+            '| 主机 | ' + wsInfo.host + ' (' + wsInfo.user + ') |',
+            '| 平台 | ' + wsInfo.platform + ' |',
+            '| 工作区 | ' + wsInfo.name + ' |',
+            '| 根目录 | `' + wsInfo.root + '` |',
+            '| IDE | ' + wsInfo.ide + ' ' + wsInfo.ideVersion + ' |',
+            '| 更新于 | ' + ts + ' |', '',
+            '## API 参考', '', '所有请求 Header: `Authorization: Bearer ' + this.token + '`', '',
+            '| 方法 | 路径 | Body | 说明 |', '|---|---|---|---|',
+            '| GET | `/api/health` | - | 存活 (免鉴权) |',
+            '| GET | `/api/info` | - | 工作区信息 |',
+            '| GET | `/api/bridge-state` | - | 隧道状态 |',
+            '| POST | `/api/exec-sync` | `{cmd,timeout}` | 同步执行 |',
+            '| POST | `/api/ls` | `{path}` | 列目录 |',
+            '| POST | `/api/read` | `{path}` | 读文件 |',
+            '| POST | `/api/write` | `{path,content}` | 写文件 |',
+            '| GET | `/api/export-cloud-md` | - | 导出本文档 |', '',
+            '## Python SDK', '', '```python',
+            "import urllib.request, json, ssl, os",
+            "for k in ('HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy'): os.environ.pop(k,None)",
+            "os.environ['NO_PROXY']='*'",
+            "ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE",
+            "urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=ctx)))",
+            'URL="' + (this.url || 'https://<见上>.trycloudflare.com') + '"',
+            'TOKEN="' + this.token + '"',
+            'def api(m,p,body=None,t=30):',
+            '    d=json.dumps(body).encode() if body else None',
+            '    req=urllib.request.Request(f"{URL}{p}",data=d,headers={"Authorization":f"Bearer {TOKEN}","Content-Type":"application/json"},method=m)',
+            '    return json.loads(urllib.request.urlopen(req,timeout=t).read())',
+            'print(api("GET","/api/health"))',
+            'print(api("POST","/api/exec-sync",{"cmd":"hostname"}))',
+            '```', '', '*道法自然 · 无为而无不为*',
+        ].join('\n');
+    }
+
+    generateLocalAgentMd(): string {
+        const wsInfo = this.workspaceInfo();
+        const ts = new Date().toISOString();
+        return [
+            '# ☯ DAO Bridge · 本地Agent配置接口文档', '',
+            '> 本文档供本机其他Agent读取，用于接入和配置 DAO Bridge 插件。', '',
+            '## 本地接入', '', '```',
+            'Local URL: http://127.0.0.1:' + this.port,
+            'Token:     ' + this.token,
+            'Auth:      Authorization: Bearer <Token>',
+            '```', '',
+            '## 可用API', '', '| 方法 | 路径 | 说明 |', '|---|---|---|',
+            '| GET | `/api/health` | 存活检查(免鉴权) |',
+            '| GET | `/api/info` | 工作区信息 |',
+            '| GET | `/api/bridge-state` | 隧道完整状态 |',
+            '| POST | `/api/exec-sync` | 同步执行命令 |',
+            '| POST | `/api/ls` | 列目录 |',
+            '| POST | `/api/read` | 读文件 |',
+            '| POST | `/api/write` | 写文件 |', '',
+            '## 当前状态', '', '| 项 | 值 |', '|---|---|',
+            '| 公网URL | ' + (this.url || '(未连接)') + ' |',
+            '| 本地端口 | ' + this.port + ' |',
+            '| 模式 | ' + this.mode + ' |',
+            '| 主机 | ' + wsInfo.host + ' |',
+            '| 更新于 | ' + ts + ' |', '',
+            '*道法自然 · 无为而无不为*',
+        ].join('\n');
+    }
+
+    async healthCheck(): Promise<{ ok: boolean; status?: string; error?: string }> {
+        if (!this.port) return { ok: false, error: 'server not running' };
+        return new Promise((resolve) => {
+            const req = http.get(`http://127.0.0.1:${this.port}/api/health`, (res) => {
+                let d = '';
+                res.on('data', (c: Buffer) => d += c);
+                res.on('end', () => {
+                    try { const j = JSON.parse(d); resolve({ ok: j.status === 'ok', status: j.status }); }
+                    catch { resolve({ ok: false, error: 'invalid response' }); }
+                });
+            });
+            req.on('error', (e) => resolve({ ok: false, error: e.message }));
+            req.setTimeout(5000, () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
+        });
+    }
+
+    saveCfCredentials(email: string, token: string) {
+        const credFile = path.join(BRIDGE_DIR, 'cf-credentials.json');
+        fs.writeFileSync(credFile, JSON.stringify({ email, token, updated: new Date().toISOString() }, null, 2), 'utf8');
+        // Also save as named tunnel config
+        if (token) {
+            const ntFile = path.join(BRIDGE_DIR, 'named-tunnel.json');
+            fs.writeFileSync(ntFile, JSON.stringify({ cfTunnelToken: token, cfEmail: email }, null, 2), 'utf8');
+        }
+    }
+
+    clearCfCredentials() {
+        for (const f of ['cf-credentials.json', 'named-tunnel.json']) {
+            try { fs.unlinkSync(path.join(BRIDGE_DIR, f)); } catch {}
+        }
+    }
+
+    private getCfEmail(): string {
+        try { return JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, 'cf-credentials.json'), 'utf8')).email || ''; } catch { return ''; }
+    }
+
+    private hasCfToken(): boolean {
+        try { return !!JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, 'named-tunnel.json'), 'utf8')).cfTunnelToken; } catch { return false; }
+    }
+
+    private async onUrlChange() {
+        if (this.autoInjectEnabled && this.url && this.url !== this.lastInjectedUrl) {
+            await this.injectKnowledgeNow();
+            this.lastInjectedUrl = this.url;
+        }
+        // Notify panel
+        sendBridgeState((d: any) => daoCloudMiddlePanel?.webview.postMessage(d));
+    }
+
+    async injectKnowledgeNow(): Promise<boolean> {
+        if (!ws.devinAuth1 || !ws.devinOrgId) return false;
+        const md = this.generateCloudAgentMd();
+        const knowledgeName = 'DAO Bridge 内网穿透远程操作文档';
+        const trigger = '涉及所有远程操作本地电脑的需求时都触发';
+        try {
+            const r = await devinUpsertKnowledge(ws.devinOrgId, knowledgeName, md, trigger, ws.devinAuth1);
+            return r.ok;
+        } catch { return false; }
+    }
+}
+
+let bridgeManager = new BridgeManager();
+
+function sendBridgeState(reply: (d: any) => void) {
+    reply({
+        type: 'bridgeState',
+        bridge: bridgeManager.state(),
+        bridgeAutoInject: bridgeManager.autoInjectEnabled,
+    });
+}
+
+// ═══════════════════════════════════════════════════════════
+// 道法自然·三模块经文注入 — 帛书·「为学者日益·闻道者日损·损之又损·以至于无为」
+// module = 'daodejing' | 'yinfujing' | 'all'
+// ═══════════════════════════════════════════════════════════
+function loadDaoRulesText(extensionPath: string): { daodejing: string; yinfujing: string; all: string } {
+    const rulesFile = path.join(extensionPath, 'media', 'dao-rules.md');
+    let full = '';
+    try { full = fs.readFileSync(rulesFile, 'utf8'); } catch { full = ''; }
+    const yinIdx = full.indexOf('神仙抱一演道章上');
+    const daodejing = yinIdx > 0 ? full.substring(0, yinIdx).trim() : full;
+    const yinfujing = yinIdx > 0 ? full.substring(yinIdx).trim() : '';
+    return { daodejing, yinfujing, all: full };
+}
+
+async function injectDaoRulesModule(module: string, includePlaybook: boolean): Promise<{ ok: boolean; error?: string }> {
+    if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+    const extensionPath = vscode.extensions.getExtension('dao.dao-vsix')?.extensionPath
+        || vscode.extensions.all.find(e => e.id.includes('dao-vsix'))?.extensionPath || '';
+    const texts = loadDaoRulesText(extensionPath);
+    const nameMap: Record<string, string> = {
+        daodejing: '帛書老子·道德經',
+        yinfujing: '道藏·陰符經',
+        all: '道法自然准则',
+    };
+    const bodyMap: Record<string, string> = {
+        daodejing: texts.daodejing,
+        yinfujing: texts.yinfujing,
+        all: texts.all,
+    };
+    const triggerMap: Record<string, string> = {
+        daodejing: '所遵從之一切均來自於帛書《老子》道德經',
+        yinfujing: '所遵從之一切均來自於道藏《陰符經》',
+        all: '所遵從之一切均來自於帛書《老子》道德經和道藏《陰符經》',
+    };
+
+    const name = nameMap[module] || nameMap.all;
+    const body = bodyMap[module] || bodyMap.all;
+    const trigger = triggerMap[module] || triggerMap.all;
+
+    if (!body) return { ok: false, error: 'rules file not found' };
+
+    const kResult = await devinUpsertKnowledge(ws.devinOrgId, name, '你本無名 名可名也 非恒名也 ' + trigger + '：\n\n' + body, trigger, ws.devinAuth1);
+    if (!kResult.ok) return { ok: false, error: 'knowledge inject failed' };
+
+    if (includePlaybook) {
+        const pResult = await devinUpsertPlaybook(ws.devinOrgId, name, body, ws.devinAuth1);
+        if (!pResult.ok) return { ok: false, error: 'playbook inject failed (knowledge ok)' };
+    }
+
+    return { ok: true };
+}
+
 async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionContext) {
     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd', 'bridgeRestart', 'bridgeStop', 'bridgeHealth', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeToggleAutoInject', 'bridgeInjectNow', 'bridgeCfLogin', 'bridgeCfLogout'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -2208,6 +2814,102 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
                     reply({ type: 'actionResult', command: 'openBridgeMd', ok: true });
                 } catch (e) { reply({ type: 'actionResult', command: 'openBridgeMd', ok: false }); }
+                break;
+            }
+            // ═══════════════════════════════════════════════════════════
+            // 内网穿透全功能 — 帛书·「天下之至柔驰骋于天下之致坚」
+            // ═══════════════════════════════════════════════════════════
+            case 'bridgeRestart': {
+                try {
+                    await bridgeManager.restart();
+                    sendBridgeState(reply);
+                    reply({ type: 'actionResult', command: 'bridgeRestart', ok: true });
+                } catch (e: any) { reply({ type: 'actionResult', command: 'bridgeRestart', ok: false }); }
+                break;
+            }
+            case 'bridgeStop': {
+                bridgeManager.stop();
+                sendBridgeState(reply);
+                reply({ type: 'actionResult', command: 'bridgeStop', ok: true });
+                break;
+            }
+            case 'bridgeHealth': {
+                try {
+                    const h = await bridgeManager.healthCheck();
+                    reply({ type: 'actionResult', command: 'bridgeHealth', ok: h.ok });
+                    vscode.window.showInformationMessage(h.ok ? `Bridge healthy: ${h.status}` : `Bridge unhealthy: ${h.error}`);
+                } catch (e: any) { reply({ type: 'actionResult', command: 'bridgeHealth', ok: false }); }
+                break;
+            }
+            case 'bridgeExportCloudMd': {
+                const md = bridgeManager.generateCloudAgentMd();
+                await vscode.env.clipboard.writeText(md);
+                vscode.window.showInformationMessage('已复制云端Agent接入MD文档');
+                reply({ type: 'actionResult', command: 'bridgeExportCloudMd', ok: true });
+                break;
+            }
+            case 'bridgeExportLocalMd': {
+                const md = bridgeManager.generateLocalAgentMd();
+                await vscode.env.clipboard.writeText(md);
+                vscode.window.showInformationMessage('已复制本地Agent配置MD文档');
+                reply({ type: 'actionResult', command: 'bridgeExportLocalMd', ok: true });
+                break;
+            }
+            case 'bridgeToggleAutoInject': {
+                bridgeManager.autoInjectEnabled = !bridgeManager.autoInjectEnabled;
+                bridgeManager.saveAutoInjectState();
+                sendBridgeState(reply);
+                reply({ type: 'actionResult', command: 'bridgeToggleAutoInject', ok: true });
+                break;
+            }
+            case 'bridgeInjectNow': {
+                try {
+                    const ok = await bridgeManager.injectKnowledgeNow();
+                    reply({ type: 'actionResult', command: 'bridgeInjectNow', ok });
+                    if (ok) vscode.window.showInformationMessage('内网穿透文档已注入 Knowledge');
+                    else vscode.window.showWarningMessage('注入失败: 需要登录 Devin Cloud');
+                } catch (e: any) { reply({ type: 'actionResult', command: 'bridgeInjectNow', ok: false }); }
+                break;
+            }
+            case 'bridgeCfLogin': {
+                try {
+                    const token = msg.token || '';
+                    const email = msg.email || '';
+                    bridgeManager.saveCfCredentials(email, token);
+                    await bridgeManager.restart();
+                    sendBridgeState(reply);
+                    reply({ type: 'actionResult', command: 'bridgeCfLogin', ok: true });
+                } catch (e: any) { reply({ type: 'actionResult', command: 'bridgeCfLogin', ok: false }); }
+                break;
+            }
+            case 'bridgeCfLogout': {
+                bridgeManager.clearCfCredentials();
+                await bridgeManager.restart();
+                sendBridgeState(reply);
+                reply({ type: 'actionResult', command: 'bridgeCfLogout', ok: true });
+                break;
+            }
+            // ═══════════════════════════════════════════════════════════
+            // 道法自然·三模块经文注入 — 帛书·「为学者日益·闻道者日损」
+            // ═══════════════════════════════════════════════════════════
+            case 'daoRulesInject': {
+                try {
+                    const module = msg.module || 'all';
+                    const includePlaybook = !!msg.includePlaybook;
+                    const result = await injectDaoRulesModule(module, includePlaybook);
+                    reply({ type: 'actionResult', command: 'daoRulesInject', ok: result.ok });
+                    if (result.ok) vscode.window.showInformationMessage(`道法自然 · ${module} 注入完成`);
+                    else vscode.window.showWarningMessage('注入失败: ' + (result.error || '需要登录'));
+                } catch (e: any) { reply({ type: 'actionResult', command: 'daoRulesInject', ok: false }); }
+                break;
+            }
+            case 'daoRulesPreview': {
+                try {
+                    const rulesPath = path.join(context.extensionPath, 'media', 'dao-rules.md');
+                    const doc = await vscode.workspace.openTextDocument(rulesPath);
+                    await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+                    reply({ type: 'actionResult', command: 'daoRulesPreview', ok: true });
+                } catch (e) { reply({ type: 'actionResult', command: 'daoRulesPreview', ok: false }); }
                 break;
             }
             case 'loadTabData': {
