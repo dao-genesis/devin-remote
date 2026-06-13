@@ -616,20 +616,63 @@ def ui_tree(root, max_depth=6):
 # ====== Chrome/Edge CDP (browser parity with Devin's browser_console) ======
 # Minimal stdlib WebSocket + DevTools client => keeps the zero-dep / freezable
 # invariant (no websocket-client / playwright needed).
+# Prefer Devin's OWN Chrome build first (本源对齐): the agent's browser tool drives
+# exactly this binary via CDP. Falling back to system Chrome/Edge keeps parity on
+# machines without the Devin build.
 _BROWSER_CANDIDATES = [
+    r'C:\devin\chrome\chrome-win64\chrome.exe',
     r'C:\Program Files\Google\Chrome\Application\chrome.exe',
     r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
     r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
     r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
 ]
+# Devin's own Chrome launch flag profile (captured verbatim from the running
+# browser tool process). Replicated so the VM browser behaves identically to
+# Devin operating its own VM. Per-instance flags (remote-debugging-port,
+# user-data-dir, load-extension, the target URL) are appended at launch time.
+_DEVIN_CHROME_FLAGS = [
+    '--disable-field-trial-config', '--disable-background-networking',
+    '--enable-features=NetworkService,NetworkServiceInProcess',
+    '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
+    '--disable-back-forward-cache', '--disable-breakpad',
+    '--disable-client-side-phishing-detection',
+    '--disable-component-extensions-with-background-pages', '--disable-component-update',
+    '--no-default-browser-check', '--disable-default-apps',
+    '--disable-features=ImprovedCookieControls,LazyFrameLoading,GlobalMediaControls,'
+    'DestroyProfileOnBrowserClose,MediaRouter,DialMediaRouteProvider,AcceptCHFrame,'
+    'AutoExpandDetailsElement,CertificateTransparencyComponentUpdater,'
+    'AvoidUnnecessaryBeforeUnloadCheckSync,Translate,HttpsUpgrades,PaintHolding',
+    '--allow-pre-commit-input', '--disable-hang-monitor', '--disable-ipc-flooding-protection',
+    '--disable-popup-blocking', '--disable-prompt-on-repost', '--disable-renderer-backgrounding',
+    '--force-color-profile=srgb', '--metrics-recording-only', '--no-first-run',
+    '--enable-automation', '--disable-infobars', '--password-store=basic',
+    '--use-mock-keychain', '--no-service-autorun', '--export-tagged-pdf',
+    '--disable-search-engine-choice-screen', '--mute-audio',
+    '--blink-settings=primaryHoverType=2,availableHoverTypes=2,'
+    'primaryPointerType=4,availablePointerTypes=4',
+    '--no-sandbox', '--disable-blink-features=AutomationControlled', '--noerrdialogs',
+    '--auto-accept-browser-signin-for-tests', '--window-size=1600,1122',
+    '--window-position=0,0', '--start-maximized', '--disable-gpu',
+    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36; Devin/1.0; +devin.ai',
+    '--remote-allow-origins=*',
+]
+_ADBLOCK_EXT = r'C:\ProgramData\devin\package\chrome_extensions\adblock'
 DEBUG_PORT = PORT + 200          # unique per VM (loopback ports are machine-wide)
-_USER_DATA = os.path.join(os.environ.get('TEMP', r'C:\Windows\Temp'), f'dao_vm_browser_{PORT}')
+def _user_data_dir(exe):
+    # Per-browser profile dir: chrome and edge profiles are NOT interchangeable,
+    # so keying on the exe basename avoids a stale-profile launch failure when a
+    # previous run used a different browser on the same VM/port.
+    tag = os.path.splitext(os.path.basename(exe))[0].lower()
+    return os.path.join(os.environ.get('TEMP', r'C:\Windows\Temp'),
+                        f'dao_vm_browser_{PORT}_{tag}')
+
+def _find_browsers():
+    return [p for p in _BROWSER_CANDIDATES if os.path.exists(p)]
 
 def _find_browser():
-    for p in _BROWSER_CANDIDATES:
-        if os.path.exists(p):
-            return p
-    return None
+    found = _find_browsers()
+    return found[0] if found else None
 
 def _cdp_http(path, method='GET'):
     req = urllib.request.Request(f'http://127.0.0.1:{DEBUG_PORT}/json{path}', method=method)
@@ -711,34 +754,47 @@ class _CDP:
             pass
 
 def browser_launch(url=None):
-    exe = _find_browser()
-    if not exe:
+    candidates = _find_browsers()
+    if not candidates:
         return {'ok': False, 'error': 'no chrome/edge installed'}
+    # Already up? reuse it (matches Devin's single-CDP-endpoint model).
     try:
-        _cdp_http('/version'); up = True
+        _cdp_http('/version')
+        if url:
+            browser_navigate(url)
+        ver = _cdp_http('/version')
+        return {'ok': True, 'port': DEBUG_PORT, 'reused': True,
+                'version': ver.get('Browser') if isinstance(ver, dict) else None}
     except Exception:
-        up = False
-    if not up:
-        args = [exe, f'--remote-debugging-port={DEBUG_PORT}', f'--user-data-dir={_USER_DATA}',
-                '--no-first-run', '--no-default-browser-check', '--remote-allow-origins=*']
+        pass
+    last_err = None
+    for exe in candidates:
+        udd = _user_data_dir(exe)
+        args = [exe, f'--remote-debugging-port={DEBUG_PORT}', f'--user-data-dir={udd}']
+        args += _DEVIN_CHROME_FLAGS
+        if 'chrome' in os.path.basename(exe).lower() and os.path.isdir(_ADBLOCK_EXT):
+            args.append(f'--load-extension={_ADBLOCK_EXT}')
         if url:
             args.append(url)
-        subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, creationflags=0x00000008 | 0x00000200)
+        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, creationflags=0x00000008 | 0x00000200)
         ver = None
-        for _ in range(40):
+        for _ in range(30):
             time.sleep(0.5)
             try:
                 ver = _cdp_http('/version'); break
             except Exception:
                 ver = None
-        if not ver:
-            return {'ok': False, 'error': 'browser started but CDP endpoint never came up'}
-    elif url:
-        browser_navigate(url)
-    ver = _cdp_http('/version')
-    return {'ok': True, 'port': DEBUG_PORT, 'browser': os.path.basename(exe),
-            'version': ver.get('Browser') if isinstance(ver, dict) else None}
+        if ver:
+            return {'ok': True, 'port': DEBUG_PORT, 'browser': os.path.basename(exe),
+                    'version': ver.get('Browser') if isinstance(ver, dict) else None}
+        # This candidate failed to expose CDP -> kill it and try the next one.
+        last_err = f'{os.path.basename(exe)} started but CDP never came up'
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    return {'ok': False, 'error': last_err or 'no browser could expose CDP'}
 
 def _page_target(create_url=None):
     targets = _cdp_http('/list')
