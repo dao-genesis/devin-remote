@@ -1,6 +1,12 @@
-# dao-proxy-pro · 续作交接 (v9.9.266)
+# dao-proxy-pro · 续作交接 (v9.9.287)
 
 > 道法自然 · 损之又损。本文件给下一个 agent：当前进度、已打通项、仍卡的一处 bug、复现方法、续作清单。
+
+## 〇、最新进展 (v9.9.287 · 道无名·工具描述去名)
+- **根因**：官方工具描述内嵌产品名（`browser_preview`/`edit_notebook` 述 "Cascade"、`check_deploy_status` 述 "Windsurf"），随 `tools` 字段透传给真实渠道；模型把描述里的 "Cascade" 当作自我身份 → 自称 "Cascade"（纯 deepseek 无此现象，属上下文注入而非工具反噬）。
+- **修复**（`vendor/外接api/core/dao_router.js`，`_callProvider` 内、`toolsField` 收尾前）：`_deOfficialName()` 在发往渠道前把工具描述里的 `Cascade`→`you`、`Windsurf`/`Codeium`→`the editor`（与道化 SP「本无名」一致，不动工具名/参数，机制不破）；并给 `_msgSummary` 增 `preview` 全息预览以验证官方身份是否仍漏入消息。
+- **校验**：`node --check dao_router.js` 通过；已随本提交构建 `dao-proxy-pro-9.9.287.vsix`。
+- **141 实机状态（经 DAO Bridge 实测）**：已安装扩展目录 `dao-agi.dao-proxy-pro-9.9.281` 的磁盘文件已是 286+287 级（`source.js` 与仓库一致、`dao_router.js` = 仓库+287），但**运行中的反代进程仍是旧版内存态**（`/origin/ea/overview` 的 `health` 为 null、无 `family_tier_extend`）。`dao_router.js` 改动经 `_eaHotReload` 自动生效；`source.js`（含 285 health）需 Reload Window 才生效。
 
 ## 一、当前版本与入口
 - 版本：`9.9.266`（`package.json`）。已构建 `dao-proxy-pro-9.9.266.vsix`（随本提交入库）。

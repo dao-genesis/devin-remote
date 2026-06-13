@@ -2268,6 +2268,26 @@ async function _callProvider(
       //   修复: 不过滤 · 透传所有工具 · 与官方API完全一致
       //   _KNOWN_TOOL_NAMES 保留用于诊断日志(不用于过滤)
 
+      // ★ v9.9.287 · 道恒无名 · 工具描述去官名 · 反者道之动
+      //   根因: 官方工具描述内嵌产品标识 (browser_preview/edit_notebook 述及
+      //   "Cascade" · check_deploy_status 述及 "Windsurf") · 随 tools 字段透传至
+      //   真实渠道 → 模型读描述见"Cascade"被当作执行体 → 自认为 "Cascade"。
+      //   纯 deepseek 不识此名 · 故必是官方内容流入最上游 (非据工具反推)。
+      //   道义: 三十二章「道恒无名」· 一章「名可名也非恒名也」· 名去则惑除。
+      //   修复: 发往渠道前中性化描述中的官方产品名 → "you"/"the editor"
+      //   (与道化 SP「你本無名」一致 · 以"你"称之) · 不改工具名/参数 · 机制不破。
+      const _deOfficialName = (s) =>
+        typeof s === "string"
+          ? s
+              .replace(/\bCascade\b/g, "you")
+              .replace(/\bWindsurf\b/g, "the editor")
+              .replace(/\bCodeium\b/g, "the editor")
+          : s;
+      for (const _tf of toolsField) {
+        if (_tf && _tf.function)
+          _tf.function.description = _deOfficialName(_tf.function.description);
+      }
+
       if (toolsField.length === 0) toolsField = undefined;
       // ★ v9.9.80 · 诊断: 记录实际传给 provider 的工具名
       _routeDiag(
@@ -2532,15 +2552,22 @@ async function _callProvider(
         _thinking: !!bodyObj.thinking,
         // ★ v9.9.84 · messages 摘要: 排查 reasoning_content 缺失导致 400
         //   道义: 十六章「万物旁作 吾以观其复也」· 观其所缺方知所修
-        _msgSummary: (bodyObj.messages || []).map((m, i) => ({
-          idx: i,
-          role: m.role,
-          hasReasoningContent: "reasoning_content" in m,
-          reasoningContentLen: (m.reasoning_content || "").length,
-          hasToolCalls: !!(m.tool_calls && m.tool_calls.length),
-          toolCallCount: m.tool_calls ? m.tool_calls.length : 0,
-          contentLen: typeof m.content === "string" ? m.content.length : -1,
-        })),
+        _msgSummary: (bodyObj.messages || []).map((m, i) => {
+          const c = typeof m.content === "string" ? m.content : "";
+          // ★ v9.9.287 · 全消息预览 · 验证官方身份(Cascade/Windsurf)是否仍漏入任一消息
+          const preview =
+            c.length > 600 ? c.slice(0, 400) + " …<cut>… " + c.slice(-200) : c;
+          return {
+            idx: i,
+            role: m.role,
+            hasReasoningContent: "reasoning_content" in m,
+            reasoningContentLen: (m.reasoning_content || "").length,
+            hasToolCalls: !!(m.tool_calls && m.tool_calls.length),
+            toolCallCount: m.tool_calls ? m.tool_calls.length : 0,
+            contentLen: typeof m.content === "string" ? m.content.length : -1,
+            preview,
+          };
+        }),
         // ★ 完整 tools 定义 (关键!)
         _tools: toolsField || [],
       };
