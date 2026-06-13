@@ -3734,7 +3734,10 @@ function handleControl(req, res) {
             method: "POST",
             headers: {
               ...testHeaders,
-              "Content-Length": String(testPayload.length),
+              // ★ v9.9.280 · Content-Length 须按字节计 · 非字符数
+              //   根因: 多字节(中文)消息 testPayload.length(字符) < 实际字节 →
+              //         上游收到截断的 JSON → 400 "EOF while parsing a string"
+              "Content-Length": String(Buffer.byteLength(testPayload)),
             },
             timeout: 30000,
             rejectUnauthorized: false,

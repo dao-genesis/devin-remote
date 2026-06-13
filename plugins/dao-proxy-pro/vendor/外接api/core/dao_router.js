@@ -1099,21 +1099,24 @@ function _normalizeModelUid(uid) {
       .toLowerCase();
     if (_routes[lowerKey]) return lowerKey;
   }
-  // 3.5) ★ v9.9.279 · 档位变体兜底 · 剥离 -slow/-fast 等后缀退族基名再匹配
+  // 3.5) ★ v9.9.280 · 档位变体兜底 · 仅延伸"用户显式连线"的族 · 不延伸系统默认桩
   //   道义: 二十五章「道法自然」· 名异而实同 · 守族之常
-  //   仅当精确/形态匹配皆未命中, 且族基名已被用户显式连线时方触发
+  //   关键: 自动播种(_seeded)的 MODEL_SWE_1_6 测试桩不得吞并兄弟档位 →
+  //         swe-1-6-slow 等未显式连线者保持官方透传(免费原生·用户旨意)
+  //   仅当精确/形态匹配皆未命中, 且族基名被用户"显式"(非_seeded)连线时方触发
   const base = _stripVariantSuffix(uid);
   if (base && base !== uid) {
-    if (_routes[base]) return base;
+    const _real = (k) => _routes[k] && !_routes[k]._seeded;
+    if (_real(base)) return base;
     if (!base.startsWith("MODEL_")) {
       const baseModelKey = "MODEL_" + base.replace(/-/g, "_").toUpperCase();
-      if (_routes[baseModelKey]) return baseModelKey;
+      if (_real(baseModelKey)) return baseModelKey;
     } else {
       const baseLowerKey = base
         .replace(/^MODEL_/, "")
         .replace(/_/g, "-")
         .toLowerCase();
-      if (_routes[baseLowerKey]) return baseLowerKey;
+      if (_real(baseLowerKey)) return baseLowerKey;
     }
   }
   // 4) ★ v9.9.59 · 通配符兜底: * → 任何未知模型自动路由
