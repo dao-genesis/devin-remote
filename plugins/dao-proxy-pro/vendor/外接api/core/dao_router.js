@@ -2458,15 +2458,7 @@ async function _callProvider(
     let targetUrl,
       extraHeaders = {};
 
-    if (provCfg.baseUrl && provCfg.noProviderPrefix) {
-      // ── 直连模式: github→Azure (model原名直发) ──
-      bodyObj.model = model;
-      const completionPath = provCfg.completionPath || "/v1/chat/completions";
-      const resolvedBase = await _resolveBaseUrl(provCfg);
-      targetUrl = new URL(resolvedBase.replace(/\/$/, "") + completionPath);
-      if (provCfg.apiKey)
-        extraHeaders["Authorization"] = `Bearer ${provCfg.apiKey}`;
-    } else if (provCfg.baseUrl && provCfg.modelPrefix) {
+    if (provCfg.baseUrl && provCfg.modelPrefix) {
       // ── 070网关前缀模式: cascadeRelay/gpt-5-4-low → 070网关 ──
       bodyObj.model = `${provCfg.modelPrefix}/${model}`;
       const completionPath = provCfg.completionPath || "/v1/chat/completions";
@@ -2474,8 +2466,19 @@ async function _callProvider(
       targetUrl = new URL(resolvedBase.replace(/\/$/, "") + completionPath);
       if (provCfg.apiKey)
         extraHeaders["Authorization"] = `Bearer ${provCfg.apiKey}`;
+    } else if (provCfg.baseUrl) {
+      // ── 直连模式: 有 baseUrl 即直连真实渠道 (model原名直发) ──
+      //   道义: 名实相符 · 配了 baseUrl 就发到 baseUrl · 不再丢给本地兜底网关
+      //   修复: 缺 noProviderPrefix 的真实渠道(如 deepseek/github)曾被错丢到
+      //   _gatewayUrl(127.0.0.1:11435) · 网关未起则 ECONNREFUSED → 回弹
+      bodyObj.model = model;
+      const completionPath = provCfg.completionPath || "/v1/chat/completions";
+      const resolvedBase = await _resolveBaseUrl(provCfg);
+      targetUrl = new URL(resolvedBase.replace(/\/$/, "") + completionPath);
+      if (provCfg.apiKey)
+        extraHeaders["Authorization"] = `Bearer ${provCfg.apiKey}`;
     } else {
-      // ── 兜底网关模式: providerName::model → _gatewayUrl ──
+      // ── 兜底网关模式: 无 baseUrl → providerName::model → _gatewayUrl ──
       bodyObj.model = `${providerName}::${model}`;
       targetUrl = new URL(_gatewayUrl + "/v1/chat/completions");
     }
