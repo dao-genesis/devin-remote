@@ -582,22 +582,43 @@ async function accountOverview(auth) {
 
 // ═══ 会话状态分类 (对话追踪用) ════════════════════════════════════════════
 // v4.6.0 · 五态细分 (问题①: 中途卡住的任何情况都要前端可见):
-//   running:  正常运行中 (streaming/working)
-//   awaiting: 中途停顿·需用户输入/回答问题 (awaiting_input/waiting_for_user/blocked_on_user/ask)
-//   blocked:  额度耗尽/出错/卡死 (quota/credit/error/stuck)
-//   finished: 已完成/已停止 · idle: 空闲/其它
-// 顺序要紧: 先额度→错误→等待输入→运行→终态; "blocked_on_user" 含 blocked 但属 awaiting,
-// 故 awaiting 必在裸 blocked 之前判 (扣其锐·解其纷)。
+//   running:  正常运行中 (streaming/working/coding/planning)
+//   awaiting: 中途停顿·需用户输入/回答问题
+//   blocked:  额度耗尽/出错/卡死 (out_of_quota/usage_limit_exceeded/error)
+//   finished: 已完成/已挂起 · idle: 空闲/其它
+//
+// 实测要点 (对真实 469 会话取证·不臆造): 权威实时状态在 `latest_status_contents`:
+//   { enum:"finished"|..., reason:"user_inactivity"|"out_of_quota"|"usage_limit_exceeded"|"error"|"user_request",
+//     user_action_required: null|{...} }   —— 顶层 status 恒为粗粒度("suspended"), activity_status 为"最后动作"(coding/planning)·非实时。
+//   ∴ 以 latest_status_contents 为主、字符串启发为辅。user_action_required 非空 = 真·等待用户输入(最高优先·即便已挂起)。
+//   终态(enum=finished / status=suspended)归 finished, 不让历史额度耗尽会话反复刷屏前端 (无为·不扰民)。
 function classifySession(s) {
-  const raw = String(s.status || s.activity_status || s.current_activity || "").toLowerCase();
-  if (/(quota|credit|overage|insufficient|exceeded|billing)/.test(raw)) return "blocked";
-  if (/(error|failed|stuck|crash)/.test(raw)) return "blocked";
-  if (/(awaiting_input|awaiting_user|waiting_for_user|waiting_for_input|waiting_input|needs_input|user_input|blocked_on_user|ask_user|awaiting)/.test(raw)) return "awaiting";
-  if (/(running|working|in_progress|streaming|active|started|resumed|busy|thinking|executing)/.test(raw)) return "running";
-  if (/(finished|completed|done|stopped|suspended|expired|exited|sleeping)/.test(raw)) return "finished";
-  if (/blocked/.test(raw)) return "blocked";
-  if (/idle/.test(raw)) return "idle";
-  return "idle";
+  s = s || {};
+  const lsc = s.latest_status_contents || {};
+  const enumV = String(lsc.enum || "").toLowerCase();
+  const reason = String(lsc.reason || "").toLowerCase();
+  const uar = lsc.user_action_required;
+  const status = String(s.status || "").toLowerCase();
+  const act = String(s.activity_status || "").toLowerCase();
+  const cur = String(s.current_activity || "").toLowerCase();
+
+  // 1. 等待用户输入 — 权威信号 user_action_required 非空 → 最高优先 (即便会话已被挂起)
+  if (uar != null && uar !== "" && uar !== false) return "awaiting";
+
+  // 2. 终态: enum=finished 或顶层 suspended/expired/exited/archived → finished
+  //    (历史 out_of_quota/error 已结束的会话不再算"活跃·卡住", 避免前端长期噪声)
+  const terminal = enumV === "finished" || /suspended|expired|exited|archived|deleted/.test(status);
+  if (terminal) return "finished";
+
+  // 3. 进行中(非终态)的细分: 额度/错误 → blocked, 等待 → awaiting, 其余 → running
+  const blob = enumV + " " + reason + " " + status + " " + act + " " + cur;
+  if (/out_of_quota|usage_limit|insufficient|overage|credit|billing|exceeded|quota/.test(blob)) return "blocked";
+  if (/error|failed|stuck|crash/.test(blob)) return "blocked";
+  if (/await|waiting_for_user|waiting_for_input|needs_input|user_input|ask_user|blocked_on_user/.test(blob)) return "awaiting";
+  if (/blocked/.test(blob)) return "blocked";
+  if (/running|working|in_progress|streaming|active|started|resumed|busy|thinking|executing|coding|planning|testing|pr\b/.test(blob)) return "running";
+  // 非终态但状态未知 → 视作运行中(需关注·宁可显示也不漏)
+  return enumV || status ? "running" : "idle";
 }
 // v4.6.0 · 是否"活跃·需关注"(运行/等待/卡住) — 对话未到真正结束的那一步
 function isActiveClass(cls) { return cls === "running" || cls === "awaiting" || cls === "blocked"; }
@@ -607,12 +628,16 @@ function isActiveClass(cls) { return cls === "running" || cls === "awaiting" || 
 async function listRunningSessions(auth) {
   const r = await listSessions(auth, 100);
   const active = (r.sessions || [])
-    .map((s) => ({
-      devinId: s.devin_id || s.session_id || s.id,
-      title: s.title || s.name || "(未命名)",
-      status: s.status || s.activity_status || "",
-      statusClass: classifySession(s),
-    }))
+    .map((s) => {
+      const lsc = s.latest_status_contents || {};
+      return {
+        devinId: s.devin_id || s.session_id || s.id,
+        title: s.title || s.name || "(未命名)",
+        status: (lsc.enum || s.status || s.activity_status || "") + (lsc.reason ? "(" + lsc.reason + ")" : ""),
+        reason: lsc.reason || "",
+        statusClass: classifySession(s),
+      };
+    })
     .filter((s) => isActiveClass(s.statusClass));
   return active;
 }

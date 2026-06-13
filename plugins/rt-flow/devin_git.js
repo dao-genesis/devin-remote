@@ -126,40 +126,54 @@ async function deleteSecret(auth, name) {
 }
 
 // ═══ PAT 注入 / OAuth ════════════════════════════════════════════════════════
-// v4.6.0 · 唯变所适 (问题⑥: 连接 Git 无效): 单一端点+单一字段名易因后端契约漂移而静默失败。
-//   按候选 (端点 × body 字段) 逐个实探, 命中首个 2xx 即真注入; 全部非 2xx 才如实回报。
-//   端点候选: /{orgId}/… · /org-{bare}/… · /integrations/…(无 org)
-//   字段候选: pat · personal_access_token · token · github_pat (不同版本契约)
+// v4.6.0 · 问题⑥根因(对真实 org 取证·不臆造):
+//   端点恒为 POST /{orgId}/integrations/github/pat (其 org-{bare} 写法与之同串;
+//   /organizations/{orgId}/… 与无 org /integrations/… 均 404)。body 字段名必须为 `pat`
+//   (实测其它字段名一律 422 {"loc":["body","pat"],"msg":"Field required"})。
+//   连接成功的真凭实据 = 注入后 org 出现 github_individual_token 连接, 且可达仓库列出目标仓库
+//   (实测注入后仓库异步落库, 约 2-5s 才 surface, 故 connectWithPat 轮询至 repos>0)。
 async function injectGitHubPAT(auth, pat) {
-  const eps = [
-    API + "/" + auth.orgId + "/integrations/github/pat",
-    API + "/org-" + bare(auth) + "/integrations/github/pat",
-    API + "/organizations/" + auth.orgId + "/integrations/github/pat",
-    API + "/integrations/github/pat",
-  ];
-  const bodies = [
-    { pat },
-    { personal_access_token: pat },
-    { token: pat },
-    { github_pat: pat },
-  ];
-  let alreadyRegistered = false, invalidPat = false, lastErr = "";
-  for (const url of eps) {
-    for (const body of bodies) {
-      let r;
-      try { r = await jPost(auth, url, body, 60000); } catch (e) { lastErr = (e && e.message) || "post err"; continue; }
-      if (r.status === 200 || r.status === 201) return { ok: true, via: url };
-      const t = (r.text || "").toLowerCase();
-      if (r.status === 400 && t.includes("already registered")) { alreadyRegistered = true; continue; }
-      if (r.status === 400 && (t.includes("invalid pat") || t.includes("invalid token") || t.includes("bad credentials"))) { invalidPat = true; continue; }
-      // 404/405 = 端点/字段不对, 换下一个候选; 其它状态记录后继续
-      if (r.status !== 404 && r.status !== 405 && r.status !== 422)
-        lastErr = (r.text || "").slice(0, 160) || "status=" + r.status;
-    }
+  const url = API + "/" + auth.orgId + "/integrations/github/pat";
+  let r;
+  try { r = await jPost(auth, url, { pat }, 60000); }
+  catch (e) { return { ok: false, error: (e && e.message) || "post err" }; }
+  if (r.status === 200 || r.status === 201) return { ok: true, via: url };
+  const t = (r.text || "").toLowerCase();
+  if (r.status === 400 && t.includes("already registered"))
+    return { ok: false, alreadyRegistered: true, error: "该组织已注册 GitHub 集成" };
+  if ((r.status === 400 || r.status === 401 || r.status === 403) &&
+      /(invalid|bad credentials|unauthorized|forbidden|expired|permission|scope)/.test(t))
+    return { ok: false, invalidPat: true, error: "PAT 无效/过期/权限不足 (需 repo 权限): " + (r.text || "").slice(0, 120) };
+  return { ok: false, error: (r.text || "").slice(0, 160) || "status=" + r.status };
+}
+
+// v4.6.0 · PAT 主身份 (归一判据): 直查 GitHub /user 取 login, 用于判断现有连接是否已是同一 PAT 主。
+//   (实测: 不同账号可能连到了别的 GitHub 身份 jenna…/rchimiegos…, 须断净改连到本 PAT 主才算"归一同仓")。
+const _patOwnerCache = {};
+async function _patOwnerLogin(pat) {
+  if (pat in _patOwnerCache) return _patOwnerCache[pat];
+  let login = "";
+  try {
+    const r = await cloud.jsonRequest("GET", GH_API + "/user",
+      { Authorization: "Bearer " + pat, "User-Agent": "rt-flow-git", Accept: "application/vnd.github+json" }, null, 20000);
+    if (r.status === 200 && r.json) login = r.json.login || "";
+  } catch (e) {}
+  _patOwnerCache[pat] = login;
+  return login;
+}
+
+// v4.6.0 · 真断该 org 现有全部 Git 连接 (按 name + connection_id 双删) → 返回删除前连接数。
+//   用于"已注册但仓库为 0"的陈旧/僵尸连接复活: 先断净再重注入即可恢复(实测 repos 0→26)。
+async function _disconnectAllConnections(auth) {
+  const gc = await checkGitConnections(auth);
+  const list = gc.connections || [];
+  for (const c of list) {
+    const nm = c.name || c.installation_name || "github";
+    const cid = c.id || c.git_connection_id || c.connection_id;
+    try { await disconnectGitHubConnection(auth, nm, c.host || "github.com"); } catch (e) {}
+    if (cid) { try { await disconnectGitHubPAT(auth, cid); } catch (e) {} }
   }
-  if (invalidPat) return { ok: false, invalidPat: true, error: "PAT 无效/已过期/权限不足 (需 repo 权限)" };
-  if (alreadyRegistered) return { ok: false, alreadyRegistered: true, error: "该组织已有 GitHub App 安装, 将尝试连接现有安装" };
-  return { ok: false, error: lastErr || "所有候选端点均未注入成功(检查 PAT 权限与网络)" };
+  return list.length;
 }
 
 // ═══ 断开族 ════════════════════════════════════════════════════════════════
@@ -306,24 +320,65 @@ async function cleanupStaleConnections(auth, keepName) {
 }
 
 // ═══ 高层组合 · 归一连接 / 状态 ═══════════════════════════════════════════════
-// connectWithPat: 注入 PAT → 落库 GITHUB_PAT 密钥 → 核验已绑身份+可达仓库 → 返回真凭实据
+// connectWithPat: 注入 PAT → (已注册且 0 仓库则先断净再重注入) → 落库密钥 → 轮询可达仓库 → 真凭实据
+//   实测确证的连接成功标准: org 出现 github_individual_token 连接 且 getAccessibleRepos 列出 PAT 主的仓库。
 async function connectWithPat(auth, pat) {
   if (!pat) return { ok: false, error: "无 PAT (请输入或在 ~/.dao/git-pats.json 配置)" };
-  const inj = await injectGitHubPAT(auth, pat);
-  // alreadyRegistered: 组织已有 App 安装, 仍尝试落库密钥并核验现有连接(归一不重复装 App)
+  let inj = await injectGitHubPAT(auth, pat);
+  let ghost = false;
+
+  // 已注册: 安全分流 (实测教训·不臆造·不毁好连接) —
+  //   实测确证: 只有 github_individual_token(本插件 PAT 所建)的连接可被 /pat?connection_id= 真断后重注入复活;
+  //   github_app(OAuth)连接一旦断开, "已注册"标记并不随之清除 ⇒ 账号即落入不可经 API 复原的孤儿态。
+  //   故对 github_app 连接「绝不主动断」, 只如实回报需上官网移除后再连 (无为·不强为)。
+  let appConn = null;
+  if (inj.alreadyRegistered) {
+    const owner = await _patOwnerLogin(pat);
+    const conns0 = await checkGitConnections(auth).catch(() => ({ connections: [] }));
+    const repos0 = await getAccessibleRepos(auth).catch(() => ({ repos: [] }));
+    const list0 = conns0.connections || [];
+    const first = list0[0] || {};
+    const curName = (first.name || "").toLowerCase();
+    const hasRepos = (repos0.repos || []).length > 0;
+    const sameOwner = owner && curName && curName === owner.toLowerCase();
+    const allIndividual = list0.length > 0 && list0.every((c) => /individual/.test((c.type || "").toLowerCase()));
+    if (hasRepos && sameOwner) {
+      inj = { ok: true, via: "existing" };                 // (a) 已归一到本 PAT 主且有仓库 → 幂等成功
+    } else if (list0.length === 0) {
+      ghost = true;                                         // (d) 无连接却已注册 → 平台孤儿态, API 不可清
+    } else if (allIndividual) {
+      // (b/c) individual_token: 连到别的身份 / 或 0 仓库陈旧 → 断净重注入 (实测安全可复活)
+      await _disconnectAllConnections(auth);
+      try { await disconnectGitHubUser(auth); } catch (e) {}
+      await sleep(1500);
+      const re = await injectGitHubPAT(auth, pat);
+      inj = re;
+    } else {
+      // (e) github_app 连接(OAuth): 不主动断 (断后不可经 API 复原), 如实回报
+      appConn = { name: first.name || "?", type: first.type || "github_app", repos: (repos0.repos || []).length };
+      inj = { ok: false, appConn: true,
+        error: "该账号经 GitHub App 连到身份 [" + appConn.name + "](" + appConn.repos + "仓库)。经 App 的连接断开后无法再用 PAT 重连(平台侧限制·会落入孤儿态)。如需归一到本 PAT 主, 请在 app.devin.ai 该组织 Settings→Integrations 手动移除该 GitHub App 后再连。" };
+    }
+  }
+
   const secOk = await ensureGithubPatSecret(auth, pat);
-  await sleep(600);
-  const [user, repos, conns] = await Promise.all([
-    getGitHubUser(auth).catch(() => ({ ok: false, login: "" })),
-    getAccessibleRepos(auth).catch(() => ({ ok: false, repos: [] })),
-    checkGitConnections(auth).catch(() => ({ ok: false, count: 0 })),
-  ]);
+  // 仓库异步落库 (实测约 2-5s), 轮询至 repos>0 或超时 (~12s)
+  let user = { login: "" }, repos = { repos: [] }, conns = { count: 0 };
+  for (let i = 0; i < 6; i++) {
+    await sleep(i === 0 ? 800 : 2200);
+    [user, repos, conns] = await Promise.all([
+      getGitHubUser(auth).catch(() => ({ ok: false, login: "" })),
+      getAccessibleRepos(auth).catch(() => ({ ok: false, repos: [] })),
+      checkGitConnections(auth).catch(() => ({ ok: false, count: 0 })),
+    ]);
+    if ((repos.repos || []).length > 0) break;
+  }
   const repoCount = (repos.repos || []).length;
   const connCount = conns.count || 0;
   // PAT 连接下 /integrations/github/user 常空, 连接元数据的 name 即已绑 GitHub 身份, 作兜底。
   const connName = ((conns.connections || [])[0] || {});
   const login = user.login || connName.name || connName.installation_name || "";
-  const ok = (inj.ok || inj.alreadyRegistered || connCount > 0 || repoCount > 0);
+  const ok = repoCount > 0 || connCount > 0 || inj.ok;
   return {
     ok,
     login,
@@ -333,7 +388,11 @@ async function connectWithPat(auth, pat) {
     secret: secOk,
     alreadyRegistered: !!inj.alreadyRegistered,
     invalidPat: !!inj.invalidPat,
-    error: ok ? "" : inj.error || "连接未生效(0 连接·0 仓库)",
+    ghost,
+    appConn: appConn || null,
+    error: ok ? "" : (ghost
+      ? "平台侧孤儿注册(已注册但无连接·API 不可清) — 需在 app.devin.ai 该组织 Settings→Integrations 手动移除 GitHub 后重连"
+      : (inj.error || "连接未生效(0 连接·0 仓库)")),
   };
 }
 
