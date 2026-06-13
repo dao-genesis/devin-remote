@@ -1,4 +1,4 @@
-// WAM · 万法归宗 v3.10.1 · 零额度紧急重触 · 切号防御双完善 · 道法自然
+// WAM · 万法归宗 v4.4.0 · 文件夹备份·HTML/MD双视图·自动备份阈值·自动清理 · 道法自然
 //
 // 本源需求: 用户在 Cascade panel 发消息 → WAM 自动切健康号 (用户无为 · 插件无不为)
 //
@@ -748,7 +748,7 @@ const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.3.0";
+const VERSION = "4.4.1";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -7955,6 +7955,9 @@ ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanS
 <button onclick="dvBackupAll()" class="conv-btn" title="备份所有(或已选)账号的全部 Devin Cloud 对话·增量">&#128190; 全部备份</button>
 <button onclick="dvWipeSel()" class="conv-btn conv-btn-s" title="水过无痕·清理已选账号的全部 Devin Cloud 痕迹">&#127754; 批量清理</button>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" ${_cfg("devinCloudAutoBackup", false) ? "checked" : ""} onchange="dvToggleAuto(this.checked)">自动备份</label>
+<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.4.0 · 备份完成且额度低于阈值时自动水过无痕清理"><input type="checkbox" id="dvAutoClean" ${_cfg("devinCloudAutoCleanup", false) ? "checked" : ""} onchange="dvToggleCleanup(this.checked)">自动清理</label>
+<label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.4.0 · 额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="${_cfg("devinCloudAutoBackupThreshold", 3)}" min="0" step="1" style="width:30px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetThreshold(this.value)"></label>
+<select style="font-size:9px;background:#1e1e1e;color:#888;border:1px solid #444;border-radius:3px;padding:1px 2px" title="v4.4.0 · 备份模式: folder=文件夹(HTML/MD·推荐) zip=传统ZIP" onchange="dvSetMode(this.value)"><option value="folder" ${_cfg("devinCloudBackupMode", "folder") === "folder" ? "selected" : ""}>文件夹</option><option value="zip" ${_cfg("devinCloudBackupMode", "folder") === "zip" ? "selected" : ""}>ZIP</option></select>
 </div>
 <div class="dv-tb dv-tb-git" title="多个 Devin 账号归一连接到同一个 GitHub：先勾选账号，再点批量连Git">
 <span class="dv-git-tag">&#128279; 批量归一</span>
@@ -8007,6 +8010,9 @@ function dvExportMd(){vscode.postMessage({type:'devinExportMd',indices:_selIx()}
 function dvBackupAll(){vscode.postMessage({type:'devinBackupAll',indices:_selIx()});}
 function dvWipeSel(){const ix=_selIx();if(!ix.length){showToast('\\u2717 先勾选账号');return;}vscode.postMessage({type:'devinWipe',indices:ix});}
 function dvToggleAuto(on){vscode.postMessage({type:'devinToggleAuto',on:!!on});}
+function dvToggleCleanup(on){vscode.postMessage({type:'devinToggleCleanup',on:!!on});}
+function dvSetThreshold(v){vscode.postMessage({type:'devinSetThreshold',value:+v});}
+function dvSetMode(v){vscode.postMessage({type:'devinSetMode',value:v});}
 function dvTog(id){const e=document.getElementById(id);if(e)e.style.display=(e.style.display==='none'||!e.style.display)?'block':'none';}
 function gitBatchConnect(){const ix=_selIx();if(!ix.length){showToast('\u2717 \u8bf7\u5148\u52fe\u9009\u8d26\u53f7','fail');return;}const el=document.getElementById('gitBatchPat');const pat=el?el.value:'';vscode.postMessage({type:'gitConnectBatch',indices:ix,pat:pat});}
 function gitBatchDisconnect(){const ix=_selIx();if(!ix.length){showToast('\u2717 \u8bf7\u5148\u52fe\u9009\u8d26\u53f7','fail');return;}vscode.postMessage({type:'gitDisconnectBatch',indices:ix});}
@@ -8238,14 +8244,57 @@ async function _dvAutoBackupRun() {
   const emails = devinCloud.cachedEmails();
   if (!emails.length) return;
   const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+  const mode = _cfg("devinCloudBackupMode", "folder");
+  const threshold = Math.max(0, +_cfg("devinCloudAutoBackupThreshold", 3) || 3);
+  const autoCleanup = !!_cfg("devinCloudAutoCleanup", false);
+  const cleanupThreshold = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", 3) || 3);
   for (const acc of _store.accounts) {
     if (!emails.includes((acc.email || "").toLowerCase())) continue;
     const auth = devinCloud.getCachedAuth(acc.email);
     if (!auth) continue;
     try {
-      await devinCloud.backupAccount(auth, { targetDir: dir, incremental: true });
-    } catch {}
+      // v4.4.0: 检查额度阈值 · 低于阈值时触发全量备份
+      let billing = null;
+      try { billing = await devinCloud.getBilling(auth); } catch {}
+      const totalCredits = _billingTotalDollars(billing);
+      if (totalCredits !== null && totalCredits < threshold) {
+        // 额度低于阈值 → 全量备份(文件夹/ZIP)
+        log("auto-backup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " < $" + threshold + " → 全量备份");
+        if (mode === "folder") {
+          await devinCloud.backupAccountFullFolders(auth, { targetDir: dir, incremental: false });
+        } else {
+          await devinCloud.backupAccountFull(auth, { targetDir: dir, incremental: false });
+        }
+        // v4.4.0: 自动清理 · 备份完成后水过无痕
+        if (autoCleanup && totalCredits < cleanupThreshold) {
+          log("auto-cleanup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " < $" + cleanupThreshold + " → 自动清理");
+          try {
+            const rep = await devinCloud.wipeAccount(auth, { onProgress: (m) => log("auto-cleanup: " + m) });
+            log("auto-cleanup: " + acc.email + " 完成 · 对话" + rep.sessions.deleted + " 知识" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted);
+            try { await devinGit.robustDisconnectGit(auth); } catch (ge) { log("auto-cleanup git: " + ge.message); }
+            _dvOverviewCache.delete(acc.email.toLowerCase());
+            _notify("info", "[" + acc.email.split("@")[0] + "] 自动清理完成 · 已回归本源");
+          } catch (ce) {
+            log("auto-cleanup error: " + acc.email + ": " + ce.message);
+          }
+        }
+      } else {
+        // 正常增量备份
+        if (mode === "folder") {
+          await devinCloud.backupAccountFolders(auth, { targetDir: dir, incremental: true });
+        } else {
+          await devinCloud.backupAccount(auth, { targetDir: dir, incremental: true });
+        }
+      }
+    } catch (e) {
+      log("auto-backup error: " + acc.email + ": " + (e.message || e));
+    }
   }
+}
+// v4.4.0: 从 billing 提取可用余额(美元) · 委托 devin_cloud.billingBalance(可单测·实测字段)
+// 返回 null = 无法判定 → 调用方据此跳过破坏性自动清理(防误删健康号)
+function _billingTotalDollars(billing) {
+  return devinCloud.billingBalance(billing);
 }
 
 // v4.0 · 导出对话备份目录为 MD 文档 · 道法自然 · 万物负阴而抱阳
@@ -9544,7 +9593,10 @@ async function handleWebviewMessage(msg) {
           const r = await _dvAuthFor(i);
           if (!r.ok) continue;
           try {
-            const fb = await devinCloud.backupAccountFull(r.auth, { targetDir: dir, incremental: true });
+            const mode = _cfg("devinCloudBackupMode", "folder");
+            const fb = mode === "folder"
+              ? await devinCloud.backupAccountFullFolders(r.auth, { targetDir: dir, incremental: true })
+              : await devinCloud.backupAccountFull(r.auth, { targetDir: dir, incremental: true });
             const res = fb.conversations || { backedUp: 0, skipped: 0 };
             const sc = (fb.snapshot && fb.snapshot.counts) || {};
             done++;
@@ -9607,7 +9659,10 @@ async function handleWebviewMessage(msg) {
           for (const s of good) {
             _toast("\u23F3 留底 " + s.email.split("@")[0] + " …");
             try {
-              const fb = await devinCloud.backupAccountFull(s.auth, { targetDir: dir, incremental: true, onProgress: (m) => _toast("\u23F3 " + m) });
+              const bkMode = _cfg("devinCloudBackupMode", "folder");
+              const fb = bkMode === "folder"
+                ? await devinCloud.backupAccountFullFolders(s.auth, { targetDir: dir, incremental: true, onProgress: (m) => _toast("\u23F3 " + m) })
+                : await devinCloud.backupAccountFull(s.auth, { targetDir: dir, incremental: true, onProgress: (m) => _toast("\u23F3 " + m) });
               const sc = (fb.snapshot && fb.snapshot.counts) || {};
               _toast("\u2713 已留底 " + s.email.split("@")[0] + ": 对话" + (fb.conversations ? fb.conversations.backedUp + fb.conversations.skipped : 0) + " 知识" + (sc.knowledge || 0) + " 剧本" + (sc.playbooks || 0) + " 密钥" + (sc.secrets || 0));
             } catch (e) {
@@ -9703,6 +9758,29 @@ async function handleWebviewMessage(msg) {
         if (msg.on) _dvStartAuto();
         else _dvStopAuto();
         _toast(msg.on ? "\u2713 已开启 Devin Cloud 自动增量备份" : "已关闭自动备份");
+        break;
+      }
+      // v4.4.0 · 自动清理开关
+      case "devinToggleCleanup": {
+        await vscode.workspace
+          .getConfiguration("wam")
+          .update("devinCloudAutoCleanup", !!msg.on, vscode.ConfigurationTarget.Global);
+        _toast(msg.on ? "\u2713 已开启自动清理(额度低于阈值时备份后水过无痕)" : "已关闭自动清理");
+        break;
+      }
+      // v4.4.0 · 设置自动备份/清理阈值
+      case "devinSetThreshold": {
+        const v = Math.max(0, +(msg.value) || 3);
+        await vscode.workspace.getConfiguration("wam").update("devinCloudAutoBackupThreshold", v, vscode.ConfigurationTarget.Global);
+        await vscode.workspace.getConfiguration("wam").update("devinCloudAutoCleanupThreshold", v, vscode.ConfigurationTarget.Global);
+        _toast("\u2713 自动备份/清理阈值: $" + v);
+        break;
+      }
+      // v4.4.0 · 设置备份模式
+      case "devinSetMode": {
+        const mode = msg.value === "zip" ? "zip" : "folder";
+        await vscode.workspace.getConfiguration("wam").update("devinCloudBackupMode", mode, vscode.ConfigurationTarget.Global);
+        _toast("\u2713 备份模式: " + (mode === "folder" ? "文件夹(HTML/MD)" : "ZIP"));
         break;
       }
       // v3.7.5 · 对话手动关闭 · 反者道之动 · 道法自然

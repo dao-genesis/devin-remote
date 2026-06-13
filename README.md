@@ -20,11 +20,11 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\too
 
 | 板块 | 版本 | 下载 |
 |------|------|------|
-| ① dao-vsix · 全功能面板 | 1.2.9 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-vsix-1.2.9.vsix) |
+| ① dao-vsix · 全功能面板 | 1.3.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-vsix-1.3.0.vsix) |
 | ② dao-bridge · 内网穿透 | 3.1.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-bridge-3.1.0.vsix) |
 | ③ devin-git-auth · 多账号 Git | 2.3.2 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/devin-git-auth-2.3.2.vsix) |
 | ④ dao-proxy-pro · 模型路由 | 9.9.277 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-proxy-pro-9.9.277.vsix) |
-| ⑤ rt-flow · Cloud 备份/wipe | 4.3.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/rt-flow-4.3.0.vsix) |
+| ⑤ rt-flow · Cloud 备份/wipe | 4.4.1 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/rt-flow-4.4.1.vsix) |
 | 模块 · dao-export · 全量导出 | 1.3.3 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-devin-export-1.3.3.vsix) |
 
 > 全部资产见 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)。vm-replica 模块为纯源码/文档，见 [`modules/vm-replica/`](modules/vm-replica/)。
@@ -90,7 +90,7 @@ devin-remote/
 
 ## ① 五核心插件 — plugins/
 
-### dao-vsix v1.2.9 · Devin 全功能面板 + 路由官网
+### dao-vsix v1.3.0 · Devin 全功能面板 + 路由官网 + 内网穿透集成
 
 核心精简两板块：本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录（根挂载代理 + Content-Length + Request 透传）。零输入获取 cog_ API Key（POST /service-users + auth1 自动换取），彻底移除面板所有手动 API Key 输入/引导。v1.2.0：增补测试聊天内置存根通道，与 dao-proxy-pro v9.9.276 配套。官网注入加固：session-token 与 auth1 严格隔离。
 
@@ -114,7 +114,7 @@ devin-remote/
 
 **VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.277.vsix` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/7094683e-c9f3-4461-96f6-fadd15c0aabf)
 
-### rt-flow v4.3.0 · Devin Cloud 接入（备份 + 回归本源）⭐新
+### rt-flow v4.4.1 · Devin Cloud 接入（备份 + 回归本源）⭐新
 
 第五板块，零依赖 `devin_cloud.js` 底层封装 Devin Cloud 全部 API（邮箱+密码→auth1 登录、概览、对话追踪、CRUD、备份、wipe）。两大核心模块：
 
@@ -123,7 +123,7 @@ devin-remote/
 
 > 实测修复多个「臆造成功」缺陷：剧本/密钥删除端点纠正（`/api/playbooks|secrets/{id}`）、会话改归档（平台不支持硬删）、Git 改用 `git-permissions` 真撤授权（连接元数据平台无删除端点，如实回报）。
 
-**VSIX**: `plugins/rt-flow/rt-flow-4.3.0.vsix` · **底层**: `plugins/rt-flow/devin_cloud.js` · **变更史**: `plugins/rt-flow/changelog.md` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/9ec20452-cb5f-4423-9204-f06088f75079)
+**VSIX**: `plugins/rt-flow/rt-flow-4.4.1.vsix` · **底层**: `plugins/rt-flow/devin_cloud.js` · **变更史**: `plugins/rt-flow/changelog.md` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/9ec20452-cb5f-4423-9204-f06088f75079)
 
 ---
 

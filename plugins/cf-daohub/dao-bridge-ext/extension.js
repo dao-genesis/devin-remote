@@ -18,7 +18,7 @@ const cp = require("child_process");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TRY_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-const BRIDGE_VERSION = "3.1.0";
+const BRIDGE_VERSION = "3.2.0";
 
 function daoDir() {
   const d = path.join(os.homedir(), ".dao", "bridge");
@@ -91,28 +91,45 @@ function spawnEnv(proxy) {
 
 const CF_BIN_NAME = process.platform === "win32" ? "cloudflared.exe" : "cloudflared";
 
+// 真二进制判定 — 帛书·「質真如渝」: 排除 npm/choco 包装脚本(.cmd/.ps1/无扩展名 shim, 仅几百字节),
+// cp.spawn(无 shell) 无法执行此类 shim → 正是 141 台式机隧道无法启动的根因。
+function isRealCloudflared(p) {
+  try {
+    if (!p || p.indexOf(path.sep) < 0 || !fs.existsSync(p)) return false;
+    const st = fs.statSync(p);
+    if (!st.isFile() || st.size < 1000000) return false; // 真二进制 ≈50MB; shim 仅几百字节
+    if (process.platform === "win32" && !/\.exe$/i.test(p)) return false; // Windows 必须是 .exe(可被 CreateProcess 执行)
+    return true;
+  } catch (e) { return false; }
+}
 function cloudflaredCandidates(ctx) {
   const cfgPath = vscode.workspace.getConfiguration("daoBridge").get("cloudflaredPath") || "";
+  const home = os.homedir();
+  const appdata = process.env.APPDATA || path.join(home, "AppData", "Roaming");
   return [
     cfgPath,
     // 插件自带(随 VSIX 分发, 离线即用) — 帛书·「大丈夫居其厚」
     ctx ? path.join(ctx.extensionPath, "bin", CF_BIN_NAME) : "",
     ctx ? path.join(ctx.extensionPath, "bin", "cloudflared.exe") : "",
     ctx ? path.join(ctx.extensionPath, "bin", "cloudflared") : "",
-    path.join(os.homedir(), ".dao", "bin", "cloudflared.exe"),
-    path.join(os.homedir(), ".dao", "bin", "cloudflared"),
+    path.join(home, ".dao", "bin", "cloudflared.exe"),
+    path.join(home, ".dao", "bin", "cloudflared"),
+    // npm/choco/winget 全局安装时缓存的真二进制(非 shim) — 帛书·「善用人者為之下」
+    path.join(appdata, "npm", "node_modules", "cloudflared", "bin", "cloudflared.exe"),
+    path.join(appdata, "npm", "node_modules", "cloudflared", "bin", "cloudflared"),
     "cloudflared.exe",
     "cloudflared",
   ].filter(Boolean);
 }
 function findCloudflared(ctx) {
   for (const c of cloudflaredCandidates(ctx)) {
-    try { if (c.indexOf(path.sep) >= 0 && fs.existsSync(c) && fs.statSync(c).size > 1000000) return c; } catch (e) {}
+    if (isRealCloudflared(c)) return c;
   }
+  // PATH 兜底: 遍历 where/command -v 全部结果, 跳过 shim, 只取真二进制
   try {
-    const probe = process.platform === "win32" ? "where cloudflared" : "command -v cloudflared";
-    const out = cp.execSync(probe, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(/\r?\n/)[0];
-    if (out && fs.existsSync(out)) return out;
+    const probe = process.platform === "win32" ? "where cloudflared" : "command -v cloudflared 2>/dev/null; which -a cloudflared 2>/dev/null";
+    const lines = cp.execSync(probe, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(/\r?\n/);
+    for (const ln of lines) { const p = ln.trim(); if (isRealCloudflared(p)) return p; }
   } catch (e) {}
   return "";
 }
@@ -397,6 +414,15 @@ class WorkspaceServer {
             workspace: wsInfo, agents_online: this.agentRegistry.size,
           });
         }
+        // 隧道回退链诊断 — 本地Agent热修复时定位
+        if (p === "/api/attempt-log" && req.method === "GET") {
+          const br = this._bridgeRef;
+          return send(res, 200, {
+            mode: br ? br.mode : "", protocol: br ? br.protocol : "", proxy: br ? br.proxy : "",
+            url: br ? br.url : "", cfBin: br ? br.cfBin : "", lastErr: br ? br.lastErr : "",
+            attempts: br ? br.attemptLog : [],
+          });
+        }
         // 导出MD文档端点
         if (p === "/api/export-cloud-md" && req.method === "GET") {
           const br = this._bridgeRef;
@@ -433,12 +459,14 @@ class WorkspaceServer {
             if (p === "/api/ls" && req.method === "POST") {
               const dir = withinRoot(root, j.path || ".");
               if (!dir) return send(res, 403, { error: "path escapes workspace root" });
+              if (!fs.existsSync(dir)) return send(res, 404, { error: "not found", path: dir });
               const items = fs.readdirSync(dir, { withFileTypes: true }).map((d) => ({ name: d.name, dir: d.isDirectory() }));
               return send(res, 200, { path: dir, items });
             }
             if (p === "/api/read" && req.method === "POST") {
               const fp = withinRoot(root, j.path || "");
               if (!fp) return send(res, 403, { error: "path escapes workspace root" });
+              if (!fs.existsSync(fp)) return send(res, 404, { error: "not found", path: fp });
               return send(res, 200, { path: fp, content: fs.readFileSync(fp, "utf8") });
             }
             if (p === "/api/write" && req.method === "POST") {
@@ -485,7 +513,40 @@ class WorkspaceServer {
               if (j.tunnelToken !== undefined) updates.push(cfg.update("tunnelToken", j.tunnelToken, true));
               if (j.hostname !== undefined) updates.push(cfg.update("hostname", j.hostname, true));
               if (j.localPort !== undefined) updates.push(cfg.update("localPort", j.localPort, true));
+              if (j.cloudflaredPath !== undefined) updates.push(cfg.update("cloudflaredPath", j.cloudflaredPath, true));
               Promise.all(updates).then(() => send(res, 200, { ok: true })).catch((e) => send(res, 500, { error: e.message }));
+              return;
+            }
+            // ── 本地Agent深度操控：镜像 UI 命令到 HTTP（表里相依）──
+            // 重启隧道（快速隧道 URL 会变；调用后重新读取 conn.json 取新 url/token）
+            if (p === "/api/bridge/restart" && req.method === "POST") {
+              const br = this._bridgeRef;
+              send(res, 200, { ok: true, note: "tunnel restarting; re-read ~/.dao/bridge/conn.json for new url/token" });
+              setTimeout(async () => { try { br.stop(); await br.start(); } catch (e) {} }, 200);
+              return;
+            }
+            // 退出账号/重置 → 清凭证残留 + 回到无账号快速隧道
+            if (p === "/api/account/logout" && req.method === "POST") {
+              const br = this._bridgeRef;
+              send(res, 200, { ok: true, note: "account reset + restart to no-account quick tunnel; re-read conn.json" });
+              setTimeout(async () => { try { await br.resetAccount(); br.stop(); await br.start(); } catch (e) {} }, 200);
+              return;
+            }
+            // 重生成并落盘两个 MD 文档（云端/本地 Agent 接入指南）
+            if (p === "/api/export/refresh" && req.method === "POST") {
+              const br = this._bridgeRef;
+              if (!br) return send(res, 503, { error: "bridge not ready" });
+              br.writeArtifacts();
+              return send(res, 200, {
+                ok: true,
+                cloud_md_path: br.mdPath(), local_md_path: br.localAgentMdPath(),
+                cloud_md: br.generateCloudAgentMd(), local_md: br.generateLocalAgentMd(),
+              });
+            }
+            // 热加载：重载窗口让扩展宿主加载新 extension.js（会打断当前 UI，谨慎调用）
+            if (p === "/api/self/reload" && req.method === "POST") {
+              send(res, 200, { ok: true, note: "reloading window in 600ms; extension host restarts (disruptive to active UI)" });
+              setTimeout(() => { try { vscode.commands.executeCommand("workbench.action.reloadWindow"); } catch (e) {} }, 600);
               return;
             }
           } catch (e) { return send(res, 500, { error: String(e && e.message) }); }
@@ -819,6 +880,12 @@ class Bridge {
       "| POST | `/api/broadcast` | `{type,payload}` | 广播 |",
       "| GET | `/api/export-cloud-md` | - | 导出本文档 |",
       "| GET | `/api/export-local-md` | - | 导出本地Agent配置文档 |",
+      "| GET | `/api/attempt-log` | - | 隧道回退链诊断 |",
+      "| GET/POST | `/api/config` | `{tunnelToken,hostname,localPort,cloudflaredPath}` | 读/写插件配置 |",
+      "| POST | `/api/bridge/restart` | - | 重启隧道(URL会变,重读conn.json) |",
+      "| POST | `/api/account/logout` | - | 退出账号→无账号快速隧道 |",
+      "| POST | `/api/export/refresh` | - | 重生成并落盘两个MD |",
+      "| POST | `/api/self/reload` | - | 重载窗口(热加载新插件代码·会打断UI) |",
       "",
       "## Python SDK",
       "",
@@ -845,71 +912,108 @@ class Bridge {
   generateLocalAgentMd() {
     const wsInfo = workspaceInfo();
     const ts = new Date().toISOString();
+    const base = "http://127.0.0.1:" + this.srv.port;
     return [
-      "# ☯ DAO Bridge · 本地Agent配置接口文档",
+      "# ☯ DAO Bridge · 本地Agent底层操控手册",
       "",
-      "> 本文档供本机其他Agent(如Devin、Cursor等)读取，用于接入和配置 DAO Bridge 插件。",
+      "> 道法自然 · 本文档自动生成。本机任何 Agent(Devin/Cursor/脚本)读此文档，",
+      "> 即可比用户更深地接入插件底层：配置隧道、退出/重置账号、热重启、热加载、",
+      "> 自诊断、自修复。外固其本，内圆其心，表里相依，浑然一统。",
       "",
-      "## 本地接入",
+      "## 一、接入点",
       "",
       "```",
-      "Local URL: http://127.0.0.1:" + this.srv.port,
+      "Local URL: " + base + "   (本机直连·最稳，无隧道依赖)",
+      "Public URL: " + (this.url || "(隧道启动中…)") + "   (公网直连·云端Agent用)",
       "Token:     " + this.srv.token,
-      "Auth:      Authorization: Bearer <Token>",
+      "Auth:      Authorization: Bearer <Token>   (/api/health 免鉴权)",
       "```",
       "",
-      "## Agent注册",
+      "> Token 与最新 URL 始终可从 `~/.dao/bridge/conn.json` 读取(重启隧道后 URL 会变)。",
       "",
-      "本地Agent需先注册才能被Bridge管理：",
+      "## 二、最小可用 SDK（复制即用）",
       "",
-      "```",
-      'POST /api/agent/register {"agent_id":"my-agent","hostname":"...","capabilities":["shell"]}',
-      "```",
+      "```python",
+      "import urllib.request, json",
+      'BASE  = "' + base + '"   # 本机直连；公网用 conn.json 里的 url',
+      'TOKEN = "' + this.srv.token + '"',
+      "def api(method, path, body=None, t=60):",
+      "    d = json.dumps(body).encode() if body is not None else None",
+      '    h = {"Authorization":"Bearer "+TOKEN, "Content-Type":"application/json"}',
+      "    req = urllib.request.Request(BASE+path, data=d, headers=h, method=method)",
+      "    return json.loads(urllib.request.urlopen(req, timeout=t).read())",
       "",
-      "注册后定期发送心跳保持在线状态：",
-      "",
-      "```",
-      'POST /api/agent/heartbeat {"agent_id":"my-agent"}',
-      "```",
-      "",
-      "## 配置读写",
-      "",
-      "读取当前插件配置：",
-      "```",
-      "GET /api/config",
+      'def sh(cmd, t=120):  # 在本机执行任意命令(最强底层入口)',
+      '    return api("POST","/api/exec-sync",{"cmd":cmd,"timeout":t})["result"]',
       "```",
       "",
-      "修改插件配置（如切换隧道模式）：",
+      "## 三、完整 API",
+      "",
+      "| 方法 | 路径 | Body | 说明 |",
+      "|---|---|---|---|",
+      "| GET | `/api/health` | - | 存活检查(免鉴权) |",
+      "| GET | `/api/info` | - | 工作区/机器信息 |",
+      "| GET | `/api/agents` | - | 在线Agent列表 |",
+      "| GET | `/api/bridge-state` | - | 隧道完整状态(url/port/mode/pid) |",
+      "| GET | `/api/attempt-log` | - | 隧道回退链诊断(自修复依据) |",
+      "| GET | `/api/config` | - | 读取插件配置 |",
+      "| POST | `/api/config` | `{tunnelToken,hostname,localPort,cloudflaredPath}` | 写配置 |",
+      "| POST | `/api/agent/register` | `{agent_id,hostname,capabilities}` | Agent注册 |",
+      "| POST | `/api/agent/heartbeat` | `{agent_id}` | Agent心跳 |",
+      "| POST | `/api/exec` / `/api/exec-sync` | `{cmd,cwd,timeout}` | 执行命令(底层万能入口) |",
+      "| POST | `/api/ls` / `/api/read` / `/api/write` | `{path,content}` | 工作区内文件操作 |",
+      "| POST | `/api/broadcast` | `{type,payload}` | 广播到在线Agent |",
+      "| GET | `/api/export-cloud-md` / `/api/export-local-md` | - | 导出接入文档 |",
+      "| POST | `/api/bridge/restart` | - | 重启隧道(URL会变,重读conn.json) |",
+      "| POST | `/api/account/logout` | - | 退出账号→无账号快速隧道 |",
+      "| POST | `/api/export/refresh` | - | 重生成并落盘两个MD |",
+      "| POST | `/api/self/reload` | - | 重载窗口·热加载新插件代码(会打断UI) |",
+      "",
+      "## 四、底层操控工作流",
+      "",
+      "### 1) 注册并保持在线",
+      "```python",
+      'api("POST","/api/agent/register",{"agent_id":"dao-local","hostname":"local","capabilities":["shell","file_read","file_write"]})',
+      '# 之后定期: api("POST","/api/agent/heartbeat",{"agent_id":"dao-local"})',
       "```",
-      'POST /api/config {"tunnelToken":"...","hostname":"...","localPort":9910}',
+      "",
+      "### 2) 配置隧道 / 注册账户(命名隧道·固定域名)",
+      "```python",
+      'api("POST","/api/config",{"tunnelToken":"<CF隧道令牌>","hostname":"bridge.example.com"})',
+      'api("POST","/api/bridge/restart")   # 应用配置，重启后从 conn.json 取新URL',
       "```",
       "",
-      "## 可用API",
+      "### 3) 退出/重置账号(回到无账号快速隧道)",
+      "```python",
+      'api("POST","/api/account/logout")   # 清凭证残留+自动备份, 重启为 quick 隧道',
+      "```",
       "",
-      "| 方法 | 路径 | 说明 |",
-      "|---|---|---|",
-      "| GET | `/api/health` | 存活检查(免鉴权) |",
-      "| GET | `/api/info` | 工作区信息 |",
-      "| GET | `/api/agents` | 在线Agent列表 |",
-      "| GET | `/api/bridge-state` | 隧道完整状态 |",
-      "| GET | `/api/config` | 读取插件配置 |",
-      "| POST | `/api/config` | 修改插件配置 |",
-      "| POST | `/api/agent/register` | Agent注册 |",
-      "| POST | `/api/agent/heartbeat` | Agent心跳 |",
-      "| POST | `/api/exec` | 执行命令 |",
-      "| POST | `/api/exec-sync` | 同步执行命令 |",
-      "| POST | `/api/ls` | 列目录 |",
-      "| POST | `/api/read` | 读文件 |",
-      "| POST | `/api/write` | 写文件 |",
+      "### 4) 自诊断(打不通时定位根因)",
+      "```python",
+      'st  = api("GET","/api/bridge-state")      # url 是否为空 / mode / tunnelPid',
+      'log = api("GET","/api/attempt-log")       # 回退链每档 quic/http2 是否注册成功',
+      'who = sh("where cloudflared")             # 确认是否取到真 .exe (非 npm shim)',
+      "```",
       "",
-      "## 当前状态",
+      "### 5) 热修复插件本体(热推进/热改进/热修复)",
+      "```python",
+      '# a. 用 exec 把新版 extension.js 落到插件目录(exec 不受工作区根限制):',
+      'ext = sh("powershell -c \\"(Get-ChildItem $env:USERPROFILE\\\\.windsurf\\\\extensions,$env:USERPROFILE\\\\.vscode\\\\extensions -Dir -ErrorAction SilentlyContinue | ? Name -like \'dao.dao-bridge*\').FullName\\"")',
+      'sh("copy /Y C:\\\\path\\\\to\\\\new-extension.js \\"<上面的目录>\\\\extension.js\\"")',
+      '# b. 热加载使新代码生效(会重载窗口):',
+      'api("POST","/api/self/reload")',
+      "```",
+      "",
+      "## 五、当前状态",
       "",
       "| 项 | 值 |",
       "|---|---|",
       "| 公网URL | " + (this.url || "(未连接)") + " |",
-      "| 本地端口 | " + this.srv.port + " |",
-      "| 模式 | " + this.mode + " |",
-      "| 主机 | " + wsInfo.host + " |",
+      "| 本地URL | " + base + " |",
+      "| 模式 | " + this.mode + (this.protocol ? " · " + this.protocol : "") + " |",
+      "| 主机 | " + wsInfo.host + " (" + wsInfo.user + ") |",
+      "| 工作区根 | `" + wsInfo.root + "` |",
+      "| 版本 | " + BRIDGE_VERSION + " |",
       "| 更新于 | " + ts + " |",
       "",
       "*道法自然 · 无为而无不为*",

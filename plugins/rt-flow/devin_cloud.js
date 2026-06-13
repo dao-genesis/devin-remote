@@ -498,6 +498,34 @@ async function getBilling(auth) {
   return { ok: false, billing: null };
 }
 
+// 从 billing 提取「可用余额(美元)」 · 返回 null = 无法判定(调用方禁止据此做破坏性自动清理)
+// 实测 Devin billing/status 字段: available_credits / overage_credits(可负=已欠) /
+//   has_subscription_or_credits(布尔权威) / is_subscription_valid。
+// 旧 v4.4.0 读 prompt_credits/flow_credits(后端根本不返回)→ 健康号被误判 $0 → 误触发 wipe。
+function billingBalance(billing) {
+  if (!billing) return null;
+  const b = billing.billing || billing;
+  const num = (...keys) => {
+    for (const k of keys) {
+      const v = b[k];
+      if (typeof v === "number" && isFinite(v)) return v;
+    }
+    return null;
+  };
+  const avail = num("available_credits", "availableCredits");
+  const overage = num("overage_credits", "overageCredits");
+  const dollars = (avail || 0) + Math.max(0, overage || 0);
+  // 权威布尔: 明确有订阅/有额度 → 视为充足, 绝不当作低额触发清理
+  if (b.has_subscription_or_credits === true || b.is_subscription_valid === true) {
+    return dollars > 0 ? dollars : 9999;
+  }
+  // 明确无订阅且无额度 → 返回真实余额(通常 0)
+  if (b.has_subscription_or_credits === false) return dollars;
+  // 字段不全/未知 → 仅当能拿到任一额度数值时才给值, 否则 null(安全)
+  if (avail !== null || overage !== null) return dollars;
+  return null;
+}
+
 // 账号本源概览 (下拉框用): 对话(着重) + 知识库/剧本/密钥/Git/额度 简要
 async function accountOverview(auth) {
   // 大成若缺: 任一子端点瞬态失败不应毁整份概览。allSettled 逐个降级,
@@ -832,19 +860,83 @@ function userAnswerText(ev) {
     .filter(Boolean)
     .join("\n");
 }
-// 对话转录 (人看的)
+// 事件归类 (HTML/MD 共用): 把 Devin Cloud 真实事件流映射到四类气泡
+// 实测事件名 (非臆造): 用户 initial_user_message/user_message/user_question_answered ·
+// Devin devin_message · 思考 devin_thoughts/one_line_thoughts ·
+// 工具 shell_process_started/multi_edit_result/computer_use/mcp_tool_call/
+//      search_file_commands/web_search/web_get_contents/todo_update。
+// 返回 { kind:"user"|"devin"|"think"|"tool", role, text?, detail? } 或 null(噪声事件跳过)。
+function classifyEvent(ev) {
+  if (!ev || typeof ev !== "object") return null;
+  const t = ev.type;
+  switch (t) {
+    case "initial_user_message":
+    case "user_message":
+      return { kind: "user", role: "用户", text: extractMessageText(ev.message).replace(/^User:\s*/, "") };
+    case "user_question_answered": {
+      const txt = userAnswerText(ev);
+      return txt ? { kind: "user", role: "用户(回答)", text: txt } : null;
+    }
+    case "devin_message":
+      return { kind: "devin", role: "Devin", text: extractMessageText(ev.message) };
+    case "devin_thoughts": {
+      const txt = extractMessageText(ev.message);
+      return txt ? { kind: "think", role: "思考", text: txt } : null;
+    }
+    case "one_line_thoughts": {
+      const txt = ev.short || ev.summary || "";
+      return txt ? { kind: "think", role: "思考", text: String(txt) } : null;
+    }
+    case "shell_process_started":
+      return { kind: "tool", role: "🖥️ shell", detail: String(ev.command || "") };
+    case "shell_process_completed":
+    case "shell_process_completed_background": {
+      const code = ev.exit_code == null ? "" : String(ev.exit_code);
+      // 成功完成不单列(命令已在 started 显示); 仅非零退出码作为工具气泡留痕
+      if (code && code !== "0") return { kind: "tool", role: "🖥️ shell · 退出码 " + code, detail: String(ev.output_trunc || "") };
+      return null;
+    }
+    case "multi_edit_result": {
+      const files = (ev.file_updates || []).map((f) => (f.action_type || "edit") + " " + (f.file_path || "")).join("\n");
+      return { kind: "tool", role: "✏️ 文件编辑", detail: files };
+    }
+    case "computer_use": {
+      const acts = (ev.actions || []).map((a) => a && a.action_type).filter(Boolean).join(", ");
+      return { kind: "tool", role: "🖱️ 电脑操作", detail: acts };
+    }
+    case "mcp_tool_call": {
+      let detail = String(ev.tool_input || "");
+      if (ev.output_trunc) detail += (detail ? "\n→ " : "") + String(ev.output_trunc);
+      return { kind: "tool", role: "🔌 " + (ev.tool_name || ev.server || "mcp"), detail };
+    }
+    case "search_file_commands": {
+      const cmds = (ev.search_commands || []).map((c) => (c.command_name || "search") + ": " + (c.regex || c.query || "") + (c.path ? " @ " + c.path : "")).join("\n");
+      return { kind: "tool", role: "🔍 文件搜索", detail: cmds };
+    }
+    case "web_search":
+      return { kind: "tool", role: "🌐 网络搜索", detail: String(ev.query || "") + ((ev.result_urls || []).length ? "\n" + ev.result_urls.join("\n") : "") };
+    case "web_get_contents":
+      return { kind: "tool", role: "🌐 抓取网页", detail: (ev.urls || []).join("\n") };
+    case "todo_update": {
+      const todos = (ev.todos || []).map((td) => "- [" + (td.status === "completed" ? "x" : " ") + "] " + (td.content || "")).join("\n");
+      return { kind: "tool", role: "📋 待办更新", detail: todos };
+    }
+    default:
+      return null;
+  }
+}
+
+// 对话转录 (人看的) — 四类气泡: 👤用户 / 🤖Devin / 💭思考 / 🔧工具
 function buildConversationMd(title, devinId, events) {
   const lines = ["# 对话: " + title, "", "- Session: `" + devinId + "`", "- 事件数: " + events.length, ""];
   for (const ev of events) {
-    const t = ev.type;
-    if (t === "initial_user_message" || t === "user_message") {
-      lines.push("## 👤 用户  " + evTs(ev), "", extractMessageText(ev.message), "");
-    } else if (t === "user_question_answered") {
-      const txt = userAnswerText(ev);
-      if (txt) lines.push("## 👤 用户(回答)  " + evTs(ev), "", txt, "");
-    } else if (t === "devin_message") {
-      lines.push("## 🤖 Devin  " + evTs(ev), "", extractMessageText(ev.message), "");
-    }
+    const c = classifyEvent(ev);
+    if (!c) continue;
+    const ts = evTs(ev);
+    if (c.kind === "user") lines.push("## 👤 " + c.role + "  " + ts, "", c.text || "", "");
+    else if (c.kind === "devin") lines.push("## 🤖 Devin  " + ts, "", c.text || "", "");
+    else if (c.kind === "think") lines.push("### 💭 思考  " + ts, "", "> " + String(c.text || "").replace(/\n/g, "\n> "), "");
+    else if (c.kind === "tool") lines.push("### " + c.role + "  " + ts, "", c.detail ? "```\n" + String(c.detail).slice(0, 4000) + "\n```" : "", "");
   }
   return lines.join("\n");
 }
@@ -1169,6 +1261,228 @@ async function snapshotAccountData(auth, opts) {
   return { ok: true, account: auth.email, dir: snapDir, counts, partial, errors: snapErrors };
 }
 
+// ═══ v4.4.0 · 文件夹备份 (ZIP→文件夹 · HTML/MD双视图 · 道法自然) ════════════
+// 结构: <root>/<账号名>/<对话名称_关键词_ID末8位>/
+//   ├── 对话.html         ← 用户看: 与 Devin AI 网页一致的可视化呈现
+//   ├── 对话.md           ← AI 看: Markdown 纯文本, 可直接喂给 Agent
+//   ├── 对话_agent.json   ← 全量机器可读: 全部事件+产出文件索引
+//   ├── _meta.json        ← 元数据(devinId/标题/事件数/时间戳)
+//   └── files/            ← 产出文件(源码/日志等)
+
+// HTML 生成: 与 Devin AI 网页呈现一致的对话 HTML
+function buildConversationHtml(title, devinId, events, opts) {
+  opts = opts || {};
+  const account = opts.account || "";
+  const ts = new Date().toISOString();
+  const msgBlocks = [];
+  for (const ev of events) {
+    const c = classifyEvent(ev);
+    if (!c) continue;
+    const time = evTs(ev);
+    const tsSpan = time ? ' <span class="ts">' + time + '</span>' : '';
+    if (c.kind === "tool") {
+      const detail = _escHtml(String(c.detail || "").slice(0, 4000));
+      msgBlocks.push(
+        '<div class="msg msg-tool"><div class="avatar">🔧</div>' +
+        '<div class="bubble bubble-tool"><div class="role">' + _escHtml(c.role) + tsSpan + '</div>' +
+        (detail ? '<details><summary>详情</summary><pre>' + detail + '</pre></details>' : '') +
+        '</div></div>'
+      );
+    } else {
+      const cls = c.kind === "user" ? "user" : c.kind === "devin" ? "ai" : "think";
+      const av = c.kind === "user" ? "👤" : c.kind === "devin" ? "🤖" : "💭";
+      const txt = _escHtml(c.text || "");
+      msgBlocks.push(
+        '<div class="msg msg-' + cls + '"><div class="avatar">' + av + '</div>' +
+        '<div class="bubble bubble-' + cls + '"><div class="role">' + _escHtml(c.role) + tsSpan + '</div>' +
+        '<div class="body">' + _mdToHtml(txt) + '</div></div></div>'
+      );
+    }
+  }
+  return '<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n' +
+    '<title>' + _escHtml(title) + ' · Devin 对话备份</title>\n' +
+    '<style>\n' +
+    ':root{--bg:#0d1117;--fg:#c9d1d9;--user-bg:#1a3a5c;--ai-bg:#161b22;--tool-bg:#1c1f26;--think-bg:#1a1a2e;--border:#30363d;--accent:#58a6ff}\n' +
+    'body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px}\n' +
+    '.header{background:#010409;border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;gap:12px}\n' +
+    '.header h1{margin:0;font-size:18px;color:#fff;font-weight:600}\n' +
+    '.header .meta{color:#8b949e;font-size:12px}\n' +
+    '.container{max-width:900px;margin:0 auto;padding:24px 16px}\n' +
+    '.msg{display:flex;gap:12px;margin:16px 0;align-items:flex-start}\n' +
+    '.avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;background:var(--border)}\n' +
+    '.bubble{flex:1;border-radius:12px;padding:12px 16px;line-height:1.6;overflow-wrap:break-word}\n' +
+    '.bubble-user{background:var(--user-bg);border:1px solid #1f4e79}\n' +
+    '.bubble-ai{background:var(--ai-bg);border:1px solid var(--border)}\n' +
+    '.bubble-tool{background:var(--tool-bg);border:1px solid var(--border);font-size:12px}\n' +
+    '.bubble-think{background:var(--think-bg);border:1px solid #2d2d5e;font-style:italic;opacity:.85}\n' +
+    '.role{font-size:12px;font-weight:600;color:var(--accent);margin-bottom:4px}\n' +
+    '.ts{color:#8b949e;font-weight:400}\n' +
+    '.body p{margin:6px 0}\n' +
+    '.body pre{background:#010409;border:1px solid var(--border);border-radius:6px;padding:12px;overflow-x:auto;font-size:13px}\n' +
+    '.body code{background:#010409;padding:2px 6px;border-radius:4px;font-size:13px}\n' +
+    'details{margin:4px 0}\n' +
+    'summary{cursor:pointer;color:var(--accent)}\n' +
+    'details pre{max-height:300px;overflow:auto}\n' +
+    '.footer{text-align:center;padding:24px;color:#484f58;font-size:12px;border-top:1px solid var(--border);margin-top:32px}\n' +
+    '</style>\n</head>\n<body>\n' +
+    '<div class="header"><h1>🔮 ' + _escHtml(title) + '</h1>' +
+    '<div class="meta">Session: ' + _escHtml(devinId) + (account ? ' · 账号: ' + _escHtml(account) : '') + ' · 事件: ' + events.length + '</div></div>\n' +
+    '<div class="container">\n' + msgBlocks.join("\n") + '\n</div>\n' +
+    '<div class="footer">RT Flow v4.4.0 备份 · ' + ts + ' · 道法自然</div>\n' +
+    '</body>\n</html>';
+}
+function _escHtml(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function _mdToHtml(escaped) {
+  // 极简 MD→HTML: 代码块/行内代码/段落 (已 HTML-escaped 输入)
+  let s = escaped;
+  // 代码块 ```...```
+  s = s.replace(/```([^`]*?)```/g, '<pre><code>$1</code></pre>');
+  // 行内代码 `...`
+  s = s.replace(/`([^`]+?)`/g, '<code>$1</code>');
+  // 段落(双换行)
+  s = s.replace(/\n\n/g, '</p><p>');
+  // 单换行 → <br>
+  s = s.replace(/\n/g, '<br>');
+  return '<p>' + s + '</p>';
+}
+
+// 对话备份为文件夹 (v4.4.0: 替代 ZIP · HTML/MD/JSON/files 四位一体)
+// 文件夹名: <对话名称>_<ID末8位>  (可读 + 唯一)
+async function backupOneConversationFolder(auth, sess, accountDir, opts) {
+  opts = opts || {};
+  const devinId = sess.devin_id || sess.devinId || sess.session_id || sess.id;
+  const title = sess.title || sess.name || "未命名";
+  const events = await getEventStream(auth, devinId);
+
+  // 增量判断
+  const state = readJson(DC_BACKUP_STATE, {});
+  const sk = backupStateKey(auth, devinId);
+  if (opts.incremental !== false && state[sk] && state[sk].eventCount === events.length) {
+    return { devinId, title, skipped: true, reason: "no-new-events", eventCount: events.length };
+  }
+
+  const detail = await getSessionDetail(auth, devinId);
+  const shortId = String(devinId).replace(/^devin-/, "").slice(0, 8);
+  const folderName = safeName(title, 50) + "_" + shortId;
+  const convDir = path.join(accountDir, folderName);
+  // 覆盖型更新 (水过无痕): 同一对话(devinId)的标题若变化(Devin 运行中常自动改名),
+  // 旧文件夹名 != 新文件夹名。把旧文件夹原地改名复用, 而非新建副本留下孤儿。
+  const prevFolder = state[sk] && state[sk].folder;
+  if (prevFolder && prevFolder !== folderName) {
+    const prevDir = path.join(accountDir, prevFolder);
+    try {
+      if (fs.existsSync(prevDir)) {
+        if (!fs.existsSync(convDir)) fs.renameSync(prevDir, convDir);
+        else fs.rmSync(prevDir, { recursive: true, force: true });
+      }
+    } catch {}
+  }
+  ensureDir(convDir);
+
+  // 产出文件
+  const fileIndex = [];
+  const finalState = new Map();
+  (function walk(o) {
+    if (!o || typeof o !== "object") return;
+    if (Array.isArray(o)) return o.forEach(walk);
+    if (o.file_path && o.contents_key) finalState.set(o.file_path, o.contents_key);
+    for (const v of Object.values(o)) walk(v);
+  })(events);
+  const changes = Array.from(finalState.entries()).map(([p, k]) => ({ path: p, key: k }));
+  const allKeys = Array.from(new Set(changes.map((c) => c.key)));
+  if (allKeys.length) {
+    const filesDir = path.join(convDir, "files");
+    ensureDir(filesDir);
+    const urlMap = await resolvePresignedUrls(auth, devinId, allKeys);
+    const cache = new Map();
+    await runPool(allKeys, CFG.downloadConcurrency, async (key) => {
+      const info = urlMap.get(key);
+      if (!info) return;
+      try {
+        cache.set(key, await downloadFile(info.url, info.headers));
+      } catch (e) {
+        fileIndex.push({ key, error: String(e && e.message ? e.message : e) });
+      }
+    });
+    for (const ch of changes) {
+      const data = cache.get(ch.key);
+      if (!data) continue;
+      const rel = ch.path
+        .replace(/^[A-Za-z]:[\\/]/, "")
+        .replace(/^[\\/]+/, "")
+        .replace(/\\/g, "/")
+        .split("/")
+        .map((p) => safeName(p, 60))
+        .join("/");
+      const dest = path.join(filesDir, rel);
+      ensureDir(path.dirname(dest));
+      try { fs.writeFileSync(dest, data); } catch {}
+      fileIndex.push({ path: ch.path, file: "files/" + rel, size: data.length });
+    }
+  }
+
+  // HTML 视图 (用户看)
+  const html = buildConversationHtml(title, devinId, events, { account: auth.email });
+  try { fs.writeFileSync(path.join(convDir, "对话.html"), html, "utf8"); } catch {}
+
+  // MD 视图 (AI 看)
+  const md = buildConversationMd(title, devinId, events);
+  try { fs.writeFileSync(path.join(convDir, "对话.md"), md, "utf8"); } catch {}
+
+  // Agent JSON (全量机器可读)
+  const agentJson = buildAgentDoc(title, devinId, detail, events, fileIndex);
+  try { fs.writeFileSync(path.join(convDir, "对话_agent.json"), agentJson, "utf8"); } catch {}
+
+  // 元数据
+  const meta = {
+    devinId, title, account: auth.email, orgId: auth.orgId,
+    eventCount: events.length, producedFiles: fileIndex.length,
+    backedUpAt: new Date().toISOString(),
+  };
+  writeJson(path.join(convDir, "_meta.json"), meta);
+
+  state[sk] = { eventCount: events.length, backedUpAt: Date.now(), folder: folderName };
+  writeJson(DC_BACKUP_STATE, state);
+  return { devinId, title, skipped: false, eventCount: events.length, producedFiles: fileIndex.length, folder: convDir };
+}
+
+// 文件夹备份某账号全部对话 (增量) → <root>/<账号名>/
+async function backupAccountFolders(auth, opts) {
+  opts = opts || {};
+  const root = opts.targetDir || DC_BACKUP_DEFAULT;
+  const prog = typeof opts.onProgress === "function" ? opts.onProgress : () => {};
+  const accountDir = path.join(root, safeName(auth.email, 80));
+  ensureDir(accountDir);
+  const r = await listSessions(auth, 1000);
+  const sessions = r.sessions || [];
+  const result = { ok: true, account: auth.email, dir: accountDir, total: sessions.length, backedUp: 0, skipped: 0, failed: 0, items: [] };
+  for (let i = 0; i < sessions.length; i++) {
+    prog("备份 " + (i + 1) + "/" + sessions.length + " ...");
+    try {
+      const one = await backupOneConversationFolder(auth, sessions[i], accountDir, opts);
+      result.items.push(one);
+      one.skipped ? result.skipped++ : result.backedUp++;
+    } catch (e) {
+      result.failed++;
+      result.items.push({ error: String(e && e.message ? e.message : e) });
+    }
+  }
+  prog("账号备份完成: 新备份" + result.backedUp + " 跳过" + result.skipped + " 失败" + result.failed);
+  return result;
+}
+
+// 完整本源备份(文件夹版) = 文件夹对话备份 + 账号数据全量快照
+async function backupAccountFullFolders(auth, opts) {
+  opts = opts || {};
+  let conversations = null, convError = null;
+  try { conversations = await backupAccountFolders(auth, opts); }
+  catch (e) { convError = String((e && e.message) || e); }
+  const snapshot = await snapshotAccountData(auth, opts);
+  return { ok: true, account: auth.email, conversations, convError, snapshot };
+}
+
 // 完整本源备份 = 会话 ZIP(增量) + 账号数据全量快照. 供「备份并清空」一步到位。
 async function backupAccountFull(auth, opts) {
   opts = opts || {};
@@ -1181,21 +1495,38 @@ async function backupAccountFull(auth, opts) {
 }
 
 // ═══ 备份浏览 + 快速解锁(解压) ════════════════════════════════════════════
-// 列出备份根下「账号 → 对话 ZIP」树, 供前端浏览。
+// v4.4.0: 列出备份根下「账号 → 对话 ZIP/文件夹」树, 供前端浏览。
 function listBackups(root) {
   root = root || DC_BACKUP_DEFAULT;
   const out = { root, accounts: [] };
   let dirs = [];
   try { dirs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return out; }
   for (const d of dirs) {
+    if (d.name.startsWith("_")) continue; // 跳过快照目录
     const accDir = path.join(root, d.name);
-    let files = [];
-    try { files = fs.readdirSync(accDir).filter((f) => f.toLowerCase().endsWith(".zip")); } catch {}
-    const convs = files.map((f) => {
+    let entries = [];
+    try { entries = fs.readdirSync(accDir, { withFileTypes: true }); } catch {}
+    const convs = [];
+    // ZIP 文件
+    for (const e of entries) {
+      if (!e.isFile() || !e.name.toLowerCase().endsWith(".zip")) continue;
       let size = 0, mtime = 0;
-      try { const st = fs.statSync(path.join(accDir, f)); size = st.size; mtime = st.mtimeMs; } catch {}
-      return { name: f, path: path.join(accDir, f), size, mtime };
-    }).sort((a, b) => b.mtime - a.mtime);
+      try { const st = fs.statSync(path.join(accDir, e.name)); size = st.size; mtime = st.mtimeMs; } catch {}
+      convs.push({ name: e.name, path: path.join(accDir, e.name), size, mtime, type: "zip" });
+    }
+    // v4.4.0: 文件夹备份 (含 _meta.json 的目录)
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith("_")) continue;
+      const metaPath = path.join(accDir, e.name, "_meta.json");
+      if (!fs.existsSync(metaPath)) continue;
+      let mtime = 0, meta = {};
+      try { const st = fs.statSync(metaPath); mtime = st.mtimeMs; } catch {}
+      try { meta = JSON.parse(fs.readFileSync(metaPath, "utf8")); } catch {}
+      const htmlPath = path.join(accDir, e.name, "对话.html");
+      const hasHtml = fs.existsSync(htmlPath);
+      convs.push({ name: e.name, path: path.join(accDir, e.name), mtime, type: "folder", title: meta.title || "", eventCount: meta.eventCount || 0, hasHtml });
+    }
+    convs.sort((a, b) => b.mtime - a.mtime);
     out.accounts.push({ account: d.name, dir: accDir, count: convs.length, conversations: convs });
   }
   out.accounts.sort((a, b) => b.count - a.count);
@@ -1427,6 +1758,8 @@ module.exports = {
   listSecrets,
   getGitConnections,
   getBilling,
+  billingBalance,
+  classifyEvent,
   accountOverview,
   classifySession,
   listRunningSessions,
@@ -1444,6 +1777,11 @@ module.exports = {
   backupOneConversation,
   snapshotAccountData,
   backupAccountFull,
+  // v4.4.0 · 文件夹备份 (HTML/MD双视图 · 道法自然)
+  buildConversationHtml,
+  backupOneConversationFolder,
+  backupAccountFolders,
+  backupAccountFullFolders,
   listBackups,
   unlockBackup,
   // tags

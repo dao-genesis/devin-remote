@@ -2,6 +2,63 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.4.1 (2026-06-13) · 实践到底 · 真机三缺陷修复 (道法自然 · 实践中发现, 实践中解决)
+
+> *知不知, 尚矣; 不知知, 病矣* —— v4.4.0 未在真号实跑, 三处臆造皆经 Devin Cloud 真账号(lcld/beasley/rioskolton 等)直连后端揪出并复证修复。
+
+### 修 · bug1 覆盖型更新失效 (孤儿文件夹 · 你最关心的"水过无痕")
+- 现象(实测复现): 文件夹名 = `safeName(标题)_ID末8`。同一对话(devinId 不变)在 Devin
+  运行中标题常被自动改写 → 新备份按新标题**新建**文件夹, 旧文件夹沦为孤儿, 同一对话被复制成多份, 非真覆盖。
+- 治法: `backup_state.json` 已按 devinId 记录上次 `folder`。备份前若新文件夹名 != 旧名,
+  把旧文件夹**原地改名复用**(`fs.renameSync`); 若新名已存在则删旧名残留。一对话恒一文件夹, 真覆盖。
+
+### 修 · bug2 自动清理误删健康号 (数据丢失风险)
+- 现象(实测复现): 阈值判断读 `prompt_credits`/`flow_credits` —— Devin `billing/status` **根本不返回**这两字段,
+  恒得 0 → 有额度的健康号(如 rioskolton: overage_credits=+33.27, has_subscription_or_credits=true)被误判 $0 →
+  触发全量备份, 若开自动清理则**直接 wipe**(删全部会话/知识/剧本/密钥 + 断 Git)。
+- 治法: 新 `devinCloud.billingBalance()`(可单测) —— 以实测字段 `available_credits + max(0, overage_credits)` 计余额,
+  权威布尔 `has_subscription_or_credits`/`is_subscription_valid` 为真即视为充足(返 9999, 绝不触发清理),
+  字段不全/未知一律返 `null` → 调用方跳过破坏性清理。`_billingTotalDollars` 改为委托此函数。
+
+### 修 · bug3 备份 HTML/MD 丢"思考/工具"两类气泡 (与官网不一致)
+- 现象(实测复现): 代码匹配 `thinking`/`tool_call`/`tool_result` —— Devin Cloud **无此事件名**。
+  真实事件: 思考 `devin_thoughts`/`one_line_thoughts`; 工具 `shell_process_started`/`multi_edit_result`/
+  `computer_use`/`mcp_tool_call`/`search_file_commands`/`web_search`/`web_get_contents`/`todo_update`。
+  致 472 思考 + 上千工具事件**全数丢失**, 备份只剩用户+Devin 两类。
+- 治法: 新增共用 `classifyEvent()` 按真实事件名映射四类气泡, HTML 与 MD 同源复用。
+  实测某 202 事件会话: 由原 ~3 气泡 → 1 用户 / 2 Devin / 22 思考 / 49 工具, 与官网呈现一致。
+
+## v4.4.0 (2026-06-13) · 文件夹备份 · HTML/MD双视图 · 自动备份阈值 · 自动清理 · 道法自然
+
+> *天下之物生于有，有生于无。* —— 备份从ZIP进化为文件夹，HTML可视化让用户如临其境，MD让AI一目了然；额度阈值驱动自动备份与清理，无为而无不为。
+
+### 新增 · 文件夹备份 (ZIP→文件夹 · HTML/MD双视图 · devin_cloud.js)
+- 备份结构从 ZIP 进化为文件夹: `<账号名>/<对话名称_ID末8位>/`
+  - `对话.html` — 用户看: 与 Devin AI 网页一致的暗色主题可视化呈现 (用户/AI/工具/思考 四类消息各有标识色)
+  - `对话.md` — AI 看: Markdown 纯文本, 可直接喂给 Agent 或作文档引用
+  - `对话_agent.json` — 全量机器可读: 全部事件 + 产出文件索引
+  - `_meta.json` — 元数据 (devinId/标题/事件数/时间戳/账号)
+  - `files/` — 产出文件 (源码/日志/截图等完整留底)
+- 新 `buildConversationHtml()`: CSS 暗色主题 · 用户👤/AI🤖/工具🔧/思考💭 四类气泡 · 工具调用可展开详情 · 响应式布局
+- 新 `backupOneConversationFolder()` / `backupAccountFolders()` / `backupAccountFullFolders()`: 文件夹版增量备份全链路
+- 备份模式可配置: `wam.devinCloudBackupMode` = `folder`(默认·推荐) 或 `zip`(兼容旧版)
+- 前端工具栏新增模式切换下拉: 实时切换 文件夹/ZIP 模式
+- `listBackups()` 同时识别 ZIP 和文件夹备份, 前端浏览面板统一展示
+
+### 新增 · 自动备份额度阈值 (额度驱动 · 无为而无不为)
+- `wam.devinCloudAutoBackupThreshold` (默 $3): 账号额度低于此阈值时, 自动触发全量备份(非增量)
+- 定时轮询时自动检测各账号 billing 额度, 低于阈值 → 全量备份 + 账号数据快照 (知识库/剧本/密钥/Git)
+- 前端工具栏新增阈值输入框: `$` + 数字输入, 实时调整阈值
+
+### 新增 · 自动清理 (备份→清理→回归本源 · 水过无痕)
+- `wam.devinCloudAutoCleanup` (默 false): 开启后, 额度低于阈值且备份完成 → 自动执行水过无痕(删对话/知识/剧本/密钥/Git)
+- `wam.devinCloudAutoCleanupThreshold` (默 $3): 自动清理的额度阈值
+- 前端工具栏新增「自动清理」开关: checkbox 一键开关
+- 自动清理含 `robustDisconnectGit`: Git 连接彻底断开, 回归完全本源态
+
+### 强化 · 批量备份 / 备份并清空 支持新模式
+- `devinBackupAll` / `devinWipe(备份并清空)` 均自动检测 `devinCloudBackupMode` 配置, 使用对应模式备份
+
 ## v4.3.0 (2026-06-12) · 批量归一 · 多 Devin 绑同一 GitHub · Devin Cloud 板块可查看 · 一键清除真解绑
 
 > *为学者日益，为道者日损。* —— 底层功能推进到底(日益)，用户操作四两拨千斤(日损)；用户近于无为无感，系统无不为。

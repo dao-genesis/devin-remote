@@ -2,7 +2,7 @@
 	"name": "rt-flow",
 	"displayName": "Runtime Flow",
 	"description": "Runtime flow management · adaptive scheduling · 三板块统一: Cascade + Devin Cloud + Git(GitHub PAT 归一连接)",
-	"version": "4.3.0",
+	"version": "4.4.1",
 	"publisher": "devaid",
 	"repository": {
 		"type": "git",
@@ -190,7 +190,28 @@
 				"wam.devinCloudBackupDir": {
 					"type": "string",
 					"default": "",
-					"description": "第五板块 · Devin Cloud 备份目录 (空=~/.wam/devin_cloud_backups). 结构: <账号名>/<对话ID末8位>_<对话名>.zip"
+					"description": "第五板块 · Devin Cloud 备份目录 (空=~/.wam/devin_cloud_backups). v4.4.0: 文件夹结构 <账号名>/<对话名称_ID末8位>/"
+				},
+				"wam.devinCloudBackupMode": {
+					"type": "string",
+					"enum": ["folder", "zip"],
+					"default": "folder",
+					"description": "v4.4.0 · 备份模式: folder=文件夹(HTML/MD双视图·持久化运行·推荐) zip=传统ZIP打包"
+				},
+				"wam.devinCloudAutoBackupThreshold": {
+					"type": "number",
+					"default": 3,
+					"description": "v4.4.0 · 自动备份额度阈值 (美元·默认3). 账号额度低于此值时自动触发全量备份"
+				},
+				"wam.devinCloudAutoCleanup": {
+					"type": "boolean",
+					"default": false,
+					"description": "v4.4.0 · 自动清理(道法自然·水过无痕). 额度低于阈值且自动备份完成后，自动清理账号全部痕迹回归本源"
+				},
+				"wam.devinCloudAutoCleanupThreshold": {
+					"type": "number",
+					"default": 3,
+					"description": "v4.4.0 · 自动清理额度阈值 (美元·默认3·须≤自动备份阈值). 低于此值且备份完成后自动执行水过无痕"
 				},
 				"wam.devinCloudRunPollMin": {
 					"type": "number",
