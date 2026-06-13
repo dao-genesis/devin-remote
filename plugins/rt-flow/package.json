@@ -2,7 +2,7 @@
 	"name": "rt-flow",
 	"displayName": "Runtime Flow",
 	"description": "Runtime flow management · adaptive scheduling · 三板块统一: Cascade + Devin Cloud + Git(GitHub PAT 归一连接)",
-	"version": "4.4.1",
+	"version": "4.5.0",
 	"publisher": "devaid",
 	"repository": {
 		"type": "git",
@@ -210,8 +210,33 @@
 				},
 				"wam.devinCloudAutoCleanupThreshold": {
 					"type": "number",
+					"default": 1,
+					"description": "v4.5.0 · 自动清理额度阈值 (美元·默认1·须≤自动备份阈值). 额度 ≤ 此值且全量备份成功后, 自动执行水过无痕(先全量备份本地留底→再删全部对话/知识/剧本/密钥+断Git)"
+				},
+				"wam.devinCloudConvQuotaCap": {
+					"type": "boolean",
+					"default": false,
+					"description": "v4.5.0 · 对话额度上限 (per-conversation quota cap · 知止不殆). 开启后实时跟踪各账号余额, 自动算出每对话使用额度上限=余额-缓冲; 余额≤停止阈值时自动中停运行中对话, 防耗尽"
+				},
+				"wam.devinCloudConvQuotaBuffer": {
+					"type": "number",
 					"default": 3,
-					"description": "v4.4.0 · 自动清理额度阈值 (美元·默认3·须≤自动备份阈值). 低于此值且备份完成后自动执行水过无痕"
+					"description": "v4.5.0 · 对话额度上限缓冲 (美元·默认3). 每对话上限 = 账号实时余额 - 此缓冲 (余额$70→上限$67, $55→$52). 随余额下降实时下调"
+				},
+				"wam.devinCloudConvStopThreshold": {
+					"type": "number",
+					"default": 3,
+					"description": "v4.5.0 · 对话中停阈值 (美元·默认3). 账号余额 ≤ 此值时自动中停其运行中对话 (知止·防耗尽)"
+				},
+				"wam.devinCloudConvPollActiveSec": {
+					"type": "number",
+					"default": 30,
+					"description": "v4.5.0 · 对话上限·使用中轮询周期 (秒·默认30·最小10). 仅当账号确认使用中(余额下降或有运行对话)时提速轮询"
+				},
+				"wam.devinCloudConvPollIdleMin": {
+					"type": "number",
+					"default": 30,
+					"description": "v4.5.0 · 对话上限·空闲轮询周期 (分钟·默认30·最小1). 日常无谓频繁, 仅周期性确认是否进入使用中"
 				},
 				"wam.devinCloudRunPollMin": {
 					"type": "number",
