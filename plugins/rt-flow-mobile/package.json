@@ -1,0 +1,11 @@
+{
+  "name": "rt-flow-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "app.devin.ai 浏览器版多账号自动切号 Chromium 扩展 (安卓 Kiwi/Edge + 桌面 Chrome)",
+  "scripts": {
+    "test": "node test/unit.test.js",
+    "icons": "node icons/gen_icons.js"
+  },
+  "license": "MIT"
+}

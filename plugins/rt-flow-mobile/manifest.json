@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "RT Flow Mobile · 道法自然",
+  "version": "1.0.0",
+  "description": "app.devin.ai 浏览器版多账号自动切号 — 账号池登录拿 auth1 → localStorage 零 GUI 自动登录 → 余额监控 → 自动切到下一健康号。移植自 rt-flow + dao-vsix，适配安卓 Chromium 浏览器 (Kiwi/Edge) 与桌面 Chrome。",
+  "permissions": ["storage", "alarms", "scripting", "tabs", "notifications"],
+  "host_permissions": [
+    "https://app.devin.ai/*",
+    "https://windsurf.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://app.devin.ai/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_title": "RT Flow Mobile",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
