@@ -45,22 +45,32 @@
     return null;
   }
 
+  // 网络异常 (断网/解析失败/被拦) 不抛出, 收束为 status:0 + netError;
+  //   柔弱不争 —— 让上层据此报「网络错误」而非整链崩断 (账号留在未验证黑洞)。
   async function jsonPost(url, headers, body) {
-    const r = await fetch(url, {
-      method: "POST",
-      headers: Object.assign({ "Content-Type": "application/json" }, headers || {}),
-      body: JSON.stringify(body || {}),
-    });
-    let json = null;
-    try { json = await r.json(); } catch {}
-    return { status: r.status, json };
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: Object.assign({ "Content-Type": "application/json" }, headers || {}),
+        body: JSON.stringify(body || {}),
+      });
+      let json = null;
+      try { json = await r.json(); } catch {}
+      return { status: r.status, json };
+    } catch (e) {
+      return { status: 0, json: null, netError: String((e && e.message) || e) };
+    }
   }
 
   async function jsonGet(url, headers) {
-    const r = await fetch(url, { method: "GET", headers: headers || {} });
-    let json = null;
-    try { json = await r.json(); } catch {}
-    return { status: r.status, json };
+    try {
+      const r = await fetch(url, { method: "GET", headers: headers || {} });
+      let json = null;
+      try { json = await r.json(); } catch {}
+      return { status: r.status, json };
+    } catch (e) {
+      return { status: 0, json: null, netError: String((e && e.message) || e) };
+    }
   }
 
   // ① + ②: email/password → { auth1, userId, orgId, orgName }
@@ -69,7 +79,8 @@
     const j1 = r1.json || {};
     const auth1 = j1.token || j1.auth1_token || j1.access_token;
     if (r1.status !== 200 || !auth1) {
-      return { ok: false, error: "login HTTP " + r1.status + " " + (j1.detail || j1.error || "no_token") };
+      const why = r1.netError ? "网络错误 " + r1.netError : (j1.detail || j1.error || "no_token");
+      return { ok: false, error: "login HTTP " + r1.status + " " + why };
     }
     const userId = j1.user_id || j1.userId || "";
     const r2 = await jsonPost(CFG.apiBase + "/users/post-auth", { Authorization: "Bearer " + auth1 }, {});

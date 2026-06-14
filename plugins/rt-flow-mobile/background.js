@@ -3,67 +3,17 @@
 // 账号池管理 + 登录拿 auth1 + 余额监控 + 自动切到下一健康号。
 // 切号语义与 plugins/rt-flow/extension.js 等价, 决策逻辑收束于 core/score.js。
 // ════════════════════════════════════════════════════════════════════════════
-importScripts("core/score.js", "core/devin_cloud.js");
+importScripts("core/score.js", "core/store.js", "core/devin_cloud.js");
 
 const S = self.RtScore;
 const Cloud = self.RtCloud;
-
-const DEFAULTS = {
-  autoSwitch: true,
-  stopThreshold: 3, // 余额 ≤ $3 视为耗尽 → 切走
-  buffer: 3, // 每对话上限缓冲
-  pollActiveSec: 30, // 有运行/余额下降时的轮询间隔
-  pollIdleMin: 30, // 空闲轮询间隔
-  drainOn: true,
-  floor: 1,
-  lowBalanceWarn: 5,
-};
-
-const K = {
-  accounts: "rtflow.accounts", // [{email,password,skipAutoSwitch,label}]
-  healths: "rtflow.healths", // {email: {balance,checked,staleMin,ts}}
-  active: "rtflow.active", // {email,auth1,userId,orgId,orgName,ts}
-  settings: "rtflow.settings",
-  alerted: "rtflow.alerted", // {email: bool}
-};
-
-async function get(key, fallback) {
-  const r = await chrome.storage.local.get([key]);
-  return r[key] === undefined ? fallback : r[key];
-}
-async function set(obj) {
-  await chrome.storage.local.set(obj);
-}
-async function settings() {
-  return Object.assign({}, DEFAULTS, await get(K.settings, {}));
-}
-
-// ── 账号池解析 (任意格式粘贴 · 每行 email + password) ──
-function parseAccounts(text) {
-  const out = [];
-  const seen = new Set();
-  for (const raw of String(text || "").split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-    const m = line.match(/([^\s:,;|]+@[^\s:,;|]+)[\s:,;|]+(\S+)/);
-    if (!m) continue;
-    const email = m[1].toLowerCase();
-    if (seen.has(email)) continue;
-    seen.add(email);
-    out.push({ email, password: m[2], skipAutoSwitch: false, label: "" });
-  }
-  return out;
-}
-
-async function addAccounts(text) {
-  const parsed = parseAccounts(text);
-  const accounts = await get(K.accounts, []);
-  const byEmail = new Map(accounts.map((a) => [a.email, a]));
-  for (const a of parsed) byEmail.set(a.email, Object.assign(byEmail.get(a.email) || {}, a));
-  const merged = Array.from(byEmail.values());
-  await set({ [K.accounts]: merged });
-  return merged;
-}
+const Store = self.RtStore;
+const K = Store.K;
+const get = Store.get;
+const set = Store.set;
+const settings = Store.settings;
+const addAccounts = Store.addAccounts;
+const snapshot = Store.buildSnapshot;
 
 // ── 验证单账号: 登录 + 取余额 → 写 health ──
 async function verifyAccount(account) {
@@ -176,32 +126,7 @@ chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "rtflow.poll") tick().then(schedulePoll).catch(() => {});
 });
 
-// ── 状态快照 (popup 用) ──
-async function snapshot() {
-  const accounts = await get(K.accounts, []);
-  const healths = await get(K.healths, {});
-  const active = await get(K.active, null);
-  const cfg = await settings();
-  const scoreCfg = { stopThreshold: cfg.stopThreshold, activeEmail: active ? active.email : "" };
-  const rows = accounts.map((a) => {
-    const h = healths[a.email] || {};
-    const cap = S.computeConvCap(h.balance, cfg.buffer, cfg.drainOn, cfg.floor);
-    return {
-      email: a.email,
-      label: a.label || "",
-      locked: !!a.skipAutoSwitch,
-      balance: h.balance === undefined ? null : h.balance,
-      checked: !!h.checked,
-      error: h.error || "",
-      score: S.scoreAccount(a, h, scoreCfg),
-      convCap: cap.cap,
-      drain: cap.drain,
-      active: !!(active && active.email === a.email),
-    };
-  });
-  rows.sort((x, y) => y.score - x.score);
-  return { accounts: rows, active: active ? active.email : null, settings: cfg };
-}
+
 
 // ── popup ↔ background 消息 ──
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
@@ -210,20 +135,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       switch (msg && msg.type) {
         case "rtflow:state": reply(await snapshot()); break;
         case "rtflow:add": await addAccounts(msg.text); reply(await snapshot()); break;
-        case "rtflow:remove": {
-          const accounts = (await get(K.accounts, [])).filter((a) => a.email !== msg.email);
-          await set({ [K.accounts]: accounts });
-          reply(await snapshot());
-          break;
-        }
-        case "rtflow:lock": {
-          const accounts = await get(K.accounts, []);
-          const a = accounts.find((x) => x.email === msg.email);
-          if (a) a.skipAutoSwitch = !a.skipAutoSwitch;
-          await set({ [K.accounts]: accounts });
-          reply(await snapshot());
-          break;
-        }
+        case "rtflow:remove": await Store.removeAccount(msg.email); reply(await snapshot()); break;
+        case "rtflow:lock": await Store.toggleLock(msg.email); reply(await snapshot()); break;
         case "rtflow:verifyAll": reply(await verifyAll()); break;
         case "rtflow:switch": { await switchTo(msg.email); reply(await snapshot()); break; }
         case "rtflow:switchNext": {

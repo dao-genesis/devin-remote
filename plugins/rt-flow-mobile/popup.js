@@ -1,8 +1,38 @@
 // rt-flow-mobile · popup.js — 面板 (水善利万物而有静)
+// 渲染与增删锁直接读写 chrome.storage (母), 不依赖 service worker 是否唤醒;
+// 仅「验证 / 切号」等需登录+注入的动作下发给 service worker 引擎执行。
 "use strict";
 
-function send(msg) {
-  return new Promise((resolve) => chrome.runtime.sendMessage(msg, resolve));
+const Store = self.RtStore;
+
+// 单次发送; 冷启动竞态下回调可能永不触发, 故加超时兜底
+function sendOnce(msg, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (r) => { if (!done) { done = true; resolve(r); } };
+    const timer = setTimeout(() => finish(undefined), timeoutMs);
+    try {
+      chrome.runtime.sendMessage(msg, (r) => {
+        void chrome.runtime.lastError; // 读取以静默 "port closed" 告警
+        clearTimeout(timer);
+        finish(r);
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      finish(undefined);
+    }
+  });
+}
+
+// 下发动作给 service worker; 冷启动首条消息可能被丢 → 超时+重试, 自举唤醒。
+// 无论回执是否到达, 调用方都会随后从 storage 重渲染, 故动作不会丢。
+async function send(msg, tries = 8) {
+  for (let i = 0; i < tries; i++) {
+    const r = await sendOnce(msg, 1500);
+    if (r !== undefined) return r;
+    await new Promise((s) => setTimeout(s, 150));
+  }
+  return undefined;
 }
 
 function fmtBal(b) {
@@ -52,8 +82,13 @@ function render(state) {
   }
 }
 
+// 渲染直接读 storage —— 永远成功, 与 service worker 生死无关
 async function refresh() {
-  render(await send({ type: "rtflow:state" }));
+  try {
+    render(await Store.buildSnapshot());
+  } catch (e) {
+    render({ error: String((e && e.message) || e) });
+  }
 }
 
 document.addEventListener("click", async (e) => {
@@ -62,9 +97,17 @@ document.addEventListener("click", async (e) => {
   const email = btn.getAttribute("data-email");
   const act = btn.getAttribute("data-act");
   btn.disabled = true;
-  if (act === "switch") render(await send({ type: "rtflow:switch", email }));
-  else if (act === "lock") render(await send({ type: "rtflow:lock", email }));
-  else if (act === "remove") render(await send({ type: "rtflow:remove", email }));
+  if (act === "lock") {
+    await Store.toggleLock(email); // 纯 storage 改, 无需 service worker
+    await refresh();
+  } else if (act === "remove") {
+    await Store.removeAccount(email);
+    await refresh();
+  } else if (act === "switch") {
+    btn.textContent = "登录中…";
+    await send({ type: "rtflow:switch", email }); // 需登录+注入 → 引擎
+    await refresh();
+  }
 });
 
 document.getElementById("btnAdd").addEventListener("click", () => {
@@ -78,16 +121,19 @@ document.getElementById("btnSave").addEventListener("click", async () => {
   const text = ta.value;
   ta.value = "";
   document.getElementById("addbox").classList.remove("show");
-  render(await send({ type: "rtflow:add", text }));
+  await Store.addAccounts(text); // 纯 storage 改, 无需 service worker
+  await refresh();
 });
 document.getElementById("btnVerify").addEventListener("click", async (e) => {
   e.target.textContent = "验证中…";
-  render(await send({ type: "rtflow:verifyAll" }));
+  await send({ type: "rtflow:verifyAll" }); // 需登录+取余额 → 引擎
+  await refresh(); // 无论回执是否到达, 从 storage 读最新健康度
   e.target.textContent = "↻ 验证全部";
 });
 document.getElementById("btnNext").addEventListener("click", async (e) => {
   e.target.disabled = true;
-  render(await send({ type: "rtflow:switchNext" }));
+  await send({ type: "rtflow:switchNext" }); // 需登录+注入 → 引擎
+  await refresh();
   e.target.disabled = false;
 });
 
