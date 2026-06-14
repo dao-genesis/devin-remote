@@ -876,6 +876,70 @@ const LOCK_FILE = path.join(WAM_DIR, "lock-state.json");
 // v3.7.6 · dismiss 跨窗口持久化 · 小邦寺民·各得其欲·大者宜为下
 const DISMISS_FILE = path.join(WAM_DIR, "_conv_dismiss.json"); // uuid→ts 共享持久文件·多窗口共守
 const CONV_DISMISS_TTL = 600000; // 10min dismiss 自动过期时长
+
+// ═══ 归一·深融 · 进程内事件总线 + 共享 auth 库 ════════════════════════════════
+// 反者道之动: rt-flow 一次登录已得真 auth1 → 直接共享给全能板(dao-vsix), 免其重复登录、免轮询延迟。
+// 三引擎同 extension host 进程 → 共享 global 总线; auth1 落 ~/.dao/dao-accounts-auth.json
+// (dao-vsix 路径A 据邮箱即命中, 复用同一令牌)。损之又损 · 一次登录驱动全体。
+const DAO_DIR = path.join(os.homedir(), ".dao");
+const DAO_ACCOUNTS_AUTH_FILE = path.join(DAO_DIR, "dao-accounts-auth.json");
+function _daoBus() {
+  try {
+    const g = global;
+    if (!g.__daoOneBus) {
+      g.__daoOneBus = new (require("node:events").EventEmitter)();
+      g.__daoOneBus.setMaxListeners(50);
+    }
+    return g.__daoOneBus;
+  } catch {
+    return null;
+  }
+}
+// 把已得真 auth1 写入共享库 (dao-vsix 据邮箱命中, 复用同一令牌) — 仅存真 auth1_, 不存 session-token
+function _daoShareAuth(email, auth1, orgId, apiKey, apiServerUrl) {
+  try {
+    const e = String(email || "").trim().toLowerCase();
+    if (!e || !auth1 || String(auth1).startsWith("devin-session-token$")) return;
+    let store = {};
+    try {
+      store = JSON.parse(fs.readFileSync(DAO_ACCOUNTS_AUTH_FILE, "utf8")) || {};
+    } catch {
+      store = {};
+    }
+    const prev = store[e] || {};
+    store[e] = {
+      auth1: auth1,
+      orgId: orgId || prev.orgId || "",
+      orgName: prev.orgName || "",
+      orgSlug: prev.orgSlug || "",
+      userId: prev.userId || "",
+      accountId: prev.accountId || "",
+      apiKey: apiKey && String(apiKey).startsWith("cog_") ? apiKey : prev.apiKey || "",
+      apiServerUrl: apiServerUrl || prev.apiServerUrl || "",
+      savedAt: new Date().toISOString(),
+    };
+    fs.mkdirSync(DAO_DIR, { recursive: true });
+    fs.writeFileSync(DAO_ACCOUNTS_AUTH_FILE, JSON.stringify(store, null, 2), "utf8");
+  } catch {
+    /* 守柔 */
+  }
+}
+// 广播切号事件 → 全能板即刻跟随 (auto 模式) · 复用既有 auth1, 无重复登录
+function _daoEmitAccount(email, auth1, orgId, apiKey, apiServerUrl) {
+  try {
+    const b = _daoBus();
+    if (b)
+      b.emit("dao:account", {
+        email: email || "",
+        auth1: auth1 || "",
+        orgId: orgId || "",
+        apiKey: apiKey || "",
+        apiServerUrl: apiServerUrl || "",
+      });
+  } catch {
+    /* 守柔 */
+  }
+}
 // v4.8.0 · 永久取消追踪 (二次点击 X · Cascade 同款) · uuid 集 · 跨窗口持久 · 永不复现
 const UNTRACK_FILE = path.join(WAM_DIR, "_conv_untrack.json");
 // v13.2 · 通知一次性闸门 · 跨窗口共享 · 同一异常生命周期只弹一次
@@ -6783,6 +6847,8 @@ async function loginAccount(store, idx) {
         delete store.blacklist[_kb];
         store.save();
       }
+      // 归一·深融 · 缓存切号也广播 → 全能板即刻跟随 (auth1 已在上次全登录写入共享库)
+      try { _daoEmitAccount(acc.email, "", "", _cached.apiKey, _cached.apiServerUrl); } catch {}
       return { ok: true, path: _injC.path, ms: _msC, cached: true };
     }
     // 缓存命中但注入失败 → 驱逐失效缓存 → fallback 全登录
@@ -6839,6 +6905,12 @@ async function loginAccount(store, idx) {
   }
   // v3.0.3 · 全登录成功 → 更新缓存 (下次切号可跳 devinLogin)
   _cacheSession(acc.email, pa.sessionToken, _regApiKey, _regApiServerUrl);
+  // 归一·深融 · 把已得真 auth1 写入共享库 + 广播 → 全能板免重复登录即刻跟随同步
+  try {
+    const _org = (pa && pa.primaryOrgId) || "";
+    _daoShareAuth(acc.email, dl.auth1, _org, _regApiKey, _regApiServerUrl);
+    _daoEmitAccount(acc.email, dl.auth1, _org, _regApiKey, _regApiServerUrl);
+  } catch {}
   // v2.3.0: 登陆成 · 消 _bumpFailure 计数 (不让历史泛黄　转转不休)
   {
     const k = acc.email.toLowerCase();

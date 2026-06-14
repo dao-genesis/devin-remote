@@ -360,6 +360,15 @@ export async function activate(context: vscode.ExtensionContext) {
             if (!daoHasInjectableAuth1()) scheduleAutoChainHeal(true);
         });
     }
+    // 归一·深融 · 订阅 rt-flow 切号事件 → 即刻跟随 (复用自动链, 不等轮询; 守 manual 单号模式)
+    try {
+        const bus = daoOneBus();
+        if (bus) {
+            const onSwitch = () => { onRtFlowAccountSwitch().catch(() => {}); };
+            bus.on('dao:account', onSwitch);
+            context.subscriptions.push({ dispose: () => { try { bus.removeListener('dao:account', onSwitch); } catch { /* 守柔 */ } } });
+        }
+    } catch { /* 守柔 */ }
     context.subscriptions.push(
         vscode.commands.registerCommand('dao.startServer', () => startServer(context)),
         vscode.commands.registerCommand('dao.stopServer', stopServer),
@@ -1737,6 +1746,28 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                         reply({ ok: true });
                         break;
                     }
+                    case 'devinPasteAccount': {
+                        // 归一·B2 · 单账号主页: 粘贴一行 email:password (rt-flow 复制格式) → 即刻切换并渲染
+                        await setAccountSyncMode('manual');
+                        let line = (typeof msg.text === 'string' && msg.text.trim()) ? msg.text.trim() : '';
+                        if (!line) { try { line = (await vscode.env.clipboard.readText() || '').trim(); } catch { line = ''; } }
+                        const parsed = parseAccountLine(line);
+                        if (!parsed) {
+                            const input = await vscode.window.showInputBox({ prompt: '粘贴账号 (一行 email:password)', placeHolder: 'user@example.com:password' });
+                            const p2 = parseAccountLine((input || '').trim());
+                            if (!p2) { vscode.window.showWarningMessage('格式应为 email:password (一行)'); reply({ ok: false }); break; }
+                            const r = await devinLogin(p2.email, p2.password);
+                            if (r.ok) { vscode.window.showInformationMessage('单账号已切换 (' + p2.email + ')'); await devinFullInject(); }
+                            else vscode.window.showErrorMessage('登录失败: ' + (r.error || ''));
+                        } else {
+                            const r = await devinLogin(parsed.email, parsed.password);
+                            if (r.ok) { vscode.window.showInformationMessage('单账号已切换 (' + parsed.email + ')'); await devinFullInject(); }
+                            else vscode.window.showErrorMessage('登录失败: ' + (r.error || ''));
+                        }
+                        this.refresh(); refreshDaoCloudMiddlePanel();
+                        reply({ ok: true });
+                        break;
+                    }
                     case 'exportAgentDoc': {
                         // 江海善下之 — 导出插件本体操作契约 MD, 供本机其他 Agent 使用
                         try {
@@ -1816,6 +1847,7 @@ ${syncing ? `
 <div class="card">
   <div class="row"><span class="lbl">🔗 账号模式</span><span class="val ${mode === 'manual' ? 'sync' : 'ok'}">${mode === 'manual' ? '✋ 手动(独立)' : '🔄 自动(跟随IDE)'}</span></div>
   <button class="btn" onclick="cmd('setSyncMode',{mode:'${mode === 'manual' ? 'auto' : 'manual'}'})">${mode === 'manual' ? '↩️ 切回自动 · 跟随 IDE 账号' : '✋ 切到手动 · 面板独立登录'}</button>
+  <button class="btn" style="background:#6f42c1;margin-top:4px" onclick="cmd('devinPasteAccount')" title="粘贴一行 email:password (rt-flow 复制格式) · 即刻切换为该单账号主页">📋 粘贴账号 · 单号切换</button>
   ${mode === 'manual' ? '<button class="btn" style="background:#0e639c;margin-top:4px" onclick="cmd(&#39;devinManualLogin&#39;)">👤 登录其他账户</button>' : ''}
 </div>
 <div class="card">
@@ -3309,6 +3341,18 @@ function devinJsonGet(targetUrl: string, headers: any, timeoutMs?: number): Prom
 // Step5: apiKey → quota (planName, daily%, weekly%)
 // ═══════════════════════════════════════════════════════════
 
+// 归一·B2 · 解析单行账号 (rt-flow 复制格式 email:password) → 取第一个冒号前为邮箱, 其后为密码
+function parseAccountLine(line: string): { email: string; password: string } | null {
+    if (!line) return null;
+    const first = line.split(/\r?\n/)[0].trim();
+    const i = first.indexOf(':');
+    if (i <= 0) return null;
+    const email = first.slice(0, i).trim();
+    const password = first.slice(i + 1).trim();
+    if (!email || !password || !email.includes('@')) return null;
+    return { email, password };
+}
+
 async function devinLogin(email: string, password: string, retryCount?: number): Promise<{ ok: boolean; auth1?: string; userId?: string; error?: string }> {
     // Step 1: Login → auth1 — 帛书·七十三「勇于不敢则活」429退避
     const maxRetry = retryCount || 0;
@@ -4273,6 +4317,46 @@ function stopCredentialSync() {
         clearInterval(credSyncTimer);
         credSyncTimer = null;
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 归一·深融 · 进程内事件总线 — rt-flow 切号即刻驱动全能板 (同 extension host 进程共享 global)
+// 反者道之动: rt-flow 一次登录已得 auth1 并写入共享库 → 此处即刻复链, 免轮询延迟、免重复登录。
+// 守柔: 手动(单账号粘贴)模式不被 rt-flow 覆盖, 保留用户操作空间。
+// ═══════════════════════════════════════════════════════════
+function daoOneBus(): any {
+    try {
+        const g: any = global as any;
+        if (!g.__daoOneBus) { g.__daoOneBus = new (require('node:events').EventEmitter)(); g.__daoOneBus.setMaxListeners(50); }
+        return g.__daoOneBus;
+    } catch { return null; }
+}
+let _fusionSyncing = false;
+// rt-flow 切号广播 → 即刻跟随同步 (复用 devinAutoChain/devinFullInject, 不改动既有轮询逻辑)
+async function onRtFlowAccountSwitch(): Promise<void> {
+    try {
+        if (getAccountSyncMode() === 'manual') return; // 单号模式不被覆盖
+        if (_fusionSyncing) return;
+        _fusionSyncing = true;
+        const fresh = readWindsurfCredentials(true); // rt-flow 已注入新号 session 入 vscdb
+        // 清旧态 → 重链 (与轮询成功分支一致)
+        ws.devinAuth1 = ''; ws.devinOrgId = ''; ws.devinOrgName = ''; ws.devinOrgSlug = '';
+        ws.devinSessionToken = ''; ws.devinApiKey = ''; ws.devinApiServerUrl = '';
+        ws.devinAccountId = ''; ws.devinUserId = ''; ws.devinQuota = null; ws.devinEmail = '';
+        ws.devinAutoSyncing = true;
+        sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel();
+        const ok = await devinAutoChain();
+        ws.devinAutoSyncing = false;
+        // 对齐 lastSynced, 避免轮询随后重复触发
+        lastSyncedApiKey = (fresh && fresh.apiKey) || ws.devinApiKey || ws.devinAuth1 || '';
+        lastSyncedEmail = (fresh && fresh.email) || ws.devinEmail || '';
+        sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); updateStatusBar();
+        if (ok && ws.port && ws.devinAuth1 && ws.devinOrgId) {
+            await devinFullInject();
+            sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel();
+        }
+        if (ok) { try { await runInjectProfileSelfLoop(); } catch { /* 守柔 */ } }
+    } catch { /* 守柔 */ } finally { _fusionSyncing = false; }
 }
 
 // ═══════════════════════════════════════════════════════════
