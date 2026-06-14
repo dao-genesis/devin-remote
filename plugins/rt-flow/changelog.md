@@ -2,6 +2,21 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.6.3 (2026-06-13) · Git 归一回报文案净化 (大象无形·去华取实)
+
+> 18 真账 live 大规模 Git 归一实测: 4/18 → 10/18 归一到 PAT 主 @zhouyoukang1234-spec (3 个空连新接 + 3 个错主净断重注), 余 3 ghost 孤儿态 + 5 github_app(OAuth) 如实回报需官网手动移除, App 连接绝不主动断 (铁律守恒)。官网交叉核验: Settings→Connections 显示 GitHub 已连 @zhouyoukang1234-spec · CLI token, 与 API 普查一致。
+
+### 修 · github_app 回报文案
+
+- `connectWithPat` 对 github_app 账号的回报里, 身份名用了 `[name](N仓库)` 形态 —— 渲染如残缺 markdown 链接 (乱), 实为「身份 + 仓库数」。
+- 净化为 `@name (N 个仓库)`, 与 `extension.js` 内其余 appConn 展示统一 (`@name (...)`), 去华取实, 不改任何分流逻辑。
+
+### 验
+
+- 23 项零依赖回归单测全绿 (`node test/unit.test.js` → PASS 23 / FAIL 0), 分流逻辑 `classifyRegisteredState` 行为不变。
+- 备份模块 live 复核: 账号 lcld 全 106 真对话备份成文件夹 (对话.md/对话_agent.json/files), 与官网会话清单逐条对应; 增量去重复跑 106/106 全跳过。
+- 清空模块 dryRun 扫描复核: 正确枚举 106 会话/10 知识/7 剧本/3 密钥/1 Git 连, 并保留 32 本默剧本 + 3 本默知识 (不毁)。
+
 ## v4.6.2 (2026-06-13) · 限流韧性 · 多账号普查不再误判失败 + 首套回归单测 (弱者道之用·反复至成)
 
 > 18 真实账号 live 普查中实测复现: 登录 + Git 连接/仓库三连发, 到第 13 个账号起连续 6 个报 `LOGIN_FAIL`。

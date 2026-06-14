@@ -377,7 +377,7 @@ async function connectWithPat(auth, pat) {
       // (e) github_app 连接(OAuth): 不主动断 (断后不可经 API 复原), 如实回报
       appConn = { name: first.name || "?", type: first.type || "github_app", repos: (repos0.repos || []).length };
       inj = { ok: false, appConn: true,
-        error: "该账号经 GitHub App 连到身份 [" + appConn.name + "](" + appConn.repos + "仓库)。经 App 的连接断开后无法再用 PAT 重连(平台侧限制·会落入孤儿态)。如需归一到本 PAT 主, 请在 app.devin.ai 该组织 Settings→Integrations 手动移除该 GitHub App 后再连。" };
+        error: "该账号经 GitHub App 连到身份 @" + appConn.name + " (" + appConn.repos + " 个仓库)。经 App 的连接断开后无法再用 PAT 重连(平台侧限制·会落入孤儿态)。如需归一到本 PAT 主, 请在 app.devin.ai 该组织 Settings→Integrations 手动移除该 GitHub App 后再连。" };
     }
   }
 
