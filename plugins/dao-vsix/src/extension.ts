@@ -4260,25 +4260,34 @@ async function devinInjectGitHubPAT(orgId: string, pat: string, auth1: string): 
 // CRUD · List — 帛书·三十三「始制有名·名亦既有·夫亦将知止」
 // ═══════════════════════════════════════════════════════════
 
-async function devinListSecrets(orgId: string, auth1: string): Promise<{ ok: boolean; secrets?: any[] }> {
+// 帛书·「不善人之所葆」— 失败不吞: 从上游响应提炼简明错误 (status + detail/text)
+function devinErr(r: any): string {
+    if (!r) return 'no response';
+    if (r.status === 0) return 'connect failed: ' + (r.text || 'unknown');
+    const detail = r.json && (r.json.detail || r.json.error || r.json.message);
+    const tail = detail ? ': ' + (typeof detail === 'string' ? detail : JSON.stringify(detail)) : (r.text ? ': ' + String(r.text).slice(0, 200) : '');
+    return 'HTTP ' + r.status + tail;
+}
+
+async function devinListSecrets(orgId: string, auth1: string): Promise<{ ok: boolean; secrets?: any[]; status?: number; error?: string }> {
     const bareOrgId = orgId.replace(/^org-/, '');
     const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/secrets', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status === 200) { const j = r.json || {}; const items = Array.isArray(j) ? j : (Array.isArray(j.secrets) ? j.secrets : []); return { ok: true, secrets: items }; }
-    return { ok: false };
+    return { ok: false, status: r.status, error: devinErr(r) };
 }
 
-async function devinListKnowledge(orgId: string, auth1: string): Promise<{ ok: boolean; learnings?: any[] }> {
+async function devinListKnowledge(orgId: string, auth1: string): Promise<{ ok: boolean; learnings?: any[]; status?: number; error?: string }> {
     const bareOrgId = orgId.replace(/^org-/, '');
     const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/learning/all', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status === 200) { const j = r.json || {}; return { ok: true, learnings: Array.isArray(j.learnings) ? j.learnings : (Array.isArray(j) ? j : []) }; }
-    return { ok: false };
+    return { ok: false, status: r.status, error: devinErr(r) };
 }
 
-async function devinListPlaybooks(orgId: string, auth1: string): Promise<{ ok: boolean; playbooks?: any[] }> {
+async function devinListPlaybooks(orgId: string, auth1: string): Promise<{ ok: boolean; playbooks?: any[]; status?: number; error?: string }> {
     const bareOrgId = orgId.replace(/^org-/, '');
     const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/playbooks', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status === 200) { const j = r.json || {}; const items = Array.isArray(j) ? j : (Array.isArray(j.playbooks) ? j.playbooks : []); return { ok: true, playbooks: items }; }
-    return { ok: false };
+    return { ok: false, status: r.status, error: devinErr(r) };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4457,7 +4466,7 @@ async function devinCreateSession(orgId: string, userMessage: string, auth1: str
     return { ok: false, status: lastStatus, error: lastErr || undefined };
 }
 
-async function devinListSessions(orgId: string, auth1: string, limit?: number): Promise<{ ok: boolean; sessions?: any[] }> {
+async function devinListSessions(orgId: string, auth1: string, limit?: number): Promise<{ ok: boolean; sessions?: any[]; status?: number; error?: string }> {
     // 帛书·「去彼取此」— 自助账号的 cog_ key 不被 api.devin.ai 接受(404)；
     // auth1 直读 app.devin.ai/v2sessions 对所有账号恒可用，与 Secret/Knowledge/Playbook 同源。
     const bareOrgId = orgId.replace(/^org-/, '');
@@ -4465,8 +4474,10 @@ async function devinListSessions(orgId: string, auth1: string, limit?: number): 
     if (limit) url += (url.includes('?') ? '&' : '?') + 'limit=' + limit;
     const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
     // 帛书·「无为而无不为」— v2sessions 首载经代理偶发超时；守柔重试两次, 让首屏自成而无需手动重试。
+    let last: any = null;
     for (let attempt = 0; attempt < 3; attempt++) {
         const r = await devinJsonGet(url, H, 30000);
+        last = r;
         if (r.status === 200) {
             const j = r.json || {};
             const arr = Array.isArray(j.result) ? j.result : (Array.isArray(j.sessions) ? j.sessions : (Array.isArray(j) ? j : []));
@@ -4475,13 +4486,13 @@ async function devinListSessions(orgId: string, auth1: string, limit?: number): 
         if (r.status && r.status !== 0 && r.status !== 502 && r.status !== 503 && r.status !== 504) break;
         await new Promise(res => setTimeout(res, 600));
     }
-    return { ok: false };
+    return { ok: false, status: last?.status, error: devinErr(last) };
 }
 
-async function devinGetSessionDetail(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; session?: any }> {
+async function devinGetSessionDetail(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; session?: any; status?: number; error?: string }> {
     const r = await devinJsonGet(DEVIN_APP + '/api/sessions/' + sessionId, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status === 200) return { ok: true, session: r.json };
-    return { ok: false };
+    return { ok: false, status: r.status, error: devinErr(r) };
 }
 
 async function devinGetSessionMessages(orgId: string, sessionId: string, auth1: string): Promise<{ ok: boolean; messages?: any[] }> {
