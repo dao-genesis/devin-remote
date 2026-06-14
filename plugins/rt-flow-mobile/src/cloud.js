@@ -272,11 +272,201 @@ const DaoCloud = (() => {
     };
   }
 
+  // ═══ 事件流 → 文档 (人看的 MD + Agent 看的 JSON · 移植自 devin_cloud.js) ════
+  function extractMessageText(v) {
+    if (v == null) return "";
+    if (typeof v === "string") return v;
+    if (Array.isArray(v)) return v.map(extractMessageText).filter(Boolean).join("\n");
+    if (typeof v === "object") {
+      if (typeof v.text === "string") return v.text;
+      if (typeof v.message === "string") return v.message;
+      if (v.content != null) return extractMessageText(v.content);
+      return JSON.stringify(v, null, 2);
+    }
+    return String(v);
+  }
+  function evTs(ev) {
+    const ms = ev.created_at_ms || (ev.timestamp ? Date.parse(ev.timestamp) : 0);
+    return ms ? new Date(ms).toISOString() : "";
+  }
+  function userAnswerText(ev) {
+    return (ev.answers || []).map((a) => {
+      if (!a) return "";
+      if (a.other_text) return a.other_text;
+      if (Array.isArray(a.selected)) return a.selected.join("; ");
+      if (typeof a.text === "string") return a.text;
+      return "";
+    }).filter(Boolean).join("\n");
+  }
+  function classifyEvent(ev) {
+    if (!ev || typeof ev !== "object") return null;
+    switch (ev.type) {
+      case "initial_user_message":
+      case "user_message":
+        return { kind: "user", role: "用户", text: extractMessageText(ev.message).replace(/^User:\s*/, "") };
+      case "user_question_answered": {
+        const txt = userAnswerText(ev);
+        return txt ? { kind: "user", role: "用户(回答)", text: txt } : null;
+      }
+      case "devin_message":
+        return { kind: "devin", role: "Devin", text: extractMessageText(ev.message) };
+      case "devin_thoughts": {
+        const txt = extractMessageText(ev.message);
+        return txt ? { kind: "think", role: "思考", text: txt } : null;
+      }
+      case "one_line_thoughts": {
+        const txt = ev.short || ev.summary || "";
+        return txt ? { kind: "think", role: "思考", text: String(txt) } : null;
+      }
+      case "shell_process_started":
+        return { kind: "tool", role: "🖥️ shell", detail: String(ev.command || "") };
+      case "shell_process_completed":
+      case "shell_process_completed_background": {
+        const code = ev.exit_code == null ? "" : String(ev.exit_code);
+        if (code && code !== "0") return { kind: "tool", role: "🖥️ shell · 退出码 " + code, detail: String(ev.output_trunc || "") };
+        return null;
+      }
+      case "multi_edit_result": {
+        const files = (ev.file_updates || []).map((f) => (f.action_type || "edit") + " " + (f.file_path || "")).join("\n");
+        return { kind: "tool", role: "✏️ 文件编辑", detail: files };
+      }
+      case "computer_use": {
+        const acts = (ev.actions || []).map((a) => a && a.action_type).filter(Boolean).join(", ");
+        return { kind: "tool", role: "🖱️ 电脑操作", detail: acts };
+      }
+      case "mcp_tool_call": {
+        let detail = String(ev.tool_input || "");
+        if (ev.output_trunc) detail += (detail ? "\n→ " : "") + String(ev.output_trunc);
+        return { kind: "tool", role: "🔌 " + (ev.tool_name || ev.server || "mcp"), detail };
+      }
+      case "search_file_commands": {
+        const cmds = (ev.search_commands || []).map((c) => (c.command_name || "search") + ": " + (c.regex || c.query || "") + (c.path ? " @ " + c.path : "")).join("\n");
+        return { kind: "tool", role: "🔍 文件搜索", detail: cmds };
+      }
+      case "web_search":
+        return { kind: "tool", role: "🌐 网络搜索", detail: String(ev.query || "") + ((ev.result_urls || []).length ? "\n" + ev.result_urls.join("\n") : "") };
+      case "web_get_contents":
+        return { kind: "tool", role: "🌐 抓取网页", detail: (ev.urls || []).join("\n") };
+      case "todo_update": {
+        const todos = (ev.todos || []).map((td) => "- [" + (td.status === "completed" ? "x" : " ") + "] " + (td.content || "")).join("\n");
+        return { kind: "tool", role: "📋 待办更新", detail: todos };
+      }
+      default: return null;
+    }
+  }
+  function buildConversationMd(title, devinId, events) {
+    const lines = ["# 对话: " + title, "", "- Session: `" + devinId + "`", "- 事件数: " + events.length, ""];
+    for (const ev of events) {
+      const c = classifyEvent(ev);
+      if (!c) continue;
+      const ts = evTs(ev);
+      if (c.kind === "user") lines.push("## 👤 " + c.role + "  " + ts, "", c.text || "", "");
+      else if (c.kind === "devin") lines.push("## 🤖 Devin  " + ts, "", c.text || "", "");
+      else if (c.kind === "think") lines.push("### 💭 思考  " + ts, "", "> " + String(c.text || "").replace(/\n/g, "\n> "), "");
+      else if (c.kind === "tool") lines.push("### " + c.role + "  " + ts, "", c.detail ? "```\n" + String(c.detail).slice(0, 4000) + "\n```" : "", "");
+    }
+    return lines.join("\n");
+  }
+  function buildAgentDoc(title, devinId, detail, events) {
+    return JSON.stringify({
+      schema: "rt-flow.devin-cloud.conversation/1",
+      title, devinId, sessionInfo: detail || {},
+      eventCount: events.length, events, generatedAt: new Date().toISOString(),
+    }, null, 2);
+  }
+  function safeName(s, maxLen) {
+    maxLen = maxLen || 60;
+    return String(s || "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/\s+/g, " ").trim().slice(0, maxLen) || "untitled";
+  }
+
+  // 事件流: stream 端点(SSE/ndjson/json 混合)→ 去重排序; first-load 兜底
+  async function getEvents(auth, devinId) {
+    let raw = null;
+    for (let attempt = 0; attempt < 3 && raw == null; attempt++) {
+      const to = withTimeout(60000);
+      try {
+        const resp = await fetch(CFG.apiBase + "/events/" + devinId + "/stream",
+          { method: "GET", headers: Object.assign(authHeaders(auth), { Accept: "text/event-stream" }), signal: to.signal });
+        if (resp.status === 200) raw = await resp.text();
+      } catch {} finally { to.done(); }
+      if (raw == null && attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+    if (raw == null) {
+      const r = await jsonRequest("GET", CFG.apiBase + "/events/first-load/" + devinId, authHeaders(auth));
+      return asArray(r.json, "result", "events");
+    }
+    const merged = new Map();
+    const add = (ev) => { if (!ev || !ev.type) return; const eid = ev.event_id || ev.type + "-" + ev.timestamp + "-" + ev.created_at_ms; if (!merged.has(eid)) merged.set(eid, ev); };
+    let i = 0;
+    while (i < raw.length) {
+      while (i < raw.length && " \r\n\t".includes(raw[i])) i++;
+      if (i >= raw.length) break;
+      if (raw[i] === "{") {
+        let depth = 0, j = i, inStr = false, esc = false;
+        for (; j < raw.length; j++) {
+          const ch = raw[j];
+          if (esc) { esc = false; continue; }
+          if (ch === "\\" && inStr) { esc = true; continue; }
+          if (ch === '"') { inStr = !inStr; continue; }
+          if (inStr) continue;
+          if (ch === "{") depth++;
+          if (ch === "}") { depth--; if (depth === 0) { j++; break; } }
+        }
+        try { const obj = JSON.parse(raw.slice(i, j)); if (obj.result && Array.isArray(obj.result)) obj.result.forEach(add); else add(obj); } catch {}
+        i = j;
+      } else {
+        const lineEnd = raw.indexOf("\n", i);
+        const end = lineEnd === -1 ? raw.length : lineEnd;
+        const line = raw.slice(i, end).trim();
+        i = end + 1;
+        if (line.startsWith("data:")) {
+          const ds = line.slice(5).trim();
+          if (ds && ds !== "[DONE]") { try { const obj = JSON.parse(ds); if (obj.result && Array.isArray(obj.result)) obj.result.forEach(add); else add(obj); } catch {} }
+        }
+      }
+    }
+    const events = Array.from(merged.values());
+    events.sort((a, b) => (a.created_at_ms || 0) - (b.created_at_ms || 0));
+    return events;
+  }
+
+  // 对话数据导出 (手机端「下载」): 返回 md(人看) + json(agent看) + 文件名, 由 popup 触发下载
+  async function exportConversation(auth, devinId, title) {
+    const detail = await getSessionDetail(auth, devinId);
+    const t = title || detail.title || detail.name || devinId;
+    const events = await getEvents(auth, devinId);
+    const base = safeName(t) + "_" + String(devinId).slice(0, 12);
+    return {
+      ok: true, title: t, devinId, eventCount: events.length,
+      mdName: base + ".md", md: buildConversationMd(t, devinId, events),
+      jsonName: base + ".json", json: buildAgentDoc(t, devinId, detail, events),
+    };
+  }
+
+  // 知识库下载: 单条 → MD 文本; 全部 → JSON 汇总
+  function knowledgeToMd(k) {
+    const name = k.name || k.title || k.id || "knowledge";
+    const body = k.body || k.content || k.text || "";
+    return "# " + name + "\n\n" + (k.trigger ? "> 触发: " + k.trigger + "\n\n" : "") + body + "\n";
+  }
+  async function exportKnowledge(auth) {
+    const r = await listKnowledge(auth);
+    const learnings = r.learnings || [];
+    return {
+      ok: r.ok, count: learnings.length,
+      jsonName: "knowledge_" + auth.orgBare + ".json",
+      json: JSON.stringify({ schema: "rt-flow.devin-cloud.knowledge/1", org: auth.orgId, count: learnings.length, learnings, generatedAt: new Date().toISOString() }, null, 2),
+      items: learnings.map((k) => ({ id: k.id, name: k.name || k.title || "", mdName: safeName(k.name || k.title || k.id) + ".md", md: knowledgeToMd(k) })),
+    };
+  }
+
   return {
     CFG, login, getBilling, billingBalance, authHeaders, verify, decodeJwtUserId,
     asArray, listSessions, getSessionDetail, classifySession, isActiveClass,
     listRunningSessions, listKnowledge, listPlaybooks, listSecrets, getGitConnections,
     isUserKnowledge, isUserPlaybook, accountOverview,
+    extractMessageText, classifyEvent, buildConversationMd, buildAgentDoc, safeName,
+    getEvents, exportConversation, knowledgeToMd, exportKnowledge,
   };
 })();
 

@@ -237,6 +237,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
           break;
         }
+        // 对话数据下载: 拉事件流 → MD(人看)+JSON(agent看)
+        case "exportConversation": {
+          const r = await ensureAuth(msg.email);
+          if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
+          try { sendResponse(await DaoCloud.exportConversation(r, msg.devinId, msg.title)); }
+          catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+          break;
+        }
+        // 知识库下载: 全部学习资源 → JSON 汇总 + 逐条 MD
+        case "exportKnowledge": {
+          const r = await ensureAuth(msg.email);
+          if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
+          try { sendResponse(await DaoCloud.exportKnowledge(r)); }
+          catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+          break;
+        }
         case "removeAccount": {
           const st = await getState();
           const key = lc(msg.email);

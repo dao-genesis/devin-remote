@@ -88,6 +88,41 @@ t("isActiveClass: running/awaiting/blocked 为活跃, finished 非", () => {
   assert.ok(!isActiveClass("finished") && !isActiveClass("idle"));
 });
 
+// 事件流 → 文档 (对话数据下载 · 与 devin_cloud.js 同源)
+const { buildConversationMd, buildAgentDoc, classifyEvent, safeName, knowledgeToMd } = globalThis.DaoCloud;
+console.log("buildConversationMd / 下载文档:");
+t("用户/Devin/思考/工具四类气泡按序渲染", () => {
+  const ev = [
+    { type: "initial_user_message", message: "修个bug", created_at_ms: 1 },
+    { type: "devin_thoughts", message: "先看代码", created_at_ms: 2 },
+    { type: "shell_process_started", command: "npm test", created_at_ms: 3 },
+    { type: "devin_message", message: "已修复", created_at_ms: 4 },
+  ];
+  const md = buildConversationMd("标题", "devin-x", ev);
+  assert.ok(md.includes("# 对话: 标题"));
+  assert.ok(md.includes("👤") && md.includes("修个bug"));
+  assert.ok(md.includes("🤖 Devin") && md.includes("已修复"));
+  assert.ok(md.includes("💭") && md.includes("> 先看代码"));
+  assert.ok(md.includes("npm test"));
+});
+t("classifyEvent: 成功 shell 完成事件不单列 (null)", () => {
+  assert.strictEqual(classifyEvent({ type: "shell_process_completed", exit_code: 0 }), null);
+  assert.ok(classifyEvent({ type: "shell_process_completed", exit_code: 1, output_trunc: "err" }));
+});
+t("buildAgentDoc 为合法 JSON 且含 schema/events", () => {
+  const doc = JSON.parse(buildAgentDoc("t", "devin-y", { a: 1 }, [{ type: "x" }]));
+  assert.strictEqual(doc.schema, "rt-flow.devin-cloud.conversation/1");
+  assert.strictEqual(doc.eventCount, 1);
+});
+t("safeName 清洗非法文件名字符", () => {
+  assert.strictEqual(safeName('a/b:c*?"d'), "a_b_c___d");
+  assert.strictEqual(safeName(""), "untitled");
+});
+t("knowledgeToMd 渲染标题/触发/正文", () => {
+  const md = knowledgeToMd({ name: "K1", trigger: "when X", body: "正文内容" });
+  assert.ok(md.includes("# K1") && md.includes("触发: when X") && md.includes("正文内容"));
+});
+
 // login(): user_id 的权威真源是 login 响应本体 (回归防护 —— 修复前 userId 恒空,
 // 因 auth1 是不透明令牌·非 JWT 且 post-auth 不回传 user_id)。mock fetch, 不触网。
 const { login } = globalThis.DaoCloud;
