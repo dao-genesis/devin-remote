@@ -84,6 +84,8 @@ function render() {
   $("autoSwitch").checked = !!settings.autoSwitch;
   $("buffer").value = settings.buffer != null ? settings.buffer : 3;
   $("pollMin").value = settings.pollMin != null ? settings.pollMin : 2;
+  // pool count
+  $("poolCount").textContent = accounts.length ? "(" + accounts.length + ")" : "";
   // list
   const ul = $("accountList");
   ul.innerHTML = "";
@@ -106,11 +108,33 @@ function render() {
       </div>
       <div class="btns">
         <button data-act="activate" data-email="${escapeAttr(a.email)}">${isActive ? "重注入" : "激活"}</button>
+        <button data-act="overview" data-email="${escapeAttr(a.email)}" class="mini">☁ 概览</button>
         <button data-act="refresh" data-email="${escapeAttr(a.email)}" class="mini">额度</button>
         <button data-act="remove" data-email="${escapeAttr(a.email)}" class="mini">删除</button>
-      </div>`;
+      </div>
+      <div class="ovw hid" data-ovw="${escapeAttr(key)}"></div>`;
     ul.appendChild(li);
   }
+}
+
+function renderCounts(c) {
+  if (!c) return "";
+  return [
+    `<span class="pill run">运行 ${c.running}</span>`,
+    `<span class="pill wait">待输入 ${c.awaiting}</span>`,
+    `<span class="pill blk">卡住 ${c.blocked}</span>`,
+    `<span class="pill">对话 ${c.sessions}</span>`,
+    `<span class="pill">知识库 ${c.knowledge}</span>`,
+    `<span class="pill">剧本 ${c.playbooks}</span>`,
+    `<span class="pill">密钥 ${c.secrets}</span>`,
+    `<span class="pill">Git ${c.gitConnections}</span>`,
+  ].join("");
+}
+const SCLS = { running: "run", awaiting: "wait", blocked: "blk" };
+const SLABEL = { running: "运行", awaiting: "待输入", blocked: "卡住" };
+function sessionLi(s) {
+  const cls = SCLS[s.statusClass] || "";
+  return `<li class="sess"><span class="dot ${cls}"></span><span class="stitle">${escapeHtml(s.title)}</span><span class="sstat ${cls}">${escapeHtml(SLABEL[s.statusClass] || s.statusClass)}</span></li>`;
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -129,11 +153,25 @@ document.addEventListener("click", async (e) => {
     } else if (act === "refresh") {
       const r = await send({ type: "refreshQuota", email });
       toast(r.ok ? "额度: " + (r.balance == null ? "$?" : fmtMoney(r.balance)) : "失败: " + (r.error || ""), r.ok ? "ok" : "err");
+    } else if (act === "overview") {
+      const box = document.querySelector(`[data-ovw="${CSS.escape(email.toLowerCase())}"]`);
+      if (box && !box.classList.contains("hid")) { box.classList.add("hid"); btn.disabled = false; return; }
+      if (box) { box.classList.remove("hid"); box.innerHTML = '<div class="loading">概览加载中…</div>'; }
+      const r = await send({ type: "accountOverview", email });
+      if (box) {
+        if (r && r.ok) {
+          const o = r.overview;
+          box.innerHTML = `<div class="track-counts">${renderCounts(o.counts)}</div>` +
+            `<ul class="sessions">${(o.sessions || []).slice(0, 12).map(sessionLi).join("") || '<li class="sess muted">无对话</li>'}</ul>`;
+        } else box.innerHTML = `<div class="err-line">概览失败: ${escapeHtml((r && r.error) || "?")}</div>`;
+      }
+      btn.disabled = false;
+      return; // 不触发 load() 重渲染 (会清空已展开概览)
     } else if (act === "remove") {
       await send({ type: "removeAccount", email });
       toast("已删除: " + email, "ok");
     }
-  } finally { await load(); }
+  } finally { if (act !== "overview") await load(); }
 });
 
 $("addBtn").addEventListener("click", async () => {
@@ -170,5 +208,40 @@ $("saveSettings").addEventListener("click", async () => {
   toast(r.ok ? "设置已保存" : "保存失败", r.ok ? "ok" : "err");
 });
 $("autoSwitch").addEventListener("change", () => $("saveSettings").click());
+
+// 万法识别·批量添加: 任意格式文本 → 解析入池
+$("bulkAddBtn").addEventListener("click", async () => {
+  const text = $("bulk").value;
+  if (!text.trim()) { toast("先粘贴账号文本", "err"); return; }
+  const r = await send({ type: "parseAndAdd", text });
+  if (r && r.ok) {
+    $("bulk").value = "";
+    toast(`识别 ${r.parsed} 个 · 新增 ${r.added} · 更新 ${r.updated}` + (r.tokens ? ` · token ${r.tokens}` : ""), r.parsed ? "ok" : "err");
+    await load();
+  } else toast("识别失败: " + ((r && r.error) || ""), "err");
+});
+
+// 一键导出: 账号池 → 剪贴板 (可再粘贴回收)
+$("exportBtn").addEventListener("click", async () => {
+  const r = await send({ type: "exportAccounts" });
+  if (!r || !r.ok || !r.text) { toast("无可导出账号", "err"); return; }
+  try { await navigator.clipboard.writeText(r.text); toast("已复制到剪贴板 (" + r.text.split("\n").length + " 个)", "ok"); }
+  catch { $("bulk").value = r.text; toast("已填入下方文本框 (剪贴板不可用)", "ok"); }
+});
+
+// 对话追踪: 拉取当前激活账号的活跃会话
+$("trackRefresh").addEventListener("click", async () => {
+  const list = $("trackList"), counts = $("trackCounts"), empty = $("trackEmpty");
+  if (!STATE.active) { toast("先激活一个账号", "err"); return; }
+  empty.classList.add("hid"); counts.innerHTML = ""; list.innerHTML = '<li class="sess muted">追踪中…</li>';
+  const r = await send({ type: "runningSessions" });
+  if (r && r.ok) {
+    const ss = r.sessions || [];
+    const c = { running: 0, awaiting: 0, blocked: 0 };
+    for (const s of ss) if (c[s.statusClass] != null) c[s.statusClass]++;
+    counts.innerHTML = `<span class="pill run">运行 ${c.running}</span><span class="pill wait">待输入 ${c.awaiting}</span><span class="pill blk">卡住 ${c.blocked}</span>`;
+    list.innerHTML = ss.length ? ss.map(sessionLi).join("") : '<li class="sess muted">无活跃对话 (运行/待输入/卡住)</li>';
+  } else { list.innerHTML = ""; empty.classList.remove("hid"); toast("追踪失败: " + ((r && r.error) || ""), "err"); }
+});
 
 load();
