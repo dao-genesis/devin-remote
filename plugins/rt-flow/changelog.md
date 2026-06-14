@@ -2,6 +2,28 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.7.7 (2026-06-14) · 对话最终模块·终报+进展+健康度 (Phase K)
+
+> 道法自然·善始且善成: 对话有始有终, 终报如实记载。三盗既宜, 三才既安——余额/卡死/阻塞三维度归一健康度。
+
+### 新增
+
+- 纯函数(可单测·`devin_cloud.js`):
+  - `conversationFinalReport(sess, opts)` → 结构化终报: outcome 分类(success/stalled/blocked/cap_exceeded/archived/unknown) + 时长(毫秒/分钟) + 成本 + 卡死标记。空输入→各字段 null(安全·不臆造)。
+  - `healthScore(inputs)` → 综合健康分 0-100: 余额权 40 + 卡死权 30 + 阻塞权 30; tier: green(≥80)/amber(≥50)/red(<50)。三盗既宜三才既安。
+- `_dvProgressSummary()`: 每 `_dvRunPoll` 轮次末聚合全活跃对话的实时进度指标(running/awaiting/blocked/stalled 计数 + health 三色灯), 写入 `_dvProgressCache`, 有活跃对话时输出 `dv-progress:` 日志行。
+- `_dvDetectFinished` 增强: 对话离场时调用 `conversationFinalReport` 生成终报, 存入 `_dvFinalReports`(环形 50 条); 通知消息附 outcome + 耗时 + 成本; `dv-final:` 日志行记载全字段。
+- `_dvRunningDetail` Map: 缓存上轮运行中会话详情(含 createdAt 等), 供终报计算时长; 离场后自动释放(无为·不占内存)。
+
+### 守恒
+
+- 既有 `_dvMaybeNotify` / `_dvStallCheck` / `_dvLowBalanceCheck` / `_dvConvCapTick` 逻辑一字未改。
+- 新增函数均为纯叠加(不改原有行为); 终报/进展/健康度缺数据时一律返回 null/safe(不臆造成功铁律不变)。
+
+### 验证
+
+- `node -c` 双文件通过; 单测 39→**52 全绿**(新增 13 项: 终报 7 + 健康度 6·无回归)。
+
 ## v4.7.6 (2026-06-14) · 实测复盘修正·真中停端点 + 版本号归一 (Phase J)
 
 > 反者道之动·重新锚定本源: v4.7.5 实测中暴露并修正两处缺陷, 既有逻辑零改动。
