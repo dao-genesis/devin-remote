@@ -351,6 +351,15 @@ export async function activate(context: vscode.ExtensionContext) {
             startCredentialSync();
         });
     }
+    // 归一·深融 · 订阅 rt-flow 切号事件 → 即刻跟随 (复用自动链, 不等轮询; 守 manual 单号模式)
+    try {
+        const bus = daoOneBus();
+        if (bus) {
+            const onSwitch = () => { onRtFlowAccountSwitch().catch(() => {}); };
+            bus.on('dao:account', onSwitch);
+            context.subscriptions.push({ dispose: () => { try { bus.removeListener('dao:account', onSwitch); } catch { /* 守柔 */ } } });
+        }
+    } catch { /* 守柔 */ }
     context.subscriptions.push(
         vscode.commands.registerCommand('dao.startServer', () => startServer(context)),
         vscode.commands.registerCommand('dao.stopServer', stopServer),
@@ -4200,6 +4209,46 @@ function stopCredentialSync() {
         clearInterval(credSyncTimer);
         credSyncTimer = null;
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 归一·深融 · 进程内事件总线 — rt-flow 切号即刻驱动全能板 (同 extension host 进程共享 global)
+// 反者道之动: rt-flow 一次登录已得 auth1 并写入共享库 → 此处即刻复链, 免轮询延迟、免重复登录。
+// 守柔: 手动(单账号粘贴)模式不被 rt-flow 覆盖, 保留用户操作空间。
+// ═══════════════════════════════════════════════════════════
+function daoOneBus(): any {
+    try {
+        const g: any = global as any;
+        if (!g.__daoOneBus) { g.__daoOneBus = new (require('node:events').EventEmitter)(); g.__daoOneBus.setMaxListeners(50); }
+        return g.__daoOneBus;
+    } catch { return null; }
+}
+let _fusionSyncing = false;
+// rt-flow 切号广播 → 即刻跟随同步 (复用 devinAutoChain/devinFullInject, 不改动既有轮询逻辑)
+async function onRtFlowAccountSwitch(): Promise<void> {
+    try {
+        if (getAccountSyncMode() === 'manual') return; // 单号模式不被覆盖
+        if (_fusionSyncing) return;
+        _fusionSyncing = true;
+        const fresh = readWindsurfCredentials(true); // rt-flow 已注入新号 session 入 vscdb
+        // 清旧态 → 重链 (与轮询成功分支一致)
+        ws.devinAuth1 = ''; ws.devinOrgId = ''; ws.devinOrgName = ''; ws.devinOrgSlug = '';
+        ws.devinSessionToken = ''; ws.devinApiKey = ''; ws.devinApiServerUrl = '';
+        ws.devinAccountId = ''; ws.devinUserId = ''; ws.devinQuota = null; ws.devinEmail = '';
+        ws.devinAutoSyncing = true;
+        sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel();
+        const ok = await devinAutoChain();
+        ws.devinAutoSyncing = false;
+        // 对齐 lastSynced, 避免轮询随后重复触发
+        lastSyncedApiKey = (fresh && fresh.apiKey) || ws.devinApiKey || ws.devinAuth1 || '';
+        lastSyncedEmail = (fresh && fresh.email) || ws.devinEmail || '';
+        sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); updateStatusBar();
+        if (ok && ws.port && ws.devinAuth1 && ws.devinOrgId) {
+            await devinFullInject();
+            sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel();
+        }
+        if (ok) { try { await runInjectProfileSelfLoop(); } catch { /* 守柔 */ } }
+    } catch { /* 守柔 */ } finally { _fusionSyncing = false; }
 }
 
 // ═══════════════════════════════════════════════════════════
