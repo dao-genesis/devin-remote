@@ -4497,7 +4497,12 @@ function getEaConfigHtml(port, nonce) {
         var p = _providers[n] || {};
         document.getElementById('provName').value = n;
         document.getElementById('provUrl').value = p.baseUrl || '';
-        document.getElementById('provKey').value = '';
+        // ★ 修「编辑渠道→Key 看不见/疑似丢失」: 不把脱敏 key 写回输入框(回传会覆盖真实key),
+        //   而是用占位提示已配置 · 留空提交=后端保留原 Key (见 hotAddProvider apiKey 保全)
+        var _kInput = document.getElementById('provKey');
+        _kInput.value = '';
+        var _hasKey = !!(p.apiKey && String(p.apiKey).length > 0);
+        _kInput.placeholder = _hasKey ? '已配置 Key · 留空=保留原 Key,或输入新 Key 覆盖' : 'API Key';
         document.getElementById('provModels').value = (p.models || p._models || []).join(', ');
       });
     });
@@ -4668,7 +4673,8 @@ function getEaConfigHtml(port, nonce) {
       var hHtml = '<span class="drag-handle">⋮⋮</span>' +
         '<span style="width:6px;height:6px;border-radius:50%;background:' + hDot + ';flex-shrink:0"></span>' +
         '<span style="flex:1">' + disp + (builtin ? ' · 内置' : '') + '</span>';
-      if (!builtin) hHtml += '<button class="btn del" data-prov="' + name + '" title="删除 ' + name + '">x</button>';
+      if (!builtin) hHtml += '<button class="btn" data-refresh="' + name + '" title="拉取该渠道全部可用模型 (/v1/models 全量自动解)" style="padding:0 5px;font-size:9px">↻全部模型</button>' +
+        '<button class="btn del" data-prov="' + name + '" title="删除 ' + name + '">x</button>';
       header.innerHTML = hHtml;
       container.appendChild(header);
       _dnd(header, name, 'rightProv', function(fk, tk, after) {
@@ -4683,6 +4689,19 @@ function getEaConfigHtml(port, nonce) {
             if (!ok2) return;
             fDel('/origin/ea/provider/' + encodeURIComponent(pName)).then(function(r) { if (r.ok) loadConfig(); });
           });
+        });
+        // ★ cc-switch 风 · 拉取该渠道全部可用模型 (refresh=1 强制 /v1/models 全量探测)
+        var _rb = header.querySelector('[data-refresh]');
+        if (_rb) _rb.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var pName = this.getAttribute('data-refresh');
+          var self = this; self.textContent = '拉取中…';
+          fJson('/origin/ea/models/' + encodeURIComponent(pName) + '?refresh=1').then(function(r) {
+            if (r && r.ok) {
+              _daoToast('渠道 ' + pName + ' 解出 ' + ((r.models && r.models.length) || 0) + ' 个模型 · ' + (r.source || ''));
+              loadConfig();
+            } else { self.textContent = '↻全部模型'; _daoToast('拉取失败: ' + ((r && (r.error || r.note)) || 'unknown')); }
+          }).catch(function(e2) { self.textContent = '↻全部模型'; _daoToast('拉取失败: ' + e2.message); });
         });
       }
 
@@ -4822,7 +4841,9 @@ function getEaConfigHtml(port, nonce) {
     var key = document.getElementById('provKey').value.trim();
     var modelsRaw = document.getElementById('provModels').value.trim();
     if (!name || !url) { _daoToast('名称和 URL 必填'); return; }
-    var cfg = { baseUrl: url, apiKey: key };
+    var cfg = { baseUrl: url };
+    // ★ Key 留空 → 不下发 apiKey 字段 → 后端保留原 Key (编辑已有渠道时不会清空)
+    if (key) cfg.apiKey = key;
     if (modelsRaw) cfg.models = modelsRaw.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
     var btnAdd = this;
     btnAdd.textContent = '添加中…';
@@ -4833,9 +4854,14 @@ function getEaConfigHtml(port, nonce) {
           document.getElementById('provUrl').value = '';
           document.getElementById('provKey').value = '';
           document.getElementById('provModels').value = '';
-          // ★ 加 key 即自动探活 + 自动拿模型 → 通则变绿 (无需手点"探测")
+          // ★ 加 key 即自动探活 + 自动全量解模型 (cc-switch 风 /v1/models) → 通则变绿+模型自现
           btnAdd.textContent = '探活中…';
           _autoProbe().then(function() {
+            btnAdd.textContent = '解模型…';
+            // refresh=1 强制全量探测; 失败不阻断流程
+            return fJson('/origin/ea/models/' + encodeURIComponent(name) + '?refresh=1').catch(function(){ return null; });
+          }).then(function(mr) {
+            if (mr && mr.ok && mr.models && mr.models.length) _daoToast('渠道 ' + name + ' 解出 ' + mr.models.length + ' 个模型');
             return loadConfig();
           }).then(function() {
             btnAdd.textContent = '+ 添加';

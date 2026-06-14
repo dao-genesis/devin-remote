@@ -2572,7 +2572,7 @@ async function _callProvider(
       const completionPath = _adapter.getCompletionPath(provCfg);
       if (provCfg.baseUrl) {
         const resolvedBase = await _resolveBaseUrl(provCfg);
-        targetUrl = new URL(resolvedBase.replace(/\/$/, "") + completionPath);
+        targetUrl = new URL(_joinCompletionUrl(resolvedBase, completionPath));
       } else {
         targetUrl = new URL(_gatewayUrl + completionPath);
       }
@@ -2639,7 +2639,7 @@ async function _callProvider(
       bodyObj.model = `${provCfg.modelPrefix}/${model}`;
       const completionPath = provCfg.completionPath || "/v1/chat/completions";
       const resolvedBase = await _resolveBaseUrl(provCfg);
-      targetUrl = new URL(resolvedBase.replace(/\/$/, "") + completionPath);
+      targetUrl = new URL(_joinCompletionUrl(resolvedBase, completionPath));
       if (provCfg.apiKey)
         extraHeaders["Authorization"] = `Bearer ${provCfg.apiKey}`;
     } else if (provCfg.baseUrl) {
@@ -2650,7 +2650,7 @@ async function _callProvider(
       bodyObj.model = model;
       const completionPath = provCfg.completionPath || "/v1/chat/completions";
       const resolvedBase = await _resolveBaseUrl(provCfg);
-      targetUrl = new URL(resolvedBase.replace(/\/$/, "") + completionPath);
+      targetUrl = new URL(_joinCompletionUrl(resolvedBase, completionPath));
       if (provCfg.apiKey)
         extraHeaders["Authorization"] = `Bearer ${provCfg.apiKey}`;
     } else {
@@ -3533,6 +3533,20 @@ function _streamOaToCascade(
         return; // ★ 不执行下面的 finalize 逻辑
       }
 
+      // ★ 道法自然 · 防「上游干净结束却无 finish_reason → IDE 视为中断」
+      //   部分渠道/代理在最后一帧不带 finish_reason、或缺 data:[DONE] 即收流;
+      //   只要已有产出(text/think/tool) → 按正常结束补 STOP_END · 令本轮完整可继续。
+      //   道义: 二十五章「周行而不殆」· 行至其终当善成 · 不令半途若断。
+      if (
+        stopReason === null &&
+        (textBytes > 0 || thinkBytes > 0 || toolCount > 0)
+      ) {
+        stopReason = w.STOP_END;
+        _log(
+          "[dao-router] ★ 上游无 finish_reason 但有产出 → 补 STOP_END (防误判中断)",
+        );
+      }
+
       // ★ 无服务端工具 → 正常关闭流
       // ★ v9.9.78 · stop_reason 帧含 message_id + timestamp
       if (stopReason !== null) {
@@ -3577,6 +3591,51 @@ function _streamOaToCascade(
 
     agRes.on("error", (e) => {
       _flushTools();
+      // ★ 道法自然 · 优雅中断恢复 (修「对话对一半就断、无法继续」核心)
+      //   上游 socket 中途断流(ECONNRESET/代理超时/proxy premature close)时,
+      //   若本轮已产出内容 → 按【正常结束 STOP_END】封口, 令 IDE 拿到一段完整、
+      //   可在其上继续追问的回答, 而非抛硬错误使整轮中断、无法继续。
+      //   仅当【零产出】(刚发起就断) 才回硬错误。
+      //   道义: 七十八章「天下莫柔弱於水 而攻堅強者莫之能勝」· 遇断不折 · 顺势成全。
+      const _hadOutput =
+        (_textAccum && _textAccum.length > 0) ||
+        (_thinkAccum && _thinkAccum.length > 0) ||
+        _serverSideCalls.length > 0 ||
+        _lspSideCalls.length > 0;
+      if (_hadOutput) {
+        _log(
+          `[dao-router] ⚠ 上游流中断(${e.message}) · 已产出 text=${(_textAccum || "").length}B → 优雅封口 STOP_END(本轮可继续)`,
+        );
+        _routeDiag("_streamOaToCascade upstream-interrupt → graceful STOP_END");
+        try {
+          const parts = [];
+          parts.push(_hdr());
+          parts.push(w.encodeUint(w.RSP.STOP_REASON, w.STOP_END));
+          const fr = w.buildFrame(0, Buffer.concat(parts));
+          if (fr && fr.length && !res.writableEnded) res.write(fr);
+        } catch {}
+        if (w.buildEndFrame) {
+          try {
+            const ef = w.buildEndFrame(null);
+            if (ef && ef.length && !res.writableEnded) res.write(ef);
+          } catch {}
+        }
+        if (!res.writableEnded) res.end();
+        resolve({
+          serverSideCalls: _serverSideCalls,
+          lspSideCalls: _lspSideCalls,
+          textBytes: (_textAccum || "").length,
+          thinkBytes: (_thinkAccum || "").length,
+          toolCount: _serverSideCalls.length + _lspSideCalls.length,
+          stopReason: w.STOP_END,
+          interrupted: true,
+          textAccum: _textAccum,
+          thinkAccum: _thinkAccum,
+          tokenCount: _tokenCount,
+        });
+        return;
+      }
+      // 零产出 → 仍按硬错误处理
       if (w.buildEndFrame) {
         try {
           res.write(w.buildEndFrame(`道路由上游错误: ${e.message}`));
@@ -3772,11 +3831,60 @@ function resetHealthCache() {
  * 拼出 provider 的模型列表 URL · 防 baseUrl 已含 /vN 时重复拼 /v1 → /v1/v1/models 404
  *   道义: 二十二章「曲则全」· baseUrl 多形(含/不含版本段) · 归一方得真路
  */
+// ★ cc-switch 风 · 渠道地址归一: baseUrl 末若含补全路径则剥离 · 防双重路径
+//   道义: 二十二章「曲则全」· 多形归一方得真路
+//   实证根因: 小米 baseUrl=https://api.xiaomimimo.com/v1/chat/completions
+//     + completionPath=/v1/chat/completions → 拼成
+//     .../v1/chat/completions/v1/chat/completions → 404 → 渠道完全不可用。
+//   归一: 剥去 baseUrl 末尾补全后缀(含可选 /vN) · 仅留真根 · 再由 completionPath 单次拼接。
+const _COMPLETION_SUFFIX_RE =
+  /\/(?:v\d+\/)?(?:chat\/completions|completions|messages|responses)\/?$/i;
+function _stripCompletionSuffix(u) {
+  let s = String(u || "").replace(/\/+$/, "");
+  s = s.replace(_COMPLETION_SUFFIX_RE, "");
+  return s.replace(/\/+$/, "");
+}
+// 真根 + completionPath 单次拼接 (剥去 base 误含的补全后缀 · 幂等)
+function _joinCompletionUrl(base, completionPath) {
+  const root = _stripCompletionSuffix(base);
+  let p = completionPath || "/v1/chat/completions";
+  if (!p.startsWith("/")) p = "/" + p;
+  return root + p;
+}
+
+// ★ cc-switch build_models_url_candidates 移植 · 多候选顺序探测 /models
+//   道义: 四十八章「为道日损」· 候选有序 · 逐一损去不通之路 · 至于得真
+//   不着相于单一 URL · 万物并育而不相害 · 任意渠道皆可自动解全量模型
+function _modelsUrlCandidates(cfg) {
+  const raw = String(cfg.baseUrl || _gatewayUrl).replace(/\/+$/, "");
+  const out = [];
+  const push = (x) => {
+    if (x && out.indexOf(x) < 0) out.push(x);
+  };
+  // 0. 用户显式 modelsUrl 优先
+  if (cfg.modelsUrl) push(String(cfg.modelsUrl).replace(/\/+$/, ""));
+  // 1. 先剥补全后缀得真根 (修小米类「全路径 baseUrl」)
+  const root = _stripCompletionSuffix(raw);
+  // 2. 根以 /vN 结尾 → root/models 优先; 否则 root/v1/models 优先
+  if (/\/v\d+$/i.test(root)) {
+    push(root + "/models");
+    push(root + "/v1/models");
+  } else {
+    push(root + "/v1/models");
+    push(root + "/models");
+  }
+  // 3. 协议+域名根兜底 (兼容子路径渠道探测失败时最后一搏)
+  try {
+    const u = new URL(root.includes("://") ? root : "https://" + root);
+    if (u.origin && u.origin !== root) {
+      push(u.origin + "/v1/models");
+      push(u.origin + "/models");
+    }
+  } catch {}
+  return out;
+}
 function _modelsUrlFor(cfg) {
-  const base = String(cfg.baseUrl || _gatewayUrl).replace(/\/+$/, "");
-  // baseUrl 已以 /v1 /v2 ... 结尾 → 仅补 /models; 否则补 /v1/models
-  if (/\/v\d+$/i.test(base)) return base + "/models";
-  return base + "/v1/models";
+  return _modelsUrlCandidates(cfg)[0];
 }
 
 // ★ 非对话模型名特征 (语音/向量/重排/图像/审核) · 自动发现时剔除
@@ -3883,7 +3991,7 @@ function _verifyProviderChat(name, cfg) {
       cfg.completionPath || (isAnthropic ? "/v1/messages" : "/v1/chat/completions");
     let u;
     try {
-      u = new URL(base + cpath);
+      u = new URL(_joinCompletionUrl(base, cpath));
     } catch (e) {
       return resolve({ alive: false, reason: "baseUrl 非法: " + e.message, model });
     }
@@ -4049,6 +4157,19 @@ function hotAddProvider(name, cfg) {
     return { ok: false, error: "name required" };
   if (!cfg || typeof cfg !== "object")
     return { ok: false, error: "cfg required" };
+  // ★ cc-switch 风 · baseUrl 归一: 剥去误含的补全后缀(/chat/completions 等) · 防双重路径 404
+  //   实证: 小米渠道用户把完整端点贴进 baseUrl → 拼 completionPath 双重 → 完全不可用 · 此处根治
+  if (cfg.baseUrl) {
+    const _normBase = _stripCompletionSuffix(cfg.baseUrl);
+    if (_normBase && _normBase !== String(cfg.baseUrl).replace(/\/+$/, "")) {
+      _log(
+        `[dao-router] [热] provider ${name}: baseUrl 归一 ${cfg.baseUrl} → ${_normBase} (剥补全后缀·防双重路径)`,
+      );
+      cfg.baseUrl = _normBase;
+      // baseUrl 既已含补全路径 → completionPath 由下方按归一后 base 重新推断 (清旧值)
+      if (!cfg.completionPath) delete cfg.completionPath;
+    }
+  }
   // ★ 自动检测 type: 根据 baseUrl 推断
   if (!cfg.type) {
     const url = (cfg.baseUrl || "").toLowerCase();
@@ -4083,11 +4204,18 @@ function hotAddProvider(name, cfg) {
   //   修正: 合并现有 cfg → 跳过脱敏 apiKey → 保留真实 key
   const existing = _providers[name] || {};
   const merged = { ...existing, ...cfg };
-  // ★ 若传入的 apiKey 是脱敏的(含***) → 保留原有的真实 apiKey
-  if (cfg.apiKey && /\*{2,}/.test(cfg.apiKey) && existing.apiKey) {
+  // ★ apiKey 保全 (修「编辑渠道→key 消失」根因之一)
+  //   道义: 三十九章「得一以宁」· 得 apiKey 之全方能宁
+  //   两类需保留原 key 的情形:
+  //     (1) 传入脱敏 key (含***) — GET overview/providers 返回的是脱敏值
+  //     (2) 传入空 key — 编辑既有渠道时用户未重输 key (前端清空了输入框)
+  //   仅当用户真输入了一个非空、非脱敏的新 key 时才覆盖。
+  const _incomingKey = cfg.apiKey == null ? "" : String(cfg.apiKey);
+  const _keyMasked = /\*{2,}|\.{3}$/.test(_incomingKey);
+  if ((!_incomingKey.trim() || _keyMasked) && existing.apiKey) {
     merged.apiKey = existing.apiKey;
     _log(
-      `[dao-router] [热] provider ${name}: 脱敏apiKey → 保留原key (${existing.apiKey.length}B)`,
+      `[dao-router] [热] provider ${name}: ${_keyMasked ? "脱敏" : "空"}apiKey → 保留原key (${existing.apiKey.length}B)`,
     );
   }
   _providers[name] = merged;
@@ -4363,76 +4491,120 @@ function _hotSaveConfig() {
  * @param {string} providerName - provider 名称
  * @returns {Promise<{ok: boolean, models?: string[], error?: string}>}
  */
-async function hotListProviderModels(providerName) {
+async function hotListProviderModels(providerName, opts) {
   const provCfg = _providers[providerName];
   if (!provCfg) return { ok: false, error: "provider not found" };
+  const refresh = !!(opts && opts.refresh);
 
-  // 1. 从配置的 models 字段直接返回
-  if (Array.isArray(provCfg.models) && provCfg.models.length > 0) {
+  // 1. 非强刷 且 已有配置 models → 直返 (快路径 · 供展示)
+  if (!refresh && Array.isArray(provCfg.models) && provCfg.models.length > 0) {
     return { ok: true, models: provCfg.models, source: "config" };
   }
 
-  // 2. 尝试 /models 探测 (智能拼接 · 防 baseUrl 已含 /vN 时 → /v1/v1/models 404)
-  try {
-    const modelsUrl = new URL(_modelsUrlFor(provCfg));
-    const isHttps = modelsUrl.protocol === "https:";
+  // 2. cc-switch 风多候选顺序探测 /models · 自动解全量模型 (不止配置子集)
+  //   道义: 五十七章「我无为也 而民自化」· 用户只输 apiKey · 模型自现全量
+  const candidates = _modelsUrlCandidates(provCfg);
+  let lastErr = "";
+  for (const cand of candidates) {
+    let urlObj;
+    try {
+      urlObj = new URL(cand);
+    } catch {
+      continue;
+    }
+    const isHttps = urlObj.protocol === "https:";
     const mod = isHttps ? https : http;
-    const headers = {};
+    const headers = { Accept: "application/json" };
     if (provCfg.apiKey) headers["Authorization"] = `Bearer ${provCfg.apiKey}`;
-
-    const body = await new Promise((resolve, reject) => {
+    const _agent = _getProxyAgent(isHttps);
+    const out = await new Promise((resolve) => {
       const req = mod.request(
         {
-          hostname: modelsUrl.hostname,
-          port: parseInt(modelsUrl.port || (isHttps ? "443" : "80")),
-          path: modelsUrl.pathname,
+          hostname: urlObj.hostname,
+          port: parseInt(urlObj.port || (isHttps ? "443" : "80")),
+          path: urlObj.pathname + (urlObj.search || ""),
           method: "GET",
           headers,
-          timeout: 5000,
+          timeout: 15000,
           rejectUnauthorized: false,
+          ...(_agent ? { agent: _agent } : {}),
         },
         (res) => {
           let d = "";
           res.on("data", (c) => (d += c));
-          res.on("end", () => resolve(d));
-          res.on("error", () => resolve(""));
+          res.on("end", () => resolve({ status: res.statusCode || 0, body: d }));
+          res.on("error", () => resolve({ status: 0, body: "" }));
         },
       );
-      req.on("error", () => resolve(""));
+      req.on("error", (e) => resolve({ status: 0, body: "err:" + e.message }));
       req.on("timeout", () => {
         req.destroy();
-        resolve("");
+        resolve({ status: 0, body: "timeout" });
       });
       req.end();
     });
 
-    if (body) {
-      const parsed = JSON.parse(body);
-      if (parsed.data && Array.isArray(parsed.data)) {
-        const all = parsed.data.filter((m) => m && m.id);
-        // ★ 协议自检: 模型 supported_endpoint_types 含 anthropic 且无 openai → provider 用 anthropic 协议
+    if (out.status >= 200 && out.status < 300 && out.body) {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(out.body);
+      } catch {}
+      // 兼容多形: {data:[...]} (OpenAI) / {models:[...]} / 顶层数组 / 元素为字符串
+      let arr = null;
+      if (parsed && Array.isArray(parsed.data)) arr = parsed.data;
+      else if (parsed && Array.isArray(parsed.models)) arr = parsed.models;
+      else if (Array.isArray(parsed)) arr = parsed;
+      if (arr) {
+        const all = arr
+          .map((m) => (typeof m === "string" ? { id: m } : m))
+          .filter((m) => m && (m.id || m.name));
+        all.forEach((m) => {
+          if (!m.id && m.name) m.id = m.name;
+        });
         _autoDetectProtocolFromModels(provCfg, all);
-        // ★ 仅取「可对话」模型 (剔除 tts/asr/embedding/rerank/image 等非对话模型);
-        //   若过滤后为空 (provider 全是特殊模型) → 回退取全部 · 不致空列表
+        // 仅取「可对话」模型; 若过滤后为空则回退全部 · 不致空列表
         const chat = all.filter((m) => _isChatModel(m.id));
         const picked = chat.length > 0 ? chat : all;
-        const models = picked.map((m) => m.id);
+        const models = Array.from(
+          new Set(picked.map((m) => m.id).filter(Boolean)),
+        ).sort();
         if (models.length > 0) {
-          // 缓存到 provider 配置
-          provCfg.models = models;
+          provCfg.models = models; // 缓存全量
+          try {
+            _hotSaveConfig();
+          } catch {}
           return {
             ok: true,
             models,
             source: "probe",
+            endpoint: cand,
             protocol: provCfg.protocol || undefined,
             filtered: all.length - models.length,
           };
         }
       }
+      lastErr = `解析空 @ ${cand}`;
+    } else if (out.status === 404 || out.status === 405 || out.status === 0) {
+      // 此候选不通 → 试下一个
+      lastErr = `HTTP ${out.status} @ ${cand}`;
+      continue;
+    } else {
+      lastErr = `HTTP ${out.status} @ ${cand} ${String(out.body).slice(0, 120)}`;
+      // 鉴权/额度等 → key 问题 · 不再试其他候选
+      if (out.status === 401 || out.status === 403) break;
     }
-  } catch {}
+  }
 
-  return { ok: true, models: [], source: "empty" };
+  // 3. 探测失败 → 回退配置 models (永不空列表)
+  if (Array.isArray(provCfg.models) && provCfg.models.length > 0) {
+    return {
+      ok: true,
+      models: provCfg.models,
+      source: "config-fallback",
+      note: lastErr,
+    };
+  }
+  return { ok: true, models: [], source: "empty", note: lastErr };
 }
 
 // ★ v9.9.97 · 热切换兼容别名 · source.js调用hotDeleteRoute
