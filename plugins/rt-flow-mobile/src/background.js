@@ -75,6 +75,10 @@ async function applyDnr(auth) {
       },
       condition: {
         urlFilter: "||app.devin.ai/api/",
+        // 只改写「由 app.devin.ai 页面发起」的请求; 扩展自身 service worker 的 fetch
+        // (getBilling 等) 不在此列 —— 否则各账号额度普查会被活跃账号的鉴权头覆盖,
+        // 导致额度串号 (每个账号都读成活跃账号余额), 令 rotate 评分失真。
+        initiatorDomains: ["app.devin.ai"],
         resourceTypes: ["xmlhttprequest", "other", "sub_frame", "main_frame"],
       },
     });

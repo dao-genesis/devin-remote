@@ -84,13 +84,15 @@ const DaoCloud = (() => {
     }
     const auth1 = resp.json.token || resp.json.access_token;
     if (!auth1) return { ok: false, error: "登录响应无 token" };
+    // user_id 的权威真源是 login 响应本体 (auth1 为不透明令牌·非 JWT, post-auth 不回传 user_id)
+    const loginUserId = resp.json.user_id || resp.json.userId || "";
     const orgResp = await jsonRequestRetry(
       "POST", CFG.apiBase + "/users/post-auth", { Authorization: "Bearer " + auth1 }, {},
     );
     const od = orgResp.json || {};
     const orgId = od.org_id || od.orgId || "";
     if (!orgId) return { ok: false, error: "post-auth 无 org_id (HTTP " + orgResp.status + ")" };
-    const userId = od.user_id || od.userId || decodeJwtUserId(auth1) || "";
+    const userId = od.user_id || od.userId || loginUserId || decodeJwtUserId(auth1) || "";
     return {
       ok: true,
       auth1, orgId, userId,

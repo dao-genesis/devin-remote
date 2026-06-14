@@ -1,7 +1,32 @@
 "use strict";
 // popup.js · rt-flow 浏览器版 · 控制面板 UI
 const $ = (id) => document.getElementById(id);
-function send(msg) { return new Promise((r) => chrome.runtime.sendMessage(msg, r)); }
+
+// send: 给 service worker 下发动作 (登录/激活/切号等)。
+// MV3 冷启时首条消息的回调可能不触发, 故加超时重试 — SW 唤醒后即返回,
+// 仍无响应则降级为错误对象, 不让 UI 卡死。
+function sendOnce(msg, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const t = setTimeout(() => { if (!done) { done = true; resolve(undefined); } }, timeoutMs);
+    try {
+      chrome.runtime.sendMessage(msg, (r) => {
+        if (done) return;
+        done = true; clearTimeout(t);
+        void chrome.runtime.lastError; // SW 未醒时避免未捕获告警
+        resolve(r);
+      });
+    } catch { if (!done) { done = true; clearTimeout(t); resolve(undefined); } }
+  });
+}
+async function send(msg, tries = 8) {
+  for (let i = 0; i < tries; i++) {
+    const r = await sendOnce(msg, 1500);
+    if (r !== undefined) return r;
+    await new Promise((s) => setTimeout(s, 150));
+  }
+  return { ok: false, error: "service worker 未响应(冷启超时)" };
+}
 function toast(text, kind) {
   const el = $("toast");
   el.textContent = text;
@@ -23,12 +48,28 @@ function fmtBal(q) {
 
 let STATE = { accounts: [], authCache: {}, active: "", quota: {}, settings: {} };
 
+// 与 background.js DEFAULT_SETTINGS 对齐 (storage-first 渲染时兜底)
+const POPUP_DEFAULT_SETTINGS = { autoSwitch: true, buffer: 3, floor: 1, pollMin: 2 };
+function getLocal(keys) { return new Promise((r) => chrome.storage.local.get(keys, r)); }
+
+// 渲染直读 chrome.storage (母/真源), 不依赖 service worker 是否唤醒,
+// 从根上杜绝 MV3 冷启竞态导致面板卡死不渲染。
 async function load() {
-  const st = await send({ type: "getState" });
-  if (!st || !st.ok) { toast("读取状态失败", "err"); return; }
-  STATE = st;
+  const s = await getLocal(["accounts", "authCache", "active", "quota", "settings"]);
+  STATE = {
+    accounts: s.accounts || [],
+    authCache: s.authCache || {},
+    active: s.active || "",
+    quota: s.quota || {},
+    settings: Object.assign({}, POPUP_DEFAULT_SETTINGS, s.settings || {}),
+  };
   render();
 }
+
+// 后台 rotate/额度刷新写入 storage 时, 面板自动跟随 (storage 即真源)。
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local") load();
+});
 
 function render() {
   const { accounts, authCache, active, quota, settings } = STATE;

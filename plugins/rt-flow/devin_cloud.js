@@ -298,6 +298,8 @@ async function login(email, password) {
   }
   const auth1 = resp.json.token || resp.json.access_token;
   if (!auth1) return { ok: false, error: "登录响应无 token" };
+  // v4.8.0 · user-XXX · 路由官网注入 localStorage['auth1_session'].userId 所需
+  const userId = resp.json.user_id || resp.json.userId || "";
   const orgResp = await jsonRequest(
     "POST",
     CFG.apiBase + "/users/post-auth",
@@ -310,6 +312,7 @@ async function login(email, password) {
   return {
     ok: true,
     auth1,
+    userId,
     orgId,
     orgBare: orgId.replace(/^org-/, ""),
     orgName: od.org_name || od.orgName || "",
@@ -324,11 +327,11 @@ async function getAuth(email, password, opts) {
   const key = String(email).toLowerCase();
   const hit = cache[key];
   if (!opts.force && hit && hit.auth1 && Date.now() - (hit.ts || 0) < CFG.authTtlMs) {
-    return { ok: true, auth1: hit.auth1, orgId: hit.orgId, orgBare: hit.orgBare, orgName: hit.orgName, email, cached: true };
+    return { ok: true, auth1: hit.auth1, userId: hit.userId || "", orgId: hit.orgId, orgBare: hit.orgBare, orgName: hit.orgName, email, cached: true };
   }
   const r = await login(email, password);
   if (r.ok) {
-    cache[key] = { auth1: r.auth1, orgId: r.orgId, orgBare: r.orgBare, orgName: r.orgName, ts: Date.now() };
+    cache[key] = { auth1: r.auth1, userId: r.userId || "", orgId: r.orgId, orgBare: r.orgBare, orgName: r.orgName, ts: Date.now() };
     writeJson(DC_AUTH_CACHE, cache);
   }
   return r;
@@ -345,7 +348,7 @@ function clearAuthCache(email) {
 function getCachedAuth(email) {
   const hit = readJson(DC_AUTH_CACHE, {})[String(email).toLowerCase()];
   if (hit && hit.auth1 && Date.now() - (hit.ts || 0) < CFG.authTtlMs) {
-    return { auth1: hit.auth1, orgId: hit.orgId, orgBare: hit.orgBare, orgName: hit.orgName, email };
+    return { auth1: hit.auth1, userId: hit.userId || "", orgId: hit.orgId, orgBare: hit.orgBare, orgName: hit.orgName, email };
   }
   return null;
 }
