@@ -124,8 +124,10 @@ async function refreshQuota(email) {
   }
   const b = await DaoCloud.getBilling(r);
   const balance = b.ok ? DaoCloud.billingBalance(b.raw) : null;
+  const reset = b.ok ? DaoCloud.quotaResetInfo(b.raw) : null;
+  const tokenShort = r.auth1 ? String(r.auth1).slice(0, 14) + "…" : "";
   const st = await getState();
-  st.quota[lc(email)] = { balance, raw: b.raw || null, ts: Date.now(), status: b.ok ? "ok" : ("HTTP " + b.status) };
+  st.quota[lc(email)] = { balance, raw: b.raw || null, ts: Date.now(), status: b.ok ? "ok" : ("HTTP " + b.status), reset, tokenShort };
   await set({ quota: st.quota });
   return { ok: true, balance };
 }

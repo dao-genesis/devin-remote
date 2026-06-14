@@ -49,6 +49,37 @@ function fmtBal(q) {
   return fmtMoney(q.balance);
 }
 
+// 采样计时: 上次普查距今 (本体「Nmin前采样」同源)
+function fmtAge(ts) {
+  if (!ts) return "无快照";
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 1) return "刚采样";
+  if (m < 60) return m + "min前采样";
+  const h = Math.round(m / 60);
+  if (h < 48) return h + "h前采样";
+  return Math.round(h / 24) + "d前采样";
+}
+// D/W 额度重置倒计时 (剩余天/时)
+function fmtReset(ms) {
+  if (!ms) return null;
+  const left = ms - Date.now();
+  if (left <= 0) return "可重置";
+  const h = left / 3600000;
+  return h >= 24 ? Math.round(h / 24) + "d" : Math.max(1, Math.round(h)) + "h";
+}
+// 每账号 D/W 重置进度 + 采样计时 + (活跃)token 展示 —— 本体活跃行同源
+function metaExtra(q, isActive) {
+  if (!q) return "";
+  const bits = [];
+  const r = q.reset || {};
+  const dr = fmtReset(r.dailyResetMs), wr = fmtReset(r.weeklyResetMs);
+  if (r.dailyPct != null || dr) bits.push(`D ${r.dailyPct != null ? Math.round(r.dailyPct) + "%" : "?"}${dr ? "·重置" + dr : ""}`);
+  if (r.weeklyPct != null || wr) bits.push(`W ${r.weeklyPct != null ? Math.round(r.weeklyPct) + "%" : "?"}${wr ? "·重置" + wr : ""}`);
+  bits.push(fmtAge(q.ts));
+  if (isActive && q.tokenShort) bits.push("token " + escapeHtml(q.tokenShort));
+  return `<div class="meta2">${bits.join(" · ")}</div>`;
+}
+
 let STATE = { accounts: [], authCache: {}, active: "", quota: {}, settings: {} };
 
 // 与 background.js DEFAULT_SETTINGS 对齐 (storage-first 渲染时兜底)
@@ -106,6 +137,7 @@ function render() {
         <span class="bal ${balClass(q && q.balance)}">${fmtBal(q)}</span>
         <span>${authCache[key] && authCache[key].auth1 ? "已登录" : "未登录"}</span>
       </div>
+      ${metaExtra(q, isActive)}
       <div class="btns">
         <button data-act="activate" data-email="${escapeAttr(a.email)}">${isActive ? "重注入" : "激活"}</button>
         <button data-act="overview" data-email="${escapeAttr(a.email)}" class="mini">☁ 概览</button>

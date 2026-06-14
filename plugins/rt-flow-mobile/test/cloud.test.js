@@ -124,7 +124,7 @@ t("knowledgeToMd 渲染标题/触发/正文", () => {
 });
 
 // 水过无痕/额度 纯函数
-const { okDelete, computeConvCap, lowBalanceVerdict, sessionSignature } = globalThis.DaoCloud;
+const { okDelete, computeConvCap, lowBalanceVerdict, sessionSignature, quotaResetInfo } = globalThis.DaoCloud;
 console.log("纯函数 (清理/额度):");
 t("okDelete: 200/202/204/404 皆视为已删 (幂等)", () => {
   assert.ok(okDelete(200) && okDelete(202) && okDelete(204) && okDelete(404));
@@ -149,6 +149,17 @@ t("sessionSignature: 状态字段拼指纹 (无推进则相同)", () => {
   const a = sessionSignature({ statusClass: "running", status: "x", reason: "r", title: "改名前" });
   const b = sessionSignature({ statusClass: "running", status: "x", reason: "r", title: "改名后" });
   assert.strictEqual(a, b);
+});
+t("quotaResetInfo: 抽取 D/W 重置时间与剩余% (秒级 unix → ms)", () => {
+  const r = quotaResetInfo({ daily_quota_reset_at_unix: 1700000000, weekly_quota_remaining_percent: 42, daily_quota_remaining_percent: 88 });
+  assert.strictEqual(r.dailyResetMs, 1700000000000);
+  assert.strictEqual(r.dailyPct, 88);
+  assert.strictEqual(r.weeklyPct, 42);
+  assert.strictEqual(r.weeklyResetMs, null);
+});
+t("quotaResetInfo: 缺字段/非对象 优雅降级为 null", () => {
+  assert.deepStrictEqual(quotaResetInfo(null), { dailyPct: null, weeklyPct: null, dailyResetMs: null, weeklyResetMs: null });
+  assert.deepStrictEqual(quotaResetInfo({}), { dailyPct: null, weeklyPct: null, dailyResetMs: null, weeklyResetMs: null });
 });
 
 // login(): user_id 的权威真源是 login 响应本体 (回归防护 —— 修复前 userId 恒空,
