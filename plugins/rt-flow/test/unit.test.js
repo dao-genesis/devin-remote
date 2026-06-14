@@ -181,6 +181,47 @@ function test(name, fn) {
     assert.deepStrictEqual(cloud.computeConvCap(NaN, 3, true, 0.1), { cap: 0, drain: false });
   });
 
+  // ── 8. 低余额预警 (lowBalanceVerdict · v4.7.5) ───────────────────────────
+  console.log("\n[lowBalanceVerdict]");
+  test("余额≤阈值且上轮未警 → 本轮发警·置已警", () => {
+    assert.deepStrictEqual(cloud.lowBalanceVerdict(2.5, 3, false), { alert: true, alerted: true });
+    assert.deepStrictEqual(cloud.lowBalanceVerdict(3, 3, false), { alert: true, alerted: true }); // 边界 = 阈值
+  });
+  test("余额≤阈值但上轮已警 → 不重复刷屏 (仍保持已警)", () => {
+    assert.deepStrictEqual(cloud.lowBalanceVerdict(1, 3, true), { alert: false, alerted: true });
+  });
+  test("余额回升至阈值之上 → 复位已警 (下次跌破再警)", () => {
+    assert.deepStrictEqual(cloud.lowBalanceVerdict(5, 3, true), { alert: false, alerted: false });
+  });
+  test("余额无法判定(null/NaN) → 不发警·保持上轮态", () => {
+    assert.deepStrictEqual(cloud.lowBalanceVerdict(null, 3, true), { alert: false, alerted: true });
+    assert.deepStrictEqual(cloud.lowBalanceVerdict(NaN, 3, false), { alert: false, alerted: false });
+  });
+
+  // ── 9. 卡死监测 (sessionSignature / stallVerdict · v4.7.5) ─────────────────
+  console.log("\n[sessionSignature / stallVerdict]");
+  test("签名取状态字段(非标题): 状态相同→指纹相同 (标题变不算进展)", () => {
+    const a = cloud.sessionSignature({ statusClass: "running", status: "coding", reason: "", title: "X" });
+    const b = cloud.sessionSignature({ statusClass: "running", status: "coding", reason: "", title: "Y 改名了" });
+    assert.strictEqual(a, b);
+  });
+  test("状态推进 → 指纹不同 (有进展)", () => {
+    const a = cloud.sessionSignature({ statusClass: "running", status: "coding" });
+    const b = cloud.sessionSignature({ statusClass: "running", status: "testing" });
+    assert.notStrictEqual(a, b);
+  });
+  test("无进展时长 ≥ 阈值 → 判卡死", () => {
+    assert.strictEqual(cloud.stallVerdict(16 * 60000, 15 * 60000), true);
+    assert.strictEqual(cloud.stallVerdict(15 * 60000, 15 * 60000), true); // 边界
+  });
+  test("无进展时长 < 阈值 → 不判卡死", () => {
+    assert.strictEqual(cloud.stallVerdict(5 * 60000, 15 * 60000), false);
+  });
+  test("阈值≤0(关闭) 或 非法入参 → 永不判卡 (安全)", () => {
+    assert.strictEqual(cloud.stallVerdict(99 * 60000, 0), false);
+    assert.strictEqual(cloud.stallVerdict(NaN, 15 * 60000), false);
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);

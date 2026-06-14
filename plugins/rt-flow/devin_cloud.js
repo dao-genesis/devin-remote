@@ -836,6 +836,35 @@ function computeConvCap(balance, buffer, drainOn, floor) {
   if (drainOn && cap <= 0 && b > flr) { cap = +b.toFixed(2); drain = true; }
   return { cap: Math.max(0, cap), drain };
 }
+// v4.7.5 · 低余额预警纯函数(可单测): 由实时余额/阈值/上轮是否已警 算本轮是否发警 + 新的已警态。
+//   余额 ≤ 阈值 且 上轮未警 → 本轮发警(只发一次·不刷屏); 余额回升至阈值之上 → 复位已警态(下次跌破再警)。
+//   余额无法判定(null/NaN) → 不发警·保持上轮态(安全·不臆断·不误扰)。
+//   知止不殆: 一次跌破只提醒一次, 回升后才允许再次提醒。
+function lowBalanceVerdict(balance, threshold, prevAlerted) {
+  const b = Number(balance);
+  const t = Math.max(0, Number(threshold) || 0);
+  if (!Number.isFinite(b)) return { alert: false, alerted: !!prevAlerted };
+  if (b <= t) return { alert: !prevAlerted, alerted: true };
+  return { alert: false, alerted: false };
+}
+
+// v4.7.5 · 会话进展签名(可单测): 取「会进展时会变」的状态字段拼成指纹。
+//   两轮指纹相同 = 这段时间该会话状态无任何推进 → 卡死监测据此计时。
+//   只取状态/原因(非标题), 避免自动命名等无关变更误判为"有进展"。
+function sessionSignature(sess) {
+  const s = sess || {};
+  return [s.statusClass || "", s.status || "", s.reason || ""].join("|");
+}
+
+// v4.7.5 · 卡死判定纯函数(可单测): 运行中会话指纹「持续不变」超过 stallMs → 疑似卡死/长时间无进展。
+//   stallMs ≤ 0 视为关闭(永不判卡); 仅以「无进展时长」为准, 不臆断真因(保守·只如实surface疑点)。
+function stallVerdict(unchangedMs, stallMs) {
+  const u = Number(unchangedMs);
+  const s = Number(stallMs);
+  if (!Number.isFinite(u) || !Number.isFinite(s) || s <= 0) return false;
+  return u >= s;
+}
+
 function isUserPlaybook(p, auth) {
   if (!p) return false;
   if (p.access === "community") return false; // Cognition 社区共享剧本
@@ -1991,4 +2020,8 @@ module.exports = {
   _isTransientErr,
   // v4.7.3 · 对话上限/抽干 (可测纯函数)
   computeConvCap,
+  // v4.7.5 · 低余额预警 / 卡死监测 (可测纯函数)
+  lowBalanceVerdict,
+  sessionSignature,
+  stallVerdict,
 };

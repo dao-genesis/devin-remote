@@ -2,6 +2,29 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.7.5 (2026-06-14) · 对话最终模块加固·卡死实时监测 + 低余额(≤$3)主动提醒 (Phase I)
+
+> 道法自然·知止不殆: 完善"对话最终模块"两件事——(1)**卡死实时监测**: 运行中对话「长时间无进展」即在 `_dvRunPoll` 每轮(默 1min)实时检出并左下角提醒(原仅检 blocked/awaiting/完成, 现补"running 但卡死"的盲区); (2)**低余额主动提醒**: 有活跃对话的账号余额 ≤ 阈值($3)时, 直接给用户发消息「额度快用完了」(IDE 通知 + 尽力往运行中对话续写一条提醒), 在被自动中停之前先告警。一次跌破只提醒一次, 回升后复位; 不臆造成功。
+
+### 新增
+
+- 纯函数(可单测·`devin_cloud.js`):
+  - `lowBalanceVerdict(balance, threshold, prevAlerted)` → `{alert, alerted}`: 余额≤阈值且上轮未警→发警; 回升→复位; null/NaN→不警保持上轮态。
+  - `sessionSignature(sess)` → 取状态字段(statusClass/status/reason·非标题)拼进展指纹。
+  - `stallVerdict(unchangedMs, stallMs)`: 无进展时长≥阈值→判卡死; 阈值≤0(关闭)/非法→永不判。
+- `_dvStallCheck(email, active)`: 运行中会话指纹持续不变超 `devinCloudStallMin`(默 15min)→ 提醒"疑似卡死·已 N 分钟无进展"(进展恢复后复位·不刷屏·离场即清状态)。
+- `_dvLowBalanceCheck(acc, auth, active)`: 有活跃对话才拉余额(限于"对话所在账号"·省调用), `billingBalance` 判定→`lowBalanceVerdict` 决策→IDE 通知 + (配 `devinCloudApiKey` 的 apk_ Key 时)`sendMessage` 续写提醒。
+- 配置: `devinCloudStallAlert`(默 true) · `devinCloudStallMin`(默 15) · `devinCloudLowBalanceAlert`(默 true) · `devinCloudLowBalanceThreshold`(默 3) · `devinCloudLowBalanceMessageSession`(默 true) · `devinCloudApiKey`(默 "")。
+
+### 守恒
+
+- 既有 `_dvMaybeNotify`(blocked/awaiting) / `_dvDetectFinished`(完成) / `_dvConvCapTick`(余额≤阈值自动中停) 逻辑一字未改; 卡死监测与低余额提醒为**新增叠加**(对话所在账号·实时监测·实时反馈)。
+- 续写消息需 apk_ Key; 缺失或失败仅走 IDE 通知, **不臆造成功**(铁律)。
+
+### 验证
+
+- `node -c` 通过; 单测 **39 全绿**(原 30 + 新 9: 低余额预警 4 + 卡死监测 5·无回归)。
+
 ## v4.7.4 (2026-06-14) · 对话追踪统一·账号编号(1-N) (Phase H)
 
 > 道法自然·卅辐同一毂: Cascade + Devin Cloud 对话追踪本已同处「对话追踪」面板(v4.6.0)。本版补齐编号区分: 侧栏每账号勾选框旁加**账号编号**(1、2、3…与账号顺序一致); 对话追踪中 Devin Cloud 对话挂**同一编号**, 用户一眼对应到具体账号; Cascade 流式对话加**对话编号**(序号)。完成/卡住/待输入 通知均带 `#编号` 前缀。Cascade 既有逻辑一字未改, 仅叠加显示。
