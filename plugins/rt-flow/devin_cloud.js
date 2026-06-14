@@ -1193,6 +1193,76 @@ async function backupOneConversation(auth, sess, accountDir, opts) {
   return { devinId, title, skipped: false, eventCount: events.length, producedFiles: fileIndex.length, zip: zipPath };
 }
 
+// 多对话合并为单个 ZIP (每对话一子文件夹·含 files/正文md/agent.json) → outDir/合并_<n>对话_<ts>.zip
+//   B 阶段·多选下载: 复用单对话备份的事件流/文件取证逻辑, 但所有对话汇入一个 ZipWriter, 一次落盘。
+async function backupConversationsBundle(auth, sessList, outDir, opts) {
+  opts = opts || {};
+  const prog = typeof opts.onProgress === "function" ? opts.onProgress : () => {};
+  const list = Array.isArray(sessList) ? sessList : [];
+  ensureDir(outDir);
+  const zip = new ZipWriter();
+  const index = [];
+  let done = 0;
+  for (const sess of list) {
+    const devinId = sess.devin_id || sess.devinId || sess.session_id || sess.id;
+    const title = sess.title || sess.name || "未命名";
+    prog("打包 " + (done + 1) + "/" + list.length + " · " + title.slice(0, 24));
+    try {
+      const events = await getEventStream(auth, devinId);
+      const detail = await getSessionDetail(auth, devinId);
+      const shortId = String(devinId).replace(/^devin-/, "").slice(0, 8);
+      const sub = safeName(shortId + "_" + safeName(title, 50), 70) + "/";
+      const fileIndex = [];
+      const finalState = new Map();
+      (function walk(o) {
+        if (!o || typeof o !== "object") return;
+        if (Array.isArray(o)) return o.forEach(walk);
+        if (o.file_path && o.contents_key) finalState.set(o.file_path, o.contents_key);
+        for (const v of Object.values(o)) walk(v);
+      })(events);
+      const changes = Array.from(finalState.entries()).map(([p, k]) => ({ path: p, key: k }));
+      const allKeys = Array.from(new Set(changes.map((c) => c.key)));
+      if (allKeys.length) {
+        const urlMap = await resolvePresignedUrls(auth, devinId, allKeys);
+        const cache = new Map();
+        await runPool(allKeys, CFG.downloadConcurrency, async (key) => {
+          const info = urlMap.get(key);
+          if (!info) return;
+          try { cache.set(key, await downloadFile(info.url, info.headers)); } catch (e) {}
+        });
+        for (const ch of changes) {
+          const data = cache.get(ch.key);
+          if (!data) continue;
+          const rel = ch.path
+            .replace(/^[A-Za-z]:[\\/]/, "")
+            .replace(/^[\\/]+/, "")
+            .replace(/\\/g, "/")
+            .split("/")
+            .map((p) => safeName(p, 60))
+            .join("/");
+          zip.addFile(sub + "files/" + rel, data);
+          fileIndex.push({ path: ch.path, size: data.length });
+        }
+      }
+      zip.addFile(sub + "对话_人类可读.md", buildConversationMd(title, devinId, events));
+      zip.addFile(sub + "对话_agent.json", buildAgentDoc(title, devinId, detail, events, fileIndex));
+      index.push({ devinId, title, files: fileIndex.length, eventCount: events.length });
+      done++;
+    } catch (e) {
+      index.push({ devinId, title, error: String((e && e.message) || e) });
+    }
+  }
+  zip.addFile(
+    "_index.json",
+    JSON.stringify({ account: auth.email, bundledAt: new Date().toISOString(), count: done, requested: list.length, conversations: index }, null, 2),
+  );
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const outName = "合并_" + done + "对话_" + ts + ".zip";
+  const outPath = path.join(outDir, outName);
+  fs.writeFileSync(outPath, zip.toBuffer());
+  return { ok: true, outPath, count: done, total: list.length, index };
+}
+
 // 备份某账号全部对话 (增量) → <root>/<账号名>/
 async function backupAccount(auth, opts) {
   opts = opts || {};
@@ -1877,6 +1947,7 @@ module.exports = {
   // backup
   backupAccount,
   backupOneConversation,
+  backupConversationsBundle,
   snapshotAccountData,
   backupAccountFull,
   // v4.4.0 · 文件夹备份 (HTML/MD双视图 · 道法自然)

@@ -2,6 +2,23 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.7.0 (2026-06-14) · 单对话操作 · 下拉概览每条对话加按钮 (查看/下载ZIP/清理) + 多选合并
+
+> 道法自然·热加载下拉里每条 Devin Cloud 对话本身可独立操作: 查看详情/Output 全文 · 下载本对话 ZIP 到本地 · 水过无痕清理(归档)。支持复选框多选(Shift 区间), 合并多个对话为一个 ZIP 下载 / 批量清理。复用既有热加载预载缓存(v4.6.0)与单对话备份取证逻辑(增量补全文件), 不改动既有备份/清理主链。
+
+### 新增
+
+- 前端 `_dvOverviewHtml` 每条对话行: 复选框 + 查看/下载/清理 三按钮; 列表上方多选条(已选计数·合并下载ZIP·批量清理·取消)。
+- webview 消息: `dvConvDetail` `dvConvZip` `dvConvDel` `dvConvZipBatch` `dvConvDelBatch`; 多选支持 Shift 区间选择(`dvcSel`)。
+- host 处理: 单对话详情(`buildConversationHtml` 新面板)、单对话 ZIP(`backupOneConversation` 强制全量补文件 + 资源管理器定位)、单/批清理(`deleteSession` 归档·模态确认·无感刷新概览)。
+- 后端 `devin_cloud.backupConversationsBundle(auth, sessList, outDir)`: 多对话合并为一个 ZIP(每对话一子文件夹·files/正文md/agent.json + _index.json), 复用事件流/取证/下载逻辑。
+- `_dvRefreshOverview`: 清理后失效缓存→重拉→推送最新概览(无感刷新)。
+
+### 验证
+
+- `node -c` 双文件语法通过; 23 项回归单测全绿(`node test/unit.test.js` → PASS 23 / FAIL 0)。
+- 真账 live: 见验证报告(合并 ZIP 结构/单对话 ZIP/详情面板)。
+
 ## v4.6.3 (2026-06-13) · Git 归一回报文案净化 (大象无形·去华取实)
 
 > 18 真账 live 大规模 Git 归一实测: 4/18 → 10/18 归一到 PAT 主 @zhouyoukang1234-spec (3 个空连新接 + 3 个错主净断重注), 余 3 ghost 孤儿态 + 5 github_app(OAuth) 如实回报需官网手动移除, App 连接绝不主动断 (铁律守恒)。官网交叉核验: Settings→Connections 显示 GitHub 已连 @zhouyoukang1234-spec · CLI token, 与 API 普查一致。
