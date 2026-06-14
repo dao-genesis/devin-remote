@@ -9,6 +9,7 @@ const assert = require("assert");
 const http = require("http");
 const cloud = require("../devin_cloud.js");
 const git = require("../devin_git.js");
+const proxy = require("../devin_proxy.js");
 
 let passed = 0;
 let failed = 0;
@@ -297,6 +298,52 @@ function test(name, fn) {
     const r = cloud.healthScore({});
     assert.strictEqual(r.score, 100);
     assert.strictEqual(r.tier, "green");
+  });
+
+  // ── 11. devin_proxy · IDE 内置浏览器自足注入反代 (v4.8.2) ──────────────────
+  console.log("\n[devin_proxy.buildAuthBridge]");
+  const _bridge = proxy.buildAuthBridge("http://localhost:54321", {
+    auth1: "auth1_abc123", userId: "user-xyz", orgId: "org-777", orgName: "Acme",
+  });
+  test("注入 auth1_session 真源登录态 (token+userId)", () => {
+    assert.ok(_bridge.includes("setItem('auth1_session'"), "含 auth1_session 写入");
+    assert.ok(_bridge.includes("auth1_abc123"), "含 token");
+    assert.ok(_bridge.includes("user-xyz"), "含 userId");
+  });
+  test("注入 org 键 + post-auth 守卫键", () => {
+    assert.ok(_bridge.includes("known-org-ids-"), "含 known-org-ids");
+    assert.ok(_bridge.includes("last-internal-org-for-external-org-v1-null"), "含 last-internal-org");
+    assert.ok(_bridge.includes("post-auth-v3-null-"), "含 post-auth 守卫键");
+    assert.ok(_bridge.includes("org-777"), "含 orgId");
+  });
+  test("拦截 fetch/XHR 挂 Authorization Bearer", () => {
+    assert.ok(_bridge.includes("window.fetch=function"), "覆写 fetch");
+    assert.ok(_bridge.includes("XMLHttpRequest.prototype.open"), "覆写 XHR.open");
+    assert.ok(_bridge.includes("'Bearer '+__a1"), "挂 Bearer 头");
+  });
+  test("注入值经 JSON 转义·防破坏脚本闭合", () => {
+    const b = proxy.buildAuthBridge("http://localhost:1", {
+      auth1: "a", userId: "u", orgId: "o", orgName: "x'</script><b>",
+    });
+    assert.ok(!b.includes("</script><b>"), "恶意 orgName 不得原样落入脚本体");
+  });
+  console.log("\n[devin_proxy.ensureProxyForAccount]");
+  await test("无 auth1 → ok:false (不起反代)", async () => {
+    const r = await proxy.ensureProxyForAccount("x@x.com", { auth1: "" });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.error, "no-auth1");
+  });
+  await test("持 auth1 → 起本地反代返回端口·同号复用·stop 收束", async () => {
+    const a = { auth1: "auth1_t", userId: "user-1", orgId: "org-1", orgName: "O" };
+    const r1 = await proxy.ensureProxyForAccount("dup@x.com", a);
+    assert.strictEqual(r1.ok, true);
+    assert.ok(r1.port > 0, "分得本地端口");
+    const r2 = await proxy.ensureProxyForAccount("dup@x.com", a);
+    assert.strictEqual(r2.port, r1.port, "同账号复用同端口 (origin 稳定)");
+    proxy.stopProxy("dup@x.com");
+    const r3 = await proxy.ensureProxyForAccount("dup@x.com", a);
+    assert.ok(r3.ok, "收束后可重启");
+    proxy.stopAll();
   });
 
   // ── 汇总 ──────────────────────────────────────────────────────────────────
