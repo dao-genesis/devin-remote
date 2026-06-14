@@ -174,7 +174,13 @@ document.addEventListener("click", async (e) => {
           const kn = o.counts && o.counts.knowledge ? `<button class="mini ghost kndl" data-kn-email="${escapeAttr(email)}">⭳ 知识库下载 (${o.counts.knowledge})</button>` : "";
           box.innerHTML = `<div class="track-counts">${renderCounts(o.counts)}</div>` +
             `<ul class="sessions">${(o.sessions || []).slice(0, 20).map((s) => sessionLi(s, email)).join("") || '<li class="sess muted">无对话</li>'}</ul>` +
-            (kn ? `<div class="ovw-actions">${kn}</div>` : "");
+            `<div class="ovw-actions">` +
+              (kn || "") +
+              `<button class="mini ghost gitst" data-git-email="${escapeAttr(email)}">🔗 Git 状态</button>` +
+              `<button class="mini ghost gitdc" data-gitdc-email="${escapeAttr(email)}">⛓ 断开 Git</button>` +
+              `<button class="mini danger wipe" data-wipe-email="${escapeAttr(email)}">🧹 水过无痕</button>` +
+            `</div>` +
+            `<div class="git-line" data-git-line="${escapeAttr(email)}"></div>`;
         } else box.innerHTML = `<div class="err-line">概览失败: ${escapeHtml((r && r.error) || "?")}</div>`;
       }
       btn.disabled = false;
@@ -214,6 +220,67 @@ document.addEventListener("click", async (e) => {
     kndl.disabled = false;
     return;
   }
+  // Git 状态
+  const gitst = e.target.closest("button.gitst");
+  if (gitst) {
+    const email = gitst.dataset.gitEmail;
+    const line = document.querySelector(`[data-git-line="${CSS.escape(email.toLowerCase())}"]`) || document.querySelector(`[data-git-line="${CSS.escape(email)}"]`);
+    gitst.disabled = true;
+    if (line) line.innerHTML = '<span class="muted">查询 Git 状态…</span>';
+    const r = await send({ type: "gitStatus", email });
+    if (line) {
+      if (r && r.ok) { const g = r.git; line.innerHTML = `<span class="muted">身份 <b>${escapeHtml(g.login || "无")}</b> · 连接 ${g.connections} · 仓库 ${g.repoCount} · PAT密钥 ${g.secret ? "✓" : "✗"}</span>`; }
+      else line.innerHTML = `<span class="err-line">${escapeHtml((r && r.error) || "失败")}</span>`;
+    }
+    gitst.disabled = false;
+    return;
+  }
+  // 断开 Git
+  const gitdc = e.target.closest("button.gitdc");
+  if (gitdc) {
+    const email = gitdc.dataset.gitdcEmail;
+    if (!confirm(`断开 ${email} 的全部 Git 连接？(清仓库授权 + 断身份)`)) return;
+    gitdc.disabled = true;
+    toast("断开 Git…");
+    const r = await send({ type: "gitDisconnect", email });
+    toast(r && r.ok ? "已断开 Git (剩余连接 0)" : `断开未净: 剩 ${(r && r.remaining) != null ? r.remaining : "?"}`, r && r.ok ? "ok" : "err");
+    gitdc.disabled = false;
+    return;
+  }
+  // 水过无痕: 先 dryRun 扫描 → 确认 → 执行
+  const wipe = e.target.closest("button.wipe");
+  if (wipe) {
+    const email = wipe.dataset.wipeEmail;
+    wipe.disabled = true;
+    toast("扫描可清理痕迹…");
+    const scan = await send({ type: "wipeAccount", email, dryRun: true });
+    if (!scan || !scan.ok) { toast("扫描失败: " + ((scan && scan.error) || ""), "err"); wipe.disabled = false; return; }
+    const rp = scan.report;
+    const msg = `水过无痕将清理 ${email}:\n对话 ${rp.sessions.found} · 知识库 ${rp.knowledge.found} · 剧本 ${rp.playbooks.found} · 密钥 ${rp.secrets.found}\n(本源默认保留: 知识 ${rp.native.knowledge} 剧本 ${rp.native.playbooks})\n并断开全部 Git 连接。不可恢复，确认执行？`;
+    if (!confirm(msg)) { wipe.disabled = false; return; }
+    toast("执行水过无痕…");
+    const r = await send({ type: "wipeAccount", email, dryRun: false });
+    if (r && r.ok) { const x = r.report; toast(`已清: 对话${x.sessions.deleted} 知识${x.knowledge.deleted} 剧本${x.playbooks.deleted} 密钥${x.secrets.deleted}`, "ok"); }
+    else toast("清理失败: " + ((r && r.error) || ""), "err");
+    wipe.disabled = false;
+    return;
+  }
+});
+
+$("gitBatchBtn").addEventListener("click", async () => {
+  const pat = $("gitPat").value.trim();
+  if (!pat) { toast("先粘贴 GitHub PAT", "err"); return; }
+  if (!STATE.accounts.length) { toast("账号池为空", "err"); return; }
+  if (!confirm(`将该 PAT 连接到全部 ${STATE.accounts.length} 个账号？`)) return;
+  const btn = $("gitBatchBtn");
+  btn.disabled = true; btn.textContent = "连接中…";
+  const r = await send({ type: "gitBatchConnectPat", pat }, 40);
+  const box = $("gitBatchResult");
+  if (r && r.ok) {
+    box.innerHTML = r.results.map((x) => `<div class="gitres-row ${x.ok ? "ok" : "err"}">${x.ok ? "✓" : "✗"} ${escapeHtml(x.email)}${x.ok ? ` · @${escapeHtml(x.login || "?")} · 仓库 ${x.repoCount}` : " · " + escapeHtml((x.error || "").slice(0, 60))}</div>`).join("");
+    toast(`批量归一: ${r.succeeded}/${r.total} 成功`, r.succeeded ? "ok" : "err");
+  } else { box.innerHTML = `<div class="gitres-row err">批量连接失败: ${escapeHtml((r && r.error) || "?")}</div>`; toast("批量连接失败", "err"); }
+  btn.disabled = false; btn.textContent = "🔗 批量连接全部账号";
 });
 
 $("addBtn").addEventListener("click", async () => {

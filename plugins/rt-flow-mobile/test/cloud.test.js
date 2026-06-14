@@ -123,6 +123,34 @@ t("knowledgeToMd 渲染标题/触发/正文", () => {
   assert.ok(md.includes("# K1") && md.includes("触发: when X") && md.includes("正文内容"));
 });
 
+// 水过无痕/额度 纯函数
+const { okDelete, computeConvCap, lowBalanceVerdict, sessionSignature } = globalThis.DaoCloud;
+console.log("纯函数 (清理/额度):");
+t("okDelete: 200/202/204/404 皆视为已删 (幂等)", () => {
+  assert.ok(okDelete(200) && okDelete(202) && okDelete(204) && okDelete(404));
+  assert.ok(!okDelete(403) && !okDelete(500));
+});
+t("computeConvCap: 常态 cap=余额-缓冲", () => {
+  assert.deepStrictEqual(computeConvCap(10, 3, false, 0), { cap: 7, drain: false });
+});
+t("computeConvCap: 抽干模式 cap≤0 且 >floor → 反抬回全余额", () => {
+  const r = computeConvCap(2, 3, true, 0.5);
+  assert.ok(r.drain === true && r.cap === 2);
+});
+t("computeConvCap: 见底(≤floor) → cap=0 不抽干", () => {
+  assert.deepStrictEqual(computeConvCap(0.3, 3, true, 0.5), { cap: 0, drain: false });
+});
+t("lowBalanceVerdict: 跌破只警一次, 回升复位", () => {
+  assert.deepStrictEqual(lowBalanceVerdict(2, 5, false), { alert: true, alerted: true });
+  assert.deepStrictEqual(lowBalanceVerdict(2, 5, true), { alert: false, alerted: true });
+  assert.deepStrictEqual(lowBalanceVerdict(9, 5, true), { alert: false, alerted: false });
+});
+t("sessionSignature: 状态字段拼指纹 (无推进则相同)", () => {
+  const a = sessionSignature({ statusClass: "running", status: "x", reason: "r", title: "改名前" });
+  const b = sessionSignature({ statusClass: "running", status: "x", reason: "r", title: "改名后" });
+  assert.strictEqual(a, b);
+});
+
 // login(): user_id 的权威真源是 login 响应本体 (回归防护 —— 修复前 userId 恒空,
 // 因 auth1 是不透明令牌·非 JWT 且 post-auth 不回传 user_id)。mock fetch, 不触网。
 const { login } = globalThis.DaoCloud;

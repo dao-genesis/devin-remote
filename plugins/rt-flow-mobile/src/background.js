@@ -10,7 +10,7 @@
 //      + 通知 app.devin.ai 标签页重注入 localStorage 登录态
 //   5. alarms 周期轮询: 活跃账号余额 ≤ 缓冲 → 自动切到最优账号 (软耗尽轮转)
 // ═══════════════════════════════════════════════════════════════════════════
-importScripts("cloud.js", "parse.js");
+importScripts("cloud.js", "parse.js", "git.js");
 
 const DNR_RULE_ID = 1001;
 const ALARM = "dao-rtflow-poll";
@@ -251,6 +251,57 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
           try { sendResponse(await DaoCloud.exportKnowledge(r)); }
           catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+          break;
+        }
+        // Git 状态快照 (只读)
+        case "gitStatus": {
+          const r = await ensureAuth(msg.email);
+          if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
+          try { sendResponse({ ok: true, git: await DaoGit.gitStatus(r) }); }
+          catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+          break;
+        }
+        // PAT 连接/归一 (单账号)
+        case "gitConnectPat": {
+          const r = await ensureAuth(msg.email);
+          if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
+          try { sendResponse(await DaoGit.connectWithPat(r, (msg.pat || "").trim())); }
+          catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+          break;
+        }
+        // 批量归一: 同一 PAT 套用到全部(或指定)账号
+        case "gitBatchConnectPat": {
+          const pat = (msg.pat || "").trim();
+          if (!pat) { sendResponse({ ok: false, error: "无 PAT" }); break; }
+          const st = await getState();
+          const emails = (msg.emails && msg.emails.length) ? msg.emails : st.accounts.map((a) => a.email);
+          const results = [];
+          for (const email of emails) {
+            const r = await ensureAuth(email);
+            if (!r.ok) { results.push({ email, ok: false, error: r.error }); continue; }
+            try { const g = await DaoGit.connectWithPat(r, pat); results.push({ email, ok: g.ok, login: g.login, repoCount: g.repoCount, error: g.error }); }
+            catch (e) { results.push({ email, ok: false, error: String((e && e.message) || e) }); }
+          }
+          sendResponse({ ok: true, results, total: emails.length, succeeded: results.filter((x) => x.ok).length });
+          break;
+        }
+        // 断开 Git
+        case "gitDisconnect": {
+          const r = await ensureAuth(msg.email);
+          if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
+          try { sendResponse(await DaoGit.robustDisconnectGit(r)); }
+          catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+          break;
+        }
+        // 水过无痕: 扫描 (dryRun) / 执行清理
+        case "wipeAccount": {
+          const r = await ensureAuth(msg.email);
+          if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
+          try {
+            const report = await DaoCloud.wipeAccount(r, { dryRun: !!msg.dryRun });
+            if (!msg.dryRun) { try { await DaoGit.robustDisconnectGit(r); } catch (e) {} }
+            sendResponse({ ok: true, report });
+          } catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
           break;
         }
         case "removeAccount": {

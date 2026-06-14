@@ -96,5 +96,17 @@ button.ghost:hover { background: var(--card2); color: var(--fg); }
 .ovw .err-line { color: var(--danger); }
 .sess .sdl { flex: none; background: transparent; border: 1px solid var(--line); color: var(--accent2); padding: 1px 6px; font-size: 12px; border-radius: 5px; }
 .sess .sdl:hover { background: var(--card2); }
-.ovw-actions { margin-top: 8px; }
-.ovw-actions .kndl { margin-left: 0; width: 100%; }
+.ovw-actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.ovw-actions .kndl { margin-left: 0; flex: 1 1 100%; }
+.git-line { margin-top: 6px; font-size: 11px; }
+.git-line .muted, .ovw .muted { color: var(--mut); }
+.git-line b { color: var(--accent2); }
+button.danger { border-color: var(--danger); color: var(--danger); background: transparent; }
+button.danger:hover { background: rgba(248,113,113,0.12); }
+.gitbox { margin-top: 4px; }
+.gitbox summary { cursor: pointer; }
+.gitbox input { width: 100%; box-sizing: border-box; margin: 6px 0; }
+.gitbox .hint, .addbox .hint { font-size: 11px; color: var(--mut); margin-top: 4px; }
+.gitres { margin-top: 6px; }
+.gitres-row { font-size: 11px; padding: 2px 0; }
+.gitres-row.ok { color: #4ade80; } .gitres-row.err { color: #f87171; }
