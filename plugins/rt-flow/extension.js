@@ -749,7 +749,7 @@ const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.7.7";
+const VERSION = "4.7.8";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -3412,21 +3412,50 @@ ${backupStatus}
 ${_dvBackupPanelHtml()}
 </div></div>`;
 }
+// v4.7.8 · 同步短睡 (rename 退避用) · Atomics.wait 优先 · 退化忙等兜底 (≤数百 ms·仅锁冲突时触发)
+function _sleepSyncMs(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {}
+  }
+}
 function atomicWrite(filePath, content) {
   ensureDir(path.dirname(filePath));
   const tmp = filePath + "." + process.pid + "." + Date.now() + ".tmp";
   fs.writeFileSync(tmp, content);
-  try {
-    fs.renameSync(tmp, filePath);
-  } catch (e) {
+  // v4.7.8 · 本源修复(141 实测 EPERM ×81): Windows 上 wam-state.json 被瞬时锁
+  //   (杀软扫描/并发读)时 fs.renameSync 抛 EPERM/EBUSY/EACCES。旧实现 catch 内即便
+  //   copyFileSync 兜底成功也无条件 throw → 数据其实已落盘却被记为 "store.save fail"
+  //   (假失败刷屏)且无重试。治法: 锁类错误短退避重试(40/80/120/160ms); 终败再 copyFile
+  //   兜底, 兜底成功即返回(不抛)。消除假失败 + 防数据丢失。
+  let lastErr = null;
+  for (let i = 0; i < 5; i++) {
     try {
-      fs.copyFileSync(tmp, filePath);
-    } catch {}
-    // v2.4.4 · bug 5: 无论 rename / copy 成败 · 必清 .tmp · 防累 70+ 个孤儿
+      fs.renameSync(tmp, filePath);
+      return; // 真原子落盘成功
+    } catch (e) {
+      lastErr = e;
+      const code = e && e.code;
+      const transient = code === "EPERM" || code === "EBUSY" || code === "EACCES";
+      if (!transient || i === 4) break; // 非锁类错误 或 已是最后一次 → 跳出走兜底
+      _sleepSyncMs(40 * (i + 1)); // 退避后重试 (锁多在数十 ms 内自解)
+    }
+  }
+  // rename 终败 → copyFile 兜底覆写 (数据仍落盘)
+  try {
+    fs.copyFileSync(tmp, filePath);
     try {
       fs.unlinkSync(tmp);
     } catch {}
-    throw e;
+    return; // 兜底成功 · 数据已持久化 · 不抛 (消除假失败)
+  } catch (e2) {
+    // 两路均败 · 清 .tmp 防累孤儿 · 如实上抛 (v2.4.4 bug5)
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
+    throw lastErr || e2;
   }
 }
 // v2.4.4 · bug 5: 启动一次性清 ~/.wam 下 >1h 的孤儿 .tmp · 历史 atomicWrite 漏处理
@@ -3593,6 +3622,7 @@ function _loadSessionCacheFromDisk() {
 //   替换 openExternal 为守卫函数 · 凡 windsurf.com/account URL 静默吞掉 · 其余放行
 let _origOpenExternal = null; // 原始 openExternal 备份
 let _guardBlockCount = 0; // 守卫拦截计数 (诊断)
+let _openExternalGuardWarned = false; // v4.7.8 · 降级只记一次 (防 27× 刷屏)
 function _installOpenExternalGuard() {
   if (_openExternalGuardActive) return; // 已安装 · 幂等
   try {
@@ -3618,20 +3648,45 @@ function _installOpenExternalGuard() {
       // 非 auth URL → 放行 (如帮助页面等)
       return _origOpenExternal.call(vscode.env, uri);
     };
-    Object.defineProperty(vscode.env, "openExternal", {
-      value: _guard,
-      configurable: true,
-      writable: true,
-    });
-    _openExternalGuardActive = vscode.env.openExternal === _guard;
-    if (_openExternalGuardActive) {
+    // v4.7.8 · 本源修复(141 实测 Cannot redefine property ×27): 某些 Windsurf/VSCode
+    //   版本 vscode.env.openExternal 为「不可配置」访问器 → Object.defineProperty 必抛
+    //   "Cannot redefine property", 且每次模式切换都重试 → 刷屏且守卫从未装上。
+    //   治法: 先探属性描述符, 不可配置则跳过 defineProperty(避免抛错), 退而尝试可写赋值兜底;
+    //   仍装不上则静默降级且只记一次 (不影响核心功能)。
+    const desc = Object.getOwnPropertyDescriptor(vscode.env, "openExternal");
+    let installed = false;
+    if (!desc || desc.configurable) {
+      try {
+        Object.defineProperty(vscode.env, "openExternal", {
+          value: _guard,
+          configurable: true,
+          writable: true,
+        });
+        installed = vscode.env.openExternal === _guard;
+      } catch {}
+    }
+    if (!installed && (!desc || desc.writable || typeof desc.set === "function")) {
+      try {
+        vscode.env.openExternal = _guard; // 可写访问器/数据属性 → 直接赋值兜底
+        installed = vscode.env.openExternal === _guard;
+      } catch {}
+    }
+    _openExternalGuardActive = installed;
+    if (installed) {
       log("🛡️ openExternal guard: 已安装 · 切号窗口保护中");
     } else {
-      log("🛡️ openExternal guard: defineProperty 不粘 · 降级无守卫");
+      // 不可配置/不可写 · 静默降级 · 只记一次 (不再每次切换都抛错刷屏)
+      if (!_openExternalGuardWarned) {
+        log("🛡️ openExternal guard: 该 IDE openExternal 不可重定义 · 降级无守卫(不影响核心功能)");
+        _openExternalGuardWarned = true;
+      }
       _origOpenExternal = null;
     }
   } catch (e) {
-    log("🛡️ openExternal guard: 安装失败 · " + (e.message || e));
+    if (!_openExternalGuardWarned) {
+      log("🛡️ openExternal guard: 安装失败 · " + (e.message || e));
+      _openExternalGuardWarned = true;
+    }
     _origOpenExternal = null;
     _openExternalGuardActive = false;
   }
