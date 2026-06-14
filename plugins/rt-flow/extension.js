@@ -9501,11 +9501,13 @@ async function handleWebviewMessage(msg) {
             const r = await loginAccount(_store, i);
             if (!r.ok) _toast("✗ 切号失败: " + (r.error || r.stage || ""));
           }
-          // 复用 dao-vsix 命令: 经本地反代根路径路由官网, auth1 自动注入登录
+          // 复用 dao-vsix 命令: 每账号独立 webview 标签 (多实例并行·经反代 dao_acct 注入该账号 auth1)。
+          // 先切此号已使该账号 auth1 持久化入共享库, 故 dao_acct 路由可命中。
           try {
-            await vscode.commands.executeCommand("dao.devinCloudBrowser");
+            await vscode.commands.executeCommand("dao.routeOfficialForAccount", { email: a.email, mode: "ide" });
           } catch {
-            await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
+            try { await vscode.commands.executeCommand("dao.devinCloudBrowser"); }
+            catch { await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai")); }
           }
           _toast("🖥 已路由官网→IDE · " + a.email.split("@")[0]);
         } catch (e) {
@@ -9518,7 +9520,12 @@ async function handleWebviewMessage(msg) {
         const i = msg.index;
         if (i < 0 || i >= _store.accounts.length) return;
         const a = _store.accounts[i];
-        await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
+        // 复用 dao-vsix 隔离启动器: 每账号独立 profile 窗口 (多实例·互不串号)。
+        try {
+          await vscode.commands.executeCommand("dao.routeOfficialForAccount", { email: a.email, mode: "sys" });
+        } catch {
+          await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
+        }
         _toast("🌐 系统浏览器已打开官网 · " + a.email.split("@")[0]);
         break;
       }

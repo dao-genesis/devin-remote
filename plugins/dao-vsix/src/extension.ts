@@ -435,6 +435,22 @@ export async function activate(context: vscode.ExtensionContext) {
             try { vscode.commands.executeCommand('simpleBrowser.show', proxyUrl); }
             catch { vscode.env.openExternal(vscode.Uri.parse(proxyUrl)); }
         }),
+        // ★ 归一·E · 路由某账号官网 (手动·多实例)。rt-flow 账号行两按钮调此命令:
+        //   mode 'ide' → IDE 内每账号独立 webview 标签 (多实例并行·不相悖);
+        //   mode 'sys' → 系统默认浏览器独立 profile 窗口 (复用 launchIsolatedBrowser)。
+        //   经反代 ?dao_acct=<email> 注入该账号 auth1 → 各窗口隔离登录, 无需全局切号。
+        vscode.commands.registerCommand('dao.routeOfficialForAccount', async (arg?: { email?: string; mode?: string }) => {
+            const email = (arg && arg.email || ws.devinEmail || '').trim();
+            const mode = (arg && arg.mode) === 'sys' ? 'sys' : 'ide';
+            await ensureRoutedAutoLogin(context);
+            const url = daoRoutedWebUrlForAccount(email, '');
+            if (mode === 'sys') {
+                const ok = launchIsolatedBrowser(url, email || 'default');
+                vscode.window.showInformationMessage(ok ? ('🌐 系统浏览器已路由官网: ' + (email || '当前账号')) : '浏览器启动失败');
+            } else {
+                openRoutedAccountPanel(context, email, url);
+            }
+        }),
         vscode.commands.registerCommand('dao.openDashboard', () => {
             vscode.commands.executeCommand('workbench.view.extension.devin-cloud-container');
         }),
@@ -5435,6 +5451,30 @@ function escapeHtml(s: string): string {
 // ═══════════════════════════════════════════════════════════
 
 let devinCloudPanelInstance: vscode.WebviewPanel | null = null;
+
+// ★ 归一·E · 多实例并行: 每账号一独立 webview 标签 (按 email 复用·不相悖)。
+//   re-click 同账号 → 聚焦其既有面板; 不同账号 → 各开独立标签同时可用。
+//   iframe 指向 daoRoutedWebUrlForAccount(email) (?dao_acct 注入该账号 auth1)。
+const routedAccountPanels = new Map<string, vscode.WebviewPanel>();
+function openRoutedAccountPanel(context: vscode.ExtensionContext, email: string, url: string): void {
+    const key = (email || 'default').toLowerCase();
+    const existing = routedAccountPanels.get(key);
+    if (existing) { existing.reveal(vscode.ViewColumn.Beside); return; }
+    const localBase = ws.port ? `http://localhost:${ws.port}` : '';
+    const panel = vscode.window.createWebviewPanel(
+        'dao.routedAccount.' + key,
+        '🖥 官网 · ' + (email ? email.split('@')[0] : '当前账号'),
+        vscode.ViewColumn.Beside,
+        {
+            enableScripts: true,
+            retainContextWhenHidden: true,
+            localResourceRoots: localBase ? [vscode.Uri.parse(localBase + '/')] : undefined,
+        }
+    );
+    routedAccountPanels.set(key, panel);
+    panel.webview.html = getDevinCloudPanelHtml(url, localBase || url);
+    panel.onDidDispose(() => { routedAccountPanels.delete(key); });
+}
 
 function devinCloudPanel(context: vscode.ExtensionContext): void {
     // 如果已有面板则聚焦
