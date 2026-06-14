@@ -75,3 +75,21 @@ src/popup.{html,js,css}  控制面板 UI
 test/cloud.test.js   纯函数单测 (billingBalance / decodeJwtUserId / 评分)
 tools/pack.sh        打包成可装载 zip
 ```
+
+## 状态 · 实测 · 开发接力
+
+> 给下一个 agent：本板块是 ⑤ rt-flow 在浏览器的移植（详见仓库根 README §rt-flow-mobile、`docs/CANON_five-plugins.md` §⑥、`docs/MODULE_STATUS_道全景.md` 模块矩阵）。从这里起手即可接续。
+
+**已完成（实测通过）**
+- 源码健康：`node test/cloud.test.js` → 12/12；`node --check src/{cloud,background,content,popup}.js` 全过。
+- 桌面 Chrome（与安卓 Kiwi/Edge 同 Chromium 引擎）全流程实测：账号增删、`chrome.storage` 即时渲染、「验证」命中真实 `windsurf.com`（假密码如实回 HTTP 401）、`content.js` 注入 `app.devin.ai` 登录态链路通。
+- **已修复 MV3 冷启竞态**：`src/popup.js` 改为 storage-first（渲染直读 `chrome.storage`，不依赖 service worker 是否唤醒），并给面向引擎的 `send` 加超时重试 → 面板不再卡「读取状态失败」。
+
+**待验证 / 续作缺口**
+- **安卓真机侧载**：未在本会话验证 —— 构建 VM 为 Windows Server，嵌套虚拟化未透传 VT-x（无法跑加速 Android 模拟器）。扩展按标准 MV3 构建，按上文「Android（Kiwi Browser）」步骤可直接侧载；官方加速模拟器需 Linux 蓝图（`system-images;android-34;x86_64` + KVM）。
+- 可选：`bash tools/pack.sh` 产物挂到 Releases；录一段桌面/真机操作视频作可视证据（与根 README 其它板块的视频体例一致）。
+
+**接手指引**
+- 引擎/消息协议在 `src/background.js`（`getState/addAccount/activate/refreshQuota/rotate/saveSettings/getActiveAuth/reportExhausted`）。
+- 加新动作：在 `background.js` 的 `onMessage` switch 里加 case，popup 用带超时重试的 `send({type:...})` 调它；纯展示态变更直接写 `chrome.storage`（storage-first，popup 会经 `chrome.storage.onChanged` 自动刷新）。
+- 登录/额度判定纯函数在 `src/cloud.js`（可单测，勿在此引入浏览器全局依赖）。

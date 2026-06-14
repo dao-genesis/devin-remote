@@ -18,6 +18,7 @@ Devin Desktop 内的交互）需 live IDE 环境，见各模块「缺口」。
 | **devin-git-auth**③多账号Git | `dao-git-auth-cli.js` / `extension.js` / `engine/*` | 2.3.2 | **CLI 可运行**（`--help` 列 read-status/connect-git/switch-git/full-auto）；engine 7 文件 `node --check` 全过 | 真机多 Devin 账号绑同一 GitHub 端到端 |
 | **cf-daohub / dao-bridge**④内网穿透 | `dao-bridge-ext/extension.js` + `dao-bridge/{agent,core}.js` | 3.2.0 | 源码 `node --check` 全过；bridge 本会话实际承载了对 141 的隧道（活体验证） | 命名隧道固定域名（需 CF token） |
 | **rt-flow**⑤Cloud备份/回归 | `extension.js` + `devin_cloud.js` + `_vscdb*.py` | 4.4.1 | 全 JS/PY 静态检查通过 | 真机多账号额度/备份/wipe 实测 |
+| **rt-flow-mobile**⑥浏览器/手机版 | `src/{cloud,background,content,popup}.js` + `manifest.json`（MV3） | 1.0.0 | **源码健康**：`node test/cloud.test.js` 12/12、`node --check` 全过；**桌面 Chrome 全流程实测通过**（登录注入/自动切号/storage-first 面板，含修复 MV3 冷启竞态卡死） | 安卓 Kiwi/Edge **真机侧载验证**（本 VM 无嵌套 KVM/VT-x，跑不了加速 Android 模拟器）；可选：打 release zip + 录屏证据 |
 | **dao-export**（模块） | `dao_export_all.py`（零依赖） | 1.3.3 | **CLI 可运行**（`--help` 全参数正常：email/password/accounts/token/org/filter/workers…） | 真账号全量导出冒烟 |
 | tools / bootstrap | `coldstart.ps1` / `pack-vsix.js` / `render_check.js` / `fetch-cloudflared.js` | — | `render_check.js` 作为 webview 渲染守卫已用于本轮验证 | — |
 
