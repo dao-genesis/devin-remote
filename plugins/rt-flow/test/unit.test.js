@@ -151,6 +151,36 @@ function test(name, fn) {
     assert.strictEqual(git.classifyRegisteredState({ ownerLogin: "z", connections: [{ name: "a", type: "github_individual_token" }, { name: "b", type: "github_app" }], hasRepos: false }), "app");
   });
 
+  // ── 7. 对话上限 + 耗尽自动重置 (computeConvCap · v4.7.3) ────────────────────
+  console.log("\n[computeConvCap]");
+  test("常态: cap = 余额 - 缓冲 (余额$70 缓冲$3 → $67)", () => {
+    const r = cloud.computeConvCap(70, 3, true, 0.1);
+    assert.strictEqual(r.cap, 67); assert.strictEqual(r.drain, false);
+  });
+  test("随余额下降实时下调 (余额$55 缓冲$3 → $52)", () => {
+    assert.strictEqual(cloud.computeConvCap(55, 3, true, 0.1).cap, 52);
+  });
+  test("反向重置: 余额抵缓冲(余额$3 缓冲$3 → cap本应0)→ 抽干抬回$3 让美金用尽", () => {
+    const r = cloud.computeConvCap(3, 3, true, 0.1);
+    assert.strictEqual(r.cap, 3); assert.strictEqual(r.drain, true);
+  });
+  test("反向重置: 余额低于缓冲(余额$2 缓冲$3)→ 抽干抬回$2", () => {
+    const r = cloud.computeConvCap(2, 3, true, 0.1);
+    assert.strictEqual(r.cap, 2); assert.strictEqual(r.drain, true);
+  });
+  test("见底(余额≤地板$0.1)→ cap=0 不抽干 (交由调用方中停)", () => {
+    const r = cloud.computeConvCap(0.05, 3, true, 0.1);
+    assert.strictEqual(r.cap, 0); assert.strictEqual(r.drain, false);
+  });
+  test("抽干关闭: 余额抵缓冲 → cap=0 (沿用旧中停语义·不抬回)", () => {
+    const r = cloud.computeConvCap(3, 3, false, 0.1);
+    assert.strictEqual(r.cap, 0); assert.strictEqual(r.drain, false);
+  });
+  test("非法余额(null/NaN)→ 安全回 {cap:0,drain:false}", () => {
+    assert.deepStrictEqual(cloud.computeConvCap(null, 3, true, 0.1), { cap: 0, drain: false });
+    assert.deepStrictEqual(cloud.computeConvCap(NaN, 3, true, 0.1), { cap: 0, drain: false });
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);

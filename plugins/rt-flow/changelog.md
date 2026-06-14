@@ -2,6 +2,27 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.7.3 (2026-06-14) · 美金额度·耗尽自动重置(反向重置·抽干至零) (Phase G)
+
+> 道法自然·将欲予之必故予之: 对话额度上限本随余额下降(cap=余额-缓冲), 余额抵缓冲时上限本将归 0、把最后一笔美金困住。新增「耗尽重置」(默认开): 当 cap 将归 0 且尚未见底, 把上限**反向抬回剩余余额**, 让美金真正用尽; 仅当余额 ≤ 抽干地板($0.10·真见底)才最终中停运行中对话。每账号实时美金余额与每对话上限继续在下拉概览显示, 缓冲可手动调。
+
+### 新增
+
+- 纯函数 `devin_cloud.computeConvCap(balance, buffer, drainOn, floor)` → `{cap, drain}`(可单测): 常态 cap=余额-缓冲; cap≤0 且 余额>地板 → cap 反抬回余额 + drain=true; 余额≤地板 → cap=0。
+- `_dvConvCapTick` 改用 `computeConvCap`; 中停边界 `stopBound = drainOn ? floor : stopAt`(抽干模式仅见底才停)。
+- 配置: `devinCloudConvDrainToZero`(默 true) · `devinCloudConvDrainFloor`(默 $0.10)。
+- 前端: 工具条加「耗尽重置」勾选 + `dvToggleDrain`; 概览/广播 capTxt 显示「·抽干中」(琥珀色 #dcaa55)。
+- host: `devinToggleDrain` 处理。
+
+### 守恒
+
+- 抽干模式不改变正常区间的 cap=余额-缓冲 语义; 仅在末端(余额≤缓冲)接管, 防止困住最后一笔钱。
+- 关闭「耗尽重置」即回退 v4.5.0 旧语义(余额≤停止阈值即中停)。
+
+### 验证
+
+- `node -c` 双文件通过; 单测 23→**30 全绿**(新增 7 项: 常态/实时下调/反向重置$3/$2/见底/抽干关闭/非法余额)。
+
 ## v4.7.2 (2026-06-14) · PAT 反向注入 · 一键把 PAT 作为 GITHUB_PAT 密钥写入全部账号 (Phase F)
 
 > 道法自然·将欲予之必故予之: 用户在「批量归一」PAT 框填入 PAT 后, 点「&#128273; PAT注密钥」即把该 PAT 作为 `GITHUB_PAT` 密钥反向注入到「全部账号」(若已勾选账号则仅注入勾选项)。复用 devin_git 写后双读确认逻辑(`ensureGithubPatSecret`), 与 dao-vsix 1.3.3 `devinInjectSecret` 同源(`POST /api/org-{bare}/secrets {key,value,type:key-value,sensitive,note}`, 200/201/409 皆视为成功·幂等)。
