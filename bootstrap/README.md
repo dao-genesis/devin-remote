@@ -74,6 +74,7 @@ devin-desktop --list-extensions                     # 验证
 - **一条失败不毁全局**：批量/并发拉取用逐条重试（allSettled 语义），别用 `Promise.all`（任一抖动即整体丢失）。
 - **区分用户数据与本源默认**：wipe 只清用户数据，保留 3 内置知识 + 32 社区剧本。
 - **中文路径/字面量坑**：经中继下发的 PowerShell 脚本里中文字面量会被破坏 → 脚本只用 ASCII，中文内容用 `base64(UTF8)` 内嵌后 `[IO.File]::WriteAllBytes` 落地。
-- **推送认证**：git 代理对本仓库可能 403（无写权）→ 用 PAT 直推 github.com（**纯 PAT 形式**，`x-access-token:` 前缀会被拒）。
+- **推送认证**：git 代理对本仓库可能 403（无写权）→ 用 PAT 直推 github.com（**纯 PAT 形式**，`x-access-token:` 前缀会被拒）。若全局 `insteadOf` 把 `https://github.com/` 改写到代理，可直接 push 带 userinfo 的显式 URL `https://x-access-token:<PAT>@github.com/...`（带 userinfo 的前缀不匹配 `insteadOf` 故不被改写）。
+- **归一(dao.dao-one)与独立引擎冲突**：归一容器复用并内联四套引擎本体视图（`wam.panel`/`dao.router`/`dao.cloudPanel`/`daoBridgeView`）。VS Code 的 **view/command id 必须全局唯一** —— 若独立引擎（`dao.dao-vsix`/`dao-agi.dao-proxy-pro`/`devaid.rt-flow`/`dao.dao-bridge`）仍各自安装，会抢占同名 id，导致归一里对应板块**静默不渲染**（曾因独立 `dao.dao-bridge` 未卸而 ④内网穿透 整块消失）。`coldstart.ps1` 已在安装后统一卸载这四个内联引擎；改完 dao-one 视图集需 **bump version** 才能让 VS Code 重读 `contributes`（reload 不足时整机重启 Devin 强制重扫）。
 
 > 历史长版 Runbook（含 141 ↔ 云VM 中继兜底等）见 [`docs/RUNBOOK_coldstart.md`](../docs/RUNBOOK_coldstart.md)。
