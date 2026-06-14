@@ -43,6 +43,7 @@ function balClass(b) {
 function fmtMoney(n) { return "$" + (Math.round(Number(n) * 100) / 100).toFixed(2); }
 function fmtBal(q) {
   if (!q) return "额度未查";
+  if (q.status === "登录失败") return "登录失败";
   if (q.status && q.status !== "ok") return "查询失败(" + q.status + ")";
   if (q.balance == null) return "额度未知";
   return fmtMoney(q.balance);
@@ -51,7 +52,7 @@ function fmtBal(q) {
 let STATE = { accounts: [], authCache: {}, active: "", quota: {}, settings: {} };
 
 // 与 background.js DEFAULT_SETTINGS 对齐 (storage-first 渲染时兜底)
-const POPUP_DEFAULT_SETTINGS = { autoSwitch: true, buffer: 3, floor: 1, pollMin: 2 };
+const POPUP_DEFAULT_SETTINGS = { autoSwitch: true, buffer: 3, pollMin: 2 };
 function getLocal(keys) { return new Promise((r) => chrome.storage.local.get(keys, r)); }
 
 // 渲染直读 chrome.storage (母/真源), 不依赖 service worker 是否唤醒,

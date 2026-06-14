@@ -18,7 +18,6 @@ const ALARM = "dao-rtflow-poll";
 const DEFAULT_SETTINGS = {
   autoSwitch: true, // 软耗尽自动轮转
   buffer: 3, // 余额 ≤ buffer($) 视为软耗尽 → 触发切换 (知止不殆)
-  floor: 1, // 余额 ≤ floor 视为硬见底
   pollMin: 2, // 轮询间隔 (分钟)
 };
 
@@ -115,7 +114,14 @@ async function broadcastInject(auth) {
 // ── 额度普查 + 评分 ──────────────────────────────────────────────────────────
 async function refreshQuota(email) {
   const r = await ensureAuth(email);
-  if (!r.ok) return { ok: false, error: r.error };
+  // 登录失败也要落账 (status: 登录失败) —— 否则该号无 quota 记录, 评分按"未普查"给 -1
+  // 而非排除, rotate 仍可能切到登不上的号。如实记录失败态 → scoreOf 给 -Infinity 真排除。
+  if (!r.ok) {
+    const st = await getState();
+    st.quota[lc(email)] = { balance: null, raw: null, ts: Date.now(), status: "登录失败" };
+    await set({ quota: st.quota });
+    return { ok: false, error: r.error };
+  }
   const b = await DaoCloud.getBilling(r);
   const balance = b.ok ? DaoCloud.billingBalance(b.raw) : null;
   const st = await getState();
@@ -124,10 +130,14 @@ async function refreshQuota(email) {
   return { ok: true, balance };
 }
 
-// 评分: 余额越高越优; 无法判定(null)给低分但高于不可用; 不可用(登录失败)=-Infinity
+// 评分 (与 rt-flow 本体「不可用号不入候选」一脉): 余额越高越优;
+//   · 普查失败/登录失败 (status 非 "ok") → -Infinity, 真排除 — rotate 绝不切到登不上的号;
+//   · 已普查但余额无法判定 (balance==null) → -1, 低分兜底但仍可选;
+//   · 从未普查 (无 quota) → -1, 同上。
 function scoreOf(quota) {
-  if (!quota) return -1; // 未知额度
-  if (quota.balance == null) return -1;
+  if (!quota) return -1; // 未普查
+  if (quota.status && quota.status !== "ok") return -Infinity; // 登录/普查失败 → 排除
+  if (quota.balance == null) return -1; // 已普查但额度未知
   return quota.balance;
 }
 

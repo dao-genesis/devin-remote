@@ -105,6 +105,22 @@ function t(name, fn) {
     assert.strictEqual(r.ranked[0].email, "high@x.com");
   });
 
+  // 回归 4: 登录失败的号 (status 非 ok) 必须排除出候选 —— 即便余额更高的号登不上,
+  //   也绝不切过去 (rotate 切过去 activate 必失败 · 形同把活跃号换成废号)。
+  store = {
+    accounts: [{ email: "ok@x.com" }, { email: "broken@x.com" }],
+    authCache: {}, settings: {},
+    active: "ok@x.com",
+    // broken 余额虚高但登录失败; 旧逻辑 balance==null 给 -1, 此处 status 失败 → -Infinity 真排除
+    quota: { "ok@x.com": { balance: 1.5, status: "ok" }, "broken@x.com": { balance: null, status: "登录失败" } },
+  };
+  activated = [];
+  r = norm(await ctx.rotate("test"));
+  t("登录失败的号被排除, 不切到登不上的账号", () => {
+    assert.strictEqual(r.switchedTo, "ok@x.com");
+    assert.deepStrictEqual(activated, []);
+  });
+
   console.log("\nensureAuth (活跃账号令牌刷新 → 同步刷新 DNR):");
   // 回归 3: 活跃账号缓存过期重登后, 必须用新 auth1 重刷 DNR; 非活跃账号重登则不动 DNR。
   ctx.DaoCloud.login = async (email) => ({
