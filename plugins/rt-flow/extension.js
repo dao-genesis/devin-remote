@@ -749,7 +749,7 @@ const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.7.3";
+const VERSION = "4.7.4";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -3288,9 +3288,10 @@ ${_dvBackupPanelHtml()}
   ).length;
   if (_streamingFiltered.length > 0) {
     currentHtml = _streamingFiltered
-      .map((c) => {
+      .map((c, _ci) => {
         // v13.1: 只显示用户可读标题，不再 shortId 兜底
         const shortT = _truncTitle(c._displayTitle, 25);
+        const _cvNo = '<span class="cv-no" title="对话编号 ' + (_ci + 1) + ' (Cascade)">' + (_ci + 1) + "</span>";
         const st =
           c.staleSec > 0
             ? (c.staleSec >= 60
@@ -3328,7 +3329,7 @@ ${_dvBackupPanelHtml()}
         const _xBtn = _safeUuid
           ? `<button class="cv-close" data-uuid="${_safeUuid}" onclick="dismissConv('${_safeUuid}')" title="关闭此对话追踪 · 10min 后若仍活跃将恢复">&#10005;</button>`
           : "";
-        return `<div class="cv-current"><span class="cv-streaming">${_stateIcon}</span> <b>${_esc(shortT)}</b>${c.sizeKB ? " · " + c.sizeKB + "KB" : ""}${st ? " · " + st : ""}${_stateHint}${_xBtn}</div>`;
+        return `<div class="cv-current">${_cvNo}<span class="cv-streaming">${_stateIcon}</span> <b>${_esc(shortT)}</b>${c.sizeKB ? " · " + c.sizeKB + "KB" : ""}${st ? " · " + st : ""}${_stateHint}${_xBtn}</div>`;
       })
       .join("");
   } else if (
@@ -7701,6 +7702,7 @@ function buildHtml() {
     rows += `
     <div class="row${isActive ? " act" : ""}${isBanned ? " banned" : ""}${isInUse ? " inuse" : ""}${!claudeOk && h.checked ? " expired-row" : ""}${isStaleRow ? " is-stale" : ""}" data-i="${i}" data-email="${_esc(a.email.toLowerCase())}">
       <input type="checkbox" class="chk" data-i="${i}" />
+      <span class="acc-no" title="账号编号 ${i + 1} · 对话追踪中 Devin Cloud 对话用此编号区分">${i + 1}</span>
       <span class="dm ${domainBadge}" title="${_esc(domain)}">${domainBadge}</span>
       <span class="em" title="${_esc(a.email)}">${_esc(emailShort)}</span>
       ${expTag}${planTag}${h.checked && h.overageDollars > 0 ? (h.staleHours >= 6 ? `<span class="eua-stale" title="Extra Usage $${h.overageDollars.toFixed(0)} · 数据${h.staleHours}h前(可能已消耗·建议重验)">$${Math.round(h.overageDollars)}?</span>` : `<span class="eua" title="Extra Usage Active · $${h.overageDollars.toFixed(0)} · Cascade quota=0时仍完全可用${h.staleHours >= 1 ? " · " + h.staleHours + "h前验" : ""}">$${Math.round(h.overageDollars)}</span>`) : ""}${h.checked && !h.overageDollars ? `<span class="eua0" title="已验 · 无Extra Usage余额">$0</span>` : ""} ${claudeTag}${bnTag}${iuTag}${staleTag}${freshTag}${liveTag}${ucTag}
@@ -7829,6 +7831,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .toast.ok{background:#1a3a1a;color:var(--green);border:1px solid #2a5a2a}
 .toast.fail{background:#3a1a1a;color:var(--red);border:1px solid #5a2a2a}
 .chk{width:14px;height:14px;cursor:pointer;flex-shrink:0}
+.acc-no{flex-shrink:0;min-width:14px;height:14px;line-height:14px;text-align:center;font-size:9px;font-weight:700;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:3px;padding:0 2px}
 .dm{width:24px;height:14px;border-radius:2px;font-size:9px;font-weight:700;text-align:center;line-height:14px;flex-shrink:0;color:#aaa}
 .dm.shop{background:#553399;color:#cdb}
 .dm.yh{background:#4a1564;color:#cce}
@@ -7952,6 +7955,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-trk-st.running{color:#4ec9b0;background:#13332b}
 .dv-trk-st.awaiting{color:#d29922;background:#332a13}
 .dv-trk-st.blocked{color:#f44;background:#3a1a1a}
+.dv-trk-no{flex-shrink:0;min-width:13px;height:13px;line-height:13px;text-align:center;font-size:9px;font-weight:700;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:3px;padding:0 2px}
 .dv-trk-who{color:#d7ba7d;flex-shrink:0;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dv-trk-tt{color:#bbb;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cv-summary{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px}
@@ -7964,6 +7968,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .cv-stuck-n{color:#f44}
 .cv-err-n{color:#f88}
 .cv-current{padding:3px 0;border-bottom:1px solid #2a2a2a}
+.cv-no{display:inline-block;min-width:13px;height:13px;line-height:13px;text-align:center;font-size:9px;font-weight:700;color:#d7ba7d;background:#2a2418;border:1px solid #5a4a1e;border-radius:3px;padding:0 2px;margin-right:3px}
 .cv-streaming{color:#4ec9b0;font-size:10px}
 .cv-completed{color:#888;font-size:10px}
 .cv-other{color:#ce9178;font-size:10px}
@@ -8160,6 +8165,15 @@ let _dvAutoTimer = null;
 //   _dvRunPoll 每轮写入; 对话追踪面板 (_getConvTrackingHtml) 据此渲染 Devin Cloud 子板块 (复用追踪 UI)。
 const _dvStatusAgg = new Map();
 let _dvPreloadTimer = null;
+// v4.7.4 · 账号编号 (1-based · 与侧栏勾选框旁编号一致): email.lower → 序号; 用于对话追踪区分 Devin Cloud 各账号。
+function _dvAccountNo(email) {
+  if (!_store || !_store.accounts) return 0;
+  const key = String(email || "").toLowerCase();
+  for (let i = 0; i < _store.accounts.length; i++) {
+    if ((_store.accounts[i].email || "").toLowerCase() === key) return i + 1;
+  }
+  return 0;
+}
 let _dvPreloadInFlight = false;
 let _dvLastPreloadTs = 0;
 // 取账号(index)的 Devin Cloud 登录态: 复用缓存·必要时 email+password 重登
@@ -8384,6 +8398,7 @@ async function _dvRunPoll() {
             states: active.map((r) => ({ t: r.title, c: r.statusClass })),
           });
           _dvStatusAgg.set(key, {
+            no: _dvAccountNo(acc.email),
             tag: devinCloud.getTag(acc.email) || "",
             running, awaiting, blocked, total: active.length,
             items: active.map((r) => ({ title: r.title, cls: r.statusClass })),
@@ -8404,7 +8419,8 @@ async function _dvRunPoll() {
 const _dvSeen = new Map(); // devinId → statusClass
 function _dvMaybeNotify(email, sess) {
   const prev = _dvSeen.get(sess.devinId);
-  const who = devinCloud.getTag(email) || email.split("@")[0];
+  const _no = _dvAccountNo(email);
+  const who = (_no ? "#" + _no + " " : "") + (devinCloud.getTag(email) || email.split("@")[0]);
   if (sess.statusClass === "blocked" && prev !== "blocked") {
     _notify("warn", "[" + who + "] 对话疑似卡住/额度超限: " + sess.title);
   } else if (sess.statusClass === "awaiting" && prev !== "awaiting") {
@@ -8485,10 +8501,12 @@ function _dvStatusAggHtml() {
     if (Date.now() - st.ts > 180000) continue; // 3min 过期不显示
     totalRun += st.running; totalAwait += st.awaiting; totalBlocked += st.blocked;
     const who = st.tag || email.split("@")[0];
+    const no = st.no || _dvAccountNo(email); // 账号编号 (与侧栏勾选框旁一致)
+    const noBadge = no ? '<span class="dv-trk-no" title="账号编号 ' + no + ' (Devin Cloud)">' + no + "</span>" : "";
     for (const it of st.items.slice(0, 6)) {
       const cls = it.cls === "running" ? "running" : it.cls === "awaiting" ? "awaiting" : "blocked";
       const tip = cls === "running" ? "运行中" : cls === "awaiting" ? "等待你的输入" : "卡住/额度超限";
-      rows.push('<div class="dv-trk-item"><span class="dv-trk-st ' + cls + '" title="' + tip + '">' +
+      rows.push('<div class="dv-trk-item">' + noBadge + '<span class="dv-trk-st ' + cls + '" title="' + tip + '">' +
         (cls === "running" ? "运行" : cls === "awaiting" ? "待输入" : "卡住") + "</span>" +
         '<span class="dv-trk-who">' + _esc(who) + "</span>" +
         '<span class="dv-trk-tt" title="' + _esc(it.title) + '">' + _esc(_truncTitle(it.title, 22)) + "</span></div>");
@@ -8540,8 +8558,10 @@ function _dvDetectFinished(email, running) {
     for (const id of prevRun) {
       if (!nowRun.has(id)) {
         const st = _dvSeen.get(id);
-        if (st !== "blocked")
-          _notify("info", "[" + (devinCloud.getTag(email) || email.split("@")[0]) + "] 对话已完成");
+        if (st !== "blocked") {
+          const _no = _dvAccountNo(email);
+          _notify("info", "[" + (_no ? "#" + _no + " " : "") + (devinCloud.getTag(email) || email.split("@")[0]) + "] 对话已完成");
+        }
       }
     }
   }
