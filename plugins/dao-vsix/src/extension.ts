@@ -1778,7 +1778,7 @@ ${syncing ? `
 <div class="card">
   <div class="row"><span class="lbl">🤖 Devin Cloud</span><span class="val ok">✓ ${escapeHtml(email.split('@')[0])}</span></div>
   <div class="row"><span class="lbl">组织</span><span class="val" style="font-size:10px">${escapeHtml(orgName)}</span></div>
-  ${ws.devinQuota ? (() => { const q = ws.devinQuota; const d = q.dailyQuotaRemainingPercent; const dc = d > 20 ? '#4ec9b0' : d > 5 ? '#e8c84a' : '#f44747'; return '<div class="row"><span class="lbl">Daily</span><span class="val" style="color:'+dc+'">'+d+'%</span></div>'; })() : ''}
+  ${ws.devinQuota ? (() => { const q: any = ws.devinQuota; const bal = (q.overageDollars != null) ? Number(q.overageDollars) : null; const bc = bal == null ? '#888' : bal > 5 ? '#4ec9b0' : bal > 1 ? '#e8c84a' : '#f44747'; return '<div class="row"><span class="lbl">余额</span><span class="val" style="color:'+bc+';font-weight:600">'+(bal != null ? '$' + bal.toFixed(2) : '—')+'</span></div>'; })() : ''}
 </div>
 `}
 <div class="card">
@@ -2319,10 +2319,12 @@ function rO(){
   }
   let qh='';
   if(S.auth.quota){
-    const q=S.auth.quota,plan=q.planName||'?',dp=q.dailyQuotaRemainingPercent,wp=q.weeklyQuotaRemainingPercent;
-    const dc=dp>20?'var(--success)':dp>5?'var(--warn)':'var(--danger)';
-    const wc=wp>20?'var(--success)':wp>5?'var(--warn)':'var(--danger)';
-    qh='<div class="st">配额</div><div class="card"><div class="cr"><span class="l">Plan</span><span class="v">'+plan+'</span></div><div class="cr"><span class="l">Daily</span><span class="v" style="color:'+dc+'">'+(dp!=null?dp+'%':'—')+'</span></div><div class="qb"><div class="f" style="width:'+(dp||0)+'%;background:'+dc+'"></div></div><div class="cr"><span class="l">Weekly</span><span class="v" style="color:'+wc+'">'+(wp!=null?wp+'%':'—')+'</span></div><div class="qb"><div class="f" style="width:'+(wp||0)+'%;background:'+wc+'"></div></div>'+(q.availablePromptCredits!=null?'<div class="cr"><span class="l">Prompt Credits</span><span class="v">'+q.availablePromptCredits+'</span></div>':'')+(q.availableFlowCredits!=null?'<div class="cr"><span class="l">Flow Credits</span><span class="v">'+q.availableFlowCredits+'</span></div>':'')+'</div>';
+    // 配额只显美金 (账号余额) · 去 Day/Week · 仿 rt-flow 最小化 · 道法自然
+    const q=S.auth.quota;
+    const bal=(q.overageDollars!=null)?q.overageDollars:null;
+    const balStr=(bal!=null)?('$'+Number(bal).toFixed(2)):'—';
+    const bc=(bal==null)?'var(--muted)':(bal>5?'var(--success)':bal>1?'var(--warn)':'var(--danger)');
+    qh='<div class="st">余额</div><div class="card"><div class="cr"><span class="l">美金余额</span><span class="v" style="color:'+bc+';font-weight:700;font-size:15px">'+balStr+'</span></div>'+(q.planName?'<div class="cr"><span class="l">Plan</span><span class="v">'+esc(q.planName)+'</span></div>':'')+'</div>';
   }
   let ih='';
   if(S.inject){
@@ -4168,7 +4170,13 @@ async function devinFetchQuota(apiKey: string, apiServerUrl?: string): Promise<a
         for (const url of tries) {
             try {
                 const r = await devinJsonPost(url, { 'Connect-Protocol-Version': '1', 'X-Api-Key': statusKey }, { metadata }, 8000);
-                if (r.status >= 200 && r.status < 300 && r.json) return devinParsePlanStatus(r.json);
+                if (r.status >= 200 && r.status < 300 && r.json) {
+                    // 配额只显美金: 即便 GetUserStatus 成功, 也并入 billing 美金余额 (overageDollars)
+                    const ps = devinParsePlanStatus(r.json);
+                    const od = await devinFetchOverageDollars();
+                    if (od != null) ps.overageDollars = od;
+                    return ps;
+                }
                 if (r.status === 401 || r.status === 400) break;
             } catch {}
         }
@@ -4197,6 +4205,20 @@ function devinParsePlanStatus(j: any): any {
     let daily = gi(ps, 'dailyQuotaRemainingPercent', 'daily_quota_remaining_percent');
     if (!ps.dailyQuotaRemainingPercent && !ps.daily_quota_remaining_percent && weekly > 0) daily = weekly;
     return { planName: gs(pi, 'planName', 'plan_name'), teamsTier: gs(pi, 'teamsTier', 'teams_tier'), planStart: gs(ps, 'planStart', 'plan_start'), planEnd: gs(ps, 'planEnd', 'plan_end'), weeklyQuotaRemainingPercent: weekly, dailyQuotaRemainingPercent: daily, availablePromptCredits: gi(ps, 'availablePromptCredits', 'available_prompt_credits'), availableFlowCredits: gi(ps, 'availableFlowCredits', 'available_flow_credits'), availableFlexCredits: gi(ps, 'availableFlexCredits', 'available_flex_credits'), _source: 'GetUserStatus' };
+}
+
+// 配额只显美金: billing/status 的 overage_credits<0 即可用余额 (绝对值=美金, 精确到分)
+// 与 rt-flow 同源 (app.devin.ai/api/{orgId}/billing/status)。无 auth1/org 或无余额则返 null。
+async function devinFetchOverageDollars(): Promise<number | null> {
+    if (!(ws.devinAuth1 && ws.devinOrgId)) return null;
+    try {
+        const bareOrgId = ws.devinOrgId.replace(/^org-/, '');
+        const br = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', { Authorization: 'Bearer ' + ws.devinAuth1 });
+        if (br.status === 200 && br.json && typeof br.json.overage_credits === 'number' && !br.json.billing_error) {
+            return br.json.overage_credits < 0 ? Math.abs(br.json.overage_credits) : 0;
+        }
+    } catch {}
+    return null;
 }
 
 // ═══════════════════════════════════════════════════════════
