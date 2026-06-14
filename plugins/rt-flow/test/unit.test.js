@@ -346,6 +346,67 @@ function test(name, fn) {
     proxy.stopAll();
   });
 
+  // ── 11. 备份命名/结构 + listBackups (v4.8.3 编号·账号+密码表层·对话/账号信息分明) ──
+  console.log("\n[备份命名/结构 · v4.8.3]");
+  const fs = require("fs"), os = require("os"), path = require("path");
+  test("accountFolderName = 编号_邮箱本地名_密码 (账号+密码写在表层)", () => {
+    assert.strictEqual(cloud.accountFolderName({ email: "foo@bar.com" }, { accountNo: 7, password: "Pa ss/w" }), "07_foo_Pass_w");
+    assert.strictEqual(cloud.accountFolderName({ email: "x@y.z" }, {}), "x"); // 无编号无密码
+  });
+  test("cleanTitle 去掉开头的下划线/井号/标点 (不再像系统目录)", () => {
+    assert.strictEqual(cloud.cleanTitle("___# Summary"), "Summary");
+    assert.strictEqual(cloud.cleanTitle("  ·, 标题"), "标题");
+    assert.strictEqual(cloud.cleanTitle(""), "未命名");
+  });
+  test("convFolderName = NNN_标题_ID末8位 (带编号·三位补零)", () => {
+    assert.strictEqual(cloud.convFolderName(3, "_hello_", "devin-abcd1234 effff"), "003_hello__abcd1234");
+    assert.ok(cloud.convFolderName(0, "t", "devin-zzzzzzzz").startsWith("t_"));
+  });
+  test("listBackups 新结构: 读 对话/ + 账号信息 + .account.json 编号·按 convNo 排序", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "rtbk-"));
+    const acc = path.join(root, "02_foo_pwd");
+    const convDir = path.join(acc, "对话");
+    fs.mkdirSync(convDir, { recursive: true });
+    fs.writeFileSync(path.join(acc, ".account.json"), JSON.stringify({ email: "foo@bar.com", accountNo: 2 }));
+    fs.mkdirSync(path.join(acc, "账号信息"), { recursive: true });
+    // 两条对话, 故意乱序写盘, 期望按 convNo 升序
+    const c2 = path.join(convDir, "002_b_id2"); fs.mkdirSync(c2);
+    fs.writeFileSync(path.join(c2, "_meta.json"), JSON.stringify({ title: "B", eventCount: 5, convNo: 2 }));
+    fs.writeFileSync(path.join(c2, "对话.html"), "<html></html>");
+    const c1 = path.join(convDir, "001_a_id1"); fs.mkdirSync(c1);
+    fs.writeFileSync(path.join(c1, "_meta.json"), JSON.stringify({ title: "A", eventCount: 3, convNo: 1 }));
+    const tree = cloud.listBackups(root);
+    assert.strictEqual(tree.accounts.length, 1);
+    const a = tree.accounts[0];
+    assert.strictEqual(a.email, "foo@bar.com");
+    assert.strictEqual(a.accountNo, 2);
+    assert.strictEqual(a.hasAccountInfo, true);
+    assert.strictEqual(a.count, 2);
+    assert.strictEqual(a.conversations[0].num, 1, "按 convNo 升序");
+    assert.strictEqual(a.conversations[0].title, "A");
+    assert.strictEqual(a.conversations[1].hasHtml, true, "B 有 对话.html");
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  test("listBackups 兼容旧结构: 对话文件夹直接在账号目录下 (无 对话/ 子目录)", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "rtbk-"));
+    const acc = path.join(root, "old@x.com");
+    const c = path.join(acc, "旧标题_deadbeef"); fs.mkdirSync(c, { recursive: true });
+    fs.writeFileSync(path.join(c, "_meta.json"), JSON.stringify({ title: "旧标题", eventCount: 9 }));
+    const tree = cloud.listBackups(root);
+    assert.strictEqual(tree.accounts.length, 1);
+    assert.strictEqual(tree.accounts[0].count, 1);
+    assert.strictEqual(tree.accounts[0].conversations[0].title, "旧标题");
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  test("findAccountDir 经 .account.json 标记定位 (改号不丢已有目录)", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "rtbk-"));
+    const acc = path.join(root, "05_who_pw"); fs.mkdirSync(acc, { recursive: true });
+    fs.writeFileSync(path.join(acc, ".account.json"), JSON.stringify({ email: "who@a.com", accountNo: 5 }));
+    assert.strictEqual(cloud.findAccountDir(root, "who@a.com"), acc);
+    assert.strictEqual(cloud.findAccountDir(root, "nobody@a.com"), null);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);

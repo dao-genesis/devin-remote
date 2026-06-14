@@ -8317,6 +8317,9 @@ function dvBackup(i){vscode.postMessage({type:'devinBackupAccount',index:i});}
 function dvCreate(i){vscode.postMessage({type:'devinCreateSession',index:i});}
 function dvBrowse(){vscode.postMessage({type:'devinBrowseBackups'});}
 function dvUnlock(p){vscode.postMessage({type:'devinUnlockBackup',zipPath:p});}
+function dvViewConv(p){vscode.postMessage({type:'devinViewBackupConv',path:p});}
+function dvReveal(p){vscode.postMessage({type:'devinRevealPath',path:p});}
+function dvCloseBk(){const o=document.getElementById('dvBkOverlay');if(o)o.remove();}
 function dvSetTag(i){vscode.postMessage({type:'devinSetTag',index:i});}
 function dvExportMd(){vscode.postMessage({type:'devinExportMd',indices:_selIx()});}
 function dvBackupAll(){vscode.postMessage({type:'devinBackupAll',indices:_selIx()});}
@@ -8416,7 +8419,50 @@ if(m.type==='devinConvCap'&&Array.isArray(m.items)){m.items.forEach(it=>{const s
 if(m.type==='convUpdate'&&m.html){const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}}}}
 if(m.type==='devinBackupTree'){_dvShowBackups(m.tree);}
 });
-function _dvShowBackups(tree){let ov=document.getElementById('dvBkOverlay');if(ov)ov.remove();ov=document.createElement('div');ov.id='dvBkOverlay';ov.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';const box=document.createElement('div');box.style.cssText='background:#1e1e1e;border:1px solid #444;border-radius:6px;max-width:90%;max-height:80%;overflow:auto;padding:14px 16px;min-width:340px;';let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b>\\u128193 Devin Cloud 备份浏览</b><span style="cursor:pointer;color:#888" onclick="document.getElementById(\\'dvBkOverlay\\').remove()">\\u2715</span></div>';if(!tree||!tree.accounts||!tree.accounts.length){html+='<div style="color:#888">暂无备份。先用「导出全部对话」备份。</div>';}else{html+='<div style="color:#888;font-size:11px;margin-bottom:6px">'+(tree.root||'')+'</div>';for(const a of tree.accounts){html+='<div style="margin-top:8px"><b>'+a.account+'</b> <span style="color:#888">('+a.count+' 个对话)</span></div>';for(const c of a.conversations){const kb=(c.size/1024).toFixed(0);html+='<div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px solid #333"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px" title="'+c.name+'">'+c.name+' <span style="color:#666">'+kb+'KB</span></span><button class="conv-btn conv-btn-s" onclick="dvUnlock(this.dataset.p)" data-p="'+c.path.replace(/"/g,'&quot;')+'">\\u128275 解锁</button></div>';}}}box.innerHTML=html;ov.appendChild(box);ov.addEventListener('click',ev=>{if(ev.target===ov)ov.remove();});document.body.appendChild(ov);}
+function _dvShowBackups(tree){
+  const _esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const _attr=s=>_esc(s).replace(/"/g,'&quot;');
+  let ov=document.getElementById('dvBkOverlay');if(ov)ov.remove();
+  ov=document.createElement('div');ov.id='dvBkOverlay';
+  ov.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:24px 0;';
+  const box=document.createElement('div');
+  box.style.cssText='background:#1e1e1e;border:1px solid #444;border-radius:8px;max-width:92%;width:760px;max-height:88%;overflow:auto;padding:14px 18px;';
+  let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;position:sticky;top:0;background:#1e1e1e;padding-bottom:6px;z-index:1"><b>📁 Devin Cloud 备份浏览</b><button class="conv-btn conv-btn-s" onclick="dvCloseBk()">✕ 关闭</button></div>';
+  if(!tree||!tree.accounts||!tree.accounts.length){
+    html+='<div style="color:#888">暂无备份。先用「导出全部对话」备份。</div>';
+  }else{
+    html+='<div style="color:#888;font-size:11px;margin-bottom:8px">'+_esc(tree.root||'')+'</div>';
+    for(const a of tree.accounts){
+      const no=a.accountNo?('<span style="background:#2ea043;color:#fff;border-radius:4px;padding:1px 7px;font-weight:700;margin-right:6px">#'+a.accountNo+'</span>'):'';
+      html+='<div style="margin-top:12px;padding-top:8px;border-top:1px solid #444">'+no+'<b>'+_esc(a.email||a.account)+'</b> <span style="color:#888">('+a.count+' 条对话)</span>';
+      if(a.account&&a.account!==a.email){html+=' <span style="color:#666;font-size:11px">'+_esc(a.account)+'</span>';}
+      if(a.hasAccountInfo){html+=' <button class="conv-btn conv-btn-s" onclick="dvReveal(this.dataset.p)" data-p="'+_attr(a.accountInfoPath)+'">📂 账号信息</button>';}
+      html+='</div>';
+      if(!a.conversations.length){html+='<div style="color:#666;font-size:12px;padding:4px 0">(无对话记录)</div>';}
+      for(let i=0;i<a.conversations.length;i++){
+        const c=a.conversations[i];
+        const n=c.num||(i+1);
+        const label=c.title||c.name;
+        let meta;
+        if(c.type==='zip'){meta='<span style="color:#666">'+(c.size?((c.size/1024).toFixed(0)+'KB'):'ZIP')+'</span>';}
+        else{meta='<span style="color:#666">'+(c.eventCount||0)+' 事件</span>';}
+        let actions='';
+        if(c.type==='folder'){
+          if(c.hasHtml){actions+='<button class="conv-btn conv-btn-s" onclick="dvViewConv(this.dataset.p)" data-p="'+_attr(c.htmlPath)+'">👁 查看</button> ';}
+          actions+='<button class="conv-btn conv-btn-s" onclick="dvReveal(this.dataset.p)" data-p="'+_attr(c.path)+'">📂</button>';
+        }else{
+          actions+='<button class="conv-btn conv-btn-s" onclick="dvUnlock(this.dataset.p)" data-p="'+_attr(c.path)+'">🔓 解锁</button>';
+        }
+        html+='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid #2a2a2a">'+
+          '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:430px" title="'+_attr(label)+'"><span style="color:#58a6ff;font-weight:600">'+n+'.</span> '+_esc(label)+' '+meta+'</span>'+
+          '<span style="white-space:nowrap">'+actions+'</span></div>';
+      }
+    }
+  }
+  box.innerHTML=html;ov.appendChild(box);
+  // 不再点击空白处自动关闭 (避免还没看清就误触回弹) — 仅可由 ✕ 关闭。
+  document.body.appendChild(ov);
+}
 </script></body></html>`;
 }
 
@@ -8452,6 +8498,37 @@ function _dvAccountNo(email) {
     if ((_store.accounts[i].email || "").toLowerCase() === key) return i + 1;
   }
   return 0;
+}
+// 某账号的备份目录 (编号+账号+密码表层命名·与自动备份一致) → <root>/<NN_email_pwd>/
+function _dvAccountBackupDir(email) {
+  const root = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+  const acc = (_store.accounts || []).find((a) => (a.email || "").toLowerCase() === String(email || "").toLowerCase()) || {};
+  return path.join(root, devinCloud.accountFolderName({ email }, { accountNo: _dvAccountNo(email), password: acc.password || "" }));
+}
+// 找/建某对话的备份文件夹 (在 <账号>/对话/ 下, 已存在则复用·按 ID末8位 匹配) → 供面板直存。
+function _dvFindOrMakeConvDir(email, devinId, title) {
+  const convParent = path.join(_dvAccountBackupDir(email), "对话");
+  const shortId = String(devinId).replace(/^devin-/, "").slice(0, 8);
+  try {
+    if (fs.existsSync(convParent)) {
+      const hit = fs.readdirSync(convParent, { withFileTypes: true }).find((d) => d.isDirectory() && d.name.endsWith("_" + shortId));
+      if (hit) return path.join(convParent, hit.name);
+    }
+  } catch {}
+  const dir = path.join(convParent, devinCloud.convFolderName(0, title, devinId));
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+// 在对话 HTML 中注入「右上角下载工具条」(MD/HTML 秒存 · 完整ZIP) → 面板内直接下载, 见落点。
+function _dvInjectConvToolbar(html) {
+  const bar =
+    '<div style="position:fixed;top:12px;right:16px;z-index:99999;display:flex;gap:6px;font-family:-apple-system,Segoe UI,sans-serif">' +
+    '<button onclick="__dl(\'md\')" style="background:#238636;color:#fff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:12px">⬇ MD</button>' +
+    '<button onclick="__dl(\'html\')" style="background:#1f6feb;color:#fff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:12px">⬇ HTML</button>' +
+    '<button onclick="__dl(\'full\')" style="background:#6e40c9;color:#fff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:12px">⬇ 完整(含文件)</button>' +
+    '</div>' +
+    '<script>const __v=acquireVsCodeApi();function __dl(f){__v.postMessage({type:"dvSaveConv",fmt:f})}</script>';
+  return html.includes("</body>") ? html.replace("</body>", bar + "\n</body>") : html + bar;
 }
 let _dvPreloadInFlight = false;
 let _dvLastPreloadTs = 0;
@@ -9037,6 +9114,8 @@ async function _dvAutoBackupRun() {
     if (!emails.includes((acc.email || "").toLowerCase())) continue;
     const auth = devinCloud.getCachedAuth(acc.email);
     if (!auth) continue;
+    // 编号(同步 WAM)+ 密码 写入备份目录命名 (账号+密码表层·编号 1:1)
+    const naming = { accountNo: _dvAccountNo(acc.email), password: acc.password || "" };
     try {
       // v4.4.0: 检查额度阈值 · 低于阈值时触发全量备份
       let billing = null;
@@ -9048,9 +9127,9 @@ async function _dvAutoBackupRun() {
         let backupOk = false;
         try {
           if (mode === "folder") {
-            await devinCloud.backupAccountFullFolders(auth, { targetDir: dir, incremental: false });
+            await devinCloud.backupAccountFullFolders(auth, Object.assign({ targetDir: dir, incremental: false }, naming));
           } else {
-            await devinCloud.backupAccountFull(auth, { targetDir: dir, incremental: false });
+            await devinCloud.backupAccountFull(auth, Object.assign({ targetDir: dir, incremental: false }, naming));
           }
           backupOk = true;
         } catch (be) {
@@ -9072,9 +9151,9 @@ async function _dvAutoBackupRun() {
       } else {
         // 正常增量备份
         if (mode === "folder") {
-          await devinCloud.backupAccountFolders(auth, { targetDir: dir, incremental: true });
+          await devinCloud.backupAccountFolders(auth, Object.assign({ targetDir: dir, incremental: true }, naming));
         } else {
-          await devinCloud.backupAccount(auth, { targetDir: dir, incremental: true });
+          await devinCloud.backupAccount(auth, Object.assign({ targetDir: dir, incremental: true }, naming));
         }
       }
     } catch (e) {
@@ -10391,6 +10470,35 @@ async function handleWebviewMessage(msg) {
         }
         break;
       }
+      // v4.8.3 · 浏览备份: 直接查看某条对话备份的正文 (打开 对话.html · 不解压·不回弹)
+      case "devinViewBackupConv": {
+        try {
+          let p = msg.path;
+          // 传目录则取其 对话.html
+          try { if (fs.existsSync(p) && fs.statSync(p).isDirectory()) p = path.join(p, "对话.html"); } catch {}
+          if (!p || !fs.existsSync(p)) { _toast("\u2717 未找到对话正文 (对话.html)"); break; }
+          const html = fs.readFileSync(p, "utf8");
+          const panel = vscode.window.createWebviewPanel(
+            "wam.backupConv", "备份对话 · " + path.basename(path.dirname(p)).slice(0, 28),
+            vscode.ViewColumn.Active, { enableScripts: false, retainContextWhenHidden: true },
+          );
+          panel.webview.html = html;
+          _toast("\u2713 已打开备份对话");
+        } catch (e) {
+          _toast("\u2717 查看失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.8.3 · 浏览备份: 在系统文件管理器中定位某文件夹 (对话目录/账号信息)
+      case "devinRevealPath": {
+        try {
+          if (!msg.path || !fs.existsSync(msg.path)) { _toast("\u2717 路径不存在"); break; }
+          await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(msg.path));
+        } catch (e) {
+          _toast("\u2717 定位失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
       // v4.0 · 一键解锁(解压)某个对话备份 ZIP → 同名文件夹并打开
       case "devinUnlockBackup": {
         try {
@@ -10660,7 +10768,7 @@ async function handleWebviewMessage(msg) {
         }
         break;
       }
-      // v4.7.0 · 单对话: 查看详情/Output 全文 (复用文件夹备份的 HTML 视图)
+      // v4.8.3 · 单对话: 查看详情 + 面板内直接快速下载 (MD/HTML 秒存·无需慢速ZIP)
       case "dvConvDetail": {
         const r = await _dvAuthFor(msg.index);
         if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
@@ -10670,13 +10778,40 @@ async function handleWebviewMessage(msg) {
           const cached = _dvOverviewCache.get(r.email.toLowerCase());
           const sm = cached && cached.ov && (cached.ov.sessions || []).find((s) => s.devinId === msg.devinId);
           const title = (detail && (detail.title || detail.name)) || (sm && sm.title) || msg.devinId;
-          const html = devinCloud.buildConversationHtml(title, msg.devinId, events);
+          const html = devinCloud.buildConversationHtml(title, msg.devinId, events, { account: r.email });
           const panel = vscode.window.createWebviewPanel(
             "wam.convDetail", "对话详情 · " + String(title).slice(0, 28),
-            vscode.ViewColumn.Active, { enableScripts: false, retainContextWhenHidden: true },
+            vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true },
           );
-          panel.webview.html = html;
-          _toast("\u2713 详情已打开");
+          panel.webview.html = _dvInjectConvToolbar(html);
+          // 面板内下载: 内容已在内存(events/detail) → MD/HTML 秒存; 完整(含产出文件)走增量补全。
+          const _idx = msg.index, _email = r.email, _auth = r.auth, _did = msg.devinId;
+          panel.webview.onDidReceiveMessage(async (m) => {
+            if (!m || m.type !== "dvSaveConv") return;
+            try {
+              if (m.fmt === "zip" || m.fmt === "full") {
+                _toast("\u23F3 打包完整对话(含产出文件)…");
+                const accountDir = _dvAccountBackupDir(_email);
+                const one = await devinCloud.backupOneConversation(_auth, { devin_id: _did, title }, accountDir, { incremental: false });
+                if (one && one.zip) {
+                  _toast("\u2713 已下载完整ZIP: " + path.basename(one.zip));
+                  try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(one.zip)); } catch {}
+                } else { _toast("\u2717 打包失败"); }
+                return;
+              }
+              const convDir = _dvFindOrMakeConvDir(_email, _did, title);
+              const isHtml = m.fmt === "html";
+              const body = isHtml ? html : devinCloud.buildConversationMd(title, _did, events);
+              const outPath = path.join(convDir, isHtml ? "对话.html" : "对话.md");
+              fs.writeFileSync(outPath, body, "utf8");
+              _toast("\u2713 已下载: " + path.basename(outPath));
+              _notify("info", "[" + _email + "] 对话已直接下载 → " + outPath);
+              try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(outPath)); } catch {}
+            } catch (e) {
+              _toast("\u2717 下载失败: " + String((e && e.message) || e));
+            }
+          });
+          _toast("\u2713 详情已打开 · 可在面板右上角直接下载");
         } catch (e) {
           _toast("\u2717 拉取失败: " + String((e && e.message) || e));
         }
@@ -10690,8 +10825,7 @@ async function handleWebviewMessage(msg) {
           const cached = _dvOverviewCache.get(r.email.toLowerCase());
           const sm = cached && cached.ov && (cached.ov.sessions || []).find((s) => s.devinId === msg.devinId);
           const title = (sm && sm.title) || msg.devinId;
-          const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
-          const accountDir = path.join(dir, devinCloud.safeName(r.email, 80));
+          const accountDir = _dvAccountBackupDir(r.email);
           const one = await devinCloud.backupOneConversation(r.auth, { devin_id: msg.devinId, title }, accountDir, { incremental: false });
           if (one && one.zip) {
             _toast("\u2713 已下载 ZIP: " + path.basename(one.zip));
@@ -10713,8 +10847,7 @@ async function handleWebviewMessage(msg) {
           const cached = _dvOverviewCache.get(r.email.toLowerCase());
           const all = (cached && cached.ov && cached.ov.sessions) || [];
           const sessList = ids.map((id) => { const m = all.find((s) => s.devinId === id); return { devin_id: id, title: (m && m.title) || id }; });
-          const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
-          const outDir = path.join(dir, devinCloud.safeName(r.email, 80));
+          const outDir = _dvAccountBackupDir(r.email);
           const res = await devinCloud.backupConversationsBundle(r.auth, sessList, outDir, { onProgress: (m) => _toast("\u23F3 " + m) });
           _toast("\u2713 合并ZIP完成 " + res.count + "/" + res.total + ": " + path.basename(res.outPath));
           _notify("info", "[" + r.email + "] 合并下载 " + res.count + " 个对话 → " + res.outPath);
@@ -10799,8 +10932,7 @@ async function handleWebviewMessage(msg) {
         try {
           const it = await _dvFetchBoardItem(r.auth, msg.boardKey, msg.id);
           if (!it) { _toast("\u2717 未找到该" + _dvBoardLabel(msg.boardKey)); break; }
-          const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
-          const outDir = path.join(dir, devinCloud.safeName(r.email, 80), _dvBoardLabel(msg.boardKey));
+          const outDir = path.join(_dvAccountBackupDir(r.email), "账号信息", _dvBoardLabel(msg.boardKey));
           fs.mkdirSync(outDir, { recursive: true });
           const outPath = path.join(outDir, _dvBoardFileName(msg.boardKey, it, msg.id));
           fs.writeFileSync(outPath, _dvBoardItemText(msg.boardKey, it), "utf8");
@@ -10819,8 +10951,7 @@ async function handleWebviewMessage(msg) {
         const ids = Array.isArray(msg.ids) ? msg.ids : [];
         if (!ids.length) { _toast("\u2717 未选项目"); break; }
         try {
-          const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
-          const outDir = path.join(dir, devinCloud.safeName(r.email, 80), _dvBoardLabel(msg.boardKey));
+          const outDir = path.join(_dvAccountBackupDir(r.email), "账号信息", _dvBoardLabel(msg.boardKey));
           fs.mkdirSync(outDir, { recursive: true });
           let ok = 0;
           for (const id of ids) {
