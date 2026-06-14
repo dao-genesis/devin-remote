@@ -94,7 +94,28 @@ function buildFlow() {
   log("vendor-flow: copied extension.js + devin_cloud/git/stuck + py helpers + media");
 }
 
+// ── ④ dao-bridge (cf-daohub/dao-bridge-ext): 内网穿透独立大块 ──────────────────
+//   复用「内穿插件最初始本体」(daoBridgeView 完整前端·cloudflared 管理·云/本 MD),
+//   零前端重写, 作为归一容器第 ④ 入口。共享 ~/.dao/bin/cloudflared。
+function buildBridge() {
+  const srcRoot = path.join(plugins, "cf-daohub", "dao-bridge-ext");
+  const dst = path.join(root, "vendor-bridge");
+  rmrf(dst);
+  if (!fs.existsSync(path.join(srcRoot, "extension.js"))) {
+    log("vendor-bridge: SKIP (源缺失 " + srcRoot + ")");
+    return;
+  }
+  for (const f of ["extension.js", "package.json"])
+    if (fs.existsSync(path.join(srcRoot, f)))
+      copyFile(path.join(srcRoot, f), path.join(dst, f));
+  for (const d of ["media", "bin"])
+    if (fs.existsSync(path.join(srcRoot, d)))
+      copyDir(path.join(srcRoot, d), path.join(dst, d));
+  log("vendor-bridge: copied extension.js + media (内网穿透本体)");
+}
+
 buildVsix();
 buildProxy();
 buildFlow();
-log("done · vendor-vsix / vendor-proxy / vendor-flow assembled");
+buildBridge();
+log("done · vendor-vsix / vendor-proxy / vendor-flow / vendor-bridge assembled");

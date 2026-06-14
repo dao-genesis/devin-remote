@@ -8,10 +8,13 @@ const rd = (p) => JSON.parse(fs.readFileSync(p, "utf8"));
 const vsix = rd(path.join(plugins, "dao-vsix", "package.json"));
 const proxy = rd(path.join(plugins, "dao-proxy-pro", "package.json"));
 const flow = rd(path.join(plugins, "rt-flow", "package.json"));
+// ④ 内网穿透本体 (cf-daohub/dao-bridge-ext) — 可选: 缺失则跳过, 不阻断构建。
+const bridgePath = path.join(plugins, "cf-daohub", "dao-bridge-ext", "package.json");
+const bridge = fs.existsSync(bridgePath) ? rd(bridgePath) : null;
 
 // commands 并集 (按 command id 去重,先到先得)
 const cmdMap = new Map();
-for (const src of [vsix, proxy, flow])
+for (const src of [vsix, proxy, flow, bridge].filter(Boolean))
   for (const c of (src.contributes && src.contributes.commands) || [])
     if (!cmdMap.has(c.command)) cmdMap.set(c.command, c);
 const commands = [...cmdMap.values()];
@@ -30,11 +33,12 @@ const configuration = [
   ...asConfigArray(vsix, "Dao 面板"),
   ...asConfigArray(proxy, "道 路由"),
   ...asConfigArray(flow, "Cloud"),
+  ...(bridge ? asConfigArray(bridge, "内网穿透") : []),
 ];
 
 // menus 并集
 const menus = {};
-for (const src of [vsix, proxy, flow]) {
+for (const src of [vsix, proxy, flow, bridge].filter(Boolean)) {
   const m = (src.contributes && src.contributes.menus) || {};
   for (const k of Object.keys(m)) menus[k] = (menus[k] || []).concat(m[k]);
 }
@@ -70,10 +74,12 @@ const manifest = {
       //   ① wam.panel    = rt-flow WAM 切号管理 (默认/最上)
       //   ② dao.router   = dao-proxy-pro 三模块面板 (源照/渠配/模路·拖排·1:1·实连)
       //   ③ dao.cloudPanel = dao-vsix 全能板 (Devin Cloud · 会话/知识/剧本/密钥)
+      //   ④ daoBridgeView = cf-daohub/dao-bridge-ext 内网穿透本体 (独立大块·公网穿透·云/本MD)
       "dao-one": [
         { id: "wam.panel", name: "① 切号 · 账号管理", type: "webview" },
         { id: "dao.router", name: "② Proxy Pro · 模型路由", type: "webview" },
         { id: "dao.cloudPanel", name: "③ 全能板 · Devin Cloud", type: "webview" },
+        ...(bridge ? [{ id: "daoBridgeView", name: "④ 内网穿透 · 公网穿透", type: "webview" }] : []),
       ],
     },
     commands,

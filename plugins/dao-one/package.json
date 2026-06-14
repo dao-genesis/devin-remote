@@ -59,6 +59,11 @@
           "id": "dao.cloudPanel",
           "name": "③ 全能板 · Devin Cloud",
           "type": "webview"
+        },
+        {
+          "id": "daoBridgeView",
+          "name": "④ 内网穿透 · 公网穿透",
+          "type": "webview"
         }
       ]
     },
@@ -323,6 +328,26 @@
         "command": "wam.devinSetBackupDir",
         "title": "Devin Cloud: Set Backup Folder (v4.6.0 · 独立于 Cascade)",
         "category": "RT Flow"
+      },
+      {
+        "command": "daoBridge.restart",
+        "title": "DAO Bridge: 重启隧道"
+      },
+      {
+        "command": "daoBridge.logout",
+        "title": "DAO Bridge: 退出账号 / 重置为无账号模式"
+      },
+      {
+        "command": "daoBridge.openMd",
+        "title": "DAO Bridge: 打开云端Agent接入文档"
+      },
+      {
+        "command": "daoBridge.exportCloudMd",
+        "title": "DAO Bridge: 导出云端Agent MD"
+      },
+      {
+        "command": "daoBridge.exportLocalMd",
+        "title": "DAO Bridge: 导出本地Agent配置MD"
       }
     ],
     "configuration": [
@@ -860,6 +885,51 @@
             "type": "string",
             "default": "",
             "description": "v15.2(3.11.9) 显式 Python 路径 — 用于 vscdb 直读拿真实对话标题 (空=自动从 PATH/py launcher/常见安装路径探测·适配 Python.org/Microsoft Store/Anaconda) · 仅当自动探测失败 (面板显示「对话 #UUID」) 时才需配置"
+          }
+        }
+      },
+      {
+        "title": "DAO Bridge",
+        "properties": {
+          "daoBridge.cloudflaredPath": {
+            "type": "string",
+            "default": "",
+            "description": "cloudflared 路径（留空自动探测：插件内置 → ~/.dao/bin → PATH → 多镜像下载）"
+          },
+          "daoBridge.cfApiToken": {
+            "type": "string",
+            "default": "",
+            "description": "（可选）Cloudflare API Token"
+          },
+          "daoBridge.tunnelToken": {
+            "type": "string",
+            "default": "",
+            "description": "（可选）命名隧道 Token（cloudflared tunnel run --token）。填入即走用户固定域名通道；留空走零配置快速隧道。打不通会自动回退快速隧道。"
+          },
+          "daoBridge.hostname": {
+            "type": "string",
+            "default": "",
+            "description": "（命名隧道）公网主机名，如 dao.example.com"
+          },
+          "daoBridge.localPort": {
+            "type": "number",
+            "default": 0,
+            "description": "本地服务固定端口（0=随机）"
+          },
+          "daoBridge.accessToken": {
+            "type": "string",
+            "default": "",
+            "description": "（可选）额外访问 Token — 本地 Agent 可用此 Token 接入"
+          },
+          "daoBridge.proxyUrl": {
+            "type": "string",
+            "default": "",
+            "description": "（可选）出站代理，如 http://127.0.0.1:7890。留空时自动探测环境变量与常见本地代理端口。"
+          },
+          "daoBridge.autoProxy": {
+            "type": "boolean",
+            "default": true,
+            "description": "自动探测本机代理（clash/v2ray 常见端口）用于 cloudflared 出站，适配国内网络。"
           }
         }
       }
