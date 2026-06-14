@@ -187,8 +187,8 @@ class CockpitProvider {
   }
   toast(text, bad) { if (this.view) try { this.view.webview.postMessage({ type: "toast", text, bad: !!bad }); } catch (_) {} }
 
-  async run(id) {
-    try { await vscode.commands.executeCommand(id); return true; }
+  async run(id, ...args) {
+    try { await vscode.commands.executeCommand(id, ...args); return true; }
     catch (e) { log("cmd 失败 " + id + ": " + e); this.toast("✗ " + id + " 未就绪", true); return false; }
   }
   async onMsg(m) {
@@ -223,6 +223,24 @@ class CockpitProvider {
           this.toast(!cur ? "✓ 自动备份 · 开" : "○ 自动备份 · 关");
         } catch (e) { this.toast("✗ 备份开关失败", true); }
         return this.push();
+      }
+      case "rotate": {
+        // 自动轮转开关 — 交由 rt-flow 命令切换(单一真源), 再回写规范配置以同步驾驶舱
+        await this.run("wam.toggleAutoRotate");
+        const cfg = vscode.workspace.getConfiguration("wam");
+        const cur = cfg.get("autoRotate") !== false;
+        this.toast(cur ? "✓ 自动轮转 · 开" : "○ 自动轮转 · 关");
+        setTimeout(() => this.push(), 600);
+        return;
+      }
+      case "pasteAccount": {
+        // B2 · 主账号粘贴即换: 把整行(账密/凭据)交给 rt-flow 添加并 token 直登, 然后刷新驾驶舱
+        const text = (m.text || "").trim();
+        if (!text) { this.toast("先粘贴 账号:密码 一行", true); return; }
+        const ok = await this.run("wam.addAccount", text);
+        if (ok) this.toast("✓ 已粘贴主账号 · 直登并刷新");
+        setTimeout(() => this.push(), 1200);
+        return;
       }
       case "intent":
         return this.intent(m.id);

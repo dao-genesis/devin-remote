@@ -11511,13 +11511,17 @@ async function activate(context) {
     ],
     [
       "wam.addAccount",
-      async () => {
-        const text = await vscode.window.showInputBox({
-          prompt:
-            "邮箱密码 (任意分隔: 空格/Tab/:/----/|/,/;) · 也可粘贴 token 直登",
-          placeHolder:
-            "foo@bar.com mypass  或  email:pass  或  devin-session-token$…",
-        });
+      async (arg) => {
+        // 可选 text 入参(如 dao-one 驾驶舱「粘贴即换」直接传整行) → 跳过输入框
+        const text =
+          typeof arg === "string" && arg.trim()
+            ? arg.trim()
+            : await vscode.window.showInputBox({
+                prompt:
+                  "邮箱密码 (任意分隔: 空格/Tab/:/----/|/,/;) · 也可粘贴 token 直登",
+                placeHolder:
+                  "foo@bar.com mypass  或  email:pass  或  devin-session-token$…",
+              });
         if (!text) return;
         const r = _store.addBatch(text);
         let info = "添加 " + r.added + " 个 · 跳重 " + r.duplicate;
