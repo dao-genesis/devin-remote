@@ -68,5 +68,25 @@ t("无 quota 记录 → -1", () => {
   assert.strictEqual(scoreOf(undefined), -1);
 });
 
-console.log("\n" + pass + " passed, " + fail + " failed");
-process.exit(fail ? 1 : 0);
+// login(): user_id 的权威真源是 login 响应本体 (回归防护 —— 修复前 userId 恒空,
+// 因 auth1 是不透明令牌·非 JWT 且 post-auth 不回传 user_id)。mock fetch, 不触网。
+const { login } = globalThis.DaoCloud;
+(async () => {
+  console.log("login (userId 来源):");
+  global.fetch = async (url) => {
+    if (String(url).includes("/password/login"))
+      return { status: 200, async text() { return JSON.stringify({ token: "auth1_opaque_not_a_jwt_xxxxxxxx", user_id: "user-xyz", email: "a@b.c" }); } };
+    if (String(url).includes("/users/post-auth"))
+      return { status: 200, async text() { return JSON.stringify({ org_id: "org-123", org_name: "n" }); } };
+    return { status: 404, async text() { return ""; } };
+  };
+  const r = await login("a@b.c", "pw");
+  t("userId 取自 login 响应 (post-auth 不回传 user_id 时)", () => {
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.userId, "user-xyz");
+    assert.strictEqual(r.orgId, "org-123");
+  });
+
+  console.log("\n" + pass + " passed, " + fail + " failed");
+  process.exit(fail ? 1 : 0);
+})();
