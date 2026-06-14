@@ -75,6 +75,17 @@ foreach ($v in $vsixFiles) {
     & $devinCli --install-extension $v.FullName --force 2>&1 | Select-Object -Last 1
 }
 
+# ---------- 2.5 Uninstall the standalone engines that dao-one inlines ----------
+# 归一 (dao.dao-one) 复用并内联了四套引擎本体的真实前端视图(wam.panel / dao.router /
+# dao.cloudPanel / daoBridgeView)。VS Code 的 view/command id 必须全局唯一 —— 若这些
+# 独立引擎仍各自安装, 会抢占同名 id, 导致归一容器里对应板块(尤其 ④ 内网穿透)不渲染。
+# 故安装完成后卸载这四个独立引擎, 让 dao.dao-one 成为唯一属主。反者道之动: 合则归一。
+$inlinedEngines = @('dao.dao-vsix', 'dao-agi.dao-proxy-pro', 'devaid.rt-flow', 'dao.dao-bridge')
+foreach ($id in $inlinedEngines) {
+    Step "Uninstalling standalone engine $id (inlined by dao.dao-one)"
+    & $devinCli --uninstall-extension $id 2>&1 | Select-Object -Last 1
+}
+
 # ---------- 3. Verify ----------
 Step 'Installed extensions:'
 & $devinCli --list-extensions
