@@ -175,6 +175,11 @@
 				"command": "wam.devinSetBackupDir",
 				"title": "Devin Cloud: Set Backup Folder (v4.6.0 · 独立于 Cascade)",
 				"category": "RT Flow"
+			},
+			{
+				"command": "wam.clearConvUntrack",
+				"title": "Conversation: Restore Permanently-Untracked (v4.8.0 · 复原永久取消追踪)",
+				"category": "RT Flow"
 			}
 		],
 		"configuration": {
