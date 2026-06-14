@@ -604,9 +604,9 @@ async function accountOverview(auth) {
       secrets: (secrets.secrets || []).length,
       gitConnections: (git.connections || []).length,
     },
-    knowledge: (knowledge.learnings || []).map((k) => ({ id: k.id, name: k.name || k.title || "" })),
-    playbooks: (playbooks.playbooks || []).map((p) => ({ id: p.id || p.playbook_id, name: p.name || p.title || "" })),
-    secrets: (secrets.secrets || []).map((s) => ({ id: s.id || s.secret_id, name: s.name || s.key || "" })),
+    knowledge: (knowledge.learnings || []).map((k) => ({ id: k.id, name: k.name || k.title || "", deletable: isUserKnowledge(k) })),
+    playbooks: (playbooks.playbooks || []).map((p) => ({ id: p.id || p.playbook_id, name: p.name || p.title || "", deletable: isUserPlaybook(p, auth) })),
+    secrets: (secrets.secrets || []).map((s) => ({ id: s.id || s.secret_id, name: s.name || s.key || "", deletable: true })),
     gitConnections: (git.connections || []).map((c) => ({
       id: c.id || c.connection_id,
       name: c.name || c.username || c.account_login || c.org || "",

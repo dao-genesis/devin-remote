@@ -2,6 +2,27 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.7.1 (2026-06-14) · 知识库/剧本/密钥 · 每项查看/下载/删除 + 多选批量 (Phase D)
+
+> 道法自然·下拉概览里知识库/剧本/密钥每一项都可独立操作: 查看内容(知识/剧本) · 下载到本地.md · 删除。复选框多选(Shift 区间) → 批量下载 / 批量删除。本源默认(内置知识 note_type=builtin / 社区剧本 access=community)由 `deletable` 标记守恒——不显示删除按钮、不可误删。
+
+### 新增
+
+- 后端 `accountOverview` 板块项补 `deletable` 标记(知识=`isUserKnowledge`, 剧本=`isUserPlaybook`, 密钥=true)。
+- 前端 `_dvBoardListHtml` 每项: 复选框 + 查看/下载/删除按钮; 顶部多选条(批量下载·批量删除·取消)。
+- webview 消息: `dvBoardView` `dvBoardDownload` `dvBoardDownloadBatch` `dvBoardDelete` `dvBoardDeleteBatch`; 多选 Shift 区间(`dvBoardSel`)。
+- host 处理 + helper: `_dvFetchBoardItem`(按 id 取全量项含 body) / `_dvBoardItemText`(知识=name+触发+body, 剧本=title+body, 密钥=名称/元数据) / `_dvBoardDelete`(分发 deleteKnowledge/Playbook/Secret) / `_dvBoardFileName`。查看开新面板; 下载落 .md 到 `账号/知识库|剧本|密钥/` 并资源管理器定位; 删除模态确认 + 无感刷新。
+
+### 守恒
+
+- 密钥无可取明文值: 仅查看名称/元数据 + 删除/多选(不提供下载值)。
+- 内置知识(3)/社区剧本(32)`deletable:false` → 前端无删除按钮 (本源默认·不毁)。
+
+### 验证
+
+- `node -c` 双文件通过; 23 单测全绿。
+- 真账 live(lcld): 知识 13(10 可删/3 内置锁) · 剧本 39(7 可删/32 社区锁) · 密钥 3 可删; 内容取回正常(用户知识 body 7852 字 + 触发场景, 剧本 body 1212 字)。`deletable` 标记与既有 wipe「保留 32 本默剧本 + 3 本默知识」完全一致。
+
 ## v4.7.0 (2026-06-14) · 单对话操作 · 下拉概览每条对话加按钮 (查看/下载ZIP/清理) + 多选合并
 
 > 道法自然·热加载下拉里每条 Devin Cloud 对话本身可独立操作: 查看详情/Output 全文 · 下载本对话 ZIP 到本地 · 水过无痕清理(归档)。支持复选框多选(Shift 区间), 合并多个对话为一个 ZIP 下载 / 批量清理。复用既有热加载预载缓存(v4.6.0)与单对话备份取证逻辑(增量补全文件), 不改动既有备份/清理主链。
