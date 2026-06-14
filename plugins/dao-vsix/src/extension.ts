@@ -43,6 +43,9 @@ let detectedProxyPort = 0;
 let _autoHealAttempts = 0;
 let _autoHealTimer: ReturnType<typeof setTimeout> | null = null;
 const AUTO_HEAL_DELAYS = [3000, 8000, 20000, 45000];
+// 归一 · 帛书「道生一」— 内联 rt-flow 运行时句柄(左·RT Flow 账号池/切号 入 dao-vsix 本体)
+interface RtflowModule { activate?: (ctx: vscode.ExtensionContext) => unknown; deactivate?: () => unknown; }
+let _rtflowModule: RtflowModule | null = null;
 
 // ═══════════════════════════════════════════════════════════
 // 道 · 玄牝之门用之不堇 — 上游连接复用(keep-alive)
@@ -296,6 +299,20 @@ export async function activate(context: vscode.ExtensionContext) {
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.command = 'dao.toggleCloudPanel';
     context.subscriptions.push(statusBarItem);
+
+    // ═══════════════════════════════════════════════════════════
+    // 归一 · 帛书「道生一,一生二」— 内联激活 rt-flow 运行时
+    // 二插合一为单一插件: 左 RT Flow(账号池/切号) + 中 数联 Devin Cloud。
+    // 守柔: rt-flow 激活异常不得阻断 dao-vsix 自身激活。
+    // ═══════════════════════════════════════════════════════════
+    try {
+        _rtflowModule = require(path.join(__dirname, '..', 'rtflow', 'extension.js')) as RtflowModule;
+        if (_rtflowModule && typeof _rtflowModule.activate === 'function') {
+            await Promise.resolve(_rtflowModule.activate(context));
+        }
+    } catch (e) {
+        try { console.error('[dao-vsix] 内联 rt-flow 激活失败(守柔不阻塞):', e); } catch { /* 守柔 */ }
+    }
 
     // ═══════════════════════════════════════════════════════════
     // 双视图 · 帛书·四十二「万物负阴而抱阳」
@@ -870,6 +887,7 @@ function unregisterWorkspace() {
 }
 
 export function deactivate() {
+    try { if (_rtflowModule && typeof _rtflowModule.deactivate === 'function') _rtflowModule.deactivate(); } catch { /* 守柔 */ }
     stopCredentialSync();
     stopServer();
     unregisterInstance();
