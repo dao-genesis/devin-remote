@@ -98,6 +98,7 @@ button.ghost:hover { background: var(--card2); color: var(--fg); }
 .sess .sdl:hover { background: var(--card2); }
 .ovw-actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
 .ovw-actions .kndl { margin-left: 0; flex: 1 1 100%; }
+.meta2 { margin-top: 3px; font-size: 10.5px; color: var(--mut); word-break: break-all; line-height: 1.5; }
 .git-line { margin-top: 6px; font-size: 11px; }
 .git-line .muted, .ovw .muted { color: var(--mut); }
 .git-line b { color: var(--accent2); }

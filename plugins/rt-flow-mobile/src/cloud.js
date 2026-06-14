@@ -586,6 +586,21 @@ const DaoCloud = (() => {
     const s = sess || {};
     return [s.statusClass || "", s.status || "", s.reason || ""].join("|");
   }
+  // D/W 额度重置信息 + 剩余百分比 (从 billing/status raw 防御式抽取·缺失则 null 优雅降级)
+  // 与本体同源字段名: {daily,weekly}_quota_reset_at_unix / _remaining_percent。
+  function quotaResetInfo(raw) {
+    const empty = { dailyPct: null, weeklyPct: null, dailyResetMs: null, weeklyResetMs: null };
+    if (!raw || typeof raw !== "object") return empty;
+    const ps = raw.plan_status || raw.planStatus || raw;
+    const pick = (...ks) => { for (const k of ks) { const v = ps[k]; if (v != null && Number.isFinite(Number(v))) return Number(v); } return null; };
+    const toMs = (u) => (u == null ? null : (u < 1e12 ? u * 1000 : u));
+    return {
+      dailyPct: pick("daily_quota_remaining_percent", "dailyQuotaRemainingPercent"),
+      weeklyPct: pick("weekly_quota_remaining_percent", "weeklyQuotaRemainingPercent"),
+      dailyResetMs: toMs(pick("daily_quota_reset_at_unix", "dailyQuotaResetAtUnix", "dailyResetAt")),
+      weeklyResetMs: toMs(pick("weekly_quota_reset_at_unix", "weeklyQuotaResetAtUnix", "weeklyResetAt")),
+    };
+  }
 
   return {
     CFG, jsonRequest, jsonRequestRetry, withTimeout,
@@ -596,7 +611,7 @@ const DaoCloud = (() => {
     extractMessageText, classifyEvent, buildConversationMd, buildAgentDoc, safeName,
     getEvents, exportConversation, knowledgeToMd, exportKnowledge,
     okDelete, deleteKnowledge, deletePlaybook, deleteSecret, deleteSession, wipeAccount,
-    computeConvCap, lowBalanceVerdict, sessionSignature,
+    computeConvCap, lowBalanceVerdict, sessionSignature, quotaResetInfo,
   };
 })();
 
