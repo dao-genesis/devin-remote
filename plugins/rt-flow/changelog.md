@@ -2,6 +2,25 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.7.2 (2026-06-14) · PAT 反向注入 · 一键把 PAT 作为 GITHUB_PAT 密钥写入全部账号 (Phase F)
+
+> 道法自然·将欲予之必故予之: 用户在「批量归一」PAT 框填入 PAT 后, 点「&#128273; PAT注密钥」即把该 PAT 作为 `GITHUB_PAT` 密钥反向注入到「全部账号」(若已勾选账号则仅注入勾选项)。复用 devin_git 写后双读确认逻辑(`ensureGithubPatSecret`), 与 dao-vsix 1.3.3 `devinInjectSecret` 同源(`POST /api/org-{bare}/secrets {key,value,type:key-value,sensitive,note}`, 200/201/409 皆视为成功·幂等)。
+
+### 新增
+
+- 前端: 「批量归一」工具条加「&#128273; PAT注密钥」按钮 + `gitInjectPatAll()`(读 `gitBatchPat` 框 → 勾选则仅勾选, 否则全部账号)。
+- host: `gitInjectSecretBatch` 处理 — 逐账号 `_dvAuthFor` 登录 → `devinGit.ensureGithubPatSecret(auth, pat)`; 不可登录账号跳过; 实时进度 toast + 汇总成功/失败/跳过 + `_notify` 明细。
+
+### 守恒
+
+- 仅注入密钥, 不触发 OAuth 连接/不改 Git 连接态(与「批量连Git」职责分离)。
+- 写后双读确认(最多 3 轮)→ 不臆造成功; 幂等(已存在的 409 视为已注入)。
+
+### 验证
+
+- `node -c` 通过; 23 单测全绿。
+- 真账 live(lcld26815946 / beasley856439): GITHUB_PAT 注入 before:false → after:true, 经独立 `listSecrets` 复核确认落库 (lcld 既有 DAO_* 密钥并存不扰)。
+
 ## v4.7.1 (2026-06-14) · 知识库/剧本/密钥 · 每项查看/下载/删除 + 多选批量 (Phase D)
 
 > 道法自然·下拉概览里知识库/剧本/密钥每一项都可独立操作: 查看内容(知识/剧本) · 下载到本地.md · 删除。复选框多选(Shift 区间) → 批量下载 / 批量删除。本源默认(内置知识 note_type=builtin / 社区剧本 access=community)由 `deletable` 标记守恒——不显示删除按钮、不可误删。

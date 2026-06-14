@@ -749,7 +749,7 @@ const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.7.1";
+const VERSION = "4.7.2";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -8019,6 +8019,7 @@ ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanS
 <input class="dv-git-pat" id="gitBatchPat" type="password" placeholder="批量 PAT (留空→各账号默认/映射)" autocomplete="off" style="max-width:200px"/>
 <button onclick="gitBatchConnect()" class="conv-btn" title="把勾选的多个 Devin 账号全部连接到同一个 GitHub（同一 PAT 注入+落库密钥+核验）">&#128279; 批量连Git</button>
 <button onclick="gitBatchDisconnect()" class="conv-btn conv-btn-s" title="真解绑勾选账号的 Git 连接（复查扫除·连接归零·删密钥）">&#9986; 批量断Git</button>
+<button onclick="gitInjectPatAll()" class="conv-btn" title="PAT 反向注入: 把上面 PAT 框的 PAT 作为 GITHUB_PAT 密钥写入「全部账号」(若已勾选则仅勾选账号)·写后双读确认·dao-vsix 1.3.3 同源">&#128273; PAT注密钥</button>
 <span style="font-size:10px;color:#888">勾选→多 Devin 绑同一 GitHub</span>
 </div>
 <div id="list">${rows}</div>
@@ -8094,6 +8095,8 @@ function dvSetMode(v){vscode.postMessage({type:'devinSetMode',value:v});}
 function dvTog(id){const e=document.getElementById(id);if(e)e.style.display=(e.style.display==='none'||!e.style.display)?'block':'none';}
 function gitBatchConnect(){const ix=_selIx();if(!ix.length){showToast('\u2717 \u8bf7\u5148\u52fe\u9009\u8d26\u53f7','fail');return;}const el=document.getElementById('gitBatchPat');const pat=el?el.value:'';vscode.postMessage({type:'gitConnectBatch',indices:ix,pat:pat});}
 function gitBatchDisconnect(){const ix=_selIx();if(!ix.length){showToast('\u2717 \u8bf7\u5148\u52fe\u9009\u8d26\u53f7','fail');return;}vscode.postMessage({type:'gitDisconnectBatch',indices:ix});}
+/* v4.7.2 · PAT 反向注入: PAT→GITHUB_PAT 密钥, 写入全部(或勾选)账号 */
+function gitInjectPatAll(){const el=document.getElementById('gitBatchPat');const pat=el?el.value.trim():'';if(!pat){showToast('\u2717 \u5148\u5728\u6279\u91cfPAT\u6846\u586b ghp_\u2026','fail');return;}const ix=_selIx();showToast('\u23F3 PAT \u6ce8\u5165\u5bc6\u94a5 '+(ix.length?ix.length+' \u4e2a\u52fe\u9009':'\u5168\u90e8')+'\u8d26\u53f7\u2026');vscode.postMessage({type:'gitInjectSecretBatch',indices:ix,pat:pat});}
 function toggleConv(){const b=document.getElementById('convBody');if(!b)return;b.classList.toggle('collapsed');const arr=document.getElementById('convArrow');const ic=b.classList.contains('collapsed');if(arr)arr.textContent=ic?'\u25BC':'\u25B2';try{localStorage.setItem('dao-conv-collapsed',ic?'1':'0');}catch(e){}}
 function doSetBackupDir(){vscode.postMessage({type:'selectBackupDir'});}
 function doSetDevinBackupDir(){vscode.postMessage({type:'devinSelectBackupDir'});}
@@ -9998,6 +10001,33 @@ async function handleWebviewMessage(msg) {
         _toast((fail || warn ? "\u26A0" : "\u2713") + " 批量连 Git: 归一 " + ok + " · 异身份 " + warn + " · 失败 " + fail + "/" + idx.length);
         _notify("info", "批量归一连接 GitHub: 归一到本 PAT 主 " + ok + " · 连到别的身份 " + warn + " · 失败 " + fail + "/" + idx.length + (fails.length ? ("\n明细: " + fails.join("; ")) : ""));
         log("[git] batch-connect ok=" + ok + " warn=" + warn + " fail=" + fail + (fails.length ? "\n  " + fails.join("\n  ") : ""));
+        _broadcastMsg({ type: "gitBatchDone" });
+        break;
+      }
+      // v4.7.2 · PAT 反向注入: 把 PAT 作为 GITHUB_PAT 密钥写入「全部(或勾选)账号」(dao-vsix 1.3.3 同源·写后双读确认)
+      case "gitInjectSecretBatch": {
+        const pat = (msg.pat && String(msg.pat).trim()) || "";
+        if (!pat) { _toast("\u2717 无 PAT"); break; }
+        const idx = Array.isArray(msg.indices) && msg.indices.length
+          ? msg.indices
+          : _store.accounts.map((_, k) => k); // 未勾选 → 全部账号
+        _toast("\u23F3 PAT 反向注入 GITHUB_PAT 密钥 → " + idx.length + " 账号 …");
+        let ok = 0, fail = 0, skip = 0; const fails = [];
+        for (const i of idx) {
+          const r = await _dvAuthFor(i);
+          if (!r.ok) { skip++; continue; } // 未登录/无密码 → 跳过(只注入可登录账号)
+          try {
+            const done = await devinGit.ensureGithubPatSecret(r.auth, pat);
+            if (done) {
+              ok++;
+              _toast("\u23F3 [" + (ok + fail) + "/" + idx.length + "] " + r.email.split("@")[0] + " · GITHUB_PAT \u2713");
+            } else { fail++; fails.push(r.email + ":写后复核未确认"); }
+          } catch (e) { fail++; fails.push(r.email + ":" + String((e && e.message) || e)); }
+          _dvOverviewCache.delete(r.email.toLowerCase());
+        }
+        _toast((fail ? "\u26A0" : "\u2713") + " PAT 注密钥: 成功 " + ok + " · 失败 " + fail + (skip ? " · 跳过(不可登录)" + skip : "") + "/" + idx.length);
+        _notify("info", "PAT 反向注入 GITHUB_PAT 密钥: 成功 " + ok + " · 失败 " + fail + " · 跳过(不可登录) " + skip + "/" + idx.length + (fails.length ? ("\n明细: " + fails.join("; ")) : ""));
+        log("[git] inject-secret-batch ok=" + ok + " fail=" + fail + " skip=" + skip + (fails.length ? "\n  " + fails.join("\n  ") : ""));
         _broadcastMsg({ type: "gitBatchDone" });
         break;
       }
