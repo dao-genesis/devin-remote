@@ -39,6 +39,10 @@ const ACCOUNTS_TXT = path.join(DAO_DIR, 'accounts.txt');
 // SESSION_FILE removed — per-workspace: ws.sessionFile
 const PROXY_PORTS = [7890, 10809, 7891, 1080, 10808, 8080, 8118];
 let detectedProxyPort = 0;
+// 自愈重试态 — 帛书·「反者道之动」启动之初凭证未就绪, 以退为进自行收敛
+let _autoHealAttempts = 0;
+let _autoHealTimer: ReturnType<typeof setTimeout> | null = null;
+const AUTO_HEAL_DELAYS = [3000, 8000, 20000, 45000];
 
 // ═══════════════════════════════════════════════════════════
 // 道 · 玄牝之门用之不堇 — 上游连接复用(keep-alive)
@@ -299,8 +303,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // ═══════════════════════════════════════════════════════════
     const cloudPanel = new DaoCloudPanel(context.extensionUri);
     sidebarCloudPanel = cloudPanel;
-    // RT Pro 左侧面板 — 帛书·「道并行而不相悖」左侧 RT Pro + 中间数联面板并行
-    const rtProPanel = new RtProPanel(context.extensionUri);
+    // 正本清源 · 帛书·「道并行而不相悖」— 左侧账号池/切号由 rt-flow 独任,
+    // dao-vsix 专司中间数联面板, 经凭证同源(devinAutoChain)与 rt-flow 全链路联动。
     // 帛书·二十五「道法自然」— 记录扩展路径 · 供读取捆绑规则文本(dao-rules.md)
     try { _daoExtPath = context.extensionPath; } catch { /* 守柔 */ }
     // 道法自然 · 默认种入每账号自动注入 (《道德经·阴符经》知识/剧本 + 内网穿透MD) — 仅首次
@@ -351,6 +355,9 @@ export async function activate(context: vscode.ExtensionContext) {
             // Step 4: 启动实时凭证同步 — RT Flow同源机制
             // 帛书·「反者道之动」— 轮询vscdb，检测账号切换
             startCredentialSync();
+            // Step 5: 自愈重试 — 启动之初凭证/账号池/代理或未就绪而仅得 session-token,
+            // 以退为进退避重试, 自行收敛到可注入 auth1。无为而无不为。
+            if (!daoHasInjectableAuth1()) scheduleAutoChainHeal(true);
         });
     }
     context.subscriptions.push(
@@ -490,8 +497,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Tab导航: Sessions | Knowledge | Playbooks | Secrets | Git | Settings
     // ═══════════════════════════════════════════════════════════
     context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider('dao.cloudPanel', cloudPanel),
-        vscode.window.registerWebviewViewProvider('dao.rtProPanel', rtProPanel)
+        vscode.window.registerWebviewViewProvider('dao.cloudPanel', cloudPanel)
     );
 
     // Watch for terminal close to clean up
@@ -1829,97 +1835,6 @@ function cmd(c, d) { vscode.postMessage(Object.assign({command: c}, d || {})); }
 }
 
 // ═══════════════════════════════════════════════════════════
-// RT Pro 左侧面板 — 帛书·「道并行而不相悖」
-// 左侧 RT Pro (rt-flow 核心模块整合) + 中间数联面板并行
-// 账号池 · WAM · 对话追踪 · 备份 · 批量操作 — 均集成于左
-// ═══════════════════════════════════════════════════════════
-class RtProPanel implements vscode.WebviewViewProvider {
-    private view: vscode.WebviewView | null = null;
-    private extensionUri: vscode.Uri;
-
-    constructor(extensionUri: vscode.Uri) {
-        this.extensionUri = extensionUri;
-    }
-
-    resolveWebviewView(webviewView: vscode.WebviewView) {
-        this.view = webviewView;
-        webviewView.webview.options = { enableScripts: true };
-        webviewView.webview.html = this.getHtml();
-        webviewView.webview.onDidReceiveMessage(async (msg) => {
-            switch (msg.command) {
-                case 'openCloudPanel':
-                    vscode.commands.executeCommand('dao.openCloudPanel');
-                    break;
-                case 'syncBrowser':
-                    vscode.commands.executeCommand('dao.routeOfficialForAccount', { email: msg.email || ws.devinEmail, mode: 'sys' });
-                    break;
-                case 'openRoutedPanel':
-                    vscode.commands.executeCommand('dao.routeOfficialForAccount', { email: msg.email || ws.devinEmail, mode: 'ide' });
-                    break;
-                case 'refresh':
-                    this.refresh();
-                    break;
-            }
-        });
-    }
-
-    refresh() {
-        if (this.view) this.view.webview.html = this.getHtml();
-    }
-
-    private getHtml(): string {
-        const loggedIn = !!ws.devinAuth1;
-        const email = ws.devinEmail || '';
-        const orgName = ws.devinOrgName || ws.devinOrgSlug || '';
-        const port = ws.port || 0;
-
-        return `<!DOCTYPE html>
-<html lang="zh"><head><meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;color:var(--vscode-foreground);background:var(--vscode-sideBar-background);padding:8px;overflow-y:auto}
-.card{background:var(--vscode-editor-background);border:1px solid var(--vscode-panel-border);border-radius:4px;padding:8px;margin-bottom:6px}
-.row{display:flex;justify-content:space-between;align-items:center;padding:2px 0}
-.lbl{color:var(--vscode-descriptionForeground);font-size:11px}
-.val{color:var(--vscode-foreground);font-weight:500;font-size:11px;word-break:break-all;max-width:180px;text-align:right}
-.ok{color:#4ec9b0}.err{color:#f44747}
-.btn{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:3px;padding:5px 10px;cursor:pointer;font-size:11px;width:100%;margin-top:4px}
-.btn:hover{background:var(--vscode-button-hoverBackground)}
-.btn.primary{background:#6366f1}.btn.primary:hover{background:#818cf8}
-.sec{font-size:11px;font-weight:600;color:var(--vscode-descriptionForeground);text-transform:uppercase;letter-spacing:0.5px;margin:12px 0 6px}
-</style></head>
-<body>
-<div class="card">
-  <div class="row"><span class="lbl">🚀 RT Pro</span><span class="val ok">v2.0.0</span></div>
-  <div class="row"><span class="lbl">服务</span><span class="val ${port ? 'ok' : 'err'}">${port ? ':' + port + ' ✓' : 'off'}</span></div>
-  ${loggedIn ? '<div class="row"><span class="lbl">账号</span><span class="val ok">' + escapeHtml(email.split('@')[0]) + '</span></div>' : ''}
-  ${orgName ? '<div class="row"><span class="lbl">组织</span><span class="val">' + escapeHtml(orgName) + '</span></div>' : ''}
-</div>
-
-<div class="sec">多实例浏览器</div>
-<button class="btn primary" onclick="cmd('openRoutedPanel')" title="在 IDE 内打开独立路由面板(多实例·不阻塞)">🖥️ IDE 内路由面板</button>
-<button class="btn" onclick="cmd('syncBrowser')" style="margin-top:4px;background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录">🌐 电脑浏览器同步</button>
-
-<div class="sec">面板</div>
-<button class="btn" onclick="cmd('openCloudPanel')" style="margin-top:2px">📊 打开数联全功能面板</button>
-
-<div class="sec" style="margin-top:16px">RT Flow 模块</div>
-<div class="card">
-  <div class="row"><span class="lbl">WAM 账号池</span><span class="val">待集成</span></div>
-  <div class="row"><span class="lbl">对话追踪</span><span class="val">待集成</span></div>
-  <div class="row"><span class="lbl">备份管理</span><span class="val">待集成</span></div>
-</div>
-<button class="btn" onclick="cmd('refresh')" style="margin-top:8px">⟳ 刷新</button>
-<script>
-const vscode = acquireVsCodeApi();
-function cmd(c, d) { vscode.postMessage(Object.assign({command: c}, d || {})); }
-</script>
-</body></html>`;
-    }
-}
-
-// ═══════════════════════════════════════════════════════════
 // 道 · DaoCloudMiddlePanel — 帛书·四十二「万物负阴而抱阳」
 // 中间层全功能面板 — 官网设计逻辑 · UI驱动 · 自动同步
 // 反者道之动: API→UI · 不可操作→可操作 · 被动→主动
@@ -3214,7 +3129,11 @@ function daoRoutedWebUrl(pagePath: string = ''): string {
 async function ensureRoutedAutoLogin(context: vscode.ExtensionContext): Promise<void> {
     try { if (!ws.port) await startServer(context); } catch { /* 守柔 */ }
     const hasInjectableAuth1 = !!ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$');
-    if (!hasInjectableAuth1) { try { await devinAutoChain(); } catch { /* 守柔 */ } }
+    if (!hasInjectableAuth1) {
+        try { await devinAutoChain(); } catch { /* 守柔 */ }
+        // 仍未得真 auth1(凭证/账号池/代理瞬时未就绪)→ 后台退避自愈, 不阻塞开页
+        if (!daoHasInjectableAuth1()) scheduleAutoChainHeal(true);
+    }
 }
 // 道·多账号并行: 路由 URL 附 ?dao_acct=<email> → 反代据此注入该账号 auth1(见 devinCloudProxyRoute)。
 // 仅当走本地反代(localhost)且该账号已持久化真 auth1 时附加; 否则退回当前账号路由 URL。
@@ -3789,6 +3708,39 @@ async function resolveActiveEmailFromToken(token: string): Promise<{ email: stri
         return { email: enriched.email, accountId };
     }
     return null;
+}
+
+// ═══════════════════════════════════════════════════════════
+// 道法自然 · 自愈重试 — 帛书·「反者道之动」「守柔曰强」「功遂身退」
+// 启动之初, 账号池文件 / IDE 凭证 / 本地代理 或尚未就绪, 首次自动链
+// 可能取不到密码或网络瞬断, 落入 session-token 兜底(非可注入)。
+// 故以退为进: 按 3s→8s→20s→45s 退避重试 devinAutoChain, 直至取得
+// 可注入 auth1(路径B 五步登录成功)即止。用户无为, 系统自行收敛到已认证态。
+// ═══════════════════════════════════════════════════════════
+function daoHasInjectableAuth1(): boolean {
+    return !!ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$');
+}
+function scheduleAutoChainHeal(fresh: boolean = false): void {
+    if (_autoHealTimer) return;                              // 已在自愈中 — 知止不殆
+    if (daoHasInjectableAuth1()) return;                     // 已得真 auth1 — 功遂身退
+    if (fresh) _autoHealAttempts = 0;                        // 新触发(启动/切号)→ 重置退避
+    if (_autoHealAttempts >= AUTO_HEAL_DELAYS.length) return; // 退避耗尽 — 不强为
+    const delay = AUTO_HEAL_DELAYS[_autoHealAttempts++];
+    _autoHealTimer = setTimeout(async () => {
+        _autoHealTimer = null;
+        if (daoHasInjectableAuth1()) return;
+        try {
+            const ok = await devinAutoChain();
+            if (ok && daoHasInjectableAuth1()) {
+                try { if (ws.port && ws.devinOrgId) await devinFullInject(); } catch { /* 守柔 */ }
+                sidebarCloudPanel?.refresh();
+                refreshDaoCloudMiddlePanel();
+                updateStatusBar();
+                return;                                      // 收敛 — 不再重试
+            }
+        } catch { /* 守柔 */ }
+        scheduleAutoChainHeal();                             // 未就绪 → 继续退避
+    }, delay);
 }
 
 async function devinAutoChain(): Promise<boolean> {
