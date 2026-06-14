@@ -1705,6 +1705,28 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                         reply({ ok: true });
                         break;
                     }
+                    case 'devinPasteAccount': {
+                        // 归一·B2 · 单账号主页: 粘贴一行 email:password (rt-flow 复制格式) → 即刻切换并渲染
+                        await setAccountSyncMode('manual');
+                        let line = (typeof msg.text === 'string' && msg.text.trim()) ? msg.text.trim() : '';
+                        if (!line) { try { line = (await vscode.env.clipboard.readText() || '').trim(); } catch { line = ''; } }
+                        const parsed = parseAccountLine(line);
+                        if (!parsed) {
+                            const input = await vscode.window.showInputBox({ prompt: '粘贴账号 (一行 email:password)', placeHolder: 'user@example.com:password' });
+                            const p2 = parseAccountLine((input || '').trim());
+                            if (!p2) { vscode.window.showWarningMessage('格式应为 email:password (一行)'); reply({ ok: false }); break; }
+                            const r = await devinLogin(p2.email, p2.password);
+                            if (r.ok) { vscode.window.showInformationMessage('单账号已切换 (' + p2.email + ')'); await devinFullInject(); }
+                            else vscode.window.showErrorMessage('登录失败: ' + (r.error || ''));
+                        } else {
+                            const r = await devinLogin(parsed.email, parsed.password);
+                            if (r.ok) { vscode.window.showInformationMessage('单账号已切换 (' + parsed.email + ')'); await devinFullInject(); }
+                            else vscode.window.showErrorMessage('登录失败: ' + (r.error || ''));
+                        }
+                        this.refresh(); refreshDaoCloudMiddlePanel();
+                        reply({ ok: true });
+                        break;
+                    }
                     case 'exportAgentDoc': {
                         // 江海善下之 — 导出插件本体操作契约 MD, 供本机其他 Agent 使用
                         try {
@@ -1784,6 +1806,7 @@ ${syncing ? `
 <div class="card">
   <div class="row"><span class="lbl">🔗 账号模式</span><span class="val ${mode === 'manual' ? 'sync' : 'ok'}">${mode === 'manual' ? '✋ 手动(独立)' : '🔄 自动(跟随IDE)'}</span></div>
   <button class="btn" onclick="cmd('setSyncMode',{mode:'${mode === 'manual' ? 'auto' : 'manual'}'})">${mode === 'manual' ? '↩️ 切回自动 · 跟随 IDE 账号' : '✋ 切到手动 · 面板独立登录'}</button>
+  <button class="btn" style="background:#6f42c1;margin-top:4px" onclick="cmd('devinPasteAccount')" title="粘贴一行 email:password (rt-flow 复制格式) · 即刻切换为该单账号主页">📋 粘贴账号 · 单号切换</button>
   ${mode === 'manual' ? '<button class="btn" style="background:#0e639c;margin-top:4px" onclick="cmd(&#39;devinManualLogin&#39;)">👤 登录其他账户</button>' : ''}
 </div>
 <div class="card">
@@ -3233,6 +3256,18 @@ function devinJsonGet(targetUrl: string, headers: any, timeoutMs?: number): Prom
 // Step4: sessionToken → apiKey+apiServerUrl
 // Step5: apiKey → quota (planName, daily%, weekly%)
 // ═══════════════════════════════════════════════════════════
+
+// 归一·B2 · 解析单行账号 (rt-flow 复制格式 email:password) → 取第一个冒号前为邮箱, 其后为密码
+function parseAccountLine(line: string): { email: string; password: string } | null {
+    if (!line) return null;
+    const first = line.split(/\r?\n/)[0].trim();
+    const i = first.indexOf(':');
+    if (i <= 0) return null;
+    const email = first.slice(0, i).trim();
+    const password = first.slice(i + 1).trim();
+    if (!email || !password || !email.includes('@')) return null;
+    return { email, password };
+}
 
 async function devinLogin(email: string, password: string, retryCount?: number): Promise<{ ok: boolean; auth1?: string; userId?: string; error?: string }> {
     // Step 1: Login → auth1 — 帛书·七十三「勇于不敢则活」429退避
