@@ -94,3 +94,46 @@ OUTBOUND -> https://models.inference.ai.azure.com/chat/completions | model gpt-4
 1. **github 免费层 8000 token 是硬上限。** 道德经+阴符经 SP(8908 字)+ 全量工具必然 413。验证 413-可读回传需要这种"必然超限"的请求;若要 github 拿到**真实回复**,需缩小 SP(如阴符经单独模式)或换高额度渠道(DeepSeek/小米)。
 2. **rt-flow 空闲看门狗误报。** rt-flow(独立插件)的空闲监控会对已收到 413 的对话弹「对话死亡(停滞 24s)」。这是 rt-flow 的空闲监控,**与 dao-proxy 的 413 修复无关**——可读错误帧本身已正确显示。仅记录,非 dao-proxy-pro 缺陷。
 3. **渠道存活探针假阴性(cosmetic)。** github provider 的 liveness 探针打 `/v1/models`,而真实完成走 `/chat/completions`;路由本身工作正常,探针绿点偶现误判,纯展示层。
+
+---
+
+## Phase 2 — 三渠道真实交互开发实测(阴符经单独 SP + DeepSeek + 小米 MiMo)
+
+**目标:** 把面板①经藏 SP 从「帛书老子+阴符经」切到**阴符经单独**以缩小载荷,接入真实可用的 DeepSeek / 小米 MiMo key,在 Cascade 里发真实复杂开发提示词,实测三家渠道的**开发能力 / 工具调用 / 规则遵守**,并核对去名。
+
+### SP 经藏切换(`POST /origin/canon {"canon":"yinfu"}`)
+
+| | canon | 经藏文本 chars | 出站 `_sysFull` chars(含身份前言+user_information) |
+|---|---|---|---|
+| 切换前 | `laozi+yinfu` | 7803 | 8908 |
+| 切换后 | `yinfu` | 597 | **1774**(~443 tok) |
+
+### 三渠道路由(面板③ `Provider 6 · 路由 6/6 · 就绪 是`)
+
+| Cascade 档位 | modelUid | → provider / model | 上下文上限 |
+|---|---|---|---|
+| SWE-1.6 | `swe-1-6` | github / gpt-4o-mini | 8000(免费层硬限) |
+| SWE-1.6 Fast | `swe-1-6-fast` | deepseek / deepseek-v4-flash | 131072 |
+| SWE-1.6 Slow | `swe-1-6-slow` | xiaomi / mimo-v2.5-pro | 大窗 |
+
+### 实测结果
+
+| # | 渠道 / 档位 | 提示词 | 结果 |
+|---|---|---|---|
+| P1 | 小米 MiMo · SWE-1.6 Slow | "实现 merge_intervals 合并重叠区间…" | **PASS** · 全自主多步循环:`mkdir`→写 `merge_intervals.py`(+69)→`python` 跑测试,Test1 `[[1,3],[2,6],[8,10],[15,18]]`→`[[1,6],[8,10],[15,18]]` ✅ 通过 |
+| P2 | DeepSeek · SWE-1.6 Fast | "从零实现 Python LRU cache 装饰器(不用 functools)+3点说明" | **PASS** · 返回正确的 from-scratch 实现(含 `Lock` 线程安全)+ 3 点说明,~6s |
+| P3 | github · SWE-1.6 | "写个 flatten list-of-lists 的一行式" | **PASS(可读 413)** · 即便 SP 已降到 1774 字,仍返可读 413 帧(不挂死)— 见根因 |
+| P4 | 去名(三渠道出站) | 抓 `_upstream_req_dump.json` | **PASS** · payload 全文 + 26 工具描述里 Cascade/CascadeProjects/Windsurf/Codeium 泄漏=0;SP 内为 `C:\Users\Administrator\Projects`(非 CascadeProjects) |
+
+### 关键根因(github 仍 413 — 量化)
+
+切阴符经后 github 后端 `test-chat`(不带 Cascade 全量工具)**已能 200 拿到真实回复**(测"求 1..n 平方和"→正确返回 `lambda n: sum(i**2 for i in range(1,n+1))`)。但**真实 agentic Cascade 仍 413**,实测出站载荷量化:
+
+```
+SP(_sysFull)      = 1774 chars  (~443 tok)      ← 阴符经单独,已极小
+26 工具定义 JSON   = 34162 chars (~8540 tok)     ← 单独已 > 8000 硬限
+```
+
+**结论:github 免费层 8000 token 的瓶颈是 Cascade 的 26 个工具定义(~8540 tok),而非 SP。** 缩 SP 只够让"轻量/非 agentic"请求通过;完整 agentic Cascade(必带全量工具)在 github 免费层下必然 413。**真正可用于 agentic 开发的是 DeepSeek(128k)/ 小米(大窗)** —— 两者本轮均交付了正确、可运行的真实开发结果。413 可读回传在该场景下仍正确工作(可读帧、不挂死)。
+
+> 实践印证用户判断:阴符经单独模式确实让 github "能正常请求"——对**轻量请求**成立(后端 200);但 agentic 全量工具场景受限于工具体积,需用 DeepSeek/小米。这是 GitHub Models 免费层的客观限制,非 dao-proxy-pro 缺陷。
