@@ -64,10 +64,16 @@ const manifest = {
       ],
     },
     views: {
-      // 归一: 仅暴露单一驾驶舱。三引擎各自的侧栏视图(dao.cloudPanel/dao.essence/
-      // wam.panel)不在此声明 → 不渲染(headless),用户只见「一」。
+      // 归一·正本清源: 直接复用三引擎本体的真实前端视图,竖排归于单一容器 dao-one。
+      // VS Code 原生把同容器多视图渲染成竖排手风琴 —— 即「全能板那种竖排按钮、
+      // 点开横展子块」的形态,零前端重写。默认聚焦 ① 切号(rt-flow 最常用)。
+      //   ① wam.panel    = rt-flow WAM 切号管理 (默认/最上)
+      //   ② dao.essence  = dao-proxy-pro 提示词隔离 + 模型路由 (源照/渠配/模路)
+      //   ③ dao.cloudPanel = dao-vsix 全能板 (Devin Cloud · 会话/知识/剧本/密钥)
       "dao-one": [
-        { id: "dao.one", name: "道 · 归一", type: "webview" },
+        { id: "wam.panel", name: "① 切号 · 账号管理", type: "webview" },
+        { id: "dao.essence", name: "② Proxy Pro · 模型路由", type: "webview" },
+        { id: "dao.cloudPanel", name: "③ 全能板 · Devin Cloud", type: "webview" },
       ],
     },
     commands,
