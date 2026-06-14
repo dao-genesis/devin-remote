@@ -7719,6 +7719,8 @@ function buildHtml() {
         <button class="b sw" onclick="sw(${i})" title="手动切换(无限制)"${isBanned ? " disabled" : ""}${_wamMode === "official" ? ' disabled style="opacity:.3;cursor:not-allowed"' : ""}>&#9889;</button>
         <button class="b vf" onclick="vf(${i})" title="验证">&#128270;</button>
         <button class="b cp" onclick="cp(${i})" title="复制">&#128203;</button>
+        <button class="b rt" onclick="rt(${i})" title="路由官网→IDE内置浏览器(先切此号·反代自动注入登录·多实例标签)">&#128421;</button>
+        <button class="b sb" onclick="sb(${i})" title="系统默认浏览器打开官网(跳出IDE·多实例)">&#127760;</button>
         <button class="b wp" onclick="wp(${i})" title="水过无痕·一键清理本账号 Devin Cloud 全部痕迹(对话/知识库/剧本/密钥/Git)">&#127754;</button>
         <button class="b rm" onclick="rm(${i})" title="删除">&times;</button>
       </span>
@@ -8053,6 +8055,8 @@ function sw(i){_clickFb(event);send('switch',i);}
 function sk(i){_clickFb(event);const b=event&&event.target&&event.target.closest('.sk');const locked=!(b&&b.dataset.locked==='1');vscode.postMessage({type:'setSkipBatch',indices:_selectedFor(i),locked:locked});}
 function vf(i){_clickFb(event);send('verify',i);}
 function cp(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:ix.length>1?'copyAccounts':'copyAccount',index:i,indices:ix});}
+function rt(i){_clickFb(event);showToast('\u23F3 切此号·路由官网→IDE…');vscode.postMessage({type:'routeToIde',index:i});}
+function sb(i){_clickFb(event);vscode.postMessage({type:'openSysBrowser',index:i});}
 function rm(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1)vscode.postMessage({type:'removeBatch',indices:ix});else send('remove',i);}
 function copyAll(){vscode.postMessage({type:'copyAllAccounts'});}
 function setMode(m){vscode.postMessage({type:'setMode',mode:m});}
@@ -9356,6 +9360,40 @@ async function handleWebviewMessage(msg) {
           _engine.rotating = false;
           _broadcastUI();
         }
+        break;
+      }
+      // ★ 归一 · 路由官网→IDE 内置浏览器 (手动·复用 dao-vsix 反向代理自动登录闭环)
+      //   先切到此号 → dao 反代随活跃号 auth1 路由官网 → simpleBrowser 内置标签 (多实例)
+      case "routeToIde": {
+        const i = msg.index;
+        if (i < 0 || i >= _store.accounts.length) return;
+        const a = _store.accounts[i];
+        try {
+          if (_switching && Date.now() - _switchingStartTime < 10000) {
+            _toast("正在切换中,稍后再点");
+          } else {
+            const r = await loginAccount(_store, i);
+            if (!r.ok) _toast("✗ 切号失败: " + (r.error || r.stage || ""));
+          }
+          // 复用 dao-vsix 命令: 经本地反代根路径路由官网, auth1 自动注入登录
+          try {
+            await vscode.commands.executeCommand("dao.devinCloudBrowser");
+          } catch {
+            await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
+          }
+          _toast("🖥 已路由官网→IDE · " + a.email.split("@")[0]);
+        } catch (e) {
+          _toast("✗ 路由失败: " + (e && e.message));
+        }
+        break;
+      }
+      // ★ 归一 · 系统默认浏览器打开官网 (跳出 IDE 框架·多实例: 每次点击新开标签)
+      case "openSysBrowser": {
+        const i = msg.index;
+        if (i < 0 || i >= _store.accounts.length) return;
+        const a = _store.accounts[i];
+        await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
+        _toast("🌐 系统浏览器已打开官网 · " + a.email.split("@")[0]);
         break;
       }
       case "verify": {
