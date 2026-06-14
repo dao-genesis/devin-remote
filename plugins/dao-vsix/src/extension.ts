@@ -266,6 +266,21 @@ function getDaoRulesText(): string {
     _daoRulesCache = '';
     return '';
 }
+// 帛书《老子》/ 道藏《阴符经》分卷文本 — 供单独 Playbook 注入 (合订见 dao-rules.md)
+const _daoAssetCache: { [k: string]: string } = {};
+function getDaoAsset(name: string): string {
+    if (_daoAssetCache[name] !== undefined) return _daoAssetCache[name];
+    const candidates = [
+        _daoExtPath ? path.join(_daoExtPath, 'media', 'dao', name) : '',
+        path.join(__dirname, '..', 'media', 'dao', name),
+        path.join(__dirname, 'media', 'dao', name),
+    ].filter(Boolean);
+    for (const p of candidates) {
+        try { const t = fs.readFileSync(p, 'utf8').trim(); if (t) { _daoAssetCache[name] = t; return t; } } catch { /* 守柔 */ }
+    }
+    _daoAssetCache[name] = '';
+    return '';
+}
 
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -286,6 +301,8 @@ export async function activate(context: vscode.ExtensionContext) {
     sidebarCloudPanel = cloudPanel;
     // 帛书·二十五「道法自然」— 记录扩展路径 · 供读取捆绑规则文本(dao-rules.md)
     try { _daoExtPath = context.extensionPath; } catch { /* 守柔 */ }
+    // 道法自然 · 默认种入每账号自动注入 (《道德经·阴符经》知识/剧本 + 内网穿透MD) — 仅首次
+    try { daoSeedDefaultInjectProfile(); } catch { /* 守柔 */ }
 
     // ═══════════════════════════════════════════════════════════
     // 道法自然 · 零配置自动链 — 帛书·六十二「道者万物之注」
@@ -2269,6 +2286,8 @@ function rBridgeFull(){
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeExportCloudMd&#39;)">☁ 云端Agent MD</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeExportLocalMd&#39;)">💻 本地Agent MD</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入Knowledge</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;bridgeRestart&#39;)">🔄 重启隧道</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;bridgeReset&#39;)" title="清除命名隧道→重置为无账号快速隧道">♻ 重置</button>';
     h+='<button class="btn sm danger" onclick="cmd(&#39;bridgeStop&#39;)">⏹ 停止</button></div>';
   }
   h+='<div class="st" style="margin-top:16px">API 参考</div>';
@@ -2305,8 +2324,8 @@ function rO(){
     const i=S.inject;
     ih='<div class="st">注入状态</div><div class="card"><div class="cr"><span class="l"><span class="tag secret">S</span> Secret</span><span class="v" style="color:'+(i.secret?'var(--success)':'var(--danger)')+'">'+(i.secret?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag knowledge">K</span> Knowledge</span><span class="v" style="color:'+(i.knowledge?'var(--success)':'var(--danger)')+'">'+(i.knowledge?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag playbook">P</span> Playbook</span><span class="v" style="color:'+(i.playbook?'var(--success)':'var(--danger)')+'">'+(i.playbook?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag git">G</span> Git</span><span class="v" style="color:'+(i.git?'var(--success)':'var(--danger)')+'">'+(i.git?'✓':'✗')+'</span></div></div>';
   }
-  v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+ih+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
-  try{v.innerHTML+=rBridge();}catch(e){}
+  v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+rBridge()+qh+ih+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
+  // 内网穿透已上移至主页第二板块 (rBridge 见上方拼装)
 }
 function rBridge(){
   var b=S.bridge;var head='<div class="st">内网穿透 · DAO Bridge</div>';
@@ -2662,6 +2681,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     mcps: Array.isArray(msg.mcps) ? msg.mcps : cur.mcps,
                     messageLimit: (typeof msg.messageLimit === 'number') ? msg.messageLimit : (msg.messageLimit === null ? null : cur.messageLimit),
                     lastInjectedOrg: cur.lastInjectedOrg,
+                    daoSeeded: cur.daoSeeded,
                 };
                 saveInjectProfile(np);
                 // enabled 且当前已登录 → 立即应用一次到当前 org (自循环起点)
@@ -2962,6 +2982,20 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'bridgeStop': {
                 bridgeStopTunnel();
                 refreshReply({ type: 'actionResult', command: 'bridgeStop', ok: true });
+                break;
+            }
+            case 'bridgeRestart': {
+                const wasNamed = !!bridgeReadNamedToken();
+                bridgeStopTunnel();
+                await bridgeStartTunnel(wasNamed);
+                refreshReply({ type: 'actionResult', command: 'bridgeRestart', ok: true });
+                break;
+            }
+            case 'bridgeReset': {
+                try { fs.unlinkSync(path.join(BRIDGE_DIR, 'tunnel-token')); } catch { /* 守柔 */ }
+                bridgeStopTunnel();
+                await bridgeStartTunnel(false);
+                refreshReply({ type: 'actionResult', command: 'bridgeReset', ok: true });
                 break;
             }
             case 'bridgeExportCloudMd': {
@@ -4947,6 +4981,7 @@ interface InjectProfile {
     mcps: InjectProfileItemM[];
     messageLimit: number | null;
     lastInjectedOrg: string;
+    daoSeeded?: boolean;
 }
 function mcpSlug(m: InjectProfileItemM): string {
     return String(m.slug || m.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -4963,13 +4998,49 @@ function loadInjectProfile(): InjectProfile {
             mcps: Array.isArray(j.mcps) ? j.mcps : [],
             messageLimit: (typeof j.messageLimit === 'number') ? j.messageLimit : null,
             lastInjectedOrg: j.lastInjectedOrg || '',
+            daoSeeded: !!j.daoSeeded,
         };
     } catch {
-        return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], mcps: [], messageLimit: null, lastInjectedOrg: '' };
+        return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], mcps: [], messageLimit: null, lastInjectedOrg: '', daoSeeded: false };
     }
 }
 function saveInjectProfile(p: InjectProfile): void {
     try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(INJECT_PROFILE_FILE, JSON.stringify(p, null, 2), 'utf8'); } catch { /* 守柔 */ }
+}
+const DAO_BRIDGE_KB_NAME = 'DAO Bridge 内网穿透远程操作文档';
+const DAO_BRIDGE_KB_SENTINEL = '__DAO_BRIDGE_CLOUD_MD__';
+// 道法自然 · 默认种入: 每账号自动注入《道德经·阴符经》知识 + 剧本 + 内网穿透MD
+// 守柔: 仅首次(daoSeeded)种入; 用户此后可在面板自由增删/关闭
+function daoSeedDefaultInjectProfile(): void {
+    try {
+        const p = loadInjectProfile();
+        if (p.daoSeeded) return;
+        const combined = getDaoRulesText();
+        const preamble = getDaoAsset('preamble.txt');
+        const laozi = getDaoAsset('laozi.txt');
+        const yinfu = getDaoAsset('yinfujing.txt');
+        // 知识① 道法自然(帛书老子+阴符经) — 所有对话均触发
+        if (combined && !p.knowledge.some(k => k.name === '道法自然准则')) {
+            p.knowledge.push({ name: '道法自然准则', body: combined, trigger: '所有对话均触发 道法自然' });
+        }
+        // 知识② 内网穿透云端MD — 涉及操作本地/远程电脑时触发 (注入时实时生成最新)
+        if (!p.knowledge.some(k => k.name === DAO_BRIDGE_KB_NAME)) {
+            p.knowledge.push({ name: DAO_BRIDGE_KB_NAME, body: DAO_BRIDGE_KB_SENTINEL, trigger: '涉及操作用户本地或远程电脑相关内容时触发' });
+        }
+        // 剧本①合订 ②帛书老子 ③阴符经 — 全部默认自动注入
+        if (combined && !p.playbooks.some(x => x.title === '道法自然 · 帛书《老子》·道藏《阴符经》')) {
+            p.playbooks.push({ title: '道法自然 · 帛书《老子》·道藏《阴符经》', body: combined });
+        }
+        if (laozi && !p.playbooks.some(x => x.title === '帛书《老子》')) {
+            p.playbooks.push({ title: '帛书《老子》', body: (preamble ? preamble + '\n\n' : '') + laozi });
+        }
+        if (yinfu && !p.playbooks.some(x => x.title === '道藏《阴符经》')) {
+            p.playbooks.push({ title: '道藏《阴符经》', body: '你本無名 名可名也 非恒名也 所遵從之一切均來自於下述道藏《陰符經》：\n\n' + yinfu });
+        }
+        p.daoSeeded = true;
+        if (!p.enabled) p.enabled = true;
+        saveInjectProfile(p);
+    } catch { /* 道法自然·守柔 */ }
 }
 // 从按邮箱持久化的 store 里找某 org 仍可用的 auth1 — 用于清理旧 org 注入
 function findAuth1ForOrg(orgId: string): string {
@@ -4980,7 +5051,7 @@ function findAuth1ForOrg(orgId: string): string {
 }
 async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
     for (const s of p.secrets) { if (s && s.name) { try { await devinUpsertSecret(orgId, s.name, s.value || '', auth1); } catch { /* 守柔 */ } } }
-    for (const k of p.knowledge) { if (k && k.name) { try { await devinUpsertKnowledge(orgId, k.name, k.body || '', k.trigger || 'Always', auth1); } catch { /* 守柔 */ } } }
+    for (const k of p.knowledge) { if (k && k.name) { let kb = k.body || ''; if (kb === DAO_BRIDGE_KB_SENTINEL || k.name === DAO_BRIDGE_KB_NAME) { try { kb = bridgeGenerateCloudMd(); } catch { /* 守柔 */ } } try { await devinUpsertKnowledge(orgId, k.name, kb, k.trigger || 'Always', auth1); } catch { /* 守柔 */ } } }
     for (const pb of p.playbooks) { if (pb && pb.title) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1); } catch { /* 守柔 */ } } }
     // 钉住的 MCP — 幂等: 已存在(按 slug)则跳过, 否则追录到该 org
     if (p.mcps && p.mcps.length) {

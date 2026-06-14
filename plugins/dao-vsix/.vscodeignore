@@ -1,0 +1,11 @@
+.vscode/**
+src/**
+**/*.ts
+**/*.map
+node_modules/**
+harness.js
+harness*.log
+harness.out
+test_api*.js
+**/*.vsix
+.gitignore
