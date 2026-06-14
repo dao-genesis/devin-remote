@@ -95,11 +95,11 @@ function buildFlow() {
   log("vendor-flow: copied extension.js + devin_cloud/web/git/stuck + py helpers + media");
 }
 
-// ── ④ dao-bridge (cf-daohub/dao-bridge-ext): 内网穿透独立大块 ──────────────────
+// ── ④ dao-bridge (dao-bridge/dao-bridge-ext): 内网穿透独立大块 ──────────────────
 //   复用「内穿插件最初始本体」(daoBridgeView 完整前端·cloudflared 管理·云/本 MD),
 //   零前端重写, 作为归一容器第 ④ 入口。共享 ~/.dao/bin/cloudflared。
 function buildBridge() {
-  const srcRoot = path.join(plugins, "cf-daohub", "dao-bridge-ext");
+  const srcRoot = path.join(plugins, "dao-bridge", "dao-bridge-ext");
   const dst = path.join(root, "vendor-bridge");
   rmrf(dst);
   if (!fs.existsSync(path.join(srcRoot, "extension.js"))) {

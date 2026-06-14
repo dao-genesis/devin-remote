@@ -70,7 +70,7 @@ devin-remote/
 │
 ├── plugins/                      # ★ 5 VSIX 核心插件（Devin Desktop 内运行）+ ⑥ rt-flow-mobile 浏览器扩展
 │   ├── dao-vsix/                 # ① Devin 全功能面板 + 本地 HTTP 服务（30+ API 端点）
-│   ├── cf-daohub/dao-bridge-ext/ # ② 工作区专属内网穿透（Cloudflare QUIC/HTTP2 隧道）
+│   ├── dao-bridge/               # ② 工作区专属内网穿透本体（独立后端 Agent + dao-bridge-ext/：Cloudflare QUIC/HTTP2 隧道）
 │   ├── devin-git-auth/           # ③ 多 Devin 账号绑定同一 GitHub 仓库
 │   ├── dao-proxy-pro/            # ④ 底层提示词隔离替换 + 第三方模型路由
 │   ├── rt-flow/                  # ⑤ Devin Cloud 接入：对话备份/全量快照/一键回归本源
@@ -101,7 +101,7 @@ devin-remote/
 
 重构为零/最小输入：quick tunnel 默认模式 + 凭证自动加载（`~/.dao/` 目录）+ 命名隧道 token 持久化 + 修正误导 UI（不再暗示必须填 token）。随 IDE 窗口启停，专穿当前工作区。v3.2.0：新增 local-agent 深度控制 HTTP API + 修正 cloudflared 二进制解析的 ENOENT 404（绕过 npm/choco shim，直取真实可执行）。
 
-**VSIX**: `plugins/cf-daohub/dao-bridge-ext/dao-bridge-3.2.0.vsix` · **源码**: `plugins/cf-daohub/dao-bridge-ext/extension.js` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/8c4aec08-8357-44f2-a169-d44c8d055dd3)
+**VSIX**: `plugins/dao-bridge/dao-bridge-ext/dao-bridge-3.2.0.vsix` · **源码**: `plugins/dao-bridge/dao-bridge-ext/extension.js` · **核心本体**: `plugins/dao-bridge/{agent,core}.js` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/8c4aec08-8357-44f2-a169-d44c8d055dd3)
 
 ### devin-git-auth v2.3.2 · 多账号 GitHub 认证
 

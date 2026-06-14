@@ -15,7 +15,7 @@ const http = require("http");
 const https = require("https");
 
 const UA = "Mozilla/5.0 dao-bridge fetch-cloudflared";
-const BIN_DIR = path.resolve(__dirname, "..", "plugins", "cf-daohub", "dao-bridge-ext", "bin");
+const BIN_DIR = path.resolve(__dirname, "..", "plugins", "dao-bridge", "dao-bridge-ext", "bin");
 
 const ASSET = {
   "windows-amd64": "cloudflared-windows-amd64.exe",

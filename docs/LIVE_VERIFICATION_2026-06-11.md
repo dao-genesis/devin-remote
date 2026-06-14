@@ -22,7 +22,7 @@
 ## 1. dao-bridge ✓ 全链路通过
 
 ### 修复（本次核心代码改动）
-`plugins/cf-daohub/dao-bridge-ext/extension.js`
+`plugins/dao-bridge/dao-bridge-ext/extension.js`
 
 - **致命 bug**：`findCloudflared()` 在 PATH 无 cloudflared 时直接把裸二进制名 `"cloudflared.exe"`
   交给 `cp.spawn`。`spawn` 对缺失二进制**不抛同步异常**，只异步 emit `error`，导致外层
@@ -110,7 +110,7 @@ GET /api/organizations/<org>/git-connections-metadata
 - 不修改 dao-proxy-pro；不连 141；不强推 main；不跳过 git hook。
 
 ## 5. 产物
-- `plugins/cf-daohub/dao-bridge-ext/dao-bridge-2.1.0.vsix`
+- `plugins/dao-bridge/dao-bridge-ext/dao-bridge-2.1.0.vsix`
 - `plugins/dao-vsix/dao-vsix-1.0.9.vsix`
 - `plugins/devin-git-auth/devin-git-auth-2.0.0.vsix`
 - 录屏（三插件实测）：随会话消息附件发送，未入库（二进制）。
