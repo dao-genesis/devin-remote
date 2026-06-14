@@ -369,10 +369,10 @@ function hotReload() {
   return R ? R.hotReload() : { ok: false, error: "router module not loadable" };
 }
 
-async function hotListProviderModels(providerName) {
+async function hotListProviderModels(providerName, opts) {
   const R = _getRouterModule();
   return R
-    ? R.hotListProviderModels(providerName)
+    ? R.hotListProviderModels(providerName, opts)
     : { ok: false, error: "router module not loadable" };
 }
 

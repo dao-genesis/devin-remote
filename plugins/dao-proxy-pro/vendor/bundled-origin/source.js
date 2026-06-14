@@ -3385,8 +3385,12 @@ function handleControl(req, res) {
       res.end(JSON.stringify({ ok: false, error: "runtime not loaded" }));
       return true;
     }
+    // ★ ?refresh=1 → 强制 /v1/models 全量探测 (cc-switch 风) · 否则用缓存配置 models
+    const _refresh = /^(1|true|yes)$/i.test(
+      String((u.query && u.query.refresh) || ""),
+    );
     _eaRuntimeMod
-      .hotListProviderModels(providerName)
+      .hotListProviderModels(providerName, { refresh: _refresh })
       .then((result) => {
         res.end(JSON.stringify(result));
       })
