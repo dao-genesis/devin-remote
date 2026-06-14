@@ -9585,39 +9585,54 @@ async function handleWebviewMessage(msg) {
             const r = await loginAccount(_store, i);
             if (!r.ok) _toast("✗ 切号失败: " + (r.error || r.stage || ""));
           }
-          // v4.8.0 · IDE 内部路由官网: 先试 dao-vsix 反代命令(注入 auth1 自动登录),
-          //   失败回退 simpleBrowser(IDE 内置·不再 openExternal → 杜绝"操作IDE与网页冲突"弹窗)。
-          let routed = false;
+          // 复用 dao-vsix 命令: 每账号独立 webview 标签 (多实例并行·经反代 dao_acct 注入该账号 auth1)。
+          // 先切此号已使该账号 auth1 持久化入共享库, 故 dao_acct 路由可命中。
+          //   失败回退 devinCloudBrowser / simpleBrowser (IDE 内置·杜绝 openExternal "操作IDE与网页冲突"弹窗)。
           try {
-            await vscode.commands.executeCommand("dao.devinCloudBrowser");
-            routed = true;
-          } catch {}
-          if (!routed) {
+            await vscode.commands.executeCommand("dao.routeOfficialForAccount", {
+              email: a.email,
+              mode: "ide",
+            });
+          } catch {
             try {
-              await vscode.commands.executeCommand(
-                "simpleBrowser.show",
-                "https://app.devin.ai",
-              );
-              routed = true;
-            } catch {}
+              await vscode.commands.executeCommand("dao.devinCloudBrowser");
+            } catch {
+              try {
+                await vscode.commands.executeCommand(
+                  "simpleBrowser.show",
+                  "https://app.devin.ai",
+                );
+              } catch {
+                await vscode.env.openExternal(
+                  vscode.Uri.parse("https://app.devin.ai"),
+                );
+              }
+            }
           }
-          _toast(
-            (routed ? "🖥 已路由官网→IDE · " : "✗ IDE 内置浏览器不可用 · ") +
-              a.email.split("@")[0],
-          );
+          _toast("🖥 已路由官网→IDE · " + a.email.split("@")[0]);
         } catch (e) {
           _toast("✗ 路由失败: " + (e && e.message));
         }
         break;
       }
-      // ★ v4.8.0 · 系统浏览器多实例隔离 (自足·不赖 dao-vsix)
-      //   每账号独立 --user-data-dir profile → 彻底隔离用户默认浏览器认证;
-      //   该账号 profile 持久化: 首次登录后, 此后每次点同一账号皆自动续登,
-      //   多账号并行各自独立窗口互不相干。另尽力 CDP 预种 auth1_session 兜底。
+      // ★ 归一 · 系统浏览器多实例隔离 + 账号注入
+      //   首选 dao-vsix 反代隔离启动器 (经 ?dao_acct 注入该账号 auth1 → 真登录闭环·多实例互不串号);
+      //   dao-vsix 不可用时回退 devin_web 独立 --user-data-dir profile (隔离用户默认浏览器认证·首登一次后续登);
+      //   再无 Chrome/Edge 才落系统默认浏览器。
       case "openSysBrowser": {
         const i = msg.index;
         if (i < 0 || i >= _store.accounts.length) return;
         const a = _store.accounts[i];
+        // 首选: dao-vsix 隔离启动器 (每账号独立 profile 窗·经反代注入 auth1 自动登录)。
+        try {
+          await vscode.commands.executeCommand("dao.routeOfficialForAccount", {
+            email: a.email,
+            mode: "sys",
+          });
+          _toast("🌐 系统浏览器已打开官网 · " + a.email.split("@")[0]);
+          break;
+        } catch {}
+        // 回退: 自足隔离 profile (dao-vsix 不可用时仍隔离用户默认浏览器认证)。
         _toast("⏳ 隔离浏览器启动中 · " + a.email.split("@")[0]);
         try {
           // 先取该账号注入态 (缓存命中秒开; 否则后台登录换 auth1+userId)。

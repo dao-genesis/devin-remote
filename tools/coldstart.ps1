@@ -57,6 +57,24 @@ if ((Test-Path $daoVsixDir) -and -not (Get-ChildItem -Path $daoVsixDir -Filter *
     if (-not (Get-ChildItem -Path $daoVsixDir -Filter *.vsix -File)) { throw 'dao-vsix build failed (no VSIX produced)' }
 }
 
+# ---------- 1.6 Build the gitignored dao-one (归一) VSIX if absent ----------
+# dao-one ships source-only (build.js / extension.js / gen-manifest.js / package.json);
+# its assembled vendor-* dirs and *.vsix are gitignored. build.js (run by vsce's
+# vscode:prepublish) inlines the four engines' sources into vendor-* before packaging.
+# WITHOUT this step a fresh clone never installs dao-one, yet step 2.5 still uninstalls
+# the four standalone engines — leaving the user with no unified panel at all ("无效果").
+$daoOneDir = Join-Path $repoRoot 'plugins\dao-one'
+if ((Test-Path $daoOneDir) -and -not (Get-ChildItem -Path $daoOneDir -Filter *.vsix -File)) {
+    Step 'Building dao-one (GuiYi unified) VSIX (vendor assembly + package)'
+    Push-Location $daoOneDir
+    try {
+        if (-not (Test-Path 'node_modules')) { & npm install --no-audit --no-fund 2>&1 | Select-Object -Last 1 }
+        & node ./build.js
+        & npx --yes @vscode/vsce package --allow-missing-repository --skip-license 2>&1 | Select-Object -Last 1
+    } finally { Pop-Location }
+    if (-not (Get-ChildItem -Path $daoOneDir -Filter *.vsix -File)) { throw 'dao-one build failed (no VSIX produced)' }
+}
+
 # ---------- 2. Install plugins straight from the repo ----------
 # 5 plugins under plugins/ + the dao-export module VSIX. Each dir keeps only its latest VSIX
 # (older versions were pruned), so a flat search picks the right build with no version parsing.
@@ -88,10 +106,19 @@ foreach ($id in $inlinedEngines) {
 
 # ---------- 3. Verify ----------
 Step 'Installed extensions:'
-& $devinCli --list-extensions
+$installed = & $devinCli --list-extensions
+$installed
+if ($installed -notcontains 'dao.dao-one') {
+    throw 'dao.dao-one is NOT installed - the unified panel would be missing. Check the dao-one build step above.'
+}
 Step "COLD START COMPLETE in $($sw.Elapsed.ToString('mm\:ss'))"
 Write-Host ''
-Write-Host 'Next steps (account login is interactive/injected by design):'
-Write-Host '  1. Launch Devin Desktop; rt-flow handles the first-account login (auth1 via email+password,'
-Write-Host '     bypassing the browser OAuth round-trip). Account pool is NOT in the repo.'
-Write-Host '  2. See bootstrap/README.md for the full bootstrap guide, token rules, and webview pitfalls.'
+Write-Host 'Next steps - IDE login (the only gate to a verifiable workbench):'
+Write-Host '  1. Launch Devin Desktop and click "Log in" on the welcome screen. The browser opens'
+Write-Host '     app.devin.ai/auth/login (redirect_uri = devin://codeium.windsurf deep link).'
+Write-Host '  2. Enter the account email + password (one row from the rt-flow pool), then "Open Devin".'
+Write-Host '     The devin:// deep link returns the session to the IDE and unlocks the workbench.'
+Write-Host '     NOTE: injecting auth1 into state.vscdb is NOT enough - the welcome gate requires the'
+Write-Host '     real firstparty session (devin-session-token$...) from this OAuth round-trip.'
+Write-Host '  3. Open the dao-one (yin-yang/target) activity-bar icon: (1) accounts (2) Proxy Pro (3) Cloud (4) tunnel.'
+Write-Host '  4. See bootstrap/README.md for the full bootstrap guide, token rules, and webview pitfalls.'

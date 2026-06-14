@@ -1,6 +1,6 @@
 # dao · 道法自然 · 太上 下知有之
 
-> **5 插件 + 2 模块 + 1 人启动**。GitHub Issues Comments = 无感传输层。
+> **5 插件 + 2 模块 + 1 人启动**（+ ⑥ rt-flow-mobile 浏览器/手机版扩展·新增板块）。GitHub Issues Comments = 无感传输层。
 
 [![Release](https://img.shields.io/github/v/release/zhouyoukang1234-spec/devin-remote?label=release&color=2ea44f)](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)
 &nbsp;5 插件 + 2 模块 + 1 人启动&nbsp;·&nbsp;[全部下载 ↓](#下载--快速安装)&nbsp;·&nbsp;[人启动](bootstrap/README.md)
@@ -68,12 +68,13 @@ https://github.com/user-attachments/assets/6a7fc519-514d-4d1e-b78b-967a4e817a60
 ```
 devin-remote/
 │
-├── plugins/                      # ★ 5 核心插件（VSIX · Devin Desktop 内运行）
+├── plugins/                      # ★ 5 VSIX 核心插件（Devin Desktop 内运行）+ ⑥ rt-flow-mobile 浏览器扩展
 │   ├── dao-vsix/                 # ① Devin 全功能面板 + 本地 HTTP 服务（30+ API 端点）
 │   ├── cf-daohub/dao-bridge-ext/ # ② 工作区专属内网穿透（Cloudflare QUIC/HTTP2 隧道）
 │   ├── devin-git-auth/           # ③ 多 Devin 账号绑定同一 GitHub 仓库
 │   ├── dao-proxy-pro/            # ④ 底层提示词隔离替换 + 第三方模型路由
-│   └── rt-flow/                  # ⑤ Devin Cloud 接入：对话备份/全量快照/一键回归本源
+│   ├── rt-flow/                  # ⑤ Devin Cloud 接入：对话备份/全量快照/一键回归本源
+│   └── rt-flow-mobile/           # ⑥ 浏览器/手机版自动切号（MV3 扩展·非 VSIX·桌面 Chrome / 安卓 Kiwi/Edge 侧载）⭐新
 │
 ├── modules/                      # ★ 2 核心模块（离线可复刻 · 不依赖 IDE）
 │   ├── vm-replica/               # 多 RDP 虚拟机化全链路（需求→架构→MCP 工具集）
@@ -125,6 +126,16 @@ devin-remote/
 > 实测修复多个「臆造成功」缺陷：剧本/密钥删除端点纠正（`/api/playbooks|secrets/{id}`）、会话改归档（平台不支持硬删）、Git 改用 `git-permissions` 真撤授权（连接元数据平台无删除端点，如实回报）；`stopSession` 同理按候选端点实探、不臆造成功。v4.6.1：修复多账号锁旋转误判——账号默认上锁时 `getSortedIndices` 致 `rotate()` 候选为 0 而误报「所有账号失败」（实为登录全成功、仅设置项无锁选），已改为正确跳过锁定项。
 
 **VSIX**: `plugins/rt-flow/rt-flow-4.6.2.vsix` · **底层**: `plugins/rt-flow/devin_cloud.js` · **变更史**: `plugins/rt-flow/changelog.md` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/9ec20452-cb5f-4423-9204-f06088f75079)
+
+### rt-flow-mobile v1.0.0 · 浏览器/手机版自动切号（rt-flow 的移动端移植）⭐新
+
+第 6 个插件，**不在前述 5 个 VSIX 之列**：把 ⑤ rt-flow 的「多账号自动切换」+ dao-vsix 的「官网注入自动登录」合一，移植到**浏览器**的 Chromium MV3 扩展。无 Devin Desktop / VSCode 依赖，可在桌面 Chrome / Edge 与 **Android 上的 Kiwi / Edge** 侧载运行。换 auth1 即换号。
+
+- **登录注入**：`email+password → POST windsurf.com/_devin-auth/password/login → auth1`；content script 于 `document_start` 在 `app.devin.ai` 种入 `localStorage['auth1_session']` + org 守卫键，并用 `declarativeNetRequest` 给 `/api/*` 注入 `Authorization` / `x-cog-org-id` → SPA 零 GUI 自动登录。
+- **自动切号**：`chrome.alarms` 轮询活跃账号余额（`GET /api/{orgId}/billing/status`），≤ 缓冲（默 $3）→ rotate 到评分最优账号；content script 探测页面「额度耗尽」文案 → 主动上报立即轮转。
+- **storage-first 面板**：popup 直读 `chrome.storage` 渲染，不依赖 service worker 是否唤醒（根除 MV3 冷启竞态导致的面板卡死）。
+
+**源码**: `plugins/rt-flow-mobile/`（`src/cloud.js` 登录链路 · `src/background.js` 切号引擎 · `src/content.js` 注入 · `src/popup.{html,js,css}` 面板）· **说明/安装/接力**: [`plugins/rt-flow-mobile/README.md`](plugins/rt-flow-mobile/README.md) · **安卓侧载实测**: [`plugins/rt-flow-mobile/docs/ANDROID_TEST.md`](plugins/rt-flow-mobile/docs/ANDROID_TEST.md)
 
 ---
 
@@ -178,6 +189,7 @@ python dao_export_all.py --email xxx@gmail.com --password xxx
 | devin-git-auth | ◑ 机制通 | 账号/PAT/设备流均通，组织 Git 连接待后端 oauth |
 | dao-proxy-pro | ✅ 已部署 | 提示词隔离 + 模型路由生效 |
 | rt-flow | ✅ 实测验证 | 12/12 批量备份 + 一键 wipe 全链路真号验证（备份留底→用户数据清零→本源默认保留） |
+| rt-flow-mobile | ◑ 桌面实测 | 浏览器 MV3 扩展：桌面 Chrome 全流程通过（登录注入 / 自动切号 / storage-first 面板，含修复 MV3 冷启竞态）；安卓 Kiwi/Edge 侧载待真机验证（本 VM 无嵌套 KVM/VT-x） |
 
 > 实测详情：[docs/LIVE_VERIFICATION_2026-06-11.md](docs/LIVE_VERIFICATION_2026-06-11.md) · 五插件规范：[docs/CANON_five-plugins.md](docs/CANON_five-plugins.md)
 
