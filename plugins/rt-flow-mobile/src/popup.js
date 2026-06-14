@@ -131,10 +131,20 @@ function renderCounts(c) {
   ].join("");
 }
 const SCLS = { running: "run", awaiting: "wait", blocked: "blk" };
-const SLABEL = { running: "运行", awaiting: "待输入", blocked: "卡住" };
-function sessionLi(s) {
+const SLABEL = { running: "运行", awaiting: "待输入", blocked: "卡住", finished: "完成", idle: "空闲" };
+function sessionLi(s, email) {
   const cls = SCLS[s.statusClass] || "";
-  return `<li class="sess"><span class="dot ${cls}"></span><span class="stitle">${escapeHtml(s.title)}</span><span class="sstat ${cls}">${escapeHtml(SLABEL[s.statusClass] || s.statusClass)}</span></li>`;
+  const dl = email ? `<button class="sdl" data-dl-sid="${escapeAttr(s.devinId || "")}" data-dl-email="${escapeAttr(email)}" data-dl-title="${escapeAttr(s.title || "")}" title="下载对话">⭳</button>` : "";
+  return `<li class="sess"><span class="dot ${cls}"></span><span class="stitle">${escapeHtml(s.title)}</span><span class="sstat ${cls}">${escapeHtml(SLABEL[s.statusClass] || s.statusClass)}</span>${dl}</li>`;
+}
+
+// 浏览器端「下载」: 文本 → Blob → a[download] 触发 (popup 是扩展页, 可直接下载)
+function downloadText(filename, text, mime) {
+  const blob = new Blob([text], { type: (mime || "text/plain") + ";charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -161,8 +171,10 @@ document.addEventListener("click", async (e) => {
       if (box) {
         if (r && r.ok) {
           const o = r.overview;
+          const kn = o.counts && o.counts.knowledge ? `<button class="mini ghost kndl" data-kn-email="${escapeAttr(email)}">⭳ 知识库下载 (${o.counts.knowledge})</button>` : "";
           box.innerHTML = `<div class="track-counts">${renderCounts(o.counts)}</div>` +
-            `<ul class="sessions">${(o.sessions || []).slice(0, 12).map(sessionLi).join("") || '<li class="sess muted">无对话</li>'}</ul>`;
+            `<ul class="sessions">${(o.sessions || []).slice(0, 20).map((s) => sessionLi(s, email)).join("") || '<li class="sess muted">无对话</li>'}</ul>` +
+            (kn ? `<div class="ovw-actions">${kn}</div>` : "");
         } else box.innerHTML = `<div class="err-line">概览失败: ${escapeHtml((r && r.error) || "?")}</div>`;
       }
       btn.disabled = false;
@@ -172,6 +184,36 @@ document.addEventListener("click", async (e) => {
       toast("已删除: " + email, "ok");
     }
   } finally { if (act !== "overview") await load(); }
+});
+
+// 下载: 对话数据 (.sdl) / 知识库 (.kndl)
+document.addEventListener("click", async (e) => {
+  const sdl = e.target.closest("button.sdl");
+  if (sdl) {
+    sdl.disabled = true;
+    toast("拉取对话事件流…");
+    const r = await send({ type: "exportConversation", email: sdl.dataset.dlEmail, devinId: sdl.dataset.dlSid, title: sdl.dataset.dlTitle });
+    if (r && r.ok) {
+      downloadText(r.mdName, r.md, "text/markdown");
+      downloadText(r.jsonName, r.json, "application/json");
+      toast(`已下载对话 (${r.eventCount} 事件): MD + JSON`, "ok");
+    } else toast("下载失败: " + ((r && r.error) || ""), "err");
+    sdl.disabled = false;
+    return;
+  }
+  const kndl = e.target.closest("button.kndl");
+  if (kndl) {
+    kndl.disabled = true;
+    toast("拉取知识库…");
+    const r = await send({ type: "exportKnowledge", email: kndl.dataset.knEmail });
+    if (r && r.ok) {
+      downloadText(r.jsonName, r.json, "application/json");
+      for (const it of (r.items || [])) downloadText(it.mdName, it.md, "text/markdown");
+      toast(`已下载知识库 (${r.count} 条): JSON + 逐条 MD`, "ok");
+    } else toast("知识库下载失败: " + ((r && r.error) || ""), "err");
+    kndl.disabled = false;
+    return;
+  }
 });
 
 $("addBtn").addEventListener("click", async () => {
