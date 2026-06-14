@@ -679,11 +679,14 @@ async function listRunningSessions(auth) {
 }
 
 // v4.5.0 · 中停运行中对话 (对话额度上限触发 · 知止不殆 · 道法自然)
-// Devin Cloud 未公开"停止/暂停会话"的 REST 路由; 此处按候选端点逐个实探,
-// 命中 2xx 即真中停; 全部非 2xx 则如实回报 stopped:false + 各端点状态 (不臆造成功)。
+// v4.7.6 · 端点经实测确证: Devin Cloud 无 stop/pause/sleep/cancel/end REST 路由 (全部 404),
+//   唯一可变更运行态的动作为 POST {apiBase}/sessions/{id}/archive (200 → status:running→suspended,
+//   is_archived:true, 即时移出活跃列表)。故以 /archive 为首选端点真中停; 其余作回退保险。
+//   命中 2xx 即真中停; 全部非 2xx 则如实回报 stopped:false + 各端点状态 (不臆造成功)。
 // 调用方据 stopped 真值决定后续 (绝不据未验证的"假成功"误导用户)。
 async function stopSession(auth, devinId) {
   const candidates = [
+    CFG.apiBase + "/sessions/" + devinId + "/archive",
     CFG.apiBase + "/sessions/" + devinId + "/stop",
     CFG.apiBase + "/sessions/" + devinId + "/pause",
     CFG.apiBase + "/sessions/" + devinId + "/sleep",
