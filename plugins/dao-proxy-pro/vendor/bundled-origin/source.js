@@ -94,6 +94,7 @@
  * 入口: ORIGIN_PORT (默认 8889)
  * 控制面:
  *   GET  /origin/ping           · 状态
+ *   GET  /origin/health         · 存活别名 (→ ping 精简 · 通用约定)
  *   GET  /origin/mode           · 当前模式
  *   POST /origin/mode           · 切换 {"mode":"invert"|"passthrough"}
  *   GET  /origin/selftest       · 自证: 三路径前置道魂 · 返回 json 诊断
@@ -2706,6 +2707,66 @@ function handleControl(req, res) {
             MODEL_UNLOCK: "GetUserSettings/ModelConfigs · 响应注入全量模型目录",
             PASSTHROUGH: "非 inference (mgmt 等) · 直透",
           },
+        },
+      }),
+    );
+    return true;
+  }
+
+  // GET /origin/health · 存活别名 (通用约定 · 精简版 ping)
+  if (u.pathname === "/origin/health" && req.method === "GET") {
+    res.end(
+      JSON.stringify({
+        ok: true,
+        status: "alive",
+        port: _actualPort,
+        pid: process.pid,
+        uptime_s: Math.round((Date.now() - START_TIME) / 1000),
+        mode: SP_MODE,
+        canon: _activeCanon,
+        dao_loaded: DAO_DE_JING_81.length > 0,
+        ea_running: _ea ? _ea.isRunning() : false,
+      }),
+    );
+    return true;
+  }
+
+  // GET /origin/selftest · 自证: 三径置道魂 · 返 json 诊断
+  if (u.pathname === "/origin/selftest" && req.method === "GET") {
+    const _router =
+      typeof _eaRuntimeMod !== "undefined" && _eaRuntimeMod
+        ? _eaRuntimeMod.routerStatus()
+        : { ready: false, count: 0 };
+    const daoOk = DAO_DE_JING_81.length > 0 && !!_activeCanonText;
+    const routeOk = !!(_ea && _ea.isRunning()) && _router.count > 0;
+    const unlockOk = !!_fullModelCatalog;
+    res.end(
+      JSON.stringify({
+        ok: daoOk && routeOk,
+        ts: Date.now(),
+        version: ORIGIN_VERSION,
+        // 径一 · 道魂 (SP / canon 注入)
+        canon_path: {
+          ok: daoOk,
+          mode: SP_MODE,
+          canon: _activeCanon,
+          canon_name: (_CANON_MAP[_activeCanon] || {}).name || _activeCanon,
+          canon_chars: _activeCanonText ? _activeCanonText.length : 0,
+          dao_chars: DAO_DE_JING_81.length,
+        },
+        // 径二 · 外接 (路由 / 渠道)
+        route_path: {
+          ok: routeOk,
+          ea_running: _ea ? _ea.isRunning() : false,
+          ready: _router.ready,
+          route_count: _router.count,
+        },
+        // 径三 · 解锁 (模型目录)
+        unlock_path: {
+          ok: unlockOk,
+          enabled: _isModelUnlockEnabled(),
+          catalog_size: _fullModelCatalog ? _fullModelCatalog.length : 0,
+          catalog_loaded: !!_fullModelCatalog,
         },
       }),
     );
