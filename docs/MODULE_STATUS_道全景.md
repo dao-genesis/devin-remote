@@ -16,7 +16,7 @@ Devin Desktop 内的交互）需 live IDE 环境，见各模块「缺口」。
 | **dao-proxy-pro**①模型路由 | `extension.js` + `vendor/bundled-origin/source.js` | 9.9.277 | **`npm test --quick` = 277 通 / 0 失**；`render_check.js` 三处 webview「RENDERED + PARSED OK」；vsix 9.9.277 与 package.json 同步 | 真机 Reload 复验三模块面板 49 家族归一/测试通道/连线；@conversation 引用双侧实测 |
 | **dao-vsix**②全功能面板 | `src/extension.ts`（sucrase→`out/`） | 1.3.0 | **从源码构建可复现**：`npm i`→`node build.js` 转译 OK、`node --check out/extension.js` OK、`vsce package`→`dao-vsix-1.3.0.vsix` 成功（产物已正确 gitignore） | 真机面板 30+ API 端点 + auth1 自动换取实测 |
 | **devin-git-auth**③多账号Git | `dao-git-auth-cli.js` / `extension.js` / `engine/*` | 2.3.2 | **CLI 可运行**（`--help` 列 read-status/connect-git/switch-git/full-auto）；engine 7 文件 `node --check` 全过 | 真机多 Devin 账号绑同一 GitHub 端到端 |
-| **cf-daohub / dao-bridge**④内网穿透 | `dao-bridge-ext/extension.js` + `dao-bridge/{agent,core}.js` | 3.2.0 | 源码 `node --check` 全过；bridge 本会话实际承载了对 141 的隧道（活体验证） | 命名隧道固定域名（需 CF token） |
+| **dao-bridge**④内网穿透 | `dao-bridge/dao-bridge-ext/extension.js` + `dao-bridge/{agent,core}.js` | 3.2.0 | 源码 `node --check` 全过；bridge 本会话实际承载了对 141 的隧道（活体验证） | 命名隧道固定域名（需 CF token） |
 | **rt-flow**⑤Cloud备份/回归 | `extension.js` + `devin_cloud.js` + `_vscdb*.py` | 4.4.1 | 全 JS/PY 静态检查通过 | 真机多账号额度/备份/wipe 实测 |
 | **rt-flow-mobile**⑥浏览器/手机版 | `src/{cloud,background,content,popup}.js` + `manifest.json`（MV3） | 1.0.0 | **源码健康**：`node test/cloud.test.js` 12/12、`node --check` 全过；**桌面 Chrome 全流程实测通过**（登录注入/自动切号/storage-first 面板，含修复 MV3 冷启竞态卡死） | 安卓 Kiwi/Edge **真机侧载验证**（本 VM 无嵌套 KVM/VT-x，跑不了加速 Android 模拟器）；可选：打 release zip + 录屏证据 |
 | **dao-export**（模块） | `dao_export_all.py`（零依赖） | 1.3.3 | **CLI 可运行**（`--help` 全参数正常：email/password/accounts/token/org/filter/workers…） | 真账号全量导出冒烟 |
@@ -28,7 +28,7 @@ Devin Desktop 内的交互）需 live IDE 环境，见各模块「缺口」。
 2. **dao-proxy-pro**：跑通测试套件 277/277；确认 webview 渲染守卫通过。
 3. **dao-vsix**：补齐从源码到 VSIX 的可复现构建链（`sucrase` 转译 + `vsce package`）。
 4. **devin-git-auth / dao-export**：确认独立 CLI 可运行。
-5. **cf-daohub / rt-flow**：源码健康基线确认。
+5. **dao-bridge / rt-flow**：源码健康基线确认。
 
 ## 四、统一缺口（共性）
 - 真机交互验证均需 **运行中的 Devin Desktop**；当前 VM 无该 GUI 运行态，故 VSIX 的「真机 Reload

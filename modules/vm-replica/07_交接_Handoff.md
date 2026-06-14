@@ -144,7 +144,7 @@ o, e, c = ps("chcp 437 > $null; qwinsta", 30)   # 在 141 跑命令
 ## 6. dao-bridge `/api/vm/*` 反代路由（待新增）
 
 `vm_agent` 绑 `127.0.0.1:9931`，外部 Agent 够不着；需在 dao-bridge 里加反代，复用现有隧道+token：
-- 文件：`plugins/cf-daohub/dao-bridge-ext/extension.js`
+- 文件：`plugins/dao-bridge/dao-bridge-ext/extension.js`
 - 路由表在 `~L384` 起（`const p = u.pathname; ... if (p === "/api/health") ...`，`auth(req)` 鉴权）。
 - 新增：`if (p.startsWith("/api/vm/"))` → 把 `p.slice(7)`（去掉 `/api/vm`）转发到 `http://127.0.0.1:9931<rest>`，透传 method/body + `Authorization: Bearer <DAO_VM_TOKEN>`，回写状态码与响应体（截屏/录屏是二进制，注意按 Buffer 透传、设对 Content-Type）。
 - 这样远端 Agent：`POST {publicURL}/api/vm/move {x,y}`、`GET {publicURL}/api/vm/screenshot` 即可驱动后台桌面。
