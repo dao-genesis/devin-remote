@@ -749,7 +749,7 @@ const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.6.0";
+const VERSION = "4.7.0";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -7867,6 +7867,16 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-detail .dv-sess .st.finished{color:#888;background:#222}
 .dv-detail .dv-sess .tt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dv-detail .dv-acts{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+/* v4.7.0 · 单对话操作: 查看/下载ZIP/清理 + 多选合并 */
+.dv-detail .dv-sess .dvc-chk{margin:0;cursor:pointer;flex:none}
+.dv-detail .dv-sess .dvc-acts{display:flex;gap:3px;flex:none;opacity:.5;transition:opacity .15s}
+.dv-detail .dv-sess:hover .dvc-acts{opacity:1}
+.dvc-b{background:#16232c;color:#9cdcfe;border:1px solid #244;border-radius:3px;cursor:pointer;font-size:10px;line-height:1;padding:2px 5px}
+.dvc-b:hover{background:#1e3340;border-color:#4ec9b0}
+.dvc-b.dvc-b-s{color:#c87a7a;border-color:#4a2a2a;background:#2a1414}
+.dvc-b.dvc-b-s:hover{background:#3a1a1a;border-color:#f44}
+.dvc-bar{display:none;background:#16232c;border:1px solid #244;border-radius:4px;padding:3px 7px;margin:4px 0;font-size:10px;color:#9cdcfe;align-items:center;gap:6px;flex-wrap:wrap}
+.dvc-bar.on{display:flex}
 .dv-git{margin:5px 0;padding:5px 6px;background:#0d1a14;border:1px solid #1f3a2a;border-radius:4px}
 .dv-git-h{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:5px}
 .dv-git-tag{color:#4ec9b0;font-size:10px;font-weight:bold}
@@ -8048,6 +8058,18 @@ function dvSetTag(i){vscode.postMessage({type:'devinSetTag',index:i});}
 function dvExportMd(){vscode.postMessage({type:'devinExportMd',indices:_selIx()});}
 function dvBackupAll(){vscode.postMessage({type:'devinBackupAll',indices:_selIx()});}
 function dvWipeSel(){const ix=_selIx();if(!ix.length){showToast('\\u2717 先勾选账号');return;}vscode.postMessage({type:'devinWipe',indices:ix});}
+/* v4.7.0 · 单对话多选(支持 Shift 区间) + 查看/下载ZIP/清理 */
+let _dvcLast={};
+function _dvcChks(i){return [...document.querySelectorAll('.dvc-chk[data-i="'+i+'"]')];}
+function dvcSel(ev,i){const chks=_dvcChks(i);const cur=ev&&ev.target?chks.indexOf(ev.target):-1;if(ev&&ev.shiftKey&&_dvcLast[i]!=null&&cur>=0){const a=Math.min(cur,_dvcLast[i]),b=Math.max(cur,_dvcLast[i]);const on=ev.target.checked;for(let k=a;k<=b;k++)chks[k].checked=on;}if(cur>=0)_dvcLast[i]=cur;_dvcSync(i);}
+function _dvcSync(i){const n=_dvcChks(i).filter(c=>c.checked).length;const bar=document.getElementById('dvcBar'+i);const cnt=document.querySelector('.dvc-cnt[data-i="'+i+'"]');if(cnt)cnt.textContent=n;if(bar)bar.classList.toggle('on',n>0);}
+function _dvcIds(i){return _dvcChks(i).filter(c=>c.checked).map(c=>c.dataset.did);}
+function dvcClear(i){_dvcChks(i).forEach(c=>c.checked=false);_dvcLast[i]=null;_dvcSync(i);}
+function dvConvDetail(i,did){showToast('\u23F3 拉取对话详情…');vscode.postMessage({type:'dvConvDetail',index:i,devinId:did});}
+function dvConvZip(i,did){showToast('\u23F3 打包对话 ZIP…');vscode.postMessage({type:'dvConvZip',index:i,devinId:did});}
+function dvConvDel(i,did){vscode.postMessage({type:'dvConvDel',index:i,devinId:did});}
+function dvConvZipBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u2717 先勾选对话');return;}showToast('\u23F3 合并打包 '+ids.length+' 个对话…');vscode.postMessage({type:'dvConvZipBatch',index:i,devinIds:ids});}
+function dvConvDelBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u2717 先勾选对话');return;}vscode.postMessage({type:'dvConvDelBatch',index:i,devinIds:ids});}
 function dvToggleAuto(on){vscode.postMessage({type:'devinToggleAuto',on:!!on});}
 function dvToggleCleanup(on){vscode.postMessage({type:'devinToggleCleanup',on:!!on});}
 function dvSetThreshold(v){vscode.postMessage({type:'devinSetThreshold',value:+v});}
@@ -8133,6 +8155,22 @@ async function _dvAuthFor(i) {
     return { ok: false, error: String((e && e.message) || e), email: acc.email };
   }
 }
+// v4.7.0 · 清理/变更后无感刷新某账号概览 (失效缓存 → 重拉 → 推送最新 HTML)
+async function _dvRefreshOverview(index, r) {
+  try {
+    const email = (r.email || "").toLowerCase();
+    _dvOverviewCache.delete(email);
+    const [ov, gitSt] = await Promise.all([
+      devinCloud.accountOverview(r.auth),
+      devinGit.gitStatus(r.auth).catch(() => null),
+    ]);
+    _dvOverviewCache.set(email, { ov, gitSt, ts: Date.now() });
+    _broadcastMsg({ type: "devinOverview", index, html: _dvOverviewHtml(ov, index, gitSt) });
+    _dvRunPoll().catch(() => {});
+  } catch (e) {
+    log("dvRefreshOverview err: " + ((e && e.message) || e));
+  }
+}
 // ═══ 第三板块 · Git 下拉框状态缓存 + 开合追踪 (根治"回弹": 全量重建 webview 时按缓存预填) ═══
 // _dvOpenEmails: 当前展开的账号 email 集合 (host 侧权威, 渲染时据此预填 open + 内容)
 // _dvOverviewCache: email → {ov, gitSt, ts} 概览数据缓存; 渲染时用当前 index 重生 HTML (索引不串)
@@ -8181,12 +8219,27 @@ function _dvOverviewHtml(ov, i, gitSt) {
   h += _dvGitSectionHtml(i, gitSt, ov.email);
   const sess = (ov.sessions || []).slice(0, 40);
   if (!sess.length) h += '<div style="color:#666">（无对话）</div>';
+  // v4.7.0 · 多选合并条 (Shift 多选对话 → 合并下载ZIP / 批量清理)
+  if (sess.length) {
+    h += '<div class="dvc-bar" id="dvcBar' + i + '">已选 <b class="dvc-cnt" data-i="' + i + '">0</b> 个对话 · ' +
+      '<button class="dvc-b" onclick="dvConvZipBatch(' + i + ')" title="把已选对话合并成一个 ZIP 下载到本地">&#11015; 合并下载ZIP</button>' +
+      '<button class="dvc-b dvc-b-s" onclick="dvConvDelBatch(' + i + ')" title="水过无痕·批量清理(归档)已选对话">&#127754; 批量清理</button>' +
+      '<button class="dvc-b" style="margin-left:auto;background:#222;color:#888;border-color:#333" onclick="dvcClear(' + i + ')">取消</button></div>';
+  }
   for (const s of sess) {
     const cls = s.statusClass || "idle";
     const stTxt = cls === "running" ? "运行" : cls === "awaiting" ? "待输入" : cls === "blocked" ? "卡住" : cls === "finished" ? "完成" : "空闲";
+    const did = _esc(s.devinId || "");
     h +=
-      '<div class="dv-sess"><span class="st ' + cls + '">' + stTxt + "</span>" +
-      '<span class="tt" title="' + _esc(s.title) + " · " + _esc(s.devinId || "") + '">' + _esc(s.title) + "</span></div>";
+      '<div class="dv-sess" data-did="' + did + '">' +
+      '<input type="checkbox" class="dvc-chk" data-i="' + i + '" data-did="' + did + '" onclick="dvcSel(event,' + i + ')">' +
+      '<span class="st ' + cls + '">' + stTxt + "</span>" +
+      '<span class="tt" title="' + _esc(s.title) + " · " + did + '">' + _esc(s.title) + "</span>" +
+      '<span class="dvc-acts">' +
+      '<button class="dvc-b" title="查看对话详情/Output 全文" onclick="dvConvDetail(' + i + ",'" + did + "')\">&#128065;</button>" +
+      '<button class="dvc-b" title="下载本对话为 ZIP 到本地(增量补全文件)" onclick="dvConvZip(' + i + ",'" + did + "')\">&#11015;</button>" +
+      '<button class="dvc-b dvc-b-s" title="水过无痕·清理(归档)本对话" onclick="dvConvDel(' + i + ",'" + did + "')\">&#128465;</button>" +
+      "</span></div>";
   }
   if ((ov.sessions || []).length > 40) h += '<div style="color:#666">… 共 ' + ov.sessions.length + " 个，更多见备份</div>";
   h +=
@@ -9938,6 +9991,115 @@ async function handleWebviewMessage(msg) {
         } catch (e) {
           _toast("\u2717 备份失败: " + String((e && e.message) || e));
         }
+        break;
+      }
+      // v4.7.0 · 单对话: 查看详情/Output 全文 (复用文件夹备份的 HTML 视图)
+      case "dvConvDetail": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        try {
+          const events = await devinCloud.getEventStream(r.auth, msg.devinId);
+          const detail = await devinCloud.getSessionDetail(r.auth, msg.devinId);
+          const cached = _dvOverviewCache.get(r.email.toLowerCase());
+          const sm = cached && cached.ov && (cached.ov.sessions || []).find((s) => s.devinId === msg.devinId);
+          const title = (detail && (detail.title || detail.name)) || (sm && sm.title) || msg.devinId;
+          const html = devinCloud.buildConversationHtml(title, msg.devinId, events);
+          const panel = vscode.window.createWebviewPanel(
+            "wam.convDetail", "对话详情 · " + String(title).slice(0, 28),
+            vscode.ViewColumn.Active, { enableScripts: false, retainContextWhenHidden: true },
+          );
+          panel.webview.html = html;
+          _toast("\u2713 详情已打开");
+        } catch (e) {
+          _toast("\u2717 拉取失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.7.0 · 单对话: 下载为 ZIP 到本地 (增量补全文件后打包·并在资源管理器中定位)
+      case "dvConvZip": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        try {
+          const cached = _dvOverviewCache.get(r.email.toLowerCase());
+          const sm = cached && cached.ov && (cached.ov.sessions || []).find((s) => s.devinId === msg.devinId);
+          const title = (sm && sm.title) || msg.devinId;
+          const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+          const accountDir = path.join(dir, devinCloud.safeName(r.email, 80));
+          const one = await devinCloud.backupOneConversation(r.auth, { devin_id: msg.devinId, title }, accountDir, { incremental: false });
+          if (one && one.zip) {
+            _toast("\u2713 已下载 ZIP: " + path.basename(one.zip));
+            _notify("info", "[" + r.email + "] 单对话 ZIP 已下载 → " + one.zip);
+            try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(one.zip)); } catch {}
+          } else { _toast("\u2717 打包失败"); }
+        } catch (e) {
+          _toast("\u2717 打包失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.7.0 · 多选: 合并多个对话为一个 ZIP 下载
+      case "dvConvZipBatch": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        const ids = Array.isArray(msg.devinIds) ? msg.devinIds : [];
+        if (!ids.length) { _toast("\u2717 未选对话"); break; }
+        try {
+          const cached = _dvOverviewCache.get(r.email.toLowerCase());
+          const all = (cached && cached.ov && cached.ov.sessions) || [];
+          const sessList = ids.map((id) => { const m = all.find((s) => s.devinId === id); return { devin_id: id, title: (m && m.title) || id }; });
+          const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+          const outDir = path.join(dir, devinCloud.safeName(r.email, 80));
+          const res = await devinCloud.backupConversationsBundle(r.auth, sessList, outDir, { onProgress: (m) => _toast("\u23F3 " + m) });
+          _toast("\u2713 合并ZIP完成 " + res.count + "/" + res.total + ": " + path.basename(res.outPath));
+          _notify("info", "[" + r.email + "] 合并下载 " + res.count + " 个对话 → " + res.outPath);
+          try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(res.outPath)); } catch {}
+        } catch (e) {
+          _toast("\u2717 合并失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.7.0 · 单对话: 水过无痕清理(归档) · 先确认 → 删除 → 无感刷新概览
+      case "dvConvDel": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        const cached = _dvOverviewCache.get(r.email.toLowerCase());
+        const sm = cached && cached.ov && (cached.ov.sessions || []).find((s) => s.devinId === msg.devinId);
+        const title = (sm && sm.title) || msg.devinId;
+        const pick = await vscode.window.showWarningMessage(
+          "【水过无痕·清理对话】将归档(从列表移除)该对话：\n\n" + title + "\n\n建议先「下载ZIP」留底。是否继续？",
+          { modal: true }, "清理(归档)",
+        );
+        if (pick !== "清理(归档)") { _toast("已取消"); break; }
+        try {
+          const d = await devinCloud.deleteSession(r.auth, msg.devinId);
+          if (d.ok) {
+            _toast("\u2713 已清理: " + String(title).slice(0, 24));
+            _notify("info", "[" + r.email + "] 已清理(归档)对话: " + title);
+            await _dvRefreshOverview(msg.index, r);
+          } else { _toast("\u2717 清理失败 HTTP " + d.status); }
+        } catch (e) {
+          _toast("\u2717 清理异常: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.7.0 · 多选: 批量清理(归档)对话
+      case "dvConvDelBatch": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        const ids = Array.isArray(msg.devinIds) ? msg.devinIds : [];
+        if (!ids.length) { _toast("\u2717 未选对话"); break; }
+        const pick = await vscode.window.showWarningMessage(
+          "【水过无痕·批量清理】将归档(从列表移除) " + ids.length + " 个对话。建议先合并下载ZIP留底。是否继续？",
+          { modal: true }, "批量清理(归档)",
+        );
+        if (pick !== "批量清理(归档)") { _toast("已取消"); break; }
+        let ok = 0, fail = 0;
+        for (const id of ids) {
+          try { const d = await devinCloud.deleteSession(r.auth, id); if (d.ok) ok++; else fail++; } catch { fail++; }
+          _toast("\u23F3 清理 " + (ok + fail) + "/" + ids.length + " …");
+        }
+        _toast("\u2713 批量清理完成: 成功" + ok + " 失败" + fail);
+        _notify("info", "[" + r.email + "] 批量清理(归档) " + ok + "/" + ids.length + " 个对话");
+        await _dvRefreshOverview(msg.index, r);
         break;
       }
       // 备份全部(或已选)账号
