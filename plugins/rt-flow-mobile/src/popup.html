@@ -8,7 +8,7 @@
 </head>
 <body>
   <header>
-    <div class="brand">道 · rt-flow <span class="ver">浏览器版 v1.1</span></div>
+    <div class="brand">道 · rt-flow <span class="ver">浏览器版 v1.2</span></div>
     <div class="active" id="activeLine">未激活账号</div>
   </header>
 
@@ -57,6 +57,18 @@
       <input type="password" id="password" placeholder="密码 password" autocomplete="off" />
       <input type="text" id="label" placeholder="标签 label (可选，防搞混)" autocomplete="off" />
       <button id="addBtn" class="mini">＋ 添加</button>
+    </details>
+  </section>
+
+  <section class="gitbox">
+    <details>
+      <summary class="sec-title">Git 批量归一 · 连接 / 断开 (PAT)</summary>
+      <input type="password" id="gitPat" placeholder="GitHub PAT (ghp_… · 需 repo 权限)" autocomplete="off" />
+      <div class="row">
+        <button id="gitBatchBtn" class="primary">🔗 批量连接全部账号</button>
+      </div>
+      <div class="hint">PAT 注入各账号 → 落 GITHUB_PAT 密钥 → 归一到同一 GitHub 主、同仓可达。单账号连接/断开/状态见各账号「☁ 概览」内。</div>
+      <div id="gitBatchResult" class="gitres"></div>
     </details>
   </section>
 

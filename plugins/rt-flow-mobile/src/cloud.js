@@ -460,13 +460,143 @@ const DaoCloud = (() => {
     };
   }
 
+  // ═══ 删除接口全集 (水过无痕底层 · 移植自 devin_cloud.js) ═══════════════════
+  function okDelete(status) { return status === 200 || status === 202 || status === 204 || status === 404; }
+  async function deleteKnowledge(auth, id) {
+    const r = await jsonRequest("DELETE", CFG.apiBase + "/org-" + auth.orgBare + "/learning/" + id, authHeaders(auth));
+    return { ok: okDelete(r.status), status: r.status };
+  }
+  async function deletePlaybook(auth, id) {
+    let r = await jsonRequest("DELETE", CFG.apiBase + "/playbooks/" + id, authHeaders(auth));
+    if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status };
+    const r2 = await jsonRequest("DELETE", CFG.apiBase + "/org-" + auth.orgBare + "/playbooks/" + id, authHeaders(auth));
+    if (r2.status >= 200 && r2.status < 300) return { ok: true, status: r2.status };
+    if (r.status === 404 && r2.status === 404) return { ok: true, status: 404 };
+    return { ok: false, status: r.status };
+  }
+  async function deleteSecret(auth, idOrName) {
+    let id = idOrName;
+    if (!/^[a-z]+-/.test(String(idOrName))) {
+      const list = await listSecrets(auth);
+      const hit = (list.secrets || []).find((s) => s.name === idOrName || s.id === idOrName);
+      if (!hit) return { ok: true, status: 404 };
+      id = hit.id;
+    }
+    let r = await jsonRequest("DELETE", CFG.apiBase + "/secrets/" + id, authHeaders(auth));
+    if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status };
+    const r2 = await jsonRequest("DELETE", CFG.apiBase + "/org-" + auth.orgBare + "/secrets/" + id, authHeaders(auth));
+    if (r2.status >= 200 && r2.status < 300) return { ok: true, status: r2.status };
+    if (r.status === 404 && r2.status === 404) return { ok: true, status: 404 };
+    return { ok: false, status: r.status };
+  }
+  // 对话: 平台无硬删除, 唯 archive (POST /sessions/{id}/archive) 移出仪表盘 = 水过无痕
+  async function deleteSession(auth, devinId) {
+    const r = await jsonRequest("POST", CFG.apiBase + "/sessions/" + devinId + "/archive", authHeaders(auth), {});
+    if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status, archived: true };
+    for (const url of [CFG.apiBase + "/sessions/" + devinId, CFG.apiBase + "/org-" + auth.orgBare + "/sessions/" + devinId]) {
+      const d = await jsonRequest("DELETE", url, authHeaders(auth));
+      if (d.status >= 200 && d.status < 300) return { ok: true, status: d.status };
+    }
+    return { ok: false, status: r.status };
+  }
+
+  // 水过无痕: 清账号自建数据 (本源默认 builtin 知识/community 剧本保留不删)。
+  //   dryRun 只扫描计数; onProgress(text) 逐步回报。删除顺序: 密钥→剧本→知识库→对话。
+  //   (Git 连接断开交由 git.js robustDisconnectGit, 此处不耦合)
+  async function wipeAccount(auth, opts) {
+    opts = opts || {};
+    const dry = !!opts.dryRun;
+    const prog = typeof opts.onProgress === "function" ? opts.onProgress : () => {};
+    const report = {
+      email: auth.email, dryRun: dry,
+      sessions: { found: 0, deleted: 0, failed: 0 },
+      knowledge: { found: 0, deleted: 0, failed: 0 },
+      playbooks: { found: 0, deleted: 0, failed: 0 },
+      secrets: { found: 0, deleted: 0, failed: 0 },
+      native: { knowledge: 0, playbooks: 0 }, errors: [],
+    };
+    prog("扫描账号痕迹...");
+    const [sess, kn, pb, sec] = await Promise.all([listSessions(auth, 1000), listKnowledge(auth), listPlaybooks(auth), listSecrets(auth)]);
+    const sessions = sess.sessions || [];
+    const allLearnings = kn.learnings || [];
+    const allPlaybooks = pb.playbooks || [];
+    const secrets = sec.secrets || [];
+    const learnings = allLearnings.filter(isUserKnowledge);
+    const playbooks = allPlaybooks.filter(isUserPlaybook);
+    report.native.knowledge = allLearnings.length - learnings.length;
+    report.native.playbooks = allPlaybooks.length - playbooks.length;
+    report.sessions.found = sessions.length;
+    report.knowledge.found = learnings.length;
+    report.playbooks.found = playbooks.length;
+    report.secrets.found = secrets.length;
+    if (dry) {
+      prog("扫描完成(可清理): 对话" + sessions.length + " 知识库" + learnings.length + " 剧本" + playbooks.length + " 密钥" + secrets.length + " · 本源保留: 知识" + report.native.knowledge + " 剧本" + report.native.playbooks);
+      return report;
+    }
+    for (const s of secrets) {
+      const r = await deleteSecret(auth, s.id || s.name);
+      r.ok ? report.secrets.deleted++ : (report.secrets.failed++, report.errors.push("secret:" + (s.name || s.id) + ":" + r.status));
+      prog("删除密钥 " + report.secrets.deleted + "/" + secrets.length);
+    }
+    for (const p of playbooks) {
+      if (!(p.id || p.playbook_id)) { report.playbooks.failed++; continue; }
+      const r = await deletePlaybook(auth, p.id || p.playbook_id);
+      r.ok ? report.playbooks.deleted++ : (report.playbooks.failed++, report.errors.push("playbook:" + (p.id || p.playbook_id) + ":" + r.status));
+      prog("删除剧本 " + report.playbooks.deleted + "/" + playbooks.length);
+    }
+    for (const k of learnings) {
+      if (!k.id) { report.knowledge.failed++; continue; }
+      const r = await deleteKnowledge(auth, String(k.id));
+      r.ok ? report.knowledge.deleted++ : (report.knowledge.failed++, report.errors.push("knowledge:" + k.id + ":" + r.status));
+      prog("删除知识库 " + report.knowledge.deleted + "/" + learnings.length);
+    }
+    for (const s of sessions) {
+      const id = s.devin_id || s.session_id || s.id;
+      if (!id) { report.sessions.failed++; continue; }
+      const r = await deleteSession(auth, id);
+      r.ok ? report.sessions.deleted++ : (report.sessions.failed++, report.errors.push("session:" + id + ":" + r.status));
+      prog("清理对话 " + report.sessions.deleted + "/" + sessions.length);
+    }
+    prog("水过无痕完成");
+    return report;
+  }
+
+  // ═══ 纯函数 (可单测 · 与本体同源) ═══════════════════════════════════════════
+  // 每对话使用额度上限 + 是否抽干模式 (反向重置·将欲予之必故予之)
+  function computeConvCap(balance, buffer, drainOn, floor) {
+    const b = Number(balance);
+    if (!Number.isFinite(b)) return { cap: 0, drain: false };
+    const buf = Math.max(0, Number(buffer) || 0);
+    const flr = Math.max(0, Number(floor) || 0);
+    let cap = +(b - buf).toFixed(2);
+    let drain = false;
+    if (drainOn && cap <= 0 && b > flr) { cap = +b.toFixed(2); drain = true; }
+    return { cap: Math.max(0, cap), drain };
+  }
+  // 低余额预警 (一次跌破只警一次·回升复位)
+  function lowBalanceVerdict(balance, threshold, prevAlerted) {
+    const b = Number(balance);
+    const t = Math.max(0, Number(threshold) || 0);
+    if (!Number.isFinite(b)) return { alert: false, alerted: !!prevAlerted };
+    if (b <= t) return { alert: !prevAlerted, alerted: true };
+    return { alert: false, alerted: false };
+  }
+  // 会话进展签名 (两轮相同 = 无推进 → 卡死监测计时)
+  function sessionSignature(sess) {
+    const s = sess || {};
+    return [s.statusClass || "", s.status || "", s.reason || ""].join("|");
+  }
+
   return {
-    CFG, login, getBilling, billingBalance, authHeaders, verify, decodeJwtUserId,
+    CFG, jsonRequest, jsonRequestRetry, withTimeout,
+    login, getBilling, billingBalance, authHeaders, verify, decodeJwtUserId,
     asArray, listSessions, getSessionDetail, classifySession, isActiveClass,
     listRunningSessions, listKnowledge, listPlaybooks, listSecrets, getGitConnections,
     isUserKnowledge, isUserPlaybook, accountOverview,
     extractMessageText, classifyEvent, buildConversationMd, buildAgentDoc, safeName,
     getEvents, exportConversation, knowledgeToMd, exportKnowledge,
+    okDelete, deleteKnowledge, deletePlaybook, deleteSecret, deleteSession, wipeAccount,
+    computeConvCap, lowBalanceVerdict, sessionSignature,
   };
 })();
 
