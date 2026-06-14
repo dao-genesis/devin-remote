@@ -46,8 +46,18 @@
     "views": {
       "dao-one": [
         {
-          "id": "dao.one",
-          "name": "道 · 归一",
+          "id": "wam.panel",
+          "name": "① 切号 · 账号管理",
+          "type": "webview"
+        },
+        {
+          "id": "dao.essence",
+          "name": "② Proxy Pro · 模型路由",
+          "type": "webview"
+        },
+        {
+          "id": "dao.cloudPanel",
+          "name": "③ 全能板 · Devin Cloud",
           "type": "webview"
         }
       ]
@@ -540,6 +550,36 @@
             "type": "number",
             "default": 1,
             "description": "第五板块 · Devin Cloud 运行中对话轮询周期 (分钟·0=关闭). 仅轮询已登录账号"
+          },
+          "wam.devinCloudStallAlert": {
+            "type": "boolean",
+            "default": true,
+            "description": "v4.7.5 · 对话卡死实时监测. 开启后运行中对话「长时间无进展」即在左下角实时提醒 (实时监测·实时反馈)"
+          },
+          "wam.devinCloudStallMin": {
+            "type": "number",
+            "default": 15,
+            "description": "v4.7.5 · 卡死判定阈值 (分钟·默认15·0=关闭). 运行中对话进展指纹持续不变超过此时长 → 判疑似卡死并提醒一次 (进展恢复后复位)"
+          },
+          "wam.devinCloudLowBalanceAlert": {
+            "type": "boolean",
+            "default": true,
+            "description": "v4.7.5 · 低余额主动提醒. 开启后, 有活跃对话的账号余额 ≤ 阈值时直接给用户发消息提示「额度快用完了」(一次跌破只提醒一次·回升后复位)"
+          },
+          "wam.devinCloudLowBalanceThreshold": {
+            "type": "number",
+            "default": 3,
+            "description": "v4.7.5 · 低余额提醒阈值 (美元·默认3). 对话所在账号实时余额 ≤ 此值即触发提醒"
+          },
+          "wam.devinCloudLowBalanceMessageSession": {
+            "type": "boolean",
+            "default": true,
+            "description": "v4.7.5 · 低余额时除 IDE 通知外, 尽力往运行中对话续写一条额度提醒消息 (需配置 devinCloudApiKey 的 apk_ Key; 缺失或失败则仅 IDE 通知·不臆造成功)"
+          },
+          "wam.devinCloudApiKey": {
+            "type": "string",
+            "default": "",
+            "description": "v4.7.5 · Devin 官方 API Key (apk_…). 用于向对话续写消息(低余额提醒/续写对话)的公开 API 鉴权; 会话登录态不被公开 API 接受, 故留空时仅走 IDE 通知"
           },
           "wam.autoRotate": {
             "type": "boolean",
