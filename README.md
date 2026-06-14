@@ -24,7 +24,7 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\too
 | ② dao-bridge · 内网穿透 | 3.2.0 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-bridge-3.2.0.vsix) |
 | ③ devin-git-auth · 多账号 Git | 2.3.2 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/devin-git-auth-2.3.2.vsix) |
 | ④ dao-proxy-pro · 模型路由 | 9.9.289 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-proxy-pro-9.9.289.vsix) |
-| ⑤ rt-flow · Cloud 备份/wipe/对话上限 | 4.7.8 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/rt-flow-4.7.8.vsix) |
+| ⑤ rt-flow · Cloud 备份/wipe/对话上限 | 4.8.1 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/rt-flow-4.8.1.vsix) |
 | 模块 · dao-export · 全量导出 | 1.3.3 | [⬇ vsix](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/v1.0.0/dao-devin-export-1.3.3.vsix) |
 
 > 全部资产见 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)。vm-replica 模块为纯源码/文档，见 [`modules/vm-replica/`](modules/vm-replica/)。
@@ -115,7 +115,7 @@ devin-remote/
 
 **VSIX**: `plugins/dao-proxy-pro/dao-proxy-pro-9.9.289.vsix` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/7094683e-c9f3-4461-96f6-fadd15c0aabf)
 
-### rt-flow v4.7.8 · Devin Cloud 接入（备份 + 回归本源 + 对话额度上限）⭐新
+### rt-flow v4.8.1 · Devin Cloud 接入（备份 + 回归本源 + 对话额度上限 + 状态持久化）⭐新
 
 第五板块，零依赖 `devin_cloud.js` 底层封装 Devin Cloud 全部 API（邮箱+密码→auth1 登录、概览、对话追踪、CRUD、备份、wipe）。三大核心模块：
 
@@ -125,7 +125,7 @@ devin-remote/
 
 > 实测修复多个「臆造成功」缺陷：剧本/密钥删除端点纠正（`/api/playbooks|secrets/{id}`）、会话改归档（平台不支持硬删）、Git 改用 `git-permissions` 真撤授权（连接元数据平台无删除端点，如实回报）；`stopSession` 同理按候选端点实探、不臆造成功。v4.6.1：修复多账号锁旋转误判——账号默认上锁时 `getSortedIndices` 致 `rotate()` 候选为 0 而误报「所有账号失败」（实为登录全成功、仅设置项无锁选），已改为正确跳过锁定项。v4.7.0~4.7.8：**单对话级操作**（概览每对话加查/下 ZIP/清按钮）、**知识库/剧本/密钥逐条查/下/删 + 批量**、**PAT 反注**（一把 PAT 作 `GITHUB_PAT` 密钥写全账号）、**对话追踪账号编号(1-N)**、**低额≤$3 主动中停 + 余额耗用自重轮询**、`VERSION` 常量随 `package.json` 同步（版号统一），并经 141 实机双源回归实测。
 
-**VSIX**: `plugins/rt-flow/rt-flow-4.7.8.vsix` · **底层**: `plugins/rt-flow/devin_cloud.js` · **变更史**: `plugins/rt-flow/changelog.md` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/9ec20452-cb5f-4423-9204-f06088f75079)
+**VSIX**: `plugins/rt-flow/rt-flow-4.8.1.vsix` · **底层**: `plugins/rt-flow/devin_cloud.js` · **变更史**: `plugins/rt-flow/changelog.md` · **📹 视频**: [▶ 小白教程（点击直接播放）](https://github.com/user-attachments/assets/9ec20452-cb5f-4423-9204-f06088f75079)
 
 ### rt-flow-mobile v1.0.0 · 浏览器/手机版自动切号（rt-flow 的移动端移植）⭐新
 

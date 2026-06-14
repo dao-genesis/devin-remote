@@ -8379,6 +8379,11 @@ let _dvAutoTimer = null;
 // v4.6.0 · Devin Cloud 状态聚合 (问题①+⑤): email.lower → {running, awaiting, blocked, total, ts, items[]}
 //   _dvRunPoll 每轮写入; 对话追踪面板 (_getConvTrackingHtml) 据此渲染 Devin Cloud 子板块 (复用追踪 UI)。
 const _dvStatusAgg = new Map();
+// v4.8.1 · 持久化·根治"一闪一没": email.lower → 首次空轮时刻 (距上次非空)
+//   暂态空(限流429/网络抖动/服务端最终一致性)在宽限窗口内不清除状态;
+//   连续空持续超窗才判定对话真的结束并移除 ("对话结束了那就OK")。
+const _dvEmptySince = new Map();
+const DV_STATUS_STICKY_MS = 90000; // 维持已知状态的宽限窗(默 90s ≈ 跨 1~2 个轮询周期)
 let _dvPreloadTimer = null;
 // v4.7.4 · 账号编号 (1-based · 与侧栏勾选框旁编号一致): email.lower → 序号; 用于对话追踪区分 Devin Cloud 各账号。
 function _dvAccountNo(email) {
@@ -8591,7 +8596,6 @@ async function _dvRunPoll() {
   try {
     const emails = new Set(devinCloud.cachedEmails());
     if (!emails.size) return;
-    const items = [];
     for (const acc of _store.accounts) {
       const key = (acc.email || "").toLowerCase();
       if (!emails.has(key)) continue;
@@ -8611,11 +8615,7 @@ async function _dvRunPoll() {
         // v4.7.5 · 低余额预警: 有活跃对话的账号余额跌破阈值($3) → 直接给用户发消息提示快用完
         if (active.length) { await _dvLowBalanceCheck(acc, auth, active).catch(() => {}); }
         if (active.length) {
-          items.push({
-            email: key, running, awaiting, blocked,
-            titles: active.map((r) => r.title),
-            states: active.map((r) => ({ t: r.title, c: r.statusClass })),
-          });
+          _dvEmptySince.delete(key); // 有活跃 → 清宽限计时
           _dvStatusAgg.set(key, {
             no: _dvAccountNo(acc.email),
             tag: devinCloud.getTag(acc.email) || "",
@@ -8623,11 +8623,35 @@ async function _dvRunPoll() {
             items: active.map((r) => ({ title: r.title, cls: r.statusClass })),
             ts: Date.now(),
           });
+          _dvDetectFinished(acc.email, active); // 有活跃 → 正常离场检测
         } else {
-          _dvStatusAgg.delete(key); // 无活跃对话 → 不占面板 (无为)
+          // v4.8.1 · 持久化·根治"一闪一没": 单轮空(限流429/网络抖动/服务端最终一致性)
+          //   不立即清除 — 保留上轮 _dvStatusAgg 条目 → 面板/badge 持续显示;
+          //   仅当连续空持续超过宽限窗口(对话真的结束) → 移除并生成终报。
+          const _since = _dvEmptySince.get(key);
+          if (!_since) {
+            _dvEmptySince.set(key, Date.now()); // 首次空 → 起算宽限·本轮不动旧态(不闪)
+          } else if (Date.now() - _since >= DV_STATUS_STICKY_MS) {
+            _dvStatusAgg.delete(key);
+            _dvEmptySince.delete(key);
+            _dvDetectFinished(acc.email, active); // 确认离场 → 终报
+          }
+          // 宽限窗口内: 不调 _dvDetectFinished, 避免暂态空误报"对话已完成"
         }
-        _dvDetectFinished(acc.email, active);
-      } catch {}
+      } catch {
+        // 拉取失败(网络/限流) → 暂态: 保留旧状态·不清除·不误报 (天下之至柔)
+      }
+    }
+    // v4.8.1 · badge/列表统一以 _dvStatusAgg(含宽限态)为准 → 暂态失败/限流也不闪没
+    const items = [];
+    for (const [_em, _st] of _dvStatusAgg) {
+      if (!_st || (_st.total | 0) <= 0) continue;
+      if (Date.now() - _st.ts > 180000) continue; // 与 _dvStatusAggHtml 同口径(3min)
+      items.push({
+        email: _em,
+        running: _st.running, awaiting: _st.awaiting, blocked: _st.blocked,
+        titles: (_st.items || []).map((x) => x.title),
+      });
     }
     _broadcastMsg({ type: "devinRunStatus", items });
     // v4.7.7 · 实时进展摘要 (每轮末聚合, 供面板/终报使用)
