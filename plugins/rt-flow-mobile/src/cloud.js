@@ -138,7 +138,146 @@ const DaoCloud = (() => {
     return r.status === 200;
   }
 
-  return { CFG, login, getBilling, billingBalance, authHeaders, verify, decodeJwtUserId };
+  // ═══ 对话追踪 / 账号数据查看 (只读 · 移植自 devin_cloud.js) ═══════════════
+  function asArray(j, ...keys) {
+    if (Array.isArray(j)) return j;
+    if (!j || typeof j !== "object") return [];
+    for (const k of keys) if (Array.isArray(j[k])) return j[k];
+    return [];
+  }
+
+  // 会话列表: 主端点 /org-{bare}/v2sessions, 备用 /sessions
+  async function listSessions(auth, limit) {
+    let url = CFG.apiBase + "/org-" + auth.orgBare + "/v2sessions";
+    if (limit) url += "?limit=" + limit;
+    let r = await jsonRequestRetry("GET", url, authHeaders(auth), null, 60000);
+    if (r.status === 200) {
+      const arr = asArray(r.json, "result", "sessions", "data");
+      if (arr.length || (r.json && (r.json.result || r.json.sessions))) return { ok: true, sessions: arr };
+    }
+    r = await jsonRequestRetry("GET", CFG.apiBase + "/sessions", authHeaders(auth), null, 60000);
+    if (r.status === 200) return { ok: true, sessions: asArray(r.json, "result", "sessions", "data") };
+    return { ok: false, sessions: [], error: "list sessions HTTP " + r.status };
+  }
+
+  async function getSessionDetail(auth, devinId) {
+    const r = await jsonRequestRetry("GET", CFG.apiBase + "/sessions/" + devinId, authHeaders(auth));
+    return r.status === 200 ? r.json || {} : {};
+  }
+
+  // 会话状态五态分类 (与 devin_cloud.js classifySession 逐字一脉):
+  //   running / awaiting(需用户输入) / blocked(额度耗尽·出错·卡死) / finished / idle
+  function classifySession(s) {
+    s = s || {};
+    const lsc = s.latest_status_contents || {};
+    const enumV = String(lsc.enum || "").toLowerCase();
+    const reason = String(lsc.reason || "").toLowerCase();
+    const uar = lsc.user_action_required;
+    const status = String(s.status || "").toLowerCase();
+    const act = String(s.activity_status || "").toLowerCase();
+    const cur = String(s.current_activity || "").toLowerCase();
+    if (uar != null && uar !== "" && uar !== false) return "awaiting";
+    const terminal = enumV === "finished" || /suspended|expired|exited|archived|deleted/.test(status);
+    if (terminal) return "finished";
+    const blob = enumV + " " + reason + " " + status + " " + act + " " + cur;
+    if (/out_of_quota|usage_limit|insufficient|overage|credit|billing|exceeded|quota/.test(blob)) return "blocked";
+    if (/error|failed|stuck|crash/.test(blob)) return "blocked";
+    if (/await|waiting_for_user|waiting_for_input|needs_input|user_input|ask_user|blocked_on_user/.test(blob)) return "awaiting";
+    if (/blocked/.test(blob)) return "blocked";
+    if (/running|working|in_progress|streaming|active|started|resumed|busy|thinking|executing|coding|planning|testing|pr\b/.test(blob)) return "running";
+    return enumV || status ? "running" : "idle";
+  }
+  function isActiveClass(cls) { return cls === "running" || cls === "awaiting" || cls === "blocked"; }
+
+  // 活跃·需关注会话 (运行/等待输入/卡住), 各带 statusClass 供前端细分
+  async function listRunningSessions(auth) {
+    const r = await listSessions(auth, 100);
+    return (r.sessions || [])
+      .map((s) => {
+        const lsc = s.latest_status_contents || {};
+        return {
+          devinId: s.devin_id || s.session_id || s.id,
+          title: s.title || s.name || "(未命名)",
+          status: (lsc.enum || s.status || s.activity_status || "") + (lsc.reason ? "(" + lsc.reason + ")" : ""),
+          reason: lsc.reason || "",
+          statusClass: classifySession(s),
+        };
+      })
+      .filter((s) => isActiveClass(s.statusClass));
+  }
+
+  async function listKnowledge(auth) {
+    const r = await jsonRequestRetry("GET", CFG.apiBase + "/org-" + auth.orgBare + "/learning/all", authHeaders(auth));
+    return r.status === 200 ? { ok: true, learnings: asArray(r.json, "learnings") } : { ok: false, learnings: [] };
+  }
+  async function listPlaybooks(auth) {
+    const r = await jsonRequestRetry("GET", CFG.apiBase + "/org-" + auth.orgBare + "/playbooks", authHeaders(auth));
+    return r.status === 200 ? { ok: true, playbooks: asArray(r.json, "playbooks") } : { ok: false, playbooks: [] };
+  }
+  async function listSecrets(auth) {
+    const r = await jsonRequestRetry("GET", CFG.apiBase + "/org-" + auth.orgBare + "/secrets", authHeaders(auth));
+    return r.status === 200 ? { ok: true, secrets: asArray(r.json, "secrets") } : { ok: false, secrets: [] };
+  }
+  async function getGitConnections(auth) {
+    const r = await jsonRequestRetry("GET", CFG.apiBase + "/organizations/" + auth.orgId + "/git-connections-metadata", authHeaders(auth));
+    if (r.status !== 200) return { ok: false, connections: [] };
+    const conns = Array.isArray(r.json) ? r.json : asArray(r.json, "connections");
+    return { ok: true, connections: conns };
+  }
+  function isUserKnowledge(k) {
+    return !!k && k.note_type !== "builtin" && k.is_default_note !== true && k.can_write !== false;
+  }
+  function isUserPlaybook(p) {
+    return !!p && p.is_builtin !== true && p.can_write !== false;
+  }
+
+  // 账号本源概览 (下拉框用): 对话(着重) + 知识库/剧本/密钥/Git/额度 简要。
+  // 大成若缺: 任一子端点失败不毁整份概览 (allSettled 逐个降级)。
+  async function accountOverview(auth) {
+    const settled = await Promise.allSettled([
+      listSessions(auth), listKnowledge(auth), listPlaybooks(auth),
+      listSecrets(auth), getGitConnections(auth), getBilling(auth),
+    ]);
+    const v = (i, fb) => (settled[i].status === "fulfilled" ? settled[i].value : fb);
+    const sessions = v(0, { sessions: [] });
+    const knowledge = v(1, { learnings: [] });
+    const playbooks = v(2, { playbooks: [] });
+    const secrets = v(3, { secrets: [] });
+    const git = v(4, { connections: [] });
+    const billing = v(5, { ok: false, raw: null });
+    const ss = sessions.sessions || [];
+    return {
+      email: auth.email, orgId: auth.orgId,
+      sessions: ss.map((s) => ({
+        devinId: s.devin_id || s.session_id || s.id,
+        title: s.title || s.name || "(未命名)",
+        statusClass: classifySession(s),
+        createdAt: s.created_at, updatedAt: s.updated_at,
+      })),
+      counts: {
+        sessions: ss.length,
+        running: ss.filter((s) => classifySession(s) === "running").length,
+        awaiting: ss.filter((s) => classifySession(s) === "awaiting").length,
+        blocked: ss.filter((s) => classifySession(s) === "blocked").length,
+        knowledge: (knowledge.learnings || []).length,
+        playbooks: (playbooks.playbooks || []).length,
+        secrets: (secrets.secrets || []).length,
+        gitConnections: (git.connections || []).length,
+      },
+      knowledge: (knowledge.learnings || []).map((k) => ({ id: k.id, name: k.name || k.title || "", deletable: isUserKnowledge(k) })),
+      playbooks: (playbooks.playbooks || []).map((p) => ({ id: p.id || p.playbook_id, name: p.name || p.title || "", deletable: isUserPlaybook(p) })),
+      secrets: (secrets.secrets || []).map((s) => ({ id: s.id || s.secret_id, name: s.name || s.key || "" })),
+      gitConnections: (git.connections || []).map((c) => ({ id: c.id || c.connection_id, name: c.name || c.username || c.account_login || c.org || "", provider: c.provider || c.type || "github" })),
+      billing: billing.raw || null,
+    };
+  }
+
+  return {
+    CFG, login, getBilling, billingBalance, authHeaders, verify, decodeJwtUserId,
+    asArray, listSessions, getSessionDetail, classifySession, isActiveClass,
+    listRunningSessions, listKnowledge, listPlaybooks, listSecrets, getGitConnections,
+    isUserKnowledge, isUserPlaybook, accountOverview,
+  };
 })();
 
 // service worker (importScripts) 与 popup(module-less) 两种加载方式都可取用

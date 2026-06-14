@@ -10,7 +10,7 @@
 //      + 通知 app.devin.ai 标签页重注入 localStorage 登录态
 //   5. alarms 周期轮询: 活跃账号余额 ≤ 缓冲 → 自动切到最优账号 (软耗尽轮转)
 // ═══════════════════════════════════════════════════════════════════════════
-importScripts("cloud.js");
+importScripts("cloud.js", "parse.js");
 
 const DNR_RULE_ID = 1001;
 const ALARM = "dao-rtflow-poll";
@@ -195,6 +195,46 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (idx >= 0) st.accounts[idx] = entry; else st.accounts.push(entry);
           await set({ accounts: st.accounts });
           sendResponse({ ok: true, count: st.accounts.length });
+          break;
+        }
+        // 万法识别批量添加: 任意格式文本 → 解析 → 入池 (去重·已存在则更新密码)
+        case "parseAndAdd": {
+          const parsed = DaoParse.parseAccountText(msg.text || "");
+          const st = await getState();
+          let added = 0, updated = 0;
+          for (const p of parsed.accounts) {
+            const key = lc(p.email);
+            const idx = st.accounts.findIndex((a) => lc(a.email) === key);
+            const entry = { email: p.email, password: p.password, label: "" };
+            if (idx >= 0) { st.accounts[idx] = Object.assign({}, st.accounts[idx], entry); updated++; }
+            else { st.accounts.push(entry); added++; }
+          }
+          await set({ accounts: st.accounts });
+          sendResponse({ ok: true, added, updated, total: st.accounts.length, parsed: parsed.accounts.length, tokens: parsed.tokens.length });
+          break;
+        }
+        // 一键导出: 账号池 → 可再粘贴文本
+        case "exportAccounts": {
+          const st = await getState();
+          sendResponse({ ok: true, text: DaoParse.exportAccountsText(st.accounts) });
+          break;
+        }
+        // 账号本源概览 (对话/知识库/剧本/密钥/Git/额度)
+        case "accountOverview": {
+          const r = await ensureAuth(msg.email);
+          if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
+          try { sendResponse({ ok: true, overview: await DaoCloud.accountOverview(r) }); }
+          catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+          break;
+        }
+        // 对话追踪: 当前激活账号的活跃会话 (运行/待输入/卡住)
+        case "runningSessions": {
+          const email = msg.email || (await getState()).active;
+          if (!email) { sendResponse({ ok: false, error: "无激活账号" }); break; }
+          const r = await ensureAuth(email);
+          if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
+          try { sendResponse({ ok: true, sessions: await DaoCloud.listRunningSessions(r) }); }
+          catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
           break;
         }
         case "removeAccount": {

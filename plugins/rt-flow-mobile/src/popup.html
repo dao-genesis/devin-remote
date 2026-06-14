@@ -8,7 +8,7 @@
 </head>
 <body>
   <header>
-    <div class="brand">道 · rt-flow <span class="ver">浏览器版</span></div>
+    <div class="brand">道 · rt-flow <span class="ver">浏览器版 v1.1</span></div>
     <div class="active" id="activeLine">未激活账号</div>
   </header>
 
@@ -28,18 +28,36 @@
     </div>
   </section>
 
+  <section class="track">
+    <div class="sec-title">
+      对话追踪 · 实时监测
+      <button id="trackRefresh" class="mini ghost">↻ 刷新</button>
+    </div>
+    <div id="trackCounts" class="track-counts"></div>
+    <ul id="trackList" class="sessions"></ul>
+    <div id="trackEmpty" class="empty">激活账号后点「刷新」查看运行中/待输入/卡住的对话。</div>
+  </section>
+
   <section>
-    <div class="sec-title">账号池</div>
+    <div class="sec-title">
+      账号池 <span id="poolCount" class="count"></span>
+      <button id="exportBtn" class="mini ghost">⭳ 一键导出</button>
+    </div>
     <ul id="accountList" class="accounts"></ul>
-    <div id="empty" class="empty hid">账号池为空，下方添加。每个账号 = 邮箱 + 密码。</div>
+    <div id="empty" class="empty hid">账号池为空，下方添加。支持任意格式粘贴。</div>
   </section>
 
   <section class="addbox">
-    <div class="sec-title">添加 / 更新账号</div>
-    <input type="email" id="email" placeholder="邮箱 email" autocomplete="off" />
-    <input type="password" id="password" placeholder="密码 password" autocomplete="off" />
-    <input type="text" id="label" placeholder="标签 label (可选，防搞混)" autocomplete="off" />
-    <button id="addBtn" class="primary">＋ 添加到账号池</button>
+    <div class="sec-title">添加 / 更新账号 · 万法识别 v2.7</div>
+    <textarea id="bulk" rows="3" placeholder="任意格式粘贴：email password / email:password / email----password / 邮箱：x 密码：y / JSON / 微信发货文本…一文混万法" autocomplete="off"></textarea>
+    <button id="bulkAddBtn" class="primary">＋ 万法识别·批量添加</button>
+    <details class="single">
+      <summary>单条精确添加</summary>
+      <input type="email" id="email" placeholder="邮箱 email" autocomplete="off" />
+      <input type="password" id="password" placeholder="密码 password" autocomplete="off" />
+      <input type="text" id="label" placeholder="标签 label (可选，防搞混)" autocomplete="off" />
+      <button id="addBtn" class="mini">＋ 添加</button>
+    </details>
   </section>
 
   <div id="toast" class="toast hid"></div>

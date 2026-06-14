@@ -68,6 +68,26 @@ t("无 quota 记录 → -1", () => {
   assert.strictEqual(scoreOf(undefined), -1);
 });
 
+// classifySession (对话追踪五态 · 与 devin_cloud.js 同源)
+const { classifySession, isActiveClass } = globalThis.DaoCloud;
+console.log("classifySession (对话追踪):");
+t("user_action_required 非空 → awaiting (最高优先)", () => {
+  assert.strictEqual(classifySession({ status: "suspended", latest_status_contents: { user_action_required: { q: 1 } } }), "awaiting");
+});
+t("enum=finished → finished", () => {
+  assert.strictEqual(classifySession({ latest_status_contents: { enum: "finished" } }), "finished");
+});
+t("out_of_quota (非终态) → blocked", () => {
+  assert.strictEqual(classifySession({ status: "running", latest_status_contents: { reason: "out_of_quota" } }), "blocked");
+});
+t("coding/working → running", () => {
+  assert.strictEqual(classifySession({ status: "running", activity_status: "coding" }), "running");
+});
+t("isActiveClass: running/awaiting/blocked 为活跃, finished 非", () => {
+  assert.ok(isActiveClass("running") && isActiveClass("awaiting") && isActiveClass("blocked"));
+  assert.ok(!isActiveClass("finished") && !isActiveClass("idle"));
+});
+
 // login(): user_id 的权威真源是 login 响应本体 (回归防护 —— 修复前 userId 恒空,
 // 因 auth1 是不透明令牌·非 JWT 且 post-auth 不回传 user_id)。mock fetch, 不触网。
 const { login } = globalThis.DaoCloud;

@@ -64,3 +64,33 @@ button.mini { padding: 6px 8px; font-size: 12px; }
 .toast.err { background: var(--danger); }
 .hid { display: none !important; }
 footer { padding: 8px 14px; font-size: 10px; color: var(--mut); text-align: center; }
+
+/* ── sec-title 内联按钮 / 计数 ── */
+.sec-title { display: flex; align-items: center; gap: 8px; }
+.sec-title .count { color: var(--accent2); text-transform: none; letter-spacing: 0; }
+button.ghost { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--mut); padding: 3px 8px; font-size: 11px; text-transform: none; letter-spacing: 0; }
+button.ghost:hover { background: var(--card2); color: var(--fg); }
+
+/* ── 万法识别 textarea / 单条折叠 ── */
+.addbox textarea { width: 100%; background: var(--card2); border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 8px; font-size: 12px; font-family: inherit; resize: vertical; margin-bottom: 8px; }
+.addbox details.single { margin-top: 8px; }
+.addbox details.single summary { color: var(--mut); font-size: 12px; cursor: pointer; margin-bottom: 8px; }
+.addbox details.single input { width: 100%; margin-bottom: 8px; }
+
+/* ── 对话追踪 / 概览 ── */
+.track-counts { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+.pill { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--card2); color: var(--mut); border: 1px solid var(--line); }
+.pill.run { background: rgba(46,164,79,.16); color: #4ade80; border-color: transparent; }
+.pill.wait { background: rgba(210,153,34,.16); color: #fbbf24; border-color: transparent; }
+.pill.blk { background: rgba(229,72,77,.16); color: #f87171; border-color: transparent; }
+.sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.sess { display: flex; align-items: center; gap: 7px; font-size: 12px; padding: 4px 0; }
+.sess.muted { color: var(--mut); }
+.sess .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--mut); }
+.sess .dot.run { background: #4ade80; } .sess .dot.wait { background: #fbbf24; } .sess .dot.blk { background: #f87171; }
+.sess .stitle { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess .sstat { font-size: 10px; color: var(--mut); flex: none; }
+.sess .sstat.run { color: #4ade80; } .sess .sstat.wait { color: #fbbf24; } .sess .sstat.blk { color: #f87171; }
+.acct .ovw { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.ovw .loading, .ovw .err-line { font-size: 12px; color: var(--mut); }
+.ovw .err-line { color: var(--danger); }
