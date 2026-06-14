@@ -1007,6 +1007,23 @@ function init({ log, configPath }) {
     // 加载 providers
     _providers = _cfg.providers || {};
 
+    // ★ 道法自然 · 渠道地址自愈 (载入即归一 · 不止新增时)
+    //   历史/手填 baseUrl 误含完整补全端点 (如小米 .../v1/chat/completions) →
+    //   剥为真根, 由 completionPath 单次拼接; 探活/解模型/对话三处皆受其益。
+    //   道义: 二十八章「复归于朴」· 去其华饰 复其本根 · 名实相符方能通。
+    for (const _pn of Object.keys(_providers)) {
+      const _pc = _providers[_pn];
+      if (_pc && _pc.baseUrl) {
+        const _nb = _stripCompletionSuffix(_pc.baseUrl);
+        if (_nb && _nb !== String(_pc.baseUrl).replace(/\/+$/, "")) {
+          _log(
+            `[dao-router] [载] provider ${_pn}: baseUrl 自愈归一 ${_pc.baseUrl} → ${_nb}`,
+          );
+          _pc.baseUrl = _nb;
+        }
+      }
+    }
+
     // 全局 substitute 开关
     _substituteEnabled = dr.substituteEnabled === true;
     if (!_substituteEnabled) {
