@@ -1,34 +1,43 @@
 {
   "manifest_version": 3,
-  "name": "RT Flow Mobile · 道法自然",
+  "name": "dao · rt-flow 浏览器版 · 自动切换账号",
+  "short_name": "rt-flow mobile",
   "version": "1.0.0",
-  "description": "app.devin.ai 浏览器版多账号自动切号 — 账号池登录拿 auth1 → localStorage 零 GUI 自动登录 → 余额监控 → 自动切到下一健康号。移植自 rt-flow + dao-vsix，适配安卓 Chromium 浏览器 (Kiwi/Edge) 与桌面 Chrome。",
-  "permissions": ["storage", "alarms", "scripting", "tabs", "notifications"],
+  "description": "rt-flow 第五板块的浏览器/手机端移植：账号池 → email+password 换 auth1 → 注入 app.devin.ai 自动登录 → 额度耗尽自动切换账号。无 IDE 依赖，Chrome / Kiwi(Android) / Edge 通用。道法自然·无为而无不为。",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "rt-flow 自动切换账号",
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "permissions": [
+    "storage",
+    "alarms",
+    "cookies",
+    "scripting",
+    "declarativeNetRequestWithHostAccess"
+  ],
   "host_permissions": [
     "https://app.devin.ai/*",
     "https://windsurf.com/*"
   ],
-  "background": {
-    "service_worker": "background.js"
-  },
   "content_scripts": [
     {
       "matches": ["https://app.devin.ai/*"],
-      "js": ["content.js"],
+      "js": ["src/content.js"],
       "run_at": "document_start",
       "all_frames": false
     }
-  ],
-  "action": {
-    "default_title": "RT Flow Mobile",
-    "default_popup": "popup.html",
-    "default_icon": {
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
-  "icons": {
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
+  ]
 }

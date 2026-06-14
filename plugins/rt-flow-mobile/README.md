@@ -1,112 +1,77 @@
-# rt-flow-mobile · 浏览器版自动切号 · 道法自然
+# rt-flow 浏览器版 · 自动切换账号 (Android / Chrome / Edge)
 
-> 太上，下知有之 · 用户无为 · 插件无不为
->
-> 把 ⑤ `rt-flow`（IDE 内 Cascade 自动切号）与 ① `dao-vsix`（浏览器页面自动注入账号）合一，
-> 落到一个 **Chromium MV3 扩展**：在 `app.devin.ai` 浏览器版里多账号零 GUI 自动登录 + 余额监控 + 自动切到下一健康号。
-> 可装在**安卓** Chromium 浏览器（Kiwi / Edge / Yandex）与**桌面** Chrome / Edge。
+> rt-flow 第五板块「多账号切换」的**浏览器/手机端移植**。无 Devin Desktop / VSCode 依赖，
+> 纯 MV3 浏览器扩展，可在桌面 Chrome、Edge，以及 **Android 上的 Kiwi Browser** 运行。
+> 道法自然·无为而无不为：账号池 → auth1 → 注入官网自动登录 → 额度耗尽自动切换。
 
----
+## 这是什么
 
-## 一句话流程
+把 IDE 插件 `rt-flow` + `dao-vsix` 的两套底层能力合一，移到浏览器里：
 
-```text
-账号池(email password) → 后台登录拿 auth1 → localStorage 注入自动登录
-        ↑                                          ↓
-   用户无为                          余额 ≤ 停止阈值 → 自动切到余额最高的下一号
+| IDE 插件做的事 | 本扩展的浏览器原生等价 |
+|---|---|
+| `rt-flow/devin_cloud.js` — email+password → auth1 登录链路 | `src/cloud.js`（纯 `fetch`，service worker 可跑） |
+| `rt-flow` 切号引擎 — 评分 + rotate + 看门狗 | `src/background.js`（额度普查 + 评分 + `chrome.alarms` 轮询） |
+| `dao-vsix` 反代注入 `localStorage['auth1_session']` 自动登录 | `src/content.js`（同源 content script 在 SPA 读取前种入登录态） |
+| `dao-vsix` fetch/XHR override 注 `Authorization`/`x-cog-org-id` | `declarativeNetRequest` 动态规则（浏览器原生改请求头） |
+
+## 登录与注入全流程（与 IDE 版同源）
+
+```
+email + password
+  └─POST windsurf.com/_devin-auth/password/login ─────────► token (= auth1)
+       └─POST app.devin.ai/api/users/post-auth (Bearer auth1)─► org_id / user_id
+            └─background 缓存 auth (12h) + 设为 active
+                 ├─declarativeNetRequest: 给 app.devin.ai/api/* 注入
+                 │    Authorization: Bearer <auth1> + x-cog-org-id: <orgId>
+                 └─content script(document_start) 在 app.devin.ai 种入:
+                      localStorage['auth1_session'] = {token, userId}
+                      localStorage['migrated-to-unscoped-auth0-token-2025-12-18']=true
+                      localStorage['known-org-ids-<uid>'] = [orgId]
+                      localStorage['post-auth-v3-null-<uid>-org_name-<orgName>'] = {...}
+                      cookie webapp_logged_in=true
+                      → 若晚于 SPA 启动则 reload 一次(有 guard) → 已登录
 ```
 
----
+## 自动切换（rotate）
 
-## 底层原理（与正典同源）
-
-两条链路移植自仓库现有实现，语义完全一致：
-
-1. **登录拿 auth1**（移植 `plugins/rt-flow/devin_cloud.js`）
-   - `POST windsurf.com/_devin-auth/password/login {email,password}` → `token`(=auth1) + `user_id`
-   - `POST app.devin.ai/api/users/post-auth` (Bearer auth1) → `org_id` / `org_name`
-   - `GET app.devin.ai/api/{org_id}/billing/status` (Bearer auth1) → 实时余额(USD)
-
-2. **浏览器页面自动注入登录**（移植 `plugins/dao-vsix/src/extension.ts:5766` 的 auth bridge）
-   - 经真机抓取确认：Devin SPA 登录态唯一真源是 `localStorage['auth1_session'] = {token,userId}`
-   - `content.js` 在 `document_start` 写入该键 + org 相关键 + `post-auth-v3-*` 守卫键 + cookie `webapp_logged_in=true`
-   - **换 auth1 即换号** → 切号 = 写新 active + 重载标签页
-
-> 与 dao-vsix 的差别：dao-vsix 因为在 IDE 里要绕 `X-Frame-Options` 用了**本地反向代理 + 改写 HTML + 劫持 fetch 注入 header**；
-> 浏览器扩展直接跑在 `app.devin.ai` 真实域上，**无需代理**——SPA 自己读 `localStorage` 后会自带 `Authorization` 发请求。大道甚夷。
-
----
-
-## 切号决策（`core/score.js` · 纯函数 · 可单测）
-
-移植自 `rt-flow` 的 `_scoreOf` / `computeConvCap` / `lowBalanceVerdict`，浏览器版以 **USD 余额**为主轴：
-
-| 层级 | 条件 | 分值 |
-|------|------|------|
-| 永禁 | 无密码 / `skipAutoSwitch` 锁 / 余额 ≤ 停止阈值(真耗尽) | `-Infinity` |
-| 未验 | 未取到余额 | `100` |
-| 已验 | 余额 USD ×100 + staleMin 微调 | `1 ~ 999900` |
-| 锁中降权 | 当前正使用号 ×0.01（防来回震荡） | — |
-
-`shouldSwitch`：当前号**耗尽**或**被锁** 且 存在更优候选 → 切到 `pickBestIndex`。无健康候选则**不切**（不臆造成功）。
-
----
+- 额度来源：`GET app.devin.ai/api/{orgId}/billing/status`
+  → `balance = available_credits + max(0, overage_credits)`（含 `has_subscription_or_credits` 权威布尔）。
+- `chrome.alarms` 周期轮询活跃账号：余额 ≤ **缓冲(默认 $3)** → 自动 `rotate()` 到评分最优账号（软耗尽轮转·知止不殆）。
+- content script 探测页面「out of credits / 额度耗尽」文案 → 主动上报 → 立即轮转（硬耗尽）。
+- 评分：余额越高越优；登录失败的账号不参与。
 
 ## 安装
 
 ### 桌面 Chrome / Edge
 1. `chrome://extensions` → 打开「开发者模式」
-2. 「加载已解压的扩展程序」→ 选 `plugins/rt-flow-mobile/`
+2. 「加载已解压的扩展程序」→ 选择本目录 `plugins/rt-flow-mobile/`
+3. 工具栏图标打开面板。
 
-### 安卓（Kiwi Browser，唯一稳定支持 Chrome 扩展的安卓浏览器）
-1. 安卓装 [Kiwi Browser](https://kiwibrowser.com/)
-2. 把本目录打成 zip（或仓库 zip），Kiwi → ⋮ → Extensions → 开发者模式 → 「+ (from .zip)」选本目录
-3. 也可用 Edge Canary / Yandex（机制相同）
+### Android（Kiwi Browser）
+1. 打包：`bash tools/pack.sh`（产出 `rt-flow-mobile.zip`）。
+2. `adb push rt-flow-mobile.zip /sdcard/Download/`
+3. Kiwi Browser → `kiwi://extensions` → 开发者模式 → `+ (from .zip/.crx/.user.js)` → 选该 zip。
+4. 菜单里出现扩展图标，点开即面板。
 
-> iOS / 原版 Chrome for Android 不支持扩展，故移动端走 Kiwi/Edge Chromium 系。
-
----
+> 详细 Android 冷启动 + 实测见 [`docs/ANDROID_TEST.md`](docs/ANDROID_TEST.md)。
 
 ## 使用
+1. 面板「添加账号」：邮箱 + 密码（+ 可选标签）。可加多个。
+2. 点账号的「激活」→ 后台登录拿 auth1 → 注入 → 打开/刷新 `app.devin.ai` 即已登录该账号。
+3. 「立即切到最优」手动轮转；开「额度耗尽自动切换」后无需管，余额见底自动换号。
 
-1. 点扩展图标 → 「＋ 添加账号」→ 粘贴 `email password`（每行一个，任意格式可解析）
-2. 「↻ 验证全部」→ 登录拿余额、评分排序
-3. 「用此号」手动切；或开启自动切号——后台按余额轮询，当前号余额 ≤ 停止阈值即自动切到余额最高的下一号
-4. 打开 `https://app.devin.ai` → 已是当前账号登录态（零 GUI）
-
-### 设置（`core` 默认值）
-
-| 项 | 默认 | 说明 |
-|----|------|------|
-| `stopThreshold` | `$3` | 余额 ≤ 此值视为耗尽 → 切走 / 不进候选 |
-| `buffer` | `$3` | 每对话使用额度上限缓冲（`cap = 余额 − buffer`） |
-| `pollActiveSec` | `30s` | 低余额时提速轮询 |
-| `pollIdleMin` | `30min` | 空闲降速轮询 |
-| `lowBalanceWarn` | `$5` | 跌破一次只提醒一次（回升后复位） |
-
----
-
-## 测试
-
-```bash
-node test/unit.test.js     # 26 例 · 零依赖 · 覆盖评分/候选/切号/余额上限/低额预警/billing 解析
-```
-
----
+## 隐私
+- 邮箱/密码/auth1 **只存在本机** `chrome.storage.local`，绝不上送任何第三方。
+- 登录与额度请求只发往官方域名 `windsurf.com` / `app.devin.ai`。
 
 ## 文件
-
 ```
-rt-flow-mobile/
-├── manifest.json          # MV3
-├── background.js          # service worker · 账号池 + 登录 + 余额监控 + 切号引擎 + alarms
-├── content.js             # document_start · localStorage 注入自动登录 (移植 dao-vsix auth bridge)
-├── popup.html / popup.js  # 移动端友好面板 · 账号列表/余额/手动切号/锁/删
-├── core/
-│   ├── score.js           # 纯函数评分 (移植 rt-flow _scoreOf/computeConvCap/lowBalanceVerdict)
-│   └── devin_cloud.js     # fetch 版登录/余额 (移植 rt-flow devin_cloud.js)
-├── icons/                 # 零依赖生成的图标 + gen_icons.js
-└── test/unit.test.js      # 零依赖单测
+manifest.json        MV3 清单 (storage/alarms/cookies/scripting/declarativeNetRequestWithHostAccess)
+src/cloud.js         登录链路 + 额度判定 (无依赖, 可单测)
+src/background.js    切号引擎 (service worker): 账号池/登录缓存/评分/rotate/DNR/alarms
+src/content.js       app.devin.ai 自动登录注入 (document_start)
+src/popup.{html,js,css}  控制面板 UI
+test/cloud.test.js   纯函数单测 (billingBalance / decodeJwtUserId / 评分)
+tools/pack.sh        打包成可装载 zip
 ```
-
-> 安全：账号 email/password 仅存 `chrome.storage.local`（本机），auth1 仅注入 `app.devin.ai` 同源 localStorage。不上传任何第三方。

@@ -35,3 +35,6 @@ __pycache__/
 **/vendor/**/dist/
 **/vendor/**/.venv/
 *.tsbuildinfo
+
+# rt-flow-mobile build artifact
+plugins/rt-flow-mobile/*.zip

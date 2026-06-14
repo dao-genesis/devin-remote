@@ -17,6 +17,7 @@ const MODULES = [
   { key: "面板", dir: "vendor-vsix", entry: "out/extension.js" }, // dao-vsix → dao.cloudPanel
   { key: "路由", dir: "vendor-proxy", entry: "extension.js" }, // dao-proxy-pro → dao.essence
   { key: "Cloud", dir: "vendor-flow", entry: "extension.js" }, // rt-flow → wam.panel
+  { key: "穿透", dir: "vendor-bridge", entry: "extension.js", optional: true }, // dao-bridge → daoBridgeView
 ];
 
 const _out = vscode.window.createOutputChannel("道 · 归一");

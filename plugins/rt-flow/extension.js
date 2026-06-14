@@ -749,7 +749,7 @@ const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.7.6";
+const VERSION = "4.7.8";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -3412,21 +3412,50 @@ ${backupStatus}
 ${_dvBackupPanelHtml()}
 </div></div>`;
 }
+// v4.7.8 · 同步短睡 (rename 退避用) · Atomics.wait 优先 · 退化忙等兜底 (≤数百 ms·仅锁冲突时触发)
+function _sleepSyncMs(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {}
+  }
+}
 function atomicWrite(filePath, content) {
   ensureDir(path.dirname(filePath));
   const tmp = filePath + "." + process.pid + "." + Date.now() + ".tmp";
   fs.writeFileSync(tmp, content);
-  try {
-    fs.renameSync(tmp, filePath);
-  } catch (e) {
+  // v4.7.8 · 本源修复(141 实测 EPERM ×81): Windows 上 wam-state.json 被瞬时锁
+  //   (杀软扫描/并发读)时 fs.renameSync 抛 EPERM/EBUSY/EACCES。旧实现 catch 内即便
+  //   copyFileSync 兜底成功也无条件 throw → 数据其实已落盘却被记为 "store.save fail"
+  //   (假失败刷屏)且无重试。治法: 锁类错误短退避重试(40/80/120/160ms); 终败再 copyFile
+  //   兜底, 兜底成功即返回(不抛)。消除假失败 + 防数据丢失。
+  let lastErr = null;
+  for (let i = 0; i < 5; i++) {
     try {
-      fs.copyFileSync(tmp, filePath);
-    } catch {}
-    // v2.4.4 · bug 5: 无论 rename / copy 成败 · 必清 .tmp · 防累 70+ 个孤儿
+      fs.renameSync(tmp, filePath);
+      return; // 真原子落盘成功
+    } catch (e) {
+      lastErr = e;
+      const code = e && e.code;
+      const transient = code === "EPERM" || code === "EBUSY" || code === "EACCES";
+      if (!transient || i === 4) break; // 非锁类错误 或 已是最后一次 → 跳出走兜底
+      _sleepSyncMs(40 * (i + 1)); // 退避后重试 (锁多在数十 ms 内自解)
+    }
+  }
+  // rename 终败 → copyFile 兜底覆写 (数据仍落盘)
+  try {
+    fs.copyFileSync(tmp, filePath);
     try {
       fs.unlinkSync(tmp);
     } catch {}
-    throw e;
+    return; // 兜底成功 · 数据已持久化 · 不抛 (消除假失败)
+  } catch (e2) {
+    // 两路均败 · 清 .tmp 防累孤儿 · 如实上抛 (v2.4.4 bug5)
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
+    throw lastErr || e2;
   }
 }
 // v2.4.4 · bug 5: 启动一次性清 ~/.wam 下 >1h 的孤儿 .tmp · 历史 atomicWrite 漏处理
@@ -3593,6 +3622,7 @@ function _loadSessionCacheFromDisk() {
 //   替换 openExternal 为守卫函数 · 凡 windsurf.com/account URL 静默吞掉 · 其余放行
 let _origOpenExternal = null; // 原始 openExternal 备份
 let _guardBlockCount = 0; // 守卫拦截计数 (诊断)
+let _openExternalGuardWarned = false; // v4.7.8 · 降级只记一次 (防 27× 刷屏)
 function _installOpenExternalGuard() {
   if (_openExternalGuardActive) return; // 已安装 · 幂等
   try {
@@ -3618,20 +3648,45 @@ function _installOpenExternalGuard() {
       // 非 auth URL → 放行 (如帮助页面等)
       return _origOpenExternal.call(vscode.env, uri);
     };
-    Object.defineProperty(vscode.env, "openExternal", {
-      value: _guard,
-      configurable: true,
-      writable: true,
-    });
-    _openExternalGuardActive = vscode.env.openExternal === _guard;
-    if (_openExternalGuardActive) {
+    // v4.7.8 · 本源修复(141 实测 Cannot redefine property ×27): 某些 Windsurf/VSCode
+    //   版本 vscode.env.openExternal 为「不可配置」访问器 → Object.defineProperty 必抛
+    //   "Cannot redefine property", 且每次模式切换都重试 → 刷屏且守卫从未装上。
+    //   治法: 先探属性描述符, 不可配置则跳过 defineProperty(避免抛错), 退而尝试可写赋值兜底;
+    //   仍装不上则静默降级且只记一次 (不影响核心功能)。
+    const desc = Object.getOwnPropertyDescriptor(vscode.env, "openExternal");
+    let installed = false;
+    if (!desc || desc.configurable) {
+      try {
+        Object.defineProperty(vscode.env, "openExternal", {
+          value: _guard,
+          configurable: true,
+          writable: true,
+        });
+        installed = vscode.env.openExternal === _guard;
+      } catch {}
+    }
+    if (!installed && (!desc || desc.writable || typeof desc.set === "function")) {
+      try {
+        vscode.env.openExternal = _guard; // 可写访问器/数据属性 → 直接赋值兜底
+        installed = vscode.env.openExternal === _guard;
+      } catch {}
+    }
+    _openExternalGuardActive = installed;
+    if (installed) {
       log("🛡️ openExternal guard: 已安装 · 切号窗口保护中");
     } else {
-      log("🛡️ openExternal guard: defineProperty 不粘 · 降级无守卫");
+      // 不可配置/不可写 · 静默降级 · 只记一次 (不再每次切换都抛错刷屏)
+      if (!_openExternalGuardWarned) {
+        log("🛡️ openExternal guard: 该 IDE openExternal 不可重定义 · 降级无守卫(不影响核心功能)");
+        _openExternalGuardWarned = true;
+      }
       _origOpenExternal = null;
     }
   } catch (e) {
-    log("🛡️ openExternal guard: 安装失败 · " + (e.message || e));
+    if (!_openExternalGuardWarned) {
+      log("🛡️ openExternal guard: 安装失败 · " + (e.message || e));
+      _openExternalGuardWarned = true;
+    }
     _origOpenExternal = null;
     _openExternalGuardActive = false;
   }
@@ -7719,6 +7774,8 @@ function buildHtml() {
         <button class="b sw" onclick="sw(${i})" title="手动切换(无限制)"${isBanned ? " disabled" : ""}${_wamMode === "official" ? ' disabled style="opacity:.3;cursor:not-allowed"' : ""}>&#9889;</button>
         <button class="b vf" onclick="vf(${i})" title="验证">&#128270;</button>
         <button class="b cp" onclick="cp(${i})" title="复制">&#128203;</button>
+        <button class="b rt" onclick="rt(${i})" title="路由官网→IDE内置浏览器(先切此号·反代自动注入登录·多实例标签)">&#128421;</button>
+        <button class="b sb" onclick="sb(${i})" title="系统默认浏览器打开官网(跳出IDE·多实例)">&#127760;</button>
         <button class="b wp" onclick="wp(${i})" title="水过无痕·一键清理本账号 Devin Cloud 全部痕迹(对话/知识库/剧本/密钥/Git)">&#127754;</button>
         <button class="b rm" onclick="rm(${i})" title="删除">&times;</button>
       </span>
@@ -8053,6 +8110,8 @@ function sw(i){_clickFb(event);send('switch',i);}
 function sk(i){_clickFb(event);const b=event&&event.target&&event.target.closest('.sk');const locked=!(b&&b.dataset.locked==='1');vscode.postMessage({type:'setSkipBatch',indices:_selectedFor(i),locked:locked});}
 function vf(i){_clickFb(event);send('verify',i);}
 function cp(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:ix.length>1?'copyAccounts':'copyAccount',index:i,indices:ix});}
+function rt(i){_clickFb(event);showToast('\u23F3 切此号·路由官网→IDE…');vscode.postMessage({type:'routeToIde',index:i});}
+function sb(i){_clickFb(event);vscode.postMessage({type:'openSysBrowser',index:i});}
 function rm(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1)vscode.postMessage({type:'removeBatch',indices:ix});else send('remove',i);}
 function copyAll(){vscode.postMessage({type:'copyAllAccounts'});}
 function setMode(m){vscode.postMessage({type:'setMode',mode:m});}
@@ -8415,6 +8474,9 @@ async function _dvRunPoll() {
       } catch {}
     }
     _broadcastMsg({ type: "devinRunStatus", items });
+    // v4.7.7 · 实时进展摘要 (每轮末聚合, 供面板/终报使用)
+    const prog = _dvProgressSummary();
+    if (prog.totalActive > 0) log("dv-progress: " + prog.totalRunning + " run / " + prog.totalAwaiting + " wait / " + prog.totalBlocked + " blocked / " + prog.totalStalled + " stall · health=" + prog.health);
     // v4.6.0 · 同步刷新对话追踪面板 (Devin Cloud 子板块随之更新 · 增量·不重建侧栏)
     try { _broadcastConvSection(); } catch {}
   } catch {}
@@ -8623,23 +8685,91 @@ function _dvBackupPanelHtml() {
   );
 }
 const _dvRunningMemo = new Map(); // email → Set(devinId) 上轮运行集合
+const _dvRunningDetail = new Map(); // devinId → session obj (上轮详情, 供终报使用)
+const _dvFinalReports = []; // 最近 N 份终报 (环形·最多 50 条, 供面板/导出)
+const DV_FINAL_REPORTS_MAX = 50;
+
 function _dvDetectFinished(email, running) {
   const key = email.toLowerCase();
   const nowRun = new Set(running.map((r) => r.devinId));
+  // 更新当轮详情快照 (为下轮终报提供 session 数据)
+  for (const r of running) { _dvRunningDetail.set(r.devinId, r); }
   const prevRun = _dvRunningMemo.get(key);
   if (prevRun) {
     for (const id of prevRun) {
       if (!nowRun.has(id)) {
         const st = _dvSeen.get(id);
+        const _no = _dvAccountNo(email);
+        const who = (_no ? "#" + _no + " " : "") + (devinCloud.getTag(email) || email.split("@")[0]);
+        // v4.7.7 · 终报: 对话离场时生成结构化终报 (善始且善成)
+        const detail = _dvRunningDetail.get(id);
+        const stalled = _dvStallSeen.has(id);
+        const report = devinCloud.conversationFinalReport(detail || { devinId: id, statusClass: st }, { stalled });
+        report.account = who;
+        _dvFinalReports.push(report);
+        if (_dvFinalReports.length > DV_FINAL_REPORTS_MAX) _dvFinalReports.shift();
         if (st !== "blocked") {
-          const _no = _dvAccountNo(email);
-          _notify("info", "[" + (_no ? "#" + _no + " " : "") + (devinCloud.getTag(email) || email.split("@")[0]) + "] 对话已完成");
+          const durTxt = report.durationMin !== null ? " · 耗时 " + report.durationMin + " min" : "";
+          const costTxt = report.cost !== null ? " · $" + report.cost.toFixed(2) : "";
+          _notify("info", "[" + who + "] 对话已完成 (" + report.outcome + durTxt + costTxt + ")");
         }
+        log("dv-final: " + id + " outcome=" + report.outcome + " dur=" + report.durationMin + "min cost=" + (report.cost !== null ? "$" + report.cost.toFixed(2) : "n/a") + " stalled=" + report.stalled);
+        _dvRunningDetail.delete(id); // 已离场·释放内存 (无为)
       }
     }
   }
+  // 清理已不活跃的详情缓存 (防内存泄漏)
+  for (const id of [..._dvRunningDetail.keys()]) { if (!nowRun.has(id)) _dvRunningDetail.delete(id); }
   _dvRunningMemo.set(key, nowRun);
 }
+
+// ═══ v4.7.7 · 对话最终模块·进展摘要 (实时聚合全活跃对话的进度指标) ═══
+//   道法自然·大制无割: 将分散于多账号多对话的实时状态汇聚为一份结构化摘要,
+//   供面板/日志/后续「终报」一致消费。每 _dvRunPoll 轮次末调用, 写入 _dvProgressCache。
+const _dvProgressCache = { ts: 0, summary: null };
+function _dvProgressSummary() {
+  const now = Date.now();
+  let totalActive = 0, totalRunning = 0, totalAwaiting = 0, totalBlocked = 0, totalStalled = 0;
+  const perAccount = [];
+  for (const [email, st] of _dvStatusAgg) {
+    totalActive += st.total || 0;
+    totalRunning += st.running || 0;
+    totalAwaiting += st.awaiting || 0;
+    totalBlocked += st.blocked || 0;
+    // 卡死计数: 从 _dvStallSeen 中统计该账号有多少对话已判卡死
+    let stalled = 0;
+    for (const item of (st.items || [])) {
+      // 无法直接用 devinId (statusAgg 不存), 以 title + cls 近似 (显示用·不做自动决策)
+      if (item.cls === "running" && _dvStallSeen.size > 0) stalled++; // 上界估计
+    }
+    totalStalled += stalled;
+    perAccount.push({
+      email,
+      no: st.no || 0,
+      tag: st.tag || "",
+      running: st.running || 0,
+      awaiting: st.awaiting || 0,
+      blocked: st.blocked || 0,
+      stalled,
+      total: st.total || 0,
+    });
+  }
+  const summary = {
+    ts: now,
+    totalActive,
+    totalRunning,
+    totalAwaiting,
+    totalBlocked,
+    totalStalled,
+    accountCount: perAccount.length,
+    perAccount,
+    health: totalBlocked === 0 && totalStalled === 0 ? "green" : (totalBlocked > 0 ? "red" : "amber"),
+  };
+  _dvProgressCache.ts = now;
+  _dvProgressCache.summary = summary;
+  return summary;
+}
+
 // 自动增量备份定时器
 function _dvStartAuto() {
   if (_dvAutoTimer) return;
@@ -9356,6 +9486,40 @@ async function handleWebviewMessage(msg) {
           _engine.rotating = false;
           _broadcastUI();
         }
+        break;
+      }
+      // ★ 归一 · 路由官网→IDE 内置浏览器 (手动·复用 dao-vsix 反向代理自动登录闭环)
+      //   先切到此号 → dao 反代随活跃号 auth1 路由官网 → simpleBrowser 内置标签 (多实例)
+      case "routeToIde": {
+        const i = msg.index;
+        if (i < 0 || i >= _store.accounts.length) return;
+        const a = _store.accounts[i];
+        try {
+          if (_switching && Date.now() - _switchingStartTime < 10000) {
+            _toast("正在切换中,稍后再点");
+          } else {
+            const r = await loginAccount(_store, i);
+            if (!r.ok) _toast("✗ 切号失败: " + (r.error || r.stage || ""));
+          }
+          // 复用 dao-vsix 命令: 经本地反代根路径路由官网, auth1 自动注入登录
+          try {
+            await vscode.commands.executeCommand("dao.devinCloudBrowser");
+          } catch {
+            await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
+          }
+          _toast("🖥 已路由官网→IDE · " + a.email.split("@")[0]);
+        } catch (e) {
+          _toast("✗ 路由失败: " + (e && e.message));
+        }
+        break;
+      }
+      // ★ 归一 · 系统默认浏览器打开官网 (跳出 IDE 框架·多实例: 每次点击新开标签)
+      case "openSysBrowser": {
+        const i = msg.index;
+        if (i < 0 || i >= _store.accounts.length) return;
+        const a = _store.accounts[i];
+        await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
+        _toast("🌐 系统浏览器已打开官网 · " + a.email.split("@")[0]);
         break;
       }
       case "verify": {

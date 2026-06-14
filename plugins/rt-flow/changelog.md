@@ -2,6 +2,52 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.7.8 (2026-06-14) · 141 生产机实测·两本源修复 (Phase L)
+
+> 反者道之动 · 重锚本源: 接入 141 台式机(64 号 / 69 会话·生产级监测)实部署, 从实时 wam.log
+> 挖出两类高频缺陷, 做根因永久修复(既有逻辑零破坏; 叠加于 v4.7.7 Phase K 健康度之上)。
+
+### 修复
+
+- **`atomicWrite` EPERM 本源修复(141 实测 ×81)**: Windows 上 `wam-state.json` 被瞬时锁
+  (杀软扫描 / 并发读)时 `fs.renameSync` 抛 `EPERM/EBUSY/EACCES`。旧实现 catch 内即便
+  `copyFileSync` 兜底成功也无条件 `throw` → 数据其实已落盘却被记为 `store.save fail`
+  (假失败刷屏)且无重试。治法: 锁类错误短退避重试(40/80/120/160ms · `Atomics.wait`
+  同步睡眠, 忙等兜底); 终败再 copyFile 兜底, 兜底成功即返回不抛。消除假失败 + 防数据丢失。
+- **`openExternal` 守卫 "Cannot redefine property" 本源修复(141 实测 ×27)**: 某些
+  Windsurf / VSCode 版本 `vscode.env.openExternal` 为「不可配置」访问器,
+  `Object.defineProperty` 必抛, 且每次模式切换都重试 → 刷屏且守卫从未装上。治法:
+  先探属性描述符, 不可配置则跳过 defineProperty(避免抛错), 退而尝试可写赋值兜底;
+  仍装不上则静默降级且只记一次(不影响核心功能)。
+
+### 实测 (141 生产机 · 真账号真会话)
+
+- 部署: v4.7.8 VSIX 经 DAO Bridge 传输(sha256 校验一致)装入活动扩展目录
+  `~/.devin/extensions`, 重载窗口热加载。
+- 回归: 单测 **全绿**; `atomicWrite` 五路弹性单测全绿。
+
+## v4.7.7 (2026-06-14) · 对话最终模块·终报+进展+健康度 (Phase K)
+
+> 道法自然·善始且善成: 对话有始有终, 终报如实记载。三盗既宜, 三才既安——余额/卡死/阻塞三维度归一健康度。
+
+### 新增
+
+- 纯函数(可单测·`devin_cloud.js`):
+  - `conversationFinalReport(sess, opts)` → 结构化终报: outcome 分类(success/stalled/blocked/cap_exceeded/archived/unknown) + 时长(毫秒/分钟) + 成本 + 卡死标记。空输入→各字段 null(安全·不臆造)。
+  - `healthScore(inputs)` → 综合健康分 0-100: 余额权 40 + 卡死权 30 + 阻塞权 30; tier: green(≥80)/amber(≥50)/red(<50)。三盗既宜三才既安。
+- `_dvProgressSummary()`: 每 `_dvRunPoll` 轮次末聚合全活跃对话的实时进度指标(running/awaiting/blocked/stalled 计数 + health 三色灯), 写入 `_dvProgressCache`, 有活跃对话时输出 `dv-progress:` 日志行。
+- `_dvDetectFinished` 增强: 对话离场时调用 `conversationFinalReport` 生成终报, 存入 `_dvFinalReports`(环形 50 条); 通知消息附 outcome + 耗时 + 成本; `dv-final:` 日志行记载全字段。
+- `_dvRunningDetail` Map: 缓存上轮运行中会话详情(含 createdAt 等), 供终报计算时长; 离场后自动释放(无为·不占内存)。
+
+### 守恒
+
+- 既有 `_dvMaybeNotify` / `_dvStallCheck` / `_dvLowBalanceCheck` / `_dvConvCapTick` 逻辑一字未改。
+- 新增函数均为纯叠加(不改原有行为); 终报/进展/健康度缺数据时一律返回 null/safe(不臆造成功铁律不变)。
+
+### 验证
+
+- `node -c` 双文件通过; 单测 39→**52 全绿**(新增 13 项: 终报 7 + 健康度 6·无回归)。
+
 ## v4.7.6 (2026-06-14) · 实测复盘修正·真中停端点 + 版本号归一 (Phase J)
 
 > 反者道之动·重新锚定本源: v4.7.5 实测中暴露并修正两处缺陷, 既有逻辑零改动。
