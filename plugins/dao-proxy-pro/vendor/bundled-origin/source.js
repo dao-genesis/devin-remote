@@ -4493,6 +4493,9 @@ function _pbDropProBadge(buf, stats) {
   const out = [];
   let i = 0;
   const n = buf.length;
+  let _frameTpl = null,
+    _frameField = -1,
+    _frameMeta = null; // ★ v9.9.292 · 本帧模型项模板(注入用)
   while (i < n) {
     let tag;
     [tag, i] = _pbReadVarint(buf, i);
@@ -4514,11 +4517,12 @@ function _pbDropProBadge(buf, stats) {
       // ★ v9.9.264 · 模型项(含徽标者) → 去 field4 Pro锁 + 去徽标 · 否则常规递归
       const _isModel = _pbIsModelEntry(sub);
       // ★ v9.9.270 · 活捕: 模型项真名 → 实时映射右侧 Cascade 可选模型
+      let _meta = null;
       if (_isModel) {
         try {
           stats.models = stats.models || [];
-          const meta = _pbExtractModelEntry(sub);
-          if (meta) stats.models.push(meta);
+          _meta = _pbExtractModelEntry(sub);
+          if (_meta) stats.models.push(_meta);
         } catch {}
       }
       const newsub = _isModel
@@ -4526,6 +4530,12 @@ function _pbDropProBadge(buf, stats) {
         : _pbParseOk(sub) && sub.length > 0
           ? _pbDropProBadge(sub, stats)
           : sub;
+      // ★ v9.9.292 · 取本帧首个模型项(已解锁)为注入模板
+      if (_isModel && stats && stats.inject && _frameField < 0) {
+        _frameTpl = newsub;
+        _frameField = field;
+        _frameMeta = _meta;
+      }
       out.push(_pbTag(field, 2), _pbEncVarint(newsub.length), newsub);
     } else if (wt === 5) {
       out.push(_pbTag(field, 5), buf.slice(i, i + 4));
@@ -4537,6 +4547,43 @@ function _pbDropProBadge(buf, stats) {
       // 未知 wire type · 不可解 · 原样返回保安全
       return buf;
     }
+  }
+  // ★ v9.9.292 · 容器级注入: 本帧含模型项 → 以模板克隆补全量目录之缺失模型
+  //   仅在含模型项之容器帧施行(深度优先·最内层先完成) · 全局一次 (stats._injected)
+  if (
+    stats &&
+    stats.inject &&
+    !stats._injected &&
+    _frameTpl &&
+    _frameField >= 0 &&
+    Array.isArray(stats.catalog) &&
+    stats.catalog.length
+  ) {
+    try {
+      const T = _pbExtractModelEntry(_frameTpl) || _frameMeta;
+      if (T && T.uid) {
+        const _nu = (s) =>
+          String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        const existing = new Set((stats.models || []).map((m) => _nu(m.uid)));
+        let cnt = 0;
+        for (const m of stats.catalog) {
+          if (!m.uid || existing.has(_nu(m.uid))) continue;
+          const map = Object.create(null);
+          map[T.uid] = m.uid;
+          if (T.label && T.label !== T.uid) map[T.label] = m.label || m.uid;
+          if (T.familyUid && m.famUid) map[T.familyUid] = m.famUid;
+          if (T.familyLabel && T.familyLabel !== T.label && m.famLabel)
+            map[T.familyLabel] = m.famLabel;
+          const clone = _pbCloneSwapStrings(_frameTpl, map);
+          if (!_pbParseOk(clone) || clone.length === 0) continue;
+          out.push(_pbTag(_frameField, 2), _pbEncVarint(clone.length), clone);
+          existing.add(_nu(m.uid));
+          cnt++;
+        }
+        stats._injected = true;
+        stats.injected_count = cnt;
+      }
+    } catch {}
   }
   return Buffer.concat(out);
 }
@@ -4756,15 +4803,101 @@ function _buildLiveFamilies(models) {
   return order.map((k) => fams.get(k));
 }
 
+// ═══════════════════════════════════════════════════════════
+// ★ v9.9.292 · 全量目录注入 · 执大象天下往 · 道法自然·无为而无不为
+//   云端只下发试用账号可见之少数模型项(proto) → 右侧选择器即只见此数
+//   损之又损治锁(去徽标/去field4)仍只解"已下发"者 · 未下发者无从显
+//   今法: 学云端所送之"模型项"为模板 → 缺者(静态全量目录)克隆补之
+//     仅换 uid/label/族名四串 · 余字段(定价/能力/图标)随模板 · 形神俱备可选
+//   一切失败(模板缺/克隆不合法/校验不过) → 原样回退基线 · 利而不害
+// ═══════════════════════════════════════════════════════════
+const _INJECT_CATALOG_FILE = path.join(__dirname, "_inject_full_catalog");
+function _isCatalogInjectEnabled() {
+  try {
+    const v = fs.readFileSync(_INJECT_CATALOG_FILE, "utf8").trim();
+    return v !== "0" && v !== "false" && v !== "disabled";
+  } catch {
+    return true; // 默认启用
+  }
+}
+// 静态全量目录 → 注入所需四元组 {uid,label,famUid,famLabel}
+function _catalogInjectionList() {
+  const cat = _fullModelCatalog || _loadFullModelCatalog();
+  if (!Array.isArray(cat)) return [];
+  return cat
+    .map((m) => ({
+      uid: (m && (m.modelUid || (m.modelInfo && m.modelInfo.modelUid))) || "",
+      label: (m && (m.label || m.modelUid)) || "",
+      famUid: (m && m.modelInfo && m.modelInfo.modelFamilyUid) || "",
+      famLabel:
+        (m && m.modelFamilyMetadata && m.modelFamilyMetadata.modelFamilyLabel) ||
+        (m && m.label) ||
+        "",
+    }))
+    .filter((m) => m.uid);
+}
+// 递归克隆 proto · 叶子字符串完全等于 map 键者换为 map 值 · 重建各级长度
+//   只对"可打印字符串叶子"做等值替换; 嵌套子消息递归; 其余原样 (利而不害)
+function _pbCloneSwapStrings(buf, map) {
+  const out = [];
+  let i = 0;
+  const n = buf.length;
+  while (i < n) {
+    let tag;
+    [tag, i] = _pbReadVarint(buf, i);
+    const field = tag >> 3;
+    const wt = tag & 7;
+    if (wt === 0) {
+      let v;
+      [v, i] = _pbReadVarint(buf, i);
+      out.push(_pbTag(field, 0), _pbEncVarint(v));
+    } else if (wt === 2) {
+      let ln;
+      [ln, i] = _pbReadVarint(buf, i);
+      const sub = buf.slice(i, i + ln);
+      i += ln;
+      const s = sub.toString("utf8");
+      const printable = ln > 0 && ln < 200 && /^[\x20-\x7e]+$/.test(s);
+      if (printable && Object.prototype.hasOwnProperty.call(map, s)) {
+        const rep = Buffer.from(map[s], "utf8");
+        out.push(_pbTag(field, 2), _pbEncVarint(rep.length), rep);
+      } else if (!printable && ln > 1 && _pbParseOk(sub)) {
+        const cs = _pbCloneSwapStrings(sub, map);
+        out.push(_pbTag(field, 2), _pbEncVarint(cs.length), cs);
+      } else {
+        out.push(_pbTag(field, 2), _pbEncVarint(sub.length), sub);
+      }
+    } else if (wt === 5) {
+      out.push(_pbTag(field, 5), buf.slice(i, i + 4));
+      i += 4;
+    } else if (wt === 1) {
+      out.push(_pbTag(field, 1), buf.slice(i, i + 8));
+      i += 8;
+    } else {
+      return buf;
+    }
+  }
+  return Buffer.concat(out);
+}
+
 // 入口: 对 gzip(proto) GetUserStatus body 做真解锁 · 失败则原样返回 (利而不害)
 function _unlockUserStatusBody(bodyBuf, contentEncoding, rid) {
   try {
     const isGz = bodyBuf.length > 2 && bodyBuf[0] === 0x1f && bodyBuf[1] === 0x8b;
     const data = isGz ? zlib.gunzipSync(bodyBuf) : bodyBuf;
+    // ★ 临时·一次性捕获原始 GetUserStatus proto (存在 _dump_us 旗标时) · 供离线析构
+    try {
+      if (fs.existsSync(path.join(__dirname, "_dump_us"))) {
+        fs.writeFileSync(path.join(__dirname, "_us_dump.bin"), data);
+        fs.unlinkSync(path.join(__dirname, "_dump_us"));
+        log(`#${rid} [dump] GetUserStatus proto 落盘 ${data.length}B`);
+      }
+    } catch {}
     if (data.indexOf(_PRO_BADGE) < 0) return null; // 无锁可解
+    // 一遍·基线解锁(去徽标+去field4) · 不注入 · 必有效则用之
     const stats = { dropped: 0, unlock4: 0, models: [] };
-    const out = _pbDropProBadge(data, stats);
-    if (stats.dropped === 0 || !_pbParseOk(out)) return null;
+    const out1 = _pbDropProBadge(data, stats);
+    if (stats.dropped === 0 || !_pbParseOk(out1)) return null;
     // ★ v9.9.270 · 活捕落库: 模型项真名 → 实时家族归一 (右侧能选什么·左侧映什么)
     try {
       if (stats.models && stats.models.length) {
@@ -4783,16 +4916,39 @@ function _unlockUserStatusBody(bodyBuf, contentEncoding, rid) {
         };
       }
     } catch {}
+    // ★ v9.9.292 · 二遍·全量目录注入 (独立 pass·克隆模板补缺) · 校验通过方采用·否则回退 out1
+    let out = out1;
+    let injectedCount = 0;
+    try {
+      if (_isCatalogInjectEnabled()) {
+        const catalog = _catalogInjectionList();
+        if (catalog.length) {
+          const s2 = { dropped: 0, unlock4: 0, models: [], inject: true, catalog };
+          const out2 = _pbDropProBadge(data, s2);
+          if (
+            s2.injected_count > 0 &&
+            _pbParseOk(out2) &&
+            out2.length > out1.length
+          ) {
+            out = out2;
+            injectedCount = s2.injected_count;
+          }
+        }
+      }
+    } catch (e) {
+      log(`#${rid} [全量注入] 异常→回退基线: ${e.message}`);
+    }
     const finalBuf = isGz ? zlib.gzipSync(out) : out;
     _unlockStats.calls += 1;
     _unlockStats.dropped_total += stats.dropped;
     _unlockStats.last_dropped = stats.dropped;
     _unlockStats.unlock4_total += stats.unlock4 || 0;
     _unlockStats.last_unlock4 = stats.unlock4 || 0;
+    _unlockStats.last_injected = injectedCount;
     _unlockStats.last_at = Date.now();
     _unlockStats.last_bytes = `${data.length}->${out.length} gz ${bodyBuf.length}->${finalBuf.length}`;
     log(
-      `#${rid} [真解锁] GetUserStatus 去 Pro锁(field4) ${stats.unlock4} 项 + 去徽标 ${stats.dropped} 项 · ${data.length}→${out.length}B (gz ${bodyBuf.length}→${finalBuf.length})`,
+      `#${rid} [真解锁] GetUserStatus 去 Pro锁(field4) ${stats.unlock4} 项 + 去徽标 ${stats.dropped} 项 + 注入全量 ${injectedCount} 项 · ${data.length}→${out.length}B (gz ${bodyBuf.length}→${finalBuf.length})`,
     );
     return finalBuf;
   } catch (e) {
@@ -6182,4 +6338,19 @@ module.exports = {
     return had;
   },
   _runCli,
+  // ★ v9.9.292 · 测试用内部导出 (生产无害·便于离线校验注入逻辑)
+  _test: {
+    _pbDropProBadge,
+    _unlockUserStatusBody,
+    _catalogInjectionList,
+    _pbExtractModelEntry,
+    _pbCloneSwapStrings,
+    _pbParseOk,
+    _pbIsModelEntry,
+    _pbStripModelEntry,
+    _pbTag,
+    _pbEncVarint,
+    _PRO_BADGE,
+    _loadFullModelCatalog,
+  },
 };
