@@ -128,7 +128,8 @@ function scoreOf(quota) {
   return quota.balance;
 }
 
-// rotate: 选出当前账号之外评分最高者 (强者道之用·择优轮转)
+// rotate: 切到评分最高的账号 (择优轮转)。当前账号已是最优(或并列最优)则不切 ——
+// 不能像旧逻辑那样"排除当前账号取次高", 否则当前已最优时反会切到更差的账号。
 async function rotate(reason) {
   const st = await getState();
   if (st.accounts.length === 0) return { ok: false, error: "账号池为空" };
@@ -138,8 +139,14 @@ async function rotate(reason) {
   const ranked = fresh.accounts
     .map((a) => ({ email: lc(a.email), score: scoreOf(fresh.quota[lc(a.email)]) }))
     .sort((x, y) => y.score - x.score);
-  const best = ranked.find((r) => r.email !== fresh.active) || ranked[0];
+  const best = ranked[0];
   if (!best) return { ok: false, error: "无可切换账号" };
+  const activeKey = lc(fresh.active || "");
+  const activeScore = activeKey ? scoreOf(fresh.quota[activeKey]) : -Infinity;
+  // 仅当存在「严格更优」的账号时才切, 避免在并列最优间反复横跳
+  if (best.score <= activeScore) {
+    return { ok: true, switchedTo: activeKey, reason: reason || "manual", ranked, noop: true };
+  }
   const res = await activate(best.email);
   return { ok: res.ok, switchedTo: best.email, reason: reason || "manual", ranked };
 }

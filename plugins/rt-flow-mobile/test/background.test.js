@@ -1,16 +1,30 @@
 "use strict";
 // background.js 关键逻辑单测 (零网络, vm 沙箱 + chrome mock): node test/background.test.js
-// 重点回归: applyDnr 的 DNR 规则必须用 initiatorDomains 限定为「app.devin.ai 页面发起」,
-// 否则扩展自身 service worker 的 getBilling fetch 会被活跃账号鉴权头覆盖 → 额度串号。
+// 回归 1: applyDnr 的 DNR 规则必须用 initiatorDomains 限定为「app.devin.ai 页面发起」,
+//         否则扩展自身 service worker 的 getBilling fetch 会被活跃账号鉴权头覆盖 → 额度串号。
+// 回归 2: rotate 必须切到「全局评分最高」的账号; 当前账号已是最优时不切(更不能切到更差者)。
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
 let captured = null;
+let store = {}; // 有状态 storage (rotate 测试需要)
 const chrome = {
   declarativeNetRequest: { updateDynamicRules: (o) => { captured = o; return Promise.resolve(); } },
-  storage: { local: { get: (k, cb) => cb({}), set: (o, cb) => cb && cb() } },
+  storage: {
+    local: {
+      get: (keys, cb) => {
+        const out = {};
+        const ks = Array.isArray(keys) ? keys : (typeof keys === "string" ? [keys] : Object.keys(store));
+        for (const k of ks) if (k in store) out[k] = store[k];
+        cb(out);
+      },
+      set: (o, cb) => { Object.assign(store, o); cb && cb(); },
+      clear: (cb) => { store = {}; cb && cb(); },
+    },
+    onChanged: { addListener: () => {} },
+  },
   tabs: { query: () => Promise.resolve([]), sendMessage: () => Promise.resolve() },
   alarms: { clear: () => Promise.resolve(), create: () => {}, onAlarm: { addListener: () => {} } },
   runtime: { onMessage: { addListener: () => {} }, onInstalled: { addListener: () => {} }, onStartup: { addListener: () => {} } },
@@ -30,11 +44,10 @@ function t(name, fn) {
 }
 
 (async () => {
-  console.log("applyDnr (DNR 注入·防额度串号):");
-
   // captured 来自 vm 沙箱 (Array 原型异于宿主域), JSON 归一化后再断言
   const norm = (x) => JSON.parse(JSON.stringify(x));
 
+  console.log("applyDnr (DNR 注入·防额度串号):");
   await ctx.applyDnr({ auth1: "auth1_opaque_token", orgId: "org-abc" });
   const rule = captured && captured.addRules && norm(captured.addRules[0]);
 
@@ -56,6 +69,40 @@ function t(name, fn) {
   t("无 auth 时清除规则 (不残留旧账号鉴权头)", () => {
     assert.deepStrictEqual(cleared.removeRuleIds, [1001]);
     assert.deepStrictEqual(cleared.addRules, []);
+  });
+
+  console.log("\nrotate (择优轮转·防切到更差账号):");
+  // 用受控桩替掉网络: refreshQuota 不动(直接用预置 quota), activate 仅记录并写 active
+  let activated = [];
+  const lc = (s) => String(s || "").toLowerCase();
+  ctx.refreshQuota = async () => ({ ok: true });
+  ctx.activate = async (email) => { activated.push(lc(email)); store.active = lc(email); return { ok: true }; };
+  const seed = (active) => {
+    store = {
+      accounts: [{ email: "low@x.com" }, { email: "high@x.com" }],
+      authCache: {}, settings: {},
+      active,
+      quota: { "low@x.com": { balance: 0, status: "ok" }, "high@x.com": { balance: 2.99, status: "ok" } },
+    };
+    activated = [];
+  };
+
+  // 关键回归: 活跃账号已是最高余额时, 不能切到更差的账号 (旧逻辑会切到 low@x.com)
+  seed("high@x.com");
+  let r = norm(await ctx.rotate("test"));
+  t("当前已是最优 → 不切 (noop), 不会切到更差账号", () => {
+    assert.strictEqual(r.switchedTo, "high@x.com");
+    assert.strictEqual(r.noop, true);
+    assert.deepStrictEqual(activated, []);
+  });
+
+  // 活跃账号是低余额时, 切到全局最优 high@x.com
+  seed("low@x.com");
+  r = norm(await ctx.rotate("test"));
+  t("活跃账号余额更低 → 切到全局最优账号", () => {
+    assert.strictEqual(r.switchedTo, "high@x.com");
+    assert.deepStrictEqual(activated, ["high@x.com"]);
+    assert.strictEqual(r.ranked[0].email, "high@x.com");
   });
 
   console.log("\n" + pass + " passed, " + fail + " failed");
