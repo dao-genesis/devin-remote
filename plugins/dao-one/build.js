@@ -80,6 +80,7 @@ function buildFlow() {
   const files = [
     "extension.js",
     "devin_cloud.js",
+    "devin_web.js",
     "devin_git.js",
     "dao_stuck.js",
     "_vscdb_helper.py",
@@ -91,7 +92,7 @@ function buildFlow() {
       copyFile(path.join(srcRoot, f), path.join(dst, f));
   if (fs.existsSync(path.join(srcRoot, "media")))
     copyDir(path.join(srcRoot, "media"), path.join(dst, "media"));
-  log("vendor-flow: copied extension.js + devin_cloud/git/stuck + py helpers + media");
+  log("vendor-flow: copied extension.js + devin_cloud/web/git/stuck + py helpers + media");
 }
 
 // ── ④ dao-bridge (cf-daohub/dao-bridge-ext): 内网穿透独立大块 ──────────────────
