@@ -4399,6 +4399,8 @@ async function devinDedupeOrg(orgId: string, auth1: string): Promise<{ ok: boole
             for (let i = kl.learnings.length - 1; i >= 0; i--) {
                 const k = kl.learnings[i];
                 if (!k || !k.name) continue;
+                // 帛书·「知止不殆」: Devin 系统默认条目(is_default_note / can_write=false)不可删, 跳过 → 计数诚实
+                if (k.is_default_note === true || k.can_write === false) { seen.add(k.name); continue; }
                 if (seen.has(k.name)) { if (k.id) { try { await devinDeleteKnowledge(orgId, String(k.id), auth1); knowledgeRemoved++; } catch { /* 守柔 */ } } }
                 else seen.add(k.name);
             }
@@ -4412,12 +4414,32 @@ async function devinDedupeOrg(orgId: string, auth1: string): Promise<{ ok: boole
             for (let i = pl.playbooks.length - 1; i >= 0; i--) {
                 const pb = pl.playbooks[i];
                 if (!pb || !pb.title) continue;
+                // 社区/共享模板(access=community)非本 org 所有, 删不动 → 跳过, 不误计
+                if (pb.access === 'community') { seen.add(pb.title); continue; }
                 if (seen.has(pb.title)) { if (pb.id) { try { await devinDeletePlaybook(orgId, String(pb.id), auth1); playbooksRemoved++; } catch { /* 守柔 */ } } }
                 else seen.add(pb.title);
             }
         }
     } catch { /* 守柔 */ }
     return { ok: anyList, knowledgeRemoved, playbooksRemoved };
+}
+
+// 老旧异名 dao 知识 — 历史版本以不同命名注入的同源残留(规则/连接信息),
+// 收敛为唯二(道法自然准则 + 内网穿透板块)时一并清除 → 老旧知识库覆盖成唯二。
+const DAO_LEGACY_KB_NAMES = ['Dao Workspace Server', '道法约束·帛书规则'];
+async function devinCleanLegacyDaoKnowledge(orgId: string, auth1: string): Promise<number> {
+    let removed = 0;
+    try {
+        const kl = await devinListKnowledge(orgId, auth1);
+        if (kl.ok && Array.isArray(kl.learnings)) {
+            for (const k of kl.learnings) {
+                if (k && k.name && DAO_LEGACY_KB_NAMES.indexOf(k.name) >= 0 && k.id) {
+                    try { await devinDeleteKnowledge(orgId, String(k.id), auth1); removed++; } catch { /* 守柔 */ }
+                }
+            }
+        }
+    } catch { /* 守柔 */ }
+    return removed;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4995,9 +5017,10 @@ async function devinFullInject(): Promise<boolean> {
         }
         // Upsert Secret (先删后建 → URL永远不stale)
         const sec = await devinUpsertSecret(ws.devinOrgId, 'DAO_TOKEN', token, ws.devinAuth1);
-        // Upsert Knowledge
-        const kb = buildDevinKnowledge(url, token);
-        const kn = await devinUpsertKnowledge(ws.devinOrgId, 'Dao Workspace Server', kb, 'When user asks to operate on local machine, execute commands locally, read/write local files, or mentions local environment or Dao', ws.devinAuth1);
+        // 唯二·知识②内网穿透板块 — 用动态生成的 DAO Bridge 文档(含连接URL/Token/API), 与种入态同名同触发
+        // → 不再另立 'Dao Workspace Server' 异名残条, 知识库收敛为唯二规范条目。
+        const kb = bridgeGenerateCloudMd();
+        const kn = await devinUpsertKnowledge(ws.devinOrgId, DAO_BRIDGE_KB_NAME, kb, DAO_BRIDGE_KB_TRIGGER, ws.devinAuth1);
         // Upsert Playbook
         const pb = buildDevinPlaybook(url, token);
         const pl = await devinUpsertPlaybook(ws.devinOrgId, 'Operate Local Environment via Dao', pb, ws.devinAuth1);
@@ -5007,13 +5030,15 @@ async function devinFullInject(): Promise<boolean> {
         if (rulesText) {
             const rk = await devinUpsertKnowledge(
                 ws.devinOrgId,
-                '道法约束·帛书规则',
+                DAO_RULES_KB_NAME,
                 rulesText,
-                'Always — 你本无名 名可名也 非恒名也 所遵从之一切均来自下述帛书《老子》道藏《阴符经》',
+                DAO_RULES_KB_TRIGGER,
                 ws.devinAuth1,
             );
             rulesOk = rk.ok;
         }
+        // 老旧异名残条收敛 → 唯二 (覆盖既有 org 历史注入)
+        try { await devinCleanLegacyDaoKnowledge(ws.devinOrgId, ws.devinAuth1); } catch { /* 守柔 */ }
         // Inject GitHub PAT if available
         const cfg = getDaoConfig();
         const githubPat = (cfg as any).githubPat || process.env.DAO_GITHUB_PAT || '';
@@ -5109,6 +5134,10 @@ function saveInjectProfile(p: InjectProfile): void {
 }
 const DAO_BRIDGE_KB_NAME = 'DAO Bridge 内网穿透远程操作文档';
 const DAO_BRIDGE_KB_SENTINEL = '__DAO_BRIDGE_CLOUD_MD__';
+const DAO_BRIDGE_KB_TRIGGER = '涉及操作用户本地或远程电脑相关内容时触发';
+// 唯二·知识① 道法自然(帛书老子+阴符经) — 与种入态/一键注入同名同触发, 收敛为单一规范条目
+const DAO_RULES_KB_NAME = '道法自然准则';
+const DAO_RULES_KB_TRIGGER = '所有对话均触发 道法自然';
 // 道法自然 · 默认种入: 每账号自动注入《道德经·阴符经》知识 + 剧本 + 内网穿透MD
 // 守柔: 仅首次(daoSeeded)种入; 用户此后可在面板自由增删/关闭
 function daoSeedDefaultInjectProfile(): void {
@@ -5120,12 +5149,12 @@ function daoSeedDefaultInjectProfile(): void {
         const laozi = getDaoAsset('laozi.txt');
         const yinfu = getDaoAsset('yinfujing.txt');
         // 知识① 道法自然(帛书老子+阴符经) — 所有对话均触发
-        if (combined && !p.knowledge.some(k => k.name === '道法自然准则')) {
-            p.knowledge.push({ name: '道法自然准则', body: combined, trigger: '所有对话均触发 道法自然' });
+        if (combined && !p.knowledge.some(k => k.name === DAO_RULES_KB_NAME)) {
+            p.knowledge.push({ name: DAO_RULES_KB_NAME, body: combined, trigger: DAO_RULES_KB_TRIGGER });
         }
         // 知识② 内网穿透云端MD — 涉及操作本地/远程电脑时触发 (注入时实时生成最新)
         if (!p.knowledge.some(k => k.name === DAO_BRIDGE_KB_NAME)) {
-            p.knowledge.push({ name: DAO_BRIDGE_KB_NAME, body: DAO_BRIDGE_KB_SENTINEL, trigger: '涉及操作用户本地或远程电脑相关内容时触发' });
+            p.knowledge.push({ name: DAO_BRIDGE_KB_NAME, body: DAO_BRIDGE_KB_SENTINEL, trigger: DAO_BRIDGE_KB_TRIGGER });
         }
         // 剧本①合订 ②帛书老子 ③阴符经 — 全部默认自动注入
         if (combined && !p.playbooks.some(x => x.title === '道法自然 · 帛书《老子》·道藏《阴符经》')) {
@@ -5208,6 +5237,8 @@ async function runInjectProfileSelfLoop(): Promise<void> {
     await applyInjectProfileToOrg(ws.devinOrgId, ws.devinAuth1, p);
     // 2.5 顺手去重: 清理同名知识/同标题剧本残留(旧版本不同命名批量注入累积) — 默认开, 用户可关
     if (getInjectAutoDedupe()) { try { await devinDedupeOrg(ws.devinOrgId, ws.devinAuth1); } catch { /* 守柔 */ } }
+    // 2.6 老旧异名 dao 知识收敛 → 唯二(道法自然准则 + 内网穿透板块)
+    try { await devinCleanLegacyDaoKnowledge(ws.devinOrgId, ws.devinAuth1); } catch { /* 守柔 */ }
     // 3. 记录 lastInjectedOrg → 下次切换据此清理
     p.lastInjectedOrg = ws.devinOrgId;
     saveInjectProfile(p);
