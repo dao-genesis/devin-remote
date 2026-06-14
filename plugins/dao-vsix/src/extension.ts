@@ -1402,6 +1402,11 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         case '/api/devin/inject': {
             return await devinFullInject();
         }
+        case '/api/devin/dedupe': {
+            // 去重: 同名知识/同标题剧本只留一份(删旧版本残留) — 帛书·「少则得·多则惑」
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            return await devinDedupeOrg(ws.devinOrgId, ws.devinAuth1);
+        }
         case '/api/devin/wss-url': {
             if (!ws.devinSessionToken) return { ok: false, error: 'no session token' };
             return { ok: true, wssUrl: devinBuildWssUrl(ws.devinSessionToken) };
@@ -3376,6 +3381,10 @@ async function setAccountSyncMode(mode: 'auto' | 'manual'): Promise<void> {
 function getInjectAutoCleanup(): boolean {
     try { return vscode.workspace.getConfiguration('dao').get<boolean>('injectAutoCleanup', true) !== false; } catch { return true; }
 }
+// 自动注入自循环: 应用期望态后是否顺手去重(同名知识/同标题剧本只留一份, 清旧版本残留) — 默认 true, 用户可关
+function getInjectAutoDedupe(): boolean {
+    try { return vscode.workspace.getConfiguration('dao').get<boolean>('injectAutoDedupe', true) !== false; } catch { return true; }
+}
 
 // ═══════════════════════════════════════════════════════════
 // 江海所以能为百谷王者，以其善下之 — 插件本体对本机 Agent 暴露
@@ -4368,6 +4377,40 @@ async function devinUpsertPlaybook(orgId: string, title: string, body: string, a
     return await devinInjectPlaybook(orgId, title, body, auth1);
 }
 
+// 去重 · 帛书·「少则得·多则惑」— 同名知识/同标题剧本只保留一份(留最后一条, 删其余)。
+// 清理旧版本插件累积的同名残留(如早期不同命名的批量注入)。按 name/title 精确分组, 不跨名误删。
+async function devinDedupeOrg(orgId: string, auth1: string): Promise<{ ok: boolean; knowledgeRemoved: number; playbooksRemoved: number }> {
+    let knowledgeRemoved = 0, playbooksRemoved = 0, anyList = false;
+    try {
+        const kl = await devinListKnowledge(orgId, auth1);
+        if (kl.ok && Array.isArray(kl.learnings)) {
+            anyList = true;
+            const seen = new Set<string>();
+            // 逆序遍历: 保留最后出现的一条, 删除更早的同名条目
+            for (let i = kl.learnings.length - 1; i >= 0; i--) {
+                const k = kl.learnings[i];
+                if (!k || !k.name) continue;
+                if (seen.has(k.name)) { if (k.id) { try { await devinDeleteKnowledge(orgId, String(k.id), auth1); knowledgeRemoved++; } catch { /* 守柔 */ } } }
+                else seen.add(k.name);
+            }
+        }
+    } catch { /* 守柔 */ }
+    try {
+        const pl = await devinListPlaybooks(orgId, auth1);
+        if (pl.ok && Array.isArray(pl.playbooks)) {
+            anyList = true;
+            const seen = new Set<string>();
+            for (let i = pl.playbooks.length - 1; i >= 0; i--) {
+                const pb = pl.playbooks[i];
+                if (!pb || !pb.title) continue;
+                if (seen.has(pb.title)) { if (pb.id) { try { await devinDeletePlaybook(orgId, String(pb.id), auth1); playbooksRemoved++; } catch { /* 守柔 */ } } }
+                else seen.add(pb.title);
+            }
+        }
+    } catch { /* 守柔 */ }
+    return { ok: anyList, knowledgeRemoved, playbooksRemoved };
+}
+
 // ═══════════════════════════════════════════════════════════
 // Session · 帛书·四十二「道生一·一生二·二生三·三生万物」
 // Create / List / Detail / Messages → 对话记录MD下载
@@ -4378,12 +4421,8 @@ const DEVIN_FRONTEND_TO_BACKEND: Record<string, string> = {
     devin_lite: 'devin-lite', 'devin-gpt-5-5': 'devin-gpt-5-5', 'devin-opus-4-7': 'opus-4-7',
 };
 
-async function devinCreateSession(orgId: string, userMessage: string, auth1: string, opts?: any): Promise<{ ok: boolean; devinId?: string; isNewSession?: boolean; createdAt?: string; raw?: any }> {
+async function devinCreateSession(orgId: string, userMessage: string, auth1: string, opts?: any): Promise<{ ok: boolean; devinId?: string; isNewSession?: boolean; createdAt?: string; raw?: any; status?: number; error?: string }> {
     opts = opts || {};
-    // 帛书·「反者道之动也」— Devin API需要cog_ API Key
-    // api.devin.ai/v1/ 是正确的API端点（非app.devin.ai/api/）
-    const useV1Api = (ws.devinApiKey || '').startsWith('cog_');
-    const apiKey = useV1Api ? ws.devinApiKey : auth1;
     const payload: any = { prompt: userMessage };
     if (opts.idempotencyKey) payload.idempotency_key = opts.idempotencyKey;
     if (opts.playbookId) payload.playbook_id = opts.playbookId;
@@ -4391,15 +4430,31 @@ async function devinCreateSession(orgId: string, userMessage: string, auth1: str
     if (opts.tags) payload.tags = opts.tags;
     if (opts.repos) payload.repos = opts.repos;
     if (opts.sessionSecrets) payload.session_secrets = opts.sessionSecrets;
-    const apiUrl = useV1Api ? `https://api.devin.ai/v1/org/${orgId}/sessions` : DEVIN_APP + '/api/sessions';
-    const headers: any = { Authorization: 'Bearer ' + apiKey };
-    if (!useV1Api) headers['x-cog-org-id'] = orgId;
-    const r = await devinJsonPost(apiUrl, headers, payload);
-    if (r.status === 200 || r.status === 201) {
-        const j = r.json || {};
-        return { ok: true, devinId: j.devin_id || j.session_id, isNewSession: j.is_new_session, createdAt: j.created_at, raw: j };
+    // 帛书·「反者道之动也」— 两条候选路径, 依次回退:
+    //   ① api.devin.ai/v1/org/<org>/sessions (cog_ API Key) — 企业/付费档可用
+    //   ② app.devin.ai/api/org-<bare>/sessions (auth1 同源) — 自助账号 cog_ 被 v1 拒(404)时兜底,
+    //      与 Secret/Knowledge/Playbook/v2sessions 同源, 对所有账号恒可用。
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const attempts: Array<{ url: string; headers: any }> = [];
+    if ((ws.devinApiKey || '').startsWith('cog_')) {
+        attempts.push({ url: `https://api.devin.ai/v1/org/${orgId}/sessions`, headers: { Authorization: 'Bearer ' + ws.devinApiKey } });
     }
-    return { ok: false };
+    attempts.push({ url: DEVIN_APP + '/api/org-' + bareOrgId + '/sessions', headers: { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId } });
+    attempts.push({ url: DEVIN_APP + '/api/sessions', headers: { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId } });
+    let lastStatus = 0, lastErr = '';
+    for (const a of attempts) {
+        const r = await devinJsonPost(a.url, a.headers, payload);
+        if (r.status === 200 || r.status === 201) {
+            const j = r.json || {};
+            return { ok: true, devinId: j.devin_id || j.session_id, isNewSession: j.is_new_session, createdAt: j.created_at, raw: j, status: r.status };
+        }
+        lastStatus = r.status;
+        const d = (r.json && (r.json.detail || r.json.error || r.json.message)) || r.json;
+        try { lastErr = typeof d === 'string' ? d : JSON.stringify(d); } catch { lastErr = String(d); }
+        // 404/405 → 该路径不存在, 试下一条; 其它(401/403/422/4xx 业务错)即真错, 不必再试别路径
+        if (r.status !== 404 && r.status !== 405) break;
+    }
+    return { ok: false, status: lastStatus, error: lastErr || undefined };
 }
 
 async function devinListSessions(orgId: string, auth1: string, limit?: number): Promise<{ ok: boolean; sessions?: any[] }> {
@@ -4753,8 +4808,25 @@ async function devinListMcpInstallations(orgId: string, auth1: string): Promise<
     return { ok: true, items };
 }
 
+// MCP env 规整: 接受对象 {KEY:VALUE} 或数组 [{key/name,value}] → 统一为官网要求的数组形态
+// [{key,value}] (实测 env_variables 必须是 list, 对象会被 422 "should be a valid list" 拒)。
+function normalizeMcpEnv(env: any): Array<{ key: string; value: string }> {
+    const out: Array<{ key: string; value: string }> = [];
+    if (!env) return out;
+    if (Array.isArray(env)) {
+        for (const e of env) {
+            if (!e || typeof e !== 'object') continue;
+            const k = e.key || e.name || e.env_var_name || '';
+            if (k) out.push({ key: String(k), value: String(e.value !== undefined ? e.value : '') });
+        }
+    } else if (typeof env === 'object') {
+        for (const k of Object.keys(env)) out.push({ key: k, value: String(env[k] !== undefined ? env[k] : '') });
+    }
+    return out;
+}
+
 // 追录: 把一个自定义 MCP 直接注册进官网 (STDIO: command/args/env; HTTP/SSE: url)
-async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promise<{ ok: boolean; status?: number; id?: string }> {
+async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promise<{ ok: boolean; status?: number; id?: string; error?: string }> {
     const name = String(spec.name || '').trim();
     const slug = String(spec.slug || name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     const transport = (spec.transport || 'STDIO').toUpperCase();
@@ -4769,8 +4841,14 @@ async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promi
     };
     if (transport === 'STDIO') {
         payload.command = spec.command || '';
-        payload.args = Array.isArray(spec.args) ? spec.args : [];
-        payload.env_variables = Array.isArray(spec.env_variables) ? spec.env_variables : [];
+        // 帛书·「知不知尚矣」— 官网 /api/mcp/installations 要求 args 为 [{value}] 字典数组,
+        // 纯字符串数组(文档式 ["-y","pkg"]) 会被 422 拒(dict_type)。此处统一规整:
+        //   字符串 → {value: s} · 已是字典则原样透出 · 容错 null。
+        const rawArgs = Array.isArray(spec.args) ? spec.args : [];
+        payload.args = rawArgs.map((a: any) => (a && typeof a === 'object') ? a : { value: String(a) });
+        // env_variables: 接受对象 {KEY:VALUE} 或数组 [{key/name,value}] — 实测官网两者皆收,
+        // 这里统一规整为对象(文档式), 便于剧本/种入态用直观写法。
+        payload.env_variables = normalizeMcpEnv(spec.env_variables);
     } else {
         // HTTP / SSE: 远程 URL + 可选鉴权头 (用于追录本地 141 经 dao-relay 暴露的公网端点)
         payload.url = spec.url || '';
@@ -4779,7 +4857,14 @@ async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promi
     const r = await devinJsonPost(DEVIN_APP + '/api/mcp/installations',
         { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId }, payload);
     const j = r.json || {};
-    return { ok: r.status === 200 || r.status === 201, status: r.status, id: j.id || j.installation_id };
+    const ok = r.status === 200 || r.status === 201;
+    // 帛书·「知不知尚矣」— 失败时把上游校验原因透出, 不再吞成裸 status (便于面板/调用方诊断)
+    let error = '';
+    if (!ok) {
+        const d = j.detail || j.error || j.message || j;
+        try { error = typeof d === 'string' ? d : JSON.stringify(d); } catch { error = String(d); }
+    }
+    return { ok, status: r.status, id: j.id || j.installation_id, error: error || undefined };
 }
 
 // 删除自定义 MCP (id 需带 mcp-installation- 前缀; 自动补全)
@@ -4950,6 +5035,10 @@ async function devinFullInject(): Promise<boolean> {
         } else {
             vscode.window.showWarningMessage('Dao inject partial: Secret=' + (sec.ok ? '✓' : '✗') + ' Knowledge=' + (kn.ok ? '✓' : '✗') + ' Playbook=' + (pl.ok ? '✓' : '✗') + ' 帛书规则=' + (rulesOk ? '✓' : '✗'));
         }
+        // 默认每账号自动注入种入态 (《道德经·阴符经》知识/剧本 + 内网穿透云端MD) —
+        // 任何登录/注入路径(IDE自动跟随·手动登录·HTTP /api/devin/inject)均落地, 不止IDE自动跟随。
+        // 帛书·「善建者不拔·善抱者不脱」 · enabled=false 即纯手动, 自循环自身守柔跳过。
+        try { await runInjectProfileSelfLoop(); } catch { /* 守柔 */ }
         return allOk;
     } finally {
         ws.devinInjecting = false;
@@ -5106,6 +5195,8 @@ async function runInjectProfileSelfLoop(): Promise<void> {
     }
     // 2. 应用到当前 org
     await applyInjectProfileToOrg(ws.devinOrgId, ws.devinAuth1, p);
+    // 2.5 顺手去重: 清理同名知识/同标题剧本残留(旧版本不同命名批量注入累积) — 默认开, 用户可关
+    if (getInjectAutoDedupe()) { try { await devinDedupeOrg(ws.devinOrgId, ws.devinAuth1); } catch { /* 守柔 */ } }
     // 3. 记录 lastInjectedOrg → 下次切换据此清理
     p.lastInjectedOrg = ws.devinOrgId;
     saveInjectProfile(p);
