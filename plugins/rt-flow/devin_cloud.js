@@ -45,6 +45,7 @@ const CFG = {
   downloadConcurrency: 16,
   presignConcurrency: 8,
   presignChunk: 40,
+  convConcurrency: 5, // 同账号内并行备份的对话数 (每对话内文件再并发 16) · 全方位提速
 };
 function configure(opts) {
   if (opts && typeof opts === "object") Object.assign(CFG, opts);
@@ -1219,6 +1220,64 @@ function safeName(s, maxLen) {
     .slice(0, maxLen) || "untitled";
 }
 
+// ═══ 备份目录命名 + 结构 (编号同步 WAM · 账号+密码表层 · 对话/账号信息分明) ═══
+// 账号文件夹名 = <编号>_<邮箱本地名>_<密码>
+//   · 编号: 与 WAM 面板 1:1 同步 (opts.accountNo) · 密码: 写在表层 (opts.password)
+//   · 改号时由 resolveAccountDir 原地改名, 既保持同步又不丢已下内容。
+function accountFolderName(auth, opts) {
+  opts = opts || {};
+  const emailLocal = String((auth && auth.email) || "").split("@")[0] || "account";
+  const no = opts.accountNo ? String(opts.accountNo).padStart(2, "0") : "";
+  const pwd = opts.password ? safeName(String(opts.password), 32).replace(/\s+/g, "") : "";
+  const parts = [];
+  if (no) parts.push(no);
+  parts.push(safeName(emailLocal, 40));
+  if (pwd) parts.push(pwd);
+  return safeName(parts.join("_"), 100);
+}
+// 标题去掉开头的下划线/井号/标点/空白 → 文件夹不再"看起来像系统目录"(_summary_ 之类)
+function cleanTitle(title) {
+  return String(title == null ? "" : title).replace(/^[\s_#·.、，,\-]+/, "").trim() || "未命名";
+}
+// 对话文件夹名 = <编号>_<标题>_<ID末8位> (编号 3 位补零·与列表序一致)
+function convFolderName(num, title, devinId) {
+  const shortId = String(devinId || "").replace(/^devin-/, "").slice(0, 8);
+  const n = num ? String(num).padStart(3, "0") + "_" : "";
+  return safeName(n + cleanTitle(title), 70) + "_" + shortId;
+}
+// 在备份根下定位某账号已有目录: 优先读 .account.json 标记 (新)·回退纯邮箱名 (旧)。
+function findAccountDir(root, email) {
+  const key = String(email || "").toLowerCase();
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return null; }
+  for (const d of entries) {
+    try {
+      const mk = JSON.parse(fs.readFileSync(path.join(root, d.name, ".account.json"), "utf8"));
+      if (mk && String(mk.email || "").toLowerCase() === key) return path.join(root, d.name);
+    } catch {}
+  }
+  // 旧命名: 文件夹名 == 邮箱 (或 safeName(邮箱))
+  const legacy = entries.find((d) => d.name.toLowerCase() === key || d.name.toLowerCase() === safeName(email, 80).toLowerCase());
+  return legacy ? path.join(root, legacy.name) : null;
+}
+// 解析账号目录: 目标命名(含编号+密码) · 已有则原地改名迁移(不重下) · 写 .account.json 标记。
+function resolveAccountDir(root, auth, opts) {
+  opts = opts || {};
+  const desired = path.join(root, accountFolderName(auth, opts));
+  const existing = findAccountDir(root, auth && auth.email);
+  if (existing && path.resolve(existing) !== path.resolve(desired)) {
+    try { if (!fs.existsSync(desired)) fs.renameSync(existing, desired); } catch {}
+  }
+  ensureDir(desired);
+  try {
+    writeJson(path.join(desired, ".account.json"), {
+      email: (auth && auth.email) || "", orgId: (auth && auth.orgId) || "",
+      accountNo: opts.accountNo || 0, hasPassword: !!opts.password, updatedAt: new Date().toISOString(),
+    });
+  } catch {}
+  return desired;
+}
+
 async function resolvePresignedUrls(auth, devinId, keys) {
   const result = new Map();
   const batches = [];
@@ -1398,8 +1457,7 @@ async function backupAccount(auth, opts) {
   opts = opts || {};
   const root = opts.targetDir || DC_BACKUP_DEFAULT;
   const prog = typeof opts.onProgress === "function" ? opts.onProgress : () => {};
-  const accountDir = path.join(root, safeName(auth.email, 80));
-  ensureDir(accountDir);
+  const accountDir = resolveAccountDir(root, auth, opts);
   const r = await listSessions(auth, 1000);
   const sessions = r.sessions || [];
   const result = { ok: true, account: auth.email, dir: accountDir, total: sessions.length, backedUp: 0, skipped: 0, failed: 0, items: [] };
@@ -1432,8 +1490,10 @@ async function snapshotAccountData(auth, opts) {
   opts = opts || {};
   const root = opts.targetDir || DC_BACKUP_DEFAULT;
   const prog = typeof opts.onProgress === "function" ? opts.onProgress : () => {};
-  const accountDir = path.join(root, safeName(auth.email, 80));
-  const snapDir = path.join(accountDir, "_账号快照_" + _snapStamp());
+  const accountDir = resolveAccountDir(root, auth, opts);
+  // 账号信息统一收纳于单一「账号信息」目录 (覆盖式·不再按时间戳堆叠 _账号快照_ 致目录乱)
+  const snapDir = path.join(accountDir, "账号信息");
+  try { if (fs.existsSync(snapDir)) fs.rmSync(snapDir, { recursive: true, force: true }); } catch {}
   ensureDir(snapDir);
 
   prog("快照: 拉取账号数据…");
@@ -1554,9 +1614,18 @@ async function snapshotAccountData(auth, opts) {
     "| Git 连接 | " + counts.gitConnections + " |",
     "",
     partial ? "> ⚠ 部分留底: 以下条目拉取失败(已记录, 其余如实留底):\n>\n" + snapErrors.map((e) => ">  - " + e).join("\n") + "\n" : "",
-    "> 对话正文 ZIP 见同级目录 `<ID末8位>_<标题>.zip`; 知识库/剧本正文见本快照 `知识库/` `剧本/` 子目录。",
+    "> 对话记录见同级 `对话/` 目录 (每条一个带编号的文件夹); 知识库/剧本正文见本目录 `知识库/` `剧本/` 子目录。",
   ].join("\n");
-  try { fs.writeFileSync(path.join(snapDir, "账号快照.md"), summaryMd); } catch {}
+  try { fs.writeFileSync(path.join(snapDir, "账号信息.md"), summaryMd); } catch {}
+
+  // 清理历史遗留: 旧版按时间戳堆叠的 _账号快照_<ts> 目录 (数据已重采于「账号信息」, 安全移除)
+  try {
+    for (const e of fs.readdirSync(accountDir, { withFileTypes: true })) {
+      if (e.isDirectory() && /^_账号快照_/.test(e.name)) {
+        try { fs.rmSync(path.join(accountDir, e.name), { recursive: true, force: true }); } catch {}
+      }
+    }
+  } catch {}
 
   prog("快照" + (partial ? "(部分)" : "完成") + ": 知识" + counts.knowledge + " 剧本" + counts.playbooks + " 密钥" + counts.secrets + " Git" + counts.gitConnections);
   return { ok: true, account: auth.email, dir: snapDir, counts, partial, errors: snapErrors };
@@ -1651,35 +1720,43 @@ function _mdToHtml(escaped) {
 
 // 对话备份为文件夹 (v4.4.0: 替代 ZIP · HTML/MD/JSON/files 四位一体)
 // 文件夹名: <对话名称>_<ID末8位>  (可读 + 唯一)
-async function backupOneConversationFolder(auth, sess, accountDir, opts) {
+// sharedState: 账号级共享的 backup_state 对象 (并行备份时由调用方一次性读写·避免并发读改写竞态)。
+async function backupOneConversationFolder(auth, sess, accountDir, opts, sharedState) {
   opts = opts || {};
   const devinId = sess.devin_id || sess.devinId || sess.session_id || sess.id;
   const title = sess.title || sess.name || "未命名";
-  const events = await getEventStream(auth, devinId);
 
-  // 增量判断
-  const state = readJson(DC_BACKUP_STATE, {});
+  const state = sharedState || readJson(DC_BACKUP_STATE, {});
   const sk = backupStateKey(auth, devinId);
-  if (opts.incremental !== false && state[sk] && state[sk].eventCount === events.length) {
-    return { devinId, title, skipped: true, reason: "no-new-events", eventCount: events.length };
-  }
-
-  const detail = await getSessionDetail(auth, devinId);
   const shortId = String(devinId).replace(/^devin-/, "").slice(0, 8);
-  const folderName = safeName(title, 50) + "_" + shortId;
-  const convDir = path.join(accountDir, folderName);
-  // 覆盖型更新 (水过无痕): 同一对话(devinId)的标题若变化(Devin 运行中常自动改名),
-  // 旧文件夹名 != 新文件夹名。把旧文件夹原地改名复用, 而非新建副本留下孤儿。
+  // 对话统一收纳于 <账号>/对话/ 子目录 (与「账号信息」分明) · 文件夹带编号
+  const convParent = path.join(accountDir, "对话");
+  const folderName = convFolderName(opts.convNum, title, devinId);
+  const convDir = path.join(convParent, folderName);
+  const relFolder = "对话/" + folderName;
+
+  // 迁移/改名 (先于增量判断, 让已备份对话也能迁入新结构):
+  //   prev 可能是旧版 "<标题>_<id>" (直接在账号目录下) 或新版 "对话/<...>"。
   const prevFolder = state[sk] && state[sk].folder;
-  if (prevFolder && prevFolder !== folderName) {
-    const prevDir = path.join(accountDir, prevFolder);
+  if (prevFolder && prevFolder !== relFolder) {
+    const prevDir = path.isAbsolute(prevFolder) ? prevFolder : path.join(accountDir, prevFolder);
     try {
-      if (fs.existsSync(prevDir)) {
+      if (fs.existsSync(prevDir) && path.resolve(prevDir) !== path.resolve(convDir)) {
+        ensureDir(convParent);
         if (!fs.existsSync(convDir)) fs.renameSync(prevDir, convDir);
         else fs.rmSync(prevDir, { recursive: true, force: true });
       }
     } catch {}
   }
+
+  const events = await getEventStream(auth, devinId);
+  // 增量判断: 事件数未变且目标文件夹已成形 → 跳过 (省去 detail/文件重下)
+  if (opts.incremental !== false && state[sk] && state[sk].eventCount === events.length &&
+      fs.existsSync(path.join(convDir, "_meta.json"))) {
+    return { devinId, title, skipped: true, reason: "no-new-events", eventCount: events.length, folder: relFolder };
+  }
+
+  const detail = await getSessionDetail(auth, devinId);
   ensureDir(convDir);
 
   // 产出文件
@@ -1739,13 +1816,14 @@ async function backupOneConversationFolder(auth, sess, accountDir, opts) {
   // 元数据
   const meta = {
     devinId, title, account: auth.email, orgId: auth.orgId,
+    convNo: opts.convNum || 0,
     eventCount: events.length, producedFiles: fileIndex.length,
     backedUpAt: new Date().toISOString(),
   };
   writeJson(path.join(convDir, "_meta.json"), meta);
 
-  state[sk] = { eventCount: events.length, backedUpAt: Date.now(), folder: folderName };
-  writeJson(DC_BACKUP_STATE, state);
+  state[sk] = { eventCount: events.length, backedUpAt: Date.now(), folder: relFolder };
+  if (!sharedState) writeJson(DC_BACKUP_STATE, state);
   return { devinId, title, skipped: false, eventCount: events.length, producedFiles: fileIndex.length, folder: convDir };
 }
 
@@ -1754,22 +1832,27 @@ async function backupAccountFolders(auth, opts) {
   opts = opts || {};
   const root = opts.targetDir || DC_BACKUP_DEFAULT;
   const prog = typeof opts.onProgress === "function" ? opts.onProgress : () => {};
-  const accountDir = path.join(root, safeName(auth.email, 80));
-  ensureDir(accountDir);
+  const accountDir = resolveAccountDir(root, auth, opts);
   const r = await listSessions(auth, 1000);
   const sessions = r.sessions || [];
-  const result = { ok: true, account: auth.email, dir: accountDir, total: sessions.length, backedUp: 0, skipped: 0, failed: 0, items: [] };
-  for (let i = 0; i < sessions.length; i++) {
-    prog("备份 " + (i + 1) + "/" + sessions.length + " ...");
+  const result = { ok: true, account: auth.email, dir: accountDir, total: sessions.length, backedUp: 0, skipped: 0, failed: 0, items: new Array(sessions.length) };
+  // 账号级共享 state: 一次读 → 并行写入内存 → 末尾一次落盘 (避免并发读改写竞态·并提速)
+  const state = readJson(DC_BACKUP_STATE, {});
+  const conc = Math.max(1, +CFG.convConcurrency || 4);
+  let done = 0;
+  await runPool(sessions, conc, async (sess, i) => {
     try {
-      const one = await backupOneConversationFolder(auth, sessions[i], accountDir, opts);
-      result.items.push(one);
+      const one = await backupOneConversationFolder(auth, sess, accountDir, Object.assign({}, opts, { convNum: i + 1 }), state);
+      result.items[i] = one;
       one.skipped ? result.skipped++ : result.backedUp++;
     } catch (e) {
       result.failed++;
-      result.items.push({ error: String(e && e.message ? e.message : e) });
+      result.items[i] = { error: String(e && e.message ? e.message : e) };
     }
-  }
+    done++;
+    prog("备份 " + done + "/" + sessions.length + " ...");
+  });
+  writeJson(DC_BACKUP_STATE, state);
   prog("账号备份完成: 新备份" + result.backedUp + " 跳过" + result.skipped + " 失败" + result.failed);
   return result;
 }
@@ -1796,41 +1879,62 @@ async function backupAccountFull(auth, opts) {
 }
 
 // ═══ 备份浏览 + 快速解锁(解压) ════════════════════════════════════════════
-// v4.4.0: 列出备份根下「账号 → 对话 ZIP/文件夹」树, 供前端浏览。
+// 列出备份根下「账号(带编号) → 对话(带编号·可查看正文)」树, 供前端浏览。
+//   新结构: <账号>/对话/<NNN_标题_id>/(含 _meta.json+对话.html) · <账号>/账号信息/
+//   兼容旧结构: 对话文件夹/ZIP 直接位于 <账号>/ 下。
+function _scanConvEntries(base) {
+  const convs = [];
+  let entries = [];
+  try { entries = fs.readdirSync(base, { withFileTypes: true }); } catch { return convs; }
+  for (const e of entries) {
+    if (e.isFile() && e.name.toLowerCase().endsWith(".zip")) {
+      let size = 0, mtime = 0;
+      try { const st = fs.statSync(path.join(base, e.name)); size = st.size; mtime = st.mtimeMs; } catch {}
+      convs.push({ name: e.name, path: path.join(base, e.name), size, mtime, type: "zip", num: 0 });
+    } else if (e.isDirectory() && !e.name.startsWith("_") && e.name !== "账号信息" && e.name !== "对话" && e.name !== "files") {
+      const metaPath = path.join(base, e.name, "_meta.json");
+      if (!fs.existsSync(metaPath)) continue;
+      let mtime = 0, meta = {};
+      try { mtime = fs.statSync(metaPath).mtimeMs; } catch {}
+      try { meta = JSON.parse(fs.readFileSync(metaPath, "utf8")); } catch {}
+      const htmlPath = path.join(base, e.name, "对话.html");
+      convs.push({
+        name: e.name, path: path.join(base, e.name), mtime, type: "folder",
+        title: meta.title || "", eventCount: meta.eventCount || 0, num: meta.convNo || 0,
+        hasHtml: fs.existsSync(htmlPath), htmlPath,
+      });
+    }
+  }
+  return convs;
+}
 function listBackups(root) {
   root = root || DC_BACKUP_DEFAULT;
   const out = { root, accounts: [] };
   let dirs = [];
   try { dirs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return out; }
   for (const d of dirs) {
-    if (d.name.startsWith("_")) continue; // 跳过快照目录
+    if (d.name.startsWith("_")) continue;
     const accDir = path.join(root, d.name);
-    let entries = [];
-    try { entries = fs.readdirSync(accDir, { withFileTypes: true }); } catch {}
-    const convs = [];
-    // ZIP 文件
-    for (const e of entries) {
-      if (!e.isFile() || !e.name.toLowerCase().endsWith(".zip")) continue;
-      let size = 0, mtime = 0;
-      try { const st = fs.statSync(path.join(accDir, e.name)); size = st.size; mtime = st.mtimeMs; } catch {}
-      convs.push({ name: e.name, path: path.join(accDir, e.name), size, mtime, type: "zip" });
+    let acctMeta = {};
+    try { acctMeta = JSON.parse(fs.readFileSync(path.join(accDir, ".account.json"), "utf8")); } catch {}
+    const convParent = path.join(accDir, "对话");
+    // 新结构优先扫 对话/ 子目录; 同时扫账号目录根 (兼容旧结构遗留的对话/ZIP)
+    const convs = _scanConvEntries(fs.existsSync(convParent) ? convParent : accDir);
+    if (fs.existsSync(convParent)) {
+      // 兼容: 既有 对话/ 又有根级旧文件夹时, 两者合并
+      for (const c of _scanConvEntries(accDir)) convs.push(c);
     }
-    // v4.4.0: 文件夹备份 (含 _meta.json 的目录)
-    for (const e of entries) {
-      if (!e.isDirectory() || e.name.startsWith("_")) continue;
-      const metaPath = path.join(accDir, e.name, "_meta.json");
-      if (!fs.existsSync(metaPath)) continue;
-      let mtime = 0, meta = {};
-      try { const st = fs.statSync(metaPath); mtime = st.mtimeMs; } catch {}
-      try { meta = JSON.parse(fs.readFileSync(metaPath, "utf8")); } catch {}
-      const htmlPath = path.join(accDir, e.name, "对话.html");
-      const hasHtml = fs.existsSync(htmlPath);
-      convs.push({ name: e.name, path: path.join(accDir, e.name), mtime, type: "folder", title: meta.title || "", eventCount: meta.eventCount || 0, hasHtml });
-    }
-    convs.sort((a, b) => b.mtime - a.mtime);
-    out.accounts.push({ account: d.name, dir: accDir, count: convs.length, conversations: convs });
+    convs.sort((a, b) => (a.num && b.num ? a.num - b.num : b.mtime - a.mtime));
+    const infoDir = path.join(accDir, "账号信息");
+    const hasInfo = fs.existsSync(infoDir);
+    out.accounts.push({
+      account: d.name, email: acctMeta.email || "", accountNo: acctMeta.accountNo || 0,
+      dir: accDir, count: convs.length,
+      hasAccountInfo: hasInfo, accountInfoPath: hasInfo ? infoDir : "",
+      conversations: convs,
+    });
   }
-  out.accounts.sort((a, b) => b.count - a.count);
+  out.accounts.sort((a, b) => (a.accountNo && b.accountNo ? a.accountNo - b.accountNo : b.count - a.count));
   return out;
 }
 
@@ -2082,6 +2186,7 @@ module.exports = {
   backupAccountFull,
   // v4.4.0 · 文件夹备份 (HTML/MD双视图 · 道法自然)
   buildConversationHtml,
+  buildConversationMd,
   backupOneConversationFolder,
   backupAccountFolders,
   backupAccountFullFolders,
@@ -2096,6 +2201,11 @@ module.exports = {
   // utils
   ZipWriter,
   safeName,
+  accountFolderName,
+  cleanTitle,
+  convFolderName,
+  findAccountDir,
+  resolveAccountDir,
   runPool,
   // 低层传输(供 devin_git 等同源复用 · 统一代理/TLS 重试于一处)
   rawRequest,
