@@ -2949,6 +2949,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'openBrowser': {
                 // 帛书·「执天之行」官网根挂载 — 经反代根路径(/)路由 app.devin.ai,
                 // 持 auth1 时 localStorage 注入 auth1_session → 自动登录, 无需手动/OAuth
+                await ensureRoutedAutoLogin(context);
                 const targetUrl = daoRoutedWebUrl('');
                 try { vscode.commands.executeCommand('simpleBrowser.show', targetUrl); }
                 catch { vscode.env.openExternal(vscode.Uri.parse(targetUrl)); }
@@ -2956,6 +2957,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             }
             case 'openDevinPage': {
                 // 帛书·「执天之行」官网根挂载 — 经反代根路径路由, auth1 localStorage 注入自动登录
+                await ensureRoutedAutoLogin(context);
                 const page = msg.page || 'home';
                 const pagePaths: Record<string, string> = {
                     home: '', sessions: '/sessions',
@@ -3070,6 +3072,14 @@ function daoRoutedWebUrl(pagePath: string = ''): string {
     const hasInjectableAuth1 = !!ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$');
     if (ws.port && hasInjectableAuth1) return `http://localhost:${ws.port}${p || '/'}`;
     return DEVIN_APP + p;
+}
+// 帛书·「为之于其未有」— 开官网前先备齐零GUI自动登录两前提: 服务器在跑 + 持真 auth1。
+// 否则 daoRoutedWebUrl 回落官网直连 → 浏览器无 Electron 会话即跳 /auth/login。
+// 每次开页都重跑 devinAutoChain → 跟随当前 IDE 账号(切号后自动换为新账号 auth1)。
+async function ensureRoutedAutoLogin(context: vscode.ExtensionContext): Promise<void> {
+    try { if (!ws.port) await startServer(context); } catch { /* 守柔 */ }
+    const hasInjectableAuth1 = !!ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$');
+    if (!hasInjectableAuth1) { try { await devinAutoChain(); } catch { /* 守柔 */ } }
 }
 const DEVIN_URL_GET_USER_STATUS = [
     'https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus',
