@@ -2,7 +2,7 @@
 	"name": "rt-flow",
 	"displayName": "Runtime Flow",
 	"description": "Runtime flow management · adaptive scheduling · 三板块统一: Cascade + Devin Cloud + Git(GitHub PAT 归一连接)",
-	"version": "4.7.2",
+	"version": "4.7.3",
 	"publisher": "devaid",
 	"repository": {
 		"type": "git",
@@ -254,7 +254,17 @@
 				"wam.devinCloudConvStopThreshold": {
 					"type": "number",
 					"default": 3,
-					"description": "v4.5.0 · 对话中停阈值 (美元·默认3). 账号余额 ≤ 此值时自动中停其运行中对话 (知止·防耗尽)"
+					"description": "v4.5.0 · 对话中停阈值 (美元·默认3). 账号余额 ≤ 此值时自动中停其运行中对话 (知止·防耗尽). 注: 开启「耗尽自动重置」后此阈值不再触发中停, 改由抽干地板控制"
+				},
+				"wam.devinCloudConvDrainToZero": {
+					"type": "boolean",
+					"default": true,
+					"description": "v4.7.3 · 耗尽自动重置 (反向重置·将欲予之必故予之). 当余额抵达缓冲(每对话上限将归0)时, 不再中停困住这笔钱, 而是把上限反向抬回剩余余额, 让美金真正用尽; 仅在余额≤抽干地板时才最终中停"
+				},
+				"wam.devinCloudConvDrainFloor": {
+					"type": "number",
+					"default": 0.1,
+					"description": "v4.7.3 · 抽干地板 (美元·默认0.1). 开启耗尽自动重置后, 仅当余额 ≤ 此值(真正见底)才最终中停运行中对话"
 				},
 				"wam.devinCloudConvPollActiveSec": {
 					"type": "number",

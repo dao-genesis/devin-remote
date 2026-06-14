@@ -822,6 +822,20 @@ async function deleteSession(auth, devinId) {
 function isUserKnowledge(k) {
   return !!k && k.note_type !== "builtin" && k.is_default_note !== true && k.can_write !== false;
 }
+// v4.7.3 · 纯函数(可单测): 由余额/缓冲/抽干开关/地板 算每对话使用额度上限 + 是否抽干模式。
+//   常态: cap = balance - buffer (留缓冲·随余额实时下调)。
+//   反向重置·将欲予之必故予之: 余额抵缓冲(cap≤0)且尚未见底(>floor) → cap 反抬回剩余余额(=balance),
+//   不困住这最后一笔钱, 让美金真正用尽; 仅当余额≤floor(真见底)才回 cap=0(交由调用方中停)。
+function computeConvCap(balance, buffer, drainOn, floor) {
+  const b = Number(balance);
+  if (!Number.isFinite(b)) return { cap: 0, drain: false };
+  const buf = Math.max(0, Number(buffer) || 0);
+  const flr = Math.max(0, Number(floor) || 0);
+  let cap = +(b - buf).toFixed(2);
+  let drain = false;
+  if (drainOn && cap <= 0 && b > flr) { cap = +b.toFixed(2); drain = true; }
+  return { cap: Math.max(0, cap), drain };
+}
 function isUserPlaybook(p, auth) {
   if (!p) return false;
   if (p.access === "community") return false; // Cognition 社区共享剧本
@@ -1975,4 +1989,6 @@ module.exports = {
   _isRetryableStatus,
   _retryDelayMs,
   _isTransientErr,
+  // v4.7.3 · 对话上限/抽干 (可测纯函数)
+  computeConvCap,
 };
