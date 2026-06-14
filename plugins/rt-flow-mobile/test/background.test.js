@@ -105,6 +105,31 @@ function t(name, fn) {
     assert.strictEqual(r.ranked[0].email, "high@x.com");
   });
 
+  console.log("\nensureAuth (活跃账号令牌刷新 → 同步刷新 DNR):");
+  // 回归 3: 活跃账号缓存过期重登后, 必须用新 auth1 重刷 DNR; 非活跃账号重登则不动 DNR。
+  ctx.DaoCloud.login = async (email) => ({
+    ok: true, auth1: "fresh_" + lc(email).replace(/[^a-z]/g, ""), orgId: "org-z", userId: "user-z", email,
+  });
+  store = {
+    accounts: [{ email: "active@x.com", password: "p" }, { email: "other@x.com", password: "p" }],
+    authCache: {}, settings: {}, active: "active@x.com", quota: {},
+  };
+
+  captured = null;
+  await ctx.ensureAuth("active@x.com");
+  t("活跃账号重登 → 用新 auth1 重刷 DNR", () => {
+    const rule = captured && captured.addRules && norm(captured.addRules[0]);
+    assert.ok(rule, "应重刷 DNR 规则");
+    const authH = rule.action.requestHeaders.find((h) => h.header === "Authorization");
+    assert.strictEqual(authH.value, "Bearer fresh_activexcom");
+  });
+
+  captured = null;
+  await ctx.ensureAuth("other@x.com");
+  t("非活跃账号重登 → 不动 DNR (不抢占活跃账号的注入头)", () => {
+    assert.strictEqual(captured, null);
+  });
+
   console.log("\n" + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);
 })();

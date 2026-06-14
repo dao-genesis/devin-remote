@@ -54,6 +54,9 @@ async function ensureAuth(email, force) {
   if (r.ok) {
     st.authCache[key] = r;
     await set({ authCache: st.authCache });
+    // 活跃账号令牌刷新后, 同步刷新 DNR 注入头与页面 localStorage 注入 —— 否则普查/轮询
+    // 触发的重登只更新了 authCache, 页面仍用过期 auth1, 自动登录会静默 401 失效。
+    if (key === lc(st.active)) { await applyDnr(r); await broadcastInject(r); }
   }
   return r;
 }

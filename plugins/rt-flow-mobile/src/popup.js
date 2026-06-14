@@ -39,11 +39,13 @@ function balClass(b) {
   if (b <= 5) return "low";
   return "good";
 }
+// 余额按美分展示 (额度为分数美元, 否则会显示成 $2.994926623885875 这类长尾浮点)
+function fmtMoney(n) { return "$" + (Math.round(Number(n) * 100) / 100).toFixed(2); }
 function fmtBal(q) {
   if (!q) return "额度未查";
   if (q.status && q.status !== "ok") return "查询失败(" + q.status + ")";
   if (q.balance == null) return "额度未知";
-  return "$" + q.balance;
+  return fmtMoney(q.balance);
 }
 
 let STATE = { accounts: [], authCache: {}, active: "", quota: {}, settings: {} };
@@ -125,7 +127,7 @@ document.addEventListener("click", async (e) => {
       toast(r.ok ? "已激活: " + email : "激活失败: " + (r.error || ""), r.ok ? "ok" : "err");
     } else if (act === "refresh") {
       const r = await send({ type: "refreshQuota", email });
-      toast(r.ok ? "额度: $" + (r.balance == null ? "?" : r.balance) : "失败: " + (r.error || ""), r.ok ? "ok" : "err");
+      toast(r.ok ? "额度: " + (r.balance == null ? "$?" : fmtMoney(r.balance)) : "失败: " + (r.error || ""), r.ok ? "ok" : "err");
     } else if (act === "remove") {
       await send({ type: "removeAccount", email });
       toast("已删除: " + email, "ok");
