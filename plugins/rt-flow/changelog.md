@@ -2,6 +2,24 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.8.2 (2026-06-14) · IDE 内置浏览器自足注入反代·多实例各登各号 (不赖 dao-vsix)
+
+> 天下之至柔, 驰骋于天下之致坚; 无有入于无间 —— 沙箱 iframe 无 CDP 可控, 以本地反代为「无间」之道。
+
+### 新增
+
+- **`devin_proxy.js` · IDE 内置浏览器自足注入反向代理**: 标准版 rt-flow 不再依赖 dao-vsix
+  的反代即可让 IDE 内置浏览器自动登录。点账号行「🖥 路由官网→IDE」:
+  - 取该号 `auth1`(缓存命中秒开, 否则后台五步登录), 起一个**每账号独立端口**的本地反代;
+  - 反代代 `app.devin.ai` 取页 → 剥 `X-Frame-Options`/`CSP` → `<head>` 起注入
+    `localStorage['auth1_session']` 登录态 + org 键 + post-auth 守卫键 + fetch/XHR
+    `Authorization` 拦截 → SPA 自判已登录, 零 GUI/OAuth;
+  - 在 IDE 内**新建 webview 标签**满铺 iframe 指向该端口 → 点不同账号开不同标签,
+    **各号独立 origin → localStorage 隔离 → 多标签各登各号, 并行不串号** (鸡犬相闻)。
+  - 注入技法 1:1 移植自 dao-vsix 已验证反代 (HTML 域名改写 / gzip·br·deflate 解压 /
+    3xx Location 改写 / `text/event-stream` SSE 流式直通)。
+- 回退链保留: 自足反代不可用 → dao-vsix `routeOfficialForAccount` → `simpleBrowser`。
+
 ## v4.8.1 (2026-06-14) · Devin Cloud 状态持久化·根治"一闪一没" (Phase M)
 
 > 见小曰明 · 守柔曰强 —— 只要对话真的还在, 就持续显示; 取消追踪或对话结束才消失。

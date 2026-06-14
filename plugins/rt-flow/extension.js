@@ -261,7 +261,66 @@ const { URL } = require("node:url");
 // 第五板块 · Devin Cloud 接入底层 (对话提取/备份/追踪/水过无痕清理)
 const devinCloud = require("./devin_cloud");
 const devinWeb = require("./devin_web"); // v4.8.0 · 浏览器多实例隔离+账号注入 (自足·CDP 注入 auth1_session)
+const devinProxy = require("./devin_proxy"); // v4.8.2 · IDE 内置浏览器自足注入反代 (每账号独立端口·多实例·不赖 dao-vsix)
 const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (整合 devin-git-auth 核心)
+
+// v4.8.2 · IDE 内置浏览器多实例 webview 标签登记 (email → WebviewPanel) · 同号复用·异号并行
+const _ideWebPanels = new Map();
+
+// v4.8.2 · IDE 内置浏览器外壳 (满铺 iframe 指向本账号注入反代; CSP 仅放行 localhost frame)。
+function _ideBrowserHtml(url) {
+  const u = String(url).replace(/"/g, "&quot;");
+  return (
+    '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; frame-src http://localhost:* http://127.0.0.1:*;">' +
+    "<style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1e1e1e}iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style></head>" +
+    '<body><iframe src="' + u + '" allow="clipboard-read; clipboard-write"></iframe></body></html>'
+  );
+}
+
+// v4.8.2 · 路由某账号官网 → IDE 内置浏览器 (自足注入反代·多实例标签·不赖 dao-vsix)。
+//   每账号独立端口反代注入其 auth1 登录态 → 各标签各登各号, 并行不串号 (鸡犬相闻)。
+async function openIdeAccountBrowser(acc) {
+  // 取该账号注入态 (缓存命中秒开; 否则后台五步登录换 auth1)。
+  let auth = devinCloud.getCachedAuth(acc.email);
+  if ((!auth || !auth.auth1) && acc.password) {
+    const r = await devinCloud.getAuth(acc.email, acc.password);
+    if (r && r.ok) auth = r;
+  }
+  if (!auth || !auth.auth1) return { ok: false, error: "no-auth1" };
+  const pr = await devinProxy.ensureProxyForAccount(
+    acc.email,
+    { auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgName: auth.orgName },
+    log,
+  );
+  if (!pr.ok) return { ok: false, error: pr.error || "proxy-fail" };
+
+  const key = String(acc.email).toLowerCase();
+  const short = acc.email.split("@")[0];
+  let panel = _ideWebPanels.get(key);
+  if (panel) {
+    try {
+      panel.reveal(vscode.ViewColumn.Active);
+      panel.webview.html = _ideBrowserHtml(pr.url);
+      return { ok: true, reused: true };
+    } catch {
+      _ideWebPanels.delete(key);
+      panel = null;
+    }
+  }
+  panel = vscode.window.createWebviewPanel(
+    "wamDevinWeb",
+    "Devin · " + short,
+    vscode.ViewColumn.Active,
+    { enableScripts: true, retainContextWhenHidden: true },
+  );
+  panel.webview.html = _ideBrowserHtml(pr.url);
+  panel.onDidDispose(() => {
+    if (_ideWebPanels.get(key) === panel) _ideWebPanels.delete(key);
+  });
+  _ideWebPanels.set(key, panel);
+  return { ok: true };
+}
 
 // ═══ § 1 · 万法之资 ═══
 // v2.5.5 · 真根因 · ideVersion 能力协商 (2026-05-04 probe 实证):
@@ -7906,7 +7965,7 @@ function buildHtml() {
         <button class="b sw" onclick="sw(${i})" title="手动切换(无限制)"${isBanned ? " disabled" : ""}${_wamMode === "official" ? ' disabled style="opacity:.3;cursor:not-allowed"' : ""}>&#9889;</button>
         <button class="b vf" onclick="vf(${i})" title="验证">&#128270;</button>
         <button class="b cp" onclick="cp(${i})" title="复制">&#128203;</button>
-        <button class="b rt" onclick="rt(${i})" title="路由官网→IDE内置浏览器(先切此号·反代自动注入登录·多实例标签)">&#128421;</button>
+        <button class="b rt" onclick="rt(${i})" title="路由官网→IDE内置浏览器(自足反代注入该号登录·多实例标签·各登各号)">&#128421;</button>
         <button class="b sb" onclick="sb(${i})" title="系统默认浏览器打开官网(跳出IDE·多实例)">&#127760;</button>
         <button class="b wp" onclick="wp(${i})" title="水过无痕·一键清理本账号 Devin Cloud 全部痕迹(对话/知识库/剧本/密钥/Git)">&#127754;</button>
         <button class="b rm" onclick="rm(${i})" title="删除">&times;</button>
@@ -9668,22 +9727,33 @@ async function handleWebviewMessage(msg) {
         }
         break;
       }
-      // ★ 归一 · 路由官网→IDE 内置浏览器 (手动·复用 dao-vsix 反向代理自动登录闭环)
-      //   先切到此号 → dao 反代随活跃号 auth1 路由官网 → simpleBrowser 内置标签 (多实例)
+      // ★ 归一 · 路由官网→IDE 内置浏览器 (自足注入反代·多实例标签·不赖 dao-vsix)
+      //   首选: rt-flow 自带每账号独立端口注入反代 → IDE webview 标签自动登录该账号
+      //   (各号独立 origin → localStorage 隔离 → 多标签各登各号, 无需全局切号)。
+      //   回退: dao-vsix 反代 → simpleBrowser (无注入·仅兜底)。
       case "routeToIde": {
         const i = msg.index;
         if (i < 0 || i >= _store.accounts.length) return;
         const a = _store.accounts[i];
+        _toast("⏳ 注入登录态·路由官网→IDE · " + a.email.split("@")[0]);
         try {
-          if (_switching && Date.now() - _switchingStartTime < 10000) {
-            _toast("正在切换中,稍后再点");
-          } else {
-            const r = await loginAccount(_store, i);
-            if (!r.ok) _toast("✗ 切号失败: " + (r.error || r.stage || ""));
+          const r = await openIdeAccountBrowser(a);
+          if (r.ok) {
+            _toast(
+              (r.reused ? "🖥 已聚焦该号标签 · " : "🖥 已注入登录态·IDE标签已开 · ") +
+                a.email.split("@")[0],
+            );
+            break;
           }
-          // 复用 dao-vsix 命令: 每账号独立 webview 标签 (多实例并行·经反代 dao_acct 注入该账号 auth1)。
-          // 先切此号已使该账号 auth1 持久化入共享库, 故 dao_acct 路由可命中。
-          //   失败回退 devinCloudBrowser / simpleBrowser (IDE 内置·杜绝 openExternal "操作IDE与网页冲突"弹窗)。
+          log("[routeToIde] 自足反代失败(" + (r.error || "") + "), 回退 dao/simpleBrowser");
+        } catch (e) {
+          log("[routeToIde] 自足反代异常: " + (e && e.message));
+        }
+        // 回退: dao-vsix 反代 → simpleBrowser (IDE 内置·杜绝 openExternal 弹窗)。
+        try {
+          if (!(_switching && Date.now() - _switchingStartTime < 10000)) {
+            try { await loginAccount(_store, i); } catch {}
+          }
           try {
             await vscode.commands.executeCommand("dao.routeOfficialForAccount", {
               email: a.email,
@@ -9691,21 +9761,17 @@ async function handleWebviewMessage(msg) {
             });
           } catch {
             try {
-              await vscode.commands.executeCommand("dao.devinCloudBrowser");
+              await vscode.commands.executeCommand(
+                "simpleBrowser.show",
+                "https://app.devin.ai",
+              );
             } catch {
-              try {
-                await vscode.commands.executeCommand(
-                  "simpleBrowser.show",
-                  "https://app.devin.ai",
-                );
-              } catch {
-                await vscode.env.openExternal(
-                  vscode.Uri.parse("https://app.devin.ai"),
-                );
-              }
+              await vscode.env.openExternal(
+                vscode.Uri.parse("https://app.devin.ai"),
+              );
             }
           }
-          _toast("🖥 已路由官网→IDE · " + a.email.split("@")[0]);
+          _toast("🖥 已路由官网→IDE(兜底) · " + a.email.split("@")[0]);
         } catch (e) {
           _toast("✗ 路由失败: " + (e && e.message));
         }
@@ -12674,6 +12740,7 @@ function deactivate() {
   _stopStuckEngine(); // v3.10.0 · 归一 · 优雅停止卡住引擎
   _stopHardExhaustWatchdog(); // v15.0 · 停止硬耗尽看门狗
   if (_engine) _engine.stopMonitor();
+  try { devinProxy.stopAll(); } catch {} // v4.8.2 · 收束 IDE 内置浏览器注入反代
   if (_store) _store.save();
   log("WAM deactivate");
 }
