@@ -2331,7 +2331,7 @@ function rO(){
     const i=S.inject;
     ih='<div class="st">注入状态</div><div class="card"><div class="cr"><span class="l"><span class="tag secret">S</span> Secret</span><span class="v" style="color:'+(i.secret?'var(--success)':'var(--danger)')+'">'+(i.secret?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag knowledge">K</span> Knowledge</span><span class="v" style="color:'+(i.knowledge?'var(--success)':'var(--danger)')+'">'+(i.knowledge?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag playbook">P</span> Playbook</span><span class="v" style="color:'+(i.playbook?'var(--success)':'var(--danger)')+'">'+(i.playbook?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag git">G</span> Git</span><span class="v" style="color:'+(i.git?'var(--success)':'var(--danger)')+'">'+(i.git?'✓':'✗')+'</span></div></div>';
   }
-  v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+rBridge()+qh+ih+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
+  v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+rBridge()+qh+ih+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn" style="background:#6f42c1" onclick="cmd(&#39;syncBrowser&#39;)" title="在电脑浏览器开独立窗口自动登录当前账号·多账号各开并行窗口互不串号">🖥️ 浏览器同步</button><button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
   // 内网穿透已上移至主页第二板块 (rBridge 见上方拼装)
 }
 function rBridge(){
@@ -2550,7 +2550,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -2955,6 +2955,16 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 catch { vscode.env.openExternal(vscode.Uri.parse(targetUrl)); }
                 break;
             }
+            case 'syncBrowser': {
+                // 浏览器同步: 在电脑浏览器(独立 profile 窗口)自动登录当前账号。
+                // 切第2/3/4账号后再点 → 各账号各开独立并行窗口同时可用(道并行而不相悖)。
+                await ensureRoutedAutoLogin(context);
+                const acct = ws.devinEmail || 'default';
+                const url = daoRoutedWebUrlForAccount(acct, msg.page ? '/' + String(msg.page).replace(/^\//, '') : '');
+                const ok = launchIsolatedBrowser(url, acct);
+                vscode.window.showInformationMessage(ok ? ('已在电脑浏览器同步并登录: ' + acct) : '浏览器启动失败');
+                break;
+            }
             case 'openDevinPage': {
                 // 帛书·「执天之行」官网根挂载 — 经反代根路径路由, auth1 localStorage 注入自动登录
                 await ensureRoutedAutoLogin(context);
@@ -3080,6 +3090,45 @@ async function ensureRoutedAutoLogin(context: vscode.ExtensionContext): Promise<
     try { if (!ws.port) await startServer(context); } catch { /* 守柔 */ }
     const hasInjectableAuth1 = !!ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$');
     if (!hasInjectableAuth1) { try { await devinAutoChain(); } catch { /* 守柔 */ } }
+}
+// 道·多账号并行: 路由 URL 附 ?dao_acct=<email> → 反代据此注入该账号 auth1(见 devinCloudProxyRoute)。
+// 仅当走本地反代(localhost)且该账号已持久化真 auth1 时附加; 否则退回当前账号路由 URL。
+function daoRoutedWebUrlForAccount(email: string, pagePath: string = ''): string {
+    const base = daoRoutedWebUrl(pagePath);
+    if (email && base.indexOf('localhost') >= 0 && loadAccountAuth(email)) {
+        return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'dao_acct=' + encodeURIComponent(email);
+    }
+    return base;
+}
+// 帛书·「绝利一源」— 定位本机浏览器可执行(Chrome 优先, 回退 Edge)。
+function findBrowserExe(): string | null {
+    const candidates = [
+        (process.env['ProgramFiles'] || '') + '\\Google\\Chrome\\Application\\chrome.exe',
+        (process.env['ProgramFiles(x86)'] || '') + '\\Google\\Chrome\\Application\\chrome.exe',
+        (process.env['LOCALAPPDATA'] || '') + '\\Google\\Chrome\\Application\\chrome.exe',
+        (process.env['ProgramFiles(x86)'] || '') + '\\Microsoft\\Edge\\Application\\msedge.exe',
+        (process.env['ProgramFiles'] || '') + '\\Microsoft\\Edge\\Application\\msedge.exe',
+    ];
+    for (const p of candidates) { try { if (p && fs.existsSync(p)) return p; } catch { /* 守柔 */ } }
+    return null;
+}
+// 浏览器同步 + 多实例并行: 在电脑浏览器开独立 profile 窗口自动登录指定账号。
+// profile 按账号 email 隔离 user-data-dir → localStorage 各自独立 → 切第2/3/4账号各开
+// 独立并行窗口同时可用, 互不串号(道并行而不相悖)。无浏览器时回退系统默认浏览器。
+function launchIsolatedBrowser(targetUrl: string, profileKey: string): boolean {
+    try {
+        const exe = findBrowserExe();
+        const safeKey = (profileKey || 'default').replace(/[^a-zA-Z0-9._@-]/g, '_');
+        const profileDir = path.join(DAO_DIR, 'browser-profiles', safeKey);
+        try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* 守柔 */ }
+        if (exe) {
+            const cp = require('child_process') as typeof import('child_process');
+            const child = cp.spawn(exe, ['--user-data-dir=' + profileDir, '--new-window', targetUrl], { detached: true, stdio: 'ignore' });
+            child.unref();
+            return true;
+        }
+    } catch { /* 守柔 */ }
+    try { vscode.env.openExternal(vscode.Uri.parse(targetUrl)); return true; } catch { return false; }
 }
 const DEVIN_URL_GET_USER_STATUS = [
     'https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus',
@@ -5819,8 +5868,18 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         // 无为而无以为: 自动注入Cookie → Devin SPA自动识别登录态
                         // 守柔: 仅当持真 auth1_ 令牌时注入; session-token 注入会污染 auth1_session → 反致登录态崩坏
                         // 手动模式(websiteLoginMode=manual): 不注入认证, 用户打开官网后自行登录
+                        // 道·多账号并行不相悖: ?dao_acct=<email> 钉住该账号(从按邮箱持久化的真 auth1 读取),
+                        // 缺省用当前同步账号。不同浏览器 profile(user-data-dir) → localStorage 隔离 → 多账号同源并行。
+                        let pinAuth1 = ws.devinAuth1, pinUid = ws.devinUserId, pinOrg = ws.devinOrgId, pinOrgName = ws.devinOrgName || '', pinEmail = ws.devinEmail || '';
+                        try {
+                            const acctParam = url.searchParams.get('dao_acct');
+                            if (acctParam) {
+                                const sa = loadAccountAuth(acctParam);
+                                if (sa && sa.auth1) { pinAuth1 = sa.auth1; pinUid = sa.userId || ''; pinOrg = sa.orgId || ''; pinOrgName = sa.orgName || ''; pinEmail = acctParam; }
+                            }
+                        } catch { /* 守柔 */ }
                         const websiteAutoLogin = getWebsiteLoginMode() === 'auto';
-                        const injA1 = (websiteAutoLogin && ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$')) ? ws.devinAuth1 : '';
+                        const injA1 = (websiteAutoLogin && pinAuth1 && !pinAuth1.startsWith('devin-session-token$')) ? pinAuth1 : '';
                         const authBridge = `<script>
 // Dao Auth Bridge — 帛书·五十二「见小曰明·守柔曰强」
 // 自动注入认证到Devin页面 — 无为而无以为
@@ -5831,9 +5890,9 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
     //    = {"token":"auth1_...","userId":"user-..."}  — SPA 据此判定已登录, 否则跳转 /auth/login
     //    一并注入 org 相关键, 免去二次解析跳转。
     var __a1 = '${injA1}';
-    var __uid = '${ws.devinUserId}';
-    var __org = '${ws.devinOrgId}';
-    var __orgName = '${(ws.devinOrgName || '').replace(/['\\\\]/g, '')}';
+    var __uid = '${pinUid}';
+    var __org = '${pinOrg}';
+    var __orgName = '${(pinOrgName || '').replace(/['\\\\]/g, '')}';
     if (__a1) {
       localStorage.setItem('auth1_session', JSON.stringify({ token: __a1, userId: __uid }));
       localStorage.setItem('migrated-to-unscoped-auth0-token-2025-12-18', 'true');
@@ -5866,7 +5925,7 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
       opts = opts || {};
       if (needAuthHdr(newUrl) && typeof opts.headers === 'object' && opts.headers && !Array.isArray(opts.headers)) {
         if (!opts.headers['Authorization']) opts.headers['Authorization'] = 'Bearer ${injA1}';
-        if (!opts.headers['x-cog-org-id']) opts.headers['x-cog-org-id'] = '${ws.devinOrgId}';
+        if (!opts.headers['x-cog-org-id']) opts.headers['x-cog-org-id'] = '${pinOrg}';
       }
       return origFetch.call(this, newUrl, opts);
     };
@@ -5875,12 +5934,12 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
       // XHR.open 方法显式传入, 不会丢失; 仅改写绝对 app.devin.ai → 根路径
       var newUrl = (typeof url === 'string') ? url.split('https://app.devin.ai').join('') : url;
       var result = origXHR.apply(this, [method, newUrl].concat(Array.prototype.slice.call(arguments, 2)));
-      if (needAuthHdr(newUrl)) { try { this.setRequestHeader('Authorization', 'Bearer ${injA1}'); this.setRequestHeader('x-cog-org-id', '${ws.devinOrgId}'); } catch(e) {} }
+      if (needAuthHdr(newUrl)) { try { this.setRequestHeader('Authorization', 'Bearer ${injA1}'); this.setRequestHeader('x-cog-org-id', '${pinOrg}'); } catch(e) {} }
       return result;
     };
     // 4. postMessage通信 — 与父窗口(IDE)同步状态
     if (window.parent !== window) {
-      window.parent.postMessage({type:'dao-auth',auth1:'${injA1}',orgId:'${ws.devinOrgId}',email:'${ws.devinEmail}'}, '*');
+      window.parent.postMessage({type:'dao-auth',auth1:'${injA1}',orgId:'${pinOrg}',email:'${pinEmail}'}, '*');
     }
     // 5. 通知父窗口加载成功
     if (window.parent !== window) {
