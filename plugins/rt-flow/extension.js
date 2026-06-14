@@ -8391,6 +8391,10 @@ async function _dvRunPoll() {
           else running++;
           _dvMaybeNotify(acc.email, s);
         }
+        // v4.7.5 · 卡死监测: 运行中会话长时间无进展 → 实时提醒 (实时监测·实时反馈)
+        _dvStallCheck(acc.email, active);
+        // v4.7.5 · 低余额预警: 有活跃对话的账号余额跌破阈值($3) → 直接给用户发消息提示快用完
+        if (active.length) { await _dvLowBalanceCheck(acc, auth, active).catch(() => {}); }
         if (active.length) {
           items.push({
             email: key, running, awaiting, blocked,
@@ -8427,6 +8431,75 @@ function _dvMaybeNotify(email, sess) {
     _notify("warn", "[" + who + "] 对话等待你的输入/回答: " + sess.title);
   }
   _dvSeen.set(sess.devinId, sess.statusClass);
+}
+
+// ═══ v4.7.5 · 对话最终模块加固: 卡死实时监测 + 低余额(≤$3)主动提醒用户 · 道法自然 ═══
+//   "实时监测·实时反馈": 各对话最终卡住/卡死, 在 _dvRunPoll 每轮(默 1min)即检出并左下角提醒;
+//   低余额: 对话所在账号余额 ≤ 阈值($3) 时直接发消息(IDE 通知 + 尽力往运行中对话续写一条)提示快用完。
+const _dvSessSig = new Map();    // devinId → { sig, since } 上次进展指纹 + 该指纹起始时刻
+const _dvStallSeen = new Set();  // devinId 已就"本段卡死"提醒过 (不刷屏·进展恢复后清)
+const _dvLowBalSeen = new Map(); // email(lc) → bool 是否已就当前低余额段提醒过 (回升后复位)
+
+// 卡死监测: 运行中会话进展指纹「持续不变」超过阈值 → 疑似卡死/长时间无进展, 提醒一次。
+//   保守: 仅 statusClass==="running" 计时(awaiting/blocked 已各有独立提醒); 进展(指纹变)即复位计时与已警。
+function _dvStallCheck(email, active) {
+  if (!_cfg("devinCloudStallAlert", true)) return;
+  const stallMs = Math.max(0, (+_cfg("devinCloudStallMin", 15) || 0)) * 60000;
+  if (stallMs <= 0) return;
+  const now = Date.now();
+  const live = new Set(active.map((s) => s.devinId));
+  for (const s of active) {
+    if (s.statusClass !== "running") { _dvStallSeen.delete(s.devinId); _dvSessSig.delete(s.devinId); continue; }
+    const sig = devinCloud.sessionSignature(s);
+    const prev = _dvSessSig.get(s.devinId);
+    if (!prev || prev.sig !== sig) {
+      _dvSessSig.set(s.devinId, { sig, since: now }); // 有进展 → 重新计时
+      _dvStallSeen.delete(s.devinId);
+      continue;
+    }
+    if (devinCloud.stallVerdict(now - prev.since, stallMs) && !_dvStallSeen.has(s.devinId)) {
+      _dvStallSeen.add(s.devinId);
+      const _no = _dvAccountNo(email);
+      const who = (_no ? "#" + _no + " " : "") + (devinCloud.getTag(email) || email.split("@")[0]);
+      const mins = Math.round((now - prev.since) / 60000);
+      _notify("warn", "[" + who + "] 对话疑似卡死·已 " + mins + " 分钟无进展: " + s.title);
+      log("dv-stall: " + s.devinId + " 无进展 " + mins + "min · " + s.title);
+    }
+  }
+  // 清理已离场会话的指纹/已警态 (无为·不占内存)
+  for (const id of [..._dvSessSig.keys()]) if (!live.has(id)) _dvSessSig.delete(id);
+  for (const id of [..._dvStallSeen]) if (!live.has(id)) _dvStallSeen.delete(id);
+}
+
+// 低余额预警: 账号实时余额 ≤ 阈值 → 给用户发消息(快用完了)。一次跌破只提醒一次, 回升后才再提醒。
+//   "也可以利用这个对话最终的模块去给用户发送消息": 除 IDE 通知外, 尽力往运行中对话续写一条提醒(需 apk_ Key·缺则仅通知, 不臆造成功)。
+async function _dvLowBalanceCheck(acc, auth, active) {
+  if (!_cfg("devinCloudLowBalanceAlert", true)) return;
+  const key = (acc.email || "").toLowerCase();
+  const threshold = Math.max(0, +_cfg("devinCloudLowBalanceThreshold", 3) || 0);
+  let balance = null;
+  try { balance = devinCloud.billingBalance(await devinCloud.getBilling(auth)); } catch {}
+  const verdict = devinCloud.lowBalanceVerdict(balance, threshold, _dvLowBalSeen.get(key));
+  _dvLowBalSeen.set(key, verdict.alerted);
+  if (!verdict.alert) return;
+  const _no = _dvAccountNo(acc.email);
+  const who = (_no ? "#" + _no + " " : "") + (devinCloud.getTag(acc.email) || key.split("@")[0]);
+  _notify("warn", "[" + who + "] 余额仅剩 $" + balance.toFixed(2) + " ≤ $" + threshold + " · 额度快用完了, 请尽快充值/转移工作 (再低将自动中停对话)");
+  log("dv-lowbal: " + key + " 余额 $" + balance.toFixed(2) + " ≤ $" + threshold + " → 已提醒用户");
+  // 尽力往运行中对话续写一条提醒消息 (需 apk_ API Key; 缺失/失败则仅 IDE 通知·不臆造)
+  if (_cfg("devinCloudLowBalanceMessageSession", true)) {
+    const apiKey = _cfg("devinCloudApiKey", "") || (auth && auth.apiKey) || "";
+    if (apiKey) {
+      const text = "⚠️ 额度提醒 (rt-flow 自动监测): 本账号 Devin 余额仅剩 $" + balance.toFixed(2) + " (≤ $" + threshold + ")，即将用尽。请尽快充值或转移工作，以免对话被自动中停。";
+      for (const s of active) {
+        try {
+          const r = await devinCloud.sendMessage(auth, s.devinId, text, { apiKey });
+          if (r && r.ok) log("dv-lowbal: 已向对话 " + s.devinId + " 续写额度提醒");
+          else log("dv-lowbal: 续写提醒未成 " + s.devinId + " · " + ((r && r.error) || ""));
+        } catch (e) { log("dv-lowbal send err: " + ((e && e.message) || e)); }
+      }
+    }
+  }
 }
 // v4.6.0 · Devin Cloud 概览预加载 + 增量刷新 (问题②: 彻底消除点击后加载耗时)
 //   后台对账号库内全部「有密码」账号并发(受限)登录 + 预拉概览/Git → 入 _dvOverviewCache;
