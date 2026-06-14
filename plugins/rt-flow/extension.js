@@ -749,7 +749,7 @@ const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.7.6";
+const VERSION = "4.7.7";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -8415,6 +8415,9 @@ async function _dvRunPoll() {
       } catch {}
     }
     _broadcastMsg({ type: "devinRunStatus", items });
+    // v4.7.7 · 实时进展摘要 (每轮末聚合, 供面板/终报使用)
+    const prog = _dvProgressSummary();
+    if (prog.totalActive > 0) log("dv-progress: " + prog.totalRunning + " run / " + prog.totalAwaiting + " wait / " + prog.totalBlocked + " blocked / " + prog.totalStalled + " stall · health=" + prog.health);
     // v4.6.0 · 同步刷新对话追踪面板 (Devin Cloud 子板块随之更新 · 增量·不重建侧栏)
     try { _broadcastConvSection(); } catch {}
   } catch {}
@@ -8623,23 +8626,91 @@ function _dvBackupPanelHtml() {
   );
 }
 const _dvRunningMemo = new Map(); // email → Set(devinId) 上轮运行集合
+const _dvRunningDetail = new Map(); // devinId → session obj (上轮详情, 供终报使用)
+const _dvFinalReports = []; // 最近 N 份终报 (环形·最多 50 条, 供面板/导出)
+const DV_FINAL_REPORTS_MAX = 50;
+
 function _dvDetectFinished(email, running) {
   const key = email.toLowerCase();
   const nowRun = new Set(running.map((r) => r.devinId));
+  // 更新当轮详情快照 (为下轮终报提供 session 数据)
+  for (const r of running) { _dvRunningDetail.set(r.devinId, r); }
   const prevRun = _dvRunningMemo.get(key);
   if (prevRun) {
     for (const id of prevRun) {
       if (!nowRun.has(id)) {
         const st = _dvSeen.get(id);
+        const _no = _dvAccountNo(email);
+        const who = (_no ? "#" + _no + " " : "") + (devinCloud.getTag(email) || email.split("@")[0]);
+        // v4.7.7 · 终报: 对话离场时生成结构化终报 (善始且善成)
+        const detail = _dvRunningDetail.get(id);
+        const stalled = _dvStallSeen.has(id);
+        const report = devinCloud.conversationFinalReport(detail || { devinId: id, statusClass: st }, { stalled });
+        report.account = who;
+        _dvFinalReports.push(report);
+        if (_dvFinalReports.length > DV_FINAL_REPORTS_MAX) _dvFinalReports.shift();
         if (st !== "blocked") {
-          const _no = _dvAccountNo(email);
-          _notify("info", "[" + (_no ? "#" + _no + " " : "") + (devinCloud.getTag(email) || email.split("@")[0]) + "] 对话已完成");
+          const durTxt = report.durationMin !== null ? " · 耗时 " + report.durationMin + " min" : "";
+          const costTxt = report.cost !== null ? " · $" + report.cost.toFixed(2) : "";
+          _notify("info", "[" + who + "] 对话已完成 (" + report.outcome + durTxt + costTxt + ")");
         }
+        log("dv-final: " + id + " outcome=" + report.outcome + " dur=" + report.durationMin + "min cost=" + (report.cost !== null ? "$" + report.cost.toFixed(2) : "n/a") + " stalled=" + report.stalled);
+        _dvRunningDetail.delete(id); // 已离场·释放内存 (无为)
       }
     }
   }
+  // 清理已不活跃的详情缓存 (防内存泄漏)
+  for (const id of [..._dvRunningDetail.keys()]) { if (!nowRun.has(id)) _dvRunningDetail.delete(id); }
   _dvRunningMemo.set(key, nowRun);
 }
+
+// ═══ v4.7.7 · 对话最终模块·进展摘要 (实时聚合全活跃对话的进度指标) ═══
+//   道法自然·大制无割: 将分散于多账号多对话的实时状态汇聚为一份结构化摘要,
+//   供面板/日志/后续「终报」一致消费。每 _dvRunPoll 轮次末调用, 写入 _dvProgressCache。
+const _dvProgressCache = { ts: 0, summary: null };
+function _dvProgressSummary() {
+  const now = Date.now();
+  let totalActive = 0, totalRunning = 0, totalAwaiting = 0, totalBlocked = 0, totalStalled = 0;
+  const perAccount = [];
+  for (const [email, st] of _dvStatusAgg) {
+    totalActive += st.total || 0;
+    totalRunning += st.running || 0;
+    totalAwaiting += st.awaiting || 0;
+    totalBlocked += st.blocked || 0;
+    // 卡死计数: 从 _dvStallSeen 中统计该账号有多少对话已判卡死
+    let stalled = 0;
+    for (const item of (st.items || [])) {
+      // 无法直接用 devinId (statusAgg 不存), 以 title + cls 近似 (显示用·不做自动决策)
+      if (item.cls === "running" && _dvStallSeen.size > 0) stalled++; // 上界估计
+    }
+    totalStalled += stalled;
+    perAccount.push({
+      email,
+      no: st.no || 0,
+      tag: st.tag || "",
+      running: st.running || 0,
+      awaiting: st.awaiting || 0,
+      blocked: st.blocked || 0,
+      stalled,
+      total: st.total || 0,
+    });
+  }
+  const summary = {
+    ts: now,
+    totalActive,
+    totalRunning,
+    totalAwaiting,
+    totalBlocked,
+    totalStalled,
+    accountCount: perAccount.length,
+    perAccount,
+    health: totalBlocked === 0 && totalStalled === 0 ? "green" : (totalBlocked > 0 ? "red" : "amber"),
+  };
+  _dvProgressCache.ts = now;
+  _dvProgressCache.summary = summary;
+  return summary;
+}
+
 // 自动增量备份定时器
 function _dvStartAuto() {
   if (_dvAutoTimer) return;

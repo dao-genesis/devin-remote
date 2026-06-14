@@ -222,6 +222,83 @@ function test(name, fn) {
     assert.strictEqual(cloud.stallVerdict(NaN, 15 * 60000), false);
   });
 
+  // ── 10. 对话最终报告 (conversationFinalReport · v4.7.7) ──────────────────────
+  console.log("\n[conversationFinalReport]");
+  test("finished 对话 → outcome=success + 时长计算正确", () => {
+    const now = 1718400000000; // 固定时刻
+    const created = new Date(now - 30 * 60000).toISOString(); // 30 分钟前
+    const r = cloud.conversationFinalReport(
+      { devinId: "dv-123", statusClass: "finished", title: "Fix bug", created_at: created },
+      { now }
+    );
+    assert.strictEqual(r.outcome, "success");
+    assert.strictEqual(r.durationMin, 30);
+    assert.strictEqual(r.devinId, "dv-123");
+    assert.strictEqual(r.title, "Fix bug");
+    assert.strictEqual(r.stalled, false);
+  });
+  test("suspended 对话 → outcome=archived", () => {
+    const r = cloud.conversationFinalReport({ statusClass: "suspended" }, {});
+    assert.strictEqual(r.outcome, "archived");
+  });
+  test("blocked + usage reason → outcome=cap_exceeded", () => {
+    const r = cloud.conversationFinalReport({ statusClass: "blocked", reason: "Usage limit reached" }, {});
+    assert.strictEqual(r.outcome, "cap_exceeded");
+  });
+  test("blocked + 其他 reason → outcome=blocked", () => {
+    const r = cloud.conversationFinalReport({ statusClass: "blocked", reason: "needs input" }, {});
+    assert.strictEqual(r.outcome, "blocked");
+  });
+  test("running + opts.stalled=true → outcome=stalled", () => {
+    const r = cloud.conversationFinalReport({ statusClass: "running" }, { stalled: true });
+    assert.strictEqual(r.outcome, "stalled");
+  });
+  test("空输入 → outcome=unknown, 各字段 null (安全·不臆造)", () => {
+    const r = cloud.conversationFinalReport(null, {});
+    assert.strictEqual(r.outcome, "unknown");
+    assert.strictEqual(r.devinId, null);
+    assert.strictEqual(r.durationMs, null);
+    assert.strictEqual(r.cost, null);
+  });
+  test("cost 优先级: opts.cost > session.total_cost > session.usage_credits", () => {
+    assert.strictEqual(cloud.conversationFinalReport({ total_cost: 5 }, { cost: 3 }).cost, 3);
+    assert.strictEqual(cloud.conversationFinalReport({ total_cost: 5, usage_credits: 8 }, {}).cost, 5);
+    assert.strictEqual(cloud.conversationFinalReport({ usage_credits: 8 }, {}).cost, 8);
+  });
+
+  // ── 11. 综合健康度 (healthScore · v4.7.7) ────────────────────────────────────
+  console.log("\n[healthScore]");
+  test("全正常(充裕余额·无卡死·无阻塞) → score=100, tier=green", () => {
+    const r = cloud.healthScore({ balance: 50, balanceThreshold: 3, stalledCount: 0, blockedCount: 0 });
+    assert.strictEqual(r.score, 100);
+    assert.strictEqual(r.tier, "green");
+  });
+  test("余额见底(余额=0) → 扣满余额权重 40", () => {
+    const r = cloud.healthScore({ balance: 0, balanceThreshold: 3, stalledCount: 0, blockedCount: 0 });
+    assert.strictEqual(r.score, 60);
+    assert.strictEqual(r.tier, "amber");
+  });
+  test("一个卡死 → 扣 15, tier=green (score=85)", () => {
+    const r = cloud.healthScore({ balance: 50, balanceThreshold: 3, stalledCount: 1, blockedCount: 0 });
+    assert.strictEqual(r.score, 85);
+    assert.strictEqual(r.tier, "green");
+  });
+  test("两个卡死 → 扣 30(封顶), tier=amber (score=70)", () => {
+    const r = cloud.healthScore({ balance: 50, balanceThreshold: 3, stalledCount: 2, blockedCount: 0 });
+    assert.strictEqual(r.score, 70);
+    assert.strictEqual(r.tier, "amber");
+  });
+  test("阻塞+卡死+低余额 → 三维度叠加, tier=red", () => {
+    const r = cloud.healthScore({ balance: 1, balanceThreshold: 3, stalledCount: 2, blockedCount: 2 });
+    assert.ok(r.score < 50, "score should be < 50: " + r.score);
+    assert.strictEqual(r.tier, "red");
+  });
+  test("空输入 → score=100 (无异常 = 安全)", () => {
+    const r = cloud.healthScore({});
+    assert.strictEqual(r.score, 100);
+    assert.strictEqual(r.tier, "green");
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);

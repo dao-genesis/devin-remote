@@ -868,6 +868,87 @@ function stallVerdict(unchangedMs, stallMs) {
   return u >= s;
 }
 
+// v4.7.7 · 对话最终报告纯函数(可单测): 对话结束时生成结构化终报(outcome/duration/cost/stall)。
+//   道法自然·善始且善成: 对话有始有终, 终报如实记载——不臆造、不美化、缺数据则 null。
+//   outcome: "success" | "stalled" | "blocked" | "cap_exceeded" | "archived" | "unknown"
+//   按 statusClass/reason 实证分类; 无法判定(空输入)→ "unknown"。
+function conversationFinalReport(sess, opts) {
+  opts = opts || {};
+  const s = sess || {};
+  const now = opts.now || Date.now();
+
+  // outcome 分类 (反者道之动·以实证分, 不臆断)
+  let outcome = "unknown";
+  const sc = (s.statusClass || "").toLowerCase();
+  const reason = (s.reason || "").toLowerCase();
+  if (sc === "finished" || sc === "completed" || sc === "suspended") {
+    outcome = sc === "suspended" ? "archived" : "success";
+  } else if (sc === "blocked") {
+    outcome = reason.includes("usage") || reason.includes("limit") || reason.includes("cap") ? "cap_exceeded" : "blocked";
+  } else if (sc === "stalled" || (sc === "running" && opts.stalled)) {
+    outcome = "stalled";
+  }
+
+  // duration (毫秒): 取 createdAt → now 时间差; 缺 createdAt 则 null
+  let durationMs = null;
+  if (s.createdAt || s.created_at) {
+    const t0 = new Date(s.createdAt || s.created_at).getTime();
+    if (Number.isFinite(t0)) durationMs = Math.max(0, now - t0);
+  }
+
+  // cost: 取 opts.cost 或 session 内嵌的 total_cost / usage_credits (实测 Devin 会话有此字段)
+  let cost = null;
+  if (typeof opts.cost === "number" && isFinite(opts.cost)) cost = opts.cost;
+  else if (typeof s.total_cost === "number" && isFinite(s.total_cost)) cost = s.total_cost;
+  else if (typeof s.usage_credits === "number" && isFinite(s.usage_credits)) cost = s.usage_credits;
+
+  return {
+    devinId: s.devinId || s.devin_id || s.id || null,
+    title: s.title || null,
+    outcome,
+    durationMs,
+    durationMin: durationMs !== null ? Math.round(durationMs / 60000) : null,
+    cost,
+    statusClass: s.statusClass || null,
+    reason: s.reason || null,
+    stalled: !!opts.stalled,
+    timestamp: now,
+  };
+}
+
+// v4.7.7 · 综合健康度纯函数(可单测): 将余额/卡死/阻塞三维度压缩为单一健康分数 0-100。
+//   道法自然·三盗既宜三才既安: 余额充足(≥阈值) + 无卡死 + 无阻塞 → 100(全安);
+//   任一维度异常按权重扣分: balance 权 40, stall 权 30, blocked 权 30。
+//   score ∈ [0,100] 整数; tier: "green" ≥ 80 | "amber" ≥ 50 | "red" < 50。
+function healthScore(inputs) {
+  const i = inputs || {};
+  let score = 100;
+
+  // 余额维度 (权重 40): 余额/阈值 比值越低扣分越多
+  const bal = Number(i.balance);
+  const thr = Math.max(0, Number(i.balanceThreshold) || 0);
+  if (Number.isFinite(bal) && thr > 0) {
+    const ratio = Math.max(0, Math.min(1, bal / (thr * 3))); // 3倍阈值 = 满分基准
+    score -= Math.round((1 - ratio) * 40);
+  }
+
+  // 卡死维度 (权重 30): 有卡死对话即扣分, 多个累加(但封顶 30)
+  const stalled = Math.max(0, +(i.stalledCount) || 0);
+  if (stalled > 0) {
+    score -= Math.min(30, stalled * 15); // 每个卡死扣 15, 最多扣满 30
+  }
+
+  // 阻塞维度 (权重 30): 有阻塞对话即扣分
+  const blocked = Math.max(0, +(i.blockedCount) || 0);
+  if (blocked > 0) {
+    score -= Math.min(30, blocked * 15);
+  }
+
+  score = Math.max(0, Math.min(100, score));
+  const tier = score >= 80 ? "green" : (score >= 50 ? "amber" : "red");
+  return { score, tier };
+}
+
 function isUserPlaybook(p, auth) {
   if (!p) return false;
   if (p.access === "community") return false; // Cognition 社区共享剧本
@@ -2027,4 +2108,7 @@ module.exports = {
   lowBalanceVerdict,
   sessionSignature,
   stallVerdict,
+  // v4.7.7 · 对话最终报告 + 健康度 (可测纯函数)
+  conversationFinalReport,
+  healthScore,
 };
