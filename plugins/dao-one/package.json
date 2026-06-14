@@ -51,7 +51,7 @@
           "type": "webview"
         },
         {
-          "id": "dao.essence",
+          "id": "dao.router",
           "name": "② Proxy Pro · 模型路由",
           "type": "webview"
         },

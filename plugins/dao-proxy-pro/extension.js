@@ -3187,6 +3187,8 @@ function ensureIconSvg() {
 
 // ═══════════════════════════ activate / deactivate ═══════════════════════════
 let _essenceProvider = null;
+// ★ 归一·② Proxy Pro: 三模块面板(本源观照·渠道配置·模型路由)作为侧栏视图复用
+let _eaRouterProvider = null;
 // ★ 状态栏入口 · 五十二章「既得其母 以知其子」· 三模块面板唯一开门处
 let _statusBarItem = null;
 // ★ 模型解锁 · 首装即自化 · 全109模型现于选择器 (三十七章「万物将自化」)
@@ -3419,6 +3421,19 @@ function activate(ctx) {
       vscode.window.registerWebviewViewProvider(
         "dao.essence",
         _essenceProvider,
+        {
+          webviewOptions: { retainContextWhenHidden: true },
+        },
+      ),
+    );
+
+    // ★ 归一·② Proxy Pro: 把「三模块面板」整体作为侧栏视图 dao.router 复用 ——
+    //   与中央面板 cmdEaConfig 同源 getEaConfigHtml(源照/渠配/模路·拖排·1:1·实连),零前端重写。
+    _eaRouterProvider = new EaRouterProvider(ctx);
+    ctx.subscriptions.push(
+      vscode.window.registerWebviewViewProvider(
+        "dao.router",
+        _eaRouterProvider,
         {
           webviewOptions: { retainContextWhenHidden: true },
         },
@@ -4030,17 +4045,20 @@ function getEaConfigHtml(port, nonce) {
   .btn.probe:hover { background: rgba(128,176,224,0.15); }
   /* ── 连线图区域 ── */
   .wire-container {
-    flex: 1; display: flex; gap: 0; overflow: hidden; border-radius: 4px;
-    background: rgba(0,0,0,0.05); min-height: 200px;
+    flex: 1; display: flex; gap: 0; overflow-y: auto; overflow-x: hidden; border-radius: 4px;
+    background: rgba(0,0,0,0.05); min-height: 200px; align-items: flex-start; position: relative;
   }
+  /* 单一滚动层: 左右列不再各自滚动,整段随容器一起滚动 → 连线与内容同层移动,无抖动 */
   .wire-col {
-    flex: 1; display: flex; flex-direction: column; padding: 6px; overflow-y: auto;
+    flex: 1; display: flex; flex-direction: column; padding: 6px; overflow: visible;
   }
   .wire-col.left { border-right: 1px solid rgba(128,128,128,0.15); }
   .wire-col.right { }
   .wire-col h3 {
     font-size: 10px; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px;
     margin-bottom: 4px; font-weight: 600;
+    position: sticky; top: 0; z-index: 11;
+    background: var(--vscode-sideBar-background, var(--vscode-editor-background, #1e1e1e));
   }
   .model-item {
     display: flex; align-items: center; gap: 4px; padding: 3px 6px;
@@ -4715,6 +4733,11 @@ function getEaConfigHtml(port, nonce) {
     var container = document.getElementById('wireContainer');
     var cRect = container.getBoundingClientRect();
     if (cRect.width === 0) return;
+    // 单一滚动层: SVG 覆盖整段滚动内容(高=scrollHeight),作为滚动容器的绝对定位子元素
+    // 随内容原生滚动 → 连线与左右列同层移动,无需任何滚动期 JS 重绘(根除"一卡一卡")。
+    var sc = container.scrollTop;
+    svg.style.width = container.clientWidth + 'px';
+    svg.style.height = container.scrollHeight + 'px';
 
     for (var uid in _routes) {
       var route = _routes[uid];
@@ -4738,9 +4761,9 @@ function getEaConfigHtml(port, nonce) {
       var lRect = leftEl.getBoundingClientRect();
       var rRect = rightEl.getBoundingClientRect();
       var x1 = lRect.right - cRect.left;
-      var y1 = lRect.top + lRect.height / 2 - cRect.top;
+      var y1 = lRect.top - cRect.top + sc + lRect.height / 2;
       var x2 = rRect.left - cRect.left;
-      var y2 = rRect.top + rRect.height / 2 - cRect.top;
+      var y2 = rRect.top - cRect.top + sc + rRect.height / 2;
       var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       var isDead = _health[route.provider] && !_health[route.provider].alive;
       path.setAttribute('class', 'wire-line' + (isDead ? ' dead' : ' active'));
@@ -4967,11 +4990,8 @@ function getEaConfigHtml(port, nonce) {
   // ── 窗口 resize 时重绘连线 ──
   window.addEventListener('resize', function() { _scheduleWires(); });
 
-  // ★ v9.9.288 · 滚动时连线实时跟随 (rAF 节流·不再一卡一卡) ──
-  ['leftCol', 'rightCol', 'wireContainer'].forEach(function(id) {
-    var el = document.getElementById(id);
-    if (el) el.addEventListener('scroll', _scheduleWires, { passive: true });
-  });
+  // ★ 单一滚动层: 连线 SVG 作为滚动容器的绝对定位子元素随内容原生滚动,
+  //   无需监听 scroll 做主线程重绘 —— 连线稳定·实时·高效,彻底消除"一卡一卡"。
 
   // ★ v9.9.288 · 1:1 对齐开关 (开↔关·可回退) ──
   (function() {
@@ -5135,6 +5155,32 @@ async function _saveHandoffDoc(content) {
 }
 
 // ★ v9.9.90 · 外接api 热配置面板命令
+// ★ 归一·② Proxy Pro 侧栏视图 Provider: 渲染三模块面板(getEaConfigHtml),
+//   与中央面板 cmdEaConfig 同一 HTML/端口映射/消息桥 —— 复用为主,无重写。
+class EaRouterProvider {
+  constructor(ctx) { this._ctx = ctx; this._view = null; }
+  resolveWebviewView(webviewView) {
+    this._view = webviewView;
+    webviewView.webview.options = {
+      enableScripts: true,
+      portMapping: [{ webviewPort: _cachedPort, extensionHostPort: _cachedPort }],
+    };
+    webviewView.webview.html = getEaConfigHtml(_cachedPort, _genNonce());
+    webviewView.webview.onDidReceiveMessage((msg) => {
+      try {
+        if (!msg || !msg.type) return;
+        if (msg.type === "focusEssence")
+          vscode.commands.executeCommand("workbench.view.extension.dao-container");
+        else if (msg.type === "openPreview") cmdOpenPreview();
+        else if (msg.type === "modelStatus") cmdModelUnlockStatus();
+        else if (msg.type === "saveHandoff") _saveHandoffDoc(msg.content || "");
+      } catch (e) { L.warn("router", `msg handle fail: ${e && e.message}`); }
+    });
+    try { webviewView.show(true); } catch {}
+    L.info("router", `dao.router resolved · port=${_cachedPort}`);
+  }
+}
+
 async function cmdEaConfig() {
   try {
     const panel = vscode.window.createWebviewPanel(
