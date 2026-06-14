@@ -260,6 +260,7 @@ const crypto = require("node:crypto");
 const { URL } = require("node:url");
 // 第五板块 · Devin Cloud 接入底层 (对话提取/备份/追踪/水过无痕清理)
 const devinCloud = require("./devin_cloud");
+const devinWeb = require("./devin_web"); // v4.8.0 · 浏览器多实例隔离+账号注入 (自足·CDP 注入 auth1_session)
 const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (整合 devin-git-auth 核心)
 
 // ═══ § 1 · 万法之资 ═══
@@ -875,6 +876,8 @@ const LOCK_FILE = path.join(WAM_DIR, "lock-state.json");
 // v3.7.6 · dismiss 跨窗口持久化 · 小邦寺民·各得其欲·大者宜为下
 const DISMISS_FILE = path.join(WAM_DIR, "_conv_dismiss.json"); // uuid→ts 共享持久文件·多窗口共守
 const CONV_DISMISS_TTL = 600000; // 10min dismiss 自动过期时长
+// v4.8.0 · 永久取消追踪 (二次点击 X · Cascade 同款) · uuid 集 · 跨窗口持久 · 永不复现
+const UNTRACK_FILE = path.join(WAM_DIR, "_conv_untrack.json");
 // v13.2 · 通知一次性闸门 · 跨窗口共享 · 同一异常生命周期只弹一次
 const CONV_NOTIFY_DIR = path.join(WAM_DIR, "_conv_notify_claims"); // uuid.json 存在 = 本轮异常已提示
 const BACKUP_DIR = path.join(WAM_DIR, "backups");
@@ -952,6 +955,7 @@ let _output = null,
   _convTitleMap = {}, // uuid → title (永久缓存 · 备份后旴新)
   // v3.7.5 · 对话手动关闭 · 反者道之动 · 道法自然
   _dismissedConvUuids = new Map(), // uuid → dismissTs · 10min 自动过期 · 用户手动关闭对话提醒
+  _untrackedConvUuids = new Set(), // v4.8.0 · uuid · 二次点击 X → 永久取消追踪 · 永不复现 (Cascade 同款)
   // v3.7.6 · dismiss 持久化防抖 · 多窗口同步
   _dismissWatchDebounce = null, // dismiss 文件监视防抖定时器
   // v3.7.7 · 启动围栏 · staleSec > uptime+缓冲 → 该对话卡住于 WAM 启动前 → 自动清零
@@ -1182,6 +1186,7 @@ function _updateStuckStatusBar(data) {
   const visible = data.stuckList.filter((s) => {
     // 安全网: staleSec > 10min → 不显示
     if (s.staleSec > STUCK_STALE_MAX) return false;
+    if (s.uuid && _untrackedConvUuids.has(s.uuid)) return false; // v4.8.0 · 永久取消追踪 · 永不复现
     const _titleOk = _convDisplayTitle(
       s.uuid,
       s.title,
@@ -1345,6 +1350,8 @@ function _processHubStuck(data) {
         ) || (s.uuid ? "对话 #" + s.uuid.replace(/-/g, "").slice(0, 8) : "");
       if (!displayName) continue;
 
+      // v4.8.0 · 永久取消追踪 → 彻底不通知
+      if (_untrackedConvUuids.has(s.uuid)) continue;
       // v3.7.5 · 手动关闭联动 · 10min 内静默通知 (自动过期后恢复)
       const _dismissTs = _dismissedConvUuids.get(s.uuid);
       if (_dismissTs) {
@@ -1420,6 +1427,7 @@ function _processHubStuck(data) {
       if (c.state !== "streaming") continue;
       if (c.isAwaitingUser && !_notifyOnAwait) continue;
       if (c.staleSec > STUCK_STALE_MAX) continue; // 10min+ 静默
+      if (_untrackedConvUuids.has(c.uuid)) continue; // v4.8.0 · 永久取消追踪 → 不通知
       // 已 dismiss 跳过
       const _dt = _dismissedConvUuids.get(c.uuid);
       if (_dt) {
@@ -1564,6 +1572,41 @@ function _saveDismissedToDisk() {
   }
 }
 
+// ═══ v4.8.0 · 永久取消追踪 (二次点击 X · Cascade 同款) · 跨窗口持久 ═══
+//   一次点 X = 10min 静默 (旧)；静默态再点 X = 永久取消追踪 · 永不复现
+//   反者道之动 · 知止不殆 — 用户主权终态 · 可 wam.clearConvUntrack 复原
+function _loadUntrackedFromDisk() {
+  try {
+    if (!fs.existsSync(UNTRACK_FILE)) return false;
+    const arr = JSON.parse(fs.readFileSync(UNTRACK_FILE, "utf8"));
+    if (!Array.isArray(arr)) return false;
+    let changed = false;
+    for (const u of arr) {
+      if (typeof u === "string" && u && !_untrackedConvUuids.has(u)) {
+        _untrackedConvUuids.add(u);
+        changed = true;
+      }
+    }
+    return changed;
+  } catch {
+    return false;
+  }
+}
+function _saveUntrackedToDisk() {
+  try {
+    // 合并磁盘已有 (其他窗口写入) + 当前内存 · 不覆盖他窗 · 大者宜为下
+    try {
+      if (fs.existsSync(UNTRACK_FILE)) {
+        const arr = JSON.parse(fs.readFileSync(UNTRACK_FILE, "utf8"));
+        if (Array.isArray(arr)) for (const u of arr) if (u) _untrackedConvUuids.add(u);
+      }
+    } catch {}
+    atomicWrite(UNTRACK_FILE, JSON.stringify([..._untrackedConvUuids]));
+  } catch (e) {
+    log("untrack-save err: " + (e.message || e));
+  }
+}
+
 // v3.5.0 · 安装 Hub 文件监视器 + 轮询保底 (双保险 · 善闭者无闩钥而不可启也)
 function _installHubWatcher(context) {
   try {
@@ -1617,6 +1660,7 @@ function _installHubWatcher(context) {
 
     // v3.7.6 ★ [F] dismiss 文件监视 · 跨窗口同步 (A窗口 dismiss → B窗口自动更新)
     _loadDismissedFromDisk(); // 启动时加载磁盘 dismiss 状态
+    _loadUntrackedFromDisk(); // v4.8.0 · 启动加载永久取消追踪集
     fs.watchFile(DISMISS_FILE, { persistent: true, interval: 1000 }, () => {
       clearTimeout(_dismissWatchDebounce);
       _dismissWatchDebounce = setTimeout(() => {
@@ -1633,6 +1677,20 @@ function _installHubWatcher(context) {
           fs.unwatchFile(DISMISS_FILE);
         } catch {}
         clearTimeout(_dismissWatchDebounce);
+      },
+    });
+    // v4.8.0 · 永久取消追踪文件监视 · 跨窗口同步
+    fs.watchFile(UNTRACK_FILE, { persistent: true, interval: 1500 }, () => {
+      if (_loadUntrackedFromDisk()) {
+        _broadcastConvSection();
+        log("untrack-sync: 跨窗口同步永久取消追踪集");
+      }
+    });
+    context.subscriptions.push({
+      dispose: () => {
+        try {
+          fs.unwatchFile(UNTRACK_FILE);
+        } catch {}
       },
     });
 
@@ -3203,6 +3261,7 @@ ${_dvBackupPanelHtml()}
   if (hub.stuckList && hub.stuckList.length > 0) {
     visibleStuck = hub.stuckList.filter((s) => {
       if (s.staleSec > STUCK_STALE_MAX) return false;
+      if (s.uuid && _untrackedConvUuids.has(s.uuid)) return false; // v4.8.0 · 永久取消追踪
       // v14.0 根治: UUID 兜底代替静默丢弃 — 卡死对话必显示·与通知同源
       //   旧逻辑「无标题就不显示」违反「卡死必告知」原则 → 用户失明
       //   新逻辑: title 失败 → "对话 #短UUID" 兜底 → 始终可见
@@ -3275,6 +3334,7 @@ ${_dvBackupPanelHtml()}
   const _nowSv = Date.now();
   const _streamingFiltered = _visibleStreamingList.filter((c) => {
     if (!c.uuid) return true;
+    if (_untrackedConvUuids.has(c.uuid)) return false; // v4.8.0 · 永久取消追踪
     const _dt = _dismissedConvUuids.get(c.uuid);
     if (!_dt) return true;
     if (_nowSv - _dt < CONV_DISMISS_TTL) return false; // 未过期 · 隐藏
@@ -8167,7 +8227,31 @@ function toggleConv(){const b=document.getElementById('convBody');if(!b)return;b
 function doSetBackupDir(){vscode.postMessage({type:'selectBackupDir'});}
 function doSetDevinBackupDir(){vscode.postMessage({type:'devinSelectBackupDir'});}
 // v3.7.5+3.7.6 · 对话手动关闭 · 反者道之动 · 即时本地消除+持久化
-function dismissConv(uuid){if(!uuid)return;const btn=document.querySelector('.cv-close[data-uuid="'+uuid+'"]');if(btn){const item=btn.closest('.cv-stuck-item');if(item)item.remove();}vscode.postMessage({type:'dismissConv',uuid:uuid});}
+// v4.8.0 · Cascade 同款两段式: 一次点 X = 8s 内可二次确认; 二次点 X = 永久取消追踪 · 永不复现
+//   未二次点击 → 8s 后落 10min 静默 (旧行为)。反者道之动 · 用户主权终态
+function dismissConv(uuid){
+  if(!uuid)return;
+  const btn=document.querySelector('.cv-close[data-uuid="'+uuid+'"]');
+  if(!btn){vscode.postMessage({type:'dismissConv',uuid:uuid});return;}
+  const item=btn.closest('.cv-stuck-item')||btn.closest('.cv-current');
+  if(btn.getAttribute('data-armed')==='1'){
+    if(btn._t){clearTimeout(btn._t);btn._t=null;}
+    if(item)item.remove();
+    showToast('\u2713 \u5df2\u6c38\u4e45\u53d6\u6d88\u8ffd\u8e2a\u6b64\u5bf9\u8bdd');
+    vscode.postMessage({type:'dismissConv',uuid:uuid,permanent:true});
+    return;
+  }
+  btn.setAttribute('data-armed','1');
+  btn.style.color='#e5a';btn.style.fontWeight='bold';
+  btn.title='\u518d\u70b9\u4e00\u6b21 = \u6c38\u4e45\u53d6\u6d88\u8ffd\u8e2a (8\u79d2\u5185)';
+  if(item)item.style.opacity='0.5';
+  showToast('\u518d\u70b9\u4e00\u6b21X=\u6c38\u4e45\u53d6\u6d88\u8ffd\u8e2a\uff0c\u5426\u52198s\u540e\u9759\u9ed810min');
+  btn._t=setTimeout(function(){
+    btn.removeAttribute('data-armed');btn.style.color='';btn.style.fontWeight='';
+    if(item)item.remove();
+    vscode.postMessage({type:'dismissConv',uuid:uuid});
+  },8000);
+}
 function toggleAdd(){const b=document.getElementById('addBody');b.classList.toggle('open');const isOpen=b.classList.contains('open');document.getElementById('addArrow').textContent=isOpen?'\\u25B2':'\\u25BC';const s=vscode.getState()||{};vscode.setState({...s,addOpen:isOpen});vscode.postMessage({type:'setAddOpen',open:isOpen});}
 function doAdd(){const ta=document.getElementById('addInput');const t=ta.value.trim();if(!t)return;vscode.postMessage({type:'addBatch',text:t});ta.value='';const s=vscode.getState()||{};vscode.setState({...s,addText:''});}
 function showToast(m,cls){const t=document.getElementById('toast');t.textContent=m;t.className='toast show'+(cls?' '+cls:'');setTimeout(()=>{t.className='toast';},2200);}
@@ -9501,25 +9585,73 @@ async function handleWebviewMessage(msg) {
             const r = await loginAccount(_store, i);
             if (!r.ok) _toast("✗ 切号失败: " + (r.error || r.stage || ""));
           }
-          // 复用 dao-vsix 命令: 经本地反代根路径路由官网, auth1 自动注入登录
+          // v4.8.0 · IDE 内部路由官网: 先试 dao-vsix 反代命令(注入 auth1 自动登录),
+          //   失败回退 simpleBrowser(IDE 内置·不再 openExternal → 杜绝"操作IDE与网页冲突"弹窗)。
+          let routed = false;
           try {
             await vscode.commands.executeCommand("dao.devinCloudBrowser");
-          } catch {
-            await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
+            routed = true;
+          } catch {}
+          if (!routed) {
+            try {
+              await vscode.commands.executeCommand(
+                "simpleBrowser.show",
+                "https://app.devin.ai",
+              );
+              routed = true;
+            } catch {}
           }
-          _toast("🖥 已路由官网→IDE · " + a.email.split("@")[0]);
+          _toast(
+            (routed ? "🖥 已路由官网→IDE · " : "✗ IDE 内置浏览器不可用 · ") +
+              a.email.split("@")[0],
+          );
         } catch (e) {
           _toast("✗ 路由失败: " + (e && e.message));
         }
         break;
       }
-      // ★ 归一 · 系统默认浏览器打开官网 (跳出 IDE 框架·多实例: 每次点击新开标签)
+      // ★ v4.8.0 · 系统浏览器多实例隔离 (自足·不赖 dao-vsix)
+      //   每账号独立 --user-data-dir profile → 彻底隔离用户默认浏览器认证;
+      //   该账号 profile 持久化: 首次登录后, 此后每次点同一账号皆自动续登,
+      //   多账号并行各自独立窗口互不相干。另尽力 CDP 预种 auth1_session 兜底。
       case "openSysBrowser": {
         const i = msg.index;
         if (i < 0 || i >= _store.accounts.length) return;
         const a = _store.accounts[i];
-        await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
-        _toast("🌐 系统浏览器已打开官网 · " + a.email.split("@")[0]);
+        _toast("⏳ 隔离浏览器启动中 · " + a.email.split("@")[0]);
+        try {
+          // 先取该账号注入态 (缓存命中秒开; 否则后台登录换 auth1+userId)。
+          let auth = devinCloud.getCachedAuth(a.email);
+          if (!auth && a.password) {
+            const r = await devinCloud.getAuth(a.email, a.password);
+            if (r && r.ok) auth = r;
+          }
+          const res = await devinWeb.launchAccountBrowser({
+            email: a.email,
+            auth1: auth && auth.auth1,
+            userId: auth && auth.userId,
+            orgId: auth && auth.orgId,
+            orgName: auth && auth.orgName,
+            log,
+          });
+          if (res.ok) {
+            _toast(
+              "🌐 独立隔离实例已开 · " +
+                a.email.split("@")[0] +
+                " (首次登录一次后自动续登)",
+            );
+          } else if (res.error === "no-browser") {
+            // 无 Chrome/Edge → 系统默认浏览器兜底 (无隔离)。
+            await vscode.env.openExternal(
+              vscode.Uri.parse("https://app.devin.ai"),
+            );
+            _toast("🌐 默认浏览器已打开(未找到 Chrome/Edge·无隔离)");
+          } else {
+            _toast("✗ 浏览器启动失败: " + (res.error || ""));
+          }
+        } catch (e) {
+          _toast("✗ 浏览器启动失败: " + (e && e.message));
+        }
         break;
       }
       case "verify": {
@@ -10807,15 +10939,30 @@ async function handleWebviewMessage(msg) {
       // 用户点 × 关闭某条卡住对话提醒 → 本地静默 10min → 面板立即消失
       case "dismissConv": {
         if (msg.uuid) {
-          _dismissedConvUuids.set(msg.uuid, Date.now());
-          _saveDismissedToDisk(); // v3.7.6: 持久化 · 多窗同步 (A窗dismiss→写盘→B窗watchFile触发)
-          log(
-            "conv-dismiss: " +
-              msg.uuid.substring(0, 8) +
-              " (10min静默 · 已写盘)",
-          );
-          _broadcastConvSection(); // 立即更新面板 · 移除该条目
-          _toast("✓ 已关闭对话提醒 (10min后若仍卡住将恢复)");
+          if (msg.permanent) {
+            // v4.8.0 · 二次点击 X = 永久取消追踪 (Cascade 同款) · 永不复现
+            _untrackedConvUuids.add(msg.uuid);
+            _dismissedConvUuids.delete(msg.uuid);
+            _saveUntrackedToDisk();
+            _saveDismissedToDisk();
+            log(
+              "conv-untrack: " +
+                msg.uuid.substring(0, 8) +
+                " (永久取消追踪 · 已写盘)",
+            );
+            _broadcastConvSection(); // 立即更新面板 · 永久移除
+            _toast("✓ 已永久取消追踪此对话 (命令面板 wam.clearConvUntrack 可恢复)");
+          } else {
+            _dismissedConvUuids.set(msg.uuid, Date.now());
+            _saveDismissedToDisk(); // v3.7.6: 持久化 · 多窗同步 (A窗dismiss→写盘→B窗watchFile触发)
+            log(
+              "conv-dismiss: " +
+                msg.uuid.substring(0, 8) +
+                " (10min静默 · 已写盘)",
+            );
+            _broadcastConvSection(); // 立即更新面板 · 移除该条目
+            _toast("✓ 已静默10min · 再点一次X=永久取消追踪");
+          }
         }
         break;
       }
@@ -11982,6 +12129,23 @@ async function activate(context) {
         const changed = await _setMode("official");
         if (!changed) _notify("info", "WAM: 已是官方登录模式");
         else _notify("info", "WAM: 切官方登录模式 · 已登出 · 可用官方登录");
+      },
+    ],
+    [
+      // v4.8.0 · 复原全部「永久取消追踪」的对话 (清空 untrack 集)
+      "wam.clearConvUntrack",
+      async () => {
+        const n = _untrackedConvUuids.size;
+        if (n === 0) {
+          _notify("info", "WAM: 当前无永久取消追踪的对话");
+          return;
+        }
+        _untrackedConvUuids.clear();
+        try {
+          atomicWrite(UNTRACK_FILE, JSON.stringify([]));
+        } catch {}
+        _broadcastConvSection();
+        _notify("info", "WAM: 已复原 " + n + " 个永久取消追踪的对话 (将重新追踪)");
       },
     ],
   ];
