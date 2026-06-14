@@ -749,7 +749,7 @@ const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.7.0";
+const VERSION = "4.7.1";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -7891,8 +7891,14 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-tb-git{background:#0d1a14;border:1px solid #1f3a2a;border-radius:4px;padding:4px 6px}
 .dv-stat-c{cursor:pointer;text-decoration:underline dotted #555}.dv-stat-c:hover{color:#9cdcfe;text-decoration-color:#9cdcfe}
 .dv-board{margin:3px 0 5px;padding:4px 6px;background:#10151c;border:1px solid #243;border-radius:4px;max-height:160px;overflow:auto}
-.dv-board-item{font-size:10px;color:#cdd;padding:2px 4px;border-bottom:1px solid #1c2530;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dv-board-item{font-size:10px;color:#cdd;padding:2px 4px;border-bottom:1px solid #1c2530;display:flex;align-items:center;gap:5px}
+.dv-board-item .bd-nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dv-board-item .dvc-chk{margin:0;flex:none;cursor:pointer}
+.dv-board-item .bd-acts{display:flex;gap:3px;flex:none;opacity:.5;transition:opacity .15s}
+.dv-board-item:hover .bd-acts{opacity:1}
 .dv-board-empty{font-size:10px;color:#666}
+.dv-board-bar{display:none;background:#16232c;border:1px solid #244;border-radius:4px;padding:2px 6px;margin:2px 0;font-size:10px;color:#9cdcfe;align-items:center;gap:5px;flex-wrap:wrap}
+.dv-board-bar.on{display:flex}
 .b.sk{background:transparent;color:#666;font-size:12px}.b.sk:hover{color:#f0c674}
 .b.vf,.b.cp{background:#333;color:var(--blue)}.b.vf:hover,.b.cp:hover{background:#444}
 .b.rm{background:transparent;color:#555;font-size:14px}.b.rm:hover{color:var(--red)}
@@ -8070,6 +8076,15 @@ function dvConvZip(i,did){showToast('\u23F3 打包对话 ZIP…');vscode.postMes
 function dvConvDel(i,did){vscode.postMessage({type:'dvConvDel',index:i,devinId:did});}
 function dvConvZipBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u2717 先勾选对话');return;}showToast('\u23F3 合并打包 '+ids.length+' 个对话…');vscode.postMessage({type:'dvConvZipBatch',index:i,devinIds:ids});}
 function dvConvDelBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u2717 先勾选对话');return;}vscode.postMessage({type:'dvConvDelBatch',index:i,devinIds:ids});}
+/* v4.7.0 · 知识库/剧本/密钥 多选(Shift) + 查看/下载/删除 + 批量 */
+let _bdLast={};
+function _bdChks(i,k){return [...document.querySelectorAll('.bd-chk[data-i="'+i+'"][data-k="'+k+'"]')];}
+function dvBoardSel(ev,i,k){const chks=_bdChks(i,k);const cur=ev&&ev.target?chks.indexOf(ev.target):-1;const kk=i+'|'+k;if(ev&&ev.shiftKey&&_bdLast[kk]!=null&&cur>=0){const a=Math.min(cur,_bdLast[kk]),b=Math.max(cur,_bdLast[kk]);const on=ev.target.checked;for(let j=a;j<=b;j++)chks[j].checked=on;}if(cur>=0)_bdLast[kk]=cur;_bdSync(i,k);}
+function _bdSync(i,k){const n=_bdChks(i,k).filter(c=>c.checked).length;const bar=document.getElementById('bdBar'+i+k);const cnt=document.querySelector('.bd-cnt[data-i="'+i+'"][data-k="'+k+'"]');if(cnt)cnt.textContent=n;if(bar)bar.classList.toggle('on',n>0);}
+function _bdIds(i,k){return _bdChks(i,k).filter(c=>c.checked).map(c=>c.dataset.id);}
+function dvBoardClear(i,k){_bdChks(i,k).forEach(c=>c.checked=false);_bdLast[i+'|'+k]=null;_bdSync(i,k);}
+function dvBoardAct(i,k,id,act){if(act==='delete'){vscode.postMessage({type:'dvBoardDelete',index:i,boardKey:k,id:id});}else if(act==='view'){showToast('\u23F3 拉取内容…');vscode.postMessage({type:'dvBoardView',index:i,boardKey:k,id:id});}else if(act==='download'){showToast('\u23F3 下载…');vscode.postMessage({type:'dvBoardDownload',index:i,boardKey:k,id:id});}}
+function dvBoardBatch(i,k,act){const ids=_bdIds(i,k);if(!ids.length){showToast('\u2717 先勾选');return;}if(act==='delete'){vscode.postMessage({type:'dvBoardDeleteBatch',index:i,boardKey:k,ids:ids});}else{showToast('\u23F3 批量下载 '+ids.length+' 项…');vscode.postMessage({type:'dvBoardDownloadBatch',index:i,boardKey:k,ids:ids});}}
 function dvToggleAuto(on){vscode.postMessage({type:'devinToggleAuto',on:!!on});}
 function dvToggleCleanup(on){vscode.postMessage({type:'devinToggleCleanup',on:!!on});}
 function dvSetThreshold(v){vscode.postMessage({type:'devinSetThreshold',value:+v});}
@@ -8171,6 +8186,37 @@ async function _dvRefreshOverview(index, r) {
     log("dvRefreshOverview err: " + ((e && e.message) || e));
   }
 }
+// v4.7.0 · 知识库/剧本/密钥 板块: 标签/取项/内容文本/删除 (Phase D)
+function _dvBoardLabel(key) { return key === "kn" ? "知识库" : key === "pb" ? "剧本" : key === "sc" ? "密钥" : "项目"; }
+async function _dvFetchBoardItem(auth, key, id) {
+  if (key === "kn") { const r = await devinCloud.listKnowledge(auth); return (r.learnings || []).find((x) => String(x.id) === String(id)); }
+  if (key === "pb") { const r = await devinCloud.listPlaybooks(auth); return (r.playbooks || []).find((x) => String(x.id || x.playbook_id) === String(id)); }
+  if (key === "sc") { const r = await devinCloud.listSecrets(auth); return (r.secrets || []).find((x) => String(x.id || x.secret_id) === String(id) || x.name === id); }
+  return null;
+}
+function _dvBoardItemText(key, it) {
+  if (!it) return "";
+  if (key === "kn") {
+    return "# " + (it.name || it.id || "知识") + "\n\n" +
+      (it.trigger_description ? "**触发场景**: " + it.trigger_description + "\n\n" : "") +
+      "---\n\n" + (it.body || "(空)");
+  }
+  if (key === "pb") {
+    return "# " + (it.title || it.name || it.id || "剧本") + "\n\n" +
+      (it.access ? "**可见性**: " + it.access + "\n\n" : "") + "---\n\n" + (it.body || "(空)");
+  }
+  // 密钥: 仅有名称/元数据, 后端不返回明文值
+  return "# 密钥 · " + (it.name || it.id || "") + "\n\n(Devin 后端不回传密钥明文, 仅可查看名称与删除)\n\n" + JSON.stringify(it, null, 2);
+}
+function _dvBoardDelete(auth, key, id) {
+  if (key === "kn") return devinCloud.deleteKnowledge(auth, id);
+  if (key === "pb") return devinCloud.deletePlaybook(auth, id);
+  return devinCloud.deleteSecret(auth, id);
+}
+function _dvBoardFileName(key, it, id) {
+  const nm = (it && (it.name || it.title)) || id;
+  return devinCloud.safeName(_dvBoardLabel(key) + "_" + nm, 80) + ".md";
+}
 // ═══ 第三板块 · Git 下拉框状态缓存 + 开合追踪 (根治"回弹": 全量重建 webview 时按缓存预填) ═══
 // _dvOpenEmails: 当前展开的账号 email 集合 (host 侧权威, 渲染时据此预填 open + 内容)
 // _dvOverviewCache: email → {ov, gitSt, ts} 概览数据缓存; 渲染时用当前 index 重生 HTML (索引不串)
@@ -8255,13 +8301,28 @@ function _dvOverviewHtml(ov, i, gitSt) {
 // 查看面板 HTML: 某个 Devin Cloud 板块(知识库/剧本/密钥)的名称清单，默认收起，点统计块展开
 function _dvBoardListHtml(i, key, label, list) {
   list = Array.isArray(list) ? list : [];
+  const viewable = key === "kn" || key === "pb"; // 密钥无可取值, 仅删除/多选
   let s = '<div class="dv-board" id="dvB' + i + key + '" style="display:none">';
   if (!list.length) {
     s += '<div class="dv-board-empty">（无' + label + "）</div>";
   } else {
+    // 多选批量条 (Shift 区间) · 批量删除 / 批量下载
+    s += '<div class="dv-board-bar" id="bdBar' + i + key + '">已选 <b class="bd-cnt" data-i="' + i + '" data-k="' + key + '">0</b> · ' +
+      (viewable ? '<button class="dvc-b" onclick="dvBoardBatch(' + i + ",'" + key + "','download')\" title=\"批量下载已选" + label + '到本地">&#11015; 批量下载</button>' : "") +
+      '<button class="dvc-b dvc-b-s" onclick="dvBoardBatch(' + i + ",'" + key + "','delete')\" title=\"批量删除已选" + label + '">&#128465; 批量删除</button>' +
+      '<button class="dvc-b" style="margin-left:auto;background:#222;color:#888;border-color:#333" onclick="dvBoardClear(' + i + ",'" + key + "')\">取消</button></div>";
     for (const it of list) {
+      const id = String((it && it.id) || "");
       const nm = (it && (it.name || it.id)) || "(未命名)";
-      s += '<div class="dv-board-item" title="' + _esc(String(it && it.id || "")) + '">' + _esc(String(nm)) + "</div>";
+      const del = it && it.deletable !== false;
+      s += '<div class="dv-board-item" title="' + _esc(id) + (del ? "" : " · 本源默认(不可删)") + '">' +
+        '<input type="checkbox" class="dvc-chk bd-chk" data-i="' + i + '" data-k="' + key + '" data-id="' + _esc(id) + '" onclick="dvBoardSel(event,' + i + ",'" + key + "')\">" +
+        '<span class="bd-nm">' + _esc(String(nm)) + (del ? "" : ' <span style="color:#666">·默认</span>') + "</span>" +
+        '<span class="bd-acts">' +
+        (viewable ? '<button class="dvc-b" title="查看' + label + '内容" onclick="dvBoardAct(' + i + ",'" + key + "','" + _esc(id) + "','view')\">&#128065;</button>" : "") +
+        (viewable ? '<button class="dvc-b" title="下载' + label + '到本地" onclick="dvBoardAct(' + i + ",'" + key + "','" + _esc(id) + "','download')\">&#11015;</button>" : "") +
+        (del ? '<button class="dvc-b dvc-b-s" title="删除' + label + '" onclick="dvBoardAct(' + i + ",'" + key + "','" + _esc(id) + "','delete')\">&#128465;</button>" : "") +
+        "</span></div>";
     }
   }
   s += "</div>";
@@ -10099,6 +10160,119 @@ async function handleWebviewMessage(msg) {
         }
         _toast("\u2713 批量清理完成: 成功" + ok + " 失败" + fail);
         _notify("info", "[" + r.email + "] 批量清理(归档) " + ok + "/" + ids.length + " 个对话");
+        await _dvRefreshOverview(msg.index, r);
+        break;
+      }
+      // v4.7.0 · 知识库/剧本/密钥 — 查看内容 (新面板)
+      case "dvBoardView": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        try {
+          const it = await _dvFetchBoardItem(r.auth, msg.boardKey, msg.id);
+          if (!it) { _toast("\u2717 未找到该" + _dvBoardLabel(msg.boardKey)); break; }
+          const text = _dvBoardItemText(msg.boardKey, it);
+          const ttl = _dvBoardLabel(msg.boardKey) + " · " + ((it.name || it.title || it.id || "")).slice(0, 24);
+          const esc = (x) => String(x).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          const panel = vscode.window.createWebviewPanel(
+            "wam.boardView", ttl, vscode.ViewColumn.Active,
+            { enableScripts: false, retainContextWhenHidden: true },
+          );
+          panel.webview.html =
+            '<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{background:#0d1117;color:#cdd;font:13px/1.6 -apple-system,Segoe UI,sans-serif;padding:16px}pre{white-space:pre-wrap;word-break:break-word;background:#10151c;border:1px solid #243;border-radius:6px;padding:14px}</style></head><body><pre>' +
+            esc(text) + "</pre></body></html>";
+          _toast("\u2713 已打开");
+        } catch (e) {
+          _toast("\u2717 拉取失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.7.0 · 知识库/剧本 — 下载到本地 (.md) 并在资源管理器中定位
+      case "dvBoardDownload": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        try {
+          const it = await _dvFetchBoardItem(r.auth, msg.boardKey, msg.id);
+          if (!it) { _toast("\u2717 未找到该" + _dvBoardLabel(msg.boardKey)); break; }
+          const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+          const outDir = path.join(dir, devinCloud.safeName(r.email, 80), _dvBoardLabel(msg.boardKey));
+          fs.mkdirSync(outDir, { recursive: true });
+          const outPath = path.join(outDir, _dvBoardFileName(msg.boardKey, it, msg.id));
+          fs.writeFileSync(outPath, _dvBoardItemText(msg.boardKey, it), "utf8");
+          _toast("\u2713 已下载: " + path.basename(outPath));
+          _notify("info", "[" + r.email + "] " + _dvBoardLabel(msg.boardKey) + " 已下载 → " + outPath);
+          try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(outPath)); } catch {}
+        } catch (e) {
+          _toast("\u2717 下载失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.7.0 · 知识库/剧本 — 批量下载
+      case "dvBoardDownloadBatch": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        const ids = Array.isArray(msg.ids) ? msg.ids : [];
+        if (!ids.length) { _toast("\u2717 未选项目"); break; }
+        try {
+          const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+          const outDir = path.join(dir, devinCloud.safeName(r.email, 80), _dvBoardLabel(msg.boardKey));
+          fs.mkdirSync(outDir, { recursive: true });
+          let ok = 0;
+          for (const id of ids) {
+            const it = await _dvFetchBoardItem(r.auth, msg.boardKey, id);
+            if (!it) continue;
+            fs.writeFileSync(path.join(outDir, _dvBoardFileName(msg.boardKey, it, id)), _dvBoardItemText(msg.boardKey, it), "utf8");
+            ok++;
+            _toast("\u23F3 下载 " + ok + "/" + ids.length + " …");
+          }
+          _toast("\u2713 批量下载完成: " + ok + "/" + ids.length + " → " + _dvBoardLabel(msg.boardKey));
+          _notify("info", "[" + r.email + "] 批量下载 " + ok + " 个" + _dvBoardLabel(msg.boardKey) + " → " + outDir);
+          try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(outDir)); } catch {}
+        } catch (e) {
+          _toast("\u2717 批量下载失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.7.0 · 知识库/剧本/密钥 — 删除 (确认 → 删 → 无感刷新)
+      case "dvBoardDelete": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        const it = await _dvFetchBoardItem(r.auth, msg.boardKey, msg.id);
+        const nm = (it && (it.name || it.title)) || msg.id;
+        const pick = await vscode.window.showWarningMessage(
+          "【删除" + _dvBoardLabel(msg.boardKey) + "】将永久删除：\n\n" + nm + "\n\n是否继续？",
+          { modal: true }, "删除",
+        );
+        if (pick !== "删除") { _toast("已取消"); break; }
+        try {
+          const d = await _dvBoardDelete(r.auth, msg.boardKey, msg.id);
+          if (d.ok) {
+            _toast("\u2713 已删除: " + String(nm).slice(0, 24));
+            _notify("info", "[" + r.email + "] 已删除" + _dvBoardLabel(msg.boardKey) + ": " + nm);
+            await _dvRefreshOverview(msg.index, r);
+          } else { _toast("\u2717 删除失败 HTTP " + d.status); }
+        } catch (e) {
+          _toast("\u2717 删除异常: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.7.0 · 知识库/剧本/密钥 — 批量删除
+      case "dvBoardDeleteBatch": {
+        const r = await _dvAuthFor(msg.index);
+        if (!r.ok) { _toast("\u2717 " + (r.error || "登录失败")); break; }
+        const ids = Array.isArray(msg.ids) ? msg.ids : [];
+        if (!ids.length) { _toast("\u2717 未选项目"); break; }
+        const pick = await vscode.window.showWarningMessage(
+          "【批量删除" + _dvBoardLabel(msg.boardKey) + "】将永久删除 " + ids.length + " 个。是否继续？",
+          { modal: true }, "批量删除",
+        );
+        if (pick !== "批量删除") { _toast("已取消"); break; }
+        let ok = 0, fail = 0;
+        for (const id of ids) {
+          try { const d = await _dvBoardDelete(r.auth, msg.boardKey, id); if (d.ok) ok++; else fail++; } catch { fail++; }
+          _toast("\u23F3 删除 " + (ok + fail) + "/" + ids.length + " …");
+        }
+        _toast("\u2713 批量删除完成: 成功" + ok + " 失败" + fail);
+        _notify("info", "[" + r.email + "] 批量删除 " + ok + "/" + ids.length + " 个" + _dvBoardLabel(msg.boardKey));
         await _dvRefreshOverview(msg.index, r);
         break;
       }
