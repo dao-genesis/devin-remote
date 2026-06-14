@@ -4065,6 +4065,24 @@ function getEaConfigHtml(port, nonce) {
   .wire-line { stroke: rgba(107,184,107,0.5); stroke-width: 1.5; fill: none; }
   .wire-line.active { stroke: #6bb86b; stroke-width: 2; }
   .wire-line.dead { stroke: #e08080; stroke-dasharray: 4 2; }
+  /* ── v9.9.288 · 拖拽排序 + 1:1对齐 + 实时连线 ── */
+  .model-item.dragging, .prov-head.dragging { opacity: 0.4; }
+  .model-item.drag-over { box-shadow: inset 0 2px 0 #6bb86b; }
+  .model-item.drag-over-after { box-shadow: inset 0 -2px 0 #6bb86b; }
+  .prov-head.drag-over { box-shadow: inset 0 2px 0 #6bb86b; }
+  .prov-head.drag-over-after { box-shadow: inset 0 -2px 0 #6bb86b; }
+  .prov-head { cursor: grab; }
+  .drag-handle { cursor: grab; opacity: 0.3; font-size: 9px; padding: 0 1px; flex-shrink: 0; user-select: none; letter-spacing: -1px; }
+  .drag-handle:hover { opacity: 0.85; }
+  .align-bar { display: flex; justify-content: center; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .align-btn {
+    padding: 2px 12px; font-size: 10px; border-radius: 11px; cursor: pointer;
+    border: 1px solid rgba(128,128,128,0.35); background: rgba(0,0,0,0.12);
+    color: var(--vscode-foreground); font-family: inherit; white-space: nowrap; opacity: 0.85;
+  }
+  .align-btn:hover { opacity: 1; }
+  .align-btn.on { border-color: #6bb86b; color: #6bb86b; background: rgba(107,184,107,0.14); font-weight: 600; }
+  .align-hint { font-size: 9px; opacity: 0.45; }
   /* ── 底部状态 ── */
   .status-bar {
     margin-top: 6px; padding: 4px 6px; border-radius: 3px;
@@ -4168,6 +4186,11 @@ function getEaConfigHtml(port, nonce) {
 
   <!-- ③ 模型路由 (官方 ↔ 第三方 连线) -->
   <div class="dao-pane" id="paneRouter">
+    <!-- v9.9.288 · 1:1 对齐开关 (居中) -->
+    <div class="align-bar">
+      <button class="align-btn" id="alignToggle" title="1:1 对齐: 把已路由的两侧模型按路由关系重排成水平直线对齐 · 再点一次回退到默认分组排序">⇄ 1:1 对齐</button>
+      <span class="align-hint">拖拽 ⋮⋮ 可重排板块/模型</span>
+    </div>
     <!-- 连线图 -->
     <div class="wire-container" id="wireContainer" style="position:relative;">
       <div class="wire-col left" id="leftCol">
@@ -4249,6 +4272,87 @@ function getEaConfigHtml(port, nonce) {
   var _health = {};
   var _selectedLeft = null;
   var _selectedRight = null;
+  // ★ v9.9.288 · 面板③ 排序/对齐偏好 (localStorage 持久 · 前端操作)
+  var _alignMode = false;       // 1:1 对齐开关
+  var _alignRightSeq = [];      // 对齐模式下右侧应跟随的 provider/model 顺序 (renderLeft 产出)
+  var _wireRAF = 0;             // 连线重绘 rAF 节流句柄
+  var _ordLeftGroups = [];      // 左侧大板块(provider分组)顺序
+  var _ordRightProv = [];       // 右侧渠道顺序
+  var _ordLeftFam = {};         // 左侧每组内家族顺序 {provLabel:[familyUid...]}
+  var _ordRightMod = {};        // 右侧每渠道内模型顺序 {provName:[model...]}
+  (function _loadOrderPrefs() {
+    try {
+      var s = JSON.parse(localStorage.getItem('dao.router.order') || '{}');
+      _alignMode = !!s.align;
+      _ordLeftGroups = Array.isArray(s.lg) ? s.lg : [];
+      _ordRightProv = Array.isArray(s.rp) ? s.rp : [];
+      _ordLeftFam = (s.lf && typeof s.lf === 'object') ? s.lf : {};
+      _ordRightMod = (s.rm && typeof s.rm === 'object') ? s.rm : {};
+    } catch (e) {}
+  })();
+  function _saveOrderPrefs() {
+    try {
+      localStorage.setItem('dao.router.order', JSON.stringify({
+        align: _alignMode, lg: _ordLeftGroups, rp: _ordRightProv, lf: _ordLeftFam, rm: _ordRightMod
+      }));
+    } catch (e) {}
+  }
+  // 按已存顺序排列 keys · 未知项保持原序追加 (新增模型不丢)
+  function _applyOrder(keys, saved) {
+    if (!saved || !saved.length) return keys.slice();
+    var out = [], seen = {};
+    saved.forEach(function(k) { if (keys.indexOf(k) >= 0 && !seen[k]) { out.push(k); seen[k] = 1; } });
+    keys.forEach(function(k) { if (!seen[k]) { out.push(k); seen[k] = 1; } });
+    return out;
+  }
+  // 把 fromKey 移到 toKey 之前/之后 · 返回新数组
+  function _reorder(arr, fromKey, toKey, after) {
+    arr = arr.slice();
+    var fi = arr.indexOf(fromKey);
+    if (fi < 0) return arr;
+    arr.splice(fi, 1);
+    var ti = arr.indexOf(toKey);
+    if (ti < 0) return arr;
+    arr.splice(after ? ti + 1 : ti, 0, fromKey);
+    return arr;
+  }
+  function _splitPM(k) { var i = String(k).indexOf('/'); return { prov: k.slice(0, i), model: k.slice(i + 1) }; }
+  // ── HTML5 拖拽重排 (长按拖动·click=选路不受影响) ──
+  var _dragKey = null, _dragScope = null;
+  function _clearDragOver() {
+    var els = document.querySelectorAll('.drag-over, .drag-over-after');
+    for (var i = 0; i < els.length; i++) { els[i].classList.remove('drag-over'); els[i].classList.remove('drag-over-after'); }
+  }
+  function _dnd(el, key, scope, onReorder) {
+    el.setAttribute('draggable', 'true');
+    el.addEventListener('dragstart', function(ev) {
+      _dragKey = key; _dragScope = scope; el.classList.add('dragging');
+      try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(key)); } catch (e) {}
+    });
+    el.addEventListener('dragend', function() { el.classList.remove('dragging'); _clearDragOver(); _dragKey = null; _dragScope = null; });
+    el.addEventListener('dragover', function(ev) {
+      if (_dragScope !== scope || _dragKey === key) return;
+      ev.preventDefault();
+      var r = el.getBoundingClientRect();
+      var after = (ev.clientY - r.top) > r.height / 2;
+      el.classList.toggle('drag-over', !after);
+      el.classList.toggle('drag-over-after', after);
+    });
+    el.addEventListener('dragleave', function() { el.classList.remove('drag-over'); el.classList.remove('drag-over-after'); });
+    el.addEventListener('drop', function(ev) {
+      if (_dragScope !== scope || _dragKey === key) { _clearDragOver(); return; }
+      ev.preventDefault();
+      var r = el.getBoundingClientRect();
+      var after = (ev.clientY - r.top) > r.height / 2;
+      var fk = _dragKey;
+      _clearDragOver();
+      if (fk != null) onReorder(fk, key, after);
+    });
+  }
+  function _scheduleWires() {
+    if (_wireRAF) return;
+    _wireRAF = requestAnimationFrame(function() { _wireRAF = 0; try { renderWires(); } catch (e) {} });
+  }
   // ★ v9.9.266 · 三模块面板 ③模型路由 与悬浮面板 eaRender 同源:
   //   统一走 /origin/ea/overview → official_families (49 家族·档位归一) + providers(首项=测试通道)
   //   反者道之动: 左侧不再着相于扁平 catalog 怪名 · 万物并育而不相害
@@ -4381,10 +4485,56 @@ function getEaConfigHtml(port, nonce) {
     });
   }
 
+  // ── 构建单个官方家族条目 (含点选/双击解路 · 复用于分组与对齐两种布局) ──
+  function _buildLeftItem(f) {
+    var uids = f.members.map(function(mm){ return mm.modelUid; }).filter(Boolean);
+    var defMember = f.members.filter(function(mm){ return mm.isDefault; })[0] || f.members[0];
+    var primary = (defMember && defMember.modelUid) || uids[0] || f.familyUid;
+    _tierGroups[primary] = uids;
+    var wiredUids = uids.filter(function(u){ return !!_routeFor(u); });
+    var isWired = wiredUids.length > 0;
+    var route = isWired ? _routeFor(wiredUids[0]) : null;
+    var target = route ? (route.provider + '/' + route.model) : '';
+    var div = document.createElement('div');
+    div.className = 'model-item' + (_selectedLeft === primary ? ' selected' : '');
+    div.setAttribute('data-uid', primary);
+    div.setAttribute('data-uids', uids.join(','));
+    div.setAttribute('data-fam', f.familyUid || primary);
+    var html = (_alignMode ? '' : '<span class="drag-handle">⋮⋮</span>') +
+      '<span class="dot ' + (isWired ? 'routed' : 'unrouted') + '"></span>' +
+      '<span class="name" title="' + f.label + (f.members.length > 1 ? ' · ' + f.members.length + '档' : '') + '">' + f.label + '</span>';
+    if (f.members.length > 1) {
+      html += '<span class="target" title="' + f.members.map(function(mm){ return (mm.tier || 'base') + (_routeFor(mm.modelUid) ? ' ✓' : ''); }).join(' · ') + '">×' + f.members.length + '</span>';
+    }
+    if (target) html += '<span class="target">' + target + '</span>';
+    div.innerHTML = html;
+    div.addEventListener('click', function() {
+      _selectedLeft = this.getAttribute('data-uid');
+      render();
+      maybeAutoRoute();
+    });
+    div.addEventListener('dblclick', function() {
+      var u = this.getAttribute('data-uid');
+      var uds = (this.getAttribute('data-uids') || u).split(',').filter(Boolean);
+      var keys = [];
+      uds.forEach(function(x){ var k = _routeKeyFor(x); if (k && keys.indexOf(k) < 0) keys.push(k); });
+      if (keys.length > 0) {
+        _daoConfirm('断开 ' + f.label + ' 全部 ' + keys.length + ' 条路由?').then(function(ok2) {
+          if (!ok2) return;
+          Promise.all(keys.map(function(k){ return fDel('/origin/ea/route/' + encodeURIComponent(k)); })).then(function(){ loadConfig(); });
+        });
+      } else {
+        openRouteModal(u);
+      }
+    });
+    return { el: div, primary: primary, isWired: isWired, route: route };
+  }
+
   function renderLeft() {
     var container = document.getElementById('officialModels');
     container.innerHTML = '';
     _tierGroups = {};
+    _alignRightSeq = [];
     // ★ v9.9.266 · 档位归一: 一族一项 (同 Cascade 顶层) · 按 provider 分组标题
     if (!_families || _families.length === 0) {
       container.innerHTML = '<div style="opacity:0.4;font-style:italic;padding:6px">加载中...</div>';
@@ -4396,73 +4546,116 @@ function getEaConfigHtml(port, nonce) {
       if (!groups[pl]) { groups[pl] = []; order.push(pl); }
       groups[pl].push(f);
     });
+    order = _applyOrder(order, _ordLeftGroups);
+
+    // ★ v9.9.288 · 1:1 对齐模式: 扁平展开 · 已路由家族在前(决定右侧顺序) · 未路由在后
+    if (_alignMode) {
+      var routedL = [], unroutedL = [];
+      order.forEach(function(pl) {
+        var fams = _applyOrder(groups[pl].map(function(f){ return f.familyUid; }), _ordLeftFam[pl]);
+        fams.forEach(function(fk) {
+          var f = groups[pl].filter(function(x){ return x.familyUid === fk; })[0];
+          if (!f) return;
+          var item = _buildLeftItem(f);
+          if (item.isWired && item.route) routedL.push(item); else unroutedL.push(item);
+        });
+      });
+      routedL.forEach(function(item) { container.appendChild(item.el); _alignRightSeq.push(item.route.provider + '/' + item.route.model); });
+      unroutedL.forEach(function(item) { container.appendChild(item.el); });
+      return;
+    }
+
+    // ── 默认分组模式: 大板块(分组头)+ 小模型(家族)均可拖拽重排 ──
     order.forEach(function(pl) {
       var head = document.createElement('div');
+      head.className = 'prov-head';
       head.style.cssText = 'font-size:10px;opacity:0.5;margin:6px 0 2px;font-weight:600;';
-      head.textContent = pl + ' (' + groups[pl].length + ')';
+      head.innerHTML = '<span class="drag-handle">⋮⋮</span>' + pl + ' (' + groups[pl].length + ')';
+      _dnd(head, pl, 'leftGroup', function(fk, tk, after) {
+        _ordLeftGroups = _reorder(order, fk, tk, after); _saveOrderPrefs(); render();
+      });
       container.appendChild(head);
-      groups[pl].forEach(function(f) {
-        var uids = f.members.map(function(mm){ return mm.modelUid; }).filter(Boolean);
-        var defMember = f.members.filter(function(mm){ return mm.isDefault; })[0] || f.members[0];
-        var primary = (defMember && defMember.modelUid) || uids[0] || f.familyUid;
-        _tierGroups[primary] = uids;
-        var wiredUids = uids.filter(function(u){ return !!_routeFor(u); });
-        var isWired = wiredUids.length > 0;
-        var route = isWired ? _routeFor(wiredUids[0]) : null;
-        var target = route ? (route.provider + '/' + route.model) : '';
-        var div = document.createElement('div');
-        div.className = 'model-item' + (_selectedLeft === primary ? ' selected' : '');
-        div.setAttribute('data-uid', primary);
-        div.setAttribute('data-uids', uids.join(','));
-        var html = '<span class="dot ' + (isWired ? 'routed' : 'unrouted') + '"></span>' +
-          '<span class="name" title="' + f.label + (f.members.length > 1 ? ' · ' + f.members.length + '档' : '') + '">' + f.label + '</span>';
-        if (f.members.length > 1) {
-          html += '<span class="target" title="' + f.members.map(function(mm){ return (mm.tier || 'base') + (_routeFor(mm.modelUid) ? ' ✓' : ''); }).join(' · ') + '">×' + f.members.length + '</span>';
-        }
-        if (target) html += '<span class="target">' + target + '</span>';
-        div.innerHTML = html;
-        div.addEventListener('click', function() {
-          _selectedLeft = this.getAttribute('data-uid');
-          render();
-          maybeAutoRoute();
-        });
-        div.addEventListener('dblclick', function() {
-          var u = this.getAttribute('data-uid');
-          var uds = (this.getAttribute('data-uids') || u).split(',').filter(Boolean);
-          var keys = [];
-          uds.forEach(function(x){ var k = _routeKeyFor(x); if (k && keys.indexOf(k) < 0) keys.push(k); });
-          if (keys.length > 0) {
-            _daoConfirm('断开 ' + f.label + ' 全部 ' + keys.length + ' 条路由?').then(function(ok2) {
-              if (!ok2) return;
-              Promise.all(keys.map(function(k){ return fDel('/origin/ea/route/' + encodeURIComponent(k)); })).then(function(){ loadConfig(); });
-            });
-          } else {
-            openRouteModal(u);
-          }
-        });
-        container.appendChild(div);
+      var fams = _applyOrder(groups[pl].map(function(f){ return f.familyUid; }), _ordLeftFam[pl]);
+      fams.forEach(function(fk) {
+        var f = groups[pl].filter(function(x){ return x.familyUid === fk; })[0];
+        if (!f) return;
+        var item = _buildLeftItem(f);
+        (function(plKey, famOrder) {
+          _dnd(item.el, f.familyUid, 'leftFam:' + plKey, function(ff, tt, after) {
+            _ordLeftFam[plKey] = _reorder(famOrder, ff, tt, after); _saveOrderPrefs(); render();
+          });
+        })(pl, fams);
+        container.appendChild(item.el);
       });
     });
+  }
+
+  // ── 构建单个外接模型条目 (含点选/双击编辑路由 · 复用于分组与对齐两种布局) ──
+  function _buildRightItem(name, m) {
+    var key = name + '/' + m;
+    var wired = false;
+    for (var ru in _routes) { var rt = _routes[ru]; if (rt && rt.provider === name && rt.model === m) { wired = true; break; } }
+    var div = document.createElement('div');
+    div.className = 'model-item' + (_selectedRight === key ? ' selected' : '');
+    div.innerHTML = (_alignMode ? '' : '<span class="drag-handle">⋮⋮</span>') +
+      '<span class="dot ' + (wired ? 'routed' : 'unrouted') + '"></span><span class="name">' + m + '</span>';
+    div.setAttribute('data-prov', name);
+    div.setAttribute('data-model', m);
+    div.addEventListener('click', function() {
+      _selectedRight = this.getAttribute('data-prov') + '/' + this.getAttribute('data-model');
+      render();
+      maybeAutoRoute();
+    });
+    div.addEventListener('dblclick', function() {
+      openRouteModal(null, this.getAttribute('data-prov'), this.getAttribute('data-model'));
+    });
+    return div;
   }
 
   function renderRight() {
     var container = document.getElementById('externalModels');
     container.innerHTML = '';
     // ★ v9.9.266 · 外接首项 = 内置测试通道(builtin-stub) · 其余 = 用户渠道 · 与悬浮面板同
-    for (var name in _providers) {
+    var provOrder = _applyOrder(Object.keys(_providers), _ordRightProv);
+
+    // ★ v9.9.288 · 1:1 对齐模式: 扁平展开 · 按左侧已路由顺序对齐(同行水平直线) · 其余在后
+    if (_alignMode) {
+      var all = [];
+      provOrder.forEach(function(name) {
+        var prov = _providers[name] || {};
+        var models = prov.models || prov._models || [];
+        _applyOrder(models, _ordRightMod[name]).forEach(function(m) { all.push(name + '/' + m); });
+      });
+      var used = {};
+      _alignRightSeq.forEach(function(k) {
+        if (all.indexOf(k) >= 0 && !used[k]) { used[k] = 1; var pm = _splitPM(k); container.appendChild(_buildRightItem(pm.prov, pm.model)); }
+      });
+      all.forEach(function(k) {
+        if (!used[k]) { used[k] = 1; var pm = _splitPM(k); container.appendChild(_buildRightItem(pm.prov, pm.model)); }
+      });
+      return;
+    }
+
+    // ── 默认分组模式: 渠道(分组头)+ 模型均可拖拽重排 ──
+    provOrder.forEach(function(name) {
       var prov = _providers[name] || {};
       var builtin = !!prov._builtin;
       var disp = prov._label || name;
       var models = prov.models || prov._models || [];
       // Provider 标题
       var header = document.createElement('div');
+      header.className = 'prov-head';
       header.style.cssText = 'font-size:10px;opacity:0.5;margin:4px 0 2px;display:flex;align-items:center;gap:4px;';
       var hDot = builtin ? '#6bb86b' : (_health[name] && _health[name].alive ? '#6bb86b' : (_health[name] ? '#e08080' : 'rgba(128,128,128,0.3)'));
-      var hHtml = '<span style="width:6px;height:6px;border-radius:50%;background:' + hDot + ';flex-shrink:0"></span>' +
+      var hHtml = '<span class="drag-handle">⋮⋮</span>' +
+        '<span style="width:6px;height:6px;border-radius:50%;background:' + hDot + ';flex-shrink:0"></span>' +
         '<span style="flex:1">' + disp + (builtin ? ' · 内置' : '') + '</span>';
       if (!builtin) hHtml += '<button class="btn del" data-prov="' + name + '" title="删除 ' + name + '">x</button>';
       header.innerHTML = hHtml;
       container.appendChild(header);
+      _dnd(header, name, 'rightProv', function(fk, tk, after) {
+        _ordRightProv = _reorder(provOrder, fk, tk, after); _saveOrderPrefs(); render();
+      });
 
       if (!builtin) {
         header.querySelector('.btn.del').addEventListener('click', function(e) {
@@ -4475,26 +4668,17 @@ function getEaConfigHtml(port, nonce) {
         });
       }
 
-      // 模型列表
-      for (var i = 0; i < models.length; i++) {
-        var m = models[i];
-        var key = name + '/' + m;
-        var wired = false;
-        for (var ru in _routes) { var rt = _routes[ru]; if (rt && rt.provider === name && rt.model === m) { wired = true; break; } }
-        var div = document.createElement('div');
-        div.className = 'model-item' + (_selectedRight === key ? ' selected' : '');
-        div.innerHTML = '<span class="dot ' + (wired ? 'routed' : 'unrouted') + '"></span><span class="name">' + m + '</span>';
-        div.setAttribute('data-prov', name);
-        div.setAttribute('data-model', m);
-        div.addEventListener('click', function() {
-          _selectedRight = this.getAttribute('data-prov') + '/' + this.getAttribute('data-model');
-          render();
-          maybeAutoRoute();
-        });
-        div.addEventListener('dblclick', function() {
-          openRouteModal(null, this.getAttribute('data-prov'), this.getAttribute('data-model'));
-        });
-        container.appendChild(div);
+      // 模型列表 (可拖拽重排)
+      var modOrder = _applyOrder(models, _ordRightMod[name]);
+      for (var i = 0; i < modOrder.length; i++) {
+        var m = modOrder[i];
+        var item = _buildRightItem(name, m);
+        (function(pn, arr) {
+          _dnd(item, m, 'rightMod:' + pn, function(ff, tt, after) {
+            _ordRightMod[pn] = _reorder(arr, ff, tt, after); _saveOrderPrefs(); render();
+          });
+        })(name, modOrder);
+        container.appendChild(item);
       }
 
       // 如果没有模型列表 · 显示 "探测" 按钮 (内置测试通道无需探测)
@@ -4522,7 +4706,7 @@ function getEaConfigHtml(port, nonce) {
         });
         container.appendChild(probeBtn);
       }
-    }
+    });
   }
 
   function renderWires() {
@@ -4557,12 +4741,16 @@ function getEaConfigHtml(port, nonce) {
       var y1 = lRect.top + lRect.height / 2 - cRect.top;
       var x2 = rRect.left - cRect.left;
       var y2 = rRect.top + rRect.height / 2 - cRect.top;
-      // 贝塞尔曲线
-      var cx = (x1 + x2) / 2;
       var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       var isDead = _health[route.provider] && !_health[route.provider].alive;
       path.setAttribute('class', 'wire-line' + (isDead ? ' dead' : ' active'));
-      path.setAttribute('d', 'M' + x1 + ',' + y1 + ' C' + cx + ',' + y1 + ' ' + cx + ',' + y2 + ' ' + x2 + ',' + y2);
+      // ★ v9.9.288 · 对齐模式画水平直线 (一目了然) · 否则贝塞尔曲线
+      if (_alignMode) {
+        path.setAttribute('d', 'M' + x1 + ',' + y1 + ' L' + x2 + ',' + y2);
+      } else {
+        var cx = (x1 + x2) / 2;
+        path.setAttribute('d', 'M' + x1 + ',' + y1 + ' C' + cx + ',' + y1 + ' ' + cx + ',' + y2 + ' ' + x2 + ',' + y2);
+      }
       svg.appendChild(path);
     }
   }
@@ -4777,7 +4965,26 @@ function getEaConfigHtml(port, nonce) {
   });
 
   // ── 窗口 resize 时重绘连线 ──
-  window.addEventListener('resize', function() { renderWires(); });
+  window.addEventListener('resize', function() { _scheduleWires(); });
+
+  // ★ v9.9.288 · 滚动时连线实时跟随 (rAF 节流·不再一卡一卡) ──
+  ['leftCol', 'rightCol', 'wireContainer'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('scroll', _scheduleWires, { passive: true });
+  });
+
+  // ★ v9.9.288 · 1:1 对齐开关 (开↔关·可回退) ──
+  (function() {
+    var ab = document.getElementById('alignToggle');
+    if (!ab) return;
+    ab.classList.toggle('on', _alignMode);
+    ab.addEventListener('click', function() {
+      _alignMode = !_alignMode;
+      ab.classList.toggle('on', _alignMode);
+      _saveOrderPrefs();
+      render();
+    });
+  })();
 
   // ── 自动刷新 ──
   setInterval(function() { loadConfig(); }, 5000);
@@ -4796,7 +5003,7 @@ function getEaConfigHtml(port, nonce) {
         if (panes[j].id === pane) { panes[j].classList.add('active'); }
         else { panes[j].classList.remove('active'); }
       }
-      if (pane === 'paneRouter') { try { renderWires(); } catch (e) {} }
+      if (pane === 'paneRouter') { _scheduleWires(); }
     });
   }
   // ═══ ① 本源观照 · IDE 左侧复刻 (道/官/编 + 经文 + 本源体池 · 与左侧同源) ═══

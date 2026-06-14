@@ -85,6 +85,34 @@ try {
 // ★ v9.9.101 · 太上下知有之 · 增强模式幂等标记 + DAO经藏文本
 //   道义: 十七章「太上 下知有之」· DAO存在但不可见 · 官方功能完整保留
 const _ENHANCE_MARKER = "\n\n<!-- DAO-ENHANCE v9.9.101 -->\n\n";
+
+// ★ v9.9.288 · 道恒无名 · 去官名归一引擎 (模块级·工具描述+参数描述+SP 共用)
+//   v9.9.287 仅覆盖工具顶层 description · 真实流量实测仍漏:
+//   ① run_command 等工具的【参数描述】内嵌 "Cascade" (如 Blocking 字段述及)
+//   ② 系统提示尾部 "CascadeProjects" (默认工作目录·复合词\bCascade\b 不匹配)
+//   道义: 三十二章「道恒无名」· 名去则惑除 · 不改工具名/参数键·仅中性化描述文本。
+function _deOfficialName(s) {
+  if (typeof s !== "string") return s;
+  return s
+    // 复合词先行 (CascadeProjects → Projects · 否则 \bCascade\b 不匹配复合词)
+    .replace(/CascadeProjects/g, "Projects")
+    .replace(/\bCascade\b/g, "you")
+    .replace(/\bWindsurf\b/g, "the editor")
+    .replace(/\bCodeium\b/g, "the editor");
+}
+// 递归中性化对象内所有 description 字段 (含任意层级参数属性描述) · 不动 name/enum/type
+function _deOfficialDescDeep(obj) {
+  if (!obj || typeof obj !== "object") return;
+  if (Array.isArray(obj)) {
+    for (const it of obj) _deOfficialDescDeep(it);
+    return;
+  }
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (k === "description" && typeof v === "string") obj[k] = _deOfficialName(v);
+    else if (v && typeof v === "object") _deOfficialDescDeep(v);
+  }
+}
 function _getDaoEnhanceText() {
   try {
     if (!_spInvert) return null;
@@ -420,6 +448,100 @@ async function _stubToCascade(res, w, modelUid, messages, tools, isJSON) {
       res.writableEnded,
   );
   return true;
+}
+
+// ★ v9.9.288 · 上游错误可读回传 · 反者道之动
+//   根因: 上游渠道返回 4xx (如 GitHub Models 免费层限输 8000 token → 真实
+//   Cascade 请求 25工具+万字SP 超限 → HTTP 413) 时 · _tryRoute 仅 return false ·
+//   route() ALL-FAIL 后亦 return false 且未向 res 写任何帧 → Cascade 端流不闭合 →
+//   对话挂起("对话死亡" 30s+)。
+//   修复: ALL-FAIL 且响应头未发出时 · 合成一条可读的 assistant 文本帧回传 Cascade
+//   (与 _stubToCascade 同帧构造器) · 让用户看到明确错误而非无尽等待。
+//   道义: 四十章「反者道之动」· 错误回传即是助 · 不藏其拙。
+function _humanUpstreamError(status, provider, bodySnippet) {
+  const _p = provider ? `渠道「${provider}」` : "上游渠道";
+  const _tail = bodySnippet ? `\n\n上游原文: ${String(bodySnippet).slice(0, 300)}` : "";
+  if (status === 413) {
+    return `⚠️ ${_p} 拒绝请求 (HTTP 413 · 请求体过大)。\n\n该渠道对单次输入有 token 上限 (如 GitHub Models 免费层约 8000 token)，而当前请求(系统提示 + 工具定义 + 对话历史)已超限。\n\n建议: ① 换用额度更高的渠道; ② 精简上下文 / 减少同时启用的工具; ③ 新开对话以缩短历史。${_tail}`;
+  }
+  if (status === 401 || status === 403) {
+    return `⚠️ ${_p} 鉴权失败 (HTTP ${status})。API Key 无效、过期或无该模型权限。请在面板②检查该渠道的密钥与权限。${_tail}`;
+  }
+  if (status === 429) {
+    return `⚠️ ${_p} 触发限流 (HTTP 429)。请求过于频繁或额度已耗尽，请稍后重试或更换渠道。${_tail}`;
+  }
+  if (status === 400 || status === 422) {
+    return `⚠️ ${_p} 拒绝请求 (HTTP ${status} · 参数不合法)。可能是该模型不支持当前的工具/参数组合。${_tail}`;
+  }
+  if (status === 404) {
+    return `⚠️ ${_p} 返回 404。该模型名在此渠道不存在，请在面板③确认路由的目标模型名是否正确。${_tail}`;
+  }
+  return `⚠️ ${_p} 返回错误 HTTP ${status}。请检查渠道配置或稍后重试。${_tail}`;
+}
+
+async function _errorToCascade(res, w, modelUid, isJSON, errText) {
+  try {
+    const _messageId =
+      "err-" +
+      Date.now().toString(36) +
+      "-" +
+      Math.random().toString(36).slice(2, 10);
+    const _tsMs = Date.now();
+    const _hdr = () => w.buildFrameHeader(_messageId, _tsMs);
+    const _outputId =
+      "err_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+    const _requestId =
+      "errReq_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+    const _actualModelUid = modelUid || "dao-router";
+
+    if (!res.headersSent) {
+      res.writeHead(200, {
+        "content-type": isJSON
+          ? "application/connect+json"
+          : "application/connect+proto",
+        "connect-accept-encoding": "gzip",
+      });
+    }
+    // metadata 帧
+    {
+      const metaParts = [
+        _hdr(),
+        w.encodeString(w.RSP.ACTUAL_MODEL_UID, _actualModelUid),
+        w.encodeString(w.RSP.OUTPUT_ID, _outputId),
+        w.encodeString(w.RSP.REQUEST_ID, _requestId),
+      ];
+      const metaFr = w.buildFrame(0, Buffer.concat(metaParts));
+      if (metaFr && metaFr.length) res.write(metaFr);
+    }
+    // 文本帧 (可读错误)
+    {
+      const parts = [_hdr(), w.encodeString(w.RSP.DELTA_TEXT, errText)];
+      const fr = w.buildFrame(0, Buffer.concat(parts));
+      if (fr && fr.length) res.write(fr);
+    }
+    // stop_reason 帧 (正常结束 · 让 LSP 闭合本轮)
+    {
+      const parts = [_hdr(), w.encodeUint(w.RSP.STOP_REASON, w.STOP_END)];
+      const fr = w.buildFrame(0, Buffer.concat(parts));
+      if (fr && fr.length) res.write(fr);
+    }
+    // end 帧 (grpc-status:0)
+    if (w.buildEndFrame) {
+      const fr = w.buildEndFrame(null);
+      if (fr && fr.length) res.write(fr);
+    }
+    if (!res.writableEnded) res.end();
+    _routeDiag(
+      `_errorToCascade SENT: modelUid=${modelUid} len=${errText.length}B`,
+    );
+    return true;
+  } catch (e) {
+    _routeDiag(`_errorToCascade EXCEPTION: ${e.message}`);
+    try {
+      if (!res.writableEnded) res.end();
+    } catch {}
+    return false;
+  }
 }
 
 // ── 道直连器健康缓存 (避免每次都探测) ──────────────────────────
@@ -1578,6 +1700,21 @@ async function route(req, res, rawBody, isJSON, modelUid) {
   _stats.errors++;
   _log(`[dao-router] [✗] ${modelUid} 所有路由失败 · 不回退官方`);
   _routeDiag(`route() ALL FAIL: ${modelUid} headersSent=${res.headersSent}`);
+
+  // ★ v9.9.288 · 反者道之动 · 上游错误可读回传 (不再对话死亡)
+  //   若全部路由因上游 4xx/5xx 失败且响应头未发出 → 合成可读错误帧回传 Cascade ·
+  //   让用户看到明确原因(如 413 请求过大)而非无尽等待。
+  if (!res.headersSent && callOpts && callOpts._lastErr) {
+    const _e = callOpts._lastErr;
+    const _txt = _humanUpstreamError(_e.status, _e.provider, _e.body);
+    const _sent = await _errorToCascade(res, w, modelUid, isJSON, _txt);
+    if (_sent) {
+      _log(
+        `[dao-router] [↩] ${modelUid} 上游错误已可读回传 Cascade (HTTP ${_e.status} · ${_e.provider})`,
+      );
+      return true;
+    }
+  }
   return false;
 }
 
@@ -1673,6 +1810,14 @@ async function _tryRoute({
       );
       if (isPrimary && agRes.statusCode >= 500) {
         _healthCache[target.provider] = { alive: false, ts: Date.now() };
+      }
+      // ★ v9.9.288 · 记录上游错误 · 供 route() ALL-FAIL 时可读回传 Cascade
+      if (callOpts) {
+        callOpts._lastErr = {
+          status: agRes.statusCode,
+          provider: target.provider,
+          body: errBody.slice(0, 300),
+        };
       }
       return false;
     }
@@ -2276,16 +2421,13 @@ async function _callProvider(
       //   道义: 三十二章「道恒无名」· 一章「名可名也非恒名也」· 名去则惑除。
       //   修复: 发往渠道前中性化描述中的官方产品名 → "you"/"the editor"
       //   (与道化 SP「你本無名」一致 · 以"你"称之) · 不改工具名/参数 · 机制不破。
-      const _deOfficialName = (s) =>
-        typeof s === "string"
-          ? s
-              .replace(/\bCascade\b/g, "you")
-              .replace(/\bWindsurf\b/g, "the editor")
-              .replace(/\bCodeium\b/g, "the editor")
-          : s;
+      //   v9.9.288 · 去名扩展至参数描述: 顶层 description + parameters 内任意层级
+      //   description 字段一并中性化 (run_command 等工具的参数描述实测仍含 "Cascade")。
       for (const _tf of toolsField) {
-        if (_tf && _tf.function)
+        if (_tf && _tf.function) {
           _tf.function.description = _deOfficialName(_tf.function.description);
+          if (_tf.function.parameters) _deOfficialDescDeep(_tf.function.parameters);
+        }
       }
 
       if (toolsField.length === 0) toolsField = undefined;
@@ -2329,6 +2471,20 @@ async function _callProvider(
         _routeDiag(
           `[dao-router] [SP已增强] ✓ 太上模式 ${_spText.length}B · 官方SP保留 + DAO增强 · 工具指令完整`,
         );
+      }
+      // ★ v9.9.288 · 道恒无名 · SP 去官名 (发渠前最后一步)
+      //   根因: 官方SP尾部默认工作目录 "CascadeProjects" 等产品名随增强SP透传给真实渠道
+      //   → 模型读 SP 见 "Cascade" 强化自认身份 (与工具描述同源·此前仅去了工具未去SP)。
+      //   修复: 对最终 SP 内容做去名归一 (CascadeProjects→Projects · Cascade→you 等)。
+      if (typeof messages[0].content === "string") {
+        const _spBefore = messages[0].content;
+        const _spAfter = _deOfficialName(_spBefore);
+        if (_spAfter !== _spBefore) {
+          messages[0].content = _spAfter;
+          _routeDiag(
+            `[道恒无名·SP去名] ${_spBefore.length}B → ${_spAfter.length}B (中性化官方产品名)`,
+          );
+        }
       }
     }
 
