@@ -11,6 +11,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write   # 允许合并后 dispatch release.yml
 
 concurrency:
   group: auto-merge-${{ github.event.pull_request.number || 'sweep' }}
@@ -44,6 +45,7 @@ jobs:
               numbers = [context.payload.pull_request.number];
             }
 
+            let mergedAny = false;
             for (const number of numbers) {
               // GitHub computes `mergeable` asynchronously; poll until known.
               let pr = null;
@@ -59,7 +61,19 @@ jobs:
               try {
                 await github.rest.pulls.merge({ owner, repo, pull_number: number, merge_method: 'merge' });
                 core.notice(`#${number}: merged into main`);
+                mergedAny = true;
               } catch (e) {
                 core.warning(`#${number}: merge failed (${e.status}) ${e.message}`);
+              }
+            }
+
+            // 自动合并由 GITHUB_TOKEN 完成，其 push 不会触发 release.yml 的 on:push（GitHub 防递归）。
+            // 故显式 dispatch（workflow_dispatch 是 GITHUB_TOKEN 的例外，可正常触发）把最新版同步到 Release。
+            if (mergedAny) {
+              try {
+                await github.rest.actions.createWorkflowDispatch({ owner, repo, workflow_id: 'release.yml', ref: 'main' });
+                core.notice('dispatched release.yml to sync plugins to Release');
+              } catch (e) {
+                core.warning(`release dispatch failed (${e.status}) ${e.message}`);
               }
             }
