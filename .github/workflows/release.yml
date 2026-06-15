@@ -1,0 +1,101 @@
+name: Sync plugins to Release
+
+# 道法自然 · 大道至简：往 main 推代码即可，本工作流自动构建全部插件 VSIX 并把最新版同步到 Release，
+# 无需手动碰 Release。Release tag 跟随 dao-one 版本（vX.Y.Z）：同版本重复推送原地刷新资产，
+# bump 了 dao-one 版本则自动新建版本 Release。鉴权用内置 GITHUB_TOKEN，跑在 GitHub 原生环境。
+# 触发：push 到 main（命中插件源码，排除纯文档）；亦可手动 workflow_dispatch。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "core/**"
+      - "addons/**"
+      - "tools/pack-vsix.js"
+      - ".github/workflows/release.yml"
+      - "!**/*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-sync
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install build deps
+        run: |
+          (cd core/dao-one && npm install)
+          (cd core/dao-vsix && npm install)
+          (cd addons/dao-export && npm install)
+
+      - name: Build all VSIX assets
+        run: |
+          set -e
+          mkdir -p release-assets
+          # dao-one（最终交付）：build.js 现拷四引擎源 + 叠 proxy-fold.patch，再 vsce 打包
+          (cd core/dao-one && node build.js && npx @vscode/vsce package --allow-missing-repository --skip-license)
+          mv core/dao-one/*.vsix release-assets/
+          # dao-vsix 需先转译，再用通用打包器
+          (cd core/dao-vsix && node build.js)
+          for d in core/dao-vsix core/rt-flow core/dao-proxy-pro addons/dao-bridge/dao-bridge-ext addons/devin-git-auth; do
+            node tools/pack-vsix.js "$d"
+            mv "$d"/*.vsix release-assets/
+          done
+          # dao-export 需 tsc
+          (cd addons/dao-export && npx tsc -p ./)
+          node tools/pack-vsix.js addons/dao-export
+          mv addons/dao-export/*.vsix release-assets/
+          ls -lh release-assets/
+
+      - name: Compute version + release notes
+        id: meta
+        run: |
+          set -e
+          VER=$(node -p "require('./core/dao-one/package.json').version")
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          {
+            echo "# dao · 4+4+3 (v$VER)"
+            echo
+            echo "最终交付 = **dao-one** —— 四引擎归一单插件，日常只装它一个。本 Release 由 CI 自动同步自 main 最新源码。"
+            echo
+            echo "| 插件 | 版本 |"
+            echo "|---|---|"
+            for entry in \
+              "dao-one:core/dao-one" \
+              "dao-vsix:core/dao-vsix" \
+              "rt-flow:core/rt-flow" \
+              "dao-proxy-pro:core/dao-proxy-pro" \
+              "dao-bridge:addons/dao-bridge/dao-bridge-ext" \
+              "devin-git-auth:addons/devin-git-auth" \
+              "dao-devin-export:addons/dao-export"; do
+              name="${entry%%:*}"; dir="${entry##*:}"
+              v=$(node -p "require('./$dir/package.json').version")
+              echo "| $name | $v |"
+            done
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Create or update Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="v${{ steps.meta.outputs.ver }}"
+          TITLE="dao · 4+4+3 ($TAG)"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes-file release-notes.md --latest --draft=false
+            gh release upload "$TAG" release-assets/*.vsix --clobber
+          else
+            gh release create "$TAG" release-assets/*.vsix --title "$TITLE" --notes-file release-notes.md --latest --target "$GITHUB_SHA"
+          fi
