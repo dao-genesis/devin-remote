@@ -34,7 +34,7 @@ Module._load = function (request, parent, isMain) {
 };
 
 const ext = require("../extension.js");
-const { DaoWsClient, connectRelayWs, extractCfTgz, isRealCloudflared } = ext;
+const { DaoWsClient, connectRelayWs, extractCfTgz, isRealCloudflared, cfAssetName } = ext;
 
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 let passed = 0;
@@ -218,6 +218,32 @@ function listen(server) { return new Promise((r) => server.listen(0, "127.0.0.1"
     b.mode = "quick"; b.url = "https://x.trycloudflare.com";
     assert.ok(!b.generateCloudAgentMd().includes(WARN), "direct MD has no envelope warning");
     ok("generateCloudAgentMd relay envelope contract");
+  }
+
+  // T7: 跨平台 cloudflared 资产名矩阵(适配 Windows/Linux/macOS × amd64/arm64/arm)
+  {
+    const origP = Object.getOwnPropertyDescriptor(process, "platform");
+    const origA = Object.getOwnPropertyDescriptor(process, "arch");
+    const set = (p, a) => {
+      Object.defineProperty(process, "platform", { value: p, configurable: true });
+      Object.defineProperty(process, "arch", { value: a, configurable: true });
+    };
+    try {
+      assert.strictEqual(cfAssetName.call(null) !== undefined, true);
+      set("win32", "x64"); assert.strictEqual(cfAssetName(), "cloudflared-windows-amd64.exe");
+      set("win32", "arm64"); assert.strictEqual(cfAssetName(), "cloudflared-windows-arm64.exe");
+      set("darwin", "x64"); assert.strictEqual(cfAssetName(), "cloudflared-darwin-amd64.tgz");
+      set("darwin", "arm64"); assert.strictEqual(cfAssetName(), "cloudflared-darwin-arm64.tgz");
+      set("linux", "x64"); assert.strictEqual(cfAssetName(), "cloudflared-linux-amd64");
+      set("linux", "arm64"); assert.strictEqual(cfAssetName(), "cloudflared-linux-arm64");
+      set("linux", "arm"); assert.strictEqual(cfAssetName(), "cloudflared-linux-arm");
+      // macOS 资产是 .tgz → 必须走解包分支; 其余平台直存
+      assert.ok(/\.tgz$/.test("cloudflared-darwin-arm64.tgz"), "darwin asset is tgz");
+    } finally {
+      Object.defineProperty(process, "platform", origP);
+      Object.defineProperty(process, "arch", origA);
+    }
+    ok("cfAssetName cross-platform matrix (win/linux/macOS × amd64/arm64/arm)");
   }
 
   console.log("\nALL " + passed + " TESTS PASSED");
