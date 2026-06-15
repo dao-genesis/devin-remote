@@ -13,10 +13,12 @@ import * as net from 'net';
 let LOGIN_URL = 'https://windsurf.com/_devin-auth/password/login';
 let API_BASE = 'https://app.devin.ai/api';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
-let DOWNLOAD_CONCURRENCY = 24;
-let PRESIGN_CONCURRENCY = 8;
-let DOWNLOAD_RETRIES_CFG = 3;
-let DOWNLOAD_TIMEOUT_CFG = 45000;
+// 默认值偏保守，避免在家用路由器/NAT 上一次备份就打开过多并发 socket
+// (maxSockets = max(DL,PRESIGN)+4)。高带宽链路可在设置里上调。
+let DOWNLOAD_CONCURRENCY = 8;
+let PRESIGN_CONCURRENCY = 4;
+let DOWNLOAD_RETRIES_CFG = 2;
+let DOWNLOAD_TIMEOUT_CFG = 30000;
 
 /**
  * 连接复用 (HTTP keep-alive) —— 高延迟链路下的根本性能杠杆。

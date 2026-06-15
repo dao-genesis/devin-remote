@@ -89,23 +89,23 @@
         },
         "daoDevin.downloadConcurrency": {
           "type": "number",
-          "default": 24,
-          "description": "文件下载并发数（连接复用 keep-alive 下可调高）"
+          "default": 8,
+          "description": "文件下载并发数（连接复用 keep-alive 下可调高；默认偏保守以保护家用路由器/NAT）"
         },
         "daoDevin.presignConcurrency": {
           "type": "number",
-          "default": 8,
+          "default": 4,
           "description": "presigned-url 批量解析并发数"
         },
         "daoDevin.downloadRetries": {
           "type": "number",
-          "default": 3,
+          "default": 2,
           "description": "每个文件下载重试次数"
         },
         "daoDevin.downloadTimeoutMs": {
           "type": "number",
-          "default": 45000,
-          "description": "单文件下载超时（毫秒）"
+          "default": 30000,
+          "description": "单文件下载超时（毫秒）——超时即回收卡死 socket，缓解丢包下的 socket 泄漏"
         }
       }
     }
