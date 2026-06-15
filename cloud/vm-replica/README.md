@@ -35,6 +35,7 @@
 | `build_exe.py` | **冻结成独立 EXE**（PyInstaller）：把 inner/host/mcp 三层打包成无 Python 依赖的单文件 exe，用于注入任意用户 Windows（见二·B）。 |
 | `config.sample.json` | 守护配置样例（落地为 `C:\ProgramData\dao_vm\config.json`）。 |
 | `recover-bootsafe.bat` | **带外恢复脚本**。开机进不去桌面 / RDP 崩溃 / 自动重启时，管理员双击即恢复 boot-safe 本源态。 |
+| `ts_multifix.py` | **多会话使能器（boot-safe，内存级）**。对*运行中*的 `termsrv.dll` 做精准内存补丁开启并发会话（Win10/11 客户端 SKU 默认单会话）：`bAppServerAllowed/bServerSku=1`、`lMaxUserSessions=1024`、`CDefPolicy::Query` 的 `jne→jmp`。**绝不改磁盘 ServiceDll、绝不挂 rdpwrap**；偏移按 termsrv 文件版本表查（含签名自检），未知 build 即 no-op（开机绝对安全），重启 TermService 即自动复原。`vm_host_daemon` 启动与 `vm.create` 前自动幂等调用 `ensure_multisession()`。CLI：`python ts_multifix.py status|apply|revert|ensure`。 |
 | `archive_practice/`（旧） | 早期/备用实现归档（`vm_agent.py` / `connector.py` / `daovm-up.ps1`）：单账号 at-logon 自启 + mstsc 对话框自动点等方案，已被 host daemon 取代，仅留作参考。详见该目录 README。 |
 | `../vendor/playwright-mcp` | **直接复制**的真实 Playwright MCP（@playwright/mcp）。经 `--cdp-endpoint` 连到 inner agent `browser_launch` 暴露的 VM 浏览器 CDP 端点，让 agent 用 Playwright 全套真实工具操作 VM 浏览器（非复刻）。 |
 | `../vendor/mcp-servers` | **直接复制**的 modelcontextprotocol/servers（filesystem/git/fetch/memory/...），对位 Devin 文件/Git/抓取工具面的官方实现。 |
@@ -164,7 +165,7 @@ RDP 许可限制**，与本代码无关：
 - ❌ **绝不**安装「开机/登录即自动跑 mstsc / 改 RDP」的 at-logon 自启任务。
 - ✅ 多会话能力**按需**获得：
   - **Windows Server**（如本仓库的实测 VM）：原生支持远程会话、无需 rdpwrap（管理模式并发上限 2，见上「并发」节）。
-  - **Windows 10/11**：需要时在会话内**临时加载** rdpwrap 补丁、用完即撤，绝不持久化为 ServiceDll。
+  - **Windows 10/11**：用 `ts_multifix.py` 对**运行中**的 termsrv.dll 做**内存级**多会话补丁（按需、幂等、重启即撤）。本机 build `26100.8521` 上 rdpwrap 会崩溃循环，故**不用 rdpwrap**，改用从微软公开 PDB 精确解析的偏移直接改内存全局量与 `CDefPolicy::Query`；磁盘 ServiceDll 永远保持原生，绝不持久化。
 - ✅ `vm_host_daemon` 默认只在 console 会话内手动起，不随机器自启；console 主会话始终保持纯净。
 
 ---
@@ -196,6 +197,23 @@ RDP 许可限制**，与本代码无关：
 >    （`DETACHED_PROCESS`，不继承 stdio 管道）。
 > 2. `ensure_rdp_active` 原先只保活**第一个** mstsc 窗口 → 改为保活**全部**匹配窗口，
 >    使许可放开的宿主上多台 VM 会话都能持续可操作。
+
+### 四·B、141 主机（DESKTOP-MASTER · Win11 `26100.8521`）多会话复原实测
+
+用户机 `DESKTOP-MASTER` 从主账号 RDP 连子账号时报「本机的连接数量是有限的」。根因：客户端
+SKU `termsrv.dll 10.0.26100.8521` 默认单会话（`bAppServerAllowed=0`），且此 build 上 rdpwrap
+崩溃不可用。用 `ts_multifix.py`（内存级、boot-safe）实测：
+
+| 验证项 | 结果 |
+|---|---|
+| `ts_multifix.py apply`（live termsrv 8521） | ✅ `bServerSku/bAppServerAllowed=1`、`lMaxUserSessions=1024`、`CDefPolicy jne→0xEB`，签名自检通过 |
+| 并发会话 | ✅ `administrator`(console s1) + `daoprobe`(rdp s2) + `daoprobe2`(rdp s4) **三会话同时 Active**，「连接数受限」消失 |
+| `vm.exec whoami`（各会话） | ✅ 分别返回 `desktop-master\daoprobe` / `desktop-master\daoprobe2`，独立会话内执行 |
+| 自愈 | ✅ `revert`→native 后重启 `vm_host_daemon` → 启动即自动 `apply`（before→after 0→1），无需手动 |
+| 稳定性 | ✅ 全程 `System` 日志无 `7031/7034`（无 TermService 崩溃，无开机锁死风险） |
+
+> 复原后只保留 `administrator` console；临时 `daoprobe*` 账号已 `vm.destroy` 清理，用户既有
+> 账号（zhou / zhou1 / daovm）与文件全程未动。
 
 ---
 

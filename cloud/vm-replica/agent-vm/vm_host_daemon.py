@@ -150,6 +150,9 @@ def create_vm(name, password=None):
     if name in vms and inner_health(vms[name]['port']):
         return {'ok': True, 'name': name, 'port': vms[name]['port'],
                 'status': 'running', 'note': 'already running'}
+    # Self-heal: make sure concurrent multi-session is enabled on the live TermService
+    # (e.g. if it was restarted since daemon start). Idempotent + boot-safe.
+    ensure_multisession()
     deploy_inner_script()
     pw = password or DEFAULT_PW
     port = vms[name]['port'] if name in vms else find_next_port()
@@ -420,6 +423,14 @@ class HostHandler(http.server.BaseHTTPRequestHandler):
             return {'status': 'ok', 'role': 'host_daemon'}
         if action == 'host.activate_rdp':
             return ensure_rdp_active(body.get('target'), body.get('offscreen', True))
+        if action == 'host.multisession':
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import ts_multifix
+                return ts_multifix.status()
+            except Exception as e:
+                return {'ok': False, 'error': str(e)}
+        if action == 'host.enable_multisession':
+            return ensure_multisession()
         if action == 'vm.snapshot':
             return snapshot_vm(body.get('name', body.get('vm', '')), body.get('tag'), body.get('path'))
         if action == 'vm.restore':
@@ -436,7 +447,24 @@ class HostHandler(http.server.BaseHTTPRequestHandler):
 class ThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True; daemon_threads = True
 
+def ensure_multisession():
+    """Enable concurrent multi-session on the live TermService (boot-safe, in-memory).
+    Required so vm.create can open more than one RDP session on a client SKU. No-op on
+    unsupported builds; never fatal. Mirrors the repo doctrine: never hang rdpwrap as
+    ServiceDll, apply on demand instead."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import ts_multifix
+        r = ts_multifix.ensure_multisession()
+        print(f'[host] multi-session: {r}')
+        return r
+    except Exception as e:
+        print(f'[host] multi-session enable skipped: {e}')
+        return {'ok': False, 'error': str(e)}
+
+
 def main():
+    ensure_multisession()
     # Auto-attach any inner agents already alive on base_port..+10
     for i in range(10):
         port = BASE_PORT + i
