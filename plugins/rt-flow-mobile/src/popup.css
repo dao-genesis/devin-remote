@@ -58,6 +58,11 @@ button.mini { padding: 6px 8px; font-size: 12px; }
 .acct .btns { display: flex; gap: 6px; margin-top: 8px; }
 .acct .btns button { flex: 1; }
 .badge { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--ok); color: #fff; }
+.badge.tok { background: var(--accent2); }
+.acct.locked { border-color: var(--warn); opacity: 0.92; }
+.acct .lockstate { font-size: 11px; }
+button.warn { border: 1px solid var(--warn); color: var(--warn); background: transparent; }
+button.warn:hover { background: rgba(251,191,36,0.12); }
 .empty { color: var(--mut); font-size: 12px; padding: 6px 0; }
 .toast { position: fixed; left: 50%; bottom: 44px; transform: translateX(-50%); background: #000; color: #fff; padding: 8px 14px; border-radius: 8px; font-size: 12px; max-width: 90%; text-align: center; z-index: 50; }
 .toast.ok { background: var(--ok); }

@@ -103,6 +103,29 @@ const DaoCloud = (() => {
     };
   }
 
+  // 裸 token → auth1 直取 (与本体 loginViaToken 一脉·万法识别 token 入池后免 email+password)
+  //   auth1 为不透明令牌, post-auth 换 org_id/(可能的)user_id; email 取 post-auth 回传或合成稳定别名。
+  async function loginViaToken(token) {
+    const auth1 = String(token || "").trim();
+    if (!auth1) return { ok: false, error: "空 token" };
+    const orgResp = await jsonRequestRetry(
+      "POST", CFG.apiBase + "/users/post-auth", { Authorization: "Bearer " + auth1 }, {},
+    );
+    const od = orgResp.json || {};
+    const orgId = od.org_id || od.orgId || "";
+    if (!orgId) return { ok: false, error: "token 无效/post-auth 无 org_id (HTTP " + orgResp.status + ")" };
+    const userId = od.user_id || od.userId || decodeJwtUserId(auth1) || "";
+    const email = od.email || od.user_email || ("token-" + auth1.slice(0, 10));
+    return {
+      ok: true,
+      auth1, orgId, userId,
+      orgBare: orgId.replace(/^org-/, ""),
+      orgName: od.org_name || od.orgName || "",
+      email, viaToken: true,
+      ts: Date.now(),
+    };
+  }
+
   // 额度: app.devin.ai/api/{orgId}/billing/status
   // balance = available_credits + max(0, overage_credits); 含权威布尔判定
   async function getBilling(auth) {
@@ -604,7 +627,7 @@ const DaoCloud = (() => {
 
   return {
     CFG, jsonRequest, jsonRequestRetry, withTimeout,
-    login, getBilling, billingBalance, authHeaders, verify, decodeJwtUserId,
+    login, loginViaToken, getBilling, billingBalance, authHeaders, verify, decodeJwtUserId,
     asArray, listSessions, getSessionDetail, classifySession, isActiveClass,
     listRunningSessions, listKnowledge, listPlaybooks, listSecrets, getGitConnections,
     isUserKnowledge, isUserPlaybook, accountOverview,
