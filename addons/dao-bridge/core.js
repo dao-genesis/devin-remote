@@ -121,6 +121,11 @@ async function handleRoute(host, route, method, headers, bodyRaw, token) {
             return { status: 200, body: host.info ? host.info() : { workspace: root } };
         }
         default:
+            if (host.handleExtra) {
+                const extra = await host.handleExtra(route, method, body, headers);
+                if (extra)
+                    return extra;
+            }
             return { status: 404, body: { error: 'not_found', route } };
     }
 }
