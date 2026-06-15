@@ -32,7 +32,8 @@
 //   ③ 心跳: 客户端每 15s 发 {type:'ping'}; 中继回 {type:'pong'}。
 // ═══════════════════════════════════════════════════════════════════════════
 
-const VERSION = "2.0.0"; // 对齐线上部署的 (session,token) 配对模型(health 报 v10)
+// 鉴权/定址纯逻辑见 ./keys.js —— 不可从本入口再导出普通值/函数, 否则 workerd 启动即报错。
+import { VERSION, relayKey, sharedTokenOk } from "./keys.js";
 
 function bearer(req) {
   const h = req.headers.get("authorization") || req.headers.get("Authorization") || "";
@@ -43,19 +44,6 @@ function json(body, status) {
     status: status || 200,
     headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
   });
-}
-
-// DO 命名空间定址: session 与 token 共同决定实例 —— 「知道 session+token」即凭证。
-// 用 \u0000 作分隔(token/session 不含 NUL), 避免 "a"+"bc" 与 "ab"+"c" 撞键。
-function relayKey(session, token) {
-  return String(session) + "\u0000" + String(token);
-}
-
-// 可选私有模式闸门: 仅当部署设置了 env.DAO_TOKEN 才生效(锁定单一密钥); 默认开放配对。
-function sharedTokenOk(env, token) {
-  const shared = env && env.DAO_TOKEN ? String(env.DAO_TOKEN) : "";
-  if (!shared) return true; // 未设共享密钥 = 零账号开放配对
-  return token === shared;
 }
 
 export default {
@@ -180,5 +168,3 @@ export class RelayDO {
   }
 }
 
-// 纯函数导出供单测(Node 可直接 import, 不触碰 Cloudflare 运行时全局)。
-export { relayKey, sharedTokenOk, VERSION };

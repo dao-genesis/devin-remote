@@ -4,7 +4,7 @@
 // 运行: node --test test/   (或 node --test test/worker.test.js)
 import { test } from "node:test";
 import assert from "node:assert";
-import { relayKey, sharedTokenOk, VERSION } from "../worker.js";
+import { relayKey, sharedTokenOk, VERSION } from "../keys.js";
 
 test("VERSION is a non-empty string", () => {
   assert.strictEqual(typeof VERSION, "string");
