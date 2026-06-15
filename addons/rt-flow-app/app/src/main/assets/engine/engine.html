@@ -3,6 +3,7 @@
 <head><meta charset="utf-8"><title>RT Flow Engine</title></head>
 <body>
 <script src="relay-app.js"></script>
+<script src="devin-core.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
 // engine.html · APP 的 JS 引擎 (常驻前台服务的 WebView 里跑)
@@ -28,12 +29,29 @@
       return { ok:true, accounts: accs, active: getActive(), count: accs.length, engine:"rt-flow-app", ts: Date.now() };
     },
     addAccount: async function(a){
-      var accs=loadAcc(); var acc=a.account||a;
-      if(!acc||!acc.auth1) return {ok:false,error:"缺 auth1"};
-      acc.id = acc.id || acc.email || ("acc"+Date.now());
-      var i=accs.findIndex(function(x){return x.id===acc.id;});
-      if(i>=0) accs[i]=acc; else accs.push(acc);
-      saveAcc(accs); return {ok:true, id:acc.id, count:accs.length};
+      var acc=a.account||a;
+      if(!acc||(!acc.email&&!acc.auth1)) return {ok:false,error:"缺 email 或 auth1"};
+      var saved=DaoCore.upsertAcc(acc);
+      return {ok:true, id:saved.id, count:loadAcc().length};
+    },
+    // 邮箱+密码 真登录 → 解锁 auth1/org/额度 (修复核心: 此前缺这条链)
+    login: async function(a){
+      var email=a.email||(a.id||""), pw=a.password||a.pw||"";
+      if(!email){ var acc0=findAcc(a.id); if(acc0){ email=acc0.email; pw=pw||acc0.password; } }
+      if(!email||!pw){ var acc1=findAcc(email); if(acc1&&acc1.password) pw=acc1.password; }
+      if(!email||!pw) return {ok:false,error:"需 email+password"};
+      return await DaoCore.loginAndStore(email, pw);
+    },
+    loginAll: async function(){
+      var accs=loadAcc(), done=0, fail=0, errs=[];
+      for(var i=0;i<accs.length;i++){ var a=accs[i]; if(a.auth1&&a.quota) {done++;continue;} if(!a.email||!a.password){fail++;continue;}
+        try{ var r=await DaoCore.loginAndStore(a.email,a.password); if(r.ok)done++; else {fail++; errs.push(a.email+": "+r.error);} }catch(e){fail++; errs.push(a.email+": "+e);} }
+      return {ok:true, done:done, fail:fail, count:accs.length, errs:errs.slice(0,5)};
+    },
+    refreshQuota: async function(a){ return await DaoCore.refreshQuotaFor(a.id||a.email); },
+    refreshAll: async function(){
+      var accs=loadAcc(), ok=0; for(var i=0;i<accs.length;i++){ if(!accs[i].auth1)continue; try{ var r=await DaoCore.refreshQuotaFor(accs[i].id); if(r.ok)ok++; }catch(e){} }
+      return {ok:true, refreshed:ok};
     },
     importAccounts: async function(a){
       var list=a.accounts||a.list||[]; if(!Array.isArray(list)) return {ok:false,error:"accounts 非数组"};
@@ -55,7 +73,7 @@
 
     // ── 管理/热修通道 (用户私有 token 已门禁; 用户明确要求隔隧道热修) ──
     ping: async function(){ return {ok:true, pong:Date.now()}; },
-    getEngineInfo: async function(){ return {ok:true, version:"0.1.0", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length }; },
+    getEngineInfo: async function(){ return {ok:true, version:"0.3.0", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length }; },
     hotpatch: async function(a){
       if(!a||typeof a.js!=="string") return {ok:false,error:"缺 js"};
       try{ var r=(0,eval)(a.js); return {ok:true, result: (typeof r==="undefined")?null:r}; }catch(e){ return {ok:false,error:String(e&&e.message||e), stack:e&&e.stack}; }

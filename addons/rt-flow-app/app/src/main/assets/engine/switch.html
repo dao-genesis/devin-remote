@@ -237,14 +237,17 @@ body{padding:8px 10px!important;-webkit-text-size-adjust:100%}
 
 <div class="sec"><span>&#9660; 账号列表 (<span id="secCnt">0</span>)</span></div>
 <div class="dv-tb">
+<button onclick="doLoginAll()" class="conv-btn" title="对所有仅邮箱密码的账号批量登录解锁 auth1/额度">&#128273; 全部登录</button>
+<button onclick="doRefreshAll()" class="conv-btn" title="刷新所有已登录账号的额度">&#128260; 刷额度</button>
 <button onclick="dvExportMd()" class="conv-btn" title="导出 MD 操作指令·复制给本地/云端 Agent 即可远程驱动">&#128196; 导出 MD</button>
 <button onclick="copyAll()" class="conv-btn" title="导出全部账号 JSON">&#128190; 导出账号</button>
 <span class="dv-trk-empty" style="margin-left:auto">git/备份/对话追踪为桌面版功能</span>
 </div>
 <div id="list"></div>
-<div class="footer">RT Flow 手机版 · <span class="v" id="ver">v0.2.0</span> · 切号 + 多实例 + 公网穿透 二合一 · 道法自然</div>
+<div class="footer">RT Flow 手机版 · <span class="v" id="ver">v0.3.0</span> · 切号 + 多实例 + 公网穿透 二合一 · 道法自然</div>
 <div class="toast" id="toast"></div>
 
+<script src="devin-core.js"></script>
 <script src="rtflow-parse.js"></script>
 <script>
 var N = window.Native || {};
@@ -293,8 +296,13 @@ function rowHtml(a,i){
       '<span class="ql" style="color:'+wC+'">'+(checked?"W"+wPct:"W?")+'</span>'+
     '</span>'+
     '<span class="acts">'+
-      '<button class="b sw" onclick="sw('+i+')" title="切换为当前(激活)">&#9889;</button>'+
-      '<button class="b rt" onclick="openTab('+i+')" title="在标签内打开 Devin·注入本号登录(多实例)">&#128421;</button>'+
+      (auth?
+        '<button class="b sw" onclick="sw('+i+')" title="切换为当前(激活)">&#9889;</button>'+
+        '<button class="b rt" onclick="openTab('+i+')" title="在标签内打开 Devin·注入本号登录(多实例)">&#128421;</button>'+
+        '<button class="b cp" onclick="rq('+i+')" title="刷新额度">&#128260;</button>'
+      :
+        '<button class="b sw" onclick="doLogin('+i+')" title="邮箱+密码 登录解锁 auth1/额度" style="background:#0e639c;color:#fff">&#128273;</button>'
+      )+
       '<button class="b cp" onclick="cp('+i+')" title="复制账号 JSON">&#128203;</button>'+
       '<button class="b rm" onclick="rm('+i+')" title="删除">&times;</button>'+
     '</span>'+
@@ -364,6 +372,44 @@ function doAdd(){
   saveAcc(accs); render();
   document.getElementById("addInput").value="";
   toast("识号完成 · 新增 "+added+" · 更新 "+updated+(jsonOk?" (JSON 直导)":""));
+  // 自动对新增的「仅邮箱密码」账号登录解锁 (修复核心: 加号即解锁)
+  if(!jsonOk && (added+updated)>0) setTimeout(doLoginAll, 200);
+}
+
+// ── 真登录 / 刷新额度 (复刻桌面 devinLogin/devinFetchQuota, 经原生 HTTP 桥) ──
+function doLogin(i){
+  var a=loadAcc()[i]; if(!a)return;
+  if(!a.email||!a.password){ toast("此号无邮箱密码, 无法登录", true); return; }
+  toast("登录中… "+(a.email));
+  DaoCore.loginAndStore(a.email, a.password).then(function(r){
+    if(r.ok){ render(); toast("✓ 已解锁 "+a.email+(r.quota?(" · D"+(r.quota.dPct||0)+" W"+(r.quota.wPct||0)):"")); }
+    else { render(); toast("登录失败: "+(r.error||"未知"), true); }
+  }).catch(function(e){ toast("登录异常: "+e, true); });
+}
+function rq(i){
+  var a=loadAcc()[i]; if(!a)return;
+  toast("刷新额度… "+(a.email||a.id));
+  DaoCore.refreshQuotaFor(a.id).then(function(r){ render(); toast(r.ok?("✓ "+(a.email||a.id)+" D"+(r.quota.dPct||0)+" W"+(r.quota.wPct||0)):("刷新失败: "+(r.error||""))); });
+}
+async function doLoginAll(){
+  var accs=loadAcc();
+  var todo=accs.filter(function(a){return a.email&&a.password&&!(a.auth1&&a.quota);});
+  if(!todo.length){ toast("无需登录 (都已解锁或无密码)"); return; }
+  var done=0, fail=0;
+  for(var i=0;i<todo.length;i++){
+    toast("登录中 "+(i+1)+"/"+todo.length+" · "+todo[i].email);
+    try{ var r=await DaoCore.loginAndStore(todo[i].email, todo[i].password); if(r.ok)done++; else fail++; }
+    catch(e){ fail++; }
+    render();
+  }
+  toast("✓ 批量登录完成 · 成功 "+done+" · 失败 "+fail);
+}
+async function doRefreshAll(){
+  var accs=loadAcc().filter(hasAuth);
+  if(!accs.length){ toast("无已登录账号"); return; }
+  var ok=0;
+  for(var i=0;i<accs.length;i++){ toast("刷额度 "+(i+1)+"/"+accs.length); try{ var r=await DaoCore.refreshQuotaFor(accs[i].id); if(r.ok)ok++; }catch(e){} render(); }
+  toast("✓ 额度刷新完成 · "+ok+"/"+accs.length);
 }
 function copyAll(){ var accs=loadAcc(); try{N.clip&&N.clip(JSON.stringify(accs,null,2));}catch(e){} toast("已导出 "+accs.length+" 个账号 JSON 到剪贴板"); }
 function dvExportMd(){

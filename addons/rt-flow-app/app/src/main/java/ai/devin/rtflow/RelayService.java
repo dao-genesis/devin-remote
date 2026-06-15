@@ -77,6 +77,13 @@ public class RelayService extends Service {
         @JavascriptInterface public String readFile(String name) { return readUserFile(name); }
         @JavascriptInterface public void reload() { main.post(() -> { if (engine != null) engine.reload(); }); }
         @JavascriptInterface public void log(String s) { android.util.Log.i("RTFlowEngine", s == null ? "" : s); }
+        /** 原生 HTTP (无 CORS, 可设 Origin/Referer) — 登录/额度/会话/Git 的底座; 结果经 window.__httpCb 回灌。 */
+        @JavascriptInterface public void httpReq(String reqId, String method, String url, String headersJson, String body) {
+            HttpBridge.exec(reqId, method, url, headersJson, body, (id, json) ->
+                main.post(() -> { if (engine != null) try {
+                    engine.evaluateJavascript("window.__httpCb&&window.__httpCb(" + HttpBridge.jsonStr(id) + "," + json + ")", null);
+                } catch (Exception ignored) {} }));
+        }
     }
 
     private static String statusLine(String json) {

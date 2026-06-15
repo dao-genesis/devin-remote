@@ -216,16 +216,17 @@ public class MainActivity extends AppCompatActivity {
         boolean internal = url.startsWith("rtflow://") || url.startsWith("file:");
         tab.internal = internal;
         if (internal) {
-            web.addJavascriptInterface(new Bridge(), "Native"); // 仅内部页暴露原生桥
+            web.addJavascriptInterface(new Bridge(web), "Native"); // 仅内部页暴露原生桥
         } else {
             st.setUserAgentString(st.getUserAgentString().replace("; wv", "")); // 贴近真浏览器
         }
 
         // 账号标签: document_start 注入鉴权头 + sessionStorage 隔离 (多实例核心)
         if (accountJson != null) {
-            String token = "", org = "";
-            try { JSONObject a = new JSONObject(accountJson); token = a.optString("auth1", ""); org = a.optString("orgId", ""); } catch (Exception ignored) {}
-            String script = TabActivity.buildInjection(token, org);
+            String token = "", org = "", uid = "", orgName = "";
+            try { JSONObject a = new JSONObject(accountJson); token = a.optString("auth1", ""); org = a.optString("orgId", "");
+                uid = a.optString("userId", ""); orgName = a.optString("orgName", ""); } catch (Exception ignored) {}
+            String script = TabActivity.buildInjection(token, uid, org, orgName);
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 try { WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton("https://app.devin.ai")); } catch (Exception ignored) {}
             }
@@ -362,6 +363,15 @@ public class MainActivity extends AppCompatActivity {
 
     // ── Native 桥 (仅注入内部页 switch.html / tunnel.html) ─────────────────
     public class Bridge {
+        private final WebView owner;
+        Bridge(WebView w) { this.owner = w; }
+        /** 原生 HTTP (无 CORS, 可设 Origin/Referer) — 切号页登录/额度直接走它; 结果经 window.__httpCb 回灌。 */
+        @JavascriptInterface public void httpReq(String reqId, String method, String url, String headersJson, String body) {
+            HttpBridge.exec(reqId, method, url, headersJson, body, (id, json) ->
+                main.post(() -> { if (owner != null) try {
+                    owner.evaluateJavascript("window.__httpCb&&window.__httpCb(" + HttpBridge.jsonStr(id) + "," + json + ")", null);
+                } catch (Exception ignored) {} }));
+        }
         @JavascriptInterface public String conn() {
             RelayService r = RelayService.instance;
             return r != null ? r.readConn() : "{}";
