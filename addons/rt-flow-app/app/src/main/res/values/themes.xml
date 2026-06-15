@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.RTFlow" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:statusBarColor">#0e1116</item>
+    </style>
+</resources>

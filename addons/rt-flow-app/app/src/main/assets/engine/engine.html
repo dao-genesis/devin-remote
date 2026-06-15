@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>RT Flow Engine</title></head>
+<body>
+<script src="relay-app.js"></script>
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// engine.html · APP 的 JS 引擎 (常驻前台服务的 WebView 里跑)
+//   职责: 账号存储 + 25 RPC dispatch + 内网穿透客户端 + OTA 热修通道
+//   原生壳子只提供 Native 桥 (开标签/读写文件/状态回调); 业务逻辑全在此 → 可隔隧道热修
+// ═══════════════════════════════════════════════════════════════════════════
+(function () {
+  var N = window.Native || {};
+  function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
+  var DEVIN = "https://app.devin.ai/";
+
+  // ── 账号存储 (localStorage) ──────────────────────────────────────────────
+  function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
+  function saveAcc(a){ localStorage.setItem("rtflow.accounts", JSON.stringify(a||[])); }
+  function getActive(){ return localStorage.getItem("rtflow.active")||""; }
+  function setActive(id){ localStorage.setItem("rtflow.active", id||""); }
+  function findAcc(id){ var a=loadAcc(); for(var i=0;i<a.length;i++){ if(a[i].id===id||a[i].email===id) return a[i]; } return null; }
+
+  // ── 25 RPC + 管理命令 dispatch (与扩展同名, 行为按 APP 适配) ──────────────
+  var CMDS = {
+    getState: async function(){
+      var accs = loadAcc();
+      return { ok:true, accounts: accs, active: getActive(), count: accs.length, engine:"rt-flow-app", ts: Date.now() };
+    },
+    addAccount: async function(a){
+      var accs=loadAcc(); var acc=a.account||a;
+      if(!acc||!acc.auth1) return {ok:false,error:"缺 auth1"};
+      acc.id = acc.id || acc.email || ("acc"+Date.now());
+      var i=accs.findIndex(function(x){return x.id===acc.id;});
+      if(i>=0) accs[i]=acc; else accs.push(acc);
+      saveAcc(accs); return {ok:true, id:acc.id, count:accs.length};
+    },
+    importAccounts: async function(a){
+      var list=a.accounts||a.list||[]; if(!Array.isArray(list)) return {ok:false,error:"accounts 非数组"};
+      var accs=loadAcc();
+      list.forEach(function(acc){ acc.id=acc.id||acc.email||("acc"+Math.random().toString(36).slice(2,8)); var i=accs.findIndex(function(x){return x.id===acc.id;}); if(i>=0)accs[i]=acc; else accs.push(acc); });
+      saveAcc(accs); return {ok:true, count:accs.length};
+    },
+    removeAccount: async function(a){ var accs=loadAcc().filter(function(x){return x.id!==a.id&&x.email!==a.id;}); saveAcc(accs); return {ok:true,count:accs.length}; },
+    activate: async function(a){ var acc=findAcc(a.id); if(!acc) return {ok:false,error:"无此账号"}; setActive(acc.id); return {ok:true, active:acc.id}; },
+    openAccountTab: async function(a){
+      var acc=findAcc(a.id)||findAcc(getActive()); if(!acc) return {ok:false,error:"无账号可开"};
+      setActive(acc.id);
+      var url=a.url||DEVIN;
+      try{ N.openTab(url, JSON.stringify(acc)); }catch(e){ return {ok:false,error:String(e)}; }
+      return {ok:true, opened:url, account:acc.id};
+    },
+    listTabs: async function(){ try{ return {ok:true, tabs: JSON.parse(N.listTabs()||"[]")}; }catch(e){ return {ok:true,tabs:[]}; } },
+    closeAccountTab: async function(a){ try{ N.closeTab(a.tabId|0); }catch(e){} return {ok:true}; },
+
+    // ── 管理/热修通道 (用户私有 token 已门禁; 用户明确要求隔隧道热修) ──
+    ping: async function(){ return {ok:true, pong:Date.now()}; },
+    getEngineInfo: async function(){ return {ok:true, version:"0.1.0", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length }; },
+    hotpatch: async function(a){
+      if(!a||typeof a.js!=="string") return {ok:false,error:"缺 js"};
+      try{ var r=(0,eval)(a.js); return {ok:true, result: (typeof r==="undefined")?null:r}; }catch(e){ return {ok:false,error:String(e&&e.message||e), stack:e&&e.stack}; }
+    },
+    persistModule: async function(a){
+      if(!a||typeof a.js!=="string") return {ok:false,error:"缺 js"};
+      var name=a.name||"user-module.js";
+      try{ N.writeFile(name, a.js); }catch(e){ return {ok:false,error:"写盘失败 "+e}; }
+      try{ (0,eval)(a.js); }catch(e){ return {ok:true, persisted:name, evalError:String(e&&e.message||e)}; }
+      return {ok:true, persisted:name, evaluated:true};
+    },
+    reloadEngine: async function(){ try{ N.reload(); }catch(e){} return {ok:true}; },
+  };
+
+  window.CMDS = CMDS;          // 暴露给 hotpatch 增删命令
+  window.DaoEngine = { loadAcc:loadAcc, saveAcc:saveAcc, getActive:getActive, setActive:setActive };
+
+  DaoRelayApp.register(CMDS);
+  DaoRelayApp.setStatusCb(function(st){ try{ N.onStatus(JSON.stringify(st)); }catch(e){} });
+
+  // 先加载持久化的用户模块 (历史热修), 再启动穿透
+  try { var um = N.readFile && N.readFile("user-module.js"); if (um) { (0,eval)(um); log("user-module loaded"); } } catch(e){ log("user-module err "+e); }
+
+  // 读取烘焙在 assets 的 conn.json (中继地址/token/session) → 自动出站连
+  try {
+    var conn = JSON.parse(N.getConn ? (N.getConn()||"{}") : "{}");
+    if (conn && conn.url && conn.token && conn.session) {
+      DaoRelayApp.start({ url: conn.url, token: conn.token, session: conn.session });
+      log("relay starting → " + conn.url + " session=" + conn.session);
+    } else { log("conn.json 不完整, 未自动连"); }
+  } catch (e) { log("conn parse err " + e); }
+})();
+</script>
+</body>
+</html>

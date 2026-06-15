@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>RT Flow 手机版</title>
+<style>
+  :root { --bg:#0e1116; --card:#171b22; --line:#262b35; --fg:#e6e9ef; --mut:#8b94a3; --acc:#3b82f6; --ok:#22c55e; --warn:#eab308; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,system-ui,"PingFang SC",sans-serif; padding:14px; }
+  h1 { font-size:17px; margin:2px 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:12px; }
+  .row { display:flex; align-items:center; gap:8px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--warn); box-shadow:0 0 6px var(--warn); }
+  .dot.ok { background:var(--ok); box-shadow:0 0 6px var(--ok); }
+  .mut { color:var(--mut); font-size:13px; word-break:break-all; }
+  .acc { display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--line); }
+  .acc:last-child { border-bottom:0; }
+  .acc .name { font-weight:600; }
+  .acc .sub { color:var(--mut); font-size:12px; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:9px; padding:8px 12px; font-size:14px; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  textarea { width:100%; min-height:78px; background:#0b0e13; color:var(--fg); border:1px solid var(--line); border-radius:9px; padding:8px; font-size:12px; }
+  .tag { display:inline-block; background:#0b0e13; border:1px solid var(--line); border-radius:6px; padding:1px 7px; font-size:11px; color:var(--mut); }
+  .sp { flex:1; }
+</style>
+</head>
+<body>
+  <h1>RT Flow 手机版 <span class="tag" id="ver">v0.1</span></h1>
+
+  <div class="card">
+    <div class="row"><span class="dot" id="dot"></span><b id="st">连接中…</b><span class="sp"></span><button class="ghost" id="restart">重启服务</button></div>
+    <div class="mut" id="ep" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <div class="row"><b>账号</b><span class="sp"></span><span class="tag" id="cnt">0</span></div>
+    <div id="list"></div>
+  </div>
+
+  <div class="card">
+    <div class="row"><b>导入账号</b><span class="sp"></span><button id="imp">导入</button></div>
+    <div class="mut" style="margin:6px 0">粘贴 JSON 数组: <code>[{"email":"..","auth1":"..","orgId":".."}]</code></div>
+    <textarea id="json" placeholder='[{"email":"a@x.com","auth1":"Bearer里的token","orgId":"org-.."}]'></textarea>
+  </div>
+
+<script>
+var N = window.Panel || {};
+function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
+function saveAcc(a){ localStorage.setItem("rtflow.accounts", JSON.stringify(a||[])); }
+function getActive(){ return localStorage.getItem("rtflow.active")||""; }
+
+function renderStatus(){
+  var st={}; try{ st=JSON.parse(N.status?N.status():"{}"); }catch(e){}
+  var dot=document.getElementById("dot"), s=document.getElementById("st"), ep=document.getElementById("ep");
+  if(st.connected){ dot.classList.add("ok"); s.textContent="内网穿透已连接 · 可远程接入"; }
+  else { dot.classList.remove("ok"); s.textContent="内网穿透连接中…"+(st.lastError?(" ("+st.lastError+")"):""); }
+  ep.textContent = st.publicEndpoint? ("公网入口: "+st.publicEndpoint) : (st.session? ("session: "+st.session):"");
+}
+function renderAccts(){
+  var a=loadAcc(), act=getActive(), L=document.getElementById("list");
+  document.getElementById("cnt").textContent=a.length;
+  if(!a.length){ L.innerHTML='<div class="mut" style="padding:8px 0">暂无账号 · 用下方「导入账号」添加, 或等我隔隧道下发</div>'; return; }
+  L.innerHTML="";
+  a.forEach(function(acc){
+    var d=document.createElement("div"); d.className="acc";
+    d.innerHTML='<div><div class="name">'+(acc.email||acc.id)+(acc.id===act?' <span class="tag">当前</span>':'')+'</div><div class="sub">'+(acc.orgId||"")+'</div></div>';
+    var b=document.createElement("button"); b.textContent="开标签"; b.onclick=function(){ localStorage.setItem("rtflow.active",acc.id||acc.email); try{ N.openTab("https://app.devin.ai/", JSON.stringify(acc)); }catch(e){} };
+    d.appendChild(b); L.appendChild(d);
+  });
+}
+document.getElementById("imp").onclick=function(){
+  var t=document.getElementById("json").value.trim(); if(!t) return;
+  try{ var list=JSON.parse(t); if(!Array.isArray(list)) throw 0; var accs=loadAcc();
+    list.forEach(function(acc){ acc.auth1=(acc.auth1||"").replace(/^Bearer\s+/i,""); acc.id=acc.id||acc.email||("acc"+Math.random().toString(36).slice(2,8));
+      var i=accs.findIndex(function(x){return x.id===acc.id;}); if(i>=0)accs[i]=acc; else accs.push(acc); });
+    saveAcc(accs); document.getElementById("json").value=""; renderAccts();
+  }catch(e){ alert("JSON 解析失败"); }
+};
+document.getElementById("restart").onclick=function(){ try{ N.restart(); }catch(e){} };
+renderStatus(); renderAccts();
+setInterval(renderStatus, 1500);
+</script>
+</body>
+</html>
