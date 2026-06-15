@@ -2,7 +2,7 @@
 
 > 配套阅读：`docs/dao-bridge-底层分析.md`（根因分析与方案，含逐行定位）。
 > 本清单把分析结论拆成**可独立执行、可验证**的任务卡，按优先级排列。每张卡写明：改哪里、怎么改、怎么验。
-> 全部任务均为**尚未落地**的待办——本次 PR 只交付分析 + 本清单，代码改动后续接手。
+> **进度（已更新）**：下方「本次 PR 已落地」一节所列 **P0 全部 + P1 路径修复 + P2 端点契约**均已落地于生产代码并合并；中继 Worker 已**归一入库** `addons/dao-relay/`。本清单其余项（部分 P1 安全收敛、P2 跨平台兜底）仍为待办，保留任务卡供后续接手。
 
 ---
 
@@ -11,11 +11,11 @@
 dao-bridge 有两套并存、割裂的穿透实现：
 
 - **实现 A（插件默认在跑）**：`addons/dao-bridge/dao-bridge-ext/extension.js` —— VS Code 插件，跑 cloudflared 子进程。成本最高、最脆弱。
-- **实现 B（已验证可用，但未接进插件）**：`addons/dao-bridge/{agent.js,core.js}` —— 纯 Node，本机出站 WSS 连 `dao-relay-do.<sub>.workers.dev` 中继，URL 天然稳定、零账号、无 50MB 二进制。`addons/dao-bridge-android/` 已用这套 core.js 在 Termux/Android 上跑通，**证明 B 是现成可用的**。
+- **实现 B（已验证可用 → 现已接进插件，为默认通道）**：`addons/dao-bridge/{agent.js,core.js}` 的中继逻辑已移植进 `extension.js`（`connectRelayWs`），插件激活先走中继。纯 Node，本机出站 WSS 连 `dao-relay-do.<sub>.workers.dev` 中继，URL 天然稳定、零账号、无 50MB 二进制。`addons/dao-bridge-android/` 已用这套 core.js 在 Termux/Android 上跑通，**证明 B 是现成可用的**。
 
 核心判断：**最大优化 = 把默认通道从 A 切到 B**，cloudflared 降为可选高级档。这一步同时解决「自动安装中断」「认证成本」「跨平台」三件事。
 
-> 中继 Worker（`dao-relay-do`）源码**不在本仓库**，部署在 zhouyoukang 的 Cloudflare 账户下（README 称可 REST API 一键部署）。接手 P0-治本 前需先拿到/确认 Worker 的 `/connect`(WSS) 与 `/relay/<session>`(POST) 协议契约。
+> ~~中继 Worker（`dao-relay-do`）源码**不在本仓库**~~ → **已归一入库**：源码现位于 `addons/dao-relay/`（`worker.js` v2，已对齐线上 `(session,token)` 零账号配对模型），含 `/connect`(WSS) 与 `/relay/<session>`(POST) 协议契约与一键部署说明（`addons/dao-relay/README.md`）。
 
 ---
 

@@ -5,6 +5,25 @@
 
 ---
 
+## ⮕ 落地状态（已实现 · 对照索引）
+
+> 本文档原为「根因分析 + 反向突破方案」。其中 **P0/P1 方案已全部落地于生产代码**，下文（§0–§7）保留为决策记录（便于追溯「为何这样改」）。逐条对照如下，验证细节见 `docs/dao-bridge-交接清单.md`：
+
+| 原方案 | 状态 | 落地位置 |
+|---|---|---|
+| P0 默认通道切到 Worker+DO 中继 | ✅ 已落地 | `dao-bridge-ext/extension.js`：零依赖 `DaoWsClient`(手写 RFC6455) + `connectRelayWs()`；`Bridge.start()` 先试中继(`DEFAULT_RELAY_URL = dao-relay-do.zhouyoukang.workers.dev`)→连不上才回退 cloudflared，`daoBridge.disableRelay` 可关 |
+| P0 cloudflared 自愈 + 断点续传 | ✅ 已落地 | `probeCloudflared()`(`--version` 探活) + `cleanupPartials()` + `httpDownload()`(Range 续传 + Content-Length 校验) |
+| P0 macOS `.tgz` 解包 | ✅ 已落地 | 零依赖 `extractCfTgz()`(gunzip + 手解 512B tar 头) |
+| P1 `fetch-cloudflared.js` 路径 | ✅ 已落地 | `plugins/`→`addons/`；darwin 改为下载后解包真二进制 |
+| P2 统一端点契约 | ✅ 已落地 | 抽出 `WorkspaceServer.handleApi(method,path,body,authed)`，HTTP 直连与中继转发共用同一份 `{status,body}` |
+| 中继 Worker（原「不在本仓库」） | ✅ 已归一入库 | 源码归入 `addons/dao-relay/`（v2，已对齐线上 `(session,token)` 零账号配对模型），不再是仓库外黑盒 |
+| 整机穿透（§5 方向纠正） | ✅ 已落地 | `ls/read/write` 默认整机，沙箱降为 `daoBridge.confineToWorkspace` 显式 opt-in |
+
+> 安全红线（§5）：MD 默认不内嵌明文 token、health 信息收敛等已处理；§5.2 提到的历史 live token 仍应轮换。
+> 测试：`addons/dao-relay`(6) + `dao-bridge-ext/test/relay.test.js`(7) 全绿。
+
+---
+
 ## 0. 一句话结论
 
 dao-bridge 实际上**并存两套互不相通的穿透实现**，而插件真正在跑的那一套（cloudflared 隧道）恰恰是成本最高、最脆弱的一套；而仓库里已经写好、几乎零成本、URL 稳定的另一套（`*.workers.dev` Worker+DurableObject 反向中继）却被晾在 `agent.js`/`core.js` 里没有接进插件。**最大的优化不是修 cloudflared，而是把默认通道切到 Worker 中继**——它一举同时解决「自动安装中断」「认证成本」「跨平台」三个问题。
