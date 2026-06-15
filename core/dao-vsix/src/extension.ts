@@ -2026,7 +2026,9 @@ async function bridgeStartTunnel(named: boolean) {
     const handleOutput = (data: Buffer) => {
         const line = data.toString();
         if (!urlCaptured) {
-            const m = line.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+            // 帛书·「不自见故明」: cloudflared 横幅会打印 api.trycloudflare.com(注册端点, 非隧道),
+            // 旧正则误抓为公网地址 → conn.json 存了占位 URL。此处排除 api. 子域, 只认真实隧道域名。
+            const m = line.match(/https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/);
             if (m) {
                 bridgeUrl = m[0];
                 urlCaptured = true;
