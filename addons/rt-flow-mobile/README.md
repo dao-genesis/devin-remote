@@ -2,7 +2,8 @@
 
 > rt-flow 第五板块「多账号切换」的**浏览器/手机端移植**。无 Devin Desktop / VSCode 依赖，
 > 纯 MV3 浏览器扩展，可在桌面 Chrome、Edge，以及 **Android 上的 Kiwi Browser** 运行。
-> 道法自然·无为而无不为：账号池 → auth1 → 注入官网自动登录 → 额度耗尽自动切换。
+> 道法自然·无为而无不为：账号池 → auth1 → 注入官网自动登录 → 点击「激活」即切号。
+> （v1.5.0 起去除自动轮转，改纯手动切号；v1.6.0 起对话下载新增 HTML 视图、对话追踪新增综合健康度。）
 
 ## 这是什么
 
@@ -11,7 +12,7 @@
 | IDE 插件做的事 | 本扩展的浏览器原生等价 |
 |---|---|
 | `rt-flow/devin_cloud.js` — email+password → auth1 登录链路 | `src/cloud.js`（纯 `fetch`，service worker 可跑） |
-| `rt-flow` 切号引擎 — 评分 + rotate + 看门狗 | `src/background.js`（额度普查 + 评分 + `chrome.alarms` 轮询） |
+| `rt-flow` 切号引擎 — 账号池 + 额度普查 | `src/background.js`（账号池 + 额度普查 + 手动激活切号·service worker） |
 | `dao-vsix` 反代注入 `localStorage['auth1_session']` 自动登录 | `src/content.js`（同源 content script 在 SPA 读取前种入登录态） |
 | `dao-vsix` fetch/XHR override 注 `Authorization`/`x-cog-org-id` | `declarativeNetRequest` 动态规则（浏览器原生改请求头） |
 
@@ -33,13 +34,13 @@ email + password
                       → 若晚于 SPA 启动则 reload 一次(有 guard) → 已登录
 ```
 
-## 自动切换（rotate）
+## 切号（手动·v1.5.0 起）
 
 - 额度来源：`GET app.devin.ai/api/{orgId}/billing/status`
   → `balance = available_credits + max(0, overage_credits)`（含 `has_subscription_or_credits` 权威布尔）。
-- `chrome.alarms` 周期轮询活跃账号：余额 ≤ **缓冲(默认 $3)** → 自动 `rotate()` 到评分最优账号（软耗尽轮转·知止不殆）。
-- content script 探测页面「out of credits / 额度耗尽」文案 → 主动上报 → 立即轮转（硬耗尽）。
-- 评分：余额越高越优；登录失败的账号不参与。
+- **切号 = 手动**：点账号「激活」即换号（注入 DNR 鉴权头 + content script 种 `localStorage` 登录态）。v1.5.0 起去除 `chrome.alarms` 自动轮转与看门狗，回归「为者败之·执者失之」的克制。
+- content script 探测页面「out of credits / 额度耗尽」文案 → 仅**通知**（`reportExhausted`），不自动切号，由用户决定。
+- 对话追踪综合健康度（v1.6.0·与桌面 v4.7.7 `healthScore` 同源）：余额(权40)/卡住(权30)/待输入(权30) → 0-100 分 + 绿/黄/红档，面板顶部「健康 N」徽标实时显示。
 
 ## 安装
 
@@ -57,9 +58,9 @@ email + password
 > 详细 Android 冷启动 + 实测见 [`docs/ANDROID_TEST.md`](docs/ANDROID_TEST.md)。
 
 ## 使用
-1. 面板「添加账号」：邮箱 + 密码（+ 可选标签）。可加多个。
+1. 面板「添加账号」：邮箱 + 密码（+ 可选标签）。可加多个（万法识别支持批量粘贴任意格式）。
 2. 点账号的「激活」→ 后台登录拿 auth1 → 注入 → 打开/刷新 `app.devin.ai` 即已登录该账号。
-3. 「立即切到最优」手动轮转；开「额度耗尽自动切换」后无需管，余额见底自动换号。
+3. 对话「⭳」下载：拉事件流 → **MD + JSON + HTML 三位一体**打包成单个 zip（规避手机浏览器多文件下载拦截）；HTML 为单文件内联样式·零外链，手机浏览器直接打开即看暗色气泡流。知识库/剧本同理打包下载。
 
 ## 隐私
 - 邮箱/密码/auth1 **只存在本机** `chrome.storage.local`，绝不上送任何第三方。
@@ -67,13 +68,14 @@ email + password
 
 ## 文件
 ```
-manifest.json        MV3 清单 (storage/alarms/cookies/scripting/declarativeNetRequestWithHostAccess)
-src/cloud.js         登录链路 + 额度判定 (无依赖, 可单测)
-src/background.js    切号引擎 (service worker): 账号池/登录缓存/评分/rotate/DNR/alarms
+manifest.json        MV3 清单 (storage/cookies/scripting/notifications/declarativeNetRequestWithHostAccess)
+src/cloud.js         登录链路 + 额度判定 + 导出(MD/JSON/HTML) + 健康度/终报纯函数 (无依赖, 可单测)
+src/background.js    账号引擎 (service worker): 账号池/登录缓存/激活切号/DNR/对话追踪
 src/content.js       app.devin.ai 自动登录注入 (document_start)
 src/popup.{html,js,css}  控制面板 UI
-test/cloud.test.js   纯函数单测 (billingBalance / decodeJwtUserId / 评分)
+test/cloud.test.js   纯函数单测 (billingBalance/导出/stallVerdict/healthScore/conversationFinalReport/buildConversationHtml)
 test/background.test.js  applyDnr DNR 规则单测 (vm 沙箱 + chrome mock·防额度串号回归)
+test/parse.test.js / test/git.test.js  万法识别解析 / Git 状态归类单测
 tools/pack.sh        打包成可装载 zip
 ```
 
@@ -82,7 +84,8 @@ tools/pack.sh        打包成可装载 zip
 > 给下一个 agent：本板块是 ⑤ rt-flow 在浏览器的移植（详见仓库根 README §rt-flow-mobile、`docs/CANON_five-plugins.md` §⑥、`docs/MODULE_STATUS_道全景.md` 模块矩阵）。从这里起手即可接续。
 
 **已完成（实测通过）**
-- 源码健康：`node test/cloud.test.js` → 13/13、`node test/background.test.js` → 3/3；`node --check src/{cloud,background,content,popup}.js` 全过。
+- 源码健康：`node test/cloud.test.js` → 54/54、`node test/background.test.js` → 13/13、`node test/parse.test.js` → 23/23、`node test/git.test.js` → 5/5（共 95）；`node --check src/{cloud,background,content,popup}.js` 全过。
+- **v1.6.0 同步桌面成果**：对话下载新增 HTML 视图（1:1 移植 `devin_cloud.js` `buildConversationHtml`·单文件暗色气泡流），对话追踪新增综合健康度（移植 `healthScore`），并补 `stallVerdict`/`conversationFinalReport` 纯函数（与桌面 v4.7.x 同源·全可单测）。
 - **安卓真机全链路实测通过**（KVM 加速 Android 模拟器 + Kiwi Browser 侧载，CDP 驱动）：加账号 → 激活（DNR 注入 + 免密登录 `app.devin.ai` 落到该账号 org）→ 额度普查读到各账号**真实且互异**余额 → `rotate` 切到余额最高账号。
 - **已修复·额度串号 (cross-account contamination)**：`applyDnr` 的 DNR 规则原先匹配所有 `||app.devin.ai/api/` 请求，连扩展自身 service worker 的 `getBilling` fetch 也被改写成活跃账号的鉴权头 → 普查时每个账号都读成活跃账号余额，`rotate` 评分失真。加 `initiatorDomains:["app.devin.ai"]` 限定为页面发起的请求即解（扩展自身 fetch 不再被改写；页面免密登录注入不受影响）。
 - **已修复·userId 取值**：auth1 为不透明令牌（非 JWT）、post-auth 不回传 user_id，故以 `windsurf.com` 登录响应体的 `user_id` 为权威真源（`cloud.js` login 回退链）。

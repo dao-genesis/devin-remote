@@ -390,6 +390,79 @@ const DaoCloud = (() => {
     }
     return lines.join("\n");
   }
+  // ── HTML 对话视图 (1:1 移植自 rt-flow devin_cloud.js v4.8.3 buildConversationHtml·手机端适配) ──
+  function _escHtml(s) {
+    return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function _mdToHtml(escaped) {
+    // 极简 MD→HTML: 代码块/行内代码/段落 (输入须已 HTML-escaped)
+    let s = escaped;
+    s = s.replace(/```([^`]*?)```/g, "<pre><code>$1</code></pre>");
+    s = s.replace(/`([^`]+?)`/g, "<code>$1</code>");
+    s = s.replace(/\n\n/g, "</p><p>");
+    s = s.replace(/\n/g, "<br>");
+    return "<p>" + s + "</p>";
+  }
+  // 单文件、内联样式、零外链 → 手机浏览器直接打开即看 (与桌面 ⬇HTML 同源·暗色气泡流)
+  function buildConversationHtml(title, devinId, events, opts) {
+    opts = opts || {};
+    const account = opts.account || "";
+    const ts = new Date().toISOString();
+    const msgBlocks = [];
+    for (const ev of events) {
+      const c = classifyEvent(ev);
+      if (!c) continue;
+      const time = evTs(ev);
+      const tsSpan = time ? ' <span class="ts">' + time + "</span>" : "";
+      if (c.kind === "tool") {
+        const detail = _escHtml(String(c.detail || "").slice(0, 4000));
+        msgBlocks.push(
+          '<div class="msg msg-tool"><div class="avatar">🔧</div>' +
+          '<div class="bubble bubble-tool"><div class="role">' + _escHtml(c.role) + tsSpan + "</div>" +
+          (detail ? "<details><summary>详情</summary><pre>" + detail + "</pre></details>" : "") +
+          "</div></div>",
+        );
+      } else {
+        const cls = c.kind === "user" ? "user" : c.kind === "devin" ? "ai" : "think";
+        const av = c.kind === "user" ? "👤" : c.kind === "devin" ? "🤖" : "💭";
+        const txt = _escHtml(c.text || "");
+        msgBlocks.push(
+          '<div class="msg msg-' + cls + '"><div class="avatar">' + av + "</div>" +
+          '<div class="bubble bubble-' + cls + '"><div class="role">' + _escHtml(c.role) + tsSpan + "</div>" +
+          '<div class="body">' + _mdToHtml(txt) + "</div></div></div>",
+        );
+      }
+    }
+    return '<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n' +
+      "<title>" + _escHtml(title) + " · Devin 对话备份</title>\n" +
+      "<style>\n" +
+      ":root{--bg:#0d1117;--fg:#c9d1d9;--user-bg:#1a3a5c;--ai-bg:#161b22;--tool-bg:#1c1f26;--think-bg:#1a1a2e;--border:#30363d;--accent:#58a6ff}\n" +
+      "body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px}\n" +
+      ".header{background:#010409;border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}\n" +
+      ".header h1{margin:0;font-size:18px;color:#fff;font-weight:600}\n" +
+      ".header .meta{color:#8b949e;font-size:12px}\n" +
+      ".container{max-width:900px;margin:0 auto;padding:24px 16px}\n" +
+      ".msg{display:flex;gap:12px;margin:16px 0;align-items:flex-start}\n" +
+      ".avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;background:var(--border)}\n" +
+      ".bubble{flex:1;border-radius:12px;padding:12px 16px;line-height:1.6;overflow-wrap:break-word}\n" +
+      ".bubble-user{background:var(--user-bg);border:1px solid #1f4e79}\n" +
+      ".bubble-ai{background:var(--ai-bg);border:1px solid var(--border)}\n" +
+      ".bubble-tool{background:var(--tool-bg);border:1px solid var(--border);font-size:12px}\n" +
+      ".bubble-think{background:var(--think-bg);border:1px solid #2d2d5e;font-style:italic;opacity:.85}\n" +
+      ".role{font-size:12px;font-weight:600;color:var(--accent);margin-bottom:4px}\n" +
+      ".ts{color:#8b949e;font-weight:400}\n" +
+      ".body p{margin:6px 0}\n" +
+      ".body pre{background:#010409;border:1px solid var(--border);border-radius:6px;padding:12px;overflow-x:auto;font-size:13px}\n" +
+      ".body code{background:#010409;padding:2px 6px;border-radius:4px;font-size:13px}\n" +
+      "details{margin:4px 0}\nsummary{cursor:pointer;color:var(--accent)}\ndetails pre{max-height:300px;overflow:auto}\n" +
+      ".footer{text-align:center;padding:24px;color:#484f58;font-size:12px;border-top:1px solid var(--border);margin-top:32px}\n" +
+      "</style>\n</head>\n<body>\n" +
+      '<div class="header"><h1>🔮 ' + _escHtml(title) + "</h1>" +
+      '<div class="meta">Session: ' + _escHtml(devinId) + (account ? " · 账号: " + _escHtml(account) : "") + " · 事件: " + events.length + "</div></div>\n" +
+      '<div class="container">\n' + msgBlocks.join("\n") + "\n</div>\n" +
+      '<div class="footer">rt-flow 浏览器版 备份 · ' + ts + " · 道法自然</div>\n" +
+      "</body>\n</html>";
+  }
   function buildAgentDoc(title, devinId, detail, events) {
     return JSON.stringify({
       schema: "rt-flow.devin-cloud.conversation/1",
@@ -463,6 +536,7 @@ const DaoCloud = (() => {
       ok: true, title: t, devinId, eventCount: events.length,
       mdName: base + ".md", md: buildConversationMd(t, devinId, events),
       jsonName: base + ".json", json: buildAgentDoc(t, devinId, detail, events),
+      htmlName: base + ".html", html: buildConversationHtml(t, devinId, events, { account: auth.email }),
     };
   }
 
@@ -642,6 +716,64 @@ const DaoCloud = (() => {
     const s = sess || {};
     return [s.statusClass || "", s.status || "", s.reason || ""].join("|");
   }
+  // 卡死判定 (1:1 移植 v4.7.5): 运行中指纹「持续不变」超 stallMs → 疑似卡死。stallMs≤0 关闭。
+  function stallVerdict(unchangedMs, stallMs) {
+    const u = Number(unchangedMs);
+    const s = Number(stallMs);
+    if (!Number.isFinite(u) || !Number.isFinite(s) || s <= 0) return false;
+    return u >= s;
+  }
+  // 对话最终报告 (1:1 移植 v4.7.7): 实证分类 outcome·缺数据则 null·不臆造。
+  function conversationFinalReport(sess, opts) {
+    opts = opts || {};
+    const s = sess || {};
+    const now = opts.now || Date.now();
+    let outcome = "unknown";
+    const sc = (s.statusClass || "").toLowerCase();
+    const reason = (s.reason || "").toLowerCase();
+    if (sc === "finished" || sc === "completed" || sc === "suspended") {
+      outcome = sc === "suspended" ? "archived" : "success";
+    } else if (sc === "blocked") {
+      outcome = reason.includes("usage") || reason.includes("limit") || reason.includes("cap") ? "cap_exceeded" : "blocked";
+    } else if (sc === "stalled" || (sc === "running" && opts.stalled)) {
+      outcome = "stalled";
+    }
+    let durationMs = null;
+    if (s.createdAt || s.created_at) {
+      const t0 = new Date(s.createdAt || s.created_at).getTime();
+      if (Number.isFinite(t0)) durationMs = Math.max(0, now - t0);
+    }
+    let cost = null;
+    if (typeof opts.cost === "number" && isFinite(opts.cost)) cost = opts.cost;
+    else if (typeof s.total_cost === "number" && isFinite(s.total_cost)) cost = s.total_cost;
+    else if (typeof s.usage_credits === "number" && isFinite(s.usage_credits)) cost = s.usage_credits;
+    return {
+      devinId: s.devinId || s.devin_id || s.id || null,
+      title: s.title || null,
+      outcome, durationMs,
+      durationMin: durationMs !== null ? Math.round(durationMs / 60000) : null,
+      cost, statusClass: s.statusClass || null, reason: s.reason || null,
+      stalled: !!opts.stalled, timestamp: now,
+    };
+  }
+  // 综合健康度 (1:1 移植 v4.7.7): 余额(40)/卡死(30)/阻塞(30) → score 0-100 + tier。
+  function healthScore(inputs) {
+    const i = inputs || {};
+    let score = 100;
+    const bal = Number(i.balance);
+    const thr = Math.max(0, Number(i.balanceThreshold) || 0);
+    if (Number.isFinite(bal) && thr > 0) {
+      const ratio = Math.max(0, Math.min(1, bal / (thr * 3)));
+      score -= Math.round((1 - ratio) * 40);
+    }
+    const stalled = Math.max(0, +(i.stalledCount) || 0);
+    if (stalled > 0) score -= Math.min(30, stalled * 15);
+    const blocked = Math.max(0, +(i.blockedCount) || 0);
+    if (blocked > 0) score -= Math.min(30, blocked * 15);
+    score = Math.max(0, Math.min(100, score));
+    const tier = score >= 80 ? "green" : (score >= 50 ? "amber" : "red");
+    return { score, tier };
+  }
   // D/W 额度重置信息 + 剩余百分比 (从 billing/status raw 防御式抽取·缺失则 null 优雅降级)
   // 与本体同源字段名: {daily,weekly}_quota_reset_at_unix / _remaining_percent。
   function quotaResetInfo(raw) {
@@ -664,11 +796,11 @@ const DaoCloud = (() => {
     asArray, listSessions, getSessionDetail, classifySession, isActiveClass,
     listRunningSessions, listKnowledge, listPlaybooks, listSecrets, getGitConnections,
     isUserKnowledge, isUserPlaybook, accountOverview,
-    extractMessageText, classifyEvent, buildConversationMd, buildAgentDoc, safeName,
+    extractMessageText, classifyEvent, buildConversationMd, buildConversationHtml, buildAgentDoc, safeName,
     getEvents, exportConversation, knowledgeToMd, exportKnowledge,
     playbookToMd, exportPlaybooks, stopSession, stopRunningSessions,
     okDelete, deleteKnowledge, deletePlaybook, deleteSecret, deleteSession, wipeAccount,
-    computeConvCap, lowBalanceVerdict, sessionSignature, quotaResetInfo,
+    computeConvCap, lowBalanceVerdict, sessionSignature, stallVerdict, conversationFinalReport, healthScore, quotaResetInfo,
   };
 })();
 

@@ -322,9 +322,11 @@ document.addEventListener("click", async (e) => {
     toast("拉取对话事件流…");
     const r = await send({ type: "exportConversation", email: sdl.dataset.dlEmail, devinId: sdl.dataset.dlSid, title: sdl.dataset.dlTitle });
     if (r && r.ok) {
-      downloadText(r.mdName, r.md, "text/markdown");
-      downloadText(r.jsonName, r.json, "application/json");
-      toast(`已下载对话 (${r.eventCount} 事件): MD + JSON → 手机`, "ok");
+      // 单条对话 → 单个 zip (MD+JSON+HTML), 规避手机浏览器多文件下载拦截
+      const files = [{ name: r.mdName, text: r.md }, { name: r.jsonName, text: r.json }];
+      if (r.html) files.push({ name: r.htmlName, text: r.html });
+      downloadBlob(`${safeName((r.title || r.devinId))}_${String(r.devinId).slice(0, 8)}.zip`, makeZip(files));
+      toast(`已下载对话 (${r.eventCount} 事件): MD + JSON + HTML → 手机 (单个 zip)`, "ok");
     } else toast("下载失败: " + ((r && r.error) || ""), "err");
     sdl.disabled = false;
     return;
@@ -466,7 +468,11 @@ $("backupAllBtn").addEventListener("click", async () => {
     if (!items.length) { toast("无对话可备份", "err"); }
     else {
       const files = [];
-      for (const it of items) { files.push({ name: it.mdName, text: it.md }); files.push({ name: it.jsonName, text: it.json }); }
+      for (const it of items) {
+        files.push({ name: it.mdName, text: it.md });
+        files.push({ name: it.jsonName, text: it.json });
+        if (it.html) files.push({ name: it.htmlName, text: it.html });
+      }
       const who = safeName(STATE.active.split("@")[0]);
       downloadBlob(`devin-cloud-backup-${who}-${stamp()}.zip`, makeZip(files));
       toast(`已备份 ${items.length}/${r.total} 个对话 → 手机 Download (单个 zip·${files.length} 文件)`, "ok");
@@ -505,7 +511,10 @@ $("trackRefresh").addEventListener("click", async () => {
     const ss = r.sessions || [];
     const c = { running: 0, awaiting: 0, blocked: 0 };
     for (const s of ss) if (c[s.statusClass] != null) c[s.statusClass]++;
-    counts.innerHTML = `<span class="pill run">运行 ${c.running}</span><span class="pill wait">待输入 ${c.awaiting}</span><span class="pill blk">卡住 ${c.blocked}</span>`;
+    // 健康度徽 (与桌面 v4.7.7 同源·绿/黄/红)
+    const h = r.health;
+    const hb = h ? `<span class="pill health-${h.tier}" title="综合健康度 (余额/卡住/待输入)">健康 ${h.score}</span>` : "";
+    counts.innerHTML = `${hb}<span class="pill run">运行 ${c.running}</span><span class="pill wait">待输入 ${c.awaiting}</span><span class="pill blk">卡住 ${c.blocked}</span>`;
     list.innerHTML = ss.length ? ss.map((s) => sessionLi(s, STATE.active)).join("") : '<li class="sess muted">无活跃对话 (运行/待输入/卡住)</li>';
   } else { list.innerHTML = ""; empty.classList.remove("hid"); toast("追踪失败: " + ((r && r.error) || ""), "err"); }
 });

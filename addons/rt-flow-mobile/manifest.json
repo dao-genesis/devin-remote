@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "dao · rt-flow 浏览器版 · 账号池切号",
   "short_name": "rt-flow mobile",
-  "version": "1.5.1",
-  "description": "rt-flow 本体的浏览器/手机端移植：账号池 → email+password 换 auth1 → 点击切号即注入 app.devin.ai 自动登录。万法识别批量加号、对话实时追踪、账号本源概览、对话/知识库下载到手机、水过无痕清理、Git 批量归一/连断(PAT)。无 IDE 依赖，Chrome / Kiwi(Android) / Edge 通用。道法自然·无为而无不为。",
+  "version": "1.6.0",
+  "description": "rt-flow 本体的浏览器/手机端移植：账号池 → email+password 换 auth1 → 点击切号即注入 app.devin.ai 自动登录。万法识别批量加号、对话实时追踪(含综合健康度)、账号本源概览、对话下载到手机(MD+JSON+HTML 三位一体·单文件直开)、知识库/剧本下载、水过无痕清理、Git 批量归一/连断(PAT)。无 IDE 依赖，Chrome / Kiwi(Android) / Edge 通用。道法自然·无为而无不为。",
   "icons": {
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",
