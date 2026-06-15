@@ -29,6 +29,22 @@ const DAO_DIR = path.join(os.homedir(), '.dao');
 const GLOBAL_CONFIG_FILE = path.join(DAO_DIR, 'dao-config.json');  // CF全局凭证
 const CONFIG_FILE = GLOBAL_CONFIG_FILE;  // 别名 — 道法自然：一即一切
 const INST_FILE = path.join(DAO_DIR, 'dao-instances.json');
+// 绝利一源 · 帛书「道生一」— 备份引擎单一来源: 直接复用内联 rt-flow 的 devin_cloud.js,
+// 全功能面板 Session/备份板块不再另起炉灶, 与 rt-flow 备份成果同源呈现 (问题②③)。
+let _devinCloudModule: any = null;
+function loadDevinCloud(): any {
+    if (_devinCloudModule) return _devinCloudModule;
+    try { _devinCloudModule = require(path.join(__dirname, '..', 'rtflow', 'devin_cloud.js')); } catch { _devinCloudModule = null; }
+    return _devinCloudModule;
+}
+// 备份根目录解析: 与 rt-flow 完全一致 (wam.devinCloudBackupDir 覆盖 → 否则 DC_BACKUP_DEFAULT=~/.wam/devin_cloud_backups)
+function resolveBackupRoot(): string {
+    let cfg = '';
+    try { cfg = (vscode.workspace.getConfiguration('wam').get('devinCloudBackupDir', '') as string) || ''; } catch { /* 守柔 */ }
+    if (cfg) return cfg;
+    const dc = loadDevinCloud();
+    return (dc && dc.paths && dc.paths.DC_BACKUP_DEFAULT) || path.join(os.homedir(), '.wam', 'devin_cloud_backups');
+}
 // 账号池 — 帛书·六十二「道者万物之注」
 // email→password 映射: IDE 注入的 session token 仅能访问 codeium 后端,
 // 被 app.devin.ai 拒绝; 全功能面板需 auth1, 而 auth1 只能由 email+password 五步登录换取。
@@ -2266,6 +2282,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ni active" data-tab="overview" onclick="sw('overview')" title="主页 Home">🏠</div>
 <div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网操作 DAO Bridge">🌐</div>
 <div class="ni" data-tab="sessions" onclick="sw('sessions')" title="Sessions 对话">💬</div>
+<div class="ni" data-tab="backups" onclick="sw('backups')" title="备份 Backups · 全账号对话备份成果">📦</div>
 <div class="ni" data-tab="knowledge" onclick="sw('knowledge')" title="Knowledge 知识库">📚</div>
 <div class="ni" data-tab="playbooks" onclick="sw('playbooks')" title="Playbooks 剧本">📋</div>
 <div class="ni" data-tab="secrets" onclick="sw('secrets')" title="Secrets 密钥">🔑</div>
@@ -2290,6 +2307,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ct">
 <div class="tv active" id="v-overview"></div>
 <div class="tv" id="v-sessions"></div>
+<div class="tv" id="v-backups"></div>
 <div class="tv" id="v-knowledge"></div>
 <div class="tv" id="v-playbooks"></div>
 <div class="tv" id="v-secrets"></div>
@@ -2337,7 +2355,8 @@ const S={
   inject:null,
   injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],messageLimit:null,lastInjectedOrg:''},
   tab:'overview',
-  data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]}
+  data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]},
+  backups:{accounts:[]}
 };
 function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function cmd(c,d){vscode.postMessage(Object.assign({command:c},d||{}))}
@@ -2352,6 +2371,7 @@ function sw(t){
   // 自动注入模块: 无需 cog_ key, 直接拉 profile 配置 (账号无关意图)
   if(t==='inject'){ cmd('getInjectProfile'); return; }
   if(t==='bridge'){ rBridgeFull(); return; }
+  if(t==='backups'){ rBackups(); return; }
   if(t!=='overview'&&S.auth.loggedIn){
     const v=document.getElementById('v-'+t);
     if(v&&!v.dataset.loaded){
@@ -2423,6 +2443,42 @@ function rBridgeFull(){
   h+='<div class="cr"><span class="l">自动更新</span><span class="v" style="color:var(--success)">✓ 端口/URL变化时自动同步</span></div></div>';
   v.innerHTML=h;
 }
+// 问题②③ · 备份板块: 全账号×全对话备份成果 + 查看/下载 (路由 rt-flow 同源备份 · 纯本地·免 cog_ key)
+function rBackups(){
+  var v=document.getElementById('v-backups');if(!v)return;
+  v.innerHTML='<div class="empty"><div class="ic">📦</div><p style="margin:8px 0;color:var(--muted)">正在扫描本地备份…</p></div>';
+  cmd('loadBackups');
+}
+function bkMtime(ms){try{return ms?new Date(ms).toLocaleString():''}catch(e){return''}}
+function bkToggle(id){var e=document.getElementById(id);if(e)e.style.display=(e.style.display==='none'?'block':'none')}
+function bkReveal(i,ci){var a=S.backups.accounts[i];if(!a)return;var p=(ci==null)?a.dir:((a.conversations[ci]||{}).path);if(p)cmd('revealBackupDir',{dir:p})}
+function bkView(i,ci){var a=S.backups.accounts[i];if(!a)return;var c=a.conversations[ci];if(c&&c.htmlPath)cmd('openBackupConv',{htmlPath:c.htmlPath})}
+function bkDownload(i,ci){var a=S.backups.accounts[i];if(!a)return;var p=(ci==null)?a.dir:((a.conversations[ci]||{}).path);if(p)cmd('exportBackup',{path:p})}
+function rBackupsData(tree,err){
+  var v=document.getElementById('v-backups');if(!v)return;
+  S.backups=tree||{accounts:[]};
+  if(err){v.innerHTML='<div class="empty"><div class="ic">📦</div><h3>备份</h3><p style="color:var(--danger);font-size:12px">'+esc(err)+'</p><div class="br" style="justify-content:center"><button class="btn" onclick="rBackups()">⟳ 重试</button></div></div>';return}
+  var accts=(tree&&tree.accounts)||[];
+  if(!accts.length){v.innerHTML='<div class="empty"><div class="ic">📦</div><h3>备份</h3><p style="color:var(--muted)">暂无备份</p><p style="font-size:10px;color:var(--muted);word-break:break-all">'+esc((tree&&tree.root)||'')+'</p><div class="br" style="justify-content:center"><button class="btn" onclick="rBackups()">⟳ 刷新</button></div></div>';return}
+  var totalConv=accts.reduce(function(s,a){return s+(a.count||0)},0);
+  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="color:var(--muted);font-size:11px">'+accts.length+' 账号 · '+totalConv+' 对话备份</span><button class="btn sm" onclick="rBackups()">⟳</button></div>';
+  h+='<div style="font-size:10px;color:var(--muted);margin-bottom:8px;word-break:break-all">根: '+esc(tree.root||'')+'</div>';
+  accts.forEach(function(a,i){
+    var aid='bkacc-'+i;
+    var label=(a.accountNo?('#'+a.accountNo+' '):'')+(a.email||a.account||'');
+    h+='<div class="card">';
+    h+='<div class="cr" style="cursor:pointer" onclick="bkToggle(&#39;'+aid+'&#39;)"><span class="l" style="font-weight:600;color:var(--fg)">▸ '+esc(label)+'</span><span class="v" style="font-size:10px;color:var(--muted)">'+(a.count||0)+' 对话'+(a.hasAccountInfo?' · 账号快照':'')+'</span></div>';
+    h+='<div class="br" style="margin-top:4px"><button class="btn sm ghost" onclick="bkReveal('+i+',null)">📂 目录</button><button class="btn sm ghost" onclick="bkDownload('+i+',null)">⬇ 下载账号</button></div>';
+    h+='<div id="'+aid+'" style="display:none;margin-top:6px;border-top:1px solid var(--border);padding-top:6px">';
+    (a.conversations||[]).slice(0,200).forEach(function(c,ci){
+      var t=c.title||c.name||'(未命名)';
+      h+='<div style="padding:3px 0;border-bottom:1px solid var(--border)"><div class="cr"><span class="l" style="font-size:11px">'+esc(t.substring(0,44))+'</span><span class="v" style="font-size:9px;color:var(--muted)">'+(c.eventCount?c.eventCount+'事件·':'')+(c.type==='zip'?'ZIP·':'')+bkMtime(c.mtime)+'</span></div><div class="br" style="margin-top:2px">'+(c.hasHtml?('<button class="btn sm" onclick="bkView('+i+','+ci+')">👁 查看</button>'):'')+'<button class="btn sm ghost" onclick="bkReveal('+i+','+ci+')">📂</button><button class="btn sm ghost" onclick="bkDownload('+i+','+ci+')">⬇</button></div></div>';
+    });
+    if((a.conversations||[]).length>200)h+='<div style="font-size:10px;color:var(--muted);margin-top:4px">仅显示前 200 条，更多请打开目录</div>';
+    h+='</div></div>';
+  });
+  v.innerHTML=h;
+}
 // 帛书·「为而弗恃」: API Key 全程底层自动获取, 面板永不出现手动输入 — 旧 submitCogKey* 已删
 function rO(){
   const v=document.getElementById('v-overview');
@@ -2466,7 +2522,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab);if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
@@ -2764,6 +2820,60 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     catch { vscode.env.openExternal(vscode.Uri.parse(sessionUrl)); }
                     reply({ type: 'sessionDetail', ok: true, session: { devin_id: sessionId }, messages: [] });
                 }
+                break;
+            }
+            // ═══ 问题② · 全功能面板 Session/备份板块 = rt-flow 备份成果路由 (绝利一源) ═══
+            // 直接路由内联 rt-flow 的备份目录: 列全部账号 × 全部对话备份 + 备份状态,
+            // 不依赖 cog_ key (纯本地文件) — 与左侧 rt-flow 账号池备份完全同源。
+            case 'loadBackups': {
+                try {
+                    const dc = loadDevinCloud();
+                    if (!dc || typeof dc.listBackups !== 'function') { reply({ type: 'backupsData', tree: { root: '', accounts: [] }, error: 'rt-flow 备份引擎不可用' }); break; }
+                    const root = resolveBackupRoot();
+                    const tree = dc.listBackups(root);
+                    reply({ type: 'backupsData', tree });
+                } catch (e: any) {
+                    reply({ type: 'backupsData', tree: { root: '', accounts: [] }, error: (e && e.message) || String(e) });
+                }
+                break;
+            }
+            // 查看一条对话备份正文 (对话.html 自包含 · 跨 IDE 用系统默认浏览器打开)
+            case 'openBackupConv': {
+                try {
+                    let p = msg.htmlPath || msg.path;
+                    if (p && fs.existsSync(p) && fs.statSync(p).isDirectory()) p = path.join(p, '对话.html');
+                    if (!p || !fs.existsSync(p)) { reply({ type: 'error', msg: '未找到对话正文 (对话.html)' }); reply({ type: 'actionResult', command: 'openBackupConv', ok: false }); break; }
+                    try { await vscode.commands.executeCommand('simpleBrowser.show', vscode.Uri.file(p).toString()); }
+                    catch { await vscode.env.openExternal(vscode.Uri.file(p)); }
+                    reply({ type: 'actionResult', command: 'openBackupConv', ok: true });
+                } catch (e: any) { reply({ type: 'actionResult', command: 'openBackupConv', ok: false }); }
+                break;
+            }
+            // 在系统文件管理器中显示备份目录 (账号目录 / 对话目录)
+            case 'revealBackupDir': {
+                try {
+                    const p = msg.dir || msg.path;
+                    if (p && fs.existsSync(p)) await vscode.env.openExternal(vscode.Uri.file(p));
+                    reply({ type: 'actionResult', command: 'revealBackupDir', ok: !!(p && fs.existsSync(p)) });
+                } catch (e: any) { reply({ type: 'actionResult', command: 'revealBackupDir', ok: false }); }
+                break;
+            }
+            // 问题③ · 下载到电脑: 把一条对话备份(或整个账号目录)拷贝到用户选定目录
+            case 'exportBackup': {
+                try {
+                    const src = msg.path || msg.dir;
+                    if (!src || !fs.existsSync(src)) { reply({ type: 'actionResult', command: 'exportBackup', ok: false }); break; }
+                    const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, openLabel: '下载到此处', title: '选择备份下载位置' });
+                    if (!picked || !picked.length) { reply({ type: 'actionResult', command: 'exportBackup', ok: false }); break; }
+                    const destRoot = picked[0].fsPath;
+                    const base = path.basename(src.replace(/[\\/]+$/, ''));
+                    const dest = path.join(destRoot, base);
+                    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '下载备份到 ' + destRoot + ' …' }, async () => {
+                        fs.cpSync(src, dest, { recursive: true });
+                    });
+                    vscode.window.showInformationMessage('备份已下载: ' + dest);
+                    reply({ type: 'actionResult', command: 'exportBackup', ok: true });
+                } catch (e: any) { reply({ type: 'error', msg: '下载失败: ' + ((e && e.message) || e) }); reply({ type: 'actionResult', command: 'exportBackup', ok: false }); }
                 break;
             }
             case 'exportSession': {
