@@ -1,10 +1,9 @@
 "use strict";
-// popup.js · rt-flow 浏览器版 · 控制面板 UI
+// popup.js · rt-flow 浏览器版 · 控制面板 UI (视觉对齐桌面 rt-flow WAM 面板)
+// v1.5.0 · 去除自动切号: 切号 = 点击账号「切号」→ 注入登录 app.devin.ai。
 const $ = (id) => document.getElementById(id);
 
-// send: 给 service worker 下发动作 (登录/激活/切号等)。
-// MV3 冷启时首条消息的回调可能不触发, 故加超时重试 — SW 唤醒后即返回,
-// 仍无响应则降级为错误对象, 不让 UI 卡死。
+// send: 给 service worker 下发动作。MV3 冷启时首条消息回调可能不触发, 故加超时重试。
 function sendOnce(msg, timeoutMs) {
   return new Promise((resolve) => {
     let done = false;
@@ -13,7 +12,7 @@ function sendOnce(msg, timeoutMs) {
       chrome.runtime.sendMessage(msg, (r) => {
         if (done) return;
         done = true; clearTimeout(t);
-        void chrome.runtime.lastError; // SW 未醒时避免未捕获告警
+        void chrome.runtime.lastError;
         resolve(r);
       });
     } catch { if (!done) { done = true; clearTimeout(t); resolve(undefined); } }
@@ -33,23 +32,19 @@ function toast(text, kind) {
   el.className = "toast " + (kind || "");
   setTimeout(() => el.classList.add("hid"), 2600);
 }
-function balClass(b) {
-  if (b == null) return "";
-  if (b <= 1) return "zero";
-  if (b <= 5) return "low";
-  return "good";
-}
-// 余额按美分展示 (额度为分数美元, 否则会显示成 $2.994926623885875 这类长尾浮点)
+
+// 余额按美分展示 (额度为分数美元)
 function fmtMoney(n) { return "$" + (Math.round(Number(n) * 100) / 100).toFixed(2); }
-function fmtBal(q) {
-  if (!q) return "额度未查";
-  if (q.status === "登录失败") return "登录失败";
-  if (q.status && q.status !== "ok") return "查询失败(" + q.status + ")";
-  if (q.balance == null) return "额度未知";
-  return fmtMoney(q.balance);
+function balQl(q) {
+  if (!q) return { cls: "unk", txt: "未查" };
+  if (q.status === "登录失败") return { cls: "zero", txt: "登录败" };
+  if (q.status && q.status !== "ok") return { cls: "unk", txt: "查失败" };
+  if (q.balance == null) return { cls: "unk", txt: "未知" };
+  const b = q.balance;
+  return { cls: b <= 1 ? "zero" : (b <= 5 ? "low" : "good"), txt: fmtMoney(b) };
 }
 
-// 采样计时: 上次普查距今 (本体「Nmin前采样」同源)
+// 采样计时: 上次普查距今
 function fmtAge(ts) {
   if (!ts) return "无快照";
   const m = Math.round((Date.now() - ts) / 60000);
@@ -59,7 +54,7 @@ function fmtAge(ts) {
   if (h < 48) return h + "h前采样";
   return Math.round(h / 24) + "d前采样";
 }
-// D/W 额度重置倒计时 (剩余天/时)
+// D/W 额度重置倒计时
 function fmtReset(ms) {
   if (!ms) return null;
   const left = ms - Date.now();
@@ -67,9 +62,9 @@ function fmtReset(ms) {
   const h = left / 3600000;
   return h >= 24 ? Math.round(h / 24) + "d" : Math.max(1, Math.round(h)) + "h";
 }
-// 每账号 D/W 重置进度 + 采样计时 + (活跃)token 展示 —— 本体活跃行同源
+// 每账号 D/W 重置进度 + 采样计时 (桌面活跃行同源)
 function metaExtra(q, isActive) {
-  if (!q) return "";
+  if (!q) return "无额度快照 (点「额度」普查)";
   const bits = [];
   const r = q.reset || {};
   const dr = fmtReset(r.dailyResetMs), wr = fmtReset(r.weeklyResetMs);
@@ -77,24 +72,31 @@ function metaExtra(q, isActive) {
   if (r.weeklyPct != null || wr) bits.push(`W ${r.weeklyPct != null ? Math.round(r.weeklyPct) + "%" : "?"}${wr ? "·重置" + wr : ""}`);
   bits.push(fmtAge(q.ts));
   if (isActive && q.tokenShort) bits.push("token " + escapeHtml(q.tokenShort));
-  return `<div class="meta2">${bits.join(" · ")}</div>`;
+  return bits.join(" · ");
+}
+
+// 邮箱域 → 域徽 (对照桌面 .dm shop/yh/gm/ms/o)
+function domainBadge(email) {
+  const d = String(email || "").split("@")[1] || "";
+  if (/gmail\./i.test(d)) return { cls: "gm", txt: "GM" };
+  if (/(outlook|hotmail|live|msn)\./i.test(d)) return { cls: "ms", txt: "MS" };
+  if (/yahoo\./i.test(d)) return { cls: "yh", txt: "YH" };
+  if (!d) return { cls: "o", txt: "TK" };
+  return { cls: "o", txt: (d[0] || "?").toUpperCase() };
+}
+// D/W mini-bar (pct 0-100)
+function miniBar(pct) {
+  if (pct == null) return "";
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  const color = p <= 10 ? "#f44" : (p <= 30 ? "#ce9178" : "#4ec9b0");
+  return `<span class="mb"><span class="mf" style="width:${p}%;background:${color}"></span></span>`;
 }
 
 let STATE = { accounts: [], authCache: {}, active: "", quota: {}, settings: {} };
-
-// 账号有效锁定态 (与 background.js effLocked 同源): 无显式 locked 记录时按 lockByDefault 决定
-function effLocked(a, settings) {
-  if (!a) return false;
-  if (a.locked === true || a.locked === false) return a.locked;
-  return (settings || {}).lockByDefault !== false;
-}
-
-// 与 background.js DEFAULT_SETTINGS 对齐 (storage-first 渲染时兜底)
-const POPUP_DEFAULT_SETTINGS = { autoSwitch: true, buffer: 3, pollMin: 2, lockByDefault: true, notify: true, lowBalance: 5, autoStop: false, stopThreshold: 3 };
+const DEFAULT_SETTINGS = { notify: true, lowBalance: 5 };
 function getLocal(keys) { return new Promise((r) => chrome.storage.local.get(keys, r)); }
 
-// 渲染直读 chrome.storage (母/真源), 不依赖 service worker 是否唤醒,
-// 从根上杜绝 MV3 冷启竞态导致面板卡死不渲染。
+// 渲染直读 chrome.storage (母/真源), 不依赖 service worker 是否唤醒。
 async function load() {
   const s = await getLocal(["accounts", "authCache", "active", "quota", "settings"]);
   STATE = {
@@ -102,66 +104,75 @@ async function load() {
     authCache: s.authCache || {},
     active: s.active || "",
     quota: s.quota || {},
-    settings: Object.assign({}, POPUP_DEFAULT_SETTINGS, s.settings || {}),
+    settings: Object.assign({}, DEFAULT_SETTINGS, s.settings || {}),
   };
   render();
 }
-
-// 后台 rotate/额度刷新写入 storage 时, 面板自动跟随 (storage 即真源)。
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local") load();
-});
+chrome.storage.onChanged.addListener((changes, area) => { if (area === "local") load(); });
 
 function render() {
-  const { accounts, authCache, active, quota, settings } = STATE;
-  // active line
-  const al = $("activeLine");
-  if (active) { al.textContent = "激活: " + active; al.classList.add("on"); }
-  else { al.textContent = "未激活账号"; al.classList.remove("on"); }
-  // settings
-  $("autoSwitch").checked = !!settings.autoSwitch;
-  $("lockByDefault").checked = settings.lockByDefault !== false;
-  $("autoStop").checked = !!settings.autoStop;
-  $("buffer").value = settings.buffer != null ? settings.buffer : 3;
-  $("pollMin").value = settings.pollMin != null ? settings.pollMin : 2;
-  $("lowBalance").value = settings.lowBalance != null ? settings.lowBalance : 5;
-  $("stopThreshold").value = settings.stopThreshold != null ? settings.stopThreshold : 3;
-  // pool count
-  $("poolCount").textContent = accounts.length ? "(" + accounts.length + ")" : "";
-  // list
-  const ul = $("accountList");
-  ul.innerHTML = "";
-  $("empty").classList.toggle("hid", accounts.length > 0);
+  const { accounts, authCache, active, quota } = STATE;
+
+  // ── 聚合统计 + 余额池条 ──
+  let avail = 0, exh = 0;
   for (const a of accounts) {
+    const q = quota[a.email.toLowerCase()];
+    if (q && q.status === "ok" && q.balance != null) { if (q.balance > 1) avail++; else exh++; }
+  }
+  const unk = accounts.length - avail - exh;
+  $("stTotal").textContent = accounts.length;
+  $("stAvail").textContent = avail;
+  $("stExh").textContent = exh;
+  $("stUnk").textContent = unk;
+  $("poolFill").style.width = (accounts.length ? Math.round((avail / accounts.length) * 100) : 0) + "%";
+  $("poolCount").textContent = accounts.length ? "(" + accounts.length + ")" : "";
+
+  // ── 活跃账号卡 ──
+  const al = $("activeLine");
+  if (active) {
+    const q = quota[active];
+    const ql = balQl(q);
+    al.classList.remove("empty");
+    al.innerHTML = `激活: <b>${escapeHtml(active)}</b><span class="tag">${ql.txt}</span>`;
+  } else {
+    al.classList.add("empty");
+    al.textContent = "未激活账号 · 点击下方账号「切号」即注入登录 devin.ai";
+  }
+
+  // ── 账号行 ──
+  const wrap = $("accountList");
+  wrap.innerHTML = "";
+  $("empty").classList.toggle("hid", accounts.length > 0);
+  accounts.forEach((a, i) => {
     const key = a.email.toLowerCase();
     const isActive = key === active;
     const q = quota[key];
-    const locked = effLocked(a, settings);
-    const li = document.createElement("li");
-    li.className = "acct" + (isActive ? " active" : "") + (locked ? " locked" : "");
-    li.innerHTML = `
-      <div class="top">
-        <span class="name">${locked ? "🔒 " : ""}${escapeHtml(a.email)}</span>
-        ${a.token ? '<span class="badge tok">token</span>' : ""}
-        ${isActive ? '<span class="badge">激活中</span>' : ""}
+    const r = (q && q.reset) || {};
+    const ql = balQl(q);
+    const dm = domainBadge(a.email);
+    const loggedIn = authCache[key] && authCache[key].auth1;
+    const row = document.createElement("div");
+    row.className = "row" + (isActive ? " act" : "");
+    row.innerHTML = `
+      <div class="row-main">
+        <span class="acc-no">${i + 1}</span>
+        <span class="dm ${dm.cls}">${dm.txt}</span>
+        <span class="em" title="${escapeAttr(a.email)}">${escapeHtml(a.email)}</span>
+        ${a.token ? '<span class="tok-tag">token</span>' : ""}
+        ${a.label && a.label !== "token" ? `<span class="plan-tag">${escapeHtml(a.label)}</span>` : ""}
+        <span class="login-tag ${loggedIn ? "" : "no"}">${loggedIn ? "已登录" : "未登录"}</span>
+        <span class="qt">${miniBar(r.dailyPct)}${miniBar(r.weeklyPct)}<span class="ql ${ql.cls}">${ql.txt}</span></span>
+        <span class="acts">
+          <button class="b sw" data-act="activate" data-email="${escapeAttr(a.email)}">${isActive ? "重注入" : "切号"}</button>
+          <button class="b dv" data-act="overview" data-email="${escapeAttr(a.email)}">☁</button>
+          <button class="b dv" data-act="refresh" data-email="${escapeAttr(a.email)}">额度</button>
+          <button class="b danger" data-act="remove" data-email="${escapeAttr(a.email)}">✕</button>
+        </span>
       </div>
-      ${a.label && a.label !== "token" ? `<div class="label">${escapeHtml(a.label)}</div>` : ""}
-      <div class="meta">
-        <span class="bal ${balClass(q && q.balance)}">${fmtBal(q)}</span>
-        <span>${authCache[key] && authCache[key].auth1 ? "已登录" : "未登录"}</span>
-        <span class="lockstate">${locked ? "🔒 锁定(不自动切)" : "🔓 已解锁(入候选)"}</span>
-      </div>
-      ${metaExtra(q, isActive)}
-      <div class="btns">
-        <button data-act="activate" data-email="${escapeAttr(a.email)}">${isActive ? "重注入" : "激活"}</button>
-        <button data-act="lock" data-email="${escapeAttr(a.email)}" data-locked="${locked ? "1" : "0"}" class="mini">${locked ? "🔓 解锁" : "🔒 锁定"}</button>
-        <button data-act="overview" data-email="${escapeAttr(a.email)}" class="mini">☁ 概览</button>
-        <button data-act="refresh" data-email="${escapeAttr(a.email)}" class="mini">额度</button>
-        <button data-act="remove" data-email="${escapeAttr(a.email)}" class="mini">删除</button>
-      </div>
+      <div class="row-meta">${metaExtra(q, isActive)}</div>
       <div class="ovw hid" data-ovw="${escapeAttr(key)}"></div>`;
-    ul.appendChild(li);
-  }
+    wrap.appendChild(row);
+  });
 }
 
 function renderCounts(c) {
@@ -183,12 +194,11 @@ const ACTIVE_CLS = { running: 1, awaiting: 1, blocked: 1 };
 function sessionLi(s, email) {
   const cls = SCLS[s.statusClass] || "";
   const dl = email ? `<button class="sdl" data-dl-sid="${escapeAttr(s.devinId || "")}" data-dl-email="${escapeAttr(email)}" data-dl-title="${escapeAttr(s.title || "")}" title="下载对话">⭳</button>` : "";
-  // 运行中(运行/待输入/卡住)才给「停止」: archive 即中停+归档 (自动停止·手动触发·对照本体 stopSession)
   const stop = (email && ACTIVE_CLS[s.statusClass]) ? `<button class="sstop" data-stop-sid="${escapeAttr(s.devinId || "")}" data-stop-email="${escapeAttr(email)}" data-stop-title="${escapeAttr(s.title || "")}" title="停止(归档)对话">⏹</button>` : "";
   return `<li class="sess"><span class="dot ${cls}"></span><span class="stitle">${escapeHtml(s.title)}</span><span class="sstat ${cls}">${escapeHtml(SLABEL[s.statusClass] || s.statusClass)}</span>${stop}${dl}</li>`;
 }
 
-// 浏览器端「下载」: 文本 → Blob → a[download] 触发 (popup 是扩展页, 可直接下载)
+// 浏览器端「下载」: 文本 → Blob → a[download] 触发 → 落手机浏览器 Download 文件夹
 function downloadText(filename, text, mime) {
   const blob = new Blob([text], { type: (mime || "text/plain") + ";charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -200,6 +210,7 @@ function downloadText(filename, text, mime) {
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function escapeAttr(s) { return escapeHtml(s).replace(/'/g, "&#39;"); }
 
+// ── 账号行操作: 切号(注入登录) / 概览 / 额度 / 删除 ──
 document.addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-act]");
   if (!btn) return;
@@ -209,7 +220,7 @@ document.addEventListener("click", async (e) => {
   try {
     if (act === "activate") {
       const r = await send({ type: "activate", email });
-      toast(r.ok ? "已激活: " + email : "激活失败: " + (r.error || ""), r.ok ? "ok" : "err");
+      toast(r.ok ? "已切号·注入登录: " + email : "切号失败: " + (r.error || ""), r.ok ? "ok" : "err");
     } else if (act === "refresh") {
       const r = await send({ type: "refreshQuota", email });
       toast(r.ok ? "额度: " + (r.balance == null ? "$?" : fmtMoney(r.balance)) : "失败: " + (r.error || ""), r.ok ? "ok" : "err");
@@ -221,26 +232,21 @@ document.addEventListener("click", async (e) => {
       if (box) {
         if (r && r.ok) {
           const o = r.overview;
-          const kn = o.counts && o.counts.knowledge ? `<button class="mini ghost kndl" data-kn-email="${escapeAttr(email)}">⭳ 知识库下载 (${o.counts.knowledge})</button>` : "";
-          const pb = o.counts && o.counts.playbooks ? `<button class="mini ghost pbdl" data-pb-email="${escapeAttr(email)}">⭳ 剧本下载 (${o.counts.playbooks})</button>` : "";
+          const kn = o.counts && o.counts.knowledge ? `<button class="ghost kndl" data-kn-email="${escapeAttr(email)}">⭳ 知识库 (${o.counts.knowledge})</button>` : "";
+          const pb = o.counts && o.counts.playbooks ? `<button class="ghost pbdl" data-pb-email="${escapeAttr(email)}">⭳ 剧本 (${o.counts.playbooks})</button>` : "";
           box.innerHTML = `<div class="track-counts">${renderCounts(o.counts)}</div>` +
             `<ul class="sessions">${(o.sessions || []).slice(0, 20).map((s) => sessionLi(s, email)).join("") || '<li class="sess muted">无对话</li>'}</ul>` +
             `<div class="ovw-actions">` +
-              (kn || "") +
-              (pb || "") +
-              `<button class="mini ghost gitst" data-git-email="${escapeAttr(email)}">🔗 Git 状态</button>` +
-              `<button class="mini ghost gitdc" data-gitdc-email="${escapeAttr(email)}">⛓ 断开 Git</button>` +
-              `<button class="mini danger wipe" data-wipe-email="${escapeAttr(email)}">🧹 水过无痕</button>` +
+              (kn || "") + (pb || "") +
+              `<button class="ghost gitst" data-git-email="${escapeAttr(email)}">🔗 Git 状态</button>` +
+              `<button class="ghost gitdc" data-gitdc-email="${escapeAttr(email)}">⛓ 断开 Git</button>` +
+              `<button class="danger wipe" data-wipe-email="${escapeAttr(email)}">🧹 水过无痕</button>` +
             `</div>` +
             `<div class="git-line" data-git-line="${escapeAttr(email)}"></div>`;
         } else box.innerHTML = `<div class="err-line">概览失败: ${escapeHtml((r && r.error) || "?")}</div>`;
       }
       btn.disabled = false;
       return; // 不触发 load() 重渲染 (会清空已展开概览)
-    } else if (act === "lock") {
-      const locked = btn.dataset.locked === "1";
-      const r = await send({ type: "lockAccount", email, locked: !locked });
-      toast(r.ok ? (r.locked ? "已🔒锁定: " + email : "已🔓解锁: " + email) : "操作失败: " + (r.error || ""), r.ok ? "ok" : "err");
     } else if (act === "remove") {
       await send({ type: "removeAccount", email });
       toast("已删除: " + email, "ok");
@@ -248,7 +254,7 @@ document.addEventListener("click", async (e) => {
   } finally { if (act !== "overview") await load(); }
 });
 
-// 下载: 对话数据 (.sdl) / 知识库 (.kndl)
+// 下载/Git/水过无痕 (概览内按钮·与桌面同源)
 document.addEventListener("click", async (e) => {
   const sdl = e.target.closest("button.sdl");
   if (sdl) {
@@ -258,7 +264,7 @@ document.addEventListener("click", async (e) => {
     if (r && r.ok) {
       downloadText(r.mdName, r.md, "text/markdown");
       downloadText(r.jsonName, r.json, "application/json");
-      toast(`已下载对话 (${r.eventCount} 事件): MD + JSON`, "ok");
+      toast(`已下载对话 (${r.eventCount} 事件): MD + JSON → 手机`, "ok");
     } else toast("下载失败: " + ((r && r.error) || ""), "err");
     sdl.disabled = false;
     return;
@@ -271,29 +277,27 @@ document.addEventListener("click", async (e) => {
     if (r && r.ok) {
       downloadText(r.jsonName, r.json, "application/json");
       for (const it of (r.items || [])) downloadText(it.mdName, it.md, "text/markdown");
-      toast(`已下载知识库 (${r.count} 条): JSON + 逐条 MD`, "ok");
+      toast(`已下载知识库 (${r.count} 条) → 手机`, "ok");
     } else toast("知识库下载失败: " + ((r && r.error) || ""), "err");
     kndl.disabled = false;
     return;
   }
-  // 剧本下载 (用户自建剧本 → JSON + 逐条 MD)
   const pbdl = e.target.closest("button.pbdl");
   if (pbdl) {
     pbdl.disabled = true;
     toast("拉取剧本…");
     const r = await send({ type: "exportPlaybooks", email: pbdl.dataset.pbEmail });
     if (r && r.ok) {
-      if (!r.count) { toast("无用户自建剧本可下载 (社区/内置剧本不导出)", "ok"); }
+      if (!r.count) { toast("无用户自建剧本可下载", "ok"); }
       else {
         downloadText(r.jsonName, r.json, "application/json");
         for (const it of (r.items || [])) downloadText(it.mdName, it.md, "text/markdown");
-        toast(`已下载剧本 (${r.count} 条): JSON + 逐条 MD`, "ok");
+        toast(`已下载剧本 (${r.count} 条) → 手机`, "ok");
       }
     } else toast("剧本下载失败: " + ((r && r.error) || ""), "err");
     pbdl.disabled = false;
     return;
   }
-  // 停止(归档)运行中对话: archive = 中停+移出列表 (对照本体 stopSession)
   const sstop = e.target.closest("button.sstop");
   if (sstop) {
     const title = sstop.dataset.stopTitle || sstop.dataset.stopSid;
@@ -306,7 +310,6 @@ document.addEventListener("click", async (e) => {
     else sstop.disabled = false;
     return;
   }
-  // Git 状态
   const gitst = e.target.closest("button.gitst");
   if (gitst) {
     const email = gitst.dataset.gitEmail;
@@ -321,7 +324,6 @@ document.addEventListener("click", async (e) => {
     gitst.disabled = false;
     return;
   }
-  // 断开 Git
   const gitdc = e.target.closest("button.gitdc");
   if (gitdc) {
     const email = gitdc.dataset.gitdcEmail;
@@ -333,7 +335,6 @@ document.addEventListener("click", async (e) => {
     gitdc.disabled = false;
     return;
   }
-  // 水过无痕: 先 dryRun 扫描 → 确认 → 执行
   const wipe = e.target.closest("button.wipe");
   if (wipe) {
     const email = wipe.dataset.wipeEmail;
@@ -351,6 +352,11 @@ document.addEventListener("click", async (e) => {
     wipe.disabled = false;
     return;
   }
+});
+
+// 添加区折叠
+$("addHeader").addEventListener("click", () => {
+  $("addHeader").parentElement.classList.toggle("open");
 });
 
 $("gitBatchBtn").addEventListener("click", async () => {
@@ -379,47 +385,29 @@ $("addBtn").addEventListener("click", async () => {
   else toast("添加失败: " + (r.error || ""), "err");
 });
 
-$("rotateBtn").addEventListener("click", async () => {
-  toast("普查额度并切换中…");
-  const r = await send({ type: "rotate" });
-  toast(r.ok ? "已切到: " + r.switchedTo : "切换失败: " + (r.error || ""), r.ok ? "ok" : "err");
-  await load();
-});
-
 $("refreshAll").addEventListener("click", async () => {
   toast("全部刷新额度中…");
-  await send({ type: "refreshAllQuota" });
+  await send({ type: "refreshAllQuota" }, 40);
   toast("额度已刷新", "ok");
   await load();
 });
 
-$("saveSettings").addEventListener("click", async () => {
-  const settings = {
-    autoSwitch: $("autoSwitch").checked,
-    lockByDefault: $("lockByDefault").checked,
-    autoStop: $("autoStop").checked,
-    buffer: Number($("buffer").value) || 0,
-    pollMin: Math.max(1, Number($("pollMin").value) || 2),
-    lowBalance: Math.max(0, Number($("lowBalance").value) || 0),
-    stopThreshold: Math.max(0, Number($("stopThreshold").value) || 0),
-  };
-  const r = await send({ type: "saveSettings", settings });
-  toast(r.ok ? "设置已保存" : "保存失败", r.ok ? "ok" : "err");
-});
-$("autoSwitch").addEventListener("change", () => $("saveSettings").click());
-$("lockByDefault").addEventListener("change", () => $("saveSettings").click());
-$("autoStop").addEventListener("change", () => $("saveSettings").click());
-
-// 紧急切换: 立即弃用当前号, 切到其他未锁定最优号
-$("panicBtn").addEventListener("click", async () => {
-  if (!confirm("紧急切换：立即弃用当前账号，切到其他未锁定的最优账号？")) return;
-  toast("紧急切换中…");
-  const r = await send({ type: "panicSwitch" });
-  toast(r.ok ? "已紧急切到: " + r.switchedTo : "切换失败: " + (r.error || ""), r.ok ? "ok" : "err");
-  await load();
+// Devin Cloud 全量备份 → 手机: 当前激活账号所有对话 → 逐条 MD+JSON 下载
+$("backupAllBtn").addEventListener("click", async () => {
+  if (!STATE.active) { toast("先激活一个账号", "err"); return; }
+  const btn = $("backupAllBtn");
+  btn.disabled = true; btn.textContent = "备份中…";
+  toast("拉取并备份全部对话…");
+  const r = await send({ type: "backupAllSessions" }, 60);
+  if (r && r.ok) {
+    let n = 0;
+    for (const it of (r.items || [])) { downloadText(it.mdName, it.md, "text/markdown"); downloadText(it.jsonName, it.json, "application/json"); n++; }
+    toast(n ? `已备份 ${n}/${r.total} 个对话 (MD+JSON) → 手机 Download` : "无对话可备份", n ? "ok" : "err");
+  } else toast("备份失败: " + ((r && r.error) || ""), "err");
+  btn.disabled = false; btn.textContent = "⭳ Devin Cloud 全量备份→手机";
 });
 
-// 万法识别·批量添加: 任意格式文本 → 解析入池
+// 万法识别·批量添加
 $("bulkAddBtn").addEventListener("click", async () => {
   const text = $("bulk").value;
   if (!text.trim()) { toast("先粘贴账号文本", "err"); return; }
@@ -431,12 +419,12 @@ $("bulkAddBtn").addEventListener("click", async () => {
   } else toast("识别失败: " + ((r && r.error) || ""), "err");
 });
 
-// 一键导出: 账号池 → 剪贴板 (可再粘贴回收)
+// 一键导出: 账号池 → 剪贴板
 $("exportBtn").addEventListener("click", async () => {
   const r = await send({ type: "exportAccounts" });
   if (!r || !r.ok || !r.text) { toast("无可导出账号", "err"); return; }
   try { await navigator.clipboard.writeText(r.text); toast("已复制到剪贴板 (" + r.text.split("\n").length + " 个)", "ok"); }
-  catch { $("bulk").value = r.text; toast("已填入下方文本框 (剪贴板不可用)", "ok"); }
+  catch { $("bulk").value = r.text; $("addHeader").parentElement.classList.add("open"); toast("已填入添加框 (剪贴板不可用)", "ok"); }
 });
 
 // 对话追踪: 拉取当前激活账号的活跃会话
