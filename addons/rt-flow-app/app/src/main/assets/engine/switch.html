@@ -1,6 +1,6 @@
 <!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT Flow 切号</title>
+<title>Devin Cloud 切号</title>
 <style>
 /* VS Code 主题变量 → 手机暗色具体值; 下方账号列表 CSS 自 RT Flow VSIX buildHtml verbatim */
 :root{
@@ -209,22 +209,35 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .cv-close:hover{color:#f66;background:#4a1a1a}
 
 /* 手机微调: 加大点触目标 */
-.b{width:26px!important;height:26px!important;font-size:13px!important}
-.b.dv{width:auto!important;padding:0 5px!important}
-.row{padding:6px 2px!important}
+.b{width:30px!important;height:30px!important;font-size:14px!important}
+.b.dv{width:auto!important;padding:0 6px!important}
 .chk{width:16px!important;height:16px!important}
 body{padding:8px 10px!important;-webkit-text-size-adjust:100%}
+/* === 大换血 v0.6.0 · 突出编号+账号名 · 去 DW 额度 · 整行点开即切号 · 横屏适配 === */
+.acc-no{min-width:24px!important;height:24px!important;line-height:24px!important;font-size:13px!important;border-radius:6px!important;background:#16304a!important;border:1px solid #2f5e8e!important;color:#7fc4ff!important}
+.em{font-size:15px!important;font-weight:600!important;color:#e6edf3!important;flex:1 1 auto}
+.row{cursor:pointer;gap:7px!important;padding:10px 6px!important;border-radius:6px}
+.row:active{background:#1b2b3a}
+.row.act{background:#13314d;box-shadow:inset 3px 0 0 var(--blue)}
+.qt{display:none!important}
+.acts{gap:4px}.acts .b{flex-shrink:0}
+.tap-hint{font-size:11px;color:#6a7d8c;margin:2px 0 8px;padding:5px 9px;background:#10161e;border:1px dashed #25303c;border-radius:6px;line-height:1.4}
+@media (orientation:landscape){
+  body{padding:8px 16px!important}
+  #list{display:grid;grid-template-columns:1fr 1fr;gap:4px 18px}
+  #list>div{border-bottom:1px solid #161b22}
+  .em{font-size:14px!important;white-space:normal;word-break:break-all}
+  .acc-no{min-width:26px!important;height:26px!important;line-height:26px!important;font-size:14px!important}
+  .dv-tb{gap:8px}
+}
+@media (orientation:landscape) and (min-width:1100px){ #list{grid-template-columns:1fr 1fr 1fr} }
 </style></head><body>
 <div class="hd">
 <div class="st">
-  <span style="color:var(--pool);font-weight:700" id="st-dw">D— W—</span>
-  <span><b id="st-avail">0</b>可用</span>
-  <span><b id="st-cnt">0</b>号</span>
-  <span style="color:var(--blue)"><b id="st-tok">0</b>已登</span>
-  <span class="mode-sw"><button class="on" title="WAM 切号">WAM</button></span>
+  <span><b id="st-cnt">0</b> 个账号</span>
+  <span style="color:var(--blue)"><b id="st-tok">0</b> 已登录</span>
 </div>
-<div class="pool-bar"><div class="pool-fill" id="poolFill" style="width:100%"></div></div>
-<div class="act-info empty" id="actInfo">未激活账号 · 点 ⚡ 切换 / 🖥 在标签打开</div>
+<div class="tap-hint">点任意账号 = 打开其专属「多实例注入浏览器」(即切号·各登各号)。横屏可一屏看更多。</div>
 </div>
 
 <div class="add-section">
@@ -238,7 +251,6 @@ body{padding:8px 10px!important;-webkit-text-size-adjust:100%}
 <div class="sec"><span>&#9660; 账号列表 (<span id="secCnt">0</span>)</span></div>
 <div class="dv-tb">
 <button onclick="doLoginAll()" class="conv-btn" title="对所有仅邮箱密码的账号批量登录解锁 auth1/额度">&#128273; 全部登录</button>
-<button onclick="doRefreshAll()" class="conv-btn" title="刷新所有已登录账号的额度">&#128260; 刷额度</button>
 <button onclick="dvExportMd()" class="conv-btn" title="导出 MD 操作指令·复制给本地/云端 Agent 即可远程驱动">&#128196; 导出 MD</button>
 <button onclick="copyAll()" class="conv-btn" title="导出全部账号 JSON">&#128190; 导出账号</button>
 <button onclick="doHealthScan()" class="conv-btn" title="重登所有账号检测失效/过期">&#128137; 健康检查</button>
@@ -247,7 +259,7 @@ body{padding:8px 10px!important;-webkit-text-size-adjust:100%}
 <span class="dv-trk-empty" style="margin-left:auto">对话/备份 → 菜单「对话 / Cloud」</span>
 </div>
 <div id="list"></div>
-<div class="footer">Devin Cloud 手机版 · <span class="v" id="ver">v0.5.0</span> · 切号 + 多实例 + 公网穿透 二合一 · 道法自然</div>
+<div class="footer">Devin Cloud 手机版 · <span class="v" id="ver">v0.6.0</span> · 切号 + 多实例 + 公网穿透 二合一 · 道法自然</div>
 <div class="toast" id="toast"></div>
 
 <script src="devin-core.js"></script>
@@ -279,7 +291,7 @@ function rowHtml(a,i){
   var auth = hasAuth(a);
   var db = domBadge(a.email);
   var emailShort = String(a.email||a.id||("acc"+i));
-  if(emailShort.length>22) emailShort = emailShort.slice(0,20)+"…";
+  if(emailShort.length>30) emailShort = emailShort.slice(0,28)+"…";
   var q = a.quota||{}; var checked = (typeof q.dPct==="number");
   var dPct = checked?q.dPct:0, wPct = checked?q.wPct:0;
   var dC = !checked?"#555":(dPct<=5?"#f44":dPct<=30?"#ce9178":"#4ec9b0");
@@ -288,24 +300,14 @@ function rowHtml(a,i){
   var euaTag = (checked && q.overageDollars>0)?('<span class="eua" title="Extra Usage">$'+Math.round(q.overageDollars)+'</span>'):(checked?'<span class="eua0">$0</span>':"");
   var authTag = auth?'<span class="eua" title="已带 auth1·可直接切号注入">登</span>':'<span class="uc" title="仅邮箱密码·需登录换 auth1(桌面/中继)">需登</span>';
   return ''+
-  '<div class="row'+(active?" act":"")+(auth?"":" expired-row")+'" data-i="'+i+'" data-id="'+_esc(a.id)+'">'+
+  '<div class="row'+(active?" act":"")+(auth?"":" expired-row")+'" data-i="'+i+'" data-id="'+_esc(a.id)+'" onclick="openTab('+i+')" title="点此打开该号专属多实例注入浏览器 (即切号)">'+
     '<span class="acc-no" title="账号编号">'+(i+1)+'</span>'+
     '<span class="dm '+db[0]+'" title="'+_esc(db[1])+'">'+db[0]+'</span>'+
     '<span class="em" title="'+_esc(a.email||a.id)+'">'+_esc(emailShort)+'</span>'+
-    planTag+euaTag+authTag+
-    '<span class="qt">'+
-      '<span class="mb"><span class="mf" style="width:'+dPct+'%;background:'+dC+'"></span></span>'+
-      '<span class="ql" style="color:'+dC+'">'+(checked?"D"+dPct:"D?")+'</span>'+
-      '<span class="mb"><span class="mf" style="width:'+wPct+'%;background:'+wC+'"></span></span>'+
-      '<span class="ql" style="color:'+wC+'">'+(checked?"W"+wPct:"W?")+'</span>'+
-    '</span>'+
-    '<span class="acts">'+
-      (auth?
-        '<button class="b sw" onclick="sw('+i+')" title="切换为当前(激活)">&#9889;</button>'+
-        '<button class="b rt" onclick="openTab('+i+')" title="在标签内打开 Devin·注入本号登录(多实例)">&#128421;</button>'+
-        '<button class="b cp" onclick="rq('+i+')" title="刷新额度">&#128260;</button>'
-      :
-        '<button class="b sw" onclick="doLogin('+i+')" title="邮箱+密码 登录解锁 auth1/额度" style="background:#0e639c;color:#fff">&#128273;</button>'
+    planTag+authTag+
+    '<span class="acts" onclick="event.stopPropagation()">'+
+      (auth? '' :
+        '<button class="b sw" onclick="doLogin('+i+')" title="邮箱+密码 登录解锁 auth1" style="background:#0e639c;color:#fff">&#128273;</button>'
       )+
       '<button class="b cp" onclick="cp('+i+')" title="复制账号 JSON">&#128203;</button>'+
       '<button class="b rm" onclick="rm('+i+')" title="删除">&times;</button>'+
@@ -319,22 +321,17 @@ function render(){
   list.innerHTML = accs.length?accs.map(rowHtml).join(""):'<div class="dv-trk-empty" style="padding:10px 4px">暂无账号 · 在上方「添加账号」粘贴 token 或桌面导出的 JSON</div>';
   document.getElementById("secCnt").textContent=accs.length;
   document.getElementById("st-cnt").textContent=accs.length;
-  document.getElementById("st-avail").textContent=accs.length;
   document.getElementById("st-tok").textContent=accs.filter(hasAuth).length;
-  var act=accs.filter(function(x){return x.id===getActive();})[0];
-  var ai=document.getElementById("actInfo");
-  if(act){ ai.className="act-info"; ai.innerHTML='当前激活: <b>'+_esc(act.email||act.id)+'</b><span class="tag">'+(hasAuth(act)?"可注入":"需登录")+'</span>'; }
-  else { ai.className="act-info empty"; ai.textContent="未激活账号 · 点 ⚡ 切换 / 🖥 在标签打开"; }
 }
 
 // ── 动作 ──
-function sw(i){ var a=loadAcc()[i]; if(!a)return; setActive(a.id); toast("已激活 "+(a.email||a.id)); render(); }
 function openTab(i){
   var a=loadAcc()[i]; if(!a)return;
-  if(!hasAuth(a)){ toast("此号无 auth1, 需先登录换取(桌面/中继)", true); }
+  if(!hasAuth(a)){ toast("此号无 auth1, 需先登录换取(点 🔑)", true); }
   setActive(a.id);
-  try{ N.openAccountTab(JSON.stringify(a)); toast("已在新标签打开并注入 "+(a.email||a.id)); }
+  try{ N.openAccountTab(JSON.stringify(a)); toast("已打开并注入 "+(a.email||a.id)); }
   catch(e){ toast("打开失败 "+e, true); }
+  render();
 }
 function cp(i){ var a=loadAcc()[i]; if(!a)return; try{N.clip&&N.clip(JSON.stringify(a));}catch(e){} toast("已复制账号 JSON"); }
 function rm(i){ var accs=loadAcc(); var a=accs[i]; if(!a)return; if(!confirm("删除 "+(a.email||a.id)+"?"))return; accs.splice(i,1); saveAcc(accs); render(); toast("已删除"); }
@@ -390,11 +387,6 @@ function doLogin(i){
     else { render(); toast("登录失败: "+(r.error||"未知"), true); }
   }).catch(function(e){ toast("登录异常: "+e, true); });
 }
-function rq(i){
-  var a=loadAcc()[i]; if(!a)return;
-  toast("刷新额度… "+(a.email||a.id));
-  DaoCore.refreshQuotaFor(a.id).then(function(r){ render(); toast(r.ok?("✓ "+(a.email||a.id)+" D"+(r.quota.dPct||0)+" W"+(r.quota.wPct||0)):("刷新失败: "+(r.error||""))); });
-}
 async function doLoginAll(){
   var accs=loadAcc();
   var todo=accs.filter(function(a){return a.email&&a.password&&!(a.auth1&&a.quota);});
@@ -418,7 +410,7 @@ async function doRefreshAll(){
 function copyAll(){ var accs=loadAcc(); try{N.clip&&N.clip(JSON.stringify(accs,null,2));}catch(e){} toast("已导出 "+accs.length+" 个账号 JSON 到剪贴板"); }
 function dvExportMd(){
   var accs=loadAcc();
-  var md=["# RT Flow 手机版 · 账号操作 MD","","共 "+accs.length+" 个账号 ("+accs.filter(hasAuth).length+" 个已带 auth1)。","",
+  var md=["# Devin Cloud 手机版 · 账号操作 MD","","共 "+accs.length+" 个账号 ("+accs.filter(hasAuth).length+" 个已带 auth1)。","",
     "| # | 账号 | 状态 |","|---|---|---|"]
     .concat(accs.map(function(a,i){return "| "+(i+1)+" | "+(a.email||a.id)+" | "+(hasAuth(a)?"可注入":"需登录")+" |";}))
     .concat(["","> 远程驱动: `POST <公网入口> {\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"openAccountTab\",\"id\":\"<id>\"}}`"]).join("\n");

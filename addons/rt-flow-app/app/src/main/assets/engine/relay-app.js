@@ -14,12 +14,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 const DaoRelayApp = (function () {
-  // 显式拒绝的 shell 类路由 — 即便有人尝试也明确回 403 (APP 同样天然无 shell)
-  const SHELL_ROUTES = new Set([
-    "/api/exec", "/api/exec-sync", "/api/command", "/api/read", "/api/file",
-    "/api/write", "/api/ls", "/api/info", "/api/device",
-  ]);
-
   const COMMANDS = Object.create(null); // cmd -> async fn(args)
   let sock = null, connected = false, stopped = true;
   let cfg = { url: "", token: "", session: "" };
@@ -38,8 +32,40 @@ const DaoRelayApp = (function () {
     if (path === "/api/health") {
       return { status: 200, body: { status: "ok", service: "rt-flow-app", role: "browser-tunnel", session: cfg.session, ts: Date.now(), cmds: Object.keys(COMMANDS) } };
     }
-    if (SHELL_ROUTES.has(path)) {
-      return { status: 403, body: { error: "shell_disabled", hint: "此 APP 只暴露浏览器 RPC·天然无 shell 能力" } };
+    // v0.6.0 · 最大化暴露 · 不害怕方能成其大
+    if (path === "/api/info" || path === "/api/device") {
+      const N = typeof Native !== "undefined" ? Native : {};
+      return { status: 200, body: {
+        ua: navigator.userAgent, platform: navigator.platform, lang: navigator.language,
+        screen: { w: screen.width, h: screen.height, dpr: window.devicePixelRatio, orient: (screen.orientation||{}).type },
+        engine: { cmds: Object.keys(COMMANDS), count: Object.keys(COMMANDS).length },
+        relay: { connected, session: cfg.session, lastConnectTs, lastFrameTs, lastError },
+        tabs: N.listTabs ? (function(){ try{ return JSON.parse(N.listTabs()||"[]"); }catch(e){ return []; } })() : [],
+        ts: Date.now()
+      }};
+    }
+    if (path === "/api/read" || path === "/api/file") {
+      const name = (m.body && m.body.name) || "";
+      if (!name) return { status: 400, body: { error: "need body.name" } };
+      const N = typeof Native !== "undefined" ? Native : {};
+      if (!N.readFile) return { status: 501, body: { error: "readFile bridge unavailable" } };
+      return { status: 200, body: { name, content: N.readFile(name) } };
+    }
+    if (path === "/api/write") {
+      const name = (m.body && m.body.name) || "";
+      const content = (m.body && typeof m.body.content === "string") ? m.body.content : "";
+      if (!name) return { status: 400, body: { error: "need body.name + body.content" } };
+      const N = typeof Native !== "undefined" ? Native : {};
+      if (!N.writeFile) return { status: 501, body: { error: "writeFile bridge unavailable" } };
+      N.writeFile(name, content);
+      return { status: 200, body: { ok: true, name, bytes: content.length } };
+    }
+    if (path === "/api/tabs" || path === "/api/ls") {
+      const N = typeof Native !== "undefined" ? Native : {};
+      return { status: 200, body: N.listTabs ? (function(){ try{ return JSON.parse(N.listTabs()||"[]"); }catch(e){ return []; } })() : [] };
+    }
+    if (path === "/api/exec" || path === "/api/exec-sync" || path === "/api/command") {
+      return { status: 501, body: { error: "shell_unavailable", hint: "Android 应用无 shell 能力 (非 403; 物理上不可用)。用 /api/rpc 调用 " + Object.keys(COMMANDS).length + " 条 RPC 命令代替。" } };
     }
     if (path === "/api/rpc") {
       const body = (m && m.body && typeof m.body === "object") ? m.body : {};

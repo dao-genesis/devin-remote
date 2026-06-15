@@ -108,7 +108,12 @@
 
     // ── 管理/热修通道 (用户私有 token 已门禁; 用户明确要求隔隧道热修) ──
     ping: async function(){ return {ok:true, pong:Date.now()}; },
-    getEngineInfo: async function(){ return {ok:true, version:"0.5.0", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length }; },
+    getEngineInfo: async function(){ return {ok:true, version:"0.6.0", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length }; },
+    deviceInfo: async function(){ var N=window.Native||{}; return {ok:true, ua:navigator.userAgent, platform:navigator.platform, lang:navigator.language, screen:{w:screen.width,h:screen.height,dpr:window.devicePixelRatio,orient:(screen.orientation||{}).type}, relay:typeof DaoRelayApp!=="undefined"?DaoRelayApp.status():{}, tabs:N.listTabs?(function(){try{return JSON.parse(N.listTabs()||"[]");}catch(e){return[];}})():[], conn:N.getConn?(function(){try{return JSON.parse(N.getConn()||"{}");}catch(e){return{};}})():{}, ts:Date.now()}; },
+    listTabs: async function(){ var N=window.Native||{}; if(!N.listTabs)return{ok:false,error:"listTabs bridge unavailable"}; try{return{ok:true,tabs:JSON.parse(N.listTabs()||"[]")};}catch(e){return{ok:false,error:String(e)};} },
+    closeTab: async function(a){ var N=window.Native||{}; if(!N.closeTab)return{ok:false,error:"closeTab bridge unavailable"}; N.closeTab(a.tabId||a.id||0); return{ok:true}; },
+    readFile: async function(a){ var N=window.Native||{}; if(!a||!a.name)return{ok:false,error:"需 name"}; if(!N.readFile)return{ok:false,error:"readFile bridge unavailable"}; return{ok:true,name:a.name,content:N.readFile(a.name)}; },
+    writeFile: async function(a){ var N=window.Native||{}; if(!a||!a.name)return{ok:false,error:"需 name+content"}; if(!N.writeFile)return{ok:false,error:"writeFile bridge unavailable"}; N.writeFile(a.name,a.content||""); return{ok:true,name:a.name}; },
     hotpatch: async function(a){
       if(!a||typeof a.js!=="string") return {ok:false,error:"缺 js"};
       try{ var r=(0,eval)(a.js); return {ok:true, result: (typeof r==="undefined")?null:r}; }catch(e){ return {ok:false,error:String(e&&e.message||e), stack:e&&e.stack}; }
