@@ -482,6 +482,24 @@ const DaoCloud = (() => {
       items: learnings.map((k) => ({ id: k.id, name: k.name || k.title || "", mdName: safeName(k.name || k.title || k.id) + ".md", md: knowledgeToMd(k) })),
     };
   }
+  // 剧本正文 → MD (与 knowledgeToMd 一脉·本体账号快照含剧本正文同源)
+  function playbookToMd(p) {
+    const name = p.name || p.title || p.id || "playbook";
+    const desc = p.description || p.summary || "";
+    const body = p.body || p.content || p.text || p.playbook || p.steps || "";
+    return "# " + name + "\n\n" + (desc ? "> " + desc + "\n\n" : "") + (typeof body === "string" ? body : JSON.stringify(body, null, 2)) + "\n";
+  }
+  // 剧本下载: 用户自建剧本 (滤掉 builtin/community) → JSON 汇总 + 逐条 MD (对照本体 board 下载·剧本)
+  async function exportPlaybooks(auth) {
+    const r = await listPlaybooks(auth);
+    const pbs = (r.playbooks || []).filter((p) => isUserPlaybook(p));
+    return {
+      ok: r.ok, count: pbs.length,
+      jsonName: "playbooks_" + auth.orgBare + ".json",
+      json: JSON.stringify({ schema: "rt-flow.devin-cloud.playbooks/1", org: auth.orgId, count: pbs.length, playbooks: pbs, generatedAt: new Date().toISOString() }, null, 2),
+      items: pbs.map((p) => ({ id: p.id, name: p.name || p.title || "", mdName: safeName(p.name || p.title || p.id) + ".md", md: playbookToMd(p) })),
+    };
+  }
 
   // ═══ 删除接口全集 (水过无痕底层 · 移植自 devin_cloud.js) ═══════════════════
   function okDelete(status) { return status === 200 || status === 202 || status === 204 || status === 404; }
@@ -521,6 +539,21 @@ const DaoCloud = (() => {
       if (d.status >= 200 && d.status < 300) return { ok: true, status: d.status };
     }
     return { ok: false, status: r.status };
+  }
+  // 中停运行中对话 (自动停止·知止不殆·移植自 devin_cloud.js stopSession):
+  //   Devin Cloud 无 stop/pause/cancel REST 路由 (实测全 404), 唯 POST /sessions/{id}/archive
+  //   可变运行态 (running→suspended·即时移出活跃列表)。命中 2xx 即真中停, 否则如实回报 (不臆造成功)。
+  async function stopSession(auth, devinId) {
+    const r = await jsonRequest("POST", CFG.apiBase + "/sessions/" + devinId + "/archive", authHeaders(auth), {});
+    const ok = r.status >= 200 && r.status < 300;
+    return { ok, stopped: ok, status: r.status };
+  }
+  // 中停活跃账号全部运行中对话 (弃号前自动停止·防弃号后仍在烧额度)
+  async function stopRunningSessions(auth) {
+    const active = await listRunningSessions(auth);
+    let stopped = 0;
+    for (const s of active) { try { if ((await stopSession(auth, s.devinId)).ok) stopped++; } catch (e) { /* 单条失败不阻断 */ } }
+    return { ok: true, total: active.length, stopped };
   }
 
   // 水过无痕: 清账号自建数据 (本源默认 builtin 知识/community 剧本保留不删)。
@@ -633,6 +666,7 @@ const DaoCloud = (() => {
     isUserKnowledge, isUserPlaybook, accountOverview,
     extractMessageText, classifyEvent, buildConversationMd, buildAgentDoc, safeName,
     getEvents, exportConversation, knowledgeToMd, exportKnowledge,
+    playbookToMd, exportPlaybooks, stopSession, stopRunningSessions,
     okDelete, deleteKnowledge, deletePlaybook, deleteSecret, deleteSession, wipeAccount,
     computeConvCap, lowBalanceVerdict, sessionSignature, quotaResetInfo,
   };

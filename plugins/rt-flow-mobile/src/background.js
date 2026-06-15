@@ -22,6 +22,8 @@ const DEFAULT_SETTINGS = {
   lockByDefault: true, // 反者道之动·默锁: 新号缺省🔒锁定(禁自动切到), 用户🔓解锁后才入候选 (防误切·与本体 wam.lockByDefault 一脉)
   notify: true, // 低余额浏览器通知
   lowBalance: 5, // 余额 ≤ 此值($) 触发一次低余额通知 (回升复位·复用 lowBalanceVerdict)
+  autoStop: false, // 自动停止: 软耗尽弃号前中停旧号运行中对话 (默关·避免误停, 与本体 ConvQuotaCap 一脉)
+  stopThreshold: 3, // 余额 ≤ 此值($) 才自动停止旧号运行中对话 (知止不殆)
 };
 
 // 账号有效锁定态: 无显式 locked 记录时按 lockByDefault 决定 (与本体 v4.6.0 反转语义同源)
@@ -183,8 +185,13 @@ async function rotate(reason) {
   if (best.score <= activeScore) {
     return { ok: true, switchedTo: activeKey, reason: reason || "manual", ranked, noop: true };
   }
+  // 自动停止 (知止不殆): 弃旧号前, 若旧号余额 ≤ stopThreshold 则中停其运行中对话, 防弃号后仍在烧额度。
+  let stopped = null;
+  if (fresh.settings.autoStop && activeKey && activeScore !== -Infinity && activeScore <= fresh.settings.stopThreshold) {
+    try { const ra = await ensureAuth(activeKey); if (ra.ok) stopped = await DaoCloud.stopRunningSessions(ra); } catch (e) { /* 停止失败不阻断切号 */ }
+  }
   const res = await activate(best.email);
-  return { ok: res.ok, switchedTo: best.email, reason: reason || "manual", ranked };
+  return { ok: res.ok, switchedTo: best.email, reason: reason || "manual", ranked, stopped };
 }
 
 // 紧急切换 (与本体 panicSwitch/rotateNext 一脉): 立即弃用当前号, 切到「其他·未锁定·可登录」中
@@ -313,6 +320,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const r = await ensureAuth(msg.email);
           if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
           try { sendResponse(await DaoCloud.exportKnowledge(r)); }
+          catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+          break;
+        }
+        // 剧本下载: 用户自建剧本 → JSON 汇总 + 逐条 MD (对照本体 board·剧本)
+        case "exportPlaybooks": {
+          const r = await ensureAuth(msg.email);
+          if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
+          try { sendResponse(await DaoCloud.exportPlaybooks(r)); }
+          catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+          break;
+        }
+        // 中停单个运行中对话 (自动停止·手动触发·对照本体 stopSession)
+        case "stopSession": {
+          const r = await ensureAuth(msg.email);
+          if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
+          try { sendResponse(await DaoCloud.stopSession(r, msg.devinId)); }
           catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
           break;
         }

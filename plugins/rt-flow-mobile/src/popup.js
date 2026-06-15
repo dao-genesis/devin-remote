@@ -90,7 +90,7 @@ function effLocked(a, settings) {
 }
 
 // 与 background.js DEFAULT_SETTINGS 对齐 (storage-first 渲染时兜底)
-const POPUP_DEFAULT_SETTINGS = { autoSwitch: true, buffer: 3, pollMin: 2, lockByDefault: true, notify: true, lowBalance: 5 };
+const POPUP_DEFAULT_SETTINGS = { autoSwitch: true, buffer: 3, pollMin: 2, lockByDefault: true, notify: true, lowBalance: 5, autoStop: false, stopThreshold: 3 };
 function getLocal(keys) { return new Promise((r) => chrome.storage.local.get(keys, r)); }
 
 // 渲染直读 chrome.storage (母/真源), 不依赖 service worker 是否唤醒,
@@ -121,9 +121,11 @@ function render() {
   // settings
   $("autoSwitch").checked = !!settings.autoSwitch;
   $("lockByDefault").checked = settings.lockByDefault !== false;
+  $("autoStop").checked = !!settings.autoStop;
   $("buffer").value = settings.buffer != null ? settings.buffer : 3;
   $("pollMin").value = settings.pollMin != null ? settings.pollMin : 2;
   $("lowBalance").value = settings.lowBalance != null ? settings.lowBalance : 5;
+  $("stopThreshold").value = settings.stopThreshold != null ? settings.stopThreshold : 3;
   // pool count
   $("poolCount").textContent = accounts.length ? "(" + accounts.length + ")" : "";
   // list
@@ -177,10 +179,13 @@ function renderCounts(c) {
 }
 const SCLS = { running: "run", awaiting: "wait", blocked: "blk" };
 const SLABEL = { running: "运行", awaiting: "待输入", blocked: "卡住", finished: "完成", idle: "空闲" };
+const ACTIVE_CLS = { running: 1, awaiting: 1, blocked: 1 };
 function sessionLi(s, email) {
   const cls = SCLS[s.statusClass] || "";
   const dl = email ? `<button class="sdl" data-dl-sid="${escapeAttr(s.devinId || "")}" data-dl-email="${escapeAttr(email)}" data-dl-title="${escapeAttr(s.title || "")}" title="下载对话">⭳</button>` : "";
-  return `<li class="sess"><span class="dot ${cls}"></span><span class="stitle">${escapeHtml(s.title)}</span><span class="sstat ${cls}">${escapeHtml(SLABEL[s.statusClass] || s.statusClass)}</span>${dl}</li>`;
+  // 运行中(运行/待输入/卡住)才给「停止」: archive 即中停+归档 (自动停止·手动触发·对照本体 stopSession)
+  const stop = (email && ACTIVE_CLS[s.statusClass]) ? `<button class="sstop" data-stop-sid="${escapeAttr(s.devinId || "")}" data-stop-email="${escapeAttr(email)}" data-stop-title="${escapeAttr(s.title || "")}" title="停止(归档)对话">⏹</button>` : "";
+  return `<li class="sess"><span class="dot ${cls}"></span><span class="stitle">${escapeHtml(s.title)}</span><span class="sstat ${cls}">${escapeHtml(SLABEL[s.statusClass] || s.statusClass)}</span>${stop}${dl}</li>`;
 }
 
 // 浏览器端「下载」: 文本 → Blob → a[download] 触发 (popup 是扩展页, 可直接下载)
@@ -217,10 +222,12 @@ document.addEventListener("click", async (e) => {
         if (r && r.ok) {
           const o = r.overview;
           const kn = o.counts && o.counts.knowledge ? `<button class="mini ghost kndl" data-kn-email="${escapeAttr(email)}">⭳ 知识库下载 (${o.counts.knowledge})</button>` : "";
+          const pb = o.counts && o.counts.playbooks ? `<button class="mini ghost pbdl" data-pb-email="${escapeAttr(email)}">⭳ 剧本下载 (${o.counts.playbooks})</button>` : "";
           box.innerHTML = `<div class="track-counts">${renderCounts(o.counts)}</div>` +
             `<ul class="sessions">${(o.sessions || []).slice(0, 20).map((s) => sessionLi(s, email)).join("") || '<li class="sess muted">无对话</li>'}</ul>` +
             `<div class="ovw-actions">` +
               (kn || "") +
+              (pb || "") +
               `<button class="mini ghost gitst" data-git-email="${escapeAttr(email)}">🔗 Git 状态</button>` +
               `<button class="mini ghost gitdc" data-gitdc-email="${escapeAttr(email)}">⛓ 断开 Git</button>` +
               `<button class="mini danger wipe" data-wipe-email="${escapeAttr(email)}">🧹 水过无痕</button>` +
@@ -267,6 +274,36 @@ document.addEventListener("click", async (e) => {
       toast(`已下载知识库 (${r.count} 条): JSON + 逐条 MD`, "ok");
     } else toast("知识库下载失败: " + ((r && r.error) || ""), "err");
     kndl.disabled = false;
+    return;
+  }
+  // 剧本下载 (用户自建剧本 → JSON + 逐条 MD)
+  const pbdl = e.target.closest("button.pbdl");
+  if (pbdl) {
+    pbdl.disabled = true;
+    toast("拉取剧本…");
+    const r = await send({ type: "exportPlaybooks", email: pbdl.dataset.pbEmail });
+    if (r && r.ok) {
+      if (!r.count) { toast("无用户自建剧本可下载 (社区/内置剧本不导出)", "ok"); }
+      else {
+        downloadText(r.jsonName, r.json, "application/json");
+        for (const it of (r.items || [])) downloadText(it.mdName, it.md, "text/markdown");
+        toast(`已下载剧本 (${r.count} 条): JSON + 逐条 MD`, "ok");
+      }
+    } else toast("剧本下载失败: " + ((r && r.error) || ""), "err");
+    pbdl.disabled = false;
+    return;
+  }
+  // 停止(归档)运行中对话: archive = 中停+移出列表 (对照本体 stopSession)
+  const sstop = e.target.closest("button.sstop");
+  if (sstop) {
+    const title = sstop.dataset.stopTitle || sstop.dataset.stopSid;
+    if (!confirm(`停止(归档)该对话？\n\n${title}\n\nDevin Cloud 无暂停接口·唯归档可中停 (running→suspended·移出列表)。建议先「⭳」下载留底。`)) return;
+    sstop.disabled = true;
+    toast("停止对话中…");
+    const r = await send({ type: "stopSession", email: sstop.dataset.stopEmail, devinId: sstop.dataset.stopSid });
+    toast(r && r.ok ? "已停止(归档): " + String(title).slice(0, 24) : "停止失败 HTTP " + ((r && r.status) || "?"), r && r.ok ? "ok" : "err");
+    if (r && r.ok) { const li = sstop.closest("li.sess"); if (li) li.remove(); }
+    else sstop.disabled = false;
     return;
   }
   // Git 状态
@@ -360,15 +397,18 @@ $("saveSettings").addEventListener("click", async () => {
   const settings = {
     autoSwitch: $("autoSwitch").checked,
     lockByDefault: $("lockByDefault").checked,
+    autoStop: $("autoStop").checked,
     buffer: Number($("buffer").value) || 0,
     pollMin: Math.max(1, Number($("pollMin").value) || 2),
     lowBalance: Math.max(0, Number($("lowBalance").value) || 0),
+    stopThreshold: Math.max(0, Number($("stopThreshold").value) || 0),
   };
   const r = await send({ type: "saveSettings", settings });
   toast(r.ok ? "设置已保存" : "保存失败", r.ok ? "ok" : "err");
 });
 $("autoSwitch").addEventListener("change", () => $("saveSettings").click());
 $("lockByDefault").addEventListener("change", () => $("saveSettings").click());
+$("autoStop").addEventListener("change", () => $("saveSettings").click());
 
 // 紧急切换: 立即弃用当前号, 切到其他未锁定最优号
 $("panicBtn").addEventListener("click", async () => {
@@ -410,7 +450,7 @@ $("trackRefresh").addEventListener("click", async () => {
     const c = { running: 0, awaiting: 0, blocked: 0 };
     for (const s of ss) if (c[s.statusClass] != null) c[s.statusClass]++;
     counts.innerHTML = `<span class="pill run">运行 ${c.running}</span><span class="pill wait">待输入 ${c.awaiting}</span><span class="pill blk">卡住 ${c.blocked}</span>`;
-    list.innerHTML = ss.length ? ss.map(sessionLi).join("") : '<li class="sess muted">无活跃对话 (运行/待输入/卡住)</li>';
+    list.innerHTML = ss.length ? ss.map((s) => sessionLi(s, STATE.active)).join("") : '<li class="sess muted">无活跃对话 (运行/待输入/卡住)</li>';
   } else { list.innerHTML = ""; empty.classList.remove("hid"); toast("追踪失败: " + ((r && r.error) || ""), "err"); }
 });
 
