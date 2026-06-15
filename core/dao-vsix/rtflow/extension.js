@@ -9090,14 +9090,21 @@ function _dvProgressSummary() {
 function _dvStartAuto() {
   if (_dvAutoTimer) return;
   const mins = Math.max(5, _cfg("devinCloudAutoBackupIntervalMin", 30));
-  _dvAutoTimer = setInterval(() => {
+  const periodMs = mins * 60000;
+  // 错峰轮询 (绝利一源): 多窗口/多账号不在同一墙钟瞬间一起备份, 避免出口 socket
+  // 扇出叠加把家用路由器 NAT 打满。首次延迟随机散布在 [0, period), 之后每周期再加 ±10% 抖动。
+  const jitter = () => Math.floor(periodMs * 0.1 * (Math.random() * 2 - 1));
+  const tick = () => {
     _dvAutoBackupRun().catch(() => {});
-  }, mins * 60000);
-  log("devin-cloud: auto-backup 定时器启动 · " + mins + "min");
+    _dvAutoTimer = setTimeout(tick, Math.max(60000, periodMs + jitter()));
+  };
+  const initial = Math.floor(Math.random() * periodMs);
+  _dvAutoTimer = setTimeout(tick, initial);
+  log("devin-cloud: auto-backup 定时器启动 · " + mins + "min · 错峰首延 " + Math.round(initial / 1000) + "s");
 }
 function _dvStopAuto() {
   if (_dvAutoTimer) {
-    clearInterval(_dvAutoTimer);
+    clearTimeout(_dvAutoTimer);
     _dvAutoTimer = null;
     log("devin-cloud: auto-backup 定时器停止");
   }
