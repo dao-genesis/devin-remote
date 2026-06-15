@@ -68,7 +68,7 @@ public class TabActivity extends AppCompatActivity {
     }
 
     /** 构造 document_start 注入脚本: iso 隔离 + 账号种入 + fetch/XHR 头注入。 */
-    private static String buildInjection(String token, String org) {
+    static String buildInjection(String token, String org) {
         String t = token == null ? "" : token.replace("\\", "\\\\").replace("'", "\\'");
         String o = org == null ? "" : org.replace("\\", "\\\\").replace("'", "\\'");
         return "(function(){try{" +

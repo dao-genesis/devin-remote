@@ -105,6 +105,8 @@ public class RelayService extends Service {
         try (InputStream is = getAssets().open(path)) { return slurp(is); }
         catch (Exception e) { return "{}"; }
     }
+    /** 供浏览器外壳内部页 (Native.conn) 读取烘焙的中继配置。 */
+    public String readConn() { return readAsset("engine/conn.json"); }
     private void writeUserFile(String name, String content) {
         try { File f = new File(getFilesDir(), safe(name)); java.io.FileOutputStream o = new java.io.FileOutputStream(f); o.write(content.getBytes("UTF-8")); o.close(); }
         catch (Exception e) { android.util.Log.e("RTFlow", "write " + e); }

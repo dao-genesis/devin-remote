@@ -1,0 +1,178 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>公网穿透</title>
+<style>
+/* VS Code 主题变量 → 手机暗色具体值 (复用 dao-bridge 前端原样, 仅补变量回退) */
+:root{
+  --vscode-font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
+  --vscode-foreground:#cdd3de;
+  --vscode-descriptionForeground:#8b949e;
+  --vscode-textLink-foreground:#4daafc;
+  --vscode-input-background:#161b22;
+  --vscode-input-foreground:#cdd3de;
+  --vscode-input-border:#30363d;
+  --vscode-button-background:#1f6feb;
+  --vscode-button-foreground:#fff;
+  --vscode-button-hoverBackground:#388bfd;
+  --vscode-textCodeBlock-background:#0d1117;
+  --vscode-panel-border:#30363d;
+  background:#0e1116;
+}
+/* ↓↓↓ 以下 CSS 自 addons/dao-bridge/dao-bridge-ext/extension.js html() verbatim ↓↓↓ */
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--vscode-font-family);font-size:13px;padding:10px;color:var(--vscode-foreground);overflow-y:auto;background:#0e1116}
+h3{margin:12px 0 5px;font-size:13px;color:var(--vscode-textLink-foreground)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;background:#888}
+.ok{background:#3fb950}.bad{background:#f85149}.pending{background:#e8c84a}
+input,button{font-size:13px;margin:3px 0;width:100%;box-sizing:border-box;padding:7px 9px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,#3334)}
+button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);cursor:pointer;border:none;border-radius:5px;padding:8px 10px}
+button:hover{background:var(--vscode-button-hoverBackground)}
+.row{display:flex;gap:6px}.row button{width:auto;flex:1}
+pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBlock-background);padding:8px;max-height:240px;overflow:auto;font-size:11px;margin:5px 0;border-radius:5px}
+.muted{color:var(--vscode-descriptionForeground);font-size:12px}
+.url{user-select:all;font-weight:600;color:var(--vscode-textLink-foreground);word-break:break-all;font-size:12px}
+.card{border:1px solid var(--vscode-input-border,#3334);border-radius:6px;padding:10px;margin-top:8px;background:#11161d}
+.lbl{color:var(--vscode-descriptionForeground);font-size:11px;margin-top:6px}
+.val{font-size:12px;word-break:break-all}
+.section{margin-top:10px;padding-top:8px;border-top:1px solid var(--vscode-input-border,#3334)}
+</style></head><body>
+
+<!-- 模块1: 实时状态 (自 dao-bridge verbatim) -->
+<h3>☯ 公网穿透状态</h3>
+<div><span id="dot" class="dot"></span><span id="stat">启动中…</span></div>
+<div class="muted" style="margin-top:4px">无名之樸 · 插件启动即自动打通整机公网穿透，<b>零配置、无需任何账号</b>。</div>
+<div class="card">
+  <div class="lbl">公网 URL</div><div id="url" class="url">—</div>
+  <div class="lbl">工作区</div><div id="ws" class="val">—</div>
+  <div class="lbl">端口 / 模式 / 协议</div><div id="mode" class="val">—</div>
+  <div class="lbl">代理 / 回退链</div><div id="net" class="val">—</div>
+  <div class="lbl">在线Agent</div><div id="agents" class="val">0</div>
+  <div class="row" style="margin-top:8px">
+    <button onclick="send('copyUrl')">复制URL</button>
+    <button onclick="send('copyToken')">复制Token</button>
+    <button onclick="send('restart')">重启隧道</button>
+  </div>
+</div>
+
+<!-- 模块2: CloudFlare 命名隧道 (可选) -->
+<div class="section">
+<h3>🔑 命名隧道 · 固定域名（可选）</h3>
+<div class="muted">默认快速隧道已可用，<b>无需登录</b>。仅当你想要<b>固定不变的公网域名</b>时，才需配置 CloudFlare 命名隧道令牌（也可放入 <code>~/.dao/dao-config.json</code> 的 <code>cfTunnelToken</code> 自动加载）。</div>
+<div id="cfStatus" class="muted" style="margin-top:4px">未配置（使用零配置快速隧道）</div>
+<div id="cfLoginForm">
+  <input id="cfEmail" type="email" placeholder="CloudFlare Email（可选）">
+  <input id="cfKey" type="password" placeholder="Tunnel Token / API Token（可选）">
+  <button onclick="send('cfLogin',null,{email:v('cfEmail'),key:v('cfKey')})">保存并切到用户通道</button>
+  <div class="muted" style="margin-top:6px">没有 token？用浏览器登录 Cloudflare（<b>可用 GitHub 账号</b>，需自有域名才有固定域名）：</div>
+  <button onclick="send('cfBrowserLogin')">🌐 用浏览器登录 Cloudflare</button>
+</div>
+<button id="logoutBtn" onclick="if(confirm('退出账号并清空全部 Cloudflare 凭证残留，回到无账号快速隧道？'))send('logout')" style="margin-top:6px;background:#a33;display:none">退出账号 / 重置为无账号模式</button>
+<button onclick="send('openCf')" style="margin-top:4px;background:var(--vscode-textLink-foreground)">打开 CloudFlare 控制台</button>
+</div>
+
+<!-- 模块3: 导出MD -->
+<div class="section">
+<h3>📄 导出接入文档</h3>
+<div class="row">
+  <button onclick="send('exportCloudMd')">☁️ 云端Agent MD</button>
+  <button onclick="send('exportLocalMd')">🖥️ 本地Agent MD</button>
+</div>
+<div class="row">
+  <button onclick="send('openCloudMd')">打开云端MD</button>
+  <button onclick="send('openLocalMd')">打开本地MD</button>
+</div>
+</div>
+
+<!-- 能力自测 -->
+<div class="section">
+<h3>⚡ 能力自测</h3>
+<div class="row"><button onclick="send('health')">health</button></div>
+<input id="cmd" placeholder="命令" value="getEngineInfo"><button onclick="send('exec',v('cmd'))">RPC 自测</button>
+<pre id="out" class="muted">（结果）</pre>
+</div>
+
+<script>
+// ── Native 桥 shim: 把 dao-bridge 的 vscode.postMessage 协议映射到手机版中继 ──
+var N = window.Native || {};
+function _conn(){ try{ return JSON.parse(N.conn?N.conn():"{}"); }catch(e){ return {}; } }
+function _relay(){ try{ return JSON.parse(N.relayStatus?N.relayStatus():"{}"); }catch(e){ return {}; } }
+function _push(){
+  var c=_conn(), r=_relay(), on=!!r.connected;
+  var pub = (c.url&&c.session)?(c.url.replace(/\/$/,'')+"/relay/"+c.session):"—";
+  var state={
+    url: on?pub:"", lastErr: on?null:(r.lastErr||null),
+    ws:{name:"RT Flow 手机版", root: c.session||"-"},
+    port:"DO", mode:"relay·Durable Object", protocol:"wss",
+    proxy:null, attempts:[{mode:"relay",proto:"wss",ok:on}],
+    agentCount: on?1:0, cfLoggedIn:false, cfEmail:"", session:c.session
+  };
+  _render(state);
+}
+function _result(op,ok,text){ var o=document.getElementById('out'); if(o){o.className='';o.textContent='['+op+'] '+(ok?'✓':'✗')+' '+(text||'');} }
+function _cloudMd(){
+  var c=_conn(); var pub=c.url.replace(/\/$/,'')+"/relay/"+c.session;
+  return ["# RT Flow 手机版 · 远程接入文档 (云端 Agent)","",
+    "手机已通过公网中继挂载, 任意云端 Agent 可用下列 REST 接口远程驱动手机扩展。","",
+    "- 公网入口: `"+pub+"`","- 鉴权: `Authorization: Bearer "+c.token+"`","- Session: `"+c.session+"`","",
+    "## 健康检查","```bash","curl -s -X POST "+pub+" \\","  -H 'Authorization: Bearer "+c.token+"' \\",
+    "  -H 'Content-Type: application/json' -d '{\"path\":\"/api/health\"}'","```","",
+    "## 调用扩展 RPC (切号/账号)","```bash","curl -s -X POST "+pub+" \\","  -H 'Authorization: Bearer "+c.token+"' \\",
+    "  -H 'Content-Type: application/json' \\","  -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"getState\"}}'","```","",
+    "> 安全边界: 仅暴露浏览器 RPC; `/api/exec` 等 shell 路由一律 403。"].join("\n");
+}
+function _localMd(){
+  var c=_conn();
+  return ["# RT Flow 手机版 · 本地接入说明","",
+    "本机 App 内置常驻前台服务, 宿主一个引擎 WebView 跑中继客户端 (出站 WSS)。","",
+    "- 中继: `"+c.url+"`","- Session: `"+c.session+"`","- 协议: 出站 WSS `/connect?session=…&token=…`, 入站 `/relay/<session>`","",
+    "面板「切号」开账号标签即在 App 内多实例浏览器并行; 「公网穿透」即本页。"].join("\n");
+}
+var vscode={ postMessage:function(m){ handle(m); } };
+function acquireVsCodeApi(){ return vscode; }
+function send(op,arg,extra){ handle(Object.assign({op:op,arg:arg},extra||{})); }
+function v(id){ return document.getElementById(id).value; }
+function handle(m){
+  var op=m.op, c=_conn();
+  if(op==='copyUrl'){ var u=c.url.replace(/\/$/,'')+"/relay/"+c.session; try{N.clip&&N.clip(u);}catch(e){} _result('copyUrl',true,'已复制公网入口'); return; }
+  if(op==='copyToken'){ try{N.clip&&N.clip(c.token||"");}catch(e){} _result('copyToken',true,'已复制 Token'); return; }
+  if(op==='restart'){ try{N.relayRestart&&N.relayRestart();}catch(e){} _result('restart',true,'已请求重连中继'); setTimeout(_push,800); return; }
+  if(op==='exportCloudMd'){ try{N.clip&&N.clip(_cloudMd());}catch(e){} _result('exportCloudMd',true,'云端Agent MD 已复制到剪贴板'); return; }
+  if(op==='exportLocalMd'){ try{N.clip&&N.clip(_localMd());}catch(e){} _result('exportLocalMd',true,'本地Agent MD 已复制到剪贴板'); return; }
+  if(op==='openCloudMd'){ try{N.openText&&N.openText("云端Agent MD",_cloudMd());}catch(e){} return; }
+  if(op==='openLocalMd'){ try{N.openText&&N.openText("本地Agent MD",_localMd());}catch(e){} return; }
+  if(op==='health'){
+    var r=_relay();
+    _result('health', !!r.connected, r.connected?('已连接 · session='+(c.session||'')):'未连接/连接中');
+    return;
+  }
+  if(op==='exec'){ // 手机版: 无 shell, 转为本地 RPC 自测 (经引擎); 真正的远程 RPC 走中继, 此处只示状态
+    _result('exec', true, '手机版穿透只暴露浏览器 RPC (无 shell)。远程 Agent 请走 /api/rpc; 当前命令: '+(m.arg||''));
+    return;
+  }
+  if(op==='cfLogin'||op==='cfBrowserLogin'||op==='openCf'||op==='logout'){
+    _result(op, true, '命名隧道为桌面 dao-bridge 功能。手机版穿透由生产中继托管, 公网入口固定 (session='+(c.session||'')+'), 无需 CloudFlare。');
+    return;
+  }
+  _result(op||'?', false, '未知操作');
+}
+
+// ── 渲染 (自 dao-bridge 前端 render 逻辑 verbatim · 仅 stat 文案按手机版微调) ──
+function _render(s){
+  s=s||{}; var on=!!s.url;
+  document.getElementById('dot').className='dot '+(on?'ok':(s.lastErr?'bad':'pending'));
+  document.getElementById('stat').textContent=on?'已打通 · 公网在线 · 可远程接入':(s.lastErr?(''+s.lastErr):'隧道启动中…');
+  document.getElementById('url').textContent=s.url||'—';
+  document.getElementById('ws').textContent=s.ws?(s.ws.name+' · '+s.ws.root):'—';
+  document.getElementById('mode').textContent=':'+s.port+' / '+s.mode+(s.protocol?' / '+s.protocol:'');
+  var chain=(s.attempts||[]).map(function(a){return a.mode+'/'+a.proto+(a.ok?'✓':'✗');}).join(' → ');
+  document.getElementById('net').textContent=(s.proxy?('代理 '+s.proxy):'直连(无代理)')+(chain?(' · '+chain):'');
+  document.getElementById('agents').textContent=String(s.agentCount||0);
+  var loggedIn=!!(s.cfLoggedIn||s.mode==='named');
+  document.getElementById('logoutBtn').style.display=loggedIn?'block':'none';
+  var cfSt=document.getElementById('cfStatus');
+  if(loggedIn){cfSt.textContent='✓ 用户通道'+(s.cfEmail?(' · '+s.cfEmail):'')+(s.mode==='named'?'（命名隧道运行中）':'');cfSt.style.color='#3fb950';document.getElementById('cfLoginForm').style.display='none';}
+  else{cfSt.textContent='未配置（使用零配置快速隧道）';cfSt.style.color='';document.getElementById('cfLoginForm').style.display='block';}
+}
+setInterval(_push, 1500); _push();
+</script>
+</body></html>
