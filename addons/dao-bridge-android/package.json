@@ -1,0 +1,11 @@
+{
+  "name": "dao-bridge-android",
+  "version": "1.0.0",
+  "private": true,
+  "description": "dao-bridge Android/Termux flavor: reuses ../dao-bridge core (outbound WS relay + local HTTP API) and adds /api/device via termux-api. Authorized-device remote management only.",
+  "main": "agent-android.js",
+  "scripts": {
+    "postinstall": "node -e \"try{require('child_process').execSync('npm install --no-audit --no-fund',{cwd:require('path').join(__dirname,'..','dao-bridge'),stdio:'inherit'})}catch(e){process.exit(0)}\"",
+    "start": "node agent-android.js"
+  }
+}
