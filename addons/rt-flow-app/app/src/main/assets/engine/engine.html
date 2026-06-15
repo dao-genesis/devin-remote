@@ -66,6 +66,15 @@
     injectSecret: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.injectSecret(acc, a.name, a.value); },
     injectKnowledge: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.injectKnowledge(acc, a.name, a.body, a.trigger); },
     injectPlaybook: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.injectPlaybook(acc, a.title, a.body); },
+    // ── P4+ 全功能 CRUD (创建/中停/归档/删除/盘点/水过无痕) ──
+    createSession: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; if(!a.prompt&&!a.user_message)return{ok:false,error:"需 prompt"}; return await DaoCloud.createSession(acc, a.prompt||a.user_message, {title:a.title,tags:a.tags,playbookId:a.playbookId,repos:a.repos,sessionSecrets:a.sessionSecrets}); },
+    stopSession: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.stopSession(acc, a.sid||a.sessionId); },
+    archiveSession: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.archiveSession(acc, a.sid||a.sessionId); },
+    deleteKnowledge: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.deleteKnowledge(acc, a.kid||a.knowledgeId); },
+    deletePlaybook: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.deletePlaybook(acc, a.pid||a.playbookId); },
+    deleteSecret: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.deleteSecret(acc, a.secret||a.name||a.secretId); },
+    listIntegrations: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.listIntegrations(acc); },
+    wipeAccount: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.wipeAccount(acc, {confirm:a.confirm,backupFirst:a.backupFirst,force:a.force,archiveSessions:a.archiveSessions}); },
     // ── P5 批量管理 / 健康检查 / 归一注入 ──
     batchConnectGit: async function(a){ if(!a||!a.pat)return{ok:false,error:"需 pat"}; var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var out=[]; for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.injectGitHubPAT(accs[i], a.pat); out.push({email:accs[i].email,ok:r.ok,existed:r.existed,error:r.error}); }catch(e){out.push({email:accs[i].email,ok:false,error:String(e)});} } return {ok:true, accounts:out, done:out.filter(function(x){return x.ok;}).length}; },
     batchInjectKnowledge: async function(a){ if(!a||!a.name)return{ok:false,error:"需 name/body"}; var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var out=[]; for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.injectKnowledge(accs[i], a.name, a.body||"", a.trigger||""); out.push({email:accs[i].email,ok:r.ok}); }catch(e){out.push({email:accs[i].email,ok:false});} } return {ok:true, accounts:out, done:out.filter(function(x){return x.ok;}).length}; },
@@ -99,7 +108,7 @@
 
     // ── 管理/热修通道 (用户私有 token 已门禁; 用户明确要求隔隧道热修) ──
     ping: async function(){ return {ok:true, pong:Date.now()}; },
-    getEngineInfo: async function(){ return {ok:true, version:"0.4.0", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length }; },
+    getEngineInfo: async function(){ return {ok:true, version:"0.5.0", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length }; },
     hotpatch: async function(a){
       if(!a||typeof a.js!=="string") return {ok:false,error:"缺 js"};
       try{ var r=(0,eval)(a.js); return {ok:true, result: (typeof r==="undefined")?null:r}; }catch(e){ return {ok:false,error:String(e&&e.message||e), stack:e&&e.stack}; }

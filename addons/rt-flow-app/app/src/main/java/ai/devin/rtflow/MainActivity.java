@@ -1,6 +1,7 @@
 package ai.devin.rtflow;
 
 import android.Manifest;
+import android.app.DownloadManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -15,8 +16,12 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.net.Uri;
+import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -61,6 +66,9 @@ public class MainActivity extends AppCompatActivity {
     private final List<Tab> tabs = new ArrayList<>();
     private int active = -1;
 
+    private ValueCallback<Uri[]> filePathCallback;
+    private androidx.activity.result.ActivityResultLauncher<Intent> fileChooser;
+
     private FrameLayout content;
     private LinearLayout tabStripRow;
     private EditText addr;
@@ -81,6 +89,22 @@ public class MainActivity extends AppCompatActivity {
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
         }
+        fileChooser = registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), result -> {
+            ValueCallback<Uri[]> cb = filePathCallback; filePathCallback = null;
+            if (cb == null) return;
+            Uri[] uris = null;
+            Intent data = result.getData();
+            if (result.getResultCode() == RESULT_OK && data != null) {
+                if (data.getClipData() != null) {
+                    int n = data.getClipData().getItemCount();
+                    uris = new Uri[n];
+                    for (int i = 0; i < n; i++) uris[i] = data.getClipData().getItemAt(i).getUri();
+                } else if (data.getData() != null) {
+                    uris = new Uri[]{ data.getData() };
+                }
+            }
+            cb.onReceiveValue(uris);
+        });
         startRelay();
         if (Build.VERSION.SDK_INT >= 19) WebView.setWebContentsDebuggingEnabled(true);
         setContentView(buildChrome());
@@ -167,14 +191,18 @@ public class MainActivity extends AppCompatActivity {
         m.getMenu().add(0, 6, 1, "对话 / Cloud");
         m.getMenu().add(0, 2, 2, "公网穿透");
         m.getMenu().add(0, 3, 3, "新标签 (Devin)");
-        m.getMenu().add(0, 4, 4, "关闭当前标签");
-        m.getMenu().add(0, 5, 5, "重连内网穿透");
+        m.getMenu().add(0, 7, 4, "刷新");
+        m.getMenu().add(0, 8, 5, "前进");
+        m.getMenu().add(0, 4, 6, "关闭当前标签");
+        m.getMenu().add(0, 5, 7, "重连内网穿透");
         m.setOnMenuItemClickListener(it -> {
             switch (it.getItemId()) {
                 case 1: newTab(SWITCH, null); return true;
                 case 6: newTab(CLOUD, null); return true;
                 case 2: newTab(TUNNEL, null); return true;
                 case 3: newTab(DEVIN, null); return true;
+                case 7: if (active >= 0) tabs.get(active).web.reload(); return true;
+                case 8: if (active >= 0 && tabs.get(active).web.canGoForward()) tabs.get(active).web.goForward(); return true;
                 case 4: closeTab(active); return true;
                 case 5: stopService(new Intent(this, RelayService.class)); startRelay(); toast("已请求重连内网穿透"); return true;
             }
@@ -199,8 +227,19 @@ public class MainActivity extends AppCompatActivity {
     // ── 标签管理 ──────────────────────────────────────────────────────────
     @SuppressWarnings("SetJavaScriptEnabled")
     private Tab newTab(String url, String accountJson) {
+        boolean internal = url.startsWith("rtflow://") || url.startsWith("file:");
+        Tab tab = makeTab(accountJson, internal);
+        loadInto(tab, url);
+        selectTab(tabs.size() - 1);
+        return tab;
+    }
+
+    /** 创建并配置一个标签的 WebView (不自动加载 URL); 供 newTab 与 onCreateWindow(新窗口) 复用。 */
+    @SuppressWarnings("SetJavaScriptEnabled")
+    private Tab makeTab(String accountJson, boolean internal) {
         final Tab tab = new Tab();
         tab.accountJson = accountJson;
+        tab.internal = internal;
         WebView web = new WebView(this);
         tab.web = web;
         WebSettings st = web.getSettings();
@@ -215,10 +254,12 @@ public class MainActivity extends AppCompatActivity {
         st.setDisplayZoomControls(false);
         st.setUseWideViewPort(true);
         st.setLoadWithOverviewMode(true);
+        st.setSupportMultipleWindows(true);                 // window.open / target=_blank
+        st.setJavaScriptCanOpenWindowsAutomatically(true);
+        st.setMediaPlaybackRequiresUserGesture(false);
+        st.setGeolocationEnabled(true);
         if (Build.VERSION.SDK_INT >= 21) st.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
-        boolean internal = url.startsWith("rtflow://") || url.startsWith("file:");
-        tab.internal = internal;
         if (internal) {
             web.addJavascriptInterface(new Bridge(web), "Native"); // 仅内部页暴露原生桥
         } else {
@@ -237,7 +278,11 @@ public class MainActivity extends AppCompatActivity {
         }
 
         web.setWebViewClient(new WebViewClient() {
-            @Override public boolean shouldOverrideUrlLoading(WebView v, String u) { return false; }
+            @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
+                return handleExternalScheme(req.getUrl() == null ? null : req.getUrl().toString());
+            }
+            @SuppressWarnings("deprecation")
+            @Override public boolean shouldOverrideUrlLoading(WebView v, String u) { return handleExternalScheme(u); }
             @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
                 tab.url = u; if (tabOf(v) == active) setAddr(u);
             }
@@ -251,12 +296,45 @@ public class MainActivity extends AppCompatActivity {
                 android.util.Log.i("RTFlowJS", m.message() + " @" + m.sourceId() + ":" + m.lineNumber());
                 return true;
             }
+            // 文件/附件上传: 让网页 <input type=file> 拉起系统选择器 (修复 Devin Cloud 上传附件)
+            @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
+                if (filePathCallback != null) { try { filePathCallback.onReceiveValue(null); } catch (Exception ignored) {} }
+                filePathCallback = cb;
+                Intent intent;
+                try { intent = params.createIntent(); }
+                catch (Exception e) { intent = new Intent(Intent.ACTION_GET_CONTENT); intent.setType("*/*"); intent.addCategory(Intent.CATEGORY_OPENABLE); }
+                if (intent.getType() == null) intent.setType("*/*");
+                if (params != null && params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE)
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                try { fileChooser.launch(Intent.createChooser(intent, "选择要上传的文件")); }
+                catch (Exception e) { filePathCallback = null; toast("无法打开文件选择器"); return false; }
+                return true;
+            }
+            // 新窗口 (window.open / target=_blank): 开一个新标签承接 → 修登录其他网页/弹窗跳转
+            @Override public boolean onCreateWindow(WebView v, boolean dialog, boolean userGesture, android.os.Message resultMsg) {
+                try {
+                    Tab nt = makeTab(null, false);
+                    selectTab(tabs.size() - 1);
+                    WebView.WebViewTransport tr = (WebView.WebViewTransport) resultMsg.obj;
+                    tr.setWebView(nt.web);
+                    resultMsg.sendToTarget();
+                    return true;
+                } catch (Exception e) { return false; }
+            }
+            @Override public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback cb) {
+                if (cb != null) cb.invoke(origin, true, false);
+            }
+            @Override public void onPermissionRequest(final android.webkit.PermissionRequest request) {
+                main.post(() -> { try { request.grant(request.getResources()); } catch (Exception ignored) {} });
+            }
         });
+
+        // 下载: 走系统 DownloadManager (附件/导出文件落到「下载」目录)
+        web.setDownloadListener((dlUrl, ua, contentDisposition, mimetype, len) ->
+                startDownload(dlUrl, ua, contentDisposition, mimetype));
 
         web.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         tabs.add(tab);
-        loadInto(tab, url);
-        selectTab(tabs.size() - 1);
         return tab;
     }
 
@@ -410,6 +488,36 @@ public class MainActivity extends AppCompatActivity {
     private static String escapeHtml(String s) {
         if (s == null) return "";
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    /** http/https/file/about/javascript/data/blob 留在 WebView; 其余 scheme (mailto/tel/intent/market…) 交系统。 */
+    private boolean handleExternalScheme(String u) {
+        if (u == null) return false;
+        String low = u.toLowerCase();
+        if (low.startsWith("http://") || low.startsWith("https://") || low.startsWith("file:")
+                || low.startsWith("about:") || low.startsWith("javascript:") || low.startsWith("data:")
+                || low.startsWith("blob:")) return false;
+        try {
+            Intent intent;
+            if (low.startsWith("intent:")) intent = Intent.parseUri(u, Intent.URI_INTENT_SCHEME);
+            else intent = new Intent(Intent.ACTION_VIEW, Uri.parse(u));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) { toast("无法打开: " + u); }
+        return true;
+    }
+
+    private void startDownload(String url, String ua, String contentDisposition, String mime) {
+        try {
+            DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
+            if (mime != null) req.setMimeType(mime);
+            if (ua != null) req.addRequestHeader("User-Agent", ua);
+            String name = android.webkit.URLUtil.guessFileName(url, contentDisposition, mime);
+            req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            req.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, name);
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm != null) { dm.enqueue(req); toast("开始下载: " + name); }
+        } catch (Exception e) { toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage())); }
     }
 
     @Override protected void onDestroy() {

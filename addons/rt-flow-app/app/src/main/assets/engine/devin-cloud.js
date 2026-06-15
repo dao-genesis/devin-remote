@@ -198,12 +198,90 @@
     return { ok: false, connections: [], count: 0, error: errOf(r) };
   }
 
+  // ── 会话创建 / 中停 / 归档 (复刻桌面 createSession/stopSession, 端点经桌面实跑确证) ──
+  async function createSession(acc, prompt, opts) {
+    opts = opts || {};
+    if (!acc || !acc.auth1 || !acc.orgId) return { ok: false, error: "需先登录(auth1)" };
+    var payload = { user_message: String(prompt || ""), prompt: String(prompt || "") };
+    if (opts.title) payload.title = opts.title;
+    if (opts.tags) payload.tags = opts.tags;
+    if (opts.playbookId) payload.playbook_id = opts.playbookId;
+    if (opts.repos) payload.repos = opts.repos;
+    if (opts.sessionSecrets) payload.session_secrets = opts.sessionSecrets;
+    var r = await jpost(APP + "/api/sessions", acc, payload);
+    if (r.status === 200 || r.status === 201) { var j = r.json || {}; return { ok: true, devinId: j.devin_id || j.session_id || j.id, isNewSession: j.is_new_session, createdAt: j.created_at, raw: j }; }
+    return { ok: false, status: r.status, error: errOf(r) };
+  }
+  async function archiveSession(acc, sid) { var r = await jpost(APP + "/api/sessions/" + sid + "/archive", acc, {}); return { ok: r.status >= 200 && r.status < 300, status: r.status }; }
+  async function stopSession(acc, sid) {
+    var cands = ["/sessions/" + sid + "/archive", "/sessions/" + sid + "/stop", "/sessions/" + sid + "/pause", "/sessions/" + sid + "/sleep", "/sessions/" + sid + "/cancel"];
+    var tried = [];
+    for (var i = 0; i < cands.length; i++) { var r = await jpost(APP + "/api" + cands[i], acc, {}); tried.push({ url: cands[i], status: r.status }); if (r.status >= 200 && r.status < 300) return { ok: true, stopped: true, endpoint: cands[i], status: r.status, tried: tried }; }
+    return { ok: false, stopped: false, tried: tried, error: "无可用中停端点 (全部非 2xx)" };
+  }
+
+  // ── 删除接口全集 (水过无痕底层; 端点取自桌面真跑确证) ──────────────────────
+  function okDelete(s) { return s === 200 || s === 202 || s === 204 || s === 404; }
+  async function deleteKnowledge(acc, id) { var r = await reqRaw("DELETE", APP + "/api/org-" + bare(acc.orgId) + "/learning/" + id, acc); return { ok: okDelete(r.status), status: r.status }; }
+  async function deletePlaybook(acc, id) {
+    var r = await reqRaw("DELETE", APP + "/api/playbooks/" + id, acc);
+    if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status };
+    var r2 = await reqRaw("DELETE", APP + "/api/org-" + bare(acc.orgId) + "/playbooks/" + id, acc);
+    if (r2.status >= 200 && r2.status < 300) return { ok: true, status: r2.status };
+    if (r.status === 404 && r2.status === 404) return { ok: true, status: 404 };
+    return { ok: false, status: r.status };
+  }
+  async function deleteSecret(acc, idOrName) {
+    var id = idOrName;
+    if (!/^[a-z]+-/.test(String(idOrName))) {
+      var list = await listSecrets(acc);
+      var hit = (list.secrets || []).find(function (s) { return s.name === idOrName || s.id === idOrName; });
+      if (!hit) return { ok: true, status: 404 };
+      id = hit.id;
+    }
+    var r = await reqRaw("DELETE", APP + "/api/secrets/" + id, acc);
+    if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status };
+    var r2 = await reqRaw("DELETE", APP + "/api/org-" + bare(acc.orgId) + "/secrets/" + id, acc);
+    if (r2.status >= 200 && r2.status < 300) return { ok: true, status: r2.status };
+    if (r.status === 404 && r2.status === 404) return { ok: true, status: 404 };
+    return { ok: false, status: r.status };
+  }
+
+  // ── 集成盘点 (Git/密钥/知识库/剧本 一次拉齐) ──────────────────────────────
+  async function listIntegrations(acc) {
+    if (!acc || !acc.auth1 || !acc.orgId) return { ok: false, error: "需先登录(auth1)" };
+    var git = await checkGit(acc), sec = await listSecrets(acc), kn = await listKnowledge(acc), pb = await listPlaybooks(acc);
+    return {
+      ok: true,
+      git: { count: git.count || 0, connections: git.connections || [] },
+      secrets: { count: (sec.secrets || []).length, list: sec.secrets || [] },
+      knowledge: { count: (kn.learnings || []).length, list: kn.learnings || [] },
+      playbooks: { count: (pb.playbooks || []).length, list: pb.playbooks || [] }
+    };
+  }
+
+  // ── 水过无痕: 先全量备份(可选)→ 删全部知识库/密钥/剧本 + 归档全部对话 ──────────
+  async function wipeAccount(acc, opts) {
+    opts = opts || {};
+    if (!opts.confirm) return { ok: false, error: "危险操作: 需 confirm:true (将删除该号全部知识库/密钥/剧本; archiveSessions:true 则一并归档对话)" };
+    var report = { knowledge: 0, secrets: 0, playbooks: 0, archived: 0, fails: [] };
+    if (opts.backupFirst) { try { var b = await backupAccount(acc, "conversation"); report.backup = b.count || 0; } catch (e) { if (!opts.force) return { ok: false, error: "备份失败, 已中止 (force:true 可跳过)" }; } }
+    try { var kn = await listKnowledge(acc); var kl = kn.learnings || []; for (var i = 0; i < kl.length; i++) { var k = kl[i]; if (k.is_builtin || k.builtin) continue; var rr = await deleteKnowledge(acc, k.id); if (rr.ok) report.knowledge++; else report.fails.push("kn:" + k.id); } } catch (e) {}
+    try { var sec = await listSecrets(acc); var sl = sec.secrets || []; for (var j = 0; j < sl.length; j++) { var s = sl[j]; var rs = await deleteSecret(acc, s.id || s.name); if (rs.ok) report.secrets++; else report.fails.push("sec:" + (s.id || s.name)); } } catch (e) {}
+    try { var pb = await listPlaybooks(acc); var pl = pb.playbooks || []; for (var p = 0; p < pl.length; p++) { var rp = await deletePlaybook(acc, pl[p].id); if (rp.ok) report.playbooks++; else report.fails.push("pb:" + pl[p].id); } } catch (e) {}
+    if (opts.archiveSessions) { try { var ls = await listSessions(acc, 200); var ss = ls.sessions || []; for (var q = 0; q < ss.length; q++) { var sid = ss[q].devin_id || ss[q].session_id || ss[q].id; if (!sid) continue; var ra = await archiveSession(acc, sid); if (ra.ok) report.archived++; } } catch (e) {} }
+    return { ok: true, report: report };
+  }
+
   root.DaoCloud = {
     listSessions: listSessions, sessionDetail: sessionDetail, sessionMessages: sessionMessages,
     sessionEvents: sessionEvents, exportSession: exportSession, deleteSession: deleteSession,
     backupAccount: backupAccount, buildConversation: buildConversation, buildWorklog: buildWorklog,
     listSecrets: listSecrets, listKnowledge: listKnowledge, listPlaybooks: listPlaybooks,
     injectSecret: injectSecret, injectKnowledge: injectKnowledge, injectPlaybook: injectPlaybook,
-    injectGitHubPAT: injectGitHubPAT, checkGit: checkGit
+    injectGitHubPAT: injectGitHubPAT, checkGit: checkGit,
+    createSession: createSession, archiveSession: archiveSession, stopSession: stopSession,
+    deleteKnowledge: deleteKnowledge, deletePlaybook: deletePlaybook, deleteSecret: deleteSecret,
+    listIntegrations: listIntegrations, wipeAccount: wipeAccount
   };
 })(window);
