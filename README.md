@@ -34,10 +34,14 @@ devin-remote/
 │   └── dao-proxy-pro/        # ④ 底层提示词隔离替换 + 外接第三方模型路由
 │
 ├── addons/                   # ★ 辅助 4 · 独立插件（按需单独安装；"aux" 为 Windows 保留名故用 addons）
-│   ├── dao-bridge/           # ① 单独内网穿透本体（Cloudflare QUIC/HTTP2 隧道 + 远控 HTTP API）
+│   ├── dao-bridge/           # ① 内网穿透本体：默认 dao-relay 零账号 Worker 中继(URL 稳定)→连不上回退 cloudflared
+│   │   ├── dao-bridge-ext/   #     随 IDE 自启的 VS Code 插件（relay-first + cloudflared 自愈/断点续传/macOS 解包）
+│   │   └── agent.js/core.js  #     纯 Node 独立后端（NAS / 路由器 / 容器 / CI 等无 VSCode 环境）
 │   ├── rt-flow-mobile/       # ② 浏览器 / 手机版自动切号（Chromium MV3·非 VSIX）
 │   ├── devin-git-auth/       # ③ 多 Devin 账号绑定同一 GitHub
-│   └── dao-export/           # ④ 对话数据导出插件（单账号·VSIX）
+│   ├── dao-export/           # ④ 对话数据导出插件（单账号·VSIX）
+│   ├── dao-relay/            #   ↳ 内网穿透栈：中继 Worker 源码（归一入库·v2·(session,token) 零账号配对·一键部署）
+│   └── dao-bridge-android/   #   ↳ 内网穿透栈：手机端 Agent（Termux·复用 dao-bridge/core.js）
 │
 ├── cloud/                    # ★ 板块 3 · 供 Devin Cloud 全链路开发
 │   ├── export-accounts/      # ① 导出其他账号对话全流程（dao_export_all.py + 后端逆向指南）
@@ -83,9 +87,11 @@ devin-remote/
 
 ## ② 辅助 4 — addons/
 
-### dao-bridge · 单独内网穿透
+### dao-bridge · 内网穿透栈（relay-first · 零账号）
 
-quick tunnel 默认 + 凭证自动加载（`~/.dao/`）+ 命名隧道 token 持久化 + local-agent 深度控制 HTTP API。随 IDE 窗口启停，专穿当前工作区。
+**默认通道 = dao-relay Worker+DO 出站中继**（`dao-relay-do.zhouyoukang.workers.dev`）：零 Cloudflare 账号、URL 天然稳定（`…workers.dev/relay/<session>`）、纯出站无 50MB 二进制、适配一切平台；连不上才**自动回退 cloudflared**（命名隧道 → quick tunnel，http2 优先）。cloudflared 路径已做**自愈**（`--version` 探活 + 断点续传 + 半成品自动重下）与 **macOS `.tgz` 解包**。随 IDE 启停，零配置一键打通整机公网；`daoBridge.disableRelay` 可关中继。
+
+**内网穿透栈**：`dao-bridge-ext/`（VS Code 插件·默认通道）· `agent.js/core.js`（纯 Node 独立后端·全平台兜底）· [`dao-relay/`](addons/dao-relay/README.md)（中继 Worker·归一入库 v2·`(session,token)` 零账号配对）· [`dao-bridge-android/`](addons/dao-bridge-android/README.md)（Termux 手机端）。
 
 **源码**：`addons/dao-bridge/dao-bridge-ext/extension.js` · **核心本体**：`addons/dao-bridge/{agent,core}.js` · **📹 视频**：[▶ 教程](https://github.com/user-attachments/assets/8c4aec08-8357-44f2-a169-d44c8d055dd3)
 
