@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Devin Cloud · 对话</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:#0e1116;color:#cdd3de;font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
+.top{position:sticky;top:0;background:#161b22;border-bottom:1px solid #21262d;padding:8px 10px;z-index:5}
+.title{font-size:15px;font-weight:600;color:#e6edf3}
+.sub{font-size:11px;color:#8b949e;margin-top:2px}
+.acc-sel{width:100%;margin-top:6px;background:#0d1117;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:7px 8px;font-size:13px}
+.tb{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px;border-bottom:1px solid #21262d}
+.btn{background:#21262d;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer}
+.btn.pri{background:#0e639c;border-color:#0e639c;color:#fff}
+.btn:active{opacity:.7}
+#list{padding:6px 8px 60px}
+.row{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:9px 10px;margin-bottom:7px}
+.r1{display:flex;align-items:center;gap:7px}
+.st{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:#6e7681}
+.st.running{background:#3fb950}.st.finished{background:#58a6ff}.st.blocked{background:#f0883e}.st.expired{background:#f85149}
+.s-title{flex:1;font-size:13px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.s-meta{font-size:11px;color:#8b949e;margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
+.acts{display:flex;gap:6px;margin-top:7px}
+.b{flex:1;text-align:center;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer;color:#cdd3de}
+.b.del{color:#f85149}
+.empty{text-align:center;color:#6e7681;padding:30px 12px;font-size:13px}
+.toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:9px 14px;font-size:13px;opacity:0;transition:.2s;pointer-events:none;z-index:20;max-width:90%}
+.toast.show{opacity:1}.toast.fail{border-color:#f85149}.toast.ok{border-color:#3fb950}
+.footer{text-align:center;color:#484f58;font-size:11px;padding:14px}
+</style></head>
+<body>
+<div class="top">
+  <div class="title">Devin Cloud · 对话</div>
+  <div class="sub" id="sub">选择账号查看其云端会话</div>
+  <select class="acc-sel" id="accSel" onchange="onAcc()"></select>
+</div>
+<div class="tb">
+  <button class="btn pri" onclick="refresh()">&#128260; 刷新会话</button>
+  <button class="btn" onclick="backupOne()">&#128190; 备份本号</button>
+  <button class="btn" onclick="backupAllAcc()">&#128229; 备份全部</button>
+  <button class="btn" onclick="showIntegrations()">&#128279; 集成/Git</button>
+</div>
+<div id="list"><div class="empty">加载中…</div></div>
+<div class="footer">RT Flow 手机版 · 对话/Cloud · 事件流深提取 · 道法自然</div>
+<div class="toast" id="toast"></div>
+
+<script src="devin-core.js"></script>
+<script src="devin-cloud.js"></script>
+<script>
+var N = window.Native || {};
+function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
+function toast(m,bad){ var t=document.getElementById("toast"); t.textContent=m; t.className="toast show"+(bad?" fail":" ok"); setTimeout(function(){t.className="toast";},2000); }
+function curAcc(){ var id=document.getElementById("accSel").value; return DaoCore.findAcc(id); }
+
+function fillAccounts(){
+  var sel=document.getElementById("accSel");
+  var accs=DaoCore.loadAcc().filter(function(a){return a.auth1&&a.orgId;});
+  if(!accs.length){ sel.innerHTML='<option value="">无已登录账号 (请先到切号板登录)</option>'; return null; }
+  var active=DaoCore.getActive();
+  sel.innerHTML=accs.map(function(a){ return '<option value="'+_esc(a.id)+'"'+(a.id===active?" selected":"")+'>'+_esc(a.email||a.id)+(a.orgName?(" · "+_esc(a.orgName)):"")+'</option>'; }).join("");
+  if(!sel.value) sel.value=accs[0].id;
+  return curAcc();
+}
+
+function stClass(s){ s=String(s||"").toLowerCase(); if(/run|work|active/.test(s))return"running"; if(/finish|complete|done/.test(s))return"finished"; if(/block|wait|stuck/.test(s))return"blocked"; if(/expir|fail|error/.test(s))return"expired"; return""; }
+function fmtTime(t){ if(!t)return""; try{ var d=new Date(typeof t==="number"?t:Date.parse(t)); if(isNaN(d))return String(t).slice(0,16); return d.toLocaleString(); }catch(e){return String(t).slice(0,16);} }
+
+var SESSIONS=[];
+function rowHtml(s,i){
+  var sid=s.devin_id||s.session_id||s.id||"";
+  var title=s.title||s.name||s.prompt||sid;
+  var st=s.status_enum||s.status||s.state||"";
+  var created=s.created_at||s.created||s.created_at_ms||"";
+  var updated=s.updated_at||s.last_updated_at||s.updated||"";
+  return '<div class="row" data-sid="'+_esc(sid)+'">'+
+    '<div class="r1"><span class="st '+stClass(st)+'" title="'+_esc(st)+'"></span>'+
+    '<span class="s-title" title="'+_esc(title)+'">'+_esc(String(title).slice(0,80))+'</span></div>'+
+    '<div class="s-meta"><span>'+_esc(String(sid).slice(0,24))+'</span>'+(st?'<span>'+_esc(st)+'</span>':'')+(created?'<span>建:'+_esc(fmtTime(created))+'</span>':'')+'</div>'+
+    '<div class="acts">'+
+      '<span class="b" onclick="viewMd('+i+',\'conversation\')">&#128172; 对话</span>'+
+      '<span class="b" onclick="viewMd('+i+',\'worklog\')">&#128221; 工作日志</span>'+
+      '<span class="b del" onclick="delSession('+i+')">&#128465; 删除</span>'+
+    '</div></div>';
+}
+
+async function refresh(){
+  var acc=curAcc(); var list=document.getElementById("list");
+  if(!acc){ list.innerHTML='<div class="empty">无已登录账号 — 请先到「切号面板」用邮箱密码登录解锁。</div>'; return; }
+  list.innerHTML='<div class="empty">拉取 '+_esc(acc.email)+' 的云端会话…</div>';
+  document.getElementById("sub").textContent=acc.email+" · "+(acc.orgName||acc.orgId);
+  try{
+    var r=await DaoCloud.listSessions(acc, 100);
+    if(!r.ok){ list.innerHTML='<div class="empty">拉取失败: '+_esc(r.error||"")+'</div>'; return; }
+    SESSIONS=r.sessions||[];
+    if(!SESSIONS.length){ list.innerHTML='<div class="empty">该账号暂无云端会话</div>'; return; }
+    list.innerHTML=SESSIONS.map(rowHtml).join("");
+    toast("✓ "+SESSIONS.length+" 个会话");
+  }catch(e){ list.innerHTML='<div class="empty">异常: '+_esc(String(e))+'</div>'; }
+}
+function onAcc(){ refresh(); }
+
+async function viewMd(i,kind){
+  var acc=curAcc(); var s=SESSIONS[i]; if(!acc||!s)return;
+  var sid=s.devin_id||s.session_id||s.id;
+  toast("提取"+(kind==="worklog"?"工作日志":"对话")+"…");
+  try{
+    var r=await DaoCloud.exportSession(acc, sid, kind);
+    if(!r.ok){ toast("提取失败: "+(r.error||""),true); return; }
+    try{ N.openText && N.openText((r.title||sid)+(kind==="worklog"?" · worklog":""), r.md); }catch(e){}
+    try{ N.clip && N.clip(r.md); }catch(e){}
+    toast("✓ 已展开并复制 ("+(r.events||0)+" 事件)"+(r.fallback?" [messages兜底]":""));
+  }catch(e){ toast("异常: "+e,true); }
+}
+async function delSession(i){
+  var acc=curAcc(); var s=SESSIONS[i]; if(!acc||!s)return;
+  var sid=s.devin_id||s.session_id||s.id;
+  if(!confirm("删除会话 "+(s.title||sid)+" ?"))return;
+  toast("删除中…");
+  var r=await DaoCloud.deleteSession(acc, sid);
+  if(r.ok){ SESSIONS.splice(i,1); document.getElementById("list").innerHTML=SESSIONS.map(rowHtml).join("")||'<div class="empty">该账号暂无云端会话</div>'; toast("✓ 已删除"); }
+  else toast("删除失败 (HTTP "+(r.status||"")+")",true);
+}
+async function backupOne(){
+  var acc=curAcc(); if(!acc){ toast("无账号",true); return; }
+  toast("备份 "+acc.email+" 全部会话…");
+  var r=await DaoCloud.backupAccount(acc, "conversation");
+  if(!r.ok){ toast("备份失败: "+(r.error||""),true); return; }
+  var md=["# RT Flow 备份 · "+acc.email,"共 "+r.count+" 个会话","",""].concat(r.sessions.map(function(s){return "\n\n================ "+s.title+" ================\n\n"+s.md;})).join("");
+  try{ N.clip && N.clip(md); }catch(e){}
+  try{ N.openText && N.openText("备份 "+acc.email+" ("+r.count+")", md); }catch(e){}
+  toast("✓ 备份完成 "+r.count+" 个会话 (已复制)");
+}
+async function backupAllAcc(){
+  var accs=DaoCore.loadAcc().filter(function(a){return a.auth1&&a.orgId;});
+  if(!accs.length){ toast("无已登录账号",true); return; }
+  var all=["# RT Flow 全量备份 · "+accs.length+" 账号",""]; var tot=0;
+  for(var i=0;i<accs.length;i++){
+    toast("备份 "+(i+1)+"/"+accs.length+" · "+accs[i].email);
+    try{ var r=await DaoCloud.backupAccount(accs[i],"conversation"); if(r.ok){ tot+=r.count; all.push("\n\n##### 账号 "+accs[i].email+" ("+r.count+") #####"); r.sessions.forEach(function(s){ all.push("\n\n--- "+s.title+" ---\n\n"+s.md); }); } }catch(e){}
+  }
+  var md=all.join("");
+  try{ N.clip && N.clip(md); }catch(e){}
+  try{ N.openText && N.openText("全量备份 ("+tot+")", md); }catch(e){}
+  toast("✓ 全量备份完成 · "+tot+" 个会话");
+}
+async function showIntegrations(){
+  var acc=curAcc(); if(!acc){ toast("无账号",true); return; }
+  toast("查询集成…");
+  try{
+    var g=await DaoCloud.checkGit(acc);
+    var s=await DaoCloud.listSecrets(acc);
+    var k=await DaoCloud.listKnowledge(acc);
+    var p=await DaoCloud.listPlaybooks(acc);
+    var md=["# 集成盘点 · "+acc.email,"",
+      "## Git 连接 ("+(g.count||0)+")",(g.connections||[]).map(function(c){return "- "+(c.type||c.provider||"git")+" "+(c.username||c.account||c.id||"");}).join("\n")||"(无)","",
+      "## Secrets ("+((s.secrets||[]).length)+")",(s.secrets||[]).map(function(x){return "- "+(x.key||x.name);}).join("\n")||"(无)","",
+      "## Knowledge ("+((k.learnings||[]).length)+")",(k.learnings||[]).map(function(x){return "- "+(x.name||x.title);}).join("\n")||"(无)","",
+      "## Playbooks ("+((p.playbooks||[]).length)+")",(p.playbooks||[]).map(function(x){return "- "+(x.title||x.name);}).join("\n")||"(无)"
+    ].join("\n");
+    try{ N.openText && N.openText("集成盘点 "+acc.email, md); }catch(e){}
+    try{ N.clip && N.clip(md); }catch(e){}
+    toast("✓ Git"+(g.count||0)+" Secret"+((s.secrets||[]).length)+" Know"+((k.learnings||[]).length)+" PB"+((p.playbooks||[]).length));
+  }catch(e){ toast("异常: "+e,true); }
+}
+
+fillAccounts();
+refresh();
+</script>
+</body></html>

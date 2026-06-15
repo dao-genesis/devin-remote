@@ -1,0 +1,6 @@
+{
+  "url": "https://<your-relay>.workers.dev",
+  "token": "<DAO_TOKEN>",
+  "session": "dao-phone-<name>",
+  "enabled": true
+}
