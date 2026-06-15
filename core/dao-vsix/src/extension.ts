@@ -2197,7 +2197,7 @@ function bridgeGetState(): any {
 }
 
 function getDaoCloudMiddlePanelHtml(st: any): string {
-    const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, injecting, bridge } = st;
+    const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, injecting, bridge, hostCaps } = st;
     // 帛书·「道生一，一生二，二生三，三生万物」
     // Overview: Codeium API 数据（已工作 — devin-session-token$ 对 Codeium API 有效）
     // Sessions/Knowledge/Secrets/Integrations: simpleBrowser 打开 app.devin.ai（共享 Electron session）
@@ -2352,14 +2352,20 @@ const S={
     hostname:'${mpEsc(hostname)}'
   },
   bridge:${JSON.stringify(bridge || null)},
+  hostCaps:${JSON.stringify(hostCaps || { appName: 'VS Code', isCascade: false, hasConvTracking: false })},
   inject:null,
   injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],messageLimit:null,lastInjectedOrg:''},
   tab:'overview',
   data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]},
-  backups:{accounts:[]}
+  backups:{accounts:[]},
+  locks:{knowledge:[],playbooks:[],secrets:[],mcps:[]}
 };
 function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function cmd(c,d){vscode.postMessage(Object.assign({command:c},d||{}))}
+// 道·单账号手动锁定: 锁住的条目在切号反向注入 autoCleanup 时不被清理
+function lkIs(kind,name){var a=(S.locks||{})[kind]||[];return a.some(function(x){return String(x).toLowerCase()===String(name).toLowerCase()})}
+function lkToggle(kind,name){cmd('toggleManualLock',{kind:kind,name:name})}
+function lkBtn(kind,name){var on=lkIs(kind,name);return '<button class="btn sm" style="'+(on?'color:var(--success);border-color:var(--success)':'color:var(--muted)')+'" onclick="lkToggle(&#39;'+kind+'&#39;,&#39;'+esc(name)+'&#39;)">'+(on?'🔒锁':'🔓')+'</button>'}
 function sw(t){
   S.tab=t;
   document.querySelectorAll('.ni').forEach(n=>n.classList.toggle('active',n.dataset.tab===t));
@@ -2480,6 +2486,7 @@ function rBackupsData(tree,err){
   v.innerHTML=h;
 }
 // 帛书·「为而弗恃」: API Key 全程底层自动获取, 面板永不出现手动输入 — 旧 submitCogKey* 已删
+function rHost(){var hc=S.hostCaps||{};var nm=hc.appName||'VS Code';var ct=hc.hasConvTracking;return '<div class="st">运行环境 · 适配</div><div class="card"><div class="cr"><span class="l">IDE</span><span class="v">'+esc(nm)+'</span></div><div class="cr"><span class="l">Devin Cloud 全功能</span><span class="v" style="color:var(--success);font-size:10px">✓ 追踪·备份·切号反向注入·K/P/S/MCP·多实例</span></div><div class="cr"><span class="l">Cascade 对话追踪/备份</span><span class="v" style="font-size:10px;color:'+(ct?'var(--success)':'var(--warn)')+'">'+(ct?'✓ 可用':'⚠ 此IDE非Cascade·其余全部正常')+'</span></div></div>'}
 function rO(){
   const v=document.getElementById('v-overview');
   if(!S.auth.loggedIn){
@@ -2500,7 +2507,7 @@ function rO(){
     const i=S.inject;
     ih='<div class="st">注入状态</div><div class="card"><div class="cr"><span class="l"><span class="tag secret">S</span> Secret</span><span class="v" style="color:'+(i.secret?'var(--success)':'var(--danger)')+'">'+(i.secret?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag knowledge">K</span> Knowledge</span><span class="v" style="color:'+(i.knowledge?'var(--success)':'var(--danger)')+'">'+(i.knowledge?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag playbook">P</span> Playbook</span><span class="v" style="color:'+(i.playbook?'var(--success)':'var(--danger)')+'">'+(i.playbook?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag git">G</span> Git</span><span class="v" style="color:'+(i.git?'var(--success)':'var(--danger)')+'">'+(i.git?'✓':'✗')+'</span></div></div>';
   }
-  v.innerHTML='<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+ih+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button></div>'+rBridge()+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn" style="background:#6f42c1" onclick="cmd(&#39;syncBrowser&#39;)" title="在电脑浏览器开独立窗口自动登录当前账号·多账号各开并行窗口互不串号">🖥️ 浏览器同步</button><button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
+  v.innerHTML=rHost()+'<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+ih+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button></div>'+rBridge()+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn" style="background:#6f42c1" onclick="cmd(&#39;syncBrowser&#39;)" title="在电脑浏览器开独立窗口自动登录当前账号·多账号各开并行窗口互不串号">🖥️ 浏览器同步</button><button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
   // 内网穿透已上移至主页第二板块 (rBridge 见上方拼装)
 }
 function rBridge(){
@@ -2522,7 +2529,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if(d.command==='toggleManualLock'&&S.tab){cmd('loadTabData',{tab:S.tab})}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab);if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
@@ -2546,22 +2553,22 @@ function rT(tab,items,err,fallbackProxy){
     items.forEach(s=>{
       const id=s.devin_id||s.id||'';const title=s.title||s.name||'Untitled';const status=s.status||'';const created=s.created_at||'';
       const sc=status==='running'?'var(--success)':status==='completed'?'var(--muted)':status==='failed'?'var(--danger)':'var(--warn)';
-      h+='<div class="card" style="cursor:pointer" onclick="cmd(&#39;loadSessionDetail&#39;,{sessionId:&#39;'+esc(id)+'&#39;})"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(title)+'</span><span class="v" style="color:'+sc+';font-size:10px">'+esc(status)+'</span></div><div class="cr"><span class="l" style="font-size:10px">'+esc(id.substring(0,12))+'...</span><span class="l" style="font-size:10px">'+esc(created?new Date(created).toLocaleString():'')+'</span></div></div>';
+      h+='<div class="card" style="cursor:pointer" onclick="cmd(&#39;loadSessionDetail&#39;,{sessionId:&#39;'+esc(id)+'&#39;})"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(title)+'</span><span class="v" style="color:'+sc+';font-size:10px">'+esc(status)+'</span></div><div class="cr"><span class="l" style="font-size:10px">'+esc(id.substring(0,12))+'...</span><span class="l" style="font-size:10px">'+esc(created?new Date(created).toLocaleString():'')+'</span></div><div class="br" style="margin-top:4px" onclick="event.stopPropagation()"><button class="btn sm" onclick="cmd(&#39;loadSessionDetail&#39;,{sessionId:&#39;'+esc(id)+'&#39;})">👁 查看</button><button class="btn sm" onclick="cmd(&#39;exportSession&#39;,{sessionId:&#39;'+esc(id)+'&#39;,kind:&#39;conversation&#39;})">📥 对话</button><button class="btn sm ghost" onclick="cmd(&#39;exportSession&#39;,{sessionId:&#39;'+esc(id)+'&#39;,kind:&#39;worklog&#39;})">📋 日志</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;,id:&#39;'+esc(id)+'&#39;})">🌐</button></div></div>';
     });
   }else if(tab==='knowledge'){
     items.forEach(k=>{
       const id=k.id||'';const name=k.name||'Untitled';const trigger=k.trigger_description||k.trigger||'';const enabled=k.is_enabled!==false;
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(name)+'</span><span class="v"><span class="tag knowledge">K</span>'+(enabled?'<span style="color:var(--success);margin-left:4px">✓</span>':'<span style="color:var(--danger);margin-left:4px">✗</span>')+'</span></div>'+(trigger?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(trigger.substring(0,100))+'</div>':'')+'<div class="br" style="margin-top:4px"><button class="btn sm danger" onclick="cmd(&#39;devinDeleteKnowledge&#39;,{id:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(name)+'</span><span class="v"><span class="tag knowledge">K</span>'+(enabled?'<span style="color:var(--success);margin-left:4px">✓</span>':'<span style="color:var(--danger);margin-left:4px">✗</span>')+'</span></div>'+(trigger?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(trigger.substring(0,100))+'</div>':'')+'<div class="br" style="margin-top:4px">'+lkBtn('knowledge',name)+'<button class="btn sm danger" onclick="cmd(&#39;devinDeleteKnowledge&#39;,{id:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
     });
   }else if(tab==='playbooks'){
     items.forEach(p=>{
       const id=p.id||'';const title=p.title||p.name||'Untitled';const status=p.status||'';
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(title)+'</span><span class="v"><span class="tag playbook">P</span></span></div>'+(status?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(status)+'</div>':'')+'<div class="br" style="margin-top:4px"><button class="btn sm danger" onclick="cmd(&#39;devinDeletePlaybook&#39;,{id:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(title)+'</span><span class="v"><span class="tag playbook">P</span></span></div>'+(status?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(status)+'</div>':'')+'<div class="br" style="margin-top:4px">'+lkBtn('playbooks',title)+'<button class="btn sm danger" onclick="cmd(&#39;devinDeletePlaybook&#39;,{id:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
     });
   }else if(tab==='secrets'){
     items.forEach(s=>{
       const name=s.name||s.key||'Unnamed';const id=s.id||'';
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(name)+'</span><span class="v"><span class="tag secret">S</span></span></div><div class="br" style="margin-top:4px"><button class="btn sm danger" onclick="cmd(&#39;devinDeleteSecret&#39;,{name:&#39;'+esc(name)+'&#39;})">🗑</button></div></div>';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(name)+'</span><span class="v"><span class="tag secret">S</span></span></div><div class="br" style="margin-top:4px">'+lkBtn('secrets',name)+'<button class="btn sm danger" onclick="cmd(&#39;devinDeleteSecret&#39;,{name:&#39;'+esc(name)+'&#39;})">🗑</button></div></div>';
     });
   }else if(tab==='integrations'){
     items.forEach(c=>{
@@ -2575,7 +2582,7 @@ function rT(tab,items,err,fallbackProxy){
     items.forEach(it=>{
       const nm=it.name||it.title||'';const dt=it.detail||'';
       const st=it.connected!==undefined?(it.connected?'<span style="color:var(--success)">● on</span>':'<span style="color:var(--muted)">○ off</span>'):'';
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'</div>';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+(tab==='mcp'&&nm?('<div class="br" style="margin-top:4px">'+lkBtn('mcps',String(nm).replace(/^★ /,''))+'</div>'):'')+'</div>';
     });
   }
   v.innerHTML=h;
@@ -2666,6 +2673,18 @@ function toggleDaoCloudMiddlePanel(context: vscode.ExtensionContext) {
     }
 }
 
+// ⑤ 适配所有 VS Code — 探测宿主 IDE 能力: Devin Cloud 全功能处处可用;
+// Cascade/Windsurf 专属(对话追踪·自动备份)仅在能读到 Windsurf 凭证缓存时可用, 否则优雅降级。
+interface HostCaps { appName: string; isCascade: boolean; hasConvTracking: boolean; }
+function detectHostCapabilities(): HostCaps {
+    let appName = '';
+    try { appName = vscode.env.appName || ''; } catch { /* 守柔 */ }
+    let hasConvTracking = false;
+    try { hasConvTracking = !!readWindsurfCredentials(); } catch { hasConvTracking = false; }
+    const lname = appName.toLowerCase();
+    const isCascade = hasConvTracking || lname.includes('windsurf') || lname.includes('cascade') || lname.includes('devin');
+    return { appName: appName || 'VS Code', isCascade, hasConvTracking };
+}
 function getPanelState() {
     return {
         loggedIn: !!(ws.devinAuth1 || ws.devinApiKey),
@@ -2682,6 +2701,7 @@ function getPanelState() {
         hostname: os.hostname(),
         injecting: ws.devinInjecting,
         bridge: readBridgeConn(),
+        hostCaps: detectHostCapabilities(),
     };
 }
 
@@ -2707,6 +2727,7 @@ function refreshDaoCloudMiddlePanel() {
         hostname: os.hostname(),
     };
     data.bridge = readBridgeConn();
+    data.hostCaps = detectHostCapabilities();
     // Inject state
     try {
         const s = JSON.parse(fs.readFileSync(ws.injectStateFile, 'utf8'));
@@ -2749,6 +2770,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const canApi = devinCanUseApi();
                 if (canApi) {
                     // ★ 有cog_ API Key — 尝试API调用加载真实数据
+                    const orgLocks = loadManualLocks()[ws.devinOrgId] || { knowledge: [], playbooks: [], secrets: [], mcps: [] };
                     try {
                         let result: any = { ok: false };
                         if (tab === 'sessions') {
@@ -2757,15 +2779,15 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败: ' + JSON.stringify(result).substring(0, 100) });
                         } else if (tab === 'knowledge') {
                             result = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1);
-                            if (result.ok) reply({ type: 'tabData', tab, items: result.learnings || [] });
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.learnings || [], locks: orgLocks });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'playbooks') {
                             result = await devinListPlaybooks(ws.devinOrgId, ws.devinAuth1);
-                            if (result.ok) reply({ type: 'tabData', tab, items: result.playbooks || [] });
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.playbooks || [], locks: orgLocks });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'secrets') {
                             result = await devinListSecrets(ws.devinOrgId, ws.devinAuth1);
-                            if (result.ok) reply({ type: 'tabData', tab, items: result.secrets || [] });
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.secrets || [], locks: orgLocks });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'integrations') {
                             result = await devinListIntegrations(ws.devinOrgId, ws.devinAuth1);
@@ -2788,7 +2810,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             const installed = (inst.items || []).map((m: any) => Object.assign({}, m, { name: '★ ' + m.name }));
                             const merged = installed.concat(cat.items || []);
                             result = { ok: cat.ok || inst.ok };
-                            if (result.ok) reply({ type: 'tabData', tab, items: merged });
+                            if (result.ok) reply({ type: 'tabData', tab, items: merged, locks: orgLocks });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'automations') {
                             result = await devinListAutomations(ws.devinOrgId, ws.devinAuth1);
@@ -3125,7 +3147,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 if (!body) break;
                 const trigger = await vscode.window.showInputBox({ prompt: 'Trigger Description (when to retrieve)', placeHolder: 'When working on...' });
                 const r = await devinInjectKnowledge(ws.devinOrgId, name, body, trigger || name, ws.devinAuth1);
-                if (r.ok) vscode.window.showInformationMessage('Knowledge created: ' + name);
+                if (r.ok) { vscode.window.showInformationMessage('Knowledge created: ' + name); setManualLock(ws.devinOrgId, 'knowledge', name, true); }
                 refreshReply({ type: 'actionResult', command: 'devinCreateKnowledge', ok: r.ok });
                 break;
             }
@@ -3135,7 +3157,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const body = await vscode.window.showInputBox({ prompt: 'Playbook Body (markdown)', placeHolder: '## Steps\n1. ...' });
                 if (!body) break;
                 const r = await devinInjectPlaybook(ws.devinOrgId, title, body, ws.devinAuth1);
-                if (r.ok) vscode.window.showInformationMessage('Playbook created: ' + title);
+                if (r.ok) { vscode.window.showInformationMessage('Playbook created: ' + title); setManualLock(ws.devinOrgId, 'playbooks', title, true); }
                 refreshReply({ type: 'actionResult', command: 'devinCreatePlaybook', ok: r.ok });
                 break;
             }
@@ -3145,8 +3167,19 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const value = await vscode.window.showInputBox({ prompt: 'Secret Value', password: true });
                 if (!value) break;
                 const r = await devinUpsertSecret(ws.devinOrgId, name, value, ws.devinAuth1);
-                if (r.ok) vscode.window.showInformationMessage('Secret created: ' + name);
+                if (r.ok) { vscode.window.showInformationMessage('Secret created: ' + name); setManualLock(ws.devinOrgId, 'secrets', name, true); }
                 refreshReply({ type: 'actionResult', command: 'devinCreateSecret', ok: r.ok });
+                break;
+            }
+            case 'toggleManualLock': {
+                const kind = msg.kind as ManualLockKind;
+                const name = String(msg.name || '');
+                const validKinds: ManualLockKind[] = ['knowledge', 'playbooks', 'secrets', 'mcps'];
+                if (!validKinds.includes(kind) || !name || !ws.devinOrgId) { refreshReply({ type: 'actionResult', command: 'toggleManualLock', ok: false }); break; }
+                const nowLocked = !isManualLocked(ws.devinOrgId, kind, name);
+                setManualLock(ws.devinOrgId, kind, name, nowLocked);
+                vscode.window.showInformationMessage((nowLocked ? '🔒 已锁定(切号不清理): ' : '🔓 已解锁: ') + name);
+                refreshReply({ type: 'actionResult', command: 'toggleManualLock', ok: true });
                 break;
             }
             case 'startServer': {
@@ -5673,6 +5706,42 @@ function loadInjectProfile(): InjectProfile {
 function saveInjectProfile(p: InjectProfile): void {
     try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(INJECT_PROFILE_FILE, JSON.stringify(p, null, 2), 'utf8'); } catch { /* 守柔 */ }
 }
+// 道·「绝利一源」单账号手动锁定 — 用户在单账号 K/P/S/MCP 面板手动新建/锁定的条目,
+// 切账号反向注入 autoCleanup 时按 (orgId,kind,name) 豁免, 不被批量清理。守柔: 只防删, 永不多删。
+const INJECT_MANUAL_LOCKS_FILE = path.join(DAO_DIR, 'dao-inject-manual-locks.json');
+type ManualLockKind = 'knowledge' | 'playbooks' | 'secrets' | 'mcps';
+interface ManualLockOrg { knowledge: string[]; playbooks: string[]; secrets: string[]; mcps: string[]; }
+function loadManualLocks(): Record<string, ManualLockOrg> {
+    try { const j = JSON.parse(fs.readFileSync(INJECT_MANUAL_LOCKS_FILE, 'utf8')); return (j && typeof j === 'object') ? j : {}; } catch { return {}; }
+}
+function saveManualLocks(m: Record<string, ManualLockOrg>): void {
+    try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(INJECT_MANUAL_LOCKS_FILE, JSON.stringify(m, null, 2), 'utf8'); } catch { /* 守柔 */ }
+}
+function manualLockOrgRef(m: Record<string, ManualLockOrg>, orgId: string): ManualLockOrg {
+    if (!m[orgId]) m[orgId] = { knowledge: [], playbooks: [], secrets: [], mcps: [] };
+    const o = m[orgId];
+    if (!Array.isArray(o.knowledge)) o.knowledge = [];
+    if (!Array.isArray(o.playbooks)) o.playbooks = [];
+    if (!Array.isArray(o.secrets)) o.secrets = [];
+    if (!Array.isArray(o.mcps)) o.mcps = [];
+    return o;
+}
+function isManualLocked(orgId: string, kind: ManualLockKind, name: string): boolean {
+    if (!orgId || !name) return false;
+    const o = loadManualLocks()[orgId];
+    if (!o) return false;
+    const arr = (o as any)[kind];
+    return Array.isArray(arr) && arr.some((x: string) => String(x).toLowerCase() === String(name).toLowerCase());
+}
+function setManualLock(orgId: string, kind: ManualLockKind, name: string, locked: boolean): void {
+    if (!orgId || !name) return;
+    const m = loadManualLocks();
+    const arr = (manualLockOrgRef(m, orgId) as any)[kind] as string[];
+    const idx = arr.findIndex((x) => String(x).toLowerCase() === String(name).toLowerCase());
+    if (locked && idx < 0) arr.push(name);
+    else if (!locked && idx >= 0) arr.splice(idx, 1);
+    saveManualLocks(m);
+}
 const DAO_BRIDGE_KB_NAME = 'DAO Bridge 内网穿透远程操作文档';
 const DAO_BRIDGE_KB_SENTINEL = '__DAO_BRIDGE_CLOUD_MD__';
 const DAO_BRIDGE_KB_TRIGGER = '涉及操作用户本地或远程电脑相关内容时触发';
@@ -5763,21 +5832,21 @@ async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectPr
     if (typeof p.messageLimit === 'number') { try { await devinSetMessageLimit(orgId, p.messageLimit, auth1); } catch { /* 守柔 */ } }
 }
 async function cleanupInjectProfileFromOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
-    for (const s of p.secrets) { if (s && s.name) { try { await devinDeleteSecret(orgId, s.name, auth1); } catch { /* 守柔 */ } } }
+    for (const s of p.secrets) { if (s && s.name && !isManualLocked(orgId, 'secrets', s.name)) { try { await devinDeleteSecret(orgId, s.name, auth1); } catch { /* 守柔 */ } } }
     try {
         const kl = await devinListKnowledge(orgId, auth1);
-        if (kl.ok && kl.learnings) for (const k of kl.learnings) { if (p.knowledge.some(x => x.name === k.name) && k.id) { try { await devinDeleteKnowledge(orgId, String(k.id), auth1); } catch { /* 守柔 */ } } }
+        if (kl.ok && kl.learnings) for (const k of kl.learnings) { if (p.knowledge.some(x => x.name === k.name) && k.id && !isManualLocked(orgId, 'knowledge', k.name)) { try { await devinDeleteKnowledge(orgId, String(k.id), auth1); } catch { /* 守柔 */ } } }
     } catch { /* 守柔 */ }
     try {
         const pl = await devinListPlaybooks(orgId, auth1);
-        if (pl.ok && pl.playbooks) for (const pb of pl.playbooks) { if (p.playbooks.some(x => x.title === pb.title) && pb.id) { try { await devinDeletePlaybook(orgId, String(pb.id), auth1); } catch { /* 守柔 */ } } }
+        if (pl.ok && pl.playbooks) for (const pb of pl.playbooks) { if (p.playbooks.some(x => x.title === pb.title) && pb.id && !isManualLocked(orgId, 'playbooks', pb.title)) { try { await devinDeletePlaybook(orgId, String(pb.id), auth1); } catch { /* 守柔 */ } } }
     } catch { /* 守柔 */ }
     if (p.mcps && p.mcps.length) {
         try {
             const inst = await devinListMcpInstallations(orgId, auth1);
             if (inst.ok && inst.items) for (const it of inst.items) {
                 const nm = String((it.name || '').replace(/^★ /, '')).toLowerCase();
-                if (p.mcps.some(x => String(x.name).toLowerCase() === nm || mcpSlug(x) === nm) && it.id) {
+                if (p.mcps.some(x => String(x.name).toLowerCase() === nm || mcpSlug(x) === nm) && it.id && !isManualLocked(orgId, 'mcps', nm)) {
                     try { await devinDeleteMcp(orgId, String(it.id), auth1); } catch { /* 守柔 */ }
                 }
             }
