@@ -2215,6 +2215,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .hd .hb:hover{background:var(--hover)}
 .ct{flex:1;overflow-y:auto;padding:16px}
 .ct iframe{width:100%;height:100%;border:none;background:#fff;border-radius:6px}
+#v-proxy.active{height:100%}
+#v-proxy iframe{width:100%;height:100%;min-height:70vh;border:none;background:transparent;border-radius:0;display:block}
 .ct .tv{display:none;height:100%}
 .ct .tv.active{display:flex;flex-direction:column}
 .empty{text-align:center;padding:40px 20px;color:var(--muted);font-size:13px}
@@ -2262,6 +2264,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <nav class="sb">
 <div class="ni active" data-tab="overview" onclick="sw('overview')" title="主页 Home">🏠</div>
 <div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网操作 DAO Bridge">🌐</div>
+<div class="ni" data-tab="proxy" onclick="sw('proxy')" title="Proxy Pro · 本源观照/渠道配置/模型路由">🔀</div>
 <div class="ni" data-tab="sessions" onclick="sw('sessions')" title="Sessions 对话">💬</div>
 <div class="ni" data-tab="knowledge" onclick="sw('knowledge')" title="Knowledge 知识库">📚</div>
 <div class="ni" data-tab="playbooks" onclick="sw('playbooks')" title="Playbooks 剧本">📋</div>
@@ -2296,6 +2299,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="tv" id="v-mcp"></div>
 <div class="tv" id="v-automations"></div>
 <div class="tv" id="v-bridge"></div>
+<div class="tv" id="v-proxy"></div>
 <div class="tv" id="v-inject"></div>
 </div>
 <div class="ft" id="ft">
@@ -2349,6 +2353,7 @@ function sw(t){
   // 自动注入模块: 无需 cog_ key, 直接拉 profile 配置 (账号无关意图)
   if(t==='inject'){ cmd('getInjectProfile'); return; }
   if(t==='bridge'){ rBridgeFull(); return; }
+  if(t==='proxy'){ rProxyFull(); return; }
   if(t!=='overview'&&S.auth.loggedIn){
     const v=document.getElementById('v-'+t);
     if(v&&!v.dataset.loaded){
@@ -2379,6 +2384,30 @@ function reloadActiveDataTab(){
   var ic=({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[t])||'🌐';
   v.innerHTML='<div class="empty"><div class="ic">'+ic+'</div><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
   cmd('loadTabData',{tab:t});
+}
+// ★ 归一·② Proxy Pro: 全能板内嵌「三模块面板」(本源观照/渠道配置/模型路由) —
+//   iframe srcdoc 复用 dao-proxy-pro 原生 getEaConfigHtml(零前端重写),
+//   端口经 ~/.dao/origin-port.json 自动发现 + webview portMapping 直通本地反代。
+function rProxyFull(){
+  var v=document.getElementById('v-proxy');if(!v)return;
+  if(v.dataset.loaded==='1')return;
+  v.innerHTML='<div class="empty"><div class="ic">🔀</div><h3>Proxy Pro · 三模块面板</h3><p style="margin:8px 0;color:var(--muted)">正在载入 本源观照 / 渠道配置 / 模型路由 …</p></div>';
+  cmd('getProxyPanel');
+}
+function rProxyResult(d){
+  var v=document.getElementById('v-proxy');if(!v)return;
+  if(d&&d.ok&&d.html){
+    v.dataset.loaded='1';
+    v.innerHTML='';
+    var f=document.createElement('iframe');
+    f.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms allow-popups');
+    f.srcdoc=d.html;
+    v.appendChild(f);
+  } else {
+    v.dataset.loaded='';
+    var msg=(d&&d.error)||'未检测到 dao-proxy-pro 反代 (~/.dao/origin-port.json)。归一插件中随引擎自动启动；若为独立 dao-vsix 请安装 dao-proxy-pro。';
+    v.innerHTML='<div class="empty"><div class="ic">🔀</div><h3>Proxy Pro 未就绪</h3><p style="margin:8px 0;color:var(--muted);font-size:12px;max-width:380px;line-height:1.6">'+esc(msg)+'</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="rProxyFull()">↻ 重试</button></div></div>';
+  }
 }
 function rBridgeFull(){
   var v=document.getElementById('v-bridge');if(!v)return;
@@ -2463,7 +2492,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='proxyPanel'){rProxyResult(d)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab);if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
@@ -2578,11 +2607,15 @@ function showDaoCloudMiddlePanel(context: vscode.ExtensionContext) {
         return;
     }
     const st = getPanelState();
+    // 归一·② Proxy Pro: 若 dao-proxy-pro 反代已就绪, 为其端口设 portMapping —
+    // 使内嵌的三模块面板 iframe 内 http://127.0.0.1:<port>/origin/* 直通本机反代。
+    const _proxyPort = discoverProxyPort();
+    const _portMapping = _proxyPort ? [{ webviewPort: _proxyPort, extensionHostPort: _proxyPort }] : undefined;
     daoCloudMiddlePanel = vscode.window.createWebviewPanel(
         'dao.cloudMiddlePanel',
         '🤖 Devin Cloud',
         vscode.ViewColumn.Beside,
-        { enableScripts: true, retainContextWhenHidden: true }
+        { enableScripts: true, retainContextWhenHidden: true, portMapping: _portMapping }
     );
     daoCloudMiddlePanel.webview.html = getDaoCloudMiddlePanelHtml(st);
     daoCloudMiddlePanelVisible = true;
@@ -2656,11 +2689,51 @@ function refreshDaoCloudMiddlePanel() {
     daoCloudMiddlePanel.webview.postMessage(data);
 }
 
+// ═══ 归一·② Proxy Pro — dao-proxy-pro 三模块面板复用 (零前端重写) ═══
+// 发现反代端口: dao-proxy-pro 启动后将端口写入 ~/.dao/origin-port.json。
+function discoverProxyPort(): number {
+    try {
+        const j = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.dao', 'origin-port.json'), 'utf8'));
+        if (j && j.port) return Number(j.port);
+    } catch { /* 守柔: 未就绪 */ }
+    return 0;
+}
+let _proxyModCache: any = null;
+// dao-one 装配布局: dao-vsix 运行于 vendor-vsix/, dao-proxy-pro 为兄弟 vendor-proxy/。
+// 复用其 getEaConfigHtml 生成「本源观照/渠道配置/模型路由」面板 HTML。独立 dao-vsix 无此兄弟则降级。
+function loadProxyModule(extPath: string): any {
+    if (_proxyModCache) return _proxyModCache;
+    const candidates = [
+        path.join(extPath, '..', 'vendor-proxy', 'extension.js'),        // dao-one 装配
+        path.join(extPath, '..', '..', 'dao-proxy-pro', 'extension.js'),  // core/ 开发布局
+    ];
+    for (const c of candidates) {
+        try {
+            if (fs.existsSync(c)) {
+                const mod = require(c);
+                if (mod && typeof mod.getEaConfigHtml === 'function') { _proxyModCache = mod; return mod; }
+            }
+        } catch { /* 守柔: 试下一候选 */ }
+    }
+    return null;
+}
+function buildProxyPanelReply(extPath: string): any {
+    const mod = loadProxyModule(extPath);
+    if (!mod) return { type: 'proxyPanel', ok: false, error: '未找到 dao-proxy-pro 模块 (vendor-proxy)。请在 dao-one 归一插件中使用，或安装 dao-proxy-pro。' };
+    const usePort = discoverProxyPort() || (typeof mod.getCachedPort === 'function' ? mod.getCachedPort() : 0);
+    if (!usePort) return { type: 'proxyPanel', ok: false, error: 'dao-proxy-pro 反代尚未就绪 (~/.dao/origin-port.json 未生成)。稍候重试。' };
+    try {
+        return { type: 'proxyPanel', ok: true, html: mod.getEaConfigHtml(usePort), port: usePort };
+    } catch (e: any) {
+        return { type: 'proxyPanel', ok: false, error: 'getEaConfigHtml 生成失败: ' + (e && e.message ? e.message : String(e)) };
+    }
+}
+
 async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionContext) {
     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge', 'getProxyPanel'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -3158,6 +3231,11 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'bridgeInjectKnowledge': {
                 const injected = await bridgeInjectKnowledge();
                 reply({ type: 'actionResult', command: 'bridgeInjectKnowledge', ok: injected });
+                break;
+            }
+            // ═══ 归一·② Proxy Pro: 全能板内嵌三模块面板 ═══
+            case 'getProxyPanel': {
+                reply(buildProxyPanelReply(context.extensionPath));
                 break;
             }
         }
