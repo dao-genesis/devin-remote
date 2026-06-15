@@ -36,16 +36,17 @@ const CFG = {
   ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) rt-flow-devin-cloud",
   authTtlMs: 12 * 60 * 60 * 1000, // 登录态缓存 12h
   reqTimeoutMs: 30000,
-  streamTimeoutMs: 180000,
+  streamTimeoutMs: 90000, // v: 180000→90000 弱链路下更快回收挂死的 event-stream socket
   maxRetries: 3, // 瞬态网络错误(TLS socket 断/ECONNRESET/超时)自动重试次数 (弱者道之用·反复至成)
   retryBaseMs: 500, // 重试退避基数 (指数: 500/1000/2000ms)
   rateLimitMaxRetries: 6, // HTTP 429 限流重试次数 (多账号预载/普查最易撞限流·退避后必复)
   retryMaxDelayMs: 30000, // 单次退避上限 (Retry-After 过大时封顶, 不无限等)
-  downloadTimeoutMs: 120000,
-  downloadConcurrency: 16,
-  presignConcurrency: 8,
+  downloadTimeoutMs: 60000, // v: 120000→60000 超时即回收卡死的下载 socket
+  downloadConcurrency: 6, // v: 16→6 降低单对话内并发下载 socket 扇出
+  presignConcurrency: 4, // v: 8→4
   presignChunk: 40,
-  convConcurrency: 5, // 同账号内并行备份的对话数 (每对话内文件再并发 16) · 全方位提速
+  convConcurrency: 2, // v: 5→2 同账号内并行备份的对话数 (每对话内文件再并发 downloadConcurrency)
+  // 备份并发上限 = convConcurrency × downloadConcurrency = 2×6 = 12 (原 5×16 = 80)。
 };
 function configure(opts) {
   if (opts && typeof opts === "object") Object.assign(CFG, opts);
