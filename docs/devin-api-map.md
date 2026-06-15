@@ -99,16 +99,39 @@
 
 | 方法 | 路径 | 置信度 | 备注 |
 |---|---|---|---|
-| GET | `/api/org-<bare>/automations` | ✅ 实测 | `[{ name, automation_id, enabled, triggers:[{event_type}] , actions? }]` |
-| POST | `/api/org-<bare>/automations` | ⚠️ 待实测 | 推断 body 同 GET 项形态(name/triggers/actions/enabled)；**需 Chrome DevTools 抓官网创建请求确认** |
-| DELETE | `/api/org-<bare>/automations/<automation_id>` | ⚠️ 待实测 | 推断；需实测 |
+| GET | `/api/org-<bare>/automations` | ✅ 实测 | `[{ name, automation_id, enabled, triggers:[{trigger_id,event_type,conditions}], actions:[...] }]` |
+| POST | `/api/org-<bare>/automations` | ✅ 实测 | 201 创建；必填 `name` / `triggers` / `actions`（见下 schema） |
+| DELETE | `/api/org-<bare>/automations/<automation_id>` | ✅ 实测 | 200 删除 |
+
+**创建 body schema（逆流 422/201 实测）：**
+```jsonc
+{
+  "name": "string",                 // 必填
+  "enabled": false,                 // 可选, 默认 true
+  "triggers": [                      // 必填, 至少一个
+    { "event_type": "webhook:incoming" }   // 自包含, 无需外部集成; 返回含 webhook_secret
+    // event_type 枚举: github:issue_comment | github:issues | github:pull_request
+    //   | github:pull_request_review | github:pull_request_review_comment
+    //   | github:check_run | github:push | schedule:recurring (须含 rrule 条件)
+    //   | slack:message | slack:reaction_added
+    //   | linear:create | linear:label_added | linear:assigned
+    //   | linear:status_changed | linear:priority_changed | webhook:incoming
+  ],
+  "actions": [                       // 必填; discriminator = type
+    { "type": "start_session", "prompt": "..." }   // prompt 必填; 可选 playbook_id/repos/tags/bypass_approval
+    // type 枚举: start_session | message_session(target_devin_id+prompt) | monitor_session | notify(when) | scan_new_commits
+  ]
+}
+```
+> 已落 `devinListAutomations` / `devinInjectAutomation` / `devinDeleteAutomation` / `devinUpsertAutomation`，并纳入反向注入 `InjectProfile.automations`（切号幂等 · autoCleanup 守柔 · 手锁豁免）。实测全程 create 201 + delete 200，无残留。
 
 ## 8. Blueprints / 蓝图
 
 | 方法 | 路径 | 置信度 | 备注 |
 |---|---|---|---|
-| GET | `/api/org-<bare>/blueprints`（推断） | ⚠️ 待实测 | 官网蓝图页对应端点未抓取；**需逆流确认真实路径与 schema** |
-| POST / DELETE | 同上 | ⚠️ 待实测 | 待 X1 现场抓 XHR |
+| GET | `/api/org-<bare>/blueprints` | ❌ 实测 404 | 该路径不存在 |
+| GET | `/api/org-<bare>/snapshots` | ✅ 实测 | 返回 `[]`（机器快照列表）；蓝图 UI 可能基于此 |
+| POST / DELETE | 真实路径未定 | ⚠️ 待实测 | 需在官网蓝图页 Chrome DevTools 抓 XHR 确认真实端点；`/blueprints` 已排除 |
 
 ## 9. Sessions 会话
 
