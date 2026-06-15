@@ -1,7 +1,8 @@
 {
   "name": "dao-relay",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
+  "type": "module",
   "description": "dao 反向隧道中继 (Cloudflare Worker + Durable Object) — 内网穿透唯一外部依赖, 归一入库",
   "scripts": {
     "dev": "wrangler dev",
