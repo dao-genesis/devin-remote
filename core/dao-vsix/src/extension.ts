@@ -540,10 +540,19 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     // ═══════════════════════════════════════════════════════════
-    // 去芜存菁 · 帛书「道法自然」— 移除左侧冗余「数联面板」侧栏(dao.cloudPanel)。
-    // 左侧默认即 RT Flow 账号面板(wam.panel); 全功能主页由状态栏 9921 / dao.toggleCloudPanel 打开。
-    // cloudPanel 实例保留(供 refresh 无操作守柔), 但不再注册为侧栏视图。
+    // 道并行而不相悖 · dao.cloudPanel 侧栏 provider。
+    // 独立 dao-vsix 的 package.json 不声明该视图 → provider 永不解析(空操作),
+    //   全功能主页仍由状态栏 / dao.toggleCloudPanel 在编辑区打开(去芜存菁不变)。
+    // 归一 dao-one 的 package.json 声明 ②「全能版」视图 → provider 解析 → 侧栏内嵌全功能面板。
+    // 故此注册对两种产物皆守柔: 不破坏 dao-vsix, 又修复 dao-one 的 ② 空白视图。
     // ═══════════════════════════════════════════════════════════
+    try {
+        context.subscriptions.push(
+            vscode.window.registerWebviewViewProvider('dao.cloudPanel', cloudPanel),
+        );
+    } catch (e) {
+        try { console.error('[dao-vsix] dao.cloudPanel provider 注册失败(守柔不阻塞):', e); } catch { /* 守柔 */ }
+    }
 
     // Watch for terminal close to clean up
     context.subscriptions.push(
