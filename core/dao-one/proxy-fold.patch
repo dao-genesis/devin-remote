@@ -62,7 +62,8 @@
 +function _proxyFetch(e){var q=e.data,src=e.source;var o={method:q.method||'GET',cache:'no-store'};if(q.headers)o.headers=q.headers;if(q.body!=null)o.body=q.body;fetch(q.url,o).then(function(r){return r.text().then(function(t){src.postMessage({__proxyFetchRes:true,id:q.id,ok:r.ok,status:r.status,statusText:r.statusText,body:t,contentType:(r.headers&&r.headers.get)?(r.headers.get('content-type')||''):''},'*');});}).catch(function(err){src.postMessage({__proxyFetchRes:true,id:q.id,error:String((err&&err.message)||err)},'*');});}
 +window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__proxyFetchReq){_proxyFetch(e);return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if(d.command==='toggleManualLock'&&S.tab){cmd('loadTabData',{tab:S.tab})}else if(S.tab!=='inject'){rc()}}}else if(d.type==='proxyPanel'){rProxyResult(d)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
  function rT(tab,items,err,fallbackProxy){
-   const v=document.getElementById('v-'+tab);if(!v)return;
+   // ② 容器归一: 独立标签(v-*)已移除的 K/P/S/Git 落主页内 ov-* 容器(integrations→ov-git)
+   const v=document.getElementById('v-'+tab)||document.getElementById('ov-'+(tab==='integrations'?'git':tab));if(!v)return;
    // 帛书·「反者道之动也」— 认证策略根本修复
 @@ -2578,11 +2607,15 @@
          return;
