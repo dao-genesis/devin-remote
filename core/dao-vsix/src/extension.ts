@@ -404,6 +404,8 @@ export async function activate(context: vscode.ExtensionContext) {
             context.subscriptions.push({ dispose: () => { try { bus.removeListener('dao:account', onSwitch); } catch { /* 守柔 */ } } });
         }
     } catch { /* 守柔 */ }
+    // 内穿持久化/智能刷新 — 延后触发(待服务器/凭证就绪), 低频去重, 采纳常驻桥发布的连接, 不另起隧道打扰
+    setTimeout(() => { bridgeAutoPersist().catch(() => { /* 守柔 */ }); }, 4000);
     context.subscriptions.push(
         vscode.commands.registerCommand('dao.startServer', () => startServer(context)),
         vscode.commands.registerCommand('dao.stopServer', stopServer),
@@ -2200,20 +2202,83 @@ async function bridgeInjectKnowledge(): Promise<boolean> {
     } catch { return false; }
 }
 
+// 读取"已发布"的桥连接文件 — 帛书·「以本为精」: 常驻桥(OS 级)每次重建隧道都把最新 URL 回写到约定文件,
+// 二合一不必自起隧道, 只需读取这份真相即可显示持久连接(避免每次"未连接")。择最新(mtime)且非占位者。
+const BRIDGE_CONN_FRESH_MS = 24 * 60 * 60 * 1000;
+function bridgeReadPublishedConn(): { url: string; token: string; relayUrl?: string; session?: string; host?: string; updated?: string; source: string; ageMs: number } | null {
+    const cands = [
+        path.join(BRIDGE_DIR, 'conn.json'),
+        path.join(os.homedir(), '.dao', 'cf-hub-conn.json'),
+        path.join(os.homedir(), '.dao', 'bridge', 'connection.json'),
+    ];
+    let best: any = null;
+    for (const f of cands) {
+        try {
+            const st = fs.statSync(f);
+            const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+            const url = String(j.url || '').trim();
+            const relayUrl = String(j.relayUrl || j.relay || '').trim();
+            // 跳过占位/空地址(如裸 api.trycloudflare.com)
+            const validUrl = /^https?:\/\//.test(url) && !/\/\/api\.trycloudflare\.com\/?$/.test(url);
+            if (!validUrl && !relayUrl) continue;
+            if (!best || st.mtimeMs > best._mtime) {
+                best = { url: validUrl ? url : '', token: String(j.token || ''), relayUrl: relayUrl || undefined, session: j.session || undefined, host: j.host, updated: j.updated, source: path.basename(f), _mtime: st.mtimeMs };
+            }
+        } catch { /* skip */ }
+    }
+    if (!best) return null;
+    best.ageMs = Date.now() - best._mtime;
+    delete best._mtime;
+    return best;
+}
+
 // Bridge API route handler (exposed via /api/bridge-state)
+// 帛书·「反者道之动」: 进程内隧道优先; 否则采纳常驻桥发布的新鲜连接 → 持久显示已连接。
 function bridgeGetState(): any {
-    return {
-        connected: !!bridgeUrl,
-        url: bridgeUrl,
-        token: bridgeToken || ws.token,
+    const base = {
         localPort: ws.port || 9920,
         localUrl: `http://127.0.0.1:${ws.port || 9920}`,
-        host: os.hostname(),
         workspace: vscode.workspace.workspaceFolders?.[0]?.name || '',
         root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
-        updated: new Date().toISOString(),
         version: EXT_VERSION,
     };
+    if (bridgeUrl) {
+        return Object.assign({ connected: true, persistent: false, source: 'inprocess', url: bridgeUrl, token: bridgeToken || ws.token, host: os.hostname(), updated: new Date().toISOString() }, base);
+    }
+    const pub = bridgeReadPublishedConn();
+    if (pub && (pub.url || pub.relayUrl) && pub.ageMs < BRIDGE_CONN_FRESH_MS) {
+        return Object.assign({ connected: true, persistent: true, source: pub.source, url: pub.url || pub.relayUrl, relayUrl: pub.relayUrl, session: pub.session, token: pub.token || ws.token, host: pub.host || os.hostname(), updated: pub.updated, ageMs: pub.ageMs }, base);
+    }
+    return Object.assign({ connected: false, persistent: false, source: '', url: '', token: bridgeToken || ws.token, host: os.hostname(), updated: new Date().toISOString() }, base);
+}
+
+// 智能持久化/刷新 — 帛书·「治人事天莫若啬」: 低频、去重、不与常驻桥重复起隧道。
+// 策略: 有新鲜发布连接→采纳(不另起); 无→(仅当 cloudflared 可用)起快速隧道; 3-5h 内已同步则跳过,
+// 除非窗口集变化(用户重开 IDE)才再同步一次。多窗口经共享 auto-sync.json 去重。
+const BRIDGE_AUTOSYNC_FILE = path.join(BRIDGE_DIR, 'auto-sync.json');
+const BRIDGE_SYNC_THROTTLE_MS = 4 * 60 * 60 * 1000;
+async function bridgeAutoPersist(): Promise<void> {
+    try {
+        const cfg = vscode.workspace.getConfiguration('dao');
+        if (!cfg.get<boolean>('bridgeAutoPersist', true)) return;
+        bridgeEnsureDir();
+        let last: any = {};
+        try { last = JSON.parse(fs.readFileSync(BRIDGE_AUTOSYNC_FILE, 'utf8')); } catch { /* 首次 */ }
+        const now = Date.now();
+        const winKey = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.hostname();
+        const pub = bridgeReadPublishedConn();
+        const connFresh = !!(pub && (pub.url || pub.relayUrl) && pub.ageMs < BRIDGE_SYNC_THROTTLE_MS);
+        const throttled = !!(last.lastMs && (now - last.lastMs) < BRIDGE_SYNC_THROTTLE_MS);
+        const windowChanged = !!(last.winKey && last.winKey !== winKey);
+        // 采纳已发布的新鲜连接 → 不与常驻桥重复起隧道(守柔)
+        if (pub && pub.url && pub.ageMs < BRIDGE_CONN_FRESH_MS) { bridgeUrl = pub.url; if (pub.token) bridgeToken = pub.token; }
+        // 无新鲜连接 → 起一条快速隧道(仅当 cloudflared 可用; spawn 失败守柔吞掉)
+        if (!connFresh) { try { await bridgeStartTunnel(false); } catch { /* 守柔 */ } }
+        // 内穿 MD 同步到当前账号 Knowledge(反向注入框架再扩散到所有账号) — 低频
+        if (!throttled || windowChanged) { try { if (ws.devinAuth1 && ws.devinOrgId) await bridgeInjectKnowledge(); } catch { /* 守柔 */ } }
+        try { fs.writeFileSync(BRIDGE_AUTOSYNC_FILE, JSON.stringify({ lastMs: now, winKey, url: bridgeUrl || (pub && pub.url) || '', source: pub ? pub.source : 'started' }, null, 2), 'utf8'); } catch { /* 守柔 */ }
+        refreshDaoCloudMiddlePanel();
+    } catch { /* 守柔 */ }
 }
 
 function getDaoCloudMiddlePanelHtml(st: any): string {
@@ -2427,8 +2492,11 @@ function rBridgeFull(){
     h+='<div class="br"><button class="btn primary" onclick="cmd(&#39;bridgeStart&#39;)">▶ 启动隧道</button>';
     h+='<button class="btn" onclick="cmd(&#39;bridgeStartNamed&#39;)">🔗 命名隧道</button></div>';
   } else {
-    h+='<div class="card"><div class="cr"><span class="l">状态</span><span class="v" style="color:var(--success)">✓ 已打通</span></div>';
-    h+='<div class="cr"><span class="l">公网 URL</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(b.url)+'</span></div>';
+    var stTxt=b.persistent?'✓ 已打通 · 持久化(常驻)':'✓ 已打通';
+    h+='<div class="card"><div class="cr"><span class="l">状态</span><span class="v" style="color:var(--success)">'+stTxt+'</span></div>';
+    if(b.persistent&&b.source)h+='<div class="cr"><span class="l">来源</span><span class="v" style="font-size:10px">'+esc(b.source)+(typeof b.ageMs==="number"?(' · '+Math.round(b.ageMs/60000)+"分钟前"):"")+'</span></div>';
+    h+='<div class="cr"><span class="l">'+(b.relayUrl&&b.url===b.relayUrl?'中继 Relay':'公网 URL')+'</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(b.url)+'</span></div>';
+    if(b.session)h+='<div class="cr"><span class="l">会话</span><span class="v">'+esc(b.session)+'</span></div>';
     if(b.port)h+='<div class="cr"><span class="l">本地端口</span><span class="v">'+b.port+'</span></div>';
     if(b.workspace)h+='<div class="cr"><span class="l">工作区</span><span class="v">'+esc(b.workspace)+'</span></div>';
     if(b.host)h+='<div class="cr"><span class="l">主机</span><span class="v">'+esc(b.host)+'</span></div>';
@@ -2546,7 +2614,7 @@ function rBridge(){
   var b=S.bridge;var head='<div class="st">内网穿透 · DAO Bridge</div>';
   if(!b){return head+'<div class="card"><div class="cr"><span class="l">状态</span><span class="v" style="color:var(--muted)">未运行 · 安装/启动 dao-bridge 插件后自动打通当前工作区</span></div></div>';}
   var on=!!b.url;
-  var rows='<div class="cr"><span class="l">状态</span><span class="v" style="color:'+(on?'var(--success)':'var(--warn)')+'">'+(on?'✓ 已打通':'隧道离线')+'</span></div>';
+  var rows='<div class="cr"><span class="l">状态</span><span class="v" style="color:'+(on?'var(--success)':'var(--warn)')+'">'+(on?(b.persistent?'✓ 已打通 · 持久化':'✓ 已打通'):'隧道离线')+'</span></div>';
   if(b.url)rows+='<div class="cr"><span class="l">公网 URL</span><span class="v" style="font-size:10px">'+esc(b.url)+'</span></div>';
   if(b.workspace)rows+='<div class="cr"><span class="l">工作区</span><span class="v">'+esc(b.workspace)+'</span></div>';
   if(b.root)rows+='<div class="cr"><span class="l">根目录</span><span class="v" style="font-size:10px">'+esc(b.root)+'</span></div>';

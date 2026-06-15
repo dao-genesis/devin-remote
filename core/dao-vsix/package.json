@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "3.3.1",
+  "version": "3.3.2",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -78,6 +78,11 @@
           "type": "boolean",
           "default": true,
           "description": "Auto-sync Windsurf credentials to Devin Cloud on startup"
+        },
+        "dao.bridgeAutoPersist": {
+          "type": "boolean",
+          "default": true,
+          "description": "内网穿透持久化: 激活时采纳常驻桥发布的连接并智能刷新内穿MD(低频去重·窗口变化才再同步)"
         },
         "dao.accountSyncMode": {
           "type": "string",
