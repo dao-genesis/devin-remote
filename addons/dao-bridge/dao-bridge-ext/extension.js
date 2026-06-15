@@ -18,7 +18,9 @@ const cp = require("child_process");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TRY_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-const BRIDGE_VERSION = "3.2.0";
+const BRIDGE_VERSION = "3.3.0";
+// 默认中继(Worker+DurableObject)端点 — 零账号穿透的公共入口, 可被 daoBridge.relayUrl 覆盖。
+const DEFAULT_RELAY_URL = "https://dao-relay-do.zhouyoukang.workers.dev";
 
 function daoDir() {
   const d = path.join(os.homedir(), ".dao", "bridge");
@@ -102,6 +104,58 @@ function isRealCloudflared(p) {
     return true;
   } catch (e) { return false; }
 }
+// 完整性探活 — 帛书·「質真如渝」: 体积过关不等于二进制完好。
+// 半成品(下载在 >1MB 处被 FIN/RST 截断)体积也能 >1MB, 唯有真正 `--version` 跑通才算数。
+// 这是「自动安装中断→以半成品为基础永久卡死」的根治判据。
+let _cfProbeCache = new Map();
+function probeCloudflared(p) {
+  if (!p) return false;
+  if (_cfProbeCache.has(p)) return _cfProbeCache.get(p);
+  let ok = false;
+  try {
+    const r = cp.spawnSync(p, ["--version"], { timeout: 8000, windowsHide: true, encoding: "utf8" });
+    ok = !r.error && r.status === 0 && /cloudflared/i.test(String(r.stdout || "") + String(r.stderr || ""));
+  } catch (e) { ok = false; }
+  _cfProbeCache.set(p, ok);
+  return ok;
+}
+// 启动清理: 删除自管目录里上一轮残留的半成品(.part / .tgz), 杜绝「以半成品为基础」
+function cleanupPartials(dir) {
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (/\.part(-[0-9a-f]+)?$/i.test(f) || /\.tgz$/i.test(f)) {
+        try { fs.unlinkSync(path.join(dir, f)); } catch (e) {}
+      }
+    }
+  } catch (e) {}
+}
+// macOS 资产是 .tgz, 必须解包取出真二进制(此前代码从不解包→mac 100% 不可用)。
+// 零依赖: 用内置 zlib gunzip + 手解 tar(512B 头块), 取名为 cloudflared 的文件。
+function extractCfTgz(tgzPath, outBin) {
+  try {
+    const zlib = require("zlib");
+    const buf = zlib.gunzipSync(fs.readFileSync(tgzPath));
+    let off = 0;
+    while (off + 512 <= buf.length) {
+      const header = buf.slice(off, off + 512);
+      const name = header.slice(0, 100).toString("utf8").replace(/\0.*$/s, "");
+      off += 512;
+      if (!name) break; // 连续空块 = 归档结束
+      const sizeOct = header.slice(124, 136).toString("utf8").replace(/[\0 ]+$/g, "").trim();
+      const size = parseInt(sizeOct, 8) || 0;
+      const base = name.split("/").pop();
+      if (base === "cloudflared" && size > 1000000) {
+        fs.writeFileSync(outBin, buf.slice(off, off + size));
+        try { fs.chmodSync(outBin, 0o755); } catch (e) {}
+        try { fs.unlinkSync(tgzPath); } catch (e) {}
+        return outBin;
+      }
+      off += Math.ceil(size / 512) * 512;
+    }
+  } catch (e) {}
+  try { fs.unlinkSync(tgzPath); } catch (e) {}
+  return "";
+}
 function cloudflaredCandidates(ctx) {
   const cfgPath = vscode.workspace.getConfiguration("daoBridge").get("cloudflaredPath") || "";
   const home = os.homedir();
@@ -122,14 +176,19 @@ function cloudflaredCandidates(ctx) {
   ].filter(Boolean);
 }
 function findCloudflared(ctx) {
+  const managedDir = path.resolve(path.join(os.homedir(), ".dao", "bin"));
   for (const c of cloudflaredCandidates(ctx)) {
-    if (isRealCloudflared(c)) return c;
+    if (!isRealCloudflared(c)) continue;
+    if (probeCloudflared(c)) return c; // 体积 + --version 双过关才算数
+    // 探活失败 = 半成品/损坏。自管目录下的直接删除以触发重下(自愈);
+    // 外部安装(PATH/npm/choco)的不动, 只跳过。
+    try { if (path.resolve(c).startsWith(managedDir + path.sep)) { fs.unlinkSync(c); _cfProbeCache.delete(c); } } catch (e) {}
   }
   // PATH 兜底: 遍历 where/command -v 全部结果, 跳过 shim, 只取真二进制
   try {
     const probe = process.platform === "win32" ? "where cloudflared" : "command -v cloudflared 2>/dev/null; which -a cloudflared 2>/dev/null";
     const lines = cp.execSync(probe, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(/\r?\n/);
-    for (const ln of lines) { const p = ln.trim(); if (isRealCloudflared(p)) return p; }
+    for (const ln of lines) { const p = ln.trim(); if (isRealCloudflared(p) && probeCloudflared(p)) return p; }
   } catch (e) {}
   return "";
 }
@@ -158,28 +217,44 @@ function downloadMirrors(asset) {
   ];
 }
 
-function httpDownload(url, dst, proxy) {
+// 单镜像下载 — 帛书·「水善利万物」: 断点续传(.part + Range) + 按 Content-Length 校验总长。
+// 续传文件用确定名 `dst.part`(去随机化, 便于清理与跨次续传); 任一档中断, 下一档/下一次接着传,
+// 而不是从零重来 → 正面化解「50MB 一次性下完概率低、次次从头中断」。
+function httpDownload(url, dst, proxy, onProgress) {
   return new Promise((resolve) => {
-    const tmp = dst + ".part-" + crypto.randomBytes(4).toString("hex");
+    const tmp = dst + ".part";
     let settled = false;
+    let expectedTotal = 0; // 期望总长(含已存在的续传字节)
     const done = (ok) => {
       if (settled) return; settled = true;
+      if (ok) {
+        try {
+          const sz = fs.statSync(tmp).size;
+          // 体积下限 + 总长一致性: 截断/HTML 错误页/长度不符一律拒收, 不留半成品
+          if (sz < 1000000 || (expectedTotal && sz !== expectedTotal)) ok = false;
+        } catch (e) { ok = false; }
+      }
       if (ok) { try { fs.renameSync(tmp, dst); } catch (e) { ok = false; } }
-      if (!ok) { try { fs.unlinkSync(tmp); } catch (e) {} }
+      if (!ok) { try { fs.unlinkSync(tmp); } catch (e) {} } // 失败即清半成品(续传残留交给 cleanupPartials)
       resolve(ok);
     };
+    let resumeAt = 0;
+    try { if (fs.existsSync(tmp)) resumeAt = fs.statSync(tmp).size; } catch (e) {}
+    const rangeHeaders = () => (resumeAt > 0 ? { Range: "bytes=" + resumeAt + "-" } : {});
     const sink = (res, retryFn, depth) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume(); return retryFn(res.headers.location, depth + 1);
       }
-      if (res.statusCode !== 200) { res.resume(); return done(false); }
-      const f = fs.createWriteStream(tmp);
+      // 206 = 续传被接受; 200 = 服务端忽略 Range, 从头给整包 → 清空续传重写
+      const append = resumeAt > 0 && res.statusCode === 206;
+      if (resumeAt > 0 && res.statusCode === 200) { resumeAt = 0; }
+      if (res.statusCode !== 200 && res.statusCode !== 206) { res.resume(); return done(false); }
+      const cl = Number(res.headers["content-length"] || 0);
+      expectedTotal = cl ? (append ? resumeAt : 0) + cl : 0;
+      const f = fs.createWriteStream(tmp, { flags: append ? "a" : "w" });
+      res.on("error", () => done(false)); // 此前缺失: 响应流中途出错未处理
       res.pipe(f);
-      f.on("finish", () => f.close(() => {
-        try { if (fs.statSync(tmp).size < 1000000) return done(false); } // 损坏/HTML 错误页
-        catch (e) { return done(false); }
-        done(true);
-      }));
+      f.on("finish", () => f.close(() => done(true)));
       f.on("error", () => done(false));
     };
     const get = (u, depth) => {
@@ -198,7 +273,7 @@ function httpDownload(url, dst, proxy) {
           });
           conn.on("connect", (resp, socket) => {
             if (resp.statusCode !== 200) { socket.destroy(); return done(false); }
-            const req2 = https.get({ hostname: opts.hostname, port: opts.port || 443, path: opts.pathname + opts.search, socket, agent: false, headers: { "User-Agent": UA }, timeout: 60000 },
+            const req2 = https.get({ hostname: opts.hostname, port: opts.port || 443, path: opts.pathname + opts.search, socket, agent: false, headers: Object.assign({ "User-Agent": UA }, rangeHeaders()), timeout: 60000 },
               (res) => sink(res, get, depth));
             req2.on("error", () => done(false));
             req2.setTimeout(60000, () => { req2.destroy(); done(false); });
@@ -210,7 +285,7 @@ function httpDownload(url, dst, proxy) {
         }
       }
       const mod = opts.protocol === "http:" ? http : https;
-      const req = mod.get({ hostname: opts.hostname, port: opts.port || (opts.protocol === "http:" ? 80 : 443), path: opts.pathname + opts.search, headers: { "User-Agent": UA }, timeout: 60000 },
+      const req = mod.get({ hostname: opts.hostname, port: opts.port || (opts.protocol === "http:" ? 80 : 443), path: opts.pathname + opts.search, headers: Object.assign({ "User-Agent": UA }, rangeHeaders()), timeout: 60000 },
         (res) => sink(res, get, depth));
       req.on("error", () => done(false));
       req.setTimeout(60000, () => { req.destroy(); done(false); });
@@ -220,21 +295,215 @@ function httpDownload(url, dst, proxy) {
 }
 
 async function downloadCloudflared(onProgress) {
-  const dst = path.join(os.homedir(), ".dao", "bin", CF_BIN_NAME);
-  try { fs.mkdirSync(path.dirname(dst), { recursive: true }); } catch (e) {}
-  try { if (fs.existsSync(dst) && fs.statSync(dst).size > 1000000) return dst; } catch (e) {}
+  const binDir = path.join(os.homedir(), ".dao", "bin");
+  const dst = path.join(binDir, CF_BIN_NAME);
+  try { fs.mkdirSync(binDir, { recursive: true }); } catch (e) {}
+  cleanupPartials(binDir); // 清上一轮半成品, 杜绝「以半成品为基础」
+  // 既有文件: 必须 --version 探活通过才复用; 否则删除重下(自愈)。不再只看体积。
+  try { if (fs.existsSync(dst) && isRealCloudflared(dst) && probeCloudflared(dst)) return dst; } catch (e) {}
+  try { if (fs.existsSync(dst)) { fs.unlinkSync(dst); _cfProbeCache.delete(dst); } } catch (e) {}
   const asset = cfAssetName();
+  const isTgz = /\.tgz$/i.test(asset); // macOS
+  const dlTarget = isTgz ? path.join(binDir, "cloudflared.tgz") : dst;
   const proxy = detectProxy();
   const mirrors = downloadMirrors(asset);
   for (let i = 0; i < mirrors.length; i++) {
     try { onProgress && onProgress("下载 cloudflared … 镜像 " + (i + 1) + "/" + mirrors.length); } catch (e) {}
-    const ok = await httpDownload(mirrors[i], dst, proxy);
-    if (ok) {
-      if (process.platform !== "win32") { try { fs.chmodSync(dst, 0o755); } catch (e) {} }
-      return dst;
-    }
+    const ok = await httpDownload(mirrors[i], dlTarget, proxy);
+    if (!ok) continue;
+    let bin = dlTarget;
+    if (isTgz) { bin = extractCfTgz(dlTarget, dst); if (!bin) continue; }
+    if (process.platform !== "win32") { try { fs.chmodSync(bin, 0o755); } catch (e) {} }
+    _cfProbeCache.delete(bin);
+    if (probeCloudflared(bin)) return bin; // 落地后最终完整性校验
+    try { fs.unlinkSync(bin); } catch (e) {} // 探活失败 → 删除, 换下一个镜像重下
   }
   return "";
+}
+
+// ═══════════════════════════════════════════════════════════
+// 最小 WebSocket 客户端(RFC6455) — 帛书·「天下之至柔驰骋于天下之致坚」
+// VS Code 扩展宿主(Electron Node)无全局 WebSocket、也未带 ws 依赖。
+// 故零依赖手写: 原生 net/tls + crypto 握手 + 帧编解码 + 客户端掩码 + ping/pong。
+// 仅实现 relay 桥所需子集(text/ping/pong/close, 自动拼分片), 直连与代理 CONNECT 皆可。
+// ═══════════════════════════════════════════════════════════
+const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+class DaoWsClient {
+  constructor(url, opts) {
+    opts = opts || {};
+    this.url = url;
+    this.proxy = opts.proxy || "";
+    this.onopen = null; this.onmessage = null; this.onclose = null; this.onerror = null;
+    this.sock = null; this.closed = false;
+    this._buf = Buffer.alloc(0);
+    this._frags = []; this._fragOp = 0;
+  }
+  connect() {
+    let u; try { u = new URL(this.url); } catch (e) { return this._fail(new Error("bad ws url")); }
+    const isTls = u.protocol === "wss:";
+    const port = Number(u.port) || (isTls ? 443 : 80);
+    const reqPath = (u.pathname || "/") + (u.search || "");
+    // 代理(http CONNECT 隧道)→ 拿到裸 socket → 视需要 TLS → WS 握手
+    if (this.proxy) {
+      let px = null; try { px = new URL(this.proxy); } catch (e) { px = null; }
+      if (px) {
+        const conn = http.request({ host: px.hostname, port: Number(px.port) || 80, method: "CONNECT", path: u.hostname + ":" + port, headers: { Host: u.hostname + ":" + port, "User-Agent": UA }, timeout: 20000 });
+        conn.on("connect", (resp, socket) => {
+          if (resp.statusCode !== 200) { try { socket.destroy(); } catch (e) {} return this._fail(new Error("proxy connect " + resp.statusCode)); }
+          this._afterRaw(socket, u, isTls, reqPath);
+        });
+        conn.on("error", (e) => this._fail(e));
+        conn.setTimeout(20000, () => { try { conn.destroy(); } catch (e) {} this._fail(new Error("proxy timeout")); });
+        conn.end();
+        return;
+      }
+    }
+    if (isTls) {
+      const tls = require("tls");
+      const t = tls.connect({ host: u.hostname, port, servername: u.hostname }, () => this._startHandshake(t, u.host, reqPath));
+      t.setTimeout(20000, () => { try { t.destroy(); } catch (e) {} this._fail(new Error("connect timeout")); });
+      t.on("error", (e) => this._fail(e));
+    } else {
+      const net = require("net");
+      const s = net.connect({ host: u.hostname, port }, () => this._startHandshake(s, u.host, reqPath));
+      s.setTimeout(20000, () => { try { s.destroy(); } catch (e) {} this._fail(new Error("connect timeout")); });
+      s.on("error", (e) => this._fail(e));
+    }
+  }
+  _afterRaw(socket, u, isTls, reqPath) {
+    if (isTls) {
+      const tls = require("tls");
+      const t = tls.connect({ socket, servername: u.hostname }, () => this._startHandshake(t, u.host, reqPath));
+      t.on("error", (e) => this._fail(e));
+    } else { this._startHandshake(socket, u.host, reqPath); }
+  }
+  _startHandshake(socket, host, reqPath) {
+    const key = crypto.randomBytes(16).toString("base64");
+    const accept = crypto.createHash("sha1").update(key + WS_GUID).digest("base64").toLowerCase();
+    let done = false; let hs = Buffer.alloc(0);
+    const onData = (d) => {
+      if (done) return this._onFrameData(d);
+      hs = Buffer.concat([hs, d]);
+      const idx = hs.indexOf("\r\n\r\n");
+      if (idx < 0) return;
+      const header = hs.slice(0, idx).toString("utf8").toLowerCase();
+      const rest = hs.slice(idx + 4);
+      if (!/^http\/1\.1 101/.test(header) || header.indexOf("sec-websocket-accept: " + accept) < 0) {
+        return this._fail(new Error("ws handshake rejected"));
+      }
+      done = true; this.sock = socket;
+      socket.removeListener("data", onData);
+      socket.on("data", (x) => this._onFrameData(x));
+      socket.setTimeout(0);
+      if (rest.length) this._onFrameData(rest);
+      try { this.onopen && this.onopen(); } catch (e) {}
+    };
+    socket.on("data", onData);
+    socket.on("close", () => this._closeOnce());
+    socket.on("error", (e) => this._err(e));
+    const req = "GET " + reqPath + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+      "Sec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\nUser-Agent: " + UA + "\r\n\r\n";
+    try { socket.write(req); } catch (e) { this._fail(e); }
+  }
+  send(str) { return this._writeFrame(0x1, Buffer.from(String(str), "utf8")); }
+  ping() { return this._writeFrame(0x9, Buffer.alloc(0)); }
+  _writeFrame(opcode, payload) {
+    if (!this.sock) return false;
+    const len = payload.length; let header;
+    if (len < 126) { header = Buffer.alloc(2); header[1] = 0x80 | len; }
+    else if (len < 65536) { header = Buffer.alloc(4); header[1] = 0x80 | 126; header.writeUInt16BE(len, 2); }
+    else { header = Buffer.alloc(10); header[1] = 0x80 | 127; header.writeUInt32BE(0, 2); header.writeUInt32BE(len, 6); }
+    header[0] = 0x80 | opcode; // FIN + opcode
+    const mask = crypto.randomBytes(4);
+    const masked = Buffer.allocUnsafe(len);
+    for (let i = 0; i < len; i++) masked[i] = payload[i] ^ mask[i & 3];
+    try { this.sock.write(Buffer.concat([header, mask, masked])); return true; } catch (e) { return false; }
+  }
+  _onFrameData(d) {
+    this._buf = Buffer.concat([this._buf, d]);
+    while (true) {
+      if (this._buf.length < 2) return;
+      const b0 = this._buf[0], b1 = this._buf[1];
+      const fin = (b0 & 0x80) !== 0;
+      const opcode = b0 & 0x0f;
+      const masked = (b1 & 0x80) !== 0;
+      let len = b1 & 0x7f; let offset = 2;
+      if (len === 126) { if (this._buf.length < 4) return; len = this._buf.readUInt16BE(2); offset = 4; }
+      else if (len === 127) { if (this._buf.length < 10) return; len = Number(this._buf.readBigUInt64BE(2)); offset = 10; }
+      let maskKey = null;
+      if (masked) { if (this._buf.length < offset + 4) return; maskKey = this._buf.slice(offset, offset + 4); offset += 4; }
+      if (this._buf.length < offset + len) return;
+      let payload = this._buf.slice(offset, offset + len);
+      if (masked && maskKey) { const o = Buffer.allocUnsafe(len); for (let i = 0; i < len; i++) o[i] = payload[i] ^ maskKey[i & 3]; payload = o; }
+      this._buf = this._buf.slice(offset + len);
+      this._handleFrame(fin, opcode, payload);
+    }
+  }
+  _handleFrame(fin, opcode, payload) {
+    if (opcode === 0x8) { this.close(); return; }            // close
+    if (opcode === 0x9) { this._writeFrame(0xA, payload); return; } // ping → pong
+    if (opcode === 0xA) { return; }                          // pong
+    if (opcode === 0x0) { this._frags.push(payload); }        // 续帧
+    else { this._frags = [payload]; this._fragOp = opcode; }
+    if (!fin) return;
+    const full = Buffer.concat(this._frags); this._frags = [];
+    if (this._fragOp === 0x1 || this._fragOp === 0x2) {
+      try { this.onmessage && this.onmessage(full.toString("utf8")); } catch (e) {}
+    }
+  }
+  close() {
+    if (this.closed) return;
+    try { this._writeFrame(0x8, Buffer.alloc(0)); } catch (e) {}
+    try { this.sock && this.sock.end(); } catch (e) {}
+    this._closeOnce();
+  }
+  _closeOnce() { if (this.closed) return; this.closed = true; try { this.onclose && this.onclose(); } catch (e) {} }
+  _err(e) { try { this.onerror && this.onerror(e); } catch (x) {} }
+  _fail(e) { this._err(e); this._closeOnce(); }
+}
+
+// 出站中继桥(WSS 穿 NAT) — 帛书·「反者道之动」: 本机主动出站连 Worker+DurableObject,
+// 云端经稳定 *.workers.dev/relay/<session> 直达本机。零账号、URL 天然稳定、无 50MB 二进制。
+// 与 core.js 的 connectRelay 共用同一帧契约(request/response/ping/pong), 统一两套实现。
+function connectRelayWs(opts) {
+  let ws = null, connected = false, stopped = false, pingTimer = null, reconnectTimer = null, pubUrl = null;
+  const base = String(opts.relayUrl || "").replace(/\/$/, "");
+  const wsUrl = base.replace(/^http/, "ws") + "/connect?session=" + encodeURIComponent(opts.session) + "&token=" + encodeURIComponent(opts.token);
+  const schedule = () => {
+    if (stopped || reconnectTimer) return;
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; if (!connected) open(); }, 5000);
+  };
+  function open() {
+    if (stopped) return;
+    ws = new DaoWsClient(wsUrl, { proxy: opts.proxy });
+    ws.onopen = () => {
+      connected = true; pubUrl = base + "/relay/" + opts.session;
+      try { opts.log && opts.log("relay connected: " + pubUrl); } catch (e) {}
+      try { opts.onStatus && opts.onStatus(true, pubUrl); } catch (e) {}
+      pingTimer = setInterval(() => { try { ws.send(JSON.stringify({ type: "ping" })); } catch (e) {} }, 15000);
+    };
+    ws.onmessage = async (raw) => {
+      let m; try { m = JSON.parse(raw); } catch (e) { return; }
+      if (m.type === "pong") return;
+      if (m.type === "request" && m.id) {
+        let out;
+        try {
+          const bodyStr = typeof m.body === "string" ? m.body : JSON.stringify(m.body || {});
+          out = await opts.handle(m.method || "GET", m.path || "/api/health", bodyStr);
+        } catch (e) { out = { status: 500, body: { error: String(e && e.message || e) } }; }
+        try { ws.send(JSON.stringify({ type: "response", id: m.id, status: out.status, body: out.body })); } catch (e) {}
+      }
+    };
+    ws.onclose = () => { connected = false; if (pingTimer) clearInterval(pingTimer); pingTimer = null; pubUrl = null; try { opts.onStatus && opts.onStatus(false, ""); } catch (e) {} schedule(); };
+    ws.onerror = () => {};
+    try { ws.connect(); } catch (e) { schedule(); }
+  }
+  open();
+  return {
+    stop() { stopped = true; if (pingTimer) clearInterval(pingTimer); if (reconnectTimer) clearTimeout(reconnectTimer); try { ws && ws.close(); } catch (e) {} },
+    isConnected: () => connected,
+    publicUrl: () => pubUrl,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -359,204 +628,184 @@ class WorkspaceServer {
         if (old.token) this.token = old.token;
       } catch (e) {}
       if (!this.token) this.token = crypto.randomBytes(16).toString("hex");
-
       this.startedAt = new Date();
-      const wsInfo = workspaceInfo();
-      const auth = (req) => {
-        const h = req.headers["authorization"] || "";
-        if (h === "Bearer " + this.token) return true;
-        // 检查配置的token
-        const cfgToken = vscode.workspace.getConfiguration("daoBridge").get("accessToken") || "";
-        if (cfgToken && h === "Bearer " + cfgToken) return true;
-        return false;
-      };
+
       const send = (res, code, obj) => {
         const b = Buffer.from(JSON.stringify(obj));
         res.writeHead(code, { "Content-Type": "application/json", "Content-Length": b.length, "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Authorization, Content-Type" });
         res.end(b);
       };
-
+      // HTTP 直连只做鉴权 + 收 body, 路由统一交给 handleApi(与 relay 转发共用一份契约)
       this.server = http.createServer((req, res) => {
         if (req.method === "OPTIONS") {
           res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type" });
           return res.end();
         }
-        const u = new URL(req.url, "http://x");
-        const p = u.pathname;
-
-        // 免鉴权端点
-        if (p === "/api/health") {
-          return send(res, 200, {
-            status: "ok", service: "dao-bridge", version: BRIDGE_VERSION,
-            host: wsInfo.host, workspace: wsInfo.name,
-            agents_online: this.agentRegistry.size,
-            uptime: Math.floor((Date.now() - (this.startedAt || Date.now())) / 1000),
-          });
-        }
-
-        if (!auth(req)) return send(res, 401, { error: "unauthorized" });
-
-        // 无Body端点
-        if (p === "/api/info" && req.method === "GET") return send(res, 200, workspaceInfo());
-        if (p === "/api/agents" && req.method === "GET") {
-          const agents = [];
-          for (const [id, a] of this.agentRegistry) {
-            agents.push({ id, hostname: a.hostname, status: a.status || "online", lastSeen: a.lastSeen, capabilities: a.capabilities || [] });
-          }
-          return send(res, 200, { agents });
-        }
-        if (p === "/api/bridge-state" && req.method === "GET") {
-          const br = this._bridgeRef;
-          return send(res, 200, {
-            url: br ? br.url : "", port: this.port, token: this.token,
-            mode: br ? br.mode : "", tunnelPid: br && br.proc ? br.proc.pid : null,
-            startedAt: this.startedAt ? this.startedAt.toISOString() : "",
-            workspace: wsInfo, agents_online: this.agentRegistry.size,
-          });
-        }
-        // 隧道回退链诊断 — 本地Agent热修复时定位
-        if (p === "/api/attempt-log" && req.method === "GET") {
-          const br = this._bridgeRef;
-          return send(res, 200, {
-            mode: br ? br.mode : "", protocol: br ? br.protocol : "", proxy: br ? br.proxy : "",
-            url: br ? br.url : "", cfBin: br ? br.cfBin : "", lastErr: br ? br.lastErr : "",
-            attempts: br ? br.attemptLog : [],
-          });
-        }
-        // 导出MD文档端点
-        if (p === "/api/export-cloud-md" && req.method === "GET") {
-          const br = this._bridgeRef;
-          const md = br ? br.generateCloudAgentMd() : "# DAO Bridge 未启动";
-          return send(res, 200, { md });
-        }
-        if (p === "/api/export-local-md" && req.method === "GET") {
-          const br = this._bridgeRef;
-          const md = br ? br.generateLocalAgentMd() : "# DAO Bridge 未启动";
-          return send(res, 200, { md });
-        }
-
-        // Body端点
+        const pathname = new URL(req.url, "http://x").pathname;
         let body = "";
         req.on("data", (c) => (body += c));
-        req.on("end", () => {
+        req.on("end", async () => {
           let j = {};
           try { j = body ? JSON.parse(body) : {}; } catch (e) {}
-          const root = workspaceInfo().root;
+          const authed = pathname === "/api/health" ? true : this.authToken(req.headers["authorization"] || "");
           try {
-            // 命令执行 — CLOUD_AGENT_GUIDE同构
-            if (p === "/api/exec" && req.method === "POST") {
-              cp.exec(j.cmd || "", { cwd: j.cwd || root, timeout: (j.timeout || 60) * 1000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-                send(res, 200, { stdout: String(stdout || ""), stderr: String(stderr || (err ? err.message : "")), exit_code: err ? (err.code || 1) : 0 });
-              });
-              return;
-            }
-            if (p === "/api/exec-sync" && req.method === "POST") {
-              cp.exec(j.cmd || "", { cwd: j.cwd || root, timeout: (j.timeout || 60) * 1000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-                send(res, 200, { status: "completed", result: { stdout: String(stdout || ""), stderr: String(stderr || (err ? err.message : "")), exit_code: err ? (err.code || 1) : 0 } });
-              });
-              return;
-            }
-            if (p === "/api/ls" && req.method === "POST") {
-              const dir = withinRoot(root, j.path || ".");
-              if (!dir) return send(res, 403, { error: "path escapes workspace root" });
-              if (!fs.existsSync(dir)) return send(res, 404, { error: "not found", path: dir });
-              const items = fs.readdirSync(dir, { withFileTypes: true }).map((d) => ({ name: d.name, dir: d.isDirectory() }));
-              return send(res, 200, { path: dir, items });
-            }
-            if (p === "/api/read" && req.method === "POST") {
-              const fp = withinRoot(root, j.path || "");
-              if (!fp) return send(res, 403, { error: "path escapes workspace root" });
-              if (!fs.existsSync(fp)) return send(res, 404, { error: "not found", path: fp });
-              return send(res, 200, { path: fp, content: fs.readFileSync(fp, "utf8") });
-            }
-            if (p === "/api/write" && req.method === "POST") {
-              const fp = withinRoot(root, j.path || "");
-              if (!fp) return send(res, 403, { error: "path escapes workspace root" });
-              fs.mkdirSync(path.dirname(fp), { recursive: true });
-              fs.writeFileSync(fp, j.content == null ? "" : String(j.content), "utf8");
-              return send(res, 200, { path: fp, ok: true });
-            }
-            // Agent注册 — 本地Agent接入
-            if (p === "/api/agent/register" && req.method === "POST") {
-              const agentId = j.agent_id || j.id || "";
-              if (!agentId) return send(res, 400, { error: "agent_id required" });
-              this.agentRegistry.set(agentId, {
-                hostname: j.hostname || "", status: "online", lastSeen: new Date().toISOString(),
-                capabilities: j.capabilities || ["shell", "file_read", "file_write"],
-                url: j.url || "",
-              });
-              return send(res, 200, { ok: true, agent_id: agentId });
-            }
-            if (p === "/api/agent/heartbeat" && req.method === "POST") {
-              const agentId = j.agent_id || j.id || "";
-              const existing = this.agentRegistry.get(agentId);
-              if (existing) { existing.lastSeen = new Date().toISOString(); existing.status = "online"; }
-              return send(res, 200, { ok: true });
-            }
-            // 广播 — 发送到所有在线Agent
-            if (p === "/api/broadcast" && req.method === "POST") {
-              return send(res, 200, { ok: true, delivered: this.agentRegistry.size, note: "broadcast queued" });
-            }
-            // 插件配置接口 — 本地Agent可读写配置
-            if (p === "/api/config" && req.method === "GET") {
-              const cfg = vscode.workspace.getConfiguration("daoBridge");
-              return send(res, 200, {
-                tunnelToken: cfg.get("tunnelToken") || "",
-                hostname: cfg.get("hostname") || "",
-                localPort: cfg.get("localPort") || 0,
-                cloudflaredPath: cfg.get("cloudflaredPath") || "",
-              });
-            }
-            if (p === "/api/config" && req.method === "POST") {
-              const cfg = vscode.workspace.getConfiguration("daoBridge");
-              const updates = [];
-              if (j.tunnelToken !== undefined) updates.push(cfg.update("tunnelToken", j.tunnelToken, true));
-              if (j.hostname !== undefined) updates.push(cfg.update("hostname", j.hostname, true));
-              if (j.localPort !== undefined) updates.push(cfg.update("localPort", j.localPort, true));
-              if (j.cloudflaredPath !== undefined) updates.push(cfg.update("cloudflaredPath", j.cloudflaredPath, true));
-              Promise.all(updates).then(() => send(res, 200, { ok: true })).catch((e) => send(res, 500, { error: e.message }));
-              return;
-            }
-            // ── 本地Agent深度操控：镜像 UI 命令到 HTTP（表里相依）──
-            // 重启隧道（快速隧道 URL 会变；调用后重新读取 conn.json 取新 url/token）
-            if (p === "/api/bridge/restart" && req.method === "POST") {
-              const br = this._bridgeRef;
-              send(res, 200, { ok: true, note: "tunnel restarting; re-read ~/.dao/bridge/conn.json for new url/token" });
-              setTimeout(async () => { try { br.stop(); await br.start(); } catch (e) {} }, 200);
-              return;
-            }
-            // 退出账号/重置 → 清凭证残留 + 回到无账号快速隧道
-            if (p === "/api/account/logout" && req.method === "POST") {
-              const br = this._bridgeRef;
-              send(res, 200, { ok: true, note: "account reset + restart to no-account quick tunnel; re-read conn.json" });
-              setTimeout(async () => { try { await br.resetAccount(); br.stop(); await br.start(); } catch (e) {} }, 200);
-              return;
-            }
-            // 重生成并落盘两个 MD 文档（云端/本地 Agent 接入指南）
-            if (p === "/api/export/refresh" && req.method === "POST") {
-              const br = this._bridgeRef;
-              if (!br) return send(res, 503, { error: "bridge not ready" });
-              br.writeArtifacts();
-              return send(res, 200, {
-                ok: true,
-                cloud_md_path: br.mdPath(), local_md_path: br.localAgentMdPath(),
-                cloud_md: br.generateCloudAgentMd(), local_md: br.generateLocalAgentMd(),
-              });
-            }
-            // 热加载：重载窗口让扩展宿主加载新 extension.js（会打断当前 UI，谨慎调用）
-            if (p === "/api/self/reload" && req.method === "POST") {
-              send(res, 200, { ok: true, note: "reloading window in 600ms; extension host restarts (disruptive to active UI)" });
-              setTimeout(() => { try { vscode.commands.executeCommand("workbench.action.reloadWindow"); } catch (e) {} }, 600);
-              return;
-            }
-          } catch (e) { return send(res, 500, { error: String(e && e.message) }); }
-          send(res, 404, { error: "not found" });
+            const out = await this.handleApi(req.method || "GET", pathname, j, authed);
+            send(res, out.status, out.body);
+          } catch (e) { send(res, 500, { error: String(e && e.message) }); }
         });
       });
       this.server.on("error", reject);
       this.server.listen(fixedPort || 0, "127.0.0.1", () => { this.port = this.server.address().port; resolve(this.port); });
     });
   }
+
+  authToken(h) {
+    if (h === "Bearer " + this.token) return true;
+    const cfgToken = vscode.workspace.getConfiguration("daoBridge").get("accessToken") || "";
+    if (cfgToken && h === "Bearer " + cfgToken) return true;
+    return false;
+  }
+
+  // 解析目标路径 — 帛书·「整个电脑的穿透·工作区只是文本的一部分」
+  // 默认整机: 绝对路径原样, 相对路径相对工作区根 → 云端 Agent 能操作全机。
+  // 仅当用户显式开 daoBridge.confineToWorkspace 才沙箱在工作区内(越界返回 null)。
+  resolveTarget(root, p, fallback) {
+    const confine = vscode.workspace.getConfiguration("daoBridge").get("confineToWorkspace") === true;
+    const raw = (p == null || p === "") ? (fallback || "") : p;
+    if (confine) return withinRoot(root, raw);
+    if (!raw) return root;
+    return path.isAbsolute(raw) ? raw : path.resolve(root, raw);
+  }
+
+  // 统一路由(HTTP 直连 与 relay 转发共用)→ {status, body}。
+  // authed=true: 调用方已鉴权(relay 在 /connect 时已用 token 校验)。
+  // 重启/退出/热加载等异步副作用经 setTimeout 调度, 立即回 ack。
+  async handleApi(method, pathname, j, authed) {
+    j = j || {};
+    const wsInfo = workspaceInfo();
+    const root = wsInfo.root;
+    const br = this._bridgeRef;
+    const escapeErr = { status: 403, body: { error: "path escapes workspace root (daoBridge.confineToWorkspace)" } };
+
+    if (pathname === "/api/health") {
+      return { status: 200, body: {
+        status: "ok", service: "dao-bridge", version: BRIDGE_VERSION,
+        host: wsInfo.host, workspace: wsInfo.name,
+        agents_online: this.agentRegistry.size,
+        uptime: Math.floor((Date.now() - (this.startedAt || Date.now())) / 1000),
+      } };
+    }
+    if (!authed) return { status: 401, body: { error: "unauthorized" } };
+
+    if (pathname === "/api/info" && method === "GET") return { status: 200, body: workspaceInfo() };
+    if (pathname === "/api/agents" && method === "GET") {
+      const agents = [];
+      for (const [id, a] of this.agentRegistry) agents.push({ id, hostname: a.hostname, status: a.status || "online", lastSeen: a.lastSeen, capabilities: a.capabilities || [] });
+      return { status: 200, body: { agents } };
+    }
+    if (pathname === "/api/bridge-state" && method === "GET") {
+      return { status: 200, body: {
+        url: br ? br.url : "", port: this.port, token: this.token,
+        mode: br ? br.mode : "", tunnelPid: br && br.proc ? br.proc.pid : null,
+        startedAt: this.startedAt ? this.startedAt.toISOString() : "",
+        workspace: wsInfo, agents_online: this.agentRegistry.size,
+      } };
+    }
+    if (pathname === "/api/attempt-log" && method === "GET") {
+      return { status: 200, body: {
+        mode: br ? br.mode : "", protocol: br ? br.protocol : "", proxy: br ? br.proxy : "",
+        url: br ? br.url : "", cfBin: br ? br.cfBin : "", lastErr: br ? br.lastErr : "",
+        attempts: br ? br.attemptLog : [],
+      } };
+    }
+    if (pathname === "/api/export-cloud-md" && method === "GET") return { status: 200, body: { md: br ? br.generateCloudAgentMd() : "# DAO Bridge 未启动" } };
+    if (pathname === "/api/export-local-md" && method === "GET") return { status: 200, body: { md: br ? br.generateLocalAgentMd() : "# DAO Bridge 未启动" } };
+
+    // 命令执行 — 整机任意命令(整个电脑的穿透, 不受工作区限制)
+    if ((pathname === "/api/exec" || pathname === "/api/exec-sync") && method === "POST") {
+      const r = await new Promise((resolve) => {
+        cp.exec(j.cmd || "", { cwd: j.cwd || root, timeout: (j.timeout || 60) * 1000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+          resolve({ stdout: String(stdout || ""), stderr: String(stderr || (err ? err.message : "")), exit_code: err ? (err.code || 1) : 0 });
+        });
+      });
+      if (pathname === "/api/exec-sync") return { status: 200, body: { status: "completed", result: r } };
+      return { status: 200, body: r };
+    }
+    if (pathname === "/api/ls" && method === "POST") {
+      const dir = this.resolveTarget(root, j.path, ".");
+      if (!dir) return escapeErr;
+      if (!fs.existsSync(dir)) return { status: 404, body: { error: "not found", path: dir } };
+      const items = fs.readdirSync(dir, { withFileTypes: true }).map((d) => ({ name: d.name, dir: d.isDirectory() }));
+      return { status: 200, body: { path: dir, items } };
+    }
+    if (pathname === "/api/read" && method === "POST") {
+      const fp = this.resolveTarget(root, j.path, "");
+      if (!fp) return escapeErr;
+      if (!fs.existsSync(fp)) return { status: 404, body: { error: "not found", path: fp } };
+      return { status: 200, body: { path: fp, content: fs.readFileSync(fp, "utf8") } };
+    }
+    if (pathname === "/api/write" && method === "POST") {
+      const fp = this.resolveTarget(root, j.path, "");
+      if (!fp) return escapeErr;
+      fs.mkdirSync(path.dirname(fp), { recursive: true });
+      fs.writeFileSync(fp, j.content == null ? "" : String(j.content), "utf8");
+      return { status: 200, body: { path: fp, ok: true } };
+    }
+    if (pathname === "/api/agent/register" && method === "POST") {
+      const agentId = j.agent_id || j.id || "";
+      if (!agentId) return { status: 400, body: { error: "agent_id required" } };
+      this.agentRegistry.set(agentId, {
+        hostname: j.hostname || "", status: "online", lastSeen: new Date().toISOString(),
+        capabilities: j.capabilities || ["shell", "file_read", "file_write"], url: j.url || "",
+      });
+      return { status: 200, body: { ok: true, agent_id: agentId } };
+    }
+    if (pathname === "/api/agent/heartbeat" && method === "POST") {
+      const existing = this.agentRegistry.get(j.agent_id || j.id || "");
+      if (existing) { existing.lastSeen = new Date().toISOString(); existing.status = "online"; }
+      return { status: 200, body: { ok: true } };
+    }
+    if (pathname === "/api/broadcast" && method === "POST") {
+      return { status: 200, body: { ok: true, delivered: this.agentRegistry.size, note: "broadcast queued" } };
+    }
+    if (pathname === "/api/config" && method === "GET") {
+      const cfg = vscode.workspace.getConfiguration("daoBridge");
+      return { status: 200, body: {
+        tunnelToken: cfg.get("tunnelToken") || "", hostname: cfg.get("hostname") || "",
+        localPort: cfg.get("localPort") || 0, cloudflaredPath: cfg.get("cloudflaredPath") || "",
+        relayUrl: cfg.get("relayUrl") || "", session: cfg.get("session") || "",
+        confineToWorkspace: cfg.get("confineToWorkspace") === true,
+      } };
+    }
+    if (pathname === "/api/config" && method === "POST") {
+      const cfg = vscode.workspace.getConfiguration("daoBridge");
+      try {
+        for (const k of ["tunnelToken", "hostname", "localPort", "cloudflaredPath", "relayUrl", "session"])
+          if (j[k] !== undefined) await cfg.update(k, j[k], true);
+        return { status: 200, body: { ok: true } };
+      } catch (e) { return { status: 500, body: { error: String(e && e.message || e) } }; }
+    }
+    // 本地Agent深度操控: 重启隧道(URL 可能变, 重读 conn.json)
+    if (pathname === "/api/bridge/restart" && method === "POST") {
+      if (br) setTimeout(async () => { try { br.stop(); await br.start(); } catch (e) {} }, 200);
+      return { status: 200, body: { ok: true, note: "tunnel restarting; re-read ~/.dao/bridge/conn.json for new url/token" } };
+    }
+    if (pathname === "/api/account/logout" && method === "POST") {
+      if (br) setTimeout(async () => { try { await br.resetAccount(); br.stop(); await br.start(); } catch (e) {} }, 200);
+      return { status: 200, body: { ok: true, note: "account reset + restart; re-read conn.json" } };
+    }
+    if (pathname === "/api/export/refresh" && method === "POST") {
+      if (!br) return { status: 503, body: { error: "bridge not ready" } };
+      br.writeArtifacts();
+      return { status: 200, body: { ok: true, cloud_md_path: br.mdPath(), local_md_path: br.localAgentMdPath(), cloud_md: br.generateCloudAgentMd(), local_md: br.generateLocalAgentMd() } };
+    }
+    if (pathname === "/api/self/reload" && method === "POST") {
+      setTimeout(() => { try { vscode.commands.executeCommand("workbench.action.reloadWindow"); } catch (e) {} }, 600);
+      return { status: 200, body: { ok: true, note: "reloading window in 600ms; extension host restarts (disruptive to active UI)" } };
+    }
+    return { status: 404, body: { error: "not found", route: pathname } };
+  }
+
   stop() { try { this.server && this.server.close(); } catch (e) {} this.server = null; }
 }
 
@@ -580,8 +829,26 @@ class Bridge {
     this.cfBin = "";
     this.attemptLog = [];
     this._starting = false;
+    this.relay = null; // 活跃的 Worker 中继(connectRelayWs 控制器)
     this.cfCredentials = loadCfCredentials();
     this.srv._bridgeRef = this;
+  }
+
+  // 中继尝试 — 出站 WSS 连 Worker。初连窗口内握手成功即采用并持有(后台自动重连);
+  // 窗口内连不上则停掉中继, 让上层回退 cloudflared。
+  _runRelayAttempt(relayUrl, session, proxy) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (ok) => { if (settled) return; settled = true; clearTimeout(timer); resolve(ok); };
+      try { if (this.relay) { this.relay.stop(); this.relay = null; } } catch (e) {}
+      this.relay = connectRelayWs({
+        relayUrl, session, token: this.srv.token, proxy,
+        handle: (m, p, bodyStr) => { let j = {}; try { j = bodyStr ? JSON.parse(bodyStr) : {}; } catch (e) {} return this.srv.handleApi(m, p, j, true); },
+        log: (msg) => { this.lastErr = msg; },
+        onStatus: (up, url) => { if (up) { this.url = url; this.mode = "relay"; this.protocol = "wss"; this.notify(); finish(true); } },
+      });
+      const timer = setTimeout(() => { if (!settled) { try { this.relay.stop(); } catch (e) {} this.relay = null; finish(false); } }, 9000);
+    });
   }
   mdPath() { return path.join(daoDir(), "workspace.md"); }
   localAgentMdPath() { return path.join(daoDir(), "local-agent-access.md"); }
@@ -608,16 +875,30 @@ class Bridge {
       // 守母: IDE 设置为空时自动从 ~/.dao 凭证库取命名隧道配置 — 零设置项介入
       if (!tunnelToken) { const dc = loadDaoTunnelConfig(); if (dc.token) tunnelToken = dc.token; if (!hostname && dc.hostname) hostname = dc.hostname; }
       const fixedPort = parseInt(cfg.get("localPort"), 10) || 0;
-
-      // cloudflared: 内置优先, 缺失则多镜像下载(含国内加速) — 不依赖用户网络/手动安装
-      let bin = findCloudflared(this.ctx);
-      if (!bin) { this.lastErr = "cloudflared 缺失，正在内置/下载…"; this.notify(); bin = await downloadCloudflared((m) => { this.lastErr = m; this.notify(); }); }
-      if (!bin) { this.lastErr = "cloudflared 不可用（内置缺失 + 多镜像下载均失败）— 请检查网络或在设置填 cloudflaredPath"; this.writeArtifacts(); this.notify(); return ""; }
-      this.cfBin = bin;
-
       const proxy = detectProxy();
       this.proxy = proxy;
+
+      // 本地服务先起(token + 统一路由就绪), relay 与 cloudflared 皆复用之
       const port = await this.srv.start(tunnelToken ? (fixedPort || 9910) : (fixedPort || 0));
+
+      // ① 默认通道: Worker+DurableObject 出站中继 — 帛书·「反者道之动」。
+      //    零 Cloudflare 账号 / URL 天然稳定(*.workers.dev/relay/<session>) / 纯出站适配一切(无 50MB 二进制)。
+      //    一举正面化解「自动安装中断」「认证成本」「跨平台」三件事; 连不上才退 cloudflared。
+      const relayUrl = String(cfg.get("relayUrl") || DEFAULT_RELAY_URL).trim();
+      if (cfg.get("disableRelay") !== true && relayUrl) {
+        const session = String(cfg.get("session") || "").trim() || os.hostname();
+        this.mode = "relay"; this.protocol = "wss"; this.notify();
+        const ok = await this._runRelayAttempt(relayUrl, session, proxy);
+        this.attemptLog.push({ mode: "relay", proto: "wss", ok, url: ok ? this.url : "" });
+        if (ok) { this.writeArtifacts(); this.notify(); return this.url; }
+        this.lastErr = "中继未连通(" + relayUrl + ")，回退 cloudflared…"; this.notify();
+      }
+
+      // ② 回退: cloudflared 隧道。内置优先, 缺失则多镜像下载(含国内加速) — 不依赖用户手动安装
+      let bin = findCloudflared(this.ctx);
+      if (!bin) { this.lastErr = "cloudflared 缺失，正在内置/下载…"; this.notify(); bin = await downloadCloudflared((m) => { this.lastErr = m; this.notify(); }); }
+      if (!bin) { this.lastErr = "中继未连通且 cloudflared 不可用（内置缺失 + 多镜像下载均失败）— 请检查网络或在设置填 cloudflaredPath"; this.writeArtifacts(); this.notify(); return ""; }
+      this.cfBin = bin;
 
       // 协议: http2 优先 — TCP/443, 穿透性最强(代理/GFW/企业网友好)。
       // 实测多数网络(含国内、本测试机)UDP/7844 被封, quic 必失败; cloudflared 自身亦会
@@ -1036,6 +1317,8 @@ class Bridge {
   stop() {
     try { if (this.proc) { this.proc.kill(); } } catch (e) {}
     this.proc = null;
+    try { if (this.relay) { this.relay.stop(); } } catch (e) {}
+    this.relay = null;
     this.srv.stop();
     this.url = "";
     try {
@@ -1280,4 +1563,4 @@ function activate(context) {
   _bridge.start().then((url) => { if (url) vscode.window.setStatusBarMessage("DAO Bridge 已打通: " + url, 8000); });
 }
 function deactivate() { try { if (_bridge) _bridge.stop(); } catch (e) {} }
-module.exports = { activate, deactivate, Bridge, detectProxy, downloadCloudflared, findCloudflared };
+module.exports = { activate, deactivate, Bridge, WorkspaceServer, detectProxy, downloadCloudflared, findCloudflared, isRealCloudflared, probeCloudflared, extractCfTgz, DaoWsClient, connectRelayWs };

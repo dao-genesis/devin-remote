@@ -19,6 +19,23 @@ dao-bridge 有两套并存、割裂的穿透实现：
 
 ---
 
+## 本次 PR 已落地（在前一 agent 分析基础上推行）
+
+> 前一 PR 仅交付分析文档、零代码。本 PR 落地了 P0 全部 + 部分 P2，并**纠正了一处方向性误判**（见下「方向纠正」）。
+
+- **默认通道切到 Worker 中继**：`extension.js` 新增零依赖 `DaoWsClient`（手写 RFC6455，宿主无 `ws` 模块）+ `connectRelayWs()`；`Bridge.start()` 改为**先起本地服务 → 试中继（`daoBridge.relayUrl` 默认 `dao-relay-do.zhouyoukang.workers.dev`）→ 连不上才回退 cloudflared**。`daoBridge.disableRelay` 可关。公网入口 `…workers.dev/relay/<session>`，零 Cloudflare 账号、URL 天然稳定。
+- **cloudflared 自愈**：`probeCloudflared()`（`--version` 探活，不止看体积）+ `cleanupPartials()`（清 `.part`/`.tgz` 残留）+ `httpDownload()` 断点续传（`Range` + `Content-Length` 校验）+ 落地后探活失败即删并换镜像。根治「半成品为基础永久卡死」。
+- **macOS `.tgz` 解包**：零依赖 `extractCfTgz()`（`zlib.gunzipSync` + 手解 512B tar 头）。修前 mac 100% 不可用。
+- **`fetch-cloudflared.js` 断链修复**：`plugins/`→`addons/` 路径；darwin 改为下载后解包落地真二进制（不再跳过）。
+- **统一路由契约**：抽出 `WorkspaceServer.handleApi(method, path, body, authed)`，HTTP 直连与中继转发共用同一份 `{status, body}` 契约。
+- **整机穿透（方向纠正）**：`resolveTarget()` 默认放开 `ls/read/write` 到整机（绝对路径原样、相对路径相对工作区根），仅 `daoBridge.confineToWorkspace=true` 才沙箱。
+- **测试**：`addons/dao-bridge/dao-bridge-ext/test/relay.test.js`（5 项：WS 握手/掩码/大帧、中继 request→handle→response 闭环、断线重连、tgz 解包、二进制体积判据）全绿。
+
+### 方向纠正
+原清单 P1-3 建议给 `/api/exec` 加「只读/工作区白名单」**收紧**。这与产品目标相反——目标是「整个电脑的穿透，云端 Agent 全方位操作电脑，工作区只是文本一部分」。真正的不一致是反向的：`/api/ls|read|write` 被 `withinRoot` 沙箱锁死。本 PR 已统一为**默认整机**，沙箱改为显式 opt-in。
+
+---
+
 ## P0 · 治本：把默认通道切到 Worker+DO 中继
 
 **目标**：插件激活后优先用实现 B 出站连中继，拿到稳定 `…workers.dev/relay/<session>` 公网入口；连不上再自动回退 cloudflared（保持现有回退链）。默认行为对「连得上中继」的用户实现零账号、稳定 URL。
@@ -86,7 +103,7 @@ dao-bridge 有两套并存、割裂的穿透实现：
 
 1. **轮换泄露的 token**：知识库笔记 `DAO Bridge 内网穿透·远程操作文档` 内嵌了 live token + trycloudflare URL，等于公开了该机器的 RCE 凭证 —— **立即轮换**。
 2. **MD 默认不内嵌明文 token**：`generateCloudAgentMd/generateLocalAgentMd`（`:836`/`:912`）把 token 写进「设计上要分享」的文档。改为引用 `conn.json` 或下发一次性短时令牌。
-3. **`/api/exec` 加约束**：`exec`/`exec-sync`（`:447`/`:453`）是不限工作区的整机任意命令执行，而 `ls/read/write` 受 `withinRoot` 沙箱。提供「只读模式 / 根目录白名单」开关。
+3. ~~**`/api/exec` 加约束**~~ **【已纠正方向，见上「方向纠正」】**：产品目标是整机穿透，故**不收紧** exec；反而把 `ls/read/write` 也放开到整机（默认），沙箱降为 `daoBridge.confineToWorkspace` 显式 opt-in。本 PR 已落地。
 4. **`/api/health` 收敛信息**（`:388`，免鉴权泄露 host/platform/workspace）。
 5. **CORS `*`**（`:375` 等）叠加在 RCE API 上，评估收紧。
 6. 导出 SDK 关闭了 TLS 校验（MD 内 `CERT_NONE`），评估去除或加固。

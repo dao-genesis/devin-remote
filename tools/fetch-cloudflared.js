@@ -13,9 +13,11 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const https = require("https");
+const zlib = require("zlib");
 
 const UA = "Mozilla/5.0 dao-bridge fetch-cloudflared";
-const BIN_DIR = path.resolve(__dirname, "..", "plugins", "dao-bridge", "dao-bridge-ext", "bin");
+// 仓库重构后插件位于 addons/(此前误写 plugins/ → 目录不存在 → 自带二进制从未落地, VSIX 实际不含 cloudflared)
+const BIN_DIR = path.resolve(__dirname, "..", "addons", "dao-bridge", "dao-bridge-ext", "bin");
 
 const ASSET = {
   "windows-amd64": "cloudflared-windows-amd64.exe",
@@ -31,9 +33,31 @@ const OUT = {
   "windows-arm64": "cloudflared.exe",
   "linux-amd64": "cloudflared",
   "linux-arm64": "cloudflared",
-  "darwin-amd64": "cloudflared.tgz",
-  "darwin-arm64": "cloudflared.tgz",
+  "darwin-amd64": "cloudflared",
+  "darwin-arm64": "cloudflared",
 };
+
+// macOS 资产是 .tgz: 零依赖 gunzip + 手解 tar(512B 头块), 取出名为 cloudflared 的真二进制。
+function extractTgz(tgzPath, outBin) {
+  try {
+    const buf = zlib.gunzipSync(fs.readFileSync(tgzPath));
+    let off = 0;
+    while (off + 512 <= buf.length) {
+      const header = buf.slice(off, off + 512);
+      const name = header.slice(0, 100).toString("utf8").replace(/\0.*$/s, "");
+      off += 512;
+      if (!name) break;
+      const size = parseInt(header.slice(124, 136).toString("utf8").replace(/[\0 ]+$/g, "").trim(), 8) || 0;
+      if (name.split("/").pop() === "cloudflared" && size > 1000000) {
+        fs.writeFileSync(outBin, buf.slice(off, off + size));
+        try { fs.chmodSync(outBin, 0o755); } catch (e) {}
+        return true;
+      }
+      off += Math.ceil(size / 512) * 512;
+    }
+  } catch (e) { console.error("  extract tgz failed:", e.message); }
+  return false;
+}
 
 function mirrors(asset) {
   const gh = "https://github.com/cloudflare/cloudflared/releases/latest/download/" + asset;
@@ -78,16 +102,18 @@ function download(url, dst, proxy) {
   let allOk = true;
   for (const t of targets) {
     if (!ASSET[t]) { console.error("unknown target:", t); allOk = false; continue; }
-    if (/darwin/.test(t)) { console.error("darwin 为 .tgz, 需手动解包; 跳过自动落地:", t); continue; }
+    const isTgz = /darwin/.test(t);
     const dst = path.join(BIN_DIR, OUT[t]);
     if (fs.existsSync(dst) && fs.statSync(dst).size > 1000000) { console.log("already present:", dst); continue; }
+    const dlTarget = isTgz ? path.join(BIN_DIR, "cloudflared.tgz") : dst;
     let ok = false;
     for (const m of mirrors(ASSET[t])) {
       process.stdout.write("fetch " + t + " <- " + m + " ... ");
-      ok = await download(m, dst, proxy);
+      ok = await download(m, dlTarget, proxy);
       console.log(ok ? "OK" : "fail");
       if (ok) break;
     }
+    if (ok && isTgz) { ok = extractTgz(dlTarget, dst); try { fs.unlinkSync(dlTarget); } catch (e) {} }
     if (ok) { if (!/windows/.test(t)) try { fs.chmodSync(dst, 0o755); } catch (e) {} console.log("  ->", dst, fs.statSync(dst).size, "bytes"); }
     else { console.error("  FAILED all mirrors for", t); allOk = false; }
   }
