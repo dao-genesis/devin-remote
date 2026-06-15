@@ -423,7 +423,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 });
             });
         }),
-        vscode.commands.registerCommand('dao.devinInject', () => devinFullInject()),
+        vscode.commands.registerCommand('dao.devinInject', () => devinFullInject(true)),
         vscode.commands.registerCommand('dao.devinQuota', () => {
             if (!ws.devinApiKey) { vscode.window.showWarningMessage('Not logged into Devin Cloud'); return; }
             devinFetchQuota(ws.devinApiKey, ws.devinApiServerUrl).then(q => {
@@ -505,7 +505,8 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         }),
         vscode.commands.registerCommand('dao.openDashboard', () => {
-            vscode.commands.executeCommand('workbench.view.extension.dao-unified-container');
+            // 去芜存菁 · 不再有冗余侧栏容器; “全功能主页”统一由中间面板承载(状态栏 9921 按钮/本命令)
+            showDaoCloudMiddlePanel(context);
         }),
         // 帛书·「道并行而不相悖」— 独立 webview 路由面板(多实例·不阻塞)
         vscode.commands.registerCommand('dao.openRoutedPanel', async () => {
@@ -537,12 +538,10 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     // ═══════════════════════════════════════════════════════════
-    // 统一视图 · DaoCloudPanel — 万物负阴而抱阳
-    // Tab导航: Sessions | Knowledge | Playbooks | Secrets | Git | Settings
+    // 去芜存菁 · 帛书「道法自然」— 移除左侧冗余「数联面板」侧栏(dao.cloudPanel)。
+    // 左侧默认即 RT Flow 账号面板(wam.panel); 全功能主页由状态栏 9921 / dao.toggleCloudPanel 打开。
+    // cloudPanel 实例保留(供 refresh 无操作守柔), 但不再注册为侧栏视图。
     // ═══════════════════════════════════════════════════════════
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider('dao.cloudPanel', cloudPanel)
-    );
 
     // Watch for terminal close to clean up
     context.subscriptions.push(
@@ -2297,10 +2296,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ni" data-tab="knowledge" onclick="sw('knowledge')" title="Knowledge 知识库 · 手动·当前账号">📚</div>
 <div class="ni" data-tab="playbooks" onclick="sw('playbooks')" title="Playbooks 剧本">📋</div>
 <div class="ni" data-tab="secrets" onclick="sw('secrets')" title="Secrets 密钥">🔑</div>
-<div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器">🧩</div>
-<div class="ni" data-tab="integrations" onclick="sw('integrations')" title="Integrations 集成">🔗</div>
-<div class="ni" data-tab="usage" onclick="sw('usage')" title="Usage 用量">📊</div>
-<div class="ni" data-tab="org" onclick="sw('org')" title="组织成员 Members">🏢</div>
+<div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器 · 专用面板">🧩</div>
 <div class="ni" data-tab="automations" onclick="sw('automations')" title="Automations 自动化">⚙️</div>
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
@@ -2320,9 +2316,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="tv" id="v-knowledge"></div>
 <div class="tv" id="v-playbooks"></div>
 <div class="tv" id="v-secrets"></div>
-<div class="tv" id="v-integrations"></div>
-<div class="tv" id="v-usage"></div>
-<div class="tv" id="v-org"></div>
 <div class="tv" id="v-mcp"></div>
 <div class="tv" id="v-automations"></div>
 <div class="tv" id="v-bridge"></div>
@@ -3067,7 +3060,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'devinInject': {
-                const ok = await devinFullInject();
+                const ok = await devinFullInject(true);
                 sidebarCloudPanel?.refresh(); // 同步刷新侧边栏
                 refreshReply({ type: 'actionResult', command: 'devinInject', ok });
                 break;
@@ -5434,7 +5427,7 @@ async function devinConnectGitHub(orgId: string, pat: string, auth1: string): Pr
 // Windsurf 会话令牌(devin-session-token$) 无法经 node 调用 app.devin.ai 写入API(401/403);
 // 但 Simple Browser 共享 Electron 的 Auth0 Session 可手动写入。
 // 故: 自动生成可一键粘贴的注入包 + 复制 Token 到剪贴板 + 打开正确页面 → 把手动步骤降到最低。
-async function devinAssistedInject(url: string, token: string): Promise<boolean> {
+async function devinAssistedInject(url: string, token: string, interactive: boolean = false): Promise<boolean> {
     const knowledge = buildDevinKnowledge(url, token);
     const playbook = buildDevinPlaybook(url, token);
     const bundle = [
@@ -5475,14 +5468,17 @@ async function devinAssistedInject(url: string, token: string): Promise<boolean>
         fs.writeFileSync(ws.injectStateFile, JSON.stringify(state, null, 2), 'utf8');
     } catch {}
     try { await vscode.env.clipboard.writeText(token); } catch {}
-    try { if (bundleFile) { const doc = await vscode.workspace.openTextDocument(bundleFile); await vscode.window.showTextDocument(doc, { preview: false }); } } catch {}
-    try { vscode.commands.executeCommand('simpleBrowser.show', daoRoutedWebUrl('/settings/secrets')); }
-    catch { try { vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP + '/settings/secrets')); } catch {} }
-    vscode.window.showInformationMessage('Windsurf Token 模式: 已生成注入包并复制 Token 到剪贴板。注入包: ' + bundleFile + ' — 按其中标题粘贴到已打开的 Devin Cloud 页面即可（或生成 cog_ Key 恢复全自动）。');
+    // 去芜存菁 · 帛书「道法自然」— 仅用户显式操作时才弹窗(打开 MD/官网); 启动自动链/切号静默, 不打扰
+    if (interactive) {
+        try { if (bundleFile) { const doc = await vscode.workspace.openTextDocument(bundleFile); await vscode.window.showTextDocument(doc, { preview: false }); } } catch {}
+        try { vscode.commands.executeCommand('simpleBrowser.show', daoRoutedWebUrl('/settings/secrets')); }
+        catch { try { vscode.env.openExternal(vscode.Uri.parse(DEVIN_APP + '/settings/secrets')); } catch {} }
+        vscode.window.showInformationMessage('Windsurf Token 模式: 已生成注入包并复制 Token 到剪贴板。注入包: ' + bundleFile + ' — 按其中标题粘贴到已打开的 Devin Cloud 页面即可（或生成 cog_ Key 恢复全自动）。');
+    }
     return true;
 }
 
-async function devinFullInject(): Promise<boolean> {
+async function devinFullInject(interactive: boolean = false): Promise<boolean> {
     if (ws.devinInjecting) return false;
     ws.devinInjecting = true;
     try {
@@ -5498,7 +5494,7 @@ async function devinFullInject(): Promise<boolean> {
         }
         // 反者道之动 — cog_ 直通全自动注入; Windsurf session token 无法经 API 写入 → 转辅助注入(无为而无不为)
         if (!devinCanUseApi()) {
-            return await devinAssistedInject(url, token);
+            return await devinAssistedInject(url, token, interactive);
         }
         // Upsert Secret (先删后建 → URL永远不stale)
         const sec = await devinUpsertSecret(ws.devinOrgId, 'DAO_TOKEN', token, ws.devinAuth1);

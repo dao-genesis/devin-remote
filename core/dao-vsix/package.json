@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "3.2.4",
+  "version": "3.2.5",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -24,22 +24,10 @@
           "id": "wam-container",
           "title": "RT Flow",
           "icon": "rtflow/media/icon.svg"
-        },
-        {
-          "id": "dao-unified-container",
-          "title": "数联 · Dao Cloud",
-          "icon": "media/devin-icon.svg"
         }
       ]
     },
     "views": {
-      "dao-unified-container": [
-        {
-          "id": "dao.cloudPanel",
-          "name": "数联面板",
-          "type": "webview"
-        }
-      ],
       "wam-container": [
         {
           "id": "wam.panel",
@@ -48,12 +36,6 @@
         }
       ]
     },
-    "viewsWelcome": [
-      {
-        "view": "dao.cloudPanel",
-        "contents": "数联面板加载中..."
-      }
-    ],
     "configuration": {
       "title": "Dao",
       "properties": {
