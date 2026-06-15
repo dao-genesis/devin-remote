@@ -45,13 +45,46 @@ const CFG = {
   downloadConcurrency: 6, // v: 16→6 降低单对话内并发下载 socket 扇出
   presignConcurrency: 4, // v: 8→4
   presignChunk: 40,
+  // ── 连接复用 · 有界 keep-alive socket 预算 (釜底抽薪) ──
+  // agent:false / 默认 globalAgent 会「每请求新建 socket + 用完不复用」, 多账号×多窗口备份把
+  // 家用路由器 NAT/conntrack 打满 → WAN 丢包/隧道反复掉线。下列上限既保全部备份功能,
+  // 又把单进程对同一 host 的并发 socket 收敛到家用路由器可承受范围 (鱼与熊掌兼得)。
+  maxSocketsPerHost: 8, // 单进程对同一 host 的并发 socket 硬上限 (> downloadConcurrency · 不卡备份吞吐)
+  maxFreeSockets: 4, // 空闲保活 socket 上限 (复用而不无限堆积)
+  socketIdleTimeoutMs: 15000, // 空闲 socket 超时回收 (防 Bound/FinWait/TimeWait 堆积)
   convConcurrency: 2, // v: 5→2 同账号内并行备份的对话数 (每对话内文件再并发 downloadConcurrency)
   // 备份并发上限 = convConcurrency × downloadConcurrency = 2×6 = 12 (原 5×16 = 80),
   // 大幅降低家用路由器/NAT 在多账号备份时的并发 socket 压力 (Bound/SynSent 堆积)。
 };
 function configure(opts) {
   if (opts && typeof opts === "object") Object.assign(CFG, opts);
+  _rebuildAgents();
   return CFG;
+}
+
+// ── 有界 keep-alive 共享 Agent (连接复用 + 单进程对同 host 并发 socket 硬上限) ──
+// 道法自然·绝利一源: 一个进程一组复用池, 杜绝「每请求新建+不复用」的 socket 海量泄漏。
+function _mkAgent(mod) {
+  return new mod.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 1000,
+    maxSockets: Math.max(1, (CFG.maxSocketsPerHost | 0) || 8),
+    maxFreeSockets: Math.max(0, (CFG.maxFreeSockets | 0) || 4),
+    timeout: Math.max(1000, (CFG.socketIdleTimeoutMs | 0) || 15000),
+    scheduling: "fifo",
+  });
+}
+let _httpsAgent = _mkAgent(https);
+let _httpAgent = _mkAgent(http);
+function _rebuildAgents() {
+  try {
+    if (_httpsAgent && _httpsAgent.destroy) _httpsAgent.destroy();
+  } catch {}
+  try {
+    if (_httpAgent && _httpAgent.destroy) _httpAgent.destroy();
+  } catch {}
+  _httpsAgent = _mkAgent(https);
+  _httpAgent = _mkAgent(http);
 }
 
 function ensureDir(d) {
@@ -250,6 +283,7 @@ function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs) {
           path: targetUrl,
           headers: Object.assign({ Host: u.hostname }, hdrs),
           timeout: tout,
+          agent: _httpAgent,
         },
         http,
       );
@@ -263,6 +297,7 @@ function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs) {
         path: u.pathname + u.search,
         headers: hdrs,
         timeout: tout,
+        agent: isHttps ? _httpsAgent : _httpAgent,
         rejectUnauthorized: false,
       },
       isHttps ? https : http,
