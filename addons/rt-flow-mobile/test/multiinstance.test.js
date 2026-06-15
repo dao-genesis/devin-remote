@@ -18,7 +18,11 @@ let onRemovedCb = null;
 const injects = []; // broadcastInject 下发记录
 
 const chrome = {
-  declarativeNetRequest: { updateDynamicRules: (o) => { dnrCalls.push(JSON.parse(JSON.stringify(o))); return Promise.resolve(); } },
+  declarativeNetRequest: {
+    // per-tab 规则走 session rules (tabIds 仅此支持); 全局规则走 dynamic rules
+    updateSessionRules: (o) => { dnrCalls.push(JSON.parse(JSON.stringify(o))); return Promise.resolve(); },
+    updateDynamicRules: () => Promise.resolve(),
+  },
   storage: {
     local: {
       get: (keys, cb) => {
