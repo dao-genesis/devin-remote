@@ -273,6 +273,43 @@ const { login } = globalThis.DaoCloud;
     assert.ok(ep.json.includes("rt-flow.devin-cloud.playbooks/1"));
   });
 
+  // ═══ v4.7.5/v4.7.7 同步: stallVerdict / conversationFinalReport / healthScore (与桌面同源) ═══
+  const { stallVerdict, conversationFinalReport, healthScore, buildConversationHtml } = globalThis.DaoCloud;
+  console.log("\nstallVerdict (卡死判定):");
+  t("无进展时长 ≥ stallMs → true", () => { assert.strictEqual(stallVerdict(60000, 30000), true); });
+  t("无进展时长 < stallMs → false", () => { assert.strictEqual(stallVerdict(10000, 30000), false); });
+  t("stallMs ≤ 0 关闭 → 永不判卡", () => { assert.strictEqual(stallVerdict(99999, 0), false); });
+  t("非数 → false", () => { assert.strictEqual(stallVerdict("x", 30000), false); });
+
+  console.log("conversationFinalReport (终报):");
+  t("finished → success", () => { assert.strictEqual(conversationFinalReport({ statusClass: "finished" }).outcome, "success"); });
+  t("suspended → archived", () => { assert.strictEqual(conversationFinalReport({ statusClass: "suspended" }).outcome, "archived"); });
+  t("blocked+usage → cap_exceeded", () => { assert.strictEqual(conversationFinalReport({ statusClass: "blocked", reason: "usage limit" }).outcome, "cap_exceeded"); });
+  t("blocked 其它 → blocked", () => { assert.strictEqual(conversationFinalReport({ statusClass: "blocked", reason: "需输入" }).outcome, "blocked"); });
+  t("空输入 → unknown", () => { assert.strictEqual(conversationFinalReport({}).outcome, "unknown"); });
+  t("createdAt → durationMin 有值", () => {
+    const r = conversationFinalReport({ statusClass: "finished", created_at: new Date(Date.now() - 120000).toISOString() }, { now: Date.now() });
+    assert.ok(r.durationMin >= 1);
+  });
+
+  console.log("healthScore (健康度):");
+  t("全安 → 100 green", () => { const h = healthScore({ balance: 50, balanceThreshold: 5, stalledCount: 0, blockedCount: 0 }); assert.strictEqual(h.score, 100); assert.strictEqual(h.tier, "green"); });
+  t("余额见底+多卡死 → 低分 red", () => { const h = healthScore({ balance: 0, balanceThreshold: 5, stalledCount: 2, blockedCount: 2 }); assert.ok(h.score < 50); assert.strictEqual(h.tier, "red"); });
+  t("score 钳制于 [0,100]", () => { const h = healthScore({ balance: 0, balanceThreshold: 5, stalledCount: 9, blockedCount: 9 }); assert.ok(h.score >= 0 && h.score <= 100); });
+
+  console.log("buildConversationHtml (HTML 视图):");
+  t("含标题/Session/气泡 + HTML 转义", () => {
+    const html = buildConversationHtml("<我的&对话>", "devin-abc123", [
+      { type: "user_message", message: "你好 <script>" },
+      { type: "devin_message", message: "收到` code `" },
+    ], { account: "a@x.com" });
+    assert.ok(html.startsWith("<!DOCTYPE html>"));
+    assert.ok(html.includes("devin-abc123") && html.includes("a@x.com"));
+    assert.ok(html.includes("&lt;\u6211\u7684&amp;\u5bf9\u8bdd&gt;")); // 标题转义
+    assert.ok(html.includes("&lt;script&gt;")); // 正文转义防注入
+    assert.ok(html.includes("<code>") ); // 行内代码渲染
+  });
+
   console.log("\n" + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);
 })();

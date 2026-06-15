@@ -223,11 +223,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (!email) { sendResponse({ ok: false, error: "无激活账号" }); break; }
           const r = await ensureAuth(email);
           if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
-          try { sendResponse({ ok: true, sessions: await DaoCloud.listRunningSessions(r) }); }
-          catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+          try {
+            const sessions = await DaoCloud.listRunningSessions(r);
+            // 健康度: 复用 cloud 纯函数 healthScore (与桌面 v4.7.7 同源)·余额+卡住+待输入三维
+            const st = await getState();
+            const q = (st.quota || {})[email.toLowerCase()] || {};
+            const blocked = sessions.filter((s) => s.statusClass === "blocked").length;
+            const awaiting = sessions.filter((s) => s.statusClass === "awaiting").length;
+            const health = DaoCloud.healthScore({
+              balance: q.balance, balanceThreshold: (st.settings || {}).lowBalance || 5,
+              stalledCount: blocked, blockedCount: awaiting,
+            });
+            sendResponse({ ok: true, sessions, health });
+          } catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
           break;
         }
-        // 对话数据下载: 拉事件流 → MD(人看)+JSON(agent看) — 落手机 Download
+        // 对话数据下载: 拉事件流 → MD(人看)+JSON(agent看)+HTML(直开看) — 落手机 Download
         case "exportConversation": {
           const r = await ensureAuth(msg.email);
           if (!r.ok) { sendResponse({ ok: false, error: r.error }); break; }
@@ -248,7 +259,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             for (const s of sessions) {
               try {
                 const ex = await DaoCloud.exportConversation(r, s.devinId, s.title);
-                if (ex && ex.ok) items.push({ title: s.title, mdName: ex.mdName, md: ex.md, jsonName: ex.jsonName, json: ex.json, eventCount: ex.eventCount });
+                if (ex && ex.ok) items.push({ title: s.title, mdName: ex.mdName, md: ex.md, jsonName: ex.jsonName, json: ex.json, htmlName: ex.htmlName, html: ex.html, eventCount: ex.eventCount });
               } catch (e) { /* 单条失败不阻断整体 */ }
             }
             sendResponse({ ok: true, email, count: items.length, total: sessions.length, items });
