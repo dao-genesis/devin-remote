@@ -545,6 +545,7 @@ function getDaoConfig() {
         token: config.get<string>('token', ''),
         relayUrl: config.get<string>('relayUrl', ''),
         autoBridge: config.get<boolean>('autoBridge', true),
+        githubPat: config.get<string>('githubPat', ''),
     };
 }
 
@@ -5373,7 +5374,7 @@ async function devinFullInject(): Promise<boolean> {
         try { await devinCleanLegacyDaoKnowledge(ws.devinOrgId, ws.devinAuth1); } catch { /* 守柔 */ }
         // Inject GitHub PAT if available
         const cfg = getDaoConfig();
-        const githubPat = (cfg as any).githubPat || process.env.DAO_GITHUB_PAT || '';
+        const githubPat = cfg.githubPat || process.env.DAO_GITHUB_PAT || '';
         let gitOk = false;
         if (githubPat) {
             const gr = await devinInjectGitHubPAT(ws.devinOrgId, githubPat, ws.devinAuth1);
@@ -5609,7 +5610,7 @@ function daoSeedDefaultInjectProfile(): void {
 function daoSyncPatSecretIntoProfile(): void {
     try {
         const cfg = getDaoConfig();
-        const pat = String((cfg as any).githubPat || process.env.DAO_GITHUB_PAT || '').trim();
+        const pat = String(cfg.githubPat || process.env.DAO_GITHUB_PAT || '').trim();
         const p = loadInjectProfile();
         const idx = p.secrets.findIndex(s => s && s.name === DAO_PAT_SECRET_NAME);
         let changed = false;
