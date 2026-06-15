@@ -26,6 +26,22 @@ async function send(msg, tries = 8) {
   }
   return { ok: false, error: "service worker 未响应(冷启超时)" };
 }
+// sendLong: 长任务专用 (全量备份等可达数十秒)。先用 ping 唤醒 SW (覆盖 MV3 冷启),
+// 再「单次」下发并等待真实完成 — 不做超时重试, 避免把长任务重复下发拖垮。
+async function sendLong(msg, warmTries = 8) {
+  for (let i = 0; i < warmTries; i++) {
+    if ((await sendOnce({ type: "ping" }, 1500)) !== undefined) break;
+    await new Promise((s) => setTimeout(s, 150));
+  }
+  return await new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(msg, (r) => {
+        void chrome.runtime.lastError;
+        resolve(r === undefined ? { ok: false, error: "service worker 无响应" } : r);
+      });
+    } catch (e) { resolve({ ok: false, error: String((e && e.message) || e) }); }
+  });
+}
 function toast(text, kind) {
   const el = $("toast");
   el.textContent = text;
@@ -198,14 +214,58 @@ function sessionLi(s, email) {
   return `<li class="sess"><span class="dot ${cls}"></span><span class="stitle">${escapeHtml(s.title)}</span><span class="sstat ${cls}">${escapeHtml(SLABEL[s.statusClass] || s.statusClass)}</span>${stop}${dl}</li>`;
 }
 
-// 浏览器端「下载」: 文本 → Blob → a[download] 触发 → 落手机浏览器 Download 文件夹
-function downloadText(filename, text, mime) {
-  const blob = new Blob([text], { type: (mime || "text/plain") + ";charset=utf-8" });
+// 浏览器端「下载」: Blob → a[download] 触发 → 落手机浏览器 Download 文件夹
+function downloadBlob(filename, blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = filename; document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 4000);
 }
+function downloadText(filename, text, mime) {
+  downloadBlob(filename, new Blob([text], { type: (mime || "text/plain") + ";charset=utf-8" }));
+}
+
+// CRC32 (ZIP 校验用)
+function crc32(bytes) {
+  let table = crc32.table;
+  if (!table) {
+    table = crc32.table = [];
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); table[n] = c >>> 0; }
+  }
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ table[(crc ^ bytes[i]) & 0xFF];
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+// 纯前端·无依赖 ZIP 打包 (store 法·不压缩)。把"一个文件夹的备份"凝成单个 zip,
+// 规避 Chrome/Kiwi 对「连续多文件下载」的静默拦截 (>~10 个会被丢弃)，落手机 Download 只需一个文件。
+function makeZip(files) {
+  const enc = new TextEncoder();
+  const u16 = (n) => [n & 0xff, (n >>> 8) & 0xff];
+  const u32 = (n) => [n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff];
+  const parts = []; const central = []; let offset = 0;
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const data = enc.encode(f.text == null ? "" : String(f.text));
+    const crc = crc32(data);
+    const lfh = [].concat(u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0x21),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0));
+    parts.push(Uint8Array.from(lfh), nameBytes, data);
+    central.push({ crc, size: data.length, nameBytes, offset });
+    offset += lfh.length + nameBytes.length + data.length;
+  }
+  let cdSize = 0; const cd = [];
+  for (const c of central) {
+    const cdh = [].concat(u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0x21),
+      u32(c.crc), u32(c.size), u32(c.size), u16(c.nameBytes.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(c.offset));
+    cd.push(Uint8Array.from(cdh), c.nameBytes);
+    cdSize += cdh.length + c.nameBytes.length;
+  }
+  const eocd = [].concat(u32(0x06054b50), u16(0), u16(0), u16(central.length), u16(central.length), u32(cdSize), u32(offset), u16(0));
+  return new Blob(parts.concat(cd, [Uint8Array.from(eocd)]), { type: "application/zip" });
+}
+// 安全文件名 (zip 内条目)
+function safeName(s) { return String(s || "x").replace(/[\/\\:*?"<>|]/g, "_").slice(0, 80); }
+function stamp() { return new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-"); }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function escapeAttr(s) { return escapeHtml(s).replace(/'/g, "&#39;"); }
@@ -273,11 +333,12 @@ document.addEventListener("click", async (e) => {
   if (kndl) {
     kndl.disabled = true;
     toast("拉取知识库…");
-    const r = await send({ type: "exportKnowledge", email: kndl.dataset.knEmail });
+    const r = await sendLong({ type: "exportKnowledge", email: kndl.dataset.knEmail });
     if (r && r.ok) {
-      downloadText(r.jsonName, r.json, "application/json");
-      for (const it of (r.items || [])) downloadText(it.mdName, it.md, "text/markdown");
-      toast(`已下载知识库 (${r.count} 条) → 手机`, "ok");
+      const files = [{ name: r.jsonName, text: r.json }];
+      for (const it of (r.items || [])) files.push({ name: it.mdName, text: it.md });
+      downloadBlob(`devin-knowledge-${safeName((kndl.dataset.knEmail || "").split("@")[0])}-${stamp()}.zip`, makeZip(files));
+      toast(`已下载知识库 (${r.count} 条) → 手机 (单个 zip)`, "ok");
     } else toast("知识库下载失败: " + ((r && r.error) || ""), "err");
     kndl.disabled = false;
     return;
@@ -286,13 +347,14 @@ document.addEventListener("click", async (e) => {
   if (pbdl) {
     pbdl.disabled = true;
     toast("拉取剧本…");
-    const r = await send({ type: "exportPlaybooks", email: pbdl.dataset.pbEmail });
+    const r = await sendLong({ type: "exportPlaybooks", email: pbdl.dataset.pbEmail });
     if (r && r.ok) {
       if (!r.count) { toast("无用户自建剧本可下载", "ok"); }
       else {
-        downloadText(r.jsonName, r.json, "application/json");
-        for (const it of (r.items || [])) downloadText(it.mdName, it.md, "text/markdown");
-        toast(`已下载剧本 (${r.count} 条) → 手机`, "ok");
+        const files = [{ name: r.jsonName, text: r.json }];
+        for (const it of (r.items || [])) files.push({ name: it.mdName, text: it.md });
+        downloadBlob(`devin-playbooks-${safeName((pbdl.dataset.pbEmail || "").split("@")[0])}-${stamp()}.zip`, makeZip(files));
+        toast(`已下载剧本 (${r.count} 条) → 手机 (单个 zip)`, "ok");
       }
     } else toast("剧本下载失败: " + ((r && r.error) || ""), "err");
     pbdl.disabled = false;
@@ -340,13 +402,13 @@ document.addEventListener("click", async (e) => {
     const email = wipe.dataset.wipeEmail;
     wipe.disabled = true;
     toast("扫描可清理痕迹…");
-    const scan = await send({ type: "wipeAccount", email, dryRun: true });
+    const scan = await sendLong({ type: "wipeAccount", email, dryRun: true });
     if (!scan || !scan.ok) { toast("扫描失败: " + ((scan && scan.error) || ""), "err"); wipe.disabled = false; return; }
     const rp = scan.report;
     const msg = `水过无痕将清理 ${email}:\n对话 ${rp.sessions.found} · 知识库 ${rp.knowledge.found} · 剧本 ${rp.playbooks.found} · 密钥 ${rp.secrets.found}\n(本源默认保留: 知识 ${rp.native.knowledge} 剧本 ${rp.native.playbooks})\n并断开全部 Git 连接。不可恢复，确认执行？`;
     if (!confirm(msg)) { wipe.disabled = false; return; }
     toast("执行水过无痕…");
-    const r = await send({ type: "wipeAccount", email, dryRun: false });
+    const r = await sendLong({ type: "wipeAccount", email, dryRun: false });
     if (r && r.ok) { const x = r.report; toast(`已清: 对话${x.sessions.deleted} 知识${x.knowledge.deleted} 剧本${x.playbooks.deleted} 密钥${x.secrets.deleted}`, "ok"); }
     else toast("清理失败: " + ((r && r.error) || ""), "err");
     wipe.disabled = false;
@@ -366,7 +428,7 @@ $("gitBatchBtn").addEventListener("click", async () => {
   if (!confirm(`将该 PAT 连接到全部 ${STATE.accounts.length} 个账号？`)) return;
   const btn = $("gitBatchBtn");
   btn.disabled = true; btn.textContent = "连接中…";
-  const r = await send({ type: "gitBatchConnectPat", pat }, 40);
+  const r = await sendLong({ type: "gitBatchConnectPat", pat });
   const box = $("gitBatchResult");
   if (r && r.ok) {
     box.innerHTML = r.results.map((x) => `<div class="gitres-row ${x.ok ? "ok" : "err"}">${x.ok ? "✓" : "✗"} ${escapeHtml(x.email)}${x.ok ? ` · @${escapeHtml(x.login || "?")} · 仓库 ${x.repoCount}` : " · " + escapeHtml((x.error || "").slice(0, 60))}</div>`).join("");
@@ -387,22 +449,28 @@ $("addBtn").addEventListener("click", async () => {
 
 $("refreshAll").addEventListener("click", async () => {
   toast("全部刷新额度中…");
-  await send({ type: "refreshAllQuota" }, 40);
+  await sendLong({ type: "refreshAllQuota" });
   toast("额度已刷新", "ok");
   await load();
 });
 
-// Devin Cloud 全量备份 → 手机: 当前激活账号所有对话 → 逐条 MD+JSON 下载
+// Devin Cloud 全量备份 → 手机: 当前激活账号所有对话 → 单个 zip (内含逐条 MD+JSON) 落 Download
 $("backupAllBtn").addEventListener("click", async () => {
   if (!STATE.active) { toast("先激活一个账号", "err"); return; }
   const btn = $("backupAllBtn");
   btn.disabled = true; btn.textContent = "备份中…";
-  toast("拉取并备份全部对话…");
-  const r = await send({ type: "backupAllSessions" }, 60);
+  toast("拉取并备份全部对话…(对话多时需数十秒)");
+  const r = await sendLong({ type: "backupAllSessions" });
   if (r && r.ok) {
-    let n = 0;
-    for (const it of (r.items || [])) { downloadText(it.mdName, it.md, "text/markdown"); downloadText(it.jsonName, it.json, "application/json"); n++; }
-    toast(n ? `已备份 ${n}/${r.total} 个对话 (MD+JSON) → 手机 Download` : "无对话可备份", n ? "ok" : "err");
+    const items = r.items || [];
+    if (!items.length) { toast("无对话可备份", "err"); }
+    else {
+      const files = [];
+      for (const it of items) { files.push({ name: it.mdName, text: it.md }); files.push({ name: it.jsonName, text: it.json }); }
+      const who = safeName(STATE.active.split("@")[0]);
+      downloadBlob(`devin-cloud-backup-${who}-${stamp()}.zip`, makeZip(files));
+      toast(`已备份 ${items.length}/${r.total} 个对话 → 手机 Download (单个 zip·${files.length} 文件)`, "ok");
+    }
   } else toast("备份失败: " + ((r && r.error) || ""), "err");
   btn.disabled = false; btn.textContent = "⭳ Devin Cloud 全量备份→手机";
 });
