@@ -213,6 +213,47 @@ function t(name, fn) {
     assert.strictEqual(captured, null);
   });
 
+  console.log("\nrotate 自动停止 (弃旧号前中停其运行中对话·知止不殆):");
+  // 桩: stopRunningSessions 记录被中停的账号 (不真打网络); ensureAuth/activate/refreshQuota 受控
+  const stopCalls = [];
+  ctx.DaoCloud.stopRunningSessions = async (a) => { stopCalls.push(lc(a.email)); return { ok: true, total: 2, stopped: 2 }; };
+  ctx.ensureAuth = async (email) => ({ ok: true, auth1: "a1", orgId: "org-o", orgBare: "o", email: lc(email) });
+  ctx.refreshQuota = async () => ({ ok: true });
+  ctx.activate = async (email) => { activated.push(lc(email)); store.active = lc(email); return { ok: true }; };
+  const seedStop = (settings, oldBal) => {
+    store = {
+      accounts: [{ email: "old@x.com", locked: false }, { email: "new@x.com", locked: false }],
+      authCache: {}, settings, active: "old@x.com",
+      quota: { "old@x.com": { balance: oldBal, status: "ok" }, "new@x.com": { balance: 8, status: "ok" } },
+    };
+    activated = []; stopCalls.length = 0;
+  };
+
+  // autoStop ON + 旧号余额 ≤ stopThreshold → 切号同时中停旧号
+  seedStop({ lockByDefault: false, autoStop: true, stopThreshold: 3 }, 1);
+  r = norm(await ctx.rotate("软耗尽"));
+  t("autoStop ON + 旧号余额≤阈值 → 切号并中停旧号 (stopped 回报)", () => {
+    assert.strictEqual(r.switchedTo, "new@x.com");
+    assert.deepStrictEqual(stopCalls, ["old@x.com"]);
+    assert.ok(r.stopped && r.stopped.stopped === 2);
+  });
+
+  // autoStop OFF → 仅切号·不中停 (即便余额低)
+  seedStop({ lockByDefault: false, autoStop: false, stopThreshold: 3 }, 1);
+  r = norm(await ctx.rotate("软耗尽"));
+  t("autoStop OFF → 仅切号·不中停旧号", () => {
+    assert.strictEqual(r.switchedTo, "new@x.com");
+    assert.strictEqual(stopCalls.length, 0);
+  });
+
+  // autoStop ON 但旧号余额 > stopThreshold → 不中停 (知止不殆·余额尚可不强停)
+  seedStop({ lockByDefault: false, autoStop: true, stopThreshold: 3 }, 5);
+  r = norm(await ctx.rotate("manual"));
+  t("autoStop ON 但旧号余额>阈值 → 不中停 (仅切号)", () => {
+    assert.strictEqual(r.switchedTo, "new@x.com");
+    assert.strictEqual(stopCalls.length, 0);
+  });
+
   console.log("\n" + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);
 })();

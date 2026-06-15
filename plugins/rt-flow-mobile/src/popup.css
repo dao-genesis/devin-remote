@@ -101,6 +101,9 @@ button.ghost:hover { background: var(--card2); color: var(--fg); }
 .ovw .err-line { color: var(--danger); }
 .sess .sdl { flex: none; background: transparent; border: 1px solid var(--line); color: var(--accent2); padding: 1px 6px; font-size: 12px; border-radius: 5px; }
 .sess .sdl:hover { background: var(--card2); }
+.sess .sstop { flex: none; background: transparent; border: 1px solid rgba(229,72,77,.4); color: #f87171; padding: 1px 6px; font-size: 12px; border-radius: 5px; }
+.sess .sstop:hover { background: rgba(229,72,77,.14); }
+.sess .sstop:disabled { opacity: .5; }
 .ovw-actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
 .ovw-actions .kndl { margin-left: 0; flex: 1 1 100%; }
 .meta2 { margin-top: 3px; font-size: 10.5px; color: var(--mut); word-break: break-all; line-height: 1.5; }

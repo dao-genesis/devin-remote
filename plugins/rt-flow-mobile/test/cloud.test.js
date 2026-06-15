@@ -216,6 +216,63 @@ const { login } = globalThis.DaoCloud;
     assert.strictEqual(syn.email, "token-abcdefghij");
   });
 
+  // ── v1.4 · stopSession / stopRunningSessions (自动停止·中停=archive) ──
+  const { stopSession, stopRunningSessions, exportPlaybooks, playbookToMd } = globalThis.DaoCloud;
+  const auth = { auth1: "x", orgId: "org-q", orgBare: "q" };
+  console.log("\nstopSession (中停=archive·对照本体):");
+  global.fetch = async (url, opt) => String(url).includes("/archive") && (opt && opt.method === "POST")
+    ? { status: 200, async text() { return "{}"; } }
+    : { status: 404, async text() { return ""; } };
+  const sp = await stopSession(auth, "devin-1");
+  t("archive 2xx → ok+stopped=true", () => {
+    assert.strictEqual(sp.ok, true);
+    assert.strictEqual(sp.stopped, true);
+  });
+  global.fetch = async () => ({ status: 500, async text() { return ""; } });
+  const spf = await stopSession(auth, "devin-1");
+  t("archive 非2xx → ok=false (不臆造成功)", () => {
+    assert.strictEqual(spf.ok, false);
+    assert.strictEqual(spf.stopped, false);
+  });
+
+  console.log("\nstopRunningSessions (中停活跃账号全部运行中对话):");
+  global.fetch = async (url, opt) => {
+    const u = String(url);
+    if ((opt && opt.method === "POST") && u.includes("/archive")) return { status: 200, async text() { return "{}"; } };
+    if (u.includes("/v2sessions")) return { status: 200, async text() {
+      return JSON.stringify({ result: [
+        { devin_id: "d1", title: "运行A", latest_status_contents: { enum: "running" } },
+        { devin_id: "d2", title: "卡住B", latest_status_contents: { enum: "blocked" } },
+        { devin_id: "d3", title: "完成C", latest_status_contents: { enum: "finished" } },
+      ] }); } };
+    return { status: 404, async text() { return ""; } };
+  };
+  const srs = await stopRunningSessions(auth);
+  t("仅中停运行/卡住(非完成) → stopped=2 total=2", () => {
+    assert.strictEqual(srs.total, 2);
+    assert.strictEqual(srs.stopped, 2);
+  });
+
+  // ── v1.4 · exportPlaybooks / playbookToMd (剧本下载·滤 builtin/community) ──
+  console.log("\nexportPlaybooks (剧本下载·滤内置/社区):");
+  t("playbookToMd 含名/描述/正文", () => {
+    const md = playbookToMd({ name: "PB1", description: "desc", body: "do x" });
+    assert.ok(md.includes("# PB1") && md.includes("> desc") && md.includes("do x"));
+  });
+  global.fetch = async (url) => String(url).includes("/playbooks")
+    ? { status: 200, async text() { return JSON.stringify({ playbooks: [
+        { id: "p1", name: "我的剧本", body: "step", is_builtin: false, can_write: true },
+        { id: "p2", name: "社区剧本", is_builtin: true },
+      ] }); } }
+    : { status: 404, async text() { return ""; } };
+  const ep = await exportPlaybooks(auth);
+  t("仅导出用户自建剧本 (count=1·滤掉 builtin)", () => {
+    assert.strictEqual(ep.count, 1);
+    assert.strictEqual(ep.items.length, 1);
+    assert.strictEqual(ep.items[0].name, "我的剧本");
+    assert.ok(ep.json.includes("rt-flow.devin-cloud.playbooks/1"));
+  });
+
   console.log("\n" + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);
 })();

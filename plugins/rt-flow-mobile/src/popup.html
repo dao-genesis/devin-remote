@@ -8,7 +8,7 @@
 </head>
 <body>
   <header>
-    <div class="brand">道 · rt-flow <span class="ver">浏览器版 v1.3</span></div>
+    <div class="brand">道 · rt-flow <span class="ver">浏览器版 v1.4</span></div>
     <div class="active" id="activeLine">未激活账号</div>
   </header>
 
@@ -21,10 +21,15 @@
       <input type="checkbox" id="lockByDefault" />
       <span>新号默认🔒锁定 (防误切·解锁后才入自动切候选)</span>
     </label>
+    <label class="switch">
+      <input type="checkbox" id="autoStop" />
+      <span>自动停止 (弃号前中停旧号运行中对话·防弃号后烧额度)</span>
+    </label>
     <div class="row">
       <label>缓冲 $<input type="number" id="buffer" min="0" step="1" /></label>
       <label>轮询 <input type="number" id="pollMin" min="1" step="1" />min</label>
       <label>低额 $<input type="number" id="lowBalance" min="0" step="1" /></label>
+      <label>停止阈 $<input type="number" id="stopThreshold" min="0" step="1" /></label>
       <button id="saveSettings" class="mini">保存</button>
     </div>
     <div class="row">
