@@ -1408,6 +1408,21 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
             return await devinDeletePlaybook(ws.devinOrgId, id, ws.devinAuth1);
         }
+        case '/api/devin/batch-inject': {
+            // 批量多账号反向注入 · body:{accounts?:[{email,password}], lines?:"email:password\n...", all?:bool, wait?:bool}
+            // 不传账号且 all=true → 用本机账号池(loadAccountPool)。默认后台异步跑, wait=true 则等全部完成再返回。
+            const bib = await readBody(req);
+            let opts: any = {}; try { opts = JSON.parse(bib || '{}'); } catch { opts = {}; }
+            if (daoBatchProgress && daoBatchProgress.running) return { ok: false, error: 'batch already running', progress: daoBatchProgress };
+            const accts = resolveBatchAccounts(opts);
+            if (!accts.length) return { ok: false, error: 'no accounts (provide accounts[]/lines, or all=true with a local pool)' };
+            if (opts.wait) { const prog = await devinBatchInject(accts); return { ok: true, progress: prog }; }
+            devinBatchInject(accts).catch(() => { if (daoBatchProgress) daoBatchProgress.running = false; });
+            return { ok: true, started: true, total: accts.length };
+        }
+        case '/api/devin/batch-inject/status': {
+            return { ok: true, progress: daoBatchProgress };
+        }
         case '/api/devin/usage/limit': {
             // 调整单条消息/会话额度上限 — body:{maxCredits}
             const ulb = await readBody(req);
@@ -3302,9 +3317,16 @@ function devinTokenType(): string {
     return key ? 'unknown' : 'none';
 }
 
+// ★ 道法自然修复 · 帛书「大音希声」: Devin /learning·/playbooks·/secrets 接口对请求体里的
+// 原始 UTF-8 多字节(中日韩)会"每隔一字"截断(实证: 发送「道法自然」存成「道自」)。
+// 解法: 把 JSON 里所有非 ASCII 字符转义为 \uXXXX(纯 ASCII 上线),服务端即可正确解析存储。
+// 仅影响含中文的注入(知识库/Playbook/Secret),纯 ASCII 请求(登录等)字节不变。
+function asciiSafeJson(body: any): string {
+    return JSON.stringify(body || {}).replace(/[\u0080-\uffff]/g, (ch) => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
+}
 function devinJsonPost(targetUrl: string, headers: any, body: any, timeoutMs?: number): Promise<any> {
     return new Promise((resolve) => {
-        const data = Buffer.from(JSON.stringify(body || {}), 'utf8');
+        const data = Buffer.from(asciiSafeJson(body), 'utf8');
         const u = new URL(targetUrl);
         // Use proxy tunnel for Devin/Windsurf domains
         const needsProxy = u.hostname === 'app.devin.ai' || u.hostname.endsWith('windsurf.com') || u.hostname === 'register.windsurf.com';
@@ -3640,6 +3662,10 @@ function agentApiCatalog(): { group: string; items: AgentApiEndpoint[] }[] {
             { method: 'GET', path: '/api/devin/playbooks', desc: '列出 playbooks' },
             { method: 'POST', path: '/api/devin/playbooks/inject', body: '{"title":"..","body":"..","upsert":true}', desc: '注入; upsert 有则替换无则新增' },
             { method: 'POST', path: '/api/devin/playbooks/delete', body: '{"id":".."}', desc: '删除 playbook' },
+        ]},
+        { group: '批量多账号反向注入 (道法自然准则 + 内网穿透 + 剧本 + DAO_TOKEN)', items: [
+            { method: 'POST', path: '/api/devin/batch-inject', body: '{"all":true}  或  {"accounts":[{"email","password"}]}  或  {"lines":"a@x:pw\\nb@y:pw"}  (+"wait":true 同步)', desc: '逐账号幂等注入(缓存auth优先·先收敛旧异名残条·回读校验); 默认后台异步' },
+            { method: 'GET', path: '/api/devin/batch-inject/status', desc: '批量注入进度/每账号结果' },
         ]},
         { group: 'MCP (读 + 追录/删除)', items: [
             { method: 'GET', path: '/api/devin/mcp/installations', desc: '列出已安装 MCP' },
@@ -5383,6 +5409,104 @@ async function devinFullInject(): Promise<boolean> {
     } finally {
         ws.devinInjecting = false;
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 道法自然 · 批量多账号反向注入 — 帛书「既以为人己愈有, 既以与人己愈多」
+// 对一批账号(email/password)逐个取 auth1+orgId(优先按邮箱缓存, 失效再登录),
+// 幂等注入(先收敛旧异名残条): 知识「道法自然准则」+「DAO Bridge 内网穿透」
+// + 剧本「Operate Local Environment via Dao」+ Secret「DAO_TOKEN」。
+// 全程自包含, 不改动当前面板登录态(ws.*); CJK 经 asciiSafeJson \uXXXX 上线服务端无损。
+// ═══════════════════════════════════════════════════════════
+interface DaoBatchAccount { email: string; password: string; }
+interface DaoBatchResult { email: string; ok: boolean; auth: string; orgId?: string; knowledge: boolean; bridge: boolean; playbook: boolean; secret: boolean; cleaned: number; verified: boolean; error?: string; }
+interface DaoBatchProgress { total: number; done: number; ok: number; running: boolean; results: DaoBatchResult[]; startedAt: string; finishedAt?: string; }
+let daoBatchProgress: DaoBatchProgress | null = null;
+
+// 仅登录取 auth1+orgId(login + devin post-auth), 不写 ws.*; 含 429 退避。
+async function devinAuthOnly(email: string, password: string, retry?: number): Promise<{ ok: boolean; auth1?: string; orgId?: string; error?: string }> {
+    const n = retry || 0;
+    const r1 = await devinJsonPost(DEVIN_URL_LOGIN, { Origin: DEVIN_WINDSURF, Referer: DEVIN_WINDSURF + '/account/login' }, { email, password });
+    if (r1.status === 429 && n < 4) { await new Promise(ok => setTimeout(ok, Math.pow(2, n) * 3000)); return devinAuthOnly(email, password, n + 1); }
+    const j1 = r1.json || {};
+    const auth1 = j1.token || j1.auth1_token;
+    if (r1.status !== 200 || !auth1) return { ok: false, error: 'login HTTP ' + r1.status + ': ' + (j1.detail || j1.error || 'no_token') };
+    let orgId = '';
+    for (let i = 0; i < 2 && !orgId; i++) {
+        const r3 = await devinJsonPost(DEVIN_URL_DEVIN_POST_AUTH, { Authorization: 'Bearer ' + auth1, 'Content-Type': 'application/json' }, {});
+        const j3 = r3.json || {};
+        orgId = (j3.org && j3.org.org_id) || j3.org_id || j3.orgId || '';
+        if (!orgId) await new Promise(ok => setTimeout(ok, 1000));
+    }
+    if (!orgId) return { ok: false, error: 'no_org' };
+    return { ok: true, auth1, orgId };
+}
+
+// 解析账号来源: 显式数组 / 多行 email:password 文本 / 本机账号池(loadAccountPool)。
+function resolveBatchAccounts(opts: { accounts?: DaoBatchAccount[]; lines?: string; all?: boolean }): DaoBatchAccount[] {
+    if (Array.isArray(opts.accounts) && opts.accounts.length) {
+        return opts.accounts.filter(a => a && a.email && a.password);
+    }
+    if (typeof opts.lines === 'string' && opts.lines.trim()) {
+        const out: DaoBatchAccount[] = [];
+        for (const raw of opts.lines.split(/\r?\n/)) {
+            const p = parseAccountLine(raw.trim());
+            if (p && p.email && p.password) out.push({ email: p.email, password: p.password });
+        }
+        return out;
+    }
+    if (opts.all) return loadAccountPool().map(a => ({ email: a.email, password: a.password })).filter(a => a.email && a.password);
+    return [];
+}
+
+async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchProgress> {
+    const url = ws.publicUrl || (ws.port ? 'http://localhost:' + ws.port : '');
+    const token = ws.token || bridgeToken || '';
+    const rulesText = getDaoRulesText();
+    const bridgeMd = bridgeGenerateCloudMd();
+    const pbBody = (url && token) ? buildDevinPlaybook(url, token) : '';
+    daoBatchProgress = { total: accounts.length, done: 0, ok: 0, running: true, results: [], startedAt: new Date().toISOString() };
+    const resultsFile = path.join(DAO_DIR, 'dao-batch-inject-results.json');
+    for (const a of accounts) {
+        const res: DaoBatchResult = { email: a.email, ok: false, auth: '', knowledge: false, bridge: false, playbook: false, secret: false, cleaned: 0, verified: false };
+        try {
+            let auth1 = '', orgId = '';
+            // 优先用按邮箱缓存的 auth1(切回即命中, 守柔省登录), GET 校验仍有效再用。
+            const saved = loadAccountAuth(a.email);
+            if (saved && saved.auth1 && saved.orgId) {
+                const chk = await devinListKnowledge(saved.orgId, saved.auth1);
+                if (chk.ok) { auth1 = saved.auth1; orgId = saved.orgId; res.auth = 'cached'; }
+            }
+            if (!auth1) {
+                const auth = await devinAuthOnly(a.email, a.password);
+                if (!auth.ok) { res.error = auth.error; res.auth = 'login_failed'; daoBatchProgress.results.push(res); daoBatchProgress.done++; continue; }
+                auth1 = auth.auth1!; orgId = auth.orgId!; res.auth = 'login';
+            }
+            res.orgId = orgId;
+            try { res.cleaned = await devinCleanLegacyDaoKnowledge(orgId, auth1); } catch { /* 守柔 */ }
+            if (rulesText) res.knowledge = (await devinUpsertKnowledge(orgId, DAO_RULES_KB_NAME, rulesText, DAO_RULES_KB_TRIGGER, auth1)).ok;
+            if (token) res.bridge = (await devinUpsertKnowledge(orgId, DAO_BRIDGE_KB_NAME, bridgeMd, DAO_BRIDGE_KB_TRIGGER, auth1)).ok;
+            if (pbBody) res.playbook = (await devinUpsertPlaybook(orgId, 'Operate Local Environment via Dao', pbBody, auth1)).ok;
+            if (token) res.secret = (await devinUpsertSecret(orgId, 'DAO_TOKEN', token, auth1)).ok;
+            // 校验: 回读知识库确认「道法自然准则」落地且正文完整(防截断/损坏)
+            try {
+                const back = await devinListKnowledge(orgId, auth1);
+                if (back.ok && back.learnings) {
+                    const hit = back.learnings.find((k: any) => k.name === DAO_RULES_KB_NAME);
+                    res.verified = !!(hit && typeof hit.body === 'string' && hit.body.length >= Math.max(0, rulesText.length - 4));
+                }
+            } catch { /* 守柔 */ }
+            res.ok = res.knowledge && res.playbook && res.secret;
+        } catch (e: any) { res.error = e?.message || String(e); }
+        if (res.ok) daoBatchProgress.ok++;
+        daoBatchProgress.results.push(res);
+        daoBatchProgress.done++;
+        try { fs.writeFileSync(resultsFile, JSON.stringify(daoBatchProgress, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    }
+    daoBatchProgress.running = false;
+    daoBatchProgress.finishedAt = new Date().toISOString();
+    try { fs.writeFileSync(resultsFile, JSON.stringify(daoBatchProgress, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    return daoBatchProgress;
 }
 
 // ═══════════════════════════════════════════════════════════
