@@ -5249,4 +5249,7 @@ async function cmdEaConfig() {
   }
 }
 
-module.exports = { activate, deactivate };
+// ★ 归一·② Proxy Pro: 导出三模块面板 HTML 生成器 + 端口取值,
+//   供 dao-one 全能板 (dao-vsix) 内嵌复用 (iframe srcdoc) — 零前端重写。
+function getCachedPort() { return _cachedPort; }
+module.exports = { activate, deactivate, getEaConfigHtml, getCachedPort };

@@ -51,18 +51,8 @@
           "type": "webview"
         },
         {
-          "id": "dao.router",
-          "name": "② Proxy Pro · 模型路由",
-          "type": "webview"
-        },
-        {
           "id": "dao.cloudPanel",
-          "name": "③ 全能板 · Devin Cloud",
-          "type": "webview"
-        },
-        {
-          "id": "daoBridgeView",
-          "name": "④ 内网穿透 · 公网穿透",
+          "name": "② 全能板 · Devin Cloud (内网穿透 / Proxy Pro 内置)",
           "type": "webview"
         }
       ]

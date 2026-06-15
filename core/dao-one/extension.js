@@ -1,12 +1,12 @@
 // 道 · 归一超级插件本体 (dao-one) — 统一编排器
 // ─────────────────────────────────────────────────────────────────────────────
-// 反者道之动。正本清源:不再手写驾驶舱,而是「大规模复用」三套引擎本体的真实前端 ——
-//   · dao-vsix     → dao.cloudPanel  (全能板 · Devin Cloud)
-//   · dao-proxy-pro→ dao.essence     (源照 / 渠配 / 模型路由)
-//   · rt-flow      → wam.panel       (WAM 切号 · 账号管理 · 备份 · 回归本源)
-// 三引擎在此归一为「一」:各引擎照常 activate 并注册其原生 webview,本体只把这三个
-// 视图统一挂到单一容器 dao-one(见 package.json),由 VS Code 竖排手风琴渲染 ——
-// 默认聚焦 ① 切号(rt-flow 最常用),点击其余入口横展子块。零前端重写。
+// 反者道之动。正本清源:不再手写驾驶舱,而是「大规模复用」各引擎本体的真实前端 ——
+//   · rt-flow      → wam.panel       (左:WAM 切号 · 账号管理 · 备份 · 回归本源)
+//   · dao-vsix     → dao.cloudPanel  (中:全能板 · Devin Cloud,右下角小按钮开全功能中央面板)
+//   · dao-proxy-pro→ /origin 反代 + getEaConfigHtml (三模块面板内嵌为全能板「Proxy Pro」tab)
+//   · dao-bridge   → 内网穿透 (内嵌为全能板「内网穿透」tab + 共享 cloudflared)
+// 最终前端只两面:左 rt-flow 切号 + 中 全能板。内网穿透 / Proxy Pro 皆并列内置于全能板内部 tab。
+// 四引擎照常 activate(后端齐备:反代端口/隧道),仅 wam.panel 与 dao.cloudPanel 占据容器视图。零前端重写。
 // 损之又损,以至于无为,无为而无不为。
 // ─────────────────────────────────────────────────────────────────────────────
 const vscode = require("vscode");
@@ -43,9 +43,9 @@ const _loaded = [];
 // ═══════════════════════════════════════════════════════════════════════════
 async function activate(context) {
   log("dao-one activate · 归一: " + MODULES.map((m) => m.key).join(" / "));
-  // 依次启动三引擎 —— 各自的 activate 会 registerWebviewViewProvider(其原生视图 id)。
-  // 这些视图 id(dao.cloudPanel / dao.essence / wam.panel)已在 package.json 的
-  // dao-one 容器下声明 → VS Code 自动竖排渲染,无需本体手写任何前端。
+  // 依次启动四引擎 —— 各自 activate 注册其原生 webview/后端服务。
+  // 仅 wam.panel 与 dao.cloudPanel 在 package.json dao-one 容器下声明 → 占据容器视图;
+  // dao-proxy-pro 的 /origin 反代与 dao-bridge 隧道照常起,其面板内嵌于全能板内部 tab。
   for (const m of MODULES) {
     const full = path.join(context.extensionPath, m.dir, m.entry);
     try {
@@ -65,7 +65,7 @@ async function activate(context) {
       vscode.commands.executeCommand("wam.panel.focus").then(undefined, () => {})
     )
   );
-  log("归一容器就绪 · 三真实前端竖排: ① 切号 / ② Proxy Pro / ③ 全能板");
+  log("归一容器就绪 · 两面: 左 ① 切号(wam.panel) + 中 ② 全能板(dao.cloudPanel·内置 内网穿透/Proxy Pro tab)");
 }
 
 async function deactivate() {
