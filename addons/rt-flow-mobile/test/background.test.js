@@ -2,14 +2,15 @@
 // background.js 关键逻辑单测 (零网络, vm 沙箱 + chrome mock): node test/background.test.js
 // 回归 1: applyDnr 的 DNR 规则必须用 initiatorDomains 限定为「app.devin.ai 页面发起」,
 //         否则扩展自身 service worker 的 getBilling fetch 会被活跃账号鉴权头覆盖 → 额度串号。
-// 回归 2: rotate 必须切到「全局评分最高」的账号; 当前账号已是最优时不切(更不能切到更差者)。
+// 回归 2 (v1.5.0): 去除「自动切号」—— rotate/panicSwitch/autoSwitchTick/alarms 已移除;
+//         切号 = 手动 activate (写 active + 刷 DNR + 注入页面)。本测试守护此契约。
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
 let captured = null;
-let store = {}; // 有状态 storage (rotate 测试需要)
+let store = {}; // 有状态 storage
 const chrome = {
   declarativeNetRequest: { updateDynamicRules: (o) => { captured = o; return Promise.resolve(); } },
   storage: {
@@ -26,7 +27,7 @@ const chrome = {
     onChanged: { addListener: () => {} },
   },
   tabs: { query: () => Promise.resolve([]), sendMessage: () => Promise.resolve() },
-  alarms: { clear: () => Promise.resolve(), create: () => {}, onAlarm: { addListener: () => {} } },
+  notifications: { create: () => {} },
   runtime: { onMessage: { addListener: () => {} }, onInstalled: { addListener: () => {} }, onStartup: { addListener: () => {} } },
 };
 const ctx = { chrome, console, setTimeout, clearTimeout, Date, Promise, JSON, Math, Object, String, Boolean, AbortController, fetch: () => Promise.resolve({}) };
@@ -44,8 +45,8 @@ function t(name, fn) {
 }
 
 (async () => {
-  // captured 来自 vm 沙箱 (Array 原型异于宿主域), JSON 归一化后再断言
   const norm = (x) => JSON.parse(JSON.stringify(x));
+  const lc = (s) => String(s || "").toLowerCase();
 
   console.log("applyDnr (DNR 注入·防额度串号):");
   await ctx.applyDnr({ auth1: "auth1_opaque_token", orgId: "org-abc" });
@@ -71,125 +72,43 @@ function t(name, fn) {
     assert.deepStrictEqual(cleared.addRules, []);
   });
 
-  console.log("\nrotate (择优轮转·防切到更差账号):");
-  // 用受控桩替掉网络: refreshQuota 不动(直接用预置 quota), activate 仅记录并写 active
-  let activated = [];
-  const lc = (s) => String(s || "").toLowerCase();
-  ctx.refreshQuota = async () => ({ ok: true });
-  ctx.activate = async (email) => { activated.push(lc(email)); store.active = lc(email); return { ok: true }; };
-  const seed = (active) => {
-    store = {
-      accounts: [{ email: "low@x.com", locked: false }, { email: "high@x.com", locked: false }],
-      authCache: {}, settings: {},
-      active,
-      quota: { "low@x.com": { balance: 0, status: "ok" }, "high@x.com": { balance: 2.99, status: "ok" } },
-    };
-    activated = [];
-  };
-
-  // 关键回归: 活跃账号已是最高余额时, 不能切到更差的账号 (旧逻辑会切到 low@x.com)
-  seed("high@x.com");
-  let r = norm(await ctx.rotate("test"));
-  t("当前已是最优 → 不切 (noop), 不会切到更差账号", () => {
-    assert.strictEqual(r.switchedTo, "high@x.com");
-    assert.strictEqual(r.noop, true);
-    assert.deepStrictEqual(activated, []);
+  console.log("\n去除自动切号 (v1.5.0·正本清源): rotate/panic/看门狗已移除:");
+  t("rotate 函数已移除 (无自动轮转)", () => { assert.strictEqual(typeof ctx.rotate, "undefined"); });
+  t("panicSwitch 函数已移除 (无紧急切换)", () => { assert.strictEqual(typeof ctx.panicSwitch, "undefined"); });
+  t("autoSwitchTick 函数已移除 (无软耗尽轮询)", () => { assert.strictEqual(typeof ctx.autoSwitchTick, "undefined"); });
+  t("scheduleAlarm 函数已移除 (无 alarms 看门狗)", () => { assert.strictEqual(typeof ctx.scheduleAlarm, "undefined"); });
+  t("保留手动引擎: activate / ensureAuth / applyDnr / refreshQuota 均在", () => {
+    assert.strictEqual(typeof ctx.activate, "function");
+    assert.strictEqual(typeof ctx.ensureAuth, "function");
+    assert.strictEqual(typeof ctx.applyDnr, "function");
+    assert.strictEqual(typeof ctx.refreshQuota, "function");
   });
 
-  // 活跃账号是低余额时, 切到全局最优 high@x.com
-  seed("low@x.com");
-  r = norm(await ctx.rotate("test"));
-  t("活跃账号余额更低 → 切到全局最优账号", () => {
-    assert.strictEqual(r.switchedTo, "high@x.com");
-    assert.deepStrictEqual(activated, ["high@x.com"]);
-    assert.strictEqual(r.ranked[0].email, "high@x.com");
+  console.log("\nactivate (手动切号 = 注入登录·桌面「点击切号」的浏览器形态):");
+  ctx.DaoCloud.login = async (email) => ({
+    ok: true, auth1: "auth_" + lc(email).replace(/[^a-z]/g, ""), orgId: "org-m", userId: "user-m", email,
   });
-
-  // 回归 4: 登录失败的号 (status 非 ok) 必须排除出候选 —— 即便余额更高的号登不上,
-  //   也绝不切过去 (rotate 切过去 activate 必失败 · 形同把活跃号换成废号)。
-  store = {
-    accounts: [{ email: "ok@x.com", locked: false }, { email: "broken@x.com", locked: false }],
-    authCache: {}, settings: {},
-    active: "ok@x.com",
-    // broken 余额虚高但登录失败; 旧逻辑 balance==null 给 -1, 此处 status 失败 → -Infinity 真排除
-    quota: { "ok@x.com": { balance: 1.5, status: "ok" }, "broken@x.com": { balance: null, status: "登录失败" } },
-  };
-  activated = [];
-  r = norm(await ctx.rotate("test"));
-  t("登录失败的号被排除, 不切到登不上的账号", () => {
-    assert.strictEqual(r.switchedTo, "ok@x.com");
-    assert.deepStrictEqual(activated, []);
+  let injected = [];
+  chrome.tabs.query = () => Promise.resolve([{ id: 1 }]);
+  chrome.tabs.sendMessage = (id, m) => { injected.push(m); return Promise.resolve(); };
+  store = { accounts: [{ email: "pick@x.com", password: "p" }], authCache: {}, settings: {}, active: "", quota: {} };
+  captured = null; injected = [];
+  const ra = norm(await ctx.activate("pick@x.com"));
+  t("activate 成功 → 写 active + 刷 DNR 注入头 (新 auth1)", () => {
+    assert.strictEqual(ra.ok, true);
+    assert.strictEqual(store.active, "pick@x.com");
+    const r = captured && captured.addRules && norm(captured.addRules[0]);
+    assert.ok(r, "应刷 DNR");
+    assert.strictEqual(r.action.requestHeaders.find((h) => h.header === "Authorization").value, "Bearer auth_pickxcom");
   });
-
-  console.log("\n账号锁 effLocked / rotate 过滤 / panicSwitch (反者道之动·默锁防误切):");
-  // effLocked: 显式 locked 优先, 缺省由 lockByDefault 决定 (与本体 v4.6.0 反转语义同源)
-  t("effLocked: 显式 locked=false → 不锁 (即便 lockByDefault=true)", () => {
-    assert.strictEqual(ctx.effLocked({ email: "a", locked: false }, { lockByDefault: true }), false);
-  });
-  t("effLocked: 显式 locked=true → 锁", () => {
-    assert.strictEqual(ctx.effLocked({ email: "a", locked: true }, { lockByDefault: false }), true);
-  });
-  t("effLocked: 无 locked 记录 → 跟随 lockByDefault", () => {
-    assert.strictEqual(ctx.effLocked({ email: "a" }, { lockByDefault: true }), true);
-    assert.strictEqual(ctx.effLocked({ email: "a" }, { lockByDefault: false }), false);
-  });
-
-  // rotate: 锁定账号不入自动切候选; 仅 high 解锁时切 high
-  store = {
-    accounts: [{ email: "low@x.com", locked: false }, { email: "high@x.com", locked: true }],
-    authCache: {}, settings: { lockByDefault: false },
-    active: "low@x.com",
-    quota: { "low@x.com": { balance: 0, status: "ok" }, "high@x.com": { balance: 9, status: "ok" } },
-  };
-  activated = [];
-  r = norm(await ctx.rotate("test"));
-  t("rotate: 余额最高账号被🔒锁定 → 不切过去 (noop·防误切)", () => {
-    assert.strictEqual(r.noop, true);
-    assert.deepStrictEqual(activated, []);
-  });
-
-  // 全锁定 → allLocked noop (非红错)
-  store = {
-    accounts: [{ email: "a@x.com", locked: true }, { email: "b@x.com", locked: true }],
-    authCache: {}, settings: { lockByDefault: false }, active: "a@x.com",
-    quota: { "a@x.com": { balance: 1, status: "ok" }, "b@x.com": { balance: 9, status: "ok" } },
-  };
-  activated = [];
-  r = norm(await ctx.rotate("test"));
-  t("rotate: 全部🔒锁定 → allLocked noop (预期·非错误)", () => {
-    assert.strictEqual(r.ok, true);
-    assert.strictEqual(r.allLocked, true);
-    assert.deepStrictEqual(activated, []);
-  });
-
-  // panicSwitch: 立即切到其他·未锁定·可登录最优号 (不要求严格更优)
-  store = {
-    accounts: [{ email: "cur@x.com", locked: false }, { email: "esc@x.com", locked: false }, { email: "lck@x.com", locked: true }],
-    authCache: {}, settings: { lockByDefault: false }, active: "cur@x.com",
-    quota: { "cur@x.com": { balance: 5, status: "ok" }, "esc@x.com": { balance: 1, status: "ok" }, "lck@x.com": { balance: 9, status: "ok" } },
-  };
-  activated = [];
-  r = norm(await ctx.panicSwitch());
-  t("panicSwitch: 弃用当前号, 切到其他未锁定号 (忽略缓冲·锁定号排除)", () => {
-    assert.strictEqual(r.switchedTo, "esc@x.com");
-    assert.deepStrictEqual(activated, ["esc@x.com"]);
-  });
-
-  // panicSwitch: 无其他可切号 → 报错
-  store = {
-    accounts: [{ email: "only@x.com", locked: false }],
-    authCache: {}, settings: { lockByDefault: false }, active: "only@x.com",
-    quota: { "only@x.com": { balance: 5, status: "ok" } },
-  };
-  activated = [];
-  r = norm(await ctx.panicSwitch());
-  t("panicSwitch: 无其他可切号 → ok=false 报错", () => {
-    assert.strictEqual(r.ok, false);
-    assert.deepStrictEqual(activated, []);
+  t("activate 成功 → 通知 app.devin.ai 标签页重注入 localStorage (reload)", () => {
+    const msg = injected.find((m) => m.type === "dao-inject");
+    assert.ok(msg, "应发 dao-inject");
+    assert.strictEqual(msg.reload, true);
+    assert.strictEqual(msg.auth1, "auth_pickxcom");
   });
 
   console.log("\nensureAuth (活跃账号令牌刷新 → 同步刷新 DNR):");
-  // 回归 3: 活跃账号缓存过期重登后, 必须用新 auth1 重刷 DNR; 非活跃账号重登则不动 DNR。
   ctx.DaoCloud.login = async (email) => ({
     ok: true, auth1: "fresh_" + lc(email).replace(/[^a-z]/g, ""), orgId: "org-z", userId: "user-z", email,
   });
@@ -197,14 +116,12 @@ function t(name, fn) {
     accounts: [{ email: "active@x.com", password: "p" }, { email: "other@x.com", password: "p" }],
     authCache: {}, settings: {}, active: "active@x.com", quota: {},
   };
-
   captured = null;
   await ctx.ensureAuth("active@x.com");
   t("活跃账号重登 → 用新 auth1 重刷 DNR", () => {
-    const rule = captured && captured.addRules && norm(captured.addRules[0]);
-    assert.ok(rule, "应重刷 DNR 规则");
-    const authH = rule.action.requestHeaders.find((h) => h.header === "Authorization");
-    assert.strictEqual(authH.value, "Bearer fresh_activexcom");
+    const r = captured && captured.addRules && norm(captured.addRules[0]);
+    assert.ok(r, "应重刷 DNR 规则");
+    assert.strictEqual(r.action.requestHeaders.find((h) => h.header === "Authorization").value, "Bearer fresh_activexcom");
   });
 
   captured = null;
@@ -213,45 +130,14 @@ function t(name, fn) {
     assert.strictEqual(captured, null);
   });
 
-  console.log("\nrotate 自动停止 (弃旧号前中停其运行中对话·知止不殆):");
-  // 桩: stopRunningSessions 记录被中停的账号 (不真打网络); ensureAuth/activate/refreshQuota 受控
-  const stopCalls = [];
-  ctx.DaoCloud.stopRunningSessions = async (a) => { stopCalls.push(lc(a.email)); return { ok: true, total: 2, stopped: 2 }; };
-  ctx.ensureAuth = async (email) => ({ ok: true, auth1: "a1", orgId: "org-o", orgBare: "o", email: lc(email) });
-  ctx.refreshQuota = async () => ({ ok: true });
-  ctx.activate = async (email) => { activated.push(lc(email)); store.active = lc(email); return { ok: true }; };
-  const seedStop = (settings, oldBal) => {
-    store = {
-      accounts: [{ email: "old@x.com", locked: false }, { email: "new@x.com", locked: false }],
-      authCache: {}, settings, active: "old@x.com",
-      quota: { "old@x.com": { balance: oldBal, status: "ok" }, "new@x.com": { balance: 8, status: "ok" } },
-    };
-    activated = []; stopCalls.length = 0;
-  };
-
-  // autoStop ON + 旧号余额 ≤ stopThreshold → 切号同时中停旧号
-  seedStop({ lockByDefault: false, autoStop: true, stopThreshold: 3 }, 1);
-  r = norm(await ctx.rotate("软耗尽"));
-  t("autoStop ON + 旧号余额≤阈值 → 切号并中停旧号 (stopped 回报)", () => {
-    assert.strictEqual(r.switchedTo, "new@x.com");
-    assert.deepStrictEqual(stopCalls, ["old@x.com"]);
-    assert.ok(r.stopped && r.stopped.stopped === 2);
-  });
-
-  // autoStop OFF → 仅切号·不中停 (即便余额低)
-  seedStop({ lockByDefault: false, autoStop: false, stopThreshold: 3 }, 1);
-  r = norm(await ctx.rotate("软耗尽"));
-  t("autoStop OFF → 仅切号·不中停旧号", () => {
-    assert.strictEqual(r.switchedTo, "new@x.com");
-    assert.strictEqual(stopCalls.length, 0);
-  });
-
-  // autoStop ON 但旧号余额 > stopThreshold → 不中停 (知止不殆·余额尚可不强停)
-  seedStop({ lockByDefault: false, autoStop: true, stopThreshold: 3 }, 5);
-  r = norm(await ctx.rotate("manual"));
-  t("autoStop ON 但旧号余额>阈值 → 不中停 (仅切号)", () => {
-    assert.strictEqual(r.switchedTo, "new@x.com");
-    assert.strictEqual(stopCalls.length, 0);
+  console.log("\nrefreshQuota (额度普查·登录失败如实落账):");
+  ctx.DaoCloud.login = async () => ({ ok: false, error: "bad creds" });
+  store = { accounts: [{ email: "dead@x.com", password: "p" }], authCache: {}, settings: {}, active: "", quota: {} };
+  const rq = norm(await ctx.refreshQuota("dead@x.com"));
+  t("登录失败 → quota 记 status=登录失败 (供面板显示·非静默)", () => {
+    assert.strictEqual(rq.ok, false);
+    assert.strictEqual(store.quota["dead@x.com"].status, "登录失败");
+    assert.strictEqual(store.quota["dead@x.com"].balance, null);
   });
 
   console.log("\n" + pass + " passed, " + fail + " failed");
