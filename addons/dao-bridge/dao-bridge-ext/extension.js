@@ -1117,6 +1117,10 @@ class Bridge {
   generateCloudAgentMd() {
     const wsInfo = workspaceInfo();
     const ts = new Date().toISOString();
+    const relay = this.mode === "relay";
+    const modeLabel = relay
+      ? "relay (Worker 中继·稳定 URL·零账号)"
+      : (this.mode === "named" ? "named (命名隧道·稳定 URL)" : "quick (临时 URL)");
     return [
       "# ☯ DAO Bridge · 云端Agent接入文档",
       "",
@@ -1128,9 +1132,14 @@ class Bridge {
       "URL:   " + (this.url || "(隧道启动中…)"),
       "Token: " + this.srv.token,
       "Auth:  Authorization: Bearer <Token>",
-      "Mode:  " + (this.mode === "named" ? "named (命名隧道·稳定 URL)" : "quick (临时 URL)") + (this.protocol ? " · proto=" + this.protocol : "") + (this.proxy ? " · proxy=" + this.proxy : ""),
+      "Mode:  " + modeLabel + (this.protocol ? " · proto=" + this.protocol : "") + (this.proxy ? " · proxy=" + this.proxy : ""),
       "```",
       "",
+      ...(relay ? [
+        "> ⚠ 中继模式：URL 不是透明反代，而是**信封端点**。请把请求包成信封 `POST <URL>` body `{path,method,body}` —",
+        "> 例：`POST <URL>` `{\"path\":\"/api/exec-sync\",\"method\":\"POST\",\"body\":{\"cmd\":\"hostname\"}}`。下方 SDK 的 `api()` 已自动适配，照常调用即可。",
+        "",
+      ] : []),
       "## 机器信息",
       "",
       "| 项 | 值 |",
@@ -1178,9 +1187,13 @@ class Bridge {
       "urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=ctx)))",
       'URL="' + (this.url || "https://<见上>.trycloudflare.com") + '"',
       'TOKEN="' + this.srv.token + '"',
+      "RELAY=('/relay/' in URL)  # 中继=信封端点; 直连=透明反代。同一份 api() 两者通用",
       "def api(m,p,body=None,t=30):",
-      "    d=json.dumps(body).encode() if body else None",
-      '    req=urllib.request.Request(f"{URL}{p}",data=d,headers={"Authorization":f"Bearer {TOKEN}","Content-Type":"application/json"},method=m)',
+      "    if RELAY:",
+      "        url=URL; method='POST'; d=json.dumps({'path':p,'method':m,'body':body or {}}).encode()",
+      "    else:",
+      "        url=f'{URL}{p}'; method=m; d=json.dumps(body).encode() if body else None",
+      '    req=urllib.request.Request(url,data=d,headers={"Authorization":f"Bearer {TOKEN}","Content-Type":"application/json"},method=method)',
       "    return json.loads(urllib.request.urlopen(req,timeout=t).read())",
       'print(api("GET","/api/health"))',
       'print(api("POST","/api/exec-sync",{"cmd":"hostname"}))',
