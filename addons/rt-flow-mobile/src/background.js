@@ -167,7 +167,9 @@ async function setTabBindings(b) { await set({ tabBindings: b }); }
 
 async function applyTabDnr(tabId, auth) {
   if (tabId == null || !auth || !auth.auth1 || !auth.orgId) return;
-  await chrome.declarativeNetRequest.updateDynamicRules({
+  // per-tab 规则必须走 session-scoped rules: «tabIds» 仅 updateSessionRules 支持
+  // (updateDynamicRules 不允许 tabIds)。session 规则随浏览器会话存活·正合 Tab 生命周期。
+  await chrome.declarativeNetRequest.updateSessionRules({
     removeRuleIds: [TAB_RULE_BASE + tabId],
     addRules: [{
       id: TAB_RULE_BASE + tabId,
@@ -181,7 +183,7 @@ async function applyTabDnr(tabId, auth) {
   });
 }
 async function removeTabDnr(tabId) {
-  try { await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [TAB_RULE_BASE + tabId], addRules: [] }); } catch (e) {}
+  try { await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [TAB_RULE_BASE + tabId], addRules: [] }); } catch (e) {}
 }
 
 // 打开账号专属 Tab (多实例): 登录该账号 → 新开 app.devin.ai Tab → 绑定 + per-tab DNR
