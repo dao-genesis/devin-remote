@@ -2661,17 +2661,17 @@ function rT(tab,items,err,fallbackProxy){
   }else if(tab==='knowledge'){
     items.forEach(k=>{
       const id=k.id||'';const name=k.name||'Untitled';const trigger=k.trigger_description||k.trigger||'';const enabled=k.is_enabled!==false;
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(name)+'</span><span class="v"><span class="tag knowledge">K</span>'+(enabled?'<span style="color:var(--success);margin-left:4px">✓</span>':'<span style="color:var(--danger);margin-left:4px">✗</span>')+'</span></div>'+(trigger?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(trigger.substring(0,100))+'</div>':'')+'<div class="br" style="margin-top:4px">'+lkBtn('knowledge',name)+'<button class="btn sm danger" onclick="cmd(&#39;devinDeleteKnowledge&#39;,{id:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(name)+'</span><span class="v"><span class="tag knowledge">K</span>'+(enabled?'<span style="color:var(--success);margin-left:4px">✓</span>':'<span style="color:var(--danger);margin-left:4px">✗</span>')+'</span></div>'+(trigger?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(trigger.substring(0,100))+'</div>':'')+'<div class="br" style="margin-top:4px">'+lkBtn('knowledge',name)+'<button class="btn sm" onclick="cmd(&#39;devinEditKnowledge&#39;,{id:&#39;'+esc(String(id))+'&#39;})">✏️ 修改</button><button class="btn sm danger" onclick="cmd(&#39;devinDeleteKnowledge&#39;,{id:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
     });
   }else if(tab==='playbooks'){
     items.forEach(p=>{
       const id=p.id||'';const title=p.title||p.name||'Untitled';const status=p.status||'';
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(title)+'</span><span class="v"><span class="tag playbook">P</span></span></div>'+(status?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(status)+'</div>':'')+'<div class="br" style="margin-top:4px">'+lkBtn('playbooks',title)+'<button class="btn sm danger" onclick="cmd(&#39;devinDeletePlaybook&#39;,{id:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(title)+'</span><span class="v"><span class="tag playbook">P</span></span></div>'+(status?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(status)+'</div>':'')+'<div class="br" style="margin-top:4px">'+lkBtn('playbooks',title)+'<button class="btn sm" onclick="cmd(&#39;devinEditPlaybook&#39;,{id:&#39;'+esc(String(id))+'&#39;})">✏️ 修改</button><button class="btn sm danger" onclick="cmd(&#39;devinDeletePlaybook&#39;,{id:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
     });
   }else if(tab==='secrets'){
     items.forEach(s=>{
       const name=s.name||s.key||'Unnamed';const id=s.id||'';
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(name)+'</span><span class="v"><span class="tag secret">S</span></span></div><div class="br" style="margin-top:4px">'+lkBtn('secrets',name)+'<button class="btn sm danger" onclick="cmd(&#39;devinDeleteSecret&#39;,{name:&#39;'+esc(name)+'&#39;})">🗑</button></div></div>';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(name)+'</span><span class="v"><span class="tag secret">S</span></span></div><div class="br" style="margin-top:4px">'+lkBtn('secrets',name)+'<button class="btn sm" onclick="cmd(&#39;devinEditSecret&#39;,{name:&#39;'+esc(name)+'&#39;})">✏️ 改值</button><button class="btn sm danger" onclick="cmd(&#39;devinDeleteSecret&#39;,{name:&#39;'+esc(name)+'&#39;})">🗑</button></div></div>';
     });
   }else if(tab==='integrations'){
     items.forEach(c=>{
@@ -3276,6 +3276,53 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const r = await devinUpsertSecret(ws.devinOrgId, name, value, ws.devinAuth1);
                 if (r.ok) { vscode.window.showInformationMessage('Secret created: ' + name); setManualLock(ws.devinOrgId, 'secrets', name, true); }
                 refreshReply({ type: 'actionResult', command: 'devinCreateSecret', ok: r.ok });
+                break;
+            }
+            // ★ 全 CRUD · 修改已有条目 · 帛书「曲则全·枉则直」— 删旧(按id, 支持改名)→建新, 多行正文用临时文档编辑
+            case 'devinEditKnowledge': {
+                const list = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1);
+                const item = (list.learnings || []).find((k: any) => String(k.id) === String(msg.id));
+                if (!item) { vscode.window.showErrorMessage('未找到该 Knowledge'); refreshReply({ type: 'actionResult', command: 'devinEditKnowledge', ok: false }); break; }
+                const newName = await vscode.window.showInputBox({ prompt: 'Knowledge 名称', value: String(item.name || '') });
+                if (newName === undefined) break;
+                const newBody = await daoEditBodyViaDoc('知识《' + (item.name || '') + '》正文', String(item.body || ''));
+                if (newBody === undefined) break;
+                const newTrig = await vscode.window.showInputBox({ prompt: '触发描述(何时检索)', value: String(item.trigger_description || item.trigger || '') });
+                if (newTrig === undefined) break;
+                await devinDeleteKnowledge(ws.devinOrgId, String(item.id), ws.devinAuth1);
+                const r = await devinInjectKnowledge(ws.devinOrgId, newName || String(item.name), newBody, newTrig || newName || String(item.name), ws.devinAuth1);
+                if (r.ok) { vscode.window.showInformationMessage('Knowledge 已修改: ' + (newName || item.name)); setManualLock(ws.devinOrgId, 'knowledge', newName || String(item.name), true); }
+                else vscode.window.showErrorMessage('Knowledge 修改失败');
+                refreshReply({ type: 'actionResult', command: 'devinEditKnowledge', ok: r.ok });
+                break;
+            }
+            case 'devinEditPlaybook': {
+                const list = await devinListPlaybooks(ws.devinOrgId, ws.devinAuth1);
+                const item = (list.playbooks || []).find((p: any) => String(p.id) === String(msg.id));
+                if (!item) { vscode.window.showErrorMessage('未找到该 Playbook'); refreshReply({ type: 'actionResult', command: 'devinEditPlaybook', ok: false }); break; }
+                const newTitle = await vscode.window.showInputBox({ prompt: 'Playbook 标题', value: String(item.title || item.name || '') });
+                if (newTitle === undefined) break;
+                const newBody = await daoEditBodyViaDoc('剧本《' + (item.title || '') + '》正文', String(item.body || ''));
+                if (newBody === undefined) break;
+                await devinDeletePlaybook(ws.devinOrgId, String(item.id), ws.devinAuth1);
+                const r = await devinInjectPlaybook(ws.devinOrgId, newTitle || String(item.title), newBody, ws.devinAuth1);
+                if (r.ok) { vscode.window.showInformationMessage('Playbook 已修改: ' + (newTitle || item.title)); setManualLock(ws.devinOrgId, 'playbooks', newTitle || String(item.title), true); }
+                else vscode.window.showErrorMessage('Playbook 修改失败');
+                refreshReply({ type: 'actionResult', command: 'devinEditPlaybook', ok: r.ok });
+                break;
+            }
+            case 'devinEditSecret': {
+                // Secret 值不可读(write-only) → 仅改新值(可同时改名)
+                const oldName = String(msg.name || '');
+                const newName = await vscode.window.showInputBox({ prompt: 'Secret 名称', value: oldName });
+                if (newName === undefined) break;
+                const value = await vscode.window.showInputBox({ prompt: 'Secret 新值(留空取消)', password: true });
+                if (!value) break;
+                if (newName && newName !== oldName) await devinDeleteSecret(ws.devinOrgId, oldName, ws.devinAuth1);
+                const r = await devinUpsertSecret(ws.devinOrgId, newName || oldName, value, ws.devinAuth1);
+                if (r.ok) { vscode.window.showInformationMessage('Secret 已修改: ' + (newName || oldName)); setManualLock(ws.devinOrgId, 'secrets', newName || oldName, true); }
+                else vscode.window.showErrorMessage('Secret 修改失败');
+                refreshReply({ type: 'actionResult', command: 'devinEditSecret', ok: r.ok });
                 break;
             }
             case 'toggleManualLock': {
@@ -4808,6 +4855,18 @@ function devinMaskToken(t: string): string {
         return prefix + value.slice(0, 8) + '...' + value.slice(-6);
     }
     return t.slice(0, 20) + '...' + t.slice(-8);
+}
+
+// 多行正文编辑: 打开临时 markdown 文档供编辑, 用户点「保存到 Devin」后回传全文; 取消则 undefined。
+// 帛书·「大成若缺·其用不弊」— 单行 InputBox 容不下长正文, 故借编辑器原生多行能力。
+async function daoEditBodyViaDoc(header: string, currentBody: string): Promise<string | undefined> {
+    const doc = await vscode.workspace.openTextDocument({ content: currentBody, language: 'markdown' });
+    const ed = await vscode.window.showTextDocument(doc, { preview: false });
+    const pick = await vscode.window.showInformationMessage(header + ' — 在打开的文档中编辑正文, 完成后点「保存到 Devin」', '保存到 Devin', '取消');
+    const text = ed.document.getText();
+    try { await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor'); } catch { /* 守柔 */ }
+    if (pick !== '保存到 Devin') return undefined;
+    return text;
 }
 
 async function devinInjectSecret(orgId: string, name: string, value: string, auth1: string): Promise<{ ok: boolean; existed?: boolean }> {
