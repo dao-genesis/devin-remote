@@ -3,7 +3,7 @@
 // Usage: node pack-vsix.js <pluginDir> [outVsixPath]
 const fs = require("fs");
 const path = require("path");
-const yazl = require(path.join(__dirname, "..", "plugins", "dao-vsix", "node_modules", "yazl"));
+const yazl = require(path.join(__dirname, "..", "core", "dao-vsix", "node_modules", "yazl"));
 
 const pluginDir = path.resolve(process.argv[2]);
 const pkg = JSON.parse(fs.readFileSync(path.join(pluginDir, "package.json"), "utf8"));
