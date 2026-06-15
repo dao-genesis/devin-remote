@@ -158,6 +158,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
       switch (msg && msg.type) {
+        // 轻量唤醒: 长任务(全量备份等)前用它确保 SW 已就绪, 避免 MV3 冷启首条回调丢失。
+        case "ping": {
+          sendResponse({ ok: true, pong: true });
+          break;
+        }
         case "getState": {
           const st = await getState();
           sendResponse({ ok: true, ...st });
