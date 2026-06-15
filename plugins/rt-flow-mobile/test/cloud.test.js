@@ -181,6 +181,41 @@ const { login } = globalThis.DaoCloud;
     assert.strictEqual(r.orgId, "org-123");
   });
 
+  // loginViaToken(): 裸 auth1 → post-auth 换 org_id; email 取回传或合成稳定别名 (万法识别 token 入池)
+  const { loginViaToken } = globalThis.DaoCloud;
+  console.log("\nloginViaToken (裸 token 入池):");
+  global.fetch = async (url) => {
+    if (String(url).includes("/users/post-auth"))
+      return { status: 200, async text() { return JSON.stringify({ org_id: "org-tok", email: "real@b.c" }); } };
+    return { status: 404, async text() { return ""; } };
+  };
+  const tr = await loginViaToken("auth1_bare_token_xyz");
+  t("有效 token → ok, 取 org_id 与回传 email, viaToken=true", () => {
+    assert.strictEqual(tr.ok, true);
+    assert.strictEqual(tr.orgId, "org-tok");
+    assert.strictEqual(tr.orgBare, "tok");
+    assert.strictEqual(tr.email, "real@b.c");
+    assert.strictEqual(tr.viaToken, true);
+  });
+  const empty = await loginViaToken("   ");
+  t("空 token → ok=false", () => {
+    assert.strictEqual(empty.ok, false);
+  });
+  // post-auth 无 org_id (token 失效) → ok=false; email 缺时合成稳定别名
+  global.fetch = async () => ({ status: 401, async text() { return "{}"; } });
+  const bad = await loginViaToken("bad_token_zzz");
+  t("post-auth 无 org_id → ok=false (token 无效)", () => {
+    assert.strictEqual(bad.ok, false);
+  });
+  global.fetch = async (url) => String(url).includes("/users/post-auth")
+    ? { status: 200, async text() { return JSON.stringify({ org_id: "org-q" }); } }
+    : { status: 404, async text() { return ""; } };
+  const syn = await loginViaToken("abcdefghij_klmnop");
+  t("post-auth 无 email → 合成稳定别名 token-<前10>", () => {
+    assert.strictEqual(syn.ok, true);
+    assert.strictEqual(syn.email, "token-abcdefghij");
+  });
+
   console.log("\n" + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);
 })();

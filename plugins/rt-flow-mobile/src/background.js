@@ -19,7 +19,17 @@ const DEFAULT_SETTINGS = {
   autoSwitch: true, // 软耗尽自动轮转
   buffer: 3, // 余额 ≤ buffer($) 视为软耗尽 → 触发切换 (知止不殆)
   pollMin: 2, // 轮询间隔 (分钟)
+  lockByDefault: true, // 反者道之动·默锁: 新号缺省🔒锁定(禁自动切到), 用户🔓解锁后才入候选 (防误切·与本体 wam.lockByDefault 一脉)
+  notify: true, // 低余额浏览器通知
+  lowBalance: 5, // 余额 ≤ 此值($) 触发一次低余额通知 (回升复位·复用 lowBalanceVerdict)
 };
+
+// 账号有效锁定态: 无显式 locked 记录时按 lockByDefault 决定 (与本体 v4.6.0 反转语义同源)
+function effLocked(a, settings) {
+  if (!a) return false;
+  if (a.locked === true || a.locked === false) return a.locked;
+  return !!(settings && settings.lockByDefault);
+}
 
 // ── storage helpers ────────────────────────────────────────────────────────
 function get(keys) { return new Promise((r) => chrome.storage.local.get(keys, r)); }
@@ -49,7 +59,8 @@ async function ensureAuth(email, force) {
   if (!acct) return { ok: false, error: "账号不在池中: " + email };
   const cached = st.authCache[key];
   if (!force && authValid(cached)) return Object.assign({ ok: true, cached: true }, cached);
-  const r = await DaoCloud.login(acct.email, acct.password);
+  // token 账号 (万法识别裸 token 入池) 走 loginViaToken; email+password 账号走常规登录
+  const r = acct.token ? await DaoCloud.loginViaToken(acct.token) : await DaoCloud.login(acct.email, acct.password);
   if (r.ok) {
     st.authCache[key] = r;
     await set({ authCache: st.authCache });
@@ -127,8 +138,13 @@ async function refreshQuota(email) {
   const reset = b.ok ? DaoCloud.quotaResetInfo(b.raw) : null;
   const tokenShort = r.auth1 ? String(r.auth1).slice(0, 14) + "…" : "";
   const st = await getState();
-  st.quota[lc(email)] = { balance, raw: b.raw || null, ts: Date.now(), status: b.ok ? "ok" : ("HTTP " + b.status), reset, tokenShort };
+  const key = lc(email);
+  // 低余额预警 (复用 cloud 纯函数 lowBalanceVerdict·一次跌破一次·回升复位)
+  const prevAlerted = !!(st.quota[key] && st.quota[key].alerted);
+  const verdict = DaoCloud.lowBalanceVerdict(balance, st.settings.lowBalance, prevAlerted);
+  st.quota[key] = { balance, raw: b.raw || null, ts: Date.now(), status: b.ok ? "ok" : ("HTTP " + b.status), reset, tokenShort, alerted: verdict.alerted };
   await set({ quota: st.quota });
+  if (verdict.alert && st.settings.notify) notifyLowBalance(email, balance, st.settings.lowBalance);
   return { ok: true, balance };
 }
 
@@ -143,8 +159,9 @@ function scoreOf(quota) {
   return quota.balance;
 }
 
-// rotate: 切到评分最高的账号 (择优轮转)。当前账号已是最优(或并列最优)则不切 ——
+// rotate: 切到评分最高的「未锁定」账号 (择优轮转)。当前账号已是最优(或并列最优)则不切 ——
 // 不能像旧逻辑那样"排除当前账号取次高", 否则当前已最优时反会切到更差的账号。
+//   锁定账号(🔒)不入自动切候选 (反者道之动·防误切到主用号); 全锁定时返回 noop 而非红错。
 async function rotate(reason) {
   const st = await getState();
   if (st.accounts.length === 0) return { ok: false, error: "账号池为空" };
@@ -152,18 +169,52 @@ async function rotate(reason) {
   for (const a of st.accounts) await refreshQuota(a.email).catch(() => {});
   const fresh = await getState();
   const ranked = fresh.accounts
+    .filter((a) => !effLocked(a, fresh.settings)) // 锁定号不入自动切候选
     .map((a) => ({ email: lc(a.email), score: scoreOf(fresh.quota[lc(a.email)]) }))
     .sort((x, y) => y.score - x.score);
-  const best = ranked[0];
-  if (!best) return { ok: false, error: "无可切换账号" };
   const activeKey = lc(fresh.active || "");
   const activeScore = activeKey ? scoreOf(fresh.quota[activeKey]) : -Infinity;
+  const best = ranked[0];
+  // v4.6.1 一脉: 无未锁定候选 = 预期(均🔒锁定), 非错误; 面板🔓解锁后启用自动切号
+  if (!best) {
+    return { ok: true, switchedTo: activeKey, reason: reason || "manual", ranked, noop: true, allLocked: true };
+  }
   // 仅当存在「严格更优」的账号时才切, 避免在并列最优间反复横跳
   if (best.score <= activeScore) {
     return { ok: true, switchedTo: activeKey, reason: reason || "manual", ranked, noop: true };
   }
   const res = await activate(best.email);
   return { ok: res.ok, switchedTo: best.email, reason: reason || "manual", ranked };
+}
+
+// 紧急切换 (与本体 panicSwitch/rotateNext 一脉): 立即弃用当前号, 切到「其他·未锁定·可登录」中
+// 评分最高者 (忽略缓冲阈值·不要求严格更优) —— 当前号被卡死/异常时人工应急逃生。
+async function panicSwitch() {
+  const st = await getState();
+  if (st.accounts.length === 0) return { ok: false, error: "账号池为空" };
+  for (const a of st.accounts) await refreshQuota(a.email).catch(() => {});
+  const fresh = await getState();
+  const activeKey = lc(fresh.active || "");
+  const cands = fresh.accounts
+    .filter((a) => lc(a.email) !== activeKey && !effLocked(a, fresh.settings) && scoreOf(fresh.quota[lc(a.email)]) > -Infinity)
+    .map((a) => ({ email: lc(a.email), score: scoreOf(fresh.quota[lc(a.email)]) }))
+    .sort((x, y) => y.score - x.score);
+  if (!cands.length) return { ok: false, error: "无其他可切换账号 (可能均🔒锁定或登录失败)" };
+  const res = await activate(cands[0].email);
+  return { ok: res.ok, switchedTo: cands[0].email, reason: "紧急切换", ranked: cands };
+}
+
+// 低余额浏览器通知 (一次跌破一次·守护式·chrome.notifications 缺失则静默)
+function notifyLowBalance(email, balance, threshold) {
+  try {
+    if (!chrome.notifications || !chrome.notifications.create) return;
+    chrome.notifications.create("dao-lowbal-" + lc(email), {
+      type: "basic",
+      iconUrl: "icons/icon-128.png",
+      title: "rt-flow · 低余额预警",
+      message: email + " 余额 $" + balance + " ≤ 阈值 $" + threshold + "，建议补充或切号。",
+    });
+  } catch (e) { /* 通知不可用·不阻断主流程 */ }
 }
 
 // 软耗尽检查: 活跃账号余额 ≤ buffer → 自动 rotate
@@ -193,8 +244,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const key = lc(msg.email);
           if (!msg.email || !msg.password) { sendResponse({ ok: false, error: "邮箱/密码必填" }); break; }
           const idx = st.accounts.findIndex((a) => lc(a.email) === key);
-          const entry = { email: msg.email, password: msg.password, label: msg.label || "" };
-          if (idx >= 0) st.accounts[idx] = entry; else st.accounts.push(entry);
+          if (idx >= 0) {
+            // 更新: 保留既有锁定态
+            st.accounts[idx] = Object.assign({}, st.accounts[idx], { email: msg.email, password: msg.password, label: msg.label || "" });
+          } else {
+            st.accounts.push({ email: msg.email, password: msg.password, label: msg.label || "", locked: !!st.settings.lockByDefault });
+          }
           await set({ accounts: st.accounts });
           sendResponse({ ok: true, count: st.accounts.length });
           break;
@@ -203,16 +258,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "parseAndAdd": {
           const parsed = DaoParse.parseAccountText(msg.text || "");
           const st = await getState();
-          let added = 0, updated = 0;
+          const lockDefault = !!st.settings.lockByDefault;
+          let added = 0, updated = 0, tokensAdded = 0;
           for (const p of parsed.accounts) {
             const key = lc(p.email);
             const idx = st.accounts.findIndex((a) => lc(a.email) === key);
-            const entry = { email: p.email, password: p.password, label: "" };
-            if (idx >= 0) { st.accounts[idx] = Object.assign({}, st.accounts[idx], entry); updated++; }
-            else { st.accounts.push(entry); added++; }
+            if (idx >= 0) { st.accounts[idx] = Object.assign({}, st.accounts[idx], { email: p.email, password: p.password }); updated++; }
+            else { st.accounts.push({ email: p.email, password: p.password, label: "", locked: lockDefault }); added++; }
+          }
+          // 万法识别·裸 token 入池 (与本体 loginViaToken 一脉): 去重 by token, 合成稳定别名
+          for (const tk of parsed.tokens) {
+            if (st.accounts.find((a) => a.token === tk)) continue;
+            st.accounts.push({ token: tk, email: "token-" + String(tk).slice(0, 10), label: "token", locked: lockDefault });
+            tokensAdded++;
           }
           await set({ accounts: st.accounts });
-          sendResponse({ ok: true, added, updated, total: st.accounts.length, parsed: parsed.accounts.length, tokens: parsed.tokens.length });
+          sendResponse({ ok: true, added, updated, total: st.accounts.length, parsed: parsed.accounts.length, tokens: tokensAdded });
           break;
         }
         // 一键导出: 账号池 → 可再粘贴文本
@@ -338,6 +399,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         case "rotate": {
           sendResponse(await rotate("manual"));
+          break;
+        }
+        // 紧急切换: 立即弃用当前号, 切到其他未锁定最优号
+        case "panicSwitch": {
+          sendResponse(await panicSwitch());
+          break;
+        }
+        // 账号锁: 🔒锁定/🔓解锁 (locked=true/false 显式两态·缺省由 lockByDefault 决定)
+        case "lockAccount": {
+          const st = await getState();
+          const key = lc(msg.email);
+          const idx = st.accounts.findIndex((a) => lc(a.email) === key);
+          if (idx < 0) { sendResponse({ ok: false, error: "账号不在池中" }); break; }
+          st.accounts[idx] = Object.assign({}, st.accounts[idx], { locked: !!msg.locked });
+          await set({ accounts: st.accounts });
+          sendResponse({ ok: true, locked: !!msg.locked });
           break;
         }
         case "saveSettings": {

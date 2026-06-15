@@ -332,11 +332,16 @@ const DaoParse = (() => {
     return { accounts, tokens };
   }
 
-  // 账号池导出为「万法皆归」可再粘贴文本 (一键导出 · email password 每行一个 · 可被本解析器原样回收)
+  // 账号池导出为「万法皆归」可再粘贴文本 (一键导出 · email password / 裸 token 每行一个 · 可被本解析器原样回收)
   function exportAccountsText(accounts) {
     return (accounts || [])
-      .filter((a) => a && a.email && a.password)
-      .map((a) => a.email + " " + a.password)
+      .map((a) => {
+        if (!a) return "";
+        if (a.password && a.email) return a.email + " " + a.password;
+        if (a.token) return a.token; // token 账号导出裸 token, 回粘可再识别入池
+        return "";
+      })
+      .filter(Boolean)
       .join("\n");
   }
 

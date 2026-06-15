@@ -79,7 +79,7 @@ function t(name, fn) {
   ctx.activate = async (email) => { activated.push(lc(email)); store.active = lc(email); return { ok: true }; };
   const seed = (active) => {
     store = {
-      accounts: [{ email: "low@x.com" }, { email: "high@x.com" }],
+      accounts: [{ email: "low@x.com", locked: false }, { email: "high@x.com", locked: false }],
       authCache: {}, settings: {},
       active,
       quota: { "low@x.com": { balance: 0, status: "ok" }, "high@x.com": { balance: 2.99, status: "ok" } },
@@ -108,7 +108,7 @@ function t(name, fn) {
   // 回归 4: 登录失败的号 (status 非 ok) 必须排除出候选 —— 即便余额更高的号登不上,
   //   也绝不切过去 (rotate 切过去 activate 必失败 · 形同把活跃号换成废号)。
   store = {
-    accounts: [{ email: "ok@x.com" }, { email: "broken@x.com" }],
+    accounts: [{ email: "ok@x.com", locked: false }, { email: "broken@x.com", locked: false }],
     authCache: {}, settings: {},
     active: "ok@x.com",
     // broken 余额虚高但登录失败; 旧逻辑 balance==null 给 -1, 此处 status 失败 → -Infinity 真排除
@@ -118,6 +118,73 @@ function t(name, fn) {
   r = norm(await ctx.rotate("test"));
   t("登录失败的号被排除, 不切到登不上的账号", () => {
     assert.strictEqual(r.switchedTo, "ok@x.com");
+    assert.deepStrictEqual(activated, []);
+  });
+
+  console.log("\n账号锁 effLocked / rotate 过滤 / panicSwitch (反者道之动·默锁防误切):");
+  // effLocked: 显式 locked 优先, 缺省由 lockByDefault 决定 (与本体 v4.6.0 反转语义同源)
+  t("effLocked: 显式 locked=false → 不锁 (即便 lockByDefault=true)", () => {
+    assert.strictEqual(ctx.effLocked({ email: "a", locked: false }, { lockByDefault: true }), false);
+  });
+  t("effLocked: 显式 locked=true → 锁", () => {
+    assert.strictEqual(ctx.effLocked({ email: "a", locked: true }, { lockByDefault: false }), true);
+  });
+  t("effLocked: 无 locked 记录 → 跟随 lockByDefault", () => {
+    assert.strictEqual(ctx.effLocked({ email: "a" }, { lockByDefault: true }), true);
+    assert.strictEqual(ctx.effLocked({ email: "a" }, { lockByDefault: false }), false);
+  });
+
+  // rotate: 锁定账号不入自动切候选; 仅 high 解锁时切 high
+  store = {
+    accounts: [{ email: "low@x.com", locked: false }, { email: "high@x.com", locked: true }],
+    authCache: {}, settings: { lockByDefault: false },
+    active: "low@x.com",
+    quota: { "low@x.com": { balance: 0, status: "ok" }, "high@x.com": { balance: 9, status: "ok" } },
+  };
+  activated = [];
+  r = norm(await ctx.rotate("test"));
+  t("rotate: 余额最高账号被🔒锁定 → 不切过去 (noop·防误切)", () => {
+    assert.strictEqual(r.noop, true);
+    assert.deepStrictEqual(activated, []);
+  });
+
+  // 全锁定 → allLocked noop (非红错)
+  store = {
+    accounts: [{ email: "a@x.com", locked: true }, { email: "b@x.com", locked: true }],
+    authCache: {}, settings: { lockByDefault: false }, active: "a@x.com",
+    quota: { "a@x.com": { balance: 1, status: "ok" }, "b@x.com": { balance: 9, status: "ok" } },
+  };
+  activated = [];
+  r = norm(await ctx.rotate("test"));
+  t("rotate: 全部🔒锁定 → allLocked noop (预期·非错误)", () => {
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.allLocked, true);
+    assert.deepStrictEqual(activated, []);
+  });
+
+  // panicSwitch: 立即切到其他·未锁定·可登录最优号 (不要求严格更优)
+  store = {
+    accounts: [{ email: "cur@x.com", locked: false }, { email: "esc@x.com", locked: false }, { email: "lck@x.com", locked: true }],
+    authCache: {}, settings: { lockByDefault: false }, active: "cur@x.com",
+    quota: { "cur@x.com": { balance: 5, status: "ok" }, "esc@x.com": { balance: 1, status: "ok" }, "lck@x.com": { balance: 9, status: "ok" } },
+  };
+  activated = [];
+  r = norm(await ctx.panicSwitch());
+  t("panicSwitch: 弃用当前号, 切到其他未锁定号 (忽略缓冲·锁定号排除)", () => {
+    assert.strictEqual(r.switchedTo, "esc@x.com");
+    assert.deepStrictEqual(activated, ["esc@x.com"]);
+  });
+
+  // panicSwitch: 无其他可切号 → 报错
+  store = {
+    accounts: [{ email: "only@x.com", locked: false }],
+    authCache: {}, settings: { lockByDefault: false }, active: "only@x.com",
+    quota: { "only@x.com": { balance: 5, status: "ok" } },
+  };
+  activated = [];
+  r = norm(await ctx.panicSwitch());
+  t("panicSwitch: 无其他可切号 → ok=false 报错", () => {
+    assert.strictEqual(r.ok, false);
     assert.deepStrictEqual(activated, []);
   });
 

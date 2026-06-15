@@ -82,8 +82,15 @@ function metaExtra(q, isActive) {
 
 let STATE = { accounts: [], authCache: {}, active: "", quota: {}, settings: {} };
 
+// 账号有效锁定态 (与 background.js effLocked 同源): 无显式 locked 记录时按 lockByDefault 决定
+function effLocked(a, settings) {
+  if (!a) return false;
+  if (a.locked === true || a.locked === false) return a.locked;
+  return (settings || {}).lockByDefault !== false;
+}
+
 // 与 background.js DEFAULT_SETTINGS 对齐 (storage-first 渲染时兜底)
-const POPUP_DEFAULT_SETTINGS = { autoSwitch: true, buffer: 3, pollMin: 2 };
+const POPUP_DEFAULT_SETTINGS = { autoSwitch: true, buffer: 3, pollMin: 2, lockByDefault: true, notify: true, lowBalance: 5 };
 function getLocal(keys) { return new Promise((r) => chrome.storage.local.get(keys, r)); }
 
 // 渲染直读 chrome.storage (母/真源), 不依赖 service worker 是否唤醒,
@@ -113,8 +120,10 @@ function render() {
   else { al.textContent = "未激活账号"; al.classList.remove("on"); }
   // settings
   $("autoSwitch").checked = !!settings.autoSwitch;
+  $("lockByDefault").checked = settings.lockByDefault !== false;
   $("buffer").value = settings.buffer != null ? settings.buffer : 3;
   $("pollMin").value = settings.pollMin != null ? settings.pollMin : 2;
+  $("lowBalance").value = settings.lowBalance != null ? settings.lowBalance : 5;
   // pool count
   $("poolCount").textContent = accounts.length ? "(" + accounts.length + ")" : "";
   // list
@@ -125,21 +134,25 @@ function render() {
     const key = a.email.toLowerCase();
     const isActive = key === active;
     const q = quota[key];
+    const locked = effLocked(a, settings);
     const li = document.createElement("li");
-    li.className = "acct" + (isActive ? " active" : "");
+    li.className = "acct" + (isActive ? " active" : "") + (locked ? " locked" : "");
     li.innerHTML = `
       <div class="top">
-        <span class="name">${escapeHtml(a.email)}</span>
+        <span class="name">${locked ? "🔒 " : ""}${escapeHtml(a.email)}</span>
+        ${a.token ? '<span class="badge tok">token</span>' : ""}
         ${isActive ? '<span class="badge">激活中</span>' : ""}
       </div>
-      ${a.label ? `<div class="label">${escapeHtml(a.label)}</div>` : ""}
+      ${a.label && a.label !== "token" ? `<div class="label">${escapeHtml(a.label)}</div>` : ""}
       <div class="meta">
         <span class="bal ${balClass(q && q.balance)}">${fmtBal(q)}</span>
         <span>${authCache[key] && authCache[key].auth1 ? "已登录" : "未登录"}</span>
+        <span class="lockstate">${locked ? "🔒 锁定(不自动切)" : "🔓 已解锁(入候选)"}</span>
       </div>
       ${metaExtra(q, isActive)}
       <div class="btns">
         <button data-act="activate" data-email="${escapeAttr(a.email)}">${isActive ? "重注入" : "激活"}</button>
+        <button data-act="lock" data-email="${escapeAttr(a.email)}" data-locked="${locked ? "1" : "0"}" class="mini">${locked ? "🔓 解锁" : "🔒 锁定"}</button>
         <button data-act="overview" data-email="${escapeAttr(a.email)}" class="mini">☁ 概览</button>
         <button data-act="refresh" data-email="${escapeAttr(a.email)}" class="mini">额度</button>
         <button data-act="remove" data-email="${escapeAttr(a.email)}" class="mini">删除</button>
@@ -217,6 +230,10 @@ document.addEventListener("click", async (e) => {
       }
       btn.disabled = false;
       return; // 不触发 load() 重渲染 (会清空已展开概览)
+    } else if (act === "lock") {
+      const locked = btn.dataset.locked === "1";
+      const r = await send({ type: "lockAccount", email, locked: !locked });
+      toast(r.ok ? (r.locked ? "已🔒锁定: " + email : "已🔓解锁: " + email) : "操作失败: " + (r.error || ""), r.ok ? "ok" : "err");
     } else if (act === "remove") {
       await send({ type: "removeAccount", email });
       toast("已删除: " + email, "ok");
@@ -342,13 +359,25 @@ $("refreshAll").addEventListener("click", async () => {
 $("saveSettings").addEventListener("click", async () => {
   const settings = {
     autoSwitch: $("autoSwitch").checked,
+    lockByDefault: $("lockByDefault").checked,
     buffer: Number($("buffer").value) || 0,
     pollMin: Math.max(1, Number($("pollMin").value) || 2),
+    lowBalance: Math.max(0, Number($("lowBalance").value) || 0),
   };
   const r = await send({ type: "saveSettings", settings });
   toast(r.ok ? "设置已保存" : "保存失败", r.ok ? "ok" : "err");
 });
 $("autoSwitch").addEventListener("change", () => $("saveSettings").click());
+$("lockByDefault").addEventListener("change", () => $("saveSettings").click());
+
+// 紧急切换: 立即弃用当前号, 切到其他未锁定最优号
+$("panicBtn").addEventListener("click", async () => {
+  if (!confirm("紧急切换：立即弃用当前账号，切到其他未锁定的最优账号？")) return;
+  toast("紧急切换中…");
+  const r = await send({ type: "panicSwitch" });
+  toast(r.ok ? "已紧急切到: " + r.switchedTo : "切换失败: " + (r.error || ""), r.ok ? "ok" : "err");
+  await load();
+});
 
 // 万法识别·批量添加: 任意格式文本 → 解析入池
 $("bulkAddBtn").addEventListener("click", async () => {
