@@ -2,6 +2,8 @@
 .gitignore
 .vscodeignore
 build.js
+apply-overlay.js
+proxy-fold.patch
 gen-manifest.js
 README.md
 **/*.ts

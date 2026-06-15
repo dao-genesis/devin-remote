@@ -35,10 +35,23 @@ function buildVsix() {
   const srcDir = path.join(srcRoot, "src");
   const outDir = path.join(dst, "out");
   fs.mkdirSync(outDir, { recursive: true });
+  // 归·② Proxy Pro 叠加: dao-vsix 源回归二合一(无 proxy); 三合一仅由 dao-one
+  // 在构建期把 proxy-fold.patch 叠到 extension.ts 副本上再转译 → vendor-vsix 含 Proxy 板。
+  // 帛·「巧拙可伏藏」: 源洁, 合于 dao-one 时方现第三板。
+  const overlayPatch = path.join(root, "proxy-fold.patch");
+  let patchText = null, applyOverlay = null;
+  if (fs.existsSync(overlayPatch)) {
+    applyOverlay = require("./apply-overlay").applyUnifiedDiff;
+    patchText = fs.readFileSync(overlayPatch, "utf8");
+  }
   let n = 0;
   for (const f of fs.readdirSync(srcDir)) {
     if (!f.endsWith(".ts")) continue;
-    const code = fs.readFileSync(path.join(srcDir, f), "utf8");
+    let code = fs.readFileSync(path.join(srcDir, f), "utf8");
+    if (patchText && f === "extension.ts") {
+      code = applyOverlay(code, patchText);
+      log("vendor-vsix: applied proxy-fold.patch → extension.ts (三合一叠加)");
+    }
     const res = transform(code, {
       transforms: ["typescript", "imports"],
       filePath: path.join(srcDir, f),
@@ -81,6 +94,7 @@ function buildFlow() {
   const files = [
     "extension.js",
     "devin_cloud.js",
+    "devin_proxy.js",
     "devin_web.js",
     "devin_git.js",
     "dao_stuck.js",
@@ -93,7 +107,7 @@ function buildFlow() {
       copyFile(path.join(srcRoot, f), path.join(dst, f));
   if (fs.existsSync(path.join(srcRoot, "media")))
     copyDir(path.join(srcRoot, "media"), path.join(dst, "media"));
-  log("vendor-flow: copied extension.js + devin_cloud/web/git/stuck + py helpers + media");
+  log("vendor-flow: copied extension.js + devin_cloud/proxy/web/git/stuck + py helpers + media");
 }
 
 // ── ④ dao-bridge (dao-bridge/dao-bridge-ext): 内网穿透独立大块 ──────────────────
