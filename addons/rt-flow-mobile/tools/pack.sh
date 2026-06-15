@@ -5,7 +5,10 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$HERE/rt-flow-mobile.zip}"
 cd "$HERE"
 rm -f "$OUT"
-zip -r -q "$OUT" manifest.json src icons \
+# conn.json (可选·开箱即连穿透配置) 仅私有发行包含, 不入仓库; 存在则一并打入
+EXTRA=()
+[ -f conn.json ] && EXTRA+=(conn.json)
+zip -r -q "$OUT" manifest.json src icons "${EXTRA[@]}" \
   -x '*.DS_Store' -x 'test/*' -x 'tools/*' -x '*.zip'
 echo "packed → $OUT"
 unzip -l "$OUT" | tail -n +2 | head -n 30

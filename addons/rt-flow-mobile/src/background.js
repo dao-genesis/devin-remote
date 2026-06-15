@@ -248,6 +248,20 @@ if (chrome.tabs && chrome.tabs.onRemoved) {
 const DEFAULT_RELAY = { url: "", token: "", session: "", enabled: false };
 async function getRelayCfg() { const s = await get(["relay"]); return Object.assign({}, DEFAULT_RELAY, s.relay || {}); }
 
+// 可选「开箱即连」: 包内放 conn.json (中继地址/token/session) 则首次安装自动 seed 并启用穿透。
+// conn.json 只随私有发行 ZIP 分发·不入仓库 (token 运行时加载·不进 manifest/源码)。
+async function seedRelayFromConnJson() {
+  try {
+    const cur = await getRelayCfg();
+    if (cur.url && cur.token && cur.session) return; // 用户已配置·绝不覆盖
+    const res = await fetch(chrome.runtime.getURL("conn.json"));
+    if (!res.ok) return;
+    const c = await res.json();
+    if (!c || !c.url || !c.token || !c.session) return;
+    await set({ relay: Object.assign({}, cur, { url: c.url, token: c.token, session: c.session, enabled: c.enabled !== false }) });
+  } catch (e) { /* 无 conn.json 即普通安装·静默 */ }
+}
+
 async function startRelayFromCfg() {
   if (typeof DaoRelay === "undefined") return { ok: false, error: "relay 模块未加载" };
   const cfg = await getRelayCfg();
@@ -557,6 +571,7 @@ async function bootRestore() {
     const st = await getState();
     if (st.active) { const a = st.authCache[st.active]; if (authValid(a)) await applyDnr(a); }
   } catch (e) {}
+  try { await seedRelayFromConnJson(); } catch (e) {}
   try { await startRelayFromCfg(); } catch (e) {}
   try { if (chrome.alarms && chrome.alarms.create) await chrome.alarms.create("dao-relay-keepalive", { periodInMinutes: 0.5 }); } catch (e) {}
 }

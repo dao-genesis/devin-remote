@@ -50,3 +50,6 @@ _rtflow*/
 # 外接第三方 MCP 源 (cloud/vm-replica/vendor, 按 VENDOR.md 固定 commit 拉取, 不入库)
 cloud/vm-replica/vendor/mcp-servers/
 cloud/vm-replica/vendor/playwright-mcp/
+
+# 私有发行穿透配置 (含 token·勿入库)
+addons/rt-flow-mobile/conn.json
