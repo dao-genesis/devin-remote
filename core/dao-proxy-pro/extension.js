@@ -3987,16 +3987,18 @@ function getEaConfigHtml(port, nonce) {
     font-size: 12px; line-height: 1.5;
     display: flex; flex-direction: column; padding: 8px;
   }
-  /* ── 三模块 Tab 栏 ── */
+  /* ── 三模块 Tab 栏 ── 守柔: 永不竖排折字, 窄则横向滚动, 任意宽度皆可读 ── */
   .dao-tabs {
-    display: flex; gap: 4px; margin-bottom: 8px;
+    display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: nowrap;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
     border-bottom: 1px solid rgba(128,128,128,0.25); padding-bottom: 6px;
   }
+  .dao-tabs::-webkit-scrollbar { height: 4px; }
   .dao-tab {
     padding: 5px 12px; font-size: 12px; cursor: pointer; user-select: none;
     border: 1px solid rgba(128,128,128,0.25); border-radius: 4px;
     background: transparent; color: var(--vscode-foreground); opacity: 0.7;
-    font-family: inherit;
+    font-family: inherit; white-space: nowrap; flex-shrink: 0;
   }
   .dao-tab:hover { opacity: 1; }
   .dao-tab.active {
