@@ -1,0 +1,24 @@
+/* panel.css · 独立控制台面板增量样式 (基于 popup.css) */
+body.panel { width: auto; max-width: 720px; margin: 0 auto; min-height: 100vh; }
+
+.tabbar { display: flex; gap: 6px; padding: 8px; position: sticky; top: 0; z-index: 10;
+  background: var(--bg, #0d1117); border-bottom: 1px solid #30363d; }
+.tabbar .tab { flex: 1; padding: 10px 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+  border: 1px solid #30363d; border-radius: 8px; background: #161b22; color: #c9d1d9; }
+.tabbar .tab.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+
+.board { padding: 8px; }
+.board.hid { display: none; }
+
+.rl-status { padding: 10px 12px; border-radius: 8px; background: #161b22; border: 1px solid #30363d;
+  margin: 8px 0; font-size: 13px; }
+.rl-status.ok { border-color: #238636; }
+.rl-status.warn { border-color: #9e6a03; }
+.rl-err { color: #f85149; font-size: 12px; margin-top: 4px; }
+.rl-lbl { display: block; font-size: 12px; color: #8b949e; margin: 8px 0 3px; }
+.rl-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.rl-pub { margin: 8px 0; font-size: 12px; word-break: break-all; }
+.rl-pub code, .rl-status code { background: #0d1117; padding: 2px 5px; border-radius: 4px; }
+.curlbox { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px;
+  font-size: 11px; white-space: pre-wrap; word-break: break-all; overflow-x: auto; }
+.mi-hint { margin: 8px 0; }

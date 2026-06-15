@@ -180,6 +180,7 @@ function render() {
         <span class="qt">${miniBar(r.dailyPct)}${miniBar(r.weeklyPct)}<span class="ql ${ql.cls}">${ql.txt}</span></span>
         <span class="acts">
           <button class="b sw" data-act="activate" data-email="${escapeAttr(a.email)}">${isActive ? "重注入" : "切号"}</button>
+          <button class="b dv" data-act="opentab" data-email="${escapeAttr(a.email)}" title="新标签页打开此账号 (多实例·与其他账号网页并行·互不干扰)">⧉新页</button>
           <button class="b dv" data-act="overview" data-email="${escapeAttr(a.email)}">☁</button>
           <button class="b dv" data-act="refresh" data-email="${escapeAttr(a.email)}">额度</button>
           <button class="b danger" data-act="remove" data-email="${escapeAttr(a.email)}">✕</button>
@@ -281,6 +282,10 @@ document.addEventListener("click", async (e) => {
     if (act === "activate") {
       const r = await send({ type: "activate", email });
       toast(r.ok ? "已切号·注入登录: " + email : "切号失败: " + (r.error || ""), r.ok ? "ok" : "err");
+    } else if (act === "opentab") {
+      const r = await send({ type: "openAccountTab", email });
+      toast(r && r.ok ? "已新标签打开·多实例注入: " + email : "打开失败: " + ((r && r.error) || ""), r && r.ok ? "ok" : "err");
+      btn.disabled = false; return;
     } else if (act === "refresh") {
       const r = await send({ type: "refreshQuota", email });
       toast(r.ok ? "额度: " + (r.balance == null ? "$?" : fmtMoney(r.balance)) : "失败: " + (r.error || ""), r.ok ? "ok" : "err");
@@ -455,6 +460,12 @@ $("refreshAll").addEventListener("click", async () => {
   toast("额度已刷新", "ok");
   await load();
 });
+
+// 打开独立控制台 (panel.html · 三合一·亦可常驻为独立网页)。panel 自身无此按钮, 故守空。
+(function () {
+  const op = $("openPanel");
+  if (op) op.addEventListener("click", () => { try { chrome.tabs.create({ url: chrome.runtime.getURL("src/panel.html") }); } catch (e) {} });
+})();
 
 // Devin Cloud 全量备份 → 手机: 当前激活账号所有对话 → 单个 zip (内含逐条 MD+JSON) 落 Download
 $("backupAllBtn").addEventListener("click", async () => {
