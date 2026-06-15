@@ -67,7 +67,8 @@
  // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
  function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
 -window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
-+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='proxyPanel'){rProxyResult(d)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
++function _proxyFetch(e){var q=e.data,src=e.source;var o={method:q.method||'GET',cache:'no-store'};if(q.headers)o.headers=q.headers;if(q.body!=null)o.body=q.body;fetch(q.url,o).then(function(r){return r.text().then(function(t){src.postMessage({__proxyFetchRes:true,id:q.id,ok:r.ok,status:r.status,statusText:r.statusText,body:t,contentType:(r.headers&&r.headers.get)?(r.headers.get('content-type')||''):''},'*');});}).catch(function(err){src.postMessage({__proxyFetchRes:true,id:q.id,error:String((err&&err.message)||err)},'*');});}
++window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__proxyFetchReq){_proxyFetch(e);return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok&&S.tab!=='inject')rc()}else if(d.type==='proxyPanel'){rProxyResult(d)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
  function rT(tab,items,err,fallbackProxy){
    const v=document.getElementById('v-'+tab);if(!v)return;
    // 帛书·「反者道之动也」— 认证策略根本修复
@@ -120,13 +121,22 @@
 +    }
 +    return null;
 +}
++// 归一·② Proxy Pro · fetch 转发垫片: VS Code portMapping 仅作用于顶层 webview 帧,
++// 不下沉到 iframe srcdoc 子帧 → 子帧内 fetch 127.0.0.1 反代全部失败(数据卡「加载中…」)。
++// 垫片(携 getEaConfigHtml 的 CSP nonce)改写子帧 window.fetch: 本机反代请求改 postMessage
++// 给父面板(顶层帧·portMapping 生效)代发, 再以重建 Response 回传。仅 fetch(无 EventSource/XHR), 100% 覆盖。
++const PROXY_FETCH_SHIM = `(function(){if(window.parent===window)return;var seq=0,pend={};window.addEventListener('message',function(e){var m=e.data;if(!m||!m.__proxyFetchRes)return;var cb=pend[m.id];if(!cb)return;delete pend[m.id];cb(m);});var of=window.fetch;window.fetch=function(input,opts){opts=opts||{};var url=(typeof input==='string')?input:((input&&input.url)||String(input));if(url.indexOf('http://127.0.0.1:')!==0&&url.indexOf('http://localhost:')!==0){return of.apply(window,arguments);}var h=opts.headers||{};if(h&&typeof h.forEach==='function'&&h.constructor!==Object){var o={};h.forEach(function(v,k){o[k]=v;});h=o;}var body=(opts.body!=null)?String(opts.body):null;return new Promise(function(res,rej){var id=++seq;pend[id]=function(m){if(m.error){rej(new TypeError(m.error));return;}var init={status:m.status||200,statusText:m.statusText||''};var hh={};if(m.contentType)hh['content-type']=m.contentType;init.headers=hh;res(new Response(m.body,init));};window.parent.postMessage({__proxyFetchReq:true,id:id,url:url,method:(opts.method||'GET'),headers:h,body:body},'*');});};})();`;
 +function buildProxyPanelReply(extPath: string): any {
 +    const mod = loadProxyModule(extPath);
 +    if (!mod) return { type: 'proxyPanel', ok: false, error: '未找到 dao-proxy-pro 模块 (vendor-proxy)。请在 dao-one 归一插件中使用，或安装 dao-proxy-pro。' };
 +    const usePort = discoverProxyPort() || (typeof mod.getCachedPort === 'function' ? mod.getCachedPort() : 0);
 +    if (!usePort) return { type: 'proxyPanel', ok: false, error: 'dao-proxy-pro 反代尚未就绪 (~/.dao/origin-port.json 未生成)。稍候重试。' };
 +    try {
-+        return { type: 'proxyPanel', ok: true, html: mod.getEaConfigHtml(usePort), port: usePort };
++        const nonce = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
++        let html: string = mod.getEaConfigHtml(usePort, nonce);
++        const shimTag = '<script nonce="' + nonce + '">' + PROXY_FETCH_SHIM + '</script>';
++        html = (html.indexOf('</head>') !== -1) ? html.replace('</head>', shimTag + '</head>') : (shimTag + html);
++        return { type: 'proxyPanel', ok: true, html: html, port: usePort };
 +    } catch (e: any) {
 +        return { type: 'proxyPanel', ok: false, error: 'getEaConfigHtml 生成失败: ' + (e && e.message ? e.message : String(e)) };
 +    }
