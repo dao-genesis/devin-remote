@@ -56,9 +56,9 @@ devin-remote/
 
 ### dao-one · 归一插件本体（最终交付）
 
-把四套引擎的真实前端视图（`wam.panel` / `dao.router` / `dao.cloudPanel` / `daoBridgeView`）合一挂到单一容器 `dao.dao-one` 下，零前端重写。`core/dao-one/build.js` 从兄弟目录 `core/{dao-vsix,dao-proxy-pro,rt-flow}` 与 `addons/dao-bridge` 装配 `vendor-*`（gitignored 构建产物），再由 vsce 打包。
+**本源架构 — 以 dao-vsix 为基础 + Proxy Pro**：以 **dao-vsix 二合一**为本源，在其 dao Cloud 全功能面板内**折入** Proxy Pro 三模块（①本源观照 ②渠道配置 ③模型路由，与「内网穿透 / Sessions / Knowledge …」并列为面板内部 tab），再合 rt-flow 切号 —— 最终前端只剩**两面**：左 rt-flow 切号 + 中 单一全功能面板。`core/dao-one/build.js` **每次都从兄弟目录** `core/{dao-vsix,dao-proxy-pro,rt-flow}` 与 `addons/dao-bridge` **现拷最新源**装配 `vendor-*`（gitignored 构建产物），并在构建期把 `proxy-fold.patch` 叠到 `vendor-vsix`（**dao-vsix 源永不沾 proxy**，保持纯二合一），再由 vsce 打包。详见 [`core/dao-one/README.md`](core/dao-one/README.md)。
 
-**构建**：`cd core/dao-one && npm install && node build.js && npx @vscode/vsce package --allow-missing-repository --skip-license` · **源码**：`core/dao-one/{build.js,extension.js,gen-manifest.js,package.json}`
+**构建**：`cd core/dao-one && npm install && node build.js && npx @vscode/vsce package --allow-missing-repository --skip-license` · **源码**：`core/dao-one/{build.js,extension.js,proxy-fold.patch,apply-overlay.js,gen-manifest.js,package.json}`
 > ⚠️ `package.json` 为手工维护清单（含全部 contributions），**不要跑 `gen-manifest.js` 覆盖**（它会重置版本并丢失手工合并的贡献项）。
 
 ### dao-vsix · 二合一面板 + 本地 HTTP API
@@ -146,7 +146,7 @@ python cloud/export-accounts/dao_export_all.py --email xxx@gmail.com --password 
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| dao-one | ✅ 构建通过 | 四引擎 vendor-* 装配 + 打包 1.36 MB / 87 文件，隔离窗口端到端实测 |
+| dao-one | ✅ 构建通过 | dao-vsix 二合一为基 + proxy-pro 折入全能板（构建期 `proxy-fold.patch`）+ rt-flow/bridge；冷启动端到端实测三模块实拉实时数据 |
 | dao-vsix | ✅ 全通 | 登录态跨重启保持 · 多账号反向注入 32/32（K/Bridge-KB/P/S 全验证、零损坏） |
 | dao-bridge | ✅ 全通 | 隧道重启自愈 · `/api/exec` 鉴权 200/401 正确 |
 | dao-proxy-pro | ✅ 已部署 | 提示词隔离 + 模型路由生效 |
