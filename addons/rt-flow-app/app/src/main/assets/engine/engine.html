@@ -4,6 +4,7 @@
 <body>
 <script src="relay-app.js"></script>
 <script src="devin-core.js"></script>
+<script src="devin-cloud.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
 // engine.html · APP 的 JS 引擎 (常驻前台服务的 WebView 里跑)
@@ -49,6 +50,31 @@
       return {ok:true, done:done, fail:fail, count:accs.length, errs:errs.slice(0,5)};
     },
     refreshQuota: async function(a){ return await DaoCore.refreshQuotaFor(a.id||a.email); },
+    // ── P3 Devin Cloud 对话 (供中继远程驱动 + UI 共用) ──
+    listSessions: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.listSessions(acc, a.limit||100); },
+    sessionDetail: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.sessionDetail(acc, a.sid||a.sessionId); },
+    exportSession: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.exportSession(acc, a.sid||a.sessionId, a.kind||"conversation"); },
+    deleteSession: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.deleteSession(acc, a.sid||a.sessionId); },
+    backupAccount: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.backupAccount(acc, a.kind||"conversation"); },
+    backupAll: async function(a){ var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var out=[]; for(var i=0;i<accs.length;i++){ try{ var b=await DaoCloud.backupAccount(accs[i], (a&&a.kind)||"conversation"); out.push({email:accs[i].email,count:b.count||0,ok:b.ok}); }catch(e){out.push({email:accs[i].email,ok:false,error:String(e)});} } return {ok:true, accounts:out}; },
+    // ── P4 集成 (Git/Secret/Knowledge/Playbook) ──
+    checkGit: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.checkGit(acc); },
+    connectGit: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; if(!a.pat)return{ok:false,error:"需 pat"}; return await DaoCloud.injectGitHubPAT(acc, a.pat); },
+    listSecrets: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.listSecrets(acc); },
+    listKnowledge: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.listKnowledge(acc); },
+    listPlaybooks: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.listPlaybooks(acc); },
+    injectSecret: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.injectSecret(acc, a.name, a.value); },
+    injectKnowledge: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.injectKnowledge(acc, a.name, a.body, a.trigger); },
+    injectPlaybook: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.injectPlaybook(acc, a.title, a.body); },
+    // ── P5 批量管理 / 健康检查 / 归一注入 ──
+    batchConnectGit: async function(a){ if(!a||!a.pat)return{ok:false,error:"需 pat"}; var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var out=[]; for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.injectGitHubPAT(accs[i], a.pat); out.push({email:accs[i].email,ok:r.ok,existed:r.existed,error:r.error}); }catch(e){out.push({email:accs[i].email,ok:false,error:String(e)});} } return {ok:true, accounts:out, done:out.filter(function(x){return x.ok;}).length}; },
+    batchInjectKnowledge: async function(a){ if(!a||!a.name)return{ok:false,error:"需 name/body"}; var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var out=[]; for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.injectKnowledge(accs[i], a.name, a.body||"", a.trigger||""); out.push({email:accs[i].email,ok:r.ok}); }catch(e){out.push({email:accs[i].email,ok:false});} } return {ok:true, accounts:out, done:out.filter(function(x){return x.ok;}).length}; },
+    batchInjectSecret: async function(a){ if(!a||!a.name)return{ok:false,error:"需 name/value"}; var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var out=[]; for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.injectSecret(accs[i], a.name, a.value||""); out.push({email:accs[i].email,ok:r.ok}); }catch(e){out.push({email:accs[i].email,ok:false});} } return {ok:true, accounts:out, done:out.filter(function(x){return x.ok;}).length}; },
+    batchInjectPlaybook: async function(a){ if(!a||!a.title)return{ok:false,error:"需 title/body"}; var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var out=[]; for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.injectPlaybook(accs[i], a.title, a.body||""); out.push({email:accs[i].email,ok:r.ok}); }catch(e){out.push({email:accs[i].email,ok:false});} } return {ok:true, accounts:out, done:out.filter(function(x){return x.ok;}).length}; },
+    // 健康检查 / 过期扫描: 对所有有 email+pw 的账号重新登录, 标记失效(过期/无效)
+    healthScan: async function(){ var accs=loadAcc(), live=0, dead=0, skip=0, report=[]; for(var i=0;i<accs.length;i++){ var a=accs[i]; if(!a.email||!a.password){ skip++; report.push({email:a.email||a.id,state:"skip(无密码)"}); continue; } try{ var r=await DaoCore.loginAndStore(a.email,a.password); if(r.ok){ live++; report.push({email:a.email,state:"live",org:r.orgName}); } else { dead++; report.push({email:a.email,state:"DEAD",error:r.error}); } }catch(e){ dead++; report.push({email:a.email,state:"DEAD",error:String(e)}); } } return {ok:true, live:live, dead:dead, skip:skip, count:accs.length, report:report}; },
+    // 对话追踪: 扫所有已登录账号的运行中/受阻会话 (status 含 block/wait/stuck/running)
+    trackStuck: async function(){ var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var hits=[]; for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.listSessions(accs[i], 50); if(!r.ok)continue; (r.sessions||[]).forEach(function(s){ var st=String(s.status_enum||s.status||"").toLowerCase(); if(/block|wait|stuck|running|working|active/.test(st)){ hits.push({email:accs[i].email,sid:s.devin_id||s.session_id||s.id,title:(s.title||"").slice(0,50),status:st}); } }); }catch(e){} } return {ok:true, count:hits.length, sessions:hits}; },
     refreshAll: async function(){
       var accs=loadAcc(), ok=0; for(var i=0;i<accs.length;i++){ if(!accs[i].auth1)continue; try{ var r=await DaoCore.refreshQuotaFor(accs[i].id); if(r.ok)ok++; }catch(e){} }
       return {ok:true, refreshed:ok};
@@ -73,7 +99,7 @@
 
     // ── 管理/热修通道 (用户私有 token 已门禁; 用户明确要求隔隧道热修) ──
     ping: async function(){ return {ok:true, pong:Date.now()}; },
-    getEngineInfo: async function(){ return {ok:true, version:"0.3.0", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length }; },
+    getEngineInfo: async function(){ return {ok:true, version:"0.4.0", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length }; },
     hotpatch: async function(a){
       if(!a||typeof a.js!=="string") return {ok:false,error:"缺 js"};
       try{ var r=(0,eval)(a.js); return {ok:true, result: (typeof r==="undefined")?null:r}; }catch(e){ return {ok:false,error:String(e&&e.message||e), stack:e&&e.stack}; }

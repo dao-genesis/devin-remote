@@ -241,13 +241,17 @@ body{padding:8px 10px!important;-webkit-text-size-adjust:100%}
 <button onclick="doRefreshAll()" class="conv-btn" title="刷新所有已登录账号的额度">&#128260; 刷额度</button>
 <button onclick="dvExportMd()" class="conv-btn" title="导出 MD 操作指令·复制给本地/云端 Agent 即可远程驱动">&#128196; 导出 MD</button>
 <button onclick="copyAll()" class="conv-btn" title="导出全部账号 JSON">&#128190; 导出账号</button>
-<span class="dv-trk-empty" style="margin-left:auto">git/备份/对话追踪为桌面版功能</span>
+<button onclick="doHealthScan()" class="conv-btn" title="重登所有账号检测失效/过期">&#128137; 健康检查</button>
+<button onclick="doBatchGit()" class="conv-btn" title="为所有已登录账号批量连接 GitHub PAT">&#128279; 批量连Git</button>
+<button onclick="doTrack()" class="conv-btn" title="扫所有账号运行中/受阻会话">&#128064; 对话追踪</button>
+<span class="dv-trk-empty" style="margin-left:auto">对话/备份 → 菜单「对话 / Cloud」</span>
 </div>
 <div id="list"></div>
-<div class="footer">RT Flow 手机版 · <span class="v" id="ver">v0.3.0</span> · 切号 + 多实例 + 公网穿透 二合一 · 道法自然</div>
+<div class="footer">RT Flow 手机版 · <span class="v" id="ver">v0.4.0</span> · 切号 + 多实例 + 公网穿透 二合一 · 道法自然</div>
 <div class="toast" id="toast"></div>
 
 <script src="devin-core.js"></script>
+<script src="devin-cloud.js"></script>
 <script src="rtflow-parse.js"></script>
 <script>
 var N = window.Native || {};
@@ -420,6 +424,45 @@ function dvExportMd(){
     .concat(["","> 远程驱动: `POST <公网入口> {\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"openAccountTab\",\"id\":\"<id>\"}}`"]).join("\n");
   try{N.clip&&N.clip(md);}catch(e){} try{N.openText&&N.openText("账号操作 MD",md);}catch(e){}
   toast("账号 MD 已复制");
+}
+// ── P5 批量管理 ──
+async function doHealthScan(){
+  var accs=loadAcc(); var todo=accs.filter(function(a){return a.email&&a.password;});
+  if(!todo.length){ toast("无可检测账号 (需邮箱密码)"); return; }
+  var live=0,dead=0,rep=[];
+  for(var i=0;i<todo.length;i++){ toast("健康检查 "+(i+1)+"/"+todo.length+" · "+todo[i].email);
+    try{ var r=await DaoCore.loginAndStore(todo[i].email,todo[i].password); if(r.ok){live++;rep.push("✓ live  "+todo[i].email+"  "+(r.orgName||""));} else {dead++;rep.push("✗ DEAD  "+todo[i].email+"  "+(r.error||""));} }
+    catch(e){ dead++; rep.push("✗ DEAD  "+todo[i].email+"  "+e); }
+    render();
+  }
+  var md=["# 健康检查 / 过期扫描","","存活: "+live+" · 失效: "+dead+" / "+todo.length,""].concat(rep).join("\n");
+  try{N.openText&&N.openText("健康检查 ("+live+"/"+todo.length+")",md);}catch(e){} try{N.clip&&N.clip(md);}catch(e){}
+  toast("✓ 健康检查完成 · 存活 "+live+" · 失效 "+dead);
+}
+async function doBatchGit(){
+  var accs=loadAcc().filter(hasAuth);
+  if(!accs.length){ toast("无已登录账号"); return; }
+  var pat=prompt("输入 GitHub PAT (将批量连接到 "+accs.length+" 个已登录账号):");
+  if(!pat){ return; }
+  var done=0,rep=[];
+  for(var i=0;i<accs.length;i++){ toast("连Git "+(i+1)+"/"+accs.length+" · "+accs[i].email);
+    try{ var r=await DaoCloud.injectGitHubPAT(accs[i],pat); if(r.ok){done++;rep.push("✓ "+accs[i].email+(r.existed?" (已存在)":""));} else rep.push("✗ "+accs[i].email+"  "+(r.error||"")); }
+    catch(e){ rep.push("✗ "+accs[i].email+"  "+e); }
+  }
+  var md=["# 批量连接 GitHub PAT","","成功 "+done+" / "+accs.length,""].concat(rep).join("\n");
+  try{N.openText&&N.openText("批量连Git ("+done+"/"+accs.length+")",md);}catch(e){}
+  toast("✓ 批量连Git 完成 · "+done+"/"+accs.length);
+}
+async function doTrack(){
+  var accs=loadAcc().filter(hasAuth);
+  if(!accs.length){ toast("无已登录账号"); return; }
+  var hits=[];
+  for(var i=0;i<accs.length;i++){ toast("追踪 "+(i+1)+"/"+accs.length+" · "+accs[i].email);
+    try{ var r=await DaoCloud.listSessions(accs[i],50); if(!r.ok)continue; (r.sessions||[]).forEach(function(s){ var st=String(s.status_enum||s.status||"").toLowerCase(); if(/block|wait|stuck|running|working|active/.test(st)) hits.push("["+st+"] "+accs[i].email+" · "+(s.title||s.devin_id||"").slice(0,50)); }); }catch(e){}
+  }
+  var md=["# 对话追踪 · 运行中/受阻会话","","共 "+hits.length+" 条",""].concat(hits.length?hits:["(无运行中/受阻会话)"]).join("\n");
+  try{N.openText&&N.openText("对话追踪 ("+hits.length+")",md);}catch(e){} try{N.clip&&N.clip(md);}catch(e){}
+  toast("✓ 对话追踪 · "+hits.length+" 条");
 }
 
 render();

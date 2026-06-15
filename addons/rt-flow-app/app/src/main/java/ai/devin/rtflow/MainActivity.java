@@ -51,9 +51,11 @@ public class MainActivity extends AppCompatActivity {
 
     static final String SWITCH = "rtflow://switch";
     static final String TUNNEL = "rtflow://tunnel";
+    static final String CLOUD = "rtflow://cloud";
     static final String DEVIN = "https://app.devin.ai/";
     private static final String SW_URL = "file:///android_asset/engine/switch.html";
     private static final String TU_URL = "file:///android_asset/engine/tunnel.html";
+    private static final String CL_URL = "file:///android_asset/engine/cloud.html";
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Tab> tabs = new ArrayList<>();
@@ -162,13 +164,15 @@ public class MainActivity extends AppCompatActivity {
     private void showMenu(View anchor) {
         PopupMenu m = new PopupMenu(this, anchor);
         m.getMenu().add(0, 1, 0, "切号面板");
-        m.getMenu().add(0, 2, 1, "公网穿透");
-        m.getMenu().add(0, 3, 2, "新标签 (Devin)");
-        m.getMenu().add(0, 4, 3, "关闭当前标签");
-        m.getMenu().add(0, 5, 4, "重连内网穿透");
+        m.getMenu().add(0, 6, 1, "对话 / Cloud");
+        m.getMenu().add(0, 2, 2, "公网穿透");
+        m.getMenu().add(0, 3, 3, "新标签 (Devin)");
+        m.getMenu().add(0, 4, 4, "关闭当前标签");
+        m.getMenu().add(0, 5, 5, "重连内网穿透");
         m.setOnMenuItemClickListener(it -> {
             switch (it.getItemId()) {
                 case 1: newTab(SWITCH, null); return true;
+                case 6: newTab(CLOUD, null); return true;
                 case 2: newTab(TUNNEL, null); return true;
                 case 3: newTab(DEVIN, null); return true;
                 case 4: closeTab(active); return true;
@@ -260,6 +264,7 @@ public class MainActivity extends AppCompatActivity {
         String real = url;
         if (SWITCH.equals(url)) { real = SW_URL; tab.internal = true; }
         else if (TUNNEL.equals(url)) { real = TU_URL; tab.internal = true; }
+        else if (CLOUD.equals(url)) { real = CL_URL; tab.internal = true; }
         tab.url = real;
         tab.web.loadUrl(real);
     }
@@ -280,6 +285,7 @@ public class MainActivity extends AppCompatActivity {
     private String displayUrl(Tab t) {
         if (t.url != null && t.url.endsWith("switch.html")) return SWITCH;
         if (t.url != null && t.url.endsWith("tunnel.html")) return TUNNEL;
+        if (t.url != null && t.url.endsWith("cloud.html")) return CLOUD;
         return t.url == null ? "" : t.url;
     }
 
@@ -341,6 +347,7 @@ public class MainActivity extends AppCompatActivity {
     private String chipTitle(Tab t) {
         if (t.url != null && t.url.endsWith("switch.html")) return "切号";
         if (t.url != null && t.url.endsWith("tunnel.html")) return "穿透";
+        if (t.url != null && t.url.endsWith("cloud.html")) return "对话";
         if (t.accountJson != null) {
             try { JSONObject a = new JSONObject(t.accountJson); String e = a.optString("email", a.optString("id", "Devin")); return e.length() > 14 ? e.substring(0, 13) + "…" : e; } catch (Exception ignored) {}
         }
