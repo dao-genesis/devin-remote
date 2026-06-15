@@ -1,6 +1,0 @@
-﻿node_modules/
-conn.json
-diag*.js
-*.log
-_artifacts*/
-_rtflow*/

@@ -19,6 +19,8 @@ node_modules/
 **/dao-bridge-ext/bin/*.tgz
 # 自包含 bundled VSIX（含二进制, 走 Release 分发, 不入库）
 *-bundled.vsix
+# 所有 VSIX 构建产物 — 走 GitHub Release, 不入库
+*.vsix
 
 # Python 运行缓存 — rt-flow/dao-export 脚本产物
 __pycache__/
@@ -37,4 +39,14 @@ __pycache__/
 *.tsbuildinfo
 
 # rt-flow-mobile build artifact
-plugins/rt-flow-mobile/*.zip
+addons/rt-flow-mobile/*.zip
+
+# 各插件运行期/诊断产物 (原 plugins/.gitignore, 现全局生效于 core/ 与 addons/)
+conn.json
+diag*.js
+_artifacts*/
+_rtflow*/
+
+# 外接第三方 MCP 源 (cloud/vm-replica/vendor, 按 VENDOR.md 固定 commit 拉取, 不入库)
+cloud/vm-replica/vendor/mcp-servers/
+cloud/vm-replica/vendor/playwright-mcp/

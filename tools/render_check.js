@@ -1,19 +1,19 @@
 // render_check.js · 校验 webview 内联脚本「渲染后」是否仍是合法 JS。
 //
-// 背景(见 docs/RUNBOOK_coldstart.md §4「webview 两大陷阱」)：dao-proxy-pro 的 webview HTML 由
+// 背景(见 cloud/coldstart/RUNBOOK_coldstart.md §4「webview 两大陷阱」)：dao-proxy-pro 的 webview HTML 由
 // 反引号模板字符串生成。串内正则的单反斜杠(\/ \s)会在模板插值时被吞，导致渲染后的脚本语法错误、
 // 整段 IIFE 抛错、面板卡「加载中」。node --check 只能查源文件，查不出「渲染后」的塌缩。
 // 本脚本抽出每个 <script nonce> 块，模拟模板插值(还原 \uXXXX / \/ 折叠)，再 new vm.Script() 解析。
 //
 // 用法: node tools/render_check.js [path/to/extension.js]
-//   默认: plugins/dao-proxy-pro/extension.js (相对仓库根)
+//   默认: core/dao-proxy-pro/extension.js (相对仓库根)
 
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
 const target = process.argv[2] ||
-  path.join(__dirname, '..', 'plugins', 'dao-proxy-pro', 'extension.js');
+  path.join(__dirname, '..', 'core', 'dao-proxy-pro', 'extension.js');
 const src = fs.readFileSync(target, 'utf8');
 
 let failures = 0;
