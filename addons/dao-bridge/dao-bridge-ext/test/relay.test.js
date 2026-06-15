@@ -203,6 +203,23 @@ function listen(server) { return new Promise((r) => server.listen(0, "127.0.0.1"
     ok("isRealCloudflared size gate");
   }
 
+  // T6: generateCloudAgentMd 在 relay 模式必须文档化信封契约(否则云端 Agent 按透明反代调用必失败)
+  {
+    const b = new ext.Bridge();
+    b.srv.token = "TT";
+    b.mode = "relay"; b.protocol = "wss";
+    b.url = "https://dao-relay-do.example.workers.dev/relay/mybox";
+    const md = b.generateCloudAgentMd();
+    const WARN = "URL 不是透明反代";
+    assert.ok(md.includes(WARN), "relay MD warns about envelope endpoint");
+    assert.ok(/RELAY=\('\/relay\/' in URL\)/.test(md), "relay MD SDK auto-detects relay");
+    assert.ok(md.includes("'path':p,'method':m,'body':body or {}"), "relay MD SDK wraps envelope");
+    // 直连模式不应出现信封告警(SDK 注释里的'信封'恒在, 但告警块不应出现)
+    b.mode = "quick"; b.url = "https://x.trycloudflare.com";
+    assert.ok(!b.generateCloudAgentMd().includes(WARN), "direct MD has no envelope warning");
+    ok("generateCloudAgentMd relay envelope contract");
+  }
+
   console.log("\nALL " + passed + " TESTS PASSED");
   process.exit(0);
 })().catch((e) => { console.error("\nTEST FAILED:", e && e.stack || e); process.exit(1); });
