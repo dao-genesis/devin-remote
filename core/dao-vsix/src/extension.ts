@@ -2280,6 +2280,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .ft .dot.on{background:var(--success)}
 .ft .dot.off{background:var(--danger)}
 .st{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin:16px 0 8px}
+.ovsec{margin-bottom:6px}
 .toast{position:fixed;bottom:20px;right:20px;padding:8px 16px;border-radius:6px;font-size:12px;z-index:200;animation:fi .2s}
 .toast.hid{display:none}
 .toast.ok{background:var(--success);color:#000}
@@ -2293,9 +2294,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网操作 DAO Bridge">🌐</div>
 <div class="ni" data-tab="backups" onclick="sw('backups')" title="对话 · 备份 — 本机全部 RT Flow 备份对话(全账号×全对话)">💬</div>
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 通用自动注入(道法自然准则+内网穿透MD+道德经/阴符经/道法自然+MCP)">💉</div>
-<div class="ni" data-tab="knowledge" onclick="sw('knowledge')" title="Knowledge 知识库 · 手动·当前账号">📚</div>
-<div class="ni" data-tab="playbooks" onclick="sw('playbooks')" title="Playbooks 剧本">📋</div>
-<div class="ni" data-tab="secrets" onclick="sw('secrets')" title="Secrets 密钥">🔑</div>
+<!-- ② 去芜存菁: Knowledge/Playbooks/Secrets/Git 三标签已合并进主页(overview)「当前账号·手动内容」分区 -->
 <div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器 · 专用面板">🧩</div>
 <div class="ni" data-tab="automations" onclick="sw('automations')" title="Automations 自动化">⚙️</div>
 <div class="sp"></div>
@@ -2313,9 +2312,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ct">
 <div class="tv active" id="v-overview"></div>
 <div class="tv" id="v-backups"></div>
-<div class="tv" id="v-knowledge"></div>
-<div class="tv" id="v-playbooks"></div>
-<div class="tv" id="v-secrets"></div>
 <div class="tv" id="v-mcp"></div>
 <div class="tv" id="v-automations"></div>
 <div class="tv" id="v-bridge"></div>
@@ -2511,6 +2507,30 @@ function rO(){
   }
   v.innerHTML=rHost()+'<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+ih+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button></div>'+rBridge()+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn" style="background:#6f42c1" onclick="cmd(&#39;syncBrowser&#39;)" title="在电脑浏览器开独立窗口自动登录当前账号·多账号各开并行窗口互不串号">🖥️ 浏览器同步</button><button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
   // 内网穿透已上移至主页第二板块 (rBridge 见上方拼装)
+  // ② 去芜存菁: 把「当前账号·手动内容」(Knowledge/Playbooks/Secrets/Git) 直接合进主页
+  v.innerHTML+=daoOverviewManualHtml();
+  daoLoadOverviewManual();
+}
+// ② 帛书·「为腹不为目」: 手动·对应当前账号的 K/P/S/Git 不再各占侧栏标签, 统一落主页内查看/修改/修复。
+//   复用既有 loadTabData→rT 渲染(含新建/刷新/删除/🔒手锁), 数据走当前账号实时 API。
+function daoOverviewManualHtml(){
+  if(!S.auth.loggedIn) return '';
+  if(!S.auth.canUseApi){
+    return '<div class="st">当前账号 · 手动内容</div><div class="card"><div class="cr"><span class="l" style="font-size:11px;color:var(--muted);line-height:1.6">凭证就绪(cog_ API Key)后自动加载 Knowledge / Playbooks / Secrets / Git。当前仅 Codeium API, 请先完成自动登录。</span></div></div>';
+  }
+  return '<div class="st">当前账号 · 手动内容 · 查看·修改·修复</div>'
+    +'<div class="st" style="margin-top:8px;font-size:11px;text-transform:none">📚 Knowledge 知识库</div><div id="ov-knowledge" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">📋 Playbooks 剧本</div><div id="ov-playbooks" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">🔑 Secrets 密钥</div><div id="ov-secrets" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">🔗 Git / Security</div><div id="ov-git" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>';
+}
+function daoLoadOverviewManual(){
+  if(!S.auth.loggedIn||!S.auth.canUseApi)return;
+  ['knowledge','playbooks','secrets','integrations'].forEach(function(t){
+    var id=(t==='integrations')?'ov-git':'ov-'+t;
+    if(!document.getElementById(id))return;
+    cmd('loadTabData',{tab:t});
+  });
 }
 function rBridge(){
   var b=S.bridge;var head='<div class="st">内网穿透 · DAO Bridge</div>';
@@ -2533,7 +2553,8 @@ function usb(){const ds=document.getElementById('ds'),dr=document.getElementById
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
 window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if(d.command==='toggleManualLock'&&S.tab){cmd('loadTabData',{tab:S.tab})}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 function rT(tab,items,err,fallbackProxy){
-  const v=document.getElementById('v-'+tab);if(!v)return;
+  // ② 容器归一: 独立标签(v-*)已移除的 K/P/S/Git 落主页内 ov-* 容器(integrations→ov-git)
+  const v=document.getElementById('v-'+tab)||document.getElementById('ov-'+(tab==='integrations'?'git':tab));if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
   if(fallbackProxy||err){
     const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'};
