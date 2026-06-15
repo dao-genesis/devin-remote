@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>道 · rt-flow 控制台 (切号 · 内网穿透 · 多实例)</title>
+  <link rel="stylesheet" href="popup.css" />
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<body class="panel">
+  <!-- 顶部分板: 切号 / 内网穿透 / 多实例 (一个面板三合一·亦可各开独立网页) -->
+  <nav class="tabbar">
+    <button class="tab active" data-board="switch">⇄ 切号</button>
+    <button class="tab" data-board="relay">🛰 内网穿透</button>
+    <button class="tab" data-board="multi">⧉ 多实例</button>
+  </nav>
+
+  <!-- ════ 板 1 · 切号 (复用 popup.js · DOM 与 popup.html 同构) ════ -->
+  <div class="board" id="board-switch">
+    <div class="hd">
+      <div class="brand">道 · rt-flow <span class="ver">控制台 v1.7</span>
+        <button id="refreshAll" class="b dv hd-act" title="全部刷新额度">↻ 全刷额</button>
+      </div>
+      <div class="st" id="stats">
+        <span>账号 <b id="stTotal">0</b></span>
+        <span>可用 <b id="stAvail">0</b></span>
+        <span class="ex">耗尽 <b id="stExh">0</b></span>
+        <span>未查 <b id="stUnk">0</b></span>
+      </div>
+      <div class="pool-bar"><div class="pool-fill" id="poolFill" style="width:0%"></div></div>
+    </div>
+    <div class="act-info empty" id="activeLine">未激活账号 · 点击下方账号「切号」即注入登录 devin.ai</div>
+    <div class="dv-tb">
+      <button id="backupAllBtn" class="b dv" title="备份当前激活账号全部对话到手机">⭳ Devin Cloud 全量备份→手机</button>
+      <button id="exportBtn" class="b dv" title="账号池导出到剪贴板">⭳ 导账号池</button>
+    </div>
+    <section class="track">
+      <div class="sec">
+        <span>Devin Cloud 对话追踪 · 实时</span>
+        <button id="trackRefresh" class="b dv">↻ 刷新</button>
+      </div>
+      <div id="trackCounts" class="track-counts"></div>
+      <ul id="trackList" class="sessions"></ul>
+      <div id="trackEmpty" class="empty">激活账号后点「刷新」查看运行中/待输入/卡住的对话。</div>
+    </section>
+    <section class="add-section">
+      <div class="add-header" id="addHeader">
+        <span>添加 / 更新账号 · 万法识别 v2.7</span><span class="add-caret">▸</span>
+      </div>
+      <div class="add-body" id="addBody">
+        <textarea id="bulk" rows="3" placeholder="任意格式粘贴：email password / email:password / email----password / 邮箱：x 密码：y / JSON…一文混万法" autocomplete="off"></textarea>
+        <div class="add-actions">
+          <button id="bulkAddBtn" class="primary">＋ 万法识别·批量添加</button>
+        </div>
+        <details class="single">
+          <summary>单条精确添加</summary>
+          <input type="email" id="email" placeholder="邮箱 email" autocomplete="off" />
+          <input type="password" id="password" placeholder="密码 password" autocomplete="off" />
+          <input type="text" id="label" placeholder="标签 label (可选)" autocomplete="off" />
+          <button id="addBtn" class="mini">＋ 添加</button>
+        </details>
+        <div class="add-hint">email+password → auth1 → 点击「切号」注入 app.devin.ai 自动登录。</div>
+      </div>
+    </section>
+    <div class="sec"><span>账号池 <span id="poolCount" class="count"></span></span></div>
+    <div id="accountList" class="rows"></div>
+    <div id="empty" class="empty hid">账号池为空，上方「添加」。支持任意格式粘贴。</div>
+    <section class="gitbox">
+      <details>
+        <summary class="sec">Git 批量归一 · 连接 / 断开 (PAT)</summary>
+        <input type="password" id="gitPat" placeholder="GitHub PAT (ghp_… · 需 repo 权限)" autocomplete="off" />
+        <button id="gitBatchBtn" class="primary">🔗 批量连接全部账号</button>
+        <div class="add-hint">PAT 注入各账号 → 落 GITHUB_PAT 密钥 → 归一到同一 GitHub 主、同仓可达。</div>
+        <div id="gitBatchResult" class="gitres"></div>
+      </details>
+    </section>
+  </div>
+
+  <!-- ════ 板 2 · 内网穿透 (扩展内 relay 客户端·二合一) ════ -->
+  <div class="board hid" id="board-relay">
+    <div class="hd"><div class="brand">🛰 内网穿透 · 扩展内中继客户端</div></div>
+    <div class="rl-status" id="rlStatus">状态加载中…</div>
+    <section class="add-section open">
+      <div class="add-body" style="display:block">
+        <label class="rl-lbl">中继地址 (Cloudflare Worker)</label>
+        <input type="text" id="rlUrl" placeholder="https://dao-relay-do.xxx.workers.dev" autocomplete="off" />
+        <label class="rl-lbl">会话 ID (session · 命名空间隔离多设备)</label>
+        <input type="text" id="rlSession" placeholder="如 mobile-kiwi-1" autocomplete="off" />
+        <label class="rl-lbl">Bearer Token (DAO_TOKEN)</label>
+        <input type="password" id="rlToken" placeholder="共享鉴权 token" autocomplete="off" />
+        <div class="add-actions rl-actions">
+          <button id="rlStart" class="primary">▶ 启动穿透 (出站连中继)</button>
+          <button id="rlStop" class="b danger">■ 停止</button>
+          <button id="rlRefresh" class="b dv">↻ 状态</button>
+        </div>
+        <div class="add-hint">
+          service worker 出站 WSS 连中继 → 公网即可远程驱动本浏览器的切号/列会话/导出等 25 条 RPC。<br/>
+          <b>天然安全边界</b>: 此扩展无 shell / 文件系统能力, 中继入站只放浏览器 RPC 白名单 (shell 类路由一律 403)。
+        </div>
+        <div class="rl-pub" id="rlPub"></div>
+        <div class="rl-curl">
+          <div class="sec"><span>公网驱动示例 (curl)</span><button id="rlCopyCurl" class="b dv">⧉ 复制</button></div>
+          <pre id="rlCurl" class="curlbox"></pre>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ════ 板 3 · 多实例 (一个浏览器多账号网页并行·互不干扰) ════ -->
+  <div class="board hid" id="board-multi">
+    <div class="hd"><div class="brand">⧉ 网页多实例 · 多账号并行</div></div>
+    <div class="add-hint mi-hint">
+      点账号「⧉ 新标签打开」→ 新开一个 app.devin.ai 网页并注入该账号 (per-tab 鉴权 + sessionStorage 隔离)。<br/>
+      多个账号网页可在同一浏览器内同时开着、各登各号、互不干扰 (民至于老死不相往来)。
+    </div>
+    <div class="sec"><span>账号池 · 一键开网页</span><button id="miRefresh" class="b dv">↻ 刷新</button></div>
+    <div id="miAccounts" class="rows"></div>
+    <div class="sec"><span>已开的账号网页 (绑定 Tab)</span></div>
+    <ul id="miTabs" class="sessions"></ul>
+    <div id="miTabsEmpty" class="empty">还没有用「新标签打开」开过账号网页。</div>
+  </div>
+
+  <div id="toast" class="toast hid"></div>
+  <script src="popup.js"></script>
+  <script src="panel.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+name = "dao-relay-do"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+# Durable Object: 每个 session 一个实例, 持有客户端 WSS + 在途请求表
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "RelayDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayDO"]
+
+# 共享鉴权 token (部署时设为机密, 勿写明文):
+#   wrangler secret put DAO_TOKEN
+# 客户端 /connect?token=<DAO_TOKEN> 与公网 POST /relay/<session> 的 Bearer 都用它。

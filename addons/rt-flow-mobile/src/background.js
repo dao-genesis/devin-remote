@@ -15,7 +15,7 @@
 //      + 通知 app.devin.ai 标签页重注入 localStorage 登录态 (手动切号即登录)
 //   5. Devin Cloud: 对话追踪 / 概览 / 导出(MD+JSON 落手机) / 水过无痕 / Git 批量归一
 // ═══════════════════════════════════════════════════════════════════════════
-importScripts("cloud.js", "parse.js", "git.js");
+importScripts("cloud.js", "parse.js", "git.js", "relay.js");
 
 const DNR_RULE_ID = 1001;
 
@@ -104,8 +104,10 @@ async function activate(email) {
 }
 
 async function broadcastInject(auth) {
+  const b = await getTabBindings();
   const tabs = await chrome.tabs.query({ url: "https://app.devin.ai/*" });
   for (const t of tabs) {
+    if (b[t.id]) continue; // 绑定专属账号的 Tab 不受全局切号影响 (网页多实例·互不干扰)
     try {
       await chrome.tabs.sendMessage(t.id, {
         type: "dao-inject",
@@ -153,9 +155,110 @@ function notifyLowBalance(email, balance, threshold) {
   } catch (e) { /* 通知不可用·不阻断主流程 */ }
 }
 
-// ── 消息路由 (popup / content 调用) ──────────────────────────────────────────
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  (async () => {
+// ═══════════════════════════════════════════════════════════════════════════
+// 网页多实例: per-tab 账号绑定 (一个浏览器多账号网页并行·互不干扰·民至老死不相往来)
+//   每个 app.devin.ai Tab 绑定一个账号: per-tab DNR 注入该账号鉴权头 (API 隔离) +
+//   content script 在该 Tab 用 sessionStorage 隔离登录态 (浏览上下文天然按 Tab 隔离)。
+// ═══════════════════════════════════════════════════════════════════════════
+const TAB_RULE_BASE = 1000000; // per-tab DNR 规则号基址 (避开全局 1001)
+
+async function getTabBindings() { const s = await get(["tabBindings"]); return s.tabBindings || {}; }
+async function setTabBindings(b) { await set({ tabBindings: b }); }
+
+async function applyTabDnr(tabId, auth) {
+  if (tabId == null || !auth || !auth.auth1 || !auth.orgId) return;
+  await chrome.declarativeNetRequest.updateDynamicRules({
+    removeRuleIds: [TAB_RULE_BASE + tabId],
+    addRules: [{
+      id: TAB_RULE_BASE + tabId,
+      priority: 2, // 高于全局 1001: 该 Tab 用「绑定账号」的鉴权头, 与其他 Tab 互不干扰
+      action: { type: "modifyHeaders", requestHeaders: [
+        { header: "Authorization", operation: "set", value: "Bearer " + auth.auth1 },
+        { header: "x-cog-org-id", operation: "set", value: auth.orgId },
+      ] },
+      condition: { urlFilter: "||app.devin.ai/api/", tabIds: [tabId], resourceTypes: ["xmlhttprequest", "other", "sub_frame", "main_frame"] },
+    }],
+  });
+}
+async function removeTabDnr(tabId) {
+  try { await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [TAB_RULE_BASE + tabId], addRules: [] }); } catch (e) {}
+}
+
+// 打开账号专属 Tab (多实例): 登录该账号 → 新开 app.devin.ai Tab → 绑定 + per-tab DNR
+async function openAccountTab(email) {
+  const r = await ensureAuth(email);
+  if (!r.ok) return r;
+  const tab = await chrome.tabs.create({ url: "https://app.devin.ai/", active: true });
+  const b = await getTabBindings();
+  b[tab.id] = lc(email);
+  await setTabBindings(b);
+  await applyTabDnr(tab.id, r);
+  return { ok: true, tabId: tab.id, email: lc(email) };
+}
+
+// content script 拉「本 Tab 应注入哪个账号」: 绑定优先, 否则回退全局 active (向后兼容单账号)
+async function getTabAuth(sender) {
+  const tabId = sender && sender.tab && sender.tab.id;
+  const st = await getState();
+  const b = await getTabBindings();
+  const bound = !!(tabId != null && b[tabId]);
+  const email = bound ? b[tabId] : st.active;
+  if (!email) return { ok: false };
+  const a = st.authCache[lc(email)];
+  if (authValid(a)) {
+    if (bound) await applyTabDnr(tabId, a); // Tab 重载补一手 per-tab DNR, 防 SW 回收后规则缺失
+    return { ok: true, bound, auth1: a.auth1, userId: a.userId, orgId: a.orgId, orgName: a.orgName, email: a.email || email };
+  }
+  return { ok: false, needLogin: true, bound };
+}
+
+async function closeAccountTab(tabId) {
+  const b = await getTabBindings();
+  delete b[tabId]; await setTabBindings(b);
+  await removeTabDnr(tabId);
+  try { await chrome.tabs.remove(Number(tabId)); } catch (e) {}
+  return { ok: true };
+}
+
+async function listTabs() {
+  const b = await getTabBindings();
+  const out = [];
+  for (const tabId of Object.keys(b)) {
+    try { const t = await chrome.tabs.get(Number(tabId)); out.push({ tabId: Number(tabId), email: b[tabId], title: t.title || "", url: t.url || "" }); }
+    catch (e) { /* Tab 已不存在: 顺手清绑定 */ delete b[tabId]; }
+  }
+  await setTabBindings(b);
+  return { ok: true, tabs: out };
+}
+
+// Tab 关闭 → 清绑定 + 撤 per-tab DNR
+if (chrome.tabs && chrome.tabs.onRemoved) {
+  chrome.tabs.onRemoved.addListener(async (tabId) => {
+    const b = await getTabBindings();
+    if (b[tabId] != null) { delete b[tabId]; await setTabBindings(b); }
+    await removeTabDnr(tabId);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 内网穿透: 扩展内 relay 客户端 (二合一·把穿透融入切号插件·砍掉 Termux 这条腿)
+// ═══════════════════════════════════════════════════════════════════════════
+const DEFAULT_RELAY = { url: "", token: "", session: "", enabled: false };
+async function getRelayCfg() { const s = await get(["relay"]); return Object.assign({}, DEFAULT_RELAY, s.relay || {}); }
+
+async function startRelayFromCfg() {
+  if (typeof DaoRelay === "undefined") return { ok: false, error: "relay 模块未加载" };
+  const cfg = await getRelayCfg();
+  if (!cfg.enabled || !cfg.url || !cfg.token || !cfg.session) return { ok: false, error: "relay 未启用或配置不全 (url/token/session)" };
+  DaoRelay.start({ url: cfg.url, token: cfg.token, session: cfg.session }, dispatch);
+  return { ok: true, status: DaoRelay.status() };
+}
+
+// ── 统一 RPC dispatch (纯函数·popup / content / relay 客户端共用同一套 25 条 RPC) ──
+// sendResponse 即 promise 的 resolve; relay.js 收到入站帧后也调本 dispatch。
+function dispatch(msg) {
+  return new Promise((sendResponse) => {
+    (async () => {
     try {
       switch (msg && msg.type) {
         // 轻量唤醒: 长任务(全量备份等)前用它确保 SW 已就绪, 避免 MV3 冷启首条回调丢失。
@@ -400,22 +503,68 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           else sendResponse({ ok: false, needLogin: true });
           break;
         }
+        // ── 内网穿透: 扩展内 relay 客户端配置/启停/状态 (二合一) ──
+        case "relayConfig": {
+          if (msg.set) { const cfg = Object.assign({}, await getRelayCfg(), msg.set); await set({ relay: cfg }); sendResponse({ ok: true, relay: cfg }); }
+          else sendResponse({ ok: true, relay: await getRelayCfg() });
+          break;
+        }
+        case "relayStart": {
+          const cur = await getRelayCfg();
+          const cfg = Object.assign({}, cur, msg.set || {}, { enabled: true });
+          await set({ relay: cfg });
+          sendResponse(await startRelayFromCfg());
+          break;
+        }
+        case "relayStop": {
+          const cfg = Object.assign({}, await getRelayCfg(), { enabled: false });
+          await set({ relay: cfg });
+          if (typeof DaoRelay !== "undefined") DaoRelay.stop();
+          sendResponse({ ok: true, status: (typeof DaoRelay !== "undefined") ? DaoRelay.status() : null });
+          break;
+        }
+        case "relayStatus": {
+          sendResponse({ ok: true, status: (typeof DaoRelay !== "undefined") ? DaoRelay.status() : null, cfg: await getRelayCfg() });
+          break;
+        }
+        // ── 网页多实例: 打开/关闭账号专属 Tab · 列举已绑定 Tab ──
+        case "openAccountTab": { sendResponse(await openAccountTab(msg.email)); break; }
+        case "closeAccountTab": { sendResponse(await closeAccountTab(msg.tabId)); break; }
+        case "listTabs": { sendResponse(await listTabs()); break; }
         default:
           sendResponse({ ok: false, error: "unknown message: " + (msg && msg.type) });
       }
     } catch (e) {
       sendResponse({ ok: false, error: String((e && e.message) || e) });
     }
-  })();
+    })();
+  });
+}
+
+// ── 消息监听: popup / content / panel → dispatch ──
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // getTabAuth 需 sender.tab.id (多实例 per-tab 注入), dispatch 拿不到 sender → 单独处理
+  if (msg && msg.type === "getTabAuth") { getTabAuth(sender).then(sendResponse, () => sendResponse({ ok: false })); return true; }
+  dispatch(msg).then(sendResponse, (e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
   return true; // async
 });
 
-// 启动/安装: 仅恢复活跃账号的 DNR 注入 (无 alarms·无看门狗)
-chrome.runtime.onInstalled.addListener(async () => {
-  const st = await getState();
-  if (st.active) { const a = st.authCache[st.active]; if (authValid(a)) await applyDnr(a); }
-});
-chrome.runtime.onStartup.addListener(async () => {
-  const st = await getState();
-  if (st.active) { const a = st.authCache[st.active]; if (authValid(a)) await applyDnr(a); }
-});
+// 启动/安装: 恢复活跃账号 DNR + 启动 relay (若已启用) + 建保活 alarm
+async function bootRestore() {
+  try {
+    const st = await getState();
+    if (st.active) { const a = st.authCache[st.active]; if (authValid(a)) await applyDnr(a); }
+  } catch (e) {}
+  try { await startRelayFromCfg(); } catch (e) {}
+  try { if (chrome.alarms && chrome.alarms.create) await chrome.alarms.create("dao-relay-keepalive", { periodInMinutes: 0.5 }); } catch (e) {}
+}
+if (chrome.runtime.onInstalled) chrome.runtime.onInstalled.addListener(bootRestore);
+if (chrome.runtime.onStartup) chrome.runtime.onStartup.addListener(bootRestore);
+if (chrome.alarms && chrome.alarms.onAlarm) {
+  chrome.alarms.onAlarm.addListener((al) => {
+    if (al && al.name === "dao-relay-keepalive") {
+      getRelayCfg().then((c) => { if (c.enabled && typeof DaoRelay !== "undefined") DaoRelay.ensure(); });
+    }
+  });
+}
+bootRestore(); // SW 顶层: 被事件唤醒即恢复 (relay 重连·DNR 复原)
