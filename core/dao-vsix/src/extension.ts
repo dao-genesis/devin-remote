@@ -572,8 +572,11 @@ function getDaoConfig() {
 function checkAuth(req: any): boolean {
     const auth = req.headers?.['authorization'] || '';
     if (auth === `Bearer ${ws.token}`) return true;
+    // 内穿令牌(可刷新)也放行 — 刷新时旧 ws.token 仍有效, 故换牌不断链(帛书「夫唯不争·故无尤」)
+    if (bridgeToken && auth === `Bearer ${bridgeToken}`) return true;
     const url = new URL(req.url || '/', `http://localhost:${ws.port}`);
     if (url.searchParams.get('master_token') === ws.token) return true;
+    if (bridgeToken && url.searchParams.get('master_token') === bridgeToken) return true;
     // Local loopback exempt for read-only endpoints; relay/public must carry token
     const remoteAddr = req.socket?.remoteAddress || '';
     if (remoteAddr === '127.0.0.1' || remoteAddr === '::1' || remoteAddr === '::ffff:127.0.0.1') {
@@ -2504,7 +2507,11 @@ function rBridgeFull(){
     if(b.host)h+='<div class="cr"><span class="l">主机</span><span class="v">'+esc(b.host)+'</span></div>';
     if(b.updated)h+='<div class="cr"><span class="l">更新于</span><span class="v" style="font-size:10px">'+esc(b.updated)+'</span></div>';
     h+='</div>';
+    if(b.token)h+='<div class="cr"><span class="l">Token</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(String(b.token).slice(0,8)+'…'+String(b.token).slice(-4))+'</span></div>';
+    h+='</div>';
     h+='<div class="br"><button class="btn sm" onclick="cmd(&#39;copyBridgeUrl&#39;)">📋 复制URL</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;copyBridgeToken&#39;)">🔑 复制Token</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;bridgeRefreshToken&#39;)" title="生新令牌并同步到所有账号; 刷新期间旧令牌仍有效不断链">♻ 刷新Token</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeExportCloudMd&#39;)">☁ 云端Agent MD</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeExportLocalMd&#39;)">💻 本地Agent MD</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入Knowledge</button>';
@@ -2846,7 +2853,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -3453,6 +3460,33 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const doc = await vscode.workspace.openTextDocument(mdPath);
                 await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
                 reply({ type: 'actionResult', command: 'bridgeExportLocalMd', ok: true });
+                break;
+            }
+            case 'copyBridgeToken': {
+                const tok = bridgeToken || ws.token;
+                if (tok) await vscode.env.clipboard.writeText(tok);
+                vscode.window.showInformationMessage('Bridge Token 已复制');
+                reply({ type: 'actionResult', command: 'copyBridgeToken', ok: !!tok });
+                break;
+            }
+            // 刷新 Token (移植自独立 dao-bridge refreshToken) — 帛书「夫唯不争·故无尤」:
+            // 先令服务器接纳新牌(checkAuth 同时认 ws.token + bridgeToken)→旧牌不失效→换牌不断链;
+            // 再回写 conn.json + 重写 MD + 反向注入到所有账号 Knowledge(新牌实时扩散)。
+            case 'bridgeRefreshToken': {
+                // 仅当本进程自起隧道时可刷新(server 认 ws.token+bridgeToken, 故换牌不断链);
+                // 持久化(常驻桥)模式下隧道与令牌皆由常驻服务管理, 此处刷新会写错 token 反而断链 → 守柔拒绝。
+                if (!bridgeUrl) {
+                    vscode.window.showWarningMessage('当前为常驻桥持久化连接 · Token 由常驻服务管理。如需本插件自管令牌, 请先「▶ 启动隧道」再刷新。');
+                    refreshReply({ type: 'actionResult', command: 'bridgeRefreshToken', ok: false });
+                    break;
+                }
+                bridgeToken = crypto.randomBytes(24).toString('hex');
+                bridgeSaveConnJson();
+                try { bridgeWriteArtifacts(); } catch { /* 守柔 */ }
+                let injected = false;
+                try { if (ws.devinAuth1 && ws.devinOrgId) injected = await bridgeInjectKnowledge(); } catch { /* 守柔 */ }
+                vscode.window.showInformationMessage('Bridge Token 已刷新' + (injected ? ' · 已同步到当前账号 Knowledge' : '') + ' (旧牌仍短暂有效, 不断链)');
+                refreshReply({ type: 'actionResult', command: 'bridgeRefreshToken', ok: true });
                 break;
             }
             case 'bridgeInjectKnowledge': {
