@@ -246,6 +246,21 @@ function listen(server) { return new Promise((r) => server.listen(0, "127.0.0.1"
     ok("cfAssetName cross-platform matrix (win/linux/macOS × amd64/arm64/arm)");
   }
 
+  // T8: 刷新Token — rotateToken 生成全新令牌, 旧令牌即刻作废, 新令牌获授权
+  {
+    const { WorkspaceServer } = ext;
+    const srv = new WorkspaceServer();
+    const before = srv.rotateToken();
+    assert.strictEqual(before.length, 32, "rotateToken issues 16-byte hex token");
+    assert.strictEqual(srv.authToken("Bearer " + before), true, "token authorized");
+    const after = srv.rotateToken();
+    assert.ok(after && after !== before, "refresh rotates to a new distinct token");
+    assert.strictEqual(srv.token, after, "server adopts new token");
+    assert.strictEqual(srv.authToken("Bearer " + before), false, "old token revoked after refresh");
+    assert.strictEqual(srv.authToken("Bearer " + after), true, "new token authorized");
+    ok("refreshToken rotates token (old revoked, new authorized)");
+  }
+
   console.log("\nALL " + passed + " TESTS PASSED");
   process.exit(0);
 })().catch((e) => { console.error("\nTEST FAILED:", e && e.stack || e); process.exit(1); });

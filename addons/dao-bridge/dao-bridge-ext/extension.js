@@ -18,7 +18,7 @@ const cp = require("child_process");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TRY_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-const BRIDGE_VERSION = "3.3.0";
+const BRIDGE_VERSION = "3.4.0";
 // 默认中继(Worker+DurableObject)端点 — 零账号穿透的公共入口, 可被 daoBridge.relayUrl 覆盖。
 const DEFAULT_RELAY_URL = "https://dao-relay-do.zhouyoukang.workers.dev";
 
@@ -619,6 +619,12 @@ class WorkspaceServer {
     this._bridgeRef = null;
   }
 
+  // 刷新令牌（一刷即换）— 帛书·「反者道之动」: 生成全新随机令牌, 旧令牌即刻作废。
+  rotateToken() {
+    this.token = crypto.randomBytes(16).toString("hex");
+    return this.token;
+  }
+
   start(fixedPort) {
     return new Promise((resolve, reject) => {
       // 复用已保存的token
@@ -982,6 +988,17 @@ class Bridge {
       cfEmail: this.cfCredentials ? this.cfCredentials.email || "" : "",
       agentCount: this.srv.agentRegistry.size,
     };
+  }
+
+  // 刷新令牌（点一下，换一次）— 帛书·「反者道之动」: 生成全新令牌, 旧令牌即刻作废,
+  // 再用新令牌重连公网通道(中继按 (session,token) 配对, 旧 token 落空→no_agent)。
+  async refreshToken() {
+    if (this._starting) return { ok: false, message: "隧道正在启动，请稍候再刷新" };
+    const fresh = this.srv.rotateToken();
+    this.writeArtifacts(); // 先把新令牌落盘, 供 start() 复用
+    this.stop();           // 收掉旧通道(旧令牌随之作废)
+    const url = await this.start(); // 用新令牌重连
+    return { ok: true, token: fresh, url };
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -1373,6 +1390,13 @@ class BridgeViewProvider {
     if (m.op === "stop") { this.bridge.stop(); this.notify(); return; }
     if (m.op === "copyUrl") { await vscode.env.clipboard.writeText(this.bridge.url || ""); vscode.window.showInformationMessage("已复制公网 URL"); return; }
     if (m.op === "copyToken") { await vscode.env.clipboard.writeText(this.bridge.srv.token || ""); vscode.window.showInformationMessage("已复制 Token"); return; }
+    if (m.op === "refreshToken") {
+      this.post({ type: "result", op: "refreshToken", ok: true, text: "正在刷新 Token 并用新 Token 重连…" });
+      const r = await this.bridge.refreshToken();
+      this.post({ type: "result", op: "refreshToken", ok: !!r.ok, text: r.ok ? ("已刷新 Token · 旧 Token 已作废" + (r.url ? " · " + r.url : "（重连中）")) : (r.message || "刷新失败") });
+      this.post({ type: "state", state: this.bridge.state() });
+      return;
+    }
     if (m.op === "exportCloudMd") {
       const md = this.bridge.generateCloudAgentMd();
       await vscode.env.clipboard.writeText(md);
@@ -1485,6 +1509,9 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
     <button onclick="send('copyUrl')">复制URL</button>
     <button onclick="send('copyToken')">复制Token</button>
     <button onclick="send('restart')">重启隧道</button>
+  </div>
+  <div class="row" style="margin-top:4px">
+    <button onclick="send('refreshToken')" title="生成全新 Token，旧 Token 立即作废，并用新 Token 重连公网通道">🔄 刷新Token</button>
   </div>
 </div>
 

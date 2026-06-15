@@ -2,7 +2,7 @@
   "name": "dao-bridge",
   "displayName": "DAO Bridge · 公网穿透",
   "description": "工作区公网穿透：插件启动即自动打通整机隧道。无账号默认走原生快速隧道；填令牌则走用户 Cloudflare 通道，打不通自动回退；内置 cloudflared、代理/国内网络自适应。三模块：实时状态 + 云端Agent接入MD + 本地Agent配置MD。道法自然·无为而无不为。",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "publisher": "dao",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Other"],
