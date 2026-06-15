@@ -1652,6 +1652,13 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                         reply({ ok: true });
                         break;
                     }
+                    case 'wamCmd': {
+                        // ① 侧栏 = RT Flow 切号面板 — 路由到 WAM 切号命令 (rtflow 已注册)
+                        const c = String(msg.cmd || '');
+                        if (c.startsWith('wam.')) { try { await vscode.commands.executeCommand(c); } catch (e: any) { vscode.window.showErrorMessage('RT Flow: ' + (e?.message || c)); } setTimeout(() => this.refresh(), 400); }
+                        reply({ ok: true });
+                        break;
+                    }
                     case 'devinRefreshQuota': {
                         if (ws.devinApiKey) { const q = await devinFetchQuota(ws.devinApiKey, ws.devinApiServerUrl); if (q) { ws.devinQuota = q; ws.devinSaveConfig(); } }
                         this.refresh();
@@ -1897,19 +1904,23 @@ ${syncing ? `
 </div>
 `}
 <div class="card">
-  <div class="row"><span class="lbl">🔗 账号模式</span><span class="val ${mode === 'manual' ? 'sync' : 'ok'}">${mode === 'manual' ? '✋ 手动(独立)' : '🔄 自动(跟随IDE)'}</span></div>
-  <button class="btn" onclick="cmd('setSyncMode',{mode:'${mode === 'manual' ? 'auto' : 'manual'}'})">${mode === 'manual' ? '↩️ 切回自动 · 跟随 IDE 账号' : '✋ 切到手动 · 面板独立登录'}</button>
+  <div class="row"><span class="lbl">🔁 RT Flow 切号</span><span class="val ${mode === 'manual' ? 'sync' : 'ok'}">${mode === 'manual' ? '✋ 手动(独立)' : '🔄 自动(跟随IDE)'}</span></div>
+  <button class="btn primary" onclick="cmd('wamCmd',{cmd:'wam.switchAccount'})" title="RT Flow 切换到指定账号">🔄 切换账号</button>
+  <button class="btn" style="background:#b8860b;margin-top:4px" onclick="cmd('wamCmd',{cmd:'wam.panicSwitch'})" title="立即轮换到下一个可用账号(限流/卡死时应急)">🚨 紧急切换 (轮换下一个)</button>
   <button class="btn" style="background:#6f42c1;margin-top:4px" onclick="cmd('devinPasteAccount')" title="粘贴一行 email:password (rt-flow 复制格式) · 即刻切换为该单账号主页">📋 粘贴账号 · 单号切换</button>
-  ${mode === 'manual' ? '<button class="btn" style="background:#0e639c;margin-top:4px" onclick="cmd(&#39;devinManualLogin&#39;)">👤 登录其他账户</button>' : ''}
+  <button class="btn" style="margin-top:4px" onclick="cmd('setSyncMode',{mode:'${mode === 'manual' ? 'auto' : 'manual'}'})">${mode === 'manual' ? '↩️ 切回自动 · 跟随 IDE 账号' : '✋ 切到手动 · 面板独立登录'}</button>
+</div>
+<div class="card">
+  <button class="btn" onclick="cmd('wamCmd',{cmd:'wam.addAccount'})" title="新增账号到 RT Flow 账号池">➕ 添加账号</button>
+  <button class="btn" style="margin-top:4px" onclick="cmd('wamCmd',{cmd:'wam.refreshAll'})" title="刷新全部账号状态/配额">🔃 刷新全部</button>
+  <button class="btn" style="margin-top:4px" onclick="cmd('wamCmd',{cmd:'wam.healthCheck'})" title="账号池健康检查">🩺 健康检查</button>
+  <button class="btn" style="margin-top:4px" onclick="cmd('wamCmd',{cmd:'wam.openEditor'})" title="打开 RT Flow 完整账号管理面板">🗂️ RT Flow 完整管理面板</button>
 </div>
 <div class="card">
   <div class="row"><span class="lbl">⚡ Server</span><span class="val ${ws.port ? 'ok' : 'err'}">${ws.port ? ':' + ws.port : 'off'}</span></div>
   <div class="row"><span class="lbl">☁️ Relay</span><span class="val ${ws.relayConnected ? 'ok' : 'err'}">${relayStatus}</span></div>
 </div>
-<button class="btn primary" onclick="cmd('openCloudPanel')">🤖 打开 Devin Cloud 全功能面板</button>
-${loggedIn ? '<button class="btn" onclick="cmd(&#39;devinCloudPanel&#39;)" style="margin-top:4px;background:#0e639c">🌐 打开 Devin 官网</button>' : ''}
-${loggedIn ? '<button class="btn" onclick="cmd(&#39;devinInject&#39;)" style="margin-top:4px">💉 一键注入</button>' : ''}
-<button class="btn" onclick="cmd('exportAgentDoc')" style="margin-top:4px" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button>
+<button class="btn primary" onclick="cmd('openCloudPanel')" title="切号/注入/备份/知识库等全部功能均在此主页">🤖 打开 Devin Cloud 全功能主页</button>
 <script>
 const vscode = acquireVsCodeApi();
 function cmd(c, d) { vscode.postMessage(Object.assign({command: c}, d || {})); }
@@ -2281,9 +2292,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <nav class="sb">
 <div class="ni active" data-tab="overview" onclick="sw('overview')" title="主页 Home">🏠</div>
 <div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网操作 DAO Bridge">🌐</div>
-<div class="ni" data-tab="sessions" onclick="sw('sessions')" title="Sessions 对话">💬</div>
-<div class="ni" data-tab="backups" onclick="sw('backups')" title="备份 Backups · 全账号对话备份成果">📦</div>
-<div class="ni" data-tab="knowledge" onclick="sw('knowledge')" title="Knowledge 知识库">📚</div>
+<div class="ni" data-tab="backups" onclick="sw('backups')" title="对话 · 备份 — 本机全部 RT Flow 备份对话(全账号×全对话)">💬</div>
+<div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 通用自动注入(道法自然准则+内网穿透MD+道德经/阴符经/道法自然+MCP)">💉</div>
+<div class="ni" data-tab="knowledge" onclick="sw('knowledge')" title="Knowledge 知识库 · 手动·当前账号">📚</div>
 <div class="ni" data-tab="playbooks" onclick="sw('playbooks')" title="Playbooks 剧本">📋</div>
 <div class="ni" data-tab="secrets" onclick="sw('secrets')" title="Secrets 密钥">🔑</div>
 <div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器">🧩</div>
@@ -2291,7 +2302,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ni" data-tab="usage" onclick="sw('usage')" title="Usage 用量">📊</div>
 <div class="ni" data-tab="org" onclick="sw('org')" title="组织成员 Members">🏢</div>
 <div class="ni" data-tab="automations" onclick="sw('automations')" title="Automations 自动化">⚙️</div>
-<div class="ni" data-tab="inject" onclick="sw('inject')" title="自动注入 Auto-Inject">💉</div>
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
 </nav>
@@ -2306,7 +2316,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 </div>
 <div class="ct">
 <div class="tv active" id="v-overview"></div>
-<div class="tv" id="v-sessions"></div>
 <div class="tv" id="v-backups"></div>
 <div class="tv" id="v-knowledge"></div>
 <div class="tv" id="v-playbooks"></div>
@@ -2617,8 +2626,8 @@ function rInject(){
   const v=document.getElementById('v-inject');if(!v)return;
   const p=S.injectProfile||{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],messageLimit:null};
   const tgl=(on,fn)=>'<span onclick="'+fn+'" style="cursor:pointer;display:inline-block;width:40px;height:20px;border-radius:10px;background:'+(on?'var(--success)':'var(--muted)')+';position:relative;vertical-align:middle"><span style="position:absolute;top:2px;left:'+(on?'22px':'2px')+';width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s"></span></span>';
-  let h='<div class="st">自动注入自循环 · 无为而无不为</div>';
-  h+='<p style="font-size:11px;color:var(--muted);line-height:1.6;margin:4px 0 10px">初始配置一次, 此后账号随 IDE 登录自动切换时, 系统按此清单自动注入新账号, 并(默认)清理旧账号的同名注入。</p>';
+  let h='<div class="st">反向注入 · 通用自动注入 · 无为而无不为</div>';
+  h+='<p style="font-size:11px;color:var(--muted);line-height:1.6;margin:4px 0 10px">通用模块：配置一次，此后账号随 IDE 登录自动切换时，系统按此清单<b>反向注入</b>到每个新账号，并(默认)清理旧账号的同名注入。默认道藏载荷：道法自然准则 · 内网穿透MD · 道德经/阴符经/道法自然 三剧本 · MCP 服务器同步。</p>';
   h+='<div class="card"><div class="cr"><span class="l">启用自动注入</span><span class="v">'+tgl(p.enabled,'ipToggle(&#39;enabled&#39;)')+'</span></div><div class="cr"><span class="l">切账号时清理旧账号</span><span class="v">'+tgl(p.autoCleanup,'ipToggle(&#39;autoCleanup&#39;)')+'</span></div>'+(p.lastInjectedOrg?'<div class="cr"><span class="l">上次注入 org</span><span class="v" style="font-size:10px">'+esc(p.lastInjectedOrg)+'</span></div>':'')+'</div>';
   const listSec=(title,kind,items,labelFn,addFn)=>{let s='<div class="st">'+title+' ('+items.length+')<button class="btn sm primary" style="float:right" onclick="'+addFn+'">+ 添加</button></div>';if(items.length){s+='<div class="card">';items.forEach((it,i)=>{s+='<div class="cr"><span class="l" style="font-size:12px">'+esc(labelFn(it))+'</span><span class="v"><button class="btn sm danger" onclick="ipRemove(&#39;'+kind+'&#39;,'+i+')">删</button></span></div>'});s+='</div>'}else{s+='<p style="font-size:11px;color:var(--muted);margin:4px 0 8px">（空）</p>'}return s};
   h+=listSec('🔑 Secrets','secrets',p.secrets,it=>it.name,'ipAddSecret()');
