@@ -36,6 +36,9 @@ public class RelayService extends Service {
     public void onCreate() {
         super.onCreate();
         instance = this;
+        // 恢复远程操控开关状态
+        String flag = readUserFile("remote-ops-flag");
+        remoteOpsEnabled = "1".equals(flag);
         startForeground(1, buildNotification("内网穿透服务启动中…"));
         main.post(this::initEngine);
     }
@@ -55,6 +58,9 @@ public class RelayService extends Service {
         engine.loadUrl("file:///android_asset/engine/engine.html");
         engine.resumeTimers();
     }
+
+    /** 远程操控安全开关 (默认关, 需在穿透面板手动启用) */
+    public static volatile boolean remoteOpsEnabled = false;
 
     /** JS ↔ 原生桥 (引擎页用 window.Native.*) */
     public class Bridge {
@@ -87,6 +93,146 @@ public class RelayService extends Service {
                 main.post(() -> { if (engine != null) try {
                     engine.evaluateJavascript("window.__httpCb&&window.__httpCb(" + HttpBridge.jsonStr(id) + "," + json + ")", null);
                 } catch (Exception ignored) {} }));
+        }
+
+        // ── 远程操控 IPC (经 MainActivity.sInstance 驱动前台 WebView) ──────────
+
+        @JavascriptInterface public boolean isRemoteOpsEnabled() { return remoteOpsEnabled; }
+        @JavascriptInterface public void setRemoteOps(boolean on) { remoteOpsEnabled = on; writeUserFile("remote-ops-flag", on ? "1" : "0"); }
+
+        @JavascriptInterface public String browseListTabs() {
+            if (!remoteOpsEnabled) return "{\"error\":\"远程操控未启用\"}";
+            MainActivity m = MainActivity.sInstance;
+            if (m == null) return "[]";
+            final String[] r = {""};
+            try { m.runOnUiThread(() -> { r[0] = m.ipcListTabs(); synchronized(r){r.notifyAll();} });
+                synchronized(r){ r.wait(3000); } } catch (Exception e) {}
+            return r[0].isEmpty() ? "[]" : r[0];
+        }
+
+        @JavascriptInterface public String browseExecJs(int tabIndex, String js) {
+            if (!remoteOpsEnabled) return "{\"error\":\"远程操控未启用\"}";
+            MainActivity m = MainActivity.sInstance;
+            if (m == null) return "null";
+            final String[] r = {"null"};
+            try { m.runOnUiThread(() -> m.ipcExecJs(tabIndex, js, v -> { r[0] = v; synchronized(r){r.notifyAll();} }));
+                synchronized(r){ r.wait(5000); } } catch (Exception e) {}
+            return r[0];
+        }
+
+        @JavascriptInterface public void browseNavigate(int tabIndex, String action, String url) {
+            if (!remoteOpsEnabled) return;
+            MainActivity m = MainActivity.sInstance;
+            if (m != null) m.runOnUiThread(() -> m.ipcNavigate(tabIndex, action, url));
+        }
+
+        @JavascriptInterface public String browseScreenshot(int tabIndex) {
+            if (!remoteOpsEnabled) return "";
+            MainActivity m = MainActivity.sInstance;
+            if (m == null) return "";
+            final String[] r = {""};
+            try { m.runOnUiThread(() -> { r[0] = m.ipcScreenshot(tabIndex); synchronized(r){r.notifyAll();} });
+                synchronized(r){ r.wait(5000); } } catch (Exception e) {}
+            return r[0];
+        }
+
+        @JavascriptInterface public String browseGetCookies(String url) {
+            if (!remoteOpsEnabled) return "";
+            MainActivity m = MainActivity.sInstance;
+            if (m == null) return "";
+            return m.ipcGetCookies(url);
+        }
+
+        @JavascriptInterface public void browseOpenTab(String url, String accountJson) {
+            if (!remoteOpsEnabled) return;
+            MainActivity m = MainActivity.sInstance;
+            if (m != null) m.ipcOpenTab(url, accountJson);
+        }
+
+        @JavascriptInterface public void browseCloseTab(int tabIndex) {
+            if (!remoteOpsEnabled) return;
+            MainActivity m = MainActivity.sInstance;
+            if (m != null) m.ipcCloseTab(tabIndex);
+        }
+
+        // ── 手机本体操控 (文件/相册/剪贴板/通知/分享/应用) ──────────
+
+        @JavascriptInterface public String phoneDeviceInfo() {
+            if (!remoteOpsEnabled) return "{\"error\":\"远程操控未启用\"}";
+            MainActivity m = MainActivity.sInstance;
+            return m != null ? m.ipcDeviceInfo() : "{}";
+        }
+
+        @JavascriptInterface public String phoneListFiles(String dir) {
+            if (!remoteOpsEnabled) return "[]";
+            MainActivity m = MainActivity.sInstance;
+            return m != null ? m.ipcListFiles(dir) : "[]";
+        }
+
+        @JavascriptInterface public String phoneReadFile(String path, boolean base64) {
+            if (!remoteOpsEnabled) return "";
+            MainActivity m = MainActivity.sInstance;
+            return m != null ? m.ipcReadFile(path, base64) : "";
+        }
+
+        @JavascriptInterface public boolean phoneWriteFile(String path, String content) {
+            if (!remoteOpsEnabled) return false;
+            MainActivity m = MainActivity.sInstance;
+            return m != null && m.ipcWriteFile(path, content);
+        }
+
+        @JavascriptInterface public String phoneListPhotos(int limit) {
+            if (!remoteOpsEnabled) return "[]";
+            MainActivity m = MainActivity.sInstance;
+            if (m == null) return "[]";
+            final String[] r = {"[]"};
+            try { m.runOnUiThread(() -> { r[0] = m.ipcListPhotos(limit); synchronized(r){r.notifyAll();} });
+                synchronized(r){ r.wait(5000); } } catch (Exception e) {}
+            return r[0];
+        }
+
+        @JavascriptInterface public String phoneClipboardGet() {
+            if (!remoteOpsEnabled) return "";
+            MainActivity m = MainActivity.sInstance;
+            return m != null ? m.ipcGetClipboard() : "";
+        }
+
+        @JavascriptInterface public void phoneClipboardSet(String text) {
+            if (!remoteOpsEnabled) return;
+            MainActivity m = MainActivity.sInstance;
+            if (m != null) m.runOnUiThread(() -> m.ipcSetClipboard(text));
+        }
+
+        @JavascriptInterface public void phoneShare(String text, String title) {
+            if (!remoteOpsEnabled) return;
+            MainActivity m = MainActivity.sInstance;
+            if (m != null) m.runOnUiThread(() -> m.ipcShare(text, title));
+        }
+
+        @JavascriptInterface public void phoneNotify(String title, String text) {
+            if (!remoteOpsEnabled) return;
+            MainActivity m = MainActivity.sInstance;
+            if (m != null) m.runOnUiThread(() -> m.ipcNotify(title, text));
+        }
+
+        @JavascriptInterface public String phoneInstalledApps() {
+            if (!remoteOpsEnabled) return "[]";
+            MainActivity m = MainActivity.sInstance;
+            return m != null ? m.ipcInstalledApps() : "[]";
+        }
+
+        @JavascriptInterface public boolean phoneLaunchApp(String pkg) {
+            if (!remoteOpsEnabled) return false;
+            MainActivity m = MainActivity.sInstance;
+            if (m == null) return false;
+            final boolean[] r = {false};
+            try { m.runOnUiThread(() -> { r[0] = m.ipcLaunchApp(pkg); synchronized(r){r.notifyAll();} });
+                synchronized(r){ r.wait(3000); } } catch (Exception e) {}
+            return r[0];
+        }
+
+        @JavascriptInterface public String readAssetFile(String path) {
+            return readAsset(path);
         }
     }
 
