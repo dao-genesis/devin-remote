@@ -1,4 +1,4 @@
-# coldstart.ps1 — one-key cold start for a fresh Windows VM (Devin cloud VM or any devinbox).
+﻿# coldstart.ps1 — one-key cold start for a fresh Windows VM (Devin cloud VM or any devinbox).
 # Full chain: download+install latest Devin Desktop -> build+install the dao-one MEGA (大 one) VSIX
 # straight from this repo -> verify. Account login is interactive/injected by design
 # (the vendored rt-flow handles the first-account login; account pool is NOT in the repo).
@@ -8,7 +8,7 @@
 #
 # Usage (run from inside a cloned devin-remote repo):
 #   git clone https://github.com/zhouyoukang1234-spec/devin-remote.git $env:USERPROFILE\repos\devin-remote
-#   powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\tools\coldstart.ps1
+#   powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\cloud\coldstart\coldstart.ps1
 #
 #   -SkipInstall   IDE already installed, skip the Devin Desktop download/install step
 #
@@ -23,8 +23,18 @@ $ErrorActionPreference = 'Continue'   # git/installers write progress to stderr;
 $sw = [Diagnostics.Stopwatch]::StartNew()
 function Step($m) { Write-Host ("[{0:mm\:ss}] {1}" -f $sw.Elapsed, $m) -ForegroundColor Cyan }
 
-# repo root = parent of this script's tools/ dir
-$repoRoot = Split-Path -Parent $PSScriptRoot
+# repo root = nearest ancestor of this script that holds both core/ and addons/.
+# (Script lives at cloud/coldstart/; walking up by a fixed count is brittle after
+#  repo restructures, so resolve by marker dirs instead.)
+$repoRoot = $PSScriptRoot
+while ($repoRoot -and -not ((Test-Path (Join-Path $repoRoot 'core')) -and (Test-Path (Join-Path $repoRoot 'addons')))) {
+    $parent = Split-Path -Parent $repoRoot
+    if ($parent -eq $repoRoot) { break }   # reached filesystem root
+    $repoRoot = $parent
+}
+if (-not ($repoRoot -and (Test-Path (Join-Path $repoRoot 'core')))) {
+    throw "repo root not found from $PSScriptRoot (expected an ancestor with core/ + addons/)"
+}
 $devinExe = "$env:LOCALAPPDATA\Programs\Devin\Devin.exe"
 $devinCli = "$env:LOCALAPPDATA\Programs\Devin\bin\devin-desktop.cmd"
 
