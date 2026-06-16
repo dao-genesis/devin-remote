@@ -45,6 +45,48 @@ function resolveBackupRoot(): string {
     const dc = loadDevinCloud();
     return (dc && dc.paths && dc.paths.DC_BACKUP_DEFAULT) || path.join(os.homedir(), '.wam', 'devin_cloud_backups');
 }
+// 最小 ZIP 文本读取器 (无三方依赖): 解析 EOCD→中央目录, 找首个匹配 entry, 用 zlib.inflateRawSync 解出文本。
+// 仅用于内联查看 .zip 型对话备份 (对话.md/html)。method 0=stored, 8=deflate。
+function readZipTextEntry(zipPath: string, patterns: RegExp[]): { name: string; text: string } | null {
+    const zlib = require('zlib');
+    const buf: Buffer = fs.readFileSync(zipPath);
+    let eocd = -1;
+    const minPos = Math.max(0, buf.length - 22 - 65536);
+    for (let i = buf.length - 22; i >= minPos; i--) {
+        if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) return null;
+    const cdCount = buf.readUInt16LE(eocd + 10);
+    let off = buf.readUInt32LE(eocd + 16);
+    const entries: { name: string; method: number; lho: number; csize: number }[] = [];
+    for (let n = 0; n < cdCount; n++) {
+        if (off + 46 > buf.length || buf.readUInt32LE(off) !== 0x02014b50) break;
+        const method = buf.readUInt16LE(off + 10);
+        const csize = buf.readUInt32LE(off + 20);
+        const nameLen = buf.readUInt16LE(off + 28);
+        const extraLen = buf.readUInt16LE(off + 30);
+        const commentLen = buf.readUInt16LE(off + 32);
+        const lho = buf.readUInt32LE(off + 42);
+        const name = buf.toString('utf8', off + 46, off + 46 + nameLen);
+        entries.push({ name, method, lho, csize });
+        off += 46 + nameLen + extraLen + commentLen;
+    }
+    for (const pat of patterns) {
+        const e = entries.find(en => pat.test(en.name));
+        if (!e) continue;
+        if (buf.readUInt32LE(e.lho) !== 0x04034b50) continue;
+        const nLen = buf.readUInt16LE(e.lho + 26);
+        const xLen = buf.readUInt16LE(e.lho + 28);
+        const dataStart = e.lho + 30 + nLen + xLen;
+        const comp = buf.slice(dataStart, dataStart + e.csize);
+        let raw: Buffer;
+        if (e.method === 0) raw = comp;
+        else if (e.method === 8) raw = zlib.inflateRawSync(comp);
+        else continue;
+        return { name: e.name, text: raw.toString('utf8') };
+    }
+    return null;
+}
 // 账号池 — 帛书·六十二「道者万物之注」
 // email→password 映射: IDE 注入的 session token 仅能访问 codeium 后端,
 // 被 app.devin.ai 拒绝; 全功能面板需 auth1, 而 auth1 只能由 email+password 五步登录换取。
@@ -2599,6 +2641,9 @@ function bkMtime(ms){try{return ms?new Date(ms).toLocaleString():''}catch(e){ret
 function bkToggle(id){var e=document.getElementById(id);if(e)e.style.display=(e.style.display==='none'?'block':'none')}
 function bkReveal(i,ci){var a=S.backups.accounts[i];if(!a)return;var p=(ci==null)?a.dir:((a.conversations[ci]||{}).path);if(p)cmd('revealBackupDir',{dir:p})}
 function bkView(i,ci){var a=S.backups.accounts[i];if(!a)return;var c=a.conversations[ci];if(c&&c.htmlPath)cmd('openBackupConv',{htmlPath:c.htmlPath})}
+// 道法自然 · 备份内联浏览 (文件夹式): 点对话即在面板内展开正文(对话.md/html), 无需弹外部页。
+function bkConvToggle(i,ci){var cid='bkc-'+i+'-'+ci;var e=document.getElementById(cid);if(!e)return;if(e.style.display==='none'||!e.style.display){e.style.display='block';if(!e.getAttribute('data-loaded')){e.innerHTML='<div style="font-size:10px;color:var(--muted);padding:4px">加载中…</div>';var c=(((S.backups.accounts[i]||{}).conversations||[])[ci]||{});cmd('readBackupConv',{i:i,ci:ci,path:c.path||c.dir||''})}}else{e.style.display='none'}}
+function rBackupConv(d){var cid='bkc-'+d.i+'-'+d.ci;var e=document.getElementById(cid);if(!e)return;e.setAttribute('data-loaded','1');if(!d.ok){e.innerHTML='<div style="font-size:11px;color:var(--danger);padding:4px">无法读取: '+esc(d.error||'未知')+'</div>';return}if(d.fmt==='html'){e.innerHTML='<iframe sandbox="" style="width:100%;height:380px;border:1px solid var(--border);border-radius:4px;background:#fff" srcdoc="'+String(d.content||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;')+'"></iframe>'}else{e.innerHTML='<div style="max-height:380px;overflow:auto;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:4px;padding:8px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-word">'+esc(d.content||'')+'</div>'}}
 function bkDownload(i,ci){var a=S.backups.accounts[i];if(!a)return;var p=(ci==null)?a.dir:((a.conversations[ci]||{}).path);if(p)cmd('exportBackup',{path:p})}
 function rBackupsData(tree,err){
   var v=document.getElementById('v-backups');if(!v)return;
@@ -2617,8 +2662,11 @@ function rBackupsData(tree,err){
     h+='<div class="br" style="margin-top:4px"><button class="btn sm ghost" onclick="bkReveal('+i+',null)">📂 目录</button><button class="btn sm ghost" onclick="bkDownload('+i+',null)">⬇ 下载账号</button></div>';
     h+='<div id="'+aid+'" style="display:none;margin-top:6px;border-top:1px solid var(--border);padding-top:6px">';
     (a.conversations||[]).slice(0,200).forEach(function(c,ci){
-      var t=c.title||c.name||'(未命名)';
-      h+='<div style="padding:3px 0;border-bottom:1px solid var(--border)"><div class="cr"><span class="l" style="font-size:11px">'+esc(t.substring(0,44))+'</span><span class="v" style="font-size:9px;color:var(--muted)">'+(c.eventCount?c.eventCount+'事件·':'')+(c.type==='zip'?'ZIP·':'')+bkMtime(c.mtime)+'</span></div><div class="br" style="margin-top:2px">'+(c.hasHtml?('<button class="btn sm" onclick="bkView('+i+','+ci+')">👁 查看</button>'):'')+'<button class="btn sm ghost" onclick="bkReveal('+i+','+ci+')">📂</button><button class="btn sm ghost" onclick="bkDownload('+i+','+ci+')">⬇</button></div></div>';
+      var t=c.title||c.name||'(未命名)';var cid='bkc-'+i+'-'+ci;
+      h+='<div style="padding:3px 0;border-bottom:1px solid var(--border)">';
+      h+='<div class="cr" style="cursor:pointer" onclick="bkConvToggle('+i+','+ci+')"><span class="l" style="font-size:11px">▸ '+esc(t.substring(0,44))+'</span><span class="v" style="font-size:9px;color:var(--muted)">'+(c.eventCount?c.eventCount+'事件·':'')+(c.type==='zip'?'ZIP·':'')+bkMtime(c.mtime)+'</span></div>';
+      h+='<div class="br" style="margin-top:2px"><button class="btn sm" onclick="bkConvToggle('+i+','+ci+')">📄 查看</button><button class="btn sm ghost" onclick="bkReveal('+i+','+ci+')" title="在文件管理器中打开">📂</button><button class="btn sm ghost" onclick="bkDownload('+i+','+ci+')" title="导出">⬇</button>'+(c.hasHtml?('<button class="btn sm ghost" onclick="bkView('+i+','+ci+')" title="在浏览器中打开 HTML">🌐</button>'):'')+'</div>';
+      h+='<div id="'+cid+'" style="display:none;margin-top:4px"></div></div>';
     });
     if((a.conversations||[]).length>200)h+='<div style="font-size:10px;color:var(--muted);margin-top:4px">仅显示前 200 条，更多请打开目录</div>';
     h+='</div></div>';
@@ -2698,7 +2746,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -2707,6 +2755,10 @@ function mcpAct(idx,action){
   else if(action==='uninstall'){if(confirm('卸载 '+(m.name||'')+' ?'))cmd('mcpUninstall',{id:m.installationId});}
   else if(action==='profile'){cmd('mcpAddProfile',{spec:mcpSpec(m)});}
 }
+// MCP 即时搜索/筛选 (纯前端, 不重渲染, 不丢焦点) — 对齐官网市场搜索
+function mcpFilter(q){q=(q||'').toLowerCase().trim();var cards=document.querySelectorAll('.mcp-card');for(var i=0;i<cards.length;i++){var k=cards[i].getAttribute('data-k')||'';cards[i].style.display=(!q||k.indexOf(q)>=0)?'':'none'}}
+// 添加自定义 MCP → 直接装到本账号 (复用市场安装通道 devinAddCustomMcp), 对齐官网 Add custom MCP
+function mcpAddCustom(){sm('添加自定义 MCP (装到本账号)','<input id="m1" placeholder="名称 name (如 GitHub MCP)" style="width:100%;margin:4px 0"><select id="m2" style="width:100%;margin:4px 0"><option value="HTTP">HTTP / SSE (远程 URL)</option><option value="STDIO">STDIO (command/args)</option></select><input id="m3" placeholder="URL (HTTP) 或 command (STDIO, 如 npx)" style="width:100%;margin:4px 0"><input id="m4" placeholder="args 空格分隔 (STDIO) / Authorization 头值 (HTTP)" style="width:100%;margin:4px 0"><input id="m5" placeholder="简介 short_description (可选)" style="width:100%;margin:4px 0"><p style="font-size:10px;color:var(--muted);margin:4px 0">提示: 点下方预设可一键填 GitHub MCP</p><button class="btn sm" onclick="ipMcpPreset(&#39;github&#39;)">GitHub MCP 预设</button>',function(){var n=document.getElementById('m1').value.trim();if(!n)return false;var tr=document.getElementById('m2').value;var f3=document.getElementById('m3').value.trim();var f4=document.getElementById('m4').value.trim();var sd=document.getElementById('m5').value.trim();var spec={name:n,transport:tr,short_description:sd,installation_scope:'org'};if(tr==='STDIO'){spec.command=f3;spec.args=f4?f4.split(' ').filter(Boolean):[];spec.env_variables=[]}else{spec.url=f3;if(f4)spec.headers={Authorization:f4}}toast('安装中…',true);cmd('mcpMarketInstall',{spec:spec})})}
 function rT(tab,items,err,fallbackProxy){
   // ② 容器归一: 独立标签(v-*)已移除的 K/P/S/Git 落主页内 ov-* 容器(integrations→ov-git)
   const v=document.getElementById('v-'+tab)||document.getElementById('ov-'+(tab==='integrations'?'git':tab));if(!v)return;
@@ -2739,10 +2791,22 @@ function rT(tab,items,err,fallbackProxy){
       h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(name)+'</span><span class="v"><span class="tag knowledge">K</span>'+(enabled?'<span style="color:var(--success);margin-left:4px">✓</span>':'<span style="color:var(--danger);margin-left:4px">✗</span>')+'</span></div>'+(trigger?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(trigger.substring(0,100))+'</div>':'')+'<div class="br" style="margin-top:4px">'+lkBtn('knowledge',name)+'<button class="btn sm" onclick="cmd(&#39;devinEditKnowledge&#39;,{id:&#39;'+esc(String(id))+'&#39;})">✏️ 修改</button><button class="btn sm danger" onclick="cmd(&#39;devinDeleteKnowledge&#39;,{id:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
     });
   }else if(tab==='playbooks'){
-    items.forEach(p=>{
-      const id=p.id||'';const title=p.title||p.name||'Untitled';const status=p.status||'';
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(title)+'</span><span class="v"><span class="tag playbook">P</span></span></div>'+(status?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(status)+'</div>':'')+'<div class="br" style="margin-top:4px">'+lkBtn('playbooks',title)+'<button class="btn sm" onclick="cmd(&#39;devinEditPlaybook&#39;,{id:&#39;'+esc(String(id))+'&#39;})">✏️ 修改</button><button class="btn sm danger" onclick="cmd(&#39;devinDeletePlaybook&#39;,{id:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
-    });
+    // 道法自然 · 官方模板剧本(access=community, Cognition 出品)默认折叠, 不占空间;
+    //   本账号自建剧本(team/org)默认展开。用户痛点「官方 Playbook 太多占满空间」根治。
+    var pbCard=function(p){
+      var id=p.id||'';var title=p.title||p.name||'Untitled';var status=p.status||'';
+      return '<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(title)+'</span><span class="v"><span class="tag playbook">P</span></span></div>'+(status?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(status)+'</div>':'')+'<div class="br" style="margin-top:4px">'+lkBtn('playbooks',title)+'<button class="btn sm" onclick="cmd(&#39;devinEditPlaybook&#39;,{id:&#39;'+esc(String(id))+'&#39;})">✏️ 修改</button><button class="btn sm danger" onclick="cmd(&#39;devinDeletePlaybook&#39;,{id:&#39;'+esc(String(id))+'&#39;})">🗑</button></div></div>';
+    };
+    var mine=items.filter(function(p){return (p.access||'')!=='community'});
+    var official=items.filter(function(p){return (p.access||'')==='community'});
+    if(mine.length){h+='<div class="st" style="font-size:11px;text-transform:none;margin:4px 0">本账号剧本 ('+mine.length+')</div>';mine.forEach(function(p){h+=pbCard(p)});}
+    else{h+='<div style="font-size:11px;color:var(--muted);margin:6px 0">本账号暂无自建剧本</div>';}
+    if(official.length){
+      h+='<div class="st" style="font-size:11px;text-transform:none;margin:10px 0 4px;cursor:pointer" onclick="bkToggle(&#39;pb-official&#39;)">▸ 官方模板剧本 ('+official.length+') · 点击展开/收起</div>';
+      h+='<div id="pb-official" style="display:none">';
+      official.forEach(function(p){h+=pbCard(p)});
+      h+='</div>';
+    }
   }else if(tab==='secrets'){
     items.forEach(s=>{
       const name=s.name||s.key||'Unnamed';const id=s.id||'';
@@ -2758,7 +2822,10 @@ function rT(tab,items,err,fallbackProxy){
     });
   }else if(tab==='mcp'){
     // 官网 MCP 整图给到本地: 已装(★)+ 全市场目录; 每项可「装到本账号 / +档案(批量注入) / 卸载」
+    // 对齐官网: 顶部「+ 自定义 MCP」(直接装到本账号) + 搜索/筛选框 (名称/简介即时过滤)。
     window._mcp=[];
+    h+='<div class="br" style="margin-bottom:6px"><button class="btn sm primary" onclick="mcpAddCustom()">+ 自定义 MCP</button></div>';
+    h+='<input id="mcpq" placeholder="🔍 搜索 MCP (名称 / 简介)" oninput="mcpFilter(this.value)" style="width:100%;margin:0 0 8px;padding:6px 8px;box-sizing:border-box;background:var(--card,#222);color:var(--fg);border:1px solid var(--border);border-radius:4px">';
     items.forEach(it=>{
       const m=it.mcp||{};const idx=window._mcp.length;window._mcp.push(m);
       const nm=it.name||'';const dt=it.detail||'';
@@ -2768,7 +2835,8 @@ function rT(tab,items,err,fallbackProxy){
       else{btns+='<button class="btn sm primary" onclick="mcpAct('+idx+',&#39;install&#39;)">装到本账号</button>';}
       btns+='<button class="btn sm" onclick="mcpAct('+idx+',&#39;profile&#39;)" title="加入反向注入档案 → 可批量注入所有账号">+档案</button>';
       btns+=lkBtn('mcps',String(nm).replace(/^★ /,''));
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'<div class="br" style="margin-top:4px">'+btns+'</div></div>';
+      var mkey=esc(String(nm+' '+dt).toLowerCase());
+      h+='<div class="card mcp-card" data-k="'+mkey+'"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'<div class="br" style="margin-top:4px">'+btns+'</div></div>';
     });
   }else if(tab==='usage'||tab==='org'||tab==='automations'){
     items.forEach(it=>{
@@ -3102,6 +3170,35 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     catch { await vscode.env.openExternal(vscode.Uri.file(p)); }
                     reply({ type: 'actionResult', command: 'openBackupConv', ok: true });
                 } catch (e: any) { reply({ type: 'actionResult', command: 'openBackupConv', ok: false }); }
+                break;
+            }
+            // 道法自然 · 内联读取一条对话备份正文 (文件夹式浏览) — 优先 对话.md, 否则 对话.html;
+            //   支持目录型与 .zip 型备份 (zip 用内置最小解包器, 无三方依赖)。截断保护 400KB。
+            case 'readBackupConv': {
+                const ri = msg.i, rci = msg.ci;
+                try {
+                    const p: string = msg.path || '';
+                    if (!p || !fs.existsSync(p)) { reply({ type: 'backupConv', i: ri, ci: rci, ok: false, error: '路径不存在' }); break; }
+                    const MAXLEN = 400 * 1024;
+                    let content = ''; let fmt = 'md';
+                    const st = fs.statSync(p);
+                    if (st.isDirectory()) {
+                        const files = fs.readdirSync(p);
+                        const md = files.find(f => /对话\.md$/i.test(f)) || files.find(f => /\.md$/i.test(f));
+                        const html = files.find(f => /对话\.html$/i.test(f)) || files.find(f => /\.html$/i.test(f));
+                        if (md) { content = fs.readFileSync(path.join(p, md), 'utf8'); fmt = 'md'; }
+                        else if (html) { content = fs.readFileSync(path.join(p, html), 'utf8'); fmt = 'html'; }
+                        else { reply({ type: 'backupConv', i: ri, ci: rci, ok: false, error: '该备份无 对话.md / 对话.html' }); break; }
+                    } else if (/\.zip$/i.test(p)) {
+                        const z = readZipTextEntry(p, [/对话\.md$/i, /\.md$/i, /对话\.html$/i, /\.html$/i]);
+                        if (!z) { reply({ type: 'backupConv', i: ri, ci: rci, ok: false, error: 'ZIP 内无 对话.md / 对话.html' }); break; }
+                        content = z.text; fmt = /\.md$/i.test(z.name) ? 'md' : 'html';
+                    } else {
+                        content = fs.readFileSync(p, 'utf8'); fmt = /\.html$/i.test(p) ? 'html' : 'md';
+                    }
+                    if (content.length > MAXLEN) content = content.slice(0, MAXLEN) + '\n\n…(正文较长已截断, 完整内容请用 📂 打开目录 / ⬇ 导出)';
+                    reply({ type: 'backupConv', i: ri, ci: rci, ok: true, fmt, content });
+                } catch (e: any) { reply({ type: 'backupConv', i: ri, ci: rci, ok: false, error: (e && e.message) || String(e) }); }
                 break;
             }
             // 在系统文件管理器中显示备份目录 (账号目录 / 对话目录)
