@@ -159,6 +159,16 @@ public class RelayService extends Service {
             if (m != null) m.ipcCloseTab(tabIndex);
         }
 
+        // ── 在线自动更新 (云端经中继可直接推送更新; 不受 remoteOps 门禁, 安装仍需用户点一次确认) ──
+        @JavascriptInterface public String appCheckUpdate() {
+            MainActivity m = MainActivity.sInstance;
+            return m != null ? m.fetchUpdateInfo() : "{\"ok\":false,\"error\":\"浏览器外壳未就绪\"}";
+        }
+        @JavascriptInterface public String appInstallUpdate(String url) {
+            MainActivity m = MainActivity.sInstance;
+            return m != null ? m.startUpdate(url) : "{\"ok\":false,\"error\":\"浏览器外壳未就绪\"}";
+        }
+
         // ── 手机本体操控 (文件/相册/剪贴板/通知/分享/应用) ──────────
 
         @JavascriptInterface public String phoneDeviceInfo() {

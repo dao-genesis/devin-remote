@@ -113,7 +113,8 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 | v0.14.3 | ADB/scrcpy 级系统级接管 (AccessibilityService, 无需 root)：phone* +10 — 手势注入(点击/长按/滑动) + 全局操作(返回/主页/最近/通知/锁屏) + 读屏(控件树) + 按文字点击 + 文本输入 + 全屏截图(takeScreenshot) |
 | v0.14.4 | 重新锚定本源 — 全仓统一命名 Devin Cloud 手机版 (清除 RT Flow 残留) + 渐进式文档系统重构 (云端轻量接入/三大核心板块概览·getModuleDoc 深入/本地重型) + 一键授权 `phoneEnsureControl` (穿透面板「⚡ 一键授权系统级接管」按钮·自动跳转·用户只点允许) + 远程开关在浏览器壳同步生效 + Node mock-Native 测试台 (32 断言全过) |
 | v0.14.5 | 真机全链路实测修复 — 后台标签 `autoHost` 常驻停泊 (满屏·INVISIBLE·保持挂载窗口与尺寸)，修复 `browseExecJs`/`browseGetDom`/`browseScreenshot` 对后台标签失效 (detached WebView 不触发 JS 回调、0 尺寸截不到图) 的真机 bug + `browseExecJs` 守卫式 wait/notify 防丢唤醒 + `ipcScreenshot` 0 尺寸兜底 (按屏幕强制测量布局)。经中继真机实测: 文档系统/软件本体(getState/listSessions 真实API)/手机本体(phoneInfo/Battery)/一键授权全部验证通过 |
-| v0.14.6 | **当前版本**：系统级接管真机实测修复 — `accessibility_config.xml` 补 `android:canTakeScreenshot="true"`，修复 `phoneScreenCapture` 抛 `SecurityException: Services don't have the capability of taking the screenshot`。经中继真机实测无障碍闭环: `phoneDumpScreen` 读屏控件树(45/92节点) + `phoneGlobalAction home` 手势注入(回主页·再读屏验证生效) 全部通过 |
+| v0.14.6 | 系统级接管真机实测修复 — `accessibility_config.xml` 补 `android:canTakeScreenshot="true"`，修复 `phoneScreenCapture` 抛 `SecurityException: Services don't have the capability of taking the screenshot`。经中继真机实测无障碍闭环: `phoneDumpScreen` 读屏控件树(45/92节点) + `phoneGlobalAction home` 手势注入(回主页·再读屏验证生效) 全部通过 |
+| v0.14.7 | **当前版本**：① 额度用完显示灰色 `$0`（弱化视觉干扰，不再刺眼红）② 在线自动更新底座 — 冷启动静默检查 `latest.json` 有新版即弹一次确认；新增 `appCheckUpdate`/`appInstallUpdate` RPC，云端经中继可直接推送更新（下载新版 APK + 唤起系统安装器，用户仅点一次「安装」），以后不必再从聊天反复发 APK。新增 `REQUEST_INSTALL_PACKAGES` 权限 + `FileProvider` 安装 Intent |
 
 ## 取代的旧模块
 

@@ -1,0 +1,6 @@
+{
+  "versionCode": 28,
+  "versionName": "0.14.7",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.14.7/DevinCloud-mobile-v0.14.7.apk",
+  "notes": "v0.14.7\n· 额度用完显示灰色 $0 (弱化视觉干扰)\n· 新增在线自动更新: 启动自动检查 + 云端可经中继推送 (appCheckUpdate/appInstallUpdate)\n· 截图能力 + 后台浏览器自动化修复 (含 v0.14.5/0.14.6)"
+}

@@ -511,7 +511,10 @@
 
     // ── 管理/热修通道 (用户私有 token 已门禁; 用户明确要求隔隧道热修) ──
     ping: async function(){ return {ok:true, pong:Date.now()}; },
-    getEngineInfo: async function(){ return {ok:true, version:"0.14.4", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length, remoteOps: N.isRemoteOpsEnabled?N.isRemoteOpsEnabled():false }; },
+    getEngineInfo: async function(){ return {ok:true, version:"0.14.7", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length, remoteOps: N.isRemoteOpsEnabled?N.isRemoteOpsEnabled():false }; },
+    // ── 在线自动更新: 云端经中继可查/可推 (安装仍需用户点一次「安装」) ──
+    appCheckUpdate: async function(){ try{ return JSON.parse(N.appCheckUpdate?N.appCheckUpdate():"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },
+    appInstallUpdate: async function(a){ try{ return JSON.parse(N.appInstallUpdate?N.appInstallUpdate((a&&a.url)||""):"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },
     deviceInfo: async function(){ var N=window.Native||{}; return {ok:true, ua:navigator.userAgent, platform:navigator.platform, lang:navigator.language, screen:{w:screen.width,h:screen.height,dpr:window.devicePixelRatio,orient:(screen.orientation||{}).type}, relay:typeof DaoRelayApp!=="undefined"?DaoRelayApp.status():{}, tabs:N.listTabs?(function(){try{return JSON.parse(N.listTabs()||"[]");}catch(e){return[];}})():[], conn:N.getConn?(function(){try{return JSON.parse(N.getConn()||"{}");}catch(e){return{};}})():{}, ts:Date.now()}; },
     listTabs: async function(){ var N=window.Native||{}; if(!N.listTabs)return{ok:false,error:"listTabs bridge unavailable"}; try{return{ok:true,tabs:JSON.parse(N.listTabs()||"[]")};}catch(e){return{ok:false,error:String(e)};} },
     closeTab: async function(a){ var N=window.Native||{}; if(!N.closeTab)return{ok:false,error:"closeTab bridge unavailable"}; N.closeTab(a.tabId||a.id||0); return{ok:true}; },

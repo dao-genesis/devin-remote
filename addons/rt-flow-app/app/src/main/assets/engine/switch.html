@@ -277,9 +277,12 @@ function rowHtml(a,i){
   var q = a.quota||{}; var checked = (typeof q.dPct==="number");
   var dollars = ovDollars(q);
   // 只保留美刀额度(放大显示), 去掉 free 套餐标 与 登/需登 标 (登录入口仍在第二行按钮)
-  var dcolor = (dollars<3?"#f44":(dollars<8?"#e8c84a":"#4ec9b0"));
+  // 配色弱化干扰(道法自然): 用完→灰色 $0 (不再刺眼红); 低→柔黄; 充足→青绿
+  var dcolor = (dollars<=0?"#777":(dollars<8?"#e8c84a":"#4ec9b0"));
   var euaTag = checked
-    ? ('<span class="eua-big" style="color:'+dcolor+'" title="Extra Usage · 美金额度 $'+dollars.toFixed(2)+(dollars<3?" · 额度偏低!":"")+'">$'+dollars.toFixed(2)+'</span>')
+    ? (dollars<=0
+        ? '<span class="eua-big" style="color:#777" title="额度已用完">$0</span>'
+        : '<span class="eua-big" style="color:'+dcolor+'" title="Extra Usage · 美金额度 $'+dollars.toFixed(2)+'">$'+dollars.toFixed(2)+'</span>')
     : '<span class="eua-big" style="color:#666" title="未刷新额度">$--</span>';
   return ''+
   '<div class="row'+(active?" act":"")+(auth?"":" expired-row")+'" data-i="'+i+'" data-id="'+_esc(a.id)+'" data-email="'+_esc((a.email||"").toLowerCase())+'">'+

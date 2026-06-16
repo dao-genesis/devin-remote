@@ -114,6 +114,10 @@ public class MainActivity extends AppCompatActivity {
     private volatile String curProxy = null;   // 已应用到内置浏览器(全部 WebView)的本地代理 host:port; null=直连
     private final java.util.Map<Long, String[]> dlPending = new java.util.concurrent.ConcurrentHashMap<>();
     private android.content.BroadcastReceiver dlReceiver;
+    // ── 在线自动更新 ──
+    static final String UPDATE_MANIFEST = "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json";
+    private volatile long updateDlId = -1;          // 当前更新下载任务 id (区别于普通网页下载)
+    private volatile File updateApkFile = null;     // 更新 APK 落地文件
 
     static class Tab {
         WebView web;
@@ -180,6 +184,33 @@ public class MainActivity extends AppCompatActivity {
         if (!restoreTabs()) {
             newTab(SWITCH, null);
         }
+        autoCheckUpdate();   // 冷启动静默检查新版 (有则弹一次确认; 安装仍需用户点一次)
+    }
+
+    /** 冷启动后台静默检查更新; 有新版则弹一次确认框, 用户点「立即更新」即下载+唤起安装。 */
+    private void autoCheckUpdate() {
+        new Thread(() -> {
+            try {
+                String info = fetchUpdateInfo();
+                JSONObject j = new JSONObject(info);
+                if (!j.optBoolean("ok", false) || !j.optBoolean("hasUpdate", false)) return;
+                final String name = j.optString("latestName", "");
+                final String notes = j.optString("notes", "");
+                final String url = j.optString("url", "");
+                if (url.isEmpty()) return;
+                main.post(() -> {
+                    if (isFinishing()) return;
+                    try {
+                        new android.app.AlertDialog.Builder(this)
+                            .setTitle("发现新版本 " + name)
+                            .setMessage(notes.isEmpty() ? "有可用更新, 是否现在更新?" : notes)
+                            .setPositiveButton("立即更新", (d, w) -> enqueueUpdateDownload(url))
+                            .setNegativeButton("稍后", null)
+                            .show();
+                    } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
+        }).start();
     }
 
     // ── UI 外壳 ────────────────────────────────────────────────────────────
@@ -1269,6 +1300,9 @@ public class MainActivity extends AppCompatActivity {
             });
         }
         @JavascriptInterface public void toast(String s) { MainActivity.this.toast(s == null ? "" : s); }
+        // ── 在线自动更新 (面板/引擎/中继共用) ──
+        @JavascriptInterface public String appCheckUpdate() { return fetchUpdateInfo(); }
+        @JavascriptInterface public String appInstallUpdate(String url) { return startUpdate(url); }
         @JavascriptInterface public void openAccountTab(String accJson) { main.post(() -> newTab(DEVIN, accJson)); }
         @JavascriptInterface public void openUrlTab(String url) { main.post(() -> newTab(url == null ? DEVIN : url, null)); }
         // 历史/书签里的多实例 Devin 条目: 用对应账号(注入鉴权)重开该 URL, 而非裸 location.href(会掉回官网登录页)
@@ -1527,6 +1561,7 @@ public class MainActivity extends AppCompatActivity {
 
     // ── 应用内下载管理器 + 可拖拽悬浮窗 ───────────────────────────────────────
     private void onDownloadComplete(long id) {
+        if (id == updateDlId) { onUpdateDownloaded(id); return; }   // 更新包: 唤起安装器
         try {
             DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
             if (dm == null) return;
@@ -1551,6 +1586,121 @@ public class MainActivity extends AppCompatActivity {
             } finally { cur.close(); }
         } catch (Exception ignored) {}
     }
+    // ── 在线自动更新 ────────────────────────────────────────────────────────
+    /** 当前已安装版本号。 */
+    int currentVersionCode() {
+        try {
+            android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return Build.VERSION.SDK_INT >= 28 ? (int) pi.getLongVersionCode() : pi.versionCode;
+        } catch (Exception e) { return 0; }
+    }
+
+    /** 拉取在线版本清单并与本机比对。后台线程调用。返回 JSON 串。 */
+    String fetchUpdateInfo() {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(UPDATE_MANIFEST).openConnection();
+            c.setConnectTimeout(8000); c.setReadTimeout(8000);
+            c.setRequestProperty("Cache-Control", "no-cache");
+            InputStream is = c.getInputStream();
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096]; int n;
+            while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+            is.close();
+            JSONObject m = new JSONObject(new String(bos.toByteArray(), StandardCharsets.UTF_8));
+            int latest = m.optInt("versionCode", 0);
+            int cur = currentVersionCode();
+            JSONObject out = new JSONObject();
+            out.put("ok", true);
+            out.put("current", cur);
+            out.put("latest", latest);
+            out.put("latestName", m.optString("versionName", ""));
+            out.put("hasUpdate", latest > cur);
+            out.put("url", m.optString("url", ""));
+            out.put("notes", m.optString("notes", ""));
+            return out.toString();
+        } catch (Exception e) {
+            return "{\"ok\":false,\"error\":" + JSONObject.quote(String.valueOf(e.getMessage())) + "}";
+        } finally { if (c != null) c.disconnect(); }
+    }
+
+    /** 触发更新: 下载最新 APK, 完成后自动唤起系统安装器 (用户点一次「安装」)。url 空则先取清单。 */
+    String startUpdate(final String urlIn) {
+        try {
+            String url = urlIn;
+            if (url == null || url.isEmpty()) {
+                JSONObject j = new JSONObject(fetchUpdateInfo());
+                if (!j.optBoolean("ok", false)) return j.toString();
+                if (!j.optBoolean("hasUpdate", false))
+                    return "{\"ok\":true,\"hasUpdate\":false,\"msg\":\"已是最新版\",\"current\":" + j.optInt("current") + "}";
+                url = j.optString("url", "");
+            }
+            if (url.isEmpty()) return "{\"ok\":false,\"error\":\"清单无下载地址 url\"}";
+            final String furl = url;
+            main.post(() -> enqueueUpdateDownload(furl));
+            return "{\"ok\":true,\"downloading\":true,\"url\":" + JSONObject.quote(furl) + "}";
+        } catch (Exception e) {
+            return "{\"ok\":false,\"error\":" + JSONObject.quote(String.valueOf(e.getMessage())) + "}";
+        }
+    }
+
+    private void enqueueUpdateDownload(String url) {
+        try {
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm == null) { toast("更新失败: 无下载服务"); return; }
+            File dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+            updateApkFile = new File(dir, "DevinCloud-update.apk");
+            if (updateApkFile.exists()) updateApkFile.delete();
+            DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
+            req.setTitle("Devin Cloud 手机版 · 更新下载中");
+            req.setMimeType("application/vnd.android.package-archive");
+            req.setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, "DevinCloud-update.apk");
+            req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            updateDlId = dm.enqueue(req);
+            toast("正在下载更新…");
+        } catch (Exception e) { toast("更新失败: " + e.getMessage()); }
+    }
+
+    private void onUpdateDownloaded(long id) {
+        updateDlId = -1;
+        try {
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm != null) {
+                android.database.Cursor cur = dm.query(new DownloadManager.Query().setFilterById(id));
+                if (cur != null) {
+                    try {
+                        if (cur.moveToFirst()) {
+                            int st = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                            if (st != DownloadManager.STATUS_SUCCESSFUL) { toast("更新下载失败"); return; }
+                        }
+                    } finally { cur.close(); }
+                }
+            }
+            if (updateApkFile == null || !updateApkFile.exists()) { toast("更新包未找到"); return; }
+            installApk(updateApkFile);
+        } catch (Exception e) { toast("更新失败: " + e.getMessage()); }
+    }
+
+    private void installApk(File apk) {
+        try {
+            // Android 8+ 需「允许安装未知应用」, 未授权时引导至开关页
+            if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+                try {
+                    startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:" + getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    toast("请先允许「安装未知应用」, 然后重试更新");
+                } catch (Exception ignored) {}
+                return;
+            }
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", apk);
+            Intent it = new Intent(Intent.ACTION_VIEW);
+            it.setDataAndType(uri, "application/vnd.android.package-archive");
+            it.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(it);
+            toast("下载完成, 请点「安装」完成更新");
+        } catch (Exception e) { toast("安装唤起失败: " + e.getMessage()); }
+    }
+
     private void addDownloadRecord(String name, String path, String mime, long size) {
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
