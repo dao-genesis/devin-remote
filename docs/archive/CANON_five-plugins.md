@@ -2,9 +2,9 @@
 
 > 核心是**五个插件**。它们同依赖一个软件本体（Devin Desktop = Windsurf 同源），
 > 各自独立的 VSIX 扩展，可并行构建/安装/测试，「道并行而不相悖」。
-> 当前权威源码在 `plugins/` 各插件目录，与 GitHub `devin-remote` main 一致。
+> 当前权威源码在 `core/` 各插件目录，与 GitHub `devin-remote` main 一致。
 >
-> 另有第 6 板块 **rt-flow-mobile**（浏览器/手机版 Chromium MV3 扩展，**非 VSIX**）：是 ⑤ rt-flow 在浏览器的移植，见下表 #6 与 §⑥。
+> 另有第 6 板块 **rt-flow-app**（Devin Cloud 手机版独立 APK，**非 VSIX**）：取代了旧的 rt-flow-mobile 和 dao-bridge-android，见下表 #6 与 §⑥。
 
 ## 总览
 
@@ -15,7 +15,7 @@
 | 3 | **dao-bridge** | 工作区专属内网穿透（随 IDE 启停 + 实时 MD + Cloudflare 隧道） | `dao-bridge-ext/` | 3.2.0 | live E2E 通过；随 IDE 启停 + 命名隧道（稳定 URL）+ local-agent 深度控制 HTTP API |
 | 4 | **devin-git-auth** | 多个 Devin 账号绑定到同一 GitHub 仓库协同 | `devin-git-auth/` | 2.3.2 | 绑定目标态达成；VSIX 已可构建安装；活跃协同待打通 |
 | 5 | **rt-flow** | Devin Cloud 接入：批量/自动对话备份 + 全量数据快照 + 一键回归本源(wipe) | `rt-flow/` | 4.6.2 | 12/12 批量备份 + 一键 wipe + 对话额度上限/自动停 + 清理阈值$1 + 余额精确到分 |
-| 6 | **rt-flow-mobile**（浏览器/手机版） | rt-flow 多账号切换 + dao-vsix 官网注入登录 → 合一移植为 Chromium MV3 浏览器扩展（**非 VSIX**） | `rt-flow-mobile/` | 1.0.0 | 桌面 Chrome 全流程实测通过（含修复 MV3 冷启竞态·storage-first）；安卓 Kiwi/Edge 侧载待真机验证 |
+| 6 | **rt-flow-app** (Devin Cloud 手机版) | 独立 APK 三合一：切号+内网穿透+多实例。取代了 rt-flow-mobile 和 dao-bridge-android | `rt-flow-app/` | 0.7.0 | 1:1 桌面面板移植 + 手机适配 + 穿透动态配置 + S23 Ultra 实测通过 |
 
 ## 逐插件本源需求（底层驱动力）
 
@@ -46,15 +46,15 @@
 - **一键回归本源（wipe）**：先 `backupAccountFull` 本地留底，再清空账号全部用户数据（对话归档 + 知识/剧本/密钥真删 + Git 授权撤销），**保留 Devin 本源默认**（3 内置知识 + 32 社区剧本）。
 - 实践戒律：区分「用户数据」与「本源默认」，删除端点必须真号实跑确证（曾揪出多个把 404 当成功的「臆造成功」缺陷），残留如实回报、绝不臆造。
 
-### ⑥ rt-flow-mobile（浏览器/手机版·新增板块，非 5 个 VSIX 之一）
-- 把 ⑤ rt-flow 的「多账号自动切号」与 dao-vsix 的「官网注入自动登录」**合一移植到浏览器**：纯 Chromium MV3 扩展，无 Devin Desktop / VSCode 依赖，可在桌面 Chrome / Edge 与 **Android 的 Kiwi / Edge** 侧载。
-- 登录注入：`email+password → windsurf.com 登录 → auth1`；content script 于 `document_start` 在 `app.devin.ai` 种入 `localStorage['auth1_session']` + org 守卫键，`declarativeNetRequest` 给 `/api/*` 注 `Authorization`/`x-cog-org-id` → SPA 零 GUI 自动登录。换 auth1 即换号。
-- 自动切号：`chrome.alarms` 轮询余额，≤ 缓冲（默 $3）→ rotate 评分最优；页面探测「额度耗尽」→ 立即轮转。
-- 实践戒律：popup 渲染 **storage-first**（直读 `chrome.storage`，不依赖 service worker 是否唤醒），根除 MV3 冷启竞态卡死；网络层异常如实回显、不静默吞。
-- 入口：`plugins/rt-flow-mobile/`（`src/cloud.js`/`src/background.js`/`src/content.js`/`src/popup.*`）；说明与接力见该目录 README 的「状态 · 实测 · 开发接力」。
+### ⑥ rt-flow-app（Devin Cloud 手机版 APK·新增板块，非 VSIX）
+- 独立 APK 三合一：切号 + 内网穿透 + 网页多实例。**取代了** `rt-flow-mobile`（MV3 扩展·Kiwi 已停更）和 `dao-bridge-android`（Termux Agent）。
+- 1:1 桌面 RT Flow 面板移植 + 手机适配化简（去 DW/去 sw·突出编号+账号名·flex-wrap）。
+- Per-account 展开面板：Sessions/Knowledge/Playbooks/Secrets/Git。
+- 穿透配置动态化：每用户/设备独立配置，localStorage + userFile + conn.json 三层优先级。
+- 入口：`addons/rt-flow-app/`；详见该目录 README。
 
 ## 告诫下一个 agent
 
-- 五插件正本就在 `plugins/` 五个目录 + GitHub `devin-remote`。不要把旁支仓库当主线翻找。
+- 五插件正本就在 `core/` 四个目录 + GitHub `devin-remote`。不要把旁支仓库当主线翻找。
 - 提示词以「已隔离替换」状态为准（帛书《老子》道德经 + 道藏《阴符经》），见各插件内 `media/dao-rules.md` 与 proxy-pro vendor。
-- **浏览器/手机版**单独成第 6 板块 `plugins/rt-flow-mobile/`（Chromium MV3 扩展，非 VSIX）；它是 rt-flow 在浏览器的移植，接续开发从该目录 README 的「状态 · 实测 · 开发接力」起手。
+- **手机版**单独成第 6 板块 `addons/rt-flow-app/`（独立 APK，非 VSIX）；取代了旧的 rt-flow-mobile 和 dao-bridge-android，接续开发从该目录 README 起手。

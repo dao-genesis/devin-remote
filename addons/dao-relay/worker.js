@@ -21,7 +21,7 @@
 //   不设 env.DAO_TOKEN(默认) = 开放配对, 零账号即用。
 //
 // 协议 (与 addons/dao-bridge/{core.js,dao-bridge-ext/extension.js}、
-//        addons/rt-flow-mobile/src/relay.js 一致):
+//        addons/rt-flow-app/app/src/main/assets/engine/relay-app.js 一致):
 //   ① 客户端 (Termux/桌面 agent 或 浏览器扩展 SW) 出站连:
 //        GET /connect?session=<id>&token=<t>   → WebSocket upgrade
 //   ② 公网/另一台设备入站驱动:
