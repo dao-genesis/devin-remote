@@ -114,7 +114,8 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 | v0.14.4 | 重新锚定本源 — 全仓统一命名 Devin Cloud 手机版 (清除 RT Flow 残留) + 渐进式文档系统重构 (云端轻量接入/三大核心板块概览·getModuleDoc 深入/本地重型) + 一键授权 `phoneEnsureControl` (穿透面板「⚡ 一键授权系统级接管」按钮·自动跳转·用户只点允许) + 远程开关在浏览器壳同步生效 + Node mock-Native 测试台 (32 断言全过) |
 | v0.14.5 | 真机全链路实测修复 — 后台标签 `autoHost` 常驻停泊 (满屏·INVISIBLE·保持挂载窗口与尺寸)，修复 `browseExecJs`/`browseGetDom`/`browseScreenshot` 对后台标签失效 (detached WebView 不触发 JS 回调、0 尺寸截不到图) 的真机 bug + `browseExecJs` 守卫式 wait/notify 防丢唤醒 + `ipcScreenshot` 0 尺寸兜底 (按屏幕强制测量布局)。经中继真机实测: 文档系统/软件本体(getState/listSessions 真实API)/手机本体(phoneInfo/Battery)/一键授权全部验证通过 |
 | v0.14.6 | 系统级接管真机实测修复 — `accessibility_config.xml` 补 `android:canTakeScreenshot="true"`，修复 `phoneScreenCapture` 抛 `SecurityException: Services don't have the capability of taking the screenshot`。经中继真机实测无障碍闭环: `phoneDumpScreen` 读屏控件树(45/92节点) + `phoneGlobalAction home` 手势注入(回主页·再读屏验证生效) 全部通过 |
-| v0.14.7 | **当前版本**：① 额度用完显示灰色 `$0`（弱化视觉干扰，不再刺眼红）② 在线自动更新底座 — 冷启动静默检查 `latest.json` 有新版即弹一次确认；新增 `appCheckUpdate`/`appInstallUpdate` RPC，云端经中继可直接推送更新（下载新版 APK + 唤起系统安装器，用户仅点一次「安装」），以后不必再从聊天反复发 APK。新增 `REQUEST_INSTALL_PACKAGES` 权限 + `FileProvider` 安装 Intent |
+| v0.14.7 | ① 额度用完显示灰色 `$0`（弱化视觉干扰，不再刺眼红）② 在线自动更新底座 — 冷启动静默检查 `latest.json` 有新版即弹一次确认；新增 `appCheckUpdate`/`appInstallUpdate` RPC，云端经中继可直接推送更新（下载新版 APK + 唤起系统安装器，用户仅点一次「安装」），以后不必再从聊天反复发 APK。新增 `REQUEST_INSTALL_PACKAGES` 权限 + `FileProvider` 安装 Intent |
+| v0.14.8 | **当前版本**：穿透稳健性 + 面板改版。① 隧道客户端 `relay-app.js`：连接看门狗（10s 未握手即弃端点重试，治 GFW 致 `CONNECTING` 长挂）+ 退避加速（1.5s→20s 封顶）+ **多端点自动故障转移**（`url` 可填多个，逗号/空格/换行分隔，逐个择优连通）+ `/health` 探测把模糊错误细化为可操作诊断（区分「不可达/被屏蔽」与「WSS 握手失败」），助力国内无 VPN 无感穿透（配合自有域名端点）。② 穿透面板：「复制URL」「复制Token」合并为「📋 复制接入信息」；4 个云端/本地 MD 文档按钮拉到第一页主页；状态卡显示当前连通端点/重连次数/故障转移端点数 |
 
 ## 取代的旧模块
 

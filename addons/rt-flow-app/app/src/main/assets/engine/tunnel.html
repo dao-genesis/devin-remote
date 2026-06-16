@@ -48,18 +48,30 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   <div class="lbl">代理 / 回退链</div><div id="net" class="val">—</div>
   <div class="lbl">在线Agent</div><div id="agents" class="val">0</div>
   <div class="row" style="margin-top:8px">
-    <button onclick="send('copyUrl')">复制URL</button>
-    <button onclick="send('copyToken')">复制Token</button>
+    <button onclick="send('copyAccess')">📋 复制接入信息</button>
     <button onclick="send('restart')">重启隧道</button>
     <button onclick="send('rotateToken')" style="background:#d29922">刷新Token</button>
+  </div>
+</div>
+
+<!-- 接入文档 · 4 模块按钮拉到第一页主页 (无需翻到底部) -->
+<div class="card">
+  <div class="lbl">📄 接入文档 (发给云端 Agent)</div>
+  <div class="row" style="margin-top:6px">
+    <button onclick="send('exportCloudMd')">☁️ 复制云端MD</button>
+    <button onclick="send('exportLocalMd')">🖥️ 复制本地MD</button>
+  </div>
+  <div class="row">
+    <button onclick="send('openCloudMd')">打开云端MD</button>
+    <button onclick="send('openLocalMd')">打开本地MD</button>
   </div>
 </div>
 
 <!-- 模块1.5: 动态穿透配置 (每设备独立·非固定) -->
 <div class="section">
 <h3>🔧 穿透配置 · 每设备独立（动态）</h3>
-<div class="muted">中继地址/Token/Session 不再写死。每台设备首次启动可在此自行配置，保存后立即重连。优先级：本地配置 &gt; 内置 conn.json。</div>
-<input id="cfgUrl" placeholder="中继 URL · 如 https://your-relay.workers.dev">
+<div class="muted">中继地址/Token/Session 不再写死。每台设备首次启动可在此自行配置，保存后立即重连。优先级：本地配置 &gt; 内置 conn.json。<br><b>国内无 VPN 连不上？</b> <code>*.workers.dev</code> 常被运营商屏蔽。可在 URL 框填<b>多个端点（逗号/空格/换行分隔）</b>，客户端自动逐个尝试、择优连通——把你给中继绑定的<b>自有域名</b>放在前面即可国内直连。</div>
+<input id="cfgUrl" placeholder="中继 URL（可填多个，逗号/换行分隔）· 如 https://relay.你的域名.com, https://xxx.workers.dev">
 <input id="cfgToken" type="password" placeholder="Bearer Token">
 <input id="cfgSession" placeholder="Session ID · 如 my-phone-session">
 <div class="row">
@@ -103,19 +115,6 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 </div>
 </div>
 
-<!-- 模块3: 导出MD -->
-<div class="section">
-<h3>📄 导出接入文档</h3>
-<div class="row">
-  <button onclick="send('exportCloudMd')">☁️ 云端Agent MD</button>
-  <button onclick="send('exportLocalMd')">🖥️ 本地Agent MD</button>
-</div>
-<div class="row">
-  <button onclick="send('openCloudMd')">打开云端MD</button>
-  <button onclick="send('openLocalMd')">打开本地MD</button>
-</div>
-</div>
-
 <!-- 能力自测 -->
 <div class="section">
 <h3>⚡ 能力自测</h3>
@@ -131,12 +130,14 @@ function _conn(){ try{ return JSON.parse(N.conn?N.conn():"{}"); }catch(e){ retur
 function _relay(){ try{ return JSON.parse(N.relayStatus?N.relayStatus():"{}"); }catch(e){ return {}; } }
 function _push(){
   var c=_conn(), r=_relay(), on=!!r.connected;
-  var pub = (c.url&&c.session)?(c.url.replace(/\/$/,'')+"/relay/"+c.session):"—";
+  var base=((on?(r.activeUrl||c.url):c.url)||"").replace(/\/$/,'');
+  var pub = (base&&c.session)?(base+"/relay/"+c.session):"—";
+  var nCand=(r.candidates&&r.candidates.length)||0;
   var state={
-    url: on?pub:"", lastErr: on?null:(r.lastErr||null),
+    url: on?pub:"", lastErr: on?null:(r.lastError||r.lastErr||null),
     ws:{name:"Devin Cloud 手机版", root: c.session||"-"},
-    port:"DO", mode:"relay·Durable Object", protocol:"wss",
-    proxy:null, attempts:[{mode:"relay",proto:"wss",ok:on}],
+    port:"DO", mode:"relay·Durable Object"+(nCand>1?(" · "+nCand+"端点故障转移"):""), protocol:"wss",
+    proxy:null, attempts:[{mode:"relay",proto:"wss",ok:on}], tries:(r.attempts||0),
     agentCount: on?1:0, cfLoggedIn:false, cfEmail:"", session:c.session
   };
   _render(state);
@@ -173,6 +174,11 @@ function send(op,arg,extra){ handle(Object.assign({op:op,arg:arg},extra||{})); }
 function v(id){ return document.getElementById(id).value; }
 function handle(m){
   var op=m.op, c=_conn();
+  if(op==='copyAccess'){
+    var r=_relay(); var base=((r.activeUrl||c.url||"")+"").replace(/\/$/,'');
+    var u=base+"/relay/"+c.session;
+    var block="公网入口: "+u+"\nToken: "+(c.token||"")+"\nSession: "+(c.session||"");
+    try{N.clip&&N.clip(block);}catch(e){} _result('copyAccess',true,'已复制 URL+Token+Session (一并粘给云端 Agent)'); return; }
   if(op==='copyUrl'){ var u=c.url.replace(/\/$/,'')+"/relay/"+c.session; try{N.clip&&N.clip(u);}catch(e){} _result('copyUrl',true,'已复制公网入口'); return; }
   if(op==='copyToken'){ try{N.clip&&N.clip(c.token||"");}catch(e){} _result('copyToken',true,'已复制 Token'); return; }
   if(op==='restart'){ try{N.relayRestart&&N.relayRestart();}catch(e){} _result('restart',true,'已请求重连中继'); setTimeout(_push,800); return; }
@@ -208,7 +214,7 @@ function handle(m){
 function _render(s){
   s=s||{}; var on=!!s.url;
   document.getElementById('dot').className='dot '+(on?'ok':(s.lastErr?'bad':'pending'));
-  document.getElementById('stat').textContent=on?'已打通 · 公网在线 · 可远程接入':(s.lastErr?(''+s.lastErr):'隧道启动中…');
+  document.getElementById('stat').textContent=on?'已打通 · 公网在线 · 可远程接入':(s.lastErr?(''+s.lastErr):('隧道启动中…'+(s.tries?(' (第'+s.tries+'次重连)'):'')));
   document.getElementById('url').textContent=s.url||'—';
   document.getElementById('ws').textContent=s.ws?(s.ws.name+' · '+s.ws.root):'—';
   document.getElementById('mode').textContent=':'+s.port+' / '+s.mode+(s.protocol?' / '+s.protocol:'');

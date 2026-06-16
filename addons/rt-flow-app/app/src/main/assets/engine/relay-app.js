@@ -17,15 +17,49 @@ const DaoRelayApp = (function () {
   const COMMANDS = Object.create(null); // cmd -> async fn(args)
   let sock = null, connected = false, stopped = true;
   let cfg = { url: "", token: "", session: "" };
-  let backoff = 2000, pingTimer = null, reTimer = null;
+  let backoff = 1500, pingTimer = null, reTimer = null, connectTimer = null;
   let lastError = null, lastConnectTs = 0, lastFrameTs = 0;
   let onStatus = null;
+  // ── 多中继端点·自动故障转移 (国内无感: workers.dev 常被运营商 SNI 拦截,
+  //    可在 url 里用逗号/空格/换行分隔多个端点, 例如自有域名镜像; 客户端逐个轮询直到连通) ──
+  let candidates = [];      // [baseUrl, ...] 去尾斜杠
+  let candIdx = 0;          // 当前尝试的端点下标
+  let activeUrl = null;     // 当前连通的端点
+  let attempts = 0;         // 累计连接尝试次数
+  const BACKOFF_MIN = 1500, BACKOFF_MAX = 20000, CONNECT_TIMEOUT = 10000;
+
+  function parseCandidates(c) {
+    let list = [];
+    if (Array.isArray(c.urls)) list = c.urls.slice();
+    const u = (c.url || "");
+    if (Array.isArray(u)) list = list.concat(u);
+    else if (typeof u === "string") list = list.concat(u.split(/[\s,]+/));
+    const seen = Object.create(null), out = [];
+    for (let s of list) {
+      s = (s || "").trim().replace(/\/$/, "");
+      if (!s || !/^https?:\/\//i.test(s) || seen[s]) continue;
+      seen[s] = 1; out.push(s);
+    }
+    return out;
+  }
 
   function emitStatus() {
     if (typeof onStatus === "function") {
-      try { onStatus({ connected, session: cfg.session, lastError, lastConnectTs, lastFrameTs }); } catch (e) {}
+      try { onStatus({ connected, session: cfg.session, lastError, lastConnectTs, lastFrameTs, activeUrl, attempts, candidates: candidates.slice() }); } catch (e) {}
     }
   }
+
+  // 失败时探测当前端点可达性, 把模糊的 "websocket error" 细化为可操作的诊断。
+  function probeHealth(base) {
+    try {
+      const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      if (ctrl) setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 5000);
+      fetch(base + "/health", { method: "GET", signal: ctrl ? ctrl.signal : undefined })
+        .then((r) => { if (!connected) { lastError = r && r.ok ? "中继可达但 WSS 握手失败 (网络可能拦截 WebSocket 升级; 可尝试切换网络/换自有域名端点)" : ("中继返回 " + (r && r.status) + " (检查 token/session)"); emitStatus(); } })
+        .catch(() => { if (!connected) { lastError = "中继不可达: " + shortHost(base) + " (DNS/网络被拦截, 国内无 VPN 常因 workers.dev 被屏蔽 → 建议为中继绑定自有域名并填入)"; emitStatus(); } });
+    } catch (e) {}
+  }
+  function shortHost(u) { try { return new URL(u).host; } catch (e) { return u; } }
 
   async function handleFrame(m) {
     const path = (m && m.path) || "/api/health";
@@ -87,34 +121,59 @@ const DaoRelayApp = (function () {
   function clearTimers() {
     if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
     if (reTimer) { clearTimeout(reTimer); reTimer = null; }
+    if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
   }
   function schedule() {
     if (stopped || reTimer) return;
-    reTimer = setTimeout(() => { reTimer = null; if (!connected) open(); }, backoff);
-    backoff = Math.min(backoff * 2, 60000);
+    // 已尝试一整轮端点后再退避; 轮内快速切换下一个端点
+    const oneRound = candidates.length <= 1 || (attempts % candidates.length === 0);
+    const delay = oneRound ? backoff : 600;
+    reTimer = setTimeout(() => { reTimer = null; if (!connected) open(); }, delay);
+    if (oneRound) backoff = Math.min(backoff * 2, BACKOFF_MAX);
   }
   function open() {
     if (stopped) return;
-    const base = (cfg.url || "").replace(/\/$/, "");
-    if (!base || !cfg.token || !cfg.session) { lastError = "未配置 relay (url/token/session)"; emitStatus(); return; }
+    if (!candidates.length) candidates = parseCandidates(cfg);
+    if (!candidates.length || !cfg.token || !cfg.session) { lastError = "未配置 relay (url/token/session)"; emitStatus(); return; }
+    const base = candidates[candIdx % candidates.length];
+    attempts++;
     const wsUrl = base.replace(/^http/, "ws") + "/connect?session=" + encodeURIComponent(cfg.session) + "&token=" + encodeURIComponent(cfg.token);
-    try { sock = new WebSocket(wsUrl); } catch (e) { lastError = String((e && e.message) || e); schedule(); return; }
-    sock.onopen = () => {
-      connected = true; backoff = 2000; lastConnectTs = Date.now(); lastError = null; emitStatus();
+    let mySock;
+    try { mySock = new WebSocket(wsUrl); sock = mySock; } catch (e) { lastError = String((e && e.message) || e); candIdx++; probeHealth(base); schedule(); return; }
+    // 连接看门狗: CONNECT_TIMEOUT 内未 open 视为该端点卡死 (GFW 常致 CONNECTING 长挂) → 关闭+切端点+重连
+    if (connectTimer) clearTimeout(connectTimer);
+    connectTimer = setTimeout(() => {
+      connectTimer = null;
+      if (!connected && sock === mySock) {
+        lastError = "连接超时 (" + shortHost(base) + " 无响应)"; probeHealth(base);
+        try { mySock.close(); } catch (e) {}
+        candIdx++; emitStatus(); schedule();
+      }
+    }, CONNECT_TIMEOUT);
+    mySock.onopen = () => {
+      if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+      connected = true; backoff = BACKOFF_MIN; lastConnectTs = Date.now(); lastError = null; activeUrl = base; emitStatus();
       if (pingTimer) clearInterval(pingTimer);
-      pingTimer = setInterval(() => { try { sock.send(JSON.stringify({ type: "ping" })); } catch (e) {} }, 15000);
+      pingTimer = setInterval(() => { try { mySock.send(JSON.stringify({ type: "ping" })); } catch (e) {} }, 15000);
     };
-    sock.onmessage = async (ev) => {
+    mySock.onmessage = async (ev) => {
       let m; try { m = JSON.parse(typeof ev.data === "string" ? ev.data : ""); } catch (e) { return; }
       if (!m || m.type === "pong") return;
       if (m.type === "request" && m.id) {
         lastFrameTs = Date.now();
         const out = await handleFrame(m);
-        try { sock.send(JSON.stringify({ type: "response", id: m.id, status: out.status, body: out.body })); } catch (e) {}
+        try { mySock.send(JSON.stringify({ type: "response", id: m.id, status: out.status, body: out.body })); } catch (e) {}
       }
     };
-    sock.onclose = () => { connected = false; emitStatus(); if (pingTimer) { clearInterval(pingTimer); pingTimer = null; } schedule(); };
-    sock.onerror = () => { lastError = "websocket error"; try { sock.close(); } catch (e) {} };
+    mySock.onclose = () => {
+      if (sock !== mySock) return;
+      const wasConnected = connected; connected = false;
+      if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+      if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+      if (!wasConnected) candIdx++;   // 没连上就掉线 → 换下一个端点
+      emitStatus(); schedule();
+    };
+    mySock.onerror = () => { if (!connected) { lastError = "WSS 握手失败 (" + shortHost(base) + ")"; } try { mySock.close(); } catch (e) {} };
   }
 
   return {
@@ -122,14 +181,20 @@ const DaoRelayApp = (function () {
     setStatusCb(fn) { onStatus = fn; },
     start(config) {
       cfg = Object.assign({}, config);
-      stopped = false; backoff = 2000; clearTimers();
+      stopped = false; backoff = BACKOFF_MIN; candIdx = 0; attempts = 0; activeUrl = null;
+      candidates = parseCandidates(cfg);
+      clearTimers();
       try { if (sock) sock.close(); } catch (e) {}
       open();
       return this.status();
     },
     stop() { stopped = true; clearTimers(); try { if (sock) sock.close(); } catch (e) {} connected = false; emitStatus(); },
-    ensure() { if (!stopped && !connected && !reTimer) open(); },
-    status() { return { connected, session: cfg.session, url: cfg.url, publicEndpoint: cfg.url ? cfg.url.replace(/\/$/, "") + "/relay/" + cfg.session : "", lastError, lastConnectTs, lastFrameTs, cmds: Object.keys(COMMANDS) }; },
+    ensure() { if (!stopped && !connected && !reTimer && !connectTimer) open(); },
+    status() {
+      const primary = activeUrl || candidates[0] || (typeof cfg.url === "string" ? cfg.url.replace(/\/$/, "") : "");
+      return { connected, session: cfg.session, url: primary, activeUrl, candidates: candidates.slice(), attempts,
+        publicEndpoint: primary ? primary + "/relay/" + cfg.session : "", lastError, lastConnectTs, lastFrameTs, cmds: Object.keys(COMMANDS) };
+    },
   };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = { DaoRelayApp };
