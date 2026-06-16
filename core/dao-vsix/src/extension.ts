@@ -1828,10 +1828,9 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                                 else reply({ ok: false, error: 'unknown tab' });
                             } catch (e: any) { reply({ ok: false, error: e.message }); }
                         } else {
-                            const urls: Record<string, string> = { sessions: '/sessions', knowledge: '/knowledge', playbooks: '/playbooks', secrets: '/settings/secrets', integrations: '/settings/integrations', automations: '/settings/automations' };
-                            const targetUrl = DEVIN_APP + (urls[tab] || '');
-                            try { vscode.commands.executeCommand('simpleBrowser.show', targetUrl); } catch { vscode.env.openExternal(vscode.Uri.parse(targetUrl)); }
-                            reply({ type: 'tabData', tab, items: [], error: '已通过 Simple Browser 打开', fallbackProxy: false });
+                            // 道法自然 · 零自动打开: 未登录/无凭证绝不自动弹页 (杜绝首启弹一堆坏页),
+                            // 仅回错误态 → UI 渲染「重试 / 🌐 在 Devin Cloud 中打开」按钮, 由用户手动开页。
+                            reply({ type: 'tabData', tab, items: [], error: '未登录 · 登录后查看或手动打开', fallbackProxy: false });
                         }
                         break;
                     }
@@ -2567,16 +2566,8 @@ function rBridgeFull(){
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeReset&#39;)" title="清除命名隧道→重置为无账号快速隧道">♻ 重置</button>';
     h+='<button class="btn sm danger" onclick="cmd(&#39;bridgeStop&#39;)">⏹ 停止</button></div>';
   }
-  h+='<div class="st" style="margin-top:16px">API 参考</div>';
-  h+='<div class="card" style="font-size:11px;line-height:1.8"><code>Authorization: Bearer &lt;token&gt;</code><br><br>';
-  h+='<table style="width:100%;font-size:11px;border-collapse:collapse">';
-  h+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:2px 4px;color:var(--muted)">GET</td><td>/api/health</td><td style="color:var(--muted)">存活(免鉴权)</td></tr>';
-  h+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:2px 4px;color:var(--muted)">POST</td><td>/api/exec</td><td style="color:var(--muted)">执行命令</td></tr>';
-  h+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:2px 4px;color:var(--muted)">POST</td><td>/api/read</td><td style="color:var(--muted)">读文件</td></tr>';
-  h+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:2px 4px;color:var(--muted)">POST</td><td>/api/write</td><td style="color:var(--muted)">写文件</td></tr>';
-  h+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:2px 4px;color:var(--muted)">POST</td><td>/api/ls</td><td style="color:var(--muted)">列目录</td></tr>';
-  h+='<tr><td style="padding:2px 4px;color:var(--muted)">GET</td><td>/api/bridge-state</td><td style="color:var(--muted)">隧道状态</td></tr>';
-  h+='</table></div>';
+  // 道法自然 · API 参考表本是给 AI 看的 → 已分别落「☁ 云端Agent MD / 💻 本地Agent MD」两份文档,
+  //   面板不再内嵌冗余表格 (为腹不为目)。需要接口清单时点上方两个 MD 按钮即可。
   h+='<div class="st" style="margin-top:16px">Knowledge 自动注入</div>';
   h+='<div class="card"><div class="cr"><span class="l">触发条件</span><span class="v" style="font-size:11px">涉及所有远程操作本地电脑的需求时都触发</span></div>';
   h+='<div class="cr"><span class="l">自动更新</span><span class="v" style="color:var(--success)">✓ 端口/URL变化时自动同步</span></div></div>';
@@ -2909,11 +2900,15 @@ function getPanelState() {
     };
 }
 
-function refreshDaoCloudMiddlePanel() {
-    if (!daoCloudMiddlePanel) return;
-    const data: any = { type: 'init' };
-    data.auth = {
-        loggedIn: !!(ws.devinAuth1 || ws.devinApiKey),
+// 道法自然 · 切号防闪 — 切号瞬间 auth1 短暂为空时, 在宽限窗口内沿用上一就绪态 (标 switching),
+// 杜绝面板在切号过程闪现「未连接」登录页 (此页本不该在切号时出现)。真正登出(宽限外)仍如实显示。
+let _daoAuthSnapshot: any = null;
+let _daoAuthSnapshotAt = 0;
+const DAO_AUTH_GRACE_MS = 12000;
+function daoMiddleAuthPayload(): any {
+    const liveLoggedIn = !!(ws.devinAuth1 || ws.devinApiKey);
+    const live = {
+        loggedIn: liveLoggedIn,
         email: ws.devinEmail || '',
         orgName: ws.devinOrgName || ws.devinOrgSlug || '',
         orgId: ws.devinOrgId || '',
@@ -2924,6 +2919,17 @@ function refreshDaoCloudMiddlePanel() {
         quota: ws.devinQuota,
         injecting: ws.devinInjecting,
     };
+    if (liveLoggedIn) { _daoAuthSnapshot = { ...live }; _daoAuthSnapshotAt = Date.now(); return live; }
+    if (_daoAuthSnapshot && (Date.now() - _daoAuthSnapshotAt) < DAO_AUTH_GRACE_MS) {
+        return { ..._daoAuthSnapshot, switching: true };
+    }
+    return live;
+}
+
+function refreshDaoCloudMiddlePanel() {
+    if (!daoCloudMiddlePanel) return;
+    const data: any = { type: 'init' };
+    data.auth = daoMiddleAuthPayload();
     data.server = {
         port: ws.port,
         relay: ws.relayConnected,
@@ -3044,10 +3050,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     const msgs = await devinGetSessionMessages(ws.devinOrgId, sessionId, ws.devinAuth1);
                     reply({ type: 'sessionDetail', ok: detail.ok, session: detail.session, messages: msgs.ok ? msgs.messages : [] });
                 } else {
-                    const sessionUrl = daoRoutedWebUrl('/sessions/' + sessionId);
-                    try { vscode.commands.executeCommand('simpleBrowser.show', sessionUrl); }
-                    catch { vscode.env.openExternal(vscode.Uri.parse(sessionUrl)); }
-                    reply({ type: 'sessionDetail', ok: true, session: { devin_id: sessionId }, messages: [] });
+                    // 道法自然 · 零自动打开: 无 API 时不自动弹页, 回未就绪态 (用户可手动打开)。
+                    reply({ type: 'sessionDetail', ok: false, session: { devin_id: sessionId }, messages: [] });
                 }
                 break;
             }
