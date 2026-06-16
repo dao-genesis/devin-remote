@@ -403,7 +403,7 @@ export async function activate(context: vscode.ExtensionContext) {
     try {
         const bus = daoOneBus();
         if (bus) {
-            const onSwitch = () => { onRtFlowAccountSwitch().catch(() => {}); };
+            const onSwitch = (payload?: any) => { onRtFlowAccountSwitch(payload).catch(() => {}); };
             bus.on('dao:account', onSwitch);
             context.subscriptions.push({ dispose: () => { try { bus.removeListener('dao:account', onSwitch); } catch { /* 守柔 */ } } });
         }
@@ -4127,6 +4127,17 @@ function loadAccountAuth(email: string): SavedAccountAuth | null {
     return loadAccountsAuthStore()[e] || null;
 }
 
+// 归一·真源 · RT Flow 活跃账号 = 全能板唯一权威账号 (1:1 同步)
+// rt-flow 活跃号写在 ~/.wam/wam-state.json.activeEmail (切号即更新·跨窗口共享)。
+// 全能板据此路由, 而非 IDE vscdb 登录态 — 二者可能错开 → 账号漂移(用户反馈核心缺陷)。
+function getRtFlowActiveEmail(): string {
+    try {
+        const f = path.join(os.homedir(), '.wam', 'wam-state.json');
+        const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+        return (j && typeof j.activeEmail === 'string') ? j.activeEmail.trim().toLowerCase() : '';
+    } catch { return ''; }
+}
+
 // 守柔 · 保留用户操作空间 — 账号同步 / 官网登录 的「自动 | 手动」模式
 function getAccountSyncMode(): 'auto' | 'manual' {
     try { return vscode.workspace.getConfiguration('dao').get<string>('accountSyncMode', 'auto') === 'manual' ? 'manual' : 'auto'; } catch { return 'auto'; }
@@ -4401,6 +4412,13 @@ async function devinAutoChain(): Promise<boolean> {
     } catch { /* 守柔 */ }
     // 即刻反映当前 IDE 账号 — 即便后续换不到 auth1, 面板也显示正确账号(永不串号)
     if (currentIdeEmail) ws.devinEmail = currentIdeEmail;
+
+    // 归一·真源·1:1 · auto 模式下 RT Flow 活跃号为权威键 — 全能板完全跟随切号面板,
+    // 而非 IDE vscdb 登录态(二者可能错开)。manual 模式保留用户自控(单号粘贴不被覆盖)。
+    if (getAccountSyncMode() !== 'manual') {
+        const rtEmail = getRtFlowActiveEmail();
+        if (rtEmail) { currentIdeEmail = rtEmail; ws.devinEmail = rtEmail; }
+    }
 
     // 路径A (最快·自循环): 按邮箱持久化的真 auth1 命中 → 切回旧账号即刻复用, 无需重登
     if (currentIdeEmail) {
@@ -4835,6 +4853,19 @@ function startCredentialSync() {
         try {
             // 守柔 · 手动模式 — 用户自控账号, 停止 IDE 跟随(保留操作空间)
             if (getAccountSyncMode() === 'manual') return;
+            // 归一·真源·1:1 · RT Flow 活跃号变化(跨窗口切号·本窗无进程内总线事件)也即刻跟随
+            const rtEmail = getRtFlowActiveEmail();
+            if (rtEmail && rtEmail !== (ws.devinEmail || '').trim().toLowerCase() && rtEmail !== lastSyncedEmail) {
+                lastSyncedEmail = rtEmail;
+                ws.devinAutoSyncing = true; sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel();
+                const okRt = await devinAutoChain();
+                ws.devinAutoSyncing = false;
+                lastSyncedApiKey = ws.devinApiKey || ws.devinAuth1 || '';
+                lastSyncedEmail = ws.devinEmail || rtEmail;
+                sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); updateStatusBar();
+                if (okRt && ws.port && ws.devinAuth1 && ws.devinOrgId) { await devinFullInject(); sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); }
+                return;
+            }
             // 强制刷新vscdb — 绕过缓存
             const freshCreds = readWindsurfCredentials(true);
             if (!freshCreds) return;
@@ -4918,23 +4949,43 @@ function daoOneBus(): any {
 }
 let _fusionSyncing = false;
 // rt-flow 切号广播 → 即刻跟随同步 (复用 devinAutoChain/devinFullInject, 不改动既有轮询逻辑)
-async function onRtFlowAccountSwitch(): Promise<void> {
+async function onRtFlowAccountSwitch(payload?: { email?: string; auth1?: string; orgId?: string; apiKey?: string; apiServerUrl?: string }): Promise<void> {
     try {
         if (getAccountSyncMode() === 'manual') return; // 单号模式不被覆盖
         if (_fusionSyncing) return;
         _fusionSyncing = true;
-        const fresh = readWindsurfCredentials(true); // rt-flow 已注入新号 session 入 vscdb
+        const pEmail = ((payload && payload.email) || '').trim().toLowerCase();
+        const pAuth1 = (payload && payload.auth1) || '';
         // 清旧态 → 重链 (与轮询成功分支一致)
         ws.devinAuth1 = ''; ws.devinOrgId = ''; ws.devinOrgName = ''; ws.devinOrgSlug = '';
         ws.devinSessionToken = ''; ws.devinApiKey = ''; ws.devinApiServerUrl = '';
         ws.devinAccountId = ''; ws.devinUserId = ''; ws.devinQuota = null; ws.devinEmail = '';
         ws.devinAutoSyncing = true;
         sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel();
-        const ok = await devinAutoChain();
+        let ok = false;
+        // 归一·1:1 直采 · rt-flow 切号广播已携真 auth1 → 全能板即刻路由该号(免 vscdb 竞态/串号)
+        if (pEmail && pAuth1 && payload && payload.orgId && !pAuth1.startsWith('devin-session-token$')) {
+            ws.devinEmail = pEmail; ws.devinAuth1 = pAuth1; ws.devinOrgId = payload.orgId;
+            ws.devinApiKey = payload.apiKey || ''; ws.devinApiServerUrl = payload.apiServerUrl || '';
+            const saved = loadAccountAuth(pEmail);
+            if (saved) {
+                ws.devinOrgName = saved.orgName || ''; ws.devinOrgSlug = saved.orgSlug || '';
+                ws.devinUserId = saved.userId || ''; ws.devinAccountId = saved.accountId || '';
+                if (!ws.devinApiKey) ws.devinApiKey = saved.apiKey || '';
+                if (!ws.devinApiServerUrl) ws.devinApiServerUrl = saved.apiServerUrl || '';
+            }
+            try { const quota = await devinFetchQuota(ws.devinApiKey || ws.devinAuth1); if (quota) ws.devinQuota = quota; } catch { /* 守柔 */ }
+            ws.devinSaveConfig(); saveAccountAuth(pEmail);
+            if (!(ws.devinApiKey || '').startsWith('cog_')) { try { await devinEnsureCogApiKey(ws.devinOrgId, ws.devinAuth1); } catch { /* 守柔 */ } }
+            ok = true;
+        } else {
+            // 兜底: 广播未携完整 auth → 走自动链 (此时 devinAutoChain 已以 rt-flow 活跃号为权威键)
+            ok = await devinAutoChain();
+        }
         ws.devinAutoSyncing = false;
         // 对齐 lastSynced, 避免轮询随后重复触发
-        lastSyncedApiKey = (fresh && fresh.apiKey) || ws.devinApiKey || ws.devinAuth1 || '';
-        lastSyncedEmail = (fresh && fresh.email) || ws.devinEmail || '';
+        lastSyncedApiKey = ws.devinApiKey || ws.devinAuth1 || '';
+        lastSyncedEmail = ws.devinEmail || '';
         sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); updateStatusBar();
         if (ok && ws.port && ws.devinAuth1 && ws.devinOrgId) {
             await devinFullInject();

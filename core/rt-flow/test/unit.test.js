@@ -498,6 +498,27 @@ function test(name, fn) {
     assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 0, "归零阈值默认0(完全归零)");
   });
 
+  // ── 账号 1:1 同步 (dao-vsix 全能板以 RT Flow 活跃号为唯一权威源 · 源级护栏) ──
+  console.log("\n[账号 1:1 同步护栏]");
+  test("dao-vsix: 全能板以 RT Flow 活跃号(wam-state.activeEmail)为权威键, 而非 IDE vscdb", () => {
+    const fs = require("fs");
+    const p = require("path").join(__dirname, "..", "..", "dao-vsix", "src", "extension.js");
+    const alt = require("path").join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts");
+    const src = fs.readFileSync(fs.existsSync(p) ? p : alt, "utf8");
+    assert.ok(/function getRtFlowActiveEmail\(/.test(src), "须有 getRtFlowActiveEmail 读 wam-state.activeEmail");
+    assert.ok(/wam-state\.json/.test(src) && /activeEmail/.test(src), "权威源须为 wam-state.activeEmail");
+    assert.ok(/const rtEmail = getRtFlowActiveEmail\(\);[\s\S]{0,160}currentIdeEmail = rtEmail/.test(src), "devinAutoChain 须以 RT Flow 活跃号覆盖 IDE 邮箱(auto)");
+    assert.ok(/onRtFlowAccountSwitch\(payload/.test(src), "切号广播须把 payload 透传给 onRtFlowAccountSwitch");
+    assert.ok(/pEmail && pAuth1 && payload && payload\.orgId/.test(src), "切号须直采广播携带的真 auth1 (免 vscdb 竞态)");
+  });
+  test("dao-vsix: 1:1 同步守 manual 模式(用户单号粘贴不被 RT Flow 覆盖)", () => {
+    const fs = require("fs");
+    const p = require("path").join(__dirname, "..", "..", "dao-vsix", "src", "extension.js");
+    const alt = require("path").join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts");
+    const src = fs.readFileSync(fs.existsSync(p) ? p : alt, "utf8");
+    assert.ok(/getAccountSyncMode\(\) !== 'manual'[\s\S]{0,200}getRtFlowActiveEmail/.test(src), "auto 模式才以 RT Flow 活跃号覆盖; manual 保留用户自控");
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
