@@ -1,4 +1,4 @@
-# Devin Cloud 手机版 · rt-flow-app (v0.14.2)
+# Devin Cloud 手机版 · rt-flow-app (v0.14.3)
 
 > **唯一的手机端方案**。取代了此前的 `rt-flow-mobile`（MV3 浏览器扩展·Kiwi 已停更）
 > 和 `dao-bridge-android`（Termux Node Agent）。一个 APK 六合一：切号 + 内网穿透 + 网页多实例 + **浏览器自动化** + **手机本体操控** + **渐进式文档**。
@@ -13,7 +13,8 @@
 | **内网穿透** (`relay-app.js` + `RelayService`) | 出站 WSS 连中继，**动态配置**（首次启动在面板填写 url/token/session，存 localStorage + userFile）；50+ RPC 命令远程驱动 |
 | **网页多实例** (`TabActivity`) | 每标签绑定一个账号，`fetch`/`XHR` 注入鉴权头 + `sessionStorage` 隔离登录态 → 多号共存 |
 | **浏览器自动化** (`browse*` RPCs) | 远程操控前台 WebView 标签：列举/打开/关闭/导航/执行JS/提取DOM/读Cookie+Storage/截图/导出MD/页内查找 — 不干扰用户正常使用 |
-| **手机本体操控** (`phone*` RPCs) | 设备信息+手机号/文件系统读写/相册图片列举/剪贴板读写/系统分享/通知/应用列举+启动 |
+| **手机本体操控** (`phone*` RPCs) | 设备信息+手机号/文件系统读写/相册图片列举/剪贴板读写/系统分享/通知/应用列举+启动/电池/WiFi/振动/音量/联系人/短信(OTP)/通话记录 |
+| **系统级接管** (`RtAccessibilityService`) | ADB/scrcpy 级无 root 接管：坐标点击/长按/滑动手势注入 + 返回/主页/最近/通知/锁屏全局操作 + 读屏控件树 + 按文字点击 + 文本输入 + 全屏截图(API30+) |
 | **安全开关** (tunnel.html) | 远程操控默认关闭，穿透面板手动启用；browse*/phone* 全部受此门禁 |
 | **渐进式文档** (`getModuleIndex`/`getModuleDoc`) | 云端 Agent 首次接入拿综合索引，按需加载各模块完整指南 |
 | **文件上传** | `onShowFileChooser` → 系统选择器（含微信/QQ 最近文件） |
@@ -36,6 +37,7 @@ app/src/main/java/ai/devin/rtflow/
 │   ├── 手机操控          phoneDeviceInfo / phoneListFiles / phoneReadFile / phoneListPhotos / phoneClipboard ...
 │   └── 安全开关          remoteOpsEnabled · setRemoteOps / isRemoteOpsEnabled
 ├── HttpBridge.java       原生 HTTP (无 CORS) — 登录/额度/Cloud API 底座
+├── RtAccessibilityService.java  系统级接管 (sInstance) → tap/swipe/longPress/globalAction/dumpScreen/clickText/inputText/takeScreenshot
 └── BootReceiver.java     开机自启
 
 app/src/main/assets/engine/
@@ -107,7 +109,8 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 | v0.13.6 | 布局修复 + 12 项浏览器功能 (前进/后退/桌面UA/无痕/标签概览/下载管理/阅读模式/广告拦截等) |
 | v0.14.0 | 浏览器自动化 (browse* 11 RPCs) + 手机本体操控 (phone* 10 RPCs) + IPC 桥 + 安全开关 + 渐进式文档系统 |
 | v0.14.1 | 高级浏览器自动化 (browse* +8: 点击/填表/等待元素/提交/提取链接+输入/页面信息/滚动) + 高级手机操控 (phone* +4: 电池/WiFi/振动/音量) + getCloudMd/getLocalMd 完整 API 文档 RPC |
-| v0.14.2 | **当前版本**：敏感数据读取 (phone* +5: 联系人/短信收件箱(含OTP)/通话记录 + 运行时权限申请/查询) — 辅助全链路账号注册与验证码读取 |
+| v0.14.2 | 敏感数据读取 (phone* +5: 联系人/短信收件箱(含OTP)/通话记录 + 运行时权限申请/查询) — 辅助全链路账号注册与验证码读取 |
+| v0.14.3 | **当前版本**：ADB/scrcpy 级系统级接管 (AccessibilityService, 无需 root)：phone* +10 — 手势注入(点击/长按/滑动) + 全局操作(返回/主页/最近/通知/锁屏) + 读屏(控件树) + 按文字点击 + 文本输入 + 全屏截图(takeScreenshot) |
 
 ## 取代的旧模块
 

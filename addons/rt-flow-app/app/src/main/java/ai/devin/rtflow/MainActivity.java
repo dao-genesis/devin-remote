@@ -2379,6 +2379,15 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) { return false; }
     }
 
+    /** 打开系统无障碍设置页 (引导用户开启 RtAccessibilityService) */
+    public void ipcOpenA11ySettings() {
+        try {
+            Intent i = new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {}
+    }
+
     /** 运行时申请联系人/短信/通话记录敏感权限 (UI 线程弹窗) */
     public void ipcRequestPhonePerms() {
         try {
