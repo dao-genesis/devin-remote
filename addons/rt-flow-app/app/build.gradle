@@ -14,10 +14,20 @@ android {
         versionName "0.15.1"
     }
 
+    signingConfigs {
+        // 自分发稳定签名: 提交到仓库的固定 keystore, 保证任意机器/CI 构建的 APK
+        // 签名一致 -> Android 自更新不会因签名不符被拒 (调试级密钥, 仅用于侧载分发)。
+        rtflow {
+            storeFile file("../release.keystore")
+            storePassword "devincloud"
+            keyAlias "devincloud"
+            keyPassword "devincloud"
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.rtflow
         }
     }
     compileOptions {
