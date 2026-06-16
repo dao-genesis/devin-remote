@@ -2,7 +2,7 @@
 	"name": "rt-flow",
 	"displayName": "Runtime Flow",
 	"description": "Runtime flow management · adaptive scheduling · 三板块统一: Cascade + Devin Cloud + Git(GitHub PAT 归一连接)",
-	"version": "4.8.3",
+	"version": "4.8.5",
 	"publisher": "devaid",
 	"repository": {
 		"type": "git",
@@ -285,6 +285,11 @@
 					"type": "number",
 					"default": 1,
 					"description": "第五板块 · Devin Cloud 运行中对话轮询周期 (分钟·0=关闭). 仅轮询已登录账号"
+				},
+				"wam.devinCloudLeaseTtlMs": {
+					"type": "number",
+					"default": 75000,
+					"description": "v4.8.4 · 跨窗口选主租约有效期 (毫秒·最小30000). 同机多窗口仅当选的「主窗口」执行全局网络扫描(轮询/预加载/备份), 主窗口每 TTL/2 续租; 关窗即释放, 崩溃则过期后由其余窗口接管. 根治多窗口 NAT/conntrack 并发风暴"
 				},
 				"wam.devinCloudStallAlert": {
 					"type": "boolean",

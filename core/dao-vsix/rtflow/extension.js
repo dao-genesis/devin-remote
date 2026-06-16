@@ -4287,7 +4287,8 @@ function _isValidAutoTarget(i) {
       ? !!_cfg("creditsBypassQuotaGate", false)
       : false;
   if (_creditsBypass && _hasUsableCredits(h)) return true;
-  if (h.planEnd > 0 && h.planEnd < Date.now()) return false;
+  // v4.8.5 · 去除"过期即排除"硬门槛 · Free 试用 planEnd 过期但 D/W 仍可用 → 不应排除
+  //   真不可用由下方 D/W 最低门槛与双零守门拦截; 真不可登录由黑名单(banned)拦截
   const _drought = isWeeklyDrought();
   // v3.8.4 · 绝对最低门槛 (高于临期感知 · 不论临期与否均拒绝)
   //   根因: 临期感知会放行 effQ>0 的临期号 · 但 D<5 或 W≤3 的账号实际无法提供有效额度
@@ -4309,7 +4310,8 @@ function _isValidAutoTarget(i) {
   //   注: 临期号已通过上方绝对门槛 (D≥5 且 W>3) · 确保真有可用额度
   const _expiryFirst =
     typeof _cfg === "function" ? !!_cfg("expiryFirst", true) : true;
-  if (_expiryFirst && h.planEnd > 0 && h.daysLeft < 7 && _effQ > 0) return true;
+  if (_expiryFirst && h.planEnd > Date.now() && h.daysLeft < 7 && _effQ > 0)
+    return true;
   return false;
 }
 
@@ -5565,8 +5567,8 @@ class Store {
       return _applyInUse(s);
     }
 
-    // ═══ 过期排除 (v3.3.1 · planEnd 已过 → 号失效 → -∞ 不浪费切号) ═══
-    if (h.planEnd > 0 && h.planEnd < Date.now()) return -Infinity;
+    // v4.8.5 · 去除"过期排除" · planEnd 过期但 D/W 仍可用(如 Free 池续配)→ 按真实额度评分, 不再 -∞
+    //   真耗尽由下方双零/最低门槛拦截; 真不可登录由黑名单拦截
     // ═══ 临期主导加成 (v3.3.1 · 反者道之动 · 不用即废先消耗) ═══
     //   (60 - daysLeft) × 2000 · 1日差=2000 > quota 最大差 ~1880 → 临期主导
     //   daysLeft≥60 或 planEnd=0(永久/Pro): bonus=0 · 与 v3.3.0 同
@@ -5574,7 +5576,9 @@ class Store {
     const expiryFirst =
       typeof _cfg === "function" ? !!_cfg("expiryFirst", true) : true;
     const expBonus =
-      expiryFirst && h.planEnd > 0 ? Math.max(0, (60 - h.daysLeft) * 2000) : 0;
+      expiryFirst && h.planEnd > Date.now()
+        ? Math.max(0, (60 - h.daysLeft) * 2000)
+        : 0;
 
     // ═══ 第二层 · 📊 百分比池 (v3.4.1 · 临期主导 + 额度次排 · 唯变所适) ═══
     //   v3.4.1 核心变更: effQ<threshold 且 daysLeft<7 且 effQ>0 → 仍加 expBonus
@@ -5584,7 +5588,7 @@ class Store {
     const _threshold =
       typeof _cfg === "function" ? +_cfg("autoSwitchThreshold", 5) || 5 : 5;
     const _isExpiryRescue =
-      expiryFirst && h.planEnd > 0 && h.daysLeft < 7 && effQ > 0;
+      expiryFirst && h.planEnd > Date.now() && h.daysLeft < 7 && effQ > 0;
 
     // v15.0 (3.11.6) · 道法自然 · 与 _isValidAutoTarget 一以贯之
     //   credits 旁路开关 (默 false · 严守 quota%)
@@ -7826,29 +7830,21 @@ function _isTrialLike(h) {
 //     Trial 脏数据 (Trial 且 planEnd=0):    "Trial?" 黄 · tooltip 提示重验
 //     永久 (其它 · planEnd=0 已验):         "∞" 灰 · Pro/Free 或后端缺字段
 function _buildExpTag(h) {
+  // v4.8.5 · 道法自然 · 去"过期"语义 · 账号能登录即发亮 · 不以有效期判死
+  //   旧法之患: Free 试用 planEnd 过期即标红"已过期" · 但 D/W=100 仍完全可用 → 误导
+  //   新法: 未来到期显绿色"N天"(正向信息) · 已过/无 planEnd 一律 ∞ 发亮 · 永不显"已过期"
   if (!h || !h.checked) {
-    return '<span class="days" style="color:#555" title="未验·点🔍获取剩余有效期">?天</span>';
+    return '<span class="days" style="color:#888" title="点🔍刷新有效期 ∞">∞</span>';
   }
   const now = Date.now();
   const planEnd = _parseTimeMs(h.planEnd);
-  const daysLeft =
-    planEnd > 0 ? _calcDaysLeft(planEnd, now) : Number(h.daysLeft) || 0;
   if (planEnd > now) {
-    const ec = daysLeft <= 2 ? "#f44" : daysLeft <= 5 ? "#ce9178" : "#4ec9b0";
+    const daysLeft = _calcDaysLeft(planEnd, now);
     const dStr = _formatExpiryTime(planEnd);
     const remain = _formatDurationMs(planEnd - now);
-    return `<span class="days" style="color:${ec}" title="到期: ${_esc(dStr)} · 剩 ${daysLeft} 天 · ${_esc(remain)}">${daysLeft}天</span>`;
+    return `<span class="days" style="color:#4ec9b0" title="到期: ${_esc(dStr)} · 剩 ${daysLeft} 天 · ${_esc(remain)}">${daysLeft}天</span>`;
   }
-  if (planEnd > 0) {
-    const dStr = _formatExpiryTime(planEnd);
-    const ago = _formatDurationMs(now - planEnd);
-    return `<span class="days" style="color:#f44" title="Trial 已过期 (${_esc(dStr)} · 已过 ${_esc(ago)})">已过期</span>`;
-  }
-  // planEnd==0 且 checked · 判 Trial 脏数据还是真 Pro 永久
-  if (_isTrialLike(h)) {
-    return '<span class="days" style="color:#d4c05a" title="Trial 剩余天数未知·点🔍重新验证">Trial?</span>';
-  }
-  return '<span class="days" style="color:#888" title="无 Plan 到期·Pro 永久或字段缺">∞</span>';
+  return '<span class="days" style="color:#888" title="无到期限制 · 账号可用即发亮 ∞">∞</span>';
 }
 
 function buildHtml() {
@@ -7930,28 +7926,16 @@ function buildHtml() {
       h.staleMin >= 0 && h.staleMin <= 3
         ? '<span class="fresh">&#8226;</span>'
         : "";
-    // v2.4.0 · stale 标记 · 不骗人 · h.staleHours 已含值
-    //   知止可以不殆: endpoint 挂时所有号都陈年 · 每行显 stale 无意义
-    //   改策略: endpoint dead 时不显单行 stale (顶部红条已告) · 只在少数号陈年时显
+    // v4.8.5 · 去除"陈年 / Nh前"标记 · 数据新鲜度不再使账号变灰 (endpoint 挂仍由顶部红条提示)
     let staleTag = "";
     let isStaleRow = false;
-    const endpointDead = _quotaEndpointDead();
-    if (!endpointDead && h.checked) {
-      if (h.staleHours >= 48) {
-        staleTag = `<span class="stale-old" title="数据极陈年 · ${h.staleHours} 小时前 · 用 wam.refreshAll 更新">陈年</span>`;
-        isStaleRow = true;
-      } else if (h.staleHours >= 12) {
-        staleTag = `<span class="stale" title="数据已老 · ${h.staleHours} 小时前">${h.staleHours}h前</span>`;
-        isStaleRow = true;
-      }
-    }
     rows += `
-    <div class="row${isActive ? " act" : ""}${isBanned ? " banned" : ""}${isInUse ? " inuse" : ""}${!claudeOk && h.checked ? " expired-row" : ""}${isStaleRow ? " is-stale" : ""}" data-i="${i}" data-email="${_esc(a.email.toLowerCase())}">
+    <div class="row${isActive ? " act" : ""}${isBanned ? " banned" : ""}${isInUse ? " inuse" : ""}" data-i="${i}" data-email="${_esc(a.email.toLowerCase())}">
       <input type="checkbox" class="chk" data-i="${i}" />
       <span class="acc-no" title="账号编号 ${i + 1} · 对话追踪中 Devin Cloud 对话用此编号区分">${i + 1}</span>
       <span class="dm ${domainBadge}" title="${_esc(domain)}">${domainBadge}</span>
       <span class="em" title="${_esc(a.email)}">${_esc(emailShort)}</span>
-      ${expTag}${planTag}${h.checked && h.overageDollars > 0 ? (h.staleHours >= 6 ? `<span class="eua-stale" title="Extra Usage $${h.overageDollars.toFixed(0)} · 数据${h.staleHours}h前(可能已消耗·建议重验)">$${Math.round(h.overageDollars)}?</span>` : `<span class="eua" title="Extra Usage Active · $${h.overageDollars.toFixed(0)} · Cascade quota=0时仍完全可用${h.staleHours >= 1 ? " · " + h.staleHours + "h前验" : ""}">$${Math.round(h.overageDollars)}</span>`) : ""}${h.checked && !h.overageDollars ? `<span class="eua0" title="已验 · 无Extra Usage余额">$0</span>` : ""} ${claudeTag}${bnTag}${iuTag}${staleTag}${freshTag}${liveTag}${ucTag}
+      ${expTag}${planTag}${h.checked && h.overageDollars > 0 ? `<span class="eua" title="Extra Usage Active · $${h.overageDollars.toFixed(0)} · Cascade quota=0时仍完全可用">$${Math.round(h.overageDollars)}</span>` : ""}${h.checked && !h.overageDollars ? `<span class="eua0" title="已验 · 无Extra Usage余额">$0</span>` : ""} ${claudeTag}${bnTag}${iuTag}${staleTag}${freshTag}${liveTag}${ucTag}
       <span class="qt">
         <span class="mb"><span class="mf" style="width:${dPct}%;background:${dC}"></span></span>
         <span class="ql" style="color:${dC}">${isU ? "D?" : "D" + dPct}</span>
@@ -8009,15 +7993,7 @@ function buildHtml() {
     // v2.4.13 · planEnd=0 (Trial proto3 omit) 时 fallback 显 weekly 重置倒计时
     let planExpiryTag = "";
     if (ah.planEnd > Date.now()) {
-      const ec =
-        ah.daysLeft <= 2
-          ? "var(--red)"
-          : ah.daysLeft <= 5
-            ? "var(--orange)"
-            : "var(--green)";
-      planExpiryTag = ` <span style="color:${ec}" title="到期: ${_esc(_formatExpiryTime(ah.planEnd))} · 剩 ${ah.daysLeft} 天 · ${_esc(_formatDurationMs(ah.planEnd - Date.now()))}">${ah.daysLeft}天</span>`;
-    } else if (ah.planEnd > 0) {
-      planExpiryTag = ` <span style="color:var(--red)" title="到期: ${_esc(_formatExpiryTime(ah.planEnd))}">已过期</span>`;
+      planExpiryTag = ` <span style="color:var(--green)" title="到期: ${_esc(_formatExpiryTime(ah.planEnd))} · 剩 ${ah.daysLeft} 天 · ${_esc(_formatDurationMs(ah.planEnd - Date.now()))}">${ah.daysLeft}天</span>`;
     } else if (ah.weeklyResetAt && ah.weeklyResetAt > Date.now()) {
       // Trial 号无 planEnd · 用 weeklyResetAt 倒计时作有效期提示
       const hrs = Math.max(
@@ -8490,6 +8466,175 @@ const _dvStatusAgg = new Map();
 const _dvEmptySince = new Map();
 const DV_STATUS_STICKY_MS = 90000; // 维持已知状态的宽限窗(默 90s ≈ 跨 1~2 个轮询周期)
 let _dvPreloadTimer = null;
+
+// ═══ v4.8.4 · 跨窗口选主 (singleton sweeps · 釜底抽薪根治多窗口网络并发风暴) ═══
+//   病因: 同机多个 IDE 窗口各是独立扩展宿主进程, 每个都无条件地周期性对【整个账号池
+//   (~数百个)】做 登录/状态轮询(_dvRunPoll)/预加载(_dvPreloadAll)/云端备份(_dvStartAuto)。
+//   N 个窗口 = N 倍出网扇出, 开机瞬间拉起几百条 TLS 短连接 + 高 TIME_WAIT churn,
+//   把家用路由器 NAT/conntrack 连接表打满 → 不只本机, 整个局域网一起丢包卡顿。
+//   (devin_cloud.js 仅收敛了【单进程】socket 预算, 未消除【多窗口=多进程】这个倍增源。)
+//   治法 (天下之至柔·绝利一源): 用心跳租约文件选出唯一「主窗口」执行全局网络扫描,
+//   主窗口把聚合状态写入共享文件, 其余窗口读共享文件渲染面板/角标 → 功能完全不变,
+//   网络并发 ÷ 窗口数; 主窗口关闭/崩溃后, 其余窗口在租约过期后自动接管。
+const DV_LEASE_FILE = path.join(WAM_DIR, "_dv_poll_lease.json"); // 主窗口心跳租约
+const DV_STATUS_FILE = path.join(WAM_DIR, "_dv_status.json"); // 主窗口写·跟随窗口读 (聚合状态)
+const _dvInstanceId =
+  String(process.pid) + "-" + Math.random().toString(36).slice(2, 8); // 本窗口唯一标识
+let _dvIsLeader = false; // 本窗口当前是否为主窗口
+let _dvLeaseTimer = null; // 选主/续租心跳定时器
+let _dvPollTimer = null; // _dvRunPoll 周期定时器 (仅主窗口持有)
+let _dvFollowerWatching = false; // 跟随窗口是否已在监听共享状态文件
+function _dvLeaseTtlMs() {
+  // 租约有效期 (默 75s ≈ 跨 1~2 个轮询周期); 主窗口每 TTL/2 续租一次, 过期即可被接管。
+  return Math.max(30000, +_cfg("devinCloudLeaseTtlMs", 75000) || 75000);
+}
+function _dvLeaseRead() {
+  try {
+    return JSON.parse(fs.readFileSync(DV_LEASE_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+// 尝试当选/续租: 无租约 或 租约已过期 或 本就是自己 → 写入并复读确认 (last-writer-wins, 自愈)。
+function _dvTryBecomeLeader() {
+  const ttl = _dvLeaseTtlMs();
+  const now = Date.now();
+  const cur = _dvLeaseRead();
+  const fresh = cur && cur.ts && now - cur.ts < ttl;
+  if (fresh && cur.owner !== _dvInstanceId) return false; // 他人持新鲜租约 → 当跟随
+  try {
+    atomicWrite(
+      DV_LEASE_FILE,
+      JSON.stringify({ owner: _dvInstanceId, pid: process.pid, ts: now }),
+    );
+  } catch {
+    return _dvIsLeader; // 写失败 → 维持原状态
+  }
+  const after = _dvLeaseRead(); // 复读: 并发写入时仅最后写入者胜出
+  return !!(after && after.owner === _dvInstanceId);
+}
+function _dvLeaseRelease() {
+  const cur = _dvLeaseRead();
+  if (cur && cur.owner === _dvInstanceId) {
+    try {
+      fs.unlinkSync(DV_LEASE_FILE);
+    } catch {}
+  }
+}
+// 主窗口启动全局网络扫描 (幂等)
+function _dvLeaderStartSweeps() {
+  if (_cfg("devinCloudAutoBackup", true)) _dvStartAuto();
+  const pollMin = Math.max(0, _cfg("devinCloudRunPollMin", 1));
+  if (pollMin > 0 && !_dvPollTimer) {
+    _dvPollTimer = setInterval(() => {
+      if (!_dvIsLeader) return; // 二重保险: 失主后即便定时器残留也空跑
+      _dvRunPoll().catch(() => {});
+    }, pollMin * 60000);
+  }
+  _dvStartPreload();
+  if (_cfg("devinCloudConvQuotaCap", false)) _dvConvCapSchedule();
+}
+// 让出主窗口 → 停止全局网络扫描 (转为跟随·只读共享状态)
+function _dvLeaderStopSweeps() {
+  _dvStopAuto();
+  if (_dvPollTimer) {
+    clearInterval(_dvPollTimer);
+    _dvPollTimer = null;
+  }
+  _dvStopPreload();
+  try {
+    _dvConvCapStop();
+  } catch {}
+}
+// 主窗口把聚合状态写入共享文件 (跟随窗口据此渲染·功能不变)
+function _dvWriteSharedStatus() {
+  try {
+    const agg = [];
+    for (const [k, v] of _dvStatusAgg) agg.push([k, v]);
+    atomicWrite(
+      DV_STATUS_FILE,
+      JSON.stringify({ ts: Date.now(), by: _dvInstanceId, agg }),
+    );
+  } catch {}
+}
+// 跟随窗口: 读共享状态文件 → 渲染面板/角标 (与 _dvRunPoll 末尾同口径·不发起网络)
+function _dvRenderFromShared() {
+  try {
+    const j = JSON.parse(fs.readFileSync(DV_STATUS_FILE, "utf8"));
+    if (!j || !Array.isArray(j.agg)) return;
+    _dvStatusAgg.clear();
+    for (const [k, v] of j.agg) if (k && v) _dvStatusAgg.set(k, v);
+    const items = [];
+    for (const [_em, _st] of _dvStatusAgg) {
+      if (!_st || (_st.total | 0) <= 0) continue;
+      if (Date.now() - _st.ts > 180000) continue;
+      items.push({
+        email: _em,
+        running: _st.running,
+        awaiting: _st.awaiting,
+        blocked: _st.blocked,
+        titles: (_st.items || []).map((x) => x.title),
+      });
+    }
+    _broadcastMsg({ type: "devinRunStatus", items });
+    try {
+      _broadcastConvSection();
+    } catch {}
+  } catch {}
+}
+function _dvStartFollowerWatch() {
+  if (_dvFollowerWatching) return;
+  _dvFollowerWatching = true;
+  try {
+    fs.watchFile(DV_STATUS_FILE, { persistent: false, interval: 2000 }, () =>
+      _dvRenderFromShared(),
+    );
+  } catch {}
+  _dvRenderFromShared(); // 立即渲染一次当前共享状态
+}
+function _dvStopFollowerWatch() {
+  if (!_dvFollowerWatching) return;
+  _dvFollowerWatching = false;
+  try {
+    fs.unwatchFile(DV_STATUS_FILE);
+  } catch {}
+}
+// 选主心跳: 当选则跑全局扫描·落选则转跟随 (每 TTL/2 续租/重选)
+function _dvElectionTick() {
+  const was = _dvIsLeader;
+  _dvIsLeader = _dvTryBecomeLeader();
+  if (_dvIsLeader && !was) {
+    log("devin-cloud: 本窗口当选轮询主窗口 (singleton·id=" + _dvInstanceId + ")");
+    _dvStopFollowerWatch();
+    _dvLeaderStartSweeps();
+  } else if (!_dvIsLeader && was) {
+    log("devin-cloud: 让出轮询主窗口 → 转跟随 (读共享状态·停本窗口网络扫描)");
+    _dvLeaderStopSweeps();
+    _dvStartFollowerWatch();
+  } else if (!_dvIsLeader && !was) {
+    _dvStartFollowerWatch(); // 持续跟随
+  }
+}
+function _dvStartElection(context) {
+  _dvElectionTick(); // 立即选一次
+  if (!_dvLeaseTimer) {
+    _dvLeaseTimer = setInterval(
+      _dvElectionTick,
+      Math.max(15000, Math.floor(_dvLeaseTtlMs() / 2)),
+    );
+  }
+  context.subscriptions.push({
+    dispose: () => {
+      if (_dvLeaseTimer) {
+        clearInterval(_dvLeaseTimer);
+        _dvLeaseTimer = null;
+      }
+      _dvLeaderStopSweeps();
+      _dvStopFollowerWatch();
+      _dvLeaseRelease(); // 关窗即让出 → 其余窗口立即可接管 (不必等租约过期)
+    },
+  });
+}
 // v4.7.4 · 账号编号 (1-based · 与侧栏勾选框旁编号一致): email.lower → 序号; 用于对话追踪区分 Devin Cloud 各账号。
 function _dvAccountNo(email) {
   if (!_store || !_store.accounts) return 0;
@@ -8790,6 +8935,7 @@ async function _dvRunPoll() {
       });
     }
     _broadcastMsg({ type: "devinRunStatus", items });
+    _dvWriteSharedStatus(); // v4.8.4 · 落盘共享 → 其余窗口(跟随)据此渲染·不重复发起网络
     // v4.7.7 · 实时进展摘要 (每轮末聚合, 供面板/终报使用)
     const prog = _dvProgressSummary();
     if (prog.totalActive > 0) log("dv-progress: " + prog.totalRunning + " run / " + prog.totalAwaiting + " wait / " + prog.totalBlocked + " blocked / " + prog.totalStalled + " stall · health=" + prog.health);
@@ -8933,10 +9079,10 @@ async function _dvPreloadAll(opts) {
 function _dvStartPreload() {
   if (!_cfg("devinCloudPreload", true)) return;
   // 启动后延迟首次预加载 (避开冷启动登录风暴 · 让切号/验证先行)
-  setTimeout(() => { _dvPreloadAll().catch(() => {}); }, 6000);
+  setTimeout(() => { if (_dvIsLeader) _dvPreloadAll().catch(() => {}); }, 6000); // v4.8.4 · 仅主窗口
   const refreshMin = Math.max(0, +_cfg("devinCloudPreloadRefreshMin", 5) || 0);
   if (refreshMin > 0 && !_dvPreloadTimer) {
-    _dvPreloadTimer = setInterval(() => { _dvPreloadAll().catch(() => {}); }, refreshMin * 60000);
+    _dvPreloadTimer = setInterval(() => { if (_dvIsLeader) _dvPreloadAll().catch(() => {}); }, refreshMin * 60000); // v4.8.4 · 仅主窗口
     log("devin-cloud: 预加载增量刷新定时器 · " + refreshMin + "min");
   }
 }
@@ -9095,6 +9241,7 @@ function _dvStartAuto() {
   // 扇出叠加把家用路由器 NAT 打满。首次延迟随机散布在 [0, period), 之后每周期再加 ±10% 抖动。
   const jitter = () => Math.floor(periodMs * 0.1 * (Math.random() * 2 - 1));
   const tick = () => {
+    if (!_dvIsLeader) { _dvAutoTimer = null; return; } // v4.8.4 · 仅主窗口备份 (失主即停)
     _dvAutoBackupRun().catch(() => {});
     _dvAutoTimer = setTimeout(tick, Math.max(60000, periodMs + jitter()));
   };
@@ -12488,20 +12635,11 @@ async function activate(context) {
 
   // ── 第五板块 · Devin Cloud 初始化 (运行状态轮询 + 自动备份 + 全账号预加载) ──
   try {
-    if (_cfg("devinCloudAutoBackup", true)) _dvStartAuto();
-    const pollMin = Math.max(0, _cfg("devinCloudRunPollMin", 1));
-    if (pollMin > 0) {
-      const dvT = setInterval(() => _dvRunPoll().catch(() => {}), pollMin * 60000);
-      context.subscriptions.push({ dispose: () => clearInterval(dvT) });
-    }
-    context.subscriptions.push({ dispose: () => _dvStopAuto() });
-    // v4.6.0 · 全账号预加载 + 增量刷新 (问题②: 概览秒开·问题①: 全账号实时状态)
-    _dvStartPreload();
-    context.subscriptions.push({ dispose: () => _dvStopPreload() });
-    // v4.5.0 · 对话额度上限调度 (开启时自适应轮询·使用中提速·空闲降速)
-    if (_cfg("devinCloudConvQuotaCap", false)) _dvConvCapSchedule();
-    context.subscriptions.push({ dispose: () => _dvConvCapStop() });
-    log("devin-cloud: 第五板块就绪 · autoBackup=" + _cfg("devinCloudAutoBackup", true) + " pollMin=" + pollMin + " preload=" + _cfg("devinCloudPreload", true) + " convCap=" + _cfg("devinCloudConvQuotaCap", false));
+    // v4.8.4 · 跨窗口选主 (singleton): 全局网络扫描(轮询/预加载/备份/额度调度)只由当选的
+    //   「主窗口」执行, 其余窗口读共享状态文件渲染 → 功能不变·网络并发 ÷ 窗口数 (根治多窗口
+    //   conntrack 风暴)。启停由 _dvStartElection 内的选主心跳统一管理 (见 _dvLeaderStartSweeps)。
+    _dvStartElection(context);
+    log("devin-cloud: 第五板块就绪 (singleton 选主) · autoBackup=" + _cfg("devinCloudAutoBackup", true) + " pollMin=" + Math.max(0, _cfg("devinCloudRunPollMin", 1)) + " preload=" + _cfg("devinCloudPreload", true) + " convCap=" + _cfg("devinCloudConvQuotaCap", false));
   } catch (e) {
     log("devin-cloud init err: " + ((e && e.message) || e));
   }
