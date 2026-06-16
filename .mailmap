@@ -1,0 +1,4 @@
+# .mailmap — 归并提交作者身份显示（不改写历史，仅影响 git log/shortlog 与 GitHub 的 Contributors 归并）
+# 把一个早期的孤儿提交（已删除的 rt-flow-mobile 模块）归并到仓库属主名下，
+# 使其不再作为独立贡献者出现。语法: 正名 <正邮> 提交名 <提交邮>
+zhouyoukang1234-spec <zhouyoukang1234@gmail.com> Hernandez Perez <jannetpauls8724467@gmail.com>
