@@ -4287,7 +4287,8 @@ function _isValidAutoTarget(i) {
       ? !!_cfg("creditsBypassQuotaGate", false)
       : false;
   if (_creditsBypass && _hasUsableCredits(h)) return true;
-  if (h.planEnd > 0 && h.planEnd < Date.now()) return false;
+  // v4.8.5 · 去除"过期即排除"硬门槛 · Free 试用 planEnd 过期但 D/W 仍可用 → 不应排除
+  //   真不可用由下方 D/W 最低门槛与双零守门拦截; 真不可登录由黑名单(banned)拦截
   const _drought = isWeeklyDrought();
   // v3.8.4 · 绝对最低门槛 (高于临期感知 · 不论临期与否均拒绝)
   //   根因: 临期感知会放行 effQ>0 的临期号 · 但 D<5 或 W≤3 的账号实际无法提供有效额度
@@ -4309,7 +4310,8 @@ function _isValidAutoTarget(i) {
   //   注: 临期号已通过上方绝对门槛 (D≥5 且 W>3) · 确保真有可用额度
   const _expiryFirst =
     typeof _cfg === "function" ? !!_cfg("expiryFirst", true) : true;
-  if (_expiryFirst && h.planEnd > 0 && h.daysLeft < 7 && _effQ > 0) return true;
+  if (_expiryFirst && h.planEnd > Date.now() && h.daysLeft < 7 && _effQ > 0)
+    return true;
   return false;
 }
 
@@ -5565,8 +5567,8 @@ class Store {
       return _applyInUse(s);
     }
 
-    // ═══ 过期排除 (v3.3.1 · planEnd 已过 → 号失效 → -∞ 不浪费切号) ═══
-    if (h.planEnd > 0 && h.planEnd < Date.now()) return -Infinity;
+    // v4.8.5 · 去除"过期排除" · planEnd 过期但 D/W 仍可用(如 Free 池续配)→ 按真实额度评分, 不再 -∞
+    //   真耗尽由下方双零/最低门槛拦截; 真不可登录由黑名单拦截
     // ═══ 临期主导加成 (v3.3.1 · 反者道之动 · 不用即废先消耗) ═══
     //   (60 - daysLeft) × 2000 · 1日差=2000 > quota 最大差 ~1880 → 临期主导
     //   daysLeft≥60 或 planEnd=0(永久/Pro): bonus=0 · 与 v3.3.0 同
@@ -5574,7 +5576,9 @@ class Store {
     const expiryFirst =
       typeof _cfg === "function" ? !!_cfg("expiryFirst", true) : true;
     const expBonus =
-      expiryFirst && h.planEnd > 0 ? Math.max(0, (60 - h.daysLeft) * 2000) : 0;
+      expiryFirst && h.planEnd > Date.now()
+        ? Math.max(0, (60 - h.daysLeft) * 2000)
+        : 0;
 
     // ═══ 第二层 · 📊 百分比池 (v3.4.1 · 临期主导 + 额度次排 · 唯变所适) ═══
     //   v3.4.1 核心变更: effQ<threshold 且 daysLeft<7 且 effQ>0 → 仍加 expBonus
@@ -5584,7 +5588,7 @@ class Store {
     const _threshold =
       typeof _cfg === "function" ? +_cfg("autoSwitchThreshold", 5) || 5 : 5;
     const _isExpiryRescue =
-      expiryFirst && h.planEnd > 0 && h.daysLeft < 7 && effQ > 0;
+      expiryFirst && h.planEnd > Date.now() && h.daysLeft < 7 && effQ > 0;
 
     // v15.0 (3.11.6) · 道法自然 · 与 _isValidAutoTarget 一以贯之
     //   credits 旁路开关 (默 false · 严守 quota%)
