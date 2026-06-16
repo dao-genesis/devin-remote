@@ -70,7 +70,7 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <!-- 模块1.5: 动态穿透配置 (每设备独立·非固定) -->
 <div class="section">
 <h3>🔧 穿透配置 · 每设备独立（动态）</h3>
-<div class="muted">中继地址/Token/Session 不再写死。每台设备首次启动可在此自行配置，保存后立即重连。优先级：本地配置 &gt; 内置 conn.json。<br><b>国内无 VPN 连不上？</b> <code>*.workers.dev</code> 常被运营商屏蔽。可在 URL 框填<b>多个端点（逗号/空格/换行分隔）</b>，客户端自动逐个尝试、择优连通——把你给中继绑定的<b>自有域名</b>放在前面即可国内直连。</div>
+<div class="muted">中继地址/Token/Session 不再写死。每台设备首次启动可在此自行配置，保存后立即重连。优先级：本地配置 &gt; 内置 conn.json。<br>⚠️ <b>连不上隧道？请先开启 VPN/科学上网再连。</b>中继域名 <code>*.workers.dev</code> 在国内会被网络屏蔽，无 VPN 时任何设备都无法连通。（进阶：URL 框可填多个端点，逗号/空格/换行分隔，客户端自动逐个择优连通。）</div>
 <input id="cfgUrl" placeholder="中继 URL（可填多个，逗号/换行分隔）· 如 https://relay.你的域名.com, https://xxx.workers.dev">
 <input id="cfgToken" type="password" placeholder="Bearer Token">
 <input id="cfgSession" placeholder="Session ID · 如 my-phone-session">

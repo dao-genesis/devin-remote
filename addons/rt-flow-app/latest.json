@@ -1,6 +1,6 @@
 {
-  "versionCode": 29,
-  "versionName": "0.14.8",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.14.8/DevinCloud-mobile-v0.14.8.apk",
-  "notes": "v0.14.8\n· 内网穿透稳健性: 连接看门狗(治国内 GFW 长挂) + 多端点自动故障转移(url 可填多个) + 健康探测细化诊断\n· 穿透面板改版: 复制URL/Token 合并为「复制接入信息」; 4个MD文档按钮拉到第一页主页\n· 国内无 VPN 无感穿透(配合自有域名端点)"
+  "versionCode": 30,
+  "versionName": "0.14.9",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.14.9/DevinCloud-mobile-v0.14.9.apk",
+  "notes": "v0.14.9\n· 去除网页下拉刷新(修复 Devin 对话页无法上下滑动); 刷新走右上角按钮\n· 自动更新自动弹「允许安装未知应用」本应用开关页 + 返回自动续装(零再触发)\n· 国内连不上隧道时直接提示「请开启 VPN/科学上网」(不再让人困惑)"
 }

@@ -55,8 +55,8 @@ const DaoRelayApp = (function () {
       const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
       if (ctrl) setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 5000);
       fetch(base + "/health", { method: "GET", signal: ctrl ? ctrl.signal : undefined })
-        .then((r) => { if (!connected) { lastError = r && r.ok ? "中继可达但 WSS 握手失败 (网络可能拦截 WebSocket 升级; 可尝试切换网络/换自有域名端点)" : ("中继返回 " + (r && r.status) + " (检查 token/session)"); emitStatus(); } })
-        .catch(() => { if (!connected) { lastError = "中继不可达: " + shortHost(base) + " (DNS/网络被拦截, 国内无 VPN 常因 workers.dev 被屏蔽 → 建议为中继绑定自有域名并填入)"; emitStatus(); } });
+        .then((r) => { if (!connected) { lastError = r && r.ok ? "⚠️ 中继可达但 WSS 握手被拦截 → 请开启 VPN/科学上网后重连 (国内网络常拦截 WebSocket 升级)" : ("中继返回 " + (r && r.status) + " (请检查 token/session 是否正确)"); emitStatus(); } })
+        .catch(() => { if (!connected) { lastError = "⚠️ 连不上中继 (" + shortHost(base) + ") → 请开启 VPN/科学上网后重连。国内网络会屏蔽 workers.dev, 无 VPN 时无法连通。"; emitStatus(); } });
     } catch (e) {}
   }
   function shortHost(u) { try { return new URL(u).host; } catch (e) { return u; } }
