@@ -1,6 +1,6 @@
 {
-  "versionCode": 30,
-  "versionName": "0.14.9",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.14.9/DevinCloud-mobile-v0.14.9.apk",
-  "notes": "v0.14.9\n· 去除网页下拉刷新(修复 Devin 对话页无法上下滑动); 刷新走右上角按钮\n· 自动更新自动弹「允许安装未知应用」本应用开关页 + 返回自动续装(零再触发)\n· 国内连不上隧道时直接提示「请开启 VPN/科学上网」(不再让人困惑)"
+  "versionCode": 31,
+  "versionName": "0.15.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.0/DevinCloud-mobile-v0.15.0.apk",
+  "notes": "v0.15.0\n· 翻译做成顶栏一键(网址旁「译」按钮): 整页自动翻译, 再点恢复原文(Google 网页翻译引擎, 同电脑端 Chrome 体感; 国内需开 VPN)\n· 广告拦截默认内置开启, 去掉手动开关\n· 登录账密像 Chrome 自动: 输完点登录自动弹「是否保存」, 下次访问自动填充; 去掉菜单按钮\n· 去掉「标签总览」菜单项(顶部标签条已足够)"
 }

@@ -129,9 +129,10 @@ public class MainActivity extends AppCompatActivity {
         boolean incognito = false;   // 无痕标签: 不记历史/不持久化
         boolean desktop = false;     // 桌面版 UA
         boolean night = false;       // 夜间反色
+        boolean translated = false;  // 整页翻译态 (跨页保持)
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
     }
-    private boolean adBlock = false;   // 广告/弹窗拦截开关
+    private boolean adBlock = true;    // 广告/弹窗拦截: 默认内置开启 (无需用户操作·无开关)
 
     @SuppressWarnings("SetJavaScriptEnabled")
     @Override
@@ -286,6 +287,9 @@ public class MainActivity extends AppCompatActivity {
         // 刷新按钮：原地重载当前标签的 WebView（保留多实例登录态）
         Button reload = chipBtnSm("\u21BB");
         reload.setOnClickListener(v -> reloadActive());
+        // 翻译按钮 (网址旁·一键整页翻译, 再点恢复原文) — 同电脑端 Chrome 体感
+        Button tr = chipBtnSm("\u8BD1");
+        tr.setOnClickListener(v -> toggleTranslate());
         // 下载管理悬浮窗按钮
         dlBtn = chipBtnSm("\uD83D\uDCE5");
         dlBtn.setOnClickListener(v -> toggleDownloadPanel());
@@ -293,6 +297,7 @@ public class MainActivity extends AppCompatActivity {
         // 第一行: 菜单 + 地址 + 前往
         bar.addView(menu);
         bar.addView(addr);
+        bar.addView(tr);
         bar.addView(go);
 
         // 第二行: 导航键 + 缩放滑块(weight自适应) + 收藏/刷新/下载
@@ -379,7 +384,6 @@ public class MainActivity extends AppCompatActivity {
         mu.add(0, 10, 3, "VPN 加速");
         mu.add(0, 3, 4, "新标签 (Devin)");
         mu.add(0, 13, 5, "无痕标签");
-        mu.add(0, 14, 6, "标签总览");
         mu.add(0, 9, 7, "浏览历史");
         mu.add(0, 12, 8, "书签收藏");
         android.view.SubMenu page = mu.addSubMenu(0, 100, 9, "页面工具");
@@ -387,14 +391,10 @@ public class MainActivity extends AppCompatActivity {
         page.add(0, 21, 1, cur() != null && cur().desktop ? "切回移动版" : "桌面版网站");
         page.add(0, 22, 2, "阅读模式");
         page.add(0, 23, 3, cur() != null && cur().night ? "关闭夜间模式" : "夜间模式");
-        page.add(0, 24, 4, "翻译此页");
         android.view.SubMenu shareM = mu.addSubMenu(0, 101, 10, "分享 / 快捷");
         shareM.add(0, 30, 0, "分享本页");
         shareM.add(0, 31, 1, "复制网址");
         shareM.add(0, 32, 2, "添加到主屏");
-        mu.add(0, 40, 11, adBlock ? "广告拦截: 开 (点击关)" : "广告拦截: 关 (点击开)");
-        mu.add(0, 41, 12, "保存本站登录");
-        mu.add(0, 42, 13, "填充本站登录");
         m.setOnMenuItemClickListener(it -> {
             switch (it.getItemId()) {
                 case 1: newTab(SWITCH, null); return true;
@@ -403,20 +403,15 @@ public class MainActivity extends AppCompatActivity {
                 case 10: newTab(VPN, null); return true;
                 case 3: newTab(DEVIN, null); return true;
                 case 13: openIncognito(); return true;
-                case 14: showTabOverview(); return true;
                 case 9: showHistory(); return true;
                 case 12: showBookmarks(); return true;
                 case 20: case 25: toggleFindBar(); return true;
                 case 21: toggleDesktop(); return true;
                 case 22: readerMode(); return true;
                 case 23: toggleNight(); return true;
-                case 24: translateCurrent(); return true;
                 case 30: shareCurrent(); return true;
                 case 31: copyCurrentUrl(); return true;
                 case 32: addHomeShortcut(); return true;
-                case 40: toggleAdBlock(); return true;
-                case 41: saveSiteLogin(); return true;
-                case 42: fillSiteLogin(); return true;
             }
             return false;
         });
@@ -632,6 +627,7 @@ public class MainActivity extends AppCompatActivity {
             web.addJavascriptInterface(new Bridge(web), "Native"); // 仅内部页暴露原生桥
         } else {
             st.setUserAgentString(st.getUserAgentString().replace("; wv", "")); // 贴近真浏览器
+            web.addJavascriptInterface(new AutofillBridge(web), "__dcaf"); // 登录账密自动保存/填充 (Chrome 式无感)
         }
         // 下载捕获桥(所有标签都挂, 仅 saveBase64 一个能力): 把页面内 blob:/data:/<a download> 下载收进右上下载列表
         web.addJavascriptInterface(new DlBridge(), "RTDL");
@@ -663,6 +659,11 @@ public class MainActivity extends AppCompatActivity {
                 if (tab.night) applyNight(v, true);          // 夜间反色跨页保持
                 installDownloadHook(v);                      // blob:/data:/<a download> 下载 → 收进右上下载列表
                 if (tab.swipe != null) tab.swipe.setRefreshing(false);
+                if (!tab.internal && u != null && u.startsWith("http")) {
+                    autoFillLogin(v, u);        // 有保存的账密 → 自动填充 (无感)
+                    installLoginCapture(v);     // 监听登录提交 → 自动弹「保存登录？」
+                    if (tab.translated) applyTranslate(v); // 翻译态跨页保持
+                }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
                 if (adBlock && req != null && req.getUrl() != null && isAdHost(req.getUrl().getHost()))
@@ -1167,12 +1168,94 @@ public class MainActivity extends AppCompatActivity {
         try { ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             cm.setPrimaryClip(ClipData.newPlainText("url", displayUrl(t))); toast("已复制网址"); } catch (Exception e) { toast("复制失败"); }
     }
-    private void translateCurrent() {
+    /** 顶栏翻译: 一键整页翻译 (Google 网页翻译引擎·同电脑端 Chrome), 再点恢复原文。 */
+    private void toggleTranslate() {
         Tab t = cur(); if (t == null) { toast("无页面"); return; }
         String u = displayUrl(t);
         if (u == null || u.startsWith("rtflow:") || u.startsWith("file:")) { toast("内部页不可翻译"); return; }
-        try { String tu = "https://translate.google.com/translate?sl=auto&tl=zh-CN&u=" + java.net.URLEncoder.encode(u, "UTF-8");
-            newTab(tu, null); } catch (Exception e) { toast("无法翻译"); }
+        if (t.translated) { t.translated = false; toast("恢复原文"); try { t.web.reload(); } catch (Exception ignored) {} return; }
+        t.translated = true; toast("翻译中…(国内需开 VPN)"); applyTranslate(t.web);
+    }
+    /** 注入 Google 网页翻译元素并触发整页翻译为中文 (autoDisplay=false, 仅翻译不弹横幅)。 */
+    private void applyTranslate(WebView w) {
+        if (w == null) return;
+        String js = "(function(){try{"
+            + "function trig(){var c=document.querySelector('.goog-te-combo');if(c){c.value='zh-CN';c.dispatchEvent(new Event('change'));return true;}return false;}"
+            + "if(window.__dcTe){var n=0,t=setInterval(function(){if(trig()||++n>40)clearInterval(t);},250);return;}"
+            + "window.__dcTe=1;window.googleTranslateElementInit=function(){try{new google.translate.TranslateElement({pageLanguage:'auto',autoDisplay:false},'__dcGte');}catch(e){}};"
+            + "var d=document.createElement('div');d.id='__dcGte';d.style.display='none';document.body.appendChild(d);"
+            + "var s=document.createElement('script');s.src='https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit';document.body.appendChild(s);"
+            + "var n=0,t=setInterval(function(){if(trig()||++n>40)clearInterval(t);},300);"
+            + "}catch(e){}})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    /** 页面加载完: 若该站有保存登录, 自动填充 (Chrome 式无感, 不覆盖已填内容)。 */
+    private void autoFillLogin(WebView w, String url) {
+        String host = hostOf(url); if (host.isEmpty()) return;
+        try {
+            org.json.JSONObject all = new org.json.JSONObject(loginsRaw());
+            if (!all.has(host)) return;
+            org.json.JSONObject c = all.getJSONObject(host);
+            String u = c.optString("u", "").replace("\\", "\\\\").replace("'", "\\'");
+            String p = c.optString("p", "").replace("\\", "\\\\").replace("'", "\\'");
+            String js = "(function(){try{var pw=document.querySelector('input[type=password]');if(!pw)return;if(pw.value)return;"
+                + "function set(el,v){var d=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');d.set.call(el,v);el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}"
+                + "var ins=document.querySelectorAll('input');var pi=-1;for(var i=0;i<ins.length;i++){if(ins[i]===pw){pi=i;break;}}"
+                + "for(var j=pi-1;j>=0;j--){var tp=(ins[j].type||'').toLowerCase();if(tp==='text'||tp==='email'||tp==='tel'||tp===''){set(ins[j],'" + u + "');break;}}"
+                + "set(pw,'" + p + "');}catch(e){}})();";
+            w.evaluateJavascript(js, null);
+        } catch (Exception ignored) {}
+    }
+    /** 注入登录捕获: 用户提交含密码的表单时回调原生 → 自动弹「保存登录？」。 */
+    private void installLoginCapture(WebView w) {
+        String js = "(function(){try{if(window.__dcLc)return;window.__dcLc=1;"
+            + "function grab(){try{var pw=document.querySelector('input[type=password]');if(!pw||!pw.value)return;"
+            + "var u='';var ins=document.querySelectorAll('input');var pi=-1;for(var i=0;i<ins.length;i++){if(ins[i]===pw){pi=i;break;}}"
+            + "for(var j=pi-1;j>=0;j--){var tp=(ins[j].type||'').toLowerCase();if(tp==='text'||tp==='email'||tp==='tel'||tp===''){u=ins[j].value||'';break;}}"
+            + "if(window.__dcaf&&__dcaf.onLogin)__dcaf.onLogin(u,pw.value);}catch(e){}}"
+            + "document.addEventListener('submit',grab,true);"
+            + "document.addEventListener('click',function(e){try{var t=e.target;if(!t)return;var tag=(t.tagName||'').toLowerCase();var ty=(t.type||'').toLowerCase();"
+            + "if(tag==='button'||ty==='submit'||ty==='button'||(t.getAttribute&&t.getAttribute('role')==='button'))setTimeout(grab,80);}catch(e){}},true);"
+            + "document.addEventListener('keydown',function(e){if(e.key==='Enter')setTimeout(grab,80);},true);"
+            + "}catch(e){}})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    /** 登录捕获桥 (仅普通网页): 表单提交 → 自动弹「保存登录？」(Chrome 式无感)。 */
+    public class AutofillBridge {
+        private final WebView owner;
+        AutofillBridge(WebView w) { this.owner = w; }
+        @JavascriptInterface public void onLogin(String u, String p) {
+            if (p == null || p.isEmpty()) return;
+            main.post(() -> promptSaveLogin(owner, u, p));
+        }
+    }
+    private long lastSavePrompt = 0;
+    private void promptSaveLogin(WebView w, String u, String p) {
+        try {
+            if (w == null || isFinishing() || p == null || p.isEmpty()) return;
+            long now = System.currentTimeMillis(); if (now - lastSavePrompt < 1500) return; // 防抖
+            String host = hostOf(w.getUrl() == null ? "" : w.getUrl());
+            if (host.isEmpty()) return;
+            org.json.JSONObject all = new org.json.JSONObject(loginsRaw());
+            if (all.has(host)) {
+                org.json.JSONObject ex = all.getJSONObject(host);
+                if (p.equals(ex.optString("p", "")) && (u == null ? "" : u).equals(ex.optString("u", ""))) return; // 未变化不打扰
+            }
+            lastSavePrompt = now;
+            final String fu = (u == null) ? "" : u; final String fp = p; final String fh = host;
+            new android.app.AlertDialog.Builder(this)
+                .setTitle("保存 " + host + " 的登录？")
+                .setMessage("账号: " + (fu.isEmpty() ? "(空)" : fu) + "\n下次访问将自动填充。")
+                .setPositiveButton("保存", (d, wi) -> { try {
+                    org.json.JSONObject a2 = new org.json.JSONObject(loginsRaw());
+                    org.json.JSONObject c = new org.json.JSONObject(); c.put("u", fu); c.put("p", fp);
+                    a2.put(fh, c); String s = a2.toString();
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("logins", s).apply(); vaultWrite("logins", s);
+                    toast("已保存 " + fh + " 登录");
+                } catch (Exception e) {} })
+                .setNegativeButton("不保存", null)
+                .show();
+        } catch (Exception ignored) {}
     }
     /** 把当前页加为主屏快捷方式 (固定图标)。 */
     private void addHomeShortcut() {
