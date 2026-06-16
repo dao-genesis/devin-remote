@@ -127,14 +127,25 @@
     if (auth1 && orgId) {
       try {
         var bare = orgId.replace(/^org-/, "");
-        var br = await devinJsonGet(APP + "/api/org-" + bare + "/billing/status", { Authorization: "Bearer " + auth1 });
+        var br = await devinJsonGet(APP + "/api/org-" + bare + "/billing/status", { Authorization: "Bearer " + auth1, "x-cog-org-id": orgId });
         if (br.status === 200 && br.json) {
-          var hf = typeof br.json.overage_credits === "number" && br.json.overage_credits < 0 && !br.json.billing_error;
-          return { planName: "Trial", dPct: hf ? 100 : 0, wPct: hf ? 100 : 0, overageActive: hf, overageDollars: hf ? Math.abs(br.json.overage_credits) : 0, _source: "devin_billing" };
+          var d = billingDollars(br.json);
+          var has = br.json.has_subscription_or_credits === true || br.json.is_subscription_valid === true || d > 0;
+          return { planName: "Trial", dPct: has ? 100 : 0, wPct: has ? 100 : 0, overageActive: d > 0, overageDollars: d, _source: "devin_billing" };
         }
       } catch (e) {}
     }
     return null;
+  }
+
+  // 美金额度 (复刻桌面 billingBalance · devin_cloud.js): 可用余额 = available_credits + max(0, overage_credits)
+  //   overage_credits 正值=可用 Extra Usage 余额; 负值=已欠/耗尽(计 0)。
+  function billingDollars(b) {
+    if (!b) return 0;
+    var avail = (typeof b.available_credits === "number" && isFinite(b.available_credits)) ? b.available_credits : 0;
+    var ovg = (typeof b.overage_credits === "number" && isFinite(b.overage_credits)) ? b.overage_credits : 0;
+    var d = Math.max(0, avail) + Math.max(0, ovg);
+    return Math.min(1000, Math.round(d * 100) / 100);
   }
 
   function parsePlanStatus(j) {
@@ -160,10 +171,8 @@
     if (!auth1 || !orgId) return null;
     try {
       var bare = orgId.replace(/^org-/, "");
-      var br = await devinJsonGet(APP + "/api/org-" + bare + "/billing/status", { Authorization: "Bearer " + auth1 });
-      if (br.status === 200 && br.json && typeof br.json.overage_credits === "number" && !br.json.billing_error) {
-        return br.json.overage_credits < 0 ? Math.abs(br.json.overage_credits) : 0;
-      }
+      var br = await devinJsonGet(APP + "/api/org-" + bare + "/billing/status", { Authorization: "Bearer " + auth1, "x-cog-org-id": orgId });
+      if (br.status === 200 && br.json) return billingDollars(br.json);
     } catch (e) {}
     return null;
   }

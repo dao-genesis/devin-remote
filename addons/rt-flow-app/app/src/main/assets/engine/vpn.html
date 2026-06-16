@@ -1,0 +1,111 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>VPN 加速</title>
+<style>
+:root{--fg:#cdd3de;--desc:#8b949e;--link:#4daafc;--inb:#161b22;--bd:#30363d;--btn:#1f6feb;--btnh:#388bfd;background:#0e1116}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;font-size:13px;padding:10px;color:var(--fg);background:#0e1116;overflow-y:auto}
+h3{margin:12px 0 5px;font-size:13px;color:var(--link)}
+.muted{color:var(--desc);font-size:12px;line-height:1.6}
+input,textarea,button,select{font-size:13px;margin:3px 0;width:100%;padding:7px 9px;background:var(--inb);color:var(--fg);border:1px solid var(--bd);border-radius:5px}
+textarea{min-height:70px;font-family:monospace;font-size:11px;resize:vertical}
+button{background:var(--btn);color:#fff;cursor:pointer;border:none}
+button:active{opacity:.8}
+.row{display:flex;gap:6px}.row button{flex:1}
+.card{border:1px solid var(--bd);border-radius:6px;padding:10px;margin-top:8px;background:#11161d}
+.lbl{color:var(--desc);font-size:11px;margin-top:6px}
+.section{margin-top:10px;padding-top:8px;border-top:1px solid var(--bd)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;background:#888;vertical-align:middle}
+.warn{background:#2d2410;border:1px solid #6b5712;border-radius:6px;padding:9px;margin-top:8px;font-size:12px;color:#e3b341;line-height:1.6}
+.app{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--bd);border-radius:6px;margin-top:6px}
+.app .nm{flex:1;font-size:12px}
+.app button{width:auto;padding:6px 12px;font-size:12px}
+.toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:9px 14px;font-size:13px;opacity:0;transition:.2s;pointer-events:none;z-index:20;max-width:90%}
+.toast.show{opacity:1}
+</style></head><body>
+
+<h3>🛡 VPN 加速 · 国内网络适配</h3>
+<div class="muted">本面板负责 <b>配置与调度</b>，由你掌控节点 — 不内置任何不可控的免费代理（免费节点活不久、且有合规/安全风险）。能力全开放，节点由你提供。</div>
+
+<div class="warn">
+说明：APK 出于安全与合规，<b>不打包</b>任何 VPN 节点/订阅。请用你自己的 Clash / sing-box / V2Ray 配置，或系统已配置的 VPN。
+</div>
+
+<!-- 系统 VPN -->
+<div class="section">
+<h3>① 系统 VPN（推荐）</h3>
+<div class="muted">在系统设置里添加/连接你的 VPN（IKEv2/IPSec/WireGuard 等），随后回到本 App 即生效。</div>
+<button onclick="openSys()">打开系统 VPN 设置</button>
+</div>
+
+<!-- 唤起外部 VPN App -->
+<div class="section">
+<h3>② 唤起外部 VPN/代理 App</h3>
+<div class="muted">已装下列开源/常用代理客户端可一键唤起（未装则跳商店）：</div>
+<div id="apps"></div>
+<div class="lbl">自定义包名</div>
+<div class="row">
+  <input id="pkg" placeholder="com.example.vpn" style="flex:2">
+  <button onclick="launchCustom()" style="flex:1">唤起</button>
+</div>
+</div>
+
+<!-- 导入配置 (留存·供外部客户端复制使用) -->
+<div class="section">
+<h3>③ 导入/暂存节点配置</h3>
+<div class="muted">把 Clash 订阅链接 / sing-box / V2Ray(vmess://·vless://·ss://·trojan://) 配置粘进来暂存。本 App 不直接拨号，复制到对应客户端使用。</div>
+<div class="lbl">订阅链接 / 节点 URI</div>
+<input id="sub" placeholder="https://… 或 vmess://… / clash 订阅">
+<div class="lbl">配置文本 (Clash YAML / sing-box JSON, 可选)</div>
+<textarea id="cfg" placeholder="粘贴配置文本…"></textarea>
+<div class="row">
+  <button onclick="saveCfg()">暂存</button>
+  <button onclick="copySub()" style="background:#238636">复制订阅</button>
+  <button onclick="copyCfg()" style="background:#238636">复制配置</button>
+</div>
+<div class="muted" id="savedAt" style="margin-top:6px"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var N = window.Native || {};
+function toast(m){ var t=document.getElementById("toast"); t.textContent=m; t.className="toast show"; setTimeout(function(){t.className="toast";},1800); }
+
+// 常见开源/可用代理客户端 (仅唤起·不内置节点)
+var APPS=[
+  {nm:"Clash Meta for Android (开源)", pkg:"com.github.metacubex.clash.meta"},
+  {nm:"sing-box (开源)", pkg:"io.nekohasekai.sfa"},
+  {nm:"v2rayNG (开源)", pkg:"com.v2ray.ang"},
+  {nm:"Hiddify (开源)", pkg:"app.hiddify.com"}
+];
+function renderApps(){
+  document.getElementById("apps").innerHTML = APPS.map(function(a){
+    return '<div class="app"><span class="dot"></span><span class="nm">'+a.nm+'</span>'+
+      '<button onclick="launch(\''+a.pkg+'\')">唤起</button></div>';
+  }).join("");
+}
+function openSys(){ try{ N.openVpnSettings && N.openVpnSettings(); }catch(e){ toast("无法打开"); } }
+function launch(pkg){ try{ N.launchApp && N.launchApp(pkg); }catch(e){ toast("唤起失败"); } }
+function launchCustom(){ var p=(document.getElementById("pkg").value||"").trim(); if(!p){toast("填包名");return;} launch(p); }
+
+function saveCfg(){
+  var sub=document.getElementById("sub").value||"", cfg=document.getElementById("cfg").value||"";
+  try{ localStorage.setItem("rtflow.vpn", JSON.stringify({sub:sub,cfg:cfg,at:Date.now()})); }catch(e){}
+  showSaved(); toast("已暂存");
+}
+function loadCfg(){
+  try{ var o=JSON.parse(localStorage.getItem("rtflow.vpn")||"{}");
+    document.getElementById("sub").value=o.sub||""; document.getElementById("cfg").value=o.cfg||""; showSaved(o.at);
+  }catch(e){}
+}
+function showSaved(at){
+  try{ var o=JSON.parse(localStorage.getItem("rtflow.vpn")||"{}"); at=at||o.at; }catch(e){}
+  document.getElementById("savedAt").textContent = at ? ("上次暂存: "+new Date(at).toLocaleString()) : "";
+}
+function copySub(){ var s=document.getElementById("sub").value||""; if(!s){toast("无订阅");return;} try{N.clip&&N.clip(s);}catch(e){} toast("已复制订阅"); }
+function copyCfg(){ var s=document.getElementById("cfg").value||""; if(!s){toast("无配置");return;} try{N.clip&&N.clip(s);}catch(e){} toast("已复制配置"); }
+
+renderApps(); loadCfg();
+</script>
+</body></html>
