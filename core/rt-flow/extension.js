@@ -10913,6 +10913,7 @@ async function handleWebviewMessage(msg) {
           const res = await devinCloud.backupAccount(r.auth, {
             targetDir: dir,
             incremental: true,
+            turbo: true, // 用户主动点「备份此账号」→ 前台极速档
             onProgress: (m) => _toast("\u23F3 " + m),
           });
           _toast("\u2713 备份完成: 新" + res.backedUp + " 跳过" + res.skipped + " 失败" + res.failed);
@@ -10946,7 +10947,7 @@ async function handleWebviewMessage(msg) {
               if (m.fmt === "zip" || m.fmt === "full") {
                 _toast("\u23F3 打包完整对话(含产出文件)…");
                 const accountDir = _dvAccountBackupDir(_email);
-                const one = await devinCloud.backupOneConversation(_auth, { devin_id: _did, title }, accountDir, { incremental: false });
+                const one = await devinCloud.backupOneConversation(_auth, { devin_id: _did, title }, accountDir, { incremental: false, turbo: true });
                 if (one && one.zip) {
                   _toast("\u2713 已下载完整ZIP: " + path.basename(one.zip));
                   try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(one.zip)); } catch {}
@@ -10980,7 +10981,7 @@ async function handleWebviewMessage(msg) {
           const sm = cached && cached.ov && (cached.ov.sessions || []).find((s) => s.devinId === msg.devinId);
           const title = (sm && sm.title) || msg.devinId;
           const accountDir = _dvAccountBackupDir(r.email);
-          const one = await devinCloud.backupOneConversation(r.auth, { devin_id: msg.devinId, title }, accountDir, { incremental: false });
+          const one = await devinCloud.backupOneConversation(r.auth, { devin_id: msg.devinId, title }, accountDir, { incremental: false, turbo: true });
           if (one && one.zip) {
             _toast("\u2713 已下载 ZIP: " + path.basename(one.zip));
             _notify("info", "[" + r.email + "] 单对话 ZIP 已下载 → " + one.zip);
@@ -11002,7 +11003,7 @@ async function handleWebviewMessage(msg) {
           const all = (cached && cached.ov && cached.ov.sessions) || [];
           const sessList = ids.map((id) => { const m = all.find((s) => s.devinId === id); return { devin_id: id, title: (m && m.title) || id }; });
           const outDir = _dvAccountBackupDir(r.email);
-          const res = await devinCloud.backupConversationsBundle(r.auth, sessList, outDir, { onProgress: (m) => _toast("\u23F3 " + m) });
+          const res = await devinCloud.backupConversationsBundle(r.auth, sessList, outDir, { turbo: true, onProgress: (m) => _toast("\u23F3 " + m) });
           _toast("\u2713 合并ZIP完成 " + res.count + "/" + res.total + ": " + path.basename(res.outPath));
           _notify("info", "[" + r.email + "] 合并下载 " + res.count + " 个对话 → " + res.outPath);
           try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(res.outPath)); } catch {}
@@ -11179,8 +11180,8 @@ async function handleWebviewMessage(msg) {
           try {
             const mode = _cfg("devinCloudBackupMode", "folder");
             const fb = mode === "folder"
-              ? await devinCloud.backupAccountFullFolders(r.auth, { targetDir: dir, incremental: true })
-              : await devinCloud.backupAccountFull(r.auth, { targetDir: dir, incremental: true });
+              ? await devinCloud.backupAccountFullFolders(r.auth, { targetDir: dir, incremental: true, turbo: true })
+              : await devinCloud.backupAccountFull(r.auth, { targetDir: dir, incremental: true, turbo: true });
             const res = fb.conversations || { backedUp: 0, skipped: 0 };
             const sc = (fb.snapshot && fb.snapshot.counts) || {};
             done++;
@@ -11245,8 +11246,8 @@ async function handleWebviewMessage(msg) {
             try {
               const bkMode = _cfg("devinCloudBackupMode", "folder");
               const fb = bkMode === "folder"
-                ? await devinCloud.backupAccountFullFolders(s.auth, { targetDir: dir, incremental: true, onProgress: (m) => _toast("\u23F3 " + m) })
-                : await devinCloud.backupAccountFull(s.auth, { targetDir: dir, incremental: true, onProgress: (m) => _toast("\u23F3 " + m) });
+                ? await devinCloud.backupAccountFullFolders(s.auth, { targetDir: dir, incremental: true, turbo: true, onProgress: (m) => _toast("\u23F3 " + m) })
+                : await devinCloud.backupAccountFull(s.auth, { targetDir: dir, incremental: true, turbo: true, onProgress: (m) => _toast("\u23F3 " + m) });
               const sc = (fb.snapshot && fb.snapshot.counts) || {};
               _toast("\u2713 已留底 " + s.email.split("@")[0] + ": 对话" + (fb.conversations ? fb.conversations.backedUp + fb.conversations.skipped : 0) + " 知识" + (sc.knowledge || 0) + " 剧本" + (sc.playbooks || 0) + " 密钥" + (sc.secrets || 0));
             } catch (e) {
