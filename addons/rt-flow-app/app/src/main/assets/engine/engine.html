@@ -183,6 +183,62 @@
       var r = N.browseExecJs?N.browseExecJs(a.tabIndex|0, js):"";
       return {ok:true, result:r};
     },
+    // ── P6+: 高级浏览器自动化 (元素操作/表单/等待/链接提取/页面信息) ──
+    browseClickElement: async function(a){
+      if(!a||!a.selector) return {ok:false,error:"需 selector"};
+      var js="(function(){try{var el=document.querySelector('"+a.selector.replace(/'/g,"\\'")+"');if(!el)return 'not_found';el.click();return 'clicked';}catch(e){return 'err:'+e;}})()";
+      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"err";
+      try{r=JSON.parse(r);}catch(e){}
+      return {ok:r==='clicked', result:r};
+    },
+    browseFillForm: async function(a){
+      if(!a||!a.selector||a.value===undefined) return {ok:false,error:"需 selector+value"};
+      var js="(function(){try{var el=document.querySelector('"+a.selector.replace(/'/g,"\\'")+"');if(!el)return 'not_found';el.value='"+String(a.value).replace(/'/g,"\\'")+"';el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));return 'filled';}catch(e){return 'err:'+e;}})()";
+      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"err";
+      try{r=JSON.parse(r);}catch(e){}
+      return {ok:r==='filled', result:r};
+    },
+    browseScrollTo: async function(a){
+      var x=a.x||0, y=a.y||0;
+      var js="(function(){window.scrollTo("+x+","+y+");return 'scrolled';})()";
+      N.browseExecJs&&N.browseExecJs(a.tabIndex|0,js);
+      return {ok:true};
+    },
+    browseGetLinks: async function(a){
+      var js="(function(){try{var links=[];document.querySelectorAll('a[href]').forEach(function(a){links.push({text:(a.innerText||'').slice(0,100),href:a.href});});return JSON.stringify(links.slice(0,200));}catch(e){return'[]';}})()";
+      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"[]";
+      try{return{ok:true,links:JSON.parse(JSON.parse(r))};}catch(e){try{return{ok:true,links:JSON.parse(r)};}catch(e2){return{ok:true,links:[]};}}
+    },
+    browseGetPageInfo: async function(a){
+      var js="(function(){try{return JSON.stringify({url:location.href,title:document.title,readyState:document.readyState,forms:document.forms.length,links:document.links.length,images:document.images.length,scripts:document.scripts.length,bodyLen:(document.body?document.body.innerText.length:0)});}catch(e){return'{}';}})()";
+      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"{}";
+      try{return{ok:true,info:JSON.parse(JSON.parse(r))};}catch(e){try{return{ok:true,info:JSON.parse(r)};}catch(e2){return{ok:true,info:{}};}}
+    },
+    browseWaitForElement: async function(a){
+      if(!a||!a.selector) return {ok:false,error:"需 selector"};
+      var timeout=a.timeout||5000, interval=200, elapsed=0;
+      while(elapsed<timeout){
+        var js="(function(){return document.querySelector('"+a.selector.replace(/'/g,"\\'")+"')?'found':'not_found';})()";
+        var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"";
+        try{r=JSON.parse(r);}catch(e){}
+        if(r==='found') return {ok:true, found:true, elapsed:elapsed};
+        await new Promise(function(res){setTimeout(res,interval);});
+        elapsed+=interval;
+      }
+      return {ok:false, found:false, elapsed:elapsed, error:"超时"};
+    },
+    browseSubmitForm: async function(a){
+      var sel=a.selector||"form";
+      var js="(function(){try{var f=document.querySelector('"+sel.replace(/'/g,"\\'")+"');if(!f)return 'not_found';if(f.tagName==='FORM')f.submit();else{var btn=f.querySelector('button[type=submit],input[type=submit]');if(btn)btn.click();else return 'no_submit';}return 'submitted';}catch(e){return 'err:'+e;}})()";
+      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"err";
+      try{r=JSON.parse(r);}catch(e){}
+      return {ok:r==='submitted', result:r};
+    },
+    browseGetInputValues: async function(a){
+      var js="(function(){try{var inputs=[];document.querySelectorAll('input,textarea,select').forEach(function(el){inputs.push({tag:el.tagName,type:el.type||'',name:el.name||'',id:el.id||'',value:(el.value||'').slice(0,200),placeholder:el.placeholder||''});});return JSON.stringify(inputs.slice(0,100));}catch(e){return'[]';}})()";
+      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"[]";
+      try{return{ok:true,inputs:JSON.parse(JSON.parse(r))};}catch(e){try{return{ok:true,inputs:JSON.parse(r)};}catch(e2){return{ok:true,inputs:[]};}}
+    },
 
     // ══════════════════════════════════════════════════════════════════════
     // P7: 手机本体操控 (文件系统/相册/剪贴板/通知/分享/应用/设备信息)
@@ -200,6 +256,170 @@
     phoneNotify: async function(a){ N.phoneNotify(a.title||"Devin Cloud", a.text||""); return {ok:true}; },
     phoneInstalledApps: async function(){ return {ok:true, apps: JSON.parse(N.phoneInstalledApps?N.phoneInstalledApps():"[]")}; },
     phoneLaunchApp: async function(a){ if(!a||!a.package)return{ok:false,error:"需 package"}; return {ok: N.phoneLaunchApp?N.phoneLaunchApp(a.package):false}; },
+    // ── P7+: 高级手机操控 (电池/WiFi/振动/音量) ──
+    phoneBattery: async function(){ return {ok:true, battery: JSON.parse(N.phoneBattery?N.phoneBattery():"{}")}; },
+    phoneWifiInfo: async function(){ return {ok:true, wifi: JSON.parse(N.phoneWifiInfo?N.phoneWifiInfo():"{}")}; },
+    phoneVibrate: async function(a){ N.phoneVibrate&&N.phoneVibrate(a.ms||200); return {ok:true}; },
+    phoneVolume: async function(a){
+      if(a&&a.set!==undefined){ N.phoneSetVolume&&N.phoneSetVolume(a.set|0); return {ok:true,action:"set"}; }
+      return {ok:true, volume: N.phoneGetVolume?N.phoneGetVolume():0, max: N.phoneGetMaxVolume?N.phoneGetMaxVolume():15};
+    },
+
+    // ── P9: 云端/本地 MD 生成 (完整 API 文档, 供穿透面板+远程导出) ──
+    getCloudMd: async function(){
+      var c; try{c=JSON.parse(N.getConn?N.getConn():"{}");} catch(e){c={};}
+      var pub = (c.url&&c.session)?(c.url.replace(/\/$/,'')+"/relay/"+c.session):"(未配置)";
+      var md = [
+        "# Devin Cloud 手机版 · 远程接入完整文档 (云端 Agent)",
+        "",
+        "手机已通过公网中继挂载。任意云端 Agent 可通过下列 REST 接口远程驱动手机。",
+        "",
+        "## 接入信息",
+        "- 公网入口: `" + pub + "`",
+        "- 鉴权: `Authorization: Bearer " + (c.token||"<TOKEN>") + "`",
+        "- Session: `" + (c.session||"<SESSION>") + "`",
+        "",
+        "## 调用方式",
+        "```bash",
+        "curl -s -X POST " + pub + " \\",
+        "  -H 'Authorization: Bearer <TOKEN>' \\",
+        "  -H 'Content-Type: application/json' \\",
+        "  -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\",\"<参数>\":\"<值>\"}}'",
+        "```",
+        "",
+        "## 全部命令一览 (" + Object.keys(CMDS).length + " 条)",
+        "",
+        "### 浏览器自动化 (需先 setRemoteOps enable:true)",
+        "| 命令 | 参数 | 说明 |",
+        "|------|------|------|",
+        "| browseListTabs | - | 列出所有前台标签 |",
+        "| browseOpen | url, account? | 打开新标签 |",
+        "| browseClose | tabIndex | 关闭标签 |",
+        "| browseNavigate | tabIndex, action, url? | back/forward/reload/stop/goto |",
+        "| browseExecJs | tabIndex, js | 执行JS返回结果 |",
+        "| browseGetDom | tabIndex | 获取完整DOM |",
+        "| browseGetCookies | url | 获取Cookie |",
+        "| browseGetStorage | tabIndex, type | localStorage/sessionStorage |",
+        "| browseScreenshot | tabIndex | 截图base64 |",
+        "| browseExportMd | tabIndex, save?, name? | 导出Markdown |",
+        "| browseFindInPage | tabIndex, text | 页内查找 |",
+        "| browseClickElement | tabIndex, selector | 点击元素 |",
+        "| browseFillForm | tabIndex, selector, value | 填写表单 |",
+        "| browseScrollTo | tabIndex, x, y | 滚动页面 |",
+        "| browseGetLinks | tabIndex | 提取所有链接 |",
+        "| browseGetPageInfo | tabIndex | 页面概要信息 |",
+        "| browseWaitForElement | tabIndex, selector, timeout? | 等待元素出现 |",
+        "| browseSubmitForm | tabIndex, selector? | 提交表单 |",
+        "| browseGetInputValues | tabIndex | 获取所有输入框值 |",
+        "",
+        "### 手机本体操控 (需先 setRemoteOps enable:true)",
+        "| 命令 | 参数 | 说明 |",
+        "|------|------|------|",
+        "| phoneInfo | - | 设备信息+手机号 |",
+        "| phoneListFiles | dir? | 列出目录 |",
+        "| phoneReadFile | path, base64? | 读文件 |",
+        "| phoneWriteFile | path, content | 写文件 |",
+        "| phoneListPhotos | limit? | 相册图片 |",
+        "| phoneClipboard | set? | 剪贴板读写 |",
+        "| phoneShare | text, title? | 系统分享 |",
+        "| phoneNotify | title?, text | 发通知 |",
+        "| phoneInstalledApps | - | 已装应用 |",
+        "| phoneLaunchApp | package | 启动应用 |",
+        "| phoneBattery | - | 电池状态 |",
+        "| phoneWifiInfo | - | WiFi信息 |",
+        "| phoneVibrate | ms? | 振动 |",
+        "| phoneVolume | set? | 音量读写 |",
+        "",
+        "### 账号管理",
+        "| 命令 | 说明 |",
+        "|------|------|",
+        "| getState | 所有账号 |",
+        "| addAccount | 添加 |",
+        "| login | 单号登录 |",
+        "| loginAll | 全部登录 |",
+        "| refreshQuota / refreshAll | 刷额度 |",
+        "| healthScan | 健康检查 |",
+        "| trackStuck | 追踪卡住 |",
+        "",
+        "### Devin Cloud CRUD",
+        "| 命令 | 说明 |",
+        "|------|------|",
+        "| listSessions / sessionDetail / exportSession | 会话 |",
+        "| createSession / stopSession / archiveSession / deleteSession | 会话操作 |",
+        "| listKnowledge / listPlaybooks / listSecrets | 列举 |",
+        "| injectKnowledge / injectPlaybook / injectSecret | 注入 |",
+        "| deleteKnowledge / deletePlaybook / deleteSecret | 删除 |",
+        "| checkGit / connectGit | Git |",
+        "| wipeAccount | 水过无痕 |",
+        "| backupAccount / backupAll | 备份 |",
+        "",
+        "### 管理/系统",
+        "| 命令 | 说明 |",
+        "|------|------|",
+        "| ping | 探活 |",
+        "| getEngineInfo / deviceInfo | 引擎/设备 |",
+        "| setRemoteOps / getRemoteOps | 远程开关 |",
+        "| getModuleIndex / getModuleDoc | 渐进式文档 |",
+        "| hotpatch / persistModule / reloadEngine | 热修 |",
+        ""
+      ].join("\n");
+      return {ok:true, markdown:md, length:md.length};
+    },
+    getLocalMd: async function(){
+      var md = [
+        "# Devin Cloud 手机版 · 本地操控文档",
+        "",
+        "本文档描述如何通过 APP 本地桥 (Native.*) 操控软件本体。",
+        "",
+        "## 软件架构",
+        "- **MainActivity**: 浏览器外壳 + 多标签 + 地址栏 + IPC 桥",
+        "- **RelayService**: 常驻前台服务 + 无界面 engine WebView",
+        "- **TabActivity**: 绑定账号的独立 WebView 标签",
+        "- **engine.html**: JS 引擎 (所有 RPC + 穿透客户端)",
+        "",
+        "## 本地桥接口 (window.Native.*)",
+        "| 方法 | 说明 |",
+        "|------|------|",
+        "| getConn() | 获取中继配置 |",
+        "| onStatus(json) | 上报穿透状态 |",
+        "| openTab(url, accountJson) | 开新标签 |",
+        "| listTabs() | 列举引擎标签 |",
+        "| closeTab(id) | 关闭引擎标签 |",
+        "| writeFile(name, content) | 写应用文件 |",
+        "| readFile(name) | 读应用文件 |",
+        "| httpReq(...) | 原生HTTP(无CORS) |",
+        "| browseListTabs() | 前台标签列表 |",
+        "| browseExecJs(idx, js) | 前台标签执行JS |",
+        "| browseNavigate(idx, action, url) | 导航 |",
+        "| browseScreenshot(idx) | 截图 |",
+        "| browseGetCookies(url) | Cookie |",
+        "| phoneDeviceInfo() | 设备信息 |",
+        "| phoneListFiles(dir) | 文件列表 |",
+        "| phoneReadFile(path, base64) | 读文件 |",
+        "| phoneWriteFile(path, content) | 写文件 |",
+        "| phoneListPhotos(limit) | 相册 |",
+        "| phoneClipboardGet/Set(text) | 剪贴板 |",
+        "| phoneShare(text, title) | 分享 |",
+        "| phoneNotify(title, text) | 通知 |",
+        "| phoneInstalledApps() | 应用列表 |",
+        "| phoneLaunchApp(pkg) | 启动应用 |",
+        "| setRemoteOps(bool) | 远程开关 |",
+        "| isRemoteOpsEnabled() | 开关状态 |",
+        "",
+        "## 数据存储位置",
+        "- 账号池: localStorage(\"rtflow.accounts\")",
+        "- 活动账号: localStorage(\"rtflow.active\")",
+        "- 中继配置: getFilesDir()/relay-config.json",
+        "- 远程开关: getFilesDir()/remote-ops-flag",
+        "- 用户模块: getFilesDir()/user-module.js",
+        "",
+        "## 热修机制",
+        "通过隧道 `hotpatch` 命令注入 JS 即时生效;",
+        "`persistModule` 持久化到 user-module.js, 下次引擎冷启动自动加载。",
+        ""
+      ].join("\n");
+      return {ok:true, markdown:md, length:md.length};
+    },
 
     // ══════════════════════════════════════════════════════════════════════
     // P8: 安全开关 + 渐进式暴露文档系统
