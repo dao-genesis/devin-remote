@@ -9,20 +9,11 @@
 
 ## 演示视频
 
-<a href="https://www.bilibili.com/video/BV1HbjP6oE77" target="_blank" rel="noopener"><img src="https://i2.hdslb.com/bfs/archive/2731c65fb82e08f12a9f6a58623bbfcd01003b9c.jpg" alt="Devin Cloud 云端 Agent 直接连接本地电脑 · 无感内网穿透 · 彻底平替 WindSurf！" width="640"></a>
+<video src="https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/demo-assets/devin-remote-demo.mp4" poster="https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/demo-assets/demo-poster.jpg" controls muted playsinline width="720"></video>
 
-▶ **[Devin Cloud 云端 Agent 直接连接本地电脑 · 无感内网穿透 · 彻底平替 WindSurf！](https://www.bilibili.com/video/BV1HbjP6oE77)** —— 哔哩哔哩
+▶ **[Devin Cloud 云端 Agent 直接连接本地电脑 · 无感内网穿透 · 彻底平替 WindSurf！](https://www.bilibili.com/video/BV1HbjP6oE77)** —— 视频来源：哔哩哔哩（BV1HbjP6oE77）
 
-<details>
-<summary>站内 / 支持 iframe 的平台可直接内嵌播放器</summary>
-
-```html
-<iframe src="//player.bilibili.com/player.html?bvid=BV1HbjP6oE77&autoplay=0" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true" width="100%" height="480"></iframe>
-```
-
-> GitHub / VS Code 扩展页会过滤 `<iframe>`，故上方用可点击封面跳转播放；在支持 iframe 内嵌的站点（个人博客、文档站等）可直接粘贴此代码内嵌播放。
-
-</details>
+> 视频自托管于本仓库 [demo-assets](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/demo-assets) Release，GitHub README 内直接内嵌可播放（无需跳转外站）。
 
 ---
 
@@ -108,19 +99,19 @@ devin-remote/
 
 本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录；SSE 流式直通。**多账号反向注入**：`POST /api/devin/batch-inject`（`{all:true}` 本机池 / `{accounts:[...]}` / `{lines:"..."}`，可选 `{wait:true}`）+ `GET /api/devin/batch-inject/status`，并以 `asciiSafeJson()`（所有非 ASCII 转 `\uXXXX`）根治 Devin 接口对原始 UTF-8 中文请求体「每隔一字截断」的服务端缺陷。
 
-**源码**：`core/dao-vsix/src/extension.ts` · **📹 视频**：[▶ 教程](https://github.com/user-attachments/assets/194e1211-739d-494c-9cf2-ff016672485d)
+**源码**：`core/dao-vsix/src/extension.ts`
 
 ### rt-flow · Devin Cloud 接入本体
 
 零依赖 `devin_cloud.js` 封装 Devin Cloud 全部 API。三大模块：对话备份（增量 ZIP + `snapshotAccountData` 全量快照）；一键回归本源 wipe（先本地留底，再清用户数据，保留本源默认）；对话额度上限（实时余额 − 缓冲，低额自动中停）。删除端点已纠正为 `/api/playbooks|secrets/{id}`，Git 用 `git-permissions` 真撤授权。
 
-**底层**：`core/rt-flow/devin_cloud.js` · **变更史**：`core/rt-flow/changelog.md` · **📹 视频**：[▶ 教程](https://github.com/user-attachments/assets/9ec20452-cb5f-4423-9204-f06088f75079)
+**底层**：`core/rt-flow/devin_cloud.js` · **变更史**：`core/rt-flow/changelog.md`
 
 ### dao-proxy-pro · 提示词隔离 + 外接路由
 
 底层拦截 IDE AI 请求，隔离替换提示词（道藏规则 + 用户注入），外接第三方模型路由。模型家族级路由（tier-agnostic）、实证探活（最小真实 chat 探测）、真实渠道直连根治 501 回弹、去名补全（官方产品名脱敏）。
 
-**源码**：`core/dao-proxy-pro/extension.js` · **渲染校验**：`node tools/render_check.js` · **📹 视频**：[▶ 教程](https://github.com/user-attachments/assets/7094683e-c9f3-4461-96f6-fadd15c0aabf)
+**源码**：`core/dao-proxy-pro/extension.js` · **渲染校验**：`node tools/render_check.js`
 
 ---
 
@@ -132,7 +123,7 @@ devin-remote/
 
 **内网穿透栈**：`dao-bridge-ext/`（VS Code 插件·默认通道）· `agent.js/core.js`（纯 Node 独立后端·全平台兜底）· [`dao-relay/`](addons/dao-relay/README.md)（中继 Worker·归一入库 v2·`(session,token)` 零账号配对）。手机端穿透已迁入 [`rt-flow-app`](addons/rt-flow-app/README.md)（内置 RelayService）。
 
-**源码**：`addons/dao-bridge/dao-bridge-ext/extension.js` · **核心本体**：`addons/dao-bridge/{agent,core}.js` · **📹 视频**：[▶ 教程](https://github.com/user-attachments/assets/8c4aec08-8357-44f2-a169-d44c8d055dd3)
+**源码**：`addons/dao-bridge/dao-bridge-ext/extension.js` · **核心本体**：`addons/dao-bridge/{agent,core}.js`
 
 ### rt-flow-app · Devin Cloud 手机版 APK (v0.7.0)
 
@@ -144,13 +135,13 @@ devin-remote/
 
 零输入：自动加载 `~/.dao/accounts.json` 账号池 + `~/.dao/git-pats.json` PAT，"already registered" 智能处理 + 仓库可达性核验。
 
-**源码**：`addons/devin-git-auth/extension.js` · **📹 视频**：[▶ 教程](https://github.com/user-attachments/assets/ae892f4c-90d4-46df-a0c6-2ca9006b9498)
+**源码**：`addons/devin-git-auth/extension.js`
 
 ### dao-export · 对话数据导出插件（单账号）
 
 仅需邮箱+密码，把 Devin 官方 Session 面板完整路由到 VS Code 内，导出账号级数据 + 全部会话。VSIX 侧边栏实时进度 + 按需加载 worklog 分页。
 
-**源码**：`addons/dao-export/`（`src/` + `package.json`）· **📹 视频**：[▶ 教程](https://github.com/user-attachments/assets/6a7fc519-514d-4d1e-b78b-967a4e817a60)
+**源码**：`addons/dao-export/`（`src/` + `package.json`）
 
 ---
 
