@@ -7,6 +7,25 @@
 
 ---
 
+## 演示视频
+
+<a href="https://www.bilibili.com/video/BV1HbjP6oE77" target="_blank" rel="noopener"><img src="https://i2.hdslb.com/bfs/archive/2731c65fb82e08f12a9f6a58623bbfcd01003b9c.jpg" alt="Devin Cloud 云端 Agent 直接连接本地电脑 · 无感内网穿透 · 彻底平替 WindSurf！" width="640"></a>
+
+▶ **[Devin Cloud 云端 Agent 直接连接本地电脑 · 无感内网穿透 · 彻底平替 WindSurf！](https://www.bilibili.com/video/BV1HbjP6oE77)** —— 哔哩哔哩
+
+<details>
+<summary>站内 / 支持 iframe 的平台可直接内嵌播放器</summary>
+
+```html
+<iframe src="//player.bilibili.com/player.html?bvid=BV1HbjP6oE77&autoplay=0" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true" width="100%" height="480"></iframe>
+```
+
+> GitHub / VS Code 扩展页会过滤 `<iframe>`，故上方用可点击封面跳转播放；在支持 iframe 内嵌的站点（个人博客、文档站等）可直接粘贴此代码内嵌播放。
+
+</details>
+
+---
+
 ## 下载 · 快速安装
 
 **一键冷启动**（自动装 Devin Desktop + 构建并安装 dao-one 大 one 插件）：
