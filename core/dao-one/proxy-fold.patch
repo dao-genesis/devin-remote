@@ -9,7 +9,7 @@
  .empty{text-align:center;padding:40px 20px;color:var(--muted);font-size:13px}
 @@ -2262,2 +2264,3 @@
  <div class="ni active" data-tab="overview" onclick="sw('overview')" title="主页 Home">🏠</div>
- <div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网操作 DAO Bridge">🌐</div>
+ <div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网穿透 · DAO Bridge (独立板块·远程操作本地电脑)">🌐</div>
 +<div class="ni" data-tab="proxy" onclick="sw('proxy')" title="Proxy Pro · 本源观照/渠道配置/模型路由">🔀</div>
 @@ -2296,6 +2299,7 @@
  <div class="tv" id="v-mcp"></div>

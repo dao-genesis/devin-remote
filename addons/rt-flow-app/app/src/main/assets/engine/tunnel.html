@@ -54,6 +54,19 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   </div>
 </div>
 
+<!-- 模块1.5: 动态穿透配置 (每设备独立·非固定) -->
+<div class="section">
+<h3>🔧 穿透配置 · 每设备独立（动态）</h3>
+<div class="muted">中继地址/Token/Session 不再写死。每台设备首次启动可在此自行配置，保存后立即重连。优先级：本地配置 &gt; 内置 conn.json。</div>
+<input id="cfgUrl" placeholder="中继 URL · 如 https://your-relay.workers.dev">
+<input id="cfgToken" type="password" placeholder="Bearer Token">
+<input id="cfgSession" placeholder="Session ID · 如 my-phone-session">
+<div class="row">
+  <button onclick="saveRelayCfg()">保存并重连</button>
+  <button onclick="clearRelayCfg()" style="background:#a33">清除·回退内置</button>
+</div>
+</div>
+
 <!-- 模块2: CloudFlare 命名隧道 (可选) -->
 <div class="section">
 <h3>🔑 命名隧道 · 固定域名（可选）</h3>
@@ -173,6 +186,31 @@ function _render(s){
   if(loggedIn){cfSt.textContent='✓ 用户通道'+(s.cfEmail?(' · '+s.cfEmail):'')+(s.mode==='named'?'（命名隧道运行中）':'');cfSt.style.color='#3fb950';document.getElementById('cfLoginForm').style.display='none';}
   else{cfSt.textContent='未配置（使用零配置快速隧道）';cfSt.style.color='';document.getElementById('cfLoginForm').style.display='block';}
 }
+// ── 动态穿透配置 (每设备独立·从 switch 面板迁移至此) ──
+function loadRelayCfg(){ try{ return JSON.parse(localStorage.getItem("rtflow.relay")||"{}"); }catch(e){ return {}; } }
+function saveRelayCfg(){
+  var cfg={url:(v('cfgUrl')||"").trim(), token:(v('cfgToken')||"").trim(), session:(v('cfgSession')||"").trim()};
+  if(!cfg.url||!cfg.token||!cfg.session){ _result('saveCfg',false,'请填写完整 (url/token/session)'); return; }
+  var json=JSON.stringify(cfg);
+  localStorage.setItem("rtflow.relay", json);
+  try{ N.saveRelayConfig&&N.saveRelayConfig(json); }catch(e){}
+  try{ N.relayRestart&&N.relayRestart(); }catch(e){}
+  _result('saveCfg',true,'已保存·重连中…'); setTimeout(_push,800);
+}
+function clearRelayCfg(){
+  localStorage.removeItem("rtflow.relay");
+  try{ N.saveRelayConfig&&N.saveRelayConfig("{}"); }catch(e){}
+  try{ N.relayRestart&&N.relayRestart(); }catch(e){}
+  document.getElementById('cfgUrl').value=""; document.getElementById('cfgToken').value=""; document.getElementById('cfgSession').value="";
+  _result('clearCfg',true,'已清除·回退内置 conn.json'); setTimeout(_push,800);
+}
+function initRelayCfg(){
+  var cfg=loadRelayCfg();
+  if(cfg.url) document.getElementById('cfgUrl').value=cfg.url;
+  if(cfg.token) document.getElementById('cfgToken').value=cfg.token;
+  if(cfg.session) document.getElementById('cfgSession').value=cfg.session;
+}
+initRelayCfg();
 setInterval(_push, 1500); _push();
 </script>
 </body></html>

@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // relay-app.js · APP 版「内网穿透客户端」(WebView 页内出站 WSS 连中继)
 //
-// 与 addons/rt-flow-mobile/src/relay.js 同协议、同安全边界, 区别:
+// 与 addons/dao-bridge/core.js 同协议、同安全边界, 区别:
 //   · 命令注册表由 engine 注入 (DaoRelayApp.register), 含切号 25 RPC + 管理命令
 //   · 多一条管理通道 hotpatch/persistModule → 隔隧道热修 (用户私有 token 已门禁)
 //   · 跑在 WebView 页, 非 service worker; WebSocket/timer 原生可用

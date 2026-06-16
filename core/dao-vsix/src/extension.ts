@@ -321,6 +321,10 @@ export async function activate(context: vscode.ExtensionContext) {
     // 二插合一为单一插件: 左 RT Flow(账号池/切号) + 中 数联 Devin Cloud。
     // 守柔: rt-flow 激活异常不得阻断 dao-vsix 自身激活。
     // ═══════════════════════════════════════════════════════════
+    // 归一·账号池同源: 把 dao-vsix 账号池(~/.dao/accounts.json)镜像到 rt-flow(wam) 可读取的
+    // ~/.wam/accounts-backup.json, 使「左·切号」与「中·数联」共用同一账号池(二合一同源)。
+    // 守柔: 须在 rt-flow 激活前完成, 使 wam 启动即见账号, 不再报「无账号」。
+    try { syncAccountPoolToWam(); } catch (e) { try { console.error('[dao-vsix] 账号池同源 wam 失败(守柔):', e); } catch { /* 守柔 */ } }
     try {
         _rtflowModule = require(path.join(__dirname, '..', 'rtflow', 'extension.js')) as RtflowModule;
         if (_rtflowModule && typeof _rtflowModule.activate === 'function') {
@@ -1482,6 +1486,24 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             if (!id) return { ok: false, error: 'id required' };
             return await devinDeleteMcp(ws.devinOrgId, id, ws.devinAuth1);
         }
+        case '/api/devin/mcp/marketplace': {
+            // 官网 MCP 市场目录 (整图给到本地, 供浏览 + 加入档案 + 批量安装)
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            return await devinListMcpMarketplace(ws.devinOrgId, ws.devinAuth1);
+        }
+        case '/api/devin/mcp/install': {
+            // 安装一个市场目录项到本账号 — body: {marketplace_server_id, slug?, name?, env_variables?, headers?, installation_scope?}
+            const mib = await readBody(req);
+            const mspec = JSON.parse(mib || '{}');
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            if (!mspec.marketplace_server_id && !mspec.slug) return { ok: false, error: 'marketplace_server_id or slug required' };
+            return await devinInstallMarketplaceMcp(ws.devinOrgId, mspec, ws.devinAuth1);
+        }
+        case '/api/devin/automations/clear': {
+            // 清除官网本账号全部自动化 (用户「一切清除官网的自动化」)
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            return await devinClearAutomations(ws.devinOrgId, ws.devinAuth1);
+        }
         case '/api/devin/session/delete': {
             const sdb = await readBody(req);
             const { id } = JSON.parse(sdb || '{}');
@@ -2206,9 +2228,11 @@ async function bridgeInjectKnowledge(): Promise<boolean> {
     try {
         const listResult = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1);
         if (listResult.ok && listResult.learnings) {
-            const existing = listResult.learnings.find((k: any) => k.name === knowledgeName || (k.trigger_description || '').includes('远程操作本地电脑'));
-            if (existing) {
-                await devinDeleteKnowledge(ws.devinOrgId, existing.id, ws.devinAuth1);
+            // 帛书·「少则得·多则惑」: 删尽所有「DAO Bridge」桥文档异名残条(含早期带「·」变体),
+            // 而非仅删首个 → 收敛为唯一规范条目, 杜绝历史命名漂移累积的重复。
+            const stale = listResult.learnings.filter((k: any) => typeof k.name === 'string' && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作本地电脑')));
+            for (const k of stale) {
+                if (k && k.id) { try { await devinDeleteKnowledge(ws.devinOrgId, k.id, ws.devinAuth1); } catch { /* 守柔 */ } }
             }
         }
         const r = await devinInjectKnowledge(ws.devinOrgId, knowledgeName, md, trigger, ws.devinAuth1);
@@ -2380,7 +2404,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="app">
 <nav class="sb">
 <div class="ni active" data-tab="overview" onclick="sw('overview')" title="主页 Home">🏠</div>
-<div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网操作 DAO Bridge">🌐</div>
+<div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网穿透 · DAO Bridge (独立板块·远程操作本地电脑)">🌐</div>
 <div class="ni" data-tab="backups" onclick="sw('backups')" title="对话 · 备份 — 本机全部 RT Flow 备份对话(全账号×全对话)">💬</div>
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 通用自动注入(道法自然准则+内网穿透MD+道德经/阴符经/道法自然+MCP)">💉</div>
 <!-- ② 去芜存菁: Knowledge/Playbooks/Secrets/Git 三标签已合并进主页(overview)「当前账号·手动内容」分区 -->
@@ -2601,8 +2625,9 @@ function rO(){
     const i=S.inject;
     ih='<div class="st">注入状态</div><div class="card"><div class="cr"><span class="l"><span class="tag secret">S</span> Secret</span><span class="v" style="color:'+(i.secret?'var(--success)':'var(--danger)')+'">'+(i.secret?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag knowledge">K</span> Knowledge</span><span class="v" style="color:'+(i.knowledge?'var(--success)':'var(--danger)')+'">'+(i.knowledge?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag playbook">P</span> Playbook</span><span class="v" style="color:'+(i.playbook?'var(--success)':'var(--danger)')+'">'+(i.playbook?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag git">G</span> Git</span><span class="v" style="color:'+(i.git?'var(--success)':'var(--danger)')+'">'+(i.git?'✓':'✗')+'</span></div></div>';
   }
-  v.innerHTML=rHost()+'<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+ih+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button></div>'+rBridge()+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn" style="background:#6f42c1" onclick="cmd(&#39;syncBrowser&#39;)" title="在电脑浏览器开独立窗口自动登录当前账号·多账号各开并行窗口互不串号">🖥️ 浏览器同步</button><button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
-  // 内网穿透已上移至主页第二板块 (rBridge 见上方拼装)
+  v.innerHTML=rHost()+'<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+ih+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button></div>'+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn" style="background:#6f42c1" onclick="cmd(&#39;syncBrowser&#39;)" title="在电脑浏览器开独立窗口自动登录当前账号·多账号各开并行窗口互不串号">🖥️ 浏览器同步</button><button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
+  // 内网穿透·DAO Bridge 已独立为左侧栏单独板块(data-tab="bridge"→rBridgeFull), 主页不再内嵌;
+  // 主页专注单账号信息/操作/注入。
   // ② 去芜存菁: 把「当前账号·手动内容」(Knowledge/Playbooks/Secrets/Git) 直接合进主页
   v.innerHTML+=daoOverviewManualHtml();
   daoLoadOverviewManual();
@@ -2647,7 +2672,15 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if(d.command==='toggleManualLock'&&S.tab){cmd('loadTabData',{tab:S.tab})}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){cmd('loadTabData',{tab:S.tab})}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+// MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
+function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
+function mcpAct(idx,action){
+  var m=(window._mcp||[])[idx];if(!m)return;
+  if(action==='install'){toast('安装中…',true);cmd('mcpMarketInstall',{spec:mcpSpec(m)});}
+  else if(action==='uninstall'){if(confirm('卸载 '+(m.name||'')+' ?'))cmd('mcpUninstall',{id:m.installationId});}
+  else if(action==='profile'){cmd('mcpAddProfile',{spec:mcpSpec(m)});}
+}
 function rT(tab,items,err,fallbackProxy){
   // ② 容器归一: 独立标签(v-*)已移除的 K/P/S/Git 落主页内 ov-* 容器(integrations→ov-git)
   const v=document.getElementById('v-'+tab)||document.getElementById('ov-'+(tab==='integrations'?'git':tab));if(!v)return;
@@ -2666,7 +2699,7 @@ function rT(tab,items,err,fallbackProxy){
   }
   if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[tab]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'}[tab]+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
   // ★ v1.0.1 · 各tab添加新建按钮 · 帛书·「道生一·一生二」
-  const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>'};
+  const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>',automations:'<button class="btn sm danger" onclick="if(confirm(&#39;确认清除本账号官网全部自动化?此操作不可撤销&#39;))cmd(&#39;clearAutomations&#39;)">🧹 清除全部</button>'};
   let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
   if(tab==='sessions'){
     items.forEach(s=>{
@@ -2697,11 +2730,25 @@ function rT(tab,items,err,fallbackProxy){
       const delBtn=(c.kind==='git'&&id)?'<div class="br" style="margin-top:4px"><button class="btn sm danger" onclick="cmd(&#39;devinDisconnectGit&#39;,{connectionId:&#39;'+esc(String(id))+'&#39;})">🗑 断开</button></div>':'';
       h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(provider)+'</span><span class="v" style="font-size:11px">'+statusHtml+'</span></div>'+(login?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(login)+'</div>':'')+delBtn+'</div>';
     });
-  }else if(tab==='usage'||tab==='org'||tab==='mcp'||tab==='automations'){
+  }else if(tab==='mcp'){
+    // 官网 MCP 整图给到本地: 已装(★)+ 全市场目录; 每项可「装到本账号 / +档案(批量注入) / 卸载」
+    window._mcp=[];
+    items.forEach(it=>{
+      const m=it.mcp||{};const idx=window._mcp.length;window._mcp.push(m);
+      const nm=it.name||'';const dt=it.detail||'';
+      const st=it.connected?'<span style="color:var(--success)">● 已装</span>':'<span style="color:var(--muted)">○ 未装</span>';
+      let btns='';
+      if(m.installed){btns+='<button class="btn sm danger" onclick="mcpAct('+idx+',&#39;uninstall&#39;)">卸载</button>';}
+      else{btns+='<button class="btn sm primary" onclick="mcpAct('+idx+',&#39;install&#39;)">装到本账号</button>';}
+      btns+='<button class="btn sm" onclick="mcpAct('+idx+',&#39;profile&#39;)" title="加入反向注入档案 → 可批量注入所有账号">+档案</button>';
+      btns+=lkBtn('mcps',String(nm).replace(/^★ /,''));
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'<div class="br" style="margin-top:4px">'+btns+'</div></div>';
+    });
+  }else if(tab==='usage'||tab==='org'||tab==='automations'){
     items.forEach(it=>{
       const nm=it.name||it.title||'';const dt=it.detail||'';
       const st=it.connected!==undefined?(it.connected?'<span style="color:var(--success)">● on</span>':'<span style="color:var(--muted)">○ off</span>'):'';
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+(tab==='mcp'&&nm?('<div class="br" style="margin-top:4px">'+lkBtn('mcps',String(nm).replace(/^★ /,''))+'</div>'):'')+'</div>';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'</div>';
     });
   }
   v.innerHTML=h;
@@ -2924,15 +2971,18 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'mcp') {
-                            // 官网 MCP = 市场目录(servers) + 本组织自定义安装(installations); 二者合并呈现
-                            const [cat, inst] = await Promise.all([
-                                devinListMcpServers(ws.devinOrgId, ws.devinAuth1),
-                                devinListMcpInstallations(ws.devinOrgId, ws.devinAuth1),
-                            ]);
-                            const installed = (inst.items || []).map((m: any) => Object.assign({}, m, { name: '★ ' + m.name }));
-                            const merged = installed.concat(cat.items || []);
-                            result = { ok: cat.ok || inst.ok };
-                            if (result.ok) reply({ type: 'tabData', tab, items: merged, locks: orgLocks });
+                            // 官网 MCP 整图给到本地: /api/mcp/servers 单源即含 82 项完整目录 + 每项安装模板 + is_installed,
+                            // 已装项置顶(★)。每项携安装模板字段, 供面板「装到本账号 / +档案(批量) / 卸载」。
+                            const mk = await devinListMcpMarketplace(ws.devinOrgId, ws.devinAuth1);
+                            const all = (mk.items || []).map((m) => ({
+                                name: (m.installed ? '★ ' : '') + m.name,
+                                detail: (m.tags.length ? '[' + m.tags.join('·') + '] ' : '') + m.detail,
+                                connected: m.installed,
+                                mcp: m,
+                            }));
+                            all.sort((a, b) => (a.mcp.installed === b.mcp.installed) ? 0 : (a.mcp.installed ? -1 : 1));
+                            result = { ok: mk.ok };
+                            if (result.ok) reply({ type: 'tabData', tab, items: all, locks: orgLocks });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'automations') {
                             result = await devinListAutomations(ws.devinOrgId, ws.devinAuth1);
@@ -3087,13 +3137,29 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'applyInjectProfileToAll': {
-                // 多账号 · 把期望态一次性注入账号池里所有已存 auth1 的账号 org
-                vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '多账号注入期望态…' }, async () => {
-                    let r: { ok: boolean; total: number; injected: number } = { ok: false, total: 0, injected: 0 };
-                    try { r = await applyInjectProfileToAllAccounts(); } catch { /* 守柔 */ }
-                    vscode.window.showInformationMessage('多账号注入完成: ' + r.injected + '/' + r.total + ' 账号');
+                // 多账号 · 把完整注入档案(K/P/S/MCP/Automations)反向注入到整个账号池的每个账号 org。
+                // 优先走 devinBatchInject(本机账号池·含登录兜底·全覆盖固定道藏集+用户档案); 池为空再退回仅缓存 auth1 路径。
+                if (daoBatchProgress && daoBatchProgress.running) {
+                    vscode.window.showWarningMessage('批量注入已在进行中: ' + daoBatchProgress.done + '/' + daoBatchProgress.total);
+                    reply({ type: 'actionResult', command: 'applyInjectProfileToAll', ok: false });
+                    break;
+                }
+                vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '多账号反向注入(K/P/S/MCP)…' }, async () => {
+                    let okCount = 0, total = 0;
+                    try {
+                        const pool = resolveBatchAccounts({ all: true });
+                        if (pool.length) {
+                            total = pool.length;
+                            const prog = await devinBatchInject(pool);
+                            okCount = prog.ok;
+                        } else {
+                            const r = await applyInjectProfileToAllAccounts();
+                            total = r.total; okCount = r.injected;
+                        }
+                    } catch { /* 守柔 */ }
+                    vscode.window.showInformationMessage('多账号反向注入完成: ' + okCount + '/' + total + ' 账号');
                     sidebarCloudPanel?.refresh();
-                    refreshReply({ type: 'actionResult', command: 'applyInjectProfileToAll', ok: r.ok });
+                    refreshReply({ type: 'actionResult', command: 'applyInjectProfileToAll', ok: okCount > 0 });
                 });
                 break;
             }
@@ -3350,6 +3416,52 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 setManualLock(ws.devinOrgId, kind, name, nowLocked);
                 vscode.window.showInformationMessage((nowLocked ? '🔒 已锁定(切号不清理): ' : '🔓 已解锁: ') + name);
                 refreshReply({ type: 'actionResult', command: 'toggleManualLock', ok: true });
+                break;
+            }
+            case 'mcpMarketInstall': {
+                // 装一个市场目录项到本账号 (引用 marketplace_server_id)
+                if (!ws.devinAuth1 || !ws.devinOrgId) { reply({ type: 'actionResult', command: 'mcpMarketInstall', ok: false }); break; }
+                const r = await devinInstallMarketplaceMcp(ws.devinOrgId, (msg.spec || {}) as McpInstallSpec, ws.devinAuth1);
+                vscode.window.showInformationMessage(r.ok ? ('✓ 已安装 MCP: ' + ((msg.spec || {}).name || '')) : ('安装失败: ' + (r.error || r.status || '')));
+                refreshReply({ type: 'actionResult', command: 'mcpMarketInstall', ok: r.ok });
+                break;
+            }
+            case 'mcpUninstall': {
+                if (!ws.devinAuth1 || !ws.devinOrgId || !msg.id) { reply({ type: 'actionResult', command: 'mcpUninstall', ok: false }); break; }
+                const r = await devinDeleteMcp(ws.devinOrgId, String(msg.id), ws.devinAuth1);
+                vscode.window.showInformationMessage(r.ok ? '✓ 已卸载 MCP' : ('卸载失败: ' + (r.status || '')));
+                refreshReply({ type: 'actionResult', command: 'mcpUninstall', ok: r.ok });
+                break;
+            }
+            case 'mcpAddProfile': {
+                // 加入反向注入档案 (injectProfile.mcps) → 可批量注入所有账号
+                const spec = (msg.spec || {}) as McpInstallSpec;
+                const p = loadInjectProfile();
+                const nm = String(spec.name || spec.slug || '').replace(/^★ /, '');
+                if (!nm) { reply({ type: 'actionResult', command: 'mcpAddProfile', ok: false }); break; }
+                const exists = (p.mcps || []).some((m: any) => String(m.name || m.slug || '') === nm);
+                if (!exists) {
+                    p.mcps = p.mcps || [];
+                    p.mcps.push({
+                        name: nm, slug: spec.slug, transport: spec.transport || 'STDIO',
+                        short_description: spec.short_description || '', command: spec.command || '',
+                        args: spec.args || [], env_variables: spec.env_variables || [],
+                        url: spec.url || '', headers: spec.headers || {},
+                        marketplace_server_id: spec.marketplace_server_id || '',
+                        installation_scope: spec.installation_scope || 'org',
+                    } as any);
+                    saveInjectProfile(p);
+                }
+                vscode.window.showInformationMessage(exists ? ('档案已含: ' + nm) : ('✓ 已加入反向注入档案: ' + nm + ' (可在 反向注入 页批量注入所有账号)'));
+                reply({ type: 'actionResult', command: 'mcpAddProfile', ok: true });
+                break;
+            }
+            case 'clearAutomations': {
+                // 一切清除本账号官网自动化
+                if (!ws.devinAuth1 || !ws.devinOrgId) { reply({ type: 'actionResult', command: 'clearAutomations', ok: false }); break; }
+                const r = await devinClearAutomations(ws.devinOrgId, ws.devinAuth1);
+                vscode.window.showInformationMessage('🧹 已清除自动化 ' + r.cleared + '/' + r.total);
+                refreshReply({ type: 'actionResult', command: 'clearAutomations', ok: r.ok });
                 break;
             }
             case 'startServer': {
@@ -3899,6 +4011,22 @@ function loadAccountPool(forceRefresh?: boolean): PoolAccount[] {
     _accountPoolCache = pool;
     _accountPoolReadAt = Date.now();
     return pool;
+}
+// 归一·账号池同源 — 把 dao-vsix 账号池镜像到 rt-flow(wam) 候选末位文件 ~/.wam/accounts-backup.json,
+// 使「左·切号」与「中·数联」共用同一账号池。守柔: 仅镜像非空池; 该路径为 wam 候选末位,
+// 用户自备的 wam.accountsFile / accounts.md 仍优先, 不被覆盖。
+function syncAccountPoolToWam(): void {
+    try {
+        const pool = loadAccountPool(true).filter(a => a && a.email && a.password);
+        if (!pool.length) return;
+        const wamDir = path.join(os.homedir(), '.wam');
+        try { fs.mkdirSync(wamDir, { recursive: true }); } catch { /* 守柔 */ }
+        const target = path.join(wamDir, 'accounts-backup.json');
+        const payload = JSON.stringify({ accounts: pool.map(a => ({ email: a.email, password: a.password })) }, null, 2);
+        let prev = '';
+        try { prev = fs.readFileSync(target, 'utf8'); } catch { /* 首次无文件 */ }
+        if (prev !== payload) fs.writeFileSync(target, payload, 'utf8');
+    } catch { /* 道法自然·守柔 */ }
 }
 function findAccountPassword(email: string): string {
     if (!email) return '';
@@ -5594,6 +5722,9 @@ async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promi
         icon: spec.icon || '',
         installation_scope: spec.installation_scope || 'org',
     };
+    // 安装市场目录项时引用其 server_id (官网逆流字段); 自定义安装则无此字段。
+    if (spec.marketplace_server_id) payload.marketplace_server_id = spec.marketplace_server_id;
+    if (spec.requires_custom_oauth_credentials) payload.requires_custom_oauth_credentials = true;
     if (transport === 'STDIO') {
         payload.command = spec.command || '';
         // 帛书·「知不知尚矣」— 官网 /api/mcp/installations 要求 args 为 [{value}] 字典数组,
@@ -5627,6 +5758,75 @@ async function devinDeleteMcp(orgId: string, installationId: string, auth1: stri
     const id = installationId.startsWith('mcp-installation-') ? installationId : 'mcp-installation-' + installationId.replace(/^mcp-installation-/, '');
     const r = await devinJsonDelete(DEVIN_APP + '/api/mcp/installations/' + id, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     return { ok: r.status === 200 || r.status === 204, status: r.status };
+}
+
+interface McpMarketItem {
+    server_id: string; name: string; slug: string; detail: string;
+    transport: string; icon: string; tags: string[]; official: boolean;
+    requiresOauth: boolean; installed: boolean; installationId: string;
+    // 安装模板 (来自 /api/mcp/servers, 供一键/批量安装直接复用)
+    command: string; args: unknown[]; env_variables: unknown; url: string; headers: unknown;
+    installation_scope: string; marketplace_server_id: string;
+}
+interface McpInstallSpec {
+    marketplace_server_id?: string; slug?: string; name?: string; transport?: string;
+    short_description?: string; description?: string; icon?: string;
+    command?: string; args?: unknown[]; env_variables?: unknown; url?: string; headers?: unknown;
+    installation_scope?: string; is_enabled?: boolean; requires_custom_oauth_credentials?: boolean;
+}
+
+// 官网 MCP 市场目录 — 整图给到本地 (浏览 + 加入档案 + 一键/批量安装):
+// 源 GET /api/mcp/servers 返回 82 项完整目录, 每项含安装模板 + is_installed/installation_id。
+async function devinListMcpMarketplace(orgId: string, auth1: string): Promise<{ ok: boolean; items?: McpMarketItem[]; status?: number }> {
+    // /api/mcp/servers 返回完整目录(82项), 每项含安装模板(transport/command/args/env/url) + is_installed/installation_id,
+    // 比轻量 /api/mcp/marketplace-servers 信息更全, 故以此为「整图」来源。
+    const r = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [], status: r.status };
+    const j = r.json || {};
+    const arr = Array.isArray(j) ? j : (Array.isArray(j.servers) ? j.servers : []);
+    const items: McpMarketItem[] = (arr as Array<Record<string, unknown>>).map((m) => ({
+        server_id: String(m.server_id || m.id || ''),
+        name: String(m.name || m.slug || 'MCP'),
+        slug: String(m.slug || ''),
+        detail: String(m.short_description || m.description || '').substring(0, 160),
+        transport: String(m.transport || ''),
+        icon: String(m.icon || ''),
+        tags: Array.isArray(m.tags) ? (m.tags as string[]) : [],
+        official: m.is_official === true,
+        requiresOauth: m.requires_custom_oauth_credentials === true,
+        installed: m.is_installed === true,
+        installationId: String(m.installation_id || ''),
+        command: String(m.command || ''),
+        args: Array.isArray(m.args) ? m.args : [],
+        env_variables: m.env_variables || [],
+        url: String(m.url || ''),
+        headers: m.headers || {},
+        installation_scope: String(m.installation_scope || 'org'),
+        marketplace_server_id: String(m.marketplace_server_id || m.server_id || ''),
+    }));
+    return { ok: true, items, status: 200 };
+}
+
+// 安装一个市场目录项到本账号 (引用 marketplace_server_id; 复用 devinAddCustomMcp 的规整逻辑)
+async function devinInstallMarketplaceMcp(orgId: string, spec: McpInstallSpec, auth1: string): Promise<{ ok: boolean; status?: number; id?: string; error?: string }> {
+    return await devinAddCustomMcp(orgId, {
+        ...spec,
+        installation_scope: spec.installation_scope || 'org',
+        is_enabled: spec.is_enabled !== false,
+    }, auth1);
+}
+
+// 清除本账号官网全部自动化 (列出后逐个删除) — 守柔: 单条失败不阻断, 汇总结果。
+async function devinClearAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; total: number; cleared: number }> {
+    const lst = await devinListAutomations(orgId, auth1);
+    const items = lst.items || [];
+    let cleared = 0;
+    for (const a of items) {
+        const id = String((a as Record<string, unknown>).automation_id || (a as Record<string, unknown>).id || '');
+        if (!id) continue;
+        try { if ((await devinDeleteAutomation(orgId, id, auth1)).ok) cleared++; } catch { /* 守柔 */ }
+    }
+    return { ok: cleared === items.length, total: items.length, cleared };
 }
 
 async function devinListAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
@@ -5814,7 +6014,7 @@ async function devinFullInject(interactive: boolean = false): Promise<boolean> {
 // 全程自包含, 不改动当前面板登录态(ws.*); CJK 经 asciiSafeJson \uXXXX 上线服务端无损。
 // ═══════════════════════════════════════════════════════════
 interface DaoBatchAccount { email: string; password: string; }
-interface DaoBatchResult { email: string; ok: boolean; auth: string; orgId?: string; knowledge: boolean; bridge: boolean; playbook: boolean; secret: boolean; cleaned: number; verified: boolean; error?: string; }
+interface DaoBatchResult { email: string; ok: boolean; auth: string; orgId?: string; knowledge: boolean; bridge: boolean; playbook: boolean; secret: boolean; profile: boolean; cleaned: number; verified: boolean; error?: string; }
 interface DaoBatchProgress { total: number; done: number; ok: number; running: boolean; results: DaoBatchResult[]; startedAt: string; finishedAt?: string; }
 let daoBatchProgress: DaoBatchProgress | null = null;
 
@@ -5860,10 +6060,13 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
     const rulesText = getDaoRulesText();
     const bridgeMd = bridgeGenerateCloudMd();
     const pbBody = (url && token) ? buildDevinPlaybook(url, token) : '';
+    // 批量反向注入全覆盖: 除固定道藏集(准则KB+桥KB+桥控制剧本+DAO_TOKEN),
+    // 还把用户完整注入档案(用户自添 K/P/S/MCP/Automations/额度上限)逐账号注入到官网 org。
+    const injectProfile = loadInjectProfile();
     daoBatchProgress = { total: accounts.length, done: 0, ok: 0, running: true, results: [], startedAt: new Date().toISOString() };
     const resultsFile = path.join(DAO_DIR, 'dao-batch-inject-results.json');
     for (const a of accounts) {
-        const res: DaoBatchResult = { email: a.email, ok: false, auth: '', knowledge: false, bridge: false, playbook: false, secret: false, cleaned: 0, verified: false };
+        const res: DaoBatchResult = { email: a.email, ok: false, auth: '', knowledge: false, bridge: false, playbook: false, secret: false, profile: false, cleaned: 0, verified: false };
         try {
             let auth1 = '', orgId = '';
             // 优先用按邮箱缓存的 auth1(切回即命中, 守柔省登录), GET 校验仍有效再用。
@@ -5883,6 +6086,8 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
             if (token) res.bridge = (await devinUpsertKnowledge(orgId, DAO_BRIDGE_KB_NAME, bridgeMd, DAO_BRIDGE_KB_TRIGGER, auth1)).ok;
             if (pbBody) res.playbook = (await devinUpsertPlaybook(orgId, 'Operate Local Environment via Dao', pbBody, auth1)).ok;
             if (token) res.secret = (await devinUpsertSecret(orgId, 'DAO_TOKEN', token, auth1)).ok;
+            // 全覆盖: 再把用户完整注入档案(K/P/S/MCP/Automations)注入该账号; 单账号锁定项被 applyInjectProfileToOrg 跳过不覆盖。
+            try { await applyInjectProfileToOrg(orgId, auth1, injectProfile); res.profile = true; } catch { /* 守柔 */ }
             // 校验: 回读知识库确认「道法自然准则」落地且正文完整(防截断/损坏)
             try {
                 const back = await devinListKnowledge(orgId, auth1);
@@ -5891,7 +6096,8 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
                     res.verified = !!(hit && typeof hit.body === 'string' && hit.body.length >= Math.max(0, rulesText.length - 4));
                 }
             } catch { /* 守柔 */ }
-            res.ok = res.knowledge && res.playbook && res.secret;
+            // 成功 = 准则KB落地 + (无桥控制剧本或已注) + (无DAO_TOKEN或已注) + 用户完整档案已应用
+            res.ok = (!rulesText || res.knowledge) && (!pbBody || res.playbook) && (!token || res.secret) && res.profile;
         } catch (e: any) { res.error = e?.message || String(e); }
         if (res.ok) daoBatchProgress.ok++;
         daoBatchProgress.results.push(res);
@@ -6067,10 +6273,33 @@ function findAuth1ForOrg(orgId: string): string {
     for (const e of Object.keys(store)) { if (store[e] && store[e].orgId === orgId && store[e].auth1) return store[e].auth1; }
     return '';
 }
+// 单账号「绝利一源」保护: 用户在某账号 K/P/S/MCP 面板手动锁定(setManualLock)的条目,
+// 批量多账号反向注入(applyInjectProfileToOrg)对该 org 跳过同名条目, 不覆盖用户单账号定制。
+// 守柔: 只防覆盖, 锁定项保持用户手改版本; 未锁定项照常注入。
 async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
-    for (const s of p.secrets) { if (s && s.name) { try { await devinUpsertSecret(orgId, s.name, s.value || '', auth1); } catch { /* 守柔 */ } } }
-    for (const k of p.knowledge) { if (k && k.name) { let kb = k.body || ''; if (kb === DAO_BRIDGE_KB_SENTINEL || k.name === DAO_BRIDGE_KB_NAME) { try { kb = bridgeGenerateCloudMd(); } catch { /* 守柔 */ } } try { await devinUpsertKnowledge(orgId, k.name, kb, k.trigger || 'Always', auth1); } catch { /* 守柔 */ } } }
-    for (const pb of p.playbooks) { if (pb && pb.title) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1); } catch { /* 守柔 */ } } }
+    for (const s of p.secrets) { if (s && s.name && !isManualLocked(orgId, 'secrets', s.name)) { try { await devinUpsertSecret(orgId, s.name, s.value || '', auth1); } catch { /* 守柔 */ } } }
+    for (const k of p.knowledge) {
+        if (!k || !k.name) continue;
+        if (isManualLocked(orgId, 'knowledge', k.name)) continue;
+        let kb = k.body || '';
+        const isBridge = (kb === DAO_BRIDGE_KB_SENTINEL || k.name === DAO_BRIDGE_KB_NAME);
+        if (isBridge) {
+            try { kb = bridgeGenerateCloudMd(); } catch { /* 守柔 */ }
+            // 帛书·「少则得·多则惑」: 收敛历史异名「DAO Bridge」残条(含早期带「·」变体) → 唯一规范条目
+            try {
+                const list = await devinListKnowledge(orgId, auth1);
+                if (list.ok && list.learnings) {
+                    for (const e of list.learnings) {
+                        if (e && e.id && typeof e.name === 'string' && /^DAO Bridge/.test(e.name)) {
+                            try { await devinDeleteKnowledge(orgId, String(e.id), auth1); } catch { /* 守柔 */ }
+                        }
+                    }
+                }
+            } catch { /* 守柔 */ }
+        }
+        try { await devinUpsertKnowledge(orgId, k.name, kb, k.trigger || 'Always', auth1); } catch { /* 守柔 */ }
+    }
+    for (const pb of p.playbooks) { if (pb && pb.title && !isManualLocked(orgId, 'playbooks', pb.title)) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1); } catch { /* 守柔 */ } } }
     for (const a of (p.automations || [])) { if (a && a.name) { try { await devinUpsertAutomation(orgId, a, auth1); } catch { /* 守柔 */ } } }
     // 钉住的 MCP — 幂等: 已存在(按 slug)则跳过, 否则追录到该 org
     if (p.mcps && p.mcps.length) {
@@ -6081,6 +6310,7 @@ async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectPr
         } catch { /* 守柔 */ }
         for (const m of p.mcps) {
             if (!m || !m.name) continue;
+            if (isManualLocked(orgId, 'mcps', m.name) || isManualLocked(orgId, 'mcps', mcpSlug(m))) continue;
             const slug = mcpSlug(m);
             if (existing.has(String(m.name).toLowerCase()) || existing.has(slug)) continue;
             try { await devinAddCustomMcp(orgId, Object.assign({}, m, { slug }), auth1); } catch { /* 守柔 */ }

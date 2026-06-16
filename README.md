@@ -37,11 +37,10 @@ devin-remote/
 │   ├── dao-bridge/           # ① 内网穿透本体：默认 dao-relay 零账号 Worker 中继(URL 稳定)→连不上回退 cloudflared
 │   │   ├── dao-bridge-ext/   #     随 IDE 自启的 VS Code 插件（relay-first + cloudflared 自愈/断点续传/macOS 解包）
 │   │   └── agent.js/core.js  #     纯 Node 独立后端（NAS / 路由器 / 容器 / CI 等无 VSCode 环境）
-│   ├── rt-flow-mobile/       # ② 浏览器 / 手机版自动切号（Chromium MV3·非 VSIX）
+│   ├── rt-flow-app/          # ② Devin Cloud 手机版 APK（三合一：切号+内网穿透+多实例·取代 rt-flow-mobile 和 dao-bridge-android）
 │   ├── devin-git-auth/       # ③ 多 Devin 账号绑定同一 GitHub
 │   ├── dao-export/           # ④ 对话数据导出插件（单账号·VSIX）
-│   ├── dao-relay/            #   ↳ 内网穿透栈：中继 Worker 源码（归一入库·v2·(session,token) 零账号配对·一键部署）
-│   └── dao-bridge-android/   #   ↳ 内网穿透栈：手机端 Agent（Termux·复用 dao-bridge/core.js）
+│   └── dao-relay/            #   ↳ 内网穿透栈：中继 Worker 源码（归一入库·v2·(session,token) 零账号配对·一键部署）
 │
 ├── cloud/                    # ★ 板块 3 · 供 Devin Cloud 全链路开发
 │   ├── export-accounts/      # ① 导出其他账号对话全流程（dao_export_all.py + 后端逆向指南）
@@ -91,15 +90,15 @@ devin-remote/
 
 **默认通道 = dao-relay Worker+DO 出站中继**（`dao-relay-do.zhouyoukang.workers.dev`）：零 Cloudflare 账号、URL 天然稳定（`…workers.dev/relay/<session>`）、纯出站无 50MB 二进制、适配一切平台；连不上才**自动回退 cloudflared**（命名隧道 → quick tunnel，http2 优先）。cloudflared 路径已做**自愈**（`--version` 探活 + 断点续传 + 半成品自动重下）与 **macOS `.tgz` 解包**。随 IDE 启停，零配置一键打通整机公网；`daoBridge.disableRelay` 可关中继。
 
-**内网穿透栈**：`dao-bridge-ext/`（VS Code 插件·默认通道）· `agent.js/core.js`（纯 Node 独立后端·全平台兜底）· [`dao-relay/`](addons/dao-relay/README.md)（中继 Worker·归一入库 v2·`(session,token)` 零账号配对）· [`dao-bridge-android/`](addons/dao-bridge-android/README.md)（Termux 手机端）。
+**内网穿透栈**：`dao-bridge-ext/`（VS Code 插件·默认通道）· `agent.js/core.js`（纯 Node 独立后端·全平台兜底）· [`dao-relay/`](addons/dao-relay/README.md)（中继 Worker·归一入库 v2·`(session,token)` 零账号配对）。手机端穿透已迁入 [`rt-flow-app`](addons/rt-flow-app/README.md)（内置 RelayService）。
 
 **源码**：`addons/dao-bridge/dao-bridge-ext/extension.js` · **核心本体**：`addons/dao-bridge/{agent,core}.js` · **📹 视频**：[▶ 教程](https://github.com/user-attachments/assets/8c4aec08-8357-44f2-a169-d44c8d055dd3)
 
-### rt-flow-mobile · 浏览器/手机版自动切号
+### rt-flow-app · Devin Cloud 手机版 APK (v0.7.0)
 
-把 rt-flow 的「多账号自动切换」+ dao-vsix 的「官网注入自动登录」移植到 Chromium MV3 扩展，无 Devin Desktop/VSCode 依赖，可在桌面 Chrome/Edge 与 Android 上的 Kiwi/Edge 侧载运行。storage-first 面板根除 MV3 冷启竞态。
+独立 APK 三合一：**切号 + 内网穿透 + 网页多实例**。取代了此前的 `rt-flow-mobile`（MV3 扩展·Kiwi 已停更）和 `dao-bridge-android`（Termux Agent）。1:1 桌面 RT Flow 面板移植 + 手机适配化简（去 DW/去 sw·突出编号+账号名·按钮 flex-wrap）。Per-account 展开面板（Sessions/Knowledge/Playbooks/Secrets/Git）。穿透配置动态化（每用户/设备独立，非固定 conn.json）。
 
-**源码/安装/接力**：[`addons/rt-flow-mobile/README.md`](addons/rt-flow-mobile/README.md) · **安卓侧载**：`addons/rt-flow-mobile/docs/ANDROID_TEST.md`
+**源码/文档**：[`addons/rt-flow-app/README.md`](addons/rt-flow-app/README.md)
 
 ### devin-git-auth · 多账号绑定同一 GitHub
 
@@ -158,7 +157,7 @@ python cloud/export-accounts/dao_export_all.py --email xxx@gmail.com --password 
 | dao-proxy-pro | ✅ 已部署 | 提示词隔离 + 模型路由生效 |
 | rt-flow | ✅ 实测验证 | 12/12 批量备份 + 一键 wipe 全链路真号验证 |
 | devin-git-auth | ◑ 机制通 | 账号/PAT/设备流均通，组织 Git 连接待后端 oauth |
-| rt-flow-mobile | ◑ 桌面实测 | 桌面 Chrome 全流程通过；安卓 Kiwi/Edge 侧载待真机验证 |
+| rt-flow-app | ✅ S23 Ultra 实测 | v0.7.0 · 1:1 桌面面板移植 + 穿透动态配置 + 手机适配 · 取代 rt-flow-mobile 和 dao-bridge-android |
 
 > 旧架构正典与历史实测见 [`docs/archive/`](docs/archive/)（CANON 五插件规范 · REARCH · AUDIT · LIVE_VERIFICATION）。
 
