@@ -4138,6 +4138,27 @@ function getRtFlowActiveEmail(): string {
     } catch { return ''; }
 }
 
+// 归一·真源·1:1 · RT Flow 切号即把最新真 auth1 落盘 ~/.wam/devin_cloud/auth_cache.json。
+// 全能板优先采此源(最鲜活·与切号面板同步), 本插件自有存储(dao-accounts-auth.json)作回退。
+function loadRtFlowCachedAuth(email: string): SavedAccountAuth | null {
+    const e = (email || '').trim().toLowerCase();
+    if (!e) return null;
+    try {
+        const f = path.join(os.homedir(), '.wam', 'devin_cloud', 'auth_cache.json');
+        const cache = JSON.parse(fs.readFileSync(f, 'utf8')) || {};
+        const hit = cache[e];
+        if (hit && hit.auth1 && hit.orgId) {
+            return {
+                auth1: hit.auth1, orgId: hit.orgId, orgName: hit.orgName || '',
+                orgSlug: hit.orgBare || String(hit.orgId).replace(/^org-/, ''),
+                userId: hit.userId || '', accountId: '', apiKey: '', apiServerUrl: '',
+                savedAt: hit.ts ? new Date(hit.ts).toISOString() : '',
+            };
+        }
+    } catch { /* 守柔 */ }
+    return null;
+}
+
 // 守柔 · 保留用户操作空间 — 账号同步 / 官网登录 的「自动 | 手动」模式
 function getAccountSyncMode(): 'auto' | 'manual' {
     try { return vscode.workspace.getConfiguration('dao').get<string>('accountSyncMode', 'auto') === 'manual' ? 'manual' : 'auto'; } catch { return 'auto'; }
@@ -4421,9 +4442,11 @@ async function devinAutoChain(): Promise<boolean> {
     }
 
     // 路径A (最快·自循环): 按邮箱持久化的真 auth1 命中 → 切回旧账号即刻复用, 无需重登
+    // 归一·真源·1:1 · auto 模式优先采 RT Flow 切号落盘的最新 auth1 (auth_cache.json),
+    // 本插件自有存储作回退 — 确保全能板与切号面板用同一鲜活令牌, 永不因旧令牌失效而判未登录。
     if (currentIdeEmail) {
         try {
-            const saved = loadAccountAuth(currentIdeEmail);
+            const saved = (getAccountSyncMode() !== 'manual' ? loadRtFlowCachedAuth(currentIdeEmail) : null) || loadAccountAuth(currentIdeEmail);
             if (saved && saved.auth1 && saved.orgId) {
                 ws.devinAuth1 = saved.auth1; ws.devinOrgId = saved.orgId;
                 ws.devinOrgName = saved.orgName || ''; ws.devinOrgSlug = saved.orgSlug || '';
@@ -4433,6 +4456,7 @@ async function devinAutoChain(): Promise<boolean> {
                 const quota = await devinFetchQuota(ws.devinApiKey || ws.devinAuth1);
                 if (quota) {
                     ws.devinQuota = quota; ws.devinSaveConfig();
+                    saveAccountAuth(currentIdeEmail); // 鲜活令牌回写本插件存储, 二源归一
                     if (!(ws.devinApiKey || '').startsWith('cog_')) { try { await devinEnsureCogApiKey(ws.devinOrgId, ws.devinAuth1); } catch {} }
                     return true;
                 }
@@ -5072,7 +5096,8 @@ async function devinFetchQuota(apiKey: string, apiServerUrl?: string): Promise<a
     if (ws.devinAuth1 && ws.devinOrgId) {
         try {
             const bareOrgId = ws.devinOrgId.replace(/^org-/, '');
-            const br = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', { Authorization: 'Bearer ' + ws.devinAuth1 });
+            // 归一·真源 · billing/status 须带 x-cog-org-id, 否则 401「No organizations found」→ 配额恒空 → 全能板恒判未登录
+            const br = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', { Authorization: 'Bearer ' + ws.devinAuth1, 'x-cog-org-id': ws.devinOrgId });
             if (br.status === 200 && br.json) {
                 const hasFunds = typeof br.json.overage_credits === 'number' && br.json.overage_credits < 0 && !br.json.billing_error;
                 return { planName: 'Trial', dailyQuotaRemainingPercent: hasFunds ? 100 : 0, weeklyQuotaRemainingPercent: hasFunds ? 100 : 0, overageActive: hasFunds, overageDollars: hasFunds ? Math.abs(br.json.overage_credits) : 0, _source: 'devin_billing' };
@@ -5100,7 +5125,8 @@ async function devinFetchOverageDollars(): Promise<number | null> {
     if (!(ws.devinAuth1 && ws.devinOrgId)) return null;
     try {
         const bareOrgId = ws.devinOrgId.replace(/^org-/, '');
-        const br = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', { Authorization: 'Bearer ' + ws.devinAuth1 });
+        // 同源 · 带 x-cog-org-id (缺则 401)
+        const br = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', { Authorization: 'Bearer ' + ws.devinAuth1, 'x-cog-org-id': ws.devinOrgId });
         if (br.status === 200 && br.json && typeof br.json.overage_credits === 'number' && !br.json.billing_error) {
             return br.json.overage_credits < 0 ? Math.abs(br.json.overage_credits) : 0;
         }
