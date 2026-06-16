@@ -694,7 +694,11 @@ function _initCfgUI(){
 
 // ── 初始化 ──
 // 数据持久化恢复: 账号库已镜像到共享文件夹(Documents/DevinCloud), 卸载/重装/换机后从此处回读
-(function(){ try{ if(N.vaultLoad && !loadAcc().length){ var v=N.vaultLoad("accounts"); if(v){ var arr=JSON.parse(v); if(arr&&arr.length) localStorage.setItem("rtflow.accounts", v); } } }catch(e){} })();
+(function(){ try{
+  var cur=loadAcc();
+  if(cur.length){ if(N.vaultSave) N.vaultSave("accounts", JSON.stringify(cur)); }            // 既有账号 → 立即镜像到共享文件夹(升级即生效)
+  else if(N.vaultLoad){ var v=N.vaultLoad("accounts"); if(v){ var arr=JSON.parse(v); if(arr&&arr.length) localStorage.setItem("rtflow.accounts", v); } }  // 本地空 → 从共享文件夹回读
+}catch(e){} })();
 document.getElementById("convBody").classList.toggle("collapsed",!_convOpen);
 document.getElementById("convArrow").innerHTML=_convOpen?"&#9660;":"&#9650;";
 _initCfgUI();
