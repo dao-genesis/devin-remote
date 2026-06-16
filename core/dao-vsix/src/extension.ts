@@ -2423,11 +2423,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="ni active" data-tab="overview" onclick="sw('overview')" title="主页 Home">🏠</div>
 <div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网穿透 · DAO Bridge (独立板块·远程操作本地电脑)">🌐</div>
 <div class="ni" data-tab="backups" onclick="sw('backups')" title="对话 · 备份 — 本机全部 RT Flow 备份对话(全账号×全对话)">💬</div>
-<div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 通用自动注入(道法自然准则+内网穿透MD+道德经/阴符经/道法自然+MCP)">💉</div>
-<!-- ② 去芜存菁: Knowledge/Playbooks/Secrets/Git 三标签已合并进主页(overview)「当前账号·手动内容」分区 -->
+<div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 全账号批量(Knowledge/Playbook/Secret/MCP/自动化/蓝图 一处整合)">💉</div>
+<!-- ② 收腰归一: 单账号 K/P/S/Git/自动化/蓝图 均并入主页(overview); 全账号批量在反向注入(inject); MCP 仍保留专用面板 -->
 <div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器 · 专用面板">🧩</div>
-<div class="ni" data-tab="automations" onclick="sw('automations')" title="Automations 自动化">⚙️</div>
-<div class="ni" data-tab="blueprints" onclick="sw('blueprints')" title="环境蓝图 · Blueprints (snapshot-setup·只读)">🗺️</div>
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
 </nav>
@@ -2444,8 +2442,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="tv active" id="v-overview"></div>
 <div class="tv" id="v-backups"></div>
 <div class="tv" id="v-mcp"></div>
-<div class="tv" id="v-automations"></div>
-<div class="tv" id="v-blueprints"></div>
 <div class="tv" id="v-bridge"></div>
 <div class="tv" id="v-inject"></div>
 </div>
@@ -2508,7 +2504,6 @@ function sw(t){
   if(t==='inject'){ cmd('getInjectProfile'); return; }
   if(t==='bridge'){ rBridgeFull(); return; }
   if(t==='backups'){ rBackups(); return; }
-  if(t==='blueprints'){ rBlueprintsLoading(); cmd('loadBlueprints'); return; }
   if(t!=='overview'&&S.auth.loggedIn){
     const v=document.getElementById('v-'+t);
     if(v&&!v.dataset.loaded){
@@ -2594,9 +2589,9 @@ function rBackups(){
   cmd('loadBackups');
 }
 // 环境蓝图 · 只读板块 (snapshot-setup/blueprints + 机器快照计数)
-function rBlueprintsLoading(){var v=document.getElementById('v-blueprints');if(v)v.innerHTML='<div class="empty"><div class="ic">🗺️</div><p style="margin:8px 0;color:var(--muted)">正在加载环境蓝图…</p></div>'}
+function rBlueprintsLoading(){var v=document.getElementById('v-blueprints')||document.getElementById('ov-blueprints');if(v)v.innerHTML='<div class="empty"><div class="ic">🗺️</div><p style="margin:8px 0;color:var(--muted)">正在加载环境蓝图…</p></div>'}
 function rBlueprintsData(items,snapCount,err){
-  var v=document.getElementById('v-blueprints');if(!v)return;
+  var v=document.getElementById('v-blueprints')||document.getElementById('ov-blueprints');if(!v)return;
   if(err){
     if(err==='需要 cog_ API Key'){v.innerHTML='<div class="empty"><div class="ic">🗺️</div><h3>环境蓝图</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试</button></div></div>';return}
     v.innerHTML='<div class="empty"><div class="ic">🗺️</div><h3>环境蓝图</h3><p style="margin:8px 0;color:var(--danger);font-size:12px">Error: '+esc(err)+'</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn" onclick="cmd(&#39;loadBlueprints&#39;)">⟳ 重试</button><button class="btn ghost" onclick="cmd(&#39;openBlueprintDetail&#39;)">🌐 官网打开</button></div></div>';return;
@@ -2679,15 +2674,19 @@ function daoOverviewManualHtml(){
     +'<div class="st" style="margin-top:8px;font-size:11px;text-transform:none">📚 Knowledge 知识库</div><div id="ov-knowledge" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">📋 Playbooks 剧本</div><div id="ov-playbooks" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">🔑 Secrets 密钥</div><div id="ov-secrets" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
-    +'<div class="st" style="font-size:11px;text-transform:none">🔗 Git / Security</div><div id="ov-git" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>';
+    +'<div class="st" style="font-size:11px;text-transform:none">🔗 Git / Security</div><div id="ov-git" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">⚙️ Automations 自动化</div><div id="ov-automations" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">🗺️ 环境蓝图 Blueprints</div><div id="ov-blueprints" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">🧩 MCP 服务器</div><div class="card"><div class="cr"><span class="l" style="font-size:11px;color:var(--muted)">MCP 在专用面板集中管理(浏览市场·安装·卸载·钉住)</span><span class="v"><button class="btn sm primary" onclick="sw(&#39;mcp&#39;)">打开 MCP 面板</button></span></div></div>';
 }
 function daoLoadOverviewManual(){
   if(!S.auth.loggedIn||!S.auth.canUseApi)return;
-  ['knowledge','playbooks','secrets','integrations'].forEach(function(t){
+  ['knowledge','playbooks','secrets','integrations','automations'].forEach(function(t){
     var id=(t==='integrations')?'ov-git':'ov-'+t;
     if(!document.getElementById(id))return;
     cmd('loadTabData',{tab:t});
   });
+  if(document.getElementById('ov-blueprints'))cmd('loadBlueprints');
 }
 function rBridge(){
   var b=S.bridge;var head='<div class="st">内网穿透 · DAO Bridge</div>';
@@ -2708,7 +2707,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){cmd('loadTabData',{tab:S.tab})}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
