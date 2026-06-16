@@ -48,7 +48,7 @@ rt-flow 的 `plugins/rt-flow/devin_cloud.js` 用「邮箱+密码 → auth1」五
 ```powershell
 # 纯 JS 插件直接打包；有 TS 源的先 build
 cd <plugin_dir>
-node build.js                                       # dao-vsix 编译 TS（若适用）
+node build.js                                       # dao-one 装配 vendor-* + 折 Proxy Pro / dao-vsix 编译 TS（若适用）
 npx @vscode/vsce package --no-dependencies --allow-missing-repository
 devin-desktop --install-extension <name>-<ver>.vsix --force
 devin-desktop --list-extensions                     # 验证
@@ -59,7 +59,7 @@ devin-desktop --list-extensions                     # 验证
 
 ## 4. 编辑器内验证要点
 - **proxy-pro**：活动栏「本源观照」面板渲染、帛书 SP 注入字数、模式/路由切换提示弹出即「活」。③模型路由数据源必须读 `http://127.0.0.1:8937/origin/ea/overview`（49 家族归一 + builtin-stub 测试通道置首），勿用旧扁平 `/origin/ea/config`+`/origin/model_catalog`。
-- **dao-vsix**：全功能面板 Sessions 拉到真实会话、内网穿透 board 显示隧道 URL。
+- **dao-one（大 one）**：全功能面板 Sessions 拉到真实会话、**Proxy Pro 三面板子模块文字浅色可读可操作**（非黑字）、内网穿透 board 显示隧道 URL。
 - **dao-bridge**：随 IDE 启动自动起隧道；集成终端 curl 公网 URL 返回 `{status:ok,workspace:...}`；关窗隧道消失（CF 530）。
 - **rt-flow**：登录账号后批量备份 12/12 快照、一键 wipe 前后对比（用户数据清零、本源默认保留）。
 - LSP「connection to server is erroring」在反代 invert 模式下是**预期现象**（代理拦截出站），与插件无关。
