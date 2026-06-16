@@ -286,7 +286,6 @@ function rowHtml(a,i){
       '<button class="b dv" onclick="dv('+i+')" title="Devin Cloud 展开(对话/知识库/剧本/密钥/Git/美金额度)">&#9729;&#9662;</button>'+
       (auth?
         '<button class="b sw" onclick="sw('+i+')" title="多实例注入浏览器打开(即切号)">&#9889;</button>'+
-        '<button class="b rt" onclick="sw('+i+')" title="多实例标签打开·注入登录">&#128421;</button>'+
         '<button class="b vf" onclick="rq('+i+')" title="刷新额度">&#128260;</button>'
       :
         '<button class="b sw" onclick="doLogin('+i+')" title="登录解锁 auth1">&#128273;</button>'
@@ -341,7 +340,7 @@ function sw(i){
   if(_mode==="official"){ try{ N.openUrlTab&&N.openUrlTab(DEVIN); }catch(e){} toast("官方模式·已打开 app.devin.ai"); return; }
   if(!hasAuth(a)){ toast("此号无 auth1, 需先登录(点 🔑)", true); return; }
   setActive(a.id);
-  try{ N.openAccountTab(JSON.stringify(a)); toast("已打开 "+(a.email||a.id)); }
+  try{ var a2={}; for(var k in a){ if(Object.prototype.hasOwnProperty.call(a,k)) a2[k]=a[k]; } a2.no=i+1; N.openAccountTab(JSON.stringify(a2)); toast("已打开 "+(a.email||a.id)); }
   catch(e){ toast("打开失败 "+e, true); }
   render();
 }

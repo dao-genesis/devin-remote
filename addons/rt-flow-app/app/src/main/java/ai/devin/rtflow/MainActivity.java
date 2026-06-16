@@ -15,10 +15,13 @@ import android.util.TypedValue;
 import android.view.DragEvent;
 import android.view.GestureDetector;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.net.ConnectivityManager;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
@@ -40,6 +43,7 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
@@ -49,6 +53,8 @@ import android.content.SharedPreferences;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -89,6 +95,12 @@ public class MainActivity extends AppCompatActivity {
     private LinearLayout tabStripRow;
     private EditText addr;
     private Button dlBtn;
+    private Button starBtn;
+    private FrameLayout dlPanel;
+    private LinearLayout dlListCol;
+    private volatile String sEngineCache = null;
+    private final java.util.Map<Long, String[]> dlPending = new java.util.concurrent.ConcurrentHashMap<>();
+    private android.content.BroadcastReceiver dlReceiver;
 
     static class Tab {
         WebView web;
@@ -124,6 +136,16 @@ public class MainActivity extends AppCompatActivity {
             cb.onReceiveValue(uris);
         });
         startRelay();
+        refreshSearchEngine();   // 后端自动判定搜索引擎(有VPN且能连Google→Google, 否则→百度)
+        // 下载完成广播 → 落入应用内下载管理器
+        dlReceiver = new android.content.BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent i) {
+                long id = i.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+                if (id >= 0) onDownloadComplete(id);
+            }
+        };
+        ContextCompat.registerReceiver(this, dlReceiver,
+                new android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), ContextCompat.RECEIVER_EXPORTED);
         // Token 冷启动轮换由 RelayService 引擎页 (engine.html) 在服务冷启动时执行,
         // 该服务为 START_STICKY 前台常驻 → 仅手动重开(进程被杀后重建)时刷新, 后台恢复不刷, 符合预期。
         if (Build.VERSION.SDK_INT >= 19) WebView.setWebContentsDebuggingEnabled(true);
@@ -173,14 +195,24 @@ public class MainActivity extends AppCompatActivity {
         Button go = chipBtn("→");
         go.setOnClickListener(v -> go(addr.getText().toString()));
 
+        // 网页栏五角星：点击收藏/取消收藏当前页 (像浏览器)
+        starBtn = chipBtn("\u2606");
+        starBtn.setOnClickListener(v -> toggleBookmarkCurrent());
+
         // 最右侧刷新按钮：原地重载当前标签的 WebView（保留多实例登录态）
         Button reload = chipBtn("\u21BB");
         reload.setOnClickListener(v -> reloadActive());
 
+        // 下载管理悬浮窗按钮 (紧邻刷新, 最右上角)
+        dlBtn = chipBtn("\uD83D\uDCE5");
+        dlBtn.setOnClickListener(v -> toggleDownloadPanel());
+
         bar.addView(menu);
         bar.addView(addr);
+        bar.addView(starBtn);
         bar.addView(go);
         bar.addView(reload);
+        bar.addView(dlBtn);
 
         // 标签条
         HorizontalScrollView strip = new HorizontalScrollView(this);
@@ -194,23 +226,6 @@ public class MainActivity extends AppCompatActivity {
         content = new FrameLayout(this);
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         content.setLayoutParams(clp);
-
-        // 右上角下载管理悬浮按钮 (避免遮挡页面底部内容)
-        dlBtn = new Button(this);
-        dlBtn.setText("📥");
-        dlBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        dlBtn.setBackgroundColor(0xCC1F6FEB);
-        dlBtn.setTextColor(0xFFFFFFFF);
-        dlBtn.setMinWidth(0); dlBtn.setMinimumWidth(0);
-        dlBtn.setPadding(dp(10), dp(8), dp(10), dp(8));
-        FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        dlp.gravity = Gravity.TOP | Gravity.END;
-        dlp.rightMargin = dp(12); dlp.topMargin = dp(8);
-        dlBtn.setLayoutParams(dlp);
-        dlBtn.setOnClickListener(v -> {
-            try { startActivity(new Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)); }
-            catch (Exception e) { toast("无法打开下载管理"); }
-        });
 
         root.addView(bar);
         root.addView(strip);
@@ -239,9 +254,6 @@ public class MainActivity extends AppCompatActivity {
         m.getMenu().add(0, 3, 4, "新标签 (Devin)");
         m.getMenu().add(0, 9, 5, "浏览历史");
         m.getMenu().add(0, 12, 6, "书签收藏");
-        m.getMenu().add(0, 13, 7, "收藏本页");
-        m.getMenu().add(0, 11, 8, "搜索引擎: " + ("baidu".equals(searchEngine()) ? "百度" : "Google"));
-        m.getMenu().add(0, 5, 9, "重连内网穿透");
         m.setOnMenuItemClickListener(it -> {
             switch (it.getItemId()) {
                 case 1: newTab(SWITCH, null); return true;
@@ -251,9 +263,6 @@ public class MainActivity extends AppCompatActivity {
                 case 3: newTab(DEVIN, null); return true;
                 case 9: showHistory(); return true;
                 case 12: showBookmarks(); return true;
-                case 13: { Tab cur = (active >= 0 && active < tabs.size()) ? tabs.get(active) : null; if (cur != null) addBookmark(displayUrl(cur), chipTitle(cur)); return true; }
-                case 11: toggleSearchEngine(); return true;
-                case 5: stopService(new Intent(this, RelayService.class)); startRelay(); toast("已请求重连内网穿透"); return true;
             }
             return false;
         });
@@ -273,15 +282,40 @@ public class MainActivity extends AppCompatActivity {
         navigate(url);
     }
 
+    // 搜索引擎后端自动判定: 有 VPN 且能连 Google → Google; 否则 → 百度。结果由后台线程刷新缓存, 不阻主线。
     private String searchEngine() {
-        SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
-        String def = java.util.Locale.getDefault().getCountry().equalsIgnoreCase("CN") ? "baidu" : "google";
-        return sp.getString(PREF_SEARCH, def);
+        if (sEngineCache != null) return sEngineCache;
+        return hasActiveVpn() ? "google" : "baidu";
     }
-    private void toggleSearchEngine() {
-        String next = "baidu".equals(searchEngine()) ? "google" : "baidu";
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_SEARCH, next).apply();
-        toast("搜索引擎已切换: " + ("baidu".equals(next) ? "百度" : "Google"));
+    private void refreshSearchEngine() {
+        new Thread(() -> {
+            String r = "baidu";
+            try { if (hasActiveVpn() && canReach("https://www.google.com/generate_204")) r = "google"; } catch (Exception ignored) {}
+            sEngineCache = r;
+        }).start();
+    }
+    private boolean hasActiveVpn() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            if (Build.VERSION.SDK_INT >= 21) {
+                for (android.net.Network n : cm.getAllNetworks()) {
+                    NetworkCapabilities cap = cm.getNetworkCapabilities(n);
+                    if (cap != null && cap.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return true;
+                }
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+    private boolean canReach(String u) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(u).openConnection();
+            c.setConnectTimeout(2500); c.setReadTimeout(2500); c.setRequestMethod("HEAD");
+            int code = c.getResponseCode();
+            return code > 0 && code < 500;
+        } catch (Exception e) { return false; }
+        finally { if (c != null) c.disconnect(); }
     }
     private String searchUrl(String q) {
         String enc = android.net.Uri.encode(q);
@@ -360,7 +394,7 @@ public class MainActivity extends AppCompatActivity {
                 tab.url = u; if (tabOf(v) == active) setAddr(u);
             }
             @Override public void onPageFinished(WebView v, String u) {
-                tab.url = u; renderTabStrip(); saveTabs(); addHistory(u, tab.title);
+                tab.url = u; renderTabStrip(); saveTabs(); addHistory(u, tab.title, tab);
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
@@ -430,10 +464,10 @@ public class MainActivity extends AppCompatActivity {
         Tab t = tabs.get(idx);
         if (t.web.getParent() != null) ((ViewGroup) t.web.getParent()).removeView(t.web);
         content.addView(t.web);
-        // 悬浮下载按钮置顶 (在 WebView 之上)
-        if (dlBtn != null) {
-            if (dlBtn.getParent() != null) ((ViewGroup) dlBtn.getParent()).removeView(dlBtn);
-            content.addView(dlBtn);
+        // 下载悬浮窗置顶 (在 WebView 之上)
+        if (dlPanel != null) {
+            if (dlPanel.getParent() != null) ((ViewGroup) dlPanel.getParent()).removeView(dlPanel);
+            content.addView(dlPanel);
         }
         setAddr(displayUrl(t));
         renderTabStrip();
@@ -459,7 +493,7 @@ public class MainActivity extends AppCompatActivity {
         selectTab(Math.max(0, idx - 1));
     }
 
-    private void setAddr(String u) { if (addr != null) addr.setText(u == null ? "" : u); }
+    private void setAddr(String u) { if (addr != null) addr.setText(u == null ? "" : u); updateStar(); }
 
     private void renderTabStrip() {
         if (tabStripRow == null) return;
@@ -492,7 +526,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tt.accountJson != null) copyTabAccount(tt); else toast("非账号标签·无账密可复制");
                     return true;
                 }
-                @Override public void onLongPress(MotionEvent e) { startTabDrag(chip, idx); }
+                @Override public void onLongPress(MotionEvent e) { chip.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); startTabDrag(chip, idx); }
             });
             chip.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
 
@@ -802,15 +836,209 @@ public class MainActivity extends AppCompatActivity {
 
     private void startDownload(String url, String ua, String contentDisposition, String mime) {
         try {
+            String name = android.webkit.URLUtil.guessFileName(url, contentDisposition, mime);
             DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
             if (mime != null) req.setMimeType(mime);
             if (ua != null) req.addRequestHeader("User-Agent", ua);
-            String name = android.webkit.URLUtil.guessFileName(url, contentDisposition, mime);
+            String cookie = android.webkit.CookieManager.getInstance().getCookie(url);
+            if (cookie != null) req.addRequestHeader("Cookie", cookie);
             req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            req.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, name);
+            // 落到应用专属外部目录 → 由应用内下载管理器统一展示/打开/拖拽
+            req.setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, name);
             DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-            if (dm != null) { dm.enqueue(req); toast("开始下载: " + name); }
+            if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, mime == null ? "" : mime }); toast("开始下载: " + name); }
         } catch (Exception e) { toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage())); }
+    }
+
+    // ── 应用内下载管理器 + 可拖拽悬浮窗 ───────────────────────────────────────
+    private void onDownloadComplete(long id) {
+        try {
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm == null) return;
+            android.database.Cursor cur = dm.query(new DownloadManager.Query().setFilterById(id));
+            if (cur == null) return;
+            try {
+                if (!cur.moveToFirst()) return;
+                int st = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                String localUri = cur.getString(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI));
+                String mediaType = cur.getString(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_MEDIA_TYPE));
+                String[] meta = dlPending.remove(id);
+                if (st == DownloadManager.STATUS_SUCCESSFUL && localUri != null) {
+                    String path = Uri.parse(localUri).getPath();
+                    if (path == null) return;
+                    String name = meta != null ? meta[0] : new File(path).getName();
+                    String mime = (meta != null && !meta[1].isEmpty()) ? meta[1] : (mediaType == null ? "*/*" : mediaType);
+                    addDownloadRecord(name, path, mime, new File(path).length());
+                    toast("下载完成: " + name);
+                } else if (st == DownloadManager.STATUS_FAILED) {
+                    toast("下载失败");
+                }
+            } finally { cur.close(); }
+        } catch (Exception ignored) {}
+    }
+    private void addDownloadRecord(String name, String path, String mime, long size) {
+        try {
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            org.json.JSONArray arr = new org.json.JSONArray(sp.getString("downloads", "[]"));
+            org.json.JSONObject e = new org.json.JSONObject();
+            e.put("name", name); e.put("file", path); e.put("mime", mime); e.put("size", size); e.put("ts", System.currentTimeMillis());
+            arr.put(e);
+            while (arr.length() > 100) arr.remove(0);
+            sp.edit().putString("downloads", arr.toString()).apply();
+            if (dlListCol != null) main.post(() -> renderDownloadList(dlListCol));
+        } catch (Exception ignored) {}
+    }
+
+    private void toggleDownloadPanel() {
+        if (dlPanel != null) { closeDownloadPanel(); return; }
+        showDownloadPanel();
+    }
+    private void closeDownloadPanel() {
+        if (dlPanel != null && dlPanel.getParent() != null) ((ViewGroup) dlPanel.getParent()).removeView(dlPanel);
+        dlPanel = null; dlListCol = null;
+    }
+    private void showDownloadPanel() {
+        final FrameLayout panel = new FrameLayout(this);
+        panel.setBackgroundColor(0xF2151B24);
+        int w = Math.min(dp(300), getResources().getDisplayMetrics().widthPixels - dp(24));
+        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(w, dp(380));
+        plp.gravity = Gravity.TOP | Gravity.END; plp.topMargin = dp(6); plp.rightMargin = dp(8);
+        panel.setLayoutParams(plp);
+
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        panel.addView(col, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // 标题栏 (拖动可移动整窗, 像电脑悬浮窗)
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL); head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setBackgroundColor(0xFF1F6FEB); head.setPadding(dp(10), dp(8), dp(8), dp(8));
+        TextView ttl = new TextView(this); ttl.setText("下载 · 长按文件拖到页面");
+        ttl.setTextColor(0xFFFFFFFF); ttl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        ttl.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView close = new TextView(this); close.setText("✕");
+        close.setTextColor(0xFFFFFFFF); close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16); close.setPadding(dp(8), 0, dp(4), 0);
+        close.setOnClickListener(v -> closeDownloadPanel());
+        head.addView(ttl); head.addView(close);
+        head.setOnTouchListener(new View.OnTouchListener() {
+            float dx, dy;
+            @Override public boolean onTouch(View v, MotionEvent ev) {
+                switch (ev.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN: dx = ev.getRawX() - panel.getTranslationX(); dy = ev.getRawY() - panel.getTranslationY(); return true;
+                    case MotionEvent.ACTION_MOVE: panel.setTranslationX(ev.getRawX() - dx); panel.setTranslationY(ev.getRawY() - dy); return true;
+                }
+                return false;
+            }
+        });
+        col.addView(head);
+
+        android.widget.ScrollView sc = new android.widget.ScrollView(this);
+        dlListCol = new LinearLayout(this); dlListCol.setOrientation(LinearLayout.VERTICAL); dlListCol.setPadding(dp(4), dp(4), dp(4), dp(4));
+        sc.addView(dlListCol);
+        col.addView(sc, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        renderDownloadList(dlListCol);
+        dlPanel = panel;
+        content.addView(panel);
+    }
+    private void renderDownloadList(LinearLayout listCol) {
+        listCol.removeAllViews();
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("downloads", "[]"));
+            if (arr.length() == 0) {
+                TextView empty = new TextView(this);
+                empty.setText("暂无下载\n网页里下载的文件会出现在这里");
+                empty.setTextColor(0xFF8B949E); empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                empty.setGravity(Gravity.CENTER); empty.setPadding(dp(10), dp(24), dp(10), dp(10));
+                listCol.addView(empty); return;
+            }
+            for (int i = arr.length() - 1; i >= 0; i--) {
+                org.json.JSONObject e = arr.getJSONObject(i);
+                final String path = e.optString("file", "");
+                final String name = e.optString("name", path);
+                final String mime = e.optString("mime", "*/*");
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.VERTICAL); row.setPadding(dp(8), dp(8), dp(8), dp(8));
+                row.setBackgroundColor(0xFF1B1F26);
+                LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                rlp.bottomMargin = dp(4); row.setLayoutParams(rlp);
+                TextView nm = new TextView(this); nm.setText(name);
+                nm.setTextColor(0xFFE6EDF3); nm.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                nm.setSingleLine(true); nm.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+                File f = new File(path);
+                TextView sub = new TextView(this);
+                sub.setText((f.exists() ? humanSize(f.length()) : "(文件已删)") + " · 点击打开 · 长按拖拽");
+                sub.setTextColor(0xFF8B949E); sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+                row.addView(nm); row.addView(sub);
+                row.setOnClickListener(v -> openDownloaded(path, mime));
+                row.setOnLongClickListener(v -> { dragDownloaded(v, path, mime); return true; });
+                listCol.addView(row);
+            }
+        } catch (Exception ignored) {}
+    }
+    private String humanSize(long b) {
+        if (b < 1024) return b + " B";
+        double k = b / 1024.0; if (k < 1024) return String.format(java.util.Locale.US, "%.1f KB", k);
+        double m = k / 1024.0; if (m < 1024) return String.format(java.util.Locale.US, "%.1f MB", m);
+        return String.format(java.util.Locale.US, "%.1f GB", m / 1024.0);
+    }
+    private Uri fileUri(String path) { return FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", new File(path)); }
+    private void openDownloaded(String path, String mime) {
+        try {
+            File f = new File(path);
+            if (!f.exists()) { toast("文件已不存在"); return; }
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(fileUri(path), (mime == null || mime.isEmpty()) ? "*/*" : mime);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) { toast("无法打开此文件"); }
+    }
+    private void dragDownloaded(View v, String path, String mime) {
+        try {
+            v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            Uri uri = fileUri(path);
+            ClipData data = new ClipData(new File(path).getName(),
+                    new String[]{ (mime == null || mime.isEmpty()) ? "*/*" : mime }, new ClipData.Item(uri));
+            View.DragShadowBuilder shadow = new View.DragShadowBuilder(v);
+            if (Build.VERSION.SDK_INT >= 24) v.startDragAndDrop(data, shadow, null, View.DRAG_FLAG_GLOBAL | View.DRAG_FLAG_GLOBAL_URI_READ);
+            else v.startDrag(data, shadow, null, 0);
+            toast("拖到页面的上传/输入区放手");
+        } catch (Exception e) { toast("拖拽失败"); }
+    }
+
+    // ── 网页栏五角星收藏 ───────────────────────────────────────────────────
+    private void toggleBookmarkCurrent() {
+        Tab cur = (active >= 0 && active < tabs.size()) ? tabs.get(active) : null;
+        if (cur == null) return;
+        String url = displayUrl(cur);
+        if (url == null || url.startsWith("rtflow:") || url.startsWith("file:") || url.startsWith("about:")) { toast("内部页不可收藏"); return; }
+        if (isBookmarked(url)) { removeBookmark(url); toast("已取消收藏"); }
+        else { addBookmark(url, chipTitle(cur)); }
+        updateStar();
+    }
+    private boolean isBookmarked(String url) {
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("bookmarks", "[]"));
+            for (int i = 0; i < arr.length(); i++) if (url.equals(arr.getJSONObject(i).optString("url"))) return true;
+        } catch (Exception ignored) {}
+        return false;
+    }
+    private void removeBookmark(String url) {
+        try {
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            org.json.JSONArray arr = new org.json.JSONArray(sp.getString("bookmarks", "[]"));
+            org.json.JSONArray out = new org.json.JSONArray();
+            for (int i = 0; i < arr.length(); i++) { if (!url.equals(arr.getJSONObject(i).optString("url"))) out.put(arr.getJSONObject(i)); }
+            sp.edit().putString("bookmarks", out.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+    private void updateStar() {
+        if (starBtn == null) return;
+        Tab cur = (active >= 0 && active < tabs.size()) ? tabs.get(active) : null;
+        String url = cur == null ? "" : displayUrl(cur);
+        boolean canBm = !(url == null || url.isEmpty() || url.startsWith("rtflow:") || url.startsWith("file:") || url.startsWith("about:"));
+        boolean on = canBm && isBookmarked(url);
+        starBtn.setText(on ? "\u2605" : "\u2606");
+        starBtn.setTextColor(on ? 0xFFE3B341 : 0xFFCDD3DE);
     }
 
     // ── 数据保险箱: 共享文件夹 Documents/DevinCloud (脱离应用沙箱, 卸载/重装/换机不丢) ──
@@ -907,18 +1135,21 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ── 浏览历史 (排除内部功能页) ─────────────────────────────────────────────
-    private void addHistory(String url, String title) {
+    private void addHistory(String url, String title) { addHistory(url, title, null); }
+    /** 多实例 Devin 账号网页单独记到 history_devin (命名=对话名+账号编号+账号), 其余走常规 history。 */
+    private void addHistory(String url, String title, Tab tab) {
         if (url == null) return;
         // 排除内部功能页
         if (url.startsWith("file:") || url.startsWith("about:") || url.startsWith("data:")
                 || url.startsWith("rtflow:") || url.startsWith("javascript:") || url.startsWith("blob:")) return;
+        boolean devin = tab != null && tab.accountJson != null && url.contains("devin.ai");
+        String key = devin ? "history_devin" : "history";
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
-            String raw = sp.getString("history", "[]");
-            org.json.JSONArray arr = new org.json.JSONArray(raw);
+            org.json.JSONArray arr = new org.json.JSONArray(sp.getString(key, "[]"));
             org.json.JSONObject entry = new org.json.JSONObject();
             entry.put("url", url);
-            entry.put("title", title == null ? "" : title);
+            entry.put("title", devin ? devinHistName(tab) : (title == null ? "" : title));
             entry.put("ts", System.currentTimeMillis());
             // 去重最近同 URL
             for (int i = arr.length() - 1; i >= 0; i--) {
@@ -927,29 +1158,59 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
             arr.put(entry);
-            // 保留最近 200 条
             while (arr.length() > 200) arr.remove(0);
-            sp.edit().putString("history", arr.toString()).apply();
-            vaultWrite("history", arr.toString());
+            sp.edit().putString(key, arr.toString()).apply();
+            vaultWrite(key, arr.toString());
         } catch (Exception ignored) {}
     }
+    /** 多实例登录历史命名: 对话名 + #账号编号 + 账号邮箱。 */
+    private String devinHistName(Tab t) {
+        String conv = chipTitle(t), email = "", no = "";
+        try {
+            JSONObject a = new JSONObject(t.accountJson);
+            email = a.optString("email", a.optString("id", ""));
+            int n = a.optInt("no", 0); if (n > 0) no = "#" + n;
+        } catch (Exception ignored) {}
+        StringBuilder sb = new StringBuilder();
+        if (conv != null && !conv.isEmpty()) sb.append(conv);
+        if (!no.isEmpty()) { if (sb.length() > 0) sb.append(" "); sb.append(no); }
+        if (!email.isEmpty()) { if (sb.length() > 0) sb.append(" · "); sb.append(email); }
+        return sb.length() == 0 ? url(t) : sb.toString();
+    }
+    private String url(Tab t) { return t.url == null ? "" : t.url; }
 
     private void showHistory() {
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            String rawD = sp.getString("history_devin", "[]");
+            if (rawD == null || rawD.isEmpty() || "[]".equals(rawD)) { String v = vaultRead("history_devin"); if (v != null && !v.isEmpty()) rawD = v; }
             String raw = sp.getString("history", "[]");
             if (raw == null || raw.isEmpty() || "[]".equals(raw)) { String v = vaultRead("history"); if (v != null && !v.isEmpty()) raw = v; }
+            org.json.JSONArray devinArr = new org.json.JSONArray(rawD);
             org.json.JSONArray arr = new org.json.JSONArray(raw);
             StringBuilder sb = new StringBuilder();
             sb.append("<html><head><meta name=viewport content='width=device-width,initial-scale=1'>");
             sb.append("<style>body{background:#0e1116;color:#cdd3de;font:13px -apple-system,sans-serif;padding:12px}");
-            sb.append("h2{color:#9cdcfe;margin-bottom:12px}");
+            sb.append("h2{color:#9cdcfe;margin:14px 0 8px}");
+            sb.append(".sec{color:#7ee787;font-size:13px;font-weight:600;margin:14px 0 6px;padding-bottom:4px;border-bottom:1px solid #21262d}");
+            sb.append(".sec.b{color:#9cdcfe}");
             sb.append(".it{padding:8px;border-bottom:1px solid #21262d;cursor:pointer}");
+            sb.append(".it.dv{border-left:3px solid #2ea043;padding-left:8px}");
             sb.append(".it:active{background:#1f3a45}");
             sb.append(".it .t{color:#e6edf3;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
             sb.append(".it .u{color:#8b949e;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
-            sb.append(".it .ts{color:#6e7681;font-size:10px}");
             sb.append("</style></head><body><h2>浏览历史</h2>");
+            sb.append("<div class='sec'>⚡ 多实例 Devin 登录历史</div>");
+            for (int i = devinArr.length() - 1; i >= 0; i--) {
+                org.json.JSONObject e = devinArr.getJSONObject(i);
+                String u = escapeHtml(e.optString("url", ""));
+                String t = escapeHtml(e.optString("title", ""));
+                sb.append("<div class='it dv' onclick=\"location.href='").append(u.replace("'", "\\'")).append("'\">");
+                sb.append("<div class='t'>").append(t.isEmpty() ? u : t).append("</div>");
+                sb.append("<div class='u'>").append(u).append("</div></div>");
+            }
+            if (devinArr.length() == 0) sb.append("<div style='color:#6e7681;padding:10px 4px'>暂无多实例登录记录</div>");
+            sb.append("<div class='sec b'>🌐 常规网页浏览历史</div>");
             for (int i = arr.length() - 1; i >= 0; i--) {
                 org.json.JSONObject e = arr.getJSONObject(i);
                 String u = escapeHtml(e.optString("url", ""));
@@ -958,7 +1219,7 @@ public class MainActivity extends AppCompatActivity {
                 sb.append("<div class='t'>").append(t.isEmpty() ? u : t).append("</div>");
                 sb.append("<div class='u'>").append(u).append("</div></div>");
             }
-            if (arr.length() == 0) sb.append("<div style='color:#6e7681;text-align:center;padding:40px'>暂无浏览历史</div>");
+            if (arr.length() == 0) sb.append("<div style='color:#6e7681;padding:10px 4px'>暂无常规浏览历史</div>");
             sb.append("</body></html>");
             Tab ht = newTab("about:blank", null);
             ht.title = "浏览历史";
@@ -1000,7 +1261,7 @@ public class MainActivity extends AppCompatActivity {
                 sb.append("<div class='t'>").append(t.isEmpty() ? u : t).append("</div>");
                 sb.append("<div class='u'>").append(u).append("</div></div>");
             }
-            if (arr.length() == 0) sb.append("<div style='color:#6e7681;text-align:center;padding:40px'>暂无书签 — 长按标签「收藏本页」</div>");
+            if (arr.length() == 0) sb.append("<div style='color:#6e7681;text-align:center;padding:40px'>暂无书签 — 点地址栏 ☆ 收藏本页</div>");
             sb.append("</body></html>");
             Tab bt = newTab("about:blank", null);
             bt.title = "书签";
@@ -1014,8 +1275,14 @@ public class MainActivity extends AppCompatActivity {
         saveTabs();
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        refreshSearchEngine();
+    }
+
     @Override protected void onDestroy() {
         saveTabs();
+        try { if (dlReceiver != null) unregisterReceiver(dlReceiver); } catch (Exception ignored) {}
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}
         for (Tab t : tabs) { try { t.web.destroy(); } catch (Exception ignored) {} }
         tabs.clear();
