@@ -72,8 +72,13 @@
 | 模块 | 方法 | 路径 | 置信度 | body / 备注 |
 |---|---|---|---|---|
 | 列表(市场+已装) | GET | `/api/mcp/servers` | ✅ 实测 | 项主键 `server_id`；`mcp-installation-*`=本组织自装，`mcp-marketplace-server-*`=市场目录 |
+| **市场目录** | GET | `/api/mcp/marketplace-servers` | ✅ 实测 | 官网 MCP marketplace 完整目录 `[{server_id:'mcp-marketplace-server-*', name, slug, short_description, transport, icon, requires_custom_oauth_credentials}]` |
 | 安装自定义 MCP | POST | `/api/mcp/installations` | ✅ 实测 | 见下方 schema |
+| **安装市场 MCP** | POST | `/api/mcp/installations` | ✅ 实测 | 同上 schema, 额外带 `marketplace_server_id:'mcp-marketplace-server-*'`(引用目录项) + 该项要求的 env/secrets/oauth 配置 |
 | 删除自定义 MCP | DELETE | `/api/mcp/installations/mcp-installation-<id>` | ✅ 实测 | id 需带前缀(自动补全) |
+
+> 官网前端路由：`/settings/mcp-marketplace`(目录) · `/setup/$slug`(装市场项) · `/setup/custom`(自定义) · `/configure/$id`(改已装)。
+> 安装表单字段(逆流 MCPEditor)：`marketplace_server_id` · `installation_scope`(org|user) · `is_enabled` · `transport`(STDIO|HTTP|SSE) · `command/args/env_variables` · `url/headers` · `requires_custom_oauth_credentials` · oauth_client_id/secret。
 
 **POST /api/mcp/installations schema（实测要点，易踩坑）：**
 ```jsonc
@@ -129,9 +134,16 @@
 
 | 方法 | 路径 | 置信度 | 备注 |
 |---|---|---|---|
-| GET | `/api/org-<bare>/blueprints` | ❌ 实测 404 | 该路径不存在 |
-| GET | `/api/org-<bare>/snapshots` | ✅ 实测 | 返回 `[]`（机器快照列表）；蓝图 UI 可能基于此 |
-| POST / DELETE | 真实路径未定 | ⚠️ 待实测 | 需在官网蓝图页 Chrome DevTools 抓 XHR 确认真实端点；`/blueprints` 已排除 |
+| GET | `/api/org-<bare>/blueprints` | ❌ 实测 404 | 该路径不存在(误猜) |
+| GET | `/api/org-<bare>/snapshots` | ✅ 实测 | 返回 `[]`（机器快照列表） |
+| **蓝图列表** | GET | `/api/org-<bare>/snapshot-setup/blueprints` | ✅ 实测 | 返回 `[]`（无蓝图时）；环境蓝图真实根 = `snapshot-setup` |
+| 蓝图详情/内容 | GET | `/api/org-<bare>/snapshot-setup/blueprints/<id>` · `/contents` · `/files` · `/versions` · `/git` · `/prs` | ✅ 逆流(前端确证) | 单蓝图内容/文件/版本/git/PR |
+| 蓝图重排 | POST | `/api/org-<bare>/snapshot-setup/blueprints/reorder` | ✅ 逆流 | body `{blueprint_ids:[...]}` |
+| 构建 | GET | `/api/org-<bare>/snapshot-setup/builds` · `/builds/active` · `/builds/<id>/logs` | ⚠️ builds 列表 500(本组织无构建) | build-jobs / cancel / logs/stream |
+| 环境建议接受 | POST | `/api/org-<bare>/snapshot-setup/environment-suggestion/accept` · `/skill-pr-suggestion/accept` | ✅ 逆流 | |
+
+> 「工作流(workflow)」官网无独立端点(`/workflows` 404)——对应概念即 **Playbooks**(§4)。
+> 「官方规则(rules)」无独立 org 级端点(`/rules` 404)——Devin 规则=仓库内 `AGENTS.md`/Knowledge(§3)，非云端 API。
 
 ## 9. Sessions 会话
 
