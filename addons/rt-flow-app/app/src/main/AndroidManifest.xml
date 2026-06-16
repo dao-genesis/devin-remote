@@ -11,6 +11,35 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
+    <!-- Android 11+ 包可见性: VPN 板块需查询已装的代理/VPN 客户端 (探测+唤起) -->
+    <queries>
+        <intent>
+            <action android:name="android.net.VpnService" />
+        </intent>
+        <!-- 网页上传: 相机拍照 / 录像 / 图库 / 文件 选择器可见性 -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.VIDEO_CAPTURE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.PICK" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.GET_CONTENT" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <package android:name="com.github.metacubex.clash.meta" />
+        <package android:name="com.github.kr328.clash" />
+        <package android:name="io.nekohasekai.sfa" />
+        <package android:name="com.v2ray.ang" />
+        <package android:name="app.hiddify.com" />
+        <package android:name="com.wireguard.android" />
+        <package android:name="org.outline.android.client" />
+        <package android:name="com.github.shadowsocks" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"

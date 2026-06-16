@@ -27,8 +27,18 @@ button:active{opacity:.8}
 <h3>🛡 VPN 加速 · 国内网络适配</h3>
 <div class="muted">本面板负责 <b>配置与调度</b>，由你掌控节点 — 不内置任何不可控的免费代理（免费节点活不久、且有合规/安全风险）。能力全开放，节点由你提供。</div>
 
-<div class="warn">
-说明：APK 出于安全与合规，<b>不打包</b>任何 VPN 节点/订阅。请用你自己的 Clash / sing-box / V2Ray 配置，或系统已配置的 VPN。
+<!-- ⓪ 实时状态 (自动识别·每 2s 刷新) -->
+<div class="card">
+  <div><span id="vdot" class="dot"></span><b id="vstat">检测中…</b></div>
+  <div class="lbl">系统 VPN</div><div id="vvpn" class="muted">—</div>
+  <div class="lbl">本地代理 (clash/v2ray 端口)</div><div id="vproxy" class="muted">—</div>
+  <div class="lbl">内置浏览器路由</div><div id="vroute" class="muted">—</div>
+  <div class="lbl">已识别的 VPN/代理 App</div><div id="vapps" class="muted">—</div>
+  <div class="row" style="margin-top:8px">
+    <button onclick="smartRoute()" style="background:#238636">⚡ 一键智能路由</button>
+    <button onclick="stopRoute()" style="background:#a33">直连</button>
+  </div>
+  <div class="muted" style="margin-top:5px">智能路由 = 自动探测本机正在运行的本地代理(Clash/V2Ray/sing-box)，把内置浏览器全部流量经它出站；<b>无需系统级 VPN</b>，App 内即可科学上网。</div>
 </div>
 
 <!-- 系统 VPN -->
@@ -79,12 +89,38 @@ var APPS=[
   {nm:"v2rayNG (开源)", pkg:"com.v2ray.ang"},
   {nm:"Hiddify (开源)", pkg:"app.hiddify.com"}
 ];
+function _isInstalled(pkg){ for(var i=0;i<_vapps.length;i++){ if(_vapps[i].pkg===pkg) return true; } return false; }
 function renderApps(){
   document.getElementById("apps").innerHTML = APPS.map(function(a){
-    return '<div class="app"><span class="dot"></span><span class="nm">'+a.nm+'</span>'+
-      '<button onclick="launch(\''+a.pkg+'\')">唤起</button></div>';
+    var inst=_isInstalled(a.pkg);
+    return '<div class="app"><span class="dot" style="background:'+(inst?'#3fb950':'#888')+'"></span><span class="nm">'+a.nm+(inst?' · 已安装':'')+'</span>'+
+      '<button onclick="launch(\''+a.pkg+'\')">'+(inst?'唤起':'安装')+'</button></div>';
   }).join("");
 }
+// ── 实时状态 (原生 vpnStatus 每 2s 拉取) ──
+var _vapps=[];
+function _vpn(){ try{ return JSON.parse(N.vpnStatus?N.vpnStatus():"{}"); }catch(e){ return {}; } }
+function refreshStatus(){
+  var s=_vpn();
+  var vpnOn=!!s.vpnActive, proxy=s.proxy||"", routed=s.proxyApplied||"";
+  _vapps=s.apps||[];
+  var active = vpnOn || !!routed;
+  document.getElementById('vdot').className='dot '+(active?'ok':(proxy?'pending':''));
+  document.getElementById('vstat').textContent = routed?('已经本地代理出站 · '+routed):(vpnOn?'系统 VPN 已连接':(proxy?'发现本地代理 · 未路由':'未检测到 VPN/代理'));
+  document.getElementById('vvpn').textContent = vpnOn?('已连接'+(s.iface?(' · '+s.iface):'')+(s.dns&&s.dns.length?(' · DNS '+s.dns.join(',')):'')):'未连接';
+  document.getElementById('vproxy').textContent = proxy?('运行中 · '+proxy):'未发现 (Clash/V2Ray 未开或非常见端口)';
+  document.getElementById('vroute').textContent = routed?('经 '+routed+' 出站'):'直连 (未走本地代理)';
+  document.getElementById('vapps').textContent = _vapps.length?_vapps.map(function(a){return a.name;}).join('、'):'未发现已安装的代理客户端';
+  renderApps();
+}
+function smartRoute(){
+  var p=""; try{ p=N.detectProxy?N.detectProxy():""; }catch(e){}
+  if(!p){ toast("未发现本地代理 (请先在 Clash/V2Ray 里开启)"); return; }
+  var ok=false; try{ ok=N.applyProxy?N.applyProxy(p):false; }catch(e){}
+  toast(ok?("已路由内置浏览器 → "+p):"路由失败 (系统 WebView 不支持代理覆盖)");
+  setTimeout(refreshStatus,300);
+}
+function stopRoute(){ try{ N.clearProxy&&N.clearProxy(); }catch(e){} toast("已恢复直连"); setTimeout(refreshStatus,300); }
 function openSys(){ try{ N.openVpnSettings && N.openVpnSettings(); }catch(e){ toast("无法打开"); } }
 function launch(pkg){ try{ N.launchApp && N.launchApp(pkg); }catch(e){ toast("唤起失败"); } }
 function launchCustom(){ var p=(document.getElementById("pkg").value||"").trim(); if(!p){toast("填包名");return;} launch(p); }
@@ -106,6 +142,6 @@ function showSaved(at){
 function copySub(){ var s=document.getElementById("sub").value||""; if(!s){toast("无订阅");return;} try{N.clip&&N.clip(s);}catch(e){} toast("已复制订阅"); }
 function copyCfg(){ var s=document.getElementById("cfg").value||""; if(!s){toast("无配置");return;} try{N.clip&&N.clip(s);}catch(e){} toast("已复制配置"); }
 
-renderApps(); loadCfg();
+renderApps(); loadCfg(); refreshStatus(); setInterval(refreshStatus, 2000);
 </script>
 </body></html>
