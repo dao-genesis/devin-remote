@@ -42,7 +42,12 @@
 +    v.innerHTML='';
 +    var f=document.createElement('iframe');
 +    f.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms allow-popups');
-+    f.srcdoc=d.html;
++    // 归一·② 修黑字: iframe srcdoc 不继承父帧 VS Code 主题变量(--vscode-*) → 黑字不可读。
++    //   复制父帧 :root 的 --vscode-* 进子帧 + 深色兜底, 确保三面板可读可操作。
++    var tv=(document.documentElement&&document.documentElement.style&&document.documentElement.style.cssText)||'';
++    var themeTag='<style>:root{color-scheme:dark;--vscode-foreground:#cccccc;--vscode-editor-background:#1e1e1e;--vscode-sideBar-background:#252526;--vscode-input-background:#3c3c3c;--vscode-input-foreground:#cccccc;--vscode-button-background:#0e639c;--vscode-button-foreground:#ffffff;--vscode-focusBorder:#007fd4;--vscode-toolbar-hoverBackground:rgba(128,128,128,0.18);'+tv+'}html,body{color:var(--vscode-foreground,#cccccc)!important;background:var(--vscode-editor-background,#1e1e1e)!important}</style>';
++    var ph=String(d.html||'');ph=(ph.indexOf('</head>')!==-1)?ph.replace('</head>',themeTag+'</head>'):(themeTag+ph);
++    f.srcdoc=ph;
 +    v.appendChild(f);
 +  } else {
 +    v.dataset.loaded='';
