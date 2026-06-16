@@ -84,6 +84,20 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <button onclick="send('openCf')" style="margin-top:4px;background:var(--vscode-textLink-foreground)">打开 CloudFlare 控制台</button>
 </div>
 
+<!-- 模块2.5: 远程操控安全开关 -->
+<div class="section">
+<h3>🛡️ 远程操控 · 安全开关</h3>
+<div class="muted">启用后, 云端 Agent 可通过隧道远程操控浏览器标签和手机本体 (文件/相册/剪贴板/通知/应用)。<br><b>默认关闭</b> — 仅在需要远程操控时手动开启。</div>
+<div style="display:flex;align-items:center;gap:10px;margin:8px 0">
+  <label style="position:relative;display:inline-block;width:48px;height:26px">
+    <input type="checkbox" id="remoteOpsToggle" onchange="toggleRemoteOps(this.checked)" style="opacity:0;width:0;height:0">
+    <span style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#333;border-radius:26px;transition:.3s" id="remoteOpsSlider"></span>
+  </label>
+  <span id="remoteOpsLabel" style="font-size:12px;color:var(--vscode-descriptionForeground)">已关闭</span>
+</div>
+<div class="muted" style="font-size:11px">操控范围: <code>browse*</code> (浏览器) + <code>phone*</code> (手机本体)</div>
+</div>
+
 <!-- 模块3: 导出MD -->
 <div class="section">
 <h3>📄 导出接入文档</h3>
@@ -216,6 +230,40 @@ function initRelayCfg(){
   if(cfg.session) document.getElementById('cfgSession').value=cfg.session;
 }
 initRelayCfg();
+// ── 远程操控开关 ──
+function toggleRemoteOps(on){
+  try{ N.saveRelayConfig; /* 检测桥可用 */ }catch(e){}
+  // 直接写 remote-ops-flag
+  try{
+    var Native = window.Native||{};
+    // 通过引擎桥设置 (RelayService.Bridge.setRemoteOps 已暴露)
+    if(window.__setRemoteOps){ window.__setRemoteOps(on); }
+    else { /* 回退: 存标志文件, 下次引擎重载时读取 */ }
+  }catch(e){}
+  updateRemoteOpsUI(on);
+  _result('remoteOps',true, on?'远程操控已开启 🟢':'远程操控已关闭 🔴');
+}
+function updateRemoteOpsUI(on){
+  var sl=document.getElementById('remoteOpsSlider');
+  var lb=document.getElementById('remoteOpsLabel');
+  var cb=document.getElementById('remoteOpsToggle');
+  if(cb) cb.checked=on;
+  if(sl) sl.style.background=on?'#3fb950':'#333';
+  if(sl){
+    // thumb indicator
+    sl.innerHTML='<span style="position:absolute;height:20px;width:20px;left:'+(on?'24px':'3px')+';bottom:3px;background:white;border-radius:50%;transition:.3s"></span>';
+  }
+  if(lb) lb.textContent=on?'已开启 · browse*/phone* 远程命令可用':'已关闭';
+}
+// 初始化: 读取当前状态
+(function(){
+  var N=window.Native||{};
+  var on=false;
+  try{ on=N.isRemoteOpsEnabled&&N.isRemoteOpsEnabled(); }catch(e){}
+  updateRemoteOpsUI(on);
+  // 为 toggleRemoteOps 注入原生调用
+  window.__setRemoteOps=function(v){ try{ N.setRemoteOps(v); }catch(e){} };
+})();
 setInterval(_push, 1500); _push();
 </script>
 </body></html>

@@ -146,9 +146,9 @@ devin-remote/
 
 **源码**：`addons/dao-bridge/dao-bridge-ext/extension.js` · **核心本体**：`addons/dao-bridge/{agent,core}.js`
 
-### rt-flow-app · Devin Cloud 手机版 APK (v0.7.0)
+### rt-flow-app · Devin Cloud 手机版 APK (v0.14.0)
 
-独立 APK 三合一：**切号 + 内网穿透 + 网页多实例**。取代了此前的 `rt-flow-mobile`（MV3 扩展·Kiwi 已停更）和 `dao-bridge-android`（Termux Agent）。1:1 桌面 RT Flow 面板移植 + 手机适配化简（去 DW/去 sw·突出编号+账号名·按钮 flex-wrap）。Per-account 展开面板（Sessions/Knowledge/Playbooks/Secrets/Git）。穿透配置动态化（每用户/设备独立，非固定 conn.json）。
+独立 APK 六合一：**切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 渐进式文档**。取代了此前的 `rt-flow-mobile`（MV3 扩展·Kiwi 已停更）和 `dao-bridge-android`（Termux Agent）。1:1 桌面 RT Flow 面板移植 + 手机适配化简。Per-account 展开面板（Sessions/Knowledge/Playbooks/Secrets/Git）。穿透配置动态化。v0.14.0 新增：远程浏览器自动化（browse* 11 RPCs·DOM/Cookie/Storage/截图/执行JS/导出MD）+ 手机本体操控（phone* 10 RPCs·文件系统/相册/剪贴板/通知/应用） + 安全开关 + Progressive Disclosure 文档系统。
 
 **源码/文档**：[`addons/rt-flow-app/README.md`](addons/rt-flow-app/README.md)
 
@@ -209,7 +209,7 @@ python cloud/export-accounts/dao_export_all.py --email xxx@gmail.com --password 
 | dao-proxy-pro | ✅ 已部署 | 提示词隔离 + 模型路由生效 |
 | rt-flow | ✅ 实测验证 | 12/12 批量备份 + 一键 wipe 全链路真号验证 |
 | devin-git-auth | ◑ 机制通 | 账号/PAT/设备流均通，组织 Git 连接待后端 oauth |
-| rt-flow-app | ✅ S23 Ultra 实测 | v0.7.0 · 1:1 桌面面板移植 + 穿透动态配置 + 手机适配 · 取代 rt-flow-mobile 和 dao-bridge-android |
+| rt-flow-app | ✅ S23 Ultra 实测 | v0.14.0 · 六合一(切号+穿透+多实例+浏览器自动化+手机操控+渐进式文档) · browse* 11 RPCs + phone* 10 RPCs + IPC 桥 + 安全开关 |
 
 > 旧架构正典与历史实测见 [`docs/archive/`](docs/archive/)（CANON 五插件规范 · REARCH · AUDIT · LIVE_VERIFICATION）。
 

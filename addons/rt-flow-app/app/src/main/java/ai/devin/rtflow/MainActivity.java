@@ -72,6 +72,9 @@ import java.util.List;
  */
 public class MainActivity extends AppCompatActivity {
 
+    /** 静态实例引用 — 供 RelayService (同进程) IPC 驱动前台 WebView 标签 */
+    public static volatile MainActivity sInstance;
+
     static final String SWITCH = "rtflow://switch";
     static final String TUNNEL = "rtflow://tunnel";
     static final String CLOUD = "rtflow://cloud";
@@ -128,6 +131,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        sInstance = this;
         if (Build.VERSION.SDK_INT >= 33 &&
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
@@ -2100,11 +2104,278 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override protected void onDestroy() {
+        sInstance = null;
         saveTabs();
         try { if (dlReceiver != null) unregisterReceiver(dlReceiver); } catch (Exception ignored) {}
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}
         for (Tab t : tabs) { try { t.web.destroy(); } catch (Exception ignored) {} }
         tabs.clear();
         super.onDestroy();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // IPC 桥: 供 RelayService (同进程) 远程驱动前台浏览器标签
+    //   所有方法在 main (UI) 线程调用; 异步结果通过 CompletableFuture 返回
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** 列出所有前台浏览器标签 (JSON 数组) */
+    public String ipcListTabs() {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < tabs.size(); i++) {
+            Tab t = tabs.get(i);
+            if (i > 0) sb.append(",");
+            sb.append("{\"index\":").append(i)
+              .append(",\"url\":").append(JSONObject.quote(t.url == null ? "" : t.url))
+              .append(",\"title\":").append(JSONObject.quote(t.title == null ? "" : t.title))
+              .append(",\"account\":").append(JSONObject.quote(t.accountJson == null ? "" : t.accountJson))
+              .append(",\"internal\":").append(t.internal)
+              .append(",\"active\":").append(i == active)
+              .append("}");
+        }
+        return sb.append("]").toString();
+    }
+
+    /** 在指定标签中执行 JS, 结果通过回调返回 */
+    public void ipcExecJs(int tabIndex, String js, android.webkit.ValueCallback<String> cb) {
+        if (tabIndex < 0 || tabIndex >= tabs.size()) { if (cb != null) cb.onReceiveValue("null"); return; }
+        Tab t = tabs.get(tabIndex);
+        if (t.web != null) t.web.evaluateJavascript(js, cb);
+        else if (cb != null) cb.onReceiveValue("null");
+    }
+
+    /** 导航指定标签: back/forward/reload/stop/goto */
+    public void ipcNavigate(int tabIndex, String action, String url) {
+        if (tabIndex < 0 || tabIndex >= tabs.size()) return;
+        Tab t = tabs.get(tabIndex);
+        if (t.web == null) return;
+        switch (action) {
+            case "back": t.web.goBack(); break;
+            case "forward": t.web.goForward(); break;
+            case "reload": t.web.reload(); break;
+            case "stop": t.web.stopLoading(); break;
+            case "goto": if (url != null) t.web.loadUrl(url); break;
+        }
+    }
+
+    /** 截图指定标签 (返回 base64 PNG) */
+    public String ipcScreenshot(int tabIndex) {
+        if (tabIndex < 0 || tabIndex >= tabs.size()) return "";
+        Tab t = tabs.get(tabIndex);
+        if (t.web == null) return "";
+        try {
+            android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(t.web.getWidth(), t.web.getHeight(), android.graphics.Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas c = new android.graphics.Canvas(bmp);
+            t.web.draw(c);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 80, bos);
+            bmp.recycle();
+            return android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
+        } catch (Exception e) { return ""; }
+    }
+
+    /** 获取所有 Cookie (指定 URL) */
+    public String ipcGetCookies(String url) {
+        try { return android.webkit.CookieManager.getInstance().getCookie(url); }
+        catch (Exception e) { return ""; }
+    }
+
+    /** 开新标签 (从 IPC 调用) */
+    public void ipcOpenTab(String url, String accountJson) {
+        main.post(() -> newTab(url == null ? DEVIN : url, accountJson));
+    }
+
+    /** 关闭标签 */
+    public void ipcCloseTab(int tabIndex) {
+        main.post(() -> { if (tabIndex >= 0 && tabIndex < tabs.size()) closeTab(tabIndex); });
+    }
+
+    /** 获取标签数量 */
+    public int ipcTabCount() { return tabs.size(); }
+
+    /** 获取活动标签索引 */
+    public int ipcActiveIndex() { return active; }
+
+    /** 获取剪贴板文本 */
+    public String ipcGetClipboard() {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip() != null && cm.getPrimaryClip().getItemCount() > 0) {
+                CharSequence cs = cm.getPrimaryClip().getItemAt(0).getText();
+                return cs == null ? "" : cs.toString();
+            }
+        } catch (Exception e) {}
+        return "";
+    }
+
+    /** 设置剪贴板文本 */
+    public void ipcSetClipboard(String text) {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("dao", text == null ? "" : text));
+        } catch (Exception e) {}
+    }
+
+    /** 分享文本 */
+    public void ipcShare(String text, String title) {
+        Intent i = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text == null ? "" : text);
+        if (title != null) i.putExtra(Intent.EXTRA_SUBJECT, title);
+        startActivity(Intent.createChooser(i, "分享").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+    }
+
+    /** 列出外部存储目录下的文件 */
+    public String ipcListFiles(String dir) {
+        try {
+            File base = (dir == null || dir.isEmpty()) ? android.os.Environment.getExternalStorageDirectory() : new File(dir);
+            if (!base.exists() || !base.isDirectory()) return "[]";
+            File[] files = base.listFiles();
+            if (files == null) return "[]";
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < files.length; i++) {
+                if (i > 0) sb.append(",");
+                sb.append("{\"name\":").append(JSONObject.quote(files[i].getName()))
+                  .append(",\"path\":").append(JSONObject.quote(files[i].getAbsolutePath()))
+                  .append(",\"isDir\":").append(files[i].isDirectory())
+                  .append(",\"size\":").append(files[i].length())
+                  .append(",\"modified\":").append(files[i].lastModified())
+                  .append("}");
+            }
+            return sb.append("]").toString();
+        } catch (Exception e) { return "[]"; }
+    }
+
+    /** 读取文件内容 (文本或 base64) */
+    public String ipcReadFile(String path, boolean base64) {
+        try {
+            File f = new File(path);
+            if (!f.exists() || f.isDirectory()) return "";
+            if (base64) {
+                byte[] bytes = new byte[(int) f.length()];
+                java.io.FileInputStream fis = new java.io.FileInputStream(f);
+                fis.read(bytes); fis.close();
+                return android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
+            } else {
+                java.io.FileInputStream fis = new java.io.FileInputStream(f);
+                byte[] bytes = new byte[(int) f.length()];
+                fis.read(bytes); fis.close();
+                return new String(bytes, StandardCharsets.UTF_8);
+            }
+        } catch (Exception e) { return ""; }
+    }
+
+    /** 写入文件 */
+    public boolean ipcWriteFile(String path, String content) {
+        try {
+            File f = new File(path);
+            f.getParentFile().mkdirs();
+            FileOutputStream fos = new FileOutputStream(f);
+            fos.write(content.getBytes(StandardCharsets.UTF_8));
+            fos.close();
+            return true;
+        } catch (Exception e) { return false; }
+    }
+
+    /** 列出相册图片 (MediaStore) */
+    public String ipcListPhotos(int limit) {
+        try {
+            android.database.Cursor cur = getContentResolver().query(
+                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                new String[]{android.provider.MediaStore.Images.Media._ID,
+                             android.provider.MediaStore.Images.Media.DISPLAY_NAME,
+                             android.provider.MediaStore.Images.Media.DATA,
+                             android.provider.MediaStore.Images.Media.SIZE,
+                             android.provider.MediaStore.Images.Media.DATE_MODIFIED},
+                null, null, android.provider.MediaStore.Images.Media.DATE_MODIFIED + " DESC");
+            if (cur == null) return "[]";
+            StringBuilder sb = new StringBuilder("[");
+            int count = 0;
+            while (cur.moveToNext() && count < (limit > 0 ? limit : 100)) {
+                if (count > 0) sb.append(",");
+                sb.append("{\"id\":").append(cur.getLong(0))
+                  .append(",\"name\":").append(JSONObject.quote(cur.getString(1) == null ? "" : cur.getString(1)))
+                  .append(",\"path\":").append(JSONObject.quote(cur.getString(2) == null ? "" : cur.getString(2)))
+                  .append(",\"size\":").append(cur.getLong(3))
+                  .append(",\"modified\":").append(cur.getLong(4))
+                  .append("}");
+                count++;
+            }
+            cur.close();
+            return sb.append("]").toString();
+        } catch (Exception e) { return "[]"; }
+    }
+
+    /** 获取设备信息 */
+    public String ipcDeviceInfo() {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("model", Build.MODEL);
+            o.put("brand", Build.BRAND);
+            o.put("device", Build.DEVICE);
+            o.put("sdk", Build.VERSION.SDK_INT);
+            o.put("release", Build.VERSION.RELEASE);
+            o.put("display", Build.DISPLAY);
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            o.put("screenWidth", dm.widthPixels);
+            o.put("screenHeight", dm.heightPixels);
+            o.put("density", dm.density);
+            // 尝试获取手机号 (需 READ_PHONE_STATE 权限, 可能为空)
+            try {
+                android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+                if (tm != null) {
+                    String line = tm.getLine1Number();
+                    if (line != null && !line.isEmpty()) o.put("phoneNumber", line);
+                }
+            } catch (Exception ignored) {}
+            o.put("totalStorage", android.os.Environment.getExternalStorageDirectory().getTotalSpace());
+            o.put("freeStorage", android.os.Environment.getExternalStorageDirectory().getFreeSpace());
+            return o.toString();
+        } catch (Exception e) { return "{}"; }
+    }
+
+    /** 列出已安装应用 */
+    public String ipcInstalledApps() {
+        try {
+            List<android.content.pm.ApplicationInfo> apps = getPackageManager().getInstalledApplications(0);
+            StringBuilder sb = new StringBuilder("[");
+            int count = 0;
+            for (android.content.pm.ApplicationInfo ai : apps) {
+                if ((ai.flags & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0) continue;
+                if (count > 0) sb.append(",");
+                sb.append("{\"package\":").append(JSONObject.quote(ai.packageName))
+                  .append(",\"label\":").append(JSONObject.quote(
+                    getPackageManager().getApplicationLabel(ai).toString()))
+                  .append("}");
+                count++;
+            }
+            return sb.append("]").toString();
+        } catch (Exception e) { return "[]"; }
+    }
+
+    /** 发送本地通知 */
+    public void ipcNotify(String title, String text) {
+        try {
+            android.app.NotificationManager nm = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (Build.VERSION.SDK_INT >= 26) {
+                android.app.NotificationChannel ch = new android.app.NotificationChannel("dao-msg", "消息", android.app.NotificationManager.IMPORTANCE_DEFAULT);
+                nm.createNotificationChannel(ch);
+            }
+            android.app.Notification.Builder nb = Build.VERSION.SDK_INT >= 26 ?
+                new android.app.Notification.Builder(this, "dao-msg") :
+                new android.app.Notification.Builder(this);
+            nb.setContentTitle(title == null ? "Devin Cloud" : title)
+              .setContentText(text == null ? "" : text)
+              .setSmallIcon(android.R.drawable.ic_dialog_info)
+              .setAutoCancel(true);
+            nm.notify((int) System.currentTimeMillis(), nb.build());
+        } catch (Exception e) {}
+    }
+
+    /** 启动指定包名的 APP */
+    public boolean ipcLaunchApp(String pkg) {
+        try {
+            Intent i = getPackageManager().getLaunchIntentForPackage(pkg);
+            if (i == null) return false;
+            startActivity(i);
+            return true;
+        } catch (Exception e) { return false; }
     }
 }
