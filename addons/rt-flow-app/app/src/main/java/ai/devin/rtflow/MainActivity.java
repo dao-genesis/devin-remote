@@ -42,6 +42,9 @@ import androidx.webkit.WebViewFeature;
 
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -487,6 +490,23 @@ public class MainActivity extends AppCompatActivity {
             });
         }
         @JavascriptInterface public void log(String s) { android.util.Log.i("RTFlowBrowser", s == null ? "" : s); }
+        /** 把文本(对话 MD/知识库/剧本等)落地到系统「下载」目录 — 单一对话下载到本地。 */
+        @JavascriptInterface public String saveTextFile(String name, String content) {
+            try {
+                String safe = (name == null || name.trim().isEmpty()) ? ("rtflow-" + System.currentTimeMillis() + ".md") : name.replaceAll("[\\\\/:*?\"<>|]", "_");
+                File dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
+                if (!dir.exists()) dir.mkdirs();
+                File f = new File(dir, safe);
+                try (FileOutputStream fos = new FileOutputStream(f)) {
+                    fos.write((content == null ? "" : content).getBytes(StandardCharsets.UTF_8));
+                }
+                main.post(() -> MainActivity.this.toast("已下载: " + safe));
+                return f.getAbsolutePath();
+            } catch (Exception e) {
+                main.post(() -> MainActivity.this.toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage())));
+                return "";
+            }
+        }
     }
 
     private static String escapeHtml(String s) {
