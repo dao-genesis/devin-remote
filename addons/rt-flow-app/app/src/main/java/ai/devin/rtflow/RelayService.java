@@ -261,6 +261,55 @@ public class RelayService extends Service {
             return m != null ? m.ipcCallLog(limit) : "[]";
         }
 
+        // ── 系统级接管 (AccessibilityService: 手势/全局/读屏/截图) ──────────
+        @JavascriptInterface public boolean phoneA11yReady() {
+            return RtAccessibilityService.isReady();
+        }
+        @JavascriptInterface public void phoneOpenA11ySettings() {
+            MainActivity m = MainActivity.sInstance;
+            if (m != null) m.runOnUiThread(() -> m.ipcOpenA11ySettings());
+        }
+        @JavascriptInterface public boolean phoneTap(int x, int y) {
+            if (!remoteOpsEnabled) return false;
+            RtAccessibilityService s = RtAccessibilityService.sInstance;
+            return s != null && s.tap(x, y);
+        }
+        @JavascriptInterface public boolean phoneLongPress(int x, int y, int ms) {
+            if (!remoteOpsEnabled) return false;
+            RtAccessibilityService s = RtAccessibilityService.sInstance;
+            return s != null && s.longPress(x, y, ms);
+        }
+        @JavascriptInterface public boolean phoneSwipe(int x1, int y1, int x2, int y2, int ms) {
+            if (!remoteOpsEnabled) return false;
+            RtAccessibilityService s = RtAccessibilityService.sInstance;
+            return s != null && s.swipe(x1, y1, x2, y2, ms);
+        }
+        @JavascriptInterface public boolean phoneGlobalAction(String action) {
+            if (!remoteOpsEnabled) return false;
+            RtAccessibilityService s = RtAccessibilityService.sInstance;
+            return s != null && s.globalAction(action);
+        }
+        @JavascriptInterface public String phoneDumpScreen() {
+            if (!remoteOpsEnabled) return "{\"error\":\"远程操控未启用\"}";
+            RtAccessibilityService s = RtAccessibilityService.sInstance;
+            return s != null ? s.dumpScreen() : "{\"error\":\"无障碍服务未开启\"}";
+        }
+        @JavascriptInterface public boolean phoneClickText(String text) {
+            if (!remoteOpsEnabled) return false;
+            RtAccessibilityService s = RtAccessibilityService.sInstance;
+            return s != null && s.clickText(text);
+        }
+        @JavascriptInterface public boolean phoneInputText(String text) {
+            if (!remoteOpsEnabled) return false;
+            RtAccessibilityService s = RtAccessibilityService.sInstance;
+            return s != null && s.inputText(text);
+        }
+        @JavascriptInterface public String phoneScreenCapture() {
+            if (!remoteOpsEnabled) return "{\"error\":\"远程操控未启用\"}";
+            RtAccessibilityService s = RtAccessibilityService.sInstance;
+            return s != null ? s.takeScreenshotBase64() : "{\"error\":\"无障碍服务未开启\"}";
+        }
+
         // ── 高级手机操控: 电池/WiFi/振动/音量 ──────────
         @JavascriptInterface public String phoneBattery() {
             if (!remoteOpsEnabled) return "{}";

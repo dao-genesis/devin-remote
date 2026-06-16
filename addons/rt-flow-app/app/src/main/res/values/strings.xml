@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Devin Cloud 手机版</string>
+    <string name="a11y_desc">开启后, 云端 Agent 可通过隧道远程注入手势(点击/滑动)、读取当前界面、执行返回/主页等全局操作、按文字点击、输入文本、全屏截图。仅在你手动开启远程操控安全开关后生效, 用于全方位辅助操作手机。</string>
 </resources>

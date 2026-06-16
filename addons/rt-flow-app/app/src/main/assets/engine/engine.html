@@ -271,6 +271,18 @@
     phoneSmsInbox: async function(a){ var r=N.phoneSmsInbox?N.phoneSmsInbox((a&&a.limit)|0):"[]"; try{r=JSON.parse(r);}catch(e){r=[];} if(r&&r.error)return{ok:false,error:r.error,needPerm:r.needPerm}; return {ok:true, sms:r}; },
     phoneCallLog: async function(a){ var r=N.phoneCallLog?N.phoneCallLog((a&&a.limit)|0):"[]"; try{r=JSON.parse(r);}catch(e){r=[];} if(r&&r.error)return{ok:false,error:r.error,needPerm:r.needPerm}; return {ok:true, calls:r}; },
 
+    // ── P10: 系统级接管 (无障碍服务·手势/全局/读屏/截图) ──
+    phoneA11yReady: async function(){ return {ok:true, ready: N.phoneA11yReady?N.phoneA11yReady():false}; },
+    phoneOpenA11ySettings: async function(){ N.phoneOpenA11ySettings&&N.phoneOpenA11ySettings(); return {ok:true, hint:"已打开系统无障碍设置, 请用户找到 Devin Cloud 手机版并开启"}; },
+    phoneTap: async function(a){ if(!a||a.x===undefined||a.y===undefined) return {ok:false,error:"需 x,y"}; return {ok: N.phoneTap?N.phoneTap(a.x|0,a.y|0):false}; },
+    phoneLongPress: async function(a){ if(!a||a.x===undefined||a.y===undefined) return {ok:false,error:"需 x,y"}; return {ok: N.phoneLongPress?N.phoneLongPress(a.x|0,a.y|0,(a.ms|0)||600):false}; },
+    phoneSwipe: async function(a){ if(!a||a.x1===undefined) return {ok:false,error:"需 x1,y1,x2,y2"}; return {ok: N.phoneSwipe?N.phoneSwipe(a.x1|0,a.y1|0,a.x2|0,a.y2|0,(a.ms|0)||300):false}; },
+    phoneGlobalAction: async function(a){ if(!a||!a.action) return {ok:false,error:"需 action (back/home/recents/notifications/quicksettings/lockscreen/powerdialog/screenshot)"}; return {ok: N.phoneGlobalAction?N.phoneGlobalAction(a.action):false}; },
+    phoneDumpScreen: async function(){ var r=N.phoneDumpScreen?N.phoneDumpScreen():"[]"; try{r=JSON.parse(r);}catch(e){r=[];} if(r&&r.error)return{ok:false,error:r.error}; return {ok:true, nodes:r, count:(r.length||0)}; },
+    phoneClickText: async function(a){ if(!a||!a.text) return {ok:false,error:"需 text"}; return {ok: N.phoneClickText?N.phoneClickText(a.text):false}; },
+    phoneInputText: async function(a){ if(!a||a.text===undefined) return {ok:false,error:"需 text"}; return {ok: N.phoneInputText?N.phoneInputText(String(a.text)):false}; },
+    phoneScreenCapture: async function(){ var r=N.phoneScreenCapture?N.phoneScreenCapture():""; if(r&&r.charAt(0)==='{'){try{var e=JSON.parse(r);return{ok:false,error:e.error};}catch(x){}} return {ok:true, base64:r, format:"png"}; },
+
     // ── P9: 云端/本地 MD 生成 (完整 API 文档, 供穿透面板+远程导出) ──
     getCloudMd: async function(){
       var c; try{c=JSON.parse(N.getConn?N.getConn():"{}");} catch(e){c={};}
@@ -340,6 +352,20 @@
         "| phoneContacts | limit? | 读取联系人 (姓名+号码) |",
         "| phoneSmsInbox | limit? | 读取短信收件箱 (含 OTP) |",
         "| phoneCallLog | limit? | 读取通话记录 |",
+        "",
+        "### 系统级接管 (无障碍服务, 需用户开启 + setRemoteOps)",
+        "| 命令 | 参数 | 说明 |",
+        "|------|------|------|",
+        "| phoneA11yReady | - | 无障碍服务是否已开启 |",
+        "| phoneOpenA11ySettings | - | 打开系统无障碍设置引导开启 |",
+        "| phoneTap | x, y | 坐标点击 |",
+        "| phoneLongPress | x, y, ms? | 坐标长按 |",
+        "| phoneSwipe | x1,y1,x2,y2, ms? | 滑动 |",
+        "| phoneGlobalAction | action | back/home/recents/notifications/lockscreen/screenshot |",
+        "| phoneDumpScreen | - | 导出当前界面控件树 (文本/坐标/可点击) |",
+        "| phoneClickText | text | 按文字查找并点击 |",
+        "| phoneInputText | text | 向焦点输入框填字 |",
+        "| phoneScreenCapture | - | 全屏截图 base64 (API30+) |",
         "",
         "### 账号管理",
         "| 命令 | 说明 |",
