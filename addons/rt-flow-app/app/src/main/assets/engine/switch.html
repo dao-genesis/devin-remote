@@ -243,7 +243,7 @@ var _mode = localStorage.getItem("rtflow.mode") || "wam";
 var _convOpen = localStorage.getItem("rtflow.convOpen") !== "0";
 function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
 function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
-function saveAcc(a){ localStorage.setItem("rtflow.accounts", JSON.stringify(a||[])); }
+function saveAcc(a){ var s=JSON.stringify(a||[]); localStorage.setItem("rtflow.accounts", s); try{ if(N.vaultSave) N.vaultSave("accounts", s); }catch(e){} }
 function getActive(){ return localStorage.getItem("rtflow.active")||""; }
 function setActive(id){ localStorage.setItem("rtflow.active", id||""); }
 function toast(msg,bad){ var t=document.getElementById("toast"); t.textContent=msg; t.className="toast show"+(bad?" fail":" ok"); setTimeout(function(){t.className="toast";},2200); }
@@ -274,13 +274,15 @@ function rowHtml(a,i){
   var authTag = auth?'<span class="eua" title="已登录·可注入">登</span>':'<span class="uc" title="需登录解锁">需登</span>';
   return ''+
   '<div class="row'+(active?" act":"")+(auth?"":" expired-row")+'" data-i="'+i+'" data-id="'+_esc(a.id)+'" data-email="'+_esc((a.email||"").toLowerCase())+'">'+
-    '<input type="checkbox" class="chk" data-i="'+i+'" onclick="onChk()" />'+
-    '<span class="acc-no" title="编号 '+(i+1)+'">'+(i+1)+'</span>'+
-    '<span class="dm '+db[0]+'" title="'+_esc(db[1])+'">'+db[0]+'</span>'+
-    '<span class="em" title="'+_esc(a.email||a.id)+'">'+_esc(emailShort)+'</span>'+
-    planTag+euaTag+authTag+
-    '<span class="dv-run" id="dvRun'+i+'"></span>'+
-    '<span class="acts">'+
+    '<div class="row-r1" onclick="rowClick('+i+',event)">'+
+      '<input type="checkbox" class="chk" data-i="'+i+'" onclick="onChk()" />'+
+      '<span class="acc-no" title="编号 '+(i+1)+'">'+(i+1)+'</span>'+
+      '<span class="dm '+db[0]+'" title="'+_esc(db[1])+'">'+db[0]+'</span>'+
+      '<span class="em" title="'+_esc(a.email||a.id)+'">'+_esc(emailShort)+'</span>'+
+      planTag+euaTag+authTag+
+      '<span class="dv-run" id="dvRun'+i+'"></span>'+
+    '</div>'+
+    '<div class="row-r2">'+
       '<button class="b dv" onclick="dv('+i+')" title="Devin Cloud 展开(对话/知识库/剧本/密钥/Git/美金额度)">&#9729;&#9662;</button>'+
       (auth?
         '<button class="b sw" onclick="sw('+i+')" title="多实例注入浏览器打开(即切号)">&#9889;</button>'+
@@ -292,7 +294,7 @@ function rowHtml(a,i){
       '<button class="b cp" onclick="cp('+i+')" title="复制 JSON">&#128203;</button>'+
       '<button class="b wp" onclick="wp('+i+')" title="水过无痕·清理">&#127754;</button>'+
       '<button class="b rm" onclick="rm('+i+')" title="删除">&times;</button>'+
-    '</span>'+
+    '</div>'+
   '</div>'+
   '<div class="dv-detail" id="dvDetail'+i+'" data-i="'+i+'" data-email="'+_esc((a.email||"").toLowerCase())+'"></div>';
 }
@@ -691,6 +693,8 @@ function _initCfgUI(){
 }
 
 // ── 初始化 ──
+// 数据持久化恢复: 账号库已镜像到共享文件夹(Documents/DevinCloud), 卸载/重装/换机后从此处回读
+(function(){ try{ if(N.vaultLoad && !loadAcc().length){ var v=N.vaultLoad("accounts"); if(v){ var arr=JSON.parse(v); if(arr&&arr.length) localStorage.setItem("rtflow.accounts", v); } } }catch(e){} })();
 document.getElementById("convBody").classList.toggle("collapsed",!_convOpen);
 document.getElementById("convArrow").innerHTML=_convOpen?"&#9660;":"&#9650;";
 _initCfgUI();
