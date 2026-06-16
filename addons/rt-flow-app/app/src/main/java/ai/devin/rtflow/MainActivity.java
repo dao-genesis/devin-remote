@@ -982,6 +982,23 @@ public class MainActivity extends AppCompatActivity {
                 else newTab(u, accJson);
             });
         }
+        /** 系统分享 (链接/文本) — 像浏览器的"分享"。 */
+        @JavascriptInterface public void share(String text) {
+            main.post(() -> {
+                try {
+                    Intent it = new Intent(Intent.ACTION_SEND); it.setType("text/plain");
+                    it.putExtra(Intent.EXTRA_TEXT, text == null ? "" : text);
+                    startActivity(Intent.createChooser(it, "分享").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                } catch (Exception e) { MainActivity.this.toast("无法分享"); }
+            });
+        }
+        /** 历史/书签条目：删除某 URL。 */
+        @JavascriptInterface public void deleteHistoryUrl(String url, boolean devin) { main.post(() -> MainActivity.this.deleteHistoryUrl(url, devin)); }
+        @JavascriptInterface public void deleteBookmarkUrl(String url) { main.post(() -> { MainActivity.this.removeBookmarkPersist(url); MainActivity.this.updateStar(); }); }
+        /** 在新标签打开 (多实例则注入对应账号)。 */
+        @JavascriptInterface public void openEntryNewTab(String accJson, String url) {
+            main.post(() -> { String u = (url == null || url.isEmpty()) ? DEVIN : url; newTab(u, (accJson == null || accJson.isEmpty()) ? null : accJson); });
+        }
         @JavascriptInterface public void openText(String title, String content) {
             main.post(() -> {
                 Tab t = makeTab(null, true); // internal=true → Native bridge available for download button
@@ -1412,13 +1429,26 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
         return false;
     }
-    private void removeBookmark(String url) {
+    private void removeBookmark(String url) { removeBookmarkPersist(url); }
+    private void removeBookmarkPersist(String url) {
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
             org.json.JSONArray arr = new org.json.JSONArray(sp.getString("bookmarks", "[]"));
             org.json.JSONArray out = new org.json.JSONArray();
             for (int i = 0; i < arr.length(); i++) { if (!url.equals(arr.getJSONObject(i).optString("url"))) out.put(arr.getJSONObject(i)); }
             sp.edit().putString("bookmarks", out.toString()).apply();
+            vaultWrite("bookmarks", out.toString());
+        } catch (Exception ignored) {}
+    }
+    private void deleteHistoryUrl(String url, boolean devin) {
+        String key = devin ? "history_devin" : "history";
+        try {
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            org.json.JSONArray arr = new org.json.JSONArray(sp.getString(key, "[]"));
+            org.json.JSONArray out = new org.json.JSONArray();
+            for (int i = 0; i < arr.length(); i++) { if (!url.equals(arr.getJSONObject(i).optString("url"))) out.put(arr.getJSONObject(i)); }
+            sp.edit().putString(key, out.toString()).apply();
+            vaultWrite(key, out.toString());
         } catch (Exception ignored) {}
     }
     private void updateStar() {
@@ -1579,50 +1609,88 @@ public class MainActivity extends AppCompatActivity {
             if (raw == null || raw.isEmpty() || "[]".equals(raw)) { String v = vaultRead("history"); if (v != null && !v.isEmpty()) raw = v; }
             org.json.JSONArray devinArr = new org.json.JSONArray(rawD);
             org.json.JSONArray arr = new org.json.JSONArray(raw);
-            StringBuilder sb = new StringBuilder();
-            sb.append("<html><head><meta name=viewport content='width=device-width,initial-scale=1'>");
-            sb.append("<style>body{background:#0e1116;color:#cdd3de;font:13px -apple-system,sans-serif;padding:12px}");
-            sb.append("h2{color:#9cdcfe;margin:14px 0 8px}");
-            sb.append(".sec{color:#7ee787;font-size:13px;font-weight:600;margin:14px 0 6px;padding-bottom:4px;border-bottom:1px solid #21262d}");
-            sb.append(".sec.b{color:#9cdcfe}");
-            sb.append(".it{padding:8px;border-bottom:1px solid #21262d;cursor:pointer}");
-            sb.append(".it.dv{border-left:3px solid #2ea043;padding-left:8px}");
-            sb.append(".it:active{background:#1f3a45}");
-            sb.append(".it .t{color:#e6edf3;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
-            sb.append(".it .u{color:#8b949e;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
-            sb.append("</style></head><body><h2>浏览历史</h2>");
-            sb.append("<div class='sec'>⚡ 多实例 Devin 登录历史</div>");
-            org.json.JSONArray dvEntries = new org.json.JSONArray();   // 供前端按账号注入重开
+            org.json.JSONArray dv = new org.json.JSONArray(), nm = new org.json.JSONArray();
             for (int i = devinArr.length() - 1; i >= 0; i--) {
                 org.json.JSONObject e = devinArr.getJSONObject(i);
-                String u = escapeHtml(e.optString("url", ""));
-                String t = escapeHtml(e.optString("title", ""));
-                org.json.JSONObject de = new org.json.JSONObject();
-                de.put("url", e.optString("url", "")); de.put("account", e.optString("account", ""));
-                int di = dvEntries.length(); dvEntries.put(de);
-                sb.append("<div class='it dv' onclick=\"openDevin(").append(di).append(")\">");
-                sb.append("<div class='t'>").append(t.isEmpty() ? u : t).append("</div>");
-                sb.append("<div class='u'>").append(u).append("</div></div>");
+                dv.put(new org.json.JSONObject().put("url", e.optString("url", "")).put("title", e.optString("title", "")).put("account", e.optString("account", "")).put("devin", true));
             }
-            if (devinArr.length() == 0) sb.append("<div style='color:#6e7681;padding:10px 4px'>暂无多实例登录记录</div>");
-            sb.append("<div class='sec b'>🌐 常规网页浏览历史</div>");
             for (int i = arr.length() - 1; i >= 0; i--) {
                 org.json.JSONObject e = arr.getJSONObject(i);
-                String u = escapeHtml(e.optString("url", ""));
-                String t = escapeHtml(e.optString("title", ""));
-                sb.append("<div class='it' onclick=\"location.href='").append(u.replace("'", "\\'")).append("'\">");
-                sb.append("<div class='t'>").append(t.isEmpty() ? u : t).append("</div>");
-                sb.append("<div class='u'>").append(u).append("</div></div>");
+                nm.put(new org.json.JSONObject().put("url", e.optString("url", "")).put("title", e.optString("title", "")).put("devin", false));
             }
-            if (arr.length() == 0) sb.append("<div style='color:#6e7681;padding:10px 4px'>暂无常规浏览历史</div>");
-            sb.append("<script>var DV=").append(jsEmbed(dvEntries)).append(";");
-            sb.append("function openDevin(i){var e=DV[i];if(!e)return;try{if(window.Native&&Native.reopenAccount){Native.reopenAccount(e.account||'',e.url||'');return;}}catch(x){}location.href=e.url;}");
-            sb.append("</scr"+"ipt></body></html>");
-            Tab ht = makeTab(null, true);   // internal=true → Native 桥可用, 供按账号注入重开
-            selectTab(tabs.size() - 1);
-            ht.title = "浏览历史";
-            ht.web.loadDataWithBaseURL("file:///android_asset/", sb.toString(), "text/html", "utf-8", null);
+            openBrowserListTab("浏览历史", "⚡ 多实例 Devin 登录历史", dv, "暂无多实例登录记录",
+                    "🌐 常规网页浏览历史", nm, "暂无常规浏览历史", "hist");
         } catch (Exception e) { toast("历史加载失败"); }
+    }
+
+    /** 浏览器式列表页 (历史/书签共用): 点击打开(多实例注入), 长按或 ⋮ → 在新标签打开/复制链接/分享/删除。 */
+    private void openBrowserListTab(String h2, String dvHeader, org.json.JSONArray dvItems, String dvEmpty,
+                                    String nmHeader, org.json.JSONArray nmItems, String nmEmpty, String mode) {
+        try {
+            org.json.JSONArray IT = new org.json.JSONArray();
+            StringBuilder sb = new StringBuilder();
+            sb.append("<html><head><meta name=viewport content='width=device-width,initial-scale=1'><style>");
+            sb.append("body{background:#0e1116;color:#cdd3de;font:13px -apple-system,sans-serif;margin:0;padding:12px 12px 40px}");
+            sb.append("h2{color:#9cdcfe;margin:8px 0 8px}");
+            sb.append(".sec{color:#7ee787;font-size:13px;font-weight:600;margin:14px 0 6px;padding-bottom:4px;border-bottom:1px solid #21262d}");
+            sb.append(".sec.b{color:#9cdcfe}");
+            sb.append(".it{display:flex;align-items:center;border-bottom:1px solid #21262d}");
+            sb.append(".it.dv{border-left:3px solid #2ea043}");
+            sb.append(".it .row{flex:1;min-width:0;padding:9px 8px}");
+            sb.append(".it .row:active{background:#1f3a45}");
+            sb.append(".it .t{color:#e6edf3;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
+            sb.append(".it .u{color:#8b949e;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
+            sb.append(".more{padding:10px 12px;color:#8b949e;font-size:18px;user-select:none}.more:active{color:#fff}");
+            sb.append(".ov{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;z-index:99}");
+            sb.append(".ov.on{display:flex}");
+            sb.append(".sheet{background:#161b22;width:100%;border-radius:14px 14px 0 0;padding:4px 0 calc(10px + env(safe-area-inset-bottom));box-shadow:0 -4px 20px rgba(0,0,0,.5)}");
+            sb.append(".sh-u{color:#8b949e;font-size:12px;padding:12px 16px 10px;border-bottom:1px solid #21262d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
+            sb.append(".sh-b{padding:14px 16px;color:#e6edf3;font-size:15px}.sh-b:active{background:#1f6feb33}.sh-b.del{color:#ff7b72}");
+            sb.append("</style></head><body>");
+            sb.append("<h2>").append(escapeHtml(h2)).append("</h2>");
+            if (dvHeader != null) {
+                sb.append("<div class='sec'>").append(dvHeader).append("</div>");
+                for (int i = 0; i < dvItems.length(); i++) { int idx = IT.length(); IT.put(dvItems.getJSONObject(i)); appendRow(sb, dvItems.getJSONObject(i), idx, true); }
+                if (dvItems.length() == 0) sb.append("<div style='color:#6e7681;padding:10px 4px'>").append(escapeHtml(dvEmpty)).append("</div>");
+            }
+            sb.append("<div class='sec b'>").append(nmHeader).append("</div>");
+            for (int i = 0; i < nmItems.length(); i++) { int idx = IT.length(); IT.put(nmItems.getJSONObject(i)); appendRow(sb, nmItems.getJSONObject(i), idx, false); }
+            if (nmItems.length() == 0) sb.append("<div style='color:#6e7681;padding:10px 4px'>").append(escapeHtml(nmEmpty)).append("</div>");
+            sb.append("<div class='ov' id='ov'><div class='sheet' id='sheet'></div></div>");
+            sb.append("<script>var IT=").append(jsEmbed(IT)).append(";var MODE='").append(mode).append("';");
+            sb.append("function openIdx(i){var e=IT[i];if(!e)return;if(e.devin&&e.account){try{Native.reopenAccount(e.account,e.url);return;}catch(x){}}location.href=e.url;}");
+            sb.append("function closeSheet(){document.getElementById('ov').classList.remove('on');}");
+            sb.append("function rmRow(i){var el=document.querySelector(\".it[data-i='\"+i+\"']\");if(el&&el.parentNode)el.parentNode.removeChild(el);}");
+            sb.append("function sheet(i){var e=IT[i];if(!e)return;var s=document.getElementById('sheet');");
+            sb.append("var h=\"<div class='sh-u'>\"+((e.title||e.url)+'').replace(/</g,'&lt;')+\"</div>\";");
+            sb.append("h+=\"<div class='sh-b' data-a='open' data-i='\"+i+\"'>在新标签打开</div>\";");
+            sb.append("h+=\"<div class='sh-b' data-a='copy' data-i='\"+i+\"'>复制链接</div>\";");
+            sb.append("h+=\"<div class='sh-b' data-a='share' data-i='\"+i+\"'>分享</div>\";");
+            sb.append("h+=\"<div class='sh-b del' data-a='del' data-i='\"+i+\"'>删除</div>\";");
+            sb.append("s.innerHTML=h;document.getElementById('ov').classList.add('on');}");
+            sb.append("document.getElementById('ov').addEventListener('click',function(ev){var b=ev.target.closest&&ev.target.closest('.sh-b');if(!b){if(ev.target.id==='ov')closeSheet();return;}var a=b.getAttribute('data-a'),i=+b.getAttribute('data-i'),e=IT[i];closeSheet();if(!e)return;");
+            sb.append("if(a==='open'){try{Native.openEntryNewTab(e.account||'',e.url||'');}catch(x){}}");
+            sb.append("else if(a==='copy'){try{Native.clip(e.url||'');Native.toast('已复制链接');}catch(x){}}");
+            sb.append("else if(a==='share'){try{Native.share(e.url||'');}catch(x){}}");
+            sb.append("else if(a==='del'){try{if(MODE==='bm')Native.deleteBookmarkUrl(e.url||'');else Native.deleteHistoryUrl(e.url||'',!!e.devin);}catch(x){}rmRow(i);Native&&Native.toast&&Native.toast('已删除');}});");
+            // 行: 点击打开; 长按 → 动作菜单
+            sb.append("var LT;document.addEventListener('touchstart',function(ev){var r=ev.target.closest&&ev.target.closest('.row');if(!r)return;var i=+r.parentNode.getAttribute('data-i');LT=setTimeout(function(){LT=0;sheet(i);},480);},{passive:true});");
+            sb.append("document.addEventListener('touchend',function(ev){if(LT){clearTimeout(LT);LT=0;}},{passive:true});");
+            sb.append("document.addEventListener('touchmove',function(ev){if(LT){clearTimeout(LT);LT=0;}},{passive:true});");
+            sb.append("document.addEventListener('click',function(ev){var m=ev.target.closest&&ev.target.closest('.more');if(m){ev.stopPropagation();sheet(+m.getAttribute('data-i'));return;}var r=ev.target.closest&&ev.target.closest('.row');if(r){openIdx(+r.parentNode.getAttribute('data-i'));}});");
+            sb.append("</scr"+"ipt></body></html>");
+            Tab bt = makeTab(null, true);   // internal=true → Native 桥可用
+            selectTab(tabs.size() - 1);
+            bt.title = h2;
+            bt.web.loadDataWithBaseURL("file:///android_asset/", sb.toString(), "text/html", "utf-8", null);
+        } catch (Exception e) { toast("加载失败"); }
+    }
+    private void appendRow(StringBuilder sb, org.json.JSONObject e, int idx, boolean devin) {
+        String u = escapeHtml(e.optString("url", "")), t = escapeHtml(e.optString("title", ""));
+        sb.append("<div class='it").append(devin ? " dv" : "").append("' data-i='").append(idx).append("'>");
+        sb.append("<div class='row'><div class='t'>").append(t.isEmpty() ? u : t).append("</div>");
+        sb.append("<div class='u'>").append(u).append("</div></div>");
+        sb.append("<div class='more' data-i='").append(idx).append("'>\u22EE</div></div>");
     }
 
     // ── 书签收藏 ──────────────────────────────────────────────────────────
@@ -1633,7 +1701,20 @@ public class MainActivity extends AppCompatActivity {
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
             org.json.JSONArray arr = new org.json.JSONArray(sp.getString("bookmarks", "[]"));
-            for (int i = 0; i < arr.length(); i++) { if (url.equals(arr.getJSONObject(i).optString("url"))) { toast("已收藏过"); return; } }
+            for (int i = 0; i < arr.length(); i++) {
+                if (url.equals(arr.getJSONObject(i).optString("url"))) {
+                    // 已存在: 若本次来自多实例标签而旧记录缺账号 → 升级补全(自愈旧版无注入的收藏, 修 404)
+                    if (devin) {
+                        org.json.JSONObject old = arr.getJSONObject(i);
+                        old.put("devin", true); old.put("account", tab.accountJson);
+                        if (title != null && !title.isEmpty()) old.put("title", title);
+                        sp.edit().putString("bookmarks", arr.toString()).apply();
+                        vaultWrite("bookmarks", arr.toString());
+                        toast("已更新收藏(已绑定账号)");
+                    } else { toast("已收藏过"); }
+                    return;
+                }
+            }
             org.json.JSONObject e = new org.json.JSONObject();
             e.put("url", url); e.put("title", title == null ? url : title); e.put("ts", System.currentTimeMillis());
             if (devin) { e.put("devin", true); e.put("account", tab.accountJson); }   // 多实例书签: 重开时注入鉴权
@@ -1650,40 +1731,16 @@ public class MainActivity extends AppCompatActivity {
             String raw = sp.getString("bookmarks", "[]");
             if (raw == null || raw.isEmpty() || "[]".equals(raw)) { String v = vaultRead("bookmarks"); if (v != null && !v.isEmpty()) raw = v; }
             org.json.JSONArray arr = new org.json.JSONArray(raw);
-            StringBuilder sb = new StringBuilder();
-            sb.append("<html><head><meta name=viewport content='width=device-width,initial-scale=1'>");
-            sb.append("<style>body{background:#0e1116;color:#cdd3de;font:13px -apple-system,sans-serif;padding:12px}");
-            sb.append("h2{color:#9cdcfe;margin-bottom:12px}");
-            sb.append(".it{padding:8px;border-bottom:1px solid #21262d;cursor:pointer}");
-            sb.append(".it.dv{border-left:3px solid #2ea043;padding-left:8px}");
-            sb.append(".it:active{background:#1f3a45}");
-            sb.append(".it .t{color:#e6edf3;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
-            sb.append(".it .u{color:#8b949e;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
-            sb.append("</style></head><body><h2>书签收藏</h2>");
-            org.json.JSONArray dvEntries = new org.json.JSONArray();
+            org.json.JSONArray dv = new org.json.JSONArray(), nm = new org.json.JSONArray();
             for (int i = arr.length() - 1; i >= 0; i--) {
                 org.json.JSONObject e = arr.getJSONObject(i);
-                String u = escapeHtml(e.optString("url", "")), t = escapeHtml(e.optString("title", ""));
-                boolean dv = e.optBoolean("devin", false) && !e.optString("account", "").isEmpty();
-                if (dv) {
-                    org.json.JSONObject de = new org.json.JSONObject();
-                    de.put("url", e.optString("url", "")); de.put("account", e.optString("account", ""));
-                    int di = dvEntries.length(); dvEntries.put(de);
-                    sb.append("<div class='it dv' onclick=\"openDevin(").append(di).append(")\">");
-                } else {
-                    sb.append("<div class='it' onclick=\"location.href='").append(u.replace("'", "\\'")).append("'\">");
-                }
-                sb.append("<div class='t'>").append(t.isEmpty() ? u : t).append("</div>");
-                sb.append("<div class='u'>").append(u).append("</div></div>");
+                boolean isDv = e.optBoolean("devin", false) && !e.optString("account", "").isEmpty();
+                org.json.JSONObject o = new org.json.JSONObject().put("url", e.optString("url", "")).put("title", e.optString("title", ""));
+                if (isDv) { o.put("account", e.optString("account", "")).put("devin", true); dv.put(o); }
+                else { o.put("devin", false); nm.put(o); }
             }
-            if (arr.length() == 0) sb.append("<div style='color:#6e7681;text-align:center;padding:40px'>暂无书签 — 点地址栏 ☆ 收藏本页</div>");
-            sb.append("<script>var DV=").append(jsEmbed(dvEntries)).append(";");
-            sb.append("function openDevin(i){var e=DV[i];if(!e)return;try{if(window.Native&&Native.reopenAccount){Native.reopenAccount(e.account||'',e.url||'');return;}}catch(x){}location.href=e.url;}");
-            sb.append("</scr"+"ipt></body></html>");
-            Tab bt = makeTab(null, true);   // internal=true → Native 桥可用
-            selectTab(tabs.size() - 1);
-            bt.title = "书签";
-            bt.web.loadDataWithBaseURL("file:///android_asset/", sb.toString(), "text/html", "utf-8", null);
+            openBrowserListTab("书签收藏", "⚡ 多实例 Devin 收藏", dv, "暂无多实例收藏",
+                    "🌐 网页收藏", nm, "暂无书签 — 点地址栏 ☆ 收藏本页", "bm");
         } catch (Exception e) { toast("书签加载失败"); }
     }
 

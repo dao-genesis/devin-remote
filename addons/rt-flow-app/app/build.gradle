@@ -10,8 +10,8 @@ android {
         applicationId "ai.devin.rtflow"
         minSdk 24
         targetSdk 34
-        versionCode 18
-        versionName "0.13.4"
+        versionCode 19
+        versionName "0.13.5"
     }
 
     buildTypes {
