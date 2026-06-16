@@ -28,6 +28,7 @@ import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -116,7 +117,12 @@ public class MainActivity extends AppCompatActivity {
         String accountJson = null;   // 非空 = 账号标签 (注入鉴权)
         boolean internal = false;    // file:// 内部页 (暴露 Native 桥)
         String titleOverride = null; // 用户双击标签改的对话名 (优先显示·持久化)
+        boolean incognito = false;   // 无痕标签: 不记历史/不持久化
+        boolean desktop = false;     // 桌面版 UA
+        boolean night = false;       // 夜间反色
+        androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
     }
+    private boolean adBlock = false;   // 广告/弹窗拦截开关
 
     @SuppressWarnings("SetJavaScriptEnabled")
     @Override
@@ -211,7 +217,9 @@ public class MainActivity extends AppCompatActivity {
         zicon.setTextColor(0xFF8B949E); zicon.setPadding(dp(2), 0, dp(1), 0);
         SeekBar zoomBar = new SeekBar(this);
         zoomBar.setMax(120); zoomBar.setProgress(pageZoom - 50);   // 0..120 → 50%..170%
-        LinearLayout.LayoutParams zlp = new LinearLayout.LayoutParams(dp(92), ViewGroup.LayoutParams.WRAP_CONTENT);
+        // 用 weight 自适应剩余宽度 → 不再固定过宽, 适配所有屏宽
+        LinearLayout.LayoutParams zlp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        zlp.leftMargin = dp(2); zlp.rightMargin = dp(2);
         zoomBar.setLayoutParams(zlp);
         zoomLabel = new TextView(this);
         zoomLabel.setText(pageZoom + "%"); zoomLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
@@ -228,6 +236,13 @@ public class MainActivity extends AppCompatActivity {
 
         Button go = chipBtnSm("→");
         go.setOnClickListener(v -> go(addr.getText().toString()));
+        // 导航键: 后退 / 前进 / 主页 (像真浏览器)
+        Button back = chipBtnSm("\u25C0");
+        back.setOnClickListener(v -> { Tab t = cur(); if (t != null && t.web.canGoBack()) t.web.goBack(); });
+        Button fwd = chipBtnSm("\u25B6");
+        fwd.setOnClickListener(v -> { Tab t = cur(); if (t != null && t.web.canGoForward()) t.web.goForward(); });
+        Button home = chipBtnSm("\u2302");
+        home.setOnClickListener(v -> newTab(SWITCH, null));
         // 网页栏五角星：点击收藏/取消收藏当前页 (像浏览器)
         starBtn = chipBtnSm("\u2606");
         starBtn.setOnClickListener(v -> toggleBookmarkCurrent());
@@ -238,21 +253,24 @@ public class MainActivity extends AppCompatActivity {
         dlBtn = chipBtnSm("\uD83D\uDCE5");
         dlBtn.setOnClickListener(v -> toggleDownloadPanel());
 
-        // 第一行: 菜单 + 地址 + 缩放滑块(最右上角)
+        // 第一行: 菜单 + 地址 + 前往
         bar.addView(menu);
         bar.addView(addr);
-        bar.addView(zicon);
-        bar.addView(zoomBar);
-        bar.addView(zoomLabel);
+        bar.addView(go);
 
-        // 第二行: 四个动作按钮整体下移 + 缩小, 右对齐成紧凑一排
+        // 第二行: 导航键 + 缩放滑块(weight自适应) + 收藏/刷新/下载
         LinearLayout btnRow = new LinearLayout(this);
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        btnRow.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        btnRow.setGravity(Gravity.CENTER_VERTICAL);
         btnRow.setBackgroundColor(0xFF161B22);
         btnRow.setPadding(dp(6), dp(1), dp(8), dp(4));
+        btnRow.addView(back);
+        btnRow.addView(fwd);
+        btnRow.addView(home);
+        btnRow.addView(zicon);
+        btnRow.addView(zoomBar);
+        btnRow.addView(zoomLabel);
         btnRow.addView(starBtn);
-        btnRow.addView(go);
         btnRow.addView(reload);
         btnRow.addView(dlBtn);
 
@@ -302,6 +320,7 @@ public class MainActivity extends AppCompatActivity {
         if (active < 0 || active >= tabs.size()) return;
         applyZoom(tabs.get(active).web);
     }
+    private Tab cur() { return (active >= 0 && active < tabs.size()) ? tabs.get(active) : null; }
     private void applyZoom(WebView w) {
         if (w == null) return;
         float f = pageZoom / 100f;
@@ -310,13 +329,29 @@ public class MainActivity extends AppCompatActivity {
 
     private void showMenu(View anchor) {
         PopupMenu m = new PopupMenu(this, anchor);
-        m.getMenu().add(0, 1, 0, "切号面板");
-        m.getMenu().add(0, 6, 1, "对话 / Cloud");
-        m.getMenu().add(0, 2, 2, "公网穿透");
-        m.getMenu().add(0, 10, 3, "VPN 加速");
-        m.getMenu().add(0, 3, 4, "新标签 (Devin)");
-        m.getMenu().add(0, 9, 5, "浏览历史");
-        m.getMenu().add(0, 12, 6, "书签收藏");
+        android.view.Menu mu = m.getMenu();
+        mu.add(0, 1, 0, "切号面板");
+        mu.add(0, 6, 1, "对话 / Cloud");
+        mu.add(0, 2, 2, "公网穿透");
+        mu.add(0, 10, 3, "VPN 加速");
+        mu.add(0, 3, 4, "新标签 (Devin)");
+        mu.add(0, 13, 5, "无痕标签");
+        mu.add(0, 14, 6, "标签总览");
+        mu.add(0, 9, 7, "浏览历史");
+        mu.add(0, 12, 8, "书签收藏");
+        android.view.SubMenu page = mu.addSubMenu(0, 100, 9, "页面工具");
+        page.add(0, 20, 0, "页内查找");
+        page.add(0, 21, 1, cur() != null && cur().desktop ? "切回移动版" : "桌面版网站");
+        page.add(0, 22, 2, "阅读模式");
+        page.add(0, 23, 3, cur() != null && cur().night ? "关闭夜间模式" : "夜间模式");
+        page.add(0, 24, 4, "翻译此页");
+        android.view.SubMenu shareM = mu.addSubMenu(0, 101, 10, "分享 / 快捷");
+        shareM.add(0, 30, 0, "分享本页");
+        shareM.add(0, 31, 1, "复制网址");
+        shareM.add(0, 32, 2, "添加到主屏");
+        mu.add(0, 40, 11, adBlock ? "广告拦截: 开 (点击关)" : "广告拦截: 关 (点击开)");
+        mu.add(0, 41, 12, "保存本站登录");
+        mu.add(0, 42, 13, "填充本站登录");
         m.setOnMenuItemClickListener(it -> {
             switch (it.getItemId()) {
                 case 1: newTab(SWITCH, null); return true;
@@ -324,8 +359,21 @@ public class MainActivity extends AppCompatActivity {
                 case 2: newTab(TUNNEL, null); return true;
                 case 10: newTab(VPN, null); return true;
                 case 3: newTab(DEVIN, null); return true;
+                case 13: openIncognito(); return true;
+                case 14: showTabOverview(); return true;
                 case 9: showHistory(); return true;
                 case 12: showBookmarks(); return true;
+                case 20: case 25: toggleFindBar(); return true;
+                case 21: toggleDesktop(); return true;
+                case 22: readerMode(); return true;
+                case 23: toggleNight(); return true;
+                case 24: translateCurrent(); return true;
+                case 30: shareCurrent(); return true;
+                case 31: copyCurrentUrl(); return true;
+                case 32: addHomeShortcut(); return true;
+                case 40: toggleAdBlock(); return true;
+                case 41: saveSiteLogin(); return true;
+                case 42: fillSiteLogin(); return true;
             }
             return false;
         });
@@ -566,9 +614,17 @@ public class MainActivity extends AppCompatActivity {
                 tab.url = u; if (tabOf(v) == active) setAddr(u);
             }
             @Override public void onPageFinished(WebView v, String u) {
-                tab.url = u; renderTabStrip(); saveTabs(); addHistory(u, tab.title, tab);
+                tab.url = u; renderTabStrip(); saveTabs();
+                if (!tab.incognito) addHistory(u, tab.title, tab);   // 无痕标签不记历史
                 if (pageZoom != 100) applyZoom(v);          // 缩放跨页/刷新保持
+                if (tab.night) applyNight(v, true);          // 夜间反色跨页保持
                 installDownloadHook(v);                      // blob:/data:/<a download> 下载 → 收进右上下载列表
+                if (tab.swipe != null) tab.swipe.setRefreshing(false);
+            }
+            @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
+                if (adBlock && req != null && req.getUrl() != null && isAdHost(req.getUrl().getHost()))
+                    return new WebResourceResponse("text/plain", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
+                return super.shouldInterceptRequest(v, req);
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
@@ -587,6 +643,7 @@ public class MainActivity extends AppCompatActivity {
             }
             // 新窗口 (window.open / target=_blank): 开一个新标签承接 → 修登录其他网页/弹窗跳转
             @Override public boolean onCreateWindow(WebView v, boolean dialog, boolean userGesture, android.os.Message resultMsg) {
+                if (adBlock && !userGesture) { toast("已拦截弹窗"); return false; }   // 拦截非用户触发的弹窗广告
                 try {
                     Tab nt = makeTab(null, false);
                     selectTab(tabs.size() - 1);
@@ -609,6 +666,14 @@ public class MainActivity extends AppCompatActivity {
                 startDownload(dlUrl, ua, contentDisposition, mimetype));
 
         web.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // 下拉刷新手势 (D11): 顶部下拉重载当前页
+        androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
+        swipe.setColorSchemeColors(0xFF2EA043, 0xFF1F6FEB);
+        swipe.setProgressBackgroundColorSchemeColor(0xFF161B22);
+        swipe.addView(web, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        swipe.setOnRefreshListener(() -> { try { web.reload(); } catch (Exception ignored) {} });
+        swipe.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        tab.swipe = swipe;
         tabs.add(tab);
         return tab;
     }
@@ -630,8 +695,9 @@ public class MainActivity extends AppCompatActivity {
         active = idx;
         content.removeAllViews();
         Tab t = tabs.get(idx);
-        if (t.web.getParent() != null) ((ViewGroup) t.web.getParent()).removeView(t.web);
-        content.addView(t.web);
+        android.view.View host = t.swipe != null ? t.swipe : t.web;
+        if (host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
+        content.addView(host);
         // 下载悬浮窗置顶 (在 WebView 之上)
         if (dlPanel != null) {
             if (dlPanel.getParent() != null) ((ViewGroup) dlPanel.getParent()).removeView(dlPanel);
@@ -657,7 +723,12 @@ public class MainActivity extends AppCompatActivity {
     private void closeTab(int idx) {
         if (idx < 0 || idx >= tabs.size()) return;
         Tab t = tabs.remove(idx);
-        try { if (t.web.getParent() != null) ((ViewGroup) t.web.getParent()).removeView(t.web); t.web.destroy(); } catch (Exception ignored) {}
+        try {
+            android.view.View host = t.swipe != null ? t.swipe : t.web;
+            if (host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
+            if (t.swipe != null) t.swipe.removeAllViews();
+            t.web.destroy();
+        } catch (Exception ignored) {}
         if (tabs.isEmpty()) { newTab(SWITCH, null); return; }
         selectTab(Math.max(0, idx - 1));
     }
@@ -941,6 +1012,206 @@ public class MainActivity extends AppCompatActivity {
         } else {
             toast("无可刷新页面");
         }
+    }
+
+    // ── 浏览器功能 ────────────────────────────────────────────────────────
+    private static final String DESKTOP_UA =
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+    /** 广告/追踪域名命中 (内置精简黑名单)。 */
+    private boolean isAdHost(String host) {
+        if (host == null) return false;
+        host = host.toLowerCase();
+        String[] ad = {"doubleclick.net","googlesyndication.com","googleadservices.com","google-analytics.com",
+                "googletagmanager.com","googletagservices.com","adservice.google.com","adnxs.com","adsystem.com",
+                "scorecardresearch.com","moatads.com","amazon-adsystem.com","facebook.net","analytics.","pagead2.",
+                "ads.","adservice.","track.","tracker.","pixel.","taboola.com","outbrain.com","criteo.com","pubmatic.com"};
+        for (String a : ad) { if (a.endsWith(".") ? host.contains(a) : (host.equals(a) || host.endsWith("." + a) || host.contains(a))) return true; }
+        return false;
+    }
+    /** 夜间反色: 整页 invert 滤镜 (图片/视频再 invert 还原)。 */
+    private void applyNight(WebView w, boolean on) {
+        if (w == null) return;
+        String js = on
+            ? "(function(){var id='__rtnight';if(document.getElementById(id))return;var s=document.createElement('style');s.id=id;s.textContent='html{filter:invert(1) hue-rotate(180deg)!important;background:#fff!important}img,video,canvas,iframe,svg,[style*=\"background-image\"]{filter:invert(1) hue-rotate(180deg)!important}';document.documentElement.appendChild(s);})();"
+            : "(function(){var e=document.getElementById('__rtnight');if(e)e.remove();})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    /** 页内查找栏 (Ctrl+F): 输入即高亮, ▲▼ 切换匹配。 */
+    private android.widget.LinearLayout findBar;
+    private void toggleFindBar() {
+        Tab t = cur(); if (t == null) { toast("无页面"); return; }
+        if (findBar != null && findBar.getParent() != null) { closeFindBar(); return; }
+        final WebView web = t.web;
+        findBar = new android.widget.LinearLayout(this);
+        findBar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        findBar.setBackgroundColor(0xFF21262D);
+        findBar.setGravity(Gravity.CENTER_VERTICAL);
+        findBar.setPadding(dp(8), dp(4), dp(8), dp(4));
+        final EditText q = new EditText(this);
+        q.setSingleLine(true); q.setHint("页内查找"); q.setTextColor(0xFFE6EDF3); q.setHintTextColor(0xFF6E7681);
+        q.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14); q.setBackgroundColor(0xFF0D1117); q.setPadding(dp(8), dp(6), dp(8), dp(6));
+        q.setLayoutParams(new android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        q.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { try { web.findAllAsync(s.toString()); } catch (Exception ignored) {} }
+            @Override public void afterTextChanged(android.text.Editable s) {}
+        });
+        Button prev = chipBtnSm("\u25B2"); prev.setOnClickListener(v -> { try { web.findNext(false); } catch (Exception ignored) {} });
+        Button next = chipBtnSm("\u25BC"); next.setOnClickListener(v -> { try { web.findNext(true); } catch (Exception ignored) {} });
+        Button close = chipBtnSm("\u2715"); close.setOnClickListener(v -> closeFindBar());
+        findBar.addView(q); findBar.addView(prev); findBar.addView(next); findBar.addView(close);
+        content.addView(findBar, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP));
+        q.requestFocus();
+    }
+    private void closeFindBar() {
+        Tab t = cur(); if (t != null) try { t.web.clearMatches(); } catch (Exception ignored) {}
+        if (findBar != null && findBar.getParent() != null) ((ViewGroup) findBar.getParent()).removeView(findBar);
+        findBar = null;
+    }
+    /** 桌面版/移动版 UA 切换。 */
+    private void toggleDesktop() {
+        Tab t = cur(); if (t == null) { toast("无页面"); return; }
+        t.desktop = !t.desktop;
+        WebSettings st = t.web.getSettings();
+        if (t.desktop) { st.setUserAgentString(DESKTOP_UA); st.setUseWideViewPort(true); st.setLoadWithOverviewMode(true); toast("已切桌面版"); }
+        else { st.setUserAgentString(null); toast("已切移动版"); }
+        t.web.reload();
+    }
+    private void toggleNight() {
+        Tab t = cur(); if (t == null) { toast("无页面"); return; }
+        t.night = !t.night; applyNight(t.web, t.night); toast(t.night ? "夜间模式开" : "夜间模式关");
+    }
+    /** 阅读模式: 提取正文, 去广告/侧栏, 大字号深色阅读。 */
+    private void readerMode() {
+        Tab t = cur(); if (t == null) { toast("无页面"); return; }
+        String js = "(function(){try{var best=null,max=0;var ps=document.querySelectorAll('article,main,[role=main],.content,.post,#content');"
+            + "for(var i=0;i<ps.length;i++){var l=(ps[i].innerText||'').length;if(l>max){max=l;best=ps[i];}}"
+            + "if(!best||max<200){best=document.body;}var html=best.innerHTML;"
+            + "document.head.innerHTML='';document.body.innerHTML=\"<div id='rtread'>\"+html+\"</div>\";"
+            + "var s=document.createElement('style');s.textContent=\"body{background:#15171a!important;margin:0}#rtread{max-width:720px;margin:0 auto;padding:24px 18px;color:#d6dae0;font:18px/1.7 -apple-system,Georgia,serif}#rtread img{max-width:100%;height:auto}#rtread a{color:#6cb6ff}\";document.head.appendChild(s);}catch(e){}})();";
+        try { t.web.evaluateJavascript(js, null); toast("阅读模式"); } catch (Exception e) { toast("无法进入阅读模式"); }
+    }
+    private void toggleAdBlock() { adBlock = !adBlock; toast(adBlock ? "广告/弹窗拦截: 开" : "广告/弹窗拦截: 关"); Tab t = cur(); if (t != null) t.web.reload(); }
+    private void openIncognito() { newTabIncognito(DEVIN); }
+    private Tab newTabIncognito(String url) {
+        Tab tab = makeTab(null, false);
+        tab.incognito = true;
+        try { tab.web.getSettings().setSaveFormData(false); } catch (Exception ignored) {}
+        loadInto(tab, url);
+        selectTab(tabs.size() - 1);
+        renderTabStrip();
+        toast("无痕标签 (不记历史)");
+        return tab;
+    }
+    private void shareCurrent() {
+        Tab t = cur(); if (t == null) { toast("无页面"); return; }
+        String u = displayUrl(t);
+        try { Intent it = new Intent(Intent.ACTION_SEND); it.setType("text/plain");
+            it.putExtra(Intent.EXTRA_SUBJECT, t.title == null ? u : t.title); it.putExtra(Intent.EXTRA_TEXT, u);
+            startActivity(Intent.createChooser(it, "分享本页")); } catch (Exception e) { toast("无法分享"); }
+    }
+    private void copyCurrentUrl() {
+        Tab t = cur(); if (t == null) { toast("无页面"); return; }
+        try { ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("url", displayUrl(t))); toast("已复制网址"); } catch (Exception e) { toast("复制失败"); }
+    }
+    private void translateCurrent() {
+        Tab t = cur(); if (t == null) { toast("无页面"); return; }
+        String u = displayUrl(t);
+        if (u == null || u.startsWith("rtflow:") || u.startsWith("file:")) { toast("内部页不可翻译"); return; }
+        try { String tu = "https://translate.google.com/translate?sl=auto&tl=zh-CN&u=" + java.net.URLEncoder.encode(u, "UTF-8");
+            newTab(tu, null); } catch (Exception e) { toast("无法翻译"); }
+    }
+    /** 把当前页加为主屏快捷方式 (固定图标)。 */
+    private void addHomeShortcut() {
+        Tab t = cur(); if (t == null) { toast("无页面"); return; }
+        String u = displayUrl(t); String label = (t.title == null || t.title.isEmpty()) ? u : t.title;
+        if (label.length() > 24) label = label.substring(0, 24);
+        try {
+            android.content.pm.ShortcutManager sm = getSystemService(android.content.pm.ShortcutManager.class);
+            if (sm != null && sm.isRequestPinShortcutSupported()) {
+                Intent open = new Intent(this, MainActivity.class).setAction(Intent.ACTION_VIEW).setData(Uri.parse(u));
+                android.content.pm.ShortcutInfo si = new android.content.pm.ShortcutInfo.Builder(this, "rt_" + u.hashCode())
+                    .setShortLabel(label)
+                    .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_launcher))
+                    .setIntent(open).build();
+                sm.requestPinShortcut(si, null); toast("已请求添加到主屏");
+            } else toast("当前桌面不支持快捷方式");
+        } catch (Exception e) { toast("添加失败"); }
+    }
+    /** 标签总览: 网格列出所有标签, 点选切换, ✕ 关闭。 */
+    private void showTabOverview() {
+        final android.app.Dialog d = new android.app.Dialog(this, android.R.style.Theme_DeviceDefault_Light_NoActionBar);
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.setBackgroundColor(0xFF0E1116);
+        android.widget.LinearLayout col = new android.widget.LinearLayout(this);
+        col.setOrientation(android.widget.LinearLayout.VERTICAL); col.setPadding(dp(12), dp(12), dp(12), dp(12));
+        TextView h = new TextView(this); h.setText("标签总览 (" + tabs.size() + ")"); h.setTextColor(0xFF9CDCFE);
+        h.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16); h.setPadding(dp(4), dp(4), dp(4), dp(10)); col.addView(h);
+        for (int i = 0; i < tabs.size(); i++) {
+            final int idx = i; Tab t = tabs.get(i);
+            android.widget.LinearLayout card = new android.widget.LinearLayout(this);
+            card.setOrientation(android.widget.LinearLayout.HORIZONTAL); card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setBackgroundColor(idx == active ? 0xFF1F3A45 : 0xFF161B22);
+            card.setPadding(dp(12), dp(12), dp(8), dp(12));
+            android.widget.LinearLayout.LayoutParams clp = new android.widget.LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            clp.bottomMargin = dp(8); card.setLayoutParams(clp);
+            TextView ti = new TextView(this); ti.setText((t.incognito ? "🕶 " : "") + chipTitle(t));
+            ti.setTextColor(0xFFE6EDF3); ti.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14); ti.setSingleLine(true);
+            ti.setLayoutParams(new android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            Button x = chipBtnSm("\u2715");
+            card.addView(ti); card.addView(x);
+            card.setOnClickListener(v -> { selectTab(idx); d.dismiss(); });
+            x.setOnClickListener(v -> { closeTab(idx); d.dismiss(); showTabOverview(); });
+            col.addView(card);
+        }
+        sv.addView(col); d.setContentView(sv); d.show();
+    }
+    private String hostOf(String url) { try { String h = Uri.parse(url).getHost(); return h == null ? "" : h; } catch (Exception e) { return ""; } }
+    /** 保存当前页可见的用户名/密码到本地 (vault, 按域名)。 */
+    private void saveSiteLogin() {
+        Tab t = cur(); if (t == null) { toast("无页面"); return; }
+        final String host = hostOf(displayUrl(t));
+        if (host.isEmpty()) { toast("无法识别站点"); return; }
+        String js = "(function(){try{var p=document.querySelector('input[type=password]');if(!p)return '';"
+            + "var u='';var ins=document.querySelectorAll('input');var pi=-1;for(var i=0;i<ins.length;i++){if(ins[i]===p){pi=i;break;}}"
+            + "for(var j=pi-1;j>=0;j--){var tp=(ins[j].type||'').toLowerCase();if(tp==='text'||tp==='email'||tp==='tel'||tp===''){u=ins[j].value||'';break;}}"
+            + "return JSON.stringify({u:u,p:p.value||''});}catch(e){return '';}})();";
+        try { t.web.evaluateJavascript(js, val -> {
+            try {
+                if (val == null || val.length() < 4) { toast("未发现登录表单"); return; }
+                String json = new org.json.JSONTokener(val).nextValue().toString(); // 去掉外层引号转义
+                org.json.JSONObject c = new org.json.JSONObject(json);
+                if (c.optString("p", "").isEmpty()) { toast("密码为空, 未保存"); return; }
+                org.json.JSONObject all = new org.json.JSONObject(loginsRaw());
+                all.put(host, c); String s = all.toString();
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("logins", s).apply(); vaultWrite("logins", s);
+                toast("已保存 " + host + " 登录");
+            } catch (Exception e) { toast("保存失败"); }
+        }); } catch (Exception e) { toast("保存失败"); }
+    }
+    /** 用已保存的本站登录填充表单。 */
+    private void fillSiteLogin() {
+        Tab t = cur(); if (t == null) { toast("无页面"); return; }
+        String host = hostOf(displayUrl(t));
+        try {
+            org.json.JSONObject all = new org.json.JSONObject(loginsRaw());
+            if (!all.has(host)) { toast("无 " + host + " 的保存登录"); return; }
+            org.json.JSONObject c = all.getJSONObject(host);
+            String u = c.optString("u", "").replace("\\", "\\\\").replace("'", "\\'");
+            String p = c.optString("p", "").replace("\\", "\\\\").replace("'", "\\'");
+            String js = "(function(){try{var pw=document.querySelector('input[type=password]');if(!pw){return;}"
+                + "function set(el,v){var d=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');d.set.call(el,v);el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}"
+                + "var ins=document.querySelectorAll('input');var pi=-1;for(var i=0;i<ins.length;i++){if(ins[i]===pw){pi=i;break;}}"
+                + "for(var j=pi-1;j>=0;j--){var tp=(ins[j].type||'').toLowerCase();if(tp==='text'||tp==='email'||tp==='tel'||tp===''){set(ins[j],'" + u + "');break;}}"
+                + "set(pw,'" + p + "');}catch(e){}})();";
+            t.web.evaluateJavascript(js, null); toast("已填充");
+        } catch (Exception e) { toast("填充失败"); }
+    }
+    private String loginsRaw() {
+        String raw = getSharedPreferences(PREFS, MODE_PRIVATE).getString("logins", "{}");
+        if (raw == null || raw.isEmpty() || "{}".equals(raw)) { String v = vaultRead("logins"); if (v != null && !v.isEmpty()) raw = v; }
+        return (raw == null || raw.isEmpty()) ? "{}" : raw;
     }
 
     // ── Native 桥 (仅注入内部页 switch.html / tunnel.html) ─────────────────
@@ -1317,11 +1588,15 @@ public class MainActivity extends AppCompatActivity {
                 final String path = e.optString("file", "");
                 final String name = e.optString("name", path);
                 final String mime = e.optString("mime", "*/*");
+                final int recIdx = i;
                 LinearLayout row = new LinearLayout(this);
-                row.setOrientation(LinearLayout.VERTICAL); row.setPadding(dp(8), dp(8), dp(8), dp(8));
+                row.setOrientation(LinearLayout.HORIZONTAL); row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(8), dp(8), dp(4), dp(8));
                 row.setBackgroundColor(0xFF1B1F26);
                 LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                 rlp.bottomMargin = dp(4); row.setLayoutParams(rlp);
+                LinearLayout txt = new LinearLayout(this); txt.setOrientation(LinearLayout.VERTICAL);
+                txt.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
                 TextView nm = new TextView(this); nm.setText(name);
                 nm.setTextColor(0xFFE6EDF3); nm.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
                 nm.setSingleLine(true); nm.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
@@ -1329,12 +1604,70 @@ public class MainActivity extends AppCompatActivity {
                 TextView sub = new TextView(this);
                 sub.setText((f.exists() ? humanSize(f.length()) : "(文件已删)") + " · 点击打开 · 长按拖拽");
                 sub.setTextColor(0xFF8B949E); sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
-                row.addView(nm); row.addView(sub);
-                row.setOnClickListener(v -> openDownloaded(path, mime));
-                row.setOnLongClickListener(v -> { dragDownloaded(v, path, mime); return true; });
+                txt.addView(nm); txt.addView(sub);
+                Button more = chipBtnSm("\u22EE");
+                more.setOnClickListener(v -> showDownloadActions(v, recIdx, path, name, mime));
+                row.addView(txt); row.addView(more);
+                txt.setOnClickListener(v -> openDownloaded(path, mime));
+                txt.setOnLongClickListener(v -> { dragDownloaded(v, path, mime); return true; });
                 listCol.addView(row);
             }
         } catch (Exception ignored) {}
+    }
+    /** 下载项动作: 用其它应用打开 / 重命名 / 删除。 */
+    private void showDownloadActions(View anchor, int recIdx, String path, String name, String mime) {
+        PopupMenu pm = new PopupMenu(this, anchor);
+        pm.getMenu().add(0, 1, 0, "用其它应用打开");
+        pm.getMenu().add(0, 2, 1, "重命名");
+        pm.getMenu().add(0, 3, 2, "删除");
+        pm.setOnMenuItemClickListener(it -> {
+            switch (it.getItemId()) {
+                case 1: openWithChooser(path, mime); return true;
+                case 2: renameDownload(recIdx, path, name); return true;
+                case 3: deleteDownload(recIdx, path); return true;
+            }
+            return false;
+        });
+        pm.show();
+    }
+    private void openWithChooser(String path, String mime) {
+        try {
+            File f = new File(path); if (!f.exists()) { toast("文件已不存在"); return; }
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(fileUri(path), (mime == null || mime.isEmpty()) ? "*/*" : mime);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(Intent.createChooser(i, "用其它应用打开").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception e) { toast("无法打开"); }
+    }
+    private void renameDownload(int recIdx, String path, String oldName) {
+        final EditText in = new EditText(this); in.setText(oldName); in.setSingleLine(true);
+        new android.app.AlertDialog.Builder(this).setTitle("重命名").setView(in)
+            .setPositiveButton("确定", (d, w) -> {
+                String nn = in.getText().toString().trim(); if (nn.isEmpty()) { toast("名称为空"); return; }
+                try {
+                    File of = new File(path); File nf = new File(of.getParentFile(), nn);
+                    boolean ok = of.exists() && of.renameTo(nf);
+                    org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("downloads", "[]"));
+                    if (recIdx >= 0 && recIdx < arr.length()) {
+                        org.json.JSONObject e = arr.getJSONObject(recIdx);
+                        e.put("name", nn); if (ok) e.put("file", nf.getAbsolutePath());
+                        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("downloads", arr.toString()).apply();
+                    }
+                    if (dlListCol != null) renderDownloadList(dlListCol);
+                    toast(ok ? "已重命名" : "已更新名称(文件未移动)");
+                } catch (Exception ex) { toast("重命名失败"); }
+            }).setNegativeButton("取消", null).show();
+    }
+    private void deleteDownload(int recIdx, String path) {
+        try {
+            File f = new File(path); if (f.exists()) f.delete();
+            org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("downloads", "[]"));
+            org.json.JSONArray out = new org.json.JSONArray();
+            for (int i = 0; i < arr.length(); i++) if (i != recIdx) out.put(arr.getJSONObject(i));
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("downloads", out.toString()).apply();
+            if (dlListCol != null) renderDownloadList(dlListCol);
+            toast("已删除");
+        } catch (Exception e) { toast("删除失败"); }
     }
     private String humanSize(long b) {
         if (b < 1024) return b + " B";
@@ -1363,31 +1696,42 @@ public class MainActivity extends AppCompatActivity {
         content.addCategory(Intent.CATEGORY_OPENABLE);
         if (multi) content.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         java.util.List<Intent> extra = new java.util.ArrayList<>();
-        // 图库 (照片/视频)
-        Intent gallery;
-        if (wantVideo && !wantImage) { gallery = new Intent(Intent.ACTION_PICK, android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI); gallery.setType("video/*"); }
-        else { gallery = new Intent(Intent.ACTION_PICK, android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI); gallery.setType(wantVideo ? "image/*,video/*" : "image/*"); }
-        if (multi) gallery.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        if (gallery.resolveActivity(getPackageManager()) != null) extra.add(gallery);
-        // 相机拍照 (输出到 FileProvider Uri, 结果回填)
+        String pkg = getPackageName();
+        // 相机拍照 (输出到 FileProvider Uri, 结果回填) — 明确「相机」入口, 点击直接开相机
         if (wantImage) {
             try {
                 File img = new File(getCacheDir(), "cam_" + System.currentTimeMillis() + ".jpg");
-                Uri out = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", img);
+                Uri out = FileProvider.getUriForFile(this, pkg + ".fileprovider", img);
                 Intent cam = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
                 cam.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, out);
                 cam.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                if (cam.resolveActivity(getPackageManager()) != null) { cameraOutputUri = out; extra.add(cam); }
+                if (cam.resolveActivity(getPackageManager()) != null) { cameraOutputUri = out; extra.add(label(cam, "相机")); }
             } catch (Exception ignored) {}
         }
         // 录像
         if (wantVideo) {
             Intent vid = new Intent(android.provider.MediaStore.ACTION_VIDEO_CAPTURE);
-            if (vid.resolveActivity(getPackageManager()) != null) extra.add(vid);
+            if (vid.resolveActivity(getPackageManager()) != null) extra.add(label(vid, "录像"));
         }
-        Intent chooser = Intent.createChooser(content, "上传 · 相机 / 图库 / 文件");
-        if (!extra.isEmpty()) chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, extra.toArray(new Intent[0]));
+        // 图库 (照片/视频) — 明确「图库」入口
+        Intent gallery;
+        if (wantVideo && !wantImage) { gallery = new Intent(Intent.ACTION_PICK, android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI); gallery.setType("video/*"); }
+        else { gallery = new Intent(Intent.ACTION_PICK, android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI); gallery.setType(wantVideo ? "image/*,video/*" : "image/*"); }
+        if (multi) gallery.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        if (gallery.resolveActivity(getPackageManager()) != null) extra.add(label(gallery, "图库"));
+        // 文件夹 (文件管理器/文档/云盘) — 明确「文件夹」入口, 点击直接开文件管理器
+        Intent docs = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        docs.addCategory(Intent.CATEGORY_OPENABLE); docs.setType("*/*");
+        if (multi) docs.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        if (docs.resolveActivity(getPackageManager()) != null) extra.add(label(docs, "文件夹"));
+        Intent chooser = Intent.createChooser(content, "上传 · 相机 / 图库 / 文件夹");
+        if (!extra.isEmpty()) chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, extra.toArray(new android.os.Parcelable[0]));
         return chooser;
+    }
+    /** 给 Intent 套上明确中文标签 (相机/图库/文件夹) 在系统选择器里直观显示。 */
+    private Intent label(Intent target, String name) {
+        try { return new android.content.pm.LabeledIntent(target, getPackageName(), name, 0); }
+        catch (Exception e) { return target; }
     }
     private void openDownloaded(String path, String mime) {
         try {

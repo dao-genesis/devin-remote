@@ -91,6 +91,12 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .acts{display:flex;gap:2px;flex-wrap:wrap}
 .b{width:20px;height:20px;border:none;border-radius:3px;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;padding:0}
 .b.sw{background:var(--btn);color:#fff}.b.sw:hover{background:var(--btn-h)}
+/* 账号级健康着色: 任一对话卡住→红闪, 仅待输入→橙 */
+.row.acc-alert{background:#3a1a1a66;border-left:3px solid #f44;animation:accpulse 1.4s infinite}
+.row.acc-warn{background:#332a1355;border-left:3px solid #d29922}
+.b.sw.sw-alert{background:#a11;color:#fff;box-shadow:0 0 0 1px #f44;animation:accpulse 1.4s infinite}
+.b.sw.sw-warn{background:#8a6d1a;color:#fff}
+@keyframes accpulse{0%,100%{opacity:1}50%{opacity:.55}}
 .b.dv{background:#1e3a4a;color:#9cdcfe;width:auto;padding:0 3px;font-size:10px}.b.dv:hover{background:#2a4a5a}
 .b.wp{background:#1a2e3a;color:#4ec9b0}.b.wp:hover{background:#2a3e4a;color:#7fffd4}
 .b.sk{background:transparent;color:#666;font-size:12px}.b.sk:hover{color:#f0c674}
@@ -658,9 +664,28 @@ function trkHtml(){
 function paintTrk(){ var b=document.getElementById("convBody"); if(b) b.innerHTML=trkHtml(); }
 function paintRowRun(){
   loadAcc().forEach(function(a,i){
-    var st=_trk[(a.email||"").toLowerCase()]; var el=document.getElementById("dvRun"+i); if(!el)return;
-    if(!st||Date.now()-st.ts>180000||(st.total|0)<=0){ el.innerHTML=""; return; }
-    el.innerHTML=(st.running?'<span class="run" title="运行中">▶'+st.running+'</span>':'')+(st.awaiting?'<span class="awa" title="待输入">⏸'+st.awaiting+'</span>':'')+(st.blocked?'<span class="blk" title="卡住">■'+st.blocked+'</span>':'');
+    var st=_trk[(a.email||"").toLowerCase()];
+    var el=document.getElementById("dvRun"+i);
+    var rowEl=document.querySelector('.row[data-i="'+i+'"]');
+    var swBtn=rowEl?rowEl.querySelector('.b.sw'):null;
+    var stale=(!st||Date.now()-st.ts>180000||(st.total|0)<=0);
+    if(el){
+      if(stale){ el.innerHTML=""; }
+      else el.innerHTML=(st.running?'<span class="run" title="运行中">▶'+st.running+'</span>':'')+(st.awaiting?'<span class="awa" title="待输入">⏸'+st.awaiting+'</span>':'')+(st.blocked?'<span class="blk" title="卡住">■'+st.blocked+'</span>':'');
+    }
+    // 账号级健康着色: 该账号下任一对话卡住→整行+⚡按钮变红闪烁; 仅有待输入→橙; 否则清除
+    // (用户通常只开一个网页操作, 多对话里某个出问题需要在切号面板一眼看到)
+    if(rowEl){
+      rowEl.classList.remove("acc-alert","acc-warn");
+      if(!stale && st.blocked>0) rowEl.classList.add("acc-alert");
+      else if(!stale && st.awaiting>0) rowEl.classList.add("acc-warn");
+    }
+    if(swBtn){
+      swBtn.classList.remove("sw-alert","sw-warn");
+      if(!stale && st.blocked>0){ swBtn.classList.add("sw-alert"); swBtn.title="有对话卡住("+st.blocked+") · 点击进入处理"; }
+      else if(!stale && st.awaiting>0){ swBtn.classList.add("sw-warn"); swBtn.title="有对话待输入("+st.awaiting+") · 点击进入"; }
+      else swBtn.title="多实例注入浏览器打开(即切号)";
+    }
   });
 }
 var _trkBusy=false;
