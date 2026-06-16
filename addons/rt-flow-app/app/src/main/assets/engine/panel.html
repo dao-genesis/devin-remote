@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-  <h1>Devin Cloud 手机版 <span class="tag" id="ver">v0.1</span></h1>
+  <h1>Devin Cloud 手机版 <span class="tag" id="ver">v0.15.1</span></h1>
 
   <div class="card">
     <div class="row"><span class="dot" id="dot"></span><b id="st">连接中…</b><span class="sp"></span><button class="ghost" id="restart">重启服务</button></div>
@@ -46,6 +46,7 @@
 
 <script>
 var N = window.Panel || {};
+try{ var _v=localStorage.getItem("rtflow.ver"); var _e=document.getElementById("ver"); if(_v&&_e) _e.textContent="v"+_v; }catch(e){}
 function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
 function saveAcc(a){ localStorage.setItem("rtflow.accounts", JSON.stringify(a||[])); }
 function getActive(){ return localStorage.getItem("rtflow.active")||""; }

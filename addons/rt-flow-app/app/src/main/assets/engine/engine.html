@@ -15,6 +15,31 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
+  var APP_VERSION = "0.15.1";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
+
+  // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
+  //   引擎页与前台标签共用同一 WebView 渲染线程; 同步 N.browseExecJs 会把渲染线程挂死,
+  //   导致前台标签的 evaluateJavascript 回调永不触发 (8s 超时返回 null)。故走非阻塞:
+  //   N.browseExecJsAsync(reqId,...) 立即返回, 结果经 window.__browseCb(reqId, value) 回灌
+  //   (与原生 HTTP 桥 __httpCb 同一模式)。resolve 的是 evaluateJavascript 已解析的值。
+  var __bseq = 0, __bcbs = Object.create(null);
+  window.__browseCb = function(id, val){ var cb = __bcbs[id]; if(cb){ delete __bcbs[id]; cb(val); } };
+  function execJs(tabIndex, js){
+    return new Promise(function(resolve){
+      if(N.browseExecJsAsync){
+        var id = "b" + (++__bseq) + "_" + Date.now();
+        __bcbs[id] = function(v){ resolve(v); };
+        try{ N.browseExecJsAsync(id, tabIndex|0, js); }
+        catch(e){ delete __bcbs[id]; resolve(null); return; }
+        setTimeout(function(){ if(__bcbs[id]){ delete __bcbs[id]; resolve(null); } }, 15000);
+        return;
+      }
+      // 兜底: 老原生无异步桥时退回同步 (并把原始 JSON 解析一层)
+      if(N.browseExecJs){ var r = N.browseExecJs(tabIndex|0, js); try{ resolve(JSON.parse(r)); }catch(e){ resolve(r); } }
+      else resolve(null);
+    });
+  }
 
   // ── 账号存储 (localStorage) ──────────────────────────────────────────────
   function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
@@ -144,27 +169,26 @@
     browseNavigate: async function(a){ N.browseNavigate(a.tabIndex!==undefined?a.tabIndex:-1, a.action||"reload", a.url||""); return {ok:true}; },
     browseExecJs: async function(a){
       if(!a||!a.js) return {ok:false,error:"需 js"};
-      var r = N.browseExecJs?N.browseExecJs(a.tabIndex|0, a.js):"null";
-      try{ return {ok:true, result: JSON.parse(r)}; }catch(e){ return {ok:true, result:r}; }
+      var v = await execJs(a.tabIndex|0, a.js);
+      return {ok:true, result: v};
     },
     browseGetDom: async function(a){
-      var js = "document.documentElement.outerHTML";
-      var r = N.browseExecJs?N.browseExecJs(a.tabIndex|0, js):"";
-      try{ return {ok:true, html: JSON.parse(r)}; }catch(e){ return {ok:true, html:r}; }
+      var html = await execJs(a.tabIndex|0, "document.documentElement.outerHTML");
+      return {ok:true, html: html};
     },
     browseGetCookies: async function(a){ return {ok:true, cookies: N.browseGetCookies?N.browseGetCookies(a.url||"https://app.devin.ai/"):""}; },
     browseGetStorage: async function(a){
       var type = a.type||"local"; // local | session
       var js = "(function(){try{var s="+(type==="session"?"sessionStorage":"localStorage")+";var o={};for(var i=0;i<s.length;i++){var k=s.key(i);o[k]=s.getItem(k);}return JSON.stringify(o);}catch(e){return'{}';}})()";
-      var r = N.browseExecJs?N.browseExecJs(a.tabIndex|0, js):"{}";
-      try{ return {ok:true, storage: JSON.parse(JSON.parse(r))}; }catch(e){ try{return{ok:true,storage:JSON.parse(r)};}catch(e2){return{ok:true,storage:r};} }
+      var s = await execJs(a.tabIndex|0, js);
+      try{ return {ok:true, storage: JSON.parse(s)}; }catch(e){ return {ok:true, storage: s}; }
     },
     browseScreenshot: async function(a){ return {ok:true, base64: N.browseScreenshot?N.browseScreenshot(a.tabIndex|0):""}; },
     browseExportMd: async function(a){
       var js = "(function(){try{var t=document.title||'';var b=document.body?document.body.innerText:'';return JSON.stringify({title:t,text:b.slice(0,50000)});}catch(e){return'{}';}})()";
-      var r = N.browseExecJs?N.browseExecJs(a.tabIndex|0, js):"{}";
+      var s = await execJs(a.tabIndex|0, js);
       try{
-        var d=JSON.parse(JSON.parse(r));
+        var d=JSON.parse(s);
         var md="# "+d.title+"\\n\\n"+d.text;
         if(a.save){ N.writeFile(a.name||"export.md", md); }
         return {ok:true, title:d.title, markdown:md.slice(0,20000), length:md.length};
@@ -173,47 +197,44 @@
     browseFindInPage: async function(a){
       if(!a||!a.text) return {ok:false,error:"需 text"};
       var js = "(function(){try{window.find('"+a.text.replace(/'/g,"\\'")+"');return 'found';}catch(e){return 'err:'+e;}})()";
-      var r = N.browseExecJs?N.browseExecJs(a.tabIndex|0, js):"";
+      var r = await execJs(a.tabIndex|0, js);
       return {ok:true, result:r};
     },
     // ── P6+: 高级浏览器自动化 (元素操作/表单/等待/链接提取/页面信息) ──
     browseClickElement: async function(a){
       if(!a||!a.selector) return {ok:false,error:"需 selector"};
       var js="(function(){try{var el=document.querySelector('"+a.selector.replace(/'/g,"\\'")+"');if(!el)return 'not_found';el.click();return 'clicked';}catch(e){return 'err:'+e;}})()";
-      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"err";
-      try{r=JSON.parse(r);}catch(e){}
+      var r = await execJs(a.tabIndex|0, js);
       return {ok:r==='clicked', result:r};
     },
     browseFillForm: async function(a){
       if(!a||!a.selector||a.value===undefined) return {ok:false,error:"需 selector+value"};
       var js="(function(){try{var el=document.querySelector('"+a.selector.replace(/'/g,"\\'")+"');if(!el)return 'not_found';el.value='"+String(a.value).replace(/'/g,"\\'")+"';el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));return 'filled';}catch(e){return 'err:'+e;}})()";
-      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"err";
-      try{r=JSON.parse(r);}catch(e){}
+      var r = await execJs(a.tabIndex|0, js);
       return {ok:r==='filled', result:r};
     },
     browseScrollTo: async function(a){
       var x=a.x||0, y=a.y||0;
       var js="(function(){window.scrollTo("+x+","+y+");return 'scrolled';})()";
-      N.browseExecJs&&N.browseExecJs(a.tabIndex|0,js);
+      await execJs(a.tabIndex|0, js);
       return {ok:true};
     },
     browseGetLinks: async function(a){
       var js="(function(){try{var links=[];document.querySelectorAll('a[href]').forEach(function(a){links.push({text:(a.innerText||'').slice(0,100),href:a.href});});return JSON.stringify(links.slice(0,200));}catch(e){return'[]';}})()";
-      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"[]";
-      try{return{ok:true,links:JSON.parse(JSON.parse(r))};}catch(e){try{return{ok:true,links:JSON.parse(r)};}catch(e2){return{ok:true,links:[]};}}
+      var s = await execJs(a.tabIndex|0, js);
+      try{ return {ok:true, links: JSON.parse(s)}; }catch(e){ return {ok:true, links: Array.isArray(s)?s:[]}; }
     },
     browseGetPageInfo: async function(a){
       var js="(function(){try{return JSON.stringify({url:location.href,title:document.title,readyState:document.readyState,forms:document.forms.length,links:document.links.length,images:document.images.length,scripts:document.scripts.length,bodyLen:(document.body?document.body.innerText.length:0)});}catch(e){return'{}';}})()";
-      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"{}";
-      try{return{ok:true,info:JSON.parse(JSON.parse(r))};}catch(e){try{return{ok:true,info:JSON.parse(r)};}catch(e2){return{ok:true,info:{}};}}
+      var s = await execJs(a.tabIndex|0, js);
+      try{ return {ok:true, info: JSON.parse(s)}; }catch(e){ return {ok:true, info: {}}; }
     },
     browseWaitForElement: async function(a){
       if(!a||!a.selector) return {ok:false,error:"需 selector"};
       var timeout=a.timeout||5000, interval=200, elapsed=0;
       while(elapsed<timeout){
         var js="(function(){return document.querySelector('"+a.selector.replace(/'/g,"\\'")+"')?'found':'not_found';})()";
-        var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"";
-        try{r=JSON.parse(r);}catch(e){}
+        var r = await execJs(a.tabIndex|0, js);
         if(r==='found') return {ok:true, found:true, elapsed:elapsed};
         await new Promise(function(res){setTimeout(res,interval);});
         elapsed+=interval;
@@ -223,14 +244,13 @@
     browseSubmitForm: async function(a){
       var sel=a.selector||"form";
       var js="(function(){try{var f=document.querySelector('"+sel.replace(/'/g,"\\'")+"');if(!f)return 'not_found';if(f.tagName==='FORM')f.submit();else{var btn=f.querySelector('button[type=submit],input[type=submit]');if(btn)btn.click();else return 'no_submit';}return 'submitted';}catch(e){return 'err:'+e;}})()";
-      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"err";
-      try{r=JSON.parse(r);}catch(e){}
+      var r = await execJs(a.tabIndex|0, js);
       return {ok:r==='submitted', result:r};
     },
     browseGetInputValues: async function(a){
       var js="(function(){try{var inputs=[];document.querySelectorAll('input,textarea,select').forEach(function(el){inputs.push({tag:el.tagName,type:el.type||'',name:el.name||'',id:el.id||'',value:(el.value||'').slice(0,200),placeholder:el.placeholder||''});});return JSON.stringify(inputs.slice(0,100));}catch(e){return'[]';}})()";
-      var r=N.browseExecJs?N.browseExecJs(a.tabIndex|0,js):"[]";
-      try{return{ok:true,inputs:JSON.parse(JSON.parse(r))};}catch(e){try{return{ok:true,inputs:JSON.parse(r)};}catch(e2){return{ok:true,inputs:[]};}}
+      var s = await execJs(a.tabIndex|0, js);
+      try{ return {ok:true, inputs: JSON.parse(s)}; }catch(e){ return {ok:true, inputs: []}; }
     },
 
     // ══════════════════════════════════════════════════════════════════════
@@ -511,7 +531,7 @@
 
     // ── 管理/热修通道 (用户私有 token 已门禁; 用户明确要求隔隧道热修) ──
     ping: async function(){ return {ok:true, pong:Date.now()}; },
-    getEngineInfo: async function(){ return {ok:true, version:"0.15.0", ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length, remoteOps: N.isRemoteOpsEnabled?N.isRemoteOpsEnabled():false }; },
+    getEngineInfo: async function(){ return {ok:true, version: APP_VERSION, ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length, remoteOps: N.isRemoteOpsEnabled?N.isRemoteOpsEnabled():false }; },
     // ── 在线自动更新: 云端经中继可查/可推 (安装仍需用户点一次「安装」) ──
     appCheckUpdate: async function(){ try{ return JSON.parse(N.appCheckUpdate?N.appCheckUpdate():"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },
     appInstallUpdate: async function(a){ try{ return JSON.parse(N.appInstallUpdate?N.appInstallUpdate((a&&a.url)||""):"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },

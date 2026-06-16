@@ -237,7 +237,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 <span style="font-size:10px;color:#888">勾选→多 Devin 绑同一 GitHub</span>
 </div>
 <div id="list"></div>
-<div class="footer">Devin Cloud 手机版 · <span class="v">v0.9.0</span> · 道法自然</div>
+<div class="footer">Devin Cloud 手机版 · <span class="v" id="appVer">v0.15.1</span> · 道法自然</div>
 <div class="toast" id="toast"></div>
 
 <script src="devin-core.js"></script>
@@ -246,6 +246,8 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 <script>
 var N = window.Native || {};
 var DEVIN = "https://app.devin.ai/";
+// 版本号自同步: 引擎页启动时写 localStorage['rtflow.ver'], 此处读取 → 永不僵化
+try{ var _v=localStorage.getItem("rtflow.ver"); var _e=document.getElementById("appVer"); if(_v&&_e) _e.textContent="v"+_v; }catch(e){}
 var _mode = localStorage.getItem("rtflow.mode") || "wam";
 var _convOpen = localStorage.getItem("rtflow.convOpen") !== "0";
 function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }

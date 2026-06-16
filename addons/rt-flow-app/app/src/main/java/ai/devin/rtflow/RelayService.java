@@ -62,6 +62,15 @@ public class RelayService extends Service {
     /** 远程操控安全开关 (默认关, 需在穿透面板手动启用) */
     public static volatile boolean remoteOpsEnabled = false;
 
+    /** 把前台标签 evaluateJavascript 的结果异步回灌给引擎页 window.__browseCb(reqId, value)。
+     *  resultJson 是 evaluateJavascript 的原始返回 (合法 JSON), 直接内联即为已解析的 JS 值。 */
+    private void deliverBrowse(String reqId, String resultJson) {
+        final String payload = (resultJson == null || resultJson.isEmpty()) ? "null" : resultJson;
+        main.post(() -> { if (engine != null) try {
+            engine.evaluateJavascript("window.__browseCb&&window.__browseCb(" + HttpBridge.jsonStr(reqId) + "," + payload + ")", null);
+        } catch (Exception ignored) {} });
+    }
+
     /** JS ↔ 原生桥 (引擎页用 window.Native.*) */
     public class Bridge {
         @JavascriptInterface public String getConn() {
@@ -122,6 +131,16 @@ public class RelayService extends Service {
                     while (!done[0]) { long left = end - System.currentTimeMillis(); if (left <= 0) break; r.wait(left); } }
             } catch (Exception e) {}
             return r[0];
+        }
+
+        // 非阻塞版 execJs: 引擎页 JS 线程不能同步等待前台标签的 evaluateJavascript 回调
+        // (两 WebView 共用同一渲染线程, 同步桥会把渲染线程挂死 → 回调永不触发, 8s 超时返回 null)。
+        // 故改为投递 reqId + 经 window.__browseCb(reqId, result) 异步回灌 (与 httpReq/__httpCb 同模式)。
+        @JavascriptInterface public void browseExecJsAsync(String reqId, int tabIndex, String js) {
+            if (!remoteOpsEnabled) { deliverBrowse(reqId, "null"); return; }
+            MainActivity m = MainActivity.sInstance;
+            if (m == null) { deliverBrowse(reqId, "null"); return; }
+            m.runOnUiThread(() -> m.ipcExecJs(tabIndex, js, v -> deliverBrowse(reqId, v)));
         }
 
         @JavascriptInterface public void browseNavigate(int tabIndex, String action, String url) {
