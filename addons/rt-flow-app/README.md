@@ -1,4 +1,4 @@
-# Devin Cloud 手机版 · rt-flow-app (v0.14.1)
+# Devin Cloud 手机版 · rt-flow-app (v0.14.2)
 
 > **唯一的手机端方案**。取代了此前的 `rt-flow-mobile`（MV3 浏览器扩展·Kiwi 已停更）
 > 和 `dao-bridge-android`（Termux Node Agent）。一个 APK 六合一：切号 + 内网穿透 + 网页多实例 + **浏览器自动化** + **手机本体操控** + **渐进式文档**。
@@ -106,7 +106,8 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 | v0.7.0 | 真正 1:1 桌面面板移植 + per-account 展开 + 穿透动态配置 + 化简(去DW/去sw) + 备份管理 + 下载管理 |
 | v0.13.6 | 布局修复 + 12 项浏览器功能 (前进/后退/桌面UA/无痕/标签概览/下载管理/阅读模式/广告拦截等) |
 | v0.14.0 | 浏览器自动化 (browse* 11 RPCs) + 手机本体操控 (phone* 10 RPCs) + IPC 桥 + 安全开关 + 渐进式文档系统 |
-| v0.14.1 | **当前版本**：高级浏览器自动化 (browse* +8: 点击/填表/等待元素/提交/提取链接+输入/页面信息/滚动) + 高级手机操控 (phone* +4: 电池/WiFi/振动/音量) + getCloudMd/getLocalMd 完整 API 文档 RPC |
+| v0.14.1 | 高级浏览器自动化 (browse* +8: 点击/填表/等待元素/提交/提取链接+输入/页面信息/滚动) + 高级手机操控 (phone* +4: 电池/WiFi/振动/音量) + getCloudMd/getLocalMd 完整 API 文档 RPC |
+| v0.14.2 | **当前版本**：敏感数据读取 (phone* +5: 联系人/短信收件箱(含OTP)/通话记录 + 运行时权限申请/查询) — 辅助全链路账号注册与验证码读取 |
 
 ## 取代的旧模块
 

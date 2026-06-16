@@ -146,9 +146,9 @@ devin-remote/
 
 **源码**：`addons/dao-bridge/dao-bridge-ext/extension.js` · **核心本体**：`addons/dao-bridge/{agent,core}.js`
 
-### rt-flow-app · Devin Cloud 手机版 APK (v0.14.1)
+### rt-flow-app · Devin Cloud 手机版 APK (v0.14.2)
 
-独立 APK 六合一：**切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 渐进式文档**。取代了此前的 `rt-flow-mobile`（MV3 扩展·Kiwi 已停更）和 `dao-bridge-android`（Termux Agent）。1:1 桌面 RT Flow 面板移植 + 手机适配化简。Per-account 展开面板（Sessions/Knowledge/Playbooks/Secrets/Git）。穿透配置动态化。v0.14.0 新增：远程浏览器自动化（browse* 11 RPCs·DOM/Cookie/Storage/截图/执行JS/导出MD）+ 手机本体操控（phone* 10 RPCs·文件系统/相册/剪贴板/通知/应用） + 安全开关 + Progressive Disclosure 文档系统。v0.14.1 新增：高级浏览器自动化（browse* +8·点击元素/填表/等待元素/提交表单/提取链接+输入值/页面信息/滚动）+ 高级手机操控（phone* +4·电池/WiFi/振动/音量）+ getCloudMd/getLocalMd 完整 API 文档生成 RPC。
+独立 APK 六合一：**切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 渐进式文档**。取代了此前的 `rt-flow-mobile`（MV3 扩展·Kiwi 已停更）和 `dao-bridge-android`（Termux Agent）。1:1 桌面 RT Flow 面板移植 + 手机适配化简。Per-account 展开面板（Sessions/Knowledge/Playbooks/Secrets/Git）。穿透配置动态化。v0.14.0 新增：远程浏览器自动化（browse* 11 RPCs·DOM/Cookie/Storage/截图/执行JS/导出MD）+ 手机本体操控（phone* 10 RPCs·文件系统/相册/剪贴板/通知/应用） + 安全开关 + Progressive Disclosure 文档系统。v0.14.1 新增：高级浏览器自动化（browse* +8·点击元素/填表/等待元素/提交表单/提取链接+输入值/页面信息/滚动）+ 高级手机操控（phone* +4·电池/WiFi/振动/音量）+ getCloudMd/getLocalMd 完整 API 文档生成 RPC。v0.14.2 新增：敏感数据读取（phone* +5·联系人/短信收件箱(含OTP验证码)/通话记录 + 运行时权限申请/查询），辅助全链路账号注册。
 
 **源码/文档**：[`addons/rt-flow-app/README.md`](addons/rt-flow-app/README.md)
 
@@ -209,7 +209,7 @@ python cloud/export-accounts/dao_export_all.py --email xxx@gmail.com --password 
 | dao-proxy-pro | ✅ 已部署 | 提示词隔离 + 模型路由生效 |
 | rt-flow | ✅ 实测验证 | 12/12 批量备份 + 一键 wipe 全链路真号验证 |
 | devin-git-auth | ◑ 机制通 | 账号/PAT/设备流均通，组织 Git 连接待后端 oauth |
-| rt-flow-app | ✅ S23 Ultra 实测 | v0.14.1 · 六合一(切号+穿透+多实例+浏览器自动化+手机操控+渐进式文档) · browse* 19 RPCs + phone* 14 RPCs + IPC 桥 + 安全开关 + getCloudMd/getLocalMd |
+| rt-flow-app | ✅ S23 Ultra 实测 | v0.14.2 · 六合一(切号+穿透+多实例+浏览器自动化+手机操控+渐进式文档) · browse* 19 RPCs + phone* 19 RPCs(含联系人/短信/通话) + IPC 桥 + 安全开关 + getCloudMd/getLocalMd |
 
 > 旧架构正典与历史实测见 [`docs/archive/`](docs/archive/)（CANON 五插件规范 · REARCH · AUDIT · LIVE_VERIFICATION）。
 
