@@ -5,7 +5,7 @@
 
 ## 它做什么
 
-一台「客户端」（Termux agent 或 **rt-flow-mobile 浏览器扩展的 service worker**）在 NAT/防火墙
+一台「客户端」（rt-flow-app APK 的 RelayService 或 dao-bridge agent）在 NAT/防火墙
 后面，**出站**连上本中继；公网上的任何人凭 Bearer token 即可 `POST /relay/<session>`，
 请求被中继经 WebSocket 转发给客户端、客户端处理后回传 —— 于是无需公网 IP、无需端口映射，
 即可远程驱动内网设备。
@@ -17,7 +17,7 @@
                            ◄── {type:response}
 ```
 
-## 协议 (与 addons/dao-bridge/core.js、addons/rt-flow-mobile/src/relay.js 完全一致)
+## 协议 (与 addons/dao-bridge/core.js、addons/rt-flow-app/assets/engine/relay-app.js 完全一致)
 
 | 方向 | 端点 | 说明 |
 |---|---|---|

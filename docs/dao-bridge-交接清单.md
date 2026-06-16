@@ -11,7 +11,7 @@
 dao-bridge 有两套并存、割裂的穿透实现：
 
 - **实现 A（插件默认在跑）**：`addons/dao-bridge/dao-bridge-ext/extension.js` —— VS Code 插件，跑 cloudflared 子进程。成本最高、最脆弱。
-- **实现 B（已验证可用 → 现已接进插件，为默认通道）**：`addons/dao-bridge/{agent.js,core.js}` 的中继逻辑已移植进 `extension.js`（`connectRelayWs`），插件激活先走中继。纯 Node，本机出站 WSS 连 `dao-relay-do.<sub>.workers.dev` 中继，URL 天然稳定、零账号、无 50MB 二进制。`addons/dao-bridge-android/` 已用这套 core.js 在 Termux/Android 上跑通，**证明 B 是现成可用的**。
+- **实现 B（已验证可用 → 现已接进插件，为默认通道）**：`addons/dao-bridge/{agent.js,core.js}` 的中继逻辑已移植进 `extension.js`（`connectRelayWs`），插件激活先走中继。纯 Node，本机出站 WSS 连 `dao-relay-do.<sub>.workers.dev` 中继，URL 天然稳定、零账号、无 50MB 二进制。手机端同协议的实现已迁入 `addons/rt-flow-app/`（独立 APK·内置 RelayService），**证明 B 是现成可用的**。
 
 核心判断：**最大优化 = 把默认通道从 A 切到 B**，cloudflared 降为可选高级档。这一步同时解决「自动安装中断」「认证成本」「跨平台」三件事。
 

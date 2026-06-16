@@ -38,8 +38,8 @@ __pycache__/
 **/vendor/**/.venv/
 *.tsbuildinfo
 
-# rt-flow-mobile build artifact
-addons/rt-flow-mobile/*.zip
+# rt-flow-app build artifacts
+addons/rt-flow-app/app/build/
 
 # 各插件运行期/诊断产物 (原 plugins/.gitignore, 现全局生效于 core/ 与 addons/)
 conn.json
@@ -50,9 +50,6 @@ _rtflow*/
 # 外接第三方 MCP 源 (cloud/vm-replica/vendor, 按 VENDOR.md 固定 commit 拉取, 不入库)
 cloud/vm-replica/vendor/mcp-servers/
 cloud/vm-replica/vendor/playwright-mcp/
-
-# 私有发行穿透配置 (含 token·勿入库)
-addons/rt-flow-mobile/conn.json
 
 # APP 私有穿透配置 + 构建产物 (勿入库)
 addons/rt-flow-app/app/src/main/assets/engine/conn.json
