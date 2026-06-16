@@ -137,6 +137,23 @@
   // 先加载持久化的用户模块 (历史热修), 再启动穿透
   try { var um = N.readFile && N.readFile("user-module.js"); if (um) { (0,eval)(um); log("user-module loaded"); } } catch(e){ log("user-module err "+e); }
 
+  // Token 冷启动自动轮换 (仅手动重启·后台不刷)
+  // 原生层 rotateTokenOnColdStart() 已在 MainActivity.onCreate 中执行;
+  // JS 侧在此补一次: 若动态配置已存在则生成新 token 并保存 (确保引擎侧也同步)
+  try {
+    var dynRaw = localStorage.getItem("rtflow.relay");
+    if (dynRaw) {
+      var dynObj = JSON.parse(dynRaw);
+      if (dynObj && dynObj.url && dynObj.session) {
+        var hex = ''; for (var k = 0; k < 32; k++) hex += '0123456789abcdef'[Math.random() * 16 | 0];
+        dynObj.token = hex;
+        localStorage.setItem("rtflow.relay", JSON.stringify(dynObj));
+        try { N.writeFile && N.writeFile("relay-config.json", JSON.stringify(dynObj)); } catch(e){}
+        log("Token auto-rotated on engine start: " + hex.slice(0,8) + "…");
+      }
+    }
+  } catch(e) { log("token rotate err " + e); }
+
   // 穿透配置: 先读 localStorage 动态配置(用户在切号面板填写), 无则回退 conn.json 资源
   try {
     var dynCfg = null;

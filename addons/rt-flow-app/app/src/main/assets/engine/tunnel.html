@@ -51,6 +51,7 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
     <button onclick="send('copyUrl')">复制URL</button>
     <button onclick="send('copyToken')">复制Token</button>
     <button onclick="send('restart')">重启隧道</button>
+    <button onclick="send('rotateToken')" style="background:#d29922">刷新Token</button>
   </div>
 </div>
 
@@ -149,6 +150,16 @@ function handle(m){
   if(op==='copyUrl'){ var u=c.url.replace(/\/$/,'')+"/relay/"+c.session; try{N.clip&&N.clip(u);}catch(e){} _result('copyUrl',true,'已复制公网入口'); return; }
   if(op==='copyToken'){ try{N.clip&&N.clip(c.token||"");}catch(e){} _result('copyToken',true,'已复制 Token'); return; }
   if(op==='restart'){ try{N.relayRestart&&N.relayRestart();}catch(e){} _result('restart',true,'已请求重连中继'); setTimeout(_push,800); return; }
+  if(op==='rotateToken'){
+    var hex=''; for(var k=0;k<32;k++) hex+='0123456789abcdef'[Math.random()*16|0];
+    var c=_conn(); c.token=hex;
+    try{ localStorage.setItem('rtflow.relay', JSON.stringify(c)); }catch(e){}
+    try{ N.saveRelayConfig&&N.saveRelayConfig(JSON.stringify(c)); }catch(e){}
+    try{ N.relayRestart&&N.relayRestart(); }catch(e){}
+    _result('rotateToken',true,'Token已刷新: '+hex.slice(0,8)+'… (新Token需重新分享给远程Agent)');
+    setTimeout(_push,1200);
+    return;
+  }
   if(op==='exportCloudMd'){ try{N.clip&&N.clip(_cloudMd());}catch(e){} _result('exportCloudMd',true,'云端Agent MD 已复制到剪贴板'); return; }
   if(op==='exportLocalMd'){ try{N.clip&&N.clip(_localMd());}catch(e){} _result('exportLocalMd',true,'本地Agent MD 已复制到剪贴板'); return; }
   if(op==='openCloudMd'){ try{N.openText&&N.openText("云端Agent MD",_cloudMd());}catch(e){} return; }
