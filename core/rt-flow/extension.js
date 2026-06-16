@@ -926,6 +926,21 @@ function _quotaEndpointDead() {
   return Date.now() - _quotaEndpointHealth.lastSuccess > 30 * 60 * 1000;
 }
 const HTTP_TIMEOUT_MS = 12000;
+// ── 有界 keep-alive 共享 Agent · 釜底抽薪根治 app.devin.ai socket 风暴 ──
+// 病因(141 实测): httpsReq (登录/postauth/取 orgId/额度/billing) 走 Node 默认 globalAgent
+//   (keepAlive:false · maxSockets:Infinity), 每账号预载/校验都新建 socket 且不复用、不限并发,
+//   ~数百账号一拥而上 → 单进程对 app.devin.ai 堆出 700+ ESTABLISHED, 把家用路由器 conntrack 打满。
+//   devin_cloud.js 早已用有界 Agent 收敛 api 侧, 但 extension.js 这条 app 侧旁路一直未纳管 → 漏网根因。
+// 治法: 与 devin_cloud 同理 — 单进程一组复用池, 对同一 host 并发 socket 硬上限 + 空闲回收。
+const HTTP_MAX_SOCKETS_PER_HOST = 8; // 单进程对同一 host 并发 socket 硬上限 (超出排队·不再无限新建)
+const _httpsAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 1000,
+  maxSockets: HTTP_MAX_SOCKETS_PER_HOST,
+  maxFreeSockets: 4,
+  timeout: 15000, // 空闲 socket 超时回收 (防 Bound/FinWait/TimeWait 堆积)
+  scheduling: "fifo",
+});
 const WAM_DIR = path.join(os.homedir(), ".wam");
 const STATE_FILE = path.join(WAM_DIR, "wam-state.json");
 // v2.7.4 (补入v3.0.2) · 道恒无名·侯王若能守之·万物将自宾·民莫之令而自均焉 (三十二章)
@@ -4331,6 +4346,7 @@ function httpsReq(method, urlStr, headers, body, timeoutMs) {
         path: u.pathname + u.search,
         headers: Object.assign({ "User-Agent": UA }, headers || {}),
         timeout: timeoutMs || HTTP_TIMEOUT_MS,
+        agent: _httpsAgent, // 有界复用池 · 防 globalAgent 无限新建 socket 打满 conntrack
       },
       (res) => {
         const chunks = [];
@@ -10913,6 +10929,7 @@ async function handleWebviewMessage(msg) {
           const res = await devinCloud.backupAccount(r.auth, {
             targetDir: dir,
             incremental: true,
+            turbo: true, // 用户主动点「备份此账号」→ 前台极速档
             onProgress: (m) => _toast("\u23F3 " + m),
           });
           _toast("\u2713 备份完成: 新" + res.backedUp + " 跳过" + res.skipped + " 失败" + res.failed);
@@ -10946,7 +10963,7 @@ async function handleWebviewMessage(msg) {
               if (m.fmt === "zip" || m.fmt === "full") {
                 _toast("\u23F3 打包完整对话(含产出文件)…");
                 const accountDir = _dvAccountBackupDir(_email);
-                const one = await devinCloud.backupOneConversation(_auth, { devin_id: _did, title }, accountDir, { incremental: false });
+                const one = await devinCloud.backupOneConversation(_auth, { devin_id: _did, title }, accountDir, { incremental: false, turbo: true });
                 if (one && one.zip) {
                   _toast("\u2713 已下载完整ZIP: " + path.basename(one.zip));
                   try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(one.zip)); } catch {}
@@ -10980,7 +10997,7 @@ async function handleWebviewMessage(msg) {
           const sm = cached && cached.ov && (cached.ov.sessions || []).find((s) => s.devinId === msg.devinId);
           const title = (sm && sm.title) || msg.devinId;
           const accountDir = _dvAccountBackupDir(r.email);
-          const one = await devinCloud.backupOneConversation(r.auth, { devin_id: msg.devinId, title }, accountDir, { incremental: false });
+          const one = await devinCloud.backupOneConversation(r.auth, { devin_id: msg.devinId, title }, accountDir, { incremental: false, turbo: true });
           if (one && one.zip) {
             _toast("\u2713 已下载 ZIP: " + path.basename(one.zip));
             _notify("info", "[" + r.email + "] 单对话 ZIP 已下载 → " + one.zip);
@@ -11002,7 +11019,7 @@ async function handleWebviewMessage(msg) {
           const all = (cached && cached.ov && cached.ov.sessions) || [];
           const sessList = ids.map((id) => { const m = all.find((s) => s.devinId === id); return { devin_id: id, title: (m && m.title) || id }; });
           const outDir = _dvAccountBackupDir(r.email);
-          const res = await devinCloud.backupConversationsBundle(r.auth, sessList, outDir, { onProgress: (m) => _toast("\u23F3 " + m) });
+          const res = await devinCloud.backupConversationsBundle(r.auth, sessList, outDir, { turbo: true, onProgress: (m) => _toast("\u23F3 " + m) });
           _toast("\u2713 合并ZIP完成 " + res.count + "/" + res.total + ": " + path.basename(res.outPath));
           _notify("info", "[" + r.email + "] 合并下载 " + res.count + " 个对话 → " + res.outPath);
           try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(res.outPath)); } catch {}
@@ -11179,8 +11196,8 @@ async function handleWebviewMessage(msg) {
           try {
             const mode = _cfg("devinCloudBackupMode", "folder");
             const fb = mode === "folder"
-              ? await devinCloud.backupAccountFullFolders(r.auth, { targetDir: dir, incremental: true })
-              : await devinCloud.backupAccountFull(r.auth, { targetDir: dir, incremental: true });
+              ? await devinCloud.backupAccountFullFolders(r.auth, { targetDir: dir, incremental: true, turbo: true })
+              : await devinCloud.backupAccountFull(r.auth, { targetDir: dir, incremental: true, turbo: true });
             const res = fb.conversations || { backedUp: 0, skipped: 0 };
             const sc = (fb.snapshot && fb.snapshot.counts) || {};
             done++;
@@ -11245,8 +11262,8 @@ async function handleWebviewMessage(msg) {
             try {
               const bkMode = _cfg("devinCloudBackupMode", "folder");
               const fb = bkMode === "folder"
-                ? await devinCloud.backupAccountFullFolders(s.auth, { targetDir: dir, incremental: true, onProgress: (m) => _toast("\u23F3 " + m) })
-                : await devinCloud.backupAccountFull(s.auth, { targetDir: dir, incremental: true, onProgress: (m) => _toast("\u23F3 " + m) });
+                ? await devinCloud.backupAccountFullFolders(s.auth, { targetDir: dir, incremental: true, turbo: true, onProgress: (m) => _toast("\u23F3 " + m) })
+                : await devinCloud.backupAccountFull(s.auth, { targetDir: dir, incremental: true, turbo: true, onProgress: (m) => _toast("\u23F3 " + m) });
               const sc = (fb.snapshot && fb.snapshot.counts) || {};
               _toast("\u2713 已留底 " + s.email.split("@")[0] + ": 对话" + (fb.conversations ? fb.conversations.backedUp + fb.conversations.skipped : 0) + " 知识" + (sc.knowledge || 0) + " 剧本" + (sc.playbooks || 0) + " 密钥" + (sc.secrets || 0));
             } catch (e) {

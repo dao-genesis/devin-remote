@@ -54,6 +54,13 @@ const CFG = {
   socketIdleTimeoutMs: 15000, // 空闲 socket 超时回收 (防 Bound/FinWait/TimeWait 堆积)
   convConcurrency: 2, // v: 5→2 同账号内并行备份的对话数 (每对话内文件再并发 downloadConcurrency)
   // 备份并发上限 = convConcurrency × downloadConcurrency = 2×6 = 12 (原 5×16 = 80)。
+  // ── 前台「极速」档 · 仅用户主动点击的单次下载 (区别于后台周期普查) ──
+  // 道法自然·食其时: 后台普查须细水长流(上方 lean 档, 防 conntrack 风暴);
+  // 但用户「手动点下载」是一次性、有界、不随窗口数倍增的前台动作 → 可放开并发抢速度。
+  // 该档仅在显式 opts.turbo 下生效, 用独立短命 Agent, 用完即毁, 绝不影响后台普查的 socket 预算。
+  turboDownloadConcurrency: 24, // 前台单次下载: 单对话内并发下载文件数 (lean 档 6 → 24)
+  turboConvConcurrency: 6, // 前台单次下载: 同账号并行对话数 (lean 档 2 → 6)
+  turboMaxSocketsPerHost: 32, // 前台 Agent 对同 host 并发 socket 上限 (> turboDownloadConcurrency)
 };
 function configure(opts) {
   if (opts && typeof opts === "object") Object.assign(CFG, opts);
@@ -75,6 +82,18 @@ function _mkAgent(mod) {
 }
 let _httpsAgent = _mkAgent(https);
 let _httpAgent = _mkAgent(http);
+// 前台「极速」档专用 Agent (高 socket 上限) · 仅用户主动下载时临时创建、用完即毁。
+// 与后台 lean Agent 完全隔离: 后台周期普查的 socket 预算丝毫不受影响 (鱼与熊掌兼得)。
+function _mkTurboAgent(mod) {
+  return new mod.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 1000,
+    maxSockets: Math.max(1, (CFG.turboMaxSocketsPerHost | 0) || 32),
+    maxFreeSockets: Math.max(0, (CFG.maxFreeSockets | 0) || 4),
+    timeout: Math.max(1000, (CFG.downloadTimeoutMs | 0) || 60000),
+    scheduling: "fifo",
+  });
+}
 function _rebuildAgents() {
   try {
     if (_httpsAgent && _httpsAgent.destroy) _httpsAgent.destroy();
@@ -180,14 +199,14 @@ function _retryDelayMs(headers, attempt) {
   return Math.min(base + Math.floor(Math.random() * CFG.retryBaseMs), cap);
 }
 // 善行无辙迹: 瞬态网络错误指数退避重试, 一次性彻底错误(bad_url 等)立即上抛。
-async function rawRequest(method, targetUrl, headers, body, timeoutMs) {
+async function rawRequest(method, targetUrl, headers, body, timeoutMs, agentOverride) {
   const maxNet = Math.max(0, CFG.maxRetries | 0);
   const maxRl = Math.max(0, CFG.rateLimitMaxRetries | 0);
   const max = Math.max(maxNet, maxRl);
   let lastErr;
   for (let attempt = 0; attempt <= max; attempt++) {
     try {
-      const res = await _rawRequestOnce(method, targetUrl, headers, body, timeoutMs);
+      const res = await _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, agentOverride);
       // 429/5xx: 状态码层面的暂时性故障 — 退避后重试 (遵从 Retry-After), 而非当作
       // 「请求已失败」直接上抛。这正是多账号预载/普查时 login 误报 LOGIN_FAIL 的根因。
       if (_isRetryableStatus(res.status, method) && attempt < maxRl) {
@@ -203,7 +222,7 @@ async function rawRequest(method, targetUrl, headers, body, timeoutMs) {
   }
   throw lastErr;
 }
-function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs) {
+function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, agentOverride) {
   return new Promise((resolve, reject) => {
     let u;
     try {
@@ -296,7 +315,7 @@ function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs) {
         path: u.pathname + u.search,
         headers: hdrs,
         timeout: tout,
-        agent: isHttps ? _httpsAgent : _httpAgent,
+        agent: agentOverride || (isHttps ? _httpsAgent : _httpAgent),
         rejectUnauthorized: false,
       },
       isHttps ? https : http,
@@ -1329,10 +1348,37 @@ async function resolvePresignedUrls(auth, devinId, keys) {
   });
   return result;
 }
-async function downloadFile(url, headers) {
-  const r = await rawRequest("GET", url, headers || {}, null, CFG.downloadTimeoutMs);
+async function downloadFile(url, headers, agentOverride) {
+  const r = await rawRequest("GET", url, headers || {}, null, CFG.downloadTimeoutMs, agentOverride);
   if (r.status < 200 || r.status >= 300) throw new Error("download HTTP " + r.status);
   return r.buf;
+}
+
+// 统一的「按 contents_key 批量下载产出文件」· 同时供增量/全量·lean/turbo 复用。
+//   opts.turbo=true → 高并发 + 独立短命 turbo Agent (用完即毁); 否则走后台 lean 共享 Agent。
+//   写入 cache: key->Buffer; 失败追进 fileIndex。
+async function downloadKeysToCache(auth, devinId, allKeys, cache, fileIndex, opts) {
+  opts = opts || {};
+  if (!allKeys || !allKeys.length) return;
+  const urlMap = await resolvePresignedUrls(auth, devinId, allKeys);
+  const turbo = !!opts.turbo;
+  const conc = turbo
+    ? Math.max(1, (CFG.turboDownloadConcurrency | 0) || 24)
+    : Math.max(1, (CFG.downloadConcurrency | 0) || 6);
+  const agent = turbo ? _mkTurboAgent(https) : null;
+  try {
+    await runPool(allKeys, conc, async (key) => {
+      const info = urlMap.get(key);
+      if (!info) return;
+      try {
+        cache.set(key, await downloadFile(info.url, info.headers, agent));
+      } catch (e) {
+        fileIndex.push({ key, error: String(e && e.message ? e.message : e) });
+      }
+    });
+  } finally {
+    if (agent && agent.destroy) try { agent.destroy(); } catch {}
+  }
 }
 
 // ═══ 备份 (Devin Cloud 目录结构 · 增量) ═══════════════════════════════════
@@ -1370,17 +1416,8 @@ async function backupOneConversation(auth, sess, accountDir, opts) {
   const changes = Array.from(finalState.entries()).map(([p, k]) => ({ path: p, key: k }));
   const allKeys = Array.from(new Set(changes.map((c) => c.key)));
   if (allKeys.length) {
-    const urlMap = await resolvePresignedUrls(auth, devinId, allKeys);
     const cache = new Map();
-    await runPool(allKeys, CFG.downloadConcurrency, async (key) => {
-      const info = urlMap.get(key);
-      if (!info) return;
-      try {
-        cache.set(key, await downloadFile(info.url, info.headers));
-      } catch (e) {
-        fileIndex.push({ key, error: String(e && e.message ? e.message : e) });
-      }
-    });
+    await downloadKeysToCache(auth, devinId, allKeys, cache, fileIndex, opts);
     for (const ch of changes) {
       const data = cache.get(ch.key);
       if (!data) continue;
@@ -1448,13 +1485,8 @@ async function backupConversationsBundle(auth, sessList, outDir, opts) {
       const changes = Array.from(finalState.entries()).map(([p, k]) => ({ path: p, key: k }));
       const allKeys = Array.from(new Set(changes.map((c) => c.key)));
       if (allKeys.length) {
-        const urlMap = await resolvePresignedUrls(auth, devinId, allKeys);
         const cache = new Map();
-        await runPool(allKeys, CFG.downloadConcurrency, async (key) => {
-          const info = urlMap.get(key);
-          if (!info) return;
-          try { cache.set(key, await downloadFile(info.url, info.headers)); } catch (e) {}
-        });
+        await downloadKeysToCache(auth, devinId, allKeys, cache, fileIndex, opts);
         for (const ch of changes) {
           const data = cache.get(ch.key);
           if (!data) continue;
@@ -1681,6 +1713,8 @@ function buildConversationHtml(title, devinId, events, opts) {
   const account = opts.account || "";
   const ts = new Date().toISOString();
   const msgBlocks = [];
+  const userIndex = []; // 用户消息快速定位索引: {n, snippet}
+  let uN = 0;
   for (const ev of events) {
     const c = classifyEvent(ev);
     if (!c) continue;
@@ -1694,34 +1728,92 @@ function buildConversationHtml(title, devinId, events, opts) {
         (detail ? '<details><summary>详情</summary><pre>' + detail + '</pre></details>' : '') +
         '</div></div>'
       );
-    } else {
-      const cls = c.kind === "user" ? "user" : c.kind === "devin" ? "ai" : "think";
-      const av = c.kind === "user" ? "👤" : c.kind === "devin" ? "🤖" : "💭";
+    } else if (c.kind === "think") {
+      // 思考默认折叠 (点「展开」才看) · 内容仍留 DOM → 可被搜索命中后自动展开
       const txt = _escHtml(c.text || "");
       msgBlocks.push(
-        '<div class="msg msg-' + cls + '"><div class="avatar">' + av + '</div>' +
+        '<div class="msg msg-think"><div class="avatar">💭</div>' +
+        '<div class="bubble bubble-think"><div class="role think-toggle" onclick="__tk(this)">💭 ' + _escHtml(c.role) + tsSpan +
+        ' <span class="exp">▸ 展开思考</span></div>' +
+        '<div class="body">' + _mdToHtml(txt) + '</div></div></div>'
+      );
+    } else {
+      const isUser = c.kind === "user";
+      const cls = isUser ? "user" : "ai";
+      const av = isUser ? "👤" : "🤖";
+      const txt = _escHtml(c.text || "");
+      let idAttr = "";
+      if (isUser) {
+        uN++;
+        idAttr = ' id="u' + uN + '" data-umsg="' + uN + '"';
+        const snip = String(c.text || "").replace(/\s+/g, " ").trim().slice(0, 30);
+        userIndex.push({ n: uN, snippet: snip });
+      }
+      msgBlocks.push(
+        '<div class="msg msg-' + cls + '"' + idAttr + '><div class="avatar">' + av + '</div>' +
         '<div class="bubble bubble-' + cls + '"><div class="role">' + _escHtml(c.role) + tsSpan + '</div>' +
         '<div class="body">' + _mdToHtml(txt) + '</div></div></div>'
       );
     }
   }
+  // 左上角「用户消息」快速定位索引 (第1行=初始消息, 第2行=第二条…)
+  const navRows = userIndex.map((u) =>
+    '<li><a href="#u' + u.n + '" onclick="__jump(' + u.n + ');return false" title="' + _escHtml(u.snippet) + '">' +
+    '<span class="ni-n">' + u.n + '</span><span class="ni-s">' + _escHtml(u.snippet || ("消息 " + u.n)) + '</span></a></li>'
+  ).join("");
+  const nav =
+    '<aside class="nav" id="nav">' +
+    '<div class="nav-tools">' +
+    '<input id="q" class="q" type="search" placeholder="🔍 搜索 (含思考)…" oninput="__search(this.value)">' +
+    '<div class="cnt" id="cnt"></div>' +
+    '<button class="tbtn" id="tkall" onclick="__tkAll()">展开全部思考</button>' +
+    '</div>' +
+    '<div class="nav-h">👤 我的消息 · ' + userIndex.length + ' 条</div>' +
+    '<ol class="ni-list">' + (navRows || '<li class="ni-empty">无用户消息</li>') + '</ol>' +
+    '</aside>';
   return '<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n' +
     '<title>' + _escHtml(title) + ' · Devin 对话备份</title>\n' +
     '<style>\n' +
     ':root{--bg:#0d1117;--fg:#c9d1d9;--user-bg:#1a3a5c;--ai-bg:#161b22;--tool-bg:#1c1f26;--think-bg:#1a1a2e;--border:#30363d;--accent:#58a6ff}\n' +
-    'body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px}\n' +
+    'body{margin:0;padding:0 0 0 232px;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px}\n' +
     '.header{background:#010409;border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;gap:12px}\n' +
     '.header h1{margin:0;font-size:18px;color:#fff;font-weight:600}\n' +
     '.header .meta{color:#8b949e;font-size:12px}\n' +
     '.container{max-width:900px;margin:0 auto;padding:24px 16px}\n' +
-    '.msg{display:flex;gap:12px;margin:16px 0;align-items:flex-start}\n' +
+    '/* 左上角 · 用户消息快速定位索引 + 搜索 */\n' +
+    '.nav{position:fixed;top:0;left:0;width:232px;height:100vh;overflow-y:auto;background:#010409;border-right:1px solid var(--border);box-sizing:border-box;z-index:50}\n' +
+    '.nav-tools{padding:12px 12px 8px;border-bottom:1px solid var(--border);position:sticky;top:0;background:#010409}\n' +
+    '.q{width:100%;box-sizing:border-box;background:#0d1117;border:1px solid var(--border);border-radius:6px;color:var(--fg);padding:7px 9px;font-size:13px;outline:none}\n' +
+    '.q:focus{border-color:var(--accent)}\n' +
+    '.cnt{font-size:11px;color:#8b949e;min-height:14px;margin:4px 2px 0}\n' +
+    '.tbtn{width:100%;margin-top:6px;background:#21262d;border:1px solid var(--border);border-radius:6px;color:var(--fg);padding:6px;font-size:12px;cursor:pointer}\n' +
+    '.tbtn:hover{background:#30363d}\n' +
+    '.nav-h{padding:10px 12px 4px;font-size:11px;color:#8b949e;font-weight:600}\n' +
+    '.ni-list{list-style:none;margin:0;padding:0 6px 24px;counter-reset:none}\n' +
+    '.ni-list li{margin:2px 0}\n' +
+    '.ni-empty{color:#484f58;font-size:12px;padding:6px 8px}\n' +
+    '.ni-list a{display:flex;gap:7px;align-items:baseline;text-decoration:none;color:var(--fg);padding:6px 8px;border-radius:6px;font-size:12px}\n' +
+    '.ni-list a:hover{background:#161b22}\n' +
+    '.ni-n{flex-shrink:0;min-width:18px;text-align:right;color:var(--accent);font-weight:600}\n' +
+    '.ni-s{color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n' +
+    '.ni-list a.cur{background:#1f4e79;color:#fff}\n' +
+    '.ni-list a.cur .ni-s{color:#cfe3ff}\n' +
+    '.msg{display:flex;gap:12px;margin:16px 0;align-items:flex-start;scroll-margin-top:16px}\n' +
     '.avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;background:var(--border)}\n' +
     '.bubble{flex:1;border-radius:12px;padding:12px 16px;line-height:1.6;overflow-wrap:break-word}\n' +
     '.bubble-user{background:var(--user-bg);border:1px solid #1f4e79}\n' +
+    '.msg-user.flash .bubble-user{box-shadow:0 0 0 2px var(--accent)}\n' +
     '.bubble-ai{background:var(--ai-bg);border:1px solid var(--border)}\n' +
     '.bubble-tool{background:var(--tool-bg);border:1px solid var(--border);font-size:12px}\n' +
     '.bubble-think{background:var(--think-bg);border:1px solid #2d2d5e;font-style:italic;opacity:.85}\n' +
+    '/* 思考默认折叠: 内容隐藏但留 DOM (可被搜索) · 点展开或命中后显示 */\n' +
+    '.msg-think .body{display:none}\n' +
+    '.msg-think.open .body{display:block}\n' +
+    'body.think-open .msg-think .body{display:block}\n' +
+    '.think-toggle{cursor:pointer;user-select:none}\n' +
+    '.msg-think.open .exp,body.think-open .exp{visibility:hidden}\n' +
     '.role{font-size:12px;font-weight:600;color:var(--accent);margin-bottom:4px}\n' +
+    '.exp{color:#8b949e;font-weight:400;font-style:normal}\n' +
     '.ts{color:#8b949e;font-weight:400}\n' +
     '.body p{margin:6px 0}\n' +
     '.body pre{background:#010409;border:1px solid var(--border);border-radius:6px;padding:12px;overflow-x:auto;font-size:13px}\n' +
@@ -1729,13 +1821,32 @@ function buildConversationHtml(title, devinId, events, opts) {
     'details{margin:4px 0}\n' +
     'summary{cursor:pointer;color:var(--accent)}\n' +
     'details pre{max-height:300px;overflow:auto}\n' +
+    '/* 搜索过滤: 仅显示命中消息 */\n' +
+    'body.filtering .msg{display:none}\n' +
+    'body.filtering .msg.match{display:flex}\n' +
     '.footer{text-align:center;padding:24px;color:#484f58;font-size:12px;border-top:1px solid var(--border);margin-top:32px}\n' +
-    '</style>\n</head>\n<body>\n' +
+    '@media(max-width:760px){body{padding-left:0}.nav{transform:translateX(-100%);transition:transform .2s}.nav.show{transform:none}}\n' +
+    '</style>\n</head>\n<body>\n' + nav +
     '<div class="header"><h1>🔮 ' + _escHtml(title) + '</h1>' +
     '<div class="meta">Session: ' + _escHtml(devinId) + (account ? ' · 账号: ' + _escHtml(account) : '') + ' · 事件: ' + events.length + '</div></div>\n' +
     '<div class="container">\n' + msgBlocks.join("\n") + '\n</div>\n' +
-    '<div class="footer">RT Flow v4.4.0 备份 · ' + ts + ' · 道法自然</div>\n' +
+    '<div class="footer">RT Flow 备份 · ' + ts + ' · 道法自然</div>\n' +
+    _convClientScript() +
     '</body>\n</html>';
+}
+// 对话详情交互脚本: 思考折叠/展开 · 用户消息定位 · 全文搜索(含思考·命中自动展开)
+function _convClientScript() {
+  return '<script>(function(){\n' +
+    'var msgs=[].slice.call(document.querySelectorAll(".msg"));\n' +
+    'window.__tk=function(el){var m=el.closest(".msg-think");if(m)m.classList.toggle("open");};\n' +
+    'window.__tkAll=function(){var b=document.body,on=b.classList.toggle("think-open");var t=document.getElementById("tkall");if(t)t.textContent=on?"折叠全部思考":"展开全部思考";};\n' +
+    'window.__jump=function(n){var t=document.getElementById("u"+n);if(!t)return;t.scrollIntoView({behavior:"smooth",block:"start"});t.classList.add("flash");setTimeout(function(){t.classList.remove("flash")},1200);__setCur(n);};\n' +
+    'function __setCur(n){[].forEach.call(document.querySelectorAll(".ni-list a"),function(a){a.classList.remove("cur")});var a=document.querySelector(\'.ni-list a[href="#u\'+n+\'"]\');if(a)a.classList.add("cur");}\n' +
+    'var qt;window.__search=function(v){clearTimeout(qt);qt=setTimeout(function(){__doSearch(v)},120);};\n' +
+    'function __doSearch(v){v=(v||"").trim().toLowerCase();var b=document.body;if(!v){b.classList.remove("filtering");msgs.forEach(function(m){m.classList.remove("match");if(m.classList.contains("msg-think")&&!b.classList.contains("think-open"))m.classList.remove("open")});document.getElementById("cnt").textContent="";return;}\n' +
+    'b.classList.add("filtering");var hit=0;msgs.forEach(function(m){var ok=(m.textContent||"").toLowerCase().indexOf(v)>=0;m.classList.toggle("match",ok);if(ok){hit++;if(m.classList.contains("msg-think"))m.classList.add("open");}});\n' +
+    'document.getElementById("cnt").textContent="命中 "+hit+" 条";}\n' +
+    '})();</script>\n';
 }
 function _escHtml(s) {
   return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -1809,17 +1920,8 @@ async function backupOneConversationFolder(auth, sess, accountDir, opts, sharedS
   if (allKeys.length) {
     const filesDir = path.join(convDir, "files");
     ensureDir(filesDir);
-    const urlMap = await resolvePresignedUrls(auth, devinId, allKeys);
     const cache = new Map();
-    await runPool(allKeys, CFG.downloadConcurrency, async (key) => {
-      const info = urlMap.get(key);
-      if (!info) return;
-      try {
-        cache.set(key, await downloadFile(info.url, info.headers));
-      } catch (e) {
-        fileIndex.push({ key, error: String(e && e.message ? e.message : e) });
-      }
-    });
+    await downloadKeysToCache(auth, devinId, allKeys, cache, fileIndex, opts);
     for (const ch of changes) {
       const data = cache.get(ch.key);
       if (!data) continue;
@@ -1874,7 +1976,9 @@ async function backupAccountFolders(auth, opts) {
   const result = { ok: true, account: auth.email, dir: accountDir, total: sessions.length, backedUp: 0, skipped: 0, failed: 0, items: new Array(sessions.length) };
   // 账号级共享 state: 一次读 → 并行写入内存 → 末尾一次落盘 (避免并发读改写竞态·并提速)
   const state = readJson(DC_BACKUP_STATE, {});
-  const conc = Math.max(1, +CFG.convConcurrency || 4);
+  const conc = opts.turbo
+    ? Math.max(1, +CFG.turboConvConcurrency || 6)
+    : Math.max(1, +CFG.convConcurrency || 4);
   let done = 0;
   await runPool(sessions, conc, async (sess, i) => {
     try {

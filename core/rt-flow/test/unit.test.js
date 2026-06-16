@@ -407,6 +407,64 @@ function test(name, fn) {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  // ── 对话详情视图 · 思考折叠/可搜索 + 用户消息定位索引 (v4.8.6) ──────────────
+  console.log("\n[buildConversationHtml · 详情视图]");
+  const _convEvents = [
+    { type: "initial_user_message", message: "User: 第一条问题ALPHA" },
+    { type: "devin_thoughts", message: "我在思考SECRET方案" },
+    { type: "devin_message", message: "这是回复BETA" },
+    { type: "user_message", message: "User: 第二条追问GAMMA" },
+    { type: "devin_message", message: "再次回复DELTA" },
+  ];
+  test("思考块默认折叠: CSS 隐藏 .msg-think .body, 点展开/搜索才显", () => {
+    const html = cloud.buildConversationHtml("T", "devin-abc", _convEvents, {});
+    assert.ok(html.includes(".msg-think .body{display:none}"), "思考默认折叠 CSS");
+    assert.ok(html.includes("展开思考"), "有展开思考触发");
+    assert.ok(html.includes("body.think-open .msg-think .body{display:block}"), "全局展开开关");
+  });
+  test("思考内容仍留 DOM (可被搜索命中)", () => {
+    const html = cloud.buildConversationHtml("T", "devin-abc", _convEvents, {});
+    assert.ok(html.includes("SECRET"), "思考正文在 HTML 中(折叠不删除→可搜索)");
+    assert.ok(html.includes("__doSearch") || html.includes("__search"), "内置搜索脚本");
+  });
+  test("左上角用户消息定位索引: 每条用户消息一行+锚点", () => {
+    const html = cloud.buildConversationHtml("T", "devin-abc", _convEvents, {});
+    assert.ok(html.includes('id="u1"') && html.includes('id="u2"'), "用户消息锚点 u1/u2");
+    assert.ok(html.includes("__jump(1)") && html.includes("__jump(2)"), "索引行可点击跳转");
+    assert.ok(html.includes("ni-list"), "索引列表容器");
+    assert.ok(!html.includes("__jump(3)"), "仅 2 条用户消息(不含 devin/think)");
+  });
+  test("摘要取自用户消息前若干字 (去 'User:' 前缀)", () => {
+    const html = cloud.buildConversationHtml("T", "devin-abc", _convEvents, {});
+    assert.ok(html.includes("第一条问题ALPHA"), "首条用户消息摘要");
+    assert.ok(html.includes("第二条追问GAMMA"), "次条用户消息摘要");
+  });
+
+  // ── 前台「极速」下载档 (v4.8.6) ───────────────────────────────────────────
+  console.log("\n[turbo 前台极速下载档]");
+  test("CFG 含 turbo 档且并发高于 lean 档", () => {
+    assert.ok(cloud.CFG.turboDownloadConcurrency > cloud.CFG.downloadConcurrency, "turbo 下载并发 > lean");
+    assert.ok(cloud.CFG.turboConvConcurrency > cloud.CFG.convConcurrency, "turbo 对话并发 > lean");
+    assert.ok(cloud.CFG.turboMaxSocketsPerHost >= cloud.CFG.turboDownloadConcurrency, "turbo socket 上限覆盖并发");
+  });
+  test("configure 可调 turbo 档 (软配置)", () => {
+    const before = cloud.CFG.turboDownloadConcurrency;
+    cloud.configure({ turboDownloadConcurrency: 30 });
+    assert.strictEqual(cloud.CFG.turboDownloadConcurrency, 30);
+    cloud.configure({ turboDownloadConcurrency: before });
+  });
+
+  // ── app 侧 httpsReq 有界 Agent (釜底抽薪根治 conntrack 风暴 v4.8.7) ──
+  console.log("\n[httpsReq 有界 Agent · 防 socket 风暴]");
+  test("extension.js httpsReq 绑有界 keep-alive Agent (非 globalAgent)", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+    assert.ok(/new https\.Agent\(/.test(src), "extension.js 必建有界 https.Agent");
+    assert.ok(/maxSockets:\s*HTTP_MAX_SOCKETS_PER_HOST/.test(src), "Agent 必设单 host socket 上限");
+    assert.ok(/keepAlive:\s*true/.test(src), "Agent 必 keepAlive 复用");
+    assert.ok(/agent:\s*_httpsAgent/.test(src), "httpsReq 必把请求挂到有界 Agent");
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
