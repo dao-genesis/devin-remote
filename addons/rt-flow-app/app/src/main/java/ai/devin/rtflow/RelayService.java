@@ -235,6 +235,32 @@ public class RelayService extends Service {
             return readAsset(path);
         }
 
+        // ── 敏感数据: 联系人/短信/通话记录 (需运行时权限, 受 remoteOps 门禁) ──────────
+        @JavascriptInterface public void phoneRequestPerms() {
+            if (!remoteOpsEnabled) return;
+            MainActivity m = MainActivity.sInstance;
+            if (m != null) m.runOnUiThread(() -> m.ipcRequestPhonePerms());
+        }
+        @JavascriptInterface public boolean phoneHasPerm(String perm) {
+            MainActivity m = MainActivity.sInstance;
+            return m != null && m.ipcHasPerm(perm);
+        }
+        @JavascriptInterface public String phoneContacts(int limit) {
+            if (!remoteOpsEnabled) return "{\"error\":\"远程操控未启用\"}";
+            MainActivity m = MainActivity.sInstance;
+            return m != null ? m.ipcContacts(limit) : "[]";
+        }
+        @JavascriptInterface public String phoneSmsInbox(int limit) {
+            if (!remoteOpsEnabled) return "{\"error\":\"远程操控未启用\"}";
+            MainActivity m = MainActivity.sInstance;
+            return m != null ? m.ipcSmsInbox(limit) : "[]";
+        }
+        @JavascriptInterface public String phoneCallLog(int limit) {
+            if (!remoteOpsEnabled) return "{\"error\":\"远程操控未启用\"}";
+            MainActivity m = MainActivity.sInstance;
+            return m != null ? m.ipcCallLog(limit) : "[]";
+        }
+
         // ── 高级手机操控: 电池/WiFi/振动/音量 ──────────
         @JavascriptInterface public String phoneBattery() {
             if (!remoteOpsEnabled) return "{}";

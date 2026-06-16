@@ -264,6 +264,12 @@
       if(a&&a.set!==undefined){ N.phoneSetVolume&&N.phoneSetVolume(a.set|0); return {ok:true,action:"set"}; }
       return {ok:true, volume: N.phoneGetVolume?N.phoneGetVolume():0, max: N.phoneGetMaxVolume?N.phoneGetMaxVolume():15};
     },
+    // ── P8: 敏感数据 (联系人/短信/通话, 需运行时权限) ──
+    phoneRequestPerms: async function(){ N.phoneRequestPerms&&N.phoneRequestPerms(); return {ok:true, hint:"已在手机端弹出权限申请, 请用户授予"}; },
+    phoneHasPerm: async function(a){ return {ok:true, granted: N.phoneHasPerm?N.phoneHasPerm(a&&a.perm||"android.permission.READ_SMS"):false}; },
+    phoneContacts: async function(a){ var r=N.phoneContacts?N.phoneContacts((a&&a.limit)|0):"[]"; try{r=JSON.parse(r);}catch(e){r=[];} if(r&&r.error)return{ok:false,error:r.error,needPerm:r.needPerm}; return {ok:true, contacts:r}; },
+    phoneSmsInbox: async function(a){ var r=N.phoneSmsInbox?N.phoneSmsInbox((a&&a.limit)|0):"[]"; try{r=JSON.parse(r);}catch(e){r=[];} if(r&&r.error)return{ok:false,error:r.error,needPerm:r.needPerm}; return {ok:true, sms:r}; },
+    phoneCallLog: async function(a){ var r=N.phoneCallLog?N.phoneCallLog((a&&a.limit)|0):"[]"; try{r=JSON.parse(r);}catch(e){r=[];} if(r&&r.error)return{ok:false,error:r.error,needPerm:r.needPerm}; return {ok:true, calls:r}; },
 
     // ── P9: 云端/本地 MD 生成 (完整 API 文档, 供穿透面板+远程导出) ──
     getCloudMd: async function(){
@@ -329,6 +335,11 @@
         "| phoneWifiInfo | - | WiFi信息 |",
         "| phoneVibrate | ms? | 振动 |",
         "| phoneVolume | set? | 音量读写 |",
+        "| phoneRequestPerms | - | 弹窗申请联系人/短信/通话权限 |",
+        "| phoneHasPerm | perm | 查询权限是否已授予 |",
+        "| phoneContacts | limit? | 读取联系人 (姓名+号码) |",
+        "| phoneSmsInbox | limit? | 读取短信收件箱 (含 OTP) |",
+        "| phoneCallLog | limit? | 读取通话记录 |",
         "",
         "### 账号管理",
         "| 命令 | 说明 |",

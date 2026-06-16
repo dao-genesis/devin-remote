@@ -2378,4 +2378,107 @@ public class MainActivity extends AppCompatActivity {
             return true;
         } catch (Exception e) { return false; }
     }
+
+    /** 运行时申请联系人/短信/通话记录敏感权限 (UI 线程弹窗) */
+    public void ipcRequestPhonePerms() {
+        try {
+            java.util.List<String> need = new ArrayList<>();
+            String[] perms = {Manifest.permission.READ_CONTACTS, Manifest.permission.READ_SMS, Manifest.permission.READ_CALL_LOG};
+            for (String p : perms) {
+                if (ContextCompat.checkSelfPermission(this, p) != PackageManager.PERMISSION_GRANTED) need.add(p);
+            }
+            if (!need.isEmpty()) ActivityCompat.requestPermissions(this, need.toArray(new String[0]), 7);
+        } catch (Exception e) {}
+    }
+
+    /** 是否已授予某敏感权限 */
+    public boolean ipcHasPerm(String perm) {
+        try { return ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED; }
+        catch (Exception e) { return false; }
+    }
+
+    /** 读取联系人 (姓名+号码, 需 READ_CONTACTS) */
+    public String ipcContacts(int limit) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED)
+            return "{\"error\":\"未授予 READ_CONTACTS 权限\",\"needPerm\":\"READ_CONTACTS\"}";
+        try {
+            android.database.Cursor cur = getContentResolver().query(
+                android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                new String[]{android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                             android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER},
+                null, null, android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC");
+            if (cur == null) return "[]";
+            StringBuilder sb = new StringBuilder("[");
+            int count = 0;
+            while (cur.moveToNext() && count < (limit > 0 ? limit : 500)) {
+                if (count > 0) sb.append(",");
+                sb.append("{\"name\":").append(JSONObject.quote(cur.getString(0) == null ? "" : cur.getString(0)))
+                  .append(",\"number\":").append(JSONObject.quote(cur.getString(1) == null ? "" : cur.getString(1)))
+                  .append("}");
+                count++;
+            }
+            cur.close();
+            return sb.append("]").toString();
+        } catch (Exception e) { return "{\"error\":" + JSONObject.quote(String.valueOf(e)) + "}"; }
+    }
+
+    /** 读取短信收件箱 (含 OTP 验证码, 需 READ_SMS) */
+    public String ipcSmsInbox(int limit) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED)
+            return "{\"error\":\"未授予 READ_SMS 权限\",\"needPerm\":\"READ_SMS\"}";
+        try {
+            android.database.Cursor cur = getContentResolver().query(
+                android.provider.Telephony.Sms.Inbox.CONTENT_URI,
+                new String[]{android.provider.Telephony.Sms.ADDRESS,
+                             android.provider.Telephony.Sms.BODY,
+                             android.provider.Telephony.Sms.DATE,
+                             android.provider.Telephony.Sms.READ},
+                null, null, android.provider.Telephony.Sms.DATE + " DESC");
+            if (cur == null) return "[]";
+            StringBuilder sb = new StringBuilder("[");
+            int count = 0;
+            while (cur.moveToNext() && count < (limit > 0 ? limit : 50)) {
+                if (count > 0) sb.append(",");
+                sb.append("{\"address\":").append(JSONObject.quote(cur.getString(0) == null ? "" : cur.getString(0)))
+                  .append(",\"body\":").append(JSONObject.quote(cur.getString(1) == null ? "" : cur.getString(1)))
+                  .append(",\"date\":").append(cur.getLong(2))
+                  .append(",\"read\":").append(cur.getInt(3) == 1)
+                  .append("}");
+                count++;
+            }
+            cur.close();
+            return sb.append("]").toString();
+        } catch (Exception e) { return "{\"error\":" + JSONObject.quote(String.valueOf(e)) + "}"; }
+    }
+
+    /** 读取通话记录 (需 READ_CALL_LOG) */
+    public String ipcCallLog(int limit) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED)
+            return "{\"error\":\"未授予 READ_CALL_LOG 权限\",\"needPerm\":\"READ_CALL_LOG\"}";
+        try {
+            android.database.Cursor cur = getContentResolver().query(
+                android.provider.CallLog.Calls.CONTENT_URI,
+                new String[]{android.provider.CallLog.Calls.NUMBER,
+                             android.provider.CallLog.Calls.TYPE,
+                             android.provider.CallLog.Calls.DATE,
+                             android.provider.CallLog.Calls.DURATION,
+                             android.provider.CallLog.Calls.CACHED_NAME},
+                null, null, android.provider.CallLog.Calls.DATE + " DESC");
+            if (cur == null) return "[]";
+            StringBuilder sb = new StringBuilder("[");
+            int count = 0;
+            while (cur.moveToNext() && count < (limit > 0 ? limit : 50)) {
+                if (count > 0) sb.append(",");
+                sb.append("{\"number\":").append(JSONObject.quote(cur.getString(0) == null ? "" : cur.getString(0)))
+                  .append(",\"type\":").append(cur.getInt(1))
+                  .append(",\"date\":").append(cur.getLong(2))
+                  .append(",\"duration\":").append(cur.getLong(3))
+                  .append(",\"name\":").append(JSONObject.quote(cur.getString(4) == null ? "" : cur.getString(4)))
+                  .append("}");
+                count++;
+            }
+            cur.close();
+            return sb.append("]").toString();
+        } catch (Exception e) { return "{\"error\":" + JSONObject.quote(String.valueOf(e)) + "}"; }
+    }
 }
