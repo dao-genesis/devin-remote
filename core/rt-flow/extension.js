@@ -1,3 +1,4 @@
+// WAM · 万法归宗 v4.9.0 · 自动清理默认开 + 归零移除(额度归零账号全量备份+清理后自动出库·备份严格校验) · 道法自然
 // WAM · 万法归宗 v4.5.0 · 对话额度上限(余额-缓冲·自动中停)·自动清理阈值$1·余额精确到分 · 道法自然
 // WAM · 万法归宗 v4.4.0 · 文件夹备份·HTML/MD双视图·自动备份阈值·自动清理 · 道法自然
 //
@@ -8253,7 +8254,8 @@ ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanS
 <button onclick="dvBackupAll()" class="conv-btn" title="备份所有(或已选)账号的全部 Devin Cloud 对话·增量">&#128190; 全部备份</button>
 <button onclick="dvWipeSel()" class="conv-btn conv-btn-s" title="水过无痕·清理已选账号的全部 Devin Cloud 痕迹">&#127754; 批量清理</button>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" ${_cfg("devinCloudAutoBackup", true) ? "checked" : ""} onchange="dvToggleAuto(this.checked)">自动备份</label>
-<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.4.0 · 备份完成且额度低于阈值时自动水过无痕清理"><input type="checkbox" id="dvAutoClean" ${_cfg("devinCloudAutoCleanup", false) ? "checked" : ""} onchange="dvToggleCleanup(this.checked)">自动清理</label>
+<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.4.0 · 默认开 · 备份完成且额度低于阈值时自动水过无痕清理"><input type="checkbox" id="dvAutoClean" ${_cfg("devinCloudAutoCleanup", true) ? "checked" : ""} onchange="dvToggleCleanup(this.checked)">自动清理</label>
+<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.9.0 · 默认开 · 额度完全归零的账号, 全量备份+清理后自动从账号库移除(等同手动删除·不再显示)"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", true) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.4.0 · 额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="${_cfg("devinCloudAutoBackupThreshold", 3)}" min="0" step="1" style="width:30px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetThreshold(this.value)"></label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.5.0 · 对话额度上限·知止不殆: 每对话上限=余额-缓冲·实时跟随余额; 余额≤停止阈值自动中停运行中对话"><input type="checkbox" id="dvConvCap" ${_cfg("devinCloudConvQuotaCap", false) ? "checked" : ""} onchange="dvToggleConvCap(this.checked)">对话上限</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.5.0 · 对话上限缓冲($): 每对话上限=余额-此缓冲 (余额$70→上限$67)">缓冲$<input type="number" id="dvConvBuf" value="${_cfg("devinCloudConvQuotaBuffer", 3)}" min="0" step="0.01" style="width:34px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetConvBuffer(this.value)"></label>
@@ -8339,6 +8341,7 @@ function dvBoardAct(i,k,id,act){if(act==='delete'){vscode.postMessage({type:'dvB
 function dvBoardBatch(i,k,act){const ids=_bdIds(i,k);if(!ids.length){showToast('\u2717 先勾选');return;}if(act==='delete'){vscode.postMessage({type:'dvBoardDeleteBatch',index:i,boardKey:k,ids:ids});}else{showToast('\u23F3 批量下载 '+ids.length+' 项…');vscode.postMessage({type:'dvBoardDownloadBatch',index:i,boardKey:k,ids:ids});}}
 function dvToggleAuto(on){vscode.postMessage({type:'devinToggleAuto',on:!!on});}
 function dvToggleCleanup(on){vscode.postMessage({type:'devinToggleCleanup',on:!!on});}
+function dvToggleRemoveZero(on){vscode.postMessage({type:'devinToggleRemoveZero',on:!!on});}
 function dvSetThreshold(v){vscode.postMessage({type:'devinSetThreshold',value:+v});}
 function dvToggleConvCap(on){vscode.postMessage({type:'devinToggleConvCap',on:!!on});}
 function dvSetConvBuffer(v){vscode.postMessage({type:'devinSetConvBuffer',value:+v});}
@@ -9278,8 +9281,12 @@ async function _dvAutoBackupRun() {
   const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
   const mode = _cfg("devinCloudBackupMode", "folder");
   const threshold = Math.max(0, +_cfg("devinCloudAutoBackupThreshold", 3) || 3);
-  const autoCleanup = !!_cfg("devinCloudAutoCleanup", false);
+  const autoCleanup = !!_cfg("devinCloudAutoCleanup", true);
   const cleanupThreshold = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", 1) || 1);
+  // v4.9.0 · 归零移除: 额度完全归零(权威)的账号, 备份+清理后从账号库出库 (默认开)
+  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", true);
+  const removeThreshold = Math.max(0, +_cfg("devinCloudAutoRemoveThreshold", 0) || 0);
+  const removeEmails = [];
   for (const acc of _store.accounts) {
     if (!emails.includes((acc.email || "").toLowerCase())) continue;
     const auth = devinCloud.getCachedAuth(acc.email);
@@ -9294,26 +9301,33 @@ async function _dvAutoBackupRun() {
       if (totalCredits !== null && totalCredits < threshold) {
         // 额度低于阈值 → 全量备份(文件夹/ZIP) · 备份成功是后续清理的前提
         log("auto-backup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " < $" + threshold + " → 全量备份");
-        let backupOk = false;
+        let backupRes = null, backupOk = false;
         try {
-          if (mode === "folder") {
-            await devinCloud.backupAccountFullFolders(auth, Object.assign({ targetDir: dir, incremental: false }, naming));
-          } else {
-            await devinCloud.backupAccountFull(auth, Object.assign({ targetDir: dir, incremental: false }, naming));
-          }
-          backupOk = true;
+          backupRes = (mode === "folder")
+            ? await devinCloud.backupAccountFullFolders(auth, Object.assign({ targetDir: dir, incremental: false }, naming))
+            : await devinCloud.backupAccountFull(auth, Object.assign({ targetDir: dir, incremental: false }, naming));
+          // v4.9.0: 严格校验「全量备份」真正完整, 唯有完整才允许后续破坏性清理 (数据一定要全量备份完)
+          backupOk = _dvBackupVerifiedFull(backupRes);
+          if (!backupOk) log("auto-backup: " + acc.email + " 备份未通过完整性校验 → 跳过自动清理(未全量备份不删) · " + _dvBackupVerifyNote(backupRes));
         } catch (be) {
           log("auto-backup full error: " + acc.email + ": " + (be.message || be) + " → 跳过自动清理(未备份不删)");
         }
-        // v4.5.0: 自动清理 · 额度 ≤ 清理阈值(默 $1) 且全量备份成功后才水过无痕 (先全量留底→再删)
+        // v4.5.0: 自动清理 · 额度 ≤ 清理阈值(默 $1) 且全量备份已校验完整后才水过无痕 (先全量留底→再删)
         if (autoCleanup && backupOk && totalCredits <= cleanupThreshold) {
-          log("auto-cleanup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " ≤ $" + cleanupThreshold + " 且备份成功 → 自动清理");
+          log("auto-cleanup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " ≤ $" + cleanupThreshold + " 且全量备份已校验 → 自动清理");
           try {
             const rep = await devinCloud.wipeAccount(auth, { onProgress: (m) => log("auto-cleanup: " + m) });
             log("auto-cleanup: " + acc.email + " 完成 · 对话" + rep.sessions.deleted + " 知识" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted);
             try { await devinGit.robustDisconnectGit(auth); } catch (ge) { log("auto-cleanup git: " + ge.message); }
             _dvOverviewCache.delete(acc.email.toLowerCase());
-            _notify("info", "[" + acc.email.split("@")[0] + "] 自动清理完成 · 已回归本源");
+            // v4.9.0: 清理无残留 + 额度权威归零(billingBalance≤removeThreshold·null/有订阅永不归零) → 标记出库
+            const wipeClean = !!rep && rep.sessions.failed === 0 && rep.knowledge.failed === 0 && rep.playbooks.failed === 0 && rep.secrets.failed === 0;
+            if (autoRemoveZero && wipeClean && totalCredits <= removeThreshold) {
+              removeEmails.push(acc.email);
+              _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零 · 已全量备份+清理 → 从账号库移除");
+            } else {
+              _notify("info", "[" + acc.email.split("@")[0] + "] 自动清理完成 · 已回归本源");
+            }
           } catch (ce) {
             log("auto-cleanup error: " + acc.email + ": " + ce.message);
           }
@@ -9330,11 +9344,44 @@ async function _dvAutoBackupRun() {
       log("auto-backup error: " + acc.email + ": " + (e.message || e));
     }
   }
+  // v4.9.0 · 归零账号统一出库 (循环外·避免迭代中改数组) — 备份+清理已完成且痕迹已清, 此处仅从账号库移除
+  if (removeEmails.length) {
+    const idx = removeEmails
+      .map((em) => _store.accounts.findIndex((a) => (a.email || "").toLowerCase() === String(em).toLowerCase()))
+      .filter((i) => i >= 0);
+    if (idx.length) {
+      _store.removeBatch(idx);
+      log("auto-remove: 归零账号出库 " + idx.length + " 个 · " + removeEmails.join(", "));
+      try { _broadcastUI(); } catch {}
+    }
+  }
 }
 // v4.4.0: 从 billing 提取可用余额(美元) · 委托 devin_cloud.billingBalance(可单测·实测字段)
 // 返回 null = 无法判定 → 调用方据此跳过破坏性自动清理(防误删健康号)
 function _billingTotalDollars(billing) {
   return devinCloud.billingBalance(billing);
+}
+// v4.9.0 · 严格校验「全量备份」是否真正完整 — 唯有完整才允许后续破坏性清理。
+//   对话: 无异常(convError 空) 且 failed===0; 账号数据快照: 非 partial(知识/剧本/密钥/Git/会话全拉到)。
+//   account 无对话 → conversations.total=0/failed=0 视为完整 (无可备亦即备齐)。
+function _dvBackupVerifiedFull(res) {
+  if (!res || !res.ok) return false;
+  if (res.convError) return false;
+  const c = res.conversations;
+  if (!c || (c.failed || 0) > 0) return false;
+  const s = res.snapshot;
+  if (!s || s.partial) return false;
+  return true;
+}
+function _dvBackupVerifyNote(res) {
+  if (!res) return "无备份结果";
+  const parts = [];
+  if (res.convError) parts.push("对话异常:" + res.convError);
+  if (res.conversations && (res.conversations.failed || 0) > 0) parts.push("对话失败" + res.conversations.failed);
+  if (!res.conversations) parts.push("无对话结果");
+  if (res.snapshot && res.snapshot.partial) parts.push("快照部分:" + ((res.snapshot.errors || []).join("/")));
+  if (!res.snapshot) parts.push("无快照");
+  return parts.join(" · ") || "未知";
 }
 
 // ═══ v4.5.0 · 对话额度上限 (per-conversation quota cap · 知止不殆 · 道法自然) ═══
@@ -11371,6 +11418,14 @@ async function handleWebviewMessage(msg) {
           .getConfiguration("wam")
           .update("devinCloudAutoCleanup", !!msg.on, vscode.ConfigurationTarget.Global);
         _toast(msg.on ? "\u2713 已开启自动清理(额度低于阈值时备份后水过无痕)" : "已关闭自动清理");
+        break;
+      }
+      // v4.9.0 · 归零移除开关 (额度完全归零账号备份+清理后从账号库出库)
+      case "devinToggleRemoveZero": {
+        await vscode.workspace
+          .getConfiguration("wam")
+          .update("devinCloudAutoRemoveZeroQuota", !!msg.on, vscode.ConfigurationTarget.Global);
+        _toast(msg.on ? "\u2713 已开启归零移除(额度归零账号备份+清理后自动出库)" : "已关闭归零移除");
         break;
       }
       // v4.4.0 · 设置自动备份/清理阈值

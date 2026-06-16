@@ -465,6 +465,39 @@ function test(name, fn) {
     assert.ok(/agent:\s*_httpsAgent/.test(src), "httpsReq 必把请求挂到有界 Agent");
   });
 
+  // ── v4.9.0 · 归零移除 + 备份严格校验 (源级护栏 · 防破坏性误删回归) ──
+  console.log("\n[v4.9.0 自动清理/归零移除护栏]");
+  test("billingBalance: 无订阅且额度0 → 0 (允许归零判定); 有订阅 → 9999 (永不归零); 未知 → null", () => {
+    assert.strictEqual(cloud.billingBalance({ has_subscription_or_credits: false, available_credits: 0, overage_credits: 0 }), 0);
+    assert.strictEqual(cloud.billingBalance({ has_subscription_or_credits: true, available_credits: 0 }), 9999);
+    assert.strictEqual(cloud.billingBalance({ unknown: 1 }), null);
+    assert.ok(cloud.billingBalance({ has_subscription_or_credits: false, available_credits: 0, overage_credits: 5 }) > 0);
+  });
+  test("extension.js: 自动清理须先通过全量备份完整性校验 (未备份不删)", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+    assert.ok(/function _dvBackupVerifiedFull\(/.test(src), "须有 _dvBackupVerifiedFull 严格校验");
+    assert.ok(/backupOk = _dvBackupVerifiedFull\(backupRes\)/.test(src), "清理前 backupOk 须由校验函数赋值");
+    assert.ok(/if \(autoCleanup && backupOk && totalCredits <= cleanupThreshold\)/.test(src), "清理须同时满足 autoCleanup+backupOk+阈值");
+    assert.ok(/if \(res\.convError\) return false;/.test(src) && /\(c\.failed \|\| 0\) > 0\) return false/.test(src) && /if \(!s \|\| s\.partial\) return false;/.test(src), "校验须覆盖对话异常/失败/快照部分");
+  });
+  test("extension.js: 归零移除仅在权威归零+清理无残留时触发, 且循环外统一 removeBatch", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+    assert.ok(/if \(autoRemoveZero && wipeClean && totalCredits <= removeThreshold\)/.test(src), "移除须 autoRemoveZero+wipeClean+归零阈值三重闸");
+    assert.ok(/const wipeClean = .*rep\.sessions\.failed === 0 && rep\.knowledge\.failed === 0 && rep\.playbooks\.failed === 0 && rep\.secrets\.failed === 0/.test(src), "wipeClean 须确认四类痕迹全清无失败");
+    assert.ok(/_store\.removeBatch\(idx\)/.test(src), "出库须走 removeBatch (单次IO+持久化)");
+    assert.ok(/removeEmails\.push\(acc\.email\)/.test(src), "归零账号先入 removeEmails, 循环外再删");
+  });
+  test("package.json: 自动清理/归零移除默认开启", () => {
+    const fs = require("fs");
+    const pkg = JSON.parse(fs.readFileSync(require("path").join(__dirname, "..", "package.json"), "utf8"));
+    const props = pkg.contributes.configuration.properties;
+    assert.strictEqual(props["wam.devinCloudAutoCleanup"].default, true, "自动清理默认开");
+    assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, true, "归零移除默认开");
+    assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 0, "归零阈值默认0(完全归零)");
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
