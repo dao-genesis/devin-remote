@@ -2386,7 +2386,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="app">
 <nav class="sb">
 <div class="ni active" data-tab="overview" onclick="sw('overview')" title="主页 Home">🏠</div>
-<div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网操作 DAO Bridge">🌐</div>
+<div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网穿透 · DAO Bridge (独立板块·远程操作本地电脑)">🌐</div>
 <div class="ni" data-tab="backups" onclick="sw('backups')" title="对话 · 备份 — 本机全部 RT Flow 备份对话(全账号×全对话)">💬</div>
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 通用自动注入(道法自然准则+内网穿透MD+道德经/阴符经/道法自然+MCP)">💉</div>
 <!-- ② 去芜存菁: Knowledge/Playbooks/Secrets/Git 三标签已合并进主页(overview)「当前账号·手动内容」分区 -->
@@ -2607,8 +2607,9 @@ function rO(){
     const i=S.inject;
     ih='<div class="st">注入状态</div><div class="card"><div class="cr"><span class="l"><span class="tag secret">S</span> Secret</span><span class="v" style="color:'+(i.secret?'var(--success)':'var(--danger)')+'">'+(i.secret?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag knowledge">K</span> Knowledge</span><span class="v" style="color:'+(i.knowledge?'var(--success)':'var(--danger)')+'">'+(i.knowledge?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag playbook">P</span> Playbook</span><span class="v" style="color:'+(i.playbook?'var(--success)':'var(--danger)')+'">'+(i.playbook?'✓':'✗')+'</span></div><div class="cr"><span class="l"><span class="tag git">G</span> Git</span><span class="v" style="color:'+(i.git?'var(--success)':'var(--danger)')+'">'+(i.git?'✓':'✗')+'</span></div></div>';
   }
-  v.innerHTML=rHost()+'<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+ih+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button></div>'+rBridge()+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn" style="background:#6f42c1" onclick="cmd(&#39;syncBrowser&#39;)" title="在电脑浏览器开独立窗口自动登录当前账号·多账号各开并行窗口互不串号">🖥️ 浏览器同步</button><button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
-  // 内网穿透已上移至主页第二板块 (rBridge 见上方拼装)
+  v.innerHTML=rHost()+'<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+ih+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button></div>'+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div><div class="st">快捷操作</div><div class="br">'+(S.auth.canUseApi?'<button class="btn primary" onclick="cmd(&#39;devinInject&#39;)">💉 一键注入</button>':'')+'<button class="btn" onclick="cmd(&#39;devinRefreshQuota&#39;)">📊 刷新配额</button><button class="btn" onclick="cmd(&#39;toggleSyncMode&#39;)" title="自动=跟随IDE账号 / 手动=面板独立登录">🔗 账号模式</button><button class="btn" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出供本机其他 Agent 操作本插件的 MD 契约">📄 导出 MD (供 Agent)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;home&#39;})">🌐 打开 Devin Cloud</button>'+'<button class="btn" style="background:#6f42c1" onclick="cmd(&#39;syncBrowser&#39;)" title="在电脑浏览器开独立窗口自动登录当前账号·多账号各开并行窗口互不串号">🖥️ 浏览器同步</button><button class="btn danger" onclick="cmd(&#39;devinLogout&#39;)">登出</button></div><div class="st">Devin Cloud 页面</div><div class="br"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;sessions&#39;})">💬 Sessions</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;knowledge&#39;})">📚 Knowledge</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;secrets&#39;})">🔑 Secrets</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;integrations&#39;})">🔗 Integrations</button></div>';
+  // 内网穿透·DAO Bridge 已独立为左侧栏单独板块(data-tab="bridge"→rBridgeFull), 主页不再内嵌;
+  // 主页专注单账号信息/操作/注入。
   // ② 去芜存菁: 把「当前账号·手动内容」(Knowledge/Playbooks/Secrets/Git) 直接合进主页
   v.innerHTML+=daoOverviewManualHtml();
   daoLoadOverviewManual();
@@ -3093,13 +3094,29 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'applyInjectProfileToAll': {
-                // 多账号 · 把期望态一次性注入账号池里所有已存 auth1 的账号 org
-                vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '多账号注入期望态…' }, async () => {
-                    let r: { ok: boolean; total: number; injected: number } = { ok: false, total: 0, injected: 0 };
-                    try { r = await applyInjectProfileToAllAccounts(); } catch { /* 守柔 */ }
-                    vscode.window.showInformationMessage('多账号注入完成: ' + r.injected + '/' + r.total + ' 账号');
+                // 多账号 · 把完整注入档案(K/P/S/MCP/Automations)反向注入到整个账号池的每个账号 org。
+                // 优先走 devinBatchInject(本机账号池·含登录兜底·全覆盖固定道藏集+用户档案); 池为空再退回仅缓存 auth1 路径。
+                if (daoBatchProgress && daoBatchProgress.running) {
+                    vscode.window.showWarningMessage('批量注入已在进行中: ' + daoBatchProgress.done + '/' + daoBatchProgress.total);
+                    reply({ type: 'actionResult', command: 'applyInjectProfileToAll', ok: false });
+                    break;
+                }
+                vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '多账号反向注入(K/P/S/MCP)…' }, async () => {
+                    let okCount = 0, total = 0;
+                    try {
+                        const pool = resolveBatchAccounts({ all: true });
+                        if (pool.length) {
+                            total = pool.length;
+                            const prog = await devinBatchInject(pool);
+                            okCount = prog.ok;
+                        } else {
+                            const r = await applyInjectProfileToAllAccounts();
+                            total = r.total; okCount = r.injected;
+                        }
+                    } catch { /* 守柔 */ }
+                    vscode.window.showInformationMessage('多账号反向注入完成: ' + okCount + '/' + total + ' 账号');
                     sidebarCloudPanel?.refresh();
-                    refreshReply({ type: 'actionResult', command: 'applyInjectProfileToAll', ok: r.ok });
+                    refreshReply({ type: 'actionResult', command: 'applyInjectProfileToAll', ok: okCount > 0 });
                 });
                 break;
             }
@@ -5836,7 +5853,7 @@ async function devinFullInject(interactive: boolean = false): Promise<boolean> {
 // 全程自包含, 不改动当前面板登录态(ws.*); CJK 经 asciiSafeJson \uXXXX 上线服务端无损。
 // ═══════════════════════════════════════════════════════════
 interface DaoBatchAccount { email: string; password: string; }
-interface DaoBatchResult { email: string; ok: boolean; auth: string; orgId?: string; knowledge: boolean; bridge: boolean; playbook: boolean; secret: boolean; cleaned: number; verified: boolean; error?: string; }
+interface DaoBatchResult { email: string; ok: boolean; auth: string; orgId?: string; knowledge: boolean; bridge: boolean; playbook: boolean; secret: boolean; profile: boolean; cleaned: number; verified: boolean; error?: string; }
 interface DaoBatchProgress { total: number; done: number; ok: number; running: boolean; results: DaoBatchResult[]; startedAt: string; finishedAt?: string; }
 let daoBatchProgress: DaoBatchProgress | null = null;
 
@@ -5882,10 +5899,13 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
     const rulesText = getDaoRulesText();
     const bridgeMd = bridgeGenerateCloudMd();
     const pbBody = (url && token) ? buildDevinPlaybook(url, token) : '';
+    // 批量反向注入全覆盖: 除固定道藏集(准则KB+桥KB+桥控制剧本+DAO_TOKEN),
+    // 还把用户完整注入档案(用户自添 K/P/S/MCP/Automations/额度上限)逐账号注入到官网 org。
+    const injectProfile = loadInjectProfile();
     daoBatchProgress = { total: accounts.length, done: 0, ok: 0, running: true, results: [], startedAt: new Date().toISOString() };
     const resultsFile = path.join(DAO_DIR, 'dao-batch-inject-results.json');
     for (const a of accounts) {
-        const res: DaoBatchResult = { email: a.email, ok: false, auth: '', knowledge: false, bridge: false, playbook: false, secret: false, cleaned: 0, verified: false };
+        const res: DaoBatchResult = { email: a.email, ok: false, auth: '', knowledge: false, bridge: false, playbook: false, secret: false, profile: false, cleaned: 0, verified: false };
         try {
             let auth1 = '', orgId = '';
             // 优先用按邮箱缓存的 auth1(切回即命中, 守柔省登录), GET 校验仍有效再用。
@@ -5905,6 +5925,8 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
             if (token) res.bridge = (await devinUpsertKnowledge(orgId, DAO_BRIDGE_KB_NAME, bridgeMd, DAO_BRIDGE_KB_TRIGGER, auth1)).ok;
             if (pbBody) res.playbook = (await devinUpsertPlaybook(orgId, 'Operate Local Environment via Dao', pbBody, auth1)).ok;
             if (token) res.secret = (await devinUpsertSecret(orgId, 'DAO_TOKEN', token, auth1)).ok;
+            // 全覆盖: 再把用户完整注入档案(K/P/S/MCP/Automations)注入该账号; 单账号锁定项被 applyInjectProfileToOrg 跳过不覆盖。
+            try { await applyInjectProfileToOrg(orgId, auth1, injectProfile); res.profile = true; } catch { /* 守柔 */ }
             // 校验: 回读知识库确认「道法自然准则」落地且正文完整(防截断/损坏)
             try {
                 const back = await devinListKnowledge(orgId, auth1);
@@ -5913,7 +5935,8 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
                     res.verified = !!(hit && typeof hit.body === 'string' && hit.body.length >= Math.max(0, rulesText.length - 4));
                 }
             } catch { /* 守柔 */ }
-            res.ok = res.knowledge && res.playbook && res.secret;
+            // 成功 = 准则KB落地 + (无桥控制剧本或已注) + (无DAO_TOKEN或已注) + 用户完整档案已应用
+            res.ok = (!rulesText || res.knowledge) && (!pbBody || res.playbook) && (!token || res.secret) && res.profile;
         } catch (e: any) { res.error = e?.message || String(e); }
         if (res.ok) daoBatchProgress.ok++;
         daoBatchProgress.results.push(res);
@@ -6089,10 +6112,14 @@ function findAuth1ForOrg(orgId: string): string {
     for (const e of Object.keys(store)) { if (store[e] && store[e].orgId === orgId && store[e].auth1) return store[e].auth1; }
     return '';
 }
+// 单账号「绝利一源」保护: 用户在某账号 K/P/S/MCP 面板手动锁定(setManualLock)的条目,
+// 批量多账号反向注入(applyInjectProfileToOrg)对该 org 跳过同名条目, 不覆盖用户单账号定制。
+// 守柔: 只防覆盖, 锁定项保持用户手改版本; 未锁定项照常注入。
 async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
-    for (const s of p.secrets) { if (s && s.name) { try { await devinUpsertSecret(orgId, s.name, s.value || '', auth1); } catch { /* 守柔 */ } } }
+    for (const s of p.secrets) { if (s && s.name && !isManualLocked(orgId, 'secrets', s.name)) { try { await devinUpsertSecret(orgId, s.name, s.value || '', auth1); } catch { /* 守柔 */ } } }
     for (const k of p.knowledge) {
         if (!k || !k.name) continue;
+        if (isManualLocked(orgId, 'knowledge', k.name)) continue;
         let kb = k.body || '';
         const isBridge = (kb === DAO_BRIDGE_KB_SENTINEL || k.name === DAO_BRIDGE_KB_NAME);
         if (isBridge) {
@@ -6111,7 +6138,7 @@ async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectPr
         }
         try { await devinUpsertKnowledge(orgId, k.name, kb, k.trigger || 'Always', auth1); } catch { /* 守柔 */ }
     }
-    for (const pb of p.playbooks) { if (pb && pb.title) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1); } catch { /* 守柔 */ } } }
+    for (const pb of p.playbooks) { if (pb && pb.title && !isManualLocked(orgId, 'playbooks', pb.title)) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1); } catch { /* 守柔 */ } } }
     for (const a of (p.automations || [])) { if (a && a.name) { try { await devinUpsertAutomation(orgId, a, auth1); } catch { /* 守柔 */ } } }
     // 钉住的 MCP — 幂等: 已存在(按 slug)则跳过, 否则追录到该 org
     if (p.mcps && p.mcps.length) {
@@ -6122,6 +6149,7 @@ async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectPr
         } catch { /* 守柔 */ }
         for (const m of p.mcps) {
             if (!m || !m.name) continue;
+            if (isManualLocked(orgId, 'mcps', m.name) || isManualLocked(orgId, 'mcps', mcpSlug(m))) continue;
             const slug = mcpSlug(m);
             if (existing.has(String(m.name).toLowerCase()) || existing.has(slug)) continue;
             try { await devinAddCustomMcp(orgId, Object.assign({}, m, { slug }), auth1); } catch { /* 守柔 */ }
