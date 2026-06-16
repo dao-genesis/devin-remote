@@ -5104,11 +5104,21 @@ async function devinListPlaybooks(orgId: string, auth1: string): Promise<{ ok: b
 }
 
 // Automations 自动化 · GET/POST/DELETE 均已逆流实测 (/api/org-<bare>/automations)
-async function devinListAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; automations?: any[]; status?: number; error?: string }> {
+// 归一: 同时返回 raw `automations`(含 automation_id, 供删除/去重) 与 `items`(面板展示用映射)。
+// 帛书·「少则得·多则惑」— 此前重复声明致 clearAutomations 拿不到 automation_id(删0条), upsert 去重失效。
+async function devinListAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; automations?: any[]; items?: any[]; status?: number; error?: string }> {
     const bareOrgId = orgId.replace(/^org-/, '');
     const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/automations', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-    if (r.status === 200) { const j = r.json || {}; const items = Array.isArray(j) ? j : (Array.isArray(j.automations) ? j.automations : []); return { ok: true, automations: items }; }
-    return { ok: false, status: r.status, error: devinErr(r) };
+    if (r.status === 200) {
+        const j = r.json || {};
+        const automations = Array.isArray(j) ? j : (Array.isArray(j.automations) ? j.automations : []);
+        const items = automations.map((a: any) => {
+            const trig = Array.isArray(a.triggers) && a.triggers[0] ? (a.triggers[0].event_type || '') : '';
+            return { name: a.name || a.automation_id || 'Automation', detail: trig, connected: a.enabled !== false };
+        });
+        return { ok: true, automations, items };
+    }
+    return { ok: false, status: r.status, error: devinErr(r), automations: [], items: [] };
 }
 // 规范化为上游接受的创建 body — 缺省 webhook:incoming + start_session(prompt)
 function buildAutomationBody(a: InjectProfileItemA): any {
@@ -5819,7 +5829,7 @@ async function devinInstallMarketplaceMcp(orgId: string, spec: McpInstallSpec, a
 // 清除本账号官网全部自动化 (列出后逐个删除) — 守柔: 单条失败不阻断, 汇总结果。
 async function devinClearAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; total: number; cleared: number }> {
     const lst = await devinListAutomations(orgId, auth1);
-    const items = lst.items || [];
+    const items = lst.automations || [];
     let cleared = 0;
     for (const a of items) {
         const id = String((a as Record<string, unknown>).automation_id || (a as Record<string, unknown>).id || '');
@@ -5827,18 +5837,6 @@ async function devinClearAutomations(orgId: string, auth1: string): Promise<{ ok
         try { if ((await devinDeleteAutomation(orgId, id, auth1)).ok) cleared++; } catch { /* 守柔 */ }
     }
     return { ok: cleared === items.length, total: items.length, cleared };
-}
-
-async function devinListAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
-    const bareOrgId = orgId.replace(/^org-/, '');
-    const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/automations', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-    if (r.status !== 200) return { ok: false, items: [] };
-    const arr = Array.isArray(r.json) ? r.json : [];
-    const items = arr.map((a: any) => {
-        const trig = Array.isArray(a.triggers) && a.triggers[0] ? (a.triggers[0].event_type || '') : '';
-        return { name: a.name || a.automation_id || 'Automation', detail: trig, connected: a.enabled !== false };
-    });
-    return { ok: true, items };
 }
 
 async function devinDisconnectGit(orgId: string, connectionId: string, auth1: string): Promise<{ ok: boolean }> {
