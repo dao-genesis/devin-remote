@@ -463,6 +463,10 @@ public class MainActivity extends AppCompatActivity {
         }
         @JavascriptInterface public String relayStatus() { return RelayService.lastStatus; }
         @JavascriptInterface public void relayRestart() { main.post(() -> { stopService(new Intent(MainActivity.this, RelayService.class)); startRelay(); }); }
+        @JavascriptInterface public void saveRelayConfig(String json) {
+            RelayService r = RelayService.instance;
+            if (r != null) r.saveRelayConfig(json == null ? "{}" : json);
+        }
         @JavascriptInterface public void clip(String text) {
             main.post(() -> {
                 try { ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);

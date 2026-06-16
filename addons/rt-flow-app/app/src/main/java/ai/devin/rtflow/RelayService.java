@@ -58,7 +58,11 @@ public class RelayService extends Service {
 
     /** JS ↔ 原生桥 (引擎页用 window.Native.*) */
     public class Bridge {
-        @JavascriptInterface public String getConn() { return readAsset("engine/conn.json"); }
+        @JavascriptInterface public String getConn() {
+            // 动态配置优先 (用户在切号面板填写), 无则回退 conn.json 资源
+            String dyn = readUserFile("relay-config.json");
+            return (dyn != null && !dyn.isEmpty() && dyn.length() > 5) ? dyn : readAsset("engine/conn.json");
+        }
         @JavascriptInterface public void onStatus(String json) {
             lastStatus = json == null ? "{}" : json;
             Intent i = new Intent("ai.devin.rtflow.STATUS").setPackage(getPackageName()).putExtra("status", lastStatus);
@@ -112,8 +116,13 @@ public class RelayService extends Service {
         try (InputStream is = getAssets().open(path)) { return slurp(is); }
         catch (Exception e) { return "{}"; }
     }
-    /** 供浏览器外壳内部页 (Native.conn) 读取烘焙的中继配置。 */
-    public String readConn() { return readAsset("engine/conn.json"); }
+    /** 供浏览器外壳内部页 (Native.conn) 读取中继配置 (动态优先, conn.json 兜底)。 */
+    public String readConn() {
+        String dyn = readUserFile("relay-config.json");
+        return (dyn != null && !dyn.isEmpty() && dyn.length() > 5) ? dyn : readAsset("engine/conn.json");
+    }
+    /** 供 MainActivity 浏览器桥写入动态穿透配置 */
+    public void saveRelayConfig(String json) { writeUserFile("relay-config.json", json); }
     private void writeUserFile(String name, String content) {
         try { File f = new File(getFilesDir(), safe(name)); java.io.FileOutputStream o = new java.io.FileOutputStream(f); o.write(content.getBytes("UTF-8")); o.close(); }
         catch (Exception e) { android.util.Log.e("RTFlow", "write " + e); }
