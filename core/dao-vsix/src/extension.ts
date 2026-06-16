@@ -321,6 +321,10 @@ export async function activate(context: vscode.ExtensionContext) {
     // 二插合一为单一插件: 左 RT Flow(账号池/切号) + 中 数联 Devin Cloud。
     // 守柔: rt-flow 激活异常不得阻断 dao-vsix 自身激活。
     // ═══════════════════════════════════════════════════════════
+    // 归一·账号池同源: 把 dao-vsix 账号池(~/.dao/accounts.json)镜像到 rt-flow(wam) 可读取的
+    // ~/.wam/accounts-backup.json, 使「左·切号」与「中·数联」共用同一账号池(二合一同源)。
+    // 守柔: 须在 rt-flow 激活前完成, 使 wam 启动即见账号, 不再报「无账号」。
+    try { syncAccountPoolToWam(); } catch (e) { try { console.error('[dao-vsix] 账号池同源 wam 失败(守柔):', e); } catch { /* 守柔 */ } }
     try {
         _rtflowModule = require(path.join(__dirname, '..', 'rtflow', 'extension.js')) as RtflowModule;
         if (_rtflowModule && typeof _rtflowModule.activate === 'function') {
@@ -2206,9 +2210,11 @@ async function bridgeInjectKnowledge(): Promise<boolean> {
     try {
         const listResult = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1);
         if (listResult.ok && listResult.learnings) {
-            const existing = listResult.learnings.find((k: any) => k.name === knowledgeName || (k.trigger_description || '').includes('远程操作本地电脑'));
-            if (existing) {
-                await devinDeleteKnowledge(ws.devinOrgId, existing.id, ws.devinAuth1);
+            // 帛书·「少则得·多则惑」: 删尽所有「DAO Bridge」桥文档异名残条(含早期带「·」变体),
+            // 而非仅删首个 → 收敛为唯一规范条目, 杜绝历史命名漂移累积的重复。
+            const stale = listResult.learnings.filter((k: any) => typeof k.name === 'string' && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作本地电脑')));
+            for (const k of stale) {
+                if (k && k.id) { try { await devinDeleteKnowledge(ws.devinOrgId, k.id, ws.devinAuth1); } catch { /* 守柔 */ } }
             }
         }
         const r = await devinInjectKnowledge(ws.devinOrgId, knowledgeName, md, trigger, ws.devinAuth1);
@@ -3899,6 +3905,22 @@ function loadAccountPool(forceRefresh?: boolean): PoolAccount[] {
     _accountPoolCache = pool;
     _accountPoolReadAt = Date.now();
     return pool;
+}
+// 归一·账号池同源 — 把 dao-vsix 账号池镜像到 rt-flow(wam) 候选末位文件 ~/.wam/accounts-backup.json,
+// 使「左·切号」与「中·数联」共用同一账号池。守柔: 仅镜像非空池; 该路径为 wam 候选末位,
+// 用户自备的 wam.accountsFile / accounts.md 仍优先, 不被覆盖。
+function syncAccountPoolToWam(): void {
+    try {
+        const pool = loadAccountPool(true).filter(a => a && a.email && a.password);
+        if (!pool.length) return;
+        const wamDir = path.join(os.homedir(), '.wam');
+        try { fs.mkdirSync(wamDir, { recursive: true }); } catch { /* 守柔 */ }
+        const target = path.join(wamDir, 'accounts-backup.json');
+        const payload = JSON.stringify({ accounts: pool.map(a => ({ email: a.email, password: a.password })) }, null, 2);
+        let prev = '';
+        try { prev = fs.readFileSync(target, 'utf8'); } catch { /* 首次无文件 */ }
+        if (prev !== payload) fs.writeFileSync(target, payload, 'utf8');
+    } catch { /* 道法自然·守柔 */ }
 }
 function findAccountPassword(email: string): string {
     if (!email) return '';
@@ -6069,7 +6091,26 @@ function findAuth1ForOrg(orgId: string): string {
 }
 async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
     for (const s of p.secrets) { if (s && s.name) { try { await devinUpsertSecret(orgId, s.name, s.value || '', auth1); } catch { /* 守柔 */ } } }
-    for (const k of p.knowledge) { if (k && k.name) { let kb = k.body || ''; if (kb === DAO_BRIDGE_KB_SENTINEL || k.name === DAO_BRIDGE_KB_NAME) { try { kb = bridgeGenerateCloudMd(); } catch { /* 守柔 */ } } try { await devinUpsertKnowledge(orgId, k.name, kb, k.trigger || 'Always', auth1); } catch { /* 守柔 */ } } }
+    for (const k of p.knowledge) {
+        if (!k || !k.name) continue;
+        let kb = k.body || '';
+        const isBridge = (kb === DAO_BRIDGE_KB_SENTINEL || k.name === DAO_BRIDGE_KB_NAME);
+        if (isBridge) {
+            try { kb = bridgeGenerateCloudMd(); } catch { /* 守柔 */ }
+            // 帛书·「少则得·多则惑」: 收敛历史异名「DAO Bridge」残条(含早期带「·」变体) → 唯一规范条目
+            try {
+                const list = await devinListKnowledge(orgId, auth1);
+                if (list.ok && list.learnings) {
+                    for (const e of list.learnings) {
+                        if (e && e.id && typeof e.name === 'string' && /^DAO Bridge/.test(e.name)) {
+                            try { await devinDeleteKnowledge(orgId, String(e.id), auth1); } catch { /* 守柔 */ }
+                        }
+                    }
+                }
+            } catch { /* 守柔 */ }
+        }
+        try { await devinUpsertKnowledge(orgId, k.name, kb, k.trigger || 'Always', auth1); } catch { /* 守柔 */ }
+    }
     for (const pb of p.playbooks) { if (pb && pb.title) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1); } catch { /* 守柔 */ } } }
     for (const a of (p.automations || [])) { if (a && a.name) { try { await devinUpsertAutomation(orgId, a, auth1); } catch { /* 守柔 */ } } }
     // 钉住的 MCP — 幂等: 已存在(按 slug)则跳过, 否则追录到该 org
