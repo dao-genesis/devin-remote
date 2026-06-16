@@ -4845,11 +4845,15 @@ function getEaConfigHtml(port, nonce) {
       opt.textContent = p.n + ' (' + p.u.replace(/^https?:[/][/]/, '') + ')';
       sel.appendChild(opt);
     });
-    // 选预设 → 自动用「干净 slug」做渠道名 (去括号/中文/空格), 不覆盖用户已填名
+    // 选预设 → 自动用「干净 slug」做渠道名, 不覆盖用户已填名
+    //   取名中首个 ASCII 词(含括注内, 如「字节 豆包 火山方舟 (Doubao/Ark)」→ doubao);
+    //   无 ASCII 词时再退化为去非 ASCII 拼接 (避免整名为中文时塌成空回退 provider)。
     function _presetSlug(name) {
-      var s = String(name || '').replace(/[(（].*?[)）]/g, '');           // 去括注
-      s = s.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
-      return s || 'provider';
+      var s = String(name || '');
+      var toks = s.match(/[A-Za-z][A-Za-z0-9]*/g);
+      if (toks && toks.length) return toks[0].toLowerCase();
+      var t = s.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
+      return t || 'provider';
     }
     var apply = document.getElementById('btnApplyPreset');
     if (apply) apply.addEventListener('click', function() {
