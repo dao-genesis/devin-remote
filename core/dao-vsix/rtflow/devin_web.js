@@ -24,11 +24,13 @@ const PROFILES_DIR = path.join(WAM_DIR, "browser-profiles");
 const DEVIN_APP = "https://app.devin.ai";
 
 // 帛书·「绝利一源」— 定位本机浏览器 (Chrome 优先, 回退 Edge)。
+//   固定路径 → 注册表 App Paths → where 兜底, 三道并查 (覆盖非标准安装位置)。
 function findBrowserExe() {
   const PF = process.env["ProgramFiles"] || "C:\\Program Files";
   const PF86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
   const LAD = process.env["LOCALAPPDATA"] || "";
   const candidates = [
+    "C:\\devin\\chrome\\chrome-win64\\chrome.exe", // Devin Desktop 内置 Chrome
     PF + "\\Google\\Chrome\\Application\\chrome.exe",
     PF86 + "\\Google\\Chrome\\Application\\chrome.exe",
     LAD + "\\Google\\Chrome\\Application\\chrome.exe",
@@ -38,6 +40,31 @@ function findBrowserExe() {
   for (const p of candidates) {
     try {
       if (p && fs.existsSync(p)) return p;
+    } catch {}
+  }
+  // 注册表 App Paths (覆盖非标准安装位置)。
+  for (const exe of ["chrome.exe", "msedge.exe"]) {
+    try {
+      const out = cp
+        .execSync(
+          'reg query "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\' +
+            exe +
+            '" /ve',
+          { encoding: "utf8", windowsHide: true, timeout: 4000 },
+        )
+        .trim();
+      const m = out.match(/REG_SZ\s+(.+\.exe)/i);
+      if (m && m[1] && fs.existsSync(m[1].trim())) return m[1].trim();
+    } catch {}
+  }
+  // where 兜底。
+  for (const name of ["chrome", "msedge"]) {
+    try {
+      const out = cp
+        .execSync("where " + name, { encoding: "utf8", windowsHide: true, timeout: 4000 })
+        .trim()
+        .split(/\r?\n/)[0];
+      if (out && fs.existsSync(out.trim())) return out.trim();
     } catch {}
   }
   return null;
