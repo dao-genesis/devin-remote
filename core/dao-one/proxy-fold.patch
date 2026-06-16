@@ -137,9 +137,9 @@
  async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionContext) {
      const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
      const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
-     // Auth gate — allow these commands without login
--    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge'];
-+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge', 'getProxyPanel'];
+     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
+-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge'];
++    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge', 'getProxyPanel'];
      if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
          reply({ type: 'error', msg: 'Not logged in' });
          return;
