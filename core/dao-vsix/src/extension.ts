@@ -4730,14 +4730,15 @@ async function devinAutoChain(): Promise<boolean> {
                 ws.devinApiKey = saved.apiKey || ''; ws.devinApiServerUrl = saved.apiServerUrl || '';
                 ws.devinEmail = currentIdeEmail;
                 const quota = await devinFetchQuota(ws.devinApiKey || ws.devinAuth1);
-                if (quota) {
+                if (quota && quota !== false) {
                     ws.devinQuota = quota; ws.devinSaveConfig();
                     saveAccountAuth(currentIdeEmail); // 鲜活令牌回写本插件存储, 二源归一
                     if (!(ws.devinApiKey || '').startsWith('cog_')) { try { await devinEnsureCogApiKey(ws.devinOrgId, ws.devinAuth1); } catch {} }
                     return true;
                 }
-                // 该邮箱的 auth1 已失效 → 清除, 继续走登录换新
-                ws.devinAuth1 = ''; ws.devinOrgId = ''; ws.devinApiKey = '';
+                // 道法自然 · 持久化: 仅凭证确认失效(false)时清除; 网络不可达(null)保留登录态
+                if (quota === false) { ws.devinAuth1 = ''; ws.devinOrgId = ''; ws.devinApiKey = ''; }
+                else { ws.devinSaveConfig(); return true; } // 网络离线 → 保留凭证, 视为已登录(额度离线)
             }
         } catch { /* 守柔 */ }
     }
@@ -4777,7 +4778,7 @@ async function devinAutoChain(): Promise<boolean> {
             ws.devinQuota = cfg.devinQuota || null;
             // Verify token still valid — 帛书·七十一「知不知尚矣」
             const quota = await devinFetchQuota(ws.devinApiKey || ws.devinAuth1);
-            if (quota) {
+            if (quota && quota !== false) {
                 ws.devinQuota = quota;
                 if (ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$')) {
                     saveAccountAuth(ws.devinEmail);
@@ -4785,8 +4786,9 @@ async function devinAutoChain(): Promise<boolean> {
                 }
                 return true;
             }
-            // Token expired → 清除，尝试其他路径
-            ws.devinAuth1 = ''; ws.devinOrgId = ''; ws.devinSessionToken = ''; ws.devinApiKey = '';
+            // 道法自然 · 持久化: 仅凭证确认失效(false)时清除; 网络不可达(null)保留登录态
+            if (quota === false) { ws.devinAuth1 = ''; ws.devinOrgId = ''; ws.devinSessionToken = ''; ws.devinApiKey = ''; }
+            else { return true; } // 网络离线 → 保留凭证, 视为已登录
         }
     } catch {}
 
@@ -5346,9 +5348,12 @@ async function enrichCredentialsFromCodeiumAPI(apiKey: string): Promise<{ email:
 // ═══════════════════════════════════════════════════════════
 
 async function devinFetchQuota(apiKey: string, apiServerUrl?: string): Promise<any> {
+    // 道法自然 · 登录持久化修复:
+    // 返回值语义: quota对象=成功, false=凭证确认失效(401/403→应清除), null=网络错误(不应清除凭证)
     // GetUserStatus(windsurf/codeium 座席服务) 只认 windsurf 风格密钥; cog_ 会被拒。
     // 登录后 ws.devinApiKey 常被换成 cog_, 故额度查询优先用注册留存的 windsurf key。
     const statusKey = (apiKey && !apiKey.startsWith('cog_')) ? apiKey : (ws.devinWindsurfKey || '');
+    let sawAuthFailure = false;
     if (statusKey) {
         const tries: string[] = [];
         if (apiServerUrl) tries.push(apiServerUrl.replace(/\/+$/, '') + '/exa.seat_management_pb.SeatManagementService/GetUserStatus');
@@ -5364,7 +5369,7 @@ async function devinFetchQuota(apiKey: string, apiServerUrl?: string): Promise<a
                     if (od != null) ps.overageDollars = od;
                     return ps;
                 }
-                if (r.status === 401 || r.status === 400) break;
+                if (r.status === 401 || r.status === 403 || r.status === 400) { sawAuthFailure = true; break; }
             } catch {}
         }
     }
@@ -5378,9 +5383,11 @@ async function devinFetchQuota(apiKey: string, apiServerUrl?: string): Promise<a
                 const hasFunds = typeof br.json.overage_credits === 'number' && br.json.overage_credits < 0 && !br.json.billing_error;
                 return { planName: 'Trial', dailyQuotaRemainingPercent: hasFunds ? 100 : 0, weeklyQuotaRemainingPercent: hasFunds ? 100 : 0, overageActive: hasFunds, overageDollars: hasFunds ? Math.abs(br.json.overage_credits) : 0, _source: 'devin_billing' };
             }
+            if (br.status === 401 || br.status === 403) { sawAuthFailure = true; }
         } catch {}
     }
-    return null;
+    // 道法自然 · 持久化: 区分「凭证失效」与「网络不可达」— 仅凭证失效时返回 false 令调用方清除
+    return sawAuthFailure ? false : null;
 }
 
 function devinParsePlanStatus(j: any): any {
