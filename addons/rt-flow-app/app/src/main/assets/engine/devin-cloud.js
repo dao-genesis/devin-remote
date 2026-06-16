@@ -247,6 +247,22 @@
     return { ok: false, status: r.status };
   }
 
+  // ── 单条消息额度上限 (On-demand / Message usage limit) ───────────────────
+  //  GET  → max_credits (当前每条消息可用的 on-demand 美金上限)
+  //  POST {max_credits} → 设定 (与官网 Settings·Usage&limits 同源, auth1 直写)
+  async function getMessageLimit(acc) {
+    if (!acc || !acc.auth1 || !acc.orgId) return { ok: false, error: "需先登录(auth1)" };
+    var r = await jget(APP + "/api/org-" + bare(acc.orgId) + "/billing/usage/limits", acc);
+    if (r.status === 200) { var j = r.json || {}; var v = (typeof j.max_credits === "number") ? j.max_credits : (typeof j.max_acu_limit === "number" ? j.max_acu_limit : null); return { ok: true, max: v, raw: j }; }
+    return { ok: false, status: r.status, error: errOf(r) };
+  }
+  async function setMessageLimit(acc, maxCredits) {
+    if (!acc || !acc.auth1 || !acc.orgId) return { ok: false, error: "需先登录(auth1)" };
+    if (typeof maxCredits !== "number" || !isFinite(maxCredits)) return { ok: false, error: "maxCredits 须为数字" };
+    var r = await jpost(APP + "/api/org-" + bare(acc.orgId) + "/billing/usage/limits", acc, { max_credits: maxCredits });
+    return { ok: r.status === 200 || r.status === 201 || r.status === 204, status: r.status, error: r.status >= 400 ? errOf(r) : undefined };
+  }
+
   // ── 集成盘点 (Git/密钥/知识库/剧本 一次拉齐) ──────────────────────────────
   async function listIntegrations(acc) {
     if (!acc || !acc.auth1 || !acc.orgId) return { ok: false, error: "需先登录(auth1)" };
@@ -282,6 +298,7 @@
     injectGitHubPAT: injectGitHubPAT, checkGit: checkGit,
     createSession: createSession, archiveSession: archiveSession, stopSession: stopSession,
     deleteKnowledge: deleteKnowledge, deletePlaybook: deletePlaybook, deleteSecret: deleteSecret,
-    listIntegrations: listIntegrations, wipeAccount: wipeAccount
+    listIntegrations: listIntegrations, wipeAccount: wipeAccount,
+    getMessageLimit: getMessageLimit, setMessageLimit: setMessageLimit
   };
 })(window);

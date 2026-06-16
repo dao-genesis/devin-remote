@@ -151,12 +151,10 @@ function handle(m){
   if(op==='copyToken'){ try{N.clip&&N.clip(c.token||"");}catch(e){} _result('copyToken',true,'已复制 Token'); return; }
   if(op==='restart'){ try{N.relayRestart&&N.relayRestart();}catch(e){} _result('restart',true,'已请求重连中继'); setTimeout(_push,800); return; }
   if(op==='rotateToken'){
-    var hex=''; for(var k=0;k<32;k++) hex+='0123456789abcdef'[Math.random()*16|0];
-    var c=_conn(); c.token=hex;
-    try{ localStorage.setItem('rtflow.relay', JSON.stringify(c)); }catch(e){}
-    try{ N.saveRelayConfig&&N.saveRelayConfig(JSON.stringify(c)); }catch(e){}
+    // 由原生 SecureRandom 轮换 (保留设备 url/session 身份, 旧 token 立即失效)
+    try{ N.rotateRelayToken&&N.rotateRelayToken(); }catch(e){}
     try{ N.relayRestart&&N.relayRestart(); }catch(e){}
-    _result('rotateToken',true,'Token已刷新: '+hex.slice(0,8)+'… (新Token需重新分享给远程Agent)');
+    _result('rotateToken',true,'Token已刷新 (原生高熵·旧Token失效, 新Token需重新分享给远程Agent)');
     setTimeout(_push,1200);
     return;
   }
@@ -197,28 +195,24 @@ function _render(s){
   if(loggedIn){cfSt.textContent='✓ 用户通道'+(s.cfEmail?(' · '+s.cfEmail):'')+(s.mode==='named'?'（命名隧道运行中）':'');cfSt.style.color='#3fb950';document.getElementById('cfLoginForm').style.display='none';}
   else{cfSt.textContent='未配置（使用零配置快速隧道）';cfSt.style.color='';document.getElementById('cfLoginForm').style.display='block';}
 }
-// ── 动态穿透配置 (每设备独立·从 switch 面板迁移至此) ──
-function loadRelayCfg(){ try{ return JSON.parse(localStorage.getItem("rtflow.relay")||"{}"); }catch(e){ return {}; } }
+// ── 穿透配置 (每设备独立·原生身份为唯一真源) ──
+//  默认无需填写: 原生已自动生成「设备唯一 session + 每冷启动轮换 token」。此处仅供高级用户自定义中继。
 function saveRelayCfg(){
   var cfg={url:(v('cfgUrl')||"").trim(), token:(v('cfgToken')||"").trim(), session:(v('cfgSession')||"").trim()};
-  if(!cfg.url||!cfg.token||!cfg.session){ _result('saveCfg',false,'请填写完整 (url/token/session)'); return; }
-  var json=JSON.stringify(cfg);
-  localStorage.setItem("rtflow.relay", json);
-  try{ N.saveRelayConfig&&N.saveRelayConfig(json); }catch(e){}
+  if(!cfg.url||!cfg.session){ _result('saveCfg',false,'至少填写 url 与 session (token 留空则原生自动轮换)'); return; }
+  try{ N.saveRelayConfig&&N.saveRelayConfig(JSON.stringify(cfg)); }catch(e){}
   try{ N.relayRestart&&N.relayRestart(); }catch(e){}
-  _result('saveCfg',true,'已保存·重连中…'); setTimeout(_push,800);
+  _result('saveCfg',true,'已保存设备身份·重连中…'); setTimeout(_push,800);
 }
 function clearRelayCfg(){
-  localStorage.removeItem("rtflow.relay");
-  try{ N.saveRelayConfig&&N.saveRelayConfig("{}"); }catch(e){}
+  try{ N.saveRelayConfig&&N.saveRelayConfig("{}"); }catch(e){}   // 空配置=重置为原生自动身份
   try{ N.relayRestart&&N.relayRestart(); }catch(e){}
   document.getElementById('cfgUrl').value=""; document.getElementById('cfgToken').value=""; document.getElementById('cfgSession').value="";
-  _result('clearCfg',true,'已清除·回退内置 conn.json'); setTimeout(_push,800);
+  _result('clearCfg',true,'已重置为设备自动身份·重连中…'); setTimeout(_push,800);
 }
 function initRelayCfg(){
-  var cfg=loadRelayCfg();
+  var cfg=_conn();   // 显示当前原生设备身份 (token 不回填, 防泄露)
   if(cfg.url) document.getElementById('cfgUrl').value=cfg.url;
-  if(cfg.token) document.getElementById('cfgToken').value=cfg.token;
   if(cfg.session) document.getElementById('cfgSession').value=cfg.session;
 }
 initRelayCfg();

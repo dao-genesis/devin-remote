@@ -72,6 +72,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .row-r1{cursor:pointer}
 .eua{font-size:9px;background:#1a3a1a;color:#4ec9b0;padding:0 4px;border-radius:3px;font-weight:700;letter-spacing:.2px;flex-shrink:0}
 .eua0{font-size:9px;background:#1e1e1e;color:#444;padding:0 4px;border-radius:3px;font-weight:600;letter-spacing:.2px;flex-shrink:0;border:1px solid #2a2a2a}
+.eua-big{font-size:15px;font-weight:800;letter-spacing:.3px;flex-shrink:0;padding:0 5px;font-variant-numeric:tabular-nums}
 .chk{width:14px;height:14px;cursor:pointer;flex-shrink:0}
 .acc-no{flex-shrink:0;min-width:20px;height:18px;line-height:18px;text-align:center;font-size:12px;font-weight:800;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:3px;padding:0 3px}
 .dm{width:24px;height:14px;border-radius:2px;font-size:9px;font-weight:700;text-align:center;line-height:14px;flex-shrink:0;color:#aaa}
@@ -210,9 +211,9 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 <label class="auto-lbl" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" onchange="dvToggleAuto(this.checked)">自动备份</label>
 <label class="auto-lbl" title="备份完成且额度低于阈值时自动水过无痕清理"><input type="checkbox" id="dvAutoClean" onchange="dvToggleCleanup(this.checked)">自动清理</label>
 <label class="auto-lbl" title="额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="3" min="0" step="1" onchange="dvSetThreshold(this.value)"></label>
-<label class="auto-lbl" title="对话额度上限·知止不殆: 每对话上限=余额-缓冲"><input type="checkbox" id="dvConvCap" onchange="dvToggleConvCap(this.checked)">对话上限</label>
+<label class="auto-lbl" title="对话缓冲·知止不殆: 单话上限=余额-缓冲, 余额抵缓冲时解除让美金用尽 (默认开)"><input type="checkbox" id="dvConvCap" checked onchange="dvToggleConvCap(this.checked)">对话缓冲</label>
 <label class="auto-lbl" title="每对话上限缓冲($): 上限=余额-此缓冲">缓冲$<input type="number" id="dvConvBuf" value="3" min="0" step="0.01" onchange="dvSetConvBuffer(this.value)"></label>
-<label class="auto-lbl" title="耗尽自动重置·将欲予之必故予之: 余额抵缓冲时抬回上限让美金真正用尽"><input type="checkbox" id="dvConvDrain" onchange="dvToggleDrain(this.checked)">耗尽重置</label>
+<label class="auto-lbl" title="耗尽自动重置·将欲予之必故予之: 余额抵缓冲时抬回上限让美金真正用尽"><input type="checkbox" id="dvConvDrain" checked onchange="dvToggleDrain(this.checked)">耗尽重置</label>
 <label class="auto-lbl"><select title="备份模式" onchange="dvSetMode(this.value)"><option value="folder">文件夹</option><option value="zip">ZIP</option></select></label>
 </div>
 <div class="dv-tb">
@@ -268,10 +269,12 @@ function rowHtml(a,i){
   var emailShort = String(a.email||a.id||("acc"+i));
   if(emailShort.length>30) emailShort = emailShort.slice(0,28)+"…";
   var q = a.quota||{}; var checked = (typeof q.dPct==="number");
-  var planTag = a.plan?('<span class="plan-tag">'+_esc(a.plan)+'</span>'):"";
   var dollars = ovDollars(q);
-  var euaTag = (checked && dollars>0)?('<span class="eua" title="Extra Usage · 美金额度 $'+dollars.toFixed(2)+'">$'+Math.round(dollars)+'</span>'):(checked?'<span class="eua0">$0</span>':"");
-  var authTag = auth?'<span class="eua" title="已登录·可注入">登</span>':'<span class="uc" title="需登录解锁">需登</span>';
+  // 只保留美刀额度(放大显示), 去掉 free 套餐标 与 登/需登 标 (登录入口仍在第二行按钮)
+  var dcolor = (dollars<3?"#f44":(dollars<8?"#e8c84a":"#4ec9b0"));
+  var euaTag = checked
+    ? ('<span class="eua-big" style="color:'+dcolor+'" title="Extra Usage · 美金额度 $'+dollars.toFixed(2)+(dollars<3?" · 额度偏低!":"")+'">$'+dollars.toFixed(2)+'</span>')
+    : '<span class="eua-big" style="color:#666" title="未刷新额度">$--</span>';
   return ''+
   '<div class="row'+(active?" act":"")+(auth?"":" expired-row")+'" data-i="'+i+'" data-id="'+_esc(a.id)+'" data-email="'+_esc((a.email||"").toLowerCase())+'">'+
     '<div class="row-r1" onclick="rowClick('+i+',event)">'+
@@ -279,7 +282,7 @@ function rowHtml(a,i){
       '<span class="acc-no" title="编号 '+(i+1)+'">'+(i+1)+'</span>'+
       '<span class="dm '+db[0]+'" title="'+_esc(db[1])+'">'+db[0]+'</span>'+
       '<span class="em" title="'+_esc(a.email||a.id)+'">'+_esc(emailShort)+'</span>'+
-      planTag+euaTag+authTag+
+      euaTag+
       '<span class="dv-run" id="dvRun'+i+'"></span>'+
     '</div>'+
     '<div class="row-r2">'+
@@ -557,38 +560,72 @@ async function gitDisconnect(i){ var a=loadAcc()[i]; if(!a)return; if(!confirm("
 //  对话追踪 (Devin Cloud · 1:1 桌面 _dvStatusAggHtml + _dvRunPoll · 去 Cascade)
 // ════════════════════════════════════════════════════════════════════════
 var _trk = {}; // email → {no,who,running,awaiting,blocked,total,items,ts}
-// ── 卡住兜底检测 (增量更新): 会话状态=running 但内容长期无增量更新 → 判定卡住 ──
-//   根因: v2sessions 列表的 status_enum 在"待输入/被问问题/action required"时仍报 running,
-//   故仅凭状态字段识别不出卡住。改用"对话备份增量更新"信号: 列表项时间戳/计数 (零成本),
-//   无可用字段时回退抓事件流 (与备份模块同源) 取末事件签名。签名在 STUCK_MS 内不变即卡住。
-var _sigMap = {};            // uuid → {sig,since,probeTs,cachedSig}
-var STUCK_MS = 180000;       // 运行中且 3 分钟无任何增量更新 → 卡住
-var STUCK_PROBE_MS = 90000;  // 单会话事件流探测节流 (无列表时间戳字段时才用)
+// ── 卡住全情形检测 (逆流事件流): 列表 status_enum 在"待输入/被问问题/action required/
+//   额度超限"时仍报 running, 单看状态字段识别不出。改抓事件流(与备份模块同源)逆流判定:
+//   ① 末条有意义事件=devin_message → Devin 说完在等你(问问题/action required) → 立即卡住
+//   ② 末事件文本含 额度/ACU/credit/insufficient/quota → 额度超限卡住
+//   ③ 末事件=报错/失败 → 错误卡住
+//   ④ 事件签名(数量+末时间)在 STUCK_MS 内无任何增量 → 长期停滞卡住
+//   事件流探测按 PROBE_MS 节流、每轮限额 _probeBudget, 结果缓存在 _sigMap。
+var _sigMap = {};            // uuid → {sig,since,probeTs,wait,reason,probed,esig}
+var STUCK_MS = 180000;       // 运行中且 3 分钟"零进度"(列表+事件流双签名均无变化) → 真停滞卡住
+var PROBE_MS = 60000;        // 单会话事件流探测节流
+var _probeBudget = 0;        // 每轮 pollTrk 的事件探测配额 (控开销)
+function _evMsgText(ev){ try{ var m=ev.message; if(m&&typeof m==="object") m=m.text||m.message||JSON.stringify(m); return String(m||ev.content||ev.text||ev.status||"").toLowerCase(); }catch(e){ return ""; } }
+// 零成本「活性签名」: 列表项任一时间戳/计数/状态变化即说明 working 有进度 → 不算停滞。
+//   working 通常 updated_at / acu / 消息数 持续变化, 据此可靠区分"真停滞"与"正在干活只是没发言"。
 function _liveSig(s){
-  var parts=[];
-  ["updated_at","last_updated_at","last_updated","modified_at","status_updated_at","last_message_at","last_activity_at","updatedAt","last_event_at","latest_event_at"].forEach(function(k){ if(s[k]!=null) parts.push(k+"="+s[k]); });
-  ["acu_used","acus","acu","num_messages","message_count","messages_count","event_count","num_events","snapshot_count","steps","step_count"].forEach(function(k){ if(s[k]!=null) parts.push(k+"="+s[k]); });
-  return parts.length?parts.join("|"):null;
+  if(!s) return "";
+  var t = s.updated_at || s.updated_at_ms || s.last_updated_at || s.last_updated || s.modified_at
+        || s.last_message_at || s.last_message_sent_at || s.last_event_at || s.last_activity_at || "";
+  var acu = s.acus_used!=null?s.acus_used:(s.acu_used!=null?s.acu_used:(s.acus!=null?s.acus:(s.acu!=null?s.acu:(s.total_acus!=null?s.total_acus:""))));
+  var mc = s.message_count!=null?s.message_count:(s.messages_count!=null?s.messages_count:(s.num_messages!=null?s.num_messages:""));
+  var st = s.status_enum||s.status||"";
+  return [t,acu,mc,st].join("|");
 }
 async function refineStuck(a, item){
   var uuid=item.uuid; if(!uuid) return;
   var now=Date.now();
-  var rec=_sigMap[uuid]||{sig:null,since:now,probeTs:0,cachedSig:null};
-  var sig=item._sig;
-  // 列表无任何增量字段 → 回退抓事件流 (节流) 取 事件数+末事件时间 作签名
-  if(sig==null){
-    if(now-rec.probeTs>=STUCK_PROBE_MS){
-      rec.probeTs=now;
-      try{ var ev=await DaoCloud.sessionEvents(a, uuid);
-        if(ev&&ev.ok){ var evs=ev.events||[]; var last=evs.length?evs[evs.length-1]:null;
-          var lt=last?(last.created_at_ms||last.timestamp||0):0; rec.cachedSig="e:"+evs.length+":"+lt; }
-      }catch(e){}
-    }
-    sig=rec.cachedSig;
+  var rec=_sigMap[uuid]||{sig:null,since:now,probeTs:0,wait:false,reason:"",probed:false,esig:null};
+  // ① 列表活性签名 (每轮零成本): 有变化 → 有进度, 重置停滞计时并清掉旧的停滞标记
+  var ls=item.fsig||"";
+  if(ls){
+    if(rec.sig===null){ rec.sig=ls; rec.since=now; rec.probed=true; }
+    else if(ls!==rec.sig){ rec.sig=ls; rec.since=now; if(rec.reason==="stall"){ rec.wait=false; rec.reason=""; } }
   }
-  if(sig!=null){ if(sig!==rec.sig){ rec.sig=sig; rec.since=now; } }
+  // ② 事件流探测 (节流·限额): 既作活性来源(末事件变化→重置停滞), 又识别 待你回复/额度/报错(即时红)
+  var due=(now-rec.probeTs)>=PROBE_MS;
+  if(due && _probeBudget>0){
+    _probeBudget--; rec.probeTs=now;
+    try{ var ev=await DaoCloud.sessionEvents(a, uuid);
+      if(ev&&ev.ok){
+        var evs=(ev.events||[]).filter(function(e){return e&&e.type;});
+        var SK={is_typing:1,terminal_update:1,context_growth_update:1,iteration_checkpoint:1,acu_consumption_at_last_user_interaction:1,rules_injected:1};
+        var mn=evs.filter(function(e){return !SK[e.type];});
+        var last=mn.length?mn[mn.length-1]:null;
+        var lastAny=evs.length?evs[evs.length-1]:null;
+        var lt=lastAny?(lastAny.created_at_ms||lastAny.timestamp||0):0;
+        var esig="e:"+evs.length+":"+lt;          // 含 terminal_update 等→正在干活时持续变化
+        if(rec.esig===null){ rec.esig=esig; }
+        else if(esig!==rec.esig){ rec.esig=esig; rec.since=now; if(rec.reason==="stall"){ rec.wait=false; rec.reason=""; } }
+        rec.probed=true;
+        // 即时卡住情形 (与停滞计时无关): 仅当末"有意义"事件指向需你处理时才置
+        var wasReason=rec.reason;
+        rec.wait=false; rec.reason=(wasReason==="stall"?"":wasReason);
+        if(last){
+          var lm=_evMsgText(last);
+          if(/额度|余额|acu|credit|insufficient|out of (acu|credit)|quota|exceed/.test(lm)){ rec.wait=true; rec.reason="quota"; }
+          else if(last.type==="devin_message"){ rec.wait=true; rec.reason="await"; }       // 说完在等你
+          else if(/error|failed|失败|报错|exception|timed? ?out|超时/.test(String(last.type||"")+" "+lm)){ rec.wait=true; rec.reason="error"; }
+        }
+      }
+    }catch(e){}
+  }
   _sigMap[uuid]=rec;
-  if(sig!=null && (now-rec.since)>=STUCK_MS){ item.cls="blocked"; item._stuck=true; }
+  // 即时红: 被你问/额度超限/报错 (探测命中才置)
+  if(rec.wait){ item.cls="blocked"; item._stuck=rec.reason||"await"; }
+  // 真停滞红: 必须已有基线观测(probed) 且 列表+事件双签名连续 STUCK_MS 零变化 (working 有进度不会触发)
+  else if(rec.probed && rec.sig!=null && (now-rec.since)>=STUCK_MS){ item.cls="blocked"; item._stuck="stall"; }
 }
 function _pruneSig(){ var now=Date.now(); for(var k in _sigMap){ if(_sigMap.hasOwnProperty(k)&&(now-(_sigMap[k].since||0))>1800000) delete _sigMap[k]; } }
 var _untrackedUuids = (function(){try{return new Set(JSON.parse(localStorage.getItem("rtflow.untracked")||"[]"));}catch(e){return new Set();}})();
@@ -604,8 +641,9 @@ function trkHtml(){
     st.items.slice(0,6).forEach(function(it){
       if(it.uuid && _untrackedUuids.has(it.uuid)) return;
       var cls=it.cls==="running"?"running":it.cls==="awaiting"?"awaiting":"blocked";
+      var lbl=cls==="running"?"运行":cls==="awaiting"?"待输入":(it._stuck==="await"?"待你回复":it._stuck==="quota"?"额度超限":it._stuck==="error"?"报错":it._stuck==="stall"?"停滞":"卡住");
       var xBtn = it.uuid ? ' <span style="cursor:pointer;color:#666;margin-left:2px" onclick="stopTrack(\''+_esc(it.uuid)+'\')" title="停止追踪此对话(永久)">&times;</span>' : '';
-      rows.push('<div class="dv-trk-item">'+noBadge+'<span class="dv-trk-st '+cls+'">'+(cls==="running"?"运行":cls==="awaiting"?"待输入":"卡住")+'</span>'+
+      rows.push('<div class="dv-trk-item">'+noBadge+'<span class="dv-trk-st '+cls+'">'+lbl+'</span>'+
         '<span class="dv-trk-who">'+_esc(st.who)+'</span><span class="dv-trk-tt" title="'+_esc(it.title)+'">'+_esc(String(it.title||"").slice(0,30))+'</span>'+xBtn+'</div>');
     });
   });
@@ -628,6 +666,7 @@ function paintRowRun(){
 var _trkBusy=false;
 async function pollTrk(){
   if(_trkBusy)return; _trkBusy=true;
+  _probeBudget=12; // 每轮事件流探测配额, 控网络开销
   var dot=document.getElementById("monDot"), mstat=document.getElementById("monStat");
   try{
     var accs=loadAcc().filter(hasAuth);
@@ -635,18 +674,18 @@ async function pollTrk(){
     for(var i=0;i<accs.length;i++){
       var a=accs[i]; var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)continue;
       var running=0,awaiting=0,blocked=0,items=[];
-      (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var cls=sessStatus(s)[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked")return; items.push({cls:cls,title:s.title||s.name||"",uuid:uuid,_sig:_liveSig(s)}); });
-      // 增量兜底: running 项若内容长期无增量更新 → 转 blocked(卡住)
+      (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var cls=sessStatus(s)[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked")return; items.push({cls:cls,title:s.title||s.name||"",uuid:uuid,fsig:_liveSig(s)}); });
+      // 逆流兜底: running 项抓事件流判定 等你/额度/报错/停滞 → 转 blocked(卡住)
       for(var k=0;k<items.length;k++){ if(items[k].cls==="running"){ try{ await refineStuck(a, items[k]); }catch(e){} } }
       items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="blocked")blocked++; });
       var total=running+awaiting+blocked;
       if(total>0) _trk[(a.email||"").toLowerCase()]={no:i+1,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,total:total,items:items,ts:Date.now()};
       else delete _trk[(a.email||"").toLowerCase()];
-      // 推送该账号"最活跃对话名+状态"到顶部标签 (运行>卡顿>等待优先)
+      // 推送该账号"最需关注对话名+状态"到顶部标签 (卡住/待你>待输入>运行优先, 让需你处理的浮上来)
       try{
-        var top=items.filter(function(x){return x.cls==="running";})[0]
-              || items.filter(function(x){return x.cls==="blocked";})[0]
-              || items.filter(function(x){return x.cls==="awaiting";})[0] || null;
+        var top=items.filter(function(x){return x.cls==="blocked";})[0]
+              || items.filter(function(x){return x.cls==="awaiting";})[0]
+              || items.filter(function(x){return x.cls==="running";})[0] || null;
         var nm = top ? (top.title||"") : "";
         var stt = top ? (top.cls==="blocked"?"blocked":(top.cls==="awaiting"?"blocked":"running")) : "finished";
         if(N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }
@@ -716,17 +755,64 @@ function _setCfg(k,v){ localStorage.setItem("rtflow.cfg."+k, JSON.stringify(v));
 function dvToggleAuto(v){ _setCfg("autoBackup",!!v); toast(v?"自动备份已开":"自动备份已关"); }
 function dvToggleCleanup(v){ _setCfg("autoCleanup",!!v); toast(v?"自动清理已开":"自动清理已关"); }
 function dvSetThreshold(v){ _setCfg("autoThreshold",parseFloat(v)||3); }
-function dvToggleConvCap(v){ _setCfg("convCap",!!v); toast(v?"对话上限已开":"对话上限已关"); }
-function dvSetConvBuffer(v){ _setCfg("convBuffer",parseFloat(v)||3); }
-function dvToggleDrain(v){ _setCfg("convDrain",!!v); }
+function dvToggleConvCap(v){ _setCfg("convCap",!!v); toast(v?"对话缓冲已开·按余额自动设单话上限":"对话缓冲已关·解除单话上限"); if(v){ applyConvCapsAll(); } else { clearConvCapsAll(); } }
+function dvSetConvBuffer(v){ _setCfg("convBuffer",parseFloat(v)||3); _capApplied={}; applyConvCapsAll(); }
+function dvToggleDrain(v){ _setCfg("convDrain",!!v); _capApplied={}; applyConvCapsAll(); }
 function dvSetMode(v){ _setCfg("backupMode",v); toast("备份模式: "+v); }
 function _initCfgUI(){
   var ab=document.getElementById("dvAutoBk"); if(ab) ab.checked=_cfg("autoBackup",true);
   var ac=document.getElementById("dvAutoClean"); if(ac) ac.checked=_cfg("autoCleanup",false);
   var at=document.getElementById("dvThreshold"); if(at) at.value=_cfg("autoThreshold",3);
-  var cc=document.getElementById("dvConvCap"); if(cc) cc.checked=_cfg("convCap",false);
+  var cc=document.getElementById("dvConvCap"); if(cc) cc.checked=_cfg("convCap",true);
   var cb=document.getElementById("dvConvBuf"); if(cb) cb.value=_cfg("convBuffer",3);
   var cd=document.getElementById("dvConvDrain"); if(cd) cd.checked=_cfg("convDrain",true);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  美刀额度自动刷新(有对话的账号高频) + <$3 提醒 + 对话缓冲(单条消息额度上限)自适应
+//  对话缓冲逻辑(道法自然·知止不殆): 单话上限 = 余额 - 间隔(缓冲)。如 余额$70、间隔$3 → 上限$67;
+//   $50→$47。余额降到 ≤ 间隔(缓冲)时, 解除限制(抬到极高数, 而非0)让用户把余额全部用尽。
+//   触限(末事件命中 额度/credit/quota) → 追踪面板标红"额度超限"并提醒。
+// ════════════════════════════════════════════════════════════════════════
+var _capApplied = {};        // id → 上次已写入的 max_credits (避免重复 POST)
+var _balAlertTs = {};        // id → 上次低额提醒时间 (节流 10 分钟)
+var _quotaBusy = false, _idleCursor = 0;
+function _hasLiveConv(a){ var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<180000); }
+async function applyConvCapFor(a){
+  if(!_cfg("convCap",true) || !hasAuth(a)) return;
+  var q=a.quota; if(!q||typeof q.dPct!=="number") return;   // 未知余额不动
+  var bal=ovDollars(q);
+  var buffer=parseFloat(_cfg("convBuffer",3)); if(!(buffer>=0)) buffer=3;
+  var drain=_cfg("convDrain",true);
+  var target;
+  if(bal<=buffer){ target = drain ? 99999 : Math.max(0,Math.round(bal*100)/100); }   // 余额抵缓冲 → 抬高让其用尽
+  else { target = Math.round((bal-buffer)*100)/100; }
+  if(target<0) target=0;
+  if(_capApplied[a.id]===target) return;
+  try{ var r=await DaoCloud.setMessageLimit(a,target); if(r&&r.ok) _capApplied[a.id]=target; }catch(e){}
+}
+async function applyConvCapsAll(){ var accs=loadAcc().filter(hasAuth); for(var i=0;i<accs.length;i++){ await applyConvCapFor(accs[i]); } }
+async function clearConvCapsAll(){ var accs=loadAcc().filter(hasAuth); for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.setMessageLimit(accs[i],99999); if(r&&r.ok) _capApplied[accs[i].id]=99999; }catch(e){} } }
+function _balAlert(a){
+  var q=a.quota; if(!q||typeof q.dPct!=="number") return;
+  var bal=ovDollars(q);
+  if(bal<3){ var t=_balAlertTs[a.id]||0; if(Date.now()-t>600000){ _balAlertTs[a.id]=Date.now(); toast("⚠ "+String(a.email||a.id).split("@")[0]+" 额度仅 $"+bal.toFixed(2)+" (<$3)",true); } }
+}
+async function autoQuotaTick(){
+  if(_quotaBusy) return; _quotaBusy=true;
+  try{
+    var accs=loadAcc().filter(hasAuth);
+    var idle=accs.filter(function(a){return !_hasLiveConv(a);});
+    var batch=accs.filter(_hasLiveConv);                          // 有对话 → 本轮必刷(高频)
+    for(var n=0;n<2 && idle.length;n++){ batch.push(idle[_idleCursor%idle.length]); _idleCursor++; }  // 空闲轮转少量
+    var seen={};
+    for(var i=0;i<batch.length;i++){ var a=batch[i]; if(!a||seen[a.id])continue; seen[a.id]=1;
+      try{ await DaoCore.refreshQuotaFor(a.id); }catch(e){}
+      var fresh=DaoCore.findAcc(a.id)||a; _balAlert(fresh); await applyConvCapFor(fresh);
+    }
+    if(batch.length) render();
+  }catch(e){}
+  _quotaBusy=false;
 }
 
 // ── 初始化 ──
@@ -744,5 +830,8 @@ pollTrk();
 window.addEventListener("focus", render);
 setInterval(render, 8000);
 setInterval(pollTrk, 30000);
+// 美刀额度: 有对话的账号每 15s 高频刷新, 空闲账号轮转; 同步施加对话缓冲单话上限 + 低额提醒
+setTimeout(autoQuotaTick, 4000);
+setInterval(autoQuotaTick, 15000);
 </script>
 </body></html>

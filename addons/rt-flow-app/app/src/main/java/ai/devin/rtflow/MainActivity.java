@@ -51,8 +51,10 @@ import org.json.JSONObject;
 
 import android.content.SharedPreferences;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -89,6 +91,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREFS = "rtflow_tabs";
 
     private ValueCallback<Uri[]> filePathCallback;
+    private Uri cameraOutputUri;          // 网页上传时相机拍照的落地 Uri (FileProvider)
     private androidx.activity.result.ActivityResultLauncher<Intent> fileChooser;
 
     private FrameLayout content;
@@ -99,6 +102,7 @@ public class MainActivity extends AppCompatActivity {
     private FrameLayout dlPanel;
     private LinearLayout dlListCol;
     private volatile String sEngineCache = null;
+    private volatile String curProxy = null;   // 已应用到内置浏览器(全部 WebView)的本地代理 host:port; null=直连
     private final java.util.Map<Long, String[]> dlPending = new java.util.concurrent.ConcurrentHashMap<>();
     private android.content.BroadcastReceiver dlReceiver;
 
@@ -121,21 +125,27 @@ public class MainActivity extends AppCompatActivity {
         }
         fileChooser = registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), result -> {
             ValueCallback<Uri[]> cb = filePathCallback; filePathCallback = null;
+            Uri camUri = cameraOutputUri; cameraOutputUri = null;
             if (cb == null) return;
             Uri[] uris = null;
             Intent data = result.getData();
-            if (result.getResultCode() == RESULT_OK && data != null) {
-                if (data.getClipData() != null) {
+            if (result.getResultCode() == RESULT_OK) {
+                if (data != null && data.getClipData() != null) {
                     int n = data.getClipData().getItemCount();
                     uris = new Uri[n];
                     for (int i = 0; i < n; i++) uris[i] = data.getClipData().getItemAt(i).getUri();
-                } else if (data.getData() != null) {
+                } else if (data != null && data.getData() != null) {
                     uris = new Uri[]{ data.getData() };
+                } else if (camUri != null) {
+                    // 相机拍照分支: 结果 Intent 无 data, 照片已写入我们预置的 FileProvider Uri
+                    uris = new Uri[]{ camUri };
                 }
             }
             cb.onReceiveValue(uris);
         });
+        ensureRelayIdentity();   // 去中心化: 设备唯一 session(防卸载) + 每冷启动轮换 token → relay-config.json
         startRelay();
+        restoreWebProxy();       // 恢复上次选定的本地代理路由(若代理仍在线), 重启沿用
         refreshSearchEngine();   // 后端自动判定搜索引擎(有VPN且能连Google→Google, 否则→百度)
         // 下载完成广播 → 落入应用内下载管理器
         dlReceiver = new android.content.BroadcastReceiver() {
@@ -317,6 +327,113 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) { return false; }
         finally { if (c != null) c.disconnect(); }
     }
+
+    // ── VPN / 本地代理 实时识别 + 联动 ─────────────────────────────────────
+    //  道法自然: 不窃取任何外部 VPN App 的私有密钥(沙箱禁止·违规)。改为合法两件事:
+    //   ① 实时识别系统 VPN 开关/接口/DNS + 已装的 VPN/代理 App (PackageManager)
+    //   ② 探测本机正在跑的本地代理端口(clash/v2ray/sing-box), 一键把内置浏览器
+    //      全部 WebView 出站流量路由经它 → 不依赖系统级 VPN 即可"在 App 内用上"。
+    private static final int[] PROXY_PORTS = {7890, 7891, 7897, 1080, 10808, 10809, 8889, 8080, 2080, 9090};
+    private static final String[][] KNOWN_VPN_APPS = {
+        {"com.github.metacubex.clash.meta", "Clash Meta for Android"},
+        {"com.github.kr328.clash", "Clash for Android"},
+        {"io.nekohasekai.sfa", "sing-box"},
+        {"com.v2ray.ang", "v2rayNG"},
+        {"app.hiddify.com", "Hiddify"},
+        {"com.wireguard.android", "WireGuard"},
+        {"org.outline.android.client", "Outline"},
+        {"com.github.shadowsocks", "Shadowsocks"},
+    };
+    /** 探测 127.0.0.1 上常见 clash/v2ray/sing-box 代理端口, 返回首个可连 "host:port"(无则"")。 */
+    private String detectLocalProxy() {
+        for (int p : PROXY_PORTS) {
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.connect(new java.net.InetSocketAddress("127.0.0.1", p), 250);
+                return "127.0.0.1:" + p;
+            } catch (Exception ignored) {}
+        }
+        return "";
+    }
+    private JSONObject installedVpnAppObj(String pkg, String name) {
+        try { JSONObject j = new JSONObject(); j.put("pkg", pkg); j.put("name", name); return j; } catch (Exception e) { return null; }
+    }
+    /** 实时综合状态: 系统 VPN 是否在用 / 接口 / DNS / 已装 VPN App / 本地代理 / 已路由代理。 */
+    private String vpnStatusJson() {
+        JSONObject o = new JSONObject();
+        try {
+            boolean vpn = false; String iface = ""; org.json.JSONArray dns = new org.json.JSONArray();
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null && Build.VERSION.SDK_INT >= 21) {
+                for (android.net.Network n : cm.getAllNetworks()) {
+                    NetworkCapabilities cap = cm.getNetworkCapabilities(n);
+                    if (cap != null && cap.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                        vpn = true;
+                        try {
+                            android.net.LinkProperties lp = cm.getLinkProperties(n);
+                            if (lp != null) {
+                                if (lp.getInterfaceName() != null) iface = lp.getInterfaceName();
+                                for (java.net.InetAddress a : lp.getDnsServers()) dns.put(a.getHostAddress());
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+            org.json.JSONArray apps = new org.json.JSONArray();
+            android.content.pm.PackageManager pm = getPackageManager();
+            for (String[] k : KNOWN_VPN_APPS) {
+                boolean inst; try { pm.getPackageInfo(k[0], 0); inst = true; } catch (Exception e) { inst = false; }
+                if (inst) { JSONObject j = installedVpnAppObj(k[0], k[1]); if (j != null) apps.put(j); }
+            }
+            o.put("vpnActive", vpn);
+            o.put("iface", iface);
+            o.put("dns", dns);
+            o.put("apps", apps);
+            o.put("proxy", detectLocalProxy());
+            o.put("proxyApplied", curProxy == null ? "" : curProxy);
+            o.put("ts", System.currentTimeMillis());
+        } catch (Exception e) { try { o.put("error", String.valueOf(e)); } catch (Exception ig) {} }
+        return o.toString();
+    }
+    /** 把内置浏览器(进程内全部 WebView)出站流量路由经本地代理 host:port (代理优先·失败直连兜底)。 */
+    private boolean applyWebViewProxy(String hostPort) {
+        try {
+            if (hostPort == null || hostPort.trim().isEmpty()) return clearWebViewProxy();
+            if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) return false;
+            String hp = hostPort.trim();
+            androidx.webkit.ProxyConfig cfg = new androidx.webkit.ProxyConfig.Builder()
+                    .addProxyRule(hp).addDirect().build();
+            androidx.webkit.ProxyController.getInstance().setProxyOverride(cfg, Runnable::run, () -> {});
+            curProxy = hp;
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("webProxy", hp).apply();
+            return true;
+        } catch (Exception e) { return false; }
+    }
+    private boolean clearWebViewProxy() {
+        try {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE))
+                androidx.webkit.ProxyController.getInstance().clearProxyOverride(Runnable::run, () -> {});
+            curProxy = null;
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove("webProxy").apply();
+            return true;
+        } catch (Exception e) { return false; }
+    }
+    /** 冷启动恢复上次选定的本地代理路由 (用户选择持久化, 重启沿用)。 */
+    private void restoreWebProxy() {
+        try {
+            String hp = getSharedPreferences(PREFS, MODE_PRIVATE).getString("webProxy", "");
+            if (hp != null && !hp.isEmpty()) new Thread(() -> applyWebViewProxyIfReachable(hp)).start();
+        } catch (Exception ignored) {}
+    }
+    private void applyWebViewProxyIfReachable(String hp) {
+        try {
+            String[] parts = hp.split(":");
+            if (parts.length != 2) return;
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.connect(new java.net.InetSocketAddress(parts[0], Integer.parseInt(parts[1])), 400);
+            } catch (Exception e) { return; }   // 代理已不在 → 不强行套用, 保持直连
+            main.post(() -> applyWebViewProxy(hp));
+        } catch (Exception ignored) {}
+    }
     private String searchUrl(String q) {
         String enc = android.net.Uri.encode(q);
         return "baidu".equals(searchEngine())
@@ -407,15 +524,9 @@ public class MainActivity extends AppCompatActivity {
             @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
                 if (filePathCallback != null) { try { filePathCallback.onReceiveValue(null); } catch (Exception ignored) {} }
                 filePathCallback = cb;
-                Intent intent;
-                try { intent = params.createIntent(); }
-                catch (Exception e) { intent = new Intent(Intent.ACTION_GET_CONTENT); intent.setType("*/*"); intent.addCategory(Intent.CATEGORY_OPENABLE); }
-                if (intent.getType() == null) intent.setType("*/*");
-                if (params != null && params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE)
-                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-                try { fileChooser.launch(Intent.createChooser(intent, "选择要上传的文件")); }
-                catch (Exception e) { filePathCallback = null; toast("无法打开文件选择器"); return false; }
-                return true;
+                cameraOutputUri = null;
+                try { fileChooser.launch(buildUploadChooser(params)); return true; }
+                catch (Exception e) { filePathCallback = null; toast("无法打开上传选择器"); return false; }
             }
             // 新窗口 (window.open / target=_blank): 开一个新标签承接 → 修登录其他网页/弹窗跳转
             @Override public boolean onCreateWindow(WebView v, boolean dialog, boolean userGesture, android.os.Message resultMsg) {
@@ -620,7 +731,7 @@ public class MainActivity extends AppCompatActivity {
             switch (it.getItemId()) {
                 case 1: copyTabAccount(t); return true;
                 case 2: renameTab(idx); return true;
-                case 3: addBookmark(t.url, chipTitle(t)); return true;
+                case 3: addBookmark(t.url, chipTitle(t), t); return true;
                 case 4: closeTab(idx); return true;
             }
             return false;
@@ -681,6 +792,84 @@ public class MainActivity extends AppCompatActivity {
         else startService(svc);
     }
 
+    // ── 内网穿透「去中心化」身份 ────────────────────────────────────────────
+    //  零账号配对中继 (dao-relay): (session,token) 即命名空间, 谁知道谁可驱动。
+    //  · session = 设备唯一身份, 持久化到防卸载 vault → 重装/换机沿用同一身份(数据不丢)
+    //  · token   = 每次冷启动用 SecureRandom 高熵轮换 → 旧 token 立即失效(安全)
+    //  · url     = 中继会合点 (conn.json 默认 worker, 可被用户覆盖)
+    //  生成的 relay-config.json 写入 filesDir, 供 RelayService 引擎 N.getConn() 读取。
+    private static String randHex(int nChars) {
+        java.security.SecureRandom r = new java.security.SecureRandom();
+        char[] H = "0123456789abcdef".toCharArray();
+        StringBuilder b = new StringBuilder(nChars);
+        for (int i = 0; i < nChars; i++) b.append(H[r.nextInt(16)]);
+        return b.toString();
+    }
+    private String readAssetText(String path) {
+        try (InputStream is = getAssets().open(path)) {
+            ByteArrayOutputStream bo = new ByteArrayOutputStream(); byte[] buf = new byte[4096]; int n;
+            while ((n = is.read(buf)) > 0) bo.write(buf, 0, n);
+            return bo.toString("UTF-8");
+        } catch (Exception e) { return ""; }
+    }
+    private String defaultRelayBase() {
+        try { JSONObject c = new JSONObject(readAssetText("engine/conn.json")); String u = c.optString("url", ""); if (!u.isEmpty()) return u; }
+        catch (Exception ignored) {}
+        return "https://dao-relay-do.zhouyoukang.workers.dev";
+    }
+    private void writeRelayConfig(String json) {
+        try (FileOutputStream o = new FileOutputStream(new File(getFilesDir(), "relay-config.json"))) {
+            o.write((json == null ? "{}" : json).getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ignored) {}
+    }
+    /** 冷启动: 取/建设备唯一 session(防卸载持久化), 轮换 token, 落地 relay-config.json。 */
+    private void ensureRelayIdentity() {
+        try {
+            JSONObject id;
+            String saved = vaultRead("relay-identity");
+            id = (saved != null && saved.trim().startsWith("{")) ? new JSONObject(saved) : new JSONObject();
+            String url = id.optString("url", "");
+            if (url.isEmpty()) url = defaultRelayBase();
+            String session = id.optString("session", "");
+            if (session.isEmpty()) session = "rtflow-" + randHex(16);
+            id.put("url", url); id.put("session", session);
+            vaultWrite("relay-identity", id.toString());   // 身份(url+session)防卸载持久化
+
+            String token = randHex(32);                    // 每次冷启动轮换
+            String base = url.replaceAll("/+$", "");
+            JSONObject cfg = new JSONObject();
+            cfg.put("url", url); cfg.put("token", token); cfg.put("session", session);
+            cfg.put("enabled", true);
+            cfg.put("endpoint", base + "/relay/" + session);
+            cfg.put("rotatedTs", System.currentTimeMillis());
+            writeRelayConfig(cfg.toString());
+        } catch (Exception ignored) {}
+    }
+    /** 用户在穿透面板手动保存配置: 持久化其 url/session 身份(token 仍每冷启动轮换); 空配置=重置为自动身份。 */
+    private void applyRelayConfig(String json) {
+        try {
+            if (json == null || json.trim().length() < 5 || "{}".equals(json.trim())) {
+                vaultWrite("relay-identity", "");   // 清身份 → 重新自动生成
+                ensureRelayIdentity();
+                return;
+            }
+            JSONObject in = new JSONObject(json);
+            String url = in.optString("url", defaultRelayBase());
+            String session = in.optString("session", "");
+            if (session.isEmpty()) session = "rtflow-" + randHex(16);
+            String token = in.optString("token", "");
+            if (token.isEmpty()) token = randHex(32);
+            JSONObject id = new JSONObject(); id.put("url", url); id.put("session", session);
+            vaultWrite("relay-identity", id.toString());
+            String base = url.replaceAll("/+$", "");
+            JSONObject cfg = new JSONObject();
+            cfg.put("url", url); cfg.put("token", token); cfg.put("session", session);
+            cfg.put("enabled", true); cfg.put("endpoint", base + "/relay/" + session);
+            cfg.put("rotatedTs", System.currentTimeMillis());
+            writeRelayConfig(cfg.toString());
+        } catch (Exception ignored) {}
+    }
+
     @Override public void onBackPressed() {
         if (active >= 0 && tabs.get(active).web.canGoBack()) { tabs.get(active).web.goBack(); return; }
         super.onBackPressed();
@@ -714,9 +903,10 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public String relayStatus() { return RelayService.lastStatus; }
         @JavascriptInterface public void relayRestart() { main.post(() -> { stopService(new Intent(MainActivity.this, RelayService.class)); startRelay(); }); }
         @JavascriptInterface public void saveRelayConfig(String json) {
-            RelayService r = RelayService.instance;
-            if (r != null) r.saveRelayConfig(json == null ? "{}" : json);
+            applyRelayConfig(json);   // 去中心化: 持久化设备身份(url/session) + 落地 relay-config.json
         }
+        // 面板「刷新Token」: 保留 url/session 身份, 仅轮换 token (旧 token 立即失效)
+        @JavascriptInterface public void rotateRelayToken() { ensureRelayIdentity(); }
         @JavascriptInterface public void clip(String text) {
             main.post(() -> {
                 try { ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -726,6 +916,14 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void toast(String s) { MainActivity.this.toast(s == null ? "" : s); }
         @JavascriptInterface public void openAccountTab(String accJson) { main.post(() -> newTab(DEVIN, accJson)); }
         @JavascriptInterface public void openUrlTab(String url) { main.post(() -> newTab(url == null ? DEVIN : url, null)); }
+        // 历史/书签里的多实例 Devin 条目: 用对应账号(注入鉴权)重开该 URL, 而非裸 location.href(会掉回官网登录页)
+        @JavascriptInterface public void reopenAccount(String accJson, String url) {
+            main.post(() -> {
+                String u = (url == null || url.isEmpty()) ? DEVIN : url;
+                if (accJson == null || accJson.isEmpty()) newTab(u, null);
+                else newTab(u, accJson);
+            });
+        }
         @JavascriptInterface public void openText(String title, String content) {
             main.post(() -> {
                 Tab t = makeTab(null, true); // internal=true → Native bridge available for download button
@@ -774,6 +972,17 @@ public class MainActivity extends AppCompatActivity {
                 catch (Exception e) { toast("未安装该 App: " + pkg); }
             });
         }
+        // ── VPN/本地代理 实时识别 + 联动内置浏览器 ──
+        /** 实时综合状态 JSON: 系统VPN开关/接口/DNS · 已装VPN App · 本地代理端口 · 当前已路由代理。 */
+        @JavascriptInterface public String vpnStatus() { return MainActivity.this.vpnStatusJson(); }
+        /** 探测本机本地代理 (clash/v2ray 端口), 返回 "host:port" 或 ""。 */
+        @JavascriptInterface public String detectProxy() { return MainActivity.this.detectLocalProxy(); }
+        /** 把内置浏览器全部 WebView 出站经本地代理路由 (host:port; 空=直连)。 */
+        @JavascriptInterface public boolean applyProxy(String hostPort) { return MainActivity.this.applyWebViewProxy(hostPort); }
+        /** 取消代理路由, 回到直连。 */
+        @JavascriptInterface public boolean clearProxy() { return MainActivity.this.clearWebViewProxy(); }
+        /** 当前已应用的代理 host:port (空=直连)。 */
+        @JavascriptInterface public String currentProxy() { return MainActivity.this.curProxy == null ? "" : MainActivity.this.curProxy; }
         /** 把文本(对话 MD/知识库/剧本等)落地到系统「下载」目录 — 单一对话下载到本地。 */
         @JavascriptInterface public String saveTextFile(String name, String content) {
             try {
@@ -815,6 +1024,12 @@ public class MainActivity extends AppCompatActivity {
     private static String escapeHtml(String s) {
         if (s == null) return "";
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    /** 将 JSON 安全内联进 <script>: 转义 < 与行分隔符, 防止破坏脚本块。 */
+    private static String jsEmbed(Object json) {
+        String s = json == null ? "[]" : json.toString();
+        return s.replace("<", "\\u003c").replace("\u2028", "").replace("\u2029", "");
     }
 
     /** http/https/file/about/javascript/data/blob 留在 WebView; 其余 scheme (mailto/tel/intent/market…) 交系统。 */
@@ -982,6 +1197,52 @@ public class MainActivity extends AppCompatActivity {
         return String.format(java.util.Locale.US, "%.1f GB", m / 1024.0);
     }
     private Uri fileUri(String path) { return FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", new File(path)); }
+    /** 网页 <input type=file> 上传: 像常规浏览器一样把 相机/图库/文件 并行罗列到同一个选择器。 */
+    private Intent buildUploadChooser(android.webkit.WebChromeClient.FileChooserParams params) {
+        String acc = "";
+        boolean multi = false;
+        if (params != null) {
+            try { multi = params.getMode() == android.webkit.WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE; } catch (Exception ignored) {}
+            String[] at = params.getAcceptTypes();
+            if (at != null) { for (String a : at) { if (a != null) acc += a.toLowerCase() + ","; } }
+        }
+        boolean wantImage = acc.isEmpty() || acc.contains("image") || acc.contains("*/*") || acc.contains(".jpg") || acc.contains(".png");
+        boolean wantVideo = acc.isEmpty() || acc.contains("video") || acc.contains("*/*") || acc.contains(".mp4");
+        // 主 Intent: 文件 (文档/云盘/任意类型)
+        Intent content;
+        try { content = (params != null) ? params.createIntent() : new Intent(Intent.ACTION_GET_CONTENT); }
+        catch (Exception e) { content = new Intent(Intent.ACTION_GET_CONTENT); }
+        if (content.getAction() == null) content.setAction(Intent.ACTION_GET_CONTENT);
+        if (content.getType() == null) content.setType("*/*");
+        content.addCategory(Intent.CATEGORY_OPENABLE);
+        if (multi) content.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        java.util.List<Intent> extra = new java.util.ArrayList<>();
+        // 图库 (照片/视频)
+        Intent gallery;
+        if (wantVideo && !wantImage) { gallery = new Intent(Intent.ACTION_PICK, android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI); gallery.setType("video/*"); }
+        else { gallery = new Intent(Intent.ACTION_PICK, android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI); gallery.setType(wantVideo ? "image/*,video/*" : "image/*"); }
+        if (multi) gallery.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        if (gallery.resolveActivity(getPackageManager()) != null) extra.add(gallery);
+        // 相机拍照 (输出到 FileProvider Uri, 结果回填)
+        if (wantImage) {
+            try {
+                File img = new File(getCacheDir(), "cam_" + System.currentTimeMillis() + ".jpg");
+                Uri out = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", img);
+                Intent cam = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
+                cam.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, out);
+                cam.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                if (cam.resolveActivity(getPackageManager()) != null) { cameraOutputUri = out; extra.add(cam); }
+            } catch (Exception ignored) {}
+        }
+        // 录像
+        if (wantVideo) {
+            Intent vid = new Intent(android.provider.MediaStore.ACTION_VIDEO_CAPTURE);
+            if (vid.resolveActivity(getPackageManager()) != null) extra.add(vid);
+        }
+        Intent chooser = Intent.createChooser(content, "上传 · 相机 / 图库 / 文件");
+        if (!extra.isEmpty()) chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, extra.toArray(new Intent[0]));
+        return chooser;
+    }
     private void openDownloaded(String path, String mime) {
         try {
             File f = new File(path);
@@ -1012,7 +1273,7 @@ public class MainActivity extends AppCompatActivity {
         String url = displayUrl(cur);
         if (url == null || url.startsWith("rtflow:") || url.startsWith("file:") || url.startsWith("about:")) { toast("内部页不可收藏"); return; }
         if (isBookmarked(url)) { removeBookmark(url); toast("已取消收藏"); }
-        else { addBookmark(url, chipTitle(cur)); }
+        else { addBookmark(url, chipTitle(cur), cur); }
         updateStar();
     }
     private boolean isBookmarked(String url) {
@@ -1151,6 +1412,7 @@ public class MainActivity extends AppCompatActivity {
             entry.put("url", url);
             entry.put("title", devin ? devinHistName(tab) : (title == null ? "" : title));
             entry.put("ts", System.currentTimeMillis());
+            if (devin) entry.put("account", tab.accountJson);   // 重新点击时用此账号注入鉴权重开
             // 去重最近同 URL
             for (int i = arr.length() - 1; i >= 0; i--) {
                 if (url.equals(arr.optJSONObject(i) != null ? arr.getJSONObject(i).optString("url") : "")) {
@@ -1201,11 +1463,15 @@ public class MainActivity extends AppCompatActivity {
             sb.append(".it .u{color:#8b949e;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
             sb.append("</style></head><body><h2>浏览历史</h2>");
             sb.append("<div class='sec'>⚡ 多实例 Devin 登录历史</div>");
+            org.json.JSONArray dvEntries = new org.json.JSONArray();   // 供前端按账号注入重开
             for (int i = devinArr.length() - 1; i >= 0; i--) {
                 org.json.JSONObject e = devinArr.getJSONObject(i);
                 String u = escapeHtml(e.optString("url", ""));
                 String t = escapeHtml(e.optString("title", ""));
-                sb.append("<div class='it dv' onclick=\"location.href='").append(u.replace("'", "\\'")).append("'\">");
+                org.json.JSONObject de = new org.json.JSONObject();
+                de.put("url", e.optString("url", "")); de.put("account", e.optString("account", ""));
+                int di = dvEntries.length(); dvEntries.put(de);
+                sb.append("<div class='it dv' onclick=\"openDevin(").append(di).append(")\">");
                 sb.append("<div class='t'>").append(t.isEmpty() ? u : t).append("</div>");
                 sb.append("<div class='u'>").append(u).append("</div></div>");
             }
@@ -1220,24 +1486,31 @@ public class MainActivity extends AppCompatActivity {
                 sb.append("<div class='u'>").append(u).append("</div></div>");
             }
             if (arr.length() == 0) sb.append("<div style='color:#6e7681;padding:10px 4px'>暂无常规浏览历史</div>");
-            sb.append("</body></html>");
-            Tab ht = newTab("about:blank", null);
+            sb.append("<script>var DV=").append(jsEmbed(dvEntries)).append(";");
+            sb.append("function openDevin(i){var e=DV[i];if(!e)return;try{if(window.Native&&Native.reopenAccount){Native.reopenAccount(e.account||'',e.url||'');return;}}catch(x){}location.href=e.url;}");
+            sb.append("</scr"+"ipt></body></html>");
+            Tab ht = makeTab(null, true);   // internal=true → Native 桥可用, 供按账号注入重开
+            selectTab(tabs.size() - 1);
             ht.title = "浏览历史";
-            ht.web.loadDataWithBaseURL(null, sb.toString(), "text/html", "utf-8", null);
+            ht.web.loadDataWithBaseURL("file:///android_asset/", sb.toString(), "text/html", "utf-8", null);
         } catch (Exception e) { toast("历史加载失败"); }
     }
 
     // ── 书签收藏 ──────────────────────────────────────────────────────────
-    private void addBookmark(String url, String title) {
+    private void addBookmark(String url, String title) { addBookmark(url, title, null); }
+    private void addBookmark(String url, String title, Tab tab) {
         if (url == null || url.startsWith("rtflow:") || url.startsWith("file:") || url.startsWith("about:")) { toast("内部页不可收藏"); return; }
+        boolean devin = tab != null && tab.accountJson != null && url.contains("devin.ai");
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
             org.json.JSONArray arr = new org.json.JSONArray(sp.getString("bookmarks", "[]"));
             for (int i = 0; i < arr.length(); i++) { if (url.equals(arr.getJSONObject(i).optString("url"))) { toast("已收藏过"); return; } }
             org.json.JSONObject e = new org.json.JSONObject();
             e.put("url", url); e.put("title", title == null ? url : title); e.put("ts", System.currentTimeMillis());
+            if (devin) { e.put("devin", true); e.put("account", tab.accountJson); }   // 多实例书签: 重开时注入鉴权
             arr.put(e);
             sp.edit().putString("bookmarks", arr.toString()).apply();
+            vaultWrite("bookmarks", arr.toString());
             toast("已收藏");
         } catch (Exception ignored) { toast("收藏失败"); }
     }
@@ -1245,27 +1518,43 @@ public class MainActivity extends AppCompatActivity {
     private void showBookmarks() {
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
-            org.json.JSONArray arr = new org.json.JSONArray(sp.getString("bookmarks", "[]"));
+            String raw = sp.getString("bookmarks", "[]");
+            if (raw == null || raw.isEmpty() || "[]".equals(raw)) { String v = vaultRead("bookmarks"); if (v != null && !v.isEmpty()) raw = v; }
+            org.json.JSONArray arr = new org.json.JSONArray(raw);
             StringBuilder sb = new StringBuilder();
             sb.append("<html><head><meta name=viewport content='width=device-width,initial-scale=1'>");
             sb.append("<style>body{background:#0e1116;color:#cdd3de;font:13px -apple-system,sans-serif;padding:12px}");
             sb.append("h2{color:#9cdcfe;margin-bottom:12px}");
-            sb.append(".it{padding:8px;border-bottom:1px solid #21262d}");
+            sb.append(".it{padding:8px;border-bottom:1px solid #21262d;cursor:pointer}");
+            sb.append(".it.dv{border-left:3px solid #2ea043;padding-left:8px}");
+            sb.append(".it:active{background:#1f3a45}");
             sb.append(".it .t{color:#e6edf3;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
             sb.append(".it .u{color:#8b949e;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
             sb.append("</style></head><body><h2>书签收藏</h2>");
+            org.json.JSONArray dvEntries = new org.json.JSONArray();
             for (int i = arr.length() - 1; i >= 0; i--) {
                 org.json.JSONObject e = arr.getJSONObject(i);
                 String u = escapeHtml(e.optString("url", "")), t = escapeHtml(e.optString("title", ""));
-                sb.append("<div class='it' onclick=\"location.href='").append(u.replace("'", "\\'")).append("'\">");
+                boolean dv = e.optBoolean("devin", false) && !e.optString("account", "").isEmpty();
+                if (dv) {
+                    org.json.JSONObject de = new org.json.JSONObject();
+                    de.put("url", e.optString("url", "")); de.put("account", e.optString("account", ""));
+                    int di = dvEntries.length(); dvEntries.put(de);
+                    sb.append("<div class='it dv' onclick=\"openDevin(").append(di).append(")\">");
+                } else {
+                    sb.append("<div class='it' onclick=\"location.href='").append(u.replace("'", "\\'")).append("'\">");
+                }
                 sb.append("<div class='t'>").append(t.isEmpty() ? u : t).append("</div>");
                 sb.append("<div class='u'>").append(u).append("</div></div>");
             }
             if (arr.length() == 0) sb.append("<div style='color:#6e7681;text-align:center;padding:40px'>暂无书签 — 点地址栏 ☆ 收藏本页</div>");
-            sb.append("</body></html>");
-            Tab bt = newTab("about:blank", null);
+            sb.append("<script>var DV=").append(jsEmbed(dvEntries)).append(";");
+            sb.append("function openDevin(i){var e=DV[i];if(!e)return;try{if(window.Native&&Native.reopenAccount){Native.reopenAccount(e.account||'',e.url||'');return;}}catch(x){}location.href=e.url;}");
+            sb.append("</scr"+"ipt></body></html>");
+            Tab bt = makeTab(null, true);   // internal=true → Native 桥可用
+            selectTab(tabs.size() - 1);
             bt.title = "书签";
-            bt.web.loadDataWithBaseURL(null, sb.toString(), "text/html", "utf-8", null);
+            bt.web.loadDataWithBaseURL("file:///android_asset/", sb.toString(), "text/html", "utf-8", null);
         } catch (Exception e) { toast("书签加载失败"); }
     }
 
