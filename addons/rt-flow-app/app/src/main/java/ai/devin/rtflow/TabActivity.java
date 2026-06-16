@@ -46,7 +46,7 @@ public class TabActivity extends AppCompatActivity {
 
         tabId = SEQ.getAndIncrement();
         TABS.put(tabId, label);
-        setTitle("RT Flow · " + label);
+        setTitle("Devin Cloud · " + label);
 
         web = new WebView(this);
         WebSettings s = web.getSettings();

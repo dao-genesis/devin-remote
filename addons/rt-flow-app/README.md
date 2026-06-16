@@ -1,4 +1,4 @@
-# Devin Cloud 手机版 · rt-flow-app (v0.14.3)
+# Devin Cloud 手机版 · rt-flow-app (v0.14.4)
 
 > **唯一的手机端方案**。取代了此前的 `rt-flow-mobile`（MV3 浏览器扩展·Kiwi 已停更）
 > 和 `dao-bridge-android`（Termux Node Agent）。一个 APK 六合一：切号 + 内网穿透 + 网页多实例 + **浏览器自动化** + **手机本体操控** + **渐进式文档**。
@@ -9,14 +9,14 @@
 
 | 模块 | 说明 |
 |------|------|
-| **切号面板** (`switch.html`) | 1:1 桌面 RT Flow 面板移植：账号列表 + per-account 展开（Sessions/Knowledge/Playbooks/Secrets/Git）+ 备份管理 + 下载管理 |
+| **切号面板** (`switch.html`) | 1:1 桌面版面板移植：账号列表 + per-account 展开（Sessions/Knowledge/Playbooks/Secrets/Git）+ 备份管理 + 下载管理 |
 | **内网穿透** (`relay-app.js` + `RelayService`) | 出站 WSS 连中继，**动态配置**（首次启动在面板填写 url/token/session，存 localStorage + userFile）；50+ RPC 命令远程驱动 |
 | **网页多实例** (`TabActivity`) | 每标签绑定一个账号，`fetch`/`XHR` 注入鉴权头 + `sessionStorage` 隔离登录态 → 多号共存 |
 | **浏览器自动化** (`browse*` RPCs) | 远程操控前台 WebView 标签：列举/打开/关闭/导航/执行JS/提取DOM/读Cookie+Storage/截图/导出MD/页内查找 — 不干扰用户正常使用 |
 | **手机本体操控** (`phone*` RPCs) | 设备信息+手机号/文件系统读写/相册图片列举/剪贴板读写/系统分享/通知/应用列举+启动/电池/WiFi/振动/音量/联系人/短信(OTP)/通话记录 |
 | **系统级接管** (`RtAccessibilityService`) | ADB/scrcpy 级无 root 接管：坐标点击/长按/滑动手势注入 + 返回/主页/最近/通知/锁屏全局操作 + 读屏控件树 + 按文字点击 + 文本输入 + 全屏截图(API30+) |
-| **安全开关** (tunnel.html) | 远程操控默认关闭，穿透面板手动启用；browse*/phone* 全部受此门禁 |
-| **渐进式文档** (`getModuleIndex`/`getModuleDoc`) | 云端 Agent 首次接入拿综合索引，按需加载各模块完整指南 |
+| **安全开关 + 一键授权** (tunnel.html) | 远程操控默认关闭，穿透面板手动启用；browse*/phone* 全部受此门禁。系统级接管走 `phoneEnsureControl` 一键自动跳转无障碍设置，用户只点一次「允许」 |
+| **渐进式文档** (`getCloudMd`/`getModuleIndex`/`getModuleDoc`/`getLocalMd`) | 三层披露：云端 MD = 轻量「初始接入」(接入信息 + 三大核心板块概览 + 一键授权)；Agent 按需 `getModuleDoc({module})` 深入某板块拉全部细节；`getLocalMd` = 重型本地操控全表 |
 | **文件上传** | `onShowFileChooser` → 系统选择器（含微信/QQ 最近文件） |
 | **系统下载** | `DownloadManager` → 下载目录 + 通知 |
 | **多窗口** | `onCreateWindow` → 新标签承接 `window.open` / `target=_blank` |
@@ -43,7 +43,7 @@ app/src/main/java/ai/devin/rtflow/
 app/src/main/assets/engine/
 ├── relay-app.js          出站 WSS 连中继 (同 dao-relay Worker 协议)
 ├── engine.html           账号存储 + 50+ RPC dispatch + 浏览器自动化 + 手机操控 + 渐进式文档 + 管理/热修通道
-├── switch.html           切号面板 UI (1:1 桌面 RT Flow 移植 + 手机适配)
+├── switch.html           切号面板 UI (1:1 桌面版移植 + 手机适配)
 ├── tunnel.html           穿透配置 + 远程操控安全开关
 ├── devin-core.js         登录链路 (email+password → auth1)
 ├── devin-cloud.js        Devin Cloud 全功能 CRUD API
@@ -110,7 +110,8 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 | v0.14.0 | 浏览器自动化 (browse* 11 RPCs) + 手机本体操控 (phone* 10 RPCs) + IPC 桥 + 安全开关 + 渐进式文档系统 |
 | v0.14.1 | 高级浏览器自动化 (browse* +8: 点击/填表/等待元素/提交/提取链接+输入/页面信息/滚动) + 高级手机操控 (phone* +4: 电池/WiFi/振动/音量) + getCloudMd/getLocalMd 完整 API 文档 RPC |
 | v0.14.2 | 敏感数据读取 (phone* +5: 联系人/短信收件箱(含OTP)/通话记录 + 运行时权限申请/查询) — 辅助全链路账号注册与验证码读取 |
-| v0.14.3 | **当前版本**：ADB/scrcpy 级系统级接管 (AccessibilityService, 无需 root)：phone* +10 — 手势注入(点击/长按/滑动) + 全局操作(返回/主页/最近/通知/锁屏) + 读屏(控件树) + 按文字点击 + 文本输入 + 全屏截图(takeScreenshot) |
+| v0.14.3 | ADB/scrcpy 级系统级接管 (AccessibilityService, 无需 root)：phone* +10 — 手势注入(点击/长按/滑动) + 全局操作(返回/主页/最近/通知/锁屏) + 读屏(控件树) + 按文字点击 + 文本输入 + 全屏截图(takeScreenshot) |
+| v0.14.4 | **当前版本**：重新锚定本源 — 全仓统一命名 Devin Cloud 手机版 (清除 RT Flow 残留) + 渐进式文档系统重构 (云端轻量接入/三大核心板块概览·getModuleDoc 深入/本地重型) + 一键授权 `phoneEnsureControl` (穿透面板「⚡ 一键授权系统级接管」按钮·自动跳转·用户只点允许) + 远程开关在浏览器壳同步生效 + Node mock-Native 测试台 (32 断言全过) |
 
 ## 取代的旧模块
 

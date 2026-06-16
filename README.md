@@ -146,9 +146,9 @@ devin-remote/
 
 **源码**：`addons/dao-bridge/dao-bridge-ext/extension.js` · **核心本体**：`addons/dao-bridge/{agent,core}.js`
 
-### rt-flow-app · Devin Cloud 手机版 APK (v0.14.3)
+### rt-flow-app · Devin Cloud 手机版 APK (v0.14.4)
 
-独立 APK 六合一：**切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 渐进式文档**。取代了此前的 `rt-flow-mobile`（MV3 扩展·Kiwi 已停更）和 `dao-bridge-android`（Termux Agent）。1:1 桌面 RT Flow 面板移植 + 手机适配化简。Per-account 展开面板（Sessions/Knowledge/Playbooks/Secrets/Git）。穿透配置动态化。v0.14.0 新增：远程浏览器自动化（browse* 11 RPCs·DOM/Cookie/Storage/截图/执行JS/导出MD）+ 手机本体操控（phone* 10 RPCs·文件系统/相册/剪贴板/通知/应用） + 安全开关 + Progressive Disclosure 文档系统。v0.14.1 新增：高级浏览器自动化（browse* +8·点击元素/填表/等待元素/提交表单/提取链接+输入值/页面信息/滚动）+ 高级手机操控（phone* +4·电池/WiFi/振动/音量）+ getCloudMd/getLocalMd 完整 API 文档生成 RPC。v0.14.2 新增：敏感数据读取（phone* +5·联系人/短信收件箱(含OTP验证码)/通话记录 + 运行时权限申请/查询），辅助全链路账号注册。v0.14.3 新增：ADB/scrcpy 级**系统级接管**（RtAccessibilityService 无需 root·phone* +10）：坐标点击/长按/滑动手势注入 + 返回/主页/最近/通知/锁屏全局操作 + 读屏控件树 + 按文字点击 + 文本输入 + 全屏截图。
+独立 APK 六合一：**切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 渐进式文档**。取代了此前的 `rt-flow-mobile`（MV3 扩展·Kiwi 已停更）和 `dao-bridge-android`（Termux Agent）。1:1 桌面版面板移植 + 手机适配化简。Per-account 展开面板（Sessions/Knowledge/Playbooks/Secrets/Git）。穿透配置动态化。v0.14.0 新增：远程浏览器自动化（browse* 11 RPCs·DOM/Cookie/Storage/截图/执行JS/导出MD）+ 手机本体操控（phone* 10 RPCs·文件系统/相册/剪贴板/通知/应用） + 安全开关 + Progressive Disclosure 文档系统。v0.14.1 新增：高级浏览器自动化（browse* +8·点击元素/填表/等待元素/提交表单/提取链接+输入值/页面信息/滚动）+ 高级手机操控（phone* +4·电池/WiFi/振动/音量）+ getCloudMd/getLocalMd 完整 API 文档生成 RPC。v0.14.2 新增：敏感数据读取（phone* +5·联系人/短信收件箱(含OTP验证码)/通话记录 + 运行时权限申请/查询），辅助全链路账号注册。v0.14.3 新增：ADB/scrcpy 级**系统级接管**（RtAccessibilityService 无需 root·phone* +10）：坐标点击/长按/滑动手势注入 + 返回/主页/最近/通知/锁屏全局操作 + 读屏控件树 + 按文字点击 + 文本输入 + 全屏截图。v0.14.4 重新锚定本源：全仓统一命名 Devin Cloud 手机版（清除 RT Flow 残留）+ 渐进式文档系统重构（云端 MD 轻量接入·三大核心板块概览·getModuleDoc 按需深入·getLocalMd 重型本地）+ 一键授权 phoneEnsureControl（自动跳转无障碍设置·用户只点一次「允许」）+ 远程开关在浏览器壳同步生效 + Node mock-Native 测试台。
 
 **源码/文档**：[`addons/rt-flow-app/README.md`](addons/rt-flow-app/README.md)
 
@@ -209,7 +209,7 @@ python cloud/export-accounts/dao_export_all.py --email xxx@gmail.com --password 
 | dao-proxy-pro | ✅ 已部署 | 提示词隔离 + 模型路由生效 |
 | rt-flow | ✅ 实测验证 | 12/12 批量备份 + 一键 wipe 全链路真号验证 |
 | devin-git-auth | ◑ 机制通 | 账号/PAT/设备流均通，组织 Git 连接待后端 oauth |
-| rt-flow-app | ✅ S23 Ultra 实测 | v0.14.3 · 七合一(切号+穿透+多实例+浏览器自动化+手机操控+系统级接管+渐进式文档) · browse* 19 + phone* 29 RPCs(含无障碍手势/读屏/截图) + IPC 桥 + 安全开关 + 本地 gradlew 编译验证 |
+| rt-flow-app | ✅ S23 Ultra 实测 | v0.14.4 · 七合一(切号+穿透+多实例+浏览器自动化+手机操控+系统级接管+渐进式文档) · browse* 19 + phone* 29 RPCs(含无障碍手势/读屏/截图) + IPC 桥 + 安全开关 + 本地 gradlew 编译验证 |
 
 > 旧架构正典与历史实测见 [`docs/archive/`](docs/archive/)（CANON 五插件规范 · REARCH · AUDIT · LIVE_VERIFICATION）。
 

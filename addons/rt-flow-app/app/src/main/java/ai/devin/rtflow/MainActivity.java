@@ -65,8 +65,8 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * MainActivity · RT Flow 手机版浏览器外壳 (地址栏 + 多标签 + 内部页)。
- *   - 内部页 rtflow://switch (切号·复用 RT Flow 真前端) / rtflow://tunnel (公网穿透·复用 dao-bridge 真前端)
+ * MainActivity · Devin Cloud 手机版浏览器外壳 (地址栏 + 多标签 + 内部页)。
+ *   - 内部页 rtflow://switch (切号·复用桌面版真前端) / rtflow://tunnel (公网穿透·复用 dao-bridge 真前端)
  *   - 账号标签: 每个标签是独立 WebView, document_start 注入各自 auth1 鉴权头 + sessionStorage 隔离 = 多实例并行互不干扰
  *   - 常驻前台服务 (RelayService) 跑引擎 + 内网穿透; 浏览器外壳与引擎共享 file:// 同源 localStorage 账号库
  */
@@ -1298,6 +1298,23 @@ public class MainActivity extends AppCompatActivity {
             });
         }
         @JavascriptInterface public void log(String s) { android.util.Log.i("RTFlowBrowser", s == null ? "" : s); }
+        // ── 远程操控开关 (穿透面板用; 与 RelayService 静态共享, 同步持久化到 remote-ops-flag) ──
+        @JavascriptInterface public boolean isRemoteOpsEnabled() { return RelayService.remoteOpsEnabled; }
+        @JavascriptInterface public void setRemoteOps(boolean on) {
+            RelayService.remoteOpsEnabled = on;
+            try { java.io.File f = new java.io.File(getFilesDir(), "remote-ops-flag");
+                  java.io.FileOutputStream o = new java.io.FileOutputStream(f); o.write((on ? "1" : "0").getBytes("UTF-8")); o.close(); }
+            catch (Exception e) {}
+        }
+        /** 无障碍服务是否已开启 (供穿透面板「一键授权」状态显示)。 */
+        @JavascriptInterface public boolean phoneA11yReady() { return RtAccessibilityService.isReady(); }
+        /** 一键授权系统级接管: 开远程开关 + 已就绪直接可用, 否则跳转无障碍设置让用户点一次「允许」。 */
+        @JavascriptInterface public boolean phoneEnsureControl() {
+            setRemoteOps(true);
+            boolean ready = RtAccessibilityService.isReady();
+            if (!ready) main.post(() -> ipcOpenA11ySettings());
+            return ready;
+        }
         /** 切号面板追踪轮询 → 推送该账号最活跃对话名+状态, 用于顶部标签实时显示。 */
         @JavascriptInterface public void setTabStatus(String accountId, String convName, String status) {
             if (accountId == null || accountId.isEmpty()) return;

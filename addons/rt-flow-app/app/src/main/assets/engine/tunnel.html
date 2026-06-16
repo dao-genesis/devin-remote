@@ -87,7 +87,7 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <!-- 模块2.5: 远程操控安全开关 -->
 <div class="section">
 <h3>🛡️ 远程操控 · 安全开关</h3>
-<div class="muted">启用后, 云端 Agent 可通过隧道远程操控浏览器标签和手机本体 (文件/相册/剪贴板/通知/应用)。<br><b>默认关闭</b> — 仅在需要远程操控时手动开启。</div>
+<div class="muted">启用后, 云端 Agent 可通过隧道远程操控浏览器标签和手机本体 (文件/相册/剪贴板/通知/应用/联系人/短信)。<br><b>默认关闭</b> — 仅在需要远程操控时手动开启。</div>
 <div style="display:flex;align-items:center;gap:10px;margin:8px 0">
   <label style="position:relative;display:inline-block;width:48px;height:26px">
     <input type="checkbox" id="remoteOpsToggle" onchange="toggleRemoteOps(this.checked)" style="opacity:0;width:0;height:0">
@@ -96,6 +96,11 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   <span id="remoteOpsLabel" style="font-size:12px;color:var(--vscode-descriptionForeground)">已关闭</span>
 </div>
 <div class="muted" style="font-size:11px">操控范围: <code>browse*</code> (浏览器) + <code>phone*</code> (手机本体)</div>
+<div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--vscode-input-border,#3334)">
+  <div class="muted">🤖 <b>系统级接管</b> (无需 root): 让 Agent 像 scrcpy 一样跨 app 点击/滑动/读屏/截图。需开启无障碍服务一次, <b>点下方按钮自动跳转, 找到「Devin Cloud 手机版」打开即可</b>。</div>
+  <button onclick="ensureControl()" style="margin-top:6px;background:#238636">⚡ 一键授权系统级接管</button>
+  <div id="a11yStat" class="muted" style="font-size:11px;margin-top:4px">无障碍服务: 检测中…</div>
+</div>
 </div>
 
 <!-- 模块3: 导出MD -->
@@ -129,7 +134,7 @@ function _push(){
   var pub = (c.url&&c.session)?(c.url.replace(/\/$/,'')+"/relay/"+c.session):"—";
   var state={
     url: on?pub:"", lastErr: on?null:(r.lastErr||null),
-    ws:{name:"RT Flow 手机版", root: c.session||"-"},
+    ws:{name:"Devin Cloud 手机版", root: c.session||"-"},
     port:"DO", mode:"relay·Durable Object", protocol:"wss",
     proxy:null, attempts:[{mode:"relay",proto:"wss",ok:on}],
     agentCount: on?1:0, cfLoggedIn:false, cfEmail:"", session:c.session
@@ -138,22 +143,29 @@ function _push(){
 }
 function _result(op,ok,text){ var o=document.getElementById('out'); if(o){o.className='';o.textContent='['+op+'] '+(ok?'✓':'✗')+' '+(text||'');} }
 function _cloudMd(){
-  var c=_conn(); var pub=c.url.replace(/\/$/,'')+"/relay/"+c.session;
-  return ["# RT Flow 手机版 · 远程接入文档 (云端 Agent)","",
-    "手机已通过公网中继挂载, 任意云端 Agent 可用下列 REST 接口远程驱动手机扩展。","",
-    "- 公网入口: `"+pub+"`","- 鉴权: `Authorization: Bearer "+c.token+"`","- Session: `"+c.session+"`","",
-    "## 健康检查","```bash","curl -s -X POST "+pub+" \\","  -H 'Authorization: Bearer "+c.token+"' \\",
-    "  -H 'Content-Type: application/json' -d '{\"path\":\"/api/health\"}'","```","",
-    "## 调用扩展 RPC (切号/账号)","```bash","curl -s -X POST "+pub+" \\","  -H 'Authorization: Bearer "+c.token+"' \\",
-    "  -H 'Content-Type: application/json' \\","  -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"getState\"}}'","```","",
-    "> 安全边界: 仅暴露浏览器 RPC; `/api/exec` 等 shell 路由一律 403。"].join("\n");
+  var c=_conn(); var pub=(c.url||"").replace(/\/$/,'')+"/relay/"+(c.session||"");
+  return ["# Devin Cloud 手机版 · 云端接入文档 (初始)","",
+    "手机已通过公网中继挂载, 任意云端 Agent (与你一样的 Devin Cloud) 可经隧道远程驱动手机。先读三大核心板块概览, 再按需用 getModuleDoc 深入。","",
+    "## 接入信息","- 公网入口: `"+pub+"`","- 鉴权: `Authorization: Bearer "+(c.token||"<TOKEN>")+"`","- Session: `"+(c.session||"<SESSION>")+"`","",
+    "## 调用方式","```bash","curl -s -X POST "+pub+" \\","  -H 'Authorization: Bearer <TOKEN>' \\",
+    "  -H 'Content-Type: application/json' \\","  -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\"}}'","```","",
+    "## 三大核心板块 (概览, 按需深入)",
+    "| 板块 | 一句话 | 拉全部细节 |","|------|--------|------|",
+    "| 板块一 · 浏览器自动化 | 不干扰用户, 远程操作/测试/记录任意网页, 19 命令 | getModuleDoc {module:browser} |",
+    "| 板块二 · 手机操控 | 全方位接管手机(本体+敏感数据+无障碍系统级), 29 命令 | getModuleDoc {module:phone} |",
+    "| 板块三 · Devin Cloud 软件本体 | 账号切换+全功能CRUD+穿透+安全 | getModuleDoc {module:software} |","",
+    "## 授权 (最小成本)",
+    "- setRemoteOps {enable:true} — 开启浏览器/手机本体/敏感数据操控",
+    "- phoneEnsureControl — 一键授权系统级接管 (自动跳转无障碍设置, 用户点一次允许)","",
+    "> 机读概览: getModuleIndex。完整本地操控: getLocalMd。安全边界: shell 路由一律 403。"].join("\n");
 }
 function _localMd(){
   var c=_conn();
-  return ["# RT Flow 手机版 · 本地接入说明","",
+  return ["# Devin Cloud 手机版 · 本地接入说明","",
     "本机 App 内置常驻前台服务, 宿主一个引擎 WebView 跑中继客户端 (出站 WSS)。","",
-    "- 中继: `"+c.url+"`","- Session: `"+c.session+"`","- 协议: 出站 WSS `/connect?session=…&token=…`, 入站 `/relay/<session>`","",
-    "面板「切号」开账号标签即在 App 内多实例浏览器并行; 「公网穿透」即本页。"].join("\n");
+    "- 中继: `"+(c.url||"")+"`","- Session: `"+(c.session||"")+"`","- 协议: 出站 WSS `/connect?session=…&token=…`, 入站 `/relay/<session>`","",
+    "面板「切号」开账号标签即在 App 内多实例浏览器并行; 「公网穿透」即本页。",
+    "完整本地操控文档 (Native.* 桥全表) 请调引擎 RPC `getLocalMd`。"].join("\n");
 }
 var vscode={ postMessage:function(m){ handle(m); } };
 function acquireVsCodeApi(){ return vscode; }
@@ -255,6 +267,21 @@ function updateRemoteOpsUI(on){
   }
   if(lb) lb.textContent=on?'已开启 · browse*/phone* 远程命令可用':'已关闭';
 }
+// ── 一键授权系统级接管 (最小化用户成本) ──
+function ensureControl(){
+  var N=window.Native||{};
+  var ready=false;
+  try{ ready = N.phoneEnsureControl && N.phoneEnsureControl(); }catch(e){}
+  // phoneEnsureControl 已同时开启远程开关
+  updateRemoteOpsUI(true);
+  refreshA11y();
+  _result('ensureControl', true, ready?'系统级接管已就绪 ✓':'已开远程开关并跳转无障碍设置, 请找到「Devin Cloud 手机版」点开→允许 (仅一次)');
+}
+function refreshA11y(){
+  var N=window.Native||{}; var el=document.getElementById('a11yStat'); if(!el) return;
+  var ready=false; try{ ready = N.phoneA11yReady && N.phoneA11yReady(); }catch(e){}
+  el.textContent='无障碍服务: '+(ready?'已开启 🟢 (系统级接管可用)':'未开启 🔴 (点上方按钮开启)');
+}
 // 初始化: 读取当前状态
 (function(){
   var N=window.Native||{};
@@ -263,6 +290,7 @@ function updateRemoteOpsUI(on){
   updateRemoteOpsUI(on);
   // 为 toggleRemoteOps 注入原生调用
   window.__setRemoteOps=function(v){ try{ N.setRemoteOps(v); }catch(e){} };
+  refreshA11y(); setInterval(refreshA11y, 3000);
 })();
 setInterval(_push, 1500); _push();
 </script>
