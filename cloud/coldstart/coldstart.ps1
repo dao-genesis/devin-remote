@@ -1,10 +1,10 @@
 # coldstart.ps1 — one-key cold start for a fresh Windows VM (Devin cloud VM or any devinbox).
-# Full chain: download+install latest Devin Desktop -> build+install the dao-vsix TWO-IN-ONE VSIX
+# Full chain: download+install latest Devin Desktop -> build+install the dao-one MEGA (大 one) VSIX
 # straight from this repo -> verify. Account login is interactive/injected by design
 # (the vendored rt-flow handles the first-account login; account pool is NOT in the repo).
 #
-# 重锚本源(re-anchored): 日常主交付 = dao-vsix 二合一(左 rt-flow 切号 + 中 Devin Cloud 全功能面板)。
-# 三合一大 one(core/dao-one, 折入 proxy-pro/bridge)不再由冷启动构建/安装, 仍可手动构建。
+# 最终主交付(final): dao-one 大 one = dao-vsix 二合一本源基座 + Proxy Pro 三面板子模块(折入 Devin Cloud 全功能面板)。
+# 冷启动构建/安装 dao-one; 若只要纯二合一本源, 可单独构建 core/dao-vsix。
 #
 # Usage (run from inside a cloned devin-remote repo):
 #   git clone https://github.com/zhouyoukang1234-spec/devin-remote.git $env:USERPROFILE\repos\devin-remote
@@ -45,26 +45,27 @@ if (-not $SkipInstall -and -not (Test-Path $devinExe)) {
 }
 if (-not (Test-Path $devinCli)) { throw "devin-desktop CLI not found: $devinCli" }
 
-# ---------- 1.5 Build the gitignored dao-vsix VSIX if absent ----------
-# dao-vsix ships only its TypeScript source (out/, node_modules/, *.vsix are gitignored),
-# so on a fresh clone we transpile + package it before the install loop can find it.
-$daoVsixDir = Join-Path $repoRoot 'core\dao-vsix'
-if ((Test-Path $daoVsixDir) -and -not (Get-ChildItem -Path $daoVsixDir -Filter *.vsix -File)) {
-    Step 'Building dao-vsix VSIX (TS transpile + package)'
-    Push-Location $daoVsixDir
+# ---------- 1.5 Build the gitignored dao-one MEGA VSIX if absent ----------
+# dao-one ships only its overlay source; build.js assembles vendor-* from sibling
+# core/{dao-vsix,dao-proxy-pro,rt-flow} + addons/dao-bridge and folds proxy-fold.patch
+# onto vendor-vsix (dao-vsix 源永不沾 proxy), then vsce packages. Build before install.
+$daoOneDir = Join-Path $repoRoot 'core\dao-one'
+if ((Test-Path $daoOneDir) -and -not (Get-ChildItem -Path $daoOneDir -Filter *.vsix -File)) {
+    Step 'Building dao-one MEGA VSIX (assemble vendor-* + fold Proxy Pro + package)'
+    Push-Location $daoOneDir
     try {
         if (-not (Test-Path 'node_modules')) { & npm install --no-audit --no-fund 2>&1 | Select-Object -Last 1 }
         & node ./build.js
         & npx --yes @vscode/vsce package --allow-missing-repository --skip-license 2>&1 | Select-Object -Last 1
     } finally { Pop-Location }
-    if (-not (Get-ChildItem -Path $daoVsixDir -Filter *.vsix -File)) { throw 'dao-vsix build failed (no VSIX produced)' }
+    if (-not (Get-ChildItem -Path $daoOneDir -Filter *.vsix -File)) { throw 'dao-one build failed (no VSIX produced)' }
 }
 
-# ---------- 2. Install the two-in-one dao-vsix (+ any optional addon VSIX present) ----------
-# dao-vsix 内联了 rt-flow 前端视图(wam-container/wam.panel)与 Devin Cloud 全功能面板; 只装它即得二合一。
-# core/dao-one、core/rt-flow、core/dao-proxy-pro 会与 dao-vsix 抢占同名 view/command id, 一律排除。
+# ---------- 2. Install the dao-one MEGA (+ any optional addon VSIX present) ----------
+# dao-one 内联了 dao-vsix 二合一本源(rt-flow 切号视图 wam-container/wam.panel + Devin Cloud 全功能面板)再折入 Proxy Pro 三面板子模块; 只装它即得大 one。
+# core/dao-vsix、core/rt-flow、core/dao-proxy-pro 会与 dao-one 抢占同名 view/command id, 一律排除。
 $excludeDirs = @(
-    (Join-Path $repoRoot 'core\dao-one'),
+    (Join-Path $repoRoot 'core\dao-vsix'),
     (Join-Path $repoRoot 'core\rt-flow'),
     (Join-Path $repoRoot 'core\dao-proxy-pro')
 )
@@ -77,20 +78,20 @@ $vsixFiles = $vsixSearch |
     ForEach-Object { Get-ChildItem -Path $_ -Recurse -Filter *.vsix -File } |
     Where-Object { $f = $_.FullName; -not ($excludeDirs | Where-Object { $f.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }) }
 
-if (-not $vsixFiles) { throw "no VSIX found under $($vsixSearch -join ', ') (did dao-vsix build in step 1.5?)" }
+if (-not $vsixFiles) { throw "no VSIX found under $($vsixSearch -join ', ') (did dao-one build in step 1.5?)" }
 
 foreach ($v in $vsixFiles) {
     Step "Installing extension $($v.Name)"
     & $devinCli --install-extension $v.FullName --force 2>&1 | Select-Object -Last 1
 }
 
-# ---------- 2.5 Uninstall the three-in-one / standalone engines that conflict with dao-vsix ----------
-# dao-vsix 自带 rt-flow 视图(wam-container/wam.panel)与 Devin Cloud 面板。VS Code 的 view/command id
-# 必须全局唯一 —— 若 dao-one / rt-flow / dao-proxy-pro 仍各自安装, 会抢占同名 id, 导致二合一面板板块不渲染。
-# 故卸载它们, 让 dao.dao-vsix 成为唯一属主。反者道之动: 收腰归二。dao-bridge(内网穿透)为独立 addon, 不冲突, 保留。
-$conflicting = @('dao.dao-one', 'devaid.rt-flow', 'dao-agi.dao-proxy-pro')
+# ---------- 2.5 Uninstall the standalone engines that conflict with dao-one ----------
+# dao-one 自带 dao-vsix 本源(rt-flow 视图 wam-container/wam.panel + Devin Cloud 面板)与 Proxy Pro 子面板。VS Code 的 view/command id
+# 必须全局唯一 —— 若 dao-vsix / rt-flow / dao-proxy-pro 仍各自安装, 会抢占同名 id, 导致大 one 面板板块不渲染。
+# 故卸载它们, 让 dao.dao-one 成为唯一属主。dao-bridge(内网穿透)为独立 addon, 不冲突, 保留。
+$conflicting = @('dao.dao-vsix', 'devaid.rt-flow', 'dao-agi.dao-proxy-pro')
 foreach ($id in $conflicting) {
-    Step "Uninstalling conflicting engine $id (superseded by dao.dao-vsix two-in-one)"
+    Step "Uninstalling conflicting engine $id (superseded by dao.dao-one mega)"
     & $devinCli --uninstall-extension $id 2>&1 | Select-Object -Last 1
 }
 
@@ -98,8 +99,8 @@ foreach ($id in $conflicting) {
 Step 'Installed extensions:'
 $installed = & $devinCli --list-extensions
 $installed
-if ($installed -notcontains 'dao.dao-vsix') {
-    throw 'dao.dao-vsix is NOT installed - the two-in-one panel would be missing. Check the dao-vsix build step above.'
+if ($installed -notcontains 'dao.dao-one') {
+    throw 'dao.dao-one is NOT installed - the mega panel would be missing. Check the dao-one build step above.'
 }
 Step "COLD START COMPLETE in $($sw.Elapsed.ToString('mm\:ss'))"
 Write-Host ''

@@ -67,13 +67,13 @@ jobs:
           {
             echo "# dao · 4+4+3 (v$VER)"
             echo
-            echo "本源/主交付 = **dao-vsix 二合一**（左 rt-flow 切号 + 中 Devin Cloud 全功能面板），日常只装它一个；**dao-one** 为可选三合一大 one（折入 Proxy Pro / 内网穿透）。本 Release 由 CI 自动同步自 main 最新源码。"
+            echo "最终主交付 = **dao-one 大 one**（dao-vsix 二合一本源基座 + Proxy Pro 三面板子模块，折入 Devin Cloud 全功能面板），冷启动只装它一个；**dao-vsix** = 本源基座，可单独安装。本 Release 由 CI 自动同步自 main 最新源码。"
             echo
             echo "| 插件 | 版本 |"
             echo "|---|---|"
             for entry in \
-              "dao-vsix:core/dao-vsix" \
               "dao-one:core/dao-one" \
+              "dao-vsix:core/dao-vsix" \
               "rt-flow:core/rt-flow" \
               "dao-proxy-pro:core/dao-proxy-pro" \
               "dao-bridge:addons/dao-bridge/dao-bridge-ext" \
