@@ -2076,6 +2076,112 @@ function bridgeReadNamedToken(): string {
     try { return fs.readFileSync(path.join(BRIDGE_DIR, 'tunnel-token'), 'utf8').trim(); } catch { return ''; }
 }
 
+// ═══════════════════════════════════════════════════════════
+// CloudFlare 账号/命名隧道 — 移植自独立 dao-bridge (帛书·「反者道之动」)
+// 与独立穿透插件 1:1: 凭证落 ~/.dao/bridge/cf-credentials.json; 命名隧道令牌落 tunnel-token / named-tunnel.json
+// ═══════════════════════════════════════════════════════════
+function bridgeCfCredFile(): string { return path.join(BRIDGE_DIR, 'cf-credentials.json'); }
+function bridgeLoadCfCredentials(): any { try { return JSON.parse(fs.readFileSync(bridgeCfCredFile(), 'utf8')); } catch { return null; } }
+function bridgeSaveCfCredentials(creds: any) { bridgeEnsureDir(); fs.writeFileSync(bridgeCfCredFile(), JSON.stringify(creds, null, 2), 'utf8'); }
+function bridgeCfState(): { cfLoggedIn: boolean; cfEmail: string; cfSource: string; named: boolean } {
+    let cfEmail = '', cfSource = '', cfLoggedIn = false, named = false;
+    const c = bridgeLoadCfCredentials();
+    if (c && (c.apiToken || c.globalApiKey || c.tunnelToken)) { cfLoggedIn = true; cfEmail = c.email || ''; cfSource = c.source || ''; }
+    try { if (fs.existsSync(path.join(BRIDGE_DIR, 'named-tunnel.json'))) named = true; } catch { /* 守柔 */ }
+    if (bridgeReadNamedToken()) named = true;
+    return { cfLoggedIn, cfEmail, cfSource, named };
+}
+let _bridgeProxyCache: string | null = null;
+function bridgeDetectProxy(): string {
+    if (_bridgeProxyCache !== null) return _bridgeProxyCache;
+    const p = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || process.env.ALL_PROXY || process.env.all_proxy || '';
+    _bridgeProxyCache = String(p).trim();
+    return _bridgeProxyCache;
+}
+async function bridgeVerifyCfToken(token: string): Promise<boolean> {
+    return await new Promise((resolve) => {
+        const https = require('https');
+        const req = https.request({ hostname: 'api.cloudflare.com', path: '/client/v4/user/tokens/verify', method: 'GET', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' } }, (res: any) => {
+            let d = ''; res.on('data', (c: any) => d += c); res.on('end', () => { try { const j = JSON.parse(d); resolve(res.statusCode === 200 && j && j.success); } catch { resolve(false); } });
+        });
+        req.on('error', () => resolve(false)); req.setTimeout(15000, () => { req.destroy(); resolve(false); }); req.end();
+    });
+}
+// CF 登录: API Token → Global API Key → 命名隧道令牌(长 base64/JWT, 持久化供固定域名)。与独立插件 loginCloudFlare 同构。
+async function bridgeCfLogin(email: string, apiKeyOrToken: string): Promise<{ ok: boolean; message: string }> {
+    const token = String(apiKeyOrToken || '').trim();
+    if (token && await bridgeVerifyCfToken(token)) {
+        bridgeSaveCfCredentials({ email, apiToken: token, source: 'api-token', savedAt: new Date().toISOString() });
+        return { ok: true, message: 'CloudFlare API Token 验证成功' };
+    }
+    const r: any = await new Promise((resolve) => {
+        const https = require('https');
+        const req = https.request({ hostname: 'api.cloudflare.com', path: '/client/v4/user', method: 'GET', headers: { 'X-Auth-Email': email, 'X-Auth-Key': token, 'Content-Type': 'application/json' } }, (res: any) => {
+            let d = ''; res.on('data', (c: any) => d += c); res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(d) }); } catch { resolve({ status: res.statusCode }); } });
+        });
+        req.on('error', () => resolve({ status: 0 })); req.setTimeout(15000, () => { req.destroy(); resolve({ status: 0 }); }); req.end();
+    });
+    if (r.status === 200 && r.json && r.json.success) {
+        bridgeSaveCfCredentials({ email, globalApiKey: token, source: 'global-api-key', savedAt: new Date().toISOString() });
+        return { ok: true, message: 'CloudFlare Global API Key 验证成功' };
+    }
+    if (token.length >= 100 && /^[A-Za-z0-9_\-=.]+$/.test(token)) {
+        try {
+            fs.writeFileSync(path.join(BRIDGE_DIR, 'named-tunnel.json'), JSON.stringify({ cfTunnelToken: token, email, savedAt: new Date().toISOString() }, null, 2), 'utf8');
+            bridgeSaveNamedToken(token);
+            return { ok: true, message: '已保存命名隧道令牌 — 点「重启隧道」即以固定域名启动' };
+        } catch { /* 守柔 */ }
+    }
+    return { ok: false, message: 'CloudFlare 验证失败 — 请检查 email 和 API Key/Token（仅用快速隧道则无需填）' };
+}
+// 用浏览器登录 Cloudflare(可用 GitHub) → cert.pem。仅"已有自有域名"用户需要(固定公网域名)。
+function bridgeCfBrowserLogin(): Promise<{ ok: boolean; message: string }> {
+    return new Promise((resolve) => {
+        const { spawn } = require('child_process');
+        const bin = bridgeFindCloudflared();
+        const cert = path.join(os.homedir(), '.cloudflared', 'cert.pem');
+        let proc: any;
+        try { proc = spawn(bin, ['tunnel', 'login'], { windowsHide: true }); } catch (e: any) { return resolve({ ok: false, message: String(e && e.message) }); }
+        let opened = false;
+        const onData = (buf: Buffer) => { const s = buf.toString(); const m = s.match(/https:\/\/dash\.cloudflare\.com\/[^\s]+/i); if (m && !opened) { opened = true; try { vscode.env.openExternal(vscode.Uri.parse(m[0])); } catch { /* 守柔 */ } } };
+        try { proc.stdout.on('data', onData); proc.stderr.on('data', onData); } catch { /* 守柔 */ }
+        const t0 = Date.now();
+        const iv = setInterval(() => {
+            if (fs.existsSync(cert)) { clearInterval(iv); try { proc.kill(); } catch { /* 守柔 */ } resolve({ ok: true, message: 'Cloudflare 浏览器登录成功（已获取 cert.pem）· 点「重启隧道」' }); }
+            else if (Date.now() - t0 > 180000) { clearInterval(iv); try { proc.kill(); } catch { /* 守柔 */ } resolve({ ok: false, message: '登录超时（180s 内未完成浏览器授权）' }); }
+        }, 1500);
+    });
+}
+// 退出账号/重置无账号模式: 备份后清除全部 CF 凭证残留(含 cloudflared cert.pem)。与独立插件 resetAccount 同构。
+async function bridgeResetAccount(): Promise<{ ok: boolean; message: string }> {
+    const removed: string[] = [];
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupDir = path.join(BRIDGE_DIR, 'reset-backup-' + ts);
+    const backup = (src: string) => { try { if (!fs.existsSync(src)) return; fs.mkdirSync(backupDir, { recursive: true }); fs.copyFileSync(src, path.join(backupDir, path.basename(src))); fs.unlinkSync(src); removed.push(src); } catch { /* 守柔 */ } };
+    backup(path.join(BRIDGE_DIR, 'named-tunnel.json'));
+    backup(bridgeCfCredFile());
+    backup(path.join(BRIDGE_DIR, 'tunnel-token'));
+    try {
+        const dc = path.join(os.homedir(), '.dao', 'dao-config.json');
+        if (fs.existsSync(dc)) { const j = JSON.parse(fs.readFileSync(dc, 'utf8')); let touched = false; for (const k of ['cfTunnelToken', 'tunnelToken', 'cfHostname', 'hostname']) if (k in j) { delete j[k]; touched = true; } if (touched) { fs.writeFileSync(dc, JSON.stringify(j, null, 2), 'utf8'); removed.push(dc + '(字段)'); } }
+    } catch { /* 守柔 */ }
+    try { const cfHome = path.join(os.homedir(), '.cloudflared'); if (fs.existsSync(cfHome)) for (const f of fs.readdirSync(cfHome)) if (f === 'cert.pem' || /\.json$/i.test(f)) backup(path.join(cfHome, f)); } catch { /* 守柔 */ }
+    return { ok: true, message: '已退出账号并清空全部凭证残留' + (removed.length ? '（备份于 ' + backupDir + '）' : '') };
+}
+// 能力自测: 本地服务 health / exec — 与独立插件 ⚡能力自测 同构
+function bridgeLocalApi(p: string, method: string, body?: any): Promise<{ status: number; text: string }> {
+    return new Promise((resolve) => {
+        const http = require('http');
+        const data = body ? JSON.stringify(body) : null;
+        const req = http.request({ host: '127.0.0.1', port: ws.port || 9920, path: p, method: method || 'GET', headers: { Authorization: 'Bearer ' + (bridgeToken || ws.token), 'Content-Type': 'application/json' } }, (res: any) => {
+            let d = ''; res.on('data', (c: any) => d += c); res.on('end', () => resolve({ status: res.statusCode, text: d }));
+        });
+        req.on('error', (e: any) => resolve({ status: 0, text: String(e.message) }));
+        req.setTimeout(15000, () => { req.destroy(); resolve({ status: 0, text: 'timeout' }); });
+        if (data) req.write(data); req.end();
+    });
+}
+
 function bridgeFindCloudflared(): string {
     const { execSync } = require('child_process');
     // 1. Check PATH
@@ -2576,45 +2682,75 @@ function reloadActiveDataTab(){
   v.innerHTML='<div class="empty"><div class="ic">'+ic+'</div><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
   cmd('loadTabData',{tab:t});
 }
+// 内网穿透 · DAO Bridge — 与独立穿透插件 1:1: 状态 + 命名隧道/CloudFlare + 导出文档 + 能力自测。
 function rBridgeFull(){
   var v=document.getElementById('v-bridge');if(!v)return;
-  var b=S.bridge;
-  var h='<div class="st">内网穿透 · DAO Bridge (集成)</div>';
-  if(!b||!b.url){
-    h+='<div class="card"><div class="cr"><span class="l">隧道状态</span><span class="v" style="color:var(--warn)">未连接</span></div>';
-    h+='<div class="cr"><span class="l">说明</span><span class="v" style="font-size:11px;color:var(--muted)">点击下方按钮启动内网穿透隧道，云端Agent即可远程操作本机</span></div></div>';
+  var b=S.bridge||{};
+  var on=!!b.url;
+  var h='<div class="st">☯ 内网穿透 · DAO Bridge (集成)</div>';
+  h+='<div class="card" style="font-size:11px;color:var(--muted);margin-bottom:6px">无名之樸 · 插件启动即自动打通整机公网穿透，<b style="color:var(--fg)">零配置、无需任何账号</b>；云端 Agent 即可远程操作本机。</div>';
+  // ── 模块1: 实时状态 ──
+  if(!on){
+    h+='<div class="card"><div class="cr"><span class="l">隧道状态</span><span class="v" style="color:var(--warn)">'+(b.lastErr?esc(b.lastErr):'未连接 · 启动中…')+'</span></div>';
+    h+='<div class="cr"><span class="l">本地端口</span><span class="v">'+(b.localPort||b.port||'—')+'</span></div></div>';
     h+='<div class="br"><button class="btn primary" onclick="cmd(&#39;bridgeStart&#39;)">▶ 启动隧道</button>';
-    h+='<button class="btn" onclick="cmd(&#39;bridgeStartNamed&#39;)">🔗 命名隧道</button></div>';
+    h+='<button class="btn" onclick="cmd(&#39;bridgeRestart&#39;)">🔄 重启隧道</button></div>';
   } else {
-    var stTxt=b.persistent?'✓ 已打通 · 持久化(常驻)':'✓ 已打通';
+    var stTxt=b.persistent?'✓ 已打通 · 持久化(常驻)':'✓ 已打通 · 公网在线';
+    var isRelay=b.relayUrl&&b.url===b.relayUrl;
     h+='<div class="card"><div class="cr"><span class="l">状态</span><span class="v" style="color:var(--success)">'+stTxt+'</span></div>';
     if(b.persistent&&b.source)h+='<div class="cr"><span class="l">来源</span><span class="v" style="font-size:10px">'+esc(b.source)+(typeof b.ageMs==="number"?(' · '+Math.round(b.ageMs/60000)+"分钟前"):"")+'</span></div>';
-    h+='<div class="cr"><span class="l">'+(b.relayUrl&&b.url===b.relayUrl?'中继 Relay':'公网 URL')+'</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(b.url)+'</span></div>';
+    h+='<div class="cr"><span class="l">'+(isRelay?'中继 Relay':(b.named?'命名隧道(固定)':'公网 URL'))+'</span><span class="v" style="font-size:10px;word-break:break-all"><a href="#" onclick="cmd(&#39;copyBridgeUrl&#39;);return false" style="color:var(--accent2)">'+esc(b.url)+'</a></span></div>';
     if(b.session)h+='<div class="cr"><span class="l">会话</span><span class="v">'+esc(b.session)+'</span></div>';
-    if(b.port)h+='<div class="cr"><span class="l">本地端口</span><span class="v">'+b.port+'</span></div>';
+    if(b.port||b.localPort)h+='<div class="cr"><span class="l">本地端口</span><span class="v">'+(b.port||b.localPort)+'</span></div>';
+    h+='<div class="cr"><span class="l">代理 / 链路</span><span class="v" style="font-size:10px">'+(b.proxy?('代理 '+esc(b.proxy)):'直连(无代理)')+(isRelay?' · relay/wss':(b.named?' · named/http2':' · quick/http2'))+'</span></div>';
+    h+='<div class="cr"><span class="l">在线 Agent</span><span class="v">'+(b.agentCount||0)+'</span></div>';
     if(b.workspace)h+='<div class="cr"><span class="l">工作区</span><span class="v">'+esc(b.workspace)+'</span></div>';
     if(b.host)h+='<div class="cr"><span class="l">主机</span><span class="v">'+esc(b.host)+'</span></div>';
-    if(b.updated)h+='<div class="cr"><span class="l">更新于</span><span class="v" style="font-size:10px">'+esc(b.updated)+'</span></div>';
-    h+='</div>';
     if(b.token)h+='<div class="cr"><span class="l">Token</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(String(b.token).slice(0,8)+'…'+String(b.token).slice(-4))+'</span></div>';
+    if(b.updated)h+='<div class="cr"><span class="l">更新于</span><span class="v" style="font-size:10px">'+esc(b.updated)+'</span></div>';
     h+='</div>';
     h+='<div class="br"><button class="btn sm" onclick="cmd(&#39;copyBridgeUrl&#39;)">📋 复制URL</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;copyBridgeToken&#39;)">🔑 复制Token</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeRefreshToken&#39;)" title="生新令牌并同步到所有账号; 刷新期间旧令牌仍有效不断链">♻ 刷新Token</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;bridgeExportCloudMd&#39;)">☁ 云端Agent MD</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;bridgeExportLocalMd&#39;)">💻 本地Agent MD</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入Knowledge</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeRestart&#39;)">🔄 重启隧道</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;bridgeReset&#39;)" title="清除命名隧道→重置为无账号快速隧道">♻ 重置</button>';
     h+='<button class="btn sm danger" onclick="cmd(&#39;bridgeStop&#39;)">⏹ 停止</button></div>';
   }
-  // 道法自然 · API 参考表本是给 AI 看的 → 已分别落「☁ 云端Agent MD / 💻 本地Agent MD」两份文档,
-  //   面板不再内嵌冗余表格 (为腹不为目)。需要接口清单时点上方两个 MD 按钮即可。
-  h+='<div class="st" style="margin-top:16px">Knowledge 自动注入</div>';
-  h+='<div class="card"><div class="cr"><span class="l">触发条件</span><span class="v" style="font-size:11px">涉及所有远程操作本地电脑的需求时都触发</span></div>';
-  h+='<div class="cr"><span class="l">自动更新</span><span class="v" style="color:var(--success)">✓ 端口/URL变化时自动同步</span></div></div>';
+  // ── 模块2: CloudFlare 命名隧道 · 固定域名 ──
+  h+='<div class="st" style="margin-top:14px">🔑 命名隧道 · 固定域名（可选）</div>';
+  h+='<div class="card">';
+  var cfOn=!!(b.cfLoggedIn||b.named);
+  if(cfOn){
+    h+='<div class="cr"><span class="l">CloudFlare</span><span class="v" style="color:var(--success)">✓ 用户通道'+(b.cfEmail?(' · '+esc(b.cfEmail)):'')+(b.named?'（命名隧道·固定域名）':'')+'</span></div>';
+    h+='<div style="font-size:10px;color:var(--muted);margin:4px 0">已绑定 CloudFlare 凭证。'+(b.named?'命名隧道令牌已就绪 — 点「重启隧道」即以固定域名启动。':'如需固定公网域名，请在 CloudFlare 创建命名隧道并把 <code>tunnel run --token</code> 令牌填入下方。')+'</div>';
+    h+='<button class="btn sm" onclick="cmd(&#39;bridgeStartNamed&#39;)">🔗 用命名隧道(固定域名)启动</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;openCf&#39;)">🌐 打开 CloudFlare 控制台</button>';
+    h+='<button class="btn sm danger" onclick="if(confirm(&#39;退出账号并清空全部 CloudFlare 凭证残留(含 cert.pem)，回到无账号快速隧道？&#39;))cmd(&#39;bridgeLogout&#39;)">退出账号 / 重置为无账号</button>';
+  } else {
+    h+='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">默认快速隧道已可用，<b style="color:var(--fg)">无需登录</b>。仅当你想要<b style="color:var(--fg)">固定不变的公网域名</b>时，才需配置 CloudFlare（也可放入 ~/.dao/dao-config.json 的 cfTunnelToken 自动加载）。</div>';
+    h+='<input id="cfEmail" type="email" placeholder="CloudFlare Email（可选）" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+    h+='<input id="cfKey" type="password" placeholder="Tunnel Token / API Token / Global Key" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+    h+='<div class="br"><button class="btn sm primary" onclick="bridgeCfLogin()">保存并切到用户通道</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;bridgeCfBrowserLogin&#39;)" title="用浏览器登录 Cloudflare(可用 GitHub 账号), 需自有域名才有固定域名">🌐 浏览器登录 CF</button></div>';
+    h+='<button class="btn sm" onclick="cmd(&#39;openCf&#39;)" style="margin-top:4px">🌐 打开 CloudFlare 控制台</button>';
+  }
+  h+='</div>';
+  // ── 模块3: 导出接入文档 ──
+  h+='<div class="st" style="margin-top:14px">📄 导出接入文档</div>';
+  h+='<div class="card"><div style="font-size:10px;color:var(--muted);margin-bottom:4px">接口清单已分别落 ☁云端 / 💻本地 两份 MD（给 Agent 看）。面板不再内嵌冗余表格。</div>';
+  h+='<div class="br"><button class="btn sm" onclick="cmd(&#39;bridgeExportCloudMd&#39;)">☁ 云端 Agent MD</button>';
+  h+='<button class="btn sm" onclick="cmd(&#39;bridgeExportLocalMd&#39;)">💻 本地 Agent MD</button>';
+  h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入 Knowledge</button></div></div>';
+  // ── 模块4: 能力自测 ──
+  h+='<div class="st" style="margin-top:14px">⚡ 能力自测</div>';
+  h+='<div class="card"><div class="br"><button class="btn sm" onclick="cmd(&#39;bridgeHealth&#39;)">health</button>';
+  h+='<input id="bridgeCmd" value="hostname" placeholder="命令" style="flex:1;min-width:80px;padding:5px 7px;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+  h+='<button class="btn sm" onclick="bridgeExec()">exec</button></div>';
+  h+='<pre id="bridgeOut" style="white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:6px;max-height:180px;overflow:auto;font-size:11px;margin:6px 0 0;border-radius:4px;color:var(--muted)">（结果）</pre></div>';
   v.innerHTML=h;
 }
+function bridgeCfLogin(){var e=document.getElementById('cfEmail'),k=document.getElementById('cfKey');var email=e?e.value.trim():'';var key=k?k.value.trim():'';if(!key){toast('请填写 Token / API Key',false);return}toast('验证中…',true);cmd('bridgeCfLogin',{email:email,key:key})}
+function bridgeExec(){var c=document.getElementById('bridgeCmd');var v=c?c.value.trim():'';if(!v)return;var o=document.getElementById('bridgeOut');if(o)o.textContent='执行中…';cmd('bridgeExec',{cmd:v})}
 // 问题②③ · 备份板块: 全账号×全对话备份成果 + 查看/下载 (路由 rt-flow 同源备份 · 纯本地·免 cog_ key)
 function rBackups(){
   var v=document.getElementById('v-backups');if(!v)return;
@@ -2746,7 +2882,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -3004,7 +3140,9 @@ function refreshDaoCloudMiddlePanel() {
         relayUrl: ws.publicUrl || '',
         hostname: os.hostname(),
     };
-    data.bridge = readBridgeConn();
+    data.bridge = bridgeGetState();
+    try { Object.assign(data.bridge, bridgeCfState()); } catch { /* 守柔 */ }
+    try { data.bridge.relay = ws.relayConnected; if (ws.publicUrl) data.bridge.relayUrl = ws.publicUrl; data.bridge.agentCount = ws.relayConnected ? 1 : 0; data.bridge.proxy = bridgeDetectProxy(); } catch { /* 守柔 */ }
     data.hostCaps = detectHostCapabilities();
     // Inject state
     try {
@@ -3018,7 +3156,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -3771,6 +3909,43 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'bridgeInjectKnowledge': {
                 const injected = await bridgeInjectKnowledge();
                 reply({ type: 'actionResult', command: 'bridgeInjectKnowledge', ok: injected });
+                break;
+            }
+            // ═══ 移植自独立 dao-bridge: CloudFlare 控制台/登录/退出 + 能力自测 ═══
+            case 'openCf': {
+                vscode.env.openExternal(vscode.Uri.parse('https://one.dash.cloudflare.com'));
+                reply({ type: 'actionResult', command: 'openCf', ok: true });
+                break;
+            }
+            case 'bridgeCfLogin': {
+                const r = await bridgeCfLogin(String(msg.email || ''), String(msg.key || ''));
+                vscode.window.showInformationMessage('CloudFlare: ' + r.message);
+                refreshReply({ type: 'actionResult', command: 'bridgeCfLogin', ok: r.ok });
+                break;
+            }
+            case 'bridgeCfBrowserLogin': {
+                vscode.window.showInformationMessage('正在用浏览器登录 Cloudflare… 完成授权后自动获取 cert.pem');
+                const r = await bridgeCfBrowserLogin();
+                vscode.window.showInformationMessage('CloudFlare: ' + r.message);
+                refreshReply({ type: 'actionResult', command: 'bridgeCfBrowserLogin', ok: r.ok });
+                break;
+            }
+            case 'bridgeLogout': {
+                const r = await bridgeResetAccount();
+                bridgeStopTunnel();
+                await bridgeStartTunnel(false);
+                vscode.window.showInformationMessage('DAO Bridge: ' + r.message + ' · 已回到无账号快速隧道');
+                refreshReply({ type: 'actionResult', command: 'bridgeLogout', ok: r.ok });
+                break;
+            }
+            case 'bridgeHealth': {
+                const r = await bridgeLocalApi('/api/health', 'GET');
+                reply({ type: 'bridgeTestResult', op: 'health', ok: r.status === 200, text: 'HTTP ' + r.status + ' ' + (r.text || '').slice(0, 300) });
+                break;
+            }
+            case 'bridgeExec': {
+                const r = await bridgeLocalApi('/api/exec', 'POST', { cmd: String(msg.cmd || '') });
+                reply({ type: 'bridgeTestResult', op: 'exec', ok: r.status === 200, text: 'HTTP ' + r.status + ' ' + (r.text || '').slice(0, 800) });
                 break;
             }
         }
