@@ -61,12 +61,15 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .add-body .add-actions button{background:var(--btn);color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:11px}
 .add-body .add-hint{font-size:10px;color:#555;margin-top:4px}
 .sec{display:flex;justify-content:space-between;align-items:center;color:#777;font-size:11px;margin:8px 0 3px;padding-bottom:3px;border-bottom:1px solid var(--border)}
-.row{display:flex;align-items:center;padding:3px 2px;border-bottom:1px solid #1a1a1a;gap:4px;user-select:none}
+.row{display:flex;flex-direction:column;padding:5px 4px;border-bottom:1px solid #1a1a1a;gap:3px;user-select:none}
+.row-r1{display:flex;align-items:center;gap:4px}
+.row-r2{display:flex;align-items:center;gap:2px;flex-wrap:wrap;padding-left:20px}
 .row:hover{background:#2a2d2e}
 .row.sel{background:#1f3a45;box-shadow:inset 2px 0 0 var(--blue)}
 .row.sel:hover{background:#254655}
 .row.act{background:#264f7844;border-left:2px solid var(--blue)}
 .row.expired-row{opacity:.55;background:#1a1515}
+.row-r1{cursor:pointer}
 .eua{font-size:9px;background:#1a3a1a;color:#4ec9b0;padding:0 4px;border-radius:3px;font-weight:700;letter-spacing:.2px;flex-shrink:0}
 .eua0{font-size:9px;background:#1e1e1e;color:#444;padding:0 4px;border-radius:3px;font-weight:600;letter-spacing:.2px;flex-shrink:0;border:1px solid #2a2a2a}
 .chk{width:14px;height:14px;cursor:pointer;flex-shrink:0}
@@ -148,17 +151,22 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-tb-git{background:#0d1a14;border:1px solid #1f3a2a;border-radius:4px;padding:4px 6px}
 .footer{margin-top:8px;padding-top:6px;border-top:1px solid var(--border);font-size:10px;color:#555;text-align:center}
 .footer .v{color:var(--blue)}
-/* 手机微调: 触摸目标放大 + 竖屏按钮折行 (横条塞不下→换行) */
-.b{width:26px!important;height:26px!important;font-size:13px!important}
+/* 手机微调: 双列布局 · 触摸目标放大 */
+.b{width:28px!important;height:28px!important;font-size:13px!important}
 .b.dv{width:auto!important;padding:0 5px!important}
-.row{padding:6px 2px!important;flex-wrap:wrap}
+.b.br{width:auto!important;padding:0 6px!important}
+.row{padding:6px 4px!important}
 .chk{width:16px!important;height:16px!important}
 .dvc-b{padding:4px 7px!important;font-size:11px!important}
 .conv-btn{padding:5px 9px!important;font-size:11px!important}
+.auto-lbl{font-size:10px;color:#888;display:flex;align-items:center;gap:3px}
+.auto-lbl input[type=checkbox]{width:14px;height:14px}
+.auto-lbl input[type=number]{width:32px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px}
+.auto-lbl select{font-size:9px;background:#1e1e1e;color:#888;border:1px solid #444;border-radius:3px;padding:1px 2px}
 @media (orientation:landscape){
   body{padding:8px 16px}
-  .row{flex-wrap:nowrap}
-  .em{font-size:13px}
+  .em{font-size:14px}
+  .row-r2{padding-left:24px}
 }
 </style></head><body>
 <div class="hd">
@@ -194,11 +202,20 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 </div></div>
 
 <div class="sec"><span>&#9660; 账号列表 (<span id="secCnt">0</span>)</span></div>
-<!-- 辅助工具条 (1:1 桌面 dv-tb) -->
+<!-- 辅助工具条 (1:1 桌面 dv-tb · v0.9.0 对齐全部按钮+checkbox) -->
 <div class="dv-tb">
-<button onclick="dvExportMd()" class="conv-btn" title="导出 MD 操作指令">&#128196; 导出 MD</button>
-<button onclick="dvBackupAll()" class="conv-btn" title="备份所有(或已选)账号的全部对话">&#128190; 全部备份</button>
-<button onclick="dvWipeSel()" class="conv-btn conv-btn-s" title="水过无痕·清理已选账号的全部痕迹">&#127754; 批量清理</button>
+<button onclick="dvExportMd()" class="conv-btn" title="导出 MD 操作指令·复制给本地 Agent 即可后端驱动全部功能">&#128196; 导出 MD</button>
+<button onclick="dvBackupAll()" class="conv-btn" title="备份所有(或已选)账号的全部 Devin Cloud 对话·增量">&#128190; 全部备份</button>
+<button onclick="dvWipeSel()" class="conv-btn conv-btn-s" title="水过无痕·清理已选账号的全部 Devin Cloud 痕迹">&#127754; 批量清理</button>
+<label class="auto-lbl" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" onchange="dvToggleAuto(this.checked)">自动备份</label>
+<label class="auto-lbl" title="备份完成且额度低于阈值时自动水过无痕清理"><input type="checkbox" id="dvAutoClean" onchange="dvToggleCleanup(this.checked)">自动清理</label>
+<label class="auto-lbl" title="额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="3" min="0" step="1" onchange="dvSetThreshold(this.value)"></label>
+<label class="auto-lbl" title="对话额度上限·知止不殆: 每对话上限=余额-缓冲"><input type="checkbox" id="dvConvCap" onchange="dvToggleConvCap(this.checked)">对话上限</label>
+<label class="auto-lbl" title="每对话上限缓冲($): 上限=余额-此缓冲">缓冲$<input type="number" id="dvConvBuf" value="3" min="0" step="0.01" onchange="dvSetConvBuffer(this.value)"></label>
+<label class="auto-lbl" title="耗尽自动重置·将欲予之必故予之: 余额抵缓冲时抬回上限让美金真正用尽"><input type="checkbox" id="dvConvDrain" onchange="dvToggleDrain(this.checked)">耗尽重置</label>
+<label class="auto-lbl"><select title="备份模式" onchange="dvSetMode(this.value)"><option value="folder">文件夹</option><option value="zip">ZIP</option></select></label>
+</div>
+<div class="dv-tb">
 <button onclick="doLoginAll()" class="conv-btn" title="登录全部未解锁账号">&#128273; 全部登录</button>
 <button onclick="doRefreshAll()" class="conv-btn" title="刷新全部已登录账号额度">&#128260; 刷额度</button>
 <button onclick="refreshTrack()" class="conv-btn" title="立即刷新对话追踪">&#128064; 刷新追踪</button>
@@ -206,13 +223,14 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 <!-- 批量归一 Git (1:1 桌面 dv-tb-git) -->
 <div class="dv-tb dv-tb-git" title="多个 Devin 账号归一连接到同一个 GitHub：先勾选账号，再点批量连Git">
 <span class="dv-git-tag">&#128279; 批量归一</span>
-<input class="dv-git-pat" id="gitBatchPat" type="password" placeholder="批量 PAT (留空→各账号默认)" autocomplete="off" style="max-width:200px"/>
-<button onclick="gitBatchConnect()" class="conv-btn" title="把勾选的多个 Devin 账号全部连接到同一个 GitHub">&#128279; 批量连Git</button>
-<button onclick="gitBatchDisconnect()" class="conv-btn conv-btn-s" title="解绑勾选账号的 Git 连接">&#9986; 批量断Git</button>
-<button onclick="gitInjectPatAll()" class="conv-btn" title="把 PAT 作为 GITHUB_PAT 密钥写入勾选(或全部)账号">&#128273; PAT注密钥</button>
+<input class="dv-git-pat" id="gitBatchPat" type="password" placeholder="批量 PAT (留空→各账号默认/映射)" autocomplete="off" style="max-width:200px"/>
+<button onclick="gitBatchConnect()" class="conv-btn" title="把勾选的多个 Devin 账号全部连接到同一个 GitHub（同一 PAT 注入+落库密钥+核验）">&#128279; 批量连Git</button>
+<button onclick="gitBatchDisconnect()" class="conv-btn conv-btn-s" title="真解绑勾选账号的 Git 连接（复查扫除·连接归零·删密钥）">&#9986; 批量断Git</button>
+<button onclick="gitInjectPatAll()" class="conv-btn" title="PAT 反向注入: 把 PAT 框的 PAT 作为 GITHUB_PAT 密钥写入勾选(或全部)账号">&#128273; PAT注密钥</button>
+<span style="font-size:10px;color:#888">勾选→多 Devin 绑同一 GitHub</span>
 </div>
 <div id="list"></div>
-<div class="footer">Devin Cloud 手机版 · <span class="v">v0.8.0</span> · 道法自然</div>
+<div class="footer">Devin Cloud 手机版 · <span class="v">v0.9.0</span> · 道法自然</div>
 <div class="toast" id="toast"></div>
 
 <script src="devin-core.js"></script>
@@ -325,9 +343,36 @@ function sw(i){
   catch(e){ toast("打开失败 "+e, true); }
   render();
 }
-function cp(i){ var a=loadAcc()[i]; if(!a)return; try{N.clip&&N.clip(JSON.stringify(a));}catch(e){} toast("已复制 JSON"); }
+function cp(i){ var a=loadAcc()[i]; if(!a)return; var t=(a.email||a.id||"")+"\n"+(a.password||""); try{N.clip&&N.clip(t);}catch(e){} toast("已复制账号+密码"); }
+// ── 浏览器按钮(合并登录逻辑·去⚡) ──
+async function openBrowser(i){
+  var a=loadAcc()[i]; if(!a)return;
+  if(!hasAuth(a)){
+    if(!a.email||!a.password){toast("此号无邮箱密码·无法自动登录",true);return;}
+    toast("登录中… "+a.email);
+    var r=await DaoCore.loginAndStore(a.email,a.password);
+    if(!r.ok){toast("登录失败: "+(r.error||""),true);return;}
+    a=loadAcc()[i]; render();
+  }
+  sw(i);
+}
+function rowClick(i,e){ if(e.target.closest('.row-r2,.b,button,.chk'))return; openBrowser(i); }
 function rm(i){ var accs=loadAcc(); var a=accs[i]; if(!a)return; if(!confirm("删除 "+(a.email||a.id)+"?"))return; accs.splice(i,1); saveAcc(accs); render(); toast("已删除"); }
-function wp(i){ var a=loadAcc()[i]; if(!a||!hasAuth(a)){toast("需先登录",true);return;} if(!confirm("水过无痕: 清理 "+(a.email||a.id)+" 全部知识库/密钥/剧本/归档对话?"))return; toast("清理中…"); DaoCloud.wipeAccount(a,{confirm:true,archiveSessions:true}).then(function(r){toast(r.ok?"✓ 清理完成":"清理失败: "+(r.error||""),!r.ok); var d=document.getElementById("dvDetail"+i); if(d&&d.classList.contains("open")){dvFetch(a,i,d);}}); }
+// ── 水过无痕 3选项(对照桌面: 备份并清空/仅清空/取消) ──
+function wp(i){ var a=loadAcc()[i]; if(!a||!hasAuth(a)){toast("需先登录",true);return;}
+  var pick=prompt("水过无痕: 清理 "+(a.email||a.id)+" 全部痕迹(对话/知识库/剧本/密钥/Git)\n\n输入 1 = 备份并清空(推荐)\n输入 2 = 仅清空(不备份)\n其他 = 取消","1");
+  if(pick!=="1"&&pick!=="2"){toast("已取消");return;}
+  if(pick==="1"){
+    toast("先备份再清空… "+(a.email||a.id));
+    DaoCloud.backupAccount(a,"conversation").then(function(bk){
+      toast("✓ 已备份 "+(bk.count||0)+" 条对话, 开始清空…");
+      DaoCloud.wipeAccount(a,{confirm:true,archiveSessions:true}).then(function(r){toast(r.ok?"✓ 已备份并清空":"清理失败: "+(r.error||""),!r.ok); var d=document.getElementById("dvDetail"+i); if(d&&d.classList.contains("open")){dvFetch(a,i,d);}});
+    });
+  } else {
+    toast("清理中…");
+    DaoCloud.wipeAccount(a,{confirm:true,archiveSessions:true}).then(function(r){toast(r.ok?"✓ 清理完成":"清理失败: "+(r.error||""),!r.ok); var d=document.getElementById("dvDetail"+i); if(d&&d.classList.contains("open")){dvFetch(a,i,d);}});
+  }
+}
 
 // ════════════════════════════════════════════════════════════════════════
 //  Devin Cloud 下拉详情 (1:1 桌面 _dvOverviewHtml / _dvBoardListHtml / _dvGitSectionHtml)
@@ -511,6 +556,9 @@ async function gitDisconnect(i){ var a=loadAcc()[i]; if(!a)return; if(!confirm("
 //  对话追踪 (Devin Cloud · 1:1 桌面 _dvStatusAggHtml + _dvRunPoll · 去 Cascade)
 // ════════════════════════════════════════════════════════════════════════
 var _trk = {}; // email → {no,who,running,awaiting,blocked,total,items,ts}
+var _untrackedUuids = (function(){try{return new Set(JSON.parse(localStorage.getItem("rtflow.untracked")||"[]"));}catch(e){return new Set();}})();
+function _saveUntracked(){ localStorage.setItem("rtflow.untracked", JSON.stringify(Array.from(_untrackedUuids))); }
+function stopTrack(uuid){ _untrackedUuids.add(uuid); _saveUntracked(); paintTrk(); paintRowRun(); toast("已停止追踪此对话"); }
 function toggleConv(){ _convOpen=!_convOpen; localStorage.setItem("rtflow.convOpen",_convOpen?"1":"0"); var b=document.getElementById("convBody"); b.classList.toggle("collapsed",!_convOpen); document.getElementById("convArrow").innerHTML=_convOpen?"&#9660;":"&#9650;"; }
 function trkHtml(){
   var totalRun=0,totalAwait=0,totalBlocked=0; var rows=[];
@@ -519,9 +567,11 @@ function trkHtml(){
     totalRun+=st.running; totalAwait+=st.awaiting; totalBlocked+=st.blocked;
     var noBadge=st.no?('<span class="dv-trk-no" title="账号编号 '+st.no+'">'+st.no+'</span>'):"";
     st.items.slice(0,6).forEach(function(it){
+      if(it.uuid && _untrackedUuids.has(it.uuid)) return;
       var cls=it.cls==="running"?"running":it.cls==="awaiting"?"awaiting":"blocked";
+      var xBtn = it.uuid ? ' <span style="cursor:pointer;color:#666;margin-left:2px" onclick="stopTrack(\''+_esc(it.uuid)+'\')" title="停止追踪此对话(永久)">&times;</span>' : '';
       rows.push('<div class="dv-trk-item">'+noBadge+'<span class="dv-trk-st '+cls+'">'+(cls==="running"?"运行":cls==="awaiting"?"待输入":"卡住")+'</span>'+
-        '<span class="dv-trk-who">'+_esc(st.who)+'</span><span class="dv-trk-tt" title="'+_esc(it.title)+'">'+_esc(String(it.title||"").slice(0,30))+'</span></div>');
+        '<span class="dv-trk-who">'+_esc(st.who)+'</span><span class="dv-trk-tt" title="'+_esc(it.title)+'">'+_esc(String(it.title||"").slice(0,30))+'</span>'+xBtn+'</div>');
     });
   });
   var totalActive=totalRun+totalAwait+totalBlocked;
@@ -550,10 +600,19 @@ async function pollTrk(){
     for(var i=0;i<accs.length;i++){
       var a=accs[i]; var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)continue;
       var running=0,awaiting=0,blocked=0,items=[];
-      (r.sessions||[]).forEach(function(s){ var ss=sessStatus(s); if(ss[0]==="running"){running++;items.push({cls:"running",title:s.title||s.name||""});} else if(ss[0]==="awaiting"){awaiting++;items.push({cls:"awaiting",title:s.title||s.name||""});} else if(ss[0]==="blocked"){blocked++;items.push({cls:"blocked",title:s.title||s.name||""});} });
+      (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var ss=sessStatus(s); if(ss[0]==="running"){running++;items.push({cls:"running",title:s.title||s.name||"",uuid:uuid});} else if(ss[0]==="awaiting"){awaiting++;items.push({cls:"awaiting",title:s.title||s.name||"",uuid:uuid});} else if(ss[0]==="blocked"){blocked++;items.push({cls:"blocked",title:s.title||s.name||"",uuid:uuid});} });
       var total=running+awaiting+blocked;
       if(total>0) _trk[(a.email||"").toLowerCase()]={no:i+1,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,total:total,items:items,ts:Date.now()};
       else delete _trk[(a.email||"").toLowerCase()];
+      // 推送该账号"最活跃对话名+状态"到顶部标签 (运行>卡顿>等待优先)
+      try{
+        var top=items.filter(function(x){return x.cls==="running";})[0]
+              || items.filter(function(x){return x.cls==="blocked";})[0]
+              || items.filter(function(x){return x.cls==="awaiting";})[0] || null;
+        var nm = top ? (top.title||"") : "";
+        var stt = top ? (top.cls==="blocked"?"blocked":(top.cls==="awaiting"?"blocked":"running")) : "finished";
+        if(N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }
+      }catch(e){}
     }
     if(mstat)mstat.textContent="Devin Cloud 监测就绪 · "+accs.length+" 号在册";
   }catch(e){ if(dot)dot.className="mon-dot off"; if(mstat)mstat.textContent="监测异常"; }
@@ -612,9 +671,29 @@ function doAdd(){
   if(!jsonOk && (added+updated)>0) setTimeout(doLoginAll, 200);
 }
 
+// ── 工具条配置 (localStorage 持久·对照桌面 _cfg 模式) ──
+function _cfg(k,d){ try{var v=localStorage.getItem("rtflow.cfg."+k); return v===null?d:JSON.parse(v);}catch(e){return d;} }
+function _setCfg(k,v){ localStorage.setItem("rtflow.cfg."+k, JSON.stringify(v)); }
+function dvToggleAuto(v){ _setCfg("autoBackup",!!v); toast(v?"自动备份已开":"自动备份已关"); }
+function dvToggleCleanup(v){ _setCfg("autoCleanup",!!v); toast(v?"自动清理已开":"自动清理已关"); }
+function dvSetThreshold(v){ _setCfg("autoThreshold",parseFloat(v)||3); }
+function dvToggleConvCap(v){ _setCfg("convCap",!!v); toast(v?"对话上限已开":"对话上限已关"); }
+function dvSetConvBuffer(v){ _setCfg("convBuffer",parseFloat(v)||3); }
+function dvToggleDrain(v){ _setCfg("convDrain",!!v); }
+function dvSetMode(v){ _setCfg("backupMode",v); toast("备份模式: "+v); }
+function _initCfgUI(){
+  var ab=document.getElementById("dvAutoBk"); if(ab) ab.checked=_cfg("autoBackup",true);
+  var ac=document.getElementById("dvAutoClean"); if(ac) ac.checked=_cfg("autoCleanup",false);
+  var at=document.getElementById("dvThreshold"); if(at) at.value=_cfg("autoThreshold",3);
+  var cc=document.getElementById("dvConvCap"); if(cc) cc.checked=_cfg("convCap",false);
+  var cb=document.getElementById("dvConvBuf"); if(cb) cb.value=_cfg("convBuffer",3);
+  var cd=document.getElementById("dvConvDrain"); if(cd) cd.checked=_cfg("convDrain",true);
+}
+
 // ── 初始化 ──
 document.getElementById("convBody").classList.toggle("collapsed",!_convOpen);
 document.getElementById("convArrow").innerHTML=_convOpen?"&#9660;":"&#9650;";
+_initCfgUI();
 render();
 pollTrk();
 window.addEventListener("focus", render);
