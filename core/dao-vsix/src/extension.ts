@@ -1486,6 +1486,24 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             if (!id) return { ok: false, error: 'id required' };
             return await devinDeleteMcp(ws.devinOrgId, id, ws.devinAuth1);
         }
+        case '/api/devin/mcp/marketplace': {
+            // 官网 MCP 市场目录 (整图给到本地, 供浏览 + 加入档案 + 批量安装)
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            return await devinListMcpMarketplace(ws.devinOrgId, ws.devinAuth1);
+        }
+        case '/api/devin/mcp/install': {
+            // 安装一个市场目录项到本账号 — body: {marketplace_server_id, slug?, name?, env_variables?, headers?, installation_scope?}
+            const mib = await readBody(req);
+            const mspec = JSON.parse(mib || '{}');
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            if (!mspec.marketplace_server_id && !mspec.slug) return { ok: false, error: 'marketplace_server_id or slug required' };
+            return await devinInstallMarketplaceMcp(ws.devinOrgId, mspec, ws.devinAuth1);
+        }
+        case '/api/devin/automations/clear': {
+            // 清除官网本账号全部自动化 (用户「一切清除官网的自动化」)
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            return await devinClearAutomations(ws.devinOrgId, ws.devinAuth1);
+        }
         case '/api/devin/session/delete': {
             const sdb = await readBody(req);
             const { id } = JSON.parse(sdb || '{}');
@@ -2654,7 +2672,15 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if(d.command==='toggleManualLock'&&S.tab){cmd('loadTabData',{tab:S.tab})}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){cmd('loadTabData',{tab:S.tab})}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+// MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
+function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
+function mcpAct(idx,action){
+  var m=(window._mcp||[])[idx];if(!m)return;
+  if(action==='install'){toast('安装中…',true);cmd('mcpMarketInstall',{spec:mcpSpec(m)});}
+  else if(action==='uninstall'){if(confirm('卸载 '+(m.name||'')+' ?'))cmd('mcpUninstall',{id:m.installationId});}
+  else if(action==='profile'){cmd('mcpAddProfile',{spec:mcpSpec(m)});}
+}
 function rT(tab,items,err,fallbackProxy){
   // ② 容器归一: 独立标签(v-*)已移除的 K/P/S/Git 落主页内 ov-* 容器(integrations→ov-git)
   const v=document.getElementById('v-'+tab)||document.getElementById('ov-'+(tab==='integrations'?'git':tab));if(!v)return;
@@ -2673,7 +2699,7 @@ function rT(tab,items,err,fallbackProxy){
   }
   if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[tab]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'}[tab]+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
   // ★ v1.0.1 · 各tab添加新建按钮 · 帛书·「道生一·一生二」
-  const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>'};
+  const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>',automations:'<button class="btn sm danger" onclick="if(confirm(&#39;确认清除本账号官网全部自动化?此操作不可撤销&#39;))cmd(&#39;clearAutomations&#39;)">🧹 清除全部</button>'};
   let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
   if(tab==='sessions'){
     items.forEach(s=>{
@@ -2704,11 +2730,25 @@ function rT(tab,items,err,fallbackProxy){
       const delBtn=(c.kind==='git'&&id)?'<div class="br" style="margin-top:4px"><button class="btn sm danger" onclick="cmd(&#39;devinDisconnectGit&#39;,{connectionId:&#39;'+esc(String(id))+'&#39;})">🗑 断开</button></div>':'';
       h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(provider)+'</span><span class="v" style="font-size:11px">'+statusHtml+'</span></div>'+(login?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(login)+'</div>':'')+delBtn+'</div>';
     });
-  }else if(tab==='usage'||tab==='org'||tab==='mcp'||tab==='automations'){
+  }else if(tab==='mcp'){
+    // 官网 MCP 整图给到本地: 已装(★)+ 全市场目录; 每项可「装到本账号 / +档案(批量注入) / 卸载」
+    window._mcp=[];
+    items.forEach(it=>{
+      const m=it.mcp||{};const idx=window._mcp.length;window._mcp.push(m);
+      const nm=it.name||'';const dt=it.detail||'';
+      const st=it.connected?'<span style="color:var(--success)">● 已装</span>':'<span style="color:var(--muted)">○ 未装</span>';
+      let btns='';
+      if(m.installed){btns+='<button class="btn sm danger" onclick="mcpAct('+idx+',&#39;uninstall&#39;)">卸载</button>';}
+      else{btns+='<button class="btn sm primary" onclick="mcpAct('+idx+',&#39;install&#39;)">装到本账号</button>';}
+      btns+='<button class="btn sm" onclick="mcpAct('+idx+',&#39;profile&#39;)" title="加入反向注入档案 → 可批量注入所有账号">+档案</button>';
+      btns+=lkBtn('mcps',String(nm).replace(/^★ /,''));
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'<div class="br" style="margin-top:4px">'+btns+'</div></div>';
+    });
+  }else if(tab==='usage'||tab==='org'||tab==='automations'){
     items.forEach(it=>{
       const nm=it.name||it.title||'';const dt=it.detail||'';
       const st=it.connected!==undefined?(it.connected?'<span style="color:var(--success)">● on</span>':'<span style="color:var(--muted)">○ off</span>'):'';
-      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+(tab==='mcp'&&nm?('<div class="br" style="margin-top:4px">'+lkBtn('mcps',String(nm).replace(/^★ /,''))+'</div>'):'')+'</div>';
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'</div>';
     });
   }
   v.innerHTML=h;
@@ -2931,15 +2971,18 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'mcp') {
-                            // 官网 MCP = 市场目录(servers) + 本组织自定义安装(installations); 二者合并呈现
-                            const [cat, inst] = await Promise.all([
-                                devinListMcpServers(ws.devinOrgId, ws.devinAuth1),
-                                devinListMcpInstallations(ws.devinOrgId, ws.devinAuth1),
-                            ]);
-                            const installed = (inst.items || []).map((m: any) => Object.assign({}, m, { name: '★ ' + m.name }));
-                            const merged = installed.concat(cat.items || []);
-                            result = { ok: cat.ok || inst.ok };
-                            if (result.ok) reply({ type: 'tabData', tab, items: merged, locks: orgLocks });
+                            // 官网 MCP 整图给到本地: /api/mcp/servers 单源即含 82 项完整目录 + 每项安装模板 + is_installed,
+                            // 已装项置顶(★)。每项携安装模板字段, 供面板「装到本账号 / +档案(批量) / 卸载」。
+                            const mk = await devinListMcpMarketplace(ws.devinOrgId, ws.devinAuth1);
+                            const all = (mk.items || []).map((m) => ({
+                                name: (m.installed ? '★ ' : '') + m.name,
+                                detail: (m.tags.length ? '[' + m.tags.join('·') + '] ' : '') + m.detail,
+                                connected: m.installed,
+                                mcp: m,
+                            }));
+                            all.sort((a, b) => (a.mcp.installed === b.mcp.installed) ? 0 : (a.mcp.installed ? -1 : 1));
+                            result = { ok: mk.ok };
+                            if (result.ok) reply({ type: 'tabData', tab, items: all, locks: orgLocks });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'automations') {
                             result = await devinListAutomations(ws.devinOrgId, ws.devinAuth1);
@@ -3373,6 +3416,52 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 setManualLock(ws.devinOrgId, kind, name, nowLocked);
                 vscode.window.showInformationMessage((nowLocked ? '🔒 已锁定(切号不清理): ' : '🔓 已解锁: ') + name);
                 refreshReply({ type: 'actionResult', command: 'toggleManualLock', ok: true });
+                break;
+            }
+            case 'mcpMarketInstall': {
+                // 装一个市场目录项到本账号 (引用 marketplace_server_id)
+                if (!ws.devinAuth1 || !ws.devinOrgId) { reply({ type: 'actionResult', command: 'mcpMarketInstall', ok: false }); break; }
+                const r = await devinInstallMarketplaceMcp(ws.devinOrgId, (msg.spec || {}) as McpInstallSpec, ws.devinAuth1);
+                vscode.window.showInformationMessage(r.ok ? ('✓ 已安装 MCP: ' + ((msg.spec || {}).name || '')) : ('安装失败: ' + (r.error || r.status || '')));
+                refreshReply({ type: 'actionResult', command: 'mcpMarketInstall', ok: r.ok });
+                break;
+            }
+            case 'mcpUninstall': {
+                if (!ws.devinAuth1 || !ws.devinOrgId || !msg.id) { reply({ type: 'actionResult', command: 'mcpUninstall', ok: false }); break; }
+                const r = await devinDeleteMcp(ws.devinOrgId, String(msg.id), ws.devinAuth1);
+                vscode.window.showInformationMessage(r.ok ? '✓ 已卸载 MCP' : ('卸载失败: ' + (r.status || '')));
+                refreshReply({ type: 'actionResult', command: 'mcpUninstall', ok: r.ok });
+                break;
+            }
+            case 'mcpAddProfile': {
+                // 加入反向注入档案 (injectProfile.mcps) → 可批量注入所有账号
+                const spec = (msg.spec || {}) as McpInstallSpec;
+                const p = loadInjectProfile();
+                const nm = String(spec.name || spec.slug || '').replace(/^★ /, '');
+                if (!nm) { reply({ type: 'actionResult', command: 'mcpAddProfile', ok: false }); break; }
+                const exists = (p.mcps || []).some((m: any) => String(m.name || m.slug || '') === nm);
+                if (!exists) {
+                    p.mcps = p.mcps || [];
+                    p.mcps.push({
+                        name: nm, slug: spec.slug, transport: spec.transport || 'STDIO',
+                        short_description: spec.short_description || '', command: spec.command || '',
+                        args: spec.args || [], env_variables: spec.env_variables || [],
+                        url: spec.url || '', headers: spec.headers || {},
+                        marketplace_server_id: spec.marketplace_server_id || '',
+                        installation_scope: spec.installation_scope || 'org',
+                    } as any);
+                    saveInjectProfile(p);
+                }
+                vscode.window.showInformationMessage(exists ? ('档案已含: ' + nm) : ('✓ 已加入反向注入档案: ' + nm + ' (可在 反向注入 页批量注入所有账号)'));
+                reply({ type: 'actionResult', command: 'mcpAddProfile', ok: true });
+                break;
+            }
+            case 'clearAutomations': {
+                // 一切清除本账号官网自动化
+                if (!ws.devinAuth1 || !ws.devinOrgId) { reply({ type: 'actionResult', command: 'clearAutomations', ok: false }); break; }
+                const r = await devinClearAutomations(ws.devinOrgId, ws.devinAuth1);
+                vscode.window.showInformationMessage('🧹 已清除自动化 ' + r.cleared + '/' + r.total);
+                refreshReply({ type: 'actionResult', command: 'clearAutomations', ok: r.ok });
                 break;
             }
             case 'startServer': {
@@ -5633,6 +5722,9 @@ async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promi
         icon: spec.icon || '',
         installation_scope: spec.installation_scope || 'org',
     };
+    // 安装市场目录项时引用其 server_id (官网逆流字段); 自定义安装则无此字段。
+    if (spec.marketplace_server_id) payload.marketplace_server_id = spec.marketplace_server_id;
+    if (spec.requires_custom_oauth_credentials) payload.requires_custom_oauth_credentials = true;
     if (transport === 'STDIO') {
         payload.command = spec.command || '';
         // 帛书·「知不知尚矣」— 官网 /api/mcp/installations 要求 args 为 [{value}] 字典数组,
@@ -5666,6 +5758,75 @@ async function devinDeleteMcp(orgId: string, installationId: string, auth1: stri
     const id = installationId.startsWith('mcp-installation-') ? installationId : 'mcp-installation-' + installationId.replace(/^mcp-installation-/, '');
     const r = await devinJsonDelete(DEVIN_APP + '/api/mcp/installations/' + id, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     return { ok: r.status === 200 || r.status === 204, status: r.status };
+}
+
+interface McpMarketItem {
+    server_id: string; name: string; slug: string; detail: string;
+    transport: string; icon: string; tags: string[]; official: boolean;
+    requiresOauth: boolean; installed: boolean; installationId: string;
+    // 安装模板 (来自 /api/mcp/servers, 供一键/批量安装直接复用)
+    command: string; args: unknown[]; env_variables: unknown; url: string; headers: unknown;
+    installation_scope: string; marketplace_server_id: string;
+}
+interface McpInstallSpec {
+    marketplace_server_id?: string; slug?: string; name?: string; transport?: string;
+    short_description?: string; description?: string; icon?: string;
+    command?: string; args?: unknown[]; env_variables?: unknown; url?: string; headers?: unknown;
+    installation_scope?: string; is_enabled?: boolean; requires_custom_oauth_credentials?: boolean;
+}
+
+// 官网 MCP 市场目录 — 整图给到本地 (浏览 + 加入档案 + 一键/批量安装):
+// 源 GET /api/mcp/servers 返回 82 项完整目录, 每项含安装模板 + is_installed/installation_id。
+async function devinListMcpMarketplace(orgId: string, auth1: string): Promise<{ ok: boolean; items?: McpMarketItem[]; status?: number }> {
+    // /api/mcp/servers 返回完整目录(82项), 每项含安装模板(transport/command/args/env/url) + is_installed/installation_id,
+    // 比轻量 /api/mcp/marketplace-servers 信息更全, 故以此为「整图」来源。
+    const r = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [], status: r.status };
+    const j = r.json || {};
+    const arr = Array.isArray(j) ? j : (Array.isArray(j.servers) ? j.servers : []);
+    const items: McpMarketItem[] = (arr as Array<Record<string, unknown>>).map((m) => ({
+        server_id: String(m.server_id || m.id || ''),
+        name: String(m.name || m.slug || 'MCP'),
+        slug: String(m.slug || ''),
+        detail: String(m.short_description || m.description || '').substring(0, 160),
+        transport: String(m.transport || ''),
+        icon: String(m.icon || ''),
+        tags: Array.isArray(m.tags) ? (m.tags as string[]) : [],
+        official: m.is_official === true,
+        requiresOauth: m.requires_custom_oauth_credentials === true,
+        installed: m.is_installed === true,
+        installationId: String(m.installation_id || ''),
+        command: String(m.command || ''),
+        args: Array.isArray(m.args) ? m.args : [],
+        env_variables: m.env_variables || [],
+        url: String(m.url || ''),
+        headers: m.headers || {},
+        installation_scope: String(m.installation_scope || 'org'),
+        marketplace_server_id: String(m.marketplace_server_id || m.server_id || ''),
+    }));
+    return { ok: true, items, status: 200 };
+}
+
+// 安装一个市场目录项到本账号 (引用 marketplace_server_id; 复用 devinAddCustomMcp 的规整逻辑)
+async function devinInstallMarketplaceMcp(orgId: string, spec: McpInstallSpec, auth1: string): Promise<{ ok: boolean; status?: number; id?: string; error?: string }> {
+    return await devinAddCustomMcp(orgId, {
+        ...spec,
+        installation_scope: spec.installation_scope || 'org',
+        is_enabled: spec.is_enabled !== false,
+    }, auth1);
+}
+
+// 清除本账号官网全部自动化 (列出后逐个删除) — 守柔: 单条失败不阻断, 汇总结果。
+async function devinClearAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; total: number; cleared: number }> {
+    const lst = await devinListAutomations(orgId, auth1);
+    const items = lst.items || [];
+    let cleared = 0;
+    for (const a of items) {
+        const id = String((a as Record<string, unknown>).automation_id || (a as Record<string, unknown>).id || '');
+        if (!id) continue;
+        try { if ((await devinDeleteAutomation(orgId, id, auth1)).ok) cleared++; } catch { /* 守柔 */ }
+    }
+    return { ok: cleared === items.length, total: items.length, cleared };
 }
 
 async function devinListAutomations(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
