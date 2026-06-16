@@ -669,17 +669,20 @@ async function pollTrk(){
   _probeBudget=12; // 每轮事件流探测配额, 控网络开销
   var dot=document.getElementById("monDot"), mstat=document.getElementById("monStat");
   try{
-    var accs=loadAcc().filter(hasAuth);
+    var full=loadAcc();                       // 全量列表(编号基准): 真正编号=在全量列表中的位置, 不受"是否已登录"影响
+    var accs=full.filter(hasAuth);
+    var _noOf={}; full.forEach(function(x,ix){ _noOf[x.id]=ix+1; });   // id → 真实编号(与账号行显示一致), 加号后动态跟随
     if(dot)dot.className="mon-dot"; if(mstat)mstat.textContent="监测中 · "+accs.length+" 号";
     for(var i=0;i<accs.length;i++){
       var a=accs[i]; var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)continue;
+      var realNo=_noOf[a.id]||(i+1);
       var running=0,awaiting=0,blocked=0,items=[];
       (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var cls=sessStatus(s)[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked")return; items.push({cls:cls,title:s.title||s.name||"",uuid:uuid,fsig:_liveSig(s)}); });
       // 逆流兜底: running 项抓事件流判定 等你/额度/报错/停滞 → 转 blocked(卡住)
       for(var k=0;k<items.length;k++){ if(items[k].cls==="running"){ try{ await refineStuck(a, items[k]); }catch(e){} } }
       items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="blocked")blocked++; });
       var total=running+awaiting+blocked;
-      if(total>0) _trk[(a.email||"").toLowerCase()]={no:i+1,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,total:total,items:items,ts:Date.now()};
+      if(total>0) _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,total:total,items:items,ts:Date.now()};
       else delete _trk[(a.email||"").toLowerCase()];
       // 推送该账号"最需关注对话名+状态"到顶部标签 (卡住/待你>待输入>运行优先, 让需你处理的浮上来)
       try{

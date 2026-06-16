@@ -37,6 +37,7 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -90,6 +91,8 @@ public class MainActivity extends AppCompatActivity {
     private int active = -1;
     private static final String PREFS = "rtflow_tabs";
 
+    private int pageZoom = 100;           // 整页缩放百分比 (滑块控制, 解决长页点不到按钮)
+    private TextView zoomLabel;
     private ValueCallback<Uri[]> filePathCallback;
     private Uri cameraOutputUri;          // 网页上传时相机拍照的落地 Uri (FileProvider)
     private androidx.activity.result.ActivityResultLauncher<Intent> fileChooser;
@@ -202,27 +205,56 @@ public class MainActivity extends AppCompatActivity {
             return false;
         });
 
-        Button go = chipBtn("→");
+        // 整页缩放滑块 (最右上角): 50%–170%, 默认 100%。解决长页/长文件点不到取消按钮 → 缩小即可全览
+        TextView zicon = new TextView(this);
+        zicon.setText("\uD83D\uDD0D"); zicon.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        zicon.setTextColor(0xFF8B949E); zicon.setPadding(dp(2), 0, dp(1), 0);
+        SeekBar zoomBar = new SeekBar(this);
+        zoomBar.setMax(120); zoomBar.setProgress(pageZoom - 50);   // 0..120 → 50%..170%
+        LinearLayout.LayoutParams zlp = new LinearLayout.LayoutParams(dp(92), ViewGroup.LayoutParams.WRAP_CONTENT);
+        zoomBar.setLayoutParams(zlp);
+        zoomLabel = new TextView(this);
+        zoomLabel.setText(pageZoom + "%"); zoomLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        zoomLabel.setTextColor(0xFFCDD3DE); zoomLabel.setMinWidth(dp(34)); zoomLabel.setPadding(dp(2), 0, dp(2), 0);
+        zoomBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
+                pageZoom = 50 + p; zoomLabel.setText(pageZoom + "%"); applyZoomActive();
+            }
+            @Override public void onStartTrackingTouch(SeekBar s) {}
+            @Override public void onStopTrackingTouch(SeekBar s) {}
+        });
+        // 双击缩放图标 → 复位 100%
+        zicon.setOnClickListener(v -> { pageZoom = 100; zoomBar.setProgress(50); zoomLabel.setText("100%"); applyZoomActive(); });
+
+        Button go = chipBtnSm("→");
         go.setOnClickListener(v -> go(addr.getText().toString()));
-
         // 网页栏五角星：点击收藏/取消收藏当前页 (像浏览器)
-        starBtn = chipBtn("\u2606");
+        starBtn = chipBtnSm("\u2606");
         starBtn.setOnClickListener(v -> toggleBookmarkCurrent());
-
-        // 最右侧刷新按钮：原地重载当前标签的 WebView（保留多实例登录态）
-        Button reload = chipBtn("\u21BB");
+        // 刷新按钮：原地重载当前标签的 WebView（保留多实例登录态）
+        Button reload = chipBtnSm("\u21BB");
         reload.setOnClickListener(v -> reloadActive());
-
-        // 下载管理悬浮窗按钮 (紧邻刷新, 最右上角)
-        dlBtn = chipBtn("\uD83D\uDCE5");
+        // 下载管理悬浮窗按钮
+        dlBtn = chipBtnSm("\uD83D\uDCE5");
         dlBtn.setOnClickListener(v -> toggleDownloadPanel());
 
+        // 第一行: 菜单 + 地址 + 缩放滑块(最右上角)
         bar.addView(menu);
         bar.addView(addr);
-        bar.addView(starBtn);
-        bar.addView(go);
-        bar.addView(reload);
-        bar.addView(dlBtn);
+        bar.addView(zicon);
+        bar.addView(zoomBar);
+        bar.addView(zoomLabel);
+
+        // 第二行: 四个动作按钮整体下移 + 缩小, 右对齐成紧凑一排
+        LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        btnRow.setBackgroundColor(0xFF161B22);
+        btnRow.setPadding(dp(6), dp(1), dp(8), dp(4));
+        btnRow.addView(starBtn);
+        btnRow.addView(go);
+        btnRow.addView(reload);
+        btnRow.addView(dlBtn);
 
         // 标签条
         HorizontalScrollView strip = new HorizontalScrollView(this);
@@ -238,6 +270,7 @@ public class MainActivity extends AppCompatActivity {
         content.setLayoutParams(clp);
 
         root.addView(bar);
+        root.addView(btnRow);
         root.addView(strip);
         root.addView(content);
         return root;
@@ -253,6 +286,26 @@ public class MainActivity extends AppCompatActivity {
         b.setPadding(dp(12), dp(4), dp(12), dp(4));
         b.setMinWidth(0); b.setMinimumWidth(0);
         return b;
+    }
+    // 紧凑按钮 (动作排用): 更小字号/内边距/高度, 整排长方体更短
+    private Button chipBtnSm(String t) {
+        Button b = chipBtn(t);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        b.setPadding(dp(9), dp(1), dp(9), dp(1));
+        b.setMinHeight(0); b.setMinimumHeight(0);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = dp(4);
+        b.setLayoutParams(lp);
+        return b;
+    }
+    private void applyZoomActive() {
+        if (active < 0 || active >= tabs.size()) return;
+        applyZoom(tabs.get(active).web);
+    }
+    private void applyZoom(WebView w) {
+        if (w == null) return;
+        float f = pageZoom / 100f;
+        try { w.evaluateJavascript("(function(){try{var d=document.documentElement;if(d)d.style.zoom='" + f + "';}catch(e){}})();", null); } catch (Exception ignored) {}
     }
 
     private void showMenu(View anchor) {
@@ -489,6 +542,8 @@ public class MainActivity extends AppCompatActivity {
         } else {
             st.setUserAgentString(st.getUserAgentString().replace("; wv", "")); // 贴近真浏览器
         }
+        // 下载捕获桥(所有标签都挂, 仅 saveBase64 一个能力): 把页面内 blob:/data:/<a download> 下载收进右上下载列表
+        web.addJavascriptInterface(new DlBridge(), "RTDL");
 
         // 账号标签: document_start 注入鉴权头 + sessionStorage 隔离 (多实例核心)
         if (accountJson != null) {
@@ -512,6 +567,8 @@ public class MainActivity extends AppCompatActivity {
             }
             @Override public void onPageFinished(WebView v, String u) {
                 tab.url = u; renderTabStrip(); saveTabs(); addHistory(u, tab.title, tab);
+                if (pageZoom != 100) applyZoom(v);          // 缩放跨页/刷新保持
+                installDownloadHook(v);                      // blob:/data:/<a download> 下载 → 收进右上下载列表
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
@@ -582,6 +639,7 @@ public class MainActivity extends AppCompatActivity {
         }
         setAddr(displayUrl(t));
         renderTabStrip();
+        if (pageZoom != 100) applyZoom(t.web);
     }
 
     private String displayUrl(Tab t) {
@@ -993,7 +1051,8 @@ public class MainActivity extends AppCompatActivity {
                 try (FileOutputStream fos = new FileOutputStream(f)) {
                     fos.write((content == null ? "" : content).getBytes(StandardCharsets.UTF_8));
                 }
-                main.post(() -> MainActivity.this.toast("已下载: " + safe));
+                final File ff = f; final String fn = safe;
+                main.post(() -> { MainActivity.this.addDownloadRecord(fn, ff.getAbsolutePath(), "text/markdown", ff.length()); MainActivity.this.toast("已下载: " + fn); });
                 return f.getAbsolutePath();
             } catch (Exception e) {
                 main.post(() -> MainActivity.this.toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage())));
@@ -1012,7 +1071,8 @@ public class MainActivity extends AppCompatActivity {
                 File f = new File(dir, safe);
                 byte[] data = android.util.Base64.decode(base64 == null ? "" : base64, android.util.Base64.DEFAULT);
                 try (FileOutputStream fos = new FileOutputStream(f)) { fos.write(data); }
-                main.post(() -> MainActivity.this.toast("已下载: " + safe));
+                final File ff = f; final String fn = safe;
+                main.post(() -> { MainActivity.this.addDownloadRecord(fn, ff.getAbsolutePath(), "application/octet-stream", ff.length()); MainActivity.this.toast("已下载: " + fn); });
                 return f.getAbsolutePath();
             } catch (Exception e) {
                 main.post(() -> MainActivity.this.toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage())));
@@ -1050,6 +1110,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startDownload(String url, String ua, String contentDisposition, String mime) {
+        // blob:/data: 无法走系统 DownloadManager → 转 JS 取内容, 统一收进应用内下载列表
+        if (url != null && url.startsWith("blob:")) { captureBlobDownload(url); return; }
+        if (url != null && url.startsWith("data:")) { captureDataUrl(url, contentDisposition); return; }
         try {
             String name = android.webkit.URLUtil.guessFileName(url, contentDisposition, mime);
             DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
@@ -1063,6 +1126,72 @@ public class MainActivity extends AppCompatActivity {
             DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
             if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, mime == null ? "" : mime }); toast("开始下载: " + name); }
         } catch (Exception e) { toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage())); }
+    }
+
+    // 页面内 <a download> / blob: / data: 下载捕获脚本 (每个页面加载完安装一次)
+    private void installDownloadHook(WebView w) {
+        if (w == null) return;
+        String js = "(function(){if(window.__rtdl)return;window.__rtdl=1;"
+            + "function send(n,m,b){try{RTDL.saveBase64(n||'download',m||'',b||'');}catch(e){}}"
+            + "function blobB64(bl,n){var r=new FileReader();r.onload=function(){var s=''+r.result;var i=s.indexOf(',');send(n,(bl.type||''),i>=0?s.slice(i+1):s);};r.readAsDataURL(bl);}"
+            + "document.addEventListener('click',function(ev){try{"
+            + "var t=ev.target;var a=t&&t.closest?t.closest('a[download],a[href^=\"blob:\"],a[href^=\"data:\"]'):null;if(!a)return;"
+            + "var href=a.getAttribute('href')||a.href||'';if(!href)return;"
+            + "var name=a.getAttribute('download')||(href.split('/').pop()||'download').split('?')[0];"
+            + "if(href.indexOf('blob:')===0){ev.preventDefault();ev.stopPropagation();fetch(href).then(function(r){return r.blob();}).then(function(b){blobB64(b,name);}).catch(function(){});}"
+            + "else if(href.indexOf('data:')===0){ev.preventDefault();ev.stopPropagation();var m=(href.match(/^data:([^;,]*)/)||[])[1]||'';var c=href.indexOf(',');var p=href.slice(c+1);var b64=/;base64/i.test(href.slice(0,c))?p:btoa(unescape(encodeURIComponent(decodeURIComponent(p))));send(name,m,b64);}"
+            + "}catch(e){}} ,true);})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    // DownloadListener 收到 blob: → 让当前页 JS 取出内容回传
+    private void captureBlobDownload(String blobUrl) {
+        if (active < 0 || active >= tabs.size()) { toast("下载失败"); return; }
+        WebView w = tabs.get(active).web; if (w == null) return;
+        String esc = blobUrl.replace("\\", "\\\\").replace("'", "\\'");
+        String js = "(function(){try{fetch('" + esc + "').then(function(r){return r.blob();}).then(function(b){var fr=new FileReader();fr.onload=function(){var s=''+fr.result;var i=s.indexOf(',');try{RTDL.saveBase64('download',(b.type||''),i>=0?s.slice(i+1):s);}catch(e){}};fr.readAsDataURL(b);});}catch(e){}})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    private void captureDataUrl(String dataUrl, String contentDisposition) {
+        try {
+            int c = dataUrl.indexOf(','); if (c < 0) { toast("下载失败"); return; }
+            String meta = dataUrl.substring(5, c);                       // 去掉 "data:"
+            String mime = meta.split(";")[0];
+            boolean b64 = meta.toLowerCase().contains("base64");
+            String payload = dataUrl.substring(c + 1);
+            byte[] data = b64 ? android.util.Base64.decode(payload, android.util.Base64.DEFAULT)
+                              : java.net.URLDecoder.decode(payload, "UTF-8").getBytes("UTF-8");
+            String name = android.webkit.URLUtil.guessFileName(dataUrl, contentDisposition, mime);
+            writeDownloadBytes(name, mime, data);
+        } catch (Exception e) { toast("下载失败"); }
+    }
+    // RTDL 桥: 页面把下载内容(base64)回传 → 落地应用下载目录 + 进下载列表
+    private class DlBridge {
+        @android.webkit.JavascriptInterface
+        public void saveBase64(String name, String mime, String b64) {
+            try { byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); writeDownloadBytes(name, mime, data); }
+            catch (Exception e) { main.post(() -> toast("下载捕获失败")); }
+        }
+    }
+    private void writeDownloadBytes(String name, String mime, byte[] data) {
+        try {
+            if (name == null || name.isEmpty()) name = "download";
+            if (!name.contains(".")) {
+                String ext = android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mime == null ? "" : mime);
+                if (ext != null && !ext.isEmpty()) name = name + "." + ext;
+            }
+            File dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+            if (dir == null) dir = getCacheDir();
+            if (!dir.exists()) dir.mkdirs();
+            File f = new File(dir, name);
+            if (f.exists()) {
+                String base = name, ext2 = ""; int dot = name.lastIndexOf('.');
+                if (dot > 0) { base = name.substring(0, dot); ext2 = name.substring(dot); }
+                f = new File(dir, base + "_" + System.currentTimeMillis() + ext2);
+            }
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(f); fos.write(data); fos.close();
+            final File ff = f; final String fmime = (mime == null || mime.isEmpty()) ? "*/*" : mime; final long sz = ff.length();
+            main.post(() -> { addDownloadRecord(ff.getName(), ff.getAbsolutePath(), fmime, sz); toast("下载完成: " + ff.getName()); });
+        } catch (Exception e) { main.post(() -> toast("下载失败")); }
     }
 
     // ── 应用内下载管理器 + 可拖拽悬浮窗 ───────────────────────────────────────
