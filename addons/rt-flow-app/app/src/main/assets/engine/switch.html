@@ -557,6 +557,40 @@ async function gitDisconnect(i){ var a=loadAcc()[i]; if(!a)return; if(!confirm("
 //  对话追踪 (Devin Cloud · 1:1 桌面 _dvStatusAggHtml + _dvRunPoll · 去 Cascade)
 // ════════════════════════════════════════════════════════════════════════
 var _trk = {}; // email → {no,who,running,awaiting,blocked,total,items,ts}
+// ── 卡住兜底检测 (增量更新): 会话状态=running 但内容长期无增量更新 → 判定卡住 ──
+//   根因: v2sessions 列表的 status_enum 在"待输入/被问问题/action required"时仍报 running,
+//   故仅凭状态字段识别不出卡住。改用"对话备份增量更新"信号: 列表项时间戳/计数 (零成本),
+//   无可用字段时回退抓事件流 (与备份模块同源) 取末事件签名。签名在 STUCK_MS 内不变即卡住。
+var _sigMap = {};            // uuid → {sig,since,probeTs,cachedSig}
+var STUCK_MS = 180000;       // 运行中且 3 分钟无任何增量更新 → 卡住
+var STUCK_PROBE_MS = 90000;  // 单会话事件流探测节流 (无列表时间戳字段时才用)
+function _liveSig(s){
+  var parts=[];
+  ["updated_at","last_updated_at","last_updated","modified_at","status_updated_at","last_message_at","last_activity_at","updatedAt","last_event_at","latest_event_at"].forEach(function(k){ if(s[k]!=null) parts.push(k+"="+s[k]); });
+  ["acu_used","acus","acu","num_messages","message_count","messages_count","event_count","num_events","snapshot_count","steps","step_count"].forEach(function(k){ if(s[k]!=null) parts.push(k+"="+s[k]); });
+  return parts.length?parts.join("|"):null;
+}
+async function refineStuck(a, item){
+  var uuid=item.uuid; if(!uuid) return;
+  var now=Date.now();
+  var rec=_sigMap[uuid]||{sig:null,since:now,probeTs:0,cachedSig:null};
+  var sig=item._sig;
+  // 列表无任何增量字段 → 回退抓事件流 (节流) 取 事件数+末事件时间 作签名
+  if(sig==null){
+    if(now-rec.probeTs>=STUCK_PROBE_MS){
+      rec.probeTs=now;
+      try{ var ev=await DaoCloud.sessionEvents(a, uuid);
+        if(ev&&ev.ok){ var evs=ev.events||[]; var last=evs.length?evs[evs.length-1]:null;
+          var lt=last?(last.created_at_ms||last.timestamp||0):0; rec.cachedSig="e:"+evs.length+":"+lt; }
+      }catch(e){}
+    }
+    sig=rec.cachedSig;
+  }
+  if(sig!=null){ if(sig!==rec.sig){ rec.sig=sig; rec.since=now; } }
+  _sigMap[uuid]=rec;
+  if(sig!=null && (now-rec.since)>=STUCK_MS){ item.cls="blocked"; item._stuck=true; }
+}
+function _pruneSig(){ var now=Date.now(); for(var k in _sigMap){ if(_sigMap.hasOwnProperty(k)&&(now-(_sigMap[k].since||0))>1800000) delete _sigMap[k]; } }
 var _untrackedUuids = (function(){try{return new Set(JSON.parse(localStorage.getItem("rtflow.untracked")||"[]"));}catch(e){return new Set();}})();
 function _saveUntracked(){ localStorage.setItem("rtflow.untracked", JSON.stringify(Array.from(_untrackedUuids))); }
 function stopTrack(uuid){ _untrackedUuids.add(uuid); _saveUntracked(); paintTrk(); paintRowRun(); toast("已停止追踪此对话"); }
@@ -601,7 +635,10 @@ async function pollTrk(){
     for(var i=0;i<accs.length;i++){
       var a=accs[i]; var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)continue;
       var running=0,awaiting=0,blocked=0,items=[];
-      (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var ss=sessStatus(s); if(ss[0]==="running"){running++;items.push({cls:"running",title:s.title||s.name||"",uuid:uuid});} else if(ss[0]==="awaiting"){awaiting++;items.push({cls:"awaiting",title:s.title||s.name||"",uuid:uuid});} else if(ss[0]==="blocked"){blocked++;items.push({cls:"blocked",title:s.title||s.name||"",uuid:uuid});} });
+      (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var cls=sessStatus(s)[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked")return; items.push({cls:cls,title:s.title||s.name||"",uuid:uuid,_sig:_liveSig(s)}); });
+      // 增量兜底: running 项若内容长期无增量更新 → 转 blocked(卡住)
+      for(var k=0;k<items.length;k++){ if(items[k].cls==="running"){ try{ await refineStuck(a, items[k]); }catch(e){} } }
+      items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="blocked")blocked++; });
       var total=running+awaiting+blocked;
       if(total>0) _trk[(a.email||"").toLowerCase()]={no:i+1,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,total:total,items:items,ts:Date.now()};
       else delete _trk[(a.email||"").toLowerCase()];
@@ -617,6 +654,7 @@ async function pollTrk(){
     }
     if(mstat)mstat.textContent="Devin Cloud 监测就绪 · "+accs.length+" 号在册";
   }catch(e){ if(dot)dot.className="mon-dot off"; if(mstat)mstat.textContent="监测异常"; }
+  _pruneSig();
   _trkBusy=false; paintTrk(); paintRowRun();
 }
 function devinTag(a){ try{ var t=JSON.parse(localStorage.getItem("rtflow.tags")||"{}"); return t[(a.email||"").toLowerCase()]||""; }catch(e){ return ""; } }
