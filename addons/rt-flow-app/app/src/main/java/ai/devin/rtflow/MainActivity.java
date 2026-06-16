@@ -102,6 +102,8 @@ public class MainActivity extends AppCompatActivity {
     private androidx.activity.result.ActivityResultLauncher<Intent> fileChooser;
 
     private FrameLayout content;
+    private FrameLayout autoHost;   // 常驻·满屏·INVISIBLE 容器: 停泊非活动标签 WebView, 使其保持挂载窗口+有尺寸
+                                    // (否则后台标签 detached → evaluateJavascript 回调不触发、draw() 截不到图)
     private LinearLayout tabStripRow;
     private EditText addr;
     private Button dlBtn;
@@ -290,6 +292,12 @@ public class MainActivity extends AppCompatActivity {
         content = new FrameLayout(this);
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         content.setLayoutParams(clp);
+
+        // 后台标签停泊容器: 满屏 + INVISIBLE (仍挂载窗口·仍被测量布局, 故 WebView JS 回调可触发、可 draw 截图)
+        autoHost = new FrameLayout(this);
+        autoHost.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        autoHost.setVisibility(android.view.View.INVISIBLE);
+        content.addView(autoHost);
 
         root.addView(bar);
         root.addView(btnRow);
@@ -679,7 +687,17 @@ public class MainActivity extends AppCompatActivity {
         swipe.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         tab.swipe = swipe;
         tabs.add(tab);
+        parkHost(tab);   // 立即停泊到 autoHost: 挂载窗口+有尺寸, 后台自动化标签 JS/截图可用
         return tab;
+    }
+
+    /** 把标签的视图停泊到常驻 INVISIBLE 容器 autoHost (保持挂载窗口与尺寸); 活动标签由 selectTab 提到 content 顶层。 */
+    private void parkHost(Tab t) {
+        if (t == null || autoHost == null) return;
+        android.view.View host = t.swipe != null ? t.swipe : t.web;
+        if (host == null || host.getParent() == autoHost) return;
+        if (host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
+        autoHost.addView(host, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
     private void loadInto(Tab tab, String url) {
@@ -698,10 +716,14 @@ public class MainActivity extends AppCompatActivity {
         if (idx < 0 || idx >= tabs.size()) return;
         active = idx;
         content.removeAllViews();
+        // autoHost 常驻 (停泊其余标签·保持挂载窗口与尺寸, 后台自动化可用); 活动标签提到其上层显示。
+        if (autoHost != null) content.addView(autoHost);
         Tab t = tabs.get(idx);
         android.view.View host = t.swipe != null ? t.swipe : t.web;
         if (host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
         content.addView(host);
+        // 其余标签全部停泊回 autoHost (确保始终挂载窗口·有尺寸)
+        for (int i = 0; i < tabs.size(); i++) if (i != idx) parkHost(tabs.get(i));
         // 下载悬浮窗置顶 (在 WebView 之上)
         if (dlPanel != null) {
             if (dlPanel.getParent() != null) ((ViewGroup) dlPanel.getParent()).removeView(dlPanel);
@@ -2180,7 +2202,16 @@ public class MainActivity extends AppCompatActivity {
         Tab t = tabs.get(tabIndex);
         if (t.web == null) return "";
         try {
-            android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(t.web.getWidth(), t.web.getHeight(), android.graphics.Bitmap.Config.ARGB_8888);
+            int w = t.web.getWidth(), h = t.web.getHeight();
+            if (w <= 0 || h <= 0) {   // 未布局的后台标签: 按屏幕尺寸强制测量+布局再截
+                android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+                w = dm.widthPixels; h = dm.heightPixels;
+                t.web.measure(android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
+                              android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY));
+                t.web.layout(0, 0, w, h);
+            }
+            if (w <= 0 || h <= 0) return "";
+            android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
             android.graphics.Canvas c = new android.graphics.Canvas(bmp);
             t.web.draw(c);
             ByteArrayOutputStream bos = new ByteArrayOutputStream();

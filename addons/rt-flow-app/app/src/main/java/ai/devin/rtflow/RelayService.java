@@ -115,8 +115,12 @@ public class RelayService extends Service {
             MainActivity m = MainActivity.sInstance;
             if (m == null) return "null";
             final String[] r = {"null"};
-            try { m.runOnUiThread(() -> m.ipcExecJs(tabIndex, js, v -> { r[0] = v; synchronized(r){r.notifyAll();} }));
-                synchronized(r){ r.wait(5000); } } catch (Exception e) {}
+            final boolean[] done = {false};
+            try {
+                m.runOnUiThread(() -> m.ipcExecJs(tabIndex, js, v -> { synchronized(r){ r[0] = (v == null ? "null" : v); done[0] = true; r.notifyAll(); } }));
+                synchronized(r){ long end = System.currentTimeMillis() + 8000;
+                    while (!done[0]) { long left = end - System.currentTimeMillis(); if (left <= 0) break; r.wait(left); } }
+            } catch (Exception e) {}
             return r[0];
         }
 

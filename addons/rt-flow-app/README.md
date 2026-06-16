@@ -111,7 +111,8 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 | v0.14.1 | 高级浏览器自动化 (browse* +8: 点击/填表/等待元素/提交/提取链接+输入/页面信息/滚动) + 高级手机操控 (phone* +4: 电池/WiFi/振动/音量) + getCloudMd/getLocalMd 完整 API 文档 RPC |
 | v0.14.2 | 敏感数据读取 (phone* +5: 联系人/短信收件箱(含OTP)/通话记录 + 运行时权限申请/查询) — 辅助全链路账号注册与验证码读取 |
 | v0.14.3 | ADB/scrcpy 级系统级接管 (AccessibilityService, 无需 root)：phone* +10 — 手势注入(点击/长按/滑动) + 全局操作(返回/主页/最近/通知/锁屏) + 读屏(控件树) + 按文字点击 + 文本输入 + 全屏截图(takeScreenshot) |
-| v0.14.4 | **当前版本**：重新锚定本源 — 全仓统一命名 Devin Cloud 手机版 (清除 RT Flow 残留) + 渐进式文档系统重构 (云端轻量接入/三大核心板块概览·getModuleDoc 深入/本地重型) + 一键授权 `phoneEnsureControl` (穿透面板「⚡ 一键授权系统级接管」按钮·自动跳转·用户只点允许) + 远程开关在浏览器壳同步生效 + Node mock-Native 测试台 (32 断言全过) |
+| v0.14.4 | 重新锚定本源 — 全仓统一命名 Devin Cloud 手机版 (清除 RT Flow 残留) + 渐进式文档系统重构 (云端轻量接入/三大核心板块概览·getModuleDoc 深入/本地重型) + 一键授权 `phoneEnsureControl` (穿透面板「⚡ 一键授权系统级接管」按钮·自动跳转·用户只点允许) + 远程开关在浏览器壳同步生效 + Node mock-Native 测试台 (32 断言全过) |
+| v0.14.5 | **当前版本**：真机全链路实测修复 — 后台标签 `autoHost` 常驻停泊 (满屏·INVISIBLE·保持挂载窗口与尺寸)，修复 `browseExecJs`/`browseGetDom`/`browseScreenshot` 对后台标签失效 (detached WebView 不触发 JS 回调、0 尺寸截不到图) 的真机 bug + `browseExecJs` 守卫式 wait/notify 防丢唤醒 + `ipcScreenshot` 0 尺寸兜底 (按屏幕强制测量布局)。经中继真机实测: 文档系统/软件本体(getState)/手机本体(phoneInfo/Battery)/一键授权全部验证通过 |
 
 ## 取代的旧模块
 
