@@ -926,6 +926,21 @@ function _quotaEndpointDead() {
   return Date.now() - _quotaEndpointHealth.lastSuccess > 30 * 60 * 1000;
 }
 const HTTP_TIMEOUT_MS = 12000;
+// ── 有界 keep-alive 共享 Agent · 釜底抽薪根治 app.devin.ai socket 风暴 ──
+// 病因(141 实测): httpsReq (登录/postauth/取 orgId/额度/billing) 走 Node 默认 globalAgent
+//   (keepAlive:false · maxSockets:Infinity), 每账号预载/校验都新建 socket 且不复用、不限并发,
+//   ~数百账号一拥而上 → 单进程对 app.devin.ai 堆出 700+ ESTABLISHED, 把家用路由器 conntrack 打满。
+//   devin_cloud.js 早已用有界 Agent 收敛 api 侧, 但 extension.js 这条 app 侧旁路一直未纳管 → 漏网根因。
+// 治法: 与 devin_cloud 同理 — 单进程一组复用池, 对同一 host 并发 socket 硬上限 + 空闲回收。
+const HTTP_MAX_SOCKETS_PER_HOST = 8; // 单进程对同一 host 并发 socket 硬上限 (超出排队·不再无限新建)
+const _httpsAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 1000,
+  maxSockets: HTTP_MAX_SOCKETS_PER_HOST,
+  maxFreeSockets: 4,
+  timeout: 15000, // 空闲 socket 超时回收 (防 Bound/FinWait/TimeWait 堆积)
+  scheduling: "fifo",
+});
 const WAM_DIR = path.join(os.homedir(), ".wam");
 const STATE_FILE = path.join(WAM_DIR, "wam-state.json");
 // v2.7.4 (补入v3.0.2) · 道恒无名·侯王若能守之·万物将自宾·民莫之令而自均焉 (三十二章)
@@ -4331,6 +4346,7 @@ function httpsReq(method, urlStr, headers, body, timeoutMs) {
         path: u.pathname + u.search,
         headers: Object.assign({ "User-Agent": UA }, headers || {}),
         timeout: timeoutMs || HTTP_TIMEOUT_MS,
+        agent: _httpsAgent, // 有界复用池 · 防 globalAgent 无限新建 socket 打满 conntrack
       },
       (res) => {
         const chunks = [];

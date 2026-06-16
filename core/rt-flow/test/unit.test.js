@@ -454,6 +454,17 @@ function test(name, fn) {
     cloud.configure({ turboDownloadConcurrency: before });
   });
 
+  // ── app 侧 httpsReq 有界 Agent (釜底抽薪根治 conntrack 风暴 v4.8.7) ──
+  console.log("\n[httpsReq 有界 Agent · 防 socket 风暴]");
+  test("extension.js httpsReq 绑有界 keep-alive Agent (非 globalAgent)", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+    assert.ok(/new https\.Agent\(/.test(src), "extension.js 必建有界 https.Agent");
+    assert.ok(/maxSockets:\s*HTTP_MAX_SOCKETS_PER_HOST/.test(src), "Agent 必设单 host socket 上限");
+    assert.ok(/keepAlive:\s*true/.test(src), "Agent 必 keepAlive 复用");
+    assert.ok(/agent:\s*_httpsAgent/.test(src), "httpsReq 必把请求挂到有界 Agent");
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);

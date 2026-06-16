@@ -2,6 +2,23 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.8.7 (2026-06-16) · 釜底抽薪·根治 app.devin.ai socket 风暴 (漏网旁路纳管)
+
+> 绝利一源 · 一处复用池, 杜绝"每请求新建+不复用"的 socket 海量泄漏。
+
+### 背景 · 141 实测再定位 (比阶段一更深一层)
+- 阶段一「跨窗口选主」已生效: 同机只有一个主窗口在扫 (实测单进程 pid 15228)。
+- 但**单个主窗口自己**对 `app.devin.ai` 仍堆出 **720 条 ESTABLISHED** (四个边缘 IP 各 ~180), 把家用路由器 conntrack 打满 —— 这才是"修过仍卡"的真凶。
+
+### 根因
+- `devin_cloud.js`(api.devin.ai 侧)早已用有界 keep-alive Agent (单 host ≤8 socket) 收敛。
+- 但 `extension.js` 另有一条旁路 `httpsReq`(每账号**登录 / 取 orgId(post-auth) / 额度 / billing**, 全打 `app.devin.ai`)一直裸用 Node 默认 `globalAgent` —— `keepAlive:false · maxSockets:Infinity`, 不复用、不限并发。~数百账号预载/校验时一拥而上 → 单进程 700+ socket。该旁路从未纳入 socket 预算。
+
+### 修复 (釜底抽薪)
+- `httpsReq` 改挂**有界 keep-alive 共享 Agent**: `maxSockets=8`(单 host 并发硬上限·超出排队不再新建)、`maxFreeSockets=4`、空闲 15s 回收。与 devin_cloud 同一套逻辑, 全部登录/额度/billing 流量纳入预算。
+- 功能零改动 (登录/额度/billing 结果不变), 仅把传输层的 socket 扇出收敛。
+- 预期 141: app.devin.ai 出网连接 720 → 个位/十位级。
+
 ## v4.8.6 (2026-06-16) · 对话详情可定位/可搜索 · 思考默认折叠 · 手动下载前台极速档
 
 > 大象无形 · 思之纷纭默而藏, 我言粲然一指可达; 取之有时, 前台抢速而后台细流。

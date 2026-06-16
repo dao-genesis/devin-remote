@@ -2,7 +2,7 @@
   "name": "dao-one",
   "displayName": "道 · 归一 (Dao One)",
   "description": "归一超级插件本体: 单一驾驶舱按'意图'统御全功能面板(dao-vsix)+提示词隔离·外接模型路由(dao-proxy-pro)+Devin Cloud 多账号/备份/回归本源(rt-flow)。三引擎隐形协作,用户无感无为,系统无不为。大道至简,道法自然。",
-  "version": "2.2.9",
+  "version": "2.2.10",
   "publisher": "dao",
   "license": "Apache-2.0",
   "icon": "media/icon.png",
