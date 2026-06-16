@@ -18,7 +18,28 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\clo
 
 冷启动脚本会从源码构建 **dao-one 大 one**（`core/dao-one`，以 dao-vsix 二合一为**本源基座** + Proxy Pro 三面板**子模块** + 本地 HTTP API），安装后卸载会抢占同名 id 的 `dao-vsix` / `rt-flow` / `dao-proxy-pro`，让 `dao.dao-one` 成为唯一属主。**最终以 dao-one 大 one 为主交付**；若只要纯二合一本源，可单独构建 `core/dao-vsix`。
 
-> 所有 VSIX 均为构建产物（已 `.gitignore`，走 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest) 分发或本地 `node build.js && npx @vscode/vsce package` 现产）。
+> 所有 VSIX 均为构建产物（已 `.gitignore`，走 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases) 分发或本地 `node build.js && npx @vscode/vsce package` 现产）。
+
+---
+
+## 模块下载 · 去中心化（按模块独立发版）
+
+每个插件**互不干扰**、各有独立的 Release / tag / 下载链接：开发哪个就只刷新哪个，不被「整合大 Release」绑架（鸡犬相闻，民至于老死不相往来）。下表由 CI（`.github/workflows/release.yml`）依据各模块当前版本**自动维护**，链接指向**该模块自己的** Release 资产（tag 形如 `‹模块›-v‹版本›`）。
+
+<!-- DAO-MODULE-INDEX:START -->
+| 模块 | 版本 | 扩展 id | 说明 | Release / 下载 |
+|---|---|---|---|---|
+| **dao-one** | `2.3.2` | `dao.dao-one` | 最终主交付：dao-vsix 二合一本源基座 + Proxy Pro 三面板子模块（折入 Devin Cloud 全功能面板），其余与 dao-vsix 完全一致。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-one-v2.3.2) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-one-v2.3.2/dao-one-2.3.2.vsix) |
+| **dao-vsix** | `3.4.4` | `dao.dao-vsix` | 本源基座：rt-flow 切号视图 + Devin Cloud 全功能面板 + 本地 HTTP API（含多账号反向注入）。可单独安装。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-vsix-v3.4.4) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-vsix-v3.4.4/dao-vsix-3.4.4.vsix) |
+| **rt-flow** | `4.8.7` | `devaid.rt-flow` | Devin Cloud 接入本体：对话备份 / 全量快照 / 一键回归本源 wipe / 对话额度上限。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/rt-flow-v4.8.7) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rt-flow-v4.8.7/rt-flow-4.8.7.vsix) |
+| **dao-proxy-pro** | `9.9.293` | `dao-agi.dao-proxy-pro` | 底层提示词隔离替换 + 外接第三方模型路由。三面板：本源观照 / 渠道配置 / 模型路由。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-proxy-pro-v9.9.293) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-proxy-pro-v9.9.293/dao-proxy-pro-9.9.293.vsix) |
+| **dao-bridge** | `3.4.0` | `dao.dao-bridge` | 内网穿透本体：relay-first + cloudflared 自愈/断点续传，随 IDE 自启。独立 addon，不与其它插件冲突。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-bridge-v3.4.0) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-bridge-v3.4.0/dao-bridge-3.4.0.vsix) |
+| **devin-git-auth** | `2.3.2` | `devaid.devin-git-auth` | 多 Devin 账号绑定同一 GitHub（git-permissions 真实授权管理）。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/devin-git-auth-v2.3.2) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/devin-git-auth-v2.3.2/devin-git-auth-2.3.2.vsix) |
+| **dao-devin-export** | `1.3.4` | `dao-natural.dao-devin-export` | 单账号对话数据导出插件（VSIX）。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-devin-export-v1.3.4) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-devin-export-v1.3.4/dao-devin-export-1.3.4.vsix) |
+| **dao-relay** | `2.0.0` | _(Worker)_ | 内网穿透栈的中继 Worker 源（Cloudflare Worker，v2·(session,token) 零账号配对·一键部署）。非 VSIX，不进编辑器安装。 | [源码](https://github.com/zhouyoukang1234-spec/devin-remote/tree/main/addons/dao-relay) |
+<!-- DAO-MODULE-INDEX:END -->
+
+> 想要一站式的最终主交付，装 **dao-one** 即可（已内联 dao-vsix 本源 + Proxy Pro 子模块）；想要纯二合一本源，装 **dao-vsix**；其余为按需独立插件。
 
 ---
 

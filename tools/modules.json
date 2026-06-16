@@ -1,0 +1,117 @@
+{
+  "_doc": "去中心化模块登记表 · 单一事实源。detect-modules.js / release-notes.js / gen-readme-index.js / release.yml 均读此表。每个 vsix 模块独立发版到自己的 tag <key>-v<version>，开发哪个只刷新哪个，互不干扰。yazl 由 core/dao-vsix/node_modules 提供, 故 pack-vsix 类模块构建前先 npm install core/dao-vsix。",
+  "modules": [
+    {
+      "key": "dao-one",
+      "name": "dao-one",
+      "extId": "dao.dao-one",
+      "dir": "core/dao-one",
+      "trigger": ["core/dao-one"],
+      "kind": "vsix",
+      "title": "dao-one · 归一大 one（最终主交付）",
+      "desc": "最终主交付：dao-vsix 二合一本源基座 + Proxy Pro 三面板子模块（折入 Devin Cloud 全功能面板），其余与 dao-vsix 完全一致。",
+      "build": [
+        "cd core/dao-one && npm install --no-audit --no-fund",
+        "cd core/dao-one && node build.js",
+        "cd core/dao-one && npx --yes @vscode/vsce package --allow-missing-repository --skip-license"
+      ]
+    },
+    {
+      "key": "dao-vsix",
+      "name": "dao-vsix",
+      "extId": "dao.dao-vsix",
+      "dir": "core/dao-vsix",
+      "trigger": ["core/dao-vsix"],
+      "kind": "vsix",
+      "title": "dao-vsix · 二合一本源基座",
+      "desc": "本源基座：rt-flow 切号视图 + Devin Cloud 全功能面板 + 本地 HTTP API（含多账号反向注入）。可单独安装。",
+      "build": [
+        "cd core/dao-vsix && npm install --no-audit --no-fund",
+        "cd core/dao-vsix && node build.js",
+        "node tools/pack-vsix.js core/dao-vsix"
+      ]
+    },
+    {
+      "key": "rt-flow",
+      "name": "rt-flow",
+      "extId": "devaid.rt-flow",
+      "dir": "core/rt-flow",
+      "trigger": ["core/rt-flow"],
+      "kind": "vsix",
+      "title": "rt-flow · Devin Cloud 接入本体",
+      "desc": "Devin Cloud 接入本体：对话备份 / 全量快照 / 一键回归本源 wipe / 对话额度上限。",
+      "build": [
+        "cd core/dao-vsix && npm install --no-audit --no-fund",
+        "node tools/pack-vsix.js core/rt-flow"
+      ]
+    },
+    {
+      "key": "dao-proxy-pro",
+      "name": "dao-proxy-pro",
+      "extId": "dao-agi.dao-proxy-pro",
+      "dir": "core/dao-proxy-pro",
+      "trigger": ["core/dao-proxy-pro"],
+      "kind": "vsix",
+      "title": "dao-proxy-pro · 提示词隔离 + 外接路由",
+      "desc": "底层提示词隔离替换 + 外接第三方模型路由。三面板：本源观照 / 渠道配置 / 模型路由。",
+      "build": [
+        "cd core/dao-vsix && npm install --no-audit --no-fund",
+        "node tools/pack-vsix.js core/dao-proxy-pro"
+      ]
+    },
+    {
+      "key": "dao-bridge",
+      "name": "dao-bridge",
+      "extId": "dao.dao-bridge",
+      "dir": "addons/dao-bridge/dao-bridge-ext",
+      "trigger": ["addons/dao-bridge/dao-bridge-ext"],
+      "kind": "vsix",
+      "title": "dao-bridge · 内网穿透插件",
+      "desc": "内网穿透本体：relay-first + cloudflared 自愈/断点续传，随 IDE 自启。独立 addon，不与其它插件冲突。",
+      "build": [
+        "cd core/dao-vsix && npm install --no-audit --no-fund",
+        "node tools/pack-vsix.js addons/dao-bridge/dao-bridge-ext"
+      ]
+    },
+    {
+      "key": "devin-git-auth",
+      "name": "devin-git-auth",
+      "extId": "devaid.devin-git-auth",
+      "dir": "addons/devin-git-auth",
+      "trigger": ["addons/devin-git-auth"],
+      "kind": "vsix",
+      "title": "devin-git-auth · 多账号绑定同一 GitHub",
+      "desc": "多 Devin 账号绑定同一 GitHub（git-permissions 真实授权管理）。",
+      "build": [
+        "cd core/dao-vsix && npm install --no-audit --no-fund",
+        "node tools/pack-vsix.js addons/devin-git-auth"
+      ]
+    },
+    {
+      "key": "dao-devin-export",
+      "name": "dao-devin-export",
+      "extId": "dao-natural.dao-devin-export",
+      "dir": "addons/dao-export",
+      "trigger": ["addons/dao-export"],
+      "kind": "vsix",
+      "title": "dao-devin-export · 对话记录导出",
+      "desc": "单账号对话数据导出插件（VSIX）。",
+      "build": [
+        "cd core/dao-vsix && npm install --no-audit --no-fund",
+        "cd addons/dao-export && npm install --no-audit --no-fund",
+        "cd addons/dao-export && npx --yes tsc -p ./",
+        "node tools/pack-vsix.js addons/dao-export"
+      ]
+    },
+    {
+      "key": "dao-relay",
+      "name": "dao-relay",
+      "dir": "addons/dao-relay",
+      "trigger": ["addons/dao-relay"],
+      "kind": "worker",
+      "title": "dao-relay · 内网穿透中继 Worker",
+      "desc": "内网穿透栈的中继 Worker 源（Cloudflare Worker，v2·(session,token) 零账号配对·一键部署）。非 VSIX，不进编辑器安装。",
+      "build": []
+    }
+  ]
+}

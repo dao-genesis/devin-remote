@@ -1,9 +1,11 @@
 name: Sync plugins to Release
 
-# 道法自然 · 大道至简：往 main 推代码即可，本工作流自动构建全部插件 VSIX 并把最新版同步到 Release，
-# 无需手动碰 Release。Release tag 跟随 dao-vsix（本源二合一）版本（vX.Y.Z）：同版本重复推送原地刷新资产，
-# bump 了 dao-vsix 版本则自动新建版本 Release。鉴权用内置 GITHUB_TOKEN，跑在 GitHub 原生环境。
-# 触发：push 到 main（命中插件源码，排除纯文档）；亦可手动 workflow_dispatch。
+# 道法自然 · 去中心化按模块发版：往 main 推代码即可。本工作流只重建并发版「真正改动的模块」，
+# 每个模块发到自己的 tag <key>-v<version>（资产仅含它自己的 VSIX），互不干扰（鸡犬相闻，老死不相往来）；
+# 末尾据各模块当前版本自动维护 README 下载索引。鉴权用内置 GITHUB_TOKEN，跑在 GitHub 原生环境。
+# 单一事实源 = tools/modules.json（detect/notes/index 三处都读它）。
+# 触发：push 到 main（命中 core/** · addons/** · 发版基础设施）；亦可手动 workflow_dispatch（all=true 强制全量，
+#       auto-merge 合并后也会 dispatch 本工作流——彼时按合并提交差异只发改动模块）。
 
 on:
   push:
@@ -12,98 +14,130 @@ on:
       - "core/**"
       - "addons/**"
       - "tools/pack-vsix.js"
+      - "tools/modules.json"
+      - "tools/detect-modules.js"
+      - "tools/release-notes.js"
+      - "tools/gen-readme-index.js"
       - ".github/workflows/release.yml"
-      - "!**/*.md"
   workflow_dispatch:
+    inputs:
+      all:
+        description: "强制全部 vsix 模块发版 (true/false)"
+        default: "false"
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-sync
+  group: release-decentralized
   cancel-in-progress: false
 
 jobs:
-  release:
+  detect:
     runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.d.outputs.modules }}
+      any: ${{ steps.d.outputs.any }}
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      - name: Install build deps
-        run: |
-          (cd core/dao-one && npm install)
-          (cd core/dao-vsix && npm install)
-          (cd addons/dao-export && npm install)
-
-      - name: Build all VSIX assets
+      - id: d
         run: |
           set -e
-          mkdir -p release-assets
-          # dao-one（可选三合一大 one）：build.js 现拷四引擎源 + 叠 proxy-fold.patch，再 vsce 打包
-          (cd core/dao-one && node build.js && npx @vscode/vsce package --allow-missing-repository --skip-license)
-          mv core/dao-one/*.vsix release-assets/
-          # dao-vsix 需先转译，再用通用打包器
-          (cd core/dao-vsix && node build.js)
-          for d in core/dao-vsix core/rt-flow core/dao-proxy-pro addons/dao-bridge/dao-bridge-ext addons/devin-git-auth; do
-            node tools/pack-vsix.js "$d"
-            mv "$d"/*.vsix release-assets/
-          done
-          # dao-export 需 tsc
-          (cd addons/dao-export && npx tsc -p ./)
-          node tools/pack-vsix.js addons/dao-export
-          mv addons/dao-export/*.vsix release-assets/
-          ls -lh release-assets/
-
-      - name: Compute version + release notes
-        id: meta
-        run: |
-          set -e
-          VER=$(node -p "require('./core/dao-vsix/package.json').version")
-          echo "ver=$VER" >> "$GITHUB_OUTPUT"
-          {
-            echo "# dao · 4+4+3 (v$VER)"
-            echo
-            echo "最终主交付 = **dao-one 大 one**（dao-vsix 二合一本源基座 + Proxy Pro 三面板子模块，折入 Devin Cloud 全功能面板），冷启动只装它一个；**dao-vsix** = 本源基座，可单独安装。本 Release 由 CI 自动同步自 main 最新源码。"
-            echo
-            echo "| 插件 | 版本 |"
-            echo "|---|---|"
-            for entry in \
-              "dao-one:core/dao-one" \
-              "dao-vsix:core/dao-vsix" \
-              "rt-flow:core/rt-flow" \
-              "dao-proxy-pro:core/dao-proxy-pro" \
-              "dao-bridge:addons/dao-bridge/dao-bridge-ext" \
-              "devin-git-auth:addons/devin-git-auth" \
-              "dao-devin-export:addons/dao-export"; do
-              name="${entry%%:*}"; dir="${entry##*:}"
-              v=$(node -p "require('./$dir/package.json').version")
-              echo "| $name | $v |"
-            done
-            # rt-flow 顶部 changelog 段落（首个 "## " 到下一个 "## " 之间），让 Release 自带变更摘要
-            if [ -f core/rt-flow/changelog.md ]; then
-              echo
-              echo "---"
-              echo "## rt-flow 最新变更"
-              echo
-              awk '/^## /{c++} c==1{print} c==2{exit}' core/rt-flow/changelog.md
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.all }}" = "true" ]; then
+            MODS=$(node tools/detect-modules.js --all)
+          else
+            BEFORE="${{ github.event.before }}"
+            ZERO="0000000000000000000000000000000000000000"
+            if [ -n "$BEFORE" ] && [ "$BEFORE" != "$ZERO" ] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+              git diff --name-only "$BEFORE" "${{ github.sha }}" > changed.txt
+            else
+              # workflow_dispatch / 无 before：用合并提交相对首父的差异（= 被合 PR 的改动）
+              git diff --name-only "${{ github.sha }}^" "${{ github.sha }}" > changed.txt 2>/dev/null || git diff --name-only HEAD~1 HEAD > changed.txt
             fi
-          } > release-notes.md
-          cat release-notes.md
+            echo "changed files:"; cat changed.txt || true
+            MODS=$(node tools/detect-modules.js --files changed.txt)
+          fi
+          echo "modules=$MODS" >> "$GITHUB_OUTPUT"
+          if [ "$MODS" = "[]" ]; then echo "any=false" >> "$GITHUB_OUTPUT"; else echo "any=true" >> "$GITHUB_OUTPUT"; fi
+          echo "detected modules: $MODS"
 
-      - name: Create or update Release
+  release:
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        key: ${{ fromJson(needs.detect.outputs.modules) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build ${{ matrix.key }} VSIX
+        env:
+          KEY: ${{ matrix.key }}
+        run: |
+          set -e
+          node -e '
+            const fs=require("fs");
+            const reg=JSON.parse(fs.readFileSync("tools/modules.json","utf8"));
+            const m=reg.modules.find(x=>x.key===process.env.KEY);
+            if(!m){console.error("unknown module "+process.env.KEY);process.exit(1);}
+            // 每条命令各自在子 shell 中从仓库根执行，避免 cd 串味
+            const sh="set -e\n"+(m.build||[]).map(c=>"( "+c+" )").join("\n")+"\n";
+            fs.writeFileSync("build.sh", sh);
+          '
+          echo "----- build.sh -----"; cat build.sh; echo "--------------------"
+          bash build.sh
+      - name: Create/update Release for ${{ matrix.key }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEY: ${{ matrix.key }}
         run: |
           set -e
-          TAG="v${{ steps.meta.outputs.ver }}"
-          TITLE="dao · 4+4+3 ($TAG)"
+          DIR=$(node -p "require('./tools/modules.json').modules.find(m=>m.key===process.env.KEY).dir")
+          NAME=$(node -p "require('./tools/modules.json').modules.find(m=>m.key===process.env.KEY).name")
+          VER=$(node -p "require('./$DIR/package.json').version")
+          TAG="${KEY}-v${VER}"
+          VSIX="$DIR/${NAME}-${VER}.vsix"
+          echo "module=$KEY dir=$DIR vsix=$VSIX tag=$TAG"
+          ls -lh "$VSIX"
+          node tools/release-notes.js "$KEY" > notes.md
+          TITLE="$KEY v$VER"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "$TITLE" --notes-file release-notes.md --latest --draft=false
-            gh release upload "$TAG" release-assets/*.vsix --clobber
+            gh release edit "$TAG" --title "$TITLE" --notes-file notes.md --draft=false
+            gh release upload "$TAG" "$VSIX" --clobber
           else
-            gh release create "$TAG" release-assets/*.vsix --title "$TITLE" --notes-file release-notes.md --latest --target "$GITHUB_SHA"
+            gh release create "$TAG" "$VSIX" --title "$TITLE" --notes-file notes.md --target "$GITHUB_SHA"
+          fi
+          echo "released $TAG"
+
+  index:
+    needs: [detect, release]
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Regenerate README module index
+        run: node tools/gen-readme-index.js
+      - name: Commit README if changed
+        run: |
+          set -e
+          if [ -n "$(git status --porcelain README.md)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add README.md
+            git commit -m "docs(readme): auto-sync 模块下载索引 [skip ci]"
+            git push
+          else
+            echo "README module index unchanged"
           fi
