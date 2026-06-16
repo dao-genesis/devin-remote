@@ -144,6 +144,7 @@
 
 > 「工作流(workflow)」官网无独立端点(`/workflows` 404)——对应概念即 **Playbooks**(§4)。
 > 「官方规则(rules)」无独立 org 级端点(`/rules` 404)——Devin 规则=仓库内 `AGENTS.md`/Knowledge(§3)，非云端 API。
+> **已落地** `devinListBlueprints`(`snapshot-setup/blueprints`) / `devinGetBlueprint`(详情+`/contents`) / `devinListSnapshots`，本地 HTTP API `GET /api/devin/blueprints` · `POST /api/devin/blueprints/detail` · `GET /api/devin/snapshots`，面板新增「🗺️ 环境蓝图」只读板块。蓝图 git-backed(引用各自仓库)，跨账号注入非平凡，故先只读盘点；写操作待后端确证后再补。
 
 ## 9. Sessions 会话
 
