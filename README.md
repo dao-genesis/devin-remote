@@ -1,19 +1,40 @@
-# dao · 道法自然 · 太上 下知有之
+# dao · 让 Devin Cloud 成为你本地电脑的 AI 编程助手
 
-> **最终主交付 = dao-one 大 one**：在 **dao-vsix 二合一**（本源基座：左 rt-flow 切号 + 中 Devin Cloud 全功能面板）之上，把 **Proxy Pro 三面板**作为 Devin Cloud 全功能面板的**一个子模块**折入，其余与 dao-vsix 完全一致。GitHub Issues / Comments = 无感传输层。
+> **道法自然 · 太上下知有之** —— 把云端 **Devin Cloud** Agent 通过「零成本、零配置、无感内网穿透」**直连你的本地电脑**，
+> 在 VS Code / Windsurf 里像用 Windsurf / Cursor 一样使用 Devin，并统一管理**多账号切换 · 反向注入 · 第三方模型路由**。
 
 [![Release](https://img.shields.io/github/v/release/zhouyoukang1234-spec/devin-remote?label=release&color=2ea44f)](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)
-&nbsp;4 + 4 + 3&nbsp;·&nbsp;[快速安装 ↓](#下载--快速安装)&nbsp;·&nbsp;[冷启动板块](cloud/coldstart/README.md)
+&nbsp;·&nbsp;架构 4 + 4 + 3&nbsp;·&nbsp;[▶ 演示视频](#演示视频)&nbsp;·&nbsp;[⬇ 快速安装](#下载--快速安装)&nbsp;·&nbsp;[📦 模块下载](#模块下载--去中心化按模块独立发版)&nbsp;·&nbsp;[🧊 冷启动](cloud/coldstart/README.md)
 
 ---
 
 ## 演示视频
 
-<video src="https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/demo-assets/devin-remote-demo.mp4" poster="https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/demo-assets/demo-poster.jpg" controls muted playsinline width="720"></video>
+<p align="center">
+  <a href="https://www.bilibili.com/video/BV1HbjP6oE77" title="点击观看完整高清演示（哔哩哔哩）">
+    <img src="https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/demo-assets/devin-remote-demo.gif" alt="dao · Devin Cloud 直连本地电脑 · 无感内网穿透 · 平替 WindSurf 演示" width="900" />
+  </a>
+</p>
 
-▶ **[Devin Cloud 云端 Agent 直接连接本地电脑 · 无感内网穿透 · 彻底平替 WindSurf！](https://www.bilibili.com/video/BV1HbjP6oE77)** —— 视频来源：哔哩哔哩（BV1HbjP6oE77）
+<p align="center">
+  ▶ <b><a href="https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/demo-assets/devin-remote-demo.mp4">点击播放完整高清演示（含声音 · MP4）</a></b>
+  &nbsp;·&nbsp; 视频来源：<a href="https://www.bilibili.com/video/BV1HbjP6oE77">哔哩哔哩 BV1HbjP6oE77</a>
+</p>
 
-> 视频自托管于本仓库 [demo-assets](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/demo-assets) Release，GitHub README 内直接内嵌可播放（无需跳转外站）。
+> 上方为**自动循环播放**的预览动图（打开页面即动，无需点击）；想看带声音的全程录屏，点「**完整高清演示**」即可。预览/视频均自托管于本仓库 [demo-assets](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/demo-assets) Release。
+
+---
+
+## 这是什么？（30 秒看懂）
+
+- 🌉 **云端 Agent 直连本地电脑**：Devin Cloud 跑在云端，经 `dao-bridge` **零配置内网穿透**直接读写你本地电脑的文件 / 终端 / 仓库 —— 不需要公网 IP、不需要改路由器、不需要 Cloudflare 账号。
+- 🪟 **彻底平替 WindSurf / Cursor 的本地体验**：在 VS Code / Windsurf 里把云端 Devin 当本地 AI 助手用，对话、改码、跑命令一气呵成。
+- 🏠 **单账号全功能面板**：一个面板**实时读写**当前账号的 额度 / Knowledge / Playbook / Secret / 环境蓝图 / MCP / 环境 / 自动化，与官网完全双向同步。
+- 🔁 **多账号 RT Flow + 反向注入**：左栏一键切号；把 Knowledge / Playbook / Secret / MCP / 自动化 **批量注入到所有账号**。
+- 🧩 **提示词隔离 + 第三方模型路由**（Proxy Pro 三面板：本源观照 / 渠道配置 / 模型路由）。
+- 📦 **去中心化发版**：每个插件各有独立 Release / 下载链接，开发哪个就只刷新哪个，互不干扰。
+
+> 想直接上手 → 看下方 **[下载 · 快速安装](#下载--快速安装)**；想了解构成 → 看 **[架构全貌 4 + 4 + 3](#架构全貌--4--4--3)**。
 
 ---
 
