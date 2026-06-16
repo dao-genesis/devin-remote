@@ -709,14 +709,9 @@ public class MainActivity extends AppCompatActivity {
                 startDownload(dlUrl, ua, contentDisposition, mimetype));
 
         web.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        // 下拉刷新手势 (D11): 顶部下拉重载当前页
-        androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
-        swipe.setColorSchemeColors(0xFF2EA043, 0xFF1F6FEB);
-        swipe.setProgressBackgroundColorSchemeColor(0xFF161B22);
-        swipe.addView(web, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        swipe.setOnRefreshListener(() -> { try { web.reload(); } catch (Exception ignored) {} });
-        swipe.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        tab.swipe = swipe;
+        // 不再包 SwipeRefreshLayout 下拉刷新: 它会拦截顶部下拉, 导致 Devin 对话页等无法正常上下滑动。
+        // 刷新统一走右上角刷新按钮 (reloadActive)。tab.swipe 保持 null, 各处视图挂载自动回退到 web。
+        tab.swipe = null;
         tabs.add(tab);
         parkHost(tab);   // 立即停泊到 autoHost: 挂载窗口+有尺寸, 后台自动化标签 JS/截图可用
         return tab;
@@ -1681,15 +1676,27 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) { toast("更新失败: " + e.getMessage()); }
     }
 
+    /** 待装 APK: 用户被引导去开「安装未知应用」开关, 返回 App 时 onResume 自动续装 (零再触发)。 */
+    private File pendingInstallApk;
+
     private void installApk(File apk) {
         try {
-            // Android 8+ 需「允许安装未知应用」, 未授权时引导至开关页
+            // Android 8+ 需「允许安装未知应用」。未授权时: 记下待装包 → 自动跳到本应用开关页 →
+            // 用户打开开关返回 App, onResume 自动续装, 无需再手动触发更新 (最大化降低操作/认知成本)。
             if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
-                try {
-                    startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                            Uri.parse("package:" + getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-                    toast("请先允许「安装未知应用」, 然后重试更新");
-                } catch (Exception ignored) {}
+                pendingInstallApk = apk;
+                main.post(() -> {
+                    if (isFinishing()) return;
+                    try {
+                        new android.app.AlertDialog.Builder(this)
+                            .setTitle("再点一下开关即可自动更新")
+                            .setMessage("系统要求先允许「安装未知应用」。点「去开启」会直接跳到本应用的开关页, 打开开关后按返回键回到 App, 更新会自动继续安装, 无需其他操作。")
+                            .setCancelable(false)
+                            .setPositiveButton("去开启", (d, w) -> openUnknownSourcesSetting())
+                            .setNegativeButton("取消", (d, w) -> { pendingInstallApk = null; })
+                            .show();
+                    } catch (Exception e) { openUnknownSourcesSetting(); }
+                });
                 return;
             }
             Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", apk);
@@ -2287,9 +2294,27 @@ public class MainActivity extends AppCompatActivity {
         saveTabs();
     }
 
+    /** 跳到本应用「安装未知应用」开关页 (package: URI 直达本应用, 避免用户在长列表里找不到)。 */
+    private void openUnknownSourcesSetting() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception e) {
+            try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); } catch (Exception ignored) {}
+        }
+    }
+
     @Override protected void onResume() {
         super.onResume();
         refreshSearchEngine();
+        // 用户从「安装未知应用」开关页返回: 若已授权且有待装包, 自动续装 (零再触发)。
+        try {
+            if (pendingInstallApk != null && (Build.VERSION.SDK_INT < 26 || getPackageManager().canRequestPackageInstalls())) {
+                File a = pendingInstallApk; pendingInstallApk = null;
+                if (a.exists()) installApk(a);
+            }
+        } catch (Exception ignored) {}
     }
 
     @Override protected void onDestroy() {
