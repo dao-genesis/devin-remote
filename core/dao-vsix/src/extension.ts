@@ -1504,6 +1504,23 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
             return await devinClearAutomations(ws.devinOrgId, ws.devinAuth1);
         }
+        case '/api/devin/blueprints': {
+            // 环境蓝图列表 (snapshot-setup/blueprints)
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            return await devinListBlueprints(ws.devinOrgId, ws.devinAuth1);
+        }
+        case '/api/devin/blueprints/detail': {
+            const bpb = await readBody(req);
+            const { id } = JSON.parse(bpb || '{}');
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            if (!id) return { ok: false, error: 'id required' };
+            return await devinGetBlueprint(ws.devinOrgId, id, ws.devinAuth1);
+        }
+        case '/api/devin/snapshots': {
+            // 机器快照列表
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            return await devinListSnapshots(ws.devinOrgId, ws.devinAuth1);
+        }
         case '/api/devin/session/delete': {
             const sdb = await readBody(req);
             const { id } = JSON.parse(sdb || '{}');
@@ -2410,6 +2427,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <!-- ② 去芜存菁: Knowledge/Playbooks/Secrets/Git 三标签已合并进主页(overview)「当前账号·手动内容」分区 -->
 <div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器 · 专用面板">🧩</div>
 <div class="ni" data-tab="automations" onclick="sw('automations')" title="Automations 自动化">⚙️</div>
+<div class="ni" data-tab="blueprints" onclick="sw('blueprints')" title="环境蓝图 · Blueprints (snapshot-setup·只读)">🗺️</div>
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
 </nav>
@@ -2427,6 +2445,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="tv" id="v-backups"></div>
 <div class="tv" id="v-mcp"></div>
 <div class="tv" id="v-automations"></div>
+<div class="tv" id="v-blueprints"></div>
 <div class="tv" id="v-bridge"></div>
 <div class="tv" id="v-inject"></div>
 </div>
@@ -2489,6 +2508,7 @@ function sw(t){
   if(t==='inject'){ cmd('getInjectProfile'); return; }
   if(t==='bridge'){ rBridgeFull(); return; }
   if(t==='backups'){ rBackups(); return; }
+  if(t==='blueprints'){ rBlueprintsLoading(); cmd('loadBlueprints'); return; }
   if(t!=='overview'&&S.auth.loggedIn){
     const v=document.getElementById('v-'+t);
     if(v&&!v.dataset.loaded){
@@ -2572,6 +2592,22 @@ function rBackups(){
   var v=document.getElementById('v-backups');if(!v)return;
   v.innerHTML='<div class="empty"><div class="ic">📦</div><p style="margin:8px 0;color:var(--muted)">正在扫描本地备份…</p></div>';
   cmd('loadBackups');
+}
+// 环境蓝图 · 只读板块 (snapshot-setup/blueprints + 机器快照计数)
+function rBlueprintsLoading(){var v=document.getElementById('v-blueprints');if(v)v.innerHTML='<div class="empty"><div class="ic">🗺️</div><p style="margin:8px 0;color:var(--muted)">正在加载环境蓝图…</p></div>'}
+function rBlueprintsData(items,snapCount,err){
+  var v=document.getElementById('v-blueprints');if(!v)return;
+  if(err){
+    if(err==='需要 cog_ API Key'){v.innerHTML='<div class="empty"><div class="ic">🗺️</div><h3>环境蓝图</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试</button></div></div>';return}
+    v.innerHTML='<div class="empty"><div class="ic">🗺️</div><h3>环境蓝图</h3><p style="margin:8px 0;color:var(--danger);font-size:12px">Error: '+esc(err)+'</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn" onclick="cmd(&#39;loadBlueprints&#39;)">⟳ 重试</button><button class="btn ghost" onclick="cmd(&#39;openBlueprintDetail&#39;)">🌐 官网打开</button></div></div>';return;
+  }
+  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' 蓝图 · '+(snapCount||0)+' 快照</span><div class="br"><button class="btn sm" onclick="cmd(&#39;loadBlueprints&#39;)">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openBlueprintDetail&#39;)">🌐</button></div></div>';
+  if(!items.length){h+='<div class="empty"><div class="ic">🗺️</div><p style="margin:8px 0;color:var(--muted)">本账号暂无环境蓝图</p><p style="font-size:11px;color:var(--muted);max-width:340px;line-height:1.6">蓝图 git-backed (引用各自仓库)，跨账号注入非平凡；此板块先提供只读盘点。</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openBlueprintDetail&#39;)">🌐 在 Devin Cloud 中配置</button></div></div>';v.innerHTML=h;return}
+  items.forEach(function(b){
+    var st=b.connected?'<span style="color:var(--success)">● active</span>':'<span style="color:var(--muted)">○ inactive</span>';
+    h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(b.name)+'</span><span class="v" style="font-size:11px">'+st+'</span></div>'+(b.detail?'<div style="font-size:10px;color:var(--muted);margin-top:4px">'+esc(b.detail)+'</div>':'')+'</div>';
+  });
+  v.innerHTML=h;
 }
 function bkMtime(ms){try{return ms?new Date(ms).toLocaleString():''}catch(e){return''}}
 function bkToggle(id){var e=document.getElementById(id);if(e)e.style.display=(e.style.display==='none'?'block':'none')}
@@ -2672,7 +2708,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){cmd('loadTabData',{tab:S.tab})}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){cmd('loadTabData',{tab:S.tab})}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -3029,6 +3065,28 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 } catch (e: any) {
                     reply({ type: 'backupsData', tree: { root: '', accounts: [] }, error: (e && e.message) || String(e) });
                 }
+                break;
+            }
+            case 'loadBlueprints': {
+                // 环境蓝图 · 只读 (列表 + 机器快照计数)
+                if (!devinCanUseApi() || !ws.devinAuth1 || !ws.devinOrgId) { reply({ type: 'blueprintsData', items: [], error: '需要 cog_ API Key' }); break; }
+                try {
+                    const bl = await devinListBlueprints(ws.devinOrgId, ws.devinAuth1);
+                    let snapCount = 0;
+                    try { const sn = await devinListSnapshots(ws.devinOrgId, ws.devinAuth1); if (sn.ok) snapCount = (sn.items || []).length; } catch { /* 守柔 */ }
+                    if (bl.ok) reply({ type: 'blueprintsData', items: bl.items || [], snapCount });
+                    else reply({ type: 'blueprintsData', items: [], error: bl.error || 'API调用失败' });
+                } catch (e: any) {
+                    reply({ type: 'blueprintsData', items: [], error: (e && e.message) || String(e) });
+                }
+                break;
+            }
+            case 'openBlueprintDetail': {
+                // 在 Devin Cloud 蓝图设置页打开 (蓝图 git-backed, 详情走官网更稳)
+                try {
+                    await vscode.commands.executeCommand('simpleBrowser.show', daoRoutedWebUrl('/settings/environments'));
+                    reply({ type: 'actionResult', command: 'openBlueprintDetail', ok: true });
+                } catch { reply({ type: 'actionResult', command: 'openBlueprintDetail', ok: false }); }
                 break;
             }
             // 查看一条对话备份正文 (对话.html 自包含 · 跨 IDE 用系统默认浏览器打开)
@@ -5148,6 +5206,44 @@ async function devinUpsertAutomation(orgId: string, a: InjectProfileItemA, auth1
         }
     }
     return await devinInjectAutomation(orgId, a, auth1);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Blueprints / 环境蓝图 — 帛书·六十四「为之于未有·治之于未乱」
+// 真实根 = snapshot-setup (/api/org-<bare>/blueprints 实测 404 误猜)。
+// 蓝图 git-backed, 跨账号「注入」非平凡(引用各自仓库), 故此处先落只读: 列表/详情/快照。
+// 一步一验: GET 先行, 写操作待后端确证后再补。
+// ═══════════════════════════════════════════════════════════
+async function devinListBlueprints(orgId: string, auth1: string): Promise<{ ok: boolean; blueprints?: any[]; items?: any[]; status?: number; error?: string }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/snapshot-setup/blueprints', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status === 200) {
+        const j = r.json || {};
+        const blueprints = Array.isArray(j) ? j : (Array.isArray(j.blueprints) ? j.blueprints : []);
+        const items = blueprints.map((b: any) => {
+            const repo = b.repo_full_name || b.repo || b.git_repo || '';
+            const st = b.status || (b.is_active === false ? 'inactive' : '');
+            return { name: b.name || b.title || b.id || 'Blueprint', detail: [repo, st].filter(Boolean).join(' · '), connected: b.is_active !== false, id: b.id || b.blueprint_id || '' };
+        });
+        return { ok: true, blueprints, items };
+    }
+    return { ok: false, status: r.status, error: devinErr(r), blueprints: [], items: [] };
+}
+async function devinGetBlueprint(orgId: string, id: string, auth1: string): Promise<{ ok: boolean; blueprint?: any; contents?: any; status?: number; error?: string }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const headers = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    const base = DEVIN_APP + '/api/org-' + bareOrgId + '/snapshot-setup/blueprints/' + encodeURIComponent(id);
+    const r = await devinJsonGet(base, headers);
+    if (r.status !== 200) return { ok: false, status: r.status, error: devinErr(r) };
+    let contents: any = null;
+    try { const c = await devinJsonGet(base + '/contents', headers); if (c.status === 200) contents = c.json; } catch { /* 守柔 */ }
+    return { ok: true, blueprint: r.json, contents };
+}
+async function devinListSnapshots(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[]; status?: number; error?: string }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/snapshots', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status === 200) { const j = r.json || {}; const items = Array.isArray(j) ? j : (Array.isArray(j.snapshots) ? j.snapshots : []); return { ok: true, items }; }
+    return { ok: false, status: r.status, error: devinErr(r) };
 }
 
 // ═══════════════════════════════════════════════════════════
