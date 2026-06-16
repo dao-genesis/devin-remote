@@ -1,7 +1,10 @@
 # coldstart.ps1 — one-key cold start for a fresh Windows VM (Devin cloud VM or any devinbox).
-# Full chain: download+install latest Devin Desktop -> install all 5 plugin VSIX (+ dao-export
-# module VSIX) straight from this repo -> verify. Account login is interactive/injected by design
-# (rt-flow handles the first-account login; account pool is NOT in the repo).
+# Full chain: download+install latest Devin Desktop -> build+install the dao-vsix TWO-IN-ONE VSIX
+# straight from this repo -> verify. Account login is interactive/injected by design
+# (the vendored rt-flow handles the first-account login; account pool is NOT in the repo).
+#
+# 重锚本源(re-anchored): 日常主交付 = dao-vsix 二合一(左 rt-flow 切号 + 中 Devin Cloud 全功能面板)。
+# 三合一大 one(core/dao-one, 折入 proxy-pro/bridge)不再由冷启动构建/安装, 仍可手动构建。
 #
 # Usage (run from inside a cloned devin-remote repo):
 #   git clone https://github.com/zhouyoukang1234-spec/devin-remote.git $env:USERPROFILE\repos\devin-remote
@@ -57,51 +60,37 @@ if ((Test-Path $daoVsixDir) -and -not (Get-ChildItem -Path $daoVsixDir -Filter *
     if (-not (Get-ChildItem -Path $daoVsixDir -Filter *.vsix -File)) { throw 'dao-vsix build failed (no VSIX produced)' }
 }
 
-# ---------- 1.6 Build the gitignored dao-one (归一) VSIX if absent ----------
-# dao-one ships source-only (build.js / extension.js / gen-manifest.js / package.json);
-# its assembled vendor-* dirs and *.vsix are gitignored. build.js (run by vsce's
-# vscode:prepublish) inlines the four engines' sources into vendor-* before packaging.
-# WITHOUT this step a fresh clone never installs dao-one, yet step 2.5 still uninstalls
-# the four standalone engines — leaving the user with no unified panel at all ("无效果").
-$daoOneDir = Join-Path $repoRoot 'core\dao-one'
-if ((Test-Path $daoOneDir) -and -not (Get-ChildItem -Path $daoOneDir -Filter *.vsix -File)) {
-    Step 'Building dao-one (GuiYi unified) VSIX (vendor assembly + package)'
-    Push-Location $daoOneDir
-    try {
-        if (-not (Test-Path 'node_modules')) { & npm install --no-audit --no-fund 2>&1 | Select-Object -Last 1 }
-        & node ./build.js
-        & npx --yes @vscode/vsce package --allow-missing-repository --skip-license 2>&1 | Select-Object -Last 1
-    } finally { Pop-Location }
-    if (-not (Get-ChildItem -Path $daoOneDir -Filter *.vsix -File)) { throw 'dao-one build failed (no VSIX produced)' }
-}
-
-# ---------- 2. Install plugins straight from the repo ----------
-# Core engines live under core/ (dao-one is the unified deliverable); standalone aux plugins
-# under addons/. VSIX are gitignored build products, so a flat recursive search picks up
-# whatever was just built (always at least dao-one) with no version parsing.
+# ---------- 2. Install the two-in-one dao-vsix (+ any optional addon VSIX present) ----------
+# dao-vsix 内联了 rt-flow 前端视图(wam-container/wam.panel)与 Devin Cloud 全功能面板; 只装它即得二合一。
+# core/dao-one、core/rt-flow、core/dao-proxy-pro 会与 dao-vsix 抢占同名 view/command id, 一律排除。
+$excludeDirs = @(
+    (Join-Path $repoRoot 'core\dao-one'),
+    (Join-Path $repoRoot 'core\rt-flow'),
+    (Join-Path $repoRoot 'core\dao-proxy-pro')
+)
 $vsixSearch = @(
     (Join-Path $repoRoot 'core'),
     (Join-Path $repoRoot 'addons')
 )
 $vsixFiles = $vsixSearch |
     Where-Object { Test-Path $_ } |
-    ForEach-Object { Get-ChildItem -Path $_ -Recurse -Filter *.vsix -File }
+    ForEach-Object { Get-ChildItem -Path $_ -Recurse -Filter *.vsix -File } |
+    Where-Object { $f = $_.FullName; -not ($excludeDirs | Where-Object { $f.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }) }
 
-if (-not $vsixFiles) { throw "no VSIX found under $($vsixSearch -join ', ')" }
+if (-not $vsixFiles) { throw "no VSIX found under $($vsixSearch -join ', ') (did dao-vsix build in step 1.5?)" }
 
 foreach ($v in $vsixFiles) {
     Step "Installing extension $($v.Name)"
     & $devinCli --install-extension $v.FullName --force 2>&1 | Select-Object -Last 1
 }
 
-# ---------- 2.5 Uninstall the standalone engines that dao-one inlines ----------
-# 归一 (dao.dao-one) 复用并内联了四套引擎本体的真实前端视图(wam.panel / dao.router /
-# dao.cloudPanel / daoBridgeView)。VS Code 的 view/command id 必须全局唯一 —— 若这些
-# 独立引擎仍各自安装, 会抢占同名 id, 导致归一容器里对应板块(尤其 ④ 内网穿透)不渲染。
-# 故安装完成后卸载这四个独立引擎, 让 dao.dao-one 成为唯一属主。反者道之动: 合则归一。
-$inlinedEngines = @('dao.dao-vsix', 'dao-agi.dao-proxy-pro', 'devaid.rt-flow', 'dao.dao-bridge')
-foreach ($id in $inlinedEngines) {
-    Step "Uninstalling standalone engine $id (inlined by dao.dao-one)"
+# ---------- 2.5 Uninstall the three-in-one / standalone engines that conflict with dao-vsix ----------
+# dao-vsix 自带 rt-flow 视图(wam-container/wam.panel)与 Devin Cloud 面板。VS Code 的 view/command id
+# 必须全局唯一 —— 若 dao-one / rt-flow / dao-proxy-pro 仍各自安装, 会抢占同名 id, 导致二合一面板板块不渲染。
+# 故卸载它们, 让 dao.dao-vsix 成为唯一属主。反者道之动: 收腰归二。dao-bridge(内网穿透)为独立 addon, 不冲突, 保留。
+$conflicting = @('dao.dao-one', 'devaid.rt-flow', 'dao-agi.dao-proxy-pro')
+foreach ($id in $conflicting) {
+    Step "Uninstalling conflicting engine $id (superseded by dao.dao-vsix two-in-one)"
     & $devinCli --uninstall-extension $id 2>&1 | Select-Object -Last 1
 }
 
@@ -109,8 +98,8 @@ foreach ($id in $inlinedEngines) {
 Step 'Installed extensions:'
 $installed = & $devinCli --list-extensions
 $installed
-if ($installed -notcontains 'dao.dao-one') {
-    throw 'dao.dao-one is NOT installed - the unified panel would be missing. Check the dao-one build step above.'
+if ($installed -notcontains 'dao.dao-vsix') {
+    throw 'dao.dao-vsix is NOT installed - the two-in-one panel would be missing. Check the dao-vsix build step above.'
 }
 Step "COLD START COMPLETE in $($sw.Elapsed.ToString('mm\:ss'))"
 Write-Host ''
@@ -121,5 +110,6 @@ Write-Host '  2. Enter the account email + password (one row from the rt-flow po
 Write-Host '     The devin:// deep link returns the session to the IDE and unlocks the workbench.'
 Write-Host '     NOTE: injecting auth1 into state.vscdb is NOT enough - the welcome gate requires the'
 Write-Host '     real firstparty session (devin-session-token$...) from this OAuth round-trip.'
-Write-Host '  3. Open the dao-one (yin-yang/target) activity-bar icon: (1) accounts (2) Proxy Pro (3) Cloud (4) tunnel.'
+Write-Host '  3. Open the RT Flow activity-bar icon (account switcher), then run "Dao: Open Devin Cloud Panel"'
+Write-Host '     for the full single-account dashboard (额度/Knowledge/Playbook/Secret/蓝图/MCP/环境/自动化 + 反向注入).'
 Write-Host '  4. See cloud/coldstart/README.md for the full bootstrap guide, token rules, and webview pitfalls.'

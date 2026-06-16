@@ -1,6 +1,6 @@
 # dao · 道法自然 · 太上 下知有之
 
-> **4 核心 + 4 辅助 + 3 板块**。最终交付是 **dao-one** —— 把四套引擎归一的单一插件。GitHub Issues / Comments = 无感传输层。
+> **本源 = dao-vsix 二合一**（左 rt-flow 切号 + 中 Devin Cloud 全功能面板）—— 日常主交付。**dao-one** 为可选三合一大 one（在二合一基础上再折入 Proxy Pro / 内网穿透）。GitHub Issues / Comments = 无感传输层。
 
 [![Release](https://img.shields.io/github/v/release/zhouyoukang1234-spec/devin-remote?label=release&color=2ea44f)](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)
 &nbsp;4 + 4 + 3&nbsp;·&nbsp;[快速安装 ↓](#下载--快速安装)&nbsp;·&nbsp;[冷启动板块](cloud/coldstart/README.md)
@@ -9,14 +9,14 @@
 
 ## 下载 · 快速安装
 
-**一键冷启动**（自动装 Devin Desktop + 构建并安装 dao-one 归一插件）：
+**一键冷启动**（自动装 Devin Desktop + 构建并安装 dao-vsix 二合一插件）：
 
 ```powershell
 git clone https://github.com/zhouyoukang1234-spec/devin-remote.git $env:USERPROFILE\repos\devin-remote
 powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\cloud\coldstart\coldstart.ps1
 ```
 
-冷启动脚本会从源码构建 **dao-one**（`core/dao-one`，内联 dao-vsix + dao-proxy-pro + rt-flow + dao-bridge 四引擎），安装后卸载这四套独立引擎，让 `dao.dao-one` 成为唯一属主。**用户日常以 dao-one 单插件为主。**
+冷启动脚本会从源码构建 **dao-vsix 二合一**（`core/dao-vsix`，内联 rt-flow 切号视图 + Devin Cloud 全功能面板 + 本地 HTTP API），安装后卸载会抢占同名 id 的 `dao-one` / `rt-flow` / `dao-proxy-pro`，让 `dao.dao-vsix` 成为唯一属主。**用户日常以 dao-vsix 二合一为主**；需要 Proxy Pro / 内网穿透折入的三合一大 one 时，再手动构建 `core/dao-one`。
 
 > 所有 VSIX 均为构建产物（已 `.gitignore`，走 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest) 分发或本地 `node build.js && npx @vscode/vsce package` 现产）。
 
@@ -27,9 +27,9 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\clo
 ```
 devin-remote/
 │
-├── core/                     # ★ 核心 4 · 合一（dao-one 是最终交付，其余为其源构件）
-│   ├── dao-one/              # ① 归一插件本体 —— 四引擎合一的单一 VSIX（最终交付）
-│   ├── dao-vsix/             # ② 整合 rt-flow 的二合一面板 + 本地 HTTP API（含多账号反向注入）
+├── core/                     # ★ 核心 4（dao-vsix 二合一 = 本源/主交付；dao-one = 可选三合一大 one）
+│   ├── dao-vsix/             # ① 本源 · 二合一 —— rt-flow 切号 + Devin Cloud 全功能面板 + 本地 HTTP API（含多账号反向注入）【主交付】
+│   ├── dao-one/              # ② 可选三合一大 one —— 在 dao-vsix 二合一基础上折入 Proxy Pro / 内网穿透
 │   ├── rt-flow/              # ③ Devin Cloud 接入本体：备份 / 全量快照 / wipe / 额度上限
 │   └── dao-proxy-pro/        # ④ 底层提示词隔离替换 + 外接第三方模型路由
 │

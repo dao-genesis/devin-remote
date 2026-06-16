@@ -1,8 +1,8 @@
 name: Sync plugins to Release
 
 # 道法自然 · 大道至简：往 main 推代码即可，本工作流自动构建全部插件 VSIX 并把最新版同步到 Release，
-# 无需手动碰 Release。Release tag 跟随 dao-one 版本（vX.Y.Z）：同版本重复推送原地刷新资产，
-# bump 了 dao-one 版本则自动新建版本 Release。鉴权用内置 GITHUB_TOKEN，跑在 GitHub 原生环境。
+# 无需手动碰 Release。Release tag 跟随 dao-vsix（本源二合一）版本（vX.Y.Z）：同版本重复推送原地刷新资产，
+# bump 了 dao-vsix 版本则自动新建版本 Release。鉴权用内置 GITHUB_TOKEN，跑在 GitHub 原生环境。
 # 触发：push 到 main（命中插件源码，排除纯文档）；亦可手动 workflow_dispatch。
 
 on:
@@ -43,7 +43,7 @@ jobs:
         run: |
           set -e
           mkdir -p release-assets
-          # dao-one（最终交付）：build.js 现拷四引擎源 + 叠 proxy-fold.patch，再 vsce 打包
+          # dao-one（可选三合一大 one）：build.js 现拷四引擎源 + 叠 proxy-fold.patch，再 vsce 打包
           (cd core/dao-one && node build.js && npx @vscode/vsce package --allow-missing-repository --skip-license)
           mv core/dao-one/*.vsix release-assets/
           # dao-vsix 需先转译，再用通用打包器
@@ -62,18 +62,18 @@ jobs:
         id: meta
         run: |
           set -e
-          VER=$(node -p "require('./core/dao-one/package.json').version")
+          VER=$(node -p "require('./core/dao-vsix/package.json').version")
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
           {
             echo "# dao · 4+4+3 (v$VER)"
             echo
-            echo "最终交付 = **dao-one** —— 四引擎归一单插件，日常只装它一个。本 Release 由 CI 自动同步自 main 最新源码。"
+            echo "本源/主交付 = **dao-vsix 二合一**（左 rt-flow 切号 + 中 Devin Cloud 全功能面板），日常只装它一个；**dao-one** 为可选三合一大 one（折入 Proxy Pro / 内网穿透）。本 Release 由 CI 自动同步自 main 最新源码。"
             echo
             echo "| 插件 | 版本 |"
             echo "|---|---|"
             for entry in \
-              "dao-one:core/dao-one" \
               "dao-vsix:core/dao-vsix" \
+              "dao-one:core/dao-one" \
               "rt-flow:core/rt-flow" \
               "dao-proxy-pro:core/dao-proxy-pro" \
               "dao-bridge:addons/dao-bridge/dao-bridge-ext" \
