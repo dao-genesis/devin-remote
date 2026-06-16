@@ -234,6 +234,68 @@ public class RelayService extends Service {
         @JavascriptInterface public String readAssetFile(String path) {
             return readAsset(path);
         }
+
+        // ── 高级手机操控: 电池/WiFi/振动/音量 ──────────
+        @JavascriptInterface public String phoneBattery() {
+            if (!remoteOpsEnabled) return "{}";
+            try {
+                android.content.Intent bs = RelayService.this.registerReceiver(null,
+                    new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+                if (bs == null) return "{}";
+                int level = bs.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+                int scale = bs.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
+                int status = bs.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+                int pct = (level >= 0 && scale > 0) ? (level * 100 / scale) : -1;
+                boolean charging = (status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                                    status == android.os.BatteryManager.BATTERY_STATUS_FULL);
+                return "{\"percent\":" + pct + ",\"charging\":" + charging + ",\"status\":" + status + "}";
+            } catch (Exception e) { return "{}"; }
+        }
+
+        @JavascriptInterface public String phoneWifiInfo() {
+            if (!remoteOpsEnabled) return "{}";
+            try {
+                android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                    RelayService.this.getApplicationContext().getSystemService(android.content.Context.WIFI_SERVICE);
+                if (wm == null) return "{}";
+                android.net.wifi.WifiInfo wi = wm.getConnectionInfo();
+                if (wi == null) return "{\"enabled\":" + wm.isWifiEnabled() + "}";
+                return "{\"enabled\":" + wm.isWifiEnabled() + ",\"ssid\":" + org.json.JSONObject.quote(wi.getSSID()) +
+                    ",\"rssi\":" + wi.getRssi() + ",\"linkSpeed\":" + wi.getLinkSpeed() +
+                    ",\"ip\":\"" + android.text.format.Formatter.formatIpAddress(wi.getIpAddress()) + "\"}";
+            } catch (Exception e) { return "{}"; }
+        }
+
+        @JavascriptInterface public void phoneVibrate(int ms) {
+            if (!remoteOpsEnabled) return;
+            try {
+                android.os.Vibrator v = (android.os.Vibrator) RelayService.this.getSystemService(android.content.Context.VIBRATOR_SERVICE);
+                if (v != null) {
+                    if (Build.VERSION.SDK_INT >= 26) v.vibrate(android.os.VibrationEffect.createOneShot(ms > 0 ? ms : 200, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+                    else v.vibrate(ms > 0 ? ms : 200);
+                }
+            } catch (Exception e) {}
+        }
+
+        @JavascriptInterface public int phoneGetVolume() {
+            try {
+                android.media.AudioManager am = (android.media.AudioManager) RelayService.this.getSystemService(android.content.Context.AUDIO_SERVICE);
+                return am != null ? am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) : 0;
+            } catch (Exception e) { return 0; }
+        }
+        @JavascriptInterface public int phoneGetMaxVolume() {
+            try {
+                android.media.AudioManager am = (android.media.AudioManager) RelayService.this.getSystemService(android.content.Context.AUDIO_SERVICE);
+                return am != null ? am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) : 15;
+            } catch (Exception e) { return 15; }
+        }
+        @JavascriptInterface public void phoneSetVolume(int vol) {
+            if (!remoteOpsEnabled) return;
+            try {
+                android.media.AudioManager am = (android.media.AudioManager) RelayService.this.getSystemService(android.content.Context.AUDIO_SERVICE);
+                if (am != null) am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, vol, 0);
+            } catch (Exception e) {}
+        }
     }
 
     private static String statusLine(String json) {
