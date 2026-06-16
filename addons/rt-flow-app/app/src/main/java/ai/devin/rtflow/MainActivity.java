@@ -128,6 +128,7 @@ public class MainActivity extends AppCompatActivity {
         // 该服务为 START_STICKY 前台常驻 → 仅手动重开(进程被杀后重建)时刷新, 后台恢复不刷, 符合预期。
         if (Build.VERSION.SDK_INT >= 19) WebView.setWebContentsDebuggingEnabled(true);
         setContentView(buildChrome());
+        ensureAllFilesAccess();   // 申请「所有文件访问」→ 账号/标签/历史落到共享文件夹, 卸载重装不丢
         // 恢复上次标签 (持久化) 或首屏切号
         if (!restoreTabs()) {
             newTab(SWITCH, null);
@@ -194,7 +195,7 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         content.setLayoutParams(clp);
 
-        // 右下角下载管理悬浮按钮
+        // 右上角下载管理悬浮按钮 (避免遮挡页面底部内容)
         dlBtn = new Button(this);
         dlBtn.setText("📥");
         dlBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
@@ -203,8 +204,8 @@ public class MainActivity extends AppCompatActivity {
         dlBtn.setMinWidth(0); dlBtn.setMinimumWidth(0);
         dlBtn.setPadding(dp(10), dp(8), dp(10), dp(8));
         FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        dlp.gravity = Gravity.BOTTOM | Gravity.END;
-        dlp.rightMargin = dp(12); dlp.bottomMargin = dp(12);
+        dlp.gravity = Gravity.TOP | Gravity.END;
+        dlp.rightMargin = dp(12); dlp.topMargin = dp(8);
         dlBtn.setLayoutParams(dlp);
         dlBtn.setOnClickListener(v -> {
             try { startActivity(new Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)); }
@@ -482,18 +483,18 @@ public class MainActivity extends AppCompatActivity {
             label.setMaxWidth(dp(130));
             label.setSingleLine(true);
             label.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            // 手势: 单击=切换(已激活的账号标签再点=复制账号+密码) · 双击=改对话名 · 长按=拖拽排序
+            // 手势: 单击=切换标签 · 双击=复制该账号+密码(弹提示) · 长按=拖拽排序
             final GestureDetector gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
-                @Override public boolean onSingleTapConfirmed(MotionEvent e) {
+                @Override public boolean onDown(MotionEvent e) { return true; }
+                @Override public boolean onSingleTapConfirmed(MotionEvent e) { selectTab(idx); return true; }
+                @Override public boolean onDoubleTap(MotionEvent e) {
                     Tab tt = tabs.get(idx);
-                    if (idx == active && tt.accountJson != null) copyTabAccount(tt); // 点一下复制账号+密码
-                    else selectTab(idx);
+                    if (tt.accountJson != null) copyTabAccount(tt); else toast("非账号标签·无账密可复制");
                     return true;
                 }
-                @Override public boolean onDoubleTap(MotionEvent e) { renameTab(idx); return true; }
                 @Override public void onLongPress(MotionEvent e) { startTabDrag(chip, idx); }
             });
-            label.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
+            chip.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
 
             TextView x = new TextView(this);
             x.setText(" ×");
@@ -757,6 +758,9 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         /** 保存 base64 二进制 (zip 打包导出) 到系统下载目录。 */
+        /** 数据保险箱: 把切号面板的账号库等关键数据落到共享文件夹, 卸载/重装/换机仍可回读。 */
+        @JavascriptInterface public void vaultSave(String key, String json) { if (key != null) vaultWrite(key, json); }
+        @JavascriptInterface public String vaultLoad(String key) { return key == null ? "" : vaultRead(key); }
         @JavascriptInterface public String saveBase64File(String name, String base64) {
             try {
                 String safe = (name == null || name.trim().isEmpty()) ? ("rtflow-" + System.currentTimeMillis() + ".bin") : name.replaceAll("[\\\\/:*?\"<>|]", "_");
@@ -809,6 +813,48 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) { toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage())); }
     }
 
+    // ── 数据保险箱: 共享文件夹 Documents/DevinCloud (脱离应用沙箱, 卸载/重装/换机不丢) ──
+    /** 申请「所有文件访问」(MANAGE_EXTERNAL_STORAGE) — 授予后才能写公共目录且卸载不删。 */
+    private void ensureAllFilesAccess() {
+        try {
+            if (Build.VERSION.SDK_INT >= 30 && !android.os.Environment.isExternalStorageManager()) {
+                startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:" + getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                toast("请开启「所有文件访问」以便数据卸载重装不丢");
+            }
+        } catch (Exception e) {
+            try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); } catch (Exception ignored) {}
+        }
+    }
+    private File vaultDir() {
+        File d = new File(android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOCUMENTS), "DevinCloud");
+        if (!d.exists()) d.mkdirs();
+        return d;
+    }
+    private void vaultWrite(String key, String data) {
+        try {
+            String safe = key.replaceAll("[\\\\/:*?\"<>|]", "_");
+            File f = new File(vaultDir(), safe + ".json");
+            try (FileOutputStream fos = new FileOutputStream(f)) {
+                fos.write((data == null ? "" : data).getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (Exception ignored) {}
+    }
+    private String vaultRead(String key) {
+        try {
+            String safe = key.replaceAll("[\\\\/:*?\"<>|]", "_");
+            File f = new File(vaultDir(), safe + ".json");
+            if (!f.exists()) return "";
+            byte[] buf = new byte[(int) f.length()];
+            try (java.io.FileInputStream fis = new java.io.FileInputStream(f)) {
+                int off = 0, r; while (off < buf.length && (r = fis.read(buf, off, buf.length - off)) > 0) off += r;
+            }
+            return new String(buf, StandardCharsets.UTF_8);
+        } catch (Exception e) { return ""; }
+    }
+
     // ── 标签会话持久化 (重开恢复上次标签/登录状态) ──────────────────────────
     private void saveTabs() {
         try {
@@ -824,6 +870,9 @@ public class MainActivity extends AppCompatActivity {
             }
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
             sp.edit().putString("tabs", arr.toString()).putInt("active", active).apply();
+            org.json.JSONObject vault = new org.json.JSONObject();
+            vault.put("tabs", arr); vault.put("active", active);
+            vaultWrite("tabs", vault.toString());
         } catch (Exception ignored) {}
     }
 
@@ -831,7 +880,18 @@ public class MainActivity extends AppCompatActivity {
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
             String json = sp.getString("tabs", null);
-            if (json == null || json.isEmpty()) return false;
+            int act;
+            if (json == null || json.isEmpty()) {
+                // 卸载/重装后 SharedPreferences 为空 → 从共享文件夹回读
+                String vault = vaultRead("tabs");
+                if (vault == null || vault.isEmpty()) return false;
+                org.json.JSONObject vo = new org.json.JSONObject(vault);
+                json = vo.optString("tabs", "");
+                act = vo.optInt("active", 0);
+            } else {
+                act = sp.getInt("active", 0);
+            }
+            if (json.isEmpty()) return false;
             org.json.JSONArray arr = new org.json.JSONArray(json);
             if (arr.length() == 0) return false;
             for (int i = 0; i < arr.length(); i++) {
@@ -841,7 +901,6 @@ public class MainActivity extends AppCompatActivity {
                 Tab nt = newTab(url, acc);
                 if (o.has("titleOverride")) { nt.titleOverride = o.optString("titleOverride", null); }
             }
-            int act = sp.getInt("active", 0);
             if (act >= 0 && act < tabs.size()) selectTab(act);
             return true;
         } catch (Exception e) { return false; }
@@ -871,6 +930,7 @@ public class MainActivity extends AppCompatActivity {
             // 保留最近 200 条
             while (arr.length() > 200) arr.remove(0);
             sp.edit().putString("history", arr.toString()).apply();
+            vaultWrite("history", arr.toString());
         } catch (Exception ignored) {}
     }
 
@@ -878,6 +938,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
             String raw = sp.getString("history", "[]");
+            if (raw == null || raw.isEmpty() || "[]".equals(raw)) { String v = vaultRead("history"); if (v != null && !v.isEmpty()) raw = v; }
             org.json.JSONArray arr = new org.json.JSONArray(raw);
             StringBuilder sb = new StringBuilder();
             sb.append("<html><head><meta name=viewport content='width=device-width,initial-scale=1'>");
