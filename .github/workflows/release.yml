@@ -83,6 +83,14 @@ jobs:
               v=$(node -p "require('./$dir/package.json').version")
               echo "| $name | $v |"
             done
+            # rt-flow 顶部 changelog 段落（首个 "## " 到下一个 "## " 之间），让 Release 自带变更摘要
+            if [ -f core/rt-flow/changelog.md ]; then
+              echo
+              echo "---"
+              echo "## rt-flow 最新变更"
+              echo
+              awk '/^## /{c++} c==1{print} c==2{exit}' core/rt-flow/changelog.md
+            fi
           } > release-notes.md
           cat release-notes.md
 

@@ -7826,29 +7826,21 @@ function _isTrialLike(h) {
 //     Trial 脏数据 (Trial 且 planEnd=0):    "Trial?" 黄 · tooltip 提示重验
 //     永久 (其它 · planEnd=0 已验):         "∞" 灰 · Pro/Free 或后端缺字段
 function _buildExpTag(h) {
+  // v4.8.5 · 道法自然 · 去"过期"语义 · 账号能登录即发亮 · 不以有效期判死
+  //   旧法之患: Free 试用 planEnd 过期即标红"已过期" · 但 D/W=100 仍完全可用 → 误导
+  //   新法: 未来到期显绿色"N天"(正向信息) · 已过/无 planEnd 一律 ∞ 发亮 · 永不显"已过期"
   if (!h || !h.checked) {
-    return '<span class="days" style="color:#555" title="未验·点🔍获取剩余有效期">?天</span>';
+    return '<span class="days" style="color:#888" title="点🔍刷新有效期 ∞">∞</span>';
   }
   const now = Date.now();
   const planEnd = _parseTimeMs(h.planEnd);
-  const daysLeft =
-    planEnd > 0 ? _calcDaysLeft(planEnd, now) : Number(h.daysLeft) || 0;
   if (planEnd > now) {
-    const ec = daysLeft <= 2 ? "#f44" : daysLeft <= 5 ? "#ce9178" : "#4ec9b0";
+    const daysLeft = _calcDaysLeft(planEnd, now);
     const dStr = _formatExpiryTime(planEnd);
     const remain = _formatDurationMs(planEnd - now);
-    return `<span class="days" style="color:${ec}" title="到期: ${_esc(dStr)} · 剩 ${daysLeft} 天 · ${_esc(remain)}">${daysLeft}天</span>`;
+    return `<span class="days" style="color:#4ec9b0" title="到期: ${_esc(dStr)} · 剩 ${daysLeft} 天 · ${_esc(remain)}">${daysLeft}天</span>`;
   }
-  if (planEnd > 0) {
-    const dStr = _formatExpiryTime(planEnd);
-    const ago = _formatDurationMs(now - planEnd);
-    return `<span class="days" style="color:#f44" title="Trial 已过期 (${_esc(dStr)} · 已过 ${_esc(ago)})">已过期</span>`;
-  }
-  // planEnd==0 且 checked · 判 Trial 脏数据还是真 Pro 永久
-  if (_isTrialLike(h)) {
-    return '<span class="days" style="color:#d4c05a" title="Trial 剩余天数未知·点🔍重新验证">Trial?</span>';
-  }
-  return '<span class="days" style="color:#888" title="无 Plan 到期·Pro 永久或字段缺">∞</span>';
+  return '<span class="days" style="color:#888" title="无到期限制 · 账号可用即发亮 ∞">∞</span>';
 }
 
 function buildHtml() {
@@ -7930,28 +7922,16 @@ function buildHtml() {
       h.staleMin >= 0 && h.staleMin <= 3
         ? '<span class="fresh">&#8226;</span>'
         : "";
-    // v2.4.0 · stale 标记 · 不骗人 · h.staleHours 已含值
-    //   知止可以不殆: endpoint 挂时所有号都陈年 · 每行显 stale 无意义
-    //   改策略: endpoint dead 时不显单行 stale (顶部红条已告) · 只在少数号陈年时显
+    // v4.8.5 · 去除"陈年 / Nh前"标记 · 数据新鲜度不再使账号变灰 (endpoint 挂仍由顶部红条提示)
     let staleTag = "";
     let isStaleRow = false;
-    const endpointDead = _quotaEndpointDead();
-    if (!endpointDead && h.checked) {
-      if (h.staleHours >= 48) {
-        staleTag = `<span class="stale-old" title="数据极陈年 · ${h.staleHours} 小时前 · 用 wam.refreshAll 更新">陈年</span>`;
-        isStaleRow = true;
-      } else if (h.staleHours >= 12) {
-        staleTag = `<span class="stale" title="数据已老 · ${h.staleHours} 小时前">${h.staleHours}h前</span>`;
-        isStaleRow = true;
-      }
-    }
     rows += `
-    <div class="row${isActive ? " act" : ""}${isBanned ? " banned" : ""}${isInUse ? " inuse" : ""}${!claudeOk && h.checked ? " expired-row" : ""}${isStaleRow ? " is-stale" : ""}" data-i="${i}" data-email="${_esc(a.email.toLowerCase())}">
+    <div class="row${isActive ? " act" : ""}${isBanned ? " banned" : ""}${isInUse ? " inuse" : ""}" data-i="${i}" data-email="${_esc(a.email.toLowerCase())}">
       <input type="checkbox" class="chk" data-i="${i}" />
       <span class="acc-no" title="账号编号 ${i + 1} · 对话追踪中 Devin Cloud 对话用此编号区分">${i + 1}</span>
       <span class="dm ${domainBadge}" title="${_esc(domain)}">${domainBadge}</span>
       <span class="em" title="${_esc(a.email)}">${_esc(emailShort)}</span>
-      ${expTag}${planTag}${h.checked && h.overageDollars > 0 ? (h.staleHours >= 6 ? `<span class="eua-stale" title="Extra Usage $${h.overageDollars.toFixed(0)} · 数据${h.staleHours}h前(可能已消耗·建议重验)">$${Math.round(h.overageDollars)}?</span>` : `<span class="eua" title="Extra Usage Active · $${h.overageDollars.toFixed(0)} · Cascade quota=0时仍完全可用${h.staleHours >= 1 ? " · " + h.staleHours + "h前验" : ""}">$${Math.round(h.overageDollars)}</span>`) : ""}${h.checked && !h.overageDollars ? `<span class="eua0" title="已验 · 无Extra Usage余额">$0</span>` : ""} ${claudeTag}${bnTag}${iuTag}${staleTag}${freshTag}${liveTag}${ucTag}
+      ${expTag}${planTag}${h.checked && h.overageDollars > 0 ? `<span class="eua" title="Extra Usage Active · $${h.overageDollars.toFixed(0)} · Cascade quota=0时仍完全可用">$${Math.round(h.overageDollars)}</span>` : ""}${h.checked && !h.overageDollars ? `<span class="eua0" title="已验 · 无Extra Usage余额">$0</span>` : ""} ${claudeTag}${bnTag}${iuTag}${staleTag}${freshTag}${liveTag}${ucTag}
       <span class="qt">
         <span class="mb"><span class="mf" style="width:${dPct}%;background:${dC}"></span></span>
         <span class="ql" style="color:${dC}">${isU ? "D?" : "D" + dPct}</span>
@@ -8009,15 +7989,7 @@ function buildHtml() {
     // v2.4.13 · planEnd=0 (Trial proto3 omit) 时 fallback 显 weekly 重置倒计时
     let planExpiryTag = "";
     if (ah.planEnd > Date.now()) {
-      const ec =
-        ah.daysLeft <= 2
-          ? "var(--red)"
-          : ah.daysLeft <= 5
-            ? "var(--orange)"
-            : "var(--green)";
-      planExpiryTag = ` <span style="color:${ec}" title="到期: ${_esc(_formatExpiryTime(ah.planEnd))} · 剩 ${ah.daysLeft} 天 · ${_esc(_formatDurationMs(ah.planEnd - Date.now()))}">${ah.daysLeft}天</span>`;
-    } else if (ah.planEnd > 0) {
-      planExpiryTag = ` <span style="color:var(--red)" title="到期: ${_esc(_formatExpiryTime(ah.planEnd))}">已过期</span>`;
+      planExpiryTag = ` <span style="color:var(--green)" title="到期: ${_esc(_formatExpiryTime(ah.planEnd))} · 剩 ${ah.daysLeft} 天 · ${_esc(_formatDurationMs(ah.planEnd - Date.now()))}">${ah.daysLeft}天</span>`;
     } else if (ah.weeklyResetAt && ah.weeklyResetAt > Date.now()) {
       // Trial 号无 planEnd · 用 weeklyResetAt 倒计时作有效期提示
       const hrs = Math.max(
