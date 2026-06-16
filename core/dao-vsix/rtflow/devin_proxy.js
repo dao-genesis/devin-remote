@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// devin_proxy.js · v4.8.2 · IDE 内置浏览器自足注入反代 (不赖 dao-vsix)
+// devin_proxy.js · v4.9.0 · IDE 内置浏览器自足注入反代 (不赖 dao-vsix) · 静态资源缓存提速
 // ───────────────────────────────────────────────────────────────────────────
 // 帛书·「天下之至柔·驰骋于天下之致坚；无有入于无间」: IDE 内置浏览器 (simpleBrowser /
 //   webview) 是受沙箱约束的 iframe — 无 CDP 端口可控, 无法如系统浏览器般经 CDP
@@ -27,6 +27,35 @@ const DEVIN_UA =
 
 // email → { server, port, auth }. 每账号独立端口 → origin 隔离 → 多实例不串号。
 const _servers = new Map();
+
+// 帛书·「为之于其未有·治之于其未乱」— 静态资源改写结果缓存。
+//   Devin SPA 的 JS/CSS/字体 bundle 皆哈希不可变, 改写结果恒定 → 缓存后多标签/重载
+//   免重复取上游 + 免重复多次全量 split/join (根治"很慢很卡")。键 = 上游 path,
+//   与账号无关 (静态资源各账号同一份) → 跨账号共享, 多开更省。
+const _assetCache = new Map(); // targetPath → { status, headers, body }
+let _assetCacheBytes = 0;
+const ASSET_CACHE_MAX = 96 * 1024 * 1024; // 96MB 上限 · 满则逐出最早
+function _cachePut(key, val) {
+  try {
+    if (_assetCache.has(key)) {
+      const old = _assetCache.get(key);
+      _assetCacheBytes -= old && old.body ? old.body.length : 0;
+      _assetCache.delete(key);
+    }
+    _assetCache.set(key, val);
+    _assetCacheBytes += val.body ? val.body.length : 0;
+    while (_assetCacheBytes > ASSET_CACHE_MAX && _assetCache.size) {
+      const k = _assetCache.keys().next().value;
+      const v = _assetCache.get(k);
+      _assetCache.delete(k);
+      _assetCacheBytes -= v && v.body ? v.body.length : 0;
+    }
+  } catch {}
+}
+// 哈希不可变静态资源 (可强缓存 + 入改写缓存)。HTML/API/json 不在此列 (动态·须实时)。
+function isCacheableAsset(p) {
+  return /\.(js|css|woff2?|ttf|eot|otf|png|jpe?g|gif|svg|ico|wasm)(\?|$)/i.test(p);
+}
 
 function safeStr(s) {
   return String(s == null ? "" : s);
@@ -129,6 +158,17 @@ async function handleRequest(req, res, auth, port, log) {
   const targetPath = u.pathname + (u.search || "");
 
   const isPage = !targetPath.match(/\.(js|css|png|jpg|jpeg|svg|ico|woff2?|ttf|eot|map|json|wasm)(\?|$)/i);
+
+  // 改写缓存命中 → 直发, 免上游往返 + 免全量改写 (多标签/重载秒开)。
+  const cacheable = (req.method === "GET" || !req.method) && isCacheableAsset(targetPath);
+  if (cacheable) {
+    const hit = _assetCache.get(targetPath);
+    if (hit) {
+      res.writeHead(hit.status, hit.headers);
+      res.end(hit.body);
+      return;
+    }
+  }
 
   let reqBody = Buffer.alloc(0);
   if (req.method && req.method !== "GET" && req.method !== "HEAD") {
@@ -256,15 +296,46 @@ async function handleRequest(req, res, auth, port, log) {
           return;
         }
         if (isJs) {
-          let js = body.toString("utf8");
-          js = js
-            .split("https://app.devin.ai/").join(localBase + "/")
-            .split("https://windsurf.com/").join(localBase + "/__ws/")
-            .split("https://register.windsurf.com/").join(localBase + "/__reg/")
-            .split("https://server.codeium.com/").join(localBase + "/__cdn/")
-            .split("https://server.self-serve.windsurf.com/").join(localBase + "/__ss/");
+          // 仅当确含上游绝对URL才全量改写 → 多数 bundle 用相对路径, 跳过省大量 split/join。
+          const txt = body.toString("utf8");
+          let outBuf;
+          if (
+            txt.indexOf("https://app.devin.ai/") >= 0 ||
+            txt.indexOf("https://windsurf.com/") >= 0 ||
+            txt.indexOf("https://register.windsurf.com/") >= 0 ||
+            txt.indexOf("https://server.codeium.com/") >= 0 ||
+            txt.indexOf("https://server.self-serve.windsurf.com/") >= 0
+          ) {
+            const js = txt
+              .split("https://app.devin.ai/").join(localBase + "/")
+              .split("https://windsurf.com/").join(localBase + "/__ws/")
+              .split("https://register.windsurf.com/").join(localBase + "/__reg/")
+              .split("https://server.codeium.com/").join(localBase + "/__cdn/")
+              .split("https://server.self-serve.windsurf.com/").join(localBase + "/__ss/");
+            outBuf = Buffer.from(js, "utf8");
+          } else {
+            outBuf = body; // 无需改写 → 直用原 buffer
+          }
+          if (cacheable) { delete safeHeaders["cache-control"]; safeHeaders["Cache-Control"] = "public, max-age=31536000, immutable"; }
           res.writeHead(status, safeHeaders);
-          res.end(js, "utf8");
+          res.end(outBuf);
+          if (cacheable && status === 200) _cachePut(targetPath, { status, headers: { ...safeHeaders }, body: outBuf });
+          return;
+        }
+        // CSS/字体/图片/wasm 等哈希不可变静态资源: CSS 按需改写, 余直发; 强缓存 + 入缓存。
+        if (cacheable) {
+          let outBuf = body;
+          if (ct.includes("text/css")) {
+            const t = body.toString("utf8");
+            if (t.indexOf("https://app.devin.ai/") >= 0) {
+              outBuf = Buffer.from(t.split("https://app.devin.ai/").join(localBase + "/"), "utf8");
+            }
+          }
+          delete safeHeaders["cache-control"];
+          safeHeaders["Cache-Control"] = "public, max-age=31536000, immutable";
+          res.writeHead(status, safeHeaders);
+          res.end(outBuf);
+          if (status === 200) _cachePut(targetPath, { status, headers: { ...safeHeaders }, body: outBuf });
           return;
         }
         res.writeHead(status, safeHeaders);
