@@ -810,7 +810,7 @@ async function openIdeAccountBrowser(acc) {
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.9.0";
+const VERSION = "4.9.1";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -10073,25 +10073,18 @@ async function handleWebviewMessage(msg) {
         }
         break;
       }
-      // ★ 归一 · 系统浏览器多实例隔离 + 账号注入
-      //   首选 dao-vsix 反代隔离启动器 (经 ?dao_acct 注入该账号 auth1 → 真登录闭环·多实例互不串号);
-      //   dao-vsix 不可用时回退 devin_web 独立 --user-data-dir profile (隔离用户默认浏览器认证·首登一次后续登);
-      //   再无 Chrome/Edge 才落系统默认浏览器。
+      // ★ 归一 · 系统浏览器多实例隔离 + 账号注入 (v4.9.0 · 自足直注优先)
+      //   首选 devin_web 自足直注: 独立 --user-data-dir profile + CDP 注入 auth1_session 直登
+      //     app.devin.ai (不赖 dao-vsix 反代/本地端口·多实例互不串号·根治"打开是死页/没作用")。
+      //   失败回退 dao-vsix 反代隔离启动器; 再无 Chrome/Edge 才落系统默认浏览器。
+      //   全程即时 toast + 必有兜底 → 杜绝"点了完全没反应"。
       case "openSysBrowser": {
         const i = msg.index;
         if (i < 0 || i >= _store.accounts.length) return;
         const a = _store.accounts[i];
-        // 首选: dao-vsix 隔离启动器 (每账号独立 profile 窗·经反代注入 auth1 自动登录)。
-        try {
-          await vscode.commands.executeCommand("dao.routeOfficialForAccount", {
-            email: a.email,
-            mode: "sys",
-          });
-          _toast("🌐 系统浏览器已打开官网 · " + a.email.split("@")[0]);
-          break;
-        } catch {}
-        // 回退: 自足隔离 profile (dao-vsix 不可用时仍隔离用户默认浏览器认证)。
-        _toast("⏳ 隔离浏览器启动中 · " + a.email.split("@")[0]);
+        const who = a.email.split("@")[0];
+        _toast("⏳ 系统浏览器启动中 · " + who); // 即时反馈, 杜绝"点了没反应"
+        // 首选: 自足直注 (devin_web · 不赖反代/本地端口)。
         try {
           // 先取该账号注入态 (缓存命中秒开; 否则后台登录换 auth1+userId)。
           let auth = devinCloud.getCachedAuth(a.email);
@@ -10109,19 +10102,32 @@ async function handleWebviewMessage(msg) {
           });
           if (res.ok) {
             _toast(
-              "🌐 独立隔离实例已开 · " +
-                a.email.split("@")[0] +
-                " (首次登录一次后自动续登)",
+              res.injected
+                ? "🌐 独立隔离实例已开并自动登录 · " + who
+                : "🌐 独立隔离实例已开 · " + who + " (首次手动登录一次后自动续登)",
             );
-          } else if (res.error === "no-browser") {
-            // 无 Chrome/Edge → 系统默认浏览器兜底 (无隔离)。
-            await vscode.env.openExternal(
-              vscode.Uri.parse("https://app.devin.ai"),
-            );
-            _toast("🌐 默认浏览器已打开(未找到 Chrome/Edge·无隔离)");
-          } else {
-            _toast("✗ 浏览器启动失败: " + (res.error || ""));
+            break;
           }
+          if (res.error && res.error !== "no-browser")
+            log("openSysBrowser: devin_web 启动异常 " + res.error);
+        } catch (e) {
+          log("openSysBrowser: devin_web 异常 " + (e && e.message));
+        }
+        // 回退①: dao-vsix 反代隔离启动器 (devin_web 失败时尝试)。
+        try {
+          await vscode.commands.executeCommand("dao.routeOfficialForAccount", {
+            email: a.email,
+            mode: "sys",
+          });
+          _toast("🌐 系统浏览器已打开官网(反代) · " + who);
+          break;
+        } catch {}
+        // 回退②: 系统默认浏览器 (无隔离·至少能用·绝不出现"没反应")。
+        try {
+          await vscode.env.openExternal(
+            vscode.Uri.parse("https://app.devin.ai"),
+          );
+          _toast("🌐 默认浏览器已打开官网(未隔离·未注入)");
         } catch (e) {
           _toast("✗ 浏览器启动失败: " + (e && e.message));
         }
