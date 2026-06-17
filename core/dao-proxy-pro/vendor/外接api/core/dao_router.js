@@ -217,7 +217,7 @@ function _routeDiag(msg) {
   } catch {}
 }
 let _substituteEnabled = false; // 全局开关: substitute模式默认关闭(需用户有目标模型权限)
-let _familyTierExtend = true; // ★ 同族档位延伸: 连一档即覆盖全族 · 默认开(可显式 familyTierExtend:false 关) · 连一族即覆盖其全部档位(含 Cascade 默认下发的 slow/fast 变体)
+let _familyTierExtend = false; // ★ 同族档位延伸: 连一档是否覆盖全族 · 默认关(可显式 familyTierExtend:true 开) · 关时 slow 等未显式连线之档保持官方原生直通(默认走官方·免费不路由) · 开时全族档位归一其渠道
 let _wire = null; // cascade_wire.js (lazy load)
 
 // ════════════════════════════════════════════════════════════════
@@ -1030,13 +1030,13 @@ function init({ log, configPath }) {
       _log("[dao-router]   substitute模式: 关闭 (substituteEnabled=false)");
     }
 
-    // ★ 同族档位自动延伸开关 (连一档即覆盖全族) · 默认开启(可显式 familyTierExtend:false 关)
-    //   开(默认): 同族任一档位被显式连线 → 全族档位归一其渠道 · 根治「UI 连 fast/base 而
-    //     Cascade 实发 swe-1-6-slow(catalog 无此档·不可单独连线) → 漏路 → 回落不可达官方上游」
-    //   关: swe-1-6-slow 等未显式连线者保持官方原生直通 (旧默认·需手动 familyTierExtend:false)
+    // ★ 同族档位自动延伸开关 (连一档是否覆盖全族) · 默认关闭(可显式 familyTierExtend:true 开)
+    //   关(默认): swe-1-6-slow 等未显式连线之档保持官方原生直通 · 即「默认走官方·免费不路由」
+    //     —— 用户旨意: fast 档随首个渠道自动路由 · slow 档默认官方 · 仅显式连线方路由第三方
+    //   开(可选): 同族任一档位被显式连线 → 全族档位(含 catalog 无独立项的 slow)归一其渠道
     //   守常: 仅延伸「含真实非播种路由」之族 · 纯播种桩族(无真路由)仍保官方直通
-    //   道义: 二十一章「名实相符」· 前端所连之族 · 其下各档皆归一其渠道 · 不漏不弃
-    _familyTierExtend = dr.familyTierExtend !== false;
+    //   道义: 二十五章「道法自然」· 唯变所适 · 默认顺其自然(官方) · 用户欲连方延伸
+    _familyTierExtend = dr.familyTierExtend === true;
     _log(
       "[dao-router]   同族档位延伸: " +
         (_familyTierExtend ? "开 (连一档覆盖全族)" : "关 (显式逐档路由)"),
