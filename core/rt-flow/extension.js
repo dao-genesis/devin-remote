@@ -8257,7 +8257,7 @@ ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanS
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.4.0 · 默认开 · 备份完成且额度低于阈值时自动水过无痕清理"><input type="checkbox" id="dvAutoClean" ${_cfg("devinCloudAutoCleanup", true) ? "checked" : ""} onchange="dvToggleCleanup(this.checked)">自动清理</label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.9.0 · 默认开 · 额度完全归零的账号, 全量备份+清理后自动从账号库移除(等同手动删除·不再显示)"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", true) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.4.0 · 额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="${_cfg("devinCloudAutoBackupThreshold", 3)}" min="0" step="1" style="width:30px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetThreshold(this.value)"></label>
-<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.5.0 · 对话额度上限·知止不殆: 每对话上限=余额-缓冲·实时跟随余额; 余额≤停止阈值自动中停运行中对话"><input type="checkbox" id="dvConvCap" ${_cfg("devinCloudConvQuotaCap", false) ? "checked" : ""} onchange="dvToggleConvCap(this.checked)">对话上限</label>
+<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.5.0 · 对话额度上限·知止不殆: 每对话上限=余额-缓冲·实时跟随余额; 余额≤停止阈值自动中停运行中对话"><input type="checkbox" id="dvConvCap" ${_cfg("devinCloudConvQuotaCap", true) ? "checked" : ""} onchange="dvToggleConvCap(this.checked)">对话上限</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.5.0 · 对话上限缓冲($): 每对话上限=余额-此缓冲 (余额$70→上限$67)">缓冲$<input type="number" id="dvConvBuf" value="${_cfg("devinCloudConvQuotaBuffer", 3)}" min="0" step="0.01" style="width:34px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetConvBuffer(this.value)"></label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.7.3 · 耗尽自动重置·将欲予之必故予之: 余额抵缓冲(上限本将归0)时不困住这笔钱, 反向把上限抬回剩余余额, 让美金真正用尽; 仅余额≤抽干地板才最终中停"><input type="checkbox" id="dvConvDrain" ${_cfg("devinCloudConvDrainToZero", true) ? "checked" : ""} onchange="dvToggleDrain(this.checked)">耗尽重置</label>
 <select style="font-size:9px;background:#1e1e1e;color:#888;border:1px solid #444;border-radius:3px;padding:1px 2px" title="v4.4.0 · 备份模式: folder=文件夹(HTML/MD·推荐) zip=传统ZIP" onchange="dvSetMode(this.value)"><option value="folder" ${_cfg("devinCloudBackupMode", "folder") === "folder" ? "selected" : ""}>文件夹</option><option value="zip" ${_cfg("devinCloudBackupMode", "folder") === "zip" ? "selected" : ""}>ZIP</option></select>
@@ -8551,7 +8551,7 @@ function _dvLeaderStartSweeps() {
     }, pollMin * 60000);
   }
   _dvStartPreload();
-  if (_cfg("devinCloudConvQuotaCap", false)) _dvConvCapSchedule();
+  if (_cfg("devinCloudConvQuotaCap", true)) _dvConvCapSchedule();
 }
 // 让出主窗口 → 停止全局网络扫描 (转为跟随·只读共享状态)
 function _dvLeaderStopSweeps() {
@@ -8780,7 +8780,7 @@ function _dvOverviewHtml(ov, i, gitSt) {
         : "";
   // v4.5.0: 对话额度上限 (开启时显示本账号当前每对话上限·实时跟随余额)
   const _capState = _dvConvCapFor(ov.email);
-  const capTxt = _cfg("devinCloudConvQuotaCap", false) && _capState
+  const capTxt = _cfg("devinCloudConvQuotaCap", true) && _capState
     ? "对话上限 $" + (typeof _capState.cap === "number" ? _capState.cap.toFixed(2) : "—") + (_capState.drain ? " ·抽干中" : "") + (_capState.inUse ? " ·使用中" : "")
     : "";
   let h = '<div class="dv-h">';
@@ -9400,7 +9400,7 @@ function _dvConvCapFor(email) { return _dvConvCap.get(String(email || "").toLowe
 // 一轮: 拉各已登录账号余额(精确到分)→ 算上限 → 检测使用中 → 必要时中停 → 广播前端。
 // 返回 true = 有账号使用中 (供调度器提速下一轮)。
 async function _dvConvCapTick() {
-  if (!_cfg("devinCloudConvQuotaCap", false)) return false;
+  if (!_cfg("devinCloudConvQuotaCap", true)) return false;
   const emails = new Set(devinCloud.cachedEmails());
   if (!emails.size) return false;
   const buffer = _dvConvBuffer();
@@ -9445,8 +9445,22 @@ async function _dvConvCapTick() {
       // 进入抽干模式且仍在运行 → 把曾因旧阈值停过的记录释放(本轮不停), 仅记录日志
       log("conv-cap: 抽干模式 " + key.split("@")[0] + " bal=$" + balance.toFixed(2) + " 上限反抬至 $" + cap.toFixed(2) + " · 不中停·让美金用尽");
     }
-    _dvConvCap.set(key, { balance, cap, drain, lastBalance: prev.balance, inUse, ts: Date.now(), stopped: prev.stopped });
-    items.push({ email: key, balance: +balance.toFixed(2), cap, drain, inUse, stopThreshold: stopBound });
+    // v4.9.5 · 反向注入·随时及时: 把算出的 cap 实时写入该账号「每条消息额度上限」(Devin Usage limits)。
+    //   余额70→上限67→64 跟随; 抽干模式下 cap 反抬回余额(>缓冲)让美金真正用尽。
+    //   仅在 cap 较上轮变化时回写(幂等·避免无谓并发请求, 不重蹈批量并发卡网覆辙)。
+    let injectedCap = prev.injectedCap;
+    if (_cfg("devinCloudConvInjectLimit", true) && Number.isFinite(cap) && cap >= 0) {
+      const changed = typeof prev.injectedCap !== "number" || Math.abs(prev.injectedCap - cap) >= 0.01;
+      if (changed) {
+        try {
+          const sr = await devinCloud.setMessageLimit(auth, cap);
+          if (sr.ok) { injectedCap = cap; log("conv-cap: 反注消息上限 " + key.split("@")[0] + " → $" + cap.toFixed(2) + (drain ? "(抽干)" : "")); }
+          else log("conv-cap: 反注消息上限失败 " + key.split("@")[0] + " status=" + sr.status);
+        } catch (e) { log("conv-cap inject-limit err: " + (e.message || e)); }
+      }
+    }
+    _dvConvCap.set(key, { balance, cap, drain, injectedCap, lastBalance: prev.balance, inUse, ts: Date.now(), stopped: prev.stopped });
+    items.push({ email: key, balance: +balance.toFixed(2), cap, drain, inUse, stopThreshold: stopBound, injectedCap });
   }
   _broadcastMsg({ type: "devinConvCap", items });
   return anyInUse;
@@ -9455,7 +9469,7 @@ async function _dvConvCapTick() {
 // 自适应自调度: 使用中→秒级、空闲→分钟级。开关关闭则不调度。
 function _dvConvCapSchedule() {
   if (_dvConvCapTimer) { clearTimeout(_dvConvCapTimer); _dvConvCapTimer = null; }
-  if (!_cfg("devinCloudConvQuotaCap", false)) return;
+  if (!_cfg("devinCloudConvQuotaCap", true)) return;
   const run = async () => {
     let inUse = false;
     try { inUse = await _dvConvCapTick(); } catch (e) { log("conv-cap tick err: " + (e.message || e)); }
@@ -11542,14 +11556,14 @@ async function handleWebviewMessage(msg) {
         const v = Math.max(0, +(msg.value) || 0);
         await vscode.workspace.getConfiguration("wam").update("devinCloudConvQuotaBuffer", v, vscode.ConfigurationTarget.Global);
         _toast("\u2713 对话上限缓冲: $" + v.toFixed(2));
-        if (_cfg("devinCloudConvQuotaCap", false)) _dvConvCapSchedule();
+        if (_cfg("devinCloudConvQuotaCap", true)) _dvConvCapSchedule();
         break;
       }
       // v4.7.3 · 耗尽自动重置(抽干至零)开关
       case "devinToggleDrain": {
         await vscode.workspace.getConfiguration("wam").update("devinCloudConvDrainToZero", !!msg.on, vscode.ConfigurationTarget.Global);
         _toast(msg.on ? "\u2713 已开启耗尽自动重置(余额抵缓冲→反向抬回上限·让美金用尽·仅见底才中停)" : "已关闭耗尽自动重置(余额≤停止阈值即中停)");
-        if (_cfg("devinCloudConvQuotaCap", false)) _dvConvCapSchedule();
+        if (_cfg("devinCloudConvQuotaCap", true)) _dvConvCapSchedule();
         break;
       }
       // v4.4.0 · 设置备份模式
@@ -12806,7 +12820,7 @@ async function activate(context) {
     //   「主窗口」执行, 其余窗口读共享状态文件渲染 → 功能不变·网络并发 ÷ 窗口数 (根治多窗口
     //   conntrack 风暴)。启停由 _dvStartElection 内的选主心跳统一管理 (见 _dvLeaderStartSweeps)。
     _dvStartElection(context);
-    log("devin-cloud: 第五板块就绪 (singleton 选主) · autoBackup=" + _cfg("devinCloudAutoBackup", true) + " pollMin=" + Math.max(0, _cfg("devinCloudRunPollMin", 1)) + " preload=" + _cfg("devinCloudPreload", true) + " convCap=" + _cfg("devinCloudConvQuotaCap", false));
+    log("devin-cloud: 第五板块就绪 (singleton 选主) · autoBackup=" + _cfg("devinCloudAutoBackup", true) + " pollMin=" + Math.max(0, _cfg("devinCloudRunPollMin", 1)) + " preload=" + _cfg("devinCloudPreload", true) + " convCap=" + _cfg("devinCloudConvQuotaCap", true));
   } catch (e) {
     log("devin-cloud init err: " + ((e && e.message) || e));
   }

@@ -592,6 +592,26 @@ async function getBilling(auth) {
   if (r.status === 200 && r.json) return { ok: true, billing: r.json };
   return { ok: false, billing: null };
 }
+// v4.9.5 · 反向注入「每条消息额度上限」(Devin Cloud · Usage & limits · Message usage limit · max_credits)。
+//   端点: POST /api/org-{bare}/billing/usage/limits  body {max_credits}。与 dao-vsix devinSetMessageLimit 同源同构。
+//   对话额度上限(conv-cap)据此把 cap=余额-缓冲 实时写入账号, 让 Devin 自身按此限额花钱(随余额下降跟随)。
+async function setMessageLimit(auth, maxCredits) {
+  const mc = Number(maxCredits);
+  if (!Number.isFinite(mc) || mc < 0) return { ok: false, status: 0 };
+  const r = await jsonRequest("POST", CFG.apiBase + "/org-" + auth.orgBare + "/billing/usage/limits", authHeaders(auth), { max_credits: +mc.toFixed(2) });
+  return { ok: r.status === 200 || r.status === 201 || r.status === 204, status: r.status };
+}
+// v4.9.5 · 读取当前「每条消息额度上限」 — 用于幂等比对(只在变化时回写, 不制造无谓请求)。
+async function getMessageLimit(auth) {
+  const r = await jsonRequest("GET", CFG.apiBase + "/org-" + auth.orgBare + "/billing/usage/limits", authHeaders(auth));
+  if (r.status === 200 && r.json) {
+    const j = r.json;
+    const v = (typeof j.max_credits === "number") ? j.max_credits
+      : (j.limits && typeof j.limits.max_credits === "number") ? j.limits.max_credits : null;
+    return { ok: true, maxCredits: v };
+  }
+  return { ok: false, maxCredits: null };
+}
 
 // 从 billing 提取「可用余额(美元)」 · 返回 null = 无法判定(调用方禁止据此做破坏性自动清理)
 // 实测 Devin billing/status 字段: available_credits / overage_credits(可负=已欠) /
@@ -2357,6 +2377,9 @@ module.exports = {
   _isTransientErr,
   // v4.7.3 · 对话上限/抽干 (可测纯函数)
   computeConvCap,
+  // v4.9.5 · 反向注入消息额度上限 (Devin billing usage limits)
+  setMessageLimit,
+  getMessageLimit,
   // v4.7.5 · 低余额预警 / 卡死监测 (可测纯函数)
   lowBalanceVerdict,
   sessionSignature,
