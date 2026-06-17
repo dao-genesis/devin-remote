@@ -6,11 +6,39 @@ import * as api from './api';
 import { ZipWriter } from './zip';
 import {
   buildWorklog, buildConversation, extractConversation, extractChanges, safeName,
-  mapKeysToPaths, buildReadme, buildSessionJson, ProducedFile,
+  mapKeysToPaths, buildReadme, buildSessionJson, buildSessionMarkdown, ProducedFile,
 } from './worklog';
 
 export interface ExportProgress {
   (message: string, increment?: number): void;
+}
+
+/**
+ * Load the full event stream for a session, trying the stream then first-load,
+ * and falling back on EMPTY (not just on a thrown error) — a dead/proxied base
+ * can return a 200 HTML page that parses to zero events without throwing.
+ */
+export async function loadSessionEvents(auth: api.AuthState, devinId: string): Promise<api.EventItem[]> {
+  let events: api.EventItem[] = [];
+  try { events = await api.getEventStream(auth, devinId); } catch { /* fall through */ }
+  if (events.length === 0) {
+    try { events = await api.getFirstLoad(auth, devinId); } catch { /* keep empty */ }
+  }
+  return events;
+}
+
+/**
+ * Export ONE session as a single self-contained markdown string (whole
+ * conversation + worklog + changes list), no folder/ZIP. Lightweight: only
+ * fetches session info + events, no binary downloads.
+ */
+export async function exportSessionToMarkdown(
+  auth: api.AuthState, devinId: string, title: string,
+): Promise<string> {
+  let info: Record<string, unknown> = {};
+  try { info = await api.getSessionInfo(auth, devinId); } catch (e) { info = { error: String(e) }; }
+  const events = await loadSessionEvents(auth, devinId);
+  return buildSessionMarkdown(info, title, devinId, events);
 }
 
 function downloadConcurrency(): number { return api.getSettings().DOWNLOAD_CONCURRENCY; }

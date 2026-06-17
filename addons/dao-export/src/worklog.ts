@@ -611,3 +611,76 @@ export function buildSessionJson(
   };
   return JSON.stringify(payload, null, 2);
 }
+
+/**
+ * buildSessionMarkdown — the WHOLE session as ONE self-contained markdown file.
+ *
+ * The ZIP export gives a folder (events.json + cloud_files/ + changes/ …) which
+ * is overkill when another Agent just needs to read the conversation. This packs
+ * everything text-shaped — metadata header, full conversation transcript, a
+ * readable worklog, and the final-changes file list — into a single .md with no
+ * folder, so it can be pasted/ingested directly. No binaries are downloaded.
+ */
+export function buildSessionMarkdown(
+  info: Record<string, any>, title: string, devinId: string, events: EventItem[],
+): string {
+  const stats = summarize(events);
+  const changes = extractChanges(events);
+  const sid = devinId.replace('devin-', '');
+  const L: string[] = [];
+
+  L.push(`# ${info.title || title || '(untitled session)'}`);
+  L.push('');
+  L.push('> 由 DAO Devin Export 单对话整段导出（单文件 Markdown · 无需文件夹）');
+  L.push('');
+  L.push('| 字段 | 值 |');
+  L.push('|---|---|');
+  L.push(`| Session | \`${devinId}\` |`);
+  L.push(`| 在线查看 | https://app.devin.ai/sessions/${sid} |`);
+  if (info.status) { L.push(`| 状态 | ${asText(info.status)} |`); }
+  if (info.created_at) { L.push(`| 创建 | ${asText(info.created_at)} |`); }
+  if (info.updated_at) { L.push(`| 更新 | ${asText(info.updated_at)} |`); }
+  L.push(`| 事件 | ${stats.events}（用户 ${stats.userMessages} · Devin ${stats.devinMessages} · 命令 ${stats.commands} · 改文件 ${stats.edits}） |`);
+  const prs = (info.pull_requests || []) as Array<Record<string, any>>;
+  if (prs.length) {
+    const urls = prs.map((p) => asText(p.url || p.html_url || p.pr_url)).filter(Boolean);
+    L.push(`| PR | ${urls.length ? urls.join(' · ') : prs.length} |`);
+  }
+  L.push(`| 导出时间 | ${new Date().toISOString()} |`);
+  L.push('');
+
+  if (stats.blockers.length) {
+    L.push('## ⚠ Blockers');
+    L.push('');
+    for (const b of stats.blockers) {
+      L.push(`- **${b.headline || '(blocker)'}** — ${b.impact || ''}${b.recommended_action ? ` · 建议: ${b.recommended_action}` : ''}`);
+    }
+    L.push('');
+  }
+
+  L.push('---');
+  L.push('');
+  // 完整对话流（含活动折叠摘要）。buildConversation 自带标题, 故此处不再重复一级标题。
+  L.push(buildConversation(title, devinId, events));
+  L.push('');
+
+  if (changes.length) {
+    L.push('---');
+    L.push('');
+    L.push(`## 📦 最终变更文件（${changes.length}）`);
+    L.push('');
+    for (const c of changes) { L.push(`- \`${c.path}\``); }
+    L.push('');
+  }
+
+  L.push('---');
+  L.push('');
+  L.push('<details><summary>📝 完整 Worklog（含命令/输出/思考）</summary>');
+  L.push('');
+  L.push(buildWorklog(title, devinId, events));
+  L.push('');
+  L.push('</details>');
+  L.push('');
+  L.push('无为而无不为 · 道法自然');
+  return L.join('\n');
+}

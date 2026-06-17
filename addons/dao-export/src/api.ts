@@ -296,6 +296,37 @@ export async function login(email: string, password: string): Promise<AuthState>
   return { token, orgId, orgBare, orgName, email };
 }
 
+/**
+ * Build an AuthState directly from a raw bearer token (devin-session-token$ /
+ * JWT / auth1_ …), skipping email+password. Resolves org info via post-auth so
+ * the rest of the plugin (sessions/events/export) works identically. The email
+ * is taken from post-auth when present, otherwise the caller's label.
+ */
+export async function loginWithToken(token: string, label?: string): Promise<AuthState> {
+  const t = (token || '').trim();
+  if (!t) { throw new Error('empty token'); }
+  const orgResp = await request(`${API_BASE}/users/post-auth`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${t}`,
+      'User-Agent': UA,
+    },
+    body: '{}',
+  });
+  if (orgResp.status !== 200) {
+    throw new Error(`token 验证失败 (post-auth HTTP ${orgResp.status}): ${orgResp.body.slice(0, 160)}`);
+  }
+  let orgData: any = {};
+  try { orgData = JSON.parse(orgResp.body); } catch { /* keep empty */ }
+  const orgId = orgData.org_id || orgData.orgId || '';
+  if (!orgId) { throw new Error(`token 验证失败: post-auth 无 org_id`); }
+  const orgBare = orgId.replace('org-', '');
+  const orgName = orgData.org_name || orgData.orgName || '';
+  const email = orgData.email || orgData.user_email || label || '(token)';
+  return { token: t, orgId, orgBare, orgName, email };
+}
+
 function authHeaders(auth: AuthState, extra?: Record<string, string>): Record<string, string> {
   return {
     'Authorization': `Bearer ${auth.token}`,
