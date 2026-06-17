@@ -3,18 +3,19 @@
 > 道法自然 · 损之又损。本文件给下一个 agent：当前进度、已打通项、仍卡的一处 bug、复现方法、续作清单。
 
 ## 〇·新 (v9.9.298 · 141 实机生产后端实测 · 见 TEST_REPORT_9.9.298_141LIVE.md)
-- **现状**：9.9.298 **已落地并实时运行** 在 141。安装于 **VS Code 1.124.0** 扩展目录
-  `~/.vscode/extensions/dao-agi.dao-proxy-pro-9.9.298`（**非** `~/.devin/extensions`），origin
-  in-process 后端 `:8937` 存活（pid 53044）。渠道凭据在 `~/.codeium/dao-byok/配置.json`（github/deepseek/freemodel-test/xiaomi + 10 路由）。
-- **经 DAO Bridge 后端实测（全 PASS）**：`/origin/ea/overview` 49 家族/5 providers/10 路由/108 目录；
-  路由端到端 `MODEL_SWE_1_6`→builtin-stub(200)、`swe-1-6-fast`→deepseek(200,DAO-OK-DEEPSEEK)、
-  `swe-1-6-slow`→xiaomi(200,DAO-OK-XIAOMI)；去名出站载荷大写身份标记=0（仅 `windsurf_deployment_id` 参数名残留，既定）；
-  经文热切 yinfu(587)↔laozi(7126)↔合一(7715) 零重载。四接入模块（浏览器 CDP/整机/code CLI）连通。
-- **唯一非通过 · gpt-4.1→GitHub**：`connect ETIMEDOUT 104.244.46.165:443` —— 141 出网不达
-  `models.github.ai`（直连与 7890 代理均超时；同网络下 `git clone github.com` 亦 TLS 握手失败）。
-  **属环境/网络，非代码缺陷**：路由解析、模型列表、凭据均在位，proxy-pro 优雅返回错误不崩溃。
-  待 141 VPN/代理上游恢复或改用国内可达渠道即恢复（v9.9.288 报告曾测 github alive）。
-- **续作建议**：(1) 141 出网恢复后复测 GitHub 渠道；(2) 真机 GUI 复验三面板渲染（本轮仅后端线级，未走 webview）；(3) 仓库与 141 `E:\DAO_ARCHIVE` 版本对齐巡检。
+- **现状（纠正旧说）**：9.9.298 **在两处 IDE 均已安装并各自运行 origin**：
+  - **Devin Desktop（用户实际使用）**：`~/.devin/extensions/dao-agi.dao-proxy-pro-9.9.298`（extensions.json 已注册），
+    ext-host = `E:\Windsurf\Devin.exe` pid 51640（与 DAO Bridge 同进程），origin **`:37808`** 活跃，
+    `_ea_diag.log` 实时增长（`routing-check _ea=true kind=INFER_STRIP`）证明正在线拦截/去名 Cascade LS。
+  - **VS Code 1.124.0（旁路）**：`~/.vscode/extensions/...`，origin `:8937`，pid 30232。
+  - 渠道凭据共用 `~/.codeium/dao-byok/配置.json`（github/deepseek/freemodel-test/xiaomi + 10 路由）。
+- **经 DAO Bridge 后端实测（Devin Desktop :37808 全 PASS）**：`/origin/ea/overview` 53 家族/5 providers/10 路由/108 目录；
+  **四渠道路由端到端 200**：`MODEL_SWE_1_6`→builtin-stub、`swe-1-6-fast`→deepseek(DAO-OK-DEEPSEEK)、
+  `swe-1-6-slow`→xiaomi(DAO-OK-XIAOMI)、`gpt-4.1`→github/openai/gpt-4.1(DAO-OK-GITHUB)；
+  去名出站载荷大写身份标记=0（仅 `windsurf_deployment_id` 参数名残留，既定）；经文热切 yinfu(587)↔laozi(7126)↔合一(7715) 零重载。四接入模块（浏览器 CDP/整机/code+devin CLI）连通。
+- **GitHub 渠道瞬时波动（已恢复）**：VS Code 侧 15:30 首测 `connect ETIMEDOUT`，Devin Desktop 侧 15:51 复测 200。
+  共用同一 141 出网，20 分钟由超时转通 → **瞬时网络**（出网到 `models.github.ai`），**非代码缺陷**；proxy-pro 超时优雅返回不崩溃。
+- **续作建议**：(1) 真机 GUI 复验三面板渲染（本轮后端线级 + 进程/日志佐证，未走 webview）；(2) 仓库与 141 `E:\DAO_ARCHIVE` 版本对齐巡检；(3) GitHub 渠道偶发出网波动可观察。
 
 ---
 
