@@ -1,6 +1,6 @@
 {
-  "versionCode": 44,
-  "versionName": "0.15.13",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.13/DevinCloud-mobile-v0.15.13.apk",
-  "notes": "v0.15.13 · 对话备份全量化 + 拖拽双MD + ZIP含产出文件夹 + 平板兼容\n· 对话导出全量化: 备份板块「预览/下载MD/全量备份/ZIP」与页面拖拽, 全部对齐电脑版 dao-vsix 四类气泡(👤用户含首条提示词与追问回答 · 🤖Devin · 💭思考 · 🔧工具:shell/文件编辑/搜索/联网/MCP/待办/电脑操作)。修复旧版只抓 用户+Devin 两类、思考与工具全丢的不全问题(实测某 1867 事件会话: 旧版 6KB/11条 → 新版 268KB/全量)。\n· 页面拖拽: 只拉当前停留的那一条对话, 产出 2 份 MD —— ①全量对话md ②「查看该对话全部文件」取数指引md(含该对话账号+密码、Session ID、整套提取流程)。\n· ZIP「下载全部文件」: 新增二进制下载桥, 按 contents_key→presigned URL 取回产出文件, 还原原始 files/<文件夹> 结构。\n· 平板兼容: 放宽 configChanges(旋转/分屏/缩放不再重建 Activity, 治卡顿/页面加载不出/闪退) + largeHeap/hardwareAccelerated(治多 WebView OOM)。\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
+  "versionCode": 45,
+  "versionName": "0.15.14",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.14/DevinCloud-mobile-v0.15.14.apk",
+  "notes": "v0.15.14 · RPC 端到端加密(中继只见密文) + 去中心化配置面板\n· 端到端加密(默认开启): RPC 载荷(含邮箱/密码/token)用设备自有 E2E Key 经 PBKDF2-HMAC-SHA256(10万次)+AES-256-GCM 加密后才发出, 任何中继(含共享 Worker)全程只见密文。E2E Key 首次启动自动生成、防卸载持久化、从不上送中继; 授权方(A群)经「取数指引 MD·板块六」拿到同一 Key 才能解密驱动。明文请求仍得明文响应(向后兼容旧驱动)。\n· 穿透面板新增「🔐 端到端加密」区: 查看/复制 E2E Key 与中继入口。\n· 参考实现: tools/dao-e2e(Python + JS, 与设备端逐字节兼容), 供授权方加解密 RPC。\n· 去中心化: 穿透面板支持每设备自填中继 URL(路线A 自托管 Worker, npx wrangler deploy 一条命令) 与命名隧道(路线C 固定域名); 叠加 E2E 后, 连自己的端点也只看得到密文。\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
 }

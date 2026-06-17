@@ -1108,6 +1108,14 @@ public class MainActivity extends AppCompatActivity {
             o.write((json == null ? "{}" : json).getBytes(StandardCharsets.UTF_8));
         } catch (Exception ignored) {}
     }
+    /** 读 filesDir 下的文本文件 (如 relay-config.json); 不存在/出错返回空串。 */
+    private String readFilesText(String name) {
+        try (InputStream is = new java.io.FileInputStream(new File(getFilesDir(), name))) {
+            ByteArrayOutputStream bo = new ByteArrayOutputStream(); byte[] buf = new byte[4096]; int n;
+            while ((n = is.read(buf)) > 0) bo.write(buf, 0, n);
+            return bo.toString("UTF-8");
+        } catch (Exception e) { return ""; }
+    }
     /** 冷启动: 取/建设备唯一 session(防卸载持久化), 轮换 token, 落地 relay-config.json。 */
     private void ensureRelayIdentity() {
         try {
@@ -1118,13 +1126,17 @@ public class MainActivity extends AppCompatActivity {
             if (url.isEmpty()) url = defaultRelayBase();
             String session = id.optString("session", "");
             if (session.isEmpty()) session = "rtflow-" + randHex(16);
-            id.put("url", url); id.put("session", session);
-            vaultWrite("relay-identity", id.toString());   // 身份(url+session)防卸载持久化
+            // 端到端加密口令: 设备唯一、防卸载持久化、从不上送中继 → 中继(含共享 Worker)只见密文。
+            String e2eKey = id.optString("e2eKey", "");
+            if (e2eKey.isEmpty()) e2eKey = randHex(32);
+            id.put("url", url); id.put("session", session); id.put("e2eKey", e2eKey);
+            vaultWrite("relay-identity", id.toString());   // 身份(url+session+e2eKey)防卸载持久化
 
             String token = randHex(32);                    // 每次冷启动轮换
             String base = url.replaceAll("/+$", "");
             JSONObject cfg = new JSONObject();
             cfg.put("url", url); cfg.put("token", token); cfg.put("session", session);
+            cfg.put("e2eKey", e2eKey);
             cfg.put("enabled", true);
             cfg.put("endpoint", base + "/relay/" + session);
             cfg.put("rotatedTs", System.currentTimeMillis());
@@ -1145,11 +1157,18 @@ public class MainActivity extends AppCompatActivity {
             if (session.isEmpty()) session = "rtflow-" + randHex(16);
             String token = in.optString("token", "");
             if (token.isEmpty()) token = randHex(32);
-            JSONObject id = new JSONObject(); id.put("url", url); id.put("session", session);
+            // e2eKey: 用户显式提供则用之; 否则沿用旧身份, 仍无则新生成 (端到端加密口令不轮换)。
+            String e2eKey = in.optString("e2eKey", "");
+            if (e2eKey.isEmpty()) {
+                try { String old = vaultRead("relay-identity"); if (old != null && old.trim().startsWith("{")) e2eKey = new JSONObject(old).optString("e2eKey", ""); } catch (Exception ignored) {}
+            }
+            if (e2eKey.isEmpty()) e2eKey = randHex(32);
+            JSONObject id = new JSONObject(); id.put("url", url); id.put("session", session); id.put("e2eKey", e2eKey);
             vaultWrite("relay-identity", id.toString());
             String base = url.replaceAll("/+$", "");
             JSONObject cfg = new JSONObject();
             cfg.put("url", url); cfg.put("token", token); cfg.put("session", session);
+            cfg.put("e2eKey", e2eKey);
             cfg.put("enabled", true); cfg.put("endpoint", base + "/relay/" + session);
             cfg.put("rotatedTs", System.currentTimeMillis());
             writeRelayConfig(cfg.toString());
@@ -2790,6 +2809,24 @@ public class MainActivity extends AppCompatActivity {
         b.append("1. `browseOpen {url:\"https://app.devin.ai/sessions/").append(bare).append("\", account:\"").append(email.isEmpty() ? "<email>" : email).append("\"}` — 用该号上下文新开页, 不打扰用户当前页。\n");
         b.append("2. `browseWaitForElement` 等内容加载 → `browseExportMd {tabIndex, save:true}` 导出整页 Markdown。\n");
         b.append("3. 或 `browseGetDom` 取完整 DOM 自行解析。\n");
+        // 六、经本机中继远程驱动 (端到端加密) — 让授权方在不登录账号的前提下直接驱动本设备, 且中继读不到明文。
+        String e2eKey = "", endpoint = "", session = "";
+        try {
+            String rc = readFilesText("relay-config.json");
+            if (rc != null && rc.length() > 5) { JSONObject c = new JSONObject(rc);
+                e2eKey = c.optString("e2eKey", ""); endpoint = c.optString("endpoint", ""); session = c.optString("session", ""); }
+        } catch (Exception ignored) {}
+        if (!e2eKey.isEmpty()) {
+            b.append("\n## 六、经本机中继远程驱动 · 端到端加密 (去中心化)\n\n");
+            b.append("> 账号邮箱/密码/token **从不**经过中继明文; RPC 载荷用下方 `E2E Key` 端到端加密, 中继(含任何共享 Worker)只见密文。\n\n");
+            b.append("| 项 | 值 |\n|----|----|\n");
+            if (!endpoint.isEmpty()) b.append("| 中继入口 | `").append(endpoint).append("` |\n");
+            if (!session.isEmpty()) b.append("| Session | `").append(session).append("` |\n");
+            b.append("| E2E Key | `").append(e2eKey).append("` |\n");
+            b.append("| Token | (每次冷启动轮换, 在穿透面板「复制」当前值) |\n");
+            b.append("\n驱动方加解密参考实现见仓库 `tools/dao-e2e/`(JS/Python 与设备逐字节兼容): 请求 body 改为 ");
+            b.append("`{\"__e2e__\":1,\"c\":seal(JSON.stringify(realBody))}`, 响应 body 形如 `{\"__e2e__\":1,\"c\":\"<密文>\"}` 用同 key `open` 解密。\n");
+        }
         return b.toString();
     }
     private static String mdCell(String s) { return s == null ? "" : s.replace("|", "\\|").replace("\n", " ").trim(); }

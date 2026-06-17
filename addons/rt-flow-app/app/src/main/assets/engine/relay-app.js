@@ -161,8 +161,20 @@ const DaoRelayApp = (function () {
       if (!m || m.type === "pong") return;
       if (m.type === "request" && m.id) {
         lastFrameTs = Date.now();
+        // 端到端加密: 入站 body 为密文信封 {__e2e__:1,c} → 经原生桥解密后再分发 (中继全程只见密文)
+        var enc = false;
+        var N = (typeof Native !== "undefined") ? Native : null;
+        if (m.body && m.body.__e2e__ && N && N.e2eOpen) {
+          try { var dec = N.e2eOpen(m.body.c); if (dec) { m.body = JSON.parse(dec); enc = true; } else { m.body = {}; } }
+          catch (e) { m.body = {}; }
+        }
         const out = await handleFrame(m);
-        try { mySock.send(JSON.stringify({ type: "response", id: m.id, status: out.status, body: out.body })); } catch (e) {}
+        var sendBody = out.body;
+        // 仅对加密入站做加密出站 → 明文驱动仍得明文响应 (向后兼容)
+        if (enc && N && N.e2eSeal) {
+          try { var sealed = N.e2eSeal(JSON.stringify(out.body)); if (sealed) sendBody = { __e2e__: 1, c: sealed }; } catch (e) {}
+        }
+        try { mySock.send(JSON.stringify({ type: "response", id: m.id, status: out.status, body: sendBody })); } catch (e) {}
       }
     };
     mySock.onclose = () => {
