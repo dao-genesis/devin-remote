@@ -36,9 +36,11 @@ public class RelayService extends Service {
     public void onCreate() {
         super.onCreate();
         instance = this;
-        // 恢复远程操控开关状态
+        // 恢复远程操控开关状态: 默认开启 (用户首次无需手动开, 直接可远程驱动);
+        // 仍受会话 token 门禁保护。用户若曾手动关闭 ("0") 则尊重其选择。
         String flag = readUserFile("remote-ops-flag");
-        remoteOpsEnabled = "1".equals(flag);
+        if (flag == null || flag.isEmpty()) { remoteOpsEnabled = true; writeUserFile("remote-ops-flag", "1"); }
+        else remoteOpsEnabled = "1".equals(flag);
         startForeground(1, buildNotification("内网穿透服务启动中…"));
         main.post(this::initEngine);
     }

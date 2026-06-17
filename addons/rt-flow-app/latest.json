@@ -1,6 +1,6 @@
 {
-  "versionCode": 35,
-  "versionName": "0.15.4",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.4/DevinCloud-mobile-v0.15.4.apk",
-  "notes": "v0.15.4\n· 新增用户脚本引擎(油猴 Tampermonkey 兼容): 直接运行标准 .user.js 脚本, 支持 @match/@include/@exclude/@run-at, 提供 GM_setValue/GM_getValue/GM_xmlhttpRequest/GM_addStyle/GM_openInTab/GM_registerMenuCommand 等 GM_* API\n· GM_xmlhttpRequest 走原生桥 → 天然跨域、绕开网站 CSP; 脚本与数据存共享保险箱, 卸载/重装不丢\n· 菜单新增「用户脚本(油猴)」管理页: 从网址(如 Greasy Fork)一键安装、粘贴源码、启停、删除\n· 含 v0.15.3 整页翻译(Edge 引擎)与 v0.15.2 数据持久化全部修复"
+  "versionCode": 36,
+  "versionName": "0.15.5",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.5/DevinCloud-mobile-v0.15.5.apk",
+  "notes": "v0.15.5\n· 去中心化自动更新: 版本清单多镜像轮询(GitHub raw + jsDelivr/Fastly/Statically CDN + ghproxy 反代), 任一可达即可检查; APK 下载自动挑选可达镜像(含 ghproxy 国内反代), 不依赖单一服务器或穿透通道\n· 内网穿透/远程操控默认开启(仍受会话 token 门禁保护), 首次无需手动开即可远程驱动; 曾手动关闭者尊重其选择\n· 含 v0.15.4 油猴用户脚本引擎、v0.15.3 整页翻译、v0.15.2 数据持久化"
 }
