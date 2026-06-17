@@ -102,7 +102,8 @@ let _autoHealAttempts = 0;
 let _autoHealTimer: ReturnType<typeof setTimeout> | null = null;
 const AUTO_HEAL_DELAYS = [3000, 8000, 20000, 45000];
 // 归一 · 帛书「道生一」— 内联 rt-flow 运行时句柄(左·RT Flow 账号池/切号 入 dao-vsix 本体)
-interface RtflowModule { activate?: (ctx: vscode.ExtensionContext) => unknown; deactivate?: () => unknown; }
+interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; }
+interface RtflowModule { activate?: (ctx: vscode.ExtensionContext) => unknown; deactivate?: () => unknown; _internals?: RtflowInternals; }
 let _rtflowModule: RtflowModule | null = null;
 
 // ═══════════════════════════════════════════════════════════
@@ -2284,63 +2285,125 @@ function bridgeGenerateCloudMd(): string {
     const tok = bridgeToken || ws.token;
     const url = bridgeUrl || '(未连接)';
     const port = ws.port || 9920;
-    // 渐进式披露 · 云端 MD = 轻量「初始接入」: 接入信息 + 四大模块概览 + 深入读取指引。
-    // 四大模块的全部操作细节落本地 local-agent.md, Agent 按需 GET /api/file 深入读取对应模块。
+    // v3.17.0 · 道法自然 · 去渐进式披露: 唯一一份 MD = 四大模块全部命令 + 内网穿透全信息, 一次到位。
+    //   旧法把云端总纲/本地详档拆两份(渐进式披露) → 现归一为单文档, Agent 一读即全。
     return [
-        '# ☯ DAO Bridge · 云端 Agent 接入总纲（四大模块）',
+        '# ☯ DAO Bridge · Agent 接入总文档（四大模块 · 内网穿透 · 单文档全量）',
         '',
         '> 本文档供云端 Agent(Devin Cloud 等)读取，用于通过内网穿透**远程操作用户本地电脑**。',
-        '> 这是**轻量初始接入**：接入信息 + 四大模块概览。需要某模块的完整操作细节时，',
-        '> 按「深入读取」一节拉取本地详档，**按需读取、不必一次全读**(渐进式披露)。',
+        '> **唯一一份文档**：四大模块全部命令 + 内网穿透全部信息都在这里，一次读全、无需再拉别的文件。',
         '> **端口和 URL 会随隧道重启而变化，以本文档为准。**',
         '',
         '## 接入信息',
         '',
         '```',
-        `公网URL: ${url}`,
-        `Token:   ${tok}`,
-        `Auth:    Authorization: Bearer ${tok}`,
-        `本地端口: ${port}   主机: ${wsInfo.host}   工作区: ${wsInfo.name}`,
+        `公网URL:   ${url}`,
+        `Local URL: http://127.0.0.1:${port}`,
+        `Token:     ${tok}`,
+        `Auth:      Authorization: Bearer ${tok}`,
+        `本地端口: ${port}   主机: ${wsInfo.host}   工作区: ${wsInfo.name}   根目录: ${wsInfo.root}`,
         `更新于:  ${ts}`,
         '```',
         '',
-        '所有请求 Header: `Authorization: Bearer <Token>`。基础底座端点：',
-        '`GET /api/health`(免鉴权) · `GET /api/bridge-state` · `POST /api/exec {cmd,timeout}` ·',
-        '`POST /api/ls {path}` · `POST /api/file {path}` · `POST /api/write {path,content}` ·',
-        '`POST /api/search {query,path}` · `POST /api/edit {path,edits}`',
+        '所有请求 Header: `Authorization: Bearer <Token>`。',
         '',
-        '## 四大接入模块（概览）',
+        '### 底座端点（四大模块共用）',
+        '',
+        '| 方法 | 路径 | Body | 说明 |',
+        '|---|---|---|---|',
+        '| GET | `/api/health` | - | 存活(免鉴权) |',
+        '| GET | `/api/connection` | - | 连接信息 |',
+        '| GET | `/api/workspace` | - | 工作区信息 |',
+        '| GET | `/api/bridge-state` | - | 隧道完整状态 |',
+        '| POST | `/api/exec` | `{cmd,timeout}` | 执行任意命令(整机核心) |',
+        '| POST | `/api/ls` | `{path}` | 列目录 |',
+        '| POST | `/api/file` | `{path}` | 读文件 |',
+        '| POST | `/api/write` | `{path,content}` | 写文件 |',
+        '| POST | `/api/search` | `{query,path}` | 搜索 |',
+        '| POST | `/api/edit` | `{path,edits}` | 编辑 |',
+        '',
+        '## 四大接入模块',
         '',
         '本插件是**二合一插件本体**，Agent 经内网穿透可全方位接入以下四层。逐层覆盖：从网页 → 插件 → 整机 → IDE。',
         '',
-        '| # | 模块 | 一句话 | 深入读取键 |',
-        '|---|------|--------|-----------|',
-        '| 1 | **浏览器全方位接入** | 操控浏览器页面：多实例标签/导航/执行JS/提取DOM/Cookie/截图/页内查找，全方位接入 Agent | `browser` |',
-        '| 2 | **插件本体全方位接入** | 代替用户操作二合一插件一切模块：切号/备份/反向注入/MCP/Devin Cloud CRUD/额度 | `plugin` |',
-        '| 3 | **操作用户电脑（最核心）** | 整机操控：任意命令/文件/进程 + Windows 多 RDP 远程桌面 + GUI 自动化（鼠标键盘/窗口/截屏） | `computer` |',
-        '| 4 | **VSCode 底层 API** | 工作区/编辑器/终端/命令/扩展全调用，达到类 Devin Cascade 模式效果 | `vscode` |',
+        '---',
         '',
-        '### 1 · 浏览器全方位接入',
-        '远程驱动用户浏览器：列举/打开/关闭标签、导航、执行 JS、提取 DOM/正文、读 Cookie 与 Storage、截图、导出 MD、页内查找。不干扰用户正常使用。详见 `computer`/`plugin` 经 `/api/exec` 启动 Chrome CDP(端口 29229) 脚本化。',
+        '## 模块1 · 浏览器全方位接入',
         '',
-        '### 2 · 插件本体全方位接入',
-        '二合一插件自身一切模块均可由 Agent 代操：切号(多账号)、对话备份、反向注入(K/P/S/MCP/自动化/蓝图)、MCP 市场、Devin Cloud CRUD、额度查询、定时任务。经本地端口插件 API 或 `/api/exec` 调插件命令。',
+        '远程驱动用户浏览器，不干扰其正常使用。机制：插件/Chrome 暴露 CDP 端点 `http://127.0.0.1:29229`，',
+        '经 `/api/exec` 跑 Playwright/CDP 脚本即可全控。',
         '',
-        '### 3 · 操作用户电脑（最核心）',
-        '经 `/api/exec` 可在用户 Windows 上执行任意命令/PowerShell：文件系统、进程、注册表、服务、计划任务；启动/连接 **RDP 远程桌面**(mstsc、多会话)；GUI 自动化(PowerShell + .NET SendKeys / pyautogui / nircmd)：鼠标点击、键盘输入、窗口管理、全屏截图。这是"代替用户操作整机一切"的核心层。',
+        '- **列举/打开/关闭标签**：CDP `Target.getTargets` / `Target.createTarget` / `Target.closeTarget`。',
+        '- **导航**：`Page.navigate {url}`；前进/后退 `Page.goBack/goForward`。',
+        '- **执行 JS**：`Runtime.evaluate {expression}` → 任意页内脚本、读写 DOM。',
+        '- **提取 DOM/正文**：`document.documentElement.outerHTML` / `document.body.innerText`；导出 MD。',
+        '- **Cookie / Storage**：`Network.getAllCookies`、`localStorage`/`sessionStorage` 经 evaluate 读写。',
+        '- **截图**：`Page.captureScreenshot` → base64 PNG。',
+        '- **页内查找**：evaluate `window.find()` 或 querySelectorAll 文本匹配。',
         '',
-        '### 4 · VSCode 底层 API',
-        '经 `/api/exec` 调 `code`/`code-server` CLI 与工作区脚本，或经插件桥调用 VSCode 扩展 API：打开/编辑文件、运行命令面板命令、跑终端任务、装卸扩展、读写工作区配置。目标是达到类 Cascade 的 IDE 内自主操作。',
-        '',
-        '## 深入读取（渐进式披露）',
-        '',
-        '需要某模块的**完整操作细节/示例/全部 API** 时，读取本地详档：',
-        '',
-        '```',
-        `POST /api/file  { "path": "${path.join(BRIDGE_DIR, 'local-agent.md').replace(/\\/g, '\\\\')}" }`,
+        '```bash',
+        '# 经 /api/exec: 列出浏览器标签',
+        'curl -s http://127.0.0.1:29229/json/list',
         '```',
         '',
-        '或经 `/api/exec` 直接 cat 该文件。详档按「## 模块N」分节，Agent 可只取所需模块章节。',
+        '---',
+        '',
+        '## 模块2 · 插件本体全方位接入',
+        '',
+        '二合一插件本体一切模块均可由 Agent 代替用户操作：',
+        '',
+        '- **切号**：多账号列表、切换当前账号、刷新额度、复制凭证、清理、删除(全功能面板第2网页=真 WAM 切号面板)。',
+        '- **对话备份**：按账号分组的对话索引，查看/清空/导出。',
+        '- **反向注入**：把 Knowledge/Playbooks/Secrets/MCP/自动化/蓝图覆盖式注入到目标账号，单账号锁定。',
+        '- **MCP 市场**：搜索/安装/卸载 MCP 服务器。',
+        '- **Devin Cloud CRUD**：Sessions/Knowledge/Playbooks/Secrets/Integrations/Usage/Org/Schedules 全增删查。',
+        '- **额度查询**、**定时任务(Schedules)**、**额度归零账号一气呵成清理(备份→清理→出库)**。',
+        '',
+        '调用方式：经 `/api/exec` 调插件 CLI 命令(`code --command wam.*` 等)，或读取插件状态文件 `~/.dao/bridge/`、`~/.wam/`。',
+        'Devin Cloud API 直连 `https://app.devin.ai/api/`(带 auth1 + x-cog-org-id)。',
+        '',
+        '---',
+        '',
+        '## 模块3 · 操作用户电脑（最核心）',
+        '',
+        '经 `/api/exec` 在用户 Windows 上执行任意命令/PowerShell，"代替用户操作整机一切"。',
+        '',
+        '### 3.1 命令 / 文件 / 进程',
+        '```bash',
+        '# 任意命令',
+        'POST /api/exec {"cmd":"powershell -c \\"Get-Process | Select -First 5\\"","timeout":15000}',
+        '# 文件: /api/ls /api/file /api/write /api/search /api/edit',
+        '```',
+        '',
+        '### 3.2 Windows 多 RDP 远程桌面',
+        '- 启动 mstsc：`exec {"cmd":"mstsc /v:<host>"}`；多会话并行。',
+        '- 开启远程桌面服务/防火墙、查询会话 `query session`、`tscon`/`tsdiscon` 切换会话。',
+        '- 参考仓库 `cloud/vm-replica/`(Windows 多 RDP/多会话方案)。',
+        '',
+        '### 3.3 GUI 自动化（鼠标键盘/窗口/截屏）',
+        '- **截屏**：PowerShell + .NET `System.Drawing` 全屏抓图，或 `nircmd savescreenshot`。',
+        '- **键盘**：`System.Windows.Forms.SendKeys::SendWait`，或 AutoHotkey/nircmd。',
+        '- **鼠标**：`Cursor.Position` + `mouse_event`(user32)，或 pyautogui(`exec` 跑 python)。',
+        '- **窗口管理**：`Get-Process`+user32 `ShowWindow/SetForegroundWindow`。',
+        '',
+        '---',
+        '',
+        '## 模块4 · VSCode 底层 API',
+        '',
+        '达到类 Devin Cascade 的 IDE 内自主操作。两条路：',
+        '',
+        '### 4.1 经 code CLI（exec）',
+        '```bash',
+        'POST /api/exec {"cmd":"code --list-extensions"}',
+        'POST /api/exec {"cmd":"code --goto <file>:<line>"}',
+        '```',
+        '- 打开文件/文件夹/diff、装卸扩展(`--install-extension`)、跑命令。',
+        '',
+        '### 4.2 经插件桥（VSCode 扩展 API）',
+        '- 打开/编辑文件 `workspace.openTextDocument` + `WorkspaceEdit`。',
+        '- 运行命令面板命令 `commands.executeCommand`。',
+        '- 终端任务 `tasks.executeTask` / 创建 `window.createTerminal`。',
+        '- 读写工作区配置 `workspace.getConfiguration`。',
         '',
         '## Python SDK',
         '',
@@ -2365,126 +2428,8 @@ function bridgeGenerateCloudMd(): string {
 }
 
 function bridgeGenerateLocalMd(): string {
-    const wsInfo = { name: vscode.workspace.workspaceFolders?.[0]?.name || 'workspace', root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', host: os.hostname() };
-    const ts = new Date().toISOString();
-    const tok = bridgeToken || ws.token;
-    const port = ws.port || 9920;
-    // 渐进式披露 · 本地 MD = 重型详档: 四大模块全部操作细节, 按「## 模块N」分节, Agent 按需取章节。
-    return [
-        '# ☯ DAO Bridge · 四大模块操作详档（本地全表）',
-        '',
-        '> 本文档是**重型详档**，承接云端总纲。Agent 按需读取对应「## 模块N」章节即可，不必全读。',
-        '> 经内网穿透远程操作用户本地电脑的一切细节都在这里。',
-        '',
-        '## 接入',
-        '',
-        '```',
-        `公网URL:   ${bridgeUrl || '(未连接)'}`,
-        `Local URL: http://127.0.0.1:${port}`,
-        `Token:     ${tok}`,
-        `Auth:      Authorization: Bearer ${tok}`,
-        `主机: ${wsInfo.host}   工作区: ${wsInfo.name}   根目录: ${wsInfo.root}   更新于: ${ts}`,
-        '```',
-        '',
-        '### 底座端点（四大模块共用）',
-        '',
-        '| 方法 | 路径 | Body | 说明 |',
-        '|---|---|---|---|',
-        '| GET | `/api/health` | - | 存活(免鉴权) |',
-        '| GET | `/api/connection` | - | 连接信息 |',
-        '| GET | `/api/workspace` | - | 工作区信息 |',
-        '| GET | `/api/bridge-state` | - | 隧道完整状态 |',
-        '| POST | `/api/exec` | `{cmd,timeout}` | 执行任意命令(整机核心) |',
-        '| POST | `/api/ls` | `{path}` | 列目录 |',
-        '| POST | `/api/file` | `{path}` | 读文件 |',
-        '| POST | `/api/write` | `{path,content}` | 写文件 |',
-        '| POST | `/api/search` | `{query,path}` | 搜索 |',
-        '| POST | `/api/edit` | `{path,edits}` | 编辑 |',
-        '',
-        '---',
-        '',
-        '## 模块1 · 浏览器全方位接入',
-        '',
-        '远程驱动用户浏览器，不干扰其正常使用。机制：插件/Chrome 暴露 CDP 端点 `http://127.0.0.1:29229`，',
-        '经 `/api/exec` 跑 Playwright/CDP 脚本即可全控。',
-        '',
-        '- **列举/打开/关闭标签**：CDP `Target.getTargets` / `Target.createTarget` / `Target.closeTarget`。',
-        '- **导航**：`Page.navigate {url}`；前进/后退 `Page.goBack/goForward`。',
-        '- **执行 JS**：`Runtime.evaluate {expression}` → 任意页内脚本、读写 DOM。',
-        '- **提取 DOM/正文**：`document.documentElement.outerHTML` / `document.body.innerText`；导出 MD。',
-        '- **Cookie / Storage**：`Network.getAllCookies`、`localStorage`/`sessionStorage` 经 evaluate 读写。',
-        '- **截图**：`Page.captureScreenshot` → base64 PNG。',
-        '- **页内查找**：evaluate `window.find()` 或 querySelectorAll 文本匹配。',
-        '',
-        '示例(经 exec 跑 Python + websocket 直连 CDP 或 Playwright `connect_over_cdp`)：',
-        '```bash',
-        `# 经 /api/exec: 列出浏览器标签`,
-        `curl -s http://127.0.0.1:29229/json/list`,
-        '```',
-        '',
-        '---',
-        '',
-        '## 模块2 · 插件本体全方位接入',
-        '',
-        '二合一插件本体一切模块均可由 Agent 代替用户操作：',
-        '',
-        '- **切号**：多账号列表、切换当前账号、刷新额度、复制凭证、清理、删除。',
-        '- **对话备份**：按账号分组的对话索引，查看/清空/导出。',
-        '- **反向注入**：把 Knowledge/Playbooks/Secrets/MCP/自动化/蓝图覆盖式注入到目标账号，单账号锁定。',
-        '- **MCP 市场**：搜索/安装/卸载 MCP 服务器。',
-        '- **Devin Cloud CRUD**：Sessions/Knowledge/Playbooks/Secrets/Integrations/Usage/Org/Schedules 全增删查。',
-        '- **额度查询**、**定时任务(Schedules)**。',
-        '',
-        '调用方式：经 `/api/exec` 调插件 CLI 命令，或读取插件状态文件 `~/.dao/bridge/`。',
-        '账号与凭证状态见各工作区 workspaceState；Devin Cloud API 直连 `https://app.devin.ai/api/`(带 auth1 + x-cog-org-id)。',
-        '',
-        '---',
-        '',
-        '## 模块3 · 操作用户电脑（最核心）',
-        '',
-        '经 `/api/exec` 在用户 Windows 上执行任意命令/PowerShell，"代替用户操作整机一切"。',
-        '',
-        '### 3.1 命令 / 文件 / 进程',
-        '```bash',
-        `# 任意命令`,
-        `POST /api/exec {"cmd":"powershell -c \\"Get-Process | Select -First 5\\"","timeout":15000}`,
-        `# 文件: /api/ls /api/file /api/write /api/search /api/edit`,
-        '```',
-        '',
-        '### 3.2 Windows 多 RDP 远程桌面',
-        '- 启动 mstsc：`exec {"cmd":"mstsc /v:<host>"}`；多会话并行。',
-        '- 开启远程桌面服务/防火墙、查询会话 `query session`、`tscon`/`tsdiscon` 切换会话。',
-        '- 参考仓库 `cloud/vm-replica/`(Windows 多 RDP/多会话方案)。',
-        '',
-        '### 3.3 GUI 自动化（鼠标键盘/窗口/截屏）',
-        '- **截屏**：PowerShell + .NET `System.Drawing` 全屏抓图，或 `nircmd savescreenshot`。',
-        '- **键盘**：`System.Windows.Forms.SendKeys::SendWait`，或 AutoHotkey/nircmd。',
-        '- **鼠标**：`Cursor.Position` + `mouse_event`(user32)，或 pyautogui(`exec` 跑 python)。',
-        '- **窗口管理**：`Get-Process`+user32 `ShowWindow/SetForegroundWindow`。',
-        '',
-        '---',
-        '',
-        '## 模块4 · VSCode 底层 API',
-        '',
-        '达到类 Devin Cascade 的 IDE 内自主操作。两条路：',
-        '',
-        '### 4.1 经 code CLI（exec）',
-        '```bash',
-        `POST /api/exec {"cmd":"code --list-extensions"}`,
-        `POST /api/exec {"cmd":"code --goto <file>:<line>"}`,
-        '```',
-        '- 打开文件/文件夹/diff、装卸扩展(`--install-extension`)、跑命令。',
-        '',
-        '### 4.2 经插件桥（VSCode 扩展 API）',
-        '- 打开/编辑文件 `workspace.openTextDocument` + `WorkspaceEdit`。',
-        '- 运行命令面板命令 `commands.executeCommand`。',
-        '- 终端任务 `tasks.executeTask` / 创建 `window.createTerminal`。',
-        '- 读写工作区配置 `workspace.getConfiguration`。',
-        '',
-        '---',
-        '',
-        '*道法自然 · 无为而无不为*',
-    ].join('\n');
+    // v3.17.0 · 归一: MD 只有一份。本地详档 = 云端总文档(同源)，杜绝两份走样。
+    return bridgeGenerateCloudMd();
 }
 
 async function bridgeInjectKnowledge(): Promise<boolean> {
@@ -2682,7 +2627,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="app">
 <nav class="sb">
 <div class="ni active" data-tab="overview" onclick="sw('overview')" title="主页 Home">🏠</div>
-<div class="ni" data-tab="switch" onclick="sw('switch')" title="切号 · 账号池(移植自 RT Flow · 多账号切换/刷新/清理)">🔀</div>
+<div class="ni" data-tab="switch" onclick="sw('switch')" title="切号 · 账号池(全功能面板第2网页 · 真 WAM 切号面板·完全一致)">🔀</div>
 <div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网穿透 · DAO Bridge (独立板块·远程操作本地电脑)">🌐</div>
 <div class="ni" data-tab="backups" onclick="sw('backups')" title="对话 · 备份 — 本机全部 RT Flow 备份对话(全账号×全对话)">💬</div>
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 全账号批量(Knowledge/Playbook/Secret/MCP/自动化/蓝图 一处整合)">💉</div>
@@ -2765,7 +2710,7 @@ function sw(t){
   // devin-session-token$ → 仅Codeium API → 显示创建API Key引导
   // 自动注入模块: 无需 cog_ key, 直接拉 profile 配置 (账号无关意图)
   if(t==='inject'){ cmd('getInjectProfile'); return; }
-  if(t==='switch'){ rSwitchLoading(); cmd('loadSwitch'); return; }
+  if(t==='switch'){ if(!S._wamReady){ var _sv=document.getElementById('v-switch'); if(_sv&&!document.getElementById('wamFrame'))_sv.innerHTML='<div class="empty"><div class="ic">🔀</div><p style="color:var(--muted)">加载切号面板…</p></div>'; cmd('wamInit'); } return; }
   if(t==='bridge'){ rBridgeFull(); return; }
   if(t==='backups'){ rBackups(); return; }
   if(t!=='overview'&&S.auth.loggedIn){
@@ -2840,12 +2785,26 @@ function rSwitchData(d){
   });
   v.innerHTML=h;
 }
-// 四大接入模块卡片 — 渐进式披露: <details> 概览常驻, 点开看细节(原理/底座)。
+// v3.17.0 · 切号面板回归本源: 第2 Tab = 真 WAM 切号面板(buildHtml) via iframe(Blob) + 消息中继。
+//   acquireVsCodeApi shim → parent.postMessage 中继到扩展 handleWebviewMessage; 引擎回推经 wamHost 中继进 iframe。
+var _wamFrameUrl='';
+function rWamMount(html){
+  var v=document.getElementById('v-switch'); if(!v||!html) return;
+  var SHIM='<scr'+'ipt>(function(){var _s={};window.acquireVsCodeApi=function(){return{postMessage:function(m){try{parent.postMessage({__wamRelay:m},"*")}catch(e){}},getState:function(){return _s},setState:function(s){_s=s;return s}}};})();</scr'+'ipt>';
+  var doc=/<head[^>]*>/i.test(html)?html.replace(/<head([^>]*)>/i,'<head$1>'+SHIM):SHIM+html;
+  var f=document.getElementById('wamFrame');
+  if(!f){ v.innerHTML=''; f=document.createElement('iframe'); f.id='wamFrame'; f.style.cssText='width:100%;height:100%;border:none;background:#1e1e1e;flex:1'; v.appendChild(f); }
+  try{var blob=new Blob([doc],{type:'text/html'});var url=URL.createObjectURL(blob);f.removeAttribute('srcdoc');f.src=url;if(_wamFrameUrl){try{URL.revokeObjectURL(_wamFrameUrl)}catch(e){}}_wamFrameUrl=url;}catch(e){ f.srcdoc=doc; }
+  S._wamReady=true;
+}
+function _wamToFrame(msg){var f=document.getElementById('wamFrame');if(f&&f.contentWindow){try{f.contentWindow.postMessage(msg,'*')}catch(e){}}}
+// 四大接入模块卡片 — 平铺常驻(去渐进式披露)。全部命令在导出的单一 MD 中。
 function daoBridgeModuleCard(n,ic,title,desc,how){
-  return '<details class="card" style="margin-bottom:6px"><summary style="cursor:pointer;font-weight:600;font-size:12px;list-style:none">'
-    +ic+' 模块'+n+' · '+title+'</summary>'
+  // v3.17.0 · 去渐进式披露: 四大模块平铺常驻(原 <details> 折叠改为 <div> 全展开)
+  return '<div class="card" style="margin-bottom:6px"><div style="font-weight:600;font-size:12px">'
+    +ic+' 模块'+n+' · '+title+'</div>'
     +'<div style="font-size:11px;color:var(--fg);margin:6px 0 4px">'+desc+'</div>'
-    +'<div style="font-size:10px;color:var(--muted)">实现：'+how+'</div></details>';
+    +'<div style="font-size:10px;color:var(--muted)">实现：'+how+'</div></div>';
 }
 // 内网穿透 · DAO Bridge — 与独立穿透插件 1:1: 状态 + 命名隧道/CloudFlare + 导出文档 + 能力自测。
 function rBridgeFull(){
@@ -2880,10 +2839,9 @@ function rBridgeFull(){
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeRestart&#39;)">🔄 重启隧道</button>';
     h+='<button class="btn sm danger" onclick="cmd(&#39;bridgeStop&#39;)">⏹ 停止</button></div>';
   }
-  // ── 四大接入模块 · 渐进式披露(参照手机版 APK) ──
-  // 帛书「图难于其易」: 概览常驻, 细节折叠; Agent/用户按需展开某层, 不被一次塞满。
+  // ── 四大接入模块 · 平铺常驻(去渐进式披露) ──
   h+='<div class="st" style="margin-top:14px">🧩 四大接入模块 · Agent 全方位接入</div>';
-  h+='<div class="card" style="font-size:11px;color:var(--muted);margin-bottom:6px">从网页→插件→整机→IDE 逐层覆盖。点开各层看 Agent 可做什么；完整操作细节在 💻 本地 Agent MD。</div>';
+  h+='<div class="card" style="font-size:11px;color:var(--muted);margin-bottom:6px">从网页→插件→整机→IDE 逐层覆盖。四层全部命令与内网穿透信息均在下方「导出接入文档」的<b style="color:var(--fg)">单一 MD</b> 中。</div>';
   h+=daoBridgeModuleCard('1','🌐','浏览器全方位接入','操控浏览器页面：多实例标签 / 导航 / 执行 JS / 提取 DOM / 读 Cookie+Storage / 截图 / 导出 MD / 页内查找，全程不干扰用户正常使用。','经 Chrome CDP(127.0.0.1:29229) + Playwright 脚本远程驱动。');
   h+=daoBridgeModuleCard('2','🧩','插件本体全方位接入','代替用户操作二合一插件一切模块：切号 / 对话备份 / 反向注入(K·P·S·MCP·自动化·蓝图) / MCP 市场 / Devin Cloud CRUD / 额度 / 定时任务。','经本地插件 API 或 /api/exec 调插件命令。');
   h+=daoBridgeModuleCard('3','💻','操作用户电脑（最核心）','整机操控：任意命令/PowerShell · 文件/进程/服务/注册表 · Windows 多 RDP 远程桌面 · GUI 自动化(鼠标键盘/窗口/全屏截图)。','/api/exec 为核心；RDP 见 cloud/vm-replica；GUI 走 .NET SendKeys / nircmd / pyautogui。');
@@ -2907,12 +2865,12 @@ function rBridgeFull(){
     h+='<button class="btn sm" onclick="cmd(&#39;openCf&#39;)" style="margin-top:4px">🌐 打开 CloudFlare 控制台</button>';
   }
   h+='</div>';
-  // ── 模块3: 导出接入文档 ──
+  // ── 模块3: 导出接入文档 (去渐进式披露 · 唯一一份 MD = 四大模块全部命令 + 内网穿透全信息) ──
   h+='<div class="st" style="margin-top:14px">📄 导出接入文档</div>';
-  h+='<div class="card"><div style="font-size:10px;color:var(--muted);margin-bottom:4px">接口清单已分别落 ☁云端 / 💻本地 两份 MD（给 Agent 看）。面板不再内嵌冗余表格。</div>';
-  h+='<div class="br"><button class="btn sm" onclick="cmd(&#39;bridgeExportCloudMd&#39;)">☁ 云端 Agent MD</button>';
-  h+='<button class="btn sm" onclick="cmd(&#39;bridgeExportLocalMd&#39;)">💻 本地 Agent MD</button>';
-  h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入 Knowledge</button></div></div>';
+  h+='<div class="card"><div style="font-size:10px;color:var(--muted);margin-bottom:4px">唯一一份云端 Agent MD：四大模块全部命令 + 内网穿透全部信息，一次到位。打开 / 复制 / 注入。</div>';
+  h+='<div class="br"><button class="btn sm" onclick="cmd(&#39;openBridgeMd&#39;)">📄 打开 MD</button>';
+  h+='<button class="btn sm primary" onclick="cmd(&#39;bridgeCopyCloudMd&#39;)">📋 复制云端 Agent MD</button>';
+  h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入</button></div></div>';
   // ── 模块4: 能力自测 ──
   h+='<div class="st" style="margin-top:14px">⚡ 能力自测</div>';
   h+='<div class="card"><div class="br"><button class="btn sm" onclick="cmd(&#39;bridgeHealth&#39;)">health</button>';
@@ -3055,7 +3013,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -3207,6 +3165,26 @@ usb();rc();
 </body></html>`;
 }
 
+// v3.17.0 · 切号面板回归本源: 全功能面板第2 Tab 用 iframe 内嵌「真」WAM 切号面板(rtflow buildHtml)。
+//   引擎一切 toast/广播/整页重渲 经 setHostPost 回调中继进 iframe → 与独立切号面板像素级一致·零数据丢失。
+//   病灶(3.15.0): 第2 Tab 另起炉灶重做精简版 rSwitchData → 丢配额条/Devin Cloud/水过无痕/对话追踪等全部核心块。
+function registerWamHost() {
+    try {
+        const int = _rtflowModule && _rtflowModule._internals;
+        if (int && typeof int.setHostPost === 'function') {
+            int.setHostPost((m: any) => {
+                try { daoCloudMiddlePanel?.webview.postMessage({ type: 'wamHost', msg: m }); } catch { /* 守柔 */ }
+            });
+        }
+    } catch { /* 守柔 */ }
+}
+function unregisterWamHost() {
+    try {
+        const int = _rtflowModule && _rtflowModule._internals;
+        if (int && typeof int.setHostPost === 'function') int.setHostPost(null);
+    } catch { /* 守柔 */ }
+}
+
 function showDaoCloudMiddlePanel(context: vscode.ExtensionContext) {
     if (daoCloudMiddlePanel) {
         daoCloudMiddlePanel.reveal(vscode.ViewColumn.Beside);
@@ -3224,10 +3202,12 @@ function showDaoCloudMiddlePanel(context: vscode.ExtensionContext) {
     );
     daoCloudMiddlePanel.webview.html = getDaoCloudMiddlePanelHtml(st);
     daoCloudMiddlePanelVisible = true;
+    registerWamHost(); // v3.17.0 · 第2 Tab iframe = 真切号面板宿主
     daoCloudMiddlePanel.webview.onDidReceiveMessage(async (msg) => {
         await handleMiddlePanelMessage(msg, context);
     }, undefined, context.subscriptions);
     daoCloudMiddlePanel.onDidDispose(() => {
+        unregisterWamHost(); // v3.17.0
         daoCloudMiddlePanel = null;
         daoCloudMiddlePanelVisible = false;
         updateStatusBar();
@@ -3329,7 +3309,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'loadSwitch', 'switchToAccount', 'routeAccount', 'wamCmd', 'cleanupZeroQuota'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'loadSwitch', 'switchToAccount', 'routeAccount', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -3342,7 +3322,21 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 reply({ type: 'actionResult', command: 'copyBridgeUrl', ok: !!(c && c.url) });
                 break;
             }
-            // ── 切号模块 (全功能面板第2模块) ──
+            // ── 切号模块 (全功能面板第2网页 · 内嵌真 WAM 切号面板 buildHtml) ──
+            case 'wamInit': {
+                // v3.17.0 · 回归本源: 把真切号面板整页 HTML 交给第2 Tab 的 iframe 渲染 (与独立面板像素级一致)
+                registerWamHost();
+                let html = '';
+                try { const int = _rtflowModule && _rtflowModule._internals; if (int && typeof int.buildHtml === 'function') html = int.buildHtml(); } catch (e: any) { html = ''; }
+                if (!html) { reply({ type: 'wamInitHtml', html: '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:sans-serif;color:#ccc;background:#1e1e1e;padding:24px"><p>⚠ RT Flow 切号引擎未就绪，请稍候重试或重载窗口。</p></body></html>' }); break; }
+                reply({ type: 'wamInitHtml', html });
+                break;
+            }
+            case 'wamRelay': {
+                // v3.17.0 · iframe 内真切号面板的 vscode.postMessage → 中继进引擎 handleWebviewMessage
+                try { const int = _rtflowModule && _rtflowModule._internals; if (int && typeof int.handleWebviewMessage === 'function') await int.handleWebviewMessage(msg.msg); } catch (e: any) { /* 守柔 */ }
+                break;
+            }
             case 'loadSwitch': {
                 const pool = loadAccountPool(true);
                 const cur = (ws.devinEmail || '').trim().toLowerCase();
@@ -3380,12 +3374,24 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'openBridgeMd': {
+                // v3.17.0 · 打开唯一云端 MD (先落盘最新内容再打开, 免陈旧/不存在)
                 try {
-                    const p = path.join(os.homedir(), '.dao', 'bridge', 'workspace.md');
+                    const p = path.join(os.homedir(), '.dao', 'bridge', 'cloud-agent.md');
+                    fs.mkdirSync(path.dirname(p), { recursive: true });
+                    fs.writeFileSync(p, bridgeGenerateCloudMd(), 'utf8');
                     const doc = await vscode.workspace.openTextDocument(p);
                     await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
                     reply({ type: 'actionResult', command: 'openBridgeMd', ok: true });
                 } catch (e) { reply({ type: 'actionResult', command: 'openBridgeMd', ok: false }); }
+                break;
+            }
+            case 'bridgeCopyCloudMd': {
+                // v3.17.0 · 复制唯一云端 Agent MD 到剪贴板 (四大模块 + 内网穿透全量)
+                const md = bridgeGenerateCloudMd();
+                try { fs.mkdirSync(path.join(os.homedir(), '.dao', 'bridge'), { recursive: true }); fs.writeFileSync(path.join(os.homedir(), '.dao', 'bridge', 'cloud-agent.md'), md, 'utf8'); } catch { /* 守柔 */ }
+                await vscode.env.clipboard.writeText(md);
+                vscode.window.showInformationMessage('已复制云端 Agent MD (四大模块 + 内网穿透全量) 到剪贴板');
+                reply({ type: 'actionResult', command: 'bridgeCopyCloudMd', ok: true });
                 break;
             }
             case 'loadTabData': {
