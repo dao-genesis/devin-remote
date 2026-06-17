@@ -118,6 +118,15 @@ public class MainActivity extends AppCompatActivity {
     private android.content.BroadcastReceiver dlReceiver;
     // ── 在线自动更新 ──
     static final String UPDATE_MANIFEST = "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json";
+    // 去中心化更新: 多镜像源轮询 (任一可达即可检查/下载, 不依赖单一服务器或穿透通道)。
+    // GitHub raw + jsDelivr/Fastly/Statically CDN + ghproxy 反代 — 覆盖国内外网络。
+    static final String[] UPDATE_MIRRORS = {
+        "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json",
+        "https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/latest.json",
+        "https://fastly.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/latest.json",
+        "https://cdn.statically.io/gh/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json",
+        "https://ghproxy.net/https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json"
+    };
     private volatile long updateDlId = -1;          // 当前更新下载任务 id (区别于普通网页下载)
     private volatile File updateApkFile = null;     // 更新 APK 落地文件
 
@@ -199,7 +208,8 @@ public class MainActivity extends AppCompatActivity {
                 if (!j.optBoolean("ok", false) || !j.optBoolean("hasUpdate", false)) return;
                 final String name = j.optString("latestName", "");
                 final String notes = j.optString("notes", "");
-                final String url = j.optString("url", "");
+                org.json.JSONArray urls = j.optJSONArray("urls");
+                final String url = (urls != null && urls.length() > 0) ? pickReachable(urls) : j.optString("url", "");
                 if (url.isEmpty()) return;
                 main.post(() -> {
                     if (isFinishing()) return;
@@ -2040,33 +2050,70 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) { return 0; }
     }
 
-    /** 拉取在线版本清单并与本机比对。后台线程调用。返回 JSON 串。 */
+    /** github release 下载地址 → 多镜像候选 (含 ghproxy 反代, 国内可达)。 */
+    private org.json.JSONArray apkMirrors(String gh) {
+        org.json.JSONArray a = new org.json.JSONArray();
+        if (gh == null || gh.isEmpty()) return a;
+        a.put(gh);
+        if (gh.startsWith("https://github.com/")) { a.put("https://ghproxy.net/" + gh); a.put("https://gh-proxy.com/" + gh); }
+        return a;
+    }
+    /** 在候选 URL 中挑第一个可达的 (HEAD 探测); 全不通则回退第一个。 */
+    private String pickReachable(org.json.JSONArray urls) {
+        if (urls == null) return "";
+        for (int i = 0; i < urls.length(); i++) {
+            String u = urls.optString(i); if (u.isEmpty()) continue;
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(u).openConnection();
+                c.setConnectTimeout(5000); c.setReadTimeout(5000);
+                c.setInstanceFollowRedirects(true); c.setRequestMethod("HEAD");
+                c.setRequestProperty("User-Agent", "Mozilla/5.0");
+                int code = c.getResponseCode();
+                if (code >= 200 && code < 400) return u;
+            } catch (Exception ignored) {} finally { if (c != null) c.disconnect(); }
+        }
+        return urls.length() > 0 ? urls.optString(0) : "";
+    }
+
+    /** 拉取在线版本清单并与本机比对。多镜像轮询 (去中心化, 任一可达即可)。后台线程调用。返回 JSON 串。 */
     String fetchUpdateInfo() {
-        HttpURLConnection c = null;
-        try {
-            c = (HttpURLConnection) new URL(UPDATE_MANIFEST).openConnection();
-            c.setConnectTimeout(8000); c.setReadTimeout(8000);
-            c.setRequestProperty("Cache-Control", "no-cache");
-            InputStream is = c.getInputStream();
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            byte[] buf = new byte[4096]; int n;
-            while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
-            is.close();
-            JSONObject m = new JSONObject(new String(bos.toByteArray(), StandardCharsets.UTF_8));
-            int latest = m.optInt("versionCode", 0);
-            int cur = currentVersionCode();
-            JSONObject out = new JSONObject();
-            out.put("ok", true);
-            out.put("current", cur);
-            out.put("latest", latest);
-            out.put("latestName", m.optString("versionName", ""));
-            out.put("hasUpdate", latest > cur);
-            out.put("url", m.optString("url", ""));
-            out.put("notes", m.optString("notes", ""));
-            return out.toString();
-        } catch (Exception e) {
-            return "{\"ok\":false,\"error\":" + JSONObject.quote(String.valueOf(e.getMessage())) + "}";
-        } finally { if (c != null) c.disconnect(); }
+        String lastErr = "无可用镜像";
+        for (String murl : UPDATE_MIRRORS) {
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(murl).openConnection();
+                c.setConnectTimeout(8000); c.setReadTimeout(8000);
+                c.setInstanceFollowRedirects(true);
+                c.setRequestProperty("Cache-Control", "no-cache");
+                c.setRequestProperty("User-Agent", "Mozilla/5.0");
+                int code = c.getResponseCode();
+                if (code != 200) { lastErr = "HTTP " + code + " @ " + murl; continue; }
+                InputStream is = c.getInputStream();
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[4096]; int n;
+                while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+                is.close();
+                JSONObject m = new JSONObject(new String(bos.toByteArray(), StandardCharsets.UTF_8));
+                int latest = m.optInt("versionCode", 0);
+                int cur = currentVersionCode();
+                String url = m.optString("url", "");
+                JSONObject out = new JSONObject();
+                out.put("ok", true);
+                out.put("current", cur);
+                out.put("latest", latest);
+                out.put("latestName", m.optString("versionName", ""));
+                out.put("hasUpdate", latest > cur);
+                out.put("url", url);
+                out.put("urls", apkMirrors(url));
+                out.put("notes", m.optString("notes", ""));
+                out.put("source", murl);
+                return out.toString();
+            } catch (Exception e) {
+                lastErr = String.valueOf(e.getMessage()) + " @ " + murl;
+            } finally { if (c != null) c.disconnect(); }
+        }
+        return "{\"ok\":false,\"error\":" + JSONObject.quote(lastErr) + "}";
     }
 
     /** 触发更新: 下载最新 APK, 完成后自动唤起系统安装器 (用户点一次「安装」)。url 空则先取清单。 */
@@ -2078,7 +2125,8 @@ public class MainActivity extends AppCompatActivity {
                 if (!j.optBoolean("ok", false)) return j.toString();
                 if (!j.optBoolean("hasUpdate", false))
                     return "{\"ok\":true,\"hasUpdate\":false,\"msg\":\"已是最新版\",\"current\":" + j.optInt("current") + "}";
-                url = j.optString("url", "");
+                org.json.JSONArray urls = j.optJSONArray("urls");
+                url = (urls != null && urls.length() > 0) ? pickReachable(urls) : j.optString("url", "");
             }
             if (url.isEmpty()) return "{\"ok\":false,\"error\":\"清单无下载地址 url\"}";
             final String furl = url;

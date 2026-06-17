@@ -99,7 +99,7 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <!-- 模块2.5: 远程操控安全开关 -->
 <div class="section">
 <h3>🛡️ 远程操控 · 安全开关</h3>
-<div class="muted">启用后, 云端 Agent 可通过隧道远程操控浏览器标签和手机本体 (文件/相册/剪贴板/通知/应用/联系人/短信)。<br><b>默认关闭</b> — 仅在需要远程操控时手动开启。</div>
+<div class="muted">启用后, 云端 Agent 可通过隧道远程操控浏览器标签和手机本体 (文件/相册/剪贴板/通知/应用/联系人/短信)。<br><b>默认开启</b>, 首次无需手动开即可远程驱动 — 仍受会话 Token 门禁保护; 不需要时可在此关闭。</div>
 <div style="display:flex;align-items:center;gap:10px;margin:8px 0">
   <label style="position:relative;display:inline-block;width:48px;height:26px">
     <input type="checkbox" id="remoteOpsToggle" onchange="toggleRemoteOps(this.checked)" style="opacity:0;width:0;height:0">
