@@ -2,7 +2,7 @@
   "name": "dao-one",
   "displayName": "道 · 归一 (Dao One)",
   "description": "归一超级插件本体: 单一驾驶舱按'意图'统御全功能面板(dao-vsix)+提示词隔离·外接模型路由(dao-proxy-pro)+Devin Cloud 多账号/备份/回归本源(rt-flow)。三引擎隐形协作,用户无感无为,系统无不为。大道至简,道法自然。",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "publisher": "dao",
   "license": "Apache-2.0",
   "icon": "media/icon.png",
@@ -518,13 +518,13 @@
           },
           "wam.devinCloudAutoCleanup": {
             "type": "boolean",
-            "default": false,
-            "description": "v4.4.0 · 自动清理(道法自然·水过无痕). 额度低于阈值且自动备份完成后，自动清理账号全部痕迹回归本源"
+            "default": true,
+            "description": "v4.9.6 · 默认开 · 自动清理(道法自然·水过无痕). 额度 < 阈值且全量备份经校验后自动清理(对话仅云端归档[无硬删], 知识/剧本/密钥/Git 真删)回归本源"
           },
           "wam.devinCloudAutoCleanupThreshold": {
             "type": "number",
-            "default": 1,
-            "description": "v4.5.0 · 自动清理额度阈值 (美元·默认1·须≤自动备份阈值). 额度 ≤ 此值且全量备份成功后, 自动执行水过无痕(先全量备份本地留底→再删全部对话/知识/剧本/密钥+断Git)"
+            "default": 3,
+            "description": "v4.9.6 · 自动清理额度阈值 (美元·默认3·与备份阈值对齐). 额度 < 此值且全量备份经校验后自动清理(先全量备份本地留底→再清)"
           },
           "wam.devinCloudConvQuotaCap": {
             "type": "boolean",

@@ -8358,7 +8358,7 @@ ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanS
 <button onclick="dvWipeSel()" class="conv-btn conv-btn-s" title="水过无痕·清理已选账号的全部 Devin Cloud 痕迹">&#127754; 批量清理</button>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" ${_cfg("devinCloudAutoBackup", true) ? "checked" : ""} onchange="dvToggleAuto(this.checked)">自动备份</label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.4.0 · 默认开 · 备份完成且额度低于阈值时自动水过无痕清理"><input type="checkbox" id="dvAutoClean" ${_cfg("devinCloudAutoCleanup", true) ? "checked" : ""} onchange="dvToggleCleanup(this.checked)">自动清理</label>
-<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.9.0 · 默认开 · 额度完全归零的账号, 全量备份+清理后自动从账号库移除(等同手动删除·不再显示)"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", true) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
+<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.9.6 · 默认关·手动归零移除 · 勾选后:额度完全归零的账号在全量备份+清理无残留后从账号库移除(不再显示). 不勾则仅清痕迹+本地留底,账号保留"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", false) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.4.0 · 额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="${_cfg("devinCloudAutoBackupThreshold", 3)}" min="0" step="1" style="width:30px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetThreshold(this.value)"></label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.5.0 · 对话额度上限·知止不殆: 每对话上限=余额-缓冲·实时跟随余额; 余额≤停止阈值自动中停运行中对话"><input type="checkbox" id="dvConvCap" ${_cfg("devinCloudConvQuotaCap", true) ? "checked" : ""} onchange="dvToggleConvCap(this.checked)">对话上限</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.5.0 · 对话上限缓冲($): 每对话上限=余额-此缓冲 (余额$70→上限$67)">缓冲$<input type="number" id="dvConvBuf" value="${_cfg("devinCloudConvQuotaBuffer", 3)}" min="0" step="0.01" style="width:34px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetConvBuffer(this.value)"></label>
@@ -8497,6 +8497,12 @@ document.addEventListener('click',e=>{if(e.target.classList&&e.target.classList.
 document.addEventListener('mouseover',e=>{if(!_dragSel)return;const row=_hitSel(e);if(!row)return;const i=parseInt(row.dataset.i);if(!Number.isFinite(i))return;_setRowSel(i,_dragVal);updateBatchBar();});
 document.addEventListener('mouseup',()=>{_dragSel=false;});
 document.addEventListener('change',e=>{if(e.target.classList.contains('chk')){const i=parseInt(e.target.dataset.i);if(Number.isFinite(i))_lastSel=i;updateBatchBar();}});
+// v4.9.6 · 滚动位置持久化 — 根治 _broadcastUI 全量重建后回弹到顶("回主页"). 守柔: 程序复位期不计为用户滚动.
+let _scrTimer=null,_scrRestoring=false;
+function _saveScroll(){if(_scrRestoring)return;try{const el=document.scrollingElement||document.documentElement;const st=vscode.getState()||{};vscode.setState({...st,scrollTop:el.scrollTop|0});}catch(e){}}
+window.addEventListener('scroll',function(){if(_scrRestoring)return;if(_scrTimer)clearTimeout(_scrTimer);_scrTimer=setTimeout(_saveScroll,100);},{passive:true});
+function _restoreScroll(){try{const st=vscode.getState()||{};const y=st.scrollTop|0;if(y<=0)return;const el=document.scrollingElement||document.documentElement;_scrRestoring=true;const ap=function(){el.scrollTop=y;};ap();requestAnimationFrame(ap);setTimeout(ap,80);setTimeout(function(){ap();_scrRestoring=false;},240);}catch(e){_scrRestoring=false;}}
+_restoreScroll();
 (function(){const s=vscode.getState()||{};if(s.addText){const ta=document.getElementById('addInput');if(ta)ta.value=s.addText;}const ta=document.getElementById('addInput');if(ta)ta.addEventListener('input',function(){const st=vscode.getState()||{};vscode.setState({...st,addText:this.value});});
 // v3.11.2 · 多选持久化复位 — 重建后立即按 email 恢复 checked + .sel + batchBar 计数
 try{_restoreSel();updateBatchBar();}catch(e){}
@@ -9412,9 +9418,10 @@ async function _dvAutoBackupRun() {
   const mode = _cfg("devinCloudBackupMode", "folder");
   const threshold = Math.max(0, +_cfg("devinCloudAutoBackupThreshold", 3) || 3);
   const autoCleanup = !!_cfg("devinCloudAutoCleanup", true);
-  const cleanupThreshold = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", 1) || 1);
-  // v4.9.0 · 归零移除: 额度完全归零(权威)的账号, 备份+清理后从账号库出库 (默认开)
-  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", true);
+  // v4.9.6 · 清理阈值默认对齐备份阈值(动态·默3) → 「额度 < 3 即在全量备份校验后自动清理」(用户可调单一阈值 dvThreshold)
+  const cleanupThreshold = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", threshold) || threshold);
+  // v4.9.6 · 归零移除改为「手动」(默认关) — 自动清理只清痕迹+本地留底, 账号是否出库由用户手动决定 (dvRmZero)
+  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", false);
   const removeThreshold = Math.max(0, +_cfg("devinCloudAutoRemoveThreshold", 0) || 0);
   const removeEmails = [];
   for (const acc of _store.accounts) {
@@ -9447,7 +9454,7 @@ async function _dvAutoBackupRun() {
           log("auto-cleanup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " ≤ $" + cleanupThreshold + " 且全量备份已校验 → 自动清理");
           try {
             const rep = await devinCloud.wipeAccount(auth, { onProgress: (m) => log("auto-cleanup: " + m) });
-            log("auto-cleanup: " + acc.email + " 完成 · 对话" + rep.sessions.deleted + " 知识" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted);
+            log("auto-cleanup: " + acc.email + " 完成 · 对话" + rep.sessions.deleted + (rep.sessions.archived ? "(归档" + rep.sessions.archived + "·平台不支持硬删·本地已留底)" : "") + " 知识" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted + " (知识/剧本/密钥/Git 为真删)");
             try { await devinGit.robustDisconnectGit(auth); } catch (ge) { log("auto-cleanup git: " + ge.message); }
             _dvOverviewCache.delete(acc.email.toLowerCase());
             // v4.9.0: 清理无残留 + 额度权威归零(billingBalance≤removeThreshold·null/有订阅永不归零) → 标记出库
@@ -9456,7 +9463,7 @@ async function _dvAutoBackupRun() {
               removeEmails.push(acc.email);
               _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零 · 已全量备份+清理 → 从账号库移除");
             } else {
-              _notify("info", "[" + acc.email.split("@")[0] + "] 自动清理完成 · 已回归本源");
+              _notify("info", "[" + acc.email.split("@")[0] + "] 自动清理完成 · 已回归本源" + (rep.sessions.archived ? " (对话" + rep.sessions.archived + "条云端仅归档·本地已留底; 知识/剧本/密钥/Git 真删)" : ""));
             }
           } catch (ce) {
             log("auto-cleanup error: " + acc.email + ": " + ce.message);

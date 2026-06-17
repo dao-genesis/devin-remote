@@ -1045,7 +1045,7 @@ async function wipeAccount(auth, opts) {
   const report = {
     email: auth.email,
     dryRun: dry,
-    sessions: { found: 0, deleted: 0, failed: 0 },
+    sessions: { found: 0, deleted: 0, archived: 0, failed: 0 },
     knowledge: { found: 0, deleted: 0, failed: 0 },
     playbooks: { found: 0, deleted: 0, failed: 0 },
     secrets: { found: 0, deleted: 0, failed: 0 },
@@ -1118,8 +1118,9 @@ async function wipeAccount(auth, opts) {
     const id = s.devin_id || s.session_id || s.id;
     if (!id) { report.sessions.failed++; continue; }
     const r = await deleteSession(auth, id);
-    r.ok ? report.sessions.deleted++ : (report.sessions.failed++, report.errors.push("session:" + id + ":" + r.status));
-    prog("清理对话 " + report.sessions.deleted + "/" + sessions.length);
+    if (r.ok) { report.sessions.deleted++; if (r.archived) report.sessions.archived++; }
+    else { report.sessions.failed++; report.errors.push("session:" + id + ":" + r.status); }
+    prog("清理对话 " + report.sessions.deleted + "/" + sessions.length + (report.sessions.archived ? "(归档" + report.sessions.archived + "·平台不支持硬删)" : ""));
   }
   prog("水过无痕完成");
   return report;

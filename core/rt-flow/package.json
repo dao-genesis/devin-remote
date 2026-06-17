@@ -2,7 +2,7 @@
 	"name": "rt-flow",
 	"displayName": "Runtime Flow",
 	"description": "Runtime flow management · adaptive scheduling · 三板块统一: Cascade + Devin Cloud + Git(GitHub PAT 归一连接)",
-	"version": "4.9.5",
+	"version": "4.9.6",
 	"publisher": "devaid",
 	"repository": {
 		"type": "git",
@@ -227,7 +227,10 @@
 				},
 				"wam.devinCloudBackupMode": {
 					"type": "string",
-					"enum": ["folder", "zip"],
+					"enum": [
+						"folder",
+						"zip"
+					],
 					"default": "folder",
 					"description": "v4.4.0 · 备份模式: folder=文件夹(HTML/MD双视图·持久化运行·推荐) zip=传统ZIP打包"
 				},
@@ -243,13 +246,13 @@
 				},
 				"wam.devinCloudAutoCleanupThreshold": {
 					"type": "number",
-					"default": 1,
-					"description": "v4.5.0 · 自动清理额度阈值 (美元·默认1·须≤自动备份阈值). 额度 ≤ 此值且全量备份成功后, 自动执行水过无痕(先全量备份本地留底→再删全部对话/知识/剧本/密钥+断Git)"
+					"default": 3,
+					"description": "v4.9.6 · 自动清理额度阈值 (美元·默认3·与备份阈值对齐). 额度 < 此值且全量备份经校验后自动清理(先全量备份本地留底→再清: 对话仅能云端归档[平台无硬删], 知识/剧本/密钥/Git 为真删)"
 				},
 				"wam.devinCloudAutoRemoveZeroQuota": {
 					"type": "boolean",
-					"default": true,
-					"description": "v4.9.0 · 默认开 · 归零移除. 额度完全归零(权威·available+overage≤移除阈值且无订阅)的账号, 在全量备份+清理无残留后自动从 RT Flow 账号库移除(等同手动删除·不再显示). 仅归零账号触发, 备份未校验通过绝不删"
+					"default": false,
+					"description": "v4.9.6 · 默认关 · 归零移除(手动). 开启后: 额度完全归零(权威·available+overage≤移除阈值且无订阅)的账号在全量备份+清理无残留后从 RT Flow 账号库移除. 默认关: 仅清痕迹+本地留底, 账号保留由用户手动决定是否出库"
 				},
 				"wam.devinCloudAutoRemoveThreshold": {
 					"type": "number",
