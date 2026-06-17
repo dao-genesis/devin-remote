@@ -188,9 +188,34 @@ const DaoRelayApp = (function () {
     mySock.onerror = () => { if (!connected) { lastError = "WSS 握手失败 (" + shortHost(base) + ")"; } try { mySock.close(); } catch (e) {} };
   }
 
+  // ── 路线B 本地隧道入站 ──────────────────────────────────────────────
+  //  设备自带 cloudflared 快速隧道把本地 HTTP server 暴露成 https://xxx.trycloudflare.com,
+  //  外部驱动直连该 URL (不经任何共享 Worker)。此处复刻 WSS onmessage 的处理:
+  //  E2E 入站解密 → handleFrame → E2E 出站重封 → 返回 {status,body} 的 JSON 字符串。
+  //  frameJson = {"path":"/api/rpc","method":"POST","body":{...}} (body 可为 E2E 信封)。
+  async function serveLocal(frameJson) {
+    let m; try { m = JSON.parse(frameJson || "{}"); } catch (e) { return JSON.stringify({ status: 400, body: { error: "bad_json" } }); }
+    if (!m || typeof m !== "object") return JSON.stringify({ status: 400, body: { error: "bad_frame" } });
+    lastFrameTs = Date.now();
+    var enc = false;
+    var N = (typeof Native !== "undefined") ? Native : null;
+    if (m.body && m.body.__e2e__ && N && N.e2eOpen) {
+      try { var dec = N.e2eOpen(m.body.c); if (dec) { m.body = JSON.parse(dec); enc = true; } else { m.body = {}; } }
+      catch (e) { m.body = {}; }
+    }
+    var out; try { out = await handleFrame(m); } catch (e) { out = { status: 500, body: { error: String((e && e.message) || e) } }; }
+    var sendBody = out.body;
+    if (enc && N && N.e2eSeal) {
+      try { var sealed = N.e2eSeal(JSON.stringify(out.body)); if (sealed) sendBody = { __e2e__: 1, c: sealed }; } catch (e) {}
+    }
+    // bodyText = 已序列化的 HTTP 响应体 (与 Worker 的 json(out.body) 一致); 原生层直接原样回写。
+    return JSON.stringify({ status: out.status || 200, bodyText: JSON.stringify(sendBody) });
+  }
+
   return {
     register(map) { Object.assign(COMMANDS, map || {}); },
     setStatusCb(fn) { onStatus = fn; },
+    serveLocal: serveLocal,
     start(config) {
       cfg = Object.assign({}, config);
       stopped = false; backoff = BACKOFF_MIN; candIdx = 0; attempts = 0; activeUrl = null;

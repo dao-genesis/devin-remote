@@ -10,6 +10,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import android.webkit.WebSettings;
@@ -32,6 +33,13 @@ public class RelayService extends Service {
 
     private WebView engine;
     private final Handler main = new Handler(Looper.getMainLooper());
+    private PowerManager.WakeLock wakeLock;   // P2: 持锁防 Doze CPU 节流, 保 WSS 心跳不断
+    // 路线B 去中心化隧道
+    private LocalServer localServer;
+    private TunnelManager tunnel;
+    public static volatile String tunnelStatus = "{\"enabled\":false}";
+    private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.SynchronousQueue<String>> pendingLocal
+            = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Override
     public void onCreate() {
@@ -43,7 +51,98 @@ public class RelayService extends Service {
         if (flag == null || flag.isEmpty()) { remoteOpsEnabled = true; writeUserFile("remote-ops-flag", "1"); }
         else remoteOpsEnabled = "1".equals(flag);
         startForeground(1, buildNotification("内网穿透服务启动中…"));
+        acquireWake();
         main.post(this::initEngine);
+        // 路线B: 若用户在穿透面板开启了「去中心化隧道」, 拉起本地 server + cloudflared 快速隧道。
+        if ("1".equals(readUserFile("tunnel-enabled"))) main.postDelayed(this::startTunnel, 1500);
+    }
+
+    // ── 路线B 去中心化隧道 (设备自带 cloudflared 快速隧道) ──────────────────
+    /** 当前会话 token (与 relay-config 一致), 供 LocalServer Bearer 鉴权。 */
+    private String relayToken() {
+        try {
+            String dyn = readUserFile("relay-config.json");
+            if (dyn != null && dyn.length() > 5) return new org.json.JSONObject(dyn).optString("token", "");
+        } catch (Exception ignored) {}
+        return "";
+    }
+    /** 把 cloudflared 转发来的 frame 喂给引擎 serveLocal, 阻塞拿回 {status,bodyText} (≤60s)。 */
+    String dispatchLocal(String frameJson) throws Exception {
+        final String reqId = "L" + System.nanoTime();
+        java.util.concurrent.SynchronousQueue<String> q = new java.util.concurrent.SynchronousQueue<>();
+        pendingLocal.put(reqId, q);
+        final String fj = frameJson;
+        main.post(() -> { if (engine != null) try {
+            engine.evaluateJavascript("window.__localServe&&window.__localServe(" + HttpBridge.jsonStr(reqId) + "," + HttpBridge.jsonStr(fj) + ")", null);
+        } catch (Exception ignored) {} });
+        try {
+            String r = q.poll(60, java.util.concurrent.TimeUnit.SECONDS);
+            if (r == null) throw new Exception("engine_timeout");
+            return r;
+        } finally { pendingLocal.remove(reqId); }
+    }
+    private synchronized void startTunnel() {
+        try {
+            if (localServer == null || !localServer.isRunning()) {
+                localServer = new LocalServer(new LocalServer.Dispatcher() {
+                    public String token() { return relayToken(); }
+                    public String dispatch(String f) throws Exception { return dispatchLocal(f); }
+                });
+                int port = localServer.start();
+                android.util.Log.i("RTFlowTunnel", "local server on 127.0.0.1:" + port);
+            }
+            int port = localServer.getPort();
+            if (tunnel != null) tunnel.stop();
+            tunnel = new TunnelManager(this, port, new TunnelManager.Callback() {
+                public void onUrl(String url) { writeUserFile("tunnel-url", url); updateTunnelStatus(url, true, "隧道已连通"); }
+                public void onLog(String line) { android.util.Log.i("RTFlowTunnel", line); }
+                public void onExit(int code) { updateTunnelStatus("", false, "cloudflared 已退出(" + code + ")"); }
+            });
+            boolean ok = tunnel.start();
+            updateTunnelStatus("", false, ok ? "正在建立隧道…" : "cloudflared 二进制缺失/启动失败");
+        } catch (Exception e) {
+            updateTunnelStatus("", false, "隧道启动失败: " + e.getMessage());
+        }
+    }
+    private synchronized void stopTunnel() {
+        if (tunnel != null) { tunnel.stop(); tunnel = null; }
+        if (localServer != null) { localServer.stop(); localServer = null; }
+        try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
+        updateTunnelStatus("", false, "已停止");
+    }
+    // 供 MainActivity 面板代理调用 (同进程)
+    public boolean tunnelEnabledFlag() { return "1".equals(readUserFile("tunnel-enabled")); }
+    public void setTunnelEnabledExternal(boolean on) {
+        writeUserFile("tunnel-enabled", on ? "1" : "0");
+        main.post(() -> { if (on) startTunnel(); else stopTunnel(); });
+    }
+    private void updateTunnelStatus(String url, boolean connected, String msg) {
+        try {
+            org.json.JSONObject o = new org.json.JSONObject();
+            o.put("enabled", true); o.put("connected", connected);
+            o.put("url", url == null ? "" : url); o.put("msg", msg == null ? "" : msg);
+            o.put("ts", System.currentTimeMillis());
+            tunnelStatus = o.toString();
+        } catch (Exception ignored) {}
+        try { sendBroadcast(new Intent("ai.devin.rtflow.TUNNEL").setPackage(getPackageName()).putExtra("tunnel", tunnelStatus)); } catch (Exception ignored) {}
+    }
+
+    /** P2: 取一个 PARTIAL_WAKE_LOCK — 前台穿透服务存活期间保持 CPU 唤醒,
+     *  使 relay-app.js 里 15s 一次的 WSS 心跳不被 Doze/息屏节流而掉线。
+     *  用户显式开启穿透才会有本服务 + 前台通知常驻, 取舍合理。 */
+    private void acquireWake() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) return;
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null) return;
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "rtflow:relay");
+            wakeLock.setReferenceCounted(false);
+            wakeLock.acquire();
+        } catch (Exception ignored) {}
+    }
+    private void releaseWake() {
+        try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); } catch (Exception ignored) {}
+        wakeLock = null;
     }
 
     @SuppressWarnings("SetJavaScriptEnabled")
@@ -121,6 +220,21 @@ public class RelayService extends Service {
                     engine.evaluateJavascript("window.__httpCb&&window.__httpCb(" + HttpBridge.jsonStr(id) + "," + json + ")", null);
                 } catch (Exception ignored) {} }));
         }
+
+        // ── 路线B 去中心化隧道桥 ────────────────────────────────────────
+        /** 引擎 serveLocal 完成后回灌结果, 唤醒等待中的 LocalServer 线程。 */
+        @JavascriptInterface public void localServeResult(String reqId, String json) {
+            if (reqId == null) return;
+            java.util.concurrent.SynchronousQueue<String> q = pendingLocal.get(reqId);
+            if (q != null) { try { q.offer(json == null ? "{}" : json, 5, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {} }
+        }
+        /** 穿透面板「去中心化隧道」开关。开 = 起本地 server + cloudflared; 关 = 停。 */
+        @JavascriptInterface public void setTunnelEnabled(boolean on) {
+            writeUserFile("tunnel-enabled", on ? "1" : "0");
+            main.post(() -> { if (on) startTunnel(); else stopTunnel(); });
+        }
+        @JavascriptInterface public boolean isTunnelEnabled() { return "1".equals(readUserFile("tunnel-enabled")); }
+        @JavascriptInterface public String tunnelStat() { return tunnelStatus; }
 
         // ── 远程操控 IPC (经 MainActivity.sInstance 驱动前台 WebView) ──────────
 
@@ -568,5 +682,5 @@ public class RelayService extends Service {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) { return START_STICKY; }
     @Nullable @Override public IBinder onBind(Intent intent) { return null; }
-    @Override public void onDestroy() { instance = null; if (engine != null) { engine.destroy(); engine = null; } super.onDestroy(); }
+    @Override public void onDestroy() { instance = null; releaseWake(); stopTunnel(); if (engine != null) { engine.destroy(); engine = null; } super.onDestroy(); }
 }

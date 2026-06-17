@@ -10,8 +10,10 @@ android {
         applicationId "ai.devin.rtflow"
         minSdk 24
         targetSdk 34
-        versionCode 45
-        versionName "0.15.14"
+        versionCode 46
+        versionName "0.15.15"
+        // 仅打包已交叉编译 cloudflared 的两种 ABI (覆盖现代真机 arm64 + 模拟器 x86_64)
+        ndk { abiFilters 'arm64-v8a', 'x86_64' }
     }
 
     signingConfigs {
@@ -33,6 +35,13 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+    // 路线B: cloudflared 以 libcloudflared.so 打包, 必须解压到 nativeLibraryDir 才能 exec
+    // (绕开 Android 10+ 禁止从应用数据目录执行二进制的限制)。
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 

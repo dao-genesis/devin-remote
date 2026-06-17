@@ -110,6 +110,26 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <button onclick="send('openCf')" style="margin-top:4px;background:var(--vscode-textLink-foreground)">打开 CloudFlare 控制台</button>
 </div>
 
+<!-- 模块2.2: 去中心化隧道 (路线B · 每设备自带 cloudflared 快速隧道) -->
+<div class="section">
+<h3>🌐 去中心化隧道 · 每设备自带（无依赖·免费）</h3>
+<div class="muted">开启后，本机自带的 <b>cloudflared</b> 会建立一条<b>免费快速隧道</b>，把设备直接暴露成 <code>https://xxx.trycloudflare.com</code> —— <b>完全不经任何共享 Worker</b>，每台设备一条独立隧道、无需 Cloudflare 账号、无需登录。配合上方端到端加密即真正去中心化。<br>⚠️ 快速隧道 URL <b>每次重启会变</b>（这是 trycloudflare 的设计）；要固定域名请用上方「命名隧道」。</div>
+<div style="display:flex;align-items:center;gap:10px;margin:8px 0">
+  <label style="position:relative;display:inline-block;width:48px;height:26px">
+    <input type="checkbox" id="decentToggle" onchange="toggleDecentralTunnel(this.checked)" style="opacity:0;width:0;height:0">
+    <span style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#333;border-radius:26px;transition:.3s" id="decentSlider"></span>
+  </label>
+  <span id="decentLabel" style="font-size:12px;color:var(--vscode-descriptionForeground)">已关闭</span>
+</div>
+<div id="decentStatus" class="muted" style="font-size:12px">—</div>
+<div class="lbl" style="margin-top:6px">去中心化公网 URL</div>
+<div id="decentUrl" class="url">—</div>
+<div class="row" style="margin-top:6px">
+  <button onclick="copyDecentAccess()">📋 复制去中心化接入信息</button>
+  <button onclick="refreshTunnel()">刷新状态</button>
+</div>
+</div>
+
 <!-- 模块2.5: 远程操控安全开关 -->
 <div class="section">
 <h3>🛡️ 远程操控 · 安全开关</h3>
@@ -273,6 +293,37 @@ function copyVal(id){
   _result('copy',done, done?('已复制 '+id):'复制失败, 请长按手动复制');
 }
 initRelayCfg();
+// ── 路线B 去中心化隧道 (每设备自带 cloudflared) ──
+function _tunnel(){ try{ return JSON.parse(N.tunnelStat?N.tunnelStat():"{}"); }catch(e){ return {}; } }
+function toggleDecentralTunnel(on){
+  try{ N.setTunnelEnabled&&N.setTunnelEnabled(!!on); }catch(e){}
+  updateDecentUI({enabled:on, connected:false, url:"", msg: on?'正在拉起本地 server + cloudflared…':'已停止'});
+  _result('decentTunnel', true, on?'去中心化隧道开启中 (首次建立约需 5~15 秒)':'已关闭去中心化隧道');
+  setTimeout(refreshTunnel, 3000); setTimeout(refreshTunnel, 9000);
+}
+function copyDecentAccess(){
+  var t=_tunnel(), c=_conn();
+  if(!t.url){ _result('copyDecent', false, '隧道未连通 (URL 尚未生成, 请稍候刷新)'); return; }
+  var block="去中心化公网入口: "+t.url+"/relay/"+(c.session||"")+"\nToken: "+(c.token||"")+"\nSession: "+(c.session||"")+"\nE2E Key: "+(c.e2eKey||"");
+  try{N.clip&&N.clip(block);}catch(e){}
+  _result('copyDecent', true, '已复制 去中心化URL+Token+Session+E2EKey (该 URL 直连本设备, 不经任何共享 Worker)');
+}
+function updateDecentUI(t){
+  t=t||{}; var on=!!t.enabled;
+  var cb=document.getElementById('decentToggle'); if(cb) cb.checked=on;
+  var sl=document.getElementById('decentSlider');
+  if(sl){ sl.style.background=on?'#3fb950':'#333';
+    sl.innerHTML='<span style="position:absolute;height:20px;width:20px;left:'+(on?'24px':'3px')+';bottom:3px;background:white;border-radius:50%;transition:.3s"></span>'; }
+  var lb=document.getElementById('decentLabel'); if(lb) lb.textContent=on?(t.connected?'已连通 🟢':'启动中…'):'已关闭';
+  var st=document.getElementById('decentStatus'); if(st) st.textContent=on?('状态: '+(t.msg||(t.connected?'隧道已连通':'启动中…'))):'未开启 (默认走中继; 开启即每设备独立免费隧道)';
+  var u=document.getElementById('decentUrl'); if(u) u.textContent=(on&&t.url)?(t.url+"/relay/"+(_conn().session||"")):'—';
+}
+function refreshTunnel(){
+  var en=false; try{ en = N.isTunnelEnabled && N.isTunnelEnabled(); }catch(e){}
+  var t=_tunnel(); t.enabled = (t.enabled!==undefined)?t.enabled:en;
+  updateDecentUI(t);
+}
+refreshTunnel();
 // ── 远程操控开关 ──
 function toggleRemoteOps(on){
   try{ N.saveRelayConfig; /* 检测桥可用 */ }catch(e){}

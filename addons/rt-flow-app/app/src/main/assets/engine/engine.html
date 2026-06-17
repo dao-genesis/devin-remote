@@ -15,7 +15,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.15.14";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.15.15";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -665,6 +665,20 @@
 
   DaoRelayApp.register(CMDS);
   DaoRelayApp.setStatusCb(function(st){ try{ N.onStatus(JSON.stringify(st)); }catch(e){} });
+
+  // 路线B 本地隧道: 原生 LocalServer 收到 cloudflared 转发的请求后调用此桥,
+  //   走与 WSS 完全相同的 serveLocal(E2E 解密→RPC→重封), 结果经 N.localServeResult 回灌原生。
+  window.__localServe = function(reqId, frameJson){
+    try {
+      DaoRelayApp.serveLocal(frameJson).then(function(r){
+        try{ N.localServeResult && N.localServeResult(reqId, r); }catch(e){}
+      }, function(err){
+        try{ N.localServeResult && N.localServeResult(reqId, JSON.stringify({status:500, body:{error:String(err)}})); }catch(e){}
+      });
+    } catch(e){
+      try{ N.localServeResult && N.localServeResult(reqId, JSON.stringify({status:500, body:{error:String(e)}})); }catch(_){}
+    }
+  };
 
   // 先加载持久化的用户模块 (历史热修), 再启动穿透
   try { var um = N.readFile && N.readFile("user-module.js"); if (um) { (0,eval)(um); log("user-module loaded"); } } catch(e){ log("user-module err "+e); }

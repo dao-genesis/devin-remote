@@ -1,6 +1,6 @@
 {
-  "versionCode": 45,
-  "versionName": "0.15.14",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.14/DevinCloud-mobile-v0.15.14.apk",
-  "notes": "v0.15.14 · RPC 端到端加密(中继只见密文) + 去中心化配置面板\n· 端到端加密(默认开启): RPC 载荷(含邮箱/密码/token)用设备自有 E2E Key 经 PBKDF2-HMAC-SHA256(10万次)+AES-256-GCM 加密后才发出, 任何中继(含共享 Worker)全程只见密文。E2E Key 首次启动自动生成、防卸载持久化、从不上送中继; 授权方(A群)经「取数指引 MD·板块六」拿到同一 Key 才能解密驱动。明文请求仍得明文响应(向后兼容旧驱动)。\n· 穿透面板新增「🔐 端到端加密」区: 查看/复制 E2E Key 与中继入口。\n· 参考实现: tools/dao-e2e(Python + JS, 与设备端逐字节兼容), 供授权方加解密 RPC。\n· 去中心化: 穿透面板支持每设备自填中继 URL(路线A 自托管 Worker, npx wrangler deploy 一条命令) 与命名隧道(路线C 固定域名); 叠加 E2E 后, 连自己的端点也只看得到密文。\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
+  "versionCode": 46,
+  "versionName": "0.15.15",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.15/DevinCloud-mobile-v0.15.15.apk",
+  "notes": "v0.15.15 · 路线B 真去中心化(每设备自带 cloudflared 免费快速隧道) + P1 token 复用 + P2 wake lock\n· 🌐 去中心化隧道(穿透面板新增开关): 本机自带的 cloudflared 一键建立免费快速隧道, 把设备直接暴露成 https://xxx.trycloudflare.com —— 完全不经任何共享 Worker, 每台设备一条独立隧道、无需 Cloudflare 账号、无需登录、无需手动。cloudflared 以 jniLibs(libcloudflared.so) 打包(arm64-v8a + x86_64), 解压到 nativeLibraryDir 执行; 强制 http2 走 TCP 更稳。叠加端到端加密即真正去中心化。注: 快速隧道 URL 每次重启会变(trycloudflare 设计), 要固定域名用命名隧道。共享 Worker 仍并行保留作兜底。\n· P1 token 复用: 不再每次冷启动轮换 token, 持久化复用 → 中继 DO 命名空间稳定, 根治「每次都要换 token / no_agent」。\n· P2 wake lock: RelayService 真正持有 PARTIAL_WAKE_LOCK, 息屏/Doze 下 CPU 不被节流 → 15s 心跳不被拖延, 不再频繁断连。\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
 }
