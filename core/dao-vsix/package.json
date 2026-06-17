@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "3.17.3",
+  "version": "3.17.4",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -191,7 +191,7 @@
         },
         "wam.devinCloudConvQuotaCap": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "v4.5.0 · 对话额度上限 (per-conversation quota cap · 知止不殆). 开启后实时跟踪各账号余额, 自动算出每对话使用额度上限=余额-缓冲; 余额≤停止阈值时自动中停运行中对话, 防耗尽"
         },
         "wam.devinCloudConvQuotaBuffer": {
@@ -213,6 +213,11 @@
           "type": "number",
           "default": 0.1,
           "description": "v4.7.3 · 抽干地板 (美元·默认0.1). 开启耗尽自动重置后, 仅当余额 ≤ 此值(真正见底)才最终中停运行中对话"
+        },
+        "wam.devinCloudConvInjectLimit": {
+          "type": "boolean",
+          "default": true,
+          "description": "v4.9.5 · 对话上限反向注入 (默认开). 把算出的每对话上限(余额-缓冲)实时写入该账号 Devin「每条消息额度上限」(Usage & limits·max_credits), 随余额下降跟随; 仅在上限变化时回写(幂等·不制造无谓请求). 关闭则仅面板本地显示不回写账号"
         },
         "wam.devinCloudConvPollActiveSec": {
           "type": "number",
