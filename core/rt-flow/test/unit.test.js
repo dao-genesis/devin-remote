@@ -538,11 +538,15 @@ function test(name, fn) {
       const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
       assert.ok(/_lastRunKey/.test(src) && /_lastConvSig/.test(src), rel.join("/") + ": 须去抖签名变量(状态+对话签名)");
       assert.ok(/if\(_rk===_lastRunKey\)return/.test(src), rel.join("/") + ": 状态未变须早返不动 DOM");
-      // v4.9.8 根因: 不再用 html 全等(被 staleSec/sizeKB/age 每秒变动击穿) → 改用剔除易变装饰的稳定签名
-      assert.ok(/function _convSig\(/.test(src), rel.join("/") + ": 须 _convSig 稳定签名函数");
-      assert.ok(/type: "convUpdate", html, sig: _convSig\(html\)/.test(src), rel.join("/") + ": convUpdate 须携带稳定签名");
-      assert.ok(/if\(_sig===_lastConvSig\)return/.test(src), rel.join("/") + ": 签名未变须早返·不换 DOM·根治每2s整段重建");
-      assert.ok(/replace\(\/title="\[\^"\]\*"\/g/.test(src) && /s前/.test(src), rel.join("/") + ": _convSig 须剔除 tooltip/相对时间等每秒变动装饰");
+      // v4.9.9 真根因: html 串里"· 分隔符+陈旧图标"随 staleSec 0↔>0 出现/消失, 屏蔽数值仍每秒不同 →
+      //   签名只取结构性数据(uuid集+硬状态+计数+灯色), 排除一切 staleSec/sizeKB/age/陈旧切换
+      assert.ok(/let _convStructSig =/.test(src), rel.join("/") + ": 须结构签名模块变量");
+      assert.ok(/_convStructSig = JSON\.stringify\(\{/.test(src), rel.join("/") + ": 须从结构性数据算签名");
+      assert.ok(/sig: _convStructSig \|\| _convSig\(html\)/.test(src), rel.join("/") + ": convUpdate 须优先携带结构签名");
+      assert.ok(/if\(_sig===_lastConvSig\)return/.test(src), rel.join("/") + ": 签名未变须早返·不换 DOM·根治每秒整段重建");
+      // 结构签名 must NOT 含 staleSec/sizeKB/age (否则又被时间滴答击穿)
+      const sigBlock = (src.match(/_convStructSig = JSON\.stringify\(\{[\s\S]*?\}\);/) || [""])[0];
+      assert.ok(sigBlock && !/staleSec|sizeKB|\bage\b/.test(sigBlock), rel.join("/") + ": 结构签名严禁含 staleSec/sizeKB/age");
     }
   });
   test("F2 根因自证: _convSig 对仅时间/大小变动的对话区返回同签名", () => {
