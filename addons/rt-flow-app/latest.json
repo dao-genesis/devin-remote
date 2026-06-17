@@ -1,6 +1,6 @@
 {
-  "versionCode": 39,
-  "versionName": "0.15.8",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.8/DevinCloud-mobile-v0.15.8.apk",
-  "notes": "v0.15.8 · 切号板块升级\n· 排序: 对话进行中的账号自动顶置(移到1号之上), 对话结束/取消追踪后自动回退原位 (保留原始编号)。\n· 多选修复: 打钩态以账号id为准, 跨8s自动重渲染持久, 不再自动丢失。\n· 新增: 长按单账号→上下滑动拖拽快速多选 (含震动反馈)。\n· 自动清理(默认开): 仅\"无进行中对话\"的低额账号→先全量备份(对话/知识库/剧本/密钥/Git/账密)到 Documents/DevinCloud/backups/<账号>/ →再彻底清理回归本源; 额度归零者移出账号库, 阈值内未归零者保留。\n· 低额(<$3)提醒: 仅当账号有进行中对话才提醒, 放大横幅+震动。\n· 修复: 顶部标签长按震动(直驱Vibrator, 不受系统触感开关影响)+拖拽移动位置。"
+  "versionCode": 40,
+  "versionName": "0.15.9",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.9/DevinCloud-mobile-v0.15.9.apk",
+  "notes": "v0.15.9 · 下载板块修复\n· 下载记录持久化: 下载文件落共享保险箱 Documents/DevinCloud/downloads/ (脱离应用沙箱), 记录写入保险箱, 启动自动回读 → 卸载/重装/升级不再丢下载 (与账号/标签同机制)。\n· 系统下载完成后自动从沙箱搬入保险箱, 永久留存。\n· 拖拽到页面修复: 长按下载项拖到网页松手, 自动把文件注入页面的上传框(input[type=file])并对落点元素派发 drop 事件 (兼容 dropzone 拖放上传组件)。\n· 诚实说明: 历史版本从未把下载写进保险箱, 之前已丢失的旧下载无法找回; 自本版起永久持久化。\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动。"
 }

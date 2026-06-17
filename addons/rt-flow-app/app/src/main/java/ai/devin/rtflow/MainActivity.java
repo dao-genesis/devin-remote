@@ -118,6 +118,8 @@ public class MainActivity extends AppCompatActivity {
     private volatile String curProxy = null;   // 已应用到内置浏览器(全部 WebView)的本地代理 host:port; null=直连
     private final java.util.Map<Long, String[]> dlPending = new java.util.concurrent.ConcurrentHashMap<>();
     private android.content.BroadcastReceiver dlReceiver;
+    private volatile String dragDlPath = null;   // 正在从下载列表拖拽的文件 (拖到页面 → 注入上传/拖放区)
+    private volatile String dragDlMime = null;
     // ── 在线自动更新 ──
     static final String UPDATE_MANIFEST = "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json";
     // 去中心化更新: 多镜像源轮询 (任一可达即可检查/下载, 不依赖单一服务器或穿透通道)。
@@ -205,6 +207,7 @@ public class MainActivity extends AppCompatActivity {
         if (Build.VERSION.SDK_INT >= 19) WebView.setWebContentsDebuggingEnabled(true);
         setContentView(buildChrome());
         ensureAllFilesAccess();   // 申请「所有文件访问」→ 账号/标签/历史落到共享文件夹, 卸载重装不丢
+        restoreDownloads();       // 下载记录: 卸载/重装后从共享保险箱回读 (文件落 Documents/DevinCloud/downloads)
         // 恢复上次标签 (持久化) 或首屏切号
         if (!restoreTabs()) {
             newTab(SWITCH, null);
@@ -662,6 +665,8 @@ public class MainActivity extends AppCompatActivity {
         }
         // 下载捕获桥(所有标签都挂, 仅 saveBase64 一个能力): 把页面内 blob:/data:/<a download> 下载收进右上下载列表
         web.addJavascriptInterface(new DlBridge(), "RTDL");
+        // 下载项长按拖到页面 → 注入页面的上传/拖放区 (file input + dropzone)
+        web.setOnDragListener(downloadDropListener(web));
 
         // 账号标签: document_start 注入鉴权头 + sessionStorage 隔离 (多实例核心)
         if (accountJson != null) {
@@ -2040,9 +2045,7 @@ public class MainActivity extends AppCompatActivity {
                 String ext = android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mime == null ? "" : mime);
                 if (ext != null && !ext.isEmpty()) name = name + "." + ext;
             }
-            File dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
-            if (dir == null) dir = getCacheDir();
-            if (!dir.exists()) dir.mkdirs();
+            File dir = downloadStoreDir();
             File f = new File(dir, name);
             if (f.exists()) {
                 String base = name, ext2 = ""; int dot = name.lastIndexOf('.');
@@ -2074,7 +2077,9 @@ public class MainActivity extends AppCompatActivity {
                     if (path == null) return;
                     String name = meta != null ? meta[0] : new File(path).getName();
                     String mime = (meta != null && !meta[1].isEmpty()) ? meta[1] : (mediaType == null ? "*/*" : mediaType);
-                    addDownloadRecord(name, path, mime, new File(path).length());
+                    // 从应用沙箱搬到共享保险箱 downloads → 卸载/重装不丢
+                    File persisted = persistToVault(new File(path), name);
+                    addDownloadRecord(name, persisted.getAbsolutePath(), mime, persisted.length());
                     toast("下载完成: " + name);
                 } else if (st == DownloadManager.STATUS_FAILED) {
                     toast("下载失败");
@@ -2247,6 +2252,58 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) { toast("安装唤起失败: " + e.getMessage()); }
     }
 
+    /** 下载文件落地目录: 优先共享保险箱 Documents/DevinCloud/downloads (卸载/重装不丢); 不可写则回退应用沙箱。 */
+    private File downloadStoreDir() {
+        try {
+            File d = new File(vaultDir(), "downloads");
+            if ((d.isDirectory() || d.mkdirs()) && d.canWrite()) return d;
+        } catch (Exception ignored) {}
+        File fb = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+        if (fb == null) fb = getCacheDir();
+        if (!fb.exists()) fb.mkdirs();
+        return fb;
+    }
+    /** 把(系统下载落到沙箱的)文件搬入共享保险箱 downloads; 搬不动则原样返回。 */
+    private File persistToVault(File src, String name) {
+        try {
+            File dir = downloadStoreDir();
+            if (src.getParentFile() != null && src.getParentFile().equals(dir)) return src;
+            String n = (name == null || name.trim().isEmpty()) ? src.getName() : name.replaceAll("[\\\\/:*?\"<>|]", "_");
+            File dst = new File(dir, n);
+            if (dst.exists()) {
+                String base = n, ext = ""; int dot = n.lastIndexOf('.');
+                if (dot > 0) { base = n.substring(0, dot); ext = n.substring(dot); }
+                dst = new File(dir, base + "_" + System.currentTimeMillis() + ext);
+            }
+            try (java.io.FileInputStream in = new java.io.FileInputStream(src);
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(dst)) {
+                byte[] buf = new byte[65536]; int r;
+                while ((r = in.read(buf)) > 0) out.write(buf, 0, r);
+            }
+            if (dst.exists() && dst.length() > 0) { src.delete(); return dst; }
+        } catch (Exception ignored) {}
+        return src;
+    }
+    /** 卸载/重装后 SharedPreferences 为空 → 从共享保险箱回读下载记录 (与账号/标签同机制)。 */
+    private void restoreDownloads() {
+        try {
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            String cur = sp.getString("downloads", "");
+            if (cur != null && !cur.isEmpty() && !cur.equals("[]")) return;
+            String vault = vaultRead("downloads");
+            if (vault == null || vault.isEmpty()) return;
+            org.json.JSONArray arr = new org.json.JSONArray(vault);
+            // 仅保留文件仍存在的记录 (保险箱里的文件卸载不删 → 多数会留存)
+            org.json.JSONArray keep = new org.json.JSONArray();
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject e = arr.getJSONObject(i);
+                if (new File(e.optString("file", "")).exists()) keep.put(e);
+            }
+            sp.edit().putString("downloads", keep.toString()).apply();
+            if (keep.length() != arr.length()) vaultWrite("downloads", keep.toString());
+        } catch (Exception ignored) {}
+    }
+
     private void addDownloadRecord(String name, String path, String mime, long size) {
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
@@ -2256,6 +2313,7 @@ public class MainActivity extends AppCompatActivity {
             arr.put(e);
             while (arr.length() > 100) arr.remove(0);
             sp.edit().putString("downloads", arr.toString()).apply();
+            vaultWrite("downloads", arr.toString());   // 落共享保险箱 → 卸载/重装不丢
             if (dlListCol != null) main.post(() -> renderDownloadList(dlListCol));
         } catch (Exception ignored) {}
     }
@@ -2391,6 +2449,7 @@ public class MainActivity extends AppCompatActivity {
                         org.json.JSONObject e = arr.getJSONObject(recIdx);
                         e.put("name", nn); if (ok) e.put("file", nf.getAbsolutePath());
                         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("downloads", arr.toString()).apply();
+                        vaultWrite("downloads", arr.toString());
                     }
                     if (dlListCol != null) renderDownloadList(dlListCol);
                     toast(ok ? "已重命名" : "已更新名称(文件未移动)");
@@ -2404,6 +2463,7 @@ public class MainActivity extends AppCompatActivity {
             org.json.JSONArray out = new org.json.JSONArray();
             for (int i = 0; i < arr.length(); i++) if (i != recIdx) out.put(arr.getJSONObject(i));
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("downloads", out.toString()).apply();
+            vaultWrite("downloads", out.toString());
             if (dlListCol != null) renderDownloadList(dlListCol);
             toast("已删除");
         } catch (Exception e) { toast("删除失败"); }
@@ -2485,14 +2545,73 @@ public class MainActivity extends AppCompatActivity {
     private void dragDownloaded(View v, String path, String mime) {
         try {
             v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            doVibrate(30);
+            dragDlPath = path;                                       // 供网页 WebView 的 drop 监听注入
+            dragDlMime = (mime == null || mime.isEmpty()) ? "*/*" : mime;
             Uri uri = fileUri(path);
             ClipData data = new ClipData(new File(path).getName(),
-                    new String[]{ (mime == null || mime.isEmpty()) ? "*/*" : mime }, new ClipData.Item(uri));
+                    new String[]{ dragDlMime }, new ClipData.Item(uri));
             View.DragShadowBuilder shadow = new View.DragShadowBuilder(v);
             if (Build.VERSION.SDK_INT >= 24) v.startDragAndDrop(data, shadow, null, View.DRAG_FLAG_GLOBAL | View.DRAG_FLAG_GLOBAL_URI_READ);
             else v.startDrag(data, shadow, null, 0);
             toast("拖到页面的上传/输入区放手");
-        } catch (Exception e) { toast("拖拽失败"); }
+        } catch (Exception e) { dragDlPath = null; toast("拖拽失败"); }
+    }
+    /** 网页标签的拖放监听: 把从下载列表拖来的文件注入页面 (file input + dropzone 双路)。 */
+    private View.OnDragListener downloadDropListener(final WebView web) {
+        return (v, ev) -> {
+            switch (ev.getAction()) {
+                case DragEvent.ACTION_DRAG_STARTED:
+                    return dragDlPath != null;                       // 仅当从下载列表发起时才接管
+                case DragEvent.ACTION_DRAG_ENTERED:
+                case DragEvent.ACTION_DRAG_LOCATION:
+                case DragEvent.ACTION_DRAG_EXITED:
+                    return dragDlPath != null;
+                case DragEvent.ACTION_DROP:
+                    if (dragDlPath != null) { dropFileIntoPage(web, ev.getX(), ev.getY(), dragDlPath, dragDlMime); return true; }
+                    return false;
+                case DragEvent.ACTION_DRAG_ENDED:
+                    dragDlPath = null; dragDlMime = null;
+                    return true;
+            }
+            return false;
+        };
+    }
+    /** 在 (x,y) 处把文件注入网页: 设到 file input 并对落点元素派发 drop 事件 (兼容 dropzone 上传组件)。 */
+    private void dropFileIntoPage(final WebView web, float x, float y, String path, String mime) {
+        if (web == null) return;
+        new Thread(() -> {
+            try {
+                File f = new File(path);
+                if (!f.exists()) { main.post(() -> toast("文件已不存在")); return; }
+                byte[] data = new byte[(int) f.length()];
+                try (java.io.FileInputStream fis = new java.io.FileInputStream(f)) {
+                    int off = 0, r; while (off < data.length && (r = fis.read(data, off, data.length - off)) > 0) off += r;
+                }
+                String b64 = android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP);
+                String name = f.getName().replace("\\", "\\\\").replace("'", "\\'");
+                String m = (mime == null || mime.isEmpty()) ? "application/octet-stream" : mime;
+                String js = "(function(){try{"
+                    + "var b=atob('" + b64 + "');var u=new Uint8Array(b.length);for(var i=0;i<b.length;i++)u[i]=b.charCodeAt(i);"
+                    + "var file=new File([u],'" + name + "',{type:'" + m + "'});"
+                    + "var dt=new DataTransfer();dt.items.add(file);"
+                    + "var dpr=window.devicePixelRatio||1;var cx=" + x + "/dpr, cy=" + y + "/dpr;"
+                    + "var el=document.elementFromPoint(cx,cy)||document.body;"
+                    + "var inp=null;var n=el;while(n){if(n.tagName==='INPUT'&&(n.type||'').toLowerCase()==='file'){inp=n;break;}n=n.parentElement;}"
+                    + "if(!inp){var z=el;while(z){if(z.querySelector){inp=z.querySelector('input[type=file]');if(inp)break;}z=z.parentElement;}}"
+                    + "if(!inp)inp=document.querySelector('input[type=file]');"
+                    + "if(inp){try{inp.files=dt.files;}catch(e){}inp.dispatchEvent(new Event('input',{bubbles:true}));inp.dispatchEvent(new Event('change',{bubbles:true}));}"
+                    + "var opt={bubbles:true,cancelable:true};"
+                    + "['dragenter','dragover','drop'].forEach(function(t){try{var dt2=new DataTransfer();dt2.items.add(file);var e=new DragEvent(t,opt);Object.defineProperty(e,'dataTransfer',{value:dt2});el.dispatchEvent(e);}catch(err){}});"
+                    + "return inp?'input':'drop';}catch(e){return 'err:'+e;}})();";
+                main.post(() -> {
+                    try { web.evaluateJavascript(js, val -> {
+                        if (val != null && val.contains("input")) toast("已放入页面上传框");
+                        else toast("已投放到页面 (若未生效请点页面的上传按钮)");
+                    }); } catch (Exception e) { toast("注入失败"); }
+                });
+            } catch (Exception e) { main.post(() -> toast("拖拽注入失败")); }
+        }).start();
     }
 
     // ── 网页栏五角星收藏 ───────────────────────────────────────────────────
