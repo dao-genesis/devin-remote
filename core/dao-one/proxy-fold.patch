@@ -1,31 +1,50 @@
-@@ -2215,6 +2215,8 @@
+--- base.ts	2026-06-17 06:23:35.261362500 +0000
++++ folded.ts	2026-06-17 06:23:35.261362500 +0000
+@@ -2634,7 +2634,9 @@
+ .hd .hb{background:transparent;border:1px solid var(--border);color:var(--fg);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:12px}
  .hd .hb:hover{background:var(--hover)}
  .ct{flex:1;overflow-y:auto;padding:16px}
- .ct iframe{width:100%;height:100%;border:none;background:#fff;border-radius:6px}
+-.ct iframe{width:100%;height:100%;border:none;background:#fff;border-radius:6px}
++.ct iframe{width:100%;height:100%;border:none;background:#fff;border-radius:6px}
 +#v-proxy.active{height:100%}
 +#v-proxy iframe{width:100%;height:100%;min-height:70vh;border:none;background:transparent;border-radius:0;display:block}
  .ct .tv{display:none;height:100%}
  .ct .tv.active{display:flex;flex-direction:column}
  .empty{text-align:center;padding:40px 20px;color:var(--muted);font-size:13px}
-@@ -2262,2 +2264,3 @@
+@@ -2683,7 +2685,8 @@
+ <nav class="sb">
  <div class="ni active" data-tab="overview" onclick="sw('overview')" title="主页 Home">🏠</div>
- <div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网穿透 · DAO Bridge (独立板块·远程操作本地电脑)">🌐</div>
+ <div class="ni" data-tab="switch" onclick="sw('switch')" title="切号 · 账号池(移植自 RT Flow · 多账号切换/刷新/清理)">🔀</div>
+-<div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网穿透 · DAO Bridge (独立板块·远程操作本地电脑)">🌐</div>
++<div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网穿透 · DAO Bridge (独立板块·远程操作本地电脑)">🌐</div>
 +<div class="ni" data-tab="proxy" onclick="sw('proxy')" title="Proxy Pro · 本源观照/渠道配置/模型路由">🔀</div>
-@@ -2296,5 +2299,6 @@
+ <div class="ni" data-tab="backups" onclick="sw('backups')" title="对话 · 备份 — 本机全部 RT Flow 备份对话(全账号×全对话)">💬</div>
+ <div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 全账号批量(Knowledge/Playbook/Secret/MCP/自动化/蓝图 一处整合)">💉</div>
+ <!-- ② 收腰归一: 单账号 K/P/S/Git/自动化/蓝图 均并入主页(overview); 全账号批量在反向注入(inject); MCP 仍保留专用面板 -->
+@@ -2705,7 +2708,8 @@
+ <div class="tv" id="v-switch"></div>
+ <div class="tv" id="v-backups"></div>
  <div class="tv" id="v-mcp"></div>
- <div class="tv" id="v-bridge"></div>
+-<div class="tv" id="v-bridge"></div>
++<div class="tv" id="v-bridge"></div>
 +<div class="tv" id="v-proxy"></div>
  <div class="tv" id="v-inject"></div>
  </div>
  <div class="ft" id="ft">
-@@ -2349,2 +2353,3 @@
+@@ -2766,7 +2770,8 @@
+   // 自动注入模块: 无需 cog_ key, 直接拉 profile 配置 (账号无关意图)
    if(t==='inject'){ cmd('getInjectProfile'); return; }
-   if(t==='bridge'){ rBridgeFull(); return; }
+   if(t==='switch'){ rSwitchLoading(); cmd('loadSwitch'); return; }
+-  if(t==='bridge'){ rBridgeFull(); return; }
++  if(t==='bridge'){ rBridgeFull(); return; }
 +  if(t==='proxy'){ rProxyFull(); return; }
-@@ -2380,6 +2385,30 @@
-   v.innerHTML='<div class="empty"><div class="ic">'+ic+'</div><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
-   cmd('loadTabData',{tab:t});
+   if(t==='backups'){ rBackups(); return; }
+   if(t!=='overview'&&S.auth.loggedIn){
+     const v=document.getElementById('v-'+t);
+@@ -2848,6 +2853,35 @@
+     +'<div style="font-size:10px;color:var(--muted)">实现：'+how+'</div></details>';
  }
+ // 内网穿透 · DAO Bridge — 与独立穿透插件 1:1: 状态 + 命名隧道/CloudFlare + 导出文档 + 能力自测。
 +// ★ 归一·② Proxy Pro: 全能板内嵌「三模块面板」(本源观照/渠道配置/模型路由) —
 +//   iframe srcdoc 复用 dao-proxy-pro 原生 getEaConfigHtml(零前端重写),
 +//   端口经 ~/.dao/origin-port.json 自动发现 + webview portMapping 直通本地反代。
@@ -57,18 +76,18 @@
 +}
  function rBridgeFull(){
    var v=document.getElementById('v-bridge');if(!v)return;
-   var b=S.bridge;
-@@ -2463,7 +2492,7 @@
+   var b=S.bridge||{};
+@@ -3055,7 +3089,8 @@
  function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
  // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
  function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
--window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 +function _proxyFetch(e){var q=e.data,src=e.source;var o={method:q.method||'GET',cache:'no-store'};if(q.headers)o.headers=q.headers;if(q.body!=null)o.body=q.body;fetch(q.url,o).then(function(r){return r.text().then(function(t){src.postMessage({__proxyFetchRes:true,id:q.id,ok:r.ok,status:r.status,statusText:r.statusText,body:t,contentType:(r.headers&&r.headers.get)?(r.headers.get('content-type')||''):''},'*');});}).catch(function(err){src.postMessage({__proxyFetchRes:true,id:q.id,error:String((err&&err.message)||err)},'*');});}
-+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__proxyFetchReq){_proxyFetch(e);return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='proxyPanel'){rProxyResult(d)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
++window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__proxyFetchReq){_proxyFetch(e);return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='proxyPanel'){rProxyResult(d)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
  // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
  function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
  function mcpAct(idx,action){
-@@ -2578,11 +2607,15 @@
+@@ -3216,11 +3251,15 @@
          return;
      }
      const st = getPanelState();
@@ -85,7 +104,7 @@
      );
      daoCloudMiddlePanel.webview.html = getDaoCloudMiddlePanelHtml(st);
      daoCloudMiddlePanelVisible = true;
-@@ -2656,11 +2689,51 @@
+@@ -3325,11 +3364,60 @@
      daoCloudMiddlePanel.webview.postMessage(data);
  }
  
@@ -142,20 +161,20 @@
      const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
      const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
      // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
--    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge'];
-+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge', 'getProxyPanel'];
+-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'loadSwitch', 'switchToAccount', 'routeAccount', 'wamCmd', 'cleanupZeroQuota'];
++    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'loadSwitch', 'switchToAccount', 'routeAccount', 'wamCmd', 'cleanupZeroQuota', 'getProxyPanel'];
      if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
          reply({ type: 'error', msg: 'Not logged in' });
          return;
-@@ -3160,6 +3233,11 @@
-                 reply({ type: 'actionResult', command: 'bridgeInjectKnowledge', ok: injected });
+@@ -4137,6 +4225,11 @@
                  break;
              }
+             // ═══ 移植自独立 dao-bridge: CloudFlare 控制台/登录/退出 + 能力自测 ═══
 +            // ═══ 归一·② Proxy Pro: 全能板内嵌三模块面板 ═══
 +            case 'getProxyPanel': {
 +                reply(buildProxyPanelReply(context.extensionPath));
 +                break;
 +            }
-         }
-     } catch (e: any) {
-         reply({ type: 'error', msg: e.message || String(e) });
+             case 'openCf': {
+                 vscode.env.openExternal(vscode.Uri.parse('https://one.dash.cloudflare.com'));
+                 reply({ type: 'actionResult', command: 'openCf', ok: true });
