@@ -517,6 +517,12 @@ export async function activate(context: vscode.ExtensionContext) {
         // ═══════════════════════════════════════════════════════════
         vscode.commands.registerCommand('dao.openCloudPanel', () => showDaoCloudMiddlePanel(context)),
         vscode.commands.registerCommand('dao.toggleCloudPanel', () => toggleDaoCloudMiddlePanel(context)),
+        // 道法自然 · 右下角 RT Flow 按钮 → 打开全功能面板并直达「切号」模块(第2模块)。
+        vscode.commands.registerCommand('dao.openSwitchModule', () => {
+            showDaoCloudMiddlePanel(context);
+            // 面板创建/显示后稍候, 令 webview 切到 switch 标签(亦兼容已打开的面板)。
+            setTimeout(() => { try { daoCloudMiddlePanel?.webview.postMessage({ type: 'gotoTab', tab: 'switch' }); } catch { /* 守柔 */ } }, 350);
+        }),
         vscode.commands.registerCommand('dao.devinCloudBrowser', () => {
             // 帛书·「天下之至柔驰骋于天下之致坚」— 反向代理自动注入认证
             // 通过本地反向代理路由官网 — 自动注入Cookie/Token，无需GUI登录
@@ -2277,11 +2283,16 @@ function bridgeGenerateCloudMd(): string {
     const ts = new Date().toISOString();
     const tok = bridgeToken || ws.token;
     const url = bridgeUrl || '(未连接)';
+    const port = ws.port || 9920;
+    // 渐进式披露 · 云端 MD = 轻量「初始接入」: 接入信息 + 四大模块概览 + 深入读取指引。
+    // 四大模块的全部操作细节落本地 local-agent.md, Agent 按需 GET /api/file 深入读取对应模块。
     return [
-        '# ☯ DAO Bridge · 云端Agent远程操作文档',
+        '# ☯ DAO Bridge · 云端 Agent 接入总纲（四大模块）',
         '',
-        '> 本文档供云端Agent(Devin Cloud等)读取，用于通过内网穿透远程操作用户本地电脑。',
-        '> **端口和URL会随隧道重启而变化，以本文档为准。**',
+        '> 本文档供云端 Agent(Devin Cloud 等)读取，用于通过内网穿透**远程操作用户本地电脑**。',
+        '> 这是**轻量初始接入**：接入信息 + 四大模块概览。需要某模块的完整操作细节时，',
+        '> 按「深入读取」一节拉取本地详档，**按需读取、不必一次全读**(渐进式披露)。',
+        '> **端口和 URL 会随隧道重启而变化，以本文档为准。**',
         '',
         '## 接入信息',
         '',
@@ -2289,35 +2300,47 @@ function bridgeGenerateCloudMd(): string {
         `公网URL: ${url}`,
         `Token:   ${tok}`,
         `Auth:    Authorization: Bearer ${tok}`,
+        `本地端口: ${port}   主机: ${wsInfo.host}   工作区: ${wsInfo.name}`,
+        `更新于:  ${ts}`,
         '```',
         '',
-        '## 当前状态',
+        '所有请求 Header: `Authorization: Bearer <Token>`。基础底座端点：',
+        '`GET /api/health`(免鉴权) · `GET /api/bridge-state` · `POST /api/exec {cmd,timeout}` ·',
+        '`POST /api/ls {path}` · `POST /api/file {path}` · `POST /api/write {path,content}` ·',
+        '`POST /api/search {query,path}` · `POST /api/edit {path,edits}`',
         '',
-        '| 项 | 值 |',
-        '|---|---|',
-        `| 公网URL | ${url} |`,
-        `| 本地端口 | ${ws.port || 9920} |`,
-        `| 工作区 | ${wsInfo.name} |`,
-        `| 根目录 | ${wsInfo.root} |`,
-        `| 主机 | ${wsInfo.host} |`,
-        `| 更新于 | ${ts} |`,
+        '## 四大接入模块（概览）',
         '',
-        '## API 参考',
+        '本插件是**二合一插件本体**，Agent 经内网穿透可全方位接入以下四层。逐层覆盖：从网页 → 插件 → 整机 → IDE。',
         '',
-        `所有请求 Header: \`Authorization: Bearer ${tok}\``,
+        '| # | 模块 | 一句话 | 深入读取键 |',
+        '|---|------|--------|-----------|',
+        '| 1 | **浏览器全方位接入** | 操控浏览器页面：多实例标签/导航/执行JS/提取DOM/Cookie/截图/页内查找，全方位接入 Agent | `browser` |',
+        '| 2 | **插件本体全方位接入** | 代替用户操作二合一插件一切模块：切号/备份/反向注入/MCP/Devin Cloud CRUD/额度 | `plugin` |',
+        '| 3 | **操作用户电脑（最核心）** | 整机操控：任意命令/文件/进程 + Windows 多 RDP 远程桌面 + GUI 自动化（鼠标键盘/窗口/截屏） | `computer` |',
+        '| 4 | **VSCode 底层 API** | 工作区/编辑器/终端/命令/扩展全调用，达到类 Devin Cascade 模式效果 | `vscode` |',
         '',
-        '| 方法 | 路径 | Body | 说明 |',
-        '|---|---|---|---|',
-        '| GET | `/api/health` | - | 存活 (免鉴权) |',
-        '| GET | `/api/connection` | - | 连接信息 |',
-        '| GET | `/api/workspace` | - | 工作区信息 |',
-        '| GET | `/api/bridge-state` | - | 隧道状态 |',
-        '| POST | `/api/exec` | `{cmd,timeout}` | 执行命令 |',
-        '| POST | `/api/ls` | `{path}` | 列目录 |',
-        '| POST | `/api/file` | `{path}` | 读文件 |',
-        '| POST | `/api/write` | `{path,content}` | 写文件 |',
-        '| POST | `/api/search` | `{query,path}` | 搜索文件 |',
-        '| POST | `/api/edit` | `{path,edits}` | 编辑文件 |',
+        '### 1 · 浏览器全方位接入',
+        '远程驱动用户浏览器：列举/打开/关闭标签、导航、执行 JS、提取 DOM/正文、读 Cookie 与 Storage、截图、导出 MD、页内查找。不干扰用户正常使用。详见 `computer`/`plugin` 经 `/api/exec` 启动 Chrome CDP(端口 29229) 脚本化。',
+        '',
+        '### 2 · 插件本体全方位接入',
+        '二合一插件自身一切模块均可由 Agent 代操：切号(多账号)、对话备份、反向注入(K/P/S/MCP/自动化/蓝图)、MCP 市场、Devin Cloud CRUD、额度查询、定时任务。经本地端口插件 API 或 `/api/exec` 调插件命令。',
+        '',
+        '### 3 · 操作用户电脑（最核心）',
+        '经 `/api/exec` 可在用户 Windows 上执行任意命令/PowerShell：文件系统、进程、注册表、服务、计划任务；启动/连接 **RDP 远程桌面**(mstsc、多会话)；GUI 自动化(PowerShell + .NET SendKeys / pyautogui / nircmd)：鼠标点击、键盘输入、窗口管理、全屏截图。这是"代替用户操作整机一切"的核心层。',
+        '',
+        '### 4 · VSCode 底层 API',
+        '经 `/api/exec` 调 `code`/`code-server` CLI 与工作区脚本，或经插件桥调用 VSCode 扩展 API：打开/编辑文件、运行命令面板命令、跑终端任务、装卸扩展、读写工作区配置。目标是达到类 Cascade 的 IDE 内自主操作。',
+        '',
+        '## 深入读取（渐进式披露）',
+        '',
+        '需要某模块的**完整操作细节/示例/全部 API** 时，读取本地详档：',
+        '',
+        '```',
+        `POST /api/file  { "path": "${path.join(BRIDGE_DIR, 'local-agent.md').replace(/\\/g, '\\\\')}" }`,
+        '```',
+        '',
+        '或经 `/api/exec` 直接 cat 该文件。详档按「## 模块N」分节，Agent 可只取所需模块章节。',
         '',
         '## Python SDK',
         '',
@@ -2345,41 +2368,120 @@ function bridgeGenerateLocalMd(): string {
     const wsInfo = { name: vscode.workspace.workspaceFolders?.[0]?.name || 'workspace', root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', host: os.hostname() };
     const ts = new Date().toISOString();
     const tok = bridgeToken || ws.token;
+    const port = ws.port || 9920;
+    // 渐进式披露 · 本地 MD = 重型详档: 四大模块全部操作细节, 按「## 模块N」分节, Agent 按需取章节。
     return [
-        '# ☯ DAO Bridge · 本地Agent配置接口文档',
+        '# ☯ DAO Bridge · 四大模块操作详档（本地全表）',
         '',
-        '> 本文档供本机其他Agent(如Devin、Cursor等)读取，用于接入和配置 DAO Bridge 插件。',
+        '> 本文档是**重型详档**，承接云端总纲。Agent 按需读取对应「## 模块N」章节即可，不必全读。',
+        '> 经内网穿透远程操作用户本地电脑的一切细节都在这里。',
         '',
-        '## 本地接入',
+        '## 接入',
         '',
         '```',
-        `Local URL: http://127.0.0.1:${ws.port || 9920}`,
+        `公网URL:   ${bridgeUrl || '(未连接)'}`,
+        `Local URL: http://127.0.0.1:${port}`,
         `Token:     ${tok}`,
-        `Auth:      Authorization: Bearer <Token>`,
+        `Auth:      Authorization: Bearer ${tok}`,
+        `主机: ${wsInfo.host}   工作区: ${wsInfo.name}   根目录: ${wsInfo.root}   更新于: ${ts}`,
         '```',
         '',
-        '## 可用API',
+        '### 底座端点（四大模块共用）',
         '',
-        '| 方法 | 路径 | 说明 |',
-        '|---|---|---|',
-        '| GET | `/api/health` | 存活检查(免鉴权) |',
-        '| GET | `/api/connection` | 连接信息 |',
-        '| GET | `/api/workspace` | 工作区信息 |',
-        '| GET | `/api/bridge-state` | 隧道完整状态 |',
-        '| POST | `/api/exec` | 执行命令 |',
-        '| POST | `/api/ls` | 列目录 |',
-        '| POST | `/api/file` | 读文件 |',
-        '| POST | `/api/write` | 写文件 |',
+        '| 方法 | 路径 | Body | 说明 |',
+        '|---|---|---|---|',
+        '| GET | `/api/health` | - | 存活(免鉴权) |',
+        '| GET | `/api/connection` | - | 连接信息 |',
+        '| GET | `/api/workspace` | - | 工作区信息 |',
+        '| GET | `/api/bridge-state` | - | 隧道完整状态 |',
+        '| POST | `/api/exec` | `{cmd,timeout}` | 执行任意命令(整机核心) |',
+        '| POST | `/api/ls` | `{path}` | 列目录 |',
+        '| POST | `/api/file` | `{path}` | 读文件 |',
+        '| POST | `/api/write` | `{path,content}` | 写文件 |',
+        '| POST | `/api/search` | `{query,path}` | 搜索 |',
+        '| POST | `/api/edit` | `{path,edits}` | 编辑 |',
         '',
-        '## 当前状态',
+        '---',
         '',
-        '| 项 | 值 |',
-        '|---|---|',
-        `| 公网URL | ${bridgeUrl || '(未连接)'} |`,
-        `| 本地端口 | ${ws.port || 9920} |`,
-        `| 工作区 | ${wsInfo.name} |`,
-        `| 主机 | ${wsInfo.host} |`,
-        `| 更新于 | ${ts} |`,
+        '## 模块1 · 浏览器全方位接入',
+        '',
+        '远程驱动用户浏览器，不干扰其正常使用。机制：插件/Chrome 暴露 CDP 端点 `http://127.0.0.1:29229`，',
+        '经 `/api/exec` 跑 Playwright/CDP 脚本即可全控。',
+        '',
+        '- **列举/打开/关闭标签**：CDP `Target.getTargets` / `Target.createTarget` / `Target.closeTarget`。',
+        '- **导航**：`Page.navigate {url}`；前进/后退 `Page.goBack/goForward`。',
+        '- **执行 JS**：`Runtime.evaluate {expression}` → 任意页内脚本、读写 DOM。',
+        '- **提取 DOM/正文**：`document.documentElement.outerHTML` / `document.body.innerText`；导出 MD。',
+        '- **Cookie / Storage**：`Network.getAllCookies`、`localStorage`/`sessionStorage` 经 evaluate 读写。',
+        '- **截图**：`Page.captureScreenshot` → base64 PNG。',
+        '- **页内查找**：evaluate `window.find()` 或 querySelectorAll 文本匹配。',
+        '',
+        '示例(经 exec 跑 Python + websocket 直连 CDP 或 Playwright `connect_over_cdp`)：',
+        '```bash',
+        `# 经 /api/exec: 列出浏览器标签`,
+        `curl -s http://127.0.0.1:29229/json/list`,
+        '```',
+        '',
+        '---',
+        '',
+        '## 模块2 · 插件本体全方位接入',
+        '',
+        '二合一插件本体一切模块均可由 Agent 代替用户操作：',
+        '',
+        '- **切号**：多账号列表、切换当前账号、刷新额度、复制凭证、清理、删除。',
+        '- **对话备份**：按账号分组的对话索引，查看/清空/导出。',
+        '- **反向注入**：把 Knowledge/Playbooks/Secrets/MCP/自动化/蓝图覆盖式注入到目标账号，单账号锁定。',
+        '- **MCP 市场**：搜索/安装/卸载 MCP 服务器。',
+        '- **Devin Cloud CRUD**：Sessions/Knowledge/Playbooks/Secrets/Integrations/Usage/Org/Schedules 全增删查。',
+        '- **额度查询**、**定时任务(Schedules)**。',
+        '',
+        '调用方式：经 `/api/exec` 调插件 CLI 命令，或读取插件状态文件 `~/.dao/bridge/`。',
+        '账号与凭证状态见各工作区 workspaceState；Devin Cloud API 直连 `https://app.devin.ai/api/`(带 auth1 + x-cog-org-id)。',
+        '',
+        '---',
+        '',
+        '## 模块3 · 操作用户电脑（最核心）',
+        '',
+        '经 `/api/exec` 在用户 Windows 上执行任意命令/PowerShell，"代替用户操作整机一切"。',
+        '',
+        '### 3.1 命令 / 文件 / 进程',
+        '```bash',
+        `# 任意命令`,
+        `POST /api/exec {"cmd":"powershell -c \\"Get-Process | Select -First 5\\"","timeout":15000}`,
+        `# 文件: /api/ls /api/file /api/write /api/search /api/edit`,
+        '```',
+        '',
+        '### 3.2 Windows 多 RDP 远程桌面',
+        '- 启动 mstsc：`exec {"cmd":"mstsc /v:<host>"}`；多会话并行。',
+        '- 开启远程桌面服务/防火墙、查询会话 `query session`、`tscon`/`tsdiscon` 切换会话。',
+        '- 参考仓库 `cloud/vm-replica/`(Windows 多 RDP/多会话方案)。',
+        '',
+        '### 3.3 GUI 自动化（鼠标键盘/窗口/截屏）',
+        '- **截屏**：PowerShell + .NET `System.Drawing` 全屏抓图，或 `nircmd savescreenshot`。',
+        '- **键盘**：`System.Windows.Forms.SendKeys::SendWait`，或 AutoHotkey/nircmd。',
+        '- **鼠标**：`Cursor.Position` + `mouse_event`(user32)，或 pyautogui(`exec` 跑 python)。',
+        '- **窗口管理**：`Get-Process`+user32 `ShowWindow/SetForegroundWindow`。',
+        '',
+        '---',
+        '',
+        '## 模块4 · VSCode 底层 API',
+        '',
+        '达到类 Devin Cascade 的 IDE 内自主操作。两条路：',
+        '',
+        '### 4.1 经 code CLI（exec）',
+        '```bash',
+        `POST /api/exec {"cmd":"code --list-extensions"}`,
+        `POST /api/exec {"cmd":"code --goto <file>:<line>"}`,
+        '```',
+        '- 打开文件/文件夹/diff、装卸扩展(`--install-extension`)、跑命令。',
+        '',
+        '### 4.2 经插件桥（VSCode 扩展 API）',
+        '- 打开/编辑文件 `workspace.openTextDocument` + `WorkspaceEdit`。',
+        '- 运行命令面板命令 `commands.executeCommand`。',
+        '- 终端任务 `tasks.executeTask` / 创建 `window.createTerminal`。',
+        '- 读写工作区配置 `workspace.getConfiguration`。',
+        '',
+        '---',
         '',
         '*道法自然 · 无为而无不为*',
     ].join('\n');
@@ -2390,15 +2492,25 @@ async function bridgeInjectKnowledge(): Promise<boolean> {
     const md = bridgeGenerateCloudMd();
     const knowledgeName = 'DAO Bridge 内网穿透远程操作文档';
     const trigger = '涉及所有远程操作本地电脑的需求时都触发';
-    // Delete existing if present, then create fresh (帛书·三十六「将欲拾之·必故张之」)
+    // 幂等回写 (帛书·「少则得·多则惑」): 保留首个规范条目 → 原地 PATCH 更新, 多余重复全删 →
+    // 收敛为唯一条目。杜绝旧法「删后建」在多窗口/最终一致下竞态堆积出几十条重复。
     try {
         const listResult = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1);
+        let matches: any[] = [];
         if (listResult.ok && listResult.learnings) {
-            // 帛书·「少则得·多则惑」: 删尽所有「DAO Bridge」桥文档异名残条(含早期带「·」变体),
-            // 而非仅删首个 → 收敛为唯一规范条目, 杜绝历史命名漂移累积的重复。
-            const stale = listResult.learnings.filter((k: any) => typeof k.name === 'string' && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作本地电脑')));
-            for (const k of stale) {
-                if (k && k.id) { try { await devinDeleteKnowledge(ws.devinOrgId, k.id, ws.devinAuth1); } catch { /* 守柔 */ } }
+            matches = listResult.learnings.filter((k: any) => typeof k.name === 'string' && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作本地电脑')));
+        }
+        if (matches.length) {
+            // 取最早(稳定锚点)为留存条目; 其余重复删除。
+            const keep = matches.find((k: any) => k && k.id) || matches[0];
+            for (const k of matches) {
+                if (k && k.id && k.id !== keep.id) { try { await devinDeleteKnowledge(ws.devinOrgId, k.id, ws.devinAuth1); } catch { /* 守柔 */ } }
+            }
+            if (keep && keep.id) {
+                const up = await devinUpdateKnowledge(ws.devinOrgId, keep.id, knowledgeName, md, trigger, ws.devinAuth1);
+                if (up.ok) return true;
+                // PATCH 不被后端支持时退回「删旧建新」(自愈)
+                try { await devinDeleteKnowledge(ws.devinOrgId, keep.id, ws.devinAuth1); } catch { /* 守柔 */ }
             }
         }
         const r = await devinInjectKnowledge(ws.devinOrgId, knowledgeName, md, trigger, ws.devinAuth1);
@@ -2570,6 +2682,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div class="app">
 <nav class="sb">
 <div class="ni active" data-tab="overview" onclick="sw('overview')" title="主页 Home">🏠</div>
+<div class="ni" data-tab="switch" onclick="sw('switch')" title="切号 · 账号池(移植自 RT Flow · 多账号切换/刷新/清理)">🔀</div>
 <div class="ni" data-tab="bridge" onclick="sw('bridge')" title="内网穿透 · DAO Bridge (独立板块·远程操作本地电脑)">🌐</div>
 <div class="ni" data-tab="backups" onclick="sw('backups')" title="对话 · 备份 — 本机全部 RT Flow 备份对话(全账号×全对话)">💬</div>
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 全账号批量(Knowledge/Playbook/Secret/MCP/自动化/蓝图 一处整合)">💉</div>
@@ -2589,6 +2702,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 </div>
 <div class="ct">
 <div class="tv active" id="v-overview"></div>
+<div class="tv" id="v-switch"></div>
 <div class="tv" id="v-backups"></div>
 <div class="tv" id="v-mcp"></div>
 <div class="tv" id="v-bridge"></div>
@@ -2651,6 +2765,7 @@ function sw(t){
   // devin-session-token$ → 仅Codeium API → 显示创建API Key引导
   // 自动注入模块: 无需 cog_ key, 直接拉 profile 配置 (账号无关意图)
   if(t==='inject'){ cmd('getInjectProfile'); return; }
+  if(t==='switch'){ rSwitchLoading(); cmd('loadSwitch'); return; }
   if(t==='bridge'){ rBridgeFull(); return; }
   if(t==='backups'){ rBackups(); return; }
   if(t!=='overview'&&S.auth.loggedIn){
@@ -2684,6 +2799,54 @@ function reloadActiveDataTab(){
   v.innerHTML='<div class="empty"><div class="ic">'+ic+'</div><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
   cmd('loadTabData',{tab:t});
 }
+// 切号模块 (移植自 RT Flow · 全功能面板第2模块) — 账号池列表 + 切换/刷新/清理/出库。
+function rSwitchLoading(){
+  var v=document.getElementById('v-switch');if(!v)return;
+  v.innerHTML='<div class="st">🔀 切号 · 账号池</div><div class="empty"><div class="ic">🔀</div><p style="margin:8px 0;color:var(--muted)">正在读取账号池…</p></div>';
+}
+function rSwitchData(d){
+  var v=document.getElementById('v-switch');if(!v)return;
+  var accts=(d&&d.accounts)||[];var cur=(d&&d.current)||'';
+  var h='<div class="st">🔀 切号 · 账号池 ('+accts.length+')</div>';
+  h+='<div class="card"><div class="cr"><span class="l">当前账号</span><span class="v" style="color:var(--success)">'+(cur?esc(cur):'—')+'</span></div></div>';
+  // 管理按钮 — 路由到 RT Flow (wam.*) 既有命令
+  h+='<div class="br"><button class="btn sm" onclick="cmd(&#39;wamCmd&#39;,{cmd:&#39;wam.switchAccount&#39;})">🔄 切换账号</button>';
+  h+='<button class="btn sm" onclick="cmd(&#39;wamCmd&#39;,{cmd:&#39;wam.panicSwitch&#39;})" title="限流/卡死时轮换到下一个可用账号">🚨 紧急切换</button>';
+  h+='<button class="btn sm" onclick="cmd(&#39;wamCmd&#39;,{cmd:&#39;wam.refreshAll&#39;});setTimeout(function(){cmd(&#39;loadSwitch&#39;)},1500)">🔃 刷新全部</button>';
+  h+='<button class="btn sm" onclick="cmd(&#39;wamCmd&#39;,{cmd:&#39;wam.addAccount&#39;})">➕ 添加账号</button>';
+  h+='<button class="btn sm ghost" onclick="cmd(&#39;wamCmd&#39;,{cmd:&#39;wam.openEditor&#39;})" title="打开 RT Flow 完整账号管理面板">🗂️ 完整管理面板</button></div>';
+  // 清理额度归零账号: 备份→清理→出库 一气呵成
+  h+='<div class="st" style="margin-top:12px">🌊 额度归零清理</div>';
+  h+='<div class="card"><div style="font-size:11px;color:var(--muted);margin-bottom:6px">对所有额度归零账号: <b style="color:var(--fg)">全量备份对话 → 清理数据 → 移出账号库</b>，一气呵成。</div>';
+  h+='<button class="btn sm danger" onclick="if(confirm(&#39;将对所有额度归零账号执行: 备份→清理→出库(不可逆)。确认?&#39;))cmd(&#39;cleanupZeroQuota&#39;)">🌊 清理并出库归零账号</button></div>';
+  // 账号列表
+  if(!accts.length){
+    h+='<div class="empty" style="margin-top:10px"><div class="ic">📭</div><p style="color:var(--muted)">账号池为空 · 用「添加账号」导入</p></div>';
+    v.innerHTML=h;return;
+  }
+  h+='<div class="st" style="margin-top:12px">账号列表</div>';
+  accts.forEach(function(a,i){
+    var active=a.active||a.email===cur;
+    var q=(typeof a.quota==='number')?(a.quota+'%'):(a.quota||'');
+    var badge=active?'<span class="tag" style="background:var(--success);color:#000">当前</span>':'';
+    if(a.banned)badge+='<span class="tag" style="background:var(--danger);color:#fff">封禁</span>';
+    if(q!=='')badge+='<span class="tag" style="background:'+(a.zero?'var(--danger)':'#2d5a8a')+';color:#fff">'+esc(q)+'</span>';
+    h+='<div class="card" style="display:flex;align-items:center;gap:6px;padding:7px 9px;margin-bottom:4px">';
+    h+='<span style="font-size:11px;color:var(--muted);min-width:20px">'+(i+1)+'</span>';
+    h+='<span style="flex:1;font-size:12px;font-weight:600;word-break:break-all">'+esc(a.email)+' '+badge+'</span>';
+    h+='<button class="btn sm" title="切换为此账号" onclick="cmd(&#39;switchToAccount&#39;,{email:&#39;'+esc(a.email)+'&#39;})">切换</button>';
+    h+='<button class="btn sm ghost" title="多实例路由(独立窗口打开此账号官网)" onclick="cmd(&#39;routeAccount&#39;,{email:&#39;'+esc(a.email)+'&#39;})">🌐</button>';
+    h+='</div>';
+  });
+  v.innerHTML=h;
+}
+// 四大接入模块卡片 — 渐进式披露: <details> 概览常驻, 点开看细节(原理/底座)。
+function daoBridgeModuleCard(n,ic,title,desc,how){
+  return '<details class="card" style="margin-bottom:6px"><summary style="cursor:pointer;font-weight:600;font-size:12px;list-style:none">'
+    +ic+' 模块'+n+' · '+title+'</summary>'
+    +'<div style="font-size:11px;color:var(--fg);margin:6px 0 4px">'+desc+'</div>'
+    +'<div style="font-size:10px;color:var(--muted)">实现：'+how+'</div></details>';
+}
 // 内网穿透 · DAO Bridge — 与独立穿透插件 1:1: 状态 + 命名隧道/CloudFlare + 导出文档 + 能力自测。
 function rBridgeFull(){
   var v=document.getElementById('v-bridge');if(!v)return;
@@ -2712,12 +2875,19 @@ function rBridgeFull(){
     if(b.token)h+='<div class="cr"><span class="l">Token</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(String(b.token).slice(0,8)+'…'+String(b.token).slice(-4))+'</span></div>';
     if(b.updated)h+='<div class="cr"><span class="l">更新于</span><span class="v" style="font-size:10px">'+esc(b.updated)+'</span></div>';
     h+='</div>';
-    h+='<div class="br"><button class="btn sm" onclick="cmd(&#39;copyBridgeUrl&#39;)">📋 复制URL</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;copyBridgeToken&#39;)">🔑 复制Token</button>';
+    h+='<div class="br"><button class="btn sm primary" onclick="cmd(&#39;copyBridgeInfo&#39;)" title="一键复制 公网URL + Token + Auth 头 整段接入信息">📋 复制接入信息</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeRefreshToken&#39;)" title="生新令牌并同步到所有账号; 刷新期间旧令牌仍有效不断链">♻ 刷新Token</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeRestart&#39;)">🔄 重启隧道</button>';
     h+='<button class="btn sm danger" onclick="cmd(&#39;bridgeStop&#39;)">⏹ 停止</button></div>';
   }
+  // ── 四大接入模块 · 渐进式披露(参照手机版 APK) ──
+  // 帛书「图难于其易」: 概览常驻, 细节折叠; Agent/用户按需展开某层, 不被一次塞满。
+  h+='<div class="st" style="margin-top:14px">🧩 四大接入模块 · Agent 全方位接入</div>';
+  h+='<div class="card" style="font-size:11px;color:var(--muted);margin-bottom:6px">从网页→插件→整机→IDE 逐层覆盖。点开各层看 Agent 可做什么；完整操作细节在 💻 本地 Agent MD。</div>';
+  h+=daoBridgeModuleCard('1','🌐','浏览器全方位接入','操控浏览器页面：多实例标签 / 导航 / 执行 JS / 提取 DOM / 读 Cookie+Storage / 截图 / 导出 MD / 页内查找，全程不干扰用户正常使用。','经 Chrome CDP(127.0.0.1:29229) + Playwright 脚本远程驱动。');
+  h+=daoBridgeModuleCard('2','🧩','插件本体全方位接入','代替用户操作二合一插件一切模块：切号 / 对话备份 / 反向注入(K·P·S·MCP·自动化·蓝图) / MCP 市场 / Devin Cloud CRUD / 额度 / 定时任务。','经本地插件 API 或 /api/exec 调插件命令。');
+  h+=daoBridgeModuleCard('3','💻','操作用户电脑（最核心）','整机操控：任意命令/PowerShell · 文件/进程/服务/注册表 · Windows 多 RDP 远程桌面 · GUI 自动化(鼠标键盘/窗口/全屏截图)。','/api/exec 为核心；RDP 见 cloud/vm-replica；GUI 走 .NET SendKeys / nircmd / pyautogui。');
+  h+=daoBridgeModuleCard('4','⌨️','VSCode 底层 API','调用 VSCode 工作区/编辑器/终端/命令/扩展全模块，达到类 Devin Cascade 的 IDE 内自主操作效果。','经 code CLI 或插件桥 commands.executeCommand / WorkspaceEdit / tasks。');
   // ── 模块2: CloudFlare 命名隧道 · 固定域名 ──
   h+='<div class="st" style="margin-top:14px">🔑 命名隧道 · 固定域名（可选）</div>';
   h+='<div class="card">';
@@ -2885,7 +3055,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -3159,7 +3329,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'loadSwitch', 'switchToAccount', 'routeAccount', 'wamCmd', 'cleanupZeroQuota'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -3170,6 +3340,43 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const c = readBridgeConn();
                 await vscode.env.clipboard.writeText((c && c.url) || '');
                 reply({ type: 'actionResult', command: 'copyBridgeUrl', ok: !!(c && c.url) });
+                break;
+            }
+            // ── 切号模块 (全功能面板第2模块) ──
+            case 'loadSwitch': {
+                const pool = loadAccountPool(true);
+                const cur = (ws.devinEmail || '').trim().toLowerCase();
+                const accounts = pool.map(a => ({ email: a.email, active: a.email === cur }));
+                reply({ type: 'switchData', accounts, current: ws.devinEmail || '' });
+                break;
+            }
+            case 'switchToAccount': {
+                const email = String(msg.email || '').trim().toLowerCase();
+                const acct = loadAccountPool().find(a => a.email === email);
+                if (!acct) { vscode.window.showWarningMessage('账号池中无此账号: ' + email); reply({ type: 'actionResult', command: 'switchToAccount', ok: false }); break; }
+                await setAccountSyncMode('manual');
+                const r = await devinLogin(acct.email, acct.password);
+                if (r.ok) { vscode.window.showInformationMessage('已切换到 ' + acct.email); await devinFullInject(); }
+                else vscode.window.showErrorMessage('切换失败: ' + (r.error || ''));
+                refreshReply({ type: 'actionResult', command: 'switchToAccount', ok: r.ok });
+                break;
+            }
+            case 'routeAccount': {
+                const email = String(msg.email || '').trim();
+                await vscode.commands.executeCommand('dao.routeOfficialForAccount', { email, mode: 'ide' });
+                reply({ type: 'actionResult', command: 'routeAccount', ok: true });
+                break;
+            }
+            case 'wamCmd': {
+                const c = String(msg.cmd || '');
+                if (c.startsWith('wam.')) { try { await vscode.commands.executeCommand(c); } catch (e: any) { vscode.window.showErrorMessage('RT Flow: ' + (e?.message || c)); } }
+                reply({ type: 'actionResult', command: 'wamCmd', ok: true });
+                break;
+            }
+            case 'cleanupZeroQuota': {
+                // 一气呵成: 全量备份 → 全量清理 → 移出账号库 (委托 RT Flow · 自带模态确认+完整性校验)
+                try { await vscode.commands.executeCommand('wam.devinCleanupZeroQuota'); } catch (e: any) { vscode.window.showErrorMessage('归零清理: ' + (e?.message || e)); }
+                refreshReply({ type: 'actionResult', command: 'cleanupZeroQuota', ok: true });
                 break;
             }
             case 'openBridgeMd': {
@@ -3893,6 +4100,17 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 reply({ type: 'actionResult', command: 'copyBridgeToken', ok: !!tok });
                 break;
             }
+            // 合一: 一键复制接入信息(URL + Token + Auth 头) — 帛书「少则得」: 一钮即得整段接入块。
+            case 'copyBridgeInfo': {
+                const c = readBridgeConn();
+                const url = (c && c.url) || bridgeUrl || '';
+                const tok = bridgeToken || ws.token || '';
+                const block = `公网URL: ${url}\nToken:   ${tok}\nAuth:    Authorization: Bearer ${tok}`;
+                await vscode.env.clipboard.writeText(block);
+                vscode.window.showInformationMessage('Bridge 接入信息已复制 (URL + Token)');
+                reply({ type: 'actionResult', command: 'copyBridgeInfo', ok: !!(url || tok) });
+                break;
+            }
             // 刷新 Token (移植自独立 dao-bridge refreshToken) — 帛书「夫唯不争·故无尤」:
             // 先令服务器接纳新牌(checkAuth 同时认 ws.token + bridgeToken)→旧牌不失效→换牌不断链;
             // 再回写 conn.json + 重写 MD + 反向注入到所有账号 Knowledge(新牌实时扩散)。
@@ -4140,6 +4358,37 @@ function devinJsonPost(targetUrl: string, headers: any, body: any, timeoutMs?: n
         };
         const reqHeaders = Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': DEVIN_UA, 'Content-Length': data.length }, headers || {});
         // 帛书·「反者道之动」— 直连优先，失败时降级走本地代理
+        const direct = () => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders);
+        const viaProxy = () => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }));
+        const origResolve = resolve;
+        if (needsProxy && detectedProxyPort) {
+            resolve = ((r: any) => { if (r && r.status === 0) { resolve = origResolve; viaProxy(); } else { origResolve(r); } }) as any;
+            direct();
+        } else {
+            direct();
+        }
+    });
+}
+
+// PATCH — 与 devinJsonPost 同构, 仅方法不同。用于「更新而非新建」(知识库幂等回写, 杜绝重复条目堆积)。
+function devinJsonPatch(targetUrl: string, headers: any, body: any, timeoutMs?: number): Promise<any> {
+    return new Promise((resolve) => {
+        const data = Buffer.from(asciiSafeJson(body), 'utf8');
+        const u = new URL(targetUrl);
+        const needsProxy = u.hostname === 'app.devin.ai' || u.hostname.endsWith('windsurf.com') || u.hostname === 'register.windsurf.com';
+        const makeRequest = (hostname: string, port: number, path: string, h: any) => {
+            const mod: any = hostname === '127.0.0.1' ? http : https;
+            const req = mod.request({ hostname, port, path, method: 'PATCH', headers: h, timeout: timeoutMs || 15000, rejectUnauthorized: false }, (res: any) => {
+                let d = '';
+                res.on('data', (c: Buffer) => d += c.toString());
+                res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(d), text: d }); } catch { resolve({ status: res.statusCode, json: null, text: d }); } });
+            });
+            req.on('error', (e) => resolve({ status: 0, json: null, text: e.message }));
+            req.on('timeout', () => { req.destroy(); resolve({ status: 0, json: null, text: 'timeout' }); });
+            req.write(data);
+            req.end();
+        };
+        const reqHeaders = Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': DEVIN_UA, 'Content-Length': data.length }, headers || {});
         const direct = () => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders);
         const viaProxy = () => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }));
         const origResolve = resolve;
@@ -5475,6 +5724,14 @@ async function devinInjectKnowledge(orgId: string, name: string, body: string, t
     const bareOrgId = orgId.replace(/^org-/, '');
     const r = await devinJsonPost(DEVIN_APP + '/api/org-' + bareOrgId + '/learning', { 'Authorization': 'Bearer ' + auth1, 'x-cog-org-id': orgId }, { name: name, body: body, trigger_description: triggerDescription, pinned_repo: null, parent_folder_id: null, is_enabled: true });
     if (r.status === 200 || r.status === 201) return { ok: true };
+    return { ok: false };
+}
+
+// 原地更新已有知识条目 (幂等回写, 防重复堆积)。后端不支持 PATCH 时返回 ok:false 由调用方退回删建。
+async function devinUpdateKnowledge(orgId: string, id: string, name: string, body: string, triggerDescription: string, auth1: string): Promise<{ ok: boolean }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const r = await devinJsonPatch(DEVIN_APP + '/api/org-' + bareOrgId + '/learning/' + id, { 'Authorization': 'Bearer ' + auth1, 'x-cog-org-id': orgId }, { name: name, body: body, trigger_description: triggerDescription, is_enabled: true });
+    if (r.status === 200 || r.status === 201 || r.status === 204) return { ok: true };
     return { ok: false };
 }
 
