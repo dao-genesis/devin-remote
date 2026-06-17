@@ -3405,6 +3405,11 @@ function _writeAgentApi() {
 
 // ═══ 对话追踪前端 HTML 片段 (buildHtml 内嵌) ═══
 // 读 Hub 数据 + 本地 .pb 目录 → 生成对话追踪区域 HTML
+// v4.9.9 · F2/F3 真根因 — 对话区 html 内嵌每秒变动的 staleSec("Ns前")/sizeKB/陈旧图标,
+//   且其"· 分隔符 + 图标"会随 staleSec 0↔>0 出现/消失 → 即便屏蔽数值, html 串仍每秒不同 →
+//   conv-section 每秒整段重建 → 闪。治本: 签名只取"结构性数据"(对话uuid集 + 硬状态 + 计数 + 灯色),
+//   不含任何 staleSec/sizeKB/age/陈旧切换 → 纯时间滴答不再触发任何 DOM 重建。
+let _convStructSig = "";
 function _getConvTrackingHtml() {
   // v3.11.4: 每次渲染前尝试从 vscdb 裸读刷新标题 (增量·有去重·10s节流)
   _refreshTitlesFromVscdbRaw();
@@ -3412,6 +3417,7 @@ function _getConvTrackingHtml() {
   const backupDir = _cfg("conversationBackupDir", "") || CONV_BACKUP_DEFAULT;
   // ── 无 Hub 数据时 · 显示简要状态 ──
   if (!hub || !hub.ts) {
+    _convStructSig = "nohub:" + (_autoBackupDone ? "1" : "0");
     return `<div class="conv-section">
 <div class="conv-header" onclick="toggleConv()"><span>&#128172; 对话追踪</span><span id="convArrow">&#9660;</span></div>
 <div class="conv-body" id="convBody">
@@ -3637,6 +3643,27 @@ ${_dvBackupPanelHtml()}
 
   // v3.7.7: badge 用 visibleStuck.length (可见卡住数 · 与列表完全一致)
   const _badgeCount = visibleStuck.length;
+  // v4.9.9 · 结构签名 (只含会"改变页面结构/语义"的字段; 刻意排除 staleSec/sizeKB/age/陈旧切换)
+  _convStructSig = JSON.stringify({
+    d: dotCls,
+    cc: _visibleConversationCount,
+    fc: _visibleFlowCount,
+    es: _effectiveStuck,
+    ee: _effectiveError,
+    s: _streamingFiltered.map(
+      (c) =>
+        (c.uuid || c._displayTitle || "") +
+        "|" +
+        (c.isAwaitingUser ? "A" : "") +
+        (c.state === "warning" || c.state === "stuck" ? "W" : "") +
+        (c.state === "no_pb" ? "N" : ""),
+    ),
+    cur:
+      _streamingFiltered.length === 0 && hub.current
+        ? (hub.current.uuid || "") + "|" + (hub.current.phase || "")
+        : "",
+    k: visibleStuck.map((s) => (s.uuid || s._displayTitle || "") + "|" + s.level),
+  });
   return `<div class="conv-section">
 <div class="conv-header" onclick="toggleConv()"><span>&#128172; 对话追踪</span>${_badgeCount > 0 ? '<span class="cv-badge">' + _badgeCount + "</span>" : ""}<span id="convArrow">&#9660;</span></div>
 <div class="conv-body" id="convBody">
@@ -10161,7 +10188,8 @@ function _convSig(html) {
 }
 function _broadcastConvSection() {
   const html = _getConvTrackingHtml();
-  _broadcastMsg({ type: "convUpdate", html, sig: _convSig(html) });
+  // v4.9.9 · 优先用结构签名(纯数据·无易变装饰); 退化用 html 屏蔽签名
+  _broadcastMsg({ type: "convUpdate", html, sig: _convStructSig || _convSig(html) });
 }
 
 // v3.17.0 · 宿主回调: 全功能面板把第2 Tab 的 iframe 注册为真切号面板的宿主
