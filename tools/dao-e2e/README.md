@@ -65,21 +65,32 @@ npx wrangler deploy          # 部署到 你的子域.workers.dev
 App「🔑 命名隧道」面板支持登录 Cloudflare（可用 GitHub 账号）→ 自有域名隧道。
 适合想要**固定公网域名**的场景。
 
-### 路线 B · 每设备本地 cloudflared 快速隧道 —— 现状与限制（如实说明）
+### 路线 B · 每设备本地 cloudflared 快速隧道 —— **v0.15.15 已在移动端实现**
 桌面版 dao-vsix 通过 `tools/fetch-cloudflared.js` 拉取 cloudflared 可执行文件，
-在本机起 quick tunnel，做到「每设备一条免登录隧道」。
+在本机起 quick tunnel，做到「每设备一条免登录隧道」。**移动端 v0.15.15 起同样支持**：
+穿透面板「🌐 去中心化隧道」开关一开，本机自带的 cloudflared 即建立免费快速隧道，
+把设备直接暴露成 `https://xxx.trycloudflare.com` —— 完全不经任何共享 Worker、
+每设备一条独立隧道、无需 Cloudflare 账号、无需登录、无需手动。
 
-**移动端目前不可直接照搬**，原因：
-- Android 普通应用**不便捷地内置并 exec 一个 ~30MB 的 Go 原生二进制**
-  （需按 ABI 打包进 `jniLibs`、用 `ProcessBuilder` 拉起、并处理后台存活）；
-- 现架构是「设备**出站** WSS 连中继」，而 cloudflared quick tunnel 需要「设备**入站**
-  本地 HTTP server」，属于另一套拓扑，改造量大且在国内网络下 quick tunnel 域名
-  (`*.trycloudflare.com`) 同样可能被屏蔽。
+落地的三项关键工程（已完成并在模拟器端到端验证）：
+1. **按 ABI 打包 cloudflared**：用 Go + Android NDK 以 cgo 交叉编译 `GOOS=android`
+   的 cloudflared（`android/arm64` + `android/amd64`，使用 Android 系统 DNS 解析器），
+   作为 `libcloudflared.so` 打包进 `app/src/main/jniLibs/{arm64-v8a,x86_64}/`。
+   安装时 Android 把它解压到 `nativeLibraryDir`（该目录可执行），用 `ProcessBuilder`
+   拉起，绕开 Android 10+ 禁止从应用数据目录 exec 的限制。
+2. **内置本地入站 HTTP server**（`LocalServer.java`，仅绑 `127.0.0.1:<临时端口>`）：
+   协议与 dao-relay Worker **完全一致**（`POST /relay/<session>` + `Bearer <token>`，
+   body 可为 E2E 信封），把入站请求桥接到引擎 `serveLocal`（E2E 解密→RPC→重封）。
+   故 `dao-e2e` 驱动工具**无需任何改动**，把 endpoint 换成 trycloudflare URL 即可。
+3. **前台服务保活**：`RelayService`（前台服务 + `PARTIAL_WAKE_LOCK`）持有
+   `cloudflared` 进程与 `LocalServer`，息屏/Doze 下不被节流；`cloudflared` 强制
+   `--protocol http2`（走 TCP，QUIC/UDP 常被 NAT/运营商拦）以求稳。
 
-**因此移动端的「每用户自己的免费隧道」实践路径是路线 A / C**（用自己的 Worker
-或命名隧道），其隐私效果与「每设备独立隧道」一致：账号数据只过你自己的端点；
-叠加 E2E 后，连你自己的端点也只看得到密文。
-
-> 若未来要在移动端做真·路线 B：需 (1) 按 ABI 打包 cloudflared、(2) 内置本地
-> HTTP server（如 NanoHTTPD）把入站请求桥接到引擎 RPC、(3) 前台服务保活
-> cloudflared 进程。这是一项独立工程，本次未实现。
+> 注：快速隧道 URL **每次重启会变**（trycloudflare 的设计）；要固定公网域名请用
+> 路线 C（命名隧道）。在国内网络下 `*.trycloudflare.com` 仍可能被屏蔽——此时
+> 自动回退共享 Worker（仍并行保留），叠加 E2E 隐私无忧；或改用路线 A / C。
+>
+> 用 `dao-e2e` 经去中心化隧道驱动（与经 Worker 完全相同，只换 endpoint）：
+> ```python
+> dao_e2e.rpc("https://xxx.trycloudflare.com/relay/rtflow-xxxx", token, e2e_key, "getModuleIndex")
+> ```

@@ -1116,7 +1116,9 @@ public class MainActivity extends AppCompatActivity {
             return bo.toString("UTF-8");
         } catch (Exception e) { return ""; }
     }
-    /** 冷启动: 取/建设备唯一 session(防卸载持久化), 轮换 token, 落地 relay-config.json。 */
+    /** 冷启动: 取/建设备唯一身份(session/token/e2eKey 均防卸载持久化、稳定复用), 落地 relay-config.json。
+     *  P1 修复: token 不再每次冷启动轮换——复用持久化 token, 端点(URL+token)长期稳定, 驱动方无需每次重拿。
+     *  仅当身份里无 token(首次)或用户显式「刷新 Token」时才生成新 token。 */
     private void ensureRelayIdentity() {
         try {
             JSONObject id;
@@ -1129,10 +1131,12 @@ public class MainActivity extends AppCompatActivity {
             // 端到端加密口令: 设备唯一、防卸载持久化、从不上送中继 → 中继(含共享 Worker)只见密文。
             String e2eKey = id.optString("e2eKey", "");
             if (e2eKey.isEmpty()) e2eKey = randHex(32);
-            id.put("url", url); id.put("session", session); id.put("e2eKey", e2eKey);
-            vaultWrite("relay-identity", id.toString());   // 身份(url+session+e2eKey)防卸载持久化
+            // P1: token 持久化复用 — 仅首次(身份无 token)时生成, 之后每次冷启动沿用同一 token。
+            String token = id.optString("token", "");
+            if (token.isEmpty()) token = randHex(32);
+            id.put("url", url); id.put("session", session); id.put("e2eKey", e2eKey); id.put("token", token);
+            vaultWrite("relay-identity", id.toString());   // 身份(url+session+token+e2eKey)防卸载持久化
 
-            String token = randHex(32);                    // 每次冷启动轮换
             String base = url.replaceAll("/+$", "");
             JSONObject cfg = new JSONObject();
             cfg.put("url", url); cfg.put("token", token); cfg.put("session", session);
@@ -1143,6 +1147,16 @@ public class MainActivity extends AppCompatActivity {
             writeRelayConfig(cfg.toString());
         } catch (Exception ignored) {}
     }
+    /** 显式刷新 token: 作废身份里的旧 token → 重新生成并落地。供穿透面板「刷新 Token」调用。 */
+    private void rotateRelayTokenForce() {
+        try {
+            String saved = vaultRead("relay-identity");
+            JSONObject id = (saved != null && saved.trim().startsWith("{")) ? new JSONObject(saved) : new JSONObject();
+            id.put("token", randHex(32));   // 新 token, 旧的即刻作废
+            vaultWrite("relay-identity", id.toString());
+        } catch (Exception ignored) {}
+        ensureRelayIdentity();   // 复用刚写入的新 token, 落地 relay-config.json
+    }
     /** 用户在穿透面板手动保存配置: 持久化其 url/session 身份(token 仍每冷启动轮换); 空配置=重置为自动身份。 */
     private void applyRelayConfig(String json) {
         try {
@@ -1152,18 +1166,20 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
             JSONObject in = new JSONObject(json);
+            JSONObject old = null;
+            try { String s = vaultRead("relay-identity"); if (s != null && s.trim().startsWith("{")) old = new JSONObject(s); } catch (Exception ignored) {}
             String url = in.optString("url", defaultRelayBase());
             String session = in.optString("session", "");
             if (session.isEmpty()) session = "rtflow-" + randHex(16);
+            // token: 用户显式填则用之; 否则沿用持久化 token(P1: 不再随机轮换); 仍无才首次生成。
             String token = in.optString("token", "");
+            if (token.isEmpty() && old != null) token = old.optString("token", "");
             if (token.isEmpty()) token = randHex(32);
             // e2eKey: 用户显式提供则用之; 否则沿用旧身份, 仍无则新生成 (端到端加密口令不轮换)。
             String e2eKey = in.optString("e2eKey", "");
-            if (e2eKey.isEmpty()) {
-                try { String old = vaultRead("relay-identity"); if (old != null && old.trim().startsWith("{")) e2eKey = new JSONObject(old).optString("e2eKey", ""); } catch (Exception ignored) {}
-            }
+            if (e2eKey.isEmpty() && old != null) e2eKey = old.optString("e2eKey", "");
             if (e2eKey.isEmpty()) e2eKey = randHex(32);
-            JSONObject id = new JSONObject(); id.put("url", url); id.put("session", session); id.put("e2eKey", e2eKey);
+            JSONObject id = new JSONObject(); id.put("url", url); id.put("session", session); id.put("e2eKey", e2eKey); id.put("token", token);
             vaultWrite("relay-identity", id.toString());
             String base = url.replaceAll("/+$", "");
             JSONObject cfg = new JSONObject();
@@ -1876,8 +1892,18 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void saveRelayConfig(String json) {
             applyRelayConfig(json);   // 去中心化: 持久化设备身份(url/session) + 落地 relay-config.json
         }
-        // 面板「刷新Token」: 保留 url/session 身份, 仅轮换 token (旧 token 立即失效)
-        @JavascriptInterface public void rotateRelayToken() { ensureRelayIdentity(); }
+        // 面板「刷新Token」: 保留 url/session 身份, 仅强制轮换 token (旧 token 立即失效)
+        @JavascriptInterface public void rotateRelayToken() { rotateRelayTokenForce(); }
+        // ── 路线B 去中心化隧道: 代理到 RelayService (引擎进程持有 cloudflared) ──
+        @JavascriptInterface public String tunnelStat() { return RelayService.tunnelStatus; }
+        @JavascriptInterface public boolean isTunnelEnabled() {
+            RelayService s = RelayService.instance;
+            return s != null && s.tunnelEnabledFlag();
+        }
+        @JavascriptInterface public void setTunnelEnabled(boolean on) {
+            RelayService s = RelayService.instance;
+            if (s != null) s.setTunnelEnabledExternal(on);
+        }
         @JavascriptInterface public void clip(String text) {
             main.post(() -> {
                 try { ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
