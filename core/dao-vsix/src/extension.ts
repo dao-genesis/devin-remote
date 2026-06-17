@@ -2330,10 +2330,21 @@ function bridgeGenerateCloudMd(): string {
         '',
         '## 模块1 · 浏览器全方位接入',
         '',
-        '远程驱动用户浏览器，不干扰其正常使用。机制：插件/Chrome 暴露 CDP 端点 `http://127.0.0.1:29229`，',
-        '经 `/api/exec` 跑 Playwright/CDP 脚本即可全控。',
+        '远程驱动用户浏览器，不干扰其正常使用。机制：经 `/api/exec` 用**固定调试端口**启动一个隔离 Chrome 实例，',
+        '暴露 CDP 端点 `http://127.0.0.1:29229`，再跑 Playwright/CDP 脚本即可全控。',
+        '> 注：CDP 端口**不是常驻**的——需先按下方「步骤1」启动带 `--remote-debugging-port` 的 Chrome 才会出现。',
+        '> 插件自身的多账号浏览器(devin_web)用的是**每实例动态端口**并自动注入 auth1_session 直登，与本 Agent 通道独立、互不干扰。',
         '',
-        '- **列举/打开/关闭标签**：CDP `Target.getTargets` / `Target.createTarget` / `Target.closeTarget`。',
+        '**步骤1 · 启动可控浏览器实例（隔离 profile，不动用户现有 Chrome）：**',
+        '```bash',
+        '# 经 /api/exec (Windows): 固定端口 29229 + 独立 user-data-dir',
+        'POST /api/exec {"cmd":"\\"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe\\\" --remote-debugging-port=29229 --user-data-dir=%TEMP%\\\\dao_cdp --no-first-run about:blank","timeout":8000}',
+        '# 之后在同一 user-data-dir 再开标签即复用该实例(同 CDP 端口):',
+        '# POST /api/exec {"cmd":"... chrome.exe --user-data-dir=%TEMP%\\\\dao_cdp https://app.devin.ai"}',
+        '```',
+        '',
+        '**步骤2 · 经 CDP 控制：**',
+        '- **列举/打开/关闭标签**：`GET /json/list`、`GET /json/list` 中每个 target 含 `title`/`url`/`webSocketDebuggerUrl`；`Target.createTarget` / `Target.closeTarget`。',
         '- **导航**：`Page.navigate {url}`；前进/后退 `Page.goBack/goForward`。',
         '- **执行 JS**：`Runtime.evaluate {expression}` → 任意页内脚本、读写 DOM。',
         '- **提取 DOM/正文**：`document.documentElement.outerHTML` / `document.body.innerText`；导出 MD。',
@@ -2342,7 +2353,7 @@ function bridgeGenerateCloudMd(): string {
         '- **页内查找**：evaluate `window.find()` 或 querySelectorAll 文本匹配。',
         '',
         '```bash',
-        '# 经 /api/exec: 列出浏览器标签',
+        '# 经 /api/exec: 列出浏览器标签(WS 级控制用 webSocketDebuggerUrl + Playwright/手写 CDP)',
         'curl -s http://127.0.0.1:29229/json/list',
         '```',
         '',
@@ -2842,7 +2853,7 @@ function rBridgeFull(){
   // ── 四大接入模块 · 平铺常驻(去渐进式披露) ──
   h+='<div class="st" style="margin-top:14px">🧩 四大接入模块 · Agent 全方位接入</div>';
   h+='<div class="card" style="font-size:11px;color:var(--muted);margin-bottom:6px">从网页→插件→整机→IDE 逐层覆盖。四层全部命令与内网穿透信息均在下方「导出接入文档」的<b style="color:var(--fg)">单一 MD</b> 中。</div>';
-  h+=daoBridgeModuleCard('1','🌐','浏览器全方位接入','操控浏览器页面：多实例标签 / 导航 / 执行 JS / 提取 DOM / 读 Cookie+Storage / 截图 / 导出 MD / 页内查找，全程不干扰用户正常使用。','经 Chrome CDP(127.0.0.1:29229) + Playwright 脚本远程驱动。');
+  h+=daoBridgeModuleCard('1','🌐','浏览器全方位接入','操控浏览器页面：多实例标签 / 导航 / 执行 JS / 提取 DOM / 读 Cookie+Storage / 截图 / 导出 MD / 页内查找，全程不干扰用户正常使用。','先经 /api/exec 启动带 --remote-debugging-port=29229 的隔离 Chrome，再经 CDP + Playwright 驱动。');
   h+=daoBridgeModuleCard('2','🧩','插件本体全方位接入','代替用户操作二合一插件一切模块：切号 / 对话备份 / 反向注入(K·P·S·MCP·自动化·蓝图) / MCP 市场 / Devin Cloud CRUD / 额度 / 定时任务。','经本地插件 API 或 /api/exec 调插件命令。');
   h+=daoBridgeModuleCard('3','💻','操作用户电脑（最核心）','整机操控：任意命令/PowerShell · 文件/进程/服务/注册表 · Windows 多 RDP 远程桌面 · GUI 自动化(鼠标键盘/窗口/全屏截图)。','/api/exec 为核心；RDP 见 cloud/vm-replica；GUI 走 .NET SendKeys / nircmd / pyautogui。');
   h+=daoBridgeModuleCard('4','⌨️','VSCode 底层 API','调用 VSCode 工作区/编辑器/终端/命令/扩展全模块，达到类 Devin Cascade 的 IDE 内自主操作效果。','经 code CLI 或插件桥 commands.executeCommand / WorkspaceEdit / tasks。');
