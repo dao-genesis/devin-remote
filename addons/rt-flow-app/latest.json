@@ -1,6 +1,6 @@
 {
-  "versionCode": 33,
-  "versionName": "0.15.2",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.2/DevinCloud-mobile-v0.15.2.apk",
-  "notes": "v0.15.2\n· 彻底修复卸载/重装丢数据: 账号库随「所有文件访问」授权后自动从共享保险箱(Documents/DevinCloud)回读, 多次重试确保权限到位后必恢复\n· 回读按 id/email 合并, 永不覆盖、永不丢号, 兼容任意历史版本字段\n· 引擎(中继)侧也持久化/回读账号到保险箱, UI 未开也不丢"
+  "versionCode": 34,
+  "versionName": "0.15.3",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.3/DevinCloud-mobile-v0.15.3.apk",
+  "notes": "v0.15.3\n· 彻底修复整页翻译: 弃用已失效的 Google 网页翻译挂件, 改用 Edge 浏览器内置免费翻译引擎(无 key·国内可直连), 遍历页面文本节点逐段翻译并回填\n· 译文经原生桥请求, 绕开页面 CSP/同源限制, 任意网站都能翻; 动态加载内容(无限滚动/SPA)增量翻译; 再点一下即时恢复原文\n· 含 v0.15.2 全部修复(卸载/重装账号自动从共享保险箱恢复)"
 }
