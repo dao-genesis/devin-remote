@@ -1,0 +1,120 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Shizuku · 自我 ADB</title>
+<style>
+:root{--fg:#cdd3de;--desc:#8b949e;--link:#4daafc;--inb:#161b22;--bd:#30363d;--btn:#1f6feb;--btnh:#388bfd}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;font-size:13px;padding:10px;color:var(--fg);background:#0e1116;overflow-y:auto}
+h3{margin:12px 0 5px;font-size:13px;color:var(--link)}
+.muted{color:var(--desc);font-size:12px;line-height:1.7}
+input,textarea,button{font-size:13px;margin:3px 0;width:100%;padding:8px 10px;background:var(--inb);color:var(--fg);border:1px solid var(--bd);border-radius:5px}
+button{background:var(--btn);color:#fff;cursor:pointer;border:none}
+button:active{opacity:.8}
+button:disabled{background:#30363d;color:#666;cursor:default}
+.row{display:flex;gap:6px}.row button{flex:1}
+.card{border:1px solid var(--bd);border-radius:6px;padding:11px;margin-top:9px;background:#11161d}
+.section{margin-top:12px;padding-top:8px;border-top:1px solid var(--bd)}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;background:#888;vertical-align:middle}
+.dot.ok{background:#3fb950}.dot.warn{background:#d29922}.dot.bad{background:#f85149}
+.warn{background:#2d2410;border:1px solid #6b5712;border-radius:6px;padding:10px;margin-top:9px;font-size:12px;color:#e3b341;line-height:1.7}
+.ok{background:#12261a;border:1px solid #1f6f3a;border-radius:6px;padding:10px;margin-top:9px;font-size:12px;color:#7ee2a8;line-height:1.7}
+pre{background:#0a0d12;border:1px solid var(--bd);border-radius:6px;padding:9px;margin-top:8px;font-size:11px;white-space:pre-wrap;word-break:break-all;color:#a9b6c4;max-height:240px;overflow:auto}
+ol{margin:6px 0 0 18px;line-height:1.8;font-size:12px;color:var(--desc)}
+.foot{text-align:center;color:#586069;font-size:11px;margin:16px 0 6px}
+.toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:9px 14px;font-size:13px;opacity:0;transition:.2s;pointer-events:none;z-index:20;max-width:90%}
+.toast.show{opacity:1}
+</style></head><body>
+
+<h3>⚡ Shizuku · 自我 ADB（ADB 级持久权限）</h3>
+<div class="muted">Android 安全模型<b>禁止</b> App 凭空给自己授予 ADB/无障碍/全文件等权限。<b>Shizuku</b> 是唯一合规路线——<b>一次性激活</b>后，一个 shell 级特权进程常驻，本 App 即可<b>自我授予一切权限</b>、跑 <code>adb shell</code> 命令，<b>持久稳定（接近有线 USB 的可靠性）</b>。</div>
+
+<div class="card">
+  <div><span id="dot" class="dot"></span><b id="stat">检测中…</b></div>
+  <div id="statDesc" class="muted" style="margin-top:5px">—</div>
+  <div id="actions" style="margin-top:9px"></div>
+</div>
+
+<div id="grantBox" style="display:none">
+  <div class="section">
+    <h3>一键自我授权</h3>
+    <div class="muted">用 Shizuku 自动开启：全文件访问、无障碍服务、联系人/短信/通话记录/电话/相册/通知等危险权限——免去逐个手动设置。</div>
+    <button onclick="grantAll()" style="background:#238636;margin-top:8px">⚡ 自我授予一切权限</button>
+    <pre id="grantOut" style="display:none"></pre>
+  </div>
+  <div class="section">
+    <h3>ADB Shell（高级）</h3>
+    <div class="muted">以 shell uid(2000) 执行任意 adb 命令。例：<code>dumpsys battery</code>、<code>wm size</code>、<code>input tap 500 500</code>。</div>
+    <input id="cmd" placeholder="dumpsys battery" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button onclick="runShell()">执行</button>
+    <pre id="shellOut" style="display:none"></pre>
+  </div>
+</div>
+
+<div id="howto" class="warn" style="display:none">
+  <b>如何一次性激活 Shizuku</b>（任选其一，之后长期有效）：
+  <ol>
+    <li><b>无线调试（安卓 11+，无需电脑）</b>：系统设置→开发者选项→开启「无线调试」→ 打开 Shizuku App→「通过无线调试启动」，按提示配对一次。</li>
+    <li><b>插一次电脑（USB）</b>：电脑装 adb，手机开 USB 调试，运行 Shizuku 提供的 <code>adb shell sh /storage/emulated/0/Android/.../start.sh</code>。</li>
+    <li><b>Root</b>：已 root 直接在 Shizuku 内一键启动。</li>
+  </ol>
+  <div style="margin-top:6px">激活只需一次；重启手机后在 Shizuku 内再点一下启动即可（无线调试方式）。</div>
+</div>
+
+<div class="foot" id="foot">Devin Cloud 手机版 · 道法自然</div>
+<div class="toast" id="toast"></div>
+
+<script>
+var N = window.Native || {};
+function toast(s){ var t=document.getElementById('toast'); t.textContent=s; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(function(){t.classList.remove('show');},2000); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
+
+function refresh(){
+  var st = 0; try{ st = N.shizukuStatus(); }catch(e){}
+  var dot=document.getElementById('dot'), stat=document.getElementById('stat'),
+      desc=document.getElementById('statDesc'), act=document.getElementById('actions'),
+      grantBox=document.getElementById('grantBox'), howto=document.getElementById('howto');
+  dot.className='dot'; act.innerHTML=''; grantBox.style.display='none'; howto.style.display='none';
+  if(st===3){
+    dot.classList.add('ok'); stat.textContent='已就绪 · ADB 级权限可用';
+    desc.textContent='Shizuku 运行中且已授权，本 App 可自我授予权限 / 执行 adb shell。';
+    grantBox.style.display='block';
+  } else if(st===2){
+    dot.classList.add('warn'); stat.textContent='运行中 · 等待授权';
+    desc.textContent='Shizuku 已运行，请授予本 App 权限。';
+    act.innerHTML='<button onclick="reqPerm()">授予本 App Shizuku 权限</button>';
+  } else if(st===1){
+    dot.classList.add('warn'); stat.textContent='已安装 · 未启动';
+    desc.textContent='Shizuku App 已安装但特权进程未运行，请按下方说明激活一次。';
+    act.innerHTML='<button onclick="openMgr()">打开 Shizuku 启动</button>';
+    howto.style.display='block';
+  } else {
+    dot.classList.add('bad'); stat.textContent='未安装 Shizuku';
+    desc.textContent='需先安装 Shizuku App（开源免费），再按下方说明激活一次。';
+    act.innerHTML='<button onclick="openMgr()">下载 / 安装 Shizuku</button>';
+    howto.style.display='block';
+  }
+}
+function reqPerm(){ try{ N.shizukuRequest(); }catch(e){} toast('已弹出授权请求'); setTimeout(refresh,1500); }
+function openMgr(){ try{ N.shizukuOpenManager(); }catch(e){} }
+function grantAll(){
+  toast('授权中…');
+  setTimeout(function(){
+    var out=''; try{ out=N.shizukuGrantAll(); }catch(e){ out='调用失败: '+e; }
+    var pre=document.getElementById('grantOut'); pre.style.display='block'; pre.textContent=out;
+    toast('已执行'); refresh();
+  },30);
+}
+function runShell(){
+  var c=document.getElementById('cmd').value.trim(); if(!c){toast('请输入命令');return;}
+  var pre=document.getElementById('shellOut'); pre.style.display='block'; pre.textContent='执行中…';
+  setTimeout(function(){
+    var r='{}'; try{ r=N.shizukuShell(c); }catch(e){ r='{"ok":false,"error":"'+e+'"}'; }
+    try{ var o=JSON.parse(r); pre.textContent=(o.ok?'[exit '+o.exit+']\n':'[失败 exit '+o.exit+'] '+(o.error||'')+'\n')+esc(o.out||''); }
+    catch(e){ pre.textContent=r; }
+  },30);
+}
+try{ var v=localStorage.getItem('rtflow.ver'); if(v) document.getElementById('foot').textContent='Devin Cloud 手机版 · v'+v+' · 道法自然'; }catch(e){}
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body></html>

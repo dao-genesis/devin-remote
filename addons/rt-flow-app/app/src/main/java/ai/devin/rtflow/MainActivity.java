@@ -80,12 +80,14 @@ public class MainActivity extends AppCompatActivity {
     static final String CLOUD = "rtflow://cloud";
     static final String VPN = "rtflow://vpn";
     static final String SCRIPTS = "rtflow://scripts";
+    static final String SHIZUKU = "rtflow://shizuku";
     static final String DEVIN = "https://app.devin.ai/";
     private static final String SW_URL = "file:///android_asset/engine/switch.html";
     private static final String TU_URL = "file:///android_asset/engine/tunnel.html";
     private static final String CL_URL = "file:///android_asset/engine/cloud.html";
     private static final String VPN_URL = "file:///android_asset/engine/vpn.html";
     private static final String SCR_URL = "file:///android_asset/engine/userscripts.html";
+    private static final String SHZ_URL = "file:///android_asset/engine/shizuku.html";
 
     // 搜索引擎 (国内环境可切百度) — 持久化于 SharedPreferences
     private static final String PREF_SEARCH = "search_engine";
@@ -150,6 +152,17 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         sInstance = this;
+        // Shizuku 授权结果: 授权成功后自动自我授予一切权限 (存储/无障碍/危险权限)
+        try {
+            rikka.shizuku.Shizuku.addRequestPermissionResultListener((requestCode, grantResult) -> {
+                if (requestCode == ShizukuManager.REQ_CODE && grantResult == PackageManager.PERMISSION_GRANTED) {
+                    new Thread(() -> {
+                        final String r = ShizukuManager.grantAll(MainActivity.this);
+                        main.post(() -> toast("Shizuku 已授权, 已自动授予权限"));
+                    }).start();
+                }
+            });
+        } catch (Throwable ignored) {}
         if (Build.VERSION.SDK_INT >= 33 &&
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
@@ -399,6 +412,7 @@ public class MainActivity extends AppCompatActivity {
         mu.add(0, 9, 7, "浏览历史");
         mu.add(0, 12, 8, "书签收藏");
         mu.add(0, 14, 9, "用户脚本 (油猴)");
+        mu.add(0, 15, 10, "Shizuku 权限 (自我 ADB)");
         android.view.SubMenu page = mu.addSubMenu(0, 100, 9, "页面工具");
         page.add(0, 20, 0, "页内查找");
         page.add(0, 21, 1, cur() != null && cur().desktop ? "切回移动版" : "桌面版网站");
@@ -419,6 +433,7 @@ public class MainActivity extends AppCompatActivity {
                 case 9: showHistory(); return true;
                 case 12: showBookmarks(); return true;
                 case 14: newTab(SCRIPTS, null); return true;
+                case 15: newTab(SHIZUKU, null); return true;
                 case 20: case 25: toggleFindBar(); return true;
                 case 21: toggleDesktop(); return true;
                 case 22: readerMode(); return true;
@@ -752,6 +767,7 @@ public class MainActivity extends AppCompatActivity {
         else if (CLOUD.equals(url)) { real = CL_URL; tab.internal = true; }
         else if (VPN.equals(url)) { real = VPN_URL; tab.internal = true; }
         else if (SCRIPTS.equals(url)) { real = SCR_URL; tab.internal = true; }
+        else if (SHIZUKU.equals(url)) { real = SHZ_URL; tab.internal = true; }
         tab.url = real;
         tab.web.loadUrl(real);
     }
@@ -1740,6 +1756,25 @@ public class MainActivity extends AppCompatActivity {
                 for (int i = 0; i < all.length(); i++) { org.json.JSONObject s = all.optJSONObject(i);
                     if (s != null && id.equals(s.optString("id"))) { s.put("enabled", on); break; } }
                 usSaveAll(all); } catch (Exception e) {}
+        }
+        // ── Shizuku (自我 ADB) ──
+        @JavascriptInterface public int shizukuStatus() { return ShizukuManager.status(MainActivity.this); }
+        @JavascriptInterface public void shizukuRequest() { main.post(ShizukuManager::requestPermission); }
+        @JavascriptInterface public String shizukuGrantAll() { return ShizukuManager.grantAll(MainActivity.this); }
+        @JavascriptInterface public String shizukuShell(String cmd) {
+            if (cmd == null || cmd.isEmpty()) return "{\"ok\":false,\"error\":\"空命令\"}";
+            if (!ShizukuManager.hasPermission()) return "{\"ok\":false,\"error\":\"Shizuku 未授权\"}";
+            String[] r = ShizukuManager.exec(cmd);
+            try { org.json.JSONObject o = new org.json.JSONObject();
+                o.put("ok", "0".equals(r[0])); o.put("exit", r[0]); o.put("out", r.length > 1 ? r[1] : "");
+                return o.toString(); } catch (Exception e) { return "{\"ok\":false}"; }
+        }
+        @JavascriptInterface public void shizukuOpenManager() {
+            main.post(() -> { try {
+                Intent i = getPackageManager().getLaunchIntentForPackage(ShizukuManager.SHIZUKU_PKG);
+                if (i != null) startActivity(i);
+                else { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/download/"))); }
+            } catch (Exception e) { toast("无法打开 Shizuku"); } });
         }
         @JavascriptInterface public String relayStatus() { return RelayService.lastStatus; }
         @JavascriptInterface public void relayRestart() { main.post(() -> { stopService(new Intent(MainActivity.this, RelayService.class)); startRelay(); }); }
