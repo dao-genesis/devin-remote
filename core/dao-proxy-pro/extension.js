@@ -5137,31 +5137,50 @@ function getEaConfigHtml(port, nonce) {
     fJson('/origin/canon').then(function(d) { if (d && d.canon) { var s = _e1El('e1Canon'); if (s) s.value = d.canon; } }).catch(function() {});
     _e1LoadPreview();
   }
+  // v9.9.299 · 「编」兜底稳态: 无 custom 时永以 /origin/custom_sp 的 default_sp 填 textarea
+  //   (随 _activeCanon 动态 · 帛书老子/道藏阴符经 名实相符), 不再回退 /origin/preview
+  //   ——preview 依赖实时捕获的 lastInject, 无对话/捕获过期时为空 → 旧版「跳有跳没」根因。
+  function _e1FillEdit(tx, st, focus) {
+    if (!tx) return;
+    fJson('/origin/custom_sp').then(function(cs) {
+      if (cs && cs.has_custom && cs.sp) {
+        tx.value = cs.sp;
+        if (st) st.textContent = '自定义 · ' + (cs.chars || cs.sp.length) + '字';
+      } else if (cs && cs.default_sp) {
+        tx.value = cs.default_sp;
+        if (st) st.textContent = '未设 · ' + (cs.default_source_name || cs.default_source || '默认') + ' ' + (cs.default_chars || cs.default_sp.length) + '字';
+      } else if (st) {
+        st.textContent = '加载兜底经文失败';
+      }
+      if (focus) tx.focus();
+    }).catch(function() { if (st) st.textContent = '加载经文网络异常'; });
+  }
   (function _e1Wire() {
     var d = _e1El('e1Dao'), o = _e1El('e1Off'), e = _e1El('e1Edit'), c = _e1El('e1Canon');
+    var tx = _e1El('e1EditText'), st = _e1El('e1EditStatus');
     if (d) d.addEventListener('click', function() { _e1SetMode('invert'); fPost('/origin/mode', { mode: 'invert' }).then(_e1LoadPreview).catch(function() {}); });
     if (o) o.addEventListener('click', function() { _e1SetMode('passthrough'); fPost('/origin/mode', { mode: 'passthrough' }).then(_e1LoadPreview).catch(function() {}); });
-    if (c) c.addEventListener('change', function() { fPost('/origin/canon', { canon: c.value }).then(_e1LoadPreview).catch(function() {}); });
-    var tx = _e1El('e1EditText'), st = _e1El('e1EditStatus');
+    if (c) c.addEventListener('change', function() {
+      fPost('/origin/canon', { canon: c.value }).then(function() {
+        _e1LoadPreview();
+        // 切经藏后 · 若正在编辑且未改自定义 · textarea 随经重填新本源 (名实相符)
+        if (_e1EditOpen) _e1FillEdit(tx, st, false);
+      }).catch(function() {});
+    });
     if (e) e.addEventListener('click', function() {
       _e1EditOpen = !_e1EditOpen;
       var area = _e1El('e1EditArea'); if (area) area.style.display = _e1EditOpen ? 'block' : 'none';
-      if (_e1EditOpen) {
-        fJson('/origin/custom_sp').then(function(cs) {
-          if (!tx) return;
-          if (cs && cs.sp) tx.value = cs.sp;
-          else fJson('/origin/preview').then(function(p) { if (p && (p.after || p.before)) tx.value = p.after || p.before; }).catch(function() {});
-        }).catch(function() {});
-      }
+      if (_e1EditOpen) { if (st) st.textContent = '加载中…'; _e1FillEdit(tx, st, true); }
     });
     function _e1Save() {
       if (!tx) return;
-      fPost('/origin/custom_sp', { sp: tx.value }).then(function() { if (st) st.textContent = '已注入 · 下次 chat 生效'; _e1LoadPreview(); }).catch(function(er) { if (st) st.textContent = '失败: ' + er.message; });
+      if (!tx.value || !tx.value.trim()) { if (st) st.textContent = '✖ 内容不可为空'; return; }
+      fPost('/origin/custom_sp', { sp: tx.value, source: 'webview-e1' }).then(function() { if (st) st.textContent = '已注入 · 下次 chat 生效'; _e1LoadPreview(); }).catch(function(er) { if (st) st.textContent = '失败: ' + er.message; });
     }
     var sv = _e1El('e1Save'), rl = _e1El('e1Reload'), rs = _e1El('e1Reset');
     if (sv) sv.addEventListener('click', _e1Save);
     if (rl) rl.addEventListener('click', function() { fJson('/origin/preview').then(function(p) { if (tx && (p.after || p.before)) tx.value = p.after || p.before; if (st) st.textContent = '已载实收 SP (未保存)'; }).catch(function() {}); });
-    if (rs) rs.addEventListener('click', function() { fDel('/origin/custom_sp').then(function() { if (tx) tx.value = ''; if (st) st.textContent = '已归道 · 回默认路径'; _e1LoadPreview(); }).catch(function() {}); });
+    if (rs) rs.addEventListener('click', function() { fDel('/origin/custom_sp').then(function() { if (st) st.textContent = '归道中…'; _e1FillEdit(tx, st, true); _e1LoadPreview(); }).catch(function() {}); });
     if (tx) tx.addEventListener('keydown', function(ev) {
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') { ev.preventDefault(); _e1Save(); }
       else if (ev.key === 'Escape') { _e1EditOpen = false; var area = _e1El('e1EditArea'); if (area) area.style.display = 'none'; }
