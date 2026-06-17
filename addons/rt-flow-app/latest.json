@@ -1,6 +1,6 @@
 {
-  "versionCode": 38,
-  "versionName": "0.15.7",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.7/DevinCloud-mobile-v0.15.7.apk",
-  "notes": "v0.15.7\n· 高保真远程控制(scrcpy 控制通道等效): 有 Shizuku 时, 远程操控的点按/滑动/长按/输入/截屏/返回主页/最近任务优先走 shell `input`/`screencap`(uid2000, 近 USB 级稳定, 不依赖无障碍服务开启); 无 Shizuku 则自动回退无障碍手势。新增远程 phoneShell 通道, 云端可经隧道跑任意 adb shell。\n· AVD 实测: App 自身经 Shizuku 执行 input keyevent/HOME 成功切换桌面; screencap base64 全屏回传; input tap/text 正常。\n· 含 v0.15.6 Shizuku 自我 ADB、v0.15.5 去中心化更新+远程默认开、v0.15.4 油猴引擎、v0.15.3 翻译。"
+  "versionCode": 39,
+  "versionName": "0.15.8",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.8/DevinCloud-mobile-v0.15.8.apk",
+  "notes": "v0.15.8 · 切号板块升级\n· 排序: 对话进行中的账号自动顶置(移到1号之上), 对话结束/取消追踪后自动回退原位 (保留原始编号)。\n· 多选修复: 打钩态以账号id为准, 跨8s自动重渲染持久, 不再自动丢失。\n· 新增: 长按单账号→上下滑动拖拽快速多选 (含震动反馈)。\n· 自动清理(默认开): 仅\"无进行中对话\"的低额账号→先全量备份(对话/知识库/剧本/密钥/Git/账密)到 Documents/DevinCloud/backups/<账号>/ →再彻底清理回归本源; 额度归零者移出账号库, 阈值内未归零者保留。\n· 低额(<$3)提醒: 仅当账号有进行中对话才提醒, 放大横幅+震动。\n· 修复: 顶部标签长按震动(直驱Vibrator, 不受系统触感开关影响)+拖拽移动位置。"
 }
