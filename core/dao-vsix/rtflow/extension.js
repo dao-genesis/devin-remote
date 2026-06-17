@@ -269,13 +269,17 @@ const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (
 const _ideWebPanels = new Map();
 
 // v4.8.2 · IDE 内置浏览器外壳 (满铺 iframe 指向本账号注入反代; CSP 仅放行 localhost frame)。
-function _ideBrowserHtml(url) {
+// v4.9.6 · E: 注入 setState({email}) → 供 WebviewPanelSerializer 在 IDE 重启后还原此面板到原账号。
+function _ideBrowserHtml(url, email) {
   const u = String(url).replace(/"/g, "&quot;");
+  const em = JSON.stringify(String(email || ""));
   return (
     '<!DOCTYPE html><html><head><meta charset="utf-8">' +
-    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; frame-src http://localhost:* http://127.0.0.1:*;">' +
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; frame-src http://localhost:* http://127.0.0.1:*;">' +
     "<style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1e1e1e}iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style></head>" +
-    '<body><iframe src="' + u + '" allow="clipboard-read; clipboard-write"></iframe></body></html>'
+    '<body><iframe src="' + u + '" allow="clipboard-read; clipboard-write"></iframe>' +
+    "<script>try{var v=acquireVsCodeApi();v.setState({email:" + em + "});}catch(e){}</script>" +
+    "</body></html>"
   );
 }
 
@@ -302,7 +306,7 @@ async function openIdeAccountBrowser(acc) {
   if (panel) {
     try {
       panel.reveal(vscode.ViewColumn.Active);
-      panel.webview.html = _ideBrowserHtml(pr.url);
+      panel.webview.html = _ideBrowserHtml(pr.url, acc.email);
       return { ok: true, reused: true };
     } catch {
       _ideWebPanels.delete(key);
@@ -315,7 +319,7 @@ async function openIdeAccountBrowser(acc) {
     vscode.ViewColumn.Active,
     { enableScripts: true, retainContextWhenHidden: true },
   );
-  panel.webview.html = _ideBrowserHtml(pr.url);
+  panel.webview.html = _ideBrowserHtml(pr.url, acc.email);
   panel.onDidDispose(() => {
     if (_ideWebPanels.get(key) === panel) _ideWebPanels.delete(key);
   });
@@ -7974,9 +7978,14 @@ function buildHtml() {
   // v3.17.0 · 借鉴手机版 APK: 有进行中对话的账号自动顶置(running/待输入/卡住 → 移到最上), 其余维持原编号顺序。
   //   仅改显示顺序; data-i / 编号 / activeIdx 仍用原始索引 i, 故 onclick/切号/锁全不受影响 (与手机版 _computeOrder 同源)。
   const _dispOrder = _wamDisplayOrder(accounts);
+  const _liveCount = _dispOrder.filter((i) => _hasLiveConv(accounts[i].email)).length;
   let rows = "";
   for (let _oi = 0; _oi < _dispOrder.length; _oi++) {
     const i = _dispOrder[_oi];
+    // v4.9.7 · F4: 在"运行组"与"其余"边界插入对齐分隔栏 (仅两组都非空时)
+    if (_oi === _liveCount && _liveCount > 0 && _liveCount < _dispOrder.length) {
+      rows += '<div class="run-sep"><span>&#9650; 运行中对话 · 其余账号 &#9660;</span></div>';
+    }
     const a = accounts[i],
       h = store.getHealth(a.email);
     const dvTag = devinCloud.getTag(a.email);
@@ -8155,6 +8164,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .add-body .add-hint{font-size:10px;color:#555;margin-top:4px}
 .sec{display:flex;justify-content:space-between;align-items:center;color:#777;font-size:11px;margin:8px 0 3px;padding-bottom:3px;border-bottom:1px solid var(--border)}
 .row{display:flex;align-items:center;padding:3px 2px;border-bottom:1px solid #1a1a1a;gap:4px;user-select:none}
+.run-sep{display:flex;align-items:center;justify-content:center;gap:6px;margin:3px 0;padding:2px 0;font-size:9px;font-weight:700;letter-spacing:.5px;color:#6cb3ff;border-top:1px dashed #2d4a63;border-bottom:1px dashed #2d4a63;background:#141c24;user-select:none}
 .row:hover{background:#2a2d2e}
 .row.sel{background:#1f3a45;box-shadow:inset 2px 0 0 var(--blue)}
 .row.sel:hover{background:#254655}
@@ -8301,6 +8311,8 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-trk-st.blocked{color:#f44;background:#3a1a1a}
 .dv-trk-no{flex-shrink:0;min-width:13px;height:13px;line-height:13px;text-align:center;font-size:9px;font-weight:700;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:3px;padding:0 2px}
 .dv-trk-who{color:#d7ba7d;flex-shrink:0;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dv-trk-x{margin-left:auto;flex-shrink:0;color:#777;font-size:10px;cursor:pointer;padding:0 3px;border-radius:3px;line-height:1.2}
+.dv-trk-x:hover{color:#f44;background:#3a1a1a}
 .dv-trk-tt{color:#bbb;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cv-summary{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px}
 .cv-summary b{margin-left:2px}
@@ -8358,7 +8370,7 @@ ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanS
 <button onclick="dvWipeSel()" class="conv-btn conv-btn-s" title="水过无痕·清理已选账号的全部 Devin Cloud 痕迹">&#127754; 批量清理</button>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" ${_cfg("devinCloudAutoBackup", true) ? "checked" : ""} onchange="dvToggleAuto(this.checked)">自动备份</label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.4.0 · 默认开 · 备份完成且额度低于阈值时自动水过无痕清理"><input type="checkbox" id="dvAutoClean" ${_cfg("devinCloudAutoCleanup", true) ? "checked" : ""} onchange="dvToggleCleanup(this.checked)">自动清理</label>
-<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.9.0 · 默认开 · 额度完全归零的账号, 全量备份+清理后自动从账号库移除(等同手动删除·不再显示)"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", true) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
+<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.9.6 · 默认关·手动归零移除 · 勾选后:额度完全归零的账号在全量备份+清理无残留后从账号库移除(不再显示). 不勾则仅清痕迹+本地留底,账号保留"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", false) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.4.0 · 额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="${_cfg("devinCloudAutoBackupThreshold", 3)}" min="0" step="1" style="width:30px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetThreshold(this.value)"></label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.5.0 · 对话额度上限·知止不殆: 每对话上限=余额-缓冲·实时跟随余额; 余额≤停止阈值自动中停运行中对话"><input type="checkbox" id="dvConvCap" ${_cfg("devinCloudConvQuotaCap", true) ? "checked" : ""} onchange="dvToggleConvCap(this.checked)">对话上限</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.5.0 · 对话上限缓冲($): 每对话上限=余额-此缓冲 (余额$70→上限$67)">缓冲$<input type="number" id="dvConvBuf" value="${_cfg("devinCloudConvQuotaBuffer", 3)}" min="0" step="0.01" style="width:34px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetConvBuffer(this.value)"></label>
@@ -8433,6 +8445,9 @@ function dvConvZip(i,did){showToast('\u23F3 打包对话 ZIP…');vscode.postMes
 function dvConvDel(i,did){vscode.postMessage({type:'dvConvDel',index:i,devinId:did});}
 function dvConvZipBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u2717 先勾选对话');return;}showToast('\u23F3 合并打包 '+ids.length+' 个对话…');vscode.postMessage({type:'dvConvZipBatch',index:i,devinIds:ids});}
 function dvConvDelBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u2717 先勾选对话');return;}vscode.postMessage({type:'dvConvDelBatch',index:i,devinIds:ids});}
+/* v4.9.6 · C: 本地对话拉取(已清零号) — 切换显示 + 请求本账号本地备份清单 */
+function dvLocalConvs(i){const c=document.getElementById('dvLocal'+i);if(!c)return;if(c.style.display!=='none'&&c.innerHTML.trim()){c.style.display='none';return;}c.style.display='block';c.innerHTML='<span style="color:#888;font-size:11px">\u8bfb\u53d6\u672c\u5730\u5907\u4efd\u2026</span>';vscode.postMessage({type:'dvLocalConvs',index:i});}
+document.addEventListener('click',function(e){const t=e.target;if(!t||!t.closest)return;const v=t.closest('.dv-localview');if(v&&v.dataset.path){e.preventDefault();vscode.postMessage({type:'devinViewBackupConv',path:v.dataset.path});return;}const r=t.closest('.dv-localreveal');if(r&&r.dataset.path){e.preventDefault();vscode.postMessage({type:'devinRevealPath',path:r.dataset.path});return;}const x=t.closest('.dv-trk-x');if(x&&x.dataset.id){e.preventDefault();e.stopPropagation();const it=x.closest('.dv-trk-item');if(it)it.style.display='none';vscode.postMessage({type:'dvUntrackConv',id:x.dataset.id});return;}});
 /* v4.7.0 · 知识库/剧本/密钥 多选(Shift) + 查看/下载/删除 + 批量 */
 let _bdLast={};
 function _bdChks(i,k){return [...document.querySelectorAll('.bd-chk[data-i="'+i+'"][data-k="'+k+'"]')];}
@@ -8497,6 +8512,13 @@ document.addEventListener('click',e=>{if(e.target.classList&&e.target.classList.
 document.addEventListener('mouseover',e=>{if(!_dragSel)return;const row=_hitSel(e);if(!row)return;const i=parseInt(row.dataset.i);if(!Number.isFinite(i))return;_setRowSel(i,_dragVal);updateBatchBar();});
 document.addEventListener('mouseup',()=>{_dragSel=false;});
 document.addEventListener('change',e=>{if(e.target.classList.contains('chk')){const i=parseInt(e.target.dataset.i);if(Number.isFinite(i))_lastSel=i;updateBatchBar();}});
+// v4.9.6 · 滚动位置持久化 — 根治 _broadcastUI 全量重建后回弹到顶("回主页"). 守柔: 程序复位期不计为用户滚动.
+// v4.9.7 · F2/F3: 增量更新去抖签名 — 状态/对话区每轮轮询若内容未变则不动 DOM, 根治"一刷新就闪/跳/回弹".
+let _scrTimer=null,_scrRestoring=false,_lastConvHtml='',_lastRunKey='';
+function _saveScroll(){if(_scrRestoring)return;try{const el=document.scrollingElement||document.documentElement;const st=vscode.getState()||{};vscode.setState({...st,scrollTop:el.scrollTop|0});}catch(e){}}
+window.addEventListener('scroll',function(){if(_scrRestoring)return;if(_scrTimer)clearTimeout(_scrTimer);_scrTimer=setTimeout(_saveScroll,100);},{passive:true});
+function _restoreScroll(){try{const st=vscode.getState()||{};const y=st.scrollTop|0;if(y<=0)return;const el=document.scrollingElement||document.documentElement;_scrRestoring=true;const ap=function(){el.scrollTop=y;};ap();requestAnimationFrame(ap);setTimeout(ap,80);setTimeout(function(){ap();_scrRestoring=false;},240);}catch(e){_scrRestoring=false;}}
+_restoreScroll();
 (function(){const s=vscode.getState()||{};if(s.addText){const ta=document.getElementById('addInput');if(ta)ta.value=s.addText;}const ta=document.getElementById('addInput');if(ta)ta.addEventListener('input',function(){const st=vscode.getState()||{};vscode.setState({...st,addText:this.value});});
 // v3.11.2 · 多选持久化复位 — 重建后立即按 email 恢复 checked + .sel + batchBar 计数
 try{_restoreSel();updateBatchBar();}catch(e){}
@@ -8512,10 +8534,11 @@ if(m.type==='quotaChange'){const r=document.querySelector('.row[data-email=\"'+(
 if(m.type==='devinOverview'){const d=document.getElementById('dvDetail'+m.index);if(d&&d.classList.contains('open')){d.innerHTML=m.html||'';}}
 if(m.type==='gitDone'){const d=document.getElementById('dvDetail'+m.index);if(d&&d.classList.contains('open')){vscode.postMessage({type:'devinExpand',index:m.index,refresh:true});}}
 if(m.type==='gitBatchDone'){document.querySelectorAll('.dv-detail.open').forEach(d=>{const i=parseInt(d.getAttribute('data-i'));if(Number.isFinite(i))vscode.postMessage({type:'devinExpand',index:i,refresh:true});});}
-if(m.type==='devinRunStatus'&&Array.isArray(m.items)){document.querySelectorAll('.dv-run').forEach(el=>{el.querySelectorAll('.run,.awa,.blk').forEach(x=>x.remove());});m.items.forEach(it=>{const el=document.querySelector('.dv-run[data-email="'+(it.email||'').toLowerCase()+'"]');if(!el)return;const tip=(it.titles||[]).join(' | ');const mk=(cls,txt,n)=>{if(!(n>0))return;const s=document.createElement('span');s.className=cls;s.textContent=txt+n;s.title=tip;el.insertBefore(s,el.firstChild);};mk('blk','\\u25CF 卡住',it.blocked);mk('awa','\\u25CF 待输入',it.awaiting);mk('run','\\u25CF 运行',it.running);});}
+if(m.type==='devinRunStatus'&&Array.isArray(m.items)){const _rk=JSON.stringify(m.items);if(_rk===_lastRunKey)return;_lastRunKey=_rk;document.querySelectorAll('.dv-run').forEach(el=>{el.querySelectorAll('.run,.awa,.blk').forEach(x=>x.remove());});m.items.forEach(it=>{const el=document.querySelector('.dv-run[data-email="'+(it.email||'').toLowerCase()+'"]');if(!el)return;const tip=(it.titles||[]).join(' | ');const mk=(cls,txt,n)=>{if(!(n>0))return;const s=document.createElement('span');s.className=cls;s.textContent=txt+n;s.title=tip;el.insertBefore(s,el.firstChild);};mk('blk','\\u25CF 卡住',it.blocked);mk('awa','\\u25CF 待输入',it.awaiting);mk('run','\\u25CF 运行',it.running);});}
 if(m.type==='devinConvCap'&&Array.isArray(m.items)){m.items.forEach(it=>{const sp=document.querySelector('.dv-stat[data-capemail="'+(it.email||'').toLowerCase()+'"]');if(sp){const c=(typeof it.cap==='number')?it.cap.toFixed(2):'\\u2014';sp.textContent='\\u5bf9\\u8bdd\\u4e0a\\u9650 $'+c+(it.drain?' \\u00b7\\u62bd\\u5e72\\u4e2d':'')+(it.inUse?' \\u00b7\\u4f7f\\u7528\\u4e2d':'');sp.style.color=it.drain?'#dcaa55':(it.inUse?'#4ec9b0':'');}});}
-if(m.type==='convUpdate'&&m.html){const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}}}}
+if(m.type==='convUpdate'&&m.html){if(m.html===_lastConvHtml)return;_lastConvHtml=m.html;const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){const el=document.scrollingElement||document.documentElement;const _y=el?el.scrollTop|0:0;old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}if(el&&_y>0&&el.scrollTop!==_y){el.scrollTop=_y;requestAnimationFrame(()=>{el.scrollTop=_y;});}}}}
 if(m.type==='devinBackupTree'){_dvShowBackups(m.tree);}
+if(m.type==='dvLocalConvList'){const c=document.getElementById('dvLocal'+m.index);if(c){c.style.display='block';c.innerHTML=m.html||'';}}
 });
 function _dvShowBackups(tree){
   const _esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -8953,9 +8976,28 @@ function _dvOverviewHtml(ov, i, gitSt) {
     '<button class="conv-btn" onclick="dvBackup(' + i + ')" title="增量备份本账号全部对话">&#128190; 导出全部对话</button>' +
     '<button class="conv-btn conv-btn-s" onclick="dvCreate(' + i + ')" title="代替我在此账号发起一个新 Devin Cloud 对话">&#9729; 发起对话</button>' +
     '<button class="conv-btn conv-btn-s" onclick="dvBrowse()" title="浏览备份文件夹·一键解锁(解压)对话ZIP">&#128193; 浏览备份</button>' +
+    '<button class="conv-btn conv-btn-s" onclick="dvLocalConvs(' + i + ')" title="从本地备份拉取本账号对话(已清零号也可查看正文/下载ZIP·数据已云→本地)·与上方云端残留并行可见">&#128194; 本地对话</button>' +
     '<button class="conv-btn conv-btn-s" onclick="dvSetTag(' + i + ')">&#127991;&#65039; 标签' + (tag ? "：" + _esc(tag) : "") + "</button>" +
     '<button class="conv-btn conv-btn-s" onclick="wp(' + i + ')" title="水过无痕清理本账号">&#127754; 水过无痕</button>' +
-    "</div>";
+    "</div>" +
+    '<div class="dv-local" id="dvLocal' + i + '" style="display:none;margin-top:6px;border-top:1px dashed #333;padding-top:6px"></div>';
+  return h;
+}
+// v4.9.6 · C: 本地备份对话清单 HTML (已清零号也可查看正文/定位/ZIP · 数据已云→本地). 路径走 data-path + 事件委托(规避反斜杠转义).
+function _dvLocalConvHtml(convs, i, dir) {
+  convs = Array.isArray(convs) ? convs : [];
+  let h = '<div class="dv-local-h" style="color:#888;font-size:11px;margin:4px 0">本地备份对话 ' + convs.length + ' 条 · 已云→本地' +
+    (dir ? ' <a href="#" class="dv-localreveal" data-path="' + _esc(dir) + '" style="color:#4ec9b0">打开目录</a>' : "") + "</div>";
+  if (!convs.length) { h += '<div style="color:#666;font-size:11px">（本地暂无备份 · 账号在线时先「导出全部对话」即可留底）</div>'; return h; }
+  for (const c of convs) {
+    const t = c.title || c.name || "(无题)";
+    h += '<div class="dv-sess">' +
+      '<span class="tt" title="' + _esc(t) + " · " + _esc(c.type || "") + '">' + _esc(t) + "</span>" +
+      '<span class="dvc-acts">' +
+      (c.hasHtml ? '<button class="dvc-b dv-localview" data-path="' + _esc(c.htmlPath) + '" title="查看本地对话正文(无需云端)">&#128065;</button>' : "") +
+      '<button class="dvc-b dv-localreveal" data-path="' + _esc(c.path) + '" title="在文件管理器中定位(可下载/压缩ZIP)">&#128193;</button>' +
+      "</span></div>";
+  }
   return h;
 }
 // 查看面板 HTML: 某个 Devin Cloud 板块(知识库/剧本/密钥)的名称清单，默认收起，点统计块展开
@@ -9023,7 +9065,9 @@ async function _dvRunPoll() {
       const auth = devinCloud.getCachedAuth(acc.email);
       if (!auth) continue;
       try {
-        const active = await devinCloud.listRunningSessions(auth);
+        let active = await devinCloud.listRunningSessions(auth);
+        // v4.9.7 · F1: 永久取消追踪的对话(devinId 命中)从活跃集剔除 — 不统计/不通知/不显示, 跨窗口持久
+        if (_untrackedConvUuids.size) active = active.filter((s) => !(s.devinId && _untrackedConvUuids.has(s.devinId)));
         let running = 0, awaiting = 0, blocked = 0;
         for (const s of active) {
           if (s.statusClass === "awaiting") awaiting++;
@@ -9041,7 +9085,7 @@ async function _dvRunPoll() {
             no: _dvAccountNo(acc.email),
             tag: devinCloud.getTag(acc.email) || "",
             running, awaiting, blocked, total: active.length,
-            items: active.map((r) => ({ title: r.title, cls: r.statusClass })),
+            items: active.map((r) => ({ title: r.title, cls: r.statusClass, id: r.devinId })),
             ts: Date.now(),
           });
           _dvDetectFinished(acc.email, active); // 有活跃 → 正常离场检测
@@ -9252,10 +9296,11 @@ function _dvStatusAggHtml() {
     for (const it of st.items.slice(0, 6)) {
       const cls = it.cls === "running" ? "running" : it.cls === "awaiting" ? "awaiting" : "blocked";
       const tip = cls === "running" ? "运行中" : cls === "awaiting" ? "等待你的输入" : "卡住/额度超限";
+      const _xBtn = it.id ? '<span class="dv-trk-x" data-id="' + _esc(String(it.id)) + '" title="取消追踪此对话(永久·不再统计/通知·可wam.clearConvUntrack复原)">\u2715</span>' : "";
       rows.push('<div class="dv-trk-item">' + noBadge + '<span class="dv-trk-st ' + cls + '" title="' + tip + '">' +
         (cls === "running" ? "运行" : cls === "awaiting" ? "待输入" : "卡住") + "</span>" +
         '<span class="dv-trk-who">' + _esc(who) + "</span>" +
-        '<span class="dv-trk-tt" title="' + _esc(it.title) + '">' + _esc(_truncTitle(it.title, 22)) + "</span></div>");
+        '<span class="dv-trk-tt" title="' + _esc(it.title) + '">' + _esc(_truncTitle(it.title, 22)) + "</span>" + _xBtn + "</div>");
     }
   }
   const cached = devinCloud.cachedEmails().length;
@@ -9412,9 +9457,10 @@ async function _dvAutoBackupRun() {
   const mode = _cfg("devinCloudBackupMode", "folder");
   const threshold = Math.max(0, +_cfg("devinCloudAutoBackupThreshold", 3) || 3);
   const autoCleanup = !!_cfg("devinCloudAutoCleanup", true);
-  const cleanupThreshold = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", 1) || 1);
-  // v4.9.0 · 归零移除: 额度完全归零(权威)的账号, 备份+清理后从账号库出库 (默认开)
-  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", true);
+  // v4.9.6 · 清理阈值默认对齐备份阈值(动态·默3) → 「额度 < 3 即在全量备份校验后自动清理」(用户可调单一阈值 dvThreshold)
+  const cleanupThreshold = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", threshold) || threshold);
+  // v4.9.6 · 归零移除改为「手动」(默认关) — 自动清理只清痕迹+本地留底, 账号是否出库由用户手动决定 (dvRmZero)
+  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", false);
   const removeThreshold = Math.max(0, +_cfg("devinCloudAutoRemoveThreshold", 0) || 0);
   const removeEmails = [];
   for (const acc of _store.accounts) {
@@ -9447,7 +9493,7 @@ async function _dvAutoBackupRun() {
           log("auto-cleanup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " ≤ $" + cleanupThreshold + " 且全量备份已校验 → 自动清理");
           try {
             const rep = await devinCloud.wipeAccount(auth, { onProgress: (m) => log("auto-cleanup: " + m) });
-            log("auto-cleanup: " + acc.email + " 完成 · 对话" + rep.sessions.deleted + " 知识" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted);
+            log("auto-cleanup: " + acc.email + " 完成 · 对话" + rep.sessions.deleted + (rep.sessions.archived ? "(归档" + rep.sessions.archived + "·平台不支持硬删·本地已留底)" : "") + " 知识" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted + " (知识/剧本/密钥/Git 为真删)");
             try { await devinGit.robustDisconnectGit(auth); } catch (ge) { log("auto-cleanup git: " + ge.message); }
             _dvOverviewCache.delete(acc.email.toLowerCase());
             // v4.9.0: 清理无残留 + 额度权威归零(billingBalance≤removeThreshold·null/有订阅永不归零) → 标记出库
@@ -9456,7 +9502,7 @@ async function _dvAutoBackupRun() {
               removeEmails.push(acc.email);
               _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零 · 已全量备份+清理 → 从账号库移除");
             } else {
-              _notify("info", "[" + acc.email.split("@")[0] + "] 自动清理完成 · 已回归本源");
+              _notify("info", "[" + acc.email.split("@")[0] + "] 自动清理完成 · 已回归本源" + (rep.sessions.archived ? " (对话" + rep.sessions.archived + "条云端仅归档·本地已留底; 知识/剧本/密钥/Git 真删)" : ""));
             }
           } catch (ce) {
             log("auto-cleanup error: " + acc.email + ": " + ce.message);
@@ -10871,6 +10917,51 @@ async function handleWebviewMessage(msg) {
           await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(msg.path));
         } catch (e) {
           _toast("\u2717 定位失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.9.7 · F1: 取消追踪某条 Devin Cloud 对话(点叉号) — devinId 入永久取消集·持久·跨窗口, 立即从聚合移除并刷新追踪区
+      case "dvUntrackConv": {
+        try {
+          const _id = String(msg.id || "");
+          if (!_id) break;
+          _untrackedConvUuids.add(_id);
+          _saveUntrackedToDisk();
+          for (const [_em, _st] of _dvStatusAgg) {
+            if (!_st || !Array.isArray(_st.items)) continue;
+            const kept = _st.items.filter((x) => x.id !== _id);
+            if (kept.length !== _st.items.length) {
+              _st.items = kept;
+              _st.total = kept.length;
+              _st.running = kept.filter((x) => x.cls === "running").length;
+              _st.awaiting = kept.filter((x) => x.cls === "awaiting").length;
+              _st.blocked = kept.filter((x) => x.cls === "blocked").length;
+              if (!kept.length) _dvStatusAgg.delete(_em);
+            }
+          }
+          try { _dvWriteSharedStatus(); } catch {}
+          try { _broadcastConvSection(); } catch {}
+          _toast("\u2713 已取消追踪此对话");
+        } catch (e) {
+          log("dvUntrackConv err: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.9.6 · C: 已清零号本地对话拉取 — 从本地备份目录读取本账号对话清单(可查看/定位/ZIP), 数据已云→本地, 与云端残留并行可见
+      case "dvLocalConvs": {
+        try {
+          const accL = _store.accounts[msg.index];
+          const emailL = accL && accL.email ? accL.email : "";
+          const rootL = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+          const treeL = devinCloud.listBackups(rootL);
+          const meL = (treeL.accounts || []).find((a) => (a.email || "").toLowerCase() === emailL.toLowerCase());
+          const convsL = ((meL && meL.conversations) || []).map((c) => ({
+            title: c.title || c.name || "", path: c.path, htmlPath: c.htmlPath || "",
+            hasHtml: !!c.hasHtml, type: c.type, num: c.num || 0, eventCount: c.eventCount || 0,
+          }));
+          _broadcastMsg({ type: "dvLocalConvList", index: msg.index, html: _dvLocalConvHtml(convsL, msg.index, meL ? meL.dir : "") });
+        } catch (e) {
+          _broadcastMsg({ type: "dvLocalConvList", index: msg.index, html: '<span style="color:#f44">读取本地备份失败: ' + _esc(String((e && e.message) || e)) + "</span>" });
         }
         break;
       }
@@ -12533,6 +12624,30 @@ async function activate(context) {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("wam.panel", _sidebarProvider),
   );
+
+  // v4.9.6 · E: IDE 内浏览器面板持久化 — 注册序列化器, IDE 重启后据 state.email 自动还原各账号面板。
+  if (vscode.window.registerWebviewPanelSerializer) {
+    context.subscriptions.push(
+      vscode.window.registerWebviewPanelSerializer("wamDevinWeb", {
+        async deserializeWebviewPanel(panel, state) {
+          const email = state && state.email ? String(state.email) : "";
+          const key = email.toLowerCase();
+          if (!key) { try { panel.dispose(); } catch {} return; }
+          try { panel.webview.options = { enableScripts: true }; } catch {}
+          _ideWebPanels.set(key, panel);
+          panel.onDidDispose(() => { if (_ideWebPanels.get(key) === panel) _ideWebPanels.delete(key); });
+          const acc = (_store.accounts || []).find((a) => (a.email || "").toLowerCase() === key);
+          if (!acc) {
+            panel.title = "Devin · " + key.split("@")[0] + " (账号不在库)";
+            panel.webview.html = "<!DOCTYPE html><html><body style='background:#1e1e1e;color:#888;font-family:sans-serif;padding:24px'>该账号已不在账号库, 无法还原此页。请在切号面板重新打开。</body></html>";
+            return;
+          }
+          panel.webview.html = "<!DOCTYPE html><html><body style='background:#1e1e1e;color:#888;font-family:sans-serif;padding:24px'>还原中 · " + _esc(acc.email.split("@")[0]) + " …</body></html>";
+          openIdeAccountBrowser(acc).catch((e) => log("ideWeb restore err: " + ((e && e.message) || e)));
+        },
+      }),
+    );
+  }
 
   const cmds = [
     ["wam.openEditor", () => openEditorPanel()],

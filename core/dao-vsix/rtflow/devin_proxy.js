@@ -25,6 +25,11 @@ const DEVIN_SS = "https://server.self-serve.windsurf.com";
 const DEVIN_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
+// v4.9.6 · E: keep-alive 连接池 — 根治「IDE 内路由官网非常慢」。SPA 一次加载数百请求,
+//   旧实现每请求新建 TLS 握手 (默认 agent keepAlive=false) → 串行重握手即是卡顿主因。
+//   复用 socket 后首屏与切页显著提速; maxSockets 适度并行, 空闲 15s 回收。
+const _httpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 64, maxFreeSockets: 16, timeout: 60000 });
+
 // email → { server, port, auth }. 每账号独立端口 → origin 隔离 → 多实例不串号。
 const _servers = new Map();
 
@@ -202,6 +207,7 @@ async function handleRequest(req, res, auth, port, log) {
       headers: fwdHeaders,
       timeout: 20000,
       rejectUnauthorized: false,
+      agent: _httpsAgent,
     },
     (proxyRes) => {
       const status = proxyRes.statusCode || 200;

@@ -489,12 +489,13 @@ function test(name, fn) {
     assert.ok(/_store\.removeBatch\(idx\)/.test(src), "出库须走 removeBatch (单次IO+持久化)");
     assert.ok(/removeEmails\.push\(acc\.email\)/.test(src), "归零账号先入 removeEmails, 循环外再删");
   });
-  test("package.json: 自动清理/归零移除默认开启", () => {
+  test("package.json: 自动清理默认开; 归零移除默认关(v4.9.6 手动)", () => {
     const fs = require("fs");
     const pkg = JSON.parse(fs.readFileSync(require("path").join(__dirname, "..", "package.json"), "utf8"));
     const props = pkg.contributes.configuration.properties;
     assert.strictEqual(props["wam.devinCloudAutoCleanup"].default, true, "自动清理默认开");
-    assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, true, "归零移除默认开");
+    // v4.9.6 · 用户要求: 归零移除改为手动(默认关) — 自动清理只清痕迹+本地留底, 出库由用户手动决定
+    assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, false, "归零移除默认关(手动)");
     assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 0, "归零阈值默认0(完全归零)");
   });
 
@@ -517,6 +518,37 @@ function test(name, fn) {
     const alt = require("path").join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts");
     const src = fs.readFileSync(fs.existsSync(p) ? p : alt, "utf8");
     assert.ok(/getAccountSyncMode\(\) !== 'manual'[\s\S]{0,200}getRtFlowActiveEmail/.test(src), "auto 模式才以 RT Flow 活跃号覆盖; manual 保留用户自控");
+  });
+
+  // ── F1-F4 切号面板回归 (双副本 rt-flow + dao-vsix 同步) ──
+  console.log("\n[F1-F4 切号面板回归]");
+  test("F1: 取消追踪叉号 + dvUntrackConv 永久持久 + 过滤", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/class="dv-trk-x"/.test(src), rel.join("/") + ": 须 dv-trk-x 叉号");
+      assert.ok(/case "dvUntrackConv"/.test(src), rel.join("/") + ": 须 dvUntrackConv host 处理");
+      assert.ok(/_untrackedConvUuids\.add/.test(src) && /_saveUntrackedToDisk\(\)/.test(src), rel.join("/") + ": 须入永久集+持久化");
+      assert.ok(/_untrackedConvUuids\.has\(s\.devinId\)/.test(src), rel.join("/") + ": 活跃集须过滤永久取消的对话");
+    }
+  });
+  test("F2/F3: 去抖签名 _lastConvHtml/_lastRunKey + 滚动保持", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/_lastConvHtml/.test(src) && /_lastRunKey/.test(src), rel.join("/") + ": 须去抖签名变量");
+      assert.ok(/if\(_rk===_lastRunKey\)return/.test(src), rel.join("/") + ": 状态未变须早返不动 DOM");
+      assert.ok(/if\(m\.html===_lastConvHtml\)return/.test(src), rel.join("/") + ": 对话区未变须早返不动 DOM");
+    }
+  });
+  test("F4: 运行账号顶置 _wamDisplayOrder + 对齐分隔栏 run-sep", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/function _wamDisplayOrder\(/.test(src) && /function _hasLiveConv\(/.test(src), rel.join("/") + ": 须顶置排序函数");
+      assert.ok(/_oi === _liveCount && _liveCount > 0 && _liveCount < _dispOrder\.length/.test(src), rel.join("/") + ": 分隔栏须仅两组非空时插入边界");
+      assert.ok(/\.run-sep\{/.test(src), rel.join("/") + ": 须 run-sep 对齐样式");
+    }
   });
 
   // ── 汇总 ──────────────────────────────────────────────────────────────────
