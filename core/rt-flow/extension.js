@@ -269,13 +269,17 @@ const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (
 const _ideWebPanels = new Map();
 
 // v4.8.2 · IDE 内置浏览器外壳 (满铺 iframe 指向本账号注入反代; CSP 仅放行 localhost frame)。
-function _ideBrowserHtml(url) {
+// v4.9.6 · E: 注入 setState({email}) → 供 WebviewPanelSerializer 在 IDE 重启后还原此面板到原账号。
+function _ideBrowserHtml(url, email) {
   const u = String(url).replace(/"/g, "&quot;");
+  const em = JSON.stringify(String(email || ""));
   return (
     '<!DOCTYPE html><html><head><meta charset="utf-8">' +
-    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; frame-src http://localhost:* http://127.0.0.1:*;">' +
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; frame-src http://localhost:* http://127.0.0.1:*;">' +
     "<style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1e1e1e}iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style></head>" +
-    '<body><iframe src="' + u + '" allow="clipboard-read; clipboard-write"></iframe></body></html>'
+    '<body><iframe src="' + u + '" allow="clipboard-read; clipboard-write"></iframe>' +
+    "<script>try{var v=acquireVsCodeApi();v.setState({email:" + em + "});}catch(e){}</script>" +
+    "</body></html>"
   );
 }
 
@@ -302,7 +306,7 @@ async function openIdeAccountBrowser(acc) {
   if (panel) {
     try {
       panel.reveal(vscode.ViewColumn.Active);
-      panel.webview.html = _ideBrowserHtml(pr.url);
+      panel.webview.html = _ideBrowserHtml(pr.url, acc.email);
       return { ok: true, reused: true };
     } catch {
       _ideWebPanels.delete(key);
@@ -315,7 +319,7 @@ async function openIdeAccountBrowser(acc) {
     vscode.ViewColumn.Active,
     { enableScripts: true, retainContextWhenHidden: true },
   );
-  panel.webview.html = _ideBrowserHtml(pr.url);
+  panel.webview.html = _ideBrowserHtml(pr.url, acc.email);
   panel.onDidDispose(() => {
     if (_ideWebPanels.get(key) === panel) _ideWebPanels.delete(key);
   });
@@ -8330,6 +8334,9 @@ function dvConvZip(i,did){showToast('\u23F3 打包对话 ZIP…');vscode.postMes
 function dvConvDel(i,did){vscode.postMessage({type:'dvConvDel',index:i,devinId:did});}
 function dvConvZipBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u2717 先勾选对话');return;}showToast('\u23F3 合并打包 '+ids.length+' 个对话…');vscode.postMessage({type:'dvConvZipBatch',index:i,devinIds:ids});}
 function dvConvDelBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u2717 先勾选对话');return;}vscode.postMessage({type:'dvConvDelBatch',index:i,devinIds:ids});}
+/* v4.9.6 · C: 本地对话拉取(已清零号) — 切换显示 + 请求本账号本地备份清单 */
+function dvLocalConvs(i){const c=document.getElementById('dvLocal'+i);if(!c)return;if(c.style.display!=='none'&&c.innerHTML.trim()){c.style.display='none';return;}c.style.display='block';c.innerHTML='<span style="color:#888;font-size:11px">\u8bfb\u53d6\u672c\u5730\u5907\u4efd\u2026</span>';vscode.postMessage({type:'dvLocalConvs',index:i});}
+document.addEventListener('click',function(e){const t=e.target;if(!t||!t.closest)return;const v=t.closest('.dv-localview');if(v&&v.dataset.path){e.preventDefault();vscode.postMessage({type:'devinViewBackupConv',path:v.dataset.path});return;}const r=t.closest('.dv-localreveal');if(r&&r.dataset.path){e.preventDefault();vscode.postMessage({type:'devinRevealPath',path:r.dataset.path});return;}});
 /* v4.7.0 · 知识库/剧本/密钥 多选(Shift) + 查看/下载/删除 + 批量 */
 let _bdLast={};
 function _bdChks(i,k){return [...document.querySelectorAll('.bd-chk[data-i="'+i+'"][data-k="'+k+'"]')];}
@@ -8419,6 +8426,7 @@ if(m.type==='devinRunStatus'&&Array.isArray(m.items)){document.querySelectorAll(
 if(m.type==='devinConvCap'&&Array.isArray(m.items)){m.items.forEach(it=>{const sp=document.querySelector('.dv-stat[data-capemail="'+(it.email||'').toLowerCase()+'"]');if(sp){const c=(typeof it.cap==='number')?it.cap.toFixed(2):'\\u2014';sp.textContent='\\u5bf9\\u8bdd\\u4e0a\\u9650 $'+c+(it.drain?' \\u00b7\\u62bd\\u5e72\\u4e2d':'')+(it.inUse?' \\u00b7\\u4f7f\\u7528\\u4e2d':'');sp.style.color=it.drain?'#dcaa55':(it.inUse?'#4ec9b0':'');}});}
 if(m.type==='convUpdate'&&m.html){const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}}}}
 if(m.type==='devinBackupTree'){_dvShowBackups(m.tree);}
+if(m.type==='dvLocalConvList'){const c=document.getElementById('dvLocal'+m.index);if(c){c.style.display='block';c.innerHTML=m.html||'';}}
 });
 function _dvShowBackups(tree){
   const _esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -8838,9 +8846,28 @@ function _dvOverviewHtml(ov, i, gitSt) {
     '<button class="conv-btn" onclick="dvBackup(' + i + ')" title="增量备份本账号全部对话">&#128190; 导出全部对话</button>' +
     '<button class="conv-btn conv-btn-s" onclick="dvCreate(' + i + ')" title="代替我在此账号发起一个新 Devin Cloud 对话">&#9729; 发起对话</button>' +
     '<button class="conv-btn conv-btn-s" onclick="dvBrowse()" title="浏览备份文件夹·一键解锁(解压)对话ZIP">&#128193; 浏览备份</button>' +
+    '<button class="conv-btn conv-btn-s" onclick="dvLocalConvs(' + i + ')" title="从本地备份拉取本账号对话(已清零号也可查看正文/下载ZIP·数据已云→本地)·与上方云端残留并行可见">&#128194; 本地对话</button>' +
     '<button class="conv-btn conv-btn-s" onclick="dvSetTag(' + i + ')">&#127991;&#65039; 标签' + (tag ? "：" + _esc(tag) : "") + "</button>" +
     '<button class="conv-btn conv-btn-s" onclick="wp(' + i + ')" title="水过无痕清理本账号">&#127754; 水过无痕</button>' +
-    "</div>";
+    "</div>" +
+    '<div class="dv-local" id="dvLocal' + i + '" style="display:none;margin-top:6px;border-top:1px dashed #333;padding-top:6px"></div>';
+  return h;
+}
+// v4.9.6 · C: 本地备份对话清单 HTML (已清零号也可查看正文/定位/ZIP · 数据已云→本地). 路径走 data-path + 事件委托(规避反斜杠转义).
+function _dvLocalConvHtml(convs, i, dir) {
+  convs = Array.isArray(convs) ? convs : [];
+  let h = '<div class="dv-local-h" style="color:#888;font-size:11px;margin:4px 0">本地备份对话 ' + convs.length + ' 条 · 已云→本地' +
+    (dir ? ' <a href="#" class="dv-localreveal" data-path="' + _esc(dir) + '" style="color:#4ec9b0">打开目录</a>' : "") + "</div>";
+  if (!convs.length) { h += '<div style="color:#666;font-size:11px">（本地暂无备份 · 账号在线时先「导出全部对话」即可留底）</div>'; return h; }
+  for (const c of convs) {
+    const t = c.title || c.name || "(无题)";
+    h += '<div class="dv-sess">' +
+      '<span class="tt" title="' + _esc(t) + " · " + _esc(c.type || "") + '">' + _esc(t) + "</span>" +
+      '<span class="dvc-acts">' +
+      (c.hasHtml ? '<button class="dvc-b dv-localview" data-path="' + _esc(c.htmlPath) + '" title="查看本地对话正文(无需云端)">&#128065;</button>' : "") +
+      '<button class="dvc-b dv-localreveal" data-path="' + _esc(c.path) + '" title="在文件管理器中定位(可下载/压缩ZIP)">&#128193;</button>' +
+      "</span></div>";
+  }
   return h;
 }
 // 查看面板 HTML: 某个 Devin Cloud 板块(知识库/剧本/密钥)的名称清单，默认收起，点统计块展开
@@ -10743,6 +10770,24 @@ async function handleWebviewMessage(msg) {
         }
         break;
       }
+      // v4.9.6 · C: 已清零号本地对话拉取 — 从本地备份目录读取本账号对话清单(可查看/定位/ZIP), 数据已云→本地, 与云端残留并行可见
+      case "dvLocalConvs": {
+        try {
+          const accL = _store.accounts[msg.index];
+          const emailL = accL && accL.email ? accL.email : "";
+          const rootL = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+          const treeL = devinCloud.listBackups(rootL);
+          const meL = (treeL.accounts || []).find((a) => (a.email || "").toLowerCase() === emailL.toLowerCase());
+          const convsL = ((meL && meL.conversations) || []).map((c) => ({
+            title: c.title || c.name || "", path: c.path, htmlPath: c.htmlPath || "",
+            hasHtml: !!c.hasHtml, type: c.type, num: c.num || 0, eventCount: c.eventCount || 0,
+          }));
+          _broadcastMsg({ type: "dvLocalConvList", index: msg.index, html: _dvLocalConvHtml(convsL, msg.index, meL ? meL.dir : "") });
+        } catch (e) {
+          _broadcastMsg({ type: "dvLocalConvList", index: msg.index, html: '<span style="color:#f44">读取本地备份失败: ' + _esc(String((e && e.message) || e)) + "</span>" });
+        }
+        break;
+      }
       // v4.0 · 一键解锁(解压)某个对话备份 ZIP → 同名文件夹并打开
       case "devinUnlockBackup": {
         try {
@@ -12400,6 +12445,30 @@ async function activate(context) {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("wam.panel", _sidebarProvider),
   );
+
+  // v4.9.6 · E: IDE 内浏览器面板持久化 — 注册序列化器, IDE 重启后据 state.email 自动还原各账号面板。
+  if (vscode.window.registerWebviewPanelSerializer) {
+    context.subscriptions.push(
+      vscode.window.registerWebviewPanelSerializer("wamDevinWeb", {
+        async deserializeWebviewPanel(panel, state) {
+          const email = state && state.email ? String(state.email) : "";
+          const key = email.toLowerCase();
+          if (!key) { try { panel.dispose(); } catch {} return; }
+          try { panel.webview.options = { enableScripts: true }; } catch {}
+          _ideWebPanels.set(key, panel);
+          panel.onDidDispose(() => { if (_ideWebPanels.get(key) === panel) _ideWebPanels.delete(key); });
+          const acc = (_store.accounts || []).find((a) => (a.email || "").toLowerCase() === key);
+          if (!acc) {
+            panel.title = "Devin · " + key.split("@")[0] + " (账号不在库)";
+            panel.webview.html = "<!DOCTYPE html><html><body style='background:#1e1e1e;color:#888;font-family:sans-serif;padding:24px'>该账号已不在账号库, 无法还原此页。请在切号面板重新打开。</body></html>";
+            return;
+          }
+          panel.webview.html = "<!DOCTYPE html><html><body style='background:#1e1e1e;color:#888;font-family:sans-serif;padding:24px'>还原中 · " + _esc(acc.email.split("@")[0]) + " …</body></html>";
+          openIdeAccountBrowser(acc).catch((e) => log("ideWeb restore err: " + ((e && e.message) || e)));
+        },
+      }),
+    );
+  }
 
   const cmds = [
     ["wam.openEditor", () => openEditorPanel()],
