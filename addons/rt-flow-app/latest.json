@@ -1,6 +1,6 @@
 {
-  "versionCode": 46,
-  "versionName": "0.15.15",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.15/DevinCloud-mobile-v0.15.15.apk",
-  "notes": "v0.15.15 · 路线B 真去中心化(每设备自带 cloudflared 免费快速隧道) + P1 token 复用 + P2 wake lock\n· 🌐 去中心化隧道(穿透面板新增开关): 本机自带的 cloudflared 一键建立免费快速隧道, 把设备直接暴露成 https://xxx.trycloudflare.com —— 完全不经任何共享 Worker, 每台设备一条独立隧道、无需 Cloudflare 账号、无需登录、无需手动。cloudflared 以 jniLibs(libcloudflared.so) 打包(arm64-v8a + x86_64), 解压到 nativeLibraryDir 执行; 强制 http2 走 TCP 更稳。叠加端到端加密即真正去中心化。注: 快速隧道 URL 每次重启会变(trycloudflare 设计), 要固定域名用命名隧道。共享 Worker 仍并行保留作兜底。\n· P1 token 复用: 不再每次冷启动轮换 token, 持久化复用 → 中继 DO 命名空间稳定, 根治「每次都要换 token / no_agent」。\n· P2 wake lock: RelayService 真正持有 PARTIAL_WAKE_LOCK, 息屏/Doze 下 CPU 不被节流 → 15s 心跳不被拖延, 不再频繁断连。\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
+  "versionCode": 47,
+  "versionName": "0.15.16",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.16/DevinCloud-mobile-v0.15.16.apk",
+  "notes": "v0.15.16 · 对话「下载 ZIP（含产出文件夹）」对齐桌面 dao-vsix 切号面板\n· 切号面板每条对话行新增 📦 按钮：一键下载该对话整包 ZIP —— 内含 对话_人类可读.md + 工作日志.md + _meta.json + files/<全部产出文件>，与电脑端「下载对话内容」产物结构一致。\n· 纯 JS 零依赖 ZIP 写入器（STORE 存储法 + CRC32，复刻桌面 ZipWriter 可读结构），WebView 无需 zlib 即可打合法 ZIP；产出文件经原生桥 httpReqB64 二进制无损取回。\n· 引擎 RPC extractConversation 新增 zip:true：另返 zipB64/zipName/zipFileCount，云端 Agent 经隧道即可取「MD+ZIP」整包，base64 解码落盘即得。\n· 拖拽提取的取文件指引 MD 同步说明 zip:true 与 📦，指导其他 Agent 整体取回。\n· 签名一致 e261b27f，v0.15.x 原地覆盖升级数据不丢。"
 }

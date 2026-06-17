@@ -7,7 +7,7 @@
 &nbsp;·&nbsp;架构 4 + 4 + 3&nbsp;·&nbsp;[▶ 演示视频](#演示视频)&nbsp;·&nbsp;[⬇ 快速安装](#下载--快速安装)&nbsp;·&nbsp;[📱 手机版 APK](#手机版-apk--直接下载)&nbsp;·&nbsp;[📦 模块下载](#模块下载--去中心化按模块独立发版)&nbsp;·&nbsp;[🧊 冷启动](cloud/coldstart/README.md)
 
 <!-- DAO-APK-LINK:START -->
-**📱 Devin Cloud 手机版 · 直接下载 APK**（安卓本体，辅助 ②）：[⬇ DevinCloud-mobile-v0.15.15.apk](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.15/DevinCloud-mobile-v0.15.15.apk) · 下载后允许「安装未知应用」即可装。
+**📱 Devin Cloud 手机版 · 直接下载 APK**（安卓本体，辅助 ②）：[⬇ DevinCloud-mobile-v0.15.16.apk](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.16/DevinCloud-mobile-v0.15.16.apk) · 下载后允许「安装未知应用」即可装。
 <!-- DAO-APK-LINK:END -->
 
 ---
@@ -83,7 +83,7 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\clo
 | **rt-flow** | `4.9.5` | `devaid.rt-flow` | Devin Cloud 接入本体：对话备份 / 全量快照 / 一键回归本源 wipe / 对话额度上限。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/rt-flow-v4.9.5) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rt-flow-v4.9.5/rt-flow-4.9.5.vsix) |
 | **dao-proxy-pro** | `9.9.298` | `dao-agi.dao-proxy-pro` | 底层提示词隔离替换 + 外接第三方模型路由。三面板：本源观照 / 渠道配置 / 模型路由。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-proxy-pro-v9.9.298) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-proxy-pro-v9.9.298/dao-proxy-pro-9.9.298.vsix) |
 | **dao-bridge** | `3.4.0` | `dao.dao-bridge` | 内网穿透本体：relay-first + cloudflared 自愈/断点续传，随 IDE 自启。独立 addon，不与其它插件冲突。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-bridge-v3.4.0) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-bridge-v3.4.0/dao-bridge-3.4.0.vsix) |
-| **rt-flow-app** | `0.15.15` | `ai.devin.rtflow` _(APK)_ | Devin Cloud 手机版 APK（安卓本体）：切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 系统级接管 + 渐进式文档。主页可直接下载安装。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/rtflow-v0.15.15) · [⬇ APK](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.15/DevinCloud-mobile-v0.15.15.apk) |
+| **rt-flow-app** | `0.15.16` | `ai.devin.rtflow` _(APK)_ | Devin Cloud 手机版 APK（安卓本体）：切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 系统级接管 + 渐进式文档。主页可直接下载安装。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/rtflow-v0.15.16) · [⬇ APK](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.16/DevinCloud-mobile-v0.15.16.apk) |
 | **devin-git-auth** | `2.3.2` | `devaid.devin-git-auth` | 多 Devin 账号绑定同一 GitHub（git-permissions 真实授权管理）。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/devin-git-auth-v2.3.2) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/devin-git-auth-v2.3.2/devin-git-auth-2.3.2.vsix) |
 | **dao-devin-export** | `1.3.4` | `dao-natural.dao-devin-export` | 单账号对话数据导出插件（VSIX）。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-devin-export-v1.3.4) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-devin-export-v1.3.4/dao-devin-export-1.3.4.vsix) |
 | **dao-relay** | `2.0.0` | _(Worker)_ | 内网穿透栈的中继 Worker 源（Cloudflare Worker，v2·(session,token) 零账号配对·一键部署）。非 VSIX，不进编辑器安装。 | [源码](https://github.com/zhouyoukang1234-spec/devin-remote/tree/main/addons/dao-relay) |
@@ -165,11 +165,11 @@ devin-remote/
 
 **源码**：`addons/dao-bridge/dao-bridge-ext/extension.js` · **核心本体**：`addons/dao-bridge/{agent,core}.js`
 
-### rt-flow-app · Devin Cloud 手机版 APK (v0.15.15)
+### rt-flow-app · Devin Cloud 手机版 APK (v0.15.16)
 
 > 主页可[直接下载 APK](#手机版-apk--直接下载)。这是**唯一**的手机端方案（取代已废弃的 `rt-flow-mobile` / `dao-bridge-android`），自成一个 APK。
 
-独立 APK 七合一：**切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 系统级接管 + 渐进式文档**。1:1 桌面版面板移植 + 手机适配化简。Per-account 展开面板（Sessions/Knowledge/Playbooks/Secrets/Git）+ 对话备份/查看全文/下载（MD/ZIP）。穿透配置动态化。v0.14.0 新增：远程浏览器自动化（browse* 11 RPCs·DOM/Cookie/Storage/截图/执行JS/导出MD）+ 手机本体操控（phone* 10 RPCs·文件系统/相册/剪贴板/通知/应用） + 安全开关 + Progressive Disclosure 文档系统。v0.14.1 新增：高级浏览器自动化（browse* +8·点击元素/填表/等待元素/提交表单/提取链接+输入值/页面信息/滚动）+ 高级手机操控（phone* +4·电池/WiFi/振动/音量）+ getCloudMd/getLocalMd 完整 API 文档生成 RPC。v0.14.2 新增：敏感数据读取（phone* +5·联系人/短信收件箱(含OTP验证码)/通话记录 + 运行时权限申请/查询），辅助全链路账号注册。v0.14.3 新增：ADB/scrcpy 级**系统级接管**（RtAccessibilityService 无需 root·phone* +10）：坐标点击/长按/滑动手势注入 + 返回/主页/最近/通知/锁屏全局操作 + 读屏控件树 + 按文字点击 + 文本输入 + 全屏截图。v0.14.4 重新锚定本源：全仓统一命名 Devin Cloud 手机版（清除 RT Flow 残留）+ 渐进式文档系统重构（云端 MD 轻量接入·三大核心板块概览·getModuleDoc 按需深入·getLocalMd 重型本地）+ 一键授权 phoneEnsureControl（自动跳转无障碍设置·用户只点一次「允许」）+ 远程开关在浏览器壳同步生效 + Node mock-Native 测试台。
+独立 APK 七合一：**切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 系统级接管 + 渐进式文档**。1:1 桌面版面板移植 + 手机适配化简。Per-account 展开面板（Sessions/Knowledge/Playbooks/Secrets/Git）+ 对话备份/查看全文/下载（MD/ZIP）。穿透配置动态化。v0.14.0 新增：远程浏览器自动化（browse* 11 RPCs·DOM/Cookie/Storage/截图/执行JS/导出MD）+ 手机本体操控（phone* 10 RPCs·文件系统/相册/剪贴板/通知/应用） + 安全开关 + Progressive Disclosure 文档系统。v0.14.1 新增：高级浏览器自动化（browse* +8·点击元素/填表/等待元素/提交表单/提取链接+输入值/页面信息/滚动）+ 高级手机操控（phone* +4·电池/WiFi/振动/音量）+ getCloudMd/getLocalMd 完整 API 文档生成 RPC。v0.14.2 新增：敏感数据读取（phone* +5·联系人/短信收件箱(含OTP验证码)/通话记录 + 运行时权限申请/查询），辅助全链路账号注册。v0.14.3 新增：ADB/scrcpy 级**系统级接管**（RtAccessibilityService 无需 root·phone* +10）：坐标点击/长按/滑动手势注入 + 返回/主页/最近/通知/锁屏全局操作 + 读屏控件树 + 按文字点击 + 文本输入 + 全屏截图。v0.14.4 重新锚定本源：全仓统一命名 Devin Cloud 手机版（清除 RT Flow 残留）+ 渐进式文档系统重构（云端 MD 轻量接入·三大核心板块概览·getModuleDoc 按需深入·getLocalMd 重型本地）+ 一键授权 phoneEnsureControl（自动跳转无障碍设置·用户只点一次「允许」）+ 远程开关在浏览器壳同步生效 + Node mock-Native 测试台。v0.15.16 对齐桌面：切号面板每条对话行新增 **📦 下载 ZIP（含产出文件夹）** —— 整包内含 `对话_人类可读.md` + `工作日志.md` + `_meta.json` + `files/<全部产出文件>`，与电脑端 dao-vsix「下载对话内容」产物结构一致（纯 JS 零依赖 ZIP 写入器，产出文件经原生桥二进制无损取回）；引擎 RPC `extractConversation` 新增 `zip:true` 回传 `zipB64`，云端 Agent 经隧道即可取「MD+ZIP」整包。
 
 **源码/文档**：[`addons/rt-flow-app/README.md`](addons/rt-flow-app/README.md)
 
@@ -230,7 +230,7 @@ python cloud/export-accounts/dao_export_all.py --email xxx@gmail.com --password 
 | dao-proxy-pro | ✅ 已部署 | 提示词隔离 + 模型路由生效 |
 | rt-flow | ✅ 实测验证 | 12/12 批量备份 + 一键 wipe 全链路真号验证 |
 | devin-git-auth | ◑ 机制通 | 账号/PAT/设备流均通，组织 Git 连接待后端 oauth |
-| rt-flow-app | ✅ S23 Ultra 实测 | v0.15.15 · 七合一(切号+穿透+多实例+浏览器自动化+手机操控+系统级接管+渐进式文档) · browse* 19 + phone* 29 RPCs(含无障碍手势/读屏/截图) + 对话备份/拖拽提取/自动清理 + 去中心化隧道(自带 cloudflared 免账号快隧) + IPC 桥 + 安全开关 + 本地 gradlew 编译验证 |
+| rt-flow-app | ✅ S23 Ultra 实测 | v0.15.16 · 七合一(切号+穿透+多实例+浏览器自动化+手机操控+系统级接管+渐进式文档) · browse* 19 + phone* 29 RPCs(含无障碍手势/读屏/截图) + 对话备份/拖拽提取/自动清理 + 去中心化隧道(自带 cloudflared 免账号快隧) + IPC 桥 + 安全开关 + 本地 gradlew 编译验证 |
 
 > 旧架构正典与历史实测见 [`docs/archive/`](docs/archive/)（CANON 五插件规范 · REARCH · AUDIT · LIVE_VERIFICATION）。
 

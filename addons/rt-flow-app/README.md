@@ -1,4 +1,4 @@
-# Devin Cloud 手机版 (v0.15.15)
+# Devin Cloud 手机版 (v0.15.16)
 
 > 模块目录: `addons/rt-flow-app/` (内部代号保留, 仅为目录/包名/自更新路径; 所有用户可见命名均为「Devin Cloud 手机版」)。
 
@@ -127,7 +127,8 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 | v0.15.12 | OTA 版本对齐：`latest.json` → versionCode 43 / 0.15.12，自动更新指向 `rtflow-v0.15.12` APK |
 | v0.15.13 | OTA 自更新链路对齐：`APP_VERSION` 与 `latest.json` 一致校验，升级提示稳定 |
 | v0.15.14 | **RPC 端到端加密** — 经中继的 RPC 载荷端到端加密，中继(含任何共享 Worker)只见密文，账号邮箱/密码/token 从不明文过中继；穿透面板补 E2E Key 展示 + 去中心化提示 |
-| v0.15.15 | **当前版本**：去中心化隧道。① **自带 cloudflared 免账号快隧** — `libcloudflared.so`(arm64-v8a + x86_64) 打入 jniLibs，解压到 nativeLibraryDir 执行，每台设备起独立 quick tunnel(`https://xxx.trycloudflare.com`)，无需 Cloudflare 账号/登录、强 http2 走 TCP 更稳；连不上才回退共享 Worker。② **P1 token 复用** — 不再每次冷启动换 token，持久化复用 → 中继 DO 命名空间稳定。③ **P2 wake lock** — RelayService 持 `PARTIAL_WAKE_LOCK`，息屏/Doze 下心跳不拖、不频繁断。签名统一 `e261b27f`，v0.15.x 原地覆盖升级数据不丢 |
+| v0.15.15 | 去中心化隧道。① **自带 cloudflared 免账号快隧** — `libcloudflared.so`(arm64-v8a + x86_64) 打入 jniLibs，解压到 nativeLibraryDir 执行，每台设备起独立 quick tunnel(`https://xxx.trycloudflare.com`)，无需 Cloudflare 账号/登录、强 http2 走 TCP 更稳；连不上才回退共享 Worker。② **P1 token 复用** — 不再每次冷启动换 token，持久化复用 → 中继 DO 命名空间稳定。③ **P2 wake lock** — RelayService 持 `PARTIAL_WAKE_LOCK`，息屏/Doze 下心跳不拖、不频繁断。签名统一 `e261b27f`，v0.15.x 原地覆盖升级数据不丢 |
+| v0.15.16 | **当前版本**：对话「下载 ZIP（含产出文件夹）」对齐桌面 dao-vsix。① 切号面板每条对话行新增 **📦** 按钮：一键下载该对话整包 ZIP——内含 `对话_人类可读.md` + `工作日志.md` + `_meta.json` + `files/<全部产出文件>`，与电脑端「下载对话内容」产物结构一致。② **纯 JS 零依赖 ZIP 写入器**（STORE 存储法 + CRC32，复刻桌面 ZipWriter 可读结构），WebView 无 zlib 亦可打合法 ZIP；产出文件经原生桥 `httpReqB64` 二进制无损取回。③ 引擎 RPC `extractConversation` 新增 `zip:true`：另返 `zipB64`/`zipName`/`zipFileCount`，云端 Agent 经隧道取「MD+ZIP」整包、base64 解码落盘即得。④ 拖拽提取的取文件指引 MD 同步说明 `zip:true` 与 📦。签名统一 `e261b27f`，v0.15.x 原地覆盖升级数据不丢 |
 
 ## 取代的旧模块
 

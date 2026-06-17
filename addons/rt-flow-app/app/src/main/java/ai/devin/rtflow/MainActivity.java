@@ -2821,10 +2821,12 @@ public class MainActivity extends AppCompatActivity {
         b.append("```jsonc\n");
         b.append("// 1) 解锁 auth1 (额度耗尽也可)\n");
         b.append("{ \"cmd\": \"login\", \"id\": \"").append(email.isEmpty() ? "<email>" : email).append("\" }\n\n");
-        b.append("// 2) 一次拿齐: 元数据 + 完整对话md + 工作日志md + 文件清单, 并落盘共享保险箱\n");
-        b.append("{ \"cmd\": \"extractConversation\", \"id\": \"").append(email.isEmpty() ? "<email>" : email).append("\", \"sid\": \"").append(sid.startsWith("devin-") ? sid : "devin-" + sid).append("\", \"save\": true }\n");
+        b.append("// 2) 一次拿齐: 元数据 + 完整对话md + 工作日志md + 文件清单; save 落盘共享保险箱, zip 额外打成 MD+ZIP(含产出文件夹)\n");
+        b.append("{ \"cmd\": \"extractConversation\", \"id\": \"").append(email.isEmpty() ? "<email>" : email).append("\", \"sid\": \"").append(sid.startsWith("devin-") ? sid : "devin-" + sid).append("\", \"save\": true, \"zip\": true }\n");
         b.append("```\n\n");
-        b.append("`extractConversation` 返回: `conversationMd`(完整对话) · `worklogMd`(工作日志) · `detail`(元数据) · `files`/`fileCount`(附件清单 name/url/path) · `saved`(落盘文件名)。\n\n");
+        b.append("`extractConversation` 返回: `conversationMd`(完整对话) · `worklogMd`(工作日志) · `detail`(元数据) · `files`/`fileCount`(附件清单 name/url/path) · `saved`(落盘文件名)。\n");
+        b.append("加 `zip:true` 时另返 `zipB64`(整包 base64: `对话_人类可读.md`+`工作日志.md`+`_meta.json`+`files/<产出文件>`) + `zipName` + `zipFileCount` — **本地有产出文件即 MD+ZIP 形态**, 云端 Agent 直接 base64 解码落盘即可。\n");
+        b.append("> 在手机切号面板里, 每条对话行的 📦 按钮等价于此 ZIP(对话md+工作日志+产出文件夹)一键下载到手机「下载」目录。\n\n");
         b.append("## 四、分步法 (需精细控制时)\n\n");
         b.append("1. `login {id}` → 解锁 `auth1`。\n");
         b.append("2. `listSessions {id, limit:200}` → 确认本 `devin_id`。\n");

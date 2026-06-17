@@ -15,7 +15,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.15.15";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.15.16";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -96,10 +96,13 @@
       "```",
       "# 单条会话: 一次拿齐 元数据+完整对话md+工作日志md+文件清单, 并落盘共享保险箱",
       "{cmd:\"extractConversation\", id:\"<email>\", sid:\"<devin_id>\", save:true}",
+      "# 要 MD+ZIP(含产出文件夹): 加 zip:true → 返回 zipB64 (base64, 解码即得整包 ZIP)",
+      "{cmd:\"extractConversation\", id:\"<email>\", sid:\"<devin_id>\", save:true, zip:true}",
       "# 整账号全部会话:",
       "{cmd:\"extractAccountConversations\", id:\"<email>\", limit:200, includeMd:true}",
       "```",
       "返回字段: `conversationMd` (完整对话), `worklogMd` (工作日志/文件编辑/命令全程), `detail` (会话元数据), `files`/`fileCount` (附件清单), `saved` (落盘文件名)。",
+      "加 `zip:true` 另返 `zipB64`(整包 base64: `对话_人类可读.md`+`工作日志.md`+`_meta.json`+`files/<产出文件>`) + `zipName` + `zipFileCount` — 本地有产出文件即 MD+ZIP 形态; 切号面板每条对话行的 📦 按钮等价于此一键下载。",
       "",
       "### C. 分步法 (需要精细控制时)",
       "1. `login {email}` → 解锁 auth1 (额度耗尽也可)。",
@@ -169,6 +172,8 @@
       try{ var wl=await DaoCloud.exportSession(acc, sid, "worklog"); out.worklogMd=wl&&(wl.md||wl.markdown||wl.text); }catch(e){}
       try{ var m=await DaoCloud.sessionMessages(acc, sid); var files=[]; (m.messages||[]).forEach(function(msg){ var atts=msg.attachments||msg.files||[]; (atts||[]).forEach(function(f){ if(f&&(f.url||f.path||f.name)) files.push({name:f.name||f.path||"", url:f.url||"", path:f.path||""}); }); }); out.files=files; out.fileCount=files.length; }catch(e){}
       if(a.save){ try{ var fn=(a.name||("session-"+sid))+".md"; var body="# 会话提取 "+sid+" ("+acc.email+")\n\n"+(out.conversationMd||"")+"\n\n---\n\n"+(out.worklogMd||""); if(N.writeFile) N.writeFile(fn, body); out.saved=fn; }catch(e){} }
+      // zip:true → 额外打成「对话md+工作日志md+_meta.json+files/产出文件」单个 ZIP, base64 随响应回传 (云端 Agent 可自行落盘); 本地有产出文件即 MD+ZIP 形态。
+      if(a.zip){ try{ var z=await DaoCloud.exportSessionZip(acc, sid); if(z&&z.ok){ out.zipB64=z.b64; out.zipName=(a.name||("session-"+sid))+".zip"; out.zipFileCount=z.fileCount; } else out.zipErr=(z&&z.error)||"zip 失败"; }catch(e){ out.zipErr=String(e); } }
       return out;
     },
     // 整账号全部对话一次性提取 (额度耗尽账号亦可)
