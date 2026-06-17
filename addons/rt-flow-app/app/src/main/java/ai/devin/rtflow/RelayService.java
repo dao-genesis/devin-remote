@@ -306,23 +306,48 @@ public class RelayService extends Service {
             MainActivity m = MainActivity.sInstance;
             if (m != null) m.runOnUiThread(() -> m.ipcOpenA11ySettings());
         }
+        // 高保真控制: 有 Shizuku 时优先走 shell `input` (uid2000, 近 USB 级稳定, 不依赖无障碍服务);
+        // 否则回退无障碍手势。scrcpy 的控制通道本质即 adb `input`/`screencap`, 此处等效打通。
+        @JavascriptInterface public boolean phoneShizukuReady() { return ShizukuManager.hasPermission(); }
+        @JavascriptInterface public String phoneShell(String cmd) {
+            if (!remoteOpsEnabled) return "{\"ok\":false,\"error\":\"远程操控未启用\"}";
+            if (cmd == null || cmd.isEmpty()) return "{\"ok\":false,\"error\":\"空命令\"}";
+            if (!ShizukuManager.hasPermission()) return "{\"ok\":false,\"error\":\"Shizuku 未授权\"}";
+            String[] r = ShizukuManager.exec(cmd);
+            try { org.json.JSONObject o = new org.json.JSONObject();
+                o.put("ok", "0".equals(r[0])); o.put("exit", r[0]); o.put("out", r.length > 1 ? r[1] : "");
+                return o.toString(); } catch (Exception e) { return "{\"ok\":false}"; }
+        }
         @JavascriptInterface public boolean phoneTap(int x, int y) {
             if (!remoteOpsEnabled) return false;
+            if (ShizukuManager.hasPermission() && "0".equals(ShizukuManager.exec("input tap " + x + " " + y)[0])) return true;
             RtAccessibilityService s = RtAccessibilityService.sInstance;
             return s != null && s.tap(x, y);
         }
         @JavascriptInterface public boolean phoneLongPress(int x, int y, int ms) {
             if (!remoteOpsEnabled) return false;
+            if (ShizukuManager.hasPermission() && "0".equals(ShizukuManager.exec("input swipe " + x + " " + y + " " + x + " " + y + " " + ms)[0])) return true;
             RtAccessibilityService s = RtAccessibilityService.sInstance;
             return s != null && s.longPress(x, y, ms);
         }
         @JavascriptInterface public boolean phoneSwipe(int x1, int y1, int x2, int y2, int ms) {
             if (!remoteOpsEnabled) return false;
+            if (ShizukuManager.hasPermission() && "0".equals(ShizukuManager.exec("input swipe " + x1 + " " + y1 + " " + x2 + " " + y2 + " " + ms)[0])) return true;
             RtAccessibilityService s = RtAccessibilityService.sInstance;
             return s != null && s.swipe(x1, y1, x2, y2, ms);
         }
         @JavascriptInterface public boolean phoneGlobalAction(String action) {
             if (!remoteOpsEnabled) return false;
+            if (ShizukuManager.hasPermission() && action != null) {
+                String key = null;
+                switch (action) {
+                    case "back": key = "KEYCODE_BACK"; break;
+                    case "home": key = "KEYCODE_HOME"; break;
+                    case "recents": key = "KEYCODE_APP_SWITCH"; break;
+                    case "notifications": key = null; break; // 无对应 keyevent, 回退无障碍
+                }
+                if (key != null && "0".equals(ShizukuManager.exec("input keyevent " + key)[0])) return true;
+            }
             RtAccessibilityService s = RtAccessibilityService.sInstance;
             return s != null && s.globalAction(action);
         }
@@ -338,11 +363,22 @@ public class RelayService extends Service {
         }
         @JavascriptInterface public boolean phoneInputText(String text) {
             if (!remoteOpsEnabled) return false;
+            if (ShizukuManager.hasPermission() && text != null) {
+                // input text 把空格当分隔符, 需转义为 %s; 单引号防 shell 注入
+                String esc = text.replace("\\", "\\\\").replace("'", "'\\''").replace(" ", "%s");
+                if ("0".equals(ShizukuManager.exec("input text '" + esc + "'")[0])) return true;
+            }
             RtAccessibilityService s = RtAccessibilityService.sInstance;
             return s != null && s.inputText(text);
         }
         @JavascriptInterface public String phoneScreenCapture() {
             if (!remoteOpsEnabled) return "{\"error\":\"远程操控未启用\"}";
+            // Shizuku 优先: screencap 经 base64 回传 (全屏真实像素, 不依赖无障碍/MediaProjection 授权)
+            if (ShizukuManager.hasPermission()) {
+                String[] r = ShizukuManager.exec("screencap -p | base64 | tr -d '\\n'");
+                if ("0".equals(r[0]) && r.length > 1 && r[1] != null && r[1].length() > 100)
+                    return "{\"ok\":true,\"base64\":\"" + r[1] + "\",\"via\":\"shizuku\"}";
+            }
             RtAccessibilityService s = RtAccessibilityService.sInstance;
             return s != null ? s.takeScreenshotBase64() : "{\"error\":\"无障碍服务未开启\"}";
         }

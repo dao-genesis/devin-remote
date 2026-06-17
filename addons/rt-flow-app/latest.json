@@ -1,6 +1,6 @@
 {
-  "versionCode": 37,
-  "versionName": "0.15.6",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.6/DevinCloud-mobile-v0.15.6.apk",
-  "notes": "v0.15.6\n· Shizuku 集成(自我 ADB): 一次性激活 Shizuku 后, App 经 binder 获得 shell uid(2000) 级权限并持久稳定; 新增「Shizuku 权限(自我 ADB)」管理页(状态检测/一键授权/ADB Shell 控制台)。授权后自动自我授予: 全文件访问(MANAGE_EXTERNAL_STORAGE)、无障碍服务、联系人/短信/通话记录/电话/相册/通知等危险权限 —— 免去逐个手动设置。\n· AVD 实测: Shizuku 授权→自动开启无障碍(已绑定)+全文件+全部危险权限; ADB Shell 执行 getprop 返回 exit 0。\n· 含 v0.15.5 去中心化多镜像更新 + 远程操控默认开启、v0.15.4 油猴脚本引擎、v0.15.3 翻译。"
+  "versionCode": 38,
+  "versionName": "0.15.7",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.7/DevinCloud-mobile-v0.15.7.apk",
+  "notes": "v0.15.7\n· 高保真远程控制(scrcpy 控制通道等效): 有 Shizuku 时, 远程操控的点按/滑动/长按/输入/截屏/返回主页/最近任务优先走 shell `input`/`screencap`(uid2000, 近 USB 级稳定, 不依赖无障碍服务开启); 无 Shizuku 则自动回退无障碍手势。新增远程 phoneShell 通道, 云端可经隧道跑任意 adb shell。\n· AVD 实测: App 自身经 Shizuku 执行 input keyevent/HOME 成功切换桌面; screencap base64 全屏回传; input tap/text 正常。\n· 含 v0.15.6 Shizuku 自我 ADB、v0.15.5 去中心化更新+远程默认开、v0.15.4 油猴引擎、v0.15.3 翻译。"
 }
