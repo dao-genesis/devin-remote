@@ -79,11 +79,13 @@ public class MainActivity extends AppCompatActivity {
     static final String TUNNEL = "rtflow://tunnel";
     static final String CLOUD = "rtflow://cloud";
     static final String VPN = "rtflow://vpn";
+    static final String SCRIPTS = "rtflow://scripts";
     static final String DEVIN = "https://app.devin.ai/";
     private static final String SW_URL = "file:///android_asset/engine/switch.html";
     private static final String TU_URL = "file:///android_asset/engine/tunnel.html";
     private static final String CL_URL = "file:///android_asset/engine/cloud.html";
     private static final String VPN_URL = "file:///android_asset/engine/vpn.html";
+    private static final String SCR_URL = "file:///android_asset/engine/userscripts.html";
 
     // 搜索引擎 (国内环境可切百度) — 持久化于 SharedPreferences
     private static final String PREF_SEARCH = "search_engine";
@@ -386,6 +388,7 @@ public class MainActivity extends AppCompatActivity {
         mu.add(0, 13, 5, "无痕标签");
         mu.add(0, 9, 7, "浏览历史");
         mu.add(0, 12, 8, "书签收藏");
+        mu.add(0, 14, 9, "用户脚本 (油猴)");
         android.view.SubMenu page = mu.addSubMenu(0, 100, 9, "页面工具");
         page.add(0, 20, 0, "页内查找");
         page.add(0, 21, 1, cur() != null && cur().desktop ? "切回移动版" : "桌面版网站");
@@ -405,6 +408,7 @@ public class MainActivity extends AppCompatActivity {
                 case 13: openIncognito(); return true;
                 case 9: showHistory(); return true;
                 case 12: showBookmarks(); return true;
+                case 14: newTab(SCRIPTS, null); return true;
                 case 20: case 25: toggleFindBar(); return true;
                 case 21: toggleDesktop(); return true;
                 case 22: readerMode(); return true;
@@ -629,6 +633,7 @@ public class MainActivity extends AppCompatActivity {
             st.setUserAgentString(st.getUserAgentString().replace("; wv", "")); // 贴近真浏览器
             web.addJavascriptInterface(new AutofillBridge(web), "__dcaf"); // 登录账密自动保存/填充 (Chrome 式无感)
             web.addJavascriptInterface(new TranslateBridge(web), "__dcTr"); // 整页翻译 (Edge 引擎, 原生桥绕过页面 CSP/跨域)
+            web.addJavascriptInterface(new UserScriptBridge(web), "__dcus"); // 用户脚本引擎 (油猴兼容: GM_* + 跨域 xhr 经原生桥)
         }
         // 下载捕获桥(所有标签都挂, 仅 saveBase64 一个能力): 把页面内 blob:/data:/<a download> 下载收进右上下载列表
         web.addJavascriptInterface(new DlBridge(), "RTDL");
@@ -652,6 +657,7 @@ public class MainActivity extends AppCompatActivity {
             @Override public boolean shouldOverrideUrlLoading(WebView v, String u) { return handleExternalScheme(u); }
             @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
                 tab.url = u; if (tabOf(v) == active) setAddr(u);
+                if (!tab.internal && u != null && u.startsWith("http")) injectUserScripts(v, u, "start"); // 油猴 @run-at document-start
             }
             @Override public void onPageFinished(WebView v, String u) {
                 tab.url = u; renderTabStrip(); saveTabs();
@@ -664,6 +670,7 @@ public class MainActivity extends AppCompatActivity {
                     autoFillLogin(v, u);        // 有保存的账密 → 自动填充 (无感)
                     installLoginCapture(v);     // 监听登录提交 → 自动弹「保存登录？」
                     if (tab.translated) applyTranslate(v); // 翻译态跨页保持
+                    injectUserScripts(v, u, "end");       // 油猴 @run-at document-end/idle
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -734,6 +741,7 @@ public class MainActivity extends AppCompatActivity {
         else if (TUNNEL.equals(url)) { real = TU_URL; tab.internal = true; }
         else if (CLOUD.equals(url)) { real = CL_URL; tab.internal = true; }
         else if (VPN.equals(url)) { real = VPN_URL; tab.internal = true; }
+        else if (SCRIPTS.equals(url)) { real = SCR_URL; tab.internal = true; }
         tab.url = real;
         tab.web.loadUrl(real);
     }
@@ -1306,6 +1314,248 @@ public class MainActivity extends AppCompatActivity {
             main.post(() -> toast(count > 0 ? ("已翻译 " + count + " 段") : "本页无可翻译内容"));
         }
     }
+
+    // ── 用户脚本引擎 (油猴 Tampermonkey 兼容) ───────────────────────────────
+    //   装不了真·Chrome 扩展(系统 WebView 不支持), 但能跑标准 .user.js:
+    //   解析 ==UserScript== 元数据 → 按 @match/@run-at 在每页注入 → 提供 GM_* API。
+    //   脚本与 GM 存储落共享保险箱(Documents/DevinCloud), 卸载/重装不丢。
+    //   GM_xmlhttpRequest 走原生桥 → 天然跨域、绕开页面 CSP (等同油猴后台请求)。
+    private final Object usLock = new Object();
+    private String b64(String s) {
+        return android.util.Base64.encodeToString(s.getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP);
+    }
+    org.json.JSONArray usLoadAll() {
+        synchronized (usLock) {
+            try {
+                String s = vaultRead("userscripts");
+                if (s == null || s.isEmpty()) s = getSharedPreferences(PREFS, 0).getString("userscripts", "");
+                if (s == null || s.isEmpty()) return new org.json.JSONArray();
+                return new org.json.JSONArray(s);
+            } catch (Exception e) { return new org.json.JSONArray(); }
+        }
+    }
+    private void usSaveAll(org.json.JSONArray a) {
+        synchronized (usLock) {
+            vaultWrite("userscripts", a.toString());
+            getSharedPreferences(PREFS, 0).edit().putString("userscripts", a.toString()).apply();
+        }
+    }
+    private org.json.JSONObject gmStore() {
+        synchronized (usLock) {
+            try {
+                String s = vaultRead("us-store");
+                if (s == null || s.isEmpty()) s = getSharedPreferences(PREFS, 0).getString("us-store", "");
+                if (s == null || s.isEmpty()) return new org.json.JSONObject();
+                return new org.json.JSONObject(s);
+            } catch (Exception e) { return new org.json.JSONObject(); }
+        }
+    }
+    private void gmStoreSave(org.json.JSONObject o) {
+        synchronized (usLock) {
+            vaultWrite("us-store", o.toString());
+            getSharedPreferences(PREFS, 0).edit().putString("us-store", o.toString()).apply();
+        }
+    }
+    private String httpGetText(String url) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(15000); c.setReadTimeout(30000);
+            c.setRequestProperty("User-Agent", "Mozilla/5.0");
+            int code = c.getResponseCode();
+            InputStream is = (code >= 200 && code < 400) ? c.getInputStream() : c.getErrorStream();
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] b = new byte[4096]; int n; while (is != null && (n = is.read(b)) > 0) bos.write(b, 0, n);
+            if (is != null) is.close();
+            return new String(bos.toByteArray(), StandardCharsets.UTF_8);
+        } catch (Exception e) { return null; } finally { if (c != null) c.disconnect(); }
+    }
+    /** 解析 .user.js 的 ==UserScript== 元数据块 → 脚本对象 (含 source)。 */
+    private org.json.JSONObject usParse(String code) {
+        org.json.JSONObject o = new org.json.JSONObject();
+        try {
+            o.put("source", code); o.put("enabled", true);
+            org.json.JSONArray matches = new org.json.JSONArray(), includes = new org.json.JSONArray(),
+                    excludes = new org.json.JSONArray(), grants = new org.json.JSONArray(), requires = new org.json.JSONArray();
+            String name = "", ns = "", ver = "", runAt = "end", desc = "", dl = "", up = "";
+            int a = code.indexOf("==UserScript=="), b = code.indexOf("==/UserScript==");
+            if (a >= 0 && b > a) {
+                for (String ln : code.substring(a, b).split("\n")) {
+                    int at = ln.indexOf('@'); if (at < 0) continue;
+                    String rest = ln.substring(at + 1).trim();
+                    int sp = rest.indexOf(' '); int tb = rest.indexOf('\t');
+                    if (sp < 0 || (tb >= 0 && tb < sp)) sp = tb;
+                    String key = sp < 0 ? rest : rest.substring(0, sp);
+                    String val = sp < 0 ? "" : rest.substring(sp + 1).trim();
+                    switch (key) {
+                        case "name": if (name.isEmpty()) name = val; break;
+                        case "namespace": ns = val; break;
+                        case "version": ver = val; break;
+                        case "description": if (desc.isEmpty()) desc = val; break;
+                        case "match": matches.put(val); break;
+                        case "include": includes.put(val); break;
+                        case "exclude": excludes.put(val); break;
+                        case "grant": grants.put(val); break;
+                        case "require": requires.put(val); break;
+                        case "run-at": runAt = val.contains("start") ? "start" : (val.contains("idle") ? "idle" : "end"); break;
+                        case "downloadURL": dl = val; break;
+                        case "updateURL": up = val; break;
+                    }
+                }
+            }
+            o.put("name", name.isEmpty() ? "未命名脚本" : name);
+            o.put("namespace", ns); o.put("version", ver); o.put("description", desc); o.put("runAt", runAt);
+            o.put("matches", matches); o.put("includes", includes); o.put("excludes", excludes);
+            o.put("grants", grants); o.put("requires", requires); o.put("downloadURL", dl); o.put("updateURL", up);
+        } catch (Exception e) {}
+        return o;
+    }
+    /** 新增或更新脚本 (按 name+namespace 去重), 同时抓取 @require 依赖内联。返回脚本 id 或 ""。 */
+    String usAddOrUpdate(String code) {
+        try {
+            org.json.JSONObject o = usParse(code);
+            org.json.JSONArray reqs = o.optJSONArray("requires");
+            StringBuilder rc = new StringBuilder();
+            if (reqs != null) for (int i = 0; i < reqs.length(); i++) {
+                String r = httpGetText(reqs.optString(i)); if (r != null) rc.append(r).append("\n;\n");
+            }
+            o.put("requireCode", rc.toString());
+            org.json.JSONArray all = usLoadAll();
+            String nm = o.optString("name"), ns = o.optString("namespace");
+            int found = -1; String fid = null;
+            for (int i = 0; i < all.length(); i++) {
+                org.json.JSONObject e = all.optJSONObject(i);
+                if (e != null && nm.equals(e.optString("name")) && ns.equals(e.optString("namespace"))) {
+                    found = i; fid = e.optString("id"); o.put("enabled", e.optBoolean("enabled", true)); break;
+                }
+            }
+            String id = (fid != null && !fid.isEmpty()) ? fid : ("us_" + System.currentTimeMillis() + "_" + Math.abs((nm + ns).hashCode()));
+            o.put("id", id);
+            if (found >= 0) all.put(found, o); else all.put(o);
+            usSaveAll(all);
+            return id;
+        } catch (Exception e) { return ""; }
+    }
+    private boolean usGlobMatch(String pat, String url) {
+        if (pat == null || pat.isEmpty()) return false;
+        try {
+            if (pat.length() > 2 && pat.startsWith("/") && pat.endsWith("/"))
+                return java.util.regex.Pattern.compile(pat.substring(1, pat.length() - 1)).matcher(url).find();
+            StringBuilder re = new StringBuilder("^");
+            for (int i = 0; i < pat.length(); i++) {
+                char c = pat.charAt(i);
+                if (c == '*') re.append(".*");
+                else if ("\\.[]{}()+-^$|?".indexOf(c) >= 0) re.append('\\').append(c);
+                else re.append(c);
+            }
+            re.append("$");
+            return java.util.regex.Pattern.compile(re.toString()).matcher(url).matches();
+        } catch (Exception e) { return false; }
+    }
+    private boolean usMatches(org.json.JSONObject s, String url) {
+        try {
+            org.json.JSONArray ex = s.optJSONArray("excludes");
+            if (ex != null) for (int i = 0; i < ex.length(); i++) if (usGlobMatch(ex.optString(i), url)) return false;
+            org.json.JSONArray m = s.optJSONArray("matches");
+            if (m != null) for (int i = 0; i < m.length(); i++) if (usGlobMatch(m.optString(i), url)) return true;
+            org.json.JSONArray inc = s.optJSONArray("includes");
+            if (inc != null) for (int i = 0; i < inc.length(); i++) if (usGlobMatch(inc.optString(i), url)) return true;
+            return false;
+        } catch (Exception e) { return false; }
+    }
+    /** 在页面注入所有匹配且启用的脚本 (phase: "start"=document-start, "end"=document-end/idle)。 */
+    private void injectUserScripts(WebView w, String url, String phase) {
+        if (w == null || url == null) return;
+        if (url.startsWith("rtflow:") || url.startsWith("file:") || url.startsWith("about:")) return;
+        try {
+            org.json.JSONArray all = usLoadAll();
+            if (all.length() == 0) return;
+            StringBuilder js = new StringBuilder();
+            boolean runtimeAdded = false;
+            for (int i = 0; i < all.length(); i++) {
+                org.json.JSONObject s = all.optJSONObject(i);
+                if (s == null || !s.optBoolean("enabled", true)) continue;
+                String want = "start".equals(s.optString("runAt", "end")) ? "start" : "end";
+                if (!want.equals(phase)) continue;
+                if (!usMatches(s, url)) continue;
+                if (!runtimeAdded) { String rt = readAssetText("engine/userscript.js"); if (rt != null) js.append(rt).append("\n"); runtimeAdded = true; }
+                String id = s.optString("id");
+                String metaB64 = b64(s.toString());
+                String req = s.optString("requireCode", "");
+                String code = s.optString("source", "");
+                js.append("(function(){try{var __g=window.__dcMakeGM('").append(id).append("',window.__dcB64d('").append(metaB64).append("'));")
+                  .append("var GM=__g.GM,GM_info=__g.GM_info,GM_setValue=__g.GM_setValue,GM_getValue=__g.GM_getValue,GM_deleteValue=__g.GM_deleteValue,GM_listValues=__g.GM_listValues,GM_xmlhttpRequest=__g.GM_xmlhttpRequest,GM_xmlHttpRequest=__g.GM_xmlhttpRequest,GM_addStyle=__g.GM_addStyle,GM_openInTab=__g.GM_openInTab,GM_setClipboard=__g.GM_setClipboard,GM_registerMenuCommand=__g.GM_registerMenuCommand,GM_notification=__g.GM_notification,GM_getResourceText=__g.GM_getResourceText,GM_getResourceURL=__g.GM_getResourceURL,GM_log=__g.GM_log,unsafeWindow=window;\n")
+                  .append(req).append("\n").append(code).append("\n}catch(e){try{window.__dcus&&window.__dcus.log('userscript error: '+e);}catch(_){} }})();\n");
+            }
+            if (js.length() > 0) w.evaluateJavascript(js.toString(), null);
+        } catch (Exception ignored) {}
+    }
+    /** GM_* 后端 + 跨域 xhr: 仅普通网页暴露 (__dcus), 与 __dcaf 同安全边界。 */
+    public class UserScriptBridge {
+        private final WebView owner;
+        UserScriptBridge(WebView w) { this.owner = w; }
+        @JavascriptInterface public String gmGet(String sid, String key) {
+            try { org.json.JSONObject sc = gmStore().optJSONObject(sid); return sc == null ? "" : sc.optString(key, ""); }
+            catch (Exception e) { return ""; }
+        }
+        @JavascriptInterface public void gmSet(String sid, String key, String val) {
+            try { org.json.JSONObject st = gmStore(); org.json.JSONObject sc = st.optJSONObject(sid);
+                if (sc == null) { sc = new org.json.JSONObject(); st.put(sid, sc); }
+                sc.put(key, val); gmStoreSave(st); } catch (Exception e) {}
+        }
+        @JavascriptInterface public void gmDel(String sid, String key) {
+            try { org.json.JSONObject st = gmStore(); org.json.JSONObject sc = st.optJSONObject(sid);
+                if (sc != null) { sc.remove(key); gmStoreSave(st); } } catch (Exception e) {}
+        }
+        @JavascriptInterface public String gmList(String sid) {
+            try { org.json.JSONObject sc = gmStore().optJSONObject(sid); org.json.JSONArray out = new org.json.JSONArray();
+                if (sc != null) { java.util.Iterator<String> it = sc.keys(); while (it.hasNext()) out.put(it.next()); }
+                return out.toString(); } catch (Exception e) { return "[]"; }
+        }
+        @JavascriptInterface public void xhr(String reqId, String optsJson) {
+            new Thread(() -> {
+                int status = 0; String bodyB64 = ""; String hdrs = "{}";
+                HttpURLConnection c = null;
+                try {
+                    org.json.JSONObject o = new org.json.JSONObject(optsJson);
+                    String method = o.optString("method", "GET").toUpperCase();
+                    c = (HttpURLConnection) new URL(o.getString("url")).openConnection();
+                    c.setConnectTimeout(15000); c.setReadTimeout(30000); c.setRequestMethod(method);
+                    org.json.JSONObject hs = o.optJSONObject("headers");
+                    if (hs != null) { java.util.Iterator<String> it = hs.keys(); while (it.hasNext()) { String k = it.next(); c.setRequestProperty(k, hs.optString(k)); } }
+                    String data = o.optString("data", "");
+                    if (!data.isEmpty() && !"GET".equals(method) && !"HEAD".equals(method)) {
+                        c.setDoOutput(true); java.io.OutputStream os = c.getOutputStream();
+                        os.write(data.getBytes(StandardCharsets.UTF_8)); os.close();
+                    }
+                    status = c.getResponseCode();
+                    InputStream is = (status >= 200 && status < 400) ? c.getInputStream() : c.getErrorStream();
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    byte[] buf = new byte[4096]; int n; while (is != null && (n = is.read(buf)) > 0) bos.write(buf, 0, n);
+                    if (is != null) is.close();
+                    bodyB64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
+                    org.json.JSONObject hj = new org.json.JSONObject();
+                    for (java.util.Map.Entry<String, java.util.List<String>> e : c.getHeaderFields().entrySet())
+                        if (e.getKey() != null) hj.put(e.getKey().toLowerCase(), android.text.TextUtils.join(", ", e.getValue()));
+                    hdrs = hj.toString();
+                } catch (Exception e) { status = 0; } finally { if (c != null) c.disconnect(); }
+                final int fs = status; final String fb = bodyB64; final String fh = b64(hdrs);
+                final String rid = reqId.replace("\\", "\\\\").replace("'", "\\'");
+                main.post(() -> { try { owner.evaluateJavascript(
+                        "window.__dcusXhrCb&&window.__dcusXhrCb('" + rid + "'," + fs + ",'" + fb + "','" + fh + "')", null);
+                } catch (Exception ig) {} });
+            }).start();
+        }
+        @JavascriptInterface public void openTab(String url) { main.post(() -> { try { newTab(url, null); } catch (Exception e) {} }); }
+        @JavascriptInterface public void setClip(String text) {
+            main.post(() -> { try { ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(ClipData.newPlainText("us", text)); } catch (Exception e) {} });
+        }
+        @JavascriptInterface public void notify(String text) { main.post(() -> toast(text)); }
+        @JavascriptInterface public void menu(String sid, String caption, String fnId) { /* v1: 接受但不渲染菜单项 */ }
+        @JavascriptInterface public void log(String s) { android.util.Log.d("RTUS", String.valueOf(s)); }
+    }
+
     private long lastSavePrompt = 0;
     private void promptSaveLogin(WebView w, String u, String p) {
         try {
@@ -1440,6 +1690,46 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public String conn() {
             RelayService r = RelayService.instance;
             return r != null ? r.readConn() : "{}";
+        }
+        // ── 用户脚本管理 (供 userscripts.html 内部页) ──
+        @JavascriptInterface public String usList() {
+            try {
+                org.json.JSONArray all = usLoadAll(); org.json.JSONArray out = new org.json.JSONArray();
+                for (int i = 0; i < all.length(); i++) {
+                    org.json.JSONObject s = all.optJSONObject(i); if (s == null) continue;
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    o.put("id", s.optString("id")); o.put("name", s.optString("name"));
+                    o.put("version", s.optString("version")); o.put("enabled", s.optBoolean("enabled", true));
+                    o.put("description", s.optString("description")); o.put("runAt", s.optString("runAt"));
+                    o.put("matches", s.optJSONArray("matches")); o.put("includes", s.optJSONArray("includes"));
+                    out.put(o);
+                }
+                return out.toString();
+            } catch (Exception e) { return "[]"; }
+        }
+        @JavascriptInterface public String usGetSource(String id) {
+            org.json.JSONArray all = usLoadAll();
+            for (int i = 0; i < all.length(); i++) { org.json.JSONObject s = all.optJSONObject(i);
+                if (s != null && id.equals(s.optString("id"))) return s.optString("source", ""); }
+            return "";
+        }
+        @JavascriptInterface public String usSaveCode(String code) { return usAddOrUpdate(code); }
+        @JavascriptInterface public String usInstall(String url) {   // 同步抓取+解析 (运行于 JS 桥线程, 非主线程)
+            String code = httpGetText(url);
+            if (code == null || code.indexOf("==UserScript==") < 0) return "";
+            return usAddOrUpdate(code);
+        }
+        @JavascriptInterface public void usDelete(String id) {
+            try { org.json.JSONArray all = usLoadAll(), out = new org.json.JSONArray();
+                for (int i = 0; i < all.length(); i++) { org.json.JSONObject s = all.optJSONObject(i);
+                    if (s != null && !id.equals(s.optString("id"))) out.put(s); }
+                usSaveAll(out); } catch (Exception e) {}
+        }
+        @JavascriptInterface public void usToggle(String id, boolean on) {
+            try { org.json.JSONArray all = usLoadAll();
+                for (int i = 0; i < all.length(); i++) { org.json.JSONObject s = all.optJSONObject(i);
+                    if (s != null && id.equals(s.optString("id"))) { s.put("enabled", on); break; } }
+                usSaveAll(all); } catch (Exception e) {}
         }
         @JavascriptInterface public String relayStatus() { return RelayService.lastStatus; }
         @JavascriptInterface public void relayRestart() { main.post(() -> { stopService(new Intent(MainActivity.this, RelayService.class)); startRelay(); }); }

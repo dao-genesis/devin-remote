@@ -1,6 +1,6 @@
 {
-  "versionCode": 34,
-  "versionName": "0.15.3",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.3/DevinCloud-mobile-v0.15.3.apk",
-  "notes": "v0.15.3\n· 彻底修复整页翻译: 弃用已失效的 Google 网页翻译挂件, 改用 Edge 浏览器内置免费翻译引擎(无 key·国内可直连), 遍历页面文本节点逐段翻译并回填\n· 译文经原生桥请求, 绕开页面 CSP/同源限制, 任意网站都能翻; 动态加载内容(无限滚动/SPA)增量翻译; 再点一下即时恢复原文\n· 含 v0.15.2 全部修复(卸载/重装账号自动从共享保险箱恢复)"
+  "versionCode": 35,
+  "versionName": "0.15.4",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.4/DevinCloud-mobile-v0.15.4.apk",
+  "notes": "v0.15.4\n· 新增用户脚本引擎(油猴 Tampermonkey 兼容): 直接运行标准 .user.js 脚本, 支持 @match/@include/@exclude/@run-at, 提供 GM_setValue/GM_getValue/GM_xmlhttpRequest/GM_addStyle/GM_openInTab/GM_registerMenuCommand 等 GM_* API\n· GM_xmlhttpRequest 走原生桥 → 天然跨域、绕开网站 CSP; 脚本与数据存共享保险箱, 卸载/重装不丢\n· 菜单新增「用户脚本(油猴)」管理页: 从网址(如 Greasy Fork)一键安装、粘贴源码、启停、删除\n· 含 v0.15.3 整页翻译(Edge 引擎)与 v0.15.2 数据持久化全部修复"
 }
