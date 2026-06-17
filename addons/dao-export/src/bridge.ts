@@ -9,14 +9,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as api from './api';
-import { exportSessionToZip } from './exporter';
+import { exportSessionToZip, exportSessionToMarkdown } from './exporter';
 import { buildWorklog, extractChanges, safeName } from './worklog';
+import { AccountStore } from './accountStore';
 
 export interface BridgeHost {
+  store: AccountStore;
   getAuth(): api.AuthState | undefined;
-  setAuth(a: api.AuthState | undefined): Promise<void>;
   getSessions(): api.SessionInfo[];
   refreshSessions(): Promise<api.SessionInfo[]>;
+  onChanged(): void;
   version: string;
 }
 
@@ -82,29 +84,76 @@ export class AgentBridge {
       const m = req.method || 'GET';
       const p = url.pathname;
 
+      const store = this.host.store;
+
       if (p === '/api/status') {
         return send(200, {
           version: this.host.version, loggedIn: !!auth,
           email: auth?.email, org: auth?.orgName, orgId: auth?.orgId,
+          accounts: store.views(),
           sessionsCached: this.host.getSessions().length,
           endpoints: ENDPOINTS,
         });
       }
 
+      // ── 多账号管理 (万法识号) ──
+      if (p === '/api/accounts' && m === 'GET') { return send(200, store.views()); }
+      if (p === '/api/accounts' && m === 'POST') {
+        const { text } = JSON.parse(body || '{}');
+        const r = await store.addFromText(String(text || ''));
+        this.host.onChanged();
+        return send(200, { ok: true, ...r, accounts: store.views() });
+      }
+      if (p === '/api/accounts/verify-all' && m === 'POST') {
+        const r = await store.verifyAll(4);
+        if (this.host.getAuth()) { await this.host.refreshSessions(); }
+        this.host.onChanged();
+        return send(200, { ok: true, verified: r.ok, failed: r.fail, accounts: store.views() });
+      }
+      const acct = p.match(/^\/api\/account\/([^/]+)(\/(activate|verify|remove))?$/);
+      if (acct) {
+        const id = decodeURIComponent(acct[1]);
+        const verb = acct[3] || '';
+        if (verb === 'activate' && m === 'POST') {
+          const a = await store.setActive(id);
+          await this.host.refreshSessions();
+          this.host.onChanged();
+          return send(200, { ok: true, active: a.email, accounts: store.views() });
+        }
+        if (verb === 'verify' && m === 'POST') {
+          const a = await store.verify(id);
+          this.host.onChanged();
+          return send(200, { ok: true, email: a.email, org: a.orgName });
+        }
+        if ((verb === 'remove' && m === 'POST') || m === 'DELETE') {
+          await store.remove(id);
+          this.host.onChanged();
+          return send(200, { ok: true, accounts: store.views() });
+        }
+      }
+
       if (p === '/api/login' && m === 'POST') {
-        const { email, password } = JSON.parse(body || '{}');
-        const a = await api.login(email, password);
-        await this.host.setAuth(a);
+        const { email, password, token } = JSON.parse(body || '{}');
+        const text = token ? String(token) : `${email} ${password}`;
+        await store.addFromText(text);
+        const view = store.views().find((v) =>
+          (email && v.email.toLowerCase() === String(email).toLowerCase()) || v.kind === 'token');
+        const id = view ? view.id : store.views()[store.views().length - 1]?.id;
+        if (!id) { return send(400, { error: '无法识别账号/凭据' }); }
+        const a = await store.setActive(id);
         await this.host.refreshSessions();
+        this.host.onChanged();
         return send(200, { ok: true, email: a.email, org: a.orgName });
       }
 
       if (p === '/api/logout' && m === 'POST') {
-        await this.host.setAuth(undefined);
+        const active = store.getActive();
+        if (active) { await store.remove(active.id); }
+        this.host.onChanged();
         return send(200, { ok: true });
       }
 
-      if (!auth) { return send(401, { error: 'not logged in; POST /api/login first' }); }
+      if (!auth) { return send(401, { error: 'no active account; POST /api/login or /api/accounts first' }); }
 
       if (p === '/api/sessions') {
         const list = url.searchParams.get('refresh') === '1'
@@ -130,6 +179,11 @@ export class AgentBridge {
           const evs = await loadEvents(auth, devinId);
           const title = this.titleOf(devinId);
           return send(200, buildWorklog(title, devinId, evs), 'text/markdown; charset=utf-8');
+        }
+        if (sub === '/conversation' || sub === '/md') {
+          const title = this.titleOf(devinId);
+          const md = await exportSessionToMarkdown(auth, devinId, title);
+          return send(200, md, 'text/markdown; charset=utf-8');
         }
         if (sub === '/changes') {
           const evs = await loadEvents(auth, devinId);
@@ -157,6 +211,16 @@ export class AgentBridge {
           fs.mkdirSync(path.dirname(out), { recursive: true });
           fs.writeFileSync(out, zipBuf);
           return send(200, { ok: true, path: out, bytes: zipBuf.length });
+        }
+        if (sub === '/export-md' && m === 'POST') {
+          const opts = JSON.parse(body || '{}');
+          const title = this.titleOf(devinId);
+          const md = await exportSessionToMarkdown(auth, devinId, title);
+          const out = opts.outputPath
+            || path.join(os.homedir(), 'Downloads', `${safeName(title, 40)}_${devinId.replace('devin-', '').slice(0, 8)}.md`);
+          fs.mkdirSync(path.dirname(out), { recursive: true });
+          fs.writeFileSync(out, md, 'utf-8');
+          return send(200, { ok: true, path: out, bytes: Buffer.byteLength(md, 'utf-8') });
         }
       }
 
@@ -217,7 +281,7 @@ export class AgentBridge {
 
 > 生成时间: ${new Date().toISOString()}
 > 插件版本: ${this.host.version} | Bridge 运行中: ${base}
-> 登录状态: ${auth ? `已登录 ${auth.email} (${auth.orgName})` : '未登录 — 先调用 POST /api/login'}
+> 当前账号: ${auth ? `${auth.email} (${auth.orgName})` : '无 — 先 POST /api/accounts 批量加号或 POST /api/login'} | 账号总数: ${this.host.store.views().length}
 
 只要 VS Code 窗口开着、插件在运行，任何 Agent 即可通过下面的 HTTP 接口调用本插件全部底层功能（无需任何其他文档/依赖）。
 
@@ -230,17 +294,25 @@ export class AgentBridge {
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /api/ping | 探活（免鉴权） |
-| GET | /api/status | 插件/登录状态 + 全部端点 |
-| POST | /api/login | body: {"email","password"} |
-| POST | /api/logout | 登出 |
-| GET | /api/sessions | 全部会话；?q=关键词 过滤；?refresh=1 强制刷新 |
+| GET | /api/status | 插件状态 + 多账号列表 + 全部端点 |
+| GET | /api/accounts | 多账号列表（脱敏：无密码/token） |
+| POST | /api/accounts | 万法识号批量加号 body: {"text":"任意格式账号文本"} |
+| POST | /api/accounts/verify-all | 批量验证全部账号 |
+| POST | /api/account/{id}/activate | 切换为当前账号（并刷新其 sessions） |
+| POST | /api/account/{id}/verify | 验证单个账号 |
+| POST | /api/account/{id}/remove | 删除单个账号（或 DELETE /api/account/{id}） |
+| POST | /api/login | 加号并激活 body: {"email","password"} 或 {"token"} |
+| POST | /api/logout | 移除当前账号 |
+| GET | /api/sessions | 当前账号全部会话；?q=关键词 过滤；?refresh=1 强制刷新 |
 | GET | /api/session/{devin_id} | 会话元数据 |
 | GET | /api/session/{devin_id}/events | 完整事件流（去重合并 JSON） |
 | GET | /api/session/{devin_id}/worklog | 可读工作日志 markdown |
+| GET | /api/session/{devin_id}/conversation | **整段对话单文件 Markdown**（=/md） |
 | GET | /api/session/{devin_id}/changes | 最终变更文件列表 (path + contents_key) |
 | GET | /api/session/{devin_id}/keys | 全部云端文件 s3 key |
 | GET | /api/session/{devin_id}/file?key=K | 下载单个云端文件内容 |
 | POST | /api/session/{devin_id}/export | 一键导出全量 ZIP；body 可选 {"outputPath":"..."} |
+| POST | /api/session/{devin_id}/export-md | **导出整段对话单文件 MD**；body 可选 {"outputPath":"..."} |
 | GET | /api/account/playbooks | 账号 playbooks |
 | GET | /api/account/knowledge | 账号 knowledge |
 | GET | /api/account/secrets | 账号 secrets 元数据 |
@@ -254,14 +326,18 @@ export class AgentBridge {
 curl ${base}/api/ping
 # 状态
 curl -H "Authorization: Bearer ${tok}" ${base}/api/status
-# 登录（如未登录）
+# 万法识号批量加号（任意格式·一文混万法）
 curl -X POST -H "Authorization: Bearer ${tok}" -H "Content-Type: application/json" \\
-  -d '{"email":"xxx@gmail.com","password":"***"}' ${base}/api/login
+  -d '{"text":"a@b.com pass1\\nc@d.com:pass2\\ndevin-session-token$xxx"}' ${base}/api/accounts
+# 切换当前账号
+curl -X POST -H "Authorization: Bearer ${tok}" "${base}/api/account/p:a@b.com/activate"
 # 会话列表
 curl -H "Authorization: Bearer ${tok}" "${base}/api/sessions?q=导出"
-# 导出某会话全量 ZIP
+# 导出某会话整段对话单文件 MD（其它 Agent 直接喂）
 curl -X POST -H "Authorization: Bearer ${tok}" -H "Content-Type: application/json" \\
-  -d '{"outputPath":"D:/exports/session.zip"}' ${base}/api/session/devin-xxxx/export
+  -d '{"outputPath":"D:/exports/session.md"}' ${base}/api/session/devin-xxxx/export-md
+# 或直接拿 markdown 文本
+curl -H "Authorization: Bearer ${tok}" ${base}/api/session/devin-xxxx/conversation
 \`\`\`
 
 \`\`\`powershell
@@ -285,12 +361,16 @@ Invoke-RestMethod "${base}/api/session/devin-xxxx/export" -Method Post -Headers 
 }
 
 const ENDPOINTS = [
-  'GET /api/ping', 'GET /api/status', 'POST /api/login', 'POST /api/logout',
+  'GET /api/ping', 'GET /api/status',
+  'GET /api/accounts', 'POST /api/accounts', 'POST /api/accounts/verify-all',
+  'POST /api/account/{id}/activate', 'POST /api/account/{id}/verify', 'POST /api/account/{id}/remove',
+  'POST /api/login', 'POST /api/logout',
   'GET /api/sessions?q=&refresh=1',
   'GET /api/session/{devin_id}', 'GET /api/session/{devin_id}/events',
-  'GET /api/session/{devin_id}/worklog', 'GET /api/session/{devin_id}/changes',
+  'GET /api/session/{devin_id}/worklog', 'GET /api/session/{devin_id}/conversation',
+  'GET /api/session/{devin_id}/changes',
   'GET /api/session/{devin_id}/keys', 'GET /api/session/{devin_id}/file?key=',
-  'POST /api/session/{devin_id}/export',
+  'POST /api/session/{devin_id}/export', 'POST /api/session/{devin_id}/export-md',
   'GET /api/account/playbooks', 'GET /api/account/knowledge',
   'GET /api/account/secrets', 'GET /api/account/org', 'GET /api/doc',
 ];

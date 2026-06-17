@@ -53,6 +53,7 @@ export function getDetailHtml(session: SessionInfo): string {
 <div class="header">
   <h2 title="${title}">${title}</h2>
   <button class="secondary" onclick="vscode.postMessage({command:'openExternal'})">官网打开</button>
+  <button class="secondary" onclick="vscode.postMessage({command:'exportMd'})" title="整段对话导出为单个 Markdown 文件（无需文件夹）">⬇ 导出 MD (整段对话)</button>
   <button onclick="vscode.postMessage({command:'export'})">⬇ 导出 ZIP (一切底层数据)</button>
 </div>
 <div class="tabs">
