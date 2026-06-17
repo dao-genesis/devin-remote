@@ -11331,11 +11331,19 @@ async function handleWebviewMessage(msg) {
           }
         }
         // 2. 执行删除
+        // 道法自然 · 水过无痕「移出账号库」: 备份并清空(回归本源)路径 = 全量备份→全量清理→移出账号库 一气呵成。
+        //   仅在「备份并清空」且清理无残留时出库(已留底→无痕→出库); 「仅清空」不出库(无留底, 防误删)。
+        const _wpEvict = pick === "备份并清空(回归本源)";
+        const _wpEvictEmails = [];
         for (const s of good) {
           if (s._skip) { _toast("\u23ED 跳过 " + s.email.split("@")[0] + " (留底失败)"); continue; }
           _toast("\u23F3 清理 " + s.email.split("@")[0] + " …");
           try {
             const rep = await devinCloud.wipeAccount(s.auth, { onProgress: (m) => _toast("\u23F3 " + m) });
+            // 清理无残留(对话/知识/剧本/密钥皆 0 失败) → 标记出库
+            if (_wpEvict && rep && rep.sessions.failed === 0 && rep.knowledge.failed === 0 && rep.playbooks.failed === 0 && rep.secrets.failed === 0) {
+              _wpEvictEmails.push(s.email);
+            }
             _toast(
               "\u2713 " + s.email.split("@")[0] + " 已回归本源: 对话归档" + rep.sessions.deleted + "/" + rep.sessions.found +
                 " 知识库" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted +
@@ -11364,6 +11372,83 @@ async function handleWebviewMessage(msg) {
             _toast("\u2717 清理失败: " + String((e && e.message) || e));
           }
         }
+        // 移出账号库 (循环外·避免迭代中改数组) — 备份+清理已完成且痕迹已清, 此处仅从账号库移除
+        if (_wpEvictEmails.length) {
+          const _ix = _wpEvictEmails
+            .map((em) => _store.accounts.findIndex((a) => (a.email || "").toLowerCase() === String(em).toLowerCase()))
+            .filter((i) => i >= 0);
+          if (_ix.length) {
+            _store.removeBatch(_ix);
+            _toast("\u2713 已移出账号库 " + _ix.length + " 个 (水过无痕·一气呵成)");
+            _notify("info", "水过无痕 · 已全量备份+清理 → 移出账号库 " + _ix.length + " 个: " + _wpEvictEmails.join(", "));
+            log("[wp-evict] 移出账号库 " + _ix.length + " 个 · " + _wpEvictEmails.join(", "));
+          }
+        }
+        _broadcastUI();
+        break;
+      }
+      // 道法自然 · 一气呵成清理额度归零账号: 全量备份 → 全量清理 → 移出账号库 (供切号面板/Agent 调用)
+      //   仅作用于「额度权威归零」(billing ≤ 阈值)的账号; 备份须通过完整性校验方可清理(未全量备份不删);
+      //   清理无残留方可出库。健康号(无法判定额度/有订阅)一律跳过, 防误删。
+      case "devinCleanupZeroQuota": {
+        const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+        const bkMode = _cfg("devinCloudBackupMode", "folder");
+        const removeThreshold = Math.max(0, +_cfg("devinCloudAutoRemoveThreshold", 0) || 0);
+        _toast("\u23F3 扫描额度归零账号…");
+        // 1. 找出额度归零账号 (billing 权威判定)
+        const zero = [];
+        for (let i = 0; i < _store.accounts.length; i++) {
+          const r = await _dvAuthFor(i);
+          if (!r.ok) continue;
+          let billing = null;
+          try { billing = await devinCloud.getBilling(r.auth); } catch {}
+          const tc = _billingTotalDollars(billing);
+          if (tc !== null && tc <= removeThreshold) zero.push({ i, email: r.email, auth: r.auth, credits: tc });
+        }
+        if (!zero.length) { _toast("\u2713 无额度归零账号 · 无需清理"); break; }
+        const pick = await vscode.window.showWarningMessage(
+          "【额度归零清理·不可逆】将对以下 " + zero.length + " 个额度归零账号一气呵成: 全量备份 → 全量清理(对话/知识/剧本/密钥/Git) → 移出账号库。\n\n" +
+            zero.map((z) => "• " + z.email + " ($" + z.credits.toFixed(2) + ")").join("\n") +
+            "\n\n仅在全量备份校验完整且清理无残留时出库。",
+          { modal: true },
+          "备份+清理+出库",
+        );
+        if (pick !== "备份+清理+出库") { _toast("已取消"); break; }
+        const evictEmails = [];
+        for (const z of zero) {
+          // 2. 全量备份 (严格校验)
+          _toast("\u23F3 留底 " + z.email.split("@")[0] + " …");
+          let backupOk = false;
+          try {
+            const naming = { accountNo: _dvAccountNo(z.email), password: (_store.accounts[z.i] && _store.accounts[z.i].password) || "" };
+            const br = bkMode === "folder"
+              ? await devinCloud.backupAccountFullFolders(z.auth, Object.assign({ targetDir: dir, incremental: false }, naming))
+              : await devinCloud.backupAccountFull(z.auth, Object.assign({ targetDir: dir, incremental: false }, naming));
+            backupOk = _dvBackupVerifiedFull(br);
+          } catch (be) { log("[cleanup-zero] backup err " + z.email + ": " + (be.message || be)); }
+          if (!backupOk) { _toast("\u26A0 " + z.email.split("@")[0] + " 备份未通过校验 → 跳过(不删)"); continue; }
+          // 3. 全量清理
+          _toast("\u23F3 清理 " + z.email.split("@")[0] + " …");
+          try {
+            const rep = await devinCloud.wipeAccount(z.auth, { onProgress: (m) => _toast("\u23F3 " + m) });
+            try { await devinGit.robustDisconnectGit(z.auth); } catch {}
+            _dvOverviewCache.delete(z.email.toLowerCase());
+            const clean = rep && rep.sessions.failed === 0 && rep.knowledge.failed === 0 && rep.playbooks.failed === 0 && rep.secrets.failed === 0;
+            if (clean) evictEmails.push(z.email);
+          } catch (ce) { _toast("\u2717 清理失败 " + z.email.split("@")[0] + ": " + (ce.message || ce)); }
+        }
+        // 4. 移出账号库 (循环外)
+        if (evictEmails.length) {
+          const ix = evictEmails
+            .map((em) => _store.accounts.findIndex((a) => (a.email || "").toLowerCase() === String(em).toLowerCase()))
+            .filter((i) => i >= 0);
+          if (ix.length) {
+            _store.removeBatch(ix);
+            _notify("info", "额度归零清理 · 全量备份+清理 → 移出账号库 " + ix.length + " 个: " + evictEmails.join(", "));
+            log("[cleanup-zero] 出库 " + ix.length + " 个 · " + evictEmails.join(", "));
+          }
+        }
+        _toast("\u2713 归零清理完成 · 出库 " + evictEmails.length + "/" + zero.length + " (一气呵成)");
         _broadcastUI();
         break;
       }
@@ -12285,7 +12370,9 @@ async function activate(context) {
     vscode.StatusBarAlignment.Right,
     100,
   );
-  _statusBar.command = "wam.openEditor";
+  // 道法自然 · 右下角 RT Flow 按钮 → 自动打开全功能面板「切号」模块(第2模块)。
+  //   dao.openSwitchModule 由 dao-vsix 注册(二合一); 缺失时回退到 wam.openEditor(独立运行兜底)。
+  _statusBar.command = "dao.openSwitchModule";
   context.subscriptions.push(_statusBar);
   updateStatusBar();
   _statusBar.show();
@@ -12312,6 +12399,10 @@ async function activate(context) {
     [
       "wam.devinBackupAll",
       () => handleWebviewMessage({ type: "devinBackupAll", indices: [] }),
+    ],
+    [
+      "wam.devinCleanupZeroQuota",
+      () => handleWebviewMessage({ type: "devinCleanupZeroQuota" }),
     ],
     [
       "wam.devinWipeAccount",
