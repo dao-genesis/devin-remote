@@ -1,4 +1,4 @@
-# Devin Cloud 手机版 (v0.15.10)
+# Devin Cloud 手机版 (v0.15.11)
 
 > 模块目录: `addons/rt-flow-app/` (内部代号保留, 仅为目录/包名/自更新路径; 所有用户可见命名均为「Devin Cloud 手机版」)。
 
@@ -122,7 +122,8 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 | v0.15.0 | 浏览器体感内置化、无感化。① **翻译做成顶栏一键**：网址旁「译」按钮，点一下整页自动翻译、再点恢复原文（注入 Google 网页翻译引擎 `translate_a/element.js`，`autoDisplay=false` 仅翻译不弹横幅，同电脑端 Chrome 体感；国内需开 VPN）。② **广告拦截默认内置开启**：`adBlock` 默认 `true`，去掉手动开关菜单项，自动拦截广告域名 + 非用户触发弹窗。③ **登录账密像 Chrome 自动**：去掉「保存/填充本站登录」菜单按钮 → `installLoginCapture` 监听 submit/click/Enter 捕获账密，提交时 `AutofillBridge.onLogin` 自动弹「保存登录？」；`autoFillLogin` 在 `onPageFinished` 对有保存登录的站点自动填充（不覆盖已填内容），全程无感。④ 去掉「标签总览」菜单项（顶部标签条已足够） |
 
 | v0.15.9 | 下载板块修复：① **下载持久化** — 下载文件落共享保险箱 `Documents/DevinCloud/downloads/` (脱离应用沙箱)、记录写入保险箱、启动自动回读；系统下载完成后自动从沙箱搬入保险箱 → 卸载/重装/升级不再丢下载 (与账号/标签同机制)。② **拖到页面** — 长按下载项拖到网页松手, 自动注入页面上传框 `input[type=file]` 并对落点派发 drop 事件 (兼容 dropzone 上传组件)。AVD 实测两项全过 |
-| v0.15.10 | **当前版本**：命名归一 + 提取增强 + 云端文档全开放。① **全量改名「Devin Cloud 手机版」**, 清除 RT Flow / rt-flow-app 用户可见残留 (内部包名 `ai.devin.rtflow`/隧道 `rtflow-` 前缀/发布 tag 保留以保数据不丢、隧道不断)。② **对话整体提取** — 新增 `extractConversation` / `extractAccountConversations` RPC (额度耗尽账号亦可, 仅读历史不耗额度), 一行拿齐 元数据+完整对话md+工作日志md+文件清单, 可 `save:true` 落共享保险箱；新增 `getExtractMd` + 仓库《对话整体提取工作流》文档 (含对话ID/账号信息/工作流)。③ **内网穿透云端 .md (`getCloudMd`) 完全开放无限制** — 三大板块全部命令/参数/高级用法 + 提取工作流全部内联, 云端 Agent 读一篇即可直接按需调用核心功能, 不再分步 `getModuleDoc` |
+| v0.15.10 | 命名归一 + 提取增强 + 云端文档全开放。① **全量改名「Devin Cloud 手机版」**, 清除 RT Flow / rt-flow-app 用户可见残留 (内部包名 `ai.devin.rtflow`/隧道 `rtflow-` 前缀/发布 tag 保留以保数据不丢、隧道不断)。② **对话整体提取** — 新增 `extractConversation` / `extractAccountConversations` RPC (额度耗尽账号亦可, 仅读历史不耗额度), 一行拿齐 元数据+完整对话md+工作日志md+文件清单, 可 `save:true` 落共享保险箱；新增 `getExtractMd` + 仓库《对话整体提取工作流》文档 (含对话ID/账号信息/工作流)。③ **内网穿透云端 .md (`getCloudMd`) 完全开放无限制** — 三大板块全部命令/参数/高级用法 + 提取工作流全部内联, 云端 Agent 读一篇即可直接按需调用核心功能, 不再分步 `getModuleDoc` |
+| v0.15.11 | **当前版本**：标签条拖拽边缘自动横滚 + 整机分享。① **标签条边缘自动横滚** — 标签多到一屏放不下时, 长按拖标签 / 把对话拖到标签条, 拖到最左/最右边缘会自动向左/向右平滑横滚露出屏外的网页 (浏览器同款); 移出边缘即停、到尽头即停。由此可先把标签条滚到一端再长按目标标签拖到另一端的网页, 跨屏拖拽更顺手 (`tabEdgeScrollRunner`/`updateTabEdgeScroll`)。② **整机分享** — 「≡ → 页面工具 → 导出整机分享包」打成一个 zip = `DevinCloud.apk` 本体 + `vault/`(整个共享保险箱: 账号/标签/历史/下载/备份/脚本) + `prefs.json` + `manifest.json`, 走系统分享; 新设备「导入分享包」一步还原全部数据并引导安装 APK, 一拿即同步。注: Android 不允许「单个已安装 APK 内塞数据」(改 APK 即破签名无法安装), 故以等效单文件 zip 实现 |
 
 ## 取代的旧模块
 
