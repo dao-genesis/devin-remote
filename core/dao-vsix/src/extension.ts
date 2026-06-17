@@ -1833,6 +1833,7 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                             knowledge: '/knowledge', playbooks: '/playbooks',
                             secrets: '/settings/secrets', integrations: '/settings/integrations',
                             automations: '/settings/automations',
+                            schedules: '/settings/schedules',
                         };
                         const pagePath = pagePaths[page] || '';
                         // 经反代根路径路由(/、/sessions ...) — SPA 客户端路由正确匹配 + 自动注入登录
@@ -1867,6 +1868,7 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                                     }));
                                     reply({ ok: true, data: aitems });
                                 }
+                                else if (tab === 'schedules') { result = await devinListSchedules(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
                                 else reply({ ok: false, error: 'unknown tab' });
                             } catch (e: any) { reply({ ok: false, error: e.message }); }
                         } else {
@@ -2661,8 +2663,8 @@ function sw(t){
         cmd('loadTabData',{tab:t});
       } else {
         // ★ 无 auth1 (仅 session-token) → 底层自动获取凭证, 用户无需手动 API Key
-        const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'};
-        const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'};
+        const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时'};
+        const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅'};
         v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[t]||'🌐')+'</div><h3>'+tabNames[t]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6;margin-bottom:12px">账号凭证将随 IDE 登录状态自动同步, 无需手动操作。若长时间未就绪, 可重试自动登录或手动切换账号。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
       }
     }
@@ -2851,12 +2853,13 @@ function daoOverviewManualHtml(){
     +'<div class="st" style="font-size:11px;text-transform:none">🔑 Secrets 密钥</div><div id="ov-secrets" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">🔗 Git / Security</div><div id="ov-git" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">⚙️ Automations 自动化</div><div id="ov-automations" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">📅 Schedules 定时任务</div><div id="ov-schedules" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">🗺️ 环境蓝图 Blueprints</div><div id="ov-blueprints" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">🧩 MCP 服务器</div><div class="card"><div class="cr"><span class="l" style="font-size:11px;color:var(--muted)">MCP 在专用面板集中管理(浏览市场·安装·卸载·钉住)</span><span class="v"><button class="btn sm primary" onclick="sw(&#39;mcp&#39;)">打开 MCP 面板</button></span></div></div>';
 }
 function daoLoadOverviewManual(){
   if(!S.auth.loggedIn||!S.auth.canUseApi)return;
-  ['knowledge','playbooks','secrets','integrations','automations'].forEach(function(t){
+  ['knowledge','playbooks','secrets','integrations','automations','schedules'].forEach(function(t){
     var id=(t==='integrations')?'ov-git':'ov-'+t;
     if(!document.getElementById(id))return;
     cmd('loadTabData',{tab:t});
@@ -2900,8 +2903,8 @@ function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab)||document.getElementById('ov-'+(tab==='integrations'?'git':tab));if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
   if(fallbackProxy||err){
-    const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'};
-    const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'};
+    const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时'};
+    const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅'};
     if(err==='需要 cog_ API Key'||fallbackProxy){
       // ★ 需要cog_ key — 显示创建引导
       v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6">账号凭证随 IDE 登录状态自动同步, 无需手动 API Key。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
@@ -2911,7 +2914,7 @@ function rT(tab,items,err,fallbackProxy){
     }
     return;
   }
-  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[tab]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'}[tab]+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
+  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅'}[tab]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时'}[tab]+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
   // ★ v1.0.1 · 各tab添加新建按钮 · 帛书·「道生一·一生二」
   const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>',automations:'<button class="btn sm danger" onclick="if(confirm(&#39;确认清除本账号官网全部自动化?此操作不可撤销&#39;))cmd(&#39;clearAutomations&#39;)">🧹 清除全部</button>'};
   let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
@@ -3233,6 +3236,10 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'automations') {
                             result = await devinListAutomations(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'schedules') {
+                            result = await devinListSchedules(ws.devinOrgId, ws.devinAuth1);
                             if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else {
@@ -5565,6 +5572,32 @@ async function devinUpsertAutomation(orgId: string, a: InjectProfileItemA, auth1
         }
     }
     return await devinInjectAutomation(orgId, a, auth1);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Schedules / 定时任务 — 道法自然·「天发杀机·移星易宿」
+// 列出 / 删除定时触发的会话调度。API: /api/org-<bare>/schedules
+// ═══════════════════════════════════════════════════════════
+async function devinListSchedules(orgId: string, auth1: string): Promise<{ ok: boolean; schedules?: any[]; items?: any[]; status?: number; error?: string }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/schedules', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status === 200) {
+        const j = r.json || {};
+        const schedules = Array.isArray(j) ? j : (Array.isArray(j.schedules) ? j.schedules : (Array.isArray(j.items) ? j.items : []));
+        const items = schedules.map((s: any) => {
+            const cron = s.cron_expression || s.cron || s.schedule || '';
+            const prompt = s.prompt || s.description || s.name || '';
+            const enabled = s.enabled !== false && s.status !== 'paused';
+            return { name: prompt.substring(0, 80) || s.schedule_id || 'Schedule', detail: cron, connected: enabled, id: s.schedule_id || s.id || '' };
+        });
+        return { ok: true, schedules, items };
+    }
+    return { ok: false, status: r.status, error: devinErr(r), schedules: [], items: [] };
+}
+async function devinDeleteSchedule(orgId: string, id: string, auth1: string): Promise<{ ok: boolean }> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const r = await devinJsonDelete(DEVIN_APP + '/api/org-' + bareOrgId + '/schedules/' + encodeURIComponent(id), { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    return { ok: r.status === 200 || r.status === 204 || r.status === 404 };
 }
 
 // ═══════════════════════════════════════════════════════════
