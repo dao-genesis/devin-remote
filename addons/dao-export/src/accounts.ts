@@ -85,6 +85,19 @@ function stripPassCandLabel(s: string): string {
   return s;
 }
 
+/**
+ * 密码定型 · 去尾随分隔副field。卖家常见 `email:password----副码`（`----` 后多为
+ * 2FA/备用码/邮箱密码等副字段），真密码即 `----` 之前那段。真实密码极少含 `----`,
+ * 故安全：仅当含 `----` 且其前有内容时截断；纯 `email----pass` 场景密码本就无 `----`,
+ * 此处为无副作用的恒等变换。
+ */
+function finalizePassword(pw: string): string {
+  if (!pw) { return pw; }
+  const i = pw.indexOf('----');
+  if (i > 0) { return pw.slice(0, i).trim(); }
+  return pw;
+}
+
 const RE_EMAIL_SCAN =
   /[A-Za-z0-9._+\-]+@[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}/;
 
@@ -312,12 +325,12 @@ export function parseAccountText(content: string): ParseResult {
   let pendingPass: string | null = null;
   for (const it of items) {
     if (it.type === 'pair') {
-      if (it.email && it.password && isValidEmail(it.email)) { accounts.push({ email: it.email, password: it.password }); }
+      if (it.email && it.password && isValidEmail(it.email)) { accounts.push({ email: it.email, password: finalizePassword(it.password) }); }
       pendingEmail = null;
       pendingPass = null;
     } else if (it.type === 'email') {
       if (pendingPass) {
-        accounts.push({ email: it.email!, password: pendingPass });
+        accounts.push({ email: it.email!, password: finalizePassword(pendingPass) });
         pendingPass = null;
         pendingEmail = null;
       } else {
@@ -325,7 +338,7 @@ export function parseAccountText(content: string): ParseResult {
       }
     } else if (it.type === 'pass') {
       if (pendingEmail) {
-        accounts.push({ email: pendingEmail, password: it.password! });
+        accounts.push({ email: pendingEmail, password: finalizePassword(it.password!) });
         pendingEmail = null;
       } else {
         pendingPass = it.password!;
