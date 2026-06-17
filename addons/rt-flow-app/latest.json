@@ -1,6 +1,6 @@
 {
-  "versionCode": 42,
-  "versionName": "0.15.11",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.11/DevinCloud-mobile-v0.15.11.apk",
-  "notes": "v0.15.11 · 标签条拖拽边缘自动横滚\n· 标签多到一屏放不下时, 长按拖一个标签/把对话拖到标签条, 拖到最左/最右边缘会自动向左/向右平滑横滚, 露出屏幕外原本看不到的网页 (浏览器同款体验); 移出边缘即停, 到尽头自动停\n· 由此可: 先把标签条滚到一端, 再长按目标标签拖到另一端的网页, 跨屏拖拽更顺手\n· 含 v0.15.10 命名归一 Devin Cloud 手机版 + 对话整体提取(extractConversation/extractAccountConversations, 额度耗尽账号亦可) + 云端 .md(getCloudMd) 完全开放\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
+  "versionCode": 43,
+  "versionName": "0.15.12",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.12/DevinCloud-mobile-v0.15.12.apk",
+  "notes": "v0.15.12 · 三大核心修复\n· 对话卡住检测: 直读 latest_status_contents.user_action_required(Devin 官方\"需你处理\"信号)+enum, 全账号每轮即时命中, 已卡住/需处理对话标红\"待处理\"(旧版只看顶层 status 常年 suspended 故漏判)\n· 对话拖拽导入: 长按某对话标签拖入另一页面松手, 自动提取该对话的 对话md+工作日志md 注入目标页上传/拖放区\n· 自动清理全流程可实测: 切号面板新增「⚡ 立即清理」, 刷额度→预览低额(<阈值)且空闲账号→全量备份→水过无痕清理→归零移出库→汇总; 备份失败绝不清理\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
 }
