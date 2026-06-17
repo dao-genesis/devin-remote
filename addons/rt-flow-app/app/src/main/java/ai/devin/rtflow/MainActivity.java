@@ -854,7 +854,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tt.accountJson != null) copyTabAccount(tt); else toast("非账号标签·无账密可复制");
                     return true;
                 }
-                @Override public void onLongPress(MotionEvent e) { chip.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); startTabDrag(chip, idx); }
+                @Override public void onLongPress(MotionEvent e) { doVibrate(40); chip.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); startTabDrag(chip, idx); }
             });
             chip.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
 
@@ -1790,6 +1790,12 @@ public class MainActivity extends AppCompatActivity {
             });
         }
         @JavascriptInterface public void toast(String s) { MainActivity.this.toast(s == null ? "" : s); }
+        /** 震动反馈 (多选长按/低额提醒) — 直驱 Vibrator, 不受系统触感开关影响。 */
+        @JavascriptInterface public void vibrate(int ms) { MainActivity.this.doVibrate(ms > 0 ? ms : 30); }
+        /** 全量备份落地: Documents/DevinCloud/backups/<账号文件夹>/<name> (脱离沙箱, 卸载/重装不丢)。 */
+        @JavascriptInterface public boolean vaultSaveBackup(String folder, String name, String content) {
+            return MainActivity.this.vaultSaveBackup(folder, name, content);
+        }
         // ── 在线自动更新 (面板/引擎/中继共用) ──
         @JavascriptInterface public String appCheckUpdate() { return fetchUpdateInfo(); }
         @JavascriptInterface public String appInstallUpdate(String url) { return startUpdate(url); }
@@ -2565,6 +2571,30 @@ public class MainActivity extends AppCompatActivity {
             try (FileOutputStream fos = new FileOutputStream(f)) {
                 fos.write((data == null ? "" : data).getBytes(StandardCharsets.UTF_8));
             }
+        } catch (Exception ignored) {}
+    }
+    /** 全量备份落地到 Documents/DevinCloud/backups/<账号文件夹>/<name> — 脱离沙箱, 卸载/重装不丢。 */
+    boolean vaultSaveBackup(String folder, String name, String content) {
+        try {
+            File base = new File(vaultDir(), "backups");
+            String sf = (folder == null || folder.trim().isEmpty()) ? "misc" : folder.replaceAll("[\\\\/:*?\"<>|]", "_");
+            File dir = new File(base, sf);
+            if (!dir.exists()) dir.mkdirs();
+            String safe = (name == null || name.trim().isEmpty()) ? ("backup-" + System.currentTimeMillis() + ".json") : name.replaceAll("[\\\\/:*?\"<>|]", "_");
+            File f = new File(dir, safe);
+            try (FileOutputStream fos = new FileOutputStream(f)) {
+                fos.write((content == null ? "" : content).getBytes(StandardCharsets.UTF_8));
+            }
+            return true;
+        } catch (Exception e) { return false; }
+    }
+    /** 直驱 Vibrator 的震动 (不受系统触感开关影响), 供多选长按/低额提醒等使用。 */
+    void doVibrate(int ms) {
+        try {
+            android.os.Vibrator v = (android.os.Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            if (v == null || !v.hasVibrator()) return;
+            if (Build.VERSION.SDK_INT >= 26) v.vibrate(android.os.VibrationEffect.createOneShot(ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+            else v.vibrate(ms);
         } catch (Exception ignored) {}
     }
     private String vaultRead(String key) {

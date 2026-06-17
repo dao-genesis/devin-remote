@@ -108,6 +108,9 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .toast.show{opacity:1}
 .toast.ok{background:#1a3a1a;color:var(--green);border:1px solid #2a5a2a}
 .toast.fail{background:#3a1a1a;color:var(--red);border:1px solid #5a2a2a}
+/* 放大·更醒目的低额提醒横幅 (仅对话进行中触发) */
+.bigalert{position:fixed;top:10px;left:8px;right:8px;background:#3a1414;color:#ff7a7a;border:2px solid #f44;border-radius:8px;padding:13px 14px;font-size:15px;font-weight:800;line-height:1.35;text-align:center;opacity:0;transform:translateY(-14px);transition:opacity .25s,transform .25s;pointer-events:none;z-index:120;box-shadow:0 6px 22px #000b}
+.bigalert.show{opacity:1;transform:translateY(0)}
 /* ── Devin Cloud 下拉详情 (1:1 桌面 _dvOverviewHtml) ── */
 .dv-detail{display:none;background:#101417;border:1px solid #233;border-radius:4px;margin:0 2px 4px;padding:6px 8px;font-size:11px}
 .dv-detail.open{display:block}
@@ -250,6 +253,12 @@ var DEVIN = "https://app.devin.ai/";
 try{ var _v=localStorage.getItem("rtflow.ver"); var _e=document.getElementById("appVer"); if(_v&&_e) _e.textContent="v"+_v; }catch(e){}
 var _mode = localStorage.getItem("rtflow.mode") || "wam";
 var _convOpen = localStorage.getItem("rtflow.convOpen") !== "0";
+// ── 多选状态 (以账号 id 为准, 跨重渲染持久; 修复"打钩后自动消失"): ──
+var _selIds = new Set();
+var _dragSel = { active:false, baseSel:null }; // 长按拖拽快速多选
+var _suspendRender = false;                    // 拖拽选择中暂停重渲, 避免行位跳动
+var _orderIds = null;                          // 上次显示顺序(账号id), 选择中冻结排序
+function _vib(ms){ try{ if(N.vibrate){ N.vibrate(ms||30); return; } }catch(e){} try{ if(navigator.vibrate) navigator.vibrate(ms||30); }catch(e){} }
 function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
 function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
 function saveAcc(a){ var s=JSON.stringify(a||[]); localStorage.setItem("rtflow.accounts", s); try{ if(N.vaultSave) N.vaultSave("accounts", s); }catch(e){} }
@@ -287,9 +296,9 @@ function rowHtml(a,i){
         : '<span class="eua-big" style="color:'+dcolor+'" title="Extra Usage · 美金额度 $'+dollars.toFixed(2)+'">$'+dollars.toFixed(2)+'</span>')
     : '<span class="eua-big" style="color:#666" title="未刷新额度">$--</span>';
   return ''+
-  '<div class="row'+(active?" act":"")+(auth?"":" expired-row")+'" data-i="'+i+'" data-id="'+_esc(a.id)+'" data-email="'+_esc((a.email||"").toLowerCase())+'">'+
+  '<div class="row'+(active?" act":"")+(auth?"":" expired-row")+(_selIds.has(a.id)?" sel":"")+'" data-i="'+i+'" data-id="'+_esc(a.id)+'" data-email="'+_esc((a.email||"").toLowerCase())+'">'+
     '<div class="row-r1" onclick="rowClick('+i+',event)">'+
-      '<input type="checkbox" class="chk" data-i="'+i+'" onclick="onChk()" />'+
+      '<input type="checkbox" class="chk" data-i="'+i+'" data-id="'+_esc(a.id)+'"'+(_selIds.has(a.id)?" checked":"")+' onclick="onChk(this)" />'+
       '<span class="acc-no" title="编号 '+(i+1)+'">'+(i+1)+'</span>'+
       '<span class="dm '+db[0]+'" title="'+_esc(db[1])+'">'+db[0]+'</span>'+
       '<span class="em" title="'+_esc(a.email||a.id)+'">'+_esc(emailShort)+'</span>'+
@@ -312,13 +321,40 @@ function rowHtml(a,i){
   '<div class="dv-detail" id="dvDetail'+i+'" data-i="'+i+'" data-email="'+_esc((a.email||"").toLowerCase())+'"></div>';
 }
 
+// ── 显示排序: 对话进行中的账号自动顶置(移到1号之上), 对话结束/取消追踪后回退原位。
+//    保留原始编号(i+1)与 data-i(=loadAcc 索引), 仅改显示顺序 → onclick/编号都不受影响。
+//    选择/拖拽中冻结排序(用上次顺序), 避免行位在手指下跳动。
+function _computeOrder(accs){
+  var order=accs.map(function(a,i){return i;});
+  order.sort(function(x,y){
+    var lx=_hasLiveConv(accs[x])?1:0, ly=_hasLiveConv(accs[y])?1:0;
+    if(lx!==ly) return ly-lx;     // 有进行中对话 → 顶置
+    return x-y;                   // 其余维持原始编号顺序
+  });
+  return order;
+}
+function _displayOrder(accs){
+  if((_dragSel.active || _selIds.size>0) && _orderIds){
+    // 冻结: 用上次顺序; 新增账号补到末尾, 已删账号自动跳过
+    var idToIdx={}; accs.forEach(function(a,i){ idToIdx[a.id]=i; });
+    var order=[], used={};
+    _orderIds.forEach(function(id){ var i=idToIdx[id]; if(i!=null){ order.push(i); used[i]=1; } });
+    accs.forEach(function(a,i){ if(!used[i]) order.push(i); });
+    return order;
+  }
+  var ord=_computeOrder(accs);
+  _orderIds=ord.map(function(i){ return accs[i].id; });
+  return ord;
+}
 // ── 统计 & 渲染 ──
 function render(){
+  if(_suspendRender) return;        // 拖拽多选中: 暂停重渲, 防止行位跳动打断选择
   var accs=loadAcc();
   var list=document.getElementById("list");
   // 保存当前已展开的详情索引 (重渲不丢)
   var openIx=[]; document.querySelectorAll(".dv-detail.open").forEach(function(d){ openIx.push(d.getAttribute("data-i")); });
-  list.innerHTML = accs.length?accs.map(rowHtml).join(""):'<div style="padding:10px 4px;color:#666">暂无账号 · 在上方「添加账号」粘贴</div>';
+  var order=_displayOrder(accs);
+  list.innerHTML = accs.length?order.map(function(i){ return rowHtml(accs[i], i); }).join(""):'<div style="padding:10px 4px;color:#666">暂无账号 · 在上方「添加账号」粘贴</div>';
   document.getElementById("secCnt").textContent=accs.length;
   document.getElementById("st-cnt").textContent=accs.length;
   var authed=accs.filter(hasAuth).length;
@@ -338,6 +374,8 @@ function render(){
   openIx.forEach(function(ix){ var d=document.getElementById("dvDetail"+ix); if(d){ d.classList.add("open"); var a=accs[ix*1]; if(a&&hasAuth(a)){ d.innerHTML='<span style="color:#888">重载…</span>'; dvFetch(a,ix*1,d); } } });
   // 行内运行计数 (从追踪缓存)
   paintRowRun();
+  // 恢复多选打钩态 (跨重渲染持久 → 修复"打钩后自动消失")
+  _syncSelUI();
   // mode 按钮
   document.getElementById("mWam").className = _mode==="wam"?"on":"";
   document.getElementById("mOff").className = _mode==="official"?"":"";
@@ -732,11 +770,54 @@ async function pollTrk(){
 function devinTag(a){ try{ var t=JSON.parse(localStorage.getItem("rtflow.tags")||"{}"); return t[(a.email||"").toLowerCase()]||""; }catch(e){ return ""; } }
 function refreshTrack(){ toast("刷新对话追踪…"); pollTrk(); }
 
-// ── 行多选 / 批量 ──
-function onChk(){ var sel=[].slice.call(document.querySelectorAll(".chk:checked")); document.querySelectorAll(".row").forEach(function(r){ var c=r.querySelector(".chk"); r.classList.toggle("sel",!!(c&&c.checked)); }); var bar=document.getElementById("batchBar"); bar.classList.toggle("visible",sel.length>0); document.getElementById("batchCount").textContent=sel.length; }
-function _selIx(){ return [].slice.call(document.querySelectorAll(".chk:checked")).map(function(c){return parseInt(c.dataset.i);}).filter(function(n){return !isNaN(n);}); }
-function clearSelection(){ document.querySelectorAll(".chk:checked").forEach(function(c){c.checked=false;}); onChk(); }
-function batchDelete(){ var ix=_selIx(); if(!ix.length)return; if(!confirm("批量删除 "+ix.length+" 个账号?"))return; var accs=loadAcc(); ix.sort(function(a,b){return b-a;}).forEach(function(i){accs.splice(i,1);}); saveAcc(accs); render(); toast("已删除 "+ix.length+" 个"); }
+// ── 行多选 / 批量 (以账号 id 为准, 跨 8s 自动重渲染持久 → 修复"打钩后状态自动丢失") ──
+function onChk(cb){
+  if(cb){ var id=cb.getAttribute("data-id"); if(id){ if(cb.checked) _selIds.add(id); else _selIds.delete(id); } }
+  _syncSelUI();
+}
+// 重渲染后据 _selIds 复原每行打钩态 + 批量条
+function _syncSelUI(){
+  document.querySelectorAll(".row").forEach(function(r){ var id=r.getAttribute("data-id"); var on=!!(id&&_selIds.has(id)); r.classList.toggle("sel",on); var c=r.querySelector(".chk"); if(c) c.checked=on; });
+  var bar=document.getElementById("batchBar"); var n=_selIds.size; if(bar){ bar.classList.toggle("visible",n>0); var bc=document.getElementById("batchCount"); if(bc) bc.textContent=n; }
+}
+function _selIx(){ var accs=loadAcc(); var ix=[]; accs.forEach(function(a,i){ if(_selIds.has(a.id)) ix.push(i); }); return ix; }
+function clearSelection(){ _selIds.clear(); _syncSelUI(); }
+function batchDelete(){ var ix=_selIx(); if(!ix.length)return; if(!confirm("批量删除 "+ix.length+" 个账号?"))return; var accs=loadAcc(); ix.sort(function(a,b){return b-a;}).forEach(function(i){accs.splice(i,1);}); saveAcc(accs); _selIds.clear(); render(); toast("已删除 "+ix.length+" 个"); }
+// ── 长按单账号 → 上下滑动拖拽快速多选 (手机常用逻辑; 含震动反馈) ──
+(function initDragSelect(){
+  function bind(){
+    var list=document.getElementById("list"); if(!list || list._dsBound) return; list._dsBound=true;
+    var pressTimer=null, startY=0, moved=false;
+    function clearTimer(){ if(pressTimer){ clearTimeout(pressTimer); pressTimer=null; } }
+    list.addEventListener("touchstart", function(e){
+      if(e.target.closest(".row-r2,.b,button,.chk,input,select,textarea,a")) return; // 让按钮/勾选框自理
+      var row=e.target.closest(".row"); if(!row) return;
+      startY=e.touches[0].clientY; moved=false; clearTimer();
+      pressTimer=setTimeout(function(){
+        pressTimer=null; _dragSel.active=true; _suspendRender=true; _dragSel.baseSel=new Set(_selIds);
+        var id=row.getAttribute("data-id"); if(id) _selIds.add(id);
+        _vib(38); _syncSelUI();
+        toast("拖拽多选 · 上下滑动选择, 松手完成");
+      }, 420);
+    }, {passive:true});
+    list.addEventListener("touchmove", function(e){
+      var y=e.touches[0].clientY;
+      if(!_dragSel.active){ if(Math.abs(y-startY)>8){ moved=true; clearTimer(); } return; } // 普通滚动
+      e.preventDefault();
+      var lo=Math.min(startY,y), hi=Math.max(startY,y);
+      var sel=new Set(_dragSel.baseSel||[]);
+      [].slice.call(document.querySelectorAll(".row")).forEach(function(r){
+        var rc=r.getBoundingClientRect(); var mid=rc.top+rc.height/2; var id=r.getAttribute("data-id");
+        if(id && mid>=lo-6 && mid<=hi+6) sel.add(id);
+      });
+      _selIds=sel; _syncSelUI();
+    }, {passive:false});
+    function endPress(){ clearTimer(); if(_dragSel.active){ _dragSel.active=false; _suspendRender=false; toast("已选 "+_selIds.size+" 个"); } }
+    list.addEventListener("touchend", endPress);
+    list.addEventListener("touchcancel", endPress);
+  }
+  if(document.getElementById("list")) bind(); else document.addEventListener("DOMContentLoaded", bind);
+})();
 
 // ── 登录/额度 ──
 function doLogin(i){ var a=loadAcc()[i]; if(!a)return; if(!a.email||!a.password){toast("此号无邮箱密码",true);return;} toast("登录中… "+a.email); DaoCore.loginAndStore(a.email,a.password).then(function(r){ render(); toast(r.ok?"✓ 已解锁 "+a.email:"登录失败: "+(r.error||""),!r.ok); }); }
@@ -794,7 +875,7 @@ function dvToggleDrain(v){ _setCfg("convDrain",!!v); _capApplied={}; applyConvCa
 function dvSetMode(v){ _setCfg("backupMode",v); toast("备份模式: "+v); }
 function _initCfgUI(){
   var ab=document.getElementById("dvAutoBk"); if(ab) ab.checked=_cfg("autoBackup",true);
-  var ac=document.getElementById("dvAutoClean"); if(ac) ac.checked=_cfg("autoCleanup",false);
+  var ac=document.getElementById("dvAutoClean"); if(ac) ac.checked=_cfg("autoCleanup",true);
   var at=document.getElementById("dvThreshold"); if(at) at.value=_cfg("autoThreshold",3);
   var cc=document.getElementById("dvConvCap"); if(cc) cc.checked=_cfg("convCap",true);
   var cb=document.getElementById("dvConvBuf"); if(cb) cb.value=_cfg("convBuffer",3);
@@ -826,10 +907,60 @@ async function applyConvCapFor(a){
 }
 async function applyConvCapsAll(){ var accs=loadAcc().filter(hasAuth); for(var i=0;i<accs.length;i++){ await applyConvCapFor(accs[i]); } }
 async function clearConvCapsAll(){ var accs=loadAcc().filter(hasAuth); for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.setMessageLimit(accs[i],99999); if(r&&r.ok) _capApplied[accs[i].id]=99999; }catch(e){} } }
+// 放大·更明显的提醒横幅 (顶部弹出 + 震动)
+function _bigAlert(msg){
+  var b=document.getElementById("bigAlert");
+  if(!b){ b=document.createElement("div"); b.id="bigAlert"; b.className="bigalert"; document.body.appendChild(b); }
+  b.textContent=msg; b.className="bigalert show"; clearTimeout(b._t);
+  b._t=setTimeout(function(){ b.className="bigalert"; }, 4600);
+}
+// 额度<$3 提醒: 仅当该账号"有进行中对话"时才提醒 (无对话不打扰), 放大 + 震动。
 function _balAlert(a){
   var q=a.quota; if(!q||typeof q.dPct!=="number") return;
+  if(!_hasLiveConv(a)) return;                       // 无进行中对话 → 不提醒
   var bal=ovDollars(q);
-  if(bal<3){ var t=_balAlertTs[a.id]||0; if(Date.now()-t>600000){ _balAlertTs[a.id]=Date.now(); toast("⚠ "+String(a.email||a.id).split("@")[0]+" 额度仅 $"+bal.toFixed(2)+" (<$3)",true); } }
+  if(bal<3){ var t=_balAlertTs[a.id]||0; if(Date.now()-t>300000){ _balAlertTs[a.id]=Date.now();
+    _bigAlert("⚠ "+String(a.email||a.id).split("@")[0]+" 额度仅 $"+bal.toFixed(2)+" · 对话进行中, 请尽快处理");
+    _vib(70);
+  } }
+}
+// ── 自动清理 (默认开): 仅"无进行中对话"的低额账号 → 先全量备份(双保险) → 再彻底清理 → 归零者移出库 ──
+var _cleanTs = {};   // id → 上次清理时间 (节流)
+// 全量备份: 对话(MD) + 知识库 + 剧本 + 密钥 + Git + 账密底层 → 落账号备份文件夹(卸载不丢)
+async function fullBackupAccount(a){
+  if(!a||!hasAuth(a)) return {ok:false};
+  var bundle={ savedAt:new Date().toISOString(), version:(localStorage.getItem("rtflow.ver")||""),
+    account:{ id:a.id, email:a.email||"", password:a.password||"", auth1:a.auth1||"", orgId:a.orgId||"", quota:a.quota||null } };
+  try{ var b=await DaoCloud.backupAccount(a,"conversation"); bundle.sessions=b.sessions||[]; bundle.sessionCount=b.count||0; }catch(e){ bundle.sessions=[]; bundle.sessionCount=0; }
+  try{ var integ=await DaoCloud.listIntegrations(a); if(integ&&integ.ok){ bundle.knowledge=integ.knowledge.list||[]; bundle.playbooks=integ.playbooks.list||[]; bundle.secrets=integ.secrets.list||[]; bundle.git=integ.git.connections||[]; } }catch(e){}
+  var folder=String(a.email||a.id||"acc").split("@")[0].replace(/[^a-zA-Z0-9_\-]/g,"_")||"acc";
+  var fname="backup-"+folder+"-"+Date.now()+".json"; var json=JSON.stringify(bundle);
+  try{ if(N.vaultSaveBackup){ if(!N.vaultSaveBackup(folder, fname, json)) return {ok:false}; }
+       else if(N.saveTextFile){ N.saveTextFile(fname, json); } else return {ok:false}; }
+  catch(e){ return {ok:false}; }
+  return {ok:true, count:bundle.sessionCount||0};
+}
+async function autoCleanFor(a){
+  if(!_cfg("autoCleanup",true)) return;
+  if(!hasAuth(a)) return;
+  if(_hasLiveConv(a)) return;                          // 有进行中对话 → 跳过(避免干扰)
+  var q=a.quota; if(!q||typeof q.dPct!=="number") return;
+  var th=parseFloat(_cfg("autoThreshold",3)); if(!isFinite(th)) th=3;
+  var bal=ovDollars(q);
+  if(bal>=th) return;                                  // 额度足够 → 不动
+  var zero=(bal<=0);
+  if(!zero && Date.now()-(_cleanTs[a.id]||0)<3600000) return; // 非归零: 1h 内清过则跳过
+  var bk=await fullBackupAccount(a);
+  if(!bk.ok) return;                                   // 备份失败 → 绝不清理 (双保险)
+  _cleanTs[a.id]=Date.now();
+  try{ await DaoCloud.wipeAccount(a,{confirm:true,archiveSessions:true}); }catch(e){}   // 彻底回归本源
+  if(zero){                                            // 额度归零 → 移出账号库(用户不可见)
+    var accs=loadAcc(); var k=-1; for(var i=0;i<accs.length;i++){ if(accs[i].id===a.id){k=i;break;} }
+    if(k>=0){ accs.splice(k,1); saveAcc(accs); }
+    try{ delete _trk[(a.email||"").toLowerCase()]; }catch(e){}
+    _selIds.delete(a.id);
+    _bigAlert("✓ 归零账号 "+String(a.email||a.id).split("@")[0]+" 已备份并移出账号库");
+  }
 }
 async function autoQuotaTick(){
   if(_quotaBusy) return; _quotaBusy=true;
@@ -842,6 +973,7 @@ async function autoQuotaTick(){
     for(var i=0;i<batch.length;i++){ var a=batch[i]; if(!a||seen[a.id])continue; seen[a.id]=1;
       try{ await DaoCore.refreshQuotaFor(a.id); }catch(e){}
       var fresh=DaoCore.findAcc(a.id)||a; _balAlert(fresh); await applyConvCapFor(fresh);
+      try{ await autoCleanFor(fresh); }catch(e){}    // 低额且无对话 → 备份+清理(归零移出库)
     }
     if(batch.length) render();
   }catch(e){}
