@@ -14,15 +14,32 @@ const README = path.join(repoRoot, "README.md");
 const START = "<!-- DAO-MODULE-INDEX:START -->";
 const END = "<!-- DAO-MODULE-INDEX:END -->";
 
+// APK 模块(gradle)的版本取自 app/build.gradle 的 versionName，其余取自 package.json。
+function moduleVersion(m) {
+  if (m.kind === "apk") {
+    const gradle = fs.readFileSync(path.join(repoRoot, m.dir, "app", "build.gradle"), "utf8");
+    const mt = gradle.match(/versionName\s+["']([^"']+)["']/);
+    if (!mt) throw new Error(`无法从 ${m.dir}/app/build.gradle 解析 versionName`);
+    return mt[1];
+  }
+  return JSON.parse(fs.readFileSync(path.join(repoRoot, m.dir, "package.json"), "utf8")).version;
+}
+
 function row(m) {
-  const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, m.dir, "package.json"), "utf8"));
-  const ver = pkg.version;
+  const ver = moduleVersion(m);
   if (m.kind === "vsix") {
     const tag = `${m.key}-v${ver}`;
     const vsixName = `${m.name}-${ver}.vsix`;
     const rel = `https://github.com/${REPO}/releases/tag/${tag}`;
     const asset = `https://github.com/${REPO}/releases/download/${tag}/${vsixName}`;
     return `| **${m.key}** | \`${ver}\` | \`${m.extId}\` | ${m.desc} | [Release](${rel}) · [⬇ VSIX](${asset}) |`;
+  }
+  if (m.kind === "apk") {
+    const tag = `${m.releaseTagPrefix}-v${ver}`;
+    const assetName = (m.assetName || `${m.name}-${ver}.apk`).replace("{version}", ver);
+    const rel = `https://github.com/${REPO}/releases/tag/${tag}`;
+    const asset = `https://github.com/${REPO}/releases/download/${tag}/${assetName}`;
+    return `| **${m.key}** | \`${ver}\` | \`${m.extId}\` _(APK)_ | ${m.desc} | [Release](${rel}) · [⬇ APK](${asset}) |`;
   }
   const dir = `https://github.com/${REPO}/tree/main/${m.dir}`;
   return `| **${m.key}** | \`${ver}\` | _(Worker)_ | ${m.desc} | [源码](${dir}) |`;
@@ -36,18 +53,35 @@ function build() {
   return lines.join("\n");
 }
 
-function main() {
-  let txt = fs.readFileSync(README, "utf8");
-  const table = build();
-  const block = `${START}\n${table}\n${END}`;
-  const re = new RegExp(`${START}[\\s\\S]*?${END}`);
+// 主页置顶「直接下载 APK」链接 —— 随手机版版本自动保持最新。
+const APK_START = "<!-- DAO-APK-LINK:START -->";
+const APK_END = "<!-- DAO-APK-LINK:END -->";
+function apkLinkLine() {
+  const m = reg.modules.find((x) => x.kind === "apk");
+  if (!m) return "";
+  const ver = moduleVersion(m);
+  const tag = `${m.releaseTagPrefix}-v${ver}`;
+  const assetName = (m.assetName || `${m.name}-${ver}.apk`).replace("{version}", ver);
+  const asset = `https://github.com/${REPO}/releases/download/${tag}/${assetName}`;
+  return `**📱 Devin Cloud 手机版 · 直接下载 APK**（安卓本体，辅助 ②）：[⬇ DevinCloud-mobile-v${ver}.apk](${asset}) · 下载后允许「安装未知应用」即可装。`;
+}
+
+function replaceBlock(txt, start, end, inner, label) {
+  const re = new RegExp(`${start}[\\s\\S]*?${end}`);
   if (!re.test(txt)) {
-    console.error(`README 缺少索引标记 ${START} ... ${END}`);
+    console.error(`README 缺少${label}标记 ${start} ... ${end}`);
     process.exit(2);
   }
-  const next = txt.replace(re, block);
-  if (next === txt) { console.log("nochange"); return; }
-  fs.writeFileSync(README, next);
+  return txt.replace(re, `${start}\n${inner}\n${end}`);
+}
+
+function main() {
+  let txt = fs.readFileSync(README, "utf8");
+  const orig = txt;
+  txt = replaceBlock(txt, START, END, build(), "索引");
+  txt = replaceBlock(txt, APK_START, APK_END, apkLinkLine(), "APK 直链");
+  if (txt === orig) { console.log("nochange"); return; }
+  fs.writeFileSync(README, txt);
   console.log("changed");
 }
 

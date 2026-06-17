@@ -427,7 +427,68 @@
     return { ok: true, files: files, index: index, total: keys.length };
   }
 
+  // ── 纯 JS ZIP (STORE 存储法·零依赖·复刻桌面 ZipWriter 的可读结构: 对话md + 工作日志md + files/) ──
+  //   桌面用 Node Buffer+zlib deflate; 手机 WebView 无 zlib, 改用 STORE(method 0) — 同样是合法 ZIP, 任意解压器可开。
+  var _crcTab = (function () { var t = []; for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
+  function crc32(bytes) { var c = 0xFFFFFFFF; for (var i = 0; i < bytes.length; i++) c = _crcTab[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+  function utf8Bytes(str) {
+    if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(String(str == null ? "" : str));
+    var u = unescape(encodeURIComponent(String(str == null ? "" : str))); var a = new Uint8Array(u.length); for (var i = 0; i < u.length; i++) a[i] = u.charCodeAt(i) & 0xFF; return a;
+  }
+  function b64ToBytes(b64) { var bin = atob(b64 || ""); var a = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i) & 0xFF; return a; }
+  function bytesToB64(bytes) { var bin = "", CH = 0x8000; for (var i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH)); return btoa(bin); }
+  function _w16(a, o, v) { a[o] = v & 0xFF; a[o + 1] = (v >>> 8) & 0xFF; }
+  function _w32(a, o, v) { a[o] = v & 0xFF; a[o + 1] = (v >>> 8) & 0xFF; a[o + 2] = (v >>> 16) & 0xFF; a[o + 3] = (v >>> 24) & 0xFF; }
+  // entries: [{name, bytes:Uint8Array}] → Uint8Array(完整 zip)
+  function buildZip(entries) {
+    var locals = [], centrals = [], offset = 0, n = entries.length;
+    for (var i = 0; i < n; i++) {
+      var nameB = utf8Bytes(String(entries[i].name).replace(/\\/g, "/")), data = entries[i].bytes, crc = crc32(data);
+      var lh = new Uint8Array(30 + nameB.length);
+      _w32(lh, 0, 0x04034b50); _w16(lh, 4, 20); _w16(lh, 6, 0x0800); _w16(lh, 8, 0); _w16(lh, 10, 0); _w16(lh, 12, 0x21);
+      _w32(lh, 14, crc); _w32(lh, 18, data.length); _w32(lh, 22, data.length); _w16(lh, 26, nameB.length); _w16(lh, 28, 0); lh.set(nameB, 30);
+      locals.push(lh, data);
+      var ch = new Uint8Array(46 + nameB.length);
+      _w32(ch, 0, 0x02014b50); _w16(ch, 4, 20); _w16(ch, 6, 20); _w16(ch, 8, 0x0800); _w16(ch, 10, 0); _w16(ch, 12, 0); _w16(ch, 14, 0x21);
+      _w32(ch, 16, crc); _w32(ch, 20, data.length); _w32(ch, 24, data.length); _w16(ch, 28, nameB.length);
+      _w16(ch, 30, 0); _w16(ch, 32, 0); _w16(ch, 34, 0); _w16(ch, 36, 0); _w32(ch, 38, 0); _w32(ch, 42, offset); ch.set(nameB, 46);
+      centrals.push(ch); offset += lh.length + data.length;
+    }
+    var centralStart = offset, centralSize = 0; centrals.forEach(function (c) { centralSize += c.length; });
+    var eocd = new Uint8Array(22);
+    _w32(eocd, 0, 0x06054b50); _w16(eocd, 4, 0); _w16(eocd, 6, 0); _w16(eocd, 8, n); _w16(eocd, 10, n); _w32(eocd, 12, centralSize); _w32(eocd, 16, centralStart); _w16(eocd, 20, 0);
+    var out = new Uint8Array(offset + centralSize + 22), p = 0;
+    locals.forEach(function (b) { out.set(b, p); p += b.length; });
+    centrals.forEach(function (b) { out.set(b, p); p += b.length; });
+    out.set(eocd, p);
+    return out;
+  }
+  // 取某对话完整内容(对话md + 工作日志md + _meta.json + files/产出文件) → 打成单个 ZIP 的 base64 (含文件夹)。
+  //   仅读历史, 不消耗额度; 额度耗尽账号亦可。复刻桌面「下载对话内容(ZIP)」的产物结构。
+  async function exportSessionZip(acc, sid, onProgress) {
+    var conv = await exportSession(acc, sid, "conversation");
+    if (!conv || !conv.ok) return { ok: false, error: (conv && conv.error) || "对话导出失败" };
+    var wl = null; try { wl = await exportSession(acc, sid, "worklog"); } catch (e) {}
+    var ev = null; try { var er = await sessionEvents(acc, sid); ev = (er.ok && er.events) || []; } catch (e) {}
+    var col = { files: [], index: [] };
+    try { col = await collectSessionFiles(acc, sid, ev, onProgress); } catch (e) {}
+    var title = conv.title || sid;
+    var entries = [];
+    entries.push({ name: "对话_人类可读.md", bytes: utf8Bytes(conv.md || conv.content || "") });
+    if (wl && (wl.md || wl.content)) entries.push({ name: "工作日志.md", bytes: utf8Bytes(wl.md || wl.content) });
+    entries.push({ name: "_meta.json", bytes: utf8Bytes(JSON.stringify({
+      sessionId: sid, title: title, account: acc.email || acc.id, events: conv.events || 0,
+      fileCount: (col.files || []).length, files: col.index || []
+    }, null, 2)) });
+    (col.files || []).forEach(function (f) {
+      var rel = String(f.path || f.key || "file").replace(/^\/+/, "");
+      entries.push({ name: "files/" + rel, bytes: b64ToBytes(f.b64 || "") });
+    });
+    return { ok: true, title: title, fileCount: (col.files || []).length, entries: entries.length, b64: bytesToB64(buildZip(entries)) };
+  }
+
   root.DaoCloud = {
+    buildZip: buildZip, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
     listSessions: listSessions, sessionDetail: sessionDetail, sessionMessages: sessionMessages,
     sessionEvents: sessionEvents, exportSession: exportSession, deleteSession: deleteSession,
     extractAllKeys: extractAllKeys, mapKeysToPaths: mapKeysToPaths,

@@ -517,6 +517,7 @@ function dvOverviewHtml(a,i,sess,kn,pb,sc,git){
        '<span class="dvc-acts">'+
          '<button class="dvc-b" title="查看/预览本对话全文(MD)" onclick="dvConvView('+i+',\''+did+'\')">&#128065;</button>'+
          '<button class="dvc-b" title="下载本对话为 MD 到本地" onclick="dvConvDl('+i+',\''+did+'\')">&#11015;</button>'+
+         '<button class="dvc-b" title="下载本对话 ZIP(对话md+工作日志+产出文件夹)" onclick="dvConvZip('+i+',\''+did+'\')">&#128230;</button>'+
          '<button class="dvc-b dvc-b-s" title="归档(水过无痕)本对话" onclick="dvConvArch('+i+',\''+did+'\')">&#128465;</button>'+
        '</span></div>';
   }
@@ -585,6 +586,15 @@ async function dvConvDl(i,did){
   if(!r||!r.ok){ toast("失败: "+((r&&r.error)||""),true); return; }
   var name="devin-"+(a.email||a.id).split("@")[0]+"-"+did.slice(0,10)+".md";
   try{ N.saveTextFile&&N.saveTextFile(name, r.md||r.content||""); }catch(e){ toast("下载失败",true); }
+}
+async function dvConvZip(i,did){
+  var a=loadAcc()[i]; if(!a)return; toast("打包 ZIP(对话+工作日志+产出文件)…");
+  var r=await DaoCloud.exportSessionZip(a,did,function(d,t){ toast("取产出文件 "+d+"/"+t+"…"); });
+  if(!r||!r.ok){ toast("打包失败: "+((r&&r.error)||""),true); return; }
+  var name="devin-"+(a.email||a.id).split("@")[0]+"-"+did.slice(0,10)+".zip";
+  try{ if(N.saveBase64File){ N.saveBase64File(name, r.b64); } else { toast("本机不支持二进制下载",true); return; } }
+  catch(e){ toast("下载失败",true); return; }
+  toast("✓ 已下载 ZIP ("+(r.fileCount||0)+" 个产出文件)");
 }
 async function dvConvArch(i,did){
   var a=loadAcc()[i]; if(!a)return; if(!confirm("归档(水过无痕)本对话?"))return; toast("归档中…");

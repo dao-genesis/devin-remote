@@ -1,4 +1,4 @@
-# Devin Cloud 手机版 (v0.15.11)
+# Devin Cloud 手机版 (v0.15.16)
 
 > 模块目录: `addons/rt-flow-app/` (内部代号保留, 仅为目录/包名/自更新路径; 所有用户可见命名均为「Devin Cloud 手机版」)。
 
@@ -123,7 +123,12 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 
 | v0.15.9 | 下载板块修复：① **下载持久化** — 下载文件落共享保险箱 `Documents/DevinCloud/downloads/` (脱离应用沙箱)、记录写入保险箱、启动自动回读；系统下载完成后自动从沙箱搬入保险箱 → 卸载/重装/升级不再丢下载 (与账号/标签同机制)。② **拖到页面** — 长按下载项拖到网页松手, 自动注入页面上传框 `input[type=file]` 并对落点派发 drop 事件 (兼容 dropzone 上传组件)。AVD 实测两项全过 |
 | v0.15.10 | 命名归一 + 提取增强 + 云端文档全开放。① **全量改名「Devin Cloud 手机版」**, 清除 RT Flow / rt-flow-app 用户可见残留 (内部包名 `ai.devin.rtflow`/隧道 `rtflow-` 前缀/发布 tag 保留以保数据不丢、隧道不断)。② **对话整体提取** — 新增 `extractConversation` / `extractAccountConversations` RPC (额度耗尽账号亦可, 仅读历史不耗额度), 一行拿齐 元数据+完整对话md+工作日志md+文件清单, 可 `save:true` 落共享保险箱；新增 `getExtractMd` + 仓库《对话整体提取工作流》文档 (含对话ID/账号信息/工作流)。③ **内网穿透云端 .md (`getCloudMd`) 完全开放无限制** — 三大板块全部命令/参数/高级用法 + 提取工作流全部内联, 云端 Agent 读一篇即可直接按需调用核心功能, 不再分步 `getModuleDoc` |
-| v0.15.11 | **当前版本**：标签条拖拽边缘自动横滚 + 整机分享。① **标签条边缘自动横滚** — 标签多到一屏放不下时, 长按拖标签 / 把对话拖到标签条, 拖到最左/最右边缘会自动向左/向右平滑横滚露出屏外的网页 (浏览器同款); 移出边缘即停、到尽头即停。由此可先把标签条滚到一端再长按目标标签拖到另一端的网页, 跨屏拖拽更顺手 (`tabEdgeScrollRunner`/`updateTabEdgeScroll`)。② **整机分享** — 「≡ → 页面工具 → 导出整机分享包」打成一个 zip = `DevinCloud.apk` 本体 + `vault/`(整个共享保险箱: 账号/标签/历史/下载/备份/脚本) + `prefs.json` + `manifest.json`, 走系统分享; 新设备「导入分享包」一步还原全部数据并引导安装 APK, 一拿即同步。注: Android 不允许「单个已安装 APK 内塞数据」(改 APK 即破签名无法安装), 故以等效单文件 zip 实现 |
+| v0.15.11 | 标签条拖拽边缘自动横滚 + 整机分享。① **标签条边缘自动横滚** — 标签多到一屏放不下时, 长按拖标签 / 把对话拖到标签条, 拖到最左/最右边缘会自动向左/向右平滑横滚露出屏外的网页 (浏览器同款); 移出边缘即停、到尽头即停。由此可先把标签条滚到一端再长按目标标签拖到另一端的网页, 跨屏拖拽更顺手 (`tabEdgeScrollRunner`/`updateTabEdgeScroll`)。② **整机分享** — 「≡ → 页面工具 → 导出整机分享包」打成一个 zip = `DevinCloud.apk` 本体 + `vault/`(整个共享保险箱: 账号/标签/历史/下载/备份/脚本) + `prefs.json` + `manifest.json`, 走系统分享; 新设备「导入分享包」一步还原全部数据并引导安装 APK, 一拿即同步。注: Android 不允许「单个已安装 APK 内塞数据」(改 APK 即破签名无法安装), 故以等效单文件 zip 实现 |
+| v0.15.12 | OTA 版本对齐：`latest.json` → versionCode 43 / 0.15.12，自动更新指向 `rtflow-v0.15.12` APK |
+| v0.15.13 | OTA 自更新链路对齐：`APP_VERSION` 与 `latest.json` 一致校验，升级提示稳定 |
+| v0.15.14 | **RPC 端到端加密** — 经中继的 RPC 载荷端到端加密，中继(含任何共享 Worker)只见密文，账号邮箱/密码/token 从不明文过中继；穿透面板补 E2E Key 展示 + 去中心化提示 |
+| v0.15.15 | 去中心化隧道。① **自带 cloudflared 免账号快隧** — `libcloudflared.so`(arm64-v8a + x86_64) 打入 jniLibs，解压到 nativeLibraryDir 执行，每台设备起独立 quick tunnel(`https://xxx.trycloudflare.com`)，无需 Cloudflare 账号/登录、强 http2 走 TCP 更稳；连不上才回退共享 Worker。② **P1 token 复用** — 不再每次冷启动换 token，持久化复用 → 中继 DO 命名空间稳定。③ **P2 wake lock** — RelayService 持 `PARTIAL_WAKE_LOCK`，息屏/Doze 下心跳不拖、不频繁断。签名统一 `e261b27f`，v0.15.x 原地覆盖升级数据不丢 |
+| v0.15.16 | **当前版本**：对话「下载 ZIP（含产出文件夹）」对齐桌面 dao-vsix。① 切号面板每条对话行新增 **📦** 按钮：一键下载该对话整包 ZIP——内含 `对话_人类可读.md` + `工作日志.md` + `_meta.json` + `files/<全部产出文件>`，与电脑端「下载对话内容」产物结构一致。② **纯 JS 零依赖 ZIP 写入器**（STORE 存储法 + CRC32，复刻桌面 ZipWriter 可读结构），WebView 无 zlib 亦可打合法 ZIP；产出文件经原生桥 `httpReqB64` 二进制无损取回。③ 引擎 RPC `extractConversation` 新增 `zip:true`：另返 `zipB64`/`zipName`/`zipFileCount`，云端 Agent 经隧道取「MD+ZIP」整包、base64 解码落盘即得。④ 拖拽提取的取文件指引 MD 同步说明 `zip:true` 与 📦。签名统一 `e261b27f`，v0.15.x 原地覆盖升级数据不丢 |
 
 ## 取代的旧模块
 
