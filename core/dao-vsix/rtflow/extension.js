@@ -810,7 +810,7 @@ async function openIdeAccountBrowser(acc) {
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.9.2";
+const VERSION = "4.9.3";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -944,6 +944,40 @@ const _httpsAgent = new https.Agent({
 });
 const WAM_DIR = path.join(os.homedir(), ".wam");
 const STATE_FILE = path.join(WAM_DIR, "wam-state.json");
+// v3.16.0 · 跨窗口共享限速退避 (道法自然·无为而无不为):
+//   任一窗口/worker 撞 429 → 落盘全局 pauseUntil → 所有窗口的批量验证一起休
+//   根治: 旧 _globalPauseUntil 仅进程内 · 多窗口各自退避 → 互不知情 → 叠加放大雪崩
+const VERIFY_RL_FILE = path.join(WAM_DIR, "_verify_rl.json");
+let _rlDiskCache = { pauseUntil: 0, readAt: 0 };
+// 读全局退避截止时间 (1s 内复用缓存 · 不高频敲盘)
+function _rlReadPauseUntil() {
+  const now = Date.now();
+  if (now - _rlDiskCache.readAt < 1000) return _rlDiskCache.pauseUntil;
+  let pu = 0;
+  try {
+    const j = JSON.parse(fs.readFileSync(VERIFY_RL_FILE, "utf8"));
+    pu = +j.pauseUntil || 0;
+  } catch {
+    pu = 0;
+  }
+  _rlDiskCache = { pauseUntil: pu, readAt: now };
+  return pu;
+}
+// 写全局退避 (只延长·不缩短 · last-writer 取最大值 · 弱者道之用)
+function _rlWritePause(ms) {
+  const add = Math.max(0, ms | 0);
+  if (add <= 0) return;
+  const until = Date.now() + add;
+  try {
+    const cur = _rlReadPauseUntil();
+    const merged = Math.max(cur, until);
+    atomicWrite(
+      VERIFY_RL_FILE,
+      JSON.stringify({ pauseUntil: merged, by: _dvInstanceId, ts: Date.now() }),
+    );
+    _rlDiskCache = { pauseUntil: merged, readAt: Date.now() };
+  } catch {}
+}
 // v2.7.4 (补入v3.0.2) · 道恒无名·侯王若能守之·万物将自宾·民莫之令而自均焉 (三十二章)
 //   独立🔒持久化 · 专司一事 · 不被 multi-window race 污染 wam-state.json 大对象
 //   只有 toggleSkip 读写 · save() 从此文件读 · multi-process 自宾不争
@@ -4155,6 +4189,13 @@ async function _onResetFired() {
     _scheduleResetRefresh();
     return;
   }
+  // v3.16.0 · 选主门: 额度重置全池刷新只由主窗口执行 (UTC 08:00 各窗口本会同时触发→stampede)
+  //   非主窗口仅重新调度 · 不发起批量网络 (主窗口刷新后经 wam-state.json 同步)
+  if (!_dvIsLeader) {
+    log("⏰ 额度重置: 非主窗口 · 跳过全池刷新 (主窗口统一执行)");
+    setTimeout(() => _scheduleResetRefresh(), 5000);
+    return;
+  }
   const now = new Date();
   const isSunday = now.getUTCDay() === 0;
   log(
@@ -5444,6 +5485,30 @@ class Store {
       isStale: staleHours >= 12,
     });
   }
+  // v3.16.0 · 跟随窗口从磁盘重载健康 (主窗口验完→followers 同步刷新额度·零网络)
+  //   逐号取 lastChecked 更新者胜 (不让磁盘旧值覆盖本窗口刚验的活跃号)
+  reloadHealthFromDisk() {
+    try {
+      const j = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+      if (!j || !j.health) return false;
+      let changed = 0;
+      for (const k of Object.keys(j.health)) {
+        const incoming = j.health[k];
+        const cur = this.health[k];
+        if (
+          !cur ||
+          (+(incoming && incoming.lastChecked) || 0) >
+            (+(cur && cur.lastChecked) || 0)
+        ) {
+          this.health[k] = incoming;
+          changed++;
+        }
+      }
+      return changed > 0;
+    } catch {
+      return false;
+    }
+  }
   // v2.5.0 · 不禁号 · 「天之道 损有余而益不足」· 失败仅记数 · 号永远可选
   //   旧法之患: 3 失败 → 15min 黑 · 网络抖动冤杀可用号
   //   新法: 只累计 count · 永不写 until · 一律返 isBanned=false
@@ -6542,8 +6607,11 @@ async function verifyAllAccounts(opts) {
   let _abortedDueToDeadEndpoint = false; // v2.4.0 · endpoint 死时整批跳出
   const _failedIndices = []; // 收集失败的 idx · 后续重试
   async function _waitGlobalPause() {
-    while (Date.now() < _globalPauseUntil) {
-      const wait = Math.min(_globalPauseUntil - Date.now(), 2000);
+    // v3.16.0 · 进程内退避 ∪ 跨窗口落盘退避 · 取最晚截止 · 全体一起休
+    while (true) {
+      const until = Math.max(_globalPauseUntil, _rlReadPauseUntil());
+      if (Date.now() >= until) break;
+      const wait = Math.min(until - Date.now(), 2000);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     }
   }
@@ -6603,12 +6671,13 @@ async function verifyAllAccounts(opts) {
               5000 * Math.pow(2, _rateLimitHits - 1),
             );
             _globalPauseUntil = Date.now() + backoff;
+            _rlWritePause(backoff); // v3.16.0 · 落盘 · 其余窗口的批量验证一并退避
             log(
               "verifyAll: 限速#" +
                 _rateLimitHits +
                 " · 全局暂停 " +
                 Math.round(backoff / 1000) +
-                "s",
+                "s (跨窗口共享)",
             );
           }
         }
@@ -8609,6 +8678,14 @@ function _dvStartFollowerWatch() {
       _dvRenderFromShared(),
     );
   } catch {}
+  // v3.16.0 · 跟随窗口监听 wam-state.json: 主窗口批量验完 → 同步刷新额度显示 (零网络)
+  try {
+    fs.watchFile(STATE_FILE, { persistent: false, interval: 2000 }, () => {
+      try {
+        if (_store && _store.reloadHealthFromDisk()) _broadcastUI();
+      } catch {}
+    });
+  } catch {}
   _dvRenderFromShared(); // 立即渲染一次当前共享状态
 }
 function _dvStopFollowerWatch() {
@@ -8616,6 +8693,9 @@ function _dvStopFollowerWatch() {
   _dvFollowerWatching = false;
   try {
     fs.unwatchFile(DV_STATUS_FILE);
+  } catch {}
+  try {
+    fs.unwatchFile(STATE_FILE);
   } catch {}
 }
 // 选主心跳: 当选则跑全局扫描·落选则转跟随 (每 TTL/2 续租/重选)
@@ -12881,6 +12961,13 @@ async function activate(context) {
       const tv = setTimeout(() => {
         if (_wamMode !== "wam") return;
         if (_verifyAllInProgress) return;
+        // v3.16.0 · 选主门: 自动批量验证只由主窗口执行 · 其余窗口读共享健康
+        //   根治: v4.8.4 选主漏掉了 verifyAllAccounts (最大网络消耗者) → 每窗口各跑全量验证
+        //   → 网络并发 = parallel × 窗口数 → 429 雪崩 · 隧道 530 · 数据不可用
+        if (!_dvIsLeader) {
+          log("auto-verify: 非主窗口 · 跳过批量验证 (主窗口统一执行·读共享健康)");
+          return;
+        }
         // v3.7.4 · 根治: 先查未验号 · 有则全量 · 不受 cache 状态影响
         //   病灶: v3.7.2 用 _sessionCache.size===0 作门 · 但 loadSessionCacheFromDisk
         //         在 activate 时已预加载 → size 永远 > 0 → 全量验证路径永远不走
@@ -12889,15 +12976,16 @@ async function activate(context) {
           (a) => !_store.getHealth(a.email).checked,
         ).length;
         if (_uncheckedOnStart > 0) {
-          // 有未验号 → 全量验证 (无论 cache 多满 · isFirstTime 保护自动激活)
+          // v3.16.0 · onlyStale:true → 只验未验/过期号 (未验号 checked=false 必含)
+          //   根治: 旧 onlyStale:false 下 1 个未验号即触发全部 142 号重验 · 放大网络
           log(
             "🔄 auto-verify: " +
               _uncheckedOnStart +
               "/" +
               _store.accounts.length +
-              " 未验 · 全量加速验证 · isFirstTime保护已激活",
+              " 未验 · 验未验+过期号 · isFirstTime保护已激活",
           );
-          verifyAllAccounts({ onlyStale: false }).catch((e) =>
+          verifyAllAccounts({ onlyStale: true }).catch((e) =>
             log("startup-verify err: " + (e.message || e)),
           );
           return;
@@ -12934,18 +13022,21 @@ async function activate(context) {
       const ti = setInterval(() => {
         if (_wamMode !== "wam") return;
         if (_verifyAllInProgress) return;
+        // v3.16.0 · 选主门: 周期批量验证只由主窗口执行 (同启动验证)
+        if (!_dvIsLeader) return;
         // v3.1.2 · _cacheOnly 模式 · 与启动同步 · 零 devinLogin
         // v3.7.4 · 周期验证同步根治: 先查未验号
         const _uncheckedPeriodic = _store.accounts.filter(
           (a) => !_store.getHealth(a.email).checked,
         ).length;
         if (_uncheckedPeriodic > 0) {
+          // v3.16.0 · onlyStale:true → 只验未验/过期号 · 不再因 1 个未验触发全量
           log(
             "🔄 auto-verify(periodic): " +
               _uncheckedPeriodic +
-              " 未验 · 全量验证",
+              " 未验 · 验未验+过期号",
           );
-          verifyAllAccounts({ onlyStale: false }).catch((e) =>
+          verifyAllAccounts({ onlyStale: true }).catch((e) =>
             log("periodic-verify err: " + (e.message || e)),
           );
           return;
