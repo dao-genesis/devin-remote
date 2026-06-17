@@ -489,12 +489,13 @@ function test(name, fn) {
     assert.ok(/_store\.removeBatch\(idx\)/.test(src), "出库须走 removeBatch (单次IO+持久化)");
     assert.ok(/removeEmails\.push\(acc\.email\)/.test(src), "归零账号先入 removeEmails, 循环外再删");
   });
-  test("package.json: 自动清理/归零移除默认开启", () => {
+  test("package.json: 自动清理默认开; 归零移除默认关(v4.9.6 手动)", () => {
     const fs = require("fs");
     const pkg = JSON.parse(fs.readFileSync(require("path").join(__dirname, "..", "package.json"), "utf8"));
     const props = pkg.contributes.configuration.properties;
     assert.strictEqual(props["wam.devinCloudAutoCleanup"].default, true, "自动清理默认开");
-    assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, true, "归零移除默认开");
+    // v4.9.6 · 用户要求: 归零移除改为手动(默认关) — 自动清理只清痕迹+本地留底, 出库由用户手动决定
+    assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, false, "归零移除默认关(手动)");
     assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 0, "归零阈值默认0(完全归零)");
   });
 
