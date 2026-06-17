@@ -127,6 +127,7 @@ public class MainActivity extends AppCompatActivity {
     private volatile int dragTabIdx = -1;        // 正在拖拽的标签序号 (拖到另一页面 → 提取该对话并导入两个 md)
     private volatile WebView convDropTarget = null; // 对话拖入的目标页 (提取完成后注入)
     private volatile float convDropX = 0, convDropY = 0;
+    private volatile String convDropAccountJson = null; // 被拖对话标签所属账号 (生成"查看全部文件"指引md)
     // ── 在线自动更新 ──
     static final String UPDATE_MANIFEST = "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json";
     // 去中心化更新: 多镜像源轮询 (任一可达即可检查/下载, 不依赖单一服务器或穿透通道)。
@@ -1781,6 +1782,13 @@ public class MainActivity extends AppCompatActivity {
                     owner.evaluateJavascript("window.__httpCb&&window.__httpCb(" + HttpBridge.jsonStr(id) + "," + json + ")", null);
                 } catch (Exception ignored) {} }));
         }
+        /** 二进制 HTTP (响应体 base64 → {status,b64,size}); 供「下载ZIP全部包括文件夹」取回产出文件。 */
+        @JavascriptInterface public void httpReqB64(String reqId, String method, String url, String headersJson, String body) {
+            HttpBridge.execB64(reqId, method, url, headersJson, body, (id, json) ->
+                main.post(() -> { if (owner != null) try {
+                    owner.evaluateJavascript("window.__httpCb&&window.__httpCb(" + HttpBridge.jsonStr(id) + "," + json + ")", null);
+                } catch (Exception ignored) {} }));
+        }
         @JavascriptInterface public String conn() {
             RelayService r = RelayService.instance;
             return r != null ? r.readConn() : "{}";
@@ -2100,7 +2108,7 @@ public class MainActivity extends AppCompatActivity {
             try { byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); writeDownloadBytes(name, mime, data); }
             catch (Exception e) { main.post(() -> toast("下载捕获失败")); }
         }
-        // 对话拖入导入: 源标签提取完的 对话md+工作日志md 经此回传 → 注入目标页
+        // 对话拖入导入: 源标签提取完的 全量对话md(+取文件指引md) 经此回传 → 注入目标页
         @android.webkit.JavascriptInterface
         public void convExtracted(String json) { main.post(() -> onConvExtracted(json == null ? "{}" : json)); }
     }
@@ -2658,56 +2666,133 @@ public class MainActivity extends AppCompatActivity {
         if (sid == null) { toast("该标签不是 Devin 对话页, 无法导入"); return; }
         if (src.web == targetWeb) { toast("请把对话标签拖到另一个页面"); return; }
         convDropTarget = targetWeb; convDropX = x; convDropY = y;
+        convDropAccountJson = src.accountJson;   // 该对话所属账号 → 生成"查看全部文件"指引md
         toast("提取对话中…");
         final String js = convExtractJs(sid);
         final WebView sw = src.web;
         main.post(() -> { try { sw.evaluateJavascript(js, null); } catch (Exception e) { toast("提取失败"); convDropTarget = null; } });
     }
-    /** 源标签内运行: fetch 事件流(页面已注入 Bearer) → 构建 对话md+工作日志md → RTDL.convExtracted 回传。 */
+    /** 源标签内运行: fetch 事件流(页面已注入 Bearer) → 构建「全量对话 md」(四类气泡, 与桌面
+     *  dao-vsix buildConversationMd 逐字对齐) → RTDL.convExtracted 回传。"查看全部文件"指引 md
+     *  由 Java 侧据该账号凭据 + sid 另行生成。 */
     private String convExtractJs(String sid) {
         String s = sid.replace("\\", "\\\\").replace("'", "\\'");
         return "(function(){try{var SID='" + s + "';"
-            + "function mt(m){if(m==null)return '';if(typeof m==='string')return m;return m.text||m.message||m.content||JSON.stringify(m);}"
-            + "function ts(e){return ''+(e.timestamp||e.created_at||e.created_at_ms||'');}"
-            + "function pe(raw){var o=[];var ls=raw.split(/\\r?\\n/);for(var i=0;i<ls.length;i++){var ln=ls[i];if(!ln)continue;if(ln.indexOf('data:')===0)ln=ln.slice(5);ln=ln.trim();if(!ln||ln[0]!=='{')continue;try{var j=JSON.parse(ln);if(j&&j.type)o.push(j);}catch(e){}}return o;}"
+            // 文本归一 / 时间戳 / 用户回答
+            + "function mt(m){if(m==null)return '';if(typeof m==='string')return m;if(Array.isArray(m))return m.map(mt).filter(Boolean).join('\\n');if(typeof m==='object'){if(typeof m.text==='string')return m.text;if(typeof m.message==='string')return m.message;if(m.content!=null)return mt(m.content);return JSON.stringify(m);}return ''+m;}"
+            + "function ts(e){var ms=e.created_at_ms||(e.timestamp?Date.parse(e.timestamp):0);return ms?new Date(ms).toISOString():'';}"
+            + "function ua(e){var a=e.answers||[];return a.map(function(x){if(!x)return '';if(x.other_text)return x.other_text;if(Array.isArray(x.selected))return x.selected.join('; ');if(typeof x.text==='string')return x.text;return '';}).filter(Boolean).join('\\n');}"
+            // 事件归类 → 四类气泡 (移植自桌面 classifyEvent)
+            + "function cls(e){if(!e||typeof e!=='object')return null;var t=e.type;"
+            + "if(t==='initial_user_message'||t==='user_message')return {k:'user',r:'用户',x:mt(e.message).replace(/^User:\\s*/,'')};"
+            + "if(t==='user_question_answered'){var q=ua(e);return q?{k:'user',r:'用户(回答)',x:q}:null;}"
+            + "if(t==='devin_message')return {k:'devin',r:'Devin',x:mt(e.message)};"
+            + "if(t==='devin_thoughts'){var tt=mt(e.message);return tt?{k:'think',r:'思考',x:tt}:null;}"
+            + "if(t==='one_line_thoughts'){var o=e.short||e.summary||'';return o?{k:'think',r:'思考',x:''+o}:null;}"
+            + "if(t==='shell_process_started')return {k:'tool',r:'\\uD83D\\uDDA5\\uFE0F shell',d:''+(e.command||'')};"
+            + "if(t==='shell_process_completed'||t==='shell_process_completed_background'){var c=e.exit_code==null?'':''+e.exit_code;if(c&&c!=='0')return {k:'tool',r:'\\uD83D\\uDDA5\\uFE0F shell · 退出码 '+c,d:''+(e.output_trunc||'')};return null;}"
+            + "if(t==='multi_edit_result')return {k:'tool',r:'\\u270F\\uFE0F 文件编辑',d:(e.file_updates||[]).map(function(f){return (f.action_type||'edit')+' '+(f.file_path||'');}).join('\\n')};"
+            + "if(t==='computer_use')return {k:'tool',r:'\\uD83D\\uDDB1\\uFE0F 电脑操作',d:(e.actions||[]).map(function(a){return a&&a.action_type;}).filter(Boolean).join(', ')};"
+            + "if(t==='mcp_tool_call'){var d=''+(e.tool_input||'');if(e.output_trunc)d+=(d?'\\n→ ':'')+e.output_trunc;return {k:'tool',r:'\\uD83D\\uDD0C '+(e.tool_name||e.server||'mcp'),d:d};}"
+            + "if(t==='search_file_commands')return {k:'tool',r:'\\uD83D\\uDD0D 文件搜索',d:(e.search_commands||[]).map(function(c){return (c.command_name||'search')+': '+(c.regex||c.query||'')+(c.path?' @ '+c.path:'');}).join('\\n')};"
+            + "if(t==='web_search')return {k:'tool',r:'\\uD83C\\uDF10 网络搜索',d:''+(e.query||'')+((e.result_urls||[]).length?'\\n'+e.result_urls.join('\\n'):'')};"
+            + "if(t==='web_get_contents')return {k:'tool',r:'\\uD83C\\uDF10 抓取网页',d:(e.urls||[]).join('\\n')};"
+            + "if(t==='todo_update')return {k:'tool',r:'\\uD83D\\uDCCB 待办更新',d:(e.todos||[]).map(function(td){return '- ['+(td.status==='completed'?'x':' ')+'] '+(td.content||'');}).join('\\n')};"
+            + "return null;}"
+            // 事件流解析: 花括号配对 + data: 行 双兜底, 去重 + 按时间排序 (与 engine sessionEvents 一致)
+            + "function pe(raw){var merged={};var order=[];function add(ev){if(!ev||!ev.type)return;var id=ev.event_id||(ev.type+'-'+ev.timestamp+'-'+ev.created_at_ms);if(!(id in merged)){merged[id]=ev;order.push(id);}}"
+            + "var i=0,n=raw.length;while(i<n){while(i<n&&' \\r\\n\\t'.indexOf(raw[i])>=0)i++;if(i>=n)break;"
+            + "if(raw[i]==='{'){var depth=0,j=i,inStr=false,esc=false;for(;j<n;j++){var ch=raw[j];if(esc){esc=false;continue;}if(ch==='\\\\'&&inStr){esc=true;continue;}if(ch==='\"'){inStr=!inStr;continue;}if(inStr)continue;if(ch==='{')depth++;if(ch==='}'){depth--;if(depth===0){j++;break;}}}"
+            + "try{var o=JSON.parse(raw.slice(i,j));if(o.result&&o.result.length)o.result.forEach(add);else if(o.type)add(o);}catch(e){}i=j;}"
+            + "else{var le=raw.indexOf('\\n',i);var end=le===-1?n:le;var line=raw.slice(i,end).trim();i=end+1;if(line.indexOf('data:')===0){var ds=line.slice(5).trim();if(ds&&ds!=='[DONE]'){try{var o2=JSON.parse(ds);if(o2.result&&o2.result.length)o2.result.forEach(add);else if(o2.type)add(o2);}catch(e){}}}}}"
+            + "var arr=order.map(function(k){return merged[k];});arr.sort(function(a,b){return (a.created_at_ms||0)-(b.created_at_ms||0);});return arr;}"
             + "fetch('/api/events/'+SID+'/stream',{headers:{Accept:'text/event-stream'},credentials:'include'}).then(function(r){return r.text();}).then(function(raw){"
             + "var evs=pe(raw);"
             + "return fetch('/api/sessions/'+SID,{credentials:'include'}).then(function(r){return r.ok?r.json():{};}).catch(function(){return {};}).then(function(d){"
             + "var title=(d&&d.title)||SID;"
-            + "var c=['# '+title,'','> Session: '+SID,''];var w=['# Worklog: '+title,'','> Session: '+SID,'> Events: '+evs.length,''];"
-            + "evs.forEach(function(e){var t=e.type;var tm=ts(e);"
-            + "if(t==='user_message'){c.push('## \\uD83D\\uDC64 USER','',mt(e.message),'');w.push('\\n## \\uD83D\\uDC64 USER ['+tm+']',mt(e.message));}"
-            + "else if(t==='devin_message'){c.push('## \\uD83E\\uDD16 DEVIN','',mt(e.message),'');w.push('\\n## \\uD83E\\uDD16 DEVIN ['+tm+']',mt(e.message));}"
-            + "else if(t==='devin_thoughts'){w.push('\\n### \\uD83D\\uDCAD THINKING ['+tm+']',mt(e.message));}"
-            + "else if(t==='shell_process_started'){w.push('\\n### \\uD83D\\uDCBB CMD ['+tm+']','```bash',(e.command||''),'```');}"
-            + "else if(t==='shell_process_completed'){var ot=(e.output_trunc||e.output||'');if((''+ot).trim())w.push('```',(''+ot).slice(0,3000),'```');}"
-            + "else if(t==='todo_update'){var td=e.todos||[];if(td.length){w.push('\\n### \\uD83D\\uDCCB TODO ['+tm+']');td.forEach(function(x){w.push('- '+(x.status||'')+' '+mt(x.content));});}}"
-            + "else if(t==='status_update'||t==='activity'){w.push('\\n_['+tm+'] '+mt(e.message||e.status)+'_');}"
-            + "else{var mm=e.message||e.content;if(mm)w.push('\\n### ['+t+'] ['+tm+']',mt(mm));}"
+            + "var c=['# 对话: '+title,'','- Session: `'+SID+'`','- 事件数: '+evs.length,''];"
+            + "evs.forEach(function(e){var x=cls(e);if(!x)return;var tm=ts(e);"
+            + "if(x.k==='user')c.push('## \\uD83D\\uDC64 '+x.r+'  '+tm,'',x.x||'','');"
+            + "else if(x.k==='devin')c.push('## \\uD83E\\uDD16 Devin  '+tm,'',x.x||'','');"
+            + "else if(x.k==='think')c.push('### \\uD83D\\uDCAD 思考  '+tm,'','> '+String(x.x||'').replace(/\\n/g,'\\n> '),'');"
+            + "else if(x.k==='tool')c.push('### '+x.r+'  '+tm,'',x.d?'```\\n'+String(x.d).slice(0,4000)+'\\n```':'','');"
             + "});"
-            + "var res={sid:SID,title:title,conv:c.join('\\n'),worklog:w.join('\\n'),events:evs.length};"
+            + "var res={sid:SID,title:title,conv:c.join('\\n'),events:evs.length};"
             + "try{RTDL.convExtracted(JSON.stringify(res));}catch(e){}"
             + "});}).catch(function(err){try{RTDL.convExtracted(JSON.stringify({sid:SID,error:''+err}));}catch(e){}});"
             + "}catch(e){try{RTDL.convExtracted(JSON.stringify({error:''+e}));}catch(_){}}})();";
     }
-    /** RTDL.convExtracted 回调 (源标签线程) → 主线程注入两个 md 到目标页。 */
+    /** RTDL.convExtracted 回调 (源标签线程) → 主线程注入两个 md 到目标页:
+     *  ① 全量对话 md (四类气泡); ② 「查看该对话全部文件」指引 md (账号+密码+Session ID+提取流程)。 */
     private void onConvExtracted(String json) {
         WebView target = convDropTarget; convDropTarget = null;
+        String accJson = convDropAccountJson; convDropAccountJson = null;
         if (target == null) return;
         try {
             JSONObject o = new JSONObject(json);
             String conv = o.optString("conv", "");
-            String worklog = o.optString("worklog", "");
-            if (conv.isEmpty() && worklog.isEmpty()) { toast("提取失败: " + o.optString("error", "无对话内容")); return; }
+            if (conv.isEmpty()) { toast("提取失败: " + o.optString("error", "无对话内容")); return; }
             String sid = o.optString("sid", "session");
-            String base = ("devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
+            String title = o.optString("title", sid);
+            String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
             java.util.List<String[]> files = new java.util.ArrayList<>();
-            if (!conv.isEmpty()) files.add(new String[]{ base + "-conversation.md", conv });
-            if (!worklog.isEmpty()) files.add(new String[]{ base + "-worklog.md", worklog });
+            files.add(new String[]{ base + "-conversation.md", conv });
+            files.add(new String[]{ base + "-files-access.md", buildAccessGuideMd(accJson, sid, title) });
             dropTextFilesIntoPage(target, convDropX, convDropY, files);
-            toast("已导入 对话+工作日志 (" + o.optInt("events", 0) + " 事件)");
+            toast("已导入 对话+取文件指引 (" + o.optInt("events", 0) + " 事件)");
         } catch (Exception e) { toast("导入失败"); }
     }
+    /** 生成「查看该对话全部文件」指引 md: 含该对话所属账号+密码、Session ID、对话提取流程。
+     *  网页拖出本就携带该对话上下文 → 第二份文档让另一 Agent(A群) 据此登录并整体取回全部文件。 */
+    private String buildAccessGuideMd(String accJson, String sid, String title) {
+        String email = "", password = "", orgId = "", orgName = "";
+        if (accJson != null) {
+            try {
+                JSONObject a = new JSONObject(accJson);
+                email = a.optString("email", "");
+                password = a.optString("password", "");
+                orgId = a.optString("orgId", "");
+                orgName = a.optString("orgName", "");
+            } catch (Exception ignored) {}
+        }
+        String bare = sid.startsWith("devin-") ? sid.substring(6) : sid;
+        StringBuilder b = new StringBuilder();
+        b.append("# 查看该对话的全部文件 · 取数指引\n\n");
+        b.append("> 本文件随对话拖拽自动生成, 仅针对**当前停留的这一条对话**。\n");
+        b.append("> 配套同时拖出的 `").append((sid.startsWith("devin-") ? sid : "devin-" + sid)).append("-conversation.md` 为该对话**全量文本**。\n\n");
+        b.append("## 一、对话坐标\n\n");
+        b.append("| 项 | 值 |\n|----|----|\n");
+        b.append("| 标题 | ").append(mdCell(title)).append(" |\n");
+        b.append("| Session ID | `").append(sid.startsWith("devin-") ? sid : "devin-" + sid).append("` |\n");
+        b.append("| 在线查看 | https://app.devin.ai/sessions/").append(bare).append(" |\n");
+        if (!orgName.isEmpty() || !orgId.isEmpty()) b.append("| 组织 | ").append(mdCell(orgName)).append(orgId.isEmpty() ? "" : (" (`" + orgId + "`)")).append(" |\n");
+        b.append("\n## 二、该对话所属账号 (额度耗尽也可登录读历史)\n\n");
+        b.append("| 项 | 值 |\n|----|----|\n");
+        b.append("| 邮箱 | ").append(email.isEmpty() ? "(未知·该标签未带账号)" : ("`" + email + "`")).append(" |\n");
+        b.append("| 密码 | ").append(password.isEmpty() ? "(未知)" : ("`" + password + "`")).append(" |\n");
+        b.append("\n> 提取只读历史数据, **不消耗额度**。额度限制的是新建会话/发新消息, 不限读取。\n\n");
+        b.append("## 三、整体取回该对话全部文件 (推荐: 一行整体提取)\n\n");
+        b.append("在「板块三 · Devin Cloud 软件本体」对该号执行:\n\n");
+        b.append("```jsonc\n");
+        b.append("// 1) 解锁 auth1 (额度耗尽也可)\n");
+        b.append("{ \"cmd\": \"login\", \"id\": \"").append(email.isEmpty() ? "<email>" : email).append("\" }\n\n");
+        b.append("// 2) 一次拿齐: 元数据 + 完整对话md + 工作日志md + 文件清单, 并落盘共享保险箱\n");
+        b.append("{ \"cmd\": \"extractConversation\", \"id\": \"").append(email.isEmpty() ? "<email>" : email).append("\", \"sid\": \"").append(sid.startsWith("devin-") ? sid : "devin-" + sid).append("\", \"save\": true }\n");
+        b.append("```\n\n");
+        b.append("`extractConversation` 返回: `conversationMd`(完整对话) · `worklogMd`(工作日志) · `detail`(元数据) · `files`/`fileCount`(附件清单 name/url/path) · `saved`(落盘文件名)。\n\n");
+        b.append("## 四、分步法 (需精细控制时)\n\n");
+        b.append("1. `login {id}` → 解锁 `auth1`。\n");
+        b.append("2. `listSessions {id, limit:200}` → 确认本 `devin_id`。\n");
+        b.append("3. `exportSession {id, sid, kind:\"conversation\"}` 与 `kind:\"worklog\"` 取两类 md。\n");
+        b.append("4. `sessionMessages` / `sessionDetail` 兜底取消息与附件。\n");
+        b.append("5. 落地手机: 加 `save:true` 写入共享保险箱 `Documents/DevinCloud/` (卸载/重装不丢)。\n\n");
+        b.append("## 五、无 auth1 / 只要页面所见即所得 (浏览器自动化)\n\n");
+        b.append("1. `browseOpen {url:\"https://app.devin.ai/sessions/").append(bare).append("\", account:\"").append(email.isEmpty() ? "<email>" : email).append("\"}` — 用该号上下文新开页, 不打扰用户当前页。\n");
+        b.append("2. `browseWaitForElement` 等内容加载 → `browseExportMd {tabIndex, save:true}` 导出整页 Markdown。\n");
+        b.append("3. 或 `browseGetDom` 取完整 DOM 自行解析。\n");
+        return b.toString();
+    }
+    private static String mdCell(String s) { return s == null ? "" : s.replace("|", "\\|").replace("\n", " ").trim(); }
     /** 把内存中的多份文本(md)作为文件注入页面 (file input + dropzone 双路, 同 dropFileIntoPage)。 */
     private void dropTextFilesIntoPage(final WebView web, float x, float y, java.util.List<String[]> files) {
         if (web == null || files.isEmpty()) return;

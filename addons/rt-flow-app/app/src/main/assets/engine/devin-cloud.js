@@ -96,7 +96,9 @@
   }
 
   // ── MD 构建 (对话 / 工作日志) ──────────────────────────────────────────────
-  function evTs(ev) { if (ev.timestamp) return ev.timestamp; if (ev.created_at_ms) return new Date(ev.created_at_ms).toISOString(); return ""; }
+  // 与桌面 dao-vsix (core/dao-vsix/rtflow/devin_cloud.js) 的 classifyEvent /
+  // buildConversationMd 完全对齐 → 手机版导出 = 电脑版全量, 四类气泡无缺。
+  function evTs(ev) { var ms = ev.created_at_ms || (ev.timestamp ? Date.parse(ev.timestamp) : 0); return ms ? new Date(ms).toISOString() : ""; }
   function msgText(v) {
     if (v == null) return "";
     if (typeof v === "string") return v;
@@ -109,13 +111,89 @@
   var TODO_MARK = { completed: "[x]", in_progress: "[~]", pending: "[ ]", cancelled: "[-]" };
   var SKIP = { terminal_update: 1, is_typing: 1, context_growth_update: 1, iteration_checkpoint: 1, acu_consumption_at_last_user_interaction: 1, rules_injected: 1, shell_process_completed_background: 1 };
 
+  function userAnswerText(ev) {
+    var answers = ev.answers || [];
+    return answers.map(function (a) {
+      if (!a) return "";
+      if (a.other_text) return a.other_text;
+      if (Array.isArray(a.selected)) return a.selected.join("; ");
+      if (typeof a.text === "string") return a.text;
+      return "";
+    }).filter(Boolean).join("\n");
+  }
+
+  // 事件归类 → 四类气泡 (👤用户 / 🤖Devin / 💭思考 / 🔧工具) · 移植自桌面 classifyEvent
+  function classifyEvent(ev) {
+    if (!ev || typeof ev !== "object") return null;
+    var t = ev.type;
+    switch (t) {
+      case "initial_user_message":
+      case "user_message":
+        return { kind: "user", role: "用户", text: msgText(ev.message).replace(/^User:\s*/, "") };
+      case "user_question_answered": {
+        var txt = userAnswerText(ev);
+        return txt ? { kind: "user", role: "用户(回答)", text: txt } : null;
+      }
+      case "devin_message":
+        return { kind: "devin", role: "Devin", text: msgText(ev.message) };
+      case "devin_thoughts": {
+        var tt = msgText(ev.message);
+        return tt ? { kind: "think", role: "思考", text: tt } : null;
+      }
+      case "one_line_thoughts": {
+        var ot = ev.short || ev.summary || "";
+        return ot ? { kind: "think", role: "思考", text: String(ot) } : null;
+      }
+      case "shell_process_started":
+        return { kind: "tool", role: "🖥️ shell", detail: String(ev.command || "") };
+      case "shell_process_completed":
+      case "shell_process_completed_background": {
+        var code = ev.exit_code == null ? "" : String(ev.exit_code);
+        if (code && code !== "0") return { kind: "tool", role: "🖥️ shell · 退出码 " + code, detail: String(ev.output_trunc || "") };
+        return null;
+      }
+      case "multi_edit_result": {
+        var files = (ev.file_updates || []).map(function (f) { return (f.action_type || "edit") + " " + (f.file_path || ""); }).join("\n");
+        return { kind: "tool", role: "✏️ 文件编辑", detail: files };
+      }
+      case "computer_use": {
+        var acts = (ev.actions || []).map(function (a) { return a && a.action_type; }).filter(Boolean).join(", ");
+        return { kind: "tool", role: "🖱️ 电脑操作", detail: acts };
+      }
+      case "mcp_tool_call": {
+        var d = String(ev.tool_input || "");
+        if (ev.output_trunc) d += (d ? "\n→ " : "") + String(ev.output_trunc);
+        return { kind: "tool", role: "🔌 " + (ev.tool_name || ev.server || "mcp"), detail: d };
+      }
+      case "search_file_commands": {
+        var cmds = (ev.search_commands || []).map(function (c) { return (c.command_name || "search") + ": " + (c.regex || c.query || "") + (c.path ? " @ " + c.path : ""); }).join("\n");
+        return { kind: "tool", role: "🔍 文件搜索", detail: cmds };
+      }
+      case "web_search":
+        return { kind: "tool", role: "🌐 网络搜索", detail: String(ev.query || "") + ((ev.result_urls || []).length ? "\n" + ev.result_urls.join("\n") : "") };
+      case "web_get_contents":
+        return { kind: "tool", role: "🌐 抓取网页", detail: (ev.urls || []).join("\n") };
+      case "todo_update": {
+        var todos = (ev.todos || []).map(function (td) { return "- [" + (td.status === "completed" ? "x" : " ") + "] " + (td.content || ""); }).join("\n");
+        return { kind: "tool", role: "📋 待办更新", detail: todos };
+      }
+      default:
+        return null;
+    }
+  }
+
+  // 对话转录 (人看的·全量) — 与桌面 buildConversationMd 逐字对齐
   function buildConversation(title, sid, events) {
-    var lines = ["# 对话记录 / Conversation: " + title, "Session: " + sid, ""]; var turns = 0;
+    var lines = ["# 对话: " + title, "", "- Session: `" + sid + "`", "- 事件数: " + events.length, ""];
     events.forEach(function (ev) {
-      if (ev.type === "user_message") { lines.push("\n## 👤 USER [" + evTs(ev) + "]", msgText(ev.message)); turns++; }
-      else if (ev.type === "devin_message") { lines.push("\n## 🤖 DEVIN [" + evTs(ev) + "]", msgText(ev.message)); turns++; }
+      var c = classifyEvent(ev);
+      if (!c) return;
+      var ts = evTs(ev);
+      if (c.kind === "user") lines.push("## 👤 " + c.role + "  " + ts, "", c.text || "", "");
+      else if (c.kind === "devin") lines.push("## 🤖 Devin  " + ts, "", c.text || "", "");
+      else if (c.kind === "think") lines.push("### 💭 思考  " + ts, "", "> " + String(c.text || "").replace(/\n/g, "\n> "), "");
+      else if (c.kind === "tool") lines.push("### " + c.role + "  " + ts, "", c.detail ? "```\n" + String(c.detail).slice(0, 4000) + "\n```" : "", "");
     });
-    lines.splice(2, 0, "Turns: " + turns);
     return lines.join("\n");
   }
   function buildWorklog(title, sid, events) {
@@ -289,9 +367,71 @@
     return { ok: true, report: report };
   }
 
+  // ── 会话产出文件 (下载ZIP全部包括文件夹) · 复刻桌面 extractAllKeys/mapKeysToPaths/resolvePresignedUrls ──
+  // 事件流里每个产出文件都带 contents_key (+ file_path), 经 /api/presigned-url/batch 换直链 → 二进制下载。
+  function extractAllKeys(events) {
+    var keys = {};
+    (function walk(o) {
+      if (!o || typeof o !== "object") return;
+      if (Array.isArray(o)) { o.forEach(walk); return; }
+      for (var k in o) { if (!Object.prototype.hasOwnProperty.call(o, k)) continue; var v = o[k];
+        if (k === "contents_key" && typeof v === "string" && v) keys[v] = 1; else walk(v); }
+    })(events);
+    return Object.keys(keys).sort();
+  }
+  function mapKeysToPaths(events) {
+    var m = {};
+    (function walk(o) {
+      if (!o || typeof o !== "object") return;
+      if (Array.isArray(o)) { o.forEach(walk); return; }
+      if (o.contents_key && o.file_path) m[o.contents_key] = o.file_path;
+      for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k)) walk(o[k]); }
+    })(events);
+    return m;
+  }
+  async function resolvePresignedUrls(acc, sid, keys) {
+    var result = {};
+    var CHUNK = 100;
+    for (var i = 0; i < keys.length; i += CHUNK) {
+      var batch = keys.slice(i, i + CHUNK);
+      var r = await jpost(APP + "/api/presigned-url/batch/" + sid, acc, { s3_key_list: batch });
+      if (r.status === 200 && r.json) {
+        var urls = r.json.urls_list || [], hdrs = r.json.headers_list || [];
+        for (var j = 0; j < batch.length; j++) if (urls[j]) result[batch[j]] = { url: urls[j], headers: hdrs[j] || {} };
+      }
+    }
+    return result;
+  }
+  // 取回某会话全部产出文件 → [{path, file, b64, size}] (b64 = 二进制 base64, 供 ZIP 无损打包)
+  async function collectSessionFiles(acc, sid, events, onProgress) {
+    var ev = events;
+    if (!ev) { var e = await sessionEvents(acc, sid); ev = (e.ok && e.events) || []; }
+    var keys = extractAllKeys(ev);
+    var keyToPath = mapKeysToPaths(ev);
+    if (!keys.length) return { ok: true, files: [], index: [] };
+    var urlMap = await resolvePresignedUrls(acc, sid, keys);
+    var files = [], index = [], done = 0;
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i]; var info = urlMap[key];
+      var path = keyToPath[key] || null;
+      if (!info) { index.push({ key: key, path: path, error: "no presigned url" }); continue; }
+      try {
+        var res = await C.httpReqB64("GET", info.url, info.headers || {}, "");
+        if (res && res.status >= 200 && res.status < 300 && typeof res.b64 === "string") {
+          files.push({ path: path, key: key, b64: res.b64, size: res.size || 0 });
+          index.push({ key: key, path: path, size: res.size || 0 });
+        } else { index.push({ key: key, path: path, error: "HTTP " + (res && res.status) }); }
+      } catch (er) { index.push({ key: key, path: path, error: String(er) }); }
+      done++; if (onProgress) try { onProgress(done, keys.length); } catch (e2) {}
+    }
+    return { ok: true, files: files, index: index, total: keys.length };
+  }
+
   root.DaoCloud = {
     listSessions: listSessions, sessionDetail: sessionDetail, sessionMessages: sessionMessages,
     sessionEvents: sessionEvents, exportSession: exportSession, deleteSession: deleteSession,
+    extractAllKeys: extractAllKeys, mapKeysToPaths: mapKeysToPaths,
+    resolvePresignedUrls: resolvePresignedUrls, collectSessionFiles: collectSessionFiles,
     backupAccount: backupAccount, buildConversation: buildConversation, buildWorklog: buildWorklog,
     listSecrets: listSecrets, listKnowledge: listKnowledge, listPlaybooks: listPlaybooks,
     injectSecret: injectSecret, injectKnowledge: injectKnowledge, injectPlaybook: injectPlaybook,
