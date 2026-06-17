@@ -4390,6 +4390,7 @@ function getEaConfigHtml(port, nonce) {
     {n:'AiHubMix (聚合)',t:'openai',u:'https://aihubmix.com/v1',m:'gpt-4o, claude-sonnet-4-6',r:'https://aihubmix.com/token'},
     // ── 国内主流 ──
     {n:'DeepSeek 深度求索',t:'openai',u:'https://api.deepseek.com/v1',m:'deepseek-chat, deepseek-reasoner',r:'https://platform.deepseek.com/api_keys'},
+    {n:'小米 MiMo (Xiaomi)',t:'openai',u:'https://api.xiaomimimo.com/v1',m:'mimo-v2-flash, mimo-v2.5-pro, mimo-v2-omni',r:'https://platform.xiaomimimo.com'},
     {n:'智谱 GLM (Zhipu)',t:'openai',u:'https://open.bigmodel.cn/api/paas/v4',m:'glm-4.6, glm-4.5-air',r:'https://open.bigmodel.cn/usercenter/apikeys'},
     {n:'Kimi 月之暗面 (Moonshot)',t:'openai',u:'https://api.moonshot.cn/v1',m:'kimi-k2-0905-preview, moonshot-v1-128k',r:'https://platform.moonshot.cn/console/api-keys'},
     {n:'阿里云百炼 通义千问 (Bailian)',t:'openai',u:'https://dashscope.aliyuncs.com/compatible-mode/v1',m:'qwen3-coder-plus, qwen-max, qwen-plus',r:'https://bailian.console.aliyun.com/?apiKey=1'},
@@ -4945,19 +4946,25 @@ function getEaConfigHtml(port, nonce) {
     var slash = right.indexOf('/');
     var prov = slash >= 0 ? right.slice(0, slash) : right;
     var model = slash >= 0 ? right.slice(slash + 1) : right;
+    // ★ 显式逐档路由: 一族多档 (fast/slow/base…) 共用一条连线作用域 ——
+    //   连家族即覆盖其全部档位 uid (与双击解路读 data-uids 全断对称),
+    //   免「连 fast 而 slow 漏路 → 回落不可达官方上游」之缺 (familyTierExtend 默关时尤甚).
+    var uids = (_tierGroups[left] && _tierGroups[left].length) ? _tierGroups[left] : [left];
+    var route = { provider: prov, model: model, maxOutputTokens: 16384, thinkingEnabled: false };
     var st = document.getElementById('statusText');
-    if (st) st.textContent = '路由中: ' + left + ' → ' + right + ' …';
-    fPost('/origin/ea/route', {
-      modelUid: left,
-      route: { provider: prov, model: model, maxOutputTokens: 16384, thinkingEnabled: false }
-    }).then(function(r) {
-      if (r && r.ok) {
+    if (st) st.textContent = '路由中: ' + left + (uids.length > 1 ? ' (×' + uids.length + '档)' : '') + ' → ' + right + ' …';
+    Promise.all(uids.map(function(uid) {
+      return fPost('/origin/ea/route', { modelUid: uid, route: route });
+    })).then(function(rs) {
+      var ok = rs.every(function(r){ return r && r.ok; });
+      if (ok) {
         _selectedLeft = null;
         _selectedRight = null;
-        if (st) st.textContent = '✔ 已路由 ' + left + ' → ' + right;
+        if (st) st.textContent = '✔ 已路由 ' + left + (uids.length > 1 ? ' (全 ' + uids.length + ' 档)' : '') + ' → ' + right;
         loadConfig();
       } else {
-        if (st) st.textContent = '路由失败: ' + ((r && r.error) || 'unknown');
+        var bad = rs.filter(function(r){ return !(r && r.ok); })[0];
+        if (st) st.textContent = '路由失败: ' + ((bad && bad.error) || 'unknown');
       }
     }).catch(function(e) {
       if (st) st.textContent = '路由请求失败: ' + e.message;
