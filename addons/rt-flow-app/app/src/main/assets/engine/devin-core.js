@@ -24,6 +24,19 @@
       setTimeout(function () { if (__cbs[id]) { delete __cbs[id]; if (!done) { done = true; resolve({ status: 0, error: "timeout" }); } } }, 40000);
     });
   }
+  // 二进制 HTTP (响应体 base64) → {status, b64, size} · 供下载会话产出文件 (二进制无损)
+  function httpReqB64(method, url, headers, body) {
+    return new Promise(function (resolve) {
+      if (!N.httpReqB64) { resolve({ status: 0, error: "no native httpReqB64" }); return; }
+      var id = "b" + (++__seq) + "_" + Date.now();
+      var done = false;
+      __cbs[id] = function (res) { if (done) return; done = true; resolve(res || { status: 0, error: "empty" }); };
+      var b = (body == null) ? "" : (typeof body === "string" ? body : JSON.stringify(body));
+      try { N.httpReqB64(id, method || "GET", url, JSON.stringify(headers || {}), b); }
+      catch (e) { delete __cbs[id]; resolve({ status: 0, error: String(e) }); return; }
+      setTimeout(function () { if (__cbs[id]) { delete __cbs[id]; if (!done) { done = true; resolve({ status: 0, error: "timeout" }); } } }, 90000);
+    });
+  }
   function _parse(res) {
     var j = null; try { j = JSON.parse(res && res.text != null ? res.text : ""); } catch (e) {}
     return { status: (res && res.status) || 0, json: j, text: (res && res.text) || "", error: res && res.error };
@@ -230,7 +243,7 @@
   }
 
   root.DaoCore = {
-    httpReq: httpReq, devinJsonPost: devinJsonPost, devinJsonGet: devinJsonGet,
+    httpReq: httpReq, httpReqB64: httpReqB64, devinJsonPost: devinJsonPost, devinJsonGet: devinJsonGet,
     devinLogin: devinLogin, devinFetchQuota: devinFetchQuota,
     loadAcc: loadAcc, saveAcc: saveAcc, getActive: getActive, setActive: setActive, findAcc: findAcc, upsertAcc: upsertAcc,
     loginAndStore: loginAndStore, refreshQuotaFor: refreshQuotaFor,

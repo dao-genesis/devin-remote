@@ -157,8 +157,8 @@ async function dlMd(i,kind){
   }catch(e){ toast("异常: "+e,true); }
 }
 
-// ── 下载单对话全部文件 → 打包 zip → 同步到下载面板 ──
-//   默认备份仅含对话记录; 此处手动拉取 对话MD + 工作日志MD + 原始事件JSON 一并打包
+// ── 下载单对话全部文件 → 打包 zip(含文件夹) → 同步到下载面板 ──
+//   与电脑版 dao-vsix 同步: 全量对话MD + 工作日志MD + 原始事件JSON + 产出文件(原路径/文件夹结构)
 async function dlAll(i){
   var s=SESSIONS[i]; if(!CUR||!s)return;
   var sid=s.devin_id||s.session_id||s.id;
@@ -170,15 +170,24 @@ async function dlAll(i){
     var wl=await DaoCloud.exportSession(CUR, sid, "worklog");
     if(wl.ok) files.push({name:"worklog.md", data:wl.md});
     // 原始事件(若可取)留底 JSON
-    try{ var ev=await DaoCloud.sessionEvents(CUR, sid); if(ev&&ev.ok) files.push({name:"events.json", data:JSON.stringify(ev.events||[],null,2)}); }catch(e){}
+    var ev=null;
+    try{ ev=await DaoCloud.sessionEvents(CUR, sid); if(ev&&ev.ok) files.push({name:"events.json", data:JSON.stringify(ev.events||[],null,2)}); }catch(e){}
+    // 会话产出文件: 按 contents_key→presigned URL 二进制取回, 还原原始文件夹结构 (与桌面 cloud_files/ 一致)
+    try{
+      var cf=await DaoCloud.collectSessionFiles(CUR, sid, (ev&&ev.events)||null, function(d,t){ if(d===1||d%20===0)toast("拉取产出文件 "+d+"/"+t); });
+      if(cf&&cf.files&&cf.files.length){
+        cf.files.forEach(function(x){ var p=(x.path||("_unpathed/"+x.key)).replace(/^\/+/,""); files.push({name:"files/"+p, b64:x.b64}); });
+      }
+      if(cf&&cf.index&&cf.index.length) files.push({name:"files/_index.json", data:JSON.stringify(cf.index,null,2)});
+    }catch(e){}
     // 元信息
     files.push({name:"meta.json", data:JSON.stringify({account:CUR.email,accountNo:CUR_NO,session:sid,title:s.title||s.name,status:s.status_enum||s.status,exportedAt:new Date().toISOString()},null,2)});
     var zipName=CUR_NO+"_"+safeName(CUR.email||CUR.id)+"_"+safeName(s.title||sid)+".zip";
     var b64=buildZipBase64(files);
     var path="";
     try{ path=N.saveBase64File ? N.saveBase64File(zipName, b64) : ""; }catch(e){}
-    if(!path){ // 兜底: 无 base64 桥则逐个落 MD
-      files.forEach(function(f){ try{ N.saveTextFile && N.saveTextFile(safeName(s.title||sid)+"_"+f.name, f.data); }catch(e){} });
+    if(!path){ // 兜底: 无 base64 桥则逐个落文本文件 (二进制产出文件跳过)
+      files.forEach(function(f){ if(f.data==null)return; try{ N.saveTextFile && N.saveTextFile(safeName(s.title||sid)+"_"+f.name.replace(/\//g,"_"), f.data); }catch(e){} });
       toast("✓ 已下载 "+files.length+" 个文件(逐个)");
     } else {
       toast("✓ 已打包 "+files.length+" 文件 → "+zipName);
@@ -229,11 +238,27 @@ function _utf8(str){
 }
 function _u16(n){ return [n&0xFF,(n>>8)&0xFF]; }
 function _u32(n){ return [n&0xFF,(n>>8)&0xFF,(n>>16)&0xFF,(n>>24)&0xFF]; }
+function _b64ToBytes(b64){
+  var B="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  if(!_b64ToBytes.L){ _b64ToBytes.L={}; for(var i=0;i<B.length;i++)_b64ToBytes.L[B.charAt(i)]=i; }
+  var L=_b64ToBytes.L;
+  var s=String(b64||"").replace(/[\r\n\t ]/g,"");
+  var pad=s.indexOf("="); if(pad>=0) s=s.substring(0,pad);
+  var out=[],n=s.length;
+  for(var j=0;j<n;j+=4){
+    var e0=L[s.charAt(j)],e1=L[s.charAt(j+1)],e2=L[s.charAt(j+2)],e3=L[s.charAt(j+3)];
+    if(e0==null||e1==null)break;
+    out.push((e0<<2)|(e1>>4));
+    if(e2!=null)out.push(((e1&15)<<4)|(e2>>2));
+    if(e3!=null)out.push(((e2&3)<<6)|e3);
+  }
+  return out;
+}
 function buildZipBase64(files){
   var local=[], central=[], offset=0;
   files.forEach(function(f){
     var nameBytes=_utf8(f.name);
-    var dataBytes=_utf8(f.data==null?"":String(f.data));
+    var dataBytes=(f.b64!=null)?_b64ToBytes(f.b64):_utf8(f.data==null?"":String(f.data));
     var crc=_crc32(dataBytes);
     var lh=[].concat(_u32(0x04034b50),_u16(20),_u16(0x0800),_u16(0),_u16(0),_u16(0),_u32(crc),_u32(dataBytes.length),_u32(dataBytes.length),_u16(nameBytes.length),_u16(0),nameBytes,dataBytes);
     var ch=[].concat(_u32(0x02014b50),_u16(20),_u16(20),_u16(0x0800),_u16(0),_u16(0),_u16(0),_u32(crc),_u32(dataBytes.length),_u32(dataBytes.length),_u16(nameBytes.length),_u16(0),_u16(0),_u16(0),_u16(0),_u32(0),_u32(offset),nameBytes);
