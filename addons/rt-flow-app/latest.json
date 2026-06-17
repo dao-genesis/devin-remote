@@ -1,6 +1,6 @@
 {
-  "versionCode": 32,
-  "versionName": "0.15.1",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.1/DevinCloud-mobile-v0.15.1.apk",
-  "notes": "v0.15.1\n· 修复板块一浏览器自动化致命缺陷: execJs/getDom/getStorage/getLinks/getPageInfo/clickElement/fillForm/submitForm/findInPage/waitForElement/getInputValues/scrollTo/exportMd 全部曾因同步桥挂死渲染线程而恒返回 null/超时, 现改异步桥 (__browseCb) 彻底打通\n· 页脚版本号自同步 (不再僵化为旧版)"
+  "versionCode": 33,
+  "versionName": "0.15.2",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.2/DevinCloud-mobile-v0.15.2.apk",
+  "notes": "v0.15.2\n· 彻底修复卸载/重装丢数据: 账号库随「所有文件访问」授权后自动从共享保险箱(Documents/DevinCloud)回读, 多次重试确保权限到位后必恢复\n· 回读按 id/email 合并, 永不覆盖、永不丢号, 兼容任意历史版本字段\n· 引擎(中继)侧也持久化/回读账号到保险箱, UI 未开也不丢"
 }

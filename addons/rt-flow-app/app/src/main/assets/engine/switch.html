@@ -849,12 +849,39 @@ async function autoQuotaTick(){
 }
 
 // ── 初始化 ──
-// 数据持久化恢复: 账号库已镜像到共享文件夹(Documents/DevinCloud), 卸载/重装/换机后从此处回读
-(function(){ try{
-  var cur=loadAcc();
-  if(cur.length){ if(N.vaultSave) N.vaultSave("accounts", JSON.stringify(cur)); }            // 既有账号 → 立即镜像到共享文件夹(升级即生效)
-  else if(N.vaultLoad){ var v=N.vaultLoad("accounts"); if(v){ var arr=JSON.parse(v); if(arr&&arr.length) localStorage.setItem("rtflow.accounts", v); } }  // 本地空 → 从共享文件夹回读
-}catch(e){} })();
+// 数据持久化恢复: 账号库镜像到共享文件夹(Documents/DevinCloud), 卸载/重装/换机后从此回读。
+// 关键: 「所有文件访问」权限在首启时尚未授予, 此刻 vaultLoad 读不到 → 必须在授权后(回到前台)重试,
+//       且回读与本地按 id/email 合并(永不覆盖、永不丢号), 兼容任意历史版本字段差异。
+function restoreAccountsFromVault(){
+  try{
+    if(!N.vaultLoad) return;
+    var raw=N.vaultLoad("accounts"); if(!raw) return;
+    var vaultArr; try{ vaultArr=JSON.parse(raw); }catch(e){ return; }
+    if(!vaultArr||!vaultArr.length) return;
+    var cur=loadAcc(), byKey={}, order=[];
+    function key(a){ return a&&(a.id||a.email)||""; }
+    cur.forEach(function(a){ var k=key(a); if(!k)return; byKey[k]=a; order.push(k); });
+    var added=0, enriched=0;
+    vaultArr.forEach(function(a){ var k=key(a); if(!k)return;
+      if(byKey[k]){ var m=Object.assign({}, a, byKey[k]); if(JSON.stringify(m)!==JSON.stringify(byKey[k])){ byKey[k]=m; enriched++; } }
+      else { byKey[k]=a; order.push(k); added++; }
+    });
+    if(added||enriched){
+      var merged=order.map(function(k){ return byKey[k]; });
+      localStorage.setItem("rtflow.accounts", JSON.stringify(merged));
+      try{ if(typeof render==="function") render(); }catch(e){}
+    }
+  }catch(e){}
+}
+function mirrorAccountsToVault(){ try{ var cur=loadAcc(); if(cur.length&&N.vaultSave) N.vaultSave("accounts", JSON.stringify(cur)); }catch(e){} }
+(function(){
+  restoreAccountsFromVault();   // 首启尝试 (若已授权立即恢复)
+  mirrorAccountsToVault();       // 既有账号 → 立即镜像 (升级即生效)
+  // 授权常在首启之后才完成 → 多次延时重试 + 回前台重试, 确保权限到位后必恢复
+  [800,2000,4000,8000].forEach(function(ms){ setTimeout(restoreAccountsFromVault, ms); });
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden){ restoreAccountsFromVault(); mirrorAccountsToVault(); } });
+  window.addEventListener("focus", function(){ restoreAccountsFromVault(); mirrorAccountsToVault(); });
+})();
 document.getElementById("convBody").classList.toggle("collapsed",!_convOpen);
 document.getElementById("convArrow").innerHTML=_convOpen?"&#9660;":"&#9650;";
 _initCfgUI();
