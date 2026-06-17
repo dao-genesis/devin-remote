@@ -1,0 +1,98 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>用户脚本 (油猴)</title>
+<style>
+:root{--fg:#cdd3de;--desc:#8b949e;--link:#4daafc;--inb:#161b22;--bd:#30363d;--btn:#1f6feb;--btnh:#388bfd;background:#0e1116}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;font-size:13px;padding:10px;color:var(--fg);background:#0e1116;overflow-y:auto}
+h3{margin:12px 0 5px;font-size:13px;color:var(--link)}
+.muted{color:var(--desc);font-size:12px;line-height:1.6}
+input,textarea,button,select{font-size:13px;margin:3px 0;width:100%;padding:7px 9px;background:var(--inb);color:var(--fg);border:1px solid var(--bd);border-radius:5px}
+textarea{min-height:120px;font-family:monospace;font-size:11px;resize:vertical}
+button{background:var(--btn);color:#fff;cursor:pointer;border:none}
+button:active{opacity:.8}
+.row{display:flex;gap:6px}.row button{flex:1}
+.card{border:1px solid var(--bd);border-radius:6px;padding:10px;margin-top:8px;background:#11161d}
+.lbl{color:var(--desc);font-size:11px;margin-top:6px}
+.section{margin-top:12px;padding-top:8px;border-top:1px solid var(--bd)}
+.it{display:flex;align-items:center;gap:8px;padding:9px;border:1px solid var(--bd);border-radius:6px;margin-top:7px;background:#11161d}
+.it .meta{flex:1;min-width:0}
+.it .nm{font-size:13px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.it .sub{color:var(--desc);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.it button{width:auto;padding:6px 10px;font-size:12px;margin:0}
+.sw{width:42px;height:24px;border-radius:12px;background:#30363d;position:relative;flex:none;transition:.2s}
+.sw.on{background:#238636}
+.sw i{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s}
+.sw.on i{left:21px}
+.empty{color:var(--desc);text-align:center;padding:22px;font-size:12px}
+.warn{background:#2d2410;border:1px solid #6b5712;border-radius:6px;padding:9px;margin-top:8px;font-size:12px;color:#e3b341;line-height:1.6}
+.toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:9px 14px;font-size:13px;opacity:0;transition:.2s;pointer-events:none;z-index:20;max-width:90%}
+.toast.show{opacity:1}
+.foot{text-align:center;color:#586069;font-size:11px;margin:16px 0 6px}
+</style></head><body>
+
+<h3>🐵 用户脚本 · 油猴兼容引擎</h3>
+<div class="muted">直接运行标准 <b>.user.js</b> 脚本 (支持 <code>@match / @run-at / GM_*</code>)。脚本与数据存于共享保险箱，卸载重装不丢。跨域请求经原生桥，绕开网站 CSP。</div>
+
+<div class="card">
+  <div class="lbl">从网址安装 (如 Greasy Fork 的 .user.js 链接)</div>
+  <input id="url" placeholder="https://update.greasyfork.org/scripts/xxxxx/yyy.user.js" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <button onclick="installUrl()">安装脚本</button>
+</div>
+
+<div class="section">
+  <h3>已安装脚本 <span id="cnt" class="muted"></span></h3>
+  <div id="list"></div>
+</div>
+
+<div class="section">
+  <h3>粘贴 / 新建脚本</h3>
+  <div class="lbl">把脚本源码 (含 ==UserScript== 头) 粘进来</div>
+  <textarea id="code" placeholder="// ==UserScript==&#10;// @name  我的脚本&#10;// @match *://*/*&#10;// @run-at document-end&#10;// ==/UserScript==&#10;console.log('hello');"></textarea>
+  <button onclick="saveCode()">保存脚本</button>
+</div>
+
+<div class="foot" id="foot">Devin Cloud 手机版 · 道法自然</div>
+<div class="toast" id="toast"></div>
+
+<script>
+var N = window.Native || {};
+function toast(s){ var t=document.getElementById('toast'); t.textContent=s; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(function(){t.classList.remove('show');},1800); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+
+function render(){
+  var arr=[]; try{ arr=JSON.parse(N.usList()||'[]'); }catch(e){}
+  document.getElementById('cnt').textContent = arr.length ? ('('+arr.length+')') : '';
+  var box=document.getElementById('list');
+  if(!arr.length){ box.innerHTML='<div class="empty">还没有脚本。从上方网址安装，或粘贴源码保存。</div>'; return; }
+  box.innerHTML='';
+  arr.forEach(function(s){
+    var m=(s.matches&&s.matches.length?s.matches:(s.includes||[])).join(', ')||'(无匹配规则)';
+    var d=document.createElement('div'); d.className='it';
+    d.innerHTML='<div class="sw'+(s.enabled?' on':'')+'"><i></i></div>'+
+      '<div class="meta"><div class="nm">'+esc(s.name)+(s.version?(' <span class="sub">v'+esc(s.version)+'</span>'):'')+'</div>'+
+      '<div class="sub">'+esc(m)+'</div></div>'+
+      '<button style="background:#a33" data-del="1">删</button>';
+    d.querySelector('.sw').onclick=function(){ var on=!s.enabled; try{N.usToggle(s.id,on);}catch(e){} toast(on?'已启用':'已停用'); render(); };
+    d.querySelector('[data-del]').onclick=function(){ try{N.usDelete(s.id);}catch(e){} toast('已删除'); render(); };
+    box.appendChild(d);
+  });
+}
+function installUrl(){
+  var u=document.getElementById('url').value.trim(); if(!u){toast('请输入网址');return;}
+  toast('安装中…');
+  setTimeout(function(){
+    var id=''; try{ id=N.usInstall(u); }catch(e){}
+    if(id){ document.getElementById('url').value=''; toast('安装成功'); render(); }
+    else toast('安装失败 (链接非 .user.js 或网络问题)');
+  }, 30);
+}
+function saveCode(){
+  var c=document.getElementById('code').value; if(c.indexOf('==UserScript==')<0){toast('缺少 ==UserScript== 头');return;}
+  var id=''; try{ id=N.usSaveCode(c); }catch(e){}
+  if(id){ document.getElementById('code').value=''; toast('已保存'); render(); } else toast('保存失败');
+}
+try{ var v=localStorage.getItem('rtflow.ver'); if(v) document.getElementById('foot').textContent='Devin Cloud 手机版 · v'+v+' · 道法自然'; }catch(e){}
+render();
+</script>
+</body></html>
