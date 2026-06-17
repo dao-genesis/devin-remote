@@ -10,8 +10,8 @@ android {
         applicationId "ai.devin.rtflow"
         minSdk 24
         targetSdk 34
-        versionCode 36
-        versionName "0.15.5"
+        versionCode 37
+        versionName "0.15.6"
     }
 
     signingConfigs {
@@ -49,4 +49,7 @@ dependencies {
     implementation 'androidx.core:core:1.13.1'
     implementation 'androidx.webkit:webkit:1.11.0'
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+    // Shizuku: 获取 ADB(shell uid 2000) 级持久权限 (一次性激活后 App 可自授权/跑 adb shell)
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
 }
