@@ -532,14 +532,34 @@ function test(name, fn) {
       assert.ok(/_untrackedConvUuids\.has\(s\.devinId\)/.test(src), rel.join("/") + ": 活跃集须过滤永久取消的对话");
     }
   });
-  test("F2/F3: 去抖签名 _lastConvHtml/_lastRunKey + 滚动保持", () => {
+  test("F2/F3: 去抖签名 _lastRunKey + 易变装饰剔除签名 _convSig + 滚动保持", () => {
     const fs = require("fs"), path = require("path");
     for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
       const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
-      assert.ok(/_lastConvHtml/.test(src) && /_lastRunKey/.test(src), rel.join("/") + ": 须去抖签名变量");
+      assert.ok(/_lastRunKey/.test(src) && /_lastConvSig/.test(src), rel.join("/") + ": 须去抖签名变量(状态+对话签名)");
       assert.ok(/if\(_rk===_lastRunKey\)return/.test(src), rel.join("/") + ": 状态未变须早返不动 DOM");
-      assert.ok(/if\(m\.html===_lastConvHtml\)return/.test(src), rel.join("/") + ": 对话区未变须早返不动 DOM");
+      // v4.9.8 根因: 不再用 html 全等(被 staleSec/sizeKB/age 每秒变动击穿) → 改用剔除易变装饰的稳定签名
+      assert.ok(/function _convSig\(/.test(src), rel.join("/") + ": 须 _convSig 稳定签名函数");
+      assert.ok(/type: "convUpdate", html, sig: _convSig\(html\)/.test(src), rel.join("/") + ": convUpdate 须携带稳定签名");
+      assert.ok(/if\(_sig===_lastConvSig\)return/.test(src), rel.join("/") + ": 签名未变须早返·不换 DOM·根治每2s整段重建");
+      assert.ok(/replace\(\/title="\[\^"\]\*"\/g/.test(src) && /s前/.test(src), rel.join("/") + ": _convSig 须剔除 tooltip/相对时间等每秒变动装饰");
     }
+  });
+  test("F2 根因自证: _convSig 对仅时间/大小变动的对话区返回同签名", () => {
+    // 直接验证签名算法本身: 同结构、仅 staleSec/sizeKB/age tooltip 不同 → 签名相等 (否则 DOM 会每秒重建)
+    const _convSig = (html) => String(html)
+      .replace(/title="[^"]*"/g, "")
+      .replace(/\d+(?:\.\d+)?\s*KB/g, "#KB")
+      .replace(/\d+\s*min前/g, "#T").replace(/\d+\s*s前/g, "#T")
+      .replace(/<span class="cv-stale">[^<]*<\/span>/g, '<span class="cv-stale"></span>')
+      .replace(/\s+/g, " ").trim();
+    const a = '<div class="conv-section"><span class="cv-dot ok" title="引擎运行中 (pid 123)"></span><div class="cv-current"><b>修Bug</b> · 12KB · 3s前</div><div class="cv-stuck-item"><span class="cv-stale">5s</span></div></div>';
+    const b = '<div class="conv-section"><span class="cv-dot ok" title="引擎运行中 (pid 123)"></span><div class="cv-current"><b>修Bug</b> · 48KB · 41s前</div><div class="cv-stuck-item"><span class="cv-stale">2min</span></div></div>';
+    assert.strictEqual(_convSig(a), _convSig(b), "仅时间/大小变动 → 签名须相等(不重建)");
+    const c = a.replace("修Bug", "改文档"); // 结构性变化(标题文本)
+    assert.notStrictEqual(_convSig(a), _convSig(c), "标题文本变化 → 签名须不同(应更新)");
+    const d = a.replace('cv-dot ok', 'cv-dot stuck'); // 状态灯变化
+    assert.notStrictEqual(_convSig(a), _convSig(d), "状态变化 → 签名须不同(应更新)");
   });
   test("F4: 运行账号顶置 _wamDisplayOrder + 对齐分隔栏 run-sep", () => {
     const fs = require("fs"), path = require("path");
