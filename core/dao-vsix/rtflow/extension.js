@@ -810,7 +810,7 @@ async function openIdeAccountBrowser(acc) {
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.9.3";
+const VERSION = "4.9.4";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
@@ -7288,6 +7288,12 @@ function _broadcastUI() {
         _editorPanel.webview.html = buildHtml();
       } catch {}
     }
+    // v3.17.0 · 宿主回归: 全功能面板第2 Tab 内嵌真切号面板 → 同步整页重渲 (与 _editorPanel 等同)
+    if (_hostPost) {
+      try {
+        _hostPost({ type: "__wamRebuild", html: buildHtml() });
+      } catch {}
+    }
     updateStatusBar();
   }, _debMs);
 }
@@ -7933,6 +7939,30 @@ function _buildExpTag(h) {
   return '<span class="days" style="color:#888" title="无到期限制 · 账号可用即发亮 ∞">∞</span>';
 }
 
+// v3.17.0 · 借鉴手机版 APK: 判定某账号是否有"进行中对话"(running/待输入/卡住), 据 _dvStatusAgg 聚合缓存。
+//   口径与 badge/追踪面板一致: total>0 且 3 分钟内有效 且 running+awaiting+blocked > 0。
+function _hasLiveConv(email) {
+  try {
+    const st = _dvStatusAgg.get(String(email || "").toLowerCase());
+    if (!st || (st.total | 0) <= 0) return false;
+    if (Date.now() - (st.ts || 0) > 180000) return false;
+    return ((st.running | 0) + (st.awaiting | 0) + (st.blocked | 0)) > 0;
+  } catch {
+    return false;
+  }
+}
+// v3.17.0 · 显示顺序: 有进行中对话的账号顶置, 其余维持原始编号顺序 (稳定排序; 与手机版 _computeOrder 同源)。
+function _wamDisplayOrder(accounts) {
+  const order = accounts.map((_, i) => i);
+  order.sort((x, y) => {
+    const lx = _hasLiveConv(accounts[x].email) ? 1 : 0;
+    const ly = _hasLiveConv(accounts[y].email) ? 1 : 0;
+    if (lx !== ly) return ly - lx; // 进行中 → 顶置
+    return x - y; // 其余维持原编号顺序
+  });
+  return order;
+}
+
 function buildHtml() {
   if (!_store)
     return `<html><body style="color:#888;font:12px sans-serif;padding:12px">WAM 初始化中...</body></html>`;
@@ -7941,8 +7971,12 @@ function buildHtml() {
     accounts = store.accounts,
     activeI = store.activeIdx;
   const autoOn = _cfg("autoRotate", true);
+  // v3.17.0 · 借鉴手机版 APK: 有进行中对话的账号自动顶置(running/待输入/卡住 → 移到最上), 其余维持原编号顺序。
+  //   仅改显示顺序; data-i / 编号 / activeIdx 仍用原始索引 i, 故 onclick/切号/锁全不受影响 (与手机版 _computeOrder 同源)。
+  const _dispOrder = _wamDisplayOrder(accounts);
   let rows = "";
-  for (let i = 0; i < accounts.length; i++) {
+  for (let _oi = 0; _oi < _dispOrder.length; _oi++) {
+    const i = _dispOrder[_oi];
     const a = accounts[i],
       h = store.getHealth(a.email);
     const dvTag = devinCloud.getTag(a.email);
@@ -8541,6 +8575,11 @@ function _toast(text) {
       _editorPanel.webview.postMessage({ type: "toast", text });
     } catch {}
   }
+  if (_hostPost) {
+    try {
+      _hostPost({ type: "toast", text });
+    } catch {}
+  }
 }
 
 // ═══ 第五板块 · Devin Cloud 后端编排 (无 UI · 全软编码) ═══════════════════
@@ -8548,6 +8587,8 @@ let _dvAutoTimer = null;
 // v4.6.0 · Devin Cloud 状态聚合 (问题①+⑤): email.lower → {running, awaiting, blocked, total, ts, items[]}
 //   _dvRunPoll 每轮写入; 对话追踪面板 (_getConvTrackingHtml) 据此渲染 Devin Cloud 子板块 (复用追踪 UI)。
 const _dvStatusAgg = new Map();
+// v3.17.0 · 上次"进行中对话账号集合"签名 → 集合变化才触发整页重渲(顶置排序实时生效·防抖动)
+let _wamLiveSig = "";
 // v4.8.1 · 持久化·根治"一闪一没": email.lower → 首次空轮时刻 (距上次非空)
 //   暂态空(限流429/网络抖动/服务端最终一致性)在宽限窗口内不清除状态;
 //   连续空持续超窗才判定对话真的结束并移除 ("对话结束了那就OK")。
@@ -9034,6 +9075,15 @@ async function _dvRunPoll() {
       });
     }
     _broadcastMsg({ type: "devinRunStatus", items });
+    // v3.17.0 · 进行中对话账号集合变化 → 整页重渲使"顶置排序"实时生效 (集合不变则不重建·防行位抖动)
+    try {
+      const _sig = items
+        .filter((it) => ((it.running | 0) + (it.awaiting | 0) + (it.blocked | 0)) > 0)
+        .map((it) => it.email)
+        .sort()
+        .join(",");
+      if (_sig !== _wamLiveSig) { _wamLiveSig = _sig; _broadcastUI(); }
+    } catch {}
     _dvWriteSharedStatus(); // v4.8.4 · 落盘共享 → 其余窗口(跟随)据此渲染·不重复发起网络
     // v4.7.7 · 实时进展摘要 (每轮末聚合, 供面板/终报使用)
     const prog = _dvProgressSummary();
@@ -10039,6 +10089,9 @@ function _broadcastConvSection() {
   _broadcastMsg({ type: "convUpdate", html });
 }
 
+// v3.17.0 · 宿主回调: 全功能面板把第2 Tab 的 iframe 注册为真切号面板的宿主
+//   引擎一切 toast/广播/整页重渲 → 经此回调中继进 iframe → 与独立面板像素级一致·零数据丢失
+let _hostPost = null;
 function _broadcastMsg(msg) {
   if (_sidebarProvider && _sidebarProvider._view) {
     try {
@@ -10048,6 +10101,11 @@ function _broadcastMsg(msg) {
   if (_editorPanel) {
     try {
       _editorPanel.webview.postMessage(msg);
+    } catch {}
+  }
+  if (_hostPost) {
+    try {
+      _hostPost(msg);
     } catch {}
   }
 }
@@ -13339,6 +13397,11 @@ module.exports = {
     _resolveCascadePbDir, // v2.5.9 · Layer 6 cascade pb 目录
     buildHtml,
     openEditorPanel,
+    handleWebviewMessage, // v3.17.0 · 暴露给全功能面板宿主 · iframe 内真切号面板消息中继
+    setHostPost(fn) {
+      // v3.17.0 · 注册/注销宿主回调 (全功能面板第2 Tab)
+      _hostPost = typeof fn === "function" ? fn : null;
+    },
     parseAccountText,
     Store,
     // v2.4.0 · 暴露 endpoint 健康度给回归测
