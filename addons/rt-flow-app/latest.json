@@ -1,6 +1,6 @@
 {
-  "versionCode": 41,
-  "versionName": "0.15.10",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.10/DevinCloud-mobile-v0.15.10.apk",
-  "notes": "v0.15.10 · 命名归一 + 提取增强 + 云端文档全开放\n· 全量改名「Devin Cloud 手机版」, 清除 RT Flow / rt-flow-app 用户可见残留 (内部包名/隧道id 保留以保数据不丢)\n· 对话整体提取: 新增 extractConversation / extractAccountConversations (额度耗尽账号亦可, 仅读历史不耗额度), 一行拿齐 元数据+完整对话md+工作日志md+文件清单, 可落共享保险箱\n· 新增《对话整体提取工作流》文档 (getExtractMd + 仓库 docs), 含对话ID/账号信息/工作流\n· 内网穿透云端 .md (getCloudMd) 完全开放无限制: 三大板块全部命令/参数/高级用法 + 提取工作流全内联, 云端 Agent 读一篇即可直接调用\n· 含 v0.15.9 下载板块修复 (下载持久化共享保险箱·卸载重装不丢 + 长按拖到页面注入上传/拖放区)\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
+  "versionCode": 42,
+  "versionName": "0.15.11",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.11/DevinCloud-mobile-v0.15.11.apk",
+  "notes": "v0.15.11 · 标签条拖拽边缘自动横滚\n· 标签多到一屏放不下时, 长按拖一个标签/把对话拖到标签条, 拖到最左/最右边缘会自动向左/向右平滑横滚, 露出屏幕外原本看不到的网页 (浏览器同款体验); 移出边缘即停, 到尽头自动停\n· 由此可: 先把标签条滚到一端, 再长按目标标签拖到另一端的网页, 跨屏拖拽更顺手\n· 含 v0.15.10 命名归一 Devin Cloud 手机版 + 对话整体提取(extractConversation/extractAccountConversations, 额度耗尽账号亦可) + 云端 .md(getCloudMd) 完全开放\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
 }

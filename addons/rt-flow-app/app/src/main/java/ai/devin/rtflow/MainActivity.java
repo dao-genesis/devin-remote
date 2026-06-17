@@ -104,11 +104,15 @@ public class MainActivity extends AppCompatActivity {
     private ValueCallback<Uri[]> filePathCallback;
     private Uri cameraOutputUri;          // 网页上传时相机拍照的落地 Uri (FileProvider)
     private androidx.activity.result.ActivityResultLauncher<Intent> fileChooser;
+    private androidx.activity.result.ActivityResultLauncher<Intent> shareImportPicker;  // 选「整机分享包」zip
 
     private FrameLayout content;
     private FrameLayout autoHost;   // 常驻·满屏·INVISIBLE 容器: 停泊非活动标签 WebView, 使其保持挂载窗口+有尺寸
                                     // (否则后台标签 detached → evaluateJavascript 回调不触发、draw() 截不到图)
     private LinearLayout tabStripRow;
+    private HorizontalScrollView tabStrip;   // 标签条横向滚动容器 (拖到边缘自动横滚需引用它)
+    private int tabDragScrollDir = 0;        // 拖拽中边缘自动滚动方向: -1 左 / +1 右 / 0 停
+    private boolean tabDragScrolling = false;
     private EditText addr;
     private Button dlBtn;
     private Button starBtn;
@@ -188,6 +192,10 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
             cb.onReceiveValue(uris);
+        });
+        shareImportPicker = registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), result -> {
+            if (result.getResultCode() != RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
+            importShareBundle(result.getData().getData());
         });
         ensureRelayIdentity();   // 去中心化: 设备唯一 session(防卸载) + 每冷启动轮换 token → relay-config.json
         startRelay();
@@ -348,6 +356,7 @@ public class MainActivity extends AppCompatActivity {
         HorizontalScrollView strip = new HorizontalScrollView(this);
         strip.setHorizontalScrollBarEnabled(false);
         strip.setBackgroundColor(0xFF0E1116);
+        tabStrip = strip;
         tabStripRow = new LinearLayout(this);
         tabStripRow.setOrientation(LinearLayout.HORIZONTAL);
         tabStripRow.setPadding(dp(4), dp(3), dp(4), dp(3));
@@ -421,6 +430,8 @@ public class MainActivity extends AppCompatActivity {
         page.add(0, 21, 1, cur() != null && cur().desktop ? "切回移动版" : "桌面版网站");
         page.add(0, 22, 2, "阅读模式");
         page.add(0, 23, 3, cur() != null && cur().night ? "关闭夜间模式" : "夜间模式");
+        page.add(0, 26, 4, "导出整机分享包 (APK+全部数据)");
+        page.add(0, 27, 5, "导入分享包 (换机同步)");
         android.view.SubMenu shareM = mu.addSubMenu(0, 101, 10, "分享 / 快捷");
         shareM.add(0, 30, 0, "分享本页");
         shareM.add(0, 31, 1, "复制网址");
@@ -441,6 +452,8 @@ public class MainActivity extends AppCompatActivity {
                 case 21: toggleDesktop(); return true;
                 case 22: readerMode(); return true;
                 case 23: toggleNight(); return true;
+                case 26: exportShareBundle(); return true;
+                case 27: pickShareBundle(); return true;
                 case 30: shareCurrent(); return true;
                 case 31: copyCurrentUrl(); return true;
                 case 32: addHomeShortcut(); return true;
@@ -883,20 +896,66 @@ public class MainActivity extends AppCompatActivity {
 
     // ── 标签长按拖拽排序 ──────────────────────────────────────────────────
     private final View.OnDragListener tabDragListener = (v, ev) -> {
-        if (ev.getAction() == DragEvent.ACTION_DROP) {
-            try {
-                int from = Integer.parseInt(ev.getClipDescription().getLabel().toString());
-                int to = dropIndex(ev.getX());
-                moveTab(from, to);
-            } catch (Exception ignored) {}
-            return true;
+        switch (ev.getAction()) {
+            case DragEvent.ACTION_DRAG_LOCATION:
+                updateTabEdgeScroll(ev.getX());   // 拖到左/右边缘 → 自动横滚露出屏外标签
+                return true;
+            case DragEvent.ACTION_DROP:
+                stopTabEdgeScroll();
+                try {
+                    int from = Integer.parseInt(ev.getClipDescription().getLabel().toString());
+                    int to = dropIndex(ev.getX());
+                    moveTab(from, to);
+                } catch (Exception ignored) {}
+                return true;
+            case DragEvent.ACTION_DRAG_EXITED:
+            case DragEvent.ACTION_DRAG_ENDED:
+                stopTabEdgeScroll();
+                return true;
+            case DragEvent.ACTION_DRAG_STARTED:
+            case DragEvent.ACTION_DRAG_ENTERED:
+                return true;
+            default:
+                return false;
         }
-        return ev.getAction() == DragEvent.ACTION_DRAG_STARTED
-                || ev.getAction() == DragEvent.ACTION_DRAG_ENTERED
-                || ev.getAction() == DragEvent.ACTION_DRAG_LOCATION
-                || ev.getAction() == DragEvent.ACTION_DRAG_EXITED
-                || ev.getAction() == DragEvent.ACTION_DRAG_ENDED;
     };
+
+    // ── 拖拽到标签条边缘 → 自动横向滚动 (露出屏幕外原本看不到的标签) ──
+    private final Runnable tabEdgeScrollRunner = new Runnable() {
+        @Override public void run() {
+            if (!tabDragScrolling || tabStrip == null || tabDragScrollDir == 0) return;
+            int step = dp(18) * tabDragScrollDir;
+            int before = tabStrip.getScrollX();
+            tabStrip.scrollBy(step, 0);
+            // 已到两端尽头则停 (滚动量为 0)
+            if (tabStrip.getScrollX() == before) { stopTabEdgeScroll(); return; }
+            main.postDelayed(this, 16);
+        }
+    };
+
+    /** ev.getX() 是相对 tabStripRow(内容) 的坐标; 减去 scrollX 即得在可视视口内的坐标。 */
+    private void updateTabEdgeScroll(float xInContent) {
+        if (tabStrip == null) return;
+        int viewport = tabStrip.getWidth();
+        if (viewport <= 0) { stopTabEdgeScroll(); return; }
+        float xInViewport = xInContent - tabStrip.getScrollX();
+        int edge = dp(44);   // 边缘热区宽度
+        int dir = 0;
+        if (xInViewport <= edge) dir = -1;
+        else if (xInViewport >= viewport - edge) dir = 1;
+        if (dir == 0) { stopTabEdgeScroll(); return; }
+        tabDragScrollDir = dir;
+        if (!tabDragScrolling) {
+            tabDragScrolling = true;
+            main.post(tabEdgeScrollRunner);
+        }
+    }
+
+    private void stopTabEdgeScroll() {
+        tabDragScrolling = false;
+        tabDragScrollDir = 0;
+        main.removeCallbacks(tabEdgeScrollRunner);
+    }
 
     private void startTabDrag(View chip, int idx) {
         try {
@@ -2727,6 +2786,164 @@ public class MainActivity extends AppCompatActivity {
             }
             return new String(buf, StandardCharsets.UTF_8);
         } catch (Exception e) { return ""; }
+    }
+
+    // ── 整机分享: 导出/导入 (一个文件含 APK 本体 + 全部数据, 换机一拿即同步) ──────
+    //  Android 不允许「单个已安装 APK 内塞数据」(改 APK 即破签名无法安装), 故用等效 zip:
+    //  zip = DevinCloud.apk(应用自身安装包) + vault/(整个共享保险箱: 账号/标签/历史/下载/备份/脚本) + prefs.json + manifest.json
+    private void exportShareBundle() {
+        toast("正在打包整机分享包…");
+        new Thread(() -> {
+            try {
+                saveTabs();   // 先把当前标签状态刷进保险箱
+                File outDir = new File(vaultDir(), "share");
+                if (!outDir.exists()) outDir.mkdirs();
+                File zip = new File(outDir, "DevinCloud-整机分享-v" + appVersionName() + ".zip");
+                if (zip.exists()) zip.delete();
+                java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+                        new java.io.BufferedOutputStream(new FileOutputStream(zip)));
+                // 1) APK 本体 (应用自己的安装包)
+                try {
+                    File apk = new File(getApplicationInfo().sourceDir);
+                    if (apk.exists()) zipFile(zos, apk, "DevinCloud.apk");
+                } catch (Exception ignored) {}
+                // 2) 全部 SharedPreferences → prefs.json
+                try {
+                    org.json.JSONObject pj = new org.json.JSONObject();
+                    java.util.Map<String, ?> all = getSharedPreferences(PREFS, MODE_PRIVATE).getAll();
+                    for (java.util.Map.Entry<String, ?> e : all.entrySet())
+                        pj.put(e.getKey(), e.getValue() == null ? org.json.JSONObject.NULL : e.getValue().toString());
+                    org.json.JSONObject wrap = new org.json.JSONObject();
+                    wrap.put("__prefsName", PREFS); wrap.put("data", pj);
+                    zipBytes(zos, "prefs.json", wrap.toString().getBytes(StandardCharsets.UTF_8));
+                } catch (Exception ignored) {}
+                // 3) 整个共享保险箱 → vault/ (排除 share/ 自身, 避免自包含)
+                File vd = vaultDir();
+                zipDir(zos, vd, "vault", new File(vd, "share"));
+                // 4) manifest
+                try {
+                    org.json.JSONObject mf = new org.json.JSONObject();
+                    mf.put("app", "Devin Cloud 手机版");
+                    mf.put("versionName", appVersionName());
+                    mf.put("versionCode", appVersionCode());
+                    mf.put("package", getPackageName());
+                    mf.put("exportedAt", System.currentTimeMillis());
+                    zipBytes(zos, "manifest.json", mf.toString().getBytes(StandardCharsets.UTF_8));
+                } catch (Exception ignored) {}
+                zos.close();
+                final long mb = Math.max(1, zip.length() / 1024 / 1024);
+                final Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", zip);
+                main.post(() -> {
+                    toast("打包完成: " + zip.getName() + " (~" + mb + "MB)");
+                    Intent it = new Intent(Intent.ACTION_SEND);
+                    it.setType("application/zip");
+                    it.putExtra(Intent.EXTRA_STREAM, uri);
+                    it.putExtra(Intent.EXTRA_SUBJECT, "Devin Cloud 手机版 · 整机分享包");
+                    it.putExtra(Intent.EXTRA_TEXT, "含 APK 本体 + 全部数据。新设备: 装 DevinCloud.apk → 打开 → ≡ 页面工具 → 导入分享包 → 选本 zip, 即同步全部账号/数据。");
+                    it.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(it, "分享整机分享包"));
+                });
+            } catch (Exception e) {
+                main.post(() -> toast("导出失败: " + e.getMessage()));
+            }
+        }).start();
+    }
+
+    private void pickShareBundle() {
+        try {
+            Intent it = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            it.addCategory(Intent.CATEGORY_OPENABLE);
+            it.setType("*/*");
+            it.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{ "application/zip", "application/octet-stream" });
+            shareImportPicker.launch(it);
+        } catch (Exception e) { toast("无法打开选择器: " + e.getMessage()); }
+    }
+
+    private void importShareBundle(Uri uri) {
+        toast("正在导入分享包…");
+        new Thread(() -> {
+            File apkOut = null;
+            try {
+                File vd = vaultDir();
+                java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
+                        new java.io.BufferedInputStream(getContentResolver().openInputStream(uri)));
+                java.util.zip.ZipEntry ze; byte[] buf = new byte[8192]; String prefsJson = null;
+                File cacheApk = new File(getCacheDir(), "DevinCloud-import.apk");
+                while ((ze = zis.getNextEntry()) != null) {
+                    String name = ze.getName();
+                    if (ze.isDirectory() || name == null) { zis.closeEntry(); continue; }
+                    if (name.contains("..")) { zis.closeEntry(); continue; }   // 防目录穿越
+                    if (name.equals("DevinCloud.apk")) {
+                        try (FileOutputStream fos = new FileOutputStream(cacheApk)) { int r; while ((r = zis.read(buf)) > 0) fos.write(buf, 0, r); }
+                        apkOut = cacheApk;
+                    } else if (name.equals("prefs.json")) {
+                        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream(); int r; while ((r = zis.read(buf)) > 0) bo.write(buf, 0, r);
+                        prefsJson = new String(bo.toByteArray(), StandardCharsets.UTF_8);
+                    } else if (name.startsWith("vault/")) {
+                        String rel = name.substring("vault/".length());
+                        if (rel.isEmpty()) { zis.closeEntry(); continue; }
+                        File out = new File(vd, rel);
+                        File parent = out.getParentFile(); if (parent != null && !parent.exists()) parent.mkdirs();
+                        try (FileOutputStream fos = new FileOutputStream(out)) { int r; while ((r = zis.read(buf)) > 0) fos.write(buf, 0, r); }
+                    }
+                    zis.closeEntry();
+                }
+                zis.close();
+                if (prefsJson != null) {
+                    try {
+                        org.json.JSONObject wrap = new org.json.JSONObject(prefsJson);
+                        org.json.JSONObject data = wrap.optJSONObject("data");
+                        if (data != null) {
+                            SharedPreferences.Editor ed = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
+                            java.util.Iterator<String> ks = data.keys();
+                            while (ks.hasNext()) { String k = ks.next(); ed.putString(k, data.getString(k)); }
+                            ed.apply();
+                        }
+                    } catch (Exception ignored) {}
+                }
+                final File apk = apkOut;
+                main.post(() -> {
+                    if (apk != null && apk.exists()) {
+                        new android.app.AlertDialog.Builder(this)
+                                .setTitle("数据已导入")
+                                .setMessage("全部账号/标签/历史/下载已还原到共享保险箱。是否现在安装分享包内的 APK 本体? (签名一致, 原地覆盖, 数据不丢)")
+                                .setPositiveButton("安装 APK", (d, w) -> installApk(apk))
+                                .setNegativeButton("稍后", (d, w) -> toast("数据已还原, 重启应用即生效"))
+                                .show();
+                    } else {
+                        toast("数据已导入并还原; 分享包内无 APK, 重启应用即生效");
+                    }
+                });
+            } catch (Exception e) {
+                main.post(() -> toast("导入失败: " + e.getMessage()));
+            }
+        }).start();
+    }
+
+    // zip 工具
+    private void zipFile(java.util.zip.ZipOutputStream zos, File f, String entryName) throws Exception {
+        zos.putNextEntry(new java.util.zip.ZipEntry(entryName));
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(f)) { byte[] b = new byte[8192]; int r; while ((r = fis.read(b)) > 0) zos.write(b, 0, r); }
+        zos.closeEntry();
+    }
+    private void zipBytes(java.util.zip.ZipOutputStream zos, String entryName, byte[] data) throws Exception {
+        zos.putNextEntry(new java.util.zip.ZipEntry(entryName)); zos.write(data); zos.closeEntry();
+    }
+    private void zipDir(java.util.zip.ZipOutputStream zos, File dir, String base, File exclude) throws Exception {
+        File[] kids = dir.listFiles(); if (kids == null) return;
+        for (File k : kids) {
+            if (exclude != null && k.getAbsolutePath().equals(exclude.getAbsolutePath())) continue;
+            String entry = base + "/" + k.getName();
+            if (k.isDirectory()) zipDir(zos, k, entry, exclude);
+            else zipFile(zos, k, entry);
+        }
+    }
+    private String appVersionName() { try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception e) { return "?"; } }
+    private int appVersionCode() {
+        try {
+            android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return Build.VERSION.SDK_INT >= 28 ? (int) pi.getLongVersionCode() : pi.versionCode;
+        } catch (Exception e) { return 0; }
     }
 
     // ── 标签会话持久化 (重开恢复上次标签/登录状态) ──────────────────────────
