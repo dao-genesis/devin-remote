@@ -2852,14 +2852,20 @@ function rBridgeFull(){
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeRestart&#39;)">🔄 重启隧道</button>';
     h+='<button class="btn sm danger" onclick="cmd(&#39;bridgeStop&#39;)">⏹ 停止</button></div>';
   }
-  // ── 四大接入模块 · 平铺常驻(去渐进式披露) ──
-  h+='<div class="st" style="margin-top:14px">🧩 四大接入模块 · Agent 全方位接入</div>';
-  h+='<div class="card" style="font-size:11px;color:var(--muted);margin-bottom:6px">从网页→插件→整机→IDE 逐层覆盖。四层全部命令与内网穿透信息均在下方「导出接入文档」的<b style="color:var(--fg)">单一 MD</b> 中。</div>';
-  h+=daoBridgeModuleCard('1','🌐','浏览器全方位接入','操控浏览器页面：多实例标签 / 导航 / 执行 JS / 提取 DOM / 读 Cookie+Storage / 截图 / 导出 MD / 页内查找，全程不干扰用户正常使用。','先经 /api/exec 启动带 --remote-debugging-port=29229 的隔离 Chrome，再经 CDP + Playwright 驱动。');
-  h+=daoBridgeModuleCard('2','🧩','插件本体全方位接入','代替用户操作二合一插件一切模块：切号 / 对话备份 / 反向注入(K·P·S·MCP·自动化·蓝图) / MCP 市场 / Devin Cloud CRUD / 额度 / 定时任务。','经本地插件 API 或 /api/exec 调插件命令。');
-  h+=daoBridgeModuleCard('3','💻','操作用户电脑（最核心）','整机操控：任意命令/PowerShell · 文件/进程/服务/注册表 · Windows 多 RDP 远程桌面 · GUI 自动化(鼠标键盘/窗口/全屏截图)。','/api/exec 为核心；RDP 见 cloud/vm-replica；GUI 走 .NET SendKeys / nircmd / pyautogui。');
-  h+=daoBridgeModuleCard('4','⌨️','VSCode 底层 API','调用 VSCode 工作区/编辑器/终端/命令/扩展全模块，达到类 Devin Cascade 的 IDE 内自主操作效果。','经 code CLI 或插件桥 commands.executeCommand / WorkspaceEdit / tasks。');
-  // ── 模块2: CloudFlare 命名隧道 · 固定域名 ──
+  // ── 四大接入模块介绍/命名隧道均移至本面板底部 (核心: 导出文档/自测 前置) ──
+  // ── 模块3: 导出接入文档 (去渐进式披露 · 唯一一份 MD = 四大模块全部命令 + 内网穿透全信息) ──
+  h+='<div class="st" style="margin-top:14px">📄 导出接入文档</div>';
+  h+='<div class="card"><div style="font-size:10px;color:var(--muted);margin-bottom:4px">唯一一份云端 Agent MD：四大模块全部命令 + 内网穿透全部信息，一次到位。打开 / 复制 / 注入。</div>';
+  h+='<div class="br"><button class="btn sm" onclick="cmd(&#39;openBridgeMd&#39;)">📄 打开 MD</button>';
+  h+='<button class="btn sm primary" onclick="cmd(&#39;bridgeCopyCloudMd&#39;)">📋 复制云端 Agent MD</button>';
+  h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入</button></div></div>';
+  // ── 模块4: 能力自测 ──
+  h+='<div class="st" style="margin-top:14px">⚡ 能力自测</div>';
+  h+='<div class="card"><div class="br"><button class="btn sm" onclick="cmd(&#39;bridgeHealth&#39;)">health</button>';
+  h+='<input id="bridgeCmd" value="hostname" placeholder="命令" style="flex:1;min-width:80px;padding:5px 7px;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+  h+='<button class="btn sm" onclick="bridgeExec()">exec</button></div>';
+  h+='<pre id="bridgeOut" style="white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:6px;max-height:180px;overflow:auto;font-size:11px;margin:6px 0 0;border-radius:4px;color:var(--muted)">（结果）</pre></div>';
+  // ── 末·参考一: 命名隧道 · 固定域名（可选） ──
   h+='<div class="st" style="margin-top:14px">🔑 命名隧道 · 固定域名（可选）</div>';
   h+='<div class="card">';
   var cfOn=!!(b.cfLoggedIn||b.named);
@@ -2878,18 +2884,13 @@ function rBridgeFull(){
     h+='<button class="btn sm" onclick="cmd(&#39;openCf&#39;)" style="margin-top:4px">🌐 打开 CloudFlare 控制台</button>';
   }
   h+='</div>';
-  // ── 模块3: 导出接入文档 (去渐进式披露 · 唯一一份 MD = 四大模块全部命令 + 内网穿透全信息) ──
-  h+='<div class="st" style="margin-top:14px">📄 导出接入文档</div>';
-  h+='<div class="card"><div style="font-size:10px;color:var(--muted);margin-bottom:4px">唯一一份云端 Agent MD：四大模块全部命令 + 内网穿透全部信息，一次到位。打开 / 复制 / 注入。</div>';
-  h+='<div class="br"><button class="btn sm" onclick="cmd(&#39;openBridgeMd&#39;)">📄 打开 MD</button>';
-  h+='<button class="btn sm primary" onclick="cmd(&#39;bridgeCopyCloudMd&#39;)">📋 复制云端 Agent MD</button>';
-  h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入</button></div></div>';
-  // ── 模块4: 能力自测 ──
-  h+='<div class="st" style="margin-top:14px">⚡ 能力自测</div>';
-  h+='<div class="card"><div class="br"><button class="btn sm" onclick="cmd(&#39;bridgeHealth&#39;)">health</button>';
-  h+='<input id="bridgeCmd" value="hostname" placeholder="命令" style="flex:1;min-width:80px;padding:5px 7px;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
-  h+='<button class="btn sm" onclick="bridgeExec()">exec</button></div>';
-  h+='<pre id="bridgeOut" style="white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:6px;max-height:180px;overflow:auto;font-size:11px;margin:6px 0 0;border-radius:4px;color:var(--muted)">（结果）</pre></div>';
+  // ── 末·参考二: 四大接入模块介绍 (核心操作已前置) ──
+  h+='<div class="st" style="margin-top:14px">🧩 四大接入模块 · Agent 全方位接入</div>';
+  h+='<div class="card" style="font-size:11px;color:var(--muted);margin-bottom:6px">从网页→插件→整机→IDE 逐层覆盖。四层全部命令与内网穿透信息均在上方「导出接入文档」的<b style="color:var(--fg)">单一 MD</b> 中。</div>';
+  h+=daoBridgeModuleCard('1','🌐','浏览器全方位接入','操控浏览器页面：多实例标签 / 导航 / 执行 JS / 提取 DOM / 读 Cookie+Storage / 截图 / 导出 MD / 页内查找，全程不干扰用户正常使用。','先经 /api/exec 启动带 --remote-debugging-port=29229 的隔离 Chrome，再经 CDP + Playwright 驱动。');
+  h+=daoBridgeModuleCard('2','🧩','插件本体全方位接入','代替用户操作二合一插件一切模块：切号 / 对话备份 / 反向注入(K·P·S·MCP·自动化·蓝图) / MCP 市场 / Devin Cloud CRUD / 额度 / 定时任务。','经本地插件 API 或 /api/exec 调插件命令。');
+  h+=daoBridgeModuleCard('3','💻','操作用户电脑（最核心）','整机操控：任意命令/PowerShell · 文件/进程/服务/注册表 · Windows 多 RDP 远程桌面 · GUI 自动化(鼠标键盘/窗口/全屏截图)。','/api/exec 为核心；RDP 见 cloud/vm-replica；GUI 走 .NET SendKeys / nircmd / pyautogui。');
+  h+=daoBridgeModuleCard('4','⌨️','VSCode 底层 API','调用 VSCode 工作区/编辑器/终端/命令/扩展全模块，达到类 Devin Cascade 的 IDE 内自主操作效果。','经 code CLI 或插件桥 commands.executeCommand / WorkspaceEdit / tasks。');
   v.innerHTML=h;
 }
 function bridgeCfLogin(){var e=document.getElementById('cfEmail'),k=document.getElementById('cfKey');var email=e?e.value.trim():'';var key=k?k.value.trim():'';if(!key){toast('请填写 Token / API Key',false);return}toast('验证中…',true);cmd('bridgeCfLogin',{email:email,key:key})}
@@ -4420,30 +4421,83 @@ function devinJsonPatch(targetUrl: string, headers: any, body: any, timeoutMs?: 
     });
 }
 
-function devinJsonGet(targetUrl: string, headers: any, timeoutMs?: number): Promise<any> {
+// ═══════════════════════════════════════════════════════════
+// 道法自然·守柔自愈 — auth1 过期自动重登 (帛书·「敝则新」)
+// 病灶: app.devin.ai 网页端接口(自动化/定时/蓝图/会话…)只认 auth1; 而 auth1 会过期。
+// devinAutoChain 路径A以 cog 额度判活, cog 通则误判"已登录"而留住失效 auth1 → 这些接口恒 401。
+// 解: 命中 401/403 时, 据当前账号(RT Flow 活跃号优先)重取鲜活 auth1(切号缓存→账号池密码五步重登),
+//     成功即原样重试一次。一处自愈, 全网页端接口同沾(无为而无不为)。
+// ═══════════════════════════════════════════════════════════
+let _reauthInflight: Promise<boolean> | null = null;
+async function devinForceReauth(): Promise<boolean> {
+    if (_reauthInflight) return _reauthInflight;
+    _reauthInflight = (async (): Promise<boolean> => {
+        try {
+            let email = (ws.devinEmail || '').trim();
+            if (getAccountSyncMode() !== 'manual') { const rt = getRtFlowActiveEmail(); if (rt) email = rt; }
+            if (!email) return false;
+            // 1) RT Flow 切号最新缓存(可能刚被刷新) — 零网络
+            try {
+                const cached = loadRtFlowCachedAuth(email) || loadAccountAuth(email);
+                if (cached && cached.auth1 && cached.orgId && cached.auth1 !== ws.devinAuth1
+                    && !cached.auth1.startsWith('devin-session-token$')) {
+                    ws.devinAuth1 = cached.auth1; ws.devinOrgId = cached.orgId;
+                    ws.devinOrgName = cached.orgName || ws.devinOrgName; ws.devinOrgSlug = cached.orgSlug || ws.devinOrgSlug;
+                    ws.devinUserId = cached.userId || ws.devinUserId; ws.devinEmail = email;
+                    try { ws.devinSaveConfig(); saveAccountAuth(email); } catch { /* 守柔 */ }
+                    return true;
+                }
+            } catch { /* 守柔 */ }
+            // 2) 账号池密码五步重登 → 鲜活 auth1 (devinLogin 内部已落 ws + 5步)
+            const pw = findAccountPassword(email);
+            if (!pw) return false;
+            const lr = await devinLogin(email, pw);
+            if (lr.ok) { try { saveAccountAuth(email); } catch { /* 守柔 */ } return true; }
+            return false;
+        } catch { return false; }
+    })();
+    try { return await _reauthInflight; } finally { _reauthInflight = null; }
+}
+
+function devinJsonGet(targetUrl: string, headers: any, timeoutMs?: number, _noReauth?: boolean): Promise<any> {
     return new Promise((resolve) => {
         const u = new URL(targetUrl);
         const needsProxy = u.hostname === 'app.devin.ai' || u.hostname.endsWith('windsurf.com');
-        const makeRequest = (hostname: string, port: number, path: string, h: any) => {
+        // 自愈闸: app.devin.ai 上持 auth1 而遭 401/403 → 重登换鲜活 auth1, 原请求重试一次
+        const settle = (r: any) => {
+            const auth = String((headers || {}).Authorization || '');
+            if (!_noReauth && r && (r.status === 401 || r.status === 403)
+                && u.hostname === 'app.devin.ai' && /^Bearer\s+auth1_/.test(auth)) {
+                devinForceReauth().then((ok) => {
+                    if (ok && ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$')) {
+                        const h2 = Object.assign({}, headers, { Authorization: 'Bearer ' + ws.devinAuth1 });
+                        if (ws.devinOrgId) h2['x-cog-org-id'] = ws.devinOrgId;
+                        const u2 = targetUrl.replace(/\/org-[0-9a-fA-F]+\//, '/org-' + (ws.devinOrgId || '').replace(/^org-/, '') + '/');
+                        devinJsonGet(u2, h2, timeoutMs, true).then(resolve);
+                    } else { resolve(r); }
+                }).catch(() => resolve(r));
+                return;
+            }
+            resolve(r);
+        };
+        const makeRequest = (hostname: string, port: number, path: string, h: any, cb: (r: any) => void) => {
             const mod: any = hostname === '127.0.0.1' ? http : https;
             const req = mod.request({ hostname, port, path, method: 'GET', headers: h, timeout: timeoutMs || 15000, rejectUnauthorized: false }, (res: any) => {
                 let d = '';
                 res.on('data', (c: Buffer) => d += c.toString());
-                res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(d), text: d }); } catch { resolve({ status: res.statusCode, json: null, text: d }); } });
+                res.on('end', () => { try { cb({ status: res.statusCode, json: JSON.parse(d), text: d }); } catch { cb({ status: res.statusCode, json: null, text: d }); } });
             });
-            req.on('error', (e) => resolve({ status: 0, json: null, text: e.message }));
-            req.on('timeout', () => { req.destroy(); resolve({ status: 0, json: null, text: 'timeout' }); });
+            req.on('error', (e) => cb({ status: 0, json: null, text: e.message }));
+            req.on('timeout', () => { req.destroy(); cb({ status: 0, json: null, text: 'timeout' }); });
             req.end();
         };
         const reqHeaders = Object.assign({ 'Accept': 'application/json', 'User-Agent': DEVIN_UA }, headers || {});
-        const direct = () => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders);
-        const viaProxy = () => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }));
-        const origResolve = resolve;
+        const direct = (cb: (r: any) => void) => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders, cb);
+        const viaProxy = (cb: (r: any) => void) => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }), cb);
         if (needsProxy && detectedProxyPort) {
-            resolve = ((r: any) => { if (r && r.status === 0) { resolve = origResolve; viaProxy(); } else { origResolve(r); } }) as any;
-            direct();
+            direct((r: any) => { if (r && r.status === 0) { viaProxy(settle); } else { settle(r); } });
         } else {
-            direct();
+            direct(settle);
         }
     });
 }
