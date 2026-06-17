@@ -2,7 +2,7 @@
   "name": "dao-devin-export",
   "displayName": "DAO Devin Export — 道法自然",
   "description": "Devin AI 对话导出 + 多账号管理插件。万法识号（任意格式账号批量识别/切号），单对话整段导出 MD 或全量 ZIP，内置 Agent Bridge HTTP API。跨 IDE / Windows·Mac·Linux 通用。",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "publisher": "dao-natural",
   "engines": {
     "vscode": "^1.80.0"
