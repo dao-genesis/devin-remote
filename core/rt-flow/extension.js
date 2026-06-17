@@ -8438,7 +8438,7 @@ document.addEventListener('mouseup',()=>{_dragSel=false;});
 document.addEventListener('change',e=>{if(e.target.classList.contains('chk')){const i=parseInt(e.target.dataset.i);if(Number.isFinite(i))_lastSel=i;updateBatchBar();}});
 // v4.9.6 · 滚动位置持久化 — 根治 _broadcastUI 全量重建后回弹到顶("回主页"). 守柔: 程序复位期不计为用户滚动.
 // v4.9.7 · F2/F3: 增量更新去抖签名 — 状态/对话区每轮轮询若内容未变则不动 DOM, 根治"一刷新就闪/跳/回弹".
-let _scrTimer=null,_scrRestoring=false,_lastConvHtml='',_lastRunKey='';
+let _scrTimer=null,_scrRestoring=false,_lastConvHtml='',_lastConvSig='',_lastRunKey='';
 function _saveScroll(){if(_scrRestoring)return;try{const el=document.scrollingElement||document.documentElement;const st=vscode.getState()||{};vscode.setState({...st,scrollTop:el.scrollTop|0});}catch(e){}}
 window.addEventListener('scroll',function(){if(_scrRestoring)return;if(_scrTimer)clearTimeout(_scrTimer);_scrTimer=setTimeout(_saveScroll,100);},{passive:true});
 function _restoreScroll(){try{const st=vscode.getState()||{};const y=st.scrollTop|0;if(y<=0)return;const el=document.scrollingElement||document.documentElement;_scrRestoring=true;const ap=function(){el.scrollTop=y;};ap();requestAnimationFrame(ap);setTimeout(ap,80);setTimeout(function(){ap();_scrRestoring=false;},240);}catch(e){_scrRestoring=false;}}
@@ -8460,7 +8460,7 @@ if(m.type==='gitDone'){const d=document.getElementById('dvDetail'+m.index);if(d&
 if(m.type==='gitBatchDone'){document.querySelectorAll('.dv-detail.open').forEach(d=>{const i=parseInt(d.getAttribute('data-i'));if(Number.isFinite(i))vscode.postMessage({type:'devinExpand',index:i,refresh:true});});}
 if(m.type==='devinRunStatus'&&Array.isArray(m.items)){const _rk=JSON.stringify(m.items);if(_rk===_lastRunKey)return;_lastRunKey=_rk;document.querySelectorAll('.dv-run').forEach(el=>{el.querySelectorAll('.run,.awa,.blk').forEach(x=>x.remove());});m.items.forEach(it=>{const el=document.querySelector('.dv-run[data-email="'+(it.email||'').toLowerCase()+'"]');if(!el)return;const tip=(it.titles||[]).join(' | ');const mk=(cls,txt,n)=>{if(!(n>0))return;const s=document.createElement('span');s.className=cls;s.textContent=txt+n;s.title=tip;el.insertBefore(s,el.firstChild);};mk('blk','\\u25CF 卡住',it.blocked);mk('awa','\\u25CF 待输入',it.awaiting);mk('run','\\u25CF 运行',it.running);});}
 if(m.type==='devinConvCap'&&Array.isArray(m.items)){m.items.forEach(it=>{const sp=document.querySelector('.dv-stat[data-capemail="'+(it.email||'').toLowerCase()+'"]');if(sp){const c=(typeof it.cap==='number')?it.cap.toFixed(2):'\\u2014';sp.textContent='\\u5bf9\\u8bdd\\u4e0a\\u9650 $'+c+(it.drain?' \\u00b7\\u62bd\\u5e72\\u4e2d':'')+(it.inUse?' \\u00b7\\u4f7f\\u7528\\u4e2d':'');sp.style.color=it.drain?'#dcaa55':(it.inUse?'#4ec9b0':'');}});}
-if(m.type==='convUpdate'&&m.html){if(m.html===_lastConvHtml)return;_lastConvHtml=m.html;const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){const el=document.scrollingElement||document.documentElement;const _y=el?el.scrollTop|0:0;old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}if(el&&_y>0&&el.scrollTop!==_y){el.scrollTop=_y;requestAnimationFrame(()=>{el.scrollTop=_y;});}}}}
+if(m.type==='convUpdate'&&m.html){const _sig=(m.sig!=null?m.sig:m.html);if(_sig===_lastConvSig)return;_lastConvSig=_sig;_lastConvHtml=m.html;const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){const el=document.scrollingElement||document.documentElement;const _y=el?el.scrollTop|0:0;old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}if(el&&_y>0&&el.scrollTop!==_y){el.scrollTop=_y;requestAnimationFrame(()=>{el.scrollTop=_y;});}}}}
 if(m.type==='devinBackupTree'){_dvShowBackups(m.tree);}
 if(m.type==='dvLocalConvList'){const c=document.getElementById('dvLocal'+m.index);if(c){c.style.display='block';c.innerHTML=m.html||'';}}
 });
@@ -10041,9 +10041,24 @@ function _refreshConvTitleMap() {
 }
 
 // Fix4: 对话追踪区块 targeted update (不触发全量 sidebar 重建)
+// v4.9.8 · F2/F3 根因修复 — 对话区 HTML 内嵌每秒变动的相对时间(staleSec "Ns前")/文件大小(sizeKB 流式增长)/引擎age,
+//   导致 m.html 每轮轮询都不同 → 旧的 html 全等去抖失效 → conv-section 每 2s 整段重建 → 滚动丢失/闪烁/✕忽隐忽现。
+//   解法: 计算"剔除易变装饰"的稳定签名, 仅当结构性内容(对话集/状态/计数/✕id)真变化时才换 DOM。
+function _convSig(html) {
+  try {
+    return String(html)
+      .replace(/title="[^"]*"/g, "")                                   // 去全部 tooltip(含引擎age/标题悬浮)
+      .replace(/\d+(?:\.\d+)?\s*KB/g, "#KB")                           // 文件大小(流式增长)
+      .replace(/\d+\s*min前/g, "#T").replace(/\d+\s*s前/g, "#T")        // 相对时间"N分/秒前"
+      .replace(/<span class="cv-stale">[^<]*<\/span>/g, '<span class="cv-stale"></span>') // 卡住相对时长
+      .replace(/\s+/g, " ").trim();                                     // 归一空白
+  } catch (e) {
+    return String(html);
+  }
+}
 function _broadcastConvSection() {
   const html = _getConvTrackingHtml();
-  _broadcastMsg({ type: "convUpdate", html });
+  _broadcastMsg({ type: "convUpdate", html, sig: _convSig(html) });
 }
 
 function _broadcastMsg(msg) {
