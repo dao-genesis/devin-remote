@@ -1,6 +1,6 @@
 {
-  "versionCode": 43,
-  "versionName": "0.15.12",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.12/DevinCloud-mobile-v0.15.12.apk",
-  "notes": "v0.15.12 · 三大核心修复\n· 对话卡住检测: 直读 latest_status_contents.user_action_required(Devin 官方\"需你处理\"信号)+enum, 全账号每轮即时命中, 已卡住/需处理对话标红\"待处理\"(旧版只看顶层 status 常年 suspended 故漏判)\n· 对话拖拽导入: 长按某对话标签拖入另一页面松手, 自动提取该对话的 对话md+工作日志md 注入目标页上传/拖放区\n· 自动清理全流程可实测: 切号面板新增「⚡ 立即清理」, 刷额度→预览低额(<阈值)且空闲账号→全量备份→水过无痕清理→归零移出库→汇总; 备份失败绝不清理\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
+  "versionCode": 44,
+  "versionName": "0.15.13",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.13/DevinCloud-mobile-v0.15.13.apk",
+  "notes": "v0.15.13 · 对话备份全量化 + 拖拽双MD + ZIP含产出文件夹 + 平板兼容\n· 对话导出全量化: 备份板块「预览/下载MD/全量备份/ZIP」与页面拖拽, 全部对齐电脑版 dao-vsix 四类气泡(👤用户含首条提示词与追问回答 · 🤖Devin · 💭思考 · 🔧工具:shell/文件编辑/搜索/联网/MCP/待办/电脑操作)。修复旧版只抓 用户+Devin 两类、思考与工具全丢的不全问题(实测某 1867 事件会话: 旧版 6KB/11条 → 新版 268KB/全量)。\n· 页面拖拽: 只拉当前停留的那一条对话, 产出 2 份 MD —— ①全量对话md ②「查看该对话全部文件」取数指引md(含该对话账号+密码、Session ID、整套提取流程)。\n· ZIP「下载全部文件」: 新增二进制下载桥, 按 contents_key→presigned URL 取回产出文件, 还原原始 files/<文件夹> 结构。\n· 平板兼容: 放宽 configChanges(旋转/分屏/缩放不再重建 Activity, 治卡顿/页面加载不出/闪退) + largeHeap/hardwareAccelerated(治多 WebView OOM)。\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
 }
