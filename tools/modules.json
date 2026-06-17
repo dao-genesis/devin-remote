@@ -74,6 +74,19 @@
       ]
     },
     {
+      "key": "rt-flow-app",
+      "name": "rt-flow-app",
+      "dir": "addons/rt-flow-app",
+      "trigger": ["addons/rt-flow-app"],
+      "kind": "apk",
+      "extId": "ai.devin.rtflow",
+      "releaseTagPrefix": "rtflow",
+      "assetName": "DevinCloud-mobile-v{version}.apk",
+      "title": "Devin Cloud 手机版 · APK（辅助 ②）",
+      "desc": "Devin Cloud 手机版 APK（安卓本体）：切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 系统级接管 + 渐进式文档。主页可直接下载安装。",
+      "build": []
+    },
+    {
       "key": "devin-git-auth",
       "name": "devin-git-auth",
       "extId": "devaid.devin-git-auth",
