@@ -391,6 +391,8 @@ export async function activate(context: vscode.ExtensionContext) {
     try { daoSeedDefaultInjectProfile(); } catch { /* 守柔 */ }
     // secret=PAT · 用户填入的 GitHub PAT 作为 secret 反向注入到所有账号 — 每次激活幂等校正
     try { daoSyncPatSecretIntoProfile(); } catch { /* 守柔 */ }
+    // MCP=DAO Bridge · 把本机 MCP 网关公网地址钉入注入档案 → 反向注入所有账号 (URL 轮换自愈)
+    try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
 
     // ═══════════════════════════════════════════════════════════
     // 道法自然 · 零配置自动链 — 帛书·六十二「道者万物之注」
@@ -6885,6 +6887,7 @@ interface InjectProfileItemP { title: string; body: string }
 interface InjectProfileItemM {
     name: string; slug?: string; transport?: string; short_description?: string;
     command?: string; args?: string[]; env_variables?: any[]; url?: string; headers?: any;
+    installation_scope?: string;
 }
 // 钉住的 Automation — 切账号即幂等注入到新 org (schema 已逆流实测: POST 201 / DELETE 200)
 // 默认 webhook:incoming 触发 + start_session(prompt) 动作; triggers/actions 可手编覆盖。
@@ -7024,6 +7027,35 @@ function daoSyncPatSecretIntoProfile(): void {
             p.secrets.splice(idx, 1); changed = true;
         }
         if (changed) saveInjectProfile(p);
+    } catch { /* 道法自然·守柔 */ }
+}
+// MCP=DAO Bridge · 把本机 MCP 网关(start_mcp_stack.ps1 写出的公网地址)作为一个钉住 MCP
+// 写入注入档案, 经反向注入路径(applyInjectProfileToOrg→devinAddCustomMcp)同步到所有账号。
+// 守柔·自愈: 公网快速隧道地址重启会变, 故每次激活幂等校正 — 仅当 url 变化时改写, 不制造无谓写入。
+const DAO_MCP_NAME = 'DAO Bridge MCP';
+const DAO_MCP_PUBLIC_FILE = path.join(process.env.ProgramData || 'C:\\ProgramData', 'dao_vm', 'mcp_public.json');
+function daoSyncDaoMcpIntoProfile(): void {
+    try {
+        if (!fs.existsSync(DAO_MCP_PUBLIC_FILE)) return;
+        let pub: any = {};
+        try { pub = JSON.parse(fs.readFileSync(DAO_MCP_PUBLIC_FILE, 'utf8')); } catch { return; }
+        const url = String(pub.url || '').trim();
+        const token = String(pub.token || '').trim();
+        if (!/^https?:\/\//.test(url)) return;
+        const p = loadInjectProfile();
+        const idx = p.mcps.findIndex(m => m && m.name === DAO_MCP_NAME);
+        const entry: InjectProfileItemM = {
+            name: DAO_MCP_NAME, transport: 'HTTP', url,
+            short_description: 'DAO four-module: PC control + browser CDP + plugin + vscode',
+            installation_scope: 'org',
+        };
+        if (token) entry.headers = { Authorization: 'Bearer ' + token };
+        let changed = false;
+        if (idx < 0) { p.mcps.push(entry); changed = true; }
+        else if (p.mcps[idx].url !== url || JSON.stringify(p.mcps[idx].headers || {}) !== JSON.stringify(entry.headers || {})) {
+            p.mcps[idx] = Object.assign({}, p.mcps[idx], entry); changed = true;
+        }
+        if (changed) { if (!p.enabled) p.enabled = true; saveInjectProfile(p); }
     } catch { /* 道法自然·守柔 */ }
 }
 // 从按邮箱持久化的 store 里找某 org 仍可用的 auth1 — 用于清理旧 org 注入
