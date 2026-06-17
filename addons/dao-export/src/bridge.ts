@@ -38,8 +38,7 @@ export class AgentBridge {
     for (let p = preferredPort; p < preferredPort + 20; p++) {
       try {
         await this.listen(p);
-        this.port = p;
-        return { port: p, token: this.token };
+        return { port: this.port, token: this.token };
       } catch { /* port busy, try next */ }
     }
     throw new Error('no free port for Agent Bridge');
@@ -58,6 +57,10 @@ export class AgentBridge {
       srv.listen(port, '127.0.0.1', () => {
         srv.removeListener('error', reject);
         this.server = srv;
+        // Record the actually-bound port (handles port 0 / ephemeral binds),
+        // not the requested one, so callers/docs report the real endpoint.
+        const addr = srv.address();
+        this.port = addr && typeof addr === 'object' ? addr.port : port;
         resolve();
       });
     });

@@ -43,7 +43,7 @@
 ## 安装
 
 ```
-code --install-extension dao-devin-export-1.4.1.vsix
+code --install-extension dao-devin-export-1.4.2.vsix
 ```
 
 ## 使用
@@ -56,6 +56,7 @@ code --install-extension dao-devin-export-1.4.1.vsix
 ## 技术
 
 - 零运行时依赖（纯 Node stdlib：https + zlib 自实现 ZIP；万法识号纯字符串解析）
+- 零依赖单元测试（`npm test` → `node --test`）：万法识号解析、多账号管理、对话/MD 构建、ZIP 合法性、单对话 MD 回退、Agent Bridge 鉴权与端点。无网络、无 vscode 依赖，跨平台可跑
 - API: windsurf.com 登录 / token 直登 → app.devin.ai sessions/events/presigned-url
 - 账号保存在 VS Code globalState（脱敏视图用于 UI / Bridge，不外泄密码/token）
 

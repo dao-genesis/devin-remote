@@ -73,10 +73,16 @@ export function buildWorklog(title: string, devinId: string, events: EventItem[]
     const time = ts(ev);
 
     switch (t) {
+      case 'initial_user_message':
       case 'user_message':
         lines.push(`\n## 👤 USER [${time}]`);
         lines.push(extractMessageText(ev.message));
         break;
+      case 'user_question_answered': {
+        const ans = userAnswerText(ev);
+        if (ans) { lines.push(`\n## 👤 USER (回答) [${time}]`); lines.push(ans); }
+        break;
+      }
       case 'devin_message':
         lines.push(`\n## 🤖 DEVIN [${time}]`);
         lines.push(extractMessageText(ev.message));
