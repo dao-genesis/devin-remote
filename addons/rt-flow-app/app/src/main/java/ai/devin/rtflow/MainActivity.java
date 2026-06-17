@@ -124,6 +124,9 @@ public class MainActivity extends AppCompatActivity {
     private android.content.BroadcastReceiver dlReceiver;
     private volatile String dragDlPath = null;   // 正在从下载列表拖拽的文件 (拖到页面 → 注入上传/拖放区)
     private volatile String dragDlMime = null;
+    private volatile int dragTabIdx = -1;        // 正在拖拽的标签序号 (拖到另一页面 → 提取该对话并导入两个 md)
+    private volatile WebView convDropTarget = null; // 对话拖入的目标页 (提取完成后注入)
+    private volatile float convDropX = 0, convDropY = 0;
     // ── 在线自动更新 ──
     static final String UPDATE_MANIFEST = "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json";
     // 去中心化更新: 多镜像源轮询 (任一可达即可检查/下载, 不依赖单一服务器或穿透通道)。
@@ -959,6 +962,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void startTabDrag(View chip, int idx) {
         try {
+            dragTabIdx = idx;   // 拖到网页区(非标签条) → 提取该标签对话, 导入目标页
             ClipData data = new ClipData(String.valueOf(idx), new String[]{ "text/plain" }, new ClipData.Item(String.valueOf(idx)));
             View.DragShadowBuilder shadow = new View.DragShadowBuilder(chip);
             if (Build.VERSION.SDK_INT >= 24) chip.startDragAndDrop(data, shadow, null, 0);
@@ -2096,6 +2100,9 @@ public class MainActivity extends AppCompatActivity {
             try { byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); writeDownloadBytes(name, mime, data); }
             catch (Exception e) { main.post(() -> toast("下载捕获失败")); }
         }
+        // 对话拖入导入: 源标签提取完的 对话md+工作日志md 经此回传 → 注入目标页
+        @android.webkit.JavascriptInterface
+        public void convExtracted(String json) { main.post(() -> onConvExtracted(json == null ? "{}" : json)); }
     }
     private void writeDownloadBytes(String name, String mime, byte[] data) {
         try {
@@ -2616,25 +2623,115 @@ public class MainActivity extends AppCompatActivity {
             toast("拖到页面的上传/输入区放手");
         } catch (Exception e) { dragDlPath = null; toast("拖拽失败"); }
     }
-    /** 网页标签的拖放监听: 把从下载列表拖来的文件注入页面 (file input + dropzone 双路)。 */
+    /** 网页标签的拖放监听: ① 下载项拖来的文件注入页面; ② 把某对话标签拖入页面→提取并导入两个 md。 */
     private View.OnDragListener downloadDropListener(final WebView web) {
         return (v, ev) -> {
             switch (ev.getAction()) {
                 case DragEvent.ACTION_DRAG_STARTED:
-                    return dragDlPath != null;                       // 仅当从下载列表发起时才接管
+                    return dragDlPath != null || dragTabIdx >= 0;    // 下载项 或 标签对话拖拽 → 接管
                 case DragEvent.ACTION_DRAG_ENTERED:
                 case DragEvent.ACTION_DRAG_LOCATION:
                 case DragEvent.ACTION_DRAG_EXITED:
-                    return dragDlPath != null;
+                    return dragDlPath != null || dragTabIdx >= 0;
                 case DragEvent.ACTION_DROP:
                     if (dragDlPath != null) { dropFileIntoPage(web, ev.getX(), ev.getY(), dragDlPath, dragDlMime); return true; }
+                    if (dragTabIdx >= 0) { importConversationFromTab(dragTabIdx, web, ev.getX(), ev.getY()); return true; }
                     return false;
                 case DragEvent.ACTION_DRAG_ENDED:
-                    dragDlPath = null; dragDlMime = null;
+                    dragDlPath = null; dragDlMime = null; dragTabIdx = -1;
                     return true;
             }
             return false;
         };
+    }
+    /** 把某标签所示的 Devin 对话(标签拖入页面松手)提取为 对话md+工作日志md, 注入目标页面的上传/拖放区。
+     *  在源标签 WebView 内就地用页面已注入的 Bearer 鉴权 fetch 事件流 → 经 RTDL 桥回传 → 注入目标页。 */
+    private void importConversationFromTab(int srcIdx, WebView targetWeb, float x, float y) {
+        if (srcIdx < 0 || srcIdx >= tabs.size()) return;
+        Tab src = tabs.get(srcIdx);
+        if (src == null || src.web == null) { toast("源标签无效"); return; }
+        String url = src.url == null ? "" : src.url;
+        String sid = null;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(devin-[0-9a-fA-F]{8,})").matcher(url);
+        if (m.find()) sid = m.group(1);
+        if (sid == null) { java.util.regex.Matcher m2 = java.util.regex.Pattern.compile("/sessions/([A-Za-z0-9_\\-]+)").matcher(url); if (m2.find()) sid = m2.group(1); }
+        if (sid == null) { toast("该标签不是 Devin 对话页, 无法导入"); return; }
+        if (src.web == targetWeb) { toast("请把对话标签拖到另一个页面"); return; }
+        convDropTarget = targetWeb; convDropX = x; convDropY = y;
+        toast("提取对话中…");
+        final String js = convExtractJs(sid);
+        final WebView sw = src.web;
+        main.post(() -> { try { sw.evaluateJavascript(js, null); } catch (Exception e) { toast("提取失败"); convDropTarget = null; } });
+    }
+    /** 源标签内运行: fetch 事件流(页面已注入 Bearer) → 构建 对话md+工作日志md → RTDL.convExtracted 回传。 */
+    private String convExtractJs(String sid) {
+        String s = sid.replace("\\", "\\\\").replace("'", "\\'");
+        return "(function(){try{var SID='" + s + "';"
+            + "function mt(m){if(m==null)return '';if(typeof m==='string')return m;return m.text||m.message||m.content||JSON.stringify(m);}"
+            + "function ts(e){return ''+(e.timestamp||e.created_at||e.created_at_ms||'');}"
+            + "function pe(raw){var o=[];var ls=raw.split(/\\r?\\n/);for(var i=0;i<ls.length;i++){var ln=ls[i];if(!ln)continue;if(ln.indexOf('data:')===0)ln=ln.slice(5);ln=ln.trim();if(!ln||ln[0]!=='{')continue;try{var j=JSON.parse(ln);if(j&&j.type)o.push(j);}catch(e){}}return o;}"
+            + "fetch('/api/events/'+SID+'/stream',{headers:{Accept:'text/event-stream'},credentials:'include'}).then(function(r){return r.text();}).then(function(raw){"
+            + "var evs=pe(raw);"
+            + "return fetch('/api/sessions/'+SID,{credentials:'include'}).then(function(r){return r.ok?r.json():{};}).catch(function(){return {};}).then(function(d){"
+            + "var title=(d&&d.title)||SID;"
+            + "var c=['# '+title,'','> Session: '+SID,''];var w=['# Worklog: '+title,'','> Session: '+SID,'> Events: '+evs.length,''];"
+            + "evs.forEach(function(e){var t=e.type;var tm=ts(e);"
+            + "if(t==='user_message'){c.push('## \\uD83D\\uDC64 USER','',mt(e.message),'');w.push('\\n## \\uD83D\\uDC64 USER ['+tm+']',mt(e.message));}"
+            + "else if(t==='devin_message'){c.push('## \\uD83E\\uDD16 DEVIN','',mt(e.message),'');w.push('\\n## \\uD83E\\uDD16 DEVIN ['+tm+']',mt(e.message));}"
+            + "else if(t==='devin_thoughts'){w.push('\\n### \\uD83D\\uDCAD THINKING ['+tm+']',mt(e.message));}"
+            + "else if(t==='shell_process_started'){w.push('\\n### \\uD83D\\uDCBB CMD ['+tm+']','```bash',(e.command||''),'```');}"
+            + "else if(t==='shell_process_completed'){var ot=(e.output_trunc||e.output||'');if((''+ot).trim())w.push('```',(''+ot).slice(0,3000),'```');}"
+            + "else if(t==='todo_update'){var td=e.todos||[];if(td.length){w.push('\\n### \\uD83D\\uDCCB TODO ['+tm+']');td.forEach(function(x){w.push('- '+(x.status||'')+' '+mt(x.content));});}}"
+            + "else if(t==='status_update'||t==='activity'){w.push('\\n_['+tm+'] '+mt(e.message||e.status)+'_');}"
+            + "else{var mm=e.message||e.content;if(mm)w.push('\\n### ['+t+'] ['+tm+']',mt(mm));}"
+            + "});"
+            + "var res={sid:SID,title:title,conv:c.join('\\n'),worklog:w.join('\\n'),events:evs.length};"
+            + "try{RTDL.convExtracted(JSON.stringify(res));}catch(e){}"
+            + "});}).catch(function(err){try{RTDL.convExtracted(JSON.stringify({sid:SID,error:''+err}));}catch(e){}});"
+            + "}catch(e){try{RTDL.convExtracted(JSON.stringify({error:''+e}));}catch(_){}}})();";
+    }
+    /** RTDL.convExtracted 回调 (源标签线程) → 主线程注入两个 md 到目标页。 */
+    private void onConvExtracted(String json) {
+        WebView target = convDropTarget; convDropTarget = null;
+        if (target == null) return;
+        try {
+            JSONObject o = new JSONObject(json);
+            String conv = o.optString("conv", "");
+            String worklog = o.optString("worklog", "");
+            if (conv.isEmpty() && worklog.isEmpty()) { toast("提取失败: " + o.optString("error", "无对话内容")); return; }
+            String sid = o.optString("sid", "session");
+            String base = ("devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
+            java.util.List<String[]> files = new java.util.ArrayList<>();
+            if (!conv.isEmpty()) files.add(new String[]{ base + "-conversation.md", conv });
+            if (!worklog.isEmpty()) files.add(new String[]{ base + "-worklog.md", worklog });
+            dropTextFilesIntoPage(target, convDropX, convDropY, files);
+            toast("已导入 对话+工作日志 (" + o.optInt("events", 0) + " 事件)");
+        } catch (Exception e) { toast("导入失败"); }
+    }
+    /** 把内存中的多份文本(md)作为文件注入页面 (file input + dropzone 双路, 同 dropFileIntoPage)。 */
+    private void dropTextFilesIntoPage(final WebView web, float x, float y, java.util.List<String[]> files) {
+        if (web == null || files.isEmpty()) return;
+        StringBuilder arr = new StringBuilder("[");
+        for (int i = 0; i < files.size(); i++) {
+            String name = files.get(i)[0]; String content = files.get(i)[1]; String b64;
+            try { b64 = android.util.Base64.encodeToString(content.getBytes("UTF-8"), android.util.Base64.NO_WRAP); } catch (Exception e) { b64 = ""; }
+            if (i > 0) arr.append(",");
+            arr.append("{n:'").append(name.replace("\\", "\\\\").replace("'", "\\'")).append("',b:'").append(b64).append("'}");
+        }
+        arr.append("]");
+        final String js = "(function(){try{var specs=" + arr + ";"
+            + "function mk(s){var bin=atob(s.b);var u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return new File([u],s.n,{type:'text/markdown'});}"
+            + "var files=specs.map(mk);var dt=new DataTransfer();files.forEach(function(f){dt.items.add(f);});"
+            + "var dpr=window.devicePixelRatio||1;var cx=" + x + "/dpr, cy=" + y + "/dpr;"
+            + "var el=document.elementFromPoint(cx,cy)||document.body;"
+            + "var inp=null;var n=el;while(n){if(n.tagName==='INPUT'&&(n.type||'').toLowerCase()==='file'){inp=n;break;}n=n.parentElement;}"
+            + "if(!inp){var z=el;while(z){if(z.querySelector){inp=z.querySelector('input[type=file]');if(inp)break;}z=z.parentElement;}}"
+            + "if(!inp)inp=document.querySelector('input[type=file]');"
+            + "if(inp){try{inp.files=dt.files;}catch(e){}inp.dispatchEvent(new Event('input',{bubbles:true}));inp.dispatchEvent(new Event('change',{bubbles:true}));}"
+            + "var opt={bubbles:true,cancelable:true};"
+            + "['dragenter','dragover','drop'].forEach(function(t){try{var e=new DragEvent(t,opt);Object.defineProperty(e,'dataTransfer',{value:dt});el.dispatchEvent(e);}catch(err){}});"
+            + "return inp?'input':'drop';}catch(e){return 'err:'+e;}})();";
+        main.post(() -> { try { web.evaluateJavascript(js, null); } catch (Exception e) { toast("注入失败"); } });
     }
     /** 在 (x,y) 处把文件注入网页: 设到 file input 并对落点元素派发 drop 事件 (兼容 dropzone 上传组件)。 */
     private void dropFileIntoPage(final WebView web, float x, float y, String path, String mime) {
