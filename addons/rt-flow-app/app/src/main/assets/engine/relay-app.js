@@ -64,7 +64,7 @@ const DaoRelayApp = (function () {
   async function handleFrame(m) {
     const path = (m && m.path) || "/api/health";
     if (path === "/api/health") {
-      return { status: 200, body: { status: "ok", service: "rt-flow-app", role: "browser-tunnel", session: cfg.session, ts: Date.now(), cmds: Object.keys(COMMANDS) } };
+      return { status: 200, body: { status: "ok", service: "devin-cloud-mobile", role: "browser-tunnel", session: cfg.session, ts: Date.now(), cmds: Object.keys(COMMANDS) } };
     }
     // v0.6.0 · 最大化暴露 · 不害怕方能成其大
     if (path === "/api/info" || path === "/api/device") {

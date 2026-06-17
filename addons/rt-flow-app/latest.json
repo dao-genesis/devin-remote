@@ -1,6 +1,6 @@
 {
-  "versionCode": 40,
-  "versionName": "0.15.9",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.9/DevinCloud-mobile-v0.15.9.apk",
-  "notes": "v0.15.9 · 下载板块修复\n· 下载记录持久化: 下载文件落共享保险箱 Documents/DevinCloud/downloads/ (脱离应用沙箱), 记录写入保险箱, 启动自动回读 → 卸载/重装/升级不再丢下载 (与账号/标签同机制)。\n· 系统下载完成后自动从沙箱搬入保险箱, 永久留存。\n· 拖拽到页面修复: 长按下载项拖到网页松手, 自动把文件注入页面的上传框(input[type=file])并对落点元素派发 drop 事件 (兼容 dropzone 拖放上传组件)。\n· 诚实说明: 历史版本从未把下载写进保险箱, 之前已丢失的旧下载无法找回; 自本版起永久持久化。\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动。"
+  "versionCode": 41,
+  "versionName": "0.15.10",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.10/DevinCloud-mobile-v0.15.10.apk",
+  "notes": "v0.15.10 · 命名归一 + 提取增强 + 云端文档全开放\n· 全量改名「Devin Cloud 手机版」, 清除 RT Flow / rt-flow-app 用户可见残留 (内部包名/隧道id 保留以保数据不丢)\n· 对话整体提取: 新增 extractConversation / extractAccountConversations (额度耗尽账号亦可, 仅读历史不耗额度), 一行拿齐 元数据+完整对话md+工作日志md+文件清单, 可落共享保险箱\n· 新增《对话整体提取工作流》文档 (getExtractMd + 仓库 docs), 含对话ID/账号信息/工作流\n· 内网穿透云端 .md (getCloudMd) 完全开放无限制: 三大板块全部命令/参数/高级用法 + 提取工作流全内联, 云端 Agent 读一篇即可直接调用\n· 含 v0.15.9 下载板块修复 (下载持久化共享保险箱·卸载重装不丢 + 长按拖到页面注入上传/拖放区)\n· 签名一致 e261b27f, v0.15.x 原地覆盖升级, 数据不动"
 }

@@ -1,4 +1,6 @@
-# Devin Cloud 手机版 · rt-flow-app (v0.14.4)
+# Devin Cloud 手机版 (v0.15.10)
+
+> 模块目录: `addons/rt-flow-app/` (内部代号保留, 仅为目录/包名/自更新路径; 所有用户可见命名均为「Devin Cloud 手机版」)。
 
 > **唯一的手机端方案**。取代了此前的 `rt-flow-mobile`（MV3 浏览器扩展·Kiwi 已停更）
 > 和 `dao-bridge-android`（Termux Node Agent）。一个 APK 六合一：切号 + 内网穿透 + 网页多实例 + **浏览器自动化** + **手机本体操控** + **渐进式文档**。
@@ -16,7 +18,7 @@
 | **手机本体操控** (`phone*` RPCs) | 设备信息+手机号/文件系统读写/相册图片列举/剪贴板读写/系统分享/通知/应用列举+启动/电池/WiFi/振动/音量/联系人/短信(OTP)/通话记录 |
 | **系统级接管** (`RtAccessibilityService`) | ADB/scrcpy 级无 root 接管：坐标点击/长按/滑动手势注入 + 返回/主页/最近/通知/锁屏全局操作 + 读屏控件树 + 按文字点击 + 文本输入 + 全屏截图(API30+) |
 | **安全开关 + 一键授权** (tunnel.html) | 远程操控默认关闭，穿透面板手动启用；browse*/phone* 全部受此门禁。系统级接管走 `phoneEnsureControl` 一键自动跳转无障碍设置，用户只点一次「允许」 |
-| **渐进式文档** (`getCloudMd`/`getModuleIndex`/`getModuleDoc`/`getLocalMd`) | 三层披露：云端 MD = 轻量「初始接入」(接入信息 + 三大核心板块概览 + 一键授权)；Agent 按需 `getModuleDoc({module})` 深入某板块拉全部细节；`getLocalMd` = 重型本地操控全表 |
+| **云端文档 (完全开放)** (`getCloudMd`/`getModuleIndex`/`getModuleDoc`/`getLocalMd`/`getExtractMd`) | 云端 MD 已**完全开放无限制**：接入信息 + 三大核心板块全部命令/参数/高级用法 + 对话整体提取工作流，全部内联，Agent 读一篇即可直接调用任意核心功能；`getModuleDoc({module})` 仍可单独按板块拉；`getLocalMd` = 本地 Native.* 桥全表；`getExtractMd` = 对话提取工作流单独文档 |
 | **文件上传** | `onShowFileChooser` → 系统选择器（含微信/QQ 最近文件） |
 | **系统下载** | `DownloadManager` → 下载目录 + 通知 |
 | **多窗口** | `onCreateWindow` → 新标签承接 `window.open` / `target=_blank` |
@@ -117,7 +119,10 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 | v0.14.7 | ① 额度用完显示灰色 `$0`（弱化视觉干扰，不再刺眼红）② 在线自动更新底座 — 冷启动静默检查 `latest.json` 有新版即弹一次确认；新增 `appCheckUpdate`/`appInstallUpdate` RPC，云端经中继可直接推送更新（下载新版 APK + 唤起系统安装器，用户仅点一次「安装」），以后不必再从聊天反复发 APK。新增 `REQUEST_INSTALL_PACKAGES` 权限 + `FileProvider` 安装 Intent |
 | v0.14.8 | 穿透稳健性 + 面板改版。① 隧道客户端 `relay-app.js`：连接看门狗（10s 未握手即弃端点重试，治 GFW 致 `CONNECTING` 长挂）+ 退避加速（1.5s→20s 封顶）+ **多端点自动故障转移**（`url` 可填多个，逗号/空格/换行分隔，逐个择优连通）+ `/health` 探测把模糊错误细化为可操作诊断（区分「不可达/被屏蔽」与「WSS 握手失败」）。② 穿透面板：「复制URL」「复制Token」合并为「📋 复制接入信息」；4 个云端/本地 MD 文档按钮拉到第一页主页；状态卡显示当前连通端点/重连次数/故障转移端点数 |
 | v0.14.9 | 降低用户三大成本（操作/认知/使用）。① **去除网页下拉刷新**（`SwipeRefreshLayout` 拦截顶部下拉导致 Devin 对话页无法正常上下滑动）；刷新统一走右上角刷新按钮 `reloadActive`。② **自动更新自动弹「允许安装未知应用」**：未授权时 `canRequestPackageInstalls()` 检测 → 弹清晰说明 → 自动跳到本应用开关页（`package:` URI 直达，避免在长列表里找不到）→ 用户开开关返回 App，`onResume` **自动续装**（零再触发）。③ **国内连不上直接提示开 VPN**：`probeHealth` 诊断文案改为「请开启 VPN/科学上网后重连」，不再让用户困惑 |
-| v0.15.0 | **当前版本**：浏览器体感内置化、无感化。① **翻译做成顶栏一键**：网址旁「译」按钮，点一下整页自动翻译、再点恢复原文（注入 Google 网页翻译引擎 `translate_a/element.js`，`autoDisplay=false` 仅翻译不弹横幅，同电脑端 Chrome 体感；国内需开 VPN）。② **广告拦截默认内置开启**：`adBlock` 默认 `true`，去掉手动开关菜单项，自动拦截广告域名 + 非用户触发弹窗。③ **登录账密像 Chrome 自动**：去掉「保存/填充本站登录」菜单按钮 → `installLoginCapture` 监听 submit/click/Enter 捕获账密，提交时 `AutofillBridge.onLogin` 自动弹「保存登录？」；`autoFillLogin` 在 `onPageFinished` 对有保存登录的站点自动填充（不覆盖已填内容），全程无感。④ 去掉「标签总览」菜单项（顶部标签条已足够） |
+| v0.15.0 | 浏览器体感内置化、无感化。① **翻译做成顶栏一键**：网址旁「译」按钮，点一下整页自动翻译、再点恢复原文（注入 Google 网页翻译引擎 `translate_a/element.js`，`autoDisplay=false` 仅翻译不弹横幅，同电脑端 Chrome 体感；国内需开 VPN）。② **广告拦截默认内置开启**：`adBlock` 默认 `true`，去掉手动开关菜单项，自动拦截广告域名 + 非用户触发弹窗。③ **登录账密像 Chrome 自动**：去掉「保存/填充本站登录」菜单按钮 → `installLoginCapture` 监听 submit/click/Enter 捕获账密，提交时 `AutofillBridge.onLogin` 自动弹「保存登录？」；`autoFillLogin` 在 `onPageFinished` 对有保存登录的站点自动填充（不覆盖已填内容），全程无感。④ 去掉「标签总览」菜单项（顶部标签条已足够） |
+
+| v0.15.9 | 下载板块修复：① **下载持久化** — 下载文件落共享保险箱 `Documents/DevinCloud/downloads/` (脱离应用沙箱)、记录写入保险箱、启动自动回读；系统下载完成后自动从沙箱搬入保险箱 → 卸载/重装/升级不再丢下载 (与账号/标签同机制)。② **拖到页面** — 长按下载项拖到网页松手, 自动注入页面上传框 `input[type=file]` 并对落点派发 drop 事件 (兼容 dropzone 上传组件)。AVD 实测两项全过 |
+| v0.15.10 | **当前版本**：命名归一 + 提取增强 + 云端文档全开放。① **全量改名「Devin Cloud 手机版」**, 清除 RT Flow / rt-flow-app 用户可见残留 (内部包名 `ai.devin.rtflow`/隧道 `rtflow-` 前缀/发布 tag 保留以保数据不丢、隧道不断)。② **对话整体提取** — 新增 `extractConversation` / `extractAccountConversations` RPC (额度耗尽账号亦可, 仅读历史不耗额度), 一行拿齐 元数据+完整对话md+工作日志md+文件清单, 可 `save:true` 落共享保险箱；新增 `getExtractMd` + 仓库《对话整体提取工作流》文档 (含对话ID/账号信息/工作流)。③ **内网穿透云端 .md (`getCloudMd`) 完全开放无限制** — 三大板块全部命令/参数/高级用法 + 提取工作流全部内联, 云端 Agent 读一篇即可直接按需调用核心功能, 不再分步 `getModuleDoc` |
 
 ## 取代的旧模块
 
