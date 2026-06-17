@@ -1,6 +1,6 @@
 {
-  "versionCode": 47,
-  "versionName": "0.15.16",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.16/DevinCloud-mobile-v0.15.16.apk",
-  "notes": "v0.15.16 · 对话「下载 ZIP（含产出文件夹）」对齐桌面 dao-vsix 切号面板\n· 切号面板每条对话行新增 📦 按钮：一键下载该对话整包 ZIP —— 内含 对话_人类可读.md + 工作日志.md + _meta.json + files/<全部产出文件>，与电脑端「下载对话内容」产物结构一致。\n· 纯 JS 零依赖 ZIP 写入器（STORE 存储法 + CRC32，复刻桌面 ZipWriter 可读结构），WebView 无需 zlib 即可打合法 ZIP；产出文件经原生桥 httpReqB64 二进制无损取回。\n· 引擎 RPC extractConversation 新增 zip:true：另返 zipB64/zipName/zipFileCount，云端 Agent 经隧道即可取「MD+ZIP」整包，base64 解码落盘即得。\n· 拖拽提取的取文件指引 MD 同步说明 zip:true 与 📦，指导其他 Agent 整体取回。\n· 签名一致 e261b27f，v0.15.x 原地覆盖升级数据不丢。"
+  "versionCode": 48,
+  "versionName": "0.15.17",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.17/DevinCloud-mobile-v0.15.17.apk",
+  "notes": "v0.15.17 · 彻底修复「拖拽对话标签到页面」提取为空/碎文件的问题\n· 根因：旧链路在源标签 WebView 内用 fetch(credentials:include) 拉事件流，但账号是 auth1/apiKey 显式鉴权（非 cookie），页内 fetch 取不到数据 → 注入的全是 ~90B 空壳 MD。\n· 新链路：拖拽改走引擎服务端 extractConversation（已存 auth1，与切号面板/中继同源取数），内容完整（实测单会话对话 MD 可达数百 KB）。\n· 产物严格 2 件，按你的规范：① 无产出文件 → 对话MD + 取数指引MD（账号/密码/SessionID/提取Skill）；② 已有产出文件 → 文件夹(ZIP·含对话md+工作日志+files/) + 取数指引MD。\n· 注入统一支持二进制（ZIP）与文本（MD），按扩展名设 MIME；引擎不可用/无账号/取数空时自动回退页内 fetch 老链路。\n· 签名一致 e261b27f，v0.15.x 原地覆盖升级数据不丢。"
 }

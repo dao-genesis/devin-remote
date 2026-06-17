@@ -2697,24 +2697,79 @@ public class MainActivity extends AppCompatActivity {
             return false;
         };
     }
-    /** 把某标签所示的 Devin 对话(标签拖入页面松手)提取为 对话md+工作日志md, 注入目标页面的上传/拖放区。
-     *  在源标签 WebView 内就地用页面已注入的 Bearer 鉴权 fetch 事件流 → 经 RTDL 桥回传 → 注入目标页。 */
+    /** 把某标签所示的 Devin 对话(标签拖入页面松手)提取后注入目标页面的上传/拖放区。
+     *  优先经引擎(已存 auth1, 服务端取数, 内容完整) extractConversation: 有产出文件 → 文件夹(ZIP)+取数指引MD;
+     *  无产出文件 → 对话MD+取数指引MD。引擎不可用/无账号/取数空 → 回退页内 fetch(老链路)。 */
     private void importConversationFromTab(int srcIdx, WebView targetWeb, float x, float y) {
         if (srcIdx < 0 || srcIdx >= tabs.size()) return;
         Tab src = tabs.get(srcIdx);
         if (src == null || src.web == null) { toast("源标签无效"); return; }
         String url = src.url == null ? "" : src.url;
-        String sid = null;
+        String sidTmp = null;
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("(devin-[0-9a-fA-F]{8,})").matcher(url);
-        if (m.find()) sid = m.group(1);
-        if (sid == null) { java.util.regex.Matcher m2 = java.util.regex.Pattern.compile("/sessions/([A-Za-z0-9_\\-]+)").matcher(url); if (m2.find()) sid = m2.group(1); }
-        if (sid == null) { toast("该标签不是 Devin 对话页, 无法导入"); return; }
+        if (m.find()) sidTmp = m.group(1);
+        if (sidTmp == null) { java.util.regex.Matcher m2 = java.util.regex.Pattern.compile("/sessions/([A-Za-z0-9_\\-]+)").matcher(url); if (m2.find()) sidTmp = m2.group(1); }
+        if (sidTmp == null) { toast("该标签不是 Devin 对话页, 无法导入"); return; }
         if (src.web == targetWeb) { toast("请把对话标签拖到另一个页面"); return; }
-        convDropTarget = targetWeb; convDropX = x; convDropY = y;
-        convDropAccountJson = src.accountJson;   // 该对话所属账号 → 生成"查看全部文件"指引md
-        toast("提取对话中…");
-        final String js = convExtractJs(sid);
+        final String sid = sidTmp;
         final WebView sw = src.web;
+        final String accJson = src.accountJson;   // 该对话所属账号 → 引擎取数 + 生成"查看全部文件"指引md
+        String emailTmp = "";
+        if (accJson != null) { try { emailTmp = new JSONObject(accJson).optString("email", ""); } catch (Exception ignored) {} }
+        final String email = emailTmp;
+        toast("提取对话中…");
+        final RelayService rs = RelayService.instance;
+        if (email.isEmpty() || rs == null) { runInTabConvExtract(sw, sid, targetWeb, x, y, accJson); return; }
+        final WebView ftarget = targetWeb; final float fx = x, fy = y;
+        new Thread(() -> {
+            String conv = "", title = sid, err = null, zipB64 = "", zipName = ""; int zipFileCount = 0;
+            try {
+                JSONObject body = new JSONObject();
+                body.put("cmd", "extractConversation");
+                body.put("id", email);
+                body.put("sid", sid.startsWith("devin-") ? sid : "devin-" + sid);
+                body.put("zip", true);
+                JSONObject frame = new JSONObject();
+                frame.put("path", "/api/rpc"); frame.put("method", "POST"); frame.put("body", body);
+                String r = rs.dispatchLocal(frame.toString());
+                JSONObject o = new JSONObject(new JSONObject(r).optString("bodyText", "{}"));
+                if (o.optBoolean("ok", false)) {
+                    conv = o.optString("conversationMd", "");
+                    title = o.optString("title", sid);
+                    zipB64 = o.optString("zipB64", "");
+                    zipName = o.optString("zipName", "");
+                    zipFileCount = o.optInt("zipFileCount", 0);
+                } else err = o.optString("error", "提取失败");
+            } catch (Exception e) { err = e.getMessage(); }
+            final String fconv = conv, ftitle = title, fzipB64 = zipB64, fzipName = zipName;
+            final int fzfc = zipFileCount;
+            main.post(() -> {
+                boolean noText = (fconv == null || fconv.isEmpty());
+                boolean noZip = (fzipB64 == null || fzipB64.isEmpty());
+                if (noText && noZip) { toast("引擎取数空, 回退页内提取…"); runInTabConvExtract(sw, sid, ftarget, fx, fy, accJson); return; }
+                String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
+                String guide = buildAccessGuideMd(accJson, sid, ftitle);
+                java.util.List<String[]> files = new java.util.ArrayList<>();
+                if (fzfc > 0 && !noZip) {
+                    // 已有产出文件 → 文件夹(ZIP·含对话md+工作日志+files/) + 取数指引MD
+                    files.add(new String[]{ (fzipName != null && !fzipName.isEmpty()) ? fzipName : (base + ".zip"), fzipB64 });
+                    files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
+                    dropB64FilesIntoPage(ftarget, fx, fy, files);
+                    toast("已导入 文件夹(ZIP·" + fzfc + "件) + 取数指引");
+                } else {
+                    // 无产出文件 → 完整对话MD + 取数指引MD
+                    files.add(new String[]{ base + "-conversation.md", b64Utf8(fconv) });
+                    files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
+                    dropB64FilesIntoPage(ftarget, fx, fy, files);
+                    toast("已导入 对话MD + 取数指引");
+                }
+            });
+        }).start();
+    }
+    /** 回退链路: 在源标签 WebView 内就地 fetch 事件流(页面已注入 Bearer) → RTDL.convExtracted 回传 → onConvExtracted 注入两份md。 */
+    private void runInTabConvExtract(WebView sw, String sid, WebView target, float x, float y, String accJson) {
+        convDropTarget = target; convDropX = x; convDropY = y; convDropAccountJson = accJson;
+        final String js = convExtractJs(sid);
         main.post(() -> { try { sw.evaluateJavascript(js, null); } catch (Exception e) { toast("提取失败"); convDropTarget = null; } });
     }
     /** 源标签内运行: fetch 事件流(页面已注入 Bearer) → 构建「全量对话 md」(四类气泡, 与桌面
@@ -2858,19 +2913,29 @@ public class MainActivity extends AppCompatActivity {
         return b.toString();
     }
     private static String mdCell(String s) { return s == null ? "" : s.replace("|", "\\|").replace("\n", " ").trim(); }
+    /** UTF-8 文本 → base64 (NO_WRAP), 供 dropB64FilesIntoPage 统一注入。 */
+    private static String b64Utf8(String s) {
+        try { return android.util.Base64.encodeToString((s == null ? "" : s).getBytes("UTF-8"), android.util.Base64.NO_WRAP); } catch (Exception e) { return ""; }
+    }
     /** 把内存中的多份文本(md)作为文件注入页面 (file input + dropzone 双路, 同 dropFileIntoPage)。 */
     private void dropTextFilesIntoPage(final WebView web, float x, float y, java.util.List<String[]> files) {
-        if (web == null || files.isEmpty()) return;
+        if (web == null || files == null || files.isEmpty()) return;
+        java.util.List<String[]> b = new java.util.ArrayList<>();
+        for (String[] f : files) b.add(new String[]{ f[0], b64Utf8(f[1]) });
+        dropB64FilesIntoPage(web, x, y, b);
+    }
+    /** 把内存中的多份文件(name + 已 base64 的字节)注入页面: 文本(md)与二进制(zip)统一走此路。 */
+    private void dropB64FilesIntoPage(final WebView web, float x, float y, java.util.List<String[]> files) {
+        if (web == null || files == null || files.isEmpty()) return;
         StringBuilder arr = new StringBuilder("[");
         for (int i = 0; i < files.size(); i++) {
-            String name = files.get(i)[0]; String content = files.get(i)[1]; String b64;
-            try { b64 = android.util.Base64.encodeToString(content.getBytes("UTF-8"), android.util.Base64.NO_WRAP); } catch (Exception e) { b64 = ""; }
+            String name = files.get(i)[0]; String b64 = files.get(i)[1]; if (b64 == null) b64 = "";
             if (i > 0) arr.append(",");
             arr.append("{n:'").append(name.replace("\\", "\\\\").replace("'", "\\'")).append("',b:'").append(b64).append("'}");
         }
         arr.append("]");
         final String js = "(function(){try{var specs=" + arr + ";"
-            + "function mk(s){var bin=atob(s.b);var u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return new File([u],s.n,{type:'text/markdown'});}"
+            + "function mk(s){var bin=atob(s.b);var u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);var mime=/\\.zip$/i.test(s.n)?'application/zip':'text/markdown';return new File([u],s.n,{type:mime});}"
             + "var files=specs.map(mk);var dt=new DataTransfer();files.forEach(function(f){dt.items.add(f);});"
             + "var dpr=window.devicePixelRatio||1;var cx=" + x + "/dpr, cy=" + y + "/dpr;"
             + "var el=document.elementFromPoint(cx,cy)||document.body;"
