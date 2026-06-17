@@ -19,6 +19,7 @@ import androidx.annotation.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 
 /**
  * RelayService · 常驻前台服务, 宿主一个无界面 engine WebView 跑 JS 引擎 (relay 客户端 + 25 RPC)。
@@ -79,6 +80,19 @@ public class RelayService extends Service {
             // 动态配置优先 (用户在切号面板填写), 无则回退 conn.json 资源
             String dyn = readUserFile("relay-config.json");
             return (dyn != null && !dyn.isEmpty() && dyn.length() > 5) ? dyn : readAsset("engine/conn.json");
+        }
+        // ── RPC 载荷端到端加密 (中继只见密文, 连自托管/共享 Worker 都读不到账号密码) ──
+        //  密钥 = PBKDF2(用户口令, 随机盐) → AES-256-GCM; 口令存于 relay-config.e2eKey,
+        //  从不上送中继。授权驱动方(A群)经「取数指引 MD」获得同一口令即可解密。
+        //  口令为空 = 关(明文, 向后兼容旧驱动)。
+        @JavascriptInterface public boolean e2eEnabled() { return !e2eKeyVal().isEmpty(); }
+        @JavascriptInterface public String e2eSeal(String plaintext) {
+            try { String k = e2eKeyVal(); if (k.isEmpty() || plaintext == null) return ""; return E2E.seal(k, plaintext); }
+            catch (Exception e) { return ""; }
+        }
+        @JavascriptInterface public String e2eOpen(String envB64) {
+            try { String k = e2eKeyVal(); if (k.isEmpty() || envB64 == null) return ""; return E2E.open(k, envB64); }
+            catch (Exception e) { return ""; }
         }
         @JavascriptInterface public void onStatus(String json) {
             lastStatus = json == null ? "{}" : json;
@@ -443,6 +457,47 @@ public class RelayService extends Service {
                 android.media.AudioManager am = (android.media.AudioManager) RelayService.this.getSystemService(android.content.Context.AUDIO_SERVICE);
                 if (am != null) am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, vol, 0);
             } catch (Exception e) {}
+        }
+    }
+
+    /** 读 relay-config.json 的 e2eKey (端到端加密口令); 无则空串=不加密。 */
+    private String e2eKeyVal() {
+        try {
+            String dyn = readUserFile("relay-config.json");
+            if (dyn != null && dyn.length() > 5) return new org.json.JSONObject(dyn).optString("e2eKey", "");
+        } catch (Exception ignored) {}
+        return "";
+    }
+
+    /** AES-256-GCM + PBKDF2(SHA256,100k) 端到端加密。封套(base64): [ver=1][salt16][iv12][密文+tag]。
+     *  与 tools/dao-e2e 参考实现(JS/Python)逐字节兼容 → 任意语言的授权驱动方均可解密。 */
+    static final class E2E {
+        private static javax.crypto.SecretKey deriveKey(String pass, byte[] salt) throws Exception {
+            javax.crypto.SecretKeyFactory f = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+            byte[] kb = f.generateSecret(new javax.crypto.spec.PBEKeySpec(pass.toCharArray(), salt, 100000, 256)).getEncoded();
+            return new javax.crypto.spec.SecretKeySpec(kb, "AES");
+        }
+        static String seal(String pass, String plaintext) throws Exception {
+            java.security.SecureRandom rnd = new java.security.SecureRandom();
+            byte[] salt = new byte[16]; rnd.nextBytes(salt);
+            byte[] iv = new byte[12]; rnd.nextBytes(iv);
+            javax.crypto.Cipher c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+            c.init(javax.crypto.Cipher.ENCRYPT_MODE, deriveKey(pass, salt), new javax.crypto.spec.GCMParameterSpec(128, iv));
+            byte[] ct = c.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
+            byte[] out = new byte[1 + 16 + 12 + ct.length];
+            out[0] = 1; System.arraycopy(salt, 0, out, 1, 16); System.arraycopy(iv, 0, out, 17, 12);
+            System.arraycopy(ct, 0, out, 29, ct.length);
+            return android.util.Base64.encodeToString(out, android.util.Base64.NO_WRAP);
+        }
+        static String open(String pass, String b64) throws Exception {
+            byte[] in = android.util.Base64.decode(b64, android.util.Base64.NO_WRAP);
+            if (in.length < 30 || in[0] != 1) throw new IllegalArgumentException("bad envelope");
+            byte[] salt = java.util.Arrays.copyOfRange(in, 1, 17);
+            byte[] iv = java.util.Arrays.copyOfRange(in, 17, 29);
+            byte[] ct = java.util.Arrays.copyOfRange(in, 29, in.length);
+            javax.crypto.Cipher c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+            c.init(javax.crypto.Cipher.DECRYPT_MODE, deriveKey(pass, salt), new javax.crypto.spec.GCMParameterSpec(128, iv));
+            return new String(c.doFinal(ct), StandardCharsets.UTF_8);
         }
     }
 

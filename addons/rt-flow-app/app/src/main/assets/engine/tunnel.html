@@ -80,6 +80,20 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 </div>
 </div>
 
+<!-- 模块1.6: 端到端加密 (去中心化隐私) -->
+<div class="section">
+<h3>🔐 端到端加密 · E2E Key（账号信息不再明文过中继）</h3>
+<div class="muted">本机已<b>自动启用</b>端到端加密：RPC 载荷(含邮箱/密码/token)用下方 <b>E2E Key</b> 加密后才发出，
+任何中继(含共享 Worker)<b>只见密文</b>。把此 Key 连同账号、Session 一起给授权方(A群)，对方才能解密驱动。
+<br>拖拽某条对话时，此 Key 会自动写入「取数指引 MD · 板块六」。</div>
+<input id="e2eKey" readonly placeholder="(启动后自动生成)" style="font-family:monospace">
+<div class="row">
+  <button onclick="copyVal('e2eKey')">复制 E2E Key</button>
+  <button onclick="copyVal('e2eEndpoint')">复制中继入口</button>
+</div>
+<input id="e2eEndpoint" readonly placeholder="中继入口" style="font-family:monospace;font-size:11px">
+</div>
+
 <!-- 模块2: CloudFlare 命名隧道 (可选) -->
 <div class="section">
 <h3>🔑 命名隧道 · 固定域名（可选）</h3>
@@ -246,6 +260,17 @@ function initRelayCfg(){
   var cfg=_conn();   // 显示当前原生设备身份 (token 不回填, 防泄露)
   if(cfg.url) document.getElementById('cfgUrl').value=cfg.url;
   if(cfg.session) document.getElementById('cfgSession').value=cfg.session;
+  // 端到端加密: 展示 E2E Key 与中继入口 (供分享给授权驱动方)
+  var ek=document.getElementById('e2eKey'); if(ek&&cfg.e2eKey) ek.value=cfg.e2eKey;
+  var ee=document.getElementById('e2eEndpoint'); if(ee&&cfg.endpoint) ee.value=cfg.endpoint;
+}
+function copyVal(id){
+  var el=document.getElementById(id); if(!el||!el.value){ _result('copy',false,'暂无内容'); return; }
+  try{ el.select(); }catch(e){}
+  var done=false;
+  try{ if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(el.value); done=true; } }catch(e){}
+  if(!done){ try{ done=document.execCommand('copy'); }catch(e){} }
+  _result('copy',done, done?('已复制 '+id):'复制失败, 请长按手动复制');
 }
 initRelayCfg();
 // ── 远程操控开关 ──
