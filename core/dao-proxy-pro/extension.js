@@ -4946,9 +4946,9 @@ function getEaConfigHtml(port, nonce) {
     var slash = right.indexOf('/');
     var prov = slash >= 0 ? right.slice(0, slash) : right;
     var model = slash >= 0 ? right.slice(slash + 1) : right;
-    // ★ 显式逐档路由: 一族多档 (fast/slow/base…) 共用一条连线作用域 ——
-    //   连家族即覆盖其全部档位 uid (与双击解路读 data-uids 全断对称),
-    //   免「连 fast 而 slow 漏路 → 回落不可达官方上游」之缺 (familyTierExtend 默关时尤甚).
+    // ★ 连一族即覆盖其全部「可见档位」uid (取自 _tierGroups · 与双击解路读 data-uids 全断对称).
+    //   注: Cascade 实发的 swe-1-6-slow 等档 catalog 无独立项·不在 _tierGroups 中·
+    //   故其归一由后端 dao_router 的同族档位延伸(familyTierExtend 默开)兜底·二者互补.
     var uids = (_tierGroups[left] && _tierGroups[left].length) ? _tierGroups[left] : [left];
     var route = { provider: prov, model: model, maxOutputTokens: 16384, thinkingEnabled: false };
     var st = document.getElementById('statusText');
