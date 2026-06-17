@@ -7868,6 +7868,30 @@ function _buildExpTag(h) {
   return '<span class="days" style="color:#888" title="无到期限制 · 账号可用即发亮 ∞">∞</span>';
 }
 
+// v4.9.7 · F4: 识别某号是否"进行中对话"(running/待输入/卡住), 据 _dvStatusAgg 聚合缓。
+//   口径与 badge/追踪面一致: total>0 且 3 分内有效且 running+awaiting+blocked > 0。
+function _hasLiveConv(email) {
+  try {
+    const st = _dvStatusAgg.get(String(email || "").toLowerCase());
+    if (!st || (st.total | 0) <= 0) return false;
+    if (Date.now() - (st.ts || 0) > 180000) return false;
+    return ((st.running | 0) + (st.awaiting | 0) + (st.blocked | 0)) > 0;
+  } catch {
+    return false;
+  }
+}
+// v4.9.7 · F4: 显示顺序 — 有进行中对话的号顶置, 其余维持原编号顺序 (稳排; 与手机版 _computeOrder 同源)。
+function _wamDisplayOrder(accounts) {
+  const order = accounts.map((_, i) => i);
+  order.sort((x, y) => {
+    const lx = _hasLiveConv(accounts[x].email) ? 1 : 0;
+    const ly = _hasLiveConv(accounts[y].email) ? 1 : 0;
+    if (lx !== ly) return ly - lx; // 进行中 → 顶置
+    return x - y; // 其余维持原编号顺序
+  });
+  return order;
+}
+
 function buildHtml() {
   if (!_store)
     return `<html><body style="color:#888;font:12px sans-serif;padding:12px">WAM 初始化中...</body></html>`;
@@ -7876,8 +7900,16 @@ function buildHtml() {
     accounts = store.accounts,
     activeI = store.activeIdx;
   const autoOn = _cfg("autoRotate", true);
+  // v4.9.7 · F4: 进行中对话的账号自动顶置(与 dao-vsix 二合一同源); 仅改显示顺序, data-i/编号/activeIdx 仍用原索引 i → 切号/锁/onclick 全不受影响。
+  const _dispOrder = _wamDisplayOrder(accounts);
+  const _liveCount = _dispOrder.filter((i) => _hasLiveConv(accounts[i].email)).length;
   let rows = "";
-  for (let i = 0; i < accounts.length; i++) {
+  for (let _oi = 0; _oi < _dispOrder.length; _oi++) {
+    const i = _dispOrder[_oi];
+    // v4.9.7 · F4: 在"运行组"与"其余"边界插入对齐分隔栏 (仅两组都非空时)
+    if (_oi === _liveCount && _liveCount > 0 && _liveCount < _dispOrder.length) {
+      rows += '<div class="run-sep"><span>&#9650; 运行中对话 · 其余账号 &#9660;</span></div>';
+    }
     const a = accounts[i],
       h = store.getHealth(a.email);
     const dvTag = devinCloud.getTag(a.email);
@@ -8056,6 +8088,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .add-body .add-hint{font-size:10px;color:#555;margin-top:4px}
 .sec{display:flex;justify-content:space-between;align-items:center;color:#777;font-size:11px;margin:8px 0 3px;padding-bottom:3px;border-bottom:1px solid var(--border)}
 .row{display:flex;align-items:center;padding:3px 2px;border-bottom:1px solid #1a1a1a;gap:4px;user-select:none}
+.run-sep{display:flex;align-items:center;justify-content:center;gap:6px;margin:3px 0;padding:2px 0;font-size:9px;font-weight:700;letter-spacing:.5px;color:#6cb3ff;border-top:1px dashed #2d4a63;border-bottom:1px dashed #2d4a63;background:#141c24;user-select:none}
 .row:hover{background:#2a2d2e}
 .row.sel{background:#1f3a45;box-shadow:inset 2px 0 0 var(--blue)}
 .row.sel:hover{background:#254655}
@@ -8202,6 +8235,8 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-trk-st.blocked{color:#f44;background:#3a1a1a}
 .dv-trk-no{flex-shrink:0;min-width:13px;height:13px;line-height:13px;text-align:center;font-size:9px;font-weight:700;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:3px;padding:0 2px}
 .dv-trk-who{color:#d7ba7d;flex-shrink:0;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dv-trk-x{margin-left:auto;flex-shrink:0;color:#777;font-size:10px;cursor:pointer;padding:0 3px;border-radius:3px;line-height:1.2}
+.dv-trk-x:hover{color:#f44;background:#3a1a1a}
 .dv-trk-tt{color:#bbb;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cv-summary{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px}
 .cv-summary b{margin-left:2px}
@@ -8336,7 +8371,7 @@ function dvConvZipBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u271
 function dvConvDelBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u2717 先勾选对话');return;}vscode.postMessage({type:'dvConvDelBatch',index:i,devinIds:ids});}
 /* v4.9.6 · C: 本地对话拉取(已清零号) — 切换显示 + 请求本账号本地备份清单 */
 function dvLocalConvs(i){const c=document.getElementById('dvLocal'+i);if(!c)return;if(c.style.display!=='none'&&c.innerHTML.trim()){c.style.display='none';return;}c.style.display='block';c.innerHTML='<span style="color:#888;font-size:11px">\u8bfb\u53d6\u672c\u5730\u5907\u4efd\u2026</span>';vscode.postMessage({type:'dvLocalConvs',index:i});}
-document.addEventListener('click',function(e){const t=e.target;if(!t||!t.closest)return;const v=t.closest('.dv-localview');if(v&&v.dataset.path){e.preventDefault();vscode.postMessage({type:'devinViewBackupConv',path:v.dataset.path});return;}const r=t.closest('.dv-localreveal');if(r&&r.dataset.path){e.preventDefault();vscode.postMessage({type:'devinRevealPath',path:r.dataset.path});return;}});
+document.addEventListener('click',function(e){const t=e.target;if(!t||!t.closest)return;const v=t.closest('.dv-localview');if(v&&v.dataset.path){e.preventDefault();vscode.postMessage({type:'devinViewBackupConv',path:v.dataset.path});return;}const r=t.closest('.dv-localreveal');if(r&&r.dataset.path){e.preventDefault();vscode.postMessage({type:'devinRevealPath',path:r.dataset.path});return;}const x=t.closest('.dv-trk-x');if(x&&x.dataset.id){e.preventDefault();e.stopPropagation();const it=x.closest('.dv-trk-item');if(it)it.style.display='none';vscode.postMessage({type:'dvUntrackConv',id:x.dataset.id});return;}});
 /* v4.7.0 · 知识库/剧本/密钥 多选(Shift) + 查看/下载/删除 + 批量 */
 let _bdLast={};
 function _bdChks(i,k){return [...document.querySelectorAll('.bd-chk[data-i="'+i+'"][data-k="'+k+'"]')];}
@@ -8402,7 +8437,8 @@ document.addEventListener('mouseover',e=>{if(!_dragSel)return;const row=_hitSel(
 document.addEventListener('mouseup',()=>{_dragSel=false;});
 document.addEventListener('change',e=>{if(e.target.classList.contains('chk')){const i=parseInt(e.target.dataset.i);if(Number.isFinite(i))_lastSel=i;updateBatchBar();}});
 // v4.9.6 · 滚动位置持久化 — 根治 _broadcastUI 全量重建后回弹到顶("回主页"). 守柔: 程序复位期不计为用户滚动.
-let _scrTimer=null,_scrRestoring=false;
+// v4.9.7 · F2/F3: 增量更新去抖签名 — 状态/对话区每轮轮询若内容未变则不动 DOM, 根治"一刷新就闪/跳/回弹".
+let _scrTimer=null,_scrRestoring=false,_lastConvHtml='',_lastRunKey='';
 function _saveScroll(){if(_scrRestoring)return;try{const el=document.scrollingElement||document.documentElement;const st=vscode.getState()||{};vscode.setState({...st,scrollTop:el.scrollTop|0});}catch(e){}}
 window.addEventListener('scroll',function(){if(_scrRestoring)return;if(_scrTimer)clearTimeout(_scrTimer);_scrTimer=setTimeout(_saveScroll,100);},{passive:true});
 function _restoreScroll(){try{const st=vscode.getState()||{};const y=st.scrollTop|0;if(y<=0)return;const el=document.scrollingElement||document.documentElement;_scrRestoring=true;const ap=function(){el.scrollTop=y;};ap();requestAnimationFrame(ap);setTimeout(ap,80);setTimeout(function(){ap();_scrRestoring=false;},240);}catch(e){_scrRestoring=false;}}
@@ -8422,9 +8458,9 @@ if(m.type==='quotaChange'){const r=document.querySelector('.row[data-email=\"'+(
 if(m.type==='devinOverview'){const d=document.getElementById('dvDetail'+m.index);if(d&&d.classList.contains('open')){d.innerHTML=m.html||'';}}
 if(m.type==='gitDone'){const d=document.getElementById('dvDetail'+m.index);if(d&&d.classList.contains('open')){vscode.postMessage({type:'devinExpand',index:m.index,refresh:true});}}
 if(m.type==='gitBatchDone'){document.querySelectorAll('.dv-detail.open').forEach(d=>{const i=parseInt(d.getAttribute('data-i'));if(Number.isFinite(i))vscode.postMessage({type:'devinExpand',index:i,refresh:true});});}
-if(m.type==='devinRunStatus'&&Array.isArray(m.items)){document.querySelectorAll('.dv-run').forEach(el=>{el.querySelectorAll('.run,.awa,.blk').forEach(x=>x.remove());});m.items.forEach(it=>{const el=document.querySelector('.dv-run[data-email="'+(it.email||'').toLowerCase()+'"]');if(!el)return;const tip=(it.titles||[]).join(' | ');const mk=(cls,txt,n)=>{if(!(n>0))return;const s=document.createElement('span');s.className=cls;s.textContent=txt+n;s.title=tip;el.insertBefore(s,el.firstChild);};mk('blk','\\u25CF 卡住',it.blocked);mk('awa','\\u25CF 待输入',it.awaiting);mk('run','\\u25CF 运行',it.running);});}
+if(m.type==='devinRunStatus'&&Array.isArray(m.items)){const _rk=JSON.stringify(m.items);if(_rk===_lastRunKey)return;_lastRunKey=_rk;document.querySelectorAll('.dv-run').forEach(el=>{el.querySelectorAll('.run,.awa,.blk').forEach(x=>x.remove());});m.items.forEach(it=>{const el=document.querySelector('.dv-run[data-email="'+(it.email||'').toLowerCase()+'"]');if(!el)return;const tip=(it.titles||[]).join(' | ');const mk=(cls,txt,n)=>{if(!(n>0))return;const s=document.createElement('span');s.className=cls;s.textContent=txt+n;s.title=tip;el.insertBefore(s,el.firstChild);};mk('blk','\\u25CF 卡住',it.blocked);mk('awa','\\u25CF 待输入',it.awaiting);mk('run','\\u25CF 运行',it.running);});}
 if(m.type==='devinConvCap'&&Array.isArray(m.items)){m.items.forEach(it=>{const sp=document.querySelector('.dv-stat[data-capemail="'+(it.email||'').toLowerCase()+'"]');if(sp){const c=(typeof it.cap==='number')?it.cap.toFixed(2):'\\u2014';sp.textContent='\\u5bf9\\u8bdd\\u4e0a\\u9650 $'+c+(it.drain?' \\u00b7\\u62bd\\u5e72\\u4e2d':'')+(it.inUse?' \\u00b7\\u4f7f\\u7528\\u4e2d':'');sp.style.color=it.drain?'#dcaa55':(it.inUse?'#4ec9b0':'');}});}
-if(m.type==='convUpdate'&&m.html){const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}}}}
+if(m.type==='convUpdate'&&m.html){if(m.html===_lastConvHtml)return;_lastConvHtml=m.html;const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){const el=document.scrollingElement||document.documentElement;const _y=el?el.scrollTop|0:0;old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}if(el&&_y>0&&el.scrollTop!==_y){el.scrollTop=_y;requestAnimationFrame(()=>{el.scrollTop=_y;});}}}}
 if(m.type==='devinBackupTree'){_dvShowBackups(m.tree);}
 if(m.type==='dvLocalConvList'){const c=document.getElementById('dvLocal'+m.index);if(c){c.style.display='block';c.innerHTML=m.html||'';}}
 });
@@ -8935,7 +8971,9 @@ async function _dvRunPoll() {
       const auth = devinCloud.getCachedAuth(acc.email);
       if (!auth) continue;
       try {
-        const active = await devinCloud.listRunningSessions(auth);
+        let active = await devinCloud.listRunningSessions(auth);
+        // v4.9.7 · F1: 永久取消追踪的对话(devinId 命中)从活跃集剔除 — 不统计/不通知/不显示, 跨窗口持久
+        if (_untrackedConvUuids.size) active = active.filter((s) => !(s.devinId && _untrackedConvUuids.has(s.devinId)));
         let running = 0, awaiting = 0, blocked = 0;
         for (const s of active) {
           if (s.statusClass === "awaiting") awaiting++;
@@ -8953,7 +8991,7 @@ async function _dvRunPoll() {
             no: _dvAccountNo(acc.email),
             tag: devinCloud.getTag(acc.email) || "",
             running, awaiting, blocked, total: active.length,
-            items: active.map((r) => ({ title: r.title, cls: r.statusClass })),
+            items: active.map((r) => ({ title: r.title, cls: r.statusClass, id: r.devinId })),
             ts: Date.now(),
           });
           _dvDetectFinished(acc.email, active); // 有活跃 → 正常离场检测
@@ -9155,10 +9193,11 @@ function _dvStatusAggHtml() {
     for (const it of st.items.slice(0, 6)) {
       const cls = it.cls === "running" ? "running" : it.cls === "awaiting" ? "awaiting" : "blocked";
       const tip = cls === "running" ? "运行中" : cls === "awaiting" ? "等待你的输入" : "卡住/额度超限";
+      const _xBtn = it.id ? '<span class="dv-trk-x" data-id="' + _esc(String(it.id)) + '" title="取消追踪此对话(永久·不再统计/通知·可wam.clearConvUntrack复原)">\u2715</span>' : "";
       rows.push('<div class="dv-trk-item">' + noBadge + '<span class="dv-trk-st ' + cls + '" title="' + tip + '">' +
         (cls === "running" ? "运行" : cls === "awaiting" ? "待输入" : "卡住") + "</span>" +
         '<span class="dv-trk-who">' + _esc(who) + "</span>" +
-        '<span class="dv-trk-tt" title="' + _esc(it.title) + '">' + _esc(_truncTitle(it.title, 22)) + "</span></div>");
+        '<span class="dv-trk-tt" title="' + _esc(it.title) + '">' + _esc(_truncTitle(it.title, 22)) + "</span>" + _xBtn + "</div>");
     }
   }
   const cached = devinCloud.cachedEmails().length;
@@ -10767,6 +10806,34 @@ async function handleWebviewMessage(msg) {
           await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(msg.path));
         } catch (e) {
           _toast("\u2717 定位失败: " + String((e && e.message) || e));
+        }
+        break;
+      }
+      // v4.9.7 · F1: 取消追踪某条 Devin Cloud 对话(点叉号) — devinId 入永久取消集·持久·跨窗口, 立即从聚合移除并刷新追踪区
+      case "dvUntrackConv": {
+        try {
+          const _id = String(msg.id || "");
+          if (!_id) break;
+          _untrackedConvUuids.add(_id);
+          _saveUntrackedToDisk();
+          // 从聚合状态剔除该对话 → 计数/列表即时更新 (无须等下一轮轮询)
+          for (const [_em, _st] of _dvStatusAgg) {
+            if (!_st || !Array.isArray(_st.items)) continue;
+            const kept = _st.items.filter((x) => x.id !== _id);
+            if (kept.length !== _st.items.length) {
+              _st.items = kept;
+              _st.total = kept.length;
+              _st.running = kept.filter((x) => x.cls === "running").length;
+              _st.awaiting = kept.filter((x) => x.cls === "awaiting").length;
+              _st.blocked = kept.filter((x) => x.cls === "blocked").length;
+              if (!kept.length) _dvStatusAgg.delete(_em);
+            }
+          }
+          try { _dvWriteSharedStatus(); } catch {}
+          try { _broadcastConvSection(); } catch {}
+          _toast("\u2713 已取消追踪此对话");
+        } catch (e) {
+          log("dvUntrackConv err: " + String((e && e.message) || e));
         }
         break;
       }
