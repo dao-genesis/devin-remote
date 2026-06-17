@@ -10,8 +10,8 @@ android {
         applicationId "ai.devin.rtflow"
         minSdk 24
         targetSdk 34
-        versionCode 32
-        versionName "0.15.1"
+        versionCode 33
+        versionName "0.15.2"
     }
 
     signingConfigs {

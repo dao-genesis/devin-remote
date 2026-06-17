@@ -179,7 +179,23 @@
 
   // ── 账号存储 (localStorage, 两 WebView 同源共享) ──────────────────────────
   function loadAcc() { try { return JSON.parse(localStorage.getItem("rtflow.accounts") || "[]"); } catch (e) { return []; } }
-  function saveAcc(a) { localStorage.setItem("rtflow.accounts", JSON.stringify(a || [])); }
+  function saveAcc(a) {
+    var s = JSON.stringify(a || []);
+    localStorage.setItem("rtflow.accounts", s);
+    // 镜像到共享保险箱(Documents/DevinCloud) → 中继远程改账(登录/加号)也卸载不丢
+    try { var N = (typeof window !== "undefined" && window.Native) || {}; if (a && a.length && N.vaultSave) N.vaultSave("accounts", s); } catch (e) {}
+  }
+  // 引擎冷启: 本地账号为空但保险箱有 → 回读 (与 switch.html 同策略, 远程/UI 任一路径都能恢复)
+  function restoreAccFromVault() {
+    try {
+      var N = (typeof window !== "undefined" && window.Native) || {};
+      if (!N.vaultLoad) return;
+      var cur = loadAcc(); if (cur.length) return;
+      var raw = N.vaultLoad("accounts"); if (!raw) return;
+      var arr = JSON.parse(raw); if (arr && arr.length) localStorage.setItem("rtflow.accounts", raw);
+    } catch (e) {}
+  }
+  try { restoreAccFromVault(); } catch (e) {}
   function getActive() { return localStorage.getItem("rtflow.active") || ""; }
   function setActive(id) { localStorage.setItem("rtflow.active", id || ""); }
   function findAcc(id) { var a = loadAcc(); for (var i = 0; i < a.length; i++) if (a[i].id === id || a[i].email === id) return a[i]; return null; }

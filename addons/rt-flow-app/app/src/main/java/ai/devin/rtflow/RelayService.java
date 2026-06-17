@@ -94,6 +94,8 @@ public class RelayService extends Service {
         @JavascriptInterface public void closeTab(int tabId) { TabActivity.closeById(tabId); }
         @JavascriptInterface public void writeFile(String name, String content) { writeUserFile(name, content); }
         @JavascriptInterface public String readFile(String name) { return readUserFile(name); }
+        @JavascriptInterface public void vaultSave(String key, String json) { if (key != null) vaultWrite(key, json); }
+        @JavascriptInterface public String vaultLoad(String key) { return key == null ? "" : vaultRead(key); }
         @JavascriptInterface public void reload() { main.post(() -> { if (engine != null) engine.reload(); }); }
         @JavascriptInterface public void log(String s) { android.util.Log.i("RTFlowEngine", s == null ? "" : s); }
         /** 原生 HTTP (无 CORS, 可设 Origin/Referer) — 登录/额度/会话/Git 的底座; 结果经 window.__httpCb 回灌。 */
@@ -445,6 +447,24 @@ public class RelayService extends Service {
     }
     private String readUserFile(String name) {
         try { File f = new File(getFilesDir(), safe(name)); if (!f.exists()) return ""; java.io.FileInputStream i = new java.io.FileInputStream(f); String r = slurp(i); i.close(); return r; }
+        catch (Exception e) { return ""; }
+    }
+    // ── 数据保险箱: 共享文件夹 Documents/DevinCloud (脱离应用沙箱, 卸载/重装/换机不丢) ──
+    // 与 MainActivity.vaultDir() 同一目录, 引擎(中继驱动)侧也能持久化/回读账号, UI 未开也不丢。
+    private File vaultDir() {
+        File d = new File(android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOCUMENTS), "DevinCloud");
+        if (!d.exists()) d.mkdirs();
+        return d;
+    }
+    private void vaultWrite(String key, String data) {
+        try { File f = new File(vaultDir(), safe(key) + ".json");
+            java.io.FileOutputStream o = new java.io.FileOutputStream(f); o.write((data == null ? "" : data).getBytes("UTF-8")); o.close(); }
+        catch (Exception ignored) {}
+    }
+    private String vaultRead(String key) {
+        try { File f = new File(vaultDir(), safe(key) + ".json"); if (!f.exists()) return "";
+            java.io.FileInputStream i = new java.io.FileInputStream(f); String r = slurp(i); i.close(); return r; }
         catch (Exception e) { return ""; }
     }
     private static String safe(String n) { return n == null ? "x" : n.replaceAll("[^A-Za-z0-9_.-]", "_"); }
