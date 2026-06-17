@@ -628,6 +628,7 @@ public class MainActivity extends AppCompatActivity {
         } else {
             st.setUserAgentString(st.getUserAgentString().replace("; wv", "")); // 贴近真浏览器
             web.addJavascriptInterface(new AutofillBridge(web), "__dcaf"); // 登录账密自动保存/填充 (Chrome 式无感)
+            web.addJavascriptInterface(new TranslateBridge(web), "__dcTr"); // 整页翻译 (Edge 引擎, 原生桥绕过页面 CSP/跨域)
         }
         // 下载捕获桥(所有标签都挂, 仅 saveBase64 一个能力): 把页面内 blob:/data:/<a download> 下载收进右上下载列表
         web.addJavascriptInterface(new DlBridge(), "RTDL");
@@ -1168,25 +1169,21 @@ public class MainActivity extends AppCompatActivity {
         try { ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             cm.setPrimaryClip(ClipData.newPlainText("url", displayUrl(t))); toast("已复制网址"); } catch (Exception e) { toast("复制失败"); }
     }
-    /** 顶栏翻译: 一键整页翻译 (Google 网页翻译引擎·同电脑端 Chrome), 再点恢复原文。 */
+    /** 顶栏翻译: 一键整页翻译 (Edge 浏览器内置免费引擎·无 key·国内可直连), 再点恢复原文。 */
     private void toggleTranslate() {
         Tab t = cur(); if (t == null) { toast("无页面"); return; }
         String u = displayUrl(t);
         if (u == null || u.startsWith("rtflow:") || u.startsWith("file:")) { toast("内部页不可翻译"); return; }
-        if (t.translated) { t.translated = false; toast("恢复原文"); try { t.web.reload(); } catch (Exception ignored) {} return; }
-        t.translated = true; toast("翻译中…(国内需开 VPN)"); applyTranslate(t.web);
+        if (t.translated) { t.translated = false; toast("恢复原文");
+            try { t.web.evaluateJavascript("window.__dcTransRestore&&window.__dcTransRestore()", null); } catch (Exception ignored) {}
+            return; }
+        t.translated = true; toast("翻译中…"); applyTranslate(t.web);
     }
-    /** 注入 Google 网页翻译元素并触发整页翻译为中文 (autoDisplay=false, 仅翻译不弹横幅)。 */
+    /** 注入内容脚本翻译引擎 (translate.js): 遍历文本节点 → 经原生桥 __dcTr 调 Edge 翻译 API → 回填译文。 */
     private void applyTranslate(WebView w) {
         if (w == null) return;
-        String js = "(function(){try{"
-            + "function trig(){var c=document.querySelector('.goog-te-combo');if(c){c.value='zh-CN';c.dispatchEvent(new Event('change'));return true;}return false;}"
-            + "if(window.__dcTe){var n=0,t=setInterval(function(){if(trig()||++n>40)clearInterval(t);},250);return;}"
-            + "window.__dcTe=1;window.googleTranslateElementInit=function(){try{new google.translate.TranslateElement({pageLanguage:'auto',autoDisplay:false},'__dcGte');}catch(e){}};"
-            + "var d=document.createElement('div');d.id='__dcGte';d.style.display='none';document.body.appendChild(d);"
-            + "var s=document.createElement('script');s.src='https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit';document.body.appendChild(s);"
-            + "var n=0,t=setInterval(function(){if(trig()||++n>40)clearInterval(t);},300);"
-            + "}catch(e){}})();";
+        String js = readAssetText("engine/translate.js");
+        if (js == null || js.isEmpty()) return;
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     /** 页面加载完: 若该站有保存登录, 自动填充 (Chrome 式无感, 不覆盖已填内容)。 */
@@ -1227,6 +1224,86 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void onLogin(String u, String p) {
             if (p == null || p.isEmpty()) return;
             main.post(() -> promptSaveLogin(owner, u, p));
+        }
+    }
+
+    // ── 整页翻译: Edge 浏览器内置翻译引擎 (免费·无 key·国内可直连) ──────────────
+    //   令牌: GET edge.microsoft.com/translate/auth (JWT 约 10 分钟, 缓存复用)
+    //   翻译: POST api-edge.cognitive.microsofttranslator.com/translate
+    //   走原生 HTTP → 绕开页面 CSP/同源策略 (浏览器扩展用后台页, 我们用原生桥, 等效)
+    private static String sTransToken = "";
+    private static long sTransTokenTs = 0;
+    private static final Object sTransLock = new Object();
+    private String ensureTransToken() throws Exception {
+        synchronized (sTransLock) {
+            if (!sTransToken.isEmpty() && System.currentTimeMillis() - sTransTokenTs < 8 * 60 * 1000) return sTransToken;
+        }
+        HttpURLConnection c = (HttpURLConnection) new URL("https://edge.microsoft.com/translate/auth").openConnection();
+        try {
+            c.setConnectTimeout(8000); c.setReadTimeout(8000);
+            c.setRequestProperty("User-Agent", "Mozilla/5.0");
+            InputStream is = c.getInputStream();
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096]; int n; while ((n = is.read(buf)) > 0) bos.write(buf, 0, n); is.close();
+            String tok = new String(bos.toByteArray(), StandardCharsets.UTF_8).trim();
+            synchronized (sTransLock) { sTransToken = tok; sTransTokenTs = System.currentTimeMillis(); }
+            return tok;
+        } finally { c.disconnect(); }
+    }
+    /** 文本数组 → 译文数组 (顺序一致, 失败项为空串)。后台线程调用。 */
+    private org.json.JSONArray doTranslate(org.json.JSONArray texts, String to) throws Exception {
+        String token = ensureTransToken();
+        org.json.JSONArray body = new org.json.JSONArray();
+        for (int i = 0; i < texts.length(); i++) {
+            org.json.JSONObject o = new org.json.JSONObject(); o.put("Text", texts.optString(i, "")); body.put(o);
+        }
+        String tgt = (to == null || to.isEmpty()) ? "zh-Hans" : to;
+        String url = "https://api-edge.cognitive.microsofttranslator.com/translate?api-version=3.0&to="
+            + java.net.URLEncoder.encode(tgt, "UTF-8");
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        try {
+            c.setConnectTimeout(10000); c.setReadTimeout(15000);
+            c.setRequestMethod("POST"); c.setDoOutput(true);
+            c.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            c.setRequestProperty("Authorization", "Bearer " + token);
+            java.io.OutputStream os = c.getOutputStream();
+            os.write(body.toString().getBytes(StandardCharsets.UTF_8)); os.close();
+            int code = c.getResponseCode();
+            InputStream is = (code >= 200 && code < 400) ? c.getInputStream() : c.getErrorStream();
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096]; int n; while (is != null && (n = is.read(buf)) > 0) bos.write(buf, 0, n);
+            if (is != null) is.close();
+            if (code == 401) synchronized (sTransLock) { sTransToken = ""; }   // 令牌过期 → 下次重取
+            org.json.JSONArray res = new org.json.JSONArray(new String(bos.toByteArray(), StandardCharsets.UTF_8));
+            org.json.JSONArray out = new org.json.JSONArray();
+            for (int i = 0; i < res.length(); i++) {
+                org.json.JSONArray tr = res.getJSONObject(i).optJSONArray("translations");
+                out.put((tr != null && tr.length() > 0) ? tr.getJSONObject(0).optString("text", "") : "");
+            }
+            return out;
+        } finally { c.disconnect(); }
+    }
+    public class TranslateBridge {
+        private final WebView owner;
+        TranslateBridge(WebView w) { this.owner = w; }
+        @JavascriptInterface public void translate(String reqId, String textsJson, String to) {
+            if (reqId == null || textsJson == null) return;
+            new Thread(() -> {
+                String b64;
+                try {
+                    org.json.JSONArray out = doTranslate(new org.json.JSONArray(textsJson), to);
+                    b64 = android.util.Base64.encodeToString(out.toString().getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP);
+                } catch (Exception e) {
+                    b64 = android.util.Base64.encodeToString("[]".getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP);
+                }
+                final String fb64 = b64; final String rid = reqId.replace("\\", "\\\\").replace("'", "\\'");
+                main.post(() -> { try {
+                    owner.evaluateJavascript("window.__dcTrCb&&window.__dcTrCb('" + rid + "','" + fb64 + "')", null);
+                } catch (Exception ignored) {} });
+            }).start();
+        }
+        @JavascriptInterface public void report(int count) {
+            main.post(() -> toast(count > 0 ? ("已翻译 " + count + " 段") : "本页无可翻译内容"));
         }
     }
     private long lastSavePrompt = 0;
