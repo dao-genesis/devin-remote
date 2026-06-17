@@ -7,26 +7,35 @@
 > 真实出站载荷 dump 交叉佐证，非桩、非臆造。
 
 **How tested:** 经 DAO Bridge `/api/exec` 在 141 上以 `python` 直连本机 origin
-`http://127.0.0.1:8937` 的 `/origin/*` 控制面。origin 为 VS Code 1.124.0 扩展
-`dao-agi.dao-proxy-pro-9.9.298` 进程内（in-process）后端，pid 53044，node v24.15.0。
+`/origin/*` 控制面。主测目标为**用户实际使用的 Devin Desktop**（`E:\Windsurf\Devin.exe`，
+kernel 1.110.1）扩展 `dao-agi.dao-proxy-pro-9.9.298` 进程内（in-process）后端 `:37808`，
+pid 51640，node v22.22.0；VS Code 1.124.0 同名扩展 origin `:8937` 作旁路对照。
 渠道凭据全部安于本机 `~/.codeium/dao-byok/配置.json`（**绝不入库**）。
 
-**Result:** 后端核心全链路 **PASS**。路由（builtin-stub / DeepSeek / 小米 MiMo）端到端
-200、去名出站零（大写身份）泄漏、经文热切零窗口重载。唯一非通过项 **gpt-4.1 → GitHub
-Models 渠道**，根因为 **141 网络无法出网到 `models.github.ai`（直连与 127.0.0.1:7890
-代理均超时）**，属环境/网络条件，**非 proxy-pro 代码缺陷**。
+**Result:** 后端核心全链路 **PASS**。**关键：proxy-pro 9.9.298 在用户实际使用的 Devin
+Desktop 中已安装并实时运行**（独立 origin `:37808`，与 VS Code 的 `:8937` 双 origin 并存），
+Devin Desktop 侧**四渠道全部端到端 200**（builtin-stub / DeepSeek / 小米 MiMo / **GitHub**），
+去名出站零（大写身份）泄漏、经文热切零窗口重载。VS Code 侧首测时 GitHub 渠道一度超时，
+20 分钟后 Devin Desktop 侧复测恢复 200 —— 证实为**瞬时网络**（141 出网到 `models.github.ai`），
+**非 proxy-pro 代码缺陷**。
 
 ---
 
-## 0. 起点：141 实机交接前状态（实测发现）
+## 0. 起点：141 实机双 IDE / 双 origin 拓扑（实测发现）
 
-| 项 | 状态 |
-|---|---|
-| 安装位置 | `~/.vscode/extensions/dao-agi.dao-proxy-pro-9.9.298`（**非** `~/.devin/extensions`；后者只有 dao-vsix） |
-| 宿主 | Microsoft VS Code 1.124.0（`code --list-extensions`：dao-proxy-pro@9.9.298 / dao-bridge@3.3.0 / dao-vsix@3.16.0 …） |
-| origin 后端 | `:8937` 实时运行，pid 53044，`ea_running=true` |
-| 渠道配置 | `~/.codeium/dao-byok/配置.json`（6307B）：github / deepseek / freemodel-test / xiaomi 四渠道 + 10 条路由 |
-| 仓库 9.9.298 | 与实机一致（最新已落地，无需重新部署） |
+纠正交接文档旧说（“`.devin/extensions` 无 proxy-pro”）：实测 **9.9.298 在两处 IDE 均已安装并各自运行 origin**。
+
+| 项 | Devin Desktop（用户实际使用 · 关键） | VS Code（旁路） |
+|---|---|---|
+| 安装位置 | `~/.devin/extensions/dao-agi.dao-proxy-pro-9.9.298`（extensions.json 已注册） | `~/.vscode/extensions/dao-agi.dao-proxy-pro-9.9.298` |
+| 宿主进程 | `E:\Windsurf\Devin.exe` ext-host pid 51640（与 DAO Bridge 同进程），kernel 1.110.1，node v22.22.0 | `Microsoft VS Code` Code.exe pid 30232，1.124.0，node v24.15.0 |
+| origin 端口 | **`:37808`** 实时运行，`ea_running=true` | `:8937` 实时运行 |
+| LS 拦截佐证 | `_ea_diag.log` 实时增长（`routing-check _ea=true kind=INFER_STRIP` + `OFFICIAL-RESP-HEADERS`），证明 Cascade LS 经 proxy 在线去名 | 同（旁路） |
+| 渠道配置（共用） | `~/.codeium/dao-byok/配置.json`：github / deepseek / freemodel-test / xiaomi + 10 路由 | 同上 |
+
+> 结论：**“装到 VS Code 没效果”之惑已解** —— proxy-pro 在 Devin Desktop 同样已装且 origin
+> `:37808` 活跃、正在线拦截/去名 Devin Desktop 的语言服务流量。下列测试矩阵以 **Devin Desktop
+> origin `:37808`** 为准（真用户路径），VS Code `:8937` 结论附后对照。
 
 ---
 
@@ -34,13 +43,13 @@ Models 渠道**，根因为 **141 网络无法出网到 `models.github.ai`（直
 
 | # | Test | Result |
 |---|------|--------|
-| 1 | origin `:8937` 健康（mode=invert · dao_loaded · ea_running · 路由 10 · 目录 108） | PASS |
-| 2 | `/origin/ea/overview`：**49 官方家族** · 5 providers(含 builtin-stub) · 路由 10 · 可用模型 20 | PASS |
-| 3 | `/origin/ea/probe` 四渠道探活：deepseek/xiaomi alive；github 超时；freemodel 403（占位 key 既知） | PASS（结论真实） |
+| 1 | Devin Desktop origin `:37808` 健康（mode=invert · dao_loaded · ea_running · 路由 10 · 目录 108 · pid 51640） | PASS |
+| 2 | `/origin/ea/overview`：**53 官方家族** · 5 providers(含 builtin-stub) · 路由 10 · 可用模型 20 | PASS |
+| 3 | `/origin/ea/probe` 四渠道探活：**deepseek/xiaomi/github 三家 alive=200**；freemodel 403（占位 key 既知） | PASS |
 | 4 | 路由端到端 `MODEL_SWE_1_6` → builtin-stub → 200 | PASS |
 | 5 | 路由端到端 `swe-1-6-fast` → deepseek/deepseek-reasoner → 200 · `DAO-OK-DEEPSEEK` | PASS |
 | 6 | 路由端到端 `swe-1-6-slow` → xiaomi/mimo-v2.5-pro → 200 · `DAO-OK-XIAOMI` | PASS |
-| 7 | 路由端到端 `gpt-4.1` → github/openai/gpt-4.1 | **FAIL（环境/网络）** |
+| 7 | 路由端到端 `gpt-4.1` → github/openai/gpt-4.1 → 200 · `DAO-OK-GITHUB`（Devin Desktop 侧；VS Code 侧首测瞬时超时） | PASS |
 | 8 | 去名：身份提问经路由至 DeepSeek，自报 “I am DeepSeek”，无 Cascade | PASS |
 | 9 | 去名线级：真实出站 `_upstream_req_dump.json` 扫描，大写身份标记泄漏=0 | PASS |
 | 10 | 经文热切：阴符(587) ↔ 帛书老子(7126) ↔ 合一(7715)，零窗口重载 + 持久化 | PASS |
@@ -50,50 +59,47 @@ Models 渠道**，根因为 **141 网络无法出网到 `models.github.ai`（直
 
 ## 2. 证据
 
-### Test 1 — origin 健康（`GET /origin/ping`）
+### Test 1 — Devin Desktop origin 健康（`GET /origin/ping`）
 ```
-ok=true port=8937 mode=invert pid=53044 node=v24.15.0
-self_file=...\.vscode\extensions\dao-agi.dao-proxy-pro-9.9.298\vendor\bundled-origin\source.js
+ok=true port=37808 mode=invert pid=51640 node=v22.22.0
+self_file=...\.devin\extensions\dao-agi.dao-proxy-pro-9.9.298\vendor\bundled-origin\source.js
 dao_loaded=true dao_chars=7126 canon=laozi+yinfu canon_chars=7715
 ea_running=true providers=[github,deepseek,freemodel-test,xiaomi] routerReady=true routerCount=10 wire=true
 model_unlock enabled=true catalog_size=108
 ```
+（对照 VS Code 旁路：port=8937 pid=30232 node=v24.15.0 self_file=…\.vscode\…）
 
 ### Test 2 — 一站式面板数据（`GET /origin/ea/overview`）
 ```
-official_families=49  providers=5(builtin-stub,github,deepseek,freemodel-test,xiaomi)  routes=10  router_ready=true  available_models=20
+official_families=53  providers=5(builtin-stub,github,deepseek,freemodel-test,xiaomi)  routes=10  router_ready=true  available_models=20
 ```
 
-### Test 3 — 四渠道探活（`POST /origin/ea/probe`）
+### Test 3 — 四渠道探活（`POST /origin/ea/probe` · Devin Desktop :37808）
 ```
-deepseek       : alive=true  status=200  deepseek-chat        1256ms
-xiaomi         : alive=true  status=200  mimo-v2.5-pro         3893ms
-github         : alive=false reason="超 (12s)"  openai/gpt-4.1-mini   ← 出网不达
+github         : alive=true  status=200  openai/gpt-4.1-mini  3413ms  sample="pong! How can I assist you today"
+deepseek       : alive=true  status=200  deepseek-chat        1345ms
+xiaomi         : alive=true  status=200  mimo-v2.5-pro         2312ms
 freemodel-test : alive=false status=403  "restricted to official Claude Code client"  (占位 key fe_oa_*，既知)
 ```
 
-### Tests 4–7 — 路由端到端（`POST /origin/ea/test-chat`，经 router.resolveRoute 真路由表）
+### Tests 4–7 — 路由端到端（`POST /origin/ea/test-chat`，经 router.resolveRoute 真路由表 · Devin Desktop :37808）
 ```
-MODEL_SWE_1_6 → builtin-stub/stub-transport-test : 200 · "道可道也 非恒道也 · 传输层得一 · stub响应正常" · 12ms
-swe-1-6-fast  → deepseek/deepseek-reasoner        : 200 · "DAO-OK-DEEPSEEK" · 1755ms
-swe-1-6-slow  → xiaomi/mimo-v2.5-pro              : 200 · "DAO-OK-XIAOMI"   · 3261ms
-gpt-4.1       → github/openai/gpt-4.1             : ok=false · error="connect ETIMEDOUT 104.244.46.165:443" · 21011ms
+MODEL_SWE_1_6 → builtin-stub/stub-transport-test : 200 · "道可道也 非恒道也 · 传输层得一 · stub响应正常" · 58ms
+swe-1-6-fast  → deepseek/deepseek-reasoner        : 200 · "DAO-OK-DEEPSEEK" · 1478ms
+swe-1-6-slow  → xiaomi/mimo-v2.5-pro              : 200 · "DAO-OK-XIAOMI"   · 2880ms
+gpt-4.1       → github/openai/gpt-4.1             : 200 · "DAO-OK-GITHUB"   · 3446ms  (usage: prompt16/completion6, finish=stop)
 ```
-三家（含传输层桩）返回**精确要求字符串**且路由解析 + 渠道鉴权 + 协议适配（openai-compatible）
-在 141 实机全链路打通。
+四家（含传输层桩）返回**精确要求字符串**且路由解析 + 渠道鉴权 + 协议适配（openai-compatible）
+在 Devin Desktop 实机全链路打通。
 
-### Test 7 根因 — GitHub Models 出网不达（环境，非代码）
+### Test 7 备注 — GitHub 渠道瞬时网络波动（已恢复，非代码）
 ```
-node 直连 models.github.ai:443                : DIRECT_TIMEOUT
-经 127.0.0.1:7890 代理 (Invoke-WebRequest)    : 连接被关闭/超时
-渠道模型列表 GET /origin/ea/models/github     : ok=true（7 模型，来自 config）
+VS Code 侧 15:30 首测 : ok=false error="connect ETIMEDOUT 104.244.46.165:443" 21s
+Devin Desktop 侧 15:51 复测 : ok=true status=200 "DAO-OK-GITHUB" 3.4s
 ```
-- 路由解析正确（gpt-4.1 → github/openai/gpt-4.1）、模型列表与凭据均在位；
-- 唯一失败是 **TCP connect 超时**（`104.244.46.165:443`）——DeepSeek/小米（国内域名）直连皆通，
-  仅 GitHub 端不达，且本机 7890 代理当前亦无法到达该端；
-- 同一网络条件下 `git clone github.com` 亦 TLS 握手失败 → **同源网络问题**；
-- proxy-pro 行为正确：解析路由、加载模型列表、发起上游、**优雅返回 ETIMEDOUT 而不崩溃**。
-- 判定：**非缺陷**。待 141 出网（VPN/代理上游恢复）或改用国内可达渠道即恢复（参 v9.9.288 报告 github alive 之时）。
+- 两侧共用同一 141 出网，间隔约 20 分钟由超时转为 200 → 证实为**瞬时网络**（出网到 `models.github.ai`，国内直连/代理上游波动）；
+- proxy-pro 行为始终正确：路由解析、模型列表、凭据均在位，超时时**优雅返回 ETIMEDOUT 不崩溃**，网络恢复即 200；
+- 判定：**非缺陷**。DeepSeek / 小米 MiMo（国内域名）全程稳定承载 agentic 主力。
 
 ### Tests 8–9 — 去名（核心保证：出站零泄漏）
 身份提问（`swe-1-6-fast` → deepseek）回答：
@@ -118,17 +124,18 @@ set laozi+yinfu → ok=true canon=laozi+yinfu  chars=7715  prev=laozi
 ### Test 11 — 四接入模块连通（DAO Bridge）
 ```
 M1 浏览器: 隔离 Chrome --remote-debugging-port=29229 → /json/version = Chrome/149.0.7827.103 (CDP 可控)
-M2 插件本体: code --list-extensions → dao-proxy-pro@9.9.298 / dao-bridge@3.3.0 / dao-vsix@3.16.0 / dao-unified@1.0.0 …
-M3 整机: /api/exec 任意命令 + python3.12 + node v24 + 文件读写，全通
-M4 VSCode: code CLI 1.124.0 · --list-extensions / --version 可控
+M2 插件本体: code/devin --list-extensions → Devin Desktop 装 dao-proxy-pro@9.9.298 / dao-bridge@3.0.0 / dao-vsix@3.17.3；VS Code 装同名 9.9.298 + dao-bridge@3.3.0
+M3 整机: /api/exec 任意命令 + python3.12 + node v22/v24 + 文件读写，全通
+M4 IDE: code CLI 1.124.0 + devin.exe CLI · --list-extensions / --version 可控
 ```
 
 ---
 
 ## 3. 结论
 
-- 最新版 **9.9.298 已落地并实时运行**（VS Code 扩展 + origin :8937），无需重新部署。
-- 后端核心全链路 PASS：家族归一(49)/目录(108)、三渠道路由端到端 200、去名出站零泄漏、经文热切、四模块连通。
+- 最新版 **9.9.298 已落地并实时运行**于**用户实际使用的 Devin Desktop**（独立 origin `:37808`，与 VS Code `:8937` 双 origin 并存），无需重新部署。
+- 「装到 VS Code 没效果」之惑已解：proxy-pro 在 Devin Desktop **同样已装、origin 活跃、正在线拦截/去名其语言服务流量**（`_ea_diag.log` 实证）。
+- 后端核心全链路 PASS：家族归一(53)/目录(108)、**四渠道**路由端到端 200、去名出站零泄漏、经文热切、四模块连通。
 - 唯一非通过项 **GitHub 渠道**为 141 出网不达（环境/网络），**非 proxy-pro 代码缺陷**；DeepSeek/小米 MiMo 正常承载 agentic 主力。
 - 未发现需修复的功能性代码缺陷。**无为而无不为** —— 当藏者藏，当为者已为。
 
