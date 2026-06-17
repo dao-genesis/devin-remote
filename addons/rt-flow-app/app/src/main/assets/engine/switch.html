@@ -3,7 +3,7 @@
 <title>Devin Cloud 切号</title>
 <style>
 /* ═══════════════════════════════════════════════════════════════════════════
-   switch.html · 1:1 复制电脑版 RT Flow buildHtml 面板 (core/rt-flow/extension.js)
+   switch.html · 1:1 复制电脑版 Devin Cloud 手机版 buildHtml 面板 (core/rt-flow/extension.js)
    仅做的减法: ①去 Cascade/Cast Code(编辑器专属) ②去自动切号(手机=多实例注入浏览器·点击即切号)
    ③去每行 D/W 百分比条(用户指定·突出编号+账号名) · 美金额度($)保留
    通信层: vscode.postMessage → 手机桥 DaoCore / DaoCloud / Native
@@ -278,7 +278,7 @@ function domBadge(email){
 }
 function ovDollars(q){ return (q && typeof q.overageDollars==="number") ? q.overageDollars : 0; }
 
-// ── 行渲染 (1:1 桌面 RT Flow row · 去 D/W 条·去自动切号·美金额度保留) ──
+// ── 行渲染 (1:1 桌面 Devin Cloud 手机版 row · 去 D/W 条·去自动切号·美金额度保留) ──
 function rowHtml(a,i){
   var active = (a.id===getActive());
   var auth = hasAuth(a);

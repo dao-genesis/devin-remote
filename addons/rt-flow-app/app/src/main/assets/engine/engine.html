@@ -15,7 +15,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.15.8";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.15.10";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -50,10 +50,10 @@
 
   // ── 渐进式暴露文档 (Progressive Disclosure) ─────────────────────────────
   //   云端 Agent 首次接入拿综合索引; 按需加载各模块详细指南
-  //  设计 (道法自然·渐进式披露):
-  //   · getCloudMd  = 轻量「初始接入」文档 — 接入信息 + 三大核心板块概览 + 一键授权; 云端 Agent 首次只读这个
+  //  设计 (道法自然·完全开放·无限制):
+  //   · getCloudMd  = 完整「云端接入」文档 — 接入信息 + 三大核心板块「全部命令/参数/高级用法」全内联 + 对话整体提取工作流; 云端 Agent 读这一篇即可直接调用任意核心功能, 无需再分步拉取
   //   · getModuleIndex = 三大核心板块的机读概览 (browser/phone/software)
-  //   · getModuleDoc(board) = 某一板块「全部细节」— Agent 按需深入哪个板块就拉哪个的完整命令表
+  //   · getModuleDoc(board) = 某一板块「全部细节」(与 getCloudMd 内联内容一致, 供单独按板块拉取)
   //   · getLocalMd  = 重型「本地操控」文档 — 直接操控软件本体 (Native.* 桥)
   var MODULE_DOCS = {
     browser: {
@@ -66,7 +66,7 @@
       core: true,
       title: "板块二 · 手机操控 (本体 + 敏感数据 + 系统级接管)",
       summary: "文件/相册/剪贴板/通知/应用/设备信息/电池/WiFi/振动/音量 + 联系人/短信(OTP)/通话 + 无障碍系统级接管(手势·读屏·按文字点击·输入·全屏截图)。共 29 命令。",
-      content: "# 板块二 · 手机操控\n\n## 概述\n通过隧道全方位接管手机 (类 ADB/scrcpy/Windows 手机连接), 三层能力:\n1. **本体操控**: 设备信息+手机号 / 文件读写 / 相册 / 剪贴板 / 分享 / 通知 / 应用 / 电池 / WiFi / 振动 / 音量\n2. **敏感数据** (辅助全链路账号注册): 联系人 / 短信收件箱(含 OTP 验证码) / 通话记录\n3. **系统级接管** (AccessibilityService, 无需 root): 坐标手势 / 全局操作 / 读屏控件树 / 按文字点击 / 文本输入 / 全屏截图\n\n## 授权 (最小成本, 一键)\n- 基础+敏感: Agent 调 `setRemoteOps({enable:true})`; 敏感数据首次自动弹运行时权限, 用户点「允许」即可 (`phoneRequestPerms`)。\n- 系统级接管: 调 `phoneEnsureControl` — 自动开启远程开关 + 跳转无障碍设置, 用户点一次「允许」开启服务即可; 之后长期有效。\n\n## 本体 (14)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneInfo | - | 设备信息+手机号+存储 |\n| phoneListFiles | dir? | 列出目录 |\n| phoneReadFile | path, base64? | 读文件 |\n| phoneWriteFile | path, content | 写文件 |\n| phoneListPhotos | limit? | 相册图片 (MediaStore) |\n| phoneClipboard | set? | 剪贴板读写 |\n| phoneShare | text, title? | 系统分享 |\n| phoneNotify | title?, text | 发通知 |\n| phoneInstalledApps | - | 已装应用 |\n| phoneLaunchApp | package | 启动应用 |\n| phoneBattery | - | 电量/温度/充电 |\n| phoneWifiInfo | - | SSID/IP |\n| phoneVibrate | ms? | 振动 |\n| phoneVolume | set? | 音量读写 |\n\n## 敏感数据 (5, 双门禁)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneRequestPerms | - | 一次弹窗申请 联系人/短信/通话 权限 |\n| phoneHasPerm | perm | 查询权限是否已授予 |\n| phoneContacts | limit? | 读取联系人 (姓名+号码) |\n| phoneSmsInbox | limit? | 读取短信收件箱 (含 OTP) |\n| phoneCallLog | limit? | 读取通话记录 |\n\n## 系统级接管 (10, 无障碍服务)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneA11yReady | - | 无障碍服务是否已开启 |\n| phoneEnsureControl | - | 一键: 开远程开关 + 跳转无障碍设置引导开启 |\n| phoneOpenA11ySettings | - | 仅跳转系统无障碍设置 |\n| phoneTap | x, y | 坐标点击 |\n| phoneLongPress | x, y, ms? | 坐标长按 |\n| phoneSwipe | x1,y1,x2,y2, ms? | 滑动 |\n| phoneGlobalAction | action | back/home/recents/notifications/quicksettings/lockscreen/powerdialog/screenshot |\n| phoneDumpScreen | - | 导出当前界面控件树 (文本/坐标/可点击) |\n| phoneClickText | text | 按文字查找并点击 |\n| phoneInputText | text | 向焦点输入框填字 |\n| phoneScreenCapture | - | 全屏截图 base64 (API30+) |\n\n## 看屏-操作闭环示例\n```json\n{\"cmd\":\"phoneEnsureControl\"}\n{\"cmd\":\"phoneDumpScreen\"}            // 读当前界面控件 (含坐标)\n{\"cmd\":\"phoneClickText\",\"text\":\"登录\"}\n{\"cmd\":\"phoneInputText\",\"text\":\"hello\"}\n{\"cmd\":\"phoneScreenCapture\"}         // 截图验证结果\n```"
+      content: "# 板块二 · 手机操控\n\n## 概述\n通过隧道全方位接管手机 (类 ADB/scrcpy/Windows 手机连接), 三层能力:\n1. **本体操控**: 设备信息+手机号 / 文件读写 / 相册 / 剪贴板 / 分享 / 通知 / 应用 / 电池 / WiFi / 振动 / 音量\n2. **敏感数据** (辅助全链路账号注册): 联系人 / 短信收件箱(含 OTP 验证码) / 通话记录\n3. **系统级接管** (AccessibilityService, 无需 root): 坐标手势 / 全局操作 / 读屏控件树 / 按文字点击 / 文本输入 / 全屏截图\n\n## 授权 (最小成本, 一键)\n- 基础+敏感: Agent 调 `setRemoteOps({enable:true})`; 敏感数据首次自动弹运行时权限, 用户点「允许」即可 (`phoneRequestPerms`)。\n- 系统级接管: 调 `phoneEnsureControl` — 自动开启远程开关 + 跳转无障碍设置, 用户点一次「允许」开启服务即可; 之后长期有效。\n\n## 本体 (14)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneInfo | - | 设备信息+手机号+存储 |\n| phoneListFiles | dir? | 列出目录 |\n| phoneReadFile | path, base64? | 读文件 |\n| phoneWriteFile | path, content | 写文件 |\n| phoneListPhotos | limit? | 相册图片 (MediaStore) |\n| phoneClipboard | set? | 剪贴板读写 |\n| phoneShare | text, title? | 系统分享 |\n| phoneNotify | title?, text | 发通知 |\n| phoneInstalledApps | - | 已装应用 |\n| phoneLaunchApp | package | 启动应用 |\n| phoneBattery | - | 电量/温度/充电 |\n| phoneWifiInfo | - | SSID/IP |\n| phoneVibrate | ms? | 振动 |\n| phoneVolume | set? | 音量读写 |\n\n## 敏感数据 (5, 一次性授权后全开放)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneRequestPerms | - | 一次弹窗申请 联系人/短信/通话 权限 |\n| phoneHasPerm | perm | 查询权限是否已授予 |\n| phoneContacts | limit? | 读取联系人 (姓名+号码) |\n| phoneSmsInbox | limit? | 读取短信收件箱 (含 OTP) |\n| phoneCallLog | limit? | 读取通话记录 |\n\n## 系统级接管 (10, 无障碍服务)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneA11yReady | - | 无障碍服务是否已开启 |\n| phoneEnsureControl | - | 一键: 开远程开关 + 跳转无障碍设置引导开启 |\n| phoneOpenA11ySettings | - | 仅跳转系统无障碍设置 |\n| phoneTap | x, y | 坐标点击 |\n| phoneLongPress | x, y, ms? | 坐标长按 |\n| phoneSwipe | x1,y1,x2,y2, ms? | 滑动 |\n| phoneGlobalAction | action | back/home/recents/notifications/quicksettings/lockscreen/powerdialog/screenshot |\n| phoneDumpScreen | - | 导出当前界面控件树 (文本/坐标/可点击) |\n| phoneClickText | text | 按文字查找并点击 |\n| phoneInputText | text | 向焦点输入框填字 |\n| phoneScreenCapture | - | 全屏截图 base64 (API30+) |\n\n## 看屏-操作闭环示例\n```json\n{\"cmd\":\"phoneEnsureControl\"}\n{\"cmd\":\"phoneDumpScreen\"}            // 读当前界面控件 (含坐标)\n{\"cmd\":\"phoneClickText\",\"text\":\"登录\"}\n{\"cmd\":\"phoneInputText\",\"text\":\"hello\"}\n{\"cmd\":\"phoneScreenCapture\"}         // 截图验证结果\n```"
     },
     software: {
       core: true,
@@ -76,11 +76,61 @@
     }
   };
 
+  // ── 对话整体提取 工作流文档 (内联进 getCloudMd / getModuleDoc{software} / 单独 getExtractMd) ──
+  //   核心: 提取只读已有数据, 不消耗额度 → 额度耗尽账号一样能登录并整体提取历史对话+文件。
+  function CONV_EXTRACT_DOC(){
+    return [
+      "",
+      "## 七、对话整体提取工作流 (额度耗尽账号亦可·最高效)",
+      "",
+      "> 关键认知: **提取只读取账号已有的历史数据, 完全不消耗额度。** 额度耗尽 (credits=0) 的账号照样能用「邮箱+密码」登录拿到 auth1, 再整体导出全部对话与文件。",
+      "",
+      "### A. 必要信息 (提取三要素)",
+      "| 要素 | 取法 |",
+      "|------|------|",
+      "| 账号 (email + password) | 已在号池则直接用; 否则 `addAccount {email,password}` |",
+      "| auth1 / orgId | `login {email}` 自动解锁 (不消耗额度) |",
+      "| 会话ID (sessionId / devin_id) | `listSessions {id}` 列出, 取每条的 `devin_id` |",
+      "",
+      "### B. 最高效·一行整体提取 (推荐)",
+      "```",
+      "# 单条会话: 一次拿齐 元数据+完整对话md+工作日志md+文件清单, 并落盘共享保险箱",
+      "{cmd:\"extractConversation\", id:\"<email>\", sid:\"<devin_id>\", save:true}",
+      "# 整账号全部会话:",
+      "{cmd:\"extractAccountConversations\", id:\"<email>\", limit:200, includeMd:true}",
+      "```",
+      "返回字段: `conversationMd` (完整对话), `worklogMd` (工作日志/文件编辑/命令全程), `detail` (会话元数据), `files`/`fileCount` (附件清单), `saved` (落盘文件名)。",
+      "",
+      "### C. 分步法 (需要精细控制时)",
+      "1. `login {email}` → 解锁 auth1 (额度耗尽也可)。",
+      "2. `listSessions {id, limit:200}` → 拿全部会话与 `devin_id`。",
+      "3. 逐条 `exportSession {id, sid, kind:\"conversation\"}` 与 `kind:\"worklog\"`。",
+      "4. `sessionMessages` / `sessionDetail` 兜底取消息与附件。",
+      "5. 需落地手机: 加 `save:true` 写入共享保险箱 (卸载/重装不丢), 或 `phoneWriteFile` 指定路径。",
+      "",
+      "### D. 浏览器自动化提取 (无 auth1 / 只想要页面所见即所得)",
+      "若不便登录, 可用板块一直接读已登录的网页:",
+      "1. `browseOpen {url:\"https://app.devin.ai/sessions/<id>\", account:\"<email>\"}` (用该号上下文新开页, 不打扰用户当前页)。",
+      "2. `browseWaitForElement` 等内容加载 → `browseExportMd {tabIndex, save:true}` 导出整页 Markdown。",
+      "3. 或 `browseGetDom` 取完整 DOM 自行解析。",
+      "",
+      "### E. 拖拽提取 (页面内·最快: 一条会话整包拖入新窗口)",
+      "理想交互: 在切号面板的「对话追踪」里**长按一条会话 → 拖到任意网页标签松手**, 该会话的 session md 会被整包注入目标页 (上传框/拖放区), 实现「拖一下即把整段对话+文件带进新窗口」。",
+      "- 底层复用 v0.15.9 的下载拖拽通道 (ClipData 全局拖拽 + WebView OnDragListener → 注入 input[type=file]/drop)。",
+      "- 程序化等价: `extractConversation {save:true}` 落盘后, 在下载面板长按该 .md 拖入页面。",
+      "",
+      "### F. 提取产物去向",
+      "- `save:true` → 共享保险箱 `Documents/DevinCloud/` (经 Native.writeFile), 卸载/重装不丢。",
+      "- 远程取回: `phoneReadFile {path}` 读回内容, 或 `phoneShare` 系统分享。",
+      ""
+    ];
+  }
+
   // ── 25+ RPC + 管理命令 dispatch (与扩展同名, 行为按 APP 适配) ──────────────
   var CMDS = {
     getState: async function(){
       var accs = loadAcc();
-      return { ok:true, accounts: accs, active: getActive(), count: accs.length, engine:"rt-flow-app", ts: Date.now() };
+      return { ok:true, accounts: accs, active: getActive(), count: accs.length, engine:"devin-cloud-mobile", ts: Date.now() };
     },
     addAccount: async function(a){
       var acc=a.account||a;
@@ -107,6 +157,32 @@
     listSessions: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.listSessions(acc, a.limit||100); },
     sessionDetail: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.sessionDetail(acc, a.sid||a.sessionId); },
     exportSession: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.exportSession(acc, a.sid||a.sessionId, a.kind||"conversation"); },
+    // ── 对话整体提取 (额度耗尽账号亦可: 仅读已有数据, 不消耗额度) ──
+    //  一次拿齐: 元数据 + 完整对话 md + 工作日志 md + 文件清单 + (可选)落盘到共享保险箱
+    extractConversation: async function(a){
+      var acc=findAcc(a.id||a.email); if(!acc) return {ok:false,error:"无此账号 (先 addAccount/login)"};
+      if(!acc.auth1||!acc.orgId) return {ok:false,error:"该账号需先登录 (login) 解锁 auth1; 登录不消耗额度, 额度耗尽也能登录读取历史"};
+      var sid=a.sid||a.sessionId; if(!sid) return {ok:false,error:"需 sid (会话ID; 可先 listSessions 取)"};
+      var out={ok:true, account:acc.email, orgId:acc.orgId, sessionId:sid};
+      try{ var d=await DaoCloud.sessionDetail(acc, sid); if(d&&d.ok) out.detail=d.session; }catch(e){}
+      try{ var conv=await DaoCloud.exportSession(acc, sid, "conversation"); out.title=conv&&conv.title; out.conversationMd=conv&&(conv.md||conv.markdown||conv.text); out.events=conv&&conv.events; }catch(e){ out.convErr=String(e); }
+      try{ var wl=await DaoCloud.exportSession(acc, sid, "worklog"); out.worklogMd=wl&&(wl.md||wl.markdown||wl.text); }catch(e){}
+      try{ var m=await DaoCloud.sessionMessages(acc, sid); var files=[]; (m.messages||[]).forEach(function(msg){ var atts=msg.attachments||msg.files||[]; (atts||[]).forEach(function(f){ if(f&&(f.url||f.path||f.name)) files.push({name:f.name||f.path||"", url:f.url||"", path:f.path||""}); }); }); out.files=files; out.fileCount=files.length; }catch(e){}
+      if(a.save){ try{ var fn=(a.name||("session-"+sid))+".md"; var body="# 会话提取 "+sid+" ("+acc.email+")\n\n"+(out.conversationMd||"")+"\n\n---\n\n"+(out.worklogMd||""); if(N.writeFile) N.writeFile(fn, body); out.saved=fn; }catch(e){} }
+      return out;
+    },
+    // 整账号全部对话一次性提取 (额度耗尽账号亦可)
+    extractAccountConversations: async function(a){
+      var acc=findAcc(a.id||a.email); if(!acc) return {ok:false,error:"无此账号"};
+      if(!acc.auth1||!acc.orgId) return {ok:false,error:"该账号需先登录 (login)"};
+      var ls=await DaoCloud.listSessions(acc, a.limit||200); if(!ls.ok) return ls;
+      var sessions=ls.sessions||[], results=[];
+      for(var i=0;i<sessions.length;i++){ var sid=sessions[i].devin_id||sessions[i].session_id||sessions[i].id; if(!sid) continue;
+        try{ var conv=await DaoCloud.exportSession(acc, sid, "conversation"); results.push({sessionId:sid, title:(conv&&conv.title)||sessions[i].title||sessions[i].name||"", events:conv&&conv.events, ok:!!(conv&&conv.ok), md:(a.includeMd?(conv&&(conv.md||conv.markdown||conv.text)):undefined)}); }
+        catch(e){ results.push({sessionId:sid, ok:false, error:String(e)}); }
+      }
+      return {ok:true, account:acc.email, total:sessions.length, results:results};
+    },
     deleteSession: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.deleteSession(acc, a.sid||a.sessionId); },
     backupAccount: async function(a){ var acc=findAcc(a.id||a.email); if(!acc)return{ok:false,error:"无此账号"}; return await DaoCloud.backupAccount(acc, a.kind||"conversation"); },
     backupAll: async function(a){ var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var out=[]; for(var i=0;i<accs.length;i++){ try{ var b=await DaoCloud.backupAccount(accs[i], (a&&a.kind)||"conversation"); out.push({email:accs[i].email,count:b.count||0,ok:b.ok}); }catch(e){out.push({email:accs[i].email,ok:false,error:String(e)});} } return {ok:true, accounts:out}; },
@@ -310,10 +386,10 @@
       var c; try{c=JSON.parse(N.getConn?N.getConn():"{}");} catch(e){c={};}
       var pub = (c.url&&c.session)?(c.url.replace(/\/$/,'')+"/relay/"+c.session):"(未配置)";
       var md = [
-        "# Devin Cloud 手机版 · 云端接入文档 (初始)",
+        "# Devin Cloud 手机版 · 云端接入文档 (完整 · 无限制)",
         "",
-        "> 这是「初始接入」轻量文档。手机已通过公网中继挂载, 任意云端 Agent (与你一样的 Devin Cloud) 可经隧道远程驱动手机。",
-        "> 先读完三大核心板块概览, 再按用户的具体需求, 用 `getModuleDoc` 深入某一板块拉取它的全部命令细节。",
+        "> 本文档已**完全展开, 无任何渐进式披露 / 功能隐藏 / 文档级限制**: 接入信息 + 三大核心板块的全部命令·参数·高级用法 + 对话整体提取工作流, 全部内联在下方。任意云端 Agent (与你一样的 Devin Cloud) 读完此一篇即可直接按需调用任意核心功能, 无需再分步调用 `getModuleDoc`。",
+        "> 唯一保留的不是限制而是「一次性用户知情同意」(防中继 token 泄露被滥用): browse*/phone* 在硬件层需 `setRemoteOps {enable:true}` 开一次 (或 `phoneEnsureControl` 一键), 之后长期有效。",
         "",
         "## 一、接入信息",
         "- 公网入口: `" + pub + "`",
@@ -328,15 +404,15 @@
         "  -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\",\"<参数>\":\"<值>\"}}'",
         "```",
         "",
-        "## 三、三大核心板块 (概览)",
+        "## 三、三大核心板块 (概览; 全部命令细节已内联于下方第六节)",
         "",
-        "| 板块 | 一句话 | 拉取全部细节 |",
+        "| 板块 | 一句话 | 命令数 |",
         "|------|--------|------|",
-        "| **板块一 · 浏览器自动化** | 不干扰用户, 远程操作/测试/记录任意网页 (类 Playwright MCP), 19 命令 | `getModuleDoc {module:\"browser\"}` |",
-        "| **板块二 · 手机操控** | 全方位接管手机 (本体+敏感数据+无障碍系统级手势/读屏/截图), 29 命令 | `getModuleDoc {module:\"phone\"}` |",
-        "| **板块三 · Devin Cloud 软件本体** | 账号切换 + Devin Cloud 全功能CRUD + 穿透 + 安全 | `getModuleDoc {module:\"software\"}` |",
+        "| **板块一 · 浏览器自动化** | 不干扰用户, 远程操作/测试/记录任意网页 (类 Playwright MCP) | 19 |",
+        "| **板块二 · 手机操控** | 全方位接管手机 (本体+敏感数据+无障碍系统级手势/读屏/截图) | 29 |",
+        "| **板块三 · Devin Cloud 软件本体** | 账号切换 + Devin Cloud 全功能CRUD + 穿透 + 安全 | 全量 |",
         "",
-        "> 机读概览: `getModuleIndex`。完整本地操控(直接调 Native.* 桥): `getLocalMd`。",
+        "> 机读概览: `getModuleIndex`。完整本地操控(直接调 Native.* 桥): `getLocalMd`。三大板块的全部命令表与高级用法已在下方**第六节内联**, 无需另调 `getModuleDoc`。",
         "",
         "## 四、授权 (最小成本·道法自然)",
         "用户成本最小化: 大多数能力只需 Agent 一行调用, 系统级权限自动弹窗/跳转, 用户只点「允许」。",
@@ -344,7 +420,7 @@
         "- 系统级接管 (手势/读屏/截图): `phoneEnsureControl` — 自动开远程开关 + 跳转无障碍设置, 用户点一次「允许」开启服务即可, 长期有效。",
         "",
         "## 五、最常用命令速查",
-        "> 完整命令请用 `getModuleDoc`。下表仅为起步。",
+        "> 下表仅为起步; 全部命令与高级用法见下方第六节 (已内联, 无需 `getModuleDoc`)。",
         "",
         "| 命令 | 板块 | 说明 |",
         "|------|------|------|",
@@ -449,8 +525,18 @@
         "| getModuleIndex / getModuleDoc | 渐进式文档 |",
         "| hotpatch / persistModule / reloadEngine | 热修 |",
         "",
-        "</details>"
-      ].join("\n");
+        "</details>",
+        "",
+        "## 六、三大板块 · 完整命令与高级用法 (内联, 无需 getModuleDoc)"
+      ];
+      try { ["browser","phone","software"].forEach(function(k){ if(MODULE_DOCS[k]&&MODULE_DOCS[k].content){ md.push(""); md.push(MODULE_DOCS[k].content); } }); } catch(e){}
+      md = md.concat(CONV_EXTRACT_DOC());
+      md = md.join("\n");
+      return {ok:true, markdown:md, length:md.length};
+    },
+    // 单独取「对话整体提取工作流」文档 (含对话ID/账号信息/工作流)
+    getExtractMd: async function(){
+      var md = ["# Devin Cloud 手机版 · 对话整体提取工作流"].concat(CONV_EXTRACT_DOC()).join("\n");
       return {ok:true, markdown:md, length:md.length};
     },
     getLocalMd: async function(){
