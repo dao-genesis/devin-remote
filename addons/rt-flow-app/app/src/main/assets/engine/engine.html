@@ -211,8 +211,28 @@
     batchInjectPlaybook: async function(a){ if(!a||!a.title)return{ok:false,error:"需 title/body"}; var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var out=[]; for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.injectPlaybook(accs[i], a.title, a.body||""); out.push({email:accs[i].email,ok:r.ok}); }catch(e){out.push({email:accs[i].email,ok:false});} } return {ok:true, accounts:out, done:out.filter(function(x){return x.ok;}).length}; },
     // 健康检查 / 过期扫描: 对所有有 email+pw 的账号重新登录, 标记失效(过期/无效)
     healthScan: async function(){ var accs=loadAcc(), live=0, dead=0, skip=0, report=[]; for(var i=0;i<accs.length;i++){ var a=accs[i]; if(!a.email||!a.password){ skip++; report.push({email:a.email||a.id,state:"skip(无密码)"}); continue; } try{ var r=await DaoCore.loginAndStore(a.email,a.password); if(r.ok){ live++; report.push({email:a.email,state:"live",org:r.orgName}); } else { dead++; report.push({email:a.email,state:"DEAD",error:r.error}); } }catch(e){ dead++; report.push({email:a.email,state:"DEAD",error:String(e)}); } } return {ok:true, live:live, dead:dead, skip:skip, count:accs.length, report:report}; },
-    // 对话追踪: 扫所有已登录账号的运行中/受阻会话 (status 含 block/wait/stuck/running)
-    trackStuck: async function(){ var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var hits=[]; for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.listSessions(accs[i], 50); if(!r.ok)continue; (r.sessions||[]).forEach(function(s){ var st=String(s.status_enum||s.status||"").toLowerCase(); if(/block|wait|stuck|running|working|active/.test(st)){ hits.push({email:accs[i].email,sid:s.devin_id||s.session_id||s.id,title:(s.title||"").slice(0,50),status:st}); } }); }catch(e){} } return {ok:true, count:hits.length, sessions:hits}; },
+    // 对话追踪: 扫所有已登录账号, 即时识别"需你处理(action required)/卡住/待输入/运行"会话。
+    //  关键: v2sessions 每条自带 latest_status_contents(JSON) → 内含真实 enum + user_action_required;
+    //  仅看顶层 status(常年 suspended/RUNNING) 会漏掉 Devin 官方"需你处理"信号, 导致已卡住对话被判正常。
+    trackStuck: async function(){
+      function lsc(s){ var x=s&&s.latest_status_contents; if(!x)return null; if(typeof x==="object")return x; try{return JSON.parse(x);}catch(e){return null;} }
+      var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var hits=[];
+      for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.listSessions(accs[i], 50); if(!r.ok)continue;
+        (r.sessions||[]).forEach(function(s){
+          var o=lsc(s); var uar=o&&o.user_action_required;
+          var actionReq=(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null");
+          var en=String((o&&o.enum)||s.status_enum||s.status||"").toLowerCase();
+          var reason="";
+          if(actionReq) reason="action_required";
+          else if(/block|stuck|fail|error/.test(en)) reason="blocked";
+          else if(/await|wait|ask|question|input|need/.test(en)) reason="awaiting";
+          else if(/run|working|active|execut/.test(en) && !/finish|complet|suspend|stopped|expired|archiv|cancel/.test(en)) reason="running";
+          if(reason){ hits.push({email:accs[i].email,sid:s.devin_id||s.session_id||s.id,title:(s.title||"").slice(0,50),status:en,reason:reason,actionRequired:actionReq,actionLabel:(actionReq&&typeof uar==="string")?uar:undefined}); }
+        });
+      }catch(e){} }
+      var need=hits.filter(function(h){return h.reason==="action_required"||h.reason==="blocked";});
+      return {ok:true, count:hits.length, actionRequired:need.length, needAttention:need, sessions:hits};
+    },
     refreshAll: async function(){
       var accs=loadAcc(), ok=0; for(var i=0;i<accs.length;i++){ if(!accs[i].auth1)continue; try{ var r=await DaoCore.refreshQuotaFor(accs[i].id); if(r.ok)ok++; }catch(e){} }
       return {ok:true, refreshed:ok};

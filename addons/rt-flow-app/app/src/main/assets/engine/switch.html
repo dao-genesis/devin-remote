@@ -219,6 +219,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 <button onclick="dvWipeSel()" class="conv-btn conv-btn-s" title="水过无痕·清理已选账号的全部 Devin Cloud 痕迹">&#127754; 批量清理</button>
 <label class="auto-lbl" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" onchange="dvToggleAuto(this.checked)">自动备份</label>
 <label class="auto-lbl" title="备份完成且额度低于阈值时自动水过无痕清理"><input type="checkbox" id="dvAutoClean" onchange="dvToggleCleanup(this.checked)">自动清理</label>
+<button onclick="dvRunAutoCleanNow()" class="conv-btn conv-btn-s" title="立即执行自动清理全流程: 刷额度→预览低额空闲账号→全量备份→水过无痕清理→归零移出库 (可实测全流程)">&#9889; 立即清理</button>
 <label class="auto-lbl" title="额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="3" min="0" step="1" onchange="dvSetThreshold(this.value)"></label>
 <label class="auto-lbl" title="对话缓冲·知止不殆: 单话上限=余额-缓冲, 余额抵缓冲时解除让美金用尽 (默认开)"><input type="checkbox" id="dvConvCap" checked onchange="dvToggleConvCap(this.checked)">对话缓冲</label>
 <label class="auto-lbl" title="每对话上限缓冲($): 上限=余额-此缓冲">缓冲$<input type="number" id="dvConvBuf" value="3" min="0" step="0.01" onchange="dvSetConvBuffer(this.value)"></label>
@@ -460,12 +461,21 @@ async function dvFetch(a,i,d){
     d.innerHTML = dvOverviewHtml(a,i,sess,kn,pb,sc,git);
   }catch(e){ d.innerHTML='<span style="color:#f44">拉取失败: '+_esc(String(e))+'</span>'; }
 }
+// 解析 latest_status_contents (v2sessions 每条自带, JSON 字符串或对象): 内含真实 enum + user_action_required
+function _lscOf(s){ var x=s&&s.latest_status_contents; if(!x)return null; if(typeof x==="object")return x; try{return JSON.parse(x);}catch(e){return null;} }
+// 状态分类 (列表字段零成本即时判定)。优先级: 需你处理(action required) > 卡住 > 待输入 > 运行 > 完成。
+//  关键修复: 旧版只看顶层 status(常年=suspended/RUNNING), 漏了 latest_status_contents.user_action_required
+//  —— 这是 Devin 官方"需你处理/action required"信号, 漏读会把已卡住对话误判成正常。现直读该字段,
+//  全账号每轮即时命中, 不再依赖被节流的事件流探测。
 function sessStatus(s){
-  var st=String(s.status_enum||s.status||s.statusClass||"").toLowerCase();
-  if(/running|working|active/.test(st)) return ["running","运行"];
-  if(/await|wait|input|user/.test(st)) return ["awaiting","待输入"];
-  if(/block|stuck|fail|error/.test(st)) return ["blocked","卡住"];
-  if(/finish|complet|done|expired/.test(st)) return ["finished","完成"];
+  var lsc=_lscOf(s);
+  var uar=lsc&&lsc.user_action_required;
+  if(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null") return ["blocked","待处理","action"];
+  var en=String((lsc&&lsc.enum)||s.status_enum||s.status||s.statusClass||"").toLowerCase();
+  if(/block|stuck|fail|error/.test(en)) return ["blocked","卡住","error"];
+  if(/await|wait|ask|question|input|need|user/.test(en)) return ["awaiting","待输入"];
+  if(/finish|complet|expired|suspend|stopped|archiv|cancel/.test(en)) return ["finished","完成"];
+  if(/run|working|active|execut/.test(en)) return ["running","运行"];
   return ["idle","空闲"];
 }
 function sessId(s){ return s.devin_id||s.session_id||s.id||""; }
@@ -690,7 +700,7 @@ function trkHtml(){
     st.items.slice(0,6).forEach(function(it){
       if(it.uuid && _untrackedUuids.has(it.uuid)) return;
       var cls=it.cls==="running"?"running":it.cls==="awaiting"?"awaiting":"blocked";
-      var lbl=cls==="running"?"运行":cls==="awaiting"?"待输入":(it._stuck==="await"?"待你回复":it._stuck==="quota"?"额度超限":it._stuck==="error"?"报错":it._stuck==="stall"?"停滞":"卡住");
+      var lbl=cls==="running"?"运行":cls==="awaiting"?"待输入":(it._stuck==="action"?"待处理":it._stuck==="await"?"待你回复":it._stuck==="quota"?"额度超限":it._stuck==="error"?"报错":it._stuck==="stall"?"停滞":"卡住");
       var xBtn = it.uuid ? ' <span style="cursor:pointer;color:#666;margin-left:2px" onclick="stopTrack(\''+_esc(it.uuid)+'\')" title="停止追踪此对话(永久)">&times;</span>' : '';
       rows.push('<div class="dv-trk-item">'+noBadge+'<span class="dv-trk-st '+cls+'">'+lbl+'</span>'+
         '<span class="dv-trk-who">'+_esc(st.who)+'</span><span class="dv-trk-tt" title="'+_esc(it.title)+'">'+_esc(String(it.title||"").slice(0,30))+'</span>'+xBtn+'</div>');
@@ -745,7 +755,7 @@ async function pollTrk(){
       var a=accs[i]; var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)continue;
       var realNo=_noOf[a.id]||(i+1);
       var running=0,awaiting=0,blocked=0,items=[];
-      (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var cls=sessStatus(s)[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked")return; items.push({cls:cls,title:s.title||s.name||"",uuid:uuid,fsig:_liveSig(s)}); });
+      (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var ssr=sessStatus(s); var cls=ssr[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked")return; items.push({cls:cls,title:s.title||s.name||"",uuid:uuid,fsig:_liveSig(s),_stuck:(cls==="blocked"?(ssr[2]||"action"):undefined)}); });
       // 逆流兜底: running 项抓事件流判定 等你/额度/报错/停滞 → 转 blocked(卡住)
       for(var k=0;k<items.length;k++){ if(items[k].cls==="running"){ try{ await refineStuck(a, items[k]); }catch(e){} } }
       items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="blocked")blocked++; });
@@ -940,18 +950,20 @@ async function fullBackupAccount(a){
   catch(e){ return {ok:false}; }
   return {ok:true, count:bundle.sessionCount||0};
 }
-async function autoCleanFor(a){
-  if(!_cfg("autoCleanup",true)) return;
-  if(!hasAuth(a)) return;
-  if(_hasLiveConv(a)) return;                          // 有进行中对话 → 跳过(避免干扰)
-  var q=a.quota; if(!q||typeof q.dPct!=="number") return;
+// 自动清理单号 (force=手动触发: 跳过 1h 节流, 用于"立即执行/实测全流程")。
+// 返回 {state:"skip|backup-fail|cleaned|removed", reason, bal}, 供手动全流程汇总。
+async function autoCleanFor(a, force){
+  if(!force && !_cfg("autoCleanup",true)) return {state:"skip",reason:"未开自动清理"};
+  if(!hasAuth(a)) return {state:"skip",reason:"未登录"};
+  if(_hasLiveConv(a)) return {state:"skip",reason:"有进行中对话"};      // 有进行中对话 → 跳过(避免干扰)
+  var q=a.quota; if(!q||typeof q.dPct!=="number") return {state:"skip",reason:"额度未知"};
   var th=parseFloat(_cfg("autoThreshold",3)); if(!isFinite(th)) th=3;
   var bal=ovDollars(q);
-  if(bal>=th) return;                                  // 额度足够 → 不动
+  if(bal>=th) return {state:"skip",reason:"额度充足 $"+bal.toFixed(2),bal:bal};   // 额度足够 → 不动
   var zero=(bal<=0);
-  if(!zero && Date.now()-(_cleanTs[a.id]||0)<3600000) return; // 非归零: 1h 内清过则跳过
+  if(!force && !zero && Date.now()-(_cleanTs[a.id]||0)<3600000) return {state:"skip",reason:"1h 内已清",bal:bal}; // 非归零: 1h 内清过则跳过
   var bk=await fullBackupAccount(a);
-  if(!bk.ok) return;                                   // 备份失败 → 绝不清理 (双保险)
+  if(!bk.ok) return {state:"backup-fail",reason:"备份失败·不清理",bal:bal};      // 备份失败 → 绝不清理 (双保险)
   _cleanTs[a.id]=Date.now();
   try{ await DaoCloud.wipeAccount(a,{confirm:true,archiveSessions:true}); }catch(e){}   // 彻底回归本源
   if(zero){                                            // 额度归零 → 移出账号库(用户不可见)
@@ -960,7 +972,30 @@ async function autoCleanFor(a){
     try{ delete _trk[(a.email||"").toLowerCase()]; }catch(e){}
     _selIds.delete(a.id);
     _bigAlert("✓ 归零账号 "+String(a.email||a.id).split("@")[0]+" 已备份并移出账号库");
+    return {state:"removed",reason:"归零·备份后移出库",bal:bal,backup:bk.count||0};
   }
+  return {state:"cleaned",reason:"已备份+清理",bal:bal,backup:bk.count||0};
+}
+// 手动触发"自动清理全流程"(可实测): 先刷全部已登录账号额度 → 预览低额候选 → 确认 → 逐个 备份+清理(归零移出库)。
+async function dvRunAutoCleanNow(){
+  var accs=loadAcc().filter(hasAuth); if(!accs.length){ toast("无已登录账号",true); return; }
+  var th=parseFloat(_cfg("autoThreshold",3)); if(!isFinite(th)) th=3;
+  toast("刷新额度中… "+accs.length+" 号");
+  for(var i=0;i<accs.length;i++){ try{ await DaoCore.refreshQuotaFor(accs[i].id); }catch(e){} }
+  accs=loadAcc().filter(hasAuth);
+  var cand=accs.filter(function(a){ var q=a.quota; if(!q||typeof q.dPct!=="number")return false; if(_hasLiveConv(a))return false; return ovDollars(q)<th; });
+  if(!cand.length){ toast("无低额(<$"+th+")且空闲的账号·无需清理"); return; }
+  if(!confirm("将对 "+cand.length+" 个 低额(<$"+th+") 且无进行中对话 的账号执行全流程:\n全量备份(对话+知识+剧本+密钥+Git) → 水过无痕清理 → 归零者移出账号库。\n\n继续?")) return;
+  var cleaned=0,removed=0,failed=0,skipped=0,log=[];
+  for(var j=0;j<cand.length;j++){ var a=cand[j]; toast("清理 "+(j+1)+"/"+cand.length+" · "+String(a.email||a.id).split("@")[0]);
+    try{ var r=await autoCleanFor(a,true);
+      if(r.state==="cleaned")cleaned++; else if(r.state==="removed")removed++; else if(r.state==="backup-fail")failed++; else skipped++;
+      log.push(String(a.email||a.id).split("@")[0]+": "+(r&&r.reason||r.state));
+    }catch(e){ failed++; log.push(String(a.email||a.id).split("@")[0]+": 异常 "+e); }
+  }
+  render();
+  _bigAlert("✓ 自动清理全流程完成 · 清理"+cleaned+" 移出"+removed+(failed?(" 失败"+failed):"")+(skipped?(" 跳过"+skipped):""));
+  toast("✓ 全流程完成: 清理"+cleaned+"·移出"+removed+(failed?("·失败"+failed):""));
 }
 async function autoQuotaTick(){
   if(_quotaBusy) return; _quotaBusy=true;
