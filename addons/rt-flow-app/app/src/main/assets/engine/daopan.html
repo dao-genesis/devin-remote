@@ -16,7 +16,8 @@ html,body{margin:0;height:100%;background:#0e1116;color:#cdd3de;font:13px/1.5 -a
 .view{position:absolute;inset:0;overflow:auto;display:none}
 .view.on{display:block}
 #recentList{padding:6px 8px 40px}
-.rc{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:8px 9px;margin-bottom:7px}
+.rc{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:8px 9px;margin-bottom:7px;cursor:grab;touch-action:pan-y}
+.rc.drag-arm{outline:2px solid #1f6feb;outline-offset:-1px;background:#172131}
 .rc .r1{display:flex;align-items:center;gap:7px}
 .grip{flex:0 0 auto;width:22px;height:30px;line-height:30px;text-align:center;color:#6e7681;font-size:15px;cursor:grab;border-radius:5px;background:#1b212b;border:1px solid #2a313c;touch-action:none;user-select:none}
 .grip:active{background:#23303f;color:#9cdcfe}
@@ -31,12 +32,18 @@ html,body{margin:0;height:100%;background:#0e1116;color:#cdd3de;font:13px/1.5 -a
 .empty{text-align:center;color:#6e7681;padding:26px 12px;font-size:13px}
 .tip{font-size:11px;color:#6e7681;padding:0 10px 6px}
 iframe{border:0;width:100%;height:100%;display:block;background:#0e1116}
-/* 对话预览("新开网页"形态) */
-#convView{background:#0e1116;display:none;flex-direction:column}
+/* 对话查看: 悬浮窗内多标签"网页式"查看(可开多个对话·切换·单独关闭) */
+#convView{position:absolute;inset:0;background:#0e1116;display:none;flex-direction:column;z-index:20}
 #convView.on{display:flex}
-.cv-top{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#161b22;border-bottom:1px solid #21262d;flex:0 0 auto}
-.cv-back{background:#21262d;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:6px 10px;font-size:12px;cursor:pointer}
-.cv-ti{flex:1;font-size:13px;font-weight:600;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cv-top{display:flex;align-items:center;gap:6px;padding:6px 7px;background:#161b22;border-bottom:1px solid #21262d;flex:0 0 auto}
+.cv-back{background:#21262d;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:6px 9px;font-size:12px;cursor:pointer;flex:0 0 auto}
+.cv-tabs{flex:1;display:flex;gap:5px;overflow-x:auto;overflow-y:hidden}
+.cv-tab{flex:0 0 auto;max-width:160px;display:flex;align-items:center;gap:6px;background:#1b212b;border:1px solid #2a313c;border-radius:6px;padding:5px 8px;font-size:12px;color:#9aa4b2;cursor:pointer;white-space:nowrap}
+.cv-tab.on{background:#11304d;border-color:#1f6feb;color:#e6edf3}
+.cv-tab .nm{overflow:hidden;text-overflow:ellipsis;max-width:118px}
+.cv-tab .x{color:#6e7681;font-weight:700;padding:0 1px}
+.cv-tab.on .x{color:#9aa4b2}
+.cv-actions{display:flex;gap:6px;padding:5px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
 .cv-body{flex:1;overflow:auto;padding:12px 12px 50px;white-space:pre-wrap;word-break:break-word;font:12.5px/1.6 -apple-system,Segoe UI,Roboto,monospace;color:#cdd3de}
 .toast{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px 14px;font-size:12.5px;opacity:0;transition:.2s;pointer-events:none;z-index:30;max-width:90%}
 .toast.show{opacity:1}.toast.fail{border-color:#f85149}.toast.ok{border-color:#3fb950}
@@ -55,15 +62,16 @@ iframe{border:0;width:100%;height:100%;display:block;background:#0e1116}
   </div>
   <div class="body">
     <div class="view on" id="recentView">
-      <div class="tip">跨全部已解锁账号 · 近期更新对话 · 实时刷新 · 长按左侧 &#10303; 拖到网页窗口</div>
+      <div class="tip">跨全部已解锁账号 · 近期更新对话 · 实时刷新 · <b>长按对话卡</b>拖到网页窗口(已备份秒拖)</div>
       <div id="recentList"><div class="empty">加载中…</div></div>
     </div>
     <div class="view" id="backupView">
       <iframe id="bkFrame" src="about:blank"></iframe>
     </div>
-    <!-- 对话预览: 悬浮窗内"新开网页"形态 -->
+    <!-- 对话查看: 悬浮窗内多标签"网页式"查看 -->
     <div id="convView">
-      <div class="cv-top"><button class="cv-back" onclick="closeConv()">‹ 返回</button><span class="cv-ti" id="cvTitle">对话</span><button class="cv-back" onclick="cvDownload()">&#11015; MD</button></div>
+      <div class="cv-top"><button class="cv-back" onclick="hideConv()">‹ 返回</button><div class="cv-tabs" id="cvTabs"></div></div>
+      <div class="cv-actions" id="cvActions"></div>
       <div class="cv-body" id="cvBody"></div>
     </div>
   </div>
@@ -76,7 +84,8 @@ iframe{border:0;width:100%;height:100%;display:block;background:#0e1116}
 <script>
 var N = window.Native || {};
 var REC = [];               // 聚合排序后的近期对话 [{acc,no,sid,title,status,t,s}]
-var CUR_CONV = null;        // 当前预览对话 {acc,sid,title,md}
+var CONV_TABS = [];         // 多标签查看: [{acc,sid,title,md,loading}]
+var CONV_ACTIVE = -1;
 var _busy = false, _bkLoaded = false;
 var _accSess = Object.create(null); // accId -> [item] 每账号最近会话缓存(增量合并)
 var _rot = 0, _seeded = false;
@@ -153,7 +162,7 @@ function showTab(t){
   document.getElementById("recentView").classList.toggle("on",rec);
   document.getElementById("backupView").classList.toggle("on",!rec);
   document.getElementById("recentBar").style.display=rec?"flex":"none";
-  closeConv();
+  hideConv();
   if(!rec && !_bkLoaded){ document.getElementById("bkFrame").src="cloud.html"; _bkLoaded=true; }
   if(rec) loadRecent(false);
 }
@@ -205,9 +214,9 @@ function renderRecent(){
       if(hay.indexOf(q)<0) return;
     }
     n++;
-    html+='<div class="rc">'+
+    html+='<div class="rc" data-idx="'+idx+'">'+
       '<div class="r1">'+
-        '<span class="grip" data-idx="'+idx+'" title="长按拖到网页">&#10303;</span>'+
+        '<span class="grip" title="长按整张卡片拖到网页">&#10303;</span>'+
         '<span class="acc-no">'+it.no+'</span>'+
         '<span class="st '+stClass(it.status)+'" title="'+_esc(it.status)+'"></span>'+
         '<span class="ti" title="'+_esc(it.title)+'">'+_esc(String(it.title).slice(0,70))+'</span>'+
@@ -220,27 +229,29 @@ function renderRecent(){
       '</div></div>';
   });
   box.innerHTML = html || '<div class="empty">无匹配 · 清空搜索查看全部</div>';
-  bindGrips();
+  bindCards();
 }
 
-// ── 长按拖拽: 触发原生全局拖拽, 携带该对话(两形态由原生侧据是否有产出文件决定) ──
-function bindGrips(){
-  var grips=document.querySelectorAll(".grip");
-  for(var i=0;i<grips.length;i++){ (function(g){
+// ── 长按整张对话卡拖拽: 触发原生全局拖拽(两形态由原生侧据本地备份/产出文件决定)。
+//    在动作按钮区(.acts)起按不触发拖拽, 保证 查看/MD/全部文件 仍可点。 ──
+function bindCards(){
+  var cards=document.querySelectorAll(".rc[data-idx]");
+  for(var i=0;i<cards.length;i++){ (function(card){
     var timer=null, sx=0, sy=0;
-    function start(x,y){ sx=x; sy=y; timer=setTimeout(function(){ fire(g); }, 420); }
-    function cancel(){ if(timer){ clearTimeout(timer); timer=null; } }
-    g.addEventListener("touchstart",function(e){ start(e.touches[0].clientX,e.touches[0].clientY); },{passive:true});
-    g.addEventListener("touchmove",function(e){ var t=e.touches[0]; if(Math.abs(t.clientX-sx)>10||Math.abs(t.clientY-sy)>10) cancel(); },{passive:true});
-    g.addEventListener("touchend",cancel);
-    g.addEventListener("touchcancel",cancel);
-    g.addEventListener("mousedown",function(e){ start(e.clientX,e.clientY); });
-    g.addEventListener("mouseup",cancel);
-    g.addEventListener("mouseleave",cancel);
-  })(grips[i]); }
+    function onBtn(t){ return !!(t && t.closest && t.closest(".acts")); }
+    function start(x,y,t){ if(onBtn(t)) return; sx=x; sy=y; card.classList.add("drag-arm"); timer=setTimeout(function(){ card.classList.remove("drag-arm"); fireCard(card); }, 360); }
+    function cancel(){ if(timer){ clearTimeout(timer); timer=null; } card.classList.remove("drag-arm"); }
+    card.addEventListener("touchstart",function(e){ start(e.touches[0].clientX,e.touches[0].clientY,e.target); },{passive:true});
+    card.addEventListener("touchmove",function(e){ var t=e.touches[0]; if(Math.abs(t.clientX-sx)>12||Math.abs(t.clientY-sy)>12) cancel(); },{passive:true});
+    card.addEventListener("touchend",cancel);
+    card.addEventListener("touchcancel",cancel);
+    card.addEventListener("mousedown",function(e){ start(e.clientX,e.clientY,e.target); });
+    card.addEventListener("mouseup",cancel);
+    card.addEventListener("mouseleave",cancel);
+  })(cards[i]); }
 }
-function fire(g){
-  var idx=+g.getAttribute("data-idx"); var it=REC[idx]; if(!it) return;
+function fireCard(card){
+  var idx=+card.getAttribute("data-idx"); var it=REC[idx]; if(!it) return;
   try{ N.vibrate && N.vibrate(30); }catch(e){}
   try{
     if(N.startConvDrag){ N.startConvDrag(JSON.stringify(it.acc), it.sid); }
@@ -248,26 +259,45 @@ function fire(g){
   }catch(e){ toast("拖拽失败",true); }
 }
 
-// ── 对话预览("新开网页"形态) ──
-async function viewConv(idx){
+// ── 对话查看: 悬浮窗内多标签"网页式"查看(可同时开多个对话·切换·单独关闭) ──
+function viewConv(idx){
   var it=REC[idx]; if(!it) return;
-  document.getElementById("cvTitle").textContent=it.title||it.sid;
-  document.getElementById("cvBody").textContent="提取对话中…";
+  var ex=-1; for(var i=0;i<CONV_TABS.length;i++){ if(CONV_TABS[i].sid===it.sid){ ex=i; break; } }
+  if(ex>=0){ CONV_ACTIVE=ex; }
+  else { CONV_TABS.push({ acc:it.acc, sid:it.sid, title:it.title||it.sid, md:"", loading:true }); CONV_ACTIVE=CONV_TABS.length-1; }
   document.getElementById("convView").classList.add("on");
-  CUR_CONV={ acc:it.acc, sid:it.sid, title:it.title, md:"" };
+  renderConvTabs();
+  if(ex<0) loadConvMd(CONV_ACTIVE);
+}
+async function loadConvMd(ti){
+  var t=CONV_TABS[ti]; if(!t) return;
   try{
-    var r=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
-    if(!r.ok){ document.getElementById("cvBody").textContent="提取失败: "+(r.error||""); return; }
-    CUR_CONV.md=r.md||""; CUR_CONV.title=r.title||it.title;
-    document.getElementById("cvTitle").textContent=CUR_CONV.title;
-    document.getElementById("cvBody").textContent=CUR_CONV.md||"(空)";
-  }catch(e){ document.getElementById("cvBody").textContent="异常: "+e; }
+    var r=await DaoCloud.exportSession(t.acc, t.sid, "conversation");
+    if(r&&r.ok){ t.md=r.md||""; t.title=r.title||t.title; }
+    else t.md="(提取失败: "+((r&&r.error)||"")+")";
+  }catch(e){ t.md="(异常: "+e+")"; }
+  t.loading=false; renderConvTabs();
 }
-function closeConv(){ document.getElementById("convView").classList.remove("on"); }
-function cvDownload(){
-  if(!CUR_CONV||!CUR_CONV.md){ toast("无内容",true); return; }
-  try{ N.saveTextFile && N.saveTextFile(safeName(CUR_CONV.title||CUR_CONV.sid)+".md", CUR_CONV.md); toast("已下载 MD"); }catch(e){ toast("下载失败",true); }
+function activateConv(ti){ CONV_ACTIVE=ti; renderConvTabs(); }
+function closeConvTab(ti,ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); CONV_TABS.splice(ti,1);
+  if(!CONV_TABS.length){ CONV_ACTIVE=-1; hideConv(); return; }
+  if(CONV_ACTIVE>=CONV_TABS.length) CONV_ACTIVE=CONV_TABS.length-1; renderConvTabs();
 }
+function hideConv(){ document.getElementById("convView").classList.remove("on"); }
+function renderConvTabs(){
+  var tabsEl=document.getElementById("cvTabs"), bodyEl=document.getElementById("cvBody"), actEl=document.getElementById("cvActions");
+  var h="";
+  CONV_TABS.forEach(function(t,i){ h+='<div class="cv-tab'+(i===CONV_ACTIVE?" on":"")+'" onclick="activateConv('+i+')"><span class="nm" title="'+_esc(t.title)+'">'+_esc(String(t.title).slice(0,40))+'</span><span class="x" onclick="closeConvTab('+i+',event)">&#10005;</span></div>'; });
+  tabsEl.innerHTML=h;
+  var cur=CONV_TABS[CONV_ACTIVE];
+  if(!cur){ bodyEl.textContent=""; actEl.innerHTML=""; return; }
+  actEl.innerHTML='<span class="b" onclick="cvDl('+CONV_ACTIVE+')">&#11015; MD</span><span class="b pri" onclick="cvZip('+CONV_ACTIVE+')">&#128230; 全部文件</span>';
+  bodyEl.textContent = cur.loading ? "提取对话中…" : (cur.md||"(空)");
+  bodyEl.scrollTop=0;
+}
+function cvDl(ti){ var t=CONV_TABS[ti]; if(!t||!t.md){ toast("无内容",true); return; }
+  try{ N.saveTextFile && N.saveTextFile(safeName(t.title||t.sid)+".md", t.md); toast("已下载 MD → 下载列表"); }catch(e){ toast("下载失败",true); } }
+function cvZip(ti){ var t=CONV_TABS[ti]; if(!t) return; var idx=-1; for(var i=0;i<REC.length;i++){ if(REC[i].sid===t.sid){ idx=i; break; } } if(idx>=0) dlZip(idx); else toast("该对话已不在近期列表",true); }
 
 async function dlMd(idx){
   var it=REC[idx]; if(!it) return; toast("下载 MD…");
