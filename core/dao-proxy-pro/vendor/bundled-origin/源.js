@@ -292,9 +292,6 @@ function _loadDaoDeJing() {
     process.env.DAO_FILE,
     path.join(__dirname, "_dao_81.txt"),
     path.join(__dirname, "..", "..", ".windsurf", "rules", "000-dao.md"),
-    "D:\\道\\道生一\\一生二\\.windsurf\\rules\\000-dao.md",
-    "E:\\道\\道生一\\一生二\\.windsurf\\rules\\000-dao.md",
-    "C:\\道\\道生一\\一生二\\.windsurf\\rules\\000-dao.md",
   ].filter(Boolean);
   for (const p of candidates) {
     try {
