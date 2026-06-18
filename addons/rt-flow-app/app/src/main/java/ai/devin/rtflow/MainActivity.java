@@ -720,6 +720,15 @@ public class MainActivity extends AppCompatActivity {
                     injectUserScripts(v, u, "end");       // 油猴 @run-at document-end/idle
                 }
             }
+            // SPA(如 Devin) 经 history.pushState/replaceState 客户端路由不会触发 onPageStarted/Finished,
+            // 仅此回调会 → 必须在这里同步 tab.url + 地址栏, 否则拖拽提取/地址栏读到的是旧的整页加载 URL(陈旧)。
+            @Override public void doUpdateVisitedHistory(WebView v, String u, boolean isReload) {
+                if (u != null && u.startsWith("http")) {
+                    tab.url = u;
+                    if (tabOf(v) == active) setAddr(u);
+                    renderTabStrip(); saveTabs();
+                }
+            }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
                 if (adBlock && req != null && req.getUrl() != null && isAdHost(req.getUrl().getHost()))
                     return new WebResourceResponse("text/plain", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
@@ -867,7 +876,7 @@ public class MainActivity extends AppCompatActivity {
             label.setMaxWidth(dp(130));
             label.setSingleLine(true);
             label.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            // 手势: 单击=切换标签 · 双击=复制该账号+密码(弹提示) · 长按=拖拽排序
+            // 手势: 单击=切换标签 · 双击=复制该账号+密码(弹提示) · 长按(整片均可)=拖拽
             final GestureDetector gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
                 @Override public boolean onDown(MotionEvent e) { return true; }
                 @Override public boolean onSingleTapConfirmed(MotionEvent e) { selectTab(idx); return true; }
@@ -876,9 +885,37 @@ public class MainActivity extends AppCompatActivity {
                     if (tt.accountJson != null) copyTabAccount(tt); else toast("非账号标签·无账密可复制");
                     return true;
                 }
-                @Override public void onLongPress(MotionEvent e) { doVibrate(40); chip.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); startTabDrag(chip, idx); }
             });
-            chip.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
+            // 长按改自管: GestureDetector 的 onLongPress 在标签条(HorizontalScrollView)里手指稍动就被横滚吞掉,
+            // 导致"要找很久位置/经常错位"。这里整片 chip 按下即起计时, 300ms 内不明显移动 → 触发拖拽; 明显滑动则放行横滚。
+            gd.setIsLongpressEnabled(false);
+            final int slop = android.view.ViewConfiguration.get(this).getScaledTouchSlop();
+            final float[] downXY = new float[2];
+            final boolean[] longFired = { false };
+            final Runnable[] lp = new Runnable[1];
+            chip.setOnTouchListener((v, ev) -> {
+                switch (ev.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downXY[0] = ev.getRawX(); downXY[1] = ev.getRawY(); longFired[0] = false;
+                        if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
+                        lp[0] = () -> { longFired[0] = true; doVibrate(40); v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); startTabDrag(v, idx); };
+                        main.postDelayed(lp[0], 300);
+                        break;
+                    case MotionEvent.ACTION_MOVE:
+                        if (!longFired[0] && (Math.abs(ev.getRawX() - downXY[0]) > slop || Math.abs(ev.getRawY() - downXY[1]) > slop)) {
+                            if (lp[0] != null) main.removeCallbacks(lp[0]);   // 明显滑动 → 取消长按, 放行标签条横滚
+                            if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(false);
+                        }
+                        break;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        if (lp[0] != null) main.removeCallbacks(lp[0]);
+                        if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(false);
+                        break;
+                }
+                gd.onTouchEvent(ev);   // 单击/双击仍由 gd 处理 (拖拽启动后系统发 CANCEL, 不会误触发单击)
+                return true;
+            });
 
             TextView x = new TextView(this);
             x.setText(" ×");
@@ -2704,16 +2741,45 @@ public class MainActivity extends AppCompatActivity {
         if (srcIdx < 0 || srcIdx >= tabs.size()) return;
         Tab src = tabs.get(srcIdx);
         if (src == null || src.web == null) { toast("源标签无效"); return; }
-        String url = src.url == null ? "" : src.url;
+        if (src.web == targetWeb) { toast("请把对话标签拖到另一个页面"); return; }
+        final WebView sw = src.web;
+        final WebView ftarget = targetWeb; final float fx = x, fy = y;
+        final String accJson = src.accountJson;   // 该对话所属账号 → 引擎取数 + 生成"查看全部文件"指引md
+        final String cachedUrl = src.url == null ? "" : src.url;
+        // Devin 是 SPA: 点开对话经 pushState 客户端跳转, 整页加载 URL(=cachedUrl)往往停在 /org/.. 首页 →
+        // 直接读 tab.url 会误判"不是对话页"。这里取源标签 WebView 的实时 location.href 为准。
+        main.post(() -> {
+            try {
+                sw.evaluateJavascript("(function(){try{return location.href}catch(e){return ''}})()", val -> {
+                    String live = jsUnquote(val);
+                    String url = (live != null && live.startsWith("http")) ? live : cachedUrl;
+                    proceedImportFromTab(url, sw, ftarget, fx, fy, accJson);
+                });
+            } catch (Exception e) {
+                proceedImportFromTab(cachedUrl, sw, ftarget, fx, fy, accJson);
+            }
+        });
+    }
+
+    /** evaluateJavascript 回调返回的是 JSON 字面量(带引号/转义); 还原为普通字符串。 */
+    private static String jsUnquote(String v) {
+        if (v == null || v.equals("null")) return "";
+        try { return new JSONObject("{\"v\":" + v + "}").optString("v", ""); }
+        catch (Exception e) {
+            String s = v;
+            if (s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"")) s = s.substring(1, s.length() - 1);
+            return s.replace("\\\"", "\"").replace("\\\\", "\\");
+        }
+    }
+
+    private void proceedImportFromTab(String url, final WebView sw, WebView targetWeb, float x, float y, final String accJson) {
+        if (url == null) url = "";
         String sidTmp = null;
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("(devin-[0-9a-fA-F]{8,})").matcher(url);
         if (m.find()) sidTmp = m.group(1);
         if (sidTmp == null) { java.util.regex.Matcher m2 = java.util.regex.Pattern.compile("/sessions/([A-Za-z0-9_\\-]+)").matcher(url); if (m2.find()) sidTmp = m2.group(1); }
         if (sidTmp == null) { toast("该标签不是 Devin 对话页, 无法导入"); return; }
-        if (src.web == targetWeb) { toast("请把对话标签拖到另一个页面"); return; }
         final String sid = sidTmp;
-        final WebView sw = src.web;
-        final String accJson = src.accountJson;   // 该对话所属账号 → 引擎取数 + 生成"查看全部文件"指引md
         String emailTmp = "";
         if (accJson != null) { try { emailTmp = new JSONObject(accJson).optString("email", ""); } catch (Exception ignored) {} }
         final String email = emailTmp;

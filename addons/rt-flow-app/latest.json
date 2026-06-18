@@ -1,6 +1,6 @@
 {
-  "versionCode": 48,
-  "versionName": "0.15.17",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.17/DevinCloud-mobile-v0.15.17.apk",
-  "notes": "v0.15.17 · 彻底修复「拖拽对话标签到页面」提取为空/碎文件的问题\n· 根因：旧链路在源标签 WebView 内用 fetch(credentials:include) 拉事件流，但账号是 auth1/apiKey 显式鉴权（非 cookie），页内 fetch 取不到数据 → 注入的全是 ~90B 空壳 MD。\n· 新链路：拖拽改走引擎服务端 extractConversation（已存 auth1，与切号面板/中继同源取数），内容完整（实测单会话对话 MD 可达数百 KB）。\n· 产物严格 2 件，按你的规范：① 无产出文件 → 对话MD + 取数指引MD（账号/密码/SessionID/提取Skill）；② 已有产出文件 → 文件夹(ZIP·含对话md+工作日志+files/) + 取数指引MD。\n· 注入统一支持二进制（ZIP）与文本（MD），按扩展名设 MIME；引擎不可用/无账号/取数空时自动回退页内 fetch 老链路。\n· 签名一致 e261b27f，v0.15.x 原地覆盖升级数据不丢。"
+  "versionCode": 49,
+  "versionName": "0.15.18",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.18/DevinCloud-mobile-v0.15.18.apk",
+  "notes": "v0.15.18 · 三项体验/正确性修复\n· 拖拽对话标签报「不是 Devin 对话页」根因修复：Devin 是 SPA，点开对话经 history.pushState 客户端跳转，不触发 onPageStarted/Finished，导致缓存的 tab.url 仍停在 /org 首页 → 误判。现新增 doUpdateVisitedHistory 同步地址栏/标签 URL，且拖拽时改读源标签实时 location.href 为准，能正确识别 /sessions/<id>。\n· 标签长按拖拽：原 GestureDetector 的 onLongPress 在标签条横滚里手指稍动就被吞掉（要找很久位置/常错位）。改为整片 chip 自管长按（按下 300ms 内不明显移动即触发，明显滑动则放行横滚），整个标签范围长按都能起拖。\n· 切号面板：去除「点整行即登录/切号」（易误触），登录/切号仅由 ⚡(已登录→切号)/🔑(未登录→登录) 按钮触发。\n· 签名一致 e261b27f，v0.15.x 原地覆盖升级数据不丢。"
 }
