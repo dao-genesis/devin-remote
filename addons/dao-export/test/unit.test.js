@@ -28,7 +28,7 @@ const zipmod = require("../out/zip.js");
 const exporter = require("../out/exporter.js");
 const api = require("../out/api.js");
 const { AccountStore } = require("../out/accountStore.js");
-const { AgentBridge } = require("../out/bridge.js");
+const { AgentBridge, selectLoginAccountId } = require("../out/bridge.js");
 
 // ── helpers ────────────────────────────────────────────────────────────────
 function memStorage() {
@@ -468,6 +468,24 @@ test("bridge · ping 免鉴权，其它端点缺 token → 401", async () => {
   } finally {
     bridge.stop();
   }
+});
+
+test("bridge · selectLoginAccountId: 邮箱登录不被无关 token 账号劫持", () => {
+  // 复现并锁死 bug：当 store 里已存在某个 token 账号时，email+password 登录
+  // 曾因 `|| v.kind === 'token'` 而错选到那个 token 账号，导致 post-auth 401。
+  const views = [
+    { id: "t:old", kind: "token", email: "(token)" },
+    { id: "p:a@x.com", kind: "password", email: "a@x.com" },
+    { id: "p:b@x.com", kind: "password", email: "b@x.com" },
+  ];
+  // 邮箱登录 → 命中对应邮箱账号，绝不命中 token 账号
+  assert.strictEqual(selectLoginAccountId(views, "a@x.com", undefined), "p:a@x.com");
+  assert.strictEqual(selectLoginAccountId(views, "B@X.COM", undefined), "p:b@x.com");
+  // token 登录 → 命中（最近的）token 账号
+  assert.strictEqual(selectLoginAccountId(views, undefined, "sometoken"), "t:old");
+  // 邮箱未找到时回退到最后新增的账号（即刚加进去的那个）
+  assert.strictEqual(selectLoginAccountId(views, "missing@x.com", undefined), "p:b@x.com");
+  assert.strictEqual(selectLoginAccountId([], "a@x.com", undefined), undefined);
 });
 
 test("bridge · 无活动账号时业务端点返回 401 引导加号", async () => {
