@@ -1,6 +1,6 @@
 {
-  "versionCode": 54,
-  "versionName": "0.16.2",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.16.2/DevinCloud-mobile-v0.16.2.apk",
-  "notes": "v0.16.2 · 浏览器板块补齐 CDP 协议域 facade\n· 新增 cdp{method,params,tabIndex} 一条路由，与 Chrome DevTools Protocol 同名方法：Browser.getVersion / Page.navigate·reload·captureScreenshot·getLayoutMetrics·getNavigationHistory / Runtime.evaluate / DOM.getDocument·getOuterHTML·querySelector(All) / Input.dispatchMouseEvent·insertText / Network.enable·disable·getRequests·getResponseBody。\n· 工具调用逻辑与 Playwright/Chrome-CDP 一致，执行全部落在软件自身多标签 WebView(本软件即浏览器基底)，不另起浏览器。\n· Network.* 经注入 fetch/XHR hook + performance 资源时间线实现抓包(enable→触发→getRequests→getResponseBody)。\n· 接入文档(getCloudMd)与板块一文档同步补 CDP 域命令表。\n· 签名一致，原地覆盖升级不丢数据。"
+  "versionCode": 55,
+  "versionName": "0.16.3",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.16.3/DevinCloud-mobile-v0.16.3.apk",
+  "notes": "v0.16.3 · 体验/性能/稳定性 + 跨设备实时监测\n· 输入体验: windowSoftInputMode=adjustResize + 聚焦输入框自动滚到可见区中部(installKbHelper)，消除「输入框被键盘遮住/弹来弹去」，对齐真浏览器。\n· 稳定性: WebView 渲染进程被系统回收时(网页变白需手动刷新)自动重建标签并重载(recoverDeadTab·onRenderProcessGone)，用户无感恢复；SPA 客户端路由后重装下载/键盘钩子(幂等)，修「切到对话页点下载无反应、要刷新才行」。\n· 提号页提速: 对话追踪 _trk 跨刷新持久化回放，刷新/对话结束后秒出在跑账号的运行态，消除初始化空窗。\n· 跨设备实时监测: pollTrk 改并发池(6路)+每号返回即增量上色，轮询 30s→15s，回到面板/可见即刷新 → 同账号池账号在其他设备(如电脑)跑对话，手机端近实时识别到。\n· 签名一致，原地覆盖升级不丢数据。"
 }

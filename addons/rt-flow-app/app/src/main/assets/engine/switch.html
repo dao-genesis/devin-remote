@@ -701,6 +701,16 @@ async function gitDisconnect(i){ var a=loadAcc()[i]; if(!a)return; if(!confirm("
 //  对话追踪 (Devin Cloud · 1:1 桌面 _dvStatusAggHtml + _dvRunPoll · 去 Cascade)
 // ════════════════════════════════════════════════════════════════════════
 var _trk = {}; // email → {no,who,running,awaiting,blocked,total,items,ts}
+// _trk 跨刷新持久化: 对话结束/提号页重载后, 先回放上次"运行态"即时上色(秒出),
+//   随后 pollTrk 实时校正 → 消除"刷新后初始化识别非常慢"的空窗。仅回放 180s 内的近况。
+function _saveTrk(){ try{ var o={}; Object.keys(_trk).forEach(function(e){ var s=_trk[e]; if(s&&Date.now()-(s.ts||0)<180000) o[e]=s; }); localStorage.setItem("rtflow.trk", JSON.stringify(o)); }catch(e){} }
+function _loadTrk(){ try{ var o=JSON.parse(localStorage.getItem("rtflow.trk")||"{}"); Object.keys(o).forEach(function(e){ var s=o[e]; if(s&&Date.now()-(s.ts||0)<180000) _trk[e]=s; }); }catch(e){} }
+// 并发池: 以账号为中心同时(默认6路)拉取会话, 把 72 号的串行等待压成并行 → 跨设备运行近实时识别。
+async function _pool(items, conc, fn){
+  var idx=0; var n=items.length; conc=Math.max(1,Math.min(conc|0||1,n));
+  async function worker(){ while(idx<n){ var i=idx++; try{ await fn(items[i], i); }catch(e){} } }
+  var ws=[]; for(var w=0;w<conc;w++) ws.push(worker()); await Promise.all(ws);
+}
 // ── 卡住全情形检测 (逆流事件流): 列表 status_enum 在"待输入/被问问题/action required/
 //   额度超限"时仍报 running, 单看状态字段识别不出。改抓事件流(与备份模块同源)逆流判定:
 //   ① 末条有意义事件=devin_message → Devin 说完在等你(问问题/action required) → 立即卡住
@@ -824,6 +834,27 @@ function paintRowRun(){
   });
 }
 var _trkBusy=false;
+// 单账号会话扫描 → 写入 _trk (从 pollTrk 串行循环抽出, 供并发池调用)。
+async function _pollOneAcc(a, realNo){
+  var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)return;
+  var running=0,awaiting=0,blocked=0,items=[];
+  (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var ssr=sessStatus(s); var cls=ssr[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked")return; items.push({cls:cls,title:s.title||s.name||"",uuid:uuid,fsig:_liveSig(s),_stuck:(cls==="blocked"?(ssr[2]||"action"):undefined)}); });
+  // 逆流兜底: running 项抓事件流判定 等你/额度/报错/停滞 → 转 blocked(卡住)
+  for(var k=0;k<items.length;k++){ if(items[k].cls==="running"){ try{ await refineStuck(a, items[k]); }catch(e){} } }
+  items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="blocked")blocked++; });
+  var total=running+awaiting+blocked;
+  if(total>0) _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,total:total,items:items,ts:Date.now()};
+  else delete _trk[(a.email||"").toLowerCase()];
+  // 推送该账号"最需关注对话名+状态"到顶部标签 (卡住/待你>待输入>运行优先, 让需你处理的浮上来)
+  try{
+    var top=items.filter(function(x){return x.cls==="blocked";})[0]
+          || items.filter(function(x){return x.cls==="awaiting";})[0]
+          || items.filter(function(x){return x.cls==="running";})[0] || null;
+    var nm = top ? (top.title||"") : "";
+    var stt = top ? (top.cls==="blocked"?"blocked":(top.cls==="awaiting"?"blocked":"running")) : "finished";
+    if(N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }
+  }catch(e){}
+}
 async function pollTrk(){
   if(_trkBusy)return; _trkBusy=true;
   _probeBudget=12; // 每轮事件流探测配额, 控网络开销
@@ -833,31 +864,16 @@ async function pollTrk(){
     var accs=full.filter(hasAuth);
     var _noOf={}; full.forEach(function(x,ix){ _noOf[x.id]=ix+1; });   // id → 真实编号(与账号行显示一致), 加号后动态跟随
     if(dot)dot.className="mon-dot"; if(mstat)mstat.textContent="监测中 · "+accs.length+" 号";
-    for(var i=0;i<accs.length;i++){
-      var a=accs[i]; var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)continue;
-      var realNo=_noOf[a.id]||(i+1);
-      var running=0,awaiting=0,blocked=0,items=[];
-      (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var ssr=sessStatus(s); var cls=ssr[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked")return; items.push({cls:cls,title:s.title||s.name||"",uuid:uuid,fsig:_liveSig(s),_stuck:(cls==="blocked"?(ssr[2]||"action"):undefined)}); });
-      // 逆流兜底: running 项抓事件流判定 等你/额度/报错/停滞 → 转 blocked(卡住)
-      for(var k=0;k<items.length;k++){ if(items[k].cls==="running"){ try{ await refineStuck(a, items[k]); }catch(e){} } }
-      items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="blocked")blocked++; });
-      var total=running+awaiting+blocked;
-      if(total>0) _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,total:total,items:items,ts:Date.now()};
-      else delete _trk[(a.email||"").toLowerCase()];
-      // 推送该账号"最需关注对话名+状态"到顶部标签 (卡住/待你>待输入>运行优先, 让需你处理的浮上来)
-      try{
-        var top=items.filter(function(x){return x.cls==="blocked";})[0]
-              || items.filter(function(x){return x.cls==="awaiting";})[0]
-              || items.filter(function(x){return x.cls==="running";})[0] || null;
-        var nm = top ? (top.title||"") : "";
-        var stt = top ? (top.cls==="blocked"?"blocked":(top.cls==="awaiting"?"blocked":"running")) : "finished";
-        if(N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }
-      }catch(e){}
-    }
+    // 以账号为中心并发扫描(6路), 每号返回即增量上色 → 跨设备运行近实时识别, 不再等满全列表才出结果。
+    var _lastPaint=0;
+    await _pool(accs, 6, async function(a){
+      await _pollOneAcc(a, _noOf[a.id]||0);
+      var now=Date.now(); if(now-_lastPaint>500){ _lastPaint=now; paintTrk(); paintRowRun(); }
+    });
     if(mstat)mstat.textContent="Devin Cloud 监测就绪 · "+accs.length+" 号在册";
   }catch(e){ if(dot)dot.className="mon-dot off"; if(mstat)mstat.textContent="监测异常"; }
   _pruneSig();
-  _trkBusy=false; paintTrk(); paintRowRun();
+  _trkBusy=false; paintTrk(); paintRowRun(); _saveTrk();
 }
 function devinTag(a){ try{ var t=JSON.parse(localStorage.getItem("rtflow.tags")||"{}"); return t[(a.email||"").toLowerCase()]||""; }catch(e){ return ""; } }
 function refreshTrack(){ toast("刷新对话追踪…"); pollTrk(); }
@@ -1249,11 +1265,14 @@ function mirrorAccountsToVault(){ try{ var cur=loadAcc(); if(cur.length&&N.vault
 document.getElementById("convBody").classList.toggle("collapsed",!_convOpen);
 document.getElementById("convArrow").innerHTML=_convOpen?"&#9660;":"&#9650;";
 _initCfgUI();
+_loadTrk();          // 先回放上次运行态 → render() 即刻给在跑的账号上色, 消除刷新后空窗
 render();
-pollTrk();
-window.addEventListener("focus", render);
+paintTrk();          // 详情区也立即铺上缓存的运行清单
+pollTrk();           // 随后实时校正(并发, 近实时)
+window.addEventListener("focus", function(){ render(); pollTrk(); });  // 回到面板即刷新运行态
+document.addEventListener("visibilitychange", function(){ if(!document.hidden) pollTrk(); });
 setInterval(render, 8000);
-setInterval(pollTrk, 30000);
+setInterval(pollTrk, 15000);   // 30s→15s: 跨设备同账号运行更接近实时
 // 美刀额度: 有对话的账号每 15s 高频刷新, 空闲账号轮转; 同步施加对话缓冲单话上限 + 低额提醒
 setTimeout(autoQuotaTick, 4000);
 setInterval(autoQuotaTick, 15000);

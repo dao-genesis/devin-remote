@@ -724,6 +724,7 @@ public class MainActivity extends AppCompatActivity {
                 if (!tab.internal && u != null && u.startsWith("http")) {
                     autoFillLogin(v, u);        // 有保存的账密 → 自动填充 (无感)
                     installLoginCapture(v);     // 监听登录提交 → 自动弹「保存登录？」
+                    installKbHelper(v);         // 键盘弹出时输入框上滚到可见区中部 (不被遮挡)
                     if (tab.translated) applyTranslate(v); // 翻译态跨页保持
                     injectUserScripts(v, u, "end");       // 油猴 @run-at document-end/idle
                 }
@@ -735,12 +736,21 @@ public class MainActivity extends AppCompatActivity {
                     tab.url = u;
                     if (tabOf(v) == active) setAddr(u);
                     renderTabStrip(); saveTabs();
+                    // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
+                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
                 if (adBlock && req != null && req.getUrl() != null && isAdHost(req.getUrl().getHost()))
                     return new WebResourceResponse("text/plain", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
                 return super.shouldInterceptRequest(v, req);
+            }
+            // 渲染进程被系统在内存压力下回收(WebView 变白/无响应需手动刷新)→ 自动重建该标签并重载, 用户无感恢复。
+            @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
+                int idx = tabOf(v);
+                if (idx < 0) { try { v.destroy(); } catch (Exception ignored) {} return true; }
+                recoverDeadTab(idx);
+                return true;   // 已处理: 系统不再杀进程
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
@@ -858,6 +868,29 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
         if (tabs.isEmpty()) { newTab(SWITCH, null); return; }
         selectTab(Math.max(0, idx - 1));
+    }
+
+    /** 渲染进程被回收后, 原地重建该标签的 WebView 并重载原 URL → 网页自动恢复(无需用户手动刷新)。 */
+    private void recoverDeadTab(final int idx) {
+        main.post(() -> {
+            if (idx < 0 || idx >= tabs.size()) return;
+            Tab dead = tabs.get(idx);
+            String acct = dead.accountJson; boolean internal = dead.internal;
+            String url = dead.url; boolean incognito = dead.incognito, night = dead.night;
+            try {
+                android.view.View host = dead.swipe != null ? dead.swipe : dead.web;
+                if (host != null && host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
+                if (dead.web != null) dead.web.destroy();
+            } catch (Exception ignored) {}
+            Tab fresh = makeTab(acct, internal);          // 完整配置 + 停泊; 追加到末尾
+            tabs.remove(tabs.size() - 1);                 // 取回, 放回原位
+            fresh.incognito = incognito; fresh.night = night;
+            tabs.set(idx, fresh);
+            if (url != null && !url.isEmpty()) { fresh.url = url; fresh.web.loadUrl(url); }
+            if (active == idx) selectTab(idx); else renderTabStrip();
+            saveTabs();
+            toast("网页已自动恢复");
+        });
     }
 
     private void setAddr(String u) { if (addr != null) addr.setText(u == null ? "" : u); updateStar(); }
@@ -2207,6 +2240,18 @@ public class MainActivity extends AppCompatActivity {
             + "if(href.indexOf('blob:')===0){ev.preventDefault();ev.stopPropagation();fetch(href).then(function(r){return r.blob();}).then(function(b){blobB64(b,name);}).catch(function(){});}"
             + "else if(href.indexOf('data:')===0){ev.preventDefault();ev.stopPropagation();var m=(href.match(/^data:([^;,]*)/)||[])[1]||'';var c=href.indexOf(',');var p=href.slice(c+1);var b64=/;base64/i.test(href.slice(0,c))?p:btoa(unescape(encodeURIComponent(decodeURIComponent(p))));send(name,m,b64);}"
             + "}catch(e){}} ,true);})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    // 键盘弹出时把聚焦的输入框滚到可见区中部 (配合 windowSoftInputMode=adjustResize):
+    //   消除"输入框被键盘遮住 / 弹来弹去", 体感对齐真浏览器。幂等(window.__rtkb 守卫), SPA 路由后可重装。
+    private void installKbHelper(WebView w) {
+        if (w == null) return;
+        String js = "(function(){if(window.__rtkb)return;window.__rtkb=1;"
+            + "var T=null;function sif(el){if(!el)return;clearTimeout(T);T=setTimeout(function(){try{el.scrollIntoView({block:'center',inline:'nearest',behavior:'smooth'});}catch(e){try{el.scrollIntoView();}catch(_){}}},220);}"
+            + "function isF(t){return t&&t.matches&&t.matches('input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]),textarea,[contenteditable=\"\"],[contenteditable=true],[role=textbox]');}"
+            + "document.addEventListener('focusin',function(e){if(isF(e.target))sif(e.target);},true);"
+            + "if(window.visualViewport){window.visualViewport.addEventListener('resize',function(){var a=document.activeElement;if(isF(a))sif(a);});}"
+            + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // DownloadListener 收到 blob: → 让当前页 JS 取出内容回传
