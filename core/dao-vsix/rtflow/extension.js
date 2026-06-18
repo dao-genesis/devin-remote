@@ -9671,10 +9671,19 @@ async function _dvAutoBackupRun() {
         // v4.9.11: 24h 冷却期门控 — 备份完成且 24h 无对话更新才允许清理
         const cooldownMs = Math.max(0, +_cfg("devinCloudCleanupCooldownHours", 24) || 24) * 3600000;
         const cleanupCheck = devinCloud.isCleanupReady(acc.email, cooldownMs);
+        // v4.9.12 · 24h 活跃对话保护(权威·实时直查): 全量备份分支不刷新 lastConvUpdateAt, 故此处实时兜底——
+        //   任一对话 24h 内更新过即视为活跃, 即使额度归零/<3 也不清理 (并回写 lastConvUpdateAt 供墓碑)。
+        let _liveRecent = false;
+        if (autoCleanup && backupOk && totalCredits <= cleanupThreshold && cleanupCheck.ready) {
+          try {
+            const _rc = await devinCloud.hasRecentConversation(auth, cooldownMs);
+            if (_rc.recent) { _liveRecent = true; if (_rc.newestMs) devinCloud.setCleanupState(acc.email, { lastConvUpdateAt: _rc.newestMs }); }
+          } catch {}
+        }
         if (autoCleanup && backupOk && totalCredits <= cleanupThreshold) {
-          if (!cleanupCheck.ready) {
+          if (!cleanupCheck.ready || _liveRecent) {
             const hrs = cleanupCheck.remaining ? Math.ceil(cleanupCheck.remaining / 3600000) : "?";
-            log("auto-cleanup: " + acc.email + " 冷却期未满(" + cleanupCheck.reason + ", 剩余~" + hrs + "h) → 跳过清理");
+            log("auto-cleanup: " + acc.email + (_liveRecent ? " 有24h内活跃对话(实时) → 跳过清理(保护活跃)" : (" 冷却期未满(" + cleanupCheck.reason + ", 剩余~" + hrs + "h) → 跳过清理")));
           } else {
             log("auto-cleanup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " ≤ $" + cleanupThreshold + " 且全量备份已校验+24h冷却期已满 → 自动清理");
             try {
@@ -11879,6 +11888,17 @@ async function handleWebviewMessage(msg) {
             backupOk = _dvBackupVerifiedFull(br);
           } catch (be) { log("[cleanup-zero] backup err " + z.email + ": " + (be.message || be)); }
           if (!backupOk) { _toast("\u26A0 " + z.email.split("@")[0] + " 备份未通过校验 → 跳过(不删)"); continue; }
+          // 2.5 · 24h 活跃对话保护 (额度归零亦不清理活跃号) — 实时直查对话, 任一对话 24h 内更新过即跳过。
+          const _zCdMs = Math.max(0, +_cfg("devinCloudCleanupCooldownHours", 24) || 24) * 3600000;
+          try {
+            const _zr = await devinCloud.hasRecentConversation(z.auth, _zCdMs);
+            if (_zr.recent) {
+              const _zh = _zr.newestMs ? Math.ceil((_zCdMs - (Date.now() - _zr.newestMs)) / 3600000) : "?";
+              _toast("\u26A0 " + z.email.split("@")[0] + " 有 24h 内活跃对话 → 跳过清理(保护活跃·剩~" + _zh + "h)");
+              log("[cleanup-zero] " + z.email + " 24h活跃对话保护 → 跳过(不清理/不出库)");
+              continue;
+            }
+          } catch {}
           // 3. 全量清理
           _toast("\u23F3 清理 " + z.email.split("@")[0] + " …");
           try {
