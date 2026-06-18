@@ -6916,6 +6916,11 @@ function _stripJsonc(raw: string): string {
     s = s.replace(/,(\s*[}\]])/g, '$1');
     return s;
 }
+// 末路兜底: 手编配置偶含非法转义(Windows 路径裸反斜杠 "E:\foo\bar"), 严格 JSON.parse 会拒 → 整份被吞、数对不上。
+//   仅在 JSON.parse + JSONC 双双失败后启用: 把「非合法转义前缀的反斜杠」修成 \\ (JSON 串外无裸反斜杠, 全局替换安全)。
+function _repairJsonEscapes(raw: string): string {
+    return raw.replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
+}
 function scanIdeMcps(): IdeMcpEntry[] {
     const home = os.homedir();
     const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
@@ -6951,7 +6956,8 @@ function scanIdeMcps(): IdeMcpEntry[] {
             if (!fs.existsSync(c.p)) continue;
             const raw = fs.readFileSync(c.p, 'utf8');
             let j: any;
-            try { j = JSON.parse(raw); } catch { j = JSON.parse(_stripJsonc(raw)); }
+            try { j = JSON.parse(raw); }
+            catch { try { j = JSON.parse(_stripJsonc(raw)); } catch { j = JSON.parse(_repairJsonEscapes(_stripJsonc(raw))); } }
             const servers = (j && (j.mcpServers || j.servers || (j.mcp && j.mcp.servers))) || {};
             for (const name of Object.keys(servers)) {
                 const s = servers[name] || {};
