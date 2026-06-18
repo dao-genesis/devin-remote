@@ -4885,6 +4885,12 @@ function getInjectAutoCleanup(): boolean {
 function getInjectAutoDedupe(): boolean {
     try { return vscode.workspace.getConfiguration('dao').get<boolean>('injectAutoDedupe', true) !== false; } catch { return true; }
 }
+// 反向注入「先清后注」: 注入前先把该 org 内一切非锁定的旧注入残条全部清除, 仅保留
+//   ① 期望态(本次将注入的 K/P/S/MCP/Automation) ② 单账号主页用户手动添加并锁定(setManualLock)的条目。
+//   其余(历史异名/弃用/多余)一律清理 → 注入后该 org 恰为「期望态 ∪ 用户锁定项」。默认 true, 用户可关。
+function getInjectReset(): boolean {
+    try { return vscode.workspace.getConfiguration('dao').get<boolean>('injectReset', true) !== false; } catch { return true; }
+}
 
 // ═══════════════════════════════════════════════════════════
 // 江海所以能为百谷王者，以其善下之 — 插件本体对本机 Agent 暴露
@@ -7002,10 +7008,11 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
             try { res.cleaned = await devinCleanLegacyDaoKnowledge(orgId, auth1); } catch { /* 守柔 */ }
             if (rulesText) res.knowledge = (await devinUpsertKnowledge(orgId, DAO_RULES_KB_NAME, rulesText, DAO_RULES_KB_TRIGGER, auth1)).ok;
             if (token) res.bridge = (await devinUpsertKnowledge(orgId, DAO_BRIDGE_KB_NAME, bridgeMd, DAO_BRIDGE_KB_TRIGGER, auth1)).ok;
-            if (pbBody) res.playbook = (await devinUpsertPlaybook(orgId, 'Operate Local Environment via Dao', pbBody, auth1)).ok;
             if (token) res.secret = (await devinUpsertSecret(orgId, 'DAO_TOKEN', token, auth1)).ok;
-            // 全覆盖: 再把用户完整注入档案(K/P/S/MCP/Automations)注入该账号; 单账号锁定项被 applyInjectProfileToOrg 跳过不覆盖。
-            try { await applyInjectProfileToOrg(orgId, auth1, injectProfile); res.profile = true; } catch { /* 守柔 */ }
+            // 剧本「老三样」(道法自然合订/帛书老子/道藏阴符经)随档案注入; 不再注入「Operate Local Environment via Dao」
+            //   (本机操作说明已并入知识库内穿MD+MCP文档), 该旧剧本由 resetOrgInjectables 自动清除。
+            // 全覆盖: 把用户完整注入档案(K/P/S/MCP/Automations)注入该账号; 先清后注且单账号锁定项被跳过不覆盖。
+            try { await applyInjectProfileToOrg(orgId, auth1, injectProfile); res.profile = true; res.playbook = true; } catch { /* 守柔 */ }
             // 校验: 回读知识库确认「道法自然准则」落地且正文完整(防截断/损坏)
             try {
                 const back = await devinListKnowledge(orgId, auth1);
@@ -7329,7 +7336,75 @@ function findAuth1ForOrg(orgId: string): string {
 // 单账号「绝利一源」保护: 用户在某账号 K/P/S/MCP 面板手动锁定(setManualLock)的条目,
 // 批量多账号反向注入(applyInjectProfileToOrg)对该 org 跳过同名条目, 不覆盖用户单账号定制。
 // 守柔: 只防覆盖, 锁定项保持用户手改版本; 未锁定项照常注入。
+// 先清后注 — 帛书·「为道日损·损之又损」: 注入前把该 org 内一切「非期望态 且 未被用户锁定」的旧注入残条全部清除。
+//   keep = 期望态名集(本次将 upsert 的 K/P/S/MCP/Automation) ∪ 固定道藏项(DAO_TOKEN) ∪ 用户单账号锁定项。
+//   清后随即由 applyInjectProfileToOrg 覆盖注入期望态 → 该 org 恰为「期望态 ∪ 用户锁定项」, 杜绝历史异名累积。
+async function resetOrgInjectables(orgId: string, auth1: string, p: InjectProfile): Promise<{ knowledge: number; playbooks: number; secrets: number; mcps: number; automations: number }> {
+    const removed = { knowledge: 0, playbooks: 0, secrets: 0, mcps: 0, automations: 0 };
+    const lc = (s: string) => String(s || '').toLowerCase();
+    // 期望保留集
+    const keepK = new Set<string>(p.knowledge.map(k => k.name).filter(Boolean));
+    [DAO_RULES_KB_NAME, DAO_BRIDGE_KB_NAME, DAO_MCP_KB_NAME].forEach(n => keepK.add(n));
+    const keepP = new Set<string>(p.playbooks.map(x => x.title).filter(Boolean));
+    const keepS = new Set<string>(p.secrets.map(s => s.name).filter(Boolean));
+    keepS.add('DAO_TOKEN');
+    const keepM = new Set<string>();
+    for (const m of (p.mcps || [])) { if (m && m.name) { keepM.add(lc(m.name)); keepM.add(lc(mcpSlug(m))); } }
+    const keepA = new Set<string>((p.automations || []).map(a => a.name).filter(Boolean));
+    // 知识
+    try {
+        const kl = await devinListKnowledge(orgId, auth1);
+        if (kl.ok && Array.isArray(kl.learnings)) for (const k of kl.learnings) {
+            if (!k || !k.id || typeof k.name !== 'string') continue;
+            if (keepK.has(k.name) || isManualLocked(orgId, 'knowledge', k.name)) continue;
+            try { await devinDeleteKnowledge(orgId, String(k.id), auth1); removed.knowledge++; } catch { /* 守柔 */ }
+        }
+    } catch { /* 守柔 */ }
+    // 剧本
+    try {
+        const pl = await devinListPlaybooks(orgId, auth1);
+        if (pl.ok && Array.isArray(pl.playbooks)) for (const pb of pl.playbooks) {
+            if (!pb || !pb.id || typeof pb.title !== 'string') continue;
+            if (keepP.has(pb.title) || isManualLocked(orgId, 'playbooks', pb.title)) continue;
+            try { await devinDeletePlaybook(orgId, String(pb.id), auth1); removed.playbooks++; } catch { /* 守柔 */ }
+        }
+    } catch { /* 守柔 */ }
+    // 密钥 (守柔: 仅清 dao 反向注入域; 未知 secret 不动以免误删会话密钥 → 仅删非保留且曾被本系统注入过的名)
+    try {
+        const sl = await devinListSecrets(orgId, auth1);
+        const known = new Set<string>(['DAO_TOKEN', 'GITHUB_PAT']);
+        if (sl.ok && Array.isArray(sl.secrets)) for (const s of sl.secrets) {
+            const nm = s && (s.name || s.key);
+            if (!nm || typeof nm !== 'string') continue;
+            if (keepS.has(nm) || isManualLocked(orgId, 'secrets', nm)) continue;
+            if (!known.has(nm)) continue;
+            try { await devinDeleteSecret(orgId, nm, auth1); removed.secrets++; } catch { /* 守柔 */ }
+        }
+    } catch { /* 守柔 */ }
+    // MCP
+    try {
+        const inst = await devinListMcpInstallations(orgId, auth1);
+        if (inst.ok && Array.isArray(inst.items)) for (const it of inst.items) {
+            const nm = lc(String((it.name || '').replace(/^★ /, '')));
+            if (!it.id || !nm) continue;
+            if (keepM.has(nm) || isManualLocked(orgId, 'mcps', nm)) continue;
+            try { await devinDeleteMcp(orgId, String(it.id), auth1); removed.mcps++; } catch { /* 守柔 */ }
+        }
+    } catch { /* 守柔 */ }
+    // 自动化
+    try {
+        const al = await devinListAutomations(orgId, auth1);
+        if (al.ok && Array.isArray(al.automations)) for (const it of al.automations) {
+            const xid = it.automation_id || it.id;
+            if (!xid || typeof it.name !== 'string') continue;
+            if (keepA.has(it.name) || isManualLocked(orgId, 'automations', it.name)) continue;
+            try { await devinDeleteAutomation(orgId, String(xid), auth1); removed.automations++; } catch { /* 守柔 */ }
+        }
+    } catch { /* 守柔 */ }
+    return removed;
+}
 async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
+    if (getInjectReset()) { try { await resetOrgInjectables(orgId, auth1, p); } catch { /* 守柔 */ } }
     for (const s of p.secrets) { if (s && s.name && !isManualLocked(orgId, 'secrets', s.name)) { try { await devinUpsertSecret(orgId, s.name, s.value || '', auth1); } catch { /* 守柔 */ } } }
     for (const k of p.knowledge) {
         if (!k || !k.name) continue;
