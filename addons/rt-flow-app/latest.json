@@ -1,6 +1,6 @@
 {
-  "versionCode": 65,
-  "versionName": "0.17.8",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.8/DevinCloud-mobile-v0.17.8.apk",
-  "notes": "v0.17.8 · 刷新手势由「双击」改为「三连击」: 在页面任意处连续点三下(每下间隔 <500ms, 不算滑动/拖拽/缩放)刷新一次, 误触更少; 仍仅观察手势不消费事件, 单击/双击/滑动/拖拽等原有交互不受影响。\n· 含 0.17.7「进入」按钮(切号+网页端开对话)、工具栏收纳(前进/后退/主页入页面工具菜单·右侧块加大)及 0.17.6 全服通 6 项 UX 修复等全部改动。签名一致, 原地覆盖升级不丢数据。"
+  "versionCode": 66,
+  "versionName": "0.17.9",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.9/DevinCloud-mobile-v0.17.9.apk",
+  "notes": "v0.17.9 · 根治「放久了网页交互/下载失效, 必须刷新一次才好」: 根因是长时间后台/重新挂载后 Chromium 把页面 visibilityState 卡在 hidden(视图其实在前台·有焦点), 导致 setTimeout/setInterval/requestAnimationFrame 全被冻结 → 看着正常能滚动, 但点下载等依赖异步的交互一律失效。修法: 回到前台/切标签时 onResume()+resumeTimers() 唤醒, 并跨帧切一下视图可见性逼 Chromium 重算页面可见性(不重载·不丢滚动/表单); 另加前台看门狗每 8s 自愈卡 hidden 的当前页 → 今后无需手动刷新。\n· 含 0.17.8 三连击刷新、0.17.7「进入」按钮+工具栏收纳、0.17.6 全服通 6 项 UX 修复等全部改动。签名一致, 原地覆盖升级不丢数据。"
 }
