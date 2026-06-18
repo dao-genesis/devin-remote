@@ -9,7 +9,9 @@ body{margin:0;background:#0e1116;color:#cdd3de;font:13px/1.5 -apple-system,Segoe
 .sub{font-size:11px;color:#8b949e;margin-top:2px}
 .crumb{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:#8b949e;flex-wrap:wrap}
 .crumb a{color:#58a6ff;cursor:pointer}
-.tb{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px;border-bottom:1px solid #21262d}
+.tb{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px;border-bottom:1px solid #21262d;align-items:center}
+.search{flex:1;min-width:120px;background:#0d1117;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:6px 9px;font-size:12px;outline:none}
+.search:focus{border-color:#0e639c}
 .btn{background:#21262d;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer}
 .btn.pri{background:#0e639c;border-color:#0e639c;color:#fff}
 .btn:active{opacity:.7}
@@ -47,6 +49,7 @@ body{margin:0;background:#0e1116;color:#cdd3de;font:13px/1.5 -apple-system,Segoe
   <div class="crumb" id="crumb"><span>📁 全部账号</span></div>
 </div>
 <div class="tb" id="tb">
+  <input class="search" id="q" placeholder="检索 账号 / 对话名称…" oninput="onSearch()" autocomplete="off"/>
   <button class="btn pri" onclick="reload()">&#128260; 刷新</button>
   <button class="btn" onclick="backupAllAcc()">&#128229; 全量备份</button>
 </div>
@@ -72,6 +75,22 @@ var VIEW = "accts";   // accts | sessions
 var CUR = null;       // 当前账号
 var CUR_NO = 0;       // 当前账号编号(面板)
 var SESSIONS = [];
+var Q = "";           // 检索词(账号名/对话名称) · 一级二级通用
+
+function onSearch(){
+  Q=(document.getElementById("q").value||"").trim().toLowerCase();
+  if(VIEW==="sessions"&&CUR) renderSessions(); else renderAccts();
+}
+function _accMatch(a,no){
+  if(!Q) return true;
+  return [a.email,a.id,a.password,a.orgName,(""+no)].some(function(v){ return String(v||"").toLowerCase().indexOf(Q)>=0; });
+}
+function _sessMatch(s){
+  if(!Q) return true;
+  var sid=s.devin_id||s.session_id||s.id||"";
+  var title=s.title||s.name||s.prompt||sid;
+  return String(title).toLowerCase().indexOf(Q)>=0 || String(sid).toLowerCase().indexOf(Q)>=0;
+}
 
 // ── 一级: 账号目录 ──
 function renderAccts(){
@@ -82,6 +101,7 @@ function renderAccts(){
   if(!accs.length){ document.getElementById("list").innerHTML='<div class="empty">无账号 — 请先到「切号面板」添加</div>'; return; }
   var html=accs.map(function(a,i){
     var no=i+1;
+    if(!_accMatch(a,no)) return "";
     var name=(a.email||a.id||("acc"+no));
     var pw=a.password||"";
     var logged=!!(a.auth1&&a.orgId);
@@ -98,7 +118,7 @@ function renderAccts(){
       '<div class="ad-meta"><span>'+(logged?"☁ 已登录·可备份":"🔒 未登录")+'</span>'+(a.orgName?'<span>'+_esc(a.orgName)+'</span>':'')+'</div>'+
     '</div>';
   }).join("");
-  document.getElementById("list").innerHTML=html;
+  document.getElementById("list").innerHTML = html || '<div class="empty">无匹配账号 · 清空搜索查看全部</div>';
 }
 function cpAcc(i){ var a=panelAccounts()[i]; if(!a)return; var t=(a.email||a.id||"")+"\n"+(a.password||""); try{N.clip&&N.clip(t);}catch(e){} toast("已复制账号+密码"); }
 
@@ -115,9 +135,15 @@ async function openAcc(i){
     if(!r.ok){ document.getElementById("list").innerHTML='<div class="empty">拉取失败: '+_esc(r.error||"")+'</div>'; return; }
     SESSIONS=r.sessions||[];
     if(!SESSIONS.length){ document.getElementById("list").innerHTML='<div class="empty">该账号暂无云端对话</div>'; return; }
-    document.getElementById("list").innerHTML=SESSIONS.map(sessHtml).join("");
+    renderSessions();
     toast("✓ "+SESSIONS.length+" 个对话");
   }catch(e){ document.getElementById("list").innerHTML='<div class="empty">异常: '+_esc(String(e))+'</div>'; }
+}
+function renderSessions(){
+  var box=document.getElementById("list");
+  if(!SESSIONS.length){ box.innerHTML='<div class="empty">该账号暂无云端对话</div>'; return; }
+  var html=SESSIONS.map(function(s,i){ return _sessMatch(s)?sessHtml(s,i):""; }).join("");
+  box.innerHTML = html || '<div class="empty">无匹配对话 · 清空搜索查看全部</div>';
 }
 function sessHtml(s,i){
   var sid=s.devin_id||s.session_id||s.id||"";
