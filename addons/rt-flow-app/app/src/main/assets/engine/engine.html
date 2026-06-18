@@ -15,7 +15,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.17.2";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.17.3";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -348,9 +348,18 @@
     },
     browseSubmitForm: async function(a){
       var sel=a.selector||"form";
-      var js="(function(){try{var f=document.querySelector('"+sel.replace(/'/g,"\\'")+"');if(!f)return 'not_found';if(f.tagName==='FORM')f.submit();else{var btn=f.querySelector('button[type=submit],input[type=submit]');if(btn)btn.click();else return 'no_submit';}return 'submitted';}catch(e){return 'err:'+e;}})()";
+      // 鲁棒提交: 选择器可指 FORM / 表单控件 / 任意搜索框。优先 requestSubmit(触发 JS submit 处理与校验),
+      // 退化到点提交按钮 / form.submit(); 无 form 的 SPA 搜索框则模拟回车(keydown/press/up Enter)。
+      var js="(function(){try{var el=document.querySelector('"+sel.replace(/'/g,"\\'")+"');if(!el)return 'not_found';"
+        +"var form=el.tagName==='FORM'?el:(el.form||(el.closest&&el.closest('form')));"
+        +"if(form){if(typeof form.requestSubmit==='function'){form.requestSubmit();return 'submitted';}"
+        +"var btn=form.querySelector('button[type=submit],input[type=submit],button:not([type])');"
+        +"if(btn){btn.click();return 'submitted';}form.submit();return 'submitted';}"
+        +"try{el.focus&&el.focus();}catch(_){}"
+        +"['keydown','keypress','keyup'].forEach(function(t){try{el.dispatchEvent(new KeyboardEvent(t,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));}catch(_){}});"
+        +"return 'submitted_enter';}catch(e){return 'err:'+e;}})()";
       var r = await execJs(a.tabIndex|0, js);
-      return {ok:r==='submitted', result:r};
+      return {ok:(r==='submitted'||r==='submitted_enter'), result:r};
     },
     browseGetInputValues: async function(a){
       var js="(function(){try{var inputs=[];document.querySelectorAll('input,textarea,select').forEach(function(el){inputs.push({tag:el.tagName,type:el.type||'',name:el.name||'',id:el.id||'',value:(el.value||'').slice(0,200),placeholder:el.placeholder||''});});return JSON.stringify(inputs.slice(0,100));}catch(e){return'[]';}})()";
