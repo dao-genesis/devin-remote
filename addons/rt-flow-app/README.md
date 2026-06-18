@@ -1,4 +1,4 @@
-# Devin Cloud 手机版 (v0.15.16)
+# Devin Cloud 手机版 (v0.15.20)
 
 > 模块目录: `addons/rt-flow-app/` (内部代号保留, 仅为目录/包名/自更新路径; 所有用户可见命名均为「Devin Cloud 手机版」)。
 
@@ -128,7 +128,11 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 | v0.15.13 | OTA 自更新链路对齐：`APP_VERSION` 与 `latest.json` 一致校验，升级提示稳定 |
 | v0.15.14 | **RPC 端到端加密** — 经中继的 RPC 载荷端到端加密，中继(含任何共享 Worker)只见密文，账号邮箱/密码/token 从不明文过中继；穿透面板补 E2E Key 展示 + 去中心化提示 |
 | v0.15.15 | 去中心化隧道。① **自带 cloudflared 免账号快隧** — `libcloudflared.so`(arm64-v8a + x86_64) 打入 jniLibs，解压到 nativeLibraryDir 执行，每台设备起独立 quick tunnel(`https://xxx.trycloudflare.com`)，无需 Cloudflare 账号/登录、强 http2 走 TCP 更稳；连不上才回退共享 Worker。② **P1 token 复用** — 不再每次冷启动换 token，持久化复用 → 中继 DO 命名空间稳定。③ **P2 wake lock** — RelayService 持 `PARTIAL_WAKE_LOCK`，息屏/Doze 下心跳不拖、不频繁断。签名统一 `e261b27f`，v0.15.x 原地覆盖升级数据不丢 |
-| v0.15.16 | **当前版本**：对话「下载 ZIP（含产出文件夹）」对齐桌面 dao-vsix。① 切号面板每条对话行新增 **📦** 按钮：一键下载该对话整包 ZIP——内含 `对话_人类可读.md` + `工作日志.md` + `_meta.json` + `files/<全部产出文件>`，与电脑端「下载对话内容」产物结构一致。② **纯 JS 零依赖 ZIP 写入器**（STORE 存储法 + CRC32，复刻桌面 ZipWriter 可读结构），WebView 无 zlib 亦可打合法 ZIP；产出文件经原生桥 `httpReqB64` 二进制无损取回。③ 引擎 RPC `extractConversation` 新增 `zip:true`：另返 `zipB64`/`zipName`/`zipFileCount`，云端 Agent 经隧道取「MD+ZIP」整包、base64 解码落盘即得。④ 拖拽提取的取文件指引 MD 同步说明 `zip:true` 与 📦。签名统一 `e261b27f`，v0.15.x 原地覆盖升级数据不丢 |
+| v0.15.16 | 对话「下载 ZIP（含产出文件夹）」对齐桌面 dao-vsix。① 切号面板每条对话行新增 **📦** 按钮：一键下载该对话整包 ZIP——内含 `对话_人类可读.md` + `工作日志.md` + `_meta.json` + `files/<全部产出文件>`，与电脑端「下载对话内容」产物结构一致。② **纯 JS 零依赖 ZIP 写入器**（STORE 存储法 + CRC32，复刻桌面 ZipWriter 可读结构），WebView 无 zlib 亦可打合法 ZIP；产出文件经原生桥 `httpReqB64` 二进制无损取回。③ 引擎 RPC `extractConversation` 新增 `zip:true`：另返 `zipB64`/`zipName`/`zipFileCount`，云端 Agent 经隧道取「MD+ZIP」整包、base64 解码落盘即得。④ 拖拽提取的取文件指引 MD 同步说明 `zip:true` 与 📦。签名统一 `e261b27f`，v0.15.x 原地覆盖升级数据不丢 |
+| v0.15.17 | **拖拽提取改走引擎服务端取数**，修复「一拖 4 个 ~90B 空壳」。根因：旧链路在源标签网页内 `fetch(credentials:include)` 拉对话流，但账号是 auth1/apiKey 显式鉴权（非 cookie 登录态）→ 页内 fetch 取不到、只剩 ~90B 模板头。改走与 📦/中继同源的 `extractConversation`（已存 auth1），严格只产 **2 件**：无产出文件→`对话.md`+`取数指引.md`（账号/SessionID/提取 Skill）；有产出文件→`.zip`+`取数指引.md`。AVD 实测对话 MD 达 282KB |
+| v0.15.18 | 三项真机修复。① **拖拽误判「不是对话页」**：Devin SPA 走 `history.pushState` 不触发 WebView 整页加载回调 → 缓存标签 URL 停在首页；新增 `doUpdateVisitedHistory` 同步 URL + 拖拽时读源标签实时 `location.href`。② **标签长按起拖**：改为整片标签自管长按（按住即起、滑动才放行横滚），不再难触发/错位。③ **切号面板**去掉「点整行登录」，登录/切号只由 ⚡/🔑 按钮触发 |
+| v0.15.19 | **整合 knoop7/Ava 后台持久化模块**。① 电池优化豁免(Doze)：首启动温和引导 + 面板可随时申请；② 各厂商自启动深链：面板「🔋 后台保活」一键跳转 华为/小米/OPPO/vivo/三星/一加/魅族 自启动/白名单/省电策略；③ WifiLock：RelayService 在 `PARTIAL_WAKE_LOCK` 外再持高性能/低延迟 Wi-Fi 锁，息屏不掉 Wi-Fi、WSS 心跳不断；④ BootReceiver 增强：覆盖各厂商 QUICKBOOT + `MY_PACKAGE_REPLACED`（OTA 自更新后自动重启中继）；⑤ 云端 Agent 经隧道可读 `keepAliveStatus` |
+| v0.15.20 | **当前版本**：内网穿透板块全面完善。① 去中心化隧道(路线B) **cloudflared 异常退出自动重试**(退避 2s/4s/6s)，超 3 次诚实回退中继并明示「隧道不可用·已回退中继(Worker)，手机仍在线」——隧道与中继**并行**，隧道失败丝毫不影响中继。② 穿透面板新增「**当前生效链路**」指示：隧道连通→`🌐 去中心化隧道(直连本设备)`；否则→`☘ 中继 Worker(默认)·在线`。③ 修正面板/注释陈旧文案：token 已持久化复用、长期稳定(P1，端点 URL+Token 长期不变)。④ Worker(中继)同步上 **WebSocket Hibernation**(`state.acceptWebSocket`+自动 ping 应答) **+ 基础限流**：常连不再全天候计费，用户量增多后成本可降一个数量级；协议对外逐字节不变，**需重新部署 Worker** 生效。详见 `docs/中继架构与成本.md`。签名 `e261b27f`，v0.15.x 原地覆盖升级数据不丢 |
 
 ## 取代的旧模块
 

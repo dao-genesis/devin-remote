@@ -98,36 +98,69 @@ export default {
 };
 
 // ── Durable Object: 每个 (session,token) 一个实例, 持有一条客户端 WSS + 在途请求表 ──
+//
+// 道法自然·上量必修(规模化第一杀手是「钱」而非架构): 本类用 WebSocket Hibernation API
+//   (state.acceptWebSocket + webSocket* 回调 + setWebSocketAutoResponse 心跳自动应答) 替代
+//   旧的 server.accept()+addEventListener 常驻监听。后果差异:
+//     · 旧版: N 台手机常连 = N 个 DO **全天候按 wall-clock 计费**(即使没说话), 成本随在线设备线性烧。
+//     · 新版: 连接空闲(无在途请求)时 DO 可被运行时驱逐出内存, **WSS 仍保活**; 15s 心跳由运行时
+//             自动回 pong(DO 不必唤醒)→ 常连场景计费可降一个数量级。这是「用户量增多」后最该有的形态。
+//   协议对外**完全不变**: /connect 出站、/relay/<session> POST 驱动、{type:request|response|ping|pong}
+//   帧格式与旧版逐字节一致 → 现网手机/驱动方无需任何改动, 仅需重新部署本 Worker。
+//
+//   注: this.pending/this.seq 仍是内存态, 但每个公网请求在 fetch() 里 `await` 直到回包/60s 超时,
+//   该 await 会把实例**钉在内存**直到本请求完结 → 配对的 pending 项必在同一活跃期创建并 resolve,
+//   不受 hibernation 驱逐影响(驱逐只发生在「无在途请求」的空闲期)。
 export class RelayDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.agent = null; // 已连接的客户端 socket (server 端)
     this.pending = new Map(); // id -> { resolve, timer }
     this.seq = 0;
+    this.rl = { windowStart: 0, count: 0 }; // 基础限流滑动窗口(内存·活跃期有效)
+  }
+
+  // 当前已连接的 agent socket: hibernation 下不持 this.agent, 而从运行时取活跃 WSS。
+  // 一个 DO 对应一台设备(一条连接); 顶替后只剩最新一条, 取末位即当前 agent。
+  agentSocket() {
+    let list = [];
+    try { list = this.state.getWebSockets() || []; } catch (e) { list = []; }
+    return list.length ? list[list.length - 1] : null;
   }
 
   async fetch(req) {
     const url = new URL(req.url);
 
-    // 客户端 WSS 接入
+    // 客户端 WSS 接入 (Hibernation: 用 state.acceptWebSocket, 空闲可驱逐、WSS 保活)
     if (url.pathname === "/connect") {
       const pair = new WebSocketPair();
       const client = pair[0];
       const server = pair[1];
-      server.accept();
-      // 新连接顶替旧连接 (断线重连即覆盖)
-      if (this.agent) { try { this.agent.close(1000, "replaced"); } catch (e) {} }
-      this.agent = server;
-      server.addEventListener("message", (ev) => this.onAgentMessage(ev));
-      server.addEventListener("close", () => { if (this.agent === server) this.agent = null; });
-      server.addEventListener("error", () => { if (this.agent === server) this.agent = null; });
+      // 新连接顶替旧连接 (断线重连即覆盖); 关闭所有既有 hibernatable 连接。
+      try {
+        for (const ws of (this.state.getWebSockets() || [])) {
+          try { ws.close(1000, "replaced"); } catch (e) {}
+        }
+      } catch (e) {}
+      this.state.acceptWebSocket(server);
+      // 心跳自动应答: 客户端每 15s 发 {"type":"ping"} → 运行时直接回 {"type":"pong"},
+      // DO 无需从 hibernation 唤醒 → 常连不烧 CPU 时长。请求串必须与客户端逐字节一致。
+      try {
+        this.state.setWebSocketAutoResponse(
+          new WebSocketRequestResponsePair(JSON.stringify({ type: "ping" }), JSON.stringify({ type: "pong" }))
+        );
+      } catch (e) {}
       return new Response(null, { status: 101, webSocket: client });
     }
 
     // 公网入站 → 转发给客户端
-    if (!this.agent) {
+    const agent = this.agentSocket();
+    if (!agent) {
       return json({ error: "no_agent", hint: "no connected agent matches this session+token" }, 502);
+    }
+    // 基础限流: 单实例(=单设备)滑动 10s 窗口上限, 防失控/被滥用驱动; 正常手动操作远不及此。
+    if (!this.rateOk()) {
+      return json({ error: "rate_limited", hint: "too many requests for this session+token; slow down" }, 429);
     }
     let frame = {};
     try { frame = await req.json(); } catch (e) { frame = {}; }
@@ -143,7 +176,7 @@ export class RelayDO {
       }, 60000);
       this.pending.set(id, { resolve, timer });
       try {
-        this.agent.send(JSON.stringify({ type: "request", id, path: reqPath, method, body }));
+        agent.send(JSON.stringify({ type: "request", id, path: reqPath, method, body }));
       } catch (e) {
         clearTimeout(timer);
         this.pending.delete(id);
@@ -153,11 +186,23 @@ export class RelayDO {
     return json(out.body, out.status || 200);
   }
 
-  onAgentMessage(ev) {
+  rateOk() {
+    const WIN = 10000, MAX = 120; // 10s 内 ≤120 次驱动 (单设备手动操作绰绰有余, 失控/暴力则截断)
+    const now = Date.now();
+    if (now - this.rl.windowStart > WIN) { this.rl.windowStart = now; this.rl.count = 0; }
+    this.rl.count++;
+    return this.rl.count <= MAX;
+  }
+
+  // ── Hibernation 回调 (替代 addEventListener; 运行时在有消息/关闭/错误时唤醒并调用) ──
+  webSocketMessage(ws, message) {
     let m;
-    try { m = JSON.parse(typeof ev.data === "string" ? ev.data : ""); } catch (e) { return; }
+    try {
+      const s = (typeof message === "string") ? message : new TextDecoder().decode(message);
+      m = JSON.parse(s);
+    } catch (e) { return; }
     if (!m || typeof m !== "object") return;
-    if (m.type === "ping") { try { this.agent.send(JSON.stringify({ type: "pong" })); } catch (e) {} return; }
+    if (m.type === "ping") { try { ws.send(JSON.stringify({ type: "pong" })); } catch (e) {} return; } // 兜底(正常由 auto-response 处理)
     if (m.type === "pong") return;
     if (m.type === "response" && m.id && this.pending.has(m.id)) {
       const p = this.pending.get(m.id);
@@ -166,5 +211,7 @@ export class RelayDO {
       p.resolve({ status: m.status || 200, body: m.body });
     }
   }
+  webSocketClose(ws, code, reason, wasClean) { try { ws.close(code, reason); } catch (e) {} }
+  webSocketError(ws, err) { /* 运行时会随后回调 close; 无需额外处理 */ }
 }
 

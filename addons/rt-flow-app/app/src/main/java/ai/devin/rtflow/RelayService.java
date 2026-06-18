@@ -40,6 +40,8 @@ public class RelayService extends Service {
     private LocalServer localServer;
     private TunnelManager tunnel;
     public static volatile String tunnelStatus = "{\"enabled\":false}";
+    private int tunnelRetries = 0;                 // cloudflared 连续异常退出计数 (连通后清零)
+    private static final int TUNNEL_RETRY_MAX = 3; // 自动重试上限; 超过则诚实回退中继(国内常被墙)
     private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.SynchronousQueue<String>> pendingLocal
             = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -96,9 +98,9 @@ public class RelayService extends Service {
             int port = localServer.getPort();
             if (tunnel != null) tunnel.stop();
             tunnel = new TunnelManager(this, port, new TunnelManager.Callback() {
-                public void onUrl(String url) { writeUserFile("tunnel-url", url); updateTunnelStatus(url, true, "隧道已连通"); }
+                public void onUrl(String url) { tunnelRetries = 0; writeUserFile("tunnel-url", url); updateTunnelStatus(url, true, "隧道已连通", 0, false); }
                 public void onLog(String line) { android.util.Log.i("RTFlowTunnel", line); }
-                public void onExit(int code) { updateTunnelStatus("", false, "cloudflared 已退出(" + code + ")"); }
+                public void onExit(int code) { onTunnelExit(code); }
             });
             boolean ok = tunnel.start();
             updateTunnelStatus("", false, ok ? "正在建立隧道…" : "cloudflared 二进制缺失/启动失败");
@@ -109,8 +111,26 @@ public class RelayService extends Service {
     private synchronized void stopTunnel() {
         if (tunnel != null) { tunnel.stop(); tunnel = null; }
         if (localServer != null) { localServer.stop(); localServer = null; }
+        tunnelRetries = 0;
         try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
-        updateTunnelStatus("", false, "已停止");
+        updateTunnelStatus("", false, "已停止", 0, false);
+    }
+    /** cloudflared 异常退出处理: 用户仍开着隧道则自动重试 N 次; 超限则诚实回退中继。
+     *  关键: 中继(Worker) 与隧道是并行的, 隧道失败丝毫不影响中继 → 手机始终在线可远程接入。 */
+    private synchronized void onTunnelExit(int code) {
+        if (!tunnelEnabledFlag()) { updateTunnelStatus("", false, "已停止", 0, false); return; }
+        try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
+        if (tunnelRetries < TUNNEL_RETRY_MAX) {
+            tunnelRetries++;
+            int attempt = tunnelRetries;
+            long delay = 2000L * attempt; // 退避 2s/4s/6s
+            updateTunnelStatus("", false, "cloudflared 退出(" + code + ") · 第 " + attempt + "/" + TUNNEL_RETRY_MAX + " 次重试中…", attempt, false);
+            main.postDelayed(() -> { if (tunnelEnabledFlag()) startTunnel(); }, delay);
+        } else {
+            // 多次退出 = 本网络下到 Cloudflare 边缘的持久隧道连不上(国内蜂窝常拦截 argotunnel/QUIC)。
+            // 诚实告知: 隧道不可用, 已回退中继; 中继仍在线, 远程接入照常。
+            updateTunnelStatus("", false, "去中心化隧道不可用(cloudflared 多次退出, 本网络疑被拦截到 Cloudflare 边缘) · 已回退中继(Worker), 手机仍在线可远程接入", tunnelRetries, true);
+        }
     }
     // 供 MainActivity 面板代理调用 (同进程)
     public boolean tunnelEnabledFlag() { return "1".equals(readUserFile("tunnel-enabled")); }
@@ -119,10 +139,14 @@ public class RelayService extends Service {
         main.post(() -> { if (on) startTunnel(); else stopTunnel(); });
     }
     private void updateTunnelStatus(String url, boolean connected, String msg) {
+        updateTunnelStatus(url, connected, msg, 0, false);
+    }
+    private void updateTunnelStatus(String url, boolean connected, String msg, int retries, boolean fallback) {
         try {
             org.json.JSONObject o = new org.json.JSONObject();
             o.put("enabled", true); o.put("connected", connected);
             o.put("url", url == null ? "" : url); o.put("msg", msg == null ? "" : msg);
+            o.put("retries", retries); o.put("fallback", fallback);
             o.put("ts", System.currentTimeMillis());
             tunnelStatus = o.toString();
         } catch (Exception ignored) {}
