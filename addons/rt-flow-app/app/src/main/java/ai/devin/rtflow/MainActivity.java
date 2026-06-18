@@ -310,7 +310,7 @@ public class MainActivity extends AppCompatActivity {
 
         // 整页缩放滑块 (最右上角): 50%–170%, 默认 100%。解决长页/长文件点不到取消按钮 → 缩小即可全览
         TextView zicon = new TextView(this);
-        zicon.setText("\uD83D\uDD0D"); zicon.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        zicon.setText("\uD83D\uDD0D"); zicon.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         zicon.setTextColor(0xFF8B949E); zicon.setPadding(dp(2), 0, dp(1), 0);
         SeekBar zoomBar = new SeekBar(this);
         zoomBar.setMax(120); zoomBar.setProgress(pageZoom - 50);   // 0..120 → 50%..170%
@@ -319,8 +319,8 @@ public class MainActivity extends AppCompatActivity {
         zlp.leftMargin = dp(2); zlp.rightMargin = dp(2);
         zoomBar.setLayoutParams(zlp);
         zoomLabel = new TextView(this);
-        zoomLabel.setText(pageZoom + "%"); zoomLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        zoomLabel.setTextColor(0xFFCDD3DE); zoomLabel.setMinWidth(dp(34)); zoomLabel.setPadding(dp(2), 0, dp(2), 0);
+        zoomLabel.setText(pageZoom + "%"); zoomLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        zoomLabel.setTextColor(0xFFCDD3DE); zoomLabel.setMinWidth(dp(40)); zoomLabel.setPadding(dp(3), 0, dp(3), 0);
         zoomBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
                 pageZoom = 50 + p; zoomLabel.setText(pageZoom + "%"); applyZoomActive();
@@ -333,27 +333,21 @@ public class MainActivity extends AppCompatActivity {
 
         Button go = chipBtnSm("→");
         go.setOnClickListener(v -> go(addr.getText().toString()));
-        // 导航键: 后退 / 前进 / 主页 (像真浏览器)
-        Button back = chipBtnSm("\u25C0");
-        back.setOnClickListener(v -> { Tab t = cur(); if (t != null && t.web.canGoBack()) t.web.goBack(); });
-        Button fwd = chipBtnSm("\u25B6");
-        fwd.setOnClickListener(v -> { Tab t = cur(); if (t != null && t.web.canGoForward()) t.web.goForward(); });
-        Button home = chipBtnSm("\u2302");
-        home.setOnClickListener(v -> newTab(SWITCH, null));
-        // 网页栏五角星：点击收藏/取消收藏当前页 (像浏览器)
-        starBtn = chipBtnSm("\u2606");
+        // 导航键(后退/前进/主页)已移入 ≡ → 页面工具收纳菜单 (基本用不到, 收起腾出工具栏空间)
+        // 网页栏五角星：点击收藏/取消收藏当前页 (像浏览器) — 略放大更易点
+        starBtn = chipBtnMd("\u2606");
         starBtn.setOnClickListener(v -> toggleBookmarkCurrent());
         // 刷新按钮：原地重载当前标签的 WebView（保留多实例登录态）
-        Button reload = chipBtnSm("\u21BB");
+        Button reload = chipBtnMd("\u21BB");
         reload.setOnClickListener(v -> reloadActive());
         // 翻译按钮 (网址旁·一键整页翻译, 再点恢复原文) — 同电脑端 Chrome 体感
         Button tr = chipBtnSm("\u8BD1");
         tr.setOnClickListener(v -> toggleTranslate());
         // 下载管理悬浮窗按钮
-        dlBtn = chipBtnSm("\uD83D\uDCE5");
+        dlBtn = chipBtnMd("\uD83D\uDCE5");
         dlBtn.setOnClickListener(v -> toggleDownloadPanel());
         // 全服通悬浮窗按钮 (下载键右侧): 近期对话(跨号·实时) + 备份网页端
-        daoBtn = chipBtnSm("\uD83D\uDDC2");
+        daoBtn = chipBtnMd("\uD83D\uDDC2");
         daoBtn.setOnClickListener(v -> toggleDaoPanel());
 
         // 第一行: 菜单 + 地址 + 前往
@@ -368,9 +362,6 @@ public class MainActivity extends AppCompatActivity {
         btnRow.setGravity(Gravity.CENTER_VERTICAL);
         btnRow.setBackgroundColor(0xFF161B22);
         btnRow.setPadding(dp(6), dp(1), dp(8), dp(4));
-        btnRow.addView(back);
-        btnRow.addView(fwd);
-        btnRow.addView(home);
         btnRow.addView(zicon);
         btnRow.addView(zoomBar);
         btnRow.addView(zoomLabel);
@@ -428,6 +419,17 @@ public class MainActivity extends AppCompatActivity {
         b.setLayoutParams(lp);
         return b;
     }
+    // 略放大的动作键 (工具栏右侧 收藏/刷新/下载/全服通) → 更易点
+    private Button chipBtnMd(String t) {
+        Button b = chipBtn(t);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        b.setPadding(dp(13), dp(3), dp(13), dp(3));
+        b.setMinHeight(0); b.setMinimumHeight(0);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = dp(6);
+        b.setLayoutParams(lp);
+        return b;
+    }
     private void applyZoomActive() {
         if (active < 0 || active >= tabs.size()) return;
         applyZoom(tabs.get(active).web);
@@ -453,12 +455,15 @@ public class MainActivity extends AppCompatActivity {
         mu.add(0, 14, 9, "用户脚本 (油猴)");
         mu.add(0, 15, 10, "Shizuku 权限 (自我 ADB)");
         android.view.SubMenu page = mu.addSubMenu(0, 100, 9, "页面工具");
-        page.add(0, 20, 0, "页内查找");
-        page.add(0, 21, 1, cur() != null && cur().desktop ? "切回移动版" : "桌面版网站");
-        page.add(0, 22, 2, "阅读模式");
-        page.add(0, 23, 3, cur() != null && cur().night ? "关闭夜间模式" : "夜间模式");
-        page.add(0, 26, 4, "导出整机分享包 (APK+全部数据)");
-        page.add(0, 27, 5, "导入分享包 (换机同步)");
+        page.add(0, 40, 0, "\u25C0 后退");
+        page.add(0, 41, 1, "\u25B6 前进");
+        page.add(0, 42, 2, "\u2302 主页 (切号面板)");
+        page.add(0, 20, 3, "页内查找");
+        page.add(0, 21, 4, cur() != null && cur().desktop ? "切回移动版" : "桌面版网站");
+        page.add(0, 22, 5, "阅读模式");
+        page.add(0, 23, 6, cur() != null && cur().night ? "关闭夜间模式" : "夜间模式");
+        page.add(0, 26, 7, "导出整机分享包 (APK+全部数据)");
+        page.add(0, 27, 8, "导入分享包 (换机同步)");
         android.view.SubMenu shareM = mu.addSubMenu(0, 101, 10, "分享 / 快捷");
         shareM.add(0, 30, 0, "分享本页");
         shareM.add(0, 31, 1, "复制网址");
@@ -475,6 +480,9 @@ public class MainActivity extends AppCompatActivity {
                 case 12: showBookmarks(); return true;
                 case 14: newTab(SCRIPTS, null); return true;
                 case 15: newTab(SHIZUKU, null); return true;
+                case 40: { Tab t = cur(); if (t != null && t.web.canGoBack()) t.web.goBack(); else toast("无法后退"); return true; }
+                case 41: { Tab t = cur(); if (t != null && t.web.canGoForward()) t.web.goForward(); else toast("无法前进"); return true; }
+                case 42: newTab(SWITCH, null); return true;
                 case 20: case 25: toggleFindBar(); return true;
                 case 21: toggleDesktop(); return true;
                 case 22: readerMode(); return true;
@@ -818,6 +826,17 @@ public class MainActivity extends AppCompatActivity {
                 startDownload(dlUrl, ua, contentDisposition, mimetype));
 
         web.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // 双击页面任意处 → 刷新一次 (刷新高频, 省去每次去点右上角小按钮)。仅观察手势不消费事件,
+        // 故单击/上下左右滑动/长按拖拽等原有交互一律不受影响。
+        final WebView webRef = web;
+        final GestureDetector dtap = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override public boolean onDoubleTap(MotionEvent e) {
+                Tab a = cur();
+                if (a != null && a.web == webRef) { try { webRef.reload(); toast("已刷新"); } catch (Exception ignored) {} }
+                return false;
+            }
+        });
+        web.setOnTouchListener((v, ev) -> { try { dtap.onTouchEvent(ev); } catch (Exception ignored) {} return false; });
         // 不再包 SwipeRefreshLayout 下拉刷新: 它会拦截顶部下拉, 导致 Devin 对话页等无法正常上下滑动。
         // 刷新统一走右上角刷新按钮 (reloadActive)。tab.swipe 保持 null, 各处视图挂载自动回退到 web。
         tab.swipe = null;
@@ -2115,6 +2134,17 @@ public class MainActivity extends AppCompatActivity {
         /** 在新标签打开 (多实例则注入对应账号)。 */
         @JavascriptInterface public void openEntryNewTab(String accJson, String url) {
             main.post(() -> { String u = (url == null || url.isEmpty()) ? DEVIN : url; newTab(u, (accJson == null || accJson.isEmpty()) ? null : accJson); });
+        }
+        /** 全服通「进入」: 切到该对话所属账号(WAM 注入鉴权) 并前台打开该对话网页页, 同时关掉全服通悬浮窗露出网页。
+         *  网页 URL 用去掉 devin- 前缀的 id (app.devin.ai/sessions/<hex>), 与浏览器地址栏一致。 */
+        @JavascriptInterface public void openAccountSession(String accJson, String sid) {
+            main.post(() -> {
+                String s = (sid == null) ? "" : sid.trim();
+                if (s.startsWith("devin-")) s = s.substring(6);
+                String u = s.isEmpty() ? DEVIN : ("https://app.devin.ai/sessions/" + s);
+                newTab(u, (accJson == null || accJson.isEmpty()) ? null : accJson);
+                if (daoPanel != null) closeDaoPanel();
+            });
         }
         @JavascriptInterface public void openText(String title, String content) {
             main.post(() -> {
