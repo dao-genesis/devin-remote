@@ -2651,8 +2651,8 @@ public class MainActivity extends AppCompatActivity {
         panel.setBackgroundColor(0xFF0E1116);
         int sw = getResources().getDisplayMetrics().widthPixels;
         int sh = getResources().getDisplayMetrics().heightPixels;
-        int w = Math.min(dp(420), (int) (sw * 0.92));
-        int h = Math.min(dp(620), (int) (sh * 0.82));
+        int w = Math.min(dp(320), sw - dp(24));
+        int h = Math.min(dp(460), (int) (sh * 0.72));
         FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(w, h);
         plp.gravity = Gravity.TOP | Gravity.END; plp.topMargin = dp(6); plp.rightMargin = dp(8);
         panel.setLayoutParams(plp);
@@ -3072,9 +3072,11 @@ public class MainActivity extends AppCompatActivity {
      *  email 空 / 引擎离线 / 取数空 → 执行 fallback (回退链路或报错)。 */
     private void engineExtractInject(final String email, final String sid, final String accJson,
                                      final WebView target, final float x, final float y, final Runnable fallback) {
-        final RelayService rs = RelayService.instance;
-        if (email == null || email.isEmpty() || rs == null) { if (fallback != null) fallback.run(); return; }
         new Thread(() -> {
+            // 秒拖: 该对话已本地备份 → 直接读盘注入两形态, 不联网 (覆盖 全服通拖拽 与 页→页拖拽)
+            if (tryLocalBackupInject(email, accJson, sid, target, x, y)) return;
+            final RelayService rs = RelayService.instance;
+            if (email == null || email.isEmpty() || rs == null) { main.post(() -> { if (fallback != null) fallback.run(); }); return; }
             String conv = "", title = sid, zipB64 = "", zipName = ""; int zipFileCount = 0;
             try {
                 JSONObject body = new JSONObject();
@@ -3116,6 +3118,68 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         }).start();
+    }
+
+    /** 账号备份文件夹名: 复刻 switch.html _acctFolder ( (email||id) 取@前 → 仅留字母数字_- )。 */
+    private String acctFolderOf(String email, String accJson) {
+        String base = (email == null) ? "" : email;
+        if (base.isEmpty() && accJson != null) {
+            try { JSONObject o = new JSONObject(accJson); base = o.optString("email", o.optString("id", "")); } catch (Exception ignored) {}
+        }
+        if (base == null) base = "";
+        int at = base.indexOf('@'); if (at >= 0) base = base.substring(0, at);
+        return base.replaceAll("[^a-zA-Z0-9_\\-]", "_");
+    }
+
+    /** 秒拖: 若该 email+sid 已在本地备份(backups/<folder>/manifest.json), 直接读盘注入两形态, 不联网。
+     *  命中并已派发注入返回 true; 未备份/读不到 返回 false (由调用方走联网提取)。 */
+    private boolean tryLocalBackupInject(String email, String accJson, String sid, final WebView target, final float x, final float y) {
+        try {
+            if (target == null || sid == null || sid.isEmpty()) return false;
+            String folder = acctFolderOf(email, accJson);
+            if (folder.isEmpty()) return false;
+            String manStr = vaultReadBackup(folder, "manifest.json");
+            if (manStr == null || manStr.isEmpty()) return false;
+            JSONObject sessions = new JSONObject(manStr).optJSONObject("sessions");
+            if (sessions == null) return false;
+            JSONObject ent = sessions.optJSONObject(sid);
+            if (ent == null && sid.startsWith("devin-")) ent = sessions.optJSONObject(sid.substring(6));
+            if (ent == null && !sid.startsWith("devin-")) ent = sessions.optJSONObject("devin-" + sid);
+            if (ent == null) return false;
+            final String title = ent.optString("title", sid);
+            String mdName = ent.optString("md", "");
+            String zipName = ent.optString("zip", "");
+            final int hasFiles = ent.optInt("hasFiles", 0);
+            final String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
+            final String guide = buildAccessGuideMd(accJson, sid, title);
+            if (zipName != null && !zipName.isEmpty() && hasFiles > 0) {
+                final String zb64 = vaultReadBackupB64(folder, zipName);
+                if (zb64 != null && !zb64.isEmpty()) {
+                    main.post(() -> {
+                        java.util.List<String[]> files = new java.util.ArrayList<>();
+                        files.add(new String[]{ base + ".zip", zb64 });
+                        files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
+                        dropB64FilesIntoPage(target, x, y, files);
+                        toast("本地备份·秒注入 文件夹ZIP(" + hasFiles + "件) + 取数指引");
+                    });
+                    return true;
+                }
+            }
+            if (mdName != null && !mdName.isEmpty()) {
+                final String md = vaultReadBackup(folder, mdName);
+                if (md != null && !md.isEmpty()) {
+                    main.post(() -> {
+                        java.util.List<String[]> files = new java.util.ArrayList<>();
+                        files.add(new String[]{ base + "-conversation.md", b64Utf8(md) });
+                        files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
+                        dropB64FilesIntoPage(target, x, y, files);
+                        toast("本地备份·秒注入 对话MD + 取数指引");
+                    });
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     /** 全服通近期对话拖拽放手: 据账号(含 email/密码/org) + sid 直接经引擎取数并注入目标页 (无需源标签)。 */
