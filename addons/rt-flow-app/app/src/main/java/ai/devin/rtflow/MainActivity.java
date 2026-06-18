@@ -4020,12 +4020,27 @@ public class MainActivity extends AppCompatActivity {
             sb.append("{\"index\":").append(i)
               .append(",\"url\":").append(JSONObject.quote(t.url == null ? "" : t.url))
               .append(",\"title\":").append(JSONObject.quote(t.title == null ? "" : t.title))
-              .append(",\"account\":").append(JSONObject.quote(t.accountJson == null ? "" : t.accountJson))
+              .append(",\"account\":").append(safeTabAccount(t.accountJson))
               .append(",\"internal\":").append(t.internal)
               .append(",\"active\":").append(i == active)
               .append("}");
         }
         return sb.append("]").toString();
+    }
+
+    /** 标签所属账号的「脱敏」标识 (供 browseListTabs 经中继外发): 仅 email/id/org/编号, 绝不含 password/auth1/token/apiKey。 */
+    private String safeTabAccount(String accountJson) {
+        if (accountJson == null || accountJson.isEmpty()) return "\"\"";
+        try {
+            JSONObject a = new JSONObject(accountJson);
+            JSONObject s = new JSONObject();
+            String email = a.optString("email", a.optString("id", ""));
+            if (!email.isEmpty()) { s.put("email", email); s.put("id", email); }
+            String org = a.optString("orgName", "");
+            if (!org.isEmpty()) s.put("orgName", org);
+            if (a.has("no")) s.put("no", a.opt("no"));
+            return s.toString();
+        } catch (Exception e) { return "\"\""; }
     }
 
     /** 在指定标签中执行 JS, 结果通过回调返回 */
