@@ -43,7 +43,7 @@
 ## 安装
 
 ```
-code --install-extension dao-devin-export-1.4.2.vsix
+code --install-extension dao-devin-export-1.4.3.vsix
 ```
 
 ## 使用

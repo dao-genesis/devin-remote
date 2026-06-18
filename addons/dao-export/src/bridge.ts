@@ -11,7 +11,7 @@ import * as os from 'os';
 import * as api from './api';
 import { exportSessionToZip, exportSessionToMarkdown } from './exporter';
 import { buildWorklog, extractChanges, safeName } from './worklog';
-import { AccountStore } from './accountStore';
+import { AccountStore, AccountView } from './accountStore';
 
 export interface BridgeHost {
   store: AccountStore;
@@ -139,9 +139,7 @@ export class AgentBridge {
         const { email, password, token } = JSON.parse(body || '{}');
         const text = token ? String(token) : `${email} ${password}`;
         await store.addFromText(text);
-        const view = store.views().find((v) =>
-          (email && v.email.toLowerCase() === String(email).toLowerCase()) || v.kind === 'token');
-        const id = view ? view.id : store.views()[store.views().length - 1]?.id;
+        const id = selectLoginAccountId(store.views(), email, token);
         if (!id) { return send(400, { error: '无法识别账号/凭据' }); }
         const a = await store.setActive(id);
         await this.host.refreshSessions();
@@ -361,6 +359,28 @@ Invoke-RestMethod "${base}/api/session/devin-xxxx/export" -Method Post -Headers 
 无为而无不为 道法自然
 `;
   }
+}
+
+/**
+ * Pick which account a POST /api/login call should activate, after the
+ * credential text has been added to the store. A token login must resolve to a
+ * token account, and an email+password login must resolve to that email's
+ * account — never to an unrelated pre-existing token account. Falls back to the
+ * most-recently-added account (the one we just inserted) when nothing matches.
+ */
+export function selectLoginAccountId(
+  views: AccountView[],
+  email?: string,
+  token?: string,
+): string | undefined {
+  if (token) {
+    const tv = [...views].reverse().find((v) => v.kind === 'token');
+    if (tv) { return tv.id; }
+  } else if (email) {
+    const ev = views.find((v) => v.email.toLowerCase() === String(email).toLowerCase());
+    if (ev) { return ev.id; }
+  }
+  return views[views.length - 1]?.id;
 }
 
 const ENDPOINTS = [
