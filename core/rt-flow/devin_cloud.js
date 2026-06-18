@@ -1051,7 +1051,7 @@ async function wipeAccount(auth, opts) {
   const report = {
     email: auth.email,
     dryRun: dry,
-    sessions: { found: 0, deleted: 0, archived: 0, failed: 0 },
+    sessions: { found: 0, deleted: 0, cleaned: 0, failed: 0 },
     knowledge: { found: 0, deleted: 0, failed: 0 },
     playbooks: { found: 0, deleted: 0, failed: 0 },
     secrets: { found: 0, deleted: 0, failed: 0 },
@@ -1124,7 +1124,7 @@ async function wipeAccount(auth, opts) {
     const id = s.devin_id || s.session_id || s.id;
     if (!id) { report.sessions.failed++; continue; }
     const r = await deleteSession(auth, id);
-    if (r.ok) { report.sessions.deleted++; if (r.cleaned) report.sessions.cleaned = (report.sessions.cleaned || 0) + 1; }
+    if (r.ok) { report.sessions.deleted++; if (r.cleaned) report.sessions.cleaned++; }
     else { report.sessions.failed++; report.errors.push("session:" + id + ":" + r.status); }
     prog("清理对话 " + report.sessions.deleted + "/" + sessions.length);
   }
@@ -2067,7 +2067,7 @@ function _scanConvEntries(base) {
       const htmlPath = path.join(base, e.name, "对话.html");
       convs.push({
         name: e.name, path: path.join(base, e.name), mtime, type: "folder",
-        title: meta.title || "", eventCount: meta.eventCount || 0, num: meta.convNo || 0,
+        title: meta.title || "", devinId: meta.devinId || "", eventCount: meta.eventCount || 0, num: meta.convNo || 0,
         hasHtml: fs.existsSync(htmlPath), htmlPath,
       });
     }

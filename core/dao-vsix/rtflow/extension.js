@@ -8990,7 +8990,7 @@ function _dvLocalOverview(email) {
     orgId: "",
     _localSource: true,
     sessions: convs.map((c, i) => ({
-      devinId: (c.name || "").replace(/^.*_/, "").replace(/\.zip$/i, "") || ("local-" + i),
+      devinId: c.devinId || (c.name || "").replace(/^.*_/, "").replace(/\.zip$/i, "") || ("local-" + i),
       title: c.title || c.name || "(本地备份)",
       status: "backed_up",
       statusClass: "finished",
@@ -9492,7 +9492,7 @@ function _dvAllConversationsHtml() {
         title: c.title || c.name || "(无题)",
         email: acctEmail,
         accountNo: acctNo,
-        devinId: (c.name || "").replace(/^.*_/, "").replace(/\.zip$/i, ""),
+        devinId: c.devinId || (c.name || "").replace(/^.*_/, "").replace(/\.zip$/i, ""),
         mtime: c.mtime || 0,
       });
     }
