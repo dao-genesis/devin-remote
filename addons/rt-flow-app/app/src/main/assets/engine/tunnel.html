@@ -54,16 +54,12 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   </div>
 </div>
 
-<!-- 接入文档 · 4 模块按钮拉到第一页主页 (无需翻到底部) -->
+<!-- 接入文档 · 唯一一份(两大模块全量) · 两个按钮: 打开 / 复制 -->
 <div class="card">
-  <div class="lbl">📄 接入文档 (发给云端 Agent)</div>
+  <div class="lbl">📄 接入文档 (唯一·两大模块全量·发给云端 Agent)</div>
   <div class="row" style="margin-top:6px">
-    <button onclick="send('exportCloudMd')">☁️ 复制云端MD</button>
-    <button onclick="send('exportLocalMd')">🖥️ 复制本地MD</button>
-  </div>
-  <div class="row">
-    <button onclick="send('openCloudMd')">打开云端MD</button>
-    <button onclick="send('openLocalMd')">打开本地MD</button>
+    <button onclick="send('openCloudMd')">📖 打开</button>
+    <button onclick="send('exportCloudMd')">📋 复制</button>
   </div>
 </div>
 
@@ -201,30 +197,143 @@ function _push(){
   _render(state);
 }
 function _result(op,ok,text){ var o=document.getElementById('out'); if(o){o.className='';o.textContent='['+op+'] '+(ok?'✓':'✗')+' '+(text||'');} }
+// 唯一一份接入文档: 两大模块(① 软件本体含浏览器子模块 ② 手机本体)全部命令直接平铺, 无渐进式披露、无隐藏。
 function _cloudMd(){
   var c=_conn(); var pub=(c.url||"").replace(/\/$/,'')+"/relay/"+(c.session||"");
-  return ["# Devin Cloud 手机版 · 云端接入文档 (初始)","",
-    "手机已通过公网中继挂载, 任意云端 Agent (与你一样的 Devin Cloud) 可经隧道远程驱动手机。先读三大核心板块概览, 再按需用 getModuleDoc 深入。","",
-    "## 接入信息","- 公网入口: `"+pub+"`","- 鉴权: `Authorization: Bearer "+(c.token||"<TOKEN>")+"`","- Session: `"+(c.session||"<SESSION>")+"`","",
-    "## 调用方式","```bash","curl -s -X POST "+pub+" \\","  -H 'Authorization: Bearer <TOKEN>' \\",
-    "  -H 'Content-Type: application/json' \\","  -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\"}}'","```","",
-    "## 三大核心板块 (概览, 按需深入)",
-    "| 板块 | 一句话 | 拉全部细节 |","|------|--------|------|",
-    "| 板块一 · 浏览器自动化 | 不干扰用户, 远程操作/测试/记录任意网页, 19 命令 | getModuleDoc {module:browser} |",
-    "| 板块二 · 手机操控 | 全方位接管手机(本体+敏感数据+无障碍系统级), 29 命令 | getModuleDoc {module:phone} |",
-    "| 板块三 · Devin Cloud 软件本体 | 账号切换+全功能CRUD+穿透+安全 | getModuleDoc {module:software} |","",
-    "## 授权 (最小成本)",
-    "- setRemoteOps {enable:true} — 开启浏览器/手机本体/敏感数据操控",
-    "- phoneEnsureControl — 一键授权系统级接管 (自动跳转无障碍设置, 用户点一次允许)","",
-    "> 机读概览: getModuleIndex。完整本地操控: getLocalMd。安全边界: shell 路由一律 403。"].join("\n");
-}
-function _localMd(){
-  var c=_conn();
-  return ["# Devin Cloud 手机版 · 本地接入说明","",
-    "本机 App 内置常驻前台服务, 宿主一个引擎 WebView 跑中继客户端 (出站 WSS)。","",
-    "- 中继: `"+(c.url||"")+"`","- Session: `"+(c.session||"")+"`","- 协议: 出站 WSS `/connect?session=…&token=…`, 入站 `/relay/<session>`","",
-    "面板「切号」开账号标签即在 App 内多实例浏览器并行; 「公网穿透」即本页。",
-    "完整本地操控文档 (Native.* 桥全表) 请调引擎 RPC `getLocalMd`。"].join("\n");
+  return [
+    "# Devin Cloud 手机版 · 接入文档 (唯一·两大模块·全量展开)","",
+    "> 手机已通过公网中继挂载, 任意云端 Agent (与你一样的 Devin Cloud) 可经隧道远程驱动。**两大模块、全部命令已直接平铺在下方**, 无渐进式披露、无隐藏、无文档级限制 — 读这一篇即可直接调用任意能力, 操作到底层 API。鉴权即边界: 持本 Token 即拥有对本机的完整接入(含 shell), Token 可随时刷新、务必保密。","",
+    "## 接入信息",
+    "- 公网入口: `"+pub+"`",
+    "- 鉴权: `Authorization: Bearer "+(c.token||"<TOKEN>")+"`",
+    "- Session: `"+(c.session||"<SESSION>")+"`","",
+    "## 调用方式",
+    "```bash","curl -s -X POST "+pub+" \\","  -H 'Authorization: Bearer <TOKEN>' \\",
+    "  -H 'Content-Type: application/json' \\","  -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\",\"<参数>\":\"<值>\"}}'","```","",
+    "## 授权 (最小成本·一键, 用户只点「允许」)",
+    "- `setRemoteOps {enable:true}` — 开启浏览器/手机本体/敏感数据操控 (敏感数据首次自动弹运行时权限)。",
+    "- `phoneEnsureControl` — 一键授权系统级接管 (自动跳转无障碍设置, 用户点一次允许, 长期有效)。","",
+    "---","",
+    "# 模块一 · 软件本体 (内含浏览器操作子模块)",
+    "操控本软件自身的一切: 内置浏览器引擎 + 账号切换 + Devin Cloud 全功能 CRUD + 内网穿透 + 管理。","",
+    "## 1.1 浏览器自动化 (内置 WebView · 等价 Playwright / Chrome-CDP / 浏览器-MCP)",
+    "查看+操作任意网页全在软件底层完成, 不干扰用户当前页。",
+    "| 命令 | 参数 | 说明 |","|------|------|------|",
+    "| browseListTabs | - | 列出所有标签 (index/url/title/account/active) |",
+    "| browseOpen | url, account? | 打开新标签 |",
+    "| browseClose | tabIndex | 关闭标签 |",
+    "| browseNavigate | tabIndex, action(back/forward/reload/stop/goto), url? | 导航 |",
+    "| browseExecJs | tabIndex, js | 执行 JS 并返回结果 |",
+    "| browseGetDom | tabIndex | 获取完整 DOM HTML |",
+    "| browseGetCookies | url | 获取指定 URL 的 Cookie |",
+    "| browseGetStorage | tabIndex, type(local/session) | 读 Storage |",
+    "| browseScreenshot | tabIndex | 截图 base64 PNG |",
+    "| browseExportMd | tabIndex, save?, name? | 导出 Markdown |",
+    "| browseFindInPage | tabIndex, text | 页内查找 |",
+    "| browseClickElement | tabIndex, selector | 点击元素 |",
+    "| browseFillForm | tabIndex, selector, value | 填写输入框 |",
+    "| browseScrollTo | tabIndex, x, y | 滚动页面 |",
+    "| browseGetLinks | tabIndex | 提取所有链接 |",
+    "| browseGetPageInfo | tabIndex | 页面概要 |",
+    "| browseWaitForElement | tabIndex, selector, timeout? | 等待元素出现 |",
+    "| browseSubmitForm | tabIndex, selector? | 提交表单 |",
+    "| browseGetInputValues | tabIndex | 获取所有输入框值 |","",
+    "### CDP 协议域 facade (一条 `cdp` 路由, 与 Chrome DevTools Protocol 同名)",
+    "| cdp.method | params | 说明 |","|------|------|------|",
+    "| Browser.getVersion | - | 引擎/UA 版本 |",
+    "| Page.navigate/reload/stopLoading/goBack/goForward | url? | 导航 |",
+    "| Page.captureScreenshot | - | base64 PNG |",
+    "| Page.getLayoutMetrics / getNavigationHistory | - | 视口尺寸 / 当前URL |",
+    "| Runtime.evaluate | expression | 执行 JS |",
+    "| DOM.getDocument / getOuterHTML / querySelector(All) | selector? | DOM |",
+    "| Input.dispatchMouseEvent / insertText | x,y,type / text | 坐标点击/插字 |",
+    "| Network.enable/disable / getRequests / getResponseBody | requestId? | 抓包 |",
+    "> 调用: `cdp {method:\"Page.navigate\", params:{url:\"https://...\"}, tabIndex:1}`。","",
+    "## 1.2 账号切换",
+    "| 命令 | 参数 | 说明 |","|------|------|------|",
+    "| getState | - | 获取所有账号状态 |",
+    "| addAccount | 账号字段 | 添加账号 |",
+    "| importAccounts | text | 万法识号·批量导入 |",
+    "| login / loginAll | id? | 单/全账号登录 (邮箱+密码→auth1, 不耗额度) |",
+    "| refreshQuota / refreshAll | id? | 刷新单/全额度 |",
+    "| activate | id | 激活账号 (切号) |",
+    "| removeAccount | id | 删除账号 |",
+    "| healthScan / trackStuck | - | 健康检查 / 追踪卡住会话 |","",
+    "## 1.3 Devin Cloud 全功能 CRUD",
+    "| 命令 | 说明 |","|------|------|",
+    "| listSessions / sessionDetail / sessionMessages / exportSession | 会话 列举/详情/消息/导出 |",
+    "| createSession / stopSession / archiveSession / deleteSession | 会话操作 |",
+    "| listKnowledge / injectKnowledge / deleteKnowledge | 知识 |",
+    "| listPlaybooks / injectPlaybook / deletePlaybook | 剧本 |",
+    "| listSecrets / injectSecret / deleteSecret | 密钥 |",
+    "| checkGit / connectGit | Git 连接/注入 PAT |",
+    "| backupAccount / backupAll | 备份 |",
+    "| wipeAccount | 水过无痕 (先备份再清数据) |",
+    "| batchConnectGit / batchInjectKnowledge / batchInjectSecret / batchInjectPlaybook | 全账号批量注入 |","",
+    "## 1.4 对话整体提取 (额度耗尽账号亦可 · 仅读已有数据·不消耗额度)",
+    "- `extractConversation {id:\"<email>\", sid:\"<devin_id>\", save:true}` → 一次拿齐 元数据+完整对话MD+工作日志MD+文件清单, 落盘共享保险箱。",
+    "- 加 `zip:true` → 另返 `zipB64` (整包: 对话MD+工作日志MD+_meta.json+files/产出文件)。",
+    "- `extractAccountConversations {id, limit:200, includeMd:true}` → 整号全部会话导出。","",
+    "## 1.5 内网穿透 / 管理 / 热修",
+    "| 命令 | 说明 |","|------|------|",
+    "| ping / getEngineInfo / deviceInfo | 探活 / 引擎 / 设备 |",
+    "| setRemoteOps / getRemoteOps | 远程操控开关 读写 |",
+    "| getCloudMd | 本接入文档 (全量) |",
+    "| listTabs / closeTab / readFile / writeFile | 引擎标签 / 应用文件 |",
+    "| hotpatch / persistModule / reloadEngine | 隔隧道热修 (注入JS即时生效/持久化) |",
+    "| appCheckUpdate / appInstallUpdate / keepAliveStatus | 在线更新 / 保活 |","",
+    "---","",
+    "# 模块二 · 手机本体 (操作手机一切的底层)",
+    "通过隧道全方位接管手机 (类 ADB/scrcpy/Windows 手机连接): 本体 + 敏感数据 + 系统级接管 + ADB/AVD 级 shell。需先 `setRemoteOps {enable:true}`。","",
+    "## 2.1 本体操控",
+    "| 命令 | 参数 | 说明 |","|------|------|------|",
+    "| phoneInfo | - | 设备信息+手机号+存储 |",
+    "| phoneListFiles | dir? | 列出目录 |",
+    "| phoneReadFile | path, base64? | 读文件 |",
+    "| phoneWriteFile | path, content | 写文件 |",
+    "| phoneListPhotos | limit? | 相册图片 (MediaStore) |",
+    "| phoneClipboard | set? | 剪贴板读写 |",
+    "| phoneShare | text, title? | 系统分享 |",
+    "| phoneNotify | title?, text | 发通知 |",
+    "| phoneInstalledApps | - | 已装应用 |",
+    "| phoneLaunchApp | package | 启动应用 |",
+    "| phoneBattery | - | 电量/温度/充电 |",
+    "| phoneWifiInfo | - | SSID/IP |",
+    "| phoneVibrate | ms? | 振动 |",
+    "| phoneVolume | set? | 音量读写 |","",
+    "## 2.2 敏感数据 (一次性授权后开放·辅助账号注册全链路)",
+    "| 命令 | 参数 | 说明 |","|------|------|------|",
+    "| phoneRequestPerms | - | 一次弹窗申请 联系人/短信/通话 权限 |",
+    "| phoneHasPerm | perm | 查询权限是否已授予 |",
+    "| phoneContacts | limit? | 读取联系人 (姓名+号码) |",
+    "| phoneSmsInbox | limit? | 读取短信收件箱 (含 OTP 验证码) |",
+    "| phoneCallLog | limit? | 读取通话记录 |","",
+    "## 2.3 系统级接管 (AccessibilityService · 无需 root · phoneEnsureControl 一键开启)",
+    "| 命令 | 参数 | 说明 |","|------|------|------|",
+    "| phoneA11yReady | - | 无障碍服务是否已开启 |",
+    "| phoneEnsureControl | - | 一键: 开远程开关 + 跳转无障碍设置 |",
+    "| phoneTap | x, y | 坐标点击 |",
+    "| phoneLongPress | x, y, ms? | 坐标长按 |",
+    "| phoneSwipe | x1,y1,x2,y2, ms? | 滑动 |",
+    "| phoneGlobalAction | action | back/home/recents/notifications/lockscreen/screenshot |",
+    "| phoneDumpScreen | - | 导出当前界面控件树 (文本/坐标/可点击) |",
+    "| phoneClickText | text | 按文字查找并点击 |",
+    "| phoneInputText | text | 向焦点输入框填字 |",
+    "| phoneScreenCapture | - | 全屏截图 base64 (API30+) |","",
+    "## 2.4 ADB/AVD 级 Shell (Shizuku · uid2000 · 等价 adb shell)",
+    "> 与操作虚拟机 AVD 一致: `input`/`screencap`/`pm`/`am`/`settings`/`dumpsys`/`wm`/`monkey` 等任意命令。需 Shizuku 授权(一次) + setRemoteOps。",
+    "| 命令 | 参数 | 说明 |","|------|------|------|",
+    "| phoneShizukuReady | - | Shizuku 是否已授权 |",
+    "| phoneShell | command | 执行任意 shell, 返回 {ok,exit,out} |",
+    "| (HTTP) POST /api/exec | {command} | 直通: `{path:\"/api/exec\",body:{command:\"input tap 500 1000\"}}` |","",
+    "```",
+    "{cmd:\"phoneShell\", command:\"input tap 540 1200\"}         # 点击坐标",
+    "{cmd:\"phoneShell\", command:\"input text hello\"}           # 输入文本",
+    "{cmd:\"phoneShell\", command:\"input keyevent KEYCODE_BACK\"} # 返回键",
+    "{cmd:\"phoneShell\", command:\"screencap -p /sdcard/s.png\"}  # 截屏到文件",
+    "{cmd:\"phoneShell\", command:\"pm list packages -3\"}         # 列第三方应用",
+    "```"
+  ].join("\n");
 }
 var vscode={ postMessage:function(m){ handle(m); } };
 function acquireVsCodeApi(){ return vscode; }
@@ -248,10 +357,8 @@ function handle(m){
     setTimeout(_push,1200);
     return;
   }
-  if(op==='exportCloudMd'){ try{N.clip&&N.clip(_cloudMd());}catch(e){} _result('exportCloudMd',true,'云端Agent MD 已复制到剪贴板'); return; }
-  if(op==='exportLocalMd'){ try{N.clip&&N.clip(_localMd());}catch(e){} _result('exportLocalMd',true,'本地Agent MD 已复制到剪贴板'); return; }
-  if(op==='openCloudMd'){ try{N.openText&&N.openText("云端Agent MD",_cloudMd());}catch(e){} return; }
-  if(op==='openLocalMd'){ try{N.openText&&N.openText("本地Agent MD",_localMd());}catch(e){} return; }
+  if(op==='exportCloudMd'){ try{N.clip&&N.clip(_cloudMd());}catch(e){} _result('exportCloudMd',true,'接入文档已复制 (两大模块全量·发给云端 Agent)'); return; }
+  if(op==='openCloudMd'){ try{N.openText&&N.openText("接入文档 (两大模块全量)",_cloudMd());}catch(e){} return; }
   if(op==='health'){
     var r=_relay();
     _result('health', !!r.connected, r.connected?('已连接 · session='+(c.session||'')):'未连接/连接中');
