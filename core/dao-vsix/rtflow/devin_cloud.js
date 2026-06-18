@@ -22,6 +22,7 @@ const DC_DIR = path.join(WAM_DIR, "devin_cloud");
 const DC_AUTH_CACHE = path.join(DC_DIR, "auth_cache.json"); // email → {auth1,orgId,...,ts}
 const DC_TAGS_FILE = path.join(DC_DIR, "account_tags.json"); // email → 标签(防搞混)
 const DC_BACKUP_STATE = path.join(DC_DIR, "backup_state.json"); // devinId → {eventCount, backedUpAt} 增量依据
+const DC_CLEANUP_STATE = path.join(DC_DIR, "cleanup_state.json"); // email → {backupCompletedAt, lastConvUpdateAt, cleanedAt} 24h冷却期
 const DC_BACKUP_DEFAULT = path.join(WAM_DIR, "devin_cloud_backups");
 
 // ── 软编码配置 (唯变所适) ──────────────────────────────────────────────────
@@ -876,23 +877,28 @@ async function disconnectGit(auth, conn) {
     note: "连接(" + (type || "unknown") + ")元数据平台未开放删除端点; 已清除其仓库授权 " + permsRemoved + " 条(访问权已撤)" + (type.indexOf("individual_token") >= 0 ? "; PAT 本体须在 GitHub 端撤销" : ""),
   };
 }
-// 清理会话: 实跑确证 Devin 平台不支持硬删除对话
-//   (OPTIONS /api/sessions/{id} → Allow: GET; DELETE → 405)。
-//   平台支持的"移出仪表盘"机制是归档: POST /api/sessions/{id}/archive (返 200)。
-//   对话正文已在清空前本地留底, 故归档即"水过无痕"。archived:true 如实标注。
+// v4.9.11 · 清理会话: 从仪表盘移除(archive → is_archived=true, 默认视图隐藏)。
+//   实跑确证: DELETE /api/sessions/{id} → 405; v3 DELETE 为 "Terminate" 非硬删。
+//   平台无硬删 API; archive 是最强清除(对话从活跃列表消失)。
+//   v3 DELETE + archive=true 作兜底 (未来若开放硬删 → 自动命中)。
 async function deleteSession(auth, devinId) {
+  // 优先: archive (可靠, 从仪表盘移除)
   const r = await jsonRequest("POST", CFG.apiBase + "/sessions/" + devinId + "/archive", authHeaders(auth), {});
-  if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status, archived: true };
-  // 兜底: 旧硬删除端点形态 (平台若日后开放硬删除则命中)
+  if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status, cleaned: true };
+  // 兜底: v3 terminate+archive / 旧硬删除端点 (平台若日后开放则命中)
   const candidates = [
-    CFG.apiBase + "/sessions/" + devinId,
-    CFG.apiBase + "/org-" + auth.orgBare + "/sessions/" + devinId,
+    { method: "DELETE", url: CFG.v1Base.replace("/v1", "/v3") + "/organizations/" + auth.orgId + "/sessions/" + devinId + "?archive=true" },
+    { method: "DELETE", url: CFG.apiBase + "/v3/organizations/" + auth.orgId + "/sessions/" + devinId },
+    { method: "DELETE", url: CFG.apiBase + "/sessions/" + devinId },
+    { method: "DELETE", url: CFG.apiBase + "/org-" + auth.orgBare + "/sessions/" + devinId },
   ];
   let last = r.status;
-  for (const url of candidates) {
-    const d = await jsonRequest("DELETE", url, authHeaders(auth));
-    last = d.status;
-    if (d.status >= 200 && d.status < 300) return { ok: true, status: d.status };
+  for (const c of candidates) {
+    try {
+      const d = await jsonRequest(c.method, c.url, authHeaders(auth));
+      last = d.status;
+      if (d.status >= 200 && d.status < 300) return { ok: true, status: d.status, cleaned: true };
+    } catch {}
   }
   return { ok: false, status: last };
 }
@@ -1118,9 +1124,9 @@ async function wipeAccount(auth, opts) {
     const id = s.devin_id || s.session_id || s.id;
     if (!id) { report.sessions.failed++; continue; }
     const r = await deleteSession(auth, id);
-    if (r.ok) { report.sessions.deleted++; if (r.archived) report.sessions.archived++; }
+    if (r.ok) { report.sessions.deleted++; if (r.cleaned) report.sessions.cleaned = (report.sessions.cleaned || 0) + 1; }
     else { report.sessions.failed++; report.errors.push("session:" + id + ":" + r.status); }
-    prog("清理对话 " + report.sessions.deleted + "/" + sessions.length + (report.sessions.archived ? "(归档" + report.sessions.archived + "·平台不支持硬删)" : ""));
+    prog("清理对话 " + report.sessions.deleted + "/" + sessions.length);
   }
   prog("水过无痕完成");
   return report;
@@ -2147,6 +2153,31 @@ function allTags() {
   return readJson(DC_TAGS_FILE, {});
 }
 
+// v4.9.11 · 24h 冷却期状态管理 (email → {backupCompletedAt, lastConvUpdateAt, cleanedAt})
+function getCleanupState(email) {
+  const all = readJson(DC_CLEANUP_STATE, {});
+  return all[String(email).toLowerCase()] || null;
+}
+function setCleanupState(email, patch) {
+  const all = readJson(DC_CLEANUP_STATE, {});
+  const k = String(email).toLowerCase();
+  all[k] = Object.assign(all[k] || {}, patch);
+  writeJson(DC_CLEANUP_STATE, all);
+  return all[k];
+}
+function isCleanupReady(email, cooldownMs) {
+  const st = getCleanupState(email);
+  if (!st || !st.backupCompletedAt) return { ready: false, reason: "no_backup" };
+  const now = Date.now();
+  const cd = cooldownMs || 24 * 60 * 60 * 1000;
+  const sinceBk = now - st.backupCompletedAt;
+  if (sinceBk < cd) return { ready: false, reason: "cooldown", remaining: cd - sinceBk };
+  if (st.lastConvUpdateAt && (now - st.lastConvUpdateAt) < cd)
+    return { ready: false, reason: "recent_update", remaining: cd - (now - st.lastConvUpdateAt) };
+  if (st.cleanedAt) return { ready: false, reason: "already_cleaned" };
+  return { ready: true };
+}
+
 // ═══ 导出 MD (给本地/其它 Agent 的操作指令文档) ═══════════════════════════
 // 前端只需一个「导出 MD」按钮: 用户复制此文档给本地 Agent, Agent 据此后端驱动全部能力。
 function buildAgentMd(ctx) {
@@ -2304,7 +2335,7 @@ class ZipWriter {
 module.exports = {
   CFG,
   configure,
-  paths: { WAM_DIR, DC_DIR, DC_AUTH_CACHE, DC_TAGS_FILE, DC_BACKUP_STATE, DC_BACKUP_DEFAULT },
+  paths: { WAM_DIR, DC_DIR, DC_AUTH_CACHE, DC_TAGS_FILE, DC_BACKUP_STATE, DC_CLEANUP_STATE, DC_BACKUP_DEFAULT },
   // auth
   login,
   getAuth,
@@ -2357,6 +2388,10 @@ module.exports = {
   getTag,
   setTag,
   allTags,
+  // cleanup state (24h 冷却期)
+  getCleanupState,
+  setCleanupState,
+  isCleanupReady,
   // export md
   buildAgentMd,
   // utils
