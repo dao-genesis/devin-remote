@@ -15,7 +15,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.15.18";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.15.19";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -645,6 +645,7 @@
     getEngineInfo: async function(){ return {ok:true, version: APP_VERSION, ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length, remoteOps: N.isRemoteOpsEnabled?N.isRemoteOpsEnabled():false }; },
     // ── 在线自动更新: 云端经中继可查/可推 (安装仍需用户点一次「安装」) ──
     appCheckUpdate: async function(){ try{ return JSON.parse(N.appCheckUpdate?N.appCheckUpdate():"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },
+    keepAliveStatus: async function(){ try{ return {ok:true, keepAlive: JSON.parse(N.keepAliveStatus?N.keepAliveStatus():"{}")}; }catch(e){ return {ok:false,error:String(e)}; } },
     appInstallUpdate: async function(a){ try{ return JSON.parse(N.appInstallUpdate?N.appInstallUpdate((a&&a.url)||""):"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },
     deviceInfo: async function(){ var N=window.Native||{}; return {ok:true, ua:navigator.userAgent, platform:navigator.platform, lang:navigator.language, screen:{w:screen.width,h:screen.height,dpr:window.devicePixelRatio,orient:(screen.orientation||{}).type}, relay:typeof DaoRelayApp!=="undefined"?DaoRelayApp.status():{}, tabs:N.listTabs?(function(){try{return JSON.parse(N.listTabs()||"[]");}catch(e){return[];}})():[], conn:N.getConn?(function(){try{return JSON.parse(N.getConn()||"{}");}catch(e){return{};}})():{}, ts:Date.now()}; },
     listTabs: async function(){ var N=window.Native||{}; if(!N.listTabs)return{ok:false,error:"listTabs bridge unavailable"}; try{return{ok:true,tabs:JSON.parse(N.listTabs()||"[]")};}catch(e){return{ok:false,error:String(e)};} },

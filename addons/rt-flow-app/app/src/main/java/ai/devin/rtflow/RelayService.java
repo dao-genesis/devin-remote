@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.net.wifi.WifiManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import android.webkit.WebSettings;
@@ -34,6 +35,7 @@ public class RelayService extends Service {
     private WebView engine;
     private final Handler main = new Handler(Looper.getMainLooper());
     private PowerManager.WakeLock wakeLock;   // P2: 持锁防 Doze CPU 节流, 保 WSS 心跳不断
+    private WifiManager.WifiLock wifiLock;     // 息屏防 Wi-Fi 休眠/降频, 保出站 WSS 不掉 (移植自 knoop7/Ava WifiWakeLock)
     // 路线B 去中心化隧道
     private LocalServer localServer;
     private TunnelManager tunnel;
@@ -139,10 +141,23 @@ public class RelayService extends Service {
             wakeLock.setReferenceCounted(false);
             wakeLock.acquire();
         } catch (Exception ignored) {}
+        // Wi-Fi 锁: 仅持 CPU 锁仍可能因 Wi-Fi 休眠/降频导致 WSS 心跳被拖延 → 一并持高性能/低延迟 Wi-Fi 锁。
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) return;
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+            if (wm == null) return;
+            int mode = (Build.VERSION.SDK_INT >= 34)
+                    ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY : WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+            wifiLock = wm.createWifiLock(mode, "rtflow:relay-wifi");
+            wifiLock.setReferenceCounted(false);
+            wifiLock.acquire();
+        } catch (Exception ignored) {}
     }
     private void releaseWake() {
         try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); } catch (Exception ignored) {}
         wakeLock = null;
+        try { if (wifiLock != null && wifiLock.isHeld()) wifiLock.release(); } catch (Exception ignored) {}
+        wifiLock = null;
     }
 
     @SuppressWarnings("SetJavaScriptEnabled")
@@ -319,6 +334,8 @@ public class RelayService extends Service {
             MainActivity m = MainActivity.sInstance;
             return m != null ? m.startUpdate(url) : "{\"ok\":false,\"error\":\"浏览器外壳未就绪\"}";
         }
+        /** 后台保活状态 (云端 Agent 经隧道可读: 机型 + 电池豁免 + 保活指引)。只读, 不依赖 Activity。 */
+        @JavascriptInterface public String keepAliveStatus() { return KeepAlive.statusJson(RelayService.this); }
 
         // ── 手机本体操控 (文件/相册/剪贴板/通知/分享/应用) ──────────
 
