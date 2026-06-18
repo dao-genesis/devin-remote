@@ -75,9 +75,54 @@ iframe{border:0;width:100%;height:100%;display:block;background:#0e1116}
 <script src="dao-zip.js"></script>
 <script>
 var N = window.Native || {};
-var REC = [];          // 聚合后的近期对话 [{acc,no,sid,title,status,t,s}]
-var CUR_CONV = null;   // 当前预览对话 {acc,sid,title,md}
+var REC = [];               // 聚合排序后的近期对话 [{acc,no,sid,title,status,t,s}]
+var CUR_CONV = null;        // 当前预览对话 {acc,sid,title,md}
 var _busy = false, _bkLoaded = false;
+var _accSess = Object.create(null); // accId -> [item] 每账号最近会话缓存(增量合并)
+var _rot = 0, _seeded = false;
+var CONC = 6, PERACC = 6, BATCH = 16, MAXREC = 40, CACHE_KEY = "rtflow.recentConv", CACHE_TTL = 45000;
+function _accId(a){ return (a&&(a.id||a.email))||""; }
+function _itemOf(a,no,s){ return { acc:a, no:no, sid:sidOf(s), title:titleOf(s), status:(s.status_enum||s.status||s.state||""), t:recencyMs(s), s:s }; }
+// 有限并发池(与原生 HttpBridge 线程池对齐): 把 68 号串行等待压成 6 路并发
+async function _pool(items, conc, fn){
+  var idx=0, n=items.length; conc=Math.max(1,Math.min(conc, n||1));
+  async function w(){ while(idx<n){ var i=idx++; try{ await fn(items[i]); }catch(e){} } }
+  var ws=[]; for(var c=0;c<conc;c++) ws.push(w()); await Promise.all(ws);
+}
+// 重建 REC: 平铺所有账号缓存 → 按时间降序 → 按 sid 去重 → 取前 MAXREC
+function _rebuild(){
+  var all=[]; for(var k in _accSess){ var arr=_accSess[k]; if(arr) for(var i=0;i<arr.length;i++) all.push(arr[i]); }
+  all.sort(function(x,y){ return y.t-x.t; });
+  var seen=Object.create(null), out=[];
+  for(var j=0;j<all.length;j++){ var id=all[j].sid; if(id&&seen[id])continue; if(id)seen[id]=1; out.push(all[j]); }
+  REC=out.slice(0, MAXREC);
+}
+function _saveCache(){
+  try{ localStorage.setItem(CACHE_KEY, JSON.stringify({ ts:Date.now(), list:REC.slice(0,MAXREC).map(function(it){ return {accId:_accId(it.acc),no:it.no,sid:it.sid,title:it.title,status:it.status,t:it.t}; }) })); }catch(e){}
+}
+// 秒开瘦物: 缓存 + 实时追踪(活跃对话)种子 → 打开面板立刻有内容, 后台再拉准
+function _seedFromCache(){
+  var byId=Object.create(null), byEmail=Object.create(null);
+  accList().forEach(function(a){ byId[_accId(a)]=a; byEmail[(a.email||"").toLowerCase()]=a; });
+  var cacheTs=0;
+  try{
+    var raw=JSON.parse(localStorage.getItem(CACHE_KEY)||"null");
+    var list = raw && (raw.list || (Array.isArray(raw)?raw:null));
+    if(raw && raw.ts) cacheTs=raw.ts;
+    if(list && list.length){
+      list.forEach(function(r){ var a=byId[r.accId]; if(!a)return; var k=_accId(a); (_accSess[k]=_accSess[k]||[]).push({acc:a,no:r.no,sid:r.sid,title:r.title,status:r.status,t:r.t,s:{}}); });
+    }
+  }catch(e){}
+  try{
+    var trk=JSON.parse(localStorage.getItem("rtflow.trk")||"{}");
+    for(var em in trk){ var rec=trk[em], a=byEmail[em]; if(!a||!rec||!rec.items)continue; var k=_accId(a); var arr=_accSess[k]=_accSess[k]||[];
+      rec.items.forEach(function(it){ if(!it.uuid)return; var dup=false; for(var z=0;z<arr.length;z++){ if(arr[z].sid===it.uuid){dup=true;break;} } if(dup)return;
+        arr.push({acc:a,no:rec.no||(accList().indexOf(a)+1),sid:it.uuid,title:it.title||it.uuid,status:it.cls||"running",t:rec.ts||Date.now(),s:{}}); });
+    }
+  }catch(e){}
+  _rebuild();
+  return cacheTs;
+}
 
 function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
 function toast(m,bad){ var t=document.getElementById("toast"); t.textContent=m; t.className="toast show"+(bad?" fail":" ok"); setTimeout(function(){t.className="toast";},2000); }
@@ -113,28 +158,39 @@ function showTab(t){
   if(rec) loadRecent(false);
 }
 
-// ── 跨账号聚合近期对话 ──
-async function loadRecent(force){
+// ── 跨账号聚合近期对话 (缓存优先 + 并发拉取 + 增量渲染 + 轮转刷新) ──
+// full=true: 全量扫(首次/手动刷新); 否则: 仅刷「活跃账号 + 轮转批次」→ 控网络不锁死 6 线程池
+async function loadRecent(full){
   if(_busy){ return; }
   _busy=true;
-  var accs=accList().filter(hasAuth);
-  if(!accs.length){ document.getElementById("recentList").innerHTML='<div class="empty">无已解锁账号 · 先到切号面板登录</div>'; _busy=false; return; }
-  if(force) document.getElementById("recentList").innerHTML='<div class="empty">刷新中…</div>';
-  var merged=[];
-  for(var i=0;i<accs.length;i++){
-    var a=accs[i]; var no=accList().indexOf(a)+1;
-    try{
-      var r=await DaoCloud.listSessions(a, 30);
-      if(r&&r.ok&&r.sessions){
-        r.sessions.forEach(function(s){
-          merged.push({ acc:a, no:no, sid:sidOf(s), title:titleOf(s), status:(s.status_enum||s.status||s.state||""), t:recencyMs(s), s:s });
-        });
-      }
-    }catch(e){}
-  }
-  merged.sort(function(x,y){ return y.t-x.t; });
-  REC=merged.slice(0, 30);
-  renderRecent();
+  try{
+    var all=accList(), unlocked=[];
+    for(var i=0;i<all.length;i++){ if(hasAuth(all[i])) unlocked.push({a:all[i],no:i+1}); }
+    var box=document.getElementById("recentList");
+    if(!unlocked.length){ box.innerHTML='<div class="empty">无已解锁账号 · 先到切号面板登录</div>'; _busy=false; return; }
+    var batch;
+    if(full || !_seeded){ batch=unlocked; }
+    else {
+      var trkActive=Object.create(null);
+      try{ var trk=JSON.parse(localStorage.getItem("rtflow.trk")||"{}"); for(var em in trk) trkActive[em]=1; }catch(e){}
+      var live=unlocked.filter(function(u){ return trkActive[(u.a.email||"").toLowerCase()]; });
+      var start=_rot%unlocked.length; _rot+=BATCH;
+      var rot=[]; for(var r=0;r<BATCH&&r<unlocked.length;r++) rot.push(unlocked[(start+r)%unlocked.length]);
+      var seen=Object.create(null); batch=[];
+      live.concat(rot).forEach(function(u){ var id=_accId(u.a); if(!seen[id]){ seen[id]=1; batch.push(u); } });
+    }
+    var cold = !REC.length;
+    if(cold) box.innerHTML='<div class="empty" id="ldp">加载中… 0/'+batch.length+'</div>';
+    var done=0, lastPaint=0;
+    await _pool(batch, CONC, async function(u){
+      var r=null; try{ r=await DaoCloud.listSessions(u.a, PERACC); }catch(e){}
+      if(r&&r.ok&&r.sessions){ _accSess[_accId(u.a)]=r.sessions.map(function(s){ return _itemOf(u.a,u.no,s); }); }
+      done++;
+      var now=Date.now(); if(now-lastPaint>300){ lastPaint=now; _rebuild(); renderRecent(); }
+      if(cold){ var p=document.getElementById("ldp"); if(p) p.textContent="加载中… "+done+"/"+batch.length; }
+    });
+    _seeded=true; _rebuild(); renderRecent(); _saveCache();
+  }catch(e){}
   _busy=false;
 }
 
@@ -246,9 +302,12 @@ async function dlZip(idx){
   }catch(e){ toast("打包异常: "+e,true); }
 }
 
-// 实时刷新: 仅在近期对话页可见时轮询
-setInterval(function(){ if(document.getElementById("recentView").classList.contains("on") && !document.getElementById("convView").classList.contains("on")) loadRecent(false); }, 20000);
+// 实时刷新: 仅在近期对话页可见时轮询(轮转批次, 轻量)
+setInterval(function(){ if(document.getElementById("recentView").classList.contains("on") && !document.getElementById("convView").classList.contains("on")) loadRecent(false); }, 25000);
 window.addEventListener("focus", function(){ if(document.getElementById("recentView").classList.contains("on")) loadRecent(false); });
-loadRecent(true);
+// 启动: 先从缓存+实时追踪种子立刻渲染 → 后台刷准(缓存新鲜则只轮转, 避免每次开窗都全量扫)
+var _cacheTs=_seedFromCache();
+if(REC.length){ _seeded=true; renderRecent(); }
+loadRecent((Date.now()-_cacheTs) > CACHE_TTL);
 </script>
 </body></html>
