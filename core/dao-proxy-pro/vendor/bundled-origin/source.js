@@ -158,6 +158,149 @@ const _spInvertLib = (() => {
 })();
 
 // ═══════════════════════════════════════════════════════════
+// ★ 上游代理agent (自包含 · 无外部依赖) · 用于 test-chat 等后端直发provider的链路
+//   根因: test-chat 在后端自起 https.request 直连 provider · 远程机直连境外渠道被网络阻断
+//   修复: 纯 Node net+tls 实现 HTTP CONNECT 隧道 Agent · 代理来源 HTTPS_PROXY/HTTP_PROXY → Windows系统代理(WinINET)
+//   道义: 四十章「弱也者 道之用也」· 代理即弱用 · 不假外求(无外部依赖) · 与 dao_router 同源同法
+const _tls = require("tls");
+let _originProxyUrlResolved;
+function _originResolveProxyUrl() {
+  if (_originProxyUrlResolved !== undefined) return _originProxyUrlResolved;
+  let purl =
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    null;
+  if (!purl && process.platform === "win32") {
+    try {
+      const root =
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+      const q = (name) =>
+        require("child_process").execSync(`reg query "${root}" /v ${name}`, {
+          encoding: "utf8",
+          timeout: 3000,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+      const em = q("ProxyEnable").match(
+        /ProxyEnable\s+REG_DWORD\s+0x([0-9a-fA-F]+)/,
+      );
+      if (em && parseInt(em[1], 16) === 1) {
+        const pm = q("ProxyServer").match(/ProxyServer\s+REG_SZ\s+(\S+)/);
+        if (pm) {
+          let p = pm[1].trim();
+          if (p.indexOf("=") !== -1) {
+            const mm = p.match(/https=([^;]+)/) || p.match(/http=([^;]+)/);
+            p = mm ? mm[1].trim() : p.split(";")[0].trim();
+          }
+          if (p && !/^https?:\/\//i.test(p)) p = "http://" + p;
+          purl = p || null;
+        }
+      }
+    } catch (_e) {
+      /* 无系统代理 → 直连 */
+    }
+  }
+  _originProxyUrlResolved = purl || null;
+  return _originProxyUrlResolved;
+}
+function _originIsLocalHost(host) {
+  if (!host) return false;
+  if (host === "localhost" || host === "::1") return true;
+  if (/^127\./.test(host)) return true;
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+  return false;
+}
+class _OriginTunnelAgent extends https.Agent {
+  constructor(proxyUrl, opts) {
+    super(opts || {});
+    const u = new URL(proxyUrl);
+    this._proxyHost = u.hostname;
+    this._proxyPort = parseInt(u.port || "80", 10);
+  }
+  createConnection(options, cb) {
+    const destHost = options.host || options.hostname;
+    const destPort = parseInt(options.port || 443, 10);
+    if (_originIsLocalHost(destHost)) {
+      return super.createConnection(options, cb);
+    }
+    const sock = net.connect(this._proxyPort, this._proxyHost);
+    let settled = false;
+    let buf = "";
+    const fail = (e) => {
+      if (settled) return;
+      settled = true;
+      try {
+        sock.destroy();
+      } catch (_) {}
+      cb(e);
+    };
+    sock.once("error", fail);
+    sock.setTimeout(20000, () => fail(new Error("dao proxy tunnel timeout")));
+    sock.on("connect", () => {
+      sock.write(
+        `CONNECT ${destHost}:${destPort} HTTP/1.1\r\nHost: ${destHost}:${destPort}\r\n\r\n`,
+      );
+    });
+    const onData = (chunk) => {
+      buf += chunk.toString("binary");
+      if (buf.indexOf("\r\n\r\n") === -1) return;
+      sock.removeListener("data", onData);
+      const statusLine = buf.split("\r\n")[0];
+      if (!/ 200 /.test(statusLine)) {
+        fail(new Error("dao proxy CONNECT rejected: " + statusLine));
+        return;
+      }
+      sock.setTimeout(0);
+      sock.removeListener("error", fail);
+      const tlsSock = _tls.connect(
+        {
+          socket: sock,
+          servername: options.servername || destHost,
+          rejectUnauthorized:
+            options.rejectUnauthorized !== undefined
+              ? options.rejectUnauthorized
+              : false,
+        },
+        () => {
+          if (!settled) {
+            settled = true;
+            cb(null, tlsSock);
+          }
+        },
+      );
+      tlsSock.once("error", (e) => {
+        if (!settled) {
+          settled = true;
+          cb(e);
+        }
+      });
+    };
+    sock.on("data", onData);
+    return undefined;
+  }
+}
+let _originTunnelAgent = null;
+let _originTunnelAgentUrl = null;
+function _originGetProxyAgent(isHttps) {
+  if (!isHttps) return undefined;
+  const purl = _originResolveProxyUrl();
+  if (!purl) return undefined;
+  if (_originTunnelAgent && _originTunnelAgentUrl === purl)
+    return _originTunnelAgent;
+  try {
+    _originTunnelAgent = new _OriginTunnelAgent(purl, { keepAlive: false });
+    _originTunnelAgentUrl = purl;
+    return _originTunnelAgent;
+  } catch (_e) {
+    return undefined;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 // 配置 · 常量
 // ═══════════════════════════════════════════════════════════
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
@@ -3957,6 +4100,9 @@ function handleControl(req, res) {
             },
             timeout: 30000,
             rejectUnauthorized: false,
+            ...(_originGetProxyAgent(isHttps)
+              ? { agent: _originGetProxyAgent(isHttps) }
+              : {}),
           },
           (testRes) => {
             let data = "";
