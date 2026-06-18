@@ -23,11 +23,17 @@ What it does (mirrors rdpwrap's New_CSLQuery_Initialize override, applied live)
   * CSLQuery::bMultimonAllowed  = 1
   * CDefPolicy::Query  jne->jmp         (disable the single-session-per-user deny)
 
-Offsets are keyed by exact termsrv.dll file version and were resolved from Microsoft's
-public PDB. On any UNKNOWN build the module is a NO-OP (logs + returns) so a Windows
-Update that swaps termsrv.dll degrades gracefully to native single-session - never a crash.
+Offsets are keyed by exact termsrv.dll file version. Known builds use the builtin OFFSETS
+table (resolved from Microsoft's public PDB) as a fast-path. For any build NOT in the table
+we fall back to the locally-installed, community-maintained rdpwrap.ini (which covers
+hundreds of builds): its `[ver-SLInit]` globals are RVAs we use directly, and the
+CDefPolicy single-session jne is located by signature-scanning .text (disambiguated by the
+ini's DefPolicyOffset). Every write is signature/sanity-checked first, so a wrong offset can
+never land. If neither source resolves the build, the module is a NO-OP (logs + returns) so
+a Windows Update that swaps termsrv.dll degrades gracefully to native single-session.
 """
 import ctypes as C
+import os
 import struct
 import subprocess
 import sys
@@ -55,6 +61,7 @@ adv = C.WinDLL("advapi32.dll", use_last_error=True)
 ver = C.WinDLL("version.dll", use_last_error=True)
 
 TERMSRV_PATH = r"C:\Windows\System32\termsrv.dll"
+RDPWRAP_INI = os.environ.get("RDPWRAP_INI", r"C:\Program Files\RDP Wrapper\rdpwrap.ini")
 
 
 def termsrv_version(path=TERMSRV_PATH):
@@ -246,63 +253,196 @@ class _Mem:
             k32.CloseHandle(self.h)
 
 
-def _open():
-    m = _Mem()
-    if not m.pid or not m.base or not m.h:
-        return None, {"ok": False, "error": "cannot open TermService (need elevation/SeDebugPrivilege)",
-                      "pid": m.pid if m else None}
-    if m.version not in OFFSETS:
-        return None, {"ok": False, "supported": False, "version": m.version,
-                      "note": "unknown termsrv.dll build - no-op (boot-safe); native single-session kept"}
-    return m, None
-
-
 # CDefPolicy::Query single-session site is `cmp r8d,r9d ; jne` -> bytes 45 3B C1 (75|EB) 14.
 # Verifying this signature before writing guarantees we never patch a wrong/mismatched build.
 CDEFPOLICY_SIG = b"\x45\x3b\xc1"
 
 
-def _sig_ok(m, off):
-    pre = m.rd(off["cdefpolicy_jne"] - 3, 3)
-    jne = m.rd(off["cdefpolicy_jne"], 1)
-    return pre == CDEFPOLICY_SIG and jne and jne[0] in (0x75, 0xEB)
+def _read_range(m, rva, size):
+    """Read a large region in page-sized chunks (whole .text may span MBs)."""
+    out, pos, step = bytearray(), 0, 0x10000
+    while pos < size:
+        chunk = m.rd(rva + pos, min(step, size - pos))
+        if not chunk:
+            break
+        out += chunk
+        if len(chunk) < min(step, size - pos):
+            break
+        pos += len(chunk)
+    return bytes(out)
+
+
+def _sections(m):
+    """Parse the PE section table from the live mapped image -> list of section dicts."""
+    hdr = m.rd(0, 0x600)
+    if not hdr or hdr[:2] != b"MZ":
+        return []
+    e = struct.unpack_from("<I", hdr, 0x3C)[0]
+    if e + 24 > len(hdr) or hdr[e:e + 4] != b"PE\x00\x00":
+        return []
+    num = struct.unpack_from("<H", hdr, e + 6)[0]
+    opt = struct.unpack_from("<H", hdr, e + 20)[0]
+    base = e + 24 + opt
+    need = base + num * 40
+    if need > len(hdr):
+        hdr = m.rd(0, need + 64) or hdr
+    secs = []
+    for i in range(num):
+        raw = hdr[base + i * 40: base + i * 40 + 40]
+        if len(raw) < 40:
+            break
+        name = raw[:8].rstrip(b"\x00").decode("latin1", "replace")
+        vsize, vaddr, rawsize, praw = struct.unpack_from("<IIII", raw, 8)
+        secs.append({"name": name, "vaddr": vaddr, "vsize": vsize,
+                     "rawsize": rawsize, "praw": praw})
+    return secs
+
+
+def _file_to_rva(secs, foff):
+    for s in secs:
+        if s["praw"] and s["praw"] <= foff < s["praw"] + s["rawsize"]:
+            return s["vaddr"] + (foff - s["praw"])
+    return None
+
+
+def _ini_section(version, suffix=""):
+    """Parse `[version+suffix]` from rdpwrap.ini -> {key(without .x64): int|str}."""
+    try:
+        with open(RDPWRAP_INI, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return {}
+    header = "[%s%s]" % (version, suffix)
+    out, inside = {}, False
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("["):
+            inside = (s == header)
+            continue
+        if inside and "=" in s:
+            k, v = (x.strip() for x in s.split("=", 1))
+            if k.lower().endswith(".x64"):
+                k = k[:-4]
+                try:
+                    out[k] = int(v, 16)
+                except ValueError:
+                    out[k] = v
+    return out
+
+
+def _offsets_from_ini(m):
+    """Derive an OFFSETS-style dict for m.version from the installed rdpwrap.ini.
+    Globals come straight from `[ver-SLInit]` (already RVAs); the CDefPolicy jne byte is
+    located by scanning .text for CDEFPOLICY_SIG, disambiguated by DefPolicyOffset. Returns
+    None if the ini doesn't cover this build. cdefpolicy_jne may be None (globals-only patch,
+    which alone lifts the concurrent-session limit)."""
+    g = _ini_section(m.version, "-SLInit")
+    if not all(isinstance(g.get(k), int) for k in GLOBAL_KEYS):
+        return None
+    off = {k: g[k] for k in GLOBAL_KEYS}
+    secs = _sections(m)
+    text = next((s for s in secs if s["name"] == ".text"), None)
+    jne = None
+    if text and 0 < text["vsize"] <= 0x2000000:
+        blob = _read_range(m, text["vaddr"], text["vsize"])
+        cands, i = [], blob.find(CDEFPOLICY_SIG)
+        while i != -1:
+            if i + 3 < len(blob) and blob[i + 3] in (0x75, 0xEB):
+                cands.append(text["vaddr"] + i + 3)
+            i = blob.find(CDEFPOLICY_SIG, i + 1)
+        if len(cands) == 1:
+            jne = cands[0]
+        elif len(cands) > 1:
+            main = _ini_section(m.version, "")
+            tgt = _file_to_rva(secs, main["DefPolicyOffset"]) if isinstance(main.get("DefPolicyOffset"), int) else None
+            jne = min(cands, key=lambda c: abs(c - tgt)) if tgt is not None else cands[0]
+    off["cdefpolicy_jne"] = jne
+    return off
+
+
+def _globals_sane(before):
+    """Boolean CSLQuery flags must read as 0/1 today; a wild value means a wrong offset."""
+    for k in ("bServerSku", "bAppServerAllowed", "bRemoteConnAllowed", "bMultimonAllowed"):
+        v = before.get(k)
+        if v is None or v < 0 or v > 1:
+            return False
+    return True
+
+
+def _open():
+    m = _Mem()
+    if not m.pid or not m.base or not m.h:
+        return None, {"ok": False, "error": "cannot open TermService (need elevation/SeDebugPrivilege)",
+                      "pid": m.pid if m else None}
+    off = OFFSETS.get(m.version)
+    src = "builtin"
+    if off is None:
+        off = _offsets_from_ini(m)
+        src = "rdpwrap.ini"
+    if off is None:
+        m.close()
+        return None, {"ok": False, "supported": False, "version": m.version,
+                      "note": "build not in OFFSETS and not resolvable from rdpwrap.ini - no-op (boot-safe)"}
+    m.off = off
+    m.off_source = src
+    return m, None
+
+
+def _sig_ok(m):
+    j = m.off.get("cdefpolicy_jne")
+    if j is None:
+        return False
+    pre = m.rd(j - 3, 3)
+    b = m.rd(j, 1)
+    return pre == CDEFPOLICY_SIG and b and b[0] in (0x75, 0xEB)
 
 
 def status():
     m, err = _open()
     if err:
         return err
-    off = OFFSETS[m.version]
+    off = m.off
     vals = {k: m.rd_dw(off[k]) for k in GLOBAL_KEYS}
-    jne = m.rd(off["cdefpolicy_jne"], 1)[0]
+    j = off.get("cdefpolicy_jne")
+    jb = m.rd(j, 1)[0] if j is not None else None
     dv = m.disk_version
-    sig = _sig_ok(m, off)
+    sig = _sig_ok(m)
     m.close()
-    applied = (vals.get("bAppServerAllowed") == 1 and jne == 0xEB)
-    return {"ok": True, "version": m.version, "disk_version": dv, "sig_ok": sig,
-            "applied": applied, "globals": vals, "cdefpolicy_jne": "0x%02X" % jne}
+    applied = (vals.get("bAppServerAllowed") == 1 and (j is None or jb == 0xEB))
+    return {"ok": True, "version": m.version, "disk_version": dv, "source": m.off_source,
+            "sig_ok": sig, "applied": applied, "globals": vals,
+            "cdefpolicy_jne": ("0x%02X" % jb) if jb is not None else "n/a"}
 
 
 def apply():
     m, err = _open()
     if err:
         return err
-    off = OFFSETS[m.version]
-    if not _sig_ok(m, off):
+    off = m.off
+    j = off.get("cdefpolicy_jne")
+    # a located jne MUST match the signature, else refuse (guards against a wrong/stale offset)
+    if j is not None and not _sig_ok(m):
         dv = m.disk_version
         m.close()
         return {"ok": False, "error": "CDefPolicy signature mismatch - refusing to patch",
-                "version": m.version, "disk_version": dv}
+                "version": m.version, "disk_version": dv, "source": m.off_source}
     before = {k: m.rd_dw(off[k]) for k in GLOBAL_KEYS}
+    # only trust ini-derived global RVAs if they currently read as plausible flag values
+    if m.off_source != "builtin" and not _globals_sane(before):
+        m.close()
+        return {"ok": False, "error": "CSLQuery globals failed sanity check - refusing (bad ini offset?)",
+                "version": m.version, "source": m.off_source, "before": before}
     for k, v in MULTI_VALUES.items():
         m.wr_dw(off[k], v)
-    m.wr(off["cdefpolicy_jne"], [0xEB])   # jne -> jmp
+    jb = None
+    if j is not None:
+        m.wr(j, [0xEB])   # jne -> jmp
+        jb = m.rd(j, 1)[0]
     after = {k: m.rd_dw(off[k]) for k in GLOBAL_KEYS}
-    jne = m.rd(off["cdefpolicy_jne"], 1)[0]
     m.close()
-    ok = (after.get("bAppServerAllowed") == 1 and jne == 0xEB)
-    return {"ok": ok, "version": m.version, "before": before, "after": after,
-            "cdefpolicy_jne": "0x%02X" % jne}
+    ok = (after.get("bAppServerAllowed") == 1 and (j is None or jb == 0xEB))
+    return {"ok": ok, "version": m.version, "source": m.off_source, "before": before, "after": after,
+            "cdefpolicy_jne": ("0x%02X" % jb) if jb is not None else "n/a"}
 
 
 def revert():
@@ -310,12 +450,15 @@ def revert():
     m, err = _open()
     if err:
         return err
-    off = OFFSETS[m.version]
+    off = m.off
     for k, v in NATIVE_VALUES.items():
         m.wr_dw(off[k], v)
-    m.wr(off["cdefpolicy_jne"], [0x75])   # jmp -> jne
+    j = off.get("cdefpolicy_jne")
+    if j is not None:
+        m.wr(j, [0x75])   # jmp -> jne
     m.close()
-    return {"ok": True, "version": m.version, "note": "native values restored in memory"}
+    return {"ok": True, "version": m.version, "source": m.off_source,
+            "note": "native values restored in memory"}
 
 
 def ensure_multisession():
