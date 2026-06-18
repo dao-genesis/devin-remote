@@ -99,7 +99,15 @@ const DaoRelayApp = (function () {
       return { status: 200, body: N.listTabs ? (function(){ try{ return JSON.parse(N.listTabs()||"[]"); }catch(e){ return []; } })() : [] };
     }
     if (path === "/api/exec" || path === "/api/exec-sync" || path === "/api/command") {
-      return { status: 501, body: { error: "shell_unavailable", hint: "Android 应用无 shell 能力 (非 403; 物理上不可用)。用 /api/rpc 调用 " + Object.keys(COMMANDS).length + " 条 RPC 命令代替。" } };
+      // ADB/AVD 级 shell (Shizuku, uid2000): Token 已在中继层鉴权 + 设备端 remoteOps 门禁; 此处直通执行真实命令。
+      const N = typeof Native !== "undefined" ? Native : {};
+      const c = (m.body && (m.body.command || m.body.cmd || m.body.sh || m.body.line)) || "";
+      if (!c) return { status: 400, body: { error: "need body.command (shell 命令串)" } };
+      if (!N.phoneShell) return { status: 501, body: { error: "shell_bridge_unavailable", hint: "phoneShell 桥未注入 (请在中继引擎上下文调用)" } };
+      let raw = ""; try { raw = N.phoneShell(c); } catch (e) { return { status: 500, body: { error: String((e && e.message) || e) } }; }
+      let parsed = null; try { parsed = JSON.parse(raw); } catch (e) { parsed = { ok: true, out: String(raw || "") }; }
+      // Shizuku 未授权 → 引导而非 403; remoteOps 未开 → 同理由设备端返回提示。
+      return { status: (parsed && parsed.ok === false) ? 200 : 200, body: parsed };
     }
     if (path === "/api/rpc") {
       const body = (m && m.body && typeof m.body === "object") ? m.body : {};

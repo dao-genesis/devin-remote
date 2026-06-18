@@ -1,6 +1,6 @@
 {
-  "versionCode": 52,
-  "versionName": "0.16.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.16.0/DevinCloud-mobile-v0.16.0.apk",
-  "notes": "v0.16.0 · 切号面板 & RT Flow 备份/清理机制重构\n· 拖拽注入修复：命中 file-input 即单路注入并立即返回，不再额外派发 drop 事件 → 两个文档不再两两重复(2→2，原先 2→4)。\n· 整行多选：点击整个账号框即可多选(不只左上角打钩框)，不干扰行内 ⚡切号/🔑登录/复制/刷新 等按钮。\n· 批量同步：多选后 复制账密/刷新额度/水过无痕/删除 全部转批量(登录除外)；批量条新增对应按钮。\n· 自动移出库默认关闭：额度归零账号默认保留在库，仅用户手动移除(或勾选「归零移出库」才自动移出)。\n· 幽灵态修复：移除彻底清残留态 + 重加自动解冻顺序立即可见，不再「已存在却看不到」。\n· 清理改为对话级：仅「账号低额 且 该对话 24h 无更新」的对话才自动清理；进行中/新更新对话绝不动。\n· 真删水过无痕：清理=归档→delete 真正抹除(原先只归档)，且必须先验证完整备份；归档查看功能保留以便核验。\n· 完整文件夹备份：每对话备份 对话MD + 工作日志 + 全量产出文件ZIP + 增量清单，非只 MD；自动备份心跳常驻(与额度解耦)。\n· 本地数据源无感回退：对话已清理或已备份且 24h 无更新 → 切号面板查看对话自动走本地备份并标记【本地】/【云端】。\n· 备份库悬浮窗：刷新↔下载之间新增「📦 备份库」，跨账号检索 账号/对话名，一键拉取本地备份(MD/全量ZIP)，含已移出库账号。\n· 签名一致 e261b27f，0.15.x 原地覆盖升级不丢数据。"
+  "versionCode": 53,
+  "versionName": "0.16.1",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.16.1/DevinCloud-mobile-v0.16.1.apk",
+  "notes": "v0.16.1 · 板块合一 · ADB/AVD 级 shell 放开 · 接入文档全量展开\n· 浏览器板块定位为软件内置底层引擎(等价 Playwright/Chrome-CDP/浏览器-MCP)：查看+操作任意网页全在软件底层完成，19 命令不干扰用户当前页。\n· 手机板块对齐 AVD 全流程：新增 phoneShell(Shizuku/uid2000，等价 adb shell) RPC 命令 + HTTP POST /api/exec 直通，可跑 input/screencap/pm/am/settings/dumpsys/wm/monkey 任意命令(需 Shizuku 授权一次 + setRemoteOps)。\n· shell 放开：/api/exec 由原先 501 不可用改为真实执行(Token 鉴权即边界，设备端 remoteOps 一键知情同意)。\n· 接入文档合一：内网穿透只保留一份云端文档(getCloudMd)，全量内联展开 — 去掉渐进式披露/折叠，getModuleIndex/getModuleDoc 降级为机读别名；文档新增「ADB/AVD 级 Shell」整节与示例。\n· 签名一致，0.16.0 原地覆盖升级不丢数据。"
 }
