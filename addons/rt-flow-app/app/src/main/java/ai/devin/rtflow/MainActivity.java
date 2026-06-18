@@ -826,17 +826,40 @@ public class MainActivity extends AppCompatActivity {
                 startDownload(dlUrl, ua, contentDisposition, mimetype));
 
         web.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        // 双击页面任意处 → 刷新一次 (刷新高频, 省去每次去点右上角小按钮)。仅观察手势不消费事件,
-        // 故单击/上下左右滑动/长按拖拽等原有交互一律不受影响。
+        // 三击页面任意处 → 刷新一次 (刷新高频, 省去每次去点右上角小按钮)。仅观察手势不消费事件 (return false),
+        // 故单击/双击/上下左右滑动/长按拖拽/缩放等原有交互一律不受影响。
         final WebView webRef = web;
-        final GestureDetector dtap = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
-            @Override public boolean onDoubleTap(MotionEvent e) {
-                Tab a = cur();
-                if (a != null && a.web == webRef) { try { webRef.reload(); toast("已刷新"); } catch (Exception ignored) {} }
-                return false;
+        final int tapSlop = android.view.ViewConfiguration.get(this).getScaledTouchSlop();
+        final long[] tapLast = new long[]{0L};   // 上次有效轻点的时间
+        final int[] tapCnt = new int[]{0};        // 连续轻点计数
+        final float[] tapDown = new float[]{0f, 0f};
+        final long[] tapDownT = new long[]{0L};
+        web.setOnTouchListener((v, ev) -> {
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    tapDown[0] = ev.getX(); tapDown[1] = ev.getY(); tapDownT[0] = System.currentTimeMillis();
+                    break;
+                case MotionEvent.ACTION_UP: {
+                    long now = System.currentTimeMillis();
+                    boolean isTap = (now - tapDownT[0]) < 300
+                            && Math.abs(ev.getX() - tapDown[0]) < tapSlop
+                            && Math.abs(ev.getY() - tapDown[1]) < tapSlop;
+                    if (isTap) {
+                        tapCnt[0] = (now - tapLast[0] < 500) ? tapCnt[0] + 1 : 1;
+                        tapLast[0] = now;
+                        if (tapCnt[0] >= 3) {
+                            tapCnt[0] = 0;
+                            Tab a = cur();
+                            if (a != null && a.web == webRef) { try { webRef.reload(); toast("已刷新"); } catch (Exception ignored) {} }
+                        }
+                    } else { tapCnt[0] = 0; }
+                    break;
+                }
+                case MotionEvent.ACTION_CANCEL:
+                    tapCnt[0] = 0; break;
             }
+            return false;
         });
-        web.setOnTouchListener((v, ev) -> { try { dtap.onTouchEvent(ev); } catch (Exception ignored) {} return false; });
         // 不再包 SwipeRefreshLayout 下拉刷新: 它会拦截顶部下拉, 导致 Devin 对话页等无法正常上下滑动。
         // 刷新统一走右上角刷新按钮 (reloadActive)。tab.swipe 保持 null, 各处视图挂载自动回退到 web。
         tab.swipe = null;
