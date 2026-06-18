@@ -322,6 +322,11 @@ const ORIGIN_VERSION = ORIGIN_VERSION_BASE + "-dao-fa-zi-ran";
 let _actualPort = PORT; // listening / start.onListen 时更新为 server.address().port
 const UPSTREAM_MGMT = "server.self-serve.windsurf.com";
 const UPSTREAM_INFER = "inference.codeium.com";
+// api_server 本源主机 · 工具类 RPC (联网搜索/读网页/代码上下文) 的真后端
+//   实证: 原版未改 Windsurf LSP 只连 server.codeium.com (35.223.238.178)
+//   ApiServerService/LanguageServerService 在此 host 注册 (415); inference.codeium.com 对其全 404
+//   之前误归 INFERENCE_SERVICES → 发往 inference → 404/501 Not Implemented · 致工具失效
+const UPSTREAM_API = process.env.API_UPSTREAM || "server.codeium.com";
 // v9.3.2 · 道恒无名 · 名随实变
 // 路由之 upstream 回归默认分流 (chat 走 inference via INFERENCE_SERVICES 匹)
 // v9.3.1 "chat 单分流至 server.codeium.com" 之推断基于无 JWT 合成测,
@@ -344,6 +349,16 @@ const INFERENCE_SERVICES = new Set([
   //   /exa.api_server_pb.ApiServerService/GetChatMessage
   //   缺此 → 错误路由至 UPSTREAM_MGMT → "Model provider unreachable"
   "exa.api_server_pb.ApiServerService",
+]);
+
+// api_server 工具服务集 · 透明转发至 server.codeium.com (api_server 本源)
+//   联网搜索 ApiServerService/GetWebSearchResults · 读网页 ApiServerService/RecordReadUrlContent
+//   代码上下文 LanguageServerService/GetMatchingCodeContext
+//   这些非 chat 方法须走 UPSTREAM_API · 否则 inference.codeium.com 回 404/501
+//   (chat 方法 GetChatMessage{,V2}/RawGetChatMessage 仍由方法名级路由 → UPSTREAM_INFER · 转 BYOK)
+const API_SERVER_SERVICES = new Set([
+  "exa.api_server_pb.ApiServerService",
+  "exa.language_server_pb.LanguageServerService",
 ]);
 
 // 三种模式 · 多言数穷 · 不如守中 · v9.9.92 加入 'custom' · 与 sp_invert.js 一致
@@ -2839,6 +2854,10 @@ function routeUpstream(reqUrl) {
   // 服务名自动分流
   const m = rawPath.match(/^\/([^/]+)\//);
   const svc = m ? m[1] : "";
+  // ★ api_server 工具服务 (非 chat 方法) → server.codeium.com 本源
+  //   先于 INFERENCE_SERVICES 判定 · 工具不再误投 inference
+  if (API_SERVER_SERVICES.has(svc))
+    return { host: UPSTREAM_API, path: rawPath + query };
   if (INFERENCE_SERVICES.has(svc))
     return { host: UPSTREAM_INFER, path: rawPath + query };
   return { host: UPSTREAM_MGMT, path: rawPath + query };
@@ -2865,9 +2884,12 @@ function classifyRPC(reqPath) {
   //   道义: 三十五章「执大象 天下往」· 全量模型即大象 · 执之则天下往
   if (rpc === "GetUserSettings" || rpc === "GetCascadeModelConfigs")
     return "MODEL_UNLOCK";
-  // inference 服务 · 深度净化侧信道
+  // ★ api_server 工具服务 · 透明直透 (不剥侧信道) · 与原版 LSP 一致
+  //   走 server.codeium.com · 真后端真鉴权 · 无需净化 (净化反致 proto 损坏)
   const svcM = cleanPath.match(/^\/([^/]+)\//);
   const svc = svcM ? svcM[1] : "";
+  if (API_SERVER_SERVICES.has(svc)) return "PASSTHROUGH";
+  // inference 服务 · 深度净化侧信道
   if (INFERENCE_SERVICES.has(svc)) return "INFER_STRIP";
   return "PASSTHROUGH";
 }
