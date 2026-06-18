@@ -81,6 +81,7 @@ public class MainActivity extends AppCompatActivity {
     static final String VPN = "rtflow://vpn";
     static final String SCRIPTS = "rtflow://scripts";
     static final String SHIZUKU = "rtflow://shizuku";
+    static final String DAOPAN = "rtflow://daopan";
     static final String DEVIN = "https://app.devin.ai/";
     private static final String SW_URL = "file:///android_asset/engine/switch.html";
     private static final String TU_URL = "file:///android_asset/engine/tunnel.html";
@@ -88,6 +89,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String VPN_URL = "file:///android_asset/engine/vpn.html";
     private static final String SCR_URL = "file:///android_asset/engine/userscripts.html";
     private static final String SHZ_URL = "file:///android_asset/engine/shizuku.html";
+    private static final String DP_URL = "file:///android_asset/engine/daopan.html";
 
     // 搜索引擎 (国内环境可切百度) — 持久化于 SharedPreferences
     private static final String PREF_SEARCH = "search_engine";
@@ -117,9 +119,12 @@ public class MainActivity extends AppCompatActivity {
     private boolean tabDragScrolling = false;
     private EditText addr;
     private Button dlBtn;
+    private Button daoBtn;
     private Button starBtn;
     private FrameLayout dlPanel;
     private LinearLayout dlListCol;
+    private FrameLayout daoPanel;          // 全服通悬浮窗 (近期对话 / 备份网页端)
+    private WebView daoWeb;
     private volatile String sEngineCache = null;
     private volatile String curProxy = null;   // 已应用到内置浏览器(全部 WebView)的本地代理 host:port; null=直连
     private final java.util.Map<Long, String[]> dlPending = new java.util.concurrent.ConcurrentHashMap<>();
@@ -127,6 +132,8 @@ public class MainActivity extends AppCompatActivity {
     private volatile String dragDlPath = null;   // 正在从下载列表拖拽的文件 (拖到页面 → 注入上传/拖放区)
     private volatile String dragDlMime = null;
     private volatile int dragTabIdx = -1;        // 正在拖拽的标签序号 (拖到另一页面 → 提取该对话并导入两个 md)
+    private volatile String dragConvAccJson = null; // 全服通近期对话拖拽: 该对话所属账号 (含 email/密码/org → 引擎取数+指引md)
+    private volatile String dragConvSid = null;     // 全服通近期对话拖拽: 该对话 sid
     private volatile WebView convDropTarget = null; // 对话拖入的目标页 (提取完成后注入)
     private volatile float convDropX = 0, convDropY = 0;
     private volatile String convDropAccountJson = null; // 被拖对话标签所属账号 (生成"查看全部文件"指引md)
@@ -155,6 +162,7 @@ public class MainActivity extends AppCompatActivity {
         boolean desktop = false;     // 桌面版 UA
         boolean night = false;       // 夜间反色
         boolean translated = false;  // 整页翻译态 (跨页保持)
+        String pendingReloadUrl = null; // 后台标签渲染进程被回收 → 延迟到选中时再重载 (避免多标签同时重载放大内存压力·消除卡死雪崩)
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
     }
     private boolean adBlock = true;    // 广告/弹窗拦截: 默认内置开启 (无需用户操作·无开关)
@@ -343,6 +351,9 @@ public class MainActivity extends AppCompatActivity {
         // 下载管理悬浮窗按钮
         dlBtn = chipBtnSm("\uD83D\uDCE5");
         dlBtn.setOnClickListener(v -> toggleDownloadPanel());
+        // 全服通悬浮窗按钮 (下载键右侧): 近期对话(跨号·实时) + 备份网页端
+        daoBtn = chipBtnSm("\uD83D\uDDC2");
+        daoBtn.setOnClickListener(v -> toggleDaoPanel());
 
         // 第一行: 菜单 + 地址 + 前往
         bar.addView(menu);
@@ -365,6 +376,7 @@ public class MainActivity extends AppCompatActivity {
         btnRow.addView(starBtn);
         btnRow.addView(reload);
         btnRow.addView(dlBtn);
+        btnRow.addView(daoBtn);
 
         // 标签条
         HorizontalScrollView strip = new HorizontalScrollView(this);
@@ -832,6 +844,8 @@ public class MainActivity extends AppCompatActivity {
         // autoHost 常驻 (停泊其余标签·保持挂载窗口与尺寸, 后台自动化可用); 活动标签提到其上层显示。
         if (autoHost != null) content.addView(autoHost);
         Tab t = tabs.get(idx);
+        // 后台被回收的标签延迟重载: 选中即载 (恢复内容, 且一次只载一个 → 不放大内存压力)
+        if (t.pendingReloadUrl != null) { String u = t.pendingReloadUrl; t.pendingReloadUrl = null; t.url = u; try { t.web.loadUrl(u); } catch (Exception ignored) {} }
         android.view.View host = t.swipe != null ? t.swipe : t.web;
         if (host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
         content.addView(host);
@@ -841,6 +855,11 @@ public class MainActivity extends AppCompatActivity {
         if (dlPanel != null) {
             if (dlPanel.getParent() != null) ((ViewGroup) dlPanel.getParent()).removeView(dlPanel);
             content.addView(dlPanel);
+        }
+        // 全服通悬浮窗置顶
+        if (daoPanel != null) {
+            if (daoPanel.getParent() != null) ((ViewGroup) daoPanel.getParent()).removeView(daoPanel);
+            content.addView(daoPanel);
         }
         setAddr(displayUrl(t));
         renderTabStrip();
@@ -887,11 +906,19 @@ public class MainActivity extends AppCompatActivity {
             Tab fresh = makeTab(acct, internal);          // 完整配置 + 停泊; 追加到末尾
             tabs.remove(tabs.size() - 1);                 // 取回, 放回原位
             fresh.incognito = incognito; fresh.night = night;
+            fresh.url = url;
             tabs.set(idx, fresh);
-            if (url != null && !url.isEmpty()) { fresh.url = url; fresh.web.loadUrl(url); }
-            if (active == idx) selectTab(idx); else renderTabStrip();
+            if (active == idx) {
+                // 当前可见标签: 立即重载, 用户无感恢复
+                if (url != null && !url.isEmpty()) fresh.web.loadUrl(url);
+                selectTab(idx);
+                toast("网页已自动恢复");
+            } else {
+                // 后台标签: 不立即重载(否则多标签同时被回收→同时重载, 内存雪崩·更卡)。延迟到用户选中该标签时再载。
+                fresh.pendingReloadUrl = (url != null && !url.isEmpty()) ? url : null;
+                renderTabStrip();
+            }
             saveTabs();
-            toast("网页已自动恢复");
         });
     }
 
@@ -1279,6 +1306,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override public void onBackPressed() {
+        if (daoPanel != null) { closeDaoPanel(); return; }     // 返回键先关全服通悬浮窗
+        if (dlPanel != null) { closeDownloadPanel(); return; }
         if (active >= 0 && tabs.get(active).web.canGoBack()) { tabs.get(active).web.goBack(); return; }
         super.onBackPressed();
     }
@@ -2018,6 +2047,8 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void toast(String s) { MainActivity.this.toast(s == null ? "" : s); }
         /** 震动反馈 (多选长按/低额提醒) — 直驱 Vibrator, 不受系统触感开关影响。 */
         @JavascriptInterface public void vibrate(int ms) { MainActivity.this.doVibrate(ms > 0 ? ms : 30); }
+        // 全服通近期对话: 长按某行 → 起全局拖拽 (该对话 accJson+sid), 拖到任意网页松手注入两形态文件
+        @JavascriptInterface public void startConvDrag(String accJson, String sid) { main.post(() -> MainActivity.this.beginConvDrag(accJson, sid)); }
         /** 全量备份落地: Documents/DevinCloud/backups/<账号文件夹>/<name> (脱离沙箱, 卸载/重装不丢)。 */
         @JavascriptInterface public boolean vaultSaveBackup(String folder, String name, String content) {
             return MainActivity.this.vaultSaveBackup(folder, name, content);
@@ -2589,6 +2620,131 @@ public class MainActivity extends AppCompatActivity {
         if (dlPanel != null && dlPanel.getParent() != null) ((ViewGroup) dlPanel.getParent()).removeView(dlPanel);
         dlPanel = null; dlListCol = null;
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  全服通悬浮窗: 近期对话(跨号·实时·拖拽两形态) + 备份网页端(路由 cloud.html)
+    // ════════════════════════════════════════════════════════════════════════
+    private void toggleDaoPanel() {
+        if (daoPanel != null) { closeDaoPanel(); return; }
+        showDaoPanel();
+    }
+    private void closeDaoPanel() {
+        if (daoWeb != null) { try { daoWeb.destroy(); } catch (Exception ignored) {} daoWeb = null; }
+        if (daoPanel != null && daoPanel.getParent() != null) ((ViewGroup) daoPanel.getParent()).removeView(daoPanel);
+        daoPanel = null;
+    }
+    private void showDaoPanel() {
+        final FrameLayout panel = new FrameLayout(this);
+        panel.setBackgroundColor(0xFF0E1116);
+        int sw = getResources().getDisplayMetrics().widthPixels;
+        int sh = getResources().getDisplayMetrics().heightPixels;
+        int w = Math.min(dp(420), (int) (sw * 0.92));
+        int h = Math.min(dp(620), (int) (sh * 0.82));
+        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(w, h);
+        plp.gravity = Gravity.TOP | Gravity.END; plp.topMargin = dp(6); plp.rightMargin = dp(8);
+        panel.setLayoutParams(plp);
+
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        panel.addView(col, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // 标题栏 (拖动可移动整窗)
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL); head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setBackgroundColor(0xFF1F6FEB); head.setPadding(dp(10), dp(8), dp(8), dp(8));
+        TextView ttl = new TextView(this); ttl.setText("全服通 · 近期对话 / 备份");
+        ttl.setTextColor(0xFFFFFFFF); ttl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        ttl.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView close = new TextView(this); close.setText("✕");
+        close.setTextColor(0xFFFFFFFF); close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16); close.setPadding(dp(10), 0, dp(6), 0);
+        close.setOnClickListener(v -> closeDaoPanel());
+        head.addView(ttl); head.addView(close);
+        head.setOnTouchListener(new View.OnTouchListener() {
+            float dx, dy;
+            @Override public boolean onTouch(View v, MotionEvent ev) {
+                switch (ev.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN: dx = ev.getRawX() - panel.getTranslationX(); dy = ev.getRawY() - panel.getTranslationY(); return true;
+                    case MotionEvent.ACTION_MOVE: panel.setTranslationX(ev.getRawX() - dx); panel.setTranslationY(ev.getRawY() - dy); return true;
+                }
+                return false;
+            }
+        });
+        col.addView(head);
+
+        WebView web = buildInternalWebView();
+        daoWeb = web;
+        col.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        daoPanel = panel;
+        content.addView(panel);
+        web.loadUrl(DP_URL);
+    }
+    /** 全服通近期对话长按拖拽: 起一个全局拖拽并临时隐藏面板, 使下方网页可接收放手注入。 */
+    private void beginConvDrag(String accJson, String sid) {
+        try {
+            if (sid == null || sid.isEmpty()) return;
+            dragConvAccJson = accJson; dragConvSid = sid; dragDlPath = null; dragTabIdx = -1;
+            View anchor = (daoWeb != null) ? daoWeb : content;
+            anchor.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            doVibrate(30);
+            // 小尺寸拖拽影像 (一个蓝色提示条, 而非整个 WebView)
+            TextView chip = new TextView(this);
+            chip.setText("📄 " + (sid.length() > 18 ? sid.substring(0, 18) : sid) + " · 拖到页面松手");
+            chip.setTextColor(0xFFFFFFFF); chip.setBackgroundColor(0xFF1F6FEB);
+            chip.setPadding(dp(12), dp(8), dp(12), dp(8)); chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            int wspec = View.MeasureSpec.makeMeasureSpec(dp(240), View.MeasureSpec.AT_MOST);
+            int hspec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
+            chip.measure(wspec, hspec);
+            chip.layout(0, 0, chip.getMeasuredWidth(), chip.getMeasuredHeight());
+            ClipData data = new ClipData("conv", new String[]{ "text/plain" }, new ClipData.Item(sid));
+            View.DragShadowBuilder shadow = new View.DragShadowBuilder(chip);
+            if (Build.VERSION.SDK_INT >= 24) anchor.startDragAndDrop(data, shadow, null, View.DRAG_FLAG_GLOBAL);
+            else anchor.startDrag(data, shadow, null, 0);
+            if (daoPanel != null) daoPanel.setVisibility(View.INVISIBLE);   // 露出下方网页作为放手目标; ENDED 时恢复
+            toast("拖到目标网页松手 (松开后回到全服通)");
+        } catch (Exception e) { dragConvAccJson = null; dragConvSid = null; toast("拖拽失败"); }
+    }
+    /** 独立内部 WebView (非标签): 暴露 Native/RTDL 桥 + 文件拖放监听, 用于全服通悬浮窗。 */
+    private WebView buildInternalWebView() {
+        WebView web = new WebView(this);
+        WebSettings st = web.getSettings();
+        st.setJavaScriptEnabled(true);
+        st.setDomStorageEnabled(true);
+        st.setDatabaseEnabled(true);
+        st.setAllowFileAccess(true);
+        st.setAllowFileAccessFromFileURLs(true);
+        st.setAllowUniversalAccessFromFileURLs(true);
+        st.setSupportZoom(true);
+        st.setBuiltInZoomControls(true);
+        st.setDisplayZoomControls(false);
+        st.setMediaPlaybackRequiresUserGesture(false);
+        if (Build.VERSION.SDK_INT >= 21) st.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        web.addJavascriptInterface(new Bridge(web), "Native");
+        web.addJavascriptInterface(new DlBridge(), "RTDL");
+        web.setWebViewClient(new WebViewClient() {
+            @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
+                return handleExternalScheme(req.getUrl() == null ? null : req.getUrl().toString());
+            }
+            @SuppressWarnings("deprecation")
+            @Override public boolean shouldOverrideUrlLoading(WebView v, String u) { return handleExternalScheme(u); }
+            @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
+                if (v == daoWeb) { closeDaoPanel(); }
+                else { try { v.destroy(); } catch (Exception ignored) {} }
+                return true;
+            }
+        });
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
+                android.util.Log.i("RTFlowJS", m.message() + " @" + m.sourceId() + ":" + m.lineNumber());
+                return true;
+            }
+            @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
+                if (filePathCallback != null) { try { filePathCallback.onReceiveValue(null); } catch (Exception ignored) {} }
+                filePathCallback = cb; cameraOutputUri = null;
+                try { fileChooser.launch(buildUploadChooser(params)); return true; }
+                catch (Exception e) { filePathCallback = null; toast("无法打开上传选择器"); return false; }
+            }
+        });
+        return web;
+    }
     private void showDownloadPanel() {
         final FrameLayout panel = new FrameLayout(this);
         panel.setBackgroundColor(0xF2151B24);
@@ -2825,17 +2981,19 @@ public class MainActivity extends AppCompatActivity {
         return (v, ev) -> {
             switch (ev.getAction()) {
                 case DragEvent.ACTION_DRAG_STARTED:
-                    return dragDlPath != null || dragTabIdx >= 0;    // 下载项 或 标签对话拖拽 → 接管
+                    return dragDlPath != null || dragTabIdx >= 0 || dragConvSid != null;   // 下载项 / 标签对话 / 全服通近期对话 → 接管
                 case DragEvent.ACTION_DRAG_ENTERED:
                 case DragEvent.ACTION_DRAG_LOCATION:
                 case DragEvent.ACTION_DRAG_EXITED:
-                    return dragDlPath != null || dragTabIdx >= 0;
+                    return dragDlPath != null || dragTabIdx >= 0 || dragConvSid != null;
                 case DragEvent.ACTION_DROP:
                     if (dragDlPath != null) { dropFileIntoPage(web, ev.getX(), ev.getY(), dragDlPath, dragDlMime); return true; }
                     if (dragTabIdx >= 0) { importConversationFromTab(dragTabIdx, web, ev.getX(), ev.getY()); return true; }
+                    if (dragConvSid != null) { importConversationFromData(dragConvAccJson, dragConvSid, web, ev.getX(), ev.getY()); return true; }
                     return false;
                 case DragEvent.ACTION_DRAG_ENDED:
-                    dragDlPath = null; dragDlMime = null; dragTabIdx = -1;
+                    dragDlPath = null; dragDlMime = null; dragTabIdx = -1; dragConvAccJson = null; dragConvSid = null;
+                    if (daoPanel != null) daoPanel.setVisibility(View.VISIBLE);   // 拖拽时临时隐藏的全服通窗 → 恢复
                     return true;
             }
             return false;
@@ -2891,11 +3049,20 @@ public class MainActivity extends AppCompatActivity {
         if (accJson != null) { try { emailTmp = new JSONObject(accJson).optString("email", ""); } catch (Exception ignored) {} }
         final String email = emailTmp;
         toast("提取对话中…");
+        final WebView ftarget = targetWeb; final float fx = x, fy = y; final WebView fsw = sw;
+        // 引擎(软件本体)取数注入两形态; 取数空/无引擎 → 回退到源标签页内 fetch 提取
+        engineExtractInject(email, sid, accJson, targetWeb, x, y, () -> { toast("引擎取数空, 回退页内提取…"); runInTabConvExtract(fsw, sid, ftarget, fx, fy, accJson); });
+    }
+
+    /** 经引擎(软件本体 RelayService)对 email+sid 取数, 注入目标页两形态:
+     *  有产出文件 → 文件夹(ZIP·对话md+工作日志+files/) + 取数指引MD; 无产出 → 完整对话MD + 取数指引MD。
+     *  email 空 / 引擎离线 / 取数空 → 执行 fallback (回退链路或报错)。 */
+    private void engineExtractInject(final String email, final String sid, final String accJson,
+                                     final WebView target, final float x, final float y, final Runnable fallback) {
         final RelayService rs = RelayService.instance;
-        if (email.isEmpty() || rs == null) { runInTabConvExtract(sw, sid, targetWeb, x, y, accJson); return; }
-        final WebView ftarget = targetWeb; final float fx = x, fy = y;
+        if (email == null || email.isEmpty() || rs == null) { if (fallback != null) fallback.run(); return; }
         new Thread(() -> {
-            String conv = "", title = sid, err = null, zipB64 = "", zipName = ""; int zipFileCount = 0;
+            String conv = "", title = sid, zipB64 = "", zipName = ""; int zipFileCount = 0;
             try {
                 JSONObject body = new JSONObject();
                 body.put("cmd", "extractConversation");
@@ -2912,32 +3079,40 @@ public class MainActivity extends AppCompatActivity {
                     zipB64 = o.optString("zipB64", "");
                     zipName = o.optString("zipName", "");
                     zipFileCount = o.optInt("zipFileCount", 0);
-                } else err = o.optString("error", "提取失败");
-            } catch (Exception e) { err = e.getMessage(); }
+                }
+            } catch (Exception ignored) {}
             final String fconv = conv, ftitle = title, fzipB64 = zipB64, fzipName = zipName;
             final int fzfc = zipFileCount;
             main.post(() -> {
                 boolean noText = (fconv == null || fconv.isEmpty());
                 boolean noZip = (fzipB64 == null || fzipB64.isEmpty());
-                if (noText && noZip) { toast("引擎取数空, 回退页内提取…"); runInTabConvExtract(sw, sid, ftarget, fx, fy, accJson); return; }
+                if (noText && noZip) { if (fallback != null) fallback.run(); return; }
                 String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
                 String guide = buildAccessGuideMd(accJson, sid, ftitle);
                 java.util.List<String[]> files = new java.util.ArrayList<>();
                 if (fzfc > 0 && !noZip) {
-                    // 已有产出文件 → 文件夹(ZIP·含对话md+工作日志+files/) + 取数指引MD
                     files.add(new String[]{ (fzipName != null && !fzipName.isEmpty()) ? fzipName : (base + ".zip"), fzipB64 });
                     files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
-                    dropB64FilesIntoPage(ftarget, fx, fy, files);
+                    dropB64FilesIntoPage(target, x, y, files);
                     toast("已导入 文件夹(ZIP·" + fzfc + "件) + 取数指引");
                 } else {
-                    // 无产出文件 → 完整对话MD + 取数指引MD
                     files.add(new String[]{ base + "-conversation.md", b64Utf8(fconv) });
                     files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
-                    dropB64FilesIntoPage(ftarget, fx, fy, files);
+                    dropB64FilesIntoPage(target, x, y, files);
                     toast("已导入 对话MD + 取数指引");
                 }
             });
         }).start();
+    }
+
+    /** 全服通近期对话拖拽放手: 据账号(含 email/密码/org) + sid 直接经引擎取数并注入目标页 (无需源标签)。 */
+    private void importConversationFromData(String accJson, String sid, WebView targetWeb, float x, float y) {
+        if (sid == null || sid.isEmpty()) { toast("无对话ID"); return; }
+        if (targetWeb == null) return;
+        String email = "";
+        if (accJson != null) { try { email = new JSONObject(accJson).optString("email", ""); } catch (Exception ignored) {} }
+        toast("提取对话中…");
+        engineExtractInject(email, sid, accJson, targetWeb, x, y, () -> toast("引擎不可用或取数空, 请确保软件本体在线并已解锁该账号"));
     }
     /** 回退链路: 在源标签 WebView 内就地 fetch 事件流(页面已注入 Bearer) → RTDL.convExtracted 回传 → onConvExtracted 注入两份md。 */
     private void runInTabConvExtract(WebView sw, String sid, WebView target, float x, float y, String accJson) {
@@ -3761,6 +3936,19 @@ public class MainActivity extends AppCompatActivity {
             try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); } catch (Exception ignored) {}
         }
+    }
+
+    /** 内存压力回调: 释放非活动标签的 WebView 内部缓存 (不卸载页面·不打断后台自动化), 缓解多标签卡死/渲染进程被杀。 */
+    @Override public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level < TRIM_MEMORY_RUNNING_LOW) return;   // 仅在确有压力时介入
+        try {
+            for (int i = 0; i < tabs.size(); i++) {
+                if (i == active) continue;
+                WebView w = tabs.get(i).web;
+                if (w != null) { try { w.clearCache(false); } catch (Exception ignored) {} try { w.freeMemory(); } catch (Exception ignored) {} }
+            }
+        } catch (Exception ignored) {}
     }
 
     @Override protected void onResume() {

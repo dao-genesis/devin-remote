@@ -115,17 +115,32 @@ function renderAccts(){
         '<span class="ad-cp" onclick="event.stopPropagation();cpAcc('+i+')">复制账密</span>'+
       '</div>'+
       '<div class="ad-pw">'+_esc(pw?("密码: "+pw):"(无密码)")+'</div>'+
-      '<div class="ad-meta"><span>'+(logged?"☁ 已登录·可备份":"🔒 未登录")+'</span>'+(a.orgName?'<span>'+_esc(a.orgName)+'</span>':'')+'</div>'+
+      '<div class="ad-meta"><span>'+(logged?"☁ 已登录·可备份":"🔒 未登录")+'</span>'+(a.orgName?'<span>'+_esc(a.orgName)+'</span>':'')+((!logged&&pw)?'<span class="ad-cp" onclick="event.stopPropagation();unlockAcc('+i+')">🔓 解锁</span>':'')+'</div>'+
     '</div>';
   }).join("");
   document.getElementById("list").innerHTML = html || '<div class="empty">无匹配账号 · 清空搜索查看全部</div>';
 }
 function cpAcc(i){ var a=panelAccounts()[i]; if(!a)return; var t=(a.email||a.id||"")+"\n"+(a.password||""); try{N.clip&&N.clip(t);}catch(e){} toast("已复制账号+密码"); }
+// 账号解锁: 用已存账密登录(auth1) → 即可在本面板备份/查看对话, 无需跳到切号面板
+async function unlockAcc(i){
+  var a=panelAccounts()[i]; if(!a)return;
+  if(!a.password){ toast("无密码·无法解锁",true); return; }
+  if(a.auth1&&a.orgId){ openAcc(i); return; }
+  toast("解锁中…");
+  try{
+    var r=await DaoCore.loginAndStore(a.email||a.id, a.password);
+    if(r&&r.ok){ toast("✓ 已解锁 "+(a.email||a.id)); renderAccts(); }
+    else toast("解锁失败: "+((r&&r.error)||""),true);
+  }catch(e){ toast("解锁异常: "+e,true); }
+}
 
 // ── 二级: 该账号的对话 ──
 async function openAcc(i){
   var a=panelAccounts()[i]; if(!a)return;
-  if(!(a.auth1&&a.orgId)){ toast("该账号未登录·先到切号面板登录",true); return; }
+  if(!(a.auth1&&a.orgId)){
+    if(a.password){ await unlockAcc(i); a=panelAccounts()[i]; if(!(a&&a.auth1&&a.orgId)) return; }
+    else { toast("该账号未登录且无密码·先到切号面板登录",true); return; }
+  }
   CUR=a; CUR_NO=i+1; VIEW="sessions";
   document.getElementById("crumb").innerHTML='<a onclick="renderAccts()">📁 全部账号</a><span>›</span><span>'+CUR_NO+'. '+_esc(a.email||a.id)+'</span>';
   document.getElementById("sub").textContent=(a.email||a.id)+" · "+(a.orgName||a.orgId);

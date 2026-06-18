@@ -1,6 +1,6 @@
 {
-  "versionCode": 56,
-  "versionName": "0.16.4",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.16.4/DevinCloud-mobile-v0.16.4.apk",
-  "notes": "v0.16.4 · 平板断连/闪退根因修复 + 账号页签实时剩余金额\n· 断连/闪退根因(逆流本源): 中继跑在 RelayService 宿主的「无界面(永远离屏)engine WebView」里。Android 默认把离屏 WebView 渲染进程降到最低优先级 → 内存压力下最先被系统回收;且原代码未实现 onRenderProcessGone，渲染进程一旦被回收会连带杀掉整个 App 进程(=闪退) 并断开中继。新版更重(整文件夹备份/CDP Network/并发监测) → 内存占用更高 → 回收更频繁 → 老版本反而「勉强能用」的真因。\n· 修法一: engine WebView 钉为 RENDERER_PRIORITY_IMPORTANT 且离屏不降级，大幅降低被系统回收概率(治本，减少自动断连)。\n· 修法二: engine WebView + 多实例账号浏览器(TabActivity) 均接管 onRenderProcessGone → 渲染进程被回收时不再连带杀 App(消除闪退)，并自动重建引擎页(engine.html 内联 DaoRelayApp.start 自动重连中继)，无感恢复。\n· 账号页签实时剩余金额: 每个账号页签在状态点左侧显示该账号当前剩余美金额度(如「$5 🟢 对话名」)，随额度刷新(render/pollTrk)实时更新，便于直接在标签条管理。\n· 签名一致，原地覆盖升级不丢数据。"
+  "versionCode": 57,
+  "versionName": "0.17.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.0/DevinCloud-mobile-v0.17.0.apk",
+  "notes": "v0.17.0 · 全服通悬浮窗 + 全局实时刷新 + 备份页搜索/解锁 + 多标签稳定性\n· 全服通悬浮窗(下载键右侧新按钮 🗂): 默认「近期对话」页 — 跨全部已解锁账号汇总最近更新的约 30 条对话, 20s 实时轮询; 每条可在窗内「查看」完整对话(悬浮窗内新开网页形态)、下载 MD、下载全部文件(ZIP)。长按左侧 ⠿ 手柄拖到任意网页松手 → 自动注入两形态(无产出文件=对话MD+取数指引MD; 有产出文件=文件夹ZIP+取数指引MD)。第二页「备份网页端」把对话备份管理页路由进悬浮窗。\n· 全局实时刷新: 额度冷启动一次性全量刷新(消除满屏 $-- 死数据), 之后每轮覆盖更多空闲账号; render 8s→6s、追踪 15s→12s、额度 15s→12s, 数据不再「一潭死水」。\n· 备份页: 新增账号/对话名称搜索框; 未登录账号可直接「🔓 解锁」(用已存账密登录)再备份/查看。\n· 多标签稳定性: 后台标签渲染进程被回收时不再立即重载(避免多标签同时重载内存雪崩), 延迟到选中时再载; onTrimMemory 内存压力下释放非活动标签缓存, 缓解频繁卡死/「网页已自动恢复」。\n· 签名一致, 原地覆盖升级不丢数据。"
 }
