@@ -662,6 +662,17 @@ public class MainActivity extends AppCompatActivity {
         return tab;
     }
 
+    /** 后台开新标签: 创建+加载+停泊 autoHost (已挂载窗口·有尺寸 → 自动化 JS/截图可用), 但不调用 selectTab
+     *  → 不切换前台, 用户当前页不受打扰 (道并行而不相悖)。无任何活动标签时退化为前台显示, 避免空屏。 */
+    private Tab newTabBackground(String url, String accountJson) {
+        boolean internal = url.startsWith("rtflow://") || url.startsWith("file:");
+        Tab tab = makeTab(accountJson, internal);   // makeTab 已 parkHost
+        loadInto(tab, url);
+        if (active < 0) selectTab(tabs.size() - 1);  // 空屏兜底
+        else renderTabStrip();                        // 仅刷新标签条, 不抢前台
+        return tab;
+    }
+
     /** 创建并配置一个标签的 WebView (不自动加载 URL); 供 newTab 与 onCreateWindow(新窗口) 复用。 */
     @SuppressWarnings("SetJavaScriptEnabled")
     private Tab makeTab(String accountJson, boolean internal) {
@@ -4096,9 +4107,14 @@ public class MainActivity extends AppCompatActivity {
         catch (Exception e) { return ""; }
     }
 
-    /** 开新标签 (从 IPC 调用) */
+    /** 开新标签 (从 IPC 调用) — 远程自动化: 后台静默开, 不抢占用户当前前台页 (道并行而不相悖)。 */
     public void ipcOpenTab(String url, String accountJson) {
-        main.post(() -> newTab(url == null ? DEVIN : url, accountJson));
+        main.post(() -> newTabBackground(url == null ? DEVIN : url, accountJson));
+    }
+
+    /** 把指定标签提到前台 (从 IPC 调用) — 仅当 Agent 显式需要"前端同步反映"时调用。 */
+    public void ipcActivateTab(int tabIndex) {
+        main.post(() -> { if (tabIndex >= 0 && tabIndex < tabs.size()) selectTab(tabIndex); });
     }
 
     /** 关闭标签 */

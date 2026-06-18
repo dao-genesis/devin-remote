@@ -15,7 +15,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.17.3";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.17.4";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -63,8 +63,8 @@
     browser: {
       core: true,
       title: "模块一 · 软件本体 ▸ 浏览器自动化子模块 (内置 WebView)",
-      summary: "软件内置 WebView 引擎(等价 Playwright/Chrome-CDP/浏览器-MCP): 查看+操作任意网页全在软件底层完成, 不干扰用户。打开/导航/执行JS/提取DOM·Cookie·Storage/截图/导出MD + 点击·填表·等待元素·提交·滚动·提链接 + CDP 协议域 facade(cdp: Page.*/Runtime.*/DOM.*/Input.*/Network.*)。共 19 专用命令 + 1 条 cdp 路由。",
-      content: "# 模块一 · 软件本体 ▸ 浏览器自动化子模块 (内置 WebView 底层)\n\n## 概述\n浏览器查看与操作全部在**软件内置 WebView 引擎底层**完成 — 等价 Playwright / Chrome-CDP / 浏览器-MCP 的能力集 (开页·执行JS·DOM·Cookie·Storage·截图·导出·点击填表等待提交), 直接驱动手机端 WebView 标签, 在不干扰用户正常使用的前提下, 帮用户操作/测试/记录任意网页:\n- 列举/打开/关闭标签, 前进/后退/刷新/跳转导航\n- 在指定标签执行任意 JavaScript 并取返回值\n- 提取 DOM (outerHTML) / 读 Cookie / 读 localStorage·sessionStorage\n- 截图 (base64 PNG) / 导出页面为 Markdown\n- 高级: 点击元素 / 填表 / 等待元素出现 / 提交表单 / 提取链接·输入值 / 页面概要 / 滚动\n\n## 授权 (一次性, 最小成本)\n远程操控开关默认关闭。Agent 调 `setRemoteOps({enable:true})` 即可 (或让用户在穿透面板拨一下开关)。\n\n## 命令列表 (19)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| browseListTabs | - | 列出所有前台标签 (index/url/title/account/active) |\n| browseOpen | url, account? | 打开新标签 |\n| browseClose | tabIndex | 关闭标签 |\n| browseNavigate | tabIndex, action(back/forward/reload/stop/goto), url? | 导航 |\n| browseExecJs | tabIndex, js | 执行 JS 并返回结果 |\n| browseGetDom | tabIndex | 获取完整 DOM HTML |\n| browseGetCookies | url | 获取指定 URL 的 Cookie |\n| browseGetStorage | tabIndex, type(local/session) | 获取 Storage 键值 |\n| browseScreenshot | tabIndex | 截图返回 base64 PNG |\n| browseExportMd | tabIndex, save?, name? | 导出为 Markdown |\n| browseFindInPage | tabIndex, text | 页内查找 |\n| browseClickElement | tabIndex, selector | 点击元素 (CSS 选择器) |\n| browseFillForm | tabIndex, selector, value | 填写输入框 |\n| browseScrollTo | tabIndex, x, y | 滚动页面 |\n| browseGetLinks | tabIndex | 提取所有链接 |\n| browseGetPageInfo | tabIndex | 页面概要 (title/url/meta/表单数) |\n| browseWaitForElement | tabIndex, selector, timeout? | 等待元素出现 |\n| browseSubmitForm | tabIndex, selector? | 提交表单 |\n| browseGetInputValues | tabIndex | 获取所有输入框值 |\n\n## 使用示例\n```json\n{\"cmd\":\"browseOpen\",\"url\":\"https://example.com\"}\n{\"cmd\":\"browseWaitForElement\",\"tabIndex\":0,\"selector\":\"#login\"}\n{\"cmd\":\"browseFillForm\",\"tabIndex\":0,\"selector\":\"#email\",\"value\":\"a@b.com\"}\n{\"cmd\":\"browseClickElement\",\"tabIndex\":0,\"selector\":\"button[type=submit]\"}\n{\"cmd\":\"browseScreenshot\",\"tabIndex\":0}\n\n## CDP 协议域 facade (与 Chrome DevTools Protocol 同名, 落在软件自身 WebView)\n一条 `cdp {method, params, tabIndex}` 路由全部域 — 工具调用逻辑与 Playwright/Chrome-CDP 一致, 执行用本软件浏览器基底:\n| method | params | 说明 |\n|------|------|------|\n| Browser.getVersion | - | 引擎/UA 版本 |\n| Page.navigate / reload / stopLoading / goBack / goForward | url? | 导航 |\n| Page.captureScreenshot | - | {data: base64 PNG} |\n| Page.getLayoutMetrics | - | 视口/内容尺寸/DPR |\n| Page.getNavigationHistory | - | 当前 URL/标题 |\n| Runtime.evaluate | expression | 执行 JS, 返回 {result:{type,value}} |\n| DOM.getDocument | - | 根文档 outerHTML |\n| DOM.getOuterHTML | selector | 指定元素 outerHTML |\n| DOM.querySelector / querySelectorAll | selector | 元素 tag/attrs/text |\n| Input.dispatchMouseEvent | x, y, type | 坐标派发鼠标事件 |\n| Input.insertText | text | 向焦点元素插入文本 |\n| Network.enable / disable | - | 注入 fetch/XHR hook 开始/停止抓包 |\n| Network.getRequests | - | {hooked:[req...], resources:[performance...]} |\n| Network.getResponseBody | requestId | 已捕获响应体 |\n示例: `cdp {method:\"Network.enable\", tabIndex:1}` 然后 `cdp {method:\"Page.reload\", tabIndex:1}` 再 `cdp {method:\"Network.getRequests\", tabIndex:1}`。\n```"
+      summary: "软件内置 WebView 引擎(等价 Playwright/Chrome-CDP/浏览器-MCP): 查看+操作任意网页全在软件底层完成, 不干扰用户。打开/导航/执行JS/提取DOM·Cookie·Storage/截图/导出MD + 点击·填表·等待元素·提交·滚动·提链接 + CDP 协议域 facade(cdp: Page.*/Runtime.*/DOM.*/Input.*/Network.*)。开页默认后台静默(不打扰用户当前页·道并行而不相悖)。共 20 专用命令 + 1 条 cdp 路由。",
+      content: "# 模块一 · 软件本体 ▸ 浏览器自动化子模块 (内置 WebView 底层)\n\n## 概述\n浏览器查看与操作全部在**软件内置 WebView 引擎底层**完成 — 等价 Playwright / Chrome-CDP / 浏览器-MCP 的能力集 (开页·执行JS·DOM·Cookie·Storage·截图·导出·点击填表等待提交), 直接驱动手机端 WebView 标签, 在不干扰用户正常使用的前提下, 帮用户操作/测试/记录任意网页:\n- 列举/打开/关闭标签, 前进/后退/刷新/跳转导航\n- 在指定标签执行任意 JavaScript 并取返回值\n- 提取 DOM (outerHTML) / 读 Cookie / 读 localStorage·sessionStorage\n- 截图 (base64 PNG) / 导出页面为 Markdown\n- 高级: 点击元素 / 填表 / 等待元素出现 / 提交表单 / 提取链接·输入值 / 页面概要 / 滚动\n\n## 授权 (一次性, 最小成本)\n远程操控开关默认关闭。Agent 调 `setRemoteOps({enable:true})` 即可 (或让用户在穿透面板拨一下开关)。\n\n## 命令列表 (20)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| browseListTabs | - | 列出所有前台标签 (index/url/title/account/active) |\n| browseOpen | url, account?, foreground? | 后台静默开新标签(默认不打扰用户当前页); foreground:true 才提到前台。返回 tabIndex |\n| browseActivateTab | tabIndex | 把指定标签提到前台(需前端同步反映时显式调用) |\n| browseClose | tabIndex | 关闭标签 |\n| browseNavigate | tabIndex, action(back/forward/reload/stop/goto), url? | 导航 |\n| browseExecJs | tabIndex, js | 执行 JS 并返回结果 |\n| browseGetDom | tabIndex | 获取完整 DOM HTML |\n| browseGetCookies | url | 获取指定 URL 的 Cookie |\n| browseGetStorage | tabIndex, type(local/session) | 获取 Storage 键值 |\n| browseScreenshot | tabIndex | 截图返回 base64 PNG |\n| browseExportMd | tabIndex, save?, name? | 导出为 Markdown |\n| browseFindInPage | tabIndex, text | 页内查找 |\n| browseClickElement | tabIndex, selector | 点击元素 (CSS 选择器) |\n| browseFillForm | tabIndex, selector, value | 填写输入框 |\n| browseScrollTo | tabIndex, x, y | 滚动页面 |\n| browseGetLinks | tabIndex | 提取所有链接 |\n| browseGetPageInfo | tabIndex | 页面概要 (title/url/meta/表单数) |\n| browseWaitForElement | tabIndex, selector, timeout? | 等待元素出现 |\n| browseSubmitForm | tabIndex, selector? | 提交表单 |\n| browseGetInputValues | tabIndex | 获取所有输入框值 |\n\n## 使用示例\n```json\n{\"cmd\":\"browseOpen\",\"url\":\"https://example.com\"}\n{\"cmd\":\"browseWaitForElement\",\"tabIndex\":0,\"selector\":\"#login\"}\n{\"cmd\":\"browseFillForm\",\"tabIndex\":0,\"selector\":\"#email\",\"value\":\"a@b.com\"}\n{\"cmd\":\"browseClickElement\",\"tabIndex\":0,\"selector\":\"button[type=submit]\"}\n{\"cmd\":\"browseScreenshot\",\"tabIndex\":0}\n\n## CDP 协议域 facade (与 Chrome DevTools Protocol 同名, 落在软件自身 WebView)\n一条 `cdp {method, params, tabIndex}` 路由全部域 — 工具调用逻辑与 Playwright/Chrome-CDP 一致, 执行用本软件浏览器基底:\n| method | params | 说明 |\n|------|------|------|\n| Browser.getVersion | - | 引擎/UA 版本 |\n| Page.navigate / reload / stopLoading / goBack / goForward | url? | 导航 |\n| Page.captureScreenshot | - | {data: base64 PNG} |\n| Page.getLayoutMetrics | - | 视口/内容尺寸/DPR |\n| Page.getNavigationHistory | - | 当前 URL/标题 |\n| Runtime.evaluate | expression | 执行 JS, 返回 {result:{type,value}} |\n| DOM.getDocument | - | 根文档 outerHTML |\n| DOM.getOuterHTML | selector | 指定元素 outerHTML |\n| DOM.querySelector / querySelectorAll | selector | 元素 tag/attrs/text |\n| Input.dispatchMouseEvent | x, y, type | 坐标派发鼠标事件 |\n| Input.insertText | text | 向焦点元素插入文本 |\n| Network.enable / disable | - | 注入 fetch/XHR hook 开始/停止抓包 |\n| Network.getRequests | - | {hooked:[req...], resources:[performance...]} |\n| Network.getResponseBody | requestId | 已捕获响应体 |\n示例: `cdp {method:\"Network.enable\", tabIndex:1}` 然后 `cdp {method:\"Page.reload\", tabIndex:1}` 再 `cdp {method:\"Network.getRequests\", tabIndex:1}`。\n```"
     },
     phone: {
       core: true,
@@ -269,7 +269,17 @@
     //   安全门禁: remoteOpsEnabled (穿透面板手动开启)
     // ══════════════════════════════════════════════════════════════════════
     browseListTabs: async function(){ return {ok:true, tabs: JSON.parse(N.browseListTabs?N.browseListTabs():"[]")}; },
-    browseOpen: async function(a){ N.browseOpenTab(a.url||"https://app.devin.ai/", a.account||""); return {ok:true}; },
+    browseOpen: async function(a){
+      // 默认后台静默开页, 不抢占用户当前前台页 (道并行而不相悖)。仅 foreground:true 时提到前台让前端同步反映。
+      // 开页经 main.post 异步建标签, 故稍候再读 listTabs 取真实新标签下标。
+      N.browseOpenTab(a.url||"https://app.devin.ai/", a.account||"");
+      await new Promise(function(r){ setTimeout(r,350); });
+      var idx = -1;
+      try{ var tabs=JSON.parse(N.browseListTabs?N.browseListTabs():"[]"); if(tabs.length) idx=tabs[tabs.length-1].index; }catch(e){}
+      if(a.foreground && idx>=0 && N.browseActivateTab){ try{ N.browseActivateTab(idx); }catch(e){} }
+      return {ok:true, tabIndex: idx, background: !a.foreground};
+    },
+    browseActivateTab: async function(a){ if(N.browseActivateTab) N.browseActivateTab(a.tabIndex|0); return {ok:true, tabIndex:a.tabIndex|0}; },
     browseClose: async function(a){ N.browseCloseTab(a.tabIndex|0); return {ok:true}; },
     browseNavigate: async function(a){ N.browseNavigate(a.tabIndex!==undefined?a.tabIndex:-1, a.action||"reload", a.url||""); return {ok:true}; },
     browseExecJs: async function(a){
@@ -518,7 +528,8 @@
         "| 命令 | 参数 | 说明 |",
         "|------|------|------|",
         "| browseListTabs | - | 列出所有前台标签 |",
-        "| browseOpen | url, account? | 打开新标签 |",
+        "| browseOpen | url, account?, foreground? | 后台静默开页(默认不打扰当前页); foreground:true 提到前台。返回 tabIndex |",
+        "| browseActivateTab | tabIndex | 把指定标签提到前台 |",
         "| browseClose | tabIndex | 关闭标签 |",
         "| browseNavigate | tabIndex, action, url? | back/forward/reload/stop/goto |",
         "| browseExecJs | tabIndex, js | 执行JS返回结果 |",
