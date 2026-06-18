@@ -7236,6 +7236,55 @@ function updateStatusBar() {
   ttLines.push("点击 → 打开管理面板");
   _statusBar.tooltip = ttLines.join("\n");
 }
+// v4.9.10 · 切号面板"每隔几秒整页重渲"根治 (用户实测: 面板每几秒刷新一次·无法操作)
+//   根因: _tick() (5~10s 周期监控) 与各处状态变更统一走 _broadcastUI → 无条件 webview.html=buildHtml()
+//     → 即便结构/数据毫无变化, 整个 webview DOM 被销毁重建 → 闪烁/滚动丢失/下拉收起/无法点击。
+//   治法 (对齐 conv-section 的 _convStructSig 思路): 计算"只含结构性数据"的面板签名,
+//     仅当结构真变化 (账号集/活跃/额度整数/锁定/封禁/标签/进行中对话…) 才整页重建;
+//     纯时间滴答 (重置倒计时/"min前切"/采样龄/封禁秒/使用中秒) 不进签名 → 不再触发任何重建。
+//   结构未变时只增量刷新对话追踪区 (_broadcastConvSection 自带签名去抖) → 永不整页闪。
+let _panelStructSig = null;
+function _computePanelStructSig() {
+  if (!_store) return "init";
+  const store = _store;
+  const stats = store.getStats();
+  const accounts = store.accounts;
+  const activeI = store.activeIdx;
+  const parts = [
+    "m=" + _wamMode,
+    "ar=" + (_cfg("autoRotate", true) ? 1 : 0),
+    "ai=" + activeI,
+    "cc=" + stats.checkedCount,
+    "dr=" + (stats.drought ? 1 : 0),
+  ];
+  const order = _wamDisplayOrder(accounts);
+  for (const i of order) {
+    const a = accounts[i];
+    const h = store.getHealth(a.email);
+    const checked = !!(h && h.checked);
+    parts.push(
+      [
+        i,
+        a.email,
+        checked ? 1 : 0,
+        checked ? Math.round(h.daily) : -1,
+        checked ? Math.round(h.weekly) : -1,
+        i === activeI ? 1 : 0,
+        store.isBanned(a.email) ? 1 : 0,
+        i !== activeI && store.isInUse(a.email) ? 1 : 0,
+        (h && h.plan) || "",
+        checked ? Math.round(h.overageDollars || 0) : 0,
+        isClaudeAvailable(h) ? 1 : 0,
+        a.skipAutoSwitch ? 1 : 0,
+        h && h.hasSnap ? 1 : 0,
+        devinCloud.getTag(a.email) || "",
+        checked ? _parseTimeMs(h.planEnd) : 0,
+        _hasLiveConv(a.email) ? 1 : 0,
+      ].join("\u0001"),
+    );
+  }
+  return parts.join("\u0002");
+}
 function _broadcastUI() {
   // v3.0.6 · 防抖 · 合并高频调用 · 根治验证/切号期多次全量重建卡顿
   //   verify N个新账号 → N次 broadcastUI → 合并为1次 · 用户无感 · 系统无不为
@@ -7244,7 +7293,15 @@ function _broadcastUI() {
   const _debMs = Math.max(30, +_cfg("broadcastDebounceMs", 200) || 200);
   _broadcastUITimer = setTimeout(() => {
     _broadcastUITimer = null;
-    if (_sidebarProvider) _sidebarProvider.refresh();
+    // v4.9.10 · 结构签名门: 结构未变 → 不整页重建 (只增量刷对话区) → 杜绝每几秒整页闪
+    const sig = _computePanelStructSig();
+    if (sig === _panelStructSig) {
+      _broadcastConvSection();
+      updateStatusBar();
+      return;
+    }
+    _panelStructSig = sig;
+    if (_sidebarProvider) _sidebarProvider.refresh(true);
     if (_editorPanel) {
       try {
         _editorPanel.webview.html = buildHtml();
@@ -7828,6 +7885,7 @@ function openEditorPanel() {
     },
   );
   _editorPanel.webview.html = buildHtml();
+  _panelStructSig = _computePanelStructSig();
   _editorPanel.webview.onDidReceiveMessage((msg) => handleWebviewMessage(msg));
   _editorPanel.onDidDispose(() => {
     _editorPanel = null;
@@ -7846,13 +7904,24 @@ class WamViewProvider {
       localResourceRoots: _ctx ? [_ctx.extensionUri] : [],
     };
     webviewView.webview.html = buildHtml();
+    _panelStructSig = _computePanelStructSig();
     webviewView.webview.onDidReceiveMessage((msg) => handleWebviewMessage(msg));
     webviewView.onDidChangeVisibility(() => {
-      if (webviewView.visible) this.refresh();
+      if (webviewView.visible) this.refresh(true);
     });
   }
-  refresh() {
-    if (this._view && this._view.visible) this._view.webview.html = buildHtml();
+  refresh(force) {
+    if (!(this._view && this._view.visible)) return;
+    // v4.9.10 · 非强制刷新先过结构签名门: 结构未变只增量刷对话区·不整页重建 (杜绝闪)
+    if (!force) {
+      const sig = _computePanelStructSig();
+      if (sig === _panelStructSig) {
+        _broadcastConvSection();
+        return;
+      }
+      _panelStructSig = sig;
+    }
+    this._view.webview.html = buildHtml();
   }
 }
 
