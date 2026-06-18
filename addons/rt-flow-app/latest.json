@@ -1,6 +1,6 @@
 {
-  "versionCode": 55,
-  "versionName": "0.16.3",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.16.3/DevinCloud-mobile-v0.16.3.apk",
-  "notes": "v0.16.3 · 体验/性能/稳定性 + 跨设备实时监测\n· 输入体验: windowSoftInputMode=adjustResize + 聚焦输入框自动滚到可见区中部(installKbHelper)，消除「输入框被键盘遮住/弹来弹去」，对齐真浏览器。\n· 稳定性: WebView 渲染进程被系统回收时(网页变白需手动刷新)自动重建标签并重载(recoverDeadTab·onRenderProcessGone)，用户无感恢复；SPA 客户端路由后重装下载/键盘钩子(幂等)，修「切到对话页点下载无反应、要刷新才行」。\n· 提号页提速: 对话追踪 _trk 跨刷新持久化回放，刷新/对话结束后秒出在跑账号的运行态，消除初始化空窗。\n· 跨设备实时监测: pollTrk 改并发池(6路)+每号返回即增量上色，轮询 30s→15s，回到面板/可见即刷新 → 同账号池账号在其他设备(如电脑)跑对话，手机端近实时识别到。\n· 签名一致，原地覆盖升级不丢数据。"
+  "versionCode": 56,
+  "versionName": "0.16.4",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.16.4/DevinCloud-mobile-v0.16.4.apk",
+  "notes": "v0.16.4 · 平板断连/闪退根因修复 + 账号页签实时剩余金额\n· 断连/闪退根因(逆流本源): 中继跑在 RelayService 宿主的「无界面(永远离屏)engine WebView」里。Android 默认把离屏 WebView 渲染进程降到最低优先级 → 内存压力下最先被系统回收;且原代码未实现 onRenderProcessGone，渲染进程一旦被回收会连带杀掉整个 App 进程(=闪退) 并断开中继。新版更重(整文件夹备份/CDP Network/并发监测) → 内存占用更高 → 回收更频繁 → 老版本反而「勉强能用」的真因。\n· 修法一: engine WebView 钉为 RENDERER_PRIORITY_IMPORTANT 且离屏不降级，大幅降低被系统回收概率(治本，减少自动断连)。\n· 修法二: engine WebView + 多实例账号浏览器(TabActivity) 均接管 onRenderProcessGone → 渲染进程被回收时不再连带杀 App(消除闪退)，并自动重建引擎页(engine.html 内联 DaoRelayApp.start 自动重连中继)，无感恢复。\n· 账号页签实时剩余金额: 每个账号页签在状态点左侧显示该账号当前剩余美金额度(如「$5 🟢 对话名」)，随额度刷新(render/pollTrk)实时更新，便于直接在标签条管理。\n· 签名一致，原地覆盖升级不丢数据。"
 }

@@ -93,6 +93,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREF_SEARCH = "search_engine";
     // 账号标签实时状态: accountId → {convName, status}  (由切号面板追踪轮询经 Native.setTabStatus 推送)
     private static final java.util.Map<String, String[]> sTabStatus = new java.util.concurrent.ConcurrentHashMap<>();
+    // 账号标签实时剩余美金: accountId/email → "$5"  (由切号面板 render() 随额度刷新经 Native.setTabDollars 推送, 显示在状态点左侧)
+    private static final java.util.Map<String, String> sTabDollars = new java.util.concurrent.ConcurrentHashMap<>();
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Tab> tabs = new ArrayList<>();
@@ -1126,14 +1128,20 @@ public class MainActivity extends AppCompatActivity {
                 String id = a.optString("id", a.optString("email", ""));
                 String email = a.optString("email", id);
                 // 标签标题优先显示该账号最活跃对话名 + 实时状态点 (运行/卡顿/结束)
+                String emailLc = email.toLowerCase();
+                String money = sTabDollars.get(id);
+                if (money == null) money = sTabDollars.get(emailLc);
+                String pre = (money != null && !money.isEmpty()) ? money + " " : "";
                 String[] sta = sTabStatus.get(id);
                 if (sta == null) sta = sTabStatus.get(email);
+                if (sta == null) sta = sTabStatus.get(emailLc);
                 if (sta != null && sta[0] != null && !sta[0].isEmpty()) {
                     String dot = statusDot(sta[1]);
                     String name = sta[0].length() > 12 ? sta[0].substring(0, 11) + "…" : sta[0];
-                    return dot + name;
+                    return pre + dot + name;     // "$5 🟢 对话名"
                 }
-                return email.length() > 14 ? email.substring(0, 13) + "…" : email;
+                String base = email.length() > 14 ? email.substring(0, 13) + "…" : email;
+                return pre + base;               // "$5 邮箱"
             } catch (Exception ignored) {}
         }
         return t.title == null || t.title.isEmpty() ? "标签" : t.title;
@@ -2109,6 +2117,13 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void setTabStatus(String accountId, String convName, String status) {
             if (accountId == null || accountId.isEmpty()) return;
             sTabStatus.put(accountId, new String[]{ convName == null ? "" : convName, status == null ? "" : status });
+            main.post(MainActivity.this::renderTabStrip);
+        }
+        /** 切号面板随额度刷新 → 推送该账号实时剩余美金 ("$5"/空), 显示在页签状态点左侧便于管理。 */
+        @JavascriptInterface public void setTabDollars(String accountId, String dollars) {
+            if (accountId == null || accountId.isEmpty()) return;
+            if (dollars == null) dollars = "";
+            if (dollars.isEmpty()) sTabDollars.remove(accountId); else sTabDollars.put(accountId, dollars);
             main.post(MainActivity.this::renderTabStrip);
         }
         /** 打开系统 VPN 设置 (用户自行连接已配置的 VPN/导入的 Clash·sing-box·V2Ray 配置)。 */

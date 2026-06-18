@@ -395,6 +395,8 @@ function render(){
   accs.forEach(function(a){ var q=a.quota; if(q&&typeof q.dPct==="number"){checkedCnt++; var d=ovDollars(q); if(d>0){actCnt++;totalD+=d;}} });
   var sa=document.getElementById("st-act");
   sa.textContent = checkedCnt? (actCnt+"/"+checkedCnt+"激活"+(actCnt>0?" $"+Math.round(totalD):"")) : "";
+  // 把每个账号的实时剩余美金推到它的页签 (显示在状态点左侧, 如 "$5 🟢 对话名") → 标签条直接看额度便于管理。
+  try{ if(N.setTabDollars){ accs.forEach(function(a){ var q=a.quota||{}; var lbl=(typeof q.dPct==="number")?("$"+Math.round(ovDollars(q))):""; N.setTabDollars(a.id||"", lbl); if(a.email) N.setTabDollars((a.email||"").toLowerCase(), lbl); }); } }catch(e){}
   // 当前
   var act=accs.filter(function(x){return x.id===getActive();})[0];
   var ai=document.getElementById("actInfo");

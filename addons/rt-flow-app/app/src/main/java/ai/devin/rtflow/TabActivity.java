@@ -54,7 +54,14 @@ public class TabActivity extends AppCompatActivity {
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
         s.setUserAgentString(s.getUserAgentString().replace("; wv", "")); // 去 WebView 标记, 贴近真浏览器
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            // 渲染进程被系统回收时若不接管, Android 默认连带杀整个 App(= 闪退)。接管 → 重建本页(无感恢复)。
+            @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail d) {
+                try { v.destroy(); } catch (Exception ignored) {}
+                recreate();
+                return true;
+            }
+        });
 
         final String script = buildInjection(token, uid, org, orgName);
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -62,6 +69,11 @@ public class TabActivity extends AppCompatActivity {
         } else {
             web.setWebViewClient(new WebViewClient() {
                 @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) { v.evaluateJavascript(script, null); }
+                @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail d) {
+                    try { v.destroy(); } catch (Exception ignored) {}
+                    recreate();
+                    return true;
+                }
             });
         }
 
