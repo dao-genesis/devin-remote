@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "3.18.2",
+  "version": "3.18.3",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -124,6 +124,11 @@
           "type": "boolean",
           "default": true,
           "description": "自动注入自循环: 切换账号时, 默认自动清理旧账号 org 的旧注入 (关闭则保留)"
+        },
+        "dao.injectSkipCleaned": {
+          "type": "boolean",
+          "default": true,
+          "description": "归零清理协同: RT Flow 对低额度账号备份→清理(→出库)后, 一切【自动】反向注入(切号自循环/批量注入/多账号/内穿实时重注)均跳过该账号, 不再重新填充; 唯用户主页【单账号手动注入】可强制重注并解除抑制。关闭则恢复旧行为(清理后仍自动重注)"
         },
         "wam.accountsFile": {
           "type": "string",

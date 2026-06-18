@@ -3247,7 +3247,7 @@ function rInject(){
   h+=listSec('⚙️ Automations (钉住)','automations',p.automations||[],it=>it.name+(it.prompt?(' · '+String(it.prompt).slice(0,24)):''),'ipAddAutomation()');
   h+='<div class="st">⚖️ 单条额度上限<button class="btn sm primary" style="float:right" onclick="ipSetLimit()">设定</button></div>';
   h+='<div class="card"><div class="cr"><span class="l" style="font-size:12px">期望 max_credits</span><span class="v">'+((p.messageLimit==null)?'<span style="color:var(--muted)">不管理</span>':'$'+esc(String(p.messageLimit)))+'</span></div></div>';
-  h+='<div class="br" style="margin-top:10px"><button class="btn" onclick="cmd(&#39;importCurrentToInjectProfile&#39;)">⬇️ 导入当前账号现有项</button>'+(p.enabled?'<button class="btn primary" onclick="cmd(&#39;setInjectProfile&#39;,{enabled:true})">▶️ 立即应用到当前账号</button><button class="btn" onclick="cmd(&#39;applyInjectProfileToAll&#39;)">👥 注入到所有账号</button>':'')+'</div>';
+  h+='<div class="br" style="margin-top:10px"><button class="btn" onclick="cmd(&#39;importCurrentToInjectProfile&#39;)">⬇️ 导入当前账号现有项</button>'+(p.enabled?'<button class="btn primary" onclick="cmd(&#39;injectCurrentNow&#39;)" title="单账号手动注入: 即便此账号曾被归零清理/出库, 也强制重注并解除自动注入抑制">▶️ 立即应用到当前账号</button><button class="btn" onclick="cmd(&#39;applyInjectProfileToAll&#39;)" title="批量自动注入: 自动跳过已被 RT Flow 归零清理/出库的账号">👥 注入到所有账号</button>':'')+'</div>';
   v.innerHTML=h;
 }
 usb();rc();
@@ -3747,6 +3747,23 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     });
                 }
                 refreshReply({ type: 'actionResult', command: 'setInjectProfile', ok: true });
+                break;
+            }
+            case 'injectCurrentNow': {
+                // 用户主页 · 单账号手动注入 (force): 显式绕过「已清理/出库账号自动注入抑制」并记 reactivatedAt;
+                //   即便该账号刚被 RT Flow 归零清理, 用户在主页主动点此仍可重注。
+                if (!(ws.devinOrgId && ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$'))) {
+                    vscode.window.showWarningMessage('当前未登录 Devin Cloud 账号, 无法单账号注入');
+                    reply({ type: 'actionResult', command: 'injectCurrentNow', ok: false });
+                    break;
+                }
+                const curp = loadInjectProfile();
+                if (!curp.enabled) { curp.enabled = true; saveInjectProfile(curp); }
+                vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '单账号注入 · 当前账号 (' + (ws.devinEmail || ws.devinOrgId) + ')…' }, async () => {
+                    try { await runInjectProfileSelfLoop({ force: true }); } catch { /* 守柔 */ }
+                    sidebarCloudPanel?.refresh();
+                });
+                refreshReply({ type: 'actionResult', command: 'injectCurrentNow', ok: true });
                 break;
             }
             case 'importCurrentToInjectProfile': {
@@ -4890,6 +4907,64 @@ function getInjectAutoDedupe(): boolean {
 //   其余(历史异名/弃用/多余)一律清理 → 注入后该 org 恰为「期望态 ∪ 用户锁定项」。默认 true, 用户可关。
 function getInjectReset(): boolean {
     try { return vscode.workspace.getConfiguration('dao').get<boolean>('injectReset', true) !== false; } catch { return true; }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 道法自然 · 归零清理协同 — 帛书·「夫唯不争, 故无尤」
+// RT Flow 对低额度账号「全量备份→水过无痕清理(→出库)」后, 在
+//   ~/.wam/devin_cloud/cleanup_state.json 写 email→{cleanedAt}。
+// 本系统据此抑制【一切自动反向注入】重新填充刚被清理/出库的账号:
+//   切号自循环 · 批量注入(注入到所有账号) · 多账号缓存注入 · 内穿实时重注 一律跳过。
+// 唯「用户主页·单账号手动注入」(injectCurrentNow / force) 显式绕过, 并记 reactivatedAt;
+//   reactivatedAt >= cleanedAt 即解除抑制; 若 RT Flow 之后再次清理(cleanedAt 前移)则重新抑制 — 与清理时序自洽。
+// 软编码: dao.injectSkipCleaned (默 true); 关之即恢复旧行为(清理后仍自动重注)。
+// ═══════════════════════════════════════════════════════════
+const RT_CLEANUP_STATE_FILE = path.join(os.homedir(), '.wam', 'devin_cloud', 'cleanup_state.json');
+const INJECT_REACTIVATED_FILE = path.join(DAO_DIR, 'dao-inject-reactivated.json');
+function getInjectSkipCleaned(): boolean {
+    try { return vscode.workspace.getConfiguration('dao').get<boolean>('injectSkipCleaned', true) !== false; } catch { return true; }
+}
+// RT Flow 记录的该账号「清理完成」时刻 (ms); 0 = 从未被清理。
+function rtCleanedAtForEmail(email: string): number {
+    const e = (email || '').trim().toLowerCase();
+    if (!e) return 0;
+    try {
+        const all = JSON.parse(fs.readFileSync(RT_CLEANUP_STATE_FILE, 'utf8')) || {};
+        const st = all[e];
+        const t = st && st.cleanedAt;
+        return typeof t === 'number' ? t : 0;
+    } catch { return 0; }
+}
+function loadInjectReactivated(): Record<string, number> {
+    try { return JSON.parse(fs.readFileSync(INJECT_REACTIVATED_FILE, 'utf8')) || {}; } catch { return {}; }
+}
+// 用户主页单账号手动注入 → 记 reactivatedAt, 解除该账号的「已清理」自动注入抑制。
+function markInjectReactivated(email: string): void {
+    const e = (email || '').trim().toLowerCase();
+    if (!e) return;
+    try {
+        const all = loadInjectReactivated();
+        all[e] = Date.now();
+        fs.mkdirSync(DAO_DIR, { recursive: true });
+        fs.writeFileSync(INJECT_REACTIVATED_FILE, JSON.stringify(all, null, 2), 'utf8');
+    } catch { /* 守柔 */ }
+}
+// 是否抑制对该账号的【自动】反向注入: RT Flow 已清理(cleanedAt>0) 且此后用户未手动重注(reactivatedAt < cleanedAt)。
+function isInjectSuppressedForEmail(email: string): boolean {
+    if (!getInjectSkipCleaned()) return false;
+    const cleanedAt = rtCleanedAtForEmail(email);
+    if (!cleanedAt) return false;
+    const re = loadInjectReactivated()[(email || '').trim().toLowerCase()] || 0;
+    return re < cleanedAt;
+}
+// org → email 反查 (自循环仅持有 orgId 时用); 取账号缓存 auth 库的反向映射。
+function emailForOrg(orgId: string): string {
+    if (!orgId) return '';
+    try {
+        const store = loadAccountsAuthStore();
+        for (const e of Object.keys(store)) { const a = store[e]; if (a && a.orgId === orgId) return e; }
+    } catch { /* 守柔 */ }
+    return '';
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -6938,7 +7013,7 @@ async function devinFullInject(interactive: boolean = false): Promise<boolean> {
 // 全程自包含, 不改动当前面板登录态(ws.*); CJK 经 asciiSafeJson \uXXXX 上线服务端无损。
 // ═══════════════════════════════════════════════════════════
 interface DaoBatchAccount { email: string; password: string; }
-interface DaoBatchResult { email: string; ok: boolean; auth: string; orgId?: string; knowledge: boolean; bridge: boolean; playbook: boolean; secret: boolean; profile: boolean; cleaned: number; verified: boolean; error?: string; }
+interface DaoBatchResult { email: string; ok: boolean; auth: string; orgId?: string; knowledge: boolean; bridge: boolean; playbook: boolean; secret: boolean; profile: boolean; cleaned: number; verified: boolean; error?: string; skipped?: boolean; }
 interface DaoBatchProgress { total: number; done: number; ok: number; running: boolean; results: DaoBatchResult[]; startedAt: string; finishedAt?: string; }
 let daoBatchProgress: DaoBatchProgress | null = null;
 
@@ -6991,6 +7066,13 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
     const resultsFile = path.join(DAO_DIR, 'dao-batch-inject-results.json');
     for (const a of accounts) {
         const res: DaoBatchResult = { email: a.email, ok: false, auth: '', knowledge: false, bridge: false, playbook: false, secret: false, profile: false, cleaned: 0, verified: false };
+        // 归零清理协同: RT Flow 已清理/出库的账号 → 批量自动注入守柔跳过 (除非用户主页单账号手动注入)。
+        if (isInjectSuppressedForEmail(a.email)) {
+            res.skipped = true; res.auth = 'skipped_cleaned';
+            daoBatchProgress.results.push(res); daoBatchProgress.done++;
+            try { fs.writeFileSync(resultsFile, JSON.stringify(daoBatchProgress, null, 2), 'utf8'); } catch { /* 守柔 */ }
+            continue;
+        }
         try {
             let auth1 = '', orgId = '';
             // 优先用按邮箱缓存的 auth1(切回即命中, 守柔省登录), GET 校验仍有效再用。
@@ -7295,6 +7377,8 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
         for (const e of Object.keys(store)) {
             const a = store[e];
             if (!a || !a.auth1 || a.auth1.startsWith('devin-session-token$') || !a.orgId) continue;
+            // 归零清理协同: RT Flow 已清理/出库账号 → 内穿实时重注守柔跳过 (除非用户主页单账号手动注入)。
+            if (isInjectSuppressedForEmail(e)) continue;
             if (doneOrgs.has(a.orgId)) continue;
             doneOrgs.add(a.orgId);
             // KB②: 幂等 upsert 最新内穿(整机直连)文档 (守 manual 锁)
@@ -7505,12 +7589,22 @@ async function cleanupInjectProfileFromOrg(orgId: string, auth1: string, p: Inje
     }
 }
 // 账号切换后调用: 应用 profile 到新 org + (默认)清理旧 org — 自循环核心
-async function runInjectProfileSelfLoop(): Promise<void> {
+// opts.force: 用户主页单账号手动注入 → 绕过「已清理账号自动注入抑制」并记 reactivatedAt。
+async function runInjectProfileSelfLoop(opts?: { force?: boolean }): Promise<void> {
     const p = loadInjectProfile();
     if (!p.enabled) return;
     if (!ws.devinOrgId || !ws.devinAuth1 || ws.devinAuth1.startsWith('devin-session-token$')) return;
     const hasItems = p.secrets.length || p.knowledge.length || p.playbooks.length || p.mcps.length || (p.automations && p.automations.length) || typeof p.messageLimit === 'number';
     if (!hasItems) return;
+    // 归零清理协同: 当前账号若已被 RT Flow 清理/出库, 自动自循环守柔跳过, 不重新填充;
+    //   唯用户主页单账号手动注入(force) 显式绕过并记 reactivatedAt 解除抑制。
+    const curEmail = (ws.devinEmail || emailForOrg(ws.devinOrgId) || '').trim().toLowerCase();
+    if (opts && opts.force) {
+        if (curEmail) markInjectReactivated(curEmail);
+    } else if (curEmail && isInjectSuppressedForEmail(curEmail)) {
+        try { console.log('[dao] self-loop skip cleaned account: ' + curEmail); } catch { /* 守柔 */ }
+        return;
+    }
     // 1. 默认清理旧 org 的旧注入 — 帛书·「将欲去之·必故与之」(用户可关 autoCleanup)
     if (p.autoCleanup && getInjectAutoCleanup() && p.lastInjectedOrg && p.lastInjectedOrg !== ws.devinOrgId) {
         const oldAuth1 = findAuth1ForOrg(p.lastInjectedOrg);
@@ -7539,6 +7633,8 @@ async function applyInjectProfileToAllAccounts(): Promise<{ ok: boolean; total: 
     for (const e of emails) {
         const a = store[e];
         if (!a || !a.auth1 || a.auth1.startsWith('devin-session-token$') || !a.orgId) { results.push({ email: e, ok: false }); continue; }
+        // 归零清理协同: RT Flow 已清理/出库账号 → 多账号自动注入守柔跳过 (除非用户主页单账号手动注入)。
+        if (isInjectSuppressedForEmail(e)) { continue; }
         if (doneOrgs.has(a.orgId)) { results.push({ email: e, ok: true }); continue; }
         try { await applyInjectProfileToOrg(a.orgId, a.auth1, p); doneOrgs.add(a.orgId); results.push({ email: e, ok: true }); }
         catch { results.push({ email: e, ok: false }); }

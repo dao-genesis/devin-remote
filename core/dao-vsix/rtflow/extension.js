@@ -11790,6 +11790,8 @@ async function handleWebviewMessage(msg) {
           _toast("\u23F3 清理 " + s.email.split("@")[0] + " …");
           try {
             const rep = await devinCloud.wipeAccount(s.auth, { onProgress: (m) => _toast("\u23F3 " + m) });
+            // 归零清理协同: 标记 cleanedAt → dao-vsix 自动反向注入跳过此清理账号(唯主页单账号手动注入可重注)
+            try { devinCloud.setCleanupState(s.email, { cleanedAt: Date.now() }); } catch {}
             // 清理无残留(对话/知识/剧本/密钥皆 0 失败) → 标记出库
             if (_wpEvict && rep && rep.sessions.failed === 0 && rep.knowledge.failed === 0 && rep.playbooks.failed === 0 && rep.secrets.failed === 0) {
               _wpEvictEmails.push(s.email);
@@ -11881,6 +11883,8 @@ async function handleWebviewMessage(msg) {
           _toast("\u23F3 清理 " + z.email.split("@")[0] + " …");
           try {
             const rep = await devinCloud.wipeAccount(z.auth, { onProgress: (m) => _toast("\u23F3 " + m) });
+            // 归零清理协同: 标记 cleanedAt → dao-vsix 自动反向注入跳过此清理/出库账号(唯主页单账号手动注入可重注)
+            try { devinCloud.setCleanupState(z.email, { cleanedAt: Date.now() }); } catch {}
             try { await devinGit.robustDisconnectGit(z.auth); } catch {}
             _dvOverviewCache.delete(z.email.toLowerCase());
             const clean = rep && rep.sessions.failed === 0 && rep.knowledge.failed === 0 && rep.playbooks.failed === 0 && rep.secrets.failed === 0;
