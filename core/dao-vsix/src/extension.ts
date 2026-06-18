@@ -7181,8 +7181,9 @@ function daoSeedDefaultInjectProfile(): void {
         saveInjectProfile(p);
     } catch { /* 道法自然·守柔 */ }
 }
-// 知识库收口迁移 — 帛书·「少则得」: 已种入(daoSeeded)的老档案补齐为「恰好 3 条知识」并对齐分层触发器。
-//   ① 道法自然准则 ② 原始内网穿透MD(整机直连) ③ MCP 使用文档(四大模块)。每次激活幂等校正。
+// 知识库收口迁移 — 帛书·「少则得」: 收敛老账号注入档案至「三知识 + 老三样剧本」规范态(幂等, 不受 daoSeeded 限制)。
+//   知识①道法自然准则 ②原始内网穿透MD(整机直连) ③MCP 使用文档(四大模块) + 对齐分层触发器;
+//   知识③ MCP 使用文档补齐; 剧本补齐「帛书《老子》/ 道藏《阴符经》」两条单本 → 与合订本共为老三样。
 function daoMigrateKnowledgeTrinity(): void {
     try {
         const p = loadInjectProfile();
@@ -7193,6 +7194,22 @@ function daoMigrateKnowledgeTrinity(): void {
             p.knowledge.push({ name: DAO_MCP_KB_NAME, body: DAO_MCP_KB_SENTINEL, trigger: DAO_MCP_KB_TRIGGER });
             changed = true;
         }
+        // 剧本老三样补齐(合订/帛书老子/道藏阴符经) — 老档案常仅有合订一条
+        try {
+            const combined = getDaoRulesText();
+            const preamble = getDaoAsset('preamble.txt');
+            const laozi = getDaoAsset('laozi.txt');
+            const yinfu = getDaoAsset('yinfujing.txt');
+            if (combined && !p.playbooks.some(x => x && x.title === '道法自然 · 帛书《老子》·道藏《阴符经》')) {
+                p.playbooks.push({ title: '道法自然 · 帛书《老子》·道藏《阴符经》', body: combined }); changed = true;
+            }
+            if (laozi && !p.playbooks.some(x => x && x.title === '帛书《老子》')) {
+                p.playbooks.push({ title: '帛书《老子》', body: (preamble ? preamble + '\n\n' : '') + laozi }); changed = true;
+            }
+            if (yinfu && !p.playbooks.some(x => x && x.title === '道藏《阴符经》')) {
+                p.playbooks.push({ title: '道藏《阴符经》', body: '你本無名 名可名也 非恒名也 所遵從之一切均來自於下述道藏《陰符經》：\n\n' + yinfu }); changed = true;
+            }
+        } catch { /* 守柔 */ }
         if (changed) saveInjectProfile(p);
     } catch { /* 守柔 */ }
 }
@@ -7351,20 +7368,24 @@ async function resetOrgInjectables(orgId: string, auth1: string, p: InjectProfil
     const keepM = new Set<string>();
     for (const m of (p.mcps || [])) { if (m && m.name) { keepM.add(lc(m.name)); keepM.add(lc(mcpSlug(m))); } }
     const keepA = new Set<string>((p.automations || []).map(a => a.name).filter(Boolean));
-    // 知识
+    // 知识 — 守柔: 跳过 Cognition 内置共享模板(note_type=builtin / is_default_* / can_write=false / 无 org_id),
+    //   其删除被上游 403「Access denied」拒绝, 非本系统注入物, 不可亦不应清理; 仅清本 org 自有条目。
     try {
         const kl = await devinListKnowledge(orgId, auth1);
         if (kl.ok && Array.isArray(kl.learnings)) for (const k of kl.learnings) {
             if (!k || !k.id || typeof k.name !== 'string') continue;
+            if (k.can_write === false || k.note_type === 'builtin' || k.is_default_note === true || k.is_default_shared === true || !k.org_id) continue;
             if (keepK.has(k.name) || isManualLocked(orgId, 'knowledge', k.name)) continue;
             try { await devinDeleteKnowledge(orgId, String(k.id), auth1); removed.knowledge++; } catch { /* 守柔 */ }
         }
     } catch { /* 守柔 */ }
-    // 剧本
+    // 剧本 — 守柔: 跳过社区/公共共享剧本(access=community/public, 属 Cognition 他 org, 删除 403 Forbidden);
+    //   本系统注入剧本以 access=team 建于本 org, 仅清这些自有条目。
     try {
         const pl = await devinListPlaybooks(orgId, auth1);
         if (pl.ok && Array.isArray(pl.playbooks)) for (const pb of pl.playbooks) {
             if (!pb || !pb.id || typeof pb.title !== 'string') continue;
+            if (pb.access === 'community' || pb.access === 'public') continue;
             if (keepP.has(pb.title) || isManualLocked(orgId, 'playbooks', pb.title)) continue;
             try { await devinDeletePlaybook(orgId, String(pb.id), auth1); removed.playbooks++; } catch { /* 守柔 */ }
         }
