@@ -387,6 +387,23 @@ function stripCreateMemoryTool(s) {
   return out;
 }
 
+// ── 道恒无名 · 去官名归一 · v9.9.298 · 共用引擎(SP keep块 + dao_router 同源) ──
+//   根因: invertSP 保留块(tool_calling 等)内残留 "Cascade"/"Windsurf" → 经/官两路
+//   送达模型皆携官方品牌 → 模型据以自认 Cascade · 破"彻底隔离"之本意。
+//   修复: 最上游 neutralizeBlock 即去名 → 两路(modifySPProto 共用 invertSP)同得净SP。
+//   语法守: "the Cascade IDE"→"the IDE"(非"the you IDE") · "the Windsurf X"→"the X"。
+function deOfficialName(s) {
+  if (typeof s !== "string") return s;
+  return s
+    .replace(/CascadeProjects/g, "Projects")
+    .replace(/\bthe Cascade\b/g, "the")
+    .replace(/\bthe Windsurf\b/g, "the")
+    .replace(/\bthe Codeium\b/g, "the")
+    .replace(/\bCascade\b/g, "you")
+    .replace(/\bWindsurf\b/g, "the editor")
+    .replace(/\bCodeium\b/g, "the editor");
+}
+
 function neutralizeBlock(block) {
   if (!block || typeof block !== "string") return block;
   let s = block;
@@ -397,6 +414,8 @@ function neutralizeBlock(block) {
   }
   // v9.9.55 · create_memory整块切除
   s = stripCreateMemoryTool(s);
+  // v9.9.298 · 道恒无名 · 去官名(残留 Cascade/Windsurf 等) · 两路最上游统一隔离
+  s = deOfficialName(s);
   s = s.replace(/\n{3,}/g, "\n\n");
   s = s.replace(/[ \t]+\n/g, "\n");
   return s;
@@ -658,6 +677,7 @@ module.exports = {
   extractKeepBlocks,
   extractRealtimeBlocks,
   neutralizeBlock,
+  deOfficialName,
   stripCreateMemoryTool,
   compactPromptText,
 
