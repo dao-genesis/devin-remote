@@ -96,6 +96,10 @@ function _deOfficialName(s) {
   return s
     // 复合词先行 (CascadeProjects → Projects · 否则 \bCascade\b 不匹配复合词)
     .replace(/CascadeProjects/g, "Projects")
+    // v9.9.298 · 语法守 · "the Cascade IDE"→"the IDE" (避免 "the you IDE") · 与 sp_invert 同源
+    .replace(/\bthe Cascade\b/g, "the")
+    .replace(/\bthe Windsurf\b/g, "the")
+    .replace(/\bthe Codeium\b/g, "the")
     .replace(/\bCascade\b/g, "you")
     .replace(/\bWindsurf\b/g, "the editor")
     .replace(/\bCodeium\b/g, "the editor");
