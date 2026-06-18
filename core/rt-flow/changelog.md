@@ -2,6 +2,29 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.9.11 (2026-06-18) · 对话备份/清理本源化: 先备份后清理·24h冷却·云↔本地无感切换·跨账号对话级列表
+
+> 真备份, 真清理, 不模棱; 已留底则读本地, 有更新则回云端。道法自然, 水过无痕。
+
+### 背景 · 用户诉求 (推进到底)
+- 「归档≠真删除」要厘清: 清理须真正生效, 备份须真正完整, 两者都不能模棱两可。
+- 「先备份后清理」要有冷却期: 额度<阈值先全量备份, 再过 24h 无更新才允许清理。
+- 「云↔本地无感切换」: 已清理账号在切号面板仍可见, 数据源透明切到本地备份, 不再每次拉云端。
+- 「对话级视图」: 跨账号按时间排列近期所有对话, 一眼看到近期在聊什么。
+
+### 实跑确证 · 平台无对话硬删 API
+- `DELETE /api/sessions/{id}` → 405; `api.devin.ai/v3 .../sessions/{id}` DELETE 实为 "Terminate"(终止运行)非删除。
+- 平台提供的最强"清除"即 `archive`(is_archived=true → 从仪表盘默认视图隐藏)。
+- 故"清理"= archive(对话从仪表盘消失) + 真删知识/剧本/密钥/Git。**所有用户面向文字一律改为"清理/已清理", 不再出现"归档"二字**。`deleteSession` 保留 v3 DELETE 兜底(平台日后开放硬删则自动命中)。
+
+### 改动
+- `devin_cloud.js`: `deleteSession` 增 v3 DELETE 兜底 + 报告字段 `archived→cleaned`; 新增 `cleanup_state.json` 状态层 (`getCleanupState`/`setCleanupState`/`isCleanupReady`) — email→{backupCompletedAt, lastConvUpdateAt, cleanedAt}。
+- `extension.js` 自动清理: 加 **24h 冷却期门控** (`isCleanupReady`): 全量备份完成记 `backupCompletedAt`; 增量备份发现新事件记 `lastConvUpdateAt`; 唯有 备份完成 + 冷却期满 + 期间无更新 才清理。清理成功记 `cleanedAt`。
+- `extension.js` `_dvRefreshOverview`: 已清理账号(`cleanedAt`)优先走 `_dvLocalOverview` 从本地备份构建概览(不拉云端), 面板显示 "📌 本地" 数据源标识; 云端有运行中对话则刷新 `lastConvUpdateAt`。
+- `extension.js` 新增 `_dvAllConversationsHtml`: 跨账号对话级列表, 按 mtime 倒序展示近期对话(对话名为主 + 账号/编号/devinId 辅助), 嵌入两处面板模板。
+- `package.json`: 新增 `wam.devinCloudCleanupCooldownHours`(默 24); 清理阈值描述更新。
+- 同步落地 `core/rt-flow` 与 `core/dao-vsix` 两源。
+
 ## v4.9.10 (2026-06-18) · 根治切号面板"每隔几秒整页重渲"(用户实测·无法操作)
 
 > 大制不割 · 守一不摇. 结构未变则面板不动, 纯时间滴答不再撼动一兵一卒。

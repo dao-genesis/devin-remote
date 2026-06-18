@@ -2,7 +2,7 @@
 	"name": "rt-flow",
 	"displayName": "Runtime Flow",
 	"description": "Runtime flow management · adaptive scheduling · 三板块统一: Cascade + Devin Cloud + Git(GitHub PAT 归一连接)",
-	"version": "4.9.10",
+	"version": "4.9.11",
 	"publisher": "devaid",
 	"repository": {
 		"type": "git",
@@ -247,7 +247,12 @@
 				"wam.devinCloudAutoCleanupThreshold": {
 					"type": "number",
 					"default": 3,
-					"description": "v4.9.6 · 自动清理额度阈值 (美元·默认3·与备份阈值对齐). 额度 < 此值且全量备份经校验后自动清理(先全量备份本地留底→再清: 对话仅能云端归档[平台无硬删], 知识/剧本/密钥/Git 为真删)"
+					"description": "v4.9.11 · 自动清理额度阈值 (美元·默认3). 额度 < 此值且全量备份经校验 + 24h冷却期无更新后自动清理(先全量备份本地留底→再清: 对话从仪表盘移除, 知识/剧本/密钥/Git 真删)"
+				},
+				"wam.devinCloudCleanupCooldownHours": {
+					"type": "number",
+					"default": 24,
+					"description": "v4.9.11 · 清理冷却期 (小时·默认24). 全量备份完成后须经过此时长且期间无任何对话更新, 才允许自动清理 (先备份后清理·留足回旋余地)"
 				},
 				"wam.devinCloudAutoRemoveZeroQuota": {
 					"type": "boolean",
