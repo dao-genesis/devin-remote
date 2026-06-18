@@ -4260,6 +4260,8 @@ function _buildHandoffMd() {
   const fams = _getOfficialFamilies();
   const src = _officialFamiliesSource();
   const now = new Date().toISOString();
+  // 七十六章「柔弱微细居上」· 不争固定端口 · 随实际监听端口而动 (各户 FNV 端口/临时端口各异)
+  const base = "http://127.0.0.1:" + _actualPort;
   const L = [];
   L.push("# dao-proxy-pro · 实时交接指挥文档 (Agent Handoff)");
   L.push("");
@@ -4267,7 +4269,7 @@ function _buildHandoffMd() {
   L.push("> 把本文件交给运行中的官方/任意 Agent, 它即可照此**热推进·热修改·热配置**路由与渠道, 无需重启.");
   L.push("");
   L.push("- 生成时间: `" + now + "`");
-  L.push("- 控制面 Base URL: `http://127.0.0.1:8937`");
+  L.push("- 控制面 Base URL: `" + base + "`");
   L.push("- 模型源: `" + src + "` (live=右侧 Cascade 实时捕获 / static=内置目录)");
   L.push(
     "- 官方家族数: `" +
@@ -4327,7 +4329,7 @@ function _buildHandoffMd() {
   L.push("### 热配渠道");
   L.push("```bash");
   L.push("# 新增/更新渠道 (apiKey 填入即启用)");
-  L.push('curl -X POST http://127.0.0.1:8937/origin/ea/provider \\');
+  L.push("curl -X POST " + base + "/origin/ea/provider \\");
   L.push("  -H 'Content-Type: application/json' \\");
   L.push(
     "  -d '" +
@@ -4345,12 +4347,12 @@ function _buildHandoffMd() {
       "'",
   );
   L.push("# 删除渠道");
-  L.push("curl -X DELETE http://127.0.0.1:8937/origin/ea/provider/freemodel");
+  L.push("curl -X DELETE " + base + "/origin/ea/provider/freemodel");
   L.push("```");
   L.push("");
   L.push("### 热配路由 (官方模型 → 渠道)");
   L.push("```bash");
-  L.push('curl -X POST http://127.0.0.1:8937/origin/ea/route \\');
+  L.push("curl -X POST " + base + "/origin/ea/route \\");
   L.push("  -H 'Content-Type: application/json' \\");
   L.push(
     "  -d '" +
@@ -4366,7 +4368,7 @@ function _buildHandoffMd() {
       "'",
   );
   L.push("# 删除路由");
-  L.push("curl -X DELETE http://127.0.0.1:8937/origin/ea/route/MODEL_SWE_1_6_FAST");
+  L.push("curl -X DELETE " + base + "/origin/ea/route/MODEL_SWE_1_6_FAST");
   L.push("```");
   L.push("");
   L.push("### 其他");
