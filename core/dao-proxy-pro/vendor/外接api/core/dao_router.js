@@ -36,42 +36,162 @@ const path = require("path");
 const fs = require("fs");
 const zlib = require("zlib");
 
-// ★ v9.9.102 · 修法㉑ · 上游代理agent · 道法自然
-//   根因: _callProvider 直连 api.deepseek.com:443 → 远程179笔记本无直连外网能力
-//   TLS 握手失败: "Client network socket disconnected before secure TLS connection was established"
-//   修复: 检测 HTTP_PROXY/HTTPS_PROXY 环境变量 + 系统代理 → 注入 HttpsProxyAgent
-//   道义: 四十章「弱也者 道之用也」· 代理即弱用 · 不直连而通天下
-let _httpsProxyAgent = null;
-let _httpProxyAgent = null;
-try {
-  const HPA = require("https-proxy-agent").HttpsProxyAgent;
-  const HtPA = require("http-proxy-agent").HttpProxyAgent;
-  // 优先级: HTTPS_PROXY > HTTP_PROXY > 系统代理(Windows)
-  const proxyUrl =
+// ★ v9.9.102 → 修法㉑+ · 上游代理agent (自包含 · 无需 https-proxy-agent 依赖) · 道法自然
+//   根因①: 远程机直连境外 provider 被网络阻断 → connect ETIMEDOUT / TLS 握手失败
+//   根因②: 旧实现 require('https-proxy-agent') 在打包环境 MODULE_NOT_FOUND → 静默失败 → 代理形同虚设
+//   修复: 纯 Node net+tls 实现 HTTP CONNECT 隧道 Agent · 无外部依赖
+//         代理URL来源: 环境变量 HTTPS_PROXY/HTTP_PROXY → Windows 系统代理(WinINET) · 不硬编码任何端口
+//   道义: 四十章「弱也者 道之用也」· 代理即弱用 · 不直连而通天下 · 不假外求(无外部依赖)
+const net = require("net");
+const tls = require("tls");
+
+let _proxyUrlResolved; // undefined=未解析, null=无代理, string=代理URL
+function _resolveProxyUrl() {
+  if (_proxyUrlResolved !== undefined) return _proxyUrlResolved;
+  // 1) 环境变量 (优先)
+  let url =
     process.env.HTTPS_PROXY ||
     process.env.https_proxy ||
     process.env.HTTP_PROXY ||
     process.env.http_proxy ||
     null;
-  if (proxyUrl) {
-    _httpsProxyAgent = new HPA(proxyUrl);
-    _httpProxyAgent = new HtPA(proxyUrl);
-    // ★ 静默日志 · 不暴露代理URL到诊断
+  // 2) Windows 系统代理 (WinINET) · 兑现"运行时检测系统代理"承诺 · 不硬编码
+  if (!url && process.platform === "win32") {
+    try {
+      const root =
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+      const q = (name) =>
+        require("child_process").execSync(`reg query "${root}" /v ${name}`, {
+          encoding: "utf8",
+          timeout: 3000,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+      const em = q("ProxyEnable").match(
+        /ProxyEnable\s+REG_DWORD\s+0x([0-9a-fA-F]+)/,
+      );
+      if (em && parseInt(em[1], 16) === 1) {
+        const pm = q("ProxyServer").match(/ProxyServer\s+REG_SZ\s+(\S+)/);
+        if (pm) {
+          let p = pm[1].trim();
+          if (p.indexOf("=") !== -1) {
+            const mm = p.match(/https=([^;]+)/) || p.match(/http=([^;]+)/);
+            p = mm ? mm[1].trim() : p.split(";")[0].trim();
+          }
+          if (p && !/^https?:\/\//i.test(p)) p = "http://" + p;
+          url = p || null;
+        }
+      }
+    } catch (_e) {
+      /* 无系统代理 → 直连 */
+    }
   }
-} catch (_proxyErr) {
-  // https-proxy-agent 不可用 → 直连模式 · 不阻塞
+  _proxyUrlResolved = url || null;
+  return _proxyUrlResolved;
 }
 
+function _isLocalHostName(host) {
+  if (!host) return false;
+  if (host === "localhost" || host === "::1") return true;
+  if (/^127\./.test(host)) return true;
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+  return false;
+}
+
+// 纯 Node 实现的 HTTP CONNECT 隧道 https Agent · 无外部依赖
+class _DaoTunnelAgent extends https.Agent {
+  constructor(proxyUrl, opts) {
+    super(opts || {});
+    const u = new URL(proxyUrl);
+    this._proxyHost = u.hostname;
+    this._proxyPort = parseInt(u.port || "80", 10);
+  }
+  createConnection(options, cb) {
+    const destHost = options.host || options.hostname;
+    const destPort = parseInt(options.port || 443, 10);
+    // 本地/内网目标 → 不走代理 (直接 TLS)
+    if (_isLocalHostName(destHost)) {
+      return super.createConnection(options, cb);
+    }
+    const sock = net.connect(this._proxyPort, this._proxyHost);
+    let settled = false;
+    let buf = "";
+    const fail = (e) => {
+      if (settled) return;
+      settled = true;
+      try {
+        sock.destroy();
+      } catch (_) {}
+      cb(e);
+    };
+    sock.once("error", fail);
+    sock.setTimeout(20000, () => fail(new Error("dao proxy tunnel timeout")));
+    sock.on("connect", () => {
+      sock.write(
+        `CONNECT ${destHost}:${destPort} HTTP/1.1\r\nHost: ${destHost}:${destPort}\r\n\r\n`,
+      );
+    });
+    const onData = (chunk) => {
+      buf += chunk.toString("binary");
+      if (buf.indexOf("\r\n\r\n") === -1) return;
+      sock.removeListener("data", onData);
+      const statusLine = buf.split("\r\n")[0];
+      if (!/ 200 /.test(statusLine)) {
+        fail(new Error("dao proxy CONNECT rejected: " + statusLine));
+        return;
+      }
+      sock.setTimeout(0);
+      sock.removeListener("error", fail);
+      const tlsSock = tls.connect(
+        {
+          socket: sock,
+          servername: options.servername || destHost,
+          rejectUnauthorized:
+            options.rejectUnauthorized !== undefined
+              ? options.rejectUnauthorized
+              : false,
+        },
+        () => {
+          if (!settled) {
+            settled = true;
+            cb(null, tlsSock);
+          }
+        },
+      );
+      tlsSock.once("error", (e) => {
+        if (!settled) {
+          settled = true;
+          cb(e);
+        }
+      });
+    };
+    sock.on("data", onData);
+    return undefined; // 异步经 cb 返回
+  }
+}
+
+let _daoTunnelAgent = null;
+let _daoTunnelAgentUrl = null;
+
 /**
- * ★ v9.9.102 · 获取代理agent (支持运行时动态检测Windows系统代理)
+ * ★ 获取代理agent · 运行时动态检测 (环境变量 + Windows系统代理) · 自包含无依赖
  *   道义: 四十一章「大白如辱」· 代理存在但不可见
  */
 function _getProxyAgent(isHttps) {
-  // 1) 环境变量代理 (优先)
-  if (isHttps && _httpsProxyAgent) return _httpsProxyAgent;
-  if (!isHttps && _httpProxyAgent) return _httpProxyAgent;
-  // 2) 无代理 → 直连
-  return undefined;
+  // 仅对 https 上游启用隧道 (http/本地上游保持直连原状)
+  if (!isHttps) return undefined;
+  const url = _resolveProxyUrl();
+  if (!url) return undefined;
+  if (_daoTunnelAgent && _daoTunnelAgentUrl === url) return _daoTunnelAgent;
+  try {
+    _daoTunnelAgent = new _DaoTunnelAgent(url, { keepAlive: false });
+    _daoTunnelAgentUrl = url;
+    return _daoTunnelAgent;
+  } catch (_e) {
+    return undefined;
+  }
 }
 
 // ★ v9.9.92 · 修法⑦ · 引用 sp_invert.js · 仅用于 SP 检测+日志 · 不修改 SP
