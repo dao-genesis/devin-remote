@@ -1,6 +1,6 @@
 {
-  "versionCode": 64,
-  "versionName": "0.17.7",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.7/DevinCloud-mobile-v0.17.7.apk",
-  "notes": "v0.17.7 · 全服通近期对话新增第 4 个按钮「🌐 进入」: 点击即切到该对话所属账号(WAM 多实例注入鉴权, 等同切号面板点账号), 并在网页端前台直接打开该对话页(app.devin.ai/sessions/…), 方便在真网页里查看/操作对话记录; 打开后自动收起全服通悬浮窗露出网页。\n· 含 0.17.6 全服通 6 项 UX 修复(整卡拖拽/缩窗/多标签查看/本地备份秒拖/下载入列表)及 0.17.1~0.17.5 全部改动。签名一致, 原地覆盖升级不丢数据。"
+  "versionCode": 65,
+  "versionName": "0.17.8",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.8/DevinCloud-mobile-v0.17.8.apk",
+  "notes": "v0.17.8 · 刷新手势由「双击」改为「三连击」: 在页面任意处连续点三下(每下间隔 <500ms, 不算滑动/拖拽/缩放)刷新一次, 误触更少; 仍仅观察手势不消费事件, 单击/双击/滑动/拖拽等原有交互不受影响。\n· 含 0.17.7「进入」按钮(切号+网页端开对话)、工具栏收纳(前进/后退/主页入页面工具菜单·右侧块加大)及 0.17.6 全服通 6 项 UX 修复等全部改动。签名一致, 原地覆盖升级不丢数据。"
 }
