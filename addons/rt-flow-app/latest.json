@@ -1,6 +1,6 @@
 {
-  "versionCode": 53,
-  "versionName": "0.16.1",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.16.1/DevinCloud-mobile-v0.16.1.apk",
-  "notes": "v0.16.1 · 板块合一 · ADB/AVD 级 shell 放开 · 接入文档全量展开\n· 浏览器板块定位为软件内置底层引擎(等价 Playwright/Chrome-CDP/浏览器-MCP)：查看+操作任意网页全在软件底层完成，19 命令不干扰用户当前页。\n· 手机板块对齐 AVD 全流程：新增 phoneShell(Shizuku/uid2000，等价 adb shell) RPC 命令 + HTTP POST /api/exec 直通，可跑 input/screencap/pm/am/settings/dumpsys/wm/monkey 任意命令(需 Shizuku 授权一次 + setRemoteOps)。\n· shell 放开：/api/exec 由原先 501 不可用改为真实执行(Token 鉴权即边界，设备端 remoteOps 一键知情同意)。\n· 接入文档合一：内网穿透只保留一份云端文档(getCloudMd)，全量内联展开 — 去掉渐进式披露/折叠，getModuleIndex/getModuleDoc 降级为机读别名；文档新增「ADB/AVD 级 Shell」整节与示例。\n· 签名一致，0.16.0 原地覆盖升级不丢数据。"
+  "versionCode": 54,
+  "versionName": "0.16.2",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.16.2/DevinCloud-mobile-v0.16.2.apk",
+  "notes": "v0.16.2 · 浏览器板块补齐 CDP 协议域 facade\n· 新增 cdp{method,params,tabIndex} 一条路由，与 Chrome DevTools Protocol 同名方法：Browser.getVersion / Page.navigate·reload·captureScreenshot·getLayoutMetrics·getNavigationHistory / Runtime.evaluate / DOM.getDocument·getOuterHTML·querySelector(All) / Input.dispatchMouseEvent·insertText / Network.enable·disable·getRequests·getResponseBody。\n· 工具调用逻辑与 Playwright/Chrome-CDP 一致，执行全部落在软件自身多标签 WebView(本软件即浏览器基底)，不另起浏览器。\n· Network.* 经注入 fetch/XHR hook + performance 资源时间线实现抓包(enable→触发→getRequests→getResponseBody)。\n· 接入文档(getCloudMd)与板块一文档同步补 CDP 域命令表。\n· 签名一致，原地覆盖升级不丢数据。"
 }
