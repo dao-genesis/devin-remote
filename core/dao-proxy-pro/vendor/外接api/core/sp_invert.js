@@ -392,16 +392,60 @@ function stripCreateMemoryTool(s) {
 //   送达模型皆携官方品牌 → 模型据以自认 Cascade · 破"彻底隔离"之本意。
 //   修复: 最上游 neutralizeBlock 即去名 → 两路(modifySPProto 共用 invertSP)同得净SP。
 //   语法守: "the Cascade IDE"→"the IDE"(非"the you IDE") · "the Windsurf X"→"the X"。
+// v9.9.299 · 去名语法守 · 第三人称单数→原形(品牌作主语之残: "Cascade blocks"→"you block")
+const DEOFFICIAL_3SG_BASE = {
+  is: "are", was: "were", has: "have", does: "do",
+  "doesn't": "don't", "hasn't": "haven't", "isn't": "aren't", "wasn't": "weren't",
+  exposes: "expose", blocks: "block", runs: "run", reads: "read", writes: "write",
+  views: "view", waits: "wait", sees: "see", needs: "need", wants: "want",
+  gets: "get", makes: "make", calls: "call", uses: "use", opens: "open",
+  finds: "find", lists: "list", creates: "create", edits: "edit", searches: "search",
+  proposes: "propose", returns: "return", expects: "expect", interacts: "interact",
+  executes: "execute", generates: "generate", provides: "provide", requires: "require",
+  allows: "allow", supports: "support", handles: "handle", sends: "send",
+  receives: "receive", loads: "load", saves: "save", fetches: "fetch", parses: "parse",
+  checks: "check", ensures: "ensure", performs: "perform", accesses: "access",
+  displays: "display", shows: "show", knows: "know", follows: "follow",
+  respects: "respect", avoids: "avoid", prefers: "prefer", attempts: "attempt",
+  tries: "try", helps: "help", asks: "ask", tells: "tell", takes: "take",
+  gives: "give", keeps: "keep", sets: "set", adds: "add", removes: "remove",
+  deletes: "delete", updates: "update", modifies: "modify", replaces: "replace",
+  applies: "apply", builds: "build", compiles: "compile", deploys: "deploy",
+  tests: "test", debugs: "debug", operates: "operate", works: "work",
+  decides: "decide", chooses: "choose", determines: "determine", understands: "understand",
+};
+// 私用区哨兵 · 仅对"本函数引入"的替换做主谓/句首大写,绝不动原文已有的小写 you
+const _DN_YOU = "\uE000", _DN_ED = "\uE001", _DN_YOURP = "\uE002";
+
 function deOfficialName(s) {
   if (typeof s !== "string") return s;
-  return s
+  let out = s
     .replace(/CascadeProjects/g, "Projects")
+    .replace(/\bCascade's\b/g, _DN_YOURP)
+    .replace(/\bWindsurf's\b/g, _DN_ED + "'s")
+    .replace(/\bCodeium's\b/g, _DN_ED + "'s")
+    // 语法守: "the Cascade IDE"→"the IDE"(非"the you IDE")
     .replace(/\bthe Cascade\b/g, "the")
     .replace(/\bthe Windsurf\b/g, "the")
     .replace(/\bthe Codeium\b/g, "the")
-    .replace(/\bCascade\b/g, "you")
-    .replace(/\bWindsurf\b/g, "the editor")
-    .replace(/\bCodeium\b/g, "the editor");
+    .replace(/\bCascade\b/g, _DN_YOU)
+    .replace(/\bWindsurf\b/g, _DN_ED)
+    .replace(/\bCodeium\b/g, _DN_ED);
+  // 主谓一致: 仅对哨兵主语 "⟨YOU⟩ <第三人称单数>" → 原形
+  out = out.replace(new RegExp(_DN_YOU + " ([A-Za-z']+)", "g"), (m, w) => {
+    const base = DEOFFICIAL_3SG_BASE[w.toLowerCase()];
+    return base ? _DN_YOU + " " + base : m;
+  });
+  // 还原哨兵 · 句首则首字母大写
+  out = out.replace(new RegExp("[" + _DN_YOU + _DN_ED + _DN_YOURP + "]", "g"), (m, off, str) => {
+    let i = off - 1;
+    while (i >= 0 && (str[i] === " " || str[i] === "\t")) i--;
+    const cap = i < 0 || str[i] === "." || str[i] === "!" || str[i] === "?" || str[i] === "\n" || str[i] === ":";
+    if (m === _DN_YOU) return cap ? "You" : "you";
+    if (m === _DN_YOURP) return cap ? "Your" : "your";
+    return cap ? "The editor" : "the editor";
+  });
+  return out;
 }
 
 function neutralizeBlock(block) {
