@@ -291,6 +291,13 @@
     return { ok: false, status: r.status, error: errOf(r) };
   }
   async function archiveSession(acc, sid) { var r = await jpost(APP + "/api/sessions/" + sid + "/archive", acc, {}); return { ok: r.status >= 200 && r.status < 300, status: r.status }; }
+  // 彻底水过无痕: 先归档(脱离活跃列表) → 再真删(从云端抹除)。仅在已验证完成全量备份后调用。
+  //   archive 失败也继续尝试 delete; 只要 delete 成功即视为真正清理(invisible·water-trace-free)。
+  async function purgeSession(acc, sid) {
+    var arch = { ok: false }; try { arch = await archiveSession(acc, sid); } catch (e) {}
+    var del = { ok: false }; try { del = await deleteSession(acc, sid); } catch (e) {}
+    return { ok: !!del.ok, archived: !!arch.ok, deleted: !!del.ok, status: del.status };
+  }
   async function stopSession(acc, sid) {
     var cands = ["/sessions/" + sid + "/archive", "/sessions/" + sid + "/stop", "/sessions/" + sid + "/pause", "/sessions/" + sid + "/sleep", "/sessions/" + sid + "/cancel"];
     var tried = [];
@@ -363,7 +370,10 @@
     try { var kn = await listKnowledge(acc); var kl = kn.learnings || []; for (var i = 0; i < kl.length; i++) { var k = kl[i]; if (k.is_builtin || k.builtin) continue; var rr = await deleteKnowledge(acc, k.id); if (rr.ok) report.knowledge++; else report.fails.push("kn:" + k.id); } } catch (e) {}
     try { var sec = await listSecrets(acc); var sl = sec.secrets || []; for (var j = 0; j < sl.length; j++) { var s = sl[j]; var rs = await deleteSecret(acc, s.id || s.name); if (rs.ok) report.secrets++; else report.fails.push("sec:" + (s.id || s.name)); } } catch (e) {}
     try { var pb = await listPlaybooks(acc); var pl = pb.playbooks || []; for (var p = 0; p < pl.length; p++) { var rp = await deletePlaybook(acc, pl[p].id); if (rp.ok) report.playbooks++; else report.fails.push("pb:" + pl[p].id); } } catch (e) {}
-    if (opts.archiveSessions) { try { var ls = await listSessions(acc, 200); var ss = ls.sessions || []; for (var q = 0; q < ss.length; q++) { var sid = ss[q].devin_id || ss[q].session_id || ss[q].id; if (!sid) continue; var ra = await archiveSession(acc, sid); if (ra.ok) report.archived++; } } catch (e) {} }
+    if (opts.archiveSessions || opts.deleteSessions) { try { var ls = await listSessions(acc, 200); var ss = ls.sessions || []; report.deleted = 0; for (var q = 0; q < ss.length; q++) { var sid = ss[q].devin_id || ss[q].session_id || ss[q].id; if (!sid) continue;
+      if (opts.deleteSessions) { var rps = await purgeSession(acc, sid); if (rps.deleted) report.deleted++; else if (rps.archived) report.archived++; }
+      else { var ra = await archiveSession(acc, sid); if (ra.ok) report.archived++; }
+    } } catch (e) {} }
     return { ok: true, report: report };
   }
 
@@ -487,8 +497,21 @@
     return { ok: true, title: title, fileCount: (col.files || []).length, entries: entries.length, b64: bytesToB64(buildZip(entries)) };
   }
 
+  // 会话最近更新时间(ms) — 字段名各端不一, 多候选兜底; 取不到回退 created/0。
+  function sessTs(s) {
+    if (!s) return 0;
+    var cands = [s.updated_at, s.last_updated_at, s.last_event_at, s.last_message_at, s.modified_at, s.updated, s.created_at, s.created];
+    for (var i = 0; i < cands.length; i++) {
+      var v = cands[i]; if (v == null) continue;
+      if (typeof v === "number") return v > 1e12 ? v : v * 1000;   // 秒→毫秒
+      var t = Date.parse(v); if (!isNaN(t)) return t;
+    }
+    return 0;
+  }
+
   root.DaoCloud = {
     buildZip: buildZip, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
+    purgeSession: purgeSession, sessTs: sessTs,
     listSessions: listSessions, sessionDetail: sessionDetail, sessionMessages: sessionMessages,
     sessionEvents: sessionEvents, exportSession: exportSession, deleteSession: deleteSession,
     extractAllKeys: extractAllKeys, mapKeysToPaths: mapKeysToPaths,

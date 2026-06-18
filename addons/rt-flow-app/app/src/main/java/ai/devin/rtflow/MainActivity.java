@@ -1981,6 +1981,26 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public boolean vaultSaveBackup(String folder, String name, String content) {
             return MainActivity.this.vaultSaveBackup(folder, name, content);
         }
+        /** 二进制备份落地 (base64 → 字节): 用于整文件夹 ZIP(对话+产出文件)入备份库。 */
+        @JavascriptInterface public boolean vaultSaveBackupB64(String folder, String name, String base64) {
+            return MainActivity.this.vaultSaveBackupB64(folder, name, base64);
+        }
+        /** 列某账号备份文件夹内容 → JSON [{name,size,mtime}] (供备份页搜索/本地数据源检索)。 */
+        @JavascriptInterface public String vaultListBackups(String folder) {
+            return MainActivity.this.vaultListBackups(folder);
+        }
+        /** 读某备份文件文本 (manifest.json / conv-<sid>.md) — 本地数据源无感回退。 */
+        @JavascriptInterface public String vaultReadBackup(String folder, String name) {
+            return MainActivity.this.vaultReadBackup(folder, name);
+        }
+        /** 列出全部备份账号文件夹 → JSON [folderName] (备份库悬浮窗检索全部账号, 含已移出库的)。 */
+        @JavascriptInterface public String vaultListBackupAccounts() {
+            return MainActivity.this.vaultListBackupAccounts();
+        }
+        /** 读某备份二进制文件 → base64 (sess-<sid>.zip) — 备份库一键拉取本地全量产出。 */
+        @JavascriptInterface public String vaultReadBackupB64(String folder, String name) {
+            return MainActivity.this.vaultReadBackupB64(folder, name);
+        }
         // ── 在线自动更新 (面板/引擎/中继共用) ──
         @JavascriptInterface public String appCheckUpdate() { return fetchUpdateInfo(); }
         @JavascriptInterface public String appInstallUpdate(String url) { return startUpdate(url); }
@@ -3035,10 +3055,13 @@ public class MainActivity extends AppCompatActivity {
             + "var inp=null;var n=el;while(n){if(n.tagName==='INPUT'&&(n.type||'').toLowerCase()==='file'){inp=n;break;}n=n.parentElement;}"
             + "if(!inp){var z=el;while(z){if(z.querySelector){inp=z.querySelector('input[type=file]');if(inp)break;}z=z.parentElement;}}"
             + "if(!inp)inp=document.querySelector('input[type=file]');"
-            + "if(inp){try{inp.files=dt.files;}catch(e){}inp.dispatchEvent(new Event('input',{bubbles:true}));inp.dispatchEvent(new Event('change',{bubbles:true}));}"
+            // 修复重复(2→4): 命中 file-input 即走 input 单路并立即返回; 绝不再派发 drop 事件,
+            // 否则同时挂 input + dropzone 的页面(如 Devin 编辑框)两路都吃 → 每份文件翻倍。
+            + "if(inp){try{inp.files=dt.files;}catch(e){}inp.dispatchEvent(new Event('input',{bubbles:true}));inp.dispatchEvent(new Event('change',{bubbles:true}));return 'input';}"
+            // 仅当没有任何 file-input 时, 才回退到 dropzone(drop 事件)单路注入。
             + "var opt={bubbles:true,cancelable:true};"
             + "['dragenter','dragover','drop'].forEach(function(t){try{var e=new DragEvent(t,opt);Object.defineProperty(e,'dataTransfer',{value:dt});el.dispatchEvent(e);}catch(err){}});"
-            + "return inp?'input':'drop';}catch(e){return 'err:'+e;}})();";
+            + "return 'drop';}catch(e){return 'err:'+e;}})();";
         main.post(() -> { try { web.evaluateJavascript(js, null); } catch (Exception e) { toast("注入失败"); } });
     }
     /** 在 (x,y) 处把文件注入网页: 设到 file input 并对落点元素派发 drop 事件 (兼容 dropzone 上传组件)。 */
@@ -3064,10 +3087,11 @@ public class MainActivity extends AppCompatActivity {
                     + "var inp=null;var n=el;while(n){if(n.tagName==='INPUT'&&(n.type||'').toLowerCase()==='file'){inp=n;break;}n=n.parentElement;}"
                     + "if(!inp){var z=el;while(z){if(z.querySelector){inp=z.querySelector('input[type=file]');if(inp)break;}z=z.parentElement;}}"
                     + "if(!inp)inp=document.querySelector('input[type=file]');"
-                    + "if(inp){try{inp.files=dt.files;}catch(e){}inp.dispatchEvent(new Event('input',{bubbles:true}));inp.dispatchEvent(new Event('change',{bubbles:true}));}"
+                    // 修复重复: 命中 file-input 即单路注入并立即返回, 不再额外派发 drop(否则两路都吃 → 翻倍)。
+                    + "if(inp){try{inp.files=dt.files;}catch(e){}inp.dispatchEvent(new Event('input',{bubbles:true}));inp.dispatchEvent(new Event('change',{bubbles:true}));return 'input';}"
                     + "var opt={bubbles:true,cancelable:true};"
                     + "['dragenter','dragover','drop'].forEach(function(t){try{var dt2=new DataTransfer();dt2.items.add(file);var e=new DragEvent(t,opt);Object.defineProperty(e,'dataTransfer',{value:dt2});el.dispatchEvent(e);}catch(err){}});"
-                    + "return inp?'input':'drop';}catch(e){return 'err:'+e;}})();";
+                    + "return 'drop';}catch(e){return 'err:'+e;}})();";
                 main.post(() -> {
                     try { web.evaluateJavascript(js, val -> {
                         if (val != null && val.contains("input")) toast("已放入页面上传框");
@@ -3170,6 +3194,76 @@ public class MainActivity extends AppCompatActivity {
             }
             return true;
         } catch (Exception e) { return false; }
+    }
+    /** 二进制备份(base64→字节)落地到 backups/<folder>/<name> — 整文件夹 ZIP 入库, 卸载/重装不丢。 */
+    boolean vaultSaveBackupB64(String folder, String name, String base64) {
+        try {
+            File base = new File(vaultDir(), "backups");
+            String sf = (folder == null || folder.trim().isEmpty()) ? "misc" : folder.replaceAll("[\\\\/:*?\"<>|]", "_");
+            File dir = new File(base, sf);
+            if (!dir.exists()) dir.mkdirs();
+            String safe = (name == null || name.trim().isEmpty()) ? ("backup-" + System.currentTimeMillis() + ".bin") : name.replaceAll("[\\\\/:*?\"<>|]", "_");
+            byte[] bytes = android.util.Base64.decode(base64 == null ? "" : base64, android.util.Base64.DEFAULT);
+            try (FileOutputStream fos = new FileOutputStream(new File(dir, safe))) { fos.write(bytes); }
+            return true;
+        } catch (Exception e) { return false; }
+    }
+    /** 列出 backups/<folder>/ 下全部文件 → JSON [{name,size,mtime}] (备份页搜索 / 本地数据源检索)。 */
+    String vaultListBackups(String folder) {
+        try {
+            File base = new File(vaultDir(), "backups");
+            String sf = (folder == null || folder.trim().isEmpty()) ? "misc" : folder.replaceAll("[\\\\/:*?\"<>|]", "_");
+            File dir = new File(base, sf);
+            org.json.JSONArray arr = new org.json.JSONArray();
+            File[] fs = dir.listFiles();
+            if (fs != null) for (File f : fs) {
+                if (!f.isFile()) continue;
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("name", f.getName()); o.put("size", f.length()); o.put("mtime", f.lastModified());
+                arr.put(o);
+            }
+            return arr.toString();
+        } catch (Exception e) { return "[]"; }
+    }
+    /** 列出 backups/ 下全部账号文件夹名 → JSON [name] (含已移出库的账号, 备份库悬浮窗全量检索)。 */
+    String vaultListBackupAccounts() {
+        try {
+            File base = new File(vaultDir(), "backups");
+            org.json.JSONArray arr = new org.json.JSONArray();
+            File[] fs = base.listFiles();
+            if (fs != null) for (File f : fs) { if (f.isDirectory()) arr.put(f.getName()); }
+            return arr.toString();
+        } catch (Exception e) { return "[]"; }
+    }
+    /** 读 backups/<folder>/<name> 二进制 → base64 (sess-<sid>.zip 本地全量产出一键拉取)。 */
+    String vaultReadBackupB64(String folder, String name) {
+        try {
+            File base = new File(vaultDir(), "backups");
+            String sf = (folder == null || folder.trim().isEmpty()) ? "misc" : folder.replaceAll("[\\\\/:*?\"<>|]", "_");
+            String safe = (name == null) ? "" : name.replaceAll("[\\\\/:*?\"<>|]", "_");
+            File f = new File(new File(base, sf), safe);
+            if (!f.exists()) return "";
+            byte[] buf = new byte[(int) f.length()];
+            try (java.io.FileInputStream fis = new java.io.FileInputStream(f)) {
+                int off = 0, r; while (off < buf.length && (r = fis.read(buf, off, buf.length - off)) > 0) off += r;
+            }
+            return android.util.Base64.encodeToString(buf, android.util.Base64.NO_WRAP);
+        } catch (Exception e) { return ""; }
+    }
+    /** 读 backups/<folder>/<name> 文本 (manifest.json / conv-<sid>.md) — 本地数据源无感回退。 */
+    String vaultReadBackup(String folder, String name) {
+        try {
+            File base = new File(vaultDir(), "backups");
+            String sf = (folder == null || folder.trim().isEmpty()) ? "misc" : folder.replaceAll("[\\\\/:*?\"<>|]", "_");
+            String safe = (name == null) ? "" : name.replaceAll("[\\\\/:*?\"<>|]", "_");
+            File f = new File(new File(base, sf), safe);
+            if (!f.exists()) return "";
+            byte[] buf = new byte[(int) f.length()];
+            try (java.io.FileInputStream fis = new java.io.FileInputStream(f)) {
+                int off = 0, r; while (off < buf.length && (r = fis.read(buf, off, buf.length - off)) > 0) off += r;
+            }
+            return new String(buf, StandardCharsets.UTF_8);
+        } catch (Exception e) { return ""; }
     }
     /** 直驱 Vibrator 的震动 (不受系统触感开关影响), 供多选长按/低额提醒等使用。 */
     void doVibrate(int ms) {
