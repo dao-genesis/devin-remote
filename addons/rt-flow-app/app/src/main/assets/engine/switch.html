@@ -1149,13 +1149,16 @@ async function dvRunAutoCleanNow(){
   _bigAlert("✓ 自动清理全流程完成 · 清理"+cleaned+" 移出"+removed+(failed?(" 失败"+failed):"")+(skipped?(" 跳过"+skipped):""));
   toast("✓ 全流程完成: 清理"+cleaned+"·移出"+removed+(failed?("·失败"+failed):""));
 }
+var _quotaWarmed=false;   // 冷启动首轮: 全部已登录账号都刷一遍 → 一上来就是活数据, 不再满屏 $--
 async function autoQuotaTick(){
   if(_quotaBusy) return; _quotaBusy=true;
   try{
     var accs=loadAcc().filter(hasAuth);
     var idle=accs.filter(function(a){return !_hasLiveConv(a);});
     var batch=accs.filter(_hasLiveConv);                          // 有对话 → 本轮必刷(高频)
-    for(var n=0;n<2 && idle.length;n++){ batch.push(idle[_idleCursor%idle.length]); _idleCursor++; }  // 空闲轮转少量
+    // 冷启首轮全刷(消除死数据); 之后每轮转 8 个空闲号 → 全部号在数轮内都刷新, 不再"半天不动"
+    var idleN = _quotaWarmed ? 8 : idle.length;
+    for(var n=0;n<idleN && idle.length;n++){ batch.push(idle[_idleCursor%idle.length]); _idleCursor++; }
     var seen={};
     for(var i=0;i<batch.length;i++){ var a=batch[i]; if(!a||seen[a.id])continue; seen[a.id]=1;
       try{ await DaoCore.refreshQuotaFor(a.id); }catch(e){}
@@ -1163,6 +1166,7 @@ async function autoQuotaTick(){
       try{ await autoCleanFor(fresh); }catch(e){}    // 低额且无对话 → 备份+清理(归零移出库)
     }
     if(batch.length) render();
+    _quotaWarmed=true;
   }catch(e){}
   _quotaBusy=false;
 }
@@ -1273,11 +1277,11 @@ paintTrk();          // 详情区也立即铺上缓存的运行清单
 pollTrk();           // 随后实时校正(并发, 近实时)
 window.addEventListener("focus", function(){ render(); pollTrk(); });  // 回到面板即刷新运行态
 document.addEventListener("visibilitychange", function(){ if(!document.hidden) pollTrk(); });
-setInterval(render, 8000);
-setInterval(pollTrk, 15000);   // 30s→15s: 跨设备同账号运行更接近实时
-// 美刀额度: 有对话的账号每 15s 高频刷新, 空闲账号轮转; 同步施加对话缓冲单话上限 + 低额提醒
-setTimeout(autoQuotaTick, 4000);
-setInterval(autoQuotaTick, 15000);
+setInterval(render, 6000);
+setInterval(pollTrk, 12000);   // 30s→15s→12s: 跨设备同账号运行更接近实时
+// 美刀额度: 冷启动尽快全量刷一遍(消除死数据), 之后每 12s 一轮(有对话高频·空闲快速轮转); 同步施加对话缓冲单话上限 + 低额提醒
+setTimeout(autoQuotaTick, 1200);
+setInterval(autoQuotaTick, 12000);
 // 自动备份心跳: 始终增量备份(每 90s 轮一个账号), 与额度/清理解耦
 setTimeout(autoBackupTick, 9000);
 setInterval(autoBackupTick, 90000);
