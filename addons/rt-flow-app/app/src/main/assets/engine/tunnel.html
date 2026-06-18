@@ -149,6 +149,28 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 </div>
 </div>
 
+<!-- 模块2.7: 后台保活 · 持久稳定化 (移植自 knoop7/Ava) -->
+<div class="section">
+<h3>🔋 后台保活 · 持久稳定化</h3>
+<div class="muted">常驻中继最大的杀手是 <b>Doze 电池优化</b> 与 <b>厂商自启动管控</b>：不豁免则息屏被节流、被杀后/重启后不再拉起。建议三项都开，让中继真正「息屏不断、杀不死、自恢复」。</div>
+<div class="card">
+  <div class="lbl">电池优化豁免 (Doze)</div>
+  <div id="kaBatt" class="val">检测中…</div>
+  <div class="lbl">机型</div><div id="kaMaker" class="val">—</div>
+  <div class="row" style="margin-top:8px">
+    <button onclick="kaRequestBatt()" style="background:#238636">🔋 申请电池不优化</button>
+    <button onclick="kaOpenAutoStart()">⚙️ 厂商自启动设置</button>
+  </div>
+  <div class="row">
+    <button onclick="kaOpenBatterySettings()">🔧 省电策略设置</button>
+    <button onclick="kaRefresh()">刷新状态</button>
+  </div>
+  <div class="lbl" style="margin-top:8px">📋 本机保活指引</div>
+  <pre id="kaHint" class="muted">—</pre>
+</div>
+<div class="muted" style="font-size:11px">说明：自启动/省电策略页为<b>厂商系统设置</b>，需你在跳转后手动把本应用设为「允许自启动 / 后台高耗电 / 不优化」。已附 BootReceiver，重启与 OTA 自更新后会自动拉起中继。</div>
+</div>
+
 <!-- 能力自测 -->
 <div class="section">
 <h3>⚡ 能力自测</h3>
@@ -324,6 +346,29 @@ function refreshTunnel(){
   updateDecentUI(t);
 }
 refreshTunnel();
+// ── 后台保活 · 持久稳定化 (Native 桥: KeepAlive) ──
+function kaStat(){ try{ return JSON.parse(N.keepAliveStatus?N.keepAliveStatus():"{}"); }catch(e){ return {}; } }
+function kaRefresh(){
+  var s=kaStat();
+  var b=document.getElementById('kaBatt');
+  if(b){ var ok=!!s.battOptIgnored; b.textContent=ok?'✓ 已豁免 (Doze 不节流)':'✗ 未豁免 — 建议申请, 否则息屏可能被杀'; b.style.color=ok?'#3fb950':'#f0883e'; }
+  var m=document.getElementById('kaMaker'); if(m) m.textContent=s.maker||'OTHER';
+  var h=document.getElementById('kaHint'); if(h) h.textContent=s.hint||'—';
+}
+function kaRequestBatt(){
+  try{ N.requestBatteryOpt&&N.requestBatteryOpt(); }catch(e){}
+  _result('keepAlive', true, '已唤起「电池不优化」申请, 请在系统弹窗点「允许」');
+  setTimeout(kaRefresh, 1500); setTimeout(kaRefresh, 4000);
+}
+function kaOpenAutoStart(){
+  try{ N.openAutoStart&&N.openAutoStart(); }catch(e){}
+  _result('keepAlive', true, '已跳转厂商「自启动/后台白名单」设置, 请把本应用设为允许');
+}
+function kaOpenBatterySettings(){
+  try{ N.openBatterySettings&&N.openBatterySettings(); }catch(e){}
+  _result('keepAlive', true, '已跳转厂商「省电策略」设置');
+}
+kaRefresh();
 // ── 远程操控开关 ──
 function toggleRemoteOps(on){
   try{ N.saveRelayConfig; /* 检测桥可用 */ }catch(e){}

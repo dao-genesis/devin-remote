@@ -177,6 +177,14 @@ public class MainActivity extends AppCompatActivity {
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
         }
+        // 后台保活: 首启动一次性引导申请「电池不优化」豁免 (常驻中继不被 Doze 杀死)。仅提一次, 用户拒绝/已豁免则不再打扰。
+        try {
+            SharedPreferences kap = getSharedPreferences(PREFS, MODE_PRIVATE);
+            if (!KeepAlive.isBatteryOptIgnored(this) && !kap.getBoolean("battopt-asked", false)) {
+                kap.edit().putBoolean("battopt-asked", true).apply();
+                main.postDelayed(() -> { try { KeepAlive.requestBatteryOpt(this); } catch (Exception ignored) {} }, 1800);
+            }
+        } catch (Exception ignored) {}
         fileChooser = registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), result -> {
             ValueCallback<Uri[]> cb = filePathCallback; filePathCallback = null;
             Uri camUri = cameraOutputUri; cameraOutputUri = null;
@@ -1940,6 +1948,24 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void setTunnelEnabled(boolean on) {
             RelayService s = RelayService.instance;
             if (s != null) s.setTunnelEnabledExternal(on);
+        }
+        // ── 后台保活 · 持久稳定化 (移植自 knoop7/Ava: 电池优化豁免 + 各厂商自启动深链) ──
+        /** 机读保活状态: {maker, battOptIgnored, hint} — 供面板展示 + 云端 Agent 远程查看。 */
+        @JavascriptInterface public String keepAliveStatus() { return KeepAlive.statusJson(MainActivity.this); }
+        /** 申请「电池不优化」豁免 (系统标准弹窗, 用户点一次「允许」)。 */
+        @JavascriptInterface public boolean requestBatteryOpt() {
+            main.post(() -> KeepAlive.requestBatteryOpt(MainActivity.this));
+            return KeepAlive.isBatteryOptIgnored(MainActivity.this);
+        }
+        /** 跳转厂商「自启动 / 后台白名单」设置页。 */
+        @JavascriptInterface public boolean openAutoStart() {
+            main.post(() -> KeepAlive.openAutoStart(MainActivity.this));
+            return true;
+        }
+        /** 跳转厂商「省电策略 / 后台耗电」设置页。 */
+        @JavascriptInterface public boolean openBatterySettings() {
+            main.post(() -> KeepAlive.openBatterySettings(MainActivity.this));
+            return true;
         }
         @JavascriptInterface public void clip(String text) {
             main.post(() -> {

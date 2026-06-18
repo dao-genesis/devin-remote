@@ -1,6 +1,6 @@
 {
-  "versionCode": 49,
-  "versionName": "0.15.18",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.18/DevinCloud-mobile-v0.15.18.apk",
-  "notes": "v0.15.18 · 三项体验/正确性修复\n· 拖拽对话标签报「不是 Devin 对话页」根因修复：Devin 是 SPA，点开对话经 history.pushState 客户端跳转，不触发 onPageStarted/Finished，导致缓存的 tab.url 仍停在 /org 首页 → 误判。现新增 doUpdateVisitedHistory 同步地址栏/标签 URL，且拖拽时改读源标签实时 location.href 为准，能正确识别 /sessions/<id>。\n· 标签长按拖拽：原 GestureDetector 的 onLongPress 在标签条横滚里手指稍动就被吞掉（要找很久位置/常错位）。改为整片 chip 自管长按（按下 300ms 内不明显移动即触发，明显滑动则放行横滚），整个标签范围长按都能起拖。\n· 切号面板：去除「点整行即登录/切号」（易误触），登录/切号仅由 ⚡(已登录→切号)/🔑(未登录→登录) 按钮触发。\n· 签名一致 e261b27f，v0.15.x 原地覆盖升级数据不丢。"
+  "versionCode": 50,
+  "versionName": "0.15.19",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.19/DevinCloud-mobile-v0.15.19.apk",
+  "notes": "v0.15.19 · 后台持久化 / 持久稳定化 (整合 knoop7/Ava 优质模块)\n· 电池优化豁免(Doze)：新增申请「电池不优化」入口 + 首启动一次性温和引导；不豁免时息屏常被节流/杀死, 豁免后中继更稳。\n· 各厂商自启动深链：穿透面板新增「🔋 后台保活」区, 一键跳转 华为/小米/OPPO/vivo/三星/一加/魅族 的「自启动 / 后台白名单 / 省电策略」设置页 + 本机保活指引。\n· WifiLock：RelayService 在 PARTIAL_WAKE_LOCK 之外再持高性能/低延迟 Wi-Fi 锁, 息屏不掉 Wi-Fi, WSS 心跳不断。\n· BootReceiver 增强：除 BOOT_COMPLETED 外, 覆盖各厂商 QUICKBOOT_POWERON + MY_PACKAGE_REPLACED(OTA 自更新后自动重启中继)。\n· 云端 Agent 经隧道可读 keepAliveStatus 远程核对保活状态。\n· 签名一致 e261b27f，v0.15.x 原地覆盖升级数据不丢。"
 }
