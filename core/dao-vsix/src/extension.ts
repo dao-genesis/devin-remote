@@ -389,6 +389,8 @@ export async function activate(context: vscode.ExtensionContext) {
     try { _daoExtPath = context.extensionPath; } catch { /* 守柔 */ }
     // 道法自然 · 默认种入每账号自动注入 (《道德经·阴符经》知识/剧本 + 内网穿透MD) — 仅首次
     try { daoSeedDefaultInjectProfile(); } catch { /* 守柔 */ }
+    // 知识库收口: 老档案补齐第三篇(MCP 使用文档)并对齐分层触发器 — 恰好 3 条知识
+    try { daoMigrateKnowledgeTrinity(); } catch { /* 守柔 */ }
     // secret=PAT · 用户填入的 GitHub PAT 作为 secret 反向注入到所有账号 — 每次激活幂等校正
     try { daoSyncPatSecretIntoProfile(); } catch { /* 守柔 */ }
     // MCP=DAO Bridge · 把本机 MCP 网关公网地址钉入注入档案 → 反向注入所有账号 (URL 轮换自愈)
@@ -458,6 +460,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // v3.17.4 · 内穿实时反向注入: 监听隧道连接文件变化 → 防抖 → 仅签名变化才扩散到所有账号; 启动后延后做一次种入扩散。
     try { bridgeWatchForReinject(context); } catch { /* 守柔 */ }
     setTimeout(() => { bridgeScheduleReinject('activate'); }, 8000);
+    // 端口/URL 实时更新 · 存活探测环: 打得通保持稳定, 打不通即刷新并重注新地址
+    try { startBridgeLivenessLoop(context); } catch { /* 守柔 */ }
     context.subscriptions.push(
         vscode.commands.registerCommand('dao.startServer', () => startServer(context)),
         vscode.commands.registerCommand('dao.stopServer', stopServer),
@@ -2290,14 +2294,14 @@ function bridgeGenerateCloudMd(): string {
     const tok = bridgeToken || ws.token;
     const url = bridgeUrl || '(未连接)';
     const port = ws.port || 9920;
-    // v3.17.0 · 道法自然 · 去渐进式披露: 唯一一份 MD = 四大模块全部命令 + 内网穿透全信息, 一次到位。
-    //   旧法把云端总纲/本地详档拆两份(渐进式披露) → 现归一为单文档, Agent 一读即全。
+    // 道法自然 · 回归本源 (dao-bridge 初始形态): 内网穿透文档只讲「整机直连」——
+    //   接入信息 + 基础整机端点 + Python SDK。四大模块的深层操作已独立为 DAO Bridge MCP
+    //   (见「MCP 使用文档」), 本文档不再内联四大模块, 保持简明、日常即用。
     return [
-        '# ☯ DAO Bridge · Agent 接入总文档（四大模块 · 内网穿透 · 单文档全量）',
+        '# ☯ DAO Bridge · 内网穿透接入文档',
         '',
-        '> 本文档供云端 Agent(Devin Cloud 等)读取，用于通过内网穿透**远程操作用户本地电脑**。',
-        '> **唯一一份文档**：四大模块全部命令 + 内网穿透全部信息都在这里，一次读全、无需再拉别的文件。',
-        '> **端口和 URL 会随隧道重启而变化，以本文档为准。**',
+        '> 本文档供云端 Agent(Devin Cloud 等)读取，经内网穿透**直连并远程操作用户本地电脑**(整机)。',
+        '> 插件启动即零配置打通整机公网穿透；**端口和 URL 会随隧道重启而变化，以本文档为准**。',
         '',
         '## 接入信息',
         '',
@@ -2310,9 +2314,11 @@ function bridgeGenerateCloudMd(): string {
         `更新于:  ${ts}`,
         '```',
         '',
-        '所有请求 Header: `Authorization: Bearer <Token>`。',
+        '所有请求 Header: `Authorization: Bearer <Token>`(`/api/health` 免鉴权)。',
         '',
-        '### 底座端点（四大模块共用）',
+        '## 整机端点',
+        '',
+        '经这些端点即可直连这台电脑，读写文件 / 执行命令 / 操作整机。',
         '',
         '| 方法 | 路径 | Body | 说明 |',
         '|---|---|---|---|',
@@ -2320,106 +2326,12 @@ function bridgeGenerateCloudMd(): string {
         '| GET | `/api/connection` | - | 连接信息 |',
         '| GET | `/api/workspace` | - | 工作区信息 |',
         '| GET | `/api/bridge-state` | - | 隧道完整状态 |',
-        '| POST | `/api/exec` | `{cmd,timeout}` | 执行任意命令(整机核心) |',
+        '| POST | `/api/exec` | `{cmd,timeout}` | 在本机执行任意命令/PowerShell(整机核心) |',
         '| POST | `/api/ls` | `{path}` | 列目录 |',
         '| POST | `/api/file` | `{path}` | 读文件 |',
         '| POST | `/api/write` | `{path,content}` | 写文件 |',
         '| POST | `/api/search` | `{query,path}` | 搜索 |',
         '| POST | `/api/edit` | `{path,edits}` | 编辑 |',
-        '',
-        '## 四大接入模块',
-        '',
-        '本插件是**二合一插件本体**，Agent 经内网穿透可全方位接入以下四层。逐层覆盖：从网页 → 插件 → 整机 → IDE。',
-        '',
-        '---',
-        '',
-        '## 模块1 · 浏览器全方位接入',
-        '',
-        '远程驱动用户浏览器，不干扰其正常使用。机制：经 `/api/exec` 用**固定调试端口**启动一个隔离 Chrome 实例，',
-        '暴露 CDP 端点 `http://127.0.0.1:29229`，再跑 Playwright/CDP 脚本即可全控。',
-        '> 注：CDP 端口**不是常驻**的——需先按下方「步骤1」启动带 `--remote-debugging-port` 的 Chrome 才会出现。',
-        '> 插件自身的多账号浏览器(devin_web)用的是**每实例动态端口**并自动注入 auth1_session 直登，与本 Agent 通道独立、互不干扰。',
-        '',
-        '**步骤1 · 启动可控浏览器实例（隔离 profile，不动用户现有 Chrome）：**',
-        '```bash',
-        '# 经 /api/exec (Windows): 固定端口 29229 + 独立 user-data-dir',
-        'POST /api/exec {"cmd":"\\"C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe\\\" --remote-debugging-port=29229 --user-data-dir=%TEMP%\\\\dao_cdp --no-first-run about:blank","timeout":8000}',
-        '# 之后在同一 user-data-dir 再开标签即复用该实例(同 CDP 端口):',
-        '# POST /api/exec {"cmd":"... chrome.exe --user-data-dir=%TEMP%\\\\dao_cdp https://app.devin.ai"}',
-        '```',
-        '',
-        '**步骤2 · 经 CDP 控制：**',
-        '- **列举/打开/关闭标签**：`GET /json/list`、`GET /json/list` 中每个 target 含 `title`/`url`/`webSocketDebuggerUrl`；`Target.createTarget` / `Target.closeTarget`。',
-        '- **导航**：`Page.navigate {url}`；前进/后退 `Page.goBack/goForward`。',
-        '- **执行 JS**：`Runtime.evaluate {expression}` → 任意页内脚本、读写 DOM。',
-        '- **提取 DOM/正文**：`document.documentElement.outerHTML` / `document.body.innerText`；导出 MD。',
-        '- **Cookie / Storage**：`Network.getAllCookies`、`localStorage`/`sessionStorage` 经 evaluate 读写。',
-        '- **截图**：`Page.captureScreenshot` → base64 PNG。',
-        '- **页内查找**：evaluate `window.find()` 或 querySelectorAll 文本匹配。',
-        '',
-        '```bash',
-        '# 经 /api/exec: 列出浏览器标签(WS 级控制用 webSocketDebuggerUrl + Playwright/手写 CDP)',
-        'curl -s http://127.0.0.1:29229/json/list',
-        '```',
-        '',
-        '---',
-        '',
-        '## 模块2 · 插件本体全方位接入',
-        '',
-        '二合一插件本体一切模块均可由 Agent 代替用户操作：',
-        '',
-        '- **切号**：多账号列表、切换当前账号、刷新额度、复制凭证、清理、删除(全功能面板第2网页=真 WAM 切号面板)。',
-        '- **对话备份**：按账号分组的对话索引，查看/清空/导出。',
-        '- **反向注入**：把 Knowledge/Playbooks/Secrets/MCP/自动化/蓝图覆盖式注入到目标账号，单账号锁定。',
-        '- **MCP 市场**：搜索/安装/卸载 MCP 服务器。',
-        '- **Devin Cloud CRUD**：Sessions/Knowledge/Playbooks/Secrets/Integrations/Usage/Org/Schedules 全增删查。',
-        '- **额度查询**、**定时任务(Schedules)**、**额度归零账号一气呵成清理(备份→清理→出库)**。',
-        '',
-        '调用方式：经 `/api/exec` 调插件 CLI 命令(`code --command wam.*` 等)，或读取插件状态文件 `~/.dao/bridge/`、`~/.wam/`。',
-        'Devin Cloud API 直连 `https://app.devin.ai/api/`(带 auth1 + x-cog-org-id)。',
-        '',
-        '---',
-        '',
-        '## 模块3 · 操作用户电脑（最核心）',
-        '',
-        '经 `/api/exec` 在用户 Windows 上执行任意命令/PowerShell，"代替用户操作整机一切"。',
-        '',
-        '### 3.1 命令 / 文件 / 进程',
-        '```bash',
-        '# 任意命令',
-        'POST /api/exec {"cmd":"powershell -c \\"Get-Process | Select -First 5\\"","timeout":15000}',
-        '# 文件: /api/ls /api/file /api/write /api/search /api/edit',
-        '```',
-        '',
-        '### 3.2 Windows 多 RDP 远程桌面',
-        '- 启动 mstsc：`exec {"cmd":"mstsc /v:<host>"}`；多会话并行。',
-        '- 开启远程桌面服务/防火墙、查询会话 `query session`、`tscon`/`tsdiscon` 切换会话。',
-        '- 参考仓库 `cloud/vm-replica/`(Windows 多 RDP/多会话方案)。',
-        '',
-        '### 3.3 GUI 自动化（鼠标键盘/窗口/截屏）',
-        '- **截屏**：PowerShell + .NET `System.Drawing` 全屏抓图，或 `nircmd savescreenshot`。',
-        '- **键盘**：`System.Windows.Forms.SendKeys::SendWait`，或 AutoHotkey/nircmd。',
-        '- **鼠标**：`Cursor.Position` + `mouse_event`(user32)，或 pyautogui(`exec` 跑 python)。',
-        '- **窗口管理**：`Get-Process`+user32 `ShowWindow/SetForegroundWindow`。',
-        '',
-        '---',
-        '',
-        '## 模块4 · VSCode 底层 API',
-        '',
-        '达到类 Devin Cascade 的 IDE 内自主操作。两条路：',
-        '',
-        '### 4.1 经 code CLI（exec）',
-        '```bash',
-        'POST /api/exec {"cmd":"code --list-extensions"}',
-        'POST /api/exec {"cmd":"code --goto <file>:<line>"}',
-        '```',
-        '- 打开文件/文件夹/diff、装卸扩展(`--install-extension`)、跑命令。',
-        '',
-        '### 4.2 经插件桥（VSCode 扩展 API）',
-        '- 打开/编辑文件 `workspace.openTextDocument` + `WorkspaceEdit`。',
-        '- 运行命令面板命令 `commands.executeCommand`。',
-        '- 终端任务 `tasks.executeTask` / 创建 `window.createTerminal`。',
-        '- 读写工作区配置 `workspace.getConfiguration`。',
         '',
         '## Python SDK',
         '',
@@ -2439,27 +2351,81 @@ function bridgeGenerateCloudMd(): string {
         'print(api("POST","/api/exec",{"cmd":"hostname"}))',
         '```',
         '',
+        '## 需要更深层的专业操作？',
+        '',
+        '浏览器自动化(CDP) / GUI 鼠键截屏 / 窗口控件树 / VSCode 命令等**四大模块**能力，已独立为',
+        '**DAO Bridge MCP**(已随账号反向注入，HTTP 传输，无需手动配置)。直接以 MCP 工具调用即可，',
+        '用法见知识库另一篇「DAO Bridge MCP 使用文档(四大模块)」。',
+        '',
+        '*道法自然 · 无为而无不为*',
+    ].join('\n');
+}
+
+// 道法自然 · MCP 使用文档 (四大模块) — 反向注入为第三篇知识。讲清四大模块 MCP「是什么/怎么用」,
+//   日常整机直连仍走简版内网穿透 MD; 需要更深层专业操作时, Agent 转用本 MCP。
+function bridgeGenerateMcpUsageMd(): string {
+    let mcpUrl = '', mcpTok = '';
+    try {
+        const mf = path.join(process.env.ProgramData || 'C:\\ProgramData', 'dao_vm', 'mcp_public.json');
+        if (fs.existsSync(mf)) { const j = JSON.parse(fs.readFileSync(mf, 'utf8')); mcpUrl = String(j.url || ''); mcpTok = String(j.token || ''); }
+    } catch { /* 守柔 */ }
+    const urlLine = mcpUrl || '(随隧道动态生成，已自动注入到账号 MCP 列表)';
+    return [
+        '# ☯ DAO Bridge MCP · 四大模块使用文档',
+        '',
+        '> 四大模块(浏览器 / 整机 GUI / 插件本体 / VSCode)以 **MCP(Model Context Protocol)** 形态对外开放。',
+        '> 已作为自定义 MCP **反向注入到账号**(HTTP 传输，无需手动配置)；Agent 直接以 MCP 工具调用即可。',
+        '> 日常「整机直连(读写文件/执行命令)」走另一篇内网穿透文档；需要更深层专业操作时用本 MCP。',
+        '',
+        '## 是什么',
+        '',
+        '- 名称：`DAO Bridge MCP`(HTTP 传输 / Streamable HTTP)。',
+        '- 端点：' + urlLine,
+        '- 鉴权：' + (mcpTok ? '`Authorization: Bearer <已随注入下发>`' : '(无 token 或随注入下发)'),
+        '- 本质：把本机已实测的计算机控制底座 + 二合一插件操作面，统一代理为一个公网 MCP 端点。',
+        '',
+        '## 四大模块工具组',
+        '',
+        '| 工具组 | 模块 | 能力 |',
+        '|---|---|---|',
+        '| `pc_*` | 模块3·操作整机 | exec / screenshot / 鼠键(click/type/key/drag/scroll) / 文件读写 / 窗口枚举 / `pc_ui_tree` 控件级定位 / activate |',
+        '| `browser_*` | 模块1·浏览器 | Chrome CDP：launch / navigate / eval / screenshot / targets |',
+        '| `plugin_*` | 模块2·插件本体 | 二合一插件：health / exec |',
+        '| `vscode_*` | 模块4·VSCode | 执行 VS Code 命令(command/args) |',
+        '',
+        '## 怎么用',
+        '',
+        '1. 在账号的 MCP 列表里确认 `DAO Bridge MCP` 已启用(由反向注入自动写入)。',
+        '2. 以标准 MCP 工具调用：先 `tools/list` 看可用工具，再 `tools/call` 传 `{name, arguments}`。',
+        '3. 例：`browser_navigate {"url":"https://app.devin.ai"}`、`pc_screenshot {}`、`pc_exec {"command":"hostname"}`。',
+        '',
+        '> **URL 轮换自愈**：快速隧道地址重启会变；插件探测到旧地址打不通即刷新并重注新地址(打通则保持稳定)。',
+        '> 因此账号里 MCP 的 URL 始终指向当前可达的端点，无需手动维护。',
+        '',
         '*道法自然 · 无为而无不为*',
     ].join('\n');
 }
 
 function bridgeGenerateLocalMd(): string {
-    // v3.17.0 · 归一: MD 只有一份。本地详档 = 云端总文档(同源)，杜绝两份走样。
+    // 归一: 本地详档 = 云端文档(同源)，杜绝两份走样。
     return bridgeGenerateCloudMd();
 }
 
 async function bridgeInjectKnowledge(): Promise<boolean> {
     if (!ws.devinAuth1 || !ws.devinOrgId) return false;
     const md = bridgeGenerateCloudMd();
-    const knowledgeName = 'DAO Bridge 内网穿透远程操作文档';
-    const trigger = '涉及所有远程操作本地电脑的需求时都触发';
+    const knowledgeName = DAO_BRIDGE_KB_NAME;
+    const trigger = DAO_BRIDGE_KB_TRIGGER;
+    // 知识③ MCP 使用文档(四大模块) 一并幂等回写到当前账号 (守 manual 锁由批量框架统一处理)
+    try { await devinUpsertKnowledge(ws.devinOrgId, DAO_MCP_KB_NAME, bridgeGenerateMcpUsageMd(), DAO_MCP_KB_TRIGGER, ws.devinAuth1); } catch { /* 守柔 */ }
     // 幂等回写 (帛书·「少则得·多则惑」): 保留首个规范条目 → 原地 PATCH 更新, 多余重复全删 →
     // 收敛为唯一条目。杜绝旧法「删后建」在多窗口/最终一致下竞态堆积出几十条重复。
+    //   注意: 收敛只针对内穿文档(同前缀), 必须排除 MCP 使用文档(独立一篇), 否则会被误删后再造成 flap。
     try {
         const listResult = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1);
         let matches: any[] = [];
         if (listResult.ok && listResult.learnings) {
-            matches = listResult.learnings.filter((k: any) => typeof k.name === 'string' && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作本地电脑')));
+            matches = listResult.learnings.filter((k: any) => typeof k.name === 'string' && k.name !== DAO_MCP_KB_NAME && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作本地电脑')));
         }
         if (matches.length) {
             // 取最早(稳定锚点)为留存条目; 其余重复删除。
@@ -2558,6 +2524,86 @@ async function bridgeAutoPersist(): Promise<void> {
         bridgeScheduleReinject('autoPersist');
         refreshDaoCloudMiddlePanel();
     } catch { /* 守柔 */ }
+}
+
+// ═══ 端口/URL 实时更新 · 存活探测环 — 帛书·「反者道之动」 ═══
+//   逻辑(用户述): 打得通就保持稳定(不折腾、不重注); 打不通就刷新(重读已发布连接/重起隧道并把新 URL 重注各账号)。
+//   守柔: 直连探测(绕过代理), 只有"死"才动手; "活"则什么也不做, 杜绝无谓 churn。
+const BRIDGE_LIVENESS_INTERVAL_MS = 30 * 1000;
+let _bridgeLivenessTimer: ReturnType<typeof setInterval> | null = null;
+let _bridgeLastAliveMs = 0;
+function bridgeProbeAlive(rawUrl: string, timeoutMs: number = 6000): Promise<boolean> {
+    return new Promise((resolve) => {
+        let done = false;
+        const fin = (v: boolean) => { if (!done) { done = true; resolve(v); } };
+        try {
+            const u = new URL(rawUrl);
+            const isHttps = u.protocol === 'https:';
+            const mod = require(isHttps ? 'https' : 'http');
+            const opts: any = {
+                method: 'GET', hostname: u.hostname,
+                port: u.port || (isHttps ? 443 : 80),
+                path: (u.pathname && u.pathname !== '/' ? u.pathname : '/api/health') + (u.search || ''),
+                timeout: timeoutMs,
+            };
+            if (isHttps) opts.rejectUnauthorized = false;
+            const req = mod.request(opts, (r: any) => { const sc = r.statusCode || 0; r.resume(); fin(sc >= 200 && sc < 500); });
+            req.on('timeout', () => { try { req.destroy(); } catch { /* 守柔 */ } fin(false); });
+            req.on('error', () => fin(false));
+            req.end();
+        } catch { fin(false); }
+    });
+}
+function bridgeEffectiveUrl(): string {
+    if (bridgeUrl) return bridgeUrl;
+    try { const c = bridgeReadPublishedConn(); if (c && c.url) return c.url; } catch { /* 守柔 */ }
+    return '';
+}
+function bridgeMcpUrl(): string {
+    try {
+        const mf = path.join(process.env.ProgramData || 'C:\\ProgramData', 'dao_vm', 'mcp_public.json');
+        if (fs.existsSync(mf)) { const j = JSON.parse(fs.readFileSync(mf, 'utf8')); return String(j.url || ''); }
+    } catch { /* 守柔 */ }
+    return '';
+}
+let _bridgeLivenessInflight = false;
+async function bridgeLivenessTick(): Promise<void> {
+    if (_bridgeLivenessInflight) return;
+    _bridgeLivenessInflight = true;
+    try {
+        const cfg = vscode.workspace.getConfiguration('dao');
+        if (!cfg.get<boolean>('bridgeLiveness', true)) return;
+        const url = bridgeEffectiveUrl();
+        const mcpUrl = bridgeMcpUrl();
+        // 都没有地址可探 → 无连接, 尝试自动持久化建立一次(守柔, autoPersist 自带节流)
+        if (!url && !mcpUrl) { try { await bridgeAutoPersist(); } catch { /* 守柔 */ } return; }
+        const [bridgeOk, mcpOk] = await Promise.all([
+            url ? bridgeProbeAlive(url) : Promise.resolve(true),
+            mcpUrl ? bridgeProbeAlive(mcpUrl) : Promise.resolve(true),
+        ]);
+        // 打得通 → 保持稳定, 什么也不做 (不重注·省网)
+        if (bridgeOk && mcpOk) { _bridgeLastAliveMs = Date.now(); return; }
+        // 打不通 → 刷新
+        try { console.log('[dao] bridge liveness DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新'); } catch { /* 守柔 */ }
+        // 1) 重读已发布连接(常驻桥/host MCP 可能已轮换出新地址) → 采纳
+        try { const c = bridgeReadPublishedConn(); if (c && c.url && c.url !== bridgeUrl) { bridgeUrl = c.url; if (c.token) bridgeToken = c.token; } } catch { /* 守柔 */ }
+        try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
+        // 2) 桥死且无新鲜发布连接 → (仅当 cloudflared 可用)重起一条快速隧道
+        if (!bridgeOk) {
+            const pub = bridgeReadPublishedConn();
+            const connFresh = !!(pub && pub.url && pub.ageMs < BRIDGE_SYNC_THROTTLE_MS);
+            if (!connFresh) { try { await bridgeStartTunnel(false); } catch { /* 守柔 */ } }
+        }
+        // 3) 强制把最新地址重注到各账号(清签名 → 绕过"无变化不重注")
+        try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ }
+        bridgeScheduleReinject('liveness-refresh');
+        refreshDaoCloudMiddlePanel();
+    } catch { /* 守柔 */ } finally { _bridgeLivenessInflight = false; }
+}
+function startBridgeLivenessLoop(context: vscode.ExtensionContext): void {
+    if (_bridgeLivenessTimer) return;
+    _bridgeLivenessTimer = setInterval(() => { bridgeLivenessTick().catch(() => { /* 守柔 */ }); }, BRIDGE_LIVENESS_INTERVAL_MS);
+    context.subscriptions.push({ dispose: () => { if (_bridgeLivenessTimer) { clearInterval(_bridgeLivenessTimer); _bridgeLivenessTimer = null; } } });
 }
 
 function getDaoCloudMiddlePanelHtml(st: any): string {
@@ -7080,7 +7126,12 @@ function setManualLock(orgId: string, kind: ManualLockKind, name: string, locked
 }
 const DAO_BRIDGE_KB_NAME = 'DAO Bridge 内网穿透远程操作文档';
 const DAO_BRIDGE_KB_SENTINEL = '__DAO_BRIDGE_CLOUD_MD__';
-const DAO_BRIDGE_KB_TRIGGER = '涉及操作用户本地或远程电脑相关内容时触发';
+// 触发器分层 · 日常: 整机直连(读写文件/执行命令) → 走简版内网穿透 MD
+const DAO_BRIDGE_KB_TRIGGER = '需要远程操作用户本地电脑(读写文件、执行命令、整机直连)时触发';
+// 触发器分层 · 深层: 浏览器自动化/GUI/VSCode 等专业操作 → 走四大模块 MCP 使用文档
+const DAO_MCP_KB_NAME = 'DAO Bridge MCP 使用文档(四大模块)';
+const DAO_MCP_KB_SENTINEL = '__DAO_BRIDGE_MCP_MD__';
+const DAO_MCP_KB_TRIGGER = '需要浏览器自动化(CDP)、GUI 鼠键截屏、窗口控件树、VSCode 命令等更深层专业远程操作时触发';
 // secret · 用户填入的 GitHub PAT 作为一个 secret 反向注入到所有账号 (图: secret=rt flow 用户 pat)
 const DAO_PAT_SECRET_NAME = 'GITHUB_PAT';
 // 唯二·知识① 道法自然(帛书老子+阴符经) — 与种入态/一键注入同名同触发, 收敛为单一规范条目
@@ -7100,9 +7151,13 @@ function daoSeedDefaultInjectProfile(): void {
         if (combined && !p.knowledge.some(k => k.name === DAO_RULES_KB_NAME)) {
             p.knowledge.push({ name: DAO_RULES_KB_NAME, body: combined, trigger: DAO_RULES_KB_TRIGGER });
         }
-        // 知识② 内网穿透云端MD — 涉及操作本地/远程电脑时触发 (注入时实时生成最新)
+        // 知识② 内网穿透云端MD(原始·整机直连) — 日常远程操作本机时触发 (注入时实时生成最新)
         if (!p.knowledge.some(k => k.name === DAO_BRIDGE_KB_NAME)) {
             p.knowledge.push({ name: DAO_BRIDGE_KB_NAME, body: DAO_BRIDGE_KB_SENTINEL, trigger: DAO_BRIDGE_KB_TRIGGER });
+        }
+        // 知识③ MCP 使用文档(四大模块) — 需要浏览器/GUI/VSCode 等更深层专业操作时触发 (注入时实时生成最新)
+        if (!p.knowledge.some(k => k.name === DAO_MCP_KB_NAME)) {
+            p.knowledge.push({ name: DAO_MCP_KB_NAME, body: DAO_MCP_KB_SENTINEL, trigger: DAO_MCP_KB_TRIGGER });
         }
         // 剧本①合订 ②帛书老子 ③阴符经 — 全部默认自动注入
         if (combined && !p.playbooks.some(x => x.title === '道法自然 · 帛书《老子》·道藏《阴符经》')) {
@@ -7118,6 +7173,21 @@ function daoSeedDefaultInjectProfile(): void {
         if (!p.enabled) p.enabled = true;
         saveInjectProfile(p);
     } catch { /* 道法自然·守柔 */ }
+}
+// 知识库收口迁移 — 帛书·「少则得」: 已种入(daoSeeded)的老档案补齐为「恰好 3 条知识」并对齐分层触发器。
+//   ① 道法自然准则 ② 原始内网穿透MD(整机直连) ③ MCP 使用文档(四大模块)。每次激活幂等校正。
+function daoMigrateKnowledgeTrinity(): void {
+    try {
+        const p = loadInjectProfile();
+        let changed = false;
+        const b = p.knowledge.find(k => k && k.name === DAO_BRIDGE_KB_NAME);
+        if (b && b.trigger !== DAO_BRIDGE_KB_TRIGGER) { b.trigger = DAO_BRIDGE_KB_TRIGGER; changed = true; }
+        if (!p.knowledge.some(k => k && k.name === DAO_MCP_KB_NAME)) {
+            p.knowledge.push({ name: DAO_MCP_KB_NAME, body: DAO_MCP_KB_SENTINEL, trigger: DAO_MCP_KB_TRIGGER });
+            changed = true;
+        }
+        if (changed) saveInjectProfile(p);
+    } catch { /* 守柔 */ }
 }
 // secret=PAT · 把用户填入的 GitHub PAT(dao.githubPat / DAO_GITHUB_PAT)作为一个 secret 写入注入档案,
 // 经反向注入路径(applyInjectProfileToOrg→devinUpsertSecret)同步到所有账号。
@@ -7193,6 +7263,7 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
         // 同步 MCP 档案条目(URL 轮换自更) → 取最新钉住条目
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
         const md = bridgeGenerateCloudMd();
+        const mcpMd = bridgeGenerateMcpUsageMd();
         const p = loadInjectProfile();
         const mcpEntry = (p.mcps || []).find(m => m && m.name === DAO_MCP_NAME) || null;
         const store = loadAccountsAuthStore();
@@ -7202,9 +7273,13 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
             if (!a || !a.auth1 || a.auth1.startsWith('devin-session-token$') || !a.orgId) continue;
             if (doneOrgs.has(a.orgId)) continue;
             doneOrgs.add(a.orgId);
-            // KB: 幂等 upsert 最新操作文档 (守 manual 锁)
+            // KB②: 幂等 upsert 最新内穿(整机直连)文档 (守 manual 锁)
             if (!isManualLocked(a.orgId, 'knowledge', DAO_BRIDGE_KB_NAME)) {
                 try { await devinUpsertKnowledge(a.orgId, DAO_BRIDGE_KB_NAME, md, DAO_BRIDGE_KB_TRIGGER, a.auth1); } catch { /* 守柔 */ }
+            }
+            // KB③: 幂等 upsert 最新 MCP 使用文档(四大模块·URL 随隧道自更) (守 manual 锁)
+            if (!isManualLocked(a.orgId, 'knowledge', DAO_MCP_KB_NAME)) {
+                try { await devinUpsertKnowledge(a.orgId, DAO_MCP_KB_NAME, mcpMd, DAO_MCP_KB_TRIGGER, a.auth1); } catch { /* 守柔 */ }
             }
             // MCP: URL 已变 → 先删旧同名安装再建新 (守 manual 锁)
             if (mcpEntry && !isManualLocked(a.orgId, 'mcps', DAO_MCP_NAME)) {
@@ -7261,14 +7336,17 @@ async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectPr
         if (isManualLocked(orgId, 'knowledge', k.name)) continue;
         let kb = k.body || '';
         const isBridge = (kb === DAO_BRIDGE_KB_SENTINEL || k.name === DAO_BRIDGE_KB_NAME);
+        const isMcpDoc = (kb === DAO_MCP_KB_SENTINEL || k.name === DAO_MCP_KB_NAME);
+        if (isMcpDoc) { try { kb = bridgeGenerateMcpUsageMd(); } catch { /* 守柔 */ } }
         if (isBridge) {
             try { kb = bridgeGenerateCloudMd(); } catch { /* 守柔 */ }
-            // 帛书·「少则得·多则惑」: 收敛历史异名「DAO Bridge」残条(含早期带「·」变体) → 唯一规范条目
+            // 帛书·「少则得·多则惑」: 收敛历史异名「DAO Bridge」内穿残条(含早期带「·」变体) → 唯一规范条目;
+            //   保留 MCP 使用文档(同前缀但独立一篇), 不误删。
             try {
                 const list = await devinListKnowledge(orgId, auth1);
                 if (list.ok && list.learnings) {
                     for (const e of list.learnings) {
-                        if (e && e.id && typeof e.name === 'string' && /^DAO Bridge/.test(e.name)) {
+                        if (e && e.id && typeof e.name === 'string' && /^DAO Bridge/.test(e.name) && e.name !== DAO_MCP_KB_NAME) {
                             try { await devinDeleteKnowledge(orgId, String(e.id), auth1); } catch { /* 守柔 */ }
                         }
                     }

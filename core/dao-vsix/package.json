@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "3.17.11",
+  "version": "3.18.0",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -83,6 +83,11 @@
           "type": "boolean",
           "default": true,
           "description": "内网穿透持久化: 激活时采纳常驻桥发布的连接并智能刷新内穿MD(低频去重·窗口变化才再同步)"
+        },
+        "dao.bridgeLiveness": {
+          "type": "boolean",
+          "default": true,
+          "description": "端口/URL 实时更新: 周期探测隧道与MCP端点, 打得通保持稳定, 打不通即刷新并把新地址重注到各账号"
         },
         "dao.accountSyncMode": {
           "type": "string",
