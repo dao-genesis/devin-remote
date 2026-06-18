@@ -1593,6 +1593,25 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             if (!mspec.marketplace_server_id && !mspec.slug) return { ok: false, error: 'marketplace_server_id or slug required' };
             return await devinInstallMarketplaceMcp(ws.devinOrgId, mspec, ws.devinAuth1);
         }
+        // ── 多实例 路由 作为 API 暴露 (插件本体「路由官网多实例」能力供任意 Agent 调用) ──
+        case '/api/devin/multi/panel': {
+            // 在 IDE 内打开当前账号的独立路由面板 (多实例·不阻塞)
+            try { await vscode.commands.executeCommand('dao.openRoutedPanel'); return { ok: true, action: 'openRoutedPanel' }; }
+            catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+        }
+        case '/api/devin/multi/open': {
+            // 路由指定账号官网多实例 — body: {email?, mode?:'ide'|'sys'} (sys=电脑浏览器隔离窗口)
+            const ob = await readBody(req); let os1: any = {}; try { os1 = JSON.parse(ob || '{}'); } catch { /* 守柔 */ }
+            try { await vscode.commands.executeCommand('dao.routeOfficialForAccount', { email: String(os1.email || ''), mode: os1.mode === 'sys' ? 'sys' : 'ide' }); return { ok: true, action: 'routeOfficial', email: String(os1.email || ''), mode: os1.mode === 'sys' ? 'sys' : 'ide' }; }
+            catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+        }
+        case '/api/devin/multi/conv': {
+            // 多实例打开某账号的具体对话官网 — body: {email?, devinId, mode?:'ide'|'sys'}
+            const cb = await readBody(req); let cs: any = {}; try { cs = JSON.parse(cb || '{}'); } catch { /* 守柔 */ }
+            if (!cs.devinId) return { ok: false, error: 'devinId required' };
+            try { await vscode.commands.executeCommand('dao.routeConvForAccount', { email: String(cs.email || ''), devinId: String(cs.devinId), mode: cs.mode === 'sys' ? 'sys' : 'ide' }); return { ok: true, action: 'routeConv', email: String(cs.email || ''), devinId: String(cs.devinId), mode: cs.mode === 'sys' ? 'sys' : 'ide' }; }
+            catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+        }
         case '/api/devin/automations/clear': {
             // 清除官网本账号全部自动化 (用户「一切清除官网的自动化」)
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
@@ -3102,7 +3121,7 @@ function rO(){
   }
   // v3.17.4 · 去芜存菁: 主页「注入状态」板块(S/K/P/G ✓✗)已移除 —
   //   反向注入实况以左侧「反向注入」面板 + 底部状态点(Server/Relay/Injected)为准, 主页不再重复呈现。
-  v.innerHTML=rHost()+'<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button><button class="btn" style="background:#0e639c" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出整个插件全量 API 的 MD 契约 · 供任意 Agent 识别后接管插件底层做基础配置">📄 导出 MD (供 Agent)</button></div>'+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div>';
+  v.innerHTML=rHost()+'<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button></div>'+'<div class="st">🧩 插件能力 · API 接口</div><div class="card"><div class="cr"><span class="l" style="font-size:11px;line-height:1.5">插件本体全部功能均以本地 HTTP API 暴露 — 多实例路由 <code>/api/devin/multi/*</code>、MCP 接测/注入 <code>/api/devin/mcp/*</code> 等,可被任意 Agent 调用接管。导出 MD 契约即得全量端点。</span></div></div><div class="br"><button class="btn primary" style="background:#0e639c" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出整个插件全量 API 的 MD 契约 · 供任意 Agent 识别后接管插件底层做基础配置">📄 导出 MD 契约 (全量 API)</button></div>'+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div>';
   // 内网穿透·DAO Bridge 已独立为左侧栏单独板块(data-tab="bridge"→rBridgeFull), 主页不再内嵌;
   // 主页专注单账号信息/操作/注入。
   // ② 去芜存菁: 把「当前账号·手动内容」(Knowledge/Playbooks/Secrets/Git) 直接合进主页
@@ -5134,10 +5153,20 @@ function agentApiCatalog(): { group: string; items: AgentApiEndpoint[] }[] {
             { method: 'POST', path: '/api/devin/batch-inject', body: '{"all":true}  或  {"accounts":[{"email","password"}]}  或  {"lines":"a@x:pw\\nb@y:pw"}  (+"wait":true 同步)', desc: '逐账号幂等注入(缓存auth优先·先收敛旧异名残条·回读校验); 默认后台异步' },
             { method: 'GET', path: '/api/devin/batch-inject/status', desc: '批量注入进度/每账号结果' },
         ]},
-        { group: 'MCP (读 + 追录/删除)', items: [
+        { group: 'MCP (读 + 接测 + 追录/删除)', items: [
             { method: 'GET', path: '/api/devin/mcp/installations', desc: '列出已安装 MCP' },
+            { method: 'GET', path: '/api/devin/mcp/ide', desc: '扫描本机 IDE 内已配 MCP (接龙 Devin Desktop⇄Windsurf + Cursor 等, 纯本地无需登录)' },
+            { method: 'GET', path: '/api/devin/mcp/marketplace', desc: '官网 MCP 市场目录' },
+            { method: 'POST', path: '/api/devin/mcp/probe', body: '{"transport":"HTTP","url":"..","headers":{}}  或  {"command":"..","args":[]}', desc: '单项接测(连接验证): HTTP/SSE 走 initialize·直连不通自动经本机代理隧道复测; STDIO 验运行时+脚本就绪' },
+            { method: 'GET', path: '/api/devin/mcp/probe-all', desc: '全量接测本机 IDE MCP, 返回每项 ok/status/label/detail' },
             { method: 'POST', path: '/api/devin/mcp/add', body: '{"name":"GitHub MCP","transport":"HTTP","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer .."}}', desc: '追录自定义 MCP (HTTP/SSE 或 STDIO: command/args/env_variables)' },
+            { method: 'POST', path: '/api/devin/mcp/install', body: '{"marketplace_server_id":".."}  或  {"slug":".."}', desc: '安装一个市场目录项到本账号' },
             { method: 'POST', path: '/api/devin/mcp/delete', body: '{"id":"mcp-installation-.."}', desc: '删除 MCP 安装' },
+        ]},
+        { group: '多实例 (路由官网 · 插件本体能力作为 API 暴露)', items: [
+            { method: 'POST', path: '/api/devin/multi/panel', desc: 'IDE 内打开当前账号独立路由面板 (多实例·不阻塞)' },
+            { method: 'POST', path: '/api/devin/multi/open', body: '{"email":"a@x","mode":"ide"}  (mode=sys 走电脑浏览器隔离窗口)', desc: '路由指定账号官网多实例 (等价主页/切号面板的多实例按钮)' },
+            { method: 'POST', path: '/api/devin/multi/conv', body: '{"email":"a@x","devinId":"devin-xxx","mode":"ide"}', desc: '多实例打开某账号的具体对话官网' },
         ]},
         { group: '额度 / 集成 / 全量注入', items: [
             { method: 'POST', path: '/api/devin/usage/limit', body: '{"maxCredits":30}', desc: '设单条消息额度上限 (max_credits)' },
@@ -6926,10 +6955,11 @@ function scanIdeMcps(): IdeMcpEntry[] {
     const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
     const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
     // 软编码候选路径 — 存在即扫, 不存在则跳; 用户亦可在 ~/.dao/ide-mcp.json 手动补充。
-    //   141 实测确认: Windsurf(.codeium/windsurf) · Cursor(.cursor) · Gemini Antigravity(.gemini/*) 三处真实存在。
-    //   Devin Desktop 本身不存本地 MCP JSON(其 MCP 源自云端账号/org) → 由官网市场段一对一呈现, 不在此扫。
+    //   141 实测确认: 接龙核心 = Devin Desktop ⇄ 老版 Windsurf 共用同一份 .codeium/windsurf/mcp_config.json
+    //   (Windsurf 升级为 Devin Desktop, 用户迁移后的 MCP 仍落此文件; 故扫描它即同时覆盖新旧两端)。
+    //   其余 IDE(Cursor/Gemini Antigravity 等)看情况存在即扫, 一般非主用。
     const candidates: Array<{ p: string; src: string }> = [
-        { p: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), src: 'Windsurf' },
+        { p: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), src: 'Devin Desktop' },
         { p: path.join(home, '.codeium', 'windsurf-next', 'mcp_config.json'), src: 'Windsurf Next' },
         { p: path.join(home, '.codeium', 'mcp_config.json'), src: 'Codeium' },
         { p: path.join(home, '.devin', 'mcp_config.json'), src: 'Devin Desktop' },
@@ -7057,8 +7087,18 @@ async function daoProbeMcp(spec: any): Promise<{ ok: boolean; status: number; la
     const cmd = String(spec.command || '').trim();
     if (!cmd) return { ok: false, status: 0, label: '缺少命令', detail: 'STDIO MCP 未配置 command' };
     const resolved = daoWhichCmd(cmd);
-    if (resolved) return { ok: true, status: 1, label: '命令可用', detail: cmd + ' → ' + resolved };
-    return { ok: false, status: 0, label: '命令未找到', detail: 'PATH 中找不到可执行: ' + cmd };
+    if (!resolved) return { ok: false, status: 0, label: '命令未找到', detail: 'PATH 中找不到可执行: ' + cmd };
+    // 接龙·ELECTRON_RUN_AS_NODE 型(Windsurf/Devin Desktop 用 Windsurf.exe 当 node 跑 npm 模块 JS):
+    //   141 实测 4 个 MCP 皆此型 → 仅命令存在不够, 还须脚本模块真在, 否则调用必失败。
+    const args: string[] = Array.isArray(spec.args) ? spec.args.map((a: any) => String(a)) : [];
+    const firstScript = args.find(a => /\.(js|mjs|cjs|py)$/i.test(a) && (path.isAbsolute(a) || a.indexOf('\\') >= 0 || a.indexOf('/') >= 0));
+    if (firstScript) {
+        try {
+            if (fs.existsSync(firstScript)) return { ok: true, status: 1, label: '可调用', detail: '运行时 ' + path.basename(resolved) + ' + 脚本就绪: ' + firstScript };
+            return { ok: false, status: 0, label: '脚本缺失', detail: '运行时在, 但目标脚本不存在: ' + firstScript };
+        } catch { /* 守柔 */ }
+    }
+    return { ok: true, status: 1, label: '命令可用', detail: cmd + ' → ' + resolved };
 }
 
 // MCP tab 数据装配 — 解耦本机 IDE 扫描与官网 API 成败: 本机 MCP 纯本地无需鉴权恒先列(与 IDE 一对一),
