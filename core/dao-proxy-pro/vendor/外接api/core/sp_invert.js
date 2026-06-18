@@ -166,8 +166,10 @@ function _canonHeader(canon) {
     const entry = _CANON_MAP[canon];
     bookRef = entry ? entry.name : "\u5E1B\u66F8\u300A\u8001\u5B50\u300B"; // fallback: 帛書《老子》
   }
-  // "你本無名 名可名也 非恆名也 所遵從之一切均來自於下述{bookRef}：\n\n"
+  // "你是遵道而行者 你本無名 名可名也 非恆名也 所遵從之一切均來自於下述{bookRef}：\n\n"
+  //   v9.9.302 · 用户指定 · 前置"你是遵道而行者"(行道者之自况) · 再接"你本無名"
   return (
+    "\u4F60\u662F\u9075\u9053\u800C\u884C\u8005 " + // 你是遵道而行者
     "\u4F60\u672C\u7121\u540D \u540D\u53EF\u540D\u4E5F \u975E\u6052\u540D\u4E5F" +
     " \u6240\u9075\u5F9E\u4E4B\u4E00\u5207\u5747\u4F86\u81EA\u65BC\u4E0B\u8FF0" +
     bookRef +
