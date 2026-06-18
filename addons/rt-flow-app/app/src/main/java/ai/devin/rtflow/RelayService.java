@@ -361,6 +361,13 @@ public class RelayService extends Service {
             if (m != null) m.ipcOpenTab(url, accountJson);
         }
 
+        /** 把指定标签提到前台 (默认后台开页不打扰用户; Agent 需要"前端同步反映"时显式调用)。 */
+        @JavascriptInterface public void browseActivateTab(int tabIndex) {
+            if (!remoteOpsEnabled) return;
+            MainActivity m = MainActivity.sInstance;
+            if (m != null) m.ipcActivateTab(tabIndex);
+        }
+
         @JavascriptInterface public void browseCloseTab(int tabIndex) {
             if (!remoteOpsEnabled) return;
             MainActivity m = MainActivity.sInstance;

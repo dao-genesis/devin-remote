@@ -1,6 +1,6 @@
 {
-  "versionCode": 60,
-  "versionName": "0.17.3",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.3/DevinCloud-mobile-v0.17.3.apk",
-  "notes": "v0.17.3 · 浏览器自动化 browseSubmitForm 修复(实测发现) + 含 0.17.2 全部改动\n· browseSubmitForm 鲁棒重写: 选择器指向搜索框/表单控件时, 现可正确提交其所属表单(requestSubmit 触发 JS 校验/处理) 或点提交按钮; 无 form 的 SPA 搜索框模拟回车(Enter)提交 — 此前指向 input 一律返回 no_submit。\n· (含 0.17.2) 修复「放久了某些交互失效需手动刷新」: 长时间后台返回, 当前标签无响应即静默自动重载(健康页不动·不丢滚动)。\n· (含 0.17.2) 接入文档收敛为两大模块(①软件本体 含浏览器子模块 ②手机本体)、文档按钮 4→2(打开/复制), 全量平铺无渐进式披露。\n· (含 0.17.2) 安全: browseListTabs 不再外发账号凭据(仅 email/编号/组织)。\n· 签名一致, 原地覆盖升级不丢数据。"
+  "versionCode": 61,
+  "versionName": "0.17.4",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.4/DevinCloud-mobile-v0.17.4.apk",
+  "notes": "v0.17.4 · 浏览器自动化「道并行而不相悖」: 远程开页默认后台静默, 不再抢占用户当前前台页 (实测发现 browseOpen 旧逻辑会 selectTab 切到新标签, 打断用户)。\n· browseOpen 改为后台开页(autoHost 停泊·JS/截图照常可用), 返回 tabIndex; 新增 foreground:true 参数才提到前台。\n· 新增 browseActivateTab {tabIndex}: 需要前端同步反映某页时显式提到前台。\n· 含 0.17.3 全部改动: browseSubmitForm 鲁棒重写(requestSubmit/回车)、长后台静默自愈重载、接入文档两大模块/两按钮、browseListTabs 凭据脱敏。\n· 签名一致, 原地覆盖升级不丢数据。"
 }
