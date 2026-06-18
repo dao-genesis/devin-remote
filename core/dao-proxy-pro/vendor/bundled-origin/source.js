@@ -2236,8 +2236,46 @@ function extractMsgContent(mf) {
 // 不触碰用户/助手消息(在 MSGS_FIELD) · 不改工具名(子 field 1)/参数键。
 // 去名引擎复用 _spInvertLib.deOfficialName(单一真源·幂等) · 与 SP 去名同源。
 const _TOOLS_FIELD_NUM = 10; // cascade_wire REQ.TOOLS
+const _TD_NAME = 1; // ChatToolDefinition.name
 const _TD_DESC = 2; // ChatToolDefinition.description
 const _TD_SCHEMA = 3; // ChatToolDefinition.json_schema_string
+
+// ═══════════════════════════════════════════════════════════
+// v9.9.301 · 记忆模块工具整条剔除 · 两路共用最上游 · 道恒无名·无记
+// ═══════════════════════════════════════════════════════════
+// 道模式彻底隔离官方一切 · 记忆体系(create/update/view/unlock memory)本属官方着相,
+// 须如九个运营块般彻删 → 模型根本不应知有"记忆"这回事。
+// 此前 stripCreateMemoryTool 只切 SP 文本里的 <function>create_memory</function> 块,
+// 但真实工具定义在 proto 顶层 field 10 → 模型仍能 Created memory(实测确证)。
+// 此函数在路由分叉前从 field 10 整条删除工具名含 memory/memories 者(官方/外接两路同净)。
+const _MEMORY_TOOL_RE = /memor(?:y|ies)/i;
+function dropMemoryToolsProto(topFields) {
+  const arr = topFields[_TOOLS_FIELD_NUM];
+  if (!arr || !arr.length) return 0;
+  let dropped = 0;
+  const kept = [];
+  for (const e of arr) {
+    if (e.w === 2) {
+      try {
+        const td = parseProto(Buffer.isBuffer(e.b) ? e.b : Buffer.from(e.b));
+        const nEntry = td[_TD_NAME] && td[_TD_NAME][0];
+        if (nEntry && nEntry.w === 2) {
+          const nm = Buffer.from(nEntry.b).toString("utf8");
+          if (_MEMORY_TOOL_RE.test(nm)) {
+            dropped++;
+            continue;
+          }
+        }
+      } catch {}
+    }
+    kept.push(e);
+  }
+  if (dropped > 0) {
+    topFields[_TOOLS_FIELD_NUM] = kept;
+    log(`[DROP-MEMORY-TOOL] memory tools removed from field 10: ${dropped}`);
+  }
+  return dropped;
+}
 function _deOfficialJsonDescriptions(obj) {
   if (!obj || typeof obj !== "object") return;
   if (Array.isArray(obj)) {
@@ -2409,9 +2447,12 @@ function modifySPProto(reqBody) {
     for (const bk of spBackups) {
       if (newMsgs[bk.i]) newMsgs[bk.i].b = bk.b;
     }
+    // v9.9.301 · 记忆模块工具整条剔除 · 先删后去名 · 两路共用最上游
+    const memDropped = dropMemoryToolsProto(topFields);
     // v9.9.300 · 官方路径工具描述去名 · 与第三方(dao_router)对齐 · 仅命中 field 10 工具定义
     const toolsChanged = deOfficialNameToolsProto(topFields);
-    if (!changed && deepChanged === 0 && toolsChanged === 0) return reqBody;
+    if (!changed && deepChanged === 0 && toolsChanged === 0 && memDropped === 0)
+      return reqBody;
     if (deepChanged > 0)
       log(`[DEEP-STRIP] nested side-channels cleaned: ${deepChanged}`);
     const newPayload = serializeProto(topFields);

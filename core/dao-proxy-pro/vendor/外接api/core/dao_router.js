@@ -2439,6 +2439,19 @@ async function _callProvider(
       //   修复: 不过滤 · 透传所有工具 · 与官方API完全一致
       //   _KNOWN_TOOL_NAMES 保留用于诊断日志(不用于过滤)
 
+      // ★ v9.9.301 · 记忆模块工具整条剔除(防御性) · 与 source.js dropMemoryToolsProto 同源意图
+      //   道义: 道恒无名 · 记忆体系本属官方着相 · 模型根本不应知有"记忆"
+      //   主剔除在 source.js 最上游(两路同净);此处为外接路径防御补刀
+      //   (source.js 旧版/被绕过时仍保第三方渠道无记忆工具暴露)。
+      const _memBefore = toolsField.length;
+      toolsField = toolsField.filter(
+        (t) => !/memor(?:y|ies)/i.test((t && t.function && t.function.name) || ""),
+      );
+      if (toolsField.length !== _memBefore)
+        _routeDiag(
+          "memory tools dropped: " + (_memBefore - toolsField.length),
+        );
+
       // ★ v9.9.287 · 道恒无名 · 工具描述去官名 · 反者道之动
       //   根因: 官方工具描述内嵌产品标识 (browser_preview/edit_notebook 述及
       //   "Cascade" · check_deploy_status 述及 "Windsurf") · 随 tools 字段透传至
