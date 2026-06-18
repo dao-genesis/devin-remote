@@ -427,9 +427,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 sidebarCloudPanel?.refresh();
                 refreshDaoCloudMiddlePanel();
                 updateStatusBar();
-                // Step 3: 认证成功 → 自动注入（服务器已启动才有URL）
+                // Step 3: 认证成功 → 自动注入（服务器已启动才有URL）· auto 跟随: 归零清理账号守柔跳过
                 if (ws.port && ws.devinAuth1 && ws.devinOrgId) {
-                    const injectOk = await devinFullInject();
+                    const injectOk = await devinFullInject(false, true);
                     if (injectOk) {
                         sidebarCloudPanel?.refresh();
                         refreshDaoCloudMiddlePanel();
@@ -1902,7 +1902,7 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                             // 切回自动 → 立即重新对齐 IDE 当前账号
                             lastSyncedApiKey = ''; lastSyncedEmail = '';
                             vscode.window.showInformationMessage('账号模式: 自动 · 重新跟随 IDE 账号…');
-                            (async () => { try { const ok = await devinAutoChain(); if (ok) { await devinFullInject(); } } catch {} this.refresh(); refreshDaoCloudMiddlePanel(); })();
+                            (async () => { try { const ok = await devinAutoChain(); if (ok) { await devinFullInject(false, true); } } catch {} this.refresh(); refreshDaoCloudMiddlePanel(); })();
                         } else {
                             vscode.window.showInformationMessage('账号模式: 手动 · 面板不再跟随 IDE, 可独立登录任意账号');
                         }
@@ -5677,7 +5677,7 @@ function startCredentialSync() {
                 lastSyncedApiKey = ws.devinApiKey || ws.devinAuth1 || '';
                 lastSyncedEmail = ws.devinEmail || rtEmail;
                 sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); updateStatusBar();
-                if (okRt && ws.port && ws.devinAuth1 && ws.devinOrgId) { await devinFullInject(); sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); }
+                if (okRt && ws.port && ws.devinAuth1 && ws.devinOrgId) { await devinFullInject(false, true); sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); }
                 return;
             }
             // 强制刷新vscdb — 绕过缓存
@@ -5722,7 +5722,7 @@ function startCredentialSync() {
                     updateStatusBar();
                     // 自动注入
                     if (ws.port && ws.devinAuth1 && ws.devinOrgId) {
-                        await devinFullInject();
+                        await devinFullInject(false, true);
                         sidebarCloudPanel?.refresh();
                         refreshDaoCloudMiddlePanel();
                     }
@@ -5802,7 +5802,7 @@ async function onRtFlowAccountSwitch(payload?: { email?: string; auth1?: string;
         lastSyncedEmail = ws.devinEmail || '';
         sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); updateStatusBar();
         if (ok && ws.port && ws.devinAuth1 && ws.devinOrgId) {
-            await devinFullInject();
+            await devinFullInject(false, true);
             sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel();
         }
         if (ok) { try { await runInjectProfileSelfLoop(); } catch { /* 守柔 */ } }
@@ -6921,10 +6921,19 @@ async function devinAssistedInject(url: string, token: string, interactive: bool
     return true;
 }
 
-async function devinFullInject(interactive: boolean = false): Promise<boolean> {
+async function devinFullInject(interactive: boolean = false, auto: boolean = false): Promise<boolean> {
     if (ws.devinInjecting) return false;
     ws.devinInjecting = true;
     try {
+        // 归零清理协同: 纯自动跟随注入(开机自同步/切号自跟随/自动模式回跟) 若当前账号已被 RT Flow
+        //   清理/出库 → 守柔跳过, 不再自动重新填充; 用户主动登录/切号/点注入则照常(单账号主权)。
+        if (auto && !interactive) {
+            const curEmail = (ws.devinEmail || emailForOrg(ws.devinOrgId) || '').trim().toLowerCase();
+            if (curEmail && isInjectSuppressedForEmail(curEmail)) {
+                try { console.log('[dao] full-inject(auto) skip cleaned account: ' + curEmail); } catch { /* 守柔 */ }
+                return false;
+            }
+        }
         const url = ws.publicUrl || (ws.port ? 'http://localhost:' + ws.port : '');
         const token = ws.token;
         if (!url || !token) {
