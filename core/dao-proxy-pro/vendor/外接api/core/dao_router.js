@@ -93,10 +93,13 @@ const _ENHANCE_MARKER = "\n\n<!-- DAO-ENHANCE v9.9.101 -->\n\n";
 //   道义: 三十二章「道恒无名」· 名去则惑除 · 不改工具名/参数键·仅中性化描述文本。
 function _deOfficialName(s) {
   if (typeof s !== "string") return s;
+  // v9.9.299 · 单一真源 · 复用 sp_invert.deOfficialName(含主谓一致+句首大写+品牌隔离) · 两路同源
+  if (_spInvert && typeof _spInvert.deOfficialName === "function") {
+    return _spInvert.deOfficialName(s);
+  }
+  // 回退(require 失败时)· 与 sp_invert 同源最小逻辑
   return s
-    // 复合词先行 (CascadeProjects → Projects · 否则 \bCascade\b 不匹配复合词)
     .replace(/CascadeProjects/g, "Projects")
-    // v9.9.298 · 语法守 · "the Cascade IDE"→"the IDE" (避免 "the you IDE") · 与 sp_invert 同源
     .replace(/\bthe Cascade\b/g, "the")
     .replace(/\bthe Windsurf\b/g, "the")
     .replace(/\bthe Codeium\b/g, "the")
