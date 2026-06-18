@@ -40,12 +40,18 @@ const tool2 = toolDef("run_command", "Cascade blocks until done.", {
   type: "object",
   properties: { Command: { type: "string", description: "Plain command." } },
 });
+// 记忆模块工具 · 须被整条剔除 (模型不应知有记忆)
+const tool3 = toolDef("create_memory", "Create memory", {
+  type: "object",
+  properties: { Content: { type: "string", description: "Memory content." } },
+});
 
 // 顶层: 2=prompt(SP) 3=messages 10=tools(repeated)
 const payload = Buffer.concat([
   encodeString(2, SP),
   encodeString(3, userMsg(USER_TEXT)),
   encodeString(10, tool1),
+  encodeString(10, tool3), // create_memory · 应被剔除
   encodeString(10, tool2),
 ]);
 const reqFramed = buildFrame(0, payload);
@@ -59,12 +65,18 @@ const ok = (cond, msg) => {
   if (!cond) fails.push(msg);
 };
 
-// 0) proto 未损坏: 能解出 2 个工具 + 1 条 user 消息
-ok(parsed.tools.length === 2, `工具数=${parsed.tools.length} 应=2 (proto 损坏?)`);
+// 0) proto 未损坏 + 记忆工具剔除: 喂入 3 工具(含 create_memory)→ 应剩 2
+ok(parsed.tools.length === 2, `工具数=${parsed.tools.length} 应=2 (记忆工具未剔除/proto 损坏?)`);
 ok(parsed.messages.length === 1, `消息数=${parsed.messages.length} 应=1`);
 
 const byName = Object.fromEntries(parsed.tools.map((t) => [t.function.name, t]));
-// 1) 工具名不变
+// 0b) 记忆模块工具整条剔除 · 模型不应知有记忆
+ok(!byName["create_memory"], "create_memory 未被剔除 (模型仍能创建记忆!)");
+ok(
+  !parsed.tools.some((t) => /memor(?:y|ies)/i.test(t.function.name)),
+  "仍有记忆类工具残留",
+);
+// 1) 非记忆工具名不变
 ok(!!byName["view_file"], "工具名 view_file 丢失/被改");
 ok(!!byName["run_command"], "工具名 run_command 丢失/被改");
 
