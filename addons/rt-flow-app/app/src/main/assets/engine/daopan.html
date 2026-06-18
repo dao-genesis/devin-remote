@@ -224,6 +224,7 @@ function renderRecent(){
       '<div class="meta"><span>'+_esc((it.acc.email||it.acc.id||"").split("@")[0])+'</span>'+(it.status?'<span>'+_esc(it.status)+'</span>':'')+(it.t?'<span>'+fmtAgo(it.t)+'</span>':'')+'</div>'+
       '<div class="acts">'+
         '<span class="b" onclick="viewConv('+idx+')">&#128065; 查看</span>'+
+        '<span class="b" onclick="openAcc('+idx+')" title="切到该账号并在网页端打开此对话">&#127760; 进入</span>'+
         '<span class="b" onclick="dlMd('+idx+')">&#11015; MD</span>'+
         '<span class="b pri" onclick="dlZip('+idx+')">&#128230; 全部文件</span>'+
       '</div></div>';
@@ -257,6 +258,19 @@ function fireCard(card){
     if(N.startConvDrag){ N.startConvDrag(JSON.stringify(it.acc), it.sid); }
     else toast("当前版本不支持拖拽 · 请更新 APK",true);
   }catch(e){ toast("拖拽失败",true); }
+}
+// ── 进入: 切到该对话所属账号(WAM 多实例注入) 并在网页端前台打开此对话页 (类似切号面板点账号) ──
+function openAcc(idx){
+  var it=REC[idx]; if(!it||!it.acc) return;
+  if(!it.acc.auth1){ toast("此号未解锁(无 auth1), 先在切号面板登录",true); return; }
+  try{ if(it.acc.id) localStorage.setItem("rtflow.active", it.acc.id); }catch(e){}
+  var web="https://app.devin.ai/sessions/"+String(it.sid||"").replace(/^devin-/,"");
+  try{
+    if(N.openAccountSession){ N.openAccountSession(JSON.stringify(it.acc), it.sid); }
+    else if(N.openEntryNewTab){ N.openEntryNewTab(JSON.stringify(it.acc), web); }
+    else { toast("当前版本不支持 · 请更新 APK",true); return; }
+    toast("已切到 "+((it.acc.email||it.acc.id||"").split("@")[0])+" · 打开网页对话");
+  }catch(e){ toast("打开失败",true); }
 }
 
 // ── 对话查看: 悬浮窗内多标签"网页式"查看(可同时开多个对话·切换·单独关闭) ──

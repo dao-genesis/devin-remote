@@ -1,6 +1,6 @@
 {
-  "versionCode": 63,
-  "versionName": "0.17.6",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.6/DevinCloud-mobile-v0.17.6.apk",
-  "notes": "v0.17.6 · 全服通悬浮窗 6 项 UX 修复: ①整张对话卡长按即可拖拽(不再只点左侧锚点)。②悬浮窗尺寸缩小到与下载列表相当。③「查看」改为多标签网页式: 可同时打开多个对话、顶部标签切换、单独关闭, 不再糊在主页背面。④/⑤拖拽提速: 已本地备份的对话(含全服通拖拽与网页页→页拖拽)直接读盘秒注入两形态, 未备份才联网。⑥下载MD/全部文件ZIP 落到右上「下载列表」, 可从下载列表直接拖。\n· 含 0.17.1~0.17.5 全部改动(近期对话并发重构/搜索/稳定性自愈/凭据脱敏/后台开页不打扰/两大模块文档)。签名一致, 原地覆盖升级不丢数据。"
+  "versionCode": 64,
+  "versionName": "0.17.7",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.7/DevinCloud-mobile-v0.17.7.apk",
+  "notes": "v0.17.7 · 全服通近期对话新增第 4 个按钮「🌐 进入」: 点击即切到该对话所属账号(WAM 多实例注入鉴权, 等同切号面板点账号), 并在网页端前台直接打开该对话页(app.devin.ai/sessions/…), 方便在真网页里查看/操作对话记录; 打开后自动收起全服通悬浮窗露出网页。\n· 含 0.17.6 全服通 6 项 UX 修复(整卡拖拽/缩窗/多标签查看/本地备份秒拖/下载入列表)及 0.17.1~0.17.5 全部改动。签名一致, 原地覆盖升级不丢数据。"
 }
