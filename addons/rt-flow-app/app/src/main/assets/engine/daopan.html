@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>全服通 · 近期对话 / 备份</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:#0e1116;color:#cdd3de;font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{display:flex;flex-direction:column;height:100%}
+.tabs{display:flex;background:#161b22;border-bottom:1px solid #21262d;flex:0 0 auto}
+.tab{flex:1;text-align:center;padding:9px 4px;font-size:13px;color:#8b949e;cursor:pointer;border-bottom:2px solid transparent}
+.tab.on{color:#e6edf3;border-bottom-color:#1f6feb;font-weight:600}
+.bar{display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid #21262d;background:#0e1116;flex:0 0 auto}
+.search{flex:1;min-width:80px;background:#0d1117;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:6px 9px;font-size:12px;outline:none}
+.search:focus{border-color:#1f6feb}
+.mini{background:#21262d;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:6px 9px;font-size:12px;cursor:pointer;white-space:nowrap}
+.body{flex:1;position:relative;overflow:hidden}
+.view{position:absolute;inset:0;overflow:auto;display:none}
+.view.on{display:block}
+#recentList{padding:6px 8px 40px}
+.rc{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:8px 9px;margin-bottom:7px}
+.rc .r1{display:flex;align-items:center;gap:7px}
+.grip{flex:0 0 auto;width:22px;height:30px;line-height:30px;text-align:center;color:#6e7681;font-size:15px;cursor:grab;border-radius:5px;background:#1b212b;border:1px solid #2a313c;touch-action:none;user-select:none}
+.grip:active{background:#23303f;color:#9cdcfe}
+.st{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:#6e7681}
+.st.running{background:#3fb950}.st.finished{background:#58a6ff}.st.blocked{background:#f0883e}.st.expired{background:#f85149}
+.acc-no{flex:0 0 auto;min-width:20px;height:18px;line-height:18px;text-align:center;font-size:11px;font-weight:800;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:4px;padding:0 3px}
+.ti{flex:1;font-size:13px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meta{font-size:11px;color:#8b949e;margin-top:3px;display:flex;gap:8px;flex-wrap:wrap;padding-left:30px}
+.acts{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap;padding-left:30px}
+.b{flex:1;min-width:60px;text-align:center;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer;color:#cdd3de}
+.b.pri{background:#0e639c;border-color:#0e639c;color:#fff}
+.empty{text-align:center;color:#6e7681;padding:26px 12px;font-size:13px}
+.tip{font-size:11px;color:#6e7681;padding:0 10px 6px}
+iframe{border:0;width:100%;height:100%;display:block;background:#0e1116}
+/* 对话预览("新开网页"形态) */
+#convView{background:#0e1116;display:none;flex-direction:column}
+#convView.on{display:flex}
+.cv-top{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#161b22;border-bottom:1px solid #21262d;flex:0 0 auto}
+.cv-back{background:#21262d;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:6px 10px;font-size:12px;cursor:pointer}
+.cv-ti{flex:1;font-size:13px;font-weight:600;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cv-body{flex:1;overflow:auto;padding:12px 12px 50px;white-space:pre-wrap;word-break:break-word;font:12.5px/1.6 -apple-system,Segoe UI,Roboto,monospace;color:#cdd3de}
+.toast{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px 14px;font-size:12.5px;opacity:0;transition:.2s;pointer-events:none;z-index:30;max-width:90%}
+.toast.show{opacity:1}.toast.fail{border-color:#f85149}.toast.ok{border-color:#3fb950}
+</style></head>
+<body>
+<div class="wrap">
+  <div class="tabs">
+    <div class="tab on" id="tabRecent" onclick="showTab('recent')">☁ 近期对话</div>
+    <div class="tab" id="tabBackup" onclick="showTab('backup')">🗂 备份网页端</div>
+  </div>
+
+  <!-- 近期对话 -->
+  <div class="bar" id="recentBar">
+    <input class="search" id="q" placeholder="检索 账号 / 对话名称…" oninput="renderRecent()" autocomplete="off"/>
+    <button class="mini" onclick="loadRecent(true)">&#128260; 刷新</button>
+  </div>
+  <div class="body">
+    <div class="view on" id="recentView">
+      <div class="tip">跨全部已解锁账号 · 近期更新对话 · 实时刷新 · 长按左侧 &#10303; 拖到网页窗口</div>
+      <div id="recentList"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="view" id="backupView">
+      <iframe id="bkFrame" src="about:blank"></iframe>
+    </div>
+    <!-- 对话预览: 悬浮窗内"新开网页"形态 -->
+    <div id="convView">
+      <div class="cv-top"><button class="cv-back" onclick="closeConv()">‹ 返回</button><span class="cv-ti" id="cvTitle">对话</span><button class="cv-back" onclick="cvDownload()">&#11015; MD</button></div>
+      <div class="cv-body" id="cvBody"></div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="devin-core.js"></script>
+<script src="devin-cloud.js"></script>
+<script src="dao-zip.js"></script>
+<script>
+var N = window.Native || {};
+var REC = [];          // 聚合后的近期对话 [{acc,no,sid,title,status,t,s}]
+var CUR_CONV = null;   // 当前预览对话 {acc,sid,title,md}
+var _busy = false, _bkLoaded = false;
+
+function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
+function toast(m,bad){ var t=document.getElementById("toast"); t.textContent=m; t.className="toast show"+(bad?" fail":" ok"); setTimeout(function(){t.className="toast";},2000); }
+function stClass(s){ s=String(s||"").toLowerCase(); if(/run|work|active/.test(s))return"running"; if(/finish|complete|done/.test(s))return"finished"; if(/block|wait|stuck/.test(s))return"blocked"; if(/expir|fail|error/.test(s))return"expired"; return""; }
+function safeName(s){ return String(s||"").replace(/[\\\/:*?"<>|]/g,"_").slice(0,60); }
+function accList(){ try{ return DaoCore.loadAcc(); }catch(e){ return []; } }
+function hasAuth(a){ return !!(a&&a.auth1&&a.orgId); }
+function sidOf(s){ return s.devin_id||s.session_id||s.id||""; }
+function titleOf(s){ var sid=sidOf(s); return s.title||s.name||s.prompt||sid; }
+function recencyMs(s){
+  var t=s.updated_at||s.updated_at_ms||s.last_updated_at||s.last_message_at||s.last_message_sent_at||s.last_event_at||s.last_activity_at||s.modified_at||s.created_at||s.created||0;
+  if(typeof t==="number") return t>1e12?t:t*1000;
+  var p=Date.parse(t); return isNaN(p)?0:p;
+}
+function fmtAgo(ms){
+  if(!ms) return "";
+  var d=Date.now()-ms; if(d<0)d=0;
+  var m=Math.floor(d/60000); if(m<1)return"刚刚"; if(m<60)return m+"分钟前";
+  var h=Math.floor(m/60); if(h<24)return h+"小时前";
+  var dd=Math.floor(h/24); if(dd<30)return dd+"天前";
+  try{ return new Date(ms).toLocaleDateString(); }catch(e){ return ""; }
+}
+
+function showTab(t){
+  var rec=t==="recent";
+  document.getElementById("tabRecent").classList.toggle("on",rec);
+  document.getElementById("tabBackup").classList.toggle("on",!rec);
+  document.getElementById("recentView").classList.toggle("on",rec);
+  document.getElementById("backupView").classList.toggle("on",!rec);
+  document.getElementById("recentBar").style.display=rec?"flex":"none";
+  closeConv();
+  if(!rec && !_bkLoaded){ document.getElementById("bkFrame").src="cloud.html"; _bkLoaded=true; }
+  if(rec) loadRecent(false);
+}
+
+// ── 跨账号聚合近期对话 ──
+async function loadRecent(force){
+  if(_busy){ return; }
+  _busy=true;
+  var accs=accList().filter(hasAuth);
+  if(!accs.length){ document.getElementById("recentList").innerHTML='<div class="empty">无已解锁账号 · 先到切号面板登录</div>'; _busy=false; return; }
+  if(force) document.getElementById("recentList").innerHTML='<div class="empty">刷新中…</div>';
+  var merged=[];
+  for(var i=0;i<accs.length;i++){
+    var a=accs[i]; var no=accList().indexOf(a)+1;
+    try{
+      var r=await DaoCloud.listSessions(a, 30);
+      if(r&&r.ok&&r.sessions){
+        r.sessions.forEach(function(s){
+          merged.push({ acc:a, no:no, sid:sidOf(s), title:titleOf(s), status:(s.status_enum||s.status||s.state||""), t:recencyMs(s), s:s });
+        });
+      }
+    }catch(e){}
+  }
+  merged.sort(function(x,y){ return y.t-x.t; });
+  REC=merged.slice(0, 30);
+  renderRecent();
+  _busy=false;
+}
+
+function renderRecent(){
+  var q=(document.getElementById("q").value||"").trim().toLowerCase();
+  var box=document.getElementById("recentList");
+  if(!REC.length){ box.innerHTML='<div class="empty">暂无近期对话</div>'; return; }
+  var html="", n=0;
+  REC.forEach(function(it,idx){
+    if(q){
+      var hay=((it.acc.email||"")+" "+(it.acc.id||"")+" "+it.title+" "+it.sid+" "+it.no).toLowerCase();
+      if(hay.indexOf(q)<0) return;
+    }
+    n++;
+    html+='<div class="rc">'+
+      '<div class="r1">'+
+        '<span class="grip" data-idx="'+idx+'" title="长按拖到网页">&#10303;</span>'+
+        '<span class="acc-no">'+it.no+'</span>'+
+        '<span class="st '+stClass(it.status)+'" title="'+_esc(it.status)+'"></span>'+
+        '<span class="ti" title="'+_esc(it.title)+'">'+_esc(String(it.title).slice(0,70))+'</span>'+
+      '</div>'+
+      '<div class="meta"><span>'+_esc((it.acc.email||it.acc.id||"").split("@")[0])+'</span>'+(it.status?'<span>'+_esc(it.status)+'</span>':'')+(it.t?'<span>'+fmtAgo(it.t)+'</span>':'')+'</div>'+
+      '<div class="acts">'+
+        '<span class="b" onclick="viewConv('+idx+')">&#128065; 查看</span>'+
+        '<span class="b" onclick="dlMd('+idx+')">&#11015; MD</span>'+
+        '<span class="b pri" onclick="dlZip('+idx+')">&#128230; 全部文件</span>'+
+      '</div></div>';
+  });
+  box.innerHTML = html || '<div class="empty">无匹配 · 清空搜索查看全部</div>';
+  bindGrips();
+}
+
+// ── 长按拖拽: 触发原生全局拖拽, 携带该对话(两形态由原生侧据是否有产出文件决定) ──
+function bindGrips(){
+  var grips=document.querySelectorAll(".grip");
+  for(var i=0;i<grips.length;i++){ (function(g){
+    var timer=null, sx=0, sy=0;
+    function start(x,y){ sx=x; sy=y; timer=setTimeout(function(){ fire(g); }, 420); }
+    function cancel(){ if(timer){ clearTimeout(timer); timer=null; } }
+    g.addEventListener("touchstart",function(e){ start(e.touches[0].clientX,e.touches[0].clientY); },{passive:true});
+    g.addEventListener("touchmove",function(e){ var t=e.touches[0]; if(Math.abs(t.clientX-sx)>10||Math.abs(t.clientY-sy)>10) cancel(); },{passive:true});
+    g.addEventListener("touchend",cancel);
+    g.addEventListener("touchcancel",cancel);
+    g.addEventListener("mousedown",function(e){ start(e.clientX,e.clientY); });
+    g.addEventListener("mouseup",cancel);
+    g.addEventListener("mouseleave",cancel);
+  })(grips[i]); }
+}
+function fire(g){
+  var idx=+g.getAttribute("data-idx"); var it=REC[idx]; if(!it) return;
+  try{ N.vibrate && N.vibrate(30); }catch(e){}
+  try{
+    if(N.startConvDrag){ N.startConvDrag(JSON.stringify(it.acc), it.sid); }
+    else toast("当前版本不支持拖拽 · 请更新 APK",true);
+  }catch(e){ toast("拖拽失败",true); }
+}
+
+// ── 对话预览("新开网页"形态) ──
+async function viewConv(idx){
+  var it=REC[idx]; if(!it) return;
+  document.getElementById("cvTitle").textContent=it.title||it.sid;
+  document.getElementById("cvBody").textContent="提取对话中…";
+  document.getElementById("convView").classList.add("on");
+  CUR_CONV={ acc:it.acc, sid:it.sid, title:it.title, md:"" };
+  try{
+    var r=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
+    if(!r.ok){ document.getElementById("cvBody").textContent="提取失败: "+(r.error||""); return; }
+    CUR_CONV.md=r.md||""; CUR_CONV.title=r.title||it.title;
+    document.getElementById("cvTitle").textContent=CUR_CONV.title;
+    document.getElementById("cvBody").textContent=CUR_CONV.md||"(空)";
+  }catch(e){ document.getElementById("cvBody").textContent="异常: "+e; }
+}
+function closeConv(){ document.getElementById("convView").classList.remove("on"); }
+function cvDownload(){
+  if(!CUR_CONV||!CUR_CONV.md){ toast("无内容",true); return; }
+  try{ N.saveTextFile && N.saveTextFile(safeName(CUR_CONV.title||CUR_CONV.sid)+".md", CUR_CONV.md); toast("已下载 MD"); }catch(e){ toast("下载失败",true); }
+}
+
+async function dlMd(idx){
+  var it=REC[idx]; if(!it) return; toast("下载 MD…");
+  try{
+    var r=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
+    if(!r.ok){ toast("提取失败: "+(r.error||""),true); return; }
+    var fn=it.no+"_"+safeName(it.acc.email||it.acc.id)+"_"+safeName(r.title||it.sid)+".md";
+    N.saveTextFile && N.saveTextFile(fn, r.md); toast("已下载 MD");
+  }catch(e){ toast("异常: "+e,true); }
+}
+async function dlZip(idx){
+  var it=REC[idx]; if(!it) return; toast("打包全部文件…");
+  try{
+    var files=[];
+    var conv=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
+    if(conv.ok) files.push({name:"conversation.md", data:conv.md});
+    var wl=await DaoCloud.exportSession(it.acc, it.sid, "worklog");
+    if(wl.ok) files.push({name:"worklog.md", data:wl.md});
+    var ev=null;
+    try{ ev=await DaoCloud.sessionEvents(it.acc, it.sid); if(ev&&ev.ok) files.push({name:"events.json", data:JSON.stringify(ev.events||[],null,2)}); }catch(e){}
+    try{
+      var cf=await DaoCloud.collectSessionFiles(it.acc, it.sid, (ev&&ev.events)||null, function(d,t){ if(d===1||d%20===0)toast("拉取产出文件 "+d+"/"+t); });
+      if(cf&&cf.files&&cf.files.length){ cf.files.forEach(function(x){ var p=(x.path||("_unpathed/"+x.key)).replace(/^\/+/,""); files.push({name:"files/"+p, b64:x.b64}); }); }
+      if(cf&&cf.index&&cf.index.length) files.push({name:"files/_index.json", data:JSON.stringify(cf.index,null,2)});
+    }catch(e){}
+    files.push({name:"meta.json", data:JSON.stringify({account:it.acc.email,accountNo:it.no,session:it.sid,title:it.title,status:it.status,exportedAt:new Date().toISOString()},null,2)});
+    var zipName=it.no+"_"+safeName(it.acc.email||it.acc.id)+"_"+safeName(it.title||it.sid)+".zip";
+    var b64=window.buildZipBase64(files);
+    var path=""; try{ path=N.saveBase64File ? N.saveBase64File(zipName, b64) : ""; }catch(e){}
+    if(!path){ files.forEach(function(f){ if(f.data==null)return; try{ N.saveTextFile && N.saveTextFile(safeName(it.title||it.sid)+"_"+f.name.replace(/\//g,"_"), f.data); }catch(e){} }); toast("✓ 已下载 "+files.length+" 个文件(逐个)"); }
+    else toast("✓ 已打包 "+files.length+" 文件 → "+zipName);
+  }catch(e){ toast("打包异常: "+e,true); }
+}
+
+// 实时刷新: 仅在近期对话页可见时轮询
+setInterval(function(){ if(document.getElementById("recentView").classList.contains("on") && !document.getElementById("convView").classList.contains("on")) loadRecent(false); }, 20000);
+window.addEventListener("focus", function(){ if(document.getElementById("recentView").classList.contains("on")) loadRecent(false); });
+loadRecent(true);
+</script>
+</body></html>
