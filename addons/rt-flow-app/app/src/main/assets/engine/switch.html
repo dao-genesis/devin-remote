@@ -410,7 +410,8 @@ async function openBrowser(i){
   }
   sw(i);
 }
-function rowClick(i,e){ if(e.target.closest('.row-r2,.b,button,.chk'))return; openBrowser(i); }
+// 点整行不再登录/切号 (避免误触登录账号); 登录/切号仅由 ⚡(已登录→切号) / 🔑(未登录→登录) 按钮触发。
+function rowClick(i,e){ return; }
 function rm(i){ var accs=loadAcc(); var a=accs[i]; if(!a)return; if(!confirm("删除 "+(a.email||a.id)+"?"))return; accs.splice(i,1); saveAcc(accs); render(); toast("已删除"); }
 // ── 水过无痕 3选项(对照桌面: 备份并清空/仅清空/取消) ──
 function wp(i){ var a=loadAcc()[i]; if(!a||!hasAuth(a)){toast("需先登录",true);return;}
