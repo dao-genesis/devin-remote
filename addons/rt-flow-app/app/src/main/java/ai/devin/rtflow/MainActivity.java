@@ -163,6 +163,7 @@ public class MainActivity extends AppCompatActivity {
         boolean night = false;       // 夜间反色
         boolean translated = false;  // 整页翻译态 (跨页保持)
         String pendingReloadUrl = null; // 后台标签渲染进程被回收 → 延迟到选中时再重载 (避免多标签同时重载放大内存压力·消除卡死雪崩)
+        boolean maybeStale = false;  // 长时间后台返回 → 渲染线程可能被系统冻结(看着正常但点击/下载等失效) → 选中/恢复时探活, 无响应则静默重载
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
     }
     private boolean adBlock = true;    // 广告/弹窗拦截: 默认内置开启 (无需用户操作·无开关)
@@ -845,7 +846,8 @@ public class MainActivity extends AppCompatActivity {
         if (autoHost != null) content.addView(autoHost);
         Tab t = tabs.get(idx);
         // 后台被回收的标签延迟重载: 选中即载 (恢复内容, 且一次只载一个 → 不放大内存压力)
-        if (t.pendingReloadUrl != null) { String u = t.pendingReloadUrl; t.pendingReloadUrl = null; t.url = u; try { t.web.loadUrl(u); } catch (Exception ignored) {} }
+        if (t.pendingReloadUrl != null) { String u = t.pendingReloadUrl; t.pendingReloadUrl = null; t.maybeStale = false; t.url = u; try { t.web.loadUrl(u); } catch (Exception ignored) {} }
+        else if (t.maybeStale) { t.maybeStale = false; probeTabLiveness(t); }   // 长后台返回切到此标签 → 探活, 冻死则静默重载
         android.view.View host = t.swipe != null ? t.swipe : t.web;
         if (host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
         content.addView(host);
@@ -3921,10 +3923,31 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) { toast("书签加载失败"); }
     }
 
+    private long bgSince = 0;   // 进入后台的时刻; onResume 据此判断是否需对可能被系统冻结的标签探活
+    private static final long STALE_BG_MS = 45000;   // 后台超过此时长返回 → 可能被冻结, 触发探活
+
     @Override protected void onPause() {
         super.onPause();
+        bgSince = System.currentTimeMillis();
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {} // 持久化其它网站登录 Cookie
         saveTabs();
+    }
+
+    /** 探活: 向标签 WebView 注入一句极简 JS; 若在超时内无回调 → 渲染线程被冻结/卡死 → 静默重载, 用户无需手动刷新。
+     *  仅在确判可能僵死时调用(长后台返回), 健康页面探活即过, 不重载 → 不丢滚动/表单。 */
+    private void probeTabLiveness(final Tab t) {
+        if (t == null || t.web == null) return;
+        final WebView w = t.web;
+        final boolean[] answered = {false};
+        try {
+            w.evaluateJavascript("(function(){try{return document.readyState;}catch(e){return 'x';}})()",
+                    val -> answered[0] = true);
+        } catch (Exception e) { return; }
+        main.postDelayed(() -> {
+            if (answered[0]) return;             // 渲染线程响应 → 健康, 不动
+            if (tabOf(w) < 0) return;            // 标签已不在
+            try { w.reload(); } catch (Exception ignored) {}   // 无响应 → 冻死, 静默重载恢复交互
+        }, 2500);
     }
 
     /** 跳到本应用「安装未知应用」开关页 (package: URI 直达本应用, 避免用户在长列表里找不到)。 */
@@ -3953,6 +3976,16 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onResume() {
         super.onResume();
+        // 长时间后台返回: 当前标签立即探活(冻死则静默重载), 其余标签标记 → 选中时再探活。修复"放久了某些交互失效需手动刷新"。
+        long bg = bgSince > 0 ? (System.currentTimeMillis() - bgSince) : 0;
+        bgSince = 0;
+        if (bg > STALE_BG_MS) {
+            for (int i = 0; i < tabs.size(); i++) {
+                Tab t = tabs.get(i);
+                if (i == active && t.pendingReloadUrl == null) probeTabLiveness(t);
+                else if (t.pendingReloadUrl == null) t.maybeStale = true;
+            }
+        }
         refreshSearchEngine();
         // 用户从「安装未知应用」开关页返回: 若已授权且有待装包, 自动续装 (零再触发)。
         try {

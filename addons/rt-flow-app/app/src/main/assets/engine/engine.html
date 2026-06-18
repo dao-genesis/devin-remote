@@ -15,7 +15,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.17.1";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.17.2";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -55,28 +55,28 @@
   // ── 渐进式暴露文档 (Progressive Disclosure) ─────────────────────────────
   //   云端 Agent 首次接入拿综合索引; 按需加载各模块详细指南
   //  设计 (道法自然·完全开放·无限制):
-  //   · getCloudMd  = 完整「云端接入」文档 — 接入信息 + 三大核心板块「全部命令/参数/高级用法」全内联 + 对话整体提取工作流; 云端 Agent 读这一篇即可直接调用任意核心功能, 无需再分步拉取
-  //   · getModuleIndex = 三大核心板块的机读概览 (browser/phone/software)
+  //   · getCloudMd  = 完整接入文档 — 接入信息 + 两大模块「全部命令/参数/高级用法」全内联 + 对话整体提取工作流; 云端 Agent 读这一篇即可直接调用任意功能, 无需再分步拉取
+  //   · getModuleIndex = 两大模块的机读概览 (模块一 软件本体[含 browser+software 子文档] · 模块二 手机本体[phone])
   //   · getModuleDoc(board) = 某一板块「全部细节」(与 getCloudMd 内联内容一致, 供单独按板块拉取)
   //   · getLocalMd  = 重型「本地操控」文档 — 直接操控软件本体 (Native.* 桥)
   var MODULE_DOCS = {
     browser: {
       core: true,
-      title: "板块一 · 浏览器自动化",
+      title: "模块一 · 软件本体 ▸ 浏览器自动化子模块 (内置 WebView)",
       summary: "软件内置 WebView 引擎(等价 Playwright/Chrome-CDP/浏览器-MCP): 查看+操作任意网页全在软件底层完成, 不干扰用户。打开/导航/执行JS/提取DOM·Cookie·Storage/截图/导出MD + 点击·填表·等待元素·提交·滚动·提链接 + CDP 协议域 facade(cdp: Page.*/Runtime.*/DOM.*/Input.*/Network.*)。共 19 专用命令 + 1 条 cdp 路由。",
-      content: "# 板块一 · 浏览器自动化 (软件内置底层)\n\n## 概述\n浏览器查看与操作全部在**软件内置 WebView 引擎底层**完成 — 等价 Playwright / Chrome-CDP / 浏览器-MCP 的能力集 (开页·执行JS·DOM·Cookie·Storage·截图·导出·点击填表等待提交), 直接驱动手机端 WebView 标签, 在不干扰用户正常使用的前提下, 帮用户操作/测试/记录任意网页:\n- 列举/打开/关闭标签, 前进/后退/刷新/跳转导航\n- 在指定标签执行任意 JavaScript 并取返回值\n- 提取 DOM (outerHTML) / 读 Cookie / 读 localStorage·sessionStorage\n- 截图 (base64 PNG) / 导出页面为 Markdown\n- 高级: 点击元素 / 填表 / 等待元素出现 / 提交表单 / 提取链接·输入值 / 页面概要 / 滚动\n\n## 授权 (一次性, 最小成本)\n远程操控开关默认关闭。Agent 调 `setRemoteOps({enable:true})` 即可 (或让用户在穿透面板拨一下开关)。\n\n## 命令列表 (19)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| browseListTabs | - | 列出所有前台标签 (index/url/title/account/active) |\n| browseOpen | url, account? | 打开新标签 |\n| browseClose | tabIndex | 关闭标签 |\n| browseNavigate | tabIndex, action(back/forward/reload/stop/goto), url? | 导航 |\n| browseExecJs | tabIndex, js | 执行 JS 并返回结果 |\n| browseGetDom | tabIndex | 获取完整 DOM HTML |\n| browseGetCookies | url | 获取指定 URL 的 Cookie |\n| browseGetStorage | tabIndex, type(local/session) | 获取 Storage 键值 |\n| browseScreenshot | tabIndex | 截图返回 base64 PNG |\n| browseExportMd | tabIndex, save?, name? | 导出为 Markdown |\n| browseFindInPage | tabIndex, text | 页内查找 |\n| browseClickElement | tabIndex, selector | 点击元素 (CSS 选择器) |\n| browseFillForm | tabIndex, selector, value | 填写输入框 |\n| browseScrollTo | tabIndex, x, y | 滚动页面 |\n| browseGetLinks | tabIndex | 提取所有链接 |\n| browseGetPageInfo | tabIndex | 页面概要 (title/url/meta/表单数) |\n| browseWaitForElement | tabIndex, selector, timeout? | 等待元素出现 |\n| browseSubmitForm | tabIndex, selector? | 提交表单 |\n| browseGetInputValues | tabIndex | 获取所有输入框值 |\n\n## 使用示例\n```json\n{\"cmd\":\"browseOpen\",\"url\":\"https://example.com\"}\n{\"cmd\":\"browseWaitForElement\",\"tabIndex\":0,\"selector\":\"#login\"}\n{\"cmd\":\"browseFillForm\",\"tabIndex\":0,\"selector\":\"#email\",\"value\":\"a@b.com\"}\n{\"cmd\":\"browseClickElement\",\"tabIndex\":0,\"selector\":\"button[type=submit]\"}\n{\"cmd\":\"browseScreenshot\",\"tabIndex\":0}\n\n## CDP 协议域 facade (与 Chrome DevTools Protocol 同名, 落在软件自身 WebView)\n一条 `cdp {method, params, tabIndex}` 路由全部域 — 工具调用逻辑与 Playwright/Chrome-CDP 一致, 执行用本软件浏览器基底:\n| method | params | 说明 |\n|------|------|------|\n| Browser.getVersion | - | 引擎/UA 版本 |\n| Page.navigate / reload / stopLoading / goBack / goForward | url? | 导航 |\n| Page.captureScreenshot | - | {data: base64 PNG} |\n| Page.getLayoutMetrics | - | 视口/内容尺寸/DPR |\n| Page.getNavigationHistory | - | 当前 URL/标题 |\n| Runtime.evaluate | expression | 执行 JS, 返回 {result:{type,value}} |\n| DOM.getDocument | - | 根文档 outerHTML |\n| DOM.getOuterHTML | selector | 指定元素 outerHTML |\n| DOM.querySelector / querySelectorAll | selector | 元素 tag/attrs/text |\n| Input.dispatchMouseEvent | x, y, type | 坐标派发鼠标事件 |\n| Input.insertText | text | 向焦点元素插入文本 |\n| Network.enable / disable | - | 注入 fetch/XHR hook 开始/停止抓包 |\n| Network.getRequests | - | {hooked:[req...], resources:[performance...]} |\n| Network.getResponseBody | requestId | 已捕获响应体 |\n示例: `cdp {method:\"Network.enable\", tabIndex:1}` 然后 `cdp {method:\"Page.reload\", tabIndex:1}` 再 `cdp {method:\"Network.getRequests\", tabIndex:1}`。\n```"
+      content: "# 模块一 · 软件本体 ▸ 浏览器自动化子模块 (内置 WebView 底层)\n\n## 概述\n浏览器查看与操作全部在**软件内置 WebView 引擎底层**完成 — 等价 Playwright / Chrome-CDP / 浏览器-MCP 的能力集 (开页·执行JS·DOM·Cookie·Storage·截图·导出·点击填表等待提交), 直接驱动手机端 WebView 标签, 在不干扰用户正常使用的前提下, 帮用户操作/测试/记录任意网页:\n- 列举/打开/关闭标签, 前进/后退/刷新/跳转导航\n- 在指定标签执行任意 JavaScript 并取返回值\n- 提取 DOM (outerHTML) / 读 Cookie / 读 localStorage·sessionStorage\n- 截图 (base64 PNG) / 导出页面为 Markdown\n- 高级: 点击元素 / 填表 / 等待元素出现 / 提交表单 / 提取链接·输入值 / 页面概要 / 滚动\n\n## 授权 (一次性, 最小成本)\n远程操控开关默认关闭。Agent 调 `setRemoteOps({enable:true})` 即可 (或让用户在穿透面板拨一下开关)。\n\n## 命令列表 (19)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| browseListTabs | - | 列出所有前台标签 (index/url/title/account/active) |\n| browseOpen | url, account? | 打开新标签 |\n| browseClose | tabIndex | 关闭标签 |\n| browseNavigate | tabIndex, action(back/forward/reload/stop/goto), url? | 导航 |\n| browseExecJs | tabIndex, js | 执行 JS 并返回结果 |\n| browseGetDom | tabIndex | 获取完整 DOM HTML |\n| browseGetCookies | url | 获取指定 URL 的 Cookie |\n| browseGetStorage | tabIndex, type(local/session) | 获取 Storage 键值 |\n| browseScreenshot | tabIndex | 截图返回 base64 PNG |\n| browseExportMd | tabIndex, save?, name? | 导出为 Markdown |\n| browseFindInPage | tabIndex, text | 页内查找 |\n| browseClickElement | tabIndex, selector | 点击元素 (CSS 选择器) |\n| browseFillForm | tabIndex, selector, value | 填写输入框 |\n| browseScrollTo | tabIndex, x, y | 滚动页面 |\n| browseGetLinks | tabIndex | 提取所有链接 |\n| browseGetPageInfo | tabIndex | 页面概要 (title/url/meta/表单数) |\n| browseWaitForElement | tabIndex, selector, timeout? | 等待元素出现 |\n| browseSubmitForm | tabIndex, selector? | 提交表单 |\n| browseGetInputValues | tabIndex | 获取所有输入框值 |\n\n## 使用示例\n```json\n{\"cmd\":\"browseOpen\",\"url\":\"https://example.com\"}\n{\"cmd\":\"browseWaitForElement\",\"tabIndex\":0,\"selector\":\"#login\"}\n{\"cmd\":\"browseFillForm\",\"tabIndex\":0,\"selector\":\"#email\",\"value\":\"a@b.com\"}\n{\"cmd\":\"browseClickElement\",\"tabIndex\":0,\"selector\":\"button[type=submit]\"}\n{\"cmd\":\"browseScreenshot\",\"tabIndex\":0}\n\n## CDP 协议域 facade (与 Chrome DevTools Protocol 同名, 落在软件自身 WebView)\n一条 `cdp {method, params, tabIndex}` 路由全部域 — 工具调用逻辑与 Playwright/Chrome-CDP 一致, 执行用本软件浏览器基底:\n| method | params | 说明 |\n|------|------|------|\n| Browser.getVersion | - | 引擎/UA 版本 |\n| Page.navigate / reload / stopLoading / goBack / goForward | url? | 导航 |\n| Page.captureScreenshot | - | {data: base64 PNG} |\n| Page.getLayoutMetrics | - | 视口/内容尺寸/DPR |\n| Page.getNavigationHistory | - | 当前 URL/标题 |\n| Runtime.evaluate | expression | 执行 JS, 返回 {result:{type,value}} |\n| DOM.getDocument | - | 根文档 outerHTML |\n| DOM.getOuterHTML | selector | 指定元素 outerHTML |\n| DOM.querySelector / querySelectorAll | selector | 元素 tag/attrs/text |\n| Input.dispatchMouseEvent | x, y, type | 坐标派发鼠标事件 |\n| Input.insertText | text | 向焦点元素插入文本 |\n| Network.enable / disable | - | 注入 fetch/XHR hook 开始/停止抓包 |\n| Network.getRequests | - | {hooked:[req...], resources:[performance...]} |\n| Network.getResponseBody | requestId | 已捕获响应体 |\n示例: `cdp {method:\"Network.enable\", tabIndex:1}` 然后 `cdp {method:\"Page.reload\", tabIndex:1}` 再 `cdp {method:\"Network.getRequests\", tabIndex:1}`。\n```"
     },
     phone: {
       core: true,
-      title: "板块二 · 手机操控 (本体 + 敏感数据 + 系统级接管)",
+      title: "模块二 · 手机本体 (本体 + 敏感数据 + 系统级接管 + ADB/AVD shell)",
       summary: "文件/相册/剪贴板/通知/应用/设备信息/电池/WiFi/振动/音量 + 联系人/短信(OTP)/通话 + 无障碍系统级接管(手势·读屏·按文字点击·输入·全屏截图) + ADB/AVD 级 shell(Shizuku, 等价 adb shell·input/screencap/pm/am)。共 31 命令。",
-      content: "# 板块二 · 手机操控\n\n## 概述\n通过隧道全方位接管手机 (类 ADB/scrcpy/Windows 手机连接), 三层能力:\n1. **本体操控**: 设备信息+手机号 / 文件读写 / 相册 / 剪贴板 / 分享 / 通知 / 应用 / 电池 / WiFi / 振动 / 音量\n2. **敏感数据** (辅助全链路账号注册): 联系人 / 短信收件箱(含 OTP 验证码) / 通话记录\n3. **系统级接管** (AccessibilityService, 无需 root): 坐标手势 / 全局操作 / 读屏控件树 / 按文字点击 / 文本输入 / 全屏截图\n\n## 授权 (最小成本, 一键)\n- 基础+敏感: Agent 调 `setRemoteOps({enable:true})`; 敏感数据首次自动弹运行时权限, 用户点「允许」即可 (`phoneRequestPerms`)。\n- 系统级接管: 调 `phoneEnsureControl` — 自动开启远程开关 + 跳转无障碍设置, 用户点一次「允许」开启服务即可; 之后长期有效。\n\n## 本体 (14)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneInfo | - | 设备信息+手机号+存储 |\n| phoneListFiles | dir? | 列出目录 |\n| phoneReadFile | path, base64? | 读文件 |\n| phoneWriteFile | path, content | 写文件 |\n| phoneListPhotos | limit? | 相册图片 (MediaStore) |\n| phoneClipboard | set? | 剪贴板读写 |\n| phoneShare | text, title? | 系统分享 |\n| phoneNotify | title?, text | 发通知 |\n| phoneInstalledApps | - | 已装应用 |\n| phoneLaunchApp | package | 启动应用 |\n| phoneBattery | - | 电量/温度/充电 |\n| phoneWifiInfo | - | SSID/IP |\n| phoneVibrate | ms? | 振动 |\n| phoneVolume | set? | 音量读写 |\n\n## 敏感数据 (5, 一次性授权后全开放)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneRequestPerms | - | 一次弹窗申请 联系人/短信/通话 权限 |\n| phoneHasPerm | perm | 查询权限是否已授予 |\n| phoneContacts | limit? | 读取联系人 (姓名+号码) |\n| phoneSmsInbox | limit? | 读取短信收件箱 (含 OTP) |\n| phoneCallLog | limit? | 读取通话记录 |\n\n## 系统级接管 (10, 无障碍服务)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneA11yReady | - | 无障碍服务是否已开启 |\n| phoneEnsureControl | - | 一键: 开远程开关 + 跳转无障碍设置引导开启 |\n| phoneOpenA11ySettings | - | 仅跳转系统无障碍设置 |\n| phoneTap | x, y | 坐标点击 |\n| phoneLongPress | x, y, ms? | 坐标长按 |\n| phoneSwipe | x1,y1,x2,y2, ms? | 滑动 |\n| phoneGlobalAction | action | back/home/recents/notifications/quicksettings/lockscreen/powerdialog/screenshot |\n| phoneDumpScreen | - | 导出当前界面控件树 (文本/坐标/可点击) |\n| phoneClickText | text | 按文字查找并点击 |\n| phoneInputText | text | 向焦点输入框填字 |\n| phoneScreenCapture | - | 全屏截图 base64 (API30+) |\n\n## 看屏-操作闭环示例\n```json\n{\"cmd\":\"phoneEnsureControl\"}\n{\"cmd\":\"phoneDumpScreen\"}            // 读当前界面控件 (含坐标)\n{\"cmd\":\"phoneClickText\",\"text\":\"登录\"}\n{\"cmd\":\"phoneInputText\",\"text\":\"hello\"}\n{\"cmd\":\"phoneScreenCapture\"}         // 截图验证结果\n```\n\n## ADB/AVD 级 Shell (Shizuku · uid2000 · 等价 adb shell — 用户端 AVD 全流程底层)\n需 Shizuku 授权(一次)+ setRemoteOps; 与你操作虚拟机 AVD 一致的控制通道: input/screencap/pm/am/settings/dumpsys/wm/monkey 任意命令。\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneShizukuReady | - | Shizuku 是否已授权 (shell 通道就绪) |\n| phoneShell | command | 执行任意 shell 命令, 返回 {ok,exit,out} |\n| (HTTP) POST /api/exec | {command} | 等价直通执行 |\n\n示例: {\"cmd\":\"phoneShell\",\"command\":\"input tap 540 1200\"} · \"screencap -p /sdcard/s.png\" · \"pm list packages -3\" · \"am start -n <pkg>/<act>\"```"
+      content: "# 模块二 · 手机本体\n\n## 概述\n通过隧道全方位接管手机 (类 ADB/scrcpy/Windows 手机连接), 三层能力:\n1. **本体操控**: 设备信息+手机号 / 文件读写 / 相册 / 剪贴板 / 分享 / 通知 / 应用 / 电池 / WiFi / 振动 / 音量\n2. **敏感数据** (辅助全链路账号注册): 联系人 / 短信收件箱(含 OTP 验证码) / 通话记录\n3. **系统级接管** (AccessibilityService, 无需 root): 坐标手势 / 全局操作 / 读屏控件树 / 按文字点击 / 文本输入 / 全屏截图\n\n## 授权 (最小成本, 一键)\n- 基础+敏感: Agent 调 `setRemoteOps({enable:true})`; 敏感数据首次自动弹运行时权限, 用户点「允许」即可 (`phoneRequestPerms`)。\n- 系统级接管: 调 `phoneEnsureControl` — 自动开启远程开关 + 跳转无障碍设置, 用户点一次「允许」开启服务即可; 之后长期有效。\n\n## 本体 (14)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneInfo | - | 设备信息+手机号+存储 |\n| phoneListFiles | dir? | 列出目录 |\n| phoneReadFile | path, base64? | 读文件 |\n| phoneWriteFile | path, content | 写文件 |\n| phoneListPhotos | limit? | 相册图片 (MediaStore) |\n| phoneClipboard | set? | 剪贴板读写 |\n| phoneShare | text, title? | 系统分享 |\n| phoneNotify | title?, text | 发通知 |\n| phoneInstalledApps | - | 已装应用 |\n| phoneLaunchApp | package | 启动应用 |\n| phoneBattery | - | 电量/温度/充电 |\n| phoneWifiInfo | - | SSID/IP |\n| phoneVibrate | ms? | 振动 |\n| phoneVolume | set? | 音量读写 |\n\n## 敏感数据 (5, 一次性授权后全开放)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneRequestPerms | - | 一次弹窗申请 联系人/短信/通话 权限 |\n| phoneHasPerm | perm | 查询权限是否已授予 |\n| phoneContacts | limit? | 读取联系人 (姓名+号码) |\n| phoneSmsInbox | limit? | 读取短信收件箱 (含 OTP) |\n| phoneCallLog | limit? | 读取通话记录 |\n\n## 系统级接管 (10, 无障碍服务)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneA11yReady | - | 无障碍服务是否已开启 |\n| phoneEnsureControl | - | 一键: 开远程开关 + 跳转无障碍设置引导开启 |\n| phoneOpenA11ySettings | - | 仅跳转系统无障碍设置 |\n| phoneTap | x, y | 坐标点击 |\n| phoneLongPress | x, y, ms? | 坐标长按 |\n| phoneSwipe | x1,y1,x2,y2, ms? | 滑动 |\n| phoneGlobalAction | action | back/home/recents/notifications/quicksettings/lockscreen/powerdialog/screenshot |\n| phoneDumpScreen | - | 导出当前界面控件树 (文本/坐标/可点击) |\n| phoneClickText | text | 按文字查找并点击 |\n| phoneInputText | text | 向焦点输入框填字 |\n| phoneScreenCapture | - | 全屏截图 base64 (API30+) |\n\n## 看屏-操作闭环示例\n```json\n{\"cmd\":\"phoneEnsureControl\"}\n{\"cmd\":\"phoneDumpScreen\"}            // 读当前界面控件 (含坐标)\n{\"cmd\":\"phoneClickText\",\"text\":\"登录\"}\n{\"cmd\":\"phoneInputText\",\"text\":\"hello\"}\n{\"cmd\":\"phoneScreenCapture\"}         // 截图验证结果\n```\n\n## ADB/AVD 级 Shell (Shizuku · uid2000 · 等价 adb shell — 用户端 AVD 全流程底层)\n需 Shizuku 授权(一次)+ setRemoteOps; 与你操作虚拟机 AVD 一致的控制通道: input/screencap/pm/am/settings/dumpsys/wm/monkey 任意命令。\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| phoneShizukuReady | - | Shizuku 是否已授权 (shell 通道就绪) |\n| phoneShell | command | 执行任意 shell 命令, 返回 {ok,exit,out} |\n| (HTTP) POST /api/exec | {command} | 等价直通执行 |\n\n示例: {\"cmd\":\"phoneShell\",\"command\":\"input tap 540 1200\"} · \"screencap -p /sdcard/s.png\" · \"pm list packages -3\" · \"am start -n <pkg>/<act>\"```"
     },
     software: {
       core: true,
-      title: "板块三 · Devin Cloud 软件本体",
+      title: "模块一 · 软件本体 ▸ 账号切换 + Devin Cloud 全功能 + 穿透",
       summary: "账号切换(多号CRUD/登录/刷额度/健康检查/对话追踪) + Devin Cloud 全功能CRUD(Sessions/Knowledge/Playbooks/Secrets/Git/备份/水过无痕) + 内网穿透 + 安全开关。",
-      content: "# 板块三 · Devin Cloud 软件本体\n\n## 概述\n操控本软件自身的全部数据与功能, 等价于桌面版切号面板 + Devin Cloud 全功能。\n\n## 账号切换\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| getState | - | 获取所有账号状态 |\n| addAccount | 账号字段 | 添加账号 |\n| importAccounts | text | 万法识号·批量导入 |\n| login / loginAll | id? | 单/全账号登录 (邮箱+密码→auth1) |\n| refreshQuota / refreshAll | id? | 刷新单/全额度 |\n| activate | id | 激活账号 (切号) |\n| removeAccount | id | 删除账号 |\n| healthScan | - | 健康检查扫描 |\n| trackStuck | - | 追踪卡住会话 |\n\n## Devin Cloud 全功能 CRUD\n| 命令 | 说明 |\n|------|------|\n| listSessions / sessionDetail / exportSession | 会话 列举/详情/导出 |\n| createSession / stopSession / archiveSession / deleteSession | 会话操作 |\n| listKnowledge / injectKnowledge / deleteKnowledge | 知识 |\n| listPlaybooks / injectPlaybook / deletePlaybook | 剧本 |\n| listSecrets / injectSecret / deleteSecret | 密钥 |\n| checkGit / connectGit | Git 连接/注入 PAT |\n| backupAccount / backupAll | 备份 |\n| wipeAccount | 水过无痕 (先备份再清数据) |\n| batchConnectGit / batchInjectKnowledge / batchInjectSecret / batchInjectPlaybook | 全账号批量注入 |\n\n## 内网穿透\n出站 WSS 连中继 (dao-relay 协议)。配置优先级: localStorage(rtflow.relay) > relay-config.json > conn.json 兜底。设备唯一 session + 每冷启动 SecureRandom 轮换 token, 中继按 (session,token) 配对。\n\n## 安全开关\n远程操控默认关闭, `setRemoteOps({enable:true})` 开启; browse*/phone* 全部受此门禁。状态持久化 remote-ops-flag。\n\n## 管理命令\n| 命令 | 说明 |\n|------|------|\n| ping / getEngineInfo / deviceInfo | 探活/引擎/设备 |\n| setRemoteOps / getRemoteOps | 远程开关 读写 |\n| getCloudMd / getLocalMd | 云端(轻)/本地(重) 文档 |\n| getModuleIndex / getModuleDoc | 三大板块 概览/详情 |\n| hotpatch / persistModule / reloadEngine | 热修 |"
+      content: "# 模块一 · 软件本体 ▸ 账号切换 + Devin Cloud 全功能\n\n## 概述\n操控本软件自身的全部数据与功能, 等价于桌面版切号面板 + Devin Cloud 全功能。\n\n## 账号切换\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| getState | - | 获取所有账号状态 |\n| addAccount | 账号字段 | 添加账号 |\n| importAccounts | text | 万法识号·批量导入 |\n| login / loginAll | id? | 单/全账号登录 (邮箱+密码→auth1) |\n| refreshQuota / refreshAll | id? | 刷新单/全额度 |\n| activate | id | 激活账号 (切号) |\n| removeAccount | id | 删除账号 |\n| healthScan | - | 健康检查扫描 |\n| trackStuck | - | 追踪卡住会话 |\n\n## Devin Cloud 全功能 CRUD\n| 命令 | 说明 |\n|------|------|\n| listSessions / sessionDetail / exportSession | 会话 列举/详情/导出 |\n| createSession / stopSession / archiveSession / deleteSession | 会话操作 |\n| listKnowledge / injectKnowledge / deleteKnowledge | 知识 |\n| listPlaybooks / injectPlaybook / deletePlaybook | 剧本 |\n| listSecrets / injectSecret / deleteSecret | 密钥 |\n| checkGit / connectGit | Git 连接/注入 PAT |\n| backupAccount / backupAll | 备份 |\n| wipeAccount | 水过无痕 (先备份再清数据) |\n| batchConnectGit / batchInjectKnowledge / batchInjectSecret / batchInjectPlaybook | 全账号批量注入 |\n\n## 内网穿透\n出站 WSS 连中继 (dao-relay 协议)。配置优先级: localStorage(rtflow.relay) > relay-config.json > conn.json 兜底。设备唯一 session + 每冷启动 SecureRandom 轮换 token, 中继按 (session,token) 配对。\n\n## 安全开关\n远程操控默认关闭, `setRemoteOps({enable:true})` 开启; browse*/phone* 全部受此门禁。状态持久化 remote-ops-flag。\n\n## 管理命令\n| 命令 | 说明 |\n|------|------|\n| ping / getEngineInfo / deviceInfo | 探活/引擎/设备 |\n| setRemoteOps / getRemoteOps | 远程开关 读写 |\n| getCloudMd / getLocalMd | 云端(轻)/本地(重) 文档 |\n| getModuleIndex / getModuleDoc | 三大板块 概览/详情 |\n| hotpatch / persistModule / reloadEngine | 热修 |"
     }
   };
 
@@ -458,9 +458,9 @@
       var c; try{c=JSON.parse(N.getConn?N.getConn():"{}");} catch(e){c={};}
       var pub = (c.url&&c.session)?(c.url.replace(/\/$/,'')+"/relay/"+c.session):"(未配置)";
       var md = [
-        "# Devin Cloud 手机版 · 云端接入文档 (唯一·完整·全量展开)",
+        "# Devin Cloud 手机版 · 接入文档 (唯一·两大模块·全量展开)",
         "",
-        "> 这是内网穿透**唯一的一份云端文档**, 已**完全展开**: 接入信息 + 全部板块的全部命令·参数·高级用法 + ADB/AVD 级 shell + 对话整体提取工作流, 全部内联在下方。无渐进式披露、无功能隐藏、无文档级限制。任意云端 Agent (与你一样的 Devin Cloud) 读完此一篇即可直接按需调用任意能力 — 无需再分步调用 `getModuleDoc`/`getModuleIndex` (二者仍保留, 仅作机读别名)。",
+        "> 这是内网穿透**唯一的一份文档**, 已**完全展开**: 接入信息 + 两大模块的全部命令·参数·高级用法 + ADB/AVD 级 shell + 对话整体提取工作流, 全部内联在下方。无渐进式披露、无功能隐藏、无本地/云端之分、无文档级限制。任意云端 Agent (与你一样的 Devin Cloud) 读完此一篇即可直接调用任意能力、操作到底层 API — 无需再分步调用 `getModuleDoc`/`getModuleIndex` (二者仍保留, 仅作机读别名)。",
         "> 鉴权即边界: 持有本 Token 即拥有对本机的完整接入(含 shell)。Token 即唯一闸门, 务必保密、可随时刷新。设备端 `setRemoteOps {enable:true}` 仅为首次一键知情同意(或 `phoneEnsureControl` 一键), 开后长期有效。",
         "",
         "## 一、接入信息",
@@ -476,15 +476,14 @@
         "  -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\",\"<参数>\":\"<值>\"}}'",
         "```",
         "",
-        "## 三、核心板块 (概览; 全部命令细节已内联于下方第六节)",
+        "## 三、两大模块 (概览; 全部命令细节已内联于下方第六节)",
         "",
-        "| 板块 | 一句话 | 命令数 |",
+        "| 模块 | 一句话 | 命令数 |",
         "|------|--------|------|",
-        "| **板块一 · 浏览器自动化 (软件内置底层)** | 软件内置 WebView 引擎, 等价 Playwright/Chrome-CDP/浏览器-MCP: 查看+操作任意网页, 不干扰用户当前页 | 19 |",
-        "| **板块二 · 手机操控 (AVD 级全流程)** | 全方位接管手机 (本体+敏感数据+无障碍系统级手势/读屏/截图) + ADB/AVD 级 shell (Shizuku, 等价 adb shell) | 31 |",
-        "| **板块三 · Devin Cloud 软件本体** | 账号切换 + Devin Cloud 全功能CRUD + 穿透 | 全量 |",
+        "| **模块一 · 软件本体 (内含浏览器操作子模块)** | 操控本软件自身的一切: 内置 WebView 浏览器引擎(等价 Playwright/Chrome-CDP/浏览器-MCP·不干扰用户) + 账号切换 + Devin Cloud 全功能CRUD + 穿透 + 管理 | 浏览器19 + 软件全量 |",
+        "| **模块二 · 手机本体 (操作手机一切底层)** | 全方位接管手机: 本体 + 敏感数据 + 无障碍系统级(手势/读屏/截图) + ADB/AVD 级 shell (Shizuku, 等价 adb shell) | 31 |",
         "",
-        "> 机读概览: `getModuleIndex` (别名)。完整本地操控(直接调 Native.* 桥): `getLocalMd`。全部板块的命令表与高级用法已在下方**第六节内联**, 无需另调 `getModuleDoc`。",
+        "> 机读概览: `getModuleIndex` (别名)。全部命令表与高级用法已在下方**第六节内联**, 无需另调 `getModuleDoc`。无渐进式披露、无本地/云端之分 — 这一篇即全部。",
         "",
         "## 四、授权 (最小成本·道法自然)",
         "用户成本最小化: 大多数能力只需 Agent 一行调用, 系统级权限自动弹窗/跳转, 用户只点「允许」。",
@@ -633,14 +632,14 @@
         "| ping | 探活 |",
         "| getEngineInfo / deviceInfo | 引擎/设备 |",
         "| setRemoteOps / getRemoteOps | 远程开关 |",
-        "| getModuleIndex / getModuleDoc | 机读别名 (内容同本文档, 非渐进式) |",
-        "| getCloudMd / getLocalMd | 云端(本篇·全量) / 本地操控文档 |",
+        "| getModuleIndex / getModuleDoc | 机读别名 (内容同本文档, 非渐进式·两大模块) |",
+        "| getCloudMd | 本接入文档 (唯一·全量, 无本地/云端之分) |",
         "| hotpatch / persistModule / reloadEngine | 热修 |",
         "| (HTTP) /api/exec | ADB/AVD 级 shell 直通 (见上「ADB/AVD 级 Shell」) |",
         "",
         "## 六、各板块 · 完整命令与高级用法 (内联全量, 无需 getModuleDoc)"
       ];
-      try { ["browser","phone","software"].forEach(function(k){ if(MODULE_DOCS[k]&&MODULE_DOCS[k].content){ md.push(""); md.push(MODULE_DOCS[k].content); } }); } catch(e){}
+      try { ["browser","software","phone"].forEach(function(k){ if(MODULE_DOCS[k]&&MODULE_DOCS[k].content){ md.push(""); md.push(MODULE_DOCS[k].content); } }); } catch(e){}
       md = md.concat(CONV_EXTRACT_DOC());
       md = md.join("\n");
       return {ok:true, markdown:md, length:md.length};
@@ -714,10 +713,19 @@
 
     getModuleIndex: async function(){
       var boards = Object.keys(MODULE_DOCS).map(function(k){ return {id:k, title:MODULE_DOCS[k].title, summary:MODULE_DOCS[k].summary}; });
+      // 对外两大模块: 模块一=软件本体(含浏览器子模块: browser+software), 模块二=手机本体(phone)
+      var modules = [
+        { id:"software", title:"模块一 · 软件本体 (内含浏览器操作子模块)",
+          summary:"操控本软件自身的一切: 内置 WebView 浏览器引擎(等价 Playwright/Chrome-CDP/浏览器-MCP) + 账号切换 + Devin Cloud 全功能CRUD + 穿透 + 管理。",
+          subDocs:["browser","software"] },
+        { id:"phone", title:"模块二 · 手机本体 (操作手机一切底层)",
+          summary:"全方位接管手机: 本体(文件/相册/剪贴板/通知/应用…) + 敏感数据(联系人/短信OTP/通话) + 无障碍系统级(手势/读屏/按文字点击/截图) + ADB/AVD 级 shell (Shizuku)。",
+          subDocs:["phone"] }
+      ];
       return {ok:true,
-        intro:"全部能力一篇览尽 — 唯一权威文档是 getCloudMd (全量内联·无渐进式披露)。本接口仅作机读别名: boards 已含各板块 summary; getModuleDoc({module:id}) 取单板块全文。含 ADB/AVD 级 shell (phoneShell / POST /api/exec)。涉及全系统的尽量直接代用户操作, 用户只需点「允许」(setRemoteOps / phoneEnsureControl)。",
-        boards: boards,
-        modules: boards };
+        intro:"全部能力一篇览尽 — 唯一权威文档是 getCloudMd (全量内联·无渐进式披露·无本地/云端之分)。对外仅两大模块: ① 软件本体(含浏览器子模块) ② 手机本体。含 ADB/AVD 级 shell (phoneShell / POST /api/exec)。涉及全系统的尽量直接代用户操作, 用户只需点「允许」(setRemoteOps / phoneEnsureControl)。getModuleDoc({module:id}) 可取单块全文 (id: software/browser/phone)。",
+        modules: modules,
+        boards: boards };
     },
     getModuleDoc: async function(a){
       if(!a||!a.module) return {ok:false,error:"需 module"};
