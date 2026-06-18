@@ -2177,6 +2177,24 @@ function isCleanupReady(email, cooldownMs) {
   if (st.cleanedAt) return { ready: false, reason: "already_cleaned" };
   return { ready: true };
 }
+// v4.9.12 · 24h 活跃对话保护 (权威·实时): 直查账号对话列表, 取最新 updated_at/created_at;
+//   若任一对话在 withinMs 内更新过 → 视为活跃, 即使额度归零/<3 也不得清理。
+//   返回 {recent:bool, newestMs:number}; 查询失败时 recent=false (不阻断, 由冷却期墓碑兜底)。
+async function hasRecentConversation(auth, withinMs) {
+  const cd = withinMs || 24 * 60 * 60 * 1000;
+  try {
+    const r = await listSessions(auth, 50);
+    if (!r || !r.ok || !Array.isArray(r.sessions)) return { recent: false, newestMs: 0 };
+    let newest = 0;
+    for (const s of r.sessions) {
+      const t = Date.parse(s.updated_at || s.updatedAt || s.created_at || s.createdAt || "") || 0;
+      if (t > newest) newest = t;
+    }
+    return { recent: newest > 0 && (Date.now() - newest) < cd, newestMs: newest };
+  } catch {
+    return { recent: false, newestMs: 0 };
+  }
+}
 
 // ═══ 导出 MD (给本地/其它 Agent 的操作指令文档) ═══════════════════════════
 // 前端只需一个「导出 MD」按钮: 用户复制此文档给本地 Agent, Agent 据此后端驱动全部能力。
@@ -2392,6 +2410,7 @@ module.exports = {
   getCleanupState,
   setCleanupState,
   isCleanupReady,
+  hasRecentConversation,
   // export md
   buildAgentMd,
   // utils
