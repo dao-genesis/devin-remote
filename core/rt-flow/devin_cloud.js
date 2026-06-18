@@ -2067,7 +2067,7 @@ function _scanConvEntries(base) {
       const htmlPath = path.join(base, e.name, "对话.html");
       convs.push({
         name: e.name, path: path.join(base, e.name), mtime, type: "folder",
-        title: meta.title || "", eventCount: meta.eventCount || 0, num: meta.convNo || 0,
+        title: meta.title || "", devinId: meta.devinId || "", eventCount: meta.eventCount || 0, num: meta.convNo || 0,
         hasHtml: fs.existsSync(htmlPath), htmlPath,
       });
     }
