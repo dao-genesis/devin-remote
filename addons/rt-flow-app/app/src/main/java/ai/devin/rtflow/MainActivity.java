@@ -919,6 +919,32 @@ public class MainActivity extends AppCompatActivity {
         setAddr(displayUrl(t));
         renderTabStrip();
         if (pageZoom != 100) applyZoom(t.web);
+        resumeWeb(t.web);   // 选中即把页面拉回「可见+计时器运行」, 防止 visibilityState 卡 hidden 致交互冻死
+    }
+
+    /** 把一个 WebView 强制拉回「页面可见 + 计时器运行」状态。
+     *  根因: 长时间后台/重新挂载后, Chromium 的 page-visibility 可能卡在 hidden(即使视图其实在前台·有焦点),
+     *  此时 setTimeout/setInterval/requestAnimationFrame 全被冻结 → 网页"看着正常能滚动, 但点下载等依赖异步的交互一律失效",
+     *  必须手动刷新才好。这里: onResume()+resumeTimers() 唤醒渲染, 再把视图可见性切一下(INVISIBLE→VISIBLE)
+     *  逼 Chromium 同步重算页面可见性 → 不重载、不丢滚动/表单即可恢复全部交互。 */
+    private void resumeWeb(final WebView w) {
+        if (w == null) return;
+        try { w.onResume(); } catch (Exception ignored) {}
+        try { w.resumeTimers(); } catch (Exception ignored) {}   // 全局: 恢复被冻结的所有 WebView 计时器
+        try {
+            // 只在真的卡 hidden 时才切可见性纠正 → 正常切标签无闪烁。
+            w.evaluateJavascript("(function(){try{return document.visibilityState;}catch(e){return 'x';}})()", val -> {
+                if (val == null || !val.contains("hidden")) return;
+                try {
+                    if (w.getVisibility() == android.view.View.VISIBLE) {
+                        // 跨帧切 INVISIBLE→VISIBLE: 逼 Chromium 把 page-visibility 当作真实的 hidden→visible 转变处理
+                        // (同帧切会被合并成无变化而失效)。仅~1 帧不可见, 只在卡死恢复时触发, 用户无感。
+                        w.setVisibility(android.view.View.INVISIBLE);
+                        main.post(() -> { try { w.setVisibility(android.view.View.VISIBLE); } catch (Exception ignored) {} });
+                    }
+                } catch (Exception ignored) {}
+            });
+        } catch (Exception ignored) {}
     }
 
     private String displayUrl(Tab t) {
@@ -4053,9 +4079,22 @@ public class MainActivity extends AppCompatActivity {
 
     private long bgSince = 0;   // 进入后台的时刻; onResume 据此判断是否需对可能被系统冻结的标签探活
     private static final long STALE_BG_MS = 45000;   // 后台超过此时长返回 → 可能被冻结, 触发探活
+    private volatile boolean appForeground = false;   // App 是否在前台 (onResume↔onPause); 看门狗仅在前台介入
+    private static final long VIS_WATCH_MS = 8000;    // 前台可见性看门狗周期
+    private final Runnable visWatchdog = new Runnable() {
+        @Override public void run() {
+            if (!appForeground) return;
+            // 前台期间: 当前可见网页若 visibilityState 卡 hidden(计时器被冻、点下载等失效), resumeWeb 会静默拉回, 无需手动刷新。
+            Tab t = cur();
+            if (t != null && t.web != null && !t.internal) resumeWeb(t.web);
+            main.postDelayed(this, VIS_WATCH_MS);
+        }
+    };
 
     @Override protected void onPause() {
         super.onPause();
+        appForeground = false;
+        main.removeCallbacks(visWatchdog);
         bgSince = System.currentTimeMillis();
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {} // 持久化其它网站登录 Cookie
         saveTabs();
@@ -4104,7 +4143,14 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onResume() {
         super.onResume();
-        // 长时间后台返回: 当前标签立即探活(冻死则静默重载), 其余标签标记 → 选中时再探活。修复"放久了某些交互失效需手动刷新"。
+        appForeground = true;
+        // 回到前台: 立即把当前可见标签拉回「可见+计时器运行」(根治"放久了点下载/交互失效需手动刷新")。
+        Tab act = cur();
+        if (act != null) resumeWeb(act.web);
+        // 持续看门狗: 前台期间每 8s 检一次, 若当前页 visibilityState 卡 hidden 则静默拉回, 无需用户操作。
+        main.removeCallbacks(visWatchdog);
+        main.postDelayed(visWatchdog, VIS_WATCH_MS);
+        // 长时间后台返回: 渲染线程可能被冻结(看着正常但点不动) → 当前标签探活(冻死则静默重载), 其余标签标记延迟探活。
         long bg = bgSince > 0 ? (System.currentTimeMillis() - bgSince) : 0;
         bgSince = 0;
         if (bg > STALE_BG_MS) {
@@ -4126,6 +4172,8 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onDestroy() {
         sInstance = null;
+        appForeground = false;
+        main.removeCallbacks(visWatchdog);
         saveTabs();
         try { if (dlReceiver != null) unregisterReceiver(dlReceiver); } catch (Exception ignored) {}
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}
