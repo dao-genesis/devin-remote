@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "3.18.0",
+  "version": "3.18.1",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -114,6 +114,11 @@
           ],
           "default": "auto",
           "description": "路由官网登录模式 — 自动深层注入登录 / 手动登录 (守柔, 保留操作空间)"
+        },
+        "dao.injectReset": {
+          "type": "boolean",
+          "default": true,
+          "description": "反向注入先清后注: 注入前清除该账号内一切非锁定的旧注入残条, 仅保留期望态与单账号主页用户手动添加(锁定)项; 其余清理覆盖注入"
         },
         "dao.injectAutoCleanup": {
           "type": "boolean",
