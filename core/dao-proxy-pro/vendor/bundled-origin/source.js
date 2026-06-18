@@ -2226,6 +2226,93 @@ function extractMsgContent(mf) {
 // ═══════════════════════════════════════════════════════════
 // 修改 GetChatMessage{V2,} 请求的 SP
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// v9.9.300 · 官方路径工具描述去名 · 两路同源 · 彻底隔离官方品牌
+// ═══════════════════════════════════════════════════════════
+// 第三方路径(dao_router)已对工具 description + 参数 schema 去名;官方路径出站的
+// ChatToolDefinition(顶层 field 10)此前仅经 deepStripProtoSideChannels(剥侧信道·不去名)
+// → 工具描述仍残留 "Cascade"/"Windsurf"/"Codeium"。此函数仅命中工具定义字段:
+//   子 field 2 = description (string) · 子 field 3 = json_schema_string (JSON, 内 description)
+// 不触碰用户/助手消息(在 MSGS_FIELD) · 不改工具名(子 field 1)/参数键。
+// 去名引擎复用 _spInvertLib.deOfficialName(单一真源·幂等) · 与 SP 去名同源。
+const _TOOLS_FIELD_NUM = 10; // cascade_wire REQ.TOOLS
+const _TD_DESC = 2; // ChatToolDefinition.description
+const _TD_SCHEMA = 3; // ChatToolDefinition.json_schema_string
+function _deOfficialJsonDescriptions(obj) {
+  if (!obj || typeof obj !== "object") return;
+  if (Array.isArray(obj)) {
+    for (const it of obj) _deOfficialJsonDescriptions(it);
+    return;
+  }
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (k === "description" && typeof v === "string") {
+      obj[k] = _spInvertLib.deOfficialName(v);
+    } else if (v && typeof v === "object") {
+      _deOfficialJsonDescriptions(v);
+    }
+  }
+}
+function deOfficialNameToolsProto(topFields) {
+  if (!_spInvertLib || typeof _spInvertLib.deOfficialName !== "function")
+    return 0;
+  const arr = topFields[_TOOLS_FIELD_NUM];
+  if (!arr || !arr.length) return 0;
+  let changed = 0;
+  for (const e of arr) {
+    if (e.w !== 2) continue;
+    const buf = Buffer.isBuffer(e.b) ? e.b : Buffer.from(e.b);
+    let td;
+    try {
+      td = parseProto(buf);
+    } catch {
+      continue;
+    }
+    let touched = false;
+    // 子 field 2: description (string)
+    const dEntry = td[_TD_DESC] && td[_TD_DESC][0];
+    if (dEntry && dEntry.w === 2) {
+      const db = Buffer.from(dEntry.b);
+      const orig = db.toString("utf8");
+      // 往返守: 非法 UTF-8(二进制)跳过 · 防 proto 损坏 (同 deepStrip 之治)
+      if (Buffer.byteLength(orig, "utf8") === db.length) {
+        const de = _spInvertLib.deOfficialName(orig);
+        if (de !== orig) {
+          td[_TD_DESC] = [{ w: 2, b: Buffer.from(de, "utf8") }];
+          touched = true;
+        }
+      }
+    }
+    // 子 field 3: json_schema_string (JSON) · 内 description 去名 · 仅含品牌词时才动
+    const sEntry = td[_TD_SCHEMA] && td[_TD_SCHEMA][0];
+    if (sEntry && sEntry.w === 2) {
+      const sb = Buffer.from(sEntry.b);
+      const orig = sb.toString("utf8");
+      if (
+        Buffer.byteLength(orig, "utf8") === sb.length &&
+        /Cascade|Windsurf|Codeium/.test(orig)
+      ) {
+        try {
+          const j = JSON.parse(orig);
+          _deOfficialJsonDescriptions(j);
+          const re = JSON.stringify(j);
+          if (re !== orig) {
+            td[_TD_SCHEMA] = [{ w: 2, b: Buffer.from(re, "utf8") }];
+            touched = true;
+          }
+        } catch {}
+      }
+    }
+    if (touched) {
+      e.b = serializeProto(td);
+      changed++;
+    }
+  }
+  if (changed > 0)
+    log(`[DEOFFICIAL-TOOLS] official-path tool descriptions de-named: ${changed}`);
+  return changed;
+}
+
 function modifySPProto(reqBody) {
   try {
     const frames = parseFrames(reqBody);
@@ -2322,7 +2409,9 @@ function modifySPProto(reqBody) {
     for (const bk of spBackups) {
       if (newMsgs[bk.i]) newMsgs[bk.i].b = bk.b;
     }
-    if (!changed && deepChanged === 0) return reqBody;
+    // v9.9.300 · 官方路径工具描述去名 · 与第三方(dao_router)对齐 · 仅命中 field 10 工具定义
+    const toolsChanged = deOfficialNameToolsProto(topFields);
+    if (!changed && deepChanged === 0 && toolsChanged === 0) return reqBody;
     if (deepChanged > 0)
       log(`[DEEP-STRIP] nested side-channels cleaned: ${deepChanged}`);
     const newPayload = serializeProto(topFields);
