@@ -15,7 +15,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.16.1";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.16.2";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -41,6 +41,10 @@
     });
   }
 
+  // ── CDP-facade 网络捕获注入脚本 (在软件自身 WebView 内 hook fetch/XHR + 读 performance) ──
+  var NET_HOOK_JS = "(function(){if(window.__cdpNetInit)return 'already';window.__cdpNetInit=true;window.__cdpNet=[];window.__cdpSeq=0;try{var of=window.fetch;if(of){window.fetch=function(){if(window.__cdpNetOff)return of.apply(this,arguments);var ar=arguments;var url=(ar[0]&&ar[0].url)||ar[0]||'';var mth=(ar[1]&&ar[1].method)||(ar[0]&&ar[0].method)||'GET';var id=++window.__cdpSeq;var rec={requestId:String(id),url:String(url),method:mth,type:'Fetch',startTime:Date.now()};window.__cdpNet.push(rec);return of.apply(this,ar).then(function(rs){rec.status=rs.status;rec.statusText=rs.statusText;rec.endTime=Date.now();try{rs.clone().text().then(function(b){rec.body=(b||'').slice(0,20000);});}catch(e){}return rs;});};}var OX=window.XMLHttpRequest;if(OX){var op=OX.prototype.open,sn=OX.prototype.send;OX.prototype.open=function(m,u){this.__cdp={requestId:String(++window.__cdpSeq),url:String(u),method:m,type:'XHR',startTime:Date.now()};return op.apply(this,arguments);};OX.prototype.send=function(){var x=this;if(x.__cdp&&!window.__cdpNetOff){window.__cdpNet.push(x.__cdp);x.addEventListener('loadend',function(){x.__cdp.status=x.status;x.__cdp.endTime=Date.now();try{x.__cdp.body=(x.responseText||'').slice(0,20000);}catch(e){}});}return sn.apply(this,arguments);};}}catch(e){return 'err:'+e;}return 'hooked';})()";
+  var NET_DUMP_JS = "(function(){var net=window.__cdpNet||[];var perf=[];try{perf=performance.getEntriesByType('resource').map(function(e){return {url:e.name,type:e.initiatorType,duration:Math.round(e.duration),transferSize:e.transferSize||0,startTime:Math.round(e.startTime),responseEnd:Math.round(e.responseEnd)};});}catch(e){}return JSON.stringify({hooked:net.slice(-200),resources:perf.slice(-200),hookedCount:net.length,resourceCount:perf.length});})()";
+
   // ── 账号存储 (localStorage) ──────────────────────────────────────────────
   function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
   function saveAcc(a){ localStorage.setItem("rtflow.accounts", JSON.stringify(a||[])); }
@@ -59,8 +63,8 @@
     browser: {
       core: true,
       title: "板块一 · 浏览器自动化",
-      summary: "软件内置 WebView 引擎(等价 Playwright/Chrome-CDP/浏览器-MCP): 查看+操作任意网页全在软件底层完成, 不干扰用户。打开/导航/执行JS/提取DOM·Cookie·Storage/截图/导出MD + 点击·填表·等待元素·提交·滚动·提链接。共 19 命令。",
-      content: "# 板块一 · 浏览器自动化 (软件内置底层)\n\n## 概述\n浏览器查看与操作全部在**软件内置 WebView 引擎底层**完成 — 等价 Playwright / Chrome-CDP / 浏览器-MCP 的能力集 (开页·执行JS·DOM·Cookie·Storage·截图·导出·点击填表等待提交), 直接驱动手机端 WebView 标签, 在不干扰用户正常使用的前提下, 帮用户操作/测试/记录任意网页:\n- 列举/打开/关闭标签, 前进/后退/刷新/跳转导航\n- 在指定标签执行任意 JavaScript 并取返回值\n- 提取 DOM (outerHTML) / 读 Cookie / 读 localStorage·sessionStorage\n- 截图 (base64 PNG) / 导出页面为 Markdown\n- 高级: 点击元素 / 填表 / 等待元素出现 / 提交表单 / 提取链接·输入值 / 页面概要 / 滚动\n\n## 授权 (一次性, 最小成本)\n远程操控开关默认关闭。Agent 调 `setRemoteOps({enable:true})` 即可 (或让用户在穿透面板拨一下开关)。\n\n## 命令列表 (19)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| browseListTabs | - | 列出所有前台标签 (index/url/title/account/active) |\n| browseOpen | url, account? | 打开新标签 |\n| browseClose | tabIndex | 关闭标签 |\n| browseNavigate | tabIndex, action(back/forward/reload/stop/goto), url? | 导航 |\n| browseExecJs | tabIndex, js | 执行 JS 并返回结果 |\n| browseGetDom | tabIndex | 获取完整 DOM HTML |\n| browseGetCookies | url | 获取指定 URL 的 Cookie |\n| browseGetStorage | tabIndex, type(local/session) | 获取 Storage 键值 |\n| browseScreenshot | tabIndex | 截图返回 base64 PNG |\n| browseExportMd | tabIndex, save?, name? | 导出为 Markdown |\n| browseFindInPage | tabIndex, text | 页内查找 |\n| browseClickElement | tabIndex, selector | 点击元素 (CSS 选择器) |\n| browseFillForm | tabIndex, selector, value | 填写输入框 |\n| browseScrollTo | tabIndex, x, y | 滚动页面 |\n| browseGetLinks | tabIndex | 提取所有链接 |\n| browseGetPageInfo | tabIndex | 页面概要 (title/url/meta/表单数) |\n| browseWaitForElement | tabIndex, selector, timeout? | 等待元素出现 |\n| browseSubmitForm | tabIndex, selector? | 提交表单 |\n| browseGetInputValues | tabIndex | 获取所有输入框值 |\n\n## 使用示例\n```json\n{\"cmd\":\"browseOpen\",\"url\":\"https://example.com\"}\n{\"cmd\":\"browseWaitForElement\",\"tabIndex\":0,\"selector\":\"#login\"}\n{\"cmd\":\"browseFillForm\",\"tabIndex\":0,\"selector\":\"#email\",\"value\":\"a@b.com\"}\n{\"cmd\":\"browseClickElement\",\"tabIndex\":0,\"selector\":\"button[type=submit]\"}\n{\"cmd\":\"browseScreenshot\",\"tabIndex\":0}\n```"
+      summary: "软件内置 WebView 引擎(等价 Playwright/Chrome-CDP/浏览器-MCP): 查看+操作任意网页全在软件底层完成, 不干扰用户。打开/导航/执行JS/提取DOM·Cookie·Storage/截图/导出MD + 点击·填表·等待元素·提交·滚动·提链接 + CDP 协议域 facade(cdp: Page.*/Runtime.*/DOM.*/Input.*/Network.*)。共 19 专用命令 + 1 条 cdp 路由。",
+      content: "# 板块一 · 浏览器自动化 (软件内置底层)\n\n## 概述\n浏览器查看与操作全部在**软件内置 WebView 引擎底层**完成 — 等价 Playwright / Chrome-CDP / 浏览器-MCP 的能力集 (开页·执行JS·DOM·Cookie·Storage·截图·导出·点击填表等待提交), 直接驱动手机端 WebView 标签, 在不干扰用户正常使用的前提下, 帮用户操作/测试/记录任意网页:\n- 列举/打开/关闭标签, 前进/后退/刷新/跳转导航\n- 在指定标签执行任意 JavaScript 并取返回值\n- 提取 DOM (outerHTML) / 读 Cookie / 读 localStorage·sessionStorage\n- 截图 (base64 PNG) / 导出页面为 Markdown\n- 高级: 点击元素 / 填表 / 等待元素出现 / 提交表单 / 提取链接·输入值 / 页面概要 / 滚动\n\n## 授权 (一次性, 最小成本)\n远程操控开关默认关闭。Agent 调 `setRemoteOps({enable:true})` 即可 (或让用户在穿透面板拨一下开关)。\n\n## 命令列表 (19)\n| 命令 | 参数 | 说明 |\n|------|------|------|\n| browseListTabs | - | 列出所有前台标签 (index/url/title/account/active) |\n| browseOpen | url, account? | 打开新标签 |\n| browseClose | tabIndex | 关闭标签 |\n| browseNavigate | tabIndex, action(back/forward/reload/stop/goto), url? | 导航 |\n| browseExecJs | tabIndex, js | 执行 JS 并返回结果 |\n| browseGetDom | tabIndex | 获取完整 DOM HTML |\n| browseGetCookies | url | 获取指定 URL 的 Cookie |\n| browseGetStorage | tabIndex, type(local/session) | 获取 Storage 键值 |\n| browseScreenshot | tabIndex | 截图返回 base64 PNG |\n| browseExportMd | tabIndex, save?, name? | 导出为 Markdown |\n| browseFindInPage | tabIndex, text | 页内查找 |\n| browseClickElement | tabIndex, selector | 点击元素 (CSS 选择器) |\n| browseFillForm | tabIndex, selector, value | 填写输入框 |\n| browseScrollTo | tabIndex, x, y | 滚动页面 |\n| browseGetLinks | tabIndex | 提取所有链接 |\n| browseGetPageInfo | tabIndex | 页面概要 (title/url/meta/表单数) |\n| browseWaitForElement | tabIndex, selector, timeout? | 等待元素出现 |\n| browseSubmitForm | tabIndex, selector? | 提交表单 |\n| browseGetInputValues | tabIndex | 获取所有输入框值 |\n\n## 使用示例\n```json\n{\"cmd\":\"browseOpen\",\"url\":\"https://example.com\"}\n{\"cmd\":\"browseWaitForElement\",\"tabIndex\":0,\"selector\":\"#login\"}\n{\"cmd\":\"browseFillForm\",\"tabIndex\":0,\"selector\":\"#email\",\"value\":\"a@b.com\"}\n{\"cmd\":\"browseClickElement\",\"tabIndex\":0,\"selector\":\"button[type=submit]\"}\n{\"cmd\":\"browseScreenshot\",\"tabIndex\":0}\n\n## CDP 协议域 facade (与 Chrome DevTools Protocol 同名, 落在软件自身 WebView)\n一条 `cdp {method, params, tabIndex}` 路由全部域 — 工具调用逻辑与 Playwright/Chrome-CDP 一致, 执行用本软件浏览器基底:\n| method | params | 说明 |\n|------|------|------|\n| Browser.getVersion | - | 引擎/UA 版本 |\n| Page.navigate / reload / stopLoading / goBack / goForward | url? | 导航 |\n| Page.captureScreenshot | - | {data: base64 PNG} |\n| Page.getLayoutMetrics | - | 视口/内容尺寸/DPR |\n| Page.getNavigationHistory | - | 当前 URL/标题 |\n| Runtime.evaluate | expression | 执行 JS, 返回 {result:{type,value}} |\n| DOM.getDocument | - | 根文档 outerHTML |\n| DOM.getOuterHTML | selector | 指定元素 outerHTML |\n| DOM.querySelector / querySelectorAll | selector | 元素 tag/attrs/text |\n| Input.dispatchMouseEvent | x, y, type | 坐标派发鼠标事件 |\n| Input.insertText | text | 向焦点元素插入文本 |\n| Network.enable / disable | - | 注入 fetch/XHR hook 开始/停止抓包 |\n| Network.getRequests | - | {hooked:[req...], resources:[performance...]} |\n| Network.getResponseBody | requestId | 已捕获响应体 |\n示例: `cdp {method:\"Network.enable\", tabIndex:1}` 然后 `cdp {method:\"Page.reload\", tabIndex:1}` 再 `cdp {method:\"Network.getRequests\", tabIndex:1}`。\n```"
     },
     phone: {
       core: true,
@@ -353,6 +357,41 @@
       var s = await execJs(a.tabIndex|0, js);
       try{ return {ok:true, inputs: JSON.parse(s)}; }catch(e){ return {ok:true, inputs: []}; }
     },
+    // ── CDP 协议域 facade: 与 Chrome DevTools Protocol 同名方法 (Page.*/Runtime.*/DOM.*/Input.*/Network.*),
+    //    全部落在软件自身 WebView 上执行 (本软件即浏览器基底)。一条命令 cdp{method,params,tabIndex} 路由全部域。
+    cdp: async function(a){
+      if(!a||!a.method) return {ok:false,error:"需 method (CDP 方法, 如 Page.navigate / Runtime.evaluate / DOM.getDocument / Network.enable)"};
+      var ti=a.tabIndex|0, p=a.params||{}, m=String(a.method);
+      var esc=function(s){ return String(s).replace(/'/g,"\\'"); };
+      // Browser
+      if(m==="Browser.getVersion") return {ok:true, result:{product:"DevinCloud-WebView/"+APP_VERSION, protocolVersion:"1.3-facade", revision:APP_VERSION, userAgent: await execJs(ti,"navigator.userAgent")}};
+      // Page
+      if(m==="Page.navigate"){ N.browseNavigate(ti,"goto",p.url||""); return {ok:true, result:{frameId:String(ti), loaderId:""}}; }
+      if(m==="Page.reload"){ N.browseNavigate(ti,"reload",""); return {ok:true, result:{}}; }
+      if(m==="Page.stopLoading"){ N.browseNavigate(ti,"stop",""); return {ok:true, result:{}}; }
+      if(m==="Page.navigateToHistoryEntry"||m==="Page.goBack"){ N.browseNavigate(ti,"back",""); return {ok:true, result:{}}; }
+      if(m==="Page.goForward"){ N.browseNavigate(ti,"forward",""); return {ok:true, result:{}}; }
+      if(m==="Page.captureScreenshot"){ return {ok:true, result:{data: N.browseScreenshot?N.browseScreenshot(ti):""}}; }
+      if(m==="Page.getLayoutMetrics"){ var s=await execJs(ti,"JSON.stringify({w:innerWidth,h:innerHeight,sw:document.documentElement.scrollWidth,sh:document.documentElement.scrollHeight,dpr:devicePixelRatio})"); var d={}; try{d=JSON.parse(s);}catch(e){} return {ok:true, result:{layoutViewport:{clientWidth:d.w,clientHeight:d.h},contentSize:{width:d.sw,height:d.sh},devicePixelRatio:d.dpr}}; }
+      if(m==="Page.getNavigationHistory"){ var u=await execJs(ti,"location.href"); var t=await execJs(ti,"document.title"); return {ok:true, result:{currentIndex:0, entries:[{url:u,title:t}]}}; }
+      // Runtime
+      if(m==="Runtime.evaluate"){ var v=await execJs(ti, p.expression||p.js||""); return {ok:true, result:{result:{type: typeof v, value:v}}}; }
+      // DOM
+      if(m==="DOM.getDocument"){ var html=await execJs(ti,"document.documentElement.outerHTML"); return {ok:true, result:{root:{nodeName:"#document", baseURL: await execJs(ti,"location.href"), outerHTML:html}}}; }
+      if(m==="DOM.getOuterHTML"){ var sel=p.selector||"html"; var h=await execJs(ti,"(function(){var el=document.querySelector('"+esc(sel)+"');return el?el.outerHTML:'';})()"); return {ok:true, result:{outerHTML:h}}; }
+      if(m==="DOM.querySelector"||m==="DOM.querySelectorAll"){ var sel=p.selector||""; var all=(m==="DOM.querySelectorAll"); var js="(function(){try{var els=document.querySelectorAll('"+esc(sel)+"');var f=function(el){var a={};for(var i=0;i<el.attributes.length;i++)a[el.attributes[i].name]=el.attributes[i].value;return {tag:el.tagName,attrs:a,text:(el.innerText||'').slice(0,300)};};return JSON.stringify("+(all?"Array.prototype.slice.call(els,0,100).map(f)":"els[0]?f(els[0]):null")+");}catch(e){return 'null';}})()"; var s=await execJs(ti,js); var d=null; try{d=JSON.parse(s);}catch(e){} return {ok:true, result:(all?{nodes:d||[]}:{node:d})}; }
+      // Input
+      if(m==="Input.dispatchMouseEvent"){ var x=p.x||0,y=p.y||0,ty=p.type||"click"; var js="(function(){var el=document.elementFromPoint("+x+","+y+");if(!el)return 'no_el';el.dispatchEvent(new MouseEvent('"+esc(ty)+"',{bubbles:true,clientX:"+x+",clientY:"+y+"}));if('"+esc(ty)+"'==='click'&&el.click)el.click();return 'ok';})()"; var r=await execJs(ti,js); return {ok:r==='ok', result:{dispatched:r}}; }
+      if(m==="Input.insertText"){ var js="(function(){var el=document.activeElement;if(!el)return 'no_focus';el.value=(el.value||'')+'"+esc(p.text||"")+"';el.dispatchEvent(new Event('input',{bubbles:true}));return 'ok';})()"; var r=await execJs(ti,js); return {ok:r==='ok', result:{inserted:r}}; }
+      // Network (facade: 注入 hook + 读 performance 资源时间线)
+      if(m==="Network.enable"){ var r=await execJs(ti, NET_HOOK_JS); return {ok:true, result:{}, hook:r}; }
+      if(m==="Network.disable"){ await execJs(ti,"(function(){window.__cdpNetOff=true;return 'off';})()"); return {ok:true, result:{}}; }
+      if(m==="Network.getRequests"||m==="Network.getAllRequests"){ var s=await execJs(ti, NET_DUMP_JS); var d={hooked:[],resources:[]}; try{d=JSON.parse(s);}catch(e){} return {ok:true, result:d}; }
+      if(m==="Network.getResponseBody"){ var rid=esc(p.requestId||""); var s=await execJs(ti,"(function(){var n=(window.__cdpNet||[]).filter(function(x){return x.requestId==='"+rid+"';})[0];return n?JSON.stringify({body:n.body||'',base64Encoded:false}):'{}';})()"); var d={}; try{d=JSON.parse(s);}catch(e){} return {ok:true, result:d}; }
+      // Emulation (facade no-op)
+      if(m==="Emulation.setDeviceMetricsOverride") return {ok:true, result:{}, note:"facade no-op (WebView 视口由系统管理)"};
+      return {ok:false, error:"未支持的 CDP 方法: "+m+" (支持 Browser.getVersion / Page.* / Runtime.evaluate / DOM.* / Input.* / Network.*)"};
+    },
 
     // ══════════════════════════════════════════════════════════════════════
     // P7: 手机本体操控 (文件系统/相册/剪贴板/通知/分享/应用/设备信息)
@@ -489,6 +528,25 @@
         "| browseWaitForElement | tabIndex, selector, timeout? | 等待元素出现 |",
         "| browseSubmitForm | tabIndex, selector? | 提交表单 |",
         "| browseGetInputValues | tabIndex | 获取所有输入框值 |",
+        "",
+        "#### CDP 协议域 facade (一条 cdp 路由, 与 Chrome DevTools Protocol 同名 · 落在软件自身 WebView)",
+        "| cdp.method | params | 说明 |",
+        "|------|------|------|",
+        "| Browser.getVersion | - | 引擎/UA 版本 |",
+        "| Page.navigate / reload / stopLoading / goBack / goForward | url? | 导航 |",
+        "| Page.captureScreenshot | - | {data: base64 PNG} |",
+        "| Page.getLayoutMetrics | - | 视口/内容尺寸/DPR |",
+        "| Page.getNavigationHistory | - | 当前 URL/标题 |",
+        "| Runtime.evaluate | expression | 执行 JS, 返回 {result:{type,value}} |",
+        "| DOM.getDocument | - | 根文档 outerHTML |",
+        "| DOM.getOuterHTML | selector | 指定元素 outerHTML |",
+        "| DOM.querySelector / querySelectorAll | selector | 元素 tag/attrs/text |",
+        "| Input.dispatchMouseEvent | x, y, type | 坐标派发鼠标事件 |",
+        "| Input.insertText | text | 向焦点元素插入文本 |",
+        "| Network.enable / disable | - | 注入 fetch/XHR hook 抓包开/关 |",
+        "| Network.getRequests | - | {hooked:[req], resources:[performance]} |",
+        "| Network.getResponseBody | requestId | 已捕获响应体 |",
+        "> 调用: `cdp {method:\"Page.navigate\", params:{url:\"https://...\"}, tabIndex:1}`。抓包: 先 `Network.enable` → 触发请求 → `Network.getRequests`。",
         "",
         "### 手机本体操控 (需先 setRemoteOps enable:true)",
         "| 命令 | 参数 | 说明 |",
