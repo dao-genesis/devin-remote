@@ -3188,7 +3188,10 @@ function mcpProbe(idx){var m=(window._mcp||[])[idx];if(!m)return;var s=document.
 function mcpProbeAll(){var n=(window._mcp||[]).length;if(!n)return;toast('接测 '+n+' 项…',true);for(var i=0;i<n;i++){(function(j){setTimeout(function(){mcpProbe(j)},j*120)})(i);}}
 function mcpProbeRender(idx,r){var s=document.getElementById('mcp-probe-'+idx);if(!s)return;r=r||{};var col=r.ok?'var(--success)':(r.status===401||r.status===403||(r.label||'').indexOf('可达')>=0?'var(--warn)':'var(--danger)');s.style.color=col;s.textContent='· '+(r.ok?'✓ ':'✗ ')+(r.label||'')+(r.detail?'':'');s.title=r.detail||'';}
 // MCP 即时搜索/筛选 (纯前端, 不重渲染, 不丢焦点) — 对齐官网市场搜索
-function mcpFilter(q){q=(q||'').toLowerCase().trim();var cards=document.querySelectorAll('.mcp-card');for(var i=0;i<cards.length;i++){var k=cards[i].getAttribute('data-k')||'';cards[i].style.display=(!q||k.indexOf(q)>=0)?'':'none'}}
+function mcpFilter(q){q=(q||'').toLowerCase().trim();var cards=document.querySelectorAll('.mcp-card');for(var i=0;i<cards.length;i++){var k=cards[i].getAttribute('data-k')||'';var c=cards[i];var srcOk=true;if(!q&&c.className.indexOf('mcp-ide-card')>=0){var cs=c.getAttribute('data-src')||'';srcOk=!window._mcpSrc||window._mcpSrc.indexOf(cs)>=0;}c.style.display=((!q||k.indexOf(q)>=0)&&srcOk)?'':'none'}}
+// MCP 来源筛选: 默认只显示 Devin Desktop, 点来源标签可展开其他平台(Cursor/VS Code 等) — 给选择空间而不全量铺开
+function mcpSrcToggle(src){if(!window._mcpSrc)window._mcpSrc=[];var i=window._mcpSrc.indexOf(src);if(i>=0){if(window._mcpSrc.length>1)window._mcpSrc.splice(i,1);}else window._mcpSrc.push(src);mcpSrcApply();}
+function mcpSrcApply(){var chips=document.querySelectorAll('.mcp-src-chip');for(var i=0;i<chips.length;i++){var s=chips[i].getAttribute('data-src');var on=window._mcpSrc.indexOf(s)>=0;chips[i].style.background=on?'#1a7f5a':'transparent';chips[i].style.color=on?'#fff':'var(--muted)';chips[i].textContent=(on?'● ':'○ ')+s;}var cards=document.querySelectorAll('.mcp-ide-card');for(var j=0;j<cards.length;j++){var cs=cards[j].getAttribute('data-src')||'';cards[j].style.display=(window._mcpSrc.indexOf(cs)>=0)?'':'none';}}
 // 添加自定义 MCP → 直接装到本账号 (复用市场安装通道 devinAddCustomMcp), 对齐官网 Add custom MCP
 function mcpAddCustom(){sm('添加自定义 MCP (装到本账号)','<input id="m1" placeholder="名称 name (如 GitHub MCP)" style="width:100%;margin:4px 0"><select id="m2" style="width:100%;margin:4px 0"><option value="HTTP">HTTP / SSE (远程 URL)</option><option value="STDIO">STDIO (command/args)</option></select><input id="m3" placeholder="URL (HTTP) 或 command (STDIO, 如 npx)" style="width:100%;margin:4px 0"><input id="m4" placeholder="args 空格分隔 (STDIO) / Authorization 头值 (HTTP)" style="width:100%;margin:4px 0"><input id="m5" placeholder="简介 short_description (可选)" style="width:100%;margin:4px 0"><p style="font-size:10px;color:var(--muted);margin:4px 0">提示: 点下方预设可一键填 GitHub MCP</p><button class="btn sm" onclick="ipMcpPreset(&#39;github&#39;)">GitHub MCP 预设</button>',function(){var n=document.getElementById('m1').value.trim();if(!n)return false;var tr=document.getElementById('m2').value;var f3=document.getElementById('m3').value.trim();var f4=document.getElementById('m4').value.trim();var sd=document.getElementById('m5').value.trim();var spec={name:n,transport:tr,short_description:sd,installation_scope:'org'};if(tr==='STDIO'){spec.command=f3;spec.args=f4?f4.split(' ').filter(Boolean):[];spec.env_variables=[]}else{spec.url=f3;if(f4)spec.headers={Authorization:f4}}toast('安装中…',true);cmd('mcpMarketInstall',{spec:spec})})}
 function rT(tab,items,err,fallbackProxy){
@@ -3259,8 +3262,14 @@ function rT(tab,items,err,fallbackProxy){
     h+='<div class="br" style="margin-bottom:6px"><button class="btn sm primary" onclick="mcpAddCustom()">+ 自定义 MCP</button><button class="btn sm" onclick="mcpProbeAll()" title="逐项接测所有 MCP 连接(连通性验证)">🔍 全部接测</button></div>';
     h+='<input id="mcpq" placeholder="🔍 搜索 MCP (名称 / 简介)" oninput="mcpFilter(this.value)" style="width:100%;margin:0 0 8px;padding:6px 8px;box-sizing:border-box;background:var(--card,#222);color:var(--fg);border:1px solid var(--border);border-radius:4px">';
     var _curG='';
+    var _ideSrcs=[];items.forEach(function(x){if(x.group==='ide'&&x.source&&_ideSrcs.indexOf(x.source)<0)_ideSrcs.push(x.source);});
+    if(!window._mcpSrc)window._mcpSrc=_ideSrcs.indexOf('Devin Desktop')>=0?['Devin Desktop']:(_ideSrcs.length?[_ideSrcs[0]]:[]);
+    window._mcpSrc=window._mcpSrc.filter(function(s){return _ideSrcs.indexOf(s)>=0;});
+    if(!window._mcpSrc.length&&_ideSrcs.length)window._mcpSrc=_ideSrcs.indexOf('Devin Desktop')>=0?['Devin Desktop']:[_ideSrcs[0]];
     items.forEach(it=>{
-      if(it.group&&it.group!==_curG){_curG=it.group;h+='<div class="st" style="font-size:11px;text-transform:none;margin:8px 0 4px">'+(_curG==='preset'?'🌟 内置预设 · 接测 / 一键装到所有账号':_curG==='ide'?'💻 本机 IDE 内部 MCP · 一对一映射(默认不装·可选装)':'🛒 官网 MCP 市场 · 通用四大模块见 DAO Bridge MCP')+'</div>';}
+      if(it.group&&it.group!==_curG){_curG=it.group;h+='<div class="st" style="font-size:11px;text-transform:none;margin:8px 0 4px">'+(_curG==='preset'?'🌟 内置预设 · 接测 / 一键装到所有账号':_curG==='ide'?'💻 本机 IDE 内部 MCP · 默认仅显示 Devin Desktop(其他平台点下方来源标签展开)':'🛒 官网 MCP 市场 · 通用四大模块见 DAO Bridge MCP')+'</div>';
+        if(_curG==='ide'&&_ideSrcs.length){h+='<div id="mcpSrcBar" style="display:flex;flex-wrap:wrap;gap:4px;margin:0 0 6px;align-items:center"><span style="font-size:10px;color:var(--muted);margin-right:2px">来源:</span>'+_ideSrcs.map(function(s){var on=window._mcpSrc.indexOf(s)>=0;return '<span class="mcp-src-chip" data-src="'+esc(s)+'" onclick="mcpSrcToggle(this.getAttribute(&#39;data-src&#39;))" style="cursor:pointer;font-size:10px;padding:2px 9px;border-radius:10px;border:1px solid var(--border);background:'+(on?'#1a7f5a':'transparent')+';color:'+(on?'#fff':'var(--muted)')+'">'+(on?'● ':'○ ')+esc(s)+'</span>';}).join('')+'</div>';}
+      }
       const m=it.mcp||{};const idx=window._mcp.length;window._mcp.push(m);
       if(it.group==='ide'||it.group==='preset')window._mcpIde.push(idx);
       const nm=it.name||'';const dt=it.detail||'';
@@ -3273,7 +3282,9 @@ function rT(tab,items,err,fallbackProxy){
       btns+='<button class="btn sm" onclick="mcpAct('+idx+',&#39;profile&#39;)" title="加入反向注入档案 → 可批量注入所有账号">+档案</button>';
       btns+=lkBtn('mcps',String(nm).replace(/^★ /,''));
       var mkey=esc(String(nm+' '+dt).toLowerCase());
-      h+='<div class="card mcp-card" data-k="'+mkey+'"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+' <span id="mcp-probe-'+idx+'" style="margin-left:6px;color:var(--muted)"></span></span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'<div class="br" style="margin-top:4px">'+btns+'</div></div>';
+      var _ideCls=(it.group==='ide')?' mcp-ide-card':'';
+      var _hide=(it.group==='ide'&&it.source&&window._mcpSrc.indexOf(it.source)<0)?' style="display:none"':'';
+      h+='<div class="card mcp-card'+_ideCls+'" data-src="'+esc(it.source||'')+'" data-k="'+mkey+'"'+_hide+'><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+' <span id="mcp-probe-'+idx+'" style="margin-left:6px;color:var(--muted)"></span></span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'<div class="br" style="margin-top:4px">'+btns+'</div></div>';
     });
     // 本机 IDE MCP 默认自动接测 (用户「初始化接测」) — 市场项按需点接测
     setTimeout(function(){try{(window._mcpIde||[]).forEach(function(i){mcpProbe(i)})}catch(e){}},150);
@@ -7131,7 +7142,7 @@ async function daoReplyMcpTab(reply: (m: any) => void): Promise<void> {
         };
         // 名前缀: ★=云端已装 / ⊘=IDE 内已禁用 — 与各 IDE 内显示一一对应
         const prefix = isInstalled ? '★ ' : (e.disabled ? '⊘ ' : '');
-        return { group: 'ide', name: prefix + e.name + ' · ' + e.source, detail, connected: isInstalled, mcp: mcpObj };
+        return { group: 'ide', source: e.source, name: prefix + e.name + ' · ' + e.source, detail, connected: isInstalled, mcp: mcpObj };
     });
     const market = mkItems.map((m) => ({
         group: 'market',
