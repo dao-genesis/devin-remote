@@ -1,6 +1,6 @@
 {
-  "versionCode": 50,
-  "versionName": "0.15.19",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.19/DevinCloud-mobile-v0.15.19.apk",
-  "notes": "v0.15.19 · 后台持久化 / 持久稳定化 (整合 knoop7/Ava 优质模块)\n· 电池优化豁免(Doze)：新增申请「电池不优化」入口 + 首启动一次性温和引导；不豁免时息屏常被节流/杀死, 豁免后中继更稳。\n· 各厂商自启动深链：穿透面板新增「🔋 后台保活」区, 一键跳转 华为/小米/OPPO/vivo/三星/一加/魅族 的「自启动 / 后台白名单 / 省电策略」设置页 + 本机保活指引。\n· WifiLock：RelayService 在 PARTIAL_WAKE_LOCK 之外再持高性能/低延迟 Wi-Fi 锁, 息屏不掉 Wi-Fi, WSS 心跳不断。\n· BootReceiver 增强：除 BOOT_COMPLETED 外, 覆盖各厂商 QUICKBOOT_POWERON + MY_PACKAGE_REPLACED(OTA 自更新后自动重启中继)。\n· 云端 Agent 经隧道可读 keepAliveStatus 远程核对保活状态。\n· 签名一致 e261b27f，v0.15.x 原地覆盖升级数据不丢。"
+  "versionCode": 51,
+  "versionName": "0.15.20",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.15.20/DevinCloud-mobile-v0.15.20.apk",
+  "notes": "v0.15.20 · 内网穿透板块全面完善\n· 去中心化隧道(路线B)：cloudflared 异常退出后自动重试(2s/4s/6s)，超过 3 次诚实回退中继并明示「隧道不可用·已回退中继(Worker)，手机仍在线」——隧道与中继并行，隧道失败丝毫不影响中继。\n· 穿透面板新增「当前生效链路」指示：隧道连通→走隧道(直连本设备)；否则→中继 Worker(默认·在线)，状态/颜色一目了然。\n· 修正面板/注释陈旧文案：token 已持久化复用、长期稳定(P1，不再每冷启动轮换)，端点 URL+Token 长期不变，驱动方无需每次重拿。\n· Worker(中继)同步上 WebSocket Hibernation + 基础限流(需重新部署 Worker 生效)：常连不再全天候计费，用户量增多后成本可降一个数量级；协议对外完全不变。\n· 签名一致 e261b27f，0.15.x 原地覆盖升级不丢数据。"
 }

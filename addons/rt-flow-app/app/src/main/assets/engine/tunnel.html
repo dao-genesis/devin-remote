@@ -122,6 +122,8 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   <span id="decentLabel" style="font-size:12px;color:var(--vscode-descriptionForeground)">已关闭</span>
 </div>
 <div id="decentStatus" class="muted" style="font-size:12px">—</div>
+<div class="lbl" style="margin-top:6px">当前生效链路</div>
+<div id="activeLink" class="val" style="font-weight:600">中继 Worker（默认）</div>
 <div class="lbl" style="margin-top:6px">去中心化公网 URL</div>
 <div id="decentUrl" class="url">—</div>
 <div class="row" style="margin-top:6px">
@@ -284,7 +286,7 @@ function _render(s){
   else{cfSt.textContent='未配置（使用零配置快速隧道）';cfSt.style.color='';document.getElementById('cfLoginForm').style.display='block';}
 }
 // ── 穿透配置 (每设备独立·原生身份为唯一真源) ──
-//  默认无需填写: 原生已自动生成「设备唯一 session + 每冷启动轮换 token」。此处仅供高级用户自定义中继。
+//  默认无需填写: 原生已自动生成「设备唯一 session + 持久化复用 token」(P1: token 不再每冷启动轮换, 端点长期稳定; 仅首次或手动刷新时才生成新 token)。此处仅供高级用户自定义中继。
 function saveRelayCfg(){
   var cfg={url:(v('cfgUrl')||"").trim(), token:(v('cfgToken')||"").trim(), session:(v('cfgSession')||"").trim()};
   if(!cfg.url||!cfg.session){ _result('saveCfg',false,'至少填写 url 与 session (token 留空则原生自动轮换)'); return; }
@@ -331,13 +333,21 @@ function copyDecentAccess(){
   _result('copyDecent', true, '已复制 去中心化URL+Token+Session+E2EKey (该 URL 直连本设备, 不经任何共享 Worker)');
 }
 function updateDecentUI(t){
-  t=t||{}; var on=!!t.enabled;
+  t=t||{}; var on=!!t.enabled; var fb=!!t.fallback;
   var cb=document.getElementById('decentToggle'); if(cb) cb.checked=on;
   var sl=document.getElementById('decentSlider');
-  if(sl){ sl.style.background=on?'#3fb950':'#333';
+  if(sl){ sl.style.background=on?(fb?'#d29922':'#3fb950'):'#333';
     sl.innerHTML='<span style="position:absolute;height:20px;width:20px;left:'+(on?'24px':'3px')+';bottom:3px;background:white;border-radius:50%;transition:.3s"></span>'; }
-  var lb=document.getElementById('decentLabel'); if(lb) lb.textContent=on?(t.connected?'已连通 🟢':'启动中…'):'已关闭';
-  var st=document.getElementById('decentStatus'); if(st) st.textContent=on?('状态: '+(t.msg||(t.connected?'隧道已连通':'启动中…'))):'未开启 (默认走中继; 开启即每设备独立免费隧道)';
+  var lb=document.getElementById('decentLabel'); if(lb) lb.textContent=on?(t.connected?'已连通 🟢':(fb?'已回退中继 🟡':'启动中…')):'已关闭';
+  var st=document.getElementById('decentStatus');
+  if(st){ st.textContent=on?('状态: '+(t.msg||(t.connected?'隧道已连通':'启动中…'))):'未开启 (默认走中继; 开启即每设备独立免费隧道)';
+    st.style.color=fb?'#f0883e':(t.connected?'#3fb950':''); }
+  // 当前生效链路: 隧道连通→走隧道(直连); 否则一律走中继 Worker(隧道与中继并行, 中继始终可用)。
+  var al=document.getElementById('activeLink');
+  if(al){ var r=_relay(); var relayOn=!!r.connected;
+    if(on&&t.connected){ al.textContent='🌐 去中心化隧道（直连本设备·不经 Worker）'; al.style.color='#3fb950'; }
+    else { al.textContent='☘ 中继 Worker（默认）'+(relayOn?' · 在线':' · 连接中…')+(on?'（隧道不可用已回退）':''); al.style.color=relayOn?'':'#f0883e'; }
+  }
   var u=document.getElementById('decentUrl'); if(u) u.textContent=(on&&t.url)?(t.url+"/relay/"+(_conn().session||"")):'—';
 }
 function refreshTunnel(){

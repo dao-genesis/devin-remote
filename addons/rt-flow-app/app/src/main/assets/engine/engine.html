@@ -690,13 +690,14 @@
   try { var um = N.readFile && N.readFile("user-module.js"); if (um) { (0,eval)(um); log("user-module loaded"); } } catch(e){ log("user-module err "+e); }
 
   // 穿透配置「去中心化」: 唯一真源 = 原生 relay-config.json (N.getConn)。
-  //   原生层 ensureRelayIdentity() 在每次冷启动: 设备唯一 session(防卸载持久化) + SecureRandom 轮换 token。
+  //   原生层 ensureRelayIdentity() 冷启动: 设备唯一 session + token + e2eKey 均**防卸载持久化、稳定复用**
+  //   (P1: token 不再每冷启动轮换, 端点长期稳定, 驱动方无需每次重拿; 仅首次或手动「刷新Token」才换)。
   //   引擎侧不再自行生成/读取 localStorage, 避免共享 session 串号; 直接采用原生身份。
   try {
     var conn = JSON.parse(N.getConn ? (N.getConn()||"{}") : "{}");
     if (conn && conn.url && conn.token && conn.session) {
       DaoRelayApp.start({ url: conn.url, token: conn.token, session: conn.session });
-      log("relay starting → " + conn.url + " session=" + conn.session + " [设备身份·token已轮换]");
+      log("relay starting → " + conn.url + " session=" + conn.session + " [设备身份·token持久复用]");
     } else { log("穿透未配置: 原生身份未就绪"); }
   } catch (e) { log("conn parse err " + e); }
 })();

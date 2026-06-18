@@ -1126,7 +1126,8 @@ public class MainActivity extends AppCompatActivity {
     // ── 内网穿透「去中心化」身份 ────────────────────────────────────────────
     //  零账号配对中继 (dao-relay): (session,token) 即命名空间, 谁知道谁可驱动。
     //  · session = 设备唯一身份, 持久化到防卸载 vault → 重装/换机沿用同一身份(数据不丢)
-    //  · token   = 每次冷启动用 SecureRandom 高熵轮换 → 旧 token 立即失效(安全)
+    //  · token   = SecureRandom 高熵生成, **持久化复用、长期稳定** (P1: 不再每冷启动轮换 →
+    //              端点 URL+token 长期不变, 驱动方无需每次重拿; 仅首次或用户手动「刷新Token」才换)
     //  · url     = 中继会合点 (conn.json 默认 worker, 可被用户覆盖)
     //  生成的 relay-config.json 写入 filesDir, 供 RelayService 引擎 N.getConn() 读取。
     private static String randHex(int nChars) {
