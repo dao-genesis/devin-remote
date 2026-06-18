@@ -6908,7 +6908,7 @@ interface McpInstallSpec {
 // 软编码扫描本机 IDE / 桌面 Agent 的内部 MCP 配置 (Devin Desktop / Windsurf / Cursor / Claude / VS Code …)。
 //   通用四大模块 MCP 是平台级(随账号反向注入); 此处把「用户本地已配的 MCP」一对一映射出来,
 //   默认不装, 用户可在 MCP 面板逐个选装到 Devin Cloud 账号 (install spec 即 1:1)。
-interface IdeMcpEntry { name: string; transport: string; command: string; args: string[]; env: Record<string, string>; url: string; headers: Record<string, string>; source: string; }
+interface IdeMcpEntry { name: string; transport: string; command: string; args: string[]; env: Record<string, string>; url: string; headers: Record<string, string>; source: string; disabled: boolean; }
 function _stripJsonc(raw: string): string {
     // 去 // 与 /* */ 注释 + 尾逗号 (settings.json 常为 JSONC) — 守柔尽力, 失败由上层 try 兜底。
     let s = raw.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -6919,7 +6919,10 @@ function _stripJsonc(raw: string): string {
 function scanIdeMcps(): IdeMcpEntry[] {
     const home = os.homedir();
     const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
     // 软编码候选路径 — 存在即扫, 不存在则跳; 用户亦可在 ~/.dao/ide-mcp.json 手动补充。
+    //   141 实测确认: Windsurf(.codeium/windsurf) · Cursor(.cursor) · Gemini Antigravity(.gemini/*) 三处真实存在。
+    //   Devin Desktop 本身不存本地 MCP JSON(其 MCP 源自云端账号/org) → 由官网市场段一对一呈现, 不在此扫。
     const candidates: Array<{ p: string; src: string }> = [
         { p: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), src: 'Windsurf' },
         { p: path.join(home, '.codeium', 'windsurf-next', 'mcp_config.json'), src: 'Windsurf Next' },
@@ -6927,13 +6930,21 @@ function scanIdeMcps(): IdeMcpEntry[] {
         { p: path.join(home, '.devin', 'mcp_config.json'), src: 'Devin Desktop' },
         { p: path.join(appData, 'Devin', 'User', 'mcp.json'), src: 'Devin Desktop' },
         { p: path.join(home, '.cursor', 'mcp.json'), src: 'Cursor' },
+        // Gemini Antigravity (141 实测路径) — 多副本择存在者扫
+        { p: path.join(home, '.gemini', 'antigravity', 'mcp_config.json'), src: 'Antigravity' },
+        { p: path.join(home, '.gemini', 'antigravity-ide', 'mcp_config.json'), src: 'Antigravity' },
+        { p: path.join(home, '.gemini', 'config', 'mcp_config.json'), src: 'Gemini' },
+        { p: path.join(home, '.gemini', 'mcp_config.json'), src: 'Gemini' },
         { p: path.join(appData, 'Claude', 'claude_desktop_config.json'), src: 'Claude' },
         { p: path.join(appData, 'Code', 'User', 'mcp.json'), src: 'VS Code' },
         { p: path.join(appData, 'Code', 'User', 'settings.json'), src: 'VS Code' },
+        { p: path.join(localAppData, 'Programs', 'cursor', 'mcp.json'), src: 'Cursor' },
         { p: path.join(home, '.mcp', 'config.json'), src: 'MCP' },
         { p: path.join(home, '.dao', 'ide-mcp.json'), src: 'DAO' },
     ];
     const out: IdeMcpEntry[] = [];
+    // 道·按「来源+名称」去重(非仅名称): 各 IDE 同名 MCP 各自呈现, 与各 IDE 内显示一一对应,
+    //   不再因 Cursor/Windsurf 同有 github 而吞掉其一(此前全局名去重正是「数量对不上」一因)。
     const seen = new Set<string>();
     for (const c of candidates) {
         try {
@@ -6944,7 +6955,7 @@ function scanIdeMcps(): IdeMcpEntry[] {
             const servers = (j && (j.mcpServers || j.servers || (j.mcp && j.mcp.servers))) || {};
             for (const name of Object.keys(servers)) {
                 const s = servers[name] || {};
-                const key = String(name).toLowerCase();
+                const key = c.src.toLowerCase() + '::' + String(name).toLowerCase();
                 if (seen.has(key)) continue;
                 seen.add(key);
                 const isHttp = !!(s.url || s.serverUrl || ['http', 'sse', 'streamable-http', 'streamable_http'].includes(String(s.type || s.transport || '').toLowerCase()));
@@ -6958,6 +6969,7 @@ function scanIdeMcps(): IdeMcpEntry[] {
                     args: Array.isArray(s.args) ? s.args.map((a: any) => String(a)) : [],
                     env, url: String(s.url || s.serverUrl || ''),
                     headers: (s.headers && typeof s.headers === 'object') ? s.headers : {},
+                    disabled: !!(s.disabled === true || s.enabled === false),
                 });
             }
         } catch { /* 守柔: 单文件解析失败不阻断其余 */ }
@@ -6981,8 +6993,42 @@ function daoWhichCmd(cmd: string): string {
     return '';
 }
 
+// 道·MCP 接测专用 POST: 直连优先, 直连不可达(status 0)且本机有 VPN/代理时, 经 CONNECT 隧道(127.0.0.1:port)重试。
+//   141 实测: api.githubcopilot.com 直连超时, 走本机 Clash(7890)→ initialize 应答 200。仅取 HTTP 状态行即判活(SSE 不必等流结束)。
+function daoMcpProbePost(targetUrl: string, headers: Record<string, string>, body: any, timeoutMs: number): Promise<{ status: number; text: string; via: string }> {
+    return new Promise(async (resolve) => {
+        let done = false; const fin = (r: { status: number; text: string; via: string }) => { if (!done) { done = true; resolve(r); } };
+        // ① 直连
+        try { const d = await devinJsonPost(targetUrl, headers, body, timeoutMs); if (d && d.status) { fin({ status: d.status, text: String(d.text || ''), via: '直连' }); return; } } catch { /* 守柔 */ }
+        // ② 直连不可达 → 经本机代理 CONNECT 隧道重试 (无代理则维持 0)
+        const port = detectedProxyPort || detectProxyPort();
+        if (done) return;
+        if (!port) { fin({ status: 0, text: '直连失败且未检出本机代理', via: '直连' }); return; }
+        let u: URL; try { u = new URL(targetUrl); } catch { fin({ status: 0, text: 'bad url', via: '直连' }); return; }
+        const tlsSock = await createProxyTunnel(u.hostname);
+        if (done) return;
+        if (!tlsSock) { fin({ status: 0, text: '代理隧道建立失败 (port ' + port + ')', via: '代理' }); return; }
+        const data = Buffer.from(asciiSafeJson(body), 'utf8');
+        const h: Record<string, string> = Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream', 'User-Agent': DEVIN_UA }, headers || {});
+        let reqStr = 'POST ' + (u.pathname + u.search) + ' HTTP/1.1\r\nHost: ' + u.hostname + '\r\n';
+        for (const k of Object.keys(h)) reqStr += k + ': ' + h[k] + '\r\n';
+        reqStr += 'Content-Length: ' + data.length + '\r\nConnection: close\r\n\r\n';
+        let buf = '';
+        const to = setTimeout(() => { try { tlsSock.destroy(); } catch { /* 守柔 */ } fin({ status: 0, text: '代理超时', via: '代理' }); }, timeoutMs);
+        tlsSock.on('data', (c: Buffer) => {
+            buf += c.toString();
+            // 仅需状态行即判活(SSE 流可不结束) — 收到完整响应头即解析返回
+            if (buf.indexOf('\r\n\r\n') >= 0) { const m = buf.match(/^HTTP\/\d\.\d\s+(\d+)/); clearTimeout(to); try { tlsSock.destroy(); } catch { /* 守柔 */ } fin({ status: m ? parseInt(m[1]) : 0, text: buf.slice(0, 400), via: '代理' }); }
+        });
+        tlsSock.on('end', () => { clearTimeout(to); const m = buf.match(/^HTTP\/\d\.\d\s+(\d+)/); fin({ status: m ? parseInt(m[1]) : 0, text: buf.slice(0, 400), via: '代理' }); });
+        tlsSock.on('error', () => { clearTimeout(to); fin({ status: 0, text: '代理连接错误', via: '代理' }); });
+        try { tlsSock.write(reqStr); tlsSock.write(data); } catch { clearTimeout(to); fin({ status: 0, text: '代理写入失败', via: '代理' }); }
+    });
+}
+
 // 帛书·「知不知尚矣」— MCP 逐项接测(连接验证): 实际探测端点连通性, 非仅看 is_installed 标志。
 //   HTTP/SSE: JSON-RPC initialize 探测(MCP streamable-http) → 2xx 连通 · 401/403 可达需鉴权 · 0 不可达。
+//             直连不通自动经本机 VPN/代理隧道复测(用户有 Clash/V2Ray 即无为而自用之)。
 //   STDIO   : PATH 中解析 command 是否可执行(args/env 由官网侧实跑, 此处验本机命令存在性)。
 async function daoProbeMcp(spec: any): Promise<{ ok: boolean; status: number; label: string; detail: string }> {
     spec = spec || {};
@@ -6994,13 +7040,13 @@ async function daoProbeMcp(spec: any): Promise<{ ok: boolean; status: number; la
         const rawH = spec.headers;
         if (rawH && typeof rawH === 'object') for (const k of Object.keys(rawH)) hdrs[k] = String(rawH[k] != null ? rawH[k] : '');
         const body = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'dao-probe', version: '1.0' } } };
-        let r: any; try { r = await devinJsonPost(url, hdrs, body, 12000); } catch (e: any) { return { ok: false, status: 0, label: '不可达', detail: String(e && e.message || e) }; }
-        const s = r.status || 0;
-        if (s >= 200 && s < 300) return { ok: true, status: s, label: '已连通', detail: 'MCP initialize 应答 ' + s };
-        if (s === 401 || s === 403) return { ok: false, status: s, label: '可达·需鉴权', detail: '端点可达, 需有效凭证 (' + s + ')' };
-        if (s === 400 || s === 404 || s === 405 || s === 406) return { ok: false, status: s, label: '可达·应答异常', detail: '端点可达, 非标准 MCP 应答 (' + s + ')' };
+        let r: any; try { r = await daoMcpProbePost(url, hdrs, body, 12000); } catch (e: any) { return { ok: false, status: 0, label: '不可达', detail: String(e && e.message || e) }; }
+        const s = r.status || 0; const via = r.via ? ('[' + r.via + '] ') : '';
+        if (s >= 200 && s < 300) return { ok: true, status: s, label: '已连通', detail: via + 'MCP initialize 应答 ' + s };
+        if (s === 401 || s === 403) return { ok: false, status: s, label: '可达·需鉴权', detail: via + '端点可达, 需有效凭证 (' + s + ')' };
+        if (s === 400 || s === 404 || s === 405 || s === 406) return { ok: false, status: s, label: '可达·应答异常', detail: via + '端点可达, 非标准 MCP 应答 (' + s + ')' };
         if (s === 0) return { ok: false, status: 0, label: '不可达', detail: '连接失败/超时: ' + String(r.text || '').slice(0, 100) };
-        return { ok: false, status: s, label: '应答 ' + s, detail: String(r.text || '').slice(0, 120) };
+        return { ok: false, status: s, label: '应答 ' + s, detail: via + String(r.text || '').slice(0, 120) };
     }
     const cmd = String(spec.command || '').trim();
     if (!cmd) return { ok: false, status: 0, label: '缺少命令', detail: 'STDIO MCP 未配置 command' };
@@ -7029,13 +7075,17 @@ async function daoReplyMcpTab(reply: (m: any) => void): Promise<void> {
     const installedNames = new Set<string>(mkItems.filter((m) => m.installed).map((m) => String(m.name || '').toLowerCase()));
     const ide = ideRaw.map((e) => {
         const isInstalled = installedNames.has(e.name.toLowerCase());
+        const tail = (e.transport === 'HTTP' ? e.url : (e.command + ' ' + (e.args || []).join(' '))).slice(0, 140);
+        const detail = '[' + e.source + (e.disabled ? ' · 已禁用' : '') + '] ' + tail;
         const mcpObj: any = {
             name: e.name, slug: e.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-            transport: e.transport, detail: '[' + e.source + ' 本地] ' + (e.transport === 'HTTP' ? e.url : (e.command + ' ' + (e.args || []).join(' '))).slice(0, 140),
+            transport: e.transport, detail,
             command: e.command, args: e.args, env_variables: e.env, url: e.url, headers: e.headers,
-            installation_scope: 'org', installed: isInstalled, ideSource: e.source,
+            installation_scope: 'org', installed: isInstalled, ideSource: e.source, disabled: e.disabled,
         };
-        return { group: 'ide', name: (isInstalled ? '★ ' : '') + e.name, detail: mcpObj.detail, connected: isInstalled, mcp: mcpObj };
+        // 名前缀: ★=云端已装 / ⊘=IDE 内已禁用 — 与各 IDE 内显示一一对应
+        const prefix = isInstalled ? '★ ' : (e.disabled ? '⊘ ' : '');
+        return { group: 'ide', name: prefix + e.name + ' · ' + e.source, detail, connected: isInstalled, mcp: mcpObj };
     });
     const market = mkItems.map((m) => ({
         group: 'market',
