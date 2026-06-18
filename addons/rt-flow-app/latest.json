@@ -1,6 +1,6 @@
 {
-  "versionCode": 61,
-  "versionName": "0.17.4",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.4/DevinCloud-mobile-v0.17.4.apk",
-  "notes": "v0.17.4 · 浏览器自动化「道并行而不相悖」: 远程开页默认后台静默, 不再抢占用户当前前台页 (实测发现 browseOpen 旧逻辑会 selectTab 切到新标签, 打断用户)。\n· browseOpen 改为后台开页(autoHost 停泊·JS/截图照常可用), 返回 tabIndex; 新增 foreground:true 参数才提到前台。\n· 新增 browseActivateTab {tabIndex}: 需要前端同步反映某页时显式提到前台。\n· 含 0.17.3 全部改动: browseSubmitForm 鲁棒重写(requestSubmit/回车)、长后台静默自愈重载、接入文档两大模块/两按钮、browseListTabs 凭据脱敏。\n· 签名一致, 原地覆盖升级不丢数据。"
+  "versionCode": 62,
+  "versionName": "0.17.5",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.5/DevinCloud-mobile-v0.17.5.apk",
+  "notes": "v0.17.5 · 穿透面板「分而治之·重量级文档」: 接入文档四按钮(复制云端/本地MD·打开云端/本地MD)→ 两按钮(打开 / 复制), 去云端/本地之分。\n· 「复制接入信息」改为轻量快速接入: 接入信息 + 两步授权(setRemoteOps / phoneEnsureControl) + curl 模板 + 软件/手机最常用底层命令, 够云端 Agent 立刻上手。\n· 接入文档(打开/复制)为重量级全量: 两大模块分而治之 — ① 软件本体(含浏览器自动化子模块) ② 手机一切底层(本体+敏感数据+无障碍/Shizuku 系统级), 命令全平铺、操作到底层 API。\n· 文档同步 v0.17.4 浏览器改动: browseOpen 默认后台静默(不打扰用户当前页·道并行而不相悖)+ foreground 参数, 新增 browseActivateTab。\n· 含 0.17.1~0.17.4 全部改动(近期对话并发重构/搜索/稳定性自愈/凭据脱敏/后台开页)。签名一致, 原地覆盖升级不丢数据。"
 }

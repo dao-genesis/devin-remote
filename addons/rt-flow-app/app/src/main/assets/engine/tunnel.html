@@ -217,10 +217,11 @@ function _cloudMd(){
     "# 模块一 · 软件本体 (内含浏览器操作子模块)",
     "操控本软件自身的一切: 内置浏览器引擎 + 账号切换 + Devin Cloud 全功能 CRUD + 内网穿透 + 管理。","",
     "## 1.1 浏览器自动化 (内置 WebView · 等价 Playwright / Chrome-CDP / 浏览器-MCP)",
-    "查看+操作任意网页全在软件底层完成, 不干扰用户当前页。",
+    "查看+操作任意网页全在软件底层完成, **道并行而不相悖**: 远程开页默认后台静默(autoHost 停泊·JS/截图照常可用), 不抢占用户当前前台页; 需让用户前端同步反映某页时才显式提到前台。",
     "| 命令 | 参数 | 说明 |","|------|------|------|",
     "| browseListTabs | - | 列出所有标签 (index/url/title/account/active) |",
-    "| browseOpen | url, account? | 打开新标签 |",
+    "| browseOpen | url, account?, foreground? | 后台静默开新标签(默认不打扰用户当前页); foreground:true 才提到前台。返回 tabIndex |",
+    "| browseActivateTab | tabIndex | 把指定标签提到前台(需前端同步反映时显式调用) |",
     "| browseClose | tabIndex | 关闭标签 |",
     "| browseNavigate | tabIndex, action(back/forward/reload/stop/goto), url? | 导航 |",
     "| browseExecJs | tabIndex, js | 执行 JS 并返回结果 |",
@@ -344,8 +345,27 @@ function handle(m){
   if(op==='copyAccess'){
     var r=_relay(); var base=((r.activeUrl||c.url||"")+"").replace(/\/$/,'');
     var u=base+"/relay/"+c.session;
-    var block="公网入口: "+u+"\nToken: "+(c.token||"")+"\nSession: "+(c.session||"");
-    try{N.clip&&N.clip(block);}catch(e){} _result('copyAccess',true,'已复制 URL+Token+Session (一并粘给云端 Agent)'); return; }
+    // 轻量级快速接入: 接入信息 + 两步授权 + curl 模板 + 软件/手机最常用命令。够云端 Agent 立刻上手, 全量见「接入文档」。
+    var block=[
+      "═══ Devin Cloud 手机版 · 快速接入 ═══",
+      "公网入口: "+u,
+      "Token: "+(c.token||""),
+      "Session: "+(c.session||""),
+      "",
+      "授权(用户各点一次「允许」即长期有效):",
+      "  setRemoteOps {enable:true}   开启 浏览器/软件本体/手机操控",
+      "  phoneEnsureControl           系统级接管(无障碍·点击/读屏)",
+      "",
+      "调用模板:",
+      "curl -s -X POST "+u+" -H 'Authorization: Bearer "+(c.token||"<TOKEN>")+"' -H 'Content-Type: application/json' -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\"}}'",
+      "",
+      "最常用命令(底层):",
+      "  软件/浏览器: browseOpen{url}(默认后台不打扰·foreground:true 才提到前台) · browseScreenshot{tabIndex} · browseExecJs{tabIndex,js} · getState",
+      "  手机底层:    phoneScreenCapture · phoneTap{x,y} · phoneDumpScreen · phoneShell{command}",
+      "",
+      "全量文档(两大模块·所有命令): 点「📄 接入文档 → 打开/复制」, 或调 getCloudMd。"
+    ].join("\n");
+    try{N.clip&&N.clip(block);}catch(e){} _result('copyAccess',true,'已复制·轻量快速接入(接入信息+授权+常用命令), 全量见接入文档'); return; }
   if(op==='copyUrl'){ var u=c.url.replace(/\/$/,'')+"/relay/"+c.session; try{N.clip&&N.clip(u);}catch(e){} _result('copyUrl',true,'已复制公网入口'); return; }
   if(op==='copyToken'){ try{N.clip&&N.clip(c.token||"");}catch(e){} _result('copyToken',true,'已复制 Token'); return; }
   if(op==='restart'){ try{N.relayRestart&&N.relayRestart();}catch(e){} _result('restart',true,'已请求重连中继'); setTimeout(_push,800); return; }
