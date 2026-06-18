@@ -184,6 +184,8 @@ public class RelayService extends Service {
         wifiLock = null;
     }
 
+    private int engineRecoveries = 0;   // 引擎渲染进程被回收并自愈的累计次数 (诊断用)
+
     @SuppressWarnings("SetJavaScriptEnabled")
     private void initEngine() {
         engine = new WebView(this);
@@ -195,6 +197,22 @@ public class RelayService extends Service {
         s.setAllowFileAccessFromFileURLs(true);
         s.setAllowUniversalAccessFromFileURLs(true); // 让 file:// 引擎页跨域 fetch Devin API (无 CORS 阻断)
         if (Build.VERSION.SDK_INT >= 21) s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        // 引擎 WebView 是无界面(永远离屏)的, 系统默认把离屏 WebView 渲染进程降到最低优先级 →
+        //   内存压力下最先被回收 = 中继断连。这里钉住为 IMPORTANT 且离屏不降级, 大幅减少被杀概率 (修"经常自动断连")。
+        if (Build.VERSION.SDK_INT >= 24)
+            engine.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+        // 渲染进程一旦真被系统回收: 若不接管, Android 默认会连带杀掉整个 App 进程(= 闪退 + 断连)。
+        //   接管 → 销毁死实例 → 重建引擎页(engine.html 内联 DaoRelayApp.start 自动重连中继) → 进程不被杀。
+        engine.setWebViewClient(new android.webkit.WebViewClient() {
+            @Override
+            public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
+                engineRecoveries++;
+                lastStatus = "{\"connected\":false,\"recovering\":true,\"recoveries\":" + engineRecoveries + "}";
+                try { if (engine == view) engine = null; view.destroy(); } catch (Exception ignored) {}
+                main.postDelayed(() -> { try { initEngine(); } catch (Exception ignored) {} }, 800);
+                return true;   // 已处理: 系统不再连带杀 App
+            }
+        });
         engine.addJavascriptInterface(new Bridge(), "Native");
         engine.loadUrl("file:///android_asset/engine/engine.html");
         engine.resumeTimers();
