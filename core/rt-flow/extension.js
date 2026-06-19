@@ -337,6 +337,9 @@ let _multiPanel = null;
 let _multiReady = false;
 const _multiQueue = [];
 const _multiTabs = new Map(); // id -> {id,label,url,email,devinId,accNo,dollars,title,status}
+// 归一 · 「全功能面板六大板块」提供者 (由 dao-vsix 经 _internals.setCloudProvider 注入)。
+// {buildHtml, handleMessage, setHostPost, refresh} — 外壳以 blob-iframe 挂载其 HTML 当同级子网页。
+let _cloudProvider = null;
 function _postMulti(m) {
   if (_multiPanel && _multiReady) {
     try { _multiPanel.webview.postMessage(m); } catch (e) {}
@@ -465,7 +468,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
   </div>
   <div id="tabs"></div>
   <div id="body">
-    <div id="hint"><div class="big">🌐</div><div>归一浏览器 · 一个面板多窗口<br>点 ☰ 选择页面：会话 / 知识 / Playbooks / 密钥 / 集成 / 用量 等 Devin Cloud 全部板块，或新建 Devin 标签<br>每个标签各登各号、互不串号 · 工具条 ↗ 可用系统浏览器打开当前页</div></div>
+    <div id="hint"><div class="big">🌐</div><div>归一面板 · 一个外壳多子网页(对齐手机 APK)<br>点 ☰ 选六大板块：🏠主页 / 🔀切号 / 🌐公网穿透 / 💬对话备份 / 💉反向注入 / 🧩MCP，或新建 Devin 标签<br>六大板块与多实例账号页同级并排 · 平级切换 · 各登各号互不串号</div></div>
     <div id="stack"></div>
     <div class="spin" id="spin"><span class="ld"></span>加载中…</div>
     <div id="drop">松开以拖入文件到当前窗口</div>
@@ -477,6 +480,8 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 (function(){
 var vscode=acquireVsCodeApi();
 var tabs={},order=[],active=null,favs=[],history=[],accounts=[],bridge=null;
+var BOARD_ID='__board__',_boardFrame=null,_boardReady=false,_boardMounted=false,_boardReq=false,_boardPending=null,_boardUrl='';
+function isBoard(){return active===BOARD_ID;}
 var S=document.getElementById('stack'),BAR=document.getElementById('tabs'),HINT=document.getElementById('hint');
 var ADDR=document.getElementById('addr'),ENG=document.getElementById('eng'),ZL=document.getElementById('zlbl'),SPIN=document.getElementById('spin');
 var MENU=document.getElementById('menu'),OV=document.getElementById('ov'),OVB=document.getElementById('ovBody'),OVT=document.getElementById('ovTi'),DROP=document.getElementById('drop');
@@ -489,7 +494,7 @@ function setActive(id){active=id;for(var k in tabs){var on=(k===id);tabs[k].fram
 function cycleTab(dir){if(!order.length)return;var i=order.indexOf(active);if(i<0)i=0;var n=(i+dir+order.length)%order.length;setActive(order[n]);var b=tabs[order[n]];if(b&&b.btn&&b.btn.scrollIntoView){try{b.btn.scrollIntoView({inline:'center',block:'nearest'});}catch(e){}}}
 function applyZoom(t){var z=t.zoom||1;t.frame.style.transformOrigin='0 0';t.frame.style.transform='scale('+z+')';t.frame.style.width=(100/z)+'%';t.frame.style.height=(100/z)+'%';}
 function spin(on){SPIN.className='spin'+(on?' on':'');}
-function closeTab(id){var t=tabs[id];if(!t)return;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];order=order.filter(function(x){return x!==id;});vscode.postMessage({type:'closed',id:id});if(active===id){active=null;if(order.length)setActive(order[order.length-1]);}sync();}
+function closeTab(id){var t=tabs[id];if(!t)return;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];order=order.filter(function(x){return x!==id;});if(id===BOARD_ID){_boardMounted=false;_boardReady=false;_boardReq=false;_boardFrame=null;_boardPending=null;}else{vscode.postMessage({type:'closed',id:id});}if(active===id){active=null;if(order.length)setActive(order[order.length-1]);}sync();}
 function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[id].url=m.url;tabs[id].frame.setAttribute('src',m.url);}setActive(id);return;}
   var btn=document.createElement('div');btn.className='tab';
   var dot=document.createElement('span');dot.className='dot'+(m.status?(' '+m.status):'');btn.appendChild(dot);
@@ -507,19 +512,41 @@ function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[
   S.appendChild(fr);
   tabs[id]={btn:btn,frame:fr,url:m.url,zoom:1,meta:m};order.push(id);applyZoom(tabs[id]);setActive(id);sync();
   vscode.postMessage({type:'histPush',url:m.url,label:m.label||'Devin'});}
-function navigate(v){v=(v||'').trim();if(!v)return;var t=tabs[active];
+function navigate(v){v=(v||'').trim();if(!v)return;if(isBoard()){if(/^https?:\\/\\//i.test(v))vscode.postMessage({type:'openExternal',url:v});return;}var t=tabs[active];
   if(/^https?:\\/\\//i.test(v)){var o=curOrigin();if(t&&o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);spin(true);}else{vscode.postMessage({type:'openExternal',url:v});}return;}
   if(v.charAt(0)==='/'){if(t){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}return;}
   vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v)});}
-var PAGES=[['🏠','新建 Devin 标签','newDevin'],['💬','会话 Sessions','cp:/sessions'],['📚','知识 Knowledge','cp:/knowledge'],['📋','Playbooks','cp:/playbooks'],['🔑','密钥 Secrets','cp:/settings/secrets'],['🔗','集成 Integrations','cp:/settings/integrations'],['📊','用量 Usage','cp:/settings/usage'],['🔀','切号面板','cloud'],['🌐','公网穿透','bridge'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
+var PAGES=[['🏠','主页 · 单账号管理','board:overview'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
 function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'" data-l="'+esc(PAGES[i][1])+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
   var items=MENU.querySelectorAll('.mi');for(var j=0;j<items.length;j++){items[j].onclick=function(){MENU.className='';onPage(this.getAttribute('data-p'),this.getAttribute('data-l'));};}}
 function toggleMenu(){MENU.className=MENU.className?'':'on';}
-function onPage(p,l){if(p==='newDevin'){vscode.postMessage({type:'newDevinTab'});return;}
-  if(p&&p.indexOf('cp:')===0){vscode.postMessage({type:'openCloudPage',path:p.slice(3),label:l||''});return;}
-  if(p==='cloud'){vscode.postMessage({type:'getAccounts'});showSwitch();return;}
-  if(p==='bridge'){vscode.postMessage({type:'getBridge'});showBridge();return;}
+function onPage(p,l){if(p&&p.indexOf('board:')===0){openBoard(p.slice(6));return;}
+  if(p==='newDevin'){vscode.postMessage({type:'newDevinTab'});return;}
   if(p==='history')showHistory();else if(p==='favs')showFavs();else if(p==='userscripts')showUserscripts();else if(p==='tools')showTools();else if(p==='about')showAbout();}
+// 归一 · 六大板块 = 与多实例账号页同级的子网页。把「全功能面板」整页用 blob-iframe 挂进 #stack 当一个标签,
+// 点不同板块即向其 postMessage gotoTab 切到对应板块(主页/切号/穿透/备份/反向注入/MCP)。复用面板逻辑·零重写。
+function openBoard(tab){tab=tab||'overview';
+  if(_boardMounted){setActive(BOARD_ID);_boardGoto(tab);return;}
+  _boardPending=tab;if(!_boardReq){_boardReq=true;spin(true);vscode.postMessage({type:'cloudInit'});}}
+function _boardGoto(tab){if(_boardFrame&&_boardFrame.contentWindow){try{_boardFrame.contentWindow.postMessage({type:'gotoTab',tab:tab},'*');}catch(e){}}}
+function _boardHost(msg){if(_boardFrame&&_boardFrame.contentWindow){try{_boardFrame.contentWindow.postMessage(msg,'*');}catch(e){}}}
+function mountBoard(html){var SHIM='<scr'+'ipt>(function(){var _s={};window.acquireVsCodeApi=function(){return{postMessage:function(m){try{parent.postMessage({__cwRelay:m},"*")}catch(e){}},getState:function(){return _s},setState:function(s){_s=s;return s}}};})();<\/scr'+'ipt>';
+  var doc=/<head[^>]*>/i.test(html)?html.replace(/<head([^>]*)>/i,'<head$1>'+SHIM):SHIM+html;
+  if(!tabs[BOARD_ID]){
+    var btn=document.createElement('div');btn.className='tab';
+    var lb=document.createElement('span');lb.className='lbl';lb.textContent='🎛 六大板块';btn.appendChild(lb);
+    var x=document.createElement('span');x.className='x';x.textContent='×';
+    btn.onclick=function(e){if(e.target===x)return;setActive(BOARD_ID);};
+    x.onclick=function(e){e.stopPropagation();closeTab(BOARD_ID);};btn.appendChild(x);
+    BAR.appendChild(btn);
+    var fr=document.createElement('iframe');fr.id='__boardFrame';fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.cssText='width:100%;height:100%;border:none;background:#1e1e1e;display:none';
+    fr.addEventListener('load',function(){_boardReady=true;spin(false);vscode.postMessage({type:'cloudReady'});if(_boardPending){_boardGoto(_boardPending);_boardPending=null;}});
+    S.appendChild(fr);_boardFrame=fr;
+    tabs[BOARD_ID]={btn:btn,frame:fr,url:'',zoom:1,meta:{board:true}};order.push(BOARD_ID);
+  }
+  _boardReady=false;
+  try{var blob=new Blob([doc],{type:'text/html'});var url=URL.createObjectURL(blob);_boardFrame.removeAttribute('srcdoc');_boardFrame.src=url;if(_boardUrl){try{URL.revokeObjectURL(_boardUrl)}catch(e){}}_boardUrl=url;}catch(e){_boardFrame.srcdoc=doc;}
+  _boardMounted=true;setActive(BOARD_ID);sync();}
 function showOverlay(title,html){OVT.textContent=title;OVB.innerHTML=html;OV.className='on';}
 function hideOverlay(){OV.className='';}
 function bindOpen(){var ob=OVB.querySelectorAll('[data-u]');for(var i=0;i<ob.length;i++){ob[i].onclick=function(){navigate(this.getAttribute('data-u'));hideOverlay();};}}
@@ -532,20 +559,10 @@ function showTools(){var t=tabs[active];var u=t?t.url:'';showOverlay('🛠 页�
   var c=document.getElementById('tCopy');if(c)c.onclick=function(){vscode.postMessage({type:'clip',text:u});};
   var e=document.getElementById('tExt');if(e)e.onclick=function(){if(u)vscode.postMessage({type:'openExternal',url:u});};
   var tr=document.getElementById('tTr');if(tr)tr.onclick=function(){if(u)vscode.postMessage({type:'openExternal',url:'https://translate.google.com/translate?sl=auto&tl=zh-CN&u='+encodeURIComponent(u)});};}
-function showSwitch(){var h='';if(!accounts.length)h='<div class="empty">读取账号中… 或账号库为空(请先在「Devin Cloud · 账号库」添加)</div>';else{for(var i=0;i<accounts.length;i++){var a=accounts[i];h+='<div class="li"><div class="g"><div class="t">#'+esc(a.accNo||(i+1))+' '+esc(a.name||a.email)+(a.dollars?(' · $'+esc(a.dollars)):'')+'</div><div class="s">'+esc(a.email)+(a.status?(' · '+esc(a.status)):'')+'</div></div><button class="b pri" data-sw-email="'+esc(a.email)+'">开标签</button></div>';}}showOverlay('🔀 切号 · 多实例(各登各号·互不串号)',h);var ob=OVB.querySelectorAll('[data-sw-email]');for(var j=0;j<ob.length;j++){ob[j].onclick=function(){vscode.postMessage({type:'switchOpen',email:this.getAttribute('data-sw-email')});hideOverlay();};}}
-function showBridge(){var b=bridge,h='';if(!b){h='<div class="empty">读取隧道状态中…</div>';}else{var stTxt=b.on?(b.persistent?'✓ 已打通 · 持久化(常驻)':'✓ 已打通 · 公网在线'):'未连接 · 可点启动';
-  h+='<div class="li"><div class="g"><div class="t">隧道状态</div><div class="s">'+esc(stTxt)+'</div></div></div>';
-  h+='<div class="li"><div class="g"><div class="t">公网 URL</div><div class="s">'+esc(b.url||'(无)')+'</div></div><button class="b pri" data-bc="copyBridgeInfo">复制接入信息</button></div>';
-  h+='<div class="li"><div class="g"><div class="t">Token</div><div class="s">'+esc(b.token||'(无)')+'</div></div></div>';
-  h+='<div class="li"><div class="g"><div class="t">本地端口 · 主机</div><div class="s">'+esc(b.port||'')+' · '+esc(b.host||'')+'</div></div></div>';
-  h+='<div class="li"><div class="g"><div class="t">在线 Agent · 模式</div><div class="s">'+esc(b.agentCount||0)+' · '+esc(b.mode||'')+'</div></div></div>';
-  h+='<div class="li"><div class="g"><div class="t">动作</div></div><button class="b" data-bc="bridgeRestart">🔄 重启</button><button class="b" data-bc="bridgeRefreshToken">♻ 刷新Token</button><button class="b" data-bc="openBridgeMd">📄 接入MD</button></div>';
-  h+=b.on?'<div class="li"><div class="g"><div class="t">停止隧道</div></div><button class="b" data-bc="bridgeStop">⏹ 停止</button></div>':'<div class="li"><div class="g"><div class="t">启动隧道</div></div><button class="b pri" data-bc="bridgeStart">▶ 启动</button></div>';}
-  showOverlay('🌐 公网穿透 · DAO Bridge',h);var ob=OVB.querySelectorAll('[data-bc]');for(var i=0;i<ob.length;i++){ob[i].onclick=function(){vscode.postMessage({type:'bridgeAct',cmd:this.getAttribute('data-bc')});};}}
 function showAbout(){showOverlay('❔ 关于 · 说明','<div class="note">多实例浏览器 · 归一面板多窗口(对齐手机版 APK)。<br><br>• 每个标签 = 一个账号/对话，经该账号独立端口反代登录，各登各号、互不串号。<br>• 标签显示: 状态点 + #账号编号 + 名称 + $额度；<b>双击标签复制账号(+密码)</b>。<br>• 工具条: 刷新 / 首页 / 地址栏+搜索引擎 / 缩放 / 收藏 / 系统浏览器打开。<br>• 书签、历史、打开的标签均持久化，软件重载后自动续接。<br>• 支持从 IDE 拖拽文件进窗口(捕获路径)。<br><br>⚠️ 限制: 外部站点(Google 等)多设 X-Frame-Options 不可内嵌，故搜索 / 翻译 / 外链经系统浏览器打开；Devin 自身页面经反代可完美内嵌。</div>');}
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
-document.getElementById('bRefresh').onclick=function(){var t=tabs[active];if(t){spin(true);t.frame.setAttribute('src',t.url);}};
-document.getElementById('bHome').onclick=function(){var t=tabs[active];if(t){var u=curOrigin()+'/';t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}};
+document.getElementById('bRefresh').onclick=function(){if(isBoard()){closeTab(BOARD_ID);openBoard('overview');return;}var t=tabs[active];if(t){spin(true);t.frame.setAttribute('src',t.url);}};
+document.getElementById('bHome').onclick=function(){if(isBoard()){_boardGoto('overview');return;}var t=tabs[active];if(t){var u=curOrigin()+'/';t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}};
 document.getElementById('bZi').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.min(3,(t.zoom||1)+0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 document.getElementById('bZo').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.max(0.3,(t.zoom||1)-0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 ZL.onclick=function(){var t=tabs[active];if(t){t.zoom=1;applyZoom(t);ZL.textContent='100%';}};
@@ -561,12 +578,15 @@ window.addEventListener('dragover',function(e){e.preventDefault();DROP.className
 window.addEventListener('dragleave',function(e){if(e.relatedTarget===null||e.relatedTarget===document.documentElement)DROP.className='';});
 window.addEventListener('drop',function(e){e.preventDefault();DROP.className='';var uris='';try{uris=e.dataTransfer.getData('text/uri-list')||e.dataTransfer.getData('text/plain')||'';}catch(x){}var names=[];try{if(e.dataTransfer.files)for(var i=0;i<e.dataTransfer.files.length;i++)names.push(e.dataTransfer.files[i].name);}catch(x){}vscode.postMessage({type:'filesDropped',uris:uris,names:names});});
 window.addEventListener('message',function(ev){var m=ev.data||{};
+  if(m.__cwRelay){vscode.postMessage({type:'cloudRelay',msg:m.__cwRelay});return;}
   if(m.type==='open'){mkTab(m);}
   else if(m.type==='closeAll'){var ks=order.slice();for(var i=0;i<ks.length;i++)closeTab(ks[i]);vscode.postMessage({type:'closeAllAck'});}
   else if(m.type==='favs'){favs=m.list||[];if(OV.className&&OVT.textContent.indexOf('书签')>=0)showFavs();}
   else if(m.type==='history'){history=m.list||history;if(OV.className&&OVT.textContent.indexOf('历史')>=0)showHistory();}
-  else if(m.type==='accounts'){accounts=m.list||[];if(OV.className&&OVT.textContent.indexOf('切号')>=0)showSwitch();}
-  else if(m.type==='bridgeState'){bridge=m.data||null;if(OV.className&&OVT.textContent.indexOf('公网穿透')>=0)showBridge();}
+  else if(m.type==='accounts'){accounts=m.list||[];}
+  else if(m.type==='bridgeState'){bridge=m.data||null;}
+  else if(m.type==='cloudInitHtml'){_boardReq=false;mountBoard(m.html||'');}
+  else if(m.type==='cloudHost'){_boardHost(m.msg||{});}
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}});
 buildMenu();
 vscode.postMessage({type:'ready'});
@@ -680,10 +700,23 @@ function _wireMultiPanel(panel) {
         }
         return;
       }
+      // 归一 · 六大板块子网页: 外壳请求挂载全功能面板 HTML (blob-iframe + 中继)
+      if (m.type === "cloudInit") {
+        if (!_cloudProvider) { _toast("六大板块面板未就绪"); return; }
+        try { _cloudProvider.setHostPost((mm) => { try { panel.webview.postMessage({ type: "cloudHost", msg: mm }); } catch (e) {} }); } catch (e) {}
+        let html = "";
+        try { html = _cloudProvider.buildHtml() || ""; } catch (e) {}
+        try { panel.webview.postMessage({ type: "cloudInitHtml", html: html }); } catch (e) {}
+        return;
+      }
+      // 子网页 iframe 载毕 → 推送初始数据 (init/auth/bridge…)
+      if (m.type === "cloudReady") { try { _cloudProvider && _cloudProvider.refresh(); } catch (e) {} return; }
+      // 子网页 → 扩展宿主: 中继全功能面板的命令到 handleMiddlePanelMessage
+      if (m.type === "cloudRelay") { try { _cloudProvider && _cloudProvider.handleMessage(m.msg); } catch (e) {} return; }
       if (m.type === "toast" && m.msg) { _toast(m.msg); return; }
     } catch (e) { try { log("[multi] msg err: " + (e && e.message)); } catch (x) {} }
   });
-  panel.onDidDispose(() => { _multiPanel = null; _multiReady = false; _multiQueue.length = 0; });
+  panel.onDidDispose(() => { _multiPanel = null; _multiReady = false; _multiQueue.length = 0; try { _cloudProvider && _cloudProvider.setHostPost(null); } catch (e) {} });
   _multiPanel = panel;
 }
 function _ensureMultiPanel() {
@@ -14067,6 +14100,7 @@ module.exports = {
     buildHtml,
     openEditorPanel,
     openMultiInstance, // v5.0.0 · 归一多实例单面板多标签 (供 dao-vsix 委托)
+    setCloudProvider(p) { _cloudProvider = p || null; }, // 归一 · dao-vsix 注入「六大板块」面板提供者
     parseAccountText,
     Store,
     // v2.4.0 · 暴露 endpoint 健康度给回归测
