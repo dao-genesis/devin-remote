@@ -203,7 +203,8 @@
     var k=e.key;
     if(k==="Enter"){ e.preventDefault(); flushType(); setTimeout(function(){ sendInput({ action:"key", key:"Enter" }); }, 60); return; }
     if(k==="Backspace"){ e.preventDefault(); if(kbuf){ kbuf=kbuf.slice(0,-1); } else { sendInput({ action:"key", key:"Backspace" }); } return; }
-    if(k && k.length===1){ e.preventDefault(); kbuf+=k; clearTimeout(kbTimer); kbTimer=setTimeout(flushType, 130); }
+    if(k && k.length===1){ var cc=k.charCodeAt(0); if(cc<0x20||cc===0x7f) return;   // 跳过控制字符/NUL, 不让畸形按键注入垃圾码点
+      e.preventDefault(); kbuf+=k; clearTimeout(kbTimer); kbTimer=setTimeout(flushType, 130); }
   }
   document.addEventListener("keydown", onKey, true);
 
