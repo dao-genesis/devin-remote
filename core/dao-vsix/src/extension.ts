@@ -1567,7 +1567,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         }
         case '/api/devin/mcp/ide': {
             // 本机 IDE / 桌面 Agent 内部 MCP 扫描 (纯本地, 无需登录) — 供远程接测/对照 IDE 内显示数量
-            try { return { ok: true, items: scanIdeMcps() }; } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+            try { return { ok: true, hostIde: daoHostIdeKey(), hostSource: daoHostIdeSource(), items: scanIdeMcps() }; } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
         }
         case '/api/devin/mcp/probe': {
             // 单项 MCP 接测(连接验证) — body: 完整 MCP spec ({transport,url,headers} | {command,args})
@@ -1596,7 +1596,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             // 实测使用: 逐本机 STDIO MCP 真起进程(initialize+tools/list)返回真实工具数; HTTP 走 initialize 接测。
             //   body: {source?:'Devin Desktop'(默认), all?:bool} — 默认仅实测 Devin Desktop, 并行执行。
             const vfb = await readBody(req); let vfo: any = {}; try { vfo = JSON.parse(vfb || '{}'); } catch { /* 守柔 */ }
-            const want = vfo.all ? null : String(vfo.source || 'Devin Desktop');
+            const want = vfo.all ? null : String(vfo.source || daoHostIdeSource());
             let ideV = (() => { try { return scanIdeMcps(); } catch { return []; } })();
             if (want) ideV = ideV.filter((e) => e.source === want);
             const vres = await Promise.all(ideV.map(async (e) => {
@@ -3286,11 +3286,15 @@ function rT(tab,items,err,fallbackProxy){
     h+='<input id="mcpq" placeholder="🔍 搜索 MCP (名称 / 简介)" oninput="mcpFilter(this.value)" style="width:100%;margin:0 0 8px;padding:6px 8px;box-sizing:border-box;background:var(--card,#222);color:var(--fg);border:1px solid var(--border);border-radius:4px">';
     var _curG='';
     var _ideSrcs=[];items.forEach(function(x){if(x.group==='ide'&&x.source&&_ideSrcs.indexOf(x.source)<0)_ideSrcs.push(x.source);});
-    if(!window._mcpSrc)window._mcpSrc=_ideSrcs.indexOf('Devin Desktop')>=0?['Devin Desktop']:(_ideSrcs.length?[_ideSrcs[0]]:[]);
+    // 跟着宿主 IDE 走: 默认来源 = 当前插件运行所在 IDE 对应的 source(否则 Devin Desktop, 再否则首个)。
+    var _an=(function(){try{return((S&&S.hostCaps&&S.hostCaps.appName)||'').toLowerCase();}catch(e){return '';}})();
+    var _hostSrc=_an.indexOf('cursor')>=0?'Cursor':(_an.indexOf('trae')>=0?'Trae':(_an.indexOf('antigravity')>=0?'Antigravity':((_an.indexOf('windsurf')>=0||_an.indexOf('devin')>=0||_an.indexOf('codeium')>=0||_an.indexOf('cascade')>=0)?'Devin Desktop':(_an.indexOf('code')>=0?'VS Code':''))));
+    var _defSrc=function(){if(_hostSrc&&_ideSrcs.indexOf(_hostSrc)>=0)return [_hostSrc];if(_ideSrcs.indexOf('Devin Desktop')>=0)return ['Devin Desktop'];return _ideSrcs.length?[_ideSrcs[0]]:[];};
+    if(!window._mcpSrc)window._mcpSrc=_defSrc();
     window._mcpSrc=window._mcpSrc.filter(function(s){return _ideSrcs.indexOf(s)>=0;});
-    if(!window._mcpSrc.length&&_ideSrcs.length)window._mcpSrc=_ideSrcs.indexOf('Devin Desktop')>=0?['Devin Desktop']:[_ideSrcs[0]];
+    if(!window._mcpSrc.length&&_ideSrcs.length)window._mcpSrc=_defSrc();
     items.forEach(it=>{
-      if(it.group&&it.group!==_curG){_curG=it.group;h+='<div class="st" style="font-size:11px;text-transform:none;margin:8px 0 4px">'+(_curG==='preset'?'🌟 内置预设 · 接测 / 一键装到所有账号':_curG==='ide'?'💻 本机 IDE 内部 MCP · 默认仅显示 Devin Desktop(其他平台点下方来源标签展开)':'🛒 官网 MCP 市场 · 通用四大模块见 DAO Bridge MCP')+'</div>';
+      if(it.group&&it.group!==_curG){_curG=it.group;h+='<div class="st" style="font-size:11px;text-transform:none;margin:8px 0 4px">'+(_curG==='preset'?'🌟 内置预设 · 接测 / 一键装到所有账号':_curG==='ide'?'💻 本机 IDE 内部 MCP · 默认仅显示当前 IDE(其他平台点下方来源标签展开)':'🛒 官网 MCP 市场 · 通用四大模块见 DAO Bridge MCP')+'</div>';
         if(_curG==='ide'&&_ideSrcs.length){h+='<div id="mcpSrcBar" style="display:flex;flex-wrap:wrap;gap:4px;margin:0 0 6px;align-items:center"><span style="font-size:10px;color:var(--muted);margin-right:2px">来源:</span>'+_ideSrcs.map(function(s){var on=window._mcpSrc.indexOf(s)>=0;return '<span class="mcp-src-chip" data-src="'+esc(s)+'" onclick="mcpSrcToggle(this.getAttribute(&#39;data-src&#39;))" style="cursor:pointer;font-size:10px;padding:2px 9px;border-radius:10px;border:1px solid var(--border);background:'+(on?'#1a7f5a':'transparent')+';color:'+(on?'#fff':'var(--muted)')+'">'+(on?'● ':'○ ')+esc(s)+'</span>';}).join('')+'</div>';}
       }
       const m=it.mcp||{};const idx=window._mcp.length;window._mcp.push(m);
@@ -4243,9 +4247,11 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'verifyLocalMcp': {
-                // 实测使用: Devin Desktop 各 STDIO MCP 真起进程拿工具数, 结果弹通知 + 回填。
+                // 实测使用: 当前宿主 IDE 各 STDIO MCP 真起进程拿工具数, 结果弹通知 + 回填。
                 try {
-                    let ideV = scanIdeMcps().filter((e) => e.source === 'Devin Desktop');
+                    const hostSrc = daoHostIdeSource();
+                    let ideV = scanIdeMcps().filter((e) => e.source === hostSrc);
+                    if (!ideV.length) ideV = scanIdeMcps().filter((e) => e.source === 'Devin Desktop');
                     const vres = await Promise.all(ideV.map(async (e) => {
                         if (e.transport === 'HTTP') { const r = await daoProbeMcp({ transport: 'HTTP', url: e.url, headers: e.headers }); return { name: e.name, ok: r.ok, toolCount: 0 }; }
                         const r = await daoVerifyMcpStdio({ command: e.command, args: e.args, env: e.env }, 15000);
@@ -4253,7 +4259,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     }));
                     const okN = vres.filter((x) => x.ok).length;
                     const summary = vres.map((x) => x.name + (x.ok ? '✓' + x.toolCount + '工具' : '✗')).join(' · ');
-                    vscode.window.showInformationMessage('🧪 实测 Devin Desktop MCP: ' + okN + '/' + vres.length + ' 可用 — ' + summary);
+                    vscode.window.showInformationMessage('🧪 实测本机 MCP (' + hostSrc + '): ' + okN + '/' + vres.length + ' 可用 — ' + summary);
                     refreshReply({ type: 'actionResult', command: 'verifyLocalMcp', ok: okN > 0 });
                 } catch (e: any) { vscode.window.showErrorMessage('MCP 实测失败: ' + String(e && e.message || e)); reply({ type: 'actionResult', command: 'verifyLocalMcp', ok: false }); }
                 break;
@@ -4575,6 +4581,26 @@ function daoRoutedWebUrlForAccount(email: string, pagePath: string = ''): string
     return base;
 }
 // 帛书·「绝利一源」— 定位本机浏览器可执行(Chrome 优先, 回退 Edge, 跨平台)。
+// Windows: 解析用户「默认浏览器」的可执行路径(注册表 UserChoice → ProgId → shell\open\command)。
+//   仅当其为 Chromium 系(Chrome/Edge/Brave/Vivaldi/Opera/Chromium)时才用于多实例隔离(支持 --user-data-dir)。
+function winDefaultBrowserExe(): string | null {
+    if (process.platform !== 'win32') return null;
+    try {
+        const cp = require('child_process') as typeof import('child_process');
+        const uc = cp.execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice" /v ProgId', { encoding: 'utf8', timeout: 4000 });
+        const m = uc.match(/ProgId\s+REG_SZ\s+(\S+)/i);
+        if (!m) return null;
+        const progId = m[1];
+        const cmdOut = cp.execSync('reg query "HKCR\\' + progId + '\\shell\\open\\command" /ve', { encoding: 'utf8', timeout: 4000 });
+        const cm = cmdOut.match(/REG_SZ\s+(.+)/i);
+        if (!cm) return null;
+        const exeM = cm[1].match(/"([^"]+\.exe)"/i) || cm[1].match(/(\S+\.exe)/i);
+        const exe = exeM ? exeM[1] : '';
+        if (!exe || !fs.existsSync(exe)) return null;
+        if (/chrome|edge|brave|vivaldi|opera|chromium/i.test(exe)) return exe; // 仅 Chromium 系可隔离多实例
+        return null;
+    } catch { return null; }
+}
 function findBrowserExe(): string | null {
     const isWin = process.platform === 'win32';
     const isLinux = process.platform === 'linux';
@@ -4586,6 +4612,8 @@ function findBrowserExe(): string | null {
         candidates.push((process.env['LOCALAPPDATA'] || '') + '\\Google\\Chrome\\Application\\chrome.exe');
         candidates.push((process.env['ProgramFiles'] || '') + '\\Google\\Chrome\\Application\\chrome.exe');
         candidates.push((process.env['ProgramFiles(x86)'] || '') + '\\Google\\Chrome\\Application\\chrome.exe');
+        // 谷歌缺失 → 用户「默认浏览器」(若为 Chromium 系, 支持隔离多实例)
+        const def = winDefaultBrowserExe(); if (def) candidates.push(def);
         candidates.push((process.env['ProgramFiles(x86)'] || '') + '\\Microsoft\\Edge\\Application\\msedge.exe');
         candidates.push((process.env['ProgramFiles'] || '') + '\\Microsoft\\Edge\\Application\\msedge.exe');
     } else if (isLinux) {
@@ -7014,33 +7042,75 @@ function _stripJsonc(raw: string): string {
 function _repairJsonEscapes(raw: string): string {
     return raw.replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
 }
-function scanIdeMcps(): IdeMcpEntry[] {
+// 跨平台·应用配置基目录(VS Code 系 IDE 的 User 配置根): win=%APPDATA% · mac=~/Library/Application Support · linux=~/.config
+function daoAppConfigBase(): string {
     const home = os.homedir();
-    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    if (process.platform === 'win32') return process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    if (process.platform === 'darwin') return path.join(home, 'Library', 'Application Support');
+    return process.env.XDG_CONFIG_HOME || path.join(home, '.config');
+}
+
+// 宿主 IDE 归一标识: 由 vscode.env.appName + execPath 推断"插件当前运行在哪个 IDE", 实现「MCP 跟着软件走」。
+function daoHostIdeKey(): string {
+    let n = ''; let root = '';
+    try { n = (vscode.env.appName || '').toLowerCase(); } catch { /* 守柔 */ }
+    try { root = (process.execPath || '').toLowerCase(); } catch { /* 守柔 */ }
+    const hay = n + ' ' + root;
+    if (hay.includes('devin')) return 'devin';
+    if (hay.includes('windsurf') || hay.includes('codeium') || hay.includes('cascade')) return 'windsurf';
+    if (hay.includes('cursor')) return 'cursor';
+    if (hay.includes('trae')) return 'trae';
+    if (hay.includes('antigravity')) return 'antigravity';
+    if (hay.includes('insiders')) return 'vscode-insiders';
+    if (hay.includes('code') || hay.includes('vscode')) return 'vscode';
+    return 'other';
+}
+
+// 宿主 IDE 对应的扫描 source 显示名(与 scanIdeMcps 的 src 标签对齐), 供面板/接测默认聚焦当前 IDE。
+function daoHostIdeSource(): string {
+    switch (daoHostIdeKey()) {
+        case 'devin': case 'windsurf': return 'Devin Desktop';
+        case 'cursor': return 'Cursor';
+        case 'trae': return 'Trae';
+        case 'antigravity': return 'Antigravity';
+        case 'vscode': case 'vscode-insiders': return 'VS Code';
+        default: return 'Devin Desktop';
+    }
+}
+
+// 单一真源·跨平台 IDE MCP 配置候选(scan 与 repair 共用)。key 用于「跟着宿主 IDE 走」; repair=false 的文件(如 settings.json)只读不改。
+interface IdeMcpCandidate { p: string; src: string; key: string; repair?: boolean; }
+function daoIdeMcpCandidates(): IdeMcpCandidate[] {
+    const home = os.homedir();
+    const base = daoAppConfigBase();
     const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
-    // 软编码候选路径 — 存在即扫, 不存在则跳; 用户亦可在 ~/.dao/ide-mcp.json 手动补充。
-    //   141 实测确认: 接龙核心 = Devin Desktop ⇄ 老版 Windsurf 共用同一份 .codeium/windsurf/mcp_config.json
-    //   (Windsurf 升级为 Devin Desktop, 用户迁移后的 MCP 仍落此文件; 故扫描它即同时覆盖新旧两端)。
-    //   其余 IDE(Cursor/Gemini Antigravity 等)看情况存在即扫, 一般非主用。
-    const candidates: Array<{ p: string; src: string }> = [
-        { p: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), src: 'Devin Desktop' },
-        { p: path.join(home, '.codeium', 'windsurf-next', 'mcp_config.json'), src: 'Windsurf Next' },
-        { p: path.join(home, '.codeium', 'mcp_config.json'), src: 'Codeium' },
-        { p: path.join(home, '.devin', 'mcp_config.json'), src: 'Devin Desktop' },
-        { p: path.join(appData, 'Devin', 'User', 'mcp.json'), src: 'Devin Desktop' },
-        { p: path.join(home, '.cursor', 'mcp.json'), src: 'Cursor' },
-        // Gemini Antigravity (141 实测路径) — 多副本择存在者扫
-        { p: path.join(home, '.gemini', 'antigravity', 'mcp_config.json'), src: 'Antigravity' },
-        { p: path.join(home, '.gemini', 'antigravity-ide', 'mcp_config.json'), src: 'Antigravity' },
-        { p: path.join(home, '.gemini', 'config', 'mcp_config.json'), src: 'Gemini' },
-        { p: path.join(home, '.gemini', 'mcp_config.json'), src: 'Gemini' },
-        { p: path.join(appData, 'Claude', 'claude_desktop_config.json'), src: 'Claude' },
-        { p: path.join(appData, 'Code', 'User', 'mcp.json'), src: 'VS Code' },
-        { p: path.join(appData, 'Code', 'User', 'settings.json'), src: 'VS Code' },
-        { p: path.join(localAppData, 'Programs', 'cursor', 'mcp.json'), src: 'Cursor' },
-        { p: path.join(home, '.mcp', 'config.json'), src: 'MCP' },
-        { p: path.join(home, '.dao', 'ide-mcp.json'), src: 'DAO' },
+    //   接龙核心 = Devin Desktop ⇄ 老版 Windsurf 共用同一份 .codeium/windsurf/mcp_config.json(home dotfile, 三平台同位)。
+    //   其余 IDE 存在即纳入; settings.json 仅供扫描读取, repair 不写(避免误改 VS Code 全局设置)。
+    return [
+        { p: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), src: 'Devin Desktop', key: 'windsurf', repair: true },
+        { p: path.join(home, '.codeium', 'windsurf-next', 'mcp_config.json'), src: 'Windsurf Next', key: 'windsurf', repair: true },
+        { p: path.join(home, '.codeium', 'mcp_config.json'), src: 'Codeium', key: 'windsurf', repair: true },
+        { p: path.join(home, '.devin', 'mcp_config.json'), src: 'Devin Desktop', key: 'devin', repair: true },
+        { p: path.join(base, 'Devin', 'User', 'mcp.json'), src: 'Devin Desktop', key: 'devin', repair: true },
+        { p: path.join(home, '.cursor', 'mcp.json'), src: 'Cursor', key: 'cursor', repair: true },
+        { p: path.join(localAppData, 'Programs', 'cursor', 'mcp.json'), src: 'Cursor', key: 'cursor', repair: true },
+        { p: path.join(base, 'Trae', 'User', 'mcp.json'), src: 'Trae', key: 'trae', repair: true },
+        { p: path.join(home, '.gemini', 'antigravity', 'mcp_config.json'), src: 'Antigravity', key: 'antigravity', repair: true },
+        { p: path.join(home, '.gemini', 'antigravity-ide', 'mcp_config.json'), src: 'Antigravity', key: 'antigravity', repair: true },
+        { p: path.join(home, '.gemini', 'config', 'mcp_config.json'), src: 'Gemini', key: 'gemini', repair: true },
+        { p: path.join(home, '.gemini', 'mcp_config.json'), src: 'Gemini', key: 'gemini', repair: true },
+        { p: path.join(base, 'Claude', 'claude_desktop_config.json'), src: 'Claude', key: 'claude', repair: true },
+        { p: path.join(base, 'Code', 'User', 'mcp.json'), src: 'VS Code', key: 'vscode', repair: true },
+        { p: path.join(base, 'Code', 'User', 'settings.json'), src: 'VS Code', key: 'vscode', repair: false },
+        { p: path.join(base, 'Code - Insiders', 'User', 'mcp.json'), src: 'VS Code Insiders', key: 'vscode-insiders', repair: true },
+        { p: path.join(home, '.mcp', 'config.json'), src: 'MCP', key: 'mcp', repair: true },
+        { p: path.join(home, '.dao', 'ide-mcp.json'), src: 'DAO', key: 'dao', repair: true },
     ];
+}
+
+function scanIdeMcps(): IdeMcpEntry[] {
+    // 软编码候选路径 — 存在即扫, 不存在则跳; 用户亦可在 ~/.dao/ide-mcp.json 手动补充。
+    const candidates = daoIdeMcpCandidates();
     const out: IdeMcpEntry[] = [];
     // 道·按「来源+名称」去重(非仅名称): 各 IDE 同名 MCP 各自呈现, 与各 IDE 内显示一一对应,
     //   不再因 Cursor/Windsurf 同有 github 而吞掉其一(此前全局名去重正是「数量对不上」一因)。
@@ -7196,21 +7266,25 @@ function daoRepairMcpConfigFile(filePath: string, opts: { enable?: boolean; dryR
     }
 }
 
-// 一键修复本机 MCP: 默认修 Devin Desktop⇄Windsurf 同源配置; allIdes 时并修其他 IDE。
-function daoRepairLocalMcp(opts: { allIdes?: boolean; enable?: boolean; dryRun?: boolean }): { ok: boolean; runtime: { command: string; electron: boolean; source: string }; npmRoots: string[]; results: Array<ReturnType<typeof daoRepairMcpConfigFile>> } {
-    const home = os.homedir();
-    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
-    const primary = [path.join(home, '.codeium', 'windsurf', 'mcp_config.json')];
-    const extra = [
-        path.join(home, '.codeium', 'windsurf-next', 'mcp_config.json'),
-        path.join(home, '.cursor', 'mcp.json'),
-        path.join(appData, 'Code', 'User', 'mcp.json'),
-    ];
-    const targets = opts.allIdes ? primary.concat(extra) : primary;
+// 一键修复本机 MCP: 「跟着宿主 IDE 走」— 默认修当前运行所在 IDE 的配置 + 接龙核心(Windsurf⇄Devin 共用); allIdes 时并修其余 IDE。
+//   通用·强鲁棒: 不论装在哪个 IDE、装到哪个位置, 都按宿主 IDE 自动定位配置, 运行时自动回退到宿主自带 Electron, 零硬编码。
+function daoRepairLocalMcp(opts: { allIdes?: boolean; enable?: boolean; dryRun?: boolean }): { ok: boolean; hostIde: string; runtime: { command: string; electron: boolean; source: string }; npmRoots: string[]; results: Array<ReturnType<typeof daoRepairMcpConfigFile>> } {
+    const all = daoIdeMcpCandidates().filter(c => c.repair !== false);
+    const hostKey = daoHostIdeKey();
+    const coreKeys = new Set(['windsurf', 'devin']); // 接龙核心始终纳入(Windsurf 升级 Devin Desktop 共用同一份)
+    const primaryList = all.filter(c => c.key === hostKey || coreKeys.has(c.key));
+    const chosen = opts.allIdes ? all : (primaryList.length ? primaryList : all.filter(c => coreKeys.has(c.key)));
     const rt = daoResolveNodeRuntime();
     const results: Array<ReturnType<typeof daoRepairMcpConfigFile>> = [];
-    for (const f of targets) { try { if (fs.existsSync(f)) results.push(daoRepairMcpConfigFile(f, { enable: opts.enable, dryRun: opts.dryRun })); } catch { /* 守柔 */ } }
-    return { ok: true, runtime: rt, npmRoots: daoNpmGlobalRoots(), results };
+    const donePaths = new Set<string>();
+    for (const c of chosen) {
+        try {
+            const norm = path.normalize(c.p).toLowerCase();
+            if (donePaths.has(norm)) continue; donePaths.add(norm);
+            if (fs.existsSync(c.p)) results.push(daoRepairMcpConfigFile(c.p, { enable: opts.enable, dryRun: opts.dryRun }));
+        } catch { /* 守柔 */ }
+    }
+    return { ok: true, hostIde: hostKey, runtime: rt, npmRoots: daoNpmGlobalRoots(), results };
 }
 
 // 实测·STDIO MCP 真起进程: spawn + initialize + tools/list, 返回真实工具数(有界超时, 必杀进程)。
