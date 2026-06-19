@@ -1025,14 +1025,15 @@ async function _resolveAuthForEmail(email, password) {
 async function openMultiInstance(opts) {
   opts = opts || {};
   const email = String(opts.email || '').trim();
-  if (!email) return { ok: false, error: 'no-email' };
+  _routeDbg("openMultiInstance ENTER email=" + email + " devinId=" + (opts.devinId || "") + " path=" + (opts.path || ""));
+  if (!email) { _routeDbg("openMultiInstance ABORT no-email"); return { ok: false, error: 'no-email' }; }
   const sid = String(opts.devinId || '').trim().replace(/^devin-/, '');
   const auth = await _resolveAuthForEmail(email, opts.password);
-  if (!auth || !auth.auth1) return { ok: false, error: 'no-auth1' };
+  if (!auth || !auth.auth1) { _routeDbg("openMultiInstance ABORT no-auth1 email=" + email); return { ok: false, error: 'no-auth1' }; }
   const pr = await devinProxy.ensureProxyForAccount(
     email, { auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgName: auth.orgName }, log,
   );
-  if (!pr.ok) return { ok: false, error: pr.error || 'proxy-fail' };
+  if (!pr.ok) { _routeDbg("openMultiInstance ABORT proxy-fail email=" + email + " err=" + (pr.error || "")); return { ok: false, error: pr.error || 'proxy-fail' }; }
   const portBase = pr.url || ('http://localhost:' + pr.port + '/');
   const base = String(portBase).replace(/\/+$/, '');
   // 归一 · Devin Cloud 板块即页面: opts.path(/sessions、/knowledge、/settings/secrets ...) → 经该账号反代加载真实网页(会话态登录·可内嵌)
@@ -1061,6 +1062,7 @@ async function openMultiInstance(opts) {
   _ensureMultiPanel();
   try { _multiPanel.reveal(vscode.ViewColumn.Active); } catch (e) {}
   _postMulti({ type: 'open', id, label, url, accNo, dollars, status, email, devinId: sid });
+  _routeDbg("openMultiInstance OK email=" + email + " url=" + url + " panel=" + (_multiPanel ? "yes" : "no"));
   return { ok: true };
 }
 // v4.16.0 · 归一 · 单账号「路由官网→IDE」实现抽出为可复用函数 (供单点 routeToIde + 多选批量 routeToIdeBatch 共用)。
@@ -1962,6 +1964,13 @@ function log(m) {
     console.log("[wam] " + m);
   } catch {}
   _logToFile(line + "\n");
+}
+// v4.17.0 · 多实例路由专用诊断落盘 (~/.wam/_route_debug.log) — 与高噪 wam.log 隔离, 便于定位「点了没反应」根因。
+function _routeDbg(m) {
+  try {
+    const p = path.join(os.homedir(), ".wam", "_route_debug.log");
+    fs.appendFileSync(p, "[" + new Date().toISOString().substring(11, 23) + "] " + m + "\n");
+  } catch (e) {}
 }
 function _cfg(k, d) {
   return vscode.workspace.getConfiguration("wam").get(k, d);
@@ -8988,7 +8997,7 @@ function buildHtml() {
   }
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; worker-src 'self' blob:;">
 <style>
-:root{--bg:var(--vscode-editor-background);--fg:var(--vscode-editor-foreground);--border:var(--vscode-panel-border,#2d2d2d);--input-bg:var(--vscode-input-background,#1e1e1e);--input-border:var(--vscode-input-border,#3c3c3c);--btn:var(--vscode-button-background,#0e639c);--btn-h:var(--vscode-button-hoverBackground,#1177bb);--green:#4ec9b0;--orange:#ce9178;--red:#f44;--blue:#9cdcfe}
+:root{--bg:#0e1116;--fg:#cdd3de;--border:#2d333b;--input-bg:#0d1117;--input-border:#30363d;--btn:#1f6feb;--btn-h:#388bfd;--green:#4ec9b0;--orange:#ce9178;--red:#f85149;--blue:#9cdcfe}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);color:var(--fg);padding:6px 8px;overflow-x:hidden}
 .hd{margin-bottom:8px}
@@ -9407,8 +9416,10 @@ function _dvShowBackups(tree){
       if(a.hasAccountInfo){html+=' <button class="conv-btn conv-btn-s" onclick="dvReveal(this.dataset.p)" data-p="'+_attr(a.accountInfoPath)+'">📂 账号信息</button>';}
       html+='</div>';
       if(!a.conversations.length){html+='<div style="color:#666;font-size:12px;padding:4px 0">(无对话记录)</div>';}
-      for(let i=0;i<a.conversations.length;i++){
-        const c=a.conversations[i];
+      var _allConv=(a.conversations||[]).slice().sort(function(x,y){return (y.mtime||0)-(x.mtime||0);});
+      var _CONV_CAP=50;var _convShow=_allConv.slice(0,_CONV_CAP);
+      for(let i=0;i<_convShow.length;i++){
+        const c=_convShow[i];
         const n=c.num||(i+1);
         const label=c.title||c.name;
         let meta;
@@ -9425,6 +9436,7 @@ function _dvShowBackups(tree){
           '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:430px" title="'+_attr(label)+'"><span style="color:#58a6ff;font-weight:600">'+n+'.</span> '+_esc(label)+' '+meta+'</span>'+
           '<span style="white-space:nowrap">'+actions+'</span></div>';
       }
+      if(_allConv.length>_CONV_CAP){html+='<div style="color:#8b949e;font-size:11px;padding:4px 0">… 共 '+_allConv.length+' 条,仅展示最近 '+_CONV_CAP+' 条(全量在文件夹·按需解锁)</div>';}
     }
   }
   box.innerHTML=html;ov.appendChild(box);
@@ -10232,7 +10244,8 @@ function _dvAllConversationsHtml() {
   }
   if (!all.length) return "";
   all.sort((a, b) => b.mtime - a.mtime);
-  const show = all.slice(0, 200);
+  const RECENT_MAX = 50; // v4.17.0 · 仅展示最近 ~50 条 (4000+ 全量仅留文件夹·按需解锁), 对齐 APK 近期列表
+  const show = all.slice(0, RECENT_MAX);
   let h = '<div class="dv-trk-section" style="margin-top:8px">';
   h += '<div class="dv-trk-hd" style="cursor:pointer" onclick="var b=this.nextElementSibling;b.style.display=b.style.display===\'none\'?\'block\':\'none\'">&#128172; 近期对话(跨账号) · ' + all.length + ' 条 <span style="color:#888;font-size:10px">[点击展开/收起]</span></div>';
   h += '<div style="display:none">';
@@ -10246,7 +10259,7 @@ function _dvAllConversationsHtml() {
     h += '<span style="color:#555;font-size:10px;white-space:nowrap;margin-left:6px">' + dt + '</span>';
     h += '</div>';
   }
-  if (all.length > 200) h += '<div style="color:#666;font-size:11px">… 共 ' + all.length + ' 条,仅展示近 200</div>';
+  if (all.length > RECENT_MAX) h += '<div style="color:#8b949e;font-size:11px;padding:4px 0">… 共 ' + all.length + ' 条,仅展示最近 ' + RECENT_MAX + ' 条(全量备份在文件夹内·解锁时按需取)</div>';
   h += '</div></div>';
   return h;
 }
@@ -11104,6 +11117,9 @@ function _broadcastMsg(msg) {
 
 async function handleWebviewMessage(msg) {
   try {
+    if (msg && /^(routeToIde|routeToIdeBatch|openSysBrowser|openSysBrowserBatch|convRouteToIde|convOpenSysBrowser)$/.test(msg.type)) {
+      _routeDbg("handleWebviewMessage type=" + msg.type + " index=" + (msg.index) + " indices=" + JSON.stringify(msg.indices || null) + " email=" + (msg.email || "") + " devinId=" + (msg.devinId || ""));
+    }
     switch (msg.type) {
       case "switch": {
         // v3.0.1 手动至高优先 · 道法自然 · 用户意志即最高优先级

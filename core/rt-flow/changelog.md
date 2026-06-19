@@ -2,6 +2,23 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.17.0 (2026-06-19) · P0 前端对比度修复 + 近期对话限 50 + 多实例路由诊断落盘
+
+> 道法自然 · 先诊断后施治: 用户报「黑底黑字看不清 / 多实例按钮点了没反应」, 此版先治可读性与列表规模, 并为「按钮无响应」植入专用诊断落盘以拿真实数据定位根因。
+
+### P0 · 前端对比度 (extension.js)
+- `:root` 调色板此前全依赖 vscode 主题变量(`--vscode-editor-background/foreground`)且无回退色 → 非 webview(独立浏览器/路由)上下文变量为空 → 黑底黑字 / 白底乱码不可读。
+- 现钉死 GitHub-dark 固定值: `--bg:#0e1116 --fg:#cdd3de --border:#2d333b ...`, 任意宿主(VS Code 主题/纯浏览器/手机)皆可读。
+
+### P1 · 近期对话仅展示最近 ~50 条
+- 跨账号近期对话 200→50; 单账号备份浮层每号对话按 mtime 倒序后封顶 50。
+- 4000+ 全量仅留文件夹按需解锁; 列表底部提示「共 N 条·仅展示最近 50」。
+
+### P0 诊断 · 多实例路由专用落盘 `~/.wam/_route_debug.log`
+- `handleWebviewMessage` 入口对 6 类路由消息(routeToIde/Batch · openSysBrowser/Batch · convRouteToIde/Sb)落盘到达记录。
+- `openMultiInstance` 全程落盘: ENTER / ABORT(no-email·no-auth1·proxy-fail) / OK(含 url·panel 状态)。
+- 与高噪 wam.log 隔离, 便于定位「点了没反应」止于何处(消息未达 / 鉴权失败 / 反代失败 / 已开但面板不可见)。
+
 ## v4.16.0 (2026-06-19) · 切号多选批量 IDE/浏览器多实例 + 对话追踪每行直达
 
 > 多选之后点任一即批量 · 免下拉直达 · 一致归一。
