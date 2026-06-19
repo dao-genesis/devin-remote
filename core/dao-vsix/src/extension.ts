@@ -34,7 +34,15 @@ const INST_FILE = path.join(DAO_DIR, 'dao-instances.json');
 let _devinCloudModule: any = null;
 function loadDevinCloud(): any {
     if (_devinCloudModule) return _devinCloudModule;
-    try { _devinCloudModule = require(path.join(__dirname, '..', 'rtflow', 'devin_cloud.js')); } catch { _devinCloudModule = null; }
+    // 双布局自适应(同 _rtflowModule): 二合一独立版 rt-flow 捆绑于 ../rtflow/;
+    // 归一(dao-one) rt-flow 在兄弟目录 ../../vendor-flow/。备份引擎单一来源, 两布局皆须命中。
+    const cands = [
+        path.join(__dirname, '..', 'rtflow', 'devin_cloud.js'),
+        path.join(__dirname, '..', '..', 'vendor-flow', 'devin_cloud.js'),
+    ];
+    for (const c of cands) {
+        try { if (fs.existsSync(c)) { _devinCloudModule = require(c); break; } } catch { _devinCloudModule = null; }
+    }
     return _devinCloudModule;
 }
 // 备份根目录解析: 与 rt-flow 完全一致 (wam.devinCloudBackupDir 覆盖 → 否则 DC_BACKUP_DEFAULT=~/.wam/devin_cloud_backups)
@@ -369,8 +377,17 @@ export async function activate(context: vscode.ExtensionContext) {
     // 守柔: 须在 rt-flow 激活前完成, 使 wam 启动即见账号, 不再报「无账号」。
     try { syncAccountPoolToWam(); } catch (e) { try { console.error('[dao-vsix] 账号池同源 wam 失败(守柔):', e); } catch { /* 守柔 */ } }
     try {
-        _rtflowModule = require(path.join(__dirname, '..', 'rtflow', 'extension.js')) as RtflowModule;
-        if (_rtflowModule && typeof _rtflowModule.activate === 'function') {
+        // 归一·句柄解析(反者道之动): 二合一(standalone) rt-flow 捆绑于 ../rtflow/, 由本插件 activate;
+        // 归一(dao-one) rt-flow 在兄弟目录 ../../vendor-flow/ 由宿主装配器 activate —— 本插件只取「同一实例」
+        // 句柄(require 命中 Node 模块缓存 → 共享 _internals), 绝不重复 activate(否则命令/视图重注册必崩)。
+        const _bundledRtflow = path.join(__dirname, '..', 'rtflow', 'extension.js');
+        const _siblingRtflow = path.join(__dirname, '..', '..', 'vendor-flow', 'extension.js');
+        let _activateRtflowHere = false;
+        let _rtflowPath: string | null = null;
+        if (fs.existsSync(_bundledRtflow)) { _rtflowPath = _bundledRtflow; _activateRtflowHere = true; }
+        else if (fs.existsSync(_siblingRtflow)) { _rtflowPath = _siblingRtflow; _activateRtflowHere = false; }
+        if (_rtflowPath) _rtflowModule = require(_rtflowPath) as RtflowModule;
+        if (_activateRtflowHere && _rtflowModule && typeof _rtflowModule.activate === 'function') {
             await Promise.resolve(_rtflowModule.activate(context));
         }
         // 归一 · 把「全功能面板六大板块」作为同级子网页接进 rt-flow 统一外壳。
