@@ -1,6 +1,6 @@
 {
-  "versionCode": 76,
-  "versionName": "0.27.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.27.0/DevinCloud-mobile-v0.27.0.apk",
-  "notes": "v0.27.0 · 减法收束 (无为而无不为): ① 强制端到端加密开关 (默认关·向后兼容): 端到端加密区新增「强制 E2E」开关, 开启后引擎拒收任何明文 RPC (仅 /api/health 存活探测例外), 杜绝明文驱动(如明文 getState)经中继泄露账号/密码 —— 闭合明文旁路这一真实安全口子。② 网络层去重: 把 WSS onmessage 与 cloudflared/局域网 serveLocal 两条重复的 E2E 解密→分发→重封管线蒸馏为单一 processFrame, 强制门禁亦在此一处生效, 两条入口行为永久一致。对外 curl/HTTP 契约零改动, 明文驱动默认仍可用。"
+  "versionCode": 77,
+  "versionName": "0.28.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.28.0/DevinCloud-mobile-v0.28.0.apk",
+  "notes": "v0.28.0 · 反向利用穿透:手机=中枢,浏览器=全功能瘦客户端。新增「网页控制台」(webshell.html):手机经 LocalServer 在局域网 + cloudflared 公网上以 GET 提供一个自洽控制台页,任意设备浏览器打开本机入口即得与 APK 一致的全功能操作(状态/会话/账号/导出/任意 RPC 命令)。每个操作经 /relay/<session> 打回手机执行(账号/网络/存储都在手机),多人同时连互不干扰。控制台内置 WebCrypto E2E(与设备逐字节兼容),即使开了 v0.27 的「强制 E2E」也可用、载荷全程密文。穿透面板新增控制台网址一键复制。对外 curl/HTTP 契约零改动。"
 }

@@ -107,6 +107,17 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <div class="muted" style="font-size:11px">开启后，本机<b>拒收任何明文 RPC</b> —— 未用 E2E Key 加密的请求一律被拒(仅存活探测 <code>/api/health</code> 例外)，杜绝明文驱动经中继泄露账号/密码。默认关闭以兼容旧驱动；确认所有驱动方都已用上方 E2E Key 加密后再开。</div>
 </div>
 
+<!-- 模块1.7: 浏览器网页控制台 (手机=中枢, 任意设备浏览器全功能接入) -->
+<div class="section">
+<h3>🌐 网页控制台 · 任意浏览器即全功能接入</h3>
+<div class="muted">把本机当<b>中枢</b>:任意设备(电脑/平板/别的手机)用浏览器打开下方网址,即得与本机 APK <b>一致的全功能控制台</b> —— 状态/会话/账号/导出/任意 RPC 命令。每个操作都经中继打回本机执行,<b>多人同时连不互相干扰</b>。网址内含 Token(=完整接入凭证),仅发可信方;开了上方「强制 E2E」时在控制台里填同一 E2E Key 即可(载荷全程密文)。</div>
+<div id="webConsoleUrls" class="url" style="margin-top:6px">—</div>
+<div class="row">
+  <button onclick="copyWebConsole()">📋 复制控制台网址(含Token·一键直登)</button>
+  <button onclick="copyWebConsoleBare()">复制纯网址(不含Token)</button>
+</div>
+</div>
+
 <!-- 模块2: CloudFlare 命名隧道 (可选) -->
 <div class="section">
 <h3>🔑 命名隧道 · 固定域名（可选）</h3>
@@ -579,6 +590,43 @@ function refreshLan(){
   if(u){ var c=_conn(); var urls=(l.urls||[]);
     u.textContent = (on&&urls.length)? urls.map(function(x){return x+"/relay/"+(c.session||"");}).join("\n") : (on?'(未取得局域网地址·请确认已连 Wi-Fi)':'—'); }
 }
+// ── 网页控制台 (手机=中枢, 浏览器全功能接入) ──
+//   控制台网址 = <本机入口>/?session=&token= → 浏览器打开即自动连通本机 RPC。
+//   入口候选: cloudflared 公网 URL + 全部局域网直连地址。
+function _webConsoleBases(){
+  var c=_conn(), l=_lan(); var bases=[];
+  if(c.url) bases.push(String(c.url).replace(/\/$/,''));
+  (l.urls||[]).forEach(function(x){ x=String(x).replace(/\/$/,''); if(bases.indexOf(x)<0) bases.push(x); });
+  return bases;
+}
+function _webConsoleUrl(base, withTok){
+  var c=_conn(); var qs="?session="+encodeURIComponent(c.session||"");
+  if(withTok) qs+="&token="+encodeURIComponent(c.token||"");
+  return base+"/"+qs;
+}
+function renderWebConsole(){
+  var el=document.getElementById('webConsoleUrls'); if(!el) return;
+  var bases=_webConsoleBases();
+  if(!bases.length){ el.textContent='(等待隧道或局域网地址…开启「局域网直连」或等 cloudflared 就绪)'; return; }
+  el.textContent=bases.map(function(b){return _webConsoleUrl(b,true);}).join("\n");
+}
+function copyWebConsole(){
+  var bases=_webConsoleBases();
+  if(!bases.length){ _result('webConsole', false, '暂无可用入口 (开启局域网直连或等 cloudflared 就绪)'); return; }
+  var lines=["═══ Devin Cloud · 网页控制台 (任意浏览器打开即全功能接入本机) ═══"];
+  bases.forEach(function(b){ lines.push("控制台: "+_webConsoleUrl(b,true)); });
+  lines.push(""); lines.push("(网址已含 Session+Token=完整接入凭证, 仅发可信方; 开了「强制 E2E」时在控制台填同一 E2E Key)");
+  try{N.clip&&N.clip(lines.join("\n"));}catch(e){}
+  _result('webConsole', true, '已复制网页控制台网址(含Token, 浏览器打开即直登)');
+}
+function copyWebConsoleBare(){
+  var bases=_webConsoleBases();
+  if(!bases.length){ _result('webConsole', false, '暂无可用入口'); return; }
+  var lines=bases.map(function(b){ return _webConsoleUrl(b,false); });
+  try{N.clip&&N.clip(lines.join("\n"));}catch(e){}
+  _result('webConsole', true, '已复制纯网址(不含Token, 打开后需手动填 Session/Token)');
+}
+renderWebConsole(); setInterval(renderWebConsole, 4000);
 function copyLanAccess(){
   var l=_lan(), c=_conn(); var urls=(l.urls||[]);
   if(!urls.length){ _result('copyLan', false, '暂无局域网地址 (请确认已连 Wi-Fi 且局域网直连已开)'); return; }

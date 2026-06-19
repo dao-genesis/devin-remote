@@ -32,6 +32,8 @@ public final class LocalServer {
         String token();
         /** 把 frame JSON {"path","method","body"} 喂给引擎, 阻塞返回 serveLocal 结果 {"status","bodyText"}。 */
         String dispatch(String frameJson) throws Exception;
+        /** GET 静态页 (浏览器控制台 webshell): 返回 HTML 文本; null = 该路径无静态页 (走 404)。 */
+        default String staticHtml(String path) { return null; }
     }
 
     private final Dispatcher disp;
@@ -106,10 +108,18 @@ public final class LocalServer {
             // CORS 预检
             if (method.equalsIgnoreCase("OPTIONS")) { writeCors(out); sock.close(); return; }
 
-            // 健康探活 (免鉴权)
-            if ((path.equals("/") || path.equals("/health")) && method.equalsIgnoreCase("GET")) {
-                write(out, 200, "{\"status\":\"ok\",\"service\":\"rtflow-local-tunnel\"}");
-                sock.close(); return;
+            if (method.equalsIgnoreCase("GET")) {
+                // 健康探活 (免鉴权; cloudflared/relay 存活探测专用)
+                if (path.equals("/health")) {
+                    write(out, 200, "{\"status\":\"ok\",\"service\":\"rtflow-local-tunnel\"}");
+                    sock.close(); return;
+                }
+                // 浏览器控制台静态页 (免鉴权拿页面; 页面内每个 RPC 仍需 Bearer Token)。
+                // 去掉 query (?session=...) 再匹配。
+                String p = path; int q = p.indexOf('?'); if (q >= 0) p = p.substring(0, q);
+                String html = disp.staticHtml(p);
+                if (html != null) { writeHtml(out, 200, html); sock.close(); return; }
+                write(out, 404, "{\"error\":\"not_found\"}"); sock.close(); return;
             }
 
             if (!path.startsWith("/relay/")) { write(out, 404, "{\"error\":\"not_found\"}"); sock.close(); return; }
@@ -171,6 +181,19 @@ public final class LocalServer {
         StringBuilder h = new StringBuilder();
         h.append("HTTP/1.1 ").append(status).append(' ').append(statusText(status)).append("\r\n");
         h.append("Content-Type: application/json\r\n");
+        h.append("Access-Control-Allow-Origin: *\r\n");
+        h.append("Content-Length: ").append(b.length).append("\r\n");
+        h.append("Connection: close\r\n\r\n");
+        out.write(h.toString().getBytes(StandardCharsets.UTF_8));
+        out.write(b);
+        out.flush();
+    }
+
+    private static void writeHtml(OutputStream out, int status, String body) throws Exception {
+        byte[] b = body == null ? new byte[0] : body.getBytes(StandardCharsets.UTF_8);
+        StringBuilder h = new StringBuilder();
+        h.append("HTTP/1.1 ").append(status).append(' ').append(statusText(status)).append("\r\n");
+        h.append("Content-Type: text/html; charset=utf-8\r\n");
         h.append("Access-Control-Allow-Origin: *\r\n");
         h.append("Content-Length: ").append(b.length).append("\r\n");
         h.append("Connection: close\r\n\r\n");
