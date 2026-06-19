@@ -635,6 +635,221 @@ vscode.postMessage({type:'ready'});
 })();
 </script></body></html>`;
 }
+// ════════════════════════════════════════════════════════════════════════
+// 归一 · 独立 HTTP 外壳 (适配所有 IDE / 任意浏览器 / 手机 · 参照手机端 APK)
+//   同一个 _multiShellHtml 外壳直出为可在任意浏览器打开的单页:
+//     · 传输层从 VS Code webview 的 acquireVsCodeApi/postMessage 改走纯 HTTP —
+//       页面→宿主: POST /api/shell/msg; 宿主→页面: SSE /api/shell/events。
+//     · 由 dao-vsix 本地服务器经 /shell 路由直出, 故不再绑定 VS Code webview,
+//       任何 IDE 的内置浏览器(乃至手机/远程经 DAO Bridge)皆可开同一套 UI。
+//   六大板块仍走 cloudInit→cloudInitHtml(blob-iframe)与 cloudRelay/cloudHost
+//   中继, 与 webview 路径同源复用·零重写。
+// ════════════════════════════════════════════════════════════════════════
+const SHELL_HTTP_SHIM = "(function(){"
+  + "var SID='sh_'+Math.random().toString(36).slice(2)+Date.now().toString(36);"
+  + "var _st={};"
+  + "function post(m){try{fetch('/api/shell/msg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:SID,msg:m})}).catch(function(){});}catch(e){}}"
+  + "window.acquireVsCodeApi=function(){return{postMessage:function(m){try{"
+  + "if(m&&m.type==='openExternal'&&m.url){window.open(m.url,'_blank');return;}"
+  + "if(m&&m.type==='clip'&&m.text){try{navigator.clipboard.writeText(m.text);}catch(e){}return;}"
+  + "post(m);"
+  + "}catch(e){}},getState:function(){return _st;},setState:function(s){_st=s;return s;}};};"
+  + "function connect(){try{var es=new EventSource('/api/shell/events?sid='+encodeURIComponent(SID));"
+  + "es.onmessage=function(ev){var m;try{m=JSON.parse(ev.data);}catch(e){return;}"
+  + "if(m&&m.type==='__copy'){try{navigator.clipboard.writeText(m.text||'');}catch(e){}return;}"
+  + "try{window.postMessage(m,'*');}catch(e){}};"
+  + "es.onerror=function(){};}catch(e){}}connect();"
+  + "})();";
+// 直出独立外壳: 复用 _multiShellHtml, 放开 CSP 的 connect-src(同源 fetch/SSE) 并注入 HTTP 传输垫片。
+function _standaloneShellHtml(opts) {
+  opts = opts || {};
+  let html = _multiShellHtml();
+  html = html.replace(
+    /<meta http-equiv="Content-Security-Policy"[^>]*>/i,
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; connect-src \'self\'; img-src data: https: http://localhost:* http://127.0.0.1:*; frame-src blob: \'self\' http://localhost:* http://127.0.0.1:*;">'
+  );
+  const shim = '<scr' + 'ipt>' + SHELL_HTTP_SHIM + '</scr' + 'ipt>';
+  html = html.replace(/<head([^>]*)>/i, '<head$1>' + shim);
+  return html;
+}
+// ── SSE 总线: sid → res(EventSource 连接), 宿主→页面单向推送 ──
+const _shellClients = new Map();
+function _shellAttach(sid, res) {
+  if (!sid || !res) return;
+  try {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write('retry: 3000\n\n');
+  } catch (e) { return; }
+  const prev = _shellClients.get(sid);
+  if (prev && prev !== res) { try { prev.end(); } catch (e) {} }
+  _shellClients.set(sid, res);
+  const ka = setInterval(() => { try { res.write(': ka\n\n'); } catch (e) {} }, 25000);
+  const close = () => { clearInterval(ka); if (_shellClients.get(sid) === res) _shellClients.delete(sid); };
+  try { res.on('close', close); } catch (e) {}
+  try { res.on('error', close); } catch (e) {}
+}
+function _shellSend(sid, msg) {
+  const res = _shellClients.get(sid);
+  if (!res) return false;
+  try { res.write('data: ' + JSON.stringify(msg) + '\n\n'); return true; } catch (e) { return false; }
+}
+function _shellBroadcast(msg) {
+  let n = 0;
+  for (const res of _shellClients.values()) {
+    try { res.write('data: ' + JSON.stringify(msg) + '\n\n'); n++; } catch (e) {}
+  }
+  return n;
+}
+// 解析「开一个账号标签」的元数据 (同 openMultiInstance 的反代解析, 但不创建 webview —
+// 独立页自身经 mkTab 以 iframe 开标签)。返回与 webview 'open' 消息同形的对象。
+async function _shellResolveOpen(opts) {
+  opts = opts || {};
+  const email = String(opts.email || '').trim();
+  if (!email) return null;
+  const sid = String(opts.devinId || '').trim().replace(/^devin-/, '');
+  const auth = await _resolveAuthForEmail(email, opts.password);
+  if (!auth || !auth.auth1) return null;
+  const pr = await devinProxy.ensureProxyForAccount(
+    email, { auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgName: auth.orgName }, log,
+  );
+  if (!pr.ok) return null;
+  const base = String(pr.url || ('http://localhost:' + pr.port + '/')).replace(/\/+$/, '');
+  const pageRaw = String(opts.path || '').trim();
+  const pagePath = pageRaw ? ('/' + pageRaw.replace(/^\/+/, '')) : '';
+  const url = pagePath ? (base + pagePath) : (sid ? (base + '/sessions/' + encodeURIComponent(sid)) : (base + '/'));
+  const short = email.split('@')[0];
+  const id = email.toLowerCase() + '|' + (pagePath ? ('page' + pagePath) : (sid || 'home'));
+  let accNo = 0, dollars = 0;
+  try {
+    const idx = ((_store && _store.accounts) || []).findIndex(
+      (a) => String(a.email).toLowerCase() === email.toLowerCase(),
+    );
+    if (idx >= 0) accNo = idx + 1;
+    const h = _store && _store.getHealth ? _store.getHealth(email) : null;
+    if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars);
+  } catch (e) {}
+  const title = String(opts.title || '').trim();
+  const pageLabel = String(opts.label || '').trim();
+  const label = title || (short + (pagePath ? (' · ' + (pageLabel || pagePath)) : (sid ? (' · ' + sid.slice(0, 8)) : '')));
+  const status = String(opts.status || '').trim();
+  return { type: 'open', id, label, url, accNo, dollars, status, email, devinId: sid };
+}
+// 独立 HTTP 外壳的宿主侧消息处理 (复刻 _wireMultiPanel, 但 send 经 SSE; 开标签经 _shellResolveOpen)。
+async function shellHandleMessage(sid, m) {
+  if (!m || !m.type) return;
+  const send = (msg) => _shellSend(sid, msg);
+  try {
+    switch (m.type) {
+      case 'ready':
+        send({ type: 'favs', list: _getMultiFavs() });
+        send({ type: 'history', list: _getMultiHist() });
+        return;
+      case 'getAccounts': {
+        const list = (((_store && _store.accounts) || [])).map((a, i) => {
+          let dollars = 0;
+          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+          return { accNo: i + 1, email: a.email, name: a.name || String(a.email || '').split('@')[0], dollars };
+        });
+        send({ type: 'accounts', list });
+        return;
+      }
+      case 'newDevinTab': {
+        const email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || '');
+        if (!email) { _toast('无可用账号 · 请先在账号库添加'); return; }
+        const open = await _shellResolveOpen({ email });
+        if (open) send(open); else _toast('账号反代未就绪 · 请检查登录/密码');
+        return;
+      }
+      case 'switchOpen':
+      case 'reopen': {
+        const open = await _shellResolveOpen({ email: m.email, devinId: m.devinId });
+        if (open) send(open);
+        return;
+      }
+      case 'openCloudPage': {
+        const email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || '');
+        if (!email) { _toast('无可用账号'); return; }
+        const open = await _shellResolveOpen({ email, path: m.path, label: m.label });
+        if (open) send(open);
+        return;
+      }
+      case 'histPush': _pushMultiHist(m.url, m.label); return;
+      case 'favAdd': {
+        const parts = String(m.id || '').split('|');
+        const email = parts[0] || '';
+        const tail = parts[1] || 'home';
+        const devinId = (tail !== 'home' && tail.indexOf('page') !== 0) ? tail : '';
+        if (!email) return;
+        const key = email.toLowerCase() + '|' + (devinId || 'home');
+        const favs = _getMultiFavs();
+        if (!favs.some((f) => f.key === key)) {
+          favs.push({ key, label: email.split('@')[0], email, devinId, accNo: 0, dollars: 0 });
+          _setMultiFavs(favs); _toast('⭐ 已收藏 · ' + email.split('@')[0]);
+        }
+        send({ type: 'favs', list: _getMultiFavs() });
+        return;
+      }
+      case 'favDel': {
+        const favs = _getMultiFavs().filter((f) => f.key !== m.key);
+        _setMultiFavs(favs); send({ type: 'favs', list: favs });
+        return;
+      }
+      case 'getBridge': {
+        let data = null; try { data = await vscode.commands.executeCommand('dao.getBridgeState'); } catch (e) {}
+        send({ type: 'bridgeState', data: data || null });
+        return;
+      }
+      case 'bridgeAct': {
+        try { await vscode.commands.executeCommand('dao.bridgeAction', { cmd: m.cmd }); } catch (e) {}
+        let data = null; try { data = await vscode.commands.executeCommand('dao.getBridgeState'); } catch (e) {}
+        send({ type: 'bridgeState', data: data || null });
+        return;
+      }
+      case 'shellBackups': {
+        try {
+          let root; try { root = vscode.workspace.getConfiguration('wam').get('devinCloudBackupDir'); } catch (e) {}
+          const tree = devinCloud.listBackups(root || undefined);
+          send({ type: 'shellBackupsData', tree });
+        } catch (e) { send({ type: 'shellBackupsData', tree: { root: '', accounts: [] }, error: String((e && e.message) || e) }); }
+        return;
+      }
+      case 'cloudInit': {
+        if (!_cloudProvider) { _toast('六大板块面板未就绪'); return; }
+        try { _cloudProvider.setHostPost((mm) => { _shellBroadcast({ type: 'cloudHost', msg: mm }); }); } catch (e) {}
+        let html = '';
+        try { html = _cloudProvider.buildHtml() || ''; } catch (e) {}
+        send({ type: 'cloudInitHtml', html });
+        return;
+      }
+      case 'cloudReady': try { _cloudProvider && _cloudProvider.refresh(); } catch (e) {} return;
+      case 'cloudRelay': try { _cloudProvider && _cloudProvider.handleMessage(m.msg); } catch (e) {} return;
+      case 'filesDropped': {
+        const uris = String(m.uris || '').split(/[\r\n]+/).map((s) => s.trim()).filter(Boolean);
+        const paths = uris.map((u) => { try { return u.startsWith('file:') ? vscode.Uri.parse(u).fsPath : u; } catch (e) { return u; } });
+        const list = paths.length ? paths : (m.names || []);
+        if (list.length) { try { await vscode.env.clipboard.writeText(list.join('\n')); } catch (e) {} _toast('📎 已捕获 ' + list.length + ' 个文件路径(已复制)'); }
+        return;
+      }
+      case 'copyCred': {
+        try {
+          const email = String(m.id || '').split('|')[0] || '';
+          const acc = ((_store && _store.accounts) || []).find((a) => String(a.email).toLowerCase() === email.toLowerCase());
+          const text = email + (acc && acc.password ? ('\t' + acc.password) : '');
+          if (email) send({ type: '__copy', text });
+        } catch (e) {}
+        return;
+      }
+      case 'toast': if (m.msg) _toast(m.msg); return;
+      case 'closed': case 'closeAllAck': return;
+      default: return;
+    }
+  } catch (e) { try { log('[shell] msg err: ' + (e && e.message)); } catch (x) {} }
+}
 function _wireMultiPanel(panel) {
   panel.webview.onDidReceiveMessage(async (m) => {
     if (!m) return;
@@ -14160,6 +14375,10 @@ module.exports = {
     buildHtml,
     openEditorPanel,
     openMultiInstance, // v5.0.0 · 归一多实例单面板多标签 (供 dao-vsix 委托)
+    // 归一 · 独立 HTTP 外壳 (适配所有 IDE/浏览器/手机·参照 APK): 供 dao-vsix 本地服务器 /shell 路由调用
+    getStandaloneShellHtml: _standaloneShellHtml, // GET /shell → 直出同一外壳 (注入 HTTP 传输垫片)
+    shellAttach: _shellAttach, // GET /api/shell/events → SSE 挂载 (宿主→页面)
+    shellHandleMessage, // POST /api/shell/msg → 页面→宿主消息处理
     setCloudProvider(p) { _cloudProvider = p || null; }, // 归一 · dao-vsix 注入「六大板块」面板提供者
     parseAccountText,
     Store,

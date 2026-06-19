@@ -1314,6 +1314,8 @@ function createProxyTunnel(hostname: string): Promise<tls.TLSSocket | null> {
 // 这些根路径需透传至 app.devin.ai(携 auth1), 否则命中 dao 鉴权 → 401 → SPA 误判
 // 未登录而跳转 /auth/login。此判定为「路由官网」自动登录闭环之关键。
 function isAppProxyPassthrough(route: string): boolean {
+    // 归一 · 独立 HTTP 外壳: /shell 与 /api/shell/* 为 dao 自有 (直出外壳/SSE/消息), 不透传官网
+    if (route === '/shell' || route.startsWith('/shell/') || route.startsWith('/api/shell')) return false;
     if (route.startsWith('/devin-cloud')) return false; // 已有专门前缀分支
     if (route.startsWith('/assets/')) return true;
     if (route.startsWith('/api/')) {
@@ -1334,12 +1336,41 @@ function isAppProxyPassthrough(route: string): boolean {
 
 async function handleRouteInternal(route: string, url: URL, req: any, token: string, res?: any): Promise<any> {
     // 认证检查（relay请求也需认证，devin-cloud代理有自己的认证）
-    const needAuth = !route.startsWith('/api/health') && !route.startsWith('/devin-cloud/') && !isAppProxyPassthrough(route);
+    // 归一 · 独立 HTTP 外壳须可被任意 IDE 内置浏览器/手机直接打开, 故 /shell 与 /api/shell/* 免 token
+    //   (本地服务器默认仅绑 localhost; 远程经 DAO Bridge 隧道层把关)。
+    const needAuth = !route.startsWith('/api/health') && !route.startsWith('/devin-cloud/')
+        && !route.startsWith('/shell') && !route.startsWith('/api/shell')
+        && !isAppProxyPassthrough(route);
     if (needAuth && !checkAuth(req)) throw new Error('unauthorized');
 
     // 官网 SPA 根路径资源/接口 → 透传 app.devin.ai
     if (isAppProxyPassthrough(route)) {
         return await devinCloudProxyRoute('/devin-cloud' + route, url, req, 'devin', res);
+    }
+
+    // ── 归一 · 独立 HTTP 外壳 (适配所有 IDE / 任意浏览器 / 手机 · 参照手机端 APK) ──
+    //   把 rt-flow 的多实例外壳直出为可在任意浏览器打开的单页, 传输层由 vscode.postMessage
+    //   改走 HTTP: 页面→宿主 POST /api/shell/msg; 宿主→页面 SSE /api/shell/events。
+    if (route === '/shell' || route === '/shell/' || route === '/api/shell/events' || route === '/api/shell/msg') {
+        const rtint: any = _rtflowModule && _rtflowModule._internals;
+        if (route === '/shell' || route === '/shell/') {
+            let html = '';
+            try { html = (rtint && typeof rtint.getStandaloneShellHtml === 'function') ? rtint.getStandaloneShellHtml({ token: ws.token, port: ws.port }) : ''; } catch (e) { html = ''; }
+            if (!html) html = '<!DOCTYPE html><meta charset="utf-8"><body style="font:14px sans-serif;padding:24px;background:#0e1116;color:#cdd3de">归一外壳未就绪 · rt-flow 多实例模块未加载</body>';
+            return { _proxy: true, status: 200, contentType: 'text/html; charset=utf-8', body: html };
+        }
+        if (route === '/api/shell/events') {
+            const sid = url.searchParams.get('sid') || '';
+            if (res && rtint && typeof rtint.shellAttach === 'function') { rtint.shellAttach(sid, res); return { _streamed: true }; }
+            return { ok: false, error: 'sse-unavailable' };
+        }
+        // POST /api/shell/msg
+        let body: any = {};
+        try { body = JSON.parse(await readBody(req) || '{}'); } catch (e) { body = {}; }
+        const sid = String((body && body.sid) || '');
+        const msg = body && body.msg;
+        try { if (rtint && typeof rtint.shellHandleMessage === 'function') await rtint.shellHandleMessage(sid, msg); } catch (e) { /* 守柔 */ }
+        return { ok: true };
     }
 
     switch (route) {

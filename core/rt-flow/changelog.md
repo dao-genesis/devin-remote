@@ -2,6 +2,24 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.15.0 (2026-06-19) · 归一独立 HTTP 外壳: 同一外壳直出单页·适配所有 IDE/浏览器/手机·参照手机端 APK
+
+> 帛书·「大方无隅」— 外壳不困于 webview 一隅, 直出为 HTTP 单页, 任意 IDE 内置浏览器/手机/远程经 DAO Bridge 皆入同一套 UI。
+
+### 背景 · 本源 (锚定)
+- v5.0.0 的「单页 / 仿 APK」多实例外壳 (`_multiShellHtml`: ☰ 六大板块 + 多实例账号标签 + 移动响应式 + 左右滑切页) 已成熟, 但只活在 **VS Code webview** (`acquireVsCodeApi`/postMessage), 仅 VS Code 系 IDE 可用。
+- 真正遗留的本源 = 把同一外壳做成 **HTTP 直出的独立单页**, 传输层改走 HTTP, 从而「适配所有 IDE / 任意浏览器 / 手机 / 远程操控」, 整体交互对齐手机端 APK。
+
+### 实现 · 复用为主·零重写 UI (`extension.js`)
+- `_standaloneShellHtml()`: 复用同一 `_multiShellHtml`, 放开 CSP 的 `connect-src 'self'`(同源 fetch/SSE), 注入 HTTP 传输垫片替换 `acquireVsCodeApi`。
+- 传输垫片 (`SHELL_HTTP_SHIM`): 页面→宿主 `POST /api/shell/msg`; 宿主→页面 `EventSource('/api/shell/events')`(SSE)。浏览器原生动作 (openExternal/clip/复制凭据) 就地处理, 余者转发。
+- SSE 总线 (`_shellClients`/`_shellAttach`/`_shellSend`/`_shellBroadcast`) + `shellHandleMessage()`: 复刻 webview 宿主逻辑 (ready/favs/history/getAccounts/newDevinTab/openCloudPage/getBridge/bridgeAct/shellBackups/cloudInit/cloudReady/cloudRelay/filesDropped/copyCred), 开账号标签经 `_shellResolveOpen()` 返回反代 URL 由前端 `mkTab` 以 iframe 平级开标签。
+- 六大板块仍走 `cloudInit→cloudInitHtml`(blob-iframe) 与 `cloudRelay/cloudHost` 双工中继, 与 webview 路径同源复用。
+- 暴露 `getStandaloneShellHtml` / `shellAttach` / `shellHandleMessage` 至 `_internals`, 供 dao-vsix 本地服务器 `/shell`、`/api/shell/*` 路由调用。
+
+### 验证
+- 本机 Chrome (无 IDE·纯浏览器) 实测 `/shell`: 外壳/工具栏/☰ 六大板块菜单/六板挂载/`cloudRelay↔cloudHost` 双工中继全通; 控制台零错误。
+
 ## v4.14.0 (2026-06-19) · 反代静态资源磁盘二级缓存 (L2): 重载/重开秒级恢复·根治首屏很慢
 
 > 帛书·「夫物芸芸·各复归其根」: 内存缓存随进程消亡, IDE 重载/重开后首屏仍须逐个重取上游 + 全量改写而卡顿。落盘归根, 重载即复。
