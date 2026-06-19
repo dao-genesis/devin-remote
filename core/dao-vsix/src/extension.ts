@@ -2753,37 +2753,74 @@ async function bridgeAutoPersist(): Promise<void> {
 const BRIDGE_LIVENESS_INTERVAL_MS = 30 * 1000;
 let _bridgeLivenessTimer: ReturnType<typeof setInterval> | null = null;
 let _bridgeLastAliveMs = 0;
-function bridgeProbeAlive(rawUrl: string, timeoutMs: number = 6000): Promise<boolean> {
+// 真验通达: relay 边缘(Worker)对一切请求(含 /api/health)强制 Bearer 鉴权 → 缺 token 必 401。
+//   旧法 GET 无 token, 把 401(<500) 误判为"活" → relay 通道下隧道真断也探不出 → 知识库不会刷新。
+//   故 relay 走信封 POST + Bearer, 校验内层健康体(非错误)才算活; 直连/命名隧道 GET /api/health(带 token 无害)。
+function bridgeProbeAlive(rawUrl: string, timeoutMs: number = 6000, token: string = ''): Promise<boolean> {
     return new Promise((resolve) => {
         let done = false;
         const fin = (v: boolean) => { if (!done) { done = true; resolve(v); } };
         try {
+            const relay = /\/relay\//.test(rawUrl);
             const u = new URL(rawUrl);
             const isHttps = u.protocol === 'https:';
             const mod = require(isHttps ? 'https' : 'http');
-            const opts: any = {
-                method: 'GET', hostname: u.hostname,
-                port: u.port || (isHttps ? 443 : 80),
-                path: (u.pathname && u.pathname !== '/' ? u.pathname : '/api/health') + (u.search || ''),
-                timeout: timeoutMs,
-            };
+            const headers: any = {};
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+            let postData: string | null = null;
+            const opts: any = { hostname: u.hostname, port: u.port || (isHttps ? 443 : 80), timeout: timeoutMs, headers };
+            if (relay) {
+                opts.method = 'POST';
+                opts.path = (u.pathname || '/') + (u.search || '');
+                postData = JSON.stringify({ path: '/api/health', method: 'GET', body: {} });
+                headers['Content-Type'] = 'application/json';
+                headers['Content-Length'] = Buffer.byteLength(postData);
+            } else {
+                opts.method = 'GET';
+                opts.path = (u.pathname && u.pathname !== '/' ? u.pathname : '/api/health') + (u.search || '');
+            }
             if (isHttps) opts.rejectUnauthorized = false;
-            const req = mod.request(opts, (r: any) => { const sc = r.statusCode || 0; r.resume(); fin(sc >= 200 && sc < 500); });
+            const req = mod.request(opts, (r: any) => {
+                const sc = r.statusCode || 0;
+                if (!relay) { r.resume(); return fin(sc >= 200 && sc < 500); }
+                // relay: 必须 2xx 且内层非错误(健康 JSON)才算活 — 401/502/{error} 皆为死
+                let body = '';
+                r.setEncoding('utf8');
+                r.on('data', (c: string) => { if (body.length < 8192) body += c; });
+                r.on('end', () => {
+                    if (sc < 200 || sc >= 300) return fin(false);
+                    try { const j = JSON.parse(body); fin(!j.error); } catch { fin(body.length > 0); }
+                });
+            });
             req.on('timeout', () => { try { req.destroy(); } catch { /* 守柔 */ } fin(false); });
             req.on('error', () => fin(false));
+            if (postData) req.write(postData);
             req.end();
         } catch { fin(false); }
     });
 }
 function bridgeEffectiveUrl(): string {
     if (bridgeUrl) return bridgeUrl;
-    try { const c = bridgeReadPublishedConn(); if (c && c.url) return c.url; } catch { /* 守柔 */ }
+    // 含 relay-only 连接(仅 relayUrl 无透明 url): 旧法漏探 → 隧道断也不刷新。此处兜底取 relayUrl。
+    try { const c = bridgeReadPublishedConn(); if (c && (c.url || c.relayUrl)) return c.url || c.relayUrl || ''; } catch { /* 守柔 */ }
     return '';
+}
+function bridgeEffectiveToken(): string {
+    if (bridgeToken) return bridgeToken;
+    try { const c = bridgeReadPublishedConn(); if (c && c.token) return c.token; } catch { /* 守柔 */ }
+    return ws.token || '';
 }
 function bridgeMcpUrl(): string {
     try {
         const mf = path.join(process.env.ProgramData || 'C:\\ProgramData', 'dao_vm', 'mcp_public.json');
         if (fs.existsSync(mf)) { const j = JSON.parse(fs.readFileSync(mf, 'utf8')); return String(j.url || ''); }
+    } catch { /* 守柔 */ }
+    return '';
+}
+function bridgeMcpToken(): string {
+    try {
+        const mf = path.join(process.env.ProgramData || 'C:\\ProgramData', 'dao_vm', 'mcp_public.json');
+        if (fs.existsSync(mf)) { const j = JSON.parse(fs.readFileSync(mf, 'utf8')); return String(j.token || ''); }
     } catch { /* 守柔 */ }
     return '';
 }
@@ -2799,8 +2836,8 @@ async function bridgeLivenessTick(): Promise<void> {
         // 都没有地址可探 → 无连接, 尝试自动持久化建立一次(守柔, autoPersist 自带节流)
         if (!url && !mcpUrl) { try { await bridgeAutoPersist(); } catch { /* 守柔 */ } return; }
         const [bridgeOk, mcpOk] = await Promise.all([
-            url ? bridgeProbeAlive(url) : Promise.resolve(true),
-            mcpUrl ? bridgeProbeAlive(mcpUrl) : Promise.resolve(true),
+            url ? bridgeProbeAlive(url, 6000, bridgeEffectiveToken()) : Promise.resolve(true),
+            mcpUrl ? bridgeProbeAlive(mcpUrl, 6000, bridgeMcpToken()) : Promise.resolve(true),
         ]);
         // 打得通 → 保持稳定, 什么也不做 (不重注·省网)
         if (bridgeOk && mcpOk) { _bridgeLastAliveMs = Date.now(); return; }
