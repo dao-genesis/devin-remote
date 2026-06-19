@@ -40,6 +40,16 @@ function daoGlobalDir() {
 //   用 PowerShell 调用运算符 & + 单引号量化 + UTF-8/原生退出码包装彻底规避。
 // ═══════════════════════════════════════════════════════════
 function psq(s) { return "'" + String(s == null ? "" : s).replace(/'/g, "''") + "'"; }
+// POSIX(/bin/sh) 单引号字面量转义（Linux/macOS 本机执行用）
+function shq(s) { return "'" + String(s == null ? "" : s).replace(/'/g, "'\\''") + "'"; }
+// 按平台生成 sysinfo 采集命令：Win→Get-ComputerInfo；Linux/macOS→uname/os-release/cpu/mem/disk
+function sysinfoCmd(platform) {
+  if ((platform || process.platform) === "win32") return "Get-ComputerInfo | Out-String";
+  return "echo '=== SYSTEM ==='; uname -a; echo; (lsb_release -a 2>/dev/null || cat /etc/os-release 2>/dev/null); " +
+    "echo; echo '=== CPU ==='; (lscpu 2>/dev/null | head -25 || sysctl -n machdep.cpu.brand_string 2>/dev/null); " +
+    "echo; echo '=== MEMORY ==='; (free -h 2>/dev/null || vm_stat 2>/dev/null); " +
+    "echo; echo '=== DISK ==='; df -h 2>/dev/null; echo; echo '=== UPTIME ==='; uptime 2>/dev/null";
+}
 function wrapPwshForUtf8AndExit(cmd) {
   return (
     "$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8\n" +
@@ -65,13 +75,28 @@ function runPwsh(cmd, cwd, timeoutMs) {
 // type：shell(默认/原样) | cmd|bat(经 cmd.exe /c + chcp 65001 跑 .bat/经典 DOS)
 //        | run|file(运行文件 .bat/.cmd/.exe/.ps1 + args) | detached|spawn(Start-Process 后台/分离回 PID)
 // 可选：cwd(工作目录) args(数组) elevate(管理员提权) show(显示窗口)
-function buildExecCommand(body) {
+function buildExecCommand(body, targetPlatform) {
   body = body || {};
+  const posix = (targetPlatform || "win32") !== "win32";
   const type = String(body.type || "shell").toLowerCase();
-  const cwd = body.cwd ? "Set-Location -LiteralPath " + psq(body.cwd) + "; " : "";
   const file = body.file || body.exe || body.program || "";
   const args = Array.isArray(body.args) ? body.args : [];
   const cmd = body.cmd || body.command || (body.payload && body.payload.command) || "";
+  if (posix) {
+    const cwdP = body.cwd ? "cd " + shq(body.cwd) + " && " : "";
+    if (type === "detached" || type === "spawn" || body.detached) {
+      const target = file ? shq(file) : cmd;
+      const al = args.length ? " " + args.map(shq).join(" ") : "";
+      return cwdP + "nohup " + target + al + " >/dev/null 2>&1 & echo \"started pid=$! file=" + (file || cmd) + "\"";
+    }
+    if (type === "run" || type === "file" || (file && !cmd)) {
+      const al = args.length ? " " + args.map(shq).join(" ") : "";
+      const runner = /\.sh$/i.test(file) ? "sh " : "";
+      return cwdP + runner + shq(file || cmd) + al + " 2>&1";
+    }
+    return cwdP + cmd;
+  }
+  const cwd = body.cwd ? "Set-Location -LiteralPath " + psq(body.cwd) + "; " : "";
   if (type === "detached" || type === "spawn" || body.detached) {
     const target = file || cmd;
     const al = args.length ? " -ArgumentList " + args.map(psq).join(",") : "";
@@ -995,7 +1020,7 @@ class WorkspaceServer {
       if (this.isSelf(j.agent_id)) {
         let r;
         if (type === "sysinfo") {
-          r = await runPwsh("Get-ComputerInfo | Out-String", j.cwd || root, timeoutMs);
+          r = await runPwsh(sysinfoCmd(process.platform), j.cwd || root, timeoutMs);
         } else if (type === "shell" && !j.file) {
           r = await new Promise((resolve) => {
             cp.exec(j.cmd || "", { cwd: j.cwd || root, timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
@@ -1003,7 +1028,7 @@ class WorkspaceServer {
             });
           });
         } else {
-          const command = buildExecCommand(j);
+          const command = buildExecCommand(j, process.platform);
           if (!command) return { status: 400, body: { error: "cmd/file required" } };
           r = await runPwsh(command, j.cwd || root, timeoutMs);
         }
@@ -1680,6 +1705,13 @@ class BridgeViewProvider {
     if (m.op === "stop") { this.bridge.stop(); this.notify(); return; }
     if (m.op === "copyUrl") { await vscode.env.clipboard.writeText(this.bridge.url || ""); vscode.window.showInformationMessage("已复制公网 URL"); return; }
     if (m.op === "copyToken") { await vscode.env.clipboard.writeText(this.bridge.srv.token || ""); vscode.window.showInformationMessage("已复制 Token"); return; }
+    if (m.op === "copyAll") {
+      const u = this.bridge.url || "", t = this.bridge.srv.token || "";
+      const text = (u || t) ? ("URL:   " + u + "\nToken: " + t + "\nAuth:  Authorization: Bearer " + t) : "";
+      await vscode.env.clipboard.writeText(text);
+      vscode.window.showInformationMessage(u ? "已复制 URL 与 Token" : "隧道尚未就绪，已复制当前 Token");
+      return;
+    }
     if (m.op === "copyBootstrap") { await vscode.env.clipboard.writeText(this.bridge.bootstrapCmd()); vscode.window.showInformationMessage("已复制被控端一行接入指令"); return; }
     if (m.op === "refreshToken") {
       this.post({ type: "result", op: "refreshToken", ok: true, text: "正在刷新 Token 并用新 Token 重连…" });
@@ -1799,11 +1831,8 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   <div class="lbl">代理 / 回退链</div><div id="net" class="val">—</div>
   <div class="lbl">在线Agent</div><div id="agents" class="val">0</div>
   <div class="row" style="margin-top:6px">
-    <button onclick="send('copyUrl')">复制URL</button>
-    <button onclick="send('copyToken')">复制Token</button>
-    <button onclick="send('restart')">重启隧道</button>
-  </div>
-  <div class="row" style="margin-top:4px">
+    <button onclick="send('copyAll')" title="一键复制公网 URL 与 Token（含 Authorization 头），直接粘贴给云端 Agent">📋 复制</button>
+    <button onclick="send('restart')" title="重启隧道（URL 会变，Token 不变）">♻️ 重启隧道</button>
     <button onclick="send('refreshToken')" title="生成全新 Token，旧 Token 立即作废，并用新 Token 重连公网通道">🔄 刷新Token</button>
   </div>
 </div>

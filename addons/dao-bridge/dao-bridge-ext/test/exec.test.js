@@ -40,7 +40,16 @@ function ok(name) { console.log("  PASS  " + name); passed++; }
     assert.ok(d.includes("Start-Process -FilePath 'notepad.exe'") && d.includes("-PassThru") && d.includes("-WindowStyle Hidden"), label + " detached");
     assert.ok(build({ type: "detached", file: "x.exe", elevate: true }).includes("-Verb RunAs"), label + " elevate");
     assert.ok(build({ cmd: "pwd", cwd: "C:\\tmp" }).startsWith("Set-Location -LiteralPath 'C:\\tmp';"), label + " cwd");
-    ok("buildExecCommand 规范化一致 (" + label + ")");
+    // ── POSIX 分支（Linux/macOS 本机执行；targetPlatform 非 win32）──
+    assert.strictEqual(build({ cmd: "uname -a" }, "linux"), "uname -a", label + " posix shell");
+    assert.strictEqual(build({ type: "cmd", cmd: "echo a && echo b" }, "linux"), "echo a && echo b", label + " posix cmd=>shell");
+    const pr = build({ type: "run", file: "/opt/my app.sh", args: ["x y", "1"] }, "linux");
+    assert.ok(pr.startsWith("sh '/opt/my app.sh'") && pr.includes("'x y'") && pr.includes("'1'") && pr.endsWith(" 2>&1"), label + " posix run .sh quoting");
+    assert.ok(build({ type: "run", file: "/usr/bin/node" }, "linux").startsWith("'/usr/bin/node'"), label + " posix run bin");
+    const pd = build({ type: "detached", cmd: "sleep 5" }, "linux");
+    assert.ok(pd.startsWith("nohup sleep 5 ") && pd.includes(">/dev/null 2>&1 &") && pd.includes("started pid=$!"), label + " posix detached");
+    assert.ok(build({ cmd: "pwd", cwd: "/tmp/x y" }, "linux").startsWith("cd '/tmp/x y' && "), label + " posix cwd");
+    ok("buildExecCommand 规范化一致·Win+POSIX 双平台 (" + label + ")");
   }
 
   // ── 2. 中枢本机真实执行（仅 win32）──
@@ -79,7 +88,37 @@ function ok(name) { console.log("  PASS  " + name); passed++; }
 
     try { fs.unlinkSync(batPath); } catch {}
   } else {
-    ok("中枢本机实跑 (skipped: non-win)");
+    // ── POSIX(Linux/macOS) 中枢本机真实执行 ──
+    const tmp = os.tmpdir();
+    const shPath = path.join(tmp, "dao_src_exec_" + Date.now() + ".sh");
+    fs.writeFileSync(shPath, "#!/bin/sh\necho DAO-SRC-SH $1\nexit 7\n");
+    const host = { workspaceRoot: () => tmp, info: () => ({ host: os.hostname() }), log: () => {} };
+    const TOKEN = "t0ken"; const hdr = { authorization: "Bearer " + TOKEN };
+
+    const cr = await core.handleRoute(host, "/api/exec", "POST", hdr, JSON.stringify({ type: "run", file: shPath, args: ["CORE42"], timeout: 25 }), TOKEN);
+    assert.strictEqual(cr.status, 200);
+    assert.ok(cr.body.stdout.includes("DAO-SRC-SH CORE42"), "core posix stdout: " + cr.body.stdout);
+    assert.strictEqual(cr.body.exit_code, 7, "core posix exit code");
+    ok("core.handleRoute 实跑 .sh (type:run, stdout + 退出码 7)·POSIX");
+
+    const srv = new ext.WorkspaceServer();
+    const cmr = await srv.handleApi("POST", "/api/exec-sync", { type: "cmd", cmd: "echo cmd-type-ok && echo two", cwd: tmp, timeout: 20 }, true);
+    assert.ok(cmr.body.result.stdout.includes("cmd-type-ok") && cmr.body.result.stdout.includes("two"), "ext posix cmd stdout: " + cmr.body.result.stdout);
+    ok("WorkspaceServer cmd 类型经 /bin/sh 执行·POSIX");
+
+    const dt = await srv.handleApi("POST", "/api/exec-sync", { type: "detached", cmd: "sleep 1", cwd: tmp, timeout: 20 }, true);
+    assert.ok(dt.body.result.stdout.includes("started pid="), "ext posix detached: " + dt.body.result.stdout);
+    ok("WorkspaceServer detached 经 nohup 后台启动·POSIX");
+
+    const si = await srv.handleApi("POST", "/api/exec-sync", { type: "sysinfo", cwd: tmp, timeout: 25 }, true);
+    assert.ok(si.body.result.stdout.includes("=== SYSTEM ==="), "ext posix sysinfo: " + si.body.result.stdout.slice(0, 80));
+    ok("WorkspaceServer sysinfo 经 uname/os-release 采集·POSIX");
+
+    const sh = await srv.handleApi("POST", "/api/exec-sync", { cmd: "echo back-compat", cwd: tmp, timeout: 20 }, true);
+    assert.ok(sh.body.result.stdout.includes("back-compat"), "ext posix shell stdout: " + sh.body.result.stdout);
+    ok("WorkspaceServer shell 默认向后兼容·POSIX");
+
+    try { fs.unlinkSync(shPath); } catch {}
   }
 
   console.log("\nALL " + passed + " TESTS PASSED");
