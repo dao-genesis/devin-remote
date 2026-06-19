@@ -2,6 +2,14 @@
 
 本项目遵循语义化版本。日期格式 YYYY-MM-DD。
 
+## [3.9.1] - 2026-06-19
+
+看门狗回环自检修复：经真 cloudflared/relay 公网隧道实测发现并修复。
+
+### 修复
+- **`_publicHealthCheck` 回环自检补 `Authorization: Bearer <token>` 头**。relay 边缘(Worker)对一切请求(含 `/api/health`)强制 Bearer 鉴权，缺头必 401 → 看门狗误判"隧道断"→ 在生产默认 relay 通道下每周期空转自愈(heal 风暴)。补上后 relay 回环自检恢复正常(实测 `true`)；直连/命名隧道 health 免鉴权、带上无害。
+- 实测佐证：真 cloudflared 隧道 `pkill` 后看门狗连续 2 次自检失败→自动重连出新 URL(token 不变)、外网 curl 新 URL 通/旧 URL 530；真 relay 通道触发自愈后 URL 不变(被控端无感)。
+
 ## [3.9.0] - 2026-06-19
 
 自愈看门狗·持久化：只要 IDE(扩展宿主)在跑就周期回环自检、隧道一断自动重连，端口/Token/URL 可随之轮换；IDE 关闭则随之关停。
