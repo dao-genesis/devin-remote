@@ -346,6 +346,64 @@ function test(name, fn) {
     proxy.stopAll();
   });
 
+  // ── 11b. devin_proxy · 磁盘二级缓存 L2 (v4.14.0 · 重载秒恢复 · 跨端口重定基) ──
+  console.log("\n[devin_proxy._diskCache · L2]");
+  {
+    const _fs = require("fs"), _os = require("os"), _path = require("path");
+    const dc = proxy._diskCache;
+    test("_diskKey 同路同键·异路异键 (sha1 稳定)", () => {
+      assert.strictEqual(dc._diskKey("/a.js"), dc._diskKey("/a.js"));
+      assert.notStrictEqual(dc._diskKey("/a.js"), dc._diskKey("/b.js"));
+    });
+    test("_isTextCt: js/css 为文本·字体/图片非文本", () => {
+      assert.strictEqual(dc._isTextCt({ "Content-Type": "application/javascript" }), true);
+      assert.strictEqual(dc._isTextCt({ "Content-Type": "text/css; charset=utf-8" }), true);
+      assert.strictEqual(dc._isTextCt({ "Content-Type": "font/woff2" }), false);
+      assert.strictEqual(dc._isTextCt({ "Content-Type": "image/png" }), false);
+    });
+    test("_rebaseAsset: 文本体端口变则重定基·二进制/同端口不动", () => {
+      const from = "http://localhost:1111", to = "http://localhost:2222";
+      const js = Buffer.from("fetch('" + from + "/api/x')", "utf8");
+      assert.strictEqual(dc._rebaseAsset(js, from, to, true).toString("utf8"), "fetch('" + to + "/api/x')");
+      assert.strictEqual(dc._rebaseAsset(js, from, from, true).toString("utf8"), js.toString("utf8"));
+      const bin = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+      assert.deepStrictEqual(dc._rebaseAsset(bin, from, to, false), bin);
+    });
+    await test("_diskPut → _diskGet 往返: status/headers/body/base/text 完整", async () => {
+      const tmp = _fs.mkdtempSync(_path.join(_os.tmpdir(), "wamcache-"));
+      process.env.WAM_PROXY_CACHE_DIR = tmp;
+      assert.strictEqual(dc._diskCacheDir(), tmp);
+      const headers = { "Content-Type": "application/javascript", "Cache-Control": "public, max-age=31536000, immutable" };
+      const body = Buffer.from("console.log('http://localhost:1234/x')", "utf8");
+      dc._diskPut("/assets/app.hash.js", { status: 200, headers, body }, "http://localhost:1234");
+      let got = null;
+      for (let i = 0; i < 50 && !got; i++) { got = await dc._diskGet("/assets/app.hash.js"); if (!got) await new Promise((r) => setTimeout(r, 20)); }
+      assert.ok(got, "磁盘命中");
+      assert.strictEqual(got.status, 200);
+      assert.strictEqual(got.text, true, "js 标记为文本");
+      assert.strictEqual(got.base, "http://localhost:1234");
+      assert.strictEqual(got.headers["Content-Type"], "application/javascript");
+      assert.strictEqual(got.body.toString("utf8"), body.toString("utf8"));
+      const bin = Buffer.from([0, 1, 2, 253, 254, 255]);
+      dc._diskPut("/f/font.woff2", { status: 200, headers: { "Content-Type": "font/woff2" }, body: bin }, "http://localhost:1234");
+      let g2 = null;
+      for (let i = 0; i < 50 && !g2; i++) { g2 = await dc._diskGet("/f/font.woff2"); if (!g2) await new Promise((r) => setTimeout(r, 20)); }
+      assert.ok(g2, "二进制磁盘命中");
+      assert.strictEqual(g2.text, false);
+      assert.deepStrictEqual(g2.body, bin, "二进制字节零损坏");
+      delete process.env.WAM_PROXY_CACHE_DIR;
+      try { _fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+    });
+    await test("_diskGet 未落盘的键 → null", async () => {
+      const tmp = _fs.mkdtempSync(_path.join(_os.tmpdir(), "wamcache2-"));
+      process.env.WAM_PROXY_CACHE_DIR = tmp;
+      const got = await dc._diskGet("/never/written.js");
+      assert.strictEqual(got, null);
+      delete process.env.WAM_PROXY_CACHE_DIR;
+      try { _fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+    });
+  }
+
   // ── 11. 备份命名/结构 + listBackups (v4.8.3 编号·账号+密码表层·对话/账号信息分明) ──
   console.log("\n[备份命名/结构 · v4.8.3]");
   const fs = require("fs"), os = require("os"), path = require("path");
