@@ -109,8 +109,8 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 
 <!-- 模块1.7: 浏览器网页控制台 (手机=中枢, 任意设备浏览器全功能接入) -->
 <div class="section">
-<h3>🌐 网页控制台 · 任意浏览器即全功能接入</h3>
-<div class="muted">把本机当<b>中枢</b>:任意设备(电脑/平板/别的手机)用浏览器打开下方网址,即得与本机 APK <b>一致的全功能控制台</b> —— 状态/会话/账号/导出/任意 RPC 命令。每个操作都经中继打回本机执行,<b>多人同时连不互相干扰</b>。网址内含 Token(=完整接入凭证),仅发可信方;开了上方「强制 E2E」时在控制台里填同一 E2E Key 即可(载荷全程密文)。</div>
+<h3>🌐 网页版 · 任意浏览器打开即与本机一致</h3>
+<div class="muted">把本机当<b>中枢</b>:任意设备(电脑/平板/别的手机)用浏览器打开下方网址,得到的就是<b>本机 APK 自身的真实页面</b>(切号/穿透/对话…),<b>表层与底层完全一致</b> —— 页面里每个操作都打回本机执行(账号/网络/金库都在本机),所以行为与手机本体逐字节一致;浏览器无状态、本机串行执行,<b>多人同时连不互相干扰</b>。网址内含 Token(=完整接入凭证),仅发可信方。</div>
 <div id="webConsoleUrls" class="url" style="margin-top:6px">—</div>
 <div class="row">
   <button onclick="copyWebConsole()">📋 复制控制台网址(含Token·一键直登)</button>
@@ -613,11 +613,11 @@ function renderWebConsole(){
 function copyWebConsole(){
   var bases=_webConsoleBases();
   if(!bases.length){ _result('webConsole', false, '暂无可用入口 (开启局域网直连或等 cloudflared 就绪)'); return; }
-  var lines=["═══ Devin Cloud · 网页控制台 (任意浏览器打开即全功能接入本机) ═══"];
-  bases.forEach(function(b){ lines.push("控制台: "+_webConsoleUrl(b,true)); });
-  lines.push(""); lines.push("(网址已含 Session+Token=完整接入凭证, 仅发可信方; 开了「强制 E2E」时在控制台填同一 E2E Key)");
+  var lines=["═══ Devin Cloud · 网页版 (任意浏览器打开即得本机真实页面) ═══"];
+  bases.forEach(function(b){ lines.push("网页版: "+_webConsoleUrl(b,true)); });
+  lines.push(""); lines.push("(网址已含 Session+Token=完整接入凭证, 仅发可信方)");
   try{N.clip&&N.clip(lines.join("\n"));}catch(e){}
-  _result('webConsole', true, '已复制网页控制台网址(含Token, 浏览器打开即直登)');
+  _result('webConsole', true, '已复制网页版网址(含Token, 浏览器打开即与本机一致)');
 }
 function copyWebConsoleBare(){
   var bases=_webConsoleBases();

@@ -1,6 +1,6 @@
 {
-  "versionCode": 77,
-  "versionName": "0.28.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.28.0/DevinCloud-mobile-v0.28.0.apk",
-  "notes": "v0.28.0 · 反向利用穿透:手机=中枢,浏览器=全功能瘦客户端。新增「网页控制台」(webshell.html):手机经 LocalServer 在局域网 + cloudflared 公网上以 GET 提供一个自洽控制台页,任意设备浏览器打开本机入口即得与 APK 一致的全功能操作(状态/会话/账号/导出/任意 RPC 命令)。每个操作经 /relay/<session> 打回手机执行(账号/网络/存储都在手机),多人同时连互不干扰。控制台内置 WebCrypto E2E(与设备逐字节兼容),即使开了 v0.27 的「强制 E2E」也可用、载荷全程密文。穿透面板新增控制台网址一键复制。对外 curl/HTTP 契约零改动。"
+  "versionCode": 78,
+  "versionName": "0.29.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.29.0/DevinCloud-mobile-v0.29.0.apk",
+  "notes": "v0.29.0 · 网页版正本清源:不再是自造控制台,而是把 APK 自身的真实页面(switch/tunnel/cloud/vpn/daopan…)经 LocalServer 在局域网 + cloudflared 公网上原样服务出去。任意设备浏览器打开 <本机入口>/?session=&token= 得到的就是与手机本体「表层(同一份 HTML/CSS/JS)+ 底层(同一套手机方法/同一金库)」完全一致的页面。注入 remote-native 垫片把页面里的 window.Native.* 重定向:状态/配置/金库读写打回本机执行,网络请求由本机发起(绕 CORS·带账号 auth1),复制/下载/看文本落到使用者自己的浏览器。浏览器无状态、本机串行,多人同时连互不干扰。对外 curl/HTTP 契约零改动。"
 }

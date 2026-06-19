@@ -34,6 +34,9 @@ public final class LocalServer {
         String dispatch(String frameJson) throws Exception;
         /** GET 静态页 (浏览器控制台 webshell): 返回 HTML 文本; null = 该路径无静态页 (走 404)。 */
         default String staticHtml(String path) { return null; }
+        /** GET 静态资源: 返回 {contentType, body}; null = 无此资源 (走 404)。
+         *  用于把 APK 自身的真实页面 (switch/tunnel/cloud/…) 与其 JS 资源原样服务给浏览器。 */
+        default String[] staticAsset(String path) { return null; }
     }
 
     private final Dispatcher disp;
@@ -114,9 +117,11 @@ public final class LocalServer {
                     write(out, 200, "{\"status\":\"ok\",\"service\":\"rtflow-local-tunnel\"}");
                     sock.close(); return;
                 }
-                // 浏览器控制台静态页 (免鉴权拿页面; 页面内每个 RPC 仍需 Bearer Token)。
+                // 浏览器: 原样拿 APK 真实页面与其 JS 资源 (免鉴权拿页面; 页面内每个 RPC 仍需 Bearer Token)。
                 // 去掉 query (?session=...) 再匹配。
                 String p = path; int q = p.indexOf('?'); if (q >= 0) p = p.substring(0, q);
+                String[] asset = disp.staticAsset(p);
+                if (asset != null) { writeAsset(out, 200, asset[0], asset[1]); sock.close(); return; }
                 String html = disp.staticHtml(p);
                 if (html != null) { writeHtml(out, 200, html); sock.close(); return; }
                 write(out, 404, "{\"error\":\"not_found\"}"); sock.close(); return;
@@ -195,6 +200,20 @@ public final class LocalServer {
         h.append("HTTP/1.1 ").append(status).append(' ').append(statusText(status)).append("\r\n");
         h.append("Content-Type: text/html; charset=utf-8\r\n");
         h.append("Access-Control-Allow-Origin: *\r\n");
+        h.append("Content-Length: ").append(b.length).append("\r\n");
+        h.append("Connection: close\r\n\r\n");
+        out.write(h.toString().getBytes(StandardCharsets.UTF_8));
+        out.write(b);
+        out.flush();
+    }
+
+    private static void writeAsset(OutputStream out, int status, String contentType, String body) throws Exception {
+        byte[] b = body == null ? new byte[0] : body.getBytes(StandardCharsets.UTF_8);
+        StringBuilder h = new StringBuilder();
+        h.append("HTTP/1.1 ").append(status).append(' ').append(statusText(status)).append("\r\n");
+        h.append("Content-Type: ").append(contentType == null ? "text/plain; charset=utf-8" : contentType).append("\r\n");
+        h.append("Access-Control-Allow-Origin: *\r\n");
+        h.append("Cache-Control: no-cache\r\n");
         h.append("Content-Length: ").append(b.length).append("\r\n");
         h.append("Connection: close\r\n\r\n");
         out.write(h.toString().getBytes(StandardCharsets.UTF_8));
