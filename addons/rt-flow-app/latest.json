@@ -1,6 +1,6 @@
 {
-  "versionCode": 83,
-  "versionName": "0.34.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.0/DevinCloud-mobile-v0.34.0.apk",
-  "notes": "v0.34.0 · 三事合一·道法自然。① 投屏镜像(突破 app.devin.ai host 门的本源解法): 新增 /mirror 网页 + /api/mirror 路由(取帧/标签/反向输入), 把手机里那个被 app.devin.ai 信任的原生 Devin 标签实时投屏到任意公网/局域网浏览器(JPEG 帧流 + 点击/滑动/打字/回车反向注入), 于是任意设备打开镜像网址即满血操控 APK 本体的 Devin, 与手机逐像素一致 — 这是 host 门下公网满血用 Devin 的唯一可靠路径(受 Bearer Token + 远程操控开关双闸门)。② 备份「文件夹+MD」线本源化: 文件夹以每条对话的完整记录 conv-<sid>.md 为本源锚定, 同写取数指引 指引-<sid>.md + 文件夹结构说明 _说明.md; ZIP 以 对话_完整记录.md 居首; 事件流偶发回退稀疏 /messages 时重试一次取全息, manifest 记 complete 标记区分完整/稀疏并对旧备份补全指引。③ 下载彻底落地系统: 网页内/悬浮窗任何下载除进 app 下载列表外, 经 MediaStore 同步进系统「下载/最近」(Download/DevinCloud), 系统文件管理器与任意其它 App 都可见可用; 下载列表新增 分享/点开, 拖出改走系统 Uri 更可靠。延续 v0.33.0 公网根挂载与诚实边界。对外 curl/HTTP 契约零改动。"
+  "versionCode": 85,
+  "versionName": "0.34.2",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.2/DevinCloud-mobile-v0.34.2.apk",
+  "notes": "v0.34.2 · 三事合一·道法自然(满血发布)。① 投屏镜像(突破 app.devin.ai host 门的本源解法): /mirror 网页 + /api/mirror 路由(取帧/标签/反向输入), 把手机里那个被 app.devin.ai 信任的原生 Devin 标签实时投屏到任意公网/局域网浏览器(JPEG 帧流 + 点击/滑动/打字/回车反向注入), 任意设备打开镜像网址即满血操控 APK 本体的 Devin, 与手机逐像素一致 — host 门下公网满血用 Devin 的唯一可靠路径(受 Bearer Token + 远程操控开关双闸门)。v0.34.1 起「物无非彼」满屏直投: 画面铺满视口、无任何工具栏/输入条(仅一个极淡的状态角标), 桌面端聚焦画面后物理键盘直接打字直通注入; v0.34.2 键盘直通过滤控制字符/NUL, 杜绝畸形按键注入垃圾码点。② 备份「文件夹+MD」线本源化: ZIP 以「对话_人类可读.md」完整记录为本源锚定居首, 配套「取数指引.md」+ 工作日志.md + _meta.json + files/<产出文件>; 事件流为先, /messages 兜底取全息。③ 下载彻底落地系统: 网页内/悬浮窗任何下载除进 app 下载列表外, 经 MediaStore 同步进系统「下载/最近」(Download/DevinCloud), 系统文件管理器与任意其它 App 都可见可用; 下载列表/悬浮窗支持分享/点开, 拖出改走系统 Uri 更可靠, 悬浮窗「下载MD」落地反馈修正。延续 v0.33.0 公网根挂载与诚实边界。对外 curl/HTTP 契约零改动。"
 }
