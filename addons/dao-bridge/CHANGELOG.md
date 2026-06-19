@@ -2,6 +2,22 @@
 
 本项目遵循语义化版本。日期格式 YYYY-MM-DD。
 
+## [3.8.0] - 2026-06-19
+
+全网状拓扑·任意设备皆可作中枢/被控端·中枢按被控端平台自动选指令（Win→PowerShell，Linux/macOS→/bin/sh）。
+
+### 新增
+- **Linux/macOS 被控端一行接入**：`GET /api/bootstrap.sh`（`curl -fsSL <hub>/api/bootstrap.sh | sh`）。bash 仅引导，connect→poll→exec→result 循环交 `python3`，命令经 `/bin/sh` 执行；登记 `platform=sys.platform`；轮询用 POST `/api/poll`。
+- **`platformOf(agent)`**：由被控端登记的 `sysinfo` 推断平台——显式 `platform` 优先 → `os_version` 关键字（linux/darwin/mac/bsd）→ **缺省回退 `win32`**（向后兼容）。
+- **中枢按被控端平台路由**：`WorkspaceServer` 与 `core.handleRoute` 的 `/api/exec`、`/api/exec-sync`、`/api/broadcast` 取目标 agent 平台，`buildExecCommand(body, platformOf(target))` 下发对应语法。两个中枢（VSIX 插件 + 独立 core）逻辑一致。
+- PowerShell `bootstrap.ps1` 登记新增 `platform='win32'` 字段。
+
+### 兼容
+- 老版被控端（无 `platform` 字段）默认按 `win32`/PowerShell 处理，行为不变。
+
+### 测试
+- `hub.test.js` 新增 Linux 被控端模拟 + 跨平台路由断言（`WorkspaceServer` 与 `core` 双中枢、`bootstrap.sh`、`platformOf`）；hub/exec/relay 全绿。
+
 ## [3.7.0] - 2026-06-19
 
 侧栏「公网穿透状态」顶部按钮归一为三个：**复制 / 重启隧道 / 刷新Token**。

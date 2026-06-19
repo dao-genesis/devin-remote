@@ -83,6 +83,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const boot = await srv.handleApi("GET", "/api/bootstrap.ps1", {}, false);
     assert.ok(String(boot.body).includes("/api/connect") && String(boot.body).includes("/api/poll"), "bootstrap script wires connect+poll");
     ok("WorkspaceServer /api/bootstrap.ps1 一行接入脚本");
+
+    // ── Linux 被控端（platform=linux）：中枢按目标平台下发 POSIX 指令（不是 PowerShell）──
+    const lconn = await srv.handleApi("POST", "/api/connect", { sysinfo: { hostname: "LX-BOX", platform: "linux", os_version: "Linux x", capabilities: ["shell", "run"] } }, false);
+    const laid = lconn.body.agent_id, ltok = lconn.body.token;
+    const lexecP = srv.handleApi("POST", "/api/exec-sync", { agent_id: "LX-BOX", type: "run", file: "/opt/my app.sh", args: ["a b"], timeout: 10 }, true);
+    await sleep(30);
+    const lpoll = await srv.handleApi("POST", "/api/poll", { id: laid, token: ltok, timeout: 1 }, false);
+    const lcmd = lpoll.body.commands[0];
+    assert.strictEqual(lcmd.payload.command, "sh '/opt/my app.sh' 'a b' 2>&1", "Linux 端被下发 POSIX sh-表达式（非 PowerShell）");
+    await srv.handleApi("POST", "/api/result", { agent_id: laid, token: ltok, cmd_id: lcmd.cmd_id, result: { stdout: "LX-OK", exit_code: 0 } }, false);
+    assert.strictEqual((await lexecP).body.result.stdout, "LX-OK");
+    ok("WorkspaceServer 跨平台路由：Linux 被控端下发 POSIX 指令");
+
+    // platformOf + bootstrap.sh
+    assert.strictEqual(ext.platformOf({ sysinfo: { platform: "linux" } }), "linux");
+    assert.strictEqual(ext.platformOf({ sysinfo: { os_version: "win-test" } }), "win32", "缺省回退 win32（向后兼容）");
+    const bootSh = await srv.handleApi("GET", "/api/bootstrap.sh", {}, false);
+    assert.ok(String(bootSh.body).includes("/api/connect") && String(bootSh.body).includes("/api/poll") && String(bootSh.body).includes("/bin/sh"), "bootstrap.sh wires connect/poll + /bin/sh");
+    assert.ok(String(bootSh.body).includes("'platform': sys.platform"), "bootstrap.sh 登记 platform");
+    ok("WorkspaceServer /api/bootstrap.sh (Linux/macOS 一行接入) + platformOf");
   }
 
   // ── 2. core.handleRoute 被控端分发闭环 ──
@@ -108,6 +128,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const boot = await core.handleRoute(host, "/api/bootstrap.ps1", "GET", {}, "", TOKEN);
     assert.ok(boot.raw.includes("https://hub.example/relay/s"), "core bootstrap injects public url");
     ok("core.handleRoute /api/bootstrap.ps1 注入公网 URL");
+
+    // 跨平台路由：Linux 被控端 → POSIX；bootstrap.sh 注入公网 URL
+    const lconn = await core.handleRoute(host, "/api/connect", "POST", {}, JSON.stringify({ sysinfo: { hostname: "CL-BOX", platform: "linux", os_version: "Linux y" } }), TOKEN);
+    const claid = lconn.body.agent_id, cltok = lconn.body.token;
+    const clP = core.handleRoute(host, "/api/exec-sync", "POST", hdr, JSON.stringify({ agent_id: "CL-BOX", type: "run", file: "/opt/a.sh", timeout: 10 }), TOKEN);
+    await sleep(30);
+    const clpoll = await core.handleRoute(host, "/api/poll", "POST", {}, JSON.stringify({ id: claid, token: cltok, timeout: 1 }), TOKEN);
+    assert.strictEqual(clpoll.body.commands[0].payload.command, "sh '/opt/a.sh' 2>&1", "core Linux 端下发 POSIX sh-表达式");
+    await core.handleRoute(host, "/api/result", "POST", {}, JSON.stringify({ agent_id: claid, token: cltok, cmd_id: clpoll.body.commands[0].cmd_id, result: { stdout: "CL-OK", exit_code: 0 } }), TOKEN);
+    assert.strictEqual((await clP).body.result.stdout, "CL-OK");
+    const bootSh = await core.handleRoute(host, "/api/bootstrap.sh", "GET", {}, "", TOKEN);
+    assert.ok(bootSh.raw.includes("https://hub.example/relay/s") && bootSh.raw.includes("/bin/sh"), "core bootstrap.sh injects url + /bin/sh");
+    assert.strictEqual(core.platformOf({ sysinfo: { os_version: "Windows NT 10" } }), "win32");
+    ok("core.handleRoute 跨平台路由（Linux→POSIX）+ bootstrap.sh + platformOf");
   }
 
   // ── 3. 前端 webview：复制URL/复制Token 已合并为单一"复制"(copyAll)，顶部恒为三按钮 ──
