@@ -68,6 +68,27 @@
 
 可选 `cwd`（工作目录，覆盖整机任意路径）。根因：裸路径走 cmd.exe/`Invoke-Expression` 时含空格的 `.bat`/`.exe` 会被当字符串字面量/被拆词 → 跑不起来；`run`/`cmd`/`detached` 用 PowerShell 调用运算符 `&` + 单引号量化彻底规避。
 
+## 中枢分发模型 · 被控端一行接入（operator→hub→agent，v3.6.0）
+dao-bridge 既可被远程操控，也可作为**中枢**协调任意多台被控端，远程在它们身上跑命令/`.bat`/`.exe`。
+
+1. 在面板「被控端一行接入」区块复制指令（或运行命令 `DAO Bridge: 复制被控端一行接入指令`），在任意 Windows 机器 PowerShell 跑：
+   ```powershell
+   irm <公网URL>/api/bootstrap.ps1 | iex
+   ```
+   该机即接入本中枢为被控端（`/api/connect` 登记 + 发放 per-agent token，`/api/poll` 长轮询命令，`/api/result` 回传结果）。
+2. `GET /api/agents` 查看在线被控端清单（status/os/user/capabilities/last_seen/pending）。
+3. 远程在某台被控端执行——给 exec 加 `agent_id`（被控端主机名）：
+   ```jsonc
+   // 同步等结果（含原生退出码透传）
+   POST /api/exec-sync  {"agent_id":"BOX-A","type":"run","file":"C:\\t\\x.bat","args":["7"]}
+   // 异步：返回 cmd_id，再 POST /api/result-fetch {"agent_id":"BOX-A","cmd_id":"..."} 取结果
+   POST /api/exec       {"agent_id":"BOX-A","cmd":"hostname"}
+   ```
+   `agent_id` 为空/`self`/`local`/中枢本机名 → 在中枢本机执行（本源行为）。
+4. `POST /api/broadcast {"cmd":"..."}` 把命令入队到所有在线被控端。
+
+被控端接入端点（`connect`/`poll`/`result`/`heartbeat`）以 per-agent token 自证、免 master token；其余端点仍需 `Authorization: Bearer <Token>`。保留 `/api/agent/register`·`/api/agent/heartbeat` 向后兼容既有部署。
+
 ## 设置项
 - `daoBridge.relayUrl` Worker 中继端点（默认通道，留空走 cloudflared）
 - `daoBridge.session` 中继会话名 = `/relay/<session>`（留空用主机名）

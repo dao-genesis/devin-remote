@@ -666,6 +666,55 @@ async function verifyCfToken(token) {
 // 帛书·「道生一」— 暴露完整能力给公网
 // ═══════════════════════════════════════════════════════════
 
+// 被控端一行接入脚本(动态注入当前公网 URL)— 长轮询命令队列, 回传结果。
+function buildBootstrap(hubUrl) {
+  hubUrl = (hubUrl || "").replace(/\/$/, "");
+  return `# dao 被控端 · 一行接入 · 道生一,一命接万机
+$ErrorActionPreference='SilentlyContinue'; $ProgressPreference='SilentlyContinue'
+try{ $OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8 }catch{}
+$U='${hubUrl}'
+function Dao-Post($path,$obj){ $b=[Text.Encoding]::UTF8.GetBytes(($obj|ConvertTo-Json -Depth 8 -Compress)); return irm "$U$path" -Method POST -Body $b -ContentType 'application/json; charset=utf-8' -TimeoutSec 35 }
+$sys=@{ hostname=$env:COMPUTERNAME; username=$env:USERNAME; os_version=[Environment]::OSVersion.VersionString; ps_version=$PSVersionTable.PSVersion.ToString(); capabilities=@('shell','cmd','run','detached') }
+try { $reg = Dao-Post '/api/connect' @{sysinfo=$sys} } catch { Write-Host "[dao] connect failed: $($_.Exception.Message)" -ForegroundColor Red; return }
+$aid=$reg.agent_id; $tok=$reg.token
+Write-Host "[dao] 已接入中枢 as $aid  (Ctrl+C 退出)" -ForegroundColor Green
+while($true){
+  try{
+    $poll = Dao-Post '/api/poll' @{id=$aid;token=$tok;timeout=25}
+    foreach($c in @($poll.commands)){
+      if(-not $c){ continue }
+      $out=''; $err=''; $code=0
+      $sw=[Diagnostics.Stopwatch]::StartNew()
+      $global:LASTEXITCODE=0
+      try{
+        switch($c.type){
+          'sysinfo' { $out = (Get-ComputerInfo | Out-String) }
+          default {
+            $Error.Clear()
+            $ErrorActionPreference='Continue'
+            $raw = Invoke-Expression $c.payload.command 2>&1
+            $ErrorActionPreference='SilentlyContinue'
+            $out = ($raw | Out-String)
+            if($Error.Count -gt 0){
+              $code=1
+              $msgs = (@($Error | Select-Object -First 20) | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+              if([string]::IsNullOrWhiteSpace($out)){ $out=$msgs } else { $out = $out + [Environment]::NewLine + $msgs }
+            }
+            if($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0){ $code=$LASTEXITCODE }
+          }
+        }
+      }catch{ $err=$_.Exception.Message; $code=1 }
+      $sw.Stop()
+      $res=@{ stdout=$out; stderr=$err; exit_code=$code; execution_time_ms=$sw.ElapsedMilliseconds }
+      try{ Dao-Post '/api/result' @{agent_id=$aid;token=$tok;cmd_id=$c.cmd_id;result=$res} | Out-Null }catch{}
+    }
+  }catch{
+    try{ $reg = Dao-Post '/api/connect' @{sysinfo=$sys}; $aid=$reg.agent_id; $tok=$reg.token }catch{ Start-Sleep 3 }
+  }
+}
+`;
+}
+
 class WorkspaceServer {
   constructor() {
     this.token = "";
@@ -674,6 +723,8 @@ class WorkspaceServer {
     this.agentRegistry = new Map();
     this.startedAt = null;
     this._bridgeRef = null;
+    this.HEARTBEAT_TIMEOUT = 120 * 1000;
+    this.POLL_MAX = 25; // < relay/cloudflared 单连超时, 留余量
   }
 
   // 刷新令牌（一刷即换）— 帛书·「反者道之动」: 生成全新随机令牌, 旧令牌即刻作废。
@@ -705,6 +756,12 @@ class WorkspaceServer {
           return res.end();
         }
         const pathname = new URL(req.url, "http://x").pathname;
+        if (pathname === "/api/bootstrap.ps1" || pathname === "/bootstrap.ps1") {
+          const hubUrl = this._bridgeRef && this._bridgeRef.url ? this._bridgeRef.url : ("http://127.0.0.1:" + this.port);
+          const sb = Buffer.from(buildBootstrap(hubUrl), "utf8");
+          res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Content-Length": sb.length, "Access-Control-Allow-Origin": "*" });
+          return res.end(sb);
+        }
         let body = "";
         req.on("data", (c) => (body += c));
         req.on("end", async () => {
@@ -740,6 +797,114 @@ class WorkspaceServer {
     return path.isAbsolute(raw) ? raw : path.resolve(root, raw);
   }
 
+  // ── 演化·中枢分发：被控端登记 + 每 agent 命令队列/结果表/唤醒器(三明治 operator→hub→agent) ──
+  registerAgent(sysinfo) {
+    sysinfo = sysinfo || {};
+    const id = sysinfo.hostname || ("agent-" + crypto.randomBytes(3).toString("hex"));
+    const token = crypto.randomBytes(24).toString("hex");
+    const existing = this.agentRegistry.get(id);
+    if (existing) {
+      existing.id = id; existing.token = token; existing.sysinfo = sysinfo;
+      existing.lastSeen = Date.now(); existing.status = "online";
+      existing.hostname = sysinfo.hostname || id;
+      existing.capabilities = sysinfo.capabilities || existing.capabilities || ["shell"];
+      if (!existing.queue) existing.queue = [];
+      if (!existing.waiters) existing.waiters = [];
+      if (!existing.results) existing.results = new Map();
+      if (!existing.resultWaiters) existing.resultWaiters = new Map();
+      return existing;
+    }
+    const a = {
+      id, token, sysinfo, hostname: sysinfo.hostname || id,
+      capabilities: sysinfo.capabilities || ["shell"],
+      connectedAt: Date.now(), lastSeen: Date.now(), status: "online",
+      queue: [], waiters: [], results: new Map(), resultWaiters: new Map(),
+    };
+    this.agentRegistry.set(id, a);
+    return a;
+  }
+  getAgent(id) {
+    if (!id) return null;
+    let a = this.agentRegistry.get(id);
+    if (a) { a.id = a.id || id; return a; }
+    const t = String(id).toLowerCase();
+    for (const [k, v] of this.agentRegistry) if (k.toLowerCase() === t) { v.id = v.id || k; return v; }
+    return null;
+  }
+  agentAlive(a) {
+    const ls = typeof a.lastSeen === "number" ? a.lastSeen : (Date.parse(a.lastSeen || 0) || 0);
+    return Date.now() - ls < this.HEARTBEAT_TIMEOUT;
+  }
+  isSelf(agentId) {
+    const k = String(agentId || "").toLowerCase().trim();
+    return k === "" || k === "self" || k === "local" || k === os.hostname().toLowerCase();
+  }
+  queueCommand(agentId, type, payload) {
+    const a = this.getAgent(agentId);
+    if (!a) return { err: "agent not found" };
+    if (!a.queue) a.queue = []; if (!a.waiters) a.waiters = [];
+    const cmdId = "cmd_" + Date.now() + "_" + crypto.randomBytes(3).toString("hex");
+    a.queue.push({ cmd_id: cmdId, type: type || "shell", payload: payload || {} });
+    const w = a.waiters.shift(); if (w) w();
+    return { cmdId, agent: a };
+  }
+  pollCommands(a, timeoutSec) {
+    a.lastSeen = Date.now(); a.status = "online";
+    if (!a.queue) a.queue = []; if (!a.waiters) a.waiters = [];
+    const ms = Math.min(timeoutSec || this.POLL_MAX, this.POLL_MAX) * 1000;
+    return new Promise((resolve) => {
+      if (a.queue.length) return resolve(a.queue.splice(0));
+      let done = false;
+      const finish = (cmds) => {
+        if (done) return; done = true; clearTimeout(timer);
+        const i = a.waiters.indexOf(wake); if (i >= 0) a.waiters.splice(i, 1);
+        resolve(cmds);
+      };
+      const wake = () => finish(a.queue.splice(0));
+      a.waiters.push(wake);
+      const timer = setTimeout(() => finish([]), ms);
+    });
+  }
+  submitResult(a, cmdId, result) {
+    a.lastSeen = Date.now();
+    if (!a.results) a.results = new Map();
+    a.results.set(cmdId, Object.assign({ completed_at: Date.now() }, result));
+    if (a.results.size > 100) {
+      const oldest = [...a.results.entries()].sort((x, y) => (x[1].completed_at || 0) - (y[1].completed_at || 0));
+      for (let i = 0; i < a.results.size - 100; i++) a.results.delete(oldest[i][0]);
+    }
+    const w = a.resultWaiters && a.resultWaiters.get(cmdId);
+    if (w) w(a.results.get(cmdId));
+  }
+  waitResult(a, cmdId, timeoutMs) {
+    return new Promise((resolve) => {
+      const existing = a.results && a.results.get(cmdId);
+      if (existing) return resolve(existing);
+      if (!a.resultWaiters) a.resultWaiters = new Map();
+      let done = false;
+      const finish = (r) => { if (done) return; done = true; clearTimeout(timer); a.resultWaiters.delete(cmdId); resolve(r); };
+      a.resultWaiters.set(cmdId, finish);
+      const timer = setTimeout(() => finish(null), timeoutMs);
+    });
+  }
+  agentListFull() {
+    const out = [];
+    for (const [id, a] of this.agentRegistry) {
+      const si = a.sysinfo || {};
+      out.push({
+        id,
+        hostname: a.hostname || id,
+        status: this.agentAlive(a) ? "online" : "offline",
+        os: si.os_version || a.os || "?",
+        user: si.username || a.user || "?",
+        capabilities: a.capabilities || ["shell"],
+        last_seen: typeof a.lastSeen === "number" ? new Date(a.lastSeen).toISOString() : (a.lastSeen || ""),
+        pending: (a.queue && a.queue.length) || 0,
+      });
+    }
+    return out;
+  }
+
   // 统一路由(HTTP 直连 与 relay 转发共用)→ {status, body}。
   // authed=true: 调用方已鉴权(relay 在 /connect 时已用 token 校验)。
   // 重启/退出/热加载等异步副作用经 setTimeout 调度, 立即回 ack。
@@ -758,13 +923,47 @@ class WorkspaceServer {
         uptime: Math.floor((Date.now() - (this.startedAt || Date.now())) / 1000),
       } };
     }
+    // ── 演化·被控端端点(以 per-agent token 自证, 免 master token) + 一行接入脚本 ──
+    if (pathname === "/api/bootstrap.ps1" || pathname === "/bootstrap.ps1") {
+      const hubUrl = br && br.url ? br.url : ("http://127.0.0.1:" + this.port);
+      return { status: 200, body: buildBootstrap(hubUrl) };
+    }
+    if (pathname === "/api/connect" && method === "POST") {
+      const a = this.registerAgent(j.sysinfo || j || {});
+      try { if (br && br.notify) br.notify(); } catch (e) {}
+      return { status: 200, body: { agent_id: a.id, token: a.token, server_time: new Date().toISOString() } };
+    }
+    if (pathname === "/api/poll" && method === "POST") {
+      const a = this.getAgent(j.id);
+      if (!a || a.token !== j.token) return { status: 401, body: { error: "unauthorized" } };
+      const cmds = await this.pollCommands(a, parseInt(j.timeout, 10) || this.POLL_MAX);
+      return { status: 200, body: { commands: cmds } };
+    }
+    if (pathname === "/api/result" && method === "POST") {
+      const a = this.getAgent(j.agent_id);
+      if (!a || a.token !== j.token) return { status: 401, body: { error: "unauthorized" } };
+      this.submitResult(a, j.cmd_id, j.result || {});
+      return { status: 200, body: { ok: true } };
+    }
+    if (pathname === "/api/heartbeat" && method === "POST") {
+      const a = this.getAgent(j.agent_id);
+      if (a && a.token === j.token) { a.lastSeen = Date.now(); a.status = "online"; }
+      return { status: 200, body: { ok: true } };
+    }
+
     if (!authed) return { status: 401, body: { error: "unauthorized" } };
 
     if (pathname === "/api/info" && method === "GET") return { status: 200, body: workspaceInfo() };
     if (pathname === "/api/agents" && method === "GET") {
-      const agents = [];
-      for (const [id, a] of this.agentRegistry) agents.push({ id, hostname: a.hostname, status: a.status || "online", lastSeen: a.lastSeen, capabilities: a.capabilities || [] });
-      return { status: 200, body: { agents } };
+      return { status: 200, body: { agents: this.agentListFull() } };
+    }
+    // 操控端拉取异步结果(/api/exec 返回 cmd_id 后凭此查询; broadcast 各路结果亦然)
+    if (pathname === "/api/result-fetch" && method === "POST") {
+      const a = this.getAgent(j.agent_id);
+      if (!a) return { status: 404, body: { error: "agent not found" } };
+      const r = a.results && a.results.get(j.cmd_id);
+      if (!r) return { status: 200, body: { status: "pending", agent_id: a.id, cmd_id: j.cmd_id } };
+      return { status: 200, body: { status: "completed", agent_id: a.id, cmd_id: j.cmd_id, result: r } };
     }
     if (pathname === "/api/bridge-state" && method === "GET") {
       return { status: 200, body: {
@@ -789,22 +988,35 @@ class WorkspaceServer {
     //   其余(run/cmd/detached 或带 file) → PowerShell & 调用运算符: .bat/.cmd/.exe/.ps1/后台进程皆可,
     //                                        UTF-8 中文回传 + 透传原生退出码, 含空格路径也安全。
     if ((pathname === "/api/exec" || pathname === "/api/exec-sync") && method === "POST") {
+      const sync = pathname === "/api/exec-sync";
       const type = String(j.type || "shell").toLowerCase();
-      const timeoutMs = (j.timeout || 60) * 1000;
-      let r;
-      if (type === "shell" && !j.file) {
-        r = await new Promise((resolve) => {
-          cp.exec(j.cmd || "", { cwd: j.cwd || root, timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-            resolve({ stdout: String(stdout || ""), stderr: String(stderr || (err ? err.message : "")), exit_code: err ? (err.code || 1) : 0 });
+      const timeoutMs = Math.min(Number(j.timeout) || 60, 300) * 1000;
+      // 按 agent_id 路由: SELF(中枢本机) → 本机执行; 否则 → 入队转发被控端(connect/poll/result)
+      if (this.isSelf(j.agent_id)) {
+        let r;
+        if (type === "sysinfo") {
+          r = await runPwsh("Get-ComputerInfo | Out-String", j.cwd || root, timeoutMs);
+        } else if (type === "shell" && !j.file) {
+          r = await new Promise((resolve) => {
+            cp.exec(j.cmd || "", { cwd: j.cwd || root, timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+              resolve({ stdout: String(stdout || ""), stderr: String(stderr || (err ? err.message : "")), exit_code: err ? (err.code || 1) : 0 });
+            });
           });
-        });
-      } else {
-        const command = buildExecCommand(j);
-        if (!command) return { status: 400, body: { error: "cmd/file required" } };
-        r = await runPwsh(command, j.cwd || root, timeoutMs);
+        } else {
+          const command = buildExecCommand(j);
+          if (!command) return { status: 400, body: { error: "cmd/file required" } };
+          r = await runPwsh(command, j.cwd || root, timeoutMs);
+        }
+        return sync ? { status: 200, body: { status: "completed", agent_id: wsInfo.host, result: r } } : { status: 200, body: r };
       }
-      if (pathname === "/api/exec-sync") return { status: 200, body: { status: "completed", result: r } };
-      return { status: 200, body: r };
+      const ctype = type === "sysinfo" ? "sysinfo" : "shell";
+      const payload = type === "sysinfo" ? {} : { command: buildExecCommand(j) };
+      const qd = this.queueCommand(j.agent_id, ctype, payload);
+      if (qd.err) return { status: 404, body: { error: qd.err } };
+      if (!sync) return { status: 200, body: { cmd_id: qd.cmdId, agent_id: qd.agent.id, type } };
+      const result = await this.waitResult(qd.agent, qd.cmdId, timeoutMs);
+      if (!result) return { status: 504, body: { status: "timeout", agent_id: qd.agent.id, cmd_id: qd.cmdId } };
+      return { status: 200, body: { status: "completed", agent_id: qd.agent.id, cmd_id: qd.cmdId, result } };
     }
     if (pathname === "/api/ls" && method === "POST") {
       const dir = this.resolveTarget(root, j.path, ".");
@@ -841,7 +1053,13 @@ class WorkspaceServer {
       return { status: 200, body: { ok: true } };
     }
     if (pathname === "/api/broadcast" && method === "POST") {
-      return { status: 200, body: { ok: true, delivered: this.agentRegistry.size, note: "broadcast queued" } };
+      const command = buildExecCommand(j);
+      const delivered = [];
+      for (const [id] of this.agentRegistry) {
+        const qd = this.queueCommand(id, "shell", { command });
+        if (qd.cmdId) delivered.push({ agent_id: id, cmd_id: qd.cmdId });
+      }
+      return { status: 200, body: { ok: true, delivered } };
     }
     if (pathname === "/api/config" && method === "GET") {
       const cfg = vscode.workspace.getConfiguration("daoBridge");
@@ -926,6 +1144,7 @@ class Bridge {
     });
   }
   mdPath() { return path.join(daoDir(), "workspace.md"); }
+  bootstrapCmd() { const u = (this.url || "").replace(/\/$/, ""); return "irm " + (u || "<公网URL>") + "/api/bootstrap.ps1 | iex"; }
   localAgentMdPath() { return path.join(daoDir(), "local-agent-access.md"); }
   connPath() { return path.join(daoDir(), "conn.json"); }
   globalConnPath() { return path.join(daoGlobalDir(), "cf-hub-conn.json"); }
@@ -1056,6 +1275,7 @@ class Bridge {
       cfLoggedIn: !!(this.cfCredentials && (this.cfCredentials.apiToken || this.cfCredentials.globalApiKey || this.cfCredentials.tunnelToken)),
       cfEmail: this.cfCredentials ? this.cfCredentials.email || "" : "",
       agentCount: this.srv.agentRegistry.size,
+      bootstrap: this.bootstrapCmd(),
     };
   }
 
@@ -1460,6 +1680,7 @@ class BridgeViewProvider {
     if (m.op === "stop") { this.bridge.stop(); this.notify(); return; }
     if (m.op === "copyUrl") { await vscode.env.clipboard.writeText(this.bridge.url || ""); vscode.window.showInformationMessage("已复制公网 URL"); return; }
     if (m.op === "copyToken") { await vscode.env.clipboard.writeText(this.bridge.srv.token || ""); vscode.window.showInformationMessage("已复制 Token"); return; }
+    if (m.op === "copyBootstrap") { await vscode.env.clipboard.writeText(this.bridge.bootstrapCmd()); vscode.window.showInformationMessage("已复制被控端一行接入指令"); return; }
     if (m.op === "refreshToken") {
       this.post({ type: "result", op: "refreshToken", ok: true, text: "正在刷新 Token 并用新 Token 重连…" });
       const r = await this.bridge.refreshToken();
@@ -1546,7 +1767,9 @@ class BridgeViewProvider {
   notify() { this.post({ type: "state", state: this.bridge.state() }); }
 
   html() {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
+<style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:var(--vscode-font-family);font-size:12px;padding:8px;color:var(--vscode-foreground);overflow-y:auto}
 h3{margin:10px 0 4px;font-size:12px;color:var(--vscode-textLink-foreground)}
@@ -1601,6 +1824,14 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <button onclick="send('openCf')" style="margin-top:4px;background:var(--vscode-textLink-foreground)">打开 CloudFlare 控制台</button>
 </div>
 
+<!-- 模块2.5: 被控端一行接入(三明治·operator→hub→agent) -->
+<div class="section">
+<h3>⊕ 被控端一行接入(三明治)</h3>
+<div class="muted">在任意 Windows 机器 PowerShell 跨下面这一行，即将它接入本中枢为被控端；之后 <code>/api/agents</code> 可见，并可用 <code>agent_id</code> 远程跑 .bat/.exe。</div>
+<pre id="boot" class="url" data-op="copyBootstrap" style="cursor:pointer" title="点击复制接入指令">…</pre>
+<button onclick="send('copyBootstrap')">📋 复制被控端一行接入指令</button>
+</div>
+
 <!-- 模块3: 导出MD -->
 <div class="section">
 <h3>📄 导出接入文档</h3>
@@ -1625,6 +1856,7 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <script>
 const vscode=acquireVsCodeApi();
 function send(op,arg,extra){vscode.postMessage(Object.assign({op,arg},extra||{}));}
+document.addEventListener('click',function(e){var t=e.target.closest('[data-op]');if(t){send(t.getAttribute('data-op'));}});
 function v(id){return document.getElementById(id).value;}
 const out=document.getElementById('out');
 window.addEventListener('message',(e)=>{const m=e.data;
@@ -1637,6 +1869,7 @@ window.addEventListener('message',(e)=>{const m=e.data;
     var chain=(s.attempts||[]).map(function(a){return a.mode+'/'+a.proto+(a.ok?'✓':'✗');}).join(' → ');
     document.getElementById('net').textContent=(s.proxy?('代理 '+s.proxy):'直连(无代理)')+(chain?(' · '+chain):'');
     document.getElementById('agents').textContent=String(s.agentCount||0);
+    document.getElementById('boot').textContent=s.bootstrap||('irm '+(s.url||'<公网URL>')+'/api/bootstrap.ps1 | iex');
     var loggedIn=!!(s.cfLoggedIn||s.mode==='named');
     document.getElementById('logoutBtn').style.display=loggedIn?'block':'none';
     const cfSt=document.getElementById('cfStatus');
@@ -1658,16 +1891,19 @@ let _bridge = null;
 function activate(context) {
   _bridge = new Bridge(context);
   const provider = new BridgeViewProvider(context, _bridge);
-  context.subscriptions.push(vscode.window.registerWebviewViewProvider("daoBridgeView", provider));
-  context.subscriptions.push(vscode.commands.registerCommand("daoBridge.restart", async () => { _bridge.stop(); await _bridge.start(); }));
-  context.subscriptions.push(vscode.commands.registerCommand("daoBridge.openMd", async () => { const d = await vscode.workspace.openTextDocument(_bridge.mdPath()); vscode.window.showTextDocument(d); }));
-  context.subscriptions.push(vscode.commands.registerCommand("daoBridge.exportCloudMd", async () => { await vscode.env.clipboard.writeText(_bridge.generateCloudAgentMd()); vscode.window.showInformationMessage("已复制云端Agent MD"); }));
-  context.subscriptions.push(vscode.commands.registerCommand("daoBridge.exportLocalMd", async () => { await vscode.env.clipboard.writeText(_bridge.generateLocalAgentMd()); vscode.window.showInformationMessage("已复制本地Agent MD"); }));
-  context.subscriptions.push(vscode.commands.registerCommand("daoBridge.logout", async () => {
+  // 防御式注册: 任一注册抛错(如残留同名插件抢注)不再 brick 掉其余贡献点(含 webview 消息处理器)。
+  const safeReg = (fn, label) => { try { context.subscriptions.push(fn()); } catch (e) { try { console.error("[dao-bridge] register failed: " + label + " · " + (e && e.message)); } catch (_) {} } };
+  safeReg(() => vscode.window.registerWebviewViewProvider("daoBridgeView", provider), "view:daoBridgeView");
+  safeReg(() => vscode.commands.registerCommand("daoBridge.restart", async () => { _bridge.stop(); await _bridge.start(); }), "cmd:restart");
+  safeReg(() => vscode.commands.registerCommand("daoBridge.openMd", async () => { const d = await vscode.workspace.openTextDocument(_bridge.mdPath()); vscode.window.showTextDocument(d); }), "cmd:openMd");
+  safeReg(() => vscode.commands.registerCommand("daoBridge.exportCloudMd", async () => { await vscode.env.clipboard.writeText(_bridge.generateCloudAgentMd()); vscode.window.showInformationMessage("已复制云端Agent MD"); }), "cmd:exportCloudMd");
+  safeReg(() => vscode.commands.registerCommand("daoBridge.exportLocalMd", async () => { await vscode.env.clipboard.writeText(_bridge.generateLocalAgentMd()); vscode.window.showInformationMessage("已复制本地Agent MD"); }), "cmd:exportLocalMd");
+  safeReg(() => vscode.commands.registerCommand("daoBridge.copyBootstrap", async () => { await vscode.env.clipboard.writeText(_bridge.bootstrapCmd()); vscode.window.showInformationMessage("DAO Bridge: 已复制被控端一行接入指令"); }), "cmd:copyBootstrap");
+  safeReg(() => vscode.commands.registerCommand("daoBridge.logout", async () => {
     const r = await _bridge.resetAccount();
     _bridge.stop(); await _bridge.start();
     vscode.window.showInformationMessage("DAO Bridge: " + r.message + " · 已回到无账号快速隧道");
-  }));
+  }), "cmd:logout");
   context.subscriptions.push({ dispose: () => { try { _bridge.stop(); } catch (e) {} } });
   // 自动启动 — 插件激活即穿透
   _bridge.start().then((url) => { if (url) vscode.window.setStatusBarMessage("DAO Bridge 已打通: " + url, 8000); });

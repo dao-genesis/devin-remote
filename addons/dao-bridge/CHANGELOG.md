@@ -2,6 +2,28 @@
 
 本项目遵循语义化版本。日期格式 YYYY-MM-DD。
 
+## [3.6.0] - 2026-06-18
+
+移植 agent-remote-repair 的完整三明治中枢分发模型（operator→hub→agent）—— dao-bridge 现在不仅能被远程操控，还能作为**中枢**协调任意多台被控端，远程在它们身上跑 `.bat`/`.exe`/任意命令。
+
+### 新增（中枢分发能力，extension.js + core.js 同源）
+- **被控端一行接入**：`GET /api/bootstrap.ps1`（免鉴权，动态注入当前公网 URL）。在任意 Windows 机器 PowerShell 跑 `irm <公网URL>/api/bootstrap.ps1 | iex` 即接入本中枢为被控端。
+- **接入协议**：`POST /api/connect`（登记 + 发放 per-agent token）、`POST /api/poll`（长轮询命令队列，≤25s）、`POST /api/result`（被控端回传结果）、`POST /api/heartbeat`（保活）。
+- **按 `agent_id` 路由的 exec**：`/api/exec`·`/api/exec-sync` 现支持 `agent_id`——空/`self`/`local`/本机名 → 中枢本机执行（本源行为，零回归）；填某台被控端主机名 → 入队转发该被控端，`exec-sync` 等待其结果（含原生退出码透传）。
+- **异步取结果**：`/api/exec` 返回 `cmd_id`，凭 `POST /api/result-fetch {agent_id,cmd_id}` 拉取。
+- **真广播**：`POST /api/broadcast` 把命令入队到所有在线被控端（此前仅占位）。
+- **`/api/agents`** 升级为完整设备清单（status/os/user/capabilities/last_seen/pending）。
+
+### 插件层（dao-bridge-ext）
+- 新增命令 `daoBridge.copyBootstrap` 与面板「被控端一行接入」区块（点击/按钮复制一行接入指令）。
+- webview 加 `Content-Security-Policy`（限制外部来源）+ `data-op` 事件委托（纵深防御）。
+
+### 兼容性
+- 保留 `daoBridge.*` 命名空间（不改名）与 `/api/agent/register`·`/api/agent/heartbeat`（向后兼容既有部署）。
+- 默认 `shell` 且无 `file` 仍走 `cp.exec`，零回归。
+
+测试：`node test/relay.test.js` 8/8 + `node test/exec.test.js` 6/6 + 新增 `node test/hub.test.js` 8/8（connect→poll→exec-sync→result 三明治分发、per-agent token 校验、broadcast、bootstrap，覆盖 extension 与 core 两条路径）。
+
 ## [3.5.0] - 2026-06-18
 
 从根本底层完善执行模块 —— 让 `/api/exec`·`/api/exec-sync` 能远程跑 `.bat`/`.cmd`/`.exe` 及任意程序，覆盖整台电脑。
