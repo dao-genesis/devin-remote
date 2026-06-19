@@ -126,6 +126,37 @@ const DaoRelayApp = (function () {
     return { status: 404, body: { error: "not_found", path } };
   }
 
+  // ── 统一帧处理管线 (WSS onmessage 与 serveLocal 共用) ──────────────────
+  //  入站 E2E 解密 → 强制 E2E 门禁 → handleFrame → 出站重封。
+  //  返回 {status, body, enc}: enc 表示该帧走了 E2E (出站 body 已是密文信封)。
+  //  ③ 强制 E2E: 已配置 E2E 且用户开了「强制」时, 明文帧(未加密)被拒 → 杜绝
+  //     明文驱动(如 plaintext getState) 经中继泄露账号/密码; /api/health 例外(无敏感数据, 保留存活探测)。
+  async function processFrame(m) {
+    if (!m || typeof m !== "object") return { status: 400, body: { error: "bad_frame" }, enc: false };
+    var enc = false;
+    var N = (typeof Native !== "undefined") ? Native : null;
+    if (m.body && m.body.__e2e__ && N && N.e2eOpen) {
+      try { var dec = N.e2eOpen(m.body.c); if (dec) { m.body = JSON.parse(dec); enc = true; } else { m.body = {}; } }
+      catch (e) { m.body = {}; }
+    }
+    var required = false;
+    try { required = !!(N && N.e2eRequired && N.e2eRequired() && N.e2eEnabled && N.e2eEnabled()); } catch (e) {}
+    if (required && !enc) {
+      var p = (m.path || "");
+      if (p !== "/api/health") {
+        return { status: 403, body: { error: "e2e_required", hint: "本机已开启强制端到端加密: 请用 E2E Key 加密 RPC 载荷 ({__e2e__:1,c:seal(...)}) 后再发送 (明文请求已拒绝以防账号泄露)" }, enc: false };
+      }
+    }
+    var out;
+    try { out = await handleFrame(m); } catch (e) { out = { status: 500, body: { error: String((e && e.message) || e) } }; }
+    var sendBody = out.body;
+    // 仅对加密入站做加密出站 → 明文驱动仍得明文响应 (向后兼容)
+    if (enc && N && N.e2eSeal) {
+      try { var sealed = N.e2eSeal(JSON.stringify(out.body)); if (sealed) sendBody = { __e2e__: 1, c: sealed }; } catch (e) {}
+    }
+    return { status: out.status || 200, body: sendBody, enc: enc };
+  }
+
   function clearTimers() {
     if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
     if (reTimer) { clearTimeout(reTimer); reTimer = null; }
@@ -169,20 +200,9 @@ const DaoRelayApp = (function () {
       if (!m || m.type === "pong") return;
       if (m.type === "request" && m.id) {
         lastFrameTs = Date.now();
-        // 端到端加密: 入站 body 为密文信封 {__e2e__:1,c} → 经原生桥解密后再分发 (中继全程只见密文)
-        var enc = false;
-        var N = (typeof Native !== "undefined") ? Native : null;
-        if (m.body && m.body.__e2e__ && N && N.e2eOpen) {
-          try { var dec = N.e2eOpen(m.body.c); if (dec) { m.body = JSON.parse(dec); enc = true; } else { m.body = {}; } }
-          catch (e) { m.body = {}; }
-        }
-        const out = await handleFrame(m);
-        var sendBody = out.body;
-        // 仅对加密入站做加密出站 → 明文驱动仍得明文响应 (向后兼容)
-        if (enc && N && N.e2eSeal) {
-          try { var sealed = N.e2eSeal(JSON.stringify(out.body)); if (sealed) sendBody = { __e2e__: 1, c: sealed }; } catch (e) {}
-        }
-        try { mySock.send(JSON.stringify({ type: "response", id: m.id, status: out.status, body: sendBody })); } catch (e) {}
+        // 入站 body 为密文信封 {__e2e__:1,c} 时由 processFrame 解密/重封 (中继全程只见密文)
+        const out = await processFrame(m);
+        try { mySock.send(JSON.stringify({ type: "response", id: m.id, status: out.status, body: out.body })); } catch (e) {}
       }
     };
     mySock.onclose = () => {
@@ -205,19 +225,9 @@ const DaoRelayApp = (function () {
     let m; try { m = JSON.parse(frameJson || "{}"); } catch (e) { return JSON.stringify({ status: 400, body: { error: "bad_json" } }); }
     if (!m || typeof m !== "object") return JSON.stringify({ status: 400, body: { error: "bad_frame" } });
     lastFrameTs = Date.now();
-    var enc = false;
-    var N = (typeof Native !== "undefined") ? Native : null;
-    if (m.body && m.body.__e2e__ && N && N.e2eOpen) {
-      try { var dec = N.e2eOpen(m.body.c); if (dec) { m.body = JSON.parse(dec); enc = true; } else { m.body = {}; } }
-      catch (e) { m.body = {}; }
-    }
-    var out; try { out = await handleFrame(m); } catch (e) { out = { status: 500, body: { error: String((e && e.message) || e) } }; }
-    var sendBody = out.body;
-    if (enc && N && N.e2eSeal) {
-      try { var sealed = N.e2eSeal(JSON.stringify(out.body)); if (sealed) sendBody = { __e2e__: 1, c: sealed }; } catch (e) {}
-    }
+    const out = await processFrame(m);
     // bodyText = 已序列化的 HTTP 响应体 (与 Worker 的 json(out.body) 一致); 原生层直接原样回写。
-    return JSON.stringify({ status: out.status || 200, bodyText: JSON.stringify(sendBody) });
+    return JSON.stringify({ status: out.status || 200, bodyText: JSON.stringify(out.body) });
   }
 
   return {
