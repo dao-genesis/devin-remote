@@ -43,7 +43,10 @@ public class RelayService extends Service {
     private volatile String lanUrlsJson = "[]";     // 本机当前局域网直连 URL 列表 (随网络变化刷新)
     public static volatile String tunnelStatus = "{\"enabled\":false}";
     private int tunnelRetries = 0;                 // cloudflared 连续异常退出计数 (连通后清零)
-    private static final int TUNNEL_RETRY_MAX = 3; // 自动重试上限; 超过则诚实回退中继(国内常被墙)
+    private volatile int tunnelGen = 0;            // 隧道启动代次 (作废过期的无URL看门狗)
+    private static final int TUNNEL_RETRY_SOFT = 3;   // 超过此次数仍持续重连, 但诚实提示已回退中继
+    private static final long TUNNEL_RETRY_CAP = 60000L; // 重连退避上限 60s (隧道=公网入口, 永不彻底放弃→真·无感常驻)
+    private static final long TUNNEL_URL_TIMEOUT = 50000L;// 起后 50s 仍拿不到公网URL=卡住, 重启隧道
     private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.SynchronousQueue<String>> pendingLocal
             = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -156,14 +159,29 @@ public class RelayService extends Service {
                 public void onLog(String line) { android.util.Log.i("RTFlowTunnel", line); }
                 public void onExit(int code) { onTunnelExit(code); }
             });
+            final int gen = ++tunnelGen;
             boolean ok = tunnel.start();
             updateTunnelStatus("", false, ok ? "正在建立隧道…" : "cloudflared 二进制缺失/启动失败");
+            if (ok) {
+                // 无URL看门狗: 进程在跑却 50s 拿不到公网URL(卡在边缘握手) → 重启隧道, 不傻等。
+                main.postDelayed(() -> {
+                    if (gen != tunnelGen || !tunnelEnabledFlag()) return;   // 已被新一轮取代/已关
+                    TunnelManager t = tunnel;
+                    if (t != null && t.isAlive() && !t.hasUrl()) {
+                        android.util.Log.w("RTFlowTunnel", "tunnel no URL after " + (TUNNEL_URL_TIMEOUT / 1000) + "s → restart");
+                        tunnelRetries++;
+                        try { t.stop(); } catch (Exception ignored) {}
+                        startTunnel();
+                    }
+                }, TUNNEL_URL_TIMEOUT);
+            }
         } catch (Exception e) {
             updateTunnelStatus("", false, "隧道启动失败: " + e.getMessage());
         }
     }
     private synchronized void stopTunnel() {
         // 仅停 cloudflared 隧道; 本地 server 保留 (局域网直连默认常驻, 不随隧道关闭而下线)。
+        tunnelGen++;   // 作废任何在途的无URL看门狗/重连
         if (tunnel != null) { tunnel.stop(); tunnel = null; }
         if (!lanDirectFlag() && localServer != null) { localServer.stop(); localServer = null; localPort = -1; }
         tunnelRetries = 0;
@@ -171,22 +189,22 @@ public class RelayService extends Service {
         refreshLanInfo();
         updateTunnelStatus("", false, "隧道已停止" + (lanDirectFlag() ? " · 局域网直连仍在线" : ""), 0, false);
     }
-    /** cloudflared 异常退出处理: 用户仍开着隧道则自动重试 N 次; 超限则诚实回退中继。
-     *  关键: 中继(Worker) 与隧道是并行的, 隧道失败丝毫不影响中继 → 手机始终在线可远程接入。 */
+    /** cloudflared 异常退出处理: 用户仍开着隧道则持久自愈, 退避重连永不彻底放弃 (隧道=公网入口)。
+     *  软上限后诚实提示"已回退中继"但后台仍持续重连 → 网络恢复即自动复活。
+     *  关键: 中继(Worker) 与隧道并行, 隧道失败丝毫不影响中继 → 手机始终在线可远程接入。 */
     private synchronized void onTunnelExit(int code) {
         if (!tunnelEnabledFlag()) { updateTunnelStatus("", false, "已停止", 0, false); return; }
         try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
-        if (tunnelRetries < TUNNEL_RETRY_MAX) {
-            tunnelRetries++;
-            int attempt = tunnelRetries;
-            long delay = 2000L * attempt; // 退避 2s/4s/6s
-            updateTunnelStatus("", false, "cloudflared 退出(" + code + ") · 第 " + attempt + "/" + TUNNEL_RETRY_MAX + " 次重试中…", attempt, false);
-            main.postDelayed(() -> { if (tunnelEnabledFlag()) startTunnel(); }, delay);
-        } else {
-            // 多次退出 = 本网络下到 Cloudflare 边缘的持久隧道连不上(国内蜂窝常拦截 argotunnel/QUIC)。
-            // 诚实告知: 隧道不可用, 已回退中继; 中继仍在线, 远程接入照常。
-            updateTunnelStatus("", false, "去中心化隧道不可用(cloudflared 多次退出, 本网络疑被拦截到 Cloudflare 边缘) · 已回退中继(Worker), 手机仍在线可远程接入", tunnelRetries, true);
-        }
+        // 持久自愈: 隧道=公网入口, 永不彻底放弃。退避 2s/4s/6s…上限 60s, 后台无限重连 → 网络恢复即自动复活(真·无感常驻)。
+        tunnelRetries++;
+        int attempt = tunnelRetries;
+        long delay = Math.min(2000L * attempt, TUNNEL_RETRY_CAP);
+        boolean fallback = attempt > TUNNEL_RETRY_SOFT;  // 软上限后诚实提示已回退中继, 但仍持续重连
+        String msg = fallback
+                ? "去中心化隧道暂连不上(cloudflared 第" + attempt + "次退出, 本网络疑拦截 Cloudflare 边缘) · 已回退中继, 手机仍在线; 后台每" + (delay / 1000) + "s持续重连…"
+                : "cloudflared 退出(" + code + ") · 第 " + attempt + " 次重连中(" + (delay / 1000) + "s)…";
+        updateTunnelStatus("", false, msg, attempt, fallback);
+        main.postDelayed(() -> { if (tunnelEnabledFlag()) startTunnel(); }, delay);
     }
     // 供 MainActivity 面板代理调用 (同进程)
     public boolean tunnelEnabledFlag() { return "1".equals(readUserFile("tunnel-enabled")); }
