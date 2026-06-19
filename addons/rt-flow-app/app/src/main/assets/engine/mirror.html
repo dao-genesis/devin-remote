@@ -5,51 +5,77 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>投屏镜像 · Devin Cloud</title>
 <style>
-  :root{ --bg:#0e1116; --panel:#161b22; --line:#222932; --fg:#e6edf3; --sub:#8b949e; --accent:#2f81f7; }
+  :root{ --bg:#000; --panel:rgba(22,27,34,.92); --line:#222932; --fg:#e6edf3; --sub:#8b949e; --accent:#2f81f7; }
   *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body{ margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,system-ui,"Segoe UI",sans-serif; overflow:hidden; }
-  #bar{ display:flex; align-items:center; gap:8px; padding:7px 10px; background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
-  #bar b{ color:#9cdcfe; font-weight:600; }
-  select,button,input{ font:13px sans-serif; color:var(--fg); background:#1b222c; border:1px solid var(--line); border-radius:8px; padding:6px 9px; outline:none; }
-  button{ cursor:pointer; }
-  button:active{ background:#243040; }
-  button.acc{ background:var(--accent); border-color:var(--accent); color:#fff; }
+  html,body{ margin:0; height:100%; width:100%; background:var(--bg); color:var(--fg);
+    font:14px/1.5 -apple-system,system-ui,"Segoe UI",sans-serif; overflow:hidden; }
+  /* 满屏直投: 画面铺满视口, 等比 contain, 黑边即"手机边框", 无任何外层界面感 */
+  #screen{ position:fixed; inset:0; width:100%; height:100%; object-fit:contain;
+    background:#000; touch-action:none; user-select:none; cursor:default; display:block; }
+  #hint{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    text-align:center; color:var(--sub); font-size:13px; padding:0 24px; pointer-events:none; }
+  /* 隐形键盘捕获层 (移动端唤起软键盘用; 透明、不挡画面) */
+  #kb{ position:fixed; left:-9999px; top:0; width:1px; height:1px; opacity:0; }
+  /* 角标: 极小的连接指示 + 设置入口, 默认半透明, 不打扰 */
+  #fab{ position:fixed; right:10px; bottom:10px; z-index:40; display:flex; align-items:center; gap:8px;
+    background:rgba(13,17,23,.55); border:1px solid var(--line); border-radius:20px; padding:6px 10px;
+    opacity:.32; transition:opacity .2s; cursor:pointer; backdrop-filter:blur(4px); }
+  #fab:hover, #fab.show{ opacity:1; }
   #dot{ width:9px; height:9px; border-radius:50%; background:#d29922; display:inline-block; }
   #dot.on{ background:#3fb950; } #dot.err{ background:#f85149; }
-  #stage{ position:relative; height:calc(100% - 48px - 52px); display:flex; align-items:center; justify-content:center; overflow:hidden; }
-  #screen{ max-width:100%; max-height:100%; touch-action:none; user-select:none; cursor:pointer; box-shadow:0 0 0 1px var(--line); background:#000; }
-  #hint{ position:absolute; color:var(--sub); font-size:13px; text-align:center; padding:0 24px; pointer-events:none; }
-  #foot{ display:flex; align-items:center; gap:7px; padding:8px 10px; background:var(--panel); border-top:1px solid var(--line); }
+  #fab .lbl{ font-size:12px; color:#cdd3de; }
+  /* 控制台 (默认隐藏; 点角标展开) — 唯一会出现的"界面", 用户不点就完全看不到 */
+  #ctl{ position:fixed; right:10px; bottom:50px; z-index:41; width:min(360px,92vw);
+    background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px;
+    display:none; flex-direction:column; gap:8px; backdrop-filter:blur(8px);
+    box-shadow:0 10px 30px rgba(0,0,0,.5); }
+  #ctl.on{ display:flex; }
+  #ctl .row{ display:flex; gap:7px; align-items:center; flex-wrap:wrap; }
+  select,button,input{ font:13px sans-serif; color:var(--fg); background:#1b222c;
+    border:1px solid var(--line); border-radius:8px; padding:7px 9px; outline:none; }
+  button{ cursor:pointer; } button:active{ background:#243040; }
+  button.acc{ background:var(--accent); border-color:var(--accent); color:#fff; }
+  .ic{ padding:7px 11px; font-size:15px; }
+  #tabsel{ flex:1; min-width:0; }
   #msg{ flex:1; min-width:0; }
-  .ic{ padding:6px 11px; font-size:15px; }
-  #meta{ color:var(--sub); font-size:12px; margin-left:auto; max-width:42%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #meta{ color:var(--sub); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tip{ color:var(--sub); font-size:11px; }
 </style>
 </head>
 <body>
-<div id="bar">
-  <span id="dot"></span><b>投屏镜像</b>
-  <select id="tabsel" title="选择要镜像的标签"></select>
-  <button id="refreshTabs" class="ic" title="刷新标签">⟲</button>
-  <button id="navBack" class="ic" title="后退">◀</button>
-  <button id="navReload" class="ic" title="重新加载页面">⟳</button>
-  <button id="activate" class="ic" title="把该标签提到手机前台">⤒</button>
-  <select id="quality" title="清晰度/带宽">
-    <option value="40">流畅</option>
-    <option value="55" selected>均衡</option>
-    <option value="75">高清</option>
-  </select>
-  <span id="meta"></span>
-</div>
-<div id="stage">
   <img id="screen" alt="screen" draggable="false">
-  <div id="hint">连接中…<br><small>点击画面即操控 · 下方输入框打字后回车发送</small></div>
-</div>
-<div id="foot">
-  <input id="msg" placeholder="在这里打字 → 先点上方 Devin 输入框聚焦, 再发送">
-  <button id="send" class="acc">发送</button>
-  <button id="enter" class="ic" title="回车">⏎</button>
-  <button id="bksp" class="ic" title="退格">⌫</button>
-</div>
+  <div id="hint">连接中…</div>
+  <textarea id="kb" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+
+  <div id="fab" title="连接状态 / 设置"><span id="dot"></span><span class="lbl">镜像</span></div>
+
+  <div id="ctl">
+    <div class="row">
+      <select id="tabsel" title="选择镜像哪个标签"></select>
+      <button id="refreshTabs" class="ic" title="刷新标签">⟲</button>
+      <button id="navBack" class="ic" title="后退">◀</button>
+      <button id="navReload" class="ic" title="重新加载">⟳</button>
+      <button id="activate" class="ic" title="提到手机前台">⤒</button>
+    </div>
+    <div class="row">
+      <span class="tip">清晰度</span>
+      <select id="quality" title="清晰度/带宽">
+        <option value="45">流畅</option>
+        <option value="62" selected>均衡</option>
+        <option value="80">高清</option>
+        <option value="92">原画</option>
+      </select>
+      <button id="kbBtn" class="ic" title="移动端唤起软键盘后即可直接打字">⌨ 键盘</button>
+    </div>
+    <div class="row">
+      <input id="msg" placeholder="备用输入框: 打字后回车发送(桌面端可直接打字)">
+      <button id="send" class="acc">发送</button>
+      <button id="enter" class="ic" title="回车">⏎</button>
+      <button id="bksp" class="ic" title="退格">⌫</button>
+    </div>
+    <div id="meta"></div>
+    <div class="tip">点击画面即操控 · 桌面端聚焦画面后直接用物理键盘打字 · 拖动/滚轮=滚动</div>
+  </div>
 <script>
 (function(){
   function qp(k){ try{ return new URLSearchParams(location.search).get(k)||""; }catch(e){ return ""; } }
@@ -61,9 +87,10 @@
   var RELAY = ENDPOINT + "/relay/" + encodeURIComponent(SESSION);
 
   var $ = function(id){ return document.getElementById(id); };
-  var dot=$("dot"), meta=$("meta"), hint=$("hint"), img=$("screen"), tabsel=$("tabsel"), quality=$("quality");
+  var dot=$("dot"), meta=$("meta"), hint=$("hint"), img=$("screen"),
+      tabsel=$("tabsel"), quality=$("quality"), ctl=$("ctl"), fab=$("fab"), kb=$("kb");
   var tab = parseInt(qp("tab")||"-1",10); if(isNaN(tab)) tab=-1;
-  var alive=true, lastOk=0, polling=false;
+  var alive=true, lastOk=0, polling=false, lastInput=0;
 
   async function mirror(body){
     var r = await fetch(RELAY, { method:"POST",
@@ -79,7 +106,6 @@
       var d = await mirror({ op:"tabs" });
       tabsel.innerHTML = "";
       var list = (d && d.tabs) || [];
-      // 默认优先镜像 Devin 标签 (app.devin.ai)
       var pick = tab;
       list.forEach(function(t){
         var o=document.createElement("option"); o.value=t.i;
@@ -99,8 +125,8 @@
     if(tab<0){ schedule(700); return; }
     polling=true;
     try{
-      var q = parseInt(quality.value,10)||55;
-      var d = await mirror({ op:"frame", tab:tab, q:q, max:1100 });
+      var q = parseInt(quality.value,10)||62;
+      var d = await mirror({ op:"frame", tab:tab, q:q, max:1280 });
       if(d && d.ok && d.jpeg){
         img.src = "data:image/jpeg;base64," + d.jpeg;
         img.dataset.w = d.w; img.dataset.h = d.h;
@@ -112,67 +138,108 @@
       }
     }catch(e){ setDot("err"); hint.style.display=""; hint.textContent="连接中断, 重试中…"; }
     polling=false;
-    // 帧间隔: 成功则紧凑, 失败则退避
-    schedule(Date.now()-lastOk < 4000 ? 480 : 1500);
+    // 自适应帧率: 刚操控过→更快(贴近原生反馈); 持续在线→紧凑; 失败→退避
+    var sinceInput = Date.now()-lastInput;
+    var ms = (sinceInput<1200) ? 110 : (Date.now()-lastOk < 4000 ? 230 : 1200);
+    schedule(ms);
   }
   var timer=null;
   function schedule(ms){ clearTimeout(timer); timer=setTimeout(tick, ms); }
+  function bump(){ lastInput=Date.now(); schedule(45); }
   function shortUrl(u){ try{ var x=new URL(u); return x.host + (x.pathname.length>1?x.pathname:""); }catch(e){ return u; } }
 
-  // 坐标 → 归一化 (相对图像显示区, 与设备像素无关)
+  // 坐标 → 归一化 (相对画面显示区, 与设备像素无关; object-fit:contain 的黑边需扣除)
   function norm(ev){
     var r = img.getBoundingClientRect();
     var cx = (ev.touches&&ev.touches[0]?ev.touches[0].clientX:ev.clientX);
     var cy = (ev.touches&&ev.touches[0]?ev.touches[0].clientY:ev.clientY);
-    var nx = (cx - r.left)/r.width, ny = (cy - r.top)/r.height;
+    var iw = parseFloat(img.dataset.w)||r.width, ih = parseFloat(img.dataset.h)||r.height;
+    // contain: 实际绘制区域居中, 计算 letterbox 偏移与缩放
+    var scale = Math.min(r.width/iw, r.height/ih);
+    var dw = iw*scale, dh = ih*scale;
+    var ox = r.left + (r.width-dw)/2, oy = r.top + (r.height-dh)/2;
+    var nx = (cx-ox)/dw, ny = (cy-oy)/dh;
     return { nx:Math.max(0,Math.min(1,nx)), ny:Math.max(0,Math.min(1,ny)) };
   }
-  function sendInput(o){ o.op="input"; o.tab=tab; mirror(o).then(function(){ schedule(60); }); }
+  function sendInput(o){ o.op="input"; o.tab=tab; mirror(o).then(bump); }
 
-  // 点击操控
-  img.addEventListener("click", function(ev){ var n=norm(ev); sendInput({ action:"click", nx:n.nx, ny:n.ny }); });
+  // 点击操控 (仅当未发生拖动)
+  img.addEventListener("click", function(ev){ if(dragMoved){ dragMoved=false; return; } var n=norm(ev); sendInput({ action:"click", nx:n.nx, ny:n.ny }); });
 
-  // 触摸/鼠标拖动 → 滚动
+  // 触摸/鼠标拖动 → 滚动 (位移按 contain 缩放换算成页面像素)
   var dragY=null, dragMoved=false;
   function dstart(ev){ dragY=(ev.touches&&ev.touches[0]?ev.touches[0].clientY:ev.clientY); dragMoved=false; }
   function dmove(ev){
     if(dragY==null) return;
     var y=(ev.touches&&ev.touches[0]?ev.touches[0].clientY:ev.clientY);
     var dy=dragY-y;
-    if(Math.abs(dy)>14){ var r=img.getBoundingClientRect(); var scale=(parseFloat(img.dataset.h)||r.height)/r.height;
-      sendInput({ action:"scroll", dy: Math.round(dy*scale) }); dragY=y; dragMoved=true; ev.preventDefault(); }
+    if(Math.abs(dy)>12){
+      var r=img.getBoundingClientRect();
+      var iw=parseFloat(img.dataset.w)||r.width, ih=parseFloat(img.dataset.h)||r.height;
+      var scale=Math.min(r.width/iw, r.height/ih);   // 显示像素 → 页面像素
+      sendInput({ action:"scroll", dy: Math.round(dy/scale) }); dragY=y; dragMoved=true; if(ev.cancelable)ev.preventDefault();
+    }
   }
   function dend(){ dragY=null; }
   img.addEventListener("touchstart", dstart, {passive:true});
   img.addEventListener("touchmove", dmove, {passive:false});
   img.addEventListener("touchend", dend);
   img.addEventListener("wheel", function(ev){ sendInput({ action:"scroll", dy: Math.round(ev.deltaY) }); ev.preventDefault(); }, {passive:false});
-  // 鼠标拖动滚动 (桌面端): 仅当移动超过阈值才视为滚动, 否则 click 已处理
   var mdown=false;
   img.addEventListener("mousedown", function(ev){ mdown=true; dstart(ev); });
   window.addEventListener("mousemove", function(ev){ if(mdown) dmove(ev); });
   window.addEventListener("mouseup", function(){ mdown=false; dend(); });
 
-  // 打字: 直接把整段文本灌入当前聚焦的输入框
-  $("send").addEventListener("click", function(){
-    var v=$("msg").value; if(!v) return;
-    sendInput({ action:"settext", text:v });
-    $("msg").value="";
+  // ── 直通键盘: 桌面端聚焦画面后用物理键盘直接打字, 像在原生 app 里输入一样 ──
+  // 累积可见字符, 短去抖后整段灌入当前聚焦输入框 (规避逐字往返竞态); Enter/退格即时下发。
+  var kbuf="", kbTimer=null;
+  function flushType(){ if(kbuf){ var s=kbuf; kbuf=""; sendInput({ action:"type", text:s }); } }
+  function inCtl(){ var a=document.activeElement; if(!a||a===document.body) return false;
+    var tg=a.tagName; if(tg==="INPUT"||tg==="TEXTAREA"||tg==="SELECT") return true;   // 任意表单控件聚焦时不拦截(含隐形键盘 #kb 与备用框)
+    return !!(a.closest && a.closest("#ctl")); }
+  function onKey(e){
+    if(e.ctrlKey||e.metaKey||e.altKey) return;     // 放行浏览器快捷键(复制/粘贴等)
+    if(inCtl()) return;                              // 正在用控制台输入框/下拉, 不拦截
+    var k=e.key;
+    if(k==="Enter"){ e.preventDefault(); flushType(); setTimeout(function(){ sendInput({ action:"key", key:"Enter" }); }, 60); return; }
+    if(k==="Backspace"){ e.preventDefault(); if(kbuf){ kbuf=kbuf.slice(0,-1); } else { sendInput({ action:"key", key:"Backspace" }); } return; }
+    if(k && k.length===1){ e.preventDefault(); kbuf+=k; clearTimeout(kbTimer); kbTimer=setTimeout(flushType, 130); }
+  }
+  document.addEventListener("keydown", onKey, true);
+
+  // 移动端: 点「⌨ 键盘」聚焦隐形 textarea 唤起软键盘; 其输入经 input 事件即时下发
+  var kbPrev="";
+  $("kbBtn").addEventListener("click", function(){ kbPrev=""; kb.value=""; kb.focus(); });
+  kb.addEventListener("input", function(){
+    var v=kb.value;
+    if(v.length>kbPrev.length){ var add=v.slice(kbPrev.length); sendInput({ action:"type", text:add }); }
+    else if(v.length<kbPrev.length){ var del=kbPrev.length-v.length; for(var i=0;i<del;i++) sendInput({ action:"key", key:"Backspace" }); }
+    kbPrev=v;
   });
+  kb.addEventListener("keydown", function(e){ if(e.key==="Enter"){ e.preventDefault(); sendInput({ action:"key", key:"Enter" }); kb.value=""; kbPrev=""; } });
+
+  // 备用文本框 (桌面/移动通用回退)
+  $("send").addEventListener("click", function(){ var v=$("msg").value; if(!v) return; sendInput({ action:"settext", text:v }); $("msg").value=""; });
   $("enter").addEventListener("click", function(){ sendInput({ action:"key", key:"Enter" }); });
   $("bksp").addEventListener("click", function(){ sendInput({ action:"key", key:"Backspace" }); });
   $("msg").addEventListener("keydown", function(ev){ if(ev.key==="Enter"){ ev.preventDefault();
     var v=$("msg").value; if(v){ sendInput({ action:"settext", text:v }); $("msg").value=""; }
-    setTimeout(function(){ sendInput({ action:"key", key:"Enter" }); }, 220);
+    setTimeout(function(){ sendInput({ action:"key", key:"Enter" }); }, 200);
   }});
+
+  // 角标 ↔ 控制台
+  fab.addEventListener("click", function(){ ctl.classList.toggle("on"); });
+  // 鼠标移到底部时短暂高亮角标 (提示可点); 不打扰主画面
+  var fabHideT=null;
+  window.addEventListener("mousemove", function(ev){ if(ev.clientY > window.innerHeight-80){ fab.classList.add("show"); clearTimeout(fabHideT); fabHideT=setTimeout(function(){ fab.classList.remove("show"); }, 1600); } });
 
   tabsel.addEventListener("change", function(){ tab=parseInt(tabsel.value,10); schedule(40); });
   $("refreshTabs").addEventListener("click", loadTabs);
   $("navBack").addEventListener("click", function(){ sendInput({ action:"back" }); });
-  $("navReload").addEventListener("click", function(){ mirror({ op:"nav", tab:tab, action:"reload" }); });
-  $("activate").addEventListener("click", function(){ mirror({ op:"activate", tab:tab }); });
+  $("navReload").addEventListener("click", function(){ mirror({ op:"nav", tab:tab, action:"reload" }).then(bump); });
+  $("activate").addEventListener("click", function(){ mirror({ op:"activate", tab:tab }).then(bump); });
 
-  if(!SESSION || !TOKEN){ hint.innerHTML="缺少会话/令牌参数<br><small>请从手机「内网穿透」面板复制带 token 的镜像链接打开</small>"; setDot("err"); return; }
+  if(!SESSION || !TOKEN){ hint.innerHTML="缺少会话/令牌参数<br><small>请从手机「内网穿透」面板复制带 token 的镜像链接打开</small>"; setDot("err"); ctl.classList.add("on"); return; }
   loadTabs().then(function(){ schedule(120); });
   document.addEventListener("visibilitychange", function(){ if(!document.hidden) schedule(80); });
 })();

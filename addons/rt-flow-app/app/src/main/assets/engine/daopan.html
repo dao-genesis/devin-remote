@@ -309,8 +309,12 @@ function renderConvTabs(){
   bodyEl.textContent = cur.loading ? "提取对话中…" : (cur.md||"(空)");
   bodyEl.scrollTop=0;
 }
-function cvDl(ti){ var t=CONV_TABS[ti]; if(!t||!t.md){ toast("无内容",true); return; }
-  try{ N.saveTextFile && N.saveTextFile(safeName(t.title||t.sid)+".md", t.md); toast("已下载 MD → 下载列表"); }catch(e){ toast("下载失败",true); } }
+function cvDl(ti){ var t=CONV_TABS[ti]; if(!t){ toast("无内容",true); return; }
+  if(!t.md){ toast("对话为空, 重新提取…"); loadConvMd(ti).then(function(){ if(CONV_TABS[ti]&&CONV_TABS[ti].md) cvDl(ti); else toast("提取失败",true); }); return; }
+  try{ if(!N.saveTextFile){ toast("当前版本不支持下载 · 请更新 APK",true); return; }
+    var p=N.saveTextFile(safeName(t.title||t.sid)+".md", t.md);
+    toast(p?"✓ 已存入系统「下载/DevinCloud」, 文件管理器可见":"下载失败", !p);
+  }catch(e){ toast("下载失败",true); } }
 function cvZip(ti){ var t=CONV_TABS[ti]; if(!t) return; var idx=-1; for(var i=0;i<REC.length;i++){ if(REC[i].sid===t.sid){ idx=i; break; } } if(idx>=0) dlZip(idx); else toast("该对话已不在近期列表",true); }
 
 async function dlMd(idx){
@@ -319,7 +323,9 @@ async function dlMd(idx){
     var r=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
     if(!r.ok){ toast("提取失败: "+(r.error||""),true); return; }
     var fn=it.no+"_"+safeName(it.acc.email||it.acc.id)+"_"+safeName(r.title||it.sid)+".md";
-    N.saveTextFile && N.saveTextFile(fn, r.md); toast("已下载 MD");
+    if(!N.saveTextFile){ toast("当前版本不支持下载 · 请更新 APK",true); return; }
+    var p=N.saveTextFile(fn, r.md);
+    toast(p?"✓ 已存入系统「下载/DevinCloud」, 文件管理器可见":"下载失败", !p);
   }catch(e){ toast("异常: "+e,true); }
 }
 async function dlZip(idx){
