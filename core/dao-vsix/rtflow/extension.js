@@ -428,6 +428,22 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 .note{color:#8b949e;font-size:12px;line-height:1.8}
 #drop{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(31,111,235,.16);border:3px dashed #1f6feb;z-index:30;color:#cfe6ff;font-size:15px;font-weight:700}
 #drop.on{display:flex}
+/* 归一 · 手机版适配: 窄屏(手机/窄面板)响应式 — 工具条换行·隐藏次要控件·加大触控目标 */
+@media (max-width:560px){
+  #tb{flex-wrap:wrap;height:auto;min-height:36px;padding:4px 6px;gap:3px}
+  #eng{display:none}
+  #addr{order:9;width:100%;min-width:0;height:32px;margin-top:3px;font-size:13px}
+  .tbtn{height:32px;min-width:36px;font-size:16px}
+  #zlbl{min-width:34px;font-size:12px}
+  #tabs{height:38px}
+  .tab{max-width:60vw;font-size:13px;padding:0 10px}
+  #menu{width:84vw;max-width:300px}
+  .mi{padding:12px 14px;font-size:15px}
+  .ov-top .ti{font-size:15px}
+  .li{padding:11px 12px}
+  .li .b{padding:9px 13px;font-size:13px}
+  #hint{font-size:14px;padding:18px}
+}
 </style></head><body>
 <div id="app">
   <div id="tb">
@@ -449,7 +465,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
   </div>
   <div id="tabs"></div>
   <div id="body">
-    <div id="hint"><div class="big">🌐</div><div>多实例浏览器 · 一个面板多窗口<br>点 ☰ 选择页面，或从「近期对话→多实例 / 账号行→路由 IDE」开标签<br>每个标签各登各号、互不串号</div></div>
+    <div id="hint"><div class="big">🌐</div><div>归一浏览器 · 一个面板多窗口<br>点 ☰ 选择页面：会话 / 知识 / Playbooks / 密钥 / 集成 / 用量 等 Devin Cloud 全部板块，或新建 Devin 标签<br>每个标签各登各号、互不串号 · 工具条 ↗ 可用系统浏览器打开当前页</div></div>
     <div id="stack"></div>
     <div class="spin" id="spin"><span class="ld"></span>加载中…</div>
     <div id="drop">松开以拖入文件到当前窗口</div>
