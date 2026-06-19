@@ -2,5 +2,5 @@
   "versionCode": 81,
   "versionName": "0.32.0",
   "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.32.0/DevinCloud-mobile-v0.32.0.apk",
-  "notes": "v0.32.0 · 鱼与熊掌兼得: 凭证转发+全量重写反向代理 /px/<acct>/<absurl>。手机端原生抓取外站(按账号注入 Bearer auth1 + x-cog-org-id 回打源站)→ 顶层 HTML 注入 <base>+登录态种子(复刻多实例 localStorage 种子)+fetch/XHR 改写垫片 → 子资源/API 全经本代理同源直取。一举破 X-Frame-Options + CORS + 跨域鉴权三重限制, 使含 app.devin.ai 登录态的外站也能在 app.html 网页外壳内 iframe 渲染。app.html Devin 标签自动选用金库内已登录账号注入。诚实边界: WebSocket/SSE 实时流无法经 HTTP 代理(会话内容可渲染, 实时增量可能不更新)。对外 curl/HTTP 契约零改动; v0.31 /embed 仍保留。"
+  "notes": "v0.32.0 · 鱼与熊掌兼得 — 根挂载透明代理: 为每个(源站,账号)起一个独立端口的 HTTP 服务器, 把源站挂在该端口的根 / 。真实路径逐字一致 → 重型 SPA(TanStack 客户端路由+auth0+Connect-RPC, 含 app.devin.ai 登录态)0 改写完整渲染, 路由/懒加载 chunk/API 全自然命中(路径前缀 /px 会污染 location 致路由错乱与 chunk 404, 故改根挂载)。手机端原生抓取(按账号注入 Bearer auth1 + x-cog-org-id 回打源站; 顶层 HTML 剥 CSP + 注入登录态种子; 透传源站真实 Content-Type 供 Connect-RPC 校验)。一举破 X-Frame-Options + CORS + 跨域鉴权, app.html 外壳内登录态 Devin 完整渲染、多标签多板块。同机/局域网(http)走根挂载, 公网 https 隧道自动回退 /px(/px 与 v0.31 /embed 仍保留)。诚实边界: WebSocket/SSE 实时流无法经 HTTP 代理(会话内容可渲染, 实时增量可能滞后)。对外 curl/HTTP 契约零改动。"
 }
