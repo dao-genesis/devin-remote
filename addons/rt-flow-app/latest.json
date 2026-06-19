@@ -1,6 +1,6 @@
 {
-  "versionCode": 71,
-  "versionName": "0.22.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.22.0/DevinCloud-mobile-v0.22.0.apk",
-  "notes": "v0.22.0 · 减法 (闻道者日损): 两条去中心化隧道后端 (cloudflared / SSH 反向) 的同形生命周期提炼为共同本源基类 NativeTunnel —— 进程拉起、读 URL、退出回调、isAlive/hasUrl/stop 全部归一, 子类只保留各自差异 (可执行 .so 名、启动参数、公网 URL 正则), 两个 manager 合计代码减约 1/3, 行为零变化。对外契约 (Callback/start/stop/局域网直连/双隧道冗余/WebRTC P2P/curl-HTTP 本源) 完全不变。AVD 全链路复测: 局域网直连 + cloudflared 主隧道 + SSH 备用隧道 + P2P 信令 全部通过。"
+  "versionCode": 72,
+  "versionName": "0.23.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.23.0/DevinCloud-mobile-v0.23.0.apk",
+  "notes": "v0.23.0 · 操作交互页完善(最小变动·最大效果): ① 接入文档(getCloudMd/面板打开·复制)自动内联「全部可用接入渠道」实时表——局域网直连 + cloudflared 主隧道 + SSH 反向隧道·备 + 中继 Worker + WebRTC P2P, 含在线状态与入口, 随状态自动更新; ② 穿透面板新增「🧭 接入渠道总览」卡片, 一处看全所有渠道(在线/离线点)+「复制全部可用渠道」一键; ③ 与既有面板同源、本源 curl/HTTP 与隧道生命周期零改动。"
 }
