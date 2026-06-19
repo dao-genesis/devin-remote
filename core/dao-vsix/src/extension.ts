@@ -2363,6 +2363,21 @@ function bridgeLocalApi(p: string, method: string, body?: any): Promise<{ status
         if (data) req.write(data); req.end();
     });
 }
+// 在线设备 · 查询中枢(dao-bridge)代理注册表 — 走 conn.json 的本地端口 + 令牌(整机直连, 免公网往返)。
+function bridgeHubApi(p: string): Promise<{ status: number; text: string }> {
+    return new Promise((resolve) => {
+        let port = 0, token = '';
+        try { const c = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.dao', 'bridge', 'conn.json'), 'utf8')); port = c.port || 0; token = c.token || ''; } catch { /* 守柔 */ }
+        if (!port) { resolve({ status: 0, text: 'no bridge port' }); return; }
+        const http = require('http');
+        const req = http.request({ host: '127.0.0.1', port, path: p, method: 'GET', headers: { Authorization: 'Bearer ' + token } }, (res: any) => {
+            let d = ''; res.on('data', (c: any) => d += c); res.on('end', () => resolve({ status: res.statusCode, text: d }));
+        });
+        req.on('error', (e: any) => resolve({ status: 0, text: String(e.message) }));
+        req.setTimeout(12000, () => { req.destroy(); resolve({ status: 0, text: 'timeout' }); });
+        req.end();
+    });
+}
 
 function bridgeFindCloudflared(): string {
     const { execSync } = require('child_process');
@@ -2496,6 +2511,17 @@ function bridgeGenerateCloudMd(): string {
         '| POST | `/api/write` | `{path,content}` | 写文件 |',
         '| POST | `/api/search` | `{query,path}` | 搜索 |',
         '| POST | `/api/edit` | `{path,edits}` | 编辑 |',
+        '| GET | `/api/agents` | - | 在线设备列表(已接入本中枢的设备·含状态/主机/最后心跳) |',
+        '',
+        '## 接入更多设备 · 一行 PowerShell',
+        '',
+        '在另一台 Windows 上以 PowerShell 运行下面这行，即把该机接入本中枢，出现在「在线设备」中并可被远程操控：',
+        '',
+        '```powershell',
+        `irm ${url}/api/bootstrap.ps1 | iex`,
+        '```',
+        '',
+        '接入后该设备长轮询 `/api/poll` 领命、回传 `/api/result`；用 `GET /api/agents` 查看全部在线设备。',
         '',
         '## Python SDK',
         '',
@@ -3074,6 +3100,17 @@ function rBridgeFull(){
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeRestart&#39;)">🔄 重启隧道</button>';
     h+='<button class="btn sm danger" onclick="cmd(&#39;bridgeStop&#39;)">⏹ 停止</button></div>';
   }
+  // ── 在线设备 · 已接入本中枢的全部设备 (本机/中枢自身 + 经一行命令接入的远端设备) ──
+  h+='<div class="st" style="margin-top:14px">🖥️ 在线设备 <button class="btn sm ghost" style="float:right;margin-top:-3px;padding:2px 8px" onclick="cmd(&#39;bridgeListAgents&#39;)">⟳ 刷新</button></div>';
+  h+='<div id="bridgeAgents" class="card">'+rBridgeAgents()+'</div>';
+  // ── 一行接入 · PowerShell 把另一台设备接进本中枢 (irm .../bootstrap.ps1 | iex) ──
+  if(on){
+    var joinCmd='irm '+String(b.url).replace(/\/$/,'')+'/api/bootstrap.ps1 | iex';
+    h+='<div class="st" style="margin-top:14px">🔗 一行接入设备 · PowerShell</div>';
+    h+='<div class="card"><div style="font-size:10px;color:var(--muted);margin-bottom:4px">在另一台 Windows 上以 PowerShell 运行下面这行，即把该机接入本中枢，出现在上方「在线设备」并可被远程操控：</div>';
+    h+='<pre style="white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:7px;font-size:11px;margin:0 0 6px;border-radius:4px;color:var(--accent2)">'+esc(joinCmd)+'</pre>';
+    h+='<button class="btn sm primary" onclick="cmd(&#39;copyBridgeJoin&#39;)">📋 复制一行接入命令</button></div>';
+  }
   // ── 四大接入模块介绍/命名隧道均移至本面板底部 (核心: 导出文档/自测 前置) ──
   // ── 导出接入文档 (回归 dao-bridge 本源 · 仅整机穿透接入信息 + 端点 + SDK; 四大模块在 MCP 使用文档) ──
   h+='<div class="st" style="margin-top:14px">📄 导出接入文档</div>';
@@ -3110,6 +3147,23 @@ function rBridgeFull(){
   h+='<div class="st" style="margin-top:14px">🧩 更深层专业操作 · DAO Bridge MCP</div>';
   h+='<div class="card" style="font-size:11px;color:var(--muted)">日常远程操作整机走上方内网穿透即可。浏览器自动化(CDP) / GUI 鼠键截屏 / 插件本体 / VSCode 命令等<b style="color:var(--fg)">四大模块</b>能力，已独立为 <b style="color:var(--fg)">DAO Bridge MCP</b>(随账号反向注入·HTTP 传输·无需手动配置)。用法见知识库「DAO Bridge MCP 使用文档(四大模块)」, 或在「MCP」面板查看。</div>';
   v.innerHTML=h;
+  if(!S.bridgeAgents||!S.bridgeAgents.loaded)cmd('bridgeListAgents');
+}
+// 在线设备列表渲染 — 中枢(本机)恒在线 + 经一行命令接入的远端设备(online/offline·主机·用户·OS·最后心跳)。
+function rBridgeAgents(){
+  var ba=S.bridgeAgents||{};
+  if(!ba.loaded)return '<div class="cr"><span class="l" style="color:var(--muted);font-size:11px">加载中…</span></div>';
+  var rows='';
+  var hubName=ba.host||'本机';
+  rows+='<div class="cr"><span class="l"><span class="dot '+(ba.online?'on':'off')+'" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle"></span>'+esc(hubName)+' <span style="color:var(--muted);font-size:10px">· 中枢(本机)</span></span><span class="v" style="color:'+(ba.online?'var(--success)':'var(--warn)')+';font-size:11px">'+(ba.online?'● 在线':'○ 离线')+'</span></div>';
+  var ags=ba.agents||[];
+  for(var i=0;i<ags.length;i++){var a=ags[i];var onl=(a.status==='online');
+    rows+='<div class="cr" style="border-top:1px solid var(--border);padding-top:5px;margin-top:5px"><span class="l"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;background:'+(onl?'var(--success)':'var(--muted)')+'"></span>'+esc(a.hostname||a.id||'?')+'</span><span class="v" style="color:'+(onl?'var(--success)':'var(--muted)')+';font-size:11px">'+(onl?'● 在线':'○ 离线')+'</span></div>';
+    var meta=[];if(a.user)meta.push('用户 '+a.user);if(a.os)meta.push(String(a.os).slice(0,40));if(a.last_seen)meta.push('心跳 '+bkRel(Date.parse(a.last_seen)));
+    if(meta.length)rows+='<div style="font-size:10px;color:var(--muted);margin:2px 0 0 14px">'+esc(meta.join(' · '))+'</div>';
+  }
+  if(!ags.length)rows+='<div style="font-size:10px;color:var(--muted);margin-top:6px">暂无其他接入设备 — 用下方「一行接入」命令把更多设备接进来。</div>';
+  return rows;
 }
 function bridgeCfLogin(){var e=document.getElementById('cfEmail'),k=document.getElementById('cfKey');var email=e?e.value.trim():'';var key=k?k.value.trim():'';if(!key){toast('请填写 Token / API Key',false);return}toast('验证中…',true);cmd('bridgeCfLogin',{email:email,key:key})}
 function bridgeExec(){var c=document.getElementById('bridgeCmd');var v=c?c.value.trim():'';if(!v)return;var o=document.getElementById('bridgeOut');if(o)o.textContent='执行中…';cmd('bridgeExec',{cmd:v})}
@@ -3317,7 +3371,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -3642,7 +3696,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -4659,6 +4713,26 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'bridgeExec': {
                 const r = await bridgeLocalApi('/api/exec', 'POST', { cmd: String(msg.cmd || '') });
                 reply({ type: 'bridgeTestResult', op: 'exec', ok: r.status === 200, text: 'HTTP ' + r.status + ' ' + (r.text || '').slice(0, 800) });
+                break;
+            }
+            // 在线设备 · 拉取中枢已接入的全部设备(含本机/中枢自身) — 喂给🌐公网穿透「在线设备」板块。
+            case 'bridgeListAgents': {
+                const c = readBridgeConn();
+                const r = await bridgeHubApi('/api/agents');
+                let agents: any[] = [];
+                try { const j = JSON.parse(r.text || '{}'); agents = Array.isArray(j.agents) ? j.agents : []; } catch { /* 守柔 */ }
+                const host = (c && c.host) || os.hostname();
+                reply({ type: 'bridgeAgents', ok: r.status === 200, host, online: !!(c && c.url), agents });
+                break;
+            }
+            // 一行接入 · 复制把另一台设备接进本中枢的 PowerShell 一行命令(irm .../bootstrap.ps1 | iex)。
+            case 'copyBridgeJoin': {
+                const c = readBridgeConn();
+                const url = (c && c.url) ? String(c.url).replace(/\/$/, '') : '';
+                const line = url ? ('irm ' + url + '/api/bootstrap.ps1 | iex') : '';
+                if (line) await vscode.env.clipboard.writeText(line);
+                if (line) vscode.window.showInformationMessage('已复制一行接入命令 · 在另一台 Windows 的 PowerShell 运行即接入本中枢');
+                reply({ type: 'actionResult', command: 'copyBridgeJoin', ok: !!line });
                 break;
             }
         }
