@@ -12,7 +12,31 @@
   // ── 原生 HTTP 桥 (Promise 封装) ──────────────────────────────────────────
   var __seq = 0, __cbs = Object.create(null);
   root.__httpCb = function (id, res) { var cb = __cbs[id]; if (cb) { delete __cbs[id]; cb(res); } };
-  function httpReq(method, url, headers, body) {
+
+  // ── 出站并发调度器 (道法自然·彻底解决多账号并发+自动备份卡顿) ──────────────
+  //   两条独立通道, 各自限流并按优先级排队:
+  //     · 文本通道  (登录/额度/会话列表/状态轮询/远程RPC) — 高优先, 并发上限较大;
+  //     · 二进制通道 (备份下载 ZIP/产出文件)            — 低优先, 并发上限小;
+  //   高优先请求永远排在低优先(后台备份)之前出队 → 备份再多也不卡交互。
+  //   配合原生 HttpBridge 的双线程池 (INTERACTIVE / BULK), 双层隔离, 卡顿根除。
+  function _mkGate(max) {
+    var active = 0, hi = [], lo = [];
+    function pump() {
+      while (active < max && (hi.length || lo.length)) {
+        var t = hi.length ? hi.shift() : lo.shift();
+        active++;
+        Promise.resolve().then(t.fn).then(function (v) { t.res(v); }, function (e) { t.res({ status: 0, error: String(e) }); })
+          .then(function () { active--; pump(); });
+      }
+    }
+    return function (fn, low) {
+      return new Promise(function (res) { (low ? lo : hi).push({ fn: fn, res: res }); pump(); });
+    };
+  }
+  var _txtGate = _mkGate(6);   // 文本: 6 路并发 (pollTrk 6 路 + 额度/登录排队), 平滑突发
+  var _binGate = _mkGate(2);   // 二进制下载: 2 路 (与原生 BULK 池对齐), 备份不抢网络
+
+  function _rawHttpReq(method, url, headers, body) {
     return new Promise(function (resolve) {
       if (!N.httpReq) { resolve({ status: 0, error: "no native httpReq" }); return; }
       var id = "h" + (++__seq) + "_" + Date.now();
@@ -24,8 +48,11 @@
       setTimeout(function () { if (__cbs[id]) { delete __cbs[id]; if (!done) { done = true; resolve({ status: 0, error: "timeout" }); } } }, 40000);
     });
   }
-  // 二进制 HTTP (响应体 base64) → {status, b64, size} · 供下载会话产出文件 (二进制无损)
-  function httpReqB64(method, url, headers, body) {
+  // method 可选第 5 参 low=true → 低优先 (供后台备份/导出的文本读取让路给交互请求)。
+  function httpReq(method, url, headers, body, low) {
+    return _txtGate(function () { return _rawHttpReq(method, url, headers, body); }, !!low);
+  }
+  function _rawHttpReqB64(method, url, headers, body) {
     return new Promise(function (resolve) {
       if (!N.httpReqB64) { resolve({ status: 0, error: "no native httpReqB64" }); return; }
       var id = "b" + (++__seq) + "_" + Date.now();
@@ -37,16 +64,20 @@
       setTimeout(function () { if (__cbs[id]) { delete __cbs[id]; if (!done) { done = true; resolve({ status: 0, error: "timeout" }); } } }, 90000);
     });
   }
+  // 二进制 HTTP (响应体 base64) → {status, b64, size} · 供下载会话产出文件 (二进制无损)。始终走低优先二进制通道。
+  function httpReqB64(method, url, headers, body) {
+    return _binGate(function () { return _rawHttpReqB64(method, url, headers, body); }, true);
+  }
   function _parse(res) {
     var j = null; try { j = JSON.parse(res && res.text != null ? res.text : ""); } catch (e) {}
     return { status: (res && res.status) || 0, json: j, text: (res && res.text) || "", error: res && res.error };
   }
-  async function devinJsonPost(url, headers, body, timeoutMs) {
+  async function devinJsonPost(url, headers, body, low) {
     var h = Object.assign({ "Content-Type": "application/json" }, headers || {});
-    return _parse(await httpReq("POST", url, h, JSON.stringify(body || {})));
+    return _parse(await httpReq("POST", url, h, JSON.stringify(body || {}), low));
   }
-  async function devinJsonGet(url, headers) {
-    return _parse(await httpReq("GET", url, headers || {}, ""));
+  async function devinJsonGet(url, headers, low) {
+    return _parse(await httpReq("GET", url, headers || {}, "", low));
   }
 
   // ── 端点常量 (与桌面同源) ─────────────────────────────────────────────────

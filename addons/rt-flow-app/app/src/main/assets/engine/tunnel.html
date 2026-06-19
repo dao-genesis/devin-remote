@@ -106,6 +106,25 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <button onclick="send('openCf')" style="margin-top:4px;background:var(--vscode-textLink-foreground)">打开 CloudFlare 控制台</button>
 </div>
 
+<!-- 模块2.1: 局域网直连 (无感等效内网穿透 · 零中继零隧道 · 直连本机) -->
+<div class="section">
+<h3>📶 局域网直连 · 无感等效内网穿透（零中继·零隧道）</h3>
+<div class="muted">控制端与本机在<b>同一 Wi-Fi / 热点</b>时, 直接用下方 URL 即可连本机 —— <b>完全不经任何 Worker / Cloudflare / 公网</b>, 真·直连「我当前设备」, 延迟最低、零云依赖。默认<b>常驻开启</b>; 受 Bearer Token + 端到端加密双重保护。<br>⚠️ 仅同一局域网可达; 跨网络请用下方「去中心化隧道」或中继。</div>
+<div style="display:flex;align-items:center;gap:10px;margin:8px 0">
+  <label style="position:relative;display:inline-block;width:48px;height:26px">
+    <input type="checkbox" id="lanToggle" onchange="toggleLanDirect(this.checked)" style="opacity:0;width:0;height:0">
+    <span style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#333;border-radius:26px;transition:.3s" id="lanSlider"></span>
+  </label>
+  <span id="lanLabel" style="font-size:12px;color:var(--vscode-descriptionForeground)">已关闭</span>
+</div>
+<div class="lbl">局域网直连 URL（同网控制端直接使用）</div>
+<div id="lanUrls" class="url">—</div>
+<div class="row" style="margin-top:6px">
+  <button onclick="copyLanAccess()">📋 复制局域网直连接入信息</button>
+  <button onclick="refreshLan()">刷新地址</button>
+</div>
+</div>
+
 <!-- 模块2.2: 去中心化隧道 (路线B · 每设备自带 cloudflared 快速隧道) -->
 <div class="section">
 <h3>🌐 去中心化隧道 · 每设备自带（无依赖·免费）</h3>
@@ -364,8 +383,12 @@ function handle(m){
       "  手机底层:    phoneScreenCapture · phoneTap{x,y} · phoneDumpScreen · phoneShell{command}",
       "",
       "全量文档(两大模块·所有命令): 点「📄 接入文档 → 打开/复制」, 或调 getCloudMd。"
-    ].join("\n");
-    try{N.clip&&N.clip(block);}catch(e){} _result('copyAccess',true,'已复制·轻量快速接入(接入信息+授权+常用命令), 全量见接入文档'); return; }
+    ];
+    // 局域网直连 (零中继零隧道·同网最优): 若已取得局域网地址, 一并附上, 控制端同网时优先直连本机。
+    try{ var l=_lan(); var us=(l&&l.urls)||[]; if(us.length){ block.push(""); block.push("【局域网直连·同网优先·零中继零隧道·直连本机】");
+      us.forEach(function(x){ block.push("  直连入口: "+x+"/relay/"+(c.session||"")); }); } }catch(e){}
+    block=block.join("\n");
+    try{N.clip&&N.clip(block);}catch(e){} _result('copyAccess',true,'已复制·轻量快速接入(接入信息+授权+常用命令+局域网直连), 全量见接入文档'); return; }
   if(op==='copyUrl'){ var u=c.url.replace(/\/$/,'')+"/relay/"+c.session; try{N.clip&&N.clip(u);}catch(e){} _result('copyUrl',true,'已复制公网入口'); return; }
   if(op==='copyToken'){ try{N.clip&&N.clip(c.token||"");}catch(e){} _result('copyToken',true,'已复制 Token'); return; }
   if(op==='restart'){ try{N.relayRestart&&N.relayRestart();}catch(e){} _result('restart',true,'已请求重连中继'); setTimeout(_push,800); return; }
@@ -483,6 +506,39 @@ function refreshTunnel(){
   updateDecentUI(t);
 }
 refreshTunnel();
+// ── 局域网直连 (无感等效内网穿透·零中继零隧道) ──
+function _lan(){ try{ return JSON.parse(N.lanDirect?N.lanDirect():"{}"); }catch(e){ return {}; } }
+function toggleLanDirect(on){
+  try{ N.setLanDirect&&N.setLanDirect(!!on); }catch(e){}
+  _result('lanDirect', true, on?'局域网直连已开 (本机绑 0.0.0.0, 同网可直连)':'局域网直连已关 (仅隧道开时才暴露)');
+  setTimeout(refreshLan, 800); setTimeout(refreshLan, 2500);
+}
+function refreshLan(){
+  var l=_lan(); var on=(l.lanDirect!==undefined)?!!l.lanDirect:true;
+  var cb=document.getElementById('lanToggle'); if(cb) cb.checked=on;
+  var sl=document.getElementById('lanSlider');
+  if(sl){ sl.style.background=on?'#3fb950':'#333';
+    sl.innerHTML='<span style="position:absolute;height:20px;width:20px;left:'+(on?'24px':'3px')+';bottom:3px;background:white;border-radius:50%;transition:.3s"></span>'; }
+  var lb=document.getElementById('lanLabel'); if(lb) lb.textContent=on?((l.urls&&l.urls.length)?('已开启 🟢 · '+l.urls.length+' 个地址'):'已开启 · 等待局域网地址…'):'已关闭';
+  var u=document.getElementById('lanUrls');
+  if(u){ var c=_conn(); var urls=(l.urls||[]);
+    u.textContent = (on&&urls.length)? urls.map(function(x){return x+"/relay/"+(c.session||"");}).join("\n") : (on?'(未取得局域网地址·请确认已连 Wi-Fi)':'—'); }
+}
+function copyLanAccess(){
+  var l=_lan(), c=_conn(); var urls=(l.urls||[]);
+  if(!urls.length){ _result('copyLan', false, '暂无局域网地址 (请确认已连 Wi-Fi 且局域网直连已开)'); return; }
+  var lines=["═══ Devin Cloud 手机版 · 局域网直连 (零中继·零隧道·直连本机) ═══"];
+  urls.forEach(function(x){ lines.push("直连入口: "+x+"/relay/"+(c.session||"")); });
+  lines.push("Token: "+(c.token||l.token||""));
+  lines.push("Session: "+(c.session||l.session||""));
+  lines.push("E2E Key: "+(c.e2eKey||l.e2eKey||""));
+  lines.push("");
+  lines.push("调用模板 (控制端与手机同一 Wi-Fi 时直接可用):");
+  lines.push("curl -s -X POST "+urls[0]+"/relay/"+(c.session||"")+" -H 'Authorization: Bearer "+(c.token||l.token||"<TOKEN>")+"' -H 'Content-Type: application/json' -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"getState\"}}'");
+  try{N.clip&&N.clip(lines.join("\n"));}catch(e){}
+  _result('copyLan', true, '已复制 局域网直连接入信息 (该地址直连本设备, 不经任何 Worker/隧道/公网)');
+}
+refreshLan(); setInterval(refreshLan, 4000);
 // ── 后台保活 · 持久稳定化 (Native 桥: KeepAlive) ──
 function kaStat(){ try{ return JSON.parse(N.keepAliveStatus?N.keepAliveStatus():"{}"); }catch(e){ return {}; } }
 function kaRefresh(){
