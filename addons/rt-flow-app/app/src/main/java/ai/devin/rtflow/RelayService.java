@@ -93,17 +93,9 @@ public class RelayService extends Service {
                 localServer = new LocalServer(new LocalServer.Dispatcher() {
                     public String token() { return relayToken(); }
                     public String dispatch(String f) throws Exception { return dispatchLocal(f); }
-                    // 浏览器控制台: 根路径/「/app」/「/webshell.html」均回 webshell.html
-                    // → 任意设备浏览器打开本机入口即得全功能控制台 (手机=中枢, 浏览器=瘦客户端)。
-                    public String staticHtml(String path) {
-                        if (path == null) return null;
-                        if (path.equals("/") || path.equals("/app") || path.equals("/app/")
-                                || path.equals("/webshell.html") || path.equals("/console")) {
-                            String h = readAsset("engine/webshell.html");
-                            return (h != null && !h.isEmpty()) ? h : null;
-                        }
-                        return null;
-                    }
+                    // 浏览器原样拿 APK 自身的真实页面 (switch/tunnel/cloud/…) 与其 JS 资源
+                    // → 任意设备浏览器打开即得与手机本体「表层+底层」完全一致的页面 (手机=中枢)。
+                    public String[] staticAsset(String path) { return RelayService.this.staticAsset(path); }
                 });
                 localPort = localServer.start();
                 android.util.Log.i("RTFlowTunnel", "local server on 0.0.0.0:" + localPort);
@@ -150,8 +142,17 @@ public class RelayService extends Service {
         } catch (Exception ignored) {}
         return "";
     }
-    /** 把 cloudflared 转发来的 frame 喂给引擎 serveLocal, 阻塞拿回 {status,bodyText} (≤60s)。 */
+    /** 把 cloudflared 转发来的 frame 喂给引擎 serveLocal, 阻塞拿回 {status,bodyText} (≤60s)。
+     *  浏览器跑 APK 真实页面时, 其 Native 桥重定向到的两条专用路由在此就地处理 (不进引擎):
+     *    · /api/native — 值返回型 Native 方法 (状态读取 / 隧道·E2E·配置 读写 / 金库读写)。
+     *    · /api/http   — 原生 HTTP (手机侧发起, 绕 CORS, 带账号 auth1), 即 DaoCloud 的底座。 */
     String dispatchLocal(String frameJson) throws Exception {
+        try {
+            org.json.JSONObject f = new org.json.JSONObject(frameJson);
+            String fpath = f.optString("path", "");
+            if ("/api/native".equals(fpath)) return webNative(f.optJSONObject("body"));
+            if ("/api/http".equals(fpath))   return webHttp(f.optJSONObject("body"));
+        } catch (Exception ignored) {}
         final String reqId = "L" + System.nanoTime();
         java.util.concurrent.SynchronousQueue<String> q = new java.util.concurrent.SynchronousQueue<>();
         pendingLocal.put(reqId, q);
@@ -165,6 +166,166 @@ public class RelayService extends Service {
             return r;
         } finally { pendingLocal.remove(reqId); }
     }
+
+    // ── 浏览器跑 APK 真实页面: 静态资源服务 + Native 桥就地实现 ─────────────────
+
+    /** 浏览器拿 APK 自身的真实页面与其 JS 资源。HTML 注入 remote-native 垫片 → 页面零改动运行。 */
+    String[] staticAsset(String path) {
+        if (path == null) return null;
+        String name;
+        if (path.equals("/") || path.equals("/app") || path.equals("/app/")
+                || path.equals("/index.html") || path.equals("/console")) name = "switch.html";
+        else if (path.startsWith("/") && path.indexOf('/', 1) < 0
+                && (path.endsWith(".html") || path.endsWith(".js"))) name = path.substring(1);
+        else return null;
+        // 仅服务白名单目录内确实存在的资源, 杜绝路径穿越。
+        if (name.contains("..") || name.contains("/")) return null;
+        String body = readAsset("engine/" + name);
+        if (body == null || body.isEmpty()) return null;
+        if (name.endsWith(".js")) return new String[]{"application/javascript; charset=utf-8", body};
+        return new String[]{"text/html; charset=utf-8", injectShim(body)};
+    }
+
+    /** 在 <head> 最前注入垫片脚本, 保证它先于页面自身脚本 (var N = window.Native||{}) 执行。 */
+    private static String injectShim(String html) {
+        String tag = "<script src=\"/__rn.js\"></script>";
+        if (html.contains("/__rn.js")) return html;
+        int h = html.indexOf("<head");
+        if (h >= 0) { int gt = html.indexOf('>', h); if (gt >= 0) return html.substring(0, gt + 1) + "\n" + tag + html.substring(gt + 1); }
+        return tag + "\n" + html;
+    }
+
+    /** /api/native — 值返回型 Native 方法就地执行, 回 {status,bodyText:{"r":...}}。 */
+    private String webNative(org.json.JSONObject body) {
+        Object r = null;
+        try {
+            String m = body == null ? "" : body.optString("m", "");
+            org.json.JSONArray a = body == null ? new org.json.JSONArray() : body.optJSONArray("a");
+            if (a == null) a = new org.json.JSONArray();
+            r = nativeInvoke(m, a);
+        } catch (Exception e) { r = null; }
+        try {
+            org.json.JSONObject o = new org.json.JSONObject();
+            o.put("r", r == null ? org.json.JSONObject.NULL : r);
+            return "{\"status\":200,\"bodyText\":" + HttpBridge.jsonStr(o.toString()) + "}";
+        } catch (Exception e) { return "{\"status\":200,\"bodyText\":\"{\\\"r\\\":null}\"}"; }
+    }
+
+    /** /api/http — 手机侧发起原生 HTTP (绕 CORS, 带账号 auth1), 阻塞拿回 {status,headers,body}。 */
+    private String webHttp(org.json.JSONObject body) {
+        try {
+            final boolean b64 = body.optBoolean("b64", false);
+            String method = body.optString("method", "GET");
+            String url = body.optString("url", "");
+            String headers = body.optJSONObject("headers") != null ? body.optJSONObject("headers").toString() : "{}";
+            String reqBody = body.optString("body", "");
+            final java.util.concurrent.SynchronousQueue<String> q = new java.util.concurrent.SynchronousQueue<>();
+            HttpBridge.Cb cb = (id, json) -> { try { q.offer(json == null ? "{}" : json, 5, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {} };
+            String rid = "W" + System.nanoTime();
+            if (b64) HttpBridge.execB64(rid, method, url, headers, reqBody, cb);
+            else HttpBridge.exec(rid, method, url, headers, reqBody, cb);
+            String res = q.poll(95, java.util.concurrent.TimeUnit.SECONDS);
+            if (res == null) res = "{\"status\":0,\"error\":\"timeout\"}";
+            return "{\"status\":200,\"bodyText\":" + HttpBridge.jsonStr(res) + "}";
+        } catch (Exception e) {
+            return "{\"status\":200,\"bodyText\":\"{\\\"status\\\":0,\\\"error\\\":\\\"bridge\\\"}\"}";
+        }
+    }
+
+    /** 值返回型 Native 方法的就地实现 (与手机本体同一套底层方法/同一金库目录)。
+     *  纯设备/原生UI 动作 (开系统设置/代理/Shizuku 等) 在浏览器里无意义 → 返回安全默认值。 */
+    private Object nativeInvoke(String m, org.json.JSONArray a) throws Exception {
+        Bridge b = new Bridge();
+        switch (m == null ? "" : m) {
+            // ── 状态读取 ──
+            case "conn": return readConn();
+            case "relayStatus": return lastStatus;
+            case "tunnelStat": return tunnelStatus;
+            case "isTunnelEnabled": return tunnelEnabledFlag();
+            case "isLanDirect": return lanDirectFlag();
+            case "lanDirect": return b.lanDirect();
+            case "e2eEnabled": return b.e2eEnabled();
+            case "e2eRequired": return b.e2eRequired();
+            case "e2eSeal": return b.e2eSeal(argStr(a, 0));
+            case "e2eOpen": return b.e2eOpen(argStr(a, 0));
+            case "keepAliveStatus": try { return KeepAlive.statusJson(this); } catch (Throwable t) { return "{}"; }
+            case "phoneA11yReady": try { return RtAccessibilityService.isReady(); } catch (Throwable t) { return false; }
+            case "isRemoteOpsEnabled": return remoteOpsEnabled;
+            // ── 配置/隧道 读写 ──
+            case "setTunnelEnabled": b.setTunnelEnabled(argBool(a, 0)); return null;
+            case "setLanDirect": b.setLanDirect(argBool(a, 0)); return null;
+            case "setE2eRequired": b.setE2eRequired(argBool(a, 0)); return null;
+            case "setRemoteOps": b.setRemoteOps(argBool(a, 0)); return null;
+            case "saveRelayConfig": writeUserFile("relay-config.json", argStr(a, 0)); return null;
+            case "relayRestart": main.post(() -> { if (engine != null) engine.reload(); }); return null;
+            // ── 金库读写 (与手机本体同一目录 Documents/DevinCloud) ──
+            case "vaultLoad": return vaultRead(argStr(a, 0));
+            case "vaultSave": vaultWrite(argStr(a, 0), argStr(a, 1)); return null;
+            case "vaultListBackupAccounts": return bkListAccounts();
+            case "vaultListBackups": return bkList(argStr(a, 0));
+            case "vaultReadBackup": return bkRead(argStr(a, 0), argStr(a, 1));
+            case "vaultReadBackupB64": return bkReadB64(argStr(a, 0), argStr(a, 1));
+            case "vaultSaveBackup": return bkSave(argStr(a, 0), argStr(a, 1), argStr(a, 2));
+            case "vaultSaveBackupB64": return bkSaveB64(argStr(a, 0), argStr(a, 1), argStr(a, 2));
+            // ── 纯设备/原生UI: 浏览器里无意义, 安全默认 ──
+            case "requestBatteryOpt": case "openAutoStart": case "openBatterySettings":
+            case "phoneEnsureControl": case "applyProxy": case "clearProxy": return false;
+            case "shizukuStatus": return 0;
+            case "vpnStatus": case "detectProxy": case "currentProxy":
+            case "shizukuGrantAll": case "shizukuShell": case "appCheckUpdate":
+            case "appInstallUpdate": case "rotateRelayToken": return "";
+            default: return null;
+        }
+    }
+    private static String argStr(org.json.JSONArray a, int i) { return a != null && i < a.length() ? a.optString(i, "") : ""; }
+    private static boolean argBool(org.json.JSONArray a, int i) { return a != null && i < a.length() && a.optBoolean(i, false); }
+
+    // 全量备份目录操作 (Documents/DevinCloud/backups/<账号文件夹>/<name>) — 与 MainActivity 同一目录。
+    private File bkDir(String folder) {
+        File base = new File(vaultDir(), "backups");
+        String sf = (folder == null || folder.trim().isEmpty()) ? "misc" : folder.replaceAll("[\\\\/:*?\"<>|]", "_");
+        File d = new File(base, sf); if (!d.exists()) d.mkdirs(); return d;
+    }
+    private String bkListAccounts() {
+        try { org.json.JSONArray arr = new org.json.JSONArray();
+            File[] fs = new File(vaultDir(), "backups").listFiles();
+            if (fs != null) for (File f : fs) if (f.isDirectory()) arr.put(f.getName());
+            return arr.toString(); } catch (Exception e) { return "[]"; }
+    }
+    private String bkList(String folder) {
+        try { org.json.JSONArray arr = new org.json.JSONArray();
+            File[] fs = bkDir(folder).listFiles();
+            if (fs != null) for (File f : fs) { if (!f.isFile()) continue;
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("name", f.getName()); o.put("size", f.length()); o.put("mtime", f.lastModified()); arr.put(o); }
+            return arr.toString(); } catch (Exception e) { return "[]"; }
+    }
+    private String bkRead(String folder, String name) {
+        try { File f = new File(bkDir(folder), safe(name)); if (!f.exists()) return "";
+            java.io.FileInputStream i = new java.io.FileInputStream(f); String r = slurp(i); i.close(); return r;
+        } catch (Exception e) { return ""; }
+    }
+    private String bkReadB64(String folder, String name) {
+        try { File f = new File(bkDir(folder), safe(name)); if (!f.exists()) return "";
+            byte[] buf = new byte[(int) f.length()];
+            try (java.io.FileInputStream fis = new java.io.FileInputStream(f)) { int off = 0, r;
+                while (off < buf.length && (r = fis.read(buf, off, buf.length - off)) > 0) off += r; }
+            return android.util.Base64.encodeToString(buf, android.util.Base64.NO_WRAP);
+        } catch (Exception e) { return ""; }
+    }
+    private boolean bkSave(String folder, String name, String content) {
+        try { String safe = (name == null || name.trim().isEmpty()) ? ("backup-" + System.currentTimeMillis() + ".json") : safe(name);
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new File(bkDir(folder), safe))) {
+                fos.write((content == null ? "" : content).getBytes("UTF-8")); } return true;
+        } catch (Exception e) { return false; }
+    }
+    private boolean bkSaveB64(String folder, String name, String base64) {
+        try { String safe = (name == null || name.trim().isEmpty()) ? ("backup-" + System.currentTimeMillis() + ".bin") : safe(name);
+            byte[] bytes = android.util.Base64.decode(base64 == null ? "" : base64, android.util.Base64.DEFAULT);
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new File(bkDir(folder), safe))) { fos.write(bytes); } return true;
+        } catch (Exception e) { return false; }
+    }
+
     /** 开启隧道: 同时拉起两条相互独立的去中心化公网后端 (cloudflared 主 + SSH 反向隧道备)。
      *  两条各自独立自愈, 互不牵连 → 任一被封/掉线另一条仍提供公网入口。 */
     private synchronized void startTunnel() {
