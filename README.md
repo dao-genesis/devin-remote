@@ -36,6 +36,7 @@
 - 🏠 **单账号全功能面板**：一个面板**实时读写**当前账号的 额度 / Knowledge / Playbook / Secret / 环境蓝图 / MCP / 环境 / 自动化，与官网完全双向同步。
 - 🔁 **多账号 RT Flow + 反向注入**：左栏一键切号；把 Knowledge / Playbook / Secret / MCP / 自动化 **批量注入到所有账号**。
 - 🧩 **提示词隔离 + 第三方模型路由**（Proxy Pro 三面板：本源观照 / 渠道配置 / 模型路由）。
+- 🔌 **多 IDE 通用 MCP**（3.24.0）：插件装到哪个 IDE（Devin Desktop / Windsurf / Cursor / VS Code / Trae / Antigravity / Claude）就自动识别该 IDE 的 MCP 配置，一键修复跟着软件走，强鲁棒性零硬编码。
 - 📦 **去中心化发版**：每个插件各有独立 Release / 下载链接，开发哪个就只刷新哪个，互不干扰。
 
 > 想直接上手 → 看下方 **[下载 · 快速安装](#下载--快速安装)**；想了解构成 → 看 **[架构全貌 4 + 4 + 3](#架构全貌--4--4--3)**。
@@ -78,8 +79,8 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\clo
 <!-- DAO-MODULE-INDEX:START -->
 | 模块 | 版本 | 扩展 id | 说明 | Release / 下载 |
 |---|---|---|---|---|
-| **dao-one** | `2.4.5` | `dao.dao-one` | 最终主交付：dao-vsix 二合一本源基座 + Proxy Pro 三面板子模块（折入 Devin Cloud 全功能面板），其余与 dao-vsix 完全一致。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-one-v2.4.5) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-one-v2.4.5/dao-one-2.4.5.vsix) |
-| **dao-vsix** | `3.24.0` | `dao.dao-vsix` | 本源基座：rt-flow 切号视图 + Devin Cloud 全功能面板 + 本地 HTTP API（含多账号反向注入）。可单独安装。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-vsix-v3.24.0) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-vsix-v3.24.0/dao-vsix-3.24.0.vsix) |
+| **dao-one** | `2.4.6` | `dao.dao-one` | 最终主交付：dao-vsix 二合一本源基座 + Proxy Pro 三面板子模块（折入 Devin Cloud 全功能面板），其余与 dao-vsix 完全一致。2.4.6 折入 dao-vsix 3.24.0(多 IDE 通用 MCP) + proxy-pro 9.9.299。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-one-v2.4.6) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-one-v2.4.6/dao-one-2.4.6.vsix) |
+| **dao-vsix** | `3.24.0` | `dao.dao-vsix` | 本源基座：rt-flow 切号视图 + Devin Cloud 全功能面板 + 本地 HTTP API（含多账号反向注入）。3.24.0 新增多 IDE 通用 MCP 适配(跟随宿主 IDE 自动识别 Devin Desktop/Windsurf/Cursor/VS Code/Trae/Antigravity/Claude 配置·一键修复跟着软件走) + 浏览器多实例 Windows 注册表默认浏览器检测(Chrome 优先否则用户默认)。可单独安装。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-vsix-v3.24.0) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-vsix-v3.24.0/dao-vsix-3.24.0.vsix) |
 | **rt-flow** | `4.9.11` | `devaid.rt-flow` | Devin Cloud 接入本体：对话备份 / 全量快照 / 一键回归本源 wipe / 对话额度上限。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/rt-flow-v4.9.11) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rt-flow-v4.9.11/rt-flow-4.9.11.vsix) |
 | **dao-proxy-pro** | `9.9.299` | `dao-agi.dao-proxy-pro` | 底层提示词隔离替换 + 外接第三方模型路由。三面板：本源观照 / 渠道配置 / 模型路由。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-proxy-pro-v9.9.299) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-proxy-pro-v9.9.299/dao-proxy-pro-9.9.299.vsix) |
 | **dao-bridge** | `3.4.0` | `dao.dao-bridge` | 内网穿透本体：relay-first + cloudflared 自愈/断点续传，随 IDE 自启。独立 addon，不与其它插件冲突。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-bridge-v3.4.0) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-bridge-v3.4.0/dao-bridge-3.4.0.vsix) |
@@ -138,6 +139,8 @@ devin-remote/
 ### dao-vsix · 二合一面板 + 本地 HTTP API
 
 本地 HTTP API（30+ 端点）+ `app.devin.ai` 路由官网零 GUI 自动登录；SSE 流式直通。**多账号反向注入**：`POST /api/devin/batch-inject`（`{all:true}` 本机池 / `{accounts:[...]}` / `{lines:"..."}`，可选 `{wait:true}`）+ `GET /api/devin/batch-inject/status`，并以 `asciiSafeJson()`（所有非 ASCII 转 `\uXXXX`）根治 Devin 接口对原始 UTF-8 中文请求体「每隔一字截断」的服务端缺陷。
+
+**多 IDE 通用 MCP（3.24.0）**：`daoHostIdeKey()` 由 `vscode.env.appName`+`execPath` 识别宿主 IDE；`daoIdeMcpCandidates()` 为各 IDE（Devin Desktop/Windsurf/Cursor/VS Code/Trae/Antigravity/Claude/Gemini）跨平台解析 MCP 配置路径为单一真源；`/api/devin/mcp/ide` 返回 `hostIde`+`hostSource`；一键修复 `daoRepairLocalMcp()` 默认修宿主 IDE + 接龙核心(Windsurf⇄Devin 共享配置)，`allIdes=true` 修全部。浏览器多实例 `winDefaultBrowserExe()` 读注册表默认浏览器，Chrome 优先否则用户默认 Chromium 系浏览器。
 
 **源码**：`core/dao-vsix/src/extension.ts`
 
