@@ -5,6 +5,7 @@
 <script src="relay-app.js"></script>
 <script src="devin-core.js"></script>
 <script src="devin-cloud.js"></script>
+<script src="p2p.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
 // engine.html · APP 的 JS 引擎 (常驻前台服务的 WebView 里跑)
@@ -15,7 +16,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.20.0";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.21.0";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -779,6 +780,10 @@
     },
     reloadEngine: async function(){ try{ N.reload(); }catch(e){} return {ok:true}; },
   };
+
+  // 路线B 加法式 P2P: 合并 WebRTC 应答方命令 (p2pConnect/p2pStatus) 进同一命令集,
+  //   信令复用 /api/rpc (curl 同源), 之后数据走 P2P DataChannel。本源 curl/HTTP 不动。
+  try { if (window.P2P && window.P2P.commands) Object.assign(CMDS, window.P2P.commands()); } catch(e){ log("p2p register err "+e); }
 
   window.CMDS = CMDS;          // 暴露给 hotpatch 增删命令
   window.DaoEngine = { loadAcc:loadAcc, saveAcc:saveAcc, getActive:getActive, setActive:setActive };
