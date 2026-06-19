@@ -3105,7 +3105,7 @@ function rBridgeFull(){
   h+='<div id="bridgeAgents" class="card">'+rBridgeAgents()+'</div>';
   // ── 一行接入 · PowerShell 把另一台设备接进本中枢 (irm .../bootstrap.ps1 | iex) ──
   if(on){
-    var joinCmd='irm '+String(b.url).replace(/\/$/,'')+'/api/bootstrap.ps1 | iex';
+    var bu=String(b.url);var joinCmd='irm '+(bu.charAt(bu.length-1)==='/'?bu.slice(0,-1):bu)+'/api/bootstrap.ps1 | iex';
     h+='<div class="st" style="margin-top:14px">🔗 一行接入设备 · PowerShell</div>';
     h+='<div class="card"><div style="font-size:10px;color:var(--muted);margin-bottom:4px">在另一台 Windows 上以 PowerShell 运行下面这行，即把该机接入本中枢，出现在上方「在线设备」并可被远程操控：</div>';
     h+='<pre style="white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:7px;font-size:11px;margin:0 0 6px;border-radius:4px;color:var(--accent2)">'+esc(joinCmd)+'</pre>';
