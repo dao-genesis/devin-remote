@@ -633,6 +633,27 @@ function test(name, fn) {
     }
   });
 
+  test("v4.16.0: 切号多选批量 rt/sb + 对话追踪每行直达", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const r = rel.join("/");
+      // 前端: rt/sb 多选时发批量消息, 否则单账号
+      assert.ok(/function rt\(i\)\{[\s\S]*?_selectedFor\(i\)[\s\S]*?routeToIdeBatch/.test(src) && /type:'routeToIde',index:i/.test(src), r + ": rt(i) 须多选发 routeToIdeBatch·单账号回退 routeToIde");
+      assert.ok(/function sb\(i\)\{[\s\S]*?_selectedFor\(i\)[\s\S]*?openSysBrowserBatch/.test(src) && /type:'openSysBrowser',index:i/.test(src), r + ": sb(i) 须多选发 openSysBrowserBatch·单账号回退 openSysBrowser");
+      // 宿主: 抽出可复用单账号实现 + 四个新 case
+      assert.ok(/async function _routeAccountToIde\(i\)/.test(src), r + ": 须抽出 _routeAccountToIde");
+      assert.ok(/async function _openAccountSysBrowser\(i\)/.test(src), r + ": 须抽出 _openAccountSysBrowser");
+      assert.ok(/case "routeToIdeBatch":/.test(src) && /case "openSysBrowserBatch":/.test(src), r + ": 须有批量 case");
+      assert.ok(/case "convRouteToIde":/.test(src) && /case "convOpenSysBrowser":/.test(src), r + ": 须有对话级直达 case");
+      // 对话级浏览器须带 pagePath=sessions/<id>
+      assert.ok(/pagePath = _sid \? \("sessions\/" \+ _sid\)/.test(src), r + ": convOpenSysBrowser 须导航至该对话 sessions/<id>");
+      // 对话追踪每行两按钮
+      assert.ok(/data-act="convRt"/.test(src) && /data-act="convSb"/.test(src) && /class="dv-trk-go"/.test(src), r + ": 对话追踪行须有 convRt/convSb 直达按钮");
+      assert.ok(/\.dv-trk-go\{/.test(src), r + ": 须 dv-trk-go 样式");
+    }
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);

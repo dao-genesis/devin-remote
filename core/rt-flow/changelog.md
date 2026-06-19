@@ -2,6 +2,23 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.16.0 (2026-06-19) · 切号多选批量 IDE/浏览器多实例 + 对话追踪每行直达
+
+> 多选之后点任一即批量 · 免下拉直达 · 一致归一。
+
+### 切号板块 · 多选批量两按钮 (extension.js)
+- 此前「IDE内路由官网多实例 (rt)」「系统浏览器多实例 (sb)」仅单账号。现复用既有 `_selectedFor(i)` 多选基建：多选 N 个后点其中任一即批量。
+- `rt(i)`/`sb(i)`：选中 >1 时发 `routeToIdeBatch`/`openSysBrowserBatch`(带 indices)，否则保持单账号原行为。
+- 宿主：单账号实现抽出为可复用 `_routeAccountToIde(i)`/`_openAccountSysBrowser(i)`；新增 `routeToIdeBatch`/`openSysBrowserBatch` 依次调用(500/800ms 间隔防启动风暴·各登各号)。
+- 锁定/复制/删除批量本已具备(setSkipBatch/copyAccounts/removeBatch)，批量栏提示同步更新。
+
+### 对话追踪板块 · 每行直达 (extension.js · _dvStatusAggHtml)
+- 每个运行/待输入/卡住的对话行新增两按钮：🖥 此对话→IDE内多实例、🌐 此对话→浏览器多实例(注入该号登录·直开 /sessions/<id>)，免下拉。
+- 宿主新增 `convRouteToIde`(openMultiInstance+devinId)、`convOpenSysBrowser`(launchAccountBrowser+pagePath=sessions/<id>，兜底默认浏览器)。
+
+### 验
+- `node --check` 通过；单测全绿；dao-vsix 打包副本同步 + `node build.js` 通过。
+
 ## v4.15.0 (2026-06-19) · 归一独立 HTTP 外壳: 同一外壳直出单页·适配所有 IDE/浏览器/手机·参照手机端 APK
 
 > 帛书·「大方无隅」— 外壳不困于 webview 一隅, 直出为 HTTP 单页, 任意 IDE 内置浏览器/手机/远程经 DAO Bridge 皆入同一套 UI。

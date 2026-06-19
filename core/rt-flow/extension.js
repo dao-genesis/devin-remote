@@ -1063,6 +1063,83 @@ async function openMultiInstance(opts) {
   _postMulti({ type: 'open', id, label, url, accNo, dollars, status, email, devinId: sid });
   return { ok: true };
 }
+// v4.16.0 · 归一 · 单账号「路由官网→IDE」实现抽出为可复用函数 (供单点 routeToIde + 多选批量 routeToIdeBatch 共用)。
+async function _routeAccountToIde(i) {
+  if (i < 0 || i >= _store.accounts.length) return;
+  const a = _store.accounts[i];
+  _toast("⏳ 注入登录态·路由官网→IDE · " + a.email.split("@")[0]);
+  try {
+    const r = await openMultiInstance({ email: a.email, password: a.password });
+    if (r.ok) {
+      _toast(
+        (r.reused ? "🖥 已聚焦该号标签 · " : "🖥 已注入登录态·IDE标签已开 · ") +
+          a.email.split("@")[0],
+      );
+      return;
+    }
+    log("[routeToIde] 自足反代失败(" + (r.error || "") + "), 回退 dao/simpleBrowser");
+  } catch (e) {
+    log("[routeToIde] 自足反代异常: " + (e && e.message));
+  }
+  try {
+    if (!(_switching && Date.now() - _switchingStartTime < 10000)) {
+      try { await loginAccount(_store, i); } catch {}
+    }
+    try {
+      await vscode.commands.executeCommand("dao.routeOfficialForAccount", { email: a.email, mode: "ide" });
+    } catch {
+      try {
+        await vscode.commands.executeCommand("simpleBrowser.show", "https://app.devin.ai");
+      } catch {
+        await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
+      }
+    }
+    _toast("🖥 已路由官网→IDE(兜底) · " + a.email.split("@")[0]);
+  } catch (e) {
+    _toast("✗ 路由失败: " + (e && e.message));
+  }
+}
+// v4.16.0 · 单账号「系统浏览器多实例」实现抽出 (供单点 openSysBrowser + 多选批量 openSysBrowserBatch 共用)。
+async function _openAccountSysBrowser(i) {
+  if (i < 0 || i >= _store.accounts.length) return;
+  const a = _store.accounts[i];
+  const who = a.email.split("@")[0];
+  _toast("⏳ 系统浏览器启动中 · " + who);
+  try {
+    let auth = devinCloud.getCachedAuth(a.email);
+    if (!auth && a.password) {
+      const r = await devinCloud.getAuth(a.email, a.password);
+      if (r && r.ok) auth = r;
+    }
+    const res = await devinWeb.launchAccountBrowser({
+      email: a.email, auth1: auth && auth.auth1, userId: auth && auth.userId,
+      orgId: auth && auth.orgId, orgName: auth && auth.orgName, log,
+    });
+    if (res.ok) {
+      _toast(
+        res.injected
+          ? "🌐 独立隔离实例已开并自动登录 · " + who
+          : "🌐 独立隔离实例已开 · " + who + " (首次手动登录一次后自动续登)",
+      );
+      return;
+    }
+    if (res.error && res.error !== "no-browser")
+      log("openSysBrowser: devin_web 启动异常 " + res.error);
+  } catch (e) {
+    log("openSysBrowser: devin_web 异常 " + (e && e.message));
+  }
+  try {
+    await vscode.commands.executeCommand("dao.routeOfficialForAccount", { email: a.email, mode: "sys" });
+    _toast("🌐 系统浏览器已打开官网(反代) · " + who);
+    return;
+  } catch {}
+  try {
+    await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
+    _toast("🌐 默认浏览器已打开官网(未隔离·未注入)");
+  } catch (e) {
+    _toast("✗ 浏览器启动失败: " + (e && e.message));
+  }
+}
 // 软件重载续接: 据 globalState 已存标签, 重新解析各账号反代 → 逐个还原标签。
 async function _resumePersistedTabs() {
   let saved = [];
@@ -9081,6 +9158,8 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-trk-who{color:#d7ba7d;flex-shrink:0;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dv-trk-x{margin-left:auto;flex-shrink:0;color:#777;font-size:10px;cursor:pointer;padding:0 3px;border-radius:3px;line-height:1.2}
 .dv-trk-x:hover{color:#f44;background:#3a1a1a}
+.dv-trk-go{flex-shrink:0;color:#888;font-size:11px;cursor:pointer;padding:0 3px;border-radius:3px;line-height:1.2}
+.dv-trk-go:hover{color:#9cdcfe;background:#1f3a45}
 .dv-trk-tt{color:#bbb;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cv-summary{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px}
 .cv-summary b{margin-left:2px}
@@ -9123,7 +9202,7 @@ ${stats.drought ? '<div style="background:#2a2a1a;border:1px solid #4a4a2a;borde
 ${_verifyAllInProgress ? '<div style="background:#1a2a3a;border:1px solid #2a3a5a;border-radius:4px;padding:4px 10px;margin:4px 0;font-size:11px;color:#9cdcfe">&#9203; <b>正在批量验证</b> · 见 Output 实时进度</div>' : ""}
 ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanStatus endpoint 已挂</b> &middot; 连续 ${_quotaEndpointHealth.consecutive401} 次 401 invalid token &middot; 服务端可能已迁移 &middot; quota% 数据保持陈年 &middot; <code>切号决策仍然工作</code> (rate-limit 拦截 + per-msg 切号 + in-use 锁)</div>` : ""}
 </div>
-<div class="batch-bar" id="batchBar"><span>已选 <b id="batchCount">0</b> 个 · 点选中行 🔒/📋/× 批量</span><button onclick="batchDelete()">批量删除</button><button onclick="clearSelection()" style="background:#333;color:var(--blue)">取消</button></div>
+<div class="batch-bar" id="batchBar"><span>已选 <b id="batchCount">0</b> 个 · 点选中行 🔒锁/📋复制/×删/🖥IDE多实例/🌐浏览器多实例 批量</span><button onclick="batchDelete()">批量删除</button><button onclick="clearSelection()" style="background:#333;color:var(--blue)">取消</button></div>
 <div class="add-section">
 <div class="add-header" onclick="toggleAdd()"><span>&#43; 添加账号</span><span id="addArrow">${_uiAddOpen ? "&#9650;" : "&#9660;"}</span></div>
 <div class="add-body${_uiAddOpen ? " open" : ""}" id="addBody">
@@ -9178,8 +9257,8 @@ function sw(i){_clickFb(event);send('switch',i);}
 function sk(i){_clickFb(event);const b=event&&event.target&&event.target.closest('.sk');const locked=!(b&&b.dataset.locked==='1');vscode.postMessage({type:'setSkipBatch',indices:_selectedFor(i),locked:locked});}
 function vf(i){_clickFb(event);send('verify',i);}
 function cp(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:ix.length>1?'copyAccounts':'copyAccount',index:i,indices:ix});}
-function rt(i){_clickFb(event);showToast('\u23F3 切此号·路由官网→IDE…');vscode.postMessage({type:'routeToIde',index:i});}
-function sb(i){_clickFb(event);vscode.postMessage({type:'openSysBrowser',index:i});}
+function rt(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1){showToast('\u23F3 \u6279\u91cf\u8def\u7531\u5b98\u7f51\u2192IDE \u00b7 '+ix.length+' \u4e2a\u2026');vscode.postMessage({type:'routeToIdeBatch',indices:ix});}else{showToast('\u23F3 \u5207\u6b64\u53f7\u00b7\u8def\u7531\u5b98\u7f51\u2192IDE\u2026');vscode.postMessage({type:'routeToIde',index:i});}}
+function sb(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1){showToast('\u23F3 \u6279\u91cf\u7cfb\u7edf\u6d4f\u89c8\u5668 \u00b7 '+ix.length+' \u4e2a\u2026');vscode.postMessage({type:'openSysBrowserBatch',indices:ix});}else{vscode.postMessage({type:'openSysBrowser',index:i});}}
 function rm(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1)vscode.postMessage({type:'removeBatch',indices:ix});else send('remove',i);}
 function copyAll(){vscode.postMessage({type:'copyAllAccounts'});}
 function setMode(m){vscode.postMessage({type:'setMode',mode:m});}
@@ -9215,7 +9294,7 @@ function dvConvZipBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u271
 function dvConvDelBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u2717 先勾选对话');return;}vscode.postMessage({type:'dvConvDelBatch',index:i,devinIds:ids});}
 /* v4.9.6 · C: 本地对话拉取(已清零号) — 切换显示 + 请求本账号本地备份清单 */
 function dvLocalConvs(i){const c=document.getElementById('dvLocal'+i);if(!c)return;if(c.style.display!=='none'&&c.innerHTML.trim()){c.style.display='none';return;}c.style.display='block';c.innerHTML='<span style="color:#888;font-size:11px">\u8bfb\u53d6\u672c\u5730\u5907\u4efd\u2026</span>';vscode.postMessage({type:'dvLocalConvs',index:i});}
-document.addEventListener('click',function(e){const t=e.target;if(!t||!t.closest)return;const v=t.closest('.dv-localview');if(v&&v.dataset.path){e.preventDefault();vscode.postMessage({type:'devinViewBackupConv',path:v.dataset.path});return;}const r=t.closest('.dv-localreveal');if(r&&r.dataset.path){e.preventDefault();vscode.postMessage({type:'devinRevealPath',path:r.dataset.path});return;}const x=t.closest('.dv-trk-x');if(x&&x.dataset.id){e.preventDefault();e.stopPropagation();const it=x.closest('.dv-trk-item');if(it)it.style.display='none';vscode.postMessage({type:'dvUntrackConv',id:x.dataset.id});return;}});
+document.addEventListener('click',function(e){const t=e.target;if(!t||!t.closest)return;const v=t.closest('.dv-localview');if(v&&v.dataset.path){e.preventDefault();vscode.postMessage({type:'devinViewBackupConv',path:v.dataset.path});return;}const r=t.closest('.dv-localreveal');if(r&&r.dataset.path){e.preventDefault();vscode.postMessage({type:'devinRevealPath',path:r.dataset.path});return;}const x=t.closest('.dv-trk-x');if(x&&x.dataset.id){e.preventDefault();e.stopPropagation();const it=x.closest('.dv-trk-item');if(it)it.style.display='none';vscode.postMessage({type:'dvUntrackConv',id:x.dataset.id});return;}const g=t.closest('.dv-trk-go');if(g&&g.dataset.act){e.preventDefault();e.stopPropagation();const em=g.dataset.email||'';const did=g.dataset.did||'';if(g.dataset.act==='convRt'){showToast('\u23F3 \u6b64\u5bf9\u8bdd\u2192IDE\u591a\u5b9e\u4f8b\u2026');vscode.postMessage({type:'convRouteToIde',email:em,devinId:did});}else if(g.dataset.act==='convSb'){showToast('\u23F3 \u6b64\u5bf9\u8bdd\u2192\u6d4f\u89c8\u5668\u591a\u5b9e\u4f8b\u2026');vscode.postMessage({type:'convOpenSysBrowser',email:em,devinId:did});}return;}});
 /* v4.7.0 · 知识库/剧本/密钥 多选(Shift) + 查看/下载/删除 + 批量 */
 let _bdLast={};
 function _bdChks(i,k){return [...document.querySelectorAll('.bd-chk[data-i="'+i+'"][data-k="'+k+'"]')];}
@@ -10076,10 +10155,15 @@ function _dvStatusAggHtml() {
       const cls = it.cls === "running" ? "running" : it.cls === "awaiting" ? "awaiting" : "blocked";
       const tip = cls === "running" ? "运行中" : cls === "awaiting" ? "等待你的输入" : "卡住/额度超限";
       const _xBtn = it.id ? '<span class="dv-trk-x" data-id="' + _esc(String(it.id)) + '" title="取消追踪此对话(永久·不再统计/通知·可wam.clearConvUntrack复原)">\u2715</span>' : "";
+      // v4.16.0 · 对话级直达: 每行加「IDE内多实例 / 浏览器多实例」, 直接开此对话(注入该号登录), 免下拉
+      const _goBtns = it.id ? (
+        '<span class="dv-trk-go" style="margin-left:auto" data-act="convRt" data-email="' + _esc(email) + '" data-did="' + _esc(String(it.id)) + '" title="此对话 → IDE 内置浏览器多实例(注入该号登录·各登各号)">\uD83D\uDDA5</span>' +
+        '<span class="dv-trk-go" data-act="convSb" data-email="' + _esc(email) + '" data-did="' + _esc(String(it.id)) + '" title="此对话 → 系统浏览器多实例(独立隔离·注入该号)">\uD83C\uDF10</span>'
+      ) : "";
       rows.push('<div class="dv-trk-item">' + noBadge + '<span class="dv-trk-st ' + cls + '" title="' + tip + '">' +
         (cls === "running" ? "运行" : cls === "awaiting" ? "待输入" : "卡住") + "</span>" +
         '<span class="dv-trk-who">' + _esc(who) + "</span>" +
-        '<span class="dv-trk-tt" title="' + _esc(it.title) + '">' + _esc(_truncTitle(it.title, 22)) + "</span>" + _xBtn + "</div>");
+        '<span class="dv-trk-tt" title="' + _esc(it.title) + '">' + _esc(_truncTitle(it.title, 22)) + "</span>" + _goBtns + _xBtn + "</div>");
     }
   }
   const cached = devinCloud.cachedEmails().length;
@@ -11074,49 +11158,15 @@ async function handleWebviewMessage(msg) {
       //   (各号独立 origin → localStorage 隔离 → 多标签各登各号, 无需全局切号)。
       //   回退: dao-vsix 反代 → simpleBrowser (无注入·仅兜底)。
       case "routeToIde": {
-        const i = msg.index;
-        if (i < 0 || i >= _store.accounts.length) return;
-        const a = _store.accounts[i];
-        _toast("⏳ 注入登录态·路由官网→IDE · " + a.email.split("@")[0]);
-        try {
-          const r = await openMultiInstance({ email: a.email, password: a.password });
-          if (r.ok) {
-            _toast(
-              (r.reused ? "🖥 已聚焦该号标签 · " : "🖥 已注入登录态·IDE标签已开 · ") +
-                a.email.split("@")[0],
-            );
-            break;
-          }
-          log("[routeToIde] 自足反代失败(" + (r.error || "") + "), 回退 dao/simpleBrowser");
-        } catch (e) {
-          log("[routeToIde] 自足反代异常: " + (e && e.message));
-        }
-        // 回退: dao-vsix 反代 → simpleBrowser (IDE 内置·杜绝 openExternal 弹窗)。
-        try {
-          if (!(_switching && Date.now() - _switchingStartTime < 10000)) {
-            try { await loginAccount(_store, i); } catch {}
-          }
-          try {
-            await vscode.commands.executeCommand("dao.routeOfficialForAccount", {
-              email: a.email,
-              mode: "ide",
-            });
-          } catch {
-            try {
-              await vscode.commands.executeCommand(
-                "simpleBrowser.show",
-                "https://app.devin.ai",
-              );
-            } catch {
-              await vscode.env.openExternal(
-                vscode.Uri.parse("https://app.devin.ai"),
-              );
-            }
-          }
-          _toast("🖥 已路由官网→IDE(兜底) · " + a.email.split("@")[0]);
-        } catch (e) {
-          _toast("✗ 路由失败: " + (e && e.message));
-        }
+        await _routeAccountToIde(msg.index);
+        break;
+      }
+      // v4.16.0 · 多选批量: 选中 N 个后点任一 → 依次路由官网→IDE 多实例标签 (各登各号·小间隔防风暴)
+      case "routeToIdeBatch": {
+        const ixs = Array.isArray(msg.indices) ? msg.indices.filter((n) => Number.isFinite(n)) : [];
+        _toast("⏳ 批量路由官网→IDE · " + ixs.length + " 个…");
+        for (const ix of ixs) { await _routeAccountToIde(ix); await new Promise((r) => setTimeout(r, 500)); }
+        _toast("🖥 批量路由完成 · " + ixs.length + " 个");
         break;
       }
       // ★ 归一 · 系统浏览器多实例隔离 + 账号注入 (v4.9.0 · 自足直注优先)
@@ -11125,58 +11175,52 @@ async function handleWebviewMessage(msg) {
       //   失败回退 dao-vsix 反代隔离启动器; 再无 Chrome/Edge 才落系统默认浏览器。
       //   全程即时 toast + 必有兜底 → 杜绝"点了完全没反应"。
       case "openSysBrowser": {
-        const i = msg.index;
-        if (i < 0 || i >= _store.accounts.length) return;
-        const a = _store.accounts[i];
-        const who = a.email.split("@")[0];
-        _toast("⏳ 系统浏览器启动中 · " + who); // 即时反馈, 杜绝"点了没反应"
-        // 首选: 自足直注 (devin_web · 不赖反代/本地端口)。
+        await _openAccountSysBrowser(msg.index);
+        break;
+      }
+      // v4.16.0 · 多选批量: 选中 N 个后点任一 → 依次开独立隔离浏览器实例 (各登各号·稍大间隔防启动风暴)
+      case "openSysBrowserBatch": {
+        const ixs = Array.isArray(msg.indices) ? msg.indices.filter((n) => Number.isFinite(n)) : [];
+        _toast("⏳ 批量系统浏览器 · " + ixs.length + " 个…");
+        for (const ix of ixs) { await _openAccountSysBrowser(ix); await new Promise((r) => setTimeout(r, 800)); }
+        _toast("🌐 批量打开完成 · " + ixs.length + " 个");
+        break;
+      }
+      // v4.16.0 · 对话级直达: 对话追踪行「IDE内多实例」→ 直接开此对话(注入该号登录)的 IDE 标签
+      case "convRouteToIde": {
+        const email = String(msg.email || "").trim();
+        const did = String(msg.devinId || "").trim();
+        if (!email) break;
+        _toast("⏳ 此对话→IDE · " + email.split("@")[0]);
         try {
-          // 先取该账号注入态 (缓存命中秒开; 否则后台登录换 auth1+userId)。
-          let auth = devinCloud.getCachedAuth(a.email);
-          if (!auth && a.password) {
-            const r = await devinCloud.getAuth(a.email, a.password);
-            if (r && r.ok) auth = r;
+          const idx = _store.accounts.findIndex((a) => String(a.email).toLowerCase() === email.toLowerCase());
+          const pw = idx >= 0 ? _store.accounts[idx].password : undefined;
+          const r = await openMultiInstance({ email, password: pw, devinId: did });
+          if (r.ok) { _toast("🖥 已开此对话标签 · " + email.split("@")[0]); break; }
+          _toast("✗ 打开失败: " + (r.error || ""));
+        } catch (e) { _toast("✗ 异常: " + (e && e.message)); }
+        break;
+      }
+      // v4.16.0 · 对话级直达: 对话追踪行「浏览器多实例」→ 独立隔离实例直开此对话(注入该号登录)
+      case "convOpenSysBrowser": {
+        const email = String(msg.email || "").trim();
+        const did = String(msg.devinId || "").trim();
+        if (!email) break;
+        const who = email.split("@")[0];
+        _toast("⏳ 此对话→系统浏览器 · " + who);
+        const _sid = did.replace(/^devin-/, "");
+        try {
+          let auth = devinCloud.getCachedAuth(email);
+          if (!auth) {
+            const idx = _store.accounts.findIndex((a) => String(a.email).toLowerCase() === email.toLowerCase());
+            const pw = idx >= 0 ? _store.accounts[idx].password : "";
+            if (pw) { const r = await devinCloud.getAuth(email, pw); if (r && r.ok) auth = r; }
           }
-          const res = await devinWeb.launchAccountBrowser({
-            email: a.email,
-            auth1: auth && auth.auth1,
-            userId: auth && auth.userId,
-            orgId: auth && auth.orgId,
-            orgName: auth && auth.orgName,
-            log,
-          });
-          if (res.ok) {
-            _toast(
-              res.injected
-                ? "🌐 独立隔离实例已开并自动登录 · " + who
-                : "🌐 独立隔离实例已开 · " + who + " (首次手动登录一次后自动续登)",
-            );
-            break;
-          }
-          if (res.error && res.error !== "no-browser")
-            log("openSysBrowser: devin_web 启动异常 " + res.error);
-        } catch (e) {
-          log("openSysBrowser: devin_web 异常 " + (e && e.message));
-        }
-        // 回退①: dao-vsix 反代隔离启动器 (devin_web 失败时尝试)。
-        try {
-          await vscode.commands.executeCommand("dao.routeOfficialForAccount", {
-            email: a.email,
-            mode: "sys",
-          });
-          _toast("🌐 系统浏览器已打开官网(反代) · " + who);
-          break;
-        } catch {}
-        // 回退②: 系统默认浏览器 (无隔离·至少能用·绝不出现"没反应")。
-        try {
-          await vscode.env.openExternal(
-            vscode.Uri.parse("https://app.devin.ai"),
-          );
-          _toast("🌐 默认浏览器已打开官网(未隔离·未注入)");
-        } catch (e) {
-          _toast("✗ 浏览器启动失败: " + (e && e.message));
-        }
+          const pagePath = _sid ? ("sessions/" + _sid) : "";
+          const res = await devinWeb.launchAccountBrowser({ email, auth1: auth && auth.auth1, userId: auth && auth.userId, orgId: auth && auth.orgId, orgName: auth && auth.orgName, pagePath, log });
+          if (res.ok) { _toast(res.injected ? "🌐 独立实例已开此对话 · " + who : "🌐 独立实例已开 · " + who); break; }
+        } catch (e) { log("convOpenSysBrowser 异常 " + (e && e.message)); }
+        try { await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai" + (_sid ? "/sessions/" + _sid : ""))); _toast("🌐 默认浏览器已打开此对话"); } catch (e) { _toast("✗ 失败: " + (e && e.message)); }
         break;
       }
       case "verify": {
