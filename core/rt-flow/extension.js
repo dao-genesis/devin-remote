@@ -493,11 +493,12 @@ function navigate(v){v=(v||'').trim();if(!v)return;var t=tabs[active];
   if(/^https?:\\/\\//i.test(v)){var o=curOrigin();if(t&&o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);spin(true);}else{vscode.postMessage({type:'openExternal',url:v});}return;}
   if(v.charAt(0)==='/'){if(t){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}return;}
   vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v)});}
-var PAGES=[['🏠','新建 Devin 标签','newDevin'],['☁','Devin Cloud / 切号面板','cloud'],['🌐','公网穿透面板','bridge'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
-function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
-  var items=MENU.querySelectorAll('.mi');for(var j=0;j<items.length;j++){items[j].onclick=function(){MENU.className='';onPage(this.getAttribute('data-p'));};}}
+var PAGES=[['🏠','新建 Devin 标签','newDevin'],['💬','会话 Sessions','cp:/sessions'],['📚','知识 Knowledge','cp:/knowledge'],['📋','Playbooks','cp:/playbooks'],['🔑','密钥 Secrets','cp:/settings/secrets'],['🔗','集成 Integrations','cp:/settings/integrations'],['📊','用量 Usage','cp:/settings/usage'],['🔀','切号面板','cloud'],['🌐','公网穿透','bridge'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
+function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'" data-l="'+esc(PAGES[i][1])+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
+  var items=MENU.querySelectorAll('.mi');for(var j=0;j<items.length;j++){items[j].onclick=function(){MENU.className='';onPage(this.getAttribute('data-p'),this.getAttribute('data-l'));};}}
 function toggleMenu(){MENU.className=MENU.className?'':'on';}
-function onPage(p){if(p==='newDevin'){vscode.postMessage({type:'newDevinTab'});return;}
+function onPage(p,l){if(p==='newDevin'){vscode.postMessage({type:'newDevinTab'});return;}
+  if(p&&p.indexOf('cp:')===0){vscode.postMessage({type:'openCloudPage',path:p.slice(3),label:l||''});return;}
   if(p==='cloud'){vscode.postMessage({type:'revealPage',page:'cloud'});return;}
   if(p==='bridge'){vscode.postMessage({type:'revealPage',page:'bridge'});return;}
   if(p==='history')showHistory();else if(p==='favs')showFavs();else if(p==='userscripts')showUserscripts();else if(p==='tools')showTools();else if(p==='about')showAbout();}
@@ -600,6 +601,12 @@ function _wireMultiPanel(panel) {
         else _toast("无可用账号 · 请先在账号库添加");
         return;
       }
+      if (m.type === "openCloudPage") {
+        const email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || "");
+        if (email) { try { await openMultiInstance({ email: email, path: m.path, label: m.label }); } catch (e) {} }
+        else _toast("无可用账号 · 请先在账号库添加");
+        return;
+      }
       if (m.type === "revealPage") {
         try { await vscode.commands.executeCommand("dao.openCloudPanel"); } catch (e) {}
         if (m.page === "bridge") _toast("公网穿透在 Devin Cloud 面板内 · 已打开面板");
@@ -662,9 +669,12 @@ async function openMultiInstance(opts) {
   if (!pr.ok) return { ok: false, error: pr.error || 'proxy-fail' };
   const portBase = pr.url || ('http://localhost:' + pr.port + '/');
   const base = String(portBase).replace(/\/+$/, '');
-  const url = sid ? (base + '/sessions/' + encodeURIComponent(sid)) : (base + '/');
+  // 归一 · Devin Cloud 板块即页面: opts.path(/sessions、/knowledge、/settings/secrets ...) → 经该账号反代加载真实网页(会话态登录·可内嵌)
+  const pageRaw = String(opts.path || '').trim();
+  const pagePath = pageRaw ? ('/' + pageRaw.replace(/^\/+/, '')) : '';
+  const url = pagePath ? (base + pagePath) : (sid ? (base + '/sessions/' + encodeURIComponent(sid)) : (base + '/'));
   const short = email.split('@')[0];
-  const id = email.toLowerCase() + '|' + (sid || 'home');
+  const id = email.toLowerCase() + '|' + (pagePath ? ('page' + pagePath) : (sid || 'home'));
   // 富标签 (对齐手机版): #账号编号 + 名称 + $额度 + 对话状态点。
   let accNo = 0, dollars = 0;
   try {
@@ -676,9 +686,10 @@ async function openMultiInstance(opts) {
     if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars);
   } catch (e) {}
   const title = String(opts.title || '').trim();
-  const label = title || (short + (sid ? (' · ' + sid.slice(0, 8)) : ''));
+  const pageLabel = String(opts.label || '').trim();
+  const label = title || (short + (pagePath ? (' · ' + (pageLabel || pagePath)) : (sid ? (' · ' + sid.slice(0, 8)) : '')));
   const status = String(opts.status || '').trim();
-  const meta = { id, label, url, email, devinId: sid, accNo, dollars, title, status };
+  const meta = { id, label, url, email, devinId: sid, accNo, dollars, title, status, path: pagePath, pageLabel };
   _multiTabs.set(id, meta);
   _saveMultiTabs();
   _ensureMultiPanel();
@@ -691,7 +702,7 @@ async function _resumePersistedTabs() {
   let saved = [];
   try { saved = (_ctx && _ctx.globalState && _ctx.globalState.get("dao.multiTabs")) || []; } catch (e) {}
   for (const t of saved) {
-    try { await openMultiInstance({ email: t.email, devinId: t.devinId, title: t.title, status: t.status }); }
+    try { await openMultiInstance({ email: t.email, devinId: t.devinId, title: t.title, status: t.status, path: t.path, label: t.pageLabel }); }
     catch (e) { try { log("[multi] resume err: " + (e && e.message)); } catch (x) {} }
   }
 }
