@@ -147,6 +147,22 @@
     }catch(e){ fallbackPx(t,url,ac); }
   }
   function fallbackPx(t,url,ac){ t.rootmount=false; t.proxyBase=null; t.src=embedSrc(url,ac); t.fr.src=t.src; scheduleBlockCheck(t); }
+  // 公网根挂载: 向手机要一条专属快速隧道(把该 (源站,账号) 的根挂载端口暴露成独立 https origin)→ iframe 指向它。
+  // 于是公网任意浏览器也享根挂载(真实路径逐字一致, 登录态完整渲染), 不必回退 /px。隧道边缘握手需 5-20s。
+  function publicRootMountOpen(t, url, ac){
+    try{
+      var origin=new URL(url).origin;
+      fetch("/pxpublic?target="+encodeURIComponent(origin)+"&acct="+encodeURIComponent(ac))
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if(j&&j.url){ t.proxyBase=j.url; t.proxyOrigin=origin; t.src=j.url+(url.slice(origin.length)||"/");
+            t.fr.src=t.src; scheduleBlockCheck(t,26000); }
+          else fallbackPx(t,url,ac);
+        }).catch(function(){ fallbackPx(t,url,ac); });
+    }catch(e){ fallbackPx(t,url,ac); }
+  }
+  // 外站标签统一: 同机/局域网走根挂载端口; 公网走专属隧道根挂载; 两者皆失败时回退 /px。
+  function openExternal(t, url, ac){ if(canRootMount()) rootMountOpen(t,url,ac); else publicRootMountOpen(t,url,ac); }
   // 选一个已登录账号注入 Devin 标签 (优先当前激活号; 否则首个已登录号) — 与 APK 多实例同一份金库账号。
   function devinAcct(){
     try{ var accs=JSON.parse(localStorage.getItem("rtflow.accounts")||"[]");
@@ -173,9 +189,9 @@
       url = "https://"+url;
     }
     var ac=acctFor(url);
-    if(canRootMount() && isExternal(url)){
+    if(isExternal(url)){
       var t={title:host(url), origUrl:url, acct:ac, kind:"web", src:"about:blank", rootmount:true};
-      addTab(t); rootMountOpen(t,url,ac); return;
+      addTab(t); openExternal(t,url,ac); return;
     }
     addTab({title:host(url), src:embedSrc(url,ac), origUrl:url, acct:ac, kind:"web"});
   }
@@ -197,7 +213,7 @@
   }
 
   // 外站经 /px 代理同源回服 → 正常可嵌; 若代理失败(502/抓取超时)给"在源站新标签打开"出口 (代理需 12s 抓取重型 SPA)
-  function scheduleBlockCheck(t){ t._loaded=false; setTimeout(function(){ if(!t._loaded) showBlocked(t); }, 12000); }
+  function scheduleBlockCheck(t,ms){ t._loaded=false; setTimeout(function(){ if(!t._loaded) showBlocked(t); }, ms||12000); }
   function checkBlocked(t){
     t._loaded=true;
     if(t.kind!=="web") return;
@@ -264,7 +280,7 @@
     if(t && t.kind==="web"){ // 当前是网页标签 → 原地导航 (经 /px 代理)
       if(!/^[a-z]+:\/\//i.test(v)) v="https://"+v;
       t.origUrl=v; t.title=host(v); t.acct=acctFor(v); if(t._blockEl){t._blockEl.remove();t._blockEl=null;}
-      if(canRootMount() && isExternal(v)){ rootMountOpen(t,v,t.acct); }
+      if(isExternal(v)){ openExternal(t,v,t.acct); }
       else { t.fr.src=embedSrc(v,t.acct); scheduleBlockCheck(t); }
       renderStrip();
     } else openWeb(v); // 板块页上输入网址 → 新开网页标签 (不覆盖板块)

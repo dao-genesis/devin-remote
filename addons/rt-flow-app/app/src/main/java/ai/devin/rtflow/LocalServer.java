@@ -50,6 +50,9 @@ public final class LocalServer {
          *  app.devin.ai 登录态)零改写完整渲染 (路径前缀代理因污染 location 致路由错乱/chunk 404, 故须独立端口根挂载)。
          *  绑 0.0.0.0 → 同机(APK 自身 app.html 外壳经 localhost)+ 局域网浏览器可达; 公网单隧道场景外壳回退 /px。 */
         default int proxyPort(String target, String acct) { return -1; }
+        /** 公网根挂载: 为 (源站,账号) 的根挂载端口再起一条专属 cloudflared 快速隧道 → 返回 https 公网 URL。
+         *  公网任意浏览器据此 iframe 内嵌即享根挂载(真实路径逐字一致, 不必回退 /px); 失败返回 ""。 */
+        default String proxyPublicUrl(String target, String acct) { return ""; }
     }
 
     private final Dispatcher disp;
@@ -170,6 +173,16 @@ public final class LocalServer {
                     String acct = urlDecode(queryParam(qs, "acct"));
                     int pp = target.isEmpty() ? -1 : disp.proxyPort(target, acct);
                     write(out, pp > 0 ? 200 : 502, pp > 0 ? "{\"port\":" + pp + "}" : "{\"error\":\"proxy_port_failed\"}");
+                    sock.close(); return;
+                }
+                // 公网根挂载 /pxpublic?target=<enc>&acct=<enc> → {"url":"https://xxx.trycloudflare.com"}。为该根挂载
+                // 端口起专属快速隧道 → 公网 https 独立 origin(根即源站根)→ 公网任意浏览器也享根挂载登录态渲染。
+                if (qe >= 0 ? pe.substring(0, qe).equals("/pxpublic") : pe.equals("/pxpublic")) {
+                    String target = urlDecode(queryParam(qs, "target"));
+                    String acct = urlDecode(queryParam(qs, "acct"));
+                    String pu = target.isEmpty() ? "" : disp.proxyPublicUrl(target, acct);
+                    write(out, (pu != null && !pu.isEmpty()) ? 200 : 502,
+                          (pu != null && !pu.isEmpty()) ? "{\"url\":" + HttpBridge.jsonStr(pu) + "}" : "{\"error\":\"proxy_public_failed\"}");
                     sock.close(); return;
                 }
                 // 浏览器: 原样拿 APK 真实页面与其 JS 资源 (免鉴权拿页面; 页面内每个 RPC 仍需 Bearer Token)。
