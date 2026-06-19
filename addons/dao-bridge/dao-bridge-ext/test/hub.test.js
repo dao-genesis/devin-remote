@@ -156,6 +156,44 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     ok("前端顶部三按钮(复制 copyAll + 重启隧道 + 刷新Token)·后端 copyAll 处理");
   }
 
+  // ── 4. 自愈看门狗：回环自检 + 失败阈值触发自愈 + _publicHealthCheck 端到端 ──
+  {
+    const http = require("http");
+    const wd = new ext.Bridge({ subscriptions: [] });
+
+    // 阈值内累计、达阈值自愈(start 打桩计数、URL 稳定、计数清零)
+    let starts = 0;
+    wd.start = async function () { starts++; this.url = "https://stable.example/relay/host"; return this.url; };
+    wd._wdThreshold = 2;
+    wd._publicHealthCheck = async () => false;
+    wd.url = "https://x";
+    await wd._wdTick();
+    assert.strictEqual(wd._healthFails, 1); assert.strictEqual(starts, 0);
+    await wd._wdTick();
+    assert.strictEqual(starts, 1, "连续失败达阈值触发自愈"); assert.strictEqual(wd._healthFails, 0, "自愈后失败计数清零");
+    wd._publicHealthCheck = async () => true;
+    wd._healthFails = 5; await wd._wdTick();
+    assert.strictEqual(wd._healthFails, 0, "自检成功清零"); assert.ok(wd._lastOkAt > 0, "记录 lastOkAt");
+    wd.startWatchdog(); const h1 = wd._wd; wd.startWatchdog();
+    assert.strictEqual(wd._wd, h1, "startWatchdog 幂等"); wd.stopWatchdog(); assert.strictEqual(wd._wd, null, "stopWatchdog 停表");
+    ok("看门狗：失败累计→达阈值自愈→成功清零·start/stop 幂等");
+
+    // _publicHealthCheck：透明反代 200 ok→true；relay 信封 {error}→false；无 URL→false
+    const wd2 = new ext.Bridge({ subscriptions: [] });
+    const okSrv = http.createServer((req, res) => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ status: "ok" })); });
+    await new Promise((r) => okSrv.listen(0, r));
+    wd2.mode = "quick"; wd2.url = "http://127.0.0.1:" + okSrv.address().port;
+    assert.strictEqual(await wd2._publicHealthCheck(), true, "透明反代 /api/health 200→true");
+    okSrv.close();
+    const errSrv = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "no_agent" })); }); });
+    await new Promise((r) => errSrv.listen(0, r));
+    wd2.mode = "relay"; wd2.url = "http://127.0.0.1:" + errSrv.address().port + "/relay/host";
+    assert.strictEqual(await wd2._publicHealthCheck(), false, "relay 信封 {error}→false(识破僵尸)");
+    errSrv.close();
+    wd2.url = ""; assert.strictEqual(await wd2._publicHealthCheck(), false, "无公网 URL→false");
+    ok("回环自检 _publicHealthCheck：透明反代/relay 信封/错误识别/空 URL");
+  }
+
   console.log("\nALL " + passed + " TESTS PASSED");
   process.exit(0);
 })().catch((e) => { console.error("\nTEST FAILED:", e && e.stack || e); process.exit(1); });

@@ -1221,6 +1221,99 @@ class Bridge {
     this.relay = null; // 活跃的 Worker 中继(connectRelayWs 控制器)
     this.cfCredentials = loadCfCredentials();
     this.srv._bridgeRef = this;
+    // 自愈看门狗状态 — 跨 stop()/start() 存活, 仅 deactivate 才停
+    this._wd = null;
+    this._healthFails = 0;
+    this._healing = false;
+    this._wdBusy = false;
+    this._lastOkAt = 0;
+    this._wdThreshold = 2;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 自愈看门狗 — 帛书·「天网恢恢，疏而不失」
+  // 只要 IDE(扩展宿主)在跑, 就周期回环自检: 主动打自己的公网 URL /api/health,
+  // 端到端验证隧道真的可达(可识破 socket 假死/息屏后僵尸连接 — 仅靠 WS 关闭事件抓不到)。
+  // 连续失败即自动重连; relay/named 复用 session/域名→URL 稳定, 被控端无感; quick 会换 URL 并重写 MD。
+  // IDE 关闭 → deactivate → stopWatchdog, 一并停。
+  // ═══════════════════════════════════════════════════════════
+  startWatchdog() {
+    if (this._wd) return; // 幂等
+    let iv = 20000, th = 2;
+    try { const c = vscode.workspace.getConfiguration("daoBridge"); iv = parseInt(c.get("watchdogIntervalMs"), 10) || 20000; th = parseInt(c.get("watchdogFailThreshold"), 10) || 2; } catch (e) {}
+    this._wdThreshold = Math.max(1, th);
+    this._wd = setInterval(() => { this._wdTick(); }, Math.max(5000, iv));
+  }
+  stopWatchdog() { if (this._wd) { clearInterval(this._wd); this._wd = null; } }
+
+  async _wdTick() {
+    if (this._starting || this._healing || this._wdBusy) return;
+    this._wdBusy = true;
+    try {
+      const ok = await this._publicHealthCheck();
+      if (ok) { this._healthFails = 0; this._lastOkAt = Date.now(); }
+      else {
+        this._healthFails++;
+        this.lastErr = "回环自检失败 ×" + this._healthFails + (this.url ? (" (" + this.url + ")") : " (无公网URL)");
+        this.notify();
+        if (this._healthFails >= this._wdThreshold) await this._heal();
+      }
+    } catch (e) { /* 自检本身异常不打断看门狗 */ }
+    finally { this._wdBusy = false; }
+  }
+
+  async _heal() {
+    if (this._starting || this._healing) return;
+    this._healing = true;
+    const prevUrl = this.url;
+    try {
+      this.lastErr = "自愈: 隧道不可达, 自动重连中…"; this.notify();
+      this.stop();
+      const url = await this.start();
+      this._healthFails = 0;
+      if (url) { this._lastOkAt = Date.now(); this.lastErr = "自愈完成: " + (url === prevUrl ? "URL 不变" : "新 URL " + url); }
+      this.notify();
+    } catch (e) { this.lastErr = "自愈异常: " + (e && e.message); }
+    finally { this._healing = false; }
+  }
+
+  // 端到端回环: 经公网 URL 打 /api/health(relay 走信封, 透明反代直打), 8s 超时。
+  _publicHealthCheck() {
+    return new Promise((resolve) => {
+      const u = this.url;
+      if (!u) return resolve(false);
+      const relay = this.mode === "relay" || /\/relay\//.test(u);
+      let target, postData = null;
+      const headers = { "User-Agent": UA };
+      try {
+        if (relay) {
+          target = new URL(u);
+          postData = JSON.stringify({ path: "/api/health", method: "GET", body: {} });
+          headers["Content-Type"] = "application/json";
+          headers["Content-Length"] = Buffer.byteLength(postData);
+        } else {
+          target = new URL(u.replace(/\/$/, "") + "/api/health");
+        }
+      } catch (e) { return resolve(false); }
+      const lib = target.protocol === "http:" ? http : https;
+      const req = lib.request({
+        hostname: target.hostname,
+        port: target.port || (target.protocol === "http:" ? 80 : 443),
+        path: target.pathname + (target.search || ""),
+        method: relay ? "POST" : "GET",
+        headers,
+      }, (res) => {
+        let d = ""; res.on("data", (c) => (d += c));
+        res.on("end", () => {
+          if (res.statusCode !== 200) return resolve(false);
+          try { const j = JSON.parse(d); resolve(!j.error); } catch (e) { resolve(true); }
+        });
+      });
+      req.on("error", () => resolve(false));
+      req.setTimeout(8000, () => { try { req.destroy(); } catch (e) {} resolve(false); });
+      if (postData) req.write(postData);
+      req.end();
+    });
   }
 
   // 中继尝试 — 出站 WSS 连 Worker。初连窗口内握手成功即采用并持有(后台自动重连);
@@ -1372,6 +1465,7 @@ class Bridge {
       cfEmail: this.cfCredentials ? this.cfCredentials.email || "" : "",
       agentCount: this.srv.agentRegistry.size,
       bootstrap: this.bootstrapCmd(),
+      lastOkAt: this._lastOkAt, healing: this._healing, healthFails: this._healthFails,
     };
   }
 
@@ -2006,9 +2100,10 @@ function activate(context) {
     _bridge.stop(); await _bridge.start();
     vscode.window.showInformationMessage("DAO Bridge: " + r.message + " · 已回到无账号快速隧道");
   }), "cmd:logout");
-  context.subscriptions.push({ dispose: () => { try { _bridge.stop(); } catch (e) {} } });
-  // 自动启动 — 插件激活即穿透
+  context.subscriptions.push({ dispose: () => { try { _bridge.stopWatchdog(); } catch (e) {} try { _bridge.stop(); } catch (e) {} } });
+  // 自动启动 — 插件激活即穿透; 看门狗常驻自愈, 只要 IDE 在跑就持久有效
+  _bridge.startWatchdog();
   _bridge.start().then((url) => { if (url) vscode.window.setStatusBarMessage("DAO Bridge 已打通: " + url, 8000); });
 }
-function deactivate() { try { if (_bridge) _bridge.stop(); } catch (e) {} }
+function deactivate() { try { if (_bridge) { _bridge.stopWatchdog(); _bridge.stop(); } } catch (e) {} }
 module.exports = { activate, deactivate, Bridge, WorkspaceServer, detectProxy, downloadCloudflared, findCloudflared, isRealCloudflared, probeCloudflared, extractCfTgz, cfAssetName, DaoWsClient, connectRelayWs, buildExecCommand, buildBootstrap, buildBootstrapSh, platformOf };
