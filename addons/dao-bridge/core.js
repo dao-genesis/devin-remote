@@ -39,6 +39,7 @@ exports.findAvailablePort = findAvailablePort;
 exports.startServer = startServer;
 exports.connectRelay = connectRelay;
 exports.buildExecCommand = buildExecCommand;
+exports.buildBootstrap = buildBootstrap;
 exports.psq = psq;
 // 道 · core — 纯 Node 核心：本地 HTTP server + 路由 + 出站中继桥
 // 不依赖 vscode，可单独被 Node 测试与复用（VSIX 与独立 Agent 共用本源）。
@@ -47,6 +48,8 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const net = __importStar(require("net"));
 const child_process_1 = require("child_process");
+const crypto = require("crypto");
+const os = require("os");
 const isWin = process.platform === 'win32';
 // PowerShell 单引号字面量转义（路径/参数含空格或引号也安全）
 function psq(s) { return "'" + String(s == null ? '' : s).replace(/'/g, "''") + "'"; }
@@ -92,6 +95,155 @@ function runShell(cmd, cwd, timeoutMs) {
         });
     });
 }
+// 被控端一行接入脚本（动态注入当前公网 URL）— 长轮询命令队列, 回传结果。
+function buildBootstrap(hubUrl) {
+    hubUrl = (hubUrl || '').replace(/\/$/, '');
+    return `# dao 被控端 · 一行接入 · 道生一,一命接万机
+$ErrorActionPreference='SilentlyContinue'; $ProgressPreference='SilentlyContinue'
+try{ $OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8 }catch{}
+$U='${hubUrl}'
+function Dao-Post($path,$obj){ $b=[Text.Encoding]::UTF8.GetBytes(($obj|ConvertTo-Json -Depth 8 -Compress)); return irm "$U$path" -Method POST -Body $b -ContentType 'application/json; charset=utf-8' -TimeoutSec 35 }
+$sys=@{ hostname=$env:COMPUTERNAME; username=$env:USERNAME; os_version=[Environment]::OSVersion.VersionString; ps_version=$PSVersionTable.PSVersion.ToString(); capabilities=@('shell','cmd','run','detached') }
+try { $reg = Dao-Post '/api/connect' @{sysinfo=$sys} } catch { Write-Host "[dao] connect failed: $($_.Exception.Message)" -ForegroundColor Red; return }
+$aid=$reg.agent_id; $tok=$reg.token
+Write-Host "[dao] 已接入中枢 as $aid  (Ctrl+C 退出)" -ForegroundColor Green
+while($true){
+  try{
+    $poll = Dao-Post '/api/poll' @{id=$aid;token=$tok;timeout=25}
+    foreach($c in @($poll.commands)){
+      if(-not $c){ continue }
+      $out=''; $err=''; $code=0
+      $sw=[Diagnostics.Stopwatch]::StartNew()
+      $global:LASTEXITCODE=0
+      try{
+        switch($c.type){
+          'sysinfo' { $out = (Get-ComputerInfo | Out-String) }
+          default {
+            $Error.Clear()
+            $ErrorActionPreference='Continue'
+            $raw = Invoke-Expression $c.payload.command 2>&1
+            $ErrorActionPreference='SilentlyContinue'
+            $out = ($raw | Out-String)
+            if($Error.Count -gt 0){
+              $code=1
+              $msgs = (@($Error | Select-Object -First 20) | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+              if([string]::IsNullOrWhiteSpace($out)){ $out=$msgs } else { $out = $out + [Environment]::NewLine + $msgs }
+            }
+            if($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0){ $code=$LASTEXITCODE }
+          }
+        }
+      }catch{ $err=$_.Exception.Message; $code=1 }
+      $sw.Stop()
+      $res=@{ stdout=$out; stderr=$err; exit_code=$code; execution_time_ms=$sw.ElapsedMilliseconds }
+      try{ Dao-Post '/api/result' @{agent_id=$aid;token=$tok;cmd_id=$c.cmd_id;result=$res} | Out-Null }catch{}
+    }
+  }catch{
+    try{ $reg = Dao-Post '/api/connect' @{sysinfo=$sys}; $aid=$reg.agent_id; $tok=$reg.token }catch{ Start-Sleep 3 }
+  }
+}
+`;
+}
+// 中枢分发：被控端登记 + 每 agent 命令队列/结果表/唤醒器（operator→hub→agent 三明治）
+class DaoHub {
+    constructor() {
+        this.agents = new Map();
+        this.HEARTBEAT_TIMEOUT = 120 * 1000;
+        this.POLL_MAX = 25;
+    }
+    registerAgent(sysinfo) {
+        sysinfo = sysinfo || {};
+        const id = sysinfo.hostname || ('agent-' + crypto.randomBytes(3).toString('hex'));
+        const token = crypto.randomBytes(24).toString('hex');
+        const existing = this.agents.get(id);
+        if (existing) {
+            existing.id = id; existing.token = token; existing.sysinfo = sysinfo;
+            existing.lastSeen = Date.now(); existing.status = 'online';
+            existing.hostname = sysinfo.hostname || id;
+            existing.capabilities = sysinfo.capabilities || existing.capabilities || ['shell'];
+            return existing;
+        }
+        const a = {
+            id, token, sysinfo, hostname: sysinfo.hostname || id,
+            capabilities: sysinfo.capabilities || ['shell'],
+            connectedAt: Date.now(), lastSeen: Date.now(), status: 'online',
+            queue: [], waiters: [], results: new Map(), resultWaiters: new Map(),
+        };
+        this.agents.set(id, a);
+        return a;
+    }
+    getAgent(id) {
+        if (!id) return null;
+        let a = this.agents.get(id);
+        if (a) return a;
+        const t = String(id).toLowerCase();
+        for (const [k, v] of this.agents) if (k.toLowerCase() === t) return v;
+        return null;
+    }
+    agentAlive(a) { return Date.now() - (a.lastSeen || 0) < this.HEARTBEAT_TIMEOUT; }
+    isSelf(agentId) {
+        const k = String(agentId || '').toLowerCase().trim();
+        return k === '' || k === 'self' || k === 'local' || k === os.hostname().toLowerCase();
+    }
+    queueCommand(agentId, type, payload) {
+        const a = this.getAgent(agentId);
+        if (!a) return { err: 'agent not found' };
+        const cmdId = 'cmd_' + Date.now() + '_' + crypto.randomBytes(3).toString('hex');
+        a.queue.push({ cmd_id: cmdId, type: type || 'shell', payload: payload || {} });
+        const w = a.waiters.shift(); if (w) w();
+        return { cmdId, agent: a };
+    }
+    pollCommands(a, timeoutSec) {
+        a.lastSeen = Date.now(); a.status = 'online';
+        const ms = Math.min(timeoutSec || this.POLL_MAX, this.POLL_MAX) * 1000;
+        return new Promise((resolve) => {
+            if (a.queue.length) return resolve(a.queue.splice(0));
+            let done = false;
+            const finish = (cmds) => {
+                if (done) return; done = true; clearTimeout(timer);
+                const i = a.waiters.indexOf(wake); if (i >= 0) a.waiters.splice(i, 1);
+                resolve(cmds);
+            };
+            const wake = () => finish(a.queue.splice(0));
+            a.waiters.push(wake);
+            const timer = setTimeout(() => finish([]), ms);
+        });
+    }
+    submitResult(a, cmdId, result) {
+        a.lastSeen = Date.now();
+        a.results.set(cmdId, Object.assign({ completed_at: Date.now() }, result));
+        const w = a.resultWaiters.get(cmdId);
+        if (w) w(a.results.get(cmdId));
+    }
+    waitResult(a, cmdId, timeoutMs) {
+        return new Promise((resolve) => {
+            const existing = a.results.get(cmdId);
+            if (existing) return resolve(existing);
+            let done = false;
+            const finish = (r) => { if (done) return; done = true; clearTimeout(timer); a.resultWaiters.delete(cmdId); resolve(r); };
+            a.resultWaiters.set(cmdId, finish);
+            const timer = setTimeout(() => finish(null), timeoutMs);
+        });
+    }
+    agentList() {
+        const out = [];
+        for (const [id, a] of this.agents) {
+            const si = a.sysinfo || {};
+            out.push({
+                id, hostname: a.hostname || id,
+                status: this.agentAlive(a) ? 'online' : 'offline',
+                os: si.os_version || '?', user: si.username || '?',
+                capabilities: a.capabilities || ['shell'],
+                last_seen: new Date(a.lastSeen || 0).toISOString(),
+                pending: a.queue.length,
+            });
+        }
+        return out;
+    }
+}
+function getHub(host) {
+    if (!host._daoHub) host._daoHub = new DaoHub();
+    return host._daoHub;
+}
 function checkAuth(headers, token) {
     const h = (headers['authorization'] || headers['Authorization'] || '');
     const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
@@ -107,12 +259,74 @@ async function handleRoute(host, route, method, headers, bodyRaw, token) {
     catch {
         body = {};
     }
+    const hub = getHub(host);
     if (route === '/api/health') {
-        return { status: 200, body: { status: 'ok', service: 'dao-bridge', version: '1.0.0', platform: process.platform, host: require('os').hostname(), workspace: root, pid: process.pid } };
+        return { status: 200, body: { status: 'ok', service: 'dao-bridge', version: '1.0.0', platform: process.platform, host: require('os').hostname(), workspace: root, agents_online: hub.agents.size, pid: process.pid } };
+    }
+    // ── 被控端端点（以 per-agent token 自证, 免 master token）+ 一行接入脚本 ──
+    if (route === '/api/bootstrap.ps1' || route === '/bootstrap.ps1') {
+        const hubUrl = host.publicUrl ? host.publicUrl() : '';
+        return { status: 200, contentType: 'text/plain; charset=utf-8', raw: buildBootstrap(hubUrl), body: buildBootstrap(hubUrl) };
+    }
+    if (route === '/api/connect' && method === 'POST') {
+        const a = hub.registerAgent(body.sysinfo || body || {});
+        return { status: 200, body: { agent_id: a.id, token: a.token, server_time: new Date().toISOString() } };
+    }
+    if (route === '/api/poll' && method === 'POST') {
+        const a = hub.getAgent(body.id);
+        if (!a || a.token !== body.token) return { status: 401, body: { error: 'unauthorized' } };
+        const cmds = await hub.pollCommands(a, parseInt(body.timeout, 10) || hub.POLL_MAX);
+        return { status: 200, body: { commands: cmds } };
+    }
+    if (route === '/api/result' && method === 'POST') {
+        const a = hub.getAgent(body.agent_id);
+        if (!a || a.token !== body.token) return { status: 401, body: { error: 'unauthorized' } };
+        hub.submitResult(a, body.cmd_id, body.result || {});
+        return { status: 200, body: { ok: true } };
+    }
+    if (route === '/api/heartbeat' && method === 'POST') {
+        const a = hub.getAgent(body.agent_id);
+        if (a && a.token === body.token) { a.lastSeen = Date.now(); a.status = 'online'; }
+        return { status: 200, body: { ok: true } };
     }
     // 其余端点需要鉴权
     if (!checkAuth(headers, token))
         return { status: 401, body: { error: 'unauthorized' } };
+    if (route === '/api/agents' && method === 'GET')
+        return { status: 200, body: { agents: hub.agentList() } };
+    if (route === '/api/result-fetch' && method === 'POST') {
+        const a = hub.getAgent(body.agent_id);
+        if (!a) return { status: 404, body: { error: 'agent not found' } };
+        const r = a.results.get(body.cmd_id);
+        if (!r) return { status: 200, body: { status: 'pending', agent_id: a.id, cmd_id: body.cmd_id } };
+        return { status: 200, body: { status: 'completed', agent_id: a.id, cmd_id: body.cmd_id, result: r } };
+    }
+    if ((route === '/api/exec' || route === '/api/exec-sync' || route === '/api/command') && method === 'POST') {
+        const sync = route === '/api/exec-sync';
+        const timeoutMs = ((body.timeout && Number(body.timeout)) || 30) * 1000;
+        // 按 agent_id 路由：SELF(本机) → 本机执行；否则 → 入队转发被控端
+        if (hub.isSelf(body.agent_id)) {
+            const command = buildExecCommand(body);
+            if (!command) return { status: 400, body: { error: 'cmd/file required' } };
+            const r = await runShell(command, body.cwd || root, timeoutMs);
+            return sync ? { status: 200, body: { status: 'completed', agent_id: require('os').hostname(), result: r } } : { status: 200, body: r };
+        }
+        const qd = hub.queueCommand(body.agent_id, 'shell', { command: buildExecCommand(body) });
+        if (qd.err) return { status: 404, body: { error: qd.err } };
+        if (!sync) return { status: 200, body: { cmd_id: qd.cmdId, agent_id: qd.agent.id } };
+        const result = await hub.waitResult(qd.agent, qd.cmdId, timeoutMs);
+        if (!result) return { status: 504, body: { status: 'timeout', agent_id: qd.agent.id, cmd_id: qd.cmdId } };
+        return { status: 200, body: { status: 'completed', agent_id: qd.agent.id, cmd_id: qd.cmdId, result } };
+    }
+    if (route === '/api/broadcast' && method === 'POST') {
+        const command = buildExecCommand(body);
+        const delivered = [];
+        for (const [id] of hub.agents) {
+            const qd = hub.queueCommand(id, 'shell', { command });
+            if (qd.cmdId) delivered.push({ agent_id: id, cmd_id: qd.cmdId });
+        }
+        return { status: 200, body: { ok: true, delivered } };
+    }
     switch (route) {
         case '/api/exec':
         case '/api/command': {
@@ -199,8 +413,13 @@ async function startServer(host, opts) {
             const raw = Buffer.concat(chunks).toString('utf8');
             try {
                 const out = await handleRoute(host, url.pathname, req.method || 'GET', req.headers, raw, token);
-                res.writeHead(out.status, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(out.body, null, 2));
+                if (out.raw !== undefined) {
+                    res.writeHead(out.status, { 'Content-Type': out.contentType || 'text/plain; charset=utf-8' });
+                    res.end(out.raw);
+                } else {
+                    res.writeHead(out.status, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(out.body, null, 2));
+                }
             }
             catch (e) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });

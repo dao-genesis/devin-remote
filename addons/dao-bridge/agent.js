@@ -48,9 +48,11 @@ function detectProxy(conf) {
   const conf = loadConf();
   if (!conf.token) { console.error('[dao-bridge] 缺 token：设 DAO_TOKEN 或在 conn.json 写 token'); process.exit(1); }
   conf.proxy = detectProxy(conf);
+  const endpointEarly = conf.relayUrl.replace(/\/$/, '') + '/relay/' + conf.session;
   const host = {
     workspaceRoot: () => conf.root,
     info: () => ({ host: os.hostname(), platform: process.platform, workspace: [conf.root] }),
+    publicUrl: () => endpointEarly,
     log: (m) => console.log('[dao-bridge] ' + m),
   };
   const server = await core.startServer(host, { port: conf.port, token: conf.token });
