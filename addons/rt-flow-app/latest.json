@@ -1,6 +1,6 @@
 {
-  "versionCode": 73,
-  "versionName": "0.24.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.24.0/DevinCloud-mobile-v0.24.0.apk",
-  "notes": "v0.24.0 · 默认全打通 (无为而无不为): 去中心化隧道 (cloudflared 主 + SSH 反向·备) 由「默认关·需手动开」改为「默认开机自启」—— 用户用默认配置即拥有不经任何 Worker 的独立公网入口, P2P 应答方随之就绪。仅当用户曾手动关闭 (\"0\") 才尊重其选择; 与局域网直连/远程操控的「默认开」语义一致。本源 curl/HTTP 协议与隧道生命周期零改动。"
+  "versionCode": 74,
+  "versionName": "0.25.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.25.0/DevinCloud-mobile-v0.25.0.apk",
+  "notes": "v0.25.0 · cloudflared 公网健康探测硬化 (唯变所适): 此前 cloudflared 进程在跑且已报公网 URL 时即被标为「已连通」, 但边缘可能回源失败/被网络拦截而对公网返回 530 (假活) —— 进程退出看门狗与无URL看门狗都抓不到。现镜像 SSH 备隧的做法, 每 30s 探一次主隧道公网 URL/health: 连失即如实标主隧道离线; 先重启换新边缘试恢复, 连续重启仍 530 则判定本网络拦截 Cloudflare 边缘, 停 cf 省电并每 5min 慢探恢复 (网络变更即自动复活)。备隧 SSH 与中继始终并行兜底, 本源 curl/HTTP 与对外契约零改动。"
 }
