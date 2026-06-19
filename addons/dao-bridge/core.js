@@ -53,6 +53,16 @@ const os = require("os");
 const isWin = process.platform === 'win32';
 // PowerShell 单引号字面量转义（路径/参数含空格或引号也安全）
 function psq(s) { return "'" + String(s == null ? '' : s).replace(/'/g, "''") + "'"; }
+// POSIX(/bin/sh) 单引号字面量转义（Linux/macOS 本机执行用）
+function shq(s) { return "'" + String(s == null ? '' : s).replace(/'/g, "'\\''") + "'"; }
+// 按平台生成 sysinfo 采集命令：Win→Get-ComputerInfo；Linux/macOS→uname/os-release/cpu/mem/disk
+function sysinfoCmd(platform) {
+    if ((platform || process.platform) === 'win32') return 'Get-ComputerInfo | Out-String';
+    return "echo '=== SYSTEM ==='; uname -a; echo; (lsb_release -a 2>/dev/null || cat /etc/os-release 2>/dev/null); " +
+        "echo; echo '=== CPU ==='; (lscpu 2>/dev/null | head -25 || sysctl -n machdep.cpu.brand_string 2>/dev/null); " +
+        "echo; echo '=== MEMORY ==='; (free -h 2>/dev/null || vm_stat 2>/dev/null); " +
+        "echo; echo '=== DISK ==='; df -h 2>/dev/null; echo; echo '=== UPTIME ==='; uptime 2>/dev/null";
+}
 // 强制 UTF-8 输出 + 透传原生退出码（powershell -Command 默认只返 0/1，吹掉 .bat 的原生退出码）
 function wrapPwsh(cmd) {
     return ('$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8\n' +
@@ -60,15 +70,31 @@ function wrapPwsh(cmd) {
         cmd +
         '\n$__c=0; if($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0){$__c=$LASTEXITCODE} elseif($Error.Count -gt 0){$__c=1}; exit $__c');
 }
-// 把高层 exec 请求规范化为一条健壮 PowerShell 表达式。
-// type：shell(默认/原样) | cmd|bat(cmd.exe /c + chcp 65001) | run|file(运行文件+args) | detached|spawn(Start-Process 回 PID)
-function buildExecCommand(body) {
+// 把高层 exec 请求规范化为一条健壮命令表达式。
+// targetPlatform 缺省 'win32'(PowerShell)——被控端经 bootstrap 恒为 Windows；中枢本机(SELF)按 process.platform 传入，linux/darwin 走 POSIX。
+// type：shell(默认/原样) | cmd|bat(Win:cmd.exe /c+chcp 65001; POSIX:当普通 shell 命令) | run|file(运行文件+args) | detached|spawn(后台启动回 PID)
+function buildExecCommand(body, targetPlatform) {
     body = body || {};
+    const posix = (targetPlatform || 'win32') !== 'win32';
     const type = String(body.type || 'shell').toLowerCase();
-    const cwd = body.cwd ? 'Set-Location -LiteralPath ' + psq(body.cwd) + '; ' : '';
     const file = body.file || body.exe || body.program || '';
     const args = Array.isArray(body.args) ? body.args : [];
     const cmd = body.cmd || body.command || (body.payload && body.payload.command) || '';
+    if (posix) {
+        const cwdP = body.cwd ? 'cd ' + shq(body.cwd) + ' && ' : '';
+        if (type === 'detached' || type === 'spawn' || body.detached) {
+            const target = file ? shq(file) : cmd;
+            const al = args.length ? ' ' + args.map(shq).join(' ') : '';
+            return cwdP + 'nohup ' + target + al + ' >/dev/null 2>&1 & echo "started pid=$! file=' + (file || cmd) + '"';
+        }
+        if (type === 'run' || type === 'file' || (file && !cmd)) {
+            const al = args.length ? ' ' + args.map(shq).join(' ') : '';
+            const runner = /\.sh$/i.test(file) ? 'sh ' : '';
+            return cwdP + runner + shq(file || cmd) + al + ' 2>&1';
+        }
+        return cwdP + cmd;
+    }
+    const cwd = body.cwd ? 'Set-Location -LiteralPath ' + psq(body.cwd) + '; ' : '';
     if (type === 'detached' || type === 'spawn' || body.detached) {
         const target = file || cmd;
         const al = args.length ? ' -ArgumentList ' + args.map(psq).join(',') : '';
@@ -304,12 +330,21 @@ async function handleRoute(host, route, method, headers, bodyRaw, token) {
     if ((route === '/api/exec' || route === '/api/exec-sync' || route === '/api/command') && method === 'POST') {
         const sync = route === '/api/exec-sync';
         const timeoutMs = ((body.timeout && Number(body.timeout)) || 30) * 1000;
-        // 按 agent_id 路由：SELF(本机) → 本机执行；否则 → 入队转发被控端
+        const type = String(body.type || 'shell').toLowerCase();
+        // 按 agent_id 路由：SELF(本机·按本机平台规范化 linux/darwin→POSIX, win→PowerShell)；否则 → 入队转发被控端(恒 PowerShell/Windows)
         if (hub.isSelf(body.agent_id)) {
-            const command = buildExecCommand(body);
+            const command = type === 'sysinfo' ? sysinfoCmd(process.platform) : buildExecCommand(body, process.platform);
             if (!command) return { status: 400, body: { error: 'cmd/file required' } };
             const r = await runShell(command, body.cwd || root, timeoutMs);
             return sync ? { status: 200, body: { status: 'completed', agent_id: require('os').hostname(), result: r } } : { status: 200, body: r };
+        }
+        if (type === 'sysinfo') {
+            const sq = hub.queueCommand(body.agent_id, 'sysinfo', {});
+            if (sq.err) return { status: 404, body: { error: sq.err } };
+            if (!sync) return { status: 200, body: { cmd_id: sq.cmdId, agent_id: sq.agent.id } };
+            const sr = await hub.waitResult(sq.agent, sq.cmdId, timeoutMs);
+            if (!sr) return { status: 504, body: { status: 'timeout', agent_id: sq.agent.id, cmd_id: sq.cmdId } };
+            return { status: 200, body: { status: 'completed', agent_id: sq.agent.id, cmd_id: sq.cmdId, result: sr } };
         }
         const qd = hub.queueCommand(body.agent_id, 'shell', { command: buildExecCommand(body) });
         if (qd.err) return { status: 404, body: { error: qd.err } };
