@@ -2,6 +2,19 @@
 
 本项目遵循语义化版本。日期格式 YYYY-MM-DD。
 
+## [3.9.0] - 2026-06-19
+
+自愈看门狗·持久化：只要 IDE(扩展宿主)在跑就周期回环自检、隧道一断自动重连，端口/Token/URL 可随之轮换；IDE 关闭则随之关停。
+
+### 新增
+- **自愈看门狗** `Bridge.startWatchdog/_wdTick/_heal`：默认每 20s 做一次**端到端回环自检**——插件主动打自己的**公网 URL** `/api/health`（透明反代直打；relay 走信封 POST），可识破"息屏/休眠后的 socket 假死僵尸连接"（仅靠 WS `onclose` 抓不到）。
+- **连续失败自动重连** `_publicHealthCheck` 连续失败达阈值（默认 2 次）→ `stop()` + `start()` 重连。relay/named 复用 session/域名 → URL 稳定、被控端无感；quick 换 URL 并重写两份 MD。
+- 看门狗跨 `stop()/start()` 常驻，仅 `deactivate()`（IDE 关闭）才停。
+- 配置项：`daoBridge.watchdogIntervalMs`(默认 20000)、`daoBridge.watchdogFailThreshold`(默认 2)；`state()` 增 `lastOkAt/healing/healthFails`。
+
+### 测试
+- `test/hub.test.js` 新增看门狗用例：失败累计→达阈值自愈→成功清零、start/stop 幂等、`_publicHealthCheck` 透明反代/relay 信封/错误识别/空 URL（+2 组）。
+
 ## [3.8.0] - 2026-06-19
 
 全网状拓扑·任意设备皆可作中枢/被控端·中枢按被控端平台自动选指令（Win→PowerShell，Linux/macOS→/bin/sh）。

@@ -2,7 +2,7 @@
   "name": "dao-bridge",
   "displayName": "DAO Bridge · 公网穿透",
   "description": "工作区公网穿透：插件启动即自动打通整机隧道。无账号默认走原生快速隧道；填令牌则走用户 Cloudflare 通道，打不通自动回退；内置 cloudflared、代理/国内网络自适应。三模块：实时状态 + 云端Agent接入MD + 本地Agent配置MD。道法自然·无为而无不为。",
-  "version": "3.8.0",
+  "version": "3.9.0",
   "publisher": "dao",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Other"],
@@ -42,7 +42,9 @@
         "daoBridge.relayUrl": { "type": "string", "default": "https://dao-relay-do.zhouyoukang.workers.dev", "description": "默认通道：Worker+DurableObject 出站中继端点。零 Cloudflare 账号、URL 天然稳定（*.workers.dev/relay/<session>）、纯出站适配一切平台。连不上才回退 cloudflared。" },
         "daoBridge.session": { "type": "string", "default": "", "description": "（中继）会话名 = 公网路径 /relay/<session>。留空用主机名。" },
         "daoBridge.disableRelay": { "type": "boolean", "default": false, "description": "关闭 Worker 中继默认通道，直接走 cloudflared。" },
-        "daoBridge.confineToWorkspace": { "type": "boolean", "default": false, "description": "将 /api/ls /api/read /api/write 限制在工作区根目录内（沙箱）。默认关闭=整机穿透：云端 Agent 可操作整台电脑，工作区只是其中一部分。" }
+        "daoBridge.confineToWorkspace": { "type": "boolean", "default": false, "description": "将 /api/ls /api/read /api/write 限制在工作区根目录内（沙箱）。默认关闭=整机穿透：云端 Agent 可操作整台电脑，工作区只是其中一部分。" },
+        "daoBridge.watchdogIntervalMs": { "type": "number", "default": 20000, "description": "自愈看门狗回环自检间隔（毫秒）。只要 IDE 在跑就周期性打自己的公网 /api/health，端到端验证隧道可达。" },
+        "daoBridge.watchdogFailThreshold": { "type": "number", "default": 2, "description": "连续自检失败多少次后自动重连隧道（识破息屏/休眠后的僵尸连接）。" }
       }
     }
   }
