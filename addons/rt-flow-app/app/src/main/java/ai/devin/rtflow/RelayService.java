@@ -96,6 +96,7 @@ public class RelayService extends Service {
                     // 浏览器原样拿 APK 自身的真实页面 (switch/tunnel/cloud/…) 与其 JS 资源
                     // → 任意设备浏览器打开即得与手机本体「表层+底层」完全一致的页面 (手机=中枢)。
                     public String[] staticAsset(String path) { return RelayService.this.staticAsset(path); }
+                    public String[] embedDoc(String url) { return RelayService.this.embedDoc(url); }
                 });
                 localPort = localServer.start();
                 android.util.Log.i("RTFlowTunnel", "local server on 0.0.0.0:" + localPort);
@@ -196,6 +197,41 @@ public class RelayService extends Service {
         int h = html.indexOf("<head");
         if (h >= 0) { int gt = html.indexOf('>', h); if (gt >= 0) return html.substring(0, gt + 1) + "\n" + tag + html.substring(gt + 1); }
         return tag + "\n" + html;
+    }
+
+    /** 反向代理外站顶层文档 (破 X-Frame-Options/CSP frame-ancestors): 原生抓取 → 剥框限响应/meta → 注入 <base>
+     *  让相对资源回源站直取 → 同源回服, 使外站能被外壳 iframe 内嵌。诚实边界: 需登录态/同源 XHR 的重型 SPA
+     *  仍可能因鉴权/CORS 不完整 (子资源直连源站, 跨域 API 不带本源 cookie); 静态/可公开内嵌站点可用。 */
+    String[] embedDoc(String url) {
+        try {
+            if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) return null;
+            final java.util.concurrent.SynchronousQueue<String> q = new java.util.concurrent.SynchronousQueue<>();
+            HttpBridge.Cb cb = (id, json) -> { try { q.offer(json == null ? "{}" : json, 5, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {} };
+            HttpBridge.exec("E" + System.nanoTime(), "GET", url,
+                    "{\"Accept\":\"text/html,application/xhtml+xml,*/*\"}", "", cb);
+            String res = q.poll(45, java.util.concurrent.TimeUnit.SECONDS);
+            if (res == null) return null;
+            org.json.JSONObject o = new org.json.JSONObject(res);
+            if (o.optInt("status", 0) < 200 || o.optInt("status", 0) >= 400) return null;
+            String html = o.optString("text", "");
+            if (html.isEmpty()) return null;
+            return new String[]{"text/html; charset=utf-8", stripFraming(html, url)};
+        } catch (Exception e) { return null; }
+    }
+
+    /** 注入 <base> 让相对资源回源站; 剥掉页内 CSP <meta> (X-Frame-Options/CSP 响应头本就不会被我们回服)。 */
+    private static String stripFraming(String html, String url) {
+        String origin;
+        try { java.net.URL u = new java.net.URL(url); origin = u.getProtocol() + "://" + u.getHost() + (u.getPort() > 0 ? ":" + u.getPort() : ""); }
+        catch (Exception e) { origin = ""; }
+        html = html.replaceAll("(?is)<meta[^>]+http-equiv\\s*=\\s*[\"']?content-security-policy[\"']?[^>]*>", "");
+        if (!origin.isEmpty() && !html.toLowerCase().contains("<base")) {
+            String base = "<base href=\"" + origin + "/\">";
+            int h = html.indexOf("<head");
+            if (h >= 0) { int gt = html.indexOf('>', h); if (gt >= 0) return html.substring(0, gt + 1) + base + html.substring(gt + 1); }
+            return base + html;
+        }
+        return html;
     }
 
     /** /api/native — 值返回型 Native 方法就地执行, 回 {status,bodyText:{"r":...}}。 */
