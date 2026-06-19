@@ -38,6 +38,8 @@ exports.handleRoute = handleRoute;
 exports.findAvailablePort = findAvailablePort;
 exports.startServer = startServer;
 exports.connectRelay = connectRelay;
+exports.buildExecCommand = buildExecCommand;
+exports.psq = psq;
 // 道 · core — 纯 Node 核心：本地 HTTP server + 路由 + 出站中继桥
 // 不依赖 vscode，可单独被 Node 测试与复用（VSIX 与独立 Agent 共用本源）。
 const http = __importStar(require("http"));
@@ -46,11 +48,46 @@ const path = __importStar(require("path"));
 const net = __importStar(require("net"));
 const child_process_1 = require("child_process");
 const isWin = process.platform === 'win32';
+// PowerShell 单引号字面量转义（路径/参数含空格或引号也安全）
+function psq(s) { return "'" + String(s == null ? '' : s).replace(/'/g, "''") + "'"; }
+// 强制 UTF-8 输出 + 透传原生退出码（powershell -Command 默认只返 0/1，吹掉 .bat 的原生退出码）
+function wrapPwsh(cmd) {
+    return ('$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8\n' +
+        "$ErrorActionPreference='Continue'; $Error.Clear(); $global:LASTEXITCODE=0\n" +
+        cmd +
+        '\n$__c=0; if($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0){$__c=$LASTEXITCODE} elseif($Error.Count -gt 0){$__c=1}; exit $__c');
+}
+// 把高层 exec 请求规范化为一条健壮 PowerShell 表达式。
+// type：shell(默认/原样) | cmd|bat(cmd.exe /c + chcp 65001) | run|file(运行文件+args) | detached|spawn(Start-Process 回 PID)
+function buildExecCommand(body) {
+    body = body || {};
+    const type = String(body.type || 'shell').toLowerCase();
+    const cwd = body.cwd ? 'Set-Location -LiteralPath ' + psq(body.cwd) + '; ' : '';
+    const file = body.file || body.exe || body.program || '';
+    const args = Array.isArray(body.args) ? body.args : [];
+    const cmd = body.cmd || body.command || (body.payload && body.payload.command) || '';
+    if (type === 'detached' || type === 'spawn' || body.detached) {
+        const target = file || cmd;
+        const al = args.length ? ' -ArgumentList ' + args.map(psq).join(',') : '';
+        const win = body.show ? '' : ' -WindowStyle Hidden';
+        const verb = body.elevate ? ' -Verb RunAs' : '';
+        return cwd + '$p=Start-Process -FilePath ' + psq(target) + al + win + verb +
+            " -PassThru; 'started pid=' + $p.Id + ' file=' + " + psq(target);
+    }
+    if (type === 'run' || type === 'file' || (file && !cmd)) {
+        const al = args.length ? ' ' + args.map(psq).join(' ') : '';
+        return cwd + '& ' + psq(file || cmd) + al + ' 2>&1 | Out-String';
+    }
+    if (type === 'cmd' || type === 'bat' || type === 'batch') {
+        return cwd + '& cmd.exe /d /c ' + psq('chcp 65001>nul & ' + cmd) + ' 2>&1 | Out-String';
+    }
+    return cwd + cmd;
+}
 function runShell(cmd, cwd, timeoutMs) {
     return new Promise((resolve) => {
         const shell = isWin ? 'powershell.exe' : '/bin/sh';
-        const args = isWin ? ['-NoProfile', '-Command', cmd] : ['-c', cmd];
-        (0, child_process_1.execFile)(shell, args, { cwd, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+        const args = isWin ? ['-NoProfile', '-Command', wrapPwsh(cmd)] : ['-c', cmd];
+        (0, child_process_1.execFile)(shell, args, { cwd, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, encoding: 'utf8' }, (err, stdout, stderr) => {
             resolve({ stdout: stdout || '', stderr: stderr || (err && err.killed ? 'timeout' : ''), exit_code: err && typeof err.code === 'number' ? err.code : err ? 1 : 0 });
         });
     });
@@ -79,11 +116,12 @@ async function handleRoute(host, route, method, headers, bodyRaw, token) {
     switch (route) {
         case '/api/exec':
         case '/api/command': {
-            const cmd = body.cmd || body.command || '';
-            if (!cmd)
-                return { status: 400, body: { error: 'cmd required' } };
+            // 规范化：.bat/.cmd/.exe/.ps1/后台进程皆可（type: shell/cmd/run/detached），默认 shell 向后兼容。
+            const command = buildExecCommand(body);
+            if (!command)
+                return { status: 400, body: { error: 'cmd/file required' } };
             const timeoutMs = ((body.timeout && Number(body.timeout)) || 30) * 1000;
-            const r = await runShell(cmd, body.cwd || root, timeoutMs);
+            const r = await runShell(command, body.cwd || root, timeoutMs);
             return { status: 200, body: r };
         }
         case '/api/file':
