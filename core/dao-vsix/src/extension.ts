@@ -1585,6 +1585,27 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             }
             return { ok: true, count: results.length, results };
         }
+        case '/api/devin/mcp/repair': {
+            // 一键修复本机 MCP(通用·强鲁棒): 自动识别 node 运行时与模块路径, 修正命令并启用(先备份)。
+            //   body: {allIdes?:bool(默认仅 Devin Desktop⇄Windsurf), enable?:bool(默认 true), dryRun?:bool}
+            const rpb = await readBody(req); let rpo: any = {}; try { rpo = JSON.parse(rpb || '{}'); } catch { /* 守柔 */ }
+            try { return Object.assign({ ok: true }, daoRepairLocalMcp({ allIdes: !!rpo.allIdes, enable: rpo.enable !== false, dryRun: !!rpo.dryRun })); }
+            catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+        }
+        case '/api/devin/mcp/verify': {
+            // 实测使用: 逐本机 STDIO MCP 真起进程(initialize+tools/list)返回真实工具数; HTTP 走 initialize 接测。
+            //   body: {source?:'Devin Desktop'(默认), all?:bool} — 默认仅实测 Devin Desktop, 并行执行。
+            const vfb = await readBody(req); let vfo: any = {}; try { vfo = JSON.parse(vfb || '{}'); } catch { /* 守柔 */ }
+            const want = vfo.all ? null : String(vfo.source || 'Devin Desktop');
+            let ideV = (() => { try { return scanIdeMcps(); } catch { return []; } })();
+            if (want) ideV = ideV.filter((e) => e.source === want);
+            const vres = await Promise.all(ideV.map(async (e) => {
+                if (e.transport === 'HTTP') { const r = await daoProbeMcp({ transport: 'HTTP', url: e.url, headers: e.headers }); return { name: e.name, source: e.source, transport: 'HTTP', ok: r.ok, toolCount: 0, detail: r.detail }; }
+                const r = await daoVerifyMcpStdio({ command: e.command, args: e.args, env: e.env }, 15000);
+                return { name: e.name, source: e.source, transport: 'STDIO', ok: r.ok, toolCount: r.toolCount, tools: r.tools, error: r.error };
+            }));
+            return { ok: true, count: vres.length, results: vres };
+        }
         case '/api/devin/mcp/install': {
             // 安装一个市场目录项到本账号 — body: {marketplace_server_id, slug?, name?, env_variables?, headers?, installation_scope?}
             const mib = await readBody(req);
@@ -3186,6 +3207,8 @@ function mcpAct(idx,action){
 // MCP 接测: 实际探测连通性 (HTTP initialize / STDIO 命令解析), 结果回填卡片状态 span
 function mcpProbe(idx){var m=(window._mcp||[])[idx];if(!m)return;var s=document.getElementById('mcp-probe-'+idx);if(s){s.style.color='var(--warn)';s.textContent='· 测试中…';}cmd('mcpProbe',{idx:idx,spec:mcpSpec(m)});}
 function mcpProbeAll(){var n=(window._mcp||[]).length;if(!n)return;toast('接测 '+n+' 项…',true);for(var i=0;i<n;i++){(function(j){setTimeout(function(){mcpProbe(j)},j*120)})(i);}}
+function mcpRepairLocal(){toast('修复本机 MCP 中…(自动识别运行时/路径, 已备份)',true);cmd('repairLocalMcp',{});}
+function mcpVerifyLocal(){toast('实测 Devin Desktop MCP 中…',true);cmd('verifyLocalMcp',{});}
 function mcpProbeRender(idx,r){var s=document.getElementById('mcp-probe-'+idx);if(!s)return;r=r||{};var col=r.ok?'var(--success)':(r.status===401||r.status===403||(r.label||'').indexOf('可达')>=0?'var(--warn)':'var(--danger)');s.style.color=col;s.textContent='· '+(r.ok?'✓ ':'✗ ')+(r.label||'')+(r.detail?'':'');s.title=r.detail||'';}
 // MCP 即时搜索/筛选 (纯前端, 不重渲染, 不丢焦点) — 对齐官网市场搜索
 function mcpFilter(q){q=(q||'').toLowerCase().trim();var cards=document.querySelectorAll('.mcp-card');for(var i=0;i<cards.length;i++){var k=cards[i].getAttribute('data-k')||'';var c=cards[i];var srcOk=true;if(!q&&c.className.indexOf('mcp-ide-card')>=0){var cs=c.getAttribute('data-src')||'';srcOk=!window._mcpSrc||window._mcpSrc.indexOf(cs)>=0;}c.style.display=((!q||k.indexOf(q)>=0)&&srcOk)?'':'none'}}
@@ -3259,7 +3282,7 @@ function rT(tab,items,err,fallbackProxy){
     // 官网 MCP 整图给到本地: 已装(★)+ 全市场目录; 每项可「装到本账号 / +档案(批量注入) / 卸载」
     // 对齐官网: 顶部「+ 自定义 MCP」(直接装到本账号) + 搜索/筛选框 (名称/简介即时过滤)。
     window._mcp=[];window._mcpIde=[];
-    h+='<div class="br" style="margin-bottom:6px"><button class="btn sm primary" onclick="mcpAddCustom()">+ 自定义 MCP</button><button class="btn sm" onclick="mcpProbeAll()" title="逐项接测所有 MCP 连接(连通性验证)">🔍 全部接测</button></div>';
+    h+='<div class="br" style="margin-bottom:6px"><button class="btn sm primary" onclick="mcpAddCustom()">+ 自定义 MCP</button><button class="btn sm" onclick="mcpProbeAll()" title="逐项接测所有 MCP 连接(连通性验证)">🔍 全部接测</button><button class="btn sm" onclick="mcpRepairLocal()" title="一键修复本机 MCP: 自动识别 node 运行时与模块路径、修正命令并启用(先备份, 通用·强鲁棒)。重载窗口后生效" style="background:#b8860b;color:#fff">🔧 一键修复本机 MCP</button><button class="btn sm" onclick="mcpVerifyLocal()" title="实测使用: 真起进程 initialize+tools/list 拿真实工具数" style="background:#1a7f5a;color:#fff">🧪 实测使用</button></div>';
     h+='<input id="mcpq" placeholder="🔍 搜索 MCP (名称 / 简介)" oninput="mcpFilter(this.value)" style="width:100%;margin:0 0 8px;padding:6px 8px;box-sizing:border-box;background:var(--card,#222);color:var(--fg);border:1px solid var(--border);border-radius:4px">';
     var _curG='';
     var _ideSrcs=[];items.forEach(function(x){if(x.group==='ide'&&x.source&&_ideSrcs.indexOf(x.source)<0)_ideSrcs.push(x.source);});
@@ -4205,6 +4228,34 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 逐项接测(连接验证) — 纯探测, 不改任何状态; 结果按 idx 回填卡片。
                 const res = await daoProbeMcp(msg.spec || {});
                 reply({ type: 'mcpProbeResult', idx: msg.idx, result: res });
+                break;
+            }
+            case 'repairLocalMcp': {
+                // 一键修复本机 MCP(通用·强鲁棒): 自动识别 node 运行时与模块路径, 修正命令并启用(先备份)。
+                try {
+                    const r = daoRepairLocalMcp({ allIdes: !!msg.allIdes, enable: true, dryRun: false });
+                    const n = r.results.reduce((a: number, x: any) => a + (x.changes ? x.changes.length : 0), 0);
+                    const rtLabel = r.runtime.electron ? ('IDE 内置 node (' + path.basename(r.runtime.command || '') + ')') : ('系统 node (' + (r.runtime.command || '未找到') + ')');
+                    if (n > 0) vscode.window.showInformationMessage('🔧 已修复本机 MCP ' + n + ' 项 · 运行时=' + rtLabel + ' · 已备份原配置。重载窗口(Ctrl+Shift+P → Reload Window)后生效。');
+                    else vscode.window.showInformationMessage('🔧 本机 MCP 无需修复 (运行时=' + rtLabel + ', 配置已就绪)。');
+                    refreshReply({ type: 'actionResult', command: 'repairLocalMcp', ok: true });
+                } catch (e: any) { vscode.window.showErrorMessage('MCP 修复失败: ' + String(e && e.message || e)); reply({ type: 'actionResult', command: 'repairLocalMcp', ok: false }); }
+                break;
+            }
+            case 'verifyLocalMcp': {
+                // 实测使用: Devin Desktop 各 STDIO MCP 真起进程拿工具数, 结果弹通知 + 回填。
+                try {
+                    let ideV = scanIdeMcps().filter((e) => e.source === 'Devin Desktop');
+                    const vres = await Promise.all(ideV.map(async (e) => {
+                        if (e.transport === 'HTTP') { const r = await daoProbeMcp({ transport: 'HTTP', url: e.url, headers: e.headers }); return { name: e.name, ok: r.ok, toolCount: 0 }; }
+                        const r = await daoVerifyMcpStdio({ command: e.command, args: e.args, env: e.env }, 15000);
+                        return { name: e.name, ok: r.ok, toolCount: r.toolCount, error: r.error };
+                    }));
+                    const okN = vres.filter((x) => x.ok).length;
+                    const summary = vres.map((x) => x.name + (x.ok ? '✓' + x.toolCount + '工具' : '✗')).join(' · ');
+                    vscode.window.showInformationMessage('🧪 实测 Devin Desktop MCP: ' + okN + '/' + vres.length + ' 可用 — ' + summary);
+                    refreshReply({ type: 'actionResult', command: 'verifyLocalMcp', ok: okN > 0 });
+                } catch (e: any) { vscode.window.showErrorMessage('MCP 实测失败: ' + String(e && e.message || e)); reply({ type: 'actionResult', command: 'verifyLocalMcp', ok: false }); }
                 break;
             }
             case 'mcpInstallAllAccounts': {
@@ -5170,6 +5221,8 @@ function agentApiCatalog(): { group: string; items: AgentApiEndpoint[] }[] {
             { method: 'GET', path: '/api/devin/mcp/marketplace', desc: '官网 MCP 市场目录' },
             { method: 'POST', path: '/api/devin/mcp/probe', body: '{"transport":"HTTP","url":"..","headers":{}}  或  {"command":"..","args":[]}', desc: '单项接测(连接验证): HTTP/SSE 走 initialize·直连不通自动经本机代理隧道复测; STDIO 验运行时+脚本就绪' },
             { method: 'GET', path: '/api/devin/mcp/probe-all', desc: '全量接测本机 IDE MCP, 返回每项 ok/status/label/detail' },
+            { method: 'POST', path: '/api/devin/mcp/repair', body: '{"allIdes":false,"enable":true,"dryRun":false}', desc: '一键修复本机 MCP(通用·强鲁棒): 自动识别 node 运行时与模块路径、修正命令并启用(先备份原配置)。dryRun 仅预演返回改动计划' },
+            { method: 'POST', path: '/api/devin/mcp/verify', body: '{"source":"Devin Desktop","all":false}', desc: '实测使用: 逐本机 STDIO MCP 真起进程 initialize+tools/list 返回真实工具数(HTTP 走 initialize 接测)' },
             { method: 'POST', path: '/api/devin/mcp/add', body: '{"name":"GitHub MCP","transport":"HTTP","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer .."}}', desc: '追录自定义 MCP (HTTP/SSE 或 STDIO: command/args/env_variables)' },
             { method: 'POST', path: '/api/devin/mcp/install', body: '{"marketplace_server_id":".."}  或  {"slug":".."}', desc: '安装一个市场目录项到本账号' },
             { method: 'POST', path: '/api/devin/mcp/delete', body: '{"id":"mcp-installation-.."}', desc: '删除 MCP 安装' },
@@ -7038,6 +7091,162 @@ function daoWhichCmd(cmd: string): string {
         }
     }
     return '';
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 帛书·「道法自然·无为而无不为」— 通用型 MCP 修复链路
+//   不论用户电脑环境/安装位置, 插件装到 IDE 即自动识别可用运行时与模块路径,
+//   一键把本机 MCP 修正为「强鲁棒·可用」: 自动选 node 运行时、重解析脚本路径、启用。
+// ──────────────────────────────────────────────────────────────────────────
+
+// 通用 node 运行时解析: 优先系统 node(最可移植), 退回 IDE 自带 Electron 当 node 跑。
+//   process.execPath 即当前 IDE 的 Electron 二进制(Windsurf/Devin Desktop/VS Code/Cursor),
+//   故 Electron 回退天然通用, 无需硬编码任何安装路径。
+function daoResolveNodeRuntime(): { cmd: string; electron: boolean; source: string } {
+    const viaPath = daoWhichCmd('node');
+    if (viaPath) return { cmd: viaPath, electron: false, source: 'PATH' };
+    const home = os.homedir();
+    const common = process.platform === 'win32'
+        ? ['C:\\Program Files\\nodejs\\node.exe', 'C:\\Program Files (x86)\\nodejs\\node.exe', path.join(home, 'scoop', 'apps', 'nodejs', 'current', 'node.exe')]
+        : ['/usr/local/bin/node', '/usr/bin/node', '/opt/homebrew/bin/node', path.join(home, '.volta', 'bin', 'node')];
+    for (const c of common) { try { if (fs.existsSync(c)) return { cmd: c, electron: false, source: 'common-path' }; } catch { /* 守柔 */ } }
+    // 退回: 当前 IDE 的 Electron 二进制当 node 跑(ELECTRON_RUN_AS_NODE=1)
+    try { if (process.execPath && fs.existsSync(process.execPath)) return { cmd: process.execPath, electron: true, source: 'ide-electron' }; } catch { /* 守柔 */ }
+    return { cmd: '', electron: false, source: 'none' };
+}
+
+// 通用 npm 全局模块根: npm root -g + 各平台常见全局位置, 存在者皆纳入候选。
+function daoNpmGlobalRoots(): string[] {
+    const home = os.homedir();
+    const out: string[] = [];
+    const push = (p: string) => { try { if (p && fs.existsSync(p) && out.indexOf(p) < 0) out.push(p); } catch { /* 守柔 */ } };
+    try { const r = require('child_process').execSync('npm root -g', { encoding: 'utf8', timeout: 6000 }).trim(); push(r); } catch { /* 守柔 */ }
+    if (process.platform === 'win32') {
+        push(path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm', 'node_modules'));
+        push('C:\\Program Files\\nodejs\\node_modules');
+    } else {
+        push('/usr/local/lib/node_modules');
+        push('/usr/lib/node_modules');
+        push('/opt/homebrew/lib/node_modules');
+    }
+    return out;
+}
+
+// 重解析模块脚本路径: 原绝对路径不存在时(换机/换装位), 截取 node_modules 后的相对段在各全局根重找。
+function daoResolveModuleScript(orig: string): string {
+    try { if (orig && fs.existsSync(orig)) return orig; } catch { /* 守柔 */ }
+    if (!orig) return orig;
+    const norm = orig.replace(/\\/g, '/');
+    const idx = norm.toLowerCase().lastIndexOf('node_modules/');
+    if (idx < 0) return orig;
+    const rel = norm.slice(idx + 'node_modules/'.length);
+    for (const root of daoNpmGlobalRoots()) {
+        const cand = path.join(root, rel.split('/').join(path.sep));
+        try { if (fs.existsSync(cand)) return cand; } catch { /* 守柔 */ }
+    }
+    return orig;
+}
+
+interface McpRepairChange { name: string; action: string; before: { command: string; argsHead: string; disabled: boolean }; after: { command: string; argsHead: string; disabled: boolean }; }
+
+// 修复单个 MCP 配置文件: 逐 server 归一运行时 + 重解析脚本 + 启用; 改动前先备份原文件。
+function daoRepairMcpConfigFile(filePath: string, opts: { enable?: boolean; dryRun?: boolean }): { ok: boolean; file: string; backup?: string; changes: McpRepairChange[]; error?: string } {
+    const enable = opts.enable !== false;
+    const changes: McpRepairChange[] = [];
+    try {
+        if (!fs.existsSync(filePath)) return { ok: false, file: filePath, changes, error: 'config not found' };
+        const raw = fs.readFileSync(filePath, 'utf8');
+        let j: any;
+        try { j = JSON.parse(raw); } catch { try { j = JSON.parse(_stripJsonc(raw)); } catch { j = JSON.parse(_repairJsonEscapes(_stripJsonc(raw))); } }
+        const servers = (j && (j.mcpServers || j.servers)) || {};
+        const rt = daoResolveNodeRuntime();
+        for (const name of Object.keys(servers)) {
+            const s = servers[name] || {};
+            const isHttp = !!(s.url || s.serverUrl || ['http', 'sse', 'streamable-http', 'streamable_http'].includes(String(s.type || s.transport || '').toLowerCase()));
+            const args0: string[] = Array.isArray(s.args) ? s.args.map((a: any) => String(a)) : [];
+            const before = { command: String(s.command || ''), argsHead: args0.slice(0, 3).join(' '), disabled: !!(s.disabled === true || s.enabled === false) };
+            let action = '';
+            if (!isHttp) {
+                const newArgs = args0.map((a) => /\.(js|mjs|cjs)$/i.test(a) ? daoResolveModuleScript(a) : a);
+                const cmdStr = String(s.command || '');
+                const isElectron = /windsurf\.exe|devin\.exe|code\.exe|cursor\.exe|electron/i.test(cmdStr.toLowerCase()) || !!(s.env && s.env.ELECTRON_RUN_AS_NODE);
+                const cmdMissing = !daoWhichCmd(cmdStr);
+                if ((isElectron || cmdMissing) && rt.cmd) {
+                    s.command = rt.cmd;
+                    s.env = s.env || {};
+                    if (rt.electron) { s.env.ELECTRON_RUN_AS_NODE = '1'; action += 'runtime→IDE-node;'; }
+                    else { if (s.env.ELECTRON_RUN_AS_NODE) delete s.env.ELECTRON_RUN_AS_NODE; action += 'runtime→system-node;'; }
+                }
+                if (JSON.stringify(newArgs) !== JSON.stringify(args0)) { s.args = newArgs; action += 'script-path-fixed;'; }
+            }
+            if (enable && before.disabled) { s.disabled = false; if ('enabled' in s) s.enabled = true; action += 'enabled;'; }
+            const argsA: string[] = Array.isArray(s.args) ? s.args.map((a: any) => String(a)) : [];
+            const after = { command: String(s.command || ''), argsHead: argsA.slice(0, 3).join(' '), disabled: !!(s.disabled === true || s.enabled === false) };
+            if (action) changes.push({ name, action, before, after });
+        }
+        if (!opts.dryRun && changes.length) {
+            let backup = '';
+            try { backup = filePath + '.dao-bak-' + Date.now(); fs.writeFileSync(backup, raw, 'utf8'); } catch { backup = ''; }
+            fs.writeFileSync(filePath, JSON.stringify(j, null, 2), 'utf8');
+            return { ok: true, file: filePath, backup, changes };
+        }
+        return { ok: true, file: filePath, changes };
+    } catch (e: any) {
+        return { ok: false, file: filePath, changes, error: String(e && e.message || e) };
+    }
+}
+
+// 一键修复本机 MCP: 默认修 Devin Desktop⇄Windsurf 同源配置; allIdes 时并修其他 IDE。
+function daoRepairLocalMcp(opts: { allIdes?: boolean; enable?: boolean; dryRun?: boolean }): { ok: boolean; runtime: { command: string; electron: boolean; source: string }; npmRoots: string[]; results: Array<ReturnType<typeof daoRepairMcpConfigFile>> } {
+    const home = os.homedir();
+    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    const primary = [path.join(home, '.codeium', 'windsurf', 'mcp_config.json')];
+    const extra = [
+        path.join(home, '.codeium', 'windsurf-next', 'mcp_config.json'),
+        path.join(home, '.cursor', 'mcp.json'),
+        path.join(appData, 'Code', 'User', 'mcp.json'),
+    ];
+    const targets = opts.allIdes ? primary.concat(extra) : primary;
+    const rt = daoResolveNodeRuntime();
+    const results: Array<ReturnType<typeof daoRepairMcpConfigFile>> = [];
+    for (const f of targets) { try { if (fs.existsSync(f)) results.push(daoRepairMcpConfigFile(f, { enable: opts.enable, dryRun: opts.dryRun })); } catch { /* 守柔 */ } }
+    return { ok: true, runtime: rt, npmRoots: daoNpmGlobalRoots(), results };
+}
+
+// 实测·STDIO MCP 真起进程: spawn + initialize + tools/list, 返回真实工具数(有界超时, 必杀进程)。
+function daoVerifyMcpStdio(spec: any, timeoutMs: number): Promise<{ ok: boolean; toolCount: number; tools?: string[]; error?: string }> {
+    return new Promise((resolve) => {
+        try {
+            const cmd = daoWhichCmd(String(spec.command || '')) || String(spec.command || '');
+            if (!cmd) return resolve({ ok: false, toolCount: 0, error: 'command not found' });
+            const args: string[] = Array.isArray(spec.args) ? spec.args.map((a: any) => String(a)) : [];
+            const env: Record<string, string> = Object.assign({}, process.env) as Record<string, string>;
+            const se = spec.env || spec.env_variables || {};
+            if (se && typeof se === 'object') for (const k of Object.keys(se)) env[k] = String(se[k] != null ? se[k] : '');
+            const cp = require('child_process');
+            const p = cp.spawn(cmd, args, { env });
+            let buf = ''; let done = false;
+            const fin = (r: any) => { if (done) return; done = true; try { p.kill(); } catch { /* 守柔 */ } resolve(r); };
+            p.stdout.on('data', (d: Buffer) => {
+                buf += d.toString();
+                let i: number;
+                while ((i = buf.indexOf('\n')) >= 0) {
+                    const ln = buf.slice(0, i); buf = buf.slice(i + 1);
+                    if (!ln.trim()) continue;
+                    let m: any; try { m = JSON.parse(ln); } catch { continue; }
+                    if (m.id === 1 && m.result && Array.isArray(m.result.tools)) {
+                        const tools = m.result.tools.map((t: any) => String(t.name || ''));
+                        fin({ ok: true, toolCount: tools.length, tools });
+                    }
+                }
+            });
+            p.on('error', (e: any) => fin({ ok: false, toolCount: 0, error: String(e && e.message || e) }));
+            p.stderr.on('data', () => { /* 守柔: 吞 stderr 噪声 */ });
+            setTimeout(() => { try { p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'dao-verify', version: '1.0' } } }) + '\n'); } catch { /* 守柔 */ } }, 300);
+            setTimeout(() => { try { p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }) + '\n'); } catch { /* 守柔 */ } }, 1300);
+            setTimeout(() => fin({ ok: false, toolCount: 0, error: 'timeout' }), timeoutMs || 12000);
+        } catch (e: any) { resolve({ ok: false, toolCount: 0, error: String(e && e.message || e) }); }
+    });
 }
 
 // 道·MCP 接测专用 POST: 直连优先, 直连不可达(status 0)且本机有 VPN/代理时, 经 CONNECT 隧道(127.0.0.1:port)重试。
