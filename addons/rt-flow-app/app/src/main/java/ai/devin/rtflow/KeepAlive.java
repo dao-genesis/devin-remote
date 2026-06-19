@@ -68,6 +68,32 @@ public final class KeepAlive {
         } catch (Exception e) { return openAppDetails(ctx); }
     }
 
+    // ── 悬浮窗 / 显示在其他应用上层 (后台启动 Activity 放行) ──────────
+    /** 是否已授予「显示在其他应用上层」。<M 视为已授予。 */
+    public static boolean canDrawOverlays(Context ctx) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+            return Settings.canDrawOverlays(ctx);
+        } catch (Exception e) { return false; }
+    }
+
+    /** 跳转「显示在其他应用上层」授权页 (Android 10+ 后台唤回前台依赖它)。返回是否发起成功。 */
+    public static boolean requestOverlay(Context ctx) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false;
+        try {
+            ctx.startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + ctx.getPackageName()))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            return true;
+        } catch (Exception e) {
+            try {
+                ctx.startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                return true;
+            } catch (Exception e2) { return openAppDetails(ctx); }
+        }
+    }
+
     // ── 厂商自启动 / 后台白名单 ─────────────────────────────────────
     /** 跳转到当前厂商的「自启动 / 后台启动」管理页。失败回退应用详情页。返回是否发起成功。 */
     public static boolean openAutoStart(Context ctx) {
@@ -173,6 +199,7 @@ public final class KeepAlive {
             org.json.JSONObject o = new org.json.JSONObject();
             o.put("maker", maker().name());
             o.put("battOptIgnored", isBatteryOptIgnored(ctx));
+            o.put("overlayGranted", canDrawOverlays(ctx));
             o.put("hint", instructions());
             return o.toString();
         } catch (Exception e) { return "{\"battOptIgnored\":false}"; }

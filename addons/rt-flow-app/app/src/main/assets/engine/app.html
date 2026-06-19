@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Devin Cloud · 手机版 (网页)</title>
+<style>
+  /* 与 APK 各页面同一套 VSCode 深色令牌, 外壳与内嵌页视觉一致 */
+  :root{--bg:#0e1116;--fg:#cdd3de;--border:#222730;--bar:#161b22;--input:#161b22;
+        --input-b:#30363d;--btn:#1f6feb;--btn-h:#388bfd;--green:#4ec9b0;--muted:#7d8590}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+            font:13px/1.4 -apple-system,'Segoe UI',Roboto,sans-serif;overflow:hidden}
+  #app{display:flex;flex-direction:column;height:100%}
+  /* ── 工具栏 ── */
+  #bar{display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bar);
+       border-bottom:1px solid var(--border);flex:0 0 auto}
+  #bar button{background:#1c2230;color:var(--fg);border:1px solid var(--input-b);
+       border-radius:7px;height:32px;min-width:34px;padding:0 9px;font-size:14px;cursor:pointer}
+  #bar button:active{background:#283041}
+  #addr{flex:1;height:32px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);
+        border-radius:8px;padding:0 11px;font-size:13px;outline:none}
+  #addr:focus{border-color:var(--btn)}
+  /* ── 标签条 ── */
+  #strip{display:flex;align-items:center;gap:5px;padding:5px 8px;background:#11161e;
+         border-bottom:1px solid var(--border);overflow-x:auto;flex:0 0 auto;scrollbar-width:thin}
+  #strip::-webkit-scrollbar{height:5px}#strip::-webkit-scrollbar-thumb{background:#2a3140;border-radius:3px}
+  .chip{display:flex;align-items:center;gap:6px;flex:0 0 auto;max-width:190px;height:30px;padding:0 8px 0 11px;
+        background:#1a2030;border:1px solid var(--input-b);border-radius:8px;cursor:pointer;color:var(--muted);font-size:12px}
+  .chip.on{background:#13332b;border-color:#1f5f51;color:var(--green)}
+  .chip .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip .x{width:18px;height:18px;line-height:16px;text-align:center;border-radius:50%;color:#8a93a0;font-size:14px}
+  .chip .x:hover{background:#3a2030;color:#f88}
+  #plus{flex:0 0 auto;width:30px;height:30px;border-radius:8px;border:1px dashed var(--input-b);
+        background:transparent;color:var(--muted);font-size:18px;cursor:pointer}
+  /* ── 内容区: 每标签一个 iframe (多实例) ── */
+  #frames{position:relative;flex:1 1 auto;background:var(--bg)}
+  #frames iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
+  #frames iframe.hidden{display:none}
+  .blocked{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+           gap:14px;background:var(--bg);color:var(--fg);padding:24px;text-align:center}
+  .blocked b{color:var(--green)}
+  .blocked button{background:var(--btn);color:#fff;border:0;border-radius:8px;padding:10px 18px;font-size:14px;cursor:pointer}
+  /* ── 新标签/板块选择面板 ── */
+  #launch{position:absolute;inset:0;background:rgba(8,11,16,.72);display:none;align-items:flex-start;justify-content:center;z-index:50}
+  #launch.show{display:flex}
+  #launchCard{margin-top:54px;width:min(460px,92vw);background:#11161e;border:1px solid var(--border);
+              border-radius:14px;padding:14px;box-shadow:0 18px 50px #000a}
+  #launchCard h3{margin:2px 0 12px;font-size:13px;color:var(--muted);font-weight:600}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .seg{display:flex;align-items:center;gap:9px;background:#1a2030;border:1px solid var(--input-b);
+       border-radius:10px;padding:11px 12px;cursor:pointer;color:var(--fg);font-size:13px}
+  .seg:hover{border-color:var(--green);background:#13332b}
+  .seg .ic{font-size:18px;width:22px;text-align:center}
+  #urlRow{display:flex;gap:7px;margin-top:12px}
+  #urlInput{flex:1;height:36px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);
+            border-radius:8px;padding:0 11px;font-size:13px;outline:none}
+  #urlGo{background:var(--btn);color:#fff;border:0;border-radius:8px;padding:0 16px;font-size:14px;cursor:pointer}
+  /* ── 菜单下拉 ── */
+  #menuPop{position:absolute;top:46px;left:8px;background:#11161e;border:1px solid var(--border);border-radius:12px;
+           padding:6px;display:none;z-index:60;min-width:200px;box-shadow:0 14px 40px #000a}
+  #menuPop.show{display:block}
+  #menuPop .mi{padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:9px}
+  #menuPop .mi:hover{background:#1a2030}
+  #menuPop .sep{height:1px;background:var(--border);margin:5px 4px}
+  #menuPop .ic{width:20px;text-align:center}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <button id="menuBtn" title="菜单">&#9776;</button>
+    <input id="addr" inputmode="url" autocomplete="off" spellcheck="false" placeholder="输入网址 / 板块 (切号·穿透·对话…)">
+    <button id="reload" title="重载">&#8635;</button>
+    <button id="go" title="前往">&#8594;</button>
+  </div>
+  <div id="strip"><button id="plus" title="新标签">+</button></div>
+  <div id="frames">
+    <div id="menuPop"></div>
+    <div id="launch"><div id="launchCard">
+      <h3>新标签 — 选择板块, 或输入任意网址 (各大浏览器多实例)</h3>
+      <div class="grid" id="segGrid"></div>
+      <div id="urlRow"><input id="urlInput" inputmode="url" placeholder="https:// 任意网址"><button id="urlGo">打开</button></div>
+    </div></div>
+  </div>
+</div>
+<script>
+(function(){
+  "use strict";
+  function qp(k){ try{ return new URLSearchParams(location.search).get(k)||""; }catch(e){ return ""; } }
+  var SESSION = qp("session") || localStorage.getItem("rtflow.rn.session") || "";
+  var TOKEN   = qp("token") || qp("t") || localStorage.getItem("rtflow.rn.token") || "";
+  var ENDPOINT= (qp("endpoint")|| "").replace(/\/+$/,"");
+  if(SESSION) localStorage.setItem("rtflow.rn.session",SESSION);
+  if(TOKEN)   localStorage.setItem("rtflow.rn.token",TOKEN);
+
+  // 与 APK 菜单同序同名的板块 (内层真实页面, 同源 iframe 内嵌)
+  var PAGES = [
+    {key:"switch",  file:"switch.html",      label:"切号面板",        ic:"🔁"},
+    {key:"cloud",   file:"cloud.html",       label:"对话 / Cloud",    ic:"☁"},
+    {key:"tunnel",  file:"tunnel.html",      label:"公网穿透",        ic:"🌐"},
+    {key:"vpn",     file:"vpn.html",         label:"VPN 加速",        ic:"🚀"},
+    {key:"scripts", file:"userscripts.html", label:"用户脚本 (油猴)", ic:"🐵"},
+    {key:"shizuku", file:"shizuku.html",     label:"Shizuku 权限",    ic:"🔑"},
+    {key:"daopan",  file:"daopan.html",      label:"全服通",          ic:"🌊"},
+    {key:"panel",   file:"panel.html",       label:"控制面板",        ic:"🎛"}
+  ];
+  function pageByKey(k){ for(var i=0;i<PAGES.length;i++) if(PAGES[i].key===k) return PAGES[i]; return null; }
+  function pageSrc(p){
+    var u = "/"+p.file+"?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN);
+    if(ENDPOINT) u += "&endpoint="+encodeURIComponent(ENDPOINT);
+    return u;
+  }
+
+  var tabs = [];      // {id,title,src,kind,fr,el} kind: 'page'|'web'
+  var active = -1, seq = 0;
+  var strip = document.getElementById("strip");
+  var plus  = document.getElementById("plus");
+  var frames= document.getElementById("frames");
+  var addr  = document.getElementById("addr");
+
+  function host(u){ try{ return new URL(u, location.href).host; }catch(e){ return u; } }
+  function isExternal(u){ return /^https?:\/\//i.test(u) && host(u)!==location.host; }
+
+  function openPage(key){
+    var p = pageByKey(key); if(!p) return;
+    addTab({title:p.label, src:pageSrc(p), kind:"page", pageKey:key});
+  }
+  function openWeb(url){
+    if(!/^[a-z]+:\/\//i.test(url)){
+      // 板块关键字 → 直接开对应板块
+      var map={"切号":"switch","穿透":"tunnel","公网穿透":"tunnel","对话":"cloud","cloud":"cloud",
+               "vpn":"vpn","脚本":"scripts","用户脚本":"scripts","shizuku":"shizuku","全服通":"daopan","面板":"panel"};
+      var lk=map[url.trim().toLowerCase()]||map[url.trim()];
+      if(lk){ openPage(lk); return; }
+      url = "https://"+url;
+    }
+    addTab({title:host(url), src:url, kind:"web"});
+  }
+
+  function addTab(t){
+    t.id = ++seq;
+    var fr = document.createElement("iframe");
+    fr.className="hidden"; fr.src=t.src;
+    fr.setAttribute("allow","clipboard-read; clipboard-write; geolocation; camera; microphone");
+    fr.referrerPolicy="no-referrer";
+    t.fr = fr; frames.appendChild(fr);
+    // 同源内层页: 加载后用真实 <title> 刷新标签名
+    fr.addEventListener("load", function(){
+      try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){}
+      checkBlocked(t);
+    });
+    if(t.kind==="web" && isExternal(t.src)) scheduleBlockCheck(t);
+    tabs.push(t); renderStrip(); selectTab(t.id);
+  }
+
+  // 外站常因 X-Frame-Options/CSP frame-ancestors 拒绝内嵌 → 检测后给"在新标签打开"出口
+  function scheduleBlockCheck(t){ t._loaded=false; setTimeout(function(){ if(!t._loaded) showBlocked(t); }, 2500); }
+  function checkBlocked(t){
+    t._loaded=true;
+    if(t.kind!=="web"||!isExternal(t.src)) return;
+    try{ // 能读到 contentDocument 即同源(不会发生); 跨域读取抛错=正常加载
+      var ok=false; try{ t.fr.contentWindow.location.href; ok=true; }catch(e){ ok=true; }
+    }catch(e){}
+  }
+  function showBlocked(t){
+    if(t.el && t.el.querySelector(".blocked")) return;
+    var d=document.createElement("div"); d.className="blocked";
+    d.innerHTML='<div>该站点 (<b>'+host(t.src)+'</b>) 禁止被网页内嵌 (X-Frame-Options)。<br>'+
+      'APK 用原生 WebView 可内嵌; 网页版受浏览器安全限制。</div>';
+    var b=document.createElement("button"); b.textContent="在浏览器新标签打开"; b.onclick=function(){ window.open(t.src,"_blank"); };
+    d.appendChild(b);
+    // 用占位层盖住该 tab 的 iframe 区域
+    t._blockEl=d; frames.appendChild(d); positionOverlay(t,d);
+  }
+  function positionOverlay(t,d){ d.style.display = (active>=0 && tabs[active]===t) ? "flex":"none"; }
+
+  function renderStrip(){
+    // 清掉旧 chip (保留 plus)
+    [].slice.call(strip.querySelectorAll(".chip")).forEach(function(c){ c.remove(); });
+    tabs.forEach(function(t,i){
+      var c=document.createElement("div"); c.className="chip"+(i===active?" on":""); c.dataset.id=t.id;
+      var tt=document.createElement("span"); tt.className="t"; tt.textContent=t.title||"新标签";
+      var x=document.createElement("span"); x.className="x"; x.textContent="×";
+      c.appendChild(tt); c.appendChild(x);
+      c.onclick=function(e){ if(e.target===x){ closeTab(t.id); return; } selectTab(t.id); };
+      strip.insertBefore(c, plus);
+    });
+  }
+
+  function selectTab(id){
+    for(var i=0;i<tabs.length;i++){
+      var on = tabs[i].id===id;
+      tabs[i].fr.className = on?"":"hidden";
+      if(on) active=i;
+      if(tabs[i]._blockEl) tabs[i]._blockEl.style.display = on?"flex":"none";
+    }
+    var t=tabs[active];
+    if(t){ addr.value = t.kind==="page" ? ("rtflow://"+(t.pageKey||"")) : t.src; }
+    renderStrip();
+  }
+
+  function closeTab(id){
+    var i=tabs.findIndex(function(t){return t.id===id;}); if(i<0) return;
+    var t=tabs[i];
+    if(t._blockEl) t._blockEl.remove();
+    t.fr.remove(); tabs.splice(i,1);
+    if(tabs.length===0){ openPage("switch"); return; }
+    if(active>=tabs.length) active=tabs.length-1;
+    selectTab(tabs[Math.max(0,active)].id);
+  }
+
+  // ── 地址栏 ──
+  function goAddr(){
+    var v=addr.value.trim(); if(!v) return;
+    var t=tabs[active];
+    if(t && t.kind==="web"){ // 当前是网页标签 → 原地导航
+      if(!/^[a-z]+:\/\//i.test(v)) v="https://"+v;
+      t.src=v; t.title=host(v); if(t._blockEl){t._blockEl.remove();t._blockEl=null;}
+      t.fr.src=v; if(isExternal(v)) scheduleBlockCheck(t); renderStrip();
+    } else openWeb(v); // 板块页上输入网址 → 新开网页标签 (不覆盖板块)
+  }
+  document.getElementById("go").onclick=goAddr;
+  addr.addEventListener("keydown",function(e){ if(e.key==="Enter") goAddr(); });
+  document.getElementById("reload").onclick=function(){ var t=tabs[active]; if(t){ try{ t.fr.contentWindow.location.reload(); }catch(e){ t.fr.src=t.fr.src; } } };
+
+  // ── 新标签面板 ──
+  var launch=document.getElementById("launch"), segGrid=document.getElementById("segGrid");
+  PAGES.forEach(function(p){
+    var s=document.createElement("div"); s.className="seg";
+    s.innerHTML='<span class="ic">'+p.ic+'</span><span>'+p.label+'</span>';
+    s.onclick=function(){ hideLaunch(); openPage(p.key); };
+    segGrid.appendChild(s);
+  });
+  (function(){ // 新标签 (Devin 外站)
+    var s=document.createElement("div"); s.className="seg";
+    s.innerHTML='<span class="ic">🟢</span><span>新标签 (Devin)</span>';
+    s.onclick=function(){ hideLaunch(); openWeb("https://app.devin.ai/"); };
+    segGrid.appendChild(s);
+  })();
+  function showLaunch(){ launch.classList.add("show"); var u=document.getElementById("urlInput"); u.value=""; setTimeout(function(){u.focus();},50); }
+  function hideLaunch(){ launch.classList.remove("show"); }
+  plus.onclick=showLaunch;
+  launch.onclick=function(e){ if(e.target===launch) hideLaunch(); };
+  document.getElementById("urlGo").onclick=function(){ var v=document.getElementById("urlInput").value.trim(); if(v){ hideLaunch(); openWeb(v); } };
+  document.getElementById("urlInput").addEventListener("keydown",function(e){ if(e.key==="Enter"){ var v=this.value.trim(); if(v){ hideLaunch(); openWeb(v); } } });
+
+  // ── 菜单 (复刻 APK 板块入口 + 页面工具) ──
+  var menuPop=document.getElementById("menuPop");
+  function buildMenu(){
+    menuPop.innerHTML="";
+    PAGES.forEach(function(p){ mi(p.ic, p.label, function(){ openPage(p.key); }); });
+    mi("🟢","新标签 (Devin)", function(){ openWeb("https://app.devin.ai/"); });
+    sep();
+    mi("◀","后退", function(){ var t=tabs[active]; if(t){ try{t.fr.contentWindow.history.back();}catch(e){} } });
+    mi("▶","前进", function(){ var t=tabs[active]; if(t){ try{t.fr.contentWindow.history.forward();}catch(e){} } });
+    mi("⌂","主页 (切号面板)", function(){ openPage("switch"); });
+    mi("🔗","复制本标签网址", function(){ var t=tabs[active]; if(!t) return;
+      var u = t.kind==="web"? t.src : (location.origin+pageSrc(pageByKey(t.pageKey)));
+      try{ navigator.clipboard.writeText(u); }catch(e){} });
+  }
+  function mi(ic,label,fn){ var d=document.createElement("div"); d.className="mi";
+    d.innerHTML='<span class="ic">'+ic+'</span><span>'+label+'</span>';
+    d.onclick=function(){ menuPop.classList.remove("show"); fn(); }; menuPop.appendChild(d); }
+  function sep(){ var s=document.createElement("div"); s.className="sep"; menuPop.appendChild(s); }
+  document.getElementById("menuBtn").onclick=function(e){ e.stopPropagation();
+    if(!menuPop.dataset.built){ buildMenu(); menuPop.dataset.built="1"; }
+    menuPop.classList.toggle("show"); };
+  document.addEventListener("click", function(){ menuPop.classList.remove("show"); });
+
+  // 首屏: 切号面板 (与 APK 冷启动一致)
+  openPage("switch");
+})();
+</script>
+</body>
+</html>

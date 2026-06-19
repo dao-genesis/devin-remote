@@ -173,8 +173,11 @@ public class RelayService extends Service {
     String[] staticAsset(String path) {
         if (path == null) return null;
         String name;
+        // 入口 = 网页版浏览器外壳 (复刻 APK 顶栏/标签条/板块切换/多实例, iframe 内嵌真实页面)。
+        // 单页直链仍可达 (如 /switch.html), 供外壳内嵌与直接打开。
         if (path.equals("/") || path.equals("/app") || path.equals("/app/")
-                || path.equals("/index.html") || path.equals("/console")) name = "switch.html";
+                || path.equals("/index.html") || path.equals("/console")
+                || path.equals("/shell") || path.equals("/home")) name = "app.html";
         else if (path.startsWith("/") && path.indexOf('/', 1) < 0
                 && (path.endsWith(".html") || path.endsWith(".js"))) name = path.substring(1);
         else return null;
@@ -809,13 +812,37 @@ public class RelayService extends Service {
             if (!remoteOpsEnabled) return;
             MainActivity m = MainActivity.sInstance;
             if (m != null) m.ipcOpenTab(url, accountJson);
+            else wakeHost();   // 软件本体被后台杀 → 先冷启动拉起浏览器外壳, 调用方稍候重试即可开页
         }
 
-        /** 把指定标签提到前台 (默认后台开页不打扰用户; Agent 需要"前端同步反映"时显式调用)。 */
+        /** 把指定标签提到前台 (默认后台开页不打扰用户; Agent 需要"前端同步反映"时显式调用)。
+         *  同时把软件本体提到前台 (后台/锁屏态时远程操控也能让前端可见)。 */
         @JavascriptInterface public void browseActivateTab(int tabIndex) {
             if (!remoteOpsEnabled) return;
+            wakeHost();
             MainActivity m = MainActivity.sInstance;
             if (m != null) m.ipcActivateTab(tabIndex);
+        }
+
+        /** 把软件本体(MainActivity)提到前台; 已被系统杀掉则冷启动拉起。
+         *  解决「手机在后台/软件被杀后, 远程操控前端不可见、甚至操作不了」: 任意设备的远程操作可主动唤回本体。 */
+        @JavascriptInterface public boolean appToFront() { return wakeHost(); }
+
+        /** 「显示在其他应用上层」是否已授予 (后台唤回前台的关键权限)。 */
+        @JavascriptInterface public boolean overlayGranted() { return KeepAlive.canDrawOverlays(RelayService.this); }
+        /** 跳转授予「显示在其他应用上层」(让后台唤回前台稳定生效)。 */
+        @JavascriptInterface public boolean requestOverlay() { return KeepAlive.requestOverlay(RelayService.this); }
+
+        /** 把软件本体提到前台 / 冷启动拉起 (前台常驻服务发起 Activity, 多数 ROM 放行)。返回是否已发起。 */
+        boolean wakeHost() {
+            try {
+                Intent it = new Intent(RelayService.this, MainActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                                | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                                | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                startActivity(it);
+                return true;
+            } catch (Exception e) { return false; }
         }
 
         @JavascriptInterface public void browseCloseTab(int tabIndex) {
