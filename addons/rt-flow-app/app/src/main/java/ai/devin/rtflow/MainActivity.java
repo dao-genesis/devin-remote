@@ -2283,18 +2283,23 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public boolean clearProxy() { return MainActivity.this.clearWebViewProxy(); }
         /** 当前已应用的代理 host:port (空=直连)。 */
         @JavascriptInterface public String currentProxy() { return MainActivity.this.curProxy == null ? "" : MainActivity.this.curProxy; }
+        /** 生成「查看该对话全部文件」取数指引 MD (账号/密码/Session ID/提取流程/中继) — 备份文件夹/ZIP 锚定本源。 */
+        @JavascriptInterface public String accessGuideMd(String accJson, String sid, String title) {
+            try { return MainActivity.this.buildAccessGuideMd(accJson, sid == null ? "" : sid, title == null ? "" : title); }
+            catch (Exception e) { return ""; }
+        }
         /** 把文本(对话 MD/知识库/剧本等)落地到系统「下载」目录 — 单一对话下载到本地。 */
         @JavascriptInterface public String saveTextFile(String name, String content) {
             try {
                 String safe = (name == null || name.trim().isEmpty()) ? ("rtflow-" + System.currentTimeMillis() + ".md") : name.replaceAll("[\\\\/:*?\"<>|]", "_");
-                File dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
-                if (!dir.exists()) dir.mkdirs();
+                File dir = downloadStoreDir();   // 保险箱副本 (软件内可拖入/打开 + 卸载不丢); 系统可见副本由 publishToDownloads 负责
                 File f = new File(dir, safe);
-                try (FileOutputStream fos = new FileOutputStream(f)) {
-                    fos.write((content == null ? "" : content).getBytes(StandardCharsets.UTF_8));
-                }
+                byte[] bytes = (content == null ? "" : content).getBytes(StandardCharsets.UTF_8);
+                try (FileOutputStream fos = new FileOutputStream(f)) { fos.write(bytes); }
+                android.net.Uri pub = publishToDownloads(safe, "text/markdown", bytes);   // 同步进系统下载/最近
+                final String puri = pub == null ? "" : pub.toString();
                 final File ff = f; final String fn = safe;
-                main.post(() -> { MainActivity.this.addDownloadRecord(fn, ff.getAbsolutePath(), "text/markdown", ff.length()); MainActivity.this.toast("已下载: " + fn); });
+                main.post(() -> { MainActivity.this.addDownloadRecord(fn, ff.getAbsolutePath(), puri, "text/markdown", ff.length()); MainActivity.this.toast(puri.isEmpty() ? ("已下载: " + fn) : ("已下载并同步系统下载: " + fn)); });
                 return f.getAbsolutePath();
             } catch (Exception e) {
                 main.post(() -> MainActivity.this.toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage())));
@@ -2308,13 +2313,14 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public String saveBase64File(String name, String base64) {
             try {
                 String safe = (name == null || name.trim().isEmpty()) ? ("rtflow-" + System.currentTimeMillis() + ".bin") : name.replaceAll("[\\\\/:*?\"<>|]", "_");
-                File dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
-                if (!dir.exists()) dir.mkdirs();
+                File dir = downloadStoreDir();   // 保险箱副本 (软件内可拖入/打开 + 卸载不丢); 系统可见副本由 publishToDownloads 负责
                 File f = new File(dir, safe);
                 byte[] data = android.util.Base64.decode(base64 == null ? "" : base64, android.util.Base64.DEFAULT);
                 try (FileOutputStream fos = new FileOutputStream(f)) { fos.write(data); }
+                android.net.Uri pub = publishToDownloads(safe, guessMime(safe), data);   // 同步进系统下载/最近
+                final String puri = pub == null ? "" : pub.toString();
                 final File ff = f; final String fn = safe;
-                main.post(() -> { MainActivity.this.addDownloadRecord(fn, ff.getAbsolutePath(), "application/octet-stream", ff.length()); MainActivity.this.toast("已下载: " + fn); });
+                main.post(() -> { MainActivity.this.addDownloadRecord(fn, ff.getAbsolutePath(), puri, guessMime(fn), ff.length()); MainActivity.this.toast(puri.isEmpty() ? ("已下载: " + fn) : ("已下载并同步系统下载: " + fn)); });
                 return f.getAbsolutePath();
             } catch (Exception e) {
                 main.post(() -> MainActivity.this.toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage())));
@@ -2445,7 +2451,10 @@ public class MainActivity extends AppCompatActivity {
             }
             java.io.FileOutputStream fos = new java.io.FileOutputStream(f); fos.write(data); fos.close();
             final File ff = f; final String fmime = (mime == null || mime.isEmpty()) ? "*/*" : mime; final long sz = ff.length();
-            main.post(() -> { addDownloadRecord(ff.getName(), ff.getAbsolutePath(), fmime, sz); toast("下载完成: " + ff.getName()); });
+            // 同步进系统「下载/最近」→ 其它 App / 文件管理器皆可见可用 (不再只困软件内)
+            android.net.Uri pub = publishToDownloads(ff.getName(), fmime, data);
+            final String puri = pub == null ? "" : pub.toString();
+            main.post(() -> { addDownloadRecord(ff.getName(), ff.getAbsolutePath(), puri, fmime, sz); toast(puri.isEmpty() ? ("下载完成: " + ff.getName()) : ("已下载并同步到系统下载: " + ff.getName())); });
         } catch (Exception e) { main.post(() -> toast("下载失败")); }
     }
 
@@ -2470,8 +2479,11 @@ public class MainActivity extends AppCompatActivity {
                     String mime = (meta != null && !meta[1].isEmpty()) ? meta[1] : (mediaType == null ? "*/*" : mediaType);
                     // 从应用沙箱搬到共享保险箱 downloads → 卸载/重装不丢
                     File persisted = persistToVault(new File(path), name);
-                    addDownloadRecord(name, persisted.getAbsolutePath(), mime, persisted.length());
-                    toast("下载完成: " + name);
+                    // 同步进系统「下载/最近」→ 其它 App / 文件管理器皆可见可用
+                    String puri = "";
+                    try { byte[] b = readAllBytes(persisted); android.net.Uri pub = publishToDownloads(name, mime, b); if (pub != null) puri = pub.toString(); } catch (Exception ignored) {}
+                    addDownloadRecord(name, persisted.getAbsolutePath(), puri, mime, persisted.length());
+                    toast(puri.isEmpty() ? ("下载完成: " + name) : ("已下载并同步系统下载: " + name));
                 } else if (st == DownloadManager.STATUS_FAILED) {
                     toast("下载失败");
                 }
@@ -2675,6 +2687,55 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
         return src;
     }
+    /** 读整个文件为字节数组 (供同步进系统下载用)。 */
+    private byte[] readAllBytes(File f) throws Exception {
+        try (java.io.FileInputStream in = new java.io.FileInputStream(f);
+             ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            byte[] buf = new byte[65536]; int r;
+            while ((r = in.read(buf)) > 0) bos.write(buf, 0, r);
+            return bos.toByteArray();
+        }
+    }
+    /** 据文件名猜 MIME, 取不到则 application/octet-stream。 */
+    private String guessMime(String name) {
+        try {
+            String ext = android.webkit.MimeTypeMap.getFileExtensionFromUrl(name == null ? "" : name);
+            String mm = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext == null ? "" : ext.toLowerCase());
+            if (mm != null && !mm.isEmpty()) return mm;
+        } catch (Exception ignored) {}
+        return "application/octet-stream";
+    }
+    /** 把字节流落进系统公共「下载」目录并登记, 使系统「下载/最近」、文件管理器及任意其它 App 都可见可用
+     *  (不再只困在软件内部)。API29+ 走 MediaStore.Downloads(Download/DevinCloud, 免「所有文件」权限且自动索引);
+     *  旧版写公共 Download 目录 + 媒体扫描登记。返回可直接 ACTION_VIEW/分享/拖拽的内容 Uri; 失败 null。 */
+    private android.net.Uri publishToDownloads(String name, String mime, byte[] data) {
+        if (data == null) return null;
+        try {
+            String safe = (name == null || name.trim().isEmpty()) ? ("DevinCloud-" + System.currentTimeMillis()) : name.replaceAll("[\\\\/:*?\"<>|]", "_");
+            String m = (mime == null || mime.trim().isEmpty() || "*/*".equals(mime)) ? guessMime(safe) : mime;
+            if (Build.VERSION.SDK_INT >= 29) {
+                android.content.ContentResolver cr = getContentResolver();
+                android.content.ContentValues cv = new android.content.ContentValues();
+                cv.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safe);
+                cv.put(android.provider.MediaStore.Downloads.MIME_TYPE, m);
+                cv.put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/DevinCloud");
+                cv.put(android.provider.MediaStore.Downloads.IS_PENDING, 1);
+                android.net.Uri uri = cr.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                if (uri == null) return null;
+                try (java.io.OutputStream os = cr.openOutputStream(uri)) { if (os != null) os.write(data); }
+                cv.clear(); cv.put(android.provider.MediaStore.Downloads.IS_PENDING, 0);
+                cr.update(uri, cv, null, null);
+                return uri;
+            }
+            File dir = new File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "DevinCloud");
+            if (!dir.exists()) dir.mkdirs();
+            File f = new File(dir, safe);
+            if (f.exists()) { String b = safe, e = ""; int d = safe.lastIndexOf('.'); if (d > 0) { b = safe.substring(0, d); e = safe.substring(d); } f = new File(dir, b + "_" + System.currentTimeMillis() + e); }
+            try (FileOutputStream fos = new FileOutputStream(f)) { fos.write(data); }
+            try { android.media.MediaScannerConnection.scanFile(this, new String[]{ f.getAbsolutePath() }, new String[]{ m }, null); } catch (Exception ignored) {}
+            try { return FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", f); } catch (Exception e) { return android.net.Uri.fromFile(f); }
+        } catch (Exception e) { return null; }
+    }
     /** 卸载/重装后 SharedPreferences 为空 → 从共享保险箱回读下载记录 (与账号/标签同机制)。 */
     private void restoreDownloads() {
         try {
@@ -2688,19 +2749,21 @@ public class MainActivity extends AppCompatActivity {
             org.json.JSONArray keep = new org.json.JSONArray();
             for (int i = 0; i < arr.length(); i++) {
                 org.json.JSONObject e = arr.getJSONObject(i);
-                if (new File(e.optString("file", "")).exists()) keep.put(e);
+                if (new File(e.optString("file", "")).exists() || !e.optString("uri", "").isEmpty()) keep.put(e);
             }
             sp.edit().putString("downloads", keep.toString()).apply();
             if (keep.length() != arr.length()) vaultWrite("downloads", keep.toString());
         } catch (Exception ignored) {}
     }
 
-    private void addDownloadRecord(String name, String path, String mime, long size) {
+    private void addDownloadRecord(String name, String path, String mime, long size) { addDownloadRecord(name, path, "", mime, size); }
+    /** uri 非空 = 该文件已登记进系统「下载」(MediaStore/公共目录) → 列表里的打开/拖拽优先用它, 系统级可见可用。 */
+    private void addDownloadRecord(String name, String path, String uri, String mime, long size) {
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
             org.json.JSONArray arr = new org.json.JSONArray(sp.getString("downloads", "[]"));
             org.json.JSONObject e = new org.json.JSONObject();
-            e.put("name", name); e.put("file", path); e.put("mime", mime); e.put("size", size); e.put("ts", System.currentTimeMillis());
+            e.put("name", name); e.put("file", path == null ? "" : path); e.put("uri", uri == null ? "" : uri); e.put("mime", mime); e.put("size", size); e.put("ts", System.currentTimeMillis());
             arr.put(e);
             while (arr.length() > 100) arr.remove(0);
             sp.edit().putString("downloads", arr.toString()).apply();
@@ -2899,6 +2962,7 @@ public class MainActivity extends AppCompatActivity {
             for (int i = arr.length() - 1; i >= 0; i--) {
                 org.json.JSONObject e = arr.getJSONObject(i);
                 final String path = e.optString("file", "");
+                final String uri = e.optString("uri", "");
                 final String name = e.optString("name", path);
                 final String mime = e.optString("mime", "*/*");
                 final int recIdx = i;
@@ -2914,28 +2978,36 @@ public class MainActivity extends AppCompatActivity {
                 nm.setTextColor(0xFFE6EDF3); nm.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
                 nm.setSingleLine(true); nm.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
                 File f = new File(path);
+                boolean avail = f.exists() || !uri.isEmpty();
                 TextView sub = new TextView(this);
-                sub.setText((f.exists() ? humanSize(f.length()) : "(文件已删)") + " · 点击打开 · 长按拖拽");
+                sub.setText((avail ? (f.exists() ? humanSize(f.length()) : "已入系统下载") : "(文件已删)") + " · 点击打开 · 长按拖拽");
                 sub.setTextColor(0xFF8B949E); sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
                 txt.addView(nm); txt.addView(sub);
                 Button more = chipBtnSm("\u22EE");
-                more.setOnClickListener(v -> showDownloadActions(v, recIdx, path, name, mime));
+                more.setOnClickListener(v -> showDownloadActions(v, recIdx, path, uri, name, mime));
                 row.addView(txt); row.addView(more);
-                txt.setOnClickListener(v -> openDownloaded(path, mime));
-                txt.setOnLongClickListener(v -> { dragDownloaded(v, path, mime); return true; });
+                txt.setOnClickListener(v -> openDownloaded(path, uri, mime));
+                txt.setOnLongClickListener(v -> { dragDownloaded(v, path, uri, mime); return true; });
                 listCol.addView(row);
             }
         } catch (Exception ignored) {}
     }
-    /** 下载项动作: 用其它应用打开 / 重命名 / 删除。 */
-    private void showDownloadActions(View anchor, int recIdx, String path, String name, String mime) {
+    /** 列表项打开/拖拽用的 Uri: 优先系统下载内容 Uri (任意 App 可读), 回退保险箱副本的 FileProvider Uri。 */
+    private Uri resolveOpenUri(String path, String uri) {
+        if (uri != null && !uri.isEmpty()) { try { return Uri.parse(uri); } catch (Exception ignored) {} }
+        try { return fileUri(path); } catch (Exception e) { return null; }
+    }
+    /** 下载项动作: 分享 / 用其它应用打开 / 重命名 / 删除。 */
+    private void showDownloadActions(View anchor, int recIdx, String path, String uri, String name, String mime) {
         PopupMenu pm = new PopupMenu(this, anchor);
-        pm.getMenu().add(0, 1, 0, "用其它应用打开");
-        pm.getMenu().add(0, 2, 1, "重命名");
-        pm.getMenu().add(0, 3, 2, "删除");
+        pm.getMenu().add(0, 0, 0, "分享");
+        pm.getMenu().add(0, 1, 1, "用其它应用打开");
+        pm.getMenu().add(0, 2, 2, "重命名");
+        pm.getMenu().add(0, 3, 3, "删除");
         pm.setOnMenuItemClickListener(it -> {
             switch (it.getItemId()) {
-                case 1: openWithChooser(path, mime); return true;
+                case 0: shareDownloaded(path, uri, mime); return true;
+                case 1: openWithChooser(path, uri, mime); return true;
                 case 2: renameDownload(recIdx, path, name); return true;
                 case 3: deleteDownload(recIdx, path); return true;
             }
@@ -2943,11 +3015,21 @@ public class MainActivity extends AppCompatActivity {
         });
         pm.show();
     }
-    private void openWithChooser(String path, String mime) {
+    private void shareDownloaded(String path, String uri, String mime) {
         try {
-            File f = new File(path); if (!f.exists()) { toast("文件已不存在"); return; }
+            Uri u = resolveOpenUri(path, uri); if (u == null) { toast("文件已不存在"); return; }
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType((mime == null || mime.isEmpty()) ? "*/*" : mime);
+            i.putExtra(Intent.EXTRA_STREAM, u);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(i, "分享到").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception e) { toast("无法分享"); }
+    }
+    private void openWithChooser(String path, String uri, String mime) {
+        try {
+            Uri u = resolveOpenUri(path, uri); if (u == null) { toast("文件已不存在"); return; }
             Intent i = new Intent(Intent.ACTION_VIEW);
-            i.setDataAndType(fileUri(path), (mime == null || mime.isEmpty()) ? "*/*" : mime);
+            i.setDataAndType(u, (mime == null || mime.isEmpty()) ? "*/*" : mime);
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(Intent.createChooser(i, "用其它应用打开").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         } catch (Exception e) { toast("无法打开"); }
@@ -3048,23 +3130,23 @@ public class MainActivity extends AppCompatActivity {
         try { return new android.content.pm.LabeledIntent(target, getPackageName(), name, 0); }
         catch (Exception e) { return target; }
     }
-    private void openDownloaded(String path, String mime) {
+    private void openDownloaded(String path, String uri, String mime) {
         try {
-            File f = new File(path);
-            if (!f.exists()) { toast("文件已不存在"); return; }
+            Uri u = resolveOpenUri(path, uri); if (u == null) { toast("文件已不存在"); return; }
             Intent i = new Intent(Intent.ACTION_VIEW);
-            i.setDataAndType(fileUri(path), (mime == null || mime.isEmpty()) ? "*/*" : mime);
+            i.setDataAndType(u, (mime == null || mime.isEmpty()) ? "*/*" : mime);
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(i);
-        } catch (Exception e) { toast("无法打开此文件"); }
+        } catch (Exception e) { toast("无法打开此文件 (可在「⋮ → 用其它应用打开」重试)"); }
     }
-    private void dragDownloaded(View v, String path, String mime) {
+    private void dragDownloaded(View v, String path, String uriStr, String mime) {
         try {
             v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
             doVibrate(30);
-            dragDlPath = path;                                       // 供网页 WebView 的 drop 监听注入
+            dragDlPath = path;                                       // 供网页 WebView 的 drop 监听注入 (读保险箱副本)
             dragDlMime = (mime == null || mime.isEmpty()) ? "*/*" : mime;
-            Uri uri = fileUri(path);
+            Uri uri = resolveOpenUri(path, uriStr);                  // 拖到其它 App: 优先系统下载内容 Uri
+            if (uri == null) uri = fileUri(path);
             ClipData data = new ClipData(new File(path).getName(),
                     new String[]{ dragDlMime }, new ClipData.Item(uri));
             View.DragShadowBuilder shadow = new View.DragShadowBuilder(v);
@@ -4272,6 +4354,104 @@ public class MainActivity extends AppCompatActivity {
             return android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
         } catch (Exception e) { return ""; }
     }
+
+    // ── 投屏镜像 (任意公网/局域网浏览器实时镜像并反向操控某原生标签) ─────────────
+    /** 镜像取帧: 截某标签为 JPEG(可降采样) + 尺寸/URL/标题/激活态 → JSON 字符串。任意线程可调(内部 marshal 到主线程)。 */
+    public String ipcMirrorFrame(int tabIndex, int quality, int maxDim) {
+        final String[] out = { "" };
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        runOnUiThread(() -> { try { out[0] = mirrorFrameOnUi(tabIndex, quality, maxDim); } catch (Exception e) { out[0] = ""; } finally { latch.countDown(); } });
+        try { latch.await(6, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {}
+        return (out[0] == null || out[0].isEmpty()) ? "{\"ok\":false}" : out[0];
+    }
+    private String mirrorFrameOnUi(int tabIndex, int quality, int maxDim) throws Exception {
+        if (tabIndex < 0 || tabIndex >= tabs.size()) return "{\"ok\":false,\"error\":\"no_tab\"}";
+        Tab t = tabs.get(tabIndex);
+        if (t.web == null) return "{\"ok\":false,\"error\":\"no_web\"}";
+        parkHost(t); resumeWeb(t.web);   // 后台标签也挂载并解冻, 否则截白图 (与 ipcScreenshot 同策)
+        int w = t.web.getWidth(), h = t.web.getHeight();
+        if (w <= 0 || h <= 0) {
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            w = dm.widthPixels; h = dm.heightPixels;
+            t.web.measure(android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
+                          android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY));
+            t.web.layout(0, 0, w, h);
+        }
+        if (w <= 0 || h <= 0) return "{\"ok\":false,\"error\":\"no_size\"}";
+        android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas c = new android.graphics.Canvas(bmp);
+        c.drawColor(0xFF0E1116);   // JPEG 无 alpha → 先铺底色避免透明区发黑
+        t.web.draw(c);
+        if (maxDim > 0 && Math.max(w, h) > maxDim) {   // 长边降采样, 控带宽
+            float s = maxDim / (float) Math.max(w, h);
+            android.graphics.Bitmap sb = android.graphics.Bitmap.createScaledBitmap(bmp, Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)), true);
+            bmp.recycle(); bmp = sb;
+        }
+        int bw = bmp.getWidth(), bh = bmp.getHeight();
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, Math.max(20, Math.min(90, quality)), bos);
+        bmp.recycle();
+        String b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
+        JSONObject o = new JSONObject();
+        o.put("ok", true); o.put("jpeg", b64); o.put("w", bw); o.put("h", bh);
+        o.put("url", t.web.getUrl() == null ? "" : t.web.getUrl());
+        o.put("title", t.web.getTitle() == null ? "" : t.web.getTitle());
+        o.put("active", tabIndex == active); o.put("n", tabs.size());
+        return o.toString();
+    }
+    /** 标签清单 (供镜像端选择镜像哪个原生标签)。 */
+    public String ipcMirrorTabs() {
+        final String[] out = { "" };
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        runOnUiThread(() -> {
+            try {
+                JSONObject o = new JSONObject(); org.json.JSONArray arr = new org.json.JSONArray();
+                for (int i = 0; i < tabs.size(); i++) {
+                    Tab t = tabs.get(i); JSONObject e = new JSONObject();
+                    e.put("i", i);
+                    e.put("title", (t.web != null && t.web.getTitle() != null) ? t.web.getTitle() : ("标签 " + (i + 1)));
+                    e.put("url", (t.web != null && t.web.getUrl() != null) ? t.web.getUrl() : "");
+                    arr.put(e);
+                }
+                o.put("active", active); o.put("tabs", arr); out[0] = o.toString();
+            } catch (Exception e) { out[0] = ""; } finally { latch.countDown(); }
+        });
+        try { latch.await(3, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {}
+        return (out[0] == null || out[0].isEmpty()) ? "{\"active\":-1,\"tabs\":[]}" : out[0];
+    }
+    /** 反向输入: 把镜像端的 点击/滑动/输入/按键 注入某标签页 (归一化坐标 → 页面视口坐标, 与设备像素密度无关)。 */
+    public String ipcMirrorInput(int tabIndex, JSONObject body) {
+        if (tabIndex < 0 || tabIndex >= tabs.size() || body == null) return "{\"ok\":false}";
+        String js;
+        try {
+            JSONObject a = new JSONObject();
+            a.put("action", body.optString("action", "click"));
+            a.put("nx", body.optDouble("nx", body.optDouble("x", 0)));
+            a.put("ny", body.optDouble("ny", body.optDouble("y", 0)));
+            a.put("text", body.optString("text", ""));
+            a.put("key", body.optString("key", ""));
+            a.put("dy", body.optDouble("dy", 0));
+            js = "(function(A){try{" + MIRROR_INPUT_CORE + "}catch(e){return 'err:'+e}})(" + a + ")";
+        } catch (Exception e) { return "{\"ok\":false}"; }
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        final String fjs = js;
+        runOnUiThread(() -> { try { ipcExecJs(tabIndex, fjs, v -> latch.countDown()); } catch (Exception e) { latch.countDown(); } });
+        try { latch.await(3, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {}
+        return "{\"ok\":true}";
+    }
+    /** 反向输入核心 JS (在被镜像页内执行): 归一化坐标→视口坐标, 合成 指针/鼠标/键盘 事件并对 React 受控输入触发 input/change。 */
+    private static final String MIRROR_INPUT_CORE =
+        "var x=Math.round(A.nx*window.innerWidth),y=Math.round(A.ny*window.innerHeight);" +
+        "var el=document.elementFromPoint(x,y);" +
+        "function fire(t,tg){var ev;try{ev=new MouseEvent(t,{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,view:window,button:0});}catch(_){ev=document.createEvent('MouseEvents');ev.initMouseEvent(t,true,true,window,0,0,0,x,y,false,false,false,false,0,null);}(tg||el).dispatchEvent(ev);}" +
+        "function fp(t,tg){try{(tg||el).dispatchEvent(new PointerEvent(t,{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,view:window,pointerType:'touch',isPrimary:true,button:0}));}catch(_){}}" +
+        "function setv(t,v){var p=(t.tagName==='TEXTAREA')?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;var s=Object.getOwnPropertyDescriptor(p,'value').set;s.call(t,v);t.dispatchEvent(new Event('input',{bubbles:true}));t.dispatchEvent(new Event('change',{bubbles:true}));}" +
+        "if(A.action==='click'||A.action==='tap'){if(!el)return'noel';fp('pointerdown');fire('mousedown');try{el.focus&&el.focus();}catch(_){}fp('pointerup');fire('mouseup');fire('click');return'click';}" +
+        "if(A.action==='scroll'){var sc=el;while(sc&&sc!==document.body&&sc!==document.documentElement){var st=getComputedStyle(sc);if(/(auto|scroll)/.test(st.overflowY)&&sc.scrollHeight>sc.clientHeight)break;sc=sc.parentElement;}if(sc&&sc!==document.body&&sc!==document.documentElement){sc.scrollTop+=A.dy;}else{window.scrollBy(0,A.dy);}return'scroll';}" +
+        "if(A.action==='type'||A.action==='settext'){var t=document.activeElement;if(!t||t===document.body){if(el&&el.focus){try{el.focus();}catch(_){}}t=document.activeElement;}if(!t)return'nofocus';var tg=(t.tagName||'').toLowerCase();if(tg==='input'||tg==='textarea'){setv(t,A.action==='settext'?A.text:((t.value||'')+A.text));return'type';}if(t.isContentEditable){document.execCommand('insertText',false,A.text);return'type-ce';}return'notinput';}" +
+        "if(A.action==='key'){var t=document.activeElement||document.body;var k=A.key||'Enter';var kc=k==='Enter'?13:(k==='Backspace'?8:0);['keydown','keypress','keyup'].forEach(function(tp){if(tp==='keypress'&&k!=='Enter')return;try{t.dispatchEvent(new KeyboardEvent(tp,{bubbles:true,cancelable:true,key:k,code:k,keyCode:kc,which:kc,view:window}));}catch(_){}});if(k==='Backspace'&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA')){setv(t,(t.value||'').slice(0,-1));}return'key';}" +
+        "if(A.action==='back'){history.back();return'back';}" +
+        "return'noop';";
 
     /** 获取所有 Cookie (指定 URL) */
     public String ipcGetCookies(String url) {

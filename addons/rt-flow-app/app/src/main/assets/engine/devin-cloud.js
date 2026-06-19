@@ -510,8 +510,38 @@
     out.set(eocd, p);
     return out;
   }
-  // 取某对话完整内容(对话md + 工作日志md + _meta.json + files/产出文件) → 打成单个 ZIP 的 base64 (含文件夹)。
-  //   仅读历史, 不消耗额度; 额度耗尽账号亦可。复刻桌面「下载对话内容(ZIP)」的产物结构。
+  // 取数指引 MD: 账号(邮箱/密码/org)+ Session ID + 提取流程 — 据此可随时整体重新取回该对话全部文件。
+  //   作为备份「文件夹/ZIP」的本源锚定第二份文档 (与「对话_完整记录」配套), 任意上下文(headless 引擎/网页)皆可生成。
+  function buildAccessGuide(acc, sid, title) {
+    acc = acc || {};
+    var full = String(sid || "").indexOf("devin-") === 0 ? sid : ("devin-" + sid);
+    var bare = String(sid || "").indexOf("devin-") === 0 ? sid.slice(6) : sid;
+    var email = acc.email || "", pwd = acc.password || "", org = acc.orgName || "", orgId = acc.orgId || "";
+    var L = [];
+    L.push("# 查看该对话的全部文件 · 取数指引\n");
+    L.push("> 本文件与同目录的 `对话_完整记录.md`(该对话全量文本) 配套, 仅针对**这一条对话**。\n");
+    L.push("## 一、对话坐标\n");
+    L.push("| 项 | 值 |\n|----|----|");
+    L.push("| 标题 | " + String(title || sid).replace(/\|/g, "\\|") + " |");
+    L.push("| Session ID | `" + full + "` |");
+    L.push("| 在线查看 | https://app.devin.ai/sessions/" + bare + " |");
+    if (org || orgId) L.push("| 组织 | " + String(org).replace(/\|/g, "\\|") + (orgId ? (" (`" + orgId + "`)") : "") + " |");
+    L.push("\n## 二、该对话所属账号 (额度耗尽也可登录读历史)\n");
+    L.push("| 项 | 值 |\n|----|----|");
+    L.push("| 邮箱 | " + (email ? ("`" + email + "`") : "(未知)") + " |");
+    L.push("| 密码 | " + (pwd ? ("`" + pwd + "`") : "(未知)") + " |");
+    L.push("\n> 提取只读历史数据, **不消耗额度**。\n");
+    L.push("## 三、整体取回该对话全部文件 (一行整体提取)\n");
+    L.push("```jsonc");
+    L.push("{ \"cmd\": \"login\", \"id\": \"" + (email || "<email>") + "\" }");
+    L.push("{ \"cmd\": \"extractConversation\", \"id\": \"" + (email || "<email>") + "\", \"sid\": \"" + full + "\", \"save\": true, \"zip\": true }");
+    L.push("```\n");
+    L.push("返回 `conversationMd`(完整对话) · `worklogMd` · `detail` · `files`/`fileCount` · `zipB64`(整包: `对话_人类可读.md`+`工作日志.md`+`取数指引.md`+`_meta.json`+`files/<产出文件>`)。\n");
+    L.push("> 手机切号面板每条对话行的 📦「全部文件」按钮等价于此 ZIP 一键下载, 并同步进系统「下载」。\n");
+    return L.join("\n");
+  }
+  // 取某对话完整内容(对话md + 取数指引md + 工作日志md + _meta.json + files/产出文件) → 打成单个 ZIP 的 base64 (含文件夹)。
+  //   仅读历史, 不消耗额度; 额度耗尽账号亦可。复刻桌面「下载对话内容(ZIP)」的产物结构, 以完整对话记录为本源锚定。
   async function exportSessionZip(acc, sid, onProgress) {
     var conv = await exportSession(acc, sid, "conversation");
     if (!conv || !conv.ok) return { ok: false, error: (conv && conv.error) || "对话导出失败" };
@@ -521,11 +551,13 @@
     try { col = await collectSessionFiles(acc, sid, ev, onProgress); } catch (e) {}
     var title = conv.title || sid;
     var entries = [];
+    // 本源核心: 完整对话记录(整条对话全过程) 放首位锚定; 取数指引/工作日志/产出文件皆辅助锚定它
     entries.push({ name: "对话_人类可读.md", bytes: utf8Bytes(conv.md || conv.content || "") });
+    try { entries.push({ name: "取数指引.md", bytes: utf8Bytes(buildAccessGuide(acc, sid, title)) }); } catch (e) {}
     if (wl && (wl.md || wl.content)) entries.push({ name: "工作日志.md", bytes: utf8Bytes(wl.md || wl.content) });
     entries.push({ name: "_meta.json", bytes: utf8Bytes(JSON.stringify({
       sessionId: sid, title: title, account: acc.email || acc.id, events: conv.events || 0,
-      fileCount: (col.files || []).length, files: col.index || []
+      anchor: "对话_人类可读.md", fileCount: (col.files || []).length, files: col.index || []
     }, null, 2)) });
     (col.files || []).forEach(function (f) {
       var rel = String(f.path || f.key || "file").replace(/^\/+/, "");
@@ -548,6 +580,7 @@
 
   root.DaoCloud = {
     buildZip: buildZip, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
+    buildAccessGuide: buildAccessGuide,
     purgeSession: purgeSession, sessTs: sessTs,
     listSessions: listSessions, sessionDetail: sessionDetail, sessionMessages: sessionMessages,
     sessionEvents: sessionEvents, exportSession: exportSession, deleteSession: deleteSession,
