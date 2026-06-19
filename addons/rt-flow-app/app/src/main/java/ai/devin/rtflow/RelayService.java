@@ -99,6 +99,7 @@ public class RelayService extends Service {
                     public String[] embedDoc(String url) { return RelayService.this.embedDoc(url); }
                     public String[] embedProxy(String method, String url, String acct, String body, String reqContentType) { return RelayService.this.embedProxy(method, url, acct, body, reqContentType); }
                     public int proxyPort(String target, String acct) { return RelayService.this.proxyPort(target, acct); }
+                    public String proxyPublicUrl(String target, String acct) { return RelayService.this.proxyPublicUrl(target, acct); }
                 });
                 localPort = localServer.start();
                 android.util.Log.i("RTFlowTunnel", "local server on 0.0.0.0:" + localPort);
@@ -295,6 +296,9 @@ public class RelayService extends Service {
     //  根挂载: 独立端口的根 / 即源站根 → 真实路径逐字一致, 0 改写, 路由/chunk/api 全自然命中 (AVD 实测登录态秒开)。
     // ════════════════════════════════════════════════════════════════════════
     private final java.util.Map<String, ProxyServer> proxyServers = new java.util.concurrent.ConcurrentHashMap<>();
+    // 公网根挂载: 每 (源站,账号) 一条专属 cloudflared 快速隧道, 把其根挂载端口暴露成独立 https 公网 origin。
+    private final java.util.Map<String, TunnelManager> proxyTunnels = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, String> proxyTunnelUrls = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** 为 (目标站 origin, 账号) 分配/复用根挂载代理端口 → 端口号 (>0); -1 失败。同 (站,号) 复用同端口供 SPA 大量子资源共享。 */
     int proxyPort(String target, String acct) {
@@ -311,6 +315,35 @@ public class RelayService extends Service {
             proxyServers.put(key, ps);
             return port;
         } catch (Exception e) { return -1; }
+    }
+
+    /** 公网根挂载: 为 (源站,账号) 的根挂载端口再起一条专属 cloudflared 快速隧道 → 返回该端口的 https 公网 URL。
+     *  公网任意浏览器据此 iframe 内嵌即享根挂载(真实路径逐字一致, 不必回退 /px); 每 (站,号) 复用同隧道; 失败返回 ""。 */
+    String proxyPublicUrl(String target, String acct) {
+        try {
+            int port = proxyPort(target, acct);
+            if (port <= 0) return "";
+            java.net.URL u = new java.net.URL(target);
+            String origin = u.getProtocol() + "://" + u.getHost() + (u.getPort() > 0 ? ":" + u.getPort() : "");
+            final String key = origin + "|" + ((acct == null || acct.isEmpty()) ? "_" : acct);
+            String have = proxyTunnelUrls.get(key);
+            TunnelManager ex = proxyTunnels.get(key);
+            if (have != null && !have.isEmpty() && ex != null && ex.isAlive()) return have;
+            if (ex != null) { try { ex.stop(); } catch (Exception ignored) {} proxyTunnels.remove(key); proxyTunnelUrls.remove(key); }
+            TunnelManager tm = new TunnelManager(this, port, new NativeTunnel.Callback() {
+                public void onUrl(String url) { proxyTunnelUrls.put(key, url); }
+                public void onLog(String line) { android.util.Log.i("RTFlowTunnel", "[px-cf] " + line); }
+                public void onExit(int code) { proxyTunnelUrls.remove(key); }
+            });
+            proxyTunnels.put(key, tm);
+            if (!tm.start()) { proxyTunnels.remove(key); return ""; }
+            for (int i = 0; i < 100; i++) {   // 等公网 URL 就绪 (快速隧道边缘握手 ~5-15s), 上限 20s
+                String url = proxyTunnelUrls.get(key);
+                if (url != null && !url.isEmpty()) return url;
+                Thread.sleep(200);
+            }
+            return "";
+        } catch (Exception e) { return ""; }
     }
 
     /** 根挂载抓取: 抓 url(代 acct 注入 Bearer auth1 + x-cog-org-id) → 顶层 HTML 剥 CSP + 注入登录态种子。
