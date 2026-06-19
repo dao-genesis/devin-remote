@@ -3639,6 +3639,31 @@ function handleControl(req, res) {
     return true;
   }
 
+  // ★ v9.9.301 · GET /origin/ea/usage · 用量聚合 (按渠道/模型 · 内存态)
+  //   道义: 四十四章「知足不辱 知止不殆」· 供「外接API」面板查看各渠道耗用
+  if (u.pathname === "/origin/ea/usage" && req.method === "GET") {
+    const usage =
+      _eaRuntimeMod && _eaRuntimeMod.routerUsage
+        ? _eaRuntimeMod.routerUsage()
+        : {};
+    let calls = 0;
+    let input = 0;
+    let output = 0;
+    for (const u2 of Object.values(usage)) {
+      calls += u2.calls || 0;
+      input += u2.input || 0;
+      output += u2.output || 0;
+    }
+    res.end(
+      JSON.stringify({
+        ok: true,
+        usage,
+        totals: { calls, input, output, total: input + output },
+      }),
+    );
+    return true;
+  }
+
   // GET /origin/ea/providers · 列出所有 provider (apiKey脱敏)
   if (u.pathname === "/origin/ea/providers" && req.method === "GET") {
     const cfg = _eaRuntimeMod ? _eaRuntimeMod.hotGetConfig() : {};
@@ -3650,6 +3675,11 @@ function handleControl(req, res) {
         const k = safe[name].apiKey;
         safe[name].apiKey = k.length > 8 ? k.substring(0, 8) + "***" : "***";
       }
+      // ★ v9.9.301 · 多 Key 脱敏 (仅回传前缀+个数 · 不泄真实 key)
+      if (Array.isArray(safe[name].apiKeys))
+        safe[name].apiKeys = safe[name].apiKeys.map((k) =>
+          typeof k === "string" && k.length > 8 ? k.substring(0, 8) + "***" : "***",
+        );
     }
     res.end(
       JSON.stringify({
@@ -3865,6 +3895,11 @@ function handleControl(req, res) {
       safe[name] = Object.assign({}, p);
       if (safe[name].apiKey)
         safe[name].apiKey = safe[name].apiKey.slice(0, 6) + "...";
+      // ★ v9.9.301 · 多 Key 脱敏 (仅回传前缀+个数 · 不泄真实 key)
+      if (Array.isArray(safe[name].apiKeys))
+        safe[name].apiKeys = safe[name].apiKeys.map((k) =>
+          typeof k === "string" && k.length > 6 ? k.slice(0, 6) + "..." : "...",
+        );
     }
     const routes = (cfg.daoRoutes && cfg.daoRoutes.routes) || {};
     const status = _eaRuntimeMod
@@ -3880,9 +3915,18 @@ function handleControl(req, res) {
     for (const [name, h] of Object.entries(health)) {
       if (safe[name]) safe[name].health = h;
     }
+    // ★ v9.9.301 · 用量聚合注入 · 每个 provider 注入 usage{calls,input,output,total,cost,models}
+    const usage =
+      _eaRuntimeMod && _eaRuntimeMod.routerUsage
+        ? _eaRuntimeMod.routerUsage()
+        : {};
+    for (const [name, u2] of Object.entries(usage)) {
+      if (safe[name]) safe[name].usage = u2;
+    }
     res.end(
       JSON.stringify({
         ok: true,
+        usage, // ★ v9.9.301 · 全渠道用量聚合
         available_models: models, // ★ v9.9.94 · 替代 seen_models
         seen_models: models, // 兼容旧前端
         official_families: _getOfficialFamilies(), // ★ v9.9.265 · 左侧全量官方·档位归一

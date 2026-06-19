@@ -4185,8 +4185,8 @@ function getEaConfigHtml(port, nonce) {
     <!-- Provider 输入 -->
     <div class="provider-bar">
       <input id="provName" placeholder="名称 (如 deepseek)" style="flex:0.5;min-width:60px">
-      <input id="provUrl" placeholder="Base URL (如 https://api.deepseek.com)" style="flex:2">
-      <input id="provKey" type="password" placeholder="API Key" style="flex:1">
+      <input id="provUrl" placeholder="Base URL (逗号分隔多端点→负载均衡)" style="flex:2">
+      <input id="provKey" type="password" placeholder="API Key (逗号分隔多 Key→负载均衡)" style="flex:1">
       <input id="provModels" placeholder="模型 (逗号分隔, 可空)" style="flex:1.2">
       <button class="btn add" id="btnAddProv" title="添加 Provider">+ 添加</button>
       <button class="btn probe" id="btnProbe" title="探测所有 Provider 健康">探测</button>
@@ -4485,6 +4485,14 @@ function getEaConfigHtml(port, nonce) {
     renderStatus();
   }
 
+  // ── token 数格式化 (K/M) · 用量行用 ──
+  function _fmtTok(n) {
+    n = Number(n) || 0;
+    if (n >= 1e6) return (n / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+    return String(n);
+  }
+
   // ── 路由命中判定: uid 双形归一 (MODEL_X_Y ↔ x-y 视为同一) ──
   function _norm(uid) { return String(uid || '').replace(/^MODEL_/, '').replace(/_/g, '-').toLowerCase(); }
   function _routeKeyFor(uid) {
@@ -4515,6 +4523,16 @@ function getEaConfigHtml(port, nonce) {
         : (alive ? '#6bb86b'
           : ((h && h.alive === false) ? '#e08080' : 'rgba(128,128,128,0.4)'));
       var mods = (p.models || p._models || []).join(', ');
+      // ★ v9.9.301 · 用量行 (overview 注入 p.usage) · 最核心信息: 次数 + token + 估算成本
+      var usageLine = '';
+      var pk = (Array.isArray(p.apiKeys) && p.apiKeys.length) ? p.apiKeys.length : ((p.apiKey ? 1 : 0));
+      var pe = (Array.isArray(p.endpoints) && p.endpoints.length) ? p.endpoints.length : 1;
+      var lbLine = (pk > 1 || pe > 1) ? ('<div style="font-size:9px;opacity:0.5">⇄ 负载均衡 · ' + pk + ' key' + (pe > 1 ? ' · ' + pe + ' 端点' : '') + '</div>') : '';
+      var us = p.usage;
+      if (us && us.calls) {
+        var costStr = (us.cost != null) ? (' · ≈' + (us.currency === 'USD' ? '$' : '') + us.cost + (us.currency && us.currency !== 'USD' ? (' ' + us.currency) : '')) : '';
+        usageLine = '<div style="font-size:9px;opacity:0.6">▦ ' + us.calls + ' 次 · ' + _fmtTok(us.total) + ' tok (入' + _fmtTok(us.input) + '/出' + _fmtTok(us.output) + ')' + costStr + '</div>';
+      }
       var row = document.createElement('div');
       row.className = 'model-item';
       row.style.cssText = 'align-items:flex-start;padding:6px;margin-bottom:4px;border:1px solid rgba(128,128,128,0.18);border-radius:4px;';
@@ -4523,6 +4541,8 @@ function getEaConfigHtml(port, nonce) {
           '<span style="font-weight:600">' + disp + (builtin ? ' <span style="opacity:0.5;font-weight:400">· 内置</span>' : '') + '</span>' +
           '<div style="font-size:9px;opacity:0.55;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (p.baseUrl || '') + '</div>' +
           (mods ? '<div style="font-size:9px;opacity:0.5">' + mods + '</div>' : '') +
+          lbLine +
+          usageLine +
         '</span>';
       if (!builtin) {
         html += '<span class="btn" data-edit="' + name + '" style="padding:1px 5px;font-size:10px;margin-right:3px" title="编辑">✎</span>' +
@@ -4547,13 +4567,17 @@ function getEaConfigHtml(port, nonce) {
         var n = this.getAttribute('data-edit');
         var p = _providers[n] || {};
         document.getElementById('provName').value = n;
-        document.getElementById('provUrl').value = p.baseUrl || '';
+        // ★ v9.9.301 · 多端点回填: 有 endpoints[] 则逗号拼接展示
+        var _eps = (Array.isArray(p.endpoints) && p.endpoints.length)
+          ? p.endpoints.map(function(e){ return (typeof e === 'string') ? e : (e.url || e.baseUrl || ''); }).filter(Boolean)
+          : null;
+        document.getElementById('provUrl').value = _eps ? _eps.join(', ') : (p.baseUrl || '');
         // ★ 修「编辑渠道→Key 看不见/疑似丢失」: 不把脱敏 key 写回输入框(回传会覆盖真实key),
         //   而是用占位提示已配置 · 留空提交=后端保留原 Key (见 hotAddProvider apiKey 保全)
         var _kInput = document.getElementById('provKey');
         _kInput.value = '';
-        var _hasKey = !!(p.apiKey && String(p.apiKey).length > 0);
-        _kInput.placeholder = _hasKey ? '已配置 Key · 留空=保留原 Key,或输入新 Key 覆盖' : 'API Key';
+        var _nk = (Array.isArray(p.apiKeys) && p.apiKeys.length) ? p.apiKeys.length : ((p.apiKey && String(p.apiKey).length > 0) ? 1 : 0);
+        _kInput.placeholder = _nk ? ('已配置 ' + _nk + ' 个 Key · 留空=保留, 或逗号分隔多 Key 覆盖') : 'API Key (逗号分隔可多个→负载均衡)';
         document.getElementById('provModels').value = (p.models || p._models || []).join(', ');
       });
     });
@@ -4914,9 +4938,16 @@ function getEaConfigHtml(port, nonce) {
     var key = document.getElementById('provKey').value.trim();
     var modelsRaw = document.getElementById('provModels').value.trim();
     if (!name || !url) { _daoToast('名称和 URL 必填'); return; }
-    var cfg = { baseUrl: url };
+    // ★ v9.9.301 · 多端点/多 Key 负载均衡: URL/Key 用逗号或空白分隔多个即自动启用
+    var urls = url.split(/[\s,]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+    var cfg = { baseUrl: urls[0] };
+    if (urls.length > 1) cfg.endpoints = urls.map(function(u2){ return { url: u2, weight: 1 }; });
     // ★ Key 留空 → 不下发 apiKey 字段 → 后端保留原 Key (编辑已有渠道时不会清空)
-    if (key) cfg.apiKey = key;
+    if (key) {
+      var keys = key.split(/[\s,]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+      cfg.apiKey = keys[0];
+      if (keys.length > 1) cfg.apiKeys = keys;
+    }
     if (modelsRaw) cfg.models = modelsRaw.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
     var btnAdd = this;
     btnAdd.textContent = '添加中…';
