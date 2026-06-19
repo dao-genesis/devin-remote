@@ -1,6 +1,6 @@
 {
-  "versionCode": 72,
-  "versionName": "0.23.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.23.0/DevinCloud-mobile-v0.23.0.apk",
-  "notes": "v0.23.0 · 操作交互页完善(最小变动·最大效果): ① 接入文档(getCloudMd/面板打开·复制)自动内联「全部可用接入渠道」实时表——局域网直连 + cloudflared 主隧道 + SSH 反向隧道·备 + 中继 Worker + WebRTC P2P, 含在线状态与入口, 随状态自动更新; ② 穿透面板新增「🧭 接入渠道总览」卡片, 一处看全所有渠道(在线/离线点)+「复制全部可用渠道」一键; ③ 与既有面板同源、本源 curl/HTTP 与隧道生命周期零改动。"
+  "versionCode": 73,
+  "versionName": "0.24.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.24.0/DevinCloud-mobile-v0.24.0.apk",
+  "notes": "v0.24.0 · 默认全打通 (无为而无不为): 去中心化隧道 (cloudflared 主 + SSH 反向·备) 由「默认关·需手动开」改为「默认开机自启」—— 用户用默认配置即拥有不经任何 Worker 的独立公网入口, P2P 应答方随之就绪。仅当用户曾手动关闭 (\"0\") 才尊重其选择; 与局域网直连/远程操控的「默认开」语义一致。本源 curl/HTTP 协议与隧道生命周期零改动。"
 }
