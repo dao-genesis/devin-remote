@@ -72,8 +72,9 @@ public class RelayService extends Service {
         main.post(this::initEngine);
         // 去中心化直连默认开启: 服务一起即拉起本地 server (绑 0.0.0.0), 同一局域网的控制端可零中继/零隧道直连本机。
         if (lanDirectFlag()) main.postDelayed(this::ensureLocalServer, 1200);
-        // 路线B: 若用户在穿透面板开启了「去中心化隧道」, 在本地 server 之上再起 cloudflared 快速隧道 (跨网络兜底)。
-        if ("1".equals(readUserFile("tunnel-enabled"))) main.postDelayed(this::startTunnel, 1800);
+        // 去中心化隧道默认开启: 服务一起即在本地 server 之上拉起两条独立公网后端 (cloudflared 主 + SSH 备),
+        // 用户用默认配置即拥有「不经任何 Worker」的独立公网入口, 无需手动开。用户若曾手动关闭 ("0") 则尊重其选择。
+        if (tunnelEnabledFlag()) main.postDelayed(this::startTunnel, 1800);
     }
 
     /** 局域网直连开关 (默认开): 控制端与手机同网时可直连, 不依赖任何 Worker/隧道。 */
@@ -300,8 +301,8 @@ public class RelayService extends Service {
         updateTunnelStatus("", false, msg, attempt, fallback);
         main.postDelayed(() -> { if (tunnelEnabledFlag()) startCfTunnel(); }, delay);
     }
-    // 供 MainActivity 面板代理调用 (同进程)
-    public boolean tunnelEnabledFlag() { return "1".equals(readUserFile("tunnel-enabled")); }
+    // 供 MainActivity 面板代理调用 (同进程)。默认开启: 仅当用户曾显式关闭 ("0") 才视为关; 与局域网直连/远程操控一致。
+    public boolean tunnelEnabledFlag() { return !"0".equals(readUserFile("tunnel-enabled")); }
     public void setTunnelEnabledExternal(boolean on) {
         writeUserFile("tunnel-enabled", on ? "1" : "0");
         main.post(() -> { if (on) startTunnel(); else stopTunnel(); });
@@ -488,7 +489,7 @@ public class RelayService extends Service {
             writeUserFile("tunnel-enabled", on ? "1" : "0");
             main.post(() -> { if (on) startTunnel(); else stopTunnel(); });
         }
-        @JavascriptInterface public boolean isTunnelEnabled() { return "1".equals(readUserFile("tunnel-enabled")); }
+        @JavascriptInterface public boolean isTunnelEnabled() { return tunnelEnabledFlag(); }
         @JavascriptInterface public String tunnelStat() { return tunnelStatus; }
 
         // ── 局域网直连 (无感等效内网穿透·零中继零隧道) ──────────────────────
