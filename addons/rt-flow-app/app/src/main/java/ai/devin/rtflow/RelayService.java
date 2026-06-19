@@ -167,7 +167,7 @@ public class RelayService extends Service {
             }
             int port = localServer.getPort();
             if (tunnel != null) tunnel.stop();
-            tunnel = new TunnelManager(this, port, new TunnelManager.Callback() {
+            tunnel = new TunnelManager(this, port, new NativeTunnel.Callback() {
                 public void onUrl(String url) { tunnelRetries = 0; writeUserFile("tunnel-url", url); updateTunnelStatus(url, true, "隧道已连通", 0, false); }
                 public void onLog(String line) { android.util.Log.i("RTFlowTunnel", line); }
                 public void onExit(int code) { onTunnelExit(code); }
@@ -199,7 +199,7 @@ public class RelayService extends Service {
             int port = localServer.getPort();
             if (sshTunnel != null) sshTunnel.stop();
             final String edge = SshTunnelManager.EDGES[sshEdgeIdx % SshTunnelManager.EDGES.length];
-            sshTunnel = new SshTunnelManager(this, port, edge, new SshTunnelManager.Callback() {
+            sshTunnel = new SshTunnelManager(this, port, edge, new NativeTunnel.Callback() {
                 public void onUrl(String url) { sshRetries = 0; sshUrl = url; rebroadcast("备用隧道已连通 (" + edge + ")"); }
                 public void onLog(String line) { android.util.Log.i("RTFlowTunnel", "[ssh] " + line); }
                 public void onExit(int code) { onSshExit(code); }
