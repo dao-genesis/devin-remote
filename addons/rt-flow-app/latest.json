@@ -1,6 +1,6 @@
 {
-  "versionCode": 69,
-  "versionName": "0.20.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.20.0/DevinCloud-mobile-v0.20.0.apk",
-  "notes": "v0.20.0 · 去中心化公网接入再加一条独立后端 (双隧道冗余)。本源不变(curl/HTTP 协议与 driver 零改动): 在 cloudflared 主隧道之外, 并行拉起一条独立于 Cloudflare 的 SSH 反向隧道(自带纯 Go 客户端 libsshtun.so, 连 localhost.run/serveo/pinggy 公共边缘, 无账号), 把本机暴露成 https://xxx.lhr.life —— Cloudflare 整体被封时仍有公网入口, 仍不经任何共享 Worker。两条各自持久自愈、互不牵连; 备用隧道增健康探测(每60s探公网URL, 静默失效即换边缘重连)。穿透面板逐条展示两条公网入口并一键复制。已在 AVD 全链路闭环实测: 两条公网 curl→引擎 RPC 均 200; 杀 cloudflared 后备用隧道 URL 不变且持续 200、cloudflared ~5s 独立自愈出新URL。"
+  "versionCode": 70,
+  "versionName": "0.21.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.21.0/DevinCloud-mobile-v0.21.0.apk",
+  "notes": "v0.21.0 · 加法式路线B: WebRTC P2P 真打洞 (curl/HTTP 本源零改动)。手机 WebView 端新增 P2P 应答方 (p2pConnect/p2pStatus 命令, 复用 /api/rpc 信令), 仅借公网隧道交换一次 SDP, 之后 RPC 走 P2P DataChannel·公共 STUN 打洞, 不再经任何边缘中转。curl 控制端照常用 HTTP; 另附 p2p-client.html 参考客户端 (填公网入口+Token+Session 即直连; 对称 NAT 可选填自有 TURN, 默认零依赖纯 STUN)。AVD 实测: WebView webrtc=true、信令 offer→answer 经隧道成功、DataChannel RPC 协议同机回环全通 (RTT 0.2ms); 注: Android 模拟器用户态 NAT 不能接收入站 UDP 故无法作 P2P 端点, 真机可成 (对称 NAT 需 TURN)。叠加既有: 局域网直连 + cloudflared/SSH 双公网隧道冗余。"
 }

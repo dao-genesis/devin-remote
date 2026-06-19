@@ -147,6 +147,16 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 </div>
 </div>
 
+<!-- 模块2.3: 路线B · WebRTC P2P 真打洞 (加法式·不改 curl 本源) -->
+<div class="section">
+<h3>🛰️ P2P 直连 · WebRTC 真打洞（加法式·可选升级）</h3>
+<div class="muted"><b>本源不动</b>: curl/HTTP 控制端照常用上面的隧道; 这是给「愿意升级」的客户端的<b>真 P2P 通道</b> —— 仅借隧道交换<b>一次</b> SDP 信令, 之后 RPC 走 <b>P2P DataChannel</b>(公共 STUN 打洞), 不再经任何边缘中转, 延迟更低、更去中心化。复用同一 Token/命令集。<br>用法: 控制端打开 <code>p2p-client.html</code>, 填本设备上面的<b>公网入口 URL + Token + Session</b> 即可直连。对称 NAT 直连不通时可在客户端填自有 TURN(默认零依赖纯 STUN)。</div>
+<div id="p2pStat" class="muted" style="font-size:12px;margin-top:6px">—</div>
+<div class="row" style="margin-top:6px">
+  <button onclick="copyP2PAccess()">📋 复制 P2P 接入信息</button>
+</div>
+</div>
+
 <!-- 模块2.5: 远程操控安全开关 -->
 <div class="section">
 <h3>🛡️ 远程操控 · 安全开关</h3>
@@ -486,8 +496,18 @@ function copyDecentAccess(){
   try{N.clip&&N.clip(block);}catch(e){}
   _result('copyDecent', true, '已复制 '+list.length+' 条去中心化入口+Token+Session+E2EKey (均直连本设备, 不经任何共享 Worker)');
 }
+function copyP2PAccess(){
+  var t=_tunnel(), c=_conn();
+  var list=(t.tunnels&&t.tunnels.length)?t.tunnels:(t.url?[{name:'',url:t.url}]:[]);
+  if(!list.length){ _result('copyP2P', false, '需先有公网入口 (开启去中心化隧道并等其连通)'); return; }
+  var sid=c.session||"";
+  var block="P2P 直连 (WebRTC·路线B):\n1) 控制端打开 p2p-client.html\n2) 公网入口(握手用任一): "+list[0].url+"\n   Token: "+(c.token||"")+"\n   Session: "+sid+"\n握手后 RPC 全程 P2P DataChannel, 不再经隧道。";
+  try{N.clip&&N.clip(block);}catch(e){}
+  _result('copyP2P', true, '已复制 P2P 接入信息 (打开 p2p-client.html 填入即直连)');
+}
 function updateDecentUI(t){
   t=t||{}; var on=!!t.enabled; var fb=!!t.fallback;
+  try{ var ps=document.getElementById('p2pStat'); if(ps) ps.textContent = on?'WebRTC 应答方就绪 · 信令复用上面的公网入口 · 命令集与 curl 一致':'开启上面的去中心化隧道后, P2P 信令即可用'; }catch(e){}
   var cb=document.getElementById('decentToggle'); if(cb) cb.checked=on;
   var sl=document.getElementById('decentSlider');
   if(sl){ sl.style.background=on?(fb?'#d29922':'#3fb950'):'#333';
