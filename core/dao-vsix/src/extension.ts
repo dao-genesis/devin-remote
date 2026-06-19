@@ -3068,20 +3068,50 @@ function bkMatch(c,a,q){if(!q)return true;q=String(q).toLowerCase();var hay=[(c&
 function bkOpenConv(i,ci){var a=S.backups.accounts[i];if(!a)return;var c=(a.conversations||[])[ci];if(!c)return;var did=c.devinId||'';if(!did){toast('该备份无对话ID, 无法打开官网',false);return}toast('多实例打开对话…',true);cmd('openConvMultiBrowser',{email:a.email||a.account||'',devinId:did})}
 // 拖拽: 像 IDE 文件夹一样把对话拖到右侧(编辑器/浏览器/路由面板) — 携带官网会话 URL(uri-list/plain/json)
 function bkConvDragStart(ev,i,ci){try{var a=S.backups.accounts[i]||{};var c=((a.conversations||[])[ci])||{};var did=String(c.devinId||'').replace(/^devin-/,'');if(!did)return;var url='https://app.devin.ai/sessions/'+did;var title=(c.title||c.name||'对话');if(ev.dataTransfer){ev.dataTransfer.setData('text/uri-list',url);ev.dataTransfer.setData('text/plain',url);ev.dataTransfer.setData('application/json',JSON.stringify({type:'dao-conv',email:a.email||a.account||'',devinId:did,title:title,url:url}));ev.dataTransfer.effectAllowed='copyLink'}}catch(e){}}
-// 单条对话渲染 (复用于两种视图) — 含 devinId/账号信息/解锁
+// 相对时间 (对齐手机版: 刚刚/分钟前/小时前/天前)
+function bkRel(ms){try{if(!ms)return'';var d=Date.now()-ms;if(d<0)d=0;var s=Math.floor(d/1000);if(s<60)return'刚刚';var m=Math.floor(s/60);if(m<60)return m+'分钟前';var hh=Math.floor(m/60);if(hh<24)return hh+'小时前';var dd=Math.floor(hh/24);if(dd<30)return dd+'天前';return new Date(ms).toLocaleDateString()}catch(e){return''}}
+// 对话状态 → 颜色 + 文案 (与 rt-flow 对话追踪同口径: running/awaiting/blocked/finished/failed)
+function bkStatusInfo(st){st=String(st||'').toLowerCase();
+  if(st==='running'||st==='working'||st==='active')return{c:'#3fb950',t:'running'};
+  if(st==='awaiting'||st==='blocked'||st==='waiting'||st.indexOf('await')>=0||st.indexOf('input')>=0)return{c:'#d29922',t:st==='awaiting'?'awaiting':'blocked'};
+  if(st==='finished'||st==='completed'||st==='done'||st==='stopped'||st==='expired')return{c:'#8b949e',t:st};
+  if(st==='failed'||st==='error')return{c:'#f85149',t:st};
+  if(st)return{c:'#58a6ff',t:st};
+  return{c:'#6e7681',t:''};
+}
+// 单条对话渲染 (复用于两种视图) — 对齐手机版: 账号编号徽章 + 状态点 + 醒目对话名 + 邮箱·状态·相对时间
 function bkConvRow(c,i,ci,showAcct){
   var t=c.title||c.name||'(未命名)';var cid='bkc-'+i+'-'+ci;
   var did=String(c.devinId||'').replace(/^devin-/,'').slice(0,8);
   var a=S.backups.accounts[i]||{};
+  var si=bkStatusInfo(c.status);
+  var accNo=a.accountNo?('#'+a.accountNo):'';
+  var rel=bkRel(c.liveTs||c.mtime);
+  var h='<div style="padding:6px 2px;border-bottom:1px solid var(--border)">';
+  // 标题行: 账号编号徽章 + 状态点 + 对话名(醒目: 13px/600/前景色, 溢出省略)
+  h+='<div style="display:flex;align-items:center;gap:6px;min-width:0;cursor:pointer" onclick="bkConvToggle('+i+','+ci+')">';
+  if(accNo)h+='<span style="flex:0 0 auto;font-size:10px;font-weight:700;color:var(--accent);background:rgba(88,166,255,.14);border-radius:4px;padding:1px 5px">'+esc(accNo)+'</span>';
+  h+='<span style="flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:'+si.c+'"'+(si.t?(' title="'+esc(si.t)+'"'):'')+'></span>';
+  h+='<span style="flex:1 1 auto;font-size:13px;font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(t)+'</span>';
+  h+='</div>';
+  // 副行: 邮箱 · 状态 · 相对时间 · devinId · 事件数
   var sub=[];
-  if(showAcct)sub.push(esc((a.accountNo?('#'+a.accountNo+' '):'')+(a.email||a.account||'')));
+  if(showAcct&&(a.email||a.account))sub.push(esc(a.email||a.account));
+  if(si.t)sub.push('<span style="color:'+si.c+';font-weight:600">'+esc(si.t)+'</span>');
+  if(rel)sub.push(esc(rel));
   if(did)sub.push('<span style="color:var(--accent)">'+esc(did)+'</span>');
   if(c.eventCount)sub.push(c.eventCount+'事件');
   if(c.type==='zip')sub.push('ZIP');
-  var h='<div style="padding:3px 0;border-bottom:1px solid var(--border)">';
-  h+='<div class="cr" style="cursor:pointer" onclick="bkConvToggle('+i+','+ci+')"><span class="l" style="font-size:11px">▸ '+esc(t.substring(0,46))+'</span><span class="v" style="font-size:9px;color:var(--muted)">'+bkMtime(c.mtime)+'</span></div>';
-  if(sub.length)h+='<div style="font-size:9px;color:var(--muted);margin-top:1px">'+sub.join(' · ')+'</div>';
-  h+='<div class="br" style="margin-top:2px"><button class="btn sm" onclick="bkConvToggle('+i+','+ci+')">📄 查看</button>'+(c.devinId?('<button class="btn sm primary" draggable="true" ondragstart="bkConvDragStart(event,'+i+','+ci+')" onclick="bkOpenConv('+i+','+ci+')" title="多实例浏览器打开此对话官网(可拖拽到右侧路由面板)">🚀 多实例</button>'):'')+'<button class="btn sm ghost" onclick="bkReveal('+i+','+ci+')" title="在文件管理器中打开">📂</button><button class="btn sm ghost" onclick="bkDownload('+i+','+ci+')" title="导出">⬇</button>'+(c.hasHtml?('<button class="btn sm ghost" onclick="bkView('+i+','+ci+')" title="在浏览器中打开本地 HTML 备份">📄HTML</button>'):'')+(c.type==='zip'?('<button class="btn sm ghost" onclick="bkUnlock('+i+','+ci+')" title="解压 ZIP 备份到同名文件夹后可内联查看">🔓 解锁</button>'):'')+'</div>';
+  if(sub.length)h+='<div style="font-size:10px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+sub.join(' · ')+'</div>';
+  // 按钮行 (对齐手机版: 查看 / 进入(多实例·可拖拽) / MD / 文件)
+  h+='<div class="br" style="margin-top:5px">';
+  h+='<button class="btn sm" onclick="bkConvToggle('+i+','+ci+')">👁 查看</button>';
+  if(c.devinId)h+='<button class="btn sm primary" draggable="true" ondragstart="bkConvDragStart(event,'+i+','+ci+')" onclick="bkOpenConv('+i+','+ci+')" title="多实例浏览器打开此对话官网(可拖拽到右侧路由/编辑器)">🚀 进入</button>';
+  h+='<button class="btn sm ghost" onclick="bkDownload('+i+','+ci+')" title="导出对话 MD/备份">⬇ MD</button>';
+  h+='<button class="btn sm ghost" onclick="bkReveal('+i+','+ci+')" title="在文件管理器中打开备份目录">📦 文件</button>';
+  if(c.hasHtml)h+='<button class="btn sm ghost" onclick="bkView('+i+','+ci+')" title="在浏览器中打开本地 HTML 备份">📄HTML</button>';
+  if(c.type==='zip')h+='<button class="btn sm ghost" onclick="bkUnlock('+i+','+ci+')" title="解压 ZIP 备份到同名文件夹后可内联查看">🔓 解锁</button>';
+  h+='</div>';
   h+='<div id="'+cid+'" style="display:none;margin-top:4px"></div></div>';
   return h;
 }
@@ -3102,7 +3132,7 @@ function rBackupsData(tree,err){
     // 跨账号 · 近期对话: 扁平化所有对话, 按 mtime 倒序, 检索过滤后每条带账号+devinId
     var flat=[];
     accts.forEach(function(a,i){(a.conversations||[]).forEach(function(c,ci){if(bkMatch(c,a,q))flat.push({c:c,i:i,ci:ci})})});
-    flat.sort(function(x,y){return (y.c.mtime||0)-(x.c.mtime||0)});
+    flat.sort(function(x,y){return ((y.c.liveTs||y.c.mtime||0)-(x.c.liveTs||x.c.mtime||0))});
     var shown=flat.slice(0,200);
     if(!shown.length){h+='<div class="empty"><div class="ic">🕒</div><p style="color:var(--muted)">'+(q?'无匹配对话':'暂无对话')+'</p></div>';v.innerHTML=h;return}
     shown.forEach(function(it){h+='<div class="card" style="margin-bottom:4px;padding:6px 8px">'+bkConvRow(it.c,it.i,it.ci,true)+'</div>'});
@@ -3705,6 +3735,34 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     if (!dc || typeof dc.listBackups !== 'function') { reply({ type: 'backupsData', tree: { root: '', accounts: [] }, error: 'rt-flow 备份引擎不可用' }); break; }
                     const root = resolveBackupRoot();
                     const tree = dc.listBackups(root);
+                    // 道法自然 · 同源: 读 rt-flow 对话追踪共享状态文件 (~/.wam/_dv_status.json),
+                    //   据 devinId 把【实时对话状态】合并进备份树 → 近期对话卡片状态点与「对话追踪」面板同源。
+                    try {
+                        const statusFile = path.join(os.homedir(), '.wam', '_dv_status.json');
+                        if (fs.existsSync(statusFile)) {
+                            const j = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
+                            const smap = new Map<string, { status: string; title: string; ts: number }>();
+                            if (j && Array.isArray(j.agg)) {
+                                for (const pair of j.agg) {
+                                    const st = Array.isArray(pair) ? pair[1] : null;
+                                    if (!st || !Array.isArray(st.items)) continue;
+                                    for (const it of st.items) {
+                                        const id = String((it && it.id) || '').replace(/^devin-/, '');
+                                        if (id) smap.set(id, { status: String((it && it.cls) || ''), title: String((it && it.title) || ''), ts: (st.ts || j.ts || 0) });
+                                    }
+                                }
+                            }
+                            if (smap.size) {
+                                for (const a of (tree.accounts || [])) {
+                                    for (const c of (a.conversations || [])) {
+                                        const id = String((c && c.devinId) || '').replace(/^devin-/, '');
+                                        const m = id ? smap.get(id) : null;
+                                        if (m) { c.status = m.status; c.liveTs = m.ts || c.mtime; if (!c.title && m.title) c.title = m.title; }
+                                    }
+                                }
+                            }
+                        }
+                    } catch { /* 守柔: 状态文件缺失/损坏不影响备份树主功能 */ }
                     reply({ type: 'backupsData', tree });
                 } catch (e: any) {
                     reply({ type: 'backupsData', tree: { root: '', accounts: [] }, error: (e && e.message) || String(e) });
