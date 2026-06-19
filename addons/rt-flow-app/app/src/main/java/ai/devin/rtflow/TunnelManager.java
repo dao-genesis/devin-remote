@@ -47,6 +47,7 @@ public final class TunnelManager {
 
     public String getUrl() { return publicUrl; }
     public boolean isAlive() { Process p = proc; return p != null && p.isAlive(); }
+    public boolean hasUrl() { return !publicUrl.isEmpty(); }
 
     /** 返回打包的 cloudflared 可执行文件路径 (nativeLibraryDir/libcloudflared.so), 不存在返回 null。 */
     public File binary() {
