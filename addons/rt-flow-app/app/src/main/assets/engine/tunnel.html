@@ -127,8 +127,8 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 
 <!-- 模块2.2: 去中心化隧道 (路线B · 每设备自带 cloudflared 快速隧道) -->
 <div class="section">
-<h3>🌐 去中心化隧道 · 每设备自带（无依赖·免费）</h3>
-<div class="muted">开启后，本机自带的 <b>cloudflared</b> 会建立一条<b>免费快速隧道</b>，把设备直接暴露成 <code>https://xxx.trycloudflare.com</code> —— <b>完全不经任何共享 Worker</b>，每台设备一条独立隧道、无需 Cloudflare 账号、无需登录。配合上方端到端加密即真正去中心化。<br>⚠️ 快速隧道 URL <b>每次重启会变</b>（这是 trycloudflare 的设计）；要固定域名请用上方「命名隧道」。</div>
+<h3>🌐 去中心化隧道 · 每设备自带（无依赖·免费·双后端冗余）</h3>
+<div class="muted">开启后，本机自带<b>两条相互独立</b>的去中心化公网隧道并行拉起、互为冗余 —— <b>完全不经任何共享 Worker</b>：<br>① <b>cloudflared 主隧道</b> → <code>https://xxx.trycloudflare.com</code>（强制 http2/TCP 更稳）；<br>② <b>SSH 反向隧道·备</b> → <code>https://xxx.lhr.life</code> 等公共边缘（<b>独立于 Cloudflare</b>，Cloudflare 被整体封锁时仍有公网入口）。<br>两条各自<b>持久自愈</b>、互不牵连；备用隧道还有健康探测，静默失效即自动换边缘。配合上方端到端加密即真正去中心化。<br>⚠️ 快速隧道 URL <b>每次重启会变</b>（公共免费隧道的设计）；要固定域名请用上方「命名隧道」。</div>
 <div style="display:flex;align-items:center;gap:10px;margin:8px 0">
   <label style="position:relative;display:inline-block;width:48px;height:26px">
     <input type="checkbox" id="decentToggle" onchange="toggleDecentralTunnel(this.checked)" style="opacity:0;width:0;height:0">
@@ -477,10 +477,14 @@ function toggleDecentralTunnel(on){
 }
 function copyDecentAccess(){
   var t=_tunnel(), c=_conn();
-  if(!t.url){ _result('copyDecent', false, '隧道未连通 (URL 尚未生成, 请稍候刷新)'); return; }
-  var block="去中心化公网入口: "+t.url+"/relay/"+(c.session||"")+"\nToken: "+(c.token||"")+"\nSession: "+(c.session||"")+"\nE2E Key: "+(c.e2eKey||"");
+  var list=(t.tunnels&&t.tunnels.length)?t.tunnels:(t.url?[{name:'',url:t.url}]:[]);
+  if(!list.length){ _result('copyDecent', false, '隧道未连通 (URL 尚未生成, 请稍候刷新)'); return; }
+  var sid=c.session||"";
+  var NAME={cloudflared:'cloudflared 主隧道', ssh:'SSH 反向隧道(备·独立于 Cloudflare)'};
+  var lines=list.map(function(x){ return (NAME[x.name]||'隧道')+': '+x.url+"/relay/"+sid; });
+  var block="去中心化公网入口（任一可用·互为冗余）:\n"+lines.join("\n")+"\nToken: "+(c.token||"")+"\nSession: "+sid+"\nE2E Key: "+(c.e2eKey||"");
   try{N.clip&&N.clip(block);}catch(e){}
-  _result('copyDecent', true, '已复制 去中心化URL+Token+Session+E2EKey (该 URL 直连本设备, 不经任何共享 Worker)');
+  _result('copyDecent', true, '已复制 '+list.length+' 条去中心化入口+Token+Session+E2EKey (均直连本设备, 不经任何共享 Worker)');
 }
 function updateDecentUI(t){
   t=t||{}; var on=!!t.enabled; var fb=!!t.fallback;
@@ -498,7 +502,19 @@ function updateDecentUI(t){
     if(on&&t.connected){ al.textContent='🌐 去中心化隧道（直连本设备·不经 Worker）'; al.style.color='#3fb950'; }
     else { al.textContent='☘ 中继 Worker（默认）'+(relayOn?' · 在线':' · 连接中…')+(on?'（隧道不可用已回退）':''); al.style.color=relayOn?'':'#f0883e'; }
   }
-  var u=document.getElementById('decentUrl'); if(u) u.textContent=(on&&t.url)?(t.url+"/relay/"+(_conn().session||"")):'—';
+  // 去中心化公网 URL: 可能有多条独立后端 (cloudflared 主 + SSH 反向隧道备), 逐条展示。
+  var u=document.getElementById('decentUrl');
+  if(u){
+    var sid=_conn().session||"";
+    var list=(t.tunnels&&t.tunnels.length)?t.tunnels:(t.url?[{name:'',url:t.url}]:[]);
+    if(on&&list.length){
+      var NAME={cloudflared:'cloudflared 主隧道', ssh:'SSH 反向隧道·备(独立于 Cloudflare)'};
+      u.innerHTML=list.map(function(x){
+        var tag=NAME[x.name]||x.name||'隧道';
+        return '<div style="margin-bottom:4px"><span style="color:var(--vscode-descriptionForeground);font-weight:400;font-size:11px">'+tag+'</span><br>'+x.url+"/relay/"+sid+'</div>';
+      }).join('');
+    } else u.textContent='—';
+  }
 }
 function refreshTunnel(){
   var en=false; try{ en = N.isTunnelEnabled && N.isTunnelEnabled(); }catch(e){}
