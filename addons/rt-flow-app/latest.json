@@ -1,6 +1,6 @@
 {
-  "versionCode": 68,
-  "versionName": "0.19.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.19.0/DevinCloud-mobile-v0.19.0.apk",
-  "notes": "v0.19.0 · 公网去中心化隧道硬化(在 v0.18.0 局域网直连+并发治理之上)。本源不变(curl/HTTP 协议与 driver 零改动): ① cloudflared 持久自愈 — 隧道=公网入口, 退避重连(2s→上限60s)永不彻底放弃, 进程崩溃/网络抖动后自动复活, 公网URL变更即重广播; ② 无URL看门狗 — 进程在跑却50s拿不到公网URL(卡边缘握手)自动重启; ③ 软上限后诚实提示已回退中继但后台持续重连。已在 AVD 全链路闭环实测: 公网 curl→trycloudflare→引擎 RPC 200(~0.3s)、杀进程后~15s 自愈出新URL 并 RPC 200、20并发全 200(峰值0.18s) 无饿死。"
+  "versionCode": 69,
+  "versionName": "0.20.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.20.0/DevinCloud-mobile-v0.20.0.apk",
+  "notes": "v0.20.0 · 去中心化公网接入再加一条独立后端 (双隧道冗余)。本源不变(curl/HTTP 协议与 driver 零改动): 在 cloudflared 主隧道之外, 并行拉起一条独立于 Cloudflare 的 SSH 反向隧道(自带纯 Go 客户端 libsshtun.so, 连 localhost.run/serveo/pinggy 公共边缘, 无账号), 把本机暴露成 https://xxx.lhr.life —— Cloudflare 整体被封时仍有公网入口, 仍不经任何共享 Worker。两条各自持久自愈、互不牵连; 备用隧道增健康探测(每60s探公网URL, 静默失效即换边缘重连)。穿透面板逐条展示两条公网入口并一键复制。已在 AVD 全链路闭环实测: 两条公网 curl→引擎 RPC 均 200; 杀 cloudflared 后备用隧道 URL 不变且持续 200、cloudflared ~5s 独立自愈出新URL。"
 }

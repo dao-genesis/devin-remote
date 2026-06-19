@@ -47,6 +47,14 @@ public class RelayService extends Service {
     private static final int TUNNEL_RETRY_SOFT = 3;   // 超过此次数仍持续重连, 但诚实提示已回退中继
     private static final long TUNNEL_RETRY_CAP = 60000L; // 重连退避上限 60s (隧道=公网入口, 永不彻底放弃→真·无感常驻)
     private static final long TUNNEL_URL_TIMEOUT = 50000L;// 起后 50s 仍拿不到公网URL=卡住, 重启隧道
+    // 路线A 扩展: 独立于 cloudflared 的第二条去中心化公网后端 (SSH 反向隧道·localhost.run 等), 与主隧道并行兜底。
+    private SshTunnelManager sshTunnel;
+    private volatile String sshUrl = "";           // SSH 后端当前公网 URL
+    private int sshRetries = 0;                     // SSH 后端连续退出计数 (连通后清零)
+    private int sshEdgeIdx = 0;                      // 当前所用公共 SSH 边缘下标 (退出后轮换兜底)
+    private volatile int sshGen = 0;                 // SSH 隧道启动代次 (作废过期看门狗)
+    private int sshHealthFails = 0;                  // SSH 公网 URL 健康探测连续失败数 (满阈值换边缘)
+    private static final long SSH_HEALTH_INTERVAL = 60000L;  // 每 60s 探一次备用隧道公网 URL 是否真活
     private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.SynchronousQueue<String>> pendingLocal
             = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -112,14 +120,8 @@ public class RelayService extends Service {
             }
         } catch (Exception ignored) {}
         lanUrlsJson = arr.toString();
-        // LAN 信息变化时刷新一次状态广播 (沿用当前隧道连通态)。
-        try {
-            org.json.JSONObject cur = new org.json.JSONObject(tunnelStatus);
-            updateTunnelStatus(cur.optString("url", ""), cur.optBoolean("connected", false),
-                    cur.optString("msg", ""), cur.optInt("retries", 0), cur.optBoolean("fallback", false));
-        } catch (Exception ignored) {
-            updateTunnelStatus("", false, "", 0, false);
-        }
+        // LAN 信息变化时刷新一次状态广播 (沿用当前主隧道/备用隧道连通态)。
+        rebroadcast(null);
     }
 
     // ── 路线B 去中心化隧道 (设备自带 cloudflared 快速隧道) ──────────────────
@@ -146,7 +148,18 @@ public class RelayService extends Service {
             return r;
         } finally { pendingLocal.remove(reqId); }
     }
+    /** 开启隧道: 同时拉起两条相互独立的去中心化公网后端 (cloudflared 主 + SSH 反向隧道备)。
+     *  两条各自独立自愈, 互不牵连 → 任一被封/掉线另一条仍提供公网入口。 */
     private synchronized void startTunnel() {
+        ensureLocalServer();
+        if (localServer == null || localServer.getPort() <= 0) {
+            updateTunnelStatus("", false, "本地 server 启动失败, 隧道无法建立"); return;
+        }
+        startCfTunnel();
+        startSshTunnel();
+    }
+    /** 主后端: cloudflared 快速隧道 (仅此一条, 自愈时只重启自己, 不牵连 SSH 备用后端)。 */
+    private synchronized void startCfTunnel() {
         try {
             ensureLocalServer();
             if (localServer == null || localServer.getPort() <= 0) {
@@ -171,7 +184,7 @@ public class RelayService extends Service {
                         android.util.Log.w("RTFlowTunnel", "tunnel no URL after " + (TUNNEL_URL_TIMEOUT / 1000) + "s → restart");
                         tunnelRetries++;
                         try { t.stop(); } catch (Exception ignored) {}
-                        startTunnel();
+                        startCfTunnel();
                     }
                 }, TUNNEL_URL_TIMEOUT);
             }
@@ -179,10 +192,91 @@ public class RelayService extends Service {
             updateTunnelStatus("", false, "隧道启动失败: " + e.getMessage());
         }
     }
+    /** 路线A 扩展: 起独立 SSH 反向隧道后端 (与 cloudflared 并行), 退出时轮换公共边缘并持久自愈。 */
+    private synchronized void startSshTunnel() {
+        try {
+            if (localServer == null || localServer.getPort() <= 0) return;
+            int port = localServer.getPort();
+            if (sshTunnel != null) sshTunnel.stop();
+            final String edge = SshTunnelManager.EDGES[sshEdgeIdx % SshTunnelManager.EDGES.length];
+            sshTunnel = new SshTunnelManager(this, port, edge, new SshTunnelManager.Callback() {
+                public void onUrl(String url) { sshRetries = 0; sshUrl = url; rebroadcast("备用隧道已连通 (" + edge + ")"); }
+                public void onLog(String line) { android.util.Log.i("RTFlowTunnel", "[ssh] " + line); }
+                public void onExit(int code) { onSshExit(code); }
+            });
+            final int gen = ++sshGen;
+            boolean ok = sshTunnel.start();
+            if (ok) {
+                // 无URL看门狗: SSH 进程在跑却 50s 拿不到公网URL → 换边缘重启。
+                main.postDelayed(() -> {
+                    if (gen != sshGen || !tunnelEnabledFlag()) return;
+                    SshTunnelManager t = sshTunnel;
+                    if (t != null && t.isAlive() && !t.hasUrl()) {
+                        android.util.Log.w("RTFlowTunnel", "[ssh] no URL after " + (TUNNEL_URL_TIMEOUT / 1000) + "s → next edge");
+                        sshEdgeIdx++;
+                        try { t.stop(); } catch (Exception ignored) {}
+                        startSshTunnel();
+                    }
+                }, TUNNEL_URL_TIMEOUT);
+                sshHealthFails = 0;
+                scheduleSshHealth(gen);
+            }
+        } catch (Exception ignored) {}
+    }
+    /** SSH 后端退出: 轮换到下一个公共边缘, 持久退避重连 (与 cloudflared 同样永不彻底放弃)。 */
+    private synchronized void onSshExit(int code) {
+        if (!tunnelEnabledFlag()) return;
+        sshUrl = "";
+        sshRetries++; sshEdgeIdx++;   // 换下一个边缘
+        long delay = Math.min(2000L * sshRetries, TUNNEL_RETRY_CAP);
+        rebroadcast(null);
+        main.postDelayed(() -> { if (tunnelEnabledFlag()) startSshTunnel(); }, delay);
+    }
+    /** 备用隧道健康探测: 公共 SSH 边缘可能在不关闭 SSH 会话的情况下静默废弃隧道(URL 返回 503)。
+     *  进程退出看门狗抓不到这种"假活", 故定期探公网 URL/health; 连失 2 次即换边缘重连。 */
+    private void scheduleSshHealth(final int gen) {
+        main.postDelayed(() -> {
+            if (gen != sshGen || !tunnelEnabledFlag()) return;
+            final String u = sshUrl;
+            if (u == null || u.isEmpty()) { scheduleSshHealth(gen); return; }
+            new Thread(() -> {
+                final boolean ok = probeUrl(u + "/health", 10000);
+                main.post(() -> {
+                    if (gen != sshGen || !tunnelEnabledFlag()) return;
+                    if (ok) { sshHealthFails = 0; scheduleSshHealth(gen); return; }
+                    sshHealthFails++;
+                    if (sshHealthFails >= 2) {
+                        android.util.Log.w("RTFlowTunnel", "[ssh] health probe failed → cycle edge");
+                        sshHealthFails = 0; sshUrl = ""; sshEdgeIdx++;
+                        SshTunnelManager t = sshTunnel;
+                        if (t != null) try { t.stop(); } catch (Exception ignored) {}
+                        rebroadcast(null);
+                        startSshTunnel();   // 提升 gen → 本探测循环自然终止
+                    } else scheduleSshHealth(gen);
+                });
+            }, "rtflow-ssh-health").start();
+        }, SSH_HEALTH_INTERVAL);
+    }
+    /** 轻量 GET 探测: 2xx/3xx/4xx 视为隧道在线; 5xx(含 localhost.run "no tunnel here" 503)或异常=死。 */
+    private boolean probeUrl(String url, int timeoutMs) {
+        java.net.HttpURLConnection c = null;
+        try {
+            c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            c.setConnectTimeout(timeoutMs); c.setReadTimeout(timeoutMs);
+            c.setInstanceFollowRedirects(false);
+            c.setRequestMethod("GET");
+            int code = c.getResponseCode();
+            return code >= 200 && code < 500;
+        } catch (Exception e) { return false; }
+        finally { if (c != null) try { c.disconnect(); } catch (Exception ignored) {} }
+    }
     private synchronized void stopTunnel() {
         // 仅停 cloudflared 隧道; 本地 server 保留 (局域网直连默认常驻, 不随隧道关闭而下线)。
         tunnelGen++;   // 作废任何在途的无URL看门狗/重连
         if (tunnel != null) { tunnel.stop(); tunnel = null; }
+        sshGen++;
+        if (sshTunnel != null) { sshTunnel.stop(); sshTunnel = null; }
+        sshUrl = ""; sshRetries = 0; sshEdgeIdx = 0;
         if (!lanDirectFlag() && localServer != null) { localServer.stop(); localServer = null; localPort = -1; }
         tunnelRetries = 0;
         try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
@@ -204,7 +298,7 @@ public class RelayService extends Service {
                 ? "去中心化隧道暂连不上(cloudflared 第" + attempt + "次退出, 本网络疑拦截 Cloudflare 边缘) · 已回退中继, 手机仍在线; 后台每" + (delay / 1000) + "s持续重连…"
                 : "cloudflared 退出(" + code + ") · 第 " + attempt + " 次重连中(" + (delay / 1000) + "s)…";
         updateTunnelStatus("", false, msg, attempt, fallback);
-        main.postDelayed(() -> { if (tunnelEnabledFlag()) startTunnel(); }, delay);
+        main.postDelayed(() -> { if (tunnelEnabledFlag()) startCfTunnel(); }, delay);
     }
     // 供 MainActivity 面板代理调用 (同进程)
     public boolean tunnelEnabledFlag() { return "1".equals(readUserFile("tunnel-enabled")); }
@@ -215,12 +309,36 @@ public class RelayService extends Service {
     private void updateTunnelStatus(String url, boolean connected, String msg) {
         updateTunnelStatus(url, connected, msg, 0, false);
     }
+    /** 沿用当前广播里的 cloudflared 主隧道态, 仅刷新一次 (用于 SSH 后端/局域网信息变化触发重广播)。 */
+    private void rebroadcast(String msgOverride) {
+        try {
+            org.json.JSONObject cur = new org.json.JSONObject(tunnelStatus);
+            String msg = msgOverride != null ? msgOverride : cur.optString("msg", "");
+            updateTunnelStatus(cur.optString("cfUrl", cur.optString("url", "")), cur.optBoolean("cfConnected", false),
+                    msg, cur.optInt("retries", 0), cur.optBoolean("fallback", false));
+        } catch (Exception ignored) {
+            updateTunnelStatus("", false, msgOverride == null ? "" : msgOverride, 0, false);
+        }
+    }
     private void updateTunnelStatus(String url, boolean connected, String msg, int retries, boolean fallback) {
         try {
+            String cf = url == null ? "" : url;
+            String ssh = sshUrl == null ? "" : sshUrl;
+            boolean anyConn = connected || !ssh.isEmpty();
+            String effective = !cf.isEmpty() ? cf : ssh;   // 主隧道优先, 否则用备用隧道作生效入口
             org.json.JSONObject o = new org.json.JSONObject();
-            o.put("enabled", tunnelEnabledFlag()); o.put("connected", connected);
-            o.put("url", url == null ? "" : url); o.put("msg", msg == null ? "" : msg);
+            o.put("enabled", tunnelEnabledFlag()); o.put("connected", anyConn);
+            o.put("url", effective); o.put("msg", msg == null ? "" : msg);
+            o.put("cfUrl", cf); o.put("cfConnected", connected);
             o.put("retries", retries); o.put("fallback", fallback);
+            // 全部生效的去中心化公网入口 (主 cloudflared + 备用 SSH 反向隧道), 供面板逐条展示/复制。
+            org.json.JSONArray tunnels = new org.json.JSONArray();
+            org.json.JSONArray publicUrls = new org.json.JSONArray();
+            if (!cf.isEmpty()) { tunnels.put(new org.json.JSONObject().put("name", "cloudflared").put("url", cf)); publicUrls.put(cf); }
+            if (!ssh.isEmpty()) { tunnels.put(new org.json.JSONObject().put("name", "ssh").put("url", ssh)); publicUrls.put(ssh); }
+            o.put("sshUrl", ssh);
+            o.put("tunnels", tunnels);
+            o.put("publicUrls", publicUrls);
             // 局域网直连信息 (零中继/零隧道, 同网直连本机): 始终随状态广播, 供穿透面板展示/复制。
             o.put("lanDirect", lanDirectFlag());
             o.put("localPort", localPort);
