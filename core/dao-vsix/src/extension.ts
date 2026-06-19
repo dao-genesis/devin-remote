@@ -2763,6 +2763,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .toast.hid{display:none}
 .toast.ok{background:var(--success);color:#000}
 .toast.err{background:var(--danger);color:#fff}
+.mo{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:300;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:32px 16px;box-sizing:border-box}
+.mo.hid{display:none}
+.md{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px 18px;width:560px;max-width:94vw;max-height:86vh;overflow:auto;box-shadow:0 8px 32px rgba(0,0,0,.5);box-sizing:border-box}
+.md h3{margin:0 0 12px;font-size:14px;color:var(--fg)}
+.mb{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 @keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 </style></head>
 <body>
