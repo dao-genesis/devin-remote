@@ -40,6 +40,16 @@ public final class LocalServer {
         /** 反向代理外站: 原生抓取 url → 剥 X-Frame-Options/CSP → 注入 <base> → 同源回服。
          *  返回 {contentType, html}; null = 失败。破除「外站禁止被 iframe 内嵌」, 让外壳能嵌真实外站。 */
         default String[] embedDoc(String url) { return null; }
+        /** 凭证转发 + 全量重写反向代理 (/px/<acct>/<absurl>): 原生抓取(代账号注入 Bearer auth1)→
+         *  顶层 HTML 注入 <base>+登录态种子+fetch/XHR 改写垫片 → 同源回服, 子资源/API 全经本代理同源直取。
+         *  破除 X-Frame-Options + CORS + 跨域鉴权三重限制, 使外站(含 app.devin.ai 登录态)能在外壳内渲染。
+         *  返回 {contentType, payload, encoding("text"|"b64"), status}; null = 失败。 */
+        default String[] embedProxy(String method, String url, String acct, String body, String reqContentType) { return null; }
+        /** 为 (目标站 origin, 账号) 分配/复用一个根挂载透明代理端口 → 返回端口号 (>0); -1 失败。
+         *  根挂载: 该端口的根 / 即源站根, 真实路径逐字一致 → 重型 SPA(TanStack 路由+auth0+Connect-RPC, 含
+         *  app.devin.ai 登录态)零改写完整渲染 (路径前缀代理因污染 location 致路由错乱/chunk 404, 故须独立端口根挂载)。
+         *  绑 0.0.0.0 → 同机(APK 自身 app.html 外壳经 localhost)+ 局域网浏览器可达; 公网单隧道场景外壳回退 /px。 */
+        default int proxyPort(String target, String acct) { return -1; }
     }
 
     private final Dispatcher disp;
@@ -101,6 +111,7 @@ public final class LocalServer {
 
             int contentLength = 0;
             String auth = "";
+            String reqCtype = "";
             String line;
             while ((line = readLine(in)) != null && !line.isEmpty()) {
                 int c = line.indexOf(':');
@@ -109,10 +120,34 @@ public final class LocalServer {
                 String v = line.substring(c + 1).trim();
                 if (k.equals("content-length")) { try { contentLength = Integer.parseInt(v); } catch (Exception ignored) {} }
                 else if (k.equals("authorization")) auth = v;
+                else if (k.equals("content-type")) reqCtype = v;
             }
 
             // CORS 预检
             if (method.equalsIgnoreCase("OPTIONS")) { writeCors(out); sock.close(); return; }
+
+            // 凭证转发全量重写代理 /px/<acct>/<absurl> (任意 method): 子资源/API 全同源经此代理直取。
+            // 破 X-Frame-Options + CORS + 跨域鉴权 → 外站(含 app.devin.ai 登录态)在外壳内渲染。免页面鉴权
+            // (拿外站内容不涉本机金库读写; 代理仅按 acct 注入该号 Bearer 回打源站)。
+            if (path.startsWith("/px/")) {
+                String afterPx = path.substring(4);
+                int sl = afterPx.indexOf('/');
+                String acct = "", target = "";
+                if (sl >= 0) {
+                    acct = urlDecode(afterPx.substring(0, sl));
+                    target = afterPx.substring(sl + 1);   // 完整绝对 URL (含其 query)
+                }
+                String reqBody = "";
+                if (contentLength > 0) reqBody = new String(readBody(in, contentLength), StandardCharsets.UTF_8);
+                String[] r = target.isEmpty() ? null : disp.embedProxy(method, target, acct, reqBody, reqCtype);
+                if (r != null) {
+                    int st = 200; try { st = Integer.parseInt(r[3]); } catch (Exception ignored) {}
+                    if ("b64".equals(r[2])) writeBytes(out, st, r[0], android.util.Base64.decode(r[1], android.util.Base64.DEFAULT));
+                    else writeAsset(out, st, r[0], r[1]);
+                    sock.close(); return;
+                }
+                write(out, 502, "{\"error\":\"proxy_failed\"}"); sock.close(); return;
+            }
 
             if (method.equalsIgnoreCase("GET")) {
                 // 健康探活 (免鉴权; cloudflared/relay 存活探测专用)
@@ -127,6 +162,15 @@ public final class LocalServer {
                     String[] doc = u.isEmpty() ? null : disp.embedDoc(u);
                     if (doc != null) { writeHtml(out, 200, doc[1]); sock.close(); return; }
                     write(out, 502, "{\"error\":\"embed_failed\"}"); sock.close(); return;
+                }
+                // 根挂载透明代理端口分配 /pxport?target=<enc>&acct=<enc> → {"port":N}。app.html Devin 标签据此
+                // 以独立端口根挂载源站 (真实路径逐字一致 → 登录态 SPA 完整渲染); 同机/局域网可达, 公网回退 /px。
+                if (qe >= 0 ? pe.substring(0, qe).equals("/pxport") : pe.equals("/pxport")) {
+                    String target = urlDecode(queryParam(qs, "target"));
+                    String acct = urlDecode(queryParam(qs, "acct"));
+                    int pp = target.isEmpty() ? -1 : disp.proxyPort(target, acct);
+                    write(out, pp > 0 ? 200 : 502, pp > 0 ? "{\"port\":" + pp + "}" : "{\"error\":\"proxy_port_failed\"}");
+                    sock.close(); return;
                 }
                 // 浏览器: 原样拿 APK 真实页面与其 JS 资源 (免鉴权拿页面; 页面内每个 RPC 仍需 Bearer Token)。
                 // 去掉 query (?session=...) 再匹配。
@@ -168,6 +212,11 @@ public final class LocalServer {
         } catch (Exception e) {
             try { sock.close(); } catch (Exception ignored) {}
         }
+    }
+
+    private static String urlDecode(String s) {
+        if (s == null || s.isEmpty()) return "";
+        try { return java.net.URLDecoder.decode(s, "UTF-8"); } catch (Exception e) { return s; }
     }
 
     /** 从 query string 取参数并 URL 解码 (供 /embed?u= 使用)。 */
@@ -239,6 +288,21 @@ public final class LocalServer {
         h.append("Content-Type: ").append(contentType == null ? "text/plain; charset=utf-8" : contentType).append("\r\n");
         h.append("Access-Control-Allow-Origin: *\r\n");
         h.append("Cache-Control: no-cache\r\n");
+        h.append("Content-Length: ").append(b.length).append("\r\n");
+        h.append("Connection: close\r\n\r\n");
+        out.write(h.toString().getBytes(StandardCharsets.UTF_8));
+        out.write(b);
+        out.flush();
+    }
+
+    /** 二进制回服 (字体/图片/wasm 等代理子资源): 原样写字节, 不经 UTF-8 损坏。 */
+    private static void writeBytes(OutputStream out, int status, String contentType, byte[] b) throws Exception {
+        if (b == null) b = new byte[0];
+        StringBuilder h = new StringBuilder();
+        h.append("HTTP/1.1 ").append(status).append(' ').append(statusText(status)).append("\r\n");
+        h.append("Content-Type: ").append(contentType == null ? "application/octet-stream" : contentType).append("\r\n");
+        h.append("Access-Control-Allow-Origin: *\r\n");
+        h.append("Cache-Control: max-age=300\r\n");
         h.append("Content-Length: ").append(b.length).append("\r\n");
         h.append("Connection: close\r\n\r\n");
         out.write(h.toString().getBytes(StandardCharsets.UTF_8));

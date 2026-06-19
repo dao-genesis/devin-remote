@@ -101,10 +101,11 @@ public final class HttpBridge {
             os.close();
         }
         int code = c.getResponseCode();
+        String ctype = c.getContentType();
         InputStream is = (code >= 200 && code < 400) ? c.getInputStream() : c.getErrorStream();
         String text = is == null ? "" : slurp(is);
         try { c.disconnect(); } catch (Exception ignored) {}
-        return "{\"status\":" + code + ",\"text\":" + jsonStr(text) + "}";
+        return "{\"status\":" + code + ",\"ctype\":" + jsonStr(ctype == null ? "" : ctype) + ",\"text\":" + jsonStr(text) + "}";
     }
 
     private static String doHttpB64(String method, String urlStr, String headersJson, String body) throws Exception {
@@ -133,11 +134,12 @@ public final class HttpBridge {
             os.close();
         }
         int code = c.getResponseCode();
+        String ctype = c.getContentType();
         InputStream is = (code >= 200 && code < 400) ? c.getInputStream() : c.getErrorStream();
         byte[] bytes = is == null ? new byte[0] : slurpBytes(is);
         try { c.disconnect(); } catch (Exception ignored) {}
         String b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
-        return "{\"status\":" + code + ",\"b64\":" + jsonStr(b64) + ",\"size\":" + bytes.length + "}";
+        return "{\"status\":" + code + ",\"ctype\":" + jsonStr(ctype == null ? "" : ctype) + ",\"b64\":" + jsonStr(b64) + ",\"size\":" + bytes.length + "}";
     }
 
     private static byte[] slurpBytes(InputStream is) throws Exception {

@@ -1,6 +1,6 @@
 {
-  "versionCode": 80,
-  "versionName": "0.31.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.31.0/DevinCloud-mobile-v0.31.0.apk",
-  "notes": "v0.31.0 · 破除外站内嵌限制 (网页套网页含外站)。① 新增手机端反向代理 /embed?u=<url>: 原生抓取外站 → 剥 X-Frame-Options/CSP frame-ancestors → 注入 <base> → 同源回服, 使外站能被 app.html 外壳 iframe 内嵌。② app.html 外站标签改走 /embed 代理 (含「新标签 (Devin)」与地址栏任意网址), 同源后可正常嵌入; 代理失败给「在源站新标签打开」出口。诚实边界: 需登录态/同源接口的重型 SPA (如 app.devin.ai 已登录会话) 仍受跨域 cookie/CORS 限制无法完整还原 — 顶层文档已可嵌入但内容需鉴权; 此类站在 APK 内用原生 WebView (带账号注入) 最完整。对外 curl/HTTP 契约零改动; v0.30 网页外壳/后台唤回不受影响。"
+  "versionCode": 81,
+  "versionName": "0.32.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.32.0/DevinCloud-mobile-v0.32.0.apk",
+  "notes": "v0.32.0 · 鱼与熊掌兼得: 凭证转发+全量重写反向代理 /px/<acct>/<absurl>。手机端原生抓取外站(按账号注入 Bearer auth1 + x-cog-org-id 回打源站)→ 顶层 HTML 注入 <base>+登录态种子(复刻多实例 localStorage 种子)+fetch/XHR 改写垫片 → 子资源/API 全经本代理同源直取。一举破 X-Frame-Options + CORS + 跨域鉴权三重限制, 使含 app.devin.ai 登录态的外站也能在 app.html 网页外壳内 iframe 渲染。app.html Devin 标签自动选用金库内已登录账号注入。诚实边界: WebSocket/SSE 实时流无法经 HTTP 代理(会话内容可渲染, 实时增量可能不更新)。对外 curl/HTTP 契约零改动; v0.31 /embed 仍保留。"
 }
