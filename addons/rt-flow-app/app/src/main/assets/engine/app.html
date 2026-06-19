@@ -121,8 +121,43 @@
 
   function host(u){ try{ return new URL(u, location.href).host; }catch(e){ return u; } }
   function isExternal(u){ return /^https?:\/\//i.test(u) && host(u)!==location.host; }
-  // 外站经手机端反向代理同源回服 → 破 X-Frame-Options, 可被 iframe 内嵌 (网页套网页, 含外站)。
-  function embedSrc(url){ return "/embed?u="+encodeURIComponent(url); }
+  function isDevin(u){ return /(^|\.)devin\.ai$/i.test(host(u)) || /(^|\.)cognition\.ai$/i.test(host(u)); }
+  // 根挂载透明代理 (独立端口, 真实路径逐字一致 → 登录态重型 SPA 0 改写完整渲染) 仅同机/局域网(http)可达;
+  // 公网 https 隧道(trycloudflare/workers)只暴露主端口且禁混合内容 → 回退 /px 路径前缀代理。
+  function isPrivateHost(h){ return h==="localhost"||h==="127.0.0.1"||h==="[::1]"
+      ||/^10\./.test(h)||/^192\.168\./.test(h)||/^172\.(1[6-9]|2\d|3[01])\./.test(h)||/^169\.254\./.test(h); }
+  function canRootMount(){ try{ return location.protocol==="http:" && isPrivateHost(location.hostname); }catch(e){ return false; } }
+  // 路径前缀回退: 外站经「凭证转发+全量重写」反向代理同源回服 (/px/<acct>/<absurl>): 破 X-Frame-Options + CORS +
+  // 跨域鉴权 → 含 app.devin.ai 登录态都可被 iframe 内嵌。SPA 客户端路由下保真度不及根挂载 (公网兜底用)。
+  function embedSrc(url, acct){ return "/px/"+encodeURIComponent(acct||"_")+"/"+url; }
+  // 根挂载: 向手机要一个绑定 (源站,账号) 的独立代理端口 → iframe 指向 http://<本机>:<端口>/<真实路径> (同源真实路径)。
+  function rootMountOpen(t, url, ac){
+    try{
+      var origin=new URL(url).origin;
+      fetch("/pxport?target="+encodeURIComponent(origin)+"&acct="+encodeURIComponent(ac))
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if(j&&j.port){
+            var base=location.protocol+"//"+location.hostname+":"+j.port;
+            t.proxyBase=base; t.proxyOrigin=origin;
+            t.src=base+(url.slice(origin.length)||"/");
+            t.fr.src=t.src; scheduleBlockCheck(t);
+          } else fallbackPx(t,url,ac);
+        }).catch(function(){ fallbackPx(t,url,ac); });
+    }catch(e){ fallbackPx(t,url,ac); }
+  }
+  function fallbackPx(t,url,ac){ t.rootmount=false; t.proxyBase=null; t.src=embedSrc(url,ac); t.fr.src=t.src; scheduleBlockCheck(t); }
+  // 选一个已登录账号注入 Devin 标签 (优先当前激活号; 否则首个已登录号) — 与 APK 多实例同一份金库账号。
+  function devinAcct(){
+    try{ var accs=JSON.parse(localStorage.getItem("rtflow.accounts")||"[]");
+      var act=localStorage.getItem("rtflow.active")||"";
+      function au(a){ return a && a.auth1; }
+      if(act){ for(var i=0;i<accs.length;i++){ var a=accs[i]; if((a.id===act||a.email===act)&&au(a)) return a.id||a.email; } }
+      for(var j=0;j<accs.length;j++){ if(au(accs[j])) return accs[j].id||accs[j].email; }
+    }catch(e){}
+    return "_";
+  }
+  function acctFor(url){ return isDevin(url)?devinAcct():"_"; }
 
   function openPage(key){
     var p = pageByKey(key); if(!p) return;
@@ -137,7 +172,12 @@
       if(lk){ openPage(lk); return; }
       url = "https://"+url;
     }
-    addTab({title:host(url), src:embedSrc(url), origUrl:url, kind:"web"});
+    var ac=acctFor(url);
+    if(canRootMount() && isExternal(url)){
+      var t={title:host(url), origUrl:url, acct:ac, kind:"web", src:"about:blank", rootmount:true};
+      addTab(t); rootMountOpen(t,url,ac); return;
+    }
+    addTab({title:host(url), src:embedSrc(url,ac), origUrl:url, acct:ac, kind:"web"});
   }
 
   function addTab(t){
@@ -152,28 +192,29 @@
       try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){}
       checkBlocked(t);
     });
-    if(t.kind==="web") scheduleBlockCheck(t);
+    if(t.kind==="web" && t.src && t.src!=="about:blank") scheduleBlockCheck(t);
     tabs.push(t); renderStrip(); selectTab(t.id);
   }
 
-  // 外站经手机端 /embed 代理同源回服 → 正常可嵌; 若代理失败(502/抓取超时)给"在源站新标签打开"出口
-  function scheduleBlockCheck(t){ t._loaded=false; setTimeout(function(){ if(!t._loaded) showBlocked(t); }, 8000); }
+  // 外站经 /px 代理同源回服 → 正常可嵌; 若代理失败(502/抓取超时)给"在源站新标签打开"出口 (代理需 12s 抓取重型 SPA)
+  function scheduleBlockCheck(t){ t._loaded=false; setTimeout(function(){ if(!t._loaded) showBlocked(t); }, 12000); }
   function checkBlocked(t){
     t._loaded=true;
     if(t.kind!=="web") return;
-    // /embed 同源 → 可读 contentDocument; 失败时回服 {"error":"embed_failed"}
+    // /px 同源 → 可读 contentDocument; 失败时回服 {"error":"proxy_failed"}
     try{
       var d=t.fr.contentDocument;
       if(d){ var txt=(d.body&&d.body.textContent||"").slice(0,120);
-        if(/embed_failed|\"error\"/.test(txt)) { showBlocked(t); return; } }
+        if(/proxy_failed|embed_failed/.test(txt)) { showBlocked(t); return; } }
     }catch(e){}
     if(t._blockEl){ t._blockEl.remove(); t._blockEl=null; }
   }
   function showBlocked(t){
     if(t._blockEl) return;
     var d=document.createElement("div"); d.className="blocked";
-    d.innerHTML='<div>无法经代理内嵌 (<b>'+host(t.origUrl||t.src)+'</b>): 该站需登录态/同源接口, 手机端代理无法完整还原。<br>'+
-      'APK 内可用原生 WebView 打开 (带账号注入); 或在源站新标签打开。</div>';
+    d.innerHTML='<div>经代理抓取 <b>'+host(t.origUrl||t.src)+'</b> 失败/超时。<br>'+
+      '可能源站暂不可达, 或该站重度依赖 WebSocket/SSE 实时流 (HTTP 代理无法完整还原)。<br>'+
+      '可重载重试, 或在源站新标签打开。</div>';
     var b=document.createElement("button"); b.textContent="在源站新标签打开"; b.onclick=function(){ window.open(t.origUrl||t.src,"_blank"); };
     d.appendChild(b);
     // 用占位层盖住该 tab 的 iframe 区域
@@ -220,10 +261,12 @@
   function goAddr(){
     var v=addr.value.trim(); if(!v) return;
     var t=tabs[active];
-    if(t && t.kind==="web"){ // 当前是网页标签 → 原地导航 (经 /embed 代理)
+    if(t && t.kind==="web"){ // 当前是网页标签 → 原地导航 (经 /px 代理)
       if(!/^[a-z]+:\/\//i.test(v)) v="https://"+v;
-      t.origUrl=v; t.title=host(v); if(t._blockEl){t._blockEl.remove();t._blockEl=null;}
-      t.fr.src=embedSrc(v); scheduleBlockCheck(t); renderStrip();
+      t.origUrl=v; t.title=host(v); t.acct=acctFor(v); if(t._blockEl){t._blockEl.remove();t._blockEl=null;}
+      if(canRootMount() && isExternal(v)){ rootMountOpen(t,v,t.acct); }
+      else { t.fr.src=embedSrc(v,t.acct); scheduleBlockCheck(t); }
+      renderStrip();
     } else openWeb(v); // 板块页上输入网址 → 新开网页标签 (不覆盖板块)
   }
   document.getElementById("go").onclick=goAddr;

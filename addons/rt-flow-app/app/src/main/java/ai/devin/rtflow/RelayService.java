@@ -97,6 +97,8 @@ public class RelayService extends Service {
                     // → 任意设备浏览器打开即得与手机本体「表层+底层」完全一致的页面 (手机=中枢)。
                     public String[] staticAsset(String path) { return RelayService.this.staticAsset(path); }
                     public String[] embedDoc(String url) { return RelayService.this.embedDoc(url); }
+                    public String[] embedProxy(String method, String url, String acct, String body, String reqContentType) { return RelayService.this.embedProxy(method, url, acct, body, reqContentType); }
+                    public int proxyPort(String target, String acct) { return RelayService.this.proxyPort(target, acct); }
                 });
                 localPort = localServer.start();
                 android.util.Log.i("RTFlowTunnel", "local server on 0.0.0.0:" + localPort);
@@ -232,6 +234,271 @@ public class RelayService extends Service {
             return base + html;
         }
         return html;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  凭证转发 + 全量重写反向代理 /px/<acct>/<absurl>
+    //  ── 鱼和熊掌兼得: 让外站(含 app.devin.ai 登录态)能在 app.html 外壳内 iframe 渲染。
+    //  破三重限制: ① X-Frame-Options(我们不回服框限头) ② CORS(子资源/API 全同源经本代理)
+    //              ③ 跨域鉴权(代理服务端按 acct 注入该号 Bearer auth1 + x-cog-org-id 回打源站)。
+    //  登录态种子复刻 TabActivity.buildInjection: localStorage 种子 + cookie, 与原生多实例逐键一致。
+    //  诚实边界: WebSocket/SSE 实时流无法经 HTTP 代理(留直连·跨域鉴权不全) → 会话内容可渲染, 实时增量可能不更新。
+    // ════════════════════════════════════════════════════════════════════════
+    String[] embedProxy(String method, String url, String acct, String body, String reqCtype) {
+        try {
+            if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) return null;
+            java.net.URL u = new java.net.URL(url);
+            String host = u.getHost() == null ? "" : u.getHost();
+            String origin = u.getProtocol() + "://" + host + (u.getPort() > 0 ? ":" + u.getPort() : "");
+            boolean devin = host.endsWith("devin.ai") || host.endsWith("cognition.ai");
+            String pathOnly = u.getPath() == null ? "" : u.getPath();
+            String ctOut = guessType(pathOnly, url);
+            boolean isText = ctOut.startsWith("text/") || ctOut.equals("application/json")
+                    || ctOut.equals("image/svg+xml") || ctOut.equals("application/javascript")
+                    || ctOut.equals("application/manifest+json");
+            boolean isHtml = ctOut.equals("text/html");
+
+            // 账号注入: 取该号 auth1/org → Bearer + x-cog-org-id (= 原生多实例鉴权等价物)
+            org.json.JSONObject acc = devin ? findAcct(acct) : null;
+            String auth1 = acc == null ? "" : acc.optString("auth1", "");
+            String org = acc == null ? "" : acc.optString("orgId", "");
+            org.json.JSONObject hdr = new org.json.JSONObject();
+            hdr.put("Accept", isHtml ? "text/html,application/xhtml+xml,*/*" : "*/*");
+            if (reqCtype != null && !reqCtype.isEmpty() && !"GET".equalsIgnoreCase(method)) hdr.put("Content-Type", reqCtype);
+            if (devin && !auth1.isEmpty()) { hdr.put("Authorization", "Bearer " + auth1); if (!org.isEmpty()) hdr.put("x-cog-org-id", org); }
+
+            final java.util.concurrent.SynchronousQueue<String> q = new java.util.concurrent.SynchronousQueue<>();
+            HttpBridge.Cb cb = (id, json) -> { try { q.offer(json == null ? "{}" : json, 6, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {} };
+            String rid = "PX" + System.nanoTime();
+            if (isText) HttpBridge.exec(rid, method, url, hdr.toString(), body, cb);
+            else        HttpBridge.execB64(rid, method, url, hdr.toString(), body, cb);
+            String res = q.poll(50, java.util.concurrent.TimeUnit.SECONDS);
+            if (res == null) return null;
+            org.json.JSONObject o = new org.json.JSONObject(res);
+            int status = o.optInt("status", 0);
+            if (status < 200) return null;     // 0 = 抓取异常
+            String statusStr = String.valueOf(status);
+
+            if (isText) {
+                String text = o.optString("text", "");
+                if (isHtml) text = rewriteDoc(text, origin, acct, acc);
+                return new String[]{ctOut + (ctOut.startsWith("text/") || ctOut.contains("json") ? "; charset=utf-8" : ""), text, "text", statusStr};
+            } else {
+                return new String[]{ctOut, o.optString("b64", ""), "b64", statusStr};
+            }
+        } catch (Exception e) { return null; }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  根挂载透明代理 (单端口 = 单 (站, 号)) — 鱼与熊掌的「熊掌」, 让登录态重型 SPA 完整渲染。
+    //  路径前缀 /px 代理会污染 SPA 的 location → 客户端路由(pushState 改根路径)错乱、懒加载 chunk 解析到根 404。
+    //  根挂载: 独立端口的根 / 即源站根 → 真实路径逐字一致, 0 改写, 路由/chunk/api 全自然命中 (AVD 实测登录态秒开)。
+    // ════════════════════════════════════════════════════════════════════════
+    private final java.util.Map<String, ProxyServer> proxyServers = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 为 (目标站 origin, 账号) 分配/复用根挂载代理端口 → 端口号 (>0); -1 失败。同 (站,号) 复用同端口供 SPA 大量子资源共享。 */
+    int proxyPort(String target, String acct) {
+        try {
+            if (target == null || target.isEmpty()) return -1;
+            java.net.URL u = new java.net.URL(target);
+            String origin = u.getProtocol() + "://" + u.getHost() + (u.getPort() > 0 ? ":" + u.getPort() : "");
+            String a = (acct == null || acct.isEmpty()) ? "_" : acct;
+            String key = origin + "|" + a;
+            ProxyServer ps = proxyServers.get(key);
+            if (ps != null && ps.isRunning()) return ps.getPort();
+            ps = new ProxyServer(origin, a, (method, url, ac, body, ct, accept) -> embedRoot(method, url, ac, body, ct, accept));
+            int port = ps.start();
+            proxyServers.put(key, ps);
+            return port;
+        } catch (Exception e) { return -1; }
+    }
+
+    /** 根挂载抓取: 抓 url(代 acct 注入 Bearer auth1 + x-cog-org-id) → 顶层 HTML 剥 CSP + 注入登录态种子。
+     *  无 base / 无 URL 改写垫片 (根挂载下源站同源, 真实路径自然命中)。回服时用源站真实 Content-Type (Connect-RPC 校验)。 */
+    String[] embedRoot(String method, String url, String acct, String body, String reqCtype, String accept) {
+        try {
+            if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) return null;
+            java.net.URL u = new java.net.URL(url);
+            String host = u.getHost() == null ? "" : u.getHost();
+            boolean devin = host.endsWith("devin.ai") || host.endsWith("cognition.ai");
+            String pathOnly = u.getPath() == null ? "" : u.getPath();
+            String ctGuess = guessType2(pathOnly, accept);
+            boolean isText = ctGuess.startsWith("text/") || ctGuess.equals("application/json")
+                    || ctGuess.equals("image/svg+xml") || ctGuess.equals("application/javascript")
+                    || ctGuess.equals("application/manifest+json");
+            boolean isHtmlGuess = ctGuess.equals("text/html");
+
+            org.json.JSONObject acc = devin ? findAcct(acct) : null;
+            String auth1 = acc == null ? "" : acc.optString("auth1", "");
+            String org = acc == null ? "" : acc.optString("orgId", "");
+            org.json.JSONObject hdr = new org.json.JSONObject();
+            hdr.put("Accept", accept == null || accept.isEmpty() ? (isHtmlGuess ? "text/html,application/xhtml+xml,*/*" : "*/*") : accept);
+            if (reqCtype != null && !reqCtype.isEmpty() && !"GET".equalsIgnoreCase(method)) hdr.put("Content-Type", reqCtype);
+            if (devin && !auth1.isEmpty()) { hdr.put("Authorization", "Bearer " + auth1); if (!org.isEmpty()) hdr.put("x-cog-org-id", org); }
+
+            final java.util.concurrent.SynchronousQueue<String> q = new java.util.concurrent.SynchronousQueue<>();
+            HttpBridge.Cb cb = (id, json) -> { try { q.offer(json == null ? "{}" : json, 6, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {} };
+            String rid = "PR" + System.nanoTime();
+            if (isText) HttpBridge.exec(rid, method, url, hdr.toString(), body, cb);
+            else        HttpBridge.execB64(rid, method, url, hdr.toString(), body, cb);
+            String res = q.poll(50, java.util.concurrent.TimeUnit.SECONDS);
+            if (res == null) return null;
+            org.json.JSONObject o = new org.json.JSONObject(res);
+            int status = o.optInt("status", 0);
+            if (status < 200) return null;
+            String statusStr = String.valueOf(status);
+            String realCt = o.optString("ctype", "");
+
+            if (isText) {
+                String text = o.optString("text", "");
+                String ct = !realCt.isEmpty() ? realCt : ctGuess;
+                boolean htmlResp = ct.toLowerCase().contains("text/html");
+                if (htmlResp) { text = injectSeed(text, acc); if (!ct.toLowerCase().contains("charset")) ct = "text/html; charset=utf-8"; }
+                else if (!ct.toLowerCase().contains("charset") && (ct.startsWith("text/") || ct.contains("json") || ct.contains("javascript"))) ct = ct + "; charset=utf-8";
+                return new String[]{ct, text, "text", statusStr};
+            } else {
+                return new String[]{!realCt.isEmpty() ? realCt : ctGuess, o.optString("b64", ""), "b64", statusStr};
+            }
+        } catch (Exception e) { return null; }
+    }
+
+    /** 根挂载: 顶层 HTML 剥 CSP <meta> + 在源站脚本前注入登录态种子。无 base / 无 URL 改写。 */
+    private static String injectSeed(String html, org.json.JSONObject acc) {
+        html = html.replaceAll("(?is)<meta[^>]+http-equiv\\s*=\\s*[\"']?content-security-policy[\"']?[^>]*>", "");
+        String a1 = acc == null ? "" : acc.optString("auth1", "");
+        if (a1.isEmpty()) return html;     // 非 devin / 无登录号 → 仅剥 CSP
+        String uid = acc.optString("userId", ""), org = acc.optString("orgId", ""), on = acc.optString("orgName", "");
+        String inject = "<script>" + loginSeed(a1, uid, org, on) + "</script>\n";
+        int h = indexOfIgnoreCase(html, "<head");
+        if (h >= 0) { int gt = html.indexOf('>', h); if (gt >= 0) return html.substring(0, gt + 1) + inject + html.substring(gt + 1); }
+        return inject + html;
+    }
+
+    /** 登录态种子 (逐键复刻 TabActivity.buildInjection 多实例注入)。根挂载下源站同源, 无需改写垫片。 */
+    private static String loginSeed(String a1, String uid, String org, String on) {
+        return "(function(){try{var A1=" + js(a1) + ",UID=" + js(uid) + ",ORG=" + js(org) + ",ON=" + js(on) + ";"
+            + "localStorage.setItem('auth1_session',JSON.stringify({token:A1,userId:UID}));"
+            + "localStorage.setItem('migrated-to-unscoped-auth0-token-2025-12-18','true');"
+            + "if(UID)localStorage.setItem('known-org-ids-'+UID,JSON.stringify([ORG]));"
+            + "if(ORG)localStorage.setItem('last-internal-org-for-external-org-v1-null',ORG);"
+            + "if(ORG&&UID&&ON){var K='post-auth-v3-null-'+UID+'-org_name-'+ON;if(!localStorage.getItem(K))localStorage.setItem(K,JSON.stringify({externalOrgId:null,userId:UID,internalOrgId:ORG,orgName:ON,result:{resolved_external_org_id:null,org_id:ORG,org_name:ON,is_valid_resource:true}}));}"
+            + "document.cookie='webapp_logged_in=true; path=/; max-age=31536000; SameSite=Lax';"
+            + "}catch(e){}})();";
+    }
+
+    /** guessType 变体: 无扩展名非 api 路径用 Accept 区分导航(html) vs 数据(json, 真实 Content-Type 再覆盖头)。 */
+    private static String guessType2(String path, String accept) {
+        String t = guessType(path, path);
+        if (!t.equals("text/html")) return t;     // 有明确扩展名或 /api/ → 用之
+        if (accept != null && accept.toLowerCase().contains("text/html")) return "text/html";
+        if (path != null && path.indexOf('.') < 0) return "application/json";   // 无扩展名非导航 → 数据
+        return "text/html";
+    }
+
+    /** 从金库 accounts 取指定账号 (按 id/email) → 含 auth1/orgId/userId/orgName。 */
+    private org.json.JSONObject findAcct(String acct) {
+        if (acct == null || acct.isEmpty()) return null;
+        try {
+            String raw = vaultRead("accounts");
+            if (raw == null || raw.isEmpty()) return null;
+            org.json.JSONArray arr = new org.json.JSONArray(raw);
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject a = arr.optJSONObject(i);
+                if (a == null) continue;
+                if (acct.equals(a.optString("id")) || acct.equals(a.optString("email"))) {
+                    if (!a.optString("auth1", "").isEmpty()) return a;
+                }
+            }
+            // 未指定有效号 → 退化用首个已登录号 (acct=="_" 占位时)
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject a = arr.optJSONObject(i);
+                if (a != null && !a.optString("auth1", "").isEmpty()) return a;
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /** 顶层 HTML 改写: 剥 CSP <meta> → 注入 <base>(指向本代理前缀) + 登录态种子 + fetch/XHR 改写垫片
+     *  → 根相对/绝对资源与 API 全经本代理同源直取, 且 API 带账号 Bearer。 */
+    private static String rewriteDoc(String html, String origin, String acct, org.json.JSONObject acc) {
+        String prefix = "/px/" + enc(acct == null ? "_" : acct) + "/";
+        String baseHref = prefix + origin + "/";
+        // 剥页内 CSP (response 头本就不回服)
+        html = html.replaceAll("(?is)<meta[^>]+http-equiv\\s*=\\s*[\"']?content-security-policy[\"']?[^>]*>", "");
+        // 根相对资源 → 相对 (去前导 /), 经 <base> 落到本代理前缀; 跳过协议相对 //
+        html = html.replaceAll("(?i)(\\s(?:src|href|action)\\s*=\\s*[\"'])/(?!/)", "$1");
+        String a1 = acc == null ? "" : acc.optString("auth1", "");
+        String uid = acc == null ? "" : acc.optString("userId", "");
+        String org = acc == null ? "" : acc.optString("orgId", "");
+        String on = acc == null ? "" : acc.optString("orgName", "");
+        String inject = "<base href=\"" + baseHref + "\">\n<script>" + seedShim(origin, prefix, a1, uid, org, on) + "</script>\n";
+        int h = indexOfIgnoreCase(html, "<head");
+        if (h >= 0) { int gt = html.indexOf('>', h); if (gt >= 0) return html.substring(0, gt + 1) + inject + html.substring(gt + 1); }
+        return inject + html;
+    }
+
+    /** 登录态种子(复刻 TabActivity.buildInjection)+ fetch/XHR/import 改写垫片(指向本代理同源前缀)。 */
+    private static String seedShim(String origin, String prefix, String a1, String uid, String org, String on) {
+        return "(function(){try{"
+            + "var TARGET=" + js(origin) + ",PREFIX=" + js(prefix) + ";"
+            + "var A1=" + js(a1) + ",UID=" + js(uid) + ",ORG=" + js(org) + ",ON=" + js(on) + ";"
+            + "if(A1){try{"
+            + "localStorage.setItem('auth1_session',JSON.stringify({token:A1,userId:UID}));"
+            + "localStorage.setItem('migrated-to-unscoped-auth0-token-2025-12-18','true');"
+            + "if(UID)localStorage.setItem('known-org-ids-'+UID,JSON.stringify([ORG]));"
+            + "if(ORG)localStorage.setItem('last-internal-org-for-external-org-v1-null',ORG);"
+            + "if(ORG&&UID&&ON){var K='post-auth-v3-null-'+UID+'-org_name-'+ON;if(!localStorage.getItem(K))localStorage.setItem(K,JSON.stringify({externalOrgId:null,userId:UID,internalOrgId:ORG,orgName:ON,result:{resolved_external_org_id:null,org_id:ORG,org_name:ON,is_valid_resource:true}}));}"
+            + "document.cookie='webapp_logged_in=true; path=/; max-age=31536000; SameSite=Lax';"
+            + "}catch(e){}}"
+            // 改写: 根相对/绝对(同源 TARGET)请求 → 本代理同源前缀 (服务端代账号注入鉴权 → 免 CORS + 带登录态)
+            + "function P(u){try{if(typeof u!=='string'||!u)return u;"
+            + "if(u.indexOf(PREFIX)===0||u.indexOf(location.origin+PREFIX)===0)return u;"
+            + "var abs;if(/^https?:\\/\\//i.test(u))abs=u;else if(u.charAt(0)==='/')abs=TARGET+u;else return u;"
+            + "if(abs.indexOf(TARGET)===0)return PREFIX+abs;return u;}catch(e){return u;}}"
+            + "var of=window.fetch;if(of)window.fetch=function(i,init){try{if(typeof i==='string')i=P(i);else if(i&&i.url)i=new Request(P(i.url),i);}catch(e){}return of.call(this,i,init);};"
+            + "var oo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){try{u=P(u);}catch(e){}return oo.apply(this,[m,u].concat([].slice.call(arguments,2)));};"
+            + "}catch(e){}})();";
+    }
+
+    private static int indexOfIgnoreCase(String s, String t) {
+        if (s == null) return -1; int n = s.length(), m = t.length();
+        for (int i = 0; i + m <= n; i++) if (s.regionMatches(true, i, t, 0, m)) return i;
+        return -1;
+    }
+    private static String enc(String s) { try { return java.net.URLEncoder.encode(s, "UTF-8"); } catch (Exception e) { return s; } }
+    /** JS 字符串字面量 (双引号包裹, 转义)。 */
+    private static String js(String s) {
+        if (s == null) return "\"\"";
+        StringBuilder b = new StringBuilder("\"");
+        for (int i = 0; i < s.length(); i++) { char c = s.charAt(i);
+            switch (c) { case '"': b.append("\\\""); break; case '\\': b.append("\\\\"); break;
+                case '\n': b.append("\\n"); break; case '\r': b.append("\\r"); break; case '<': b.append("\\u003c"); break;
+                default: if (c < 0x20) b.append(String.format("\\u%04x", (int) c)); else b.append(c); } }
+        return b.append("\"").toString();
+    }
+    /** 按 URL 路径扩展名推断 Content-Type (HttpBridge 不回服源站头, 故就地推断)。 */
+    private static String guessType(String path, String url) {
+        String p = path.toLowerCase();
+        if (p.endsWith(".js") || p.endsWith(".mjs")) return "application/javascript";
+        if (p.endsWith(".css")) return "text/css";
+        if (p.endsWith(".json") || p.endsWith(".map")) return "application/json";
+        if (p.endsWith(".webmanifest")) return "application/manifest+json";
+        if (p.endsWith(".svg")) return "image/svg+xml";
+        if (p.endsWith(".woff2")) return "font/woff2";
+        if (p.endsWith(".woff")) return "font/woff";
+        if (p.endsWith(".ttf")) return "font/ttf";
+        if (p.endsWith(".otf")) return "font/otf";
+        if (p.endsWith(".png")) return "image/png";
+        if (p.endsWith(".jpg") || p.endsWith(".jpeg")) return "image/jpeg";
+        if (p.endsWith(".gif")) return "image/gif";
+        if (p.endsWith(".webp")) return "image/webp";
+        if (p.endsWith(".avif")) return "image/avif";
+        if (p.endsWith(".ico")) return "image/x-icon";
+        if (p.endsWith(".wasm")) return "application/wasm";
+        if (p.endsWith(".mp4")) return "video/mp4";
+        if (p.endsWith(".html") || p.endsWith(".htm")) return "text/html";
+        if (p.contains("/api/")) return "application/json";
+        return "text/html";   // 无扩展名 = SPA 入口/客户端路由 → 回 index 外壳, 注入种子
     }
 
     /** /api/native — 值返回型 Native 方法就地执行, 回 {status,bodyText:{"r":...}}。 */
