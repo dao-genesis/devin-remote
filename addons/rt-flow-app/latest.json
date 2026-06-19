@@ -1,6 +1,6 @@
 {
-  "versionCode": 75,
-  "versionName": "0.26.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.26.0/DevinCloud-mobile-v0.26.0.apk",
-  "notes": "v0.26.0 · 诚实状态 UI + 恢复探测精简 (承 v0.25 健康探测): ① cloudflared 被如实标离线后, 渠道总览/接入文档不再让它消失, 而是如实显示「离线·本网络下 Cloudflare 边缘不可达(530)·后台慢探恢复中」, 控制端一眼看清主隧道为何不可用、备隧(SSH)仍在线兜底。② 5min 慢探恢复只保留 1 次重启余量 (而非从零重跑 3 轮), 持续封锁网络下从约 3min churn 缩到约 60s 即回到诚实离线, 省电更利落。本源 curl/HTTP 协议与对外契约零改动。"
+  "versionCode": 76,
+  "versionName": "0.27.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.27.0/DevinCloud-mobile-v0.27.0.apk",
+  "notes": "v0.27.0 · 减法收束 (无为而无不为): ① 强制端到端加密开关 (默认关·向后兼容): 端到端加密区新增「强制 E2E」开关, 开启后引擎拒收任何明文 RPC (仅 /api/health 存活探测例外), 杜绝明文驱动(如明文 getState)经中继泄露账号/密码 —— 闭合明文旁路这一真实安全口子。② 网络层去重: 把 WSS onmessage 与 cloudflared/局域网 serveLocal 两条重复的 E2E 解密→分发→重封管线蒸馏为单一 processFrame, 强制门禁亦在此一处生效, 两条入口行为永久一致。对外 curl/HTTP 契约零改动, 明文驱动默认仍可用。"
 }

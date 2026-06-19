@@ -97,6 +97,14 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   <button onclick="copyVal('e2eEndpoint')">复制中继入口</button>
 </div>
 <input id="e2eEndpoint" readonly placeholder="中继入口" style="font-family:monospace;font-size:11px">
+<div style="display:flex;align-items:center;gap:10px;margin:10px 0 2px">
+  <label style="position:relative;display:inline-block;width:48px;height:26px">
+    <input type="checkbox" id="forceE2eToggle" onchange="toggleForceE2E(this.checked)" style="opacity:0;width:0;height:0">
+    <span style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#333;border-radius:26px;transition:.3s" id="forceE2eSlider"></span>
+  </label>
+  <span id="forceE2eLabel" style="font-size:12px;color:var(--vscode-descriptionForeground)">强制端到端加密：已关闭</span>
+</div>
+<div class="muted" style="font-size:11px">开启后，本机<b>拒收任何明文 RPC</b> —— 未用 E2E Key 加密的请求一律被拒(仅存活探测 <code>/api/health</code> 例外)，杜绝明文驱动经中继泄露账号/密码。默认关闭以兼容旧驱动；确认所有驱动方都已用上方 E2E Key 加密后再开。</div>
 </div>
 
 <!-- 模块2: CloudFlare 命名隧道 (可选) -->
@@ -586,6 +594,26 @@ function copyLanAccess(){
   _result('copyLan', true, '已复制 局域网直连接入信息 (该地址直连本设备, 不经任何 Worker/隧道/公网)');
 }
 refreshLan(); setInterval(refreshLan, 4000);
+// ── 强制端到端加密开关 (Native 桥: e2eRequired/setE2eRequired) ──
+function toggleForceE2E(on){
+  var hasKey=false; try{ hasKey=!!(N.e2eEnabled&&N.e2eEnabled()); }catch(e){}
+  if(on && !hasKey){
+    _result('forceE2E', false, '尚未生成 E2E Key, 无法开启强制加密 (请先等待启动自动生成)');
+    refreshForceE2E(); return;
+  }
+  try{ N.setE2eRequired&&N.setE2eRequired(!!on); }catch(e){}
+  refreshForceE2E();
+  _result('forceE2E', true, on?'强制端到端加密已开启 🔒 (明文 RPC 一律拒收)':'强制端到端加密已关闭 (兼容明文驱动)');
+}
+function refreshForceE2E(){
+  var on=false; try{ on=!!(N.e2eRequired&&N.e2eRequired()); }catch(e){}
+  var cb=document.getElementById('forceE2eToggle'); if(cb) cb.checked=on;
+  var sl=document.getElementById('forceE2eSlider');
+  if(sl){ sl.style.background=on?'#3fb950':'#333';
+    sl.innerHTML='<span style="position:absolute;height:20px;width:20px;left:'+(on?'24px':'3px')+';bottom:3px;background:white;border-radius:50%;transition:.3s"></span>'; }
+  var lb=document.getElementById('forceE2eLabel'); if(lb) lb.textContent=on?'强制端到端加密：已开启 🔒 (明文 RPC 拒收)':'强制端到端加密：已关闭';
+}
+refreshForceE2E();
 // ── 后台保活 · 持久稳定化 (Native 桥: KeepAlive) ──
 function kaStat(){ try{ return JSON.parse(N.keepAliveStatus?N.keepAliveStatus():"{}"); }catch(e){ return {}; } }
 function kaRefresh(){

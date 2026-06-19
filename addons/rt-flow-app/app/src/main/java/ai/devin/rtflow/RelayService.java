@@ -499,6 +499,9 @@ public class RelayService extends Service {
             try { String k = e2eKeyVal(); if (k.isEmpty() || envB64 == null) return ""; return E2E.open(k, envB64); }
             catch (Exception e) { return ""; }
         }
+        // ── 强制端到端加密 (默认关·向后兼容)。开 = 引擎拒收明文 RPC, 杜绝明文驱动经中继泄露账号/密码。──
+        @JavascriptInterface public boolean e2eRequired() { return e2eRequiredFlag(); }
+        @JavascriptInterface public void setE2eRequired(boolean on) { writeUserFile("e2e-required", on ? "1" : "0"); }
         @JavascriptInterface public void onStatus(String json) {
             lastStatus = json == null ? "{}" : json;
             Intent i = new Intent("ai.devin.rtflow.STATUS").setPackage(getPackageName()).putExtra("status", lastStatus);
@@ -923,6 +926,8 @@ public class RelayService extends Service {
         } catch (Exception ignored) {}
         return "";
     }
+    /** 强制端到端加密开关 (默认关, 向后兼容明文驱动)。 */
+    private boolean e2eRequiredFlag() { return "1".equals(readUserFile("e2e-required")); }
 
     /** AES-256-GCM + PBKDF2(SHA256,100k) 端到端加密。封套(base64): [ver=1][salt16][iv12][密文+tag]。
      *  与 tools/dao-e2e 参考实现(JS/Python)逐字节兼容 → 任意语言的授权驱动方均可解密。 */
