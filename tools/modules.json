@@ -67,7 +67,7 @@
       "trigger": ["addons/dao-bridge/dao-bridge-ext"],
       "kind": "vsix",
       "title": "dao-bridge · 内网穿透插件",
-      "desc": "内网穿透本体：relay-first + cloudflared 自愈/断点续传，随 IDE 自启。独立 addon，不与其它插件冲突。",
+      "desc": "内网穿透本体：默认 Cloudflare 快速隧道（去中心化，无 Worker），配置账号走命名隧道；cloudflared 自愈/断点续传，随 IDE 自启。独立 addon，不与其它插件冲突。",
       "build": [
         "cd core/dao-vsix && npm install --no-audit --no-fund",
         "node tools/pack-vsix.js addons/dao-bridge/dao-bridge-ext"
