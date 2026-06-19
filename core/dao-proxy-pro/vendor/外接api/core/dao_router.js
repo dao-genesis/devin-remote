@@ -4024,6 +4024,27 @@ function _modelsUrlCandidates(cfg) {
   if (cfg.modelsUrl) push(String(cfg.modelsUrl).replace(/\/+$/, ""));
   // 1. 先剥补全后缀得真根 (修小米类「全路径 baseUrl」)
   const root = _stripCompletionSuffix(raw);
+  // ★ 渠特模表端 (优先) · GitHub Models 目录 / Gemini 原生 / Anthropic limit
+  //   道: 上善若水 · 处众人之所恶 · 各家底层皆自适
+  try {
+    const _h = new URL(root.includes("://") ? root : "https://" + root).hostname.toLowerCase();
+    const _isAnthropicHost =
+      cfg.protocol === "anthropic" ||
+      cfg.type === "anthropic" ||
+      _h === "api.anthropic.com";
+    if (_h === "models.github.ai") {
+      push("https://models.github.ai/catalog/models");
+    }
+    if (
+      _h === "generativelanguage.googleapis.com" &&
+      !/\/openai(\/|$)/i.test(root)
+    ) {
+      push("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000");
+    }
+    if (_isAnthropicHost) {
+      push(root.replace(/\/v\d+$/i, "") + "/v1/models?limit=1000");
+    }
+  } catch {}
   // 2. 根以 /vN 结尾 → root/models 优先; 否则 root/v1/models 优先
   if (/\/v\d+$/i.test(root)) {
     push(root + "/models");
@@ -4674,7 +4695,39 @@ async function hotListProviderModels(providerName, opts) {
     const isHttps = urlObj.protocol === "https:";
     const mod = isHttps ? https : http;
     const headers = { Accept: "application/json" };
-    if (provCfg.apiKey) headers["Authorization"] = `Bearer ${provCfg.apiKey}`;
+    // ★ 按协议/家族择认证头 · 不再一律 Bearer (Anthropic=x-api-key · Gemini原生=x-goog-api-key)
+    //   道: 知其雄守其雌 · 各从其类 · 万邦皆通
+    if (provCfg.apiKey) {
+      const _bu = String(provCfg.baseUrl || "").toLowerCase();
+      const _host = urlObj.hostname.toLowerCase();
+      const _isAnthropic =
+        provCfg.protocol === "anthropic" ||
+        provCfg.type === "anthropic" ||
+        /api\.anthropic\.com/.test(_bu) ||
+        _host === "api.anthropic.com" ||
+        /\/v1\/messages/.test(String(provCfg.completionPath || ""));
+      if (
+        _host === "generativelanguage.googleapis.com" &&
+        !/\/openai(\/|$)/i.test(urlObj.pathname)
+      ) {
+        headers["x-goog-api-key"] = provCfg.apiKey;
+      } else if (_isAnthropic) {
+        headers["x-api-key"] = provCfg.apiKey;
+        headers["anthropic-version"] = "2023-06-01";
+      } else {
+        headers["Authorization"] = `Bearer ${provCfg.apiKey}`;
+      }
+    }
+    // 自定义认证头 / 额外头 (与 adapters.applyAuthHeaders 同源)
+    if (provCfg.authHeader) {
+      const _ci = String(provCfg.authHeader).indexOf(":");
+      if (_ci > 0)
+        headers[provCfg.authHeader.slice(0, _ci).trim()] =
+          provCfg.authHeader.slice(_ci + 1).trim();
+    }
+    if (provCfg.extraHeaders && typeof provCfg.extraHeaders === "object") {
+      Object.assign(headers, provCfg.extraHeaders);
+    }
     const _agent = _getProxyAgent(isHttps);
     const out = await new Promise((resolve) => {
       const req = mod.request(
@@ -4719,6 +4772,9 @@ async function hotListProviderModels(providerName, opts) {
           .filter((m) => m && (m.id || m.name));
         all.forEach((m) => {
           if (!m.id && m.name) m.id = m.name;
+          // Gemini 原生 /v1beta/models 返回 name="models/gemini-..." · 去前缀
+          if (typeof m.id === "string" && /^models\//.test(m.id))
+            m.id = m.id.replace(/^models\//, "");
         });
         _autoDetectProtocolFromModels(provCfg, all);
         // 仅取「可对话」模型; 若过滤后为空则回退全部 · 不致空列表
