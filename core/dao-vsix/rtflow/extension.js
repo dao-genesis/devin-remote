@@ -327,6 +327,117 @@ async function openIdeAccountBrowser(acc) {
   return { ok: true };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════════
+// v5.0.0 · 归一 · 单面板多窗口多实例 (对齐手机版 APK)
+//   一个 webview 面板 = 顶部标签栏 + 多个 iframe; 每标签指向「该账号独立端口反代」origin,
+//   localStorage 各自隔离 → 各登各号·并行不串号。近期对话「多实例」与账号行「路由→IDE」
+//   全部归到此面板的不同标签 (一个面板里好几个窗口)。
+// ────────────────────────────────────────────────────────────────────────────────────
+let _multiPanel = null;
+let _multiReady = false;
+const _multiQueue = [];
+function _postMulti(m) {
+  if (_multiPanel && _multiReady) {
+    try { _multiPanel.webview.postMessage(m); } catch (e) {}
+  } else {
+    _multiQueue.push(m);
+  }
+}
+function _multiShellHtml() {
+  return [
+    '<!DOCTYPE html><html><head><meta charset="utf-8">',
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; img-src data:; frame-src http://localhost:* http://127.0.0.1:*;">',
+    '<style>',
+    'html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1e1e1e;color:#ccc;font-family:-apple-system,Segoe UI,sans-serif}',
+    '#bar{display:flex;align-items:stretch;height:34px;background:#252526;border-bottom:1px solid #333;overflow-x:auto;overflow-y:hidden;white-space:nowrap}',
+    '.tab{display:inline-flex;align-items:center;gap:6px;padding:0 10px;max-width:220px;border-right:1px solid #333;cursor:pointer;color:#bbb;font-size:12px;user-select:none}',
+    '.tab:hover{background:#2a2d2e}',
+    '.tab.on{background:#1e1e1e;color:#fff;border-bottom:2px solid #0a84ff}',
+    '.tab .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.tab .x{opacity:.6;font-size:14px;line-height:1;padding:0 3px;border-radius:3px}',
+    '.tab .x:hover{opacity:1;background:#444}',
+    '#stack{position:absolute;top:34px;left:0;right:0;bottom:0}',
+    '#stack iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}',
+    '#hint{position:absolute;top:34px;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;color:#777;font-size:13px;text-align:center;padding:24px}',
+    '</style></head><body>',
+    '<div id="bar"></div>',
+    '<div id="hint">\uD83C\uDF10 多实例面板 · 从「近期对话→多实例」或账号行「路由→IDE」打开窗口,每个窗口各登各号、互不串号。</div>',
+    '<div id="stack"></div>',
+    '<script>',
+    '(function(){var vscode=acquireVsCodeApi();var tabs={};var active=null;',
+    'var bar=document.getElementById("bar");var stack=document.getElementById("stack");var hint=document.getElementById("hint");',
+    'function sync(){hint.style.display=Object.keys(tabs).length?"none":"flex";}',
+    'function activate(id){active=id;for(var k in tabs){var on=(k===id);tabs[k].frame.style.display=on?"block":"none";tabs[k].btn.className="tab"+(on?" on":"");}}',
+    'function closeTab(id){var t=tabs[id];if(!t)return;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];vscode.postMessage({type:"closed",id:id});if(active===id){var ks=Object.keys(tabs);if(ks.length)activate(ks[ks.length-1]);else active=null;}sync();}',
+    'function mkTab(id,label,url){if(tabs[id]){if(url&&tabs[id].frame.getAttribute("src")!==url)tabs[id].frame.setAttribute("src",url);activate(id);return;}',
+    'var btn=document.createElement("div");btn.className="tab";var lb=document.createElement("span");lb.className="lbl";lb.textContent=label;btn.appendChild(lb);',
+    'var x=document.createElement("span");x.className="x";x.textContent="\\u00d7";btn.appendChild(x);',
+    'btn.onclick=function(e){if(e.target===x)return;activate(id);};x.onclick=function(e){e.stopPropagation();closeTab(id);};bar.appendChild(btn);',
+    'var fr=document.createElement("iframe");fr.setAttribute("src",url);fr.setAttribute("allow","clipboard-read; clipboard-write");fr.style.display="none";stack.appendChild(fr);',
+    'tabs[id]={btn:btn,frame:fr};activate(id);sync();}',
+    'window.addEventListener("message",function(ev){var m=ev.data||{};if(m.type==="open"){mkTab(m.id,m.label,m.url);}else if(m.type==="closeAll"){var ks=Object.keys(tabs);for(var i=0;i<ks.length;i++)closeTab(ks[i]);}});',
+    'vscode.postMessage({type:"ready"});})();',
+    '</script></body></html>'
+  ].join('');
+}
+function _ensureMultiPanel() {
+  if (_multiPanel) return _multiPanel;
+  _multiReady = false; _multiQueue.length = 0;
+  const panel = vscode.window.createWebviewPanel(
+    'daoMultiInstance', '\uD83C\uDF10 多实例 · Devin', vscode.ViewColumn.Active,
+    { enableScripts: true, retainContextWhenHidden: true },
+  );
+  panel.webview.html = _multiShellHtml();
+  panel.webview.onDidReceiveMessage((m) => {
+    if (m && m.type === 'ready') {
+      _multiReady = true;
+      while (_multiQueue.length) { try { panel.webview.postMessage(_multiQueue.shift()); } catch (e) {} }
+    }
+  });
+  panel.onDidDispose(() => { _multiPanel = null; _multiReady = false; _multiQueue.length = 0; });
+  _multiPanel = panel;
+  return panel;
+}
+async function _resolveAuthForEmail(email, password) {
+  let auth = devinCloud.getCachedAuth(email);
+  if (!auth || !auth.auth1) {
+    let pw = password;
+    if (!pw) {
+      try {
+        const acc = ((_store && _store.accounts) || []).find(
+          (a) => String(a.email).toLowerCase() === String(email).toLowerCase(),
+        );
+        if (acc) pw = acc.password;
+      } catch (e) {}
+    }
+    if (pw) { const r = await devinCloud.getAuth(email, pw); if (r && r.ok) auth = r; }
+  }
+  return auth;
+}
+// 归一入口: 在统一多实例面板里为某账号(可带具体对话)开/聚焦一个标签。
+async function openMultiInstance(opts) {
+  opts = opts || {};
+  const email = String(opts.email || '').trim();
+  if (!email) return { ok: false, error: 'no-email' };
+  const sid = String(opts.devinId || '').trim().replace(/^devin-/, '');
+  const auth = await _resolveAuthForEmail(email, opts.password);
+  if (!auth || !auth.auth1) return { ok: false, error: 'no-auth1' };
+  const pr = await devinProxy.ensureProxyForAccount(
+    email, { auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgName: auth.orgName }, log,
+  );
+  if (!pr.ok) return { ok: false, error: pr.error || 'proxy-fail' };
+  const portBase = pr.url || ('http://localhost:' + pr.port + '/');
+  const base = String(portBase).replace(/\/+$/, '');
+  const url = sid ? (base + '/sessions/' + encodeURIComponent(sid)) : (base + '/');
+  const short = email.split('@')[0];
+  const id = email.toLowerCase() + '|' + (sid || 'home');
+  const label = short + (sid ? (' · ' + sid.slice(0, 8)) : '');
+  _ensureMultiPanel();
+  try { _multiPanel.reveal(vscode.ViewColumn.Active); } catch (e) {}
+  _postMulti({ type: 'open', id: id, label: label, url: url });
+  return { ok: true };
+}
+
 // ═══ § 1 · 万法之资 ═══
 // v2.5.5 · 真根因 · ideVersion 能力协商 (2026-05-04 probe 实证):
 //   根源: v2.5.3/v2.5.4 改了脏数据清洗/软判据 · 但用户截图仍 "Trial?" · planEnd 仍 0
@@ -10447,7 +10558,7 @@ async function handleWebviewMessage(msg) {
         const a = _store.accounts[i];
         _toast("⏳ 注入登录态·路由官网→IDE · " + a.email.split("@")[0]);
         try {
-          const r = await openIdeAccountBrowser(a);
+          const r = await openMultiInstance({ email: a.email, password: a.password });
           if (r.ok) {
             _toast(
               (r.reused ? "🖥 已聚焦该号标签 · " : "🖥 已注入登录态·IDE标签已开 · ") +
@@ -13757,6 +13868,7 @@ module.exports = {
     _resolveCascadePbDir, // v2.5.9 · Layer 6 cascade pb 目录
     buildHtml,
     openEditorPanel,
+    openMultiInstance, // v5.0.0 · 归一多实例单面板多标签 (供 dao-vsix 委托)
     handleWebviewMessage, // v3.17.0 · 暴露给全功能面板宿主 · iframe 内真切号面板消息中继
     setHostPost(fn) {
       // v3.17.0 · 注册/注销宿主回调 (全功能面板第2 Tab)

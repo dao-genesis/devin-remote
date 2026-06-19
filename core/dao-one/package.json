@@ -934,10 +934,6 @@
         {
           "command": "dao.openDashboard",
           "when": "true"
-        },
-        {
-          "command": "dao.toggleCloudPanel",
-          "when": "true"
         }
       ]
     }

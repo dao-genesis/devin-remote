@@ -778,14 +778,7 @@
         "category": "RT Flow"
       }
     ],
-    "menus": {
-      "editor/title/run": [
-        {
-          "command": "dao.toggleCloudPanel",
-          "when": "true"
-        }
-      ]
-    }
+    "menus": {}
   },
   "scripts": {
     "vscode:prepublish": "node ./build.js",
