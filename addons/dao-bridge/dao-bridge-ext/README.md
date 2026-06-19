@@ -56,6 +56,18 @@
 云端 Agent 可全方位操作整台电脑：`/api/exec` 整机任意命令；`/api/ls|read|write` **默认整机**（绝对路径原样、相对路径相对工作区根）。
 仅当显式开启 `daoBridge.confineToWorkspace=true` 才把文件操作沙箱在工作区根目录内。
 
+### 远程执行 `.bat`/`.cmd`/`.exe`/任意程序
+`/api/exec` 与 `/api/exec-sync` 支持 `type` 字段（向后兼容，默认 `shell`）：
+
+| type | 说明 | 示例 body |
+|---|---|---|
+| `shell`(默认) | 原样命令（cmd.exe） | `{"cmd":"hostname"}` |
+| `run`/`file` | 运行文件 `.bat`/`.cmd`/`.exe`/`.ps1` + `args`，含空格路径也安全，透传原生退出码 | `{"type":"run","file":"C:\\Program Files\\app\\run.bat","args":["x"]}` |
+| `cmd`/`bat` | 经 `cmd.exe /c` + `chcp 65001` 执行（中文 UTF-8 回传） | `{"type":"cmd","cmd":"dir & ver"}` |
+| `detached`/`spawn` | `Start-Process` 后台/分离启动 GUI 或长驻进程，立即回 PID；可选 `elevate`/`show` | `{"type":"detached","file":"notepad.exe"}` |
+
+可选 `cwd`（工作目录，覆盖整机任意路径）。根因：裸路径走 cmd.exe/`Invoke-Expression` 时含空格的 `.bat`/`.exe` 会被当字符串字面量/被拆词 → 跑不起来；`run`/`cmd`/`detached` 用 PowerShell 调用运算符 `&` + 单引号量化彻底规避。
+
 ## 设置项
 - `daoBridge.relayUrl` Worker 中继端点（默认通道，留空走 cloudflared）
 - `daoBridge.session` 中继会话名 = `/relay/<session>`（留空用主机名）

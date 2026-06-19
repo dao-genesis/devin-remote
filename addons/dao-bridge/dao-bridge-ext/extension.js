@@ -18,7 +18,7 @@ const cp = require("child_process");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TRY_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-const BRIDGE_VERSION = "3.4.0";
+const BRIDGE_VERSION = "3.5.0";
 // 默认中继(Worker+DurableObject)端点 — 零账号穿透的公共入口, 可被 daoBridge.relayUrl 覆盖。
 const DEFAULT_RELAY_URL = "https://dao-relay-do.zhouyoukang.workers.dev";
 
@@ -31,6 +31,63 @@ function daoGlobalDir() {
   const d = path.join(os.homedir(), ".dao");
   try { fs.mkdirSync(d, { recursive: true }); } catch (e) {}
   return d;
+}
+
+// ═══════════════════════════════════════════════════════════
+// exec 规范化 — 让 .bat/.cmd/.exe 及任意程序都能远程执行（覆盖整机）
+// 痛点根因：裸命令走 cmd.exe / Invoke-Expression 时，一个含空格的 .bat/.exe
+//   文件路径会被当成「字符串字面量」或被拆词 → 远程跑不起来。
+//   用 PowerShell 调用运算符 & + 单引号量化 + UTF-8/原生退出码包装彻底规避。
+// ═══════════════════════════════════════════════════════════
+function psq(s) { return "'" + String(s == null ? "" : s).replace(/'/g, "''") + "'"; }
+function wrapPwshForUtf8AndExit(cmd) {
+  return (
+    "$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8\n" +
+    "$ErrorActionPreference='Continue'; $Error.Clear(); $global:LASTEXITCODE=0\n" +
+    cmd +
+    "\n$__c=0; if($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0){$__c=$LASTEXITCODE} elseif($Error.Count -gt 0){$__c=1}; exit $__c"
+  );
+}
+function runPwsh(cmd, cwd, timeoutMs) {
+  return new Promise((resolve) => {
+    const isWin = process.platform === "win32";
+    const shell = isWin ? "powershell.exe" : "/bin/sh";
+    const args = isWin ? ["-NoProfile", "-Command", wrapPwshForUtf8AndExit(cmd)] : ["-c", cmd];
+    cp.execFile(shell, args, { cwd, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, encoding: "utf8" },
+      (err, stdout, stderr) => resolve({
+        stdout: stdout || "",
+        stderr: stderr || (err && err.killed ? "timeout" : ""),
+        exit_code: err && typeof err.code === "number" ? err.code : err ? 1 : 0,
+      }));
+  });
+}
+// 把高层 exec 请求规范化为一条健壮的 PowerShell 表达式。
+// type：shell(默认/原样) | cmd|bat(经 cmd.exe /c + chcp 65001 跑 .bat/经典 DOS)
+//        | run|file(运行文件 .bat/.cmd/.exe/.ps1 + args) | detached|spawn(Start-Process 后台/分离回 PID)
+// 可选：cwd(工作目录) args(数组) elevate(管理员提权) show(显示窗口)
+function buildExecCommand(body) {
+  body = body || {};
+  const type = String(body.type || "shell").toLowerCase();
+  const cwd = body.cwd ? "Set-Location -LiteralPath " + psq(body.cwd) + "; " : "";
+  const file = body.file || body.exe || body.program || "";
+  const args = Array.isArray(body.args) ? body.args : [];
+  const cmd = body.cmd || body.command || (body.payload && body.payload.command) || "";
+  if (type === "detached" || type === "spawn" || body.detached) {
+    const target = file || cmd;
+    const al = args.length ? " -ArgumentList " + args.map(psq).join(",") : "";
+    const win = body.show ? "" : " -WindowStyle Hidden";
+    const verb = body.elevate ? " -Verb RunAs" : "";
+    return cwd + "$p=Start-Process -FilePath " + psq(target) + al + win + verb +
+      " -PassThru; 'started pid=' + $p.Id + ' file=' + " + psq(target);
+  }
+  if (type === "run" || type === "file" || (file && !cmd)) {
+    const al = args.length ? " " + args.map(psq).join(" ") : "";
+    return cwd + "& " + psq(file || cmd) + al + " 2>&1 | Out-String";
+  }
+  if (type === "cmd" || type === "bat" || type === "batch") {
+    return cwd + "& cmd.exe /d /c " + psq("chcp 65001>nul & " + cmd) + " 2>&1 | Out-String";
+  }
+  return cwd + cmd;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -728,12 +785,24 @@ class WorkspaceServer {
     if (pathname === "/api/export-local-md" && method === "GET") return { status: 200, body: { md: br ? br.generateLocalAgentMd() : "# DAO Bridge 未启动" } };
 
     // 命令执行 — 整机任意命令(整个电脑的穿透, 不受工作区限制)
+    //   type=shell 且无 file → 向后兼容: 纯命令字符串仍走 cmd.exe(cp.exec)
+    //   其余(run/cmd/detached 或带 file) → PowerShell & 调用运算符: .bat/.cmd/.exe/.ps1/后台进程皆可,
+    //                                        UTF-8 中文回传 + 透传原生退出码, 含空格路径也安全。
     if ((pathname === "/api/exec" || pathname === "/api/exec-sync") && method === "POST") {
-      const r = await new Promise((resolve) => {
-        cp.exec(j.cmd || "", { cwd: j.cwd || root, timeout: (j.timeout || 60) * 1000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-          resolve({ stdout: String(stdout || ""), stderr: String(stderr || (err ? err.message : "")), exit_code: err ? (err.code || 1) : 0 });
+      const type = String(j.type || "shell").toLowerCase();
+      const timeoutMs = (j.timeout || 60) * 1000;
+      let r;
+      if (type === "shell" && !j.file) {
+        r = await new Promise((resolve) => {
+          cp.exec(j.cmd || "", { cwd: j.cwd || root, timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+            resolve({ stdout: String(stdout || ""), stderr: String(stderr || (err ? err.message : "")), exit_code: err ? (err.code || 1) : 0 });
+          });
         });
-      });
+      } else {
+        const command = buildExecCommand(j);
+        if (!command) return { status: 400, body: { error: "cmd/file required" } };
+        r = await runPwsh(command, j.cwd || root, timeoutMs);
+      }
       if (pathname === "/api/exec-sync") return { status: 200, body: { status: "completed", result: r } };
       return { status: 200, body: r };
     }
@@ -762,7 +831,7 @@ class WorkspaceServer {
       if (!agentId) return { status: 400, body: { error: "agent_id required" } };
       this.agentRegistry.set(agentId, {
         hostname: j.hostname || "", status: "online", lastSeen: new Date().toISOString(),
-        capabilities: j.capabilities || ["shell", "file_read", "file_write"], url: j.url || "",
+        capabilities: j.capabilities || ["shell", "cmd", "run", "detached", "file_read", "file_write"], url: j.url || "",
       });
       return { status: 200, body: { ok: true, agent_id: agentId } };
     }
@@ -1179,8 +1248,9 @@ class Bridge {
       "| GET | `/api/info` | - | 工作区信息 |",
       "| GET | `/api/agents` | - | 在线Agent列表 |",
       "| GET | `/api/bridge-state` | - | 隧道状态 |",
-      "| POST | `/api/exec` | `{cmd,timeout}` | 执行命令 |",
-      "| POST | `/api/exec-sync` | `{cmd,timeout}` | 同步执行 |",
+      "| POST | `/api/exec` | `{type,cmd,file,args,cwd,timeout}` | 执行命令(type: shell/cmd/run/detached) |",
+      "| POST | `/api/exec-sync` | `{type,cmd,file,args,cwd,timeout}` | 同步执行(run 跑 .bat/.exe/.ps1+args) |",
+      "| | | 例 `{type:'run',file:'C:\\\\a\\\\b.bat',args:['x']}` / `{type:'cmd',cmd:'dir'}` / `{type:'detached',file:'app.exe'}` | |",
       "| POST | `/api/ls` | `{path}` | 列目录 |",
       "| POST | `/api/read` | `{path}` | 读文件 |",
       "| POST | `/api/write` | `{path,content}` | 写文件 |",
@@ -1271,7 +1341,7 @@ class Bridge {
       "| POST | `/api/config` | `{tunnelToken,hostname,localPort,cloudflaredPath}` | 写配置 |",
       "| POST | `/api/agent/register` | `{agent_id,hostname,capabilities}` | Agent注册 |",
       "| POST | `/api/agent/heartbeat` | `{agent_id}` | Agent心跳 |",
-      "| POST | `/api/exec` / `/api/exec-sync` | `{cmd,cwd,timeout}` | 执行命令(底层万能入口) |",
+      "| POST | `/api/exec` / `/api/exec-sync` | `{type,cmd,file,args,cwd,timeout}` | 执行命令(底层万能入口·type:shell/cmd/run/detached·run跑.bat/.exe/.ps1) |",
       "| POST | `/api/ls` / `/api/read` / `/api/write` | `{path,content}` | 工作区内文件操作 |",
       "| POST | `/api/broadcast` | `{type,payload}` | 广播到在线Agent |",
       "| GET | `/api/export-cloud-md` / `/api/export-local-md` | - | 导出接入文档 |",
@@ -1603,4 +1673,4 @@ function activate(context) {
   _bridge.start().then((url) => { if (url) vscode.window.setStatusBarMessage("DAO Bridge 已打通: " + url, 8000); });
 }
 function deactivate() { try { if (_bridge) _bridge.stop(); } catch (e) {} }
-module.exports = { activate, deactivate, Bridge, WorkspaceServer, detectProxy, downloadCloudflared, findCloudflared, isRealCloudflared, probeCloudflared, extractCfTgz, cfAssetName, DaoWsClient, connectRelayWs };
+module.exports = { activate, deactivate, Bridge, WorkspaceServer, detectProxy, downloadCloudflared, findCloudflared, isRealCloudflared, probeCloudflared, extractCfTgz, cfAssetName, DaoWsClient, connectRelayWs, buildExecCommand };
