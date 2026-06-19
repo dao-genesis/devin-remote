@@ -16,7 +16,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.29.0";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.30.0";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -272,7 +272,9 @@
     browseListTabs: async function(){ return {ok:true, tabs: JSON.parse(N.browseListTabs?N.browseListTabs():"[]")}; },
     browseOpen: async function(a){
       // 默认后台静默开页, 不抢占用户当前前台页 (道并行而不相悖)。仅 foreground:true 时提到前台让前端同步反映。
+      // foreground:true 先把软件本体唤回前台 (后台/被杀态也能让前端真正可见, 并保证开页落到活的外壳),
       // 开页经 main.post 异步建标签, 故稍候再读 listTabs 取真实新标签下标。
+      if(a.foreground && N.appToFront){ try{ N.appToFront(); }catch(e){} await new Promise(function(r){ setTimeout(r,600); }); }
       N.browseOpenTab(a.url||"https://app.devin.ai/", a.account||"");
       await new Promise(function(r){ setTimeout(r,350); });
       var idx = -1;
@@ -280,6 +282,8 @@
       if(a.foreground && idx>=0 && N.browseActivateTab){ try{ N.browseActivateTab(idx); }catch(e){} }
       return {ok:true, tabIndex: idx, background: !a.foreground};
     },
+    // 把软件本体(浏览器外壳)提到前台; 已被系统杀掉则冷启动拉起 (远程操控/后台态唤回前端)。
+    appToFront: async function(){ var ok=false; try{ ok=!!(N.appToFront&&N.appToFront()); }catch(e){} return {ok:ok}; },
     browseActivateTab: async function(a){ if(N.browseActivateTab) N.browseActivateTab(a.tabIndex|0); return {ok:true, tabIndex:a.tabIndex|0}; },
     browseClose: async function(a){ N.browseCloseTab(a.tabIndex|0); return {ok:true}; },
     browseNavigate: async function(a){ N.browseNavigate(a.tabIndex!==undefined?a.tabIndex:-1, a.action||"reload", a.url||""); return {ok:true}; },

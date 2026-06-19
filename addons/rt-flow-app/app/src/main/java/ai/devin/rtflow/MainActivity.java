@@ -195,6 +195,11 @@ public class MainActivity extends AppCompatActivity {
                 kap.edit().putBoolean("battopt-asked", true).apply();
                 main.postDelayed(() -> { try { KeepAlive.requestBatteryOpt(this); } catch (Exception ignored) {} }, 1800);
             }
+            // 一次性引导授予「显示在其他应用上层」→ 后台/被杀时远程操控可把软件本体唤回前台 (Android 10+ 后台启动 Activity 依赖此权限)。
+            if (!KeepAlive.canDrawOverlays(this) && !kap.getBoolean("overlay-asked", false)) {
+                kap.edit().putBoolean("overlay-asked", true).apply();
+                main.postDelayed(() -> { try { KeepAlive.requestOverlay(this); } catch (Exception ignored) {} }, 3600);
+            }
         } catch (Exception ignored) {}
         fileChooser = registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), result -> {
             ValueCallback<Uri[]> cb = filePathCallback; filePathCallback = null;
@@ -4247,6 +4252,8 @@ public class MainActivity extends AppCompatActivity {
         Tab t = tabs.get(tabIndex);
         if (t.web == null) return "";
         try {
+            parkHost(t);            // 确保挂载窗口(后台标签也有尺寸·可被 draw 截取)
+            resumeWeb(t.web);       // 拉回「页面可见+计时器运行」, 否则离屏/冻结态 Chromium 合成层为空 → 截白图
             int w = t.web.getWidth(), h = t.web.getHeight();
             if (w <= 0 || h <= 0) {   // 未布局的后台标签: 按屏幕尺寸强制测量+布局再截
                 android.util.DisplayMetrics dm = getResources().getDisplayMetrics();

@@ -1,6 +1,6 @@
 {
-  "versionCode": 78,
-  "versionName": "0.29.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.29.0/DevinCloud-mobile-v0.29.0.apk",
-  "notes": "v0.29.0 · 网页版正本清源:不再是自造控制台,而是把 APK 自身的真实页面(switch/tunnel/cloud/vpn/daopan…)经 LocalServer 在局域网 + cloudflared 公网上原样服务出去。任意设备浏览器打开 <本机入口>/?session=&token= 得到的就是与手机本体「表层(同一份 HTML/CSS/JS)+ 底层(同一套手机方法/同一金库)」完全一致的页面。注入 remote-native 垫片把页面里的 window.Native.* 重定向:状态/配置/金库读写打回本机执行,网络请求由本机发起(绕 CORS·带账号 auth1),复制/下载/看文本落到使用者自己的浏览器。浏览器无状态、本机串行,多人同时连互不干扰。对外 curl/HTTP 契约零改动。"
+  "versionCode": 79,
+  "versionName": "0.30.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.30.0/DevinCloud-mobile-v0.30.0.apk",
+  "notes": "v0.30.0 · 网页版整机外壳 + 远程后台唤回。① 网页入口(/)改为复刻 APK 浏览器外壳的网页 app.html: 顶部地址栏 + 多标签条 + 板块菜单(切号/对话/穿透/VPN/用户脚本/Shizuku/全服通/面板) + 多实例, 网页内套网页(iframe 内嵌 APK 自身真实页面), 操作与 APK 内一致; 单页直链(如 /switch.html)仍可达。② appToFront: 远程 browseOpen{foreground:true}/browseActivateTab 把软件本体提到前台, 被后台杀则冷启动拉起; 新增 SYSTEM_ALERT_WINDOW + 首启动引导授予「显示在其他应用上层」以稳过 Android 10+ 后台启动限制。③ 截图前 parkHost+resumeWeb 减少后台标签截白图。对外 curl/HTTP 契约零改动。"
 }
