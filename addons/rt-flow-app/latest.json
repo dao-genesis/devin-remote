@@ -1,6 +1,6 @@
 {
-  "versionCode": 79,
-  "versionName": "0.30.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.30.0/DevinCloud-mobile-v0.30.0.apk",
-  "notes": "v0.30.0 · 网页版整机外壳 + 远程后台唤回。① 网页入口(/)改为复刻 APK 浏览器外壳的网页 app.html: 顶部地址栏 + 多标签条 + 板块菜单(切号/对话/穿透/VPN/用户脚本/Shizuku/全服通/面板) + 多实例, 网页内套网页(iframe 内嵌 APK 自身真实页面), 操作与 APK 内一致; 单页直链(如 /switch.html)仍可达。② appToFront: 远程 browseOpen{foreground:true}/browseActivateTab 把软件本体提到前台, 被后台杀则冷启动拉起; 新增 SYSTEM_ALERT_WINDOW + 首启动引导授予「显示在其他应用上层」以稳过 Android 10+ 后台启动限制。③ 截图前 parkHost+resumeWeb 减少后台标签截白图。对外 curl/HTTP 契约零改动。"
+  "versionCode": 80,
+  "versionName": "0.31.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.31.0/DevinCloud-mobile-v0.31.0.apk",
+  "notes": "v0.31.0 · 破除外站内嵌限制 (网页套网页含外站)。① 新增手机端反向代理 /embed?u=<url>: 原生抓取外站 → 剥 X-Frame-Options/CSP frame-ancestors → 注入 <base> → 同源回服, 使外站能被 app.html 外壳 iframe 内嵌。② app.html 外站标签改走 /embed 代理 (含「新标签 (Devin)」与地址栏任意网址), 同源后可正常嵌入; 代理失败给「在源站新标签打开」出口。诚实边界: 需登录态/同源接口的重型 SPA (如 app.devin.ai 已登录会话) 仍受跨域 cookie/CORS 限制无法完整还原 — 顶层文档已可嵌入但内容需鉴权; 此类站在 APK 内用原生 WebView (带账号注入) 最完整。对外 curl/HTTP 契约零改动; v0.30 网页外壳/后台唤回不受影响。"
 }

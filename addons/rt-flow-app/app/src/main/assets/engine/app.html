@@ -121,6 +121,8 @@
 
   function host(u){ try{ return new URL(u, location.href).host; }catch(e){ return u; } }
   function isExternal(u){ return /^https?:\/\//i.test(u) && host(u)!==location.host; }
+  // 外站经手机端反向代理同源回服 → 破 X-Frame-Options, 可被 iframe 内嵌 (网页套网页, 含外站)。
+  function embedSrc(url){ return "/embed?u="+encodeURIComponent(url); }
 
   function openPage(key){
     var p = pageByKey(key); if(!p) return;
@@ -135,7 +137,7 @@
       if(lk){ openPage(lk); return; }
       url = "https://"+url;
     }
-    addTab({title:host(url), src:url, kind:"web"});
+    addTab({title:host(url), src:embedSrc(url), origUrl:url, kind:"web"});
   }
 
   function addTab(t){
@@ -150,25 +152,29 @@
       try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){}
       checkBlocked(t);
     });
-    if(t.kind==="web" && isExternal(t.src)) scheduleBlockCheck(t);
+    if(t.kind==="web") scheduleBlockCheck(t);
     tabs.push(t); renderStrip(); selectTab(t.id);
   }
 
-  // 外站常因 X-Frame-Options/CSP frame-ancestors 拒绝内嵌 → 检测后给"在新标签打开"出口
-  function scheduleBlockCheck(t){ t._loaded=false; setTimeout(function(){ if(!t._loaded) showBlocked(t); }, 2500); }
+  // 外站经手机端 /embed 代理同源回服 → 正常可嵌; 若代理失败(502/抓取超时)给"在源站新标签打开"出口
+  function scheduleBlockCheck(t){ t._loaded=false; setTimeout(function(){ if(!t._loaded) showBlocked(t); }, 8000); }
   function checkBlocked(t){
     t._loaded=true;
-    if(t.kind!=="web"||!isExternal(t.src)) return;
-    try{ // 能读到 contentDocument 即同源(不会发生); 跨域读取抛错=正常加载
-      var ok=false; try{ t.fr.contentWindow.location.href; ok=true; }catch(e){ ok=true; }
+    if(t.kind!=="web") return;
+    // /embed 同源 → 可读 contentDocument; 失败时回服 {"error":"embed_failed"}
+    try{
+      var d=t.fr.contentDocument;
+      if(d){ var txt=(d.body&&d.body.textContent||"").slice(0,120);
+        if(/embed_failed|\"error\"/.test(txt)) { showBlocked(t); return; } }
     }catch(e){}
+    if(t._blockEl){ t._blockEl.remove(); t._blockEl=null; }
   }
   function showBlocked(t){
-    if(t.el && t.el.querySelector(".blocked")) return;
+    if(t._blockEl) return;
     var d=document.createElement("div"); d.className="blocked";
-    d.innerHTML='<div>该站点 (<b>'+host(t.src)+'</b>) 禁止被网页内嵌 (X-Frame-Options)。<br>'+
-      'APK 用原生 WebView 可内嵌; 网页版受浏览器安全限制。</div>';
-    var b=document.createElement("button"); b.textContent="在浏览器新标签打开"; b.onclick=function(){ window.open(t.src,"_blank"); };
+    d.innerHTML='<div>无法经代理内嵌 (<b>'+host(t.origUrl||t.src)+'</b>): 该站需登录态/同源接口, 手机端代理无法完整还原。<br>'+
+      'APK 内可用原生 WebView 打开 (带账号注入); 或在源站新标签打开。</div>';
+    var b=document.createElement("button"); b.textContent="在源站新标签打开"; b.onclick=function(){ window.open(t.origUrl||t.src,"_blank"); };
     d.appendChild(b);
     // 用占位层盖住该 tab 的 iframe 区域
     t._blockEl=d; frames.appendChild(d); positionOverlay(t,d);
@@ -196,7 +202,7 @@
       if(tabs[i]._blockEl) tabs[i]._blockEl.style.display = on?"flex":"none";
     }
     var t=tabs[active];
-    if(t){ addr.value = t.kind==="page" ? ("rtflow://"+(t.pageKey||"")) : t.src; }
+    if(t){ addr.value = t.kind==="page" ? ("rtflow://"+(t.pageKey||"")) : (t.origUrl||t.src); }
     renderStrip();
   }
 
@@ -214,10 +220,10 @@
   function goAddr(){
     var v=addr.value.trim(); if(!v) return;
     var t=tabs[active];
-    if(t && t.kind==="web"){ // 当前是网页标签 → 原地导航
+    if(t && t.kind==="web"){ // 当前是网页标签 → 原地导航 (经 /embed 代理)
       if(!/^[a-z]+:\/\//i.test(v)) v="https://"+v;
-      t.src=v; t.title=host(v); if(t._blockEl){t._blockEl.remove();t._blockEl=null;}
-      t.fr.src=v; if(isExternal(v)) scheduleBlockCheck(t); renderStrip();
+      t.origUrl=v; t.title=host(v); if(t._blockEl){t._blockEl.remove();t._blockEl=null;}
+      t.fr.src=embedSrc(v); scheduleBlockCheck(t); renderStrip();
     } else openWeb(v); // 板块页上输入网址 → 新开网页标签 (不覆盖板块)
   }
   document.getElementById("go").onclick=goAddr;
@@ -256,7 +262,7 @@
     mi("▶","前进", function(){ var t=tabs[active]; if(t){ try{t.fr.contentWindow.history.forward();}catch(e){} } });
     mi("⌂","主页 (切号面板)", function(){ openPage("switch"); });
     mi("🔗","复制本标签网址", function(){ var t=tabs[active]; if(!t) return;
-      var u = t.kind==="web"? t.src : (location.origin+pageSrc(pageByKey(t.pageKey)));
+      var u = t.kind==="web"? (t.origUrl||t.src) : (location.origin+pageSrc(pageByKey(t.pageKey)));
       try{ navigator.clipboard.writeText(u); }catch(e){} });
   }
   function mi(ic,label,fn){ var d=document.createElement("div"); d.className="mi";

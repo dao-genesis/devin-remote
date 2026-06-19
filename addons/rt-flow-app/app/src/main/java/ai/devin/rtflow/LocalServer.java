@@ -37,6 +37,9 @@ public final class LocalServer {
         /** GET 静态资源: 返回 {contentType, body}; null = 无此资源 (走 404)。
          *  用于把 APK 自身的真实页面 (switch/tunnel/cloud/…) 与其 JS 资源原样服务给浏览器。 */
         default String[] staticAsset(String path) { return null; }
+        /** 反向代理外站: 原生抓取 url → 剥 X-Frame-Options/CSP → 注入 <base> → 同源回服。
+         *  返回 {contentType, html}; null = 失败。破除「外站禁止被 iframe 内嵌」, 让外壳能嵌真实外站。 */
+        default String[] embedDoc(String url) { return null; }
     }
 
     private final Dispatcher disp;
@@ -117,6 +120,14 @@ public final class LocalServer {
                     write(out, 200, "{\"status\":\"ok\",\"service\":\"rtflow-local-tunnel\"}");
                     sock.close(); return;
                 }
+                // 反向代理外站 (破 X-Frame-Options): /embed?u=<urlencoded> → 原生抓取后同源回服, 可被 iframe 内嵌。
+                String pe = path; int qe = pe.indexOf('?'); String qs = qe >= 0 ? pe.substring(qe + 1) : "";
+                if (qe >= 0 ? pe.substring(0, qe).equals("/embed") : pe.equals("/embed")) {
+                    String u = queryParam(qs, "u");
+                    String[] doc = u.isEmpty() ? null : disp.embedDoc(u);
+                    if (doc != null) { writeHtml(out, 200, doc[1]); sock.close(); return; }
+                    write(out, 502, "{\"error\":\"embed_failed\"}"); sock.close(); return;
+                }
                 // 浏览器: 原样拿 APK 真实页面与其 JS 资源 (免鉴权拿页面; 页面内每个 RPC 仍需 Bearer Token)。
                 // 去掉 query (?session=...) 再匹配。
                 String p = path; int q = p.indexOf('?'); if (q >= 0) p = p.substring(0, q);
@@ -157,6 +168,20 @@ public final class LocalServer {
         } catch (Exception e) {
             try { sock.close(); } catch (Exception ignored) {}
         }
+    }
+
+    /** 从 query string 取参数并 URL 解码 (供 /embed?u= 使用)。 */
+    private static String queryParam(String qs, String key) {
+        if (qs == null || qs.isEmpty()) return "";
+        for (String kv : qs.split("&")) {
+            int eq = kv.indexOf('=');
+            String k = eq >= 0 ? kv.substring(0, eq) : kv;
+            if (k.equals(key)) {
+                String v = eq >= 0 ? kv.substring(eq + 1) : "";
+                try { return java.net.URLDecoder.decode(v, "UTF-8"); } catch (Exception e) { return v; }
+            }
+        }
+        return "";
     }
 
     private static String readLine(InputStream in) throws Exception {
