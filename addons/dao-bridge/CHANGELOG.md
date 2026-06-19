@@ -2,6 +2,18 @@
 
 本项目遵循语义化版本。日期格式 YYYY-MM-DD。
 
+## [3.10.0] - 2026-06-19
+
+去 Worker 中继 · 默认快速隧道（去中心化）。
+
+### 变更
+- **移除 Worker/DurableObject 中继通道**。默认只走 Cloudflare 快速隧道(trycloudflare)；用户配置 `tunnelToken`/`hostname` 才走命名隧道。去中心化、不依赖任何人的 Worker。
+- 移除 `relayUrl`/`session`/`disableRelay` 配置项。
+- `extension.js` 删除 `DaoWsClient`/`connectRelayWs`/`_runRelayAttempt`/relay 启动分支；`_publicHealthCheck` 简化为纯 GET。
+- `core.js` 删除 `connectRelay`（不再依赖 `ws`/`https-proxy-agent`）。
+- `agent.js` 独立后端改为起本地服务 + cloudflared 快速隧道（不再连 Worker），断开自动重连。
+- README/start.ps1/SDK 同步去 relay 化；单测移除 relay 用例（保留 cloudflared 工具/Token 用例）。
+
 ## [3.9.1] - 2026-06-19
 
 看门狗回环自检修复：经真 cloudflared/relay 公网隧道实测发现并修复。

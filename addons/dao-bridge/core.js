@@ -37,13 +37,12 @@ exports.checkAuth = checkAuth;
 exports.handleRoute = handleRoute;
 exports.findAvailablePort = findAvailablePort;
 exports.startServer = startServer;
-exports.connectRelay = connectRelay;
 exports.buildExecCommand = buildExecCommand;
 exports.buildBootstrap = buildBootstrap;
 exports.buildBootstrapSh = buildBootstrapSh;
 exports.platformOf = platformOf;
 exports.psq = psq;
-// 道 · core — 纯 Node 核心：本地 HTTP server + 路由 + 出站中继桥
+// 道 · core — 纯 Node 核心：本地 HTTP server + 统一路由
 // 不依赖 vscode，可单独被 Node 测试与复用（VSIX 与独立 Agent 共用本源）。
 const http = __importStar(require("http"));
 const fs = __importStar(require("fs"));
@@ -335,7 +334,7 @@ function checkAuth(headers, token) {
     const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
     return !!token && bearer === token;
 }
-// 统一路由：HTTP 直连与 relay 转发共用。返回普通对象（JSON）。
+// 统一路由。返回普通对象（JSON）。
 async function handleRoute(host, route, method, headers, bodyRaw, token) {
     const root = host.workspaceRoot();
     let body = {};
@@ -532,88 +531,4 @@ async function startServer(host, opts) {
     host.log(`dao-bridge server on http://127.0.0.1:${port}`);
     return { port, token, close: () => server.close() };
 }
-function connectRelay(host, opts) {
-    const WebSocket = require('ws');
-    let wsAgent = undefined;
-    if (opts.proxy) {
-        try {
-            const { HttpsProxyAgent } = require('https-proxy-agent');
-            wsAgent = new HttpsProxyAgent(opts.proxy);
-            host.log('bridge via proxy ' + opts.proxy);
-        }
-        catch (e) {
-            host.log('proxy agent load failed: ' + (e && e.message || e));
-        }
-    }
-    let sock = null;
-    let connected = false;
-    let stopped = false;
-    let pingTimer = null;
-    let reconnectTimer = null;
-    let pubUrl = null;
-    const base = opts.relayUrl.replace(/\/$/, '');
-    const wsUrl = base.replace(/^http/, 'ws') + `/connect?session=${encodeURIComponent(opts.sessionId)}&token=${encodeURIComponent(opts.token)}`;
-    function open() {
-        if (stopped)
-            return;
-        try {
-            sock = new WebSocket(wsUrl, wsAgent ? { agent: wsAgent } : undefined);
-        }
-        catch {
-            schedule();
-            return;
-        }
-        sock.on('open', () => {
-            connected = true;
-            pubUrl = base + '/relay/' + opts.sessionId;
-            host.log('bridge connected: ' + pubUrl);
-            pingTimer = setInterval(() => { try {
-                sock.send(JSON.stringify({ type: 'ping' }));
-            }
-            catch { } }, 15000);
-        });
-        sock.on('message', async (data) => {
-            let m;
-            try {
-                m = JSON.parse(data.toString());
-            }
-            catch {
-                return;
-            }
-            if (m.type === 'pong')
-                return;
-            if (m.type === 'request' && m.id) {
-                // 桥已在 /connect 时用 token 鉴权，转发请求视为已授权：注入 token 供统一路由校验通过
-                const fwdHeaders = Object.assign({}, m.headers || {}, { authorization: 'Bearer ' + opts.token });
-                const out = await handleRoute(host, m.path || '/api/health', m.method || 'GET', fwdHeaders, typeof m.body === 'string' ? m.body : JSON.stringify(m.body || {}), opts.token);
-                try {
-                    sock.send(JSON.stringify({ type: 'response', id: m.id, status: out.status, body: out.body }));
-                }
-                catch { }
-            }
-        });
-        sock.on('close', () => { connected = false; if (pingTimer)
-            clearInterval(pingTimer); pubUrl = null; schedule(); });
-        sock.on('error', () => { try {
-            sock.close();
-        }
-        catch { } });
-    }
-    function schedule() {
-        if (stopped || reconnectTimer)
-            return;
-        reconnectTimer = setTimeout(() => { reconnectTimer = null; if (!connected)
-            open(); }, 5000);
-    }
-    open();
-    return {
-        stop() { stopped = true; if (pingTimer)
-            clearInterval(pingTimer); if (reconnectTimer)
-            clearTimeout(reconnectTimer); try {
-            sock && sock.close();
-        }
-        catch { } },
-        isConnected: () => connected,
-        publicUrl: () => pubUrl,
-    };
-}
+

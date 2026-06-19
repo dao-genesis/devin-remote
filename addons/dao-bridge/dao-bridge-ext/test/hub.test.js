@@ -107,7 +107,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // ── 2. core.handleRoute 被控端分发闭环 ──
   {
-    const host = { workspaceRoot: () => process.cwd(), info: () => ({ host: "hub" }), publicUrl: () => "https://hub.example/relay/s", log: () => {} };
+    const host = { workspaceRoot: () => process.cwd(), info: () => ({ host: "hub" }), publicUrl: () => "https://hub.example.trycloudflare.com", log: () => {} };
     const TOKEN = "master";
     const hdr = { authorization: "Bearer " + TOKEN };
 
@@ -126,7 +126,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     ok("core.handleRoute connect→poll→exec-sync→result 分发");
 
     const boot = await core.handleRoute(host, "/api/bootstrap.ps1", "GET", {}, "", TOKEN);
-    assert.ok(boot.raw.includes("https://hub.example/relay/s"), "core bootstrap injects public url");
+    assert.ok(boot.raw.includes("https://hub.example.trycloudflare.com"), "core bootstrap injects public url");
     ok("core.handleRoute /api/bootstrap.ps1 注入公网 URL");
 
     // 跨平台路由：Linux 被控端 → POSIX；bootstrap.sh 注入公网 URL
@@ -139,7 +139,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await core.handleRoute(host, "/api/result", "POST", {}, JSON.stringify({ agent_id: claid, token: cltok, cmd_id: clpoll.body.commands[0].cmd_id, result: { stdout: "CL-OK", exit_code: 0 } }), TOKEN);
     assert.strictEqual((await clP).body.result.stdout, "CL-OK");
     const bootSh = await core.handleRoute(host, "/api/bootstrap.sh", "GET", {}, "", TOKEN);
-    assert.ok(bootSh.raw.includes("https://hub.example/relay/s") && bootSh.raw.includes("/bin/sh"), "core bootstrap.sh injects url + /bin/sh");
+    assert.ok(bootSh.raw.includes("https://hub.example.trycloudflare.com") && bootSh.raw.includes("/bin/sh"), "core bootstrap.sh injects url + /bin/sh");
     assert.strictEqual(core.platformOf({ sysinfo: { os_version: "Windows NT 10" } }), "win32");
     ok("core.handleRoute 跨平台路由（Linux→POSIX）+ bootstrap.sh + platformOf");
   }
@@ -163,7 +163,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     // 阈值内累计、达阈值自愈(start 打桩计数、URL 稳定、计数清零)
     let starts = 0;
-    wd.start = async function () { starts++; this.url = "https://stable.example/relay/host"; return this.url; };
+    wd.start = async function () { starts++; this.url = "https://stable.example.trycloudflare.com"; return this.url; };
     wd._wdThreshold = 2;
     wd._publicHealthCheck = async () => false;
     wd.url = "https://x";
@@ -178,9 +178,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     assert.strictEqual(wd._wd, h1, "startWatchdog 幂等"); wd.stopWatchdog(); assert.strictEqual(wd._wd, null, "stopWatchdog 停表");
     ok("看门狗：失败累计→达阈值自愈→成功清零·start/stop 幂等");
 
-    // _publicHealthCheck：透明反代 200 ok→true；relay 信封 {error}→false；无 URL→false
+    // _publicHealthCheck：GET /api/health 200→true；{error}→false；无 URL→false
     const wd2 = new ext.Bridge({ subscriptions: [] });
-    wd2.srv.token = "wdtoken0123456789abcdef0123456789"; // 真实 token(生产恒非空)
+    wd2.srv.token = "wdtoken0123456789abcdef0123456789";
     const okSrv = http.createServer((req, res) => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ status: "ok" })); });
     await new Promise((r) => okSrv.listen(0, r));
     wd2.mode = "quick"; wd2.url = "http://127.0.0.1:" + okSrv.address().port;
@@ -189,12 +189,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     let sawAuth = "";
     const errSrv = http.createServer((req, res) => { sawAuth = req.headers["authorization"] || ""; let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "no_agent" })); }); });
     await new Promise((r) => errSrv.listen(0, r));
-    wd2.mode = "relay"; wd2.url = "http://127.0.0.1:" + errSrv.address().port + "/relay/host";
-    assert.strictEqual(await wd2._publicHealthCheck(), false, "relay 信封 {error}→false(识破僵尸)");
-    assert.strictEqual(sawAuth, "Bearer " + wd2.srv.token, "relay 请求带 Authorization: Bearer <token>(防 401 误判)");
+    wd2.mode = "quick"; wd2.url = "http://127.0.0.1:" + errSrv.address().port;
+    assert.strictEqual(await wd2._publicHealthCheck(), false, "{error}响应→false");
     errSrv.close();
     wd2.url = ""; assert.strictEqual(await wd2._publicHealthCheck(), false, "无公网 URL→false");
-    ok("回环自检 _publicHealthCheck：透明反代/relay 信封/错误识别/空 URL");
+    ok("回环自检 _publicHealthCheck：GET health / {error}识别 / 空 URL");
   }
 
   console.log("\nALL " + passed + " TESTS PASSED");
