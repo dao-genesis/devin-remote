@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// devin_proxy.js · v4.9.0 · IDE 内置浏览器自足注入反代 (不赖 dao-vsix) · 静态资源缓存提速
+// devin_proxy.js · v4.14.0 · IDE 内置浏览器自足注入反代 (不赖 dao-vsix) · 静态资源缓存提速 (内存 L1 + 磁盘 L2)
 // ───────────────────────────────────────────────────────────────────────────
 // 帛书·「天下之至柔·驰骋于天下之致坚；无有入于无间」: IDE 内置浏览器 (simpleBrowser /
 //   webview) 是受沙箱约束的 iframe — 无 CDP 端口可控, 无法如系统浏览器般经 CDP
@@ -16,6 +16,10 @@ const http = require("http");
 const https = require("https");
 const net = require("net");
 const zlib = require("zlib");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+const crypto = require("crypto");
 
 const DEVIN_APP = "https://app.devin.ai";
 const DEVIN_WS = "https://windsurf.com";
@@ -60,6 +64,126 @@ function _cachePut(key, val) {
 // 哈希不可变静态资源 (可强缓存 + 入改写缓存)。HTML/API/json 不在此列 (动态·须实时)。
 function isCacheableAsset(p) {
   return /\.(js|css|woff2?|ttf|eot|otf|png|jpe?g|gif|svg|ico|wasm)(\?|$)/i.test(p);
+}
+
+// ═══ 磁盘二级缓存 (L2) ═══════════════════════════════════════════════════════
+// 帛书·「夫物芸芸·各复归其根」: 上面的内存缓存随进程消亡, IDE 重载/重开后内存全空,
+//   首屏须重新取上游 + 全量改写 (即"首屏很慢很卡"之根)。故落盘一份: 重载后内存 miss →
+//   从磁盘秒级恢复, 免上游往返与全量改写。键 = sha1(上游 path); 跨账号/跨进程共享。
+//   注意: JS/CSS 改写体里 baked 了 localBase(含动态端口), 重载后端口可能不同 → 落盘
+//   时一并记 base, 命中时若 base 变则仅对文本体做一次 split/join 重定基 (二进制资源里
+//   绝不含 base 串, 直发不动以免坏字节)。
+const ASSET_DISK_MAX = 256 * 1024 * 1024; // 256MB 磁盘上限 · 满则按 mtime 逐出最旧
+let _diskDir = null;
+let _diskEvicted = false;
+function _diskCacheDir() {
+  // 显式 env 覆盖 (运维/单测) 每次生效; 默认路径解析一次即缓存。
+  const env = process.env.WAM_PROXY_CACHE_DIR;
+  if (env) {
+    try { fs.mkdirSync(env, { recursive: true }); return env; } catch { return ""; }
+  }
+  if (_diskDir !== null) return _diskDir;
+  try {
+    const d = path.join(os.homedir(), ".wam", "_proxy_asset_cache");
+    fs.mkdirSync(d, { recursive: true });
+    _diskDir = d;
+  } catch {
+    _diskDir = "";
+  }
+  return _diskDir;
+}
+function _diskKey(key) {
+  return crypto.createHash("sha1").update(String(key)).digest("hex");
+}
+function _isTextCt(headers) {
+  try {
+    const ct = String((headers && (headers["Content-Type"] || headers["content-type"])) || "").toLowerCase();
+    return ct.includes("javascript") || ct.includes("application/x-javascript") || ct.includes("text/css");
+  } catch { return false; }
+}
+// 文本资源落盘时 baked 了旧 localBase(含动态端口); 命中时若端口已变则重定基。
+//   仅文本体做 split/join — 二进制资源(字体/图片/wasm)里绝无 base 串, 直发不动以免坏字节。
+function _rebaseAsset(body, fromBase, toBase, isText) {
+  if (isText && fromBase && toBase && fromBase !== toBase) {
+    return Buffer.from(body.toString("utf8").split(fromBase).join(toBase), "utf8");
+  }
+  return body;
+}
+// 落盘 (异步·尽力而为·不阻塞请求)。先写临时文件再 rename → 防半成品被读到。
+function _diskPut(key, val, base) {
+  try {
+    const dir = _diskCacheDir();
+    if (!dir || !val || !val.body) return;
+    const h = _diskKey(key);
+    const binPath = path.join(dir, h + ".bin");
+    const metaPath = path.join(dir, h + ".json");
+    const meta = { status: val.status, headers: val.headers, base: base || "", text: _isTextCt(val.headers), size: val.body.length, t: Date.now() };
+    const tmpBin = binPath + ".tmp" + process.pid;
+    const tmpMeta = metaPath + ".tmp" + process.pid;
+    fs.writeFile(tmpBin, val.body, (e1) => {
+      if (e1) { try { fs.unlink(tmpBin, () => {}); } catch {} return; }
+      fs.rename(tmpBin, binPath, () => {
+        fs.writeFile(tmpMeta, JSON.stringify(meta), (e2) => {
+          if (e2) { try { fs.unlink(tmpMeta, () => {}); } catch {} return; }
+          fs.rename(tmpMeta, metaPath, () => {});
+        });
+      });
+    });
+    if (!_diskEvicted) { _diskEvicted = true; setTimeout(_diskEvict, 2000); }
+  } catch {}
+}
+// 读盘 (异步)。命中返回 { status, headers, body, base, text }, 否则 null。
+function _diskGet(key) {
+  return new Promise((resolve) => {
+    try {
+      const dir = _diskCacheDir();
+      if (!dir) return resolve(null);
+      const h = _diskKey(key);
+      const binPath = path.join(dir, h + ".bin");
+      const metaPath = path.join(dir, h + ".json");
+      fs.readFile(metaPath, "utf8", (em, metaStr) => {
+        if (em) return resolve(null);
+        let meta;
+        try { meta = JSON.parse(metaStr); } catch { return resolve(null); }
+        fs.readFile(binPath, (eb, body) => {
+          if (eb || !body) return resolve(null);
+          resolve({ status: meta.status, headers: meta.headers || {}, body, base: meta.base || "", text: !!meta.text });
+        });
+      });
+    } catch { resolve(null); }
+  });
+}
+// 容量逐出: 累计 .bin 体积超上限则按 mtime 删最旧 (连带其 .json)。启动后延迟跑一次。
+function _diskEvict() {
+  try {
+    const dir = _diskCacheDir();
+    if (!dir) return;
+    fs.readdir(dir, (er, names) => {
+      if (er || !names) return;
+      const bins = names.filter((n) => n.endsWith(".bin"));
+      const stats = [];
+      let pending = bins.length;
+      let total = 0;
+      if (!pending) return;
+      bins.forEach((n) => {
+        const p = path.join(dir, n);
+        fs.stat(p, (es, st) => {
+          if (!es && st) { stats.push({ p, base: n.slice(0, -4), size: st.size, mtime: st.mtimeMs }); total += st.size; }
+          if (--pending === 0) {
+            if (total <= ASSET_DISK_MAX) return;
+            stats.sort((a, b) => a.mtime - b.mtime);
+            let cur = total;
+            for (const s of stats) {
+              if (cur <= ASSET_DISK_MAX) break;
+              try { fs.unlink(s.p, () => {}); } catch {}
+              try { fs.unlink(path.join(dir, s.base + ".json"), () => {}); } catch {}
+              cur -= s.size;
+            }
+          }
+        });
+      });
+    });
+  } catch {}
 }
 
 function safeStr(s) {
@@ -171,6 +295,15 @@ async function handleRequest(req, res, auth, port, log) {
     if (hit) {
       res.writeHead(hit.status, hit.headers);
       res.end(hit.body);
+      return;
+    }
+    // L2: 内存未命中 → 查磁盘 (重载/重开后秒级恢复, 免上游往返与全量改写)。
+    const disk = await _diskGet(targetPath);
+    if (disk) {
+      const body = _rebaseAsset(disk.body, disk.base, localBase, disk.text);
+      _cachePut(targetPath, { status: disk.status, headers: disk.headers, body }); // 提升入内存
+      res.writeHead(disk.status, disk.headers);
+      res.end(body);
       return;
     }
   }
@@ -325,7 +458,11 @@ async function handleRequest(req, res, auth, port, log) {
           if (cacheable) { delete safeHeaders["cache-control"]; safeHeaders["Cache-Control"] = "public, max-age=31536000, immutable"; }
           res.writeHead(status, safeHeaders);
           res.end(outBuf);
-          if (cacheable && status === 200) _cachePut(targetPath, { status, headers: { ...safeHeaders }, body: outBuf });
+          if (cacheable && status === 200) {
+            const entry = { status, headers: { ...safeHeaders }, body: outBuf };
+            _cachePut(targetPath, entry);
+            _diskPut(targetPath, entry, localBase);
+          }
           return;
         }
         // CSS/字体/图片/wasm 等哈希不可变静态资源: CSS 按需改写, 余直发; 强缓存 + 入缓存。
@@ -341,7 +478,11 @@ async function handleRequest(req, res, auth, port, log) {
           safeHeaders["Cache-Control"] = "public, max-age=31536000, immutable";
           res.writeHead(status, safeHeaders);
           res.end(outBuf);
-          if (status === 200) _cachePut(targetPath, { status, headers: { ...safeHeaders }, body: outBuf });
+          if (status === 200) {
+            const entry = { status, headers: { ...safeHeaders }, body: outBuf };
+            _cachePut(targetPath, entry);
+            _diskPut(targetPath, entry, localBase);
+          }
           return;
         }
         res.writeHead(status, safeHeaders);
@@ -413,4 +554,11 @@ function stopAll() {
   _servers.clear();
 }
 
-module.exports = { ensureProxyForAccount, stopProxy, stopAll, buildAuthBridge };
+module.exports = {
+  ensureProxyForAccount,
+  stopProxy,
+  stopAll,
+  buildAuthBridge,
+  // 供单测访问磁盘二级缓存内部 (非对外 API)。
+  _diskCache: { _diskCacheDir, _diskKey, _diskPut, _diskGet, _diskEvict, _isTextCt, _rebaseAsset, ASSET_DISK_MAX },
+};
