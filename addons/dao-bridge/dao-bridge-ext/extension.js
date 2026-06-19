@@ -1284,7 +1284,8 @@ class Bridge {
       if (!u) return resolve(false);
       const relay = this.mode === "relay" || /\/relay\//.test(u);
       let target, postData = null;
-      const headers = { "User-Agent": UA };
+      // relay 边缘(Worker)对一切请求(含 /api/health)强制 Bearer 鉴权; 直连/命名隧道 health 免鉴权但带上无害。
+      const headers = { "User-Agent": UA, "Authorization": "Bearer " + (this.srv && this.srv.token || "") };
       try {
         if (relay) {
           target = new URL(u);
