@@ -54,9 +54,18 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   </div>
 </div>
 
+<!-- 接入渠道总览: 一处看全所有可用渠道 + 一键复制 (实时·随状态自动刷新) -->
+<div class="card" id="chCard">
+  <div class="lbl">🧭 接入渠道总览 · 本设备实时（任一可用·同一 Token/Session/E2E Key）</div>
+  <div id="chList" style="margin-top:6px"><span class="muted">检测中…</span></div>
+  <div class="row" style="margin-top:6px">
+    <button onclick="copyAllChannels()">📋 复制全部可用渠道</button>
+  </div>
+</div>
+
 <!-- 接入文档 · 唯一一份(两大模块全量) · 两个按钮: 打开 / 复制 -->
 <div class="card">
-  <div class="lbl">📄 接入文档 (唯一·两大模块全量·发给云端 Agent)</div>
+  <div class="lbl">📄 接入文档 (唯一·两大模块全量·含全部渠道·发给云端 Agent)</div>
   <div class="row" style="margin-top:6px">
     <button onclick="send('openCloudMd')">📖 打开</button>
     <button onclick="send('exportCloudMd')">📋 复制</button>
@@ -224,6 +233,7 @@ function _push(){
     agentCount: on?1:0, cfLoggedIn:false, cfEmail:"", session:c.session
   };
   _render(state);
+  try{ renderChannels(); }catch(e){}
 }
 function _result(op,ok,text){ var o=document.getElementById('out'); if(o){o.className='';o.textContent='['+op+'] '+(ok?'✓':'✗')+' '+(text||'');} }
 // 唯一一份接入文档: 两大模块(① 软件本体含浏览器子模块 ② 手机本体)全部命令直接平铺, 无渐进式披露、无隐藏。
@@ -236,6 +246,7 @@ function _cloudMd(){
     "- 公网入口: `"+pub+"`",
     "- 鉴权: `Authorization: Bearer "+(c.token||"<TOKEN>")+"`",
     "- Session: `"+(c.session||"<SESSION>")+"`","",
+    _channelsMd(),"",
     "## 调用方式",
     "```bash","curl -s -X POST "+pub+" \\","  -H 'Authorization: Bearer <TOKEN>' \\",
     "  -H 'Content-Type: application/json' \\","  -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\",\"<参数>\":\"<值>\"}}'","```","",
@@ -648,6 +659,60 @@ function refreshA11y(){
   window.__setRemoteOps=function(v){ try{ N.setRemoteOps(v); }catch(e){} };
   refreshA11y(); setInterval(refreshA11y, 3000);
 })();
+// ── 接入渠道总览 (一处汇总所有可用渠道·实时) ──
+//   渠道统一来源: 局域网直连 + cloudflared 主隧道 + SSH 反向隧道·备 + 中继 Worker + WebRTC P2P。
+//   全部复用同一 Token/Session/E2E Key, 控制端就近择优。
+function _channels(){
+  var c=_conn(), t=_tunnel(), l=_lan(), r=_relay();
+  var sid=c.session||"", suf="/relay/"+sid, out=[];
+  var lus=(l.urls||t.lanUrls||[]), lanOn=(l.lanDirect!==undefined?!!l.lanDirect:!!t.lanDirect);
+  out.push({label:"局域网直连 · 零中继零隧道·同网最优", online:lanOn&&lus.length>0,
+            urls: lus.map(function(x){return x+suf;})});
+  var NAME={cloudflared:"cloudflared 去中心化隧道 · 主", ssh:"SSH 反向隧道 · 备(独立于 Cloudflare)"};
+  var tl=(t.tunnels&&t.tunnels.length)?t.tunnels:[];
+  tl.forEach(function(x){ out.push({label:(NAME[x.name]||"去中心化隧道"), online:!!x.url, urls:[x.url+suf]}); });
+  if(!tl.length) out.push({label:"去中心化隧道 (cloudflared 主 / SSH 备)", online:false, urls:[], note:"开启上方「去中心化隧道」即每设备独立免费公网入口"});
+  var base=((r.activeUrl||c.url)||"").replace(/\/$/,'');
+  out.push({label:"中继 Worker · 默认兜底", online:!!r.connected, urls:(base&&sid)?[base+suf]:[], note: base?"":"未配置"});
+  out.push({label:"WebRTC P2P · 真打洞(打开 p2p-client.html)", online:tl.length>0, urls:[],
+            note:"借任一公网入口握手一次, 之后 RPC 走 P2P DataChannel·不再经隧道"});
+  return out;
+}
+// 接入文档用: 把当前所有可用渠道渲染成 Markdown 表 (随实时状态自动更新, 与面板总览同源)。
+function _channelsMd(){
+  var rows=["## 接入渠道总览 (本设备实时·任一可用·同一 Token/Session/E2E Key)","",
+            "> 控制端就近择优: 同网走局域网直连(最优), 跨网走去中心化隧道, 隧道不可用兜底中继; 愿意升级的客户端可走 WebRTC P2P。",
+            "","| 渠道 | 状态 | 入口 |","|------|------|------|"];
+  _channels().forEach(function(ch){
+    var ent=(ch.urls&&ch.urls.length)?ch.urls.join("<br>"):(ch.note||"—");
+    rows.push("| "+ch.label+" | "+(ch.online?"在线":"离线/未开启")+" | "+ent+" |");
+  });
+  return rows.join("\n");
+}
+function renderChannels(){
+  var el=document.getElementById('chList'); if(!el) return;
+  el.innerHTML=_channels().map(function(ch){
+    var detail=(ch.urls&&ch.urls.length)?ch.urls.join('<br>'):(ch.note||(ch.online?'在线':'离线/未开启'));
+    return '<div style="margin:5px 0 5px;padding-bottom:5px;border-bottom:1px dashed var(--vscode-input-border,#3334)">'
+      +'<div><span class="dot '+(ch.online?'ok':'pending')+'"></span><span style="font-size:12px">'+ch.label+'</span></div>'
+      +'<div class="url" style="margin-left:16px;font-size:11px">'+detail+'</div></div>';
+  }).join('');
+}
+function copyAllChannels(){
+  var c=_conn(), chs=_channels(), first=null;
+  var lines=["═══ Devin Cloud 手机版 · 全部可用接入渠道 (任一可用·同一 Token/Session) ═══"];
+  chs.forEach(function(ch){
+    var st=ch.online?'[在线]':'[离线/未开启]';
+    if(ch.urls&&ch.urls.length){ ch.urls.forEach(function(u){ if(!first)first=u; lines.push(st+' '+ch.label+': '+u); }); }
+    else lines.push(st+' '+ch.label+(ch.note?(' — '+ch.note):''));
+  });
+  lines.push(""); lines.push("Token: "+(c.token||"")); lines.push("Session: "+(c.session||"")); lines.push("E2E Key: "+(c.e2eKey||""));
+  lines.push(""); lines.push("调用模板 (任一入口通用):");
+  lines.push("curl -s -X POST "+(first||"<入口>")+" -H 'Authorization: Bearer "+(c.token||"<TOKEN>")+"' -H 'Content-Type: application/json' -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"getState\"}}'");
+  try{N.clip&&N.clip(lines.join("\n"));}catch(e){}
+  _result('copyAll', true, '已复制 全部可用接入渠道 + Token/Session/E2EKey + curl 模板');
+}
+renderChannels();
 setInterval(_push, 1500); _push();
 </script>
 </body></html>

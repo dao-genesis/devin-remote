@@ -16,7 +16,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.22.0";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.23.0";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -477,6 +477,21 @@
     getCloudMd: async function(){
       var c; try{c=JSON.parse(N.getConn?N.getConn():"{}");} catch(e){c={};}
       var pub = (c.url&&c.session)?(c.url.replace(/\/$/,'')+"/relay/"+c.session):"(未配置)";
+      // 全部可用接入渠道 (实时·随状态自动更新): 局域网直连 + cloudflared 主 + SSH 备 + 中继 + P2P。
+      var _tj={}; try{_tj=JSON.parse(N.tunnelStat?N.tunnelStat():"{}");}catch(e){}
+      var _lj={}; try{_lj=JSON.parse(N.lanDirect?N.lanDirect():"{}");}catch(e){}
+      var _sid=c.session||"", _suf="/relay/"+_sid;
+      var chRows=["## 一·补、全部可用接入渠道 (本设备实时·任一可用·同一 Token/Session/E2E Key)","",
+        "> 控制端就近择优: 同网走局域网直连(最优), 跨网走去中心化隧道, 隧道不可用兜底中继; 愿升级客户端可走 WebRTC P2P。",
+        "","| 渠道 | 状态 | 入口 |","|------|------|------|"];
+      var _lus=(_lj.urls||_tj.lanUrls||[]);
+      chRows.push("| 局域网直连·零中继零隧道·同网最优 | "+(_lus.length?"在线":"离线/未开启")+" | "+(_lus.length?_lus.map(function(x){return x+_suf;}).join("<br>"):"—")+" |");
+      var _tl=(_tj.tunnels&&_tj.tunnels.length)?_tj.tunnels:[];
+      var _NM={cloudflared:"cloudflared 去中心化隧道·主", ssh:"SSH 反向隧道·备(独立于 Cloudflare)"};
+      _tl.forEach(function(x){ chRows.push("| "+(_NM[x.name]||"去中心化隧道")+" | 在线 | "+x.url+_suf+" |"); });
+      if(!_tl.length) chRows.push("| 去中心化隧道(cloudflared 主/SSH 备) | 离线/未开启 | 设备面板开启「去中心化隧道」即每设备独立免费公网入口 |");
+      chRows.push("| 中继 Worker·默认兜底 | "+(pub!=="(未配置)"?"已配置":"未配置")+" | "+pub+" |");
+      chRows.push("| WebRTC P2P·真打洞 | "+(_tl.length?"可握手":"需先有公网入口")+" | 打开 p2p-client.html, 借任一公网入口握手一次, 之后 RPC 走 P2P DataChannel·不再经隧道 |");
       var md = [
         "# Devin Cloud 手机版 · 接入文档 (唯一·两大模块·全量展开)",
         "",
@@ -487,6 +502,8 @@
         "- 公网入口: `" + pub + "`",
         "- 鉴权: `Authorization: Bearer " + (c.token||"<TOKEN>") + "`",
         "- Session: `" + (c.session||"<SESSION>") + "`",
+        "",
+        chRows.join("\n"),
         "",
         "## 二、调用方式",
         "```bash",
