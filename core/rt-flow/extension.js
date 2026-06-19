@@ -377,9 +377,12 @@ function _pushMultiHist(url, label) {
     _ctx.globalState.update("dao.multiHistory", h);
   } catch (e) {}
 }
+// v4.9.3 · 归一修复: 六大板块经 blob-iframe 挂载, frame-src 必须放行 blob: 否则
+// 子网页被 CSP 静默拦截 → 标签全空白(用户反馈"加载不进去")。createObjectURL 不抛错,
+// 故 mountBoard 的 srcdoc 兜底不触发, 必须在此放行 blob:。
 function _multiShellHtml() {
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https:; frame-src http://localhost:* http://127.0.0.1:*;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https:; frame-src blob: http://localhost:* http://127.0.0.1:*;">
 <style>
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;color:#cdd3de;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
@@ -1285,7 +1288,7 @@ async function _resumePersistedTabs() {
 //   ━━━ 道 ━━━
 //   未验号本不该留 · 只是门没开 · 门一开 · 民自化 · 无为而无不为
 //
-const VERSION = "4.9.2";
+const VERSION = "4.9.3";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36";
 const WINDSURF = "https://windsurf.com";
