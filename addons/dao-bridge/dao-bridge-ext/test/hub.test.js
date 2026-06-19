@@ -110,6 +110,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     ok("core.handleRoute /api/bootstrap.ps1 注入公网 URL");
   }
 
+  // ── 3. 前端 webview：复制URL/复制Token 已合并为单一"复制"(copyAll)，顶部恒为三按钮 ──
+  {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(path.join(__dirname, "..", "extension.js"), "utf8");
+    assert.ok(/send\('copyAll'\)/.test(src), "顶部含合并复制按钮 copyAll");
+    assert.ok(!/send\('copyUrl'\)/.test(src) && !/send\('copyToken'\)/.test(src), "顶部不再有独立 复制URL/复制Token 按钮");
+    assert.ok(/send\('restart'\)/.test(src) && /send\('refreshToken'\)/.test(src), "顶部含 重启隧道 + 刷新Token");
+    assert.ok(/m\.op === "copyAll"/.test(src) && /Authorization: Bearer/.test(src), "后端含 copyAll 处理(复制 URL+Token+Authorization 头)");
+    ok("前端顶部三按钮(复制 copyAll + 重启隧道 + 刷新Token)·后端 copyAll 处理");
+  }
+
   console.log("\nALL " + passed + " TESTS PASSED");
   process.exit(0);
 })().catch((e) => { console.error("\nTEST FAILED:", e && e.stack || e); process.exit(1); });

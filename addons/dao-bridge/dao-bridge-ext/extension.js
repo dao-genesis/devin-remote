@@ -1680,6 +1680,13 @@ class BridgeViewProvider {
     if (m.op === "stop") { this.bridge.stop(); this.notify(); return; }
     if (m.op === "copyUrl") { await vscode.env.clipboard.writeText(this.bridge.url || ""); vscode.window.showInformationMessage("已复制公网 URL"); return; }
     if (m.op === "copyToken") { await vscode.env.clipboard.writeText(this.bridge.srv.token || ""); vscode.window.showInformationMessage("已复制 Token"); return; }
+    if (m.op === "copyAll") {
+      const u = this.bridge.url || "", t = this.bridge.srv.token || "";
+      const text = (u || t) ? ("URL:   " + u + "\nToken: " + t + "\nAuth:  Authorization: Bearer " + t) : "";
+      await vscode.env.clipboard.writeText(text);
+      vscode.window.showInformationMessage(u ? "已复制 URL 与 Token" : "隧道尚未就绪，已复制当前 Token");
+      return;
+    }
     if (m.op === "copyBootstrap") { await vscode.env.clipboard.writeText(this.bridge.bootstrapCmd()); vscode.window.showInformationMessage("已复制被控端一行接入指令"); return; }
     if (m.op === "refreshToken") {
       this.post({ type: "result", op: "refreshToken", ok: true, text: "正在刷新 Token 并用新 Token 重连…" });
@@ -1799,11 +1806,8 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   <div class="lbl">代理 / 回退链</div><div id="net" class="val">—</div>
   <div class="lbl">在线Agent</div><div id="agents" class="val">0</div>
   <div class="row" style="margin-top:6px">
-    <button onclick="send('copyUrl')">复制URL</button>
-    <button onclick="send('copyToken')">复制Token</button>
-    <button onclick="send('restart')">重启隧道</button>
-  </div>
-  <div class="row" style="margin-top:4px">
+    <button onclick="send('copyAll')" title="一键复制公网 URL 与 Token（含 Authorization 头），直接粘贴给云端 Agent">📋 复制</button>
+    <button onclick="send('restart')" title="重启隧道（URL 会变，Token 不变）">♻️ 重启隧道</button>
     <button onclick="send('refreshToken')" title="生成全新 Token，旧 Token 立即作废，并用新 Token 重连公网通道">🔄 刷新Token</button>
   </div>
 </div>
