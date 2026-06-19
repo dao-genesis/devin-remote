@@ -798,6 +798,151 @@ const _stats = {
   errors: 0, // 致命错误
 };
 
+// ════════════════════════════════════════════════════════════════
+// §0.5  多 Key/多端点 负载均衡 + 故障转移 (v9.9.301)
+//   道义: 三十九章「天得一以清」· 一渠不通则取其次 · 万邦皆通方为得一
+//   渠道可配 apiKeys:[] / endpoints:[{url,weight}] · 单 key 限额/被封不致中断
+// ════════════════════════════════════════════════════════════════
+const _rrState = {}; // providerName → 轮转计数 (不落盘 · 不污染配置.json)
+
+// 加权随机全序: 按 weight 抽样不放回 → 既负载均衡又可作故障转移顺序
+function _weightedShuffle(items) {
+  const pool = items.slice();
+  const out = [];
+  while (pool.length) {
+    let total = 0;
+    for (const it of pool) total += it.weight > 0 ? it.weight : 1;
+    let r = Math.random() * total;
+    let idx = 0;
+    for (let i = 0; i < pool.length; i++) {
+      r -= pool[i].weight > 0 ? pool[i].weight : 1;
+      if (r <= 0) {
+        idx = i;
+        break;
+      }
+    }
+    out.push(pool.splice(idx, 1)[0]);
+  }
+  return out;
+}
+
+// 可重试状态: 0(网络)/401/403/408/409/429/5xx → 换下一个候选; 4xx(如400请求非法)不换
+function _isLbRetryable(status) {
+  return (
+    status === 0 ||
+    status === 401 ||
+    status === 403 ||
+    status === 408 ||
+    status === 409 ||
+    status === 429 ||
+    status >= 500
+  );
+}
+
+// 生成 (apiKey, baseUrl) 候选序列 · 首项即负载均衡选择 · 其后为故障转移顺序
+function _lbCandidates(providerName, provCfg) {
+  // ── keys ──
+  let keys = null;
+  if (Array.isArray(provCfg.apiKeys) && provCfg.apiKeys.length) {
+    keys = provCfg.apiKeys.filter(
+      (k) => typeof k === "string" && k && !/\*{4,}/.test(k),
+    );
+  }
+  if (!keys || !keys.length)
+    keys = [provCfg.apiKey != null ? provCfg.apiKey : null];
+  // ── endpoints ──
+  let eps = null;
+  if (Array.isArray(provCfg.endpoints) && provCfg.endpoints.length) {
+    eps = provCfg.endpoints
+      .map((e) =>
+        typeof e === "string"
+          ? { url: e, weight: 1 }
+          : { url: e.url || e.baseUrl, weight: Number(e.weight) > 0 ? Number(e.weight) : 1 },
+      )
+      .filter((e) => e.url);
+  }
+  if (!eps || !eps.length) eps = [{ url: provCfg.baseUrl, weight: 1 }];
+  // 单 key 单端点 → 退化为原行为 (零开销)
+  if (keys.length === 1 && eps.length === 1)
+    return [{ apiKey: keys[0], baseUrl: eps[0].url }];
+  // 端点加权随机全序 · key 轮转起点 (跨请求均摊)
+  const epOrder = _weightedShuffle(eps);
+  const start = (_rrState[providerName] = (_rrState[providerName] || 0) + 1);
+  const off = start % keys.length;
+  const keyOrder = keys.slice(off).concat(keys.slice(0, off));
+  const out = [];
+  const seen = new Set();
+  for (const ep of epOrder)
+    for (const k of keyOrder) {
+      const sig = (k || "") + "@@" + (ep.url || "");
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      out.push({ apiKey: k, baseUrl: ep.url });
+    }
+  return out;
+}
+
+// ── 用量聚合 (v9.9.301) · 内存态 · 供「外接API」面板查看 ──
+//   道义: 四十四章「知足不辱 知止不殆」· 知其所耗 · 方知所止
+const _usage = {}; // providerName → {input,output,calls,since,models:{model:{input,output,calls}}}
+function _recordUsage(providerName, model, tc) {
+  if (!providerName) return;
+  const inTok = (tc && tc.input) || 0;
+  const outTok = (tc && tc.output) || 0;
+  let p = _usage[providerName];
+  if (!p) {
+    p = _usage[providerName] = {
+      input: 0,
+      output: 0,
+      calls: 0,
+      since: Date.now(),
+      models: {},
+    };
+  }
+  p.input += inTok;
+  p.output += outTok;
+  p.calls += 1;
+  const mk = model || "?";
+  let m = p.models[mk];
+  if (!m) m = p.models[mk] = { input: 0, output: 0, calls: 0 };
+  m.input += inTok;
+  m.output += outTok;
+  m.calls += 1;
+}
+// 估算成本 (仅当渠道配置了 pricing:{inPer1k,outPer1k} 时给出 · 否则 null)
+function _estCost(provCfg, input, output) {
+  const pr = provCfg && provCfg.pricing;
+  if (!pr || (pr.inPer1k == null && pr.outPer1k == null)) return null;
+  const ci = ((input || 0) / 1000) * (Number(pr.inPer1k) || 0);
+  const co = ((output || 0) / 1000) * (Number(pr.outPer1k) || 0);
+  return Math.round((ci + co) * 1e6) / 1e6;
+}
+function usage() {
+  const out = {};
+  for (const [name, p] of Object.entries(_usage)) {
+    const provCfg = _providers[name] || {};
+    out[name] = {
+      calls: p.calls,
+      input: p.input,
+      output: p.output,
+      total: p.input + p.output,
+      since: p.since,
+      cost: _estCost(provCfg, p.input, p.output),
+      currency: (provCfg.pricing && provCfg.pricing.currency) || "USD",
+      models: Object.entries(p.models)
+        .map(([m, mm]) => ({
+          model: m,
+          calls: mm.calls,
+          input: mm.input,
+          output: mm.output,
+          total: mm.input + mm.output,
+        }))
+        .sort((a, b) => b.total - a.total),
+    };
+  }
+  return out;
+}
+
 // ── lazy load cascade_wire ──────────────────────────────────
 function wire() {
   // ★ v9.9.81 · 热重载: 清除 require.cache 使代码修改生效
@@ -1933,38 +2078,78 @@ async function _tryRoute({
 
   _log(`[dao-router] ${tag}[→] ${modelUid} → ${target.provider}/${sendModel}`);
   try {
-    const agRes = await _callProvider(
-      provCfg,
-      target.provider,
-      sendModel,
-      callOpts.messages,
-      callOpts.tools,
-      callOpts.toolChoice,
-      callOpts.maxOutputTokens,
-      target, // ★ v9.9.80 · 传入路由配置 (含 thinkingEnabled)
-      callOpts._lspToolNames, // ★ v9.9.83 · LSP 原始工具名集合
-      callOpts, // ★ v9.9.92 · 修法⑦ · 回填 _toolAliasMap
-    );
-
-    if (agRes.statusCode !== 200) {
-      const errBody = await _readAll(agRes);
+    // ★ v9.9.301 · 多 Key/多端点 负载均衡 + 故障转移
+    //   候选首项即负载均衡选择 · 上游可重试错误(429/5xx/401/403/0)自动切下一候选
+    //   仅在响应头未发出前转移 · 流已开始则不再切 (大制无割)
+    const _cands = _lbCandidates(target.provider, provCfg);
+    let agRes = null;
+    let _activeCfg = provCfg;
+    for (let _ci = 0; _ci < _cands.length; _ci++) {
+      const _c = _cands[_ci];
+      const _pc =
+        _cands.length > 1
+          ? Object.assign({}, provCfg, {
+              apiKey: _c.apiKey != null ? _c.apiKey : provCfg.apiKey,
+              baseUrl: _c.baseUrl || provCfg.baseUrl,
+            })
+          : provCfg;
+      let _r;
+      try {
+        _r = await _callProvider(
+          _pc,
+          target.provider,
+          sendModel,
+          callOpts.messages,
+          callOpts.tools,
+          callOpts.toolChoice,
+          callOpts.maxOutputTokens,
+          target, // ★ v9.9.80 · 传入路由配置 (含 thinkingEnabled)
+          callOpts._lspToolNames, // ★ v9.9.83 · LSP 原始工具名集合
+          callOpts, // ★ v9.9.92 · 修法⑦ · 回填 _toolAliasMap
+        );
+      } catch (e) {
+        if (callOpts)
+          callOpts._lastErr = {
+            status: 0,
+            provider: target.provider,
+            body: "exception:" + e.message,
+          };
+        _routeDiag(
+          `_tryRoute ${tag} call EXCEPTION cand#${_ci + 1}/${_cands.length}: ${e.message}`,
+        );
+        continue; // 网络异常 → 换下一候选
+      }
+      if (_r.statusCode === 200) {
+        agRes = _r;
+        _activeCfg = _pc;
+        if (_ci > 0)
+          _log(
+            `[dao-router] ${tag}[↻] ${target.provider} 故障转移命中候选#${_ci + 1}/${_cands.length}`,
+          );
+        break;
+      }
+      // 非 200 → 记录上游错误 · 视情况换下一候选
+      const errBody = await _readAll(_r);
       _log(
-        `[dao-router] ${tag}[✗] HTTP ${agRes.statusCode}: ${errBody.slice(0, 180)}`,
+        `[dao-router] ${tag}[✗] HTTP ${_r.statusCode} (cand#${_ci + 1}/${_cands.length}): ${errBody.slice(0, 180)}`,
       );
       _routeDiag(
-        `_tryRoute ${tag} HTTP ${agRes.statusCode}: ${errBody.slice(0, 200)} model=${sendModel}`,
+        `_tryRoute ${tag} HTTP ${_r.statusCode} cand#${_ci + 1}/${_cands.length}: ${errBody.slice(0, 200)} model=${sendModel}`,
       );
-      if (isPrimary && agRes.statusCode >= 500) {
+      if (isPrimary && _r.statusCode >= 500) {
         _healthCache[target.provider] = { alive: false, ts: Date.now() };
       }
       // ★ v9.9.288 · 记录上游错误 · 供 route() ALL-FAIL 时可读回传 Cascade
       if (callOpts) {
         callOpts._lastErr = {
-          status: agRes.statusCode,
+          status: _r.statusCode,
           provider: target.provider,
           body: errBody.slice(0, 300),
         };
       }
+      if (!_isLbRetryable(_r.statusCode)) break; // 4xx 非限流 → 换 key/端点无益
+    }
+    if (!agRes) {
       return false;
     }
 
@@ -2131,7 +2316,7 @@ async function _tryRoute({
         let retryRes;
         try {
           retryRes = await _callProvider(
-            provCfg,
+            _activeCfg, // ★ v9.9.301 · 沿用命中候选的 key/端点 · 流内重试一致
             target.provider,
             sendModel,
             _currentMessages,
@@ -2224,6 +2409,15 @@ async function _tryRoute({
         );
       }
     }
+
+    // ★ v9.9.301 · 用量聚合 (按渠道/模型) · 供「外接API」面板查看
+    try {
+      _recordUsage(
+        target.provider,
+        sendModel,
+        (streamResult && streamResult.tokenCount) || null,
+      );
+    } catch {}
 
     _log(
       `[dao-router] ${tag}[✓] ${modelUid} → ${target.provider}/${sendModel}`,
@@ -4398,6 +4592,18 @@ function hotAddProvider(name, cfg) {
       `[dao-router] [热] provider ${name}: ${_keyMasked ? "脱敏" : "空"}apiKey → 保留原key (${existing.apiKey.length}B)`,
     );
   }
+  // ★ v9.9.301 · apiKeys[] 保全: 传入数组含脱敏项 → 保留原数组 (同 apiKey 逻辑)
+  if (Array.isArray(cfg.apiKeys)) {
+    const _anyMasked = cfg.apiKeys.some((k) =>
+      /\*{2,}|\.{3}$/.test(String(k || "")),
+    );
+    if (_anyMasked && Array.isArray(existing.apiKeys)) {
+      merged.apiKeys = existing.apiKeys;
+      _log(
+        `[dao-router] [热] provider ${name}: 脱敏apiKeys → 保留原数组 (${existing.apiKeys.length}项)`,
+      );
+    }
+  }
   _providers[name] = merged;
   _log(
     `[dao-router] [热] 添加provider: ${name} type=${cfg.type} url=${cfg.baseUrl || "?"}`,
@@ -4654,15 +4860,67 @@ function _hotSaveConfig() {
     for (const [k, v] of Object.entries(_cfg)) {
       if (!k.startsWith("_")) clean[k] = v;
     }
-    // ★ 异步写入 · 不阻塞路由请求
     const data = JSON.stringify(clean, null, 2);
-    fs.writeFile(configPath, data, "utf8", (err) => {
-      if (err) _log(`[dao-router] _hotSaveConfig fail: ${err.message}`);
-      else
-        _log(`[dao-router] _hotSaveConfig ok: ${configPath} ${data.length}B`);
-    });
+    // ★ v9.9.301 · 原子写 + 备份轮转 · 防写入中途被杀损坏配置.json
+    //   道义: 六十四章「为之于未有 治之于未乱」· 临时文件+rename 原子落盘 · 旧本留痕
+    _atomicSaveWithBackup(configPath, data);
   } catch (e) {
     _log(`[dao-router] _hotSaveConfig exception: ${e.message}`);
+  }
+}
+
+const _BACKUP_KEEP = 10;
+// 原子落盘: 先备份旧配置(轮转保留最近 N 份) · 再写临时文件 · 最后 rename 原子替换
+function _atomicSaveWithBackup(configPath, data) {
+  try {
+    // 1. 备份现有配置 (存在且非空) → <dir>/.config-backups/<name>.<ts>.bak
+    if (fs.existsSync(configPath)) {
+      try {
+        const bakDir = path.join(path.dirname(configPath), ".config-backups");
+        if (!fs.existsSync(bakDir)) fs.mkdirSync(bakDir, { recursive: true });
+        const base = path.basename(configPath);
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        fs.copyFileSync(configPath, path.join(bakDir, `${base}.${stamp}.bak`));
+        // 轮转: 仅保留最近 _BACKUP_KEEP 份
+        const baks = fs
+          .readdirSync(bakDir)
+          .filter((f) => f.startsWith(base + ".") && f.endsWith(".bak"))
+          .sort();
+        while (baks.length > _BACKUP_KEEP) {
+          const oldf = baks.shift();
+          try {
+            fs.unlinkSync(path.join(bakDir, oldf));
+          } catch {}
+        }
+      } catch (be) {
+        _log(`[dao-router] 配置备份失败(忽略): ${be.message}`);
+      }
+    }
+    // 2. 原子写: 临时文件 → rename (同目录 · rename 原子)
+    const tmp = `${configPath}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFile(tmp, data, "utf8", (err) => {
+      if (err) {
+        _log(`[dao-router] _hotSaveConfig tmp 写入失败: ${err.message}`);
+        try {
+          fs.unlinkSync(tmp);
+        } catch {}
+        return;
+      }
+      fs.rename(tmp, configPath, (rerr) => {
+        if (rerr) {
+          _log(`[dao-router] _hotSaveConfig rename 失败: ${rerr.message}`);
+          try {
+            fs.unlinkSync(tmp);
+          } catch {}
+        } else {
+          _log(
+            `[dao-router] _hotSaveConfig ok(原子): ${configPath} ${data.length}B`,
+          );
+        }
+      });
+    });
+  } catch (e) {
+    _log(`[dao-router] _atomicSaveWithBackup exception: ${e.message}`);
   }
 }
 
@@ -4995,6 +5253,8 @@ module.exports = {
   probeAllProviders,
   classifyChannelResponse,
   healthSnapshot,
+  // ★ v9.9.301 · 用量聚合 (按渠道/模型) · 供「外接API」面板查看
+  usage,
   // ★ 热配置 API · 道法自然
   hotAddProvider,
   hotRemoveProvider,

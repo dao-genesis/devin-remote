@@ -261,6 +261,12 @@ function routerStatus() {
   return R ? R.status() : { ready: false, count: 0 };
 }
 
+/** v9.9.301 · 用量聚合 (按渠道/模型) · 供「外接API」面板查看 */
+function routerUsage() {
+  const R = _getRouterModule();
+  return R && R.usage ? R.usage() : {};
+}
+
 /** substitute模式: 获取替代目标UID (source.js 用) */
 function getSubstitution(modelUid) {
   const R = _getRouterModule();
@@ -472,6 +478,7 @@ module.exports = {
   extractModelUid,
   route,
   routerStatus,
+  routerUsage,
   getSubstitution,
   patchModelUid,
   // ★ 热配置 API
