@@ -4293,6 +4293,8 @@ function getEaConfigHtml(port, nonce) {
   var _health = {};
   var _selectedLeft = null;
   var _selectedRight = null;
+  // ★ 加 Key 即自动全量识别 · 已配/预设渠道首载自动热探一次 (cc-switch 风 · 道法自然)
+  var _autoDiscDone = false;   // 本会话仅自动热探一轮 (防回环)
   // ★ v9.9.288 · 面板③ 排序/对齐偏好 (localStorage 持久 · 前端操作)
   var _alignMode = false;       // 1:1 对齐开关
   var _alignRightSeq = [];      // 对齐模式下右侧应跟随的 provider/model 顺序 (renderLeft 产出)
@@ -4438,6 +4440,7 @@ function getEaConfigHtml(port, nonce) {
       _routes = d.routes || {};
       _families = d.official_families || [];
       render();
+      _autoDiscoverAll();
     }).catch(function(e) {
       _loadTries++;
       var st = document.getElementById('statusText');
@@ -4448,6 +4451,29 @@ function getEaConfigHtml(port, nonce) {
         st.textContent = '后端未就绪 · 官方模型不受影响 (' + e.message + ')';
       }
     });
+  }
+
+  // ── 加 Key 即自动全量识别模型 (已配/预设渠道首载自动热探一轮) ──
+  //   道: 无为而无不为 · 用户只填 Key → 系统自动 /v1/models 全量解出该渠道所有模型
+  //   背景串行 (节流·不阻 UI)·失败不断流·全部完成后 loadConfig 一次刷新到视图
+  //   后端 hotListProviderModels 已持久化解出结果 → 仅本会话探一轮即长效
+  function _autoDiscoverAll() {
+    if (_autoDiscDone) return;
+    _autoDiscDone = true;
+    var names = Object.keys(_providers).filter(function(n) {
+      var p = _providers[n];
+      return p && !p._builtin && p.apiKey; // 有 Key 的外接渠道 (overview 中 apiKey 已脱敏但非空)
+    });
+    if (!names.length) return;
+    var i = 0, changed = false;
+    function next() {
+      if (i >= names.length) { if (changed) loadConfig(); return; }
+      var n = names[i++];
+      fJson('/origin/ea/models/' + encodeURIComponent(n) + '?refresh=1').then(function(r) {
+        if (r && r.ok && r.models && r.models.length) changed = true;
+      }).catch(function() {}).then(function() { setTimeout(next, 150); });
+    }
+    next();
   }
 
   // ── 渲染 ──
