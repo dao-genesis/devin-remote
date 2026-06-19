@@ -55,6 +55,11 @@ public class RelayService extends Service {
     private volatile int sshGen = 0;                 // SSH 隧道启动代次 (作废过期看门狗)
     private int sshHealthFails = 0;                  // SSH 公网 URL 健康探测连续失败数 (满阈值换边缘)
     private static final long SSH_HEALTH_INTERVAL = 60000L;  // 每 60s 探一次备用隧道公网 URL 是否真活
+    private int cfHealthFails = 0;                   // cloudflared 公网 URL 健康探测连续失败数 (满阈值触发重启)
+    private int cfHealthRestarts = 0;                // 健康探测驱动的连续重启次数 (达上限判定本网络拦 cf 边缘→如实标离线+慢探恢复)
+    private static final long CF_HEALTH_INTERVAL = 30000L;   // 每 30s 探一次主隧道公网 URL 是否真活 (cf 是主入口, 比备隧更勤)
+    private static final int CF_HEALTH_RESTART_CAP = 3;      // 连续重启仍 530 即判定网络拦截, 停 cf 省电并如实标离线
+    private static final long CF_RECOVER_INTERVAL = 300000L; // 判定拦截后每 5min 重启 cf 重试 (网络变更即自动复活)
     private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.SynchronousQueue<String>> pendingLocal
             = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -188,10 +193,54 @@ public class RelayService extends Service {
                         startCfTunnel();
                     }
                 }, TUNNEL_URL_TIMEOUT);
+                cfHealthFails = 0;
+                scheduleCfHealth(gen);   // 公网可达性健康探测: 进程在跑且已报 URL, 但边缘可能回源失败/被拦而对公网返回 530(假活), 进程看门狗抓不到。
             }
         } catch (Exception e) {
             updateTunnelStatus("", false, "隧道启动失败: " + e.getMessage());
         }
+    }
+    /** 主隧道健康探测: cloudflared 进程在跑、也报了公网 URL, 但边缘可能回源失败/被网络拦截而对公网返回 530 (假活)。
+     *  进程退出看门狗与无URL看门狗都抓不到这种"假活", 故定期探公网 URL/health;
+     *  连失 2 次即走 onTunnelExit 退避重启 (并如实标记主隧道离线; 新一代→本探测循环自然终止)。
+     *  注: 若本网络持续拦截 Cloudflare 边缘, 重启会很快累计到软上限而诚实回退中继, 备隧(SSH)始终并行兜底。 */
+    private void scheduleCfHealth(final int gen) {
+        main.postDelayed(() -> {
+            if (gen != tunnelGen || !tunnelEnabledFlag()) return;
+            TunnelManager t = tunnel;
+            final String u = (t != null) ? t.getUrl() : "";
+            if (u == null || u.isEmpty()) { scheduleCfHealth(gen); return; }  // 尚无 URL → 交无URL看门狗处理, 本探测仅续期
+            new Thread(() -> {
+                final boolean ok = probeUrl(u + "/health", 10000);
+                main.post(() -> {
+                    if (gen != tunnelGen || !tunnelEnabledFlag()) return;
+                    if (ok) { cfHealthFails = 0; cfHealthRestarts = 0; scheduleCfHealth(gen); return; }  // 真活 → 清零累计, 主隧道恢复正常
+                    cfHealthFails++;
+                    if (cfHealthFails < 2) { scheduleCfHealth(gen); return; }   // 单次抑制抖动, 连失 2 次才动手
+                    cfHealthFails = 0;
+                    TunnelManager cur = tunnel;
+                    if (cur != null) try { cur.stop(); } catch (Exception ignored) {}
+                    if (cfHealthRestarts < CF_HEALTH_RESTART_CAP) {
+                        // 可能是边缘瞬时抖动/该快速隧道被废弃 → 重启一次拿新边缘 URL (startCfTunnel 提升 gen→本循环终止)。
+                        cfHealthRestarts++;
+                        android.util.Log.w("RTFlowTunnel", "cf health probe failed (edge 530/unreachable) → restart #" + cfHealthRestarts);
+                        startCfTunnel();
+                    } else {
+                        // 连续重启仍 530 → 判定本网络拦截 Cloudflare 边缘: 如实标主隧道离线, 停 cf 省电, 慢探恢复 (备隧 SSH/中继始终兜底)。
+                        android.util.Log.w("RTFlowTunnel", "cf edge persistently unreachable (530) → mark offline, slow recover");
+                        tunnel = null;
+                        final int rgen = ++tunnelGen;   // 作废本健康循环 + 任何在途看门狗
+                        try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
+                        updateTunnelStatus("", false, "cloudflared 边缘持续不可达(530·本网络疑拦截 Cloudflare) · 已回退备隧(SSH)/中继, 后台每5min重试…", tunnelRetries, true);
+                        main.postDelayed(() -> {
+                            if (!tunnelEnabledFlag() || tunnelGen != rgen) return;
+                            cfHealthRestarts = 0; cfHealthFails = 0;
+                            startCfTunnel();
+                        }, CF_RECOVER_INTERVAL);
+                    }
+                });
+            }, "rtflow-cf-health").start();
+        }, CF_HEALTH_INTERVAL);
     }
     /** 路线A 扩展: 起独立 SSH 反向隧道后端 (与 cloudflared 并行), 退出时轮换公共边缘并持久自愈。 */
     private synchronized void startSshTunnel() {
@@ -277,9 +326,9 @@ public class RelayService extends Service {
         if (tunnel != null) { tunnel.stop(); tunnel = null; }
         sshGen++;
         if (sshTunnel != null) { sshTunnel.stop(); sshTunnel = null; }
-        sshUrl = ""; sshRetries = 0; sshEdgeIdx = 0;
+        sshUrl = ""; sshRetries = 0; sshEdgeIdx = 0; sshHealthFails = 0;
         if (!lanDirectFlag() && localServer != null) { localServer.stop(); localServer = null; localPort = -1; }
-        tunnelRetries = 0;
+        tunnelRetries = 0; cfHealthFails = 0; cfHealthRestarts = 0;
         try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
         refreshLanInfo();
         updateTunnelStatus("", false, "隧道已停止" + (lanDirectFlag() ? " · 局域网直连仍在线" : ""), 0, false);
