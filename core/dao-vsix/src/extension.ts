@@ -469,6 +469,64 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('dao.showInfo', showWorkspaceInfo),
         vscode.commands.registerCommand('dao.copyConnection', copyConnection),
         vscode.commands.registerCommand('dao.regenerateToken', regenerateToken),
+        // 归一外壳 · 让多实例外壳内嵌「公网穿透」页直接读桥状态(不再弹独立面板)
+        vscode.commands.registerCommand('dao.getBridgeState', () => {
+            const c = readBridgeConn() || {};
+            let extra: any = {};
+            try { extra = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.dao', 'bridge', 'connection.json'), 'utf8')) || {}; } catch { /* 守柔 */ }
+            const url = c.url || extra.url || bridgeUrl || '';
+            const token = bridgeToken || extra.token || ws.token || '';
+            const port = c.port || extra.port || ws.port || 0;
+            const host = c.host || (extra.workspace && extra.workspace.host) || '';
+            const named = !!bridgeReadNamedToken();
+            return {
+                on: !!url, url, token, port, host,
+                updated: c.updated || extra.startedAt || '',
+                mode: extra.mode || (named ? 'named' : 'quick'),
+                agentCount: extra.agents_online || extra.agentCount || 0,
+                named, persistent: !bridgeUrl && !!url,
+            };
+        }),
+        // 归一外壳 · 桥动作(复制接入信息/重启/停止/启动/刷新Token/导出MD)走全局命令, 外壳内即可触发
+        vscode.commands.registerCommand('dao.bridgeAction', async (arg?: { cmd?: string }) => {
+            const c = (arg && arg.cmd) || '';
+            try {
+                if (c === 'copyBridgeInfo') {
+                    const cc = readBridgeConn() || {};
+                    const url = cc.url || bridgeUrl || '';
+                    const tok = bridgeToken || ws.token || '';
+                    await vscode.env.clipboard.writeText(`公网URL: ${url}\nToken:   ${tok}\nAuth:    Authorization: Bearer ${tok}`);
+                    vscode.window.showInformationMessage('Bridge 接入信息已复制 (URL + Token)');
+                    return { ok: !!(url || tok) };
+                }
+                if (c === 'bridgeStart') { await bridgeStartTunnel(false); vscode.window.showInformationMessage('隧道已启动'); return { ok: true }; }
+                if (c === 'bridgeStop') { bridgeStopTunnel(); vscode.window.showInformationMessage('隧道已停止'); return { ok: true }; }
+                if (c === 'bridgeRestart') { const wasNamed = !!bridgeReadNamedToken(); bridgeStopTunnel(); await bridgeStartTunnel(wasNamed); vscode.window.showInformationMessage('隧道已重启'); return { ok: true }; }
+                if (c === 'bridgeRefreshToken') {
+                    if (!bridgeUrl) { vscode.window.showWarningMessage('当前为常驻桥持久化连接 · Token 由常驻服务管理。请先「启动隧道」再刷新。'); return { ok: false }; }
+                    bridgeToken = crypto.randomBytes(24).toString('hex');
+                    bridgeSaveConnJson();
+                    try { bridgeWriteArtifacts(); } catch { /* 守柔 */ }
+                    try { if (ws.devinAuth1 && ws.devinOrgId) await bridgeInjectKnowledge(); } catch { /* 守柔 */ }
+                    bridgeScheduleReinject('tokenRefresh');
+                    vscode.window.showInformationMessage('Bridge Token 已刷新 (旧牌仍短暂有效, 不断链)');
+                    return { ok: true };
+                }
+                if (c === 'openBridgeMd') {
+                    const md = bridgeGenerateCloudMd();
+                    const mdPath = path.join(os.homedir(), '.dao', 'bridge', 'cloud-agent.md');
+                    fs.mkdirSync(path.dirname(mdPath), { recursive: true });
+                    fs.writeFileSync(mdPath, md, 'utf8');
+                    const doc = await vscode.workspace.openTextDocument(mdPath);
+                    await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+                    return { ok: true };
+                }
+            } catch (e: any) {
+                vscode.window.showWarningMessage('桥动作失败: ' + (e && e.message ? e.message : String(e)));
+                return { ok: false, err: String(e) };
+            }
+            return { ok: false, err: 'unknown cmd' };
+        }),
         vscode.commands.registerCommand('dao.devinLogin', () => {
             vscode.window.showInputBox({ prompt: 'Devin Cloud Email', placeHolder: 'user@example.com' }).then(email => {
                 if (!email) return;

@@ -476,7 +476,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 <script>
 (function(){
 var vscode=acquireVsCodeApi();
-var tabs={},order=[],active=null,favs=[],history=[];
+var tabs={},order=[],active=null,favs=[],history=[],accounts=[],bridge=null;
 var S=document.getElementById('stack'),BAR=document.getElementById('tabs'),HINT=document.getElementById('hint');
 var ADDR=document.getElementById('addr'),ENG=document.getElementById('eng'),ZL=document.getElementById('zlbl'),SPIN=document.getElementById('spin');
 var MENU=document.getElementById('menu'),OV=document.getElementById('ov'),OVB=document.getElementById('ovBody'),OVT=document.getElementById('ovTi'),DROP=document.getElementById('drop');
@@ -517,8 +517,8 @@ function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi
 function toggleMenu(){MENU.className=MENU.className?'':'on';}
 function onPage(p,l){if(p==='newDevin'){vscode.postMessage({type:'newDevinTab'});return;}
   if(p&&p.indexOf('cp:')===0){vscode.postMessage({type:'openCloudPage',path:p.slice(3),label:l||''});return;}
-  if(p==='cloud'){vscode.postMessage({type:'revealPage',page:'cloud'});return;}
-  if(p==='bridge'){vscode.postMessage({type:'revealPage',page:'bridge'});return;}
+  if(p==='cloud'){vscode.postMessage({type:'getAccounts'});showSwitch();return;}
+  if(p==='bridge'){vscode.postMessage({type:'getBridge'});showBridge();return;}
   if(p==='history')showHistory();else if(p==='favs')showFavs();else if(p==='userscripts')showUserscripts();else if(p==='tools')showTools();else if(p==='about')showAbout();}
 function showOverlay(title,html){OVT.textContent=title;OVB.innerHTML=html;OV.className='on';}
 function hideOverlay(){OV.className='';}
@@ -532,6 +532,16 @@ function showTools(){var t=tabs[active];var u=t?t.url:'';showOverlay('🛠 页�
   var c=document.getElementById('tCopy');if(c)c.onclick=function(){vscode.postMessage({type:'clip',text:u});};
   var e=document.getElementById('tExt');if(e)e.onclick=function(){if(u)vscode.postMessage({type:'openExternal',url:u});};
   var tr=document.getElementById('tTr');if(tr)tr.onclick=function(){if(u)vscode.postMessage({type:'openExternal',url:'https://translate.google.com/translate?sl=auto&tl=zh-CN&u='+encodeURIComponent(u)});};}
+function showSwitch(){var h='';if(!accounts.length)h='<div class="empty">读取账号中… 或账号库为空(请先在「Devin Cloud · 账号库」添加)</div>';else{for(var i=0;i<accounts.length;i++){var a=accounts[i];h+='<div class="li"><div class="g"><div class="t">#'+esc(a.accNo||(i+1))+' '+esc(a.name||a.email)+(a.dollars?(' · $'+esc(a.dollars)):'')+'</div><div class="s">'+esc(a.email)+(a.status?(' · '+esc(a.status)):'')+'</div></div><button class="b pri" data-sw-email="'+esc(a.email)+'">开标签</button></div>';}}showOverlay('🔀 切号 · 多实例(各登各号·互不串号)',h);var ob=OVB.querySelectorAll('[data-sw-email]');for(var j=0;j<ob.length;j++){ob[j].onclick=function(){vscode.postMessage({type:'switchOpen',email:this.getAttribute('data-sw-email')});hideOverlay();};}}
+function showBridge(){var b=bridge,h='';if(!b){h='<div class="empty">读取隧道状态中…</div>';}else{var stTxt=b.on?(b.persistent?'✓ 已打通 · 持久化(常驻)':'✓ 已打通 · 公网在线'):'未连接 · 可点启动';
+  h+='<div class="li"><div class="g"><div class="t">隧道状态</div><div class="s">'+esc(stTxt)+'</div></div></div>';
+  h+='<div class="li"><div class="g"><div class="t">公网 URL</div><div class="s">'+esc(b.url||'(无)')+'</div></div><button class="b pri" data-bc="copyBridgeInfo">复制接入信息</button></div>';
+  h+='<div class="li"><div class="g"><div class="t">Token</div><div class="s">'+esc(b.token||'(无)')+'</div></div></div>';
+  h+='<div class="li"><div class="g"><div class="t">本地端口 · 主机</div><div class="s">'+esc(b.port||'')+' · '+esc(b.host||'')+'</div></div></div>';
+  h+='<div class="li"><div class="g"><div class="t">在线 Agent · 模式</div><div class="s">'+esc(b.agentCount||0)+' · '+esc(b.mode||'')+'</div></div></div>';
+  h+='<div class="li"><div class="g"><div class="t">动作</div></div><button class="b" data-bc="bridgeRestart">🔄 重启</button><button class="b" data-bc="bridgeRefreshToken">♻ 刷新Token</button><button class="b" data-bc="openBridgeMd">📄 接入MD</button></div>';
+  h+=b.on?'<div class="li"><div class="g"><div class="t">停止隧道</div></div><button class="b" data-bc="bridgeStop">⏹ 停止</button></div>':'<div class="li"><div class="g"><div class="t">启动隧道</div></div><button class="b pri" data-bc="bridgeStart">▶ 启动</button></div>';}
+  showOverlay('🌐 公网穿透 · DAO Bridge',h);var ob=OVB.querySelectorAll('[data-bc]');for(var i=0;i<ob.length;i++){ob[i].onclick=function(){vscode.postMessage({type:'bridgeAct',cmd:this.getAttribute('data-bc')});};}}
 function showAbout(){showOverlay('❔ 关于 · 说明','<div class="note">多实例浏览器 · 归一面板多窗口(对齐手机版 APK)。<br><br>• 每个标签 = 一个账号/对话，经该账号独立端口反代登录，各登各号、互不串号。<br>• 标签显示: 状态点 + #账号编号 + 名称 + $额度；<b>双击标签复制账号(+密码)</b>。<br>• 工具条: 刷新 / 首页 / 地址栏+搜索引擎 / 缩放 / 收藏 / 系统浏览器打开。<br>• 书签、历史、打开的标签均持久化，软件重载后自动续接。<br>• 支持从 IDE 拖拽文件进窗口(捕获路径)。<br><br>⚠️ 限制: 外部站点(Google 等)多设 X-Frame-Options 不可内嵌，故搜索 / 翻译 / 外链经系统浏览器打开；Devin 自身页面经反代可完美内嵌。</div>');}
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
 document.getElementById('bRefresh').onclick=function(){var t=tabs[active];if(t){spin(true);t.frame.setAttribute('src',t.url);}};
@@ -555,6 +565,8 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='closeAll'){var ks=order.slice();for(var i=0;i<ks.length;i++)closeTab(ks[i]);vscode.postMessage({type:'closeAllAck'});}
   else if(m.type==='favs'){favs=m.list||[];if(OV.className&&OVT.textContent.indexOf('书签')>=0)showFavs();}
   else if(m.type==='history'){history=m.list||history;if(OV.className&&OVT.textContent.indexOf('历史')>=0)showHistory();}
+  else if(m.type==='accounts'){accounts=m.list||[];if(OV.className&&OVT.textContent.indexOf('切号')>=0)showSwitch();}
+  else if(m.type==='bridgeState'){bridge=m.data||null;if(OV.className&&OVT.textContent.indexOf('公网穿透')>=0)showBridge();}
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}});
 buildMenu();
 vscode.postMessage({type:'ready'});
@@ -625,6 +637,32 @@ function _wireMultiPanel(panel) {
         const email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || "");
         if (email) { try { await openMultiInstance({ email: email, path: m.path, label: m.label }); } catch (e) {} }
         else _toast("无可用账号 · 请先在账号库添加");
+        return;
+      }
+      if (m.type === "getAccounts") {
+        const list = (((_store && _store.accounts) || [])).map((a, i) => {
+          let dollars = 0;
+          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+          return { accNo: i + 1, email: a.email, name: a.name || String(a.email || "").split("@")[0], dollars: dollars };
+        });
+        try { panel.webview.postMessage({ type: "accounts", list: list }); } catch (e) {}
+        return;
+      }
+      if (m.type === "switchOpen") {
+        if (m.email) { try { await openMultiInstance({ email: m.email }); } catch (e) {} }
+        return;
+      }
+      if (m.type === "getBridge") {
+        let data = null;
+        try { data = await vscode.commands.executeCommand("dao.getBridgeState"); } catch (e) {}
+        try { panel.webview.postMessage({ type: "bridgeState", data: data || null }); } catch (e) {}
+        return;
+      }
+      if (m.type === "bridgeAct") {
+        try { await vscode.commands.executeCommand("dao.bridgeAction", { cmd: m.cmd }); } catch (e) {}
+        let data = null;
+        try { data = await vscode.commands.executeCommand("dao.getBridgeState"); } catch (e) {}
+        try { panel.webview.postMessage({ type: "bridgeState", data: data || null }); } catch (e) {}
         return;
       }
       if (m.type === "revealPage") {
