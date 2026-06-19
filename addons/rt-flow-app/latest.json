@@ -1,6 +1,6 @@
 {
-  "versionCode": 74,
-  "versionName": "0.25.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.25.0/DevinCloud-mobile-v0.25.0.apk",
-  "notes": "v0.25.0 · cloudflared 公网健康探测硬化 (唯变所适): 此前 cloudflared 进程在跑且已报公网 URL 时即被标为「已连通」, 但边缘可能回源失败/被网络拦截而对公网返回 530 (假活) —— 进程退出看门狗与无URL看门狗都抓不到。现镜像 SSH 备隧的做法, 每 30s 探一次主隧道公网 URL/health: 连失即如实标主隧道离线; 先重启换新边缘试恢复, 连续重启仍 530 则判定本网络拦截 Cloudflare 边缘, 停 cf 省电并每 5min 慢探恢复 (网络变更即自动复活)。备隧 SSH 与中继始终并行兜底, 本源 curl/HTTP 与对外契约零改动。"
+  "versionCode": 75,
+  "versionName": "0.26.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.26.0/DevinCloud-mobile-v0.26.0.apk",
+  "notes": "v0.26.0 · 诚实状态 UI + 恢复探测精简 (承 v0.25 健康探测): ① cloudflared 被如实标离线后, 渠道总览/接入文档不再让它消失, 而是如实显示「离线·本网络下 Cloudflare 边缘不可达(530)·后台慢探恢复中」, 控制端一眼看清主隧道为何不可用、备隧(SSH)仍在线兜底。② 5min 慢探恢复只保留 1 次重启余量 (而非从零重跑 3 轮), 持续封锁网络下从约 3min churn 缩到约 60s 即回到诚实离线, 省电更利落。本源 curl/HTTP 协议与对外契约零改动。"
 }

@@ -670,8 +670,15 @@ function _channels(){
             urls: lus.map(function(x){return x+suf;})});
   var NAME={cloudflared:"cloudflared 去中心化隧道 · 主", ssh:"SSH 反向隧道 · 备(独立于 Cloudflare)"};
   var tl=(t.tunnels&&t.tunnels.length)?t.tunnels:[];
-  tl.forEach(function(x){ out.push({label:(NAME[x.name]||"去中心化隧道"), online:!!x.url, urls:[x.url+suf]}); });
-  if(!tl.length) out.push({label:"去中心化隧道 (cloudflared 主 / SSH 备)", online:false, urls:[], note:"开启上方「去中心化隧道」即每设备独立免费公网入口"});
+  var tlN={};
+  tl.forEach(function(x){ tlN[x.name]=true; out.push({label:(NAME[x.name]||"去中心化隧道"), online:!!x.url, urls:[x.url+suf]}); });
+  if(t.enabled){
+    // 隧道已开启: 即使某条后端不在 tunnels(边缘不可达/正在建立), 仍如实显示其状态, 不消失
+    if(!tlN.cloudflared) out.push({label:"cloudflared 去中心化隧道 · 主", online:false, urls:[], note:t.fallback?'本网络下 Cloudflare 边缘不可达(530)·后台慢探恢复中':'正在建立…'});
+    if(!tlN.ssh) out.push({label:"SSH 反向隧道 · 备(独立于 Cloudflare)", online:false, urls:[], note:'正在建立…'});
+  } else if(!tl.length) {
+    out.push({label:"去中心化隧道 (cloudflared 主 / SSH 备)", online:false, urls:[], note:"开启上方「去中心化隧道」即每设备独立免费公网入口"});
+  }
   var base=((r.activeUrl||c.url)||"").replace(/\/$/,'');
   out.push({label:"中继 Worker · 默认兜底", online:!!r.connected, urls:(base&&sid)?[base+suf]:[], note: base?"":"未配置"});
   out.push({label:"WebRTC P2P · 真打洞(打开 p2p-client.html)", online:tl.length>0, urls:[],
