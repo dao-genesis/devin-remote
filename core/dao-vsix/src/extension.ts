@@ -102,7 +102,7 @@ let _autoHealAttempts = 0;
 let _autoHealTimer: ReturnType<typeof setTimeout> | null = null;
 const AUTO_HEAL_DELAYS = [3000, 8000, 20000, 45000];
 // 归一 · 帛书「道生一」— 内联 rt-flow 运行时句柄(左·RT Flow 账号池/切号 入 dao-vsix 本体)
-interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; openMultiInstance?: (opts: { email?: string; devinId?: string; password?: string }) => Promise<{ ok: boolean; error?: string; reused?: boolean }>; }
+interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; openMultiInstance?: (opts: { email?: string; devinId?: string; password?: string; path?: string; label?: string }) => Promise<{ ok: boolean; error?: string; reused?: boolean }>; }
 interface RtflowModule { activate?: (ctx: vscode.ExtensionContext) => unknown; deactivate?: () => unknown; _internals?: RtflowInternals; }
 let _rtflowModule: RtflowModule | null = null;
 
@@ -356,7 +356,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Status bar
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBarItem.command = 'dao.toggleCloudPanel';
+    statusBarItem.command = 'dao.openUnifiedShell';
     context.subscriptions.push(statusBarItem);
 
     // ═══════════════════════════════════════════════════════════
@@ -527,6 +527,14 @@ export async function activate(context: vscode.ExtensionContext) {
         // ═══════════════════════════════════════════════════════════
         vscode.commands.registerCommand('dao.openCloudPanel', () => showDaoCloudMiddlePanel(context)),
         vscode.commands.registerCommand('dao.toggleCloudPanel', () => toggleDaoCloudMiddlePanel(context)),
+        // 归一入口: 底部 9921 按钮 → 弹出综合浏览器外壳(多实例单面板多窗口), 默认当前账号 Devin Cloud 主页;
+        //   6 大板块 = 外壳左上角 ☰ 菜单页(经该账号反代加载真实网页)。rt-flow 不可用时回退老全功能面板。
+        vscode.commands.registerCommand('dao.openUnifiedShell', async () => {
+            await ensureRoutedServerFast(context);
+            const email = (ws.devinEmail || '').trim();
+            const r = await tryRtflowMultiInstance({ email });
+            if (!r || !r.ok) toggleDaoCloudMiddlePanel(context);
+        }),
         // 道法自然 · 右下角 RT Flow 按钮 → 打开全功能面板并直达「切号」模块(第2模块)。
         vscode.commands.registerCommand('dao.openSwitchModule', () => {
             showDaoCloudMiddlePanel(context);
