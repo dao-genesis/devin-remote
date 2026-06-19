@@ -234,7 +234,8 @@ public class RelayService extends Service {
                         updateTunnelStatus("", false, "cloudflared 边缘持续不可达(530·本网络疑拦截 Cloudflare) · 已回退备隧(SSH)/中继, 后台每5min重试…", tunnelRetries, true);
                         main.postDelayed(() -> {
                             if (!tunnelEnabledFlag() || tunnelGen != rgen) return;
-                            cfHealthRestarts = 0; cfHealthFails = 0;
+                            // 慢探恢复: 只留 1 次重启余量 (而非全部从零), 若仍 530 则极速回到离线, 减少无效重启。
+                            cfHealthRestarts = CF_HEALTH_RESTART_CAP - 1; cfHealthFails = 0;
                             startCfTunnel();
                         }, CF_RECOVER_INTERVAL);
                     }
