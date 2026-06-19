@@ -336,6 +336,7 @@ async function openIdeAccountBrowser(acc) {
 let _multiPanel = null;
 let _multiReady = false;
 const _multiQueue = [];
+const _multiTabs = new Map(); // id -> {id,label,url,email,devinId,accNo,dollars,title,status}
 function _postMulti(m) {
   if (_multiPanel && _multiReady) {
     try { _multiPanel.webview.postMessage(m); } catch (e) {}
@@ -343,42 +344,282 @@ function _postMulti(m) {
     _multiQueue.push(m);
   }
 }
+// 持久化: 打开的标签/书签/历史 → globalState, 软件重载后经序列化器自动续接。
+function _saveMultiTabs() {
+  try {
+    if (_ctx && _ctx.globalState) {
+      const arr = Array.from(_multiTabs.values()).map((t) => ({
+        email: t.email, devinId: t.devinId, accNo: t.accNo,
+        dollars: t.dollars, title: t.title, status: t.status,
+      }));
+      _ctx.globalState.update("dao.multiTabs", arr);
+    }
+  } catch (e) {}
+}
+function _getMultiFavs() {
+  try { return (_ctx && _ctx.globalState && _ctx.globalState.get("dao.multiFavs")) || []; } catch (e) { return []; }
+}
+function _setMultiFavs(f) {
+  try { if (_ctx && _ctx.globalState) _ctx.globalState.update("dao.multiFavs", f || []); } catch (e) {}
+}
+function _getMultiHist() {
+  try { return (_ctx && _ctx.globalState && _ctx.globalState.get("dao.multiHistory")) || []; } catch (e) { return []; }
+}
+function _pushMultiHist(url, label) {
+  try {
+    if (!url || !_ctx || !_ctx.globalState) return;
+    let h = _getMultiHist().filter((x) => x.url !== url);
+    h.unshift({ url: url, label: label || url, ts: Date.now() });
+    h = h.slice(0, 200);
+    _ctx.globalState.update("dao.multiHistory", h);
+  } catch (e) {}
+}
 function _multiShellHtml() {
-  return [
-    '<!DOCTYPE html><html><head><meta charset="utf-8">',
-    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; img-src data:; frame-src http://localhost:* http://127.0.0.1:*;">',
-    '<style>',
-    'html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1e1e1e;color:#ccc;font-family:-apple-system,Segoe UI,sans-serif}',
-    '#bar{display:flex;align-items:stretch;height:34px;background:#252526;border-bottom:1px solid #333;overflow-x:auto;overflow-y:hidden;white-space:nowrap}',
-    '.tab{display:inline-flex;align-items:center;gap:6px;padding:0 10px;max-width:220px;border-right:1px solid #333;cursor:pointer;color:#bbb;font-size:12px;user-select:none}',
-    '.tab:hover{background:#2a2d2e}',
-    '.tab.on{background:#1e1e1e;color:#fff;border-bottom:2px solid #0a84ff}',
-    '.tab .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-    '.tab .x{opacity:.6;font-size:14px;line-height:1;padding:0 3px;border-radius:3px}',
-    '.tab .x:hover{opacity:1;background:#444}',
-    '#stack{position:absolute;top:34px;left:0;right:0;bottom:0}',
-    '#stack iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}',
-    '#hint{position:absolute;top:34px;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;color:#777;font-size:13px;text-align:center;padding:24px}',
-    '</style></head><body>',
-    '<div id="bar"></div>',
-    '<div id="hint">\uD83C\uDF10 多实例面板 · 从「近期对话→多实例」或账号行「路由→IDE」打开窗口,每个窗口各登各号、互不串号。</div>',
-    '<div id="stack"></div>',
-    '<script>',
-    '(function(){var vscode=acquireVsCodeApi();var tabs={};var active=null;',
-    'var bar=document.getElementById("bar");var stack=document.getElementById("stack");var hint=document.getElementById("hint");',
-    'function sync(){hint.style.display=Object.keys(tabs).length?"none":"flex";}',
-    'function activate(id){active=id;for(var k in tabs){var on=(k===id);tabs[k].frame.style.display=on?"block":"none";tabs[k].btn.className="tab"+(on?" on":"");}}',
-    'function closeTab(id){var t=tabs[id];if(!t)return;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];vscode.postMessage({type:"closed",id:id});if(active===id){var ks=Object.keys(tabs);if(ks.length)activate(ks[ks.length-1]);else active=null;}sync();}',
-    'function mkTab(id,label,url){if(tabs[id]){if(url&&tabs[id].frame.getAttribute("src")!==url)tabs[id].frame.setAttribute("src",url);activate(id);return;}',
-    'var btn=document.createElement("div");btn.className="tab";var lb=document.createElement("span");lb.className="lbl";lb.textContent=label;btn.appendChild(lb);',
-    'var x=document.createElement("span");x.className="x";x.textContent="\\u00d7";btn.appendChild(x);',
-    'btn.onclick=function(e){if(e.target===x)return;activate(id);};x.onclick=function(e){e.stopPropagation();closeTab(id);};bar.appendChild(btn);',
-    'var fr=document.createElement("iframe");fr.setAttribute("src",url);fr.setAttribute("allow","clipboard-read; clipboard-write");fr.style.display="none";stack.appendChild(fr);',
-    'tabs[id]={btn:btn,frame:fr};activate(id);sync();}',
-    'window.addEventListener("message",function(ev){var m=ev.data||{};if(m.type==="open"){mkTab(m.id,m.label,m.url);}else if(m.type==="closeAll"){var ks=Object.keys(tabs);for(var i=0;i<ks.length;i++)closeTab(ks[i]);}});',
-    'vscode.postMessage({type:"ready"});})();',
-    '</script></body></html>'
-  ].join('');
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https:; frame-src http://localhost:* http://127.0.0.1:*;">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;color:#cdd3de;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
+#app{display:flex;flex-direction:column;height:100%}
+#tb{display:flex;align-items:center;gap:4px;height:36px;padding:0 6px;background:#161b22;border-bottom:1px solid #21262d;flex:0 0 auto}
+.tbtn{background:#21262d;border:1px solid #30363d;color:#cdd3de;border-radius:6px;height:25px;min-width:27px;padding:0 7px;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.tbtn:hover{background:#2d333b;color:#fff}
+#addr{flex:1;min-width:60px;height:25px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:0 9px;font-size:12px;outline:none}
+#addr:focus{border-color:#1f6feb}
+#eng{height:25px;background:#21262d;border:1px solid #30363d;color:#9aa4b2;border-radius:6px;font-size:11px;cursor:pointer}
+#zlbl{min-width:40px;text-align:center;color:#9aa4b2;font-size:11px;cursor:pointer;user-select:none}
+#tabs{display:flex;align-items:stretch;height:30px;background:#11151b;border-bottom:1px solid #21262d;overflow-x:auto;overflow-y:hidden;white-space:nowrap;flex:0 0 auto}
+.tab{display:inline-flex;align-items:center;gap:6px;padding:0 8px;max-width:250px;border-right:1px solid #21262d;cursor:pointer;color:#9aa4b2;font-size:12px;user-select:none;flex:0 0 auto}
+.tab:hover{background:#1b212b}
+.tab.on{background:#0e1116;color:#e6edf3;box-shadow:inset 0 -2px 0 #1f6feb}
+.tab .dot{width:7px;height:7px;border-radius:50%;background:#6e7681;flex:0 0 auto}
+.tab .dot.running{background:#3fb950}.tab .dot.finished{background:#58a6ff}.tab .dot.blocked{background:#f0883e}.tab .dot.expired{background:#f85149}.tab .dot.awaiting{background:#d29922}
+.tab .no{min-width:16px;height:15px;line-height:15px;text-align:center;font-size:10px;font-weight:800;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:4px;padding:0 3px;flex:0 0 auto}
+.tab .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tab .amt{color:#3fb950;font-weight:700;flex:0 0 auto}
+.tab .x{opacity:.5;font-size:14px;padding:0 2px;border-radius:3px;flex:0 0 auto}
+.tab .x:hover{opacity:1;background:#3a3a3a}
+#body{position:relative;flex:1;overflow:hidden}
+#stack{position:absolute;inset:0}
+#stack iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
+#hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#6e7681;font-size:13px;text-align:center;padding:24px;flex-direction:column;gap:10px}
+#hint .big{font-size:36px}
+.spin{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(14,17,22,.55);z-index:5;color:#9aa4b2;font-size:12px}
+.spin.on{display:flex}
+.spin .ld{width:22px;height:22px;border:3px solid #30363d;border-top-color:#1f6feb;border-radius:50%;animation:spin 1s linear infinite;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+#menu{position:absolute;top:36px;left:6px;width:216px;background:#161b22;border:1px solid #30363d;border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.5);z-index:25;display:none;overflow:hidden}
+#menu.on{display:block}
+.mi{display:flex;align-items:center;gap:9px;padding:9px 12px;font-size:13px;color:#cdd3de;cursor:pointer;border-bottom:1px solid #1c222b}
+.mi:hover{background:#1f6feb22;color:#fff}
+.mi .ic{width:18px;text-align:center}
+#ov{position:absolute;inset:0;background:#0e1116;z-index:18;display:none;flex-direction:column}
+#ov.on{display:flex}
+.ov-top{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#161b22;border-bottom:1px solid #21262d;flex:0 0 auto}
+.ov-top .ti{font-size:14px;font-weight:600;color:#e6edf3;flex:1}
+.ov-body{flex:1;overflow:auto;padding:10px 12px 40px}
+.li{display:flex;align-items:center;gap:8px;background:#161b22;border:1px solid #21262d;border-radius:8px;padding:8px 10px;margin-bottom:7px}
+.li .g{flex:1;overflow:hidden}
+.li .t{color:#e6edf3;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.li .s{color:#6e7681;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.li .b{background:#21262d;border:1px solid #30363d;color:#cdd3de;border-radius:6px;padding:5px 9px;font-size:12px;cursor:pointer;flex:0 0 auto}
+.li .b.pri{background:#0e639c;border-color:#0e639c;color:#fff}
+.empty{color:#6e7681;text-align:center;padding:30px;font-size:13px}
+.note{color:#8b949e;font-size:12px;line-height:1.8}
+#drop{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(31,111,235,.16);border:3px dashed #1f6feb;z-index:30;color:#cfe6ff;font-size:15px;font-weight:700}
+#drop.on{display:flex}
+</style></head><body>
+<div id="app">
+  <div id="tb">
+    <button class="tbtn" id="bMenu" title="菜单 · 页面">☰</button>
+    <button class="tbtn" id="bRefresh" title="刷新当前页">⟳</button>
+    <button class="tbtn" id="bHome" title="回到账号首页">🏠</button>
+    <input id="addr" placeholder="Devin 路径(/sessions/..)、网址 或 搜索词，回车" />
+    <select id="eng" title="搜索引擎">
+      <option value="https://www.google.com/search?q=">Google</option>
+      <option value="https://www.bing.com/search?q=">Bing</option>
+      <option value="https://duckduckgo.com/?q=">DuckDuckGo</option>
+      <option value="https://www.baidu.com/s?wd=">百度</option>
+    </select>
+    <button class="tbtn" id="bZo" title="缩小">A−</button>
+    <span id="zlbl" title="点击复位 100%">100%</span>
+    <button class="tbtn" id="bZi" title="放大">A+</button>
+    <button class="tbtn" id="bStar" title="收藏当前页">☆</button>
+    <button class="tbtn" id="bExt" title="用系统浏览器打开当前页">↗</button>
+  </div>
+  <div id="tabs"></div>
+  <div id="body">
+    <div id="hint"><div class="big">🌐</div><div>多实例浏览器 · 一个面板多窗口<br>点 ☰ 选择页面，或从「近期对话→多实例 / 账号行→路由 IDE」开标签<br>每个标签各登各号、互不串号</div></div>
+    <div id="stack"></div>
+    <div class="spin" id="spin"><span class="ld"></span>加载中…</div>
+    <div id="drop">松开以拖入文件到当前窗口</div>
+  </div>
+</div>
+<div id="menu"></div>
+<div id="ov"><div class="ov-top"><span class="ti" id="ovTi"></span><button class="tbtn" id="ovClose">✕ 关闭</button></div><div class="ov-body" id="ovBody"></div></div>
+<script>
+(function(){
+var vscode=acquireVsCodeApi();
+var tabs={},order=[],active=null,favs=[],history=[];
+var S=document.getElementById('stack'),BAR=document.getElementById('tabs'),HINT=document.getElementById('hint');
+var ADDR=document.getElementById('addr'),ENG=document.getElementById('eng'),ZL=document.getElementById('zlbl'),SPIN=document.getElementById('spin');
+var MENU=document.getElementById('menu'),OV=document.getElementById('ov'),OVB=document.getElementById('ovBody'),OVT=document.getElementById('ovTi'),DROP=document.getElementById('drop');
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function sync(){HINT.style.display=order.length?'none':'flex';}
+function curOrigin(){try{return tabs[active].url.split('/').slice(0,3).join('/');}catch(e){return '';}}
+function setActive(id){active=id;for(var k in tabs){var on=(k===id);tabs[k].frame.style.display=on?'block':'none';tabs[k].btn.className='tab'+(on?' on':'');}
+  if(tabs[id]){ADDR.value=tabs[id].url;ZL.textContent=Math.round((tabs[id].zoom||1)*100)+'%';}hideOverlay();}
+function applyZoom(t){var z=t.zoom||1;t.frame.style.transformOrigin='0 0';t.frame.style.transform='scale('+z+')';t.frame.style.width=(100/z)+'%';t.frame.style.height=(100/z)+'%';}
+function spin(on){SPIN.className='spin'+(on?' on':'');}
+function closeTab(id){var t=tabs[id];if(!t)return;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];order=order.filter(function(x){return x!==id;});vscode.postMessage({type:'closed',id:id});if(active===id){active=null;if(order.length)setActive(order[order.length-1]);}sync();}
+function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[id].url=m.url;tabs[id].frame.setAttribute('src',m.url);}setActive(id);return;}
+  var btn=document.createElement('div');btn.className='tab';
+  var dot=document.createElement('span');dot.className='dot'+(m.status?(' '+m.status):'');btn.appendChild(dot);
+  if(m.accNo){var no=document.createElement('span');no.className='no';no.textContent='#'+m.accNo;btn.appendChild(no);}
+  var lb=document.createElement('span');lb.className='lbl';lb.textContent=m.label||'Devin';btn.appendChild(lb);
+  if(m.dollars){var am=document.createElement('span');am.className='amt';am.textContent='$'+m.dollars;btn.appendChild(am);}
+  var x=document.createElement('span');x.className='x';x.textContent='×';btn.appendChild(x);
+  btn.onclick=function(e){if(e.target===x)return;setActive(id);};
+  btn.ondblclick=function(e){if(e.target===x)return;vscode.postMessage({type:'copyCred',id:id});};
+  x.onclick=function(e){e.stopPropagation();closeTab(id);};
+  btn.title='双击复制账号密码';
+  BAR.appendChild(btn);
+  var fr=document.createElement('iframe');fr.setAttribute('src',m.url);fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.display='none';
+  spin(true);fr.addEventListener('load',function(){spin(false);});
+  S.appendChild(fr);
+  tabs[id]={btn:btn,frame:fr,url:m.url,zoom:1,meta:m};order.push(id);applyZoom(tabs[id]);setActive(id);sync();
+  vscode.postMessage({type:'histPush',url:m.url,label:m.label||'Devin'});}
+function navigate(v){v=(v||'').trim();if(!v)return;var t=tabs[active];
+  if(/^https?:\\/\\//i.test(v)){var o=curOrigin();if(t&&o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);spin(true);}else{vscode.postMessage({type:'openExternal',url:v});}return;}
+  if(v.charAt(0)==='/'){if(t){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}return;}
+  vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v)});}
+var PAGES=[['🏠','新建 Devin 标签','newDevin'],['☁','Devin Cloud / 切号面板','cloud'],['🌐','公网穿透面板','bridge'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
+function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
+  var items=MENU.querySelectorAll('.mi');for(var j=0;j<items.length;j++){items[j].onclick=function(){MENU.className='';onPage(this.getAttribute('data-p'));};}}
+function toggleMenu(){MENU.className=MENU.className?'':'on';}
+function onPage(p){if(p==='newDevin'){vscode.postMessage({type:'newDevinTab'});return;}
+  if(p==='cloud'){vscode.postMessage({type:'revealPage',page:'cloud'});return;}
+  if(p==='bridge'){vscode.postMessage({type:'revealPage',page:'bridge'});return;}
+  if(p==='history')showHistory();else if(p==='favs')showFavs();else if(p==='userscripts')showUserscripts();else if(p==='tools')showTools();else if(p==='about')showAbout();}
+function showOverlay(title,html){OVT.textContent=title;OVB.innerHTML=html;OV.className='on';}
+function hideOverlay(){OV.className='';}
+function bindOpen(){var ob=OVB.querySelectorAll('[data-u]');for(var i=0;i<ob.length;i++){ob[i].onclick=function(){navigate(this.getAttribute('data-u'));hideOverlay();};}}
+function showHistory(){var h='';if(!history.length)h='<div class="empty">暂无浏览记录</div>';else for(var i=0;i<history.length;i++){var it=history[i];h+='<div class="li"><div class="g"><div class="t">'+esc(it.label)+'</div><div class="s">'+esc(it.url)+'</div></div><button class="b" data-u="'+esc(it.url)+'">打开</button></div>';}showOverlay('🕘 浏览历史',h);bindOpen();}
+function showFavs(){var h='';if(!favs.length)h='<div class="empty">暂无书签 · 工具条点 ☆ 收藏当前页</div>';else for(var i=0;i<favs.length;i++){var f=favs[i];h+='<div class="li"><div class="g"><div class="t">'+esc(f.label)+'</div><div class="s">#'+esc(f.accNo||'')+' '+esc(f.email||'')+'</div></div><button class="b pri" data-re-email="'+esc(f.email||'')+'" data-re-did="'+esc(f.devinId||'')+'">打开</button><button class="b" data-del="'+esc(f.key)+'">删</button></div>';}showOverlay('⭐ 书签收藏',h);
+  var ob=OVB.querySelectorAll('[data-re-email]');for(var a=0;a<ob.length;a++){ob[a].onclick=function(){vscode.postMessage({type:'reopen',email:this.getAttribute('data-re-email'),devinId:this.getAttribute('data-re-did')});hideOverlay();};}
+  var db=OVB.querySelectorAll('[data-del]');for(var b=0;b<db.length;b++){db[b].onclick=function(){vscode.postMessage({type:'favDel',key:this.getAttribute('data-del')});};}}
+function showUserscripts(){showOverlay('🐵 用户脚本','<div class="note">用户脚本(油猴)用于在 Devin 页面注入增强脚本。<br>受 IDE webview 跨域限制，注入到 Devin 页面将经「每账号反代」统一注入实现(规划中)。<br>当前可在「页面工具」使用复制链接 / 系统浏览器打开 / 翻译等通用能力。</div>');}
+function showTools(){var t=tabs[active];var u=t?t.url:'';showOverlay('🛠 页面工具','<div class="li"><div class="g"><div class="t">复制当前页链接</div><div class="s">'+esc(u||'(无)')+'</div></div><button class="b" id="tCopy">复制</button></div><div class="li"><div class="g"><div class="t">系统浏览器打开当前页</div></div><button class="b pri" id="tExt">打开</button></div><div class="li"><div class="g"><div class="t">翻译当前页(系统浏览器 · Google 翻译)</div></div><button class="b" id="tTr">翻译</button></div><div class="note" style="margin-top:8px">缩放: 工具条 A− / A＋；点百分比复位。刷新: ⟳ 。回首页: 🏠 。</div>');
+  var c=document.getElementById('tCopy');if(c)c.onclick=function(){vscode.postMessage({type:'clip',text:u});};
+  var e=document.getElementById('tExt');if(e)e.onclick=function(){if(u)vscode.postMessage({type:'openExternal',url:u});};
+  var tr=document.getElementById('tTr');if(tr)tr.onclick=function(){if(u)vscode.postMessage({type:'openExternal',url:'https://translate.google.com/translate?sl=auto&tl=zh-CN&u='+encodeURIComponent(u)});};}
+function showAbout(){showOverlay('❔ 关于 · 说明','<div class="note">多实例浏览器 · 归一面板多窗口(对齐手机版 APK)。<br><br>• 每个标签 = 一个账号/对话，经该账号独立端口反代登录，各登各号、互不串号。<br>• 标签显示: 状态点 + #账号编号 + 名称 + $额度；<b>双击标签复制账号(+密码)</b>。<br>• 工具条: 刷新 / 首页 / 地址栏+搜索引擎 / 缩放 / 收藏 / 系统浏览器打开。<br>• 书签、历史、打开的标签均持久化，软件重载后自动续接。<br>• 支持从 IDE 拖拽文件进窗口(捕获路径)。<br><br>⚠️ 限制: 外部站点(Google 等)多设 X-Frame-Options 不可内嵌，故搜索 / 翻译 / 外链经系统浏览器打开；Devin 自身页面经反代可完美内嵌。</div>');}
+document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
+document.getElementById('bRefresh').onclick=function(){var t=tabs[active];if(t){spin(true);t.frame.setAttribute('src',t.url);}};
+document.getElementById('bHome').onclick=function(){var t=tabs[active];if(t){var u=curOrigin()+'/';t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}};
+document.getElementById('bZi').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.min(3,(t.zoom||1)+0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
+document.getElementById('bZo').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.max(0.3,(t.zoom||1)-0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
+ZL.onclick=function(){var t=tabs[active];if(t){t.zoom=1;applyZoom(t);ZL.textContent='100%';}};
+document.getElementById('bStar').onclick=function(){if(active)vscode.postMessage({type:'favAdd',id:active});};
+document.getElementById('bExt').onclick=function(){var t=tabs[active];if(t)vscode.postMessage({type:'openExternal',url:t.url});};
+document.getElementById('ovClose').onclick=hideOverlay;
+ADDR.addEventListener('keydown',function(e){if(e.key==='Enter')navigate(ADDR.value);});
+document.addEventListener('click',function(){if(MENU.className)MENU.className='';});
+window.addEventListener('keydown',function(e){if(e.ctrlKey&&(e.key==='='||e.key==='+')){document.getElementById('bZi').click();e.preventDefault();}else if(e.ctrlKey&&e.key==='-'){document.getElementById('bZo').click();e.preventDefault();}else if(e.ctrlKey&&e.key==='0'){ZL.click();e.preventDefault();}else if(e.ctrlKey&&(e.key==='r'||e.key==='R')){document.getElementById('bRefresh').click();e.preventDefault();}else if(e.ctrlKey&&(e.key==='l'||e.key==='L')){ADDR.focus();ADDR.select();e.preventDefault();}});
+window.addEventListener('dragover',function(e){e.preventDefault();DROP.className='on';});
+window.addEventListener('dragleave',function(e){if(e.relatedTarget===null||e.relatedTarget===document.documentElement)DROP.className='';});
+window.addEventListener('drop',function(e){e.preventDefault();DROP.className='';var uris='';try{uris=e.dataTransfer.getData('text/uri-list')||e.dataTransfer.getData('text/plain')||'';}catch(x){}var names=[];try{if(e.dataTransfer.files)for(var i=0;i<e.dataTransfer.files.length;i++)names.push(e.dataTransfer.files[i].name);}catch(x){}vscode.postMessage({type:'filesDropped',uris:uris,names:names});});
+window.addEventListener('message',function(ev){var m=ev.data||{};
+  if(m.type==='open'){mkTab(m);}
+  else if(m.type==='closeAll'){var ks=order.slice();for(var i=0;i<ks.length;i++)closeTab(ks[i]);vscode.postMessage({type:'closeAllAck'});}
+  else if(m.type==='favs'){favs=m.list||[];if(OV.className&&OVT.textContent.indexOf('书签')>=0)showFavs();}
+  else if(m.type==='history'){history=m.list||history;if(OV.className&&OVT.textContent.indexOf('历史')>=0)showHistory();}
+  else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}});
+buildMenu();
+vscode.postMessage({type:'ready'});
+})();
+</script></body></html>`;
+}
+function _wireMultiPanel(panel) {
+  panel.webview.onDidReceiveMessage(async (m) => {
+    if (!m) return;
+    try {
+      if (m.type === "ready") {
+        _multiReady = true;
+        while (_multiQueue.length) { try { panel.webview.postMessage(_multiQueue.shift()); } catch (e) {} }
+        try { panel.webview.postMessage({ type: "favs", list: _getMultiFavs() }); } catch (e) {}
+        try { panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {}
+        return;
+      }
+      if (m.type === "closed") { _multiTabs.delete(m.id); _saveMultiTabs(); return; }
+      if (m.type === "closeAllAck") { _multiTabs.clear(); _saveMultiTabs(); return; }
+      if (m.type === "copyCred") {
+        const t = _multiTabs.get(m.id); if (!t) return;
+        let pw = "";
+        try {
+          const acc = ((_store && _store.accounts) || []).find((a) => String(a.email).toLowerCase() === String(t.email).toLowerCase());
+          if (acc) pw = acc.password || "";
+        } catch (e) {}
+        const text = t.email + (pw ? "\t" + pw : "");
+        try { await vscode.env.clipboard.writeText(text); _toast("📋 已复制账号" + (pw ? "+密码" : "") + " · " + String(t.email).split("@")[0]); } catch (e) {}
+        return;
+      }
+      if (m.type === "clip" && m.text) {
+        try { await vscode.env.clipboard.writeText(String(m.text)); _toast("📋 已复制链接"); } catch (e) {}
+        return;
+      }
+      if (m.type === "openExternal" && m.url) {
+        try { await vscode.env.openExternal(vscode.Uri.parse(m.url)); } catch (e) {}
+        return;
+      }
+      if (m.type === "favAdd") {
+        const t = _multiTabs.get(m.id); if (!t) return;
+        const favs = _getMultiFavs();
+        const key = String(t.email).toLowerCase() + "|" + (t.devinId || "home");
+        if (!favs.some((f) => f.key === key)) {
+          favs.push({ key: key, label: t.label, email: t.email, devinId: t.devinId || "", accNo: t.accNo, dollars: t.dollars });
+          _setMultiFavs(favs); _toast("⭐ 已收藏 · " + t.label);
+        }
+        try { panel.webview.postMessage({ type: "favs", list: _getMultiFavs() }); } catch (e) {}
+        return;
+      }
+      if (m.type === "favDel") {
+        const favs = _getMultiFavs().filter((f) => f.key !== m.key);
+        _setMultiFavs(favs);
+        try { panel.webview.postMessage({ type: "favs", list: favs }); } catch (e) {}
+        return;
+      }
+      if (m.type === "reopen") {
+        try { await openMultiInstance({ email: m.email, devinId: m.devinId }); } catch (e) {}
+        return;
+      }
+      if (m.type === "histPush") { _pushMultiHist(m.url, m.label); return; }
+      if (m.type === "newDevinTab") {
+        const email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || "");
+        if (email) { try { await openMultiInstance({ email: email }); } catch (e) {} }
+        else _toast("无可用账号 · 请先在账号库添加");
+        return;
+      }
+      if (m.type === "revealPage") {
+        try { await vscode.commands.executeCommand("dao.openCloudPanel"); } catch (e) {}
+        if (m.page === "bridge") _toast("公网穿透在 Devin Cloud 面板内 · 已打开面板");
+        return;
+      }
+      if (m.type === "filesDropped") {
+        const uris = String(m.uris || "").split(/[\r\n]+/).map((s) => s.trim()).filter(Boolean);
+        const paths = uris.map((u) => { try { return u.startsWith("file:") ? vscode.Uri.parse(u).fsPath : u; } catch (e) { return u; } });
+        const list = paths.length ? paths : (m.names || []);
+        if (list.length) {
+          try { await vscode.env.clipboard.writeText(list.join("\n")); } catch (e) {}
+          _toast("📎 已捕获 " + list.length + " 个文件路径(已复制) · 受跨域限制可在对话内粘贴 · " + (list[0] || "").split(/[\\/]/).pop());
+        }
+        return;
+      }
+      if (m.type === "toast" && m.msg) { _toast(m.msg); return; }
+    } catch (e) { try { log("[multi] msg err: " + (e && e.message)); } catch (x) {} }
+  });
+  panel.onDidDispose(() => { _multiPanel = null; _multiReady = false; _multiQueue.length = 0; });
+  _multiPanel = panel;
 }
 function _ensureMultiPanel() {
   if (_multiPanel) return _multiPanel;
@@ -388,14 +629,7 @@ function _ensureMultiPanel() {
     { enableScripts: true, retainContextWhenHidden: true },
   );
   panel.webview.html = _multiShellHtml();
-  panel.webview.onDidReceiveMessage((m) => {
-    if (m && m.type === 'ready') {
-      _multiReady = true;
-      while (_multiQueue.length) { try { panel.webview.postMessage(_multiQueue.shift()); } catch (e) {} }
-    }
-  });
-  panel.onDidDispose(() => { _multiPanel = null; _multiReady = false; _multiQueue.length = 0; });
-  _multiPanel = panel;
+  _wireMultiPanel(panel);
   return panel;
 }
 async function _resolveAuthForEmail(email, password) {
@@ -431,11 +665,35 @@ async function openMultiInstance(opts) {
   const url = sid ? (base + '/sessions/' + encodeURIComponent(sid)) : (base + '/');
   const short = email.split('@')[0];
   const id = email.toLowerCase() + '|' + (sid || 'home');
-  const label = short + (sid ? (' · ' + sid.slice(0, 8)) : '');
+  // 富标签 (对齐手机版): #账号编号 + 名称 + $额度 + 对话状态点。
+  let accNo = 0, dollars = 0;
+  try {
+    const idx = ((_store && _store.accounts) || []).findIndex(
+      (a) => String(a.email).toLowerCase() === email.toLowerCase(),
+    );
+    if (idx >= 0) accNo = idx + 1;
+    const h = _store && _store.getHealth ? _store.getHealth(email) : null;
+    if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars);
+  } catch (e) {}
+  const title = String(opts.title || '').trim();
+  const label = title || (short + (sid ? (' · ' + sid.slice(0, 8)) : ''));
+  const status = String(opts.status || '').trim();
+  const meta = { id, label, url, email, devinId: sid, accNo, dollars, title, status };
+  _multiTabs.set(id, meta);
+  _saveMultiTabs();
   _ensureMultiPanel();
   try { _multiPanel.reveal(vscode.ViewColumn.Active); } catch (e) {}
-  _postMulti({ type: 'open', id: id, label: label, url: url });
+  _postMulti({ type: 'open', id, label, url, accNo, dollars, status, email, devinId: sid });
   return { ok: true };
+}
+// 软件重载续接: 据 globalState 已存标签, 重新解析各账号反代 → 逐个还原标签。
+async function _resumePersistedTabs() {
+  let saved = [];
+  try { saved = (_ctx && _ctx.globalState && _ctx.globalState.get("dao.multiTabs")) || []; } catch (e) {}
+  for (const t of saved) {
+    try { await openMultiInstance({ email: t.email, devinId: t.devinId, title: t.title, status: t.status }); }
+    catch (e) { try { log("[multi] resume err: " + (e && e.message)); } catch (x) {} }
+  }
 }
 
 // ═══ § 1 · 万法之资 ═══
@@ -12856,6 +13114,18 @@ async function activate(context) {
           }
           panel.webview.html = "<!DOCTYPE html><html><body style='background:#1e1e1e;color:#888;font-family:sans-serif;padding:24px'>还原中 · " + _esc(acc.email.split("@")[0]) + " …</body></html>";
           openIdeAccountBrowser(acc).catch((e) => log("ideWeb restore err: " + ((e && e.message) || e)));
+        },
+      }),
+    );
+    // v6.0.0 · 归一多实例浏览器面板序列化器 — 软件重载后自动还原已打开的全部标签。
+    context.subscriptions.push(
+      vscode.window.registerWebviewPanelSerializer("daoMultiInstance", {
+        async deserializeWebviewPanel(panel) {
+          try { panel.webview.options = { enableScripts: true }; } catch {}
+          _multiReady = false; _multiQueue.length = 0; _multiTabs.clear();
+          panel.webview.html = _multiShellHtml();
+          _wireMultiPanel(panel);
+          _resumePersistedTabs().catch((e) => log("multi resume err: " + ((e && e.message) || e)));
         },
       }),
     );
