@@ -36,9 +36,11 @@ public class RelayService extends Service {
     private final Handler main = new Handler(Looper.getMainLooper());
     private PowerManager.WakeLock wakeLock;   // P2: 持锁防 Doze CPU 节流, 保 WSS 心跳不断
     private WifiManager.WifiLock wifiLock;     // 息屏防 Wi-Fi 休眠/降频, 保出站 WSS 不掉 (移植自 knoop7/Ava WifiWakeLock)
-    // 路线B 去中心化隧道
+    // 去中心化直连 (局域网直连 + 路线B cloudflared 隧道)
     private LocalServer localServer;
     private TunnelManager tunnel;
+    private volatile int localPort = -1;            // LocalServer 监听端口 (局域网直连 + 隧道共用)
+    private volatile String lanUrlsJson = "[]";     // 本机当前局域网直连 URL 列表 (随网络变化刷新)
     public static volatile String tunnelStatus = "{\"enabled\":false}";
     private int tunnelRetries = 0;                 // cloudflared 连续异常退出计数 (连通后清零)
     private static final int TUNNEL_RETRY_MAX = 3; // 自动重试上限; 超过则诚实回退中继(国内常被墙)
@@ -57,8 +59,64 @@ public class RelayService extends Service {
         startForeground(1, buildNotification("内网穿透服务启动中…"));
         acquireWake();
         main.post(this::initEngine);
-        // 路线B: 若用户在穿透面板开启了「去中心化隧道」, 拉起本地 server + cloudflared 快速隧道。
-        if ("1".equals(readUserFile("tunnel-enabled"))) main.postDelayed(this::startTunnel, 1500);
+        // 去中心化直连默认开启: 服务一起即拉起本地 server (绑 0.0.0.0), 同一局域网的控制端可零中继/零隧道直连本机。
+        if (lanDirectFlag()) main.postDelayed(this::ensureLocalServer, 1200);
+        // 路线B: 若用户在穿透面板开启了「去中心化隧道」, 在本地 server 之上再起 cloudflared 快速隧道 (跨网络兜底)。
+        if ("1".equals(readUserFile("tunnel-enabled"))) main.postDelayed(this::startTunnel, 1800);
+    }
+
+    /** 局域网直连开关 (默认开): 控制端与手机同网时可直连, 不依赖任何 Worker/隧道。 */
+    private boolean lanDirectFlag() { String f = readUserFile("lan-direct"); return f == null || f.isEmpty() || "1".equals(f); }
+
+    /** 起本地入站 server (绑 0.0.0.0) — 局域网直连与 cloudflared 隧道共用同一实例; 幂等。
+     *  起好后刷新并广播当前局域网直连 URL, 供穿透面板展示/复制。 */
+    private synchronized void ensureLocalServer() {
+        try {
+            if (localServer == null || !localServer.isRunning()) {
+                localServer = new LocalServer(new LocalServer.Dispatcher() {
+                    public String token() { return relayToken(); }
+                    public String dispatch(String f) throws Exception { return dispatchLocal(f); }
+                });
+                localPort = localServer.start();
+                android.util.Log.i("RTFlowTunnel", "local server on 0.0.0.0:" + localPort);
+            } else {
+                localPort = localServer.getPort();
+            }
+        } catch (Exception e) {
+            android.util.Log.w("RTFlowTunnel", "local server start failed: " + e.getMessage());
+        }
+        refreshLanInfo();
+    }
+
+    /** 枚举本机非回环 IPv4 局域网地址, 拼成 http://<ip>:<port> 直连 URL 列表 → lanUrlsJson, 并广播状态。 */
+    private void refreshLanInfo() {
+        org.json.JSONArray arr = new org.json.JSONArray();
+        try {
+            int p = localPort;
+            if (p > 0) {
+                java.util.Enumeration<java.net.NetworkInterface> ifs = java.net.NetworkInterface.getNetworkInterfaces();
+                while (ifs != null && ifs.hasMoreElements()) {
+                    java.net.NetworkInterface ni = ifs.nextElement();
+                    try { if (!ni.isUp() || ni.isLoopback() || ni.isVirtual()) continue; } catch (Exception ignored) { continue; }
+                    java.util.Enumeration<java.net.InetAddress> addrs = ni.getInetAddresses();
+                    while (addrs.hasMoreElements()) {
+                        java.net.InetAddress a = addrs.nextElement();
+                        if (a.isLoopbackAddress() || a.isLinkLocalAddress()) continue;
+                        if (!(a instanceof java.net.Inet4Address)) continue;   // IPv4 局域网地址 (192.168/10/172.16-31)
+                        arr.put("http://" + a.getHostAddress() + ":" + p);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        lanUrlsJson = arr.toString();
+        // LAN 信息变化时刷新一次状态广播 (沿用当前隧道连通态)。
+        try {
+            org.json.JSONObject cur = new org.json.JSONObject(tunnelStatus);
+            updateTunnelStatus(cur.optString("url", ""), cur.optBoolean("connected", false),
+                    cur.optString("msg", ""), cur.optInt("retries", 0), cur.optBoolean("fallback", false));
+        } catch (Exception ignored) {
+            updateTunnelStatus("", false, "", 0, false);
+        }
     }
 
     // ── 路线B 去中心化隧道 (设备自带 cloudflared 快速隧道) ──────────────────
@@ -87,13 +145,9 @@ public class RelayService extends Service {
     }
     private synchronized void startTunnel() {
         try {
-            if (localServer == null || !localServer.isRunning()) {
-                localServer = new LocalServer(new LocalServer.Dispatcher() {
-                    public String token() { return relayToken(); }
-                    public String dispatch(String f) throws Exception { return dispatchLocal(f); }
-                });
-                int port = localServer.start();
-                android.util.Log.i("RTFlowTunnel", "local server on 127.0.0.1:" + port);
+            ensureLocalServer();
+            if (localServer == null || localServer.getPort() <= 0) {
+                updateTunnelStatus("", false, "本地 server 启动失败, 隧道无法建立"); return;
             }
             int port = localServer.getPort();
             if (tunnel != null) tunnel.stop();
@@ -109,11 +163,13 @@ public class RelayService extends Service {
         }
     }
     private synchronized void stopTunnel() {
+        // 仅停 cloudflared 隧道; 本地 server 保留 (局域网直连默认常驻, 不随隧道关闭而下线)。
         if (tunnel != null) { tunnel.stop(); tunnel = null; }
-        if (localServer != null) { localServer.stop(); localServer = null; }
+        if (!lanDirectFlag() && localServer != null) { localServer.stop(); localServer = null; localPort = -1; }
         tunnelRetries = 0;
         try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
-        updateTunnelStatus("", false, "已停止", 0, false);
+        refreshLanInfo();
+        updateTunnelStatus("", false, "隧道已停止" + (lanDirectFlag() ? " · 局域网直连仍在线" : ""), 0, false);
     }
     /** cloudflared 异常退出处理: 用户仍开着隧道则自动重试 N 次; 超限则诚实回退中继。
      *  关键: 中继(Worker) 与隧道是并行的, 隧道失败丝毫不影响中继 → 手机始终在线可远程接入。 */
@@ -144,9 +200,15 @@ public class RelayService extends Service {
     private void updateTunnelStatus(String url, boolean connected, String msg, int retries, boolean fallback) {
         try {
             org.json.JSONObject o = new org.json.JSONObject();
-            o.put("enabled", true); o.put("connected", connected);
+            o.put("enabled", tunnelEnabledFlag()); o.put("connected", connected);
             o.put("url", url == null ? "" : url); o.put("msg", msg == null ? "" : msg);
             o.put("retries", retries); o.put("fallback", fallback);
+            // 局域网直连信息 (零中继/零隧道, 同网直连本机): 始终随状态广播, 供穿透面板展示/复制。
+            o.put("lanDirect", lanDirectFlag());
+            o.put("localPort", localPort);
+            org.json.JSONArray lans; try { lans = new org.json.JSONArray(lanUrlsJson); } catch (Exception e) { lans = new org.json.JSONArray(); }
+            o.put("lanUrls", lans);
+            o.put("lanUrl", lans.length() > 0 ? lans.optString(0, "") : "");
             o.put("ts", System.currentTimeMillis());
             tunnelStatus = o.toString();
         } catch (Exception ignored) {}
@@ -292,6 +354,32 @@ public class RelayService extends Service {
         }
         @JavascriptInterface public boolean isTunnelEnabled() { return "1".equals(readUserFile("tunnel-enabled")); }
         @JavascriptInterface public String tunnelStat() { return tunnelStatus; }
+
+        // ── 局域网直连 (无感等效内网穿透·零中继零隧道) ──────────────────────
+        /** 局域网直连开关 (默认开)。开 = 起本地 server(绑 0.0.0.0) 供同网控制端直连; 关 = 仅在隧道开时才起。 */
+        @JavascriptInterface public void setLanDirect(boolean on) {
+            writeUserFile("lan-direct", on ? "1" : "0");
+            main.post(() -> { if (on) ensureLocalServer(); else if (!tunnelEnabledFlag()) stopTunnel(); else refreshLanInfo(); });
+        }
+        @JavascriptInterface public boolean isLanDirect() { return lanDirectFlag(); }
+        /** 当前局域网直连接入信息: {lanDirect, port, urls:[...], token, session, e2eKey}。 */
+        @JavascriptInterface public String lanDirect() {
+            main.post(RelayService.this::refreshLanInfo);   // 取最新网络地址 (下一次轮询即生效)
+            try {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("lanDirect", lanDirectFlag());
+                o.put("port", localPort);
+                o.put("urls", new org.json.JSONArray(lanUrlsJson));
+                String cfg = readUserFile("relay-config.json");
+                if (cfg != null && cfg.length() > 5) {
+                    org.json.JSONObject c = new org.json.JSONObject(cfg);
+                    o.put("token", c.optString("token", ""));
+                    o.put("session", c.optString("session", ""));
+                    o.put("e2eKey", c.optString("e2eKey", ""));
+                }
+                return o.toString();
+            } catch (Exception e) { return "{\"lanDirect\":" + lanDirectFlag() + ",\"port\":" + localPort + ",\"urls\":" + lanUrlsJson + "}"; }
+        }
 
         // ── 远程操控 IPC (经 MainActivity.sInstance 驱动前台 WebView) ──────────
 

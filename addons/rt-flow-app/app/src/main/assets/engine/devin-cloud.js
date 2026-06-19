@@ -17,17 +17,23 @@
     var d = r.json && (r.json.detail || r.json.error || r.json.message);
     return "HTTP " + r.status + (d ? ": " + (typeof d === "string" ? d : JSON.stringify(d)) : (r.text ? ": " + String(r.text).slice(0, 160) : ""));
   }
-  async function jget(url, acc) { return await C.devinJsonGet(url, H(acc)); }
-  async function jpost(url, acc, body) { return await C.devinJsonPost(url, H(acc), body); }
-  async function reqRaw(method, url, acc) {
-    var res = await C.httpReq(method, url, H(acc), "");
+  // low=true → 低优先 (后台备份/导出让路给登录/额度/状态等交互请求)
+  async function jget(url, acc, low) { return await C.devinJsonGet(url, H(acc), low); }
+  async function jpost(url, acc, body, low) { return await C.devinJsonPost(url, H(acc), body, low); }
+  async function reqRaw(method, url, acc, low) {
+    var res = await C.httpReq(method, url, H(acc), "", low);
     var j = null; try { j = JSON.parse(res.text || ""); } catch (e) {}
     return { status: res.status || 0, json: j, text: res.text || "", error: res.error };
   }
 
   // ── P3 会话列表 / 详情 / 事件流 ────────────────────────────────────────────
-  async function listSessions(acc, limit) {
-    if (!acc || !acc.auth1 || !acc.orgId) return { ok: false, error: "需先登录(auth1)" };
+  //  会话列表短期缓存 + 在途去重 (彻底削减多账号并发的重复 v2sessions 请求):
+  //  pollTrk(状态轮询) / autoQuota / autoBackup 常在数秒内对同一账号重复拉列表 →
+  //  命中 TTL 直接复用; 同一账号同一时刻仅一条真实请求在途, 其余共享同一 Promise。
+  var _lsCache = Object.create(null);   // key → { ts, data }
+  var _lsInflight = Object.create(null);// key → Promise
+  var _LS_TTL = 5000;                   // 5s: 足够吸收并发去重, 又不至于明显过期
+  async function _listSessionsRaw(acc, limit) {
     var url = APP + "/api/org-" + bare(acc.orgId) + "/v2sessions";
     if (limit) url += "?limit=" + limit;
     var last = null;
@@ -43,24 +49,42 @@
     }
     return { ok: false, status: last && last.status, error: errOf(last) };
   }
-  async function sessionDetail(acc, sid) {
-    var r = await jget(APP + "/api/sessions/" + sid, acc);
+  function listSessions(acc, limit, opts) {
+    if (!acc || !acc.auth1 || !acc.orgId) return Promise.resolve({ ok: false, error: "需先登录(auth1)" });
+    var key = (acc.id || acc.orgId) + "|" + (limit || "");
+    var useCache = !opts || !opts.fresh;   // 默认走缓存+在途去重; opts.fresh=true 强制绕过 (用户手动刷新时)
+    var now = Date.now();
+    if (useCache) {
+      var c = _lsCache[key];
+      if (c && (now - c.ts) < _LS_TTL && c.data && c.data.ok) return Promise.resolve(c.data);
+      if (_lsInflight[key]) return _lsInflight[key];   // 同账号同刻仅一条真实请求, 其余共享
+    }
+    var p = _listSessionsRaw(acc, limit).then(function (res) {
+      if (res && res.ok) _lsCache[key] = { ts: Date.now(), data: res };
+      delete _lsInflight[key];
+      return res;
+    }, function (e) { delete _lsInflight[key]; throw e; });
+    if (useCache) _lsInflight[key] = p;
+    return p;
+  }
+  async function sessionDetail(acc, sid, low) {
+    var r = await jget(APP + "/api/sessions/" + sid, acc, low);
     if (r.status === 200) return { ok: true, session: r.json };
     return { ok: false, status: r.status, error: errOf(r) };
   }
-  async function sessionMessages(acc, sid) {
-    var r = await jget(APP + "/api/sessions/" + sid + "/messages", acc);
+  async function sessionMessages(acc, sid, low) {
+    var r = await jget(APP + "/api/sessions/" + sid + "/messages", acc, low);
     if (r.status === 200) { var j = r.json || {}; return { ok: true, messages: Array.isArray(j.messages) ? j.messages : (Array.isArray(j) ? j : []) }; }
     return { ok: true, messages: [] };
   }
 
   // 事件流 (SSE/ndjson) → 有序去重事件 (会话全息真源)
-  async function sessionEvents(acc, sid) {
+  async function sessionEvents(acc, sid, low) {
     var url = APP + "/api/events/" + sid + "/stream";
     var headers = Object.assign(H(acc), { Accept: "text/event-stream" });
     var raw = "";
     for (var a = 0; a < 3; a++) {
-      var res = await C.httpReq("GET", url, headers, "");
+      var res = await C.httpReq("GET", url, headers, "", low);
       if (res.status === 200 && typeof res.text === "string") { raw = res.text; break; }
       if (a < 2) await new Promise(function (k) { setTimeout(k, 1500 * (a + 1)); });
     }
@@ -221,13 +245,14 @@
   }
 
   // 一键导出会话 MD (kind: conversation | worklog), 事件流为先, /messages 兜底
-  async function exportSession(acc, sid, kind) {
+  //  low=true → 备份场景, 全程低优先, 不抢交互请求 (登录/额度/状态轮询)。
+  async function exportSession(acc, sid, kind, low) {
     kind = kind || "conversation";
-    var detail = await sessionDetail(acc, sid);
+    var detail = await sessionDetail(acc, sid, low);
     var title = (detail.ok && detail.session && detail.session.title) || sid;
-    var ev = await sessionEvents(acc, sid);
+    var ev = await sessionEvents(acc, sid, low);
     if (ev.ok && ev.events.length) return { ok: true, title: title, md: kind === "worklog" ? buildWorklog(title, sid, ev.events) : buildConversation(title, sid, ev.events), events: ev.events.length };
-    var msgs = await sessionMessages(acc, sid);
+    var msgs = await sessionMessages(acc, sid, low);
     var lines = ["# " + title, "", "> Session: " + sid, ""];
     (msgs.messages || []).forEach(function (m) {
       var role = m.role || m.type || "unknown"; var content = m.content || m.text || m.message || "";
@@ -245,15 +270,27 @@
     return { ok: false, status: last };
   }
 
-  // 备份单号: 列出会话 → 逐条导出对话 MD → 汇总
+  // 并发限流器: 同时最多 conc 个任务在跑, 其余排队 (备份不至于一次性轰出几百请求)。
+  async function _pool(items, conc, fn) {
+    var i = 0, out = new Array(items.length);
+    async function worker() { while (i < items.length) { var idx = i++; try { out[idx] = await fn(items[idx], idx); } catch (e) { out[idx] = undefined; } } }
+    var ws = []; for (var w = 0; w < Math.min(conc, items.length); w++) ws.push(worker());
+    await Promise.all(ws);
+    return out;
+  }
+  // 备份单号: 列出会话 → 并发(限 3 路·低优先)导出对话 MD → 汇总。
+  //  全程低优先 → 自动备份在后台慢慢跑, 登录/额度/状态轮询始终即时, 多账号并发不再卡顿。
   async function backupAccount(acc, kind) {
     var ls = await listSessions(acc, 200);
     if (!ls.ok) return { ok: false, error: ls.error };
-    var out = [];
+    var sids = [];
     for (var i = 0; i < ls.sessions.length; i++) {
-      var s = ls.sessions[i]; var sid = s.devin_id || s.session_id || s.id; if (!sid) continue;
-      try { var e = await exportSession(acc, sid, kind); out.push({ sid: sid, title: e.title, md: e.md }); } catch (er) {}
+      var s = ls.sessions[i]; var sid = s.devin_id || s.session_id || s.id; if (sid) sids.push(sid);
     }
+    var res = await _pool(sids, 3, async function (sid) {
+      var e = await exportSession(acc, sid, kind, true); return { sid: sid, title: e.title, md: e.md };
+    });
+    var out = res.filter(function (x) { return x && x.md != null; });
     return { ok: true, count: out.length, sessions: out };
   }
 

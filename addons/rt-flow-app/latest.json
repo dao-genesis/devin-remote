@@ -1,6 +1,6 @@
 {
-  "versionCode": 66,
-  "versionName": "0.17.9",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.17.9/DevinCloud-mobile-v0.17.9.apk",
-  "notes": "v0.17.9 · 根治「放久了网页交互/下载失效, 必须刷新一次才好」: 根因是长时间后台/重新挂载后 Chromium 把页面 visibilityState 卡在 hidden(视图其实在前台·有焦点), 导致 setTimeout/setInterval/requestAnimationFrame 全被冻结 → 看着正常能滚动, 但点下载等依赖异步的交互一律失效。修法: 回到前台/切标签时 onResume()+resumeTimers() 唤醒, 并跨帧切一下视图可见性逼 Chromium 重算页面可见性(不重载·不丢滚动/表单); 另加前台看门狗每 8s 自愈卡 hidden 的当前页 → 今后无需手动刷新。\n· 含 0.17.8 三连击刷新、0.17.7「进入」按钮+工具栏收纳、0.17.6 全服通 6 项 UX 修复等全部改动。签名一致, 原地覆盖升级不丢数据。"
+  "versionCode": 67,
+  "versionName": "0.18.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.18.0/DevinCloud-mobile-v0.18.0.apk",
+  "notes": "v0.18.0 · 网络层根治两大问题。①去中心化直连(无感等效内网穿透): 本地 server 改绑 0.0.0.0, 控制端与手机同一 Wi-Fi/热点时直接 http://<手机局域网IP>:<port> 连本机, 零中继·零隧道·零云依赖(仍受 Bearer Token+端到端加密双保护); 穿透面板新增「局域网直连」开关(默认常驻开)与一键复制接入信息, 快速接入卡片同网时自动附局域网直连入口。②多账号并发卡顿根治: 原生 HTTP 桥拆双线程池(交互池/下载池隔离, 备份大文件下载永不抢占登录·额度·状态轮询); JS 出站调度器双通道限流+优先级队列(交互高优·备份低优); 会话列表 5s 缓存+在途去重削减重复请求; 自动备份并发限流(3路低优)且让路给交互, 三大心跳错峰抖动 → 多账号同时查看状态/自动备份时不再卡顿。"
 }

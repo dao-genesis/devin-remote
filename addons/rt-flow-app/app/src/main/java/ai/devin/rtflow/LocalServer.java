@@ -12,10 +12,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * LocalServer · 路线B 去中心化隧道的本地入站 HTTP server (仅绑 127.0.0.1)。
+ * LocalServer · 去中心化直连的本地入站 HTTP server (绑 0.0.0.0 = 回环 + 局域网)。
  *
- *  设备自带的 cloudflared 快速隧道把本 server 暴露成 https://xxx.trycloudflare.com,
- *  外部驱动 (A群) 直连该 URL —— 完全不经任何共享 Worker, 每设备一条独立免费隧道。
+ *  两种直连均经本 server, 完全不经任何共享 Worker:
+ *   ① 局域网直连 (无感等效内网穿透): 控制端与手机同一 Wi-Fi/热点时, 直接 http://<手机局域网IP>:<port>
+ *      连本机 —— 零中继、零隧道、零云依赖, 真·直连「我当前设备」。
+ *   ② 设备自带 cloudflared 快速隧道把本 server 暴露成 https://xxx.trycloudflare.com (跨网络兜底)。
  *
  *  协议与 dao-relay Worker 完全一致 (driver 工具无需改动):
  *    POST /relay/<session>   Authorization: Bearer <token>
@@ -37,17 +39,23 @@ public final class LocalServer {
     private volatile int port = -1;
     private volatile boolean running = false;
     private Thread acceptThread;
-    private final ExecutorService pool = Executors.newCachedThreadPool();
+    // 有界线程池: 入站请求会阻塞等引擎 dispatch (≤60s), 引擎本身串行; 固定 12 线程足够且杜绝线程暴涨。
+    private final ExecutorService pool = Executors.newFixedThreadPool(12, r -> {
+        Thread t = new Thread(r, "rtflow-localsrv-w");
+        t.setDaemon(true);
+        return t;
+    });
 
     public LocalServer(Dispatcher disp) { this.disp = disp; }
 
     public int getPort() { return port; }
     public boolean isRunning() { return running; }
 
-    /** 绑 127.0.0.1 临时端口并起 accept 线程。失败抛异常。 */
+    /** 绑 0.0.0.0 (回环 + 局域网) 临时端口并起 accept 线程。失败抛异常。
+     *  绑全网卡使局域网内控制端可直连本机 (Bearer + E2E 双重保护); cloudflared 仍可经回环接入。 */
     public synchronized int start() throws Exception {
         if (running) return port;
-        server = new ServerSocket(0, 64, InetAddress.getByName("127.0.0.1"));
+        server = new ServerSocket(0, 128, InetAddress.getByName("0.0.0.0"));
         port = server.getLocalPort();
         running = true;
         acceptThread = new Thread(this::acceptLoop, "rtflow-localsrv");
