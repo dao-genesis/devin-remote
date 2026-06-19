@@ -93,6 +93,17 @@ public class RelayService extends Service {
                 localServer = new LocalServer(new LocalServer.Dispatcher() {
                     public String token() { return relayToken(); }
                     public String dispatch(String f) throws Exception { return dispatchLocal(f); }
+                    // 浏览器控制台: 根路径/「/app」/「/webshell.html」均回 webshell.html
+                    // → 任意设备浏览器打开本机入口即得全功能控制台 (手机=中枢, 浏览器=瘦客户端)。
+                    public String staticHtml(String path) {
+                        if (path == null) return null;
+                        if (path.equals("/") || path.equals("/app") || path.equals("/app/")
+                                || path.equals("/webshell.html") || path.equals("/console")) {
+                            String h = readAsset("engine/webshell.html");
+                            return (h != null && !h.isEmpty()) ? h : null;
+                        }
+                        return null;
+                    }
                 });
                 localPort = localServer.start();
                 android.util.Log.i("RTFlowTunnel", "local server on 0.0.0.0:" + localPort);
