@@ -102,7 +102,7 @@ let _autoHealAttempts = 0;
 let _autoHealTimer: ReturnType<typeof setTimeout> | null = null;
 const AUTO_HEAL_DELAYS = [3000, 8000, 20000, 45000];
 // 归一 · 帛书「道生一」— 内联 rt-flow 运行时句柄(左·RT Flow 账号池/切号 入 dao-vsix 本体)
-interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; }
+interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; openMultiInstance?: (opts: { email?: string; devinId?: string; password?: string }) => Promise<{ ok: boolean; error?: string; reused?: boolean }>; }
 interface RtflowModule { activate?: (ctx: vscode.ExtensionContext) => unknown; deactivate?: () => unknown; _internals?: RtflowInternals; }
 let _rtflowModule: RtflowModule | null = null;
 
@@ -565,7 +565,8 @@ export async function activate(context: vscode.ExtensionContext) {
                 const ok = launchIsolatedBrowser(url, email || 'default');
                 vscode.window.showInformationMessage(ok ? ('🌐 系统浏览器已路由官网: ' + (email || '当前账号')) : '浏览器启动失败');
             } else {
-                openRoutedAccountPanel(context, email, url);
+                const r = await tryRtflowMultiInstance({ email });
+                if (!r || !r.ok) openRoutedAccountPanel(context, email, url);
             }
         }),
         // 近期对话 · 多实例打开「具体对话」: 路由该账号官网到 /sessions/<devinId> (独立 webview 标签·按 email+会话复用)。
@@ -581,7 +582,8 @@ export async function activate(context: vscode.ExtensionContext) {
                 const ok = launchIsolatedBrowser(url, (email || 'default') + '·' + sid);
                 vscode.window.showInformationMessage(ok ? ('🌐 系统浏览器已打开对话: ' + sid) : '浏览器启动失败');
             } else {
-                openRoutedAccountPanel(context, email, url, sid);
+                const r = await tryRtflowMultiInstance({ email, devinId: sid });
+                if (!r || !r.ok) openRoutedAccountPanel(context, email, url, sid);
             }
         }),
         vscode.commands.registerCommand('dao.openDashboard', () => {
@@ -4570,6 +4572,18 @@ async function ensureRoutedServerFast(context: vscode.ExtensionContext): Promise
     try { if (!ws.port) await startServer(context); } catch { /* 守柔 */ }
     const hasInjectableAuth1 = !!ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$');
     if (!hasInjectableAuth1) { ensureRoutedAutoLogin(context).catch(() => { /* 守柔: 后台自愈 */ }); }
+}
+// 归一 · 优先委托 rt-flow「单面板多窗口」多实例 (每账号独立端口反代·真 origin 隔离·各登各号)。
+//   成功 → {ok:true}; rt-flow 不可用或该账号无 auth1 → null/{ok:false} → 调用方退回本地反代面板。
+async function tryRtflowMultiInstance(arg: { email?: string; devinId?: string }): Promise<{ ok: boolean; error?: string } | null> {
+    try {
+        const open = _rtflowModule && _rtflowModule._internals && _rtflowModule._internals.openMultiInstance;
+        if (typeof open !== 'function') return null;
+        const r = await open({ email: arg.email || '', devinId: arg.devinId || '' });
+        return r || { ok: false };
+    } catch (e) {
+        return { ok: false, error: (e as Error)?.message || 'throw' };
+    }
 }
 // 道·多账号并行: 路由 URL 附 ?dao_acct=<email> → 反代据此注入该账号 auth1(见 devinCloudProxyRoute)。
 // 仅当走本地反代(localhost)且该账号已持久化真 auth1 时附加; 否则退回当前账号路由 URL。
