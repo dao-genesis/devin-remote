@@ -373,6 +373,19 @@ export async function activate(context: vscode.ExtensionContext) {
         if (_rtflowModule && typeof _rtflowModule.activate === 'function') {
             await Promise.resolve(_rtflowModule.activate(context));
         }
+        // 归一 · 把「全功能面板六大板块」作为同级子网页接进 rt-flow 统一外壳。
+        // 外壳经 blob-iframe + 消息中继挂载本面板 HTML, 复用 handleMiddlePanelMessage/refresh, 零重写。
+        try {
+            const int = (_rtflowModule && _rtflowModule._internals) as (RtflowInternals & { setCloudProvider?: (p: unknown) => void }) | undefined;
+            if (int && typeof int.setCloudProvider === 'function') {
+                int.setCloudProvider({
+                    buildHtml: () => getDaoCloudMiddlePanelHtml(getPanelState()),
+                    handleMessage: (m: any) => handleMiddlePanelMessage(m, context),
+                    setHostPost: (fn: ((m: any) => void) | null) => { _middlePostTarget = fn; },
+                    refresh: () => refreshDaoCloudMiddlePanel(),
+                });
+            }
+        } catch { /* 守柔 */ }
     } catch (e) {
         try { console.error('[dao-vsix] 内联 rt-flow 激活失败(守柔不阻塞):', e); } catch { /* 守柔 */ }
     }
@@ -2202,6 +2215,13 @@ function cmd(c, d) { vscode.postMessage(Object.assign({command: c}, d || {})); }
 // ═══════════════════════════════════════════════════════════
 
 let daoCloudMiddlePanel: vscode.WebviewPanel | null = null;
+// 归一 · 「全功能面板六大板块」可被 rt-flow 统一外壳以 blob-iframe 挂载为同级子网页。
+// 回推目标指针: 默认走独立面板; 外壳挂载时由 setCloudProvider.setHostPost 改指向外壳中继 → iframe。
+let _middlePostTarget: ((d: any) => void) | null = null;
+function postMiddle(d: any) {
+    if (daoCloudMiddlePanel) { try { daoCloudMiddlePanel.webview.postMessage(d); } catch { /* 守柔 */ } return; }
+    if (_middlePostTarget) { try { _middlePostTarget(d); } catch { /* 守柔 */ } }
+}
 let daoCloudMiddlePanelVisible = false;
 let sidebarCloudPanel: DaoCloudPanel | null = null;
 
@@ -3486,7 +3506,7 @@ function registerWamHost() {
         const int = _rtflowModule && _rtflowModule._internals;
         if (int && typeof int.setHostPost === 'function') {
             int.setHostPost((m: any) => {
-                try { daoCloudMiddlePanel?.webview.postMessage({ type: 'wamHost', msg: m }); } catch { /* 守柔 */ }
+                postMiddle({ type: 'wamHost', msg: m });
             });
         }
     } catch { /* 守柔 */ }
@@ -3597,7 +3617,7 @@ function daoMiddleAuthPayload(): any {
 }
 
 function refreshDaoCloudMiddlePanel() {
-    if (!daoCloudMiddlePanel) return;
+    if (!daoCloudMiddlePanel && !_middlePostTarget) return;
     const data: any = { type: 'init' };
     data.auth = daoMiddleAuthPayload();
     data.server = {
@@ -3615,11 +3635,11 @@ function refreshDaoCloudMiddlePanel() {
         const s = JSON.parse(fs.readFileSync(ws.injectStateFile, 'utf8'));
         data.inject = { secret: s.secret, knowledge: s.knowledge, playbook: s.playbook, git: s.git, timestamp: s.timestamp };
     } catch { data.inject = null; }
-    daoCloudMiddlePanel.webview.postMessage(data);
+    postMiddle(data);
 }
 
 async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionContext) {
-    const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
+    const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
     const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe'];
