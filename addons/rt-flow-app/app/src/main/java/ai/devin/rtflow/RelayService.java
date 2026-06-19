@@ -156,6 +156,7 @@ public class RelayService extends Service {
             String fpath = f.optString("path", "");
             if ("/api/native".equals(fpath)) return webNative(f.optJSONObject("body"));
             if ("/api/http".equals(fpath))   return webHttp(f.optJSONObject("body"));
+            if ("/api/mirror".equals(fpath)) return webMirror(f.optJSONObject("body"));
         } catch (Exception ignored) {}
         final String reqId = "L" + System.nanoTime();
         java.util.concurrent.SynchronousQueue<String> q = new java.util.concurrent.SynchronousQueue<>();
@@ -182,6 +183,7 @@ public class RelayService extends Service {
         if (path.equals("/") || path.equals("/app") || path.equals("/app/")
                 || path.equals("/index.html") || path.equals("/console")
                 || path.equals("/shell") || path.equals("/home")) name = "app.html";
+        else if (path.equals("/mirror") || path.equals("/mirror/")) name = "mirror.html";   // 投屏镜像入口
         else if (path.startsWith("/") && path.indexOf('/', 1) < 0
                 && (path.endsWith(".html") || path.endsWith(".js"))) name = path.substring(1);
         else return null;
@@ -550,6 +552,35 @@ public class RelayService extends Service {
         } catch (Exception e) { return "{\"status\":200,\"bodyText\":\"{\\\"r\\\":null}\"}"; }
     }
 
+    /** /api/mirror — 投屏镜像: 取帧 / 标签清单 / 反向输入。任意公网/局域网浏览器经 mirror.html 调用本路由,
+     *  实时镜像并满血操控手机里那个被 app.devin.ai 信任的原生标签 (Bearer + remoteOps 双重闸门)。 */
+    private String webMirror(org.json.JSONObject body) {
+        try {
+            if (!remoteOpsEnabled) return localJson("{\"ok\":false,\"error\":\"remote_ops_disabled\",\"hint\":\"在穿透面板启用远程操控\"}");
+            MainActivity m = MainActivity.sInstance;
+            if (m == null) { wakeHostStatic(); return localJson("{\"ok\":false,\"error\":\"no_host\",\"hint\":\"软件本体被后台杀, 已尝试唤回, 稍候重试\"}"); }
+            String op = body == null ? "frame" : body.optString("op", "frame");
+            if ("tabs".equals(op)) return localJson(m.ipcMirrorTabs());
+            int tab = body == null ? -1 : body.optInt("tab", -1);
+            if ("input".equals(op)) return localJson(m.ipcMirrorInput(tab, body));
+            if ("activate".equals(op)) { m.ipcActivateTab(tab); return localJson("{\"ok\":true}"); }
+            if ("nav".equals(op)) { m.ipcNavigate(tab, body.optString("action", "reload"), body.optString("url", "")); return localJson("{\"ok\":true}"); }
+            // 默认取帧
+            int q = body == null ? 55 : body.optInt("q", 55);
+            int max = body == null ? 1080 : body.optInt("max", 1080);
+            return localJson(m.ipcMirrorFrame(tab, q, max));
+        } catch (Exception e) { return localJson("{\"ok\":false,\"error\":\"ex\"}"); }
+    }
+    /** 把一段已序列化 JSON 包成 LocalServer 期望的 {status,bodyText} 信封。 */
+    private static String localJson(String bodyJson) {
+        return "{\"status\":200,\"bodyText\":" + HttpBridge.jsonStr(bodyJson == null ? "{}" : bodyJson) + "}";
+    }
+    /** 静态唤回本体 (镜像取帧时本体被杀 → 冷启动拉起, 调用方稍候重试)。 */
+    private void wakeHostStatic() {
+        try { startActivity(new Intent(this, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP)); }
+        catch (Exception ignored) {}
+    }
     /** /api/http — 手机侧发起原生 HTTP (绕 CORS, 带账号 auth1), 阻塞拿回 {status,headers,body}。 */
     private String webHttp(org.json.JSONObject body) {
         try {

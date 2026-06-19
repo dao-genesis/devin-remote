@@ -1,6 +1,6 @@
 {
-  "versionCode": 82,
-  "versionName": "0.33.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.33.0/DevinCloud-mobile-v0.33.0.apk",
-  "notes": "v0.33.0 · 公网根挂载: 为 (源站,账号) 的根挂载端口再起一条专属 cloudflared 快速隧道 → 公网独立 https origin(根即源站根)→ 公网任意浏览器经 /pxpublic 取该 URL iframe 内嵌即享根挂载(真实路径逐字一致, 不必再用路径前缀 /px), 隧道边缘握手 ~5-20s, 失败回退 /px。延续 v0.32.0 根挂载(同机/局域网 http 直走端口根挂载)。诚实边界: app.devin.ai 这类站点的网页 SPA 仅在 localhost / *.devin.ai 源信任注入的登录态种子, 在其它公网源会跳转其自身 /auth/login(其客户端 host 校验所致, /px 同理), 故公网浏览器无法显示登录态 Devin 网页 — 此为 app.devin.ai 自身行为; 手机 APK 本体(原生 WebView 直连真实源, 头注入)与同机/localhost 网页登录态完整。WebSocket/SSE 实时流无法经 HTTP 代理。对外 curl/HTTP 契约零改动。"
+  "versionCode": 83,
+  "versionName": "0.34.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.0/DevinCloud-mobile-v0.34.0.apk",
+  "notes": "v0.34.0 · 三事合一·道法自然。① 投屏镜像(突破 app.devin.ai host 门的本源解法): 新增 /mirror 网页 + /api/mirror 路由(取帧/标签/反向输入), 把手机里那个被 app.devin.ai 信任的原生 Devin 标签实时投屏到任意公网/局域网浏览器(JPEG 帧流 + 点击/滑动/打字/回车反向注入), 于是任意设备打开镜像网址即满血操控 APK 本体的 Devin, 与手机逐像素一致 — 这是 host 门下公网满血用 Devin 的唯一可靠路径(受 Bearer Token + 远程操控开关双闸门)。② 备份「文件夹+MD」线本源化: 文件夹以每条对话的完整记录 conv-<sid>.md 为本源锚定, 同写取数指引 指引-<sid>.md + 文件夹结构说明 _说明.md; ZIP 以 对话_完整记录.md 居首; 事件流偶发回退稀疏 /messages 时重试一次取全息, manifest 记 complete 标记区分完整/稀疏并对旧备份补全指引。③ 下载彻底落地系统: 网页内/悬浮窗任何下载除进 app 下载列表外, 经 MediaStore 同步进系统「下载/最近」(Download/DevinCloud), 系统文件管理器与任意其它 App 都可见可用; 下载列表新增 分享/点开, 拖出改走系统 Uri 更可靠。延续 v0.33.0 公网根挂载与诚实边界。对外 curl/HTTP 契约零改动。"
 }

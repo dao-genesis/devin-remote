@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>投屏镜像 · Devin Cloud</title>
+<style>
+  :root{ --bg:#0e1116; --panel:#161b22; --line:#222932; --fg:#e6edf3; --sub:#8b949e; --accent:#2f81f7; }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,system-ui,"Segoe UI",sans-serif; overflow:hidden; }
+  #bar{ display:flex; align-items:center; gap:8px; padding:7px 10px; background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  #bar b{ color:#9cdcfe; font-weight:600; }
+  select,button,input{ font:13px sans-serif; color:var(--fg); background:#1b222c; border:1px solid var(--line); border-radius:8px; padding:6px 9px; outline:none; }
+  button{ cursor:pointer; }
+  button:active{ background:#243040; }
+  button.acc{ background:var(--accent); border-color:var(--accent); color:#fff; }
+  #dot{ width:9px; height:9px; border-radius:50%; background:#d29922; display:inline-block; }
+  #dot.on{ background:#3fb950; } #dot.err{ background:#f85149; }
+  #stage{ position:relative; height:calc(100% - 48px - 52px); display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  #screen{ max-width:100%; max-height:100%; touch-action:none; user-select:none; cursor:pointer; box-shadow:0 0 0 1px var(--line); background:#000; }
+  #hint{ position:absolute; color:var(--sub); font-size:13px; text-align:center; padding:0 24px; pointer-events:none; }
+  #foot{ display:flex; align-items:center; gap:7px; padding:8px 10px; background:var(--panel); border-top:1px solid var(--line); }
+  #msg{ flex:1; min-width:0; }
+  .ic{ padding:6px 11px; font-size:15px; }
+  #meta{ color:var(--sub); font-size:12px; margin-left:auto; max-width:42%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span id="dot"></span><b>投屏镜像</b>
+  <select id="tabsel" title="选择要镜像的标签"></select>
+  <button id="refreshTabs" class="ic" title="刷新标签">⟲</button>
+  <button id="navBack" class="ic" title="后退">◀</button>
+  <button id="navReload" class="ic" title="重新加载页面">⟳</button>
+  <button id="activate" class="ic" title="把该标签提到手机前台">⤒</button>
+  <select id="quality" title="清晰度/带宽">
+    <option value="40">流畅</option>
+    <option value="55" selected>均衡</option>
+    <option value="75">高清</option>
+  </select>
+  <span id="meta"></span>
+</div>
+<div id="stage">
+  <img id="screen" alt="screen" draggable="false">
+  <div id="hint">连接中…<br><small>点击画面即操控 · 下方输入框打字后回车发送</small></div>
+</div>
+<div id="foot">
+  <input id="msg" placeholder="在这里打字 → 先点上方 Devin 输入框聚焦, 再发送">
+  <button id="send" class="acc">发送</button>
+  <button id="enter" class="ic" title="回车">⏎</button>
+  <button id="bksp" class="ic" title="退格">⌫</button>
+</div>
+<script>
+(function(){
+  function qp(k){ try{ return new URLSearchParams(location.search).get(k)||""; }catch(e){ return ""; } }
+  var SESSION = qp("session") || localStorage.getItem("rtflow.rn.session") || "";
+  var TOKEN   = qp("token") || qp("t") || localStorage.getItem("rtflow.rn.token") || "";
+  var ENDPOINT= (qp("endpoint") || location.origin).replace(/\/+$/,"");
+  if(SESSION) localStorage.setItem("rtflow.rn.session", SESSION);
+  if(TOKEN)   localStorage.setItem("rtflow.rn.token", TOKEN);
+  var RELAY = ENDPOINT + "/relay/" + encodeURIComponent(SESSION);
+
+  var $ = function(id){ return document.getElementById(id); };
+  var dot=$("dot"), meta=$("meta"), hint=$("hint"), img=$("screen"), tabsel=$("tabsel"), quality=$("quality");
+  var tab = parseInt(qp("tab")||"-1",10); if(isNaN(tab)) tab=-1;
+  var alive=true, lastOk=0, polling=false;
+
+  async function mirror(body){
+    var r = await fetch(RELAY, { method:"POST",
+      headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+TOKEN },
+      body: JSON.stringify({ path:"/api/mirror", method:"POST", body:body }) });
+    var t = await r.text();
+    try{ return JSON.parse(t); }catch(e){ return { ok:false, error:"bad_json", raw:t }; }
+  }
+  function setDot(s){ dot.className = s||""; }
+
+  async function loadTabs(){
+    try{
+      var d = await mirror({ op:"tabs" });
+      tabsel.innerHTML = "";
+      var list = (d && d.tabs) || [];
+      // 默认优先镜像 Devin 标签 (app.devin.ai)
+      var pick = tab;
+      list.forEach(function(t){
+        var o=document.createElement("option"); o.value=t.i;
+        var label = (t.title||("标签 "+(t.i+1)));
+        if(/devin\.ai/.test(t.url||"")) label = "★ "+label;
+        o.textContent = label.length>26?label.slice(0,26)+"…":label;
+        tabsel.appendChild(o);
+        if(pick<0 && /devin\.ai/.test(t.url||"")) pick=t.i;
+      });
+      if(pick<0 && list.length) pick = (d.active>=0?d.active:list[0].i);
+      if(pick>=0){ tab=pick; tabsel.value=String(pick); }
+    }catch(e){}
+  }
+
+  async function tick(){
+    if(!alive || polling) return;
+    if(tab<0){ schedule(700); return; }
+    polling=true;
+    try{
+      var q = parseInt(quality.value,10)||55;
+      var d = await mirror({ op:"frame", tab:tab, q:q, max:1100 });
+      if(d && d.ok && d.jpeg){
+        img.src = "data:image/jpeg;base64," + d.jpeg;
+        img.dataset.w = d.w; img.dataset.h = d.h;
+        hint.style.display="none"; setDot("on"); lastOk=Date.now();
+        meta.textContent = (d.title||"") + (d.url?("  ·  "+shortUrl(d.url)):"");
+      }else{
+        setDot("err");
+        hint.style.display=""; hint.innerHTML = (d&&d.hint)? d.hint : ((d&&d.error)||"取帧失败") ;
+      }
+    }catch(e){ setDot("err"); hint.style.display=""; hint.textContent="连接中断, 重试中…"; }
+    polling=false;
+    // 帧间隔: 成功则紧凑, 失败则退避
+    schedule(Date.now()-lastOk < 4000 ? 480 : 1500);
+  }
+  var timer=null;
+  function schedule(ms){ clearTimeout(timer); timer=setTimeout(tick, ms); }
+  function shortUrl(u){ try{ var x=new URL(u); return x.host + (x.pathname.length>1?x.pathname:""); }catch(e){ return u; } }
+
+  // 坐标 → 归一化 (相对图像显示区, 与设备像素无关)
+  function norm(ev){
+    var r = img.getBoundingClientRect();
+    var cx = (ev.touches&&ev.touches[0]?ev.touches[0].clientX:ev.clientX);
+    var cy = (ev.touches&&ev.touches[0]?ev.touches[0].clientY:ev.clientY);
+    var nx = (cx - r.left)/r.width, ny = (cy - r.top)/r.height;
+    return { nx:Math.max(0,Math.min(1,nx)), ny:Math.max(0,Math.min(1,ny)) };
+  }
+  function sendInput(o){ o.op="input"; o.tab=tab; mirror(o).then(function(){ schedule(60); }); }
+
+  // 点击操控
+  img.addEventListener("click", function(ev){ var n=norm(ev); sendInput({ action:"click", nx:n.nx, ny:n.ny }); });
+
+  // 触摸/鼠标拖动 → 滚动
+  var dragY=null, dragMoved=false;
+  function dstart(ev){ dragY=(ev.touches&&ev.touches[0]?ev.touches[0].clientY:ev.clientY); dragMoved=false; }
+  function dmove(ev){
+    if(dragY==null) return;
+    var y=(ev.touches&&ev.touches[0]?ev.touches[0].clientY:ev.clientY);
+    var dy=dragY-y;
+    if(Math.abs(dy)>14){ var r=img.getBoundingClientRect(); var scale=(parseFloat(img.dataset.h)||r.height)/r.height;
+      sendInput({ action:"scroll", dy: Math.round(dy*scale) }); dragY=y; dragMoved=true; ev.preventDefault(); }
+  }
+  function dend(){ dragY=null; }
+  img.addEventListener("touchstart", dstart, {passive:true});
+  img.addEventListener("touchmove", dmove, {passive:false});
+  img.addEventListener("touchend", dend);
+  img.addEventListener("wheel", function(ev){ sendInput({ action:"scroll", dy: Math.round(ev.deltaY) }); ev.preventDefault(); }, {passive:false});
+  // 鼠标拖动滚动 (桌面端): 仅当移动超过阈值才视为滚动, 否则 click 已处理
+  var mdown=false;
+  img.addEventListener("mousedown", function(ev){ mdown=true; dstart(ev); });
+  window.addEventListener("mousemove", function(ev){ if(mdown) dmove(ev); });
+  window.addEventListener("mouseup", function(){ mdown=false; dend(); });
+
+  // 打字: 直接把整段文本灌入当前聚焦的输入框
+  $("send").addEventListener("click", function(){
+    var v=$("msg").value; if(!v) return;
+    sendInput({ action:"settext", text:v });
+    $("msg").value="";
+  });
+  $("enter").addEventListener("click", function(){ sendInput({ action:"key", key:"Enter" }); });
+  $("bksp").addEventListener("click", function(){ sendInput({ action:"key", key:"Backspace" }); });
+  $("msg").addEventListener("keydown", function(ev){ if(ev.key==="Enter"){ ev.preventDefault();
+    var v=$("msg").value; if(v){ sendInput({ action:"settext", text:v }); $("msg").value=""; }
+    setTimeout(function(){ sendInput({ action:"key", key:"Enter" }); }, 220);
+  }});
+
+  tabsel.addEventListener("change", function(){ tab=parseInt(tabsel.value,10); schedule(40); });
+  $("refreshTabs").addEventListener("click", loadTabs);
+  $("navBack").addEventListener("click", function(){ sendInput({ action:"back" }); });
+  $("navReload").addEventListener("click", function(){ mirror({ op:"nav", tab:tab, action:"reload" }); });
+  $("activate").addEventListener("click", function(){ mirror({ op:"activate", tab:tab }); });
+
+  if(!SESSION || !TOKEN){ hint.innerHTML="缺少会话/令牌参数<br><small>请从手机「内网穿透」面板复制带 token 的镜像链接打开</small>"; setDot("err"); return; }
+  loadTabs().then(function(){ schedule(120); });
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden) schedule(80); });
+})();
+</script>
+</body>
+</html>

@@ -118,6 +118,17 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 </div>
 </div>
 
+<!-- 模块1.8: 投屏镜像 (任意公网设备实时看到并操控手机里被 app.devin.ai 信任的原生标签) -->
+<div class="section">
+<h3>📲 投屏镜像 · 任意设备浏览器满血操控本机 Devin</h3>
+<div class="muted"><b>道法自然·突破 host 门</b>: <code>app.devin.ai</code> 仅信任 <code>localhost/*.devin.ai</code> 源的登录态, 公网源被它自身挡死。镜像绕过这一硬限——把手机里那个<b>已登录的原生 Devin 标签</b>实时<b>投屏</b>到任意公网/局域网浏览器(JPEG 帧流 + 反向输入), 于是任意设备打开下方网址即<b>满血使用 APK 本体的 Devin</b>(看会话、点按钮、打字发消息), 与手机本体逐像素一致。<br>点击画面=点按, 拖动=滚动, 下方输入框打字→回车发送。受 Bearer Token + 远程操控开关双重保护; 网址含 Token, 仅发可信方。</div>
+<div id="mirrorUrls" class="url" style="margin-top:6px">—</div>
+<div class="row">
+  <button onclick="openMirror()" class="acc" style="background:#238636">▶ 在本机打开镜像</button>
+  <button onclick="copyMirror()">📋 复制镜像网址(含Token)</button>
+</div>
+</div>
+
 <!-- 模块2: CloudFlare 命名隧道 (可选) -->
 <div class="section">
 <h3>🔑 命名隧道 · 固定域名（可选）</h3>
@@ -627,6 +638,37 @@ function copyWebConsoleBare(){
   _result('webConsole', true, '已复制纯网址(不含Token, 打开后需手动填 Session/Token)');
 }
 renderWebConsole(); setInterval(renderWebConsole, 4000);
+// ── 投屏镜像 (公网/局域网浏览器实时镜像并操控某原生标签; 突破 app.devin.ai host 门) ──
+function _mirrorUrl(base, withTok){
+  var c=_conn(); var qs="?session="+encodeURIComponent(c.session||"");
+  if(withTok) qs+="&token="+encodeURIComponent(c.token||"");
+  return base+"/mirror"+qs;
+}
+function renderMirror(){
+  var el=document.getElementById('mirrorUrls'); if(!el) return;
+  var bases=_webConsoleBases();
+  if(!bases.length){ el.textContent='(等待隧道或局域网地址…开启「局域网直连」或等 cloudflared 就绪)'; return; }
+  el.textContent=bases.map(function(b){return _mirrorUrl(b,true);}).join("\n");
+}
+function openMirror(){
+  // 本机打开优先走回环(同机直连, 不依赖隧道/局域网就绪); 端口取自局域网直连状态
+  var port=(_lan().port||0); var bases=_webConsoleBases();
+  var base = port>0 ? ("http://127.0.0.1:"+port) : (bases[0]||"");
+  if(!base){ _result('mirror', false, '暂无可用入口 (开启局域网直连或等隧道就绪)'); return; }
+  var url=_mirrorUrl(base,true);
+  try{ if(N.openTab){ N.openTab(url); } else { window.open(url,'_blank'); } }catch(e){ try{ window.open(url,'_blank'); }catch(_){} }
+  _result('mirror', true, '已在新标签打开投屏镜像 (本机回环直连)');
+}
+function copyMirror(){
+  var bases=_webConsoleBases();
+  if(!bases.length){ _result('mirror', false, '暂无可用入口 (开启局域网直连或等 cloudflared 就绪)'); return; }
+  var lines=["═══ Devin Cloud · 投屏镜像 (任意设备浏览器实时操控本机 Devin) ═══"];
+  bases.forEach(function(b){ lines.push("镜像: "+_mirrorUrl(b,true)); });
+  lines.push(""); lines.push("(网址含 Session+Token=完整接入凭证, 仅发可信方; 需保持手机端「远程操控」开启)");
+  try{N.clip&&N.clip(lines.join("\n"));}catch(e){}
+  _result('mirror', true, '已复制投屏镜像网址(含Token, 任意设备浏览器打开即可操控本机 Devin)');
+}
+renderMirror(); setInterval(renderMirror, 4000);
 function copyLanAccess(){
   var l=_lan(), c=_conn(); var urls=(l.urls||[]);
   if(!urls.length){ _result('copyLan', false, '暂无局域网地址 (请确认已连 Wi-Fi 且局域网直连已开)'); return; }

@@ -326,10 +326,13 @@ async function dlZip(idx){
   var it=REC[idx]; if(!it) return; toast("打包全部文件…");
   try{
     var files=[];
+    // 本源核心: 完整对话记录 MD (整条对话的全过程/全流程) — 放首位锚定; 其余皆辅助锚定它
     var conv=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
-    if(conv.ok) files.push({name:"conversation.md", data:conv.md});
+    if(conv.ok) files.push({name:"对话_完整记录.md", data:conv.md});
+    // 取数指引 MD: 账号/密码/Session ID/提取流程/中继 — 据此可随时整体重新取回
+    try{ var guide=window.Native&&window.Native.accessGuideMd?window.Native.accessGuideMd(JSON.stringify(it.acc), it.sid, conv.title||it.title||it.sid):""; if(guide) files.push({name:"取数指引.md", data:guide}); }catch(e){}
     var wl=await DaoCloud.exportSession(it.acc, it.sid, "worklog");
-    if(wl.ok) files.push({name:"worklog.md", data:wl.md});
+    if(wl.ok) files.push({name:"工作日志.md", data:wl.md});
     var ev=null;
     try{ ev=await DaoCloud.sessionEvents(it.acc, it.sid); if(ev&&ev.ok) files.push({name:"events.json", data:JSON.stringify(ev.events||[],null,2)}); }catch(e){}
     try{
@@ -337,7 +340,7 @@ async function dlZip(idx){
       if(cf&&cf.files&&cf.files.length){ cf.files.forEach(function(x){ var p=(x.path||("_unpathed/"+x.key)).replace(/^\/+/,""); files.push({name:"files/"+p, b64:x.b64}); }); }
       if(cf&&cf.index&&cf.index.length) files.push({name:"files/_index.json", data:JSON.stringify(cf.index,null,2)});
     }catch(e){}
-    files.push({name:"meta.json", data:JSON.stringify({account:it.acc.email,accountNo:it.no,session:it.sid,title:it.title,status:it.status,exportedAt:new Date().toISOString()},null,2)});
+    files.push({name:"_meta.json", data:JSON.stringify({account:it.acc.email,accountNo:it.no,session:it.sid,title:it.title,status:it.status,anchor:"对话_完整记录.md",exportedAt:new Date().toISOString()},null,2)});
     var zipName=it.no+"_"+safeName(it.acc.email||it.acc.id)+"_"+safeName(it.title||it.sid)+".zip";
     var b64=window.buildZipBase64(files);
     var path=""; try{ path=N.saveBase64File ? N.saveBase64File(zipName, b64) : ""; }catch(e){}
