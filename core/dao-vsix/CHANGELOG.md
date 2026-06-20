@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.47.0
+- 归一化收口：六大板块新增「🖥️ 操作电脑本体」(getDaoCloudMiddlePanelHtml 增 `computer` solo 板块 + rComputer 客户端 + 宿主 compInfo/compRun/compTerminal/compOpenFile/compReveal 处理)
+  - 本机信息 + 运行命令(工作目录内 child_process.exec·回显 stdout/stderr/退出码) + 送入集成终端 + 编辑器打开 + 系统资源管理器定位
+  - 把整个软件当浏览器供 MCP/用户驱动本机；与公网穿透板块配合可远端代操作
+- 同步 rt-flow v4.23.0（vendored `rtflow/extension.js`）：归一外壳菜单/主页新增「操作电脑本体」板块入口
+
 ## 3.46.0
 - 同步 rt-flow v4.22.0（vendored `rtflow/extension.js`）：用户脚本/扩展 — 对接 Chrome 扩展体系(content_scripts·非油猴)
   - 用户脚本/扩展管理器(汉堡「🔌 用户脚本 / 扩展」)：新建/编辑/启用停用/删除；导入「解压扩展目录 / .crx / .zip」解析 manifest.json content_scripts
