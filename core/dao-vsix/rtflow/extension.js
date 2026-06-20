@@ -1836,6 +1836,16 @@ function _wireMultiPanel(panel) {
         return;
       }
       if (m.type === "favAdd") {
+        if (m.board) {
+          const bkey = "board:" + m.board;
+          const bfavs = _getMultiFavs();
+          if (!bfavs.some((f) => f.key === bkey)) {
+            bfavs.push({ key: bkey, label: m.label || ("板块·" + m.board), board: m.board, kind: "board" });
+            _setMultiFavs(bfavs); _toast("⭐ 已收藏 · " + (m.label || m.board));
+          }
+          try { panel.webview.postMessage({ type: "favs", list: _getMultiFavs() }); } catch (e) {}
+          return;
+        }
         const t = _multiTabs.get(m.id); if (!t) return;
         const favs = _getMultiFavs();
         const key = String(t.email).toLowerCase() + "|" + (t.devinId || "home");
