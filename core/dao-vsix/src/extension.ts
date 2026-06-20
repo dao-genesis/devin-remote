@@ -396,7 +396,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const int = (_rtflowModule && _rtflowModule._internals) as (RtflowInternals & { setCloudProvider?: (p: unknown) => void }) | undefined;
             if (int && typeof int.setCloudProvider === 'function') {
                 int.setCloudProvider({
-                    buildHtml: () => getDaoCloudMiddlePanelHtml(getPanelState()),
+                    buildHtml: (board?: string) => getDaoCloudMiddlePanelHtml(getPanelState(), board),
                     handleMessage: (m: any) => handleMiddlePanelMessage(m, context),
                     setHostPost: (fn: ((m: any) => void) | null) => { _middlePostTarget = fn; },
                     refresh: () => refreshDaoCloudMiddlePanel(),
@@ -2881,8 +2881,11 @@ function startBridgeLivenessLoop(context: vscode.ExtensionContext): void {
     context.subscriptions.push({ dispose: () => { if (_bridgeLivenessTimer) { clearInterval(_bridgeLivenessTimer); _bridgeLivenessTimer = null; } } });
 }
 
-function getDaoCloudMiddlePanelHtml(st: any): string {
+function getDaoCloudMiddlePanelHtml(st: any, soloBoard?: string): string {
     const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, injecting, bridge, hostCaps } = st;
+    // 归一·分而治之: 单板块模式 — 归一外壳为「六大板块」各开一张独立子网页(各自一个 iframe),
+    // 每张只锁定渲染一个板块并隐藏左侧导航条 → 板块不再挤在一个全功能面板里, 真正网页套网页·平级并排。
+    const _solo = ['overview', 'switch', 'bridge', 'backups', 'inject', 'mcp'].includes(soloBoard || '') ? (soloBoard as string) : '';
     // 帛书·「道生一，一生二，二生三，三生万物」
     // Overview: Codeium API 数据（已工作 — devin-session-token$ 对 Codeium API 有效）
     // Sessions/Knowledge/Secrets/Integrations: simpleBrowser 打开 app.devin.ai（共享 Electron session）
@@ -2908,6 +2911,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .sb .ni:hover{opacity:1;background:var(--hover)}
 .sb .ni.active{opacity:1;background:var(--accent);color:#fff}
 .sb .sp{flex:1}
+body.solo .sb{display:none}
 .mn{flex:1;display:flex;flex-direction:column;overflow:hidden}
 .hd{padding:8px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0;background:var(--card)}
 .hd .t{font-size:14px;font-weight:600}
@@ -2967,7 +2971,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .mb{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 @keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 </style></head>
-<body>
+<body class="${_solo ? 'solo' : ''}">
 <div class="app">
 <nav class="sb">
 <div class="ni active" data-tab="overview" onclick="sw('overview')" title="主页 Home">🏠</div>
@@ -3033,7 +3037,7 @@ const S={
   hostCaps:${JSON.stringify(hostCaps || { appName: 'VS Code', isCascade: false, hasConvTracking: false })},
   inject:null,
   injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],automations:[],messageLimit:null,lastInjectedOrg:''},
-  tab:'overview',
+  tab:'${_solo || 'overview'}',
   data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]},
   backups:{accounts:[]},
   locks:{knowledge:[],playbooks:[],secrets:[],mcps:[]}
@@ -3632,7 +3636,7 @@ function rInject(){
   h+='<div class="br" style="margin-top:10px"><button class="btn" onclick="cmd(&#39;importCurrentToInjectProfile&#39;)">⬇️ 导入当前账号现有项</button>'+(p.enabled?'<button class="btn primary" onclick="cmd(&#39;injectCurrentNow&#39;)" title="单账号手动注入: 即便此账号曾被归零清理/出库, 也强制重注并解除自动注入抑制">▶️ 立即应用到当前账号</button><button class="btn" onclick="cmd(&#39;applyInjectProfileToAll&#39;)" title="批量自动注入: 自动跳过已被 RT Flow 归零清理/出库的账号">👥 注入到所有账号</button>':'')+'</div>';
   v.innerHTML=h;
 }
-usb();rc();
+usb();${_solo ? `try{sw('${_solo}')}catch(e){rc()}` : 'rc()'};
 </script>
 </body></html>`;
 }
