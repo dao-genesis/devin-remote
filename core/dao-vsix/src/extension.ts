@@ -110,7 +110,7 @@ let _autoHealAttempts = 0;
 let _autoHealTimer: ReturnType<typeof setTimeout> | null = null;
 const AUTO_HEAL_DELAYS = [3000, 8000, 20000, 45000];
 // 归一 · 帛书「道生一」— 内联 rt-flow 运行时句柄(左·RT Flow 账号池/切号 入 dao-vsix 本体)
-interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; openMultiInstance?: (opts: { email?: string; devinId?: string; password?: string; path?: string; label?: string }) => Promise<{ ok: boolean; error?: string; reused?: boolean }>; }
+interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; openShellHome?: () => Promise<{ ok: boolean; error?: string }>; openMultiInstance?: (opts: { email?: string; devinId?: string; password?: string; path?: string; label?: string }) => Promise<{ ok: boolean; error?: string; reused?: boolean }>; }
 interface RtflowModule { activate?: (ctx: vscode.ExtensionContext) => unknown; deactivate?: () => unknown; _internals?: RtflowInternals; }
 let _rtflowModule: RtflowModule | null = null;
 
@@ -619,9 +619,15 @@ export async function activate(context: vscode.ExtensionContext) {
         //   6 大板块 = 外壳左上角 ☰ 菜单页(经该账号反代加载真实网页)。rt-flow 不可用时回退老全功能面板。
         vscode.commands.registerCommand('dao.openUnifiedShell', async () => {
             await ensureRoutedServerFast(context);
-            const email = (ws.devinEmail || '').trim();
-            const r = await tryRtflowMultiInstance({ email });
-            if (!r || !r.ok) toggleDaoCloudMiddlePanel(context);
+            // 归一 · 冷启动落「六合板块主页」(home), 不再默认开账号 Devin 对话框(无意义空页)。
+            //   已保存标签由序列化器还原(状态保留)。rt-flow 不可用时回退老全功能面板。
+            const int = (_rtflowModule && _rtflowModule._internals) as RtflowInternals | undefined;
+            if (int && typeof int.openShellHome === 'function') {
+                const r = await int.openShellHome();
+                if (!r || !r.ok) toggleDaoCloudMiddlePanel(context);
+            } else {
+                toggleDaoCloudMiddlePanel(context);
+            }
         }),
         // 道法自然 · 右下角 RT Flow 按钮 → 打开全功能面板并直达「切号」模块(第2模块)。
         vscode.commands.registerCommand('dao.openSwitchModule', () => {

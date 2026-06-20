@@ -341,6 +341,10 @@ const _multiTabs = new Map(); // id -> {id,label,url,email,devinId,accNo,dollars
 // 归一 · 「全功能面板六大板块」提供者 (由 dao-vsix 经 _internals.setCloudProvider 注入)。
 // {buildHtml, handleMessage, setHostPost, refresh} — 外壳以 blob-iframe 挂载其 HTML 当同级子网页。
 let _cloudProvider = null;
+// 归一 · 内嵌「切号」宿主回推 (dao-vsix registerWamHost 经 _internals.setHostPost 注入)。
+//   根治: 内嵌六板里的真 WAM 切号面板靠此把广播(toast/切号动画/对话区/整页重渲)中继进 iframe,
+//   否则面板渲染后即"死页"——数据不刷新。与单独左侧面板像素级一致。
+let _hostPost = null;
 function _postMulti(m) {
   if (_multiPanel && _multiReady) {
     try { _multiPanel.webview.postMessage(m); } catch (e) {}
@@ -595,13 +599,13 @@ function navigate(v){v=(v||'').trim();if(!v)return;if(isBoard()){if(/^https?:\\/
   if(/^https?:\\/\\//i.test(v)){var o=curOrigin();if(t&&o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);spin(true);}else{vscode.postMessage({type:'openExternal',url:v});}return;}
   if(v.charAt(0)==='/'){if(t){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}return;}
   vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v)});}
-var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about'],['💻','切换 电脑版 / 手机版','toggleMode']];
+// 归一 · 设备类型自动识别 (UA / ?m=1·见 _multiShellHtml MOBILE 注入) — 移除手动「切换 电脑版/手机版」(点击会重载致整体失效)。
+var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
 function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'" data-l="'+esc(PAGES[i][1])+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
   var items=MENU.querySelectorAll('.mi');for(var j=0;j<items.length;j++){items[j].onclick=function(){MENU.className='';onPage(this.getAttribute('data-p'),this.getAttribute('data-l'));};}}
 function toggleMenu(){MENU.className=MENU.className?'':'on';}
 function onPage(p,l){if(p&&p.indexOf('board:')===0){openBoard(p.slice(6));return;}
   if(p==='newDevin'){vscode.postMessage({type:'newDevinTab'});return;}
-  if(p==='toggleMode'){try{var _u=new URL(location.href);_u.searchParams.set('m',MOBILE?'0':'1');location.href=_u.toString();}catch(e){}return;}
   if(p==='history')showHistory();else if(p==='favs')showFavs();else if(p==='userscripts')showUserscripts();else if(p==='tools')showTools();else if(p==='about')showAbout();}
 // 归一·分而治之 · 六大板块 = 与多实例账号页同级的独立子网页(各板块各自一张 iframe·网页套网页)。
 // 点某板块 → 若已挂载则切到该标签, 否则向宿主取该板块的「单板块」HTML(隐藏导航·只渲染该板块)挂一张新子网页。
@@ -634,7 +638,8 @@ function showOverlay(title,html){OVT.textContent=title;OVB.innerHTML=html;OV.cla
 function hideOverlay(){OV.className='';}
 function bindOpen(){var ob=OVB.querySelectorAll('[data-u]');for(var i=0;i<ob.length;i++){ob[i].onclick=function(){navigate(this.getAttribute('data-u'));hideOverlay();};}}
 function showHistory(){var h='';if(!history.length)h='<div class="empty">暂无浏览记录</div>';else for(var i=0;i<history.length;i++){var it=history[i];h+='<div class="li"><div class="g"><div class="t">'+esc(it.label)+'</div><div class="s">'+esc(it.url)+'</div></div><button class="b" data-u="'+esc(it.url)+'">打开</button></div>';}showOverlay('🕘 浏览历史',h);bindOpen();}
-function showFavs(){var h='';if(!favs.length)h='<div class="empty">暂无书签 · 工具条点 ☆ 收藏当前页</div>';else for(var i=0;i<favs.length;i++){var f=favs[i];h+='<div class="li"><div class="g"><div class="t">'+esc(f.label)+'</div><div class="s">#'+esc(f.accNo||'')+' '+esc(f.email||'')+'</div></div><button class="b pri" data-re-email="'+esc(f.email||'')+'" data-re-did="'+esc(f.devinId||'')+'">打开</button><button class="b" data-del="'+esc(f.key)+'">删</button></div>';}showOverlay('⭐ 书签收藏',h);
+function showFavs(){var h='';if(!favs.length)h='<div class="empty">暂无书签 · 工具条点 ☆ 收藏当前页</div>';else for(var i=0;i<favs.length;i++){var f=favs[i];var _ob=(f.kind==='board')?('<button class="b pri" data-goto-board="'+esc(f.board||'')+'">打开</button>'):('<button class="b pri" data-re-email="'+esc(f.email||'')+'" data-re-did="'+esc(f.devinId||'')+'">打开</button>');var _sub=(f.kind==='board')?'板块':('#'+esc(f.accNo||'')+' '+esc(f.email||''));h+='<div class="li"><div class="g"><div class="t">'+esc(f.label)+'</div><div class="s">'+_sub+'</div></div>'+_ob+'<button class="b" data-del="'+esc(f.key)+'">删</button></div>';}showOverlay('⭐ 书签收藏',h);
+  var gb=OVB.querySelectorAll('[data-goto-board]');for(var g=0;g<gb.length;g++){gb[g].onclick=function(){try{openBoard(this.getAttribute('data-goto-board'));}catch(e){}hideOverlay();};}
   var ob=OVB.querySelectorAll('[data-re-email]');for(var a=0;a<ob.length;a++){ob[a].onclick=function(){vscode.postMessage({type:'reopen',email:this.getAttribute('data-re-email'),devinId:this.getAttribute('data-re-did')});hideOverlay();};}
   var db=OVB.querySelectorAll('[data-del]');for(var b=0;b<db.length;b++){db[b].onclick=function(){vscode.postMessage({type:'favDel',key:this.getAttribute('data-del')});};}}
 function showUserscripts(){showOverlay('🐵 用户脚本','<div class="note">用户脚本(油猴)用于在 Devin 页面注入增强脚本。<br>受 IDE webview 跨域限制，注入到 Devin 页面将经「每账号反代」统一注入实现(规划中)。<br>当前可在「页面工具」使用复制链接 / 系统浏览器打开 / 翻译等通用能力。</div>');}
@@ -760,7 +765,7 @@ document.getElementById('bHome').onclick=function(){openBoard('home');};
 document.getElementById('bZi').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.min(3,(t.zoom||1)+0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 document.getElementById('bZo').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.max(0.3,(t.zoom||1)-0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 ZL.onclick=function(){var t=tabs[active];if(t){t.zoom=1;applyZoom(t);ZL.textContent='100%';}};
-document.getElementById('bStar').onclick=function(){if(active)vscode.postMessage({type:'favAdd',id:active});};
+document.getElementById('bStar').onclick=function(){if(isBoard()){var bt=activeBoardTab();var meta=BOARD_META[bt]||['⭐',bt];vscode.postMessage({type:'favAdd',board:bt,label:meta[0]+' '+meta[1]});}else if(active){vscode.postMessage({type:'favAdd',id:active});}};
 document.getElementById('bExt').onclick=function(){var t=tabs[active];if(t)vscode.postMessage({type:'openExternal',url:t.url});};
 document.getElementById('ovClose').onclick=hideOverlay;
 ADDR.addEventListener('keydown',function(e){if(e.key==='Enter')navigate(ADDR.value);});
@@ -780,6 +785,7 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='accounts'){accounts=m.list||[];}
   else if(m.type==='bridgeState'){bridge=m.data||null;}
   else if(m.type==='cloudInitHtml'){mountBoardSolo(m.html||'',m.board||'overview');}
+  else if(m.type==='gotoBoard'){try{openBoard(m.board||'home');}catch(e){}}
   else if(m.type==='cloudHost'){_boardHostAll(m.msg||{});}
   else if(m.type==='shellBackupsData'){_bkTree=m.tree||{root:'',accounts:[]};if(OV.className){if(_bkMode==='dl')renderDownloads();else if(_bkMode==='bk')renderBkLib();}try{daoRenderBackup();}catch(e){}}
   else if(m.type==='dlRecentData'){try{daoOnRecent(m.list);}catch(e){}}
@@ -1172,6 +1178,16 @@ async function shellHandleMessage(sid, m) {
       }
       case 'histPush': _pushMultiHist(m.url, m.label); return;
       case 'favAdd': {
+        if (m.board) {
+          const bkey = 'board:' + m.board;
+          const bfavs = _getMultiFavs();
+          if (!bfavs.some((f) => f.key === bkey)) {
+            bfavs.push({ key: bkey, label: m.label || ('板块·' + m.board), board: m.board, kind: 'board' });
+            _setMultiFavs(bfavs); _toast('⭐ 已收藏 · ' + (m.label || m.board));
+          }
+          send({ type: 'favs', list: _getMultiFavs() });
+          return;
+        }
         const parts = String(m.id || '').split('|');
         const email = parts[0] || '';
         const tail = parts[1] || 'home';
@@ -1541,6 +1557,16 @@ async function openMultiInstance(opts) {
   _postMulti({ type: 'open', id, label, url, accNo, dollars, status, email, devinId: sid });
   _routeDbg("openMultiInstance OK email=" + email + " url=" + url + " panel=" + (_multiPanel ? "yes" : "no"));
   return { ok: true };
+}
+// 归一 · 9921 综合外壳入口: 仅确保/聚焦面板, 不强开账号 Devin 对话框; 冷启动落「六合板块主页」(home)。
+//   已保存标签由序列化器 _resumePersistedTabs 还原(状态保留) → 二者不冲突。
+async function openShellHome() {
+  try {
+    _ensureMultiPanel();
+    _postMulti({ type: "gotoBoard", board: "home" });
+    try { _multiPanel.reveal(vscode.ViewColumn.Active); } catch (e) {}
+    return { ok: true };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 }
 // v4.16.0 · 归一 · 单账号「路由官网→IDE」实现抽出为可复用函数 (供单点 routeToIde + 多选批量 routeToIdeBatch 共用)。
 async function _routeAccountToIde(i) {
@@ -8613,10 +8639,16 @@ function _broadcastUI() {
     }
     _panelStructSig = sig;
     if (_sidebarProvider) _sidebarProvider.refresh(true);
+    let _rebuilt = null;
     if (_editorPanel) {
       try {
-        _editorPanel.webview.html = buildHtml();
+        _rebuilt = buildHtml();
+        _editorPanel.webview.html = _rebuilt;
       } catch {}
+    }
+    // 归一 · 内嵌「切号」: 结构性变化 → 整页重渲推回宿主 → 六板 iframe 重挂 (__wamRebuild)
+    if (_hostPost) {
+      try { _hostPost({ type: "__wamRebuild", html: _rebuilt || buildHtml() }); } catch {}
     }
     updateStatusBar();
   }, _debMs);
@@ -11590,6 +11622,10 @@ function _broadcastMsg(msg) {
       _editorPanel.webview.postMessage(msg);
     } catch {}
   }
+  // 归一 · 内嵌「切号」: 同一广播回推给宿主 → 中继进六板 iframe (toast/切号/对话区增量)
+  if (_hostPost) {
+    try { _hostPost(msg); } catch {}
+  }
 }
 
 async function handleWebviewMessage(msg) {
@@ -14039,7 +14075,11 @@ async function activate(context) {
           _multiReady = false; _multiQueue.length = 0; _multiTabs.clear();
           panel.webview.html = _multiShellHtml();
           _wireMultiPanel(panel);
-          _resumePersistedTabs().catch((e) => log("multi resume err: " + ((e && e.message) || e)));
+          // 状态保留: 有已存标签 → 还原; 无 → 落「六合板块主页」(首次/空状态)。
+          let _savedCnt = 0;
+          try { _savedCnt = (((_ctx && _ctx.globalState && _ctx.globalState.get("dao.multiTabs")) || [])).length; } catch (e) {}
+          if (_savedCnt > 0) _resumePersistedTabs().catch((e) => log("multi resume err: " + ((e && e.message) || e)));
+          else _postMulti({ type: "gotoBoard", board: "home" });
         },
       }),
     );
@@ -14910,6 +14950,9 @@ module.exports = {
     _resolveWorkspaceStorageBase, // v2.5.6 · Layer 6 workspaceStorage 路径
     _resolveCascadePbDir, // v2.5.9 · Layer 6 cascade pb 目录
     buildHtml,
+    openShellHome, // 归一 · 9921 综合外壳入口 (冷启动落六合主页·不强开 Devin 对话框)
+    handleWebviewMessage, // 归一 · 内嵌「切号」消息处理 (dao-vsix wamRelay 中继 → 此 · 根治内嵌面板按钮全失效)
+    setHostPost(fn) { _hostPost = (typeof fn === "function") ? fn : null; }, // 归一 · 内嵌「切号」宿主回推注入 (live 同步)
     openEditorPanel,
     openMultiInstance, // v5.0.0 · 归一多实例单面板多标签 (供 dao-vsix 委托)
     // 归一 · 独立 HTTP 外壳 (适配所有 IDE/浏览器/手机·参照 APK): 供 dao-vsix 本地服务器 /shell 路由调用
