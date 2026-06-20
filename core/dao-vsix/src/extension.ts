@@ -1368,7 +1368,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     // ── 归一 · 独立 HTTP 外壳 (适配所有 IDE / 任意浏览器 / 手机 · 参照手机端 APK) ──
     //   把 rt-flow 的多实例外壳直出为可在任意浏览器打开的单页, 传输层由 vscode.postMessage
     //   改走 HTTP: 页面→宿主 POST /api/shell/msg; 宿主→页面 SSE /api/shell/events。
-    if (route === '/shell' || route === '/shell/' || route === '/api/shell/events' || route === '/api/shell/msg') {
+    if (route === '/shell' || route === '/shell/' || route === '/api/shell/events' || route === '/api/shell/poll' || route === '/api/shell/msg') {
         const rtint: any = _rtflowModule && _rtflowModule._internals;
         if (route === '/shell' || route === '/shell/') {
             let html = '';
@@ -1380,6 +1380,13 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             const sid = url.searchParams.get('sid') || '';
             if (res && rtint && typeof rtint.shellAttach === 'function') { rtint.shellAttach(sid, res); return { _streamed: true }; }
             return { ok: false, error: 'sse-unavailable' };
+        }
+        if (route === '/api/shell/poll') {
+            // 长轮询回退 — 公网经 Cloudflare 等代理时 SSE 被整体缓冲, 改由此普通 HTTP 响应补送排队消息。
+            const sid = url.searchParams.get('sid') || '';
+            const after = url.searchParams.get('after') || '0';
+            if (res && rtint && typeof rtint.shellPoll === 'function') { rtint.shellPoll(sid, after, res); return { _streamed: true }; }
+            return { ok: false, error: 'poll-unavailable' };
         }
         // POST /api/shell/msg
         let body: any = {};

@@ -677,6 +677,38 @@ function test(name, fn) {
     }
   });
 
+  // ── 归一外壳 /shell 宿主→页面双通道 (SSE 快路 + 长轮询回退·过任意代理 · 双副本) ──
+  // Cloudflare quick tunnel 等代理会整体缓冲 text/event-stream → 公网用户六板永卡"加载中…"。
+  // 正法: SSE 失败/3s 无字节即转 /api/shell/poll 长轮询; 每条消息带 _q 序号跨通道去重。
+  console.log("\n[/shell 宿主→页面双通道·长轮询回退]");
+  test("/shell: SSE+长轮询双通道, 按 _q 序号去重, 过任意代理 (公网用户六板必达)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const r = rel.join("/");
+      // 宿主侧: 按 sid 的队列 (带 seq) + 派发器 + 长轮询处理器
+      assert.ok(/function _shellQ\(sid\)/.test(src), r + ": 须 _shellQ(sid) 每会话队列");
+      assert.ok(/function _shellEmit\(sid, msg\)/.test(src), r + ": 须 _shellEmit(sid,msg) 入队+派发");
+      assert.ok(/_q: seq/.test(src), r + ": 每条消息须带 _q 单调序号");
+      assert.ok(/_SHELL_Q_MAX/.test(src), r + ": 须每会话队列上限 (回退补发窗口)");
+      assert.ok(/function _shellPoll\(sid, after, res\)/.test(src), r + ": 须 _shellPoll(sid,after,res) 长轮询处理器");
+      // 派发器须既写 SSE(若在线) 又唤醒长轮询 waiter
+      assert.ok(/_shellClients\.get\(sid\)[\s\S]{0,160}res\.write\('data: '/.test(src), r + ": _shellEmit 须写 SSE (在线快路)");
+      assert.ok(/q\.waiters\.splice\(0\)/.test(src), r + ": _shellEmit 须唤醒挂起的长轮询 waiter");
+      // 客户端垫片: SSE 失败/无字节 → startPoll; pollLoop 打 /api/shell/poll; _q 去重
+      assert.ok(/function pollLoop\(\)/.test(src) && /function startPoll\(\)/.test(src), r + ": 客户端须有 pollLoop/startPoll 回退");
+      assert.ok(/\/api\/shell\/poll\?sid=/.test(src), r + ": 客户端须打 /api/shell/poll?sid=");
+      assert.ok(/if\(m\._q<=lastSeq\)return;lastSeq=m\._q;/.test(src), r + ": 客户端须按 _q 跨通道去重");
+      assert.ok(/if\(!gotAny\)startPoll\(\)/.test(src), r + ": SSE 无字节须自动转长轮询");
+      // 导出: shellAttach (SSE) + shellPoll (长轮询)
+      assert.ok(/shellPoll: _shellPoll/.test(src), r + ": 须导出 shellPoll");
+    }
+    // dao-vsix HTTP 路由: 须接 /api/shell/poll → rtint.shellPoll
+    const ts = fs.readFileSync(path.join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts"), "utf8");
+    assert.ok(/route === '\/api\/shell\/poll'/.test(ts), "src/extension.ts: 须路由 /api/shell/poll");
+    assert.ok(/rtint\.shellPoll\(sid, after, res\)/.test(ts), "src/extension.ts: /api/shell/poll 须调 rtint.shellPoll(sid,after,res)");
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);

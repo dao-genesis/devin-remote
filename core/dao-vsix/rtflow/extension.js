@@ -653,20 +653,27 @@ vscode.postMessage({type:'ready'});
 //   六大板块仍走 cloudInit→cloudInitHtml(blob-iframe)与 cloudRelay/cloudHost
 //   中继, 与 webview 路径同源复用·零重写。
 // ════════════════════════════════════════════════════════════════════════
+// 传输垫片: 宿主→页面双通道 (SSE 快路 + 长轮询回退·过任意代理), 按 _q 序号跨通道去重。
+//   公网经 Cloudflare 等代理时 SSE 整体被缓冲 → 收不到任何字节; 故 SSE 若 ~3s 内无消息
+//   (或报错) 即启动长轮询 (普通完整 HTTP 响应·必过代理), 补回排队消息 → 与 IDE 内一致。
 const SHELL_HTTP_SHIM = "(function(){"
   + "var SID='sh_'+Math.random().toString(36).slice(2)+Date.now().toString(36);"
-  + "var _st={};"
+  + "var _st={};var lastSeq=0;var gotAny=false;var polling=false;"
   + "function post(m){try{fetch('/api/shell/msg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:SID,msg:m})}).catch(function(){});}catch(e){}}"
+  + "function apply(m){if(!m)return;if(typeof m._q==='number'){if(m._q<=lastSeq)return;lastSeq=m._q;}gotAny=true;"
+  + "if(m.type==='__copy'){try{navigator.clipboard.writeText(m.text||'');}catch(e){}return;}"
+  + "try{window.postMessage(m,'*');}catch(e){}}"
+  + "function pollLoop(){fetch('/api/shell/poll?sid='+encodeURIComponent(SID)+'&after='+lastSeq).then(function(r){return r.json();}).then(function(j){if(j&&j.msgs){j.msgs.forEach(apply);}setTimeout(pollLoop,40);}).catch(function(){setTimeout(pollLoop,2000);});}"
+  + "function startPoll(){if(polling)return;polling=true;pollLoop();}"
   + "window.acquireVsCodeApi=function(){return{postMessage:function(m){try{"
   + "if(m&&m.type==='openExternal'&&m.url){window.open(m.url,'_blank');return;}"
   + "if(m&&m.type==='clip'&&m.text){try{navigator.clipboard.writeText(m.text);}catch(e){}return;}"
   + "post(m);"
   + "}catch(e){}},getState:function(){return _st;},setState:function(s){_st=s;return s;}};};"
   + "function connect(){try{var es=new EventSource('/api/shell/events?sid='+encodeURIComponent(SID));"
-  + "es.onmessage=function(ev){var m;try{m=JSON.parse(ev.data);}catch(e){return;}"
-  + "if(m&&m.type==='__copy'){try{navigator.clipboard.writeText(m.text||'');}catch(e){}return;}"
-  + "try{window.postMessage(m,'*');}catch(e){}};"
-  + "es.onerror=function(){};}catch(e){}}connect();"
+  + "es.onmessage=function(ev){var m;try{m=JSON.parse(ev.data);}catch(e){return;}apply(m);};"
+  + "es.onerror=function(){if(!gotAny)startPoll();};}catch(e){startPoll();}}connect();"
+  + "setTimeout(function(){if(!gotAny)startPoll();},3000);"
   + "})();";
 // 直出独立外壳: 复用 _multiShellHtml, 放开 CSP 的 connect-src(同源 fetch/SSE) 并注入 HTTP 传输垫片。
 function _standaloneShellHtml(opts) {
@@ -680,8 +687,45 @@ function _standaloneShellHtml(opts) {
   html = html.replace(/<head([^>]*)>/i, '<head$1>' + shim);
   return html;
 }
-// ── SSE 总线: sid → res(EventSource 连接), 宿主→页面单向推送 ──
-const _shellClients = new Map();
+// ── 宿主→页面单向推送总线: SSE (快路) + 长轮询 (回退) 双通道, 每会话(sid)隔离 ──
+//   缘起 (实证·公网): Cloudflare quick tunnel (含用户自有 DAO Bridge) 会整体缓冲
+//     `text/event-stream` 响应 — SSE 一字节都到不了浏览器 → 公网用户六大板块永远「加载中」。
+//   正法: 不依赖流式。每会话维护带序号(seq)的出站消息队列:
+//     · 有 SSE 连接 → 立即写 SSE (本地/IDE 内置浏览器·零延迟)。
+//     · 同时入队 → 任意代理后的公网用户改用 GET /api/shell/poll?sid=&after=<seq> 长轮询取回,
+//       每次返回的是普通完整 HTTP 响应 (不流式·必过 CF) → 与 IDE 内完全一致。
+//   去重: 每条消息带 `_q` 单调序号; 页面跨两通道按 lastSeq 去重, 绝不重复处理。
+//   隔离: 队列、序号、长轮询 waiter 全部按 sid 分治 → 多用户道并行而不相悖。
+const _shellClients = new Map(); // sid → SSE res (在线流式连接)
+const _shellQueues = new Map();  // sid → { seq, msgs:[{seq,obj}], waiters:[], touch }
+const _SHELL_Q_MAX = 600;        // 每会话保留最近 N 条 (回退轮询补发窗口)
+const _SHELL_SID_MAX = 60;       // 最多保留 N 个会话队列 (LRU 淘汰·防泄漏)
+function _shellQ(sid) {
+  let q = _shellQueues.get(sid);
+  if (!q) {
+    q = { seq: 0, msgs: [], waiters: [], touch: Date.now() };
+    _shellQueues.set(sid, q);
+    if (_shellQueues.size > _SHELL_SID_MAX) {
+      let oldK = null, oldT = Infinity;
+      for (const [k, v] of _shellQueues) { if (!_shellClients.has(k) && v.touch < oldT) { oldT = v.touch; oldK = k; } }
+      if (oldK != null) { const ov = _shellQueues.get(oldK); if (ov) { for (const w of ov.waiters.splice(0)) { try { w.done(); } catch (e) {} } } _shellQueues.delete(oldK); }
+    }
+  } else { q.touch = Date.now(); }
+  return q;
+}
+// 核心: 给某 sid 派发一条消息 — 入队(带 seq)、写 SSE(若在线)、唤醒长轮询 waiter。
+function _shellEmit(sid, msg) {
+  if (!sid) return false;
+  const q = _shellQ(sid);
+  const seq = ++q.seq;
+  const obj = Object.assign({}, msg, { _q: seq });
+  q.msgs.push({ seq, obj });
+  if (q.msgs.length > _SHELL_Q_MAX) q.msgs.splice(0, q.msgs.length - _SHELL_Q_MAX);
+  const res = _shellClients.get(sid);
+  if (res) { try { res.write('data: ' + JSON.stringify(obj) + '\n\n'); } catch (e) {} }
+  if (q.waiters.length) { for (const w of q.waiters.splice(0)) { try { w.fire(); } catch (e) {} } }
+  return true;
+}
 function _shellAttach(sid, res) {
   if (!sid || !res) return;
   try {
@@ -693,6 +737,7 @@ function _shellAttach(sid, res) {
     });
     res.write('retry: 3000\n\n');
   } catch (e) { return; }
+  _shellQ(sid); // 确保队列存在 → 后续广播/回退轮询覆盖此会话
   const prev = _shellClients.get(sid);
   if (prev && prev !== res) { try { prev.end(); } catch (e) {} }
   _shellClients.set(sid, res);
@@ -701,17 +746,44 @@ function _shellAttach(sid, res) {
   try { res.on('close', close); } catch (e) {}
   try { res.on('error', close); } catch (e) {}
 }
-function _shellSend(sid, msg) {
-  const res = _shellClients.get(sid);
-  if (!res) return false;
-  try { res.write('data: ' + JSON.stringify(msg) + '\n\n'); return true; } catch (e) { return false; }
-}
+function _shellSend(sid, msg) { return _shellEmit(sid, msg); }
 function _shellBroadcast(msg) {
+  // 广播给所有已知会话 (含仅长轮询·无 SSE 的公网会话), 各自独立 seq。
+  const sids = new Set();
+  for (const k of _shellClients.keys()) sids.add(k);
+  for (const k of _shellQueues.keys()) sids.add(k);
   let n = 0;
-  for (const res of _shellClients.values()) {
-    try { res.write('data: ' + JSON.stringify(msg) + '\n\n'); n++; } catch (e) {}
-  }
+  for (const sid of sids) { if (_shellEmit(sid, msg)) n++; }
   return n;
+}
+// GET /api/shell/poll?sid=&after=<seq> — 长轮询回退 (公网/任意代理后均可用·非流式)。
+//   返回 seq>after 的全部排队消息; 无则挂起至多 ~25s, 有新消息即返回 (空则返回空数组)。
+function _shellPoll(sid, after, res) {
+  if (!sid || !res) { try { res && res.end(); } catch (e) {} return; }
+  const q = _shellQ(sid);
+  const aft = Math.max(0, parseInt(after, 10) || 0);
+  let done = false;
+  const respond = () => {
+    if (done) return; done = true;
+    const pending = q.msgs.filter((it) => it.seq > aft);
+    const last = q.msgs.length ? q.msgs[q.msgs.length - 1].seq : aft;
+    try {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ ok: true, last, msgs: pending.map((it) => it.obj) }));
+    } catch (e) {}
+  };
+  // 已有积压 → 立即返回
+  if (q.msgs.some((it) => it.seq > aft)) { respond(); return; }
+  // 否则挂起等待新消息 (或超时)
+  const waiter = { fire: respond, done: respond };
+  q.waiters.push(waiter);
+  const timer = setTimeout(() => {
+    const i = q.waiters.indexOf(waiter); if (i >= 0) q.waiters.splice(i, 1);
+    respond();
+  }, 25000);
+  const cleanup = () => { clearTimeout(timer); const i = q.waiters.indexOf(waiter); if (i >= 0) q.waiters.splice(i, 1); };
+  try { res.on('close', cleanup); } catch (e) {}
+  try { res.on('error', cleanup); } catch (e) {}
 }
 // ── 多用户「道并行而不相悖」· 六大板块宿主回推按会话隔离 ──────────────────
 //   病灶: 旧实现 setHostPost 恒走 _shellBroadcast — 把某用户触发的板块数据/回包
@@ -14472,7 +14544,8 @@ module.exports = {
     openMultiInstance, // v5.0.0 · 归一多实例单面板多标签 (供 dao-vsix 委托)
     // 归一 · 独立 HTTP 外壳 (适配所有 IDE/浏览器/手机·参照 APK): 供 dao-vsix 本地服务器 /shell 路由调用
     getStandaloneShellHtml: _standaloneShellHtml, // GET /shell → 直出同一外壳 (注入 HTTP 传输垫片)
-    shellAttach: _shellAttach, // GET /api/shell/events → SSE 挂载 (宿主→页面)
+    shellAttach: _shellAttach, // GET /api/shell/events → SSE 挂载 (宿主→页面·快路)
+    shellPoll: _shellPoll, // GET /api/shell/poll → 长轮询回退 (公网/任意代理后均可用)
     shellHandleMessage, // POST /api/shell/msg → 页面→宿主消息处理
     setCloudProvider(p) { _cloudProvider = p || null; }, // 归一 · dao-vsix 注入「六大板块」面板提供者
     parseAccountText,
