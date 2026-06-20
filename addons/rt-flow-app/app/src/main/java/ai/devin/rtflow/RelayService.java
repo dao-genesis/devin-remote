@@ -576,6 +576,11 @@ public class RelayService extends Service {
     private static String localJson(String bodyJson) {
         return "{\"status\":200,\"bodyText\":" + HttpBridge.jsonStr(bodyJson == null ? "{}" : bodyJson) + "}";
     }
+    /** webNative/webHttp/webMirror 回的是 {status,bodyText} 信封; 取出 bodyText (即浏览器应直接收到的响应体)。 */
+    private static String unwrapBody(String env) {
+        try { return new org.json.JSONObject(env == null ? "{}" : env).optString("bodyText", "{}"); }
+        catch (Exception e) { return "{}"; }
+    }
     /** 静态唤回本体 (镜像取帧时本体被杀 → 冷启动拉起, 调用方稍候重试)。 */
     private void wakeHostStatic() {
         try { startActivity(new Intent(this, MainActivity.class)
@@ -1188,6 +1193,38 @@ public class RelayService extends Service {
             if (m == null) return "{\"ok\":false,\"error\":\"no_host\"}";
             try { return m.ipcMirrorFrame(tabIndex, quality > 0 ? quality : 55, maxDim > 0 ? maxDim : 1024); }
             catch (Exception e) { return "{\"ok\":false,\"error\":\"ex\"}"; }
+        }
+
+        /** 网页原生直渲底座(零账号中继版): 把「直渲」路由经中继暴露 → 浏览器在 srcdoc 里原生跑 APK
+         *  自身真实页面 (switch/cloud/tunnel/…), 由浏览器自身渲染、原生交互, 彻底取代截图投屏
+         *  (无黑屏 / 不卡顿 / 反向操作即时; 账号数据并行而不相悖)。frameJson = {path, body}。
+         *  返回浏览器应直接收到的响应体 JSON 串:
+         *    · /api/native — 值返回型 Native 方法 (状态/配置/金库 读写)        → {"r":...}
+         *    · /api/http   — 手机侧原生 HTTP (绕 CORS, 带账号 auth1)            → {status,headers,body}
+         *    · /api/asset  — APK 自身页面/JS 资源原文 (供 srcdoc 内联)          → {ok,ct,text}
+         *    · /api/mirror — 兼容旧投屏取帧 (回退用)。 */
+        @JavascriptInterface public String serveEmbed(String frameJson) {
+            try {
+                org.json.JSONObject f = new org.json.JSONObject(frameJson == null ? "{}" : frameJson);
+                String p = f.optString("path", "");
+                org.json.JSONObject b = f.optJSONObject("body");
+                if ("/api/native".equals(p)) return unwrapBody(webNative(b));
+                if ("/api/http".equals(p))   return unwrapBody(webHttp(b));
+                if ("/api/mirror".equals(p)) return unwrapBody(webMirror(b));
+                if ("/api/asset".equals(p)) {
+                    String name = b == null ? "" : b.optString("name", "");
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    // 仅服务白名单形态的引擎资源名, 杜绝路径穿越。
+                    if (!name.matches("[A-Za-z0-9_\\-]+\\.(html|js)")) { o.put("ok", false); o.put("error", "bad_name"); return o.toString(); }
+                    String txt = readAsset("engine/" + name);
+                    if (txt == null || txt.isEmpty() || "{}".equals(txt)) { o.put("ok", false); o.put("error", "not_found"); return o.toString(); }
+                    o.put("ok", true);
+                    o.put("ct", name.endsWith(".js") ? "application/javascript" : "text/html");
+                    o.put("text", txt);
+                    return o.toString();
+                }
+            } catch (Exception ignored) {}
+            return "{\"ok\":false,\"error\":\"unhandled\"}";
         }
 
         // 网页控台 📥 下载悬浮窗: 列出手机下载 (脱敏) + 在手机本机执行项动作 (分享/打开/删除)。

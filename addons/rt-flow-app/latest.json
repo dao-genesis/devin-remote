@@ -1,6 +1,6 @@
 {
-  "versionCode": 103,
-  "versionName": "0.36.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.36.0/DevinCloud-mobile-v0.36.0.apk",
-  "notes": "v0.36.0 · 修复网页控台(/console)板块全黑屏、卡在「首帧加载」无法操作的缺陷\n• 根因: 控台镜像取帧走 RPC browseScreenshot，旧实现忽略 format/quality/maxWidth，恒返回整幅 PNG(单帧约 400~550KB)；弱网下大包反复超时 → 永久黑屏；停泊的本地板块页首帧还要数秒才出。\n• 修复: browseScreenshot 现遵循 format/quality/maxWidth → 走压缩 JPEG 降采样取帧(ipcMirrorFrame，带铺底色)，单帧缩到约一个量级以下，弱网不再超时；停泊板块也能秒出首帧。无帧参数或 format:png 仍回退整幅 PNG(兼容 CDP/程序化截图)。\n• 控台: 首帧到达前显示「正在接入实时画面…」而非纯黑底，帧参数下调更适配移动网络。\n更新经 latest.json 多镜像(GitHub raw + jsDelivr/Fastly/Statically + ghproxy)轮替下载，国内外可达；版本递增可覆盖升级。"
+  "versionCode": 104,
+  "versionName": "0.37.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.0/DevinCloud-mobile-v0.37.0.apk",
+  "notes": "v0.37.0 · 从根本底层换架构: 网页控台(/console)由「截图投屏」改为「浏览器原生直渲」\n• 旧架构天花板: 控台靠 RPC browseScreenshot 把手机画面截图推流到浏览器 → 黑屏、卡顿、反向操作慢, 是架构本身决定的, 修不到根上。\n• 新架构(网页套网页): /console 现把 APK 自身的真实页面(切号/对话/穿透/VPN/脚本/Shizuku/全服通/面板)经零账号中继取来, 内联依赖 + 注入 remote-native 垫片(__rn.js), 挂进同源 iframe srcdoc → 由浏览器自身原生渲染、原生交互。表层与手机本体逐件一致(矢量清晰可选可输入), 底层 window.Native.* 经同源中继打回手机 /api/native(读金库数据) 与 /api/http(手机侧原生 HTTP 绕 CORS, 带账号 auth1)。彻底消除黑屏/卡顿/反向操作慢。\n• 中继侧: relay-app.js + RelayService.serveEmbed 新增 /api/native、/api/http、/api/asset 三路由, 把原本只走局域网/隧道的「直渲」底座接到零账号中继上。Devin 对话页直接在使用者自己的浏览器新标签打开。\n更新经 latest.json 多镜像(GitHub raw + jsDelivr/Fastly/Statically + ghproxy)轮替下载, 国内外可达; 版本递增可覆盖升级。"
 }

@@ -123,6 +123,18 @@ const DaoRelayApp = (function () {
         return { status: 500, body: { error: String((e && e.message) || e), stack: e && e.stack } };
       }
     }
+    // ── 网页原生直渲(零账号中继版) ──────────────────────────────────────
+    //  把 APK 的「直渲」底座经中继暴露 → 任意浏览器在 srcdoc 里原生跑真实页面 (switch/cloud/tunnel/…),
+    //  由浏览器自身渲染、原生交互, 彻底取代截图投屏 (无黑屏/不卡顿/反向操作即时)。
+    //    /api/native — 值返回型 Native 方法 (状态/配置/金库)   /api/http — 手机侧原生 HTTP (绕 CORS, 带 auth1)
+    //    /api/asset  — APK 页面/JS 资源原文 (供 srcdoc 内联)    /api/mirror — 兼容旧投屏取帧
+    if (path === "/api/native" || path === "/api/http" || path === "/api/asset" || path === "/api/mirror") {
+      const N = typeof Native !== "undefined" ? Native : {};
+      if (!N.serveEmbed) return { status: 501, body: { error: "serveEmbed_bridge_unavailable", hint: "请在中继引擎上下文调用 (需新版 APK)" } };
+      let raw = ""; try { raw = N.serveEmbed(JSON.stringify({ path: path, body: (m && m.body) || {} })); } catch (e) { return { status: 500, body: { error: String((e && e.message) || e) } }; }
+      let parsed; try { parsed = JSON.parse(raw || "{}"); } catch (e) { parsed = { ok: false, error: "bad_json" }; }
+      return { status: 200, body: parsed };
+    }
     return { status: 404, body: { error: "not_found", path } };
   }
 

@@ -4,69 +4,58 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Devin Cloud · 手机版 (网页)</title>
+<!-- ─────────────────────────────────────────────────────────────────────────
+  道法自然·从根本底层换架构 (v0.37.0): 网页控台不再「截图投屏」, 改为「浏览器原生直渲」。
+  本页是一个『网页套网页』的归一外壳: 每个板块(切号/对话/穿透/VPN/脚本/Shizuku/全服通/面板)
+  都把 APK 自身的真实页面(同一份 HTML/CSS/JS)经零账号中继取来, 内联依赖 + 注入 remote-native
+  垫片(__rn.js), 挂进一张同源 <iframe srcdoc> → 由浏览器自身渲染、原生交互。
+    · 表层: 与手机本体逐件一致的真实页面 (非截图, 矢量清晰, 可选择/复制/滚动/输入)。
+    · 底层: 页面里的 window.Native.* 经 srcdoc(继承本页=Worker 同源, 无 CORS) 同步打回手机
+            /relay/<session> 的 /api/native(读数据) 与 /api/http(手机侧原生 HTTP, 绕 CORS, 带账号
+            auth1) → 与手机本体同一套金库账号、同一套方法。数据并行而不相悖, 各端各取所需。
+  彻底消除截图投屏的黑屏/卡顿/反向操作慢。Devin 对话页直接在使用者自己的浏览器新标签打开。
+─────────────────────────────────────────────────────────────────────────── -->
 <style>
-  /* 道法自然·页面归一(1:1): 本页外壳与手机 APK 的原生界面逐件一致 —— 两行工具栏(≡/地址/译/→ ; 🔍缩放/★/↻/📥/🗂)、
-     汉堡菜单的每个模块与子菜单、下载 📥 与 全服通 🗂 两个悬浮窗, 全部按 MainActivity 原生布局复刻。
-     内容区因板块绑定原生 N 桥(只能跑在手机里), 故以「实时镜像 + 反向点按」忠实呈现同一张手机页。 */
-  :root{--bg:#0e1116;--fg:#cdd3de;--border:#222730;--bar:#161b22;--bar2:#161b22;--input:#0d1117;
+  :root{--bg:#0e1116;--fg:#cdd3de;--border:#222730;--bar:#161b22;--input:#0d1117;
         --input-b:#30363d;--btn:#1f6feb;--btn-h:#388bfd;--green:#4ec9b0;--muted:#7d8590;
         --red:#f85149;--amber:#f0883e;--chipbg:#21262d}
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
             font:13px/1.4 -apple-system,'Segoe UI',Roboto,sans-serif;overflow:hidden}
   #app{display:flex;flex-direction:column;height:100%}
-  /* ── 第一行工具栏: ≡ 地址 译 → (同 APK bar) ── */
-  #bar{display:flex;align-items:center;gap:6px;padding:6px;background:var(--bar);flex:0 0 auto}
-  .tbtn{background:var(--chipbg);color:var(--fg);border:0;border-radius:6px;height:34px;min-width:0;
-        padding:0 12px;font-size:16px;cursor:pointer;line-height:1}
-  .tbtn:active{background:#283041}
-  .tbtn.sm{padding:0 9px;font-size:14px;height:30px}
-  .tbtn.md{padding:0 10px;font-size:15px;height:31px}
-  #dot{flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:var(--amber);margin:0 1px}
+  #bar{display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bar);
+       border-bottom:1px solid var(--border);flex:0 0 auto}
+  #bar button{background:#1c2230;color:var(--fg);border:1px solid var(--input-b);
+       border-radius:7px;height:32px;min-width:34px;padding:0 9px;font-size:14px;cursor:pointer}
+  #bar button:active{background:#283041}
+  #dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 2px #0e1116}
   #dot.on{background:var(--green)} #dot.off{background:var(--red)}
-  #addr{flex:1;min-width:60px;height:32px;background:var(--input);color:var(--fg);border:0;
-        border-radius:0;padding:0 11px;font-size:13px;outline:none}
-  #addr::placeholder{color:#6e7681}
-  /* ── 第二行工具栏: 🔍 缩放滑块 % ★ ↻ 📥 🗂 (同 APK btnRow) ── */
-  #bar2{display:flex;align-items:center;gap:2px;padding:1px 8px 4px;background:var(--bar2);flex:0 0 auto}
-  #zicon{color:#8b949e;font-size:14px;padding:0 1px 0 2px;cursor:pointer;user-select:none}
-  #zoomBar{flex:1;margin:0 2px;accent-color:var(--btn)}
-  #zoomLabel{color:#cdd3de;font-size:13px;min-width:40px;padding:0 3px;text-align:center}
-  /* ── 标签条 (同 APK 横向标签条) ── */
-  #strip{display:flex;align-items:center;gap:5px;padding:3px 4px;background:var(--bg);
+  #addr{flex:1;min-width:60px;height:32px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);
+        border-radius:8px;padding:0 11px;font-size:13px;outline:none}
+  #addr:focus{border-color:var(--btn)} #addr::placeholder{color:#6e7681}
+  #strip{display:flex;align-items:center;gap:5px;padding:5px 8px;background:#11161e;
          border-bottom:1px solid var(--border);overflow-x:auto;flex:0 0 auto;scrollbar-width:thin}
   #strip::-webkit-scrollbar{height:5px}#strip::-webkit-scrollbar-thumb{background:#2a3140;border-radius:3px}
-  .chip{display:flex;align-items:center;gap:6px;flex:0 0 auto;max-width:210px;height:30px;padding:0 8px 0 11px;
+  .chip{display:flex;align-items:center;gap:6px;flex:0 0 auto;max-width:200px;height:30px;padding:0 8px 0 11px;
         background:#1a2030;border:1px solid var(--input-b);border-radius:8px;cursor:pointer;color:var(--muted);font-size:12px}
   .chip.on{background:#13332b;border-color:#1f5f51;color:var(--green)}
-  /* 道法自然·跨设备在场: 有其他设备(含手机本体)正看/控此标签 → 橙色半透明, 与 APK 标签条同款双向一致 */
-  .chip.shared{background:rgba(240,136,62,.18);border-color:rgba(240,136,62,.55);color:#ffcaa0}
-  .chip.on.shared{background:rgba(240,136,62,.26);border-color:rgba(240,136,62,.7)}
   .chip .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .chip .co{flex:0 0 auto;font-size:10px;color:#ffcaa0}
   .chip .x{width:18px;height:18px;line-height:16px;text-align:center;border-radius:50%;color:#8a93a0;font-size:14px}
   .chip .x:hover{background:#3a2030;color:#f88}
   #plus{flex:0 0 auto;width:30px;height:30px;border-radius:8px;border:1px dashed var(--input-b);
         background:transparent;color:var(--muted);font-size:18px;cursor:pointer}
-  /* ── 内容区: 实时镜像投屏 ── */
-  #frames{position:relative;flex:1 1 auto;background:#06080c;overflow:auto;display:flex;align-items:center;justify-content:center}
-  #frame{max-width:100%;max-height:100%;object-fit:contain;cursor:crosshair;transform-origin:center center;
-         box-shadow:0 0 0 1px #000,0 8px 40px #000a;background:#fff;-webkit-user-select:none;user-select:none}
-  #frame.empty{display:none}
-  #hint{position:absolute;color:var(--muted);font-size:13px;text-align:center;padding:24px;pointer-events:none}
-  #kbd{position:absolute;left:0;width:1px;height:1px;opacity:0;pointer-events:none}
-  #status{position:fixed;left:10px;bottom:8px;font-size:11px;color:var(--muted);background:#0e1116cc;
-          padding:3px 8px;border-radius:6px;pointer-events:none;max-width:70%;z-index:30}
-  #health{position:fixed;left:50%;top:90px;transform:translateX(-50%);display:none;font-size:12px;color:#ffd7b0;
-          background:#3a1d10ee;border:1px solid #7a3b1e;padding:5px 12px;border-radius:8px;z-index:90;max-width:88%;text-align:center;pointer-events:none}
-  #health.show{display:block}
-  #toast{position:fixed;right:10px;bottom:8px;font-size:11px;color:var(--fg);background:#1a2030;
-         border:1px solid var(--input-b);padding:5px 10px;border-radius:7px;opacity:0;transition:opacity .2s;max-width:60%;z-index:95}
-  #toast.show{opacity:1}
-  /* ── 新标签/板块选择面板 ── */
-  #launch{position:fixed;inset:0;background:rgba(8,11,16,.72);display:none;align-items:flex-start;justify-content:center;z-index:70}
+  #frames{position:relative;flex:1 1 auto;background:var(--bg)}
+  #frames iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
+  #frames iframe.hidden{display:none}
+  .load{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+        gap:13px;background:var(--bg);color:var(--muted);padding:24px;text-align:center;font-size:13px}
+  .load .sp{width:30px;height:30px;border:3px solid #2a3140;border-top-color:var(--green);border-radius:50%;animation:spin 1s linear infinite}
+  .load b{color:var(--green)} .load .er{color:var(--amber);max-width:380px}
+  .load button{background:var(--btn);color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:13px;cursor:pointer}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #launch{position:absolute;inset:0;background:rgba(8,11,16,.72);display:none;align-items:flex-start;justify-content:center;z-index:50}
   #launch.show{display:flex}
-  #launchCard{margin-top:54px;width:min(460px,92vw);background:#11161e;border:1px solid var(--border);
+  #launchCard{margin-top:48px;width:min(470px,93vw);background:#11161e;border:1px solid var(--border);
               border-radius:14px;padding:14px;box-shadow:0 18px 50px #000a}
   #launchCard h3{margin:2px 0 12px;font-size:13px;color:var(--muted);font-weight:600}
   .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
@@ -74,682 +63,295 @@
        border-radius:10px;padding:11px 12px;cursor:pointer;color:var(--fg);font-size:13px}
   .seg:hover{border-color:var(--green);background:#13332b}
   .seg .ic{font-size:18px;width:22px;text-align:center}
-  /* ── 汉堡菜单下拉 (复刻 APK PopupMenu: 模块 + 页面工具 + 分享 + 镜像/连接) ── */
-  #menuPop{position:fixed;top:78px;left:8px;background:#11161e;border:1px solid var(--border);border-radius:12px;
-           padding:6px;display:none;z-index:96;min-width:230px;max-height:80vh;overflow-y:auto;box-shadow:0 14px 40px #000a}
+  #urlRow{display:flex;gap:7px;margin-top:12px}
+  #urlInput{flex:1;height:36px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);
+            border-radius:8px;padding:0 11px;font-size:13px;outline:none}
+  #urlGo{background:var(--btn);color:#fff;border:0;border-radius:8px;padding:0 16px;font-size:14px;cursor:pointer}
+  #menuPop{position:absolute;top:46px;left:8px;background:#11161e;border:1px solid var(--border);border-radius:12px;
+           padding:6px;display:none;z-index:60;min-width:210px;max-height:78vh;overflow-y:auto;box-shadow:0 14px 40px #000a}
   #menuPop.show{display:block}
   #menuPop .mi{padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:9px}
   #menuPop .mi:hover{background:#1a2030}
-  #menuPop .mi .ph{margin-left:auto;font-size:10px;color:#6e7681}
-  #menuPop .grp{padding:8px 12px 3px;font-size:10px;color:#6e7681;letter-spacing:.5px}
   #menuPop .sep{height:1px;background:var(--border);margin:5px 4px}
   #menuPop .ic{width:20px;text-align:center}
-  /* ── 悬浮窗 (下载 📥 / 全服通 🗂): 复刻 APK 可拖动悬浮面板 ── */
-  .fw{position:fixed;top:90px;right:8px;width:min(320px,92vw);height:min(460px,72vh);background:#0e1116;
-      border:1px solid var(--border);border-radius:10px;display:none;flex-direction:column;z-index:88;
-      box-shadow:0 18px 50px #000c;overflow:hidden}
-  .fw.show{display:flex}
-  .fw-head{display:flex;align-items:center;background:#1f6feb;color:#fff;padding:8px 8px 8px 10px;cursor:move;flex:0 0 auto}
-  .fw-head .ttl{flex:1;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .fw-head .cl{padding:0 6px 0 10px;font-size:16px;cursor:pointer}
-  .fw-body{flex:1 1 auto;position:relative;overflow:auto;background:#06080c}
-  #fwDaoImg{display:block;max-width:100%;margin:0 auto;cursor:crosshair;background:#fff;-webkit-user-select:none;user-select:none}
-  #fwDlList{padding:5px}
-  .dlrow{display:flex;align-items:center;gap:8px;background:#1b1f26;border-radius:7px;padding:8px;margin-bottom:4px}
-  .dlrow .info{flex:1;min-width:0}
-  .dlrow .nm{color:#e6edf3;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .dlrow .sub{color:#8b949e;font-size:10px;margin-top:2px}
-  .dlrow .act{background:#21262d;color:#cdd3de;border:0;border-radius:6px;height:28px;padding:0 9px;font-size:14px;cursor:pointer}
-  .dlempty{color:#8b949e;font-size:12px;text-align:center;padding:26px 10px;white-space:pre-line}
-  /* ── 设置浮层 ── */
-  #cfg{position:fixed;inset:0;background:rgba(8,11,16,.78);display:none;align-items:center;justify-content:center;z-index:99}
+  #cfg{position:absolute;inset:0;background:rgba(8,11,16,.82);display:none;align-items:center;justify-content:center;z-index:99}
   #cfg.show{display:flex}
-  #cfgCard{width:min(420px,92vw);background:#11161e;border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 18px 50px #000a}
-  #cfgCard h3{margin:0 0 12px;font-size:14px}
+  #cfgCard{width:min(420px,93vw);background:#11161e;border:1px solid var(--border);border-radius:14px;padding:16px}
+  #cfgCard h3{margin:0 0 10px;font-size:14px} #cfgCard p{color:var(--muted);font-size:12px;margin:0 0 10px}
   #cfgCard label{display:block;font-size:11px;color:var(--muted);margin:10px 0 4px}
   #cfgCard input{width:100%;height:34px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);border-radius:8px;padding:0 11px;font-size:13px;outline:none}
   #cfgCard .row{display:flex;gap:8px;margin-top:14px}
   #cfgCard button{flex:1;height:36px;border-radius:8px;border:1px solid var(--input-b);background:#1c2230;color:var(--fg);cursor:pointer;font-size:13px}
   #cfgCard button.pri{background:var(--btn);border-color:var(--btn);color:#fff}
-  #pick{position:fixed;inset:0;background:rgba(8,11,16,.72);display:none;align-items:flex-start;justify-content:center;z-index:97}
-  #pick.show{display:flex}
-  #pickCard{margin-top:60px;width:min(440px,92vw);max-height:70%;overflow-y:auto;background:#11161e;border:1px solid var(--border);border-radius:14px;padding:14px}
-  #pickCard h3{margin:2px 0 12px;font-size:13px;color:var(--muted)}
-  .pr{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:9px;background:#1a2030;border:1px solid var(--input-b);margin:5px 0;cursor:pointer;font-size:13px}
-  .pr:hover{border-color:var(--green);background:#13332b}
+  #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#222;color:#fff;padding:9px 15px;
+         border-radius:9px;font-size:13px;z-index:120;opacity:0;transition:.2s;max-width:84%;pointer-events:none}
+  #toast.show{opacity:1}
 </style>
 </head>
 <body>
 <div id="app">
   <div id="bar">
-    <button class="tbtn" id="menuBtn" title="菜单">&#8801;</button>
-    <span id="dot" title="连接状态"></span>
-    <input id="addr" inputmode="url" autocomplete="off" spellcheck="false" placeholder="输入网址 / 搜索">
-    <button class="tbtn sm" id="trBtn" title="整页翻译">译</button>
-    <button class="tbtn sm" id="go" title="前往">&#8594;</button>
-  </div>
-  <div id="bar2">
-    <span id="zicon" title="双击复位 100%">&#128269;</span>
-    <input id="zoomBar" type="range" min="50" max="170" value="100" title="缩放">
-    <span id="zoomLabel">100%</span>
-    <button class="tbtn md" id="starBtn" title="收藏">&#9734;</button>
-    <button class="tbtn md" id="reloadBtn" title="重载该标签">&#8635;</button>
-    <button class="tbtn md" id="dlBtn" title="下载">&#128229;</button>
-    <button class="tbtn md" id="daoBtn" title="全服通 · 近期对话 / 备份">&#128450;</button>
+    <button id="menuBtn" title="菜单">&#9776;</button>
+    <span id="dot" title="中继连接状态"></span>
+    <input id="addr" inputmode="url" autocomplete="off" spellcheck="false" placeholder="输入网址 / 板块 (切号·穿透·对话…)">
+    <button id="reload" title="重载">&#8635;</button>
+    <button id="go" title="前往">&#8594;</button>
   </div>
   <div id="strip"><button id="plus" title="新标签">+</button></div>
   <div id="frames">
-    <img id="frame" class="empty" alt="">
-    <div id="hint">选择上方一个标签开始 · 任意公网浏览器与手机 APK 同款操作</div>
-    <textarea id="kbd"></textarea>
+    <div id="menuPop"></div>
+    <div id="launch"><div id="launchCard">
+      <h3>新标签 — 选择板块, 或打开任意网址 / Devin 对话</h3>
+      <div class="grid" id="segGrid"></div>
+      <div id="urlRow"><input id="urlInput" inputmode="url" placeholder="https:// 任意网址"><button id="urlGo">打开</button></div>
+    </div></div>
   </div>
-  <select id="fpsSel" style="display:none">
-    <option value="0">手动</option>
-    <option value="1500">~0.7 fps</option>
-    <option value="700" selected>~1.4 fps</option>
-    <option value="400">~2.5 fps</option>
-    <option value="250">~4 fps</option>
-  </select>
-  <div id="menuPop"></div>
-  <div id="status"></div>
-  <div id="health"></div>
-  <div id="toast"></div>
-  <!-- 下载悬浮窗 (📥) -->
-  <div class="fw" id="fwDl">
-    <div class="fw-head" id="fwDlHead"><span class="ttl">下载 · 手机文件管理</span><span class="cl" id="fwDlClose">&#10005;</span></div>
-    <div class="fw-body"><div id="fwDlList"></div></div>
-  </div>
-  <!-- 全服通悬浮窗 (🗂): 近期对话 / 备份 —— 实时镜像手机内真实 全服通 页 -->
-  <div class="fw" id="fwDao">
-    <div class="fw-head" id="fwDaoHead"><span class="ttl">全服通 · 近期对话 / 备份</span><span class="cl" id="fwDaoClose">&#10005;</span></div>
-    <div class="fw-body"><img id="fwDaoImg" alt=""><div id="fwDaoHint" class="dlempty">正在打开 全服通…</div></div>
-  </div>
-  <div id="launch"><div id="launchCard">
-    <h3>新标签 — 选择板块, 或输入任意网址 (各大浏览器多实例)</h3>
-    <div class="grid" id="segGrid"></div>
-    <div id="urlRow" style="display:flex;gap:7px;margin-top:12px">
-      <input id="urlInput" inputmode="url" placeholder="https:// 任意网址"
-             style="flex:1;height:36px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);border-radius:8px;padding:0 11px;font-size:13px;outline:none">
-      <button id="urlGo" style="background:var(--btn);color:#fff;border:0;border-radius:8px;padding:0 16px;font-size:14px;cursor:pointer">打开</button>
-    </div>
-  </div></div>
-  <div id="cfg"><div id="cfgCard">
-    <h3>连接设置</h3>
-    <label>中继入口 Endpoint</label><input id="cEndpoint" placeholder="https://...workers.dev">
-    <label>Session</label><input id="cSession" placeholder="rtflow-...">
-    <label>Token</label><input id="cToken" placeholder="...">
-    <div class="row"><button id="cCancel">取消</button><button class="pri" id="cSave">保存并连接</button></div>
-  </div></div>
-  <div id="pick"><div id="pickCard"><h3>新建 / 打开</h3><div id="pickList"></div></div></div>
 </div>
+<div id="cfg"><div id="cfgCard">
+  <h3>接入设置</h3>
+  <p>填入零账号中继的 Session 与 Token (复制接入链接里的同名参数)。Endpoint 留空即用本站。</p>
+  <label>Session</label><input id="cfgSession" placeholder="rtflow-xxxxxxxx">
+  <label>Token</label><input id="cfgToken" placeholder="xxxxxxxxxxxxxxxx">
+  <label>Endpoint (可选)</label><input id="cfgEndpoint" placeholder="https://dao-relay-do.xxx.workers.dev">
+  <div class="row"><button id="cfgCancel">取消</button><button id="cfgSave" class="pri">保存并连接</button></div>
+</div></div>
+<div id="toast"></div>
 <script>
 (function(){
   "use strict";
-  function $(id){ return document.getElementById(id); }
   function qp(k){ try{ return new URLSearchParams(location.search).get(k)||""; }catch(e){ return ""; } }
+  var SESSION = qp("session") || localStorage.getItem("rtflow.rn.session") || "";
+  var TOKEN   = qp("token") || qp("t") || localStorage.getItem("rtflow.rn.token") || "";
+  var ENDPOINT= (qp("endpoint") || localStorage.getItem("rtflow.rn.endpoint") || location.origin).replace(/\/+$/,"");
+  function persist(){ if(SESSION) localStorage.setItem("rtflow.rn.session",SESSION);
+    if(TOKEN) localStorage.setItem("rtflow.rn.token",TOKEN);
+    if(ENDPOINT) localStorage.setItem("rtflow.rn.endpoint",ENDPOINT); }
+  persist();
+  function relayUrl(){ return ENDPOINT + "/relay/" + encodeURIComponent(SESSION); }
 
-  // ── 配置: session/token/endpoint (query > localStorage > 同源) ──
-  var cfg = {
-    session:  qp("session") || localStorage.getItem("rtflow.con.session") || "",
-    token:    qp("token") || qp("t") || localStorage.getItem("rtflow.con.token") || "",
-    endpoint:(qp("endpoint") || localStorage.getItem("rtflow.con.endpoint") || location.origin).replace(/\/+$/,"")
-  };
-  function saveCfg(){ localStorage.setItem("rtflow.con.session",cfg.session);
-    localStorage.setItem("rtflow.con.token",cfg.token); localStorage.setItem("rtflow.con.endpoint",cfg.endpoint); }
-
-  // ── 本设备标识 (一个浏览器页 = 一台联控设备; sessionStorage → 每页独立) ──
-  var CLIENT_ID = sessionStorage.getItem("rtflow.con.cid");
-  if(!CLIENT_ID){ CLIENT_ID = "c_"+Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-4); sessionStorage.setItem("rtflow.con.cid",CLIENT_ID); }
-
-  // ── RPC 传输: POST <endpoint>/relay/<session> {path:/api/rpc, body:{cmd,...}} ──
-  // 道并行而不相悖: 手机端 relay 串行处理 (截图/执行 JS 都在 UI 线程), 故客户端也单线在飞 ——
-  // 用一条 Promise 链把所有 RPC 串行化, 避免「主镜像 + 悬浮窗镜像 + 标签刷新」并发把手机打到超时/abort。
-  var rateUntil = 0, rpcChain = Promise.resolve();
-  function rpc(cmd, args, timeoutMs){
-    var run = function(){ return rpcRaw(cmd, args, timeoutMs); };
-    var p = rpcChain.then(run, run);
-    rpcChain = p.catch(function(){});
-    return p;
+  // ── 与手机的统一中继调用 (本页 + 各 srcdoc 板块共用同一通道) ─────────────
+  function relay(path, body, timeoutMs){
+    var ctrl = (typeof AbortController!=="undefined") ? new AbortController() : null;
+    var to = ctrl ? setTimeout(function(){ try{ctrl.abort();}catch(e){} }, timeoutMs||30000) : null;
+    return fetch(relayUrl(), {
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+TOKEN },
+      body: JSON.stringify({ path:path, method:"POST", body: body||{} }),
+      signal: ctrl ? ctrl.signal : undefined
+    }).then(function(r){ return r.text().then(function(t){
+      var j; try{ j=JSON.parse(t); }catch(e){ j={ error:"bad_json", raw:t }; }
+      return { status:r.status, body:j };
+    }); }).finally(function(){ if(to) clearTimeout(to); });
   }
-  async function rpcRaw(cmd, args, timeoutMs){
-    if(!cfg.session || !cfg.token){ throw new Error("未配置 session/token"); }
-    if(Date.now() < rateUntil) await new Promise(function(r){ setTimeout(r, rateUntil-Date.now()); });
-    var body = Object.assign({cmd:cmd}, args||{});
-    var ctrl = new AbortController(); var to = setTimeout(function(){ try{ctrl.abort();}catch(e){} }, timeoutMs||20000);
-    var r;
-    try{
-      r = await fetch(cfg.endpoint+"/relay/"+encodeURIComponent(cfg.session), {
-        method:"POST", signal:ctrl.signal,
-        headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+cfg.token },
-        body: JSON.stringify({ path:"/api/rpc", method:"POST", body: body })
+
+  // 资源原文 (板块 HTML / 引擎 JS), 取自手机 APK 真身, 缓存复用。
+  var ASSETS = Object.create(null);
+  function asset(name){
+    if(ASSETS[name]!=null) return Promise.resolve(ASSETS[name]);
+    return relay("/api/asset", { name:name }, 45000).then(function(res){
+      if(res.status!==200 || !res.body || !res.body.ok)
+        throw new Error("取资源失败 "+name+" ("+((res.body&&res.body.error)||res.status)+")");
+      ASSETS[name] = res.body.text; return res.body.text;
+    });
+  }
+  function b64(str){ try{ return btoa(unescape(encodeURIComponent(str))); }catch(e){ return btoa(str); } }
+
+  // 把板块页里的相对 <script src="x.js"> 取来内联为 data: URL (保留 defer/async 语义与顺序),
+  // 让 srcdoc 完全自洽 (不会回 Worker 取 404)。
+  function inlineDeps(html){
+    var re=/<script\b([^>]*?)\ssrc=(["'])([^"']+)\2([^>]*)>\s*<\/script>/gi, m, names=[];
+    while((m=re.exec(html))){ var s=m[3]; if(!/^(https?:)?\/\//i.test(s) && !/^data:/i.test(s)) names.push(s.replace(/^\.?\//,"")); }
+    var uniq=names.filter(function(n,i){ return names.indexOf(n)===i; });
+    return Promise.all(uniq.map(function(n){ return asset(n).then(function(c){ return [n,c]; }).catch(function(){ return [n,""]; }); }))
+      .then(function(pairs){
+        var map=Object.create(null); pairs.forEach(function(p){ map[p[0]]=p[1]; });
+        return html.replace(re, function(full,a,q,src,b){
+          if(/^(https?:)?\/\//i.test(src) || /^data:/i.test(src)) return full;
+          var nm=src.replace(/^\.?\//,""); if(map[nm]==null) return full;
+          return "<scr"+"ipt"+a+" src=\"data:application/javascript;base64,"+b64(map[nm])+"\""+b+"><\/scr"+"ipt>";
+        });
       });
-    } finally { clearTimeout(to); }
-    if(r.status===429){ rateUntil = Date.now()+2000; throw new Error("rate_limited"); }
-    var t = await r.text(); var j;
-    try{ j = JSON.parse(t); }catch(e){ throw new Error("bad_json: "+t.slice(0,80)); }
-    return j;
   }
-  async function cdp(tabIndex, method, params){
-    var j = await rpc("cdp", {tabIndex:tabIndex, method:method, params:params||{}});
-    if(j && j.ok===false) throw new Error(j.error||"cdp_err");
-    return j && j.result;
+  // remote-native 垫片须先于页面脚本执行 → 注入 <head> 最前。
+  // srcdoc 子文档无 URL query 且 location.origin 可能为 "null"(不透明源), 故把绝对中继端点 +
+  // session/token 经 window.__RN_CFG 显式注入, 垫片据此直连中继(中继已开 CORS+预检, 跨源亦可)。
+  function injectRn(html, rn){
+    var cfg="<scr"+"ipt>window.__RN_CFG="+JSON.stringify({session:SESSION,token:TOKEN,endpoint:ENDPOINT})+";<\/scr"+"ipt>";
+    var tag=cfg+"<scr"+"ipt>\n"+rn+"\n<\/scr"+"ipt>";
+    var h=html.search(/<head[^>]*>/i);
+    if(h>=0){ var gt=html.indexOf(">",h); if(gt>=0) return html.slice(0,gt+1)+"\n"+tag+html.slice(gt+1); }
+    return tag+"\n"+html;
   }
-
-  // ── 状态 ──
-  var tabsArr = [];        // browseListTabs 结果
-  var activeIdx = -1;      // 当前投屏的 tab index
-  var view = { cssW:384, cssH:602 };  // 当前 tab 的 CSS 视口 (反向坐标映射)
-  var pollTimer = null, listTimer = null, loopBusy = false;
-  var connected = false;
-  var pageZoom = 100;
-  // ── 手机端实时健康检测 ──
-  var health = { fails:0, since:0 };
-  function isStuckErr(m){ return /agent_timeout|timeout|aborted|Failed to fetch|NetworkError|load failed/i.test(String(m||"")); }
-  function markHealth(ok, reason){
-    var el=$("health"); if(!el) return;
-    if(ok){ if(health.fails){ health.fails=0; health.since=0; } el.classList.remove("show"); return; }
-    health.fails++; if(!health.since) health.since=Date.now();
-    if(health.fails>=2){
-      var sec=Math.round((Date.now()-health.since)/1000);
-      el.textContent="⚠ 手机端疑卡死/无响应"+(reason?(" · "+reason):"")+" · 已重试 "+health.fails+" 次/"+sec+"s · 正自动恢复…";
-      el.classList.add("show"); setDot("off");
-    }
+  function buildSrcdoc(file){
+    return Promise.all([ asset(file), asset("__rn.js") ]).then(function(r){
+      return inlineDeps(r[0]).then(function(inl){ return injectRn(inl, r[1]); });
+    });
   }
 
-  var dot=$("dot"), addr=$("addr"), frame=$("frame"), hint=$("hint"),
-      statusEl=$("status"), toastEl=$("toast"), fpsSel=$("fpsSel"), kbd=$("kbd");
-  var strip=$("strip"), plus=$("plus"), launch=$("launch"), menuPop=$("menuPop");
+  // ── 板块注册表 (与 APK 菜单同序同名) ────────────────────────────────────
+  var PAGES = [
+    {key:"switch",  file:"switch.html",      label:"切号面板",        ic:"🔁"},
+    {key:"cloud",   file:"cloud.html",       label:"对话 / Cloud",    ic:"☁"},
+    {key:"tunnel",  file:"tunnel.html",      label:"公网穿透",        ic:"🌐"},
+    {key:"vpn",     file:"vpn.html",         label:"VPN 加速",        ic:"🚀"},
+    {key:"scripts", file:"userscripts.html", label:"用户脚本 (油猴)", ic:"🐵"},
+    {key:"shizuku", file:"shizuku.html",     label:"Shizuku 权限",    ic:"🔑"},
+    {key:"daopan",  file:"daopan.html",      label:"全服通",          ic:"🌊"},
+    {key:"panel",   file:"panel.html",       label:"控制面板",        ic:"🎛"}
+  ];
+  function pageByKey(k){ for(var i=0;i<PAGES.length;i++) if(PAGES[i].key===k) return PAGES[i]; return null; }
 
-  function setDot(s){ dot.className=""; if(s) dot.classList.add(s); }
-  function setStatus(s){ statusEl.textContent = s||""; }
-  var toastT=null;
-  function toast(s){ toastEl.textContent=s; toastEl.classList.add("show");
-    if(toastT) clearTimeout(toastT); toastT=setTimeout(function(){ toastEl.classList.remove("show"); },1800); }
+  var tabs=[], active=-1, seq=0;
+  var strip=document.getElementById("strip"), plus=document.getElementById("plus");
+  var frames=document.getElementById("frames"), addr=document.getElementById("addr");
 
-  function curTab(){ return tabsArr.find(function(t){return t.index===activeIdx;}); }
-  function claimView(){
-    var t = curTab(); if(!t || !t.id) return;
-    rpc("browseClaimView",{id:t.id, clientId:CLIENT_ID},8000).catch(function(){});
-  }
-  function otherViewers(t){ return (t && t.viewers || []).filter(function(v){ return v && v!==CLIENT_ID; }); }
-  function coControlCount(){
-    var s={}; tabsArr.forEach(function(t){ otherViewers(t).forEach(function(v){ s[v]=1; }); });
-    return Object.keys(s).length;
-  }
-  function hostOf(u){ try{ return new URL(u).host; }catch(e){ return u||""; } }
+  function host(u){ try{ return new URL(u, location.href).host; }catch(e){ return u; } }
 
-  // ── 标签列表 → 横向标签条 ──
-  async function refreshTabs(){
-    try{
-      var j = await rpc("browseListTabs",{},12000);
-      if(!j || !j.tabs){ throw new Error(j&&j.error||"no_tabs"); }
-      connected=true; setDot("on"); markHealth(true);
-      tabsArr = j.tabs;
-      renderStrip();
-      claimView();
-      if(activeIdx<0){
-        var act = tabsArr.find(function(t){return t.active;});
-        if(act) selectTab(act.index);
-        else if(tabsArr.length) selectTab(tabsArr[0].index);
-      }
-    }catch(e){
-      connected=false; setDot("off");
-      var m=String(e.message||e), stuck=isStuckErr(m);
-      markHealth(false, stuck?"agent_timeout/超时":m);
-      if(m.indexOf("session")>=0){ openCfg(); }
-      setStatus(stuck? "手机端疑卡死/无响应, 自动重试…" : ("连接异常: "+m));
-    }
+  // ── 板块标签 (原生直渲, srcdoc) ─────────────────────────────────────────
+  function openPage(key){
+    var p=pageByKey(key); if(!p) return;
+    // 同板块已开 → 直接选中
+    for(var i=0;i<tabs.length;i++){ if(tabs[i].pageKey===key){ selectTab(tabs[i].id); return; } }
+    var t={ id:++seq, title:p.label, kind:"page", pageKey:key, ready:false };
+    var fr=document.createElement("iframe"); fr.className="hidden";
+    fr.setAttribute("allow","clipboard-read; clipboard-write");
+    fr.referrerPolicy="no-referrer";
+    t.fr=fr; frames.appendChild(fr);
+    var ld=document.createElement("div"); ld.className="load";
+    ld.innerHTML='<div class="sp"></div><div>正在原生加载 <b>'+p.label+'</b> …<br><span style="color:#6e7681">取真实页面与依赖 · 首次稍候</span></div>';
+    t.ld=ld; frames.appendChild(ld);
+    fr.addEventListener("load", function(){
+      try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){}
+    });
+    tabs.push(t); renderStrip(); selectTab(t.id);
+    buildSrcdoc(p.file).then(function(html){
+      t.ready=true; if(t.ld){ t.ld.remove(); t.ld=null; }
+      fr.srcdoc=html;
+    }).catch(function(e){
+      if(t.ld) t.ld.innerHTML='<div class="er">加载「'+p.label+'」失败：<br>'+String(e&&e.message||e)+
+        '<br><br>请确认手机端已是新版(v0.37.0+)且穿透已连通。</div>'+
+        '<button id="rt'+t.id+'">重试</button>';
+      var rb=document.getElementById("rt"+t.id);
+      if(rb) rb.onclick=function(){ closeTab(t.id); openPage(key); };
+    });
   }
+
+  // ── 外部网址 / Devin 对话: 在使用者自己的浏览器新标签打开 (登录态归使用者本机) ──
+  function openExternalNewTab(url){
+    if(!/^[a-z]+:\/\//i.test(url)) url="https://"+url;
+    try{ window.open(url, "_blank"); toast("已在新标签打开 "+host(url)); }
+    catch(e){ toast("无法打开新标签"); }
+  }
+  function openWeb(v){
+    var map={"切号":"switch","穿透":"tunnel","公网穿透":"tunnel","对话":"cloud","cloud":"cloud","vpn":"vpn",
+             "脚本":"scripts","用户脚本":"scripts","shizuku":"shizuku","全服通":"daopan","面板":"panel","控制面板":"panel"};
+    var lk=map[v.trim().toLowerCase()]||map[v.trim()];
+    if(lk){ openPage(lk); return; }
+    openExternalNewTab(v);
+  }
+
   function renderStrip(){
     [].slice.call(strip.querySelectorAll(".chip")).forEach(function(c){ c.remove(); });
-    var co = coControlCount();
-    tabsArr.forEach(function(t){
-      var others = otherViewers(t);
-      var shared = others.length>0;
-      var c=document.createElement("div");
-      c.className="chip"+(t.index===activeIdx?" on":"")+(shared?" shared":"");
-      var tt=document.createElement("span"); tt.className="t";
-      tt.textContent=(t.title||hostOf(t.url)||"新标签");
-      c.appendChild(tt);
-      if(shared){
-        var hasPhone = others.indexOf("__phone__")>=0;
-        var cob=document.createElement("span"); cob.className="co";
-        cob.textContent = "☁"+others.length;
-        cob.title = hasPhone? "手机本体在前 + 其他设备共 "+others.length+" 台正看/控此页" : (others.length+" 台其他设备正看/控此页");
-        c.appendChild(cob);
-      }
-      var x=document.createElement("span"); x.className="x"; x.textContent="×"; x.title="关闭";
-      c.appendChild(x);
-      c.onclick=function(e){
-        if(e.target===x){ closeTab(t.index); return; }
-        if(shared){ duplicateTab(t); return; }
-        selectTab(t.index);
-      };
+    tabs.forEach(function(t,i){
+      var c=document.createElement("div"); c.className="chip"+(i===active?" on":""); c.dataset.id=t.id;
+      var tt=document.createElement("span"); tt.className="t"; tt.textContent=t.title||"新标签";
+      var x=document.createElement("span"); x.className="x"; x.textContent="×";
+      c.appendChild(tt); c.appendChild(x);
+      c.onclick=function(e){ if(e.target===x){ closeTab(t.id); return; } selectTab(t.id); };
       strip.insertBefore(c, plus);
     });
-    addr.value = (function(){ var t=curTab(); return t? (t.internal? ("rtflow://"+(t.title||"板块")) : (t.url||"")) : ""; })();
-    document.title = "Devin Cloud · 手机版 (网页)"+(co>0? " · "+co+" 设备联控":"");
   }
-  function duplicateTab(t){
-    toast("该页其他设备在操控 · 正为你弹出独立副本…");
-    var before = tabsArr.map(function(x){return x.id;});
-    var p;
-    if(t.internal){
-      var asset = (t.url||"").replace(/^.*\/engine\//,"file:///android_asset/engine/");
-      if(asset.indexOf("session=")<0) asset += (asset.indexOf("?")>=0?"&":"?")+"session="+encodeURIComponent(cfg.session)+"&token="+encodeURIComponent(cfg.token);
-      p = rpc("browseOpen",{url:asset, foreground:false},15000);
-    } else if(t.account && (t.account.id||t.account.email)){
-      p = rpc("openAccountTab",{account:(t.account.id||t.account.email), url:t.url||"https://app.devin.ai/", foreground:false},15000);
-    } else {
-      p = rpc("browseOpen",{url:t.url||"https://app.devin.ai/", foreground:false},15000);
+  function selectTab(id){
+    for(var i=0;i<tabs.length;i++){
+      var on=tabs[i].id===id; tabs[i].fr.className=on?"":"hidden";
+      if(tabs[i].ld) tabs[i].ld.style.display=on?"flex":"none";
+      if(on) active=i;
     }
-    p.then(function(){ setTimeout(function(){ refreshTabs().then(function(){
-        var fresh = tabsArr.filter(function(x){ return before.indexOf(x.id)<0; });
-        if(fresh.length){ selectTab(fresh[fresh.length-1].index); }
-        else { toast("已弹出副本"); }
-      }); }, 1000); })
-     .catch(function(e){ toast("复刻失败: "+e.message); });
+    var t=tabs[active];
+    if(t) addr.value="rtflow://"+(t.pageKey||"");
+    renderStrip();
+  }
+  function closeTab(id){
+    var i=-1; for(var k=0;k<tabs.length;k++){ if(tabs[k].id===id){ i=k; break; } }
+    if(i<0) return;
+    var t=tabs[i]; if(t.ld) t.ld.remove(); t.fr.remove(); tabs.splice(i,1);
+    if(tabs.length===0){ openPage("switch"); return; }
+    if(active>=tabs.length) active=tabs.length-1;
+    selectTab(tabs[Math.max(0,active)].id);
   }
 
-  // ── 选标签 / 投屏循环 ──
-  var selGen = 0;
-  async function selectTab(idx){
-    var gen = ++selGen;
-    activeIdx = idx; renderStrip();
-    claimView();
-    var t = tabsArr.find(function(x){return x.index===idx;});
-    // 首帧到达前不要只露黑底: 给出居中「接入实时画面」提示, 拿到第一帧即隐藏 (见 shotNow)。
-    hint.textContent="正在接入实时画面…"; hint.style.display="";
-    frame.classList.add("empty"); setStatus("切换到标签 "+idx+" … (首帧合成约 1s)");
-    try{
-      var r = await cdp(idx,"Runtime.evaluate",{expression:"JSON.stringify({w:innerWidth,h:innerHeight})",returnByValue:true});
-      var v = JSON.parse(r.result.value); if(v.w) view={cssW:v.w,cssH:v.h};
-    }catch(e){}
-    if(gen!==selGen) return;
-    await new Promise(function(r2){ setTimeout(r2, 200); });
-    if(gen!==selGen) return;
-    shotNow(); startLoop();
-  }
-  function startLoop(){
-    if(pollTimer){ clearInterval(pollTimer); pollTimer=null; }
-    var ms = parseInt(fpsSel.value,10)||0;
-    if(ms>0) pollTimer = setInterval(shotNow, ms);
-  }
-  async function shotNow(){
-    if(loopBusy || activeIdx<0) return;
-    loopBusy=true;
-    var want = activeIdx;
-    try{
-      var j = await rpc("browseScreenshot",{tabIndex:want, format:"jpeg", quality:48, maxWidth:900}, 18000);
-      if(want!==activeIdx) return;
-      var b64 = j && (j.base64||j.data||j.image);
-      if(j && (j.ok===false || j.error)){
-        var em=String(j.error||"");
-        if(isStuckErr(em)){ markHealth(false, "agent_timeout/超时"); setStatus("手机端疑卡死/无响应, 自动重试…"); }
-        else setStatus("截图失败: "+em);
-      }
-      else if(b64){
-        var mime = b64.charAt(0)==="/" ? "image/jpeg" : (b64.charAt(0)==="i"?"image/png":"image/jpeg");
-        frame.src = "data:"+mime+";base64,"+b64;
-        frame.classList.remove("empty"); hint.style.display="none";
-        connected=true; setDot("on"); markHealth(true);
-        setStatus("● 实时 · "+view.cssW+"×"+view.cssH+" · 标签 "+want);
-      }
-    }catch(e){
-      var m=String(e.message||e);
-      if(m.indexOf("rate")>=0){ setStatus("限流, 自动降速…"); }
-      else if(isStuckErr(m)){ markHealth(false,"agent_timeout/超时"); setStatus("手机端疑卡死/无响应, 自动重试…"); }
-      else { setDot("off"); setStatus("掉线: "+m); }
-    }finally{ loopBusy=false; }
-  }
-
-  // ── 反向控制核心 (与原生 ipcMirrorInput 同核心) ──
-  var MIRROR_CORE =
-    "var x=Math.round(A.nx*window.innerWidth),y=Math.round(A.ny*window.innerHeight);" +
-    "var el=document.elementFromPoint(x,y);" +
-    "function fire(t,tg){var ev;try{ev=new MouseEvent(t,{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,view:window,button:0});}catch(_){ev=document.createEvent('MouseEvents');ev.initMouseEvent(t,true,true,window,0,0,0,x,y,false,false,false,false,0,null);}(tg||el).dispatchEvent(ev);}" +
-    "function fp(t,tg){try{(tg||el).dispatchEvent(new PointerEvent(t,{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,view:window,pointerType:'touch',isPrimary:true,button:0}));}catch(_){}}" +
-    "function setv(t,v){var p=(t.tagName==='TEXTAREA')?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;var s=Object.getOwnPropertyDescriptor(p,'value').set;s.call(t,v);t.dispatchEvent(new Event('input',{bubbles:true}));t.dispatchEvent(new Event('change',{bubbles:true}));}" +
-    "function isEd(n){return n&&(n.isContentEditable||n.tagName==='INPUT'||n.tagName==='TEXTAREA');}" +
-    "function findEd(n){for(var i=0;i<5&&n;i++){if(n.matches&&n.matches('[contenteditable=true],input:not([type=hidden]):not([type=button]):not([type=submit]),textarea'))return n;var q=n.querySelector&&n.querySelector('[contenteditable=true],textarea,input:not([type=hidden]):not([type=button]):not([type=submit])');if(q)return q;n=n.parentElement;}return null;}" +
-    "function caret(ed){if(!ed||!ed.isContentEditable)return;try{var rg=document.createRange();rg.selectNodeContents(ed);rg.collapse(false);var sl=getSelection();sl.removeAllRanges();sl.addRange(rg);}catch(_){}}" +
-    "if(A.action==='click'||A.action==='tap'){if(!el)return'noel';fp('pointerdown');fire('mousedown');try{el.focus&&el.focus();}catch(_){}fp('pointerup');fire('mouseup');fire('click');if(!isEd(document.activeElement)){var ed=findEd(el);if(ed){try{ed.focus();}catch(_){}caret(ed);}}return'click';}" +
-    "if(A.action==='scroll'){var sc=el;while(sc&&sc!==document.body&&sc!==document.documentElement){var st=getComputedStyle(sc);if(/(auto|scroll)/.test(st.overflowY)&&sc.scrollHeight>sc.clientHeight)break;sc=sc.parentElement;}if(sc&&sc!==document.body&&sc!==document.documentElement){sc.scrollTop+=A.dy;}else{window.scrollBy(0,A.dy);}return'scroll';}" +
-    "if(A.action==='type'||A.action==='settext'){var t=document.activeElement;if(!t||t===document.body){if(el&&el.focus){try{el.focus();}catch(_){}}t=document.activeElement;}if(!t)return'nofocus';var tg=(t.tagName||'').toLowerCase();if(tg==='input'||tg==='textarea'){setv(t,A.action==='settext'?A.text:((t.value||'')+A.text));return'type';}if(t.isContentEditable){var sl=getSelection();if(!sl.rangeCount||(sl.anchorNode&&!t.contains(sl.anchorNode))){caret(t);}document.execCommand('insertText',false,A.text);return'type-ce';}return'notinput';}" +
-    "if(A.action==='key'){var t=document.activeElement||document.body;var k=A.key||'Enter';var kc=k==='Enter'?13:(k==='Backspace'?8:0);['keydown','keypress','keyup'].forEach(function(tp){if(tp==='keypress'&&k!=='Enter')return;try{t.dispatchEvent(new KeyboardEvent(tp,{bubbles:true,cancelable:true,key:k,code:k,keyCode:kc,which:kc,view:window}));}catch(_){}});if(k==='Backspace'){if(t.tagName==='INPUT'||t.tagName==='TEXTAREA'){setv(t,(t.value||'').slice(0,-1));}else if(t.isContentEditable){document.execCommand('delete',false,null);}}return'key';}" +
-    "if(A.action==='back'){history.back();return'back';}return'noop';";
-  var lastTap = {nx:0.5, ny:0.5};
-  async function injectTo(tabIdx, action, opts){
-    if(tabIdx<0) return;
-    var A = Object.assign({action:action, nx:lastTap.nx, ny:lastTap.ny, text:"", key:"", dy:0}, opts||{});
-    var js = "(function(A){try{"+MIRROR_CORE+"}catch(e){return 'err:'+e}})("+JSON.stringify(A)+")";
-    try{ await rpc("browseExecJs",{tabIndex:tabIdx, js:js}, 12000); }
-    catch(e){ toast("操作失败: "+e.message); }
-  }
-  function inject(action, opts){ return injectTo(activeIdx, action, opts); }
-  function normIn(imgEl, vw, vh, ev){
-    var r = imgEl.getBoundingClientRect();
-    var aw = vw||imgEl.naturalWidth||r.width, ah = vh||imgEl.naturalHeight||r.height;
-    var scale = Math.min(r.width/aw, r.height/ah);
-    var dw = aw*scale, dh = ah*scale;
-    var ox = r.left + (r.width-dw)/2, oy = r.top + (r.height-dh)/2;
-    var nx = (ev.clientX-ox)/dw, ny = (ev.clientY-oy)/dh;
-    return { nx:Math.max(0,Math.min(1,nx)), ny:Math.max(0,Math.min(1,ny)) };
-  }
-  function frameToNorm(ev){ return normIn(frame, view.cssW, view.cssH, ev); }
-  frame.addEventListener("click", function(ev){
-    ev.preventDefault(); if(activeIdx<0) return;
-    kbd.focus();
-    lastTap = frameToNorm(ev);
-    inject("click", lastTap).then(function(){ setTimeout(shotNow,140); setTimeout(shotNow,420); });
-  });
-  frame.addEventListener("wheel", function(ev){
-    ev.preventDefault(); if(activeIdx<0) return;
-    var p=frameToNorm(ev); p.dy=Math.round(ev.deltaY);
-    inject("scroll", p).then(function(){ setTimeout(shotNow,120); });
-  }, {passive:false});
-
-  var typeBuf="", typeTimer=null;
-  function flushType(){
-    if(typeTimer){ clearTimeout(typeTimer); typeTimer=null; }
-    if(!typeBuf) return;
-    var s=typeBuf; typeBuf="";
-    inject("type",{text:s}).then(function(){ setTimeout(shotNow,120); });
-  }
-  function queueType(ch){
-    typeBuf+=ch;
-    if(typeTimer) clearTimeout(typeTimer);
-    typeTimer=setTimeout(flushType, 160);
-  }
-  kbd.addEventListener("keydown", function(ev){
-    if(activeIdx<0) return;
-    if(ev.isComposing) return;
-    if(ev.key==="Enter"){ ev.preventDefault(); flushType(); inject("key",{key:"Enter"}).then(function(){setTimeout(shotNow,160);}); }
-    else if(ev.key==="Backspace"){ ev.preventDefault(); flushType(); inject("key",{key:"Backspace"}).then(function(){setTimeout(shotNow,150);}); }
-    else if(ev.key.length===1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey){ ev.preventDefault(); queueType(ev.key); }
-  });
-  kbd.addEventListener("compositionend", function(ev){
-    if(activeIdx<0) return;
-    var s=ev.data||""; if(s) queueType(s);
-    flushType();
-    kbd.value="";
-  });
-
-  // ── 第二行工具栏: 缩放 / 收藏 / 重载 / 翻译 ──
-  function applyZoom(){
-    pageZoom = Math.max(50, Math.min(170, pageZoom));
-    $("zoomLabel").textContent = pageZoom+"%";
-    $("zoomBar").value = pageZoom;
-    frame.style.transform = "scale("+(pageZoom/100)+")";
-  }
-  $("zoomBar").addEventListener("input", function(){ pageZoom = parseInt(this.value,10)||100; applyZoom(); });
-  $("zicon").addEventListener("dblclick", function(){ pageZoom=100; applyZoom(); });
-  $("zicon").addEventListener("click", function(){ pageZoom=100; applyZoom(); });
-  $("reloadBtn").onclick=function(){ if(activeIdx<0)return; cdp(activeIdx,"Runtime.evaluate",{expression:"location.reload()"}).then(function(){setTimeout(shotNow,800);}); };
-  $("starBtn").onclick=function(){ var t=curTab(); if(!t){ toast("无当前标签"); return; }
-    var bm = JSON.parse(localStorage.getItem("rtflow.con.bm")||"[]");
-    var url = t.url||""; var i = bm.findIndex(function(b){return b.url===url;});
-    if(i>=0){ bm.splice(i,1); $("starBtn").innerHTML="&#9734;"; toast("已取消收藏"); }
-    else { bm.push({url:url, title:t.title||hostOf(url)}); $("starBtn").innerHTML="&#9733;"; toast("已收藏 (浏览器本地)"); }
-    localStorage.setItem("rtflow.con.bm", JSON.stringify(bm));
-  };
-  $("trBtn").onclick=function(){ if(activeIdx<0){ toast("无当前标签"); return; }
-    // 整页翻译: 注入 Google 翻译元件到镜像的手机页 (在手机 WebView 内运行)
-    var js="(function(){try{if(window.__rtTr){location.reload();return 'off';}window.__rtTr=1;var s=document.createElement('script');s.src='https://translate.google.com/translate_a/element.js?cb=__rtTrCb';window.__rtTrCb=function(){new google.translate.TranslateElement({pageLanguage:'auto',includedLanguages:'zh-CN',autoDisplay:true},document.body);};document.body.appendChild(s);return 'on';}catch(e){return 'err:'+e;}})()";
-    cdp(activeIdx,"Runtime.evaluate",{expression:js}).then(function(){ toast("整页翻译已切换"); setTimeout(shotNow,1500); })
-      .catch(function(){ toast("翻译失败 (该页可能禁外链)"); });
-  };
-
-  function goAddr(){
-    var v=addr.value.trim(); if(!v) return;
-    var map={"切号":"switch.html","穿透":"tunnel.html","公网穿透":"tunnel.html","对话":"cloud.html","cloud":"cloud.html",
-             "vpn":"vpn.html","脚本":"userscripts.html","用户脚本":"userscripts.html","shizuku":"shizuku.html","全服通":"daopan.html","面板":"panel.html","控制面板":"panel.html"};
-    var asset=map[v.toLowerCase()]||map[v];
-    if(asset){ var seg=SEGS.find(function(s){return s.asset===asset;}); if(seg){ openPanel(seg); return; } }
-    if(!/^[a-z]+:\/\//i.test(v)) v="https://"+v;
-    rpc("browseOpen",{url:v, foreground:false},15000)
-      .then(function(){ toast("已打开 "+hostOf(v)); setTimeout(refreshTabs,1000); })
-      .catch(function(e){ toast("打开失败: "+e.message); });
-  }
-  $("go").onclick=goAddr;
+  // ── 地址栏 ──
+  function goAddr(){ var v=addr.value.trim(); if(!v) return;
+    if(/^rtflow:\/\//i.test(v)){ openPage(v.replace(/^rtflow:\/\//i,"").trim()); return; } openWeb(v); }
+  document.getElementById("go").onclick=goAddr;
   addr.addEventListener("keydown",function(e){ if(e.key==="Enter") goAddr(); });
+  document.getElementById("reload").onclick=function(){ var t=tabs[active]; if(t&&t.pageKey){ var k=t.pageKey; closeTab(t.id); openPage(k); } };
 
-  // ── 板块 / 新实例 (与 APK 菜单同序同名) ──
-  var SEGS = [
-    {label:"切号面板", ic:"🔁", asset:"switch.html"},
-    {label:"对话 / Cloud", ic:"☁", asset:"cloud.html"},
-    {label:"公网穿透", ic:"🌐", asset:"tunnel.html"},
-    {label:"VPN 加速", ic:"🚀", asset:"vpn.html"},
-    {label:"用户脚本 (油猴)", ic:"🐵", asset:"userscripts.html"},
-    {label:"Shizuku 权限", ic:"🔑", asset:"shizuku.html"},
-    {label:"全服通", ic:"🌊", asset:"daopan.html"},
-    {label:"控制面板", ic:"🎛", asset:"panel.html"}
-  ];
-  function buildSegs(){
-    var box=$("segGrid"); box.innerHTML="";
-    SEGS.forEach(function(s){
-      var d=document.createElement("div"); d.className="seg";
-      d.innerHTML='<span class="ic">'+s.ic+'</span><span>'+s.label+'</span>';
-      d.onclick=function(){ hideLaunch(); openPanel(s); };
-      box.appendChild(d);
-    });
-    var d=document.createElement("div"); d.className="seg";
-    d.innerHTML='<span class="ic">🟢</span><span>新 Devin 实例</span>';
-    d.onclick=function(){ hideLaunch(); openPick(); }; box.appendChild(d);
-  }
-  function openPanel(s){
-    var found = tabsArr.find(function(t){ return t.internal && (t.url||"").indexOf(s.asset)>=0; });
-    if(found){ selectTab(found.index); return; }
-    rpc("browseOpen",{url:"file:///android_asset/engine/"+s.asset+"?session="+encodeURIComponent(cfg.session)+"&token="+encodeURIComponent(cfg.token), foreground:false},12000)
-      .then(function(){ toast("已打开 "+s.label); setTimeout(function(){ refreshTabs().then(function(){ var f=tabsArr.find(function(t){return t.internal&&(t.url||"").indexOf(s.asset)>=0;}); if(f) selectTab(f.index); }); },900); })
-      .catch(function(e){ toast("打开失败: "+e.message); });
-  }
-  async function openPick(){
-    var list=$("pickList"); list.innerHTML="<div style='color:var(--muted);padding:8px'>读取账号…</div>";
-    $("pick").classList.add("show");
-    var accs=[];
-    try{ var j=await rpc("getState",{},12000); accs=(j&&(j.accounts||j.state&&j.state.accounts))||[]; }catch(e){}
-    list.innerHTML="";
-    var add=function(label,fn){ var d=document.createElement("div"); d.className="pr"; d.textContent=label; d.onclick=fn; list.appendChild(d); };
-    add("➕ 新建空白 Devin 标签 (默认账号)", function(){ doOpenAccount("_"); });
-    (accs||[]).forEach(function(a){
-      var id=a.id||a.email; if(!id) return;
-      add("🟢 "+(a.orgName?a.orgName+" · ":"")+(a.email||id), function(){ doOpenAccount(id); });
-    });
-    if(!(accs&&accs.length)) add("(未读到账号, 仍可用默认账号新开)", function(){});
-  }
-  function doOpenAccount(id){
-    $("pick").classList.remove("show");
-    rpc("openAccountTab",{account:id, url:"https://app.devin.ai/", foreground:false},15000)
-      .then(function(){ toast("已新开实例"); setTimeout(refreshTabs,1200); })
-      .catch(function(e){
-        rpc("browseOpen",{url:"https://app.devin.ai/",foreground:false},15000)
-          .then(function(){ toast("已新开标签"); setTimeout(refreshTabs,1200); })
-          .catch(function(e2){ toast("新开失败: "+e2.message); });
-      });
-  }
-  $("pick").onclick=function(e){ if(e.target===$("pick")) $("pick").classList.remove("show"); };
-
-  function closeTab(idx){
-    rpc("browseClose",{tabIndex:idx},10000).catch(function(){ return rpc("closeTab",{tabIndex:idx},10000); })
-      .then(function(){ if(activeIdx===idx) activeIdx=-1; setTimeout(refreshTabs,500); })
-      .catch(function(e){ toast("关闭失败: "+e.message); });
-  }
-
-  // ── 新标签面板 (+ / launch) ──
-  function showLaunch(){ launch.classList.add("show"); var u=$("urlInput"); u.value=""; setTimeout(function(){u.focus();},50); }
+  // ── 新标签面板 ──
+  var launch=document.getElementById("launch"), segGrid=document.getElementById("segGrid");
+  PAGES.forEach(function(p){ var s=document.createElement("div"); s.className="seg";
+    s.innerHTML='<span class="ic">'+p.ic+'</span><span>'+p.label+'</span>';
+    s.onclick=function(){ hideLaunch(); openPage(p.key); }; segGrid.appendChild(s); });
+  (function(){ var s=document.createElement("div"); s.className="seg";
+    s.innerHTML='<span class="ic">🟢</span><span>新标签 (Devin 对话)</span>';
+    s.onclick=function(){ hideLaunch(); openExternalNewTab("https://app.devin.ai/"); }; segGrid.appendChild(s); })();
+  function showLaunch(){ launch.classList.add("show"); var u=document.getElementById("urlInput"); u.value=""; setTimeout(function(){u.focus();},50); }
   function hideLaunch(){ launch.classList.remove("show"); }
   plus.onclick=showLaunch;
   launch.onclick=function(e){ if(e.target===launch) hideLaunch(); };
-  $("urlGo").onclick=function(){ var v=$("urlInput").value.trim(); if(v){ hideLaunch(); addr.value=v; goAddr(); } };
-  $("urlInput").addEventListener("keydown",function(e){ if(e.key==="Enter"){ var v=this.value.trim(); if(v){ hideLaunch(); addr.value=v; goAddr(); } } });
+  document.getElementById("urlGo").onclick=function(){ var v=document.getElementById("urlInput").value.trim(); if(v){ hideLaunch(); openWeb(v); } };
+  document.getElementById("urlInput").addEventListener("keydown",function(e){ if(e.key==="Enter"){ var v=this.value.trim(); if(v){ hideLaunch(); openWeb(v); } } });
 
-  // ── 页内执行小工具 (后退/前进/查找/夜间/阅读) ──
-  function execActive(expr, delay){ if(activeIdx<0){ toast("无当前标签"); return; }
-    cdp(activeIdx,"Runtime.evaluate",{expression:expr}).then(function(){ setTimeout(shotNow, delay||600); }).catch(function(){}); }
-  function findInPage(){ var q=prompt("页内查找:"); if(!q) return;
-    execActive("(function(){try{window.find("+JSON.stringify(q)+");return 1;}catch(e){return 0;}})()", 300); }
-  function nightMode(){ execActive("(function(){var id='__rtNight';var ex=document.getElementById(id);if(ex){ex.remove();return 'off';}var s=document.createElement('style');s.id=id;s.textContent='html{filter:invert(1) hue-rotate(180deg)!important;background:#111!important}img,video,canvas,svg,[style*=background-image]{filter:invert(1) hue-rotate(180deg)!important}';document.documentElement.appendChild(s);return 'on';})()", 200); toast("夜间模式已切换"); }
-  function readMode(){ execActive("(function(){try{var a=document.querySelector('article')||document.querySelector('main')||document.body;var t=a.innerText;var w=document.createElement('div');w.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#0e1116;color:#cdd3de;font:17px/1.7 -apple-system,sans-serif;padding:24px;overflow:auto;white-space:pre-wrap';w.textContent=t;w.onclick=function(){w.remove();};document.body.appendChild(w);return 'on';}catch(e){return 'err';}})()", 200); toast("阅读模式 (点击关闭)"); }
-
-  // ── 汉堡菜单 (复刻 APK PopupMenu 全部项 + 子分组) ──
-  function buildMenu(){
-    menuPop.innerHTML="";
-    grp("模块");
-    mi("🔁","切号面板", function(){ openPanel(seg("switch.html")); });
-    mi("☁","对话 / Cloud", function(){ openPanel(seg("cloud.html")); });
-    mi("🌐","公网穿透", function(){ openPanel(seg("tunnel.html")); });
-    mi("🚀","VPN 加速", function(){ openPanel(seg("vpn.html")); });
-    mi("➕","新标签 (Devin)", openPick);
-    mi("🕶","无痕标签", function(){ doOpenAccount("_"); toast("已新开标签 (无痕为手机本机隔离)"); }, "📱");
-    mi("🕘","浏览历史", function(){ openPanel(seg("panel.html")); }, "📱");
-    mi("⭐","书签收藏", showBookmarks);
-    mi("🐵","用户脚本 (油猴)", function(){ openPanel(seg("userscripts.html")); });
-    mi("🔑","Shizuku 权限 (自我 ADB)", function(){ openPanel(seg("shizuku.html")); });
-    sep(); grp("页面工具");
-    mi("◀","后退", function(){ execActive("history.back()"); });
-    mi("▶","前进", function(){ execActive("history.forward()"); });
-    mi("⌂","主页 (切号面板)", function(){ openPanel(seg("switch.html")); });
-    mi("🔎","页内查找", findInPage);
-    mi("🖥","桌面版网站", function(){ toast("桌面/移动版切换为手机本机功能 (改 UA)"); }, "📱");
-    mi("📖","阅读模式", readMode);
-    mi("🌙","夜间模式", nightMode);
-    mi("📦","导出整机分享包 (APK+全部数据)", function(){ toast("导出分享包为手机本机操作"); }, "📱");
-    mi("📥","导入分享包 (换机同步)", function(){ toast("导入分享包为手机本机操作"); }, "📱");
-    sep(); grp("分享");
-    mi("🔗","分享本页", function(){ copyUrl(); });
-    mi("📋","复制网址", copyUrl);
-    mi("🏠","添加到主屏", function(){ toast("添加到主屏为手机本机操作"); }, "📱");
-    sep(); grp("镜像 / 连接");
-    mi("⟳","立即刷新镜像", shotNow);
-    mi("🎞","镜像帧率: "+fpsText(), cycleFps);
-    mi("⚙","连接设置", openCfg);
-  }
-  function seg(asset){ return SEGS.find(function(s){return s.asset===asset;}); }
-  function fpsText(){ var o=fpsSel.options[fpsSel.selectedIndex]; return o?o.text:""; }
-  function cycleFps(){ fpsSel.selectedIndex=(fpsSel.selectedIndex+1)%fpsSel.options.length; startLoop(); toast("帧率 "+fpsText()); menuPop.dataset.built=""; }
-  function copyUrl(){ var t=curTab(); if(!t){ toast("无当前标签"); return; }
-    try{ navigator.clipboard.writeText(t.url||""); toast("已复制网址"); }catch(e){ toast("复制失败"); } }
-  function showBookmarks(){
-    var bm = JSON.parse(localStorage.getItem("rtflow.con.bm")||"[]");
-    if(!bm.length){ toast("暂无收藏 (点 ★ 收藏当前页)"); return; }
-    var list=$("pickList"); list.innerHTML=""; $("pick").classList.add("show");
-    bm.slice().reverse().forEach(function(b){ var d=document.createElement("div"); d.className="pr";
-      d.textContent="⭐ "+(b.title||b.url); d.onclick=function(){ $("pick").classList.remove("show"); addr.value=b.url; goAddr(); }; list.appendChild(d); });
-  }
-  function grp(t){ var d=document.createElement("div"); d.className="grp"; d.textContent=t; menuPop.appendChild(d); }
-  function mi(ic,label,fn,ph){ var d=document.createElement("div"); d.className="mi";
-    d.innerHTML='<span class="ic">'+ic+'</span><span>'+label+'</span>'+(ph?'<span class="ph">'+ph+'</span>':'');
+  // ── 菜单 ──
+  var menuPop=document.getElementById("menuPop");
+  function mi(ic,label,fn){ var d=document.createElement("div"); d.className="mi";
+    d.innerHTML='<span class="ic">'+ic+'</span><span>'+label+'</span>';
     d.onclick=function(){ menuPop.classList.remove("show"); fn(); }; menuPop.appendChild(d); }
   function sep(){ var s=document.createElement("div"); s.className="sep"; menuPop.appendChild(s); }
-  $("menuBtn").onclick=function(e){ e.stopPropagation();
+  function buildMenu(){
+    menuPop.innerHTML="";
+    PAGES.forEach(function(p){ mi(p.ic, p.label, function(){ openPage(p.key); }); });
+    mi("🟢","新标签 (Devin 对话)", function(){ openExternalNewTab("https://app.devin.ai/"); });
+    sep();
+    mi("🔗","复制接入链接", function(){ var u=location.origin+"/console?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN);
+      try{ navigator.clipboard.writeText(u); toast("已复制接入链接"); }catch(e){ toast(u); } });
+    mi("⚙","接入设置 (Session/Token)", function(){ showCfg(); });
+    mi("↻","重连/刷新本页", function(){ location.reload(); });
+  }
+  document.getElementById("menuBtn").onclick=function(e){ e.stopPropagation();
     if(!menuPop.dataset.built){ buildMenu(); menuPop.dataset.built="1"; }
     menuPop.classList.toggle("show"); };
   document.addEventListener("click", function(){ menuPop.classList.remove("show"); });
 
-  // ── 悬浮窗通用: 拖动 ──
-  function makeDraggable(panel, handle){
-    var dx=0, dy=0, ox=0, oy=0, drag=false;
-    handle.addEventListener("pointerdown", function(ev){ drag=true; dx=ev.clientX; dy=ev.clientY;
-      var r=panel.getBoundingClientRect(); ox=r.left; oy=r.top; panel.style.right="auto";
-      panel.style.left=ox+"px"; panel.style.top=oy+"px"; try{handle.setPointerCapture(ev.pointerId);}catch(e){} });
-    handle.addEventListener("pointermove", function(ev){ if(!drag) return;
-      panel.style.left=(ox+ev.clientX-dx)+"px"; panel.style.top=Math.max(0,oy+ev.clientY-dy)+"px"; });
-    handle.addEventListener("pointerup", function(){ drag=false; });
-  }
-  makeDraggable($("fwDl"), $("fwDlHead"));
-  makeDraggable($("fwDao"), $("fwDaoHead"));
-
-  // ── 下载悬浮窗 (📥) ──
-  function toggleDl(){ var p=$("fwDl"); if(p.classList.contains("show")){ p.classList.remove("show"); return; }
-    p.classList.add("show"); loadDownloads(); }
-  $("dlBtn").onclick=toggleDl;
-  $("fwDlClose").onclick=function(){ $("fwDl").classList.remove("show"); };
-  async function loadDownloads(){
-    var box=$("fwDlList"); box.innerHTML="<div class='dlempty'>读取下载…</div>";
-    var items=null;
-    try{ var j=await rpc("listDownloads",{},10000); items=j&&j.items; }
-    catch(e){ box.innerHTML="<div class='dlempty'>读取失败: "+e.message+"</div>"; return; }
-    if(items==null){ box.innerHTML="<div class='dlempty'>需把手机端升级到 v0.35.6+\n才能在网页查看手机下载列表</div>"; return; }
-    if(!items.length){ box.innerHTML="<div class='dlempty'>暂无下载\n网页里下载的文件会出现在这里</div>"; return; }
-    box.innerHTML="";
-    items.slice().reverse().forEach(function(it){
-      var row=document.createElement("div"); row.className="dlrow";
-      var info=document.createElement("div"); info.className="info";
-      var nm=document.createElement("div"); nm.className="nm"; nm.textContent=it.name||"(文件)";
-      var sub=document.createElement("div"); sub.className="sub"; sub.textContent=(it.sizeText||"")+" · 在手机本机操作";
-      info.appendChild(nm); info.appendChild(sub);
-      var act=document.createElement("button"); act.className="act"; act.innerHTML="&#8942;"; act.title="操作";
-      act.onclick=function(e){ e.stopPropagation(); dlActions(it); };
-      row.appendChild(info); row.appendChild(act); box.appendChild(row);
-    });
-  }
-  function dlActions(it){
-    var which=prompt("对「"+(it.name||"文件")+"」执行 (在手机本机):\n1=分享  2=用其它应用打开  3=删除\n输入数字:");
-    var map={"1":"share","2":"open","3":"delete"};
-    var a=map[(which||"").trim()]; if(!a) return;
-    rpc("downloadAction",{index:it.index, action:a},10000)
-      .then(function(){ toast(a==="delete"?"已删除":"已在手机执行"); if(a==="delete") loadDownloads(); })
-      .catch(function(e){ toast("失败: "+e.message); });
-  }
-
-  // ── 全服通悬浮窗 (🗂): 实时镜像手机内真实 全服通 页 ──
-  var dao = { idx:-1, view:{cssW:320,cssH:440}, timer:null, busy:false };
-  function toggleDao(){ var p=$("fwDao"); if(p.classList.contains("show")){ closeDao(); return; } openDao(); }
-  $("daoBtn").onclick=toggleDao;
-  $("fwDaoClose").onclick=closeDao;
-  function closeDao(){ $("fwDao").classList.remove("show"); if(dao.timer){ clearInterval(dao.timer); dao.timer=null; } }
-  async function openDao(){
-    $("fwDao").classList.add("show"); $("fwDaoHint").style.display="block"; $("fwDaoHint").textContent="正在打开 全服通…";
-    var found = tabsArr.find(function(t){ return t.internal && (t.url||"").indexOf("daopan.html")>=0; });
-    if(found){ dao.idx=found.index; startDao(); return; }
-    try{
-      await rpc("browseOpen",{url:"file:///android_asset/engine/daopan.html?session="+encodeURIComponent(cfg.session)+"&token="+encodeURIComponent(cfg.token), foreground:false},12000);
-      setTimeout(function(){ refreshTabs().then(function(){
-        var f=tabsArr.find(function(t){return t.internal&&(t.url||"").indexOf("daopan.html")>=0;});
-        if(f){ dao.idx=f.index; startDao(); } else { $("fwDaoHint").textContent="打开 全服通 失败, 重试…"; }
-      }); }, 1000);
-    }catch(e){ $("fwDaoHint").textContent="打开失败: "+e.message; }
-  }
-  function startDao(){
-    if(dao.idx<0) return;
-    rpc("browseClaimView",{id:(tabsArr.find(function(t){return t.index===dao.idx;})||{}).id||0, clientId:CLIENT_ID},8000).catch(function(){});
-    cdp(dao.idx,"Runtime.evaluate",{expression:"JSON.stringify({w:innerWidth,h:innerHeight})",returnByValue:true})
-      .then(function(r){ try{ var v=JSON.parse(r.result.value); if(v.w) dao.view={cssW:v.w,cssH:v.h}; }catch(e){} }).catch(function(){});
-    daoShot();
-    if(dao.timer) clearInterval(dao.timer);
-    dao.timer=setInterval(daoShot, 900);
-  }
-  async function daoShot(){
-    if(dao.busy || dao.idx<0) return; dao.busy=true;
-    try{
-      var j=await rpc("browseScreenshot",{tabIndex:dao.idx, format:"jpeg", quality:55, maxWidth:720}, 15000);
-      var b64=j&&(j.base64||j.data||j.image);
-      if(b64){ var mime=b64.charAt(0)==="i"?"image/png":"image/jpeg";
-        $("fwDaoImg").src="data:"+mime+";base64,"+b64; $("fwDaoHint").style.display="none"; }
-    }catch(e){}finally{ dao.busy=false; }
-  }
-  $("fwDaoImg").addEventListener("click", function(ev){ ev.preventDefault(); if(dao.idx<0) return;
-    var p=normIn($("fwDaoImg"), dao.view.cssW, dao.view.cssH, ev); lastTap=p;
-    injectTo(dao.idx,"click",p).then(function(){ setTimeout(daoShot,160); setTimeout(daoShot,450); }); });
-  $("fwDaoImg").addEventListener("wheel", function(ev){ ev.preventDefault(); if(dao.idx<0) return;
-    var p=normIn($("fwDaoImg"), dao.view.cssW, dao.view.cssH, ev); p.dy=Math.round(ev.deltaY);
-    injectTo(dao.idx,"scroll",p).then(function(){ setTimeout(daoShot,140); }); }, {passive:false});
-
-  // ── 设置浮层 ──
-  function openCfg(){ $("cEndpoint").value=cfg.endpoint; $("cSession").value=cfg.session; $("cToken").value=cfg.token; $("cfg").classList.add("show"); }
-  $("cCancel").onclick=function(){ $("cfg").classList.remove("show"); };
-  $("cSave").onclick=function(){
-    cfg.endpoint=$("cEndpoint").value.trim().replace(/\/+$/,""); cfg.session=$("cSession").value.trim(); cfg.token=$("cToken").value.trim();
-    saveCfg(); $("cfg").classList.remove("show"); activeIdx=-1; tabsArr=[]; refreshTabs();
+  // ── 接入设置浮层 ──
+  var cfg=document.getElementById("cfg");
+  function showCfg(){ document.getElementById("cfgSession").value=SESSION;
+    document.getElementById("cfgToken").value=TOKEN; document.getElementById("cfgEndpoint").value=ENDPOINT; cfg.classList.add("show"); }
+  function hideCfg(){ cfg.classList.remove("show"); }
+  document.getElementById("cfgCancel").onclick=hideCfg;
+  document.getElementById("cfgSave").onclick=function(){
+    SESSION=document.getElementById("cfgSession").value.trim();
+    TOKEN=document.getElementById("cfgToken").value.trim();
+    var ep=document.getElementById("cfgEndpoint").value.trim(); ENDPOINT=(ep||location.origin).replace(/\/+$/,"");
+    persist(); hideCfg(); ASSETS=Object.create(null);
+    // 重开当前板块
+    var cur=tabs[active]&&tabs[active].pageKey; tabs.slice().forEach(function(t){ closeTab(t.id); });
+    openPage(cur||"switch"); ping();
   };
 
+  // ── 连接状态点 ──
+  var dot=document.getElementById("dot");
+  function setDot(ok){ dot.className=ok?"on":"off"; dot.title=ok?"中继已连通":"中继未连通 (检查穿透/Token 或开 VPN)"; }
+  function ping(){ relay("/api/health",{},12000).then(function(r){ setDot(r.status===200 && r.body && r.body.status==="ok"); })
+    .catch(function(){ setDot(false); }); }
+
+  function toast(msg){ var el=document.getElementById("toast"); el.textContent=String(msg==null?"":msg);
+    el.classList.add("show"); clearTimeout(el._t); el._t=setTimeout(function(){ el.classList.remove("show"); }, 2200); }
+
   // ── 启动 ──
-  buildSegs(); applyZoom();
-  if(!cfg.session || !cfg.token){ openCfg(); }
-  else { saveCfg(); refreshTabs(); }
-  listTimer = setInterval(refreshTabs, 6000);
-  document.addEventListener("visibilitychange", function(){ if(!document.hidden){ startLoop(); shotNow(); } });
+  if(!SESSION || !TOKEN){ showCfg(); }
+  else { openPage("switch"); }
+  ping(); setInterval(ping, 9000);
 })();
 </script>
 </body>
