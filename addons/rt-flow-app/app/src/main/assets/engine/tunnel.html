@@ -613,7 +613,13 @@ function _webConsoleBases(){
 function _webConsoleUrl(base, withTok){
   var c=_conn(); var qs="?session="+encodeURIComponent(c.session||"");
   if(withTok) qs+="&token="+encodeURIComponent(c.token||"");
-  return base+"/"+qs;
+  // 中继入口(=conn.url, 如 *.workers.dev): 走 Worker 自托管的 /console 纯 RPC 控制台 ——
+  //   即使设备侧 cloudflared/SSH/局域网全被拦截也能用(仅需 /relay RPC)。
+  // 局域网/LocalServer 入口: 仍取 / (本机直供的 app.html 外壳, 直连 /api/rpc)。
+  var relayBase=String(c.url||"").replace(/\/$/,'');
+  var isRelay=(base===relayBase)||/\.workers\.dev$/i.test(base.replace(/^https?:\/\//,'').split('/')[0]);
+  var path=isRelay?"/console":"/";
+  return base+path+qs;
 }
 function renderWebConsole(){
   var el=document.getElementById('webConsoleUrls'); if(!el) return;

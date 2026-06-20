@@ -10,7 +10,7 @@
 // 故归一于此独立模块, 入口只导出 default 处理器与 RelayDO 类。
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const VERSION = "3.0.0-hibernation"; // (session,token) 配对模型 + WebSocket Hibernation(上量省钱)。重新部署后 /health 报此值即生效。
+export const VERSION = "3.1.0-console"; // (session,token) 配对模型 + WebSocket Hibernation(上量省钱) + GET /console 自托管单网页控制台。重新部署后 /health 报此值即生效。
 
 // DO 命名空间定址: session 与 token 共同决定实例 —— 「知道 session+token」即凭证。
 // 用 \u0000 作分隔(token/session 不含 NUL), 避免 "a"+"bc" 与 "ab"+"c" 撞键。

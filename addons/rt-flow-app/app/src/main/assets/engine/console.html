@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Devin Cloud · 网页控制台 (整机·多实例)</title>
+<style>
+  /* 与 APK 同一套 VSCode 深色令牌 */
+  :root{--bg:#0e1116;--fg:#cdd3de;--border:#222730;--bar:#161b22;--panel:#11161e;
+        --input:#161b22;--input-b:#30363d;--btn:#1f6feb;--btn-h:#388bfd;
+        --green:#4ec9b0;--muted:#7d8590;--red:#f85149;--amber:#f0883e}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+            font:13px/1.4 -apple-system,'Segoe UI',Roboto,sans-serif;overflow:hidden}
+  #app{display:flex;height:100%}
+  /* ── 侧栏 ── */
+  #side{flex:0 0 232px;background:var(--panel);border-right:1px solid var(--border);
+        display:flex;flex-direction:column;min-width:0}
+  #side.collapsed{flex-basis:0;width:0;border:0;overflow:hidden}
+  .sh{padding:8px 12px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;
+      display:flex;align-items:center;justify-content:space-between}
+  .sh b{color:var(--fg);font-size:12px;text-transform:none;letter-spacing:0}
+  #tabs{flex:1 1 auto;overflow-y:auto;padding:0 8px 8px}
+  .tab{display:flex;align-items:center;gap:8px;padding:8px 9px;margin:3px 0;border-radius:9px;
+       background:#1a2030;border:1px solid transparent;cursor:pointer;min-width:0}
+  .tab:hover{border-color:var(--input-b)}
+  .tab.on{background:#13332b;border-color:#1f5f51}
+  .tab .dot{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#3a4150}
+  .tab.on .dot{background:var(--green);box-shadow:0 0 6px var(--green)}
+  .tab .meta{flex:1 1 auto;min-width:0}
+  .tab .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;color:var(--fg)}
+  .tab .acc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10.5px;color:var(--muted);margin-top:1px}
+  .tab.intl .acc{color:var(--amber)}
+  .tab .x{flex:0 0 auto;width:18px;height:18px;line-height:16px;text-align:center;border-radius:50%;color:#8a93a0;font-size:14px}
+  .tab .x:hover{background:#3a2030;color:#f88}
+  #segs{flex:0 0 auto;border-top:1px solid var(--border);padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:42%;overflow-y:auto}
+  .seg{display:flex;align-items:center;gap:7px;background:#1a2030;border:1px solid var(--input-b);
+       border-radius:8px;padding:8px 9px;cursor:pointer;color:var(--fg);font-size:12px}
+  .seg:hover{border-color:var(--green);background:#13332b}
+  .seg .ic{font-size:15px}
+  /* ── 主区 ── */
+  #main{flex:1 1 auto;display:flex;flex-direction:column;min-width:0}
+  #bar{flex:0 0 auto;display:flex;align-items:center;gap:7px;padding:7px 10px;
+       background:var(--bar);border-bottom:1px solid var(--border)}
+  #bar button{background:#1c2230;color:var(--fg);border:1px solid var(--input-b);
+       border-radius:7px;height:30px;min-width:32px;padding:0 9px;font-size:13px;cursor:pointer}
+  #bar button:active{background:#283041}
+  #bar button.pri{background:var(--btn);border-color:var(--btn);color:#fff}
+  #title{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--fg);font-size:13px}
+  #dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--amber)}
+  #dot.on{background:var(--green)} #dot.off{background:var(--red)}
+  #fpsSel{height:30px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);border-radius:7px;font-size:12px}
+  /* ── 投屏区 ── */
+  #stage{flex:1 1 auto;position:relative;background:#06080c;overflow:hidden;display:flex;align-items:center;justify-content:center}
+  #frame{max-width:100%;max-height:100%;object-fit:contain;cursor:crosshair;
+         box-shadow:0 0 0 1px #000,0 8px 40px #000a;background:#fff;-webkit-user-select:none;user-select:none}
+  #frame.empty{display:none}
+  #hint{position:absolute;color:var(--muted);font-size:13px;text-align:center;padding:24px;pointer-events:none}
+  #kbd{position:absolute;left:0;width:1px;height:1px;opacity:0;pointer-events:none}
+  #status{position:absolute;left:10px;bottom:8px;font-size:11px;color:var(--muted);background:#0e1116cc;
+          padding:3px 8px;border-radius:6px;pointer-events:none;max-width:70%}
+  #toast{position:absolute;right:10px;bottom:8px;font-size:11px;color:var(--fg);background:#1a2030;
+         border:1px solid var(--input-b);padding:5px 10px;border-radius:7px;opacity:0;transition:opacity .2s;max-width:60%}
+  #toast.show{opacity:1}
+  /* ── 设置浮层 ── */
+  #cfg{position:absolute;inset:0;background:rgba(8,11,16,.78);display:none;align-items:center;justify-content:center;z-index:80}
+  #cfg.show{display:flex}
+  #cfgCard{width:min(420px,92vw);background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 18px 50px #000a}
+  #cfgCard h3{margin:0 0 12px;font-size:14px}
+  #cfgCard label{display:block;font-size:11px;color:var(--muted);margin:10px 0 4px}
+  #cfgCard input{width:100%;height:34px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);border-radius:8px;padding:0 11px;font-size:13px;outline:none}
+  #cfgCard .row{display:flex;gap:8px;margin-top:14px}
+  #cfgCard button{flex:1;height:36px;border-radius:8px;border:1px solid var(--input-b);background:#1c2230;color:var(--fg);cursor:pointer;font-size:13px}
+  #cfgCard button.pri{background:var(--btn);border-color:var(--btn);color:#fff}
+  #pick{position:absolute;inset:0;background:rgba(8,11,16,.72);display:none;align-items:flex-start;justify-content:center;z-index:70}
+  #pick.show{display:flex}
+  #pickCard{margin-top:60px;width:min(440px,92vw);max-height:70%;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px}
+  #pickCard h3{margin:2px 0 12px;font-size:13px;color:var(--muted)}
+  .pr{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:9px;background:#1a2030;border:1px solid var(--input-b);margin:5px 0;cursor:pointer;font-size:13px}
+  .pr:hover{border-color:var(--green);background:#13332b}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <div class="sh"><b>实例 / 标签</b><span id="tabCount" style="color:var(--muted)"></span></div>
+    <div id="tabs"></div>
+    <div class="sh" style="border-top:1px solid var(--border)"><b>板块 / 新实例</b></div>
+    <div id="segs"></div>
+  </div>
+  <div id="main">
+    <div id="bar">
+      <button id="sideBtn" title="折叠侧栏">&#9776;</button>
+      <span id="dot" title="连接状态"></span>
+      <span id="title">未连接</span>
+      <select id="fpsSel" title="刷新频率">
+        <option value="0">手动</option>
+        <option value="1500">~0.7 fps</option>
+        <option value="700" selected>~1.4 fps</option>
+        <option value="400">~2.5 fps</option>
+        <option value="250">~4 fps</option>
+      </select>
+      <button id="shotBtn" title="立即刷新">&#8635;</button>
+      <button id="reloadBtn" title="重载该标签">⟲页</button>
+      <button id="backBtn" title="后退">◀</button>
+      <button id="fwdBtn" title="前进">▶</button>
+      <button id="cfgBtn" title="设置">⚙</button>
+    </div>
+    <div id="stage">
+      <img id="frame" class="empty" alt="">
+      <div id="hint">选择左侧一个标签开始投屏 · 任意公网设备可用</div>
+      <textarea id="kbd"></textarea>
+      <div id="status"></div>
+      <div id="toast"></div>
+      <div id="cfg"><div id="cfgCard">
+        <h3>连接设置</h3>
+        <label>中继入口 Endpoint</label><input id="cEndpoint" placeholder="https://...workers.dev">
+        <label>Session</label><input id="cSession" placeholder="rtflow-...">
+        <label>Token</label><input id="cToken" placeholder="...">
+        <div class="row"><button id="cCancel">取消</button><button class="pri" id="cSave">保存并连接</button></div>
+      </div></div>
+      <div id="pick"><div id="pickCard"><h3>新建 / 打开</h3><div id="pickList"></div></div></div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  "use strict";
+  function $(id){ return document.getElementById(id); }
+  function qp(k){ try{ return new URLSearchParams(location.search).get(k)||""; }catch(e){ return ""; } }
+
+  // ── 配置: session/token/endpoint (query > localStorage > 同源) ──
+  var cfg = {
+    session:  qp("session") || localStorage.getItem("rtflow.con.session") || "",
+    token:    qp("token") || qp("t") || localStorage.getItem("rtflow.con.token") || "",
+    endpoint:(qp("endpoint") || localStorage.getItem("rtflow.con.endpoint") || location.origin).replace(/\/+$/,"")
+  };
+  function saveCfg(){ localStorage.setItem("rtflow.con.session",cfg.session);
+    localStorage.setItem("rtflow.con.token",cfg.token); localStorage.setItem("rtflow.con.endpoint",cfg.endpoint); }
+
+  // ── RPC 传输: POST <endpoint>/relay/<session> {path:/api/rpc, body:{cmd,...}} ──
+  var rateUntil = 0;
+  async function rpc(cmd, args, timeoutMs){
+    if(!cfg.session || !cfg.token){ throw new Error("未配置 session/token"); }
+    if(Date.now() < rateUntil) await new Promise(function(r){ setTimeout(r, rateUntil-Date.now()); });
+    var body = Object.assign({cmd:cmd}, args||{});
+    var ctrl = new AbortController(); var to = setTimeout(function(){ try{ctrl.abort();}catch(e){} }, timeoutMs||20000);
+    var r;
+    try{
+      r = await fetch(cfg.endpoint+"/relay/"+encodeURIComponent(cfg.session), {
+        method:"POST", signal:ctrl.signal,
+        headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+cfg.token },
+        body: JSON.stringify({ path:"/api/rpc", method:"POST", body: body })
+      });
+    } finally { clearTimeout(to); }
+    if(r.status===429){ rateUntil = Date.now()+2000; throw new Error("rate_limited"); }
+    var t = await r.text(); var j;
+    try{ j = JSON.parse(t); }catch(e){ throw new Error("bad_json: "+t.slice(0,80)); }
+    return j;
+  }
+  async function cdp(tabIndex, method, params){
+    var j = await rpc("cdp", {tabIndex:tabIndex, method:method, params:params||{}});
+    if(j && j.ok===false) throw new Error(j.error||"cdp_err");
+    return j && j.result;
+  }
+
+  // ── 状态 ──
+  var tabsArr = [];        // browseListTabs 结果
+  var activeIdx = -1;      // 当前投屏的 tab index
+  var view = { cssW:384, cssH:602 };  // 当前 tab 的 CSS 视口 (反向坐标映射)
+  var pollTimer = null, listTimer = null, loopBusy = false;
+  var connected = false;
+
+  var dot=$("dot"), titleEl=$("title"), frame=$("frame"), hint=$("hint"),
+      statusEl=$("status"), toastEl=$("toast"), fpsSel=$("fpsSel"), kbd=$("kbd");
+
+  function setDot(s){ dot.className=""; if(s) dot.classList.add(s); }
+  function setStatus(s){ statusEl.textContent = s||""; }
+  var toastT=null;
+  function toast(s){ toastEl.textContent=s; toastEl.classList.add("show");
+    if(toastT) clearTimeout(toastT); toastT=setTimeout(function(){ toastEl.classList.remove("show"); },1800); }
+
+  function accLabel(a){
+    if(!a) return "";
+    if(typeof a==="string") return a;
+    return (a.orgName? a.orgName+" · ":"") + (a.email||a.id||"");
+  }
+
+  // ── 标签列表 ──
+  async function refreshTabs(){
+    try{
+      var j = await rpc("browseListTabs",{},12000);
+      if(!j || !j.tabs){ throw new Error(j&&j.error||"no_tabs"); }
+      connected=true; setDot("on");
+      tabsArr = j.tabs;
+      $("tabCount").textContent = tabsArr.length+" 个";
+      renderTabs();
+      if(activeIdx<0){
+        var act = tabsArr.find(function(t){return t.active;});
+        if(act) selectTab(act.index);
+        else if(tabsArr.length) selectTab(tabsArr[0].index);
+      }
+    }catch(e){
+      connected=false; setDot("off");
+      if(String(e.message).indexOf("session")>=0){ openCfg(); }
+      setStatus("连接失败: "+e.message);
+    }
+  }
+  function renderTabs(){
+    var box=$("tabs"); box.innerHTML="";
+    tabsArr.forEach(function(t){
+      var d=document.createElement("div");
+      d.className="tab"+(t.index===activeIdx?" on":"")+(t.internal?" intl":"");
+      var dot=document.createElement("span"); dot.className="dot";
+      var meta=document.createElement("div"); meta.className="meta";
+      var ttl=document.createElement("div"); ttl.className="ttl"; ttl.textContent=t.title||"(无标题)";
+      var acc=document.createElement("div"); acc.className="acc";
+      acc.textContent = t.internal? "板块 · "+(t.title||"") : (accLabel(t.account)||hostOf(t.url));
+      meta.appendChild(ttl); meta.appendChild(acc);
+      var x=document.createElement("span"); x.className="x"; x.textContent="×"; x.title="关闭";
+      d.appendChild(dot); d.appendChild(meta); d.appendChild(x);
+      d.onclick=function(e){ if(e.target===x){ closeTab(t.index); return; } selectTab(t.index); };
+      box.appendChild(d);
+    });
+  }
+  function hostOf(u){ try{ return new URL(u).host; }catch(e){ return u||""; } }
+
+  // ── 选标签 / 投屏循环 ──
+  var selGen = 0;
+  async function selectTab(idx){
+    var gen = ++selGen;
+    activeIdx = idx; renderTabs();
+    var t = tabsArr.find(function(x){return x.index===idx;});
+    titleEl.textContent = t? (t.title||hostOf(t.url)) : ("标签 "+idx);
+    hint.style.display="none";
+    frame.classList.add("empty"); setStatus("切换到标签 "+idx+" … (首帧合成约 1s)");
+    try{ await rpc("browseActivateTab",{tabIndex:idx},10000); }catch(e){}
+    if(gen!==selGen) return;
+    // 取该 tab 的 CSS 视口供反向坐标映射
+    try{
+      var r = await cdp(idx,"Runtime.evaluate",{expression:"JSON.stringify({w:innerWidth,h:innerHeight})",returnByValue:true});
+      var v = JSON.parse(r.result.value); if(v.w) view={cssW:v.w,cssH:v.h};
+    }catch(e){}
+    if(gen!==selGen) return;
+    // 新激活的 WebView 需要 ~1s 才合成首帧, 先等再取, 避免黑屏
+    await new Promise(function(r2){ setTimeout(r2, 950); });
+    if(gen!==selGen) return;
+    shotNow(); startLoop();
+  }
+  function startLoop(){
+    if(pollTimer){ clearInterval(pollTimer); pollTimer=null; }
+    var ms = parseInt(fpsSel.value,10)||0;
+    if(ms>0) pollTimer = setInterval(shotNow, ms);
+  }
+  async function shotNow(){
+    if(loopBusy || activeIdx<0) return;
+    loopBusy=true;
+    var want = activeIdx;
+    try{
+      var j = await rpc("browseScreenshot",{tabIndex:want, format:"jpeg", quality:50, maxWidth:1024}, 18000);
+      if(want!==activeIdx) return;   // 切换期间到达的旧帧 → 丢弃
+      var b64 = j && (j.base64||j.data||j.image);
+      if(j && j.ok===false){ setStatus("截图失败: "+(j.error||"")); }
+      else if(b64){
+        var mime = b64.charAt(0)==="/" ? "image/jpeg" : (b64.charAt(0)==="i"?"image/png":"image/jpeg");
+        frame.src = "data:"+mime+";base64,"+b64;
+        frame.classList.remove("empty");
+        connected=true; setDot("on");
+        setStatus("● 实时 · "+view.cssW+"×"+view.cssH+" · 标签 "+want);
+      }
+    }catch(e){
+      if(String(e.message).indexOf("rate")>=0){ setStatus("限流, 自动降速…"); }
+      else { setDot("off"); setStatus("掉线: "+e.message); }
+    }finally{ loopBusy=false; }
+  }
+
+  // ── 反向控制: 点击 / 滚动 / 输入 (忠实注入, 与原生 ipcMirrorInput 同核心) ──
+  // 经 browseExecJs 在目标标签内执行 MIRROR_INPUT_CORE: 归一化坐标→视口坐标, 合成
+  // pointer/mouse/键盘事件并对 React 受控输入(原生 value setter)与 contenteditable
+  // (execCommand insertText) 触发, 远比 CDP facade 忠实 — 纯中继即可, 无需无障碍/Shizuku。
+  var MIRROR_CORE =
+    "var x=Math.round(A.nx*window.innerWidth),y=Math.round(A.ny*window.innerHeight);" +
+    "var el=document.elementFromPoint(x,y);" +
+    "function fire(t,tg){var ev;try{ev=new MouseEvent(t,{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,view:window,button:0});}catch(_){ev=document.createEvent('MouseEvents');ev.initMouseEvent(t,true,true,window,0,0,0,x,y,false,false,false,false,0,null);}(tg||el).dispatchEvent(ev);}" +
+    "function fp(t,tg){try{(tg||el).dispatchEvent(new PointerEvent(t,{bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,view:window,pointerType:'touch',isPrimary:true,button:0}));}catch(_){}}" +
+    "function setv(t,v){var p=(t.tagName==='TEXTAREA')?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;var s=Object.getOwnPropertyDescriptor(p,'value').set;s.call(t,v);t.dispatchEvent(new Event('input',{bubbles:true}));t.dispatchEvent(new Event('change',{bubbles:true}));}" +
+    "function isEd(n){return n&&(n.isContentEditable||n.tagName==='INPUT'||n.tagName==='TEXTAREA');}" +
+    "function findEd(n){for(var i=0;i<5&&n;i++){if(n.matches&&n.matches('[contenteditable=true],input:not([type=hidden]):not([type=button]):not([type=submit]),textarea'))return n;var q=n.querySelector&&n.querySelector('[contenteditable=true],textarea,input:not([type=hidden]):not([type=button]):not([type=submit])');if(q)return q;n=n.parentElement;}return null;}" +
+    "function caret(ed){if(!ed||!ed.isContentEditable)return;try{var rg=document.createRange();rg.selectNodeContents(ed);rg.collapse(false);var sl=getSelection();sl.removeAllRanges();sl.addRange(rg);}catch(_){}}" +
+    "if(A.action==='click'||A.action==='tap'){if(!el)return'noel';fp('pointerdown');fire('mousedown');try{el.focus&&el.focus();}catch(_){}fp('pointerup');fire('mouseup');fire('click');if(!isEd(document.activeElement)){var ed=findEd(el);if(ed){try{ed.focus();}catch(_){}caret(ed);}}return'click';}" +
+    "if(A.action==='scroll'){var sc=el;while(sc&&sc!==document.body&&sc!==document.documentElement){var st=getComputedStyle(sc);if(/(auto|scroll)/.test(st.overflowY)&&sc.scrollHeight>sc.clientHeight)break;sc=sc.parentElement;}if(sc&&sc!==document.body&&sc!==document.documentElement){sc.scrollTop+=A.dy;}else{window.scrollBy(0,A.dy);}return'scroll';}" +
+    "if(A.action==='type'||A.action==='settext'){var t=document.activeElement;if(!t||t===document.body){if(el&&el.focus){try{el.focus();}catch(_){}}t=document.activeElement;}if(!t)return'nofocus';var tg=(t.tagName||'').toLowerCase();if(tg==='input'||tg==='textarea'){setv(t,A.action==='settext'?A.text:((t.value||'')+A.text));return'type';}if(t.isContentEditable){var sl=getSelection();if(!sl.rangeCount||(sl.anchorNode&&!t.contains(sl.anchorNode))){caret(t);}document.execCommand('insertText',false,A.text);return'type-ce';}return'notinput';}" +
+    "if(A.action==='key'){var t=document.activeElement||document.body;var k=A.key||'Enter';var kc=k==='Enter'?13:(k==='Backspace'?8:0);['keydown','keypress','keyup'].forEach(function(tp){if(tp==='keypress'&&k!=='Enter')return;try{t.dispatchEvent(new KeyboardEvent(tp,{bubbles:true,cancelable:true,key:k,code:k,keyCode:kc,which:kc,view:window}));}catch(_){}});if(k==='Backspace'){if(t.tagName==='INPUT'||t.tagName==='TEXTAREA'){setv(t,(t.value||'').slice(0,-1));}else if(t.isContentEditable){document.execCommand('delete',false,null);}}return'key';}" +
+    "if(A.action==='back'){history.back();return'back';}return'noop';";
+  var lastTap = {nx:0.5, ny:0.5};
+  async function inject(action, opts){
+    if(activeIdx<0) return;
+    var A = Object.assign({action:action, nx:lastTap.nx, ny:lastTap.ny, text:"", key:"", dy:0}, opts||{});
+    var js = "(function(A){try{"+MIRROR_CORE+"}catch(e){return 'err:'+e}})("+JSON.stringify(A)+")";
+    try{ await rpc("browseExecJs",{tabIndex:activeIdx, js:js}, 12000); }
+    catch(e){ toast("操作失败: "+e.message); }
+  }
+  function frameToNorm(ev){
+    var r = frame.getBoundingClientRect();
+    // 用手机真实视口宽高比 (view, 来自 innerWidth/Height) 计算 contain 内显区, 避免依赖
+    // IMG 偶发的过渡帧尺寸导致 Y 偏移。
+    var aw = (view&&view.cssW)||frame.naturalWidth||r.width;
+    var ah = (view&&view.cssH)||frame.naturalHeight||r.height;
+    var scale = Math.min(r.width/aw, r.height/ah);
+    var dw = aw*scale, dh = ah*scale;
+    var ox = r.left + (r.width-dw)/2, oy = r.top + (r.height-dh)/2;
+    var nx = (ev.clientX-ox)/dw, ny = (ev.clientY-oy)/dh;
+    return { nx:Math.max(0,Math.min(1,nx)), ny:Math.max(0,Math.min(1,ny)) };
+  }
+  frame.addEventListener("click", function(ev){
+    ev.preventDefault(); if(activeIdx<0) return;
+    kbd.focus();                       // 同步聚焦, 不等 RPC, 保证随后键入进入注入通道
+    lastTap = frameToNorm(ev);
+    inject("click", lastTap).then(function(){ setTimeout(shotNow,140); setTimeout(shotNow,420); });
+  });
+  frame.addEventListener("wheel", function(ev){
+    ev.preventDefault(); if(activeIdx<0) return;
+    var p=frameToNorm(ev); p.dy=Math.round(ev.deltaY);
+    inject("scroll", p).then(function(){ setTimeout(shotNow,120); });
+  }, {passive:false});
+
+  // 键盘: 可打印字符按 ~160ms 去抖合批成一次注入 (单字符逐次往返会被中继延迟/限流吞字);
+  // Enter/Backspace 先冲刷待发文本再合成按键; 中文/IME 监听 compositionend 整段送入。
+  var typeBuf="", typeTimer=null;
+  function flushType(){
+    if(typeTimer){ clearTimeout(typeTimer); typeTimer=null; }
+    if(!typeBuf) return;
+    var s=typeBuf; typeBuf="";
+    inject("type",{text:s}).then(function(){ setTimeout(shotNow,120); });
+  }
+  function queueType(ch){
+    typeBuf+=ch;
+    if(typeTimer) clearTimeout(typeTimer);
+    typeTimer=setTimeout(flushType, 160);
+  }
+  kbd.addEventListener("keydown", function(ev){
+    if(activeIdx<0) return;
+    if(ev.isComposing) return;
+    if(ev.key==="Enter"){ ev.preventDefault(); flushType(); inject("key",{key:"Enter"}).then(function(){setTimeout(shotNow,160);}); }
+    else if(ev.key==="Backspace"){ ev.preventDefault(); flushType(); inject("key",{key:"Backspace"}).then(function(){setTimeout(shotNow,150);}); }
+    else if(ev.key.length===1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey){ ev.preventDefault(); queueType(ev.key); }
+  });
+  kbd.addEventListener("compositionend", function(ev){
+    if(activeIdx<0) return;
+    var s=ev.data||""; if(s) queueType(s);
+    flushType();
+    kbd.value="";
+  });
+
+  // ── 工具栏 ──
+  $("sideBtn").onclick=function(){ $("side").classList.toggle("collapsed"); };
+  $("shotBtn").onclick=shotNow;
+  fpsSel.onchange=startLoop;
+  $("reloadBtn").onclick=function(){ if(activeIdx<0)return; cdp(activeIdx,"Runtime.evaluate",{expression:"location.reload()"}).then(function(){setTimeout(shotNow,800);}); };
+  $("backBtn").onclick=function(){ if(activeIdx<0)return; cdp(activeIdx,"Runtime.evaluate",{expression:"history.back()"}).then(function(){setTimeout(shotNow,600);}); };
+  $("fwdBtn").onclick=function(){ if(activeIdx<0)return; cdp(activeIdx,"Runtime.evaluate",{expression:"history.forward()"}).then(function(){setTimeout(shotNow,600);}); };
+
+  // ── 板块 / 新实例 ──
+  var SEGS = [
+    {label:"切号面板", ic:"🔁", asset:"switch.html"},
+    {label:"公网穿透", ic:"🌐", asset:"tunnel.html"},
+    {label:"对话/Cloud", ic:"☁", asset:"cloud.html"},
+    {label:"VPN 加速", ic:"🚀", asset:"vpn.html"},
+    {label:"用户脚本", ic:"🐵", asset:"userscripts.html"},
+    {label:"Shizuku", ic:"🔑", asset:"shizuku.html"},
+    {label:"全服通", ic:"🌊", asset:"daopan.html"},
+    {label:"控制面板", ic:"🎛", asset:"panel.html"}
+  ];
+  function buildSegs(){
+    var box=$("segs"); box.innerHTML="";
+    SEGS.forEach(function(s){
+      var d=document.createElement("div"); d.className="seg";
+      d.innerHTML='<span class="ic">'+s.ic+'</span><span>'+s.label+'</span>';
+      d.onclick=function(){ openPanel(s); };
+      box.appendChild(d);
+    });
+    var d=document.createElement("div"); d.className="seg"; d.style.gridColumn="1 / 3";
+    d.innerHTML='<span class="ic">🟢</span><span>+ 新 Devin 实例</span>';
+    d.onclick=openPick; box.appendChild(d);
+  }
+  // 板块已开 → 切过去; 否则 browseOpen 资源页
+  function openPanel(s){
+    var found = tabsArr.find(function(t){ return t.internal && (t.url||"").indexOf(s.asset)>=0; });
+    if(found){ selectTab(found.index); return; }
+    rpc("browseOpen",{url:"file:///android_asset/engine/"+s.asset+"?session="+encodeURIComponent(cfg.session)+"&token="+encodeURIComponent(cfg.token), foreground:true},12000)
+      .then(function(){ toast("已打开 "+s.label); setTimeout(refreshTabs,900); })
+      .catch(function(e){ toast("打开失败: "+e.message); });
+  }
+  // 新 Devin 实例: 列已登录账号, 选一个 openAccountTab
+  async function openPick(){
+    var list=$("pickList"); list.innerHTML="<div style='color:var(--muted);padding:8px'>读取账号…</div>";
+    $("pick").classList.add("show");
+    var accs=[];
+    try{ var j=await rpc("getState",{},12000); accs=(j&&(j.accounts||j.state&&j.state.accounts))||[]; }catch(e){}
+    list.innerHTML="";
+    var add=function(label,fn){ var d=document.createElement("div"); d.className="pr"; d.textContent=label; d.onclick=fn; list.appendChild(d); };
+    add("➕ 新建空白 Devin 标签 (默认账号)", function(){ doOpenAccount("_"); });
+    (accs||[]).forEach(function(a){
+      var id=a.id||a.email; if(!id) return;
+      add("🟢 "+(a.orgName?a.orgName+" · ":"")+(a.email||id), function(){ doOpenAccount(id); });
+    });
+    if(!(accs&&accs.length)) add("(未读到账号, 仍可用默认账号新开)", function(){});
+  }
+  function doOpenAccount(id){
+    $("pick").classList.remove("show");
+    rpc("openAccountTab",{account:id, url:"https://app.devin.ai/", foreground:true},15000)
+      .then(function(){ toast("已新开实例"); setTimeout(refreshTabs,1200); })
+      .catch(function(e){
+        rpc("browseOpen",{url:"https://app.devin.ai/",foreground:true},15000)
+          .then(function(){ toast("已新开标签"); setTimeout(refreshTabs,1200); })
+          .catch(function(e2){ toast("新开失败: "+e2.message); });
+      });
+  }
+  $("pick").onclick=function(e){ if(e.target===$("pick")) $("pick").classList.remove("show"); };
+
+  function closeTab(idx){
+    rpc("browseCloseTab",{tabIndex:idx},10000).catch(function(){ return rpc("closeTab",{tabIndex:idx},10000); })
+      .then(function(){ if(activeIdx===idx) activeIdx=-1; setTimeout(refreshTabs,500); })
+      .catch(function(e){ toast("关闭失败: "+e.message); });
+  }
+
+  // ── 设置浮层 ──
+  function openCfg(){ $("cEndpoint").value=cfg.endpoint; $("cSession").value=cfg.session; $("cToken").value=cfg.token; $("cfg").classList.add("show"); }
+  $("cfgBtn").onclick=openCfg;
+  $("cCancel").onclick=function(){ $("cfg").classList.remove("show"); };
+  $("cSave").onclick=function(){
+    cfg.endpoint=$("cEndpoint").value.trim().replace(/\/+$/,""); cfg.session=$("cSession").value.trim(); cfg.token=$("cToken").value.trim();
+    saveCfg(); $("cfg").classList.remove("show"); activeIdx=-1; tabsArr=[]; refreshTabs();
+  };
+
+  // ── 启动 ──
+  buildSegs();
+  if(!cfg.session || !cfg.token){ openCfg(); }
+  else { saveCfg(); refreshTabs(); }
+  listTimer = setInterval(function(){ if(connected) refreshTabs(); }, 6000);
+  // 失焦自动恢复轮询
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden){ startLoop(); shotNow(); } });
+})();
+</script>
+</body>
+</html>

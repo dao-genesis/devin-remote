@@ -67,6 +67,30 @@ export default {
       return json({ status: "ok", service: "dao-relay", version: VERSION });
     }
 
+    // 单网页控制台 (中继自托管) —— 道法自然·归一:
+    //   任意公网设备打开 /console?session=<id>&token=<t> 即得整机:所有标签 + 网页内切换 +
+    //   单页多实例 Devin + 实时投屏 + 反向点按/滚动/输入。即使设备侧 cloudflared/SSH/局域网
+    //   全被拦截, 仅凭本中继的 /relay RPC 即可驱动(页面 endpoint 默认 location.origin → 同源
+    //   走本 Worker 的 /relay/<session>, 无 CORS)。内容取自仓库内 console.html(单一真源,
+    //   不在此重复), 5 分钟边缘缓存; 改 console.html 合并 main 后重新部署即生效。
+    if (path === "/console" || path === "/app" || path === "/console.html") {
+      const RAW = "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/console.html";
+      try {
+        const r = await fetch(RAW, { cf: { cacheTtl: 300, cacheEverything: true } });
+        if (!r.ok) return json({ error: "console_fetch_failed", status: r.status }, 502);
+        const html = await r.text();
+        return new Response(html, {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+            "access-control-allow-origin": "*",
+            "cache-control": "public, max-age=300",
+          },
+        });
+      } catch (e) {
+        return json({ error: "console_unavailable", detail: String((e && e.message) || e) }, 502);
+      }
+    }
+
     // 客户端出站连 (WSS)
     if (path === "/connect") {
       if (req.headers.get("Upgrade") !== "websocket") return json({ error: "expected websocket" }, 426);
