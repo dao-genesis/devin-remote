@@ -1,6 +1,6 @@
 {
-  "versionCode": 91,
-  "versionName": "0.34.8",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.8/DevinCloud-mobile-v0.34.8.apk",
-  "notes": "v0.34.8 · 公网网页控台 = 手机投屏·共享一切但互不干扰可并行 (鸡犬相闻·民至老死不相往来·道法自然)。在 v0.34.7(根除卡死)基础上再正本清源:控台「选标签」改为纯本端行为,不再调 browseActivateTab 去改手机本体的全局当前标签 —— 故 A 端看/操作标签2、B 端看/操作标签5、手机本体停在自己页, 三者真正并行不相犯(原生 ipcScreenshot/ipcExecJs 均按 tabIndex 独立寻址,后台标签也能取帧与注入)。而开/关标签是共享动作:任一端(或手机)新开/关闭网页,所有端经轮询同步看到,共享同一组打开网页数。即:全员共享同一组网页,各操各页互不干扰。"
+  "versionCode": 92,
+  "versionName": "0.34.9",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.9/DevinCloud-mobile-v0.34.9.apk",
+  "notes": "v0.34.9 · 板块标签后台投屏修复 (配合 v0.34.8 共享一切但互不干扰可并行)。根因: 硬件加速的 WebView 一旦停泊到不可见容器(后台标签), 其 GPU 合成面被释放, 远程截图 draw(软件Canvas) 取到黑帧 —— 普通远程网页走软件路径不受影响, 唯板块(本地内部页·含合成层)在纯后台时发黑。修复: 板块标签改用软件层渲染(setLayerType SOFTWARE), draw() 始终取到真实内容 → 任意后台板块标签都能被远程网页端取帧投屏, 无需把它提到手机前台 (故多端各看各页·并行不相犯, 板块亦然)。注: 此乃真机硬件合成器特性, SwiftShader 模拟器无法复现(两版均正常渲染), 模拟器已验证无回归; 真机效果待 OTA 到 0.34.9 后实测确认。"
 }
