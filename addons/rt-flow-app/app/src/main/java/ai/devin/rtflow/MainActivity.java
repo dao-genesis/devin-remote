@@ -326,17 +326,29 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /** 冷启动后台静默检查更新; 有新版则弹一次确认框, 用户点「立即更新」即下载+唤起安装。 */
-    private void autoCheckUpdate() {
+    private void autoCheckUpdate() { checkUpdate(true); }
+
+    /** 检查更新核心: silent=true 冷启动静默(仅有新版才打扰); silent=false 手动(☰→检查更新)给全程反馈。
+     *  有新版 → 弹「发现新版本」确认框; 已最新 → 提示当前版本; 失败 → 提示原因(仅手动)。 */
+    private void checkUpdate(boolean silent) {
+        if (!silent) toast("检查更新中…");
         new Thread(() -> {
             try {
                 String info = fetchUpdateInfo();
                 JSONObject j = new JSONObject(info);
-                if (!j.optBoolean("ok", false) || !j.optBoolean("hasUpdate", false)) return;
+                if (!j.optBoolean("ok", false)) {
+                    if (!silent) main.post(() -> toast("检查更新失败: " + j.optString("error", "网络不可达")));
+                    return;
+                }
+                if (!j.optBoolean("hasUpdate", false)) {
+                    if (!silent) main.post(() -> toast("已是最新版 · v" + appVersionName()));
+                    return;
+                }
                 final String name = j.optString("latestName", "");
                 final String notes = j.optString("notes", "");
                 org.json.JSONArray urls = j.optJSONArray("urls");
                 final String url = (urls != null && urls.length() > 0) ? pickReachable(urls) : j.optString("url", "");
-                if (url.isEmpty()) return;
+                if (url.isEmpty()) { if (!silent) main.post(() -> toast("新版本暂无可用下载地址")); return; }
                 main.post(() -> {
                     if (isFinishing()) return;
                     try {
@@ -348,7 +360,9 @@ public class MainActivity extends AppCompatActivity {
                             .show();
                     } catch (Exception ignored) {}
                 });
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                if (!silent) main.post(() -> toast("检查更新出错: " + e.getMessage()));
+            }
         }).start();
     }
 
@@ -548,6 +562,7 @@ public class MainActivity extends AppCompatActivity {
         shareM.add(0, 30, 0, "分享本页");
         shareM.add(0, 31, 1, "复制网址");
         shareM.add(0, 32, 2, "添加到主屏");
+        mu.add(0, 50, 11, "检查更新 · v" + appVersionName());
         m.setOnMenuItemClickListener(it -> {
             switch (it.getItemId()) {
                 case 1: newTab(SWITCH, null); return true;
@@ -573,6 +588,7 @@ public class MainActivity extends AppCompatActivity {
                 case 30: shareCurrent(); return true;
                 case 31: copyCurrentUrl(); return true;
                 case 32: addHomeShortcut(); return true;
+                case 50: checkUpdate(false); return true;
             }
             return false;
         });
@@ -2332,6 +2348,7 @@ public class MainActivity extends AppCompatActivity {
         // ── 在线自动更新 (面板/引擎/中继共用) ──
         @JavascriptInterface public String appCheckUpdate() { return fetchUpdateInfo(); }
         @JavascriptInterface public String appInstallUpdate(String url) { return startUpdate(url); }
+        @JavascriptInterface public String appVer() { return appVersionName(); }   // 真实 APK versionName, 供页脚读取免僵化
         @JavascriptInterface public void openAccountTab(String accJson) { main.post(() -> newTab(DEVIN, accJson)); }
         @JavascriptInterface public void openUrlTab(String url) { main.post(() -> newTab(url == null ? DEVIN : url, null)); }
         // 历史/书签里的多实例 Devin 条目: 用对应账号(注入鉴权)重开该 URL, 而非裸 location.href(会掉回官网登录页)
