@@ -3288,7 +3288,8 @@ function rBridgeFull(){
     if(b.token)h+='<div class="cr"><span class="l">Token</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(String(b.token).slice(0,8)+'…'+String(b.token).slice(-4))+'</span></div>';
     if(b.updated)h+='<div class="cr"><span class="l">更新于</span><span class="v" style="font-size:10px">'+esc(b.updated)+'</span></div>';
     h+='</div>';
-    h+='<div class="br"><button class="btn sm primary" onclick="cmd(&#39;copyBridgeInfo&#39;)" title="一键复制 公网URL + Token + Auth 头 整段接入信息">📋 复制接入信息</button>';
+    h+='<div class="br"><button class="btn sm primary" onclick="cmd(&#39;copyBridgeShell&#39;)" title="复制实时公网单页地址(/shell)·免登录·在任意电脑/手机浏览器打开即可操作整个面板(适配电脑/手机)">🌐 复制公网单页网址</button>';
+    h+='<button class="btn sm primary" onclick="cmd(&#39;copyBridgeInfo&#39;)" title="一键复制 公网URL + Token + Auth 头 整段接入信息">📋 复制接入信息</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeRefreshToken&#39;)" title="生新令牌并同步到所有账号; 刷新期间旧令牌仍有效不断链">♻ 刷新Token</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeRestart&#39;)">🔄 重启隧道</button>';
     h+='<button class="btn sm danger" onclick="cmd(&#39;bridgeStop&#39;)">⏹ 停止</button></div>';
@@ -3889,7 +3890,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'openRoutedPanel', 'compInfo', 'compRun', 'compTerminal', 'compOpenFile', 'compReveal'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'openRoutedPanel', 'compInfo', 'compRun', 'compTerminal', 'compOpenFile', 'compReveal'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -3900,6 +3901,14 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const c = readBridgeConn();
                 await vscode.env.clipboard.writeText((c && c.url) || '');
                 reply({ type: 'actionResult', command: 'copyBridgeUrl', ok: !!(c && c.url) });
+                break;
+            }
+            // 归一 · 复制「实时公网单页地址」(<url>/shell · 免 token) — 在任意电脑/手机浏览器打开即可操作整个六合一面板。
+            case 'copyBridgeShell': {
+                const c = readBridgeConn();
+                const u = (c && c.url) ? (String(c.url).replace(/\/+$/, '') + '/shell') : '';
+                await vscode.env.clipboard.writeText(u);
+                reply({ type: 'actionResult', command: 'copyBridgeShell', ok: !!u });
                 break;
             }
             // ── 操作电脑本体 (把整个软件当浏览器供 MCP/用户驱动本机) ──
