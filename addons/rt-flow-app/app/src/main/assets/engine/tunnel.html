@@ -252,19 +252,35 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 var N = window.Native || {};
 function _conn(){ try{ return JSON.parse(N.conn?N.conn():"{}"); }catch(e){ return {}; } }
 function _relay(){ try{ return JSON.parse(N.relayStatus?N.relayStatus():"{}"); }catch(e){ return {}; } }
-// 「当前生效的最优公网入口」选取 (道法自然·随情况变化, 不再恒定 Worker):
-//   去中心化隧道(cloudflared 主 > SSH 备) 优先 → 真去中心化、不经任何共享 Worker;
-//   两者都不可用时才回落「中继 Worker · 兜底」。局域网仅同网可达, 不计入「公网」; P2P 是握手机制非基础 URL。
+// 「当前生效的最优公网入口」选取 (道法自然·对齐本源 AGENTS: 默认零账号中继 Worker, 隧道仅作冗余):
+//   零账号中继 Worker 始终在线、浏览器可直开 /console、无需任何隧道/凭证 → 作首选(connected 时);
+//   仅当中继暂掉线时, 才回落去中心化隧道(cloudflared 主 > SSH 备), 末位再以 Worker 兜底(即便未连)。
+//   旧实现把「可能掉线」的隧道排在中继之前且不探活 → 死隧道被当「当前生效通道」对外广播, 浏览器必打不开。
+//   局域网仅同网可达, 不计入「公网」; P2P 是握手机制非基础 URL。
 function _bestPublic(){
   var c=_conn(), t=_tunnel(), r=_relay();
   var tl=(t&&t.tunnels&&t.tunnels.length)?t.tunnels:[];
   function pick(name){ for(var i=0;i<tl.length;i++){ if(tl[i].name===name && tl[i].url) return tl[i].url; } return ""; }
+  var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
+  if(w && r.connected!==false) return { base:w, kind:'worker', label:'零账号中继(始终在线·浏览器免隧道直开)', online:true };
   var cf=pick('cloudflared'), sh=pick('ssh');
   if(cf) return { base:String(cf).replace(/\/$/,''), kind:'cloudflared', label:'cloudflared 去中心化隧道', online:true };
   if(sh) return { base:String(sh).replace(/\/$/,''), kind:'ssh', label:'SSH 反向隧道(独立于 Cloudflare)', online:true };
-  var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
-  if(w) return { base:w, kind:'worker', label:'中继 Worker · 兜底', online:!!r.connected };
+  if(w) return { base:w, kind:'worker', label:'零账号中继·兜底', online:!!r.connected };
   return { base:"", kind:'none', label:'(暂无可用公网入口)', online:false };
+}
+// 浏览器可直开的最优网页入口: 永远优先零账号中继 /console(始终在线·免隧道·免凭证), 退求隧道根/局域网根。
+//   这是「任意浏览器打开即与 APK 同款操作」唯一普适可靠的入口 — 不依赖被网络封锁的 cloudflared、不依赖
+//   随时回收子域的免账号 SSH 隧道。中继 /console 同源走 /relay RPC, 无 CORS, 零配置零账号。
+function _bestWeb(){
+  var c=_conn(), r=_relay();
+  var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
+  if(w) return { url:_webConsoleUrl(w,true), label:'零账号中继网控台(始终在线·免隧道)', kind:'worker', base:w };
+  var bp=_bestPublic();
+  if(bp.base) return { url:_webConsoleUrl(bp.base,true), label:bp.label, kind:bp.kind, base:bp.base };
+  var l=_lan(); var us=(l&&l.urls)||[];
+  if(us.length){ var lb=String(us[0]).replace(/\/$/,''); return { url:_webConsoleUrl(lb,true), label:'局域网直连(同网·零中继零隧道)', kind:'lan', base:lb }; }
+  return { url:"", label:'(暂无)', kind:'none', base:"" };
 }
 function _push(){
   var c=_conn(), r=_relay();
@@ -289,12 +305,13 @@ function _push(){
 function _result(op,ok,text){ var o=document.getElementById('out'); if(o){o.className='';o.textContent='['+op+'] '+(ok?'✓':'✗')+' '+(text||'');} }
 // 唯一一份接入文档: 两大模块(① 软件本体含浏览器子模块 ② 手机本体)全部命令直接平铺, 无渐进式披露、无隐藏。
 function _cloudMd(){
-  var c=_conn(); var bp=_bestPublic(); var pub=((bp.base||c.url)||"").replace(/\/$/,'')+"/relay/"+(c.session||"");
+  var c=_conn(); var bp=_bestPublic(); var pub=((bp.base||c.url)||"").replace(/\/$/,'')+"/relay/"+(c.session||""); var web=_bestWeb();
   return [
     "# Devin Cloud 手机版 · 接入文档 (唯一·两大模块·全量展开)","",
     "> 手机已通过公网中继挂载, 任意云端 Agent (与你一样的 Devin Cloud) 可经隧道远程驱动。**两大模块、全部命令已直接平铺在下方**, 无渐进式披露、无隐藏、无文档级限制 — 读这一篇即可直接调用任意能力, 操作到底层 API。鉴权即边界: 持本 Token 即拥有对本机的完整接入(含 shell), Token 可随时刷新、务必保密。","",
     "## 接入信息",
-    "- 公网入口: `"+pub+"`",
+    "- 网页直开(任意浏览器·零账号免隧道, 打开即与 APK 同款操作): `"+(web.url||"(等中继连通)")+"`",
+    "- RPC 公网入口(给云端 Agent / curl): `"+pub+"`",
     "- 鉴权: `Authorization: Bearer "+(c.token||"<TOKEN>")+"`",
     "- Session: `"+(c.session||"<SESSION>")+"`","",
     _channelsMd(),"",
@@ -436,11 +453,16 @@ function handle(m){
   if(op==='copyAccess'){
     var bp=_bestPublic(); var base=(bp.base||"").replace(/\/$/,'');
     var u=base+"/relay/"+c.session;
-    // 轻量级快速接入: 接入信息 + 两步授权 + curl 模板 + 软件/手机最常用命令。够云端 Agent 立刻上手, 全量见「接入文档」。
+    var web=_bestWeb();
+    // 轻量级快速接入: 网页直开网址(浏览器) + 接入信息 + 两步授权 + curl 模板 + 软件/手机最常用命令。
     var block=[
       "═══ Devin Cloud 手机版 · 快速接入 ═══",
-      "当前生效通道: "+bp.label+(bp.kind!=='worker'?" (去中心化·不经 Worker)":" (其他公网通道暂不可用时兜底)"),
-      "公网入口: "+u,
+      "【网页直开·任意浏览器打开即与本机 APK 同款操作】",
+      "  "+(web.url||"(等中继连通后自动出现)"),
+      "  ↑ 零账号·免隧道·免凭证, 经["+web.label+"]; 复制到电脑/平板/别的手机浏览器即可。含 Token, 仅发可信方。",
+      "",
+      "当前生效通道: "+bp.label,
+      "RPC 接口(给云端 Agent / curl, 非浏览器直开): "+u,
       "Token: "+(c.token||""),
       "Session: "+(c.session||""),
       "",
@@ -669,16 +691,15 @@ renderWebConsole(); setInterval(renderWebConsole, 4000);
 // ── 公网网址 (跟随当前生效公网通道·任意浏览器打开即与 APK 同款操作) ──
 //   = <最优公网入口>/console(中继) 或 /(本机直供外壳) + ?session=&token=。多设备同时打开互不干扰(浏览器无状态, 本机串行执行)。
 function copyPublicWebUrl(){
-  var bp=_bestPublic();
-  if(!bp.base){ _result('pubWeb', false, '暂无可用公网入口 (开启「去中心化隧道」或等中继连通后再试)'); return; }
-  var url=_webConsoleUrl(bp.base, true);
-  try{N.clip&&N.clip(url);}catch(e){}
-  _result('pubWeb', true, '已复制公网网址 · 经['+bp.label+'] · 任意公网浏览器打开即与 APK 同款操作 (多设备同时打开互不干扰)');
+  var web=_bestWeb();
+  if(!web.url){ _result('pubWeb', false, '暂无可用公网入口 (等中继连通; 无需任何隧道/凭证)'); return; }
+  try{N.clip&&N.clip(web.url);}catch(e){}
+  _result('pubWeb', true, '已复制网页直开网址 · 经['+web.label+'] · 任意浏览器打开即与 APK 同款操作 (多设备同时打开互不干扰)');
 }
 function renderPubWebUrl(){
   var el=document.getElementById('pubWebUrl'); if(!el) return;
-  var bp=_bestPublic();
-  el.textContent = bp.base ? ('经['+bp.label+']: '+_webConsoleUrl(bp.base,true)) : '(等待公网入口…开启去中心化隧道或等中继连通)';
+  var web=_bestWeb();
+  el.textContent = web.url ? ('经['+web.label+']: '+web.url) : '(等待中继连通…连通即自动出现, 无需任何隧道)';
 }
 renderPubWebUrl(); setInterval(renderPubWebUrl, 4000);
 // ── 投屏镜像 (公网/局域网浏览器实时镜像并操控某原生标签; 突破 app.devin.ai host 门) ──
