@@ -391,18 +391,141 @@ function _delMultiHist(urls) {
   const h = _getMultiHist().filter((x) => !set.has(String(x.url)));
   _setMultiHist(h); return h;
 }
+// ── 归一 · 用户脚本/扩展(对接 Chrome 扩展体系: 解压目录 / .crx/.zip · 非油猴) ──
+//   每条 = {id,name,enabled,matches:[],js,css,runAt,source}. content_scripts 注入到
+//   /shell 宝主自渲染的账号页(会话列表/对话正文) · 同源·CSP 放行内联。
+function _getUserScripts() {
+  try { const a = (_ctx && _ctx.globalState && _ctx.globalState.get("dao.userScripts")) || []; return Array.isArray(a) ? a : []; } catch (e) { return []; }
+}
+function _setUserScripts(a) {
+  try { if (_ctx && _ctx.globalState) _ctx.globalState.update("dao.userScripts", Array.isArray(a) ? a.slice(0, 200) : []); } catch (e) {}
+}
+function _usId() { return "us_" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36); }
+// chrome match pattern / 通配 glob → 正则 (支持 * 与 <all_urls>)
+function _usGlobToRe(p) {
+  p = String(p || "").trim();
+  if (!p || p === "<all_urls>" || p === "*") return /^.*$/;
+  const re = p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp("^" + re + "$", "i");
+}
+function _usMatches(s, url) {
+  try {
+    const ms = (s && s.matches) || [];
+    if (!ms.length) return false;
+    for (let i = 0; i < ms.length; i++) { if (_usGlobToRe(ms[i]).test(url)) return true; }
+    return false;
+  } catch (e) { return false; }
+}
+// 构造注入片段(<style>+chrome 垫片+<script>) — 仅匹配且启用者。
+function _buildUserScriptInject(url) {
+  let list = [];
+  try { list = _getUserScripts().filter((s) => s && s.enabled !== false && _usMatches(s, url)); } catch (e) { list = []; }
+  if (!list.length) return "";
+  let css = "", js = "";
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i];
+    if (s.css) css += String(s.css) + "\n";
+    if (s.js) js += "\n;(function(){try{\n" + String(s.js) + "\n}catch(e){try{console.error('[dao-userscript]',e);}catch(_){}}})();";
+  }
+  const shim = "(function(){var w=window;if(w.chrome&&w.chrome.storage)return;var KP='dao.cs.kv.';"
+    + "function gv(k){try{var v=localStorage.getItem(KP+k);return v==null?undefined:JSON.parse(v);}catch(e){return undefined;}}"
+    + "function sv(o){try{for(var k in o)localStorage.setItem(KP+k,JSON.stringify(o[k]));}catch(e){}}"
+    + "w.chrome=w.chrome||{};w.chrome.runtime=w.chrome.runtime||{id:'dao-ext',getURL:function(p){return String(p||'');},onMessage:{addListener:function(){}},sendMessage:function(){}};"
+    + "w.chrome.storage=w.chrome.storage||{local:{get:function(keys,cb){var out={};try{if(typeof keys==='string')out[keys]=gv(keys);else if(Array.isArray(keys))keys.forEach(function(k){out[k]=gv(k);});else if(keys&&typeof keys==='object'){for(var k in keys){var v=gv(k);out[k]=(v===undefined?keys[k]:v);}}}catch(e){}if(typeof keys==='function'){cb=keys;}if(cb)cb(out);return Promise.resolve(out);},set:function(o,cb){sv(o||{});if(cb)cb();return Promise.resolve();},remove:function(k,cb){if(cb)cb();return Promise.resolve();}}};"
+    + "w.GM_addStyle=w.GM_addStyle||function(c){try{var st=document.createElement('style');st.textContent=c;(document.head||document.documentElement).appendChild(st);}catch(e){}};"
+    + "})();";
+  let out = "";
+  if (css) out += "<style data-dao-userscript>" + css.replace(/<\/style/gi, "<\\/style") + "</style>";
+  out += "<scr" + "ipt data-dao-userscript>" + shim + "</scr" + "ipt>";
+  if (js) out += "<scr" + "ipt data-dao-userscript>" + js.replace(/<\/script/gi, "<\\/script") + "</scr" + "ipt>";
+  return out;
+}
+// 最小 ZIP 读取(仅取所需文件) — 支持 .crx(Cr24 头后即 zip) / .zip, 无第三方依赖。
+function _zipEntries(buf) {
+  const zlib = require("node:zlib");
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0 && i >= buf.length - 22 - 65536; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("非法 zip(无 EOCD)");
+  const count = buf.readUInt16LE(eocd + 10);
+  let off = buf.readUInt32LE(eocd + 16);
+  const out = {};
+  for (let n = 0; n < count; n++) {
+    if (off + 46 > buf.length || buf.readUInt32LE(off) !== 0x02014b50) break;
+    const method = buf.readUInt16LE(off + 10);
+    const compSize = buf.readUInt32LE(off + 20);
+    const nameLen = buf.readUInt16LE(off + 28);
+    const extraLen = buf.readUInt16LE(off + 30);
+    const commLen = buf.readUInt16LE(off + 32);
+    const lho = buf.readUInt32LE(off + 42);
+    const name = buf.toString("utf8", off + 46, off + 46 + nameLen);
+    const lNameLen = buf.readUInt16LE(lho + 26);
+    const lExtraLen = buf.readUInt16LE(lho + 28);
+    const dataStart = lho + 30 + lNameLen + lExtraLen;
+    const comp = buf.slice(dataStart, dataStart + compSize);
+    let data;
+    try { data = method === 0 ? comp : zlib.inflateRawSync(comp); } catch (e) { data = null; }
+    if (data) out[name] = data;
+    off += 46 + nameLen + extraLen + commLen;
+  }
+  return out;
+}
+function _crxToZip(buf) {
+  if (buf.length > 16 && buf.toString("ascii", 0, 4) === "Cr24") {
+    const ver = buf.readUInt32LE(4);
+    if (ver === 2) { const pubLen = buf.readUInt32LE(8); const sigLen = buf.readUInt32LE(12); return buf.slice(16 + pubLen + sigLen); }
+    if (ver === 3) { const hdrLen = buf.readUInt32LE(8); return buf.slice(12 + hdrLen); }
+  }
+  return buf;
+}
+// 从「解压目录」或「.crx/.zip 文件」导入 Chrome 扩展的 content_scripts → 用户脚本条目。
+function _usImportExtension(p) {
+  p = String(p || "").trim().replace(/^[\"']|[\"']$/g, "");
+  if (!p) throw new Error("路径为空");
+  let readFile, manifestRaw, extName = path.basename(p);
+  const stat = fs.statSync(p);
+  if (stat.isDirectory()) {
+    manifestRaw = fs.readFileSync(path.join(p, "manifest.json"), "utf8");
+    readFile = (rel) => { try { return fs.readFileSync(path.join(p, String(rel).replace(/^\.?\//, "")), "utf8"); } catch (e) { return ""; } };
+  } else {
+    const zip = _zipEntries(_crxToZip(fs.readFileSync(p)));
+    if (!zip["manifest.json"]) throw new Error("扩展内无 manifest.json");
+    manifestRaw = zip["manifest.json"].toString("utf8");
+    readFile = (rel) => { const k = String(rel).replace(/^\.?\//, ""); return zip[k] ? zip[k].toString("utf8") : ""; };
+  }
+  const mani = JSON.parse(manifestRaw);
+  extName = mani.name || extName;
+  const cs = mani.content_scripts || [];
+  if (!cs.length) throw new Error("该扩展无 content_scripts(仅支持注入内容脚本)");
+  const added = [];
+  for (let i = 0; i < cs.length; i++) {
+    const c = cs[i];
+    let js = "", css = "";
+    (c.js || []).forEach((f) => { js += "\n/* " + f + " */\n" + readFile(f); });
+    (c.css || []).forEach((f) => { css += "\n/* " + f + " */\n" + readFile(f); });
+    added.push({
+      id: _usId(), name: extName + (cs.length > 1 ? (" #" + (i + 1)) : ""), enabled: true,
+      matches: c.matches || ["<all_urls>"], js, css, runAt: c.run_at || "document_idle", source: "ext:" + p,
+    });
+  }
+  const all = _getUserScripts().concat(added);
+  _setUserScripts(all);
+  return { name: extName, count: added.length, list: _getUserScripts() };
+}
 // 设备迁移(对照手机端一键导出/注入): 整包 = 账号库(可重导格式 email password) + 书签 + 历史 + 已开标签 + 安装元信息。
 function _migBuildBundle() {
   const accounts = (((_store && _store.accounts) || [])).map((a) => ({ email: a.email, password: a.password || "" }));
-  let favs = [], history = [], shellTabs = [];
+  let favs = [], history = [], shellTabs = [], userScripts = [];
   try { favs = _getMultiFavs(); } catch (e) {}
   try { history = _getMultiHist(); } catch (e) {}
   try { shellTabs = (_ctx && _ctx.globalState && _ctx.globalState.get("dao.shellTabs")) || []; } catch (e) {}
+  try { userScripts = _getUserScripts(); } catch (e) {}
   return {
     kind: "dao-migration", version: VERSION, exportedAt: Date.now(),
     activeEmail: (_store && _store.activeEmail) || "",
-    counts: { accounts: accounts.length, favs: favs.length, history: history.length, tabs: shellTabs.length },
-    accounts, favs, history, shellTabs,
+    counts: { accounts: accounts.length, favs: favs.length, history: history.length, tabs: shellTabs.length, userScripts: userScripts.length },
+    accounts, favs, history, shellTabs, userScripts,
     install: { plugin: "dao", version: VERSION, note: "新设备安装对应版本插件后, 在「页面工具 · 整包导入」选择本文件即可恢复账号库与状态。" },
   };
 }
@@ -419,6 +542,7 @@ async function _migApplyBundle(data) {
   try { if (Array.isArray(data.favs)) _setMultiFavs(data.favs); } catch (e) {}
   try { if (Array.isArray(data.history)) _setMultiHist(data.history); } catch (e) {}
   try { if (Array.isArray(data.shellTabs) && _ctx && _ctx.globalState) _ctx.globalState.update("dao.shellTabs", data.shellTabs.slice(0, 40)); } catch (e) {}
+  try { if (Array.isArray(data.userScripts)) _setUserScripts(data.userScripts); } catch (e) {}
   return { addedAcc, favs: (data.favs || []).length, history: (data.history || []).length, tabs: (data.shellTabs || []).length };
 }
 // v4.9.3 · 归一修复: 六大板块经 blob-iframe 挂载, frame-src 必须放行 blob: 否则
@@ -617,7 +741,7 @@ html.m #hint{font-size:14px;padding:18px}
 <script>
 (function(){
 var vscode=acquireVsCodeApi();
-var tabs={},order=[],active=null,favs=[],history=[],accounts=[],bridge=null;var MOBILE=false;
+var tabs={},order=[],active=null,favs=[],history=[],accounts=[],bridge=null,userScripts=[],_usEdit=null;var MOBILE=false;
 // 归一·分而治之: 六大板块各开一张独立子网页(各自一个 iframe), 不再共用一个全功能面板。
 // BOARDS[tab] = {req,mounted,ready,frame,url}; 外壳标签 id = 'board:'+tab。
 var BOARDS={};
@@ -672,7 +796,7 @@ function navigate(v){v=(v||'').trim();if(!v)return;if(isBoard()){if(/^https?:\\/
   if(v.charAt(0)==='/'){if(t){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}return;}
   vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v)});}
 // 归一 · 设备类型自动识别 (UA / ?m=1·见 _multiShellHtml MOBILE 注入) — 移除手动「切换 电脑版/手机版」(点击会重载致整体失效)。
-var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
+var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🔌','用户脚本 / 扩展','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
 function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'" data-l="'+esc(PAGES[i][1])+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
   var items=MENU.querySelectorAll('.mi');for(var j=0;j<items.length;j++){items[j].onclick=function(){MENU.className='';onPage(this.getAttribute('data-p'),this.getAttribute('data-l'));};}}
 function toggleMenu(){MENU.className=MENU.className?'':'on';}
@@ -726,10 +850,31 @@ function showFavs(){if(!favs.length){showOverlay('⭐ 书签收藏','<div class=
   var ob=OVB.querySelectorAll('[data-re-email]');for(var a=0;a<ob.length;a++){ob[a].onclick=function(){vscode.postMessage({type:'reopen',email:this.getAttribute('data-re-email'),devinId:this.getAttribute('data-re-did')});hideOverlay();};}
   var db=OVB.querySelectorAll('[data-del]');for(var b=0;b<db.length;b++){db[b].onclick=function(){vscode.postMessage({type:'favDel',key:this.getAttribute('data-del')});};}
   _ovBindBulk('f','.fck','data-k',function(v){vscode.postMessage({type:'favDelMany',keys:v});},function(){vscode.postMessage({type:'favClear'});});}
-function showUserscripts(){showOverlay('🐵 用户脚本','<div class="note">用户脚本(油猴)用于在 Devin 页面注入增强脚本。<br>受 IDE webview 跨域限制，注入到 Devin 页面将经「每账号反代」统一注入实现(规划中)。<br>当前可在「页面工具」使用复制链接 / 系统浏览器打开 / 翻译等通用能力。</div>');}
 // 归一 · 手动切换 电脑版 / 手机版: 经 ?m 重载当前 /shell 页 (UA 自识之上的手动覆盖)。
 // MOBILE 真→切回电脑版(m=0); 假→切手机版(m=1)。webview 内无真实 URL, try/catch 静默兜底。
 function toggleMobileMode(){try{var _u=new URL(location.href);_u.searchParams.set('m',MOBILE?'0':'1');location.href=_u.toString();}catch(e){}}
+function _usInput(id,ph,val){return '<input id="'+id+'" placeholder="'+ph+'" value="'+esc(val||'')+'" style="background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:7px 9px;font-size:12.5px;outline:none"/>';}
+function showUserscripts(){
+  var h='<div class="note">🧩 用户脚本/扩展(对接 Chrome 扩展体系 · 非油猴): content_scripts 会注入到 /shell 自渲染的账号页(会话列表/对话正文) · 同源。可手写脚本, 或导入「解压扩展目录 / .crx / .zip」。</div>';
+  h+='<div class="li" style="gap:6px"><input id="usPath" placeholder="扩展解压目录绝对路径 或 ext.crx/.zip" style="flex:1;min-width:0;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:7px 9px;font-size:12.5px;outline:none"/><button class="b pri" id="usImp">导入扩展</button><button class="b" id="usNew">＋新建</button></div>';
+  if(_usEdit){var e=_usEdit;
+    h+='<div class="li" style="flex-direction:column;align-items:stretch;gap:6px">'
+      +_usInput('usName','脚本名称',e.name)
+      +_usInput('usMatch','匹配(逗号/换行分隔, 如 *://app.devin.ai/* 或 <all_urls>)',(e.matches||[]).join(', '))
+      +'<textarea id="usCss" placeholder="CSS(可选)" style="height:54px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:7px 9px;font:12px monospace;outline:none;resize:vertical">'+esc(e.css||'')+'</textarea>'
+      +'<textarea id="usJs" placeholder="JavaScript content script" style="height:120px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:7px 9px;font:12px monospace;outline:none;resize:vertical">'+esc(e.js||'')+'</textarea>'
+      +'<div style="display:flex;gap:6px;justify-content:flex-end"><button class="b" id="usCancel">取消</button><button class="b pri" id="usSaveBtn">保存</button></div></div>';}
+  if(!userScripts.length && !_usEdit) h+='<div class="empty">暂无用户脚本 · 点「＋新建」或导入扩展</div>';
+  for(var i=0;i<userScripts.length;i++){var s=userScripts[i];
+    h+='<div class="li"><input type="checkbox" class="usck" data-id="'+esc(s.id)+'" '+(s.enabled!==false?'checked':'')+' style="flex:none"/><div class="g"><div class="t">'+esc(s.name||'(未命名)')+'</div><div class="s">'+esc((s.matches||[]).join(', ').slice(0,80))+'</div></div><button class="b" data-edit="'+esc(s.id)+'">编辑</button><button class="b" data-del="'+esc(s.id)+'">删</button></div>';}
+  showOverlay('🧩 用户脚本 / 扩展 ('+userScripts.length+')',h);
+  var ip=document.getElementById('usImp');if(ip)ip.onclick=function(){var p=(document.getElementById('usPath')||{}).value||'';if(!p){daoToast('请填扩展路径',true);return;}daoToast('导入中…');vscode.postMessage({type:'usImport',path:p});};
+  var nw=document.getElementById('usNew');if(nw)nw.onclick=function(){_usEdit={name:'',matches:['*://app.devin.ai/*'],css:'',js:''};showUserscripts();};
+  var cc=document.getElementById('usCancel');if(cc)cc.onclick=function(){_usEdit=null;showUserscripts();};
+  var sb=document.getElementById('usSaveBtn');if(sb)sb.onclick=function(){var name=(document.getElementById('usName')||{}).value||'';var mt=((document.getElementById('usMatch')||{}).value||'').split(/[\\n,]+/).map(function(x){return x.trim();}).filter(Boolean);var css=(document.getElementById('usCss')||{}).value||'';var js=(document.getElementById('usJs')||{}).value||'';var entry={name:name,matches:mt.length?mt:['<all_urls>'],css:css,js:js,enabled:true};if(_usEdit&&_usEdit.id)entry.id=_usEdit.id;_usEdit=null;vscode.postMessage({type:'usSave',entry:entry});};
+  var cks=OVB.querySelectorAll('.usck');for(var c=0;c<cks.length;c++)cks[c].onchange=function(){vscode.postMessage({type:'usToggle',id:this.getAttribute('data-id')});};
+  var eb=OVB.querySelectorAll('[data-edit]');for(var d=0;d<eb.length;d++)eb[d].onclick=function(){var id=this.getAttribute('data-edit');for(var k=0;k<userScripts.length;k++){if(userScripts[k].id===id){_usEdit=JSON.parse(JSON.stringify(userScripts[k]));break;}}showUserscripts();};
+  var xb=OVB.querySelectorAll('[data-del]');for(var x=0;x<xb.length;x++)xb[x].onclick=function(){vscode.postMessage({type:'usDelete',id:this.getAttribute('data-del')});};}
 function showTools(){var t=tabs[active];var u=t?t.url:'';showOverlay('🛠 页面工具',
   '<div class="li"><div class="g"><div class="t">复制当前页链接</div><div class="s">'+esc(u||'(无)')+'</div></div><button class="b" id="tCopy">复制</button></div>'
   +'<div class="li"><div class="g"><div class="t">系统浏览器打开当前页</div></div><button class="b pri" id="tExt">打开</button></div>'
@@ -937,6 +1082,8 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='favs'){favs=m.list||[];if(OV.className&&OVT.textContent.indexOf('书签')>=0)showFavs();}
   else if(m.type==='history'){history=m.list||history;if(OV.className&&OVT.textContent.indexOf('历史')>=0)showHistory();}
   else if(m.type==='accounts'){accounts=m.list||[];}
+  else if(m.type==='userscripts'){userScripts=m.list||[];if(OV.className&&OVT.textContent.indexOf('用户脚本')>=0)showUserscripts();}
+  else if(m.type==='usError'){try{daoToast('导入失败: '+(m.error||''),true);}catch(e){}}
   else if(m.type==='bridgeState'){bridge=m.data||null;}
   else if(m.type==='cloudInitHtml'){mountBoardSolo(m.html||'',m.board||'overview');}
   else if(m.type==='gotoBoard'){try{openBoard(m.board||'home');}catch(e){}}
@@ -1167,8 +1314,12 @@ function _shellAccKey(email) {
 // 主口 9920 的 /i/<accKey>/* 路由就地调用: 解析账号 auth → dao 用 auth1 调内部 REST API 服务端自渲染。
 //   restPath 为已剥 `/i/<accKey>` 的同源路径 (含 query)。直接写 res (流式)。令牌只在服务端, 不下发浏览器。
 async function shellAccountProxy(accKey, restPath, req, res) {
+  let _csUrl = '/';
   const _txt = (status, s) => { if (res && !res.headersSent) { res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); } if (res) res.end(s); };
   const _html = (status, s) => {
+    if (status === 200 && typeof s === 'string') {
+      try { const inj = _buildUserScriptInject(_csUrl); if (inj) { s = /<\/body>/i.test(s) ? s.replace(/<\/body>/i, inj + '</body>') : (s + inj); } } catch (e) {}
+    }
     if (res && !res.headersSent) {
       res.writeHead(status, {
         'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
@@ -1186,6 +1337,7 @@ async function shellAccountProxy(accKey, restPath, req, res) {
     if (rest.charAt(0) !== '/') rest = '/' + rest;
     const qIdx = rest.indexOf('?');
     const pathOnly = qIdx >= 0 ? rest.slice(0, qIdx) : rest;
+    _csUrl = 'https://app.devin.ai' + (pathOnly || '/');
     const route = _shellAccRoute(pathOnly);
     if (route.kind === 'favicon') { if (res && !res.headersSent) res.writeHead(204); if (res) res.end(); return; }
 
@@ -1304,6 +1456,7 @@ async function shellHandleMessage(sid, m) {
       case 'ready':
         send({ type: 'favs', list: _getMultiFavs() });
         send({ type: 'history', list: _getMultiHist() });
+        send({ type: 'userscripts', list: _getUserScripts() });
         // 状态续接: 有已存标签 → 还原(老用户停在原网页); 无 → 电脑端落「六合一主页」(新用户), 手机端由前端冷启动开🔀切号。
         try {
           const st = (_ctx && _ctx.globalState && _ctx.globalState.get('dao.shellTabs')) || [];
@@ -1314,6 +1467,24 @@ async function shellHandleMessage(sid, m) {
       case 'shellSaveTabs':
         try { if (_ctx && _ctx.globalState) _ctx.globalState.update('dao.shellTabs', Array.isArray(m.tabs) ? m.tabs.slice(0, 40) : []); } catch (e) {}
         return;
+      case 'usList': send({ type: 'userscripts', list: _getUserScripts() }); return;
+      case 'usSave': {
+        const list = _getUserScripts();
+        const e = m.entry || {};
+        if (e.id) { const i = list.findIndex((x) => x.id === e.id); if (i >= 0) list[i] = Object.assign({}, list[i], e); else list.push(Object.assign({ id: _usId(), enabled: true }, e)); }
+        else list.push(Object.assign({ id: _usId(), enabled: true }, e));
+        _setUserScripts(list); send({ type: 'userscripts', list: _getUserScripts() }); _toast('✓ 用户脚本已保存'); return;
+      }
+      case 'usToggle': {
+        const list = _getUserScripts(); const i = list.findIndex((x) => x.id === m.id);
+        if (i >= 0) { list[i].enabled = list[i].enabled === false; _setUserScripts(list); } send({ type: 'userscripts', list: _getUserScripts() }); return;
+      }
+      case 'usDelete': { _setUserScripts(_getUserScripts().filter((x) => x.id !== m.id)); send({ type: 'userscripts', list: _getUserScripts() }); return; }
+      case 'usImport': {
+        try { const r = _usImportExtension(m.path); send({ type: 'userscripts', list: r.list }); _toast('✓ 已导入扩展 ' + r.name + ' (' + r.count + ' 脚本)'); }
+        catch (e) { _toast('导入失败: ' + ((e && e.message) || e)); send({ type: 'usError', error: (e && e.message) || String(e) }); }
+        return;
+      }
       case 'getAccounts': {
         const list = (((_store && _store.accounts) || [])).map((a, i) => {
           let dollars = 0;

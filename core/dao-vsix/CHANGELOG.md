@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.46.0
+- 同步 rt-flow v4.22.0（vendored `rtflow/extension.js`）：用户脚本/扩展 — 对接 Chrome 扩展体系(content_scripts·非油猴)
+  - 用户脚本/扩展管理器(汉堡「🔌 用户脚本 / 扩展」)：新建/编辑/启用停用/删除；导入「解压扩展目录 / .crx / .zip」解析 manifest.json content_scripts
+  - 内置最小 ZIP 读取 + .crx(Cr24 v2/v3) 头剥离(零依赖)；content_scripts 按 match 注入宿主自渲染账号页，附 chrome.storage/runtime/GM_addStyle 垫片
+  - 设备迁移整包纳入 userScripts
+
 ## 3.45.0
 - 同步 rt-flow v4.21.0（vendored `rtflow/extension.js`）：对话/备份归一(对照手机端 APK)
   - 拖拽对话进网页(复刻手机端 `startConvDrag`)：近期对话卡/备份卡拖到网页区即在该账号网页中打开此会话(跨账号正确路由·新开标签)
