@@ -99,6 +99,9 @@ public class MainActivity extends AppCompatActivity {
     private static final java.util.Map<String, String> sTabDollars = new java.util.concurrent.ConcurrentHashMap<>();
 
     private final Handler main = new Handler(Looper.getMainLooper());
+    // 后台单线程 I/O: 标签持久化的外存写盘移出主线程 → 翻页/路由切换不再卡顿。
+    private final java.util.concurrent.ExecutorService ioExec = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private final Runnable saveTabsTask = this::saveTabsNow;
     private final List<Tab> tabs = new ArrayList<>();
     private int active = -1;
     private static final String PREFS = "rtflow_tabs";
@@ -834,7 +837,7 @@ public class MainActivity extends AppCompatActivity {
                 if (!tab.internal && u != null && u.startsWith("http")) injectUserScripts(v, u, "start"); // 油猴 @run-at document-start
             }
             @Override public void onPageFinished(WebView v, String u) {
-                tab.url = u; renderTabStrip(); saveTabs();
+                tab.url = u; renderTabStrip(); scheduleSaveTabs();
                 if (!tab.incognito) addHistory(u, tab.title, tab);   // 无痕标签不记历史
                 if (pageZoom != 100) applyZoom(v);          // 缩放跨页/刷新保持
                 if (tab.night) applyNight(v, true);          // 夜间反色跨页保持
@@ -854,7 +857,7 @@ public class MainActivity extends AppCompatActivity {
                 if (u != null && u.startsWith("http")) {
                     tab.url = u;
                     if (tabOf(v) == active) setAddr(u);
-                    renderTabStrip(); saveTabs();
+                    renderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
                     if (!tab.internal) { installDownloadHook(v); installKbHelper(v); }
                 }
@@ -4331,8 +4334,19 @@ public class MainActivity extends AppCompatActivity {
         return true;
     }
 
+    /** 防抖落盘: 合并 SPA 路由切换/翻页产生的密集调用, ~350ms 后只写一次 (热路径用此, 避免主线程频繁 I/O)。 */
+    private void scheduleSaveTabs() {
+        main.removeCallbacks(saveTabsTask);
+        main.postDelayed(saveTabsTask, 350);
+    }
+    /** 立即落盘 (关标签/退到后台等关键时刻): 先取消待执行的防抖任务, 再同步序列化。 */
     private void saveTabs() {
+        main.removeCallbacks(saveTabsTask);
+        saveTabsNow();
+    }
+    private void saveTabsNow() {
         try {
+            // 序列化读 tabs/displayUrl → 必须主线程 (快); 真正的外存写盘交后台单线程, 不卡 UI。
             org.json.JSONArray arr = new org.json.JSONArray();
             int savedActive = 0;
             for (int i = 0; i < tabs.size(); i++) {
@@ -4347,11 +4361,14 @@ public class MainActivity extends AppCompatActivity {
                 if (t.titleOverride != null) o.put("titleOverride", t.titleOverride);
                 arr.put(o);
             }
-            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
-            sp.edit().putString("tabs", arr.toString()).putInt("active", savedActive).apply();
+            final String tabsJson = arr.toString();
+            final int fActive = savedActive;
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString("tabs", tabsJson).putInt("active", fActive).apply();   // apply() 已异步
             org.json.JSONObject vault = new org.json.JSONObject();
-            vault.put("tabs", arr); vault.put("active", savedActive);
-            vaultWrite("tabs", vault.toString());
+            vault.put("tabs", new org.json.JSONArray(tabsJson)); vault.put("active", fActive);
+            final String vaultJson = vault.toString();
+            ioExec.execute(() -> vaultWrite("tabs", vaultJson));   // 外存写盘移出主线程
         } catch (Exception ignored) {}
     }
 
@@ -4373,18 +4390,33 @@ public class MainActivity extends AppCompatActivity {
             if (json.isEmpty()) return false;
             org.json.JSONArray arr = new org.json.JSONArray(json);
             if (arr.length() == 0) return false;
-            int created = 0;
+            int created = 0, activeTab = -1;
             for (int i = 0; i < arr.length(); i++) {
                 org.json.JSONObject o = arr.getJSONObject(i);
                 String url = o.optString("url", SWITCH);
                 if (!isPersistableTabUrl(url)) continue;   // 跳过历史遗留的不可还原条目(裸 file:///android_asset/ 等)
                 String acc = o.has("account") ? o.getString("account") : null;
-                Tab nt = newTab(url, acc);
+                boolean isActive = (created == act);
+                boolean http = url.startsWith("http://") || url.startsWith("https://");
+                Tab nt;
+                if (!isActive && acc == null && http) {
+                    // 普通网页·后台标签: 懒加载 — 建好 WebView 但暂不 loadUrl, 选中时才载。
+                    // 冷启动不再让 N 个页面同时网络加载+跑 JS → 启动快、整体跟手 (一次只载一个)。
+                    // 仅限 http(s); 内部 file:// 页(脚本管理等)需 internal=true 的原生桥, 照常即时加载。
+                    nt = makeTab(acc, false);
+                    nt.url = url;
+                    nt.title = o.optString("title", "");
+                    nt.pendingReloadUrl = url;            // selectTab 命中即载
+                } else {
+                    // 活动标签 + Devin 账号标签(多实例需后台保活追踪): 即时加载, 不抢前台。
+                    nt = newTabBackground(url, acc);
+                }
                 if (o.has("titleOverride")) { nt.titleOverride = o.optString("titleOverride", null); }
+                if (isActive) activeTab = tabs.size() - 1;
                 created++;
             }
             if (created == 0) return false;
-            if (act >= 0 && act < tabs.size()) selectTab(act);
+            selectTab(activeTab >= 0 ? activeTab : 0);
             return true;
         } catch (Exception e) { return false; }
     }
