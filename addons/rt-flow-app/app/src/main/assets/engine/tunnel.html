@@ -52,6 +52,8 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
     <button onclick="send('restart')">重启隧道</button>
     <button onclick="send('rotateToken')" style="background:#d29922">刷新Token</button>
   </div>
+  <button onclick="copyPublicWebUrl()" style="margin-top:6px;background:#238636">🌐 复制公网网址（任意浏览器打开 = APK 同款操作）</button>
+  <div id="pubWebUrl" class="muted" style="font-size:11px;margin-top:4px;word-break:break-all">—</div>
 </div>
 
 <!-- 接入渠道总览: 一处看全所有可用渠道 + 一键复制 (实时·随状态自动刷新) -->
@@ -250,25 +252,44 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 var N = window.Native || {};
 function _conn(){ try{ return JSON.parse(N.conn?N.conn():"{}"); }catch(e){ return {}; } }
 function _relay(){ try{ return JSON.parse(N.relayStatus?N.relayStatus():"{}"); }catch(e){ return {}; } }
+// 「当前生效的最优公网入口」选取 (道法自然·随情况变化, 不再恒定 Worker):
+//   去中心化隧道(cloudflared 主 > SSH 备) 优先 → 真去中心化、不经任何共享 Worker;
+//   两者都不可用时才回落「中继 Worker · 兜底」。局域网仅同网可达, 不计入「公网」; P2P 是握手机制非基础 URL。
+function _bestPublic(){
+  var c=_conn(), t=_tunnel(), r=_relay();
+  var tl=(t&&t.tunnels&&t.tunnels.length)?t.tunnels:[];
+  function pick(name){ for(var i=0;i<tl.length;i++){ if(tl[i].name===name && tl[i].url) return tl[i].url; } return ""; }
+  var cf=pick('cloudflared'), sh=pick('ssh');
+  if(cf) return { base:String(cf).replace(/\/$/,''), kind:'cloudflared', label:'cloudflared 去中心化隧道', online:true };
+  if(sh) return { base:String(sh).replace(/\/$/,''), kind:'ssh', label:'SSH 反向隧道(独立于 Cloudflare)', online:true };
+  var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
+  if(w) return { base:w, kind:'worker', label:'中继 Worker · 兜底', online:!!r.connected };
+  return { base:"", kind:'none', label:'(暂无可用公网入口)', online:false };
+}
 function _push(){
-  var c=_conn(), r=_relay(), on=!!r.connected;
-  var base=((on?(r.activeUrl||c.url):c.url)||"").replace(/\/$/,'');
-  var pub = (base&&c.session)?(base+"/relay/"+c.session):"—";
+  var c=_conn(), r=_relay();
+  var bp=_bestPublic(), isWorker=(bp.kind==='worker');
+  var on = bp.base ? (isWorker ? !!r.connected : true) : false;
+  var pub = (on&&c.session)?(bp.base+"/relay/"+c.session):"—";
   var nCand=(r.candidates&&r.candidates.length)||0;
+  var modeTxt = isWorker
+    ? ("中继 Worker·兜底 · relay·Durable Object"+(nCand>1?(" · "+nCand+"端点故障转移"):""))
+    : (bp.label+" · 去中心化直连·不经 Worker");
   var state={
     url: on?pub:"", lastErr: on?null:(r.lastError||r.lastErr||null),
     ws:{name:"Devin Cloud 手机版", root: c.session||"-"},
-    port:"DO", mode:"relay·Durable Object"+(nCand>1?(" · "+nCand+"端点故障转移"):""), protocol:"wss",
-    proxy:null, attempts:[{mode:"relay",proto:"wss",ok:on}], tries:(r.attempts||0),
-    agentCount: on?1:0, cfLoggedIn:false, cfEmail:"", session:c.session
+    port: isWorker?"DO":"tunnel", mode: modeTxt, protocol: isWorker?"wss":"https",
+    proxy:null, attempts:[{mode:bp.kind,proto:isWorker?"wss":"https",ok:on}], tries:(r.attempts||0),
+    agentCount: on?1:0, cfLoggedIn:false, cfEmail:"", session:c.session, channelLabel: bp.label
   };
   _render(state);
   try{ renderChannels(); }catch(e){}
+  try{ renderPubWebUrl(); }catch(e){}
 }
 function _result(op,ok,text){ var o=document.getElementById('out'); if(o){o.className='';o.textContent='['+op+'] '+(ok?'✓':'✗')+' '+(text||'');} }
 // 唯一一份接入文档: 两大模块(① 软件本体含浏览器子模块 ② 手机本体)全部命令直接平铺, 无渐进式披露、无隐藏。
 function _cloudMd(){
-  var c=_conn(); var pub=(c.url||"").replace(/\/$/,'')+"/relay/"+(c.session||"");
+  var c=_conn(); var bp=_bestPublic(); var pub=((bp.base||c.url)||"").replace(/\/$/,'')+"/relay/"+(c.session||"");
   return [
     "# Devin Cloud 手机版 · 接入文档 (唯一·两大模块·全量展开)","",
     "> 手机已通过公网中继挂载, 任意云端 Agent (与你一样的 Devin Cloud) 可经隧道远程驱动。**两大模块、全部命令已直接平铺在下方**, 无渐进式披露、无隐藏、无文档级限制 — 读这一篇即可直接调用任意能力, 操作到底层 API。鉴权即边界: 持本 Token 即拥有对本机的完整接入(含 shell), Token 可随时刷新、务必保密。","",
@@ -413,11 +434,12 @@ function v(id){ return document.getElementById(id).value; }
 function handle(m){
   var op=m.op, c=_conn();
   if(op==='copyAccess'){
-    var r=_relay(); var base=((r.activeUrl||c.url||"")+"").replace(/\/$/,'');
+    var bp=_bestPublic(); var base=(bp.base||"").replace(/\/$/,'');
     var u=base+"/relay/"+c.session;
     // 轻量级快速接入: 接入信息 + 两步授权 + curl 模板 + 软件/手机最常用命令。够云端 Agent 立刻上手, 全量见「接入文档」。
     var block=[
       "═══ Devin Cloud 手机版 · 快速接入 ═══",
+      "当前生效通道: "+bp.label+(bp.kind!=='worker'?" (去中心化·不经 Worker)":" (其他公网通道暂不可用时兜底)"),
       "公网入口: "+u,
       "Token: "+(c.token||""),
       "Session: "+(c.session||""),
@@ -473,7 +495,7 @@ function handle(m){
 function _render(s){
   s=s||{}; var on=!!s.url;
   document.getElementById('dot').className='dot '+(on?'ok':(s.lastErr?'bad':'pending'));
-  document.getElementById('stat').textContent=on?'已打通 · 公网在线 · 可远程接入':(s.lastErr?(''+s.lastErr):('隧道启动中…'+(s.tries?(' (第'+s.tries+'次重连)'):'')));
+  document.getElementById('stat').textContent=on?('已打通 · '+(s.channelLabel||'公网在线')+' · 可远程接入'):(s.lastErr?(''+s.lastErr):('隧道启动中…'+(s.tries?(' (第'+s.tries+'次重连)'):'')));
   document.getElementById('url').textContent=s.url||'—';
   document.getElementById('ws').textContent=s.ws?(s.ws.name+' · '+s.ws.root):'—';
   document.getElementById('mode').textContent=':'+s.port+' / '+s.mode+(s.protocol?' / '+s.protocol:'');
@@ -644,6 +666,21 @@ function copyWebConsoleBare(){
   _result('webConsole', true, '已复制纯网址(不含Token, 打开后需手动填 Session/Token)');
 }
 renderWebConsole(); setInterval(renderWebConsole, 4000);
+// ── 公网网址 (跟随当前生效公网通道·任意浏览器打开即与 APK 同款操作) ──
+//   = <最优公网入口>/console(中继) 或 /(本机直供外壳) + ?session=&token=。多设备同时打开互不干扰(浏览器无状态, 本机串行执行)。
+function copyPublicWebUrl(){
+  var bp=_bestPublic();
+  if(!bp.base){ _result('pubWeb', false, '暂无可用公网入口 (开启「去中心化隧道」或等中继连通后再试)'); return; }
+  var url=_webConsoleUrl(bp.base, true);
+  try{N.clip&&N.clip(url);}catch(e){}
+  _result('pubWeb', true, '已复制公网网址 · 经['+bp.label+'] · 任意公网浏览器打开即与 APK 同款操作 (多设备同时打开互不干扰)');
+}
+function renderPubWebUrl(){
+  var el=document.getElementById('pubWebUrl'); if(!el) return;
+  var bp=_bestPublic();
+  el.textContent = bp.base ? ('经['+bp.label+']: '+_webConsoleUrl(bp.base,true)) : '(等待公网入口…开启去中心化隧道或等中继连通)';
+}
+renderPubWebUrl(); setInterval(renderPubWebUrl, 4000);
 // ── 投屏镜像 (公网/局域网浏览器实时镜像并操控某原生标签; 突破 app.devin.ai host 门) ──
 function _mirrorUrl(base, withTok){
   var c=_conn(); var qs="?session="+encodeURIComponent(c.session||"");
@@ -804,9 +841,11 @@ function _channels(){
     out.push({label:"去中心化隧道 (cloudflared 主 / SSH 备)", online:false, urls:[], note:"开启上方「去中心化隧道」即每设备独立免费公网入口"});
   }
   var base=((r.activeUrl||c.url)||"").replace(/\/$/,'');
-  out.push({label:"中继 Worker · 默认兜底", online:!!r.connected, urls:(base&&sid)?[base+suf]:[], note: base?"":"未配置"});
+  out.push({label:"中继 Worker · 兜底（仅其他公网通道不可用时）", online:!!r.connected, urls:(base&&sid)?[base+suf]:[], note: base?"":"未配置"});
   out.push({label:"WebRTC P2P · 真打洞(打开 p2p-client.html)", online:tl.length>0, urls:[],
             note:"借任一公网入口握手一次, 之后 RPC 走 P2P DataChannel·不再经隧道"});
+  // 标注「当前生效」通道 (= 公网网址/复制接入信息 实际选用的那条; 优先去中心化隧道, Worker 仅兜底)
+  try{ var bp=_bestPublic(); if(bp.base) out.forEach(function(ch){ ch.active=!!(ch.urls&&ch.urls.length&&ch.urls[0].indexOf(bp.base)===0); }); }catch(e){}
   return out;
 }
 // 接入文档用: 把当前所有可用渠道渲染成 Markdown 表 (随实时状态自动更新, 与面板总览同源)。
@@ -824,8 +863,9 @@ function renderChannels(){
   var el=document.getElementById('chList'); if(!el) return;
   el.innerHTML=_channels().map(function(ch){
     var detail=(ch.urls&&ch.urls.length)?ch.urls.join('<br>'):(ch.note||(ch.online?'在线':'离线/未开启'));
+    var badge=ch.active?'<span style="color:#3fb950;font-size:10px;font-weight:600;margin-left:6px">★ 当前生效</span>':'';
     return '<div style="margin:5px 0 5px;padding-bottom:5px;border-bottom:1px dashed var(--vscode-input-border,#3334)">'
-      +'<div><span class="dot '+(ch.online?'ok':'pending')+'"></span><span style="font-size:12px">'+ch.label+'</span></div>'
+      +'<div><span class="dot '+(ch.online?'ok':'pending')+'"></span><span style="font-size:12px">'+ch.label+'</span>'+badge+'</div>'
       +'<div class="url" style="margin-left:16px;font-size:11px">'+detail+'</div></div>';
   }).join('');
 }
