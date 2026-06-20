@@ -654,6 +654,29 @@ function test(name, fn) {
     }
   });
 
+  // ── 归一外壳 /shell 公网多用户隔离 (道并行而不相悖 · 双副本 rt-flow + dao-vsix) ──
+  console.log("\n[/shell 多用户会话隔离]");
+  test("/shell: 六大板块宿主回推按 sid 隔离, 不再无脑广播 (道并行而不相悖)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const r = rel.join("/");
+      // 必备: 按会话路由的派发器 + 串行化执行器 + 活跃 sid 锁
+      assert.ok(/function _shellCloudDispatch\(/.test(src), r + ": 须 _shellCloudDispatch 按 sid 派发");
+      assert.ok(/function _shellCloudRun\(sid, fn\)/.test(src), r + ": 须 _shellCloudRun 串行化执行器");
+      assert.ok(/_shellCloudActiveSid/.test(src), r + ": 须活跃 sid 锁");
+      // 派发器: 有活跃 sid → 只发该 sid; 无 → 广播 (后台只读刷新)
+      assert.ok(/if \(_shellCloudActiveSid\) _shellSend\(_shellCloudActiveSid, \{ type: 'cloudHost'/.test(src), r + ": 有活跃 sid 须仅 _shellSend 给该 sid");
+      assert.ok(/else _shellBroadcast\(\{ type: 'cloudHost'/.test(src), r + ": 无活跃 sid(任务间)才广播");
+      // cloudInit/cloudRelay/cloudReady 三入口须经 _shellCloudRun 路由
+      assert.ok(/case 'cloudInit':[\s\S]{0,260}_shellCloudRun\(sid,/.test(src), r + ": cloudInit 须经 _shellCloudRun(sid,...)");
+      assert.ok(/case 'cloudRelay':[\s\S]{0,160}_shellCloudRun\(sid,[\s\S]{0,120}_cloudProvider\.handleMessage/.test(src), r + ": cloudRelay 须经 _shellCloudRun(sid,...) await handleMessage");
+      assert.ok(/case 'cloudReady':[\s\S]{0,140}_shellCloudRun\(sid,/.test(src), r + ": cloudReady 须经 _shellCloudRun(sid,...)");
+      // 严禁旧病灶: cloudInit 内直接 setHostPost(()=>_shellBroadcast(cloudHost))
+      assert.ok(!/setHostPost\(\(mm\) => \{ _shellBroadcast\(\{ type: 'cloudHost'/.test(src), r + ": 严禁 cloudInit 内直接广播式 setHostPost (旧病灶)");
+    }
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
