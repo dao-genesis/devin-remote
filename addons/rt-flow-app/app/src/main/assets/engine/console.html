@@ -3,62 +3,48 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>Devin Cloud · 网页控制台 (整机·多实例)</title>
+<title>Devin Cloud · 手机版 (网页)</title>
 <style>
-  /* 与 APK 同一套 VSCode 深色令牌 */
-  :root{--bg:#0e1116;--fg:#cdd3de;--border:#222730;--bar:#161b22;--panel:#11161e;
-        --input:#161b22;--input-b:#30363d;--btn:#1f6feb;--btn-h:#388bfd;
-        --green:#4ec9b0;--muted:#7d8590;--red:#f85149;--amber:#f0883e}
+  /* 道法自然·页面归一: 外壳与 app.html 逐令牌一致 —— 任意公网浏览器打开本页, 视觉/标签条/菜单
+     与手机 APK 那张 app.html 完全相同, 不再「另起炉灶」。内容区因板块绑定原生 N 桥(只能跑在手机里),
+     故以「实时镜像 + 反向点按」忠实呈现手机当前标签 —— 这就是同一张手机页, 只是经中继投到本端。 */
+  :root{--bg:#0e1116;--fg:#cdd3de;--border:#222730;--bar:#161b22;--input:#161b22;
+        --input-b:#30363d;--btn:#1f6feb;--btn-h:#388bfd;--green:#4ec9b0;--muted:#7d8590;
+        --red:#f85149;--amber:#f0883e}
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
             font:13px/1.4 -apple-system,'Segoe UI',Roboto,sans-serif;overflow:hidden}
-  #app{display:flex;height:100%}
-  /* ── 侧栏 ── */
-  #side{flex:0 0 232px;background:var(--panel);border-right:1px solid var(--border);
-        display:flex;flex-direction:column;min-width:0}
-  #side.collapsed{flex-basis:0;width:0;border:0;overflow:hidden}
-  .sh{padding:8px 12px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;
-      display:flex;align-items:center;justify-content:space-between}
-  .sh b{color:var(--fg);font-size:12px;text-transform:none;letter-spacing:0}
-  #tabs{flex:1 1 auto;overflow-y:auto;padding:0 8px 8px}
-  .tab{display:flex;align-items:center;gap:8px;padding:8px 9px;margin:3px 0;border-radius:9px;
-       background:#1a2030;border:1px solid transparent;cursor:pointer;min-width:0}
-  .tab:hover{border-color:var(--input-b)}
-  .tab.on{background:#13332b;border-color:#1f5f51}
-  /* 道法自然·联控可视: 被其他设备前置/操控的标签 → 淡透明橙色背景一眼区分 (橙色数≈联控设备数) */
-  .tab.shared{background:rgba(240,136,62,.15);border-color:rgba(240,136,62,.55)}
-  .tab.on.shared{background:rgba(240,136,62,.22)}
-  .tab .dot{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#3a4150}
-  .tab.on .dot{background:var(--green);box-shadow:0 0 6px var(--green)}
-  .tab.shared .dot{background:var(--amber);box-shadow:0 0 6px var(--amber)}
-  .tab .co{flex:0 0 auto;font-size:9.5px;color:#ffcaa0;background:rgba(240,136,62,.22);
-           border:1px solid rgba(240,136,62,.5);border-radius:7px;padding:1px 5px;white-space:nowrap}
-  #coBadge{color:var(--amber)}
-  .tab .meta{flex:1 1 auto;min-width:0}
-  .tab .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;color:var(--fg)}
-  .tab .acc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10.5px;color:var(--muted);margin-top:1px}
-  .tab.intl .acc{color:var(--amber)}
-  .tab .x{flex:0 0 auto;width:18px;height:18px;line-height:16px;text-align:center;border-radius:50%;color:#8a93a0;font-size:14px}
-  .tab .x:hover{background:#3a2030;color:#f88}
-  #segs{flex:0 0 auto;border-top:1px solid var(--border);padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:42%;overflow-y:auto}
-  .seg{display:flex;align-items:center;gap:7px;background:#1a2030;border:1px solid var(--input-b);
-       border-radius:8px;padding:8px 9px;cursor:pointer;color:var(--fg);font-size:12px}
-  .seg:hover{border-color:var(--green);background:#13332b}
-  .seg .ic{font-size:15px}
-  /* ── 主区 ── */
-  #main{flex:1 1 auto;display:flex;flex-direction:column;min-width:0}
-  #bar{flex:0 0 auto;display:flex;align-items:center;gap:7px;padding:7px 10px;
-       background:var(--bar);border-bottom:1px solid var(--border)}
+  #app{display:flex;flex-direction:column;height:100%}
+  /* ── 工具栏 (同 app.html) ── */
+  #bar{display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bar);
+       border-bottom:1px solid var(--border);flex:0 0 auto}
   #bar button{background:#1c2230;color:var(--fg);border:1px solid var(--input-b);
-       border-radius:7px;height:30px;min-width:32px;padding:0 9px;font-size:13px;cursor:pointer}
+       border-radius:7px;height:32px;min-width:34px;padding:0 9px;font-size:14px;cursor:pointer}
   #bar button:active{background:#283041}
-  #bar button.pri{background:var(--btn);border-color:var(--btn);color:#fff}
-  #title{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--fg);font-size:13px}
   #dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--amber)}
   #dot.on{background:var(--green)} #dot.off{background:var(--red)}
-  #fpsSel{height:30px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);border-radius:7px;font-size:12px}
-  /* ── 投屏区 ── */
-  #stage{flex:1 1 auto;position:relative;background:#06080c;overflow:hidden;display:flex;align-items:center;justify-content:center}
+  #addr{flex:1;min-width:60px;height:32px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);
+        border-radius:8px;padding:0 11px;font-size:13px;outline:none}
+  #addr:focus{border-color:var(--btn)}
+  #fpsSel{height:32px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);border-radius:7px;font-size:12px}
+  /* ── 标签条 (同 app.html) ── */
+  #strip{display:flex;align-items:center;gap:5px;padding:5px 8px;background:#11161e;
+         border-bottom:1px solid var(--border);overflow-x:auto;flex:0 0 auto;scrollbar-width:thin}
+  #strip::-webkit-scrollbar{height:5px}#strip::-webkit-scrollbar-thumb{background:#2a3140;border-radius:3px}
+  .chip{display:flex;align-items:center;gap:6px;flex:0 0 auto;max-width:210px;height:30px;padding:0 8px 0 11px;
+        background:#1a2030;border:1px solid var(--input-b);border-radius:8px;cursor:pointer;color:var(--muted);font-size:12px}
+  .chip.on{background:#13332b;border-color:#1f5f51;color:var(--green)}
+  /* 道法自然·跨设备在场: 有其他设备(含手机本体)正看/控此标签 → 橙色半透明, 与 APK 标签条同款双向一致 */
+  .chip.shared{background:rgba(240,136,62,.18);border-color:rgba(240,136,62,.55);color:#ffcaa0}
+  .chip.on.shared{background:rgba(240,136,62,.26);border-color:rgba(240,136,62,.7)}
+  .chip .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip .co{flex:0 0 auto;font-size:10px;color:#ffcaa0}
+  .chip .x{width:18px;height:18px;line-height:16px;text-align:center;border-radius:50%;color:#8a93a0;font-size:14px}
+  .chip .x:hover{background:#3a2030;color:#f88}
+  #plus{flex:0 0 auto;width:30px;height:30px;border-radius:8px;border:1px dashed var(--input-b);
+        background:transparent;color:var(--muted);font-size:18px;cursor:pointer}
+  /* ── 内容区: 实时镜像投屏 (因板块绑原生桥, 远端以镜像忠实呈现同一张手机页) ── */
+  #frames{position:relative;flex:1 1 auto;background:#06080c;overflow:hidden;display:flex;align-items:center;justify-content:center}
   #frame{max-width:100%;max-height:100%;object-fit:contain;cursor:crosshair;
          box-shadow:0 0 0 1px #000,0 8px 40px #000a;background:#fff;-webkit-user-select:none;user-select:none}
   #frame.empty{display:none}
@@ -72,10 +58,29 @@
   #toast{position:absolute;right:10px;bottom:8px;font-size:11px;color:var(--fg);background:#1a2030;
          border:1px solid var(--input-b);padding:5px 10px;border-radius:7px;opacity:0;transition:opacity .2s;max-width:60%}
   #toast.show{opacity:1}
+  /* ── 新标签/板块选择面板 (同 app.html) ── */
+  #launch{position:absolute;inset:0;background:rgba(8,11,16,.72);display:none;align-items:flex-start;justify-content:center;z-index:50}
+  #launch.show{display:flex}
+  #launchCard{margin-top:54px;width:min(460px,92vw);background:#11161e;border:1px solid var(--border);
+              border-radius:14px;padding:14px;box-shadow:0 18px 50px #000a}
+  #launchCard h3{margin:2px 0 12px;font-size:13px;color:var(--muted);font-weight:600}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .seg{display:flex;align-items:center;gap:9px;background:#1a2030;border:1px solid var(--input-b);
+       border-radius:10px;padding:11px 12px;cursor:pointer;color:var(--fg);font-size:13px}
+  .seg:hover{border-color:var(--green);background:#13332b}
+  .seg .ic{font-size:18px;width:22px;text-align:center}
+  /* ── 菜单下拉 (同 app.html) ── */
+  #menuPop{position:absolute;top:46px;left:8px;background:#11161e;border:1px solid var(--border);border-radius:12px;
+           padding:6px;display:none;z-index:60;min-width:210px;box-shadow:0 14px 40px #000a}
+  #menuPop.show{display:block}
+  #menuPop .mi{padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:9px}
+  #menuPop .mi:hover{background:#1a2030}
+  #menuPop .sep{height:1px;background:var(--border);margin:5px 4px}
+  #menuPop .ic{width:20px;text-align:center}
   /* ── 设置浮层 ── */
   #cfg{position:absolute;inset:0;background:rgba(8,11,16,.78);display:none;align-items:center;justify-content:center;z-index:80}
   #cfg.show{display:flex}
-  #cfgCard{width:min(420px,92vw);background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 18px 50px #000a}
+  #cfgCard{width:min(420px,92vw);background:#11161e;border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 18px 50px #000a}
   #cfgCard h3{margin:0 0 12px;font-size:14px}
   #cfgCard label{display:block;font-size:11px;color:var(--muted);margin:10px 0 4px}
   #cfgCard input{width:100%;height:34px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);border-radius:8px;padding:0 11px;font-size:13px;outline:none}
@@ -84,7 +89,7 @@
   #cfgCard button.pri{background:var(--btn);border-color:var(--btn);color:#fff}
   #pick{position:absolute;inset:0;background:rgba(8,11,16,.72);display:none;align-items:flex-start;justify-content:center;z-index:70}
   #pick.show{display:flex}
-  #pickCard{margin-top:60px;width:min(440px,92vw);max-height:70%;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px}
+  #pickCard{margin-top:60px;width:min(440px,92vw);max-height:70%;overflow-y:auto;background:#11161e;border:1px solid var(--border);border-radius:14px;padding:14px}
   #pickCard h3{margin:2px 0 12px;font-size:13px;color:var(--muted)}
   .pr{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:9px;background:#1a2030;border:1px solid var(--input-b);margin:5px 0;cursor:pointer;font-size:13px}
   .pr:hover{border-color:var(--green);background:#13332b}
@@ -92,46 +97,50 @@
 </head>
 <body>
 <div id="app">
-  <div id="side">
-    <div class="sh"><b>实例 / 标签</b><span id="tabCount" style="color:var(--muted)"></span></div>
-    <div id="tabs"></div>
-    <div class="sh" style="border-top:1px solid var(--border)"><b>板块 / 新实例</b></div>
-    <div id="segs"></div>
+  <div id="bar">
+    <button id="menuBtn" title="菜单">&#9776;</button>
+    <span id="dot" title="连接状态"></span>
+    <input id="addr" inputmode="url" autocomplete="off" spellcheck="false" placeholder="输入网址 / 板块 (切号·穿透·对话…)">
+    <button id="reloadBtn" title="重载该标签">&#8635;</button>
+    <button id="go" title="前往">&#8594;</button>
+    <select id="fpsSel" title="刷新频率">
+      <option value="0">手动</option>
+      <option value="1500">~0.7 fps</option>
+      <option value="700" selected>~1.4 fps</option>
+      <option value="400">~2.5 fps</option>
+      <option value="250">~4 fps</option>
+    </select>
+    <button id="shotBtn" title="立即刷新">&#10227;</button>
+    <button id="backBtn" title="后退" style="display:none">◀</button>
+    <button id="fwdBtn" title="前进" style="display:none">▶</button>
+    <button id="cfgBtn" title="设置">&#9881;</button>
   </div>
-  <div id="main">
-    <div id="bar">
-      <button id="sideBtn" title="折叠侧栏">&#9776;</button>
-      <span id="dot" title="连接状态"></span>
-      <span id="title">未连接</span>
-      <select id="fpsSel" title="刷新频率">
-        <option value="0">手动</option>
-        <option value="1500">~0.7 fps</option>
-        <option value="700" selected>~1.4 fps</option>
-        <option value="400">~2.5 fps</option>
-        <option value="250">~4 fps</option>
-      </select>
-      <button id="shotBtn" title="立即刷新">&#8635;</button>
-      <button id="reloadBtn" title="重载该标签">⟲页</button>
-      <button id="backBtn" title="后退">◀</button>
-      <button id="fwdBtn" title="前进">▶</button>
-      <button id="cfgBtn" title="设置">⚙</button>
-    </div>
-    <div id="stage">
-      <img id="frame" class="empty" alt="">
-      <div id="hint">选择左侧一个标签开始投屏 · 任意公网设备可用</div>
-      <textarea id="kbd"></textarea>
-      <div id="status"></div>
-      <div id="health"></div>
-      <div id="toast"></div>
-      <div id="cfg"><div id="cfgCard">
-        <h3>连接设置</h3>
-        <label>中继入口 Endpoint</label><input id="cEndpoint" placeholder="https://...workers.dev">
-        <label>Session</label><input id="cSession" placeholder="rtflow-...">
-        <label>Token</label><input id="cToken" placeholder="...">
-        <div class="row"><button id="cCancel">取消</button><button class="pri" id="cSave">保存并连接</button></div>
-      </div></div>
-      <div id="pick"><div id="pickCard"><h3>新建 / 打开</h3><div id="pickList"></div></div></div>
-    </div>
+  <div id="strip"><button id="plus" title="新标签">+</button></div>
+  <div id="frames">
+    <div id="menuPop"></div>
+    <img id="frame" class="empty" alt="">
+    <div id="hint">选择上方一个标签开始 · 任意公网浏览器与手机 APK 同款操作</div>
+    <textarea id="kbd"></textarea>
+    <div id="status"></div>
+    <div id="health"></div>
+    <div id="toast"></div>
+    <div id="launch"><div id="launchCard">
+      <h3>新标签 — 选择板块, 或输入任意网址 (各大浏览器多实例)</h3>
+      <div class="grid" id="segGrid"></div>
+      <div id="urlRow" style="display:flex;gap:7px;margin-top:12px">
+        <input id="urlInput" inputmode="url" placeholder="https:// 任意网址"
+               style="flex:1;height:36px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);border-radius:8px;padding:0 11px;font-size:13px;outline:none">
+        <button id="urlGo" style="background:var(--btn);color:#fff;border:0;border-radius:8px;padding:0 16px;font-size:14px;cursor:pointer">打开</button>
+      </div>
+    </div></div>
+    <div id="cfg"><div id="cfgCard">
+      <h3>连接设置</h3>
+      <label>中继入口 Endpoint</label><input id="cEndpoint" placeholder="https://...workers.dev">
+      <label>Session</label><input id="cSession" placeholder="rtflow-...">
+      <label>Token</label><input id="cToken" placeholder="...">
+      <div class="row"><button id="cCancel">取消</button><button class="pri" id="cSave">保存并连接</button></div>
+    </div></div>
+    <div id="pick"><div id="pickCard"><h3>新建 / 打开</h3><div id="pickList"></div></div></div>
   </div>
 </div>
 <script>
@@ -150,7 +159,6 @@
     localStorage.setItem("rtflow.con.token",cfg.token); localStorage.setItem("rtflow.con.endpoint",cfg.endpoint); }
 
   // ── 本设备标识 (一个浏览器页 = 一台联控设备; sessionStorage → 每页独立) ──
-  // 道法自然·共享一切但互不干扰: 各设备各操各页, 互不相犯; 同看一页则标橙→可选弹独立副本。
   var CLIENT_ID = sessionStorage.getItem("rtflow.con.cid");
   if(!CLIENT_ID){ CLIENT_ID = "c_"+Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-4); sessionStorage.setItem("rtflow.con.cid",CLIENT_ID); }
 
@@ -190,7 +198,7 @@
   var health = { fails:0, since:0 };
   function isStuckErr(m){ return /agent_timeout|timeout|aborted|Failed to fetch|NetworkError|load failed/i.test(String(m||"")); }
   function markHealth(ok, reason){
-    var el=document.getElementById("health"); if(!el) return;
+    var el=$("health"); if(!el) return;
     if(ok){ if(health.fails){ health.fails=0; health.since=0; } el.classList.remove("show"); return; }
     health.fails++; if(!health.since) health.since=Date.now();
     if(health.fails>=2){
@@ -200,8 +208,9 @@
     }
   }
 
-  var dot=$("dot"), titleEl=$("title"), frame=$("frame"), hint=$("hint"),
+  var dot=$("dot"), addr=$("addr"), frame=$("frame"), hint=$("hint"),
       statusEl=$("status"), toastEl=$("toast"), fpsSel=$("fpsSel"), kbd=$("kbd");
+  var strip=$("strip"), plus=$("plus"), launch=$("launch"), menuPop=$("menuPop");
 
   function setDot(s){ dot.className=""; if(s) dot.classList.add(s); }
   function setStatus(s){ statusEl.textContent = s||""; }
@@ -227,23 +236,21 @@
     var s={}; tabsArr.forEach(function(t){ otherViewers(t).forEach(function(v){ s[v]=1; }); });
     return Object.keys(s).length;
   }
+  function hostOf(u){ try{ return new URL(u).host; }catch(e){ return u||""; } }
 
-  // ── 标签列表 ──
+  // ── 标签列表 → 横向标签条 (同 app.html 的 #strip 芯片) ──
   async function refreshTabs(){
     try{
       var j = await rpc("browseListTabs",{},12000);
       if(!j || !j.tabs){ throw new Error(j&&j.error||"no_tabs"); }
       connected=true; setDot("on"); markHealth(true);
       tabsArr = j.tabs;
-      var co = coControlCount();
-      $("tabCount").innerHTML = tabsArr.length+" 个" + (co>0? " · <span id='coBadge'>"+co+" 设备联控</span>" : "");
-      renderTabs();
+      renderStrip();
       claimView();   // 续期本设备「正看/控当前标签」的在场登记
       if(activeIdx<0){
         var act = tabsArr.find(function(t){return t.active;});
         if(act) selectTab(act.index);
         else if(tabsArr.length) selectTab(tabsArr[0].index);
-        else { titleEl.textContent="已连接 · 无标签 (点左下板块或「+ 新 Devin 实例」开页)"; }
       }
     }catch(e){
       connected=false; setDot("off");
@@ -253,38 +260,36 @@
       setStatus(stuck? "手机端疑卡死/无响应, 自动重试…" : ("连接异常: "+m));
     }
   }
-  function renderTabs(){
-    var box=$("tabs"); box.innerHTML="";
+  function renderStrip(){
+    [].slice.call(strip.querySelectorAll(".chip")).forEach(function(c){ c.remove(); });
+    var co = coControlCount();
     tabsArr.forEach(function(t){
       var others = otherViewers(t);          // 其他设备(含手机本体)是否正前置此页
       var shared = others.length>0;
-      var d=document.createElement("div");
-      d.className="tab"+(t.index===activeIdx?" on":"")+(t.internal?" intl":"")+(shared?" shared":"");
-      var dot=document.createElement("span"); dot.className="dot";
-      var meta=document.createElement("div"); meta.className="meta";
-      var ttl=document.createElement("div"); ttl.className="ttl"; ttl.textContent=t.title||"(无标题)";
-      var acc=document.createElement("div"); acc.className="acc";
-      acc.textContent = t.internal? "板块 · "+(t.title||"") : (accLabel(t.account)||hostOf(t.url));
-      meta.appendChild(ttl); meta.appendChild(acc);
-      d.appendChild(dot); d.appendChild(meta);
+      var c=document.createElement("div");
+      c.className="chip"+(t.index===activeIdx?" on":"")+(shared?" shared":"");
+      var tt=document.createElement("span"); tt.className="t";
+      tt.textContent=(t.title||hostOf(t.url)||"新标签");
+      c.appendChild(tt);
       if(shared){
         var hasPhone = others.indexOf("__phone__")>=0;
-        var co=document.createElement("span"); co.className="co";
-        co.textContent = hasPhone? (others.length>1? "本机+"+(others.length-1)+"控" : "本机在前") : (others.length+" 设备");
-        co.title = "其他设备正前置/操控此页 · 点击将弹出独立副本, 互不干扰";
-        d.appendChild(co);
+        var cob=document.createElement("span"); cob.className="co";
+        cob.textContent = "☁"+others.length;
+        cob.title = hasPhone? "手机本体在前 + 其他设备共 "+others.length+" 台正看/控此页" : (others.length+" 台其他设备正看/控此页");
+        c.appendChild(cob);
       }
       var x=document.createElement("span"); x.className="x"; x.textContent="×"; x.title="关闭";
-      d.appendChild(x);
-      d.onclick=function(e){
+      c.appendChild(x);
+      c.onclick=function(e){
         if(e.target===x){ closeTab(t.index); return; }
-        // 道法自然·冲突即复刻: 点已被其他设备前置的标签 → 不去抢同一个(否则互相干扰),
-        // 而是弹出内容一致的独立副本, 各操各的 (Devin 账号页/板块均支持同内容多开)。
+        // 道法自然·冲突即复刻: 点已被其他设备前置的标签 → 不抢同一个(否则互相干扰), 而弹出独立副本各操各的。
         if(shared){ duplicateTab(t); return; }
         selectTab(t.index);
       };
-      box.appendChild(d);
+      strip.insertBefore(c, plus);
     });
+    addr.value = (function(){ var t=curTab(); return t? (t.internal? ("rtflow://"+(t.title||"板块")) : (t.url||"")) : ""; })();
+    document.title = "Devin Cloud · 手机版 (网页)"+(co>0? " · "+co+" 设备联控":"");
   }
   // 复刻一张「内容一致」的新标签 (后台静默开, 不抢手机前台), 开后自动选中投屏到本端。
   function duplicateTab(t){
@@ -292,7 +297,6 @@
     var before = tabsArr.map(function(x){return x.id;});
     var p;
     if(t.internal){
-      // 板块: 用其资源页 URL 再开一张 (同账号/同内容多开)
       var asset = (t.url||"").replace(/^.*\/engine\//,"file:///android_asset/engine/");
       if(asset.indexOf("session=")<0) asset += (asset.indexOf("?")>=0?"&":"?")+"session="+encodeURIComponent(cfg.session)+"&token="+encodeURIComponent(cfg.token);
       p = rpc("browseOpen",{url:asset, foreground:false},15000);
@@ -308,29 +312,23 @@
       }); }, 1000); })
      .catch(function(e){ toast("复刻失败: "+e.message); });
   }
-  function hostOf(u){ try{ return new URL(u).host; }catch(e){ return u||""; } }
 
   // ── 选标签 / 投屏循环 ──
   // 道法自然·共享一切但互不干扰: 选标签是「本浏览器本地」行为 —— 仅决定本端投屏/反控哪张标签,
   // 绝不调 browseActivateTab 去改手机本体的全局当前标签 (否则多设备会互抢前台、并打扰手机本体)。
-  // browseScreenshot(tabIndex)/browseExecJs(tabIndex) 均按标签独立寻址, 后台标签也能取帧与注入,
-  // 故 A 看/操作标签2、B 看/操作标签5 可真正并行不相犯; 而开/关标签是共享动作 → 经轮询同步给所有端。
   var selGen = 0;
   async function selectTab(idx){
     var gen = ++selGen;
-    activeIdx = idx; renderTabs();
+    activeIdx = idx; renderStrip();
     claimView();   // 立刻登记本设备前置此标签 (其他端随即看到橙色)
     var t = tabsArr.find(function(x){return x.index===idx;});
-    titleEl.textContent = t? (t.title||hostOf(t.url)) : ("标签 "+idx);
     hint.style.display="none";
     frame.classList.add("empty"); setStatus("切换到标签 "+idx+" … (首帧合成约 1s)");
-    // 取该 tab 的 CSS 视口供反向坐标映射 (按 tabIndex 寻址, 不改全局当前标签)
     try{
       var r = await cdp(idx,"Runtime.evaluate",{expression:"JSON.stringify({w:innerWidth,h:innerHeight})",returnByValue:true});
       var v = JSON.parse(r.result.value); if(v.w) view={cssW:v.w,cssH:v.h};
     }catch(e){}
     if(gen!==selGen) return;
-    // 后台标签首帧合成略有延迟, 先等再取, 避免黑屏
     await new Promise(function(r2){ setTimeout(r2, 650); });
     if(gen!==selGen) return;
     shotNow(); startLoop();
@@ -369,9 +367,6 @@
   }
 
   // ── 反向控制: 点击 / 滚动 / 输入 (忠实注入, 与原生 ipcMirrorInput 同核心) ──
-  // 经 browseExecJs 在目标标签内执行 MIRROR_INPUT_CORE: 归一化坐标→视口坐标, 合成
-  // pointer/mouse/键盘事件并对 React 受控输入(原生 value setter)与 contenteditable
-  // (execCommand insertText) 触发, 远比 CDP facade 忠实 — 纯中继即可, 无需无障碍/Shizuku。
   var MIRROR_CORE =
     "var x=Math.round(A.nx*window.innerWidth),y=Math.round(A.ny*window.innerHeight);" +
     "var el=document.elementFromPoint(x,y);" +
@@ -396,8 +391,6 @@
   }
   function frameToNorm(ev){
     var r = frame.getBoundingClientRect();
-    // 用手机真实视口宽高比 (view, 来自 innerWidth/Height) 计算 contain 内显区, 避免依赖
-    // IMG 偶发的过渡帧尺寸导致 Y 偏移。
     var aw = (view&&view.cssW)||frame.naturalWidth||r.width;
     var ah = (view&&view.cssH)||frame.naturalHeight||r.height;
     var scale = Math.min(r.width/aw, r.height/ah);
@@ -408,7 +401,7 @@
   }
   frame.addEventListener("click", function(ev){
     ev.preventDefault(); if(activeIdx<0) return;
-    kbd.focus();                       // 同步聚焦, 不等 RPC, 保证随后键入进入注入通道
+    kbd.focus();
     lastTap = frameToNorm(ev);
     inject("click", lastTap).then(function(){ setTimeout(shotNow,140); setTimeout(shotNow,420); });
   });
@@ -418,8 +411,6 @@
     inject("scroll", p).then(function(){ setTimeout(shotNow,120); });
   }, {passive:false});
 
-  // 键盘: 可打印字符按 ~160ms 去抖合批成一次注入 (单字符逐次往返会被中继延迟/限流吞字);
-  // Enter/Backspace 先冲刷待发文本再合成按键; 中文/IME 监听 compositionend 整段送入。
   var typeBuf="", typeTimer=null;
   function flushType(){
     if(typeTimer){ clearTimeout(typeTimer); typeTimer=null; }
@@ -447,38 +438,49 @@
   });
 
   // ── 工具栏 ──
-  $("sideBtn").onclick=function(){ $("side").classList.toggle("collapsed"); };
   $("shotBtn").onclick=shotNow;
   fpsSel.onchange=startLoop;
   $("reloadBtn").onclick=function(){ if(activeIdx<0)return; cdp(activeIdx,"Runtime.evaluate",{expression:"location.reload()"}).then(function(){setTimeout(shotNow,800);}); };
   $("backBtn").onclick=function(){ if(activeIdx<0)return; cdp(activeIdx,"Runtime.evaluate",{expression:"history.back()"}).then(function(){setTimeout(shotNow,600);}); };
   $("fwdBtn").onclick=function(){ if(activeIdx<0)return; cdp(activeIdx,"Runtime.evaluate",{expression:"history.forward()"}).then(function(){setTimeout(shotNow,600);}); };
+  function goAddr(){
+    var v=addr.value.trim(); if(!v) return;
+    var map={"切号":"switch.html","穿透":"tunnel.html","公网穿透":"tunnel.html","对话":"cloud.html","cloud":"cloud.html",
+             "vpn":"vpn.html","脚本":"userscripts.html","用户脚本":"userscripts.html","shizuku":"shizuku.html","全服通":"daopan.html","面板":"panel.html","控制面板":"panel.html"};
+    var asset=map[v.toLowerCase()]||map[v];
+    if(asset){ var seg=SEGS.find(function(s){return s.asset===asset;}); if(seg){ openPanel(seg); return; } }
+    if(!/^[a-z]+:\/\//i.test(v)) v="https://"+v;
+    rpc("browseOpen",{url:v, foreground:false},15000)
+      .then(function(){ toast("已打开 "+hostOf(v)); setTimeout(refreshTabs,1000); })
+      .catch(function(e){ toast("打开失败: "+e.message); });
+  }
+  $("go").onclick=goAddr;
+  addr.addEventListener("keydown",function(e){ if(e.key==="Enter") goAddr(); });
 
-  // ── 板块 / 新实例 ──
+  // ── 板块 / 新实例 (新标签面板 + 菜单, 同 app.html 序与名) ──
   var SEGS = [
     {label:"切号面板", ic:"🔁", asset:"switch.html"},
+    {label:"对话 / Cloud", ic:"☁", asset:"cloud.html"},
     {label:"公网穿透", ic:"🌐", asset:"tunnel.html"},
-    {label:"对话/Cloud", ic:"☁", asset:"cloud.html"},
     {label:"VPN 加速", ic:"🚀", asset:"vpn.html"},
-    {label:"用户脚本", ic:"🐵", asset:"userscripts.html"},
-    {label:"Shizuku", ic:"🔑", asset:"shizuku.html"},
+    {label:"用户脚本 (油猴)", ic:"🐵", asset:"userscripts.html"},
+    {label:"Shizuku 权限", ic:"🔑", asset:"shizuku.html"},
     {label:"全服通", ic:"🌊", asset:"daopan.html"},
     {label:"控制面板", ic:"🎛", asset:"panel.html"}
   ];
   function buildSegs(){
-    var box=$("segs"); box.innerHTML="";
+    var box=$("segGrid"); box.innerHTML="";
     SEGS.forEach(function(s){
       var d=document.createElement("div"); d.className="seg";
       d.innerHTML='<span class="ic">'+s.ic+'</span><span>'+s.label+'</span>';
-      d.onclick=function(){ openPanel(s); };
+      d.onclick=function(){ hideLaunch(); openPanel(s); };
       box.appendChild(d);
     });
-    var d=document.createElement("div"); d.className="seg"; d.style.gridColumn="1 / 3";
-    d.innerHTML='<span class="ic">🟢</span><span>+ 新 Devin 实例</span>';
-    d.onclick=openPick; box.appendChild(d);
+    var d=document.createElement("div"); d.className="seg";
+    d.innerHTML='<span class="ic">🟢</span><span>新 Devin 实例</span>';
+    d.onclick=function(){ hideLaunch(); openPick(); }; box.appendChild(d);
   }
-  // 板块已开 → 切过去; 否则后台静默 browseOpen 资源页 (foreground:false: 远程控台绝不抢占手机本体前台,
-  // 既避免 foreground 唤起本体的 agent_timeout 卡死, 又实现多设备接入互不干扰)。开后自动选中投屏。
+  // 板块已开 → 切过去; 否则后台静默 browseOpen 资源页 (foreground:false: 远程控台绝不抢占手机本体前台)。
   function openPanel(s){
     var found = tabsArr.find(function(t){ return t.internal && (t.url||"").indexOf(s.asset)>=0; });
     if(found){ selectTab(found.index); return; }
@@ -486,7 +488,6 @@
       .then(function(){ toast("已打开 "+s.label); setTimeout(function(){ refreshTabs().then(function(){ var f=tabsArr.find(function(t){return t.internal&&(t.url||"").indexOf(s.asset)>=0;}); if(f) selectTab(f.index); }); },900); })
       .catch(function(e){ toast("打开失败: "+e.message); });
   }
-  // 新 Devin 实例: 列已登录账号, 选一个 openAccountTab
   async function openPick(){
     var list=$("pickList"); list.innerHTML="<div style='color:var(--muted);padding:8px'>读取账号…</div>";
     $("pick").classList.add("show");
@@ -519,6 +520,37 @@
       .catch(function(e){ toast("关闭失败: "+e.message); });
   }
 
+  // ── 新标签面板 (+ / launch) ──
+  function showLaunch(){ launch.classList.add("show"); var u=$("urlInput"); u.value=""; setTimeout(function(){u.focus();},50); }
+  function hideLaunch(){ launch.classList.remove("show"); }
+  plus.onclick=showLaunch;
+  launch.onclick=function(e){ if(e.target===launch) hideLaunch(); };
+  $("urlGo").onclick=function(){ var v=$("urlInput").value.trim(); if(v){ hideLaunch(); addr.value=v; goAddr(); } };
+  $("urlInput").addEventListener("keydown",function(e){ if(e.key==="Enter"){ var v=this.value.trim(); if(v){ hideLaunch(); addr.value=v; goAddr(); } } });
+
+  // ── 菜单 (复刻 app.html 板块入口 + 页面工具) ──
+  function buildMenu(){
+    menuPop.innerHTML="";
+    SEGS.forEach(function(s){ mi(s.ic, s.label, function(){ openPanel(s); }); });
+    mi("🟢","新 Devin 实例", openPick);
+    sep();
+    mi("◀","后退", function(){ $("backBtn").onclick(); });
+    mi("▶","前进", function(){ $("fwdBtn").onclick(); });
+    mi("⟲","重载该标签", function(){ $("reloadBtn").onclick(); });
+    mi("⌂","主页 (切号面板)", function(){ openPanel(SEGS[0]); });
+    mi("🔗","复制本标签网址", function(){ var t=curTab(); if(!t) return;
+      try{ navigator.clipboard.writeText(t.url||""); toast("已复制"); }catch(e){} });
+    mi("⚙","连接设置", openCfg);
+  }
+  function mi(ic,label,fn){ var d=document.createElement("div"); d.className="mi";
+    d.innerHTML='<span class="ic">'+ic+'</span><span>'+label+'</span>';
+    d.onclick=function(){ menuPop.classList.remove("show"); fn(); }; menuPop.appendChild(d); }
+  function sep(){ var s=document.createElement("div"); s.className="sep"; menuPop.appendChild(s); }
+  $("menuBtn").onclick=function(e){ e.stopPropagation();
+    if(!menuPop.dataset.built){ buildMenu(); menuPop.dataset.built="1"; }
+    menuPop.classList.toggle("show"); };
+  document.addEventListener("click", function(){ menuPop.classList.remove("show"); });
+
   // ── 设置浮层 ──
   function openCfg(){ $("cEndpoint").value=cfg.endpoint; $("cSession").value=cfg.session; $("cToken").value=cfg.token; $("cfg").classList.add("show"); }
   $("cfgBtn").onclick=openCfg;
@@ -532,9 +564,7 @@
   buildSegs();
   if(!cfg.session || !cfg.token){ openCfg(); }
   else { saveCfg(); refreshTabs(); }
-  // 持续轮询 (不因掉线而停): 既能冷启动等标签恢复, 又能在手机端卡死/恢复时实时反映与自愈。
   listTimer = setInterval(refreshTabs, 6000);
-  // 失焦自动恢复轮询
   document.addEventListener("visibilitychange", function(){ if(!document.hidden){ startLoop(); shotNow(); } });
 })();
 </script>
