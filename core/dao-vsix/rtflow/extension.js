@@ -480,6 +480,10 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 .note{color:#8b949e;font-size:12px;line-height:1.8}
 #drop{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(31,111,235,.16);border:3px dashed #1f6feb;z-index:30;color:#cfe6ff;font-size:15px;font-weight:700}
 #drop.on{display:flex}
+#convdrop{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(35,134,54,.18);border:3px dashed #2ea043;z-index:31;color:#d5f5dd;font-size:15px;font-weight:700;pointer-events:none}
+#convdrop.on{display:flex;pointer-events:auto}
+.rc[draggable=true]{cursor:grab}
+.rc.cdragging{opacity:.5}
 /* 归一·手机版模式 (UA 自动识别 / ?m=1): 不依赖视口宽度, 强制移动端布局 — 触控放大·菜单底部抽屉 */
 html.m #tb{flex-wrap:wrap;height:auto;min-height:40px;padding:5px 6px;gap:4px}
 html.m #eng{display:none}
@@ -591,6 +595,7 @@ html.m #hint{font-size:14px;padding:18px}
     <div id="stack"></div>
     <div class="spin" id="spin"><span class="ld"></span>加载中…</div>
     <div id="drop">松开以拖入文件到当前窗口</div>
+    <div id="convdrop">🌐 松开 · 在网页中打开该对话</div>
   </div>
 </div>
 <div id="menu"></div>
@@ -599,11 +604,11 @@ html.m #hint{font-size:14px;padding:18px}
 <div id="ov"><div class="ov-top"><span class="ti" id="ovTi"></span><button class="tbtn" id="ovClose">✕ 关闭</button></div><div class="ov-body" id="ovBody"></div></div>
 <div id="daowin">
   <div class="dwh" id="dwHead"><span>☁</span><span class="t" id="dwTitle">下载 / 备份库</span><button class="dwx" id="dwClose">✕ 关闭</button></div>
-  <div class="dwtabs"><div class="dwtab on" id="dwTabR">☁ 近期对话</div><div class="dwtab" id="dwTabB">🗂 备份库</div></div>
+  <div class="dwtabs"><div class="dwtab on" id="dwTabR">☁ 近期对话</div><div class="dwtab" id="dwTabB">🗂 备份网页端</div></div>
   <div class="dwbar" id="dwBarR"><input class="srch" id="dwQ" placeholder="检索 账号 / 对话名称…" autocomplete="off"/><button class="mini" id="dwRefresh">🔄 刷新</button></div>
   <div class="dwbar" id="dwBarB" style="display:none"><input class="srch" id="dwBQ" placeholder="检索 账号 / 备份名称…" autocomplete="off"/><button class="mini" id="dwRoot">📁 根目录</button></div>
   <div class="dwbody">
-    <div class="dwview on" id="dwViewR"><div class="tip">跨全部已登录账号 · 近期更新对话 · ⬇MD 秒存 · 📦全部文件含产出</div><div id="dwRecent"><div class="empty">加载中…</div></div></div>
+    <div class="dwview on" id="dwViewR"><div class="tip">跨全部已登录账号 · 近期更新对话 · ⬇MD 秒存 · 📦全部文件含产出 · <b>拖对话卡到网页</b>即在网页中打开(对齐手机 APK)</div><div id="dwRecent"><div class="empty">加载中…</div></div></div>
     <div class="dwview" id="dwViewB"><div id="dwBackup"><div class="empty">加载中…</div></div></div>
     <div id="cv"><div class="cvtop"><button class="dwx" id="cvBack">‹ 返回</button><div class="cvtabs" id="cvTabs"></div></div><div class="cvacts" id="cvActs"></div><div class="cvbody" id="cvBody"></div></div>
   </div>
@@ -779,7 +784,7 @@ function renderDownloads(){if(!_bkTree){showOverlay('⬇ 下载','<div class="em
   if(!all.length)body+='<div class="empty">暂无已下载/备份的对话 · 在「💬对话备份」板块备份后此处即可见</div>';
   showOverlay('⬇ 下载 ('+all.length+')',body);_bkBindActions();}
 // ── 归一 · 下载/备份悬浮窗(复刻手机端 APK daopan.html) · CSP 安全(事件委托·无内联 onclick) ──
-var DAO_REC=[],CV_TABS=[],CV_ACT=-1,_daoBkQ='';
+var DAO_REC=[],CV_TABS=[],CV_ACT=-1,_daoBkQ='',_convDrag=null,_convDragActive=false;
 function _dEl(id){return document.getElementById(id);}
 function daoToast(msg,bad){var t=_dEl('daotoast');if(!t)return;t.textContent=msg;t.className='dtoast show'+(bad?' fail':' ok');clearTimeout(t._tm);t._tm=setTimeout(function(){t.className='dtoast';},2200);}
 function daoAgo(ms){if(!ms)return'';var d=Date.now()-ms;if(d<0)d=0;var mn=Math.floor(d/60000);if(mn<1)return'刚刚';if(mn<60)return mn+'分钟前';var h=Math.floor(mn/60);if(h<24)return h+'小时前';var dd=Math.floor(h/24);if(dd<30)return dd+'天前';try{return new Date(ms).toLocaleDateString();}catch(e){return'';}}
@@ -806,7 +811,7 @@ function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),bo
   if(!DAO_REC.length){box.innerHTML='<div class="empty">暂无近期对话 · 先在 🔀切号 面板登录账号</div>';return;}
   var html='';DAO_REC.forEach(function(it,idx){
     if(q){var hay=((it.email||'')+' '+it.title+' '+it.sid+' '+it.accNo).toLowerCase();if(hay.indexOf(q)<0)return;}
-    html+='<div class="rc"><div class="r1"><span class="acc-no">#'+esc(String(it.accNo))+'</span><span class="st '+esc(it.statusClass||'')+'" title="'+esc(it.status||'')+'"></span><span class="ti" title="'+esc(it.title)+'">'+esc(String(it.title).slice(0,70))+'</span></div>'+
+    html+='<div class="rc" draggable="true" data-cdrag="1" data-email="'+esc(it.email||'')+'" data-sid="'+esc(it.sid||'')+'" data-title="'+esc(it.title||'')+'"><div class="r1"><span class="acc-no">#'+esc(String(it.accNo))+'</span><span class="st '+esc(it.statusClass||'')+'" title="'+esc(it.status||'')+'"></span><span class="ti" title="'+esc(it.title)+'">'+esc(String(it.title).slice(0,70))+'</span></div>'+
       '<div class="meta"><span>'+esc(String(it.email||'').split('@')[0])+'</span>'+(it.status?'<span>'+esc(it.status)+'</span>':'')+(it.updatedAt?'<span>'+daoAgo(it.updatedAt)+'</span>':'')+'</div>'+
       '<div class="acts"><span class="b" data-act="view" data-idx="'+idx+'">👁 查看</span><span class="b" data-act="enter" data-idx="'+idx+'" title="切到该账号并在网页端打开此对话">🌐 进入</span><span class="b" data-act="md" data-idx="'+idx+'">⬇ MD</span><span class="b pri" data-act="zip" data-idx="'+idx+'">📦 全部文件</span></div></div>';});
   box.innerHTML=html||'<div class="empty">无匹配 · 清空搜索查看全部</div>';}
@@ -839,7 +844,7 @@ function daoRenderBackup(){var box=_dEl('dwBackup');if(!box)return;if(!_bkTree){
     if(!rows.length)continue;na++;
     body+='<div class="gh">'+esc(a.email||a.account)+' · '+rows.length+' 备份</div>';
     for(var k=0;k<rows.length;k++){var c=rows[k];nc++;
-      body+='<div class="rc"><div class="r1"><span class="ti" title="'+esc(c.title||c.name||c.devinId||'')+'">'+esc(c.title||c.name||c.devinId||'(未命名)')+'</span></div><div class="meta"><span>'+_bkWhen(c.mtime)+(c.eventCount?(' · '+c.eventCount+' 事件'):'')+'</span></div>'+
+      body+='<div class="rc" draggable="true" data-cdrag="1" data-email="'+esc(a.email||a.account||'')+'" data-sid="'+esc(c.devinId||'')+'" data-title="'+esc(c.title||c.name||c.devinId||'')+'"><div class="r1"><span class="ti" title="'+esc(c.title||c.name||c.devinId||'')+'">'+esc(c.title||c.name||c.devinId||'(未命名)')+'</span></div><div class="meta"><span>'+_bkWhen(c.mtime)+(c.eventCount?(' · '+c.eventCount+' 事件'):'')+'</span></div>'+
         '<div class="acts">'+(c.hasHtml?'<span class="b pri" data-open="'+esc(c.htmlPath||'')+'">打开正文</span>':'')+'<span class="b" data-reveal="'+esc(c.path||c.htmlPath||a.dir||'')+'">文件夹</span></div></div>';}}
   box.innerHTML=body||'<div class="empty">无备份记录 · 先在「💬对话备份」板块备份或开启自动备份</div>';
   var ttl=_dEl('dwTitle');if(ttl)ttl.textContent='下载 / 备份库 ('+na+'账号·'+nc+'对话)';}
@@ -850,6 +855,10 @@ _dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.t
   var cva=el.getAttribute('data-cvact');if(cva){var cj=+el.getAttribute('data-i');if(cva==='md')daoCvMd(cj);else daoCvZip(cj);return;}
   var op=el.getAttribute('data-open');if(op){vscode.postMessage({type:'shellOpenFile',path:op});return;}
   var rv=el.getAttribute('data-reveal');if(rv){vscode.postMessage({type:'shellRevealFile',path:rv});return;}});
+// ── 归一 · 拖拽对话进网页(复刻手机端 startConvDrag): 拖近期对话/备份卡 → 落到网页区即在该账号网页中打开此对话 ──
+_dEl('daowin').addEventListener('dragstart',function(e){var el=e.target.closest&&e.target.closest('.rc[data-cdrag]');if(!el)return;var email=el.getAttribute('data-email')||'',sid=el.getAttribute('data-sid')||'',title=el.getAttribute('data-title')||'';if(!email||!sid){try{e.preventDefault();}catch(x){}daoToast('该对话暂无可定位会话, 无法拖入网页',true);return;}_convDrag={email:email,sid:sid,title:title};_convDragActive=true;el.classList.add('cdragging');try{e.dataTransfer.effectAllowed='copy';e.dataTransfer.setData('text/plain',title||sid);e.dataTransfer.setData('application/x-dao-conv',JSON.stringify(_convDrag));}catch(x){}var cd=_dEl('convdrop');if(cd)cd.className='on';});
+_dEl('daowin').addEventListener('dragend',function(){_convDragActive=false;var cd=_dEl('convdrop');if(cd)cd.className='';var dg=_dEl('daowin').querySelector('.rc.cdragging');if(dg)dg.classList.remove('cdragging');});
+(function(){var cd=_dEl('convdrop');if(!cd)return;cd.addEventListener('dragover',function(e){if(!_convDragActive)return;e.preventDefault();try{e.dataTransfer.dropEffect='copy';}catch(x){}});cd.addEventListener('drop',function(e){e.preventDefault();e.stopPropagation();cd.className='';var d=_convDrag;try{var s=e.dataTransfer.getData('application/x-dao-conv');if(s)d=JSON.parse(s);}catch(x){}_convDragActive=false;if(d&&d.email&&d.sid){vscode.postMessage({type:'reopen',email:d.email,devinId:d.sid});daoToast('🌐 已在网页打开 · '+String(d.title||d.sid).slice(0,24));daoClose();}_convDrag=null;});})();
 _dEl('dwClose').onclick=daoClose;
 _dEl('dwTabR').onclick=function(){daoTab('recent');};
 _dEl('dwTabB').onclick=function(){daoTab('backup');};
@@ -918,9 +927,9 @@ document.getElementById('fPrev').onclick=function(){doFind(true);};
 document.getElementById('fX').onclick=function(){closeFind();};
 // 归一 · 手机端左右手势(复用 APK 切页逻辑): 在标签条上快速左右滑 → 切上/下一个标签
 (function(){var sx=0,sy=0,st=0;BAR.addEventListener('touchstart',function(e){var t=e.touches[0];sx=t.clientX;sy=t.clientY;st=Date.now();},{passive:true});BAR.addEventListener('touchend',function(e){var t=e.changedTouches[0];var dx=t.clientX-sx,dy=t.clientY-sy,dt=Date.now()-st;if(dt<500&&Math.abs(dx)>70&&Math.abs(dx)>Math.abs(dy)*2){cycleTab(dx<0?1:-1);}},{passive:true});})();
-window.addEventListener('dragover',function(e){if(_dragId)return;e.preventDefault();DROP.className='on';});
+window.addEventListener('dragover',function(e){if(_dragId||_convDragActive)return;e.preventDefault();DROP.className='on';});
 window.addEventListener('dragleave',function(e){if(e.relatedTarget===null||e.relatedTarget===document.documentElement)DROP.className='';});
-window.addEventListener('drop',function(e){if(_dragId){DROP.className='';return;}e.preventDefault();DROP.className='';var uris='';try{uris=e.dataTransfer.getData('text/uri-list')||e.dataTransfer.getData('text/plain')||'';}catch(x){}var names=[];try{if(e.dataTransfer.files)for(var i=0;i<e.dataTransfer.files.length;i++)names.push(e.dataTransfer.files[i].name);}catch(x){}vscode.postMessage({type:'filesDropped',uris:uris,names:names});});
+window.addEventListener('drop',function(e){if(_dragId||_convDragActive){DROP.className='';_convDragActive=false;return;}e.preventDefault();DROP.className='';var uris='';try{uris=e.dataTransfer.getData('text/uri-list')||e.dataTransfer.getData('text/plain')||'';}catch(x){}var names=[];try{if(e.dataTransfer.files)for(var i=0;i<e.dataTransfer.files.length;i++)names.push(e.dataTransfer.files[i].name);}catch(x){}vscode.postMessage({type:'filesDropped',uris:uris,names:names});});
 window.addEventListener('message',function(ev){var m=ev.data||{};
   if(m.__cwRelay){vscode.postMessage({type:'cloudRelay',msg:m.__cwRelay,board:m.__board||''});return;}
   if(m.type==='open'){mkTab(m);}
