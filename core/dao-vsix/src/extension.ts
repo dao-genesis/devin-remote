@@ -1343,6 +1343,7 @@ function createProxyTunnel(hostname: string): Promise<tls.TLSSocket | null> {
 function isAppProxyPassthrough(route: string): boolean {
     // 归一 · 独立 HTTP 外壳: /shell 与 /api/shell/* 为 dao 自有 (直出外壳/SSE/消息), 不透传官网
     if (route === '/shell' || route.startsWith('/shell/') || route.startsWith('/api/shell')) return false;
+    if (route === '/i' || route.startsWith('/i/')) return false; // 归一 · 同源前缀账号反代 (dao 自有·非官网透传)
     if (route.startsWith('/devin-cloud')) return false; // 已有专门前缀分支
     if (route.startsWith('/assets/')) return true;
     if (route.startsWith('/api/')) {
@@ -1367,6 +1368,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     //   (本地服务器默认仅绑 localhost; 远程经 DAO Bridge 隧道层把关)。
     const needAuth = !route.startsWith('/api/health') && !route.startsWith('/devin-cloud/')
         && !route.startsWith('/shell') && !route.startsWith('/api/shell')
+        && !route.startsWith('/i/')
         && !isAppProxyPassthrough(route);
     if (needAuth && !checkAuth(req)) throw new Error('unauthorized');
 
@@ -1398,6 +1400,24 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         const msg = body && body.msg;
         try { if (rtint && typeof rtint.shellHandleMessage === 'function') await rtint.shellHandleMessage(sid, msg); } catch (e) { /* 守柔 */ }
         return { ok: true };
+    }
+
+    // ── 归一 · 公网同源前缀账号反代: /i/<accKey>/* → rt-flow 前缀模式反代该账号页 ──
+    //   公网手机/电脑经 DAO Bridge 隧道主口直达, 无感打开 Devin 对话页 / 多实例号页 (流式·HTML/JS/二进制/SSE)。
+    //   仅 HTTP 流式路径支持 (relay/apiGet 走 JSON 信道, 不可承载流), 故无 res 时返错。
+    if (route === '/i' || route.startsWith('/i/')) {
+        if (!res) return { ok: false, error: 'stream-required' };
+        const rtint2: any = _rtflowModule && _rtflowModule._internals;
+        const m = route.match(/^\/i\/([^\/]+)(\/.*)?$/);
+        const accKey = m ? m[1] : '';
+        const rest = (m && m[2]) ? m[2] : '/';
+        const restUrl = rest + (url.search || '');
+        if (rtint2 && typeof rtint2.shellAccountProxy === 'function') {
+            await rtint2.shellAccountProxy(accKey, restUrl, req, res);
+            return { _streamed: true };
+        }
+        if (!res.headersSent) { res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('account proxy unavailable'); }
+        return { _streamed: true };
     }
 
     switch (route) {

@@ -2,6 +2,19 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.37.0
+- 归一网页公网传输无感设备使用（道并行而不相悖）：`/shell` 经 DAO Bridge 隧道主口
+  9920 暴露后，公网手机/电脑浏览器打开「Devin 对话页 / 多实例号页」iframe 不再指向
+  `http://localhost:<随机端口>`（绑 127.0.0.1·未隧道暴露·公网 404），改走**同源路径
+  前缀** `/i/<accKey>/*` 直达。`_shellResolveOpen` 返回同源相对 URL；rt-flow
+  `devin_proxy` 新增前缀模式（rewriteBase=`/i/<accKey>`）：HTML/JS 根绝对引用补前缀、
+  运行时 fetch/XHR/EventSource(SSE) 补前缀+鉴权、缓存按基址重定基。
+- 同源多实例隔离：同源前缀下所有账号 iframe 共用一 origin，桥接脚本按 accKey 给
+  localStorage 加私有命名空间（get/set/remove/clear 全包）→ 各账号互不串号。端口模式
+  （IDE 内置浏览器·异 origin 本已隔离）不注入 shim，零回归。
+- 仅动传输层（外科手术式），不碰布局/面板渲染；并修复 3.36.0 的 vendor 脱钩
+  （面板代码回灌源 `core/rt-flow/`，恢复 源↔打包 一致）。
+
 ## 3.36.0
 - 下载/备份悬浮窗（复刻手机端 APK daopan.html）：⬇ 按钮打开「☁近期对话 / 🗂备份库」双标签悬浮窗；跨账号近期对话聚合（状态灯+账号编号+查看/进入/⬇MD/📦全部文件）；convView 多标签同时查看多条对话正文（自动抓取 MD、可逐条导出 MD/ZIP）；备份库按账号分组；搜索过滤、toast 提示、可拖拽标题栏。宿主端新增 dlRecent/dlExportMd/dlZip 数据通道（HTTP /shell 与 VS Code webview 两路均接）。
 - 主页路由：汉堡菜单「主页」与左上角 🏠 按钮 → 直接打开「六合一」组合板块（含主页在内的全六板侧栏导航）；🔀切号/🌐公网穿透/💬对话备份/💉反向注入/🧩MCP 仍各自独立单板，分而治之并存。

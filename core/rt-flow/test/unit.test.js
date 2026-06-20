@@ -346,6 +346,79 @@ function test(name, fn) {
     proxy.stopAll();
   });
 
+  // ── 11a. 归一 · 公网同源前缀反代 (道并行而不相悖 · /shell 经隧道主口无感传输) ──
+  console.log("\n[devin_proxy · 公网同源前缀模式 /i/<accKey>]");
+  {
+    const pb = proxy.buildAuthBridge("/i/aKEY123", {
+      auth1: "auth1_p", userId: "user-p", orgId: "org-p", orgName: "P",
+    });
+    test("前缀模式: __pfx = /i/<accKey>, app.devin.ai 改指前缀 + 根绝对路径补前缀", () => {
+      assert.ok(pb.includes('var __pfx="/i/aKEY123"'), "含 __pfx 前缀常量");
+      assert.ok(pb.includes("u=u.split(__abs).join(__pfx)"), "app.devin.ai 绝对 URL 改指前缀");
+      assert.ok(pb.includes("u.indexOf(__pfx+'/')!==0"), "SPA 自构造根绝对路径补前缀守卫");
+    });
+    test("前缀模式: 仍覆写 fetch/XHR/EventSource 补前缀+鉴权 (含 SSE 实时)", () => {
+      assert.ok(pb.includes("window.fetch=function"), "覆写 fetch");
+      assert.ok(pb.includes("XMLHttpRequest.prototype.open"), "覆写 XHR.open");
+      assert.ok(pb.includes("window.EventSource=nES"), "覆写 EventSource(对话实时)");
+      assert.ok(pb.includes("'Bearer '+__a1"), "挂 Bearer 头");
+    });
+    test("前缀模式: localStorage 按 accKey 命名空间隔离 (同源多实例不串号)", () => {
+      assert.ok(pb.includes('var P="/i/aKEY123::"'), "命名空间前缀 = accKey::");
+      assert.ok(pb.includes("L.getItem=function(k){return og(P+k);}"), "getItem 须加私有前缀");
+      assert.ok(pb.includes("L.setItem=function(k,v){return os(P+k,v);}"), "setItem 须加私有前缀");
+      assert.ok(/L\.clear=function\(\)\{/.test(pb), "clear 须只清本账号键空间");
+    });
+    const portB = proxy.buildAuthBridge("http://localhost:5", { auth1: "a", userId: "u", orgId: "o", orgName: "O" });
+    test("端口模式向后兼容: __pfx 为空, 不补前缀, 不注入命名空间 shim (零回归)", () => {
+      assert.ok(portB.includes('var __pfx=""'), "端口模式 __pfx 空");
+      assert.ok(portB.includes("u.split(__abs).join(__pfx)"), "端口模式 app.devin.ai 剥成同源相对");
+      assert.ok(!portB.includes("L.getItem=function"), "端口模式不注入 localStorage 命名空间(异 origin 本已隔离)");
+    });
+    test("devin_proxy.handleRequest 源级: rewriteBase/parseBase 双模 + 缓存按基址重定基", () => {
+      const fs = require("fs");
+      const src = fs.readFileSync(require("path").join(__dirname, "..", "devin_proxy.js"), "utf8");
+      assert.ok(/const isPrefix = localBase\.charAt\(0\) === "\/"/.test(src), "须判前缀模式");
+      assert.ok(/const parseBase = isPrefix \? "http:\/\/dao\.local" : localBase/.test(src), "前缀模式须用可解析的 parseBase");
+      assert.ok(/hit\.base && hit\.base !== localBase/.test(src), "缓存命中须按当前改写基址重定基(跨端口/前缀复用)");
+      assert.ok(/if \(isPrefix\) \{\s*html = html\.replace/.test(src), "前缀模式 index.html 根绝对引用须补前缀");
+    });
+    test("proxyPrefixed 导出为函数, 无 auth1 → 502 (不反代)", async () => {
+      assert.strictEqual(typeof proxy.proxyPrefixed, "function", "proxyPrefixed 须导出");
+      let _code = 0;
+      const fakeRes = { headersSent: false, writeHead(c) { _code = c; this.headersSent = true; }, end() {} };
+      await proxy.proxyPrefixed({ method: "GET", headers: {} }, fakeRes, { auth1: "" }, "/i/x", "/", null);
+      assert.strictEqual(_code, 502, "无 auth1 须 502");
+    });
+  }
+  console.log("\n[归一 · _shellResolveOpen 同源 URL + /i/ 路由 (源级·双副本)]");
+  test("rt-flow extension.js: _shellResolveOpen 返回同源 /i/<accKey>/ + 账号注册表 + 反代入口", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+    assert.ok(/const base = '\/i\/' \+ _shellAccKey\(email\)/.test(src), "_shellResolveOpen 须返回同源 /i/<accKey> 而非 localhost:端口");
+    assert.ok(/createHmac\('sha256', _shellAccSalt\)/.test(src), "accKey 须 HMAC 不可枚举(防公网猜测)");
+    assert.ok(/async function shellAccountProxy\(accKey, restPath, req, res\)/.test(src), "须有 /i/ 反代入口 shellAccountProxy");
+    assert.ok(/devinProxy\.proxyPrefixed\(/.test(src), "shellAccountProxy 须委托 devin_proxy 前缀模式");
+    assert.ok(/shellAccountProxy, \/\//.test(src), "须经 _internals 导出 shellAccountProxy");
+  });
+  test("dao-vsix src/extension.ts: 9920 主口 /i/<accKey>/* 路由 (dao 自有·免 token·流式)", () => {
+    const fs = require("fs");
+    const p = require("path").join(__dirname, "..", "..", "dao-vsix", "src", "extension.js");
+    const alt = require("path").join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts");
+    const src = fs.readFileSync(fs.existsSync(p) ? p : alt, "utf8");
+    assert.ok(/route\.startsWith\('\/i\/'\) return false/.test(src) || /route\.startsWith\('\/i\/'\)\) return false/.test(src), "/i/ 须排除官网透传(dao 自有)");
+    assert.ok(/&& !route\.startsWith\('\/i\/'\)/.test(src), "/i/ 须免 token (公网设备可直达账号 iframe)");
+    assert.ok(/rtint2\.shellAccountProxy\(accKey, restUrl, req, res\)/.test(src), "须委托 rt-flow shellAccountProxy 流式反代");
+    assert.ok(/return \{ _streamed: true \}/.test(src), "/i/ 须走流式直通 (HTML/JS/二进制/SSE)");
+  });
+  test("vendor 同步: dao-vsix/rtflow 含同源前缀传输新码 (源↔打包一致)", () => {
+    const fs = require("fs");
+    const ven = fs.readFileSync(require("path").join(__dirname, "..", "..", "dao-vsix", "rtflow", "extension.js"), "utf8");
+    const venP = fs.readFileSync(require("path").join(__dirname, "..", "..", "dao-vsix", "rtflow", "devin_proxy.js"), "utf8");
+    assert.ok(/async function shellAccountProxy\(/.test(ven), "打包副本须含 shellAccountProxy (vendor 未脱钩)");
+    assert.ok(/const isPrefix = localBase\.charAt\(0\) === "\/"/.test(venP), "打包 devin_proxy 须含前缀模式");
+  });
+
   // ── 11b. devin_proxy · 磁盘二级缓存 L2 (v4.14.0 · 重载秒恢复 · 跨端口重定基) ──
   console.log("\n[devin_proxy._diskCache · L2]");
   {

@@ -871,8 +871,52 @@ function _shellCloudRun(sid, fn) {
   });
   return _shellCloudQueue;
 }
+// ── 归一 · 公网同源前缀反代 (道并行而不相悖) ─────────────────────────────────
+// 病灶: _shellResolveOpen 旧返 `http://localhost:<随机端口>/…`, 该端口反代绑 127.0.0.1 未经隧道
+//   暴露 → 公网手机/电脑打开 /shell 时「Devin 对话页/多实例号页」iframe 指向用户自己机器, 打不开。
+// 归一: 每账号映射到稳定且不可枚举的 accKey, 经主端口 9920 的同源路径 `/i/<accKey>/*` 暴露;
+//   _shellResolveOpen 返回同源相对 URL (`'self'` 已在 standalone shell 的 frame-src 白名单内) →
+//   隧道主口直达, 公网设备无感访问 (含多实例并排)。端口模式仍保留供 IDE 内置浏览器 (openMultiInstance)。
+const _shellAccSalt = crypto.randomBytes(16).toString('hex'); // 进程级盐 → accKey 不可枚举(防公网猜测)
+const _shellAccByKey = new Map();   // accKey → emailLower
+const _shellAccByEmail = new Map(); // emailLower → accKey
+function _shellAccKey(email) {
+  const e = String(email || '').toLowerCase();
+  let k = _shellAccByEmail.get(e);
+  if (k) return k;
+  k = 'a' + crypto.createHmac('sha256', _shellAccSalt).update(e).digest('hex').slice(0, 20);
+  _shellAccByEmail.set(e, k);
+  _shellAccByKey.set(k, e);
+  return k;
+}
+// 主口 9920 的 /i/<accKey>/* 路由就地调用: 解析账号 auth → 经 devin_proxy 前缀模式反代 (同源相对前缀)。
+//   restPath 为已剥 `/i/<accKey>` 的同源路径 (含 query)。直接写 res (流式·支持 HTML/JS/二进制/SSE)。
+async function shellAccountProxy(accKey, restPath, req, res) {
+  try {
+    const email = _shellAccByKey.get(String(accKey || ''));
+    if (!email) {
+      if (res && !res.headersSent) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('unknown account'); }
+      return;
+    }
+    const auth = await _resolveAuthForEmail(email);
+    if (!auth || !auth.auth1) {
+      if (res && !res.headersSent) { res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('account proxy not ready'); }
+      return;
+    }
+    let rest = String(restPath == null ? '/' : restPath);
+    if (rest.charAt(0) !== '/') rest = '/' + rest;
+    await devinProxy.proxyPrefixed(
+      req, res,
+      { auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgName: auth.orgName },
+      '/i/' + accKey, rest, log,
+    );
+  } catch (e) {
+    if (res && !res.headersSent) { try { res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('proxy fail: ' + (e && e.message)); } catch (x) {} }
+  }
+}
 // 解析「开一个账号标签」的元数据 (同 openMultiInstance 的反代解析, 但不创建 webview —
 // 独立页自身经 mkTab 以 iframe 开标签)。返回与 webview 'open' 消息同形的对象。
+//   归一: url 改为同源相对 `/i/<accKey>/…` → IDE 内置浏览器(localhost:9920)与公网隧道两端皆可达。
 async function _shellResolveOpen(opts) {
   opts = opts || {};
   const email = String(opts.email || '').trim();
@@ -880,11 +924,7 @@ async function _shellResolveOpen(opts) {
   const sid = String(opts.devinId || '').trim().replace(/^devin-/, '');
   const auth = await _resolveAuthForEmail(email, opts.password);
   if (!auth || !auth.auth1) return null;
-  const pr = await devinProxy.ensureProxyForAccount(
-    email, { auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgName: auth.orgName }, log,
-  );
-  if (!pr.ok) return null;
-  const base = String(pr.url || ('http://localhost:' + pr.port + '/')).replace(/\/+$/, '');
+  const base = '/i/' + _shellAccKey(email); // 同源相对前缀 (隧道主口 9920 直达·公网设备无感)
   const pageRaw = String(opts.path || '').trim();
   const pagePath = pageRaw ? ('/' + pageRaw.replace(/^\/+/, '')) : '';
   const url = pagePath ? (base + pagePath) : (sid ? (base + '/sessions/' + encodeURIComponent(sid)) : (base + '/'));
@@ -14690,6 +14730,8 @@ module.exports = {
     getStandaloneShellHtml: _standaloneShellHtml, // GET /shell → 直出同一外壳 (注入 HTTP 传输垫片)
     shellAttach: _shellAttach, // GET /api/shell/events → SSE 挂载 (宿主→页面)
     shellHandleMessage, // POST /api/shell/msg → 页面→宿主消息处理
+    shellAccountProxy, // GET/POST /i/<accKey>/* → 同源前缀反代账号页 (公网手机/电脑无感·含多实例)
+    _shellAccKey, // (供单测) email → 稳定不可枚举 accKey
     setCloudProvider(p) { _cloudProvider = p || null; }, // 归一 · dao-vsix 注入「六大板块」面板提供者
     parseAccountText,
     Store,

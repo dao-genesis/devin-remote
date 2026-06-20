@@ -204,16 +204,35 @@ function pickFreePort() {
 
 // 帛书·「观天之道·执天之行」— 认证桥接脚本 (运行于 SPA 任何引导脚本之前)。
 // Devin SPA 登录态唯一真源 = localStorage['auth1_session'] = {token, userId}。
-// 一并注入 org 键 + post-auth 守卫键, 并拦截 fetch/XHR 以挂 Authorization (同源相对请求)。
-function buildAuthBridge(localBase, auth) {
+// 一并注入 org 键 + post-auth 守卫键, 并拦截 fetch/XHR/EventSource 以挂 Authorization + 归一前缀。
+//   rewriteBase 形如 `http://localhost:<port>`(端口模式·IDE 内置浏览器) 或 `/i/<accKey>`(同源
+//   前缀模式·公网经主口 9920 隧道暴露)。前缀模式下 SPA 自构造的根绝对路径(/api、/assets…)在
+//   运行时统一补 `/i/<accKey>` 前缀 → 公网手机/电脑无感同源访问该账号页。
+function buildAuthBridge(rewriteBase, auth) {
   const a1 = safeStr(auth.auth1);
   const uid = safeStr(auth.userId);
   const org = safeStr(auth.orgId);
   // org_name 源自 Devin post-auth 响应; 仍剥引号/反斜杠/尖括号 → 杜绝 </script> 闭合逃逸。
   const orgName = safeStr(auth.orgName).replace(/['"\\<>]/g, "");
+  const isPrefix = String(rewriteBase).charAt(0) === "/";
+  const pfx = isPrefix ? String(rewriteBase) : "";
   const J = JSON.stringify;
+  // 帛书·「万物并作·各归其根」— 前缀模式多实例隔离: 同源前缀下所有账号 iframe 共用同一 origin,
+  //   localStorage 本会互相覆盖(auth1_session 串号)。故按 accKey 给本 iframe 的 localStorage 键
+  //   加私有命名空间前缀 (get/set/remove/clear 全包) → 各账号读写各自键空间, 同源亦完全隔离。
+  //   端口模式各账号本就异 origin, 无需此 shim (不注入·零回归)。
+  const nsShim = isPrefix
+    ? ("try{(function(){var L=window.localStorage;var P=" + J(pfx + "::") + ";" +
+       "var og=L.getItem.bind(L),os=L.setItem.bind(L),orm=L.removeItem.bind(L);" +
+       "L.getItem=function(k){return og(P+k);};" +
+       "L.setItem=function(k,v){return os(P+k,v);};" +
+       "L.removeItem=function(k){return orm(P+k);};" +
+       "L.clear=function(){try{var ks=[],i;for(i=0;i<L.length;i++){var kk=L.key(i);if(kk&&kk.indexOf(P)===0)ks.push(kk);}for(i=0;i<ks.length;i++)orm(ks[i]);}catch(e){}};" +
+       "})();}catch(e){}")
+    : "";
   return (
     "<script>(function(){try{" +
+    nsShim +
     "var __a1=" + J(a1) + ";var __uid=" + J(uid) + ";var __org=" + J(org) + ";var __orgName=" + J(orgName) + ";" +
     "if(__a1){" +
     "localStorage.setItem('auth1_session',JSON.stringify({token:__a1,userId:__uid}));" +
@@ -224,8 +243,14 @@ function buildAuthBridge(localBase, auth) {
     "if(!localStorage.getItem(__k))localStorage.setItem(__k,JSON.stringify({externalOrgId:null,userId:__uid,internalOrgId:__org,orgName:__orgName,result:{resolved_external_org_id:null,org_id:__org,org_name:__orgName,is_valid_resource:true}}));}" +
     "}" +
     "document.cookie='webapp_logged_in=true; path=/; max-age=31536000; SameSite=Lax';" +
-    "var __base=" + J(localBase) + ";var __abs='https://app.devin.ai';" +
-    // 运行时兜底: 拦截动态构造的绝对 app.devin.ai 整页跳转(assign/replace/history)→ 改指本地代理,
+    "var __base=" + J(String(rewriteBase)) + ";var __pfx=" + J(pfx) + ";var __abs='https://app.devin.ai';" +
+    // __pf: 统一把请求 URL 规整到本代理可达地址 —— app.devin.ai 绝对 URL 改指 __pfx(前缀模式)
+    //   或剥成同源相对(端口模式); 前缀模式下再把 SPA 自构造的根绝对路径(/api、/assets…)补 __pfx。
+    "var __pf=function(u){if(typeof u!=='string')return u;" +
+    "u=u.split(__abs).join(__pfx);" +
+    "if(__pfx&&u.charAt(0)==='/'&&u.charAt(1)!=='/'&&u!==__pfx&&u.indexOf(__pfx+'/')!==0){u=__pfx+u;}" +
+    "return u;};" +
+    // 运行时兜底: 拦截动态构造的绝对 app.devin.ai 整页跳转(assign/replace/history)→ 改指本代理,
     //   防 SPA 漏改字面量时仍硬跳真站致掉登录(JS/HTML 静态改写之外的双保险)。
     "var __fix=function(u){return (typeof u==='string')?u.split(__abs).join(__base):u;};" +
     "try{var _la=window.location.assign.bind(window.location);window.location.assign=function(u){return _la(__fix(u));};}catch(e){}" +
@@ -235,15 +260,17 @@ function buildAuthBridge(localBase, auth) {
     "var needAuth=function(u){return typeof u==='string'&&(u.charAt(0)==='/'||u.indexOf(__base)===0);};" +
     "var oF=window.fetch;" +
     "window.fetch=function(u,o){if(typeof u!=='string')return oF.call(this,u,o);" +
-    "var nu=u.split('https://app.devin.ai').join('');o=o||{};" +
+    "var nu=__pf(u);o=o||{};" +
     "if(needAuth(nu)&&typeof o.headers==='object'&&o.headers&&!Array.isArray(o.headers)){" +
     "if(!o.headers['Authorization'])o.headers['Authorization']='Bearer '+__a1;" +
     "if(!o.headers['x-cog-org-id'])o.headers['x-cog-org-id']=__org;}" +
     "return oF.call(this,nu,o);};" +
     "var oX=XMLHttpRequest.prototype.open;" +
-    "XMLHttpRequest.prototype.open=function(m,u){var nu=(typeof u==='string')?u.split('https://app.devin.ai').join(''):u;" +
+    "XMLHttpRequest.prototype.open=function(m,u){var nu=(typeof u==='string')?__pf(u):u;" +
     "var r=oX.apply(this,[m,nu].concat([].slice.call(arguments,2)));" +
     "if(needAuth(nu)){try{this.setRequestHeader('Authorization','Bearer '+__a1);this.setRequestHeader('x-cog-org-id',__org);}catch(e){}}return r;};" +
+    // EventSource(Devin 对话实时事件) 前缀模式下亦须补 __pfx, 否则公网 SSE 打到错账号/根域。
+    "try{var _ES=window.EventSource;if(_ES){var nES=function(u,o){return new _ES(__pf(u),o);};nES.prototype=_ES.prototype;try{nES.CONNECTING=_ES.CONNECTING;nES.OPEN=_ES.OPEN;nES.CLOSED=_ES.CLOSED;}catch(e){}window.EventSource=nES;}}catch(e){}" +
     "}catch(e){}})();</script>"
   );
 }
@@ -276,8 +303,24 @@ function decode(buf, enc) {
 }
 
 // 单账号请求处理: 取上游 → 剥安全头 → HTML 注入登录态 / JS 改写绝对 URL / 其余透传。
-async function handleRequest(req, res, auth, port, log) {
-  const localBase = "http://localhost:" + port;
+//   两种调用形态 (道并行而不相悖):
+//     · 端口模式 (旧·IDE 内置浏览器): handleRequest(req,res,auth,port,log) → 改写基址 = http://localhost:<port>
+//     · 前缀模式 (新·公网经主口 9920 隧道): handleRequest(req,res,auth,{rewriteBase:'/i/<accKey>',parsePath,log})
+//       → 改写基址 = 同源相对前缀, 公网手机/电脑浏览器无感同源访问该账号页。
+async function handleRequest(req, res, auth, opts, _log) {
+  let rewriteBase, parsePath, log;
+  if (opts && typeof opts === "object") {
+    rewriteBase = String(opts.rewriteBase || "");
+    parsePath = opts.parsePath != null ? opts.parsePath : (req.url || "/");
+    log = opts.log;
+  } else {
+    rewriteBase = "http://localhost:" + opts; // opts = port (旧签名)
+    parsePath = req.url || "/";
+    log = _log;
+  }
+  const localBase = rewriteBase; // 下游沿用 localBase 命名 = 改写基址
+  const isPrefix = localBase.charAt(0) === "/"; // 同源前缀模式 (/i/<accKey>)
+  const parseBase = isPrefix ? "http://dao.local" : localBase; // new URL() 仅需可解析的绝对基址
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, x-cog-org-id");
@@ -287,7 +330,7 @@ async function handleRequest(req, res, auth, port, log) {
     return;
   }
 
-  const reqUrl = new URL(req.url || "/", localBase);
+  const reqUrl = new URL(parsePath || "/", parseBase);
   const up = resolveUpstream(reqUrl.pathname);
   const targetUrl = up.base + up.path + (reqUrl.search || "");
   const u = new URL(targetUrl);
@@ -300,15 +343,19 @@ async function handleRequest(req, res, auth, port, log) {
   if (cacheable) {
     const hit = _assetCache.get(targetPath);
     if (hit) {
+      // 缓存键与账号无关 (静态资源各账号同份), 但 baked 了改写基址(端口/前缀) → 命中时按当前基址重定基。
+      const body = (hit.base && hit.base !== localBase)
+        ? _rebaseAsset(hit.body, hit.base, localBase, _isTextCt(hit.headers))
+        : hit.body;
       res.writeHead(hit.status, hit.headers);
-      res.end(hit.body);
+      res.end(body);
       return;
     }
     // L2: 内存未命中 → 查磁盘 (重载/重开后秒级恢复, 免上游往返与全量改写)。
     const disk = await _diskGet(targetPath);
     if (disk) {
       const body = _rebaseAsset(disk.body, disk.base, localBase, disk.text);
-      _cachePut(targetPath, { status: disk.status, headers: disk.headers, body }); // 提升入内存
+      _cachePut(targetPath, { status: disk.status, headers: disk.headers, body, base: localBase }); // 提升入内存
       res.writeHead(disk.status, disk.headers);
       res.end(body);
       return;
@@ -364,6 +411,10 @@ async function handleRequest(req, res, auth, port, log) {
             .split(DEVIN_REG + "/").join(localBase + "/__reg/")
             .split(DEVIN_CDN + "/").join(localBase + "/__cdn/")
             .split(DEVIN_SS + "/").join(localBase + "/__ss/");
+          // 前缀模式: 上游下发的根绝对 Location(/login …)须补前缀, 否则公网浏览器跳到根域(脱离本账号)。
+          if (isPrefix && loc.charAt(0) === "/" && loc.charAt(1) !== "/" && loc.indexOf(localBase + "/") !== 0 && loc !== localBase) {
+            loc = localBase + loc;
+          }
         }
         res.writeHead(status, loc ? { Location: loc } : {});
         res.end();
@@ -433,6 +484,12 @@ async function handleRequest(req, res, auth, port, log) {
             .split("https://register.windsurf.com/").join(localBase + "/__reg/")
             .split("https://server.codeium.com/").join(localBase + "/__cdn/")
             .split("https://server.self-serve.windsurf.com/").join(localBase + "/__ss/");
+          // 前缀模式: SPA 入口 index.html 以根绝对引用入口/预载资源(href="/assets/…" · src="/…")。
+          //   根绝对路径不随 iframe 文档 base 解析 → 须显式补 /i/<accKey> 前缀, SPA 方能在前缀下启动;
+          //   后续 Vite 分片以模块自身 URL 相对解析, 自然留在前缀内。
+          if (isPrefix) {
+            html = html.replace(/(\s(?:href|src|action)\s*=\s*)(["'])\/(?!\/)/gi, "$1$2" + localBase + "/");
+          }
           const bridge = buildAuthBridge(localBase, auth);
           // 认证桥接须先于 SPA 任何引导脚本 → 注入 <head> 起始 (紧随 charset meta)。
           if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + bridge);
@@ -468,7 +525,7 @@ async function handleRequest(req, res, auth, port, log) {
           res.writeHead(status, safeHeaders);
           res.end(outBuf);
           if (cacheable && status === 200) {
-            const entry = { status, headers: { ...safeHeaders }, body: outBuf };
+            const entry = { status, headers: { ...safeHeaders }, body: outBuf, base: localBase };
             _cachePut(targetPath, entry);
             _diskPut(targetPath, entry, localBase);
           }
@@ -480,7 +537,7 @@ async function handleRequest(req, res, auth, port, log) {
           //   所见 host = 本地代理地址, 故把服务端下发的 webapp_host 改写为本次请求 Host, 令校验通过。
           let txt = body.toString("utf8");
           if (txt.indexOf("webapp_host") >= 0) {
-            const reqHost = (req.headers && req.headers.host) ? String(req.headers.host) : ("localhost:" + port);
+            const reqHost = (req.headers && req.headers.host) ? String(req.headers.host) : "localhost";
             txt = txt.replace(/("webapp_host"\s*:\s*")[^"]*(")/g, "$1" + reqHost + "$2");
           }
           res.writeHead(status, safeHeaders);
@@ -501,7 +558,7 @@ async function handleRequest(req, res, auth, port, log) {
           res.writeHead(status, safeHeaders);
           res.end(outBuf);
           if (status === 200) {
-            const entry = { status, headers: { ...safeHeaders }, body: outBuf };
+            const entry = { status, headers: { ...safeHeaders }, body: outBuf, base: localBase };
             _cachePut(targetPath, entry);
             _diskPut(targetPath, entry, localBase);
           }
@@ -564,6 +621,23 @@ async function ensureProxyForAccount(email, auth, log) {
   return { ok: true, port, url: "http://localhost:" + port + "/" };
 }
 
+// 帛书·「水善利万物而有静」— 前缀模式入口: 不另起端口, 由主口 9920 的 /i/<accKey>/* 路由
+//   就地调用, 把同源前缀作改写基址 → 公网手机/电脑浏览器无感访问该账号页 (含 Devin 对话/多实例)。
+//   prefix 形如 '/i/<accKey>' (无尾斜杠); restUrl 为已剥前缀的同源路径 (含 query)。
+async function proxyPrefixed(req, res, auth, prefix, restUrl, log) {
+  if (!auth || !auth.auth1) {
+    if (!res.headersSent) { res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" }); res.end("no-auth1"); }
+    return;
+  }
+  try {
+    await handleRequest(req, res, auth, { rewriteBase: String(prefix || "").replace(/\/+$/, ""), parsePath: restUrl, log });
+  } catch (e) {
+    if (!res.headersSent) {
+      try { res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" }); res.end("proxy fail: " + (e && e.message)); } catch {}
+    }
+  }
+}
+
 function stopProxy(email) {
   const key = String(email || "default").toLowerCase();
   const e = _servers.get(key);
@@ -578,6 +652,7 @@ function stopAll() {
 
 module.exports = {
   ensureProxyForAccount,
+  proxyPrefixed,
   stopProxy,
   stopAll,
   buildAuthBridge,
