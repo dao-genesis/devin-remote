@@ -17,7 +17,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.34.5";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.34.6";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -481,17 +481,21 @@
     // ── P9: 云端/本地 MD 生成 (完整 API 文档, 供穿透面板+远程导出) ──
     getCloudMd: async function(){
       var c; try{c=JSON.parse(N.getConn?N.getConn():"{}");} catch(e){c={};}
-      var pub = (c.url&&c.session)?(c.url.replace(/\/$/,'')+"/relay/"+c.session):"(未配置)";
       // 全部可用接入渠道 (实时·随状态自动更新): 局域网直连 + cloudflared 主 + SSH 备 + 中继 + P2P。
       var _tj={}; try{_tj=JSON.parse(N.tunnelStat?N.tunnelStat():"{}");}catch(e){}
       var _lj={}; try{_lj=JSON.parse(N.lanDirect?N.lanDirect():"{}");}catch(e){}
+      // 公网入口跟随当前生效通道: 去中心化隧道(cloudflared>ssh)优先, Worker 仅兜底 (道法自然·随情况变化)。
+      var _btl=(_tj.tunnels&&_tj.tunnels.length)?_tj.tunnels:[];
+      function _pickT(n){ for(var i=0;i<_btl.length;i++){ if(_btl[i].name===n&&_btl[i].url) return _btl[i].url; } return ""; }
+      var _bestBase=(_pickT('cloudflared')||_pickT('ssh')||c.url||"").replace(/\/$/,'');
+      var pub = (_bestBase&&c.session)?(_bestBase+"/relay/"+c.session):"(未配置)";
       var _sid=c.session||"", _suf="/relay/"+_sid;
       var chRows=["## 一·补、全部可用接入渠道 (本设备实时·任一可用·同一 Token/Session/E2E Key)","",
         "> 控制端就近择优: 同网走局域网直连(最优), 跨网走去中心化隧道, 隧道不可用兜底中继; 愿升级客户端可走 WebRTC P2P。",
         "","| 渠道 | 状态 | 入口 |","|------|------|------|"];
       var _lus=(_lj.urls||_tj.lanUrls||[]);
       chRows.push("| 局域网直连·零中继零隧道·同网最优 | "+(_lus.length?"在线":"离线/未开启")+" | "+(_lus.length?_lus.map(function(x){return x+_suf;}).join("<br>"):"—")+" |");
-      var _tl=(_tj.tunnels&&_tj.tunnels.length)?_tj.tunnels:[];
+      var _tl=_btl;
       var _NM={cloudflared:"cloudflared 去中心化隧道·主", ssh:"SSH 反向隧道·备(独立于 Cloudflare)"};
       var _tlN={};
       _tl.forEach(function(x){ _tlN[x.name]=true; chRows.push("| "+(_NM[x.name]||"去中心化隧道")+" | 在线 | "+x.url+_suf+" |"); });
@@ -501,7 +505,8 @@
       } else if(!_tl.length) {
         chRows.push("| 去中心化隧道(cloudflared 主/SSH 备) | 离线/未开启 | 设备面板开启「去中心化隧道」即每设备独立免费公网入口 |");
       }
-      chRows.push("| 中继 Worker·默认兜底 | "+(pub!=="(未配置)"?"已配置":"未配置")+" | "+pub+" |");
+      var _wbase=(c.url||"").replace(/\/$/,''); var _wpub=(_wbase&&_sid)?(_wbase+_suf):"(未配置)";
+      chRows.push("| 中继 Worker·兜底(仅其他公网通道不可用时) | "+(_wbase?"已配置":"未配置")+" | "+_wpub+" |");
       chRows.push("| WebRTC P2P·真打洞 | "+(_tl.length?"可握手":"需先有公网入口")+" | 打开 p2p-client.html, 借任一公网入口握手一次, 之后 RPC 走 P2P DataChannel·不再经隧道 |");
       var md = [
         "# Devin Cloud 手机版 · 接入文档 (唯一·两大模块·全量展开)",

@@ -1,6 +1,6 @@
 {
-  "versionCode": 88,
-  "versionName": "0.34.5",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.5/DevinCloud-mobile-v0.34.5.apk",
-  "notes": "v0.34.5 · 去中心化 P2P 握手加固 (道法自然·无为而无不为)。① 等答超时从发出 offer 起算 (此前 ICE 收集占去数秒不再吃进等答窗口), 上限 12s→25s, 弱网/对称 NAT 更稳。② 区分失败成因: ice_failed (对端已应答但 P2P 打洞失败/对称 NAT → 提示填 TURN 或隧道兜底) vs signal_timeout (未收到对端应答 → 提示检查手机在线与 session/token), 客户端给出可操作提示。承接 v0.34.4 路线C 0账号去中心化 WebRTC 信令 (公共 ntfy pub/sub 换 AES-GCM 加密 SDP, RPC 全走 P2P DataChannel, 不经 Worker) 与对话追踪全局系统通知。"
+  "versionCode": 89,
+  "versionName": "0.34.6",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.6/DevinCloud-mobile-v0.34.6.apk",
+  "notes": "v0.34.6 · 公网穿透面板不再默认 Worker (道法自然·随情况变化)。① 面板「公网穿透状态/公网URL/接入信息/接入文档」改为按当前实际生效的公网通道动态选取与显示: 去中心化隧道(cloudflared 主 > SSH 备)优先, Worker 仅在其他公网通道都不可用时兜底; 接入渠道总览标注「★ 当前生效」。② 新增「🌐 复制公网网址」按钮: 一键复制公网网页控台地址(含 Session+Token), 任意公网浏览器打开即与 APK 同款操作; 该网址跟随当前公网通道自动变化, 多设备同时打开互不干扰。"
 }
