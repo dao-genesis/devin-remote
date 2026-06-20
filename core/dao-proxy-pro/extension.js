@@ -4926,7 +4926,7 @@ function getEaConfigHtml(port, nonce) {
   // ── 添加 Provider ──
   document.getElementById('btnAddProv').addEventListener('click', function() {
     var name = document.getElementById('provName').value.trim();
-    var url = document.getElementById('provUrl').value.trim().replace(/\s+/g, '');
+    var url = document.getElementById('provUrl').value.trim();
     var key = document.getElementById('provKey').value.trim();
     var modelsRaw = document.getElementById('provModels').value.trim();
     if (!name || !url) { _daoToast('名称和 URL 必填'); return; }
