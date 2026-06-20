@@ -1,6 +1,6 @@
 {
-  "versionCode": 101,
-  "versionName": "0.35.8",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.8/DevinCloud-mobile-v0.35.8.apk",
-  "notes": "v0.35.8 · 在 0.35.7 基础上修复『更新后版本号不变』的观感问题。\n• 各页脚(切号/油猴/Shizuku)版本号改为直接读真实 APK 版本(Native.appVer), 不再依赖可能过期的本地缓存 → 升级后立即显示新版本号, 不会再『看着像没变化』。\n0.35.7 起已包含的改进:\n• 整页翻译穿透 Shadow DOM: 现代 SPA/主页『译』按钮终于生效, 含嵌套 shadow 与动态增量补译; 再点一次全部还原。\n• 浏览跳转提速: 标签持久化写盘移出主线程+防抖; 冷启动后台标签懒加载, 启动更跟手。\n• ☰『检查更新』手动入口 + 网页控台 /shell 补回『切换 电脑版/手机版』。\n更新经 latest.json 多镜像(GitHub raw + jsDelivr/Fastly/Statically + ghproxy)轮询下发, 国内外均可达; 与历史版本同签名, 可直接覆盖升级。"
+  "versionCode": 102,
+  "versionName": "0.35.9",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.9/DevinCloud-mobile-v0.35.9.apk",
+  "notes": "v0.35.9 · 修复浏览历史把网页记成『上一页标题』的缺陷。\n• 根因: 网页标题是异步到达的 (onPageFinished 之后才回调 onReceivedTitle), 而历史在 onPageFinished 时就用当时的 tab.title 落库 → 此刻仍是上一页的标题。裸域名 301 跳 www (如 wikipedia.org→www.wikipedia.org、iana.org→www.iana.org) 必现此问题: 该条历史标题张冠李戴。\n• 修法: 标题到达 onReceivedTitle 时回填最近一条同 URL 历史的标题, 并兼容跳转前的原始 URL (getOriginalUrl), 末尾斜杠差异也归一 → 历史标题恒与网页实际标题一致。无痕标签不记历史; 多实例 Devin 账号历史 (history_devin) 用账号命名, 不受影响。\n更新经 latest.json 多镜像(GitHub raw + jsDelivr/Fastly/Statically + ghproxy)轮询下发, 国内外均可达; 与历史版本同签名, 可直接覆盖升级。"
 }
