@@ -1853,13 +1853,100 @@ function buildConversationHtml(title, devinId, events, opts) {
     'body.filtering .msg.match{display:flex}\n' +
     '.footer{text-align:center;padding:24px;color:#484f58;font-size:12px;border-top:1px solid var(--border);margin-top:32px}\n' +
     '@media(max-width:760px){body{padding-left:0}.nav{transform:translateX(-100%);transition:transform .2s}.nav.show{transform:none}}\n' +
+    '.header .back{color:var(--accent);text-decoration:none;font-size:13px;padding:5px 10px;border:1px solid var(--border);border-radius:6px;white-space:nowrap}\n' +
+    '.header .back:hover{background:#161b22}\n' +
     '</style>\n</head>\n<body>\n' + nav +
-    '<div class="header"><h1>🔮 ' + _escHtml(title) + '</h1>' +
+    '<div class="header">' + (opts.base ? '<a class="back" href="' + _escHtml(opts.base) + '/" title="返回对话列表">‹ 对话列表</a> ' : '') + '<h1>🔮 ' + _escHtml(title) + '</h1>' +
     '<div class="meta">Session: ' + _escHtml(devinId) + (account ? ' · 账号: ' + _escHtml(account) : '') + ' · 事件: ' + events.length + '</div></div>\n' +
     '<div class="container">\n' + msgBlocks.join("\n") + '\n</div>\n' +
     '<div class="footer">RT Flow 备份 · ' + ts + ' · 道法自然</div>\n' +
     _convClientScript() +
     '</body>\n</html>';
+}
+// ── 归一 · 账号对话列表 (dao 自渲染·Auth0 免疫·手机+电脑一致) ──────────────────
+//   base: 同源前缀 (如 /i/<accKey>) → 各链接/接口同源相对前缀, 公网隧道主口直达。
+//   每条对话卡片链到 <base>/sessions/<id> (原生对话视图); 顶部可检索/刷新/新建对话。
+function buildSessionsListHtml(account, sessions, opts) {
+  opts = opts || {};
+  const base = String(opts.base || '');
+  const orgName = String(opts.orgName || '');
+  const err = String(opts.error || '');
+  sessions = Array.isArray(sessions) ? sessions : [];
+  const stClass = (s) => {
+    s = String(s || '').toLowerCase();
+    if (/run|work|active/.test(s)) return 'running';
+    if (/finish|complete|done/.test(s)) return 'finished';
+    if (/block|wait|stuck/.test(s)) return 'blocked';
+    if (/expir|fail|error/.test(s)) return 'expired';
+    return '';
+  };
+  const fmtTime = (t) => {
+    if (!t) return '';
+    try { const d = new Date(typeof t === 'number' ? t : Date.parse(t)); return isNaN(d) ? String(t).slice(0, 16) : d.toLocaleString(); }
+    catch (e) { return String(t).slice(0, 16); }
+  };
+  const cards = sessions.map((s) => {
+    const sid = s.devin_id || s.session_id || s.id || '';
+    const title = s.title || s.name || s.prompt || sid || '未命名';
+    const st = s.status_enum || s.status || s.state || '';
+    const created = s.created_at || s.created || '';
+    const hay = (String(title) + ' ' + String(sid)).toLowerCase();
+    return '<a class="row" data-h="' + _escHtml(hay) + '" href="' + _escHtml(base) + '/sessions/' + encodeURIComponent(sid) + '">' +
+      '<div class="r1"><span class="st ' + stClass(st) + '" title="' + _escHtml(st) + '"></span>' +
+      '<span class="s-title">' + _escHtml(String(title).slice(0, 90)) + '</span></div>' +
+      '<div class="s-meta"><span>' + _escHtml(String(sid).slice(0, 28)) + '</span>' +
+      (st ? '<span>' + _escHtml(st) + '</span>' : '') +
+      (created ? '<span>建: ' + _escHtml(fmtTime(created)) + '</span>' : '') + '</div></a>';
+  }).join('\n');
+  const emptyMsg = err ? ('拉取失败: ' + _escHtml(err)) : '该账号暂无云端对话';
+  return '<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">\n' +
+    '<title>' + _escHtml(account) + ' · 对话列表</title>\n<style>\n' +
+    '*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}\n' +
+    'body{margin:0;background:#0d1117;color:#c9d1d9;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}\n' +
+    '.top{position:sticky;top:0;background:#010409;border-bottom:1px solid #30363d;padding:12px 16px;z-index:5}\n' +
+    '.title{font-size:16px;font-weight:600;color:#fff}\n' +
+    '.sub{font-size:12px;color:#8b949e;margin-top:3px;word-break:break-all}\n' +
+    '.tb{display:flex;flex-wrap:wrap;gap:8px;padding:10px 16px;border-bottom:1px solid #30363d;align-items:center}\n' +
+    '.q{flex:1;min-width:140px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:8px 11px;font-size:13px;outline:none}\n' +
+    '.q:focus{border-color:#58a6ff}\n' +
+    '.btn{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:8px 12px;font-size:13px;cursor:pointer}\n' +
+    '.btn.pri{background:#1f6feb;border-color:#1f6feb;color:#fff}\n' +
+    '.btn:active{opacity:.7}\n' +
+    '#list{padding:10px 12px 60px;max-width:900px;margin:0 auto}\n' +
+    '.row{display:block;text-decoration:none;color:inherit;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:11px 13px;margin-bottom:9px}\n' +
+    '.row:hover{border-color:#58a6ff}\n' +
+    '.r1{display:flex;align-items:center;gap:8px}\n' +
+    '.st{width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:#6e7681}\n' +
+    '.st.running{background:#3fb950}.st.finished{background:#58a6ff}.st.blocked{background:#f0883e}.st.expired{background:#f85149}\n' +
+    '.s-title{flex:1;font-size:14px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n' +
+    '.s-meta{font-size:11px;color:#8b949e;margin-top:4px;display:flex;gap:10px;flex-wrap:wrap}\n' +
+    '.empty{text-align:center;color:#6e7681;padding:36px 14px;font-size:14px}\n' +
+    '.cnt{font-size:11px;color:#8b949e;margin-left:auto}\n' +
+    '.footer{text-align:center;color:#484f58;font-size:11px;padding:18px}\n' +
+    '</style>\n</head>\n<body data-base="' + _escHtml(base) + '">\n' +
+    '<div class="top"><div class="title">🔮 Devin · 对话列表</div>' +
+    '<div class="sub">' + _escHtml(account) + (orgName ? ' · ' + _escHtml(orgName) : '') + ' · 共 ' + sessions.length + ' 个对话</div></div>\n' +
+    '<div class="tb"><input class="q" id="q" placeholder="🔍 检索 对话名称 / ID…" autocomplete="off">' +
+    '<button class="btn" id="rf">↻ 刷新</button>' +
+    '<button class="btn pri" id="nw">＋ 新建对话</button>' +
+    '<span class="cnt" id="cnt"></span></div>\n' +
+    '<div id="list">' + (cards || '<div class="empty">' + emptyMsg + '</div>') + '</div>\n' +
+    '<div class="footer">RT Flow · 归一网页 · dao 自渲染 · 道法自然</div>\n' +
+    _sessListClientScript() +
+    '</body>\n</html>';
+}
+function _sessListClientScript() {
+  return '<scr' + 'ipt>(function(){\n' +
+    'var base=document.body.getAttribute("data-base")||"";\n' +
+    'var rows=[].slice.call(document.querySelectorAll(".row"));\n' +
+    'var q=document.getElementById("q"),cnt=document.getElementById("cnt");\n' +
+    'function flt(){var v=(q.value||"").trim().toLowerCase();var n=0;rows.forEach(function(r){var ok=!v||(r.getAttribute("data-h")||"").indexOf(v)>=0;r.style.display=ok?"":"none";if(ok)n++;});cnt.textContent=v?("命中 "+n):"";}\n' +
+    'q.addEventListener("input",flt);\n' +
+    'document.getElementById("rf").onclick=function(){location.reload();};\n' +
+    'document.getElementById("nw").onclick=function(){var p=prompt("新建对话 · 输入首条消息:");if(!p||!p.trim())return;var b=this;b.disabled=true;b.textContent="创建中…";\n' +
+    'fetch(base+"/__dao/create",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt:p})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok&&j.url){location.href=j.url;}else{alert("创建失败: "+((j&&j.error)||"未知"));b.disabled=false;b.textContent="＋ 新建对话";}}).catch(function(e){alert("创建异常: "+e);b.disabled=false;b.textContent="＋ 新建对话";});};\n' +
+    '})();</scr' + 'ipt>\n';
 }
 // 对话详情交互脚本: 思考折叠/展开 · 用户消息定位 · 全文搜索(含思考·命中自动展开)
 function _convClientScript() {
@@ -2379,6 +2466,7 @@ module.exports = {
   // v4.4.0 · 文件夹备份 (HTML/MD双视图 · 道法自然)
   buildConversationHtml,
   buildConversationMd,
+  buildSessionsListHtml,
   backupOneConversationFolder,
   backupAccountFolders,
   backupAccountFullFolders,

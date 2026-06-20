@@ -2,6 +2,20 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.38.0
+- 归一网公传「dao 自渲染」正解（Auth0 免疫·手机+电脑完全一致）：现版 Devin 官网
+  已迁 Auth0/SSO，账号密码登录只得旧 auth1 令牌、官网 SPA 已不收 → 「内嵌官网 SPA +
+  注入 auth1_session」对密码池账号根本走不通（IDE 内多实例按钮失效亦同因）。
+- `/i/<accKey>/*` 不再反代官网 SPA，改由 dao 用 auth1 调内部 REST API、服务端自渲染
+  原生页：根 `/` → 对话列表（buildSessionsListHtml·检索/刷新/新建对话）；
+  `/sessions/<id>` → 原生对话视图（getEventStream → buildConversationHtml·四类气泡/
+  思考折叠/全文搜索/用户消息定位）；`/__dao/create`(POST) → 新建对话（auth1）。
+  令牌只在服务端、绝不下发浏览器；同源前缀不变、多实例隔离不变。
+- 手机（APK 网页）与电脑（归一网页）共用同一组原生渲染件，前端/逻辑完全一致。
+- 单测 +6（buildSessionsListHtml 链接/计数/状态/空与失败/转义 + 对话视图回链），共 103/0 全绿。
+- 注：续写已有对话（sendMessage）需 Devin API Key（apk_·公开 API 不收 auth1），属平台契约
+  约束；列表/查看/新建/检索均 auth1 即可，与手机端「备管」一致。
+
 ## 3.37.0
 - 归一网页公网传输无感设备使用（道并行而不相悖）：`/shell` 经 DAO Bridge 隧道主口
   9920 暴露后，公网手机/电脑浏览器打开「Devin 对话页 / 多实例号页」iframe 不再指向

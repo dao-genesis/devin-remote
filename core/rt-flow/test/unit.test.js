@@ -391,14 +391,18 @@ function test(name, fn) {
       assert.strictEqual(_code, 502, "无 auth1 须 502");
     });
   }
-  console.log("\n[归一 · _shellResolveOpen 同源 URL + /i/ 路由 (源级·双副本)]");
-  test("rt-flow extension.js: _shellResolveOpen 返回同源 /i/<accKey>/ + 账号注册表 + 反代入口", () => {
+  console.log("\n[归一 · _shellResolveOpen 同源 URL + /i/ dao 自渲染 (源级·双副本)]");
+  test("rt-flow extension.js: _shellResolveOpen 返回同源 /i/<accKey>/ + 账号注册表 + dao 自渲染入口", () => {
     const fs = require("fs");
     const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
     assert.ok(/const base = '\/i\/' \+ _shellAccKey\(email\)/.test(src), "_shellResolveOpen 须返回同源 /i/<accKey> 而非 localhost:端口");
     assert.ok(/createHmac\('sha256', _shellAccSalt\)/.test(src), "accKey 须 HMAC 不可枚举(防公网猜测)");
-    assert.ok(/async function shellAccountProxy\(accKey, restPath, req, res\)/.test(src), "须有 /i/ 反代入口 shellAccountProxy");
-    assert.ok(/devinProxy\.proxyPrefixed\(/.test(src), "shellAccountProxy 须委托 devin_proxy 前缀模式");
+    assert.ok(/async function shellAccountProxy\(accKey, restPath, req, res\)/.test(src), "须有 /i/ 入口 shellAccountProxy");
+    // 归一架构(用户确认): /i/ 不再反代官网 SPA(Auth0 已挡), 改由 dao 用 auth1 调内部 API 服务端自渲染原生页
+    assert.ok(/devinCloud\.buildSessionsListHtml\(/.test(src), "shellAccountProxy 须 dao 自渲染对话列表(非内嵌 SPA)");
+    assert.ok(/devinCloud\.buildConversationHtml\(/.test(src), "shellAccountProxy 须 dao 自渲染对话视图");
+    assert.ok(/devinCloud\.createSession\(/.test(src), "shellAccountProxy 须支持新建对话(auth1·内部 API)");
+    assert.ok(/_shellAccRoute, \/\//.test(src), "须经 _internals 导出 _shellAccRoute(供单测)");
     assert.ok(/shellAccountProxy, \/\//.test(src), "须经 _internals 导出 shellAccountProxy");
   });
   test("dao-vsix src/extension.ts: 9920 主口 /i/<accKey>/* 路由 (dao 自有·免 token·流式)", () => {
@@ -569,6 +573,49 @@ function test(name, fn) {
     const html = cloud.buildConversationHtml("T", "devin-abc", _convEvents, {});
     assert.ok(html.includes("第一条问题ALPHA"), "首条用户消息摘要");
     assert.ok(html.includes("第二条追问GAMMA"), "次条用户消息摘要");
+  });
+  test("opts.base 注入「返回对话列表」回链 (归一·iframe 内导航回列表)", () => {
+    const noBase = cloud.buildConversationHtml("T", "devin-abc", _convEvents, {});
+    assert.ok(!/class="back"/.test(noBase), "无 base 时不加回链(备份文件场景)");
+    const withBase = cloud.buildConversationHtml("T", "devin-abc", _convEvents, { base: "/i/aKEY" });
+    assert.ok(/<a class="back" href="\/i\/aKEY\/"/.test(withBase), "有 base 时回链到 <base>/");
+  });
+
+  // ── 归一 · 账号对话列表 (dao 自渲染·Auth0 免疫·手机+电脑一致) ──────────────
+  console.log("\n[buildSessionsListHtml · 对话列表(dao 自渲染)]");
+  const _sess = [
+    { devin_id: "devin-aaa", title: "对话甲ALPHA", status: "running", created_at: 1700000000000 },
+    { session_id: "devin-bbb", name: "对话乙BETA", status_enum: "finished" },
+    { id: "devin-ccc" },
+  ];
+  test("每条对话卡片链到 <base>/sessions/<id> (同源相对前缀)", () => {
+    const html = cloud.buildSessionsListHtml("u@x.com", _sess, { base: "/i/aKEY", orgName: "OrgZ" });
+    assert.ok(html.includes('href="/i/aKEY/sessions/devin-aaa"'), "卡片1 链到 devin-aaa");
+    assert.ok(html.includes('href="/i/aKEY/sessions/devin-bbb"'), "卡片2 链到 devin-bbb(session_id)");
+    assert.ok(html.includes('href="/i/aKEY/sessions/devin-ccc"'), "卡片3 链到 devin-ccc(id 兜底)");
+  });
+  test("标题/账号/组织/计数 与状态点呈现", () => {
+    const html = cloud.buildSessionsListHtml("u@x.com", _sess, { base: "/i/aKEY", orgName: "OrgZ" });
+    assert.ok(html.includes("对话甲ALPHA") && html.includes("对话乙BETA"), "标题渲染");
+    assert.ok(html.includes("u@x.com") && html.includes("OrgZ"), "账号+组织");
+    assert.ok(html.includes("共 3 个对话"), "对话计数");
+    assert.ok(html.includes("st running") && html.includes("st finished"), "状态点分类");
+  });
+  test("顶部「新建对话」POST 到 <base>/__dao/create (auth1 内部 API)", () => {
+    const html = cloud.buildSessionsListHtml("u@x.com", _sess, { base: "/i/aKEY" });
+    assert.ok(html.includes('base+"/__dao/create"'), "新建对话 POST 同源相对接口");
+    assert.ok(html.includes("data-base=\"/i/aKEY\""), "base 经 data-base 下传脚本");
+  });
+  test("空列表 / 拉取失败 给出可读原生页(不空白)", () => {
+    const empty = cloud.buildSessionsListHtml("u@x.com", [], { base: "/i/aKEY" });
+    assert.ok(empty.includes("该账号暂无云端对话"), "空列表提示");
+    const errHtml = cloud.buildSessionsListHtml("u@x.com", [], { base: "/i/aKEY", error: "HTTP 502" });
+    assert.ok(errHtml.includes("拉取失败: HTTP 502"), "拉取失败提示");
+  });
+  test("HTML 转义防注入 (标题含 <script>)", () => {
+    const html = cloud.buildSessionsListHtml("u@x.com", [{ devin_id: "devin-x", title: "<script>alert(1)</script>" }], { base: "/i/aKEY" });
+    assert.ok(!html.includes("<script>alert(1)</script>"), "原样脚本不得进入 DOM");
+    assert.ok(html.includes("&lt;script&gt;"), "已转义");
   });
 
   // ── 前台「极速」下载档 (v4.8.6) ───────────────────────────────────────────
