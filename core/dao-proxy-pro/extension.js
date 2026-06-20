@@ -4943,21 +4943,22 @@ function getEaConfigHtml(port, nonce) {
           document.getElementById('provUrl').value = '';
           document.getElementById('provKey').value = '';
           document.getElementById('provModels').value = '';
-          // ★ 加 key 即自动探活 + 自动全量解模型 (cc-switch 风 /v1/models) → 通则变绿+模型自现
-          btnAdd.textContent = '探活中…';
-          _autoProbe().then(function() {
-            btnAdd.textContent = '解模型…';
-            // refresh=1 强制全量探测; 失败不阻断流程
-            return fJson('/origin/ea/models/' + encodeURIComponent(name) + '?refresh=1').catch(function(){ return null; });
-          }).then(function(mr) {
-            if (mr && mr.ok && mr.models && mr.models.length) _daoToast('渠道 ' + name + ' 解出 ' + mr.models.length + ' 个模型');
-            return loadConfig();
-          }).then(function() {
-            btnAdd.textContent = '+ 添加';
-            var hh = _health[name];
-            if (hh && hh.alive === true) _daoToast('渠道 ' + name + ' 已连通 · 绿');
-            else if (hh && hh.alive === false) _daoToast('渠道 ' + name + ' 探活失败 · 检查 apiKey/URL');
-          });
+          // ★ 加 key 即「先全量解模型(cc-switch 风 /v1/models) → 再探活」: 新渠道首次添加即有模型可探, 无需重启窗口
+          btnAdd.textContent = '解模型…';
+          // refresh=1 强制全量探测; 失败不阻断流程
+          fJson('/origin/ea/models/' + encodeURIComponent(name) + '?refresh=1').catch(function(){ return null; })
+            .then(function(mr) {
+              if (mr && mr.ok && mr.models && mr.models.length) _daoToast('渠道 ' + name + ' 解出 ' + mr.models.length + ' 个模型');
+              btnAdd.textContent = '探活中…';
+              return _autoProbe();
+            }).then(function() {
+              return loadConfig();
+            }).then(function() {
+              btnAdd.textContent = '+ 添加';
+              var hh = _health[name];
+              if (hh && hh.alive === true) _daoToast('渠道 ' + name + ' 已连通 · 绿');
+              else if (hh && hh.alive === false) _daoToast('渠道 ' + name + ' 探活失败 · 检查 apiKey/URL');
+            });
         } else {
           btnAdd.textContent = '+ 添加';
           _daoToast('添加失败: ' + (r.error || 'unknown'));
