@@ -1160,19 +1160,29 @@ function connectSingleRelay(wsUrl: string, relayUrl: string, sessionId: string, 
         // 动态require ws — VSIX bundle可能不包含
         const WebSocket = require('ws');
         const relayHostname = new URL(relayUrl).hostname;
-        const needsProxy = relayHostname.includes('workers.dev') || relayHostname.includes('cloudflare');
-        if (needsProxy) {
+        const isCfHost = relayHostname.includes('workers.dev') || relayHostname.includes('cloudflare');
+        // 直连兜底: 每实例独立出站连自己的 relay session (鸡犬相闻·老死不相往来)
+        // 反者道之动: 不再「无代理即放弃」——本机出网通(cloudflared 隧道已可达 CF), 故直连必通。
+        const tryDirect = () => {
+            try {
+                const socket = new WebSocket(wsUrl);
+                setupRelayHandlers(socket, relayUrl, sessionId, port, token, onFail);
+            } catch { onFail(); }
+        };
+        // workers.dev/cloudflare: 优先用本地代理(为 DNS 污染网络兜底), 但无代理/代理失败 → 直连, 绝不空手而归
+        if (isCfHost) {
+            const proxyPort = detectedProxyPort || detectProxyPort();
+            if (!proxyPort) { tryDirect(); return; }
             createProxyTunnel(relayHostname).then((tlsSocket) => {
                 if (tlsSocket) {
                     const socket = new WebSocket(wsUrl, { createConnection: () => tlsSocket });
                     setupRelayHandlers(socket, relayUrl, sessionId, port, token, onFail);
                 } else {
-                    onFail();
+                    tryDirect();
                 }
-            }).catch(() => onFail());
+            }).catch(() => tryDirect());
         } else {
-            const socket = new WebSocket(wsUrl);
-            setupRelayHandlers(socket, relayUrl, sessionId, port, token, onFail);
+            tryDirect();
         }
     } catch {
         onFail();
