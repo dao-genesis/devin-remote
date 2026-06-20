@@ -279,8 +279,8 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 <script>
 var N = window.Native || {};
 var DEVIN = "https://app.devin.ai/";
-// 版本号自同步: 引擎页启动时写 localStorage['rtflow.ver'], 此处读取 → 永不僵化
-try{ var _v=localStorage.getItem("rtflow.ver"); var _e=document.getElementById("appVer"); if(_v&&_e) _e.textContent="v"+_v; }catch(e){}
+// 版本号优先读真实 APK 版本(Native.appVer), 回退 localStorage → 升级后页脚即时刷新, 永不僵化
+try{ var _v=(N.appVer&&N.appVer())||localStorage.getItem("rtflow.ver"); var _e=document.getElementById("appVer"); if(_v&&_e){ _e.textContent="v"+_v; localStorage.setItem("rtflow.ver",_v); } }catch(e){}
 var _mode = localStorage.getItem("rtflow.mode") || "wam";
 var _convOpen = localStorage.getItem("rtflow.convOpen") !== "0";
 // ── 多选状态 (以账号 id 为准, 跨重渲染持久; 修复"打钩后自动消失"): ──

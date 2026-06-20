@@ -18,7 +18,7 @@
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
   // 版本号优先读真实 APK versionName (Native.appVer), 取不到才回退常量 → 页脚永不再僵化/落后于发版。
-  var APP_VERSION = (function(){ try{ var v = N.appVer && N.appVer(); if(v) return String(v); }catch(e){} return "0.35.6"; })();
+  var APP_VERSION = (function(){ try{ var v = N.appVer && N.appVer(); if(v) return String(v); }catch(e){} try{ var c = localStorage.getItem("rtflow.ver"); if(c) return String(c); }catch(e){} return "0.35.8"; })();
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
