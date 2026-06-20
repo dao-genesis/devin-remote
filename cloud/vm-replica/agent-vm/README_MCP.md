@@ -1,10 +1,11 @@
-# DAO Bridge MCP · 四大模块自定义 MCP（Streamable HTTP）
+# DAO Bridge MCP · 综合归一 MCP（Streamable HTTP）
 
-> 道法自然 · 无为而无不为 —— **不重造轮子**：直接复用本目录已有、已实测的多 RDP
-> 计算机控制底座（`vm_inner_agent.py` / `vm_host_daemon.py`），把它的操作面以
-> **MCP（Model Context Protocol）** 的形态对外开放，让任意 MCP 客户端
-> （Devin Cloud / Claude / Cursor / Windsurf）像操作自己的 VM 一样操作这台电脑 +
-> 二合一插件本体。
+> 道法自然 · 无为而无不为 —— **不重造轮子、不分而治之**：把原本分散的「浏览器 /
+> 软件本体 / VSCode / Windows 多 RDP」四模块自定义 MCP **整合归一为单一综合 MCP**，
+> 复用本目录已实测的计算机控制底座（`vm_inner_agent.py` / `vm_host_daemon.py`）与
+> 二合一插件本体的工作区 API，让任意 MCP 客户端（Devin Cloud / Claude / Cursor /
+> Windsurf）用同一个端点像操作自己的 VM 一样操作这台电脑 + 插件本体 + VSCode。
+> **操作浏览器即操作插件本体的一部分。**
 
 ## 是什么
 
@@ -12,18 +13,22 @@
 端点，接受 JSON-RPC 2.0 的 POST，返回 `application/json`。纯 Python 标准库，可与
 其余 agent-vm 一样用 PyInstaller 冻成单 exe。
 
-它本身不实现任何底层能力，而是把请求**代理**给已有服务：
+它本身不实现任何底层能力，而是把请求**代理**给已有服务，**一个端点暴露五大工具组**
+（共 72 个工具，`python test_mcp_http.py` 离线校验）：
 
 | 工具组 | 路由到 | 说明 |
 |---|---|---|
-| `pc_*`       | `vm_inner_agent.py` (PC_PORT) | 模块3·操作用户电脑：exec / screenshot / 鼠键 / 文件 / 窗口枚举 / `ui_tree` 元素级定位 |
-| `browser_*`  | `vm_inner_agent.py` (PC_PORT) | 模块1·浏览器：Chrome CDP launch / navigate / eval / screenshot / targets |
-| `plugin_*`   | dao-vsix 工作区服务 (DV_PORT) | 模块2·插件本体：health / exec |
-| `vscode_*`   | dao-vsix 工作区服务 (DV_PORT) | 模块4·VSCode：执行命令 |
+| `pc_*` (18)      | `vm_inner_agent.py` (PC_PORT)  | 操作用户电脑：exec / screenshot / 鼠键 / 文件 / 窗口枚举 / `ui_tree` 元素级定位 |
+| `browser_*` (5)  | `vm_inner_agent.py` (PC_PORT)  | 浏览器：Chrome CDP launch / navigate / eval / screenshot / targets |
+| `plugin_*` (11)  | dao-vsix 工作区服务 (DV_PORT)  | 插件本体/工作区：health / exec / ls / file / write / edit / search / terminal / git / tools |
+| `vscode_*` (6)   | dao-vsix 工作区服务 (DV_PORT)  | VSCode 暴露：command / commands / diagnostics / definitions / references / symbols |
+| `vm_*` (32)      | `vm_host_daemon.py` (HOST_PORT)| Windows 多 RDP：每账号隔离会话 create/attach/destroy/snapshot + 会话内整机面(与 `pc_*` 同构、带 `vm` 目标) |
 
-> **「先不用多 RDP」**：`PC_PORT` 指向跑在**交互式控制台会话**里的 inner agent，
-> 即用户的真实桌面（单一目标）。日后要做「每账号一台隔离虚机」时，把
-> `vm_host_daemon.py` 的多会话编排接回来即可，本服务的工具契约不变。
+> **归一 · 不分而治之**：`pc_*`/`browser_*` 走**交互式控制台会话**里的 inner agent
+> （用户真实桌面·单一目标）；要做「每账号一台隔离虚机」时直接用 `vm_*`
+> （`vm_host_daemon.py` 的多会话编排）。两套操作面**同构、工具契约一致**，多 RDP
+> 不再是独立 stdio MCP，而是综合 MCP 的第五个工具组。`HOST_PORT`/`HOST_TOKEN`
+> 默认从 `C:\ProgramData\dao_vm\config.json` 自动读取，无需重复配置。
 
 ## 启动
 

@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.0
+- MCP 归一化（综合 MCP）：反向注入到账号的「DAO Bridge MCP 使用文档」由「四大模块」升级为**五大模块综合归一 MCP**
+  - 配套 `cloud/vm-replica/agent-vm/mcp_http.py`：单端点整合 `pc_*`/`browser_*`/`plugin_*`/`vscode_*`/`vm_*`（Windows 多 RDP）共 72 个工具，不再分而治之
+  - `plugin_*`/`vscode_*` 由 2 个工具扩展到覆盖 dao-vsix 工作区/VSCode 全量 API（ls/file/write/edit/search/terminal/git/tools · commands/diagnostics/definitions/references/symbols）
+  - 离线校验：`python cloud/vm-replica/agent-vm/test_mcp_http.py`（目录/schema/路由/查询串/截屏图像）全过
+
 ## 3.49.0
 - 同步 rt-flow v4.25.0（vendored `rtflow/extension.js`）：归一外壳新增**浏览器分屏并排**
   - 标签右键「▣ 与当前页分屏并排」→ 两张子网页左右并排同时显示，中缝可拖拽调比例(15%~85%)；「▣ 退出分屏」复原
