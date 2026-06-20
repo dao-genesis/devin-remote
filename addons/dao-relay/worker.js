@@ -91,6 +91,28 @@ export default {
       }
     }
 
+    // 去中心化 P2P 客户端 (路线C): 任意公网设备打开 /p2p 即得 0账号直连页;
+    //   仅填 session+token 即经公共 ntfy 信令 P2P 直连手机, 全程不经本 Worker。
+    //   p2p-client.html 内相对引用 signal.js → 一并经 /signal.js 代理 raw。
+    if (path === "/p2p" || path === "/p2p-client.html" || path === "/signal.js") {
+      const file = (path === "/signal.js") ? "signal.js" : "p2p-client.html";
+      const RAW = "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/" + file;
+      try {
+        const r = await fetch(RAW, { cf: { cacheTtl: 300, cacheEverything: true } });
+        if (!r.ok) return json({ error: "p2p_fetch_failed", status: r.status }, 502);
+        const body = await r.text();
+        return new Response(body, {
+          headers: {
+            "content-type": (file === "signal.js" ? "application/javascript" : "text/html") + "; charset=utf-8",
+            "access-control-allow-origin": "*",
+            "cache-control": "public, max-age=300",
+          },
+        });
+      } catch (e) {
+        return json({ error: "p2p_unavailable", detail: String((e && e.message) || e) }, 502);
+      }
+    }
+
     // 客户端出站连 (WSS)
     if (path === "/connect") {
       if (req.headers.get("Upgrade") !== "websocket") return json({ error: "expected websocket" }, 426);

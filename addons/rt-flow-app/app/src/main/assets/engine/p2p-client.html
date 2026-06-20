@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Devin Cloud · P2P 直连客户端 (路线B · WebRTC 真打洞)</title>
+<title>Devin Cloud · P2P 直连客户端 (路线C · 0账号去中心化 WebRTC)</title>
+<script src="signal.js"></script>
 <style>
   :root{color-scheme:dark}
   body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:16px;max-width:820px}
@@ -25,13 +26,13 @@
 <body>
 <h2>🛰️ Devin Cloud · P2P 直连客户端</h2>
 <div class="muted">
-  路线B · <b>WebRTC 真打洞</b>(加法式, 不改 curl/HTTP 本源)。信令只借用一次设备公网隧道交换 SDP, 之后 RPC 走 <b>P2P DataChannel</b> —— 不再经任何边缘中转, 延迟更低、更去中心化。<br>
-  curl 控制端照常用 HTTP; 本页是「愿意升级 P2P 的客户端」参考实现, 复用同一鉴权/命令集。
+  路线C · <b>0 账号去中心化 WebRTC</b>。只需 <b>session + token</b> 即可直连 —— 信令借公共 pub/sub (ntfy 多家公开实例) 一次性交换加密 SDP, 之后 RPC 全程走 <b>P2P DataChannel</b>, <b>完全不经你的 Worker</b>。<br>
+  隧道 URL <b>可留空</b>; 仅当去中心化打洞失败时, 才用它走 Worker 兜底。curl 控制端照常 HTTP 可用。
 </div>
 
 <div class="sec-box">
-  <label>设备公网入口 (隧道 URL · 仅握手用一次)</label>
-  <input id="url" placeholder="https://xxx.trycloudflare.com 或 https://xxx.lhr.life">
+  <label>设备公网入口 (隧道 URL · 可选 · 仅去中心化失败时兜底)</label>
+  <input id="url" placeholder="可留空。兜底: https://xxx.trycloudflare.com">
   <div class="row">
     <div><label>Token</label><input id="token" placeholder="Bearer Token"></div>
     <div><label>Session</label><input id="session" placeholder="rtflow-xxxx"></div>
@@ -64,6 +65,8 @@ var STUN = [
   { urls: "stun:stun.cloudflare.com:3478" }
 ];
 var pc = null, dc = null, seq = 0, waiters = Object.create(null);
+var sig = null;   // 去中心化直连句柄 (DaoSignal.connect 返回 {pc,dc,rpc,ping,close})
+function onOpen(label){ setState(label,"#238636"); $("btnSend").disabled=false; $("btnPing").disabled=false; $("btnConnect").disabled=false; log("✓ DataChannel open — 之后 RPC 全程 P2P"); }
 function $(id){ return document.getElementById(id); }
 function log(s){ var p=$("log"); p.textContent += (typeof s==="string"?s:JSON.stringify(s,null,2)) + "\n"; p.scrollTop=p.scrollHeight; }
 function setState(t,c){ var e=$("state"); e.textContent=t; e.style.background=c||"#30363d"; }
@@ -80,15 +83,30 @@ function waitIce(pc){
 async function connect(){
   hangup();
   var url=$("url").value.trim().replace(/\/$/,""), token=$("token").value.trim(), session=$("session").value.trim();
-  if(!url||!session){ log("✗ 需要填写 隧道URL 与 session"); return; }
-  var ice=STUN.slice(), turnRaw=($("turn").value||"").trim();
-  if(turnRaw){ try{ var extra=JSON.parse(turnRaw); if(Array.isArray(extra)) ice=ice.concat(extra); }catch(e){ log("✗ TURN JSON 非法, 忽略"); } }
-  $("btnConnect").disabled=true; setState("握手中…","#9e6a03");
+  if(!session||!token){ log("✗ 去中心化直连需填 session + token (隧道URL 可留空)"); return; }
+  var ice=STUN.slice(), extraIce=[], turnRaw=($("turn").value||"").trim();
+  if(turnRaw){ try{ var extra=JSON.parse(turnRaw); if(Array.isArray(extra)){ ice=ice.concat(extra); extraIce=extra; } }catch(e){ log("✗ TURN JSON 非法, 忽略"); } }
+  $("btnConnect").disabled=true;
+
+  // ── 路线C 优先: 0账号·去中心化信令 (公共 ntfy, 不经 Worker) ──
+  if(window.DaoSignal && DaoSignal.available()){
+    setState("去中心化握手中…","#9e6a03");
+    log("→ 路线C: 公共信令(ntfy)交换加密 SDP, 0账号不经 Worker…");
+    try{
+      sig = await DaoSignal.connect({ session:session, token:token, ice:extraIce, timeout:13000 });
+      onOpen("P2P 直连 🟢 (去中心化·0账号)");
+      return;
+    }catch(e){ log("• 去中心化未通 ("+String((e&&e.message)||e)+")"+(url?", 尝试 Worker 兜底…":"")); try{ if(sig) sig.close(); }catch(_){ } sig=null; }
+  } else { log("• 本环境无 WebCrypto, 跳过去中心化"+(url?", 用 Worker 兜底":"")); }
+
+  // ── 兜底: Worker 隧道信令 (原路径) ──
+  if(!url){ log("✗ 去中心化未通且未填隧道URL, 无法兜底"); setState("失败","#da3633"); $("btnConnect").disabled=false; return; }
+  setState("Worker兜底握手中…","#9e6a03");
   try{
     pc = new RTCPeerConnection({ iceServers: ice });
     dc = pc.createDataChannel("rpc");
     dc.binaryType="arraybuffer";
-    dc.onopen=function(){ setState("P2P 已直连 🟢","#238636"); $("btnSend").disabled=false; $("btnPing").disabled=false; log("✓ DataChannel open — 之后 RPC 全程 P2P, 不经隧道"); };
+    dc.onopen=function(){ onOpen("P2P 已直连 🟢 (Worker兜底信令)"); };
     dc.onclose=function(){ setState("通道关闭","#30363d"); $("btnSend").disabled=true; $("btnPing").disabled=true; };
     dc.onmessage=function(ev){
       var m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
@@ -125,7 +143,7 @@ async function sendRpc(){
   var body=Object.assign({cmd:cmd}, argsObj);
   var t0=performance.now();
   try{
-    var result = await rpcRaw({ path:"/api/rpc", method:"POST", body:body });
+    var result = sig ? await sig.rpc({ path:"/api/rpc", method:"POST", body:body }) : await rpcRaw({ path:"/api/rpc", method:"POST", body:body });
     var dt=(performance.now()-t0).toFixed(0);
     var r; try{ r=JSON.parse(result); }catch(e){ r=result; }
     var out=r; try{ if(r&&r.bodyText) out=JSON.parse(r.bodyText); }catch(e){}
@@ -133,8 +151,8 @@ async function sendRpc(){
   }catch(e){ log("✗ "+cmd+": "+String((e&&e.message)||e)); }
 }
 function ping(){ return new Promise(function(resolve,reject){ var id="p"+(++seq); waiters[id]={resolve:resolve,reject:reject}; var t0=performance.now(); dc.send(JSON.stringify({t:"ping",id:id})); waiters[id].resolve=function(){ resolve(performance.now()-t0); }; setTimeout(function(){ if(waiters[id]){delete waiters[id]; reject(new Error("to")); } },5000); }); }
-async function pingLoop(){ for(var i=0;i<5;i++){ try{ var ms=await ping(); log("ping#"+(i+1)+" = "+ms.toFixed(1)+"ms (P2P RTT)"); }catch(e){ log("ping#"+(i+1)+" timeout"); } } }
-function hangup(){ try{ if(dc) dc.close(); }catch(e){} try{ if(pc) pc.close(); }catch(e){} dc=null; pc=null; $("btnSend").disabled=true; $("btnPing").disabled=true; setState("未连接","#30363d"); }
+async function pingLoop(){ for(var i=0;i<5;i++){ try{ var ms=await (sig?sig.ping():ping()); log("ping#"+(i+1)+" = "+ms.toFixed(1)+"ms (P2P RTT)"); }catch(e){ log("ping#"+(i+1)+" timeout"); } } }
+function hangup(){ try{ if(sig) sig.close(); }catch(e){} sig=null; try{ if(dc) dc.close(); }catch(e){} try{ if(pc) pc.close(); }catch(e){} dc=null; pc=null; $("btnSend").disabled=true; $("btnPing").disabled=true; setState("未连接","#30363d"); }
 </script>
 </body>
 </html>

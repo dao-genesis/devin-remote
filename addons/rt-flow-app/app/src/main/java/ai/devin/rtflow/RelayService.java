@@ -29,6 +29,7 @@ import java.nio.charset.StandardCharsets;
  */
 public class RelayService extends Service {
     public static final String CH = "rtflow-relay";
+    public static final String CONV_CH = "rtflow-conv";   // 对话追踪·全局通知频道 (高优先, 可锁屏/后台弹)
     public static volatile String lastStatus = "{\"connected\":false}";
     public static volatile RelayService instance;
 
@@ -1064,6 +1065,10 @@ public class RelayService extends Service {
         @JavascriptInterface public String vaultLoad(String key) { return key == null ? "" : vaultRead(key); }
         @JavascriptInterface public void reload() { main.post(() -> { if (engine != null) engine.reload(); }); }
         @JavascriptInterface public void log(String s) { android.util.Log.i("RTFlowEngine", s == null ? "" : s); }
+        /** 对话追踪·全局系统通知 (引擎后台检测到会话卡住/待处理/结束时调用; 软件被切后台/锁屏亦可弹)。 */
+        @JavascriptInterface public void notifyGlobal(String tag, String title, String text) {
+            main.post(() -> postConvNotification(tag, title, text));
+        }
         /** 原生 HTTP (无 CORS, 可设 Origin/Referer) — 登录/额度/会话/Git 的底座; 结果经 window.__httpCb 回灌。 */
         @JavascriptInterface public void httpReq(String reqId, String method, String url, String headersJson, String body) {
             HttpBridge.exec(reqId, method, url, headersJson, body, (id, json) ->
@@ -1547,6 +1552,35 @@ public class RelayService extends Service {
                 .setOngoing(true)
                 .setContentIntent(pi)
                 .build();
+    }
+
+    /**
+     * 对话追踪·全局系统通知 (引擎检测到会话卡住/待处理/结束时调用)。
+     * 与常驻穿透通知分属不同频道: 高优先级、可弹出、点按拉起 App。tag 决定通知 id (同会话更新而非刷屏)。
+     */
+    public void postConvNotification(String tag, String title, String text) {
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            if (Build.VERSION.SDK_INT >= 26) {
+                NotificationChannel ch = new NotificationChannel(CONV_CH, "对话追踪提醒", NotificationManager.IMPORTANCE_HIGH);
+                ch.setShowBadge(true);
+                ch.enableVibration(true);
+                nm.createNotificationChannel(ch);
+            }
+            PendingIntent pi = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class),
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            Notification.Builder b = (Build.VERSION.SDK_INT >= 26) ? new Notification.Builder(this, CONV_CH) : new Notification.Builder(this);
+            b.setContentTitle(title == null ? "Devin 对话提醒" : title)
+                    .setContentText(text == null ? "" : text)
+                    .setStyle(new Notification.BigTextStyle().bigText(text == null ? "" : text))
+                    .setSmallIcon(android.R.drawable.stat_notify_chat)
+                    .setAutoCancel(true)
+                    .setContentIntent(pi);
+            if (Build.VERSION.SDK_INT < 26) b.setPriority(Notification.PRIORITY_HIGH);
+            int id = 0x7000_0000 | ((tag == null ? "" : tag).hashCode() & 0x0FFF_FFFF);
+            nm.notify(id, b.build());
+        } catch (Exception e) { android.util.Log.w("RTFlowEngine", "postConvNotification err " + e); }
     }
 
     private String readAsset(String path) {
