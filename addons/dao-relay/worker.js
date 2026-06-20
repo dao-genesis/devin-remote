@@ -122,8 +122,8 @@ export default {
       if (!t) return json({ error: "token required" }, 401);
       if (!sharedTokenOk(env, t)) return json({ error: "unauthorized" }, 401);
       // 按 (session,token) 配对定址 —— 客户端用自己的随机 token 即占用该命名空间。
-      const id = env.RELAY.idFromName(relayKey(session, t));
-      return env.RELAY.get(id).fetch(req);
+      const id = env.DAO_RELAY.idFromName(relayKey(session, t));
+      return env.DAO_RELAY.get(id).fetch(req);
     }
 
     // 公网入站驱动
@@ -135,8 +135,8 @@ export default {
       const session = decodeURIComponent(path.slice("/relay/".length));
       if (!session) return json({ error: "session required" }, 400);
       // 必须 session+token 都与已连接客户端一致才命中其 DO; 否则落到空实例 → no_agent。
-      const id = env.RELAY.idFromName(relayKey(session, t));
-      return env.RELAY.get(id).fetch(req);
+      const id = env.DAO_RELAY.idFromName(relayKey(session, t));
+      return env.DAO_RELAY.get(id).fetch(req);
     }
 
     return json({ error: "not_found", path }, 404);
@@ -157,7 +157,7 @@ export default {
 //   注: this.pending/this.seq 仍是内存态, 但每个公网请求在 fetch() 里 `await` 直到回包/60s 超时,
 //   该 await 会把实例**钉在内存**直到本请求完结 → 配对的 pending 项必在同一活跃期创建并 resolve,
 //   不受 hibernation 驱逐影响(驱逐只发生在「无在途请求」的空闲期)。
-export class RelayDO {
+export class DaoRelayDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;
