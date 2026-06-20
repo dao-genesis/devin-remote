@@ -473,7 +473,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
   </div>
   <div id="tabs"></div>
   <div id="body">
-    <div id="hint"><div class="big">🌐</div><div>归一面板 · 一个外壳多子网页(对齐手机 APK)<br>点 ☰ 选六大板块：🏠主页 / 🔀切号 / 🌐公网穿透 / 💬对话备份 / 💉反向注入 / 🧩MCP，或新建 Devin 标签<br>六大板块与多实例账号页同级并排 · 平级切换 · 各登各号互不串号</div></div>
+    <div id="hint"><div class="big">🌐</div><div>归一面板 · 一个外壳多子网页(对齐手机 APK)<br>点 ☰ 选六大板块：🏠主页 / 🔀切号 / 🌐公网穿透 / 💬对话备份 / 💉反向注入 / 🧩MCP，或新建 Devin 标签<br>六大板块分而治之 · 各开一张独立子网页(网页套网页) · 与多实例账号页同级并排 · 各登各号互不串号</div></div>
     <div id="stack"></div>
     <div class="spin" id="spin"><span class="ld"></span>加载中…</div>
     <div id="drop">松开以拖入文件到当前窗口</div>
@@ -485,8 +485,13 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 (function(){
 var vscode=acquireVsCodeApi();
 var tabs={},order=[],active=null,favs=[],history=[],accounts=[],bridge=null;
-var BOARD_ID='__board__',_boardFrame=null,_boardReady=false,_boardMounted=false,_boardReq=false,_boardPending=null,_boardUrl='';
-function isBoard(){return active===BOARD_ID;}
+// 归一·分而治之: 六大板块各开一张独立子网页(各自一个 iframe), 不再共用一个全功能面板。
+// BOARDS[tab] = {req,mounted,ready,frame,url}; 外壳标签 id = 'board:'+tab。
+var BOARDS={};
+var BOARD_META={overview:['🏠','主页'],switch:['🔀','切号'],bridge:['🌐','公网穿透'],backups:['💬','对话备份'],inject:['💉','反向注入'],mcp:['🧩','MCP']};
+function boardId(tab){return 'board:'+tab;}
+function isBoard(){return !!active&&active.indexOf('board:')===0;}
+function activeBoardTab(){return isBoard()?active.slice(6):'';}
 var S=document.getElementById('stack'),BAR=document.getElementById('tabs'),HINT=document.getElementById('hint');
 var ADDR=document.getElementById('addr'),ENG=document.getElementById('eng'),ZL=document.getElementById('zlbl'),SPIN=document.getElementById('spin');
 var MENU=document.getElementById('menu'),OV=document.getElementById('ov'),OVB=document.getElementById('ovBody'),OVT=document.getElementById('ovTi'),DROP=document.getElementById('drop');
@@ -499,7 +504,7 @@ function setActive(id){active=id;for(var k in tabs){var on=(k===id);tabs[k].fram
 function cycleTab(dir){if(!order.length)return;var i=order.indexOf(active);if(i<0)i=0;var n=(i+dir+order.length)%order.length;setActive(order[n]);var b=tabs[order[n]];if(b&&b.btn&&b.btn.scrollIntoView){try{b.btn.scrollIntoView({inline:'center',block:'nearest'});}catch(e){}}}
 function applyZoom(t){var z=t.zoom||1;t.frame.style.transformOrigin='0 0';t.frame.style.transform='scale('+z+')';t.frame.style.width=(100/z)+'%';t.frame.style.height=(100/z)+'%';}
 function spin(on){SPIN.className='spin'+(on?' on':'');}
-function closeTab(id){var t=tabs[id];if(!t)return;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];order=order.filter(function(x){return x!==id;});if(id===BOARD_ID){_boardMounted=false;_boardReady=false;_boardReq=false;_boardFrame=null;_boardPending=null;}else{vscode.postMessage({type:'closed',id:id});}if(active===id){active=null;if(order.length)setActive(order[order.length-1]);}sync();}
+function closeTab(id){var t=tabs[id];if(!t)return;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];order=order.filter(function(x){return x!==id;});if(id.indexOf('board:')===0){var _bt=id.slice(6);var _b=BOARDS[_bt];if(_b){if(_b.url){try{URL.revokeObjectURL(_b.url)}catch(e){}}delete BOARDS[_bt];}}else{vscode.postMessage({type:'closed',id:id});}if(active===id){active=null;if(order.length)setActive(order[order.length-1]);}sync();}
 function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[id].url=m.url;tabs[id].frame.setAttribute('src',m.url);}setActive(id);return;}
   var btn=document.createElement('div');btn.className='tab';
   var dot=document.createElement('span');dot.className='dot'+(m.status?(' '+m.status):'');btn.appendChild(dot);
@@ -528,30 +533,33 @@ function toggleMenu(){MENU.className=MENU.className?'':'on';}
 function onPage(p,l){if(p&&p.indexOf('board:')===0){openBoard(p.slice(6));return;}
   if(p==='newDevin'){vscode.postMessage({type:'newDevinTab'});return;}
   if(p==='history')showHistory();else if(p==='favs')showFavs();else if(p==='userscripts')showUserscripts();else if(p==='tools')showTools();else if(p==='about')showAbout();}
-// 归一 · 六大板块 = 与多实例账号页同级的子网页。把「全功能面板」整页用 blob-iframe 挂进 #stack 当一个标签,
-// 点不同板块即向其 postMessage gotoTab 切到对应板块(主页/切号/穿透/备份/反向注入/MCP)。复用面板逻辑·零重写。
-function openBoard(tab){tab=tab||'overview';
-  if(_boardMounted){setActive(BOARD_ID);_boardGoto(tab);return;}
-  _boardPending=tab;if(!_boardReq){_boardReq=true;spin(true);vscode.postMessage({type:'cloudInit'});}}
-function _boardGoto(tab){if(_boardFrame&&_boardFrame.contentWindow){try{_boardFrame.contentWindow.postMessage({type:'gotoTab',tab:tab},'*');}catch(e){}}}
-function _boardHost(msg){if(_boardFrame&&_boardFrame.contentWindow){try{_boardFrame.contentWindow.postMessage(msg,'*');}catch(e){}}}
-function mountBoard(html){var SHIM='<scr'+'ipt>(function(){var _s={};window.acquireVsCodeApi=function(){return{postMessage:function(m){try{parent.postMessage({__cwRelay:m},"*")}catch(e){}},getState:function(){return _s},setState:function(s){_s=s;return s}}};})();<\/scr'+'ipt>';
+// 归一·分而治之 · 六大板块 = 与多实例账号页同级的独立子网页(各板块各自一张 iframe·网页套网页)。
+// 点某板块 → 若已挂载则切到该标签, 否则向宿主取该板块的「单板块」HTML(隐藏导航·只渲染该板块)挂一张新子网页。
+// 宿主单一面板状态共享, cloudHost 数据广播到所有板块帧, 各帧只渲染自己的板块 → 复用面板逻辑·零重写。
+function openBoard(tab){tab=tab||'overview';var id=boardId(tab);var b=BOARDS[tab];
+  if(b&&b.mounted){setActive(id);return;}
+  if(!b){b=BOARDS[tab]={req:false,mounted:false,ready:false,frame:null,url:''};}
+  if(!b.req){b.req=true;spin(true);vscode.postMessage({type:'cloudInit',board:tab});}}
+function _boardHostAll(msg){for(var k in BOARDS){var b=BOARDS[k];if(b&&b.frame&&b.frame.contentWindow){try{b.frame.contentWindow.postMessage(msg,'*');}catch(e){}}}}
+function mountBoardSolo(html,tab){tab=tab||'overview';var id=boardId(tab);var b=BOARDS[tab]||(BOARDS[tab]={req:false,mounted:false,ready:false,frame:null,url:''});
+  var SHIM='<scr'+'ipt>(function(){var _s={};window.acquireVsCodeApi=function(){return{postMessage:function(m){try{parent.postMessage({__cwRelay:m,__board:"'+tab+'"},"*")}catch(e){}},getState:function(){return _s},setState:function(s){_s=s;return s}}};})();<\/scr'+'ipt>';
   var doc=/<head[^>]*>/i.test(html)?html.replace(/<head([^>]*)>/i,'<head$1>'+SHIM):SHIM+html;
-  if(!tabs[BOARD_ID]){
+  if(!tabs[id]){
+    var meta=BOARD_META[tab]||['🎛',tab];
     var btn=document.createElement('div');btn.className='tab';
-    var lb=document.createElement('span');lb.className='lbl';lb.textContent='🎛 六大板块';btn.appendChild(lb);
+    var lb=document.createElement('span');lb.className='lbl';lb.textContent=meta[0]+' '+meta[1];btn.appendChild(lb);
     var x=document.createElement('span');x.className='x';x.textContent='×';
-    btn.onclick=function(e){if(e.target===x)return;setActive(BOARD_ID);};
-    x.onclick=function(e){e.stopPropagation();closeTab(BOARD_ID);};btn.appendChild(x);
+    btn.onclick=function(e){if(e.target===x)return;setActive(id);};
+    x.onclick=function(e){e.stopPropagation();closeTab(id);};btn.appendChild(x);
     BAR.appendChild(btn);
-    var fr=document.createElement('iframe');fr.id='__boardFrame';fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.cssText='width:100%;height:100%;border:none;background:#1e1e1e;display:none';
-    fr.addEventListener('load',function(){_boardReady=true;spin(false);vscode.postMessage({type:'cloudReady'});if(_boardPending){_boardGoto(_boardPending);_boardPending=null;}});
-    S.appendChild(fr);_boardFrame=fr;
-    tabs[BOARD_ID]={btn:btn,frame:fr,url:'',zoom:1,meta:{board:true}};order.push(BOARD_ID);
+    var fr=document.createElement('iframe');fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.cssText='width:100%;height:100%;border:none;background:#1e1e1e;display:none';
+    fr.addEventListener('load',function(){b.ready=true;spin(false);vscode.postMessage({type:'cloudReady',board:tab});});
+    S.appendChild(fr);b.frame=fr;
+    tabs[id]={btn:btn,frame:fr,url:'',zoom:1,meta:{board:tab}};order.push(id);
   }
-  _boardReady=false;
-  try{var blob=new Blob([doc],{type:'text/html'});var url=URL.createObjectURL(blob);_boardFrame.removeAttribute('srcdoc');_boardFrame.src=url;if(_boardUrl){try{URL.revokeObjectURL(_boardUrl)}catch(e){}}_boardUrl=url;}catch(e){_boardFrame.srcdoc=doc;}
-  _boardMounted=true;setActive(BOARD_ID);sync();}
+  b.ready=false;
+  try{var blob=new Blob([doc],{type:'text/html'});var url=URL.createObjectURL(blob);b.frame.removeAttribute('srcdoc');b.frame.src=url;if(b.url){try{URL.revokeObjectURL(b.url)}catch(e){}}b.url=url;}catch(e){b.frame.srcdoc=doc;}
+  b.mounted=true;b.req=false;setActive(id);sync();}
 function showOverlay(title,html){OVT.textContent=title;OVB.innerHTML=html;OV.className='on';}
 function hideOverlay(){OV.className='';}
 function bindOpen(){var ob=OVB.querySelectorAll('[data-u]');for(var i=0;i<ob.length;i++){ob[i].onclick=function(){navigate(this.getAttribute('data-u'));hideOverlay();};}}
@@ -602,8 +610,8 @@ function renderDownloads(){if(!_bkTree){showOverlay('⬇ 下载','<div class="em
 document.getElementById('bDl').onclick=function(){showDownloads();};
 document.getElementById('bBk').onclick=function(){showBkLib();};
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
-document.getElementById('bRefresh').onclick=function(){if(isBoard()){closeTab(BOARD_ID);openBoard('overview');return;}var t=tabs[active];if(t){spin(true);t.frame.setAttribute('src',t.url);}};
-document.getElementById('bHome').onclick=function(){if(isBoard()){_boardGoto('overview');return;}var t=tabs[active];if(t){var u=curOrigin()+'/';t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}};
+document.getElementById('bRefresh').onclick=function(){if(isBoard()){var bt=activeBoardTab();closeTab(boardId(bt));openBoard(bt);return;}var t=tabs[active];if(t){spin(true);t.frame.setAttribute('src',t.url);}};
+document.getElementById('bHome').onclick=function(){if(isBoard()){openBoard('overview');return;}var t=tabs[active];if(t){var u=curOrigin()+'/';t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}};
 document.getElementById('bZi').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.min(3,(t.zoom||1)+0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 document.getElementById('bZo').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.max(0.3,(t.zoom||1)-0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 ZL.onclick=function(){var t=tabs[active];if(t){t.zoom=1;applyZoom(t);ZL.textContent='100%';}};
@@ -619,15 +627,15 @@ window.addEventListener('dragover',function(e){e.preventDefault();DROP.className
 window.addEventListener('dragleave',function(e){if(e.relatedTarget===null||e.relatedTarget===document.documentElement)DROP.className='';});
 window.addEventListener('drop',function(e){e.preventDefault();DROP.className='';var uris='';try{uris=e.dataTransfer.getData('text/uri-list')||e.dataTransfer.getData('text/plain')||'';}catch(x){}var names=[];try{if(e.dataTransfer.files)for(var i=0;i<e.dataTransfer.files.length;i++)names.push(e.dataTransfer.files[i].name);}catch(x){}vscode.postMessage({type:'filesDropped',uris:uris,names:names});});
 window.addEventListener('message',function(ev){var m=ev.data||{};
-  if(m.__cwRelay){vscode.postMessage({type:'cloudRelay',msg:m.__cwRelay});return;}
+  if(m.__cwRelay){vscode.postMessage({type:'cloudRelay',msg:m.__cwRelay,board:m.__board||''});return;}
   if(m.type==='open'){mkTab(m);}
   else if(m.type==='closeAll'){var ks=order.slice();for(var i=0;i<ks.length;i++)closeTab(ks[i]);vscode.postMessage({type:'closeAllAck'});}
   else if(m.type==='favs'){favs=m.list||[];if(OV.className&&OVT.textContent.indexOf('书签')>=0)showFavs();}
   else if(m.type==='history'){history=m.list||history;if(OV.className&&OVT.textContent.indexOf('历史')>=0)showHistory();}
   else if(m.type==='accounts'){accounts=m.list||[];}
   else if(m.type==='bridgeState'){bridge=m.data||null;}
-  else if(m.type==='cloudInitHtml'){_boardReq=false;mountBoard(m.html||'');}
-  else if(m.type==='cloudHost'){_boardHost(m.msg||{});}
+  else if(m.type==='cloudInitHtml'){mountBoardSolo(m.html||'',m.board||'overview');}
+  else if(m.type==='cloudHost'){_boardHostAll(m.msg||{});}
   else if(m.type==='shellBackupsData'){_bkTree=m.tree||{root:'',accounts:[]};if(OV.className){if(_bkMode==='dl')renderDownloads();else if(_bkMode==='bk')renderBkLib();}}
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}});
 buildMenu();
@@ -822,8 +830,8 @@ async function shellHandleMessage(sid, m) {
         if (!_cloudProvider) { _toast('六大板块面板未就绪'); return; }
         try { _cloudProvider.setHostPost((mm) => { _shellBroadcast({ type: 'cloudHost', msg: mm }); }); } catch (e) {}
         let html = '';
-        try { html = _cloudProvider.buildHtml() || ''; } catch (e) {}
-        send({ type: 'cloudInitHtml', html });
+        try { html = _cloudProvider.buildHtml(m.board) || ''; } catch (e) {}
+        send({ type: 'cloudInitHtml', html, board: m.board || 'overview' });
         return;
       }
       case 'cloudReady': try { _cloudProvider && _cloudProvider.refresh(); } catch (e) {} return;
@@ -980,8 +988,8 @@ function _wireMultiPanel(panel) {
         if (!_cloudProvider) { _toast("六大板块面板未就绪"); return; }
         try { _cloudProvider.setHostPost((mm) => { try { panel.webview.postMessage({ type: "cloudHost", msg: mm }); } catch (e) {} }); } catch (e) {}
         let html = "";
-        try { html = _cloudProvider.buildHtml() || ""; } catch (e) {}
-        try { panel.webview.postMessage({ type: "cloudInitHtml", html: html }); } catch (e) {}
+        try { html = _cloudProvider.buildHtml(m.board) || ""; } catch (e) {}
+        try { panel.webview.postMessage({ type: "cloudInitHtml", html: html, board: m.board || "overview" }); } catch (e) {}
         return;
       }
       // 子网页 iframe 载毕 → 推送初始数据 (init/auth/bridge…)
