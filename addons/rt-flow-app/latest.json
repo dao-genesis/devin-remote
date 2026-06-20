@@ -1,6 +1,6 @@
 {
-  "versionCode": 99,
-  "versionName": "0.35.6",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.6/DevinCloud-mobile-v0.35.6.apk",
-  "notes": "v0.35.6 · 网页控台与 APK 原生界面 1:1 归一: /console 现逐件复刻手机原生外壳——两行工具栏(≡菜单/地址/译/→ 与 🔍缩放滑块/★收藏/↻重载/📥下载/🗂全服通)、完整汉堡菜单(模块/页面工具/分享/镜像·连接, 全部项与子分组同序同名)、以及『下载』与『全服通』两个可拖动悬浮窗。📥 下载窗 1:1 呈现手机下载列表并可在手机本机分享/打开/删除(本版新增 listDownloads/downloadAction 桥, 仅外发文件名/大小, 不含路径); 🗂 全服通窗实时镜像手机内真实『近期对话/备份』页, 可反向点按。客户端 RPC 串行化, 杜绝多镜像并发把手机打到超时。橙色 ☁N 跨设备在场仍双向一致。网页外壳无需重装即生效(中继自动取最新); 升级到本版后网页 📥 下载列表方可读取。"
+  "versionCode": 100,
+  "versionName": "0.35.7",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.7/DevinCloud-mobile-v0.35.7.apk",
+  "notes": "v0.35.7 · 把近期合入 main 的全部改进打包发版(此前停在 0.35.6 的安装包未含这些)。\n• 整页翻译穿透 Shadow DOM: 现代 SPA/主页(正文在 shadow root 里)『译』按钮终于生效, 含嵌套 shadow 与动态增量补译; 再点一次全部还原原文。\n• 浏览跳转提速: 标签持久化的外存写盘移出主线程+防抖合并, 翻页/SPA 路由切换不再卡顿; 冷启动后台普通网页标签懒加载(选中才载, 一次只载一个), 启动更跟手。\n• ☰ 新增『检查更新 · v当前版本』手动入口: 有新版弹确认框一键下载安装, 已最新则提示当前版本; 版本号改读真实 APK 版本, 页脚永不再僵化。\n• 网页控台 /shell 补回『切换 电脑版/手机版』(经 ?m 重载)。\n更新经 latest.json 多镜像(GitHub raw + jsDelivr/Fastly/Statically + ghproxy)轮询下发, 国内外均可达; 安装包与历史版本同签名, 可直接覆盖升级。"
 }
