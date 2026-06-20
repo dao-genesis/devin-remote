@@ -745,7 +745,7 @@ var tabs={},order=[],active=null,favs=[],history=[],accounts=[],bridge=null,user
 // 归一·分而治之: 六大板块各开一张独立子网页(各自一个 iframe), 不再共用一个全功能面板。
 // BOARDS[tab] = {req,mounted,ready,frame,url}; 外壳标签 id = 'board:'+tab。
 var BOARDS={};
-var BOARD_META={home:['🏠','主页·六合一'],overview:['🏠','主页'],switch:['🔀','切号'],bridge:['🌐','公网穿透'],backups:['💬','对话备份'],inject:['💉','反向注入'],mcp:['🧩','MCP']};
+var BOARD_META={home:['🏠','主页·六合一'],overview:['🏠','主页'],switch:['🔀','切号'],bridge:['🌐','公网穿透'],backups:['💬','对话备份'],inject:['💉','反向注入'],mcp:['🧩','MCP'],computer:['🖥️','操作电脑']};
 function boardId(tab){return 'board:'+tab;}
 function isBoard(){return !!active&&active.indexOf('board:')===0;}
 function activeBoardTab(){return isBoard()?active.slice(6):'';}
@@ -796,7 +796,7 @@ function navigate(v){v=(v||'').trim();if(!v)return;if(isBoard()){if(/^https?:\\/
   if(v.charAt(0)==='/'){if(t){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}return;}
   vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v)});}
 // 归一 · 设备类型自动识别 (UA / ?m=1·见 _multiShellHtml MOBILE 注入) — 移除手动「切换 电脑版/手机版」(点击会重载致整体失效)。
-var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🔌','用户脚本 / 扩展','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
+var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['🖥️','操作电脑本体','board:computer'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🔌','用户脚本 / 扩展','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
 function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'" data-l="'+esc(PAGES[i][1])+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
   var items=MENU.querySelectorAll('.mi');for(var j=0;j<items.length;j++){items[j].onclick=function(){MENU.className='';onPage(this.getAttribute('data-p'),this.getAttribute('data-l'));};}}
 function toggleMenu(){MENU.className=MENU.className?'':'on';}

@@ -11,6 +11,7 @@ import * as net from 'net';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as childProcess from 'child_process';
 import * as vscode from 'vscode';
 
 // ═══════════════════════════════════════════════════════════
@@ -2950,7 +2951,7 @@ function getDaoCloudMiddlePanelHtml(st: any, soloBoard?: string): string {
     const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, injecting, bridge, hostCaps } = st;
     // 归一·分而治之: 单板块模式 — 归一外壳为「六大板块」各开一张独立子网页(各自一个 iframe),
     // 每张只锁定渲染一个板块并隐藏左侧导航条 → 板块不再挤在一个全功能面板里, 真正网页套网页·平级并排。
-    const _solo = ['overview', 'switch', 'bridge', 'backups', 'inject', 'mcp'].includes(soloBoard || '') ? (soloBoard as string) : '';
+    const _solo = ['overview', 'switch', 'bridge', 'backups', 'inject', 'mcp', 'computer'].includes(soloBoard || '') ? (soloBoard as string) : '';
     // 帛书·「道生一，一生二，二生三，三生万物」
     // Overview: Codeium API 数据（已工作 — devin-session-token$ 对 Codeium API 有效）
     // Sessions/Knowledge/Secrets/Integrations: simpleBrowser 打开 app.devin.ai（共享 Electron session）
@@ -3046,6 +3047,7 @@ body.solo .sb{display:none}
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 全账号批量(Knowledge/Playbook/Secret/MCP/自动化/蓝图 一处整合)">💉</div>
 <!-- ② 收腰归一: 单账号 K/P/S/Git/自动化/蓝图 均并入主页(overview); 全账号批量在反向注入(inject); MCP 仍保留专用面板 -->
 <div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器 · 专用面板">🧩</div>
+<div class="ni" data-tab="computer" onclick="sw('computer')" title="操作电脑本体 · 本机命令/文件/终端(把整个软件当浏览器供 MCP 操作)">🖥️</div>
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
 </nav>
@@ -3065,6 +3067,7 @@ body.solo .sb{display:none}
 <div class="tv" id="v-mcp"></div>
 <div class="tv" id="v-bridge"></div>
 <div class="tv" id="v-inject"></div>
+<div class="tv" id="v-computer"></div>
 </div>
 <div class="ft" id="ft">
 <span><span class="dot off" id="ds"></span> Server</span>
@@ -3128,6 +3131,7 @@ function sw(t){
   if(t==='switch'){ if(!S._wamReady){ var _sv=document.getElementById('v-switch'); if(_sv&&!document.getElementById('wamFrame'))_sv.innerHTML='<div class="empty"><div class="ic">🔀</div><p style="color:var(--muted)">加载切号面板…</p></div>'; cmd('wamInit'); } return; }
   if(t==='bridge'){ rBridgeFull(); return; }
   if(t==='backups'){ rBackups(); return; }
+  if(t==='computer'){ rComputer(); return; }
   if(t!=='overview'&&S.auth.loggedIn){
     const v=document.getElementById('v-'+t);
     if(v&&!v.dataset.loaded){
@@ -3150,7 +3154,7 @@ function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull()}
 // (该占位故意不标记 loaded) — 此处自动重载, 拉取真实数据, 用户无需再次点击。
 function reloadActiveDataTab(){
   var t=S.tab;
-  if(t==='overview'||t==='bridge'||t==='inject'||t==='switch'||t==='backups')return;
+  if(t==='overview'||t==='bridge'||t==='inject'||t==='switch'||t==='backups'||t==='computer')return;
   if(!S.auth.loggedIn||!S.auth.canUseApi)return;
   var v=document.getElementById('v-'+t);
   if(!v||v.dataset.loaded)return;
@@ -3158,6 +3162,40 @@ function reloadActiveDataTab(){
   var ic=({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[t])||'🌐';
   v.innerHTML='<div class="empty"><div class="ic">'+ic+'</div><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
   cmd('loadTabData',{tab:t});
+}
+// 操作电脑本体 · 把整个软件/IDE 当浏览器供 MCP/用户直接操作本机: 命令/文件/终端/系统打开。
+// (对照手机端 Shizuku/无障碍「操作整机」, 电脑端经 VSCode 扩展宿主直接驱动本机)
+function rComputer(){
+  var v=document.getElementById('v-computer');if(!v)return;
+  if(!v.dataset.init){ v.dataset.init='1'; cmd('compInfo'); }
+  var info=S.comp&&S.comp.info;
+  var infoHtml = info
+    ? ('<div class="card"><div class="cr"><span class="l">主机</span><span class="v">'+esc(info.host||'')+' · '+esc(info.platform||'')+' '+esc(info.arch||'')+'</span></div>'
+        +'<div class="cr"><span class="l">用户</span><span class="v">'+esc(info.user||'')+'</span></div>'
+        +'<div class="cr"><span class="l">工作目录(cwd)</span><span class="v">'+esc(info.cwd||'')+'</span></div>'
+        +'<div class="cr"><span class="l">工作区</span><span class="v">'+esc((info.folders||[]).join(' · ')||'(无)')+'</span></div></div>')
+    : '<div class="empty"><div class="ic">🖥️</div><p style="color:var(--muted)">读取本机信息…</p></div>';
+  var last=S.comp&&S.comp.last;
+  var outHtml = last
+    ? ('<div class="card"><div class="cr"><span class="l">上次命令</span><span class="v">'+esc(last.cmd||'')+(last.code!=null?(' · 退出码 '+last.code):'')+'</span></div>'
+        +'<pre style="white-space:pre-wrap;word-break:break-all;max-height:280px;overflow:auto;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;padding:10px;font-family:monospace;font-size:11.5px;color:'+(last.ok?'#cdd3de':'#ffb4b4')+'">'+esc((last.stdout||'')+((last.stderr)?('\n'+last.stderr):''))+'</pre></div>')
+    : '';
+  v.innerHTML=''
+    +'<div class="st">🖥️ 操作电脑本体</div>'
+    +'<div class="card" style="font-size:12px;color:var(--muted);line-height:1.6">把整个软件当浏览器: 在此直接驱动本机(运行命令/打开文件/系统资源管理器/集成终端)。'
+      +'与「公网穿透」板块配合, 远端 Devin/MCP 亦可代用户操作本机, 达 MCP 效果。<br>⚠ 命令以 IDE 进程权限在工作目录执行, 请谨慎。</div>'
+    +infoHtml
+    +'<div class="st">▶ 运行命令</div>'
+    +'<div class="card"><textarea id="compCmd" placeholder="如: git status   /   node -v   /   dir(Windows) ls(类Unix)" style="width:100%;height:60px;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;color:var(--fg);padding:8px;font-family:monospace;font-size:12px;resize:vertical"></textarea>'
+      +'<div class="br" style="margin-top:8px"><button class="btn primary" id="compRunBtn">运行</button><button class="btn ghost" id="compTermBtn">送入集成终端</button></div></div>'
+    +outHtml
+    +'<div class="st">📂 文件 / 资源管理器</div>'
+    +'<div class="card"><input id="compPath" placeholder="文件或目录绝对路径" style="width:100%;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;color:var(--fg);padding:7px 9px;font-size:12px">'
+      +'<div class="br" style="margin-top:8px"><button class="btn" id="compOpenBtn">在编辑器打开</button><button class="btn ghost" id="compRevealBtn">系统资源管理器定位</button></div></div>';
+  var rb=document.getElementById('compRunBtn');if(rb)rb.onclick=function(){var c=(document.getElementById('compCmd')||{}).value||'';if(!c.trim()){toast('请输入命令',false);return;}toast('执行中…',true);cmd('compRun',{cmd:c});};
+  var tb=document.getElementById('compTermBtn');if(tb)tb.onclick=function(){var c=(document.getElementById('compCmd')||{}).value||'';if(!c.trim()){toast('请输入命令',false);return;}cmd('compTerminal',{text:c});toast('已送入集成终端',true);};
+  var ob=document.getElementById('compOpenBtn');if(ob)ob.onclick=function(){var p=(document.getElementById('compPath')||{}).value||'';if(!p.trim()){toast('请输入路径',false);return;}cmd('compOpenFile',{path:p});};
+  var vb=document.getElementById('compRevealBtn');if(vb)vb.onclick=function(){var p=(document.getElementById('compPath')||{}).value||'';if(!p.trim()){toast('请输入路径',false);return;}cmd('compReveal',{path:p});};
 }
 // 切号模块 (移植自 RT Flow · 全功能面板第2模块) — 账号池列表 + 切换/刷新/清理/出库。
 function rSwitchLoading(){
@@ -3525,7 +3563,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='compInfo'){S.comp=S.comp||{};S.comp.info=d.info||null;if(S.tab==='computer')rComputer()}else if(d.type==='compResult'){S.comp=S.comp||{};S.comp.last={cmd:d.cmd,ok:d.ok,code:d.code,stdout:d.stdout,stderr:d.stderr};toast('命令'+(d.ok?'完成':'失败')+(d.code!=null?(' · 退出码 '+d.code):''),d.ok);if(S.tab==='computer')rComputer()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -3850,7 +3888,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'openRoutedPanel'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'openRoutedPanel', 'compInfo', 'compRun', 'compTerminal', 'compOpenFile', 'compReveal'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -3861,6 +3899,58 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const c = readBridgeConn();
                 await vscode.env.clipboard.writeText((c && c.url) || '');
                 reply({ type: 'actionResult', command: 'copyBridgeUrl', ok: !!(c && c.url) });
+                break;
+            }
+            // ── 操作电脑本体 (把整个软件当浏览器供 MCP/用户驱动本机) ──
+            case 'compInfo': {
+                let cwd = process.cwd();
+                let folders: string[] = [];
+                try { folders = (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath); } catch (e) { /* 守柔 */ }
+                if (folders.length) cwd = folders[0];
+                reply({ type: 'compInfo', info: { host: os.hostname(), platform: process.platform, arch: process.arch, user: (os.userInfo().username || ''), cwd, folders } });
+                break;
+            }
+            case 'compRun': {
+                const command = String(msg.cmd || '').trim();
+                if (!command) { reply({ type: 'compResult', ok: false, cmd: command, code: null, stdout: '', stderr: '空命令' }); break; }
+                let cwd = process.cwd();
+                try { const fl = vscode.workspace.workspaceFolders; if (fl && fl.length) cwd = fl[0].uri.fsPath; } catch (e) { /* 守柔 */ }
+                await new Promise<void>((resolve) => {
+                    childProcess.exec(command, { cwd, timeout: 120000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+                        const code = err && typeof (err as any).code === 'number' ? (err as any).code : (err ? 1 : 0);
+                        reply({ type: 'compResult', ok: !err, cmd: command, code, stdout: String(stdout || '').slice(0, 200000), stderr: String(stderr || (err ? (err.message || '') : '')).slice(0, 200000) });
+                        resolve();
+                    });
+                });
+                break;
+            }
+            case 'compTerminal': {
+                const text = String(msg.text || '');
+                try {
+                    let term = vscode.window.activeTerminal;
+                    if (!term) term = vscode.window.createTerminal('Dao Cloud · 操作电脑');
+                    term.show(true);
+                    if (text) term.sendText(text, true);
+                    reply({ type: 'actionResult', command: 'compTerminal', ok: true });
+                } catch (e: any) { reply({ type: 'actionResult', command: 'compTerminal', ok: false }); }
+                break;
+            }
+            case 'compOpenFile': {
+                const p = String(msg.path || '').trim();
+                let ok = false;
+                try {
+                    const st = fs.statSync(p);
+                    if (st.isDirectory()) { await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(p)); ok = true; }
+                    else { const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(p)); await vscode.window.showTextDocument(doc, { preview: false }); ok = true; }
+                } catch (e: any) { ok = false; }
+                reply({ type: 'actionResult', command: 'compOpenFile', ok });
+                break;
+            }
+            case 'compReveal': {
+                const p = String(msg.path || '').trim();
+                let ok = false;
+                try { await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(p)); ok = true; } catch (e: any) { ok = false; }
+                reply({ type: 'actionResult', command: 'compReveal', ok });
                 break;
             }
             // ── 切号模块 (全功能面板第2网页 · 内嵌真 WAM 切号面板 buildHtml) ──
