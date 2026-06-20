@@ -405,6 +405,29 @@ function test(name, fn) {
     assert.ok(/_shellAccRoute, \/\//.test(src), "须经 _internals 导出 _shellAccRoute(供单测)");
     assert.ok(/shellAccountProxy, \/\//.test(src), "须经 _internals 导出 shellAccountProxy");
   });
+  test("rt-flow extension.js: 投屏兜底路由 /mirror·/__mirror/{frame,input,nav} + devin_mirror 委托", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+    assert.ok(/require\("\.\/devin_mirror"\)/.test(src), "须引入 devin_mirror 模块");
+    assert.ok(/return \{ kind: 'mirror' \}/.test(src), "_shellAccRoute 须识别 /mirror (投屏视图)");
+    assert.ok(/return \{ kind: 'mirrorFrame' \}/.test(src), "_shellAccRoute 须识别 /__mirror/frame");
+    assert.ok(/return \{ kind: 'mirrorInput' \}/.test(src), "_shellAccRoute 须识别 /__mirror/input");
+    assert.ok(/return \{ kind: 'mirrorNav' \}/.test(src), "_shellAccRoute 须识别 /__mirror/nav");
+    assert.ok(/devinCloud\.buildMirrorHtml\(/.test(src), "mirror 路由须 dao 渲染投屏视图");
+    assert.ok(/devinMirror\.frame\(/.test(src), "mirrorFrame 须委托 devinMirror.frame (CDP 截帧)");
+    assert.ok(/devinMirror\.input\(/.test(src), "mirrorInput 须委托 devinMirror.input (归一化输入)");
+    assert.ok(/devinMirror\.navigate\(/.test(src), "mirrorNav 须委托 devinMirror.navigate");
+  });
+  test("devin_mirror: 令牌只在服务端·归一化坐标·宿主生命周期自管 (close 杀进程)", () => {
+    const fs = require("fs");
+    const m = fs.readFileSync(require("path").join(__dirname, "..", "devin_mirror.js"), "utf8");
+    assert.ok(/Page\.captureScreenshot/.test(m), "须经 CDP Page.captureScreenshot 截帧");
+    assert.ok(/Input\.dispatchMouseEvent/.test(m), "须经 CDP Input 下发鼠标事件");
+    assert.ok(/Input\.insertText|Input\.dispatchKeyEvent/.test(m), "须支持文本/键盘输入回传");
+    assert.ok(/\* VW|\* VH/.test(m), "归一化坐标 (nx,ny) 须乘固定视口映射回像素");
+    assert.ok(/s\.child\.kill\(\)/.test(m), "close 须真正杀宿主进程 (防残留占 profile 夺端口)");
+    assert.ok(!/auth1[^a-zA-Z].*res\.|res\.end\([^)]*auth1/.test(m), "auth1 绝不下发浏览器");
+  });
   test("dao-vsix src/extension.ts: 9920 主口 /i/<accKey>/* 路由 (dao 自有·免 token·流式)", () => {
     const fs = require("fs");
     const p = require("path").join(__dirname, "..", "..", "dao-vsix", "src", "extension.js");
@@ -421,6 +444,9 @@ function test(name, fn) {
     const venP = fs.readFileSync(require("path").join(__dirname, "..", "..", "dao-vsix", "rtflow", "devin_proxy.js"), "utf8");
     assert.ok(/async function shellAccountProxy\(/.test(ven), "打包副本须含 shellAccountProxy (vendor 未脱钩)");
     assert.ok(/const isPrefix = localBase\.charAt\(0\) === "\/"/.test(venP), "打包 devin_proxy 须含前缀模式");
+    const venM = require("path").join(__dirname, "..", "..", "dao-vsix", "rtflow", "devin_mirror.js");
+    assert.ok(fs.existsSync(venM), "打包副本须含 devin_mirror.js (投屏兜底·vendor 未脱钩)");
+    assert.ok(/Page\.captureScreenshot/.test(fs.readFileSync(venM, "utf8")), "打包 devin_mirror 须含 CDP 截帧");
   });
 
   // ── 11b. devin_proxy · 磁盘二级缓存 L2 (v4.14.0 · 重载秒恢复 · 跨端口重定基) ──
@@ -616,6 +642,31 @@ function test(name, fn) {
     const html = cloud.buildSessionsListHtml("u@x.com", [{ devin_id: "devin-x", title: "<script>alert(1)</script>" }], { base: "/i/aKEY" });
     assert.ok(!html.includes("<script>alert(1)</script>"), "原样脚本不得进入 DOM");
     assert.ok(html.includes("&lt;script&gt;"), "已转义");
+  });
+
+  // ── 归一 · 投屏兜底视图 (宿主真·官网本体 CDP 截帧 + 归一化输入回传) ──────────
+  console.log("\n[buildMirrorHtml · 投屏兜底视图]");
+  test("对话视图含「🖥️ 官网本体」投屏入口 (链到 <base>/mirror?path=/sessions/<id>)", () => {
+    const html = cloud.buildConversationHtml("T", "devin-abc", [], { account: "u@x.com", base: "/i/aKEY" });
+    assert.ok(html.includes("/i/aKEY/mirror?path="), "对话视图须有投屏入口");
+    assert.ok(html.includes("官网本体"), "入口文案");
+    const noBase = cloud.buildConversationHtml("T", "devin-abc", [], {});
+    assert.ok(!noBase.includes("/mirror?path="), "无 base(备份场景)不加投屏入口");
+  });
+  test("投屏视图: 同源帧轮询 + 归一化输入回传 (令牌不下发)", () => {
+    const html = cloud.buildMirrorHtml("u@x.com", { base: "/i/aKEY", path: "/sessions/devin-abc" });
+    assert.ok(html.includes('id="screen"'), "须有投屏画面元素");
+    assert.ok(html.includes('base+"/__mirror/frame'), "帧走同源相对接口");
+    assert.ok(html.includes('base+"/__mirror/input"'), "输入回传同源相对接口");
+    assert.ok(html.includes('base+"/__mirror/nav"'), "导航同源相对接口");
+    assert.ok(html.includes('data:image/jpeg;base64,'), "帧以 data: URL 渲染(契合 CSP img-src data:)");
+    assert.ok(html.includes('action:"click"') && html.includes('action:"settext"'), "支持点击/文本回传");
+    assert.ok(!html.includes("auth1") && !html.includes("Bearer"), "投屏页面绝不含令牌");
+  });
+  test("投屏视图: base/path 经 data-* 下传, 防 HTML 注入", () => {
+    const html = cloud.buildMirrorHtml("u@x.com", { base: "/i/aKEY", path: '/sessions/"><img>' });
+    assert.ok(html.includes('data-base="/i/aKEY"'), "base 经 data-base 下传");
+    assert.ok(!html.includes('"><img>'), "path 须转义防注入");
   });
 
   // ── 前台「极速」下载档 (v4.8.6) ───────────────────────────────────────────

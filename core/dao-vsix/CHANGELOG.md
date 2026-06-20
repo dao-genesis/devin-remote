@@ -2,6 +2,21 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.39.0
+- 归一网页公网传输「分层混合」落地（道并行而不相悖）：dao 自渲染为主干，新增
+  「投屏兜底」补齐官网 100% 功能（含回信/Automations/Review/Wiki/设置）。
+- 实测纠偏：宿主整窗浏览器经 devin_web 注入 auth1（含迁移标志）可**直登官网 SPA**，
+  此前「auth1 被 Auth0 挡」实为 iframe 内嵌特有（第三方存储分区/CSP），整窗不受限。
+  故续写已有对话 **无需 apk_** —— 经投屏在官网本体内即可原样回信。
+- 新增 `core/rt-flow/devin_mirror.js`：宿主真·官网本体的 CDP 截帧（Page.captureScreenshot·
+  JPEG）+ 归一化坐标输入回传（Input.dispatch*），自管浏览器生命周期（close 真杀进程，
+  防残留占 profile 夺端口）。令牌只在服务端，浏览器只见像素与归一化输入。
+- 路由 `/i/<accKey>/`：新增 `/mirror`（投屏视图）、`/__mirror/frame`（截帧）、
+  `/__mirror/input`（输入）、`/__mirror/nav`（导航）；对话视图加「🖥️ 官网本体」入口。
+  手机/电脑共用同一 `buildMirrorHtml` viewer（同源帧轮询 data: URL + 同源输入 POST）。
+- 单测 +5（投屏路由/委托·viewer 同源帧与输入·令牌不下发·防注入·vendor 含 devin_mirror）
+  共 108/0 全绿；dao-vsix/dao-one 构建 + render_check 通过；vendor 字节一致。
+
 ## 3.38.0
 - 归一网公传「dao 自渲染」正解（Auth0 免疫·手机+电脑完全一致）：现版 Devin 官网
   已迁 Auth0/SSO，账号密码登录只得旧 auth1 令牌、官网 SPA 已不收 → 「内嵌官网 SPA +

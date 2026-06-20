@@ -1858,6 +1858,7 @@ function buildConversationHtml(title, devinId, events, opts) {
     '.header .back:hover{background:#161b22}\n' +
     '</style>\n</head>\n<body>\n' + nav +
     '<div class="header">' + (opts.base ? '<a class="back" href="' + _escHtml(opts.base) + '/" title="返回对话列表">‹ 对话列表</a> ' : '') + '<h1>🔮 ' + _escHtml(title) + '</h1>' +
+    (opts.base ? '<a class="back mirror" href="' + _escHtml(opts.base) + '/mirror?path=' + encodeURIComponent('/sessions/' + devinId) + '" title="投屏官网本体 · 可回信/全功能">🖥️ 官网本体</a>' : '') +
     '<div class="meta">Session: ' + _escHtml(devinId) + (account ? ' · 账号: ' + _escHtml(account) : '') + ' · 事件: ' + events.length + '</div></div>\n' +
     '<div class="container">\n' + msgBlocks.join("\n") + '\n</div>\n' +
     '<div class="footer">RT Flow 备份 · ' + ts + ' · 道法自然</div>\n' +
@@ -1947,6 +1948,78 @@ function _sessListClientScript() {
     'document.getElementById("rf").onclick=function(){location.reload();};\n' +
     'document.getElementById("nw").onclick=function(){var p=prompt("新建对话 · 输入首条消息:");if(!p||!p.trim())return;var b=this;b.disabled=true;b.textContent="创建中…";\n' +
     'fetch(base+"/__dao/create",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt:p})}).then(function(r){return r.json();}).then(function(j){if(j&&j.ok&&j.url){location.href=j.url;}else{alert("创建失败: "+((j&&j.error)||"未知"));b.disabled=false;b.textContent="＋ 新建对话";}}).catch(function(e){alert("创建异常: "+e);b.disabled=false;b.textContent="＋ 新建对话";});};\n' +
+    '})();</scr' + 'ipt>\n';
+}
+// ── 归一 · 投屏兜底视图 (宿主真·官网本体 CDP 截帧 + 归一化输入回传) ────────────
+//   base: 同源前缀; path: 官网目标路径 (如 /sessions/<id>)。帧走 data: URL, 输入走
+//   同源 fetch → 令牌只在服务端, 浏览器只见像素与归一化坐标。手机/电脑同一viewer。
+function buildMirrorHtml(account, opts) {
+  opts = opts || {};
+  const base = String(opts.base || '');
+  const path = String(opts.path || '');
+  const title = String(opts.title || (account + ' · 官网本体投屏'));
+  return '<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">\n' +
+    '<title>' + _escHtml(title) + '</title>\n<style>\n' +
+    '*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}\n' +
+    'html,body{margin:0;height:100%;width:100%;background:#000;color:#e6edf3;font:13px/1.5 -apple-system,system-ui,"Segoe UI",sans-serif;overflow:hidden}\n' +
+    '#screen{position:fixed;inset:0;top:42px;width:100%;height:calc(100% - 42px);object-fit:contain;background:#000;display:block;touch-action:none;user-select:none}\n' +
+    '#bar{position:fixed;left:0;right:0;top:0;height:42px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#010409;border-bottom:1px solid #30363d;z-index:10}\n' +
+    '#bar a,#bar button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 9px;font-size:13px;cursor:pointer;text-decoration:none;white-space:nowrap}\n' +
+    '#bar button:active{opacity:.7}\n' +
+    '#dot{width:9px;height:9px;border-radius:50%;background:#d29922;flex:0 0 auto;margin:0 2px}\n' +
+    '#dot.on{background:#3fb950}#dot.err{background:#f85149}\n' +
+    '#sp{flex:1}\n' +
+    '#kb{position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0}\n' +
+    '#cw{position:fixed;left:0;right:0;bottom:0;display:flex;gap:6px;padding:7px 8px;background:rgba(1,4,9,.92);border-top:1px solid #30363d;z-index:10}\n' +
+    '#ci{flex:1;min-width:0;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:9px 11px;font-size:14px;outline:none}\n' +
+    '#cs{background:#1f6feb;border:1px solid #1f6feb;color:#fff;border-radius:8px;padding:9px 14px;font-size:14px;cursor:pointer}\n' +
+    '#hint{position:fixed;inset:42px 0 0 0;display:flex;align-items:center;justify-content:center;color:#8b949e;font-size:13px;padding:0 24px;text-align:center;pointer-events:none}\n' +
+    '</style>\n</head>\n<body data-base="' + _escHtml(base) + '" data-path="' + _escHtml(path) + '">\n' +
+    '<div id="bar">' +
+    (base ? '<a href="' + _escHtml(base) + '/" title="返回对话列表">‹ 列表</a>' : '') +
+    '<button id="back" title="后退">◀</button>' +
+    '<button id="reload" title="重新加载">⟳</button>' +
+    '<button id="kbbtn" title="键盘">⌨</button>' +
+    '<span id="dot"></span><span id="sp"></span>' +
+    '<span style="color:#8b949e;font-size:11px">官网本体投屏</span></div>\n' +
+    '<img id="screen" alt="screen" draggable="false">\n' +
+    '<div id="hint">连接宿主官网本体中…(首次需启隔离浏览器·稍候)</div>\n' +
+    '<textarea id="kb" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>\n' +
+    '<div id="cw"><input id="ci" placeholder="在官网本体内回信 / 输入…（回车发送）" autocomplete="off"><button id="cs">发送</button></div>\n' +
+    _mirrorClientScript() +
+    '</body>\n</html>';
+}
+function _mirrorClientScript() {
+  return '<scr' + 'ipt>(function(){\n' +
+    'var base=document.body.getAttribute("data-base")||"";\n' +
+    'var path=document.body.getAttribute("data-path")||"";\n' +
+    'var img=document.getElementById("screen"),dot=document.getElementById("dot"),hint=document.getElementById("hint");\n' +
+    'var kb=document.getElementById("kb"),ci=document.getElementById("ci");\n' +
+    'var alive=true,inflight=false,navDone=false;\n' +
+    'function post(body){return fetch(base+"/__mirror/input",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).catch(function(){});}\n' +
+    'function navTo(){return fetch(base+"/__mirror/nav",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:path})}).then(function(r){return r.json();}).catch(function(){return null;});}\n' +
+    'function tick(){if(!alive){return;}if(inflight){setTimeout(tick,120);return;}inflight=true;\n' +
+    'fetch(base+"/__mirror/frame?q=55",{cache:"no-store"}).then(function(r){return r.json();}).then(function(j){inflight=false;\n' +
+    'if(j&&j.ok&&j.jpeg){img.src="data:image/jpeg;base64,"+j.jpeg;if(hint)hint.style.display="none";dot.className="on";}else{dot.className="err";}\n' +
+    'setTimeout(tick,j&&j.ok?350:1200);}).catch(function(){inflight=false;dot.className="err";setTimeout(tick,1500);});}\n' +
+    'function norm(ev){var r=img.getBoundingClientRect();\n' +
+    // object-fit:contain → 计算真实绘制区 (黑边外不计)
+    'var iw=img.naturalWidth||1280,ih=img.naturalHeight||800;var rr=r.width/r.height,ir=iw/ih;var dw,dh,ox,oy;\n' +
+    'if(rr>ir){dh=r.height;dw=dh*ir;ox=(r.width-dw)/2;oy=0;}else{dw=r.width;dh=dw/ir;ox=0;oy=(r.height-dh)/2;}\n' +
+    'var x=ev.clientX-r.left-ox,y=ev.clientY-r.top-oy;return{nx:Math.max(0,Math.min(1,x/dw)),ny:Math.max(0,Math.min(1,y/dh))};}\n' +
+    'img.addEventListener("click",function(ev){var n=norm(ev);post({action:"click",nx:n.nx,ny:n.ny});});\n' +
+    'img.addEventListener("wheel",function(ev){ev.preventDefault();post({action:"scroll",nx:0.5,ny:0.5,dx:ev.deltaX,dy:ev.deltaY});},{passive:false});\n' +
+    'document.getElementById("back").onclick=function(){post({action:"back"});};\n' +
+    'document.getElementById("reload").onclick=function(){post({action:"reload"});};\n' +
+    'document.getElementById("kbbtn").onclick=function(){kb.value="";kb.focus();};\n' +
+    'kb.addEventListener("input",function(){var v=kb.value;kb.value="";if(v)post({action:"settext",text:v});});\n' +
+    'kb.addEventListener("keydown",function(ev){if(ev.key==="Enter"){ev.preventDefault();post({action:"key",key:"Enter"});}else if(ev.key==="Backspace"){ev.preventDefault();post({action:"key",key:"Backspace"});}});\n' +
+    'function send(){var v=ci.value;if(!v)return;ci.value="";post({action:"settext",text:v}).then(function(){return post({action:"key",key:"Enter"});});}\n' +
+    'document.getElementById("cs").onclick=send;\n' +
+    'ci.addEventListener("keydown",function(ev){if(ev.key==="Enter"){ev.preventDefault();send();}});\n' +
+    'window.addEventListener("beforeunload",function(){alive=false;});\n' +
+    'navTo().then(function(){setTimeout(tick,600);});\n' +
     '})();</scr' + 'ipt>\n';
 }
 // 对话详情交互脚本: 思考折叠/展开 · 用户消息定位 · 全文搜索(含思考·命中自动展开)
@@ -2468,6 +2541,7 @@ module.exports = {
   buildConversationHtml,
   buildConversationMd,
   buildSessionsListHtml,
+  buildMirrorHtml,
   backupOneConversationFolder,
   backupAccountFolders,
   backupAccountFullFolders,

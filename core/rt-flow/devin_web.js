@@ -430,6 +430,10 @@ module.exports = {
   profileDirFor,
   buildInjectSource,
   launchAccountBrowser,
+  launchIsolatedBasic,
+  waitForPageTarget,
+  cdpConnect,
+  pickFreePort,
   PROFILES_DIR,
   DEVIN_APP,
 };
