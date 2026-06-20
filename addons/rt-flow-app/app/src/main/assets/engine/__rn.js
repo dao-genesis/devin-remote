@@ -10,9 +10,8 @@
   if (window.__rnReady) return; window.__rnReady = true;
   function qp(k) { try { return new URLSearchParams(location.search).get(k) || ""; } catch (e) { return ""; } }
   function ls(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
-  // 外壳(网页控台)经 srcdoc 内嵌真实页面时, 子文档 URL 为 about:srcdoc — 无 query、且
-  // location.origin 可能序列化为 "null"(不透明源)。故外壳会把绝对中继端点经 window.__RN_CFG 注入,
-  // 这里优先采信它 → 子页面据此直连中继(同源 worker 经 srcdoc 内嵌时跨源, 中继已开 CORS+预检)。
+  // 外壳(网页控台)用 blob: iframe 内嵌真实页面 → 子页继承外壳(中继 Worker)真实源, 与中继严格同源。
+  // 外壳仍把绝对中继端点/session/token 经 window.__RN_CFG 注入, 这里优先采信 (不依赖 location 解析)。
   var CFG = (window.__RN_CFG && typeof window.__RN_CFG === "object") ? window.__RN_CFG : {};
   var SESSION = CFG.session || qp("session") || ls("rtflow.rn.session") || "";
   var TOKEN = CFG.token || qp("token") || qp("t") || ls("rtflow.rn.token") || "";
@@ -22,8 +21,8 @@
 
   function frame(path, body) { return JSON.stringify({ path: path, method: "POST", body: body }); }
 
-  // 值返回型 Native 方法 → 同步请求 (保住页面对"同步桥"的预期, 页面无需改写)
-  function syncCall(m, args) {
+  // 一次阻塞同步取值 (仅缓存未命中的首读用)
+  function blockingFetch(m, args) {
     try {
       var x = new XMLHttpRequest();
       x.open("POST", RELAY, false);
@@ -34,6 +33,36 @@
       var d = JSON.parse(x.responseText || "{}");
       return d && Object.prototype.hasOwnProperty.call(d, "r") ? d.r : null;
     } catch (e) { try { console.error("[rn] " + m, e); } catch (_) {} return null; }
+  }
+  // 后台异步刷新缓存 (不阻塞主线程)
+  function bgRefresh(m, args, k) {
+    if (_inflight[k]) return; _inflight[k] = true;
+    fetch(RELAY, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN }, body: frame("/api/native", { m: m, a: args || [] }) })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (t) { _inflight[k] = false; if (t == null) return;
+        try { var d = JSON.parse(t); if (d && Object.prototype.hasOwnProperty.call(d, "r")) { _cache[k] = d.r; _ts[k] = Date.now(); } } catch (e) {} })
+      .catch(function () { _inflight[k] = false; });
+  }
+  // 写/动作型方法: 不缓存; 执行后清空读缓存使后续读反映变更
+  function isWrite(m) { return /^(set|save|apply|clear|rotate|request|open|install|delete|toggle|grant|restart|launch|reload|seal|usSave|gmSet|gmDel|e2e(Seal|Open))/.test(m); }
+
+  var _cache = {}, _ts = {}, _inflight = {}, TTL = 2000;
+  // 值返回型 Native → 同步桥 (页面零改动)。
+  // 关键架构: **渲染期的读调用绝不阻塞主线程**。否则只要任一同步读撞上手机 agent 的积压/弱网,
+  // 同步 XHR 就会把 WebView 主线程冻住(实测可达 60s 网关超时)→ 整页卡死黑屏、板块永不渲染。
+  //   · 读(状态/数据): 命中缓存即瞬时返回; 未命中先返回 null 并后台异步取值填缓存。board 本就轮询,
+  //                    ~1 个轮询周期(亚秒级)后即拿到真实值重渲 → 首屏秒出, 数据随后补齐, 主线程永不阻塞。
+  //   · 写/动作(用户点击触发, 渲染后才发生, 需正确返回值): 仍走一次阻塞同步, 完成后清读缓存。
+  function syncCall(m, args) {
+    var k = m + "|" + JSON.stringify(args || []);
+    if (isWrite(m)) { var w = blockingFetch(m, args); _cache = {}; _ts = {}; return w; }
+    if (!Object.prototype.hasOwnProperty.call(_cache, k)) {
+      _cache[k] = null; _ts[k] = 0;   // 先占位返回 null, 不阻塞
+      bgRefresh(m, args, k);           // 后台异步取真实值
+      return null;
+    }
+    if (Date.now() - (_ts[k] || 0) > TTL) bgRefresh(m, args, k);
+    return _cache[k];
   }
   function rpc(m) { return function () { return syncCall(m, Array.prototype.slice.call(arguments)); }; }
 

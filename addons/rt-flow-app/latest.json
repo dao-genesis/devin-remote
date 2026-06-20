@@ -1,6 +1,6 @@
 {
-  "versionCode": 104,
-  "versionName": "0.37.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.0/DevinCloud-mobile-v0.37.0.apk",
-  "notes": "v0.37.0 · 从根本底层换架构: 网页控台(/console)由「截图投屏」改为「浏览器原生直渲」\n• 旧架构天花板: 控台靠 RPC browseScreenshot 把手机画面截图推流到浏览器 → 黑屏、卡顿、反向操作慢, 是架构本身决定的, 修不到根上。\n• 新架构(网页套网页): /console 现把 APK 自身的真实页面(切号/对话/穿透/VPN/脚本/Shizuku/全服通/面板)经零账号中继取来, 内联依赖 + 注入 remote-native 垫片(__rn.js), 挂进同源 iframe srcdoc → 由浏览器自身原生渲染、原生交互。表层与手机本体逐件一致(矢量清晰可选可输入), 底层 window.Native.* 经同源中继打回手机 /api/native(读金库数据) 与 /api/http(手机侧原生 HTTP 绕 CORS, 带账号 auth1)。彻底消除黑屏/卡顿/反向操作慢。\n• 中继侧: relay-app.js + RelayService.serveEmbed 新增 /api/native、/api/http、/api/asset 三路由, 把原本只走局域网/隧道的「直渲」底座接到零账号中继上。Devin 对话页直接在使用者自己的浏览器新标签打开。\n更新经 latest.json 多镜像(GitHub raw + jsDelivr/Fastly/Statically + ghproxy)轮替下载, 国内外可达; 版本递增可覆盖升级。"
+  "versionCode": 105,
+  "versionName": "0.37.1",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.1/DevinCloud-mobile-v0.37.1.apk",
+  "notes": "v0.37.1 · 原生直渲控台(/console)在手机浏览器/WebView 的根因修复\n• 根因: 板块挂为 srcdoc 不透明源 iframe, 其 window.Native.* 走同步 XHR 打回中继; 每次同步调用 ~200ms 往返, 板块又不停轮询(conn/穿透状态/relayStatus…)。弱网或手机 agent 积压时, 任一同步读会把浏览器主线程冻住最长 60s → 整页卡死、只切号偶出、其它板块全黑/加载失败。\n• 修复一: 板块改用同源 blob: iframe(继承中继 Worker 真实源, 严格同源, 无 CORS/无预检), 取代不透明源 srcdoc。\n• 修复二: __rn.js 读调用永不阻塞主线程——命中缓存即返回, 未命中先返回空再后台异步补齐(板块本就轮询, 亚秒级补上真值); 仅用户点击触发的写仍走一次同步。主线程不再被冻 → 板块秒级渲染。\n• 交付优化: __rn.js 已内联进 console.html(经中继 Worker 取自 GitHub main 下发), 此控台修复随网页生效, 重开 /console 链接即可, 无需安装新包。\n• 实测(模拟器 WebView): 切号面板由约 4 分钟 → 约 7-8 秒全渲染; 多板块并存各自独立。"
 }
