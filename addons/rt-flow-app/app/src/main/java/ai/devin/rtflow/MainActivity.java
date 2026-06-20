@@ -538,7 +538,8 @@ public class MainActivity extends AppCompatActivity {
         page.add(0, 21, 4, cur() != null && cur().desktop ? "切回移动版" : "桌面版网站");
         page.add(0, 22, 5, "阅读模式");
         page.add(0, 23, 6, cur() != null && cur().night ? "关闭夜间模式" : "夜间模式");
-        page.add(0, 26, 7, "导出整机分享包 (APK+全部数据)");
+        page.add(0, 16, 7, "脚本菜单 (油猴)");
+        page.add(0, 26, 8, "导出整机分享包 (APK+全部数据)");
         page.add(0, 27, 8, "导入分享包 (换机同步)");
         android.view.SubMenu shareM = mu.addSubMenu(0, 101, 10, "分享 / 快捷");
         shareM.add(0, 30, 0, "分享本页");
@@ -555,6 +556,7 @@ public class MainActivity extends AppCompatActivity {
                 case 9: showHistory(); return true;
                 case 12: showBookmarks(); return true;
                 case 14: newTab(SCRIPTS, null); return true;
+                case 16: showUserscriptMenu(); return true;
                 case 15: newTab(SHIZUKU, null); return true;
                 case 40: { Tab t = cur(); if (t != null && t.web.canGoBack()) t.web.goBack(); else toast("无法后退"); return true; }
                 case 41: { Tab t = cur(); if (t != null && t.web.canGoForward()) t.web.goForward(); else toast("无法前进"); return true; }
@@ -1580,11 +1582,18 @@ public class MainActivity extends AppCompatActivity {
     private Tab newTabIncognito(String url) {
         Tab tab = makeTab(null, false);
         tab.incognito = true;
-        try { tab.web.getSettings().setSaveFormData(false); } catch (Exception ignored) {}
+        try {
+            WebSettings st = tab.web.getSettings();
+            st.setSaveFormData(false);
+            st.setSavePassword(false);
+            st.setCacheMode(WebSettings.LOAD_NO_CACHE);   // 无痕: 不留磁盘缓存
+        } catch (Exception ignored) {}
+        // 无痕: 不接受第三方 Cookie (减少跨站跟踪); 同源 Cookie 仍随会话存在, 但页面不入历史/不存表单密码
+        try { if (Build.VERSION.SDK_INT >= 21) android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(tab.web, false); } catch (Exception ignored) {}
         loadInto(tab, url);
         selectTab(tabs.size() - 1);
         renderTabStrip();
-        toast("无痕标签 (不记历史)");
+        toast("无痕标签 (不记历史 / 不存表单密码 / 无磁盘缓存)");
         return tab;
     }
     private void shareCurrent() {
@@ -1885,6 +1894,32 @@ public class MainActivity extends AppCompatActivity {
             return false;
         } catch (Exception e) { return false; }
     }
+    /** 油猴脚本菜单 (GM_registerMenuCommand): 读当前页注册的菜单命令并列出, 选中即触发回调。 */
+    private void showUserscriptMenu() {
+        Tab t = cur();
+        if (t == null || t.web == null) { toast("无页面"); return; }
+        String u = displayUrl(t);
+        if (u == null || u.startsWith("rtflow:") || u.startsWith("file:") || u.startsWith("about:")) { toast("请在网页上使用脚本菜单"); return; }
+        String js = "(function(){try{var m=window.__dcusMenus||[];return JSON.stringify(m.map(function(x){return ''+x.caption;}));}catch(e){return '[]';}})();";
+        try { t.web.evaluateJavascript(js, val -> {
+            try {
+                if (val == null) { toast("读取菜单失败"); return; }
+                String json = new org.json.JSONTokener(val).nextValue().toString();
+                org.json.JSONArray a = new org.json.JSONArray(json);
+                if (a.length() == 0) { toast("本页无脚本菜单命令"); return; }
+                final String[] caps = new String[a.length()];
+                for (int i = 0; i < a.length(); i++) caps[i] = a.optString(i);
+                new android.app.AlertDialog.Builder(this)
+                    .setTitle("脚本菜单 (油猴)")
+                    .setItems(caps, (d, w) -> {
+                        try { t.web.evaluateJavascript("(function(){try{var m=window.__dcusMenus||[];var f=m[" + w + "];if(f&&typeof f.fn==='function')f.fn();}catch(e){}})();", null); }
+                        catch (Exception e) {}
+                    })
+                    .setNegativeButton("关闭", null)
+                    .show();
+            } catch (Exception e) { toast("读取菜单失败"); }
+        }); } catch (Exception e) { toast("读取菜单失败"); }
+    }
     /** 在页面注入所有匹配且启用的脚本 (phase: "start"=document-start, "end"=document-end/idle)。 */
     private void injectUserScripts(WebView w, String url, String phase) {
         if (w == null || url == null) return;
@@ -1982,6 +2017,7 @@ public class MainActivity extends AppCompatActivity {
     private void promptSaveLogin(WebView w, String u, String p) {
         try {
             if (w == null || isFinishing() || p == null || p.isEmpty()) return;
+            for (Tab t : tabs) { if (t.web == w) { if (t.incognito) return; break; } }   // 无痕标签不提示保存密码
             long now = System.currentTimeMillis(); if (now - lastSavePrompt < 1500) return; // 防抖
             String host = hostOf(w.getUrl() == null ? "" : w.getUrl());
             if (host.isEmpty()) return;
@@ -2160,6 +2196,47 @@ public class MainActivity extends AppCompatActivity {
                     if (s != null && id.equals(s.optString("id"))) { s.put("enabled", on); break; } }
                 usSaveAll(all); } catch (Exception e) {}
         }
+        /** 批量启停/删除 (脚本列表多选)。 */
+        @JavascriptInterface public void usToggleMany(String jsonIds, boolean on) {
+            try { java.util.HashSet<String> set = new java.util.HashSet<>(); org.json.JSONArray ids = new org.json.JSONArray(jsonIds);
+                for (int i = 0; i < ids.length(); i++) set.add(ids.optString(i));
+                org.json.JSONArray all = usLoadAll();
+                for (int i = 0; i < all.length(); i++) { org.json.JSONObject s = all.optJSONObject(i);
+                    if (s != null && set.contains(s.optString("id"))) s.put("enabled", on); }
+                usSaveAll(all); } catch (Exception e) {}
+        }
+        @JavascriptInterface public void usDeleteMany(String jsonIds) {
+            try { java.util.HashSet<String> set = new java.util.HashSet<>(); org.json.JSONArray ids = new org.json.JSONArray(jsonIds);
+                for (int i = 0; i < ids.length(); i++) set.add(ids.optString(i));
+                org.json.JSONArray all = usLoadAll(), out = new org.json.JSONArray();
+                for (int i = 0; i < all.length(); i++) { org.json.JSONObject s = all.optJSONObject(i);
+                    if (s != null && !set.contains(s.optString("id"))) out.put(s); }
+                usSaveAll(out); } catch (Exception e) {}
+        }
+        /** 导出全部脚本 (完整 JSON, 用于备份/换机)。 */
+        @JavascriptInterface public String usExportAll() { return usLoadAll().toString(); }
+        /** 导入脚本 JSON (数组, 每项含 source); 返回成功条数。 */
+        @JavascriptInterface public int usImport(String json) {
+            try { org.json.JSONArray inc = new org.json.JSONArray(json); int n = 0;
+                for (int i = 0; i < inc.length(); i++) { org.json.JSONObject s = inc.optJSONObject(i); if (s == null) continue;
+                    String src = s.optString("source", ""); if (src.indexOf("==UserScript==") < 0) continue;
+                    String id = usAddOrUpdate(src); if (id != null && !id.isEmpty()) n++; }
+                return n; } catch (Exception e) { return 0; }
+        }
+        /** 检查并应用脚本更新 (downloadURL/updateURL): updated / latest / nourl / fail。 */
+        @JavascriptInterface public String usCheckUpdate(String id) {
+            try {
+                org.json.JSONArray all = usLoadAll(); org.json.JSONObject cur = null;
+                for (int i = 0; i < all.length(); i++) { org.json.JSONObject s = all.optJSONObject(i); if (s != null && id.equals(s.optString("id"))) { cur = s; break; } }
+                if (cur == null) return "fail";
+                String dl = cur.optString("downloadURL", ""), up = cur.optString("updateURL", "");
+                String url = !dl.isEmpty() ? dl : up; if (url.isEmpty()) return "nourl";
+                String code = httpGetText(url); if (code == null || code.indexOf("==UserScript==") < 0) return "fail";
+                String newVer = usParse(code).optString("version", ""), oldVer = cur.optString("version", "");
+                usAddOrUpdate(code);
+                return (!newVer.isEmpty() && !newVer.equals(oldVer)) ? "updated" : "latest";
+            } catch (Exception e) { return "fail"; }
+        }
         // ── Shizuku (自我 ADB) ──
         @JavascriptInterface public int shizukuStatus() { return ShizukuManager.status(MainActivity.this); }
         @JavascriptInterface public void shizukuRequest() { main.post(ShizukuManager::requestPermission); }
@@ -2279,6 +2356,25 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void openEntryNewTab(String accJson, String url) {
             main.post(() -> { String u = (url == null || url.isEmpty()) ? DEVIN : url; newTab(u, (accJson == null || accJson.isEmpty()) ? null : accJson); });
         }
+        /** 后台新标签打开 (批量多选打开用, 不抢前台)。 */
+        @JavascriptInterface public void openEntryBg(String accJson, String url) {
+            main.post(() -> { String u = (url == null || url.isEmpty()) ? DEVIN : url; newTabBackground(u, (accJson == null || accJson.isEmpty()) ? null : accJson); });
+        }
+        // ── 多选批量 (历史/书签列表页) ──
+        @JavascriptInterface public void deleteHistoryUrls(String jsonUrls, boolean devin) {
+            main.post(() -> { try { MainActivity.this.deleteHistoryBatch(new org.json.JSONArray(jsonUrls), devin); } catch (Exception e) {} });
+        }
+        @JavascriptInterface public void deleteBookmarkUrls(String jsonUrls) {
+            main.post(() -> { try { MainActivity.this.deleteBookmarkBatch(new org.json.JSONArray(jsonUrls)); } catch (Exception e) {} });
+        }
+        @JavascriptInterface public int bookmarkUrls(String jsonItems) {
+            try { int n = MainActivity.this.addBookmarkBatch(new org.json.JSONArray(jsonItems)); main.post(MainActivity.this::updateStar); return n; }
+            catch (Exception e) { return 0; }
+        }
+        @JavascriptInterface public void downloadUrls(String jsonUrls) {
+            main.post(() -> { try { MainActivity.this.downloadBatch(new org.json.JSONArray(jsonUrls)); } catch (Exception e) {} });
+        }
+        @JavascriptInterface public void clearHistory() { main.post(MainActivity.this::clearHistoryAll); }
         /** 全服通「进入」: 切到该对话所属账号(WAM 注入鉴权) 并前台打开该对话网页页, 同时关掉全服通悬浮窗露出网页。
          *  网页 URL 用去掉 devin- 前缀的 id (app.devin.ai/sessions/<hex>), 与浏览器地址栏一致。 */
         @JavascriptInterface public void openAccountSession(String accJson, String sid) {
@@ -3859,6 +3955,66 @@ public class MainActivity extends AppCompatActivity {
             vaultWrite(key, out.toString());
         } catch (Exception ignored) {}
     }
+
+    // ── 多选批量操作 (历史/书签列表页, 对标手机浏览器) ──────────────────────
+    private void deleteHistoryBatch(org.json.JSONArray urls, boolean devin) {
+        String key = devin ? "history_devin" : "history";
+        try {
+            java.util.HashSet<String> set = new java.util.HashSet<>();
+            for (int i = 0; i < urls.length(); i++) set.add(urls.optString(i));
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            org.json.JSONArray arr = new org.json.JSONArray(sp.getString(key, "[]"));
+            org.json.JSONArray out = new org.json.JSONArray();
+            for (int i = 0; i < arr.length(); i++) { org.json.JSONObject e = arr.getJSONObject(i); if (!set.contains(e.optString("url"))) out.put(e); }
+            sp.edit().putString(key, out.toString()).apply(); vaultWrite(key, out.toString());
+        } catch (Exception ignored) {}
+    }
+    private void deleteBookmarkBatch(org.json.JSONArray urls) {
+        try {
+            java.util.HashSet<String> set = new java.util.HashSet<>();
+            for (int i = 0; i < urls.length(); i++) set.add(urls.optString(i));
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            org.json.JSONArray arr = new org.json.JSONArray(sp.getString("bookmarks", "[]"));
+            org.json.JSONArray out = new org.json.JSONArray();
+            for (int i = 0; i < arr.length(); i++) { org.json.JSONObject e = arr.getJSONObject(i); if (!set.contains(e.optString("url"))) out.put(e); }
+            sp.edit().putString("bookmarks", out.toString()).apply(); vaultWrite("bookmarks", out.toString());
+            updateStar();
+        } catch (Exception ignored) {}
+    }
+    /** 批量收藏 (历史→收藏): 去重已存在, 返回新增条数。不弹 toast (调用方汇总)。 */
+    private int addBookmarkBatch(org.json.JSONArray items) {
+        int added = 0;
+        try {
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            org.json.JSONArray arr = new org.json.JSONArray(sp.getString("bookmarks", "[]"));
+            java.util.HashSet<String> have = new java.util.HashSet<>();
+            for (int i = 0; i < arr.length(); i++) have.add(arr.getJSONObject(i).optString("url"));
+            for (int i = 0; i < items.length(); i++) {
+                org.json.JSONObject it = items.optJSONObject(i); if (it == null) continue;
+                String url = it.optString("url", "");
+                if (url.isEmpty() || url.startsWith("rtflow:") || url.startsWith("file:") || url.startsWith("about:")) continue;
+                if (have.contains(url)) continue;
+                org.json.JSONObject e = new org.json.JSONObject();
+                e.put("url", url); e.put("title", it.optString("title", url)); e.put("ts", System.currentTimeMillis());
+                String acc = it.optString("account", "");
+                if (it.optBoolean("devin", false) && !acc.isEmpty()) { e.put("devin", true); e.put("account", acc); }
+                arr.put(e); have.add(url); added++;
+            }
+            sp.edit().putString("bookmarks", arr.toString()).apply(); vaultWrite("bookmarks", arr.toString());
+        } catch (Exception ignored) {}
+        return added;
+    }
+    private void downloadBatch(org.json.JSONArray urls) {
+        for (int i = 0; i < urls.length(); i++) { String u = urls.optString(i); if (u != null && u.startsWith("http")) startDownload(u, null, null, null); }
+    }
+    private void clearHistoryAll() {
+        try {
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            sp.edit().putString("history", "[]").putString("history_devin", "[]").apply();
+            vaultWrite("history", "[]"); vaultWrite("history_devin", "[]");
+        } catch (Exception ignored) {}
+    }
+
     private void updateStar() {
         if (starBtn == null) return;
         Tab cur = (active >= 0 && active < tabs.size()) ? tabs.get(active) : null;
@@ -4313,20 +4469,37 @@ public class MainActivity extends AppCompatActivity {
             sb.append("h2{color:#9cdcfe;margin:8px 0 8px}");
             sb.append(".sec{color:#7ee787;font-size:13px;font-weight:600;margin:14px 0 6px;padding-bottom:4px;border-bottom:1px solid #21262d}");
             sb.append(".sec.b{color:#9cdcfe}");
-            sb.append(".it{display:flex;align-items:center;border-bottom:1px solid #21262d}");
+            sb.append(".it{display:flex;align-items:center;border-bottom:1px solid #21262d;-webkit-user-select:none;user-select:none}");
             sb.append(".it.dv{border-left:3px solid #2ea043}");
             sb.append(".it .row{flex:1;min-width:0;padding:9px 8px}");
             sb.append(".it .row:active{background:#1f3a45}");
             sb.append(".it .t{color:#e6edf3;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
             sb.append(".it .u{color:#8b949e;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
             sb.append(".more{padding:10px 12px;color:#8b949e;font-size:18px;user-select:none}.more:active{color:#fff}");
+            // 多选 (对标手机浏览器): 顶部工具条 + 行内圆形勾选 + 底部批量动作条
+            sb.append(".bar{display:flex;gap:8px;margin:2px 0 6px;flex-wrap:wrap}");
+            sb.append(".bar button{background:#161b22;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:7px 13px;font-size:13px}.bar button:active{background:#1f6feb33}");
+            sb.append(".ck{width:20px;height:20px;border:2px solid #6e7681;border-radius:50%;margin:0 2px 0 6px;flex:none;display:none;position:relative}");
+            sb.append("body.sel .ck{display:block}body.sel .more{display:none}");
+            sb.append(".it.on{background:#15324a}.it.on .ck{border-color:#1f6feb;background:#1f6feb}");
+            sb.append(".it.on .ck:after{content:'';position:absolute;left:5px;top:1px;width:5px;height:10px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}");
+            sb.append(".selbar{position:fixed;left:0;right:0;top:0;background:#161b22;border-bottom:1px solid #30363d;display:none;align-items:center;gap:4px;padding:9px 8px;z-index:60}");
+            sb.append("body.sel .selbar{display:flex}body.sel{padding-top:52px}");
+            sb.append(".selbar .sx{padding:4px 10px;color:#e6edf3;font-size:19px}.selbar .cnt{color:#9cdcfe;font-size:13px;flex:1}");
+            sb.append(".selbar .all{padding:7px 12px;color:#cdd3de;font-size:13px;border:1px solid #30363d;border-radius:6px}.selbar .all:active{background:#1f6feb33}");
+            sb.append(".actbar{position:fixed;left:0;right:0;bottom:0;background:#161b22;border-top:1px solid #30363d;display:none;z-index:60;padding-bottom:env(safe-area-inset-bottom)}");
+            sb.append("body.sel .actbar{display:flex}.actbar .sb{flex:1;text-align:center;color:#e6edf3;font-size:12px;padding:13px 2px}.actbar .sb:active{background:#1f6feb33}.actbar .sb.del{color:#ff7b72}");
             sb.append(".ov{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;z-index:99}");
             sb.append(".ov.on{display:flex}");
             sb.append(".sheet{background:#161b22;width:100%;border-radius:14px 14px 0 0;padding:4px 0 calc(10px + env(safe-area-inset-bottom));box-shadow:0 -4px 20px rgba(0,0,0,.5)}");
             sb.append(".sh-u{color:#8b949e;font-size:12px;padding:12px 16px 10px;border-bottom:1px solid #21262d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
             sb.append(".sh-b{padding:14px 16px;color:#e6edf3;font-size:15px}.sh-b:active{background:#1f6feb33}.sh-b.del{color:#ff7b72}");
             sb.append("</style></head><body>");
+            sb.append("<div class='selbar'><span class='sx' id='selX'>\u2715</span><span class='cnt' id='cnt'>0 \u9009\u4e2d</span><span class='all' id='selAll'>\u5168\u9009</span></div>");
             sb.append("<h2>").append(escapeHtml(h2)).append("</h2>");
+            sb.append("<div class='bar'><button id='btnSel'>\u591a\u9009</button>");
+            if (!"bm".equals(mode)) sb.append("<button id='btnClear'>\u6e05\u7a7a\u5386\u53f2</button>");
+            sb.append("</div>");
             if (dvHeader != null) {
                 sb.append("<div class='sec'>").append(dvHeader).append("</div>");
                 for (int i = 0; i < dvItems.length(); i++) { int idx = IT.length(); IT.put(dvItems.getJSONObject(i)); appendRow(sb, dvItems.getJSONObject(i), idx, true); }
@@ -4335,6 +4508,10 @@ public class MainActivity extends AppCompatActivity {
             sb.append("<div class='sec b'>").append(nmHeader).append("</div>");
             for (int i = 0; i < nmItems.length(); i++) { int idx = IT.length(); IT.put(nmItems.getJSONObject(i)); appendRow(sb, nmItems.getJSONObject(i), idx, false); }
             if (nmItems.length() == 0) sb.append("<div style='color:#6e7681;padding:10px 4px'>").append(escapeHtml(nmEmpty)).append("</div>");
+            sb.append("<div class='actbar'>");
+            sb.append("<span class='sb' data-act='open'>\u6253\u5f00</span><span class='sb' data-act='copy'>\u590d\u5236</span><span class='sb' data-act='share'>\u5206\u4eab</span>");
+            if (!"bm".equals(mode)) sb.append("<span class='sb' data-act='bm'>\u6536\u85cf</span>");
+            sb.append("<span class='sb' data-act='dl'>\u4e0b\u8f7d</span><span class='sb del' data-act='del'>\u5220\u9664</span></div>");
             sb.append("<div class='ov' id='ov'><div class='sheet' id='sheet'></div></div>");
             sb.append("<script>var IT=").append(jsEmbed(IT)).append(";var MODE='").append(mode).append("';");
             sb.append("function openIdx(i){var e=IT[i];if(!e)return;if(e.devin&&e.account){try{Native.reopenAccount(e.account,e.url);return;}catch(x){}}location.href=e.url;}");
@@ -4352,11 +4529,33 @@ public class MainActivity extends AppCompatActivity {
             sb.append("else if(a==='copy'){try{Native.clip(e.url||'');Native.toast('已复制链接');}catch(x){}}");
             sb.append("else if(a==='share'){try{Native.share(e.url||'');}catch(x){}}");
             sb.append("else if(a==='del'){try{if(MODE==='bm')Native.deleteBookmarkUrl(e.url||'');else Native.deleteHistoryUrl(e.url||'',!!e.devin);}catch(x){}rmRow(i);Native&&Native.toast&&Native.toast('已删除');}});");
-            // 行: 点击打开; 长按 → 动作菜单
-            sb.append("var LT;document.addEventListener('touchstart',function(ev){var r=ev.target.closest&&ev.target.closest('.row');if(!r)return;var i=+r.parentNode.getAttribute('data-i');LT=setTimeout(function(){LT=0;sheet(i);},480);},{passive:true});");
+            // ── 多选 (对标手机浏览器): 长按进入选择 → 勾选 → 底部批量动作 ──
+            sb.append("var SEL={},selMode=false,SWALLOW=false;");
+            sb.append("function selCount(){return Object.keys(SEL).length;}");
+            sb.append("function rowEl(i){return document.querySelector(\".it[data-i='\"+i+\"']\");}");
+            sb.append("function setRow(i,on){var el=rowEl(i);if(!el)return;if(on){SEL[i]=1;el.classList.add('on');}else{delete SEL[i];el.classList.remove('on');}}");
+            sb.append("function updBar(){var c=document.getElementById('cnt');if(c)c.textContent=selCount()+' \u9009\u4e2d';}");
+            sb.append("function enterSel(i){selMode=true;document.body.classList.add('sel');if(i!=null)setRow(i,true);updBar();try{Native.vibrate(18);}catch(x){}}");
+            sb.append("function exitSel(){selMode=false;document.body.classList.remove('sel');for(var k in SEL)setRow(k,false);SEL={};}");
+            sb.append("function toggleRow(i){if(SEL[i])setRow(i,false);else setRow(i,true);updBar();if(selCount()===0)exitSel();}");
+            sb.append("function selAll(){var all=document.querySelectorAll('.it'),every=true;all.forEach(function(el){if(!SEL[el.getAttribute('data-i')])every=false;});all.forEach(function(el){setRow(el.getAttribute('data-i'),!every);});updBar();if(selCount()===0)exitSel();}");
+            sb.append("function selItems(){var o=[];for(var k in SEL){var e=IT[k];if(e)o.push(e);}return o;}");
+            sb.append("function doAct(a){var its=selItems();if(!its.length){exitSel();return;}var urls=its.map(function(e){return e.url||'';}).filter(Boolean);");
+            sb.append("if(a==='open'){its.forEach(function(e){try{Native.openEntryBg(e.account||'',e.url||'');}catch(x){}});try{Native.toast('\u5df2\u540e\u53f0\u6253\u5f00 '+urls.length+' \u4e2a');}catch(x){}exitSel();}");
+            sb.append("else if(a==='copy'){try{Native.clip(urls.join('\\n'));Native.toast('\u5df2\u590d\u5236 '+urls.length+' \u6761');}catch(x){}exitSel();}");
+            sb.append("else if(a==='share'){try{Native.share(urls.join('\\n'));}catch(x){}exitSel();}");
+            sb.append("else if(a==='bm'){var arr=its.map(function(e){return {url:e.url||'',title:e.title||'',account:e.account||'',devin:!!e.devin};});var n=0;try{n=Native.bookmarkUrls(JSON.stringify(arr));}catch(x){}try{Native.toast(n>0?('\u5df2\u6536\u85cf '+n+' \u6761'):'\u5747\u5df2\u6536\u85cf\u8fc7');}catch(x){}exitSel();}");
+            sb.append("else if(a==='dl'){var hs=urls.filter(function(u){return u.indexOf('http')===0;});try{Native.downloadUrls(JSON.stringify(hs));Native.toast('\u5f00\u59cb\u4e0b\u8f7d '+hs.length+' \u4e2a');}catch(x){}exitSel();}");
+            sb.append("else if(a==='del'){var ix=Object.keys(SEL).slice();if(MODE==='bm'){try{Native.deleteBookmarkUrls(JSON.stringify(urls));}catch(x){}}else{var dv=[],nm=[];its.forEach(function(e){(e.devin?dv:nm).push(e.url||'');});try{if(dv.length)Native.deleteHistoryUrls(JSON.stringify(dv),true);if(nm.length)Native.deleteHistoryUrls(JSON.stringify(nm),false);}catch(x){}}ix.forEach(function(i){IT[i]=null;rmRow(i);});try{Native.toast('\u5df2\u5220\u9664 '+ix.length+' \u6761');}catch(x){}exitSel();}}");
+            sb.append("document.getElementById('selX').onclick=exitSel;document.getElementById('selAll').onclick=selAll;");
+            sb.append("var bs=document.getElementById('btnSel');if(bs)bs.onclick=function(){if(selMode)exitSel();else enterSel(null);};");
+            sb.append("var bc=document.getElementById('btnClear');if(bc)bc.onclick=function(){if(!confirm('\u6e05\u7a7a\u5168\u90e8\u6d4f\u89c8\u5386\u53f2\uff1f'))return;try{Native.clearHistory();}catch(x){}document.querySelectorAll('.it').forEach(function(el){el.parentNode&&el.parentNode.removeChild(el);});exitSel();try{Native.toast('\u5386\u53f2\u5df2\u6e05\u7a7a');}catch(x){}};");
+            sb.append("document.querySelector('.actbar').addEventListener('click',function(ev){var b=ev.target.closest&&ev.target.closest('.sb');if(b)doAct(b.getAttribute('data-act'));});");
+            // 行: 点击打开/选择; 长按 → 选择模式(已在选择模式则弹单项菜单)
+            sb.append("var LT;document.addEventListener('touchstart',function(ev){var r=ev.target.closest&&ev.target.closest('.it');if(!r)return;var i=+r.getAttribute('data-i');LT=setTimeout(function(){LT=0;SWALLOW=true;if(selMode){sheet(i);}else{enterSel(i);}},460);},{passive:true});");
             sb.append("document.addEventListener('touchend',function(ev){if(LT){clearTimeout(LT);LT=0;}},{passive:true});");
             sb.append("document.addEventListener('touchmove',function(ev){if(LT){clearTimeout(LT);LT=0;}},{passive:true});");
-            sb.append("document.addEventListener('click',function(ev){var m=ev.target.closest&&ev.target.closest('.more');if(m){ev.stopPropagation();sheet(+m.getAttribute('data-i'));return;}var r=ev.target.closest&&ev.target.closest('.row');if(r){openIdx(+r.parentNode.getAttribute('data-i'));}});");
+            sb.append("document.addEventListener('click',function(ev){if(SWALLOW){SWALLOW=false;ev.preventDefault();ev.stopPropagation();return;}var m=ev.target.closest&&ev.target.closest('.more');if(m&&!selMode){ev.stopPropagation();sheet(+m.getAttribute('data-i'));return;}var r=ev.target.closest&&ev.target.closest('.it');if(!r)return;var i=+r.getAttribute('data-i');if(selMode){toggleRow(i);}else{if(ev.target.closest('.row'))openIdx(i);}});");
             sb.append("</scr"+"ipt></body></html>");
             Tab bt = makeTab(null, true);   // internal=true → Native 桥可用
             selectTab(tabs.size() - 1);
@@ -4367,6 +4566,7 @@ public class MainActivity extends AppCompatActivity {
     private void appendRow(StringBuilder sb, org.json.JSONObject e, int idx, boolean devin) {
         String u = escapeHtml(e.optString("url", "")), t = escapeHtml(e.optString("title", ""));
         sb.append("<div class='it").append(devin ? " dv" : "").append("' data-i='").append(idx).append("'>");
+        sb.append("<div class='ck'></div>");
         sb.append("<div class='row'><div class='t'>").append(t.isEmpty() ? u : t).append("</div>");
         sb.append("<div class='u'>").append(u).append("</div></div>");
         sb.append("<div class='more' data-i='").append(idx).append("'>\u22EE</div></div>");
