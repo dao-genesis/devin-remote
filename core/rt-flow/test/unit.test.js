@@ -709,6 +709,30 @@ function test(name, fn) {
     assert.ok(/rtint\.shellPoll\(sid, after, res\)/.test(ts), "src/extension.ts: /api/shell/poll 须调 rtint.shellPoll(sid,after,res)");
   });
 
+  // ── 归一外壳 /shell 手机/电脑自动识别 + 手机版模式 (红保留·底层换电脑端数据 · 双副本) ──
+  // UA 判手机→手机版布局(触控放大·菜单底部抽屉·首屏直开🔀切号), ?m=1/0 可手动覆盖切换;
+  // 六板复用电脑端数据源(cloudInit), 红色(切号/对话备份/⬇下载📁备份)布局不变。
+  console.log("\n[/shell 手机/电脑自动识别·手机版模式]");
+  test("/shell: UA 自动识别手机/电脑 + 手机版模式 (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const r = rel.join("/");
+      assert.ok(/function _multiShellHtml\(opts\)/.test(src), r + ": _multiShellHtml 须收 opts");
+      assert.ok(/var MOBILE=false;/.test(src), r + ": 须 MOBILE 开关默认 false");
+      assert.ok(/html\.m #menu\{[^}]*bottom:0/.test(src), r + ": 手机版菜单须底部抽屉 (html.m #menu)");
+      assert.ok(/if\(MOBILE\)\{try\{openBoard\('switch'\)/.test(src), r + ": 手机版冷启动须直开🔀切号板块");
+      assert.ok(/_u\.searchParams\.set\('m',MOBILE\?'0':'1'\)/.test(src), r + ": 须「切换 电脑/手机版」toggle (改 ?m)");
+      assert.ok(/'<!DOCTYPE html><html class="m">'/.test(src) && /'var MOBILE=true;'/.test(src), r + ": 手机版须注入 html.m + MOBILE=true");
+      assert.ok(/_multiShellHtml\(\{ mobile: !!opts\.mobile \}\)/.test(src), r + ": _standaloneShellHtml 须透传 mobile");
+    }
+    // dao-vsix HTTP 路由: 须按 UA 判手机 + ?m 覆盖, 并把 mobile 传入 getStandaloneShellHtml
+    const ts = fs.readFileSync(path.join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts"), "utf8");
+    assert.ok(/Android\|iPhone\|iPad/.test(ts), "src/extension.ts: 须按 User-Agent 判定移动端");
+    assert.ok(/mOverride === '1' \? true : \(mOverride === '0' \? false : uaMobile\)/.test(ts), "src/extension.ts: 须 ?m=1/0 覆盖 UA");
+    assert.ok(/getStandaloneShellHtml\(\{ token: ws\.token, port: ws\.port, mobile \}\)/.test(ts), "src/extension.ts: 须把 mobile 传入 getStandaloneShellHtml");
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);

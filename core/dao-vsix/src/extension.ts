@@ -1371,8 +1371,14 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     if (route === '/shell' || route === '/shell/' || route === '/api/shell/events' || route === '/api/shell/poll' || route === '/api/shell/msg') {
         const rtint: any = _rtflowModule && _rtflowModule._internals;
         if (route === '/shell' || route === '/shell/') {
+            // 归一 · 自动识别手机/电脑浏览器并切换模式: 默认按 User-Agent 判定移动端;
+            //   ?m=1 强制手机版、?m=0 强制电脑版 (供「切换 电脑/手机版」菜单项与用户手动覆盖)。
+            const mOverride = url.searchParams.get('m');
+            const ua = String((req && req.headers && (req.headers['user-agent'] || req.headers['User-Agent'])) || '');
+            const uaMobile = /Android|iPhone|iPad|iPod|Mobile|Silk|Kindle|BlackBerry|Opera Mini|IEMobile|webOS/i.test(ua);
+            const mobile = mOverride === '1' ? true : (mOverride === '0' ? false : uaMobile);
             let html = '';
-            try { html = (rtint && typeof rtint.getStandaloneShellHtml === 'function') ? rtint.getStandaloneShellHtml({ token: ws.token, port: ws.port }) : ''; } catch (e) { html = ''; }
+            try { html = (rtint && typeof rtint.getStandaloneShellHtml === 'function') ? rtint.getStandaloneShellHtml({ token: ws.token, port: ws.port, mobile }) : ''; } catch (e) { html = ''; }
             if (!html) html = '<!DOCTYPE html><meta charset="utf-8"><body style="font:14px sans-serif;padding:24px;background:#0e1116;color:#cdd3de">归一外壳未就绪 · rt-flow 多实例模块未加载</body>';
             return { _proxy: true, status: 200, contentType: 'text/html; charset=utf-8', body: html };
         }

@@ -380,8 +380,10 @@ function _pushMultiHist(url, label) {
 // v4.9.3 · 归一修复: 六大板块经 blob-iframe 挂载, frame-src 必须放行 blob: 否则
 // 子网页被 CSP 静默拦截 → 标签全空白(用户反馈"加载不进去")。createObjectURL 不抛错,
 // 故 mountBoard 的 srcdoc 兜底不触发, 必须在此放行 blob:。
-function _multiShellHtml() {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+function _multiShellHtml(opts) {
+  opts = opts || {};
+  const _mobile = !!opts.mobile;
+  let _html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https:; frame-src blob: http://localhost:* http://127.0.0.1:*;">
 <style>
 *{box-sizing:border-box}
@@ -434,6 +436,17 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 .note{color:#8b949e;font-size:12px;line-height:1.8}
 #drop{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(31,111,235,.16);border:3px dashed #1f6feb;z-index:30;color:#cfe6ff;font-size:15px;font-weight:700}
 #drop.on{display:flex}
+/* 归一·手机版模式 (UA 自动识别 / ?m=1): 不依赖视口宽度, 强制移动端布局 — 触控放大·菜单底部抽屉 */
+html.m #tb{flex-wrap:wrap;height:auto;min-height:40px;padding:5px 6px;gap:4px}
+html.m #eng{display:none}
+html.m #addr{order:9;width:100%;min-width:0;height:36px;margin-top:4px;font-size:14px}
+html.m .tbtn{height:36px;min-width:40px;font-size:17px}
+html.m #tabs{height:42px}
+html.m .tab{max-width:62vw;font-size:14px;padding:0 12px}
+html.m #menu{position:fixed;left:0;right:0;top:auto;bottom:0;width:100%;max-width:none;border-radius:14px 14px 0 0;max-height:72vh;overflow:auto;box-shadow:0 -10px 30px rgba(0,0,0,.55)}
+html.m .mi{padding:14px 16px;font-size:16px}
+html.m .li .b{padding:10px 14px;font-size:14px}
+html.m #hint{font-size:14px;padding:18px}
 /* 归一 · 手机版适配: 窄屏(手机/窄面板)响应式 — 工具条换行·隐藏次要控件·加大触控目标 */
 @media (max-width:560px){
   #tb{flex-wrap:wrap;height:auto;min-height:36px;padding:4px 6px;gap:3px}
@@ -484,7 +497,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 <script>
 (function(){
 var vscode=acquireVsCodeApi();
-var tabs={},order=[],active=null,favs=[],history=[],accounts=[],bridge=null;
+var tabs={},order=[],active=null,favs=[],history=[],accounts=[],bridge=null;var MOBILE=false;
 // 归一·分而治之: 六大板块各开一张独立子网页(各自一个 iframe), 不再共用一个全功能面板。
 // BOARDS[tab] = {req,mounted,ready,frame,url}; 外壳标签 id = 'board:'+tab。
 var BOARDS={};
@@ -526,12 +539,13 @@ function navigate(v){v=(v||'').trim();if(!v)return;if(isBoard()){if(/^https?:\\/
   if(/^https?:\\/\\//i.test(v)){var o=curOrigin();if(t&&o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);spin(true);}else{vscode.postMessage({type:'openExternal',url:v});}return;}
   if(v.charAt(0)==='/'){if(t){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}return;}
   vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v)});}
-var PAGES=[['🏠','主页 · 单账号管理','board:overview'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
+var PAGES=[['🏠','主页 · 单账号管理','board:overview'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about'],['💻','切换 电脑版 / 手机版','toggleMode']];
 function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'" data-l="'+esc(PAGES[i][1])+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
   var items=MENU.querySelectorAll('.mi');for(var j=0;j<items.length;j++){items[j].onclick=function(){MENU.className='';onPage(this.getAttribute('data-p'),this.getAttribute('data-l'));};}}
 function toggleMenu(){MENU.className=MENU.className?'':'on';}
 function onPage(p,l){if(p&&p.indexOf('board:')===0){openBoard(p.slice(6));return;}
   if(p==='newDevin'){vscode.postMessage({type:'newDevinTab'});return;}
+  if(p==='toggleMode'){try{var _u=new URL(location.href);_u.searchParams.set('m',MOBILE?'0':'1');location.href=_u.toString();}catch(e){}return;}
   if(p==='history')showHistory();else if(p==='favs')showFavs();else if(p==='userscripts')showUserscripts();else if(p==='tools')showTools();else if(p==='about')showAbout();}
 // 归一·分而治之 · 六大板块 = 与多实例账号页同级的独立子网页(各板块各自一张 iframe·网页套网页)。
 // 点某板块 → 若已挂载则切到该标签, 否则向宿主取该板块的「单板块」HTML(隐藏导航·只渲染该板块)挂一张新子网页。
@@ -640,8 +654,16 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}});
 buildMenu();
 vscode.postMessage({type:'ready'});
+// 归一·手机版冷启动: 与 APK app.html 一致, 首屏直接打开「🔀切号」板块(电脑端数据源), 而非空提示页。
+if(MOBILE){try{openBoard('switch');}catch(e){}}
 })();
 </script></body></html>`;
+  if (_mobile) {
+    _html = _html
+      .replace('<!DOCTYPE html><html>', '<!DOCTYPE html><html class="m">')
+      .replace('var MOBILE=false;', 'var MOBILE=true;');
+  }
+  return _html;
 }
 // ════════════════════════════════════════════════════════════════════════
 // 归一 · 独立 HTTP 外壳 (适配所有 IDE / 任意浏览器 / 手机 · 参照手机端 APK)
@@ -678,7 +700,7 @@ const SHELL_HTTP_SHIM = "(function(){"
 // 直出独立外壳: 复用 _multiShellHtml, 放开 CSP 的 connect-src(同源 fetch/SSE) 并注入 HTTP 传输垫片。
 function _standaloneShellHtml(opts) {
   opts = opts || {};
-  let html = _multiShellHtml();
+  let html = _multiShellHtml({ mobile: !!opts.mobile });
   html = html.replace(
     /<meta http-equiv="Content-Security-Policy"[^>]*>/i,
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; connect-src \'self\'; img-src data: https: http://localhost:* http://127.0.0.1:*; frame-src blob: \'self\' http://localhost:* http://127.0.0.1:*;">'
