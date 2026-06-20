@@ -243,6 +243,12 @@ function _deOfficialDescDeep(obj) {
 function _getDaoEnhanceText() {
   try {
     if (!_spInvert) return null;
+    // ★ 经藏热切真生效 · 以持久化 _origin_canon.txt 为准 · 不滞启动值
+    if (typeof _spInvert.hotReloadCanon === "function") {
+      try {
+        _spInvert.hotReloadCanon();
+      } catch {}
+    }
     // 从 sp_invert.js 获取经藏文本
     const canonText = _spInvert.getActiveCanonText
       ? _spInvert.getActiveCanonText()
