@@ -8,24 +8,30 @@
 ## 本源架构 — 以 dao-vsix 为基础 + Proxy Pro
 
 dao-one **不是**把四套引擎并排成四个侧栏视图, 而是**以 dao-vsix(二合一)为根**, 在其
-「dao Cloud 全功能面板」内部**折入** Proxy Pro 三模块, 使之与「内网穿透 / Sessions /
-Knowledge …」并列为面板的一个内部 tab。最终用户看到的前端只有**两面**:
+「dao Cloud 全功能面板」内部**折入** Proxy Pro 三模块, 使之与**六大板块**并列, 成为面板的
+**第 7 个 tab**(六大板块 + Proxy Pro = 七大板块, 其余前端与 dao-vsix 完全一致)。
+最终用户看到的前端只有**两面**:
 
 ```
-┌──────────────┬──────────────────────────────────────────────┐
-│  左 · rt-flow │  中 · dao Cloud 全功能面板 (单一)             │
-│  切号面板     │  ┌────────────────────────────────────────┐  │
-│  (多账号轮转  │  │ 🏠主页 🌐内网穿透 🔀Proxy Pro 💬Sessions │  │
-│   /备份/额度) │  │ 📚Knowledge 📋Playbooks 🔑Secrets …      │  │
-│              │  │ ── 🔀Proxy Pro: ①本源观照 ②渠道配置      │  │
-│              │  │      ③模型路由 (内嵌, 复用原生面板)      │  │
-│              │  └────────────────────────────────────────┘  │
-└──────────────┴──────────────────────────────────────────────┘
+┌──────────────┬──────────────────────────────────────────────────┐
+│  左 · rt-flow │  中 · dao Cloud 全功能面板 (单一 · 六板 + Proxy)   │
+│  切号面板     │  ┌────────────────────────────────────────────┐  │
+│  (多账号轮转  │  │ 🏠主页 🔀切号 🌐内网穿透 🔀Proxy Pro          │  │
+│   /备份/额度) │  │ 💬对话备份 💉反向注入 🧩MCP                    │  │
+│              │  │ ── 🔀Proxy Pro(第7板): ①本源观照 ②渠道配置    │  │
+│              │  │      ③模型路由 (内嵌, 复用原生面板)          │  │
+│              │  └────────────────────────────────────────────┘  │
+└──────────────┴──────────────────────────────────────────────────┘
 ```
+
+> 六大板块(本源·见 [`AGENTS.md`](../../AGENTS.md) 第二节)= `overview`🏠 / `switch`🔀 /
+> `bridge`🌐 / `backups`💬 / `inject`💉 / `mcp`🧩。dao-one 在 `bridge` 之后插入第 7 板
+> `proxy`🔀(Proxy Pro)。单号 Knowledge/Playbook/Secret/Git/自动化蓝图已收归主页(`overview`),
+> 全号批量在反向注入(`inject`)。
 
 | 层 | 源 | 在 dao-one 中的角色 |
 |---|---|---|
-| 本源 · dao-vsix(二合一) | `core/dao-vsix` | 全功能面板(主页/内网穿透/Sessions/Knowledge/Playbooks/Secrets)+ 本地 HTTP API + 官网自动登录 + 多账号反向注入 |
+| 本源 · dao-vsix(二合一) | `core/dao-vsix` | 全功能面板**六大板块**(overview/switch/bridge/backups/inject/mcp)+ 本地 HTTP API + 官网自动登录 + 多账号反向注入 |
 | 折入 · dao-proxy-pro | `core/dao-proxy-pro` | **折进全功能面板**的 🔀Proxy Pro tab: ①本源观照 ②渠道配置 ③模型路由(底层提示词隔离替换 + 外接模型路由) |
 | 并立 · rt-flow | `core/rt-flow` | 左侧切号面板: Devin Cloud 多账号实时额度/轮转 + 批量备份/快照 + 回归本源 wipe |
 | 内置 · dao-bridge | `addons/dao-bridge` | 内网穿透(作为全功能面板内的「内网穿透」tab, 后端随引擎启动) |
@@ -54,8 +60,8 @@ npm install            # ws (dao-vsix 运行期依赖) + sucrase (转译 TS)
 node build.js          # 从 ../dao-vsix ../dao-proxy-pro ../rt-flow + ../../addons/dao-bridge
                        #   装配 vendor-* (gitignored), 并把 proxy-fold.patch 叠到 vendor-vsix
 npx @vscode/vsce package --allow-missing-repository --skip-license
-# → dao-one-2.2.2.vsix
-devin-desktop --install-extension dao-one-2.2.2.vsix --force
+# → dao-one-<版本>.vsix (当前 2.9.0)
+devin-desktop --install-extension dao-one-2.9.0.vsix --force
 ```
 
 - 各源**正本**仍在 `core/{dao-vsix,dao-proxy-pro,rt-flow}` 与 `addons/dao-bridge`;

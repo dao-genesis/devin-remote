@@ -2,6 +2,81 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.40.0
+- 全方位整合：将 main（rt-flow-app/APK 线 v0.34.6–v0.35.5）与 dao-vsix 公网中枢线
+  （3.35.0–3.39.0：每窗 relay 直连自愈、下载/备份悬浮窗、/shell 公网公传、官页镜像）
+  合并为单一最终版，并补齐"切号面板两个多实例按钮"的底层修复。
+- 修复·浏览器多实例按钮（点了没反应）：findBrowserExe 原取首个存在的浏览器，会命中
+  LOCALAPPDATA 内损坏的旧 Chrome（ICU 崩溃）→ spawn 即崩、无窗口。新增 daoProbeBrowser()
+  以 `--headless=new` 实测可启动才选，跳过损坏者，回退首个存在者，结果缓存；并补 Edge
+  友好启动旗标（--disable-sync / --disable-features=Translate,msEdgeWelcomePage,msSync）。
+- 修复·IDE 多实例按钮（openRoutedPanel）：命令与 webview 处理器改为先走 tryRtflowMultiInstance
+  （rt-flow 同源多实例，无 X-Frame），失败方回退 openRoutedAccountPanel（保留公传反代路径为兜底）；
+  openRoutedPanel 并入 noAuthNeeded 白名单。
+- 合并冲突·六板菜单 PAGES：保留云端"主·六合一"home 设计，并追加 main 的"💻 切电版/手版"
+  toggleMode 项（其处理器已随 main 合入），两线特性皆不失。
+- 校验：dao-vsix 构建 + out/extension.js 语法通过；rt-flow 单测 110/0 全绿。
+
+## 3.39.0
+- 归一网页公网传输「分层混合」落地（道并行而不相悖）：dao 自渲染为主干，新增
+  「投屏兜底」补齐官网 100% 功能（含回信/Automations/Review/Wiki/设置）。
+- 实测纠偏：宿主整窗浏览器经 devin_web 注入 auth1（含迁移标志）可**直登官网 SPA**，
+  此前「auth1 被 Auth0 挡」实为 iframe 内嵌特有（第三方存储分区/CSP），整窗不受限。
+  故续写已有对话 **无需 apk_** —— 经投屏在官网本体内即可原样回信。
+- 新增 `core/rt-flow/devin_mirror.js`：宿主真·官网本体的 CDP 截帧（Page.captureScreenshot·
+  JPEG）+ 归一化坐标输入回传（Input.dispatch*），自管浏览器生命周期（close 真杀进程，
+  防残留占 profile 夺端口）。令牌只在服务端，浏览器只见像素与归一化输入。
+- 路由 `/i/<accKey>/`：新增 `/mirror`（投屏视图）、`/__mirror/frame`（截帧）、
+  `/__mirror/input`（输入）、`/__mirror/nav`（导航）；对话视图加「🖥️ 官网本体」入口。
+  手机/电脑共用同一 `buildMirrorHtml` viewer（同源帧轮询 data: URL + 同源输入 POST）。
+- 单测 +5（投屏路由/委托·viewer 同源帧与输入·令牌不下发·防注入·vendor 含 devin_mirror）
+  共 108/0 全绿；dao-vsix/dao-one 构建 + render_check 通过；vendor 字节一致。
+
+## 3.38.0
+- 归一网公传「dao 自渲染」正解（Auth0 免疫·手机+电脑完全一致）：现版 Devin 官网
+  已迁 Auth0/SSO，账号密码登录只得旧 auth1 令牌、官网 SPA 已不收 → 「内嵌官网 SPA +
+  注入 auth1_session」对密码池账号根本走不通（IDE 内多实例按钮失效亦同因）。
+- `/i/<accKey>/*` 不再反代官网 SPA，改由 dao 用 auth1 调内部 REST API、服务端自渲染
+  原生页：根 `/` → 对话列表（buildSessionsListHtml·检索/刷新/新建对话）；
+  `/sessions/<id>` → 原生对话视图（getEventStream → buildConversationHtml·四类气泡/
+  思考折叠/全文搜索/用户消息定位）；`/__dao/create`(POST) → 新建对话（auth1）。
+  令牌只在服务端、绝不下发浏览器；同源前缀不变、多实例隔离不变。
+- 手机（APK 网页）与电脑（归一网页）共用同一组原生渲染件，前端/逻辑完全一致。
+- 单测 +6（buildSessionsListHtml 链接/计数/状态/空与失败/转义 + 对话视图回链），共 103/0 全绿。
+- 注：续写已有对话（sendMessage）需 Devin API Key（apk_·公开 API 不收 auth1），属平台契约
+  约束；列表/查看/新建/检索均 auth1 即可，与手机端「备管」一致。
+
+## 3.37.0
+- 归一网页公网传输无感设备使用（道并行而不相悖）：`/shell` 经 DAO Bridge 隧道主口
+  9920 暴露后，公网手机/电脑浏览器打开「Devin 对话页 / 多实例号页」iframe 不再指向
+  `http://localhost:<随机端口>`（绑 127.0.0.1·未隧道暴露·公网 404），改走**同源路径
+  前缀** `/i/<accKey>/*` 直达。`_shellResolveOpen` 返回同源相对 URL；rt-flow
+  `devin_proxy` 新增前缀模式（rewriteBase=`/i/<accKey>`）：HTML/JS 根绝对引用补前缀、
+  运行时 fetch/XHR/EventSource(SSE) 补前缀+鉴权、缓存按基址重定基。
+- 同源多实例隔离：同源前缀下所有账号 iframe 共用一 origin，桥接脚本按 accKey 给
+  localStorage 加私有命名空间（get/set/remove/clear 全包）→ 各账号互不串号。端口模式
+  （IDE 内置浏览器·异 origin 本已隔离）不注入 shim，零回归。
+- 仅动传输层（外科手术式），不碰布局/面板渲染；并修复 3.36.0 的 vendor 脱钩
+  （面板代码回灌源 `core/rt-flow/`，恢复 源↔打包 一致）。
+
+## 3.36.0
+- 下载/备份悬浮窗（复刻手机端 APK daopan.html）：⬇ 按钮打开「☁近期对话 / 🗂备份库」双标签悬浮窗；跨账号近期对话聚合（状态灯+账号编号+查看/进入/⬇MD/📦全部文件）；convView 多标签同时查看多条对话正文（自动抓取 MD、可逐条导出 MD/ZIP）；备份库按账号分组；搜索过滤、toast 提示、可拖拽标题栏。宿主端新增 dlRecent/dlExportMd/dlZip 数据通道（HTTP /shell 与 VS Code webview 两路均接）。
+- 主页路由：汉堡菜单「主页」与左上角 🏠 按钮 → 直接打开「六合一」组合板块（含主页在内的全六板侧栏导航）；🔀切号/🌐公网穿透/💬对话备份/💉反向注入/🧩MCP 仍各自独立单板，分而治之并存。
+
+## 3.35.1
+
+**补齐 relay 运行时依赖 `ws`（让 3.35.0 的去中心化真正生效）**
+
+- 致命遗漏：`build.js` 仅用 sucrase 转译（不打包），`connectSingleRelay` 运行时 `require('ws')` 为外部依赖；而 `.vscodeignore` 把 `node_modules/**` 全量排除、打包又用了 `--no-dependencies` → **`ws` 从未随 VSIX 下发** → 安装版 `require('ws')` 直接抛错被 catch → relay 永远连不上（`relay=local`）。这是 dao-vsix 每窗口 relay 长期休眠、最深层的根因之一（与 3.35.0 的「强制走代理」叠加，双保险地掐死了 relay）。
+- 修复：`.vscodeignore` 加 `!node_modules/ws` / `!node_modules/ws/**` 例外，把零依赖的 `ws@8.21.0`（约 195KB）随包下发至 `extension/node_modules/ws`，使 `extension/out/extension.js` 的 `require('ws')` 正常解析。3.35.0 的直连兜底 + 本补丁，方使每窗口真正连上各自的 `relay/<session>`。
+
+## 3.35.0
+
+**去中心化根治：每窗口各自独立公网隧道（鸡犬相闻·老死不相往来）**
+
+- 根因定位：`connectSingleRelay` 对 `workers.dev`/`cloudflare` 域**强制走本地代理**，一旦本机无代理（或代理 CONNECT 失败）便直接 `onFail()` 放弃——**从不尝试直连**。导致每个实例的 relay 通道永远连不上（`relay=local`），于是**所有窗口没有各自的公网 URL**，全网唯一入口退化为编排器那条写死指向 9920 的「独苗」cloudflared 隧道 → 只有最早占住 9920 的窗口对外可见（你反复看到旧界面的真正底层原因）。
+- 修复：无代理 / 代理失败时**直连兜底**（本机出网可达 Cloudflare，cloudflared 隧道已证明这点），让每个实例都能独立连上自己的 `relay/<本窗口唯一 session>`。N 个窗口 = N 条独立出站隧道、N 个独立公网 URL、各自账号，完全并行、互不覆盖。会话 id 已是「workspaceKey + 32 位随机」每窗口唯一，conn 注册表(`dao-conn.json`)已是按 pid 去重的数组——去中心化设计本就齐备，此前只因 relay 连不上而休眠。
+
 ## 3.34.0
 
 **内穿自愈增强 + 知识库触发器改「所有对话均触发」**
