@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.48.1
+- 严重回归修复：六合一中间面板(getDaoCloudMiddlePanelHtml)整面板全白、所有板块点不动
+  - 根因：批6「操作电脑本体」rComputer 在反引号模板内的内联脚本里用了 `'\n'`，模板插值时 `\n` 塌缩为真实换行 → 单引号字符串跨行 → 整段内联脚本 SyntaxError → `sw` 等全部未定义 → 点击导航无反应、内容区空白
+  - 修复：改为 `'\\n'`(渲染后为合法的 `\n` 转义)
+  - 加固 `tools/render_check.js`：括号感知地剥离 `${...}` 插值(支持嵌套花括号)，并新增对 getDaoCloudMiddlePanelHtml 的渲染后语法校验，可在 CI 拦截此类塌缩
+
 ## 3.48.0
 - 同步 rt-flow v4.24.0（vendored `rtflow/extension.js`）：修复多实例「一直加载中」污染其他页面
   - 根因：全屏加载遮罩 `#spin` 为全局单例，仅由某 iframe load 清除、无超时/error 兜底；一个卡住的标签(官网多实例 iframe 永不 load)会永久盖住整个外壳
