@@ -1,6 +1,6 @@
 {
-  "versionCode": 98,
-  "versionName": "0.35.5",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.5/DevinCloud-mobile-v0.35.5.apk",
-  "notes": "v0.35.5 · 页面归一(网页端外壳与 APK app.html 完全一致): 任意公网浏览器打开零账号中继 /console, 现在呈现与手机 APK 那张 app.html 逐令牌一致的外壳——顶部工具栏 + 横向标签条 + 同套深色令牌 + ☁N 橙色在场, 不再是「另起炉灶」的左栏镜像台。标签条芯片在有其他设备(含手机本体)正看/控时上橙色半透明 + ☁N, 与 APK 标签条双向一致; 内容区因板块绑定原生桥(只能跑在手机里), 以实时镜像 + 反向点按忠实呈现同一张手机页。仅网页资源变更, 无需重装即生效(中继自动取最新)。"
+  "versionCode": 99,
+  "versionName": "0.35.6",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.6/DevinCloud-mobile-v0.35.6.apk",
+  "notes": "v0.35.6 · 网页控台与 APK 原生界面 1:1 归一: /console 现逐件复刻手机原生外壳——两行工具栏(≡菜单/地址/译/→ 与 🔍缩放滑块/★收藏/↻重载/📥下载/🗂全服通)、完整汉堡菜单(模块/页面工具/分享/镜像·连接, 全部项与子分组同序同名)、以及『下载』与『全服通』两个可拖动悬浮窗。📥 下载窗 1:1 呈现手机下载列表并可在手机本机分享/打开/删除(本版新增 listDownloads/downloadAction 桥, 仅外发文件名/大小, 不含路径); 🗂 全服通窗实时镜像手机内真实『近期对话/备份』页, 可反向点按。客户端 RPC 串行化, 杜绝多镜像并发把手机打到超时。橙色 ☁N 跨设备在场仍双向一致。网页外壳无需重装即生效(中继自动取最新); 升级到本版后网页 📥 下载列表方可读取。"
 }
