@@ -1180,6 +1180,16 @@ public class RelayService extends Service {
             return r[0];
         }
 
+        /** 投屏取帧: 压缩 JPEG (降采样 + 铺底色) + 尺寸/URL/标题。网页控台镜像走它 —— 帧体积较整幅 PNG 小一个量级,
+         *  弱网下不再因大包超时而黑屏; 停泊的板块(本地页)也能被任意端取帧投屏。返回 ipcMirrorFrame 的 JSON。 */
+        @JavascriptInterface public String mirrorFrame(int tabIndex, int quality, int maxDim) {
+            if (!remoteOpsEnabled) return "{\"ok\":false,\"error\":\"remote_ops_disabled\"}";
+            MainActivity m = MainActivity.sInstance;
+            if (m == null) return "{\"ok\":false,\"error\":\"no_host\"}";
+            try { return m.ipcMirrorFrame(tabIndex, quality > 0 ? quality : 55, maxDim > 0 ? maxDim : 1024); }
+            catch (Exception e) { return "{\"ok\":false,\"error\":\"ex\"}"; }
+        }
+
         // 网页控台 📥 下载悬浮窗: 列出手机下载 (脱敏) + 在手机本机执行项动作 (分享/打开/删除)。
         @JavascriptInterface public String listDownloads() {
             if (!remoteOpsEnabled) return "[]";
