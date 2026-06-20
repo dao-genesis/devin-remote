@@ -713,6 +713,31 @@ function _shellBroadcast(msg) {
   }
   return n;
 }
+// ── 多用户「道并行而不相悖」· 六大板块宿主回推按会话隔离 ──────────────────
+//   病灶: 旧实现 setHostPost 恒走 _shellBroadcast — 把某用户触发的板块数据/回包
+//   广播给所有连接的浏览器 → 公网多用户互相串台 (相悖)。
+//   正法: _cloudProvider 是「单一宿主、状态为号主共享」的实例, 故:
+//     · 单用户发起的请求(cloudInit/cloudRelay/cloudReady)经 _shellCloudRun 串行化执行,
+//       执行期间把 _shellCloudActiveSid 锁定为该 sid, 宿主一切回推(含 await 后的异步回包)
+//       只经 SSE 发给这个 sid → 各用户各得其所·互不串台 (鸡犬相闻·老死不相往来)。
+//     · 任务之间(active 为空)宿主若有后台主动刷新(refresh), 因数据本为号主共享, 广播给所有页。
+//   串行化代价: 各用户的板块操作排队执行; 板块多为快读, 而切号/清理等本就是改号主共享态的
+//   全局变更, 串行+广播结果正是其应有语义, 故无碍。
+let _shellCloudActiveSid = '';
+let _shellCloudQueue = Promise.resolve();
+function _shellCloudDispatch(mm) {
+  if (_shellCloudActiveSid) _shellSend(_shellCloudActiveSid, { type: 'cloudHost', msg: mm });
+  else _shellBroadcast({ type: 'cloudHost', msg: mm });
+}
+function _shellCloudRun(sid, fn) {
+  _shellCloudQueue = _shellCloudQueue.then(async () => {
+    _shellCloudActiveSid = sid || '';
+    try { if (_cloudProvider && _cloudProvider.setHostPost) _cloudProvider.setHostPost(_shellCloudDispatch); } catch (e) {}
+    try { await fn(); } catch (e) { try { log('[shell] cloud task err: ' + (e && e.message)); } catch (x) {} }
+    finally { _shellCloudActiveSid = ''; }
+  });
+  return _shellCloudQueue;
+}
 // 解析「开一个账号标签」的元数据 (同 openMultiInstance 的反代解析, 但不创建 webview —
 // 独立页自身经 mkTab 以 iframe 开标签)。返回与 webview 'open' 消息同形的对象。
 async function _shellResolveOpen(opts) {
@@ -827,15 +852,17 @@ async function shellHandleMessage(sid, m) {
         return;
       }
       case 'cloudInit': {
-        if (!_cloudProvider) { _toast('六大板块面板未就绪'); return; }
-        try { _cloudProvider.setHostPost((mm) => { _shellBroadcast({ type: 'cloudHost', msg: mm }); }); } catch (e) {}
-        let html = '';
-        try { html = _cloudProvider.buildHtml(m.board) || ''; } catch (e) {}
-        send({ type: 'cloudInitHtml', html, board: m.board || 'overview' });
+        if (!_cloudProvider) { send({ type: 'toast', text: '六大板块面板未就绪' }); return; }
+        // 按会话隔离: buildHtml 与其触发的宿主回推仅发给本 sid (道并行而不相悖)
+        await _shellCloudRun(sid, async () => {
+          let html = '';
+          try { html = _cloudProvider.buildHtml(m.board) || ''; } catch (e) {}
+          send({ type: 'cloudInitHtml', html, board: m.board || 'overview' });
+        });
         return;
       }
-      case 'cloudReady': try { _cloudProvider && _cloudProvider.refresh(); } catch (e) {} return;
-      case 'cloudRelay': try { _cloudProvider && _cloudProvider.handleMessage(m.msg); } catch (e) {} return;
+      case 'cloudReady': _shellCloudRun(sid, async () => { try { _cloudProvider && _cloudProvider.refresh(); } catch (e) {} }); return;
+      case 'cloudRelay': _shellCloudRun(sid, async () => { try { if (_cloudProvider) await _cloudProvider.handleMessage(m.msg); } catch (e) {} }); return;
       case 'filesDropped': {
         const uris = String(m.uris || '').split(/[\r\n]+/).map((s) => s.trim()).filter(Boolean);
         const paths = uris.map((u) => { try { return u.startsWith('file:') ? vscode.Uri.parse(u).fsPath : u; } catch (e) { return u; } });

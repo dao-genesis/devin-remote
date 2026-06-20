@@ -62,6 +62,38 @@
 > 同步到 `core/dao-vsix/rtflow/`，否则二合一独立版跑的是旧代码。校验：
 > `diff -q core/rt-flow/extension.js core/dao-vsix/rtflow/extension.js`。
 
+### 公网多用户「道并行而不相悖」（会话隔离模型）
+
+`/shell` 经 dao-bridge 暴露公网后，会有**多个浏览器同时连**。每个浏览器页 = 一个 `sid`
+（`SHELL_HTTP_SHIM` 内 `sh_<rand>`），各自一条 SSE 通道（`_shellClients: sid→res`）。
+隔离要点（`core/rt-flow/extension.js` 宿主侧）：
+
+- **板块回推按 sid 隔离**：六大板块是**单一宿主、状态为号主共享**的 `_cloudProvider`。
+  用户发起的 `cloudInit/cloudRelay/cloudReady` 经 `_shellCloudRun(sid, fn)` **串行化**执行，
+  执行期间 `_shellCloudActiveSid` 锁定该 sid，宿主一切回推（含 `await` 后的异步回包）经
+  `_shellCloudDispatch` **只发给该 sid** → 各用户各得其所、互不串台。任务间（无活跃 sid）
+  的后台只读刷新（`refresh`）才广播给所有页（数据本为号主共享）。
+  > 旧病灶（已修）：`cloudInit` 内 `setHostPost(()=>_shellBroadcast(cloudHost))` —— 把某用户
+  > 的板块数据广播给所有连接的浏览器，公网多用户互相串台。源级护栏见 `test/unit.test.js`
+  > 「/shell 多用户会话隔离」。
+- 各浏览器页的标签集 / 已开的 Devin 对话 iframe **本就按页隔离**（每次加载独立）。
+
+### ⚠️ 待完善：公网用户的「Devin 对话 / 多实例账号页」仍指向 localhost 端口
+
+`_shellResolveOpen` 开账号页时返回 `devin_proxy.ensureProxyForAccount` 的
+`http://localhost:<随机端口>/…`，该反代**绑在 127.0.0.1 的独立端口**，**未经 dao-bridge 隧道
+暴露**（隧道只暴露主端口 9920）。因此：
+
+- **IDE 内 / 本机浏览器**：localhost 可达 → Devin 对话 iframe 正常。
+- **公网隧道用户**：`http://localhost:<port>` 指向**用户自己**的机器 → Devin 对话页加载不出来。
+  六大板块（blob-iframe + `/api/shell/*` 走 9920）不受影响，仍正常。
+
+> 归一目标（“公网用户操作与 IDE 内完全一致”）的**最后一块**：把每账号反代改为经主端口 9920
+> 的**同源路径前缀**（如 `/i/<accKey>/…`）暴露，`_shellResolveOpen` 返回**同源相对 URL**
+> （`'self'` 已在 standalone shell 的 `frame-src` 白名单内）。需要 `devin_proxy` 支持前缀化
+> 服务（资产/接口路径重写 + 每账号 auth 注入），可参照现有 `/devin-cloud/*` 同源反代实现。
+> 此改动较大且需真实扩展宿主（VS Code）联调，宜单独成一支。
+
 ---
 
 ## 三、内网穿透是去中心化的 —— 不需要 Cloudflare 账号、不存在必需的 Worker
