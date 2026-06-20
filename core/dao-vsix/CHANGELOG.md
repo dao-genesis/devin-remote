@@ -2,6 +2,13 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.35.1
+
+**补齐 relay 运行时依赖 `ws`（让 3.35.0 的去中心化真正生效）**
+
+- 致命遗漏：`build.js` 仅用 sucrase 转译（不打包），`connectSingleRelay` 运行时 `require('ws')` 为外部依赖；而 `.vscodeignore` 把 `node_modules/**` 全量排除、打包又用了 `--no-dependencies` → **`ws` 从未随 VSIX 下发** → 安装版 `require('ws')` 直接抛错被 catch → relay 永远连不上（`relay=local`）。这是 dao-vsix 每窗口 relay 长期休眠、最深层的根因之一（与 3.35.0 的「强制走代理」叠加，双保险地掐死了 relay）。
+- 修复：`.vscodeignore` 加 `!node_modules/ws` / `!node_modules/ws/**` 例外，把零依赖的 `ws@8.21.0`（约 195KB）随包下发至 `extension/node_modules/ws`，使 `extension/out/extension.js` 的 `require('ws')` 正常解析。3.35.0 的直连兜底 + 本补丁，方使每窗口真正连上各自的 `relay/<session>`。
+
 ## 3.35.0
 
 **去中心化根治：每窗口各自独立公网隧道（鸡犬相闻·老死不相往来）**
