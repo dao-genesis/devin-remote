@@ -93,10 +93,10 @@ async function connect(){
     setState("去中心化握手中…","#9e6a03");
     log("→ 路线C: 公共信令(ntfy)交换加密 SDP, 0账号不经 Worker…");
     try{
-      sig = await DaoSignal.connect({ session:session, token:token, ice:extraIce, timeout:13000 });
+      sig = await DaoSignal.connect({ session:session, token:token, ice:extraIce, timeout:25000 });
       onOpen("P2P 直连 🟢 (去中心化·0账号)");
       return;
-    }catch(e){ log("• 去中心化未通 ("+String((e&&e.message)||e)+")"+(url?", 尝试 Worker 兜底…":"")); try{ if(sig) sig.close(); }catch(_){ } sig=null; }
+    }catch(e){ var ec=String((e&&e.message)||e); var hint = ec==="ice_failed" ? "去中心化未通 (对端已应答但 P2P 打洞失败/对称NAT —— 可填 TURN 或用隧道兜底)" : (ec==="signal_timeout" ? "去中心化未通 (未收到对端应答 —— 检查手机在线与 session/token 是否一致)" : "去中心化未通 ("+ec+")"); log("• "+hint+(url?", 尝试 Worker 兜底…":"")); try{ if(sig) sig.close(); }catch(_){ } sig=null; }
   } else { log("• 本环境无 WebCrypto, 跳过去中心化"+(url?", 用 Worker 兜底":"")); }
 
   // ── 兜底: Worker 隧道信令 (原路径) ──
