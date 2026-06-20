@@ -4164,22 +4164,37 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ── 标签会话持久化 (重开恢复上次标签/登录状态) ──────────────────────────
+    /** 标签 URL 是否可在重启后还原: 排除空 / about:blank / data: 以及生成式内部列表页的裸基址 file:///android_asset/
+     *  (书签/历史/MD 导出页经 loadDataWithBaseURL 渲染, 无具体文件, 重载会 ERR_FILE_NOT_FOUND → 不持久化, 用户从菜单重新打开)。 */
+    private boolean isPersistableTabUrl(String u) {
+        if (u == null) return false;
+        String s = u.trim();
+        if (s.isEmpty() || s.equals("about:blank")) return false;
+        if (s.startsWith("data:")) return false;
+        if (s.equals("file:///android_asset/") || s.equals("file:///android_asset")) return false;
+        return true;
+    }
+
     private void saveTabs() {
         try {
             org.json.JSONArray arr = new org.json.JSONArray();
+            int savedActive = 0;
             for (int i = 0; i < tabs.size(); i++) {
                 Tab t = tabs.get(i);
+                String u = displayUrl(t);
+                if (!isPersistableTabUrl(u)) continue;   // 跳过生成式/瞬态内部页, 重启无法还原
+                if (i == active) savedActive = arr.length();
                 org.json.JSONObject o = new org.json.JSONObject();
-                o.put("url", displayUrl(t));
+                o.put("url", u);
                 if (t.accountJson != null) o.put("account", t.accountJson);
                 o.put("title", t.title);
                 if (t.titleOverride != null) o.put("titleOverride", t.titleOverride);
                 arr.put(o);
             }
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
-            sp.edit().putString("tabs", arr.toString()).putInt("active", active).apply();
+            sp.edit().putString("tabs", arr.toString()).putInt("active", savedActive).apply();
             org.json.JSONObject vault = new org.json.JSONObject();
-            vault.put("tabs", arr); vault.put("active", active);
+            vault.put("tabs", arr); vault.put("active", savedActive);
             vaultWrite("tabs", vault.toString());
         } catch (Exception ignored) {}
     }
@@ -4202,13 +4217,17 @@ public class MainActivity extends AppCompatActivity {
             if (json.isEmpty()) return false;
             org.json.JSONArray arr = new org.json.JSONArray(json);
             if (arr.length() == 0) return false;
+            int created = 0;
             for (int i = 0; i < arr.length(); i++) {
                 org.json.JSONObject o = arr.getJSONObject(i);
                 String url = o.optString("url", SWITCH);
+                if (!isPersistableTabUrl(url)) continue;   // 跳过历史遗留的不可还原条目(裸 file:///android_asset/ 等)
                 String acc = o.has("account") ? o.getString("account") : null;
                 Tab nt = newTab(url, acc);
                 if (o.has("titleOverride")) { nt.titleOverride = o.optString("titleOverride", null); }
+                created++;
             }
+            if (created == 0) return false;
             if (act >= 0 && act < tabs.size()) selectTab(act);
             return true;
         } catch (Exception e) { return false; }
