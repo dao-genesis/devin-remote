@@ -121,7 +121,11 @@
 - **IDE 内路由多实例**：`core/rt-flow/devin_proxy.js` 反代 `app.devin.ai`，在 IDE 内置浏览器
   里按号路由（含 L2 磁盘缓存）。
 
-不需要新造多实例机制；遇到问题是做**稳定性完善**（如路由实例 auth 自动注入、profile 隔离）。
+两条路用**同一套** auth 注入（`localStorage['auth1_session']={token,userId}` + 一组 org/post-auth
+键，见各文件 `buildInjectSource/buildAuthBridge`）。auth1 仍是当前 auth0 版 SPA 认可的登录态真源——
+实测在 `app.devin.ai` 真源注入即秒登。
+
+不需要新造多实例机制；遇到问题是做**稳定性完善**（见第五节踩坑 6：反代源的规范主机校验）。
 
 ---
 
@@ -141,6 +145,14 @@
 4. **捆绑 rtflow 易过期**（见第二节末尾的 re-vendor 提醒）。
 5. **中文请求体截断**：调 Devin 接口务必用 `asciiSafeJson()`（非 ASCII 全转 `\uXXXX`），
    否则服务端会「每隔一字截断」。
+6. **IDE 内路由多实例「掉登录」之真因 = 规范主机校验，不是 auth 没注入。** auth0 版 SPA 会读
+   服务端下发的 `webapp_host`，一旦 `location.host !== webapp_host` 就 `location.href =`
+   `` `https://${webapp_host}/login?next=...` `` **硬跳真站**（绝对 URL·`location.href` 无法 hook），
+   于是反代的 `localhost:<port>` 源被弹回真站登录页。**修法（已落地）**：`devin_proxy.js` 改写
+   **JSON 响应**里的 `webapp_host` = 本次请求 `Host`（IDE webview / 直连 localhost / 经 bridge 隧道
+   均自动匹配）→ 校验通过、留在反代源、保持登录。配套把 HTML/JS/Location 的 `https://app.devin.ai`
+   改为**裸前缀全量改写**（含单引号/反引号结尾），并加 `location.assign/replace`+`history` 运行时兜底。
+   排错口诀：先 `curl <proxyPort>/<orgResolve JSON>` 看 `webapp_host` 是否=本地 Host；别再去怀疑 auth1。
 
 ---
 
