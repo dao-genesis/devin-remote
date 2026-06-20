@@ -1,6 +1,6 @@
 {
-  "versionCode": 96,
-  "versionName": "0.35.3",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.3/DevinCloud-mobile-v0.35.3.apk",
-  "notes": "v0.35.3 · 浏览器公网访问根治：默认把「零账号中继网控台 /console」作为公网入口交给你（任意浏览器直接打开即与 APK 同款操作：实时镜像+反向操控+橙色在场标签），不再依赖被网络封锁的 cloudflared，也不再把已掉线的免账号 SSH 隧道当「当前生效通道」对外广播。修法：穿透面板 _bestPublic 改为对齐本源——默认零账号中继 Worker、隧道仅作冗余；新增 _bestWeb 永远优先 /console；快速接入/接入文档/复制公网网址均以浏览器直开网址为首选，RPC /relay 明确标注为给云端 Agent/curl 用。隧道掉线时浏览器入口仍稳定可用。"
+  "versionCode": 97,
+  "versionName": "0.35.4",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.4/DevinCloud-mobile-v0.35.4.apk",
+  "notes": "v0.35.4 · 跨设备「在场登记」双向同步根治：橙色半透明在场标记现在所有设备都有，包括 APK 本机。此前手机只把自己的在场(__phone__)告诉云端(云端能看到「本机在前」)，却从不把云端的在场画回手机 → APK 标签条永远不亮橙。修法：MainActivity 标签条按 tabViewers 渲染——某标签有其他设备(云端控台)正看/控时即上橙色半透明底 + ☁N 角标(N=联控设备数)，前台每 3s 巡检 + 收到 claim 即时重绘，TTL 15s 离场自动消。于是任一端(APK / 浏览器 /console)操作哪张标签，所有端都实时看到同一张标签亮橙、互不串台。实测：云端两台设备看「公网穿透」标签 → 手机 APK 该标签即显「穿透 ☁2」橙底。"
 }

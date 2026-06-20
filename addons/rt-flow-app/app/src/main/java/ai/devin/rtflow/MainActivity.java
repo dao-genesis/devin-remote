@@ -188,6 +188,7 @@ public class MainActivity extends AppCompatActivity {
             java.util.Iterator<java.util.Map.Entry<String,Long>> it = e.getValue().entrySet().iterator();
             while (it.hasNext()) if (now - it.next().getValue() > VIEW_TTL) it.remove();        // 顺手清陈
         }
+        main.post(this::refreshPresenceIfChanged);   // 云端来看/离场 → 本机标签条橙色在场标记即时同步
     }
     /** 某标签当前在场 viewers 的 JSON 数组 (活动标签总含 __phone__ = 手机本体前置)。 */
     private String viewersJson(long vid, boolean isActive, long now) {
@@ -200,6 +201,41 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i < ids.size(); i++) { if (i > 0) sb.append(","); sb.append(JSONObject.quote(ids.get(i))); }
         return sb.append("]").toString();
     }
+    /** 某标签当前「其他设备(云端控台, 非手机本体)」在场计数 (按 TTL 过滤)。>0 → 本机标签条上橙色在场标记。 */
+    private int coViewerCount(long vid, long now) {
+        java.util.concurrent.ConcurrentHashMap<String,Long> m = tabViewers.get(vid);
+        if (m == null) return 0;
+        int n = 0;
+        for (java.util.Map.Entry<String,Long> e : m.entrySet())
+            if (now - e.getValue() <= VIEW_TTL) n++;
+        return n;
+    }
+    private String lastPresenceSig = "";
+    /** 在场签名: 各标签 vid→云端在场数。仅变化才重绘标签条(省电·防抖)。 */
+    private String presenceSig() {
+        long now = System.currentTimeMillis();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < tabs.size(); i++) {
+            Tab t = tabs.get(i);
+            int n = coViewerCount(t.vid, now);
+            if (n > 0) sb.append(t.vid).append(':').append(n).append(';');
+        }
+        return sb.toString();
+    }
+    /** 云端在场变化(claim/离场/TTL过期) → 即时重绘标签条上橙色在场标记。无变化不重绘。 */
+    private void refreshPresenceIfChanged() {
+        String sig = presenceSig();
+        if (sig.equals(lastPresenceSig)) return;
+        lastPresenceSig = sig;
+        renderTabStrip();
+    }
+    // 前台期间每 3s 巡检在场(覆盖离场/TTL过期, 无对应 RPC 事件), 变化即重绘; 收到 claim 时另立即重绘。
+    private final Runnable presenceTick = new Runnable() {
+        @Override public void run() {
+            refreshPresenceIfChanged();
+            if (appForeground) main.postDelayed(this, 3000);
+        }
+    };
 
     @SuppressWarnings("SetJavaScriptEnabled")
     @Override
@@ -1058,10 +1094,14 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i < tabs.size(); i++) {
             final int idx = i;
             Tab t = tabs.get(i);
+            int coN = coViewerCount(t.vid, System.currentTimeMillis());   // 云端控台在场数(非手机本体)
+            boolean coView = coN > 0;
             LinearLayout chip = new LinearLayout(this);
             chip.setOrientation(LinearLayout.HORIZONTAL);
             chip.setGravity(Gravity.CENTER_VERTICAL);
-            chip.setBackgroundColor(idx == active ? 0xFF1F3A45 : 0xFF1B1F26);
+            // 道法自然·跨设备在场同步: 有其他设备(云端)正看/控此标签 → 橙色半透明底, 与控台 .tab.shared 同款视觉, 双向一致。
+            chip.setBackgroundColor(coView ? (idx == active ? 0xFF5A3D22 : 0xFF3A2C1B)
+                                           : (idx == active ? 0xFF1F3A45 : 0xFF1B1F26));
             chip.setPadding(dp(10), dp(5), dp(6), dp(5));
             LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             clp.rightMargin = dp(4);
@@ -1069,7 +1109,7 @@ public class MainActivity extends AppCompatActivity {
 
             TextView label = new TextView(this);
             label.setText(chipTitle(t));
-            label.setTextColor(idx == active ? 0xFF9CDCFE : 0xFFAAB2BD);
+            label.setTextColor(idx == active ? 0xFF9CDCFE : (coView ? 0xFFE3A877 : 0xFFAAB2BD));
             label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
             label.setMaxWidth(dp(130));
             label.setSingleLine(true);
@@ -1123,6 +1163,14 @@ public class MainActivity extends AppCompatActivity {
             x.setOnClickListener(v -> closeTab(idx));
 
             chip.addView(label);
+            if (coView) {   // 橙色在场角标: 几台其他设备正看/控此页 (与控台 .co 同义)
+                TextView co = new TextView(this);
+                co.setText(" \u2601" + coN);   // ☁N
+                co.setTextColor(0xFFF0883E);
+                co.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+                co.setPadding(dp(3), 0, dp(1), 0);
+                chip.addView(co);
+            }
             chip.addView(x);
             chip.setTag(idx);
             tabStripRow.addView(chip);
@@ -4374,6 +4422,7 @@ public class MainActivity extends AppCompatActivity {
         super.onPause();
         appForeground = false;
         main.removeCallbacks(visWatchdog);
+        main.removeCallbacks(presenceTick);
         bgSince = System.currentTimeMillis();
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {} // 持久化其它网站登录 Cookie
         saveTabs();
@@ -4430,6 +4479,8 @@ public class MainActivity extends AppCompatActivity {
         // 持续看门狗: 前台期间每 8s 检一次, 若当前页 visibilityState 卡 hidden 则静默拉回, 无需用户操作。
         main.removeCallbacks(visWatchdog);
         main.postDelayed(visWatchdog, VIS_WATCH_MS);
+        main.removeCallbacks(presenceTick);
+        main.post(presenceTick);   // 前台巡检跨设备在场, 橙色标记随云端来去实时同步
         // 长时间后台返回: 渲染线程可能被冻结(看着正常但点不动) → 当前标签探活(冻死则静默重载), 其余标签标记延迟探活。
         long bg = bgSince > 0 ? (System.currentTimeMillis() - bgSince) : 0;
         bgSince = 0;
@@ -4454,6 +4505,7 @@ public class MainActivity extends AppCompatActivity {
         sInstance = null;
         appForeground = false;
         main.removeCallbacks(visWatchdog);
+        main.removeCallbacks(presenceTick);
         saveTabs();
         try { if (dlReceiver != null) unregisterReceiver(dlReceiver); } catch (Exception ignored) {}
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}
