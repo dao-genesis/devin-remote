@@ -1,6 +1,6 @@
 {
-  "versionCode": 97,
-  "versionName": "0.35.4",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.4/DevinCloud-mobile-v0.35.4.apk",
-  "notes": "v0.35.4 · 跨设备「在场登记」双向同步根治：橙色半透明在场标记现在所有设备都有，包括 APK 本机。此前手机只把自己的在场(__phone__)告诉云端(云端能看到「本机在前」)，却从不把云端的在场画回手机 → APK 标签条永远不亮橙。修法：MainActivity 标签条按 tabViewers 渲染——某标签有其他设备(云端控台)正看/控时即上橙色半透明底 + ☁N 角标(N=联控设备数)，前台每 3s 巡检 + 收到 claim 即时重绘，TTL 15s 离场自动消。于是任一端(APK / 浏览器 /console)操作哪张标签，所有端都实时看到同一张标签亮橙、互不串台。实测：云端两台设备看「公网穿透」标签 → 手机 APK 该标签即显「穿透 ☁2」橙底。"
+  "versionCode": 98,
+  "versionName": "0.35.5",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.5/DevinCloud-mobile-v0.35.5.apk",
+  "notes": "v0.35.5 · 页面归一(网页端外壳与 APK app.html 完全一致): 任意公网浏览器打开零账号中继 /console, 现在呈现与手机 APK 那张 app.html 逐令牌一致的外壳——顶部工具栏 + 横向标签条 + 同套深色令牌 + ☁N 橙色在场, 不再是「另起炉灶」的左栏镜像台。标签条芯片在有其他设备(含手机本体)正看/控时上橙色半透明 + ☁N, 与 APK 标签条双向一致; 内容区因板块绑定原生桥(只能跑在手机里), 以实时镜像 + 反向点按忠实呈现同一张手机页。仅网页资源变更, 无需重装即生效(中继自动取最新)。"
 }
