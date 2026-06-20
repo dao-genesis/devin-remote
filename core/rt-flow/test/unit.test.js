@@ -346,6 +346,109 @@ function test(name, fn) {
     proxy.stopAll();
   });
 
+  // ── 11a. 归一 · 公网同源前缀反代 (道并行而不相悖 · /shell 经隧道主口无感传输) ──
+  console.log("\n[devin_proxy · 公网同源前缀模式 /i/<accKey>]");
+  {
+    const pb = proxy.buildAuthBridge("/i/aKEY123", {
+      auth1: "auth1_p", userId: "user-p", orgId: "org-p", orgName: "P",
+    });
+    test("前缀模式: __pfx = /i/<accKey>, app.devin.ai 改指前缀 + 根绝对路径补前缀", () => {
+      assert.ok(pb.includes('var __pfx="/i/aKEY123"'), "含 __pfx 前缀常量");
+      assert.ok(pb.includes("u=u.split(__abs).join(__pfx)"), "app.devin.ai 绝对 URL 改指前缀");
+      assert.ok(pb.includes("u.indexOf(__pfx+'/')!==0"), "SPA 自构造根绝对路径补前缀守卫");
+    });
+    test("前缀模式: 仍覆写 fetch/XHR/EventSource 补前缀+鉴权 (含 SSE 实时)", () => {
+      assert.ok(pb.includes("window.fetch=function"), "覆写 fetch");
+      assert.ok(pb.includes("XMLHttpRequest.prototype.open"), "覆写 XHR.open");
+      assert.ok(pb.includes("window.EventSource=nES"), "覆写 EventSource(对话实时)");
+      assert.ok(pb.includes("'Bearer '+__a1"), "挂 Bearer 头");
+    });
+    test("前缀模式: localStorage 按 accKey 命名空间隔离 (同源多实例不串号)", () => {
+      assert.ok(pb.includes('var P="/i/aKEY123::"'), "命名空间前缀 = accKey::");
+      assert.ok(pb.includes("L.getItem=function(k){return og(P+k);}"), "getItem 须加私有前缀");
+      assert.ok(pb.includes("L.setItem=function(k,v){return os(P+k,v);}"), "setItem 须加私有前缀");
+      assert.ok(/L\.clear=function\(\)\{/.test(pb), "clear 须只清本账号键空间");
+    });
+    const portB = proxy.buildAuthBridge("http://localhost:5", { auth1: "a", userId: "u", orgId: "o", orgName: "O" });
+    test("端口模式向后兼容: __pfx 为空, 不补前缀, 不注入命名空间 shim (零回归)", () => {
+      assert.ok(portB.includes('var __pfx=""'), "端口模式 __pfx 空");
+      assert.ok(portB.includes("u.split(__abs).join(__pfx)"), "端口模式 app.devin.ai 剥成同源相对");
+      assert.ok(!portB.includes("L.getItem=function"), "端口模式不注入 localStorage 命名空间(异 origin 本已隔离)");
+    });
+    test("devin_proxy.handleRequest 源级: rewriteBase/parseBase 双模 + 缓存按基址重定基", () => {
+      const fs = require("fs");
+      const src = fs.readFileSync(require("path").join(__dirname, "..", "devin_proxy.js"), "utf8");
+      assert.ok(/const isPrefix = localBase\.charAt\(0\) === "\/"/.test(src), "须判前缀模式");
+      assert.ok(/const parseBase = isPrefix \? "http:\/\/dao\.local" : localBase/.test(src), "前缀模式须用可解析的 parseBase");
+      assert.ok(/hit\.base && hit\.base !== localBase/.test(src), "缓存命中须按当前改写基址重定基(跨端口/前缀复用)");
+      assert.ok(/if \(isPrefix\) \{\s*html = html\.replace/.test(src), "前缀模式 index.html 根绝对引用须补前缀");
+    });
+    test("proxyPrefixed 导出为函数, 无 auth1 → 502 (不反代)", async () => {
+      assert.strictEqual(typeof proxy.proxyPrefixed, "function", "proxyPrefixed 须导出");
+      let _code = 0;
+      const fakeRes = { headersSent: false, writeHead(c) { _code = c; this.headersSent = true; }, end() {} };
+      await proxy.proxyPrefixed({ method: "GET", headers: {} }, fakeRes, { auth1: "" }, "/i/x", "/", null);
+      assert.strictEqual(_code, 502, "无 auth1 须 502");
+    });
+  }
+  console.log("\n[归一 · _shellResolveOpen 同源 URL + /i/ dao 自渲染 (源级·双副本)]");
+  test("rt-flow extension.js: _shellResolveOpen 返回同源 /i/<accKey>/ + 账号注册表 + dao 自渲染入口", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+    assert.ok(/const base = '\/i\/' \+ _shellAccKey\(email\)/.test(src), "_shellResolveOpen 须返回同源 /i/<accKey> 而非 localhost:端口");
+    assert.ok(/createHmac\('sha256', _shellAccSalt\)/.test(src), "accKey 须 HMAC 不可枚举(防公网猜测)");
+    assert.ok(/async function shellAccountProxy\(accKey, restPath, req, res\)/.test(src), "须有 /i/ 入口 shellAccountProxy");
+    // 归一架构(用户确认): /i/ 不再反代官网 SPA(Auth0 已挡), 改由 dao 用 auth1 调内部 API 服务端自渲染原生页
+    assert.ok(/devinCloud\.buildSessionsListHtml\(/.test(src), "shellAccountProxy 须 dao 自渲染对话列表(非内嵌 SPA)");
+    assert.ok(/devinCloud\.buildConversationHtml\(/.test(src), "shellAccountProxy 须 dao 自渲染对话视图");
+    assert.ok(/devinCloud\.createSession\(/.test(src), "shellAccountProxy 须支持新建对话(auth1·内部 API)");
+    assert.ok(/_shellAccRoute, \/\//.test(src), "须经 _internals 导出 _shellAccRoute(供单测)");
+    assert.ok(/shellAccountProxy, \/\//.test(src), "须经 _internals 导出 shellAccountProxy");
+  });
+  test("rt-flow extension.js: 投屏兜底路由 /mirror·/__mirror/{frame,input,nav} + devin_mirror 委托", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+    assert.ok(/require\("\.\/devin_mirror"\)/.test(src), "须引入 devin_mirror 模块");
+    assert.ok(/return \{ kind: 'mirror' \}/.test(src), "_shellAccRoute 须识别 /mirror (投屏视图)");
+    assert.ok(/return \{ kind: 'mirrorFrame' \}/.test(src), "_shellAccRoute 须识别 /__mirror/frame");
+    assert.ok(/return \{ kind: 'mirrorInput' \}/.test(src), "_shellAccRoute 须识别 /__mirror/input");
+    assert.ok(/return \{ kind: 'mirrorNav' \}/.test(src), "_shellAccRoute 须识别 /__mirror/nav");
+    assert.ok(/devinCloud\.buildMirrorHtml\(/.test(src), "mirror 路由须 dao 渲染投屏视图");
+    assert.ok(/devinMirror\.frame\(/.test(src), "mirrorFrame 须委托 devinMirror.frame (CDP 截帧)");
+    assert.ok(/devinMirror\.input\(/.test(src), "mirrorInput 须委托 devinMirror.input (归一化输入)");
+    assert.ok(/devinMirror\.navigate\(/.test(src), "mirrorNav 须委托 devinMirror.navigate");
+  });
+  test("devin_mirror: 令牌只在服务端·归一化坐标·宿主生命周期自管 (close 杀进程)", () => {
+    const fs = require("fs");
+    const m = fs.readFileSync(require("path").join(__dirname, "..", "devin_mirror.js"), "utf8");
+    assert.ok(/Page\.captureScreenshot/.test(m), "须经 CDP Page.captureScreenshot 截帧");
+    assert.ok(/Input\.dispatchMouseEvent/.test(m), "须经 CDP Input 下发鼠标事件");
+    assert.ok(/Input\.insertText|Input\.dispatchKeyEvent/.test(m), "须支持文本/键盘输入回传");
+    assert.ok(/\* VW|\* VH/.test(m), "归一化坐标 (nx,ny) 须乘固定视口映射回像素");
+    assert.ok(/s\.child\.kill\(\)/.test(m), "close 须真正杀宿主进程 (防残留占 profile 夺端口)");
+    assert.ok(!/auth1[^a-zA-Z].*res\.|res\.end\([^)]*auth1/.test(m), "auth1 绝不下发浏览器");
+  });
+  test("dao-vsix src/extension.ts: 9920 主口 /i/<accKey>/* 路由 (dao 自有·免 token·流式)", () => {
+    const fs = require("fs");
+    const p = require("path").join(__dirname, "..", "..", "dao-vsix", "src", "extension.js");
+    const alt = require("path").join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts");
+    const src = fs.readFileSync(fs.existsSync(p) ? p : alt, "utf8");
+    assert.ok(/route\.startsWith\('\/i\/'\) return false/.test(src) || /route\.startsWith\('\/i\/'\)\) return false/.test(src), "/i/ 须排除官网透传(dao 自有)");
+    assert.ok(/&& !route\.startsWith\('\/i\/'\)/.test(src), "/i/ 须免 token (公网设备可直达账号 iframe)");
+    assert.ok(/rtint2\.shellAccountProxy\(accKey, restUrl, req, res\)/.test(src), "须委托 rt-flow shellAccountProxy 流式反代");
+    assert.ok(/return \{ _streamed: true \}/.test(src), "/i/ 须走流式直通 (HTML/JS/二进制/SSE)");
+  });
+  test("vendor 同步: dao-vsix/rtflow 含同源前缀传输新码 (源↔打包一致)", () => {
+    const fs = require("fs");
+    const ven = fs.readFileSync(require("path").join(__dirname, "..", "..", "dao-vsix", "rtflow", "extension.js"), "utf8");
+    const venP = fs.readFileSync(require("path").join(__dirname, "..", "..", "dao-vsix", "rtflow", "devin_proxy.js"), "utf8");
+    assert.ok(/async function shellAccountProxy\(/.test(ven), "打包副本须含 shellAccountProxy (vendor 未脱钩)");
+    assert.ok(/const isPrefix = localBase\.charAt\(0\) === "\/"/.test(venP), "打包 devin_proxy 须含前缀模式");
+    const venM = require("path").join(__dirname, "..", "..", "dao-vsix", "rtflow", "devin_mirror.js");
+    assert.ok(fs.existsSync(venM), "打包副本须含 devin_mirror.js (投屏兜底·vendor 未脱钩)");
+    assert.ok(/Page\.captureScreenshot/.test(fs.readFileSync(venM, "utf8")), "打包 devin_mirror 须含 CDP 截帧");
+  });
+
   // ── 11b. devin_proxy · 磁盘二级缓存 L2 (v4.14.0 · 重载秒恢复 · 跨端口重定基) ──
   console.log("\n[devin_proxy._diskCache · L2]");
   {
@@ -496,6 +599,77 @@ function test(name, fn) {
     const html = cloud.buildConversationHtml("T", "devin-abc", _convEvents, {});
     assert.ok(html.includes("第一条问题ALPHA"), "首条用户消息摘要");
     assert.ok(html.includes("第二条追问GAMMA"), "次条用户消息摘要");
+  });
+  test("opts.base 注入「返回对话列表」回链 (归一·iframe 内导航回列表)", () => {
+    const noBase = cloud.buildConversationHtml("T", "devin-abc", _convEvents, {});
+    assert.ok(!/class="back"/.test(noBase), "无 base 时不加回链(备份文件场景)");
+    const withBase = cloud.buildConversationHtml("T", "devin-abc", _convEvents, { base: "/i/aKEY" });
+    assert.ok(/<a class="back" href="\/i\/aKEY\/"/.test(withBase), "有 base 时回链到 <base>/");
+  });
+
+  // ── 归一 · 账号对话列表 (dao 自渲染·Auth0 免疫·手机+电脑一致) ──────────────
+  console.log("\n[buildSessionsListHtml · 对话列表(dao 自渲染)]");
+  const _sess = [
+    { devin_id: "devin-aaa", title: "对话甲ALPHA", status: "running", created_at: 1700000000000 },
+    { session_id: "devin-bbb", name: "对话乙BETA", status_enum: "finished" },
+    { id: "devin-ccc" },
+  ];
+  test("每条对话卡片链到 <base>/sessions/<id> (同源相对前缀)", () => {
+    const html = cloud.buildSessionsListHtml("u@x.com", _sess, { base: "/i/aKEY", orgName: "OrgZ" });
+    assert.ok(html.includes('href="/i/aKEY/sessions/devin-aaa"'), "卡片1 链到 devin-aaa");
+    assert.ok(html.includes('href="/i/aKEY/sessions/devin-bbb"'), "卡片2 链到 devin-bbb(session_id)");
+    assert.ok(html.includes('href="/i/aKEY/sessions/devin-ccc"'), "卡片3 链到 devin-ccc(id 兜底)");
+  });
+  test("标题/账号/组织/计数 与状态点呈现", () => {
+    const html = cloud.buildSessionsListHtml("u@x.com", _sess, { base: "/i/aKEY", orgName: "OrgZ" });
+    assert.ok(html.includes("对话甲ALPHA") && html.includes("对话乙BETA"), "标题渲染");
+    assert.ok(html.includes("u@x.com") && html.includes("OrgZ"), "账号+组织");
+    assert.ok(html.includes("共 3 个对话"), "对话计数");
+    assert.ok(html.includes("st running") && html.includes("st finished"), "状态点分类");
+  });
+  test("顶部「新建对话」POST 到 <base>/__dao/create (auth1 内部 API)", () => {
+    const html = cloud.buildSessionsListHtml("u@x.com", _sess, { base: "/i/aKEY" });
+    assert.ok(html.includes('base+"/__dao/create"'), "新建对话 POST 同源相对接口");
+    assert.ok(html.includes("data-base=\"/i/aKEY\""), "base 经 data-base 下传脚本");
+  });
+  test("空列表 / 拉取失败 给出可读原生页(不空白)", () => {
+    const empty = cloud.buildSessionsListHtml("u@x.com", [], { base: "/i/aKEY" });
+    assert.ok(empty.includes("该账号暂无云端对话"), "空列表提示");
+    const errHtml = cloud.buildSessionsListHtml("u@x.com", [], { base: "/i/aKEY", error: "HTTP 502" });
+    assert.ok(errHtml.includes("拉取失败: HTTP 502"), "拉取失败提示");
+  });
+  test("HTML 转义防注入 (标题含 <script>)", () => {
+    const html = cloud.buildSessionsListHtml("u@x.com", [{ devin_id: "devin-x", title: "<script>alert(1)</script>" }], { base: "/i/aKEY" });
+    assert.ok(!html.includes("<script>alert(1)</script>"), "原样脚本不得进入 DOM");
+    assert.ok(html.includes("&lt;script&gt;"), "已转义");
+  });
+
+  // ── 归一 · 投屏兜底视图 (宿主真·官网本体 CDP 截帧 + 归一化输入回传) ──────────
+  console.log("\n[buildMirrorHtml · 投屏兜底视图]");
+  test("对话视图含「🖥️ 官网本体」投屏入口 (链到 <base>/mirror?path=/sessions/<id·去devin-前缀>)", () => {
+    const html = cloud.buildConversationHtml("T", "devin-abc123", [], { account: "u@x.com", base: "/i/aKEY" });
+    assert.ok(html.includes("/i/aKEY/mirror?path="), "对话视图须有投屏入口");
+    assert.ok(html.includes("官网本体"), "入口文案");
+    // 官网会话 URL 无 devin- 前缀: 深链须去前缀, 否则官网 404 (实测纠偏)
+    assert.ok(html.includes(encodeURIComponent("/sessions/abc123")), "投屏深链须去 devin- 前缀 (/sessions/abc123)");
+    assert.ok(!html.includes(encodeURIComponent("/sessions/devin-abc123")), "深链不得保留 devin- 前缀");
+    const noBase = cloud.buildConversationHtml("T", "devin-abc123", [], {});
+    assert.ok(!noBase.includes("/mirror?path="), "无 base(备份场景)不加投屏入口");
+  });
+  test("投屏视图: 同源帧轮询 + 归一化输入回传 (令牌不下发)", () => {
+    const html = cloud.buildMirrorHtml("u@x.com", { base: "/i/aKEY", path: "/sessions/devin-abc" });
+    assert.ok(html.includes('id="screen"'), "须有投屏画面元素");
+    assert.ok(html.includes('base+"/__mirror/frame'), "帧走同源相对接口");
+    assert.ok(html.includes('base+"/__mirror/input"'), "输入回传同源相对接口");
+    assert.ok(html.includes('base+"/__mirror/nav"'), "导航同源相对接口");
+    assert.ok(html.includes('data:image/jpeg;base64,'), "帧以 data: URL 渲染(契合 CSP img-src data:)");
+    assert.ok(html.includes('action:"click"') && html.includes('action:"settext"'), "支持点击/文本回传");
+    assert.ok(!html.includes("auth1") && !html.includes("Bearer"), "投屏页面绝不含令牌");
+  });
+  test("投屏视图: base/path 经 data-* 下传, 防 HTML 注入", () => {
+    const html = cloud.buildMirrorHtml("u@x.com", { base: "/i/aKEY", path: '/sessions/"><img>' });
+    assert.ok(html.includes('data-base="/i/aKEY"'), "base 经 data-base 下传");
+    assert.ok(!html.includes('"><img>'), "path 须转义防注入");
   });
 
   // ── 前台「极速」下载档 (v4.8.6) ───────────────────────────────────────────

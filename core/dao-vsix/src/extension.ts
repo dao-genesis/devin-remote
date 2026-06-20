@@ -690,8 +690,13 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('dao.openRoutedPanel', async () => {
             await ensureRoutedServerFast(context);
             const email = ws.devinEmail || '';
-            const url = daoRoutedWebUrlForAccount(email, '');
-            openRoutedAccountPanel(context, email, url);
+            // 帛书·守正出奇: 先走已验证可用的 rt-flow 多实例反代(中栏同源·无 X-Frame),
+            //   打不通才回退 9920/?dao_acct 路由面板(官网带 X-Frame 限制·内嵌易空白)。
+            const r = await tryRtflowMultiInstance({ email });
+            if (!r || !r.ok) {
+                const url = daoRoutedWebUrlForAccount(email, '');
+                openRoutedAccountPanel(context, email, url);
+            }
         }),
         // ═══════════════════════════════════════════════════════════
         // 统一认证 · Windsurf自动登录 — 帛书·六十二「道者万物之注」
@@ -1160,19 +1165,29 @@ function connectSingleRelay(wsUrl: string, relayUrl: string, sessionId: string, 
         // 动态require ws — VSIX bundle可能不包含
         const WebSocket = require('ws');
         const relayHostname = new URL(relayUrl).hostname;
-        const needsProxy = relayHostname.includes('workers.dev') || relayHostname.includes('cloudflare');
-        if (needsProxy) {
+        const isCfHost = relayHostname.includes('workers.dev') || relayHostname.includes('cloudflare');
+        // 直连兜底: 每实例独立出站连自己的 relay session (鸡犬相闻·老死不相往来)
+        // 反者道之动: 不再「无代理即放弃」——本机出网通(cloudflared 隧道已可达 CF), 故直连必通。
+        const tryDirect = () => {
+            try {
+                const socket = new WebSocket(wsUrl);
+                setupRelayHandlers(socket, relayUrl, sessionId, port, token, onFail);
+            } catch { onFail(); }
+        };
+        // workers.dev/cloudflare: 优先用本地代理(为 DNS 污染网络兜底), 但无代理/代理失败 → 直连, 绝不空手而归
+        if (isCfHost) {
+            const proxyPort = detectedProxyPort || detectProxyPort();
+            if (!proxyPort) { tryDirect(); return; }
             createProxyTunnel(relayHostname).then((tlsSocket) => {
                 if (tlsSocket) {
                     const socket = new WebSocket(wsUrl, { createConnection: () => tlsSocket });
                     setupRelayHandlers(socket, relayUrl, sessionId, port, token, onFail);
                 } else {
-                    onFail();
+                    tryDirect();
                 }
-            }).catch(() => onFail());
+            }).catch(() => tryDirect());
         } else {
-            const socket = new WebSocket(wsUrl);
-            setupRelayHandlers(socket, relayUrl, sessionId, port, token, onFail);
+            tryDirect();
         }
     } catch {
         onFail();
@@ -1333,6 +1348,7 @@ function createProxyTunnel(hostname: string): Promise<tls.TLSSocket | null> {
 function isAppProxyPassthrough(route: string): boolean {
     // 归一 · 独立 HTTP 外壳: /shell 与 /api/shell/* 为 dao 自有 (直出外壳/SSE/消息), 不透传官网
     if (route === '/shell' || route.startsWith('/shell/') || route.startsWith('/api/shell')) return false;
+    if (route === '/i' || route.startsWith('/i/')) return false; // 归一 · 同源前缀账号反代 (dao 自有·非官网透传)
     if (route.startsWith('/devin-cloud')) return false; // 已有专门前缀分支
     if (route.startsWith('/assets/')) return true;
     if (route.startsWith('/api/')) {
@@ -1357,6 +1373,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     //   (本地服务器默认仅绑 localhost; 远程经 DAO Bridge 隧道层把关)。
     const needAuth = !route.startsWith('/api/health') && !route.startsWith('/devin-cloud/')
         && !route.startsWith('/shell') && !route.startsWith('/api/shell')
+        && !route.startsWith('/i/')
         && !isAppProxyPassthrough(route);
     if (needAuth && !checkAuth(req)) throw new Error('unauthorized');
 
@@ -1401,6 +1418,24 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         const msg = body && body.msg;
         try { if (rtint && typeof rtint.shellHandleMessage === 'function') await rtint.shellHandleMessage(sid, msg); } catch (e) { /* 守柔 */ }
         return { ok: true };
+    }
+
+    // ── 归一 · 公网同源前缀账号反代: /i/<accKey>/* → rt-flow 前缀模式反代该账号页 ──
+    //   公网手机/电脑经 DAO Bridge 隧道主口直达, 无感打开 Devin 对话页 / 多实例号页 (流式·HTML/JS/二进制/SSE)。
+    //   仅 HTTP 流式路径支持 (relay/apiGet 走 JSON 信道, 不可承载流), 故无 res 时返错。
+    if (route === '/i' || route.startsWith('/i/')) {
+        if (!res) return { ok: false, error: 'stream-required' };
+        const rtint2: any = _rtflowModule && _rtflowModule._internals;
+        const m = route.match(/^\/i\/([^\/]+)(\/.*)?$/);
+        const accKey = m ? m[1] : '';
+        const rest = (m && m[2]) ? m[2] : '/';
+        const restUrl = rest + (url.search || '');
+        if (rtint2 && typeof rtint2.shellAccountProxy === 'function') {
+            await rtint2.shellAccountProxy(accKey, restUrl, req, res);
+            return { _streamed: true };
+        }
+        if (!res.headersSent) { res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('account proxy unavailable'); }
+        return { _streamed: true };
     }
 
     switch (route) {
@@ -3809,7 +3844,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'openRoutedPanel'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -4668,10 +4703,16 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             }
             case 'openRoutedPanel': {
                 // 帛书·「道并行而不相悖」— IDE 内独立 webview 路由面板(多实例·不阻塞)
+                // 守正出奇: 先走已验证可用的 rt-flow 多实例反代(中栏同源·无 X-Frame),
+                //   打不通才回退 9920/?dao_acct 路由面板(官网带 X-Frame 限制·内嵌易空白→「点了没反应」)。
                 await ensureRoutedServerFast(context);
                 const routedEmail = ws.devinEmail || '';
-                const routedUrl = daoRoutedWebUrlForAccount(routedEmail, '');
-                openRoutedAccountPanel(context, routedEmail, routedUrl);
+                const rRouted = await tryRtflowMultiInstance({ email: routedEmail });
+                if (!rRouted || !rRouted.ok) {
+                    const routedUrl = daoRoutedWebUrlForAccount(routedEmail, '');
+                    openRoutedAccountPanel(context, routedEmail, routedUrl);
+                }
+                refreshReply({ type: 'actionResult', command: 'openRoutedPanel', ok: true });
                 break;
             }
             case 'openDevinPage': {
@@ -4951,7 +4992,19 @@ function winDefaultBrowserExe(): string | null {
         return null;
     } catch { return null; }
 }
+let _daoGoodBrowser: string | null | undefined; // undefined=未探, null=皆不可用, string=实测可用(缓存)
+// 帛书·「知人者智, 自知者明」— 实地探测浏览器能否启动: 破损安装(如 ICU 崩溃的旧 Chrome)
+//   会在 --headless 下非零退出/崩溃, 据此跳过, 不致「点了没反应」。
+function daoProbeBrowser(exe: string): boolean {
+    try {
+        const cp = require('child_process') as typeof import('child_process');
+        const tmp = path.join(os.tmpdir(), 'dao-bp-probe');
+        cp.execFileSync(exe, ['--headless=new', '--disable-gpu', '--no-first-run', '--user-data-dir=' + tmp, '--dump-dom', 'about:blank'], { timeout: 8000, stdio: ['ignore', 'ignore', 'ignore'], windowsHide: true });
+        return true; // 退出码 0 → 可用
+    } catch { return false; } // 崩溃/超时/非零退出 → 不可用
+}
 function findBrowserExe(): string | null {
+    if (_daoGoodBrowser !== undefined) return _daoGoodBrowser;
     const isWin = process.platform === 'win32';
     const isLinux = process.platform === 'linux';
     const isMac = process.platform === 'darwin';
@@ -4984,8 +5037,19 @@ function findBrowserExe(): string | null {
             if (which) candidates.unshift(which);
         } catch { /* 守柔 */ }
     }
-    for (const p of candidates) { try { if (p && fs.existsSync(p)) return p; } catch { /* 守柔 */ } }
-    return null;
+    // 择善而从: 仅返回「实测可启动」之浏览器, 跳过损坏者(如 ICU 崩溃的旧 Chrome);
+    // 全部探测失败时回退首个存在者(守柔·不致全失)。结果缓存, 仅首次 launch 探一次。
+    let firstExisting: string | null = null;
+    for (const p of candidates) {
+        try {
+            if (p && fs.existsSync(p)) {
+                if (!firstExisting) firstExisting = p;
+                if (daoProbeBrowser(p)) { _daoGoodBrowser = p; return p; }
+            }
+        } catch { /* 守柔 */ }
+    }
+    _daoGoodBrowser = firstExisting;
+    return firstExisting;
 }
 // 浏览器同步 + 多实例并行: 在电脑浏览器开独立 profile 窗口自动登录指定账号。
 // profile 按账号 email 隔离 user-data-dir → localStorage 各自独立 → 切第2/3/4账号各开
@@ -5003,6 +5067,8 @@ function launchIsolatedBrowser(targetUrl: string, profileKey: string): boolean {
                 '--no-first-run',
                 '--no-default-browser-check',
                 '--disable-default-apps',
+                '--disable-sync',
+                '--disable-features=Translate,msEdgeWelcomePage,msSync',
                 '--new-window',
                 targetUrl,
             ];
