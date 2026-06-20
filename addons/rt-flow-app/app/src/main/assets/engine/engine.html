@@ -307,6 +307,9 @@
       try{ return {ok:true, storage: JSON.parse(s)}; }catch(e){ return {ok:true, storage: s}; }
     },
     browseScreenshot: async function(a){ return {ok:true, base64: N.browseScreenshot?N.browseScreenshot(a.tabIndex|0):""}; },
+    // 网页控台 📥 下载悬浮窗: 列出手机下载 (脱敏) + 项动作在手机本机执行 (分享/打开/删除)。
+    listDownloads: async function(){ try{ return {ok:true, items: JSON.parse(N.listDownloads?N.listDownloads():"[]")}; }catch(e){ return {ok:true, items:[]}; } },
+    downloadAction: async function(a){ if(N.downloadAction){ try{ N.downloadAction(a.index|0, String(a.action||"")); }catch(e){} } return {ok:true}; },
     browseExportMd: async function(a){
       var js = "(function(){try{var t=document.title||'';var b=document.body?document.body.innerText:'';return JSON.stringify({title:t,text:b.slice(0,50000)});}catch(e){return'{}';}})()";
       var s = await execJs(a.tabIndex|0, js);

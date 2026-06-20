@@ -1180,6 +1180,22 @@ public class RelayService extends Service {
             return r[0];
         }
 
+        // 网页控台 📥 下载悬浮窗: 列出手机下载 (脱敏) + 在手机本机执行项动作 (分享/打开/删除)。
+        @JavascriptInterface public String listDownloads() {
+            if (!remoteOpsEnabled) return "[]";
+            MainActivity m = MainActivity.sInstance;
+            if (m == null) return "[]";
+            final String[] r = {"[]"};
+            try { m.runOnUiThread(() -> { r[0] = m.ipcListDownloads(); synchronized(r){r.notifyAll();} });
+                synchronized(r){ r.wait(3000); } } catch (Exception e) {}
+            return r[0];
+        }
+        @JavascriptInterface public void downloadAction(int recIdx, String action) {
+            if (!remoteOpsEnabled) return;
+            MainActivity m = MainActivity.sInstance;
+            if (m != null) m.runOnUiThread(() -> m.ipcDownloadAction(recIdx, action));
+        }
+
         @JavascriptInterface public String browseGetCookies(String url) {
             if (!remoteOpsEnabled) return "";
             MainActivity m = MainActivity.sInstance;

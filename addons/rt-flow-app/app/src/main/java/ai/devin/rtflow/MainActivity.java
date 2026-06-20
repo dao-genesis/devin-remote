@@ -4540,6 +4540,44 @@ public class MainActivity extends AppCompatActivity {
         return sb.append("]").toString();
     }
 
+    /** 下载列表 (供网页控台 📥 悬浮窗 1:1 呈现手机下载管理): 仅外发文件名/大小/状态/mime/序号, 不含绝对路径。 */
+    public String ipcListDownloads() {
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("downloads", "[]"));
+            org.json.JSONArray out = new org.json.JSONArray();
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject e = arr.getJSONObject(i);
+                String path = e.optString("file", "");
+                String uri = e.optString("uri", "");
+                String name = e.optString("name", path);
+                String mime = e.optString("mime", "*/*");
+                File f = new File(path);
+                boolean avail = f.exists() || !uri.isEmpty();
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("index", i);
+                o.put("name", name);
+                o.put("mime", mime);
+                o.put("size", f.exists() ? f.length() : 0);
+                o.put("sizeText", avail ? (f.exists() ? humanSize(f.length()) : "已入系统下载") : "(文件已删)");
+                o.put("avail", avail);
+                out.put(o);
+            }
+            return out.toString();
+        } catch (Exception e) { return "[]"; }
+    }
+    /** 网页控台 📥 悬浮窗的下载项动作 (在手机本机执行, 与原生下载面板同款): share / open / delete。 */
+    public void ipcDownloadAction(int recIdx, String action) {
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("downloads", "[]"));
+            if (recIdx < 0 || recIdx >= arr.length()) return;
+            org.json.JSONObject e = arr.getJSONObject(recIdx);
+            String path = e.optString("file", ""); String uri = e.optString("uri", ""); String mime = e.optString("mime", "*/*");
+            if ("share".equals(action)) shareDownloaded(path, uri, mime);
+            else if ("open".equals(action)) openWithChooser(path, uri, mime);
+            else if ("delete".equals(action)) { deleteDownload(recIdx, path); if (dlListCol != null) runOnUiThread(() -> renderDownloadList(dlListCol)); }
+        } catch (Exception ignored) {}
+    }
+
     /** 标签所属账号的「脱敏」标识 (供 browseListTabs 经中继外发): 仅 email/id/org/编号, 绝不含 password/auth1/token/apiKey。 */
     private String safeTabAccount(String accountJson) {
         if (accountJson == null || accountJson.isEmpty()) return "\"\"";
