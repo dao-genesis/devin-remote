@@ -1,6 +1,6 @@
 {
-  "versionCode": 92,
-  "versionName": "0.34.9",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.9/DevinCloud-mobile-v0.34.9.apk",
-  "notes": "v0.34.9 · 板块标签后台投屏修复 (配合 v0.34.8 共享一切但互不干扰可并行)。根因: 硬件加速的 WebView 一旦停泊到不可见容器(后台标签), 其 GPU 合成面被释放, 远程截图 draw(软件Canvas) 取到黑帧 —— 普通远程网页走软件路径不受影响, 唯板块(本地内部页·含合成层)在纯后台时发黑。修复: 板块标签改用软件层渲染(setLayerType SOFTWARE), draw() 始终取到真实内容 → 任意后台板块标签都能被远程网页端取帧投屏, 无需把它提到手机前台 (故多端各看各页·并行不相犯, 板块亦然)。注: 此乃真机硬件合成器特性, SwiftShader 模拟器无法复现(两版均正常渲染), 模拟器已验证无回归; 真机效果待 OTA 到 0.34.9 后实测确认。"
+  "versionCode": 93,
+  "versionName": "0.35.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.0/DevinCloud-mobile-v0.35.0.apk",
+  "notes": "v0.35.0 · 联控可视化 + 冲突即复刻 + 黑屏根治 (道法自然·共享一切但互不干扰可并行)。① 黑屏根治: ipcScreenshot/mirrorFrameOnUi 截图前原无条件 parkHost(把标签 WebView 搬进不可见 autoHost), 截到手机当前前台标签时就把它从可见 content 拽走 → 手机本体+该端齐黑屏。改为仅停泊「非活动」标签, 前台标签留在 content 直接 draw → 同看前台页不再黑。② 联控在场登记: 原生按稳定 vid 记录哪台设备(控台 clientId / 手机本体 __phone__)正前置哪张标签, browseListTabs 回传每张标签的 viewers。③ 控台联控可视: 被其他设备前置的标签上淡透明橙色背景一眼区分, 顶部点数「N 设备联控」(橙色数≈联控设备数)。④ 冲突即复刻: 点橙色(冲突)标签不再去抢同一个, 而是弹出内容一致的独立副本(Devin 账号页/切号·备份·穿透板块均支持同内容多开), 各设备各操各的, 互不干扰。常规单 APK 时手机最前端标签自动标橙, 其余不标。"
 }
