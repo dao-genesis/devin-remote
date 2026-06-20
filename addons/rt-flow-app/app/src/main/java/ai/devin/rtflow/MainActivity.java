@@ -892,7 +892,17 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
-            @Override public void onReceivedTitle(WebView v, String t) { if (t != null && !t.isEmpty()) { tab.title = t; renderTabStrip(); } }
+            @Override public void onReceivedTitle(WebView v, String t) {
+                if (t == null || t.isEmpty()) return;
+                tab.title = t; renderTabStrip();
+                // 网页标题往往在 onPageFinished 之后才异步到达(尤其裸域名 301 跳 www), 此时回填,
+                // 否则该条历史会记成上一页的标题。同时回填跳转前的原始 URL。
+                if (!tab.incognito) {
+                    updateHistoryTitle(v.getUrl(), t);
+                    String orig = v.getOriginalUrl();
+                    if (orig != null) updateHistoryTitle(orig, t);
+                }
+            }
             @Override public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
                 android.util.Log.i("RTFlowJS", m.message() + " @" + m.sourceId() + ":" + m.lineNumber());
                 return true;
@@ -4467,6 +4477,38 @@ public class MainActivity extends AppCompatActivity {
             sp.edit().putString(key, arr.toString()).apply();
             vaultWrite(key, arr.toString());
         } catch (Exception ignored) {}
+    }
+    /** 标题异步到达(含 301/302 跳转)时回填最近一条同 URL 的常规历史标题,
+     *  修正"网页历史记成上一页标题"。仅改常规 history(history_devin 用账号命名, 不受影响)。 */
+    private void updateHistoryTitle(String url, String title) {
+        if (url == null || title == null || title.isEmpty()) return;
+        if (url.startsWith("file:") || url.startsWith("about:") || url.startsWith("data:")
+                || url.startsWith("rtflow:") || url.startsWith("javascript:") || url.startsWith("blob:")) return;
+        try {
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            org.json.JSONArray arr = new org.json.JSONArray(sp.getString("history", "[]"));
+            for (int i = arr.length() - 1; i >= 0; i--) {
+                org.json.JSONObject e = arr.optJSONObject(i);
+                if (e == null) continue;
+                if (sameUrl(url, e.optString("url"))) {
+                    if (!title.equals(e.optString("title"))) {
+                        e.put("title", title);
+                        sp.edit().putString("history", arr.toString()).apply();
+                        vaultWrite("history", arr.toString());
+                    }
+                    return;
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+    /** URL 等价判定(忽略末尾斜杠差异, 兼容 getUrl()/getOriginalUrl() 的规范化)。 */
+    private static boolean sameUrl(String a, String b) {
+        if (a == null || b == null) return false;
+        if (a.equals(b)) return true;
+        return stripTrailingSlash(a).equals(stripTrailingSlash(b));
+    }
+    private static String stripTrailingSlash(String u) {
+        return (u.length() > 1 && u.endsWith("/")) ? u.substring(0, u.length() - 1) : u;
     }
     /** 多实例登录历史命名: 对话名 + #账号编号 + 账号邮箱。 */
     private String devinHistName(Tab t) {
