@@ -721,6 +721,11 @@ public class MainActivity extends AppCompatActivity {
 
         if (internal) {
             web.addJavascriptInterface(new Bridge(web), "Native"); // 仅内部页暴露原生桥
+            // 道法自然·共享一切但互不干扰: 板块(内部页)用软件层渲染。硬件加速的 WebView 一旦离屏/停泊到
+            // 不可见容器, 其 GPU 合成面被释放, 截图 draw(软件Canvas) 取到黑帧 (普通远程网页走软件路径不受影响,
+            // 唯板块这类含合成层的本地页发黑)。改软件层后 draw() 始终取到真实内容 → 任意后台板块标签都能被
+            // 远程网页端取帧投屏, 无需把它提到手机前台 (故多端各看各页·并行不相犯)。板块 UI 轻量, 软件层无感。
+            web.setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null);
         } else {
             st.setUserAgentString(st.getUserAgentString().replace("; wv", "")); // 贴近真浏览器
             web.addJavascriptInterface(new AutofillBridge(web), "__dcaf"); // 登录账密自动保存/填充 (Chrome 式无感)
