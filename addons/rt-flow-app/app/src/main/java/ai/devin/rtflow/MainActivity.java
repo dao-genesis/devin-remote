@@ -123,8 +123,9 @@ public class MainActivity extends AppCompatActivity {
     private Button starBtn;
     private FrameLayout dlPanel;
     private LinearLayout dlListCol;
-    private FrameLayout daoPanel;          // 全服通悬浮窗 (近期对话 / 备份网页端)
+    private FrameLayout daoPanel;          // 全服通悬浮窗 (近期对话 / 备份网页端) — 建一次后保活, 开关只切显隐
     private WebView daoWeb;
+    private boolean daoOpen = false;       // 全服通悬浮窗逻辑可见态 (面板/WebView 常驻, 故不能用 daoPanel!=null 判断)
     private volatile String sEngineCache = null;
     private volatile String curProxy = null;   // 已应用到内置浏览器(全部 WebView)的本地代理 host:port; null=直连
     private final java.util.Map<Long, String[]> dlPending = new java.util.concurrent.ConcurrentHashMap<>();
@@ -1428,7 +1429,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override public void onBackPressed() {
-        if (daoPanel != null) { closeDaoPanel(); return; }     // 返回键先关全服通悬浮窗
+        if (daoOpen) { hideDaoPanel(); return; }                // 返回键先关全服通悬浮窗 (保活, 再开秒显)
         if (dlPanel != null) { closeDownloadPanel(); return; }
         if (active >= 0 && tabs.get(active).web.canGoBack()) { tabs.get(active).web.goBack(); return; }
         super.onBackPressed();
@@ -2233,7 +2234,7 @@ public class MainActivity extends AppCompatActivity {
                 if (s.startsWith("devin-")) s = s.substring(6);
                 String u = s.isEmpty() ? DEVIN : ("https://app.devin.ai/sessions/" + s);
                 newTab(u, (accJson == null || accJson.isEmpty()) ? null : accJson);
-                if (daoPanel != null) closeDaoPanel();
+                hideDaoPanel();   // 进入对话: 收起全服通悬浮窗露出网页 (保活)
             });
         }
         @JavascriptInterface public void openText(String title, String content) {
@@ -2821,15 +2822,37 @@ public class MainActivity extends AppCompatActivity {
     //  全服通悬浮窗: 近期对话(跨号·实时·拖拽两形态) + 备份网页端(路由 cloud.html)
     // ════════════════════════════════════════════════════════════════════════
     private void toggleDaoPanel() {
-        if (daoPanel != null) { closeDaoPanel(); return; }
+        if (daoOpen) { hideDaoPanel(); return; }
         showDaoPanel();
     }
-    private void closeDaoPanel() {
+    /** 隐藏全服通悬浮窗但**保活**其 WebView/面板 → 再开秒显, 不再冷启动整页。
+     *  仅暂停其 WebView(停后台轮询/渲染, 省电), 不销毁不重载。 */
+    private void hideDaoPanel() {
+        daoOpen = false;
+        if (daoPanel != null) daoPanel.setVisibility(View.GONE);
+        if (daoWeb != null) { try { daoWeb.onPause(); } catch (Exception ignored) {} }
+    }
+    /** 彻底销毁全服通悬浮窗 (仅渲染进程崩溃 / Activity 销毁时用)。 */
+    private void destroyDaoPanel() {
+        daoOpen = false;
         if (daoWeb != null) { try { daoWeb.destroy(); } catch (Exception ignored) {} daoWeb = null; }
         if (daoPanel != null && daoPanel.getParent() != null) ((ViewGroup) daoPanel.getParent()).removeView(daoPanel);
         daoPanel = null;
     }
     private void showDaoPanel() {
+        if (daoPanel == null) buildDaoPanel();           // 首次: 建面板+WebView 并加载一次 (此后保活)
+        if (daoPanel.getParent() != null) ((ViewGroup) daoPanel.getParent()).removeView(daoPanel);
+        content.addView(daoPanel);                        // 置顶到当前活动标签之上
+        daoPanel.setVisibility(View.VISIBLE);
+        daoOpen = true;
+        if (daoWeb != null) {
+            resumeWeb(daoWeb);                            // 唤醒被暂停的 WebView (可见+计时器运行)
+            // 页面已驻留内存(localStorage 缓存+实时追踪种子已渲染) → 仅触发一次轻量增量刷新, 不重载整页
+            try { daoWeb.evaluateJavascript("try{if(typeof loadRecent==='function'&&document.getElementById('recentView')&&document.getElementById('recentView').classList.contains('on'))loadRecent(false);}catch(e){}", null); } catch (Exception ignored) {}
+        }
+    }
+    /** 首建全服通悬浮窗 (面板+独立 WebView, 加载 daopan.html 一次)。此后开关只切显隐, 不再重建。 */
+    private void buildDaoPanel() {
         final FrameLayout panel = new FrameLayout(this);
         panel.setBackgroundColor(0xFF0E1116);
         int sw = getResources().getDisplayMetrics().widthPixels;
@@ -2852,7 +2875,7 @@ public class MainActivity extends AppCompatActivity {
         ttl.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         TextView close = new TextView(this); close.setText("✕");
         close.setTextColor(0xFFFFFFFF); close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16); close.setPadding(dp(10), 0, dp(6), 0);
-        close.setOnClickListener(v -> closeDaoPanel());
+        close.setOnClickListener(v -> hideDaoPanel());
         head.addView(ttl); head.addView(close);
         head.setOnTouchListener(new View.OnTouchListener() {
             float dx, dy;
@@ -2870,8 +2893,7 @@ public class MainActivity extends AppCompatActivity {
         daoWeb = web;
         col.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         daoPanel = panel;
-        content.addView(panel);
-        web.loadUrl(DP_URL);
+        web.loadUrl(DP_URL);   // 仅首建时加载一次; showDaoPanel 负责挂载到 content 并置顶
     }
     /** 全服通近期对话长按拖拽: 起一个全局拖拽并临时隐藏面板, 使下方网页可接收放手注入。 */
     private void beginConvDrag(String accJson, String sid) {
@@ -2922,7 +2944,7 @@ public class MainActivity extends AppCompatActivity {
             @SuppressWarnings("deprecation")
             @Override public boolean shouldOverrideUrlLoading(WebView v, String u) { return handleExternalScheme(u); }
             @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
-                if (v == daoWeb) { closeDaoPanel(); }
+                if (v == daoWeb) { destroyDaoPanel(); }   // 渲染进程崩溃: 彻底销毁, 下次开窗重建
                 else { try { v.destroy(); } catch (Exception ignored) {} }
                 return true;
             }
@@ -3208,7 +3230,7 @@ public class MainActivity extends AppCompatActivity {
                     return false;
                 case DragEvent.ACTION_DRAG_ENDED:
                     dragDlPath = null; dragDlMime = null; dragTabIdx = -1; dragConvAccJson = null; dragConvSid = null;
-                    if (daoPanel != null) daoPanel.setVisibility(View.VISIBLE);   // 拖拽时临时隐藏的全服通窗 → 恢复
+                    if (daoOpen && daoPanel != null) daoPanel.setVisibility(View.VISIBLE);   // 拖拽时临时隐藏的全服通窗 → 恢复
                     return true;
             }
             return false;
@@ -4270,6 +4292,7 @@ public class MainActivity extends AppCompatActivity {
         // 回到前台: 立即把当前可见标签拉回「可见+计时器运行」(根治"放久了点下载/交互失效需手动刷新")。
         Tab act = cur();
         if (act != null) resumeWeb(act.web);
+        if (daoOpen && daoWeb != null) resumeWeb(daoWeb);   // 全服通悬浮窗若开着, 一并唤醒 (回前台不卡)
         // 持续看门狗: 前台期间每 8s 检一次, 若当前页 visibilityState 卡 hidden 则静默拉回, 无需用户操作。
         main.removeCallbacks(visWatchdog);
         main.postDelayed(visWatchdog, VIS_WATCH_MS);
@@ -4300,6 +4323,7 @@ public class MainActivity extends AppCompatActivity {
         saveTabs();
         try { if (dlReceiver != null) unregisterReceiver(dlReceiver); } catch (Exception ignored) {}
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}
+        destroyDaoPanel();   // 全服通悬浮窗 WebView 常驻 → Activity 销毁时一并释放
         for (Tab t : tabs) { try { t.web.destroy(); } catch (Exception ignored) {} }
         tabs.clear();
         super.onDestroy();

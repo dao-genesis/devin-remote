@@ -1,6 +1,6 @@
 {
-  "versionCode": 93,
-  "versionName": "0.35.0",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.0/DevinCloud-mobile-v0.35.0.apk",
-  "notes": "v0.35.0 · 联控可视化 + 冲突即复刻 + 黑屏根治 (道法自然·共享一切但互不干扰可并行)。① 黑屏根治: ipcScreenshot/mirrorFrameOnUi 截图前原无条件 parkHost(把标签 WebView 搬进不可见 autoHost), 截到手机当前前台标签时就把它从可见 content 拽走 → 手机本体+该端齐黑屏。改为仅停泊「非活动」标签, 前台标签留在 content 直接 draw → 同看前台页不再黑。② 联控在场登记: 原生按稳定 vid 记录哪台设备(控台 clientId / 手机本体 __phone__)正前置哪张标签, browseListTabs 回传每张标签的 viewers。③ 控台联控可视: 被其他设备前置的标签上淡透明橙色背景一眼区分, 顶部点数「N 设备联控」(橙色数≈联控设备数)。④ 冲突即复刻: 点橙色(冲突)标签不再去抢同一个, 而是弹出内容一致的独立副本(Devin 账号页/切号·备份·穿透板块均支持同内容多开), 各设备各操各的, 互不干扰。常规单 APK 时手机最前端标签自动标橙, 其余不标。"
+  "versionCode": 94,
+  "versionName": "0.35.1",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.1/DevinCloud-mobile-v0.35.1.apk",
+  "notes": "v0.35.1 · 全服通悬浮窗秒开根治 (道法自然·建一次后保活, 不再冷启动)。病灶: 右上角「🗂 全服通(近期对话/备份)」悬浮窗每次关闭都 daoWeb.destroy() 销毁整个 WebView, 再开时新建 WebView + loadUrl(daopan.html) 从零加载 (重解析 HTML/JS·重建 JS 上下文·重新布局) → 每次点开都像冷启动, 卡顿。修法: 悬浮窗面板/WebView 首建后**常驻保活**, 开关只切显隐 (VISIBLE↔GONE) — 关闭时仅 onPause 暂停其后台轮询/渲染省电, 不销毁不重载; 再开时秒显已渲染页面并触发一次轻量增量刷新(loadRecent(false), 复用 localStorage 缓存+实时追踪种子)。配套: 返回键/「进入」/拖拽收起均改为保活式隐藏; 仅渲染进程崩溃或 Activity 销毁时才彻底释放; 回前台(onResume)一并唤醒, 不卡死。"
 }
