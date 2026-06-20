@@ -246,6 +246,10 @@
   function hostOf(u){ try{ return new URL(u).host; }catch(e){ return u||""; } }
 
   // ── 选标签 / 投屏循环 ──
+  // 道法自然·共享一切但互不干扰: 选标签是「本浏览器本地」行为 —— 仅决定本端投屏/反控哪张标签,
+  // 绝不调 browseActivateTab 去改手机本体的全局当前标签 (否则多设备会互抢前台、并打扰手机本体)。
+  // browseScreenshot(tabIndex)/browseExecJs(tabIndex) 均按标签独立寻址, 后台标签也能取帧与注入,
+  // 故 A 看/操作标签2、B 看/操作标签5 可真正并行不相犯; 而开/关标签是共享动作 → 经轮询同步给所有端。
   var selGen = 0;
   async function selectTab(idx){
     var gen = ++selGen;
@@ -254,16 +258,14 @@
     titleEl.textContent = t? (t.title||hostOf(t.url)) : ("标签 "+idx);
     hint.style.display="none";
     frame.classList.add("empty"); setStatus("切换到标签 "+idx+" … (首帧合成约 1s)");
-    try{ await rpc("browseActivateTab",{tabIndex:idx},10000); }catch(e){}
-    if(gen!==selGen) return;
-    // 取该 tab 的 CSS 视口供反向坐标映射
+    // 取该 tab 的 CSS 视口供反向坐标映射 (按 tabIndex 寻址, 不改全局当前标签)
     try{
       var r = await cdp(idx,"Runtime.evaluate",{expression:"JSON.stringify({w:innerWidth,h:innerHeight})",returnByValue:true});
       var v = JSON.parse(r.result.value); if(v.w) view={cssW:v.w,cssH:v.h};
     }catch(e){}
     if(gen!==selGen) return;
-    // 新激活的 WebView 需要 ~1s 才合成首帧, 先等再取, 避免黑屏
-    await new Promise(function(r2){ setTimeout(r2, 950); });
+    // 后台标签首帧合成略有延迟, 先等再取, 避免黑屏
+    await new Promise(function(r2){ setTimeout(r2, 650); });
     if(gen!==selGen) return;
     shotNow(); startLoop();
   }
