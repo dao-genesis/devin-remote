@@ -25,8 +25,15 @@
        background:#1a2030;border:1px solid transparent;cursor:pointer;min-width:0}
   .tab:hover{border-color:var(--input-b)}
   .tab.on{background:#13332b;border-color:#1f5f51}
+  /* 道法自然·联控可视: 被其他设备前置/操控的标签 → 淡透明橙色背景一眼区分 (橙色数≈联控设备数) */
+  .tab.shared{background:rgba(240,136,62,.15);border-color:rgba(240,136,62,.55)}
+  .tab.on.shared{background:rgba(240,136,62,.22)}
   .tab .dot{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#3a4150}
   .tab.on .dot{background:var(--green);box-shadow:0 0 6px var(--green)}
+  .tab.shared .dot{background:var(--amber);box-shadow:0 0 6px var(--amber)}
+  .tab .co{flex:0 0 auto;font-size:9.5px;color:#ffcaa0;background:rgba(240,136,62,.22);
+           border:1px solid rgba(240,136,62,.5);border-radius:7px;padding:1px 5px;white-space:nowrap}
+  #coBadge{color:var(--amber)}
   .tab .meta{flex:1 1 auto;min-width:0}
   .tab .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;color:var(--fg)}
   .tab .acc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10.5px;color:var(--muted);margin-top:1px}
@@ -142,6 +149,11 @@
   function saveCfg(){ localStorage.setItem("rtflow.con.session",cfg.session);
     localStorage.setItem("rtflow.con.token",cfg.token); localStorage.setItem("rtflow.con.endpoint",cfg.endpoint); }
 
+  // ── 本设备标识 (一个浏览器页 = 一台联控设备; sessionStorage → 每页独立) ──
+  // 道法自然·共享一切但互不干扰: 各设备各操各页, 互不相犯; 同看一页则标橙→可选弹独立副本。
+  var CLIENT_ID = sessionStorage.getItem("rtflow.con.cid");
+  if(!CLIENT_ID){ CLIENT_ID = "c_"+Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-4); sessionStorage.setItem("rtflow.con.cid",CLIENT_ID); }
+
   // ── RPC 传输: POST <endpoint>/relay/<session> {path:/api/rpc, body:{cmd,...}} ──
   var rateUntil = 0;
   async function rpc(cmd, args, timeoutMs){
@@ -202,6 +214,19 @@
     if(typeof a==="string") return a;
     return (a.orgName? a.orgName+" · ":"") + (a.email||a.id||"");
   }
+  function curTab(){ return tabsArr.find(function(t){return t.index===activeIdx;}); }
+  // 在场登记: 声明本设备正看/控当前标签 (按稳定 vid)。非阻塞·失败无碍。
+  function claimView(){
+    var t = curTab(); if(!t || !t.id) return;
+    rpc("browseClaimView",{id:t.id, clientId:CLIENT_ID},8000).catch(function(){});
+  }
+  // 某标签除「本设备」外的其他在场设备 (含手机本体 __phone__) → 据此判定冲突/上橙色。
+  function otherViewers(t){ return (t && t.viewers || []).filter(function(v){ return v && v!==CLIENT_ID; }); }
+  // 全局联控设备数 = 所有标签 viewers 去重(排除本设备)的个数 (几台在前端操控)。
+  function coControlCount(){
+    var s={}; tabsArr.forEach(function(t){ otherViewers(t).forEach(function(v){ s[v]=1; }); });
+    return Object.keys(s).length;
+  }
 
   // ── 标签列表 ──
   async function refreshTabs(){
@@ -210,8 +235,10 @@
       if(!j || !j.tabs){ throw new Error(j&&j.error||"no_tabs"); }
       connected=true; setDot("on"); markHealth(true);
       tabsArr = j.tabs;
-      $("tabCount").textContent = tabsArr.length+" 个";
+      var co = coControlCount();
+      $("tabCount").innerHTML = tabsArr.length+" 个" + (co>0? " · <span id='coBadge'>"+co+" 设备联控</span>" : "");
       renderTabs();
+      claimView();   // 续期本设备「正看/控当前标签」的在场登记
       if(activeIdx<0){
         var act = tabsArr.find(function(t){return t.active;});
         if(act) selectTab(act.index);
@@ -229,19 +256,57 @@
   function renderTabs(){
     var box=$("tabs"); box.innerHTML="";
     tabsArr.forEach(function(t){
+      var others = otherViewers(t);          // 其他设备(含手机本体)是否正前置此页
+      var shared = others.length>0;
       var d=document.createElement("div");
-      d.className="tab"+(t.index===activeIdx?" on":"")+(t.internal?" intl":"");
+      d.className="tab"+(t.index===activeIdx?" on":"")+(t.internal?" intl":"")+(shared?" shared":"");
       var dot=document.createElement("span"); dot.className="dot";
       var meta=document.createElement("div"); meta.className="meta";
       var ttl=document.createElement("div"); ttl.className="ttl"; ttl.textContent=t.title||"(无标题)";
       var acc=document.createElement("div"); acc.className="acc";
       acc.textContent = t.internal? "板块 · "+(t.title||"") : (accLabel(t.account)||hostOf(t.url));
       meta.appendChild(ttl); meta.appendChild(acc);
+      d.appendChild(dot); d.appendChild(meta);
+      if(shared){
+        var hasPhone = others.indexOf("__phone__")>=0;
+        var co=document.createElement("span"); co.className="co";
+        co.textContent = hasPhone? (others.length>1? "本机+"+(others.length-1)+"控" : "本机在前") : (others.length+" 设备");
+        co.title = "其他设备正前置/操控此页 · 点击将弹出独立副本, 互不干扰";
+        d.appendChild(co);
+      }
       var x=document.createElement("span"); x.className="x"; x.textContent="×"; x.title="关闭";
-      d.appendChild(dot); d.appendChild(meta); d.appendChild(x);
-      d.onclick=function(e){ if(e.target===x){ closeTab(t.index); return; } selectTab(t.index); };
+      d.appendChild(x);
+      d.onclick=function(e){
+        if(e.target===x){ closeTab(t.index); return; }
+        // 道法自然·冲突即复刻: 点已被其他设备前置的标签 → 不去抢同一个(否则互相干扰),
+        // 而是弹出内容一致的独立副本, 各操各的 (Devin 账号页/板块均支持同内容多开)。
+        if(shared){ duplicateTab(t); return; }
+        selectTab(t.index);
+      };
       box.appendChild(d);
     });
+  }
+  // 复刻一张「内容一致」的新标签 (后台静默开, 不抢手机前台), 开后自动选中投屏到本端。
+  function duplicateTab(t){
+    toast("该页其他设备在操控 · 正为你弹出独立副本…");
+    var before = tabsArr.map(function(x){return x.id;});
+    var p;
+    if(t.internal){
+      // 板块: 用其资源页 URL 再开一张 (同账号/同内容多开)
+      var asset = (t.url||"").replace(/^.*\/engine\//,"file:///android_asset/engine/");
+      if(asset.indexOf("session=")<0) asset += (asset.indexOf("?")>=0?"&":"?")+"session="+encodeURIComponent(cfg.session)+"&token="+encodeURIComponent(cfg.token);
+      p = rpc("browseOpen",{url:asset, foreground:false},15000);
+    } else if(t.account && (t.account.id||t.account.email)){
+      p = rpc("openAccountTab",{account:(t.account.id||t.account.email), url:t.url||"https://app.devin.ai/", foreground:false},15000);
+    } else {
+      p = rpc("browseOpen",{url:t.url||"https://app.devin.ai/", foreground:false},15000);
+    }
+    p.then(function(){ setTimeout(function(){ refreshTabs().then(function(){
+        var fresh = tabsArr.filter(function(x){ return before.indexOf(x.id)<0; });
+        if(fresh.length){ selectTab(fresh[fresh.length-1].index); }
+        else { toast("已弹出副本"); }
+      }); }, 1000); })
+     .catch(function(e){ toast("复刻失败: "+e.message); });
   }
   function hostOf(u){ try{ return new URL(u).host; }catch(e){ return u||""; } }
 
@@ -254,6 +319,7 @@
   async function selectTab(idx){
     var gen = ++selGen;
     activeIdx = idx; renderTabs();
+    claimView();   // 立刻登记本设备前置此标签 (其他端随即看到橙色)
     var t = tabsArr.find(function(x){return x.index===idx;});
     titleEl.textContent = t? (t.title||hostOf(t.url)) : ("标签 "+idx);
     hint.style.display="none";

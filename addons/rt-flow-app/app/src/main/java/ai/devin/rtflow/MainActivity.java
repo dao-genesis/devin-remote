@@ -153,6 +153,7 @@ public class MainActivity extends AppCompatActivity {
 
     static class Tab {
         WebView web;
+        long vid = 0;                 // 稳定标签 id (不随 index 漂移): 联控在场登记·橙色标记·冲突复刻皆据此寻址
         String title = "新标签";
         String url = "";
         String accountJson = null;   // 非空 = 账号标签 (注入鉴权)
@@ -167,6 +168,34 @@ public class MainActivity extends AppCompatActivity {
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
     }
     private boolean adBlock = true;    // 广告/弹窗拦截: 默认内置开启 (无需用户操作·无开关)
+
+    // 道法自然·联控在场登记: 哪台设备(控台 clientId / 手机本体 __phone__)正「看/控」哪张标签(按 vid)。
+    // 控台每轮为其当前标签 claim 一次(带心跳 ts); 超 VIEW_TTL 未续期即视为离场。
+    // browseListTabs 回传每张标签的 viewers → 控台据此上橙色(他设备在前置)与点数联控设备数。
+    static final long VIEW_TTL = 15000;
+    private final java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.ConcurrentHashMap<String,Long>> tabViewers = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 某设备声明「我正看/控标签 vid」(一设备一时只前置一张 → 从其他 vid 移除该 clientId)。 */
+    public void ipcClaimView(long vid, String clientId) {
+        if (clientId == null || clientId.isEmpty() || vid <= 0) return;
+        long now = System.currentTimeMillis();
+        tabViewers.computeIfAbsent(vid, k -> new java.util.concurrent.ConcurrentHashMap<>()).put(clientId, now);
+        for (java.util.Map.Entry<Long, java.util.concurrent.ConcurrentHashMap<String,Long>> e : tabViewers.entrySet()) {
+            if (!e.getKey().equals(vid)) e.getValue().remove(clientId);                       // 一设备仅前置一张
+            java.util.Iterator<java.util.Map.Entry<String,Long>> it = e.getValue().entrySet().iterator();
+            while (it.hasNext()) if (now - it.next().getValue() > VIEW_TTL) it.remove();        // 顺手清陈
+        }
+    }
+    /** 某标签当前在场 viewers 的 JSON 数组 (活动标签总含 __phone__ = 手机本体前置)。 */
+    private String viewersJson(long vid, boolean isActive, long now) {
+        java.util.ArrayList<String> ids = new java.util.ArrayList<>();
+        if (isActive) ids.add("__phone__");
+        java.util.concurrent.ConcurrentHashMap<String,Long> m = tabViewers.get(vid);
+        if (m != null) for (java.util.Map.Entry<String,Long> e : m.entrySet())
+            if (now - e.getValue() <= VIEW_TTL) ids.add(e.getKey());
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < ids.size(); i++) { if (i > 0) sb.append(","); sb.append(JSONObject.quote(ids.get(i))); }
+        return sb.append("]").toString();
+    }
 
     @SuppressWarnings("SetJavaScriptEnabled")
     @Override
@@ -688,8 +717,10 @@ public class MainActivity extends AppCompatActivity {
 
     /** 创建并配置一个标签的 WebView (不自动加载 URL); 供 newTab 与 onCreateWindow(新窗口) 复用。 */
     @SuppressWarnings("SetJavaScriptEnabled")
+    private static long sVidSeq = 1;
     private Tab makeTab(String accountJson, boolean internal) {
         final Tab tab = new Tab();
+        tab.vid = sVidSeq++;          // 稳定唯一 id (随创建递增)
         tab.accountJson = accountJson;
         tab.internal = internal;
         WebView web = new WebView(this);
@@ -4281,16 +4312,19 @@ public class MainActivity extends AppCompatActivity {
 
     /** 列出所有前台浏览器标签 (JSON 数组) */
     public String ipcListTabs() {
+        long now = System.currentTimeMillis();
         StringBuilder sb = new StringBuilder("[");
         for (int i = 0; i < tabs.size(); i++) {
             Tab t = tabs.get(i);
             if (i > 0) sb.append(",");
             sb.append("{\"index\":").append(i)
+              .append(",\"id\":").append(t.vid)
               .append(",\"url\":").append(JSONObject.quote(t.url == null ? "" : t.url))
               .append(",\"title\":").append(JSONObject.quote(t.title == null ? "" : t.title))
               .append(",\"account\":").append(safeTabAccount(t.accountJson))
               .append(",\"internal\":").append(t.internal)
               .append(",\"active\":").append(i == active)
+              .append(",\"viewers\":").append(viewersJson(t.vid, i == active, now))
               .append("}");
         }
         return sb.append("]").toString();
@@ -4339,7 +4373,9 @@ public class MainActivity extends AppCompatActivity {
         Tab t = tabs.get(tabIndex);
         if (t.web == null) return "";
         try {
-            parkHost(t);            // 确保挂载窗口(后台标签也有尺寸·可被 draw 截取)
+            // 道法自然·共享一切但互不干扰: 仅停泊「非活动」标签到 autoHost; 活动(前台)标签本就在 content 可见,
+            // 绝不 park 它 —— 否则任一端截前台标签都会把它从 content 拽进不可见 autoHost, 害手机本体+该端齐黑屏。
+            if (tabIndex != active) parkHost(t);   // 后台标签: 确保挂载窗口(有尺寸·可被 draw 截取)
             resumeWeb(t.web);       // 拉回「页面可见+计时器运行」, 否则离屏/冻结态 Chromium 合成层为空 → 截白图
             int w = t.web.getWidth(), h = t.web.getHeight();
             if (w <= 0 || h <= 0) {   // 未布局的后台标签: 按屏幕尺寸强制测量+布局再截
@@ -4373,7 +4409,9 @@ public class MainActivity extends AppCompatActivity {
         if (tabIndex < 0 || tabIndex >= tabs.size()) return "{\"ok\":false,\"error\":\"no_tab\"}";
         Tab t = tabs.get(tabIndex);
         if (t.web == null) return "{\"ok\":false,\"error\":\"no_web\"}";
-        parkHost(t); resumeWeb(t.web);   // 后台标签也挂载并解冻, 否则截白图 (与 ipcScreenshot 同策)
+        // 仅 park 非活动标签; 活动前台标签留在 content 直接 draw, 否则截图会把手机本体前台拽黑 (与 ipcScreenshot 同策)
+        if (tabIndex != active) parkHost(t);
+        resumeWeb(t.web);   // 后台标签也解冻, 否则截白图
         int w = t.web.getWidth(), h = t.web.getHeight();
         if (w <= 0 || h <= 0) {
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();

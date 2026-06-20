@@ -1133,6 +1133,13 @@ public class RelayService extends Service {
             return r[0].isEmpty() ? "[]" : r[0];
         }
 
+        // 道法自然·联控在场登记: 控台声明「本设备(clientId)正看/控标签 vid」。轻量·非阻塞·不进引擎。
+        @JavascriptInterface public void browseClaimView(double vid, String clientId) {
+            if (!remoteOpsEnabled) return;
+            MainActivity m = MainActivity.sInstance;
+            if (m != null) m.runOnUiThread(() -> m.ipcClaimView((long) vid, clientId));
+        }
+
         @JavascriptInterface public String browseExecJs(int tabIndex, String js) {
             if (!remoteOpsEnabled) return "{\"error\":\"远程操控未启用\"}";
             MainActivity m = MainActivity.sInstance;
