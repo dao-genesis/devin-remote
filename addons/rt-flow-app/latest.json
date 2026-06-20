@@ -1,6 +1,6 @@
 {
-  "versionCode": 94,
-  "versionName": "0.35.1",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.1/DevinCloud-mobile-v0.35.1.apk",
-  "notes": "v0.35.1 · 全服通悬浮窗秒开根治 (道法自然·建一次后保活, 不再冷启动)。病灶: 右上角「🗂 全服通(近期对话/备份)」悬浮窗每次关闭都 daoWeb.destroy() 销毁整个 WebView, 再开时新建 WebView + loadUrl(daopan.html) 从零加载 (重解析 HTML/JS·重建 JS 上下文·重新布局) → 每次点开都像冷启动, 卡顿。修法: 悬浮窗面板/WebView 首建后**常驻保活**, 开关只切显隐 (VISIBLE↔GONE) — 关闭时仅 onPause 暂停其后台轮询/渲染省电, 不销毁不重载; 再开时秒显已渲染页面并触发一次轻量增量刷新(loadRecent(false), 复用 localStorage 缓存+实时追踪种子)。配套: 返回键/「进入」/拖拽收起均改为保活式隐藏; 仅渲染进程崩溃或 Activity 销毁时才彻底释放; 回前台(onResume)一并唤醒, 不卡死。"
+  "versionCode": 95,
+  "versionName": "0.35.2",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.2/DevinCloud-mobile-v0.35.2.apk",
+  "notes": "v0.35.2 · 在线自更新整链路根治 (道法自然·下载→落地→认领→校验→安装→净化, 环环不丢)。病灶: 更新下载用内存字段 updateDlId/updateApkFile 记账, 一旦下载途中 App 进程被杀/Activity 重建, 字段清零 → 完成广播认不出是更新包 → 被当普通下载: 搬进保险箱+记进「下载库」却从不唤起安装 (故面板里堆出一排 DevinCloud-update.apk, 且原文件被搬走/清理后显示「文件已删」); 或字段半丢时报「更新包未找到」。叠加: 镜像/反代偶发返回 HTML 错误页被当 .apk 存下 → 系统「解析包出现问题」。修法: (1) 更新包用固定文件名 DevinCloud-update.apk 落 app 私有 Download, 下载 id 持久化到 SharedPreferences → 据 id 或文件名三重认领, 进程重建也不漏认、绝不混入下载库; (2) 安装前严校验 (文件>1MB + ZIP 魔数 PK + getPackageArchiveInfo 包名匹配), 非法包自动删并换下一个镜像源重试, 试遍才报错; (3) 启动时认领上次未竟下载 (广播漏收也能续装), 残留旧包/坏包自动清理; (4) 一次性净化历史误记进下载库的更新包条目。自此点更新即可稳定: 下载完成自动唤起安装器, 不再解析失败/找不到/被删。"
 }
