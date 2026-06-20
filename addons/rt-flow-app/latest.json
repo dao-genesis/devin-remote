@@ -1,6 +1,6 @@
 {
-  "versionCode": 102,
-  "versionName": "0.35.9",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.9/DevinCloud-mobile-v0.35.9.apk",
-  "notes": "v0.35.9 · 修复浏览历史把网页记成『上一页标题』的缺陷。\n• 根因: 网页标题是异步到达的 (onPageFinished 之后才回调 onReceivedTitle), 而历史在 onPageFinished 时就用当时的 tab.title 落库 → 此刻仍是上一页的标题。裸域名 301 跳 www (如 wikipedia.org→www.wikipedia.org、iana.org→www.iana.org) 必现此问题: 该条历史标题张冠李戴。\n• 修法: 标题到达 onReceivedTitle 时回填最近一条同 URL 历史的标题, 并兼容跳转前的原始 URL (getOriginalUrl), 末尾斜杠差异也归一 → 历史标题恒与网页实际标题一致。无痕标签不记历史; 多实例 Devin 账号历史 (history_devin) 用账号命名, 不受影响。\n更新经 latest.json 多镜像(GitHub raw + jsDelivr/Fastly/Statically + ghproxy)轮询下发, 国内外均可达; 与历史版本同签名, 可直接覆盖升级。"
+  "versionCode": 103,
+  "versionName": "0.36.0",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.36.0/DevinCloud-mobile-v0.36.0.apk",
+  "notes": "v0.36.0 · 修复网页控台(/console)板块全黑屏、卡在「首帧加载」无法操作的缺陷\n• 根因: 控台镜像取帧走 RPC browseScreenshot，旧实现忽略 format/quality/maxWidth，恒返回整幅 PNG(单帧约 400~550KB)；弱网下大包反复超时 → 永久黑屏；停泊的本地板块页首帧还要数秒才出。\n• 修复: browseScreenshot 现遵循 format/quality/maxWidth → 走压缩 JPEG 降采样取帧(ipcMirrorFrame，带铺底色)，单帧缩到约一个量级以下，弱网不再超时；停泊板块也能秒出首帧。无帧参数或 format:png 仍回退整幅 PNG(兼容 CDP/程序化截图)。\n• 控台: 首帧到达前显示「正在接入实时画面…」而非纯黑底，帧参数下调更适配移动网络。\n更新经 latest.json 多镜像(GitHub raw + jsDelivr/Fastly/Statically + ghproxy)轮替下载，国内外可达；版本递增可覆盖升级。"
 }

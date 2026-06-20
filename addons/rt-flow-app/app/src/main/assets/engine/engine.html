@@ -307,7 +307,21 @@
       var s = await execJs(a.tabIndex|0, js);
       try{ return {ok:true, storage: JSON.parse(s)}; }catch(e){ return {ok:true, storage: s}; }
     },
-    browseScreenshot: async function(a){ return {ok:true, base64: N.browseScreenshot?N.browseScreenshot(a.tabIndex|0):""}; },
+    browseScreenshot: async function(a){
+      // 投屏/镜像取帧: 传了 format/quality/maxWidth(maxDim) 任一帧参数(且非 png) → 走压缩 JPEG 降采样路径,
+      //   帧体积较整幅 PNG 小一个量级 → 弱网不再因大包超时而黑屏, 停泊板块也能秒出首帧。
+      // 无帧参数 或 显式 format:"png" → 回退整幅 base64 PNG (兼容 CDP Page.captureScreenshot 等程序化调用)。
+      var fmt = String(a.format||"").toLowerCase();
+      var hint = (a.format!==undefined)||(a.quality!==undefined)||(a.maxWidth!==undefined)||(a.maxDim!==undefined);
+      if(fmt!=="png" && hint && N.mirrorFrame){
+        try{
+          var q=a.quality|0, max=(a.maxWidth|0)||(a.maxDim|0);
+          var o=JSON.parse(N.mirrorFrame(a.tabIndex|0, q>0?q:55, max>0?max:1024));
+          if(o && o.ok && o.jpeg) return {ok:true, base64:o.jpeg, mime:"image/jpeg", w:o.w, h:o.h, url:o.url, title:o.title, active:o.active};
+        }catch(e){}
+      }
+      return {ok:true, base64: N.browseScreenshot?N.browseScreenshot(a.tabIndex|0):""};
+    },
     // 网页控台 📥 下载悬浮窗: 列出手机下载 (脱敏) + 项动作在手机本机执行 (分享/打开/删除)。
     listDownloads: async function(){ try{ return {ok:true, items: JSON.parse(N.listDownloads?N.listDownloads():"[]")}; }catch(e){ return {ok:true, items:[]}; } },
     downloadAction: async function(a){ if(N.downloadAction){ try{ N.downloadAction(a.index|0, String(a.action||"")); }catch(e){} } return {ok:true}; },

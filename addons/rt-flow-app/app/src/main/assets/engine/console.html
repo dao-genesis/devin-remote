@@ -358,14 +358,15 @@
     activeIdx = idx; renderStrip();
     claimView();
     var t = tabsArr.find(function(x){return x.index===idx;});
-    hint.style.display="none";
+    // 首帧到达前不要只露黑底: 给出居中「接入实时画面」提示, 拿到第一帧即隐藏 (见 shotNow)。
+    hint.textContent="正在接入实时画面…"; hint.style.display="";
     frame.classList.add("empty"); setStatus("切换到标签 "+idx+" … (首帧合成约 1s)");
     try{
       var r = await cdp(idx,"Runtime.evaluate",{expression:"JSON.stringify({w:innerWidth,h:innerHeight})",returnByValue:true});
       var v = JSON.parse(r.result.value); if(v.w) view={cssW:v.w,cssH:v.h};
     }catch(e){}
     if(gen!==selGen) return;
-    await new Promise(function(r2){ setTimeout(r2, 650); });
+    await new Promise(function(r2){ setTimeout(r2, 200); });
     if(gen!==selGen) return;
     shotNow(); startLoop();
   }
@@ -379,7 +380,7 @@
     loopBusy=true;
     var want = activeIdx;
     try{
-      var j = await rpc("browseScreenshot",{tabIndex:want, format:"jpeg", quality:50, maxWidth:1024}, 18000);
+      var j = await rpc("browseScreenshot",{tabIndex:want, format:"jpeg", quality:48, maxWidth:900}, 18000);
       if(want!==activeIdx) return;
       var b64 = j && (j.base64||j.data||j.image);
       if(j && (j.ok===false || j.error)){
@@ -390,7 +391,7 @@
       else if(b64){
         var mime = b64.charAt(0)==="/" ? "image/jpeg" : (b64.charAt(0)==="i"?"image/png":"image/jpeg");
         frame.src = "data:"+mime+";base64,"+b64;
-        frame.classList.remove("empty");
+        frame.classList.remove("empty"); hint.style.display="none";
         connected=true; setDot("on"); markHealth(true);
         setStatus("● 实时 · "+view.cssW+"×"+view.cssH+" · 标签 "+want);
       }
