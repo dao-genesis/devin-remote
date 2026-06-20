@@ -224,7 +224,14 @@ function buildAuthBridge(localBase, auth) {
     "if(!localStorage.getItem(__k))localStorage.setItem(__k,JSON.stringify({externalOrgId:null,userId:__uid,internalOrgId:__org,orgName:__orgName,result:{resolved_external_org_id:null,org_id:__org,org_name:__orgName,is_valid_resource:true}}));}" +
     "}" +
     "document.cookie='webapp_logged_in=true; path=/; max-age=31536000; SameSite=Lax';" +
-    "var __base=" + J(localBase) + ";" +
+    "var __base=" + J(localBase) + ";var __abs='https://app.devin.ai';" +
+    // 运行时兜底: 拦截动态构造的绝对 app.devin.ai 整页跳转(assign/replace/history)→ 改指本地代理,
+    //   防 SPA 漏改字面量时仍硬跳真站致掉登录(JS/HTML 静态改写之外的双保险)。
+    "var __fix=function(u){return (typeof u==='string')?u.split(__abs).join(__base):u;};" +
+    "try{var _la=window.location.assign.bind(window.location);window.location.assign=function(u){return _la(__fix(u));};}catch(e){}" +
+    "try{var _lr=window.location.replace.bind(window.location);window.location.replace=function(u){return _lr(__fix(u));};}catch(e){}" +
+    "try{var _ps=history.pushState;history.pushState=function(s,t,u){return _ps.call(history,s,t,__fix(u));};}catch(e){}" +
+    "try{var _rs=history.replaceState;history.replaceState=function(s,t,u){return _rs.call(history,s,t,__fix(u));};}catch(e){}" +
     "var needAuth=function(u){return typeof u==='string'&&(u.charAt(0)==='/'||u.indexOf(__base)===0);};" +
     "var oF=window.fetch;" +
     "window.fetch=function(u,o){if(typeof u!=='string')return oF.call(this,u,o);" +
@@ -352,7 +359,7 @@ async function handleRequest(req, res, auth, port, log) {
         let loc = proxyRes.headers["location"] || "";
         if (loc) {
           loc = loc
-            .split(DEVIN_APP + "/").join(localBase + "/")
+            .split(DEVIN_APP).join(localBase)
             .split(DEVIN_WS + "/").join(localBase + "/__ws/")
             .split(DEVIN_REG + "/").join(localBase + "/__reg/")
             .split(DEVIN_CDN + "/").join(localBase + "/__cdn/")
@@ -417,9 +424,11 @@ async function handleRequest(req, res, auth, port, log) {
 
         if (isHtml && isPage) {
           let html = body.toString("utf8");
+          // 帛书·「大制不割」: 整源站前缀(任意结尾字符·含单/双引号/反引号/路径)统一改写,
+          //   杜绝单引号 'https://app.devin.ai' 这类绝对 URL 漏改 → SPA 硬跳真站致掉登录。
+          //   桥接脚本在本段之后再注入, 故其内置的 app.devin.ai 前缀剥离逻辑不受影响。
           html = html
-            .split("https://app.devin.ai/").join(localBase + "/")
-            .split('https://app.devin.ai"').join(localBase + '"')
+            .split("https://app.devin.ai").join(localBase)
             .split("https://windsurf.com/").join(localBase + "/__ws/")
             .split("https://register.windsurf.com/").join(localBase + "/__reg/")
             .split("https://server.codeium.com/").join(localBase + "/__cdn/")
@@ -439,14 +448,14 @@ async function handleRequest(req, res, auth, port, log) {
           const txt = body.toString("utf8");
           let outBuf;
           if (
-            txt.indexOf("https://app.devin.ai/") >= 0 ||
+            txt.indexOf("https://app.devin.ai") >= 0 ||
             txt.indexOf("https://windsurf.com/") >= 0 ||
             txt.indexOf("https://register.windsurf.com/") >= 0 ||
             txt.indexOf("https://server.codeium.com/") >= 0 ||
             txt.indexOf("https://server.self-serve.windsurf.com/") >= 0
           ) {
             const js = txt
-              .split("https://app.devin.ai/").join(localBase + "/")
+              .split("https://app.devin.ai").join(localBase)
               .split("https://windsurf.com/").join(localBase + "/__ws/")
               .split("https://register.windsurf.com/").join(localBase + "/__reg/")
               .split("https://server.codeium.com/").join(localBase + "/__cdn/")
@@ -463,6 +472,19 @@ async function handleRequest(req, res, auth, port, log) {
             _cachePut(targetPath, entry);
             _diskPut(targetPath, entry, localBase);
           }
+          return;
+        }
+        if (ct.includes("application/json")) {
+          // 帛书·「域中有四大」: SPA 以 webapp_host 校验规范主机 —— location.host!==webapp_host 即
+          //   `location.href=https://${webapp_host}/login?...` 硬跳真站(掉登录之真因)。反代下浏览器
+          //   所见 host = 本地代理地址, 故把服务端下发的 webapp_host 改写为本次请求 Host, 令校验通过。
+          let txt = body.toString("utf8");
+          if (txt.indexOf("webapp_host") >= 0) {
+            const reqHost = (req.headers && req.headers.host) ? String(req.headers.host) : ("localhost:" + port);
+            txt = txt.replace(/("webapp_host"\s*:\s*")[^"]*(")/g, "$1" + reqHost + "$2");
+          }
+          res.writeHead(status, safeHeaders);
+          res.end(Buffer.from(txt, "utf8"));
           return;
         }
         // CSS/字体/图片/wasm 等哈希不可变静态资源: CSS 按需改写, 余直发; 强缓存 + 入缓存。
