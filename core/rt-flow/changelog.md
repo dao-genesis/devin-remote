@@ -2,6 +2,16 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.22.0 (2026-06-20) · 用户脚本/扩展: 对接 Chrome 扩展体系(content_scripts·非油猴)
+
+> 道法自然 · 把电脑浏览器的「插件/扩展」搬进 /shell, 用 Chrome 扩展的 content_scripts 范式而非油猴。
+
+### /shell 归一外壳
+- **用户脚本/扩展管理器**(汉堡「🔌 用户脚本 / 扩展」, 替换原「🐵 用户脚本(规划中)」占位): 新建/编辑/启用停用/删除脚本, 每条 = `{name,matches[],css,js,enabled}`, 持久化 `dao.userScripts`。
+- **导入 Chrome 扩展**: 支持「解压扩展目录 / .crx / .zip」→ 宿主解析 `manifest.json` 的 `content_scripts`(matches + js/css 文件内容)→ 落为脚本条目。内置最小 ZIP 读取(`zlib.inflateRawSync` · 解析 EOCD/中央目录)与 `.crx`(Cr24 v2/v3)头剥离, 零第三方依赖。
+- **注入**: content_scripts 按 match 规则注入到 /shell 宿主自渲染的账号页(会话列表/对话正文), 同源·CSP 已放行内联; 附最小 `chrome.storage.local`/`chrome.runtime`/`GM_addStyle` 垫片以兼容简单内容脚本。
+- 设备迁移整包(导出/导入)纳入 `userScripts`, 跨设备一并迁移。
+
 ## v4.21.0 (2026-06-20) · 对话/备份归一(对照手机端 APK): 拖拽对话进网页 + 备份页签命名对齐
 
 > 道法自然 · 复刻手机端 daopan.html 的「长按对话卡拖到网页」到电脑端 /shell。
