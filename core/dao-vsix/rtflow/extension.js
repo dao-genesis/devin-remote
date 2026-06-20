@@ -788,18 +788,23 @@ vscode.postMessage({type:'ready'});
 // ════════════════════════════════════════════════════════════════════════
 const SHELL_HTTP_SHIM = "(function(){"
   + "var SID='sh_'+Math.random().toString(36).slice(2)+Date.now().toString(36);"
-  + "var _st={};"
+  + "var _st={};var _seen=0;"
   + "function post(m){try{fetch('/api/shell/msg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:SID,msg:m})}).catch(function(){});}catch(e){}}"
   + "window.acquireVsCodeApi=function(){return{postMessage:function(m){try{"
   + "if(m&&m.type==='openExternal'&&m.url){window.open(m.url,'_blank');return;}"
   + "if(m&&m.type==='clip'&&m.text){try{navigator.clipboard.writeText(m.text);}catch(e){}return;}"
   + "post(m);"
   + "}catch(e){}},getState:function(){return _st;},setState:function(s){_st=s;return s;}};};"
+  // deliver: SSE 与轮询双通道统一入口, 按 __seq 去重 (隧道缓冲 SSE 时轮询兜底)
+  + "function deliver(m){if(!m)return;if(typeof m.__seq==='number'){if(m.__seq<=_seen)return;_seen=m.__seq;}"
+  + "if(m.type==='__copy'){try{navigator.clipboard.writeText(m.text||'');}catch(e){}return;}"
+  + "try{window.postMessage(m,'*');}catch(e){}}"
   + "function connect(){try{var es=new EventSource('/api/shell/events?sid='+encodeURIComponent(SID));"
-  + "es.onmessage=function(ev){var m;try{m=JSON.parse(ev.data);}catch(e){return;}"
-  + "if(m&&m.type==='__copy'){try{navigator.clipboard.writeText(m.text||'');}catch(e){}return;}"
-  + "try{window.postMessage(m,'*');}catch(e){}};"
-  + "es.onerror=function(){};}catch(e){}}connect();"
+  + "es.onmessage=function(ev){var m;try{m=JSON.parse(ev.data);}catch(e){return;}deliver(m);};"
+  + "es.onerror=function(){};}catch(e){}}"
+  // poll: 兜底轮询, 即使隧道缓冲 SSE 也能拿到宿主回推
+  + "function poll(){fetch('/api/shell/poll?sid='+encodeURIComponent(SID)+'&since='+_seen).then(function(r){return r.json();}).then(function(arr){if(arr&&arr.length){for(var i=0;i<arr.length;i++)deliver(arr[i]);}}).catch(function(){}).then(function(){setTimeout(poll,700);});}"
+  + "connect();poll();"
   + "})();";
 // 直出独立外壳: 复用 _multiShellHtml, 放开 CSP 的 connect-src(同源 fetch/SSE) 并注入 HTTP 传输垫片。
 function _standaloneShellHtml(opts) {
@@ -834,17 +839,59 @@ function _shellAttach(sid, res) {
   try { res.on('close', close); } catch (e) {}
   try { res.on('error', close); } catch (e) {}
 }
+// ── 轮询兜底 (隧道缓冲 SSE 时仍可达): 每个 sid 维护带序号的消息队列 ──
+//   病灶: 部分隧道 (cloudflared quick / 反代) 会缓冲 text/event-stream,
+//   SSE 连上(readyState=OPEN)却收不到任何 data: 推送 → 一切「宿主→页面」回包
+//   (dlRecent/cloudInit/favs…)永远卡「加载中」。兜底: 所有回推同时入队,
+//   页面侧除 SSE 外再以 /api/shell/poll 轮询拉取, 按 __seq 去重, 隧道无关。
+const _shellQueue = new Map(); // sid -> [{__seq, ...msg}]
+const _shellSeq = new Map(); // sid -> last seq
+const _SHELL_Q_MAX = 400; // 单 sid 最多缓存条数
+const _SHELL_SID_MAX = 80; // 最多保留的 sid 队列数 (按插入顺序淘汰最旧)
+function _shellEnqueue(sid, data) {
+  let q = _shellQueue.get(sid);
+  if (!q) {
+    if (_shellQueue.size >= _SHELL_SID_MAX) {
+      const k = _shellQueue.keys().next().value;
+      _shellQueue.delete(k); _shellSeq.delete(k);
+    }
+    q = []; _shellQueue.set(sid, q);
+  }
+  q.push(data);
+  if (q.length > _SHELL_Q_MAX) q.splice(0, q.length - _SHELL_Q_MAX);
+}
+function _shellStamp(sid, msg) {
+  const seq = (_shellSeq.get(sid) || 0) + 1; _shellSeq.set(sid, seq);
+  return Object.assign({ __seq: seq }, msg);
+}
 function _shellSend(sid, msg) {
+  if (!sid) return false;
+  const data = _shellStamp(sid, msg);
+  _shellEnqueue(sid, data); // 入队 → 轮询可取 (隧道缓冲 SSE 时的兜底)
   const res = _shellClients.get(sid);
-  if (!res) return false;
-  try { res.write('data: ' + JSON.stringify(msg) + '\n\n'); return true; } catch (e) { return false; }
+  if (res) { try { res.write('data: ' + JSON.stringify(data) + '\n\n'); } catch (e) {} }
+  return true;
 }
 function _shellBroadcast(msg) {
   let n = 0;
-  for (const res of _shellClients.values()) {
-    try { res.write('data: ' + JSON.stringify(msg) + '\n\n'); n++; } catch (e) {}
+  const sids = new Set();
+  for (const k of _shellClients.keys()) sids.add(k);
+  for (const k of _shellQueue.keys()) sids.add(k);
+  for (const sid of sids) {
+    const data = _shellStamp(sid, msg);
+    _shellEnqueue(sid, data);
+    const res = _shellClients.get(sid);
+    if (res) { try { res.write('data: ' + JSON.stringify(data) + '\n\n'); n++; } catch (e) {} }
   }
   return n;
+}
+// GET /api/shell/poll?sid=&since= → 返回 __seq>since 的消息 (隧道缓冲 SSE 时的兜底通道)
+function _shellPoll(sid, since) {
+  if (!sid) return [];
+  const q = _shellQueue.get(sid) || [];
+  since = Number(since) || 0;
+  if (!since) return q.slice(-200);
+  return q.filter((d) => (d.__seq || 0) > since);
 }
 // ── 多用户「道并行而不相悖」· 六大板块宿主回推按会话隔离 ──────────────────
 //   病灶: 旧实现 setHostPost 恒走 _shellBroadcast — 把某用户触发的板块数据/回包
@@ -1033,6 +1080,13 @@ function _daoRecencyMs(s) {
   if (typeof t === "number") return t > 1e12 ? t : t * 1000;
   const p = Date.parse(t); return isNaN(p) ? 0 : p;
 }
+function _daoTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const tm = setTimeout(() => { if (!done) { done = true; reject(new Error("timeout")); } }, Math.max(500, ms || 7000));
+    Promise.resolve(promise).then((v) => { if (!done) { done = true; clearTimeout(tm); resolve(v); } }, (e) => { if (!done) { done = true; clearTimeout(tm); reject(e); } });
+  });
+}
 async function _daoPool(items, conc, fn) {
   let idx = 0; const n = items.length; conc = Math.max(1, Math.min(conc, n || 1));
   async function w() { while (idx < n) { const i = idx++; try { await fn(items[i]); } catch (e) {} } }
@@ -1044,12 +1098,21 @@ async function _daoDownloadData(m, reply) {
     const accs = (_store && _store.accounts) || [];
     const noOf = (email) => { const i = accs.findIndex((a) => String(a.email).toLowerCase() === String(email).toLowerCase()); return i >= 0 ? i + 1 : "?"; };
     let emails = []; try { emails = devinCloud.cachedEmails() || []; } catch (e) {}
+    // 仅查询「已解锁(有 auth1)」的账号, 并限量, 避免对全部 N 百账号串行抓取卡死。
+    //   账号池(_store.accounts)中的账号排在前 (活跃/常用), 其余缓存账号补足到上限。
+    const order = new Map();
+    accs.forEach((a, i) => { if (a && a.email) order.set(String(a.email).toLowerCase(), i); });
+    const ready = emails.filter((e) => { try { const a = devinCloud.getCachedAuth(e); return a && a.auth1; } catch (x) { return false; } });
+    ready.sort((a, b) => (order.has(a.toLowerCase()) ? order.get(a.toLowerCase()) : 1e9) - (order.has(b.toLowerCase()) ? order.get(b.toLowerCase()) : 1e9));
+    const cap = Math.max(1, Math.min(80, Number(m.maxAcc) || 48));
+    const pick = ready.slice(0, cap);
     const perAcc = Math.max(1, Math.min(20, Number(m.perAcc) || 12));
     const out = [];
-    await _daoPool(emails, 6, async (email) => {
+    await _daoPool(pick, 8, async (email) => {
       const auth = devinCloud.getCachedAuth(email);
       if (!auth || !auth.auth1) return;
-      const ls = await devinCloud.listSessions(auth, perAcc);
+      let ls = null;
+      try { ls = await _daoTimeout(devinCloud.listSessions(auth, perAcc), 7000); } catch (e) { ls = null; }
       if (!ls || !ls.ok) return;
       (ls.sessions || []).forEach((s) => {
         const sid = s.devin_id || s.session_id || s.id; if (!sid) return;
@@ -1059,7 +1122,7 @@ async function _daoDownloadData(m, reply) {
     out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const seen = Object.create(null), ded = [];
     for (const it of out) { if (it.sid && seen[it.sid]) continue; if (it.sid) seen[it.sid] = 1; ded.push(it); }
-    reply({ type: "dlRecentData", list: ded.slice(0, 60), accounts: emails.length });
+    reply({ type: "dlRecentData", list: ded.slice(0, 60), accounts: pick.length, scanned: ready.length });
     return true;
   }
   if (t === "dlExportMd") {
@@ -14689,6 +14752,7 @@ module.exports = {
     // 归一 · 独立 HTTP 外壳 (适配所有 IDE/浏览器/手机·参照 APK): 供 dao-vsix 本地服务器 /shell 路由调用
     getStandaloneShellHtml: _standaloneShellHtml, // GET /shell → 直出同一外壳 (注入 HTTP 传输垫片)
     shellAttach: _shellAttach, // GET /api/shell/events → SSE 挂载 (宿主→页面)
+    shellPoll: _shellPoll, // GET /api/shell/poll → 轮询兜底 (隧道缓冲 SSE 时仍可达)
     shellHandleMessage, // POST /api/shell/msg → 页面→宿主消息处理
     setCloudProvider(p) { _cloudProvider = p || null; }, // 归一 · dao-vsix 注入「六大板块」面板提供者
     parseAccountText,

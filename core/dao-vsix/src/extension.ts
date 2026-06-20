@@ -1378,7 +1378,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     // ── 归一 · 独立 HTTP 外壳 (适配所有 IDE / 任意浏览器 / 手机 · 参照手机端 APK) ──
     //   把 rt-flow 的多实例外壳直出为可在任意浏览器打开的单页, 传输层由 vscode.postMessage
     //   改走 HTTP: 页面→宿主 POST /api/shell/msg; 宿主→页面 SSE /api/shell/events。
-    if (route === '/shell' || route === '/shell/' || route === '/api/shell/events' || route === '/api/shell/msg') {
+    if (route === '/shell' || route === '/shell/' || route === '/api/shell/events' || route === '/api/shell/poll' || route === '/api/shell/msg') {
         const rtint: any = _rtflowModule && _rtflowModule._internals;
         if (route === '/shell' || route === '/shell/') {
             let html = '';
@@ -1390,6 +1390,14 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             const sid = url.searchParams.get('sid') || '';
             if (res && rtint && typeof rtint.shellAttach === 'function') { rtint.shellAttach(sid, res); return { _streamed: true }; }
             return { ok: false, error: 'sse-unavailable' };
+        }
+        if (route === '/api/shell/poll') {
+            // 轮询兜底: 隧道缓冲 SSE 时, 页面经此拉取宿主回推 (按 __seq 去重)。
+            const sid = url.searchParams.get('sid') || '';
+            const since = url.searchParams.get('since') || '0';
+            let arr: any[] = [];
+            try { if (rtint && typeof rtint.shellPoll === 'function') arr = rtint.shellPoll(sid, since) || []; } catch (e) { arr = []; }
+            return { _proxy: true, status: 200, contentType: 'application/json; charset=utf-8', body: JSON.stringify(arr) };
         }
         // POST /api/shell/msg
         let body: any = {};
