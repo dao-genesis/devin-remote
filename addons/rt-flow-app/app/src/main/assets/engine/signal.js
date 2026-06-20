@@ -21,7 +21,7 @@
   // 默认公共 ntfy 实例 (多家 → 去中心化, 任一可达即通; 可自托管私有实例进一步去中心)。
   var DEFAULT_SERVERS = ["https://ntfy.sh", "https://ntfy.envs.net"];
   var CHUNK = 1200;          // 单条信令分片上限 (规避公共 broker 4KB 报文限制)
-  var ANSWER_TIMEOUT = 12000;
+  var ANSWER_TIMEOUT = 25000;
   var hasSubtle = (typeof crypto !== "undefined" && crypto.subtle && typeof crypto.subtle.digest === "function");
   var STUN = [
     { urls: "stun:stun.l.google.com:19302" },
@@ -187,11 +187,12 @@
         setTimeout(fin, 4000);
       });
     }
-    var opened = false;
+    var opened = false, answered = false, settle = null;
     var ready = new Promise(function (resolve, reject) {
+      settle = { resolve: resolve, reject: reject };
       dc.onopen = function () { opened = true; resolve({ pc: pc, dc: dc, rpc: rpc, ping: ping, topic: topic, close: close }); };
-      pc.onconnectionstatechange = function () { if (pc.connectionState === "failed" && !opened) reject(new Error("p2p_failed")); };
-      setTimeout(function () { if (!opened) reject(new Error("signal_timeout")); }, opts.timeout || ANSWER_TIMEOUT);
+      // 对端已应答(收到 answer)却仍 failed ⇒ 是 ICE 打洞失败(NAT/防火墙), 与「压根没应答」区分开。
+      pc.onconnectionstatechange = function () { if (pc.connectionState === "failed" && !opened) reject(new Error(answered ? "ice_failed" : "p2p_failed")); };
     });
     var reasm = makeReasm();
     var sub = subscribe(servers, topic, function (raw) {
@@ -199,7 +200,7 @@
         if (role !== "a" || corr !== nonce || opened) return;   // 只认本次 offer 对应的 answer
         var obj = await unseal(key, full);
         if (!obj || obj.t !== "answer" || !obj.sdp) return;
-        try { await pc.setRemoteDescription({ type: "answer", sdp: obj.sdp }); } catch (e) {}
+        try { await pc.setRemoteDescription({ type: "answer", sdp: obj.sdp }); answered = true; } catch (e) {}
       });
     });
     function close() { try { sub.close(); } catch (e) {} try { if (dc) dc.close(); } catch (e) {} try { if (pc) pc.close(); } catch (e) {} }
@@ -211,6 +212,9 @@
     publish(servers, topic, frameChunks(nonce, "o", payload));
     // 稍后补发一次 (公共 broker 偶发丢首包 / 应答方刚上线)
     setTimeout(function () { if (!opened) publish(servers, topic, frameChunks(nonce, "o", payload)); }, 2500);
+    // 等答超时只从「发出 offer」起算 —— 此前 ICE 收集已占去数秒, 不该吃进等答窗口。
+    //   answered=true(已收到对端 answer)但仍超时 ⇒ ice_failed(建议填 TURN/隧道兜底); 否则 signal_timeout(对端离线/token 不符)。
+    setTimeout(function () { if (!opened && settle) settle.reject(new Error(answered ? "ice_failed" : "signal_timeout")); }, opts.timeout || ANSWER_TIMEOUT);
     try { return await ready; } finally { /* ready 失败时由调用方决定是否 close()→Worker 兜底 */ }
   }
 

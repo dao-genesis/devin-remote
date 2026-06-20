@@ -1,6 +1,6 @@
 {
-  "versionCode": 87,
-  "versionName": "0.34.4",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.4/DevinCloud-mobile-v0.34.4.apk",
-  "notes": "v0.34.4 · 内网穿透底层重做 + 对话追踪全局通知 (道法自然·无为而无不为)。① 路线C 0账号·去中心化 WebRTC: 新增 signal.js, 借公共 ntfy pub/sub (多家公开实例·可自托管) 一次性交换 AES-GCM 加密 SDP, 之后 RPC 全程走 P2P DataChannel —— 完全不经你的 Worker, 真·去中心化零账号; 鉴权即加密(密钥=H(session+token)), 准入门禁同中继级别; Worker 仅打洞失败时兜底。引擎冷启动即自动作信令应答方; 客户端 p2p-client.html / Worker 的 /p2p 仅填 session+token 即直连。② 对话追踪·全局系统通知: 引擎常驻后台轮询所有已登录账号, 检测会话『待你处理/卡住/等待输入/结束』并在状态跃迁时弹系统级通知 (软件切后台/锁屏亦可弹, 点按拉起 App), 不刷屏。复用 trackStuck 的 latest_status_contents.user_action_required 真信号。"
+  "versionCode": 88,
+  "versionName": "0.34.5",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.5/DevinCloud-mobile-v0.34.5.apk",
+  "notes": "v0.34.5 · 去中心化 P2P 握手加固 (道法自然·无为而无不为)。① 等答超时从发出 offer 起算 (此前 ICE 收集占去数秒不再吃进等答窗口), 上限 12s→25s, 弱网/对称 NAT 更稳。② 区分失败成因: ice_failed (对端已应答但 P2P 打洞失败/对称 NAT → 提示填 TURN 或隧道兜底) vs signal_timeout (未收到对端应答 → 提示检查手机在线与 session/token), 客户端给出可操作提示。承接 v0.34.4 路线C 0账号去中心化 WebRTC 信令 (公共 ntfy pub/sub 换 AES-GCM 加密 SDP, RPC 全走 P2P DataChannel, 不经 Worker) 与对话追踪全局系统通知。"
 }
