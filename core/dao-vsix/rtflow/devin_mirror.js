@@ -159,6 +159,8 @@ async function navigate(accKey, auth, pathPart) {
   s.lastUse = Date.now();
   let p = String(pathPart || "");
   p = p ? "/" + p.replace(/^\/+/, "") : "";
+  // 官网会话 URL 去 devin- 前缀: dao 内部 id 为 devin-<uuid>, 官网路由为 /sessions/<uuid>。
+  p = p.replace(/^\/sessions\/devin-/, "/sessions/");
   const url = web.DEVIN_APP + p;
   await s.send("Page.navigate", { url });
   return { ok: true, url };

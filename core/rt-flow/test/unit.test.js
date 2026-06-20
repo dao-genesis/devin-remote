@@ -646,11 +646,14 @@ function test(name, fn) {
 
   // ── 归一 · 投屏兜底视图 (宿主真·官网本体 CDP 截帧 + 归一化输入回传) ──────────
   console.log("\n[buildMirrorHtml · 投屏兜底视图]");
-  test("对话视图含「🖥️ 官网本体」投屏入口 (链到 <base>/mirror?path=/sessions/<id>)", () => {
-    const html = cloud.buildConversationHtml("T", "devin-abc", [], { account: "u@x.com", base: "/i/aKEY" });
+  test("对话视图含「🖥️ 官网本体」投屏入口 (链到 <base>/mirror?path=/sessions/<id·去devin-前缀>)", () => {
+    const html = cloud.buildConversationHtml("T", "devin-abc123", [], { account: "u@x.com", base: "/i/aKEY" });
     assert.ok(html.includes("/i/aKEY/mirror?path="), "对话视图须有投屏入口");
     assert.ok(html.includes("官网本体"), "入口文案");
-    const noBase = cloud.buildConversationHtml("T", "devin-abc", [], {});
+    // 官网会话 URL 无 devin- 前缀: 深链须去前缀, 否则官网 404 (实测纠偏)
+    assert.ok(html.includes(encodeURIComponent("/sessions/abc123")), "投屏深链须去 devin- 前缀 (/sessions/abc123)");
+    assert.ok(!html.includes(encodeURIComponent("/sessions/devin-abc123")), "深链不得保留 devin- 前缀");
+    const noBase = cloud.buildConversationHtml("T", "devin-abc123", [], {});
     assert.ok(!noBase.includes("/mirror?path="), "无 base(备份场景)不加投屏入口");
   });
   test("投屏视图: 同源帧轮询 + 归一化输入回传 (令牌不下发)", () => {

@@ -1858,7 +1858,7 @@ function buildConversationHtml(title, devinId, events, opts) {
     '.header .back:hover{background:#161b22}\n' +
     '</style>\n</head>\n<body>\n' + nav +
     '<div class="header">' + (opts.base ? '<a class="back" href="' + _escHtml(opts.base) + '/" title="返回对话列表">‹ 对话列表</a> ' : '') + '<h1>🔮 ' + _escHtml(title) + '</h1>' +
-    (opts.base ? '<a class="back mirror" href="' + _escHtml(opts.base) + '/mirror?path=' + encodeURIComponent('/sessions/' + devinId) + '" title="投屏官网本体 · 可回信/全功能">🖥️ 官网本体</a>' : '') +
+    (opts.base ? '<a class="back mirror" href="' + _escHtml(opts.base) + '/mirror?path=' + encodeURIComponent('/sessions/' + String(devinId).replace(/^devin-/, '')) + '" title="投屏官网本体 · 可回信/全功能">🖥️ 官网本体</a>' : '') +
     '<div class="meta">Session: ' + _escHtml(devinId) + (account ? ' · 账号: ' + _escHtml(account) : '') + ' · 事件: ' + events.length + '</div></div>\n' +
     '<div class="container">\n' + msgBlocks.join("\n") + '\n</div>\n' +
     '<div class="footer">RT Flow 备份 · ' + ts + ' · 道法自然</div>\n' +
