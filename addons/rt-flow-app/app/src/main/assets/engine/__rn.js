@@ -9,12 +9,15 @@
 (function () {
   if (window.__rnReady) return; window.__rnReady = true;
   function qp(k) { try { return new URLSearchParams(location.search).get(k) || ""; } catch (e) { return ""; } }
-
-  var SESSION = qp("session") || localStorage.getItem("rtflow.rn.session") || "";
-  var TOKEN = qp("token") || qp("t") || localStorage.getItem("rtflow.rn.token") || "";
-  var ENDPOINT = (qp("endpoint") || location.origin).replace(/\/+$/, "");
-  if (SESSION) localStorage.setItem("rtflow.rn.session", SESSION);
-  if (TOKEN) localStorage.setItem("rtflow.rn.token", TOKEN);
+  function ls(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
+  // 外壳(网页控台)经 srcdoc 内嵌真实页面时, 子文档 URL 为 about:srcdoc — 无 query、且
+  // location.origin 可能序列化为 "null"(不透明源)。故外壳会把绝对中继端点经 window.__RN_CFG 注入,
+  // 这里优先采信它 → 子页面据此直连中继(同源 worker 经 srcdoc 内嵌时跨源, 中继已开 CORS+预检)。
+  var CFG = (window.__RN_CFG && typeof window.__RN_CFG === "object") ? window.__RN_CFG : {};
+  var SESSION = CFG.session || qp("session") || ls("rtflow.rn.session") || "";
+  var TOKEN = CFG.token || qp("token") || qp("t") || ls("rtflow.rn.token") || "";
+  var ENDPOINT = String(CFG.endpoint || qp("endpoint") || location.origin || "").replace(/\/+$/, "");
+  try { if (SESSION) localStorage.setItem("rtflow.rn.session", SESSION); if (TOKEN) localStorage.setItem("rtflow.rn.token", TOKEN); } catch (e) {}
   var RELAY = ENDPOINT + "/relay/" + encodeURIComponent(SESSION);
 
   function frame(path, body) { return JSON.stringify({ path: path, method: "POST", body: body }); }
