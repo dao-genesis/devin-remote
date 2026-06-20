@@ -373,11 +373,11 @@ function _setMultiFavs(f) {
 function _getMultiHist() {
   try { return (_ctx && _ctx.globalState && _ctx.globalState.get("dao.multiHistory")) || []; } catch (e) { return []; }
 }
-function _pushMultiHist(url, label) {
+function _pushMultiHist(url, label, kind) {
   try {
     if (!url || !_ctx || !_ctx.globalState) return;
     let h = _getMultiHist().filter((x) => x.url !== url);
-    h.unshift({ url: url, label: label || url, ts: Date.now() });
+    h.unshift({ url: url, label: label || url, ts: Date.now(), kind: kind || "acc" });
     h = h.slice(0, 200);
     _ctx.globalState.update("dao.multiHistory", h);
   } catch (e) {}
@@ -817,8 +817,8 @@ function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[
   var fr=document.createElement('iframe');fr.setAttribute('src',m.url);fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.display='none';
   fr.addEventListener('load',function(){setLoading(id,false);});fr.addEventListener('error',function(){setLoading(id,false);});
   S.appendChild(fr);
-  tabs[id]={btn:btn,frame:fr,url:m.url,zoom:1,meta:m,loading:false};order.push(id);applyZoom(tabs[id]);setActive(id);setLoading(id,true);sync();schedPersist();
-  vscode.postMessage({type:'histPush',url:m.url,label:m.label||'Devin'});}
+  tabs[id]={btn:btn,frame:fr,url:m.url,email:m.email||'',zoom:1,meta:m,loading:false};order.push(id);applyZoom(tabs[id]);setActive(id);setLoading(id,true);sync();schedPersist();
+  vscode.postMessage({type:'histPush',url:m.url,label:m.label||'Devin',kind:'acc'});}
 // 归一 · 状态续接(对齐手机端会话保持): 持久化当前打开的标签集 → 宿主 globalState;
 //   重开 /shell 时宿主在 ready 回推 restoreTabs, 逐个还原(老用户停在原网页·新用户落主页)。
 var _persistT=null;
@@ -830,10 +830,15 @@ function schedPersist(){clearTimeout(_persistT);_persistT=setTimeout(persistShel
 function restoreTabs(arr){if(!arr||!arr.length)return;for(var i=0;i<arr.length;i++){var s=arr[i]||{};try{
   if(s.kind==='board'){openBoard(s.board||'home');}
   else if(s.kind==='acc'&&s.email){vscode.postMessage({type:'reopen',email:s.email,devinId:s.devinId||''});}}catch(e){}}}
-function navigate(v){v=(v||'').trim();if(!v)return;if(isBoard()){if(/^https?:\\/\\//i.test(v))vscode.postMessage({type:'openExternal',url:v});return;}var t=tabs[active];
-  if(/^https?:\\/\\//i.test(v)){var o=curOrigin();if(t&&o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);setLoading(active,true);}else{vscode.postMessage({type:'openExternal',url:v});}return;}
-  if(v.charAt(0)==='/'){if(t){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);setLoading(active,true);ADDR.value=u;}return;}
-  vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v)});}
+function navigate(v){v=(v||'').trim();if(!v)return;var isU=/^https?:\\/\\//i.test(v);var t=tabs[active];
+  if(isBoard()||!t){
+    if(isU){vscode.postMessage({type:'openExternal',url:v,hist:1,label:v});}
+    else if(v.charAt(0)==='/'){vscode.postMessage({type:'openCloudPage',path:v});}
+    else{vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v),hist:1,label:v});}
+    try{ADDR.blur();}catch(e){}return;}
+  if(isU){var o=curOrigin();if(o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);setLoading(active,true);}else{vscode.postMessage({type:'openExternal',url:v,hist:1,label:v});}return;}
+  if(v.charAt(0)==='/'){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);setLoading(active,true);ADDR.value=u;return;}
+  vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v),hist:1,label:v});}
 // 归一 · 设备类型自动识别 (UA / ?m=1·见 _multiShellHtml MOBILE 注入) — 移除手动「切换 电脑版/手机版」(点击会重载致整体失效)。
 var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['🖥️','操作电脑本体','board:computer'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🔌','用户脚本 / 扩展','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
 function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'" data-l="'+esc(PAGES[i][1])+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
@@ -881,7 +886,10 @@ function _ovBindBulk(idPfx,ckSel,attr,onDel,onClear){
   var del=document.getElementById(idPfx+'Del');if(del)del.onclick=function(){var cks=OVB.querySelectorAll(ckSel),v=[];for(var j=0;j<cks.length;j++)if(cks[j].checked)v.push(cks[j].getAttribute(attr));if(v.length)onDel(v);};
   var clr=document.getElementById(idPfx+'Clear');if(clr)clr.onclick=function(){onClear();};}
 function showHistory(){if(!history.length){showOverlay('🕘 浏览历史','<div class="empty">暂无浏览记录</div>');return;}
-  var h=_ovBulkBar('h');for(var i=0;i<history.length;i++){var it=history[i];h+='<div class="li"><input type="checkbox" class="hck" data-u="'+esc(it.url)+'" style="flex:none"/><div class="g"><div class="t">'+esc(it.label)+'</div><div class="s">'+esc(it.url)+'</div></div><button class="b" data-u="'+esc(it.url)+'">打开</button></div>';}
+  var accH=[],webH=[];for(var i=0;i<history.length;i++){var it=history[i];((it.kind==='web')?webH:accH).push(it);}
+  function _hRow(it){return '<div class="li"><input type="checkbox" class="hck" data-u="'+esc(it.url)+'" style="flex:none"/><div class="g"><div class="t">'+esc(it.label)+'</div><div class="s">'+esc(it.url)+'</div></div><button class="b" data-u="'+esc(it.url)+'">打开</button></div>';}
+  function _hSec(t,a){if(!a.length)return '';var s='<div class="note" style="margin:6px 0 4px;font-weight:600;color:#9cdcfe">'+t+' ('+a.length+')</div>';for(var j=0;j<a.length;j++)s+=_hRow(a[j]);return s;}
+  var h=_ovBulkBar('h')+_hSec('🔀 多实例账号页',accH)+_hSec('🌐 普通浏览',webH);
   showOverlay('🕘 浏览历史 ('+history.length+')',h);bindOpen();
   _ovBindBulk('h','.hck','data-u',function(v){vscode.postMessage({type:'histDel',urls:v});},function(){vscode.postMessage({type:'histClear'});});}
 function showFavs(){if(!favs.length){showOverlay('⭐ 书签收藏','<div class="empty">暂无书签 · 工具条点 ☆ 收藏当前页</div>');return;}
@@ -1060,7 +1068,7 @@ _dEl('cvBack').onclick=daoHideCv;
 document.getElementById('bDl').onclick=function(){daoOpen('recent');};
 document.getElementById('bBk').onclick=function(){daoOpen('backup');};
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
-document.getElementById('bAdd').onclick=function(e){e.stopPropagation();vscode.postMessage({type:'newDevinTab'});};
+document.getElementById('bAdd').onclick=function(e){e.stopPropagation();var em='';try{var t=tabs[active];if(t&&t.email)em=t.email;}catch(_){}vscode.postMessage({type:'newDevinTab',email:em});};
 document.getElementById('bRefresh').onclick=function(){if(isBoard()){var bt=activeBoardTab();closeTab(boardId(bt));openBoard(bt);return;}var t=tabs[active];if(t){t.frame.setAttribute('src',t.url);setLoading(active,true);}};
 document.getElementById('bHome').onclick=function(){openBoard('home');};
 document.getElementById('bZi').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.min(3,(t.zoom||1)+0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
@@ -1144,7 +1152,8 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='dlZipDone'){try{daoToast(m.ok?('✓ 已打包: '+(m.name||'')):('打包失败: '+(m.error||'')),!m.ok);}catch(e){}}
   else if(m.type==='migBundle'){try{migDownload(m);}catch(e){}}
   else if(m.type==='migDone'){try{daoToast(m.ok?('✓ 导入完成 · '+(m.summary||'')):('导入失败: '+(m.error||'')),!m.ok);}catch(e){}}
-  else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}});
+  else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}
+  else if(m.type==='toast'){try{daoToast(m.text||'',!!m.bad);}catch(e){}}});
 buildMenu();
 vscode.postMessage({type:'ready',mobile:MOBILE});
 // 归一·手机版冷启动: 与 APK app.html 一致, 首屏直接打开「🔀切号」板块(电脑端数据源), 而非空提示页。
@@ -1544,10 +1553,18 @@ async function shellHandleMessage(sid, m) {
         return;
       }
       case 'newDevinTab': {
-        const email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || '');
-        if (!email) { _toast('无可用账号 · 请先在账号库添加'); return; }
-        const open = await _shellResolveOpen({ email, fresh: true });
-        if (open) send(open); else _toast('账号反代未就绪 · 请检查登录/密码');
+        const accs = ((_store && _store.accounts) || []);
+        const cand = [];
+        const pushE = (e) => { const k = String(e || '').trim().toLowerCase(); if (k && cand.indexOf(k) < 0) cand.push(k); };
+        pushE(m.email);
+        pushE(_store && _store.activeEmail);
+        for (const a of accs) { try { const au = devinCloud.getCachedAuth(a.email); if (au && au.auth1) pushE(a.email); } catch (e) {} }
+        for (const a of accs) { if (a && a.password) pushE(a.email); }
+        for (const a of accs) pushE(a.email);
+        if (!cand.length) { _toast('无可用账号 · 请先在账号库添加'); return; }
+        let open = null;
+        for (const e of cand) { try { open = await _shellResolveOpen({ email: e, fresh: true }); } catch (er) { open = null; } if (open) break; }
+        if (open) send(open); else _toast('账号反代未就绪 · 请先在切号面板登录一个账号');
         return;
       }
       case 'switchOpen':
@@ -1563,7 +1580,7 @@ async function shellHandleMessage(sid, m) {
         if (open) send(open);
         return;
       }
-      case 'histPush': _pushMultiHist(m.url, m.label); return;
+      case 'histPush': _pushMultiHist(m.url, m.label, m.kind); send({ type: 'history', list: _getMultiHist() }); return;
       case 'favAdd': {
         if (m.board) {
           const bkey = 'board:' + m.board;
@@ -1792,6 +1809,7 @@ function _wireMultiPanel(panel) {
         return;
       }
       if (m.type === "openExternal" && m.url) {
+        if (m.hist) { try { _pushMultiHist(m.url, m.label || m.url, "web"); panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {} }
         try { await vscode.env.openExternal(vscode.Uri.parse(m.url)); } catch (e) {}
         return;
       }
@@ -1863,11 +1881,20 @@ function _wireMultiPanel(panel) {
         try { await openMultiInstance({ email: m.email, devinId: m.devinId }); } catch (e) {}
         return;
       }
-      if (m.type === "histPush") { _pushMultiHist(m.url, m.label); return; }
+      if (m.type === "histPush") { _pushMultiHist(m.url, m.label, m.kind); try { panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {} return; }
       if (m.type === "newDevinTab") {
-        const email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || "");
-        if (email) { try { await openMultiInstance({ email: email }); } catch (e) {} }
-        else _toast("无可用账号 · 请先在账号库添加");
+        const accs = ((_store && _store.accounts) || []);
+        const cand = [];
+        const pushE = (e) => { const k = String(e || "").trim().toLowerCase(); if (k && cand.indexOf(k) < 0) cand.push(k); };
+        pushE(m.email);
+        pushE(_store && _store.activeEmail);
+        for (const a of accs) { try { const au = devinCloud.getCachedAuth(a.email); if (au && au.auth1) pushE(a.email); } catch (e) {} }
+        for (const a of accs) { if (a && a.password) pushE(a.email); }
+        for (const a of accs) pushE(a.email);
+        if (!cand.length) { _toast("无可用账号 · 请先在账号库添加"); return; }
+        let ok = false;
+        for (const e of cand) { try { const r = await openMultiInstance({ email: e, fresh: true }); if (r && r.ok) { ok = true; break; } } catch (er) {} }
+        if (!ok) _toast("账号反代未就绪 · 请先在切号面板登录一个账号");
         return;
       }
       if (m.type === "openCloudPage") {
@@ -1981,9 +2008,10 @@ async function openMultiInstance(opts) {
   // 归一 · Devin Cloud 板块即页面: opts.path(/sessions、/knowledge、/settings/secrets ...) → 经该账号反代加载真实网页(会话态登录·可内嵌)
   const pageRaw = String(opts.path || '').trim();
   const pagePath = pageRaw ? ('/' + pageRaw.replace(/^\/+/, '')) : '';
+  const fresh = !!opts.fresh && !pagePath && !sid;
   const url = pagePath ? (base + pagePath) : (sid ? (base + '/sessions/' + encodeURIComponent(sid)) : (base + '/'));
   const short = email.split('@')[0];
-  const id = email.toLowerCase() + '|' + (pagePath ? ('page' + pagePath) : (sid || 'home'));
+  const id = email.toLowerCase() + '|' + (pagePath ? ('page' + pagePath) : (sid || (fresh ? ('new' + Date.now()) : 'home')));
   // 富标签 (对齐手机版): #账号编号 + 名称 + $额度 + 对话状态点。
   let accNo = 0, dollars = 0;
   try {
@@ -1996,7 +2024,7 @@ async function openMultiInstance(opts) {
   } catch (e) {}
   const title = String(opts.title || '').trim();
   const pageLabel = String(opts.label || '').trim();
-  const label = title || (short + (pagePath ? (' · ' + (pageLabel || pagePath)) : (sid ? (' · ' + sid.slice(0, 8)) : '')));
+  const label = title || (short + (pagePath ? (' · ' + (pageLabel || pagePath)) : (sid ? (' · ' + sid.slice(0, 8)) : (fresh ? ' · 新对话' : ''))));
   const status = String(opts.status || '').trim();
   const meta = { id, label, url, email, devinId: sid, accNo, dollars, title, status, path: pagePath, pageLabel };
   _multiTabs.set(id, meta);
@@ -10415,6 +10443,7 @@ function _toast(text) {
       _editorPanel.webview.postMessage({ type: "toast", text });
     } catch {}
   }
+  try { _shellBroadcast({ type: "toast", text }); } catch (e) {}
 }
 
 // ═══ 第五板块 · Devin Cloud 后端编排 (无 UI · 全软编码) ═══════════════════
