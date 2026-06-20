@@ -382,6 +382,15 @@ function _pushMultiHist(url, label) {
     _ctx.globalState.update("dao.multiHistory", h);
   } catch (e) {}
 }
+function _setMultiHist(h) {
+  try { if (_ctx && _ctx.globalState) _ctx.globalState.update("dao.multiHistory", Array.isArray(h) ? h : []); } catch (e) {}
+}
+// 批量删历史(urls 集合)/清空。返回更新后的列表。
+function _delMultiHist(urls) {
+  const set = new Set((urls || []).map(String));
+  const h = _getMultiHist().filter((x) => !set.has(String(x.url)));
+  _setMultiHist(h); return h;
+}
 // v4.9.3 · 归一修复: 六大板块经 blob-iframe 挂载, frame-src 必须放行 blob: 否则
 // 子网页被 CSP 静默拦截 → 标签全空白(用户反馈"加载不进去")。createObjectURL 不抛错,
 // 故 mountBoard 的 srcdoc 兜底不触发, 必须在此放行 blob:。
@@ -515,6 +524,7 @@ html.m #hint{font-size:14px;padding:18px}
 <div id="app">
   <div id="tb">
     <button class="tbtn" id="bMenu" title="菜单 · 页面">☰</button>
+    <button class="tbtn" id="bAdd" title="新建标签 · 新 Devin 对话页">＋</button>
     <button class="tbtn" id="bRefresh" title="刷新当前页">⟳</button>
     <button class="tbtn" id="bHome" title="回到账号首页">🏠</button>
     <input id="addr" placeholder="Devin 路径(/sessions/..)、网址 或 搜索词，回车" />
@@ -577,7 +587,7 @@ function setActive(id){active=id;for(var k in tabs){var on=(k===id);tabs[k].fram
 function cycleTab(dir){if(!order.length)return;var i=order.indexOf(active);if(i<0)i=0;var n=(i+dir+order.length)%order.length;setActive(order[n]);var b=tabs[order[n]];if(b&&b.btn&&b.btn.scrollIntoView){try{b.btn.scrollIntoView({inline:'center',block:'nearest'});}catch(e){}}}
 function applyZoom(t){var z=t.zoom||1;t.frame.style.transformOrigin='0 0';t.frame.style.transform='scale('+z+')';t.frame.style.width=(100/z)+'%';t.frame.style.height=(100/z)+'%';}
 function spin(on){SPIN.className='spin'+(on?' on':'');}
-function closeTab(id){var t=tabs[id];if(!t)return;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];order=order.filter(function(x){return x!==id;});if(id.indexOf('board:')===0){var _bt=id.slice(6);var _b=BOARDS[_bt];if(_b){if(_b.url){try{URL.revokeObjectURL(_b.url)}catch(e){}}delete BOARDS[_bt];}}else{vscode.postMessage({type:'closed',id:id});}if(active===id){active=null;if(order.length)setActive(order[order.length-1]);}sync();}
+function closeTab(id){var t=tabs[id];if(!t)return;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];order=order.filter(function(x){return x!==id;});if(id.indexOf('board:')===0){var _bt=id.slice(6);var _b=BOARDS[_bt];if(_b){if(_b.url){try{URL.revokeObjectURL(_b.url)}catch(e){}}delete BOARDS[_bt];}}else{vscode.postMessage({type:'closed',id:id});}if(active===id){active=null;if(order.length)setActive(order[order.length-1]);}sync();schedPersist();}
 function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[id].url=m.url;tabs[id].frame.setAttribute('src',m.url);}setActive(id);return;}
   var btn=document.createElement('div');btn.className='tab';
   var dot=document.createElement('span');dot.className='dot'+(m.status?(' '+m.status):'');btn.appendChild(dot);
@@ -593,8 +603,19 @@ function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[
   var fr=document.createElement('iframe');fr.setAttribute('src',m.url);fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.display='none';
   spin(true);fr.addEventListener('load',function(){spin(false);});
   S.appendChild(fr);
-  tabs[id]={btn:btn,frame:fr,url:m.url,zoom:1,meta:m};order.push(id);applyZoom(tabs[id]);setActive(id);sync();
+  tabs[id]={btn:btn,frame:fr,url:m.url,zoom:1,meta:m};order.push(id);applyZoom(tabs[id]);setActive(id);sync();schedPersist();
   vscode.postMessage({type:'histPush',url:m.url,label:m.label||'Devin'});}
+// 归一 · 状态续接(对齐手机端会话保持): 持久化当前打开的标签集 → 宿主 globalState;
+//   重开 /shell 时宿主在 ready 回推 restoreTabs, 逐个还原(老用户停在原网页·新用户落主页)。
+var _persistT=null;
+function persistShell(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];
+  if(id.indexOf('board:')===0){arr.push({kind:'board',board:id.slice(6)});}
+  else{var t=tabs[id];var mt=(t&&t.meta)||{};if(mt.email)arr.push({kind:'acc',email:mt.email,devinId:mt.devinId||'',title:mt.label||'',status:mt.status||''});}}
+  vscode.postMessage({type:'shellSaveTabs',tabs:arr});}catch(e){}}
+function schedPersist(){clearTimeout(_persistT);_persistT=setTimeout(persistShell,400);}
+function restoreTabs(arr){if(!arr||!arr.length)return;for(var i=0;i<arr.length;i++){var s=arr[i]||{};try{
+  if(s.kind==='board'){openBoard(s.board||'home');}
+  else if(s.kind==='acc'&&s.email){vscode.postMessage({type:'reopen',email:s.email,devinId:s.devinId||''});}}catch(e){}}}
 function navigate(v){v=(v||'').trim();if(!v)return;if(isBoard()){if(/^https?:\\/\\//i.test(v))vscode.postMessage({type:'openExternal',url:v});return;}var t=tabs[active];
   if(/^https?:\\/\\//i.test(v)){var o=curOrigin();if(t&&o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);spin(true);}else{vscode.postMessage({type:'openExternal',url:v});}return;}
   if(v.charAt(0)==='/'){if(t){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}return;}
@@ -633,15 +654,26 @@ function mountBoardSolo(html,tab){tab=tab||'overview';var id=boardId(tab);var b=
   }
   b.ready=false;
   try{var blob=new Blob([doc],{type:'text/html'});var url=URL.createObjectURL(blob);b.frame.removeAttribute('srcdoc');b.frame.src=url;if(b.url){try{URL.revokeObjectURL(b.url)}catch(e){}}b.url=url;}catch(e){b.frame.srcdoc=doc;}
-  b.mounted=true;b.req=false;setActive(id);sync();}
+  b.mounted=true;b.req=false;setActive(id);sync();schedPersist();}
 function showOverlay(title,html){OVT.textContent=title;OVB.innerHTML=html;OV.className='on';}
 function hideOverlay(){OV.className='';}
-function bindOpen(){var ob=OVB.querySelectorAll('[data-u]');for(var i=0;i<ob.length;i++){ob[i].onclick=function(){navigate(this.getAttribute('data-u'));hideOverlay();};}}
-function showHistory(){var h='';if(!history.length)h='<div class="empty">暂无浏览记录</div>';else for(var i=0;i<history.length;i++){var it=history[i];h+='<div class="li"><div class="g"><div class="t">'+esc(it.label)+'</div><div class="s">'+esc(it.url)+'</div></div><button class="b" data-u="'+esc(it.url)+'">打开</button></div>';}showOverlay('🕘 浏览历史',h);bindOpen();}
-function showFavs(){var h='';if(!favs.length)h='<div class="empty">暂无书签 · 工具条点 ☆ 收藏当前页</div>';else for(var i=0;i<favs.length;i++){var f=favs[i];var _ob=(f.kind==='board')?('<button class="b pri" data-goto-board="'+esc(f.board||'')+'">打开</button>'):('<button class="b pri" data-re-email="'+esc(f.email||'')+'" data-re-did="'+esc(f.devinId||'')+'">打开</button>');var _sub=(f.kind==='board')?'板块':('#'+esc(f.accNo||'')+' '+esc(f.email||''));h+='<div class="li"><div class="g"><div class="t">'+esc(f.label)+'</div><div class="s">'+_sub+'</div></div>'+_ob+'<button class="b" data-del="'+esc(f.key)+'">删</button></div>';}showOverlay('⭐ 书签收藏',h);
+function bindOpen(){var ob=OVB.querySelectorAll('button[data-u]');for(var i=0;i<ob.length;i++){ob[i].onclick=function(){navigate(this.getAttribute('data-u'));hideOverlay();};}}
+// 批量操作工具条(对齐电脑浏览器历史/书签): 全选 + 删除所选 + 清空。selSel=勾选项选择器, attr=取值属性。
+function _ovBulkBar(idPfx){return '<div class="li" style="background:transparent;border:none;padding:0 0 8px;gap:10px"><label class="g" style="display:flex;align-items:center;gap:6px;cursor:pointer;flex:none"><input type="checkbox" id="'+idPfx+'All"/> 全选</label><div style="flex:1"></div><button class="b" id="'+idPfx+'Del">删除所选</button><button class="b" id="'+idPfx+'Clear">清空</button></div>';}
+function _ovBindBulk(idPfx,ckSel,attr,onDel,onClear){
+  var all=document.getElementById(idPfx+'All');if(all)all.onchange=function(){var cks=OVB.querySelectorAll(ckSel);for(var j=0;j<cks.length;j++)cks[j].checked=all.checked;};
+  var del=document.getElementById(idPfx+'Del');if(del)del.onclick=function(){var cks=OVB.querySelectorAll(ckSel),v=[];for(var j=0;j<cks.length;j++)if(cks[j].checked)v.push(cks[j].getAttribute(attr));if(v.length)onDel(v);};
+  var clr=document.getElementById(idPfx+'Clear');if(clr)clr.onclick=function(){onClear();};}
+function showHistory(){if(!history.length){showOverlay('🕘 浏览历史','<div class="empty">暂无浏览记录</div>');return;}
+  var h=_ovBulkBar('h');for(var i=0;i<history.length;i++){var it=history[i];h+='<div class="li"><input type="checkbox" class="hck" data-u="'+esc(it.url)+'" style="flex:none"/><div class="g"><div class="t">'+esc(it.label)+'</div><div class="s">'+esc(it.url)+'</div></div><button class="b" data-u="'+esc(it.url)+'">打开</button></div>';}
+  showOverlay('🕘 浏览历史 ('+history.length+')',h);bindOpen();
+  _ovBindBulk('h','.hck','data-u',function(v){vscode.postMessage({type:'histDel',urls:v});},function(){vscode.postMessage({type:'histClear'});});}
+function showFavs(){if(!favs.length){showOverlay('⭐ 书签收藏','<div class="empty">暂无书签 · 工具条点 ☆ 收藏当前页</div>');return;}
+  var h=_ovBulkBar('f');for(var i=0;i<favs.length;i++){var f=favs[i];var _ob=(f.kind==='board')?('<button class="b pri" data-goto-board="'+esc(f.board||'')+'">打开</button>'):('<button class="b pri" data-re-email="'+esc(f.email||'')+'" data-re-did="'+esc(f.devinId||'')+'">打开</button>');var _sub=(f.kind==='board')?'板块':('#'+esc(f.accNo||'')+' '+esc(f.email||''));h+='<div class="li"><input type="checkbox" class="fck" data-k="'+esc(f.key)+'" style="flex:none"/><div class="g"><div class="t">'+esc(f.label)+'</div><div class="s">'+_sub+'</div></div>'+_ob+'<button class="b" data-del="'+esc(f.key)+'">删</button></div>';}showOverlay('⭐ 书签收藏 ('+favs.length+')',h);
   var gb=OVB.querySelectorAll('[data-goto-board]');for(var g=0;g<gb.length;g++){gb[g].onclick=function(){try{openBoard(this.getAttribute('data-goto-board'));}catch(e){}hideOverlay();};}
   var ob=OVB.querySelectorAll('[data-re-email]');for(var a=0;a<ob.length;a++){ob[a].onclick=function(){vscode.postMessage({type:'reopen',email:this.getAttribute('data-re-email'),devinId:this.getAttribute('data-re-did')});hideOverlay();};}
-  var db=OVB.querySelectorAll('[data-del]');for(var b=0;b<db.length;b++){db[b].onclick=function(){vscode.postMessage({type:'favDel',key:this.getAttribute('data-del')});};}}
+  var db=OVB.querySelectorAll('[data-del]');for(var b=0;b<db.length;b++){db[b].onclick=function(){vscode.postMessage({type:'favDel',key:this.getAttribute('data-del')});};}
+  _ovBindBulk('f','.fck','data-k',function(v){vscode.postMessage({type:'favDelMany',keys:v});},function(){vscode.postMessage({type:'favClear'});});}
 function showUserscripts(){showOverlay('🐵 用户脚本','<div class="note">用户脚本(油猴)用于在 Devin 页面注入增强脚本。<br>受 IDE webview 跨域限制，注入到 Devin 页面将经「每账号反代」统一注入实现(规划中)。<br>当前可在「页面工具」使用复制链接 / 系统浏览器打开 / 翻译等通用能力。</div>');}
 function showTools(){var t=tabs[active];var u=t?t.url:'';showOverlay('🛠 页面工具','<div class="li"><div class="g"><div class="t">复制当前页链接</div><div class="s">'+esc(u||'(无)')+'</div></div><button class="b" id="tCopy">复制</button></div><div class="li"><div class="g"><div class="t">系统浏览器打开当前页</div></div><button class="b pri" id="tExt">打开</button></div><div class="li"><div class="g"><div class="t">翻译当前页(系统浏览器 · Google 翻译)</div></div><button class="b" id="tTr">翻译</button></div><div class="note" style="margin-top:8px">缩放: 工具条 A− / A＋；点百分比复位。刷新: ⟳ 。回首页: 🏠 。</div>');
   var c=document.getElementById('tCopy');if(c)c.onclick=function(){vscode.postMessage({type:'clip',text:u});};
@@ -694,8 +726,18 @@ function daoTab(t){var rec=t==='recent';
   _dEl('dwViewR').classList.toggle('on',rec);_dEl('dwViewB').classList.toggle('on',!rec);
   _dEl('dwBarR').style.display=rec?'flex':'none';_dEl('dwBarB').style.display=rec?'none':'flex';
   daoHideCv();if(rec)daoLoadRecent();else daoLoadBackup();}
-function daoLoadRecent(){_dEl('dwRecent').innerHTML='<div class="empty">加载中…(跨账号近期对话)</div>';vscode.postMessage({type:'dlRecent'});}
-function daoOnRecent(list){DAO_REC=list||[];daoRenderRecent();}
+var DAO_REC_CK='dao.recent.cache';
+function daoLoadRecent(){
+  // 秒开: 先用本地缓存渲染(若有), 再后台流式拉取持续刷新 — 对齐手机 daopan.html, 不再空等全量。
+  if(!DAO_REC.length){try{var c=JSON.parse(localStorage.getItem(DAO_REC_CK)||'null');if(c&&c.list&&c.list.length){DAO_REC=c.list;daoRenderRecent();}}catch(e){}}
+  if(!DAO_REC.length)_dEl('dwRecent').innerHTML='<div class="empty">加载中…(跨账号近期对话)</div>';
+  vscode.postMessage({type:'dlRecent'});}
+function daoOnRecent(m){
+  // 兼容老形态(直接传 list)与新形态(带 partial/done/total 的增量包)。
+  if(Array.isArray(m)){DAO_REC=m||[];daoRenderRecent();return;}
+  m=m||{};DAO_REC=m.list||[];daoRenderRecent();
+  if(m.partial&&m.total){var b=_dEl('dwRecent');if(b&&!DAO_REC.length)b.innerHTML='<div class="empty">加载中… '+(m.done||0)+'/'+m.total+' 账号</div>';}
+  if(!m.partial){try{localStorage.setItem(DAO_REC_CK,JSON.stringify({ts:Date.now(),list:DAO_REC.slice(0,80)}));}catch(e){}}}
 function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),box=_dEl('dwRecent');
   if(!DAO_REC.length){box.innerHTML='<div class="empty">暂无近期对话 · 先在 🔀切号 面板登录账号</div>';return;}
   var html='';DAO_REC.forEach(function(it,idx){
@@ -760,12 +802,13 @@ _dEl('cvBack').onclick=daoHideCv;
 document.getElementById('bDl').onclick=function(){daoOpen('recent');};
 document.getElementById('bBk').onclick=function(){daoOpen('backup');};
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
+document.getElementById('bAdd').onclick=function(e){e.stopPropagation();vscode.postMessage({type:'newDevinTab'});};
 document.getElementById('bRefresh').onclick=function(){if(isBoard()){var bt=activeBoardTab();closeTab(boardId(bt));openBoard(bt);return;}var t=tabs[active];if(t){spin(true);t.frame.setAttribute('src',t.url);}};
 document.getElementById('bHome').onclick=function(){openBoard('home');};
 document.getElementById('bZi').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.min(3,(t.zoom||1)+0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 document.getElementById('bZo').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.max(0.3,(t.zoom||1)-0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 ZL.onclick=function(){var t=tabs[active];if(t){t.zoom=1;applyZoom(t);ZL.textContent='100%';}};
-document.getElementById('bStar').onclick=function(){if(isBoard()){var bt=activeBoardTab();var meta=BOARD_META[bt]||['⭐',bt];vscode.postMessage({type:'favAdd',board:bt,label:meta[0]+' '+meta[1]});}else if(active){vscode.postMessage({type:'favAdd',id:active});}};
+document.getElementById('bStar').onclick=function(){if(isBoard()){var bt=activeBoardTab();var meta=BOARD_META[bt]||['⭐',bt];vscode.postMessage({type:'favAdd',board:bt,label:meta[0]+' '+meta[1]});daoToast('★ 已收藏当前板块');}else if(active){vscode.postMessage({type:'favAdd',id:active});daoToast('★ 已收藏当前页');}else{daoToast('请先打开一个页面再收藏',true);}};
 document.getElementById('bExt').onclick=function(){var t=tabs[active];if(t)vscode.postMessage({type:'openExternal',url:t.url});};
 document.getElementById('ovClose').onclick=hideOverlay;
 ADDR.addEventListener('keydown',function(e){if(e.key==='Enter')navigate(ADDR.value);});
@@ -786,14 +829,15 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='bridgeState'){bridge=m.data||null;}
   else if(m.type==='cloudInitHtml'){mountBoardSolo(m.html||'',m.board||'overview');}
   else if(m.type==='gotoBoard'){try{openBoard(m.board||'home');}catch(e){}}
+  else if(m.type==='restoreTabs'){try{restoreTabs(m.tabs);}catch(e){}}
   else if(m.type==='cloudHost'){_boardHostAll(m.msg||{});}
   else if(m.type==='shellBackupsData'){_bkTree=m.tree||{root:'',accounts:[]};if(OV.className){if(_bkMode==='dl')renderDownloads();else if(_bkMode==='bk')renderBkLib();}try{daoRenderBackup();}catch(e){}}
-  else if(m.type==='dlRecentData'){try{daoOnRecent(m.list);}catch(e){}}
+  else if(m.type==='dlRecentData'){try{daoOnRecent(m);}catch(e){}}
   else if(m.type==='dlExportData'){try{daoOnExport(m);}catch(e){}}
   else if(m.type==='dlZipDone'){try{daoToast(m.ok?('✓ 已打包: '+(m.name||'')):('打包失败: '+(m.error||'')),!m.ok);}catch(e){}}
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}});
 buildMenu();
-vscode.postMessage({type:'ready'});
+vscode.postMessage({type:'ready',mobile:MOBILE});
 // 归一·手机版冷启动: 与 APK app.html 一致, 首屏直接打开「🔀切号」板块(电脑端数据源), 而非空提示页。
 if(MOBILE){try{openBoard('switch');}catch(e){}}
 })();
@@ -1146,6 +1190,15 @@ async function shellHandleMessage(sid, m) {
       case 'ready':
         send({ type: 'favs', list: _getMultiFavs() });
         send({ type: 'history', list: _getMultiHist() });
+        // 状态续接: 有已存标签 → 还原(老用户停在原网页); 无 → 电脑端落「六合一主页」(新用户), 手机端由前端冷启动开🔀切号。
+        try {
+          const st = (_ctx && _ctx.globalState && _ctx.globalState.get('dao.shellTabs')) || [];
+          if (st.length) send({ type: 'restoreTabs', tabs: st });
+          else if (!m.mobile) send({ type: 'gotoBoard', board: 'home' });
+        } catch (e) {}
+        return;
+      case 'shellSaveTabs':
+        try { if (_ctx && _ctx.globalState) _ctx.globalState.update('dao.shellTabs', Array.isArray(m.tabs) ? m.tabs.slice(0, 40) : []); } catch (e) {}
         return;
       case 'getAccounts': {
         const list = (((_store && _store.accounts) || [])).map((a, i) => {
@@ -1207,6 +1260,15 @@ async function shellHandleMessage(sid, m) {
         _setMultiFavs(favs); send({ type: 'favs', list: favs });
         return;
       }
+      case 'favDelMany': {
+        const set = new Set((m.keys || []).map(String));
+        const favs = _getMultiFavs().filter((f) => !set.has(String(f.key)));
+        _setMultiFavs(favs); send({ type: 'favs', list: favs });
+        return;
+      }
+      case 'favClear': _setMultiFavs([]); send({ type: 'favs', list: [] }); return;
+      case 'histDel': { const h = _delMultiHist(m.urls || []); send({ type: 'history', list: h }); return; }
+      case 'histClear': _setMultiHist([]); send({ type: 'history', list: [] }); return;
       case 'getBridge': {
         let data = null; try { data = await vscode.commands.executeCommand('dao.getBridgeState'); } catch (e) {}
         send({ type: 'bridgeState', data: data || null });
@@ -1287,21 +1349,35 @@ async function _daoDownloadData(m, reply) {
     const noOf = (email) => { const i = accs.findIndex((a) => String(a.email).toLowerCase() === String(email).toLowerCase()); return i >= 0 ? i + 1 : "?"; };
     let emails = []; try { emails = devinCloud.cachedEmails() || []; } catch (e) {}
     const perAcc = Math.max(1, Math.min(20, Number(m.perAcc) || 12));
+    // 流式增量(对齐手机 daopan.html): 每账号回来即合并去重排序回推一次(节流~250ms),
+    //   末尾再回推一次 partial:false。前端先用缓存秒开, 收到增量持续刷新 → 不再等全量阻塞。
     const out = [];
+    let doneN = 0, lastPaint = 0;
+    const emit = (partial) => {
+      const sorted = out.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      const seen = Object.create(null), ded = [];
+      for (const it of sorted) { if (it.sid && seen[it.sid]) continue; if (it.sid) seen[it.sid] = 1; ded.push(it); }
+      reply({ type: "dlRecentData", list: ded.slice(0, 80), accounts: emails.length, partial: !!partial, done: doneN, total: emails.length });
+    };
+    if (!emails.length) { reply({ type: "dlRecentData", list: [], accounts: 0, partial: false, done: 0, total: 0 }); return true; }
     await _daoPool(emails, 6, async (email) => {
-      const auth = devinCloud.getCachedAuth(email);
-      if (!auth || !auth.auth1) return;
-      const ls = await devinCloud.listSessions(auth, perAcc);
-      if (!ls || !ls.ok) return;
-      (ls.sessions || []).forEach((s) => {
-        const sid = s.devin_id || s.session_id || s.id; if (!sid) return;
-        out.push({ email, accNo: noOf(email), sid, title: s.title || s.name || s.prompt || sid, status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s) });
-      });
+      try {
+        const auth = devinCloud.getCachedAuth(email);
+        if (auth && auth.auth1) {
+          const ls = await devinCloud.listSessions(auth, perAcc);
+          if (ls && ls.ok) {
+            (ls.sessions || []).forEach((s) => {
+              const sid = s.devin_id || s.session_id || s.id; if (!sid) return;
+              out.push({ email, accNo: noOf(email), sid, title: s.title || s.name || s.prompt || sid, status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s) });
+            });
+          }
+        }
+      } catch (e) {}
+      doneN++;
+      const now = Date.now();
+      if (now - lastPaint > 250) { lastPaint = now; emit(true); }
     });
-    out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    const seen = Object.create(null), ded = [];
-    for (const it of out) { if (it.sid && seen[it.sid]) continue; if (it.sid) seen[it.sid] = 1; ded.push(it); }
-    reply({ type: "dlRecentData", list: ded.slice(0, 60), accounts: emails.length });
+    emit(false);
     return true;
   }
   if (t === "dlExportMd") {
@@ -1410,6 +1486,17 @@ function _wireMultiPanel(panel) {
         try { panel.webview.postMessage({ type: "favs", list: favs }); } catch (e) {}
         return;
       }
+      if (m.type === "favDelMany") {
+        const set = new Set((m.keys || []).map(String));
+        const favs = _getMultiFavs().filter((f) => !set.has(String(f.key)));
+        _setMultiFavs(favs);
+        try { panel.webview.postMessage({ type: "favs", list: favs }); } catch (e) {}
+        return;
+      }
+      if (m.type === "favClear") { _setMultiFavs([]); try { panel.webview.postMessage({ type: "favs", list: [] }); } catch (e) {} return; }
+      if (m.type === "histDel") { const h = _delMultiHist(m.urls || []); try { panel.webview.postMessage({ type: "history", list: h }); } catch (e) {} return; }
+      if (m.type === "histClear") { _setMultiHist([]); try { panel.webview.postMessage({ type: "history", list: [] }); } catch (e) {} return; }
+      if (m.type === "shellSaveTabs") { try { if (_ctx && _ctx.globalState) _ctx.globalState.update("dao.shellTabs", Array.isArray(m.tabs) ? m.tabs.slice(0, 40) : []); } catch (e) {} return; }
       if (m.type === "reopen") {
         try { await openMultiInstance({ email: m.email, devinId: m.devinId }); } catch (e) {}
         return;
