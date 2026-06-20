@@ -2770,6 +2770,7 @@ async function bridgeAutoPersist(): Promise<void> {
 const BRIDGE_LIVENESS_INTERVAL_MS = 30 * 1000;
 let _bridgeLivenessTimer: ReturnType<typeof setInterval> | null = null;
 let _bridgeLastAliveMs = 0;
+let _bridgeLivenessFail = 0;
 // 真验通达: relay 边缘(Worker)对一切请求(含 /api/health)强制 Bearer 鉴权 → 缺 token 必 401。
 //   旧法 GET 无 token, 把 401(<500) 误判为"活" → relay 通道下隧道真断也探不出 → 知识库不会刷新。
 //   故 relay 走信封 POST + Bearer, 校验内层健康体(非错误)才算活; 直连/命名隧道 GET /api/health(带 token 无害)。
@@ -2857,17 +2858,27 @@ async function bridgeLivenessTick(): Promise<void> {
             mcpUrl ? bridgeProbeAlive(mcpUrl, 6000, bridgeMcpToken()) : Promise.resolve(true),
         ]);
         // 打得通 → 保持稳定, 什么也不做 (不重注·省网)
-        if (bridgeOk && mcpOk) { _bridgeLastAliveMs = Date.now(); return; }
+        if (bridgeOk && mcpOk) { _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0; return; }
         // 打不通 → 刷新
         try { console.log('[dao] bridge liveness DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新'); } catch { /* 守柔 */ }
         // 1) 重读已发布连接(常驻桥/host MCP 可能已轮换出新地址) → 采纳
         try { const c = bridgeReadPublishedConn(); if (c && c.url && c.url !== bridgeUrl) { bridgeUrl = c.url; if (c.token) bridgeToken = c.token; } } catch { /* 守柔 */ }
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
-        // 2) 桥死且无新鲜发布连接 → (仅当 cloudflared 可用)重起一条快速隧道
+        // 2) 桥死 → 后端自动重启隧道 (用户诉求: 系统实时自检, 检测到问题就自动重启隧道)
         if (!bridgeOk) {
+            _bridgeLivenessFail++;
             const pub = bridgeReadPublishedConn();
             const connFresh = !!(pub && pub.url && pub.ageMs < BRIDGE_SYNC_THROTTLE_MS);
-            if (!connFresh) { try { await bridgeStartTunnel(false); } catch { /* 守柔 */ } }
+            if (bridgeUrl) {
+                // 进程内隧道由本插件持有 → 停止+重启 (保持命名/快速模式), 让 cloudflared 重新建链
+                try { const wasNamed = !!bridgeReadNamedToken(); console.log('[dao] bridge DEAD → 自动重启隧道 (named=' + wasNamed + ', fail=' + _bridgeLivenessFail + ')'); bridgeStopTunnel(); await bridgeStartTunnel(wasNamed); } catch { /* 守柔 */ }
+            } else if (!connFresh) {
+                // 无进程内隧道且无新鲜发布连接 → (仅当 cloudflared 可用)起一条快速隧道
+                try { await bridgeStartTunnel(false); } catch { /* 守柔 */ }
+            } else if (_bridgeLivenessFail >= 3) {
+                // 常驻桥发布连接仍探测为死且连续失败 → 兜底自起快速隧道, 不再死等常驻桥轮换
+                try { console.log('[dao] bridge DEAD x' + _bridgeLivenessFail + ' (常驻发布连接无效) → 兜底自起隧道'); await bridgeStartTunnel(false); } catch { /* 守柔 */ }
+            }
         }
         // 3) 强制把最新地址重注到各账号(清签名 → 绕过"无变化不重注")
         try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ }
@@ -8219,12 +8230,12 @@ function setManualLock(orgId: string, kind: ManualLockKind, name: string, locked
 }
 const DAO_BRIDGE_KB_NAME = 'DAO Bridge 内网穿透远程操作文档';
 const DAO_BRIDGE_KB_SENTINEL = '__DAO_BRIDGE_CLOUD_MD__';
-// 触发器分层 · 日常: 整机直连(读写文件/执行命令) → 走简版内网穿透 MD
-const DAO_BRIDGE_KB_TRIGGER = '需要远程操作用户本地电脑(读写文件、执行命令、整机直连)时触发';
-// 触发器分层 · 深层: 浏览器自动化/GUI/VSCode 等专业操作 → 走四大模块 MCP 使用文档
+// 触发器 · 所有对话均触发(常驻检索): 让每个对话的 Agent 都先知道"可远程操作用户本地电脑(读写文件/执行命令/整机直连)"的存在与方法。
+const DAO_BRIDGE_KB_TRIGGER = '所有对话均触发 · 任何任务开始时都应先知道:可远程操作用户本地电脑(读写文件、执行命令、整机直连)的方法。Always retrieve this in every conversation.';
+// 触发器 · 所有对话均触发(常驻检索): 深层四大模块 MCP(浏览器自动化/GUI/控件树/VSCode 命令)的用法亦随每个对话注入。
 const DAO_MCP_KB_NAME = 'DAO Bridge MCP 使用文档(四大模块)';
 const DAO_MCP_KB_SENTINEL = '__DAO_BRIDGE_MCP_MD__';
-const DAO_MCP_KB_TRIGGER = '需要浏览器自动化(CDP)、GUI 鼠键截屏、窗口控件树、VSCode 命令等更深层专业远程操作时触发';
+const DAO_MCP_KB_TRIGGER = '所有对话均触发 · 任何任务都应知道:可用 DAO Bridge MCP 做浏览器自动化(CDP)、GUI 鼠键截屏、窗口控件树、VSCode 命令等深层远程操作。Always retrieve this in every conversation.';
 // secret · 用户填入的 GitHub PAT 作为一个 secret 反向注入到所有账号 (图: secret=rt flow 用户 pat)
 const DAO_PAT_SECRET_NAME = 'GITHUB_PAT';
 // 唯二·知识① 道法自然(帛书老子+阴符经) — 与种入态/一键注入同名同触发, 收敛为单一规范条目
