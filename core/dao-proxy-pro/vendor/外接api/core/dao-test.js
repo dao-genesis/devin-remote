@@ -418,6 +418,9 @@ async function runNormalizeCheck() {
       daoRoutes: {
         enabled: true,
         substituteEnabled: false,
+        // ★ v9.9.298 起 familyTierExtend 默认关(slow 等默走官方·免费不路由)。
+        //   本组专测「连族即覆盖全档」之延伸能力 → 须显式置 true 方为有效场景。
+        familyTierExtend: true,
         routes: {
           MODEL_SWE_1_6: { provider: "deepseek", model: "deepseek-v4-flash" },
         },
@@ -475,7 +478,7 @@ async function runNormalizeCheck() {
 // ─── L2.6: 自动播种基础桩不得吞并兄弟档位 (v9.9.280) ──
 //   init() 幂等补 MODEL_SWE_1_6 → builtin-stub(_seeded) · 基础测试通道
 //   关键: swe-1-6-slow 未显式连线 → 保持官方透传(免费原生) · 不被 _seeded 桩兜底吞并
-//   而用户显式连线的族 (claude-sonnet-4-6) 仍正常覆盖其档位变体
+//   ★ v9.9.298: familyTierExtend 默关 → 未显式连线之档位变体(如 claude-...-thinking)亦保持官方透传
 async function runSeededBaseCheck() {
   console.log(header("\n═══════════════════════════════════════════"));
   console.log(header("  L2.6 · 播种桩不吞档位 (slow守官方)"));
@@ -535,7 +538,8 @@ async function runSeededBaseCheck() {
     ["swe-1-6-fast", true, "Fast→deepseek(显式连线)"],
     ["swe-1-6-slow", false, "Slow→官方透传(未连线·播种桩不吞)"],
     ["claude-sonnet-4-6", true, "Claude族基名→deepseek(显式)"],
-    ["claude-sonnet-4-6-thinking", true, "Claude Thinking档→族兜底覆盖"],
+    // ★ v9.9.298: familyTierExtend 默认关 → 未显式连线之 Thinking 档保持官方透传(不路由)。
+    ["claude-sonnet-4-6-thinking", false, "Thinking档·默认官方(未显式连线·familyTierExtend默关)"],
     ["gpt-4o", false, "未连线→不路由"],
   ];
   for (const [uid, exp, desc] of cases) {
