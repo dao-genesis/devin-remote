@@ -49,4 +49,32 @@ function renderScripts(label, startMarker) {
 renderScripts('getEssenceHtml', 'function getEssenceHtml(');
 renderScripts('getEaConfigHtml', 'function getEaConfigHtml(');
 
+// /shell 归一外壳客户端脚本用无 nonce 的 <script>，单独以同样的模板插值+解析校验。
+function renderPlainScripts(label, startMarker) {
+  const fi = src.indexOf(startMarker);
+  if (fi < 0) return; // 该构建无此函数(如 dao-proxy-pro)则跳过
+  const region = src.slice(fi);
+  const re = /<script>([\s\S]*?)<\/script>/g;
+  let m, n = 0;
+  while ((m = re.exec(region))) {
+    n++;
+    const placeheld = m[1].replace(/\$\{[^}]*\}/g, '0');
+    let rendered;
+    try {
+      rendered = vm.runInNewContext('`' + placeheld.replace(/`/g, '\\`') + '`');
+    } catch (e) {
+      console.log(label, 'script#' + n, 'TEMPLATE-RENDER FAILED:', e.message);
+      failures++; continue;
+    }
+    try {
+      new vm.Script(rendered);
+      console.log(label, 'script#' + n, 'RENDERED + PARSED OK (', rendered.length, 'chars )');
+    } catch (e) {
+      console.log(label, 'script#' + n, 'PARSE FAILED:', e.message);
+      failures++;
+    }
+  }
+}
+renderPlainScripts('_multiShellHtml', 'function _multiShellHtml(');
+
 process.exit(failures ? 1 : 0);

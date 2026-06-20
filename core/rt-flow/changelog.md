@@ -2,6 +2,15 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.19.0 (2026-06-20) · 设备迁移: 整包导出/导入(对照手机端一键导出+注入)
+
+> 道法自然 · 把账号库+书签+历史+已开标签整包导出, 新设备装好插件后导入即用 — 对齐手机端「一键导出 zip / 一键注入」。
+
+### /shell 归一外壳 · 页面工具(汉堡 → 🛠 页面工具)
+- 新增**整包导出**: 宿主 `_migBuildBundle()` 汇总 `{accounts(email password 可重导格式), favs, history, shellTabs, activeEmail, install 元信息}`, 前端 Blob 下载 `dao-migration-*.json`。
+- 新增**整包导入**: 选择迁移文件 → 宿主 `_migApplyBundle()` 经 `_store.addBatch` 合并账号库(去重)、还原书签/历史/标签/活跃账号, 即时回推刷新。
+- 消息 `migExport/migImport` 双通道(`shellHandleMessage` + `_wireMultiPanel`)均补齐; `tools/render_check.js` 增 `_multiShellHtml` 无 nonce `<script>` 渲染校验。
+
 ## v4.18.0 (2026-06-20) · 近期对话流式增量+缓存 / 状态续接 / 顶部＋ / 历史·书签批量
 
 > 道法自然 · 充分对照手机端 APK(daopan.html) 复刻近期对话加载逻辑, 续接整体连续性。

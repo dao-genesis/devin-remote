@@ -391,6 +391,36 @@ function _delMultiHist(urls) {
   const h = _getMultiHist().filter((x) => !set.has(String(x.url)));
   _setMultiHist(h); return h;
 }
+// 设备迁移(对照手机端一键导出/注入): 整包 = 账号库(可重导格式 email password) + 书签 + 历史 + 已开标签 + 安装元信息。
+function _migBuildBundle() {
+  const accounts = (((_store && _store.accounts) || [])).map((a) => ({ email: a.email, password: a.password || "" }));
+  let favs = [], history = [], shellTabs = [];
+  try { favs = _getMultiFavs(); } catch (e) {}
+  try { history = _getMultiHist(); } catch (e) {}
+  try { shellTabs = (_ctx && _ctx.globalState && _ctx.globalState.get("dao.shellTabs")) || []; } catch (e) {}
+  return {
+    kind: "dao-migration", version: VERSION, exportedAt: Date.now(),
+    activeEmail: (_store && _store.activeEmail) || "",
+    counts: { accounts: accounts.length, favs: favs.length, history: history.length, tabs: shellTabs.length },
+    accounts, favs, history, shellTabs,
+    install: { plugin: "dao", version: VERSION, note: "新设备安装对应版本插件后, 在「页面工具 · 整包导入」选择本文件即可恢复账号库与状态。" },
+  };
+}
+async function _migApplyBundle(data) {
+  if (!data || data.kind !== "dao-migration") throw new Error("非 dao 迁移文件(kind 不符)");
+  let addedAcc = 0;
+  try {
+    if (Array.isArray(data.accounts) && data.accounts.length && _store && _store.addBatch) {
+      const text = data.accounts.map((a) => String((a && a.email) || "") + " " + String((a && a.password) || "")).filter((s) => s.trim().length > 1).join("\n");
+      if (text) { const r = _store.addBatch(text); addedAcc = (r && r.added) || 0; }
+    }
+  } catch (e) {}
+  try { if (data.activeEmail && _store) { _store.activeEmail = data.activeEmail; if (_store.save) _store.save(); } } catch (e) {}
+  try { if (Array.isArray(data.favs)) _setMultiFavs(data.favs); } catch (e) {}
+  try { if (Array.isArray(data.history)) _setMultiHist(data.history); } catch (e) {}
+  try { if (Array.isArray(data.shellTabs) && _ctx && _ctx.globalState) _ctx.globalState.update("dao.shellTabs", data.shellTabs.slice(0, 40)); } catch (e) {}
+  return { addedAcc, favs: (data.favs || []).length, history: (data.history || []).length, tabs: (data.shellTabs || []).length };
+}
 // v4.9.3 · 归一修复: 六大板块经 blob-iframe 挂载, frame-src 必须放行 blob: 否则
 // 子网页被 CSP 静默拦截 → 标签全空白(用户反馈"加载不进去")。createObjectURL 不抛错,
 // 故 mountBoard 的 srcdoc 兜底不触发, 必须在此放行 blob:。
@@ -675,10 +705,22 @@ function showFavs(){if(!favs.length){showOverlay('⭐ 书签收藏','<div class=
   var db=OVB.querySelectorAll('[data-del]');for(var b=0;b<db.length;b++){db[b].onclick=function(){vscode.postMessage({type:'favDel',key:this.getAttribute('data-del')});};}
   _ovBindBulk('f','.fck','data-k',function(v){vscode.postMessage({type:'favDelMany',keys:v});},function(){vscode.postMessage({type:'favClear'});});}
 function showUserscripts(){showOverlay('🐵 用户脚本','<div class="note">用户脚本(油猴)用于在 Devin 页面注入增强脚本。<br>受 IDE webview 跨域限制，注入到 Devin 页面将经「每账号反代」统一注入实现(规划中)。<br>当前可在「页面工具」使用复制链接 / 系统浏览器打开 / 翻译等通用能力。</div>');}
-function showTools(){var t=tabs[active];var u=t?t.url:'';showOverlay('🛠 页面工具','<div class="li"><div class="g"><div class="t">复制当前页链接</div><div class="s">'+esc(u||'(无)')+'</div></div><button class="b" id="tCopy">复制</button></div><div class="li"><div class="g"><div class="t">系统浏览器打开当前页</div></div><button class="b pri" id="tExt">打开</button></div><div class="li"><div class="g"><div class="t">翻译当前页(系统浏览器 · Google 翻译)</div></div><button class="b" id="tTr">翻译</button></div><div class="note" style="margin-top:8px">缩放: 工具条 A− / A＋；点百分比复位。刷新: ⟳ 。回首页: 🏠 。</div>');
+function showTools(){var t=tabs[active];var u=t?t.url:'';showOverlay('🛠 页面工具',
+  '<div class="li"><div class="g"><div class="t">复制当前页链接</div><div class="s">'+esc(u||'(无)')+'</div></div><button class="b" id="tCopy">复制</button></div>'
+  +'<div class="li"><div class="g"><div class="t">系统浏览器打开当前页</div></div><button class="b pri" id="tExt">打开</button></div>'
+  +'<div class="li"><div class="g"><div class="t">翻译当前页(系统浏览器 · Google 翻译)</div></div><button class="b" id="tTr">翻译</button></div>'
+  +'<div class="note" style="margin:10px 0 4px">🧳 设备迁移(对照手机端一键导出/导入) · 把账号库+书签+历史+已开标签整包导出, 新设备装好插件后导入即用。</div>'
+  +'<div class="li"><div class="g"><div class="t">整包导出</div><div class="s">下载迁移文件 dao-migration-*.json</div></div><button class="b pri" id="tMigExp">导出</button></div>'
+  +'<div class="li"><div class="g"><div class="t">整包导入</div><div class="s">选择迁移文件 · 合并到本机账号库</div></div><button class="b" id="tMigImp">导入</button></div>'
+  +'<input type="file" id="tMigFile" accept="application/json,.json" style="display:none"/>'
+  +'<div class="note" style="margin-top:8px">缩放: 工具条 A− / A＋；点百分比复位。刷新: ⟳ 。回首页: 🏠 。</div>');
   var c=document.getElementById('tCopy');if(c)c.onclick=function(){vscode.postMessage({type:'clip',text:u});};
   var e=document.getElementById('tExt');if(e)e.onclick=function(){if(u)vscode.postMessage({type:'openExternal',url:u});};
-  var tr=document.getElementById('tTr');if(tr)tr.onclick=function(){if(u)vscode.postMessage({type:'openExternal',url:'https://translate.google.com/translate?sl=auto&tl=zh-CN&u='+encodeURIComponent(u)});};}
+  var tr=document.getElementById('tTr');if(tr)tr.onclick=function(){if(u)vscode.postMessage({type:'openExternal',url:'https://translate.google.com/translate?sl=auto&tl=zh-CN&u='+encodeURIComponent(u)});};
+  var me=document.getElementById('tMigExp');if(me)me.onclick=function(){daoToast('正在打包迁移文件…');vscode.postMessage({type:'migExport'});};
+  var mi=document.getElementById('tMigImp');if(mi)mi.onclick=function(){var f=document.getElementById('tMigFile');if(f)f.click();};
+  var mf=document.getElementById('tMigFile');if(mf)mf.onchange=function(){var file=this.files&&this.files[0];if(!file)return;var rd=new FileReader();rd.onload=function(){try{var data=JSON.parse(rd.result);daoToast('正在导入…');vscode.postMessage({type:'migImport',data:data});}catch(e){daoToast('迁移文件解析失败',true);}};rd.readAsText(file);this.value='';};}
+function migDownload(m){try{var name=m.name||('dao-migration-'+Date.now()+'.json');var blob=new Blob([m.json||'{}'],{type:'application/json'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(function(){try{URL.revokeObjectURL(a.href);}catch(e){}a.remove();},1500);daoToast('✓ 已导出迁移文件 · '+name);}catch(e){daoToast('导出失败',true);}}
 function showAbout(){showOverlay('❔ 关于 · 说明','<div class="note">多实例浏览器 · 归一面板多窗口(对齐手机版 APK)。<br><br>• 每个标签 = 一个账号/对话，经该账号独立端口反代登录，各登各号、互不串号。<br>• 标签显示: 状态点 + #账号编号 + 名称 + $额度；<b>双击标签复制账号(+密码)</b>。<br>• 工具条: 刷新 / 首页 / 地址栏+搜索引擎 / 缩放 / 收藏 / 系统浏览器打开。<br>• 书签、历史、打开的标签均持久化，软件重载后自动续接。<br>• 支持从 IDE 拖拽文件进窗口(捕获路径)。<br><br>⚠️ 限制: 外部站点(Google 等)多设 X-Frame-Options 不可内嵌，故搜索 / 翻译 / 外链经系统浏览器打开；Devin 自身页面经反代可完美内嵌。</div>');}
 // 归一 · ⬇下载 / 📁备份库 悬浮窗(对齐手机 APK 工具条): 复用 showOverlay + 主机 devinCloud.listBackups 同源数据,零另起炉灶。
 var _bkTree=null,_bkMode='',_bkQ='';
@@ -835,6 +877,8 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='dlRecentData'){try{daoOnRecent(m);}catch(e){}}
   else if(m.type==='dlExportData'){try{daoOnExport(m);}catch(e){}}
   else if(m.type==='dlZipDone'){try{daoToast(m.ok?('✓ 已打包: '+(m.name||'')):('打包失败: '+(m.error||'')),!m.ok);}catch(e){}}
+  else if(m.type==='migBundle'){try{migDownload(m);}catch(e){}}
+  else if(m.type==='migDone'){try{daoToast(m.ok?('✓ 导入完成 · '+(m.summary||'')):('导入失败: '+(m.error||'')),!m.ok);}catch(e){}}
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}});
 buildMenu();
 vscode.postMessage({type:'ready',mobile:MOBILE});
@@ -1269,6 +1313,20 @@ async function shellHandleMessage(sid, m) {
       case 'favClear': _setMultiFavs([]); send({ type: 'favs', list: [] }); return;
       case 'histDel': { const h = _delMultiHist(m.urls || []); send({ type: 'history', list: h }); return; }
       case 'histClear': _setMultiHist([]); send({ type: 'history', list: [] }); return;
+      case 'migExport': {
+        try { const b = _migBuildBundle(); send({ type: 'migBundle', json: JSON.stringify(b, null, 2), name: 'dao-migration-' + new Date().toISOString().slice(0, 10) + '.json' }); }
+        catch (e) { send({ type: 'migDone', ok: false, error: String((e && e.message) || e) }); }
+        return;
+      }
+      case 'migImport': {
+        try {
+          const r = await _migApplyBundle(m.data);
+          send({ type: 'favs', list: _getMultiFavs() });
+          send({ type: 'history', list: _getMultiHist() });
+          send({ type: 'migDone', ok: true, summary: '账号+' + r.addedAcc + ' · 书签' + r.favs + ' · 历史' + r.history + ' · 标签' + r.tabs });
+        } catch (e) { send({ type: 'migDone', ok: false, error: String((e && e.message) || e) }); }
+        return;
+      }
       case 'getBridge': {
         let data = null; try { data = await vscode.commands.executeCommand('dao.getBridgeState'); } catch (e) {}
         send({ type: 'bridgeState', data: data || null });
@@ -1496,6 +1554,20 @@ function _wireMultiPanel(panel) {
       if (m.type === "favClear") { _setMultiFavs([]); try { panel.webview.postMessage({ type: "favs", list: [] }); } catch (e) {} return; }
       if (m.type === "histDel") { const h = _delMultiHist(m.urls || []); try { panel.webview.postMessage({ type: "history", list: h }); } catch (e) {} return; }
       if (m.type === "histClear") { _setMultiHist([]); try { panel.webview.postMessage({ type: "history", list: [] }); } catch (e) {} return; }
+      if (m.type === "migExport") {
+        try { const b = _migBuildBundle(); panel.webview.postMessage({ type: "migBundle", json: JSON.stringify(b, null, 2), name: "dao-migration-" + new Date().toISOString().slice(0, 10) + ".json" }); }
+        catch (e) { try { panel.webview.postMessage({ type: "migDone", ok: false, error: String((e && e.message) || e) }); } catch (e2) {} }
+        return;
+      }
+      if (m.type === "migImport") {
+        try {
+          const r = await _migApplyBundle(m.data);
+          panel.webview.postMessage({ type: "favs", list: _getMultiFavs() });
+          panel.webview.postMessage({ type: "history", list: _getMultiHist() });
+          panel.webview.postMessage({ type: "migDone", ok: true, summary: "账号+" + r.addedAcc + " · 书签" + r.favs + " · 历史" + r.history + " · 标签" + r.tabs });
+        } catch (e) { try { panel.webview.postMessage({ type: "migDone", ok: false, error: String((e && e.message) || e) }); } catch (e2) {} }
+        return;
+      }
       if (m.type === "shellSaveTabs") { try { if (_ctx && _ctx.globalState) _ctx.globalState.update("dao.shellTabs", Array.isArray(m.tabs) ? m.tabs.slice(0, 40) : []); } catch (e) {} return; }
       if (m.type === "reopen") {
         try { await openMultiInstance({ email: m.email, devinId: m.devinId }); } catch (e) {}
