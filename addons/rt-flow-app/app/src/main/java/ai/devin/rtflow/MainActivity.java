@@ -149,8 +149,11 @@ public class MainActivity extends AppCompatActivity {
         "https://cdn.statically.io/gh/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json",
         "https://ghproxy.net/https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json"
     };
+    static final String UPDATE_APK_NAME = "DevinCloud-update.apk";   // 更新包固定文件名 (落 app 私有 Download, 据此识别更新下载, 不受进程重建/字段丢失影响)
     private volatile long updateDlId = -1;          // 当前更新下载任务 id (区别于普通网页下载)
     private volatile File updateApkFile = null;     // 更新 APK 落地文件
+    private volatile org.json.JSONArray updateUrls = null;   // 本轮更新候选下载源 (多镜像), 某源下到非法包则自动换下一个
+    private volatile int updateUrlIdx = 0;          // 当前已用到的候选源下标
 
     static class Tab {
         WebView web;
@@ -274,6 +277,8 @@ public class MainActivity extends AppCompatActivity {
         setContentView(buildChrome());
         ensureAllFilesAccess();   // 申请「所有文件访问」→ 账号/标签/历史落到共享文件夹, 卸载重装不丢
         restoreDownloads();       // 下载记录: 卸载/重装后从共享保险箱回读 (文件落 Documents/DevinCloud/downloads)
+        purgeUpdateRecords();     // 净化历史误记进「下载库」的更新包条目 (旧版遗留, 现一次性清掉)
+        resumePendingUpdate();    // 上次更新下载若在 App 被杀时完成 (广播漏收) → 启动时认领并续装
         // 恢复上次标签 (持久化) 或首屏切号
         if (!restoreTabs()) {
             newTab(SWITCH, null);
@@ -2497,7 +2502,6 @@ public class MainActivity extends AppCompatActivity {
 
     // ── 应用内下载管理器 + 可拖拽悬浮窗 ───────────────────────────────────────
     private void onDownloadComplete(long id) {
-        if (id == updateDlId) { onUpdateDownloaded(id); return; }   // 更新包: 唤起安装器
         try {
             DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
             if (dm == null) return;
@@ -2508,6 +2512,10 @@ public class MainActivity extends AppCompatActivity {
                 int st = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
                 String localUri = cur.getString(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI));
                 String mediaType = cur.getString(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_MEDIA_TYPE));
+                // 更新包: 据 id 或落地文件名识别 (进程重建后 updateDlId 字段会丢, 故还要按文件名兜底),
+                // 走自更新分支 → 校验+唤起安装, 绝不混入普通「下载库」(那会污染列表且原文件被搬走/清掉→解析失败/文件已删)。
+                String localPath = (localUri != null) ? Uri.parse(localUri).getPath() : null;
+                if (isUpdateDownload(id, localPath)) { dlPending.remove(id); onUpdateDownloaded(id); return; }
                 String[] meta = dlPending.remove(id);
                 if (st == DownloadManager.STATUS_SUCCESSFUL && localUri != null) {
                     String path = Uri.parse(localUri).getPath();
@@ -2606,58 +2614,160 @@ public class MainActivity extends AppCompatActivity {
     String startUpdate(final String urlIn) {
         try {
             String url = urlIn;
+            org.json.JSONArray cands = null;
             if (url == null || url.isEmpty()) {
                 JSONObject j = new JSONObject(fetchUpdateInfo());
                 if (!j.optBoolean("ok", false)) return j.toString();
                 if (!j.optBoolean("hasUpdate", false))
                     return "{\"ok\":true,\"hasUpdate\":false,\"msg\":\"已是最新版\",\"current\":" + j.optInt("current") + "}";
-                org.json.JSONArray urls = j.optJSONArray("urls");
-                url = (urls != null && urls.length() > 0) ? pickReachable(urls) : j.optString("url", "");
+                cands = j.optJSONArray("urls");
+                url = (cands != null && cands.length() > 0) ? pickReachable(cands) : j.optString("url", "");
             }
             if (url.isEmpty()) return "{\"ok\":false,\"error\":\"清单无下载地址 url\"}";
-            final String furl = url;
-            main.post(() -> enqueueUpdateDownload(furl));
-            return "{\"ok\":true,\"downloading\":true,\"url\":" + JSONObject.quote(furl) + "}";
+            // 候选源: 优先用清单给的多镜像数组; 没有则就地由单 url 推导镜像。下到非法包(如反代返回 HTML)会自动换下一个。
+            if (cands == null || cands.length() == 0) cands = apkMirrors(url);
+            // 把命中的可达源排到最前 (pickReachable 已选), 其余作兜底
+            org.json.JSONArray ordered = new org.json.JSONArray();
+            ordered.put(url);
+            for (int i = 0; i < cands.length(); i++) { String u = cands.optString(i); if (!u.isEmpty() && !u.equals(url)) ordered.put(u); }
+            final org.json.JSONArray furls = ordered;
+            main.post(() -> { updateUrls = furls; updateUrlIdx = 0; enqueueUpdateDownload(furls.optString(0)); });
+            return "{\"ok\":true,\"downloading\":true,\"url\":" + JSONObject.quote(furls.optString(0)) + ",\"mirrors\":" + furls.length() + "}";
         } catch (Exception e) {
             return "{\"ok\":false,\"error\":" + JSONObject.quote(String.valueOf(e.getMessage())) + "}";
         }
+    }
+
+    /** 更新包固定落地文件 (app 私有 Download, 不入共享保险箱/系统下载, 不被下载库清理误删)。 */
+    private File updateApkDest() {
+        File dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+        if (dir == null) dir = getCacheDir();
+        if (!dir.exists()) dir.mkdirs();
+        return new File(dir, UPDATE_APK_NAME);
     }
 
     private void enqueueUpdateDownload(String url) {
         try {
             DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
             if (dm == null) { toast("更新失败: 无下载服务"); return; }
-            File dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
-            updateApkFile = new File(dir, "DevinCloud-update.apk");
+            updateApkFile = updateApkDest();
             if (updateApkFile.exists()) updateApkFile.delete();
             DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
             req.setTitle("Devin Cloud 手机版 · 更新下载中");
             req.setMimeType("application/vnd.android.package-archive");
-            req.setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, "DevinCloud-update.apk");
+            req.setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, UPDATE_APK_NAME);
             req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
             updateDlId = dm.enqueue(req);
+            // 持久化任务 id: 进程被杀/Activity 重建后, 仍能据此 (或据文件名) 认领下载完成回调, 不再误当普通下载。
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putLong("updateDlId", updateDlId).apply();
             toast("正在下载更新…");
         } catch (Exception e) { toast("更新失败: " + e.getMessage()); }
     }
 
+    /** 此 id 是否为「更新包」下载: 内存字段 / 持久化 id / 落地文件名 三重判定 (任一命中即是), 进程重建也不漏认。 */
+    private boolean isUpdateDownload(long id, String localPath) {
+        if (id >= 0 && id == updateDlId) return true;
+        try { if (id >= 0 && id == getSharedPreferences(PREFS, MODE_PRIVATE).getLong("updateDlId", -1)) return true; } catch (Exception ignored) {}
+        if (localPath != null && new File(localPath).getName().equals(UPDATE_APK_NAME)) return true;
+        return false;
+    }
+
+    /** 校验下载到的是不是「我们这个 App 的合法、且不低于当前版本的」安装包。
+     *  防反代/镜像把 HTML 错误页当 .apk 存下导致「解析包出现问题」, 也防截断/坏包。 */
+    private boolean isValidUpdateApk(File f) {
+        try {
+            if (f == null || !f.exists() || f.length() < 1024L * 1024L) return false;
+            byte[] magic = new byte[4];
+            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) { if (in.read(magic) != 4) return false; }
+            if (!(magic[0] == 0x50 && magic[1] == 0x4B && magic[2] == 0x03 && magic[3] == 0x04)) return false; // ZIP/APK 魔数 PK\x03\x04
+            android.content.pm.PackageInfo pi = getPackageManager().getPackageArchiveInfo(f.getAbsolutePath(), 0);
+            if (pi == null || !getPackageName().equals(pi.packageName)) return false;
+            return true;
+        } catch (Exception e) { return false; }
+    }
+
     private void onUpdateDownloaded(long id) {
         updateDlId = -1;
+        try { getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove("updateDlId").apply(); } catch (Exception ignored) {}
         try {
             DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-            if (dm != null) {
+            File apk = null;
+            if (dm != null && id >= 0) {
                 android.database.Cursor cur = dm.query(new DownloadManager.Query().setFilterById(id));
                 if (cur != null) {
                     try {
                         if (cur.moveToFirst()) {
                             int st = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
-                            if (st != DownloadManager.STATUS_SUCCESSFUL) { toast("更新下载失败"); return; }
+                            if (st != DownloadManager.STATUS_SUCCESSFUL) { tryNextUpdateMirror("更新下载失败"); return; }
+                            String lu = cur.getString(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI));
+                            if (lu != null) { String p = Uri.parse(lu).getPath(); if (p != null) apk = new File(p); }
                         }
                     } finally { cur.close(); }
                 }
             }
-            if (updateApkFile == null || !updateApkFile.exists()) { toast("更新包未找到"); return; }
-            installApk(updateApkFile);
+            if (apk == null || !apk.exists()) apk = (updateApkFile != null && updateApkFile.exists()) ? updateApkFile : updateApkDest();
+            if (!apk.exists()) { tryNextUpdateMirror("更新包未找到"); return; }
+            if (!isValidUpdateApk(apk)) {   // 下到的不是合法 APK (多半是镜像/反代返回了网页) → 删掉换下一个源
+                try { apk.delete(); } catch (Exception ignored) {}
+                tryNextUpdateMirror("下载的安装包无效"); return;
+            }
+            updateApkFile = apk;
+            installApk(apk);
         } catch (Exception e) { toast("更新失败: " + e.getMessage()); }
+    }
+
+    /** 当前源下到的包无效/失败时, 自动改用下一个候选镜像重试; 全部用尽才报错。 */
+    private void tryNextUpdateMirror(String why) {
+        org.json.JSONArray urls = updateUrls;
+        int next = updateUrlIdx + 1;
+        if (urls != null && next < urls.length()) {
+            String u = urls.optString(next);
+            if (u != null && !u.isEmpty()) {
+                updateUrlIdx = next;
+                toast(why + ", 换源重试…");
+                main.post(() -> enqueueUpdateDownload(u));
+                return;
+            }
+        }
+        toast(why + " (已试遍所有下载源, 请检查网络后重试)");
+    }
+
+    /** 启动时认领上次未竟的更新下载: 下载在 App 被杀期间完成→广播漏收, 这里据持久化 id / 落地包补救。
+     *  - 任务仍在跑: 复位 updateDlId, 让完成广播能命中;
+     *  - 已成功: 直接走校验+安装;
+     *  - 落地有「比当前新且合法」的包: 续装; 是旧包/坏包: 清掉, 不打扰。 */
+    private void resumePendingUpdate() {
+        try {
+            long saved = getSharedPreferences(PREFS, MODE_PRIVATE).getLong("updateDlId", -1);
+            if (saved >= 0) {
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm != null) {
+                    android.database.Cursor cur = dm.query(new DownloadManager.Query().setFilterById(saved));
+                    if (cur != null) {
+                        try {
+                            if (cur.moveToFirst()) {
+                                int st = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                                if (st == DownloadManager.STATUS_RUNNING || st == DownloadManager.STATUS_PENDING || st == DownloadManager.STATUS_PAUSED) {
+                                    updateDlId = saved; return;   // 还在下: 等完成广播
+                                }
+                                if (st == DownloadManager.STATUS_SUCCESSFUL) { onUpdateDownloaded(saved); return; }
+                            }
+                        } finally { cur.close(); }
+                    }
+                }
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove("updateDlId").apply();
+            }
+            // 兜底: 落地若已有合法且更高版本的包, 续装; 否则清掉残包不打扰。
+            File apk = updateApkDest();
+            if (apk.exists()) {
+                if (isValidUpdateApk(apk)) {
+                    android.content.pm.PackageInfo pi = getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), 0);
+                    int vc = pi == null ? 0 : (Build.VERSION.SDK_INT >= 28 ? (int) pi.getLongVersionCode() : pi.versionCode);
+                    if (vc > currentVersionCode()) { updateApkFile = apk; installApk(apk); return; }
+                }
+                try { apk.delete(); } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
     }
 
     /** 待装 APK: 用户被引导去开「安装未知应用」开关, 返回 App 时 onResume 自动续装 (零再触发)。 */
@@ -2793,10 +2903,34 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
     }
 
+    /** 清掉历史误记进「下载库」的更新包条目 (旧版本把更新包当普通下载记录了, 现一次性净化)。 */
+    private void purgeUpdateRecords() {
+        try {
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            String s = sp.getString("downloads", "[]");
+            org.json.JSONArray arr = new org.json.JSONArray(s);
+            org.json.JSONArray keep = new org.json.JSONArray();
+            boolean changed = false;
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject e = arr.getJSONObject(i);
+                String nm = e.optString("name", ""); String fp = e.optString("file", "");
+                if (UPDATE_APK_NAME.equals(nm) || (!fp.isEmpty() && new File(fp).getName().equals(UPDATE_APK_NAME))) { changed = true; continue; }
+                keep.put(e);
+            }
+            if (changed) {
+                sp.edit().putString("downloads", keep.toString()).apply();
+                vaultWrite("downloads", keep.toString());
+                if (dlListCol != null) main.post(() -> renderDownloadList(dlListCol));
+            }
+        } catch (Exception ignored) {}
+    }
+
     private void addDownloadRecord(String name, String path, String mime, long size) { addDownloadRecord(name, path, "", mime, size); }
     /** uri 非空 = 该文件已登记进系统「下载」(MediaStore/公共目录) → 列表里的打开/拖拽优先用它, 系统级可见可用。 */
     private void addDownloadRecord(String name, String path, String uri, String mime, long size) {
         try {
+            // 更新包永不进「下载库」: 它由自更新分支校验+安装, 混进来只会污染列表并被搬走/清掉→「文件已删/解析失败」。
+            if (UPDATE_APK_NAME.equals(name) || (path != null && new File(path).getName().equals(UPDATE_APK_NAME))) return;
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
             org.json.JSONArray arr = new org.json.JSONArray(sp.getString("downloads", "[]"));
             org.json.JSONObject e = new org.json.JSONObject();
