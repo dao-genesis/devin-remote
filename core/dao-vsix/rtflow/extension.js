@@ -449,7 +449,50 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
   .li{padding:11px 12px}
   .li .b{padding:9px 13px;font-size:13px}
   #hint{font-size:14px;padding:18px}
+  #daowin{width:96vw!important;height:84%!important;right:2vw!important;left:auto}
 }
+/* ── 归一 · 下载/备份悬浮窗(复刻手机端 APK daopan.html) ── */
+#daowin{position:absolute;top:44px;right:10px;width:560px;height:74%;max-width:96vw;max-height:88%;background:#0e1116;border:1px solid #2a313c;border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.6);z-index:26;display:none;flex-direction:column;overflow:hidden}
+#daowin.on{display:flex}
+#daowin .dwh{display:flex;align-items:center;gap:8px;padding:8px 11px;background:#161b22;border-bottom:1px solid #21262d;cursor:move;flex:0 0 auto;user-select:none}
+#daowin .dwh .t{flex:1;font-size:13px;font-weight:700;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#daowin .dwtabs{display:flex;background:#161b22;border-bottom:1px solid #21262d;flex:0 0 auto}
+#daowin .dwtab{flex:1;text-align:center;padding:9px 4px;font-size:13px;color:#8b949e;cursor:pointer;border-bottom:2px solid transparent}
+#daowin .dwtab.on{color:#e6edf3;border-bottom-color:#1f6feb;font-weight:600}
+#daowin .dwbar{display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
+#daowin .dwbody{flex:1;position:relative;overflow:hidden}
+#daowin .dwview{position:absolute;inset:0;overflow:auto;display:none;padding:6px 8px 36px}
+#daowin .dwview.on{display:block}
+#daowin .rc{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:8px 9px;margin-bottom:7px}
+#daowin .rc .r1{display:flex;align-items:center;gap:7px}
+#daowin .acc-no{flex:0 0 auto;min-width:20px;height:18px;line-height:18px;text-align:center;font-size:11px;font-weight:800;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:4px;padding:0 3px}
+#daowin .st{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:#6e7681}
+#daowin .st.running{background:#3fb950}#daowin .st.finished{background:#58a6ff}#daowin .st.awaiting{background:#d29922}#daowin .st.blocked{background:#f0883e}#daowin .st.expired{background:#f85149}
+#daowin .ti{flex:1;font-size:13px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#daowin .meta{font-size:11px;color:#8b949e;margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
+#daowin .acts{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+#daowin .b{flex:1;min-width:56px;text-align:center;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer;color:#cdd3de}
+#daowin .b:hover{background:#2d333b}
+#daowin .b.pri{background:#0e639c;border-color:#0e639c;color:#fff}
+#daowin .gh{margin-top:9px;font-size:12px;color:#8b94a2;font-weight:800;padding:3px 2px;border-bottom:1px dashed #2a2f37}
+#daowin .empty{color:#6e7681;text-align:center;padding:26px 12px;font-size:13px}
+#daowin .tip{font-size:11px;color:#6e7681;padding:6px 4px 2px}
+#daowin .srch{flex:1;min-width:80px;background:#0d1117;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:6px 9px;font-size:12px;outline:none}
+#daowin .srch:focus{border-color:#1f6feb}
+#daowin .mini{background:#21262d;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:6px 9px;font-size:12px;cursor:pointer;white-space:nowrap}
+#daowin .dwx{background:#21262d;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:5px 10px;font-size:12px;cursor:pointer;flex:0 0 auto}
+#daowin #cv{position:absolute;inset:0;background:#0e1116;display:none;flex-direction:column;z-index:20}
+#daowin #cv.on{display:flex}
+#daowin .cvtop{display:flex;align-items:center;gap:6px;padding:6px 7px;background:#161b22;border-bottom:1px solid #21262d;flex:0 0 auto}
+#daowin .cvtabs{flex:1;display:flex;gap:5px;overflow-x:auto;overflow-y:hidden}
+#daowin .cvtab{flex:0 0 auto;max-width:170px;display:flex;align-items:center;gap:6px;background:#1b212b;border:1px solid #2a313c;border-radius:6px;padding:5px 8px;font-size:12px;color:#9aa4b2;cursor:pointer;white-space:nowrap}
+#daowin .cvtab.on{background:#11304d;border-color:#1f6feb;color:#e6edf3}
+#daowin .cvtab .nm{overflow:hidden;text-overflow:ellipsis;max-width:120px}
+#daowin .cvtab .x{color:#6e7681;font-weight:700;padding:0 1px}
+#daowin .cvacts{display:flex;gap:6px;padding:5px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
+#daowin .cvbody{flex:1;overflow:auto;padding:12px 12px 50px;white-space:pre-wrap;word-break:break-word;font:12.5px/1.6 ui-monospace,Consolas,monospace;color:#cdd3de}
+#daowin .dtoast{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px 14px;font-size:12.5px;opacity:0;transition:.2s;pointer-events:none;z-index:40;max-width:90%}
+#daowin .dtoast.show{opacity:1}#daowin .dtoast.fail{border-color:#f85149}#daowin .dtoast.ok{border-color:#3fb950}
 </style></head><body>
 <div id="app">
   <div id="tb">
@@ -481,6 +524,18 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 </div>
 <div id="menu"></div>
 <div id="ov"><div class="ov-top"><span class="ti" id="ovTi"></span><button class="tbtn" id="ovClose">✕ 关闭</button></div><div class="ov-body" id="ovBody"></div></div>
+<div id="daowin">
+  <div class="dwh" id="dwHead"><span>☁</span><span class="t" id="dwTitle">下载 / 备份库</span><button class="dwx" id="dwClose">✕ 关闭</button></div>
+  <div class="dwtabs"><div class="dwtab on" id="dwTabR">☁ 近期对话</div><div class="dwtab" id="dwTabB">🗂 备份库</div></div>
+  <div class="dwbar" id="dwBarR"><input class="srch" id="dwQ" placeholder="检索 账号 / 对话名称…" autocomplete="off"/><button class="mini" id="dwRefresh">🔄 刷新</button></div>
+  <div class="dwbar" id="dwBarB" style="display:none"><input class="srch" id="dwBQ" placeholder="检索 账号 / 备份名称…" autocomplete="off"/><button class="mini" id="dwRoot">📁 根目录</button></div>
+  <div class="dwbody">
+    <div class="dwview on" id="dwViewR"><div class="tip">跨全部已登录账号 · 近期更新对话 · ⬇MD 秒存 · 📦全部文件含产出</div><div id="dwRecent"><div class="empty">加载中…</div></div></div>
+    <div class="dwview" id="dwViewB"><div id="dwBackup"><div class="empty">加载中…</div></div></div>
+    <div id="cv"><div class="cvtop"><button class="dwx" id="cvBack">‹ 返回</button><div class="cvtabs" id="cvTabs"></div></div><div class="cvacts" id="cvActs"></div><div class="cvbody" id="cvBody"></div></div>
+  </div>
+  <div class="dtoast" id="daotoast"></div>
+</div>
 <script>
 (function(){
 var vscode=acquireVsCodeApi();
@@ -488,7 +543,7 @@ var tabs={},order=[],active=null,favs=[],history=[],accounts=[],bridge=null;
 // 归一·分而治之: 六大板块各开一张独立子网页(各自一个 iframe), 不再共用一个全功能面板。
 // BOARDS[tab] = {req,mounted,ready,frame,url}; 外壳标签 id = 'board:'+tab。
 var BOARDS={};
-var BOARD_META={overview:['🏠','主页'],switch:['🔀','切号'],bridge:['🌐','公网穿透'],backups:['💬','对话备份'],inject:['💉','反向注入'],mcp:['🧩','MCP']};
+var BOARD_META={home:['🏠','主页·六合一'],overview:['🏠','主页'],switch:['🔀','切号'],bridge:['🌐','公网穿透'],backups:['💬','对话备份'],inject:['💉','反向注入'],mcp:['🧩','MCP']};
 function boardId(tab){return 'board:'+tab;}
 function isBoard(){return !!active&&active.indexOf('board:')===0;}
 function activeBoardTab(){return isBoard()?active.slice(6):'';}
@@ -526,7 +581,7 @@ function navigate(v){v=(v||'').trim();if(!v)return;if(isBoard()){if(/^https?:\\/
   if(/^https?:\\/\\//i.test(v)){var o=curOrigin();if(t&&o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);spin(true);}else{vscode.postMessage({type:'openExternal',url:v});}return;}
   if(v.charAt(0)==='/'){if(t){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}return;}
   vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v)});}
-var PAGES=[['🏠','主页 · 单账号管理','board:overview'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
+var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🐵','用户脚本','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
 function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'" data-l="'+esc(PAGES[i][1])+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
   var items=MENU.querySelectorAll('.mi');for(var j=0;j<items.length;j++){items[j].onclick=function(){MENU.className='';onPage(this.getAttribute('data-p'),this.getAttribute('data-l'));};}}
 function toggleMenu(){MENU.className=MENU.className?'':'on';}
@@ -607,11 +662,86 @@ function renderDownloads(){if(!_bkTree){showOverlay('⬇ 下载','<div class="em
       +'<button class="b" data-reveal="'+esc(c.path||c.htmlPath||it.dir||'')+'">文件夹</button></div>';}
   if(!all.length)body+='<div class="empty">暂无已下载/备份的对话 · 在「💬对话备份」板块备份后此处即可见</div>';
   showOverlay('⬇ 下载 ('+all.length+')',body);_bkBindActions();}
-document.getElementById('bDl').onclick=function(){showDownloads();};
-document.getElementById('bBk').onclick=function(){showBkLib();};
+// ── 归一 · 下载/备份悬浮窗(复刻手机端 APK daopan.html) · CSP 安全(事件委托·无内联 onclick) ──
+var DAO_REC=[],CV_TABS=[],CV_ACT=-1,_daoBkQ='';
+function _dEl(id){return document.getElementById(id);}
+function daoToast(msg,bad){var t=_dEl('daotoast');if(!t)return;t.textContent=msg;t.className='dtoast show'+(bad?' fail':' ok');clearTimeout(t._tm);t._tm=setTimeout(function(){t.className='dtoast';},2200);}
+function daoAgo(ms){if(!ms)return'';var d=Date.now()-ms;if(d<0)d=0;var mn=Math.floor(d/60000);if(mn<1)return'刚刚';if(mn<60)return mn+'分钟前';var h=Math.floor(mn/60);if(h<24)return h+'小时前';var dd=Math.floor(h/24);if(dd<30)return dd+'天前';try{return new Date(ms).toLocaleDateString();}catch(e){return'';}}
+function daoOpen(tab){_dEl('daowin').className='on';daoTab(tab||'recent');}
+function daoClose(){_dEl('daowin').className='';}
+function daoTab(t){var rec=t==='recent';
+  _dEl('dwTabR').classList.toggle('on',rec);_dEl('dwTabB').classList.toggle('on',!rec);
+  _dEl('dwViewR').classList.toggle('on',rec);_dEl('dwViewB').classList.toggle('on',!rec);
+  _dEl('dwBarR').style.display=rec?'flex':'none';_dEl('dwBarB').style.display=rec?'none':'flex';
+  daoHideCv();if(rec)daoLoadRecent();else daoLoadBackup();}
+function daoLoadRecent(){_dEl('dwRecent').innerHTML='<div class="empty">加载中…(跨账号近期对话)</div>';vscode.postMessage({type:'dlRecent'});}
+function daoOnRecent(list){DAO_REC=list||[];daoRenderRecent();}
+function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),box=_dEl('dwRecent');
+  if(!DAO_REC.length){box.innerHTML='<div class="empty">暂无近期对话 · 先在 🔀切号 面板登录账号</div>';return;}
+  var html='';DAO_REC.forEach(function(it,idx){
+    if(q){var hay=((it.email||'')+' '+it.title+' '+it.sid+' '+it.accNo).toLowerCase();if(hay.indexOf(q)<0)return;}
+    html+='<div class="rc"><div class="r1"><span class="acc-no">#'+esc(String(it.accNo))+'</span><span class="st '+esc(it.statusClass||'')+'" title="'+esc(it.status||'')+'"></span><span class="ti" title="'+esc(it.title)+'">'+esc(String(it.title).slice(0,70))+'</span></div>'+
+      '<div class="meta"><span>'+esc(String(it.email||'').split('@')[0])+'</span>'+(it.status?'<span>'+esc(it.status)+'</span>':'')+(it.updatedAt?'<span>'+daoAgo(it.updatedAt)+'</span>':'')+'</div>'+
+      '<div class="acts"><span class="b" data-act="view" data-idx="'+idx+'">👁 查看</span><span class="b" data-act="enter" data-idx="'+idx+'" title="切到该账号并在网页端打开此对话">🌐 进入</span><span class="b" data-act="md" data-idx="'+idx+'">⬇ MD</span><span class="b pri" data-act="zip" data-idx="'+idx+'">📦 全部文件</span></div></div>';});
+  box.innerHTML=html||'<div class="empty">无匹配 · 清空搜索查看全部</div>';}
+function daoEnter(idx){var it=DAO_REC[idx];if(!it)return;vscode.postMessage({type:'openCloudPage',path:'sessions/'+String(it.sid||'').replace(/^devin-/,''),label:it.title});daoToast('已请求打开 · '+String(it.email||'').split('@')[0]);}
+function daoMd(idx){var it=DAO_REC[idx];if(!it)return;daoToast('下载 MD…');vscode.postMessage({type:'dlExportMd',email:it.email,sid:it.sid,title:it.title,save:true});}
+function daoZip(idx){var it=DAO_REC[idx];if(!it)return;daoToast('打包全部文件…(增量补全·稍候定位)');vscode.postMessage({type:'dlZip',email:it.email,sid:it.sid,title:it.title});}
+function daoView(idx){var it=DAO_REC[idx];if(!it)return;var ex=-1;for(var i=0;i<CV_TABS.length;i++){if(CV_TABS[i].sid===it.sid){ex=i;break;}}
+  if(ex>=0)CV_ACT=ex;else{CV_TABS.push({email:it.email,sid:it.sid,title:it.title||it.sid,md:'',loading:true});CV_ACT=CV_TABS.length-1;}
+  _dEl('cv').className='on';daoRenderCv();if(ex<0)vscode.postMessage({type:'dlExportMd',email:it.email,sid:it.sid,title:it.title,save:false});}
+function daoOnExport(d){
+  if(d.save){daoToast(d.ok?('✓ 已保存: '+(d.name||'对话.md')):('下载失败: '+(d.error||'')),!d.ok);return;}
+  for(var i=0;i<CV_TABS.length;i++){if(CV_TABS[i].sid===d.sid){CV_TABS[i].md=d.ok?(d.md||''):('(提取失败: '+(d.error||'')+')');CV_TABS[i].loading=false;if(d.title)CV_TABS[i].title=d.title;}}
+  daoRenderCv();}
+function daoActCv(ti){CV_ACT=ti;daoRenderCv();}
+function daoCloseCv(ti){CV_TABS.splice(ti,1);if(!CV_TABS.length){CV_ACT=-1;daoHideCv();return;}if(CV_ACT>=CV_TABS.length)CV_ACT=CV_TABS.length-1;daoRenderCv();}
+function daoHideCv(){_dEl('cv').className='';}
+function daoRenderCv(){var tabsEl=_dEl('cvTabs'),bodyEl=_dEl('cvBody'),actEl=_dEl('cvActs'),h='';
+  CV_TABS.forEach(function(t,i){h+='<div class="cvtab'+(i===CV_ACT?' on':'')+'" data-cv="act" data-i="'+i+'"><span class="nm" title="'+esc(t.title)+'">'+esc(String(t.title).slice(0,40))+'</span><span class="x" data-cv="close" data-i="'+i+'">✕</span></div>';});
+  tabsEl.innerHTML=h;var cur=CV_TABS[CV_ACT];
+  if(!cur){bodyEl.textContent='';actEl.innerHTML='';return;}
+  actEl.innerHTML='<span class="b" data-cvact="md" data-i="'+CV_ACT+'">⬇ MD</span><span class="b pri" data-cvact="zip" data-i="'+CV_ACT+'">📦 全部文件</span>';
+  bodyEl.textContent=cur.loading?'提取对话中…':(cur.md||'(空)');bodyEl.scrollTop=0;}
+function daoCvMd(ti){var t=CV_TABS[ti];if(!t)return;daoToast('下载 MD…');vscode.postMessage({type:'dlExportMd',email:t.email,sid:t.sid,title:t.title,save:true});}
+function daoCvZip(ti){var t=CV_TABS[ti];if(!t)return;daoToast('打包全部文件…');vscode.postMessage({type:'dlZip',email:t.email,sid:t.sid,title:t.title});}
+function daoLoadBackup(){if(!_bkTree)_dEl('dwBackup').innerHTML='<div class="empty">正在扫描本地备份…</div>';vscode.postMessage({type:'shellBackups'});}
+function daoRenderBackup(){var box=_dEl('dwBackup');if(!box)return;if(!_bkTree){box.innerHTML='<div class="empty">正在扫描…</div>';return;}
+  var accs=_bkTree.accounts||[],q=(_daoBkQ||'').trim().toLowerCase(),na=0,nc=0,body='';
+  for(var i=0;i<accs.length;i++){var a=accs[i];var accHit=(String(a.email||'').toLowerCase().indexOf(q)>=0)||(String(a.account||'').toLowerCase().indexOf(q)>=0);
+    var rows=(a.conversations||[]).filter(function(c){return !q||accHit||String(c.title||c.name||'').toLowerCase().indexOf(q)>=0;});
+    if(!rows.length)continue;na++;
+    body+='<div class="gh">'+esc(a.email||a.account)+' · '+rows.length+' 备份</div>';
+    for(var k=0;k<rows.length;k++){var c=rows[k];nc++;
+      body+='<div class="rc"><div class="r1"><span class="ti" title="'+esc(c.title||c.name||c.devinId||'')+'">'+esc(c.title||c.name||c.devinId||'(未命名)')+'</span></div><div class="meta"><span>'+_bkWhen(c.mtime)+(c.eventCount?(' · '+c.eventCount+' 事件'):'')+'</span></div>'+
+        '<div class="acts">'+(c.hasHtml?'<span class="b pri" data-open="'+esc(c.htmlPath||'')+'">打开正文</span>':'')+'<span class="b" data-reveal="'+esc(c.path||c.htmlPath||a.dir||'')+'">文件夹</span></div></div>';}}
+  box.innerHTML=body||'<div class="empty">无备份记录 · 先在「💬对话备份」板块备份或开启自动备份</div>';
+  var ttl=_dEl('dwTitle');if(ttl)ttl.textContent='下载 / 备份库 ('+na+'账号·'+nc+'对话)';}
+// 事件委托(CSP 安全): 所有悬浮窗内点击统一在 #daowin 上处理
+_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal]');if(!el)return;
+  var a=el.getAttribute('data-act');if(a){var idx=+el.getAttribute('data-idx');if(a==='view')daoView(idx);else if(a==='enter')daoEnter(idx);else if(a==='md')daoMd(idx);else if(a==='zip')daoZip(idx);return;}
+  var cv=el.getAttribute('data-cv');if(cv){var ci=+el.getAttribute('data-i');if(cv==='act')daoActCv(ci);else if(cv==='close'){e.stopPropagation();daoCloseCv(ci);}return;}
+  var cva=el.getAttribute('data-cvact');if(cva){var cj=+el.getAttribute('data-i');if(cva==='md')daoCvMd(cj);else daoCvZip(cj);return;}
+  var op=el.getAttribute('data-open');if(op){vscode.postMessage({type:'shellOpenFile',path:op});return;}
+  var rv=el.getAttribute('data-reveal');if(rv){vscode.postMessage({type:'shellRevealFile',path:rv});return;}});
+_dEl('dwClose').onclick=daoClose;
+_dEl('dwTabR').onclick=function(){daoTab('recent');};
+_dEl('dwTabB').onclick=function(){daoTab('backup');};
+_dEl('dwRefresh').onclick=daoLoadRecent;
+_dEl('dwQ').oninput=daoRenderRecent;
+_dEl('dwBQ').oninput=function(){_daoBkQ=this.value;daoRenderBackup();};
+_dEl('dwRoot').onclick=function(){if(_bkTree&&_bkTree.root)vscode.postMessage({type:'shellRevealFile',path:_bkTree.root});};
+_dEl('cvBack').onclick=daoHideCv;
+// 悬浮窗拖拽(按标题栏)
+(function(){var w=_dEl('daowin'),hd=_dEl('dwHead'),dx=0,dy=0,drag=false;if(!w||!hd)return;
+  hd.addEventListener('mousedown',function(e){if(e.target&&e.target.id==='dwClose')return;drag=true;var r=w.getBoundingClientRect();dx=e.clientX-r.left;dy=e.clientY-r.top;w.style.right='auto';w.style.left=r.left+'px';w.style.top=r.top+'px';e.preventDefault();});
+  window.addEventListener('mousemove',function(e){if(!drag)return;var x=Math.max(0,Math.min(window.innerWidth-90,e.clientX-dx)),y=Math.max(0,Math.min(window.innerHeight-40,e.clientY-dy));w.style.left=x+'px';w.style.top=y+'px';});
+  window.addEventListener('mouseup',function(){drag=false;});})();
+document.getElementById('bDl').onclick=function(){daoOpen('recent');};
+document.getElementById('bBk').onclick=function(){daoOpen('backup');};
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
 document.getElementById('bRefresh').onclick=function(){if(isBoard()){var bt=activeBoardTab();closeTab(boardId(bt));openBoard(bt);return;}var t=tabs[active];if(t){spin(true);t.frame.setAttribute('src',t.url);}};
-document.getElementById('bHome').onclick=function(){if(isBoard()){openBoard('overview');return;}var t=tabs[active];if(t){var u=curOrigin()+'/';t.url=u;t.frame.setAttribute('src',u);spin(true);ADDR.value=u;}};
+document.getElementById('bHome').onclick=function(){openBoard('home');};
 document.getElementById('bZi').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.min(3,(t.zoom||1)+0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 document.getElementById('bZo').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.max(0.3,(t.zoom||1)-0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 ZL.onclick=function(){var t=tabs[active];if(t){t.zoom=1;applyZoom(t);ZL.textContent='100%';}};
@@ -636,7 +766,10 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='bridgeState'){bridge=m.data||null;}
   else if(m.type==='cloudInitHtml'){mountBoardSolo(m.html||'',m.board||'overview');}
   else if(m.type==='cloudHost'){_boardHostAll(m.msg||{});}
-  else if(m.type==='shellBackupsData'){_bkTree=m.tree||{root:'',accounts:[]};if(OV.className){if(_bkMode==='dl')renderDownloads();else if(_bkMode==='bk')renderBkLib();}}
+  else if(m.type==='shellBackupsData'){_bkTree=m.tree||{root:'',accounts:[]};if(OV.className){if(_bkMode==='dl')renderDownloads();else if(_bkMode==='bk')renderBkLib();}try{daoRenderBackup();}catch(e){}}
+  else if(m.type==='dlRecentData'){try{daoOnRecent(m.list);}catch(e){}}
+  else if(m.type==='dlExportData'){try{daoOnExport(m);}catch(e){}}
+  else if(m.type==='dlZipDone'){try{daoToast(m.ok?('✓ 已打包: '+(m.name||'')):('打包失败: '+(m.error||'')),!m.ok);}catch(e){}}
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}});
 buildMenu();
 vscode.postMessage({type:'ready'});
@@ -843,6 +976,8 @@ async function shellHandleMessage(sid, m) {
         send({ type: 'bridgeState', data: data || null });
         return;
       }
+      case 'dlRecent': case 'dlExportMd': case 'dlZip':
+        await _daoDownloadData(m, send); return;
       case 'shellBackups': {
         try {
           let root; try { root = vscode.workspace.getConfiguration('wam').get('devinCloudBackupDir'); } catch (e) {}
@@ -885,6 +1020,83 @@ async function shellHandleMessage(sid, m) {
     }
   } catch (e) { try { log('[shell] msg err: ' + (e && e.message)); } catch (x) {} }
 }
+// ════════════════════════════════════════════════════════════════════
+// 归一 · 下载/备份悬浮窗(复刻手机端 APK daopan.html)宿主数据通道
+//   dlRecent   → 跨全部已登录账号聚合近期对话(状态/账号号/更新时间)
+//   dlExportMd → 单对话导出 MD(save=false 仅返回正文供查看; save=true 落盘+定位)
+//   dlZip      → 单对话「全部文件」增量补全后打 ZIP 并在资源管理器定位
+// reply(obj): 统一回推(VS Code webview 与 standalone shell 同形态)。
+// ════════════════════════════════════════════════════════════════════
+function _daoRecencyMs(s) {
+  s = s || {};
+  const t = s.updated_at || s.last_updated_at || s.last_message_at || s.last_event_at || s.last_activity_at || s.modified_at || s.created_at || 0;
+  if (typeof t === "number") return t > 1e12 ? t : t * 1000;
+  const p = Date.parse(t); return isNaN(p) ? 0 : p;
+}
+async function _daoPool(items, conc, fn) {
+  let idx = 0; const n = items.length; conc = Math.max(1, Math.min(conc, n || 1));
+  async function w() { while (idx < n) { const i = idx++; try { await fn(items[i]); } catch (e) {} } }
+  const ws = []; for (let c = 0; c < conc; c++) ws.push(w()); await Promise.all(ws);
+}
+async function _daoDownloadData(m, reply) {
+  const t = m && m.type;
+  if (t === "dlRecent") {
+    const accs = (_store && _store.accounts) || [];
+    const noOf = (email) => { const i = accs.findIndex((a) => String(a.email).toLowerCase() === String(email).toLowerCase()); return i >= 0 ? i + 1 : "?"; };
+    let emails = []; try { emails = devinCloud.cachedEmails() || []; } catch (e) {}
+    const perAcc = Math.max(1, Math.min(20, Number(m.perAcc) || 12));
+    const out = [];
+    await _daoPool(emails, 6, async (email) => {
+      const auth = devinCloud.getCachedAuth(email);
+      if (!auth || !auth.auth1) return;
+      const ls = await devinCloud.listSessions(auth, perAcc);
+      if (!ls || !ls.ok) return;
+      (ls.sessions || []).forEach((s) => {
+        const sid = s.devin_id || s.session_id || s.id; if (!sid) return;
+        out.push({ email, accNo: noOf(email), sid, title: s.title || s.name || s.prompt || sid, status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s) });
+      });
+    });
+    out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    const seen = Object.create(null), ded = [];
+    for (const it of out) { if (it.sid && seen[it.sid]) continue; if (it.sid) seen[it.sid] = 1; ded.push(it); }
+    reply({ type: "dlRecentData", list: ded.slice(0, 60), accounts: emails.length });
+    return true;
+  }
+  if (t === "dlExportMd") {
+    const email = String(m.email || ""), sid = String(m.sid || "");
+    try {
+      const auth = await _resolveAuthForEmail(email);
+      if (!auth || !auth.auth1) { reply({ type: "dlExportData", save: !!m.save, ok: false, sid, error: "账号未解锁(无 auth1) · 先在切号面板登录" }); return true; }
+      const events = await devinCloud.getEventStream(auth, sid);
+      let title = m.title || sid;
+      try { const detail = await devinCloud.getSessionDetail(auth, sid); if (detail && (detail.title || detail.name)) title = detail.title || detail.name; } catch (e) {}
+      const md = devinCloud.buildConversationMd(title, sid, events);
+      if (m.save) {
+        const dir = _dvFindOrMakeConvDir(email, sid, title);
+        const outPath = path.join(dir, "对话.md");
+        fs.writeFileSync(outPath, md, "utf8");
+        try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(outPath)); } catch (e) {}
+        reply({ type: "dlExportData", save: true, ok: true, sid, name: path.basename(outPath), path: outPath });
+      } else {
+        reply({ type: "dlExportData", save: false, ok: true, sid, title, md });
+      }
+    } catch (e) { reply({ type: "dlExportData", save: !!m.save, ok: false, sid, error: String((e && e.message) || e) }); }
+    return true;
+  }
+  if (t === "dlZip") {
+    const email = String(m.email || ""), sid = String(m.sid || "");
+    try {
+      const auth = await _resolveAuthForEmail(email);
+      if (!auth || !auth.auth1) { reply({ type: "dlZipDone", ok: false, sid, error: "账号未解锁(无 auth1)" }); return true; }
+      const title = m.title || sid;
+      const one = await devinCloud.backupOneConversation(auth, { devin_id: sid, title }, _dvAccountBackupDir(email), { incremental: false, turbo: true });
+      if (one && one.zip) { try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(one.zip)); } catch (e) {} reply({ type: "dlZipDone", ok: true, sid, name: path.basename(one.zip), path: one.zip }); }
+      else reply({ type: "dlZipDone", ok: false, sid, error: "打包失败" });
+    } catch (e) { reply({ type: "dlZipDone", ok: false, sid, error: String((e && e.message) || e) }); }
+    return true;
+  }
+  return false;
+}
 function _wireMultiPanel(panel) {
   panel.webview.onDidReceiveMessage(async (m) => {
     if (!m) return;
@@ -915,6 +1127,10 @@ function _wireMultiPanel(panel) {
       }
       if (m.type === "openExternal" && m.url) {
         try { await vscode.env.openExternal(vscode.Uri.parse(m.url)); } catch (e) {}
+        return;
+      }
+      if (m.type === "dlRecent" || m.type === "dlExportMd" || m.type === "dlZip") {
+        await _daoDownloadData(m, (x) => { try { panel.webview.postMessage(x); } catch (e) {} });
         return;
       }
       // 归一 · ⬇下载 / 📁备份库 悬浮窗数据源: 复用内联备份引擎 devinCloud.listBackups(同 dao-vsix 六大板块备份板块同源)。
