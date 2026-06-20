@@ -2,6 +2,13 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.34.0
+
+**内穿自愈增强 + 知识库触发器改「所有对话均触发」**
+
+- 存活探测环(`bridgeLivenessTick`)在探测到隧道死时，对**进程内持有的隧道**改为真正的「停止+重启」(`bridgeStopTunnel` → `bridgeStartTunnel`，保持命名/快速模式)，而非仅刷新地址；新增连续失败计数 `_bridgeLivenessFail`，常驻发布连接连续 3 次探测仍为死则兜底自起快速隧道，不再死等常驻桥轮换。探活成功即清零计数。
+- 知识库两篇反向注入文档(`DAO_BRIDGE_KB_TRIGGER` / `DAO_MCP_KB_TRIGGER`)的触发器由「条件触发」改为 **「所有对话均触发」(Always retrieve in every conversation)** —— 每个对话的 Agent 一开始就知道「可远程操作用户本地电脑」的方法，无需特定关键词命中。
+
 ## 3.33.1
 
 **修复：端口/URL 自愈自检在 relay 通道下失效 → 知识库不会实时刷新（核心修复）**
