@@ -2,6 +2,11 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.48.0
+- 同步 rt-flow v4.24.0（vendored `rtflow/extension.js`）：修复多实例「一直加载中」污染其他页面
+  - 根因：全屏加载遮罩 `#spin` 为全局单例，仅由某 iframe load 清除、无超时/error 兜底；一个卡住的标签(官网多实例 iframe 永不 load)会永久盖住整个外壳
+  - 修复：每标签独立 loading 态 + load/error/15s 三重兜底 + setActive 切换按目标标签真实状态重算遮罩 → 后台卡住标签不再污染前台
+
 ## 3.47.0
 - 归一化收口：六大板块新增「🖥️ 操作电脑本体」(getDaoCloudMiddlePanelHtml 增 `computer` solo 板块 + rComputer 客户端 + 宿主 compInfo/compRun/compTerminal/compOpenFile/compReveal 处理)
   - 本机信息 + 运行命令(工作目录内 child_process.exec·回显 stdout/stderr/退出码) + 送入集成终端 + 编辑器打开 + 系统资源管理器定位
