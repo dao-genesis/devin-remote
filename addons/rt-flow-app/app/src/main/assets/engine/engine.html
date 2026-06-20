@@ -6,6 +6,7 @@
 <script src="devin-core.js"></script>
 <script src="devin-cloud.js"></script>
 <script src="p2p.js"></script>
+<script src="signal.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
 // engine.html · APP 的 JS 引擎 (常驻前台服务的 WebView 里跑)
@@ -16,7 +17,7 @@
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
   var DEVIN = "https://app.devin.ai/";
-  var APP_VERSION = "0.34.2";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
+  var APP_VERSION = "0.34.4";              // 唯一版本源 (getEngineInfo 与 UI 页脚共用)
   try{ localStorage.setItem("rtflow.ver", APP_VERSION); }catch(e){}  // 供 switch/panel 页脚自同步, 永不再僵化
 
   // ── 浏览器自动化 execJs 异步桥 ─────────────────────────────────────────────
@@ -839,13 +840,74 @@
   //   原生层 ensureRelayIdentity() 冷启动: 设备唯一 session + token + e2eKey 均**防卸载持久化、稳定复用**
   //   (P1: token 不再每冷启动轮换, 端点长期稳定, 驱动方无需每次重拿; 仅首次或手动「刷新Token」才换)。
   //   引擎侧不再自行生成/读取 localStorage, 避免共享 session 串号; 直接采用原生身份。
+  var _devSession = null, _devToken = null;
   try {
     var conn = JSON.parse(N.getConn ? (N.getConn()||"{}") : "{}");
+    if (conn) { _devSession = conn.session || null; _devToken = conn.token || null; }
     if (conn && conn.url && conn.token && conn.session) {
       DaoRelayApp.start({ url: conn.url, token: conn.token, session: conn.session });
       log("relay starting → " + conn.url + " session=" + conn.session + " [设备身份·token持久复用]");
     } else { log("穿透未配置: 原生身份未就绪"); }
   } catch (e) { log("conn parse err " + e); }
+
+  // ── 路线C 启动: 0账号·去中心化 WebRTC 信令应答方 (公共 ntfy pub/sub, 不经 Worker)。──
+  //   用设备身份(session+token)既定址(topic=H(session))又鉴权(密钥=H(session+token))。
+  //   公网客户端(console.html / p2p-client.html)优先走此直连, 不通才回落 Worker → 真·兜底。
+  (function startSignal(){
+    try {
+      if (!(window.DaoSignal && DaoSignal.available && DaoSignal.available())) { log("signal: webcrypto 不可用, 去中心化信令禁用 (Worker 兜底仍在)"); return; }
+      if (!_devSession || !_devToken) { log("signal: 设备身份未就绪, 暂不启动去中心化信令"); return; }
+      DaoSignal.serve({ session: _devSession, token: _devToken }).then(function(r){
+        if (r && r.ok) log("signal serving (去中心化P2P) → topic=" + r.topic + " servers=" + (r.servers||[]).join(","));
+        else log("signal serve 失败: " + (r && r.error));
+      }, function(e){ log("signal serve err " + e); });
+    } catch (e) { log("signal boot err " + e); }
+  })();
+
+  // ── 对话追踪·全局通知 (常驻引擎后台轮询, 软件被切后台/锁屏也能弹系统通知)。──
+  //   仅在「状态跃迁」时通知, 不刷屏: active→卡住/待处理 弹一次; →结束 弹一次。
+  //   复用 CMDS.trackStuck 的判定 (latest_status_contents.user_action_required 等真信号)。
+  (function startConvWatch(){
+    var PREV_KEY = "rtflow.convwatch";            // sid → {phase, title, email, ts}
+    var POLL_MS = 60000, FIRST_DELAY = 15000;
+    function loadPrev(){ try { return JSON.parse(localStorage.getItem(PREV_KEY)||"{}")||{}; } catch(e){ return {}; } }
+    function savePrev(o){ try { localStorage.setItem(PREV_KEY, JSON.stringify(o)); } catch(e){} }
+    function notify(tag, title, text){ try { if (N.notifyGlobal) N.notifyGlobal(String(tag), String(title), String(text)); } catch(e){} }
+    function watchEnabled(){ try { var v = localStorage.getItem("rtflow.convwatch.off"); return v !== "1"; } catch(e){ return true; } }
+    async function tick(){
+      if (!watchEnabled()) return;
+      var accs = []; try { accs = loadAcc().filter(function(x){ return x.auth1 && x.orgId; }); } catch(e){}
+      if (!accs.length) return;
+      var r; try { r = await CMDS.trackStuck(); } catch(e){ return; }
+      if (!r || !r.ok || !Array.isArray(r.sessions)) return;
+      var prev = loadPrev(), next = {}, now = Date.now();
+      // 本轮 active(running/awaiting) 与 attention(action_required/blocked) 集合
+      var cur = Object.create(null);
+      r.sessions.forEach(function(s){
+        var sid = s.sid; if (!sid) return;
+        var phase = (s.reason === "action_required" || s.reason === "blocked" || s.reason === "awaiting") ? "stuck" : "active";
+        cur[sid] = { phase: phase, title: s.title || sid, email: s.email || "", reason: s.reason, label: s.actionLabel };
+      });
+      // 跃迁判定
+      Object.keys(cur).forEach(function(sid){
+        var c = cur[sid], p = prev[sid];
+        next[sid] = { phase: c.phase, title: c.title, email: c.email, ts: now };
+        if (c.phase === "stuck" && (!p || p.phase !== "stuck")) {
+          var head = c.reason === "action_required" ? "⚠️ 待你处理" : (c.reason === "blocked" ? "⛔ 卡住/失败" : "⏳ 等待输入");
+          notify("conv-" + sid, head + ": " + c.title, (c.email ? c.email + " · " : "") + (c.label || "Devin 需要你回应") );
+        }
+      });
+      // 结束判定: 上轮在追踪(active/stuck)、本轮已不在 active/stuck 列表 → 视为结束
+      Object.keys(prev).forEach(function(sid){
+        if (!cur[sid] && (prev[sid].phase === "active" || prev[sid].phase === "stuck")) {
+          notify("conv-" + sid, "✅ 已结束: " + (prev[sid].title || sid), (prev[sid].email ? prev[sid].email + " · " : "") + "对话已完成/停止");
+        }
+      });
+      savePrev(next);
+    }
+    setTimeout(function(){ tick(); setInterval(tick, POLL_MS); }, FIRST_DELAY);
+    log("convwatch armed (对话追踪·全局通知, 轮询 " + (POLL_MS/1000) + "s)");
+  })();
 })();
 </script>
 </body>

@@ -1,6 +1,6 @@
 {
-  "versionCode": 86,
-  "versionName": "0.34.3",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.3/DevinCloud-mobile-v0.34.3.apk",
-  "notes": "v0.34.3 · 整机归一单网页(道法自然·无为而无不为)。新增 engine/console.html 纯中继单网页控制台: 任意公网设备打开 中继 /console?session=&token= 即得整机 —— 顶栏全部功能 + 左侧标签清单与网页内切换 + 单页多实例 Devin(多账号同屏) + 实时投屏(browseListTabs/browseActivateTab/browseScreenshot) + 反向点按/滚动/输入。即使设备侧 cloudflared/SSH/局域网全被拦截, 仅凭中继 /relay RPC 即可驱动, 无需无障碍/Shizuku。反向操控改用与原生 ipcMirrorInput 同源的忠实注入(经 browseExecJs: pointer/mouse 事件 + 原生 value setter + contenteditable execCommand insertText), 并补点到非编辑层时自动定位最近可编辑元素并放置光标、键入 160ms 去抖合批 —— 解决旧 CDP facade 点不进/打不进 Devin Lexical 编辑器的根因。原生 /mirror 同步该忠实注入。承 v0.34.2: 投镜满屏直投 + 备份「文件夹+完整对话MD」+ 下载彻底落地系统。"
+  "versionCode": 87,
+  "versionName": "0.34.4",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.4/DevinCloud-mobile-v0.34.4.apk",
+  "notes": "v0.34.4 · 内网穿透底层重做 + 对话追踪全局通知 (道法自然·无为而无不为)。① 路线C 0账号·去中心化 WebRTC: 新增 signal.js, 借公共 ntfy pub/sub (多家公开实例·可自托管) 一次性交换 AES-GCM 加密 SDP, 之后 RPC 全程走 P2P DataChannel —— 完全不经你的 Worker, 真·去中心化零账号; 鉴权即加密(密钥=H(session+token)), 准入门禁同中继级别; Worker 仅打洞失败时兜底。引擎冷启动即自动作信令应答方; 客户端 p2p-client.html / Worker 的 /p2p 仅填 session+token 即直连。② 对话追踪·全局系统通知: 引擎常驻后台轮询所有已登录账号, 检测会话『待你处理/卡住/等待输入/结束』并在状态跃迁时弹系统级通知 (软件切后台/锁屏亦可弹, 点按拉起 App), 不刷屏。复用 trackStuck 的 latest_status_contents.user_action_required 真信号。"
 }
