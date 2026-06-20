@@ -1852,7 +1852,8 @@ function buildConversationHtml(title, devinId, events, opts) {
     'body.filtering .msg{display:none}\n' +
     'body.filtering .msg.match{display:flex}\n' +
     '.footer{text-align:center;padding:24px;color:#484f58;font-size:12px;border-top:1px solid var(--border);margin-top:32px}\n' +
-    '@media(max-width:760px){body{padding-left:0}.nav{transform:translateX(-100%);transition:transform .2s}.nav.show{transform:none}}\n' +
+    '@media(max-width:760px){body{padding-left:0}.nav{transform:translateX(-100%);transition:transform .2s}.nav.show{transform:none}' +
+    '.header{flex-wrap:wrap;padding:12px 16px;gap:8px}.header h1{font-size:16px;flex:1 1 100%;order:2;line-height:1.3}.header .meta{flex:1 1 100%;order:3}.header .back{order:1}}\n' +
     '.header .back{color:var(--accent);text-decoration:none;font-size:13px;padding:5px 10px;border:1px solid var(--border);border-radius:6px;white-space:nowrap}\n' +
     '.header .back:hover{background:#161b22}\n' +
     '</style>\n</head>\n<body>\n' + nav +
