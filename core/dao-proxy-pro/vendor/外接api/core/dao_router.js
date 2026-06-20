@@ -4410,6 +4410,8 @@ function hotAddProvider(name, cfg) {
   // ★ cc-switch 风 · baseUrl 归一: 剥去误含的补全后缀(/chat/completions 等) · 防双重路径 404
   //   实证: 小米渠道用户把完整端点贴进 baseUrl → 拼 completionPath 双重 → 完全不可用 · 此处根治
   if (cfg.baseUrl) {
+    // ★ baseUrl 去内部空白 · 根治「http s://…」被切成 "http" 的渠道不可用 (URL 不含空格)
+    cfg.baseUrl = String(cfg.baseUrl).trim().replace(/\s+/g, "");
     const _normBase = _stripCompletionSuffix(cfg.baseUrl);
     if (_normBase && _normBase !== String(cfg.baseUrl).replace(/\/+$/, "")) {
       _log(
