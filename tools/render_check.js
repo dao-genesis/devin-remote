@@ -18,6 +18,20 @@ const src = fs.readFileSync(target, 'utf8');
 
 let failures = 0;
 
+// 括号感知地剥离 ${...} 模板插值(替换为 0)。朴素的 /\$\{[^}]*\}/ 遇到内含 { 的插值
+// (如 ${JSON.stringify(x||{a:1})} 或 ${c?`{...}`:''})会在第一个 } 截断, 误报 PARSE FAILED。
+function stripInterp(s) {
+  let out = '', i = 0;
+  while (i < s.length) {
+    if (s[i] === '$' && s[i + 1] === '{') {
+      let depth = 1, j = i + 2;
+      while (j < s.length && depth > 0) { if (s[j] === '{') depth++; else if (s[j] === '}') depth--; j++; }
+      out += '0'; i = j;
+    } else { out += s[i]; i++; }
+  }
+  return out;
+}
+
 function renderScripts(label, startMarker) {
   const fi = src.indexOf(startMarker);
   if (fi < 0) { console.log(label, 'FUNC NOT FOUND'); return; }
@@ -26,7 +40,7 @@ function renderScripts(label, startMarker) {
   let m, n = 0;
   while ((m = re.exec(region))) {
     n++;
-    const placeheld = m[1].replace(/\$\{[^}]*\}/g, '0');
+    const placeheld = stripInterp(m[1]);
     let rendered;
     try {
       // 反引号包裹 eval -> 处理转义与模板插值完全一致
@@ -58,7 +72,7 @@ function renderPlainScripts(label, startMarker) {
   let m, n = 0;
   while ((m = re.exec(region))) {
     n++;
-    const placeheld = m[1].replace(/\$\{[^}]*\}/g, '0');
+    const placeheld = stripInterp(m[1]);
     let rendered;
     try {
       rendered = vm.runInNewContext('`' + placeheld.replace(/`/g, '\\`') + '`');
@@ -76,5 +90,8 @@ function renderPlainScripts(label, startMarker) {
   }
 }
 renderPlainScripts('_multiShellHtml', 'function _multiShellHtml(');
+// dao-vsix 六合一中间面板(getDaoCloudMiddlePanelHtml)亦为反引号模板内联 <script>,
+// 其客户端脚本含 rComputer 等; 运行: node tools/render_check.js core/dao-vsix/out/extension.js
+renderPlainScripts('getDaoCloudMiddlePanelHtml', 'function getDaoCloudMiddlePanelHtml(');
 
 process.exit(failures ? 1 : 0);

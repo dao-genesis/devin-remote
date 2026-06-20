@@ -3178,7 +3178,7 @@ function rComputer(){
   var last=S.comp&&S.comp.last;
   var outHtml = last
     ? ('<div class="card"><div class="cr"><span class="l">上次命令</span><span class="v">'+esc(last.cmd||'')+(last.code!=null?(' · 退出码 '+last.code):'')+'</span></div>'
-        +'<pre style="white-space:pre-wrap;word-break:break-all;max-height:280px;overflow:auto;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;padding:10px;font-family:monospace;font-size:11.5px;color:'+(last.ok?'#cdd3de':'#ffb4b4')+'">'+esc((last.stdout||'')+((last.stderr)?('\n'+last.stderr):''))+'</pre></div>')
+        +'<pre style="white-space:pre-wrap;word-break:break-all;max-height:280px;overflow:auto;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;padding:10px;font-family:monospace;font-size:11.5px;color:'+(last.ok?'#cdd3de':'#ffb4b4')+'">'+esc((last.stdout||'')+((last.stderr)?('\\n'+last.stderr):''))+'</pre></div>')
     : '';
   v.innerHTML=''
     +'<div class="st">🖥️ 操作电脑本体</div>'
