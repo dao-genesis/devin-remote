@@ -59,6 +59,9 @@
   #kbd{position:absolute;left:0;width:1px;height:1px;opacity:0;pointer-events:none}
   #status{position:absolute;left:10px;bottom:8px;font-size:11px;color:var(--muted);background:#0e1116cc;
           padding:3px 8px;border-radius:6px;pointer-events:none;max-width:70%}
+  #health{position:absolute;left:50%;top:10px;transform:translateX(-50%);display:none;font-size:12px;color:#ffd7b0;
+          background:#3a1d10ee;border:1px solid #7a3b1e;padding:5px 12px;border-radius:8px;z-index:60;max-width:88%;text-align:center;pointer-events:none}
+  #health.show{display:block}
   #toast{position:absolute;right:10px;bottom:8px;font-size:11px;color:var(--fg);background:#1a2030;
          border:1px solid var(--input-b);padding:5px 10px;border-radius:7px;opacity:0;transition:opacity .2s;max-width:60%}
   #toast.show{opacity:1}
@@ -111,6 +114,7 @@
       <div id="hint">选择左侧一个标签开始投屏 · 任意公网设备可用</div>
       <textarea id="kbd"></textarea>
       <div id="status"></div>
+      <div id="health"></div>
       <div id="toast"></div>
       <div id="cfg"><div id="cfgCard">
         <h3>连接设置</h3>
@@ -170,6 +174,19 @@
   var view = { cssW:384, cssH:602 };  // 当前 tab 的 CSS 视口 (反向坐标映射)
   var pollTimer = null, listTimer = null, loopBusy = false;
   var connected = false;
+  // ── 手机端实时健康检测: 连续 RPC 失败/agent_timeout → 判定疑卡死, 横幅提示并持续自愈重试 ──
+  var health = { fails:0, since:0 };
+  function isStuckErr(m){ return /agent_timeout|timeout|aborted|Failed to fetch|NetworkError|load failed/i.test(String(m||"")); }
+  function markHealth(ok, reason){
+    var el=document.getElementById("health"); if(!el) return;
+    if(ok){ if(health.fails){ health.fails=0; health.since=0; } el.classList.remove("show"); return; }
+    health.fails++; if(!health.since) health.since=Date.now();
+    if(health.fails>=2){
+      var sec=Math.round((Date.now()-health.since)/1000);
+      el.textContent="⚠ 手机端疑卡死/无响应"+(reason?(" · "+reason):"")+" · 已重试 "+health.fails+" 次/"+sec+"s · 正自动恢复…";
+      el.classList.add("show"); setDot("off");
+    }
+  }
 
   var dot=$("dot"), titleEl=$("title"), frame=$("frame"), hint=$("hint"),
       statusEl=$("status"), toastEl=$("toast"), fpsSel=$("fpsSel"), kbd=$("kbd");
@@ -191,7 +208,7 @@
     try{
       var j = await rpc("browseListTabs",{},12000);
       if(!j || !j.tabs){ throw new Error(j&&j.error||"no_tabs"); }
-      connected=true; setDot("on");
+      connected=true; setDot("on"); markHealth(true);
       tabsArr = j.tabs;
       $("tabCount").textContent = tabsArr.length+" 个";
       renderTabs();
@@ -199,11 +216,14 @@
         var act = tabsArr.find(function(t){return t.active;});
         if(act) selectTab(act.index);
         else if(tabsArr.length) selectTab(tabsArr[0].index);
+        else { titleEl.textContent="已连接 · 无标签 (点左下板块或「+ 新 Devin 实例」开页)"; }
       }
     }catch(e){
       connected=false; setDot("off");
-      if(String(e.message).indexOf("session")>=0){ openCfg(); }
-      setStatus("连接失败: "+e.message);
+      var m=String(e.message||e), stuck=isStuckErr(m);
+      markHealth(false, stuck?"agent_timeout/超时":m);
+      if(m.indexOf("session")>=0){ openCfg(); }
+      setStatus(stuck? "手机端疑卡死/无响应, 自动重试…" : ("连接异常: "+m));
     }
   }
   function renderTabs(){
@@ -260,17 +280,23 @@
       var j = await rpc("browseScreenshot",{tabIndex:want, format:"jpeg", quality:50, maxWidth:1024}, 18000);
       if(want!==activeIdx) return;   // 切换期间到达的旧帧 → 丢弃
       var b64 = j && (j.base64||j.data||j.image);
-      if(j && j.ok===false){ setStatus("截图失败: "+(j.error||"")); }
+      if(j && (j.ok===false || j.error)){
+        var em=String(j.error||"");
+        if(isStuckErr(em)){ markHealth(false, "agent_timeout/超时"); setStatus("手机端疑卡死/无响应, 自动重试…"); }
+        else setStatus("截图失败: "+em);
+      }
       else if(b64){
         var mime = b64.charAt(0)==="/" ? "image/jpeg" : (b64.charAt(0)==="i"?"image/png":"image/jpeg");
         frame.src = "data:"+mime+";base64,"+b64;
         frame.classList.remove("empty");
-        connected=true; setDot("on");
+        connected=true; setDot("on"); markHealth(true);
         setStatus("● 实时 · "+view.cssW+"×"+view.cssH+" · 标签 "+want);
       }
     }catch(e){
-      if(String(e.message).indexOf("rate")>=0){ setStatus("限流, 自动降速…"); }
-      else { setDot("off"); setStatus("掉线: "+e.message); }
+      var m=String(e.message||e);
+      if(m.indexOf("rate")>=0){ setStatus("限流, 自动降速…"); }
+      else if(isStuckErr(m)){ markHealth(false,"agent_timeout/超时"); setStatus("手机端疑卡死/无响应, 自动重试…"); }
+      else { setDot("off"); setStatus("掉线: "+m); }
     }finally{ loopBusy=false; }
   }
 
@@ -383,12 +409,13 @@
     d.innerHTML='<span class="ic">🟢</span><span>+ 新 Devin 实例</span>';
     d.onclick=openPick; box.appendChild(d);
   }
-  // 板块已开 → 切过去; 否则 browseOpen 资源页
+  // 板块已开 → 切过去; 否则后台静默 browseOpen 资源页 (foreground:false: 远程控台绝不抢占手机本体前台,
+  // 既避免 foreground 唤起本体的 agent_timeout 卡死, 又实现多设备接入互不干扰)。开后自动选中投屏。
   function openPanel(s){
     var found = tabsArr.find(function(t){ return t.internal && (t.url||"").indexOf(s.asset)>=0; });
     if(found){ selectTab(found.index); return; }
-    rpc("browseOpen",{url:"file:///android_asset/engine/"+s.asset+"?session="+encodeURIComponent(cfg.session)+"&token="+encodeURIComponent(cfg.token), foreground:true},12000)
-      .then(function(){ toast("已打开 "+s.label); setTimeout(refreshTabs,900); })
+    rpc("browseOpen",{url:"file:///android_asset/engine/"+s.asset+"?session="+encodeURIComponent(cfg.session)+"&token="+encodeURIComponent(cfg.token), foreground:false},12000)
+      .then(function(){ toast("已打开 "+s.label); setTimeout(function(){ refreshTabs().then(function(){ var f=tabsArr.find(function(t){return t.internal&&(t.url||"").indexOf(s.asset)>=0;}); if(f) selectTab(f.index); }); },900); })
       .catch(function(e){ toast("打开失败: "+e.message); });
   }
   // 新 Devin 实例: 列已登录账号, 选一个 openAccountTab
@@ -408,10 +435,10 @@
   }
   function doOpenAccount(id){
     $("pick").classList.remove("show");
-    rpc("openAccountTab",{account:id, url:"https://app.devin.ai/", foreground:true},15000)
+    rpc("openAccountTab",{account:id, url:"https://app.devin.ai/", foreground:false},15000)
       .then(function(){ toast("已新开实例"); setTimeout(refreshTabs,1200); })
       .catch(function(e){
-        rpc("browseOpen",{url:"https://app.devin.ai/",foreground:true},15000)
+        rpc("browseOpen",{url:"https://app.devin.ai/",foreground:false},15000)
           .then(function(){ toast("已新开标签"); setTimeout(refreshTabs,1200); })
           .catch(function(e2){ toast("新开失败: "+e2.message); });
       });
@@ -437,7 +464,8 @@
   buildSegs();
   if(!cfg.session || !cfg.token){ openCfg(); }
   else { saveCfg(); refreshTabs(); }
-  listTimer = setInterval(function(){ if(connected) refreshTabs(); }, 6000);
+  // 持续轮询 (不因掉线而停): 既能冷启动等标签恢复, 又能在手机端卡死/恢复时实时反映与自愈。
+  listTimer = setInterval(refreshTabs, 6000);
   // 失焦自动恢复轮询
   document.addEventListener("visibilitychange", function(){ if(!document.hidden){ startLoop(); shotNow(); } });
 })();

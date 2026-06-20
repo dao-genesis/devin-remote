@@ -1,6 +1,6 @@
 {
-  "versionCode": 89,
-  "versionName": "0.34.6",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.6/DevinCloud-mobile-v0.34.6.apk",
-  "notes": "v0.34.6 · 公网穿透面板不再默认 Worker (道法自然·随情况变化)。① 面板「公网穿透状态/公网URL/接入信息/接入文档」改为按当前实际生效的公网通道动态选取与显示: 去中心化隧道(cloudflared 主 > SSH 备)优先, Worker 仅在其他公网通道都不可用时兜底; 接入渠道总览标注「★ 当前生效」。② 新增「🌐 复制公网网址」按钮: 一键复制公网网页控台地址(含 Session+Token), 任意公网浏览器打开即与 APK 同款操作; 该网址跟随当前公网通道自动变化, 多设备同时打开互不干扰。"
+  "versionCode": 90,
+  "versionName": "0.34.7",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.34.7/DevinCloud-mobile-v0.34.7.apk",
+  "notes": "v0.34.7 · 公网网页控台(/console)从根本修复「手机端卡死」与多设备共存 (道法自然·无为而无不为)。① 控台开板块/新实例改为后台静默开页 (foreground:false): 远程网页绝不再抢占手机本体前台 —— 既根除了 foreground 唤起本体导致的 agent_timeout 卡死(实测 foreground:true 卡 60s、false 仅 1s),又实现任意设备公网接入互不干扰。② 新增手机端实时健康检测: 连续 RPC 失败/agent_timeout 即判定「手机端疑卡死」横幅提示并持续自动重试自愈,卡死/恢复实时反映。③ 控台持续轮询不因掉线而停,冷启动等标签恢复;连接但无标签时给出明确指引而非误显「未连接」。实测公网网页与 APK 逐板块一致(9 标签:多账号实例 + 切号/公穿等板块均像素级忠实投屏可反控)。"
 }
