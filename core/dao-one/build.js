@@ -50,7 +50,14 @@ function buildVsix() {
     let code = fs.readFileSync(path.join(srcDir, f), "utf8");
     if (patchText && f === "extension.ts") {
       code = applyOverlay(code, patchText);
-      log("vendor-vsix: applied proxy-fold.patch → extension.ts (三合一叠加)");
+      // 归一·② noAuthNeeded 是高频改动行(每加一条命令就变长) → 整行 diff 必朽。
+      // 改为幂等 token 注入: 确保免登白名单含 'getProxyPanel'(已含则不动), 与行漂移无关。
+      code = code.replace(
+        /(const\s+noAuthNeeded\s*=\s*\[[^\]]*?)(\s*\]\s*;)/,
+        (m, head, tail) =>
+          head.includes("'getProxyPanel'") ? m : head + ", 'getProxyPanel'" + tail,
+      );
+      log("vendor-vsix: applied proxy-fold.patch + folded getProxyPanel into noAuthNeeded (三合一叠加)");
     }
     const res = transform(code, {
       transforms: ["typescript", "imports"],

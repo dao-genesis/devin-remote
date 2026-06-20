@@ -45,19 +45,50 @@ function findBlock(srcLines, block, hintIdx) {
   return matches[0];
 }
 
+// 帛书·「曲则全」: 上下文会漂移(dao-vsix 源在别处增删/拉长某行) → 严格全块匹配
+// 一行不符即整 hunk 失败, 是 dao-one 构建反复崩的根。故仿 GNU patch「fuzz」: 全块
+// 匹配不中时, 渐进裁掉两端「可弃的纯上下文行」(优先裁尾, 次裁头), 只要核心改动块
+// (含 - 行)与剩余锚点仍唯一命中即应用。纯插入 hunk 以前导上下文为锚, 尾随上下文可弃。
 function applyUnifiedDiff(source, patchText) {
   const eol = source.indexOf("\r\n") >= 0 ? "\r\n" : "\n";
   let srcLines = source.split(/\r?\n/);
   const hunks = parseHunks(patchText);
   for (const h of hunks) {
-    const before = h.lines.filter((l) => l.tag === " " || l.tag === "-").map((l) => l.text);
-    const after = h.lines.filter((l) => l.tag === " " || l.tag === "+").map((l) => l.text);
+    // 拆 hunk: 前导纯上下文 / 核心(含 -/+, 及其间夹的上下文) / 尾随纯上下文。
+    let lead = 0;
+    while (lead < h.lines.length && h.lines[lead].tag === " ") lead++;
+    let trail = 0;
+    while (trail < h.lines.length - lead && h.lines[h.lines.length - 1 - trail].tag === " ") trail++;
+    const leadCtx = h.lines.slice(0, lead).map((l) => l.text);
+    const trailCtx = trail ? h.lines.slice(h.lines.length - trail).map((l) => l.text) : [];
+    const core = h.lines.slice(lead, h.lines.length - trail);
+    const coreBefore = core.filter((l) => l.tag === " " || l.tag === "-").map((l) => l.text);
+    const coreAfter = core.filter((l) => l.tag === " " || l.tag === "+").map((l) => l.text);
     const hint = Math.max(0, h.oldStart - 1);
-    const at = findBlock(srcLines, before, hint);
-    if (at < 0) {
-      throw new Error("apply-overlay: hunk @ -" + h.oldStart + " context not found (before-block " + before.length + " lines)");
+
+    let applied = false;
+    const maxDrop = leadCtx.length + trailCtx.length;
+    // fuzz 由小到大; 同等裁剪量下优先裁尾(保前导锚)。
+    for (let total = 0; total <= maxDrop && !applied; total++) {
+      for (let dropTrail = Math.min(total, trailCtx.length); dropTrail >= 0 && !applied; dropTrail--) {
+        const dropLead = total - dropTrail;
+        if (dropLead > leadCtx.length) continue;
+        const lc = leadCtx.slice(dropLead);
+        const tc = trailCtx.slice(0, trailCtx.length - dropTrail);
+        const before = lc.concat(coreBefore, tc);
+        if (before.length === 0) continue; // 无锚不可定位
+        const at = findBlock(srcLines, before, hint + dropLead);
+        if (at < 0) continue;
+        const after = lc.concat(coreAfter, tc);
+        srcLines = srcLines.slice(0, at).concat(after, srcLines.slice(at + before.length));
+        applied = true;
+      }
     }
-    srcLines = srcLines.slice(0, at).concat(after, srcLines.slice(at + before.length));
+    if (!applied) {
+      throw new Error(
+        "apply-overlay: hunk @ -" + h.oldStart + " context not found (lead " + leadCtx.length + " trail " + trailCtx.length + " core " + coreBefore.length + ")",
+      );
+    }
   }
   return srcLines.join(eol);
 }

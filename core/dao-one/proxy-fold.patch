@@ -154,15 +154,6 @@
  async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionContext) {
      const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
      const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
-@@ -3325,7 +3414,7 @@
-     const reply = (d: any) => daoCloudMiddlePanel?.webview.postMessage(d);
-     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
-     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
--    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe'];
-+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'getProxyPanel'];
-     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
-         reply({ type: 'error', msg: 'Not logged in' });
-         return;
 @@ -4161,6 +4250,11 @@
                  break;
              }
