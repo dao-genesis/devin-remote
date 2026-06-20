@@ -58,9 +58,23 @@
     return false;
   }
 
+  // 收集 root 自身 + 其下所有开放 Shadow DOM 根 (递归) → 现代 SPA/Web Component 主页的文本多在 shadow 内,
+  // 普通 TreeWalker 不跨 shadow 边界会整页漏译; 这里逐 shadow 根分别遍历。
+  function allRoots(root) {
+    var roots = [root];
+    try {
+      var els = root.querySelectorAll ? root.querySelectorAll("*") : [];
+      for (var i = 0; i < els.length; i++) {
+        var sr = els[i].shadowRoot;
+        if (sr) { var sub = allRoots(sr); for (var j = 0; j < sub.length; j++) roots.push(sub[j]); }
+      }
+    } catch (e) {}
+    return roots;
+  }
+
   function collect(root) {
     var out = [];
-    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    var filter = {
       acceptNode: function (n) {
         if (n.__dcOrig !== undefined) return NodeFilter.FILTER_REJECT;   // 已译
         var t = n.nodeValue;
@@ -70,8 +84,16 @@
         if (rejectByParent(n)) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
-    });
-    var n; while ((n = w.nextNode())) out.push(n);
+    };
+    var roots = allRoots(root);
+    for (var r = 0; r < roots.length; r++) {
+      try {
+        var w = document.createTreeWalker(roots[r], NodeFilter.SHOW_TEXT, filter);
+        var n; while ((n = w.nextNode())) out.push(n);
+        // shadow 根内的宿主也可能再挂 shadow → observe 它们以便增量翻译
+        observeRoot(roots[r]);
+      } catch (e) {}
+    }
     return out;
   }
 
@@ -116,25 +138,37 @@
     });
   }
 
-  function observe() {
-    if (S.obs) return;
+  // 对任意根(document 或 shadow root)挂增量观察: 动态加载/SPA 路由/shadow 内容出现即补译。
+  S.observed = S.observed || [];
+  function scheduleIncremental() {
+    clearTimeout(S.debounce);
+    S.debounce = setTimeout(function () { if (S.active) runOnce(document.body || document.documentElement); }, 700);
+  }
+  function observeRoot(root) {
     try {
-      S.obs = new MutationObserver(function () {
-        clearTimeout(S.debounce);
-        S.debounce = setTimeout(function () { if (S.active) runOnce(document.body); }, 700);
-      });
-      S.obs.observe(document.documentElement, { childList: true, subtree: true });
+      if (!root || S.observed.indexOf(root) >= 0) return;
+      var mo = new MutationObserver(scheduleIncremental);
+      mo.observe(root, { childList: true, subtree: true, characterData: true });
+      S.observed.push(root);
+      S.mos = S.mos || []; S.mos.push(mo);
     } catch (e) {}
   }
+  function observe() { observeRoot(document.documentElement); }
 
-  // 一键恢复原文
+  // 一键恢复原文 (含所有 shadow 根)
   window.__dcTransRestore = function () {
     try {
       S.active = false;
-      if (S.obs) { S.obs.disconnect(); S.obs = null; }
-      var w = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT, null);
-      var n; while ((n = w.nextNode())) {
-        if (n.__dcOrig !== undefined) { n.nodeValue = n.__dcOrig; delete n.__dcOrig; }
+      if (S.mos) { for (var i = 0; i < S.mos.length; i++) try { S.mos[i].disconnect(); } catch (e) {} }
+      S.mos = []; S.observed = [];
+      var roots = allRoots(document.documentElement);
+      for (var r = 0; r < roots.length; r++) {
+        try {
+          var w = document.createTreeWalker(roots[r], NodeFilter.SHOW_TEXT, null);
+          var n; while ((n = w.nextNode())) {
+            if (n.__dcOrig !== undefined) { n.nodeValue = n.__dcOrig; delete n.__dcOrig; }
+          }
+        } catch (e) {}
       }
     } catch (e) {}
   };
