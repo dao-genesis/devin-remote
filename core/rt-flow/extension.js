@@ -568,6 +568,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 .tab{display:inline-flex;align-items:center;gap:6px;padding:0 8px;max-width:250px;border-right:1px solid #21262d;cursor:pointer;color:#9aa4b2;font-size:12px;user-select:none;flex:0 0 auto}
 .tab:hover{background:#1b212b}
 .tab.on{background:#0e1116;color:#e6edf3;box-shadow:inset 0 -2px 0 #1f6feb}
+.tab.on2{background:#0e1116;color:#e6edf3;box-shadow:inset 0 -2px 0 #3fb950}
 .tab .dot{width:7px;height:7px;border-radius:50%;background:#6e7681;flex:0 0 auto}
 .tab .dot.running{background:#3fb950}.tab .dot.finished{background:#58a6ff}.tab .dot.blocked{background:#f0883e}.tab .dot.expired{background:#f85149}.tab .dot.awaiting{background:#d29922}
 .tab .no{min-width:16px;height:15px;line-height:15px;text-align:center;font-size:10px;font-weight:800;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:4px;padding:0 3px;flex:0 0 auto}
@@ -578,6 +579,10 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 #body{position:relative;flex:1;overflow:hidden}
 #stack{position:absolute;inset:0}
 #stack iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
+#splitbar{position:absolute;top:0;bottom:0;width:8px;margin-left:-4px;cursor:col-resize;z-index:6;display:none}
+#splitbar.on{display:block}
+#splitbar::after{content:'';position:absolute;top:0;bottom:0;left:50%;width:2px;margin-left:-1px;background:#30363d}
+#splitbar:hover::after,#splitbar.drag::after{background:#1f6feb;width:3px;margin-left:-1.5px}
 #hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#6e7681;font-size:13px;text-align:center;padding:24px;flex-direction:column;gap:10px}
 #hint .big{font-size:36px}
 .spin{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(14,17,22,.55);z-index:5;color:#9aa4b2;font-size:12px}
@@ -717,6 +722,7 @@ html.m #hint{font-size:14px;padding:18px}
   <div id="body">
     <div id="hint"><div class="big">🌐</div><div>归一面板 · 一个外壳多子网页(对齐手机 APK)<br>点 ☰ 选六大板块：🏠主页 / 🔀切号 / 🌐公网穿透 / 💬对话备份 / 💉反向注入 / 🧩MCP，或新建 Devin 标签<br>六大板块分而治之 · 各开一张独立子网页(网页套网页) · 与多实例账号页同级并排 · 各登各号互不串号</div></div>
     <div id="stack"></div>
+    <div id="splitbar" title="拖动调整分屏比例"></div>
     <div class="spin" id="spin"><span class="ld"></span>加载中…</div>
     <div id="drop">松开以拖入文件到当前窗口</div>
     <div id="convdrop">🌐 松开 · 在网页中打开该对话</div>
@@ -752,14 +758,40 @@ function activeBoardTab(){return isBoard()?active.slice(6):'';}
 var S=document.getElementById('stack'),BAR=document.getElementById('tabs'),HINT=document.getElementById('hint');
 var ADDR=document.getElementById('addr'),ENG=document.getElementById('eng'),ZL=document.getElementById('zlbl'),SPIN=document.getElementById('spin');
 var MENU=document.getElementById('menu'),OV=document.getElementById('ov'),OVB=document.getElementById('ovBody'),OVT=document.getElementById('ovTi'),DROP=document.getElementById('drop');
+var SBAR=document.getElementById('splitbar');
+// 归一·浏览器分屏(对照 Windows 贴靠/Chrome 分屏): splitId=与 active 并排的另一张标签; splitRatio=左窗占比
+var splitId=null,splitRatio=0.5;
+function _splitOn(){return !!(splitId&&tabs[splitId]&&tabs[active]&&active!==splitId);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function sync(){HINT.style.display=order.length?'none':'flex';}
 function curOrigin(){try{return tabs[active].url.split('/').slice(0,3).join('/');}catch(e){return '';}}
-function setActive(id){active=id;for(var k in tabs){var on=(k===id);tabs[k].frame.style.display=on?'block':'none';tabs[k].btn.className='tab'+(on?' on':'');}
-  if(tabs[id]){ADDR.value=tabs[id].url;ZL.textContent=Math.round((tabs[id].zoom||1)*100)+'%';}spin(!!(tabs[id]&&tabs[id].loading));hideOverlay();}
+function setActive(id){
+  if(splitId&&!tabs[splitId])splitId=null;
+  if(splitId&&id===splitId)splitId=active; // 点击副窗标签 → 聚焦它并与原主窗对调, 保持分屏
+  active=id;var split=_splitOn();
+  for(var k in tabs){var isA=(k===active),isB=(split&&k===splitId);var on=isA||isB;
+    tabs[k].frame.style.display=on?'block':'none';
+    tabs[k].btn.className='tab'+(isA?' on':'')+(isB?' on2':'');
+    if(on)applyZoom(tabs[k]);}
+  if(SBAR){if(split){SBAR.style.left=(splitRatio*100)+'%';SBAR.className='on';}else SBAR.className='';}
+  if(tabs[active]){ADDR.value=tabs[active].url;ZL.textContent=Math.round((tabs[active].zoom||1)*100)+'%';}
+  spin(!!(tabs[active]&&tabs[active].loading));hideOverlay();}
+function _otherTab(id){for(var i=order.length-1;i>=0;i--){if(order[i]!==id)return order[i];}return null;}
+function toggleSplitWith(id){
+  if(splitId){clearSplit();daoToast('已退出分屏');return;}
+  var partner=(id===active)?_otherTab(id):active;if(!partner)partner=_otherTab(id);
+  if(!partner){daoToast('分屏需要至少两个标签页',true);return;}
+  splitId=id;active=partner;setActive(active);daoToast('▣ 已开启分屏并排 · 拖中缝调比例');}
+function clearSplit(){splitId=null;if(tabs[active])setActive(active);else if(order.length)setActive(order[order.length-1]);}
 // 归一 · 对齐 APK 左右切页: 在标签序内前后循环切换 (键盘 Ctrl+Tab / 手机标签条左右滑)
 function cycleTab(dir){if(!order.length)return;var i=order.indexOf(active);if(i<0)i=0;var n=(i+dir+order.length)%order.length;setActive(order[n]);var b=tabs[order[n]];if(b&&b.btn&&b.btn.scrollIntoView){try{b.btn.scrollIntoView({inline:'center',block:'nearest'});}catch(e){}}}
-function applyZoom(t){var z=t.zoom||1;t.frame.style.transformOrigin='0 0';t.frame.style.transform='scale('+z+')';t.frame.style.width=(100/z)+'%';t.frame.style.height=(100/z)+'%';}
+// 分屏感知缩放布局: 主窗(左)占 splitRatio, 副窗(右)占 1-splitRatio; 非分屏占满。width 计入缩放补偿。
+function applyZoom(t){var side='full';
+  if(_splitOn()){if(t===tabs[active])side='left';else if(t===tabs[splitId])side='right';}
+  var z=t.zoom||1,frac=(side==='full')?1:(side==='left'?splitRatio:(1-splitRatio)),off=(side==='right')?splitRatio:0;
+  t.frame.style.transformOrigin='0 0';t.frame.style.transform='scale('+z+')';
+  t.frame.style.left=(off*100)+'%';t.frame.style.right='auto';
+  t.frame.style.width=(frac*100/z)+'%';t.frame.style.height=(100/z)+'%';}
 function spin(on){SPIN.className='spin'+(on?' on':'');}
 // 归一·每标签独立加载态 + 三重兜底(load/error/超时): 单一全屏遮罩只反映「当前活动标签」的加载,
 //   后台标签(如卡住的官网多实例)永不再污染前台其他页面; 超时 15s 强制收起, 杜绝「一直加载中」。
@@ -768,7 +800,7 @@ function setLoading(id,on){var t=tabs[id];if(!t){spin(!!on);return;}
   t.loading=!!on;_clrLoadTO(t);
   if(on){t._loadTO=setTimeout(function(){t.loading=false;t._loadTO=null;if(active===id)spin(false);},15000);}
   if(active===id)spin(!!on);}
-function closeTab(id){var t=tabs[id];if(!t)return;_clrLoadTO(t);if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];order=order.filter(function(x){return x!==id;});if(id.indexOf('board:')===0){var _bt=id.slice(6);var _b=BOARDS[_bt];if(_b){if(_b.url){try{URL.revokeObjectURL(_b.url)}catch(e){}}delete BOARDS[_bt];}}else{vscode.postMessage({type:'closed',id:id});}if(active===id){active=null;if(order.length)setActive(order[order.length-1]);}sync();schedPersist();}
+function closeTab(id){var t=tabs[id];if(!t)return;_clrLoadTO(t);if(id===splitId)splitId=null;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];order=order.filter(function(x){return x!==id;});if(id.indexOf('board:')===0){var _bt=id.slice(6);var _b=BOARDS[_bt];if(_b){if(_b.url){try{URL.revokeObjectURL(_b.url)}catch(e){}}delete BOARDS[_bt];}}else{vscode.postMessage({type:'closed',id:id});}if(active===id){active=null;if(order.length)setActive(order[order.length-1]);}sync();schedPersist();}
 function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[id].url=m.url;tabs[id].frame.setAttribute('src',m.url);setLoading(id,true);}setActive(id);return;}
   var btn=document.createElement('div');btn.className='tab';
   var dot=document.createElement('span');dot.className='dot'+(m.status?(' '+m.status):'');btn.appendChild(dot);
@@ -1039,7 +1071,7 @@ document.getElementById('bExt').onclick=function(){var t=tabs[active];if(t)vscod
 document.getElementById('ovClose').onclick=hideOverlay;
 ADDR.addEventListener('keydown',function(e){if(e.key==='Enter')navigate(ADDR.value);});
 document.addEventListener('click',function(){if(MENU.className)MENU.className='';});
-window.addEventListener('keydown',function(e){if(e.key==='Escape'){if(FBAR&&FBAR.className){closeFind();e.preventDefault();return;}if(TCTX&&TCTX.className){TCTX.className='';return;}}if(e.ctrlKey&&(e.key==='f'||e.key==='F')){openFind();e.preventDefault();}else if(e.ctrlKey&&(e.key==='='||e.key==='+')){document.getElementById('bZi').click();e.preventDefault();}else if(e.ctrlKey&&e.key==='-'){document.getElementById('bZo').click();e.preventDefault();}else if(e.ctrlKey&&e.key==='0'){ZL.click();e.preventDefault();}else if(e.ctrlKey&&(e.key==='r'||e.key==='R')){document.getElementById('bRefresh').click();e.preventDefault();}else if(e.ctrlKey&&(e.key==='l'||e.key==='L')){ADDR.focus();ADDR.select();e.preventDefault();}else if(e.ctrlKey&&e.key==='Tab'){cycleTab(e.shiftKey?-1:1);e.preventDefault();}else if(e.ctrlKey&&e.key==='PageDown'){cycleTab(1);e.preventDefault();}else if(e.ctrlKey&&e.key==='PageUp'){cycleTab(-1);e.preventDefault();}});
+window.addEventListener('keydown',function(e){if(e.key==='Escape'){if(FBAR&&FBAR.className){closeFind();e.preventDefault();return;}if(TCTX&&TCTX.className){TCTX.className='';return;}}if(e.ctrlKey&&(e.key==='f'||e.key==='F')){openFind();e.preventDefault();}else if(e.ctrlKey&&(e.key==='='||e.key==='+')){document.getElementById('bZi').click();e.preventDefault();}else if(e.ctrlKey&&e.key==='-'){document.getElementById('bZo').click();e.preventDefault();}else if(e.ctrlKey&&e.key==='0'){ZL.click();e.preventDefault();}else if(e.ctrlKey&&(e.key==='r'||e.key==='R')){document.getElementById('bRefresh').click();e.preventDefault();}else if(e.ctrlKey&&(e.key==='l'||e.key==='L')){ADDR.focus();ADDR.select();e.preventDefault();}else if(e.ctrlKey&&e.key==='Tab'){cycleTab(e.shiftKey?-1:1);e.preventDefault();}else if(e.ctrlKey&&e.key==='PageDown'){cycleTab(1);e.preventDefault();}else if(e.ctrlKey&&e.key==='PageUp'){cycleTab(-1);e.preventDefault();}else if(e.ctrlKey&&(e.key==='w'||e.key==='W')){if(active)closeTab(active);e.preventDefault();}else if(e.ctrlKey&&(e.key==='\\\\'||e.key==='|')){if(active)toggleSplitWith(active);e.preventDefault();}});
 // ── 归一·浏览器交互(对照 Chrome/Edge): 标签横向滚轮 / 拖拽排序 / 右键菜单 / 页内查找(Ctrl+F·不外跳) ──
 var _dragId=null;
 BAR.addEventListener('wheel',function(e){if(e.deltaY&&Math.abs(e.deltaY)>=Math.abs(e.deltaX||0)){BAR.scrollLeft+=e.deltaY;e.preventDefault();}},{passive:false});
@@ -1056,6 +1088,7 @@ function _closeRight(id){var i=order.indexOf(id);if(i<0)return;var ids=order.sli
 function openTabCtx(x,y,id){var t=tabs[id];if(!t)return;var isB=(id.indexOf('board:')===0);
   var rows=[['⟳ 刷新此页','reload']];
   if(!isB)rows.push(['🔗 复制链接','copy'],['↗ 系统浏览器打开','ext']);
+  rows.push(['SEP'],[(splitId?'▣ 退出分屏':'▣ 与当前页分屏并排'),'split']);
   rows.push(['SEP'],['✕ 关闭','close'],['✕ 关闭其他','others'],['✕ 关闭右侧','right']);
   var h='';for(var i=0;i<rows.length;i++){h+=(rows[i][0]==='SEP')?'<div class="sep"></div>':('<div class="ci" data-a="'+rows[i][1]+'">'+rows[i][0]+'</div>');}
   TCTX.innerHTML=h;TCTX.style.left=Math.min(x,window.innerWidth-170)+'px';TCTX.style.top=Math.min(y,window.innerHeight-230)+'px';TCTX.className='on';
@@ -1065,9 +1098,17 @@ function openTabCtx(x,y,id){var t=tabs[id];if(!t)return;var isB=(id.indexOf('boa
     else if(a==='ext'){if(t.url)vscode.postMessage({type:'openExternal',url:t.url});}
     else if(a==='close'){closeTab(id);}
     else if(a==='others'){_closeOthers(id);}
-    else if(a==='right'){_closeRight(id);}};}}
+    else if(a==='right'){_closeRight(id);}
+    else if(a==='split'){toggleSplitWith(id);}};}}
 document.addEventListener('click',function(){if(TCTX.className)TCTX.className='';});
-function bindTabBtn(btn,id){enableTabDnD(btn,id);btn.addEventListener('contextmenu',function(e){e.preventDefault();e.stopPropagation();openTabCtx(e.clientX,e.clientY,id);});}
+function bindTabBtn(btn,id){enableTabDnD(btn,id);btn.addEventListener('contextmenu',function(e){e.preventDefault();e.stopPropagation();openTabCtx(e.clientX,e.clientY,id);});btn.addEventListener('auxclick',function(e){if(e.button===1){e.preventDefault();closeTab(id);}});}
+// 分屏中缝拖拽调比例(拖拽时置 iframe pointer-events:none, 防子帧吞掉 mousemove)
+if(SBAR){SBAR.addEventListener('mousedown',function(e){if(!_splitOn())return;e.preventDefault();SBAR.classList.add('drag');
+  for(var kk in tabs)tabs[kk].frame.style.pointerEvents='none';
+  function mv(ev){var r=S.getBoundingClientRect();var ratio=(ev.clientX-r.left)/(r.width||1);ratio=Math.max(.15,Math.min(.85,ratio));splitRatio=ratio;
+    if(tabs[active])applyZoom(tabs[active]);if(tabs[splitId])applyZoom(tabs[splitId]);SBAR.style.left=(ratio*100)+'%';}
+  function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up);SBAR.classList.remove('drag');for(var kk in tabs)tabs[kk].frame.style.pointerEvents='';schedPersist&&schedPersist();}
+  document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);});}
 var FBAR=document.getElementById('find'),FQ=document.getElementById('fQ'),FINFO=document.getElementById('fInfo');
 function activeWin(){var t=tabs[active];try{return t&&t.frame?t.frame.contentWindow:null;}catch(e){return null;}}
 function openFind(){if(!active){daoToast('请先打开一个网页',true);return;}FBAR.className='on';FQ.focus();FQ.select();}
