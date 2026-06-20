@@ -113,7 +113,7 @@ function runShell(){
     catch(e){ pre.textContent=r; }
   },30);
 }
-try{ var v=localStorage.getItem('rtflow.ver'); if(v) document.getElementById('foot').textContent='Devin Cloud 手机版 · v'+v+' · 道法自然'; }catch(e){}
+try{ var v=(N.appVer&&N.appVer())||localStorage.getItem('rtflow.ver'); if(v){ document.getElementById('foot').textContent='Devin Cloud 手机版 · v'+v+' · 道法自然'; localStorage.setItem('rtflow.ver',v); } }catch(e){}
 refresh();
 setInterval(refresh, 4000);
 </script>
