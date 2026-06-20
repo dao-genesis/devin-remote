@@ -1,6 +1,6 @@
 {
-  "versionCode": 95,
-  "versionName": "0.35.2",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.2/DevinCloud-mobile-v0.35.2.apk",
-  "notes": "v0.35.2 · 在线自更新整链路根治 (道法自然·下载→落地→认领→校验→安装→净化, 环环不丢)。病灶: 更新下载用内存字段 updateDlId/updateApkFile 记账, 一旦下载途中 App 进程被杀/Activity 重建, 字段清零 → 完成广播认不出是更新包 → 被当普通下载: 搬进保险箱+记进「下载库」却从不唤起安装 (故面板里堆出一排 DevinCloud-update.apk, 且原文件被搬走/清理后显示「文件已删」); 或字段半丢时报「更新包未找到」。叠加: 镜像/反代偶发返回 HTML 错误页被当 .apk 存下 → 系统「解析包出现问题」。修法: (1) 更新包用固定文件名 DevinCloud-update.apk 落 app 私有 Download, 下载 id 持久化到 SharedPreferences → 据 id 或文件名三重认领, 进程重建也不漏认、绝不混入下载库; (2) 安装前严校验 (文件>1MB + ZIP 魔数 PK + getPackageArchiveInfo 包名匹配), 非法包自动删并换下一个镜像源重试, 试遍才报错; (3) 启动时认领上次未竟下载 (广播漏收也能续装), 残留旧包/坏包自动清理; (4) 一次性净化历史误记进下载库的更新包条目。自此点更新即可稳定: 下载完成自动唤起安装器, 不再解析失败/找不到/被删。"
+  "versionCode": 96,
+  "versionName": "0.35.3",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.35.3/DevinCloud-mobile-v0.35.3.apk",
+  "notes": "v0.35.3 · 浏览器公网访问根治：默认把「零账号中继网控台 /console」作为公网入口交给你（任意浏览器直接打开即与 APK 同款操作：实时镜像+反向操控+橙色在场标签），不再依赖被网络封锁的 cloudflared，也不再把已掉线的免账号 SSH 隧道当「当前生效通道」对外广播。修法：穿透面板 _bestPublic 改为对齐本源——默认零账号中继 Worker、隧道仅作冗余；新增 _bestWeb 永远优先 /console；快速接入/接入文档/复制公网网址均以浏览器直开网址为首选，RPC /relay 明确标注为给云端 Agent/curl 用。隧道掉线时浏览器入口仍稳定可用。"
 }
