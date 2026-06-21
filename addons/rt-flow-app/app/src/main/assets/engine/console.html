@@ -318,15 +318,44 @@
     }); }).finally(function(){ if(to) clearTimeout(to); });
   }
 
-  // 资源原文 (板块 HTML / 引擎 JS), 取自手机 APK 真身, 缓存复用。
+  // 资源原文 (板块 HTML / 引擎 JS) = 全网一致的静态死文件 → 走公共 CDN(jsDelivr)直取。
+  //   旧架构的根本瓶颈: 板块 HTML + 其 JS 依赖近 200KB、需经"手机弱网中继"分 4 次往返取回,
+  //   任一次在弱网/手机后台积压下超时, 板块就空白/「加载失败」→ 整台「静态死网页」。
+  //   静态资源本与手机无关(GitHub main 即真源), 故改由 CDN 边缘直发(实测手机端 1.5~2.3s 取回 switch.html);
+  //   CDN 全部失败(极端网络)才回退手机 APK 真身, 绝不退化。数据(Native.*)仍走中继 → 道并行而不相悖。
   var ASSETS = Object.create(null);
-  function asset(name){
-    if(ASSETS[name]!=null) return Promise.resolve(ASSETS[name]);
+  var CDN_BASES = [
+    "https://fastly.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/",
+    "https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/"
+  ];
+  function fetchTimeout(url, ms){
+    return new Promise(function(resolve, reject){
+      var done=false, ctl=(typeof AbortController!=="undefined")?new AbortController():null;
+      var to=setTimeout(function(){ if(!done){ done=true; try{ctl&&ctl.abort();}catch(e){} reject(new Error("timeout")); } }, ms||9000);
+      fetch(url, ctl?{cache:"no-store",signal:ctl.signal}:{cache:"no-store"})
+        .then(function(r){ if(!r.ok) throw new Error("http "+r.status); return r.text(); })
+        .then(function(t){ if(!done){ done=true; clearTimeout(to); resolve(t); } })
+        .catch(function(e){ if(!done){ done=true; clearTimeout(to); reject(e); } });
+    });
+  }
+  function assetFromCdn(name, i){
+    i=i||0; if(i>=CDN_BASES.length) return Promise.reject(new Error("cdn_all_failed"));
+    return fetchTimeout(CDN_BASES[i]+name, 9000).then(function(t){
+      if(!t || t.indexOf("Couldn't find")>=0 || t.indexOf("Package size exceeded")>=0) throw new Error("bad_cdn");
+      return t;
+    }).catch(function(){ return assetFromCdn(name, i+1); });
+  }
+  function assetFromPhone(name){
     return relay("/api/asset", { name:name }, 45000).then(function(res){
       if(res.status!==200 || !res.body || !res.body.ok)
         throw new Error("取资源失败 "+name+" ("+((res.body&&res.body.error)||res.status)+")");
-      ASSETS[name] = res.body.text; return res.body.text;
+      return res.body.text;
     });
+  }
+  function asset(name){
+    if(ASSETS[name]!=null) return Promise.resolve(ASSETS[name]);
+    return assetFromCdn(name).catch(function(){ return assetFromPhone(name); })
+      .then(function(txt){ ASSETS[name]=txt; return txt; });
   }
   function b64(str){ try{ return btoa(unescape(encodeURIComponent(str))); }catch(e){ return btoa(str); } }
 
