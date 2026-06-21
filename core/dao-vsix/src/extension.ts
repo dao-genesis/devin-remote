@@ -1442,6 +1442,37 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         return await genericWebProxy(target);
     }
 
+    // ── 归一 · 拖拽上传桥数据源 (对齐手机 APK: 拖文件=上传该文件 / 拖会话=上传该会话 MD) ──
+    //   网页内注入的 drop 桥与外壳同源, 落点后经此同源端点取字节 → 合成 File 喂入页面上传框。
+    // /__dlfile: 下载悬浮窗内文件字节 (沙箱限定 downloads 目录, 防路径穿越)。
+    if (route === '/__dlfile') {
+        const p = url.searchParams.get('p') || '';
+        try {
+            const dir = path.resolve(daoDownloadsDir());
+            const rp = path.resolve(p);
+            if (rp.indexOf(dir) !== 0 || !fs.existsSync(rp) || !fs.statSync(rp).isFile()) {
+                return { _proxy: true, status: 404, contentType: 'text/plain; charset=utf-8', body: '未找到该文件或越权' };
+            }
+            const buf = fs.readFileSync(rp);
+            const nm = path.basename(rp).replace(/^[a-z0-9]+-/i, '') || 'download';
+            return { _proxy: true, status: 200, contentType: 'application/octet-stream', binary: true, body: buf.toString('base64'), headers: { 'Content-Disposition': 'attachment; filename="' + nm.replace(/["\r\n]/g, '_') + '"' } };
+        } catch (e) { return { _proxy: true, status: 500, contentType: 'text/plain; charset=utf-8', body: 'read error' }; }
+    }
+    // /__convmd: 会话 MD (优先备份最新·无则实时 getEventStream 导出) → 拖拽对话到网页时合成 .md 上传。
+    if (route === '/__convmd') {
+        const rtintMd = _rtflowModule && _rtflowModule._internals;
+        const email = url.searchParams.get('email') || '';
+        const sid = url.searchParams.get('sid') || '';
+        let md = null;
+        try { if (rtintMd && typeof rtintMd.resolveConvMd === 'function') md = await rtintMd.resolveConvMd(email, sid); } catch (e) { md = null; }
+        if (!md || !md.text) return { _proxy: true, status: 404, contentType: 'text/plain; charset=utf-8', body: '无法导出该会话 MD' };
+        return { _proxy: true, status: 200, contentType: 'text/markdown; charset=utf-8', body: md.text, headers: { 'Content-Disposition': 'attachment; filename="' + String(md.name || 'conversation.md').replace(/["\r\n]/g, '_') + '"' } };
+    }
+    // /__daobridge.js: 拖拽上传桥脚本资产 (各代理页注入 <script src> 引用)。
+    if (route === '/__daobridge.js') {
+        return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoDropBridgeJs(), headers: { 'Cache-Control': 'no-store' } };
+    }
+
     // 官网 SPA 根路径资源/接口 → 透传 app.devin.ai
     if (isAppProxyPassthrough(route)) {
         return await devinCloudProxyRoute('/devin-cloud' + route, url, req, 'devin', res);
@@ -9350,10 +9381,83 @@ function daoSaveDownload(name: string, buf: Buffer, ct: string, src: string): an
 //   + 注入 <base>(相对资源回源直载) + 注入链接/表单/window.open 拦截(改写经本代理 → 站内导航不外跳)。
 //   不注入任何 Devin 认证(隐私/安全: 外站不应拿到本地登录态)。复刻手机端 APK 站内搜索体验。
 // ═══════════════════════════════════════════════════════════
-async function genericWebProxy(targetUrl: string, depth: number = 0): Promise<any> {
-    const errPage = (msg: string, href?: string) => {
+function _dechunk(buf) {
+    const out = [];
+    let off = 0;
+    while (off < buf.length) {
+        const nl = buf.indexOf('\r\n', off);
+        if (nl < 0) break;
+        const sizeHex = buf.slice(off, nl).toString('latin1').trim().split(';')[0];
+        const size = parseInt(sizeHex, 16);
+        if (isNaN(size) || size <= 0) break;
+        const start = nl + 2;
+        if (start + size > buf.length) { out.push(buf.slice(start)); break; }
+        out.push(buf.slice(start, start + size));
+        off = start + size + 2;
+    }
+    return Buffer.concat(out);
+}
+// 道·经本机 VPN/代理 CONNECT 隧道发起原生 GET, 解析原始 HTTP 响应(状态/头/体)。直连被墙站点(GFW RST)的兜底通路。
+function fetchViaTunnel(u, headers, timeoutMs) {
+    return new Promise((resolve) => {
+        let done = false;
+        const fin = (r) => { if (!done) { done = true; resolve(r); } };
+        createProxyTunnel(u.hostname).then((sock) => {
+            if (!sock) { fin(null); return; }
+            const bufs = [];
+            const to = setTimeout(() => { try { sock.destroy(); } catch (e) { /* 守柔 */ } fin(null); }, timeoutMs || 16000);
+            const parseAll = () => {
+                clearTimeout(to);
+                if (done) return;
+                const all = Buffer.concat(bufs);
+                const idx = all.indexOf('\r\n\r\n');
+                if (idx < 0) { fin(null); return; }
+                const head = all.slice(0, idx).toString('latin1').split('\r\n');
+                let bodyBuf = all.slice(idx + 4);
+                const m = (head[0] || '').match(/^HTTP\/\d\.\d\s+(\d+)/);
+                const status = m ? parseInt(m[1]) : 0;
+                const hdrs = {};
+                for (let i = 1; i < head.length; i++) { const c = head[i].indexOf(':'); if (c > 0) { const k = head[i].slice(0, c).trim().toLowerCase(); const v = head[i].slice(c + 1).trim(); hdrs[k] = hdrs[k] ? (hdrs[k] + ', ' + v) : v; } }
+                if (String(hdrs['transfer-encoding'] || '').toLowerCase().indexOf('chunked') >= 0) bodyBuf = _dechunk(bodyBuf);
+                fin({ status: status, headers: hdrs, raw: bodyBuf });
+            };
+            sock.on('data', (c) => bufs.push(c));
+            sock.on('end', parseAll);
+            sock.on('close', parseAll);
+            sock.on('error', () => { clearTimeout(to); fin(null); });
+            let reqStr = 'GET ' + ((u.pathname || '/') + (u.search || '')) + ' HTTP/1.1\r\n';
+            const h = Object.assign({}, headers, { Host: u.host, Connection: 'close' });
+            for (const k of Object.keys(h)) reqStr += k + ': ' + h[k] + '\r\n';
+            reqStr += '\r\n';
+            try { sock.write(reqStr); } catch (e) { clearTimeout(to); fin(null); }
+        }).catch(() => fin(null));
+    });
+}
+// ═══════════════════════════════════════════════════════════
+// 归一 · 拖拽上传桥 (注入所有同源代理页) — 对齐手机 APK: 拖文件=上传该文件 / 拖会话=上传该会话最新 MD。
+//   外壳侧 dragstart 写入 application/x-dao-file{path,name} 或 application/x-dao-conv{email,sid,title};
+//   落点页(同源)经此桥拿到标记 → fetch /__dlfile|/__convmd 取字节 → 合成 File → 喂入页面 file input + 合成 drop。
+//   独立 .js 资产经 /__daobridge.js 直出 (避免内联脚本的转义/CSP 噪声), 各代理页仅注入一行 <script src>。
+// ═══════════════════════════════════════════════════════════
+function daoDropBridgeJs() {
+    return [
+        "(function(){try{",
+        "if(window.__daoDropBridge)return;window.__daoDropBridge=1;",
+        "var ORIGIN=location.origin;",
+        "function toast(t){try{var d=document.createElement('div');d.textContent=t;d.style.cssText='position:fixed;z-index:2147483647;left:50%;top:18px;transform:translateX(-50%);background:#11161d;color:#cdd3de;border:1px solid #2a313b;border-radius:8px;padding:8px 14px;font:13px sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.45)';(document.body||document.documentElement).appendChild(d);setTimeout(function(){try{d.parentNode.removeChild(d);}catch(e){}},2800);}catch(e){}}",
+        "function mkFile(buf,ct,nm){try{return new File([buf],nm,{type:ct||'application/octet-stream'});}catch(e){var b=new Blob([buf],{type:ct||'application/octet-stream'});try{b.name=nm;}catch(e2){}return b;}}",
+        "async function fetchFile(u,nm){var r=await fetch(u,{credentials:'same-origin'});if(!r.ok)throw new Error('HTTP '+r.status);var ct=r.headers.get('content-type')||'application/octet-stream';var buf=await r.arrayBuffer();return mkFile(buf,ct,nm);}",
+        "function feed(target,file){var done=false;try{var dt=new DataTransfer();dt.items.add(file);var inps=document.querySelectorAll('input[type=file]');for(var k=0;k<inps.length;k++){try{inps[k].files=dt.files;inps[k].dispatchEvent(new Event('input',{bubbles:true}));inps[k].dispatchEvent(new Event('change',{bubbles:true}));done=true;}catch(e){}}try{var ev;try{ev=new DragEvent('drop',{bubbles:true,cancelable:true});Object.defineProperty(ev,'dataTransfer',{value:dt});}catch(e2){ev=new Event('drop',{bubbles:true,cancelable:true});ev.dataTransfer=dt;}(target||document.body).dispatchEvent(ev);done=true;}catch(e3){}}catch(e){}return done;}",
+        "document.addEventListener('dragover',function(e){try{var ts=(e.dataTransfer&&e.dataTransfer.types)||[];var has=false;for(var i=0;i<ts.length;i++){if(ts[i]==='application/x-dao-file'||ts[i]==='application/x-dao-conv')has=true;}if(has){e.preventDefault();try{e.dataTransfer.dropEffect='copy';}catch(x){}}}catch(x){}},true);",
+        "document.addEventListener('drop',function(e){try{var dtt=e.dataTransfer;if(!dtt)return;var fp='',cv='';try{fp=dtt.getData('application/x-dao-file');}catch(x){}try{cv=dtt.getData('application/x-dao-conv');}catch(x){}if(!fp&&!cv)return;e.preventDefault();e.stopPropagation();var tgt=e.target||document.body;toast('\\u23f3 \\u6b63\\u5728\\u4e0a\\u4f20\\u2026');(async function(){try{var f;if(fp){var o=JSON.parse(fp);f=await fetchFile(ORIGIN+'/__dlfile?p='+encodeURIComponent(o.path||''),(o.name||'file'));}else{var c=JSON.parse(cv);f=await fetchFile(ORIGIN+'/__convmd?email='+encodeURIComponent(c.email||'')+'&sid='+encodeURIComponent(c.sid||''),((c.title||c.sid||'conversation')+'.md'));}var ok=feed(tgt,f);toast(ok?('\\u2705 \\u5df2\\u6295\\u9012\\u4e0a\\u4f20 '+f.name):('\\u26a0 \\u672a\\u627e\\u5230\\u4e0a\\u4f20\\u6846 '+f.name));}catch(err){toast('\\u2715 \\u4e0a\\u4f20\\u5931\\u8d25: '+((err&&err.message)||err));}})();}catch(x){}},true);",
+        "}catch(e){}})();"
+    ].join("");
+}
+
+async function genericWebProxy(targetUrl, depth = 0) {
+    const errPage = (msg, href) => {
         const safeHref = (href || '').replace(/"/g, '&quot;');
-        const host = (() => { try { return new URL(href || targetUrl).host; } catch { return ''; } })();
+        const host = (() => { try { return new URL(href || targetUrl).host; } catch (e359) { return ''; } })();
         return {
             _proxy: true, status: 200, contentType: 'text/html; charset=utf-8',
             body: '<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -9371,96 +9475,126 @@ async function genericWebProxy(targetUrl: string, depth: number = 0): Promise<an
         };
     };
     if (depth > 6) return errPage('重定向过多', targetUrl);
-    let u: URL;
-    try { u = new URL(targetUrl); } catch { return errPage('非法网址', targetUrl); }
+    let u;
+    try { u = new URL(targetUrl); } catch (e360) { return errPage('非法网址', targetUrl); }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return errPage('仅支持 http/https', targetUrl);
     return await new Promise((resolve) => {
         let done = false;
-        const finish = (v: any) => { if (done) return; done = true; try { clearTimeout(hardTimer); } catch { /* 守柔 */ } try { proxyReq.destroy(); } catch { /* 守柔 */ } resolve(v); };
+        let proxyReq = null;
+        let triedTunnel = false;
+        const finish = (v) => { if (done) return; done = true; try { clearTimeout(hardTimer); } catch (e361) { /* 守柔 */ } try { if (proxyReq) proxyReq.destroy(); } catch (e362) { /* 守柔 */ } resolve(v); };
         // 硬墙超时: 不论 socket 在连接/发送/接收哪一阶段卡住, 到点即返站内错误页, 杜绝隧道层 502 直出。
         const hardTimer = setTimeout(() => finish(errPage('加载超时(网络不可达或站点过慢)', u.href)), 18000);
         const isHttps = u.protocol === 'https:';
         const lib = isHttps ? https : http;
-        const options: any = {
+        const reqHeaders = {
+            'User-Agent': DEVIN_UA,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Upgrade-Insecure-Requests': '1',
+            'sec-ch-ua': '"Chromium";v="124", "Not.A/Brand";v="24"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Referer': u.origin + '/',
+            'Connection': 'keep-alive',
+            'Host': u.host,
+        };
+        const options = {
             hostname: u.hostname,
             port: u.port ? parseInt(u.port) : (isHttps ? 443 : 80),
             path: (u.pathname || '/') + (u.search || ''),
             method: 'GET',
-            headers: {
-                'User-Agent': DEVIN_UA,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Upgrade-Insecure-Requests': '1',
-                'sec-ch-ua': '"Chromium";v="124", "Not.A/Brand";v="24"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"Windows"',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Referer': u.origin + '/',
-                'Connection': 'keep-alive',
-                'Host': u.host,
-            },
+            headers: reqHeaders,
             timeout: 14000,
             agent: false,
         };
         if (isHttps) options.rejectUnauthorized = false;
-        const proxyReq = lib.request(options, (pr: any) => {
+        // 道·「天下之至柔驰骋于天下之致坚」— 响应体统一处理: 解压 → 下载登记 → HTML 注入(改写链接经同源代理)。直连/隧道两路共用。
+        const processBody = async (sc, headers, raw) => {
+            if (done) return;
+            const ct = String(headers['content-type'] || '');
+            const isHtml = ct.includes('text/html') || ct.includes('application/xhtml');
+            const enc = String(headers['content-encoding'] || '').toLowerCase();
+            const zlib = require('zlib');
+            const body = await new Promise((rr) => {
+                if (enc === 'gzip') zlib.gunzip(raw, (e, b) => rr(e ? raw : b));
+                else if (enc === 'br') zlib.brotliDecompress(raw, (e, b) => rr(e ? raw : b));
+                else if (enc === 'deflate') zlib.inflate(raw, (e, b) => rr(e ? raw : b));
+                else rr(raw);
+            });
+            const cd = String(headers['content-disposition'] || '');
+            if (_isDownloadable(cd, ct)) {
+                // 网页内下载的真实文件 → 落盘登记(供 ⬇下载悬浮窗), 同时回传 attachment 让浏览器原生下载。
+                const fname = _dlFilename(cd, u, ct);
+                try { daoSaveDownload(fname, body, ct, u.href); } catch (e364) { /* 守柔 */ }
+                finish({ _proxy: true, status: sc, contentType: ct || 'application/octet-stream', body: body.toString('base64'), binary: true, headers: { 'Content-Disposition': 'attachment; filename="' + fname.replace(/["\r\n]/g, '_') + '"' } });
+                return;
+            }
+            if (!isHtml) {
+                finish({ _proxy: true, status: sc, contentType: ct || 'application/octet-stream', body: body.toString('base64'), binary: true });
+                return;
+            }
+            let html = body.toString('utf8');
+            const pBase = 'http://127.0.0.1:' + (ws && ws.port ? ws.port : 9921) + '/__web?u=';
+            const inj = '<base href="' + (u.origin + '/').replace(/"/g, '&quot;') + '">'
+                + '<script>(function(){'
+                + 'var PB=' + JSON.stringify(pBase) + ';'
+                + 'var P=((location.origin&&/^https?:/i.test(location.origin))?location.origin+"/__web?u=":PB),B=' + JSON.stringify(u.href) + ';'
+                + 'function ab(h){try{return new URL(h,B).href}catch(e){return ""}}'
+                + 'function go(h){var a=ab(h);if(/^https?:/i.test(a)){window.location.href=P+encodeURIComponent(a);return true}return false}'
+                + 'document.addEventListener("click",function(e){var t=e.target;var a=t&&t.closest?t.closest("a[href]"):null;if(!a)return;var h=a.getAttribute("href");if(!h||h.charAt(0)==="#"||/^(javascript|mailto|tel|data|blob):/i.test(h))return;if(go(h))e.preventDefault();},true);'
+                + 'document.addEventListener("submit",function(e){var f=e.target;if(!f||(f.method||"get").toLowerCase()!=="get")return;try{var u2=new URL(f.getAttribute("action")||B,B);u2.search=new URLSearchParams(new FormData(f)).toString();e.preventDefault();window.location.href=P+encodeURIComponent(u2.href);}catch(x){}},true);'
+                + 'try{window.open=function(u){if(u){go(u)}return null};}catch(e){}'
+                + '})();<\/script>'
+                + '<script src="/__daobridge.js"><\/script>'; // 拖拽上传桥(下载文件/会话MD → 投递页面上传框)
+            html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>' + inj) : (inj + html);
+            finish({ _proxy: true, status: sc, contentType: 'text/html; charset=utf-8', body: html });
+        };
+        // 道·直连被 RST/超时(如 GFW 下 github) → 经本机 VPN/代理 CONNECT 隧道复取一次。与官网代理/MCP 接测同策。
+        const viaTunnel = async (origMsg) => {
+            if (done) return;
+            const tr = await fetchViaTunnel(u, reqHeaders, 16000);
+            if (done) return;
+            if (!tr) { finish(errPage(origMsg || '网络不可达', u.href)); return; }
+            if (tr.status >= 300 && tr.status < 400 && tr.headers['location']) {
+                let loc = String(tr.headers['location']);
+                try { loc = new URL(loc, u.href).href; } catch (e) { /* 守柔 */ }
+                finish(genericWebProxy(loc, depth + 1));
+                return;
+            }
+            await processBody(tr.status || 200, tr.headers, tr.raw);
+        };
+        const onConnErr = (e) => {
+            const msg = (e && e.message) || 'network error';
+            if (!triedTunnel && isHttps && (detectedProxyPort || detectProxyPort())) {
+                triedTunnel = true;
+                viaTunnel(msg);
+                return;
+            }
+            finish(errPage(msg, u.href));
+        };
+        proxyReq = lib.request(options, (pr) => {
             const sc = pr.statusCode || 200;
             // 3xx 重定向: 服务端跟随(相对 Location 按当前 URL 解析), 让 iframe 直接拿到最终页。
             if (sc >= 300 && sc < 400 && pr.headers['location']) {
                 let loc = String(pr.headers['location']);
-                try { loc = new URL(loc, u.href).href; } catch { /* 守柔 */ }
+                try { loc = new URL(loc, u.href).href; } catch (e363) { /* 守柔 */ }
                 pr.resume();
                 finish(genericWebProxy(loc, depth + 1));
                 return;
             }
-            const ct = String(pr.headers['content-type'] || '');
-            const isHtml = ct.includes('text/html') || ct.includes('application/xhtml');
-            const enc = String(pr.headers['content-encoding'] || '').toLowerCase();
-            const chunks: Buffer[] = [];
+            const chunks = [];
             pr.on('error', () => finish(errPage('读取响应失败', u.href)));
-            pr.on('data', (c: Buffer) => chunks.push(c));
-            pr.on('end', async () => {
-                const raw = Buffer.concat(chunks);
-                const zlib = require('zlib');
-                const body: Buffer = await new Promise<Buffer>((rr) => {
-                    if (enc === 'gzip') zlib.gunzip(raw, (e: any, b: Buffer) => rr(e ? raw : b));
-                    else if (enc === 'br') zlib.brotliDecompress(raw, (e: any, b: Buffer) => rr(e ? raw : b));
-                    else if (enc === 'deflate') zlib.inflate(raw, (e: any, b: Buffer) => rr(e ? raw : b));
-                    else rr(raw);
-                });
-                const cd = String(pr.headers['content-disposition'] || '');
-                if (_isDownloadable(cd, ct)) {
-                    // 网页内下载的真实文件 → 落盘登记(供 ⬇下载悬浮窗), 同时回传 attachment 让浏览器原生下载。
-                    const fname = _dlFilename(cd, u, ct);
-                    try { daoSaveDownload(fname, body, ct, u.href); } catch { /* 守柔 */ }
-                    finish({ _proxy: true, status: sc, contentType: ct || 'application/octet-stream', body: body.toString('base64'), binary: true, headers: { 'Content-Disposition': 'attachment; filename="' + fname.replace(/["\r\n]/g, '_') + '"' } });
-                    return;
-                }
-                if (!isHtml) {
-                    finish({ _proxy: true, status: sc, contentType: ct || 'application/octet-stream', body: body.toString('base64'), binary: true });
-                    return;
-                }
-                let html = body.toString('utf8');
-                const pBase = 'http://127.0.0.1:' + (ws && ws.port ? ws.port : 9921) + '/__web?u=';
-                const inj = '<base href="' + (u.origin + '/').replace(/"/g, '&quot;') + '">'
-                    + '<script>(function(){'
-                    + 'var P=' + JSON.stringify(pBase) + ',B=' + JSON.stringify(u.href) + ';'
-                    + 'function ab(h){try{return new URL(h,B).href}catch(e){return ""}}'
-                    + 'function go(h){var a=ab(h);if(/^https?:/i.test(a)){window.location.href=P+encodeURIComponent(a);return true}return false}'
-                    + 'document.addEventListener("click",function(e){var t=e.target;var a=t&&t.closest?t.closest("a[href]"):null;if(!a)return;var h=a.getAttribute("href");if(!h||h.charAt(0)==="#"||/^(javascript|mailto|tel|data|blob):/i.test(h))return;if(go(h))e.preventDefault();},true);'
-                    + 'document.addEventListener("submit",function(e){var f=e.target;if(!f||(f.method||"get").toLowerCase()!=="get")return;try{var u2=new URL(f.getAttribute("action")||B,B);u2.search=new URLSearchParams(new FormData(f)).toString();e.preventDefault();window.location.href=P+encodeURIComponent(u2.href);}catch(x){}},true);'
-                    + 'try{window.open=function(u){if(u){go(u)}return null};}catch(e){}'
-                    + '})();<\/script>';
-                html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>' + inj) : (inj + html);
-                finish({ _proxy: true, status: sc, contentType: 'text/html; charset=utf-8', body: html });
-            });
+            pr.on('data', (c) => chunks.push(c));
+            pr.on('end', () => { processBody(sc, pr.headers, Buffer.concat(chunks)); });
         });
-        proxyReq.on('error', (e: Error) => finish(errPage((e && e.message) || 'network error', u.href)));
-        proxyReq.on('timeout', () => finish(errPage('加载超时', u.href)));
+        proxyReq.on('error', onConnErr);
+        proxyReq.on('timeout', () => { try { proxyReq.destroy(); } catch (e) { /* 守柔 */ } onConnErr(new Error('加载超时')); });
         proxyReq.end();
     });
 }
@@ -9531,7 +9665,9 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
 
     return new Promise((resolve) => {
         const u = new URL(targetUrl);
-        const needsProxy = detectedProxyPort > 0;
+        // 道·直连优先 + 代理兜底: 未被墙站(app.devin.ai 等)直连最快(实测 ~0.3s), 经 Clash 反而 3.7~7.9s 冷开白屏;
+        //   仅当直连被 RST/超时(GFW) 才回退本机代理隧道。与 genericWebProxy/#4 同策。两向各只试一次, 不空转。
+        let _triedProxy = false, _triedDirect = false;
 
         const makeRequest = (hostname: string, port: number, reqPath: string, h: any, isProxyTunnel: boolean = false) => {
             const options: any = {
@@ -9797,22 +9933,27 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                 });
             });
 
-            proxyReq.on('error', (e: Error) => {
-                // 帛书·「反者道之动」— 隧道不通则直连。本机多为直连环境,
-                // detectedProxyPort 误检会致 ECONNREFUSED, 故降级直连源站。
-                if (isProxyTunnel) {
-                    makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, fwdHeaders, false);
-                    return;
+            const _fallback = (errLabel?: string) => {
+                // 直连失败(GFW RST/超时) → 有本机代理则改走代理兜底; 代理失败 → 降级直连。互为兜底, 各只一次。
+                if (!isProxyTunnel && detectedProxyPort > 0 && !_triedProxy) {
+                    _triedProxy = true;
+                    makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, fwdHeaders, { Host: u.hostname }), true);
+                    return true;
                 }
+                if (isProxyTunnel && !_triedDirect) {
+                    _triedDirect = true;
+                    makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, fwdHeaders, false);
+                    return true;
+                }
+                return false;
+            };
+            proxyReq.on('error', (e: Error) => {
+                if (_fallback()) return;
                 resolve({ ok: false, error: 'proxy error: ' + e.message });
             });
             proxyReq.on('timeout', () => {
                 proxyReq.destroy();
-                // 隧道超时同样降级直连源站
-                if (isProxyTunnel) {
-                    makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, fwdHeaders, false);
-                    return;
-                }
+                if (_fallback()) return;
                 resolve({ ok: false, error: 'proxy timeout' });
             });
 
@@ -9851,10 +9992,8 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
         fwdHeaders['Origin'] = upstreamBase;
         fwdHeaders['Referer'] = upstreamBase + '/';
 
-        if (needsProxy) {
-            makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, fwdHeaders, { Host: u.hostname }), true);
-        } else {
-            makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, fwdHeaders, false);
-        }
+        // 直连优先(快); 失败再由 _fallback 回退本机代理隧道(被墙站兜底)。
+        _triedDirect = true;
+        makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, fwdHeaders, false);
     });
 }
