@@ -288,6 +288,9 @@ var _selIds = new Set();
 var _dragSel = { active:false, baseSel:null }; // 长按拖拽快速多选
 var _suspendRender = false;                    // 拖拽选择中暂停重渲, 避免行位跳动
 var _orderIds = null;                          // 上次显示顺序(账号id), 选择中冻结排序
+// 性能: 列表重渲门控 — 内容签名未变就跳过 72 行 innerHTML 重建; 隐藏/输入时延后, 显示时补一次。
+var _lastListHtml = null, _lastOpenKey = "", _renderDirty = false, _renderDeferT = 0;
+function _notVisible(){ try{ return document.hidden || (document.documentElement && document.documentElement.clientWidth===0); }catch(e){ return false; } }
 function _vib(ms){ try{ if(N.vibrate){ N.vibrate(ms||30); return; } }catch(e){} try{ if(navigator.vibrate) navigator.vibrate(ms||30); }catch(e){} }
 function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
 function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
@@ -379,12 +382,31 @@ function _displayOrder(accs){
 // ── 统计 & 渲染 ──
 function render(){
   if(_suspendRender) return;        // 拖拽多选中: 暂停重渲, 防止行位跳动打断选择
+  // 性能: 板块隐藏/后台不可见 → 暂停重渲(标脏), 显示时补一次。消除隐藏板块 iframe 的无谓重排/网络。
+  if(_notVisible()){ _renderDirty=true; return; }
+  // 性能: 用户正在某输入框打字 → 延后重渲, 不与输入抢主线程(消除"打字一卡一卡")。
+  var ae=document.activeElement;
+  if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName||"")){
+    _renderDirty=true; if(!_renderDeferT) _renderDeferT=setTimeout(function(){ _renderDeferT=0; render(); }, 1500); return; }
   var accs=loadAcc();
   var list=document.getElementById("list");
   // 保存当前已展开的详情索引 (重渲不丢)
   var openIx=[]; document.querySelectorAll(".dv-detail.open").forEach(function(d){ openIx.push(d.getAttribute("data-i")); });
   var order=_displayOrder(accs);
-  list.innerHTML = accs.length?order.map(function(i){ return rowHtml(accs[i], i); }).join(""):'<div style="padding:10px 4px;color:#666">暂无账号 · 在上方「添加账号」粘贴</div>';
+  var html = accs.length?order.map(function(i){ return rowHtml(accs[i], i); }).join(""):'<div style="padding:10px 4px;color:#666">暂无账号 · 在上方「添加账号」粘贴</div>';
+  var openKey=openIx.join(",");
+  // 性能核心: 列表内容与展开态都没变 → 跳过昂贵的 72 行 innerHTML 重建 + 展开详情的重复网络拉取(原先每 6s 必发)。
+  var changed = (html!==_lastListHtml) || (openKey!==_lastOpenKey);
+  if(changed){
+    _lastListHtml=html; _lastOpenKey=openKey;
+    list.innerHTML = html;
+    // 把每个账号的实时剩余美金推到它的页签 → 标签条直接看额度。仅在列表实际变化时推, 省每轮 ~72 次原生桥调用。
+    try{ if(N.setTabDollars){ accs.forEach(function(a){ var q=a.quota||{}; var lbl=(typeof q.dPct==="number")?("$"+Math.round(ovDollars(q))):""; N.setTabDollars(a.id||"", lbl); if(a.email) N.setTabDollars((a.email||"").toLowerCase(), lbl); }); } }catch(e){}
+    // 恢复展开 (重建后详情被清空 → 重新挂载+拉取; 内容未变时不重建即不重复拉取)
+    openIx.forEach(function(ix){ var d=document.getElementById("dvDetail"+ix); if(d){ d.classList.add("open"); var a=accs[ix*1]; if(a&&hasAuth(a)){ d.innerHTML='<span style="color:#888">重载…</span>'; dvFetch(a,ix*1,d); } } });
+  }
+  _renderDirty=false;
+  // 头部计数 (廉价文本更新, 每次都做)
   document.getElementById("secCnt").textContent=accs.length;
   document.getElementById("st-cnt").textContent=accs.length;
   var authed=accs.filter(hasAuth).length;
@@ -395,15 +417,11 @@ function render(){
   accs.forEach(function(a){ var q=a.quota; if(q&&typeof q.dPct==="number"){checkedCnt++; var d=ovDollars(q); if(d>0){actCnt++;totalD+=d;}} });
   var sa=document.getElementById("st-act");
   sa.textContent = checkedCnt? (actCnt+"/"+checkedCnt+"激活"+(actCnt>0?" $"+Math.round(totalD):"")) : "";
-  // 把每个账号的实时剩余美金推到它的页签 (显示在状态点左侧, 如 "$5 🟢 对话名") → 标签条直接看额度便于管理。
-  try{ if(N.setTabDollars){ accs.forEach(function(a){ var q=a.quota||{}; var lbl=(typeof q.dPct==="number")?("$"+Math.round(ovDollars(q))):""; N.setTabDollars(a.id||"", lbl); if(a.email) N.setTabDollars((a.email||"").toLowerCase(), lbl); }); } }catch(e){}
   // 当前
   var act=accs.filter(function(x){return x.id===getActive();})[0];
   var ai=document.getElementById("actInfo");
   if(act){ ai.className="act-info"; ai.innerHTML='当前: <b>'+_esc(act.email||act.id)+'</b><span class="tag">'+(hasAuth(act)?"可注入":"需登录")+'</span>'; }
   else { ai.className="act-info empty"; ai.textContent="点 ⚡ 打开某账号的多实例注入浏览器 (即切号)"; }
-  // 恢复展开
-  openIx.forEach(function(ix){ var d=document.getElementById("dvDetail"+ix); if(d){ d.classList.add("open"); var a=accs[ix*1]; if(a&&hasAuth(a)){ d.innerHTML='<span style="color:#888">重载…</span>'; dvFetch(a,ix*1,d); } } });
   // 行内运行计数 (从追踪缓存)
   paintRowRun();
   // 恢复多选打钩态 (跨重渲染持久 → 修复"打钩后自动消失")
@@ -858,6 +876,7 @@ async function _pollOneAcc(a, realNo){
   }catch(e){}
 }
 async function pollTrk(){
+  if(_notVisible()) return;     // 性能: 板块隐藏/后台 → 停轮询, 不再无谓轰网络(消除"刷新很忙")
   if(_trkBusy)return; _trkBusy=true;
   _probeBudget=12; // 每轮事件流探测配额, 控网络开销
   var dot=document.getElementById("monDot"), mstat=document.getElementById("monStat");
@@ -1176,6 +1195,7 @@ async function dvRunAutoCleanNow(){
 }
 var _quotaWarmed=false;   // 冷启动首轮: 全部已登录账号都刷一遍 → 一上来就是活数据, 不再满屏 $--
 async function autoQuotaTick(){
+  if(_notVisible()) return;     // 性能: 板块隐藏/后台 → 暂停额度刷新心跳, 显示时再补
   if(_quotaBusy) return; _quotaBusy=true;
   try{
     var accs=loadAcc().filter(hasAuth);
@@ -1302,8 +1322,11 @@ _loadTrk();          // 先回放上次运行态 → render() 即刻给在跑的
 render();
 paintTrk();          // 详情区也立即铺上缓存的运行清单
 pollTrk();           // 随后实时校正(并发, 近实时)
-window.addEventListener("focus", function(){ render(); pollTrk(); });  // 回到面板即刷新运行态
-document.addEventListener("visibilitychange", function(){ if(!document.hidden) pollTrk(); });
+function _resumeVisible(){ render(); pollTrk(); try{ autoQuotaTick(); }catch(e){} }   // 重新可见: 渲染+运行态+额度各补一次
+window.addEventListener("focus", _resumeVisible);  // 回到面板即刷新
+document.addEventListener("visibilitychange", function(){ if(!document.hidden) _resumeVisible(); });
+// 性能: 板块 iframe 由隐藏(display:none, 视口 0)切到显示会触发 resize → 补一次脏渲染+刷新(否则隐藏期暂停的数据不补)
+window.addEventListener("resize", function(){ if(!_notVisible() && _renderDirty) _resumeVisible(); });
 setInterval(render, 6000);
 // 自调度 + 抖动: 让 pollTrk / autoQuota / autoBackup 三个心跳错峰, 不在同一刻一起轰网络 (消除并发卡顿)。
 function _loop(fn, base, jitter){ (function tick(){ setTimeout(function(){ try{ fn(); }catch(e){} tick(); }, base + Math.floor(Math.random()*jitter)); })(); }

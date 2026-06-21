@@ -25,11 +25,26 @@
   #app{display:flex;flex-direction:column;height:100%}
   #bar{display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bar);
        border-bottom:1px solid var(--border);flex:0 0 auto}
-  #bar button{background:#1c2230;color:var(--fg);border:1px solid var(--input-b);
-       border-radius:7px;height:32px;min-width:34px;padding:0 9px;font-size:14px;cursor:pointer}
-  #bar button:active{background:#283041}
-  #dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 2px #0e1116}
-  #dot.on{background:var(--green)} #dot.off{background:var(--red)}
+  /* 与原生 APK buildChrome 同款: #21262d 芯片按钮, 两行工具栏 */
+  #bar button,#bar2 button{background:#21262d;color:var(--fg);border:1px solid var(--input-b);
+       border-radius:7px;height:32px;min-width:30px;padding:0 11px;font-size:14px;cursor:pointer;flex:0 0 auto}
+  #bar button:active,#bar2 button:active{background:#283041}
+  /* 第二行: 缩放滑块 + 收藏/刷新/下载/全服通 (复刻原生 btnRow) */
+  #bar2{display:flex;align-items:center;gap:6px;padding:1px 8px 4px;background:var(--bar);
+        border-bottom:1px solid var(--border);flex:0 0 auto}
+  #bar2 .act{font-size:15px;padding:0 12px}
+  #zicon{flex:0 0 auto;font-size:14px;color:#8b949e;cursor:pointer;padding:0 1px;user-select:none}
+  #zoom{flex:1 1 auto;min-width:40px;height:26px;accent-color:var(--green);cursor:pointer}
+  #zlabel{flex:0 0 auto;min-width:40px;text-align:center;font-size:13px;color:var(--fg)}
+  #menuPop .hd{padding:7px 12px 5px;font-size:11px;color:var(--muted)}
+  #menuPop .hd b.ok{color:var(--green)} #menuPop .hd b.bad{color:var(--red)}
+  /* 下载面板 (复刻原生悬浮下载管理) */
+  #dlPanel{position:absolute;top:46px;right:8px;width:min(340px,92vw);max-height:74vh;overflow-y:auto;
+           background:#11161e;border:1px solid var(--border);border-radius:12px;padding:10px;display:none;z-index:60;box-shadow:0 14px 40px #000a}
+  #dlPanel.show{display:block}
+  #dlPanel h4{margin:2px 4px 8px;font-size:13px;display:flex;align-items:center;gap:6px}
+  #dlPanel .dlrow{padding:8px 9px;border:1px solid var(--input-b);border-radius:8px;margin-bottom:6px;font-size:12px;word-break:break-all}
+  #dlPanel .dlrow .nm{color:var(--green)} #dlPanel .empty{color:var(--muted);font-size:12px;padding:10px 6px;text-align:center}
   #addr{flex:1;min-width:60px;height:32px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);
         border-radius:8px;padding:0 11px;font-size:13px;outline:none}
   #addr:focus{border-color:var(--btn)} #addr::placeholder{color:#6e7681}
@@ -92,14 +107,23 @@
 <div id="app">
   <div id="bar">
     <button id="menuBtn" title="菜单">&#9776;</button>
-    <span id="dot" title="中继连接状态"></span>
-    <input id="addr" inputmode="url" autocomplete="off" spellcheck="false" placeholder="输入网址 / 板块 (切号·穿透·对话…)">
-    <button id="reload" title="重载">&#8635;</button>
+    <input id="addr" inputmode="url" autocomplete="off" spellcheck="false" placeholder="输入网址 / 搜索">
+    <button id="trBtn" title="翻译整页">译</button>
     <button id="go" title="前往">&#8594;</button>
+  </div>
+  <div id="bar2">
+    <span id="zicon" title="点按复位 100%">&#128269;</span>
+    <input id="zoom" type="range" min="50" max="170" value="100" title="整页缩放">
+    <span id="zlabel">100%</span>
+    <button id="starBtn" class="act" title="收藏本页">&#9734;</button>
+    <button id="reload" class="act" title="重载">&#8635;</button>
+    <button id="dlBtn" class="act" title="下载管理">&#128229;</button>
+    <button id="daoBtn" class="act" title="全服通">&#128450;</button>
   </div>
   <div id="strip"><button id="plus" title="新标签">+</button></div>
   <div id="frames">
     <div id="menuPop"></div>
+    <div id="dlPanel"><h4>&#128229; 下载</h4><div id="dlList"></div></div>
     <div id="launch"><div id="launchCard">
       <h3>新标签 — 选择板块, 或打开任意网址 / Devin 对话</h3>
       <div class="grid" id="segGrid"></div>
@@ -230,6 +254,7 @@
       var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name || "download";
       document.body.appendChild(a); a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+      try { if (window.parent && window.parent !== window) window.parent.postMessage({ __rtflow: "download", name: name || "download" }, "*"); } catch (e) {}
       return name || "download";
     } catch (e) { return ""; }
   }
@@ -426,7 +451,7 @@
     var fr=document.createElement("iframe"); fr.className="hidden";
     fr.setAttribute("allow","clipboard-read; clipboard-write");
     fr.referrerPolicy="no-referrer";
-    t.fr=fr; frames.appendChild(fr);
+    t.fr=fr; frames.appendChild(fr); applyZoomTo(fr);
     var ld=document.createElement("div"); ld.className="load";
     ld.innerHTML='<div class="sp"></div><div>正在原生加载 <b>'+p.label+'</b> …<br><span style="color:#6e7681">取真实页面与依赖 · 首次稍候</span></div>';
     t.ld=ld; frames.appendChild(ld);
@@ -497,6 +522,42 @@
     selectTab(tabs[Math.max(0,active)].id);
   }
 
+  // ── 整页缩放 (复刻原生 zoom 滑块 50%–170%, 作用于当前及后续板块 iframe) ──
+  var pageZoom=(function(){ var z=parseInt(localStorage.getItem("rtflow.console.zoom")||"100",10); return (z>=50&&z<=170)?z:100; })();
+  function applyZoomTo(fr){ try{ fr.style.zoom=(pageZoom/100); }catch(e){} }
+  function applyZoomAll(){ tabs.forEach(function(t){ if(t.fr) applyZoomTo(t.fr); }); }
+  var zoomEl=document.getElementById("zoom"), zlabel=document.getElementById("zlabel");
+  zoomEl.value=pageZoom; zlabel.textContent=pageZoom+"%";
+  zoomEl.addEventListener("input", function(){ pageZoom=parseInt(zoomEl.value,10)||100; zlabel.textContent=pageZoom+"%";
+    try{ localStorage.setItem("rtflow.console.zoom", String(pageZoom)); }catch(e){} applyZoomAll(); });
+  document.getElementById("zicon").onclick=function(){ pageZoom=100; zoomEl.value=100; zlabel.textContent="100%";
+    try{ localStorage.setItem("rtflow.console.zoom","100"); }catch(e){} applyZoomAll(); };
+
+  // ── 译 翻译 (板块均为内部中文页 → 与原生「内部页不可翻译」一致) ──
+  document.getElementById("trBtn").onclick=function(){ toast("板块为内部中文页, 无需翻译; Devin 对话已在你本机浏览器新标签打开"); };
+
+  // ── ☆ 收藏当前板块 ──
+  function bookmarks(){ try{ return JSON.parse(localStorage.getItem("rtflow.console.bm")||"[]"); }catch(e){ return []; } }
+  function saveBookmarks(a){ try{ localStorage.setItem("rtflow.console.bm", JSON.stringify(a)); }catch(e){} }
+  document.getElementById("starBtn").onclick=function(){ var t=tabs[active]; if(!t||!t.pageKey){ toast("无可收藏的板块"); return; }
+    var a=bookmarks(), i=a.indexOf(t.pageKey);
+    if(i>=0){ a.splice(i,1); toast("已取消收藏 "+(t.title||t.pageKey)); } else { a.push(t.pageKey); toast("已收藏 "+(t.title||t.pageKey)); }
+    saveBookmarks(a); };
+
+  // ── 📥 下载管理 (网页端下载交浏览器下载器; 列出本会话经控台触发的下载) ──
+  var dlPanel=document.getElementById("dlPanel"), dlList=document.getElementById("dlList");
+  window.__rnDownloads=window.__rnDownloads||[];
+  function renderDl(){ var a=window.__rnDownloads;
+    if(!a.length){ dlList.innerHTML='<div class="empty">暂无下载 · 网页端下载直接落入浏览器下载管理器</div>'; return; }
+    dlList.innerHTML=a.slice().reverse().map(function(d){
+      return '<div class="dlrow"><div class="nm">'+String(d.name||"download")+'</div><div style="color:#7d8590">'+(d.ts?new Date(d.ts).toLocaleTimeString():"")+'</div></div>';
+    }).join(""); }
+  document.getElementById("dlBtn").onclick=function(e){ e.stopPropagation(); renderDl(); dlPanel.classList.toggle("show"); menuPop.classList.remove("show"); };
+  window.addEventListener("message", function(ev){ try{ var d=ev.data; if(d&&d.__rtflow==="download"&&d.name){ window.__rnDownloads.push({name:d.name,ts:Date.now()}); if(dlPanel.classList.contains("show")) renderDl(); } }catch(e){} });
+
+  // ── 🗂 全服通 (= 全服通板块 daopan) ──
+  document.getElementById("daoBtn").onclick=function(){ dlPanel.classList.remove("show"); openPage("daopan"); };
+
   // ── 地址栏 ──
   function goAddr(){ var v=addr.value.trim(); if(!v) return;
     if(/^rtflow:\/\//i.test(v)){ openPage(v.replace(/^rtflow:\/\//i,"").trim()); return; } openWeb(v); }
@@ -527,9 +588,14 @@
   function sep(){ var s=document.createElement("div"); s.className="sep"; menuPop.appendChild(s); }
   function buildMenu(){
     menuPop.innerHTML="";
+    var hd=document.createElement("div"); hd.className="hd"; hd.id="__connhd";
+    hd.innerHTML="中继: "+(_connOk==null?"检测中…":(_connOk?'<b class="ok">已连通</b>':'<b class="bad">未连通 (检查穿透/Token 或开 VPN)</b>'));
+    menuPop.appendChild(hd); sep();
     PAGES.forEach(function(p){ mi(p.ic, p.label, function(){ openPage(p.key); }); });
     mi("🟢","新标签 (Devin 对话)", function(){ openExternalNewTab("https://app.devin.ai/"); });
     sep();
+    mi("⭐","书签收藏", function(){ var a=bookmarks(); if(!a.length){ toast("暂无收藏 · 点 ☆ 收藏板块"); return; }
+      a.forEach(function(k){ openPage(k); }); });
     mi("🔗","复制接入链接", function(){ var u=location.origin+"/console?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN);
       try{ navigator.clipboard.writeText(u); toast("已复制接入链接"); }catch(e){ toast(u); } });
     mi("⚙","接入设置 (Session/Token)", function(){ showCfg(); });
@@ -538,7 +604,7 @@
   document.getElementById("menuBtn").onclick=function(e){ e.stopPropagation();
     if(!menuPop.dataset.built){ buildMenu(); menuPop.dataset.built="1"; }
     menuPop.classList.toggle("show"); };
-  document.addEventListener("click", function(){ menuPop.classList.remove("show"); });
+  document.addEventListener("click", function(){ menuPop.classList.remove("show"); dlPanel.classList.remove("show"); });
 
   // ── 接入设置浮层 ──
   var cfg=document.getElementById("cfg");
@@ -556,11 +622,12 @@
     openPage(cur||"switch"); ping();
   };
 
-  // ── 连接状态点 ──
-  var dot=document.getElementById("dot");
-  function setDot(ok){ dot.className=ok?"on":"off"; dot.title=ok?"中继已连通":"中继未连通 (检查穿透/Token 或开 VPN)"; }
-  function ping(){ relay("/api/health",{},12000).then(function(r){ setDot(r.status===200 && r.body && r.body.status==="ok"); })
-    .catch(function(){ setDot(false); }); }
+  // ── 连接状态 (折入 ≡ 菜单顶, 顶栏与原生 buildChrome 逐件一致) ──
+  var _connOk=null;
+  function setStatus(ok){ _connOk=ok; var h=document.getElementById("__connhd");
+    if(h) h.innerHTML="中继: "+(ok?'<b class="ok">已连通</b>':'<b class="bad">未连通 (检查穿透/Token 或开 VPN)</b>'); }
+  function ping(){ relay("/api/health",{},12000).then(function(r){ setStatus(r.status===200 && r.body && r.body.status==="ok"); })
+    .catch(function(){ setStatus(false); }); }
 
   function toast(msg){ var el=document.getElementById("toast"); el.textContent=String(msg==null?"":msg);
     el.classList.add("show"); clearTimeout(el._t); el._t=setTimeout(function(){ el.classList.remove("show"); }, 2200); }
