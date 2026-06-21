@@ -108,6 +108,7 @@
       var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name || "download";
       document.body.appendChild(a); a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+      try { if (window.parent && window.parent !== window) window.parent.postMessage({ __rtflow: "download", name: name || "download" }, "*"); } catch (e) {}
       return name || "download";
     } catch (e) { return ""; }
   }
