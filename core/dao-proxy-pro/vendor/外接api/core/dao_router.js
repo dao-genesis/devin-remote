@@ -1931,6 +1931,44 @@ async function route(req, res, rawBody, isJSON, modelUid) {
   return false;
 }
 
+// ★ v9.9.308 · 首字守望 · 冷启/长空闲后首请的「吞言」根治
+//   现象: 空闲后第一条消息上游返回 200，但响应体迟迟无字节(半开/冷连 socket 静默卡死)，
+//        Cascade 端死等 → 用户感觉「首条被吞」，重发第二条(新连接)即成功。
+//   守望: 上游 200 后在 _TTFB_FIRSTBYTE_MS 内若无首字节，则判为卡死，透明重试一次。
+let _TTFB_FIRSTBYTE_MS = parseInt(process.env.DAO_TTFB_MS || "18000", 10);
+if (!(_TTFB_FIRSTBYTE_MS > 0)) _TTFB_FIRSTBYTE_MS = 18000;
+
+/**
+ * 等上游响应体「首字节」到达，不消费数据(用 readable+read+unshift 把首块还回去)。
+ * @returns {Promise<"data"|"end"|"error"|"timeout">}
+ */
+function _awaitFirstByte(stream, ms) {
+  return new Promise((resolve) => {
+    let done = false;
+    const fin = (v) => {
+      if (done) return;
+      done = true;
+      clearTimeout(t);
+      stream.removeListener("readable", onR);
+      stream.removeListener("end", onE);
+      stream.removeListener("error", onErr);
+      resolve(v);
+    };
+    const onR = () => {
+      const chunk = stream.read();
+      if (chunk === null) return; // readable 误触(无实数据) → 继续等
+      stream.unshift(chunk); // 首块还回缓冲，交由 _streamOaToCascade 正常消费
+      fin("data");
+    };
+    const onE = () => fin("end");
+    const onErr = () => fin("error");
+    const t = setTimeout(() => fin("timeout"), ms);
+    stream.on("readable", onR);
+    stream.once("end", onE);
+    stream.once("error", onErr);
+  });
+}
+
 /** 尝试单条路由 */
 async function _tryRoute({
   target,
@@ -2000,39 +2038,67 @@ async function _tryRoute({
 
   _log(`[dao-router] ${tag}[→] ${modelUid} → ${target.provider}/${sendModel}`);
   try {
-    const agRes = await _callProvider(
-      provCfg,
-      target.provider,
-      sendModel,
-      callOpts.messages,
-      callOpts.tools,
-      callOpts.toolChoice,
-      callOpts.maxOutputTokens,
-      target, // ★ v9.9.80 · 传入路由配置 (含 thinkingEnabled)
-      callOpts._lspToolNames, // ★ v9.9.83 · LSP 原始工具名集合
-      callOpts, // ★ v9.9.92 · 修法⑦ · 回填 _toolAliasMap
-    );
+    // ★ v9.9.308 · 首字守望重试环 · 主路/流式/未下发头时，上游200但体无流则透明重试一次
+    let agRes;
+    let _ttfbRetried = false;
+    while (true) {
+      agRes = await _callProvider(
+        provCfg,
+        target.provider,
+        sendModel,
+        callOpts.messages,
+        callOpts.tools,
+        callOpts.toolChoice,
+        callOpts.maxOutputTokens,
+        target, // ★ v9.9.80 · 传入路由配置 (含 thinkingEnabled)
+        callOpts._lspToolNames, // ★ v9.9.83 · LSP 原始工具名集合
+        callOpts, // ★ v9.9.92 · 修法⑦ · 回填 _toolAliasMap
+      );
 
-    if (agRes.statusCode !== 200) {
-      const errBody = await _readAll(agRes);
-      _log(
-        `[dao-router] ${tag}[✗] HTTP ${agRes.statusCode}: ${errBody.slice(0, 180)}`,
-      );
-      _routeDiag(
-        `_tryRoute ${tag} HTTP ${agRes.statusCode}: ${errBody.slice(0, 200)} model=${sendModel}`,
-      );
-      if (isPrimary && agRes.statusCode >= 500) {
-        _healthCache[target.provider] = { alive: false, ts: Date.now() };
+      if (agRes.statusCode !== 200) {
+        const errBody = await _readAll(agRes);
+        _log(
+          `[dao-router] ${tag}[✗] HTTP ${agRes.statusCode}: ${errBody.slice(0, 180)}`,
+        );
+        _routeDiag(
+          `_tryRoute ${tag} HTTP ${agRes.statusCode}: ${errBody.slice(0, 200)} model=${sendModel}`,
+        );
+        if (isPrimary && agRes.statusCode >= 500) {
+          _healthCache[target.provider] = { alive: false, ts: Date.now() };
+        }
+        // ★ v9.9.288 · 记录上游错误 · 供 route() ALL-FAIL 时可读回传 Cascade
+        if (callOpts) {
+          callOpts._lastErr = {
+            status: agRes.statusCode,
+            provider: target.provider,
+            body: errBody.slice(0, 300),
+          };
+        }
+        return false;
       }
-      // ★ v9.9.288 · 记录上游错误 · 供 route() ALL-FAIL 时可读回传 Cascade
-      if (callOpts) {
-        callOpts._lastErr = {
-          status: agRes.statusCode,
-          provider: target.provider,
-          body: errBody.slice(0, 300),
-        };
+
+      // ★ v9.9.308 · 首字守望: 上游已200但响应体在 _TTFB_FIRSTBYTE_MS 内无首字
+      //   → 判为冷连/半开 socket 静默卡死 → 销毁本连、透明重试一次(新连接)，
+      //   仅主路·仅流式·仅未下发下游头时生效，避免「首条被吞、需重发」。
+      if (
+        isPrimary &&
+        !res.headersSent &&
+        provCfg.streamMode !== "unary" &&
+        !_ttfbRetried
+      ) {
+        const _fb = await _awaitFirstByte(agRes, _TTFB_FIRSTBYTE_MS);
+        if (_fb === "timeout") {
+          _ttfbRetried = true;
+          _routeDiag(
+            `_tryRoute ${tag} TTFB stall ${_TTFB_FIRSTBYTE_MS}ms 无首字 → 透明重试 ${target.provider}/${sendModel}`,
+          );
+          try {
+            agRes.destroy();
+          } catch {}
+          continue;
+        }
       }
-      return false;
+      break;
     }
 
     if (!res.headersSent) {
