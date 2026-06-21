@@ -1,6 +1,6 @@
 {
-  "versionCode": 105,
-  "versionName": "0.37.1",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.1/DevinCloud-mobile-v0.37.1.apk",
-  "notes": "v0.37.1 · 原生直渲控台(/console)在手机浏览器/WebView 的根因修复\n• 根因: 板块挂为 srcdoc 不透明源 iframe, 其 window.Native.* 走同步 XHR 打回中继; 每次同步调用 ~200ms 往返, 板块又不停轮询(conn/穿透状态/relayStatus…)。弱网或手机 agent 积压时, 任一同步读会把浏览器主线程冻住最长 60s → 整页卡死、只切号偶出、其它板块全黑/加载失败。\n• 修复一: 板块改用同源 blob: iframe(继承中继 Worker 真实源, 严格同源, 无 CORS/无预检), 取代不透明源 srcdoc。\n• 修复二: __rn.js 读调用永不阻塞主线程——命中缓存即返回, 未命中先返回空再后台异步补齐(板块本就轮询, 亚秒级补上真值); 仅用户点击触发的写仍走一次同步。主线程不再被冻 → 板块秒级渲染。\n• 交付优化: __rn.js 已内联进 console.html(经中继 Worker 取自 GitHub main 下发), 此控台修复随网页生效, 重开 /console 链接即可, 无需安装新包。\n• 实测(模拟器 WebView): 切号面板由约 4 分钟 → 约 7-8 秒全渲染; 多板块并存各自独立。"
+  "versionCode": 106,
+  "versionName": "0.37.2",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.2/DevinCloud-mobile-v0.37.2.apk",
+  "notes": "v0.37.2 · 网页控台(/console)板块空白/「加载失败」根因修复（无需装包，重开链接即生效）。\n• 真根因：板块 HTML + 其 JS 依赖近 200KB，旧架构需分 4 次经『手机弱网中继』往返取回；任一次在弱网/手机后台积压下超时，板块即空白或『加载失败』→ 整台像静态死网页。\n• 根本修法：静态资源（板块 HTML / 引擎 JS）本是全网一致的死文件、与手机无关，改由公共 CDN(jsDelivr) 边缘直发（实测手机端 1.5~2.3s 取回 switch.html）；CDN 全失败才回退手机 APK 真身，绝不退化。数据(Native.*)仍走中继 → 道并行而不相悖。\n• 叠加 v0.37.1 的同源 blob: iframe + __rn.js 读调用非阻塞缓存：板块 UI 秒级原生渲染，数据随后异步补齐，主线程永不冻死。\n• 控台经中继 Worker 实时取自 GitHub main，修复随网页下发，用户无需安装新包，重开 /console 链接即生效。"
 }
