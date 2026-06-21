@@ -468,7 +468,10 @@ class ClientV3 extends Client {
     }
     async request(remote, method, body, headers, signal) {
         const options = {
-            credentials: "omit",
+            // dao-relay: 改 omit→same-origin, 让对【本源 /bare/v3/】的请求带上 uv_auth Cookie
+            // (HttpOnly·Path=/bare, 由 /uv-init 写入)→ bareV3 据此为 app.devin.ai 注入登录种子。
+            // 该 fetch 仅打本 Worker 同源端点(目标站字节走 x-bare-* 头), 不会把 Cookie 泄漏给被代理站。
+            credentials: "same-origin",
             method: method,
             signal,
             //@ts-expect-error this exists but isnt typed ig
