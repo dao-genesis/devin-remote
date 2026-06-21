@@ -1050,13 +1050,24 @@ public class MainActivity extends AppCompatActivity {
         return tab;
     }
 
-    /** 把标签的视图停泊到常驻 INVISIBLE 容器 autoHost (保持挂载窗口与尺寸); 活动标签由 selectTab 提到 content 顶层。 */
+    /** 把标签的视图停泊到常驻 INVISIBLE 容器 autoHost (保持挂载窗口与尺寸); 活动标签由 selectTab 提到 content 顶层。
+     *  停泊即「转入后台」: 仿 Chrome/真浏览器对后台标签的资源调度 —— 调 onPause() 暂停该 WebView 的渲染合成/动画/
+     *  WebGL/video 等「额外处理」(不停 JS、不丢页面态), 让出 CPU/GPU 给前台标签 → 多标签下前台打字/滚动不再被
+     *  后台页抢资源致卡顿。自动化截图/镜像(ipcScreenshot/ipcMirrorFrame)取帧前都会 resumeWeb 唤醒目标 → 不受影响。 */
     private void parkHost(Tab t) {
         if (t == null || autoHost == null) return;
         android.view.View host = t.swipe != null ? t.swipe : t.web;
-        if (host == null || host.getParent() == autoHost) return;
+        if (host == null || host.getParent() == autoHost) { pauseWeb(t.web); return; }
         if (host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
         autoHost.addView(host, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        pauseWeb(t.web);
+    }
+
+    /** 暂停一个后台 WebView 的「额外处理」(渲染合成/动画/插件), 让出系统资源。仅 onPause(), 不动全局 pauseTimers()
+     *  (那会冻结所有 WebView 的 JS 计时器·伤及前台); JS 仍可经 evaluateJavascript 跑 → 后台自动化(执行JS)不受影响。 */
+    private void pauseWeb(final WebView w) {
+        if (w == null) return;
+        try { w.onPause(); } catch (Exception ignored) {}
     }
 
     private void loadInto(Tab tab, String url) {
@@ -4825,6 +4836,9 @@ public class MainActivity extends AppCompatActivity {
         main.removeCallbacks(presenceTick);
         bgSince = System.currentTimeMillis();
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {} // 持久化其它网站登录 Cookie
+        // App 整体转后台(切到别的应用/锁屏): 没有任何标签可见 → 暂停全部 WebView 的渲染合成/动画, 不再空耗 CPU/GPU/电量
+        // (仿真浏览器: 不可见即不渲染)。JS 不停, 远程自动化仍可经 execJs 驱动; 镜像/截图取帧前各自 resumeWeb → 不受影响。
+        for (int i = 0; i < tabs.size(); i++) pauseWeb(tabs.get(i).web);
         saveTabs();
     }
 
