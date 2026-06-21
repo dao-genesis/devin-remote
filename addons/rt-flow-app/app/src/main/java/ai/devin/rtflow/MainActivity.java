@@ -272,6 +272,12 @@ public class MainActivity extends AppCompatActivity {
                 kap.edit().putBoolean("overlay-asked", true).apply();
                 main.postDelayed(() -> { try { KeepAlive.requestOverlay(this); } catch (Exception ignored) {} }, 3600);
             }
+            // 一次性引导「自启动 / 后台白名单」: 国产 ROM 切走就杀后台的真正元凶 (标准电池豁免管不到它,
+            // 必须在各厂商「自启动管理」里单独放行)。仅对已知厂商 ROM 提一次, 用户处理过即不再打扰。
+            if (KeepAlive.maker() != KeepAlive.Maker.OTHER && !kap.getBoolean("autostart-asked", false)) {
+                kap.edit().putBoolean("autostart-asked", true).apply();
+                main.postDelayed(() -> { try { showKeepAliveDialog(true); } catch (Exception ignored) {} }, 5400);
+            }
         } catch (Exception ignored) {}
         fileChooser = registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), result -> {
             ValueCallback<Uri[]> cb = filePathCallback; filePathCallback = null;
@@ -562,7 +568,8 @@ public class MainActivity extends AppCompatActivity {
         shareM.add(0, 30, 0, "分享本页");
         shareM.add(0, 31, 1, "复制网址");
         shareM.add(0, 32, 2, "添加到主屏");
-        mu.add(0, 50, 11, "检查更新 · v" + appVersionName());
+        mu.add(0, 51, 11, "后台常驻 · 保活");
+        mu.add(0, 50, 12, "检查更新 · v" + appVersionName());
         m.setOnMenuItemClickListener(it -> {
             switch (it.getItemId()) {
                 case 1: newTab(SWITCH, null); return true;
@@ -589,10 +596,56 @@ public class MainActivity extends AppCompatActivity {
                 case 31: copyCurrentUrl(); return true;
                 case 32: addHomeShortcut(); return true;
                 case 50: checkUpdate(false); return true;
+                case 51: showKeepAliveDialog(false); return true;
             }
             return false;
         });
         m.show();
+    }
+
+    /** 后台常驻 · 保活引导: 展示本机机型的保活操作指引 + 一键直达「自启动白名单 / 电池不限制」设置页。
+     *  firstRun=true 为冷启动一次性引导 (仅已知厂商 ROM); =false 为用户主动从菜单打开。
+     *  本机「切到其他 App 一会就被杀、整页重载」的根因之一即后台白名单未放行 → 这里把开关递到用户面前。 */
+    private void showKeepAliveDialog(boolean firstRun) {
+        if (isFinishing()) return;
+        boolean battOk = KeepAlive.isBatteryOptIgnored(this);
+        String head = firstRun
+                ? "为避免切到其他 App 后本应用被系统杀死 (整页重载、对话中断), 请按下方为你的机型放行后台常驻:\n\n"
+                : "让应用切到后台也不被系统杀死, 按机型放行:\n\n";
+        String tail = "\n\n电池优化豁免: " + (battOk ? "已开启 ✓" : "未开启 — 点「电池不限制」");
+        try {
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("后台常驻 · 保活")
+                    .setMessage(head + KeepAlive.instructions() + tail)
+                    .setPositiveButton("自启动白名单", (d, w) -> { try { KeepAlive.openAutoStart(this); } catch (Exception ignored) {} })
+                    .setNeutralButton("电池不限制", (d, w) -> { try { KeepAlive.requestBatteryOpt(this); } catch (Exception ignored) {} })
+                    .setNegativeButton("知道了", null)
+                    .show();
+        } catch (Exception ignored) {}
+    }
+
+    /** 高内存压力下卸载后台普通网页标签: 销毁其重型 WebView, 换一个空壳 + pendingReloadUrl (选中时再重建)。
+     *  后台占用骤降 → 整进程更不易被系统 LMK 整体杀掉, 回前台也无需「整页全部重来」。
+     *  仅卸载 非活动·非内部页·非 Devin 账号 (多实例追踪需保活) 的 http(s) 标签。镜像 recoverDeadTab 的换壳路径。 */
+    private void unloadBackgroundTab(int idx) {
+        if (idx < 0 || idx >= tabs.size() || idx == active) return;
+        Tab t = tabs.get(idx);
+        if (t.internal || t.accountJson != null || t.pendingReloadUrl != null) return;
+        String u = (t.url != null && !t.url.isEmpty()) ? t.url : null;
+        if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) return;
+        boolean incognito = t.incognito, night = t.night;
+        String title = t.title, titleOverride = t.titleOverride;
+        try {
+            android.view.View host = t.swipe != null ? t.swipe : t.web;
+            if (host != null && host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
+            if (t.web != null) t.web.destroy();
+        } catch (Exception ignored) {}
+        Tab fresh = makeTab(null, false);     // 空壳 + 完整配置 + 停泊 autoHost; 追加末尾
+        tabs.remove(tabs.size() - 1);         // 取回, 放回原位
+        fresh.incognito = incognito; fresh.night = night;
+        fresh.url = u; fresh.title = title; fresh.titleOverride = titleOverride;
+        fresh.pendingReloadUrl = u;           // selectTab 命中即重建
+        tabs.set(idx, fresh);
     }
 
     private void go(String input) {
@@ -4787,6 +4840,11 @@ public class MainActivity extends AppCompatActivity {
                 WebView w = tabs.get(i).web;
                 if (w != null) { try { w.clearCache(false); } catch (Exception ignored) {} try { w.freeMemory(); } catch (Exception ignored) {} }
             }
+            // 高压 (后台且濒临被整体回收, 或极端运行内存): 把后台普通网页标签整页卸载 → 压低进程内存,
+            // 让整进程更不易被 LMK 整体杀死 (这是「切走一会就崩、回来整页重载」的釜底抽薪)。
+            boolean critical = level >= TRIM_MEMORY_COMPLETE
+                    || (!appForeground && level >= TRIM_MEMORY_RUNNING_CRITICAL);
+            if (critical) for (int i = tabs.size() - 1; i >= 0; i--) unloadBackgroundTab(i);
         } catch (Exception ignored) {}
     }
 

@@ -1700,6 +1700,16 @@ public class RelayService extends Service {
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) { return START_STICKY; }
+
+    /** 用户从「最近任务」划掉本应用 → 部分 ROM 会连带杀掉常驻中继。这里立即重新拉起前台服务保活,
+     *  使内网穿透 / 远控通道不因划任务而中断 (与 START_STICKY 协同, 双保险)。 */
+    @Override public void onTaskRemoved(Intent rootIntent) {
+        try {
+            Intent restart = new Intent(getApplicationContext(), RelayService.class).setPackage(getPackageName());
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(restart); else startService(restart);
+        } catch (Exception ignored) {}
+        super.onTaskRemoved(rootIntent);
+    }
     @Nullable @Override public IBinder onBind(Intent intent) { return null; }
     @Override public void onDestroy() { instance = null; releaseWake(); stopTunnel(); if (engine != null) { engine.destroy(); engine = null; } super.onDestroy(); }
 }
