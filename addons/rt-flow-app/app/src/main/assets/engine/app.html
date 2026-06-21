@@ -21,6 +21,23 @@
   #addr{flex:1;height:32px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);
         border-radius:8px;padding:0 11px;font-size:13px;outline:none}
   #addr:focus{border-color:var(--btn)}
+  /* ── 第二行工具栏: 缩放/收藏/刷新/下载/全服通 (与 APK btnRow 1:1) ── */
+  #btnRow{display:flex;align-items:center;gap:4px;padding:1px 8px 4px;background:var(--bar);
+          border-bottom:1px solid var(--border);flex:0 0 auto}
+  #btnRow button{background:#1c2230;color:var(--fg);border:1px solid var(--input-b);
+          border-radius:7px;height:28px;min-width:30px;padding:0 7px;font-size:14px;cursor:pointer}
+  #btnRow button:active{background:#283041}
+  #zicon{color:#8b949e;font-size:14px;padding:0 2px;cursor:pointer;user-select:none}
+  #zoomBar{flex:1;min-width:60px;accent-color:var(--btn)}
+  #zoomLabel{color:var(--fg);min-width:42px;text-align:center;font-size:13px}
+  #starBtn.on{color:#e3b341;border-color:#7a5b14}
+  #dlPanel{position:absolute;top:8px;right:8px;width:min(360px,90vw);max-height:72%;overflow:auto;
+           background:#11161e;border:1px solid var(--border);border-radius:12px;padding:10px;display:none;z-index:60;box-shadow:0 14px 40px #000a}
+  #dlPanel.show{display:block}
+  #dlPanel h4{margin:2px 0 8px;font-size:12px;color:var(--muted)}
+  #dlPanel .it{padding:7px 8px;border-radius:7px;font-size:12px;color:var(--fg);border:1px solid var(--border);margin-bottom:6px;word-break:break-all;cursor:pointer}
+  #dlPanel .it:hover{border-color:var(--green)}
+  #dlPanel .empty{color:var(--muted);font-size:12px;padding:8px}
   /* ── 标签条 ── */
   #strip{display:flex;align-items:center;gap:5px;padding:5px 8px;background:#11161e;
          border-bottom:1px solid var(--border);overflow-x:auto;flex:0 0 auto;scrollbar-width:thin}
@@ -71,12 +88,22 @@
   <div id="bar">
     <button id="menuBtn" title="菜单">&#9776;</button>
     <input id="addr" inputmode="url" autocomplete="off" spellcheck="false" placeholder="输入网址 / 板块 (切号·穿透·对话…)">
-    <button id="reload" title="重载">&#8635;</button>
+    <button id="trBtn" title="整页翻译 (再点恢复原文)">译</button>
     <button id="go" title="前往">&#8594;</button>
+  </div>
+  <div id="btnRow">
+    <span id="zicon" title="复位 100%">&#128269;</span>
+    <input type="range" id="zoomBar" min="50" max="170" step="5" value="100" title="整页缩放">
+    <span id="zoomLabel">100%</span>
+    <button id="starBtn" title="收藏本页">&#9734;</button>
+    <button id="reload" title="重载">&#8635;</button>
+    <button id="dlBtn" title="下载 / 书签">&#128229;</button>
+    <button id="daoBtn" title="全服通">&#128450;</button>
   </div>
   <div id="strip"><button id="plus" title="新标签">+</button></div>
   <div id="frames">
     <div id="menuPop"></div>
+    <div id="dlPanel"></div>
     <div id="launch"><div id="launchCard">
       <h3>新标签 — 选择板块, 或输入任意网址 (各大浏览器多实例)</h3>
       <div class="grid" id="segGrid"></div>
@@ -219,6 +246,7 @@
     fr.addEventListener("load", function(){
       try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){}
       checkBlocked(t);
+      if(tabs[active]===t){ try{applyZoom();}catch(e){} }
     });
     if(t.kind==="web" && t.src && t.src!=="about:blank") scheduleBlockCheck(t);
     tabs.push(t); renderStrip(); selectTab(t.id);
@@ -272,6 +300,7 @@
     }
     var t=tabs[active];
     if(t){ addr.value = t.kind==="page" ? ("rtflow://"+(t.pageKey||"")) : (t.origUrl||t.src); }
+    try{ applyZoom(); updateStar(); }catch(e){}
     renderStrip();
   }
 
@@ -343,7 +372,87 @@
   document.getElementById("menuBtn").onclick=function(e){ e.stopPropagation();
     if(!menuPop.dataset.built){ buildMenu(); menuPop.dataset.built="1"; }
     menuPop.classList.toggle("show"); };
-  document.addEventListener("click", function(){ menuPop.classList.remove("show"); });
+  document.addEventListener("click", function(){ menuPop.classList.remove("show"); try{ dlPanel.classList.remove("show"); }catch(e){} });
+
+  // ── 第二行工具栏行为 (与 APK buildChrome 的 btnRow 1:1) ──
+  var RELAY = (ENDPOINT || location.origin).replace(/\/+$/,"") + "/relay/" + encodeURIComponent(SESSION);
+  function shToast(m){ try{ var el=document.getElementById("__shtoast"); if(!el){el=document.createElement("div");el.id="__shtoast";
+      el.style.cssText="position:fixed;left:50%;bottom:42px;transform:translateX(-50%);background:#222;color:#fff;padding:9px 15px;border-radius:9px;font:13px sans-serif;z-index:2147483647;opacity:0;transition:.2s;max-width:80%";
+      document.body.appendChild(el);} el.textContent=String(m==null?"":m); el.style.opacity="1";
+      clearTimeout(el._t); el._t=setTimeout(function(){el.style.opacity="0";},2000);}catch(e){} }
+
+  // 整页缩放: 50%–170% 默认100% (同 APK pageZoom; documentElement.style.zoom)
+  var pageZoom = parseInt(localStorage.getItem("rtflow.zoom")||"100",10)||100;
+  var zoomBar=document.getElementById("zoomBar"), zoomLabel=document.getElementById("zoomLabel");
+  zoomBar.value=pageZoom; zoomLabel.textContent=pageZoom+"%";
+  function applyZoom(){ var t=tabs[active]; if(!t||!t.fr) return; var f=pageZoom/100;
+    try{ var d=t.fr.contentDocument; if(d&&d.documentElement){ d.documentElement.style.zoom=f; return; } }catch(e){}
+    try{ t.fr.style.zoom=f; }catch(e){} }
+  zoomBar.addEventListener("input",function(){ pageZoom=parseInt(this.value,10)||100; zoomLabel.textContent=pageZoom+"%";
+    try{localStorage.setItem("rtflow.zoom",String(pageZoom));}catch(e){} applyZoom(); });
+  document.getElementById("zicon").onclick=function(){ pageZoom=100; zoomBar.value=100; zoomLabel.textContent="100%";
+    try{localStorage.setItem("rtflow.zoom","100");}catch(e){} applyZoom(); };
+
+  // 收藏 (书签)
+  function getBM(){ try{ return JSON.parse(localStorage.getItem("rtflow.bookmarks")||"[]"); }catch(e){ return []; } }
+  function setBM(a){ try{ localStorage.setItem("rtflow.bookmarks",JSON.stringify(a)); }catch(e){} }
+  function curUrl(){ var t=tabs[active]; if(!t) return ""; return t.kind==="web"?(t.origUrl||t.src):("rtflow://"+(t.pageKey||"")); }
+  function curTitle(){ var t=tabs[active]; return t?(t.title||curUrl()):""; }
+  function isBM(u){ return getBM().some(function(b){return b.url===u;}); }
+  var starBtn=document.getElementById("starBtn");
+  function updateStar(){ var on=isBM(curUrl()); starBtn.classList.toggle("on",on); starBtn.innerHTML=on?"\u2605":"\u2606"; }
+  starBtn.onclick=function(){ var u=curUrl(); if(!u) return; var a=getBM();
+    var i=a.findIndex(function(b){return b.url===u;});
+    if(i>=0){ a.splice(i,1); shToast("已取消收藏"); } else { a.unshift({url:u,title:curTitle()}); shToast("已收藏"); }
+    setBM(a); updateStar(); };
+
+  // 下载 / 书签面板 (📥): 浏览器原生下载该号文件已落本设备; 此处汇总本次下载 + 书签
+  var dlPanel=document.getElementById("dlPanel"); var downloads=[];
+  window.addEventListener("message",function(ev){ var d=ev&&ev.data;
+    if(d&&d.__rtflow==="download"&&d.name){ downloads.unshift({name:d.name}); if(dlPanel.classList.contains("show")) renderDl(); } });
+  function renderDl(){ var bm=getBM();
+    var h='<h4>下载 (浏览器已保存到本设备)</h4>';
+    h+= downloads.length? downloads.map(function(x){return '<div class="it">\u2b07 '+x.name+'</div>';}).join('') : '<div class="empty">暂无本次下载</div>';
+    h+='<h4 style="margin-top:10px">书签收藏</h4>';
+    h+= bm.length? bm.map(function(b,i){return '<div class="it" data-i="'+i+'">\u2605 '+(b.title||b.url)+'</div>';}).join('') : '<div class="empty">暂无书签</div>';
+    dlPanel.innerHTML=h;
+    [].slice.call(dlPanel.querySelectorAll('.it[data-i]')).forEach(function(el){ el.onclick=function(){ var b=getBM()[+el.dataset.i]; if(b){ dlPanel.classList.remove("show"); if(b.url.indexOf("rtflow://")===0) openPage(b.url.slice(9)); else openWeb(b.url); } }; }); }
+  document.getElementById("dlBtn").onclick=function(e){ e.stopPropagation(); var show=!dlPanel.classList.contains("show"); if(show) renderDl(); dlPanel.classList.toggle("show",show); };
+  dlPanel.onclick=function(e){ e.stopPropagation(); };
+
+  // 全服通 (🗂)
+  document.getElementById("daoBtn").onclick=function(){ openPage("daopan"); };
+
+  // 整页翻译 (译): Edge 免费引擎, 经手机 /api/http 绕 CORS (同 APK TranslateBridge)。仅同源(板块/ px)标签可注入; 跨域根挂载标签提示在源站操作。
+  var _trTok="", _trTs=0;
+  function relayHttp(method,url,headers,body){
+    return fetch(RELAY,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+TOKEN},
+        body:JSON.stringify({path:"/api/http",method:"POST",body:{b64:false,method:method,url:url,headers:headers||{},body:body==null?"":body}})})
+      .then(function(r){return r.json();})
+      .then(function(o){ var inner=o; if(o&&typeof o.bodyText==="string"){ try{inner=JSON.parse(o.bodyText);}catch(e){} } return inner||{}; });
+  }
+  function trToken(){ if(_trTok && Date.now()-_trTs<8*60*1000) return Promise.resolve(_trTok);
+    return relayHttp("GET","https://edge.microsoft.com/translate/auth",{"User-Agent":"Mozilla/5.0"},"")
+      .then(function(inner){ var t=String(inner.text||"").trim(); if(t){_trTok=t;_trTs=Date.now();} return t; }); }
+  function doTranslate(texts,to){
+    return trToken().then(function(tok){ if(!tok) return [];
+      var body=JSON.stringify(texts.map(function(s){return {Text:String(s==null?"":s)};}));
+      var u="https://api-edge.cognitive.microsoft"+"translator.com/translate?api-version=3.0&to="+encodeURIComponent(to||"zh-Hans");
+      return relayHttp("POST",u,{"Content-Type":"application/json; charset=UTF-8","Authorization":"Bearer "+tok},body)
+        .then(function(inner){ var arr=[]; try{ arr=JSON.parse(inner.text||"[]"); }catch(e){}
+          return arr.map(function(o){ var tr=o&&o.translations; return (tr&&tr[0]&&tr[0].text)||""; }); });
+    }).catch(function(){ return []; }); }
+  function toggleTranslate(){ var t=tabs[active]; if(!t) return;
+    var win,docu; try{ win=t.fr.contentWindow; docu=t.fr.contentDocument; }catch(e){}
+    if(!win||!docu){ shToast("该标签为跨域代理, 翻译请在源站进行"); return; }
+    if(win.__dcTransOn){ win.__dcTransOn=false; try{ win.__dcTransRestore&&win.__dcTransRestore(); }catch(e){} shToast("恢复原文"); return; }
+    win.__dcTr={ translate:function(reqId,textsJson,to){ var texts=[]; try{texts=JSON.parse(textsJson);}catch(e){}
+        doTranslate(texts,to).then(function(out){ var b64=""; try{ b64=win.btoa(unescape(encodeURIComponent(JSON.stringify(out)))); }catch(e){ try{b64=btoa(JSON.stringify(out));}catch(_){} }
+          try{ win.__dcTrCb&&win.__dcTrCb(reqId,b64); }catch(e){} }); }, report:function(){} };
+    win.__dcTransOn=true; shToast("翻译中…");
+    try{ var s=docu.createElement("script"); s.src=location.origin+"/translate.js"; (docu.body||docu.documentElement).appendChild(s); }catch(e){ shToast("翻译注入失败"); }
+  }
+  document.getElementById("trBtn").onclick=toggleTranslate;
 
   // 首屏: 切号面板 (与 APK 冷启动一致)
   openPage("switch");
