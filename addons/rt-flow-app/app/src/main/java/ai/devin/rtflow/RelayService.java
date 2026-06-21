@@ -98,7 +98,7 @@ public class RelayService extends Service {
                     // → 任意设备浏览器打开即得与手机本体「表层+底层」完全一致的页面 (手机=中枢)。
                     public String[] staticAsset(String path) { return RelayService.this.staticAsset(path); }
                     public String[] embedDoc(String url) { return RelayService.this.embedDoc(url); }
-                    public String[] embedProxy(String method, String url, String acct, String body, String reqContentType) { return RelayService.this.embedProxy(method, url, acct, body, reqContentType); }
+                    public String[] embedProxy(String method, String url, String acct, String body, String reqContentType, String reqHost) { return RelayService.this.embedProxy(method, url, acct, body, reqContentType, reqHost); }
                     public int proxyPort(String target, String acct) { return RelayService.this.proxyPort(target, acct); }
                     public String proxyPublicUrl(String target, String acct) { return RelayService.this.proxyPublicUrl(target, acct); }
                 });
@@ -248,7 +248,7 @@ public class RelayService extends Service {
     //  登录态种子复刻 TabActivity.buildInjection: localStorage 种子 + cookie, 与原生多实例逐键一致。
     //  诚实边界: WebSocket/SSE 实时流无法经 HTTP 代理(留直连·跨域鉴权不全) → 会话内容可渲染, 实时增量可能不更新。
     // ════════════════════════════════════════════════════════════════════════
-    String[] embedProxy(String method, String url, String acct, String body, String reqCtype) {
+    String[] embedProxy(String method, String url, String acct, String body, String reqCtype, String reqHost) {
         try {
             if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) return null;
             java.net.URL u = new java.net.URL(url);
@@ -286,6 +286,7 @@ public class RelayService extends Service {
             if (isText) {
                 String text = o.optString("text", "");
                 if (isHtml) text = rewriteDoc(text, origin, acct, acc);
+                else if (devin && ctOut.contains("json") && text != null && text.contains("webapp_host")) text = rewriteWebappHost(text, reqHost, url);
                 return new String[]{ctOut + (ctOut.startsWith("text/") || ctOut.contains("json") ? "; charset=utf-8" : ""), text, "text", statusStr};
             } else {
                 return new String[]{ctOut, o.optString("b64", ""), "b64", statusStr};
@@ -313,7 +314,7 @@ public class RelayService extends Service {
             String key = origin + "|" + a;
             ProxyServer ps = proxyServers.get(key);
             if (ps != null && ps.isRunning()) return ps.getPort();
-            ps = new ProxyServer(origin, a, (method, url, ac, body, ct, accept) -> embedRoot(method, url, ac, body, ct, accept));
+            ps = new ProxyServer(origin, a, (method, url, ac, body, ct, accept, reqHost) -> embedRoot(method, url, ac, body, ct, accept, reqHost));
             int port = ps.start();
             proxyServers.put(key, ps);
             return port;
@@ -351,7 +352,7 @@ public class RelayService extends Service {
 
     /** 根挂载抓取: 抓 url(代 acct 注入 Bearer auth1 + x-cog-org-id) → 顶层 HTML 剥 CSP + 注入登录态种子。
      *  无 base / 无 URL 改写垫片 (根挂载下源站同源, 真实路径自然命中)。回服时用源站真实 Content-Type (Connect-RPC 校验)。 */
-    String[] embedRoot(String method, String url, String acct, String body, String reqCtype, String accept) {
+    String[] embedRoot(String method, String url, String acct, String body, String reqCtype, String accept, String reqHost) {
         try {
             if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) return null;
             java.net.URL u = new java.net.URL(url);
@@ -390,7 +391,10 @@ public class RelayService extends Service {
                 String ct = !realCt.isEmpty() ? realCt : ctGuess;
                 boolean htmlResp = ct.toLowerCase().contains("text/html");
                 if (htmlResp) { text = injectSeed(text, acc); if (!ct.toLowerCase().contains("charset")) ct = "text/html; charset=utf-8"; }
-                else if (!ct.toLowerCase().contains("charset") && (ct.startsWith("text/") || ct.contains("json") || ct.contains("javascript"))) ct = ct + "; charset=utf-8";
+                else {
+                    if (devin && ct.toLowerCase().contains("json") && text != null && text.contains("webapp_host")) text = rewriteWebappHost(text, reqHost, url);
+                    if (!ct.toLowerCase().contains("charset") && (ct.startsWith("text/") || ct.contains("json") || ct.contains("javascript"))) ct = ct + "; charset=utf-8";
+                }
                 return new String[]{ct, text, "text", statusStr};
             } else {
                 return new String[]{!realCt.isEmpty() ? realCt : ctGuess, o.optString("b64", ""), "b64", statusStr};
@@ -404,10 +408,43 @@ public class RelayService extends Service {
         String a1 = acc == null ? "" : acc.optString("auth1", "");
         if (a1.isEmpty()) return html;     // 非 devin / 无登录号 → 仅剥 CSP
         String uid = acc.optString("userId", ""), org = acc.optString("orgId", ""), on = acc.optString("orgName", "");
-        String inject = "<script>" + loginSeed(a1, uid, org, on) + "</script>\n";
+        String inject = "<script>" + loginSeed(a1, uid, org, on) + whInstall() + "</script>\n";
         int h = indexOfIgnoreCase(html, "<head");
         if (h >= 0) { int gt = html.indexOf('>', h); if (gt >= 0) return html.substring(0, gt + 1) + inject + html.substring(gt + 1); }
         return inject + html;
+    }
+
+    /** 服务端改写 JSON 响应里的 webapp_host = 本次请求 Host (AGENTS 踩埑 6 之正解): auth0 SPA 读服务端下发
+     *  webapp_host, 一旦 !== location.host 即硬跳真站 /login。代理下 location.host = 本代理 Host, 故把响应里的
+     *  webapp_host 改写成本次 Host → 校验通过、留在代理源保持登录。 */
+    private static String rewriteWebappHost(String json, String reqHost, String url) {
+        try {
+            if (json == null || reqHost == null || reqHost.isEmpty()) return json;
+            String h = reqHost.trim();
+            // 值可能是 null (普通组 = 用默认主机 app.devin.ai) 或 "字符串"; 两者都改成本代理 host。
+            String rewritten = json.replaceAll("(\"webapp_host\"\\s*:\\s*)(?:null|\"[^\"]*\")",
+                    "$1\"" + java.util.regex.Matcher.quoteReplacement(h) + "\"");
+            if (!rewritten.equals(json)) android.util.Log.i("rtflow-proxy", "webapp_host rewritten -> " + h + " for " + url);
+            return rewritten;
+        } catch (Exception e) { return json; }
+    }
+
+    /** webapp_host 改写器 (函数体 _RW): 把字符串里的 "webapp_host":"..." 改写成本页 location.host。 */
+    private static String whRw() {
+        return "function(v){try{return (typeof v==='string'&&v.indexOf('webapp_host')>=0)?"
+            + "v.replace(/(\"webapp_host\"\\s*:\\s*)(null|\"[^\"]*\")/g,'$1\"'+location.host+'\"'):v;}catch(e){return v;}}";
+    }
+    /** webapp_host 守卫: auth0 版 SPA 读服务端下发的 webapp_host, 一旦 webapp_host !== location.host
+     *  即 location.href= 硬跳真站 `/login`(绝对 URL 无法 hook) → 代理/根挂载源被弹回真站登录页 = 「登录不进去」。
+     *  webapp_host 真源 = SPA 写进 localStorage 的 post-auth 解析值 (F.data 取自 localStorage), 故 hook localStorage.setItem
+     *  把写入值里的 webapp_host 改写成本页 location.host (并扫一遍已存键); 另兜底改写 fetch 的 JSON 响应。
+     *  以 location.host 为真 → 直连/局域网/cloudflared 隧道/Worker 全准 (无需服务端预知公网 host)。 */
+    private static String whInstall() {
+        return "try{if(!window.__rnWH){window.__rnWH=1;var _RW=" + whRw() + ";"
+            + "try{var _os=localStorage.setItem.bind(localStorage);localStorage.setItem=function(k,v){return _os(k,_RW(v));};"
+            + "for(var i=localStorage.length-1;i>=0;i--){var k=localStorage.key(i);var v=localStorage.getItem(k);var nv=_RW(v);if(nv!==v)_os(k,nv);}}catch(e){}"
+            + "try{var _of=window.fetch;if(_of)window.fetch=function(){return _of.apply(this,arguments).then(function(r){try{var ct=(r.headers&&r.headers.get&&(r.headers.get('content-type')||''))||'';if(ct.indexOf('json')<0)return r;return r.clone().text().then(function(t){try{if(!t||t.indexOf('webapp_host')<0)return r;var nt=_RW(t);if(nt===t)return r;return new Response(nt,{status:r.status,statusText:r.statusText,headers:r.headers});}catch(e){return r;}}).catch(function(){return r;});}catch(e){return r;}});};}catch(e){}"
+            + "}}catch(e){}";
     }
 
     /** 登录态种子 (逐键复刻 TabActivity.buildInjection 多实例注入)。根挂载下源站同源, 无需改写垫片。 */
@@ -476,6 +513,7 @@ public class RelayService extends Service {
     /** 登录态种子(复刻 TabActivity.buildInjection)+ fetch/XHR/import 改写垫片(指向本代理同源前缀)。 */
     private static String seedShim(String origin, String prefix, String a1, String uid, String org, String on) {
         return "(function(){try{"
+            + whInstall()
             + "var TARGET=" + js(origin) + ",PREFIX=" + js(prefix) + ";"
             + "var A1=" + js(a1) + ",UID=" + js(uid) + ",ORG=" + js(org) + ",ON=" + js(on) + ";"
             + "if(A1){try{"
