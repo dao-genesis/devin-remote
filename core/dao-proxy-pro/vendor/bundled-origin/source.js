@@ -1026,6 +1026,134 @@ function _recordInject(ev) {
   } catch {}
 }
 
+// ═══════════════════════════════════════════════════════════
+// v9.9.307 · 本源观照·真上游 · 路由第三方时捕获「实发上游之全文」
+// ═══════════════════════════════════════════════════════════
+// 痛根: 面板原仅显 source.js 侧 devin body 之 SP after(经文) · 非第三方实收之全文
+//       且 tape limit=1 取最末 → 常滞于 devin 子代 RPC(summary/title/memory)
+// 解: dao_router._callProvider 组装最终请求体后 · 经 global.__DAO_RECORD_UPSTREAM
+//     回传 {provider,model,messages,tools} · 此处建可读全文(system+messages+tools)
+//     面板优先显此「真上游」· 仅路由第三方时有 · 官方透传时为空(回退 tape)
+// 道义: 十四章「执今之道·以御今之有」· 观其真实所往 · 名实终一
+const _UPSTREAM_FILE = path.join(__dirname, "_lastupstream.json");
+const _UP_FIELD_CAP = 60000; // 单字段上限
+const _UP_TOTAL_CAP = 262144; // 全文上限 256KB
+let _lastUpstream = null;
+let _saveUpstreamTimer = null;
+function _capUpField(s, cap) {
+  s = typeof s === "string" ? s : s == null ? "" : String(s);
+  cap = cap || _UP_FIELD_CAP;
+  if (s.length <= cap) return s;
+  return s.slice(0, cap - 200) + "\n…[" + (s.length - cap + 200) + "B 省]…";
+}
+function _recordUpstream(p) {
+  try {
+    if (!p) return;
+    const msgs = Array.isArray(p.messages) ? p.messages : [];
+    const hasSys =
+      msgs.length > 0 &&
+      msgs[0].role === "system" &&
+      typeof msgs[0].content === "string";
+    const fields = [];
+    let total = 0;
+    // 1. 真实系统提示词 (第三方实收 · 增强=官方+DAO · 替换=经文)
+    let sysText = hasSys
+      ? msgs[0].content
+      : typeof p.system === "string"
+        ? p.system
+        : "";
+    if (sysText) {
+      const t = _capUpField(sysText, _UP_FIELD_CAP);
+      fields.push({
+        kind: "chat",
+        field_path: "system",
+        role: "system",
+        chars: sysText.length,
+        text: t,
+      });
+      total += t.length;
+    }
+    // 2. 对话消息 (角色+内容+tool_calls) · 上下文之全 · 各条限长
+    for (let i = hasSys ? 1 : 0; i < msgs.length; i++) {
+      if (total >= _UP_TOTAL_CAP) break;
+      const m = msgs[i] || {};
+      let c = m.content;
+      if (Array.isArray(c)) {
+        c = c
+          .map((x) =>
+            typeof x === "string" ? x : x && x.text ? x.text : JSON.stringify(x),
+          )
+          .join("\n");
+      } else if (c != null && typeof c !== "string") {
+        c = JSON.stringify(c);
+      }
+      c = c || "";
+      if (m.tool_calls && m.tool_calls.length) {
+        c +=
+          (c ? "\n" : "") +
+          "[tool_calls] " +
+          m.tool_calls
+            .map((tc) => (tc.function && tc.function.name) || tc.id || "?")
+            .join(", ");
+      }
+      const t = _capUpField(c, 8000);
+      fields.push({
+        kind: "msg",
+        field_path: "messages[" + i + "]",
+        role: m.role || "?",
+        chars: c.length,
+        text: t,
+      });
+      total += t.length;
+    }
+    // 3. 工具清单
+    if (Array.isArray(p.tools) && p.tools.length) {
+      const names = p.tools.map(
+        (t) => (t.function && t.function.name) || t.name || "?",
+      );
+      fields.push({
+        kind: "tools",
+        field_path: "tools",
+        role: "tools",
+        chars: names.length,
+        text: "[" + names.length + " 工具] " + _capUpField(names.join(", "), 8000),
+      });
+    }
+    if (fields.length === 0) return;
+    _lastUpstream = {
+      at: Date.now(),
+      provider: p.provider || "",
+      model: p.model || "",
+      after: sysText ? _capUpField(sysText, _UP_FIELD_CAP) : "",
+      all_fields: fields,
+      all_fields_count: fields.length,
+      all_fields_chars: fields.reduce((s, f) => s + (f.chars || 0), 0),
+    };
+    if (!_saveUpstreamTimer) {
+      _saveUpstreamTimer = setTimeout(() => {
+        _saveUpstreamTimer = null;
+        try {
+          fs.writeFile(
+            _UPSTREAM_FILE,
+            JSON.stringify(_lastUpstream),
+            { mode: 0o600 },
+            () => {},
+          );
+        } catch {}
+      }, _SAVE_DEBOUNCE_MS);
+    }
+  } catch {}
+}
+try {
+  if (
+    fs.existsSync(_UPSTREAM_FILE) &&
+    fs.statSync(_UPSTREAM_FILE).size < 2 * 1024 * 1024
+  ) {
+    _lastUpstream = JSON.parse(fs.readFileSync(_UPSTREAM_FILE, "utf8"));
+  }
+} catch {}
+global.__DAO_RECORD_UPSTREAM = _recordUpstream;
+
 // v17.44 · 版本指纹 · 扩展据此检测 hot_dir 源.js 与本进程代码是否一致
 let _SELF_SIZE = 0;
 try {
@@ -3349,6 +3477,24 @@ function handleControl(req, res) {
   }
 
   // ═══════════════════════════════════════════════════════════
+  // v9.9.307 · /origin/upstream · 真上游 · 第三方实收之全文(system+messages+tools)
+  // ═══════════════════════════════════════════════════════════
+  if (u.pathname === "/origin/upstream" && req.method === "GET") {
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        upstream: _lastUpstream || null,
+        at: _lastUpstream && _lastUpstream.at ? _lastUpstream.at : 0,
+      }),
+    );
+    return true;
+  }
+
+  // ═══════════════════════════════════════════════════════════
   // v7.3 · /origin/sig · 简哈签名 · webview 实时同步检变之据
   // ═══════════════════════════════════════════════════════════
   // 返: { mode, sp_sig, custom_sig, last_inject_at, custom_sp }
@@ -3391,6 +3537,9 @@ function handleControl(req, res) {
         // v9.4.5 · 底层之底 · tape 动感
         tape_count: _rawTape.length,
         tape_last_at: tapeLastAt,
+        // v9.9.307 · 真上游动感 · 第三方实发即变 · 面板优先据此刷
+        upstream_last_at:
+          _lastUpstream && _lastUpstream.at ? _lastUpstream.at : 0,
         uptime_s: Math.round((Date.now() - START_TIME) / 1000),
         req_total: reqCounter,
       }),

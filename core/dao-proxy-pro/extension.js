@@ -2809,6 +2809,8 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
   var lastSig = '';
   var curMode = 'invert';
   var editMode = false;
+  // v9.9.307 · 真上游 · 路由第三方时面板优先显第三方实收全文 · 时戳防 host 推之经文覆盖
+  var _lastUpstreamAt = 0;
 
   // 反者道之动 · 编模式预填只取经文本源部分 · 截去 kept blocks (—之后)
   // TAO_TRAILER = "\\n\\n---\\n\\n" 是自然分界符 · 前为道魂(经文) · 后为辐(工具块)
@@ -2854,8 +2856,11 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
     if (fieldCount > 0) {
       for (var i = 0; i < fieldCount; i++) {
         var f = entry.all_fields[i];
-        parts.push('\u2501\u2501\u2501 #' + (i + 1) + '/' + fieldCount +
-          ' \u00b7 ' + (f.chars || 0) + '\u5b57 \u2501\u2501\u2501');
+        var _h = '\u2501\u2501\u2501 #' + (i + 1) + '/' + fieldCount;
+        if (f.field_path) _h += ' \u00b7 ' + f.field_path;
+        else if (f.role) _h += ' \u00b7 ' + f.role;
+        _h += ' \u00b7 ' + (f.chars || 0) + '\u5b57 \u2501\u2501\u2501';
+        parts.push(_h);
         parts.push(f.text || '');
         parts.push('');
         totalChars += (f.chars || 0);
@@ -3019,14 +3024,38 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
     }).catch(function(){});
   }
 
+  // v9.9.307 · 真上游 · 路由第三方时拉第三方实收全文(system+messages+tools)并全显
+  //   有则优先显此(返 true) · 无则交回 tape 兜底 · 道法自然·观其真实所往
+  function pullUpstream() {
+    return fJson('/origin/upstream').then(function(resp){
+      if (resp && resp.ok && resp.upstream && resp.upstream.all_fields && resp.upstream.all_fields.length > 0) {
+        var e = resp.upstream;
+        _lastUpstreamAt = e.at || Date.now();
+        renderTapeEntry({ after: e.after, all_fields: e.all_fields }, new Date().toLocaleTimeString());
+        var _p = '\u771f\u4e0a\u6e38 \u00b7 ' + (e.all_fields_chars || 0) + '\u5b57';
+        if (e.provider) _p += ' \u00b7 ' + e.provider;
+        if (e.model) _p += ' / ' + e.model;
+        $stat.innerHTML = '<span class="pill">' + _p + '</span>';
+        $stat.classList.add('show');
+        return true;
+      }
+      return false;
+    }).catch(function(){ return false; });
+  }
+
+  // v9.9.307 · 统一刷 SP 显 · 先真上游(第三方实收全文) · 无则 tape 兜底
+  function refreshSP() {
+    return pullUpstream().then(function(shown){ if (!shown) pull(); });
+  }
+
   function sigTick() {
     fJson('/origin/sig').then(function(r){
       if (!r || !r.ok) return;
-      var cur = (r.injects_last_at || 0) + '|' + (r.injects_count || 0) + '|' + (r.tape_last_at || 0) + '|' + (r.mode_sig || '');
+      var cur = (r.injects_last_at || 0) + '|' + (r.injects_count || 0) + '|' + (r.tape_last_at || 0) + '|' + (r.upstream_last_at || 0) + '|' + (r.mode_sig || '');
       if (cur === lastSig) return;
       lastSig = cur;
       pingPull();
-      pull();
+      refreshSP();
     }).catch(function(){});
   }
 
@@ -3049,7 +3078,10 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
       // 3. \u81ea\u5b9a\u4e49 badge
       if (_d.ping && _d.ping.custom_sp != null) updateCustomBadge(_d.ping.custom_sp, _d.ping.custom_sp_chars);
       // 4. \u663e\u793a SP \u5185\u5bb9 (\u4f18\u5148 proxy.after · \u5df2\u8fd0\u884c\u624d\u6709)
-      if (_d.proxy && _d.proxy.after) {
+      //   v9.9.307 · 但真上游(第三方实收全文)若不旧于此 SP 注入 · 则不以经文覆盖之
+      var _proxyAt = (_d.proxy && _d.proxy.age_s != null) ? (Date.now() - _d.proxy.age_s * 1000) : 0;
+      var _upWins = _lastUpstreamAt && _lastUpstreamAt >= (_proxyAt - 2000);
+      if (_d.proxy && _d.proxy.after && !_upWins) {
         lastSP = _d.proxy.after;
         if (!editMode) {
           $sp.classList.remove('quiet');
@@ -3152,15 +3184,15 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
 
   // boot · v9.7.6 · 执今之道 · boot 即拉 getCustomSP 预装 lastSP (帛书本源) · tape 空亦可编辑
   pingPull();
-  pull();
+  refreshSP();
   vsc.postMessage({ command: 'getCustomSP' });
   // v9.9.18 \u4fee\u590d \u00b7 boot \u5373\u8bf7\u6c42 extension host refresh \u63a8\u9001 {type:"data"} \u5305
   // \u8ba9\u4e09\u76cf/\u6309\u9215/SP\u663e\u793a\u5728\u65e0\u9700 portMapping \u7684\u60c5\u51b5\u4e0b\u4e5f\u80fd\u7acb\u5373\u66f4\u65b0
   vsc.postMessage({ command: 'refresh' });
-  setTimeout(function(){ pingPull(); pull(); vsc.postMessage({ command: 'refresh' }); }, 3000);
+  setTimeout(function(){ pingPull(); refreshSP(); vsc.postMessage({ command: 'refresh' }); }, 3000);
   setInterval(sigTick, 5000);
   setInterval(pingPull, 10000);
-  setInterval(pull, 30000);
+  setInterval(refreshSP, 30000);
   // v9.9.18+v9.9.36 \u00b7 \u5468\u671f refresh \u4fdd\u5e95 \u00b7 15s (\u539f 5s)
   setInterval(function() { vsc.postMessage({ command: 'refresh' }); }, 15000);
   // v9.9.20 jiqi · IIFE 全跑通 · 至此即活 · 上报 boot-done 标记
