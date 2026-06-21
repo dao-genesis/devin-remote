@@ -1632,6 +1632,8 @@ async function shellHandleMessage(sid, m) {
           return { accNo: i + 1, email: a.email, name: a.name || String(a.email || '').split('@')[0], dollars };
         });
         send({ type: 'accounts', list });
+        // v3.51.0 · 切号板一开即后台节流预热前若干号 auth1 → 随后多实例首开秒开 (受控并发·不抛·不阻塞)
+        try { _prewarmAuthThrottled(list.map((x) => x && x.email)); } catch (e) {}
         return;
       }
       case 'newDevinTab': {
@@ -2275,10 +2277,73 @@ async function _openAccountSysBrowser(i) {
 async function _resumePersistedTabs() {
   let saved = [];
   try { saved = (_ctx && _ctx.globalState && _ctx.globalState.get("dao.multiTabs")) || []; } catch (e) {}
+  // v3.51.0 · 多实例首开提速: 先节流预热这批要还原的账号 auth1 缓存 (受控并发,
+  //   下面的 openMultiInstance 即命中缓存秒开 · 不再逐个串行慢登录)。
+  try { await _prewarmAuthThrottled(saved.map((t) => t && t.email)); } catch (e) {}
   for (const t of saved) {
     try { await openMultiInstance({ email: t.email, devinId: t.devinId, title: t.title, status: t.status, path: t.path, label: t.pageLabel }); }
     catch (e) { try { log("[multi] resume err: " + (e && e.message)); } catch (x) {} }
   }
+}
+
+// v3.51.0 · 道法自然 · 反者道之动 · 多实例首开提速 · 节流预热 (auth1 缓存)
+//   本源校正: 多实例首开慢的根因是「并发过多→网络拥塞」, 非被官网限速。
+//             故不再因噎废食地全禁预热, 而是「鱼与熊掌皆得」——预热回归,
+//             但用 受控并发 + 请求间隔 + 仅热有限的近期/已开账号, 网络占用极小(对齐手机版)。
+//   守柔(零再增弊端):
+//     · 单飞 _prewarmInProgress 防重叠 · 并发默认 2 · 间隔默认 400ms · 上限默认 8 个号
+//     · 命中缓存(已有 auth1)即跳过 · 黑名单跳过 · 全程 try/catch 不抛
+//     · 仍保留限速感知安全网: _devinLoginRateLimitedUntil 窗口内整体让位(零网络)
+//     · 配置开关: wam.prewarm.enabled / .concurrency / .gapMs / .maxCount
+let _prewarmInProgress = false;
+async function _prewarmAuthThrottled(emails, opts) {
+  opts = opts || {};
+  if (_prewarmInProgress) return { ok: false, busy: true };
+  if (!_cfg("prewarm.enabled", true)) return { ok: false, disabled: true };
+  // 限速窗口内不预热 (守安全网 · 即便根因是并发拥塞, 窗口期亦无谓再打)
+  if (Date.now() < _devinLoginRateLimitedUntil) return { ok: false, rateLimited: true };
+  const conc = Math.max(1, Math.min(4, (opts.concurrency != null ? opts.concurrency : (_cfg("prewarm.concurrency", 2) | 0)) || 2));
+  const gapMs = Math.max(0, (opts.gapMs != null ? opts.gapMs : (_cfg("prewarm.gapMs", 400) | 0)));
+  const maxCount = Math.max(1, Math.min(50, (opts.maxCount != null ? opts.maxCount : (_cfg("prewarm.maxCount", 8) | 0)) || 8));
+  // 去重 + 过滤(已缓存/黑名单/无密码) + 限量
+  const seen = new Set();
+  const targets = [];
+  for (const raw of (emails || [])) {
+    const email = String(raw || "").trim();
+    if (!email) continue;
+    const key = email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try { if (_store && _store.isBanned && _store.isBanned(email)) continue; } catch (e) {}
+    try { const au = devinCloud.getCachedAuth(email); if (au && au.auth1) continue; } catch (e) {} // 已热即跳
+    targets.push(email);
+    if (targets.length >= maxCount) break;
+  }
+  if (!targets.length) return { ok: true, warmed: 0 };
+  _prewarmInProgress = true;
+  const t0 = Date.now();
+  let ok = 0, fail = 0;
+  log("prewarm: 启动 · 目标 " + targets.length + " · 并发 " + conc + " · 间隔 " + gapMs + "ms");
+  const queue = targets.slice();
+  async function _pwWorker() {
+    while (queue.length) {
+      // 任务执行中若进入限速窗口 → 整队让位 (清空 queue · 零再打)
+      if (Date.now() < _devinLoginRateLimitedUntil) { queue.length = 0; break; }
+      const email = queue.shift();
+      try { const auth = await _resolveAuthForEmail(email); if (auth && auth.auth1) ok++; else fail++; }
+      catch (e) { fail++; }
+      if (gapMs && queue.length) await new Promise((r) => setTimeout(r, gapMs));
+    }
+  }
+  try {
+    const ws = [];
+    for (let c = 0; c < conc; c++) ws.push(_pwWorker());
+    await Promise.all(ws);
+  } finally {
+    _prewarmInProgress = false;
+    log("prewarm: 完成 · ok " + ok + " · fail " + fail + " · 用时 " + (Date.now() - t0) + "ms");
+  }
+  return { ok: true, warmed: ok, failed: fail };
 }
 
 // ═══ § 1 · 万法之资 ═══
@@ -15532,6 +15597,10 @@ module.exports = {
     _parsePlanStatusJson,
     verifyOneAccount,
     verifyAllAccounts,
+    _prewarmAuthThrottled, // v3.51.0 · 多实例首开节流预热 · 暴露给守门测试
+    get _prewarmInProgress() {
+      return _prewarmInProgress;
+    },
     injectViaBing,
     injectToken, // v3.1.0 · 暴露给回归测
     _installOpenExternalGuard, // v3.1.0 · 暴露给回归测
