@@ -2,6 +2,16 @@ name = "dao-relay-do"
 main = "worker.js"
 compatibility_date = "2024-09-23"
 
+# 静态资产 (Ultraviolet SW 代理引擎本源重构):
+#   public/uv/* = UV bundle/handler/client/sw + bare-mux + bare-as-module3 传输模块 + frame.html。
+#   由用户浏览器同源加载并注册 Service Worker (渲染/JS 改写全在浏览器内 = 充分调用浏览器本源资源);
+#   Worker 只当极薄传输 (/bare/v3) + Devin 认证注入。资产命中即直发, 其余路径才进入 Worker。
+[assets]
+directory = "./public"
+binding = "ASSETS"
+html_handling = "none"        # /uv/frame.html 按字面路径直发 (不丢 .html · 不丢 #hash)
+not_found_handling = "none"   # 非资产路径(/bare、/uv/service/* SW 引导等)落入 Worker 处理
+
 # Durable Object: 每个 (session,token) 配对一个实例, 持有客户端 WSS + 在途请求表
 [[durable_objects.bindings]]
 name = "DAO_RELAY"
