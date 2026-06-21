@@ -4613,8 +4613,52 @@ function _liveFresh() {
 function _officialFamiliesSource() {
   return _liveFresh() ? "merged" : "static";
 }
+// ★ v9.9.310 · 端点发现文件 · 让任意本地 Agent 凭固定路径找到运行中的控制面 Base
+//   写 ~/.codeium/dao-byok/endpoint.json · 即便交接文档里的端口过期(重启换端口),
+//   Agent 读此文件即得当前真实 base/port · 据此热管理一切 · 六章「玄牝之门」
+function _daoUserDir() {
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  return home ? path.join(home, ".codeium", "dao-byok") : null;
+}
+function _extVersion() {
+  try {
+    const pj = path.join(__dirname, "..", "..", "package.json");
+    return JSON.parse(fs.readFileSync(pj, "utf8")).version || "";
+  } catch {
+    return "";
+  }
+}
+function _writeEndpointDiscovery() {
+  try {
+    const dir = _daoUserDir();
+    if (!dir) return;
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {}
+    const base = "http://127.0.0.1:" + _actualPort;
+    const payload = {
+      base,
+      port: _actualPort,
+      host: "127.0.0.1",
+      pid: process.pid,
+      version: _extVersion(),
+      mode: SP_MODE,
+      handoff_url: base + "/origin/ea/handoff.md",
+      overview_url: base + "/origin/ea/overview",
+      health_url: base + "/origin/health",
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(
+      path.join(dir, "endpoint.json"),
+      JSON.stringify(payload, null, 2),
+      { mode: 0o600 },
+    );
+  } catch {}
+}
+
 // ★ v9.9.270 · 生成实时交接指挥文档 (Markdown) · 供官方/任意 Agent 热配置
 function _buildHandoffMd() {
+  _writeEndpointDiscovery(); // 生成文档同时刷新发现文件 · 二者同源
   const cfg = _eaRuntimeMod ? _eaRuntimeMod.hotGetConfig() : {};
   const providers = (cfg && cfg.providers) || {};
   const routes = (cfg && cfg.daoRoutes && cfg.daoRoutes.routes) || {};
@@ -4629,8 +4673,11 @@ function _buildHandoffMd() {
   L.push("> 道法自然 · 无为而无不为 · 本插件运行于设备内部, 全部能力对 Agent 开放.");
   L.push("> 把本文件交给运行中的官方/任意 Agent, 它即可照此**热推进·热修改·热配置**路由与渠道, 无需重启.");
   L.push("");
+  const _udir = _daoUserDir();
+  const _epFile = _udir ? path.join(_udir, "endpoint.json") : "(不可用)";
   L.push("- 生成时间: `" + now + "`");
-  L.push("- 控制面 Base URL: `" + base + "`");
+  L.push("- 控制面 Base URL: `" + base + "` (仅本机 127.0.0.1 · 无需鉴权)");
+  L.push("- 端点发现文件: `" + _epFile + "` (推荐先读此文件取 base · 文档可能阶段性过期)");
   L.push("- 模型源: `" + src + "` (live=右侧 Cascade 实时捕获 / static=内置目录)");
   L.push(
     "- 官方家族数: `" +
@@ -4639,6 +4686,21 @@ function _buildHandoffMd() {
       ((_liveModelCapture.models || []).length) +
       "`",
   );
+  L.push("");
+  L.push("## 零、连接握手 (本地 Agent 三步接入底层)");
+  L.push("");
+  L.push("> 目标: 任意跑在本机的 Agent 拿到本文档即可直接接管运行中的本插件·热修热管一切·无需重启。");
+  L.push("");
+  L.push("1. **取 Base**: 优先读发现文件 `" + _epFile + "` 中的 `base`(即便本文档端口过期也准); 读不到则用上方 Base URL。");
+  L.push("   - 发现文件内容: `{ base, port, pid, version, mode, handoff_url, overview_url, health_url, updatedAt }`");
+  L.push("2. **探活**: `GET $BASE/origin/health` 返 200 即控制面存活; `GET $BASE/origin/ea/overview` 拿一站式全貌(渠道/路由/健康/模型源)。");
+  L.push("3. **热管理**: 照下面「三、热配置 API」直接 curl 增删渠道/路由、切提示词与经藏、探活与冒烟测试、读用量与上游抓取·均即时生效。");
+  L.push("");
+  L.push("```bash");
+  L.push("# 一行接入(本机): 读发现文件拿 base → 拉全貌");
+  L.push("BASE=$(node -e \"process.stdout.write(require('" + _epFile.replace(/\\/g, "/") + "').base)\" 2>/dev/null || echo '" + base + "')");
+  L.push("curl -s $BASE/origin/ea/overview");
+  L.push("```");
   L.push("");
   L.push("## 一、当前渠道 (providers)");
   L.push("");
@@ -4732,10 +4794,32 @@ function _buildHandoffMd() {
   L.push("curl -X DELETE " + base + "/origin/ea/route/MODEL_SWE_1_6_FAST");
   L.push("```");
   L.push("");
-  L.push("### 其他");
+  L.push("### 其他 (批写/重载/探活/测试/发现)");
   L.push("- `POST /origin/ea/config` — 批量写配置 (body 为完整 config 对象)");
-  L.push("- `POST /origin/ea/reload` — 重载配置 · `POST /origin/ea/probe` — 探活渠道");
+  L.push("- `POST /origin/ea/reload` — 重载配置 (手改配置.json 后生效) · `POST /origin/ea/probe` — 实证探活全渠道");
   L.push("- `POST /origin/ea/test-chat` — 冒烟测试某渠道连通性 (body: `{modelUid, message}`)");
+  L.push("- `GET /origin/ea/discover-models?provider=NAME` — 拉该渠道 /v1/models 自动发现可用模型");
+  L.push("- `DELETE /origin/ea/provider/:name` · `DELETE /origin/ea/route/:uid` — 热删除渠道/路由");
+  L.push("");
+  L.push("### 提示词·经藏 (道魂热切 · 不重启)");
+  L.push("```bash");
+  L.push("# 模式: 道(帛书前置注入) / 官(透传)  —  GET 看当前, POST 切换");
+  L.push("curl -s " + base + "/origin/mode");
+  L.push("curl -X POST " + base + "/origin/mode -H 'Content-Type: application/json' -d '" + JSON.stringify({ mode: "invert" }) + "'");
+  L.push("# 经藏热切: laozi+yinfu(默认) / laozi(单帛书老子) / yinfu(单阴符经)");
+  L.push("curl -s " + base + "/origin/canon");
+  L.push("curl -X POST " + base + "/origin/canon -H 'Content-Type: application/json' -d '" + JSON.stringify({ canon: "laozi" }) + "'");
+  L.push("# 自定义注入 SP: GET 看 / POST 设 / DELETE 清");
+  L.push("curl -s " + base + "/origin/custom_sp");
+  L.push("curl -X POST " + base + "/origin/custom_sp -H 'Content-Type: application/json' -d '" + JSON.stringify({ sp: "你的自定义系统提示词" }) + "'");
+  L.push("curl -X DELETE " + base + "/origin/custom_sp");
+  L.push("```");
+  L.push("");
+  L.push("### 观测·用量 (本源观照 · 验证注入与消耗)");
+  L.push("- `GET /origin/upstream` — 最上游(发往第三方模型)实收请求体: system(官方SP+道增强)+对话+工具");
+  L.push("- `GET /origin/sig` — 动感签名(含 `upstream_last_at`) · 轮询判是否有新注入");
+  L.push("- `GET /origin/tape?limit=1` · `GET /origin/lastinject` · `GET /origin/allinjects` — 代理流/注入快照");
+  L.push("- `GET /origin/ea/usage` — 用量统计 · `GET /origin/ea/status` — 运行状态");
   L.push("");
   L.push("### ★ v9.9.285 · 渠道实证探活 (名实相符·坏渠道直书错误)");
   L.push("- `POST /origin/ea/probe` 改为发**最小真实 chat 请求**端到端验证, 不再仅探 `/models`+看状态码.");
@@ -4759,7 +4843,7 @@ function _buildHandoffMd() {
   L.push("4. GitHub Models (`gpt-4.1` / `gpt-4o` 等) → `github` 渠道 (PAT 作 key)");
   L.push("");
   L.push("---");
-  L.push("_本文件由 /origin/ea/handoff.md 实时生成 · 反映插件当前真实状态 · v9.9.285_");
+  L.push("_本文件由 /origin/ea/handoff.md 实时生成 · 反映插件当前真实状态 · 端点发现文件 endpoint.json 保证跨重启可连 · v9.9.310_");
   return L.join("\n");
 }
 
@@ -6593,6 +6677,7 @@ server.on("listening", () => {
   try {
     _actualPort = (server.address() && server.address().port) || PORT;
   } catch {}
+  _writeEndpointDiscovery();
   log("═══════════════════════════════════════════════════════");
   log(` 本源 Origin ${ORIGIN_VERSION} h1+h2c mux @ :${_actualPort}`);
   log(` mgmt   → https://${UPSTREAM_MGMT}`);
@@ -6639,6 +6724,7 @@ function start(opts) {
       const addr = server.address();
       const realPort = (addr && addr.port) || port;
       _actualPort = realPort;
+      _writeEndpointDiscovery();
       // v9.9.58 · 延迟绑定H2内部服务器 · 基于实际mux端口
       // 七十六章「柔弱微细居上」· 不争固定端口 · 随实际端口而动
       _bindH2Internal(realPort);
