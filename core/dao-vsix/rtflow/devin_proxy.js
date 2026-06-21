@@ -519,10 +519,19 @@ async function handleRequest(req, res, auth, opts, _log) {
           if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + bridge);
           else if (/<\/head>/i.test(html)) html = html.replace(/<\/head>/i, bridge + "</head>");
           else html = bridge + html;
-          // 拖拽上传桥脚本(同源 /__daobridge.js): 注入该反代页 → 拖文件/会话到页内即投递上传框(对齐 /i/ 与手机 APK)。
+          // 拖拽上传桥: 内联于 <head>(随首段 HTML 同步执行·document 级监听跨 SPA body 重渲染长存)。
+          //   不可用 </body> 前 <script src>: SPA 引导清空/重建 body, 外链脚本走网络往返期间标签已被抹除 →
+          //   永不执行(实测 __daoDropBridge 不挂·拖拽无反应)。同源直服本反代端口 → 取字节 fetch 即达。
           if (_bridgeServe) {
-            const dbg = '<script src="/__daobridge.js"></script>';
-            html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, dbg + "</body>") : (html + dbg);
+            try {
+              const _bj = await _bridgeServe("/__daobridge.js", reqUrl);
+              if (_bj && _bj.body) {
+                const dbg = "<script>" + _bj.body + "</script>";
+                if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + dbg);
+                else if (/<\/head>/i.test(html)) html = html.replace(/<\/head>/i, dbg + "</head>");
+                else html = dbg + html;
+              }
+            } catch (e) { /* 守柔: 桥注入失败不阻断反代 */ }
           }
           safeHeaders["Content-Type"] = "text/html; charset=utf-8";
           res.writeHead(status, safeHeaders);
