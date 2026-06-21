@@ -683,6 +683,7 @@ html.m #hint{font-size:14px;padding:18px}
 #daowin .cvbody{flex:1;overflow:auto;padding:12px 12px 50px;white-space:pre-wrap;word-break:break-word;font:12.5px/1.6 ui-monospace,Consolas,monospace;color:#cdd3de}
 .dtoast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(8px);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:9px 16px;font-size:13px;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;z-index:99999;max-width:90%;box-shadow:0 8px 30px rgba(0,0,0,.5)}
 .dtoast.show{opacity:1;transform:translateX(-50%) translateY(0)}.dtoast.fail{border-color:#f85149}.dtoast.ok{border-color:#3fb950}
+.tbtn.faved{color:#f0b400}
 #find{position:fixed;top:66px;right:14px;display:none;align-items:center;gap:4px;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:5px 7px;z-index:45;box-shadow:0 6px 20px rgba(0,0,0,.45)}
 #find.on{display:flex}
 #find input{background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:4px 8px;font-size:12.5px;width:180px;outline:none}
@@ -775,7 +776,9 @@ function setActive(id){
     if(on)applyZoom(tabs[k]);}
   if(SBAR){if(split){SBAR.style.left=(splitRatio*100)+'%';SBAR.className='on';}else SBAR.className='';}
   if(tabs[active]){ADDR.value=tabs[active].url;ZL.textContent=Math.round((tabs[active].zoom||1)*100)+'%';}
-  spin(!!(tabs[active]&&tabs[active].loading));hideOverlay();}
+  spin(!!(tabs[active]&&tabs[active].loading));hideOverlay();syncStar();}
+function markStar(on){var sb=document.getElementById('bStar');if(sb){sb.textContent=on?'★':'☆';sb.classList.toggle('faved',!!on);}}
+function syncStar(){var on=false;try{if(isBoard()){var bt=activeBoardTab();on=(favs||[]).some(function(f){return f&&f.board===bt;});}else if(active){var u=tabs[active]&&tabs[active].url;on=(favs||[]).some(function(f){return f&&(f.id===active||(u&&f.url===u));});}}catch(e){}markStar(on);}
 function _otherTab(id){for(var i=order.length-1;i>=0;i--){if(order[i]!==id)return order[i];}return null;}
 function toggleSplitWith(id){
   if(splitId){clearSplit();daoToast('已退出分屏');return;}
@@ -1072,13 +1075,13 @@ _dEl('cvBack').onclick=daoHideCv;
 document.getElementById('bDl').onclick=function(){daoOpen('recent');};
 document.getElementById('bBk').onclick=function(){daoOpen('backup');};
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
-document.getElementById('bAdd').onclick=function(e){e.stopPropagation();vscode.postMessage({type:'newDevinTab',clean:1});};
+document.getElementById('bAdd').onclick=function(e){e.stopPropagation();openWebTab('https://app.devin.ai/','＋登 Devin');};
 document.getElementById('bRefresh').onclick=function(){if(isBoard()){var bt=activeBoardTab();closeTab(boardId(bt));openBoard(bt);return;}var t=tabs[active];if(t){t.frame.setAttribute('src',t.url);setLoading(active,true);}};
 document.getElementById('bHome').onclick=function(){openBoard('home');};
 document.getElementById('bZi').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.min(3,(t.zoom||1)+0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 document.getElementById('bZo').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.max(0.3,(t.zoom||1)-0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 ZL.onclick=function(){var t=tabs[active];if(t){t.zoom=1;applyZoom(t);ZL.textContent='100%';}};
-document.getElementById('bStar').onclick=function(){if(isBoard()){var bt=activeBoardTab();var meta=BOARD_META[bt]||['⭐',bt];vscode.postMessage({type:'favAdd',board:bt,label:meta[0]+' '+meta[1]});daoToast('★ 已收藏当前板块');}else if(active){vscode.postMessage({type:'favAdd',id:active});daoToast('★ 已收藏当前页');}else{daoToast('请先打开一个页面再收藏',true);}};
+document.getElementById('bStar').onclick=function(){if(isBoard()){var bt=activeBoardTab();var meta=BOARD_META[bt]||['⭐',bt];vscode.postMessage({type:'favAdd',board:bt,label:meta[0]+' '+meta[1]});markStar(true);daoToast('★ 已收藏当前板块');}else if(active){vscode.postMessage({type:'favAdd',id:active});markStar(true);daoToast('★ 已收藏当前页');}else{daoToast('请先打开一个页面再收藏',true);}};
 document.getElementById('bExt').onclick=function(){var t=tabs[active];if(t)vscode.postMessage({type:'openExternal',url:t.url});};
 document.getElementById('ovClose').onclick=hideOverlay;
 ADDR.addEventListener('keydown',function(e){if(e.key==='Enter')navigate(ADDR.value);});

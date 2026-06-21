@@ -283,8 +283,23 @@ class WorkspaceState {
             const t = fs.readFileSync(this.tokenFile, 'utf8').trim();
             if (t && t.length >= 16) { this.token = t; return t; }
         } catch {}
+        // 道·令牌恒稳: 无工作区窗口的 workspaceKey 由 vscode.env.sessionId 派生,
+        //   每次重开即变 → 令牌随之漂移(重启后旧牌失效, 公网/外部客户端断连)。
+        //   故回落机器级全局令牌文件(全机一致), 重启/换窗口仍复用同一牌;
+        //   有工作区且已存自有 token 者上面已优先用己(账号隔离边界不破)。
+        const globalTokenFile = path.join(DAO_DIR, 'api-token');
+        try {
+            const g = fs.readFileSync(globalTokenFile, 'utf8').trim();
+            if (g && g.length >= 16) {
+                this.token = g;
+                try { fs.writeFileSync(this.tokenFile, g, 'utf8'); } catch {}
+                this.saveState();
+                return g;
+            }
+        } catch {}
         this.token = 'dao-vsix-' + crypto.randomBytes(16).toString('hex');
         try { fs.writeFileSync(this.tokenFile, this.token, 'utf8'); } catch {}
+        try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(globalTokenFile, this.token, 'utf8'); } catch {}
         this.saveState();
         return this.token;
     }
@@ -3946,15 +3961,20 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     try {
         switch (msg.command) {
             case 'copyBridgeUrl': {
+                // 无公网(relay=local)时回落本机地址, 保证有可复制内容(不报错 ✗)。
                 const c = readBridgeConn();
-                await vscode.env.clipboard.writeText((c && c.url) || '');
-                reply({ type: 'actionResult', command: 'copyBridgeUrl', ok: !!(c && c.url) });
+                const url = (c && c.url) || ws.publicUrl || ('http://localhost:' + (ws.port || 9921));
+                await vscode.env.clipboard.writeText(url);
+                reply({ type: 'actionResult', command: 'copyBridgeUrl', ok: !!url });
                 break;
             }
             // 归一 · 复制「实时公网单页地址」(<url>/shell · 免 token) — 在任意电脑/手机浏览器打开即可操作整个六合一面板。
             case 'copyBridgeShell': {
                 const c = readBridgeConn();
-                const u = (c && c.url) ? (String(c.url).replace(/\/+$/, '') + '/shell') : '';
+                const base = (c && c.url)
+                    ? String(c.url).replace(/\/+$/, '')
+                    : (ws.publicUrl ? String(ws.publicUrl).replace(/\/+$/, '') : ('http://localhost:' + (ws.port || 9921)));
+                const u = base + '/shell';
                 await vscode.env.clipboard.writeText(u);
                 reply({ type: 'actionResult', command: 'copyBridgeShell', ok: !!u });
                 break;
@@ -9287,18 +9307,34 @@ setTimeout(function() {
 //   不注入任何 Devin 认证(隐私/安全: 外站不应拿到本地登录态)。复刻手机端 APK 站内搜索体验。
 // ═══════════════════════════════════════════════════════════
 async function genericWebProxy(targetUrl: string, depth: number = 0): Promise<any> {
-    const errPage = (msg: string, href?: string) => ({
-        _proxy: true, status: 502, contentType: 'text/html; charset=utf-8',
-        body: '<!DOCTYPE html><meta charset="utf-8"><body style="background:#1e1e1e;color:#bbb;font:14px sans-serif;padding:24px;line-height:1.7">'
-            + '加载失败: ' + String(msg).replace(/[<>]/g, '')
-            + (href ? ('<br><br><a style="color:#6cf" target="_blank" rel="noopener" href="' + href.replace(/"/g, '&quot;') + '">在系统浏览器打开此网址</a>') : '')
-            + '</body>',
-    });
-    if (depth > 6) return errPage('重定向过多');
+    const errPage = (msg: string, href?: string) => {
+        const safeHref = (href || '').replace(/"/g, '&quot;');
+        const host = (() => { try { return new URL(href || targetUrl).host; } catch { return ''; } })();
+        return {
+            _proxy: true, status: 200, contentType: 'text/html; charset=utf-8',
+            body: '<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+                + '<body style="margin:0;background:#0d1117;color:#c9d1d9;font:14px/1.7 -apple-system,Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh">'
+                + '<div style="max-width:520px;padding:28px 30px;text-align:center">'
+                + '<div style="font-size:38px;margin-bottom:10px">🌐</div>'
+                + '<div style="font-size:16px;color:#e6edf3;font-weight:700;margin-bottom:6px">此页暂时打不开</div>'
+                + (host ? '<div style="color:#8b949e;font-size:12.5px;word-break:break-all;margin-bottom:14px">' + host.replace(/[<>]/g, '') + '</div>' : '')
+                + '<div style="color:#8b949e;margin-bottom:20px">' + String(msg).replace(/[<>]/g, '')
+                + '<br>可能是站点屏蔽了代理请求, 或当前网络无法直达(如需科学上网/站点限区)。</div>'
+                + '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">'
+                + '<button onclick="location.reload()" style="background:#1f6feb;color:#fff;border:0;border-radius:7px;padding:9px 18px;font-size:13px;cursor:pointer">↻ 重试</button>'
+                + (safeHref ? '<a href="' + safeHref + '" target="_blank" rel="noopener" style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:7px;padding:9px 18px;font-size:13px;text-decoration:none">↗ 用系统浏览器打开</a>' : '')
+                + '</div></div></body>',
+        };
+    };
+    if (depth > 6) return errPage('重定向过多', targetUrl);
     let u: URL;
-    try { u = new URL(targetUrl); } catch { return errPage('非法网址'); }
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return errPage('仅支持 http/https');
+    try { u = new URL(targetUrl); } catch { return errPage('非法网址', targetUrl); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return errPage('仅支持 http/https', targetUrl);
     return await new Promise((resolve) => {
+        let done = false;
+        const finish = (v: any) => { if (done) return; done = true; try { clearTimeout(hardTimer); } catch { /* 守柔 */ } try { proxyReq.destroy(); } catch { /* 守柔 */ } resolve(v); };
+        // 硬墙超时: 不论 socket 在连接/发送/接收哪一阶段卡住, 到点即返站内错误页, 杜绝隧道层 502 直出。
+        const hardTimer = setTimeout(() => finish(errPage('加载超时(网络不可达或站点过慢)', u.href)), 18000);
         const isHttps = u.protocol === 'https:';
         const lib = isHttps ? https : http;
         const options: any = {
@@ -9308,13 +9344,23 @@ async function genericWebProxy(targetUrl: string, depth: number = 0): Promise<an
             method: 'GET',
             headers: {
                 'User-Agent': DEVIN_UA,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
                 'Accept-Encoding': 'gzip, deflate, br',
+                'Upgrade-Insecure-Requests': '1',
+                'sec-ch-ua': '"Chromium";v="124", "Not.A/Brand";v="24"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Referer': u.origin + '/',
+                'Connection': 'keep-alive',
                 'Host': u.host,
             },
-            timeout: 15000,
-            agent: isHttps ? upstreamHttpsAgent : upstreamHttpAgent,
+            timeout: 14000,
+            agent: false,
         };
         if (isHttps) options.rejectUnauthorized = false;
         const proxyReq = lib.request(options, (pr: any) => {
@@ -9324,13 +9370,14 @@ async function genericWebProxy(targetUrl: string, depth: number = 0): Promise<an
                 let loc = String(pr.headers['location']);
                 try { loc = new URL(loc, u.href).href; } catch { /* 守柔 */ }
                 pr.resume();
-                resolve(genericWebProxy(loc, depth + 1));
+                finish(genericWebProxy(loc, depth + 1));
                 return;
             }
             const ct = String(pr.headers['content-type'] || '');
             const isHtml = ct.includes('text/html') || ct.includes('application/xhtml');
             const enc = String(pr.headers['content-encoding'] || '').toLowerCase();
             const chunks: Buffer[] = [];
+            pr.on('error', () => finish(errPage('读取响应失败', u.href)));
             pr.on('data', (c: Buffer) => chunks.push(c));
             pr.on('end', async () => {
                 const raw = Buffer.concat(chunks);
@@ -9342,7 +9389,7 @@ async function genericWebProxy(targetUrl: string, depth: number = 0): Promise<an
                     else rr(raw);
                 });
                 if (!isHtml) {
-                    resolve({ _proxy: true, status: sc, contentType: ct || 'application/octet-stream', body: body.toString('base64'), binary: true });
+                    finish({ _proxy: true, status: sc, contentType: ct || 'application/octet-stream', body: body.toString('base64'), binary: true });
                     return;
                 }
                 let html = body.toString('utf8');
@@ -9357,11 +9404,11 @@ async function genericWebProxy(targetUrl: string, depth: number = 0): Promise<an
                     + 'try{window.open=function(u){if(u){go(u)}return null};}catch(e){}'
                     + '})();<\/script>';
                 html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>' + inj) : (inj + html);
-                resolve({ _proxy: true, status: sc, contentType: 'text/html; charset=utf-8', body: html });
+                finish({ _proxy: true, status: sc, contentType: 'text/html; charset=utf-8', body: html });
             });
         });
-        proxyReq.on('error', (e: Error) => resolve(errPage((e && e.message) || 'network error', u.href)));
-        proxyReq.on('timeout', () => { try { proxyReq.destroy(); } catch { /* 守柔 */ } resolve(errPage('加载超时', u.href)); });
+        proxyReq.on('error', (e: Error) => finish(errPage((e && e.message) || 'network error', u.href)));
+        proxyReq.on('timeout', () => finish(errPage('加载超时', u.href)));
         proxyReq.end();
     });
 }
