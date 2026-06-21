@@ -1026,7 +1026,7 @@ function renderDownloads(){if(!_bkTree){showOverlay('⬇ 下载','<div class="em
   if(!all.length)body+='<div class="empty">暂无已下载/备份的对话 · 在「💬对话备份」板块备份后此处即可见</div>';
   showOverlay('⬇ 下载 ('+all.length+')',body);_bkBindActions();}
 // ── 归一 · 下载/备份悬浮窗(复刻手机端 APK daopan.html) · CSP 安全(事件委托·无内联 onclick) ──
-var DAO_REC=[],CV_TABS=[],CV_ACT=-1,_daoBkQ='',_convDrag=null,_convDragActive=false;
+var DAO_REC=[],CV_TABS=[],CV_ACT=-1,_daoBkQ='',_convDrag=null,_convDragActive=false,_bkOpen={};
 function _dEl(id){return document.getElementById(id);}
 function daoToast(msg,bad){var t=_dEl('daotoast');if(!t)return;t.textContent=msg;t.className='dtoast show'+(bad?' fail':' ok');clearTimeout(t._tm);t._tm=setTimeout(function(){t.className='dtoast';},2200);}
 function daoAgo(ms){if(!ms)return'';var d=Date.now()-ms;if(d<0)d=0;var mn=Math.floor(d/60000);if(mn<1)return'刚刚';if(mn<60)return mn+'分钟前';var h=Math.floor(mn/60);if(h<24)return h+'小时前';var dd=Math.floor(h/24);if(dd<30)return dd+'天前';try{return new Date(ms).toLocaleDateString();}catch(e){return'';}}
@@ -1041,7 +1041,7 @@ function dlLoad(){if(!DAO_DL.length)_dEl('dlList').innerHTML='<div class="empty"
 function dlRender(){var box=_dEl('dlList');if(!box)return;
   if(!DAO_DL.length){box.innerHTML='<div class="empty">暂无下载 · 在网页中下载文件后会自动出现在这里</div>';var t=_dEl('dlTitle');if(t)t.textContent='下载';return;}
   var h='';for(var i=0;i<DAO_DL.length;i++){var d=DAO_DL[i];var host='';try{host=new URL(d.url||'').host;}catch(e){}
-    h+='<div class="rc"><div class="ti" title="'+esc(d.name||'')+'">'+esc(d.name||'(未命名)')+'</div>'+
+    h+='<div class="rc" draggable="true" data-dldrag="'+esc(d.path||'')+'" data-dlname="'+esc(d.name||'')+'" title="拖拽此文件可上传/发送"><div class="ti" title="'+esc(d.name||'')+'">'+esc(d.name||'(未命名)')+'</div>'+
       '<div class="meta"><span>'+_fsize(d.size)+'</span>'+(host?'<span>'+esc(host)+'</span>':'')+(d.time?'<span>'+daoAgo(d.time)+'</span>':'')+'</div>'+
       '<div class="acts"><span class="b pri" data-dlopen="'+esc(d.path||'')+'">打开</span><span class="b" data-dlrev="'+esc(d.path||'')+'">所在文件夹</span><span class="b" data-dldel="'+esc(d.path||'')+'">删除</span></div></div>';}
   box.innerHTML=h;var tt=_dEl('dlTitle');if(tt)tt.textContent='下载 ('+DAO_DL.length+')';}
@@ -1093,18 +1093,28 @@ function daoCvMd(ti){var t=CV_TABS[ti];if(!t)return;daoToast('下载 MD…');vsc
 function daoCvZip(ti){var t=CV_TABS[ti];if(!t)return;daoToast('打包全部文件…');vscode.postMessage({type:'dlZip',email:t.email,sid:t.sid,title:t.title});}
 function daoLoadBackup(){if(!_bkTree)_dEl('dwBackup').innerHTML='<div class="empty">正在扫描本地备份…</div>';vscode.postMessage({type:'shellBackups'});}
 function daoRenderBackup(){var box=_dEl('dwBackup');if(!box)return;if(!_bkTree){box.innerHTML='<div class="empty">正在扫描…</div>';return;}
+  // 一级目录=账号文件夹(默认折叠·点开看该号对话), 对齐手机版悬浮窗分层逻辑; 搜索时自动展开命中账号。
   var accs=_bkTree.accounts||[],q=(_daoBkQ||'').trim().toLowerCase(),na=0,nc=0,body='';
-  for(var i=0;i<accs.length;i++){var a=accs[i];var accHit=(String(a.email||'').toLowerCase().indexOf(q)>=0)||(String(a.account||'').toLowerCase().indexOf(q)>=0);
-    var rows=(a.conversations||[]).filter(function(c){return !q||accHit||String(c.title||c.name||'').toLowerCase().indexOf(q)>=0;});
-    if(!rows.length)continue;na++;
-    body+='<div class="gh">'+esc(a.email||a.account)+' · '+rows.length+' 备份</div>';
-    for(var k=0;k<rows.length;k++){var c=rows[k];nc++;
-      body+='<div class="rc" draggable="true" data-cdrag="1" data-email="'+esc(a.email||a.account||'')+'" data-sid="'+esc(c.devinId||'')+'" data-title="'+esc(c.title||c.name||c.devinId||'')+'"><div class="r1"><span class="ti" title="'+esc(c.title||c.name||c.devinId||'')+'">'+esc(c.title||c.name||c.devinId||'(未命名)')+'</span></div><div class="meta"><span>'+_bkWhen(c.mtime)+(c.eventCount?(' · '+c.eventCount+' 事件'):'')+'</span></div>'+
-        '<div class="acts">'+(c.hasHtml?'<span class="b pri" data-open="'+esc(c.htmlPath||'')+'">打开正文</span>':'')+'<span class="b" data-reveal="'+esc(c.path||c.htmlPath||a.dir||'')+'">文件夹</span></div></div>';}}
+  for(var i=0;i<accs.length;i++){var a=accs[i];var em=String(a.email||a.account||'');var accHit=em.toLowerCase().indexOf(q)>=0;
+    var rows=(a.conversations||[]).filter(function(c){return !q||accHit||String(c.title||c.name||c.devinId||'').toLowerCase().indexOf(q)>=0;});
+    if(!rows.length)continue;na++;nc+=rows.length;
+    var key=String(a.account||em||i).toLowerCase();var open=q?true:!!_bkOpen[key];
+    body+='<div class="bkacc" data-bkacc="'+esc(key)+'" style="display:flex;align-items:center;gap:7px;margin-top:7px;padding:8px 10px;background:#11161d;border:1px solid #232a33;border-radius:7px;cursor:pointer;user-select:none">'
+      +'<span style="width:12px;flex:none;color:#7d8794;font-size:11px">'+(open?'▾':'▸')+'</span>'
+      +'<span style="flex:none">📁</span>'
+      +'<span style="flex:1;min-width:0;font-size:12.5px;color:#cdd3de;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(em)+'">'+esc(em||'(未命名账号)')+'</span>'
+      +'<span style="flex:none;font-size:11px;color:#8b94a2;background:#1b2129;border:1px solid #2a313b;border-radius:10px;padding:1px 8px">'+rows.length+' 对话</span>'
+      +'<span class="b" data-reveal="'+esc(a.dir||'')+'" title="打开账号文件夹">📂</span></div>';
+    if(open){body+='<div style="padding-left:6px;border-left:2px solid #232a33;margin:2px 0 4px 6px">';
+      for(var k=0;k<rows.length;k++){var c=rows[k];
+        body+='<div class="rc" draggable="true" data-cdrag="1" data-email="'+esc(em)+'" data-sid="'+esc(c.devinId||'')+'" data-title="'+esc(c.title||c.name||c.devinId||'')+'"><div class="r1"><span class="ti" title="'+esc(c.title||c.name||c.devinId||'')+'">'+esc(c.title||c.name||c.devinId||'(未命名)')+'</span></div><div class="meta"><span>'+_bkWhen(c.mtime)+(c.eventCount?(' · '+c.eventCount+' 事件'):'')+'</span></div>'+
+          '<div class="acts">'+(c.hasHtml?'<span class="b pri" data-open="'+esc(c.htmlPath||'')+'">打开正文</span>':'')+'<span class="b" data-reveal="'+esc(c.path||c.htmlPath||a.dir||'')+'">文件夹</span></div></div>';}
+      body+='</div>';}}
   box.innerHTML=body||'<div class="empty">无备份记录 · 先在「💬对话备份」板块备份或开启自动备份</div>';
-  var ttl=_dEl('dwTitle');if(ttl)ttl.textContent='下载 / 备份库 ('+na+'账号·'+nc+'对话)';}
+  var ttl=_dEl('dwTitle');if(ttl)ttl.textContent='下载 / 备份库 ('+na+'账号·'+nc+'对话'+(q?'·已筛':'')+')';}
 // 事件委托(CSP 安全): 所有悬浮窗内点击统一在 #daowin 上处理
-_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal]');if(!el)return;
+_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal],[data-bkacc]');if(!el)return;
+  var bk=el.getAttribute('data-bkacc');if(bk!=null){_bkOpen[bk]=!_bkOpen[bk];daoRenderBackup();return;}
   var a=el.getAttribute('data-act');if(a){var idx=+el.getAttribute('data-idx');if(a==='view')daoView(idx);else if(a==='enter')daoEnter(idx);else if(a==='md')daoMd(idx);else if(a==='zip')daoZip(idx);return;}
   var cv=el.getAttribute('data-cv');if(cv){var ci=+el.getAttribute('data-i');if(cv==='act')daoActCv(ci);else if(cv==='close'){e.stopPropagation();daoCloseCv(ci);}return;}
   var cva=el.getAttribute('data-cvact');if(cva){var cj=+el.getAttribute('data-i');if(cva==='md')daoCvMd(cj);else daoCvZip(cj);return;}
@@ -1131,6 +1141,10 @@ _dEl('cvBack').onclick=daoHideCv;
 _dEl('dlClose').onclick=dlClose;
 _dEl('dlRefresh').onclick=dlLoad;
 _dEl('dlFolder').onclick=function(){if(DAO_DL[0]&&DAO_DL[0].path)vscode.postMessage({type:'shellRevealFile',path:DAO_DL[0].path});else daoToast('暂无下载文件',true);};
+// ── 下载列表拖拽上传(参考手机 APK): 拖动文件卡 → 携带 file:// 路径与 DownloadURL, 可拖到网页上传区/其它应用 ──
+var _dlDrag=null;
+_dEl('dlwin').addEventListener('dragstart',function(e){var el=e.target.closest&&e.target.closest('.rc[data-dldrag]');if(!el)return;var p=el.getAttribute('data-dldrag')||'',nm=el.getAttribute('data-dlname')||'';if(!p){try{e.preventDefault();}catch(x){}daoToast('该文件无本地路径, 无法拖拽',true);return;}_dlDrag={path:p,name:nm};el.classList.add('cdragging');try{var uri='file:///'+String(p).replace(/\\\\/g,'/').replace(/^\\/+/,'');e.dataTransfer.effectAllowed='copyLink';e.dataTransfer.setData('text/uri-list',uri);e.dataTransfer.setData('text/plain',p);try{e.dataTransfer.setData('DownloadURL','application/octet-stream:'+nm+':'+uri);}catch(x2){}try{e.dataTransfer.setData('application/x-dao-file',JSON.stringify({path:p,name:nm}));}catch(x3){}}catch(x){}});
+_dEl('dlwin').addEventListener('dragend',function(){_dlDrag=null;var dg=_dEl('dlwin').querySelector('.rc.cdragging');if(dg)dg.classList.remove('cdragging');});
 _dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-dlopen],[data-dlrev],[data-dldel]');if(!el)return;
   var op=el.getAttribute('data-dlopen');if(op){vscode.postMessage({type:'shellOpenFile',path:op});return;}
   var rv=el.getAttribute('data-dlrev');if(rv){vscode.postMessage({type:'shellRevealFile',path:rv});return;}
@@ -1142,6 +1156,10 @@ _dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.ta
 document.getElementById('bDl').onclick=function(){dlOpen();};
 document.getElementById('bBk').onclick=function(){daoOpen('recent');};
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
+// 浏览器细节·点菜单外任意处一键自动收起(对齐桌面浏览器下拉菜单): 捕获阶段判定点击落点不在 #menu/#bMenu 即收起;
+// 点进子网页(iframe)会令父窗口失焦 → window blur 兜底收起(iframe 内点击不冒泡到父文档)。
+document.addEventListener('click',function(e){if(!MENU.className)return;var t=e.target;if(t&&t.closest&&(t.closest('#menu')||t.closest('#bMenu')))return;MENU.className='';},true);
+window.addEventListener('blur',function(){if(MENU.className)MENU.className='';});
 document.getElementById('bAdd').onclick=function(e){e.stopPropagation();openWebTab('https://app.devin.ai/','＋登 Devin');};
 document.getElementById('bRefresh').onclick=function(){if(isBoard()){var bt=activeBoardTab();closeTab(boardId(bt));openBoard(bt);return;}var t=tabs[active];if(t){t.frame.setAttribute('src',t.url);setLoading(active,true);}};
 document.getElementById('bHome').onclick=function(){openBoard('home');};
@@ -1166,7 +1184,10 @@ BAR.addEventListener('wheel',function(e){if(e.deltaY&&Math.abs(e.deltaY)>=Math.a
 function _clearDragMark(){var ts=BAR.querySelectorAll('.tab');for(var i=0;i<ts.length;i++){ts[i].classList.remove('dh-l');ts[i].classList.remove('dh-r');}}
 function reorderTab(src,dst,before){if(!src||!dst||src===dst)return;var si=order.indexOf(src),di=order.indexOf(dst);if(si<0||di<0)return;order.splice(si,1);di=order.indexOf(dst);order.splice(before?di:di+1,0,src);var sb=tabs[src].btn,db=tabs[dst].btn;if(before)BAR.insertBefore(sb,db);else BAR.insertBefore(sb,db.nextSibling);schedPersist();}
 function enableTabDnD(btn,id){btn.draggable=true;
-  btn.addEventListener('dragstart',function(e){_dragId=id;try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',id);}catch(x){}btn.classList.add('dragging');});
+  btn.addEventListener('dragstart',function(e){_dragId=id;try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',id);}catch(x){}
+    // 标签拖出到网页 → 携该会话 MD (对齐手机 APK·拖标签=拖该号最新对话 MD)。仅账号会话标签具备 email+sid。
+    try{var _tt=tabs[id],_tm=(_tt&&_tt.meta)||{};var _te=_tm.email||(_tt&&_tt.email)||'',_ts=String(_tm.devinId||_tm.sid||'').replace(/^devin-/,'');if(_te&&_ts){e.dataTransfer.setData('application/x-dao-conv',JSON.stringify({email:_te,sid:_ts,title:_tm.label||_tm.title||''}));}}catch(x){}
+    btn.classList.add('dragging');});
   btn.addEventListener('dragend',function(){_dragId=null;btn.classList.remove('dragging');_clearDragMark();});
   btn.addEventListener('dragover',function(e){if(!_dragId)return;e.preventDefault();try{e.dataTransfer.dropEffect='move';}catch(x){}var r=btn.getBoundingClientRect();var before=(e.clientX<r.left+r.width/2);_clearDragMark();btn.classList.add(before?'dh-l':'dh-r');});
   btn.addEventListener('drop',function(e){if(!_dragId)return;e.preventDefault();e.stopPropagation();var r=btn.getBoundingClientRect();var before=(e.clientX<r.left+r.width/2);reorderTab(_dragId,id,before);_clearDragMark();_dragId=null;});}
@@ -1459,11 +1480,13 @@ async function shellAccountProxy(accKey, restPath, req, res) {
   const _html = (status, s) => {
     if (status === 200 && typeof s === 'string') {
       try { const inj = _buildUserScriptInject(_csUrl); if (inj) { s = /<\/body>/i.test(s) ? s.replace(/<\/body>/i, inj + '</body>') : (s + inj); } } catch (e) {}
+      // 拖拽上传桥(同源 /__daobridge.js): 拖文件/会话到该页 → 投递上传框 (对齐手机 APK)。
+      try { const dbg = '<script src="/__daobridge.js"></script>'; s = /<\/body>/i.test(s) ? s.replace(/<\/body>/i, dbg + '</body>') : (s + dbg); } catch (e) {}
     }
     if (res && !res.headersSent) {
       res.writeHead(status, {
         'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
-        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'self'; form-action 'self'",
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self'; img-src data:; connect-src 'self'; form-action 'self'",
       });
     }
     if (res) res.end(s);
@@ -1554,6 +1577,26 @@ async function shellAccountProxy(accKey, restPath, req, res) {
   } catch (e) {
     _txt(500, 'render fail: ' + (e && e.message));
   }
+}
+// 拖拽会话到网页 → 该会话最新 MD (实时 getEventStream 导出·即最新数据·复用备份引擎 buildConversationMd)。
+//   供 /__convmd 端点同源取用; 网页内 drop 桥据此合成 .md File 喂入页面上传框 (对齐手机 APK 拖会话=拖其 MD)。
+async function resolveConvMd(email, sid) {
+  email = String(email || '').trim();
+  sid = String(sid || '').trim().replace(/^devin-/, '');
+  if (!email || !sid) return null;
+  try {
+    const auth = await _resolveAuthForEmail(email);
+    if (!auth || !auth.auth1) return null;
+    const authObj = { auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgBare: auth.orgBare, orgName: auth.orgName, email };
+    let events = [];
+    try { events = await devinCloud.getEventStream(authObj, sid); } catch (e) { events = []; }
+    let title = sid;
+    try { const d = await devinCloud.getSessionDetail(authObj, sid); if (d && (d.title || d.name)) title = d.title || d.name; } catch (e) {}
+    const md = devinCloud.buildConversationMd(title, sid, events || []);
+    if (!md) return null;
+    const safe = String(title || sid).replace(/[\\/:*?"<>|\r\n]/g, '_').slice(0, 80) || sid;
+    return { name: safe + '.md', text: md };
+  } catch (e) { return null; }
 }
 // 解析「开一个账号标签」的元数据 (同 openMultiInstance 的反代解析, 但不创建 webview —
 // 独立页自身经 mkTab 以 iframe 开标签)。返回与 webview 'open' 消息同形的对象。
@@ -15657,6 +15700,7 @@ module.exports = {
     shellPoll: _shellPoll, // GET /api/shell/poll → 长轮询回退 (公网/任意代理后均可用)
     shellHandleMessage, // POST /api/shell/msg → 页面→宿主消息处理
     shellAccountProxy, // GET/POST /i/<accKey>/* → dao 自渲染账号页 (公网手机/电脑无感·含多实例)
+    resolveConvMd, // GET /__convmd?email=&sid= → 会话最新 MD (拖拽对话上传桥数据源)
     _shellAccKey, // (供单测) email → 稳定不可枚举 accKey
     _shellAccRoute, // (供单测) 同源前缀路径 → 路由类型 (list/conv/create/sessionsJson/favicon)
     setCloudProvider(p) { _cloudProvider = p || null; }, // 归一 · dao-vsix 注入「六大板块」面板提供者
