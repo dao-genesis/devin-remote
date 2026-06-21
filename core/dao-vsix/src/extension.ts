@@ -111,7 +111,7 @@ let _autoHealAttempts = 0;
 let _autoHealTimer: ReturnType<typeof setTimeout> | null = null;
 const AUTO_HEAL_DELAYS = [3000, 8000, 20000, 45000];
 // 归一 · 帛书「道生一」— 内联 rt-flow 运行时句柄(左·RT Flow 账号池/切号 入 dao-vsix 本体)
-interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; openShellHome?: () => Promise<{ ok: boolean; error?: string }>; openMultiInstance?: (opts: { email?: string; devinId?: string; password?: string; path?: string; label?: string }) => Promise<{ ok: boolean; error?: string; reused?: boolean }>; }
+interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; openShellHome?: (board?: string) => Promise<{ ok: boolean; error?: string }>; openMultiInstance?: (opts: { email?: string; devinId?: string; password?: string; path?: string; label?: string }) => Promise<{ ok: boolean; error?: string; reused?: boolean }>; }
 interface RtflowModule { activate?: (ctx: vscode.ExtensionContext) => unknown; deactivate?: () => unknown; _internals?: RtflowInternals; }
 let _rtflowModule: RtflowModule | null = null;
 
@@ -398,6 +398,11 @@ export async function activate(context: vscode.ExtensionContext) {
             if (int && typeof int.setCloudProvider === 'function') {
                 int.setCloudProvider({
                     buildHtml: (board?: string) => getDaoCloudMiddlePanelHtml(getPanelState(), board),
+                    // 归一 · webview 框架层封禁 blob: 子帧 → 板块改经本地 HTTP(127.0.0.1) 直出,
+                    //   webview CSP 本就放行 127.0.0.1:* (账号页同理), 故板块得以真正加载。
+                    boardUrl: (board?: string) => (ws.port && ws.token)
+                        ? ('http://127.0.0.1:' + ws.port + '/__board?b=' + encodeURIComponent(board || 'overview') + '&master_token=' + encodeURIComponent(ws.token))
+                        : '',
                     handleMessage: (m: any) => handleMiddlePanelMessage(m, context),
                     setHostPost: (fn: ((m: any) => void) | null) => { _middlePostTarget = fn; },
                     refresh: () => refreshDaoCloudMiddlePanel(),
@@ -618,6 +623,13 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('dao.toggleCloudPanel', () => toggleDaoCloudMiddlePanel(context)),
         // 归一入口: 底部 9921 按钮 → 弹出综合浏览器外壳(多实例单面板多窗口), 默认当前账号 Devin Cloud 主页;
         //   6 大板块 = 外壳左上角 ☰ 菜单页(经该账号反代加载真实网页)。rt-flow 不可用时回退老全功能面板。
+        // 归一 · 深链直达某板块 (供深链/快捷键/外部调用直接打开六合外壳并切到指定板块)。
+        vscode.commands.registerCommand('dao.openShellBoard', async (board?: string) => {
+            await ensureRoutedServerFast(context);
+            const int = (_rtflowModule && _rtflowModule._internals) as RtflowInternals | undefined;
+            if (int && typeof int.openShellHome === 'function') { await int.openShellHome(typeof board === 'string' && board ? board : 'home'); }
+            else { toggleDaoCloudMiddlePanel(context); }
+        }),
         vscode.commands.registerCommand('dao.openUnifiedShell', async () => {
             await ensureRoutedServerFast(context);
             // 归一 · 冷启动落「六合板块主页」(home), 不再默认开账号 Devin 对话框(无意义空页)。
@@ -1383,6 +1395,21 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         && !route.startsWith('/i/')
         && !isAppProxyPassthrough(route);
     if (needAuth && !checkAuth(req)) throw new Error('unauthorized');
+
+    // ── 归一 · 六大板块「单板块」网页直出 (127.0.0.1) ──
+    //   IDE webview 框架层封禁 blob:/srcdoc 子帧 → 板块经此本地 HTTP 路由当 iframe 加载,
+    //   服务端注入 acquireVsCodeApi 垫片(经 parent.postMessage __cwRelay 中继回宿主)。
+    //   必须在 isAppProxyPassthrough 之前处理, 否则被当作官网 SPA 路径透传到 app.devin.ai。
+    if (route === '/__board') {
+        const board = url.searchParams.get('b') || 'overview';
+        let html = '';
+        try { html = getDaoCloudMiddlePanelHtml(getPanelState(), board) || ''; } catch (e) { html = ''; }
+        const shim = '<script>(function(){var _s={};window.acquireVsCodeApi=function(){return{postMessage:function(m){try{parent.postMessage({__cwRelay:m,__board:'
+            + JSON.stringify(board) + '},"*")}catch(e){}},getState:function(){return _s},setState:function(s){_s=s;return s}}};})();<\/script>';
+        if (html) html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>' + shim) : shim + html;
+        else html = '<!DOCTYPE html><meta charset="utf-8"><body style="background:#1e1e1e;color:#888;font:13px sans-serif;padding:16px">板块未就绪</body>';
+        return { _proxy: true, status: 200, contentType: 'text/html; charset=utf-8', body: html };
+    }
 
     // 官网 SPA 根路径资源/接口 → 透传 app.devin.ai
     if (isAppProxyPassthrough(route)) {
