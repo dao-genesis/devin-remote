@@ -1,0 +1,108 @@
+name: Build & Release rt-flow APK
+
+# 道法自然 · 手机版 APK 去中心化发版：往 main 推 addons/rt-flow-app/** 即自动构建签名 APK 并发到
+# tag rtflow-v<versionName>（资产 DevinCloud-mobile-v<versionName>.apk），与 latest.json 的 url 对齐，
+# 从而 App 内「检查更新」可检索到并下载安装。版本号唯一事实源 = app/build.gradle 的 versionName/versionCode。
+# 签名用仓库内固定 release.keystore（侧载分发用），任意机器/CI 构建签名一致 → 自更新不会因签名不符被拒。
+# 已存在同名资产则跳过（幂等，重跑不重复构建/覆盖）。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "addons/rt-flow-app/**"
+      - ".github/workflows/android-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rtflow-apk-release
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version from build.gradle
+        id: ver
+        run: |
+          set -e
+          GRADLE=addons/rt-flow-app/app/build.gradle
+          VN=$(grep -oP 'versionName\s+"\K[^"]+' "$GRADLE")
+          VC=$(grep -oP 'versionCode\s+\K[0-9]+' "$GRADLE")
+          echo "vn=$VN" >> "$GITHUB_OUTPUT"
+          echo "vc=$VC" >> "$GITHUB_OUTPUT"
+          echo "tag=rtflow-v$VN" >> "$GITHUB_OUTPUT"
+          echo "asset=DevinCloud-mobile-v$VN.apk" >> "$GITHUB_OUTPUT"
+          echo "rt-flow APK: versionName=$VN versionCode=$VC"
+
+      - name: Skip if release already has this APK
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ steps.ver.outputs.tag }}"
+          ASSET="${{ steps.ver.outputs.asset }}"
+          if gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "release $TAG already has $ASSET → skip build"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up JDK 17
+        if: steps.gate.outputs.exists == 'false'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        if: steps.gate.outputs.exists == 'false'
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        if: steps.gate.outputs.exists == 'false'
+        run: |
+          set -e
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Build signed release APK
+        if: steps.gate.outputs.exists == 'false'
+        working-directory: addons/rt-flow-app
+        run: |
+          set -e
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Stage APK asset
+        if: steps.gate.outputs.exists == 'false'
+        run: |
+          set -e
+          SRC=addons/rt-flow-app/app/build/outputs/apk/release/app-release.apk
+          cp "$SRC" "${{ steps.ver.outputs.asset }}"
+          ls -lh "${{ steps.ver.outputs.asset }}"
+
+      - name: Create/update GitHub release
+        if: steps.gate.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ steps.ver.outputs.tag }}"
+          ASSET="${{ steps.ver.outputs.asset }}"
+          TITLE="Devin Cloud 手机版 v${{ steps.ver.outputs.vn }}"
+          node -e "console.log(JSON.parse(require('fs').readFileSync('addons/rt-flow-app/latest.json','utf8')).notes||'')" > notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes-file notes.md --draft=false
+            gh release upload "$TAG" "$ASSET" --clobber
+          else
+            gh release create "$TAG" "$ASSET" --title "$TITLE" --notes-file notes.md --target "$GITHUB_SHA"
+          fi
+          echo "released $TAG with $ASSET"
