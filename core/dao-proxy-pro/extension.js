@@ -4219,7 +4219,7 @@ function getEaConfigHtml(port, nonce) {
       <input id="provName" placeholder="名称 (如 deepseek)" style="flex:0.5;min-width:60px">
       <input id="provUrl" placeholder="Base URL (如 https://api.deepseek.com)" style="flex:2">
       <input id="provKey" type="password" placeholder="API Key" style="flex:1">
-      <input id="provModels" placeholder="模型 (逗号分隔, 可空)" style="flex:1.2">
+      <input id="provModels" placeholder="模型 (留空=自动识别该渠道全部 · 也可逗号手填)" style="flex:1.2">
       <button class="btn add" id="btnAddProv" title="添加 Provider">+ 添加</button>
       <button class="btn probe" id="btnProbe" title="探测所有 Provider 健康">探测</button>
       <button class="btn" id="btnOpenCfgJson" title="在编辑器中打开 配置.json 文件 · 直接查看/手改全部渠道与路由">📄 配置JSON</button>
@@ -4419,42 +4419,43 @@ function getEaConfigHtml(port, nonce) {
   var _families = [];         // official_families: [{familyUid,label,provider,members:[{modelUid,tier,isDefault}],isNew,isRecommended}]
   var _tierGroups = {};       // primaryUid -> [memberUids]  (一族多档共用一条路由作用域)
 
-  // ── cc-switch 预设库 (与悬浮面板 _EA_PRESETS 同步) ──
-  //   字段: n=名, t=协议(openai|anthropic), u=Base URL, m=候选模型, r=注册/官网(去拿 APIKey)
+  // ── cc-switch 预设库 (与悬浮面板 同源) ──
+  //   字段: n=名, t=协议(openai|anthropic), u=Base URL, r=注册/官网(去拿 APIKey)
+  //   ★ v9.9.311 · 预设不再内置具体模型: 填 Key 添加后自动 /v1/models 全量识别该渠道所有模型 (无为而无不为)
   //   太上下知有之: 用户只需「选渠道 → 点🌐去注册拿 Key → 填 Key」三步. 国内外主流尽收.
   var _PRESETS = [
     // ── 测试/聚合 ──
-    {n:'FreeModel(CC)',t:'anthropic',u:'https://cc.freemodel.dev',m:'claude-opus-4-8, claude-opus-4-7, claude-fable-5, claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5-20251001',r:'https://cc.freemodel.dev'},
-    {n:'OpenRouter (聚合)',t:'openai',u:'https://openrouter.ai/api/v1',m:'anthropic/claude-sonnet-4.6, deepseek/deepseek-chat',r:'https://openrouter.ai/keys'},
-    {n:'AiHubMix (聚合)',t:'openai',u:'https://aihubmix.com/v1',m:'gpt-4o, claude-sonnet-4-6',r:'https://aihubmix.com/token'},
+    {n:'FreeModel(CC)',t:'anthropic',u:'https://cc.freemodel.dev',r:'https://cc.freemodel.dev'},
+    {n:'OpenRouter (聚合)',t:'openai',u:'https://openrouter.ai/api/v1',r:'https://openrouter.ai/keys'},
+    {n:'AiHubMix (聚合)',t:'openai',u:'https://aihubmix.com/v1',r:'https://aihubmix.com/token'},
     // ── 国内主流 ──
-    {n:'DeepSeek 深度求索',t:'openai',u:'https://api.deepseek.com/v1',m:'deepseek-chat, deepseek-reasoner',r:'https://platform.deepseek.com/api_keys'},
-    {n:'小米 MiMo (Xiaomi)',t:'openai',u:'https://api.xiaomimimo.com/v1',m:'mimo-v2-flash, mimo-v2.5-pro, mimo-v2-omni',r:'https://platform.xiaomimimo.com'},
-    {n:'智谱 GLM (Zhipu)',t:'openai',u:'https://open.bigmodel.cn/api/paas/v4',m:'glm-4.6, glm-4.5-air',r:'https://open.bigmodel.cn/usercenter/apikeys'},
-    {n:'Kimi 月之暗面 (Moonshot)',t:'openai',u:'https://api.moonshot.cn/v1',m:'kimi-k2-0905-preview, moonshot-v1-128k',r:'https://platform.moonshot.cn/console/api-keys'},
-    {n:'阿里云百炼 通义千问 (Bailian)',t:'openai',u:'https://dashscope.aliyuncs.com/compatible-mode/v1',m:'qwen3-coder-plus, qwen-max, qwen-plus',r:'https://bailian.console.aliyun.com/?apiKey=1'},
-    {n:'字节 豆包 火山方舟 (Doubao/Ark)',t:'openai',u:'https://ark.cn-beijing.volces.com/api/v3',m:'doubao-seed-1-6-250615, doubao-1-5-pro-32k-250115',r:'https://console.volcengine.com/ark'},
-    {n:'腾讯 混元 (Hunyuan)',t:'openai',u:'https://api.hunyuan.cloud.tencent.com/v1',m:'hunyuan-turbos-latest, hunyuan-t1-latest',r:'https://console.cloud.tencent.com/hunyuan/api-key'},
-    {n:'百度 文心千帆 (Qianfan)',t:'openai',u:'https://qianfan.baidubce.com/v2',m:'ernie-4.5-turbo-128k, ernie-x1-turbo-32k',r:'https://console.bce.baidu.com/iam/#/iam/apikey/list'},
-    {n:'硅基流动 (SiliconFlow)',t:'openai',u:'https://api.siliconflow.cn/v1',m:'deepseek-ai/DeepSeek-V3, Qwen/Qwen3-Coder-480B-A35B-Instruct',r:'https://cloud.siliconflow.cn/account/ak'},
-    {n:'魔搭 ModelScope',t:'openai',u:'https://api-inference.modelscope.cn/v1',m:'Qwen/Qwen3-Coder-480B-A35B-Instruct',r:'https://modelscope.cn/my/myaccesstoken'},
-    {n:'MiniMax 稀宇',t:'openai',u:'https://api.minimaxi.com/v1',m:'MiniMax-M2, abab6.5s-chat',r:'https://platform.minimaxi.com/user-center/basic-information/interface-key'},
-    {n:'讯飞星火 (iFlytek Spark)',t:'openai',u:'https://spark-api-open.xf-yun.com/v1',m:'4.0Ultra, generalv3.5',r:'https://console.xfyun.cn/services/cbm'},
-    {n:'阶跃星辰 (StepFun)',t:'openai',u:'https://api.stepfun.com/v1',m:'step-2-16k, step-2-mini',r:'https://platform.stepfun.com/interface-key'},
-    {n:'零一万物 (01.AI Yi)',t:'openai',u:'https://api.lingyiwanwu.com/v1',m:'yi-lightning',r:'https://platform.lingyiwanwu.com/apikeys'},
-    {n:'百川 (Baichuan)',t:'openai',u:'https://api.baichuan-ai.com/v1',m:'Baichuan4-Turbo, Baichuan4-Air',r:'https://platform.baichuan-ai.com/console/apikey'},
+    {n:'DeepSeek 深度求索',t:'openai',u:'https://api.deepseek.com/v1',r:'https://platform.deepseek.com/api_keys'},
+    {n:'小米 MiMo (Xiaomi)',t:'openai',u:'https://api.xiaomimimo.com/v1',r:'https://platform.xiaomimimo.com'},
+    {n:'智谱 GLM (Zhipu)',t:'openai',u:'https://open.bigmodel.cn/api/paas/v4',r:'https://open.bigmodel.cn/usercenter/apikeys'},
+    {n:'Kimi 月之暗面 (Moonshot)',t:'openai',u:'https://api.moonshot.cn/v1',r:'https://platform.moonshot.cn/console/api-keys'},
+    {n:'阿里云百炼 通义千问 (Bailian)',t:'openai',u:'https://dashscope.aliyuncs.com/compatible-mode/v1',r:'https://bailian.console.aliyun.com/?apiKey=1'},
+    {n:'字节 豆包 火山方舟 (Doubao/Ark)',t:'openai',u:'https://ark.cn-beijing.volces.com/api/v3',r:'https://console.volcengine.com/ark'},
+    {n:'腾讯 混元 (Hunyuan)',t:'openai',u:'https://api.hunyuan.cloud.tencent.com/v1',r:'https://console.cloud.tencent.com/hunyuan/api-key'},
+    {n:'百度 文心千帆 (Qianfan)',t:'openai',u:'https://qianfan.baidubce.com/v2',r:'https://console.bce.baidu.com/iam/#/iam/apikey/list'},
+    {n:'硅基流动 (SiliconFlow)',t:'openai',u:'https://api.siliconflow.cn/v1',r:'https://cloud.siliconflow.cn/account/ak'},
+    {n:'魔搭 ModelScope',t:'openai',u:'https://api-inference.modelscope.cn/v1',r:'https://modelscope.cn/my/myaccesstoken'},
+    {n:'MiniMax 稀宇',t:'openai',u:'https://api.minimaxi.com/v1',r:'https://platform.minimaxi.com/user-center/basic-information/interface-key'},
+    {n:'讯飞星火 (iFlytek Spark)',t:'openai',u:'https://spark-api-open.xf-yun.com/v1',r:'https://console.xfyun.cn/services/cbm'},
+    {n:'阶跃星辰 (StepFun)',t:'openai',u:'https://api.stepfun.com/v1',r:'https://platform.stepfun.com/interface-key'},
+    {n:'零一万物 (01.AI Yi)',t:'openai',u:'https://api.lingyiwanwu.com/v1',r:'https://platform.lingyiwanwu.com/apikeys'},
+    {n:'百川 (Baichuan)',t:'openai',u:'https://api.baichuan-ai.com/v1',r:'https://platform.baichuan-ai.com/console/apikey'},
     // ── 国际主流 ──
-    {n:'OpenAI',t:'openai',u:'https://api.openai.com/v1',m:'gpt-4o, gpt-4o-mini, o4-mini',r:'https://platform.openai.com/api-keys'},
-    {n:'Anthropic Claude',t:'anthropic',u:'https://api.anthropic.com',m:'claude-sonnet-4-6, claude-opus-4-6',r:'https://console.anthropic.com/settings/keys'},
-    {n:'Google Gemini',t:'openai',u:'https://generativelanguage.googleapis.com/v1beta/openai',m:'gemini-2.5-pro, gemini-2.5-flash',r:'https://aistudio.google.com/apikey'},
-    {n:'xAI Grok',t:'openai',u:'https://api.x.ai/v1',m:'grok-4, grok-3, grok-code-fast-1',r:'https://console.x.ai'},
-    {n:'Groq (极速)',t:'openai',u:'https://api.groq.com/openai/v1',m:'llama-3.3-70b-versatile, moonshotai/kimi-k2-instruct',r:'https://console.groq.com/keys'},
-    {n:'Mistral',t:'openai',u:'https://api.mistral.ai/v1',m:'mistral-large-latest, codestral-latest',r:'https://console.mistral.ai/api-keys'},
-    {n:'Together AI',t:'openai',u:'https://api.together.xyz/v1',m:'deepseek-ai/DeepSeek-V3, Qwen/Qwen2.5-Coder-32B-Instruct',r:'https://api.together.xyz/settings/api-keys'},
-    {n:'Fireworks AI',t:'openai',u:'https://api.fireworks.ai/inference/v1',m:'accounts/fireworks/models/deepseek-v3',r:'https://fireworks.ai/account/api-keys'},
-    {n:'Perplexity',t:'openai',u:'https://api.perplexity.ai',m:'sonar-pro, sonar',r:'https://www.perplexity.ai/settings/api'},
+    {n:'OpenAI',t:'openai',u:'https://api.openai.com/v1',r:'https://platform.openai.com/api-keys'},
+    {n:'Anthropic Claude',t:'anthropic',u:'https://api.anthropic.com',r:'https://console.anthropic.com/settings/keys'},
+    {n:'Google Gemini',t:'openai',u:'https://generativelanguage.googleapis.com/v1beta/openai',r:'https://aistudio.google.com/apikey'},
+    {n:'xAI Grok',t:'openai',u:'https://api.x.ai/v1',r:'https://console.x.ai'},
+    {n:'Groq (极速)',t:'openai',u:'https://api.groq.com/openai/v1',r:'https://console.groq.com/keys'},
+    {n:'Mistral',t:'openai',u:'https://api.mistral.ai/v1',r:'https://console.mistral.ai/api-keys'},
+    {n:'Together AI',t:'openai',u:'https://api.together.xyz/v1',r:'https://api.together.xyz/settings/api-keys'},
+    {n:'Fireworks AI',t:'openai',u:'https://api.fireworks.ai/inference/v1',r:'https://fireworks.ai/account/api-keys'},
+    {n:'Perplexity',t:'openai',u:'https://api.perplexity.ai',r:'https://www.perplexity.ai/settings/api'},
     // ── 本地 ──
-    {n:'Ollama (本地)',t:'openai',u:'http://localhost:11434/v1',m:'qwen2.5-coder, llama3.1',r:'https://ollama.com/download'},
+    {n:'Ollama (本地)',t:'openai',u:'http://localhost:11434/v1',r:'https://ollama.com/download'},
   ];
 
   // ── provider 名 → 友好显示 (与 eaRender _provLabel 同) ──
@@ -4943,7 +4944,9 @@ function getEaConfigHtml(port, nonce) {
       if (!p) return;
       document.getElementById('provName').value = _presetSlug(p.n);
       document.getElementById('provUrl').value = p.u;
-      document.getElementById('provModels').value = p.m;
+      document.getElementById('provModels').value = ''; // 预设不带具体模型 · 填 Key 添加后自动识别该渠道全部模型
+      var _pm = document.getElementById('provModels');
+      if (_pm) _pm.placeholder = '留空即可 · 添加后自动识别 ' + p.n + ' 全部模型';
       document.getElementById('provKey').focus();
     });
     // ★ 🌐 注册/官网: 打开所选预设渠道的官网/注册页 (去拿 APIKey) · 最小化用户操作
