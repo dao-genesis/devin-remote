@@ -274,10 +274,13 @@ async function pxProxy(req, opts) {
     }
     // Vite assetsURL(base="/") 不带前缀 → __vitePreload 的 CSS/模块预加载打到根区无账号路径失败。
     //   改写为读运行时 window.__PXFX(本账号前缀) → 预加载资源走 /i/<acc>/assets/...。
-    if (isDevin) txt = txt.replace(/function\(([A-Za-z_$][\w$]*)\)\{return`\/`\+\1\}/g, function (m, p) { return "function(" + p + "){return(window.__PXFX||\"\")+\"/\"+" + p + "}"; });
+    let assetFix = false;
+    if (isDevin) { const before = txt; txt = txt.replace(/function\(([A-Za-z_$][\w$]*)\)\{return`\/`\+\1\}/g, function (m, p) { return "function(" + p + "){return(window.__PXFX||\"\")+\"/\"+" + p + "}"; }); assetFix = (txt !== before); }
     if (!isDevin && txt.indexOf(opts.genericOrigin) >= 0) {
       txt = txt.split(opts.genericOrigin).join(prefix);
     }
+    // 预加载助手被改写过 → 必随 Worker 版本更新 (体积极小); 防 immutable 缓存吃旧版导致 CSS 预加载失败。
+    if (assetFix) out.set("cache-control", "no-cache");
     return new Response(txt, { status: status, headers: out });
   }
   if (isJson && isDevin) {
