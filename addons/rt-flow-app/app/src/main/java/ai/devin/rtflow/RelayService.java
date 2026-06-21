@@ -634,6 +634,9 @@ public class RelayService extends Service {
             case "setRemoteOps": b.setRemoteOps(argBool(a, 0)); return null;
             case "saveRelayConfig": writeUserFile("relay-config.json", argStr(a, 0)); return null;
             case "relayRestart": main.post(() -> { if (engine != null) engine.reload(); }); return null;
+            // ── 网页内原生直渲: 为 (目标站, 账号) 起根挂载代理 + 专属公网隧道, 返回可被控台 iframe 的 https 公网 URL
+            //    (剥 CSP/X-Frame-Options + 代账号注入 auth1) → Devin 多实例/任意第三方站皆在控台单页内原生操作。
+            case "proxyPublicUrl": return proxyPublicUrl(argStr(a, 0), argStr(a, 1));
             // ── 金库读写 (与手机本体同一目录 Documents/DevinCloud) ──
             case "vaultLoad": return vaultRead(argStr(a, 0));
             case "vaultSave": vaultWrite(argStr(a, 0), argStr(a, 1)); return null;

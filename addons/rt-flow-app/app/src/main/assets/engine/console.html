@@ -498,12 +498,45 @@
     try{ window.open(url, "_blank"); toast("已在新标签打开 "+host(url)); }
     catch(e){ toast("无法打开新标签"); }
   }
+
+  // ── 网页内原生直渲任意站 / Devin 多实例 (经手机根挂载反代 + 专属公网隧道) ───────────────
+  //   手机为每个 (源站,账号) 起一条根挂载代理(剥 CSP/X-Frame-Options + 代该号注入 auth1) 暴露成独立
+  //   https 公网 origin → 控台 iframe 它即原生操作 (不投屏); 不同账号落不同 origin, localStorage 天然隔离、
+  //   多实例互不串号。手机端需 v0.37.5+; 取不到(旧包/隧道未起)则优雅回退到本机浏览器新标签打开。
+  function openInPage(url, acct, title){
+    if(!/^[a-z]+:\/\//i.test(url)) url="https://"+url;
+    acct=acct||"";
+    for(var i=0;i<tabs.length;i++){ if(tabs[i].kind==="web" && tabs[i].url===url && (tabs[i].acct||"")===acct){ selectTab(tabs[i].id); return; } }
+    var t={ id:++seq, title:title||host(url), kind:"web", url:url, acct:acct, ready:false };
+    var fr=document.createElement("iframe"); fr.className="hidden";
+    fr.setAttribute("allow","clipboard-read; clipboard-write");
+    fr.referrerPolicy="no-referrer";
+    t.fr=fr; frames.appendChild(fr); applyZoomTo(fr);
+    var ld=document.createElement("div"); ld.className="load";
+    ld.innerHTML='<div class="sp"></div><div>正在网页内原生打开 <b>'+host(url)+'</b>'+(acct?(" · "+acct):"")+
+      ' …<br><span style="color:#6e7681">手机正建立专属公网隧道 · 首次约 5–15s</span></div>';
+    t.ld=ld; frames.appendChild(ld);
+    fr.addEventListener("load", function(){ try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){} });
+    tabs.push(t); renderStrip(); selectTab(t.id);
+    relay("/api/native", { m:"proxyPublicUrl", a:[url, acct] }, 35000).then(function(res){
+      var base = res && res.status===200 && res.body && res.body.r ? String(res.body.r) : "";
+      if(!base){ throw new Error("no_public_url"); }
+      var path=""; try{ var u=new URL(url); path=u.pathname+u.search+u.hash; }catch(e){ path="/"; }
+      t.ready=true; if(t.ld){ t.ld.remove(); t.ld=null; }
+      t.fr.src = base.replace(/\/$/,"") + path;
+    }).catch(function(){
+      // 回退: 旧包无 proxyPublicUrl / 隧道未就绪 → 本机浏览器新标签打开, 关掉占位 web 标签。
+      openExternalNewTab(url);
+      closeTab(t.id);
+    });
+  }
+
   function openWeb(v){
     var map={"切号":"switch","穿透":"tunnel","公网穿透":"tunnel","对话":"cloud","cloud":"cloud","vpn":"vpn",
              "脚本":"scripts","用户脚本":"scripts","shizuku":"shizuku","全服通":"daopan","面板":"panel","控制面板":"panel"};
     var lk=map[v.trim().toLowerCase()]||map[v.trim()];
     if(lk){ openPage(lk); return; }
-    openExternalNewTab(v);
+    openInPage(v, "", v);
   }
 
   function renderStrip(){
@@ -524,7 +557,7 @@
       if(on) active=i;
     }
     var t=tabs[active];
-    if(t) addr.value="rtflow://"+(t.pageKey||"");
+    if(t) addr.value = t.kind==="web" ? (t.url||"") : ("rtflow://"+(t.pageKey||""));
     renderStrip();
   }
   function closeTab(id){
@@ -538,7 +571,7 @@
 
   // ── 📱 手机标签实时镜像 (browseListTabs 轮询 → 与 APK 当前开着的网页 1:1) ──────
   //   数量/标题/账号(邮箱·序号·组织)/active/橙色 viewers 全跟手机走; 互不干扰(只读镜像)。
-  //   点 内部板块标签 → 网页内原生直渲; 点 Devin 对话标签 → 在本机浏览器打开(对话页禁止被跨站 iframe)。
+  //   点 内部板块标签 → 网页内原生直渲; 点 Devin 对话标签 → 经手机根挂载反代在本页内原生打开(多账号互不串号)。
   var mirrorEl=document.getElementById("mirror");
   var APK_TABS=[], _mirrorPollT=0, _mirrorBusy=false;
   var FILE2KEY={ "switch.html":"switch","cloud.html":"cloud","tunnel.html":"tunnel","vpn.html":"vpn",
@@ -561,7 +594,7 @@
       t.textContent=tb.title||(key?("板块 "+key):host(tb.url)); c.appendChild(t);
       var at=acctTag(tb.account); if(at){ var a=document.createElement("span"); a.className="ma"; a.textContent=at; c.appendChild(a); }
       c.title=(tb.title||"")+(at?(" · "+at):"")+"\n"+(tb.url||"");
-      c.onclick=function(){ if(key){ openPage(key); } else { openExternalNewTab(tb.url); } };
+      c.onclick=function(){ if(key){ openPage(key); } else { openInPage(tb.url, (tb.account&&(tb.account.email||tb.account.id))||"", tb.title); } };
       mirrorEl.appendChild(c);
     });
   }
@@ -588,7 +621,7 @@
     try{ localStorage.setItem("rtflow.console.zoom","100"); }catch(e){} applyZoomAll(); };
 
   // ── 译 翻译 (板块均为内部中文页 → 与原生「内部页不可翻译」一致) ──
-  document.getElementById("trBtn").onclick=function(){ toast("板块为内部中文页, 无需翻译; Devin 对话已在你本机浏览器新标签打开"); };
+  document.getElementById("trBtn").onclick=function(){ toast("板块为内部中文页, 无需翻译; Devin 对话经手机反代在本页内原生打开"); };
 
   // ── ☆ 收藏当前板块 ──
   function bookmarks(){ try{ return JSON.parse(localStorage.getItem("rtflow.console.bm")||"[]"); }catch(e){ return []; } }
@@ -617,7 +650,9 @@
     if(/^rtflow:\/\//i.test(v)){ openPage(v.replace(/^rtflow:\/\//i,"").trim()); return; } openWeb(v); }
   document.getElementById("go").onclick=goAddr;
   addr.addEventListener("keydown",function(e){ if(e.key==="Enter") goAddr(); });
-  document.getElementById("reload").onclick=function(){ var t=tabs[active]; if(t&&t.pageKey){ var k=t.pageKey; closeTab(t.id); openPage(k); } };
+  document.getElementById("reload").onclick=function(){ var t=tabs[active]; if(!t) return;
+    if(t.kind==="web"){ var s=t.fr.src; t.fr.src="about:blank"; setTimeout(function(){ t.fr.src=s; },60); return; }
+    if(t.pageKey){ var k=t.pageKey; closeTab(t.id); openPage(k); } };
 
   // ── 新标签面板 ──
   var launch=document.getElementById("launch"), segGrid=document.getElementById("segGrid");
@@ -626,7 +661,7 @@
     s.onclick=function(){ hideLaunch(); openPage(p.key); }; segGrid.appendChild(s); });
   (function(){ var s=document.createElement("div"); s.className="seg";
     s.innerHTML='<span class="ic">🟢</span><span>新标签 (Devin 对话)</span>';
-    s.onclick=function(){ hideLaunch(); openExternalNewTab("https://app.devin.ai/"); }; segGrid.appendChild(s); })();
+    s.onclick=function(){ hideLaunch(); openInPage("https://app.devin.ai/", "", "Devin"); }; segGrid.appendChild(s); })();
   function showLaunch(){ launch.classList.add("show"); var u=document.getElementById("urlInput"); u.value=""; setTimeout(function(){u.focus();},50); }
   function hideLaunch(){ launch.classList.remove("show"); }
   plus.onclick=showLaunch;
