@@ -1,6 +1,6 @@
 {
-  "versionCode": 110,
-  "versionName": "0.37.6",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.6/DevinCloud-mobile-v0.37.6.apk",
-  "notes": "v0.37.6 · Path A 边缘反代直渲（彻底解决「加载不出 Devin」）\n• 内置控台改走 Worker 同源反代：点 Devin 标签 / 地址栏任意网址 / 新标签 → 经 /i-init 取该号登录态进 HttpOnly Cookie，再在本页 iframe 同源前缀 /i/<账号>/… 原生渲染操作；不再依赖手机本地隧道（此前隧道被运营商 NAT 挡死、返回 530 故加载不出）。\n• 多账号落各自命名空间 + 各自 Cookie，多实例并行互不串号；第三方站经 /e/<站点>/ 同源直渲。\n• 取不到优雅回退、不空白崩溃。\n• 续含 0.37.3/0.37.4 的性能换血（切号板打字卡/刷额度忙的修复）与对话使用中额度快轮、取数指引文档强化。\n• 网页 /console 由中继 Worker 从 main 直取、即时生效；本版让手机内置控台也享同款 Path A 直渲。"
+  "versionCode": 111,
+  "versionName": "0.37.7",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.7/DevinCloud-mobile-v0.37.7.apk",
+  "notes": "v0.37.7 · 拖拽取数不再「零事件」+ 网页刷新不再频繁打断\n• 网页拖拽对话记录修复：从「网页/对话标签」拖拽提取走的页内回退链路此前依赖 cookie（Devin 实为 Authorization:Bearer 鉴权），常空取成「零事件」。现直接从本页登录态真源 auth1_session 取出 token+org 显式带鉴权头取事件流 → 与悬浮窗一致正常提取。\n• 新窗口（target=_blank / window.open）打开的 Devin 对话页继承父标签账号绑定 → 保持登录、可被正常拖拽取数。\n• 三击刷新改为「同一处」连续三击才触发：此前散落三下（滚动/连点）会误触整页重载，频繁打断浏览与打字。\n• 僵死探活改为连续两次（各4s）无响应才静默重载：避免设备繁忙时迟到回调被误判、每次回前台都误刷新。\n• 降低无谓开销：仅记录 JS 告警/错误日志（不再全量写 logcat）。"
 }

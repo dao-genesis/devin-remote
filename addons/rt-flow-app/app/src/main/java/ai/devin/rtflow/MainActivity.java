@@ -957,7 +957,11 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
             @Override public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
-                android.util.Log.i("RTFlowJS", m.message() + " @" + m.sourceId() + ":" + m.lineNumber());
+                // 仅记录告警/错误: SPA 的 log/info 极其频繁, 全量写 logcat 是无谓开销 → 略过, 减轻主线程负担。
+                if (m.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.WARNING
+                        || m.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR) {
+                    android.util.Log.w("RTFlowJS", m.message() + " @" + m.sourceId() + ":" + m.lineNumber());
+                }
                 return true;
             }
             // 文件/附件上传: 让网页 <input type=file> 拉起系统选择器 (修复 Devin Cloud 上传附件)
@@ -972,7 +976,9 @@ public class MainActivity extends AppCompatActivity {
             @Override public boolean onCreateWindow(WebView v, boolean dialog, boolean userGesture, android.os.Message resultMsg) {
                 if (adBlock && !userGesture) { toast("已拦截弹窗"); return false; }   // 拦截非用户触发的弹窗广告
                 try {
-                    Tab nt = makeTab(null, false);
+                    // 继承父标签的账号绑定: 新窗口(target=_blank / window.open)打开的 Devin 对话页
+                    // 因此保持鉴权注入 → 既能正常登录, 也能被「网页拖拽对话记录」按引擎取数 (不再零事件)。
+                    Tab nt = makeTab(tab.accountJson, false);
                     selectTab(tabs.size() - 1);
                     WebView.WebViewTransport tr = (WebView.WebViewTransport) resultMsg.obj;
                     tr.setWebView(nt.web);
@@ -993,14 +999,18 @@ public class MainActivity extends AppCompatActivity {
                 startDownload(dlUrl, ua, contentDisposition, mimetype));
 
         web.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        // 三击页面任意处 → 刷新一次 (刷新高频, 省去每次去点右上角小按钮)。仅观察手势不消费事件 (return false),
+        // 三击「同一处」→ 刷新一次 (刷新高频, 省去每次去点右上角小按钮)。仅观察手势不消费事件 (return false),
         // 故单击/双击/上下左右滑动/长按拖拽/缩放等原有交互一律不受影响。
+        // 关键: 必须是同一落点的连续三击 (deliberate), 而非滚动/连点散落的三下 —— 否则正常浏览/打字时
+        // 误触发整页重载, 既打断操作又像卡死 (根治用户反映的"网页刷新频繁打断")。
         final WebView webRef = web;
         final int tapSlop = android.view.ViewConfiguration.get(this).getScaledTouchSlop();
         final long[] tapLast = new long[]{0L};   // 上次有效轻点的时间
         final int[] tapCnt = new int[]{0};        // 连续轻点计数
         final float[] tapDown = new float[]{0f, 0f};
         final long[] tapDownT = new long[]{0L};
+        final float[] tapFirst = new float[]{0f, 0f};   // 第一击落点 (同处判定锚点)
+        final int sameSpot = tapSlop * 3;               // 三击须落在该半径内才算"同一处"
         web.setOnTouchListener((v, ev) -> {
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
@@ -1012,7 +1022,12 @@ public class MainActivity extends AppCompatActivity {
                             && Math.abs(ev.getX() - tapDown[0]) < tapSlop
                             && Math.abs(ev.getY() - tapDown[1]) < tapSlop;
                     if (isTap) {
-                        tapCnt[0] = (now - tapLast[0] < 500) ? tapCnt[0] + 1 : 1;
+                        // 与上一击间隔 <350ms 且落点在同处半径内 → 连击; 否则重新计数 (并把本击设为新锚点)
+                        boolean chain = (now - tapLast[0] < 350)
+                                && Math.abs(ev.getX() - tapFirst[0]) < sameSpot
+                                && Math.abs(ev.getY() - tapFirst[1]) < sameSpot;
+                        if (chain) { tapCnt[0] = tapCnt[0] + 1; }
+                        else { tapCnt[0] = 1; tapFirst[0] = ev.getX(); tapFirst[1] = ev.getY(); }
                         tapLast[0] = now;
                         if (tapCnt[0] >= 3) {
                             tapCnt[0] = 0;
@@ -3312,7 +3327,11 @@ public class MainActivity extends AppCompatActivity {
         });
         web.setWebChromeClient(new WebChromeClient() {
             @Override public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
-                android.util.Log.i("RTFlowJS", m.message() + " @" + m.sourceId() + ":" + m.lineNumber());
+                // 仅记录告警/错误: SPA 的 log/info 极其频繁, 全量写 logcat 是无谓开销 → 略过, 减轻主线程负担。
+                if (m.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.WARNING
+                        || m.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR) {
+                    android.util.Log.w("RTFlowJS", m.message() + " @" + m.sourceId() + ":" + m.lineNumber());
+                }
                 return true;
             }
             @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
@@ -3788,6 +3807,13 @@ public class MainActivity extends AppCompatActivity {
     private String convExtractJs(String sid) {
         String s = sid.replace("\\", "\\\\").replace("'", "\\'");
         return "(function(){try{var SID='" + s + "';"
+            // 鉴权: Devin 用 Authorization:Bearer(auth1), 不认 cookie。直接从本页登录态真源 (auth1_session)
+            //   取出 token+org, 显式带头, 不再 credentials:'include' 空取 → 根治"网页拖拽=零事件"。
+            + "var __A=null;try{__A=JSON.parse(sessionStorage.getItem('auth1_session')||localStorage.getItem('auth1_session')||'null');}catch(e){}"
+            + "var __TOK=(__A&&__A.token)||'';var __UID=(__A&&__A.userId)||'';var __ORG='';"
+            + "try{var __ko=JSON.parse((sessionStorage.getItem('known-org-ids-'+__UID)||localStorage.getItem('known-org-ids-'+__UID))||'null');if(__ko&&__ko.length)__ORG=__ko[0];}catch(e){}"
+            + "if(!__ORG){try{__ORG=sessionStorage.getItem('last-internal-org-for-external-org-v1-null')||localStorage.getItem('last-internal-org-for-external-org-v1-null')||'';}catch(e){}}"
+            + "function H(x){var h=x||{};if(__TOK)h['Authorization']='Bearer '+__TOK;if(__ORG)h['x-cog-org-id']=__ORG;return h;}"
             // 文本归一 / 时间戳 / 用户回答
             + "function mt(m){if(m==null)return '';if(typeof m==='string')return m;if(Array.isArray(m))return m.map(mt).filter(Boolean).join('\\n');if(typeof m==='object'){if(typeof m.text==='string')return m.text;if(typeof m.message==='string')return m.message;if(m.content!=null)return mt(m.content);return JSON.stringify(m);}return ''+m;}"
             + "function ts(e){var ms=e.created_at_ms||(e.timestamp?Date.parse(e.timestamp):0);return ms?new Date(ms).toISOString():'';}"
@@ -3816,9 +3842,9 @@ public class MainActivity extends AppCompatActivity {
             + "try{var o=JSON.parse(raw.slice(i,j));if(o.result&&o.result.length)o.result.forEach(add);else if(o.type)add(o);}catch(e){}i=j;}"
             + "else{var le=raw.indexOf('\\n',i);var end=le===-1?n:le;var line=raw.slice(i,end).trim();i=end+1;if(line.indexOf('data:')===0){var ds=line.slice(5).trim();if(ds&&ds!=='[DONE]'){try{var o2=JSON.parse(ds);if(o2.result&&o2.result.length)o2.result.forEach(add);else if(o2.type)add(o2);}catch(e){}}}}}"
             + "var arr=order.map(function(k){return merged[k];});arr.sort(function(a,b){return (a.created_at_ms||0)-(b.created_at_ms||0);});return arr;}"
-            + "fetch('/api/events/'+SID+'/stream',{headers:{Accept:'text/event-stream'},credentials:'include'}).then(function(r){return r.text();}).then(function(raw){"
+            + "fetch('/api/events/'+SID+'/stream',{headers:H({Accept:'text/event-stream'}),credentials:'include'}).then(function(r){return r.text();}).then(function(raw){"
             + "var evs=pe(raw);"
-            + "return fetch('/api/sessions/'+SID,{credentials:'include'}).then(function(r){return r.ok?r.json():{};}).catch(function(){return {};}).then(function(d){"
+            + "return fetch('/api/sessions/'+SID,{headers:H({}),credentials:'include'}).then(function(r){return r.ok?r.json():{};}).catch(function(){return {};}).then(function(d){"
             + "var title=(d&&d.title)||SID;"
             + "var c=['# 对话: '+title,'','- Session: `'+SID+'`','- 事件数: '+evs.length,''];"
             + "evs.forEach(function(e){var x=cls(e);if(!x)return;var tm=ts(e);"
@@ -4803,8 +4829,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /** 探活: 向标签 WebView 注入一句极简 JS; 若在超时内无回调 → 渲染线程被冻结/卡死 → 静默重载, 用户无需手动刷新。
-     *  仅在确判可能僵死时调用(长后台返回), 健康页面探活即过, 不重载 → 不丢滚动/表单。 */
-    private void probeTabLiveness(final Tab t) {
+     *  仅在确判可能僵死时调用(长后台返回), 健康页面探活即过, 不重载 → 不丢滚动/表单。
+     *  关键: 必须连续两次(各 4s)无响应才判僵死并重载 —— 设备繁忙时单次回调迟到很常见, 单次超时即重载
+     *  会在每次回前台时误重载、打断操作 (用户反映"刷新频繁打断")。给一次重试 → 仅真冻死才重载。 */
+    private void probeTabLiveness(final Tab t) { probeTabLiveness(t, 0); }
+    private void probeTabLiveness(final Tab t, final int attempt) {
         if (t == null || t.web == null) return;
         final WebView w = t.web;
         final boolean[] answered = {false};
@@ -4815,8 +4844,9 @@ public class MainActivity extends AppCompatActivity {
         main.postDelayed(() -> {
             if (answered[0]) return;             // 渲染线程响应 → 健康, 不动
             if (tabOf(w) < 0) return;            // 标签已不在
-            try { w.reload(); } catch (Exception ignored) {}   // 无响应 → 冻死, 静默重载恢复交互
-        }, 2500);
+            if (attempt < 1) { probeTabLiveness(t, attempt + 1); return; }   // 再给一次机会, 避免迟到回调被误判僵死
+            try { w.reload(); } catch (Exception ignored) {}   // 连续无响应 → 真冻死, 静默重载恢复交互
+        }, 4000);
     }
 
     /** 跳到本应用「安装未知应用」开关页 (package: URI 直达本应用, 避免用户在长列表里找不到)。 */
