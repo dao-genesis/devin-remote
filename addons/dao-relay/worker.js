@@ -299,6 +299,136 @@ async function pxProxy(req, opts) {
   return new Response(up.body, { status: status, headers: out });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Bare v3 传输层 (本源重构·Path SW) —— 道法自然·为道日损:
+//   不再服务端逐字符改写 SPA(那是老路·必碎)。改由【用户浏览器的 Service Worker】(Ultraviolet)
+//   拦截一切请求、客户端改写 URL/JS/location/WS、原生执行页面 —— 即「充分调用浏览器本源资源、
+//   把整个浏览器做成网页」。本 Worker 退化为极薄传输 + (仅 Devin)认证注入:
+//     · GET /bare/         → 版本清单 (兼容标准 Bare 客户端探测)
+//     · */bare/v3/?cache=  → 取 x-bare-url 目标 → 直取上游 → x-bare-* 回包 (UV SW 重建响应)
+//   认证层: app.devin.ai 的 HTML 注入「登录态种子脚本」(localStorage auth1 + 组织键),
+//   SPA 自带 fetch 读 localStorage 设 Bearer → 经 UV SW 透传至上游; 另对 Devin API 兜底注 Bearer。
+//   认证只在「传输层」处理 → 正合「我们主要传输认证层」。
+// ═══════════════════════════════════════════════════════════════════════════
+const BARE_MAX_HEADER = 3072; // 与 bare-as-module3 MAX_HEADER_VALUE 对齐 (单 header 值上限)
+
+function bareIsDevinHost(h) {
+  h = String(h || "").toLowerCase();
+  return /(^|\.)devin\.ai$/.test(h) || /(^|\.)cognition\.ai$/.test(h) ||
+    /(^|\.)windsurf\.com$/.test(h) || /(^|\.)codeium\.com$/.test(h) || /(^|\.)self-serve\.windsurf\.com$/.test(h);
+}
+
+// 还原 split 过的 x-bare-headers (id 顺序拼接), 解析成 {name:value} 对象。
+function bareJoinHeaders(req) {
+  const direct = req.headers.get("x-bare-headers");
+  if (direct) { try { return JSON.parse(direct); } catch (e) { return {}; } }
+  const parts = [];
+  req.headers.forEach(function (v, k) {
+    const m = /^x-bare-headers-(\d+)$/.exec(k.toLowerCase());
+    if (m) { if (v.charAt(0) !== ";") return; parts[parseInt(m[1], 10)] = v.slice(1); }
+  });
+  if (!parts.length) return {};
+  try { return JSON.parse(parts.join("")); } catch (e) { return {}; }
+}
+
+// 把上游响应头序列化进 x-bare-headers(JSON); 超长则按 spec 切成 x-bare-headers-0/1/...
+function bareSetRespHeaders(out, obj) {
+  const json = JSON.stringify(obj);
+  if (json.length <= BARE_MAX_HEADER) { out.set("x-bare-headers", json); return; }
+  let split = 0;
+  for (let i = 0; i < json.length; i += BARE_MAX_HEADER) {
+    out.set("x-bare-headers-" + split, ";" + json.slice(i, i + BARE_MAX_HEADER));
+    split++;
+  }
+}
+
+// Devin 登录态种子: 注入被代理页 (UV 已虚拟化 localStorage/cookie) → SPA 秒登。
+//   不做任何 URL 前缀化 (UV 已 emulate location/URL) —— 这正是比老反代稳的根因。
+function bareDevinSeed(auth) {
+  const J = JSON.stringify;
+  const a1 = String(auth.auth1 || ""), uid = String(auth.userId || ""), org = String(auth.orgId || "");
+  const on = String(auth.orgName || "").replace(/['"\\<>]/g, "");
+  if (!a1) return "";
+  return "<script>(function(){try{" +
+    "var a1=" + J(a1) + ",uid=" + J(uid) + ",org=" + J(org) + ",on=" + J(on) + ";" +
+    "localStorage.setItem('auth1_session',JSON.stringify({token:a1,userId:uid}));" +
+    "localStorage.setItem('migrated-to-unscoped-auth0-token-2025-12-18','true');" +
+    "if(uid)localStorage.setItem('known-org-ids-'+uid,JSON.stringify([org]));" +
+    "if(org)localStorage.setItem('last-internal-org-for-external-org-v1-null',org);" +
+    "if(org&&uid&&on){var k='post-auth-v3-null-'+uid+'-org_name-'+on;" +
+    "if(!localStorage.getItem(k))localStorage.setItem(k,JSON.stringify({externalOrgId:null,userId:uid,internalOrgId:org,orgName:on,result:{resolved_external_org_id:null,org_id:org,org_name:on,is_valid_resource:true}}));}" +
+    "document.cookie='webapp_logged_in=true; path=/; max-age=31536000; SameSite=Lax';" +
+    "}catch(e){}})();</script>";
+}
+
+// Bare v3 服务端: 取上游裸字节, x-bare-* 回包; Devin 注认证。
+async function bareV3(req, env) {
+  const target = req.headers.get("x-bare-url") || "";
+  let tu;
+  try { tu = new URL(target); } catch (e) { return json({ code: "INVALID_BARE_HEADER", id: "request.headers.x-bare-url", message: "bad x-bare-url" }, 400); }
+
+  const fwdObj = bareJoinHeaders(req);
+  const fwd = new Headers();
+  for (const k in fwdObj) {
+    if (!Object.prototype.hasOwnProperty.call(fwdObj, k)) continue;
+    const kl = k.toLowerCase();
+    if (kl === "host" || kl === "connection" || kl === "content-length" || kl === "transfer-encoding") continue;
+    const val = fwdObj[k];
+    if (Array.isArray(val)) val.forEach(function (v) { fwd.append(k, v); });
+    else fwd.set(k, String(val));
+  }
+  if (!fwd.has("user-agent")) fwd.set("User-Agent", PX_UA);
+
+  // 认证层注入 (仅 Devin 系上游 · 兜底): 页面 localStorage 种子优先, 此处补首屏/无种子调用。
+  const isDevin = bareIsDevinHost(tu.host);
+  let auth = null;
+  if (isDevin) {
+    const ck = pxCookies(req);
+    if (ck.uv_auth) auth = pxB64Dec(ck.uv_auth);
+    if (auth && auth.auth1) {
+      if (!fwd.has("authorization")) fwd.set("Authorization", "Bearer " + auth.auth1);
+      if (auth.orgId && !fwd.has("x-cog-org-id")) fwd.set("x-cog-org-id", auth.orgId);
+    }
+  }
+
+  const method = req.method || "GET";
+  let body;
+  if (method !== "GET" && method !== "HEAD") body = await req.arrayBuffer();
+
+  let up;
+  try { up = await fetch(tu.toString(), { method: method, headers: fwd, body: body, redirect: "manual" }); }
+  catch (e) { return json({ code: "UNKNOWN", id: "error", message: "upstream_fetch_failed: " + String((e && e.message) || e) }, 500); }
+
+  // 上游响应头 → 对象 (剥编码/长度/分块 + 框限/CSP, 余原样回给 UV SW 重建)
+  const respObj = {};
+  up.headers.forEach(function (v, k) {
+    const kl = k.toLowerCase();
+    if (kl === "content-encoding" || kl === "content-length" || kl === "transfer-encoding" ||
+      kl === "x-frame-options" || kl === "content-security-policy" || kl === "content-security-policy-report-only") return;
+    if (respObj[k] === undefined) respObj[k] = v; else if (Array.isArray(respObj[k])) respObj[k].push(v); else respObj[k] = [respObj[k], v];
+  });
+
+  const out = new Headers();
+  out.set("access-control-allow-origin", "*");
+  out.set("content-type", "text/plain; charset=utf-8");
+  out.set("x-bare-status", String(up.status));
+  out.set("x-bare-status-text", up.statusText || "");
+  bareSetRespHeaders(out, respObj);
+
+  // Devin HTML: 注入登录态种子脚本 (UV 在被代理上下文执行之 → 秒登)。
+  const rct = up.headers.get("content-type") || "";
+  if (isDevin && auth && auth.auth1 && rct.includes("text/html")) {
+    let html = await up.text();
+    const seed = bareDevinSeed(auth);
+    if (seed) {
+      if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + seed);
+      else html = seed + html;
+    }
+    return new Response(html, { status: 200, headers: out });
+  }
+  return new Response(up.body, { status: 200, headers: out });
+}
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -318,6 +448,35 @@ export default {
     // 健康检查 (免鉴权·便于探活)
     if (path === "/" || path === "/health") {
       return json({ status: "ok", service: "dao-relay", version: VERSION });
+    }
+
+    // ── Bare v3 传输层 (UV SW 代理引擎专用) ──────────────────────────────────
+    if (path === "/bare/" || path === "/bare") {
+      // 版本清单 (兼容标准 Bare 客户端探测; bare-as-module3 实际不探, 仍返以防万一)
+      return json({ versions: ["v3"], language: "Cloudflare-Workers", maintainer: { email: "", website: "" }, project: { name: "dao-relay-bare", repository: "https://github.com/zhouyoukang1234-spec/devin-remote", version: VERSION } });
+    }
+    if (path === "/bare/v3/" || path === "/bare/v3") {
+      return bareV3(req, env);
+    }
+
+    // 网页内原生直渲(UV): 账号初始化 — 经 WSS 取该号 auth → HttpOnly Cookie(path=/bare) → 注认证
+    //   随后控台把 iframe.src 指向 /uv/frame.html#<devinUrl>, UV SW 同源原生渲染该号 Devin。
+    if (path === "/uv-init") {
+      if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+      let b = {}; try { b = await req.json(); } catch (e) {}
+      const session = String(b.s || ""), token = String(b.tk || ""), acc = String(b.acc || "");
+      if (!session || !token || !acc) return json({ error: "uv_init_params" }, 400);
+      if (!sharedTokenOk(env, token)) return json({ error: "unauthorized" }, 401);
+      const arr = await pxLoadAccounts(env, session, token);
+      const a = pxFindAcct(arr, acc);
+      if (!a || !a.auth1) return json({ error: "acct_not_found_or_no_auth", acc: acc }, 404);
+      const bundle = pxB64Enc({ auth1: a.auth1, userId: a.userId, orgId: a.orgId, orgName: a.orgName, email: a.email });
+      const h = new Headers();
+      h.set("content-type", "application/json");
+      h.set("access-control-allow-origin", "*");
+      // path=/bare → 仅 UV SW 的 bare 传输请求携带; HttpOnly → 不经页面 JS。
+      h.append("Set-Cookie", "uv_auth=" + bundle + "; Path=/bare; Max-Age=7200; HttpOnly; Secure; SameSite=Lax");
+      return new Response(JSON.stringify({ ok: true, acc: acc }), { headers: h });
     }
 
     // 单网页控制台 (中继自托管) —— 道法自然·归一:
@@ -447,6 +606,25 @@ export default {
       const prefix = "/e/" + encOrigin;
       const restPath = (sl >= 0 ? after.slice(sl) : "/") + (url.search || "");
       return pxProxy(req, { prefix: prefix, restPath: restPath, genericOrigin: origin.replace(/\/+$/, ""), host: url.host });
+    }
+
+    // 自愈引导: /uv/service/* 请求落到 Worker = 该客户端的 SW 尚未接管(首屏/硬刷/SW 被清)。
+    //   返回引导页: 注册 SW + 设传输 + 待 ready 后 reload 本 URL → 再次请求即被 SW 接管原生代理。
+    if (path.indexOf("/uv/service/") === 0) {
+      const boot = "<!doctype html><html><head><meta charset=utf-8>" +
+        "<style>html,body{margin:0;height:100%;background:#0d1117;color:#8b949e;font:13px system-ui;display:flex;align-items:center;justify-content:center}</style>" +
+        "</head><body>正在接管 Service Worker…<script type=\"module\">" +
+        "import { BareMuxConnection } from \"/uv/baremux/index.mjs\";" +
+        "(async()=>{try{" +
+        "var c=new BareMuxConnection(\"/uv/baremux/worker.js\");window.__daoBareConn=c;" +
+        "await c.setTransport(\"/uv/baremod/index.mjs\",[location.origin+\"/bare/\"]);" +
+        "var r=await navigator.serviceWorker.register(\"/uv/sw.js\",{scope:\"/uv/\"});" +
+        "await navigator.serviceWorker.ready;" +
+        "if(!navigator.serviceWorker.controller){await new Promise(function(res){navigator.serviceWorker.addEventListener(\"controllerchange\",res,{once:true});setTimeout(res,1500);});}" +
+        "location.reload();" +
+        "}catch(e){document.body.textContent=\"SW 接管失败: \"+((e&&e.message)||e);}})();" +
+        "</script></body></html>";
+      return new Response(boot, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
     }
 
     return json({ error: "not_found", path }, 404);

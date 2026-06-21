@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>原生加载中…</title>
+<style>
+  html,body{margin:0;height:100%;background:#0d1117;color:#c9d1d9;font:14px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+  #pf{position:fixed;inset:0;border:0;width:100%;height:100%;display:none;background:#0d1117}
+  .wrap{height:100%;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}
+  .sp{width:26px;height:26px;border:3px solid #30363d;border-top-color:#2f81f7;border-radius:50%;animation:s .8s linear infinite;margin:0 auto 14px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .err{color:#f85149;max-width:560px;line-height:1.5}
+  code{color:#8b949e}
+</style>
+<!-- UV 引擎 + 配置 (供本页用 encodeUrl 编码目标 URL) -->
+<script src="/uv/uv.bundle.js"></script>
+<script src="/uv/uv.config.js"></script>
+</head>
+<body>
+<div class="wrap" id="box">
+  <div><div class="sp"></div><div>正在用浏览器本源引擎原生加载…<br><span style="color:#6e7681">注册 Service Worker · 首次稍候</span></div></div>
+</div>
+<!-- 被代理内容落在此【嵌套 iframe】, 本页(frame.html)常驻以持有 bare-mux 传输 SharedWorker 不被回收。
+     若改为 location 跳走本页, SharedWorker 失去客户端→传输端口断→SW 内 bare 请求全部超时。 -->
+<iframe id="pf" title="原生内容" allow="clipboard-read; clipboard-write; fullscreen; microphone; camera"></iframe>
+<script type="module">
+  import { BareMuxConnection } from "/uv/baremux/index.mjs";
+
+  function fail(msg) {
+    document.getElementById("box").innerHTML =
+      '<div class="err"><b>原生加载失败</b><br>' + String(msg || "") +
+      '<br><br><code>请确认中继 Worker 已部署最新版 (含 /bare 与 /uv 资产)。</code></div>';
+  }
+
+  // 常驻持有, 防 GC 回收 → bare-mux SharedWorker 始终在线。
+  window.__daoBareConn = null;
+
+  (async function () {
+    try {
+      // 目标 URL 经 hash 传入 (不上 URL query · 不进日志)
+      var target = "";
+      try { target = decodeURIComponent((location.hash || "").slice(1)); } catch (e) { target = (location.hash || "").slice(1); }
+      if (!target) { fail("缺少目标 URL"); return; }
+
+      if (!("serviceWorker" in navigator)) { fail("此浏览器不支持 Service Worker"); return; }
+
+      // 传输层: bare-mux → bare-as-module3 (Bare v3) → 本 Worker /bare/v3/
+      var conn = new BareMuxConnection("/uv/baremux/worker.js");
+      window.__daoBareConn = conn;
+      await conn.setTransport("/uv/baremod/index.mjs", [location.origin + "/bare/"]);
+
+      // 注册 SW (scope=/uv/ 覆盖 /uv/service/ 被代理内容)
+      await navigator.serviceWorker.register("/uv/sw.js", { scope: "/uv/" });
+      await navigator.serviceWorker.ready;
+
+      // 预热: 先经 SW 发一个轻量请求, 让 SW 内 BareClient 在【本页空闲且能应答 getPort】时
+      //   完成与 SharedWorker 的端口协商并缓存。否则 SPA 启动瞬间并发 ~20 个 module 预载,
+      //   首次端口协商会在 1s 内超时 → 这批 import 全 ERR_ABORTED。预热后整批复用已建端口。
+      try {
+        var orig = (function () { try { return new URL(target).origin; } catch (e) { return target; } })();
+        var warm = self.__uv$config.prefix + self.__uv$config.encodeUrl(orig + "/favicon.ico");
+        await Promise.race([
+          fetch(warm, { cache: "no-store" }).catch(function () {}),
+          new Promise(function (r) { setTimeout(r, 4000); })
+        ]);
+      } catch (e) {}
+
+      // 用 UV 编解码器把真实 URL 编成 /uv/service/<enc>，交由 SW 客户端代理。
+      // 关键: 不跳走本页, 而是把它喂给【嵌套 iframe】—— 本页常驻保活传输 SharedWorker。
+      var enc = self.__uv$config.prefix + self.__uv$config.encodeUrl(target);
+      var pf = document.getElementById("pf");
+      pf.addEventListener("load", function () {
+        var b = document.getElementById("box");
+        if (b) b.style.display = "none";
+        pf.style.display = "block";
+      });
+      pf.src = enc;
+    } catch (e) {
+      fail((e && e.message) || e);
+    }
+  })();
+</script>
+</body>
+</html>
