@@ -27,8 +27,9 @@ import java.util.concurrent.Executors;
  */
 public final class ProxyServer {
     public interface Fetcher {
-        /** 抓取 url (代 acct 注入鉴权), 顶层 HTML 注入种子/剥 CSP。返回 {contentType, payload, encoding("text"|"b64"), status}; null=失败。 */
-        String[] fetch(String method, String url, String acct, String body, String reqContentType, String accept);
+        /** 抓取 url (代 acct 注入鉴权), 顶层 HTML 注入种子/剥 CSP。reqHost = 浏览器本次请求的 Host (= location.host),
+         *  用于把 JSON 响应里的 webapp_host 改写成本代理 host → 过规范主机校验不被弹回真站。返回 {contentType, payload, encoding("text"|"b64"), status}; null=失败。 */
+        String[] fetch(String method, String url, String acct, String body, String reqContentType, String accept, String reqHost);
     }
 
     private final String target;   // 源站 origin, 如 https://app.devin.ai
@@ -85,7 +86,7 @@ public final class ProxyServer {
             String method = rl.length > 0 ? rl[0] : "GET";
             String path = rl.length > 1 ? rl[1] : "/";
 
-            int contentLength = 0; String ctype = "", accept = "";
+            int contentLength = 0; String ctype = "", accept = "", host = "";
             String line;
             while ((line = readLine(in)) != null && !line.isEmpty()) {
                 int c = line.indexOf(':'); if (c <= 0) continue;
@@ -93,6 +94,7 @@ public final class ProxyServer {
                 if (k.equals("content-length")) { try { contentLength = Integer.parseInt(v); } catch (Exception ignored) {} }
                 else if (k.equals("content-type")) ctype = v;
                 else if (k.equals("accept")) accept = v;
+                else if (k.equals("host")) host = v;
             }
             if (method.equalsIgnoreCase("OPTIONS")) { writeCors(out); sock.close(); return; }
 
@@ -100,7 +102,7 @@ public final class ProxyServer {
             if (contentLength > 0) body = new String(readBody(in, contentLength), StandardCharsets.UTF_8);
 
             String url = target + path;
-            String[] r = fetcher.fetch(method, url, acct, body, ctype, accept);
+            String[] r = fetcher.fetch(method, url, acct, body, ctype, accept, host);
             if (r == null) { writeHead(out, 502, "text/plain", 11); out.write("proxy_fail".getBytes()); out.flush(); sock.close(); return; }
             int st = 200; try { st = Integer.parseInt(r[3]); } catch (Exception ignored) {}
             if ("b64".equals(r[2])) {

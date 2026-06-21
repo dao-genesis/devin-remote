@@ -1,6 +1,6 @@
 {
-  "versionCode": 111,
-  "versionName": "0.37.7",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.7/DevinCloud-mobile-v0.37.7.apk",
-  "notes": "v0.37.7 · 拖拽取数不再「零事件」+ 卡顿/频繁刷新根治\n• 网页拖拽对话记录修复：从「网页/对话标签」拖拽提取走的页内回退链路此前依赖 cookie（Devin 实为 Authorization:Bearer 鉴权），常空取成「零事件」。现直接从本页登录态真源 auth1_session 取出 token+org 显式带鉴权头取事件流 → 与悬浮窗一致正常提取。\n• 新窗口（target=_blank / window.open）打开的 Devin 对话页继承父标签账号绑定 → 保持登录、可被正常拖拽取数。\n• 后台标签资源调度（仿 Chrome）：切到后台的标签即 onPause 暂停渲染合成/动画，让出 CPU/GPU 给前台 → 多标签下前台打字/滚动不再被后台页抢资源致卡顿；App 整体转后台时暂停全部 WebView，不再空耗电量。自动化截图/镜像取帧前各自唤醒目标，不受影响。\n• 三击刷新改为「同一处」连续三击才触发：此前散落三下（滚动/连点）会误触整页重载，频繁打断浏览与打字。\n• 僵死探活改为连续两次（各4s）无响应才静默重载：避免设备繁忙时迟到回调被误判、每次回前台都误刷新。\n• 降低无谓开销：仅记录 JS 告警/错误日志（不再全量写 logcat）。"
+  "versionCode": 112,
+  "versionName": "0.37.8",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.8/DevinCloud-mobile-v0.37.8.apk",
+  "notes": "v0.37.8 · 修复网页直开网控台「登录不进去」\n• 真因：auth0 版 SPA 读服务端下发的 webapp_host，普通组该值为 null → SPA 回退默认主机 app.devin.ai，与代理 location.host 不一致 → 硬跳真站 /login，被弹回真站登录页 = 登录不进去。\n• 修法（对照 IDE 反代踩坑6 正解）：透明代理在服务端把 JSON 响应里的 webapp_host（null 或字符串）改写成本次请求 Host = 浏览器 location.host；根挂载 /、路径前缀 /px 两条路均覆盖；并加客户端 localStorage/fetch 守卫兜底（隧道场景按 location.host 自动匹配）。\n• 效果：浏览器直开网控台留在代理源，完整渲染已登录 Devin（侧栏/会话/Wiki/路由全 1:1），不再弹回真站。"
 }

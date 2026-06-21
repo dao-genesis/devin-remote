@@ -44,7 +44,7 @@ public final class LocalServer {
          *  顶层 HTML 注入 <base>+登录态种子+fetch/XHR 改写垫片 → 同源回服, 子资源/API 全经本代理同源直取。
          *  破除 X-Frame-Options + CORS + 跨域鉴权三重限制, 使外站(含 app.devin.ai 登录态)能在外壳内渲染。
          *  返回 {contentType, payload, encoding("text"|"b64"), status}; null = 失败。 */
-        default String[] embedProxy(String method, String url, String acct, String body, String reqContentType) { return null; }
+        default String[] embedProxy(String method, String url, String acct, String body, String reqContentType, String reqHost) { return null; }
         /** 为 (目标站 origin, 账号) 分配/复用一个根挂载透明代理端口 → 返回端口号 (>0); -1 失败。
          *  根挂载: 该端口的根 / 即源站根, 真实路径逐字一致 → 重型 SPA(TanStack 路由+auth0+Connect-RPC, 含
          *  app.devin.ai 登录态)零改写完整渲染 (路径前缀代理因污染 location 致路由错乱/chunk 404, 故须独立端口根挂载)。
@@ -115,6 +115,7 @@ public final class LocalServer {
             int contentLength = 0;
             String auth = "";
             String reqCtype = "";
+            String reqHost = "";
             String line;
             while ((line = readLine(in)) != null && !line.isEmpty()) {
                 int c = line.indexOf(':');
@@ -124,6 +125,7 @@ public final class LocalServer {
                 if (k.equals("content-length")) { try { contentLength = Integer.parseInt(v); } catch (Exception ignored) {} }
                 else if (k.equals("authorization")) auth = v;
                 else if (k.equals("content-type")) reqCtype = v;
+                else if (k.equals("host")) reqHost = v;
             }
 
             // CORS 预检
@@ -142,7 +144,7 @@ public final class LocalServer {
                 }
                 String reqBody = "";
                 if (contentLength > 0) reqBody = new String(readBody(in, contentLength), StandardCharsets.UTF_8);
-                String[] r = target.isEmpty() ? null : disp.embedProxy(method, target, acct, reqBody, reqCtype);
+                String[] r = target.isEmpty() ? null : disp.embedProxy(method, target, acct, reqBody, reqCtype, reqHost);
                 if (r != null) {
                     int st = 200; try { st = Integer.parseInt(r[3]); } catch (Exception ignored) {}
                     if ("b64".equals(r[2])) writeBytes(out, st, r[0], android.util.Base64.decode(r[1], android.util.Base64.DEFAULT));
