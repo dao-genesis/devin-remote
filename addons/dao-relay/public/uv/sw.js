@@ -6,7 +6,87 @@ importScripts("/uv/uv.config.js");
 importScripts("/uv/repair.js");
 importScripts(__uv$config.sw || "/uv/uv.sw.js");
 
+// === dao-relay: Service Worker 内无 SharedWorker/localStorage → 直连 /bare/v3/ 传输 ===
+// UV 的 UVServiceWorker 构造里 `new Ultraviolet.BareClient` (= bare-mux) 会读
+// `new SharedWorker(...)` 与 `localStorage['bare-mux-path']`。但 ServiceWorkerGlobalScope
+// 规范【既不暴露 SharedWorker 也不暴露 localStorage】→ 构造即抛 → SW 顶层脚本报错 →
+// install 失败 → SW 永不激活 → frame.html 永远卡在「注册 Service Worker」
+// (这正是线上「网页内容基本用不了」的总根因: 引擎根本没在浏览器里跑起来)。
+// 本设计的传输本就是 bare-as-module3 (纯 HTTP → 本源 /bare/v3/), 与 bare-mux 无关。
+// 故: 构造前把 Ultraviolet.BareClient 换成惰性占位(构造不触碰任何 SW 不可用的全局),
+//     构造后再把 uv.bareClient 换成直连 /bare/v3/ 的纯 HTTP 适配器
+//     (同源带 uv_auth Cookie → Devin 登录态注入)。
+self.Ultraviolet.BareClient = function () {};
+
+// bare v3 头部 split/join (与 baremod / worker.js bareJoinHeaders 同协议)。
+const DAO_BARE_MAX_HEADER = 3072;
+function daoSplitBareHeaders(headers) {
+  const v = headers.get("x-bare-headers");
+  if (v && v.length > DAO_BARE_MAX_HEADER) {
+    headers.delete("x-bare-headers");
+    let split = 0;
+    for (let i = 0; i < v.length; i += DAO_BARE_MAX_HEADER) {
+      headers.set("x-bare-headers-" + (split++), ";" + v.slice(i, i + DAO_BARE_MAX_HEADER));
+    }
+  }
+  return headers;
+}
+function daoJoinBareHeaders(headers) {
+  if (headers.has("x-bare-headers-0")) {
+    const parts = [];
+    headers.forEach(function (value, key) {
+      const m = /^x-bare-headers-(\d+)$/.exec(key.toLowerCase());
+      if (m && value.charAt(0) === ";") parts[parseInt(m[1], 10)] = value.slice(1);
+    });
+    return parts.join("");
+  }
+  return headers.get("x-bare-headers") || "{}";
+}
+
 const uv = new UVServiceWorker();
+
+// 用直连本源 /bare/v3/ 的纯 HTTP 适配器替换 bare-mux(SharedWorker)客户端。
+// UV 的响应包装类按 .rawHeaders/.status/.statusText/.body 读取, 改写分支另用 .text() ——
+// 故返回对象须同时提供这些 (body=上游字节流, text/arrayBuffer 透传)。
+uv.bareClient = {
+  async fetch(url, opts) {
+    opts = opts || {};
+    const remote = new URL(url);
+    const reqHeaders = Object.assign({}, opts.headers || {});
+    if ("host" in reqHeaders) reqHeaders.host = remote.host; else reqHeaders.Host = remote.host;
+    const bh = new Headers();
+    bh.set("x-bare-url", remote.toString());
+    bh.set("x-bare-headers", JSON.stringify(reqHeaders));
+    daoSplitBareHeaders(bh);
+    const fopts = {
+      method: opts.method || "GET",
+      credentials: "same-origin", // 携 uv_auth Cookie 至本源 /bare/v3/ → 登录态注入
+      headers: bh,
+      redirect: "manual",
+      signal: opts.signal,
+      duplex: "half"
+    };
+    if (opts.body !== undefined && opts.body !== null) fopts.body = opts.body;
+    const resp = await fetch("/bare/v3/?cache=" + encodeURIComponent(remote.toString()), fopts);
+    if (!resp.ok) {
+      let eb; try { eb = await resp.json(); } catch (e) { eb = { message: "bare error " + resp.status }; }
+      throw new Error((eb && (eb.message || eb.code)) || ("bare error " + resp.status));
+    }
+    const rawHeaders = JSON.parse(daoJoinBareHeaders(resp.headers) || "{}");
+    return {
+      body: resp.body,
+      finalURL: remote.toString(),
+      rawHeaders: rawHeaders,
+      status: parseInt(resp.headers.get("x-bare-status") || String(resp.status), 10),
+      statusText: resp.headers.get("x-bare-status-text") || resp.statusText,
+      text: function () { return resp.text(); },
+      arrayBuffer: function () { return resp.arrayBuffer(); },
+      json: function () { return resp.json(); },
+      blob: function () { return resp.blob(); }
+    };
+  },
+  connect: function () { throw new Error("dao-relay SW transport: ws connect handled in page"); }
+};
 
 // 把 repair.js 的「标签误伤」修复挂进 UV 自身的 JS 重写管线(无需二次读响应体)。
 try {
