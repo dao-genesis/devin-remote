@@ -2746,6 +2746,20 @@ async function _callProvider(
       }
     }
 
+    // ★ v9.9.307 · 本源观照·真上游 · 回传第三方实发之全文(system+messages+tools)给面板
+    //   道义: 十四章「执今之道·以御今之有」· 观其真实所往 · 不滞 devin 侧经文
+    //   仅观察 · 不改 body · 失败静默 · 不扰路由
+    try {
+      if (typeof global.__DAO_RECORD_UPSTREAM === "function") {
+        global.__DAO_RECORD_UPSTREAM({
+          provider: providerName,
+          model: model,
+          messages: messages,
+          tools: toolsField,
+        });
+      }
+    } catch {}
+
     const bodyObj = { messages, stream: provCfg.streamMode !== "unary" };
     if (toolsField) {
       bodyObj.tools = toolsField;
