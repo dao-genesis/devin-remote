@@ -275,11 +275,15 @@ function _bestPublic(){
 function _bestWeb(){
   var c=_conn(), r=_relay();
   var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
-  if(w) return { url:_webConsoleUrl(w,true), label:'零账号中继网控台(始终在线·免隧道)', kind:'worker', base:w };
+  // 仅当中继 Worker 确实连通时才把它作为浏览器直开入口; 掉线/被 CF 限流(429)时回落到当前生效公网隧道(cloudflared/SSH),
+  // 否则会把一个打不开的 workers.dev/console 当「网页直开」对外广播 (用户实测「公网链接产生不了」即此因)。
+  if(w && r.connected!==false) return { url:_webConsoleUrl(w,true), label:'零账号中继网控台(始终在线·免隧道)', kind:'worker', base:w };
   var bp=_bestPublic();
-  if(bp.base) return { url:_webConsoleUrl(bp.base,true), label:bp.label, kind:bp.kind, base:bp.base };
+  if(bp.base && bp.kind!=='worker') return { url:_webConsoleUrl(bp.base,true), label:bp.label, kind:bp.kind, base:bp.base };
   var l=_lan(); var us=(l&&l.urls)||[];
   if(us.length){ var lb=String(us[0]).replace(/\/$/,''); return { url:_webConsoleUrl(lb,true), label:'局域网直连(同网·零中继零隧道)', kind:'lan', base:lb }; }
+  // 末位兜底: 即便 Worker 未连通也总比空好 (用户可手动重试中继)。
+  if(w) return { url:_webConsoleUrl(w,true), label:'零账号中继·兜底(未连通·可重试)', kind:'worker', base:w };
   return { url:"", label:'(暂无)', kind:'none', base:"" };
 }
 function _push(){
