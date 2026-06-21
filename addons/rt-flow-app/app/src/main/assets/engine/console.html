@@ -703,6 +703,13 @@
     if(!menuPop.dataset.built){ buildMenu(); menuPop.dataset.built="1"; }
     menuPop.classList.toggle("show"); };
   document.addEventListener("click", function(){ menuPop.classList.remove("show"); dlPanel.classList.remove("show"); });
+  // 点进 iframe 内容(板块/网页)时, 点击落在子文档里 → 父文档的 document click 收不到, 旧逻辑下浮层不收
+  // (要再点一次外壳才关 = 「菜单/下载要点两次」)。改为窗口失焦且焦点进入某 iframe 时即收起, 一次点击即关。
+  window.addEventListener("blur", function(){
+    if(document.activeElement && document.activeElement.tagName==="IFRAME"){
+      menuPop.classList.remove("show"); dlPanel.classList.remove("show");
+    }
+  });
 
   // ── 接入设置浮层 ──
   var cfg=document.getElementById("cfg");
