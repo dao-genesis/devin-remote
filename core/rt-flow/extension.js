@@ -370,6 +370,22 @@ function _getMultiFavs() {
 function _setMultiFavs(f) {
   try { if (_ctx && _ctx.globalState) _ctx.globalState.update("dao.multiFavs", f || []); } catch (e) {}
 }
+// 浏览器下载管理: 网页内下载的真实文件由代理层落盘到 ~/.dao/downloads + _index.json,
+//   此处只读/删该清单(与「对话备份」彻底无关), 供 /shell ⬇下载悬浮窗罗列。
+function _daoDownloadsIndexPath() { return path.join(os.homedir(), ".dao", "downloads", "_index.json"); }
+function _listDaoDownloads() {
+  try {
+    const idx = JSON.parse(fs.readFileSync(_daoDownloadsIndexPath(), "utf8")) || [];
+    return idx.filter((d) => { try { return d && d.path && fs.existsSync(d.path); } catch (e) { return false; } });
+  } catch (e) { return []; }
+}
+function _delDaoDownload(p) {
+  try {
+    if (p) { try { fs.unlinkSync(p); } catch (e) {} }
+    const idx = JSON.parse(fs.readFileSync(_daoDownloadsIndexPath(), "utf8")) || [];
+    fs.writeFileSync(_daoDownloadsIndexPath(), JSON.stringify(idx.filter((d) => d && d.path !== p)));
+  } catch (e) {}
+}
 function _getMultiHist() {
   try { return (_ctx && _ctx.globalState && _ctx.globalState.get("dao.multiHistory")) || []; } catch (e) { return []; }
 }
@@ -697,6 +713,23 @@ html.m #hint{font-size:14px;padding:18px}
 .tab.dragging{opacity:.45}
 .tab.dh-l{box-shadow:inset 2px 0 0 #1f6feb}
 .tab.dh-r{box-shadow:inset -2px 0 0 #1f6feb}
+/* 归一 · ⬇下载悬浮窗(独立于对话备份, 对齐手机 APK 下载悬浮窗) */
+#dlwin{position:absolute;top:44px;right:10px;width:480px;height:66%;max-width:96vw;max-height:88%;background:#0e1116;border:1px solid #2a313c;border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.6);z-index:27;display:none;flex-direction:column;overflow:hidden}
+#dlwin.on{display:flex}
+#dlwin .dwh{display:flex;align-items:center;gap:8px;padding:8px 11px;background:#161b22;border-bottom:1px solid #21262d;cursor:move;flex:0 0 auto;user-select:none}
+#dlwin .dwh .t{flex:1;font-size:13px;font-weight:700;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#dlwin .dwbar{display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
+#dlwin .dlbody{flex:1;overflow:auto;padding:6px 8px 30px}
+#dlwin .rc{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:8px 9px;margin-bottom:7px}
+#dlwin .rc .ti{font-size:13px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#dlwin .rc .meta{font-size:11px;color:#8b949e;margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
+#dlwin .acts{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+#dlwin .b{flex:1;min-width:56px;text-align:center;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer;color:#cdd3de}
+#dlwin .b:hover{background:#2d333b}#dlwin .b.pri{background:#0e639c;border-color:#0e639c;color:#fff}
+#dlwin .mini{background:#21262d;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:6px 9px;font-size:12px;cursor:pointer;white-space:nowrap}
+#dlwin .dwx{background:#21262d;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:5px 10px;font-size:12px;cursor:pointer;flex:0 0 auto}
+#dlwin .empty{color:#6e7681;text-align:center;padding:26px 12px;font-size:13px}
+#dlwin .tip{font-size:11px;color:#6e7681;padding:4px 4px 6px}
 </style></head><body>
 <div id="app">
   <div id="tb">
@@ -715,8 +748,8 @@ html.m #hint{font-size:14px;padding:18px}
     <span id="zlbl" title="点击复位 100%">100%</span>
     <button class="tbtn" id="bZi" title="放大">A+</button>
     <button class="tbtn" id="bStar" title="收藏当前页">☆</button>
-    <button class="tbtn" id="bDl" title="下载 · 已备份/导出的对话文件">⬇</button>
-    <button class="tbtn" id="bBk" title="备份库 · 跨账号检索对话备份">📁</button>
+    <button class="tbtn" id="bDl" title="下载 · 网页内下载的文件(浏览器下载管理)">⬇</button>
+    <button class="tbtn" id="bBk" title="对话备份 · 近期对话 / 对话记录">📁</button>
     <button class="tbtn" id="bExt" title="用系统浏览器打开当前页">↗</button>
   </div>
   <div id="tabs"></div>
@@ -734,8 +767,8 @@ html.m #hint{font-size:14px;padding:18px}
 <div id="tabctx"></div>
 <div id="ov"><div class="ov-top"><span class="ti" id="ovTi"></span><button class="tbtn" id="ovClose">✕ 关闭</button></div><div class="ov-body" id="ovBody"></div></div>
 <div id="daowin">
-  <div class="dwh" id="dwHead"><span>☁</span><span class="t" id="dwTitle">下载 / 备份库</span><button class="dwx" id="dwClose">✕ 关闭</button></div>
-  <div class="dwtabs"><div class="dwtab on" id="dwTabR">☁ 近期对话</div><div class="dwtab" id="dwTabB">🗂 备份网页端</div></div>
+  <div class="dwh" id="dwHead"><span>💬</span><span class="t" id="dwTitle">对话备份</span><button class="dwx" id="dwClose">✕ 关闭</button></div>
+  <div class="dwtabs"><div class="dwtab on" id="dwTabR">☁ 近期对话</div><div class="dwtab" id="dwTabB">🗂 对话记录(备份)</div></div>
   <div class="dwbar" id="dwBarR"><input class="srch" id="dwQ" placeholder="检索 账号 / 对话名称…" autocomplete="off"/><button class="mini" id="dwRefresh">🔄 刷新</button></div>
   <div class="dwbar" id="dwBarB" style="display:none"><input class="srch" id="dwBQ" placeholder="检索 账号 / 备份名称…" autocomplete="off"/><button class="mini" id="dwRoot">📁 根目录</button></div>
   <div class="dwbody">
@@ -743,6 +776,11 @@ html.m #hint{font-size:14px;padding:18px}
     <div class="dwview" id="dwViewB"><div id="dwBackup"><div class="empty">加载中…</div></div></div>
     <div id="cv"><div class="cvtop"><button class="dwx" id="cvBack">‹ 返回</button><div class="cvtabs" id="cvTabs"></div></div><div class="cvacts" id="cvActs"></div><div class="cvbody" id="cvBody"></div></div>
   </div>
+</div>
+<div id="dlwin">
+  <div class="dwh" id="dlHead"><span>⬇</span><span class="t" id="dlTitle">下载</span><button class="dwx" id="dlClose">✕ 关闭</button></div>
+  <div class="dwbar"><button class="mini" id="dlRefresh">🔄 刷新</button><button class="mini" id="dlFolder">📁 下载文件夹</button></div>
+  <div class="dlbody"><div class="tip">浏览器下载 · 在网页中下载的文件都会出现在这里(与对话备份无关 · 对齐手机 APK 下载悬浮窗)</div><div id="dlList"><div class="empty">加载中…</div></div></div>
 </div>
 <div class="dtoast" id="daotoast"></div>
 <script>
@@ -778,7 +816,11 @@ function setActive(id){
   if(tabs[active]){ADDR.value=tabs[active].url;ZL.textContent=Math.round((tabs[active].zoom||1)*100)+'%';}
   spin(!!(tabs[active]&&tabs[active].loading));hideOverlay();syncStar();}
 function markStar(on){var sb=document.getElementById('bStar');if(sb){sb.textContent=on?'★':'☆';sb.classList.toggle('faved',!!on);}}
-function syncStar(){var on=false;try{if(isBoard()){var bt=activeBoardTab();on=(favs||[]).some(function(f){return f&&f.board===bt;});}else if(active){var u=tabs[active]&&tabs[active].url;on=(favs||[]).some(function(f){return f&&(f.id===active||(u&&f.url===u));});}}catch(e){}markStar(on);}
+// 收藏键 = 账号/对话标签 → 与宿主 favAdd 完全同构的 key, 保证「亮金↔取消」前后端一致命中。
+function _acctFavKey(id){var p=String(id||'').split('|');var email=(p[0]||'').toLowerCase();var tail=p[1]||'home';var did=(tail!=='home'&&tail.indexOf('page')!==0)?tail:'';return email+'|'+(did||'home');}
+function _curFavKey(){if(isBoard())return 'board:'+activeBoardTab();if(active)return _acctFavKey(active);return '';}
+function _isFaved(){var k=_curFavKey();return !!k&&(favs||[]).some(function(f){return f&&f.key===k;});}
+function syncStar(){markStar(_isFaved());}
 function _otherTab(id){for(var i=order.length-1;i>=0;i--){if(order[i]!==id)return order[i];}return null;}
 function toggleSplitWith(id){
   if(splitId){clearSplit();daoToast('已退出分屏');return;}
@@ -990,6 +1032,19 @@ function daoToast(msg,bad){var t=_dEl('daotoast');if(!t)return;t.textContent=msg
 function daoAgo(ms){if(!ms)return'';var d=Date.now()-ms;if(d<0)d=0;var mn=Math.floor(d/60000);if(mn<1)return'刚刚';if(mn<60)return mn+'分钟前';var h=Math.floor(mn/60);if(h<24)return h+'小时前';var dd=Math.floor(h/24);if(dd<30)return dd+'天前';try{return new Date(ms).toLocaleDateString();}catch(e){return'';}}
 function daoOpen(tab){_dEl('daowin').className='on';daoTab(tab||'recent');}
 function daoClose(){_dEl('daowin').className='';}
+// ── 归一 · ⬇下载悬浮窗(浏览器下载管理): 罗列网页内下载的真实文件, 与对话备份彻底无关 ──
+var DAO_DL=[];
+function _fsize(n){n=+n||0;if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';if(n<1073741824)return (n/1048576).toFixed(1)+' MB';return (n/1073741824).toFixed(2)+' GB';}
+function dlOpen(){_dEl('dlwin').className='on';dlLoad();}
+function dlClose(){_dEl('dlwin').className='';}
+function dlLoad(){if(!DAO_DL.length)_dEl('dlList').innerHTML='<div class="empty">加载中…</div>';vscode.postMessage({type:'shellDownloads'});}
+function dlRender(){var box=_dEl('dlList');if(!box)return;
+  if(!DAO_DL.length){box.innerHTML='<div class="empty">暂无下载 · 在网页中下载文件后会自动出现在这里</div>';var t=_dEl('dlTitle');if(t)t.textContent='下载';return;}
+  var h='';for(var i=0;i<DAO_DL.length;i++){var d=DAO_DL[i];var host='';try{host=new URL(d.url||'').host;}catch(e){}
+    h+='<div class="rc"><div class="ti" title="'+esc(d.name||'')+'">'+esc(d.name||'(未命名)')+'</div>'+
+      '<div class="meta"><span>'+_fsize(d.size)+'</span>'+(host?'<span>'+esc(host)+'</span>':'')+(d.time?'<span>'+daoAgo(d.time)+'</span>':'')+'</div>'+
+      '<div class="acts"><span class="b pri" data-dlopen="'+esc(d.path||'')+'">打开</span><span class="b" data-dlrev="'+esc(d.path||'')+'">所在文件夹</span><span class="b" data-dldel="'+esc(d.path||'')+'">删除</span></div></div>';}
+  box.innerHTML=h;var tt=_dEl('dlTitle');if(tt)tt.textContent='下载 ('+DAO_DL.length+')';}
 function daoTab(t){var rec=t==='recent';
   _dEl('dwTabR').classList.toggle('on',rec);_dEl('dwTabB').classList.toggle('on',!rec);
   _dEl('dwViewR').classList.toggle('on',rec);_dEl('dwViewB').classList.toggle('on',!rec);
@@ -1072,8 +1127,20 @@ _dEl('cvBack').onclick=daoHideCv;
   hd.addEventListener('mousedown',function(e){if(e.target&&e.target.id==='dwClose')return;drag=true;var r=w.getBoundingClientRect();dx=e.clientX-r.left;dy=e.clientY-r.top;w.style.right='auto';w.style.left=r.left+'px';w.style.top=r.top+'px';e.preventDefault();});
   window.addEventListener('mousemove',function(e){if(!drag)return;var x=Math.max(0,Math.min(window.innerWidth-90,e.clientX-dx)),y=Math.max(0,Math.min(window.innerHeight-40,e.clientY-dy));w.style.left=x+'px';w.style.top=y+'px';});
   window.addEventListener('mouseup',function(){drag=false;});})();
-document.getElementById('bDl').onclick=function(){daoOpen('recent');};
-document.getElementById('bBk').onclick=function(){daoOpen('backup');};
+// ⬇下载悬浮窗 事件: 关闭/刷新/打开文件夹 + 列表内 打开/定位/删除(事件委托·CSP 安全) + 标题栏拖拽
+_dEl('dlClose').onclick=dlClose;
+_dEl('dlRefresh').onclick=dlLoad;
+_dEl('dlFolder').onclick=function(){if(DAO_DL[0]&&DAO_DL[0].path)vscode.postMessage({type:'shellRevealFile',path:DAO_DL[0].path});else daoToast('暂无下载文件',true);};
+_dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-dlopen],[data-dlrev],[data-dldel]');if(!el)return;
+  var op=el.getAttribute('data-dlopen');if(op){vscode.postMessage({type:'shellOpenFile',path:op});return;}
+  var rv=el.getAttribute('data-dlrev');if(rv){vscode.postMessage({type:'shellRevealFile',path:rv});return;}
+  var dl=el.getAttribute('data-dldel');if(dl){vscode.postMessage({type:'shellDownloadDel',path:dl});daoToast('已删除');return;}});
+(function(){var w=_dEl('dlwin'),hd=_dEl('dlHead'),dx=0,dy=0,drag=false;if(!w||!hd)return;
+  hd.addEventListener('mousedown',function(e){if(e.target&&e.target.id==='dlClose')return;drag=true;var r=w.getBoundingClientRect();dx=e.clientX-r.left;dy=e.clientY-r.top;w.style.right='auto';w.style.left=r.left+'px';w.style.top=r.top+'px';e.preventDefault();});
+  window.addEventListener('mousemove',function(e){if(!drag)return;var x=Math.max(0,Math.min(window.innerWidth-90,e.clientX-dx)),y=Math.max(0,Math.min(window.innerHeight-40,e.clientY-dy));w.style.left=x+'px';w.style.top=y+'px';});
+  window.addEventListener('mouseup',function(){drag=false;});})();
+document.getElementById('bDl').onclick=function(){dlOpen();};
+document.getElementById('bBk').onclick=function(){daoOpen('recent');};
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
 document.getElementById('bAdd').onclick=function(e){e.stopPropagation();openWebTab('https://app.devin.ai/','＋登 Devin');};
 document.getElementById('bRefresh').onclick=function(){if(isBoard()){var bt=activeBoardTab();closeTab(boardId(bt));openBoard(bt);return;}var t=tabs[active];if(t){t.frame.setAttribute('src',t.url);setLoading(active,true);}};
@@ -1081,7 +1148,13 @@ document.getElementById('bHome').onclick=function(){openBoard('home');};
 document.getElementById('bZi').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.min(3,(t.zoom||1)+0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 document.getElementById('bZo').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.max(0.3,(t.zoom||1)-0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
 ZL.onclick=function(){var t=tabs[active];if(t){t.zoom=1;applyZoom(t);ZL.textContent='100%';}};
-document.getElementById('bStar').onclick=function(){if(isBoard()){var bt=activeBoardTab();var meta=BOARD_META[bt]||['⭐',bt];vscode.postMessage({type:'favAdd',board:bt,label:meta[0]+' '+meta[1]});markStar(true);daoToast('★ 已收藏当前板块');}else if(active){vscode.postMessage({type:'favAdd',id:active});markStar(true);daoToast('★ 已收藏当前页');}else{daoToast('请先打开一个页面再收藏',true);}};
+document.getElementById('bStar').onclick=function(){
+  var key=_curFavKey();
+  if(!key){daoToast('请先打开一个页面再收藏',true);return;}
+  if(_isFaved()){vscode.postMessage({type:'favDel',key:key});markStar(false);daoToast('☆ 已取消收藏');return;}
+  if(isBoard()){var bt=activeBoardTab();var meta=BOARD_META[bt]||['⭐',bt];vscode.postMessage({type:'favAdd',board:bt,label:meta[0]+' '+meta[1]});markStar(true);daoToast('★ 已收藏当前板块');}
+  else{vscode.postMessage({type:'favAdd',id:active});markStar(true);daoToast('★ 已收藏当前页');}
+};
 document.getElementById('bExt').onclick=function(){var t=tabs[active];if(t)vscode.postMessage({type:'openExternal',url:t.url});};
 document.getElementById('ovClose').onclick=hideOverlay;
 ADDR.addEventListener('keydown',function(e){if(e.key==='Enter')navigate(ADDR.value);});
@@ -1143,7 +1216,7 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   if(m.__cwRelay){vscode.postMessage({type:'cloudRelay',msg:m.__cwRelay,board:m.__board||''});return;}
   if(m.type==='open'){mkTab(m);}
   else if(m.type==='closeAll'){var ks=order.slice();for(var i=0;i<ks.length;i++)closeTab(ks[i]);vscode.postMessage({type:'closeAllAck'});}
-  else if(m.type==='favs'){favs=m.list||[];if(OV.className&&OVT.textContent.indexOf('书签')>=0)showFavs();}
+  else if(m.type==='favs'){favs=m.list||[];syncStar();if(OV.className&&OVT.textContent.indexOf('书签')>=0)showFavs();}
   else if(m.type==='history'){history=m.list||history;if(OV.className&&OVT.textContent.indexOf('历史')>=0)showHistory();}
   else if(m.type==='accounts'){accounts=m.list||[];}
   else if(m.type==='userscripts'){userScripts=m.list||[];if(OV.className&&OVT.textContent.indexOf('用户脚本')>=0)showUserscripts();}
@@ -1154,6 +1227,7 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='restoreTabs'){try{restoreTabs(m.tabs);}catch(e){}}
   else if(m.type==='cloudHost'){_boardHostAll(m.msg||{});}
   else if(m.type==='shellBackupsData'){_bkTree=m.tree||{root:'',accounts:[]};if(OV.className){if(_bkMode==='dl')renderDownloads();else if(_bkMode==='bk')renderBkLib();}try{daoRenderBackup();}catch(e){}}
+  else if(m.type==='shellDownloadsData'){DAO_DL=m.list||[];dlRender();}
   else if(m.type==='dlRecentData'){try{daoOnRecent(m);}catch(e){}}
   else if(m.type==='dlExportData'){try{daoOnExport(m);}catch(e){}}
   else if(m.type==='dlZipDone'){try{daoToast(m.ok?('✓ 已打包: '+(m.name||'')):('打包失败: '+(m.error||'')),!m.ok);}catch(e){}}
@@ -1674,6 +1748,26 @@ async function shellHandleMessage(sid, m) {
         } catch (e) { send({ type: 'shellBackupsData', tree: { root: '', accounts: [] }, error: String((e && e.message) || e) }); }
         return;
       }
+      case 'shellDownloads': {
+        send({ type: 'shellDownloadsData', list: _listDaoDownloads() });
+        return;
+      }
+      case 'shellDownloadDel': {
+        _delDaoDownload(m.path);
+        send({ type: 'shellDownloadsData', list: _listDaoDownloads() });
+        return;
+      }
+      case 'shellOpenFile': {
+        if (!m.path) return;
+        try { await vscode.commands.executeCommand('simpleBrowser.show', vscode.Uri.file(m.path).toString()); }
+        catch (e) { try { await vscode.env.openExternal(vscode.Uri.file(m.path)); } catch (e2) {} }
+        return;
+      }
+      case 'shellRevealFile': {
+        if (!m.path) return;
+        try { await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(m.path)); } catch (e) {}
+        return;
+      }
       case 'cloudInit': {
         if (!_cloudProvider) { send({ type: 'toast', text: '六大板块面板未就绪' }); return; }
         // 按会话隔离: buildHtml 与其触发的宿主回推仅发给本 sid (道并行而不相悖)
@@ -1852,6 +1946,15 @@ function _wireMultiPanel(panel) {
           const tree = devinCloud.listBackups(root || undefined);
           panel.webview.postMessage({ type: "shellBackupsData", tree });
         } catch (e) { try { panel.webview.postMessage({ type: "shellBackupsData", tree: { root: "", accounts: [] }, error: String((e && e.message) || e) }); } catch (e2) {} }
+        return;
+      }
+      if (m.type === "shellDownloads") {
+        try { panel.webview.postMessage({ type: "shellDownloadsData", list: _listDaoDownloads() }); } catch (e) {}
+        return;
+      }
+      if (m.type === "shellDownloadDel") {
+        _delDaoDownload(m.path);
+        try { panel.webview.postMessage({ type: "shellDownloadsData", list: _listDaoDownloads() }); } catch (e) {}
         return;
       }
       if (m.type === "shellOpenFile" && m.path) {

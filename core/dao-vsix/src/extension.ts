@@ -9301,6 +9301,50 @@ setTimeout(function() {
 // ═══════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════
+// 归一 · 浏览器下载管理 — 网页内下载的文件落盘 + 登记, 供 /shell ⬇下载悬浮窗罗列。
+//   与「对话备份」彻底解耦: 这里只收「用户在网页中下载的真实文件」(对齐手机 APK 下载悬浮窗)。
+// ═══════════════════════════════════════════════════════════
+function daoDownloadsDir(): string {
+    const d = path.join(DAO_DIR, 'downloads');
+    try { fs.mkdirSync(d, { recursive: true }); } catch { /* 守柔 */ }
+    return d;
+}
+function daoDownloadsIndex(): string { return path.join(daoDownloadsDir(), '_index.json'); }
+function _dlFilename(cd: string, u: URL, ct: string): string {
+    let name = '';
+    const m = /filename\*?=(?:UTF-8'')?["']?([^"';\n]+)/i.exec(cd || '');
+    if (m && m[1]) { try { name = decodeURIComponent(m[1]); } catch { name = m[1]; } }
+    if (!name) { try { name = decodeURIComponent((u.pathname || '').split('/').filter(Boolean).pop() || ''); } catch { name = (u.pathname || '').split('/').filter(Boolean).pop() || ''; } }
+    if (!name || name.indexOf('.') < 0) {
+        const ext = /pdf/i.test(ct) ? '.pdf' : /zip/i.test(ct) ? '.zip' : /json/i.test(ct) ? '.json' : /csv/i.test(ct) ? '.csv' : /(msword|wordprocessingml)/i.test(ct) ? '.docx' : /(excel|spreadsheetml)/i.test(ct) ? '.xlsx' : /octet-stream/i.test(ct) ? '.bin' : '';
+        name = (name || 'download') + ext;
+    }
+    return name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120) || 'download';
+}
+// 是否「应作为下载捕获」: 显式 attachment, 或明确的可下载二进制类型(排除内联渲染的图片/音视频/脚本/样式)。
+function _isDownloadable(cd: string, ct: string): boolean {
+    if (/attachment/i.test(cd || '')) return true;
+    const c = String(ct || '').toLowerCase().split(';')[0].trim();
+    if (!c) return false;
+    if (/^(text\/html|application\/xhtml|text\/css|application\/javascript|text\/javascript|application\/json|image\/|video\/|audio\/|font\/|text\/plain|text\/xml|application\/xml)/.test(c)) return false;
+    return /^(application\/(octet-stream|zip|x-zip|pdf|x-pdf|gzip|x-gzip|x-tar|x-7z|x-rar|vnd\.|msword|x-msdownload)|application\/x-)/.test(c);
+}
+function daoSaveDownload(name: string, buf: Buffer, ct: string, src: string): any {
+    const dir = daoDownloadsDir();
+    const stamp = Date.now().toString(36) + Math.floor(Math.random() * 1e3).toString(36);
+    const safe = String(name || 'download').replace(/[\\/:*?"<>|]/g, '_').slice(0, 120) || 'download';
+    const fp = path.join(dir, stamp + '-' + safe);
+    fs.writeFileSync(fp, buf);
+    let idx: any[] = [];
+    try { idx = JSON.parse(fs.readFileSync(daoDownloadsIndex(), 'utf8')) || []; } catch { idx = []; }
+    const meta = { name: safe, path: fp, size: buf.length, contentType: ct || '', url: src || '', time: Date.now() };
+    idx.unshift(meta);
+    if (idx.length > 500) idx = idx.slice(0, 500);
+    try { fs.writeFileSync(daoDownloadsIndex(), JSON.stringify(idx)); } catch { /* 守柔 */ }
+    return meta;
+}
+
+// ═══════════════════════════════════════════════════════════
 // 归一 · 任意网页「站内代理」直出 — 搜索/外站经此当 iframe 加载
 //   只做三件事: 剥 X-Frame-Options/CSP(否则 webview iframe 被站点框架策略挡白屏)
 //   + 注入 <base>(相对资源回源直载) + 注入链接/表单/window.open 拦截(改写经本代理 → 站内导航不外跳)。
@@ -9388,6 +9432,14 @@ async function genericWebProxy(targetUrl: string, depth: number = 0): Promise<an
                     else if (enc === 'deflate') zlib.inflate(raw, (e: any, b: Buffer) => rr(e ? raw : b));
                     else rr(raw);
                 });
+                const cd = String(pr.headers['content-disposition'] || '');
+                if (_isDownloadable(cd, ct)) {
+                    // 网页内下载的真实文件 → 落盘登记(供 ⬇下载悬浮窗), 同时回传 attachment 让浏览器原生下载。
+                    const fname = _dlFilename(cd, u, ct);
+                    try { daoSaveDownload(fname, body, ct, u.href); } catch { /* 守柔 */ }
+                    finish({ _proxy: true, status: sc, contentType: ct || 'application/octet-stream', body: body.toString('base64'), binary: true, headers: { 'Content-Disposition': 'attachment; filename="' + fname.replace(/["\r\n]/g, '_') + '"' } });
+                    return;
+                }
                 if (!isHtml) {
                     finish({ _proxy: true, status: sc, contentType: ct || 'application/octet-stream', body: body.toString('base64'), binary: true });
                     return;
