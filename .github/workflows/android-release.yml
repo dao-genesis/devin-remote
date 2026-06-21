@@ -25,7 +25,14 @@ jobs:
   build-release:
     runs-on: ubuntu-latest
     steps:
+      # 显式 checkout main 活动分支顶端，而非 dispatch 时记录的 github.sha。
+      # auto-merge 合并后立刻 dispatch 本流，若用默认 (= dispatch 时刻的 main SHA)
+      # 会读到合并前的旧 versionName → 误判该版已发布而跳过 → 新版 APK 永不构建
+      # (即「升版号却不发包」)。fetch-depth:0 取全量，确保 --target $GITHUB_SHA 可定位。
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
       - name: Read version from build.gradle
         id: ver
@@ -103,6 +110,6 @@ jobs:
             gh release edit "$TAG" --title "$TITLE" --notes-file notes.md --draft=false
             gh release upload "$TAG" "$ASSET" --clobber
           else
-            gh release create "$TAG" "$ASSET" --title "$TITLE" --notes-file notes.md --target "$GITHUB_SHA"
+            gh release create "$TAG" "$ASSET" --title "$TITLE" --notes-file notes.md --target "$(git rev-parse HEAD)"
           fi
           echo "released $TAG with $ASSET"
