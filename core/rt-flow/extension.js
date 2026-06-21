@@ -705,8 +705,8 @@ html.m #hint{font-size:14px;padding:18px}
     <button class="tbtn" id="bHome" title="回到账号首页">🏠</button>
     <input id="addr" placeholder="Devin 路径(/sessions/..)、网址 或 搜索词，回车" />
     <select id="eng" title="搜索引擎">
+      <option value="https://www.bing.com/search?q=" selected>Bing</option>
       <option value="https://www.google.com/search?q=">Google</option>
-      <option value="https://www.bing.com/search?q=">Bing</option>
       <option value="https://duckduckgo.com/?q=">DuckDuckGo</option>
       <option value="https://www.baidu.com/s?wd=">百度</option>
     </select>
@@ -830,15 +830,18 @@ function schedPersist(){clearTimeout(_persistT);_persistT=setTimeout(persistShel
 function restoreTabs(arr){if(!arr||!arr.length)return;for(var i=0;i<arr.length;i++){var s=arr[i]||{};try{
   if(s.kind==='board'){openBoard(s.board||'home');}
   else if(s.kind==='acc'&&s.email){vscode.postMessage({type:'reopen',email:s.email,devinId:s.devinId||''});}}catch(e){}}}
+// 归一 · 站内新标签开任意网页/搜索(复刻手机端 APK · 不再弹外部系统浏览器):
+//   经本地 HTTP 代理 /__web?u= 直出(剥 XFO/CSP · 注入 base + 链接/表单拦截), 当 iframe 挂一张站内标签。
+function openWebTab(u,label){if(!u)return;vscode.postMessage({type:'openWebTab',url:u,label:(label||u).slice(0,60),hist:1});}
 function navigate(v){v=(v||'').trim();if(!v)return;var isU=/^https?:\\/\\//i.test(v);var t=tabs[active];
   if(isBoard()||!t){
-    if(isU){vscode.postMessage({type:'openExternal',url:v,hist:1,label:v});}
+    if(isU){openWebTab(v,v);}
     else if(v.charAt(0)==='/'){vscode.postMessage({type:'openCloudPage',path:v});}
-    else{vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v),hist:1,label:v});}
+    else{openWebTab(ENG.value+encodeURIComponent(v),v);}
     try{ADDR.blur();}catch(e){}return;}
-  if(isU){var o=curOrigin();if(o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);setLoading(active,true);}else{vscode.postMessage({type:'openExternal',url:v,hist:1,label:v});}return;}
+  if(isU){var o=curOrigin();if(o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);setLoading(active,true);}else{openWebTab(v,v);}return;}
   if(v.charAt(0)==='/'){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);setLoading(active,true);ADDR.value=u;return;}
-  vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v),hist:1,label:v});}
+  openWebTab(ENG.value+encodeURIComponent(v),v);}
 // 归一 · 设备类型自动识别 (UA / ?m=1·见 _multiShellHtml MOBILE 注入) — 移除手动「切换 电脑版/手机版」(点击会重载致整体失效)。
 var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['🖥️','操作电脑本体','board:computer'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🔌','用户脚本 / 扩展','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
 function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'" data-l="'+esc(PAGES[i][1])+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
@@ -1815,6 +1818,15 @@ function _wireMultiPanel(panel) {
       if (m.type === "openExternal" && m.url) {
         if (m.hist) { try { _pushMultiHist(m.url, m.label || m.url, "web"); panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {} }
         try { await vscode.env.openExternal(vscode.Uri.parse(m.url)); } catch (e) {}
+        return;
+      }
+      if (m.type === "openWebTab" && m.url) {
+        // 站内新标签开任意网页/搜索 → 经本地 HTTP 代理 /__web 直出(剥 XFO·当 iframe 加载), 不再弹外部系统浏览器。
+        let abs = "";
+        try { if (_cloudProvider && typeof _cloudProvider.webUrl === "function") abs = _cloudProvider.webUrl(m.url) || ""; } catch (e) {}
+        if (!abs) { try { await vscode.env.openExternal(vscode.Uri.parse(m.url)); } catch (e) {} return; }
+        if (m.hist) { try { _pushMultiHist(m.url, m.label || m.url, "web"); panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {} }
+        try { panel.webview.postMessage({ type: "open", id: "web:" + Date.now().toString(36), url: abs, label: (m.label || m.url) }); } catch (e) {}
         return;
       }
       if (m.type === "dlRecent" || m.type === "dlExportMd" || m.type === "dlZip") {
