@@ -2,7 +2,7 @@
   "name": "dao-proxy-pro",
   "displayName": "道Agent Pro · 外接API · 反者道之动",
   "description": "道Agent Pro · 外接 API 渠道接入：选一个渠道、填一个 API Key 即用，自动识别可用模型。支持 OpenAI/DeepSeek/智谱GLM/Kimi 等 OpenAI 兼容接口及 Anthropic、Gemini，内置用量统计与配置原子保存/备份。",
-  "version": "9.9.310",
+  "version": "9.9.311",
   "publisher": "dao-agi",
   "license": "Apache-2.0",
   "engines": {
