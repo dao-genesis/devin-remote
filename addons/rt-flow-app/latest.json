@@ -1,6 +1,6 @@
 {
-  "versionCode": 106,
-  "versionName": "0.37.2",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.2/DevinCloud-mobile-v0.37.2.apk",
-  "notes": "v0.37.2 · 网页控台(/console)板块空白/「加载失败」根因修复（无需装包，重开链接即生效）。\n• 真根因：板块 HTML + 其 JS 依赖近 200KB，旧架构需分 4 次经『手机弱网中继』往返取回；任一次在弱网/手机后台积压下超时，板块即空白或『加载失败』→ 整台像静态死网页。\n• 根本修法：静态资源（板块 HTML / 引擎 JS）本是全网一致的死文件、与手机无关，改由公共 CDN(jsDelivr) 边缘直发（实测手机端 1.5~2.3s 取回 switch.html）；CDN 全失败才回退手机 APK 真身，绝不退化。数据(Native.*)仍走中继 → 道并行而不相悖。\n• 叠加 v0.37.1 的同源 blob: iframe + __rn.js 读调用非阻塞缓存：板块 UI 秒级原生渲染，数据随后异步补齐，主线程永不冻死。\n• 控台经中继 Worker 实时取自 GitHub main，修复随网页下发，用户无需安装新包，重开 /console 链接即生效。"
+  "versionCode": 107,
+  "versionName": "0.37.3",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.3/DevinCloud-mobile-v0.37.3.apk",
+  "notes": "v0.37.3 · 手机端「打字一卡一卡 / 刷额度很忙」性能换血 + 顶栏与网页控台归一（需装此包，原生内部页用的是打包进 APK 的离线前端，CDN 刷新管不到，故必须升级 APK）。\n• 卡顿真根因：切号板块（rtflow://switch）每 6s 用 innerHTML 全量重建 72 行账号列表，并向原生回推约 72 次状态——与你打字抢主线程→一卡一卡；隐藏的板块标签也照常轮询额度→刷额度很忙。\n• 换血修法：列表内容签名未变就跳过整段重建；输入框聚焦时延后重渲、绝不打断打字；板块隐藏/切后台即暂停所有轮询(运行态/额度)，重新可见才补刷一次；状态只在真正变化时回推原生。\n• 顶栏归一：网页控台(/console)顶栏已逐件复刻原生 APK 两行工具栏（≡/地址/译/→ + 🔍缩放滑块 50–170%/☆收藏/↻刷新/📥下载/🗂全服通）与菜单，浏览器直开与手机内操作一致。\n• 网页控台改动已随 main 实时下发、无需装包；但手机原生内部页(切号等)的前端是打包进 APK 的离线文件，必须更新到本版方可消除卡顿。"
 }
