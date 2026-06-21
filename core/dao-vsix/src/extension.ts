@@ -111,7 +111,7 @@ let _autoHealAttempts = 0;
 let _autoHealTimer: ReturnType<typeof setTimeout> | null = null;
 const AUTO_HEAL_DELAYS = [3000, 8000, 20000, 45000];
 // 归一 · 帛书「道生一」— 内联 rt-flow 运行时句柄(左·RT Flow 账号池/切号 入 dao-vsix 本体)
-interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; openShellHome?: () => Promise<{ ok: boolean; error?: string }>; openMultiInstance?: (opts: { email?: string; devinId?: string; password?: string; path?: string; label?: string }) => Promise<{ ok: boolean; error?: string; reused?: boolean }>; }
+interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; openShellHome?: (board?: string) => Promise<{ ok: boolean; error?: string }>; openMultiInstance?: (opts: { email?: string; devinId?: string; password?: string; path?: string; label?: string }) => Promise<{ ok: boolean; error?: string; reused?: boolean }>; }
 interface RtflowModule { activate?: (ctx: vscode.ExtensionContext) => unknown; deactivate?: () => unknown; _internals?: RtflowInternals; }
 let _rtflowModule: RtflowModule | null = null;
 
@@ -398,6 +398,15 @@ export async function activate(context: vscode.ExtensionContext) {
             if (int && typeof int.setCloudProvider === 'function') {
                 int.setCloudProvider({
                     buildHtml: (board?: string) => getDaoCloudMiddlePanelHtml(getPanelState(), board),
+                    // 归一 · webview 框架层封禁 blob: 子帧 → 板块改经本地 HTTP(127.0.0.1) 直出,
+                    //   webview CSP 本就放行 127.0.0.1:* (账号页同理), 故板块得以真正加载。
+                    boardUrl: (board?: string) => (ws.port && ws.token)
+                        ? ('http://127.0.0.1:' + ws.port + '/__board?b=' + encodeURIComponent(board || 'overview') + '&master_token=' + encodeURIComponent(ws.token))
+                        : '',
+                    // 归一 · 站内开任意网页/搜索: 经本地 HTTP 代理 /__web 直出(剥 XFO/CSP) → webview 当 iframe 加载, 不再弹外部系统浏览器。
+                    webUrl: (target?: string) => (ws.port && target)
+                        ? ('http://127.0.0.1:' + ws.port + '/__web?u=' + encodeURIComponent(target))
+                        : '',
                     handleMessage: (m: any) => handleMiddlePanelMessage(m, context),
                     setHostPost: (fn: ((m: any) => void) | null) => { _middlePostTarget = fn; },
                     refresh: () => refreshDaoCloudMiddlePanel(),
@@ -618,6 +627,13 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('dao.toggleCloudPanel', () => toggleDaoCloudMiddlePanel(context)),
         // 归一入口: 底部 9921 按钮 → 弹出综合浏览器外壳(多实例单面板多窗口), 默认当前账号 Devin Cloud 主页;
         //   6 大板块 = 外壳左上角 ☰ 菜单页(经该账号反代加载真实网页)。rt-flow 不可用时回退老全功能面板。
+        // 归一 · 深链直达某板块 (供深链/快捷键/外部调用直接打开六合外壳并切到指定板块)。
+        vscode.commands.registerCommand('dao.openShellBoard', async (board?: string) => {
+            await ensureRoutedServerFast(context);
+            const int = (_rtflowModule && _rtflowModule._internals) as RtflowInternals | undefined;
+            if (int && typeof int.openShellHome === 'function') { await int.openShellHome(typeof board === 'string' && board ? board : 'home'); }
+            else { toggleDaoCloudMiddlePanel(context); }
+        }),
         vscode.commands.registerCommand('dao.openUnifiedShell', async () => {
             await ensureRoutedServerFast(context);
             // 归一 · 冷启动落「六合板块主页」(home), 不再默认开账号 Devin 对话框(无意义空页)。
@@ -1381,8 +1397,35 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     const needAuth = !route.startsWith('/api/health') && !route.startsWith('/devin-cloud/')
         && !route.startsWith('/shell') && !route.startsWith('/api/shell')
         && !route.startsWith('/i/')
+        && !route.startsWith('/__web')
         && !isAppProxyPassthrough(route);
     if (needAuth && !checkAuth(req)) throw new Error('unauthorized');
+
+    // ── 归一 · 六大板块「单板块」网页直出 (127.0.0.1) ──
+    //   IDE webview 框架层封禁 blob:/srcdoc 子帧 → 板块经此本地 HTTP 路由当 iframe 加载,
+    //   服务端注入 acquireVsCodeApi 垫片(经 parent.postMessage __cwRelay 中继回宿主)。
+    //   必须在 isAppProxyPassthrough 之前处理, 否则被当作官网 SPA 路径透传到 app.devin.ai。
+    if (route === '/__board') {
+        const board = url.searchParams.get('b') || 'overview';
+        let html = '';
+        try { html = getDaoCloudMiddlePanelHtml(getPanelState(), board) || ''; } catch (e) { html = ''; }
+        const shim = '<script>(function(){var _s={};window.acquireVsCodeApi=function(){return{postMessage:function(m){try{parent.postMessage({__cwRelay:m,__board:'
+            + JSON.stringify(board) + '},"*")}catch(e){}},getState:function(){return _s},setState:function(s){_s=s;return s}}};})();<\/script>';
+        if (html) html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>' + shim) : shim + html;
+        else html = '<!DOCTYPE html><meta charset="utf-8"><body style="background:#1e1e1e;color:#888;font:13px sans-serif;padding:16px">板块未就绪</body>';
+        return { _proxy: true, status: 200, contentType: 'text/html; charset=utf-8', body: html };
+    }
+
+    // ── 归一 · 任意网页/搜索「站内代理」直出 (127.0.0.1) ──
+    //   搜索/外站经此路由当 iframe 加载(剥 X-Frame-Options/CSP · 注入 base + 链接/表单拦截改写),
+    //   复刻手机端 APK 的站内新标签搜索, 不再弹外部系统浏览器。必须在 isAppProxyPassthrough 之前处理。
+    if (route === '/__web') {
+        const target = url.searchParams.get('u') || '';
+        if (!/^https?:\/\//i.test(target)) {
+            return { _proxy: true, status: 400, contentType: 'text/html; charset=utf-8', body: '<!DOCTYPE html><meta charset="utf-8"><body style="background:#1e1e1e;color:#888;font:13px sans-serif;padding:16px">缺少或非法的 u 参数</body>' };
+        }
+        return await genericWebProxy(target);
+    }
 
     // 官网 SPA 根路径资源/接口 → 透传 app.devin.ai
     if (isAppProxyPassthrough(route)) {
@@ -9236,6 +9279,92 @@ setTimeout(function() {
 // 三件事: 剥安全头 + 注认证 + 改写绝对URL
 // 道法自然: 代理层无为 — 只做三件事，其余原样透传
 // ═══════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════
+// 归一 · 任意网页「站内代理」直出 — 搜索/外站经此当 iframe 加载
+//   只做三件事: 剥 X-Frame-Options/CSP(否则 webview iframe 被站点框架策略挡白屏)
+//   + 注入 <base>(相对资源回源直载) + 注入链接/表单/window.open 拦截(改写经本代理 → 站内导航不外跳)。
+//   不注入任何 Devin 认证(隐私/安全: 外站不应拿到本地登录态)。复刻手机端 APK 站内搜索体验。
+// ═══════════════════════════════════════════════════════════
+async function genericWebProxy(targetUrl: string, depth: number = 0): Promise<any> {
+    const errPage = (msg: string, href?: string) => ({
+        _proxy: true, status: 502, contentType: 'text/html; charset=utf-8',
+        body: '<!DOCTYPE html><meta charset="utf-8"><body style="background:#1e1e1e;color:#bbb;font:14px sans-serif;padding:24px;line-height:1.7">'
+            + '加载失败: ' + String(msg).replace(/[<>]/g, '')
+            + (href ? ('<br><br><a style="color:#6cf" target="_blank" rel="noopener" href="' + href.replace(/"/g, '&quot;') + '">在系统浏览器打开此网址</a>') : '')
+            + '</body>',
+    });
+    if (depth > 6) return errPage('重定向过多');
+    let u: URL;
+    try { u = new URL(targetUrl); } catch { return errPage('非法网址'); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return errPage('仅支持 http/https');
+    return await new Promise((resolve) => {
+        const isHttps = u.protocol === 'https:';
+        const lib = isHttps ? https : http;
+        const options: any = {
+            hostname: u.hostname,
+            port: u.port ? parseInt(u.port) : (isHttps ? 443 : 80),
+            path: (u.pathname || '/') + (u.search || ''),
+            method: 'GET',
+            headers: {
+                'User-Agent': DEVIN_UA,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Host': u.host,
+            },
+            timeout: 15000,
+            agent: isHttps ? upstreamHttpsAgent : upstreamHttpAgent,
+        };
+        if (isHttps) options.rejectUnauthorized = false;
+        const proxyReq = lib.request(options, (pr: any) => {
+            const sc = pr.statusCode || 200;
+            // 3xx 重定向: 服务端跟随(相对 Location 按当前 URL 解析), 让 iframe 直接拿到最终页。
+            if (sc >= 300 && sc < 400 && pr.headers['location']) {
+                let loc = String(pr.headers['location']);
+                try { loc = new URL(loc, u.href).href; } catch { /* 守柔 */ }
+                pr.resume();
+                resolve(genericWebProxy(loc, depth + 1));
+                return;
+            }
+            const ct = String(pr.headers['content-type'] || '');
+            const isHtml = ct.includes('text/html') || ct.includes('application/xhtml');
+            const enc = String(pr.headers['content-encoding'] || '').toLowerCase();
+            const chunks: Buffer[] = [];
+            pr.on('data', (c: Buffer) => chunks.push(c));
+            pr.on('end', async () => {
+                const raw = Buffer.concat(chunks);
+                const zlib = require('zlib');
+                const body: Buffer = await new Promise<Buffer>((rr) => {
+                    if (enc === 'gzip') zlib.gunzip(raw, (e: any, b: Buffer) => rr(e ? raw : b));
+                    else if (enc === 'br') zlib.brotliDecompress(raw, (e: any, b: Buffer) => rr(e ? raw : b));
+                    else if (enc === 'deflate') zlib.inflate(raw, (e: any, b: Buffer) => rr(e ? raw : b));
+                    else rr(raw);
+                });
+                if (!isHtml) {
+                    resolve({ _proxy: true, status: sc, contentType: ct || 'application/octet-stream', body: body.toString('base64'), binary: true });
+                    return;
+                }
+                let html = body.toString('utf8');
+                const pBase = 'http://127.0.0.1:' + (ws && ws.port ? ws.port : 9921) + '/__web?u=';
+                const inj = '<base href="' + (u.origin + '/').replace(/"/g, '&quot;') + '">'
+                    + '<script>(function(){'
+                    + 'var P=' + JSON.stringify(pBase) + ',B=' + JSON.stringify(u.href) + ';'
+                    + 'function ab(h){try{return new URL(h,B).href}catch(e){return ""}}'
+                    + 'function go(h){var a=ab(h);if(/^https?:/i.test(a)){window.location.href=P+encodeURIComponent(a);return true}return false}'
+                    + 'document.addEventListener("click",function(e){var t=e.target;var a=t&&t.closest?t.closest("a[href]"):null;if(!a)return;var h=a.getAttribute("href");if(!h||h.charAt(0)==="#"||/^(javascript|mailto|tel|data|blob):/i.test(h))return;if(go(h))e.preventDefault();},true);'
+                    + 'document.addEventListener("submit",function(e){var f=e.target;if(!f||(f.method||"get").toLowerCase()!=="get")return;try{var u2=new URL(f.getAttribute("action")||B,B);u2.search=new URLSearchParams(new FormData(f)).toString();e.preventDefault();window.location.href=P+encodeURIComponent(u2.href);}catch(x){}},true);'
+                    + 'try{window.open=function(u){if(u){go(u)}return null};}catch(e){}'
+                    + '})();<\/script>';
+                html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>' + inj) : (inj + html);
+                resolve({ _proxy: true, status: sc, contentType: 'text/html; charset=utf-8', body: html });
+            });
+        });
+        proxyReq.on('error', (e: Error) => resolve(errPage((e && e.message) || 'network error', u.href)));
+        proxyReq.on('timeout', () => { try { proxyReq.destroy(); } catch { /* 守柔 */ } resolve(errPage('加载超时', u.href)); });
+        proxyReq.end();
+    });
+}
 
 async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: string = 'devin', res?: any): Promise<any> {
     // 帛书·「天下之至柔驰骋于天下之致坚」— 反向代理不需要Devin API认证

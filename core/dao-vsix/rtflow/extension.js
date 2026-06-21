@@ -681,8 +681,8 @@ html.m #hint{font-size:14px;padding:18px}
 #daowin .cvtab .x{color:#6e7681;font-weight:700;padding:0 1px}
 #daowin .cvacts{display:flex;gap:6px;padding:5px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
 #daowin .cvbody{flex:1;overflow:auto;padding:12px 12px 50px;white-space:pre-wrap;word-break:break-word;font:12.5px/1.6 ui-monospace,Consolas,monospace;color:#cdd3de}
-#daowin .dtoast{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px 14px;font-size:12.5px;opacity:0;transition:.2s;pointer-events:none;z-index:40;max-width:90%}
-#daowin .dtoast.show{opacity:1}#daowin .dtoast.fail{border-color:#f85149}#daowin .dtoast.ok{border-color:#3fb950}
+.dtoast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(8px);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:9px 16px;font-size:13px;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;z-index:99999;max-width:90%;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.dtoast.show{opacity:1;transform:translateX(-50%) translateY(0)}.dtoast.fail{border-color:#f85149}.dtoast.ok{border-color:#3fb950}
 #find{position:fixed;top:66px;right:14px;display:none;align-items:center;gap:4px;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:5px 7px;z-index:45;box-shadow:0 6px 20px rgba(0,0,0,.45)}
 #find.on{display:flex}
 #find input{background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:4px 8px;font-size:12.5px;width:180px;outline:none}
@@ -705,8 +705,8 @@ html.m #hint{font-size:14px;padding:18px}
     <button class="tbtn" id="bHome" title="回到账号首页">🏠</button>
     <input id="addr" placeholder="Devin 路径(/sessions/..)、网址 或 搜索词，回车" />
     <select id="eng" title="搜索引擎">
+      <option value="https://www.bing.com/search?q=" selected>Bing</option>
       <option value="https://www.google.com/search?q=">Google</option>
-      <option value="https://www.bing.com/search?q=">Bing</option>
       <option value="https://duckduckgo.com/?q=">DuckDuckGo</option>
       <option value="https://www.baidu.com/s?wd=">百度</option>
     </select>
@@ -742,8 +742,8 @@ html.m #hint{font-size:14px;padding:18px}
     <div class="dwview" id="dwViewB"><div id="dwBackup"><div class="empty">加载中…</div></div></div>
     <div id="cv"><div class="cvtop"><button class="dwx" id="cvBack">‹ 返回</button><div class="cvtabs" id="cvTabs"></div></div><div class="cvacts" id="cvActs"></div><div class="cvbody" id="cvBody"></div></div>
   </div>
-  <div class="dtoast" id="daotoast"></div>
 </div>
+<div class="dtoast" id="daotoast"></div>
 <script>
 (function(){
 var vscode=acquireVsCodeApi();
@@ -830,15 +830,18 @@ function schedPersist(){clearTimeout(_persistT);_persistT=setTimeout(persistShel
 function restoreTabs(arr){if(!arr||!arr.length)return;for(var i=0;i<arr.length;i++){var s=arr[i]||{};try{
   if(s.kind==='board'){openBoard(s.board||'home');}
   else if(s.kind==='acc'&&s.email){vscode.postMessage({type:'reopen',email:s.email,devinId:s.devinId||''});}}catch(e){}}}
+// 归一 · 站内新标签开任意网页/搜索(复刻手机端 APK · 不再弹外部系统浏览器):
+//   经本地 HTTP 代理 /__web?u= 直出(剥 XFO/CSP · 注入 base + 链接/表单拦截), 当 iframe 挂一张站内标签。
+function openWebTab(u,label){if(!u)return;vscode.postMessage({type:'openWebTab',url:u,label:(label||u).slice(0,60),hist:1});}
 function navigate(v){v=(v||'').trim();if(!v)return;var isU=/^https?:\\/\\//i.test(v);var t=tabs[active];
   if(isBoard()||!t){
-    if(isU){vscode.postMessage({type:'openExternal',url:v,hist:1,label:v});}
+    if(isU){openWebTab(v,v);}
     else if(v.charAt(0)==='/'){vscode.postMessage({type:'openCloudPage',path:v});}
-    else{vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v),hist:1,label:v});}
+    else{openWebTab(ENG.value+encodeURIComponent(v),v);}
     try{ADDR.blur();}catch(e){}return;}
-  if(isU){var o=curOrigin();if(o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);setLoading(active,true);}else{vscode.postMessage({type:'openExternal',url:v,hist:1,label:v});}return;}
+  if(isU){var o=curOrigin();if(o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);setLoading(active,true);}else{openWebTab(v,v);}return;}
   if(v.charAt(0)==='/'){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);setLoading(active,true);ADDR.value=u;return;}
-  vscode.postMessage({type:'openExternal',url:ENG.value+encodeURIComponent(v),hist:1,label:v});}
+  openWebTab(ENG.value+encodeURIComponent(v),v);}
 // 归一 · 设备类型自动识别 (UA / ?m=1·见 _multiShellHtml MOBILE 注入) — 移除手动「切换 电脑版/手机版」(点击会重载致整体失效)。
 var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['🖥️','操作电脑本体','board:computer'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🔌','用户脚本 / 扩展','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
 function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'" data-l="'+esc(PAGES[i][1])+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
@@ -855,7 +858,7 @@ function openBoard(tab){tab=tab||'overview';var id=boardId(tab);var b=BOARDS[tab
   if(!b){b=BOARDS[tab]={req:false,mounted:false,ready:false,frame:null,url:''};}
   if(!b.req){b.req=true;spin(true);b._initTO=setTimeout(function(){if(!b.mounted)spin(false);},15000);vscode.postMessage({type:'cloudInit',board:tab});}}
 function _boardHostAll(msg){for(var k in BOARDS){var b=BOARDS[k];if(b&&b.frame&&b.frame.contentWindow){try{b.frame.contentWindow.postMessage(msg,'*');}catch(e){}}}}
-function mountBoardSolo(html,tab){tab=tab||'overview';var id=boardId(tab);var b=BOARDS[tab]||(BOARDS[tab]={req:false,mounted:false,ready:false,frame:null,url:''});
+function mountBoardSolo(html,tab,srcUrl){tab=tab||'overview';var id=boardId(tab);var b=BOARDS[tab]||(BOARDS[tab]={req:false,mounted:false,ready:false,frame:null,url:''});
   var SHIM='<scr'+'ipt>(function(){var _s={};window.acquireVsCodeApi=function(){return{postMessage:function(m){try{parent.postMessage({__cwRelay:m,__board:"'+tab+'"},"*")}catch(e){}},getState:function(){return _s},setState:function(s){_s=s;return s}}};})();<\/scr'+'ipt>';
   var doc=/<head[^>]*>/i.test(html)?html.replace(/<head([^>]*)>/i,'<head$1>'+SHIM):SHIM+html;
   if(!tabs[id]){
@@ -874,7 +877,8 @@ function mountBoardSolo(html,tab){tab=tab||'overview';var id=boardId(tab);var b=
     tabs[id]={btn:btn,frame:fr,url:'',zoom:1,meta:{board:tab}};order.push(id);
   }
   b.ready=false;
-  try{var blob=new Blob([doc],{type:'text/html'});var url=URL.createObjectURL(blob);b.frame.removeAttribute('srcdoc');b.frame.src=url;if(b.url){try{URL.revokeObjectURL(b.url)}catch(e){}}b.url=url;}catch(e){b.frame.srcdoc=doc;}
+  if(srcUrl){b.frame.removeAttribute('srcdoc');if(b.url&&b.url.indexOf('blob:')===0){try{URL.revokeObjectURL(b.url)}catch(e){}}b.frame.src=srcUrl;b.url=srcUrl;}
+  else{try{var blob=new Blob([doc],{type:'text/html'});var url=URL.createObjectURL(blob);b.frame.removeAttribute('srcdoc');b.frame.src=url;if(b.url&&b.url.indexOf('blob:')===0){try{URL.revokeObjectURL(b.url)}catch(e){}}b.url=url;}catch(e){b.frame.srcdoc=doc;}}
   b.mounted=true;b.req=false;setActive(id);setLoading(id,true);sync();schedPersist();}
 function showOverlay(title,html){OVT.textContent=title;OVB.innerHTML=html;OV.className='on';}
 function hideOverlay(){OV.className='';}
@@ -1068,7 +1072,7 @@ _dEl('cvBack').onclick=daoHideCv;
 document.getElementById('bDl').onclick=function(){daoOpen('recent');};
 document.getElementById('bBk').onclick=function(){daoOpen('backup');};
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
-document.getElementById('bAdd').onclick=function(e){e.stopPropagation();var em='';try{var t=tabs[active];if(t&&t.email)em=t.email;}catch(_){}vscode.postMessage({type:'newDevinTab',email:em});};
+document.getElementById('bAdd').onclick=function(e){e.stopPropagation();vscode.postMessage({type:'newDevinTab',clean:1});};
 document.getElementById('bRefresh').onclick=function(){if(isBoard()){var bt=activeBoardTab();closeTab(boardId(bt));openBoard(bt);return;}var t=tabs[active];if(t){t.frame.setAttribute('src',t.url);setLoading(active,true);}};
 document.getElementById('bHome').onclick=function(){openBoard('home');};
 document.getElementById('bZi').onclick=function(){var t=tabs[active];if(t){t.zoom=Math.min(3,(t.zoom||1)+0.1);applyZoom(t);ZL.textContent=Math.round(t.zoom*100)+'%';}};
@@ -1142,7 +1146,7 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='userscripts'){userScripts=m.list||[];if(OV.className&&OVT.textContent.indexOf('用户脚本')>=0)showUserscripts();}
   else if(m.type==='usError'){try{daoToast('导入失败: '+(m.error||''),true);}catch(e){}}
   else if(m.type==='bridgeState'){bridge=m.data||null;}
-  else if(m.type==='cloudInitHtml'){mountBoardSolo(m.html||'',m.board||'overview');}
+  else if(m.type==='cloudInitHtml'){mountBoardSolo(m.html||'',m.board||'overview',m.url||'');}
   else if(m.type==='gotoBoard'){try{openBoard(m.board||'home');}catch(e){}}
   else if(m.type==='restoreTabs'){try{restoreTabs(m.tabs);}catch(e){}}
   else if(m.type==='cloudHost'){_boardHostAll(m.msg||{});}
@@ -1153,7 +1157,8 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='migBundle'){try{migDownload(m);}catch(e){}}
   else if(m.type==='migDone'){try{daoToast(m.ok?('✓ 导入完成 · '+(m.summary||'')):('导入失败: '+(m.error||'')),!m.ok);}catch(e){}}
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}
-  else if(m.type==='toast'){try{daoToast(m.text||'',!!m.bad);}catch(e){}}});
+  else if(m.type==='toast'){try{daoToast(m.text||'',!!m.bad);}catch(e){}}
+  else if(m.type==='winOpen'&&m.url){try{window.open(m.url,'_blank','noopener');}catch(e){}}});
 buildMenu();
 vscode.postMessage({type:'ready',mobile:MOBILE});
 // 归一·手机版冷启动: 与 APK app.html 一致, 首屏直接打开「🔀切号」板块(电脑端数据源), 而非空提示页。
@@ -1553,6 +1558,8 @@ async function shellHandleMessage(sid, m) {
         return;
       }
       case 'newDevinTab': {
+        // 新建标签(＋) → 登录官网 (而非跳进已登录账号): 独立外壳经浏览器新标签打开官网登录页。
+        if (m.clean) { send({ type: 'winOpen', url: 'https://app.devin.ai/' }); _toast('已打开官网登录页 · 登录后可在切号面板入号池'); return; }
         const accs = ((_store && _store.accounts) || []);
         const cand = [];
         const pushE = (e) => { const k = String(e || '').trim().toLowerCase(); if (k && cand.indexOf(k) < 0) cand.push(k); };
@@ -1813,6 +1820,15 @@ function _wireMultiPanel(panel) {
         try { await vscode.env.openExternal(vscode.Uri.parse(m.url)); } catch (e) {}
         return;
       }
+      if (m.type === "openWebTab" && m.url) {
+        // 站内新标签开任意网页/搜索 → 经本地 HTTP 代理 /__web 直出(剥 XFO·当 iframe 加载), 不再弹外部系统浏览器。
+        let abs = "";
+        try { if (_cloudProvider && typeof _cloudProvider.webUrl === "function") abs = _cloudProvider.webUrl(m.url) || ""; } catch (e) {}
+        if (!abs) { try { await vscode.env.openExternal(vscode.Uri.parse(m.url)); } catch (e) {} return; }
+        if (m.hist) { try { _pushMultiHist(m.url, m.label || m.url, "web"); panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {} }
+        try { panel.webview.postMessage({ type: "open", id: "web:" + Date.now().toString(36), url: abs, label: (m.label || m.url) }); } catch (e) {}
+        return;
+      }
       if (m.type === "dlRecent" || m.type === "dlExportMd" || m.type === "dlZip") {
         await _daoDownloadData(m, (x) => { try { panel.webview.postMessage(x); } catch (e) {} });
         return;
@@ -1893,6 +1909,13 @@ function _wireMultiPanel(panel) {
       }
       if (m.type === "histPush") { _pushMultiHist(m.url, m.label, m.kind); try { panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {} return; }
       if (m.type === "newDevinTab") {
+        // 新建标签(＋) → 登录官网 (而非跳进已登录账号): IDE 内经 Simple Browser 打开官网登录页 (绕过 X-Frame-Options)。
+        if (m.clean) {
+          try { await vscode.commands.executeCommand("simpleBrowser.show", "https://app.devin.ai/"); }
+          catch (e) { try { await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai/")); } catch (e2) {} }
+          _toast("已打开官网登录页 · 登录后可在切号面板入号池");
+          return;
+        }
         const accs = ((_store && _store.accounts) || []);
         const cand = [];
         const pushE = (e) => { const k = String(e || "").trim().toLowerCase(); if (k && cand.indexOf(k) < 0) cand.push(k); };
@@ -1958,9 +1981,10 @@ function _wireMultiPanel(panel) {
       if (m.type === "cloudInit") {
         if (!_cloudProvider) { _toast("六大板块面板未就绪"); return; }
         try { _cloudProvider.setHostPost((mm) => { try { panel.webview.postMessage({ type: "cloudHost", msg: mm }); } catch (e) {} }); } catch (e) {}
-        let html = "";
-        try { html = _cloudProvider.buildHtml(m.board) || ""; } catch (e) {}
-        try { panel.webview.postMessage({ type: "cloudInitHtml", html: html, board: m.board || "overview" }); } catch (e) {}
+        // webview 框架层封禁 blob: 子帧 → 优先经本地 HTTP(127.0.0.1) 直出板块当 iframe 加载; 无 URL 时回退 blob。
+        let url = ""; try { if (typeof _cloudProvider.boardUrl === "function") url = _cloudProvider.boardUrl(m.board) || ""; } catch (e) {}
+        let html = ""; if (!url) { try { html = _cloudProvider.buildHtml(m.board) || ""; } catch (e) {} }
+        try { panel.webview.postMessage({ type: "cloudInitHtml", html: html, url: url, board: m.board || "overview" }); } catch (e) {}
         return;
       }
       // 子网页 iframe 载毕 → 推送初始数据 (init/auth/bridge…)
@@ -2047,10 +2071,10 @@ async function openMultiInstance(opts) {
 }
 // 归一 · 9921 综合外壳入口: 仅确保/聚焦面板, 不强开账号 Devin 对话框; 冷启动落「六合板块主页」(home)。
 //   已保存标签由序列化器 _resumePersistedTabs 还原(状态保留) → 二者不冲突。
-async function openShellHome() {
+async function openShellHome(board) {
   try {
     _ensureMultiPanel();
-    _postMulti({ type: "gotoBoard", board: "home" });
+    _postMulti({ type: "gotoBoard", board: board || "home" });
     try { _multiPanel.reveal(vscode.ViewColumn.Active); } catch (e) {}
     return { ok: true };
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
