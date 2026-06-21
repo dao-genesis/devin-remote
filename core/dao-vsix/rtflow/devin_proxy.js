@@ -37,6 +37,14 @@ const _httpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 15000, ma
 // email → { server, port, auth }. 每账号独立端口 → origin 隔离 → 多实例不串号。
 const _servers = new Map();
 
+// 拖拽上传桥服务钩子 (由 dao-vsix out 层经 rt-flow 注入)。
+//   帛书·「同于道者·道亦乐得之」: 桥脚本 /__daobridge.js 与取字节端点 /__dlfile·/__convmd
+//   就地服务于本账号反代端口 → 与落点页严格同源, location.origin fetch 即达, 无跨域。
+//   根治: 桥此前仅注入 /i/ 同源页与 /__web 通用代理页, 漏了 IDE 内多实例真正承载 Devin 页的
+//   本反代 → 拖文件/会话到该页"无反应"。签名: (routePath, urlObj) => {status,contentType,body,binary,headers}|null。
+let _bridgeServe = null;
+function setBridgeServe(fn) { _bridgeServe = (typeof fn === "function") ? fn : null; }
+
 // 帛书·「为之于其未有·治之于其未乱」— 静态资源改写结果缓存。
 //   Devin SPA 的 JS/CSS/字体 bundle 皆哈希不可变, 改写结果恒定 → 缓存后多标签/重载
 //   免重复取上游 + 免重复多次全量 split/join (根治"很慢很卡")。键 = 上游 path,
@@ -331,6 +339,22 @@ async function handleRequest(req, res, auth, opts, _log) {
   }
 
   const reqUrl = new URL(parsePath || "/", parseBase);
+  // 拖拽上传桥 (同源直服本反代端口 → 对齐 /i/ 同源页·根治 IDE 内拖拽无反应)。
+  if (_bridgeServe) {
+    const bp = reqUrl.pathname;
+    if (bp === "/__daobridge.js" || bp === "/__dlfile" || bp === "/__convmd") {
+      try {
+        const out = await _bridgeServe(bp, reqUrl);
+        if (out) {
+          const h = Object.assign({ "Content-Type": out.contentType || "application/octet-stream", "Access-Control-Allow-Origin": "*" }, out.headers || {});
+          res.writeHead(out.status || 200, h);
+          res.end(out.binary ? Buffer.from(String(out.body || ""), "base64") : (out.body || ""));
+          return;
+        }
+      } catch (e) { /* 守柔: 桥失败不阻断正常反代 */ }
+      res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" }); res.end("bridge error"); return;
+    }
+  }
   const up = resolveUpstream(reqUrl.pathname);
   const targetUrl = up.base + up.path + (reqUrl.search || "");
   const u = new URL(targetUrl);
@@ -495,6 +519,11 @@ async function handleRequest(req, res, auth, opts, _log) {
           if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + bridge);
           else if (/<\/head>/i.test(html)) html = html.replace(/<\/head>/i, bridge + "</head>");
           else html = bridge + html;
+          // 拖拽上传桥脚本(同源 /__daobridge.js): 注入该反代页 → 拖文件/会话到页内即投递上传框(对齐 /i/ 与手机 APK)。
+          if (_bridgeServe) {
+            const dbg = '<script src="/__daobridge.js"></script>';
+            html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, dbg + "</body>") : (html + dbg);
+          }
           safeHeaders["Content-Type"] = "text/html; charset=utf-8";
           res.writeHead(status, safeHeaders);
           res.end(html, "utf8");
@@ -656,6 +685,7 @@ module.exports = {
   stopProxy,
   stopAll,
   buildAuthBridge,
+  setBridgeServe,
   // 供单测访问磁盘二级缓存内部 (非对外 API)。
   _diskCache: { _diskCacheDir, _diskKey, _diskPut, _diskGet, _diskEvict, _isTextCt, _rebaseAsset, ASSET_DISK_MAX },
 };

@@ -409,7 +409,10 @@ export async function activate(context: vscode.ExtensionContext) {
         // 归一 · 把「全功能面板六大板块」作为同级子网页接进 rt-flow 统一外壳。
         // 外壳经 blob-iframe + 消息中继挂载本面板 HTML, 复用 handleMiddlePanelMessage/refresh, 零重写。
         try {
-            const int = (_rtflowModule && _rtflowModule._internals) as (RtflowInternals & { setCloudProvider?: (p: unknown) => void }) | undefined;
+            const int = (_rtflowModule && _rtflowModule._internals) as (RtflowInternals & { setCloudProvider?: (p: unknown) => void; setDevinProxyBridgeServe?: (fn: (rp: string, u: URL) => Promise<any>) => void }) | undefined;
+            // 归一 · 把拖拽上传桥路由服务注入 IDE 内多实例反代 → /__daobridge.js·/__dlfile·/__convmd
+            //   就地同源服务于各账号反代端口 (根治"拖文件/会话到内嵌 Devin 页无反应")。
+            try { if (int && typeof int.setDevinProxyBridgeServe === 'function') int.setDevinProxyBridgeServe(daoServeBridgeRoute); } catch { /* 守柔 */ }
             if (int && typeof int.setCloudProvider === 'function') {
                 int.setCloudProvider({
                     buildHtml: (board?: string) => getDaoCloudMiddlePanelHtml(getPanelState(), board),
@@ -1444,33 +1447,10 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
 
     // ── 归一 · 拖拽上传桥数据源 (对齐手机 APK: 拖文件=上传该文件 / 拖会话=上传该会话 MD) ──
     //   网页内注入的 drop 桥与外壳同源, 落点后经此同源端点取字节 → 合成 File 喂入页面上传框。
-    // /__dlfile: 下载悬浮窗内文件字节 (沙箱限定 downloads 目录, 防路径穿越)。
-    if (route === '/__dlfile') {
-        const p = url.searchParams.get('p') || '';
-        try {
-            const dir = path.resolve(daoDownloadsDir());
-            const rp = path.resolve(p);
-            if (rp.indexOf(dir) !== 0 || !fs.existsSync(rp) || !fs.statSync(rp).isFile()) {
-                return { _proxy: true, status: 404, contentType: 'text/plain; charset=utf-8', body: '未找到该文件或越权' };
-            }
-            const buf = fs.readFileSync(rp);
-            const nm = path.basename(rp).replace(/^[a-z0-9]+-/i, '') || 'download';
-            return { _proxy: true, status: 200, contentType: 'application/octet-stream', binary: true, body: buf.toString('base64'), headers: { 'Content-Disposition': 'attachment; filename="' + nm.replace(/["\r\n]/g, '_') + '"' } };
-        } catch (e) { return { _proxy: true, status: 500, contentType: 'text/plain; charset=utf-8', body: 'read error' }; }
-    }
-    // /__convmd: 会话 MD (优先备份最新·无则实时 getEventStream 导出) → 拖拽对话到网页时合成 .md 上传。
-    if (route === '/__convmd') {
-        const rtintMd = _rtflowModule && _rtflowModule._internals;
-        const email = url.searchParams.get('email') || '';
-        const sid = url.searchParams.get('sid') || '';
-        let md = null;
-        try { if (rtintMd && typeof rtintMd.resolveConvMd === 'function') md = await rtintMd.resolveConvMd(email, sid); } catch (e) { md = null; }
-        if (!md || !md.text) return { _proxy: true, status: 404, contentType: 'text/plain; charset=utf-8', body: '无法导出该会话 MD' };
-        return { _proxy: true, status: 200, contentType: 'text/markdown; charset=utf-8', body: md.text, headers: { 'Content-Disposition': 'attachment; filename="' + String(md.name || 'conversation.md').replace(/["\r\n]/g, '_') + '"' } };
-    }
-    // /__daobridge.js: 拖拽上传桥脚本资产 (各代理页注入 <script src> 引用)。
-    if (route === '/__daobridge.js') {
-        return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoDropBridgeJs(), headers: { 'Cache-Control': 'no-store' } };
+    //   同一服务函数 daoServeBridgeRoute 亦注入 IDE 内多实例反代(devin_proxy)就地同源服务。
+    if (route === '/__dlfile' || route === '/__convmd' || route === '/__daobridge.js') {
+        const br = await daoServeBridgeRoute(route, url);
+        if (br) return br;
     }
 
     // 官网 SPA 根路径资源/接口 → 透传 app.devin.ai
@@ -9439,6 +9419,39 @@ function fetchViaTunnel(u, headers, timeoutMs) {
 //   落点页(同源)经此桥拿到标记 → fetch /__dlfile|/__convmd 取字节 → 合成 File → 喂入页面 file input + 合成 drop。
 //   独立 .js 资产经 /__daobridge.js 直出 (避免内联脚本的转义/CSP 噪声), 各代理页仅注入一行 <script src>。
 // ═══════════════════════════════════════════════════════════
+// 拖拽上传桥路由服务 (单一来源): 既供 dao-vsix out 层主服务器路由, 又经 rt-flow 注入 IDE 内
+//   多实例反代 devin_proxy 就地同源服务 (各账号端口) → 落点页 location.origin fetch 即达。
+//   全部带 CORS, 故同源/跨域两用皆可。
+async function daoServeBridgeRoute(routePath: string, urlObj: URL): Promise<any> {
+    const CORS = { 'Access-Control-Allow-Origin': '*' };
+    if (routePath === '/__daobridge.js') {
+        return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoDropBridgeJs(), headers: { 'Cache-Control': 'no-store', ...CORS } };
+    }
+    if (routePath === '/__dlfile') {
+        const p = urlObj.searchParams.get('p') || '';
+        try {
+            const dir = path.resolve(daoDownloadsDir());
+            const rp = path.resolve(p);
+            if (rp.indexOf(dir) !== 0 || !fs.existsSync(rp) || !fs.statSync(rp).isFile()) {
+                return { _proxy: true, status: 404, contentType: 'text/plain; charset=utf-8', body: '未找到该文件或越权', headers: { ...CORS } };
+            }
+            const buf = fs.readFileSync(rp);
+            const nm = path.basename(rp).replace(/^[a-z0-9]+-/i, '') || 'download';
+            return { _proxy: true, status: 200, contentType: 'application/octet-stream', binary: true, body: buf.toString('base64'), headers: { 'Content-Disposition': 'attachment; filename="' + nm.replace(/["\r\n]/g, '_') + '"', ...CORS } };
+        } catch (e) { return { _proxy: true, status: 500, contentType: 'text/plain; charset=utf-8', body: 'read error', headers: { ...CORS } }; }
+    }
+    if (routePath === '/__convmd') {
+        const rtintMd = _rtflowModule && _rtflowModule._internals;
+        const email = urlObj.searchParams.get('email') || '';
+        const sid = urlObj.searchParams.get('sid') || '';
+        let md: { name?: string; text?: string } | null = null;
+        try { if (rtintMd && typeof rtintMd.resolveConvMd === 'function') md = await rtintMd.resolveConvMd(email, sid); } catch (e) { md = null; }
+        if (!md || !md.text) return { _proxy: true, status: 404, contentType: 'text/plain; charset=utf-8', body: '无法导出该会话 MD', headers: { ...CORS } };
+        return { _proxy: true, status: 200, contentType: 'text/markdown; charset=utf-8', body: md.text, headers: { 'Content-Disposition': 'attachment; filename="' + String(md.name || 'conversation.md').replace(/["\r\n]/g, '_') + '"', ...CORS } };
+    }
+    return null;
+}
+
 function daoDropBridgeJs() {
     return [
         "(function(){try{",
