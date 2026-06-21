@@ -4222,6 +4222,7 @@ function getEaConfigHtml(port, nonce) {
       <input id="provModels" placeholder="模型 (逗号分隔, 可空)" style="flex:1.2">
       <button class="btn add" id="btnAddProv" title="添加 Provider">+ 添加</button>
       <button class="btn probe" id="btnProbe" title="探测所有 Provider 健康">探测</button>
+      <button class="btn" id="btnOpenCfgJson" title="在编辑器中打开 配置.json 文件 · 直接查看/手改全部渠道与路由">📄 配置JSON</button>
     </div>
     <!-- 已配渠道列表 (cc-switch 风) -->
     <div id="channelList" style="flex:1;overflow-y:auto;margin-top:4px"></div>
@@ -4275,8 +4276,12 @@ function getEaConfigHtml(port, nonce) {
         <input id="routeExtModel" placeholder="如 deepseek-v4-flash">
       </div>
       <div>
-        <label style="font-size:10px;opacity:0.6">Max Output Tokens</label>
+        <label style="font-size:10px;opacity:0.6">最大输出 Token (max_tokens · 单次回复上限 · 越大越费)</label>
         <input id="routeMaxTokens" type="number" value="16384" placeholder="16384">
+      </div>
+      <div>
+        <label style="font-size:10px;opacity:0.6">采样温度 Temperature (0~2 · 留空=用模型默认)</label>
+        <input id="routeTemp" type="number" step="0.1" min="0" max="2" placeholder="留空=默认">
       </div>
       <div>
         <label style="font-size:10px;opacity:0.6">
@@ -5088,6 +5093,7 @@ function getEaConfigHtml(port, nonce) {
     document.getElementById('routeModelUid').value = uid || '';
     document.getElementById('routeExtModel').value = extModel || '';
     document.getElementById('routeMaxTokens').value = '16384';
+    document.getElementById('routeTemp').value = '';
     document.getElementById('routeThinking').checked = false;
 
     // 填充 provider 下拉
@@ -5106,6 +5112,7 @@ function getEaConfigHtml(port, nonce) {
       document.getElementById('routeModalTitle').textContent = '编辑路由: ' + uid;
       document.getElementById('routeExtModel').value = route.model || '';
       document.getElementById('routeMaxTokens').value = route.maxOutputTokens || 16384;
+      document.getElementById('routeTemp').value = (route.temperature != null ? route.temperature : '');
       document.getElementById('routeThinking').checked = !!route.thinkingEnabled;
       for (var i = 0; i < sel.options.length; i++) {
         if (sel.options[i].value === route.provider) sel.options[i].selected = true;
@@ -5122,11 +5129,14 @@ function getEaConfigHtml(port, nonce) {
     var prov = document.getElementById('routeProvider').value;
     var model = document.getElementById('routeExtModel').value.trim();
     var maxTokens = parseInt(document.getElementById('routeMaxTokens').value) || 16384;
+    var tempRaw = (document.getElementById('routeTemp').value || '').trim();
     var thinking = document.getElementById('routeThinking').checked;
     if (!uid || !prov || !model) { _daoToast('所有字段必填'); return; }
+    var _route = { provider: prov, model: model, maxOutputTokens: maxTokens, thinkingEnabled: thinking };
+    if (tempRaw !== '') { var _tv = parseFloat(tempRaw); if (!isNaN(_tv)) _route.temperature = _tv; }
     fPost('/origin/ea/route', {
       modelUid: uid,
-      route: { provider: prov, model: model, maxOutputTokens: maxTokens, thinkingEnabled: thinking }
+      route: _route
     }).then(function(r) {
       if (r.ok) {
         document.getElementById('routeModal').classList.remove('show');
@@ -5270,6 +5280,8 @@ function getEaConfigHtml(port, nonce) {
     return fetch(_BASE + '/origin/ea/handoff.md', { cache: 'no-store' })
       .then(function(r) { if (!r.ok) throw new Error('http ' + r.status); return r.text(); });
   }
+  var _ocj = _e1El('btnOpenCfgJson');
+  if (_ocj) _ocj.addEventListener('click', function() { postMsg('openConfigJson'); });
   var _dh = _e1El('btnDownloadHandoff'), _ph = _e1El('btnPreviewHandoff');
   if (_dh) _dh.addEventListener('click', function() {
     _fetchHandoff().then(function(md) {
@@ -5327,6 +5339,48 @@ async function _saveHandoffDoc(content) {
   }
 }
 
+// ★ v9.9.309 · 解析活跃配置文件路径 · 与 runtime._resolveConfigPath 同序:
+//   1) 用户级 ~/.codeium/dao-byok/配置.json (跨升级持久·含真凭据)
+//   2) 退 · 当前 VSIX 内 vendor/外接api/core/配置.json
+function _resolveDaoConfigPath() {
+  try {
+    const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
+    if (home) {
+      const userCfg = path.join(home, ".codeium", "dao-byok", "配置.json");
+      if (fs.existsSync(userCfg)) return userCfg;
+    }
+  } catch {}
+  try {
+    const bundled = path.join(
+      __dirname,
+      "vendor",
+      "外接api",
+      "core",
+      "配置.json",
+    );
+    if (fs.existsSync(bundled)) return bundled;
+  } catch {}
+  return null;
+}
+
+// ★ v9.9.309 · 渠道配置面板「📄 配置JSON」按钮 · 直接在编辑器打开配置文件
+//   方便用户一眼查看/手改全部渠道与路由 · 排查问题
+async function _openConfigJson() {
+  try {
+    const p = _resolveDaoConfigPath();
+    if (!p) {
+      vscode.window.showWarningMessage("未找到配置文件 配置.json");
+      return;
+    }
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(p));
+    await vscode.window.showTextDocument(doc, { preview: false });
+  } catch (e) {
+    vscode.window.showErrorMessage(
+      "打开配置JSON失败: " + (e && e.message ? e.message : e),
+    );
+  }
+}
+
 // ★ 渠道注册/官网跳转 · 仅放行 http(s) · 渠道配置面板「🌐 注册/官网」按钮用
 //   太上下知有之: 用户无账号时一键跳官网注册拿 APIKey, 回来填 Key 即用。
 function _openExternalUrl(url) {
@@ -5362,6 +5416,7 @@ class EaRouterProvider {
         else if (msg.type === "openPreview") cmdOpenPreview();
         else if (msg.type === "modelStatus") cmdModelUnlockStatus();
         else if (msg.type === "saveHandoff") _saveHandoffDoc(msg.content || "");
+        else if (msg.type === "openConfigJson") _openConfigJson();
         else if (msg.type === "openExternal" && msg.url) _openExternalUrl(msg.url);
       } catch (e) { L.warn("router", `msg handle fail: ${e && e.message}`); }
     });
@@ -5400,6 +5455,8 @@ async function cmdEaConfig() {
           cmdModelUnlockStatus();
         } else if (msg.type === "saveHandoff") {
           _saveHandoffDoc(msg.content || "");
+        } else if (msg.type === "openConfigJson") {
+          _openConfigJson();
         } else if (msg.type === "openExternal" && msg.url) {
           _openExternalUrl(msg.url);
         }

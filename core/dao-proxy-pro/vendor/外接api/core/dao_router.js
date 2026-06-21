@@ -2841,6 +2841,15 @@ async function _callProvider(
     }
     if (maxOutputTokens) bodyObj.max_tokens = maxOutputTokens;
 
+    // ★ v9.9.309 · 采样温度 · 路由可配 · 留空则不发(用模型默认) · 参照通用 OpenAI 兼容配置
+    if (
+      target &&
+      typeof target.temperature === "number" &&
+      !Number.isNaN(target.temperature)
+    ) {
+      bodyObj.temperature = target.temperature;
+    }
+
     // ★ v9.9.80 · 思考模式: DeepSeek V3.2 支持 thinking + tools
     //   配置中 thinkingEnabled=true → 请求体加 thinking:{type:"enabled"}
     //   响应 SSE 中 delta.reasoning_content 包含思考内容
