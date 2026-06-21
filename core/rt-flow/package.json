@@ -404,6 +404,26 @@
 					"default": 30,
 					"description": "Skip recently verified accounts (min)"
 				},
+				"wam.prewarm.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Throttled auth1 prewarm for fast multi-instance first-open"
+				},
+				"wam.prewarm.concurrency": {
+					"type": "number",
+					"default": 2,
+					"description": "Prewarm parallelism (1-4, low to avoid network congestion)"
+				},
+				"wam.prewarm.gapMs": {
+					"type": "number",
+					"default": 400,
+					"description": "Prewarm gap between logins (ms)"
+				},
+				"wam.prewarm.maxCount": {
+					"type": "number",
+					"default": 8,
+					"description": "Max accounts to prewarm per trigger (1-50)"
+				},
 				"wam.autoVerifyOnStartupMs": {
 					"type": "number",
 					"default": 30000,
