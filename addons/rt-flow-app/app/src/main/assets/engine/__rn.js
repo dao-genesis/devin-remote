@@ -120,6 +120,19 @@
       else _toast(content); } catch (e) { _toast(content); }
   }
   function _open(u) { try { window.open(u || "https://app.devin.ai/", "_blank"); } catch (e) {} }
+  // 归一网页本源: 账号型「打开」(多实例切号/重开/打开对话) 应在外壳里新开一张 Devin 标签
+  // (经根挂载代理 + 该账号 auth1 注入 → 登录态完整), 而非 window.open 裸跳真站(未登录/离开归一页)。
+  // 外壳监听 {__rtflow:'openDevin', url, acct, title}; 仅当作为外壳子页(parent!==self)时走此路, 否则回退 window.open。
+  function _acctOf(accJson) { try { var o = typeof accJson === "string" ? JSON.parse(accJson) : accJson; return (o && (o.id || o.email)) || ""; } catch (e) { return ""; } }
+  function _titleOf(accJson) { try { var o = typeof accJson === "string" ? JSON.parse(accJson) : accJson; return (o && (o.email || o.id)) || ""; } catch (e) { return ""; } }
+  function _inShell() { try { return !!(window.parent && window.parent !== window); } catch (e) { return false; } }
+  function _openDevin(url, accJson) {
+    var u = url || "https://app.devin.ai/";
+    if (_inShell()) {
+      try { window.parent.postMessage({ __rtflow: "openDevin", url: u, acct: _acctOf(accJson), title: _titleOf(accJson) }, "*"); return; } catch (e) {}
+    }
+    _open(u);
+  }
 
   var Native = {
     // 网络 (异步回灌 __httpCb)
@@ -130,11 +143,13 @@
     saveTextFile: function (name, content) { return _download(name, content, false); },
     saveBase64File: function (name, b64) { return _download(name, b64, true); },
     openText: _openText,
-    openTab: _open, openUrlTab: _open,
-    openAccountTab: function () { _open("https://app.devin.ai/"); },
-    openEntryNewTab: function () { _open("https://app.devin.ai/"); },
-    openAccountSession: function (accJson, sid) { _open("https://app.devin.ai/sessions/" + (sid || "")); },
-    reopenAccount: function () { _open("https://app.devin.ai/"); },
+    // openTab(url[, accountJson]): 带账号 (panel 开标签 / engine RPC) → 外壳内开该号 Devin 标签; 无账号 (投屏镜像等) → 普通新标签
+    openTab: function (url, accJson) { if (accJson) _openDevin(url || "https://app.devin.ai/", accJson); else _open(url); },
+    openUrlTab: _open,
+    openAccountTab: function (accJson) { _openDevin("https://app.devin.ai/", accJson); },
+    openEntryNewTab: function (accJson, url) { _openDevin(url || "https://app.devin.ai/", accJson || ""); },
+    openAccountSession: function (accJson, sid) { _openDevin("https://app.devin.ai/sessions/" + (sid || ""), accJson); },
+    reopenAccount: function (accJson) { _openDevin("https://app.devin.ai/", accJson); },
     notify: _toast, toast: _toast,
     vibrate: function (ms) { try { navigator.vibrate && navigator.vibrate(ms || 30); } catch (e) {} },
     log: function (s) { try { console.log("[app]", s); } catch (e) {} },

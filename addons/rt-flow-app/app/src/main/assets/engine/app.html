@@ -188,13 +188,25 @@
       if(lk){ openPage(lk); return; }
       url = "https://"+url;
     }
-    var ac=acctFor(url);
+    openWebAcct(url, acctFor(url));
+  }
+  // 指定账号开一张网页标签 (多实例核心): acct 显式指定 → 经根挂载代理注入「该号」auth1 → 登录态完整。
+  // 板块子页 (switch 的 ⚡切号 / 对话追踪 打开对话) 经 postMessage 调到这里, 于是多实例 Devin 全在本归一页内开标签。
+  function openWebAcct(url, acct, title){
+    if(!url) return;
+    if(!/^[a-z]+:\/\//i.test(url)) url="https://"+url;
+    var ac = acct || acctFor(url);
     if(isExternal(url)){
-      var t={title:host(url), origUrl:url, acct:ac, kind:"web", src:"about:blank", rootmount:true};
+      var t={title:title||host(url), origUrl:url, acct:ac, kind:"web", src:"about:blank", rootmount:true};
       addTab(t); openExternal(t,url,ac); return;
     }
-    addTab({title:host(url), src:embedSrc(url,ac), origUrl:url, acct:ac, kind:"web"});
+    addTab({title:title||host(url), src:embedSrc(url,ac), origUrl:url, acct:ac, kind:"web"});
   }
+  // 板块子页 (注入了 __rn 垫片的真实页面) 请求「在外壳内开 Devin 标签」→ 本页新标签, 不再 window.open 裸跳真站。
+  window.addEventListener("message", function(ev){
+    var d = ev && ev.data;
+    if(d && d.__rtflow==="openDevin" && d.url){ openWebAcct(d.url, d.acct||"", d.title||""); }
+  });
 
   function addTab(t){
     t.id = ++seq;
