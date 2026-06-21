@@ -67,13 +67,18 @@ jobs:
               }
             }
 
-            // 自动合并由 GITHUB_TOKEN 完成，其 push 不会触发 release.yml 的 on:push（GitHub 防递归）。
+            // 自动合并由 GITHUB_TOKEN 完成，其 push 不会触发 release.yml / android-release.yml 的 on:push（GitHub 防递归）。
             // 故显式 dispatch（workflow_dispatch 是 GITHUB_TOKEN 的例外，可正常触发）把最新版同步到 Release。
+            // 两者都 dispatch：release.yml 发插件，android-release.yml 发手机版 APK（幂等，已存在的版本会跳过）。
+            // 缺了 android-release.yml 这一步会导致：rt-flow-app 经自动合并进 main 后 APK 从不构建，
+            // latest.json 却已升到新版 → App 内「检查更新」查到新版但下载 404 → 用户解锁到新版却装不上、仍是旧版。
             if (mergedAny) {
-              try {
-                await github.rest.actions.createWorkflowDispatch({ owner, repo, workflow_id: 'release.yml', ref: 'main' });
-                core.notice('dispatched release.yml to sync plugins to Release');
-              } catch (e) {
-                core.warning(`release dispatch failed (${e.status}) ${e.message}`);
+              for (const wf of ['release.yml', 'android-release.yml']) {
+                try {
+                  await github.rest.actions.createWorkflowDispatch({ owner, repo, workflow_id: wf, ref: 'main' });
+                  core.notice(`dispatched ${wf} to publish latest release`);
+                } catch (e) {
+                  core.warning(`${wf} dispatch failed (${e.status}) ${e.message}`);
+                }
               }
             }
