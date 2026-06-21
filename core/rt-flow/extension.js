@@ -1205,7 +1205,7 @@ const SHELL_HTTP_SHIM = "(function(){"
   + "function connect(){try{var es=new EventSource('/api/shell/events?sid='+encodeURIComponent(SID));"
   + "es.onmessage=function(ev){var m;try{m=JSON.parse(ev.data);}catch(e){return;}apply(m);};"
   + "es.onerror=function(){if(!gotAny)startPoll();};}catch(e){startPoll();}}connect();"
-  + "setTimeout(function(){if(!gotAny)startPoll();},3000);"
+  + "startPoll();"
   + "})();";
 // 直出独立外壳: 复用 _multiShellHtml, 放开 CSP 的 connect-src(同源 fetch/SSE) 并注入 HTTP 传输垫片。
 function _standaloneShellHtml(opts) {
@@ -1588,6 +1588,15 @@ async function shellHandleMessage(sid, m) {
         if (!email) { _toast('无可用账号'); return; }
         const open = await _shellResolveOpen({ email, path: m.path, label: m.label });
         if (open) send(open);
+        return;
+      }
+      case 'openWebTab': {
+        // 站内新标签开任意网页/搜索(＋按钮·地址栏 URL/搜索词) → 经同源相对 /__web 代理直出
+        //   (剥 XFO/CSP·隧道与本机内置浏览器两端皆可达, 不再弹外部系统浏览器·不再静默丢弃)。
+        if (!m.url) return;
+        const abs = '/__web?u=' + encodeURIComponent(m.url);
+        if (m.hist) { try { _pushMultiHist(m.url, m.label || m.url, 'web'); send({ type: 'history', list: _getMultiHist() }); } catch (e) {} }
+        send({ type: 'open', id: 'web:' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), url: abs, label: String(m.label || m.url || '网页').slice(0, 60) });
         return;
       }
       case 'histPush': _pushMultiHist(m.url, m.label, m.kind); send({ type: 'history', list: _getMultiHist() }); return;
