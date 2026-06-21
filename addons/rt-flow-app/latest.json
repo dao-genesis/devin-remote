@@ -1,6 +1,6 @@
 {
-  "versionCode": 112,
-  "versionName": "0.37.8",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.8/DevinCloud-mobile-v0.37.8.apk",
-  "notes": "v0.37.8 · 修复网页直开网控台「登录不进去」\n• 真因：auth0 版 SPA 读服务端下发的 webapp_host，普通组该值为 null → SPA 回退默认主机 app.devin.ai，与代理 location.host 不一致 → 硬跳真站 /login，被弹回真站登录页 = 登录不进去。\n• 修法（对照 IDE 反代踩坑6 正解）：透明代理在服务端把 JSON 响应里的 webapp_host（null 或字符串）改写成本次请求 Host = 浏览器 location.host；根挂载 /、路径前缀 /px 两条路均覆盖；并加客户端 localStorage/fetch 守卫兜底（隧道场景按 location.host 自动匹配）。\n• 效果：浏览器直开网控台留在代理源，完整渲染已登录 Devin（侧栏/会话/Wiki/路由全 1:1），不再弹回真站。"
+  "versionCode": 113,
+  "versionName": "0.37.9",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.9/DevinCloud-mobile-v0.37.9.apk",
+  "notes": "v0.37.9 · 网页直开网控台「多实例 Devin 全在归一页内开」修复\n• 真因：浏览器版网控台里点账号 ⚡(多实例切号)/开标签/打开对话时，垫片把动作降级成 window.open 裸跳 https://app.devin.ai —— 既离开了归一页，又没注入该号 auth → 打开的是未登录真站。与「整个 APK 变成一个网页、多实例 Devin 全在这一页内操作」的本源不符。\n• 修法：账号型打开 (openAccountTab/openAccountSession/reopenAccount/openEntryNewTab/带账号的 openTab) 改为经 postMessage 通知外壳，在本归一页内新开一张 Devin 标签，经根挂载代理 + 该号 auth1 注入 → 登录态完整、留在归一页、真多实例隔离。\n• 效果：浏览器直开网控台后，切号面板/全服通/控制面板里打开 Devin 各账号实例，全部在同一页内以标签形式呈现并保持各自登录，与 APK 体感一致。"
 }
