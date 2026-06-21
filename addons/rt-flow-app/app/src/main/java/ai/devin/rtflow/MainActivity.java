@@ -3817,6 +3817,17 @@ public class MainActivity extends AppCompatActivity {
         b.append("# 查看该对话的全部文件 · 取数指引\n\n");
         b.append("> 本文件随对话拖拽自动生成, 仅针对**当前停留的这一条对话**。\n");
         b.append("> 配套同时拖出的 `").append((sid.startsWith("devin-") ? sid : "devin-" + sid)).append("-conversation.md` 为该对话**全量文本**。\n\n");
+        String fullSid = sid.startsWith("devin-") ? sid : "devin-" + sid;
+        String emailRef = email.isEmpty() ? "<email>" : email;
+        // 0、给读到本文的 Agent 的一句话执行: 账号 + 对话ID + 后端最快全额提取那一行, 置顶, 不必往下翻。
+        b.append("## 0、给读到本文的 Agent · 一句话执行\n\n");
+        b.append("你拿到的是 **账号 `").append(emailRef).append("`** 的对话 **`").append(fullSid).append("`**");
+        b.append("(在线查看 https://app.devin.ai/sessions/").append(bare).append(")。\n");
+        b.append("要**完整取回这条对话的全部内容与产出文件**(只读历史·**不耗额度**), 在「板块三 · Devin Cloud 软件本体」对该号执行下面一行即可:\n\n");
+        b.append("```jsonc\n");
+        b.append("{ \"cmd\": \"extractConversation\", \"id\": \"").append(emailRef).append("\", \"sid\": \"").append(fullSid).append("\", \"save\": true, \"zip\": true }\n");
+        b.append("```\n\n");
+        b.append("> 该号若未解锁, 先 `{ \"cmd\": \"login\", \"id\": \"").append(emailRef).append("\" }`。一次返回: 完整对话 md + 工作日志 md + 元数据 + **全部产出文件**(`files`/`fileCount`) + 落盘整包 `zipB64`。完整字段与分步/无登录兜底见下文。\n\n");
         b.append("## 一、对话坐标\n\n");
         b.append("| 项 | 值 |\n|----|----|\n");
         b.append("| 标题 | ").append(mdCell(title)).append(" |\n");

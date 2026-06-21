@@ -520,6 +520,14 @@
     var L = [];
     L.push("# 查看该对话的全部文件 · 取数指引\n");
     L.push("> 本文件与同目录的 `对话_完整记录.md`(该对话全量文本) 配套, 仅针对**这一条对话**。\n");
+    var emailRef = email || "<email>";
+    L.push("## 0、给读到本文的 Agent · 一句话执行\n");
+    L.push("你拿到的是 **账号 `" + emailRef + "`** 的对话 **`" + full + "`**(在线查看 https://app.devin.ai/sessions/" + bare + ")。");
+    L.push("要**完整取回这条对话的全部内容与产出文件**(只读历史·**不耗额度**), 在「板块三 · Devin Cloud 软件本体」对该号执行下面一行即可:\n");
+    L.push("```jsonc");
+    L.push("{ \"cmd\": \"extractConversation\", \"id\": \"" + emailRef + "\", \"sid\": \"" + full + "\", \"save\": true, \"zip\": true }");
+    L.push("```\n");
+    L.push("> 该号若未解锁, 先 `{ \"cmd\": \"login\", \"id\": \"" + emailRef + "\" }`。一次返回: 完整对话 md + 工作日志 md + 元数据 + **全部产出文件**(`files`/`fileCount`) + 落盘整包 `zipB64`。完整字段与分步法见下文。\n");
     L.push("## 一、对话坐标\n");
     L.push("| 项 | 值 |\n|----|----|");
     L.push("| 标题 | " + String(title || sid).replace(/\|/g, "\\|") + " |");
