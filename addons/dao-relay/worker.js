@@ -46,6 +46,242 @@ function json(body, status) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 网页内原生直渲 (Path A·中继 Worker 边缘反代) —— 道法自然·取之尽锱铢:
+//   该网络下手机一切公网 HTTP 隧道(cloudflared/SSH)全 530/503 不可达, 唯出站 WSS 中继通。
+//   故把仓库内早已验证的反代(core/rt-flow/devin_proxy.js 前缀模式: 剥 CSP/X-Frame-Options +
+//   按号注 auth1 + localStorage 按账号命名空间隔离多实例不串号)直接搬到 Worker 边缘运行:
+//     · POST /i-init {s,tk,acc,u} — 经唯一通的 WSS 中继向手机 vaultLoad 取该号 auth1/org,
+//                                   存进 HttpOnly Cookie(auth1 不经页面 JS·不上 URL), 回 /i/<acc>/<u>
+//     · /i/<accKey>/...           — 同源前缀代 app.devin.ai(+windsurf/codeium 辅源); 字节由
+//                                   Worker 边缘**直取上游**(非经手机·无 WS 1MB 限·与手机隧道死活无关)
+//                                   + 剥框限 + HTML 注入登录态/前缀化根绝对资源 + JS/CSS/JSON 改写。
+//     · /e/<b64origin>/...        — 任意第三方站同源前缀代(剥框限·前缀化·无账号注入)。
+//   控台 iframe 它即原生操作(不投屏); 不同账号落不同前缀命名空间 → 多实例并行互不串号。
+// ═══════════════════════════════════════════════════════════════════════════
+const PX_APP = "https://app.devin.ai";
+const PX_WS = "https://windsurf.com";
+const PX_REG = "https://register.windsurf.com";
+const PX_CDN = "https://server.codeium.com";
+const PX_SS = "https://server.self-serve.windsurf.com";
+const PX_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+function pxCookies(req) {
+  const h = req.headers.get("cookie") || "";
+  const o = {};
+  h.split(/;\s*/).forEach(function (p) { const i = p.indexOf("="); if (i > 0) o[p.slice(0, i)] = p.slice(i + 1); });
+  return o;
+}
+function pxSafeKey(s) { return String(s || "").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 48); }
+function pxB64Enc(o) {
+  const bytes = new TextEncoder().encode(JSON.stringify(o));
+  let bin = ""; for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+function pxB64Dec(s) {
+  try { const bin = atob(s); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return JSON.parse(new TextDecoder().decode(a)); }
+  catch (e) { return null; }
+}
+
+// relay → 手机 vaultLoad accounts (isolate 内 60s 缓存, 免每次往返)
+const _pxAcctCache = new Map(); // session -> {ts, arr}
+async function pxLoadAccounts(env, session, token) {
+  const hit = _pxAcctCache.get(session);
+  if (hit && Date.now() - hit.ts < 60000) return hit.arr;
+  const id = env.DAO_RELAY.idFromName(relayKey(session, token));
+  const r = new Request("https://do/relay/" + encodeURIComponent(session), {
+    method: "POST",
+    headers: { "content-type": "application/json", "authorization": "Bearer " + token },
+    body: JSON.stringify({ path: "/api/native", method: "POST", body: { m: "vaultLoad", a: ["accounts"] } }),
+  });
+  let arr = [];
+  try {
+    const resp = await env.DAO_RELAY.get(id).fetch(r);
+    const j = await resp.json();
+    let s = (j && j.r !== undefined) ? j.r : j;
+    if (typeof s === "string") s = JSON.parse(s);
+    arr = Array.isArray(s) ? s : ((s && (s.accounts || s.list)) || []);
+  } catch (e) { arr = []; }
+  if (arr.length) _pxAcctCache.set(session, { ts: Date.now(), arr: arr });
+  return arr;
+}
+function pxFindAcct(arr, acc) {
+  acc = String(acc || "");
+  for (const a of arr) { if (a && (a.email === acc || a.id === acc || String(a.no) === acc)) return a; }
+  const lc = acc.toLowerCase();
+  for (const a of arr) { if (a && String(a.email || "").toLowerCase() === lc) return a; }
+  return null;
+}
+
+function pxResolveUpstream(pathname) {
+  if (pathname.startsWith("/__ws/")) return { base: PX_WS, path: pathname.slice(5) };
+  if (pathname.startsWith("/__reg/")) return { base: PX_REG, path: pathname.slice(6) };
+  if (pathname.startsWith("/__cdn/")) return { base: PX_CDN, path: pathname.slice(6) };
+  if (pathname.startsWith("/__ss/")) return { base: PX_SS, path: pathname.slice(5) };
+  return { base: PX_APP, path: pathname };
+}
+
+// 认证桥接 (前缀模式·源自 devin_proxy.js buildAuthBridge): nsShim 按 accKey 命名空间隔离 localStorage
+//   → 同源多实例不串号; 注入 auth1/org 登录态种子; 拦 fetch/XHR/EventSource 归一前缀 + 挂 Authorization。
+function pxAuthBridge(prefix, auth) {
+  const J = JSON.stringify;
+  const a1 = String(auth.auth1 || ""), uid = String(auth.userId || ""), org = String(auth.orgId || "");
+  const on = String(auth.orgName || "").replace(/['"\\<>]/g, "");
+  const P = prefix + "::";
+  return "<script>(function(){try{" +
+    "try{(function(){var L=window.localStorage;var P=" + J(P) + ";" +
+    "var og=L.getItem.bind(L),os=L.setItem.bind(L),orm=L.removeItem.bind(L);" +
+    "L.getItem=function(k){return og(P+k);};L.setItem=function(k,v){return os(P+k,v);};L.removeItem=function(k){return orm(P+k);};" +
+    "L.clear=function(){try{var ks=[],i;for(i=0;i<L.length;i++){var kk=L.key(i);if(kk&&kk.indexOf(P)===0)ks.push(kk);}for(i=0;i<ks.length;i++)orm(ks[i]);}catch(e){}};" +
+    "})();}catch(e){}" +
+    "var __a1=" + J(a1) + ";var __uid=" + J(uid) + ";var __org=" + J(org) + ";var __orgName=" + J(on) + ";" +
+    "if(__a1){localStorage.setItem('auth1_session',JSON.stringify({token:__a1,userId:__uid}));" +
+    "localStorage.setItem('migrated-to-unscoped-auth0-token-2025-12-18','true');" +
+    "if(__uid)localStorage.setItem('known-org-ids-'+__uid,JSON.stringify([__org]));" +
+    "if(__org)localStorage.setItem('last-internal-org-for-external-org-v1-null',__org);" +
+    "if(__org&&__uid&&__orgName){var __k='post-auth-v3-null-'+__uid+'-org_name-'+__orgName;" +
+    "if(!localStorage.getItem(__k))localStorage.setItem(__k,JSON.stringify({externalOrgId:null,userId:__uid,internalOrgId:__org,orgName:__orgName,result:{resolved_external_org_id:null,org_id:__org,org_name:__orgName,is_valid_resource:true}}));}}" +
+    "document.cookie='webapp_logged_in=true; path=/; max-age=31536000; SameSite=Lax';" +
+    "var __base=" + J(prefix) + ";var __pfx=" + J(prefix) + ";var __abs='https://app.devin.ai';" +
+    "var __pf=function(u){if(typeof u!=='string')return u;u=u.split(__abs).join(__pfx);" +
+    "if(__pfx&&u.charAt(0)==='/'&&u.charAt(1)!=='/'&&u!==__pfx&&u.indexOf(__pfx+'/')!==0){u=__pfx+u;}return u;};" +
+    "var __fix=function(u){return (typeof u==='string')?u.split(__abs).join(__base):u;};" +
+    "try{var _la=window.location.assign.bind(window.location);window.location.assign=function(u){return _la(__fix(u));};}catch(e){}" +
+    "try{var _lr=window.location.replace.bind(window.location);window.location.replace=function(u){return _lr(__fix(u));};}catch(e){}" +
+    "try{var _ps=history.pushState;history.pushState=function(s,t,u){return _ps.call(history,s,t,__fix(u));};}catch(e){}" +
+    "try{var _rs=history.replaceState;history.replaceState=function(s,t,u){return _rs.call(history,s,t,__fix(u));};}catch(e){}" +
+    "var needAuth=function(u){return typeof u==='string'&&(u.charAt(0)==='/'||u.indexOf(__base)===0);};" +
+    "var oF=window.fetch;window.fetch=function(u,o){if(typeof u!=='string')return oF.call(this,u,o);var nu=__pf(u);o=o||{};" +
+    "if(needAuth(nu)&&typeof o.headers==='object'&&o.headers&&!Array.isArray(o.headers)){if(!o.headers['Authorization'])o.headers['Authorization']='Bearer '+__a1;if(!o.headers['x-cog-org-id'])o.headers['x-cog-org-id']=__org;}" +
+    "return oF.call(this,nu,o);};" +
+    "var oX=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var nu=(typeof u==='string')?__pf(u):u;" +
+    "var r=oX.apply(this,[m,nu].concat([].slice.call(arguments,2)));if(needAuth(nu)){try{this.setRequestHeader('Authorization','Bearer '+__a1);this.setRequestHeader('x-cog-org-id',__org);}catch(e){}}return r;};" +
+    "try{var _ES=window.EventSource;if(_ES){var nES=function(u,o){return new _ES(__pf(u),o);};nES.prototype=_ES.prototype;try{nES.CONNECTING=_ES.CONNECTING;nES.OPEN=_ES.OPEN;nES.CLOSED=_ES.CLOSED;}catch(e){}window.EventSource=nES;}}catch(e){}" +
+    "}catch(e){}})();</script>";
+}
+// 第三方站轻量桥接: 仅运行时前缀化动态构造的根绝对/绝对 URL (无账号注入)。
+function pxGenericBridge(prefix, origin) {
+  const J = JSON.stringify;
+  return "<script>(function(){try{var __pfx=" + J(prefix) + ";var __abs=" + J(origin) + ";" +
+    "var __pf=function(u){if(typeof u!=='string')return u;u=u.split(__abs).join(__pfx);if(u.charAt(0)==='/'&&u.charAt(1)!=='/'&&u!==__pfx&&u.indexOf(__pfx+'/')!==0){u=__pfx+u;}return u;};" +
+    "var oF=window.fetch;window.fetch=function(u,o){if(typeof u==='string')u=__pf(u);return oF.call(this,u,o);};" +
+    "var oX=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){if(typeof u==='string')u=__pf(u);return oX.apply(this,[m,u].concat([].slice.call(arguments,2)));};" +
+    "}catch(e){}})();</script>";
+}
+
+// 单请求边缘反代: Worker 直取上游 → 剥安全头 → HTML 注桥/前缀化 / JS·CSS·JSON 改写 / SSE 直通 / 余透传。
+async function pxProxy(req, opts) {
+  const prefix = opts.prefix;
+  const isDevin = !opts.genericOrigin;
+  const auth = opts.auth || {};
+  let base, upath;
+  if (isDevin) { const up = pxResolveUpstream(opts.restPath); base = up.base; upath = up.path; }
+  else { base = opts.genericOrigin; upath = opts.restPath; }
+  if (!upath || upath.charAt(0) !== "/") upath = "/" + (upath || "");
+  let u;
+  try { u = new URL(base + upath); } catch (e) { return new Response("bad_target", { status: 400 }); }
+
+  const method = req.method || "GET";
+  const fwd = new Headers();
+  fwd.set("User-Agent", PX_UA);
+  fwd.set("Accept", req.headers.get("accept") || "*/*");
+  fwd.set("Origin", base);
+  fwd.set("Referer", base + "/");
+  let body;
+  const ct = req.headers.get("content-type");
+  if (method !== "GET" && method !== "HEAD") { body = await req.arrayBuffer(); if (ct) fwd.set("Content-Type", ct); }
+  if (isDevin) {
+    const clientAuth = req.headers.get("authorization");
+    if (clientAuth) fwd.set("Authorization", clientAuth);
+    else if (auth.auth1) fwd.set("Authorization", "Bearer " + auth.auth1);
+    if (auth.orgId) fwd.set("x-cog-org-id", auth.orgId);
+  }
+  let up;
+  try { up = await fetch(u.toString(), { method: method, headers: fwd, body: body, redirect: "manual" }); }
+  catch (e) { return new Response("upstream_fetch_failed: " + String((e && e.message) || e), { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } }); }
+
+  const status = up.status;
+  const rct = up.headers.get("content-type") || "";
+
+  if (status >= 300 && status < 400) {
+    let loc = up.headers.get("location") || "";
+    if (loc) {
+      if (isDevin) {
+        loc = loc.split(PX_APP).join(prefix).split(PX_WS + "/").join(prefix + "/__ws/").split(PX_REG + "/").join(prefix + "/__reg/").split(PX_CDN + "/").join(prefix + "/__cdn/").split(PX_SS + "/").join(prefix + "/__ss/");
+      } else {
+        loc = loc.split(opts.genericOrigin).join(prefix);
+      }
+      if (loc.charAt(0) === "/" && loc.charAt(1) !== "/" && loc.indexOf(prefix + "/") !== 0 && loc !== prefix) loc = prefix + loc;
+    }
+    const h = new Headers(); if (loc) h.set("Location", loc); h.set("access-control-allow-origin", "*");
+    return new Response(null, { status: status, headers: h });
+  }
+
+  const out = new Headers();
+  up.headers.forEach(function (v, k) {
+    const kl = k.toLowerCase();
+    if (kl === "x-frame-options" || kl === "content-security-policy" || kl === "content-security-policy-report-only" ||
+      kl === "strict-transport-security" || kl === "x-content-type-options" || kl === "content-encoding" ||
+      kl === "content-length" || kl === "transfer-encoding") return;
+    out.set(k, v);
+  });
+  out.set("access-control-allow-origin", "*");
+
+  if (rct.includes("text/event-stream")) {
+    out.set("content-type", rct || "text/event-stream");
+    out.set("cache-control", "no-cache, no-transform");
+    out.set("x-accel-buffering", "no");
+    return new Response(up.body, { status: status, headers: out });
+  }
+
+  const isHtml = rct.includes("text/html");
+  const isJs = rct.includes("javascript");
+  const isJson = rct.includes("application/json");
+  const isCss = rct.includes("text/css");
+
+  if (isHtml) {
+    let html = await up.text();
+    if (isDevin) {
+      html = html.split("https://app.devin.ai").join(prefix)
+        .split("https://windsurf.com/").join(prefix + "/__ws/")
+        .split("https://register.windsurf.com/").join(prefix + "/__reg/")
+        .split("https://server.codeium.com/").join(prefix + "/__cdn/")
+        .split("https://server.self-serve.windsurf.com/").join(prefix + "/__ss/");
+    } else {
+      html = html.split(opts.genericOrigin).join(prefix);
+    }
+    html = html.replace(/(\s(?:href|src|action)\s*=\s*)(["'])\/(?!\/)/gi, "$1$2" + prefix + "/");
+    html = html.replace(/<meta[^>]+http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/ig, "");
+    const bridge = isDevin ? pxAuthBridge(prefix, auth) : pxGenericBridge(prefix, opts.genericOrigin);
+    if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + bridge);
+    else if (/<\/head>/i.test(html)) html = html.replace(/<\/head>/i, bridge + "</head>");
+    else html = bridge + html;
+    out.set("content-type", "text/html; charset=utf-8");
+    return new Response(html, { status: status, headers: out });
+  }
+  if (isJs) {
+    let txt = await up.text();
+    if (isDevin && (txt.indexOf("https://app.devin.ai") >= 0 || txt.indexOf("https://windsurf.com/") >= 0 || txt.indexOf("https://register.windsurf.com/") >= 0 || txt.indexOf("https://server.codeium.com/") >= 0 || txt.indexOf("https://server.self-serve.windsurf.com/") >= 0)) {
+      txt = txt.split("https://app.devin.ai").join(prefix).split("https://windsurf.com/").join(prefix + "/__ws/").split("https://register.windsurf.com/").join(prefix + "/__reg/").split("https://server.codeium.com/").join(prefix + "/__cdn/").split("https://server.self-serve.windsurf.com/").join(prefix + "/__ss/");
+    } else if (!isDevin && txt.indexOf(opts.genericOrigin) >= 0) {
+      txt = txt.split(opts.genericOrigin).join(prefix);
+    }
+    return new Response(txt, { status: status, headers: out });
+  }
+  if (isJson && isDevin) {
+    let txt = await up.text();
+    if (txt.indexOf("webapp_host") >= 0) txt = txt.replace(/("webapp_host"\s*:\s*")[^"]*(")/g, "$1" + opts.host + "$2");
+    return new Response(txt, { status: status, headers: out });
+  }
+  if (isCss) {
+    let txt = await up.text();
+    if (isDevin && txt.indexOf("https://app.devin.ai/") >= 0) txt = txt.split("https://app.devin.ai/").join(prefix + "/");
+    else if (!isDevin && txt.indexOf(opts.genericOrigin) >= 0) txt = txt.split(opts.genericOrigin).join(prefix);
+    return new Response(txt, { status: status, headers: out });
+  }
+  return new Response(up.body, { status: status, headers: out });
+}
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -137,6 +373,63 @@ export default {
       // 必须 session+token 都与已连接客户端一致才命中其 DO; 否则落到空实例 → no_agent。
       const id = env.DAO_RELAY.idFromName(relayKey(session, t));
       return env.DAO_RELAY.get(id).fetch(req);
+    }
+
+    // 网页内原生直渲: 账号初始化 — 经 WSS 取该号 auth → HttpOnly Cookie → 回 /i/<acc>/<u>
+    if (path === "/i-init") {
+      if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+      let b = {}; try { b = await req.json(); } catch (e) {}
+      const session = String(b.s || ""), token = String(b.tk || ""), acc = String(b.acc || "");
+      let u = String(b.u || "/");
+      if (!session || !token || !acc) return json({ error: "i_init_params" }, 400);
+      if (!sharedTokenOk(env, token)) return json({ error: "unauthorized" }, 401);
+      const arr = await pxLoadAccounts(env, session, token);
+      const a = pxFindAcct(arr, acc);
+      if (!a || !a.auth1) return json({ error: "acct_not_found_or_no_auth", acc: acc }, 404);
+      if (!u.startsWith("/")) u = "/" + u;
+      const encAcc = encodeURIComponent(acc);
+      const prefix = "/i/" + encAcc;
+      const bundle = pxB64Enc({ auth1: a.auth1, userId: a.userId, orgId: a.orgId, orgName: a.orgName, email: a.email });
+      const h = new Headers();
+      h.set("content-type", "application/json");
+      h.set("access-control-allow-origin", "*");
+      h.append("Set-Cookie", "da_" + pxSafeKey(acc) + "=" + bundle + "; Path=" + prefix + "; Max-Age=7200; HttpOnly; Secure; SameSite=Lax");
+      h.append("Set-Cookie", "ds=" + encodeURIComponent(session) + "; Path=/; Max-Age=7200; HttpOnly; Secure; SameSite=Lax");
+      h.append("Set-Cookie", "dt=" + encodeURIComponent(token) + "; Path=/; Max-Age=7200; HttpOnly; Secure; SameSite=Lax");
+      return new Response(JSON.stringify({ ok: true, redirect: prefix + u }), { headers: h });
+    }
+
+    // 网页内原生直渲: Devin 同源前缀代理 /i/<accKey>/...
+    if (path.startsWith("/i/")) {
+      const after = path.slice(3);
+      const sl = after.indexOf("/");
+      const encAcc = sl >= 0 ? after.slice(0, sl) : after;
+      const acc = decodeURIComponent(encAcc);
+      const prefix = "/i/" + encAcc;
+      const restPath = (sl >= 0 ? after.slice(sl) : "/") + (url.search || "");
+      const ck = pxCookies(req);
+      let auth = ck["da_" + pxSafeKey(acc)] ? pxB64Dec(ck["da_" + pxSafeKey(acc)]) : null;
+      if (!auth || !auth.auth1) {
+        const s = ck.ds ? decodeURIComponent(ck.ds) : "", t = ck.dt ? decodeURIComponent(ck.dt) : "";
+        if (s && t) { const arr = await pxLoadAccounts(env, s, t); const a = pxFindAcct(arr, acc); if (a && a.auth1) auth = { auth1: a.auth1, userId: a.userId, orgId: a.orgId, orgName: a.orgName }; }
+      }
+      if (!auth || !auth.auth1) {
+        return new Response("<!doctype html><meta charset=utf-8><body style='font:15px system-ui;padding:24px;color:#c9d1d9;background:#0d1117'><h3>会话已过期</h3><p>请回控台重新打开此 Devin 实例。</p>", { status: 401, headers: { "content-type": "text/html; charset=utf-8" } });
+      }
+      return pxProxy(req, { prefix: prefix, restPath: restPath, auth: auth, host: url.host });
+    }
+
+    // 任意第三方站同源前缀代理 /e/<b64origin>/...
+    if (path.startsWith("/e/")) {
+      const after = path.slice(3);
+      const sl = after.indexOf("/");
+      const encOrigin = sl >= 0 ? after.slice(0, sl) : after;
+      let origin = "";
+      try { origin = atob(encOrigin.replace(/-/g, "+").replace(/_/g, "/")); } catch (e) { origin = ""; }
+      if (!/^https?:\/\//i.test(origin)) return json({ error: "bad_origin" }, 400);
+      const prefix = "/e/" + encOrigin;
+      const restPath = (sl >= 0 ? after.slice(sl) : "/") + (url.search || "");
+      return pxProxy(req, { prefix: prefix, restPath: restPath, genericOrigin: origin.replace(/\/+$/, ""), host: url.host });
     }
 
     return json({ error: "not_found", path }, 404);

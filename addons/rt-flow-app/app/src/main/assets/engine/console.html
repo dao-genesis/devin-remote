@@ -499,14 +499,20 @@
     catch(e){ toast("无法打开新标签"); }
   }
 
-  // ── 网页内原生直渲任意站 / Devin 多实例 (经手机根挂载反代 + 专属公网隧道) ───────────────
-  //   手机为每个 (源站,账号) 起一条根挂载代理(剥 CSP/X-Frame-Options + 代该号注入 auth1) 暴露成独立
-  //   https 公网 origin → 控台 iframe 它即原生操作 (不投屏); 不同账号落不同 origin, localStorage 天然隔离、
-  //   多实例互不串号。手机端需 v0.37.5+; 取不到(旧包/隧道未起)则优雅回退到本机浏览器新标签打开。
+  // ── 网页内原生直渲任意站 / Devin 多实例 (经中继 Worker 边缘反代·Path A) ──────────────────
+  //   中继 Worker 直取上游(剥 CSP/X-Frame-Options + 按号注 auth1 + localStorage 按账号命名空间隔离),
+  //   暴露成本中继同源前缀: Devin → /i/<账号>/… (经 /i-init 取登录态进 HttpOnly Cookie),
+  //   任意第三方站 → /e/<b64源站>/…。控台直接 iframe 该同源前缀即原生操作(不投屏·不依赖手机隧道);
+  //   不同账号落不同前缀命名空间 → 多实例并行互不串号。取不到则优雅回退本机浏览器新标签打开。
+  function b64url(s){ try{ return btoa(unescape(encodeURIComponent(s))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }catch(e){ return ""; } }
+  function isDevinHost(h){ return /(^|\.)devin\.ai$/i.test(h) || /(^|\.)cognition\.ai$/i.test(h); }
   function openInPage(url, acct, title){
     if(!/^[a-z]+:\/\//i.test(url)) url="https://"+url;
     acct=acct||"";
     for(var i=0;i<tabs.length;i++){ if(tabs[i].kind==="web" && tabs[i].url===url && (tabs[i].acct||"")===acct){ selectTab(tabs[i].id); return; } }
+    var uo; try{ uo=new URL(url); }catch(e){ openExternalNewTab(url); return; }
+    var pathq=(uo.pathname||"/")+(uo.search||"")+(uo.hash||"");
+    var devin=isDevinHost(uo.hostname);
     var t={ id:++seq, title:title||host(url), kind:"web", url:url, acct:acct, ready:false };
     var fr=document.createElement("iframe"); fr.className="hidden";
     fr.setAttribute("allow","clipboard-read; clipboard-write");
@@ -514,21 +520,25 @@
     t.fr=fr; frames.appendChild(fr); applyZoomTo(fr);
     var ld=document.createElement("div"); ld.className="load";
     ld.innerHTML='<div class="sp"></div><div>正在网页内原生打开 <b>'+host(url)+'</b>'+(acct?(" · "+acct):"")+
-      ' …<br><span style="color:#6e7681">手机正建立专属公网隧道 · 首次约 5–15s</span></div>';
+      ' …<br><span style="color:#6e7681">经中继边缘反代 · 首次数秒</span></div>';
     t.ld=ld; frames.appendChild(ld);
     fr.addEventListener("load", function(){ try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){} });
     tabs.push(t); renderStrip(); selectTab(t.id);
-    relay("/api/native", { m:"proxyPublicUrl", a:[url, acct] }, 35000).then(function(res){
-      var base = res && res.status===200 && res.body && res.body.r ? String(res.body.r) : "";
-      if(!base){ throw new Error("no_public_url"); }
-      var path=""; try{ var u=new URL(url); path=u.pathname+u.search+u.hash; }catch(e){ path="/"; }
-      t.ready=true; if(t.ld){ t.ld.remove(); t.ld=null; }
-      t.fr.src = base.replace(/\/$/,"") + path;
-    }).catch(function(){
-      // 回退: 旧包无 proxyPublicUrl / 隧道未就绪 → 本机浏览器新标签打开, 关掉占位 web 标签。
-      openExternalNewTab(url);
-      closeTab(t.id);
-    });
+    function go(src){ t.ready=true; if(t.ld){ t.ld.remove(); t.ld=null; } t.fr.src=src; }
+    function fail(){ openExternalNewTab(url); closeTab(t.id); }
+    if(devin && acct){
+      // Devin: 先 /i-init 取该号登录态进 Cookie, 再 iframe 同源前缀 /i/<账号>/…
+      fetch(ENDPOINT+"/i-init", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ s:SESSION, tk:TOKEN, acc:acct, u:pathq }) })
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(j){ if(!j||!j.ok||!j.redirect) throw new Error("init_failed"); go(ENDPOINT+j.redirect); })
+        .catch(fail);
+    } else {
+      // 任意站(或无账号 Devin): 直接同源前缀代理 /e/<b64源站>/…
+      var enc=b64url(uo.protocol+"//"+uo.host);
+      if(!enc){ fail(); return; }
+      go(ENDPOINT+"/e/"+enc+(pathq||"/"));
+    }
   }
 
   function openWeb(v){
