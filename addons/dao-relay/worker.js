@@ -142,17 +142,24 @@ function pxAuthBridge(prefix, auth) {
     "if(__org&&__uid&&__orgName){var __k='post-auth-v3-null-'+__uid+'-org_name-'+__orgName;" +
     "if(!localStorage.getItem(__k))localStorage.setItem(__k,JSON.stringify({externalOrgId:null,userId:__uid,internalOrgId:__org,orgName:__orgName,result:{resolved_external_org_id:null,org_id:__org,org_name:__orgName,is_valid_resource:true}}));}}" +
     "document.cookie='webapp_logged_in=true; path=/; max-age=31536000; SameSite=Lax';" +
-    "var __base=" + J(prefix) + ";var __pfx=" + J(prefix) + ";var __abs='https://app.devin.ai';" +
-    "var __pf=function(u){if(typeof u!=='string')return u;u=u.split(__abs).join(__pfx);" +
+    "var __base=" + J(prefix) + ";var __pfx=" + J(prefix) + ";var __abs='https://app.devin.ai';var __O=location.origin;window.__PXFX=__pfx;" +
+    "var __pf=function(u){if(typeof u!=='string')return u;u=u.split(__abs).join(__O+__pfx);" +
+    "if(u.indexOf(__O)===0){var p=u.slice(__O.length);if(p.charAt(0)==='/'&&p!==__pfx&&p.indexOf(__pfx+'/')!==0&&p.indexOf(__pfx)!==0){u=__O+__pfx+p;}return u;}" +
     "if(__pfx&&u.charAt(0)==='/'&&u.charAt(1)!=='/'&&u!==__pfx&&u.indexOf(__pfx+'/')!==0){u=__pfx+u;}return u;};" +
-    "var __fix=function(u){return (typeof u==='string')?u.split(__abs).join(__base):u;};" +
-    "try{var _la=window.location.assign.bind(window.location);window.location.assign=function(u){return _la(__fix(u));};}catch(e){}" +
-    "try{var _lr=window.location.replace.bind(window.location);window.location.replace=function(u){return _lr(__fix(u));};}catch(e){}" +
-    "try{var _ps=history.pushState;history.pushState=function(s,t,u){return _ps.call(history,s,t,__fix(u));};}catch(e){}" +
-    "try{var _rs=history.replaceState;history.replaceState=function(s,t,u){return _rs.call(history,s,t,__fix(u));};}catch(e){}" +
+    // 路由前缀虚拟化: SPA 路由器读 location.pathname 匹配路由; 故把地址栏前缀剥成根级
+    //   → 路由器按根路由匹配渲染; 而 fetch/资源仍由 __pf 补 __pfx 前缀打到本账号 → 路由与取数解耦。
+    "var __strip=function(u){if(typeof u!=='string')return u;u=u.split(__abs).join(__O);" +
+    "if(__pfx){if(u.indexOf(__O+__pfx)===0){var r=u.slice((__O+__pfx).length)||'/';u=__O+(r.charAt(0)==='/'?r:'/'+r);}" +
+    "else if(u.charAt(0)==='/'&&(u===__pfx||u.indexOf(__pfx+'/')===0)){var r2=u.slice(__pfx.length)||'/';u=r2.charAt(0)==='/'?r2:'/'+r2;}}return u;};" +
+    "var _ps=history.pushState,_rs=history.replaceState;" +
+    "try{var _la=window.location.assign.bind(window.location);window.location.assign=function(u){return _la(__strip(u));};}catch(e){}" +
+    "try{var _lr=window.location.replace.bind(window.location);window.location.replace=function(u){return _lr(__strip(u));};}catch(e){}" +
+    "try{history.pushState=function(s,t,u){return _ps.call(history,s,t,__strip(u));};}catch(e){}" +
+    "try{history.replaceState=function(s,t,u){return _rs.call(history,s,t,__strip(u));};}catch(e){}" +
+    "try{if(__pfx&&location.pathname.indexOf(__pfx)===0){var __sp=location.pathname.slice(__pfx.length)||'/';if(__sp.charAt(0)!=='/')__sp='/'+__sp;_rs.call(history,history.state,'',__sp+location.search+location.hash);}}catch(e){}" +
     "var needAuth=function(u){return typeof u==='string'&&(u.charAt(0)==='/'||u.indexOf(__base)===0);};" +
-    "var oF=window.fetch;window.fetch=function(u,o){if(typeof u!=='string')return oF.call(this,u,o);var nu=__pf(u);o=o||{};" +
-    "if(needAuth(nu)&&typeof o.headers==='object'&&o.headers&&!Array.isArray(o.headers)){if(!o.headers['Authorization'])o.headers['Authorization']='Bearer '+__a1;if(!o.headers['x-cog-org-id'])o.headers['x-cog-org-id']=__org;}" +
+    "var oF=window.fetch;window.fetch=function(u,o){var nu=u;try{if(typeof u==='string'){nu=__pf(u);}else if(u&&u.url){var ru=__pf(u.url);nu=(ru!==u.url)?new Request(ru,u):u;}}catch(e){nu=u;}o=o||{};" +
+    "if(typeof nu==='string'&&needAuth(nu)&&typeof o.headers==='object'&&o.headers&&!Array.isArray(o.headers)){if(!o.headers['Authorization'])o.headers['Authorization']='Bearer '+__a1;if(!o.headers['x-cog-org-id'])o.headers['x-cog-org-id']=__org;}" +
     "return oF.call(this,nu,o);};" +
     "var oX=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var nu=(typeof u==='string')?__pf(u):u;" +
     "var r=oX.apply(this,[m,nu].concat([].slice.call(arguments,2)));if(needAuth(nu)){try{this.setRequestHeader('Authorization','Bearer '+__a1);this.setRequestHeader('x-cog-org-id',__org);}catch(e){}}return r;};" +
@@ -162,9 +169,9 @@ function pxAuthBridge(prefix, auth) {
 // 第三方站轻量桥接: 仅运行时前缀化动态构造的根绝对/绝对 URL (无账号注入)。
 function pxGenericBridge(prefix, origin) {
   const J = JSON.stringify;
-  return "<script>(function(){try{var __pfx=" + J(prefix) + ";var __abs=" + J(origin) + ";" +
-    "var __pf=function(u){if(typeof u!=='string')return u;u=u.split(__abs).join(__pfx);if(u.charAt(0)==='/'&&u.charAt(1)!=='/'&&u!==__pfx&&u.indexOf(__pfx+'/')!==0){u=__pfx+u;}return u;};" +
-    "var oF=window.fetch;window.fetch=function(u,o){if(typeof u==='string')u=__pf(u);return oF.call(this,u,o);};" +
+  return "<script>(function(){try{var __pfx=" + J(prefix) + ";var __abs=" + J(origin) + ";var __O=location.origin;" +
+    "var __pf=function(u){if(typeof u!=='string')return u;u=u.split(__abs).join(__O+__pfx);if(u.indexOf(__O)===0){var p=u.slice(__O.length);if(p.charAt(0)==='/'&&p!==__pfx&&p.indexOf(__pfx+'/')!==0&&p.indexOf(__pfx)!==0){u=__O+__pfx+p;}return u;}if(u.charAt(0)==='/'&&u.charAt(1)!=='/'&&u!==__pfx&&u.indexOf(__pfx+'/')!==0){u=__pfx+u;}return u;};" +
+    "var oF=window.fetch;window.fetch=function(u,o){var nu=u;try{if(typeof u==='string'){nu=__pf(u);}else if(u&&u.url){var ru=__pf(u.url);nu=(ru!==u.url)?new Request(ru,u):u;}}catch(e){nu=u;}return oF.call(this,nu,o);};" +
     "var oX=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){if(typeof u==='string')u=__pf(u);return oX.apply(this,[m,u].concat([].slice.call(arguments,2)));};" +
     "}catch(e){}})();</script>";
 }
@@ -236,7 +243,8 @@ async function pxProxy(req, opts) {
 
   const isHtml = rct.includes("text/html");
   const isJs = rct.includes("javascript");
-  const isJson = rct.includes("application/json");
+  // Connect-RPC 用 application/(connect+)json; 泛匹配 json → 必抓 webapp_host(否则 SPA host 校验失败硬跳真站)。
+  const isJson = rct.includes("json");
   const isCss = rct.includes("text/css");
 
   if (isHtml) {
@@ -263,14 +271,20 @@ async function pxProxy(req, opts) {
     let txt = await up.text();
     if (isDevin && (txt.indexOf("https://app.devin.ai") >= 0 || txt.indexOf("https://windsurf.com/") >= 0 || txt.indexOf("https://register.windsurf.com/") >= 0 || txt.indexOf("https://server.codeium.com/") >= 0 || txt.indexOf("https://server.self-serve.windsurf.com/") >= 0)) {
       txt = txt.split("https://app.devin.ai").join(prefix).split("https://windsurf.com/").join(prefix + "/__ws/").split("https://register.windsurf.com/").join(prefix + "/__reg/").split("https://server.codeium.com/").join(prefix + "/__cdn/").split("https://server.self-serve.windsurf.com/").join(prefix + "/__ss/");
-    } else if (!isDevin && txt.indexOf(opts.genericOrigin) >= 0) {
+    }
+    // Vite assetsURL(base="/") 不带前缀 → __vitePreload 的 CSS/模块预加载打到根区无账号路径失败。
+    //   改写为读运行时 window.__PXFX(本账号前缀) → 预加载资源走 /i/<acc>/assets/...。
+    if (isDevin) txt = txt.replace(/function\(([A-Za-z_$][\w$]*)\)\{return`\/`\+\1\}/g, function (m, p) { return "function(" + p + "){return(window.__PXFX||\"\")+\"/\"+" + p + "}"; });
+    if (!isDevin && txt.indexOf(opts.genericOrigin) >= 0) {
       txt = txt.split(opts.genericOrigin).join(prefix);
     }
     return new Response(txt, { status: status, headers: out });
   }
   if (isJson && isDevin) {
     let txt = await up.text();
-    if (txt.indexOf("webapp_host") >= 0) txt = txt.replace(/("webapp_host"\s*:\s*")[^"]*(")/g, "$1" + opts.host + "$2");
+    // host 校验真源: webapp_host 常下发为 null → SPA 回退到内置常量 app.devin.ai 硬跳真站。
+    //   故把 null / 字符串值 一律改写成本 Worker host → e===location.host → 校验通过, 不跳。
+    if (txt.indexOf("webapp_host") >= 0) txt = txt.replace(/("webapp_host"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|null)/g, '$1"' + opts.host + '"');
     return new Response(txt, { status: status, headers: out });
   }
   if (isCss) {
