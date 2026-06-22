@@ -265,19 +265,51 @@
     return Object.assign({ ok: true }, r, { account: acc });
   }
 
-  // 刷新单号额度 (用已存的 key) — 写回账号
+  // 校验 auth1 是否仍有效 (额度/billing 接口对死令牌回 401「No organizations found for auth1 user」)。
+  async function auth1Alive(acc) {
+    if (!acc || !acc.auth1 || !acc.orgId) return false;
+    try {
+      var bare = acc.orgId.replace(/^org-/, "");
+      var br = await devinJsonGet(APP + "/api/org-" + bare + "/billing/status", { Authorization: "Bearer " + acc.auth1, "x-cog-org-id": acc.orgId });
+      return br.status === 200;
+    } catch (e) { return false; }
+  }
+
+  // 刷新单号额度 (用已存的 key) — 写回账号。
+  //   自愈: 先用现有 auth1 取额度; 取不到(令牌过期回 401/null) 且存有邮箱密码 → 自动重登换新 auth1 再取。
+  //   这样「额度刷新」不再因令牌过期而僵死, 后台心跳每轮都会让死号自己活过来 —— 无为而无不为。
+  //   健康路径(令牌有效)只发一次额度请求, 不额外探活, 无性能损耗。
   async function refreshQuotaFor(id) {
-    var acc = findAcc(id); if (!acc || !acc.auth1) return { ok: false, error: "无 auth1, 需先登录" };
-    var q = await devinFetchQuota(acc.apiKey, acc.windsurfKey, acc.auth1, acc.orgId, acc.apiServerUrl);
+    var acc = findAcc(id);
+    if (!acc) return { ok: false, error: "无此账号" };
+    var q = null;
+    if (acc.auth1) { try { q = await devinFetchQuota(acc.apiKey, acc.windsurfKey, acc.auth1, acc.orgId, acc.apiServerUrl); } catch (e) {} }
+    if (!q && acc.email && acc.password) {
+      var lr = await loginAndStore(acc.email, acc.password);
+      if (lr.ok) { acc = findAcc(id) || acc; return { ok: !!(acc.quota), quota: acc.quota, relogin: true }; }
+      return { ok: false, error: "auth1 过期且重登失败: " + (lr.error || ""), relogin: true };
+    }
+    if (!q && !acc.auth1) return { ok: false, error: "无 auth1, 需先登录" };
     if (q) { acc.quota = q; acc.plan = q.planName || acc.plan; upsertAcc(acc); }
     return { ok: !!q, quota: q || acc.quota };
+  }
+
+  // 刷新全部账号额度 (自愈式): 逐号 refreshQuotaFor (死令牌自动重登)。串行让路给交互, 失败不阻断后续。
+  async function refreshAllQuota(force) {
+    var accs = loadAcc(), ok = 0, relogin = 0, fail = 0;
+    for (var i = 0; i < accs.length; i++) {
+      var a = accs[i]; if (!a || (!a.auth1 && !(a.email && a.password))) continue;
+      try { var r = await refreshQuotaFor(a.id || a.email); if (r.ok) ok++; else fail++; if (r.relogin) relogin++; }
+      catch (e) { fail++; }
+    }
+    return { ok: true, refreshed: ok, relogin: relogin, fail: fail, count: accs.length };
   }
 
   root.DaoCore = {
     httpReq: httpReq, httpReqB64: httpReqB64, devinJsonPost: devinJsonPost, devinJsonGet: devinJsonGet,
     devinLogin: devinLogin, devinFetchQuota: devinFetchQuota,
     loadAcc: loadAcc, saveAcc: saveAcc, getActive: getActive, setActive: setActive, findAcc: findAcc, upsertAcc: upsertAcc,
-    loginAndStore: loginAndStore, refreshQuotaFor: refreshQuotaFor,
+    loginAndStore: loginAndStore, refreshQuotaFor: refreshQuotaFor, refreshAllQuota: refreshAllQuota, auth1Alive: auth1Alive,
     APP: APP, WINDSURF: WINDSURF
   };
 })(window);

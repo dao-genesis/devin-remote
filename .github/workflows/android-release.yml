@@ -34,17 +34,66 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Read version from build.gradle
+      # 版本 + 自动升版断链根治:
+      #   病灶: 改了 rt-flow-app 代码却忘了升 versionCode/versionName → 本流读到旧版号 →
+      #         发现该版 Release 已存在 → 跳过构建 → 新代码永不发包; 用户手机(已在该版)查更新得 hasUpdate=false → 永远收不到。
+      #   修法: 若「该版 Release 已存在」且「自该 tag 以来 rt-flow-app 代码有改动(排除 build.gradle/latest.json 自身)」,
+      #         即判定为「改了码没升号」→ 自动 versionCode+1·versionName 末段+1·同步 latest.json(版本号+url) 并提交回 main,
+      #         再据新版号构建发版。GITHUB_TOKEN 的提交不触发 on:push(防递归), 同一次运行内继续构建, 无死循环。
+      - name: Resolve version (auto-bump if code changed without a version bump)
         id: ver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
+          git fetch --tags --force --quiet || true
           GRADLE=addons/rt-flow-app/app/build.gradle
+          LATEST=addons/rt-flow-app/latest.json
           VN=$(grep -oP 'versionName\s+"\K[^"]+' "$GRADLE")
           VC=$(grep -oP 'versionCode\s+\K[0-9]+' "$GRADLE")
+          TAG="rtflow-v$VN"
+          ASSET="DevinCloud-mobile-v$VN.apk"
+          need_bump=false
+          if gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
+            # 该版已发布。自该 tag 以来 rt-flow-app 是否有「非版本文件」改动?
+            if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              CHANGED=$(git diff --name-only "refs/tags/$TAG" HEAD -- addons/rt-flow-app \
+                | grep -v -e '^addons/rt-flow-app/app/build.gradle$' -e '^addons/rt-flow-app/latest.json$' || true)
+              if [ -n "$CHANGED" ]; then
+                need_bump=true
+                echo "代码自 $TAG 以来有改动但版本号未升 → 自动升版:"; echo "$CHANGED"
+              fi
+            fi
+          fi
+          if [ "$need_bump" = true ]; then
+            NVC=$((VC + 1))
+            NVN=$(echo "$VN" | awk -F. 'BEGIN{OFS="."} {$NF=$NF+1; print}')
+            NTAG="rtflow-v$NVN"
+            NASSET="DevinCloud-mobile-v$NVN.apk"
+            sed -i -E "s/versionCode[[:space:]]+$VC/versionCode $NVC/" "$GRADLE"
+            sed -i -E "s/versionName[[:space:]]+\"$VN\"/versionName \"$NVN\"/" "$GRADLE"
+            node -e '
+              const fs=require("fs"), f=process.argv[1];
+              const j=JSON.parse(fs.readFileSync(f,"utf8"));
+              const [nvc,nvn,ntag,nasset]=process.argv.slice(2);
+              j.versionCode=parseInt(nvc,10); j.versionName=nvn;
+              j.url=`https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${ntag}/${nasset}`;
+              const head=`v${nvn} · 自动发版(代码已更新, 版本号自动递增)`;
+              j.notes=(j.notes && j.notes.indexOf("v"+nvn)===0)?j.notes:(head+"\n"+(j.notes||""));
+              fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n");
+            ' "$LATEST" "$NVC" "$NVN" "$NTAG" "$NASSET"
+            git config user.name "rtflow-release-bot"
+            git config user.email "rtflow-release-bot@users.noreply.github.com"
+            git add "$GRADLE" "$LATEST"
+            git commit -m "release(rt-flow-app): 自动升版 v$NVN (code $NVC) — 代码已更新但版本号未升, CI 自动递增并发版"
+            git push origin HEAD:main
+            VN=$NVN; VC=$NVC; TAG=$NTAG; ASSET=$NASSET
+            echo "已自动升版并提交回 main: v$NVN (code $NVC)"
+          fi
           echo "vn=$VN" >> "$GITHUB_OUTPUT"
           echo "vc=$VC" >> "$GITHUB_OUTPUT"
-          echo "tag=rtflow-v$VN" >> "$GITHUB_OUTPUT"
-          echo "asset=DevinCloud-mobile-v$VN.apk" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
           echo "rt-flow APK: versionName=$VN versionCode=$VC"
 
       - name: Skip if release already has this APK

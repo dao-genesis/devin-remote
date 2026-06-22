@@ -1,6 +1,6 @@
 {
-  "versionCode": 114,
-  "versionName": "0.37.10",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.10/DevinCloud-mobile-v0.37.10.apk",
-  "notes": "v0.37.10 · 网页直开网控台与 APK 1:1 工具栏对齐 + 公网直开链接回落修复\n• 工具栏对齐：浏览器版 /console 外壳此前只有精简工具栏（菜单/地址/重载/前往），与 APK 原生顶栏不一致。现补齐与 APK buildChrome 完全 1:1 的第二行：🔍整页缩放滑块(50%–170%)+百分比、⭐收藏、↻重载、📥下载/书签、🗂全服通，并在地址栏旁加「译」整页翻译键。\n• 整页翻译：浏览器版「译」经手机 /api/http 调 Edge 免费翻译引擎(无 key·绕 CORS)，与 APK 同一套底层，可对同源板块/代理页一键整页翻译、再点恢复原文。\n• 缩放/收藏：缩放经 documentElement.zoom 作用于当前标签并持久化；收藏写入本地书签，📥面板可查看并一键打开。\n• 公网直开修复：当零账号中继 Worker 掉线/被 CF 限流(429)时，对外广播的「网页直开」链接不再固定指向打不开的 workers.dev/console，而是回落到当前生效的 cloudflared 隧道 /console（实测 200 可开）。"
+  "versionCode": 115,
+  "versionName": "0.37.11",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.11/DevinCloud-mobile-v0.37.11.apk",
+  "notes": "v0.37.11 · 额度自愈 + 公网网页 1:1 落地 + 发版断链根治\n• 额度刷新自愈：auth1 令牌过期后额度不再僵死。刷额度/后台心跳取不到额度(令牌 401)时，自动用金库里存的账密重登换新 auth1 再取额度——令牌死了自己活过来，全程无需手动。修复「几个账号额度停止刷新、识别不了」。\n• 公网网页与 APK 完全一致：本机 LocalServer 移植 dao-relay 的 /i-init·/i/<账号>/·/e/<站>/ 同源前缀边缘反代，单网页外壳统一为 console.html。任意浏览器经隧道直开 /console，点账号即在页内原生渲染 Devin(零 useAuth 崩溃)，与 APK 逐字节一致。\n• 发版断链根治：以前改了代码但没升版本号 → 发版流水线判定该版已发而跳过 → 你手机检查更新永远查不到新版。现在 CI 检测到 rt-flow-app 代码变更但版本号未升时，自动升版号+同步 latest.json+发版，确保每次开发的成果都能被你手机的「检查更新」直接收到。"
 }
