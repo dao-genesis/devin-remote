@@ -535,6 +535,9 @@
     var t={ id:++seq, title:title||host(url), kind:"web", url:url, acct:acct, ready:false };
     var fr=document.createElement("iframe"); fr.className="hidden";
     fr.setAttribute("allow","clipboard-read; clipboard-write");
+    // sandbox 去掉 allow-top-navigation* → 子页(Devin SPA)即便做顶层跳转(framebust/跳真站登录页)
+    //   也被浏览器拦死, 牢牢嵌在单网页里, 永不把使用者整个浏览器标签带离本控台。同源/脚本/表单/弹窗仍放行(反代注认证·登录表单照常)。
+    fr.setAttribute("sandbox","allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-popups-to-escape-sandbox allow-storage-access-by-user-activation");
     fr.referrerPolicy="no-referrer";
     t.fr=fr; frames.appendChild(fr); applyZoomTo(fr);
     var ld=document.createElement("div"); ld.className="load";
@@ -544,7 +547,19 @@
     fr.addEventListener("load", function(){ try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){} });
     tabs.push(t); renderStrip(); selectTab(t.id);
     function go(src){ t.ready=true; if(t.ld){ t.ld.remove(); t.ld=null; } t.fr.src=src; }
-    function fail(){ openExternalNewTab(url); closeTab(t.id); }
+    // 失败不外跳: 旧逻辑 openExternalNewTab(window.open 真站) 会另开浏览器标签、看着像「跳出页面」。
+    //   改为在本标签内显示错误 + 重试, 永不离开单网页。
+    function fail(e){
+      var msg=(e&&e.message)?e.message:(typeof e==="string"?e:"登录态获取失败");
+      if(msg==="i_init_failed") msg="取登录态失败(账号未登录或令牌已失效)";
+      if(t.ld){
+        t.ld.innerHTML='<div class="er">网页内打开「'+host(url)+'」失败：<br>'+msg+
+          '<br><br><span style="color:#6e7681">已留在本控台 · 不会离开此页</span></div>'+
+          '<button id="rf'+t.id+'">重试</button>';
+        var rb=document.getElementById("rf"+t.id);
+        if(rb) rb.onclick=function(){ var uu=url,aa=acct,tt=title; closeTab(t.id); openInPage(uu,aa,tt); };
+      } else { toast("网页内打开失败"); }
+    }
     // 同源前缀边缘反代 (Path A): Devin 账号 → /i-init 验证后回 /i/<账号>/<path>; 任意第三方站 → /e/<b64源站>/<path>。
     //   页面 JS 在本浏览器原生执行(渲染/取数各设备各耗各资源), 中继/本机 LocalServer 仅边缘改写字节(剥框限·前缀化·注认证·webapp_host 防跳)。不用 UV/SW(Vite 分包经 302 自愈双实例致 useAuth 崩)。
     if(devin && acct){
