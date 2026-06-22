@@ -53,20 +53,46 @@ function daoPruneConnRegistry(): any[] {
     try { if (live.length !== all.length) fs.writeFileSync(DAO_CONN_REGISTRY, JSON.stringify(live, null, 2), 'utf8'); } catch { /* 守柔 */ }
     return live;
 }
-// 据活实例集刷新权威「当前接口」: 取端口最小者为确定性 leader(不抖动), epoch 仅在 leader 真变时 +1。
-function daoRefreshCurrent(): any {
-    const live = daoPruneConnRegistry();
+// 健康探活: 直连端口 /api/health 确认真有 dao-vsix 在听。帛书·「自知者明」: pid 可能被 OS 回收
+//   (旧死实例的 pid 被别的进程占用 → process.kill 误判活), 故以「端口是否应答」为活的唯一真相。
+function daoProbeHealth(port: number): Promise<{ port: number; pid?: number; version?: string } | null> {
+    return new Promise((resolve) => {
+        try {
+            const http = require('http');
+            const req = http.request({ host: '127.0.0.1', port, path: '/api/health', method: 'GET', timeout: 700 }, (r: any) => {
+                let d = ''; r.on('data', (c: any) => d += c);
+                r.on('end', () => { try { const j = JSON.parse(d); resolve({ port, pid: j.pid, version: j.version }); } catch { resolve(r.statusCode === 200 ? { port } : null); } });
+            });
+            req.on('error', () => resolve(null));
+            req.on('timeout', () => { try { req.destroy(); } catch { /* 守柔 */ } resolve(null); });
+            req.end();
+        } catch { resolve(null); }
+    });
+}
+// 据「真应答」的活实例刷新权威「当前接口」: 取端口最小者为确定性 leader(不抖动), epoch 仅在 leader 真变时 +1。
+//   候选来自 pid-裁剪后的注册表 ∪ 本窗口; 再逐一 /api/health 验证 → 杜绝 pid 回收造成的幽灵 leader。
+async function daoRefreshCurrent(): Promise<any> {
+    const reg = daoPruneConnRegistry();
     let prev: any = {};
     try { prev = JSON.parse(fs.readFileSync(DAO_CONN_CURRENT, 'utf8')) || {}; } catch { /* 首次 */ }
-    const leader = live.slice().sort((a, b) => (a.port || 0) - (b.port || 0))[0];
-    if (!leader) return prev;  // 无活实例: 保留旧 current(常驻桥仍可据此尝试)
+    const byPort = new Map<number, any>();
+    for (const c of reg) { if (c && c.port) byPort.set(c.port, c); }  // 同端口取最后(最新)
+    const ports = new Set<number>(); if (ws && ws.port) ports.add(ws.port);
+    for (const p of byPort.keys()) ports.add(p);
+    const probed = await Promise.all(Array.from(ports).map(p => daoProbeHealth(p)));
+    const alive = probed.filter((x): x is { port: number; pid?: number; version?: string } => !!x)
+        .map(v => { const r = byPort.get(v.port) || {}; return { port: v.port, pid: v.pid, version: v.version, url: r.url || ('http://localhost:' + v.port), devinEmail: r.devinEmail, devinOrgId: r.devinOrgId, workspacePath: r.workspacePath, _token: r.token }; })
+        .sort((a, b) => a.port - b.port);
+    const leader = alive[0];
+    if (!leader) return prev;  // 无任何应答: 保留旧 current(常驻桥仍可据此尝试)
     const changed = prev.port !== leader.port || prev.pid !== leader.pid || prev.url !== leader.url;
     const epoch = (typeof prev.epoch === 'number' ? prev.epoch : 0) + (changed ? 1 : 0);
     const cur: any = {
-        url: leader.url, token: leader.token, port: leader.port, host: leader.hostname || os.hostname(),
-        pid: leader.pid, devinEmail: leader.devinEmail, devinOrgId: leader.devinOrgId,
-        workspacePath: leader.workspacePath, epoch, updated: new Date().toISOString(),
-        alive: live.map(l => ({ port: l.port, pid: l.pid, url: l.url, devinEmail: l.devinEmail, updated: l.updated }))
+        url: leader.url, token: leader._token || (leader.port === (ws && ws.port) ? (ws && ws.token) : '') || '',
+        port: leader.port, host: os.hostname(), pid: leader.pid, version: leader.version,
+        devinEmail: leader.devinEmail, devinOrgId: leader.devinOrgId, workspacePath: leader.workspacePath,
+        epoch, updated: new Date().toISOString(),
+        alive: alive.map(a => ({ port: a.port, pid: a.pid, version: a.version, url: a.url, devinEmail: a.devinEmail }))
     };
     try { fs.writeFileSync(DAO_CONN_CURRENT, JSON.stringify(cur, null, 2), 'utf8'); } catch { /* 守柔 */ }
     return cur;
@@ -325,7 +351,7 @@ class WorkspaceState {
             allConns.push(info);
             fs.writeFileSync(globalConnFile, JSON.stringify(allConns, null, 2), 'utf8');
             // 无缝接力: 裁剪死实例 + 刷新权威「当前接口」(epoch 单调) → 重启/切号后外部可解析活接口
-            daoRefreshCurrent();
+            daoRefreshCurrent().catch(() => { /* 守柔 */ });
         } catch {}
     }
 
@@ -1609,7 +1635,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         //   current=确定性 leader, alive=全部活实例, epoch 变化即提示重解析。常驻桥读
         //   ~/.dao/dao-conn-current.json 亦得同源真相。
         case '/api/next': {
-            const cur = daoRefreshCurrent();
+            const cur = await daoRefreshCurrent();
             return { ok: true, current: cur || null, alive: (cur && cur.alive) || [], epoch: (cur && cur.epoch) || 0, self: { port: ws.port, pid: process.pid, url: ws.publicUrl || ('http://localhost:' + ws.port) } };
         }
         case '/api/workspace': {
@@ -3074,7 +3100,7 @@ async function bridgeLivenessTick(): Promise<void> {
     _bridgeLivenessInflight = true;
     try {
         // 无缝接力兜底: 周期裁剪死实例 + 刷新权威「当前接口」(即便无人 saveConnection 也自愈)
-        try { daoRefreshCurrent(); } catch { /* 守柔 */ }
+        try { await daoRefreshCurrent(); } catch { /* 守柔 */ }
         const cfg = vscode.workspace.getConfiguration('dao');
         if (!cfg.get<boolean>('bridgeLiveness', true)) return;
         const url = bridgeEffectiveUrl();
