@@ -520,6 +520,8 @@ export async function activate(context: vscode.ExtensionContext) {
     setTimeout(() => { bridgeScheduleReinject('activate'); }, 8000);
     // 端口/URL 实时更新 · 存活探测环: 打得通保持稳定, 打不通即刷新并重注新地址
     try { startBridgeLivenessLoop(context); } catch { /* 守柔 */ }
+    try { startQuotaAutoLimitLoop(context); } catch { /* 守柔 */ }
+    try { startNetworkChangeWatch(context); } catch { /* 守柔 */ }
     context.subscriptions.push(
         vscode.commands.registerCommand('dao.startServer', () => startServer(context)),
         vscode.commands.registerCommand('dao.stopServer', stopServer),
@@ -3017,6 +3019,70 @@ function startBridgeLivenessLoop(context: vscode.ExtensionContext): void {
     context.subscriptions.push({ dispose: () => { if (_bridgeLivenessTimer) { clearInterval(_bridgeLivenessTimer); _bridgeLivenessTimer = null; } } });
 }
 
+// ═══ 单会话上限 · 额度跟随环 — 帛书·「反者道之动」 ═══
+//   启用 auto 时, 周期性据活动号最新剩余额度重算 cap = 剩余 ACU − offset, 仅变化才回写(守柔省网)。
+//   账号切换/批量注入时另由 devinApplyInjectProfile 即刻据本号算注; 此环负责活动号「额度刷新即跟随」。
+const QUOTA_AUTO_LIMIT_INTERVAL_MS = 60 * 1000;
+let _quotaAutoLimitTimer: ReturnType<typeof setInterval> | null = null;
+let _lastAutoLimitSig = '';
+async function quotaAutoLimitTick(): Promise<void> {
+    try {
+        const p = loadInjectProfile();
+        if (!p.enabled || !p.messageLimitAuto) return;
+        if (!ws.devinOrgId || !ws.devinAuth1 || ws.devinAuth1.startsWith('devin-session-token$')) return;
+        const avail = await devinFetchAvailableAcus(ws.devinOrgId, ws.devinAuth1);
+        if (avail == null) return;
+        const off = (typeof p.messageLimitOffset === 'number') ? p.messageLimitOffset : 3;
+        const cap = Math.max(Math.floor(avail - off), 1);
+        const sig = ws.devinOrgId + ':' + cap;
+        if (sig === _lastAutoLimitSig) return;  // 无变化不重写 (守柔省网)
+        const r = await devinSetMessageLimit(ws.devinOrgId, cap, ws.devinAuth1);
+        if (r.ok) { _lastAutoLimitSig = sig; try { console.log('[dao] quota-auto-limit org=' + ws.devinOrgId + ' avail=' + avail + ' \u2192 cap=' + cap); } catch { /* 守柔 */ } }
+    } catch { /* 守柔 */ }
+}
+function startQuotaAutoLimitLoop(context: vscode.ExtensionContext): void {
+    if (_quotaAutoLimitTimer) return;
+    _quotaAutoLimitTimer = setInterval(() => { quotaAutoLimitTick().catch(() => { /* 守柔 */ }); }, QUOTA_AUTO_LIMIT_INTERVAL_MS);
+    context.subscriptions.push({ dispose: () => { if (_quotaAutoLimitTimer) { clearInterval(_quotaAutoLimitTimer); _quotaAutoLimitTimer = null; } } });
+}
+
+// ═══ 网络状态变化即时触发 — 帛书·「反者道之动」 ═══
+//   不傻等 30s 轮询: 本机活动 IPv4 接口/地址一变(网络抖动·切网·IP 轮换) 即刻探活+重注隧道。
+//   纯读本地接口(无网络 I/O), 5s 轻量采样; 变化才动手, 守柔。
+const NET_WATCH_INTERVAL_MS = 5 * 1000;
+let _netSig = '';
+let _netWatchTimer: ReturnType<typeof setInterval> | null = null;
+function computeNetSig(): string {
+    try {
+        const ifs = os.networkInterfaces();
+        const ips: string[] = [];
+        for (const name of Object.keys(ifs)) {
+            for (const a of (ifs[name] || [])) {
+                if (a && !a.internal && a.family === 'IPv4') ips.push(name + '=' + a.address);
+            }
+        }
+        return ips.sort().join(',');
+    } catch { return ''; }
+}
+function startNetworkChangeWatch(context: vscode.ExtensionContext): void {
+    if (_netWatchTimer) return;
+    _netSig = computeNetSig();
+    _netWatchTimer = setInterval(() => {
+        try {
+            const sig = computeNetSig();
+            if (sig === _netSig) return;
+            const old = _netSig; _netSig = sig;
+            try { console.log('[dao] network changed (' + old + ' \u2192 ' + sig + ') \u2192 即时探活+重注隧道'); } catch { /* 守柔 */ }
+            _bridgeLivenessFail = 0;
+            // 即刻探活刷新 + 强制重注最新地址到各账号(清签名绕过「无变化不重注」)
+            bridgeLivenessTick().catch(() => { /* 守柔 */ });
+            try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ }
+            bridgeScheduleReinject('net-change');
+        } catch { /* 守柔 */ }
+    }, NET_WATCH_INTERVAL_MS);
+    context.subscriptions.push({ dispose: () => { if (_netWatchTimer) { clearInterval(_netWatchTimer); _netWatchTimer = null; } } });
+}
+
 function getDaoCloudMiddlePanelHtml(st: any, soloBoard?: string): string {
     const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, injecting, bridge, hostCaps } = st;
     // 归一·分而治之: 单板块模式 — 归一外壳为「六大板块」各开一张独立子网页(各自一个 iframe),
@@ -3174,7 +3240,7 @@ const S={
   bridge:${JSON.stringify(bridge || null)},
   hostCaps:${JSON.stringify(hostCaps || { appName: 'VS Code', isCascade: false, hasConvTracking: false })},
   inject:null,
-  injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],automations:[],messageLimit:null,lastInjectedOrg:''},
+  injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],automations:[],messageLimit:null,messageLimitAuto:false,messageLimitOffset:3,lastInjectedOrg:''},
   tab:'${_solo || 'overview'}',
   data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]},
   backups:{accounts:[]},
@@ -3781,7 +3847,7 @@ function rSD(d){
 }
 // 自动注入自循环配置面板 — 帛书·「善建者不拔·善抱者不脱」
 // 初始配置一次, 账号随 IDE 切换, 系统据此 profile 自动注入新账号 + 清理旧账号
-function ipSave(){cmd('setInjectProfile',{enabled:S.injectProfile.enabled,autoCleanup:S.injectProfile.autoCleanup,secrets:S.injectProfile.secrets,knowledge:S.injectProfile.knowledge,playbooks:S.injectProfile.playbooks,mcps:S.injectProfile.mcps,automations:S.injectProfile.automations,messageLimit:S.injectProfile.messageLimit})}
+function ipSave(){cmd('setInjectProfile',{enabled:S.injectProfile.enabled,autoCleanup:S.injectProfile.autoCleanup,secrets:S.injectProfile.secrets,knowledge:S.injectProfile.knowledge,playbooks:S.injectProfile.playbooks,mcps:S.injectProfile.mcps,automations:S.injectProfile.automations,messageLimit:S.injectProfile.messageLimit,messageLimitAuto:S.injectProfile.messageLimitAuto,messageLimitOffset:S.injectProfile.messageLimitOffset})}
 function ipToggle(field){S.injectProfile[field]=!S.injectProfile[field];ipSave();rInject()}
 function ipRemove(kind,idx){S.injectProfile[kind].splice(idx,1);ipSave();rInject()}
 function ipAddSecret(){sm('添加 Secret','<input id="m1" placeholder="名称 KEY" style="width:100%;margin:4px 0"><input id="m2" placeholder="值 value" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim(),val=document.getElementById('m2').value;if(!n)return false;S.injectProfile.secrets.push({name:n,value:val});ipSave();rInject()})}
@@ -3795,7 +3861,7 @@ function ipEditKnowledge(i){const it=(S.injectProfile.knowledge||[])[i];if(!it)r
 function ipEditPlaybook(i){const it=(S.injectProfile.playbooks||[])[i];if(!it)return;sm('✂ 修改 Playbook','<label style="font-size:11px;color:var(--muted)">标题 title</label><input id="m1" value="'+esc(it.title||'')+'" style="width:100%;margin:4px 0"><label style="font-size:11px;color:var(--muted)">正文 body</label><textarea id="m2" style="width:100%;height:200px;margin:4px 0;font-family:monospace;white-space:pre">'+esc(it.body||'')+'</textarea>',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.playbooks[i]={title:n,body:document.getElementById('m2').value};ipSave();rInject()})}
 function ipEditAutomation(i){const it=(S.injectProfile.automations||[])[i];if(!it)return;sm('✂ 修改 Automation','<input id="m1" value="'+esc(it.name||'')+'" placeholder="名称 name" style="width:100%;margin:4px 0"><textarea id="m2" placeholder="会话提示 prompt" style="width:100%;height:120px;margin:4px 0">'+esc(it.prompt||'')+'</textarea>',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.automations[i]={name:n,prompt:document.getElementById('m2').value,enabled:!!it.enabled};ipSave();rInject()})}
 function ipEditMcp(i){const it=(S.injectProfile.mcps||[])[i];if(!it)return;const isStdio=(it.transport==='STDIO');sm('✂ 修改 MCP','<input id="m1" value="'+esc(it.name||'')+'" placeholder="名称 name" style="width:100%;margin:4px 0"><select id="m2" style="width:100%;margin:4px 0"><option value="HTTP"'+(isStdio?'':' selected')+'>HTTP / SSE</option><option value="STDIO"'+(isStdio?' selected':'')+'>STDIO</option></select><input id="m3" value="'+esc(isStdio?(it.command||''):(it.url||''))+'" placeholder="URL 或 command" style="width:100%;margin:4px 0"><input id="m4" value="'+esc(isStdio?((it.args||[]).join(' ')):((it.headers&&it.headers.Authorization)||''))+'" placeholder="args / Authorization" style="width:100%;margin:4px 0"><input id="m5" value="'+esc(it.short_description||'')+'" placeholder="简介" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;const tr=document.getElementById('m2').value;const f3=document.getElementById('m3').value.trim();const f4=document.getElementById('m4').value.trim();const sd=document.getElementById('m5').value.trim();const m={name:n,transport:tr,short_description:sd};if(tr==='STDIO'){m.command=f3;m.args=f4?f4.split(' ').filter(Boolean):[];m.env_variables=[]}else{m.url=f3;if(f4)m.headers={Authorization:f4}}S.injectProfile.mcps[i]=m;ipSave();rInject()})}
-function ipSetLimit(){const cur=(S.injectProfile.messageLimit==null?'':S.injectProfile.messageLimit);sm('设定单条额度上限 (max_credits)','<input id="m1" type="number" placeholder="如 30; 留空=不管理" value="'+cur+'" style="width:100%;margin:4px 0">',function(){const raw=document.getElementById('m1').value.trim();S.injectProfile.messageLimit=(raw===''?null:Number(raw));ipSave();rInject()})}
+function ipSetLimit(){const cur=(S.injectProfile.messageLimit==null?'':S.injectProfile.messageLimit);const au=!!S.injectProfile.messageLimitAuto;const off=(S.injectProfile.messageLimitOffset==null?3:S.injectProfile.messageLimitOffset);sm('设定单条额度上限 (max_credits)','<label style="display:flex;align-items:center;gap:8px;margin:6px 0;font-size:12px"><input type="checkbox" id="ma" '+(au?'checked':'')+'> 自动跟随剩余额度 (cap = 剩余 − N · 各号注入不同数)</label><label style="font-size:11px;color:var(--muted)">N · 留出余量 (默认 3)</label><input id="mo" type="number" value="'+off+'" style="width:100%;margin:4px 0"><label style="font-size:11px;color:var(--muted)">固定值 max_credits (仅当不勾自动 · 留空=不管理)</label><input id="m1" type="number" placeholder="如 30" value="'+cur+'" style="width:100%;margin:4px 0">',function(){const auto=document.getElementById('ma').checked;const offv=document.getElementById('mo').value.trim();const raw=document.getElementById('m1').value.trim();S.injectProfile.messageLimitAuto=auto;S.injectProfile.messageLimitOffset=(offv===''?3:Number(offv));S.injectProfile.messageLimit=(raw===''?null:Number(raw));ipSave();rInject()})}
 function rInject(){
   const v=document.getElementById('v-inject');if(!v)return;
   const p=S.injectProfile||{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],automations:[],messageLimit:null};
@@ -3811,7 +3877,7 @@ function rInject(){
   h+=listSec('🔌 MCP (钉住)','mcps',p.mcps||[],it=>it.name+' · '+(it.transport||'STDIO'),'ipAddMcp()','ipEditMcp');
   h+=listSec('⚙️ Automations (钉住)','automations',p.automations||[],it=>it.name+(it.prompt?(' · '+String(it.prompt).slice(0,24)):''),'ipAddAutomation()','ipEditAutomation');
   h+='<div class="st">⚖️ 单条额度上限<button class="btn sm primary" style="float:right" onclick="ipSetLimit()">设定</button></div>';
-  h+='<div class="card"><div class="cr"><span class="l" style="font-size:12px">期望 max_credits</span><span class="v">'+((p.messageLimit==null)?'<span style="color:var(--muted)">不管理</span>':'$'+esc(String(p.messageLimit)))+'</span></div></div>';
+  h+='<div class="card"><div class="cr"><span class="l" style="font-size:12px">期望 max_credits</span><span class="v">'+(p.messageLimitAuto?('<span style="color:var(--success)">自动 · 剩余−'+((p.messageLimitOffset==null)?3:esc(String(p.messageLimitOffset)))+'</span>'):((p.messageLimit==null)?'<span style="color:var(--muted)">不管理</span>':esc(String(p.messageLimit))))+'</span></div></div>';
   h+='<div class="br" style="margin-top:10px"><button class="btn" onclick="cmd(&#39;importCurrentToInjectProfile&#39;)">⬇️ 导入当前账号现有项</button>'+(p.enabled?'<button class="btn primary" onclick="cmd(&#39;injectCurrentNow&#39;)" title="单账号手动注入: 即便此账号曾被归零清理/出库, 也强制重注并解除自动注入抑制">▶️ 立即应用到当前账号</button><button class="btn" onclick="cmd(&#39;applyInjectProfileToAll&#39;)" title="批量自动注入: 自动跳过已被 RT Flow 归零清理/出库的账号">👥 注入到所有账号</button>':'')+'</div>';
   v.innerHTML=h;
 }
@@ -4376,7 +4442,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'getInjectProfile': {
                 // 自动注入自循环配置: 返回当前 profile 给面板渲染
                 const p = loadInjectProfile();
-                reply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: p.knowledge, playbooks: p.playbooks, mcps: p.mcps, automations: p.automations, messageLimit: p.messageLimit, lastInjectedOrg: p.lastInjectedOrg } });
+                reply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: p.knowledge, playbooks: p.playbooks, mcps: p.mcps, automations: p.automations, messageLimit: p.messageLimit, messageLimitAuto: p.messageLimitAuto, messageLimitOffset: p.messageLimitOffset, lastInjectedOrg: p.lastInjectedOrg } });
                 break;
             }
             case 'setInjectProfile': {
@@ -4391,6 +4457,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     mcps: Array.isArray(msg.mcps) ? msg.mcps : cur.mcps,
                     automations: Array.isArray(msg.automations) ? msg.automations : cur.automations,
                     messageLimit: (typeof msg.messageLimit === 'number') ? msg.messageLimit : (msg.messageLimit === null ? null : cur.messageLimit),
+                    messageLimitAuto: (typeof msg.messageLimitAuto === 'boolean') ? msg.messageLimitAuto : cur.messageLimitAuto,
+                    messageLimitOffset: (typeof msg.messageLimitOffset === 'number') ? msg.messageLimitOffset : cur.messageLimitOffset,
                     lastInjectedOrg: cur.lastInjectedOrg,
                     daoSeeded: cur.daoSeeded,
                 };
@@ -7522,6 +7590,16 @@ async function devinSetMessageLimit(orgId: string, maxCredits: number, auth1: st
     return { ok: r.status === 200 || r.status === 201 || r.status === 204, status: r.status };
 }
 
+// 读本号剩余可用 ACU (billing/usage/stats.available_acus) — 供「单会话上限 = 剩余 − N」动态反注
+async function devinFetchAvailableAcus(orgId: string, auth1: string): Promise<number | null> {
+    const bareOrgId = orgId.replace(/^org-/, '');
+    try {
+        const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/usage/stats', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+        if (r.status === 200 && r.json && typeof r.json.available_acus === 'number') return r.json.available_acus;
+    } catch { /* 守柔 */ }
+    return null;
+}
+
 // 列出本组织已安装的自定义 MCP (与官网 Connections 一致)
 async function devinListMcpInstallations(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
     // 实测官网真实端点为 GET /api/mcp/servers (旧 /api/mcp/installations GET 返回 405)。
@@ -8428,6 +8506,8 @@ interface InjectProfile {
     mcps: InjectProfileItemM[];
     automations: InjectProfileItemA[];
     messageLimit: number | null;
+    messageLimitAuto?: boolean;
+    messageLimitOffset?: number;
     lastInjectedOrg: string;
     daoSeeded?: boolean;
 }
@@ -8446,11 +8526,13 @@ function loadInjectProfile(): InjectProfile {
             mcps: Array.isArray(j.mcps) ? j.mcps : [],
             automations: Array.isArray(j.automations) ? j.automations : [],
             messageLimit: (typeof j.messageLimit === 'number') ? j.messageLimit : null,
+            messageLimitAuto: !!j.messageLimitAuto,
+            messageLimitOffset: (typeof j.messageLimitOffset === 'number') ? j.messageLimitOffset : 3,
             lastInjectedOrg: j.lastInjectedOrg || '',
             daoSeeded: !!j.daoSeeded,
         };
     } catch {
-        return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], mcps: [], automations: [], messageLimit: null, lastInjectedOrg: '', daoSeeded: false };
+        return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], mcps: [], automations: [], messageLimit: null, messageLimitAuto: false, messageLimitOffset: 3, lastInjectedOrg: '', daoSeeded: false };
     }
 }
 function saveInjectProfile(p: InjectProfile): void {
@@ -8831,8 +8913,18 @@ async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectPr
             try { await devinAddCustomMcp(orgId, Object.assign({}, m, { slug }), auth1); } catch { /* 守柔 */ }
         }
     }
-    // 期望的单条额度上限
-    if (typeof p.messageLimit === 'number') { try { await devinSetMessageLimit(orgId, p.messageLimit, auth1); } catch { /* 守柔 */ } }
+    // 期望的单条额度上限 — auto: 跟随本号剩余额度动态(cap = 剩余 ACU − offset), 实时反向注入;
+    //   否则用固定值。auto 让每个账号据各自剩余额度注入不同数字(剩余70→注67·剩余50→注47)。
+    if (p.messageLimitAuto) {
+        try {
+            const avail = await devinFetchAvailableAcus(orgId, auth1);
+            if (avail != null) {
+                const off = (typeof p.messageLimitOffset === 'number') ? p.messageLimitOffset : 3;
+                const cap = Math.max(Math.floor(avail - off), 1);
+                await devinSetMessageLimit(orgId, cap, auth1);
+            }
+        } catch { /* 守柔 */ }
+    } else if (typeof p.messageLimit === 'number') { try { await devinSetMessageLimit(orgId, p.messageLimit, auth1); } catch { /* 守柔 */ } }
 }
 async function cleanupInjectProfileFromOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
     for (const s of p.secrets) { if (s && s.name && !isManualLocked(orgId, 'secrets', s.name)) { try { await devinDeleteSecret(orgId, s.name, auth1); } catch { /* 守柔 */ } } }
@@ -8873,7 +8965,7 @@ async function runInjectProfileSelfLoop(opts?: { force?: boolean }): Promise<voi
     const p = loadInjectProfile();
     if (!p.enabled) return;
     if (!ws.devinOrgId || !ws.devinAuth1 || ws.devinAuth1.startsWith('devin-session-token$')) return;
-    const hasItems = p.secrets.length || p.knowledge.length || p.playbooks.length || p.mcps.length || (p.automations && p.automations.length) || typeof p.messageLimit === 'number';
+    const hasItems = p.secrets.length || p.knowledge.length || p.playbooks.length || p.mcps.length || (p.automations && p.automations.length) || typeof p.messageLimit === 'number' || p.messageLimitAuto;
     if (!hasItems) return;
     // 归零清理协同: 当前账号若已被 RT Flow 清理/出库, 自动自循环守柔跳过, 不重新填充;
     //   唯用户主页单账号手动注入(force) 显式绕过并记 reactivatedAt 解除抑制。
