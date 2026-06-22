@@ -538,6 +538,7 @@
     t.ld=ld; frames.appendChild(ld);
     fr.addEventListener("load", function(){
       try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){}
+      setTimeout(function(){ broadcastLiveAccts(true); }, 600);   // 板块挂载完即送当前 liveAccts (不等保活轮)
     });
     tabs.push(t); renderStrip(); selectTab(t.id);
     buildSrcdoc(p.file).then(function(html){
@@ -594,7 +595,7 @@
       ' …<br><span style="color:#6e7681">经中继边缘反代 · 首次数秒</span></div>';
     t.ld=ld; frames.appendChild(ld);
     fr.addEventListener("load", function(){ try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){} });
-    tabs.push(t); renderStrip(); selectTab(t.id); broadcastLiveAccts();
+    tabs.push(t); renderStrip(); selectTab(t.id); broadcastLiveAccts(true);
     if(!t.incognito) histAdd(url, t.title, acct);
     function go(src){ t.ready=true; if(t.ld){ t.ld.remove(); t.ld=null; } t.fr.src=src; }
     // 失败不外跳: 旧逻辑 openExternalNewTab(window.open 真站) 会另开浏览器标签、看着像「跳出页面」。
@@ -660,20 +661,25 @@
     if(tabs.length===0){ openPage("switch"); return; }
     if(active>=tabs.length) active=tabs.length-1;
     selectTab(tabs[Math.max(0,active)].id);
-    broadcastLiveAccts();
+    broadcastLiveAccts(true);
   }
 
   // ── 道法自然·所见即所刷: 把「外壳里正开着 Devin 对话标签」的账号集合广播给各板块子页 ──
   //   切号板据此把这些号纳入高频额度轮 → 用户正盯着的对话美金近实时跳动 (不必等追踪轮归类 running)。
   //   每次标签增减即广播一次, 另加 3s 轻量周期广播 → 晚挂载的板块也能拿到、并刷新对端 TTL。
-  function broadcastLiveAccts(){
+  var _liveAcctsKey=null, _bcTick=0;
+  function broadcastLiveAccts(force){
     var seen={}, accts=[];
     for(var i=0;i<tabs.length;i++){ var t=tabs[i];
       if(t.kind==="web" && t.acct){ var k=String(t.acct).toLowerCase(); if(!seen[k]){ seen[k]=1; accts.push(t.acct); } } }
+    var key=accts.map(function(a){ return String(a).toLowerCase(); }).sort().join("|");
+    if(!force && key===_liveAcctsKey) return;   // 集合未变且非强制(保活/晚挂载) → 不向各板块重发 postMessage
+    _liveAcctsKey=key;
     for(var j=0;j<tabs.length;j++){ var b=tabs[j];
       if(b.pageKey && b.fr){ try{ b.fr.contentWindow.postMessage({__rtflow:"liveAccts", accts:accts}, "*"); }catch(e){} } }
   }
-  setInterval(broadcastLiveAccts, 3000);
+  // 集合变化即时发; 否则每 ~9s 保活一次(覆盖晚挂载板块 + 刷新对端 TTL); 页面后台时不发。
+  setInterval(function(){ if(document.hidden) return; _bcTick=(_bcTick+1)%3; broadcastLiveAccts(_bcTick===0); }, 3000);
 
   // ── 📱 手机标签实时镜像 (browseListTabs 轮询 → 与 APK 当前开着的网页 1:1) ──────
   //   数量/标题/账号(邮箱·序号·组织)/active/橙色 viewers 全跟手机走; 互不干扰(只读镜像)。
@@ -689,9 +695,9 @@
   function internalKey(url){ try{ var m=String(url||"").match(/engine\/([a-z0-9_]+\.html)/i); return m?(FILE2KEY[m[1].toLowerCase()]||null):null; }catch(e){ return null; } }
   function acctTag(a){ if(!a||typeof a!=="object") return ""; var n=(a.no!=null&&a.no!=="")?("#"+a.no):""; var o=a.orgName||"";
     var s=[n,o].filter(Boolean).join(" "); return s||(a.email||""); }
+  var _mirrorSig="";
   function renderMirror(){
-    if(!APK_TABS.length){ mirrorEl.className="empty"; mirrorEl.innerHTML=""; return; }
-    mirrorEl.className=""; mirrorEl.innerHTML="";
+    if(!APK_TABS.length){ if(_mirrorSig!=="\u2205"){ _mirrorSig="\u2205"; mirrorEl.className="empty"; mirrorEl.innerHTML=""; } return; }
     // 在场去重统计: 所有标签 viewers 并集 (含 __phone__ 与各 web_* 客户端) → 当前正在操作的用户数。
     var seen={}, activeVid=0;
     APK_TABS.forEach(function(tb){ if(tb.active) activeVid=tb.id;
@@ -699,6 +705,12 @@
     if(!FRONT_VID && activeVid) FRONT_VID=activeVid;   // 默认前置 = 手机当前页 (本浏览器一进来即登记在场)
     if(FRONT_VID) seen[CLIENT_ID]=1;                   // 本浏览器自身 (claim 将于下一轮回传, 此处先计入)
     var people=Object.keys(seen).length;
+    // 签名防抖 (复刻 APK presenceSig): 数据未变则跳过整条 DOM 重建 → 消除每 3.5s 轮询的无谓回流/GC/闭包分配。
+    var sig=people+"|"+FRONT_VID+"||"+APK_TABS.map(function(tb){
+      return tb.id+":"+(tb.active?1:0)+":"+((tb.viewers&&tb.viewers.length)||0)+":"+(tb.title||"")+":"+acctTag(tb.account)+":"+(tb.internal?internalKey(tb.url):(tb.url||"")); }).join("~");
+    if(sig===_mirrorSig) return;
+    _mirrorSig=sig;
+    mirrorEl.className=""; mirrorEl.innerHTML="";
     var lab=document.createElement("span"); lab.className="mlab"; lab.textContent="📱 手机 "+APK_TABS.length+" 标签";
     mirrorEl.appendChild(lab);
     var pe=document.createElement("span"); pe.className="mpeople"; pe.textContent="👥 "+people+" 人在线";
@@ -721,8 +733,12 @@
     });
   }
   // 把「本浏览器当前最前端页」claim 给手机 → 手机标签条橙色 + ☁N, 其他浏览器镜像同步可见 (轻量·非阻塞·只读不干扰)。
+  var _lastClaimVid=0, _lastClaimTs=0;
   function claimFront(){
     if(!FRONT_VID || !SESSION || !TOKEN) return;
+    var now=Date.now();
+    if(FRONT_VID===_lastClaimVid && (now-_lastClaimTs)<9000) return;   // 同一前置页且 9s 内已 claim → 跳过(对端 TTL 15s, 安全) · 省每轮一次 RPC
+    _lastClaimVid=FRONT_VID; _lastClaimTs=now;
     relay("/api/rpc", { cmd:"browseClaimView", id:FRONT_VID, clientId:CLIENT_ID }, 8000).catch(function(){});
   }
   function pollApkTabs(){
@@ -733,7 +749,7 @@
     }).catch(function(){}).finally(function(){ _mirrorBusy=false; });
   }
   function startMirror(){ if(_mirrorPollT) return; pollApkTabs(); _mirrorPollT=setInterval(pollApkTabs, 3500); }
-  document.addEventListener("visibilitychange", function(){ if(!document.hidden) pollApkTabs(); });
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden){ pollApkTabs(); broadcastLiveAccts(true); } });
   startMirror();
 
   // ── 整页缩放 (复刻原生 zoom 滑块 50%–170%, 作用于当前及后续板块 iframe) ──
