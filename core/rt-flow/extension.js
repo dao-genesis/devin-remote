@@ -1988,6 +1988,29 @@ function _wireMultiPanel(panel) {
         while (_multiQueue.length) { try { panel.webview.postMessage(_multiQueue.shift()); } catch (e) {} }
         try { panel.webview.postMessage({ type: "favs", list: _getMultiFavs() }); } catch (e) {}
         try { panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {}
+        try { panel.webview.postMessage({ type: "userscripts", list: _getUserScripts() }); } catch (e) {}
+        return;
+      }
+      // 归一 · 用户脚本 (与公网 /shell 一致): IDE webview 路径补齐 us* 处理, 否则同一套前端的脚本面板在 IDE 内形同虚设。
+      if (m.type === "usList") { try { panel.webview.postMessage({ type: "userscripts", list: _getUserScripts() }); } catch (e) {} return; }
+      if (m.type === "usSave") {
+        const list = _getUserScripts();
+        const e = m.entry || {};
+        if (e.id) { const i = list.findIndex((x) => x.id === e.id); if (i >= 0) list[i] = Object.assign({}, list[i], e); else list.push(Object.assign({ id: _usId(), enabled: true }, e)); }
+        else list.push(Object.assign({ id: _usId(), enabled: true }, e));
+        _setUserScripts(list);
+        try { panel.webview.postMessage({ type: "userscripts", list: _getUserScripts() }); } catch (e2) {}
+        _toast("✓ 用户脚本已保存"); return;
+      }
+      if (m.type === "usToggle") {
+        const list = _getUserScripts(); const i = list.findIndex((x) => x.id === m.id);
+        if (i >= 0) { list[i].enabled = list[i].enabled === false; _setUserScripts(list); }
+        try { panel.webview.postMessage({ type: "userscripts", list: _getUserScripts() }); } catch (e) {} return;
+      }
+      if (m.type === "usDelete") { _setUserScripts(_getUserScripts().filter((x) => x.id !== m.id)); try { panel.webview.postMessage({ type: "userscripts", list: _getUserScripts() }); } catch (e) {} return; }
+      if (m.type === "usImport") {
+        try { const r = _usImportExtension(m.path); try { panel.webview.postMessage({ type: "userscripts", list: r.list }); } catch (e2) {} _toast("✓ 已导入扩展 " + r.name + " (" + r.count + " 脚本)"); }
+        catch (e) { _toast("导入失败: " + ((e && e.message) || e)); try { panel.webview.postMessage({ type: "usError", error: (e && e.message) || String(e) }); } catch (e2) {} }
         return;
       }
       if (m.type === "closed") { _multiTabs.delete(m.id); _saveMultiTabs(); return; }
