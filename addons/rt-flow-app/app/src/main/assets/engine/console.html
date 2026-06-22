@@ -689,7 +689,12 @@
       return '<div class="dlrow"><div class="nm">'+String(d.name||"download")+'</div><div style="color:#7d8590">'+(d.ts?new Date(d.ts).toLocaleTimeString():"")+'</div></div>';
     }).join(""); }
   document.getElementById("dlBtn").onclick=function(e){ e.stopPropagation(); renderDl(); dlPanel.classList.toggle("show"); menuPop.classList.remove("show"); };
-  window.addEventListener("message", function(ev){ try{ var d=ev.data; if(d&&d.__rtflow==="download"&&d.name){ window.__rnDownloads.push({name:d.name,ts:Date.now()}); if(dlPanel.classList.contains("show")) renderDl(); } }catch(e){} });
+  window.addEventListener("message", function(ev){ try{ var d=ev.data; if(!d) return;
+    if(d.__rtflow==="download"&&d.name){ window.__rnDownloads.push({name:d.name,ts:Date.now()}); if(dlPanel.classList.contains("show")) renderDl(); }
+    // 账号型「打开」(板块里点某号 ⚡/打开对话 → __rn._openDevin 回传): 在外壳里网页内原生开该号 Devin 标签
+    // (经 /uv-init 注该号 auth → 登录态完整), 这是「单网页内打开官网并真登录」的本源落点。
+    else if(d.__rtflow==="openDevin"&&d.url){ openInPage(d.url, d.acct||"", d.title||""); }
+  }catch(e){} });
 
   // ── 🗂 全服通 (= 全服通板块 daopan) ──
   document.getElementById("daoBtn").onclick=function(){ dlPanel.classList.remove("show"); openPage("daopan"); };
@@ -699,7 +704,15 @@
     if(/^rtflow:\/\//i.test(v)){ openPage(v.replace(/^rtflow:\/\//i,"").trim()); return; } openWeb(v); }
   document.getElementById("go").onclick=goAddr;
   addr.addEventListener("keydown",function(e){ if(e.key==="Enter") goAddr(); });
-  document.getElementById("reload").onclick=function(){ var t=tabs[active]; if(!t) return;
+  // 刷新按钮: 除重载当前页外, 同时通知所有已开板块子页立刻刷新账号各项数据(美金额度 + 对话追踪 + 重渲),
+  //   不只刷当前停留页 → 「刷新页面 = 顺带刷新账号的额度及相关各项数据」。
+  function rtRefreshAccounts(){
+    var hit=0;
+    for(var i=0;i<tabs.length;i++){ var t=tabs[i];
+      if(t && t.pageKey && t.fr){ try{ (t.fr.contentWindow||{}).postMessage&&t.fr.contentWindow.postMessage({__rtflow:"rtRefresh"},"*"); hit++; }catch(e){} } }
+    if(hit) toast("正在刷新账号额度与数据…");
+  }
+  document.getElementById("reload").onclick=function(){ rtRefreshAccounts(); var t=tabs[active]; if(!t) return;
     if(t.kind==="web"){ var s=t.fr.src; t.fr.src="about:blank"; setTimeout(function(){ t.fr.src=s; },60); return; }
     if(t.pageKey){ var k=t.pageKey; closeTab(t.id); openPage(k); } };
 
