@@ -3262,7 +3262,7 @@ const S={
   bridge:${JSON.stringify(bridge || null)},
   hostCaps:${JSON.stringify(hostCaps || { appName: 'VS Code', isCascade: false, hasConvTracking: false })},
   inject:null,
-  injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],automations:[],messageLimit:null,messageLimitAuto:false,messageLimitOffset:3,lastInjectedOrg:''},
+  injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],automations:[],messageLimit:null,messageLimitAuto:true,messageLimitOffset:3,lastInjectedOrg:''},
   tab:'${_solo || 'overview'}',
   data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]},
   backups:{accounts:[]},
@@ -8598,13 +8598,14 @@ function loadInjectProfile(): InjectProfile {
             mcps: Array.isArray(j.mcps) ? j.mcps : [],
             automations: Array.isArray(j.automations) ? j.automations : [],
             messageLimit: (typeof j.messageLimit === 'number') ? j.messageLimit : null,
-            messageLimitAuto: !!j.messageLimitAuto,
+            // 额度跟随环默认开 — 帛书·「反者道之动」: 字段缺省且未设固定值 → 自动跟随剩余额度(不覆盖用户的显式选择/固定上限)
+            messageLimitAuto: (typeof j.messageLimitAuto === 'boolean') ? j.messageLimitAuto : (typeof j.messageLimit !== 'number'),
             messageLimitOffset: (typeof j.messageLimitOffset === 'number') ? j.messageLimitOffset : 3,
             lastInjectedOrg: j.lastInjectedOrg || '',
             daoSeeded: !!j.daoSeeded,
         };
     } catch {
-        return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], mcps: [], automations: [], messageLimit: null, messageLimitAuto: false, messageLimitOffset: 3, lastInjectedOrg: '', daoSeeded: false };
+        return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], mcps: [], automations: [], messageLimit: null, messageLimitAuto: true, messageLimitOffset: 3, lastInjectedOrg: '', daoSeeded: false };
     }
 }
 function saveInjectProfile(p: InjectProfile): void {
