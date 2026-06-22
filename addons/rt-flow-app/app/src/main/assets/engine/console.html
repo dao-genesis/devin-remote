@@ -67,11 +67,15 @@
   #mirror .mlab{flex:0 0 auto;font-size:11px;color:#7d8590;margin-right:3px}
   .mchip{display:flex;align-items:center;gap:6px;flex:0 0 auto;max-width:210px;height:28px;padding:0 9px;
          background:#161b22;border:1px solid var(--input-b);border-radius:8px;cursor:pointer;color:var(--muted);font-size:12px}
-  .mchip.on{background:#13332b;border-color:#1f5f51;color:var(--green)}
+  .mchip.on{border-color:#1f5f51;color:var(--green)}
+  /* 道法自然·跨设备在场: 任意用户(手机/网页)当前最前端停留此页 → 橙色半透明标记 (与 APK 标签条 0xFF3A2C1B 同款·双向一致) */
+  .mchip.live{background:rgba(255,159,28,.14);border-color:rgba(255,159,28,.55);color:#ffcf8f}
+  .mchip.me{background:rgba(255,159,28,.26);border-color:rgba(255,159,28,.9)}
   .mchip .dot{width:7px;height:7px;border-radius:50%;background:#30363d;flex:0 0 auto}
   .mchip.live .dot{background:#ff9f1c;box-shadow:0 0 5px #ff9f1c}
   .mchip .mt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
   .mchip .ma{color:#6e7681;font-size:10px;white-space:nowrap;flex:0 0 auto}
+  #mirror .mpeople{flex:0 0 auto;font-size:11px;color:#ff9f1c;font-weight:600;margin-right:5px}
   #frames{position:relative;flex:1 1 auto;background:var(--bg)}
   #frames iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
   #frames iframe.hidden{display:none}
@@ -280,6 +284,19 @@
       else _toast(content); } catch (e) { _toast(content); }
   }
   function _open(u) { try { window.open(u || "https://app.devin.ai/", "_blank"); } catch (e) {} }
+  // 归一网页本源: 账号型「打开」(多实例切号/重开/打开对话) 应在外壳里新开一张 Devin 标签
+  // (经根挂载代理 + 该账号 auth1 注入 → 登录态完整), 而非 window.open 裸跳真站(未登录/离开归一页)。
+  // 外壳监听 {__rtflow:'openDevin', url, acct, title}; 仅当作为外壳子页(parent!==self)时走此路, 否则回退 window.open。
+  function _acctOf(accJson) { try { var o = typeof accJson === "string" ? JSON.parse(accJson) : accJson; return (o && (o.id || o.email)) || ""; } catch (e) { return ""; } }
+  function _titleOf(accJson) { try { var o = typeof accJson === "string" ? JSON.parse(accJson) : accJson; return (o && (o.email || o.id)) || ""; } catch (e) { return ""; } }
+  function _inShell() { try { return !!(window.parent && window.parent !== window); } catch (e) { return false; } }
+  function _openDevin(url, accJson) {
+    var u = url || "https://app.devin.ai/";
+    if (_inShell()) {
+      try { window.parent.postMessage({ __rtflow: "openDevin", url: u, acct: _acctOf(accJson), title: _titleOf(accJson) }, "*"); return; } catch (e) {}
+    }
+    _open(u);
+  }
 
   var Native = {
     // 网络 (异步回灌 __httpCb)
@@ -290,11 +307,13 @@
     saveTextFile: function (name, content) { return _download(name, content, false); },
     saveBase64File: function (name, b64) { return _download(name, b64, true); },
     openText: _openText,
-    openTab: _open, openUrlTab: _open,
-    openAccountTab: function () { _open("https://app.devin.ai/"); },
-    openEntryNewTab: function () { _open("https://app.devin.ai/"); },
-    openAccountSession: function (accJson, sid) { _open("https://app.devin.ai/sessions/" + (sid || "")); },
-    reopenAccount: function () { _open("https://app.devin.ai/"); },
+    // openTab(url[, accountJson]): 带账号 (panel 开标签 / engine RPC) → 外壳内开该号 Devin 标签; 无账号 (投屏镜像等) → 普通新标签
+    openTab: function (url, accJson) { if (accJson) _openDevin(url || "https://app.devin.ai/", accJson); else _open(url); },
+    openUrlTab: _open,
+    openAccountTab: function (accJson) { _openDevin("https://app.devin.ai/", accJson); },
+    openEntryNewTab: function (accJson, url) { _openDevin(url || "https://app.devin.ai/", accJson || ""); },
+    openAccountSession: function (accJson, sid) { _openDevin("https://app.devin.ai/sessions/" + (sid || ""), accJson); },
+    reopenAccount: function (accJson) { _openDevin("https://app.devin.ai/", accJson); },
     notify: _toast, toast: _toast,
     vibrate: function (ms) { try { navigator.vibrate && navigator.vibrate(ms || 30); } catch (e) {} },
     log: function (s) { try { console.log("[app]", s); } catch (e) {} },
@@ -583,6 +602,10 @@
   //   点 内部板块标签 → 网页内原生直渲; 点 Devin 对话标签 → 经手机根挂载反代在本页内原生打开(多账号互不串号)。
   var mirrorEl=document.getElementById("mirror");
   var APK_TABS=[], _mirrorPollT=0, _mirrorBusy=false;
+  // 道法自然·联控在场: 本浏览器页一个稳定 clientId; FRONT_VID = 本页当前最前端停留页对应的 APK 标签 vid。
+  // 每轮把 FRONT_VID claim 给手机 (browseClaimView) → 手机标签条上橙色 + ☁N, 其他浏览器镜像同步可见 → 多用户互见、各得其所。
+  var CLIENT_ID="web_"+(Math.random().toString(36).slice(2,8))+(Date.now().toString(36).slice(-4));
+  var FRONT_VID=0;
   var FILE2KEY={ "switch.html":"switch","cloud.html":"cloud","tunnel.html":"tunnel","vpn.html":"vpn",
     "userscripts.html":"scripts","shizuku.html":"shizuku","daopan.html":"daopan","panel.html":"panel" };
   function internalKey(url){ try{ var m=String(url||"").match(/engine\/([a-z0-9_]+\.html)/i); return m?(FILE2KEY[m[1].toLowerCase()]||null):null; }catch(e){ return null; } }
@@ -591,27 +614,44 @@
   function renderMirror(){
     if(!APK_TABS.length){ mirrorEl.className="empty"; mirrorEl.innerHTML=""; return; }
     mirrorEl.className=""; mirrorEl.innerHTML="";
+    // 在场去重统计: 所有标签 viewers 并集 (含 __phone__ 与各 web_* 客户端) → 当前正在操作的用户数。
+    var seen={}, activeVid=0;
+    APK_TABS.forEach(function(tb){ if(tb.active) activeVid=tb.id;
+      if(tb.viewers&&tb.viewers.length) tb.viewers.forEach(function(v){ if(v) seen[v]=1; }); });
+    if(!FRONT_VID && activeVid) FRONT_VID=activeVid;   // 默认前置 = 手机当前页 (本浏览器一进来即登记在场)
+    if(FRONT_VID) seen[CLIENT_ID]=1;                   // 本浏览器自身 (claim 将于下一轮回传, 此处先计入)
+    var people=Object.keys(seen).length;
     var lab=document.createElement("span"); lab.className="mlab"; lab.textContent="📱 手机 "+APK_TABS.length+" 标签";
     mirrorEl.appendChild(lab);
+    var pe=document.createElement("span"); pe.className="mpeople"; pe.textContent="👥 "+people+" 人在线";
+    pe.title="正在操作(手机/网页)的用户数 — 一机多浏览器并存·道并行而不相悖"; mirrorEl.appendChild(pe);
     APK_TABS.forEach(function(tb){
       var key=tb.internal?internalKey(tb.url):null;
       var live=(tb.viewers&&tb.viewers.length)||tb.active;
+      var mine=(tb.id===FRONT_VID);
       var c=document.createElement("div");
-      c.className="mchip"+(tb.active?" on":"")+(live?" live":"");
+      c.className="mchip"+(tb.active?" on":"")+(live?" live":"")+(mine?" me":"");
       var dot=document.createElement("span"); dot.className="dot"; c.appendChild(dot);
       var t=document.createElement("span"); t.className="mt";
       t.textContent=tb.title||(key?("板块 "+key):host(tb.url)); c.appendChild(t);
+      var vc=(tb.viewers&&tb.viewers.length)||0;
+      if(vc>1){ var vb=document.createElement("span"); vb.className="ma"; vb.textContent="👥"+vc; c.appendChild(vb); }
       var at=acctTag(tb.account); if(at){ var a=document.createElement("span"); a.className="ma"; a.textContent=at; c.appendChild(a); }
-      c.title=(tb.title||"")+(at?(" · "+at):"")+"\n"+(tb.url||"");
-      c.onclick=function(){ if(key){ openPage(key); } else { openInPage(tb.url, (tb.account&&(tb.account.email||tb.account.id))||"", tb.title); } };
+      c.title=(tb.title||"")+(at?(" · "+at):"")+(vc?("\n在场 "+vc):"")+"\n"+(tb.url||"");
+      c.onclick=function(){ FRONT_VID=tb.id; claimFront(); if(key){ openPage(key); } else { openInPage(tb.url, (tb.account&&(tb.account.email||tb.account.id))||"", tb.title); } };
       mirrorEl.appendChild(c);
     });
+  }
+  // 把「本浏览器当前最前端页」claim 给手机 → 手机标签条橙色 + ☁N, 其他浏览器镜像同步可见 (轻量·非阻塞·只读不干扰)。
+  function claimFront(){
+    if(!FRONT_VID || !SESSION || !TOKEN) return;
+    relay("/api/rpc", { cmd:"browseClaimView", id:FRONT_VID, clientId:CLIENT_ID }, 8000).catch(function(){});
   }
   function pollApkTabs(){
     if(_mirrorBusy || document.hidden || !SESSION || !TOKEN) return;
     _mirrorBusy=true;
     relay("/api/rpc", { cmd:"browseListTabs" }, 12000).then(function(res){
-      if(res && res.status===200 && res.body && res.body.ok && res.body.tabs){ APK_TABS=res.body.tabs; renderMirror(); }
+      if(res && res.status===200 && res.body && res.body.ok && res.body.tabs){ APK_TABS=res.body.tabs; renderMirror(); claimFront(); }
     }).catch(function(){}).finally(function(){ _mirrorBusy=false; });
   }
   function startMirror(){ if(_mirrorPollT) return; pollApkTabs(); _mirrorPollT=setInterval(pollApkTabs, 3500); }
