@@ -101,6 +101,9 @@ public class RelayService extends Service {
                     public String[] embedProxy(String method, String url, String acct, String body, String reqContentType, String reqHost) { return RelayService.this.embedProxy(method, url, acct, body, reqContentType, reqHost); }
                     public int proxyPort(String target, String acct) { return RelayService.this.proxyPort(target, acct); }
                     public String proxyPublicUrl(String target, String acct) { return RelayService.this.proxyPublicUrl(target, acct); }
+                    // 同源前缀边缘反代 (与 dao-relay Worker /i-init·/i/·/e/ 完全一致 → APK 与单网页同款在页渲染)
+                    public String iInitRedirect(String token, String acc, String u) { return RelayService.this.iInitRedirect(token, acc, u); }
+                    public String[] iProxy(String method, String prefix, String restPath, String acc, String genericOrigin, String body, String reqContentType, String reqHost) { return RelayService.this.iProxy(method, prefix, restPath, acc, genericOrigin, body, reqContentType, reqHost); }
                 });
                 localPort = localServer.start();
                 android.util.Log.i("RTFlowTunnel", "local server on 0.0.0.0:" + localPort);
@@ -179,11 +182,14 @@ public class RelayService extends Service {
     String[] staticAsset(String path) {
         if (path == null) return null;
         String name;
-        // 入口 = 网页版浏览器外壳 (复刻 APK 顶栏/标签条/板块切换/多实例, iframe 内嵌真实页面)。
-        // 单页直链仍可达 (如 /switch.html), 供外壳内嵌与直接打开。
+        // 入口 = 单一真源网页外壳 console.html (= dao-relay Worker 的 /console 同一文件):
+        //   含标签条 + 板块 + 实时镜像 + 橙色在场 + N人在线 + openInPage(/i-init→/i/<号>/ 同源前缀反代)。
+        //   APK 本机 LocalServer(经 cloudflared/局域网)与 Worker /console 服务同一文件 → APK 与单网页逐字节完全一致。
+        //   单页直链仍可达 (如 /switch.html), 供外壳内嵌与直接打开。
         if (path.equals("/") || path.equals("/app") || path.equals("/app/")
                 || path.equals("/index.html") || path.equals("/console")
-                || path.equals("/shell") || path.equals("/home")) name = "app.html";
+                || path.equals("/console.html")
+                || path.equals("/shell") || path.equals("/home")) name = "console.html";
         else if (path.equals("/mirror") || path.equals("/mirror/")) name = "mirror.html";   // 投屏镜像入口
         else if (path.startsWith("/") && path.indexOf('/', 1) < 0
                 && (path.endsWith(".html") || path.endsWith(".js"))) name = path.substring(1);
@@ -457,6 +463,184 @@ public class RelayService extends Service {
             + "if(ORG&&UID&&ON){var K='post-auth-v3-null-'+UID+'-org_name-'+ON;if(!localStorage.getItem(K))localStorage.setItem(K,JSON.stringify({externalOrgId:null,userId:UID,internalOrgId:ORG,orgName:ON,result:{resolved_external_org_id:null,org_id:ORG,org_name:ON,is_valid_resource:true}}));}"
             + "document.cookie='webapp_logged_in=true; path=/; max-age=31536000; SameSite=Lax';"
             + "}catch(e){}})();";
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 同源前缀边缘反代 (dao-relay Worker pxProxy 的 APK 端口实现) —— APK↔单网页完全一致:
+    //   console.html 的 openInPage 一律走 /i-init → /i/<acc>/<path>; 无论该 console 由 Worker 还是
+    //   由本机 LocalServer(经 cloudflared/局域网)服务, 渲染逻辑逐字节一致 → 「把整个浏览器塞进单网页」。
+    //   · /i/<acc>/..  Devin 多源(app/ws/reg/cdn/ss) 同源前缀代理 + 该号 auth1 注入 + webapp_host 改写;
+    //   · /e/<b64>/..  任意第三方站同源前缀代理(无账号注入)。
+    //   认证以本机金库 findAcct(acc) 直查(APK 自带金库, 故 /i-init 不必下发 cookie)。
+    // ═══════════════════════════════════════════════════════════════════════
+    private static final String PX_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+    /** /i-init: 校验 token + 该号有登录态 → 回 {redirect:/i/<encAcc>/<u>}; null=不可用。 */
+    String iInitRedirect(String token, String acc, String u) {
+        try {
+            if (token == null || !token.equals(relayToken())) return null;
+            org.json.JSONObject a = findAcct(acc);
+            if (a == null || a.optString("auth1", "").isEmpty()) return null;
+            if (u == null || u.isEmpty()) u = "/";
+            if (u.charAt(0) != '/') u = "/" + u;
+            return "/i/" + enc(acc) + u;
+        } catch (Exception e) { return null; }
+    }
+
+    /** 同源前缀边缘反代抓取+改写 (pxProxy 的 Java 端口)。genericOrigin==null → Devin(注认证); 非 null → 第三方站。
+     *  返回 {contentType, payload, encoding("text"|"b64"), status}; null=失败。 */
+    String[] iProxy(String method, String prefix, String restPath, String acct, String genericOrigin,
+                    String body, String reqCtype, String reqHost) {
+        try {
+            boolean isDevin = (genericOrigin == null);
+            String base, upath;
+            if (isDevin) {
+                String rp = restPath;
+                if (rp.startsWith("/__ws/")) { base = "https://windsurf.com"; upath = rp.substring(5); }
+                else if (rp.startsWith("/__reg/")) { base = "https://register.windsurf.com"; upath = rp.substring(6); }
+                else if (rp.startsWith("/__cdn/")) { base = "https://server.codeium.com"; upath = rp.substring(6); }
+                else if (rp.startsWith("/__ss/")) { base = "https://server.self-serve.windsurf.com"; upath = rp.substring(5); }
+                else { base = "https://app.devin.ai"; upath = rp; }
+            } else { base = genericOrigin; upath = restPath; }
+            if (upath.isEmpty() || upath.charAt(0) != '/') upath = "/" + upath;
+            String url = base + upath;
+            java.net.URL u = new java.net.URL(url);
+            String pathOnly = u.getPath() == null ? "" : u.getPath();
+            String ctGuess = guessType2(pathOnly, "*/*");
+            boolean isText = ctGuess.startsWith("text/") || ctGuess.contains("json") || ctGuess.contains("javascript")
+                    || ctGuess.equals("image/svg+xml") || ctGuess.contains("manifest");
+
+            org.json.JSONObject acc = isDevin ? findAcct(acct) : null;
+            String auth1 = acc == null ? "" : acc.optString("auth1", "");
+            String org = acc == null ? "" : acc.optString("orgId", "");
+            org.json.JSONObject hdr = new org.json.JSONObject();
+            hdr.put("User-Agent", PX_UA);
+            hdr.put("Accept", "*/*");
+            hdr.put("Origin", base);
+            hdr.put("Referer", base + "/");
+            if (reqCtype != null && !reqCtype.isEmpty() && !"GET".equalsIgnoreCase(method)) hdr.put("Content-Type", reqCtype);
+            if (isDevin && !auth1.isEmpty()) { hdr.put("Authorization", "Bearer " + auth1); if (!org.isEmpty()) hdr.put("x-cog-org-id", org); }
+
+            final java.util.concurrent.SynchronousQueue<String> q = new java.util.concurrent.SynchronousQueue<>();
+            HttpBridge.Cb cb = (id, jsn) -> { try { q.offer(jsn == null ? "{}" : jsn, 6, java.util.concurrent.TimeUnit.SECONDS); } catch (Exception ignored) {} };
+            String rid = "IX" + System.nanoTime();
+            if (isText) HttpBridge.exec(rid, method, url, hdr.toString(), body, cb);
+            else        HttpBridge.execB64(rid, method, url, hdr.toString(), body, cb);
+            String res = q.poll(50, java.util.concurrent.TimeUnit.SECONDS);
+            if (res == null) return null;
+            org.json.JSONObject o = new org.json.JSONObject(res);
+            int status = o.optInt("status", 0);
+            if (status < 200) return null;
+            String statusStr = String.valueOf(status);
+            String realCt = o.optString("ctype", "");
+
+            if (isText) {
+                String text = o.optString("text", "");
+                String ct = !realCt.isEmpty() ? realCt : ctGuess;
+                String low = ct.toLowerCase();
+                boolean isHtml = low.contains("text/html");
+                boolean isJs = low.contains("javascript");
+                boolean isJson = low.contains("json");
+                boolean isCss = low.contains("text/css");
+                if (isHtml) {
+                    if (isDevin) {
+                        text = text.replace("https://app.devin.ai", prefix)
+                                .replace("https://windsurf.com/", prefix + "/__ws/")
+                                .replace("https://register.windsurf.com/", prefix + "/__reg/")
+                                .replace("https://server.codeium.com/", prefix + "/__cdn/")
+                                .replace("https://server.self-serve.windsurf.com/", prefix + "/__ss/");
+                    } else {
+                        text = text.replace(genericOrigin, prefix);
+                    }
+                    text = text.replaceAll("(?i)(\\s(?:href|src|action)\\s*=\\s*)([\"'])/(?!/)",
+                            "$1$2" + java.util.regex.Matcher.quoteReplacement(prefix) + "/");
+                    text = text.replaceAll("(?is)<meta[^>]+http-equiv\\s*=\\s*[\"']?content-security-policy[\"']?[^>]*>", "");
+                    String bridge = isDevin ? pxAuthBridge(prefix, acc) : pxGenericBridge(prefix, genericOrigin);
+                    int h = indexOfIgnoreCase(text, "<head");
+                    if (h >= 0) { int gt = text.indexOf('>', h); if (gt >= 0) text = text.substring(0, gt + 1) + bridge + text.substring(gt + 1); else text = bridge + text; }
+                    else text = bridge + text;
+                    ct = "text/html; charset=utf-8";
+                } else if (isJs) {
+                    if (isDevin && (text.contains("https://app.devin.ai") || text.contains("https://windsurf.com/")
+                            || text.contains("https://register.windsurf.com/") || text.contains("https://server.codeium.com/")
+                            || text.contains("https://server.self-serve.windsurf.com/"))) {
+                        text = text.replace("https://app.devin.ai", prefix)
+                                .replace("https://windsurf.com/", prefix + "/__ws/")
+                                .replace("https://register.windsurf.com/", prefix + "/__reg/")
+                                .replace("https://server.codeium.com/", prefix + "/__cdn/")
+                                .replace("https://server.self-serve.windsurf.com/", prefix + "/__ss/");
+                    }
+                    // Vite assetsURL(base="/") 预加载不带前缀 → 改写为读运行时 window.__PXFX → 资源走 /i/<acc>/assets/..
+                    if (isDevin) text = text.replaceAll("function\\(([A-Za-z_$][\\w$]*)\\)\\{return`/`\\+\\1\\}",
+                            "function($1){return(window.__PXFX||\"\")+\"/\"+$1}");
+                    if (!isDevin && text.contains(genericOrigin)) text = text.replace(genericOrigin, prefix);
+                } else if (isJson && isDevin) {
+                    if (text.contains("webapp_host")) text = rewriteWebappHost(text, reqHost, url);
+                } else if (isCss) {
+                    if (isDevin && text.contains("https://app.devin.ai/")) text = text.replace("https://app.devin.ai/", prefix + "/");
+                    else if (!isDevin && text.contains(genericOrigin)) text = text.replace(genericOrigin, prefix);
+                }
+                low = ct.toLowerCase();
+                if (!low.contains("charset") && (low.startsWith("text/") || low.contains("json") || low.contains("javascript"))) ct = ct + "; charset=utf-8";
+                return new String[]{ct, text, "text", statusStr};
+            } else {
+                return new String[]{!realCt.isEmpty() ? realCt : ctGuess, o.optString("b64", ""), "b64", statusStr};
+            }
+        } catch (Exception e) { return null; }
+    }
+
+    /** 认证桥接 (前缀模式·源自 worker.js pxAuthBridge): nsShim 按 prefix 命名空间隔离 localStorage(同源多实例不串号)
+     *  + 注入 auth1/org 登录态种子 + __pf/__strip 路由前缀虚拟化 + 拦 fetch/XHR/EventSource 归一前缀挂 Bearer。 */
+    private static String pxAuthBridge(String prefix, org.json.JSONObject acc) {
+        String a1 = acc == null ? "" : acc.optString("auth1", "");
+        String uid = acc == null ? "" : acc.optString("userId", "");
+        String org = acc == null ? "" : acc.optString("orgId", "");
+        String on = (acc == null ? "" : acc.optString("orgName", "")).replaceAll("['\"\\\\<>]", "");
+        String P = prefix + "::";
+        return "<script>(function(){try{"
+            + "try{(function(){var L=window.localStorage;var P=" + js(P) + ";"
+            + "var og=L.getItem.bind(L),os=L.setItem.bind(L),orm=L.removeItem.bind(L);"
+            + "L.getItem=function(k){return og(P+k);};L.setItem=function(k,v){return os(P+k,v);};L.removeItem=function(k){return orm(P+k);};"
+            + "L.clear=function(){try{var ks=[],i;for(i=0;i<L.length;i++){var kk=L.key(i);if(kk&&kk.indexOf(P)===0)ks.push(kk);}for(i=0;i<ks.length;i++)orm(ks[i]);}catch(e){}};"
+            + "})();}catch(e){}"
+            + "var __a1=" + js(a1) + ";var __uid=" + js(uid) + ";var __org=" + js(org) + ";var __orgName=" + js(on) + ";"
+            + "if(__a1){localStorage.setItem('auth1_session',JSON.stringify({token:__a1,userId:__uid}));"
+            + "localStorage.setItem('migrated-to-unscoped-auth0-token-2025-12-18','true');"
+            + "if(__uid)localStorage.setItem('known-org-ids-'+__uid,JSON.stringify([__org]));"
+            + "if(__org)localStorage.setItem('last-internal-org-for-external-org-v1-null',__org);"
+            + "if(__org&&__uid&&__orgName){var __k='post-auth-v3-null-'+__uid+'-org_name-'+__orgName;"
+            + "if(!localStorage.getItem(__k))localStorage.setItem(__k,JSON.stringify({externalOrgId:null,userId:__uid,internalOrgId:__org,orgName:__orgName,result:{resolved_external_org_id:null,org_id:__org,org_name:__orgName,is_valid_resource:true}}));}}"
+            + "document.cookie='webapp_logged_in=true; path=/; max-age=31536000; SameSite=Lax';"
+            + "var __base=" + js(prefix) + ";var __pfx=" + js(prefix) + ";var __abs='https://app.devin.ai';var __O=location.origin;window.__PXFX=__pfx;"
+            + "var __pf=function(u){if(typeof u!=='string')return u;u=u.split(__abs).join(__O+__pfx);"
+            + "if(u.indexOf(__O)===0){var p=u.slice(__O.length);if(p.charAt(0)==='/'&&p!==__pfx&&p.indexOf(__pfx+'/')!==0&&p.indexOf(__pfx)!==0){u=__O+__pfx+p;}return u;}"
+            + "if(__pfx&&u.charAt(0)==='/'&&u.charAt(1)!=='/'&&u!==__pfx&&u.indexOf(__pfx+'/')!==0){u=__pfx+u;}return u;};"
+            + "var __strip=function(u){if(typeof u!=='string')return u;u=u.split(__abs).join(__O);"
+            + "if(__pfx){if(u.indexOf(__O+__pfx)===0){var r=u.slice((__O+__pfx).length)||'/';u=__O+(r.charAt(0)==='/'?r:'/'+r);}"
+            + "else if(u.charAt(0)==='/'&&(u===__pfx||u.indexOf(__pfx+'/')===0)){var r2=u.slice(__pfx.length)||'/';u=r2.charAt(0)==='/'?r2:'/'+r2;}}return u;};"
+            + "var _ps=history.pushState,_rs=history.replaceState;"
+            + "try{var _la=window.location.assign.bind(window.location);window.location.assign=function(u){return _la(__strip(u));};}catch(e){}"
+            + "try{var _lr=window.location.replace.bind(window.location);window.location.replace=function(u){return _lr(__strip(u));};}catch(e){}"
+            + "try{history.pushState=function(s,t,u){return _ps.call(history,s,t,__strip(u));};}catch(e){}"
+            + "try{history.replaceState=function(s,t,u){return _rs.call(history,s,t,__strip(u));};}catch(e){}"
+            + "try{if(__pfx&&location.pathname.indexOf(__pfx)===0){var __sp=location.pathname.slice(__pfx.length)||'/';if(__sp.charAt(0)!=='/')__sp='/'+__sp;_rs.call(history,history.state,'',__sp+location.search+location.hash);}}catch(e){}"
+            + "var needAuth=function(u){return typeof u==='string'&&(u.charAt(0)==='/'||u.indexOf(__base)===0);};"
+            + "var oF=window.fetch;window.fetch=function(u,o){var nu=u;try{if(typeof u==='string'){nu=__pf(u);}else if(u&&u.url){var ru=__pf(u.url);nu=(ru!==u.url)?new Request(ru,u):u;}}catch(e){nu=u;}o=o||{};"
+            + "if(typeof nu==='string'&&needAuth(nu)&&typeof o.headers==='object'&&o.headers&&!Array.isArray(o.headers)){if(!o.headers['Authorization'])o.headers['Authorization']='Bearer '+__a1;if(!o.headers['x-cog-org-id'])o.headers['x-cog-org-id']=__org;}"
+            + "return oF.call(this,nu,o);};"
+            + "var oX=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var nu=(typeof u==='string')?__pf(u):u;"
+            + "var r=oX.apply(this,[m,nu].concat([].slice.call(arguments,2)));if(needAuth(nu)){try{this.setRequestHeader('Authorization','Bearer '+__a1);this.setRequestHeader('x-cog-org-id',__org);}catch(e){}}return r;};"
+            + "try{var _ES=window.EventSource;if(_ES){var nES=function(u,o){return new _ES(__pf(u),o);};nES.prototype=_ES.prototype;try{nES.CONNECTING=_ES.CONNECTING;nES.OPEN=_ES.OPEN;nES.CLOSED=_ES.CLOSED;}catch(e){}window.EventSource=nES;}}catch(e){}"
+            + "}catch(e){}})();</script>";
+    }
+
+    /** 第三方站轻量桥接 (源自 worker.js pxGenericBridge): 仅运行时前缀化动态 URL, 无账号注入。 */
+    private static String pxGenericBridge(String prefix, String origin) {
+        return "<script>(function(){try{var __pfx=" + js(prefix) + ";var __abs=" + js(origin) + ";var __O=location.origin;"
+            + "var __pf=function(u){if(typeof u!=='string')return u;u=u.split(__abs).join(__O+__pfx);if(u.indexOf(__O)===0){var p=u.slice(__O.length);if(p.charAt(0)==='/'&&p!==__pfx&&p.indexOf(__pfx+'/')!==0&&p.indexOf(__pfx)!==0){u=__O+__pfx+p;}return u;}if(u.charAt(0)==='/'&&u.charAt(1)!=='/'&&u!==__pfx&&u.indexOf(__pfx+'/')!==0){u=__pfx+u;}return u;};"
+            + "var oF=window.fetch;window.fetch=function(u,o){var nu=u;try{if(typeof u==='string'){nu=__pf(u);}else if(u&&u.url){var ru=__pf(u.url);nu=(ru!==u.url)?new Request(ru,u):u;}}catch(e){nu=u;}return oF.call(this,nu,o);};"
+            + "var oX=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){if(typeof u==='string')u=__pf(u);return oX.apply(this,[m,u].concat([].slice.call(arguments,2)));};"
+            + "}catch(e){}})();</script>";
     }
 
     /** guessType 变体: 无扩展名非 api 路径用 Accept 区分导航(html) vs 数据(json, 真实 Content-Type 再覆盖头)。 */

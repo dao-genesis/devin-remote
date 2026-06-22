@@ -53,6 +53,13 @@ public final class LocalServer {
         /** 公网根挂载: 为 (源站,账号) 的根挂载端口再起一条专属 cloudflared 快速隧道 → 返回 https 公网 URL。
          *  公网任意浏览器据此 iframe 内嵌即享根挂载(真实路径逐字一致, 不必回退 /px); 失败返回 ""。 */
         default String proxyPublicUrl(String target, String acct) { return ""; }
+        /** /i-init: 校验 token + 该号有登录态 → 回 redirect 路径 (/i/<encAcc>/<u>); null=不可用。
+         *  与 dao-relay Worker /i-init 一致(APK 自带金库, 故不下发 cookie, /i/ 每请求按 acct 直查)。 */
+        default String iInitRedirect(String token, String acc, String u) { return null; }
+        /** 同源前缀边缘反代 /i/<acc>/.. (Devin·注认证) 与 /e/<b64origin>/.. (第三方站·无认证):
+         *  与 dao-relay Worker pxProxy 完全一致 → APK 隧道路径与单网页(Worker)渲染逐字节同款。
+         *  genericOrigin!=null 表第三方站。返回 {contentType, payload, encoding("text"|"b64"), status}; null=失败。 */
+        default String[] iProxy(String method, String prefix, String restPath, String acc, String genericOrigin, String body, String reqContentType, String reqHost) { return null; }
     }
 
     private final Dispatcher disp;
@@ -152,6 +159,48 @@ public final class LocalServer {
                     sock.close(); return;
                 }
                 write(out, 502, "{\"error\":\"proxy_failed\"}"); sock.close(); return;
+            }
+
+            // 同源前缀边缘反代: /i-init · /i/<acc>/.. · /e/<b64origin>/.. (与 dao-relay Worker 完全一致)
+            // → console.html 的 openInPage 无论由 Worker 还是本机 LocalServer 服务, 在页渲染 Devin 逐字节同款。
+            if (path.equals("/i-init")) {
+                if (!method.equalsIgnoreCase("POST")) { write(out, 405, "{\"error\":\"method_not_allowed\"}"); sock.close(); return; }
+                String reqBody = contentLength > 0 ? new String(readBody(in, contentLength), StandardCharsets.UTF_8) : "{}";
+                String acc = "", u = "/", tk = "";
+                try { org.json.JSONObject b = new org.json.JSONObject(reqBody); acc = b.optString("acc", ""); u = b.optString("u", "/"); tk = b.optString("tk", ""); } catch (Exception ignored) {}
+                String redir = disp.iInitRedirect(tk, acc, u);
+                if (redir != null) writeAsset(out, 200, "application/json", "{\"ok\":true,\"redirect\":" + HttpBridge.jsonStr(redir) + "}");
+                else write(out, 404, "{\"error\":\"acct_not_found_or_no_auth\"}");
+                sock.close(); return;
+            }
+            if (path.startsWith("/i/") || path.startsWith("/e/")) {
+                boolean generic = path.startsWith("/e/");
+                String after = path.substring(3);
+                int qcut = after.indexOf('?'); String qs2 = "";
+                if (qcut >= 0) { qs2 = after.substring(qcut + 1); after = after.substring(0, qcut); }
+                int sl = after.indexOf('/');
+                String seg = sl >= 0 ? after.substring(0, sl) : after;
+                String rest = sl >= 0 ? after.substring(sl) : "/";
+                if (!qs2.isEmpty()) rest = rest + "?" + qs2;
+                String acc = "", genericOrigin = null, prefix;
+                if (generic) {
+                    String origin = "";
+                    try { origin = new String(android.util.Base64.decode(seg.replace('-', '+').replace('_', '/'), android.util.Base64.DEFAULT), StandardCharsets.UTF_8); } catch (Exception e) { origin = ""; }
+                    if (!origin.matches("(?i)^https?://.*")) { write(out, 400, "{\"error\":\"bad_origin\"}"); sock.close(); return; }
+                    genericOrigin = origin.replaceAll("/+$", "");
+                    prefix = "/e/" + seg;
+                } else {
+                    acc = urlDecode(seg);
+                    prefix = "/i/" + seg;
+                }
+                String reqBody = contentLength > 0 ? new String(readBody(in, contentLength), StandardCharsets.UTF_8) : "";
+                String[] r = disp.iProxy(method, prefix, rest, acc, genericOrigin, reqBody, reqCtype, reqHost);
+                if (r != null) {
+                    int st = 200; try { st = Integer.parseInt(r[3]); } catch (Exception ignored) {}
+                    if ("b64".equals(r[2])) writeBytes(out, st, r[0], android.util.Base64.decode(r[1], android.util.Base64.DEFAULT));
+                    else writeAsset(out, st, r[0], r[1]);
+                } else write(out, 502, "{\"error\":\"i_proxy_failed\"}");
+                sock.close(); return;
             }
 
             if (method.equalsIgnoreCase("GET")) {
