@@ -2920,6 +2920,11 @@ const BRIDGE_LIVENESS_INTERVAL_MS = 30 * 1000;
 let _bridgeLivenessTimer: ReturnType<typeof setInterval> | null = null;
 let _bridgeLastAliveMs = 0;
 let _bridgeLivenessFail = 0;
+// 三环自检 · 统一审计日志 — 帛书·「自知者明」: 让隧道环/额度环的每次「识别→决策」可见可验(环① 另有 dao-pool-reconcile.log)。
+//   守柔: 仅记瞬时决策(活/死·跟随/保持), 单文件滚动, 失败静默不扰主流程。
+function daoLoopLog(tag: string, line: string): void {
+    try { fs.appendFileSync(path.join(DAO_DIR, 'dao-loops.log'), new Date().toISOString() + ' [' + tag + '] ' + line + '\n'); } catch { /* 守柔 */ }
+}
 // 真验通达: relay 边缘(Worker)对一切请求(含 /api/health)强制 Bearer 鉴权 → 缺 token 必 401。
 //   旧法 GET 无 token, 把 401(<500) 误判为"活" → relay 通道下隧道真断也探不出 → 知识库不会刷新。
 //   故 relay 走信封 POST + Bearer, 校验内层健康体(非错误)才算活; 直连/命名隧道 GET /api/health(带 token 无害)。
@@ -3007,9 +3012,10 @@ async function bridgeLivenessTick(): Promise<void> {
             mcpUrl ? bridgeProbeAlive(mcpUrl, 6000, bridgeMcpToken()) : Promise.resolve(true),
         ]);
         // 打得通 → 保持稳定, 什么也不做 (不重注·省网)
-        if (bridgeOk && mcpOk) { _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0; return; }
+        if (bridgeOk && mcpOk) { _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0; daoLoopLog('tunnel', 'probe ALIVE (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 保持'); return; }
         // 打不通 → 刷新
         try { console.log('[dao] bridge liveness DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新'); } catch { /* 守柔 */ }
+        daoLoopLog('tunnel', 'probe DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新+重注');
         // 1) 重读已发布连接(常驻桥/host MCP 可能已轮换出新地址) → 采纳
         try { const c = bridgeReadPublishedConn(); if (c && c.url && c.url !== bridgeUrl) { bridgeUrl = c.url; if (c.token) bridgeToken = c.token; } } catch { /* 守柔 */ }
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
@@ -3057,9 +3063,10 @@ async function quotaAutoLimitTick(): Promise<void> {
         const off = (typeof p.messageLimitOffset === 'number') ? p.messageLimitOffset : 3;
         const cap = Math.max(Math.floor(avail - off), 1);
         const sig = ws.devinOrgId + ':' + cap;
-        if (sig === _lastAutoLimitSig) return;  // 无变化不重写 (守柔省网)
+        if (sig === _lastAutoLimitSig) { daoLoopLog('quota', 'avail=' + avail + ' cap=' + cap + ' \u2192 \u4fdd\u6301(\u65e0\u53d8)'); return; }  // 无变化不重写 (守柔省网)
         const r = await devinSetMessageLimit(ws.devinOrgId, cap, ws.devinAuth1);
-        if (r.ok) { _lastAutoLimitSig = sig; try { console.log('[dao] quota-auto-limit org=' + ws.devinOrgId + ' avail=' + avail + ' \u2192 cap=' + cap); } catch { /* 守柔 */ } }
+        if (r.ok) { _lastAutoLimitSig = sig; daoLoopLog('quota', 'avail=' + avail + ' \u2192 cap=' + cap + ' \u5df2\u56de\u5199'); try { console.log('[dao] quota-auto-limit org=' + ws.devinOrgId + ' avail=' + avail + ' \u2192 cap=' + cap); } catch { /* 守柔 */ } }
+        else { daoLoopLog('quota', 'avail=' + avail + ' cap=' + cap + ' \u56de\u5199\u5931\u8d25 status=' + (r.status || '?')); }
     } catch { /* 守柔 */ }
 }
 function startQuotaAutoLimitLoop(context: vscode.ExtensionContext): void {
