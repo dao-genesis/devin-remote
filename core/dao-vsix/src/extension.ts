@@ -522,6 +522,9 @@ export async function activate(context: vscode.ExtensionContext) {
     try { startBridgeLivenessLoop(context); } catch { /* 守柔 */ }
     try { startQuotaAutoLimitLoop(context); } catch { /* 守柔 */ }
     try { startNetworkChangeWatch(context); } catch { /* 守柔 */ }
+    // 账号库实时检测 + 全池反向注入闭环: 切号板块账号池/共享 auth 库/注入档案一变即全池核对注入(新增账号自动注入), 另周期自愈。
+    try { startAccountPoolReconcileLoop(context); } catch { /* 守柔 */ }
+    setTimeout(() => { reconcileAccountPoolInject('activate', { force: true }).catch(() => { /* 守柔 */ }); }, 12000);
     context.subscriptions.push(
         vscode.commands.registerCommand('dao.startServer', () => startServer(context)),
         vscode.commands.registerCommand('dao.stopServer', stopServer),
@@ -529,6 +532,12 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('dao.showInfo', showWorkspaceInfo),
         vscode.commands.registerCommand('dao.copyConnection', copyConnection),
         vscode.commands.registerCommand('dao.regenerateToken', regenerateToken),
+        // 全池反向注入核对 · 立即强制(绕签名守柔): 切号板块/主页板块可一键触发全账号核对注入
+        vscode.commands.registerCommand('dao.reconcilePool', async () => {
+            const r = await reconcileAccountPoolInject('manual', { force: true });
+            try { vscode.window.showInformationMessage('全池反向注入核对: ' + r.okCount + '/' + r.total + (r.skipped ? ' (跳过)' : '')); } catch { /* 守柔 */ }
+            return r;
+        }),
         // 归一外壳 · 让多实例外壳内嵌「公网穿透」页直接读桥状态(不再弹独立面板)
         vscode.commands.registerCommand('dao.getBridgeState', () => {
             const c = readBridgeConn() || {};
@@ -1935,6 +1944,10 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         }
         case '/api/devin/inject': {
             return await devinFullInject();
+        }
+        case '/api/devin/reconcile-pool': {
+            // 全池反向注入核对 · 立即强制(绕签名守柔) — 账号库实时检测闭环的手动触发口
+            return await reconcileAccountPoolInject('api', { force: true });
         }
         case '/api/devin/dedupe': {
             // 去重: 同名知识/同标题剧本只留一份(删旧版本残留) — 帛书·「少则得·多则惑」
@@ -5938,6 +5951,7 @@ function agentApiCatalog(): { group: string; items: AgentApiEndpoint[] }[] {
             { method: 'POST', path: '/api/devin/git/connect', body: '{"pat":"ghp_.."}', desc: '连接 GitHub PAT' },
             { method: 'POST', path: '/api/devin/git/disconnect', body: '{"connectionId":".."}', desc: '断开 Git 集成' },
             { method: 'POST', path: '/api/devin/inject', desc: '一键全量注入 (Secret/Knowledge/Playbook/规则)' },
+            { method: 'POST', path: '/api/devin/reconcile-pool', desc: '全池反向注入核对 · 立即强制(账号库实时检测闭环手动触发)' },
         ]},
         { group: 'IDE 控制 (本机工作区)', items: [
             { method: 'POST', path: '/api/exec', body: '{"cmd":"ls"}', desc: '在 IDE 终端执行命令并回收输出' },
@@ -8789,6 +8803,77 @@ function bridgeWatchForReinject(context: vscode.ExtensionContext): void {
             });
             context.subscriptions.push({ dispose: () => { try { w.close(); } catch { /* 守柔 */ } } });
         } catch { /* 守柔 */ }
+    }
+}
+// ═══════════════════════════════════════════════════════════
+// 账号库实时检测 + 全池反向注入闭环 — 帛书·「周行而不殆·独立而不改」
+//   切号板块账号池(accounts.json)/共享 auth 库(dao-accounts-auth.json)/注入档案(dao-inject-profile.json)
+//   任一变化 → 防抖 2.5s → 全池逐号核对(缺补·旧换·守 manual 锁·守清理抑制):
+//     · 新增账号(含仅邮箱密码入池, 经 devinBatchInject 登录兜底)即自动反向注入, 无需手动切号;
+//     · 注入档案改动(新增KB/PB/PAT/MCP/额度)即扩散到全池。
+//   另每 POOL_RECONCILE_INTERVAL_MS 周期强制自检一次 → 远端态漂移自愈(纯账号配置 API, 不发起消耗额度的对话)。
+//   守柔·省网: watch 触发路径按(账号池+档案)快照签名去抖, 未变不重跑; 单飞(inflight)互斥不并发。
+// ═══════════════════════════════════════════════════════════
+const POOL_RECONCILE_INTERVAL_MS = 15 * 60 * 1000;
+let _poolReconcileTimer: ReturnType<typeof setInterval> | null = null;
+let _poolReconcileDebounce: ReturnType<typeof setTimeout> | null = null;
+let _poolReconcileInflight = false;
+let _lastPoolReconcileSig = '';
+function computeAccountPoolSig(): string {
+    try {
+        const store = loadAccountsAuthStore();
+        const parts: string[] = [];
+        for (const e of Object.keys(store).sort()) {
+            const a: any = store[e] || {};
+            parts.push(e + '|' + (a.orgId || '') + '|' + (a.auth1 ? String(a.auth1).slice(0, 12) : ''));
+        }
+        // 邮箱密码池(切号板块 accounts.json/配置)— 新增账号(尚无 auth1)亦须翻动签名, 否则 watch 触发被签名守柔吞掉, 即用户所报「新增账号不自动注入」。
+        try { for (const pa of loadAccountPool(true)) { if (!store[pa.email]) parts.push('pool:' + pa.email); } } catch { /* 守柔 */ }
+        const p = loadInjectProfile();
+        const pf = [p.enabled ? '1' : '0', p.secrets.length, p.knowledge.length, p.playbooks.length, p.mcps.length, (p.automations || []).length, p.messageLimitAuto ? 'a' : String(p.messageLimit == null ? '-' : p.messageLimit), p.messageLimitOffset].join(',');
+        return parts.join(';') + '#' + pf;
+    } catch { return ''; }
+}
+function poolReconcileLog(line: string): void {
+    try { fs.appendFileSync(path.join(DAO_DIR, 'dao-pool-reconcile.log'), new Date().toISOString() + ' ' + line + '\n'); } catch { /* 守柔 */ }
+}
+async function reconcileAccountPoolInject(reason: string, opts?: { force?: boolean }): Promise<{ ok: boolean; okCount: number; total: number; skipped: boolean }> {
+    const skip = { ok: false, okCount: 0, total: 0, skipped: true };
+    const p = loadInjectProfile();
+    if (!p.enabled) { poolReconcileLog('trigger=' + reason + ' skip=disabled'); return skip; }
+    const hasItems = !!(p.secrets.length || p.knowledge.length || p.playbooks.length || p.mcps.length || (p.automations && p.automations.length) || typeof p.messageLimit === 'number' || p.messageLimitAuto);
+    if (!hasItems) { poolReconcileLog('trigger=' + reason + ' skip=empty-profile'); return skip; }
+    if (_poolReconcileInflight) { poolReconcileLog('trigger=' + reason + ' skip=inflight'); return skip; }
+    const sig = computeAccountPoolSig();
+    if (!(opts && opts.force) && sig === _lastPoolReconcileSig) { poolReconcileLog('trigger=' + reason + ' skip=unchanged-sig'); return skip; }
+    _poolReconcileInflight = true;
+    poolReconcileLog('trigger=' + reason + (opts && opts.force ? ' force=1' : '') + ' RUN sig-changed');
+    try {
+        const r = await daoBatchInjectAllAccounts();
+        // 注入过程可能登录补 auth1 → 重算签名, 避免随后 dao-accounts-auth.json 写入再触发空转
+        _lastPoolReconcileSig = computeAccountPoolSig();
+        try { console.log('[dao] pool-reconcile(' + reason + ') ' + r.okCount + '/' + r.total); } catch { /* 守柔 */ }
+        poolReconcileLog('trigger=' + reason + ' DONE ok=' + r.okCount + '/' + r.total);
+        try { sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
+        return { ok: r.ok, okCount: r.okCount, total: r.total, skipped: false };
+    } finally { _poolReconcileInflight = false; }
+}
+function schedulePoolReconcile(reason: string): void {
+    if (_poolReconcileDebounce) { clearTimeout(_poolReconcileDebounce); }
+    _poolReconcileDebounce = setTimeout(() => { _poolReconcileDebounce = null; reconcileAccountPoolInject(reason).catch(() => { /* 守柔 */ }); }, 2500);
+}
+function startAccountPoolReconcileLoop(context: vscode.ExtensionContext): void {
+    try {
+        fs.mkdirSync(DAO_DIR, { recursive: true });
+        const w = fs.watch(DAO_DIR, { persistent: false }, (_evt, fname) => {
+            const f = String(fname || '');
+            if (f === '' || /^accounts\.json$|^dao-accounts-auth\.json$|^dao-inject-profile\.json$/i.test(f)) schedulePoolReconcile('watch:' + (f || 'dao'));
+        });
+        context.subscriptions.push({ dispose: () => { try { w.close(); } catch { /* 守柔 */ } } });
+    } catch { /* 守柔 */ }
+    if (!_poolReconcileTimer) {
+        _poolReconcileTimer = setInterval(() => { reconcileAccountPoolInject('periodic', { force: true }).catch(() => { /* 守柔 */ }); }, POOL_RECONCILE_INTERVAL_MS);
+        context.subscriptions.push({ dispose: () => { if (_poolReconcileTimer) { clearInterval(_poolReconcileTimer); _poolReconcileTimer = null; } } });
     }
 }
 // 从按邮箱持久化的 store 里找某 org 仍可用的 auth1 — 用于清理旧 org 注入
