@@ -102,6 +102,12 @@ function readZipTextEntry(zipPath: string, patterns: RegExp[]): { name: string; 
 // 账号池让 dao-vsix 据当前登录 email 查到密码 → 自动换取 auth1 → 真实 org。
 const ACCOUNTS_FILE = path.join(DAO_DIR, 'accounts.json');
 const ACCOUNTS_TXT = path.join(DAO_DIR, 'accounts.txt');
+// 归一·账号池同源 (本源修复): 反向注入必须与「切号板块」读同一真池 ~/.wam/accounts.md，
+//   否则注入对着旧/假的 ~/.dao/accounts.json 空转(用户真账号在 wam 真池里却从不被注入)。
+//   候选与 rt-flow loadAccountsFromFs 对齐: 配置 accountsFile > ~/.wam/accounts.md > ~/.wam/accounts-backup.json。
+const WAM_DIR = path.join(os.homedir(), '.wam');
+const WAM_ACCOUNTS_MD = path.join(WAM_DIR, 'accounts.md');
+const WAM_ACCOUNTS_BACKUP = path.join(WAM_DIR, 'accounts-backup.json');
 // TOKEN_FILE removed — per-workspace: ws.tokenFile
 // SESSION_FILE removed — per-workspace: ws.sessionFile
 const PROXY_PORTS = [7890, 10809, 7891, 1080, 10808, 8080, 8118];
@@ -522,6 +528,9 @@ export async function activate(context: vscode.ExtensionContext) {
     try { startBridgeLivenessLoop(context); } catch { /* 守柔 */ }
     try { startQuotaAutoLimitLoop(context); } catch { /* 守柔 */ }
     try { startNetworkChangeWatch(context); } catch { /* 守柔 */ }
+    // 账号库实时检测 + 全池反向注入闭环: 切号板块账号池/共享 auth 库/注入档案一变即全池核对注入(新增账号自动注入), 另周期自愈。
+    try { startAccountPoolReconcileLoop(context); } catch { /* 守柔 */ }
+    setTimeout(() => { reconcileAccountPoolInject('activate', { force: true }).catch(() => { /* 守柔 */ }); }, 12000);
     context.subscriptions.push(
         vscode.commands.registerCommand('dao.startServer', () => startServer(context)),
         vscode.commands.registerCommand('dao.stopServer', stopServer),
@@ -529,6 +538,12 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('dao.showInfo', showWorkspaceInfo),
         vscode.commands.registerCommand('dao.copyConnection', copyConnection),
         vscode.commands.registerCommand('dao.regenerateToken', regenerateToken),
+        // 全池反向注入核对 · 立即强制(绕签名守柔): 切号板块/主页板块可一键触发全账号核对注入
+        vscode.commands.registerCommand('dao.reconcilePool', async () => {
+            const r = await reconcileAccountPoolInject('manual', { force: true });
+            try { vscode.window.showInformationMessage('全池反向注入核对: ' + r.okCount + '/' + r.total + (r.skipped ? ' (跳过)' : '')); } catch { /* 守柔 */ }
+            return r;
+        }),
         // 归一外壳 · 让多实例外壳内嵌「公网穿透」页直接读桥状态(不再弹独立面板)
         vscode.commands.registerCommand('dao.getBridgeState', () => {
             const c = readBridgeConn() || {};
@@ -1936,6 +1951,10 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         case '/api/devin/inject': {
             return await devinFullInject();
         }
+        case '/api/devin/reconcile-pool': {
+            // 全池反向注入核对 · 立即强制(绕签名守柔) — 账号库实时检测闭环的手动触发口
+            return await reconcileAccountPoolInject('api', { force: true });
+        }
         case '/api/devin/dedupe': {
             // 去重: 同名知识/同标题剧本只留一份(删旧版本残留) — 帛书·「少则得·多则惑」
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
@@ -2393,7 +2412,10 @@ let daoCloudMiddlePanel: vscode.WebviewPanel | null = null;
 // 回推目标指针: 默认走独立面板; 外壳挂载时由 setCloudProvider.setHostPost 改指向外壳中继 → iframe。
 let _middlePostTarget: ((d: any) => void) | null = null;
 function postMiddle(d: any) {
-    if (daoCloudMiddlePanel) { try { daoCloudMiddlePanel.webview.postMessage(d); } catch { /* 守柔 */ } return; }
+    // 道并行而不相悖: 原生面板与归一外壳(/shell)可同时在场, 回推须同时抵达二者;
+    //   旧实现 daoCloudMiddlePanel 在场即 return, 致外壳(_middlePostTarget)被饿死
+    //   → /shell 切号板块 wamInit 回包丢失, 永停"加载切号面板…"。号主态本为共享, 双发幂等无害。
+    if (daoCloudMiddlePanel) { try { daoCloudMiddlePanel.webview.postMessage(d); } catch { /* 守柔 */ } }
     if (_middlePostTarget) { try { _middlePostTarget(d); } catch { /* 守柔 */ } }
 }
 let daoCloudMiddlePanelVisible = false;
@@ -5645,9 +5667,25 @@ async function devinEnsureCogApiKey(orgId: string, auth1: string): Promise<strin
 // ═══════════════════════════════════════════════════════════
 // 账号池 · 帛书·六十二「道者万物之注·善人之宝」
 // email→password 映射 — 据 IDE 当前登录 email 查密码 → 换 auth1
-// 来源(优先级): VS Code 配置 dao.devinAccounts > ~/.dao/accounts.json > ~/.dao/accounts.txt
+// 来源(优先级): VS Code 配置 dao.devinAccounts > ~/.wam 切号真池(accounts.md/backup) > (回退)~/.dao/accounts.json/.txt
 // ═══════════════════════════════════════════════════════════
 interface PoolAccount { email: string; password: string }
+// 解析切号板块 accounts.md 文本: 每行「邮箱<分隔>密码」。分隔可为空格/冒号/全角冒号/竖线/破折号;
+//   密码可含 @ 等特殊字符, 故以首个合法邮箱为锚, 其后整段(去前导分隔)即密码。空行/无邮箱行跳过。
+function parseWamAccountLines(raw: string): PoolAccount[] {
+    const out: PoolAccount[] = [];
+    if (!raw) return out;
+    for (const line of raw.split(/\r?\n/)) {
+        const ln = line.trim();
+        if (!ln || ln.startsWith('#') || ln.startsWith('//')) continue;
+        const em = ln.match(/[^\s:：|,;，；]+@[^\s:：|,;，；]+\.[A-Za-z]{2,}/);
+        if (!em) continue;
+        const email = em[0];
+        const pw = ln.slice((em.index || 0) + email.length).replace(/^[\s:：|,;，；\-=＝·]+/, '').trim();
+        if (email && pw) out.push({ email, password: pw });
+    }
+    return out;
+}
 let _accountPoolCache: PoolAccount[] | null = null;
 let _accountPoolReadAt = 0;
 const ACCOUNT_POOL_TTL = 30000;
@@ -5669,23 +5707,51 @@ function loadAccountPool(forceRefresh?: boolean): PoolAccount[] {
         const cfgAccts = vscode.workspace.getConfiguration('dao').get<any[]>('devinAccounts');
         if (Array.isArray(cfgAccts)) for (const a of cfgAccts) { if (a && a.email) add(a.email, a.password); }
     } catch { /* 守柔 */ }
-    // 来源2: ~/.dao/accounts.json  ({accounts:[{email,password}]} 或 直接数组)
+    // 来源2 (本源·真池): ~/.wam 切号板块账号库 — 反向注入与切号同源, 命中用户真实在用的账号。
+    //   配置 wam.accountsFile(若指定) > ~/.wam/accounts.md > ~/.wam/accounts-backup.json。
+    let wamLoaded = false;
     try {
-        if (fs.existsSync(ACCOUNTS_FILE)) {
-            const j = JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf8'));
-            const arr = Array.isArray(j) ? j : (Array.isArray(j.accounts) ? j.accounts : []);
-            for (const a of arr) { if (a && a.email) add(a.email, a.password); }
-        }
-    } catch { /* 守柔 */ }
-    // 来源3: ~/.dao/accounts.txt  (email:password 每行一条)
-    try {
-        if (fs.existsSync(ACCOUNTS_TXT)) {
-            for (const line of fs.readFileSync(ACCOUNTS_TXT, 'utf8').split(/\r?\n/)) {
-                const m = line.match(/^\s*([^\s:]+@[^\s:]+)\s*[:：]\s*(.+?)\s*$/);
-                if (m) add(m[1], m[2]);
+        const cands: string[] = [];
+        try {
+            const af = vscode.workspace.getConfiguration('wam').get<string>('accountsFile')
+                || vscode.workspace.getConfiguration('dao').get<string>('accountsFile') || '';
+            if (af) cands.push(af);
+        } catch { /* 守柔 */ }
+        cands.push(WAM_ACCOUNTS_MD, WAM_ACCOUNTS_BACKUP);
+        for (const p of cands) {
+            if (!p || !fs.existsSync(p)) continue;
+            const raw = fs.readFileSync(p, 'utf8');
+            let parsed: PoolAccount[] = [];
+            if (p.endsWith('.json')) {
+                const j = JSON.parse(raw);
+                const arr = Array.isArray(j) ? j : (Array.isArray(j.accounts) ? j.accounts : []);
+                parsed = arr.filter((a: any) => a && a.email && a.password).map((a: any) => ({ email: a.email, password: a.password }));
+            } else {
+                parsed = parseWamAccountLines(raw);
             }
+            // 真池文件存在且解析出账号即视为权威源(无论与配置是否去重重叠), 不再回退 ~/.dao 假池。
+            if (parsed.length) { for (const acc of parsed) add(acc.email, acc.password); wamLoaded = true; break; }
         }
     } catch { /* 守柔 */ }
+    // 来源3 (回退·仅当真池缺失): ~/.dao/accounts.json / accounts.txt。
+    //   真池非空时不再 union 这里, 杜绝旧/假账号污染批量反向注入。
+    if (!wamLoaded) {
+        try {
+            if (fs.existsSync(ACCOUNTS_FILE)) {
+                const j = JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf8'));
+                const arr = Array.isArray(j) ? j : (Array.isArray(j.accounts) ? j.accounts : []);
+                for (const a of arr) { if (a && a.email) add(a.email, a.password); }
+            }
+        } catch { /* 守柔 */ }
+        try {
+            if (fs.existsSync(ACCOUNTS_TXT)) {
+                for (const line of fs.readFileSync(ACCOUNTS_TXT, 'utf8').split(/\r?\n/)) {
+                    const m = line.match(/^\s*([^\s:]+@[^\s:]+)\s*[:：]\s*(.+?)\s*$/);
+                    if (m) add(m[1], m[2]);
+                }
+            }
+        } catch { /* 守柔 */ }
+    }
     _accountPoolCache = pool;
     _accountPoolReadAt = Date.now();
     return pool;
@@ -5935,6 +6001,7 @@ function agentApiCatalog(): { group: string; items: AgentApiEndpoint[] }[] {
             { method: 'POST', path: '/api/devin/git/connect', body: '{"pat":"ghp_.."}', desc: '连接 GitHub PAT' },
             { method: 'POST', path: '/api/devin/git/disconnect', body: '{"connectionId":".."}', desc: '断开 Git 集成' },
             { method: 'POST', path: '/api/devin/inject', desc: '一键全量注入 (Secret/Knowledge/Playbook/规则)' },
+            { method: 'POST', path: '/api/devin/reconcile-pool', desc: '全池反向注入核对 · 立即强制(账号库实时检测闭环手动触发)' },
         ]},
         { group: 'IDE 控制 (本机工作区)', items: [
             { method: 'POST', path: '/api/exec', body: '{"cmd":"ls"}', desc: '在 IDE 终端执行命令并回收输出' },
@@ -8786,6 +8853,86 @@ function bridgeWatchForReinject(context: vscode.ExtensionContext): void {
             });
             context.subscriptions.push({ dispose: () => { try { w.close(); } catch { /* 守柔 */ } } });
         } catch { /* 守柔 */ }
+    }
+}
+// ═══════════════════════════════════════════════════════════
+// 账号库实时检测 + 全池反向注入闭环 — 帛书·「周行而不殆·独立而不改」
+//   切号板块账号池(accounts.json)/共享 auth 库(dao-accounts-auth.json)/注入档案(dao-inject-profile.json)
+//   任一变化 → 防抖 2.5s → 全池逐号核对(缺补·旧换·守 manual 锁·守清理抑制):
+//     · 新增账号(含仅邮箱密码入池, 经 devinBatchInject 登录兜底)即自动反向注入, 无需手动切号;
+//     · 注入档案改动(新增KB/PB/PAT/MCP/额度)即扩散到全池。
+//   另每 POOL_RECONCILE_INTERVAL_MS 周期强制自检一次 → 远端态漂移自愈(纯账号配置 API, 不发起消耗额度的对话)。
+//   守柔·省网: watch 触发路径按(账号池+档案)快照签名去抖, 未变不重跑; 单飞(inflight)互斥不并发。
+// ═══════════════════════════════════════════════════════════
+const POOL_RECONCILE_INTERVAL_MS = 15 * 60 * 1000;
+let _poolReconcileTimer: ReturnType<typeof setInterval> | null = null;
+let _poolReconcileDebounce: ReturnType<typeof setTimeout> | null = null;
+let _poolReconcileInflight = false;
+let _lastPoolReconcileSig = '';
+function computeAccountPoolSig(): string {
+    try {
+        const store = loadAccountsAuthStore();
+        const parts: string[] = [];
+        for (const e of Object.keys(store).sort()) {
+            const a: any = store[e] || {};
+            parts.push(e + '|' + (a.orgId || '') + '|' + (a.auth1 ? String(a.auth1).slice(0, 12) : ''));
+        }
+        // 邮箱密码池(切号板块 accounts.json/配置)— 新增账号(尚无 auth1)亦须翻动签名, 否则 watch 触发被签名守柔吞掉, 即用户所报「新增账号不自动注入」。
+        try { for (const pa of loadAccountPool(true)) { if (!store[pa.email]) parts.push('pool:' + pa.email); } } catch { /* 守柔 */ }
+        const p = loadInjectProfile();
+        const pf = [p.enabled ? '1' : '0', p.secrets.length, p.knowledge.length, p.playbooks.length, p.mcps.length, (p.automations || []).length, p.messageLimitAuto ? 'a' : String(p.messageLimit == null ? '-' : p.messageLimit), p.messageLimitOffset].join(',');
+        return parts.join(';') + '#' + pf;
+    } catch { return ''; }
+}
+function poolReconcileLog(line: string): void {
+    try { fs.appendFileSync(path.join(DAO_DIR, 'dao-pool-reconcile.log'), new Date().toISOString() + ' ' + line + '\n'); } catch { /* 守柔 */ }
+}
+async function reconcileAccountPoolInject(reason: string, opts?: { force?: boolean }): Promise<{ ok: boolean; okCount: number; total: number; skipped: boolean }> {
+    const skip = { ok: false, okCount: 0, total: 0, skipped: true };
+    const p = loadInjectProfile();
+    if (!p.enabled) { poolReconcileLog('trigger=' + reason + ' skip=disabled'); return skip; }
+    const hasItems = !!(p.secrets.length || p.knowledge.length || p.playbooks.length || p.mcps.length || (p.automations && p.automations.length) || typeof p.messageLimit === 'number' || p.messageLimitAuto);
+    if (!hasItems) { poolReconcileLog('trigger=' + reason + ' skip=empty-profile'); return skip; }
+    if (_poolReconcileInflight) { poolReconcileLog('trigger=' + reason + ' skip=inflight'); return skip; }
+    const sig = computeAccountPoolSig();
+    if (!(opts && opts.force) && sig === _lastPoolReconcileSig) { poolReconcileLog('trigger=' + reason + ' skip=unchanged-sig'); return skip; }
+    _poolReconcileInflight = true;
+    poolReconcileLog('trigger=' + reason + (opts && opts.force ? ' force=1' : '') + ' RUN sig-changed');
+    try {
+        const r = await daoBatchInjectAllAccounts();
+        // 注入过程可能登录补 auth1 → 重算签名, 避免随后 dao-accounts-auth.json 写入再触发空转
+        _lastPoolReconcileSig = computeAccountPoolSig();
+        try { console.log('[dao] pool-reconcile(' + reason + ') ' + r.okCount + '/' + r.total); } catch { /* 守柔 */ }
+        poolReconcileLog('trigger=' + reason + ' DONE ok=' + r.okCount + '/' + r.total);
+        try { sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
+        return { ok: r.ok, okCount: r.okCount, total: r.total, skipped: false };
+    } finally { _poolReconcileInflight = false; }
+}
+function schedulePoolReconcile(reason: string): void {
+    if (_poolReconcileDebounce) { clearTimeout(_poolReconcileDebounce); }
+    _poolReconcileDebounce = setTimeout(() => { _poolReconcileDebounce = null; reconcileAccountPoolInject(reason).catch(() => { /* 守柔 */ }); }, 2500);
+}
+function startAccountPoolReconcileLoop(context: vscode.ExtensionContext): void {
+    try {
+        fs.mkdirSync(DAO_DIR, { recursive: true });
+        const w = fs.watch(DAO_DIR, { persistent: false }, (_evt, fname) => {
+            const f = String(fname || '');
+            if (f === '' || /^accounts\.json$|^dao-accounts-auth\.json$|^dao-inject-profile\.json$/i.test(f)) schedulePoolReconcile('watch:' + (f || 'dao'));
+        });
+        context.subscriptions.push({ dispose: () => { try { w.close(); } catch { /* 守柔 */ } } });
+    } catch { /* 守柔 */ }
+    // 本源·真池监听: 切号板块在 ~/.wam/accounts.md 增删账号 → 即触发全池反向注入核对(否则新增账号不自动注入)。
+    try {
+        fs.mkdirSync(WAM_DIR, { recursive: true });
+        const ww = fs.watch(WAM_DIR, { persistent: false }, (_evt, fname) => {
+            const f = String(fname || '');
+            if (f === '' || /^accounts\.md$|^accounts-backup\.json$/i.test(f)) schedulePoolReconcile('watch:wam:' + (f || 'wam'));
+        });
+        context.subscriptions.push({ dispose: () => { try { ww.close(); } catch { /* 守柔 */ } } });
+    } catch { /* 守柔 */ }
+    if (!_poolReconcileTimer) {
+        _poolReconcileTimer = setInterval(() => { reconcileAccountPoolInject('periodic', { force: true }).catch(() => { /* 守柔 */ }); }, POOL_RECONCILE_INTERVAL_MS);
+        context.subscriptions.push({ dispose: () => { if (_poolReconcileTimer) { clearInterval(_poolReconcileTimer); _poolReconcileTimer = null; } } });
     }
 }
 // 从按邮箱持久化的 store 里找某 org 仍可用的 auth1 — 用于清理旧 org 注入
