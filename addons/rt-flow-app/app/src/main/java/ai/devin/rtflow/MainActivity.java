@@ -170,6 +170,8 @@ public class MainActivity extends AppCompatActivity {
         boolean desktop = false;     // 桌面版 UA
         boolean night = false;       // 夜间反色
         boolean translated = false;  // 整页翻译态 (跨页保持)
+        boolean lastEditable = false; // 最近一次前台巡检时页面是否有聚焦的可编辑元素 (正在打字/语音输入)
+        long lastEditableTs = 0;     // 上述「正在输入」状态的记录时刻 → 据此避免输入中被探活重载打断
         String pendingReloadUrl = null; // 后台标签渲染进程被回收 → 延迟到选中时再重载 (避免多标签同时重载放大内存压力·消除卡死雪崩)
         boolean maybeStale = false;  // 长时间后台返回 → 渲染线程可能被系统冻结(看着正常但点击/下载等失效) → 选中/恢复时探活, 无响应则静默重载
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
@@ -4825,7 +4827,7 @@ public class MainActivity extends AppCompatActivity {
             if (!appForeground) return;
             // 前台期间: 当前可见网页若 visibilityState 卡 hidden(计时器被冻、点下载等失效), resumeWeb 会静默拉回, 无需手动刷新。
             Tab t = cur();
-            if (t != null && t.web != null && !t.internal) resumeWeb(t.web);
+            if (t != null && t.web != null && !t.internal) { resumeWeb(t.web); recordEditable(t); }
             main.postDelayed(this, VIS_WATCH_MS);
         }
     };
@@ -4847,6 +4849,20 @@ public class MainActivity extends AppCompatActivity {
      *  仅在确判可能僵死时调用(长后台返回), 健康页面探活即过, 不重载 → 不丢滚动/表单。
      *  关键: 必须连续两次(各 4s)无响应才判僵死并重载 —— 设备繁忙时单次回调迟到很常见, 单次超时即重载
      *  会在每次回前台时误重载、打断操作 (用户反映"刷新频繁打断")。给一次重试 → 仅真冻死才重载。 */
+    private static final long EDIT_GUARD_MS = 20000;   // 最近 20s 内在输入 → 不做破坏性重载, 保住草稿
+    /** 前台巡检时记录当前页是否有聚焦的可编辑元素 (input/textarea/contenteditable = 正在打字或语音输入)。
+     *  页面僵死时本巡检的 JS 也回不来 → lastEditableTs 自然变陈旧, 不影响真冻死的恢复。 */
+    private void recordEditable(final Tab t) {
+        if (t == null || t.web == null) return;
+        final WebView w = t.web;
+        try {
+            w.evaluateJavascript(
+                "(function(){try{var a=document.activeElement;if(!a)return '0';var g=(a.tagName||'').toLowerCase();"
+                + "return (g==='input'||g==='textarea'||a.isContentEditable)?'1':'0';}catch(e){return '0';}})()",
+                val -> { if (tabOf(w) < 0) return; boolean ed = val != null && val.contains("1");
+                    t.lastEditable = ed; if (ed) t.lastEditableTs = System.currentTimeMillis(); });
+        } catch (Exception ignored) {}
+    }
     private void probeTabLiveness(final Tab t) { probeTabLiveness(t, 0); }
     private void probeTabLiveness(final Tab t, final int attempt) {
         if (t == null || t.web == null) return;
@@ -4860,7 +4876,12 @@ public class MainActivity extends AppCompatActivity {
             if (answered[0]) return;             // 渲染线程响应 → 健康, 不动
             if (tabOf(w) < 0) return;            // 标签已不在
             if (attempt < 1) { probeTabLiveness(t, attempt + 1); return; }   // 再给一次机会, 避免迟到回调被误判僵死
-            try { w.reload(); } catch (Exception ignored) {}   // 连续无响应 → 真冻死, 静默重载恢复交互
+            // 用户正在输入/语音输入 (最近 ~20s 有聚焦可编辑元素) → 绝不破坏性重载 (会清空草稿·打断语音),
+            //   改非破坏性唤醒。页面真冻死时该状态无法刷新 → 自然变陈旧, 下一轮探活即正常重载恢复。
+            if (t.lastEditable && (System.currentTimeMillis() - t.lastEditableTs) < EDIT_GUARD_MS) {
+                try { resumeWeb(w); } catch (Exception ignored) {} return;
+            }
+            try { w.reload(); } catch (Exception ignored) {}   // 连续无响应且非输入中 → 真冻死, 静默重载恢复交互
         }, 4000);
     }
 
