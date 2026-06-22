@@ -2393,7 +2393,10 @@ let daoCloudMiddlePanel: vscode.WebviewPanel | null = null;
 // 回推目标指针: 默认走独立面板; 外壳挂载时由 setCloudProvider.setHostPost 改指向外壳中继 → iframe。
 let _middlePostTarget: ((d: any) => void) | null = null;
 function postMiddle(d: any) {
-    if (daoCloudMiddlePanel) { try { daoCloudMiddlePanel.webview.postMessage(d); } catch { /* 守柔 */ } return; }
+    // 道并行而不相悖: 原生面板与归一外壳(/shell)可同时在场, 回推须同时抵达二者;
+    //   旧实现 daoCloudMiddlePanel 在场即 return, 致外壳(_middlePostTarget)被饿死
+    //   → /shell 切号板块 wamInit 回包丢失, 永停"加载切号面板…"。号主态本为共享, 双发幂等无害。
+    if (daoCloudMiddlePanel) { try { daoCloudMiddlePanel.webview.postMessage(d); } catch { /* 守柔 */ } }
     if (_middlePostTarget) { try { _middlePostTarget(d); } catch { /* 守柔 */ } }
 }
 let daoCloudMiddlePanelVisible = false;
