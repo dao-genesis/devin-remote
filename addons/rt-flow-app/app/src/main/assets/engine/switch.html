@@ -310,6 +310,33 @@ function domBadge(email){
   return ["o","token"];
 }
 function ovDollars(q){ return (q && typeof q.overageDollars==="number") ? q.overageDollars : 0; }
+// ── 美金额度就地刷新 (与结构 HTML 解耦·道法自然) ───────────────────
+//   额度是高频跳动的易变量; 把它从 rowHtml 结构里剥离, 仅就地 patch 对应 .eua-big 单元 +
+//   头部汇总 + 页签美金。如此「实时额度轮(~2.2s)」不再每轮重建整列 122 行 → 根除卡顿。
+var _lastTabDol={};
+function _euaText(a){
+  var q=a.quota||{}; var dollars=ovDollars(q);
+  if(typeof q.dPct!=="number") return {t:"$--", c:"#666", ti:"未刷新额度"};
+  if(dollars<=0) return {t:"$0", c:"#777", ti:"额度已用完"};
+  return {t:"$"+dollars.toFixed(2), c:(dollars<8?"#e8c84a":"#4ec9b0"), ti:"Extra Usage · 美金额度 $"+dollars.toFixed(2)};
+}
+function paintDollars(accs){
+  accs=accs||loadAcc();
+  for(var i=0;i<accs.length;i++){ var el=document.getElementById("eua"+i); if(!el) continue;
+    var d=_euaText(accs[i]);
+    if(el.textContent!==d.t) el.textContent=d.t;
+    if(el.dataset.c!==d.c){ el.style.color=d.c; el.dataset.c=d.c; }
+    if(el.title!==d.ti) el.title=d.ti;
+  }
+  // 头部「激活$/已验·总额度」汇总 (廉价文本)
+  var checkedCnt=0, actCnt=0, totalD=0;
+  accs.forEach(function(a){ var q=a.quota; if(q&&typeof q.dPct==="number"){checkedCnt++; var dd=ovDollars(q); if(dd>0){actCnt++;totalD+=dd;}} });
+  var sa=document.getElementById("st-act");
+  if(sa) sa.textContent = checkedCnt? (actCnt+"/"+checkedCnt+"激活"+(actCnt>0?" $"+Math.round(totalD):"")) : "";
+  // 每号实时美金推到其页签 (仅变化的号才调原生桥 → 省每轮 ~122 次调用)
+  try{ if(N.setTabDollars){ accs.forEach(function(a){ var q=a.quota||{}; var lbl=(typeof q.dPct==="number")?("$"+Math.round(ovDollars(q))):"";
+        var key=a.id||""; if(_lastTabDol[key]!==lbl){ _lastTabDol[key]=lbl; N.setTabDollars(key, lbl); if(a.email) N.setTabDollars((a.email||"").toLowerCase(), lbl); } }); } }catch(e){}
+}
 
 // ── 行渲染 (1:1 桌面 Devin Cloud 手机版 row · 去 D/W 条·去自动切号·美金额度保留) ──
 function rowHtml(a,i){
@@ -318,16 +345,8 @@ function rowHtml(a,i){
   var db = domBadge(a.email);
   var emailShort = String(a.email||a.id||("acc"+i));
   if(emailShort.length>30) emailShort = emailShort.slice(0,28)+"…";
-  var q = a.quota||{}; var checked = (typeof q.dPct==="number");
-  var dollars = ovDollars(q);
-  // 只保留美刀额度(放大显示), 去掉 free 套餐标 与 登/需登 标 (登录入口仍在第二行按钮)
-  // 配色弱化干扰(道法自然): 用完→灰色 $0 (不再刺眼红); 低→柔黄; 充足→青绿
-  var dcolor = (dollars<=0?"#777":(dollars<8?"#e8c84a":"#4ec9b0"));
-  var euaTag = checked
-    ? (dollars<=0
-        ? '<span class="eua-big" style="color:#777" title="额度已用完">$0</span>'
-        : '<span class="eua-big" style="color:'+dcolor+'" title="Extra Usage · 美金额度 $'+dollars.toFixed(2)+'">$'+dollars.toFixed(2)+'</span>')
-    : '<span class="eua-big" style="color:#666" title="未刷新额度">$--</span>';
+  // 美金额度从结构 HTML 中剥离 → 仅留稳定占位(id=eua<i>), 由 paintDollars() 就地填充。
+  //   这样「额度跳动」不再使 html 串变化, render() 不触发整列 innerHTML 重建 (高频实时轮 ~2.2s 卡顿根因)。
   return ''+
   '<div class="row'+(active?" act":"")+(auth?"":" expired-row")+(_selIds.has(a.id)?" sel":"")+'" data-i="'+i+'" data-id="'+_esc(a.id)+'" data-email="'+_esc((a.email||"").toLowerCase())+'">'+
     '<div class="row-r1" onclick="rowClick('+i+',event)">'+
@@ -335,7 +354,7 @@ function rowHtml(a,i){
       '<span class="acc-no" title="编号 '+(i+1)+'">'+(i+1)+'</span>'+
       '<span class="dm '+db[0]+'" title="'+_esc(db[1])+'">'+db[0]+'</span>'+
       '<span class="em" title="'+_esc(a.email||a.id)+'">'+_esc(emailShort)+'</span>'+
-      euaTag+
+      '<span class="eua-big" id="eua'+i+'"></span>'+
       '<span class="dv-run" id="dvRun'+i+'"></span>'+
     '</div>'+
     '<div class="row-r2">'+
@@ -400,23 +419,18 @@ function render(){
   if(changed){
     _lastListHtml=html; _lastOpenKey=openKey;
     list.innerHTML = html;
-    // 把每个账号的实时剩余美金推到它的页签 → 标签条直接看额度。仅在列表实际变化时推, 省每轮 ~72 次原生桥调用。
-    try{ if(N.setTabDollars){ accs.forEach(function(a){ var q=a.quota||{}; var lbl=(typeof q.dPct==="number")?("$"+Math.round(ovDollars(q))):""; N.setTabDollars(a.id||"", lbl); if(a.email) N.setTabDollars((a.email||"").toLowerCase(), lbl); }); } }catch(e){}
     // 恢复展开 (重建后详情被清空 → 重新挂载+拉取; 内容未变时不重建即不重复拉取)
     openIx.forEach(function(ix){ var d=document.getElementById("dvDetail"+ix); if(d){ d.classList.add("open"); var a=accs[ix*1]; if(a&&hasAuth(a)){ d.innerHTML='<span style="color:#888">重载…</span>'; dvFetch(a,ix*1,d); } } });
   }
   _renderDirty=false;
+  // 美金额度: 不论列表是否重建都就地刷新各行/汇总/页签 (额度跳动走廉价 paint·不触发整列重建)。
+  paintDollars(accs);
   // 头部计数 (廉价文本更新, 每次都做)
   document.getElementById("secCnt").textContent=accs.length;
   document.getElementById("st-cnt").textContent=accs.length;
   var authed=accs.filter(hasAuth).length;
   document.getElementById("st-tok").textContent=authed;
   document.getElementById("st-avail").textContent=authed;
-  // 激活$/已验·总额度 (美金额度汇总)
-  var checkedCnt=0, actCnt=0, totalD=0;
-  accs.forEach(function(a){ var q=a.quota; if(q&&typeof q.dPct==="number"){checkedCnt++; var d=ovDollars(q); if(d>0){actCnt++;totalD+=d;}} });
-  var sa=document.getElementById("st-act");
-  sa.textContent = checkedCnt? (actCnt+"/"+checkedCnt+"激活"+(actCnt>0?" $"+Math.round(totalD):"")) : "";
   // 当前
   var act=accs.filter(function(x){return x.id===getActive();})[0];
   var ai=document.getElementById("actInfo");
