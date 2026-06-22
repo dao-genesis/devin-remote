@@ -27,6 +27,50 @@ const EXT_VERSION: string = (() => {
     return '1.3.2';
 })();
 const DAO_DIR = path.join(os.homedir(), '.dao');
+// 道·无缝接力(seamless handoff) — 帛书·「反者道之动」: 窗口/IDE 重启、切号时账号 API 端口会变,
+//   旧 dao-conn.json 只增不删 → 外部 Agent 无从判定「下一个活接口」, 连续性断需人工接管。
+//   此处让「谁是活的」成为磁盘上的自愈真相: 裁剪死 pid + 维护单一权威 dao-conn-current.json
+//   (含单调 epoch, 端口/pid/url 变化才 +1), 常驻桥(独立进程·不随窗口死)随时可读 →
+//   重启/切号全程可解析活接口, 守柔不抖。
+const DAO_CONN_REGISTRY = path.join(DAO_DIR, 'dao-conn.json');
+const DAO_CONN_CURRENT = path.join(DAO_DIR, 'dao-conn-current.json');
+function daoPidAlive(pid: number): boolean {
+    if (!pid || typeof pid !== 'number') return false;
+    if (pid === process.pid) return true;
+    try { process.kill(pid, 0); return true; } catch (e: any) { return !!(e && e.code === 'EPERM'); }
+}
+// 裁剪死实例 + 按 pid 去重(留最新 updated), 仅在有变化时回写; 返回活实例数组。
+function daoPruneConnRegistry(): any[] {
+    let all: any[] = [];
+    try { all = JSON.parse(fs.readFileSync(DAO_CONN_REGISTRY, 'utf8')); if (!Array.isArray(all)) all = []; } catch { return []; }
+    const byPid = new Map<number, any>();
+    for (const c of all) {
+        if (!c || !daoPidAlive(c.pid)) continue;
+        const prev = byPid.get(c.pid);
+        if (!prev || String(c.updated || '') >= String(prev.updated || '')) byPid.set(c.pid, c);
+    }
+    const live = Array.from(byPid.values());
+    try { if (live.length !== all.length) fs.writeFileSync(DAO_CONN_REGISTRY, JSON.stringify(live, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    return live;
+}
+// 据活实例集刷新权威「当前接口」: 取端口最小者为确定性 leader(不抖动), epoch 仅在 leader 真变时 +1。
+function daoRefreshCurrent(): any {
+    const live = daoPruneConnRegistry();
+    let prev: any = {};
+    try { prev = JSON.parse(fs.readFileSync(DAO_CONN_CURRENT, 'utf8')) || {}; } catch { /* 首次 */ }
+    const leader = live.slice().sort((a, b) => (a.port || 0) - (b.port || 0))[0];
+    if (!leader) return prev;  // 无活实例: 保留旧 current(常驻桥仍可据此尝试)
+    const changed = prev.port !== leader.port || prev.pid !== leader.pid || prev.url !== leader.url;
+    const epoch = (typeof prev.epoch === 'number' ? prev.epoch : 0) + (changed ? 1 : 0);
+    const cur: any = {
+        url: leader.url, token: leader.token, port: leader.port, host: leader.hostname || os.hostname(),
+        pid: leader.pid, devinEmail: leader.devinEmail, devinOrgId: leader.devinOrgId,
+        workspacePath: leader.workspacePath, epoch, updated: new Date().toISOString(),
+        alive: live.map(l => ({ port: l.port, pid: l.pid, url: l.url, devinEmail: l.devinEmail, updated: l.updated }))
+    };
+    try { fs.writeFileSync(DAO_CONN_CURRENT, JSON.stringify(cur, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    return cur;
+}
 const GLOBAL_CONFIG_FILE = path.join(DAO_DIR, 'dao-config.json');  // CF全局凭证
 const CONFIG_FILE = GLOBAL_CONFIG_FILE;  // 别名 — 道法自然：一即一切
 const INST_FILE = path.join(DAO_DIR, 'dao-instances.json');
@@ -280,6 +324,8 @@ class WorkspaceState {
             allConns = allConns.filter((c: any) => c.pid !== process.pid);
             allConns.push(info);
             fs.writeFileSync(globalConnFile, JSON.stringify(allConns, null, 2), 'utf8');
+            // 无缝接力: 裁剪死实例 + 刷新权威「当前接口」(epoch 单调) → 重启/切号后外部可解析活接口
+            daoRefreshCurrent();
         } catch {}
     }
 
@@ -1415,7 +1461,7 @@ function isAppProxyPassthrough(route: string): boolean {
             '/api/command', '/api/file', '/api/write', '/api/search', '/api/edit', '/api/ls',
             '/api/terminal', '/api/diagnostics', '/api/definitions', '/api/references', '/api/symbols',
             '/api/git/', '/api/agents', '/api/commands', '/api/tools', '/api/devin', '/api/workspaces',
-            '/api/agent-doc', '/api/manifest', '/api/bridge-state'];
+            '/api/agent-doc', '/api/manifest', '/api/bridge-state', '/api/next'];
         return !daoApiPrefixes.some(p => route === p || route.startsWith(p + '/') || route === p.replace(/\/$/, ''));
     }
     // 帛书·「执天之行」官网根挂载: dao 自身 HTTP 仅占用 /api/*, 故其余所有根路径
@@ -1558,6 +1604,13 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
                 relayUrl: ws.publicUrl || '',
                 primaryUrl: ws.publicUrl || ('http://localhost:' + ws.port)
             };
+        }
+        // 无缝接力 · 帛书「自知者明」: 一次调用解析「下一个活接口」(重启/切号后仍可定位),
+        //   current=确定性 leader, alive=全部活实例, epoch 变化即提示重解析。常驻桥读
+        //   ~/.dao/dao-conn-current.json 亦得同源真相。
+        case '/api/next': {
+            const cur = daoRefreshCurrent();
+            return { ok: true, current: cur || null, alive: (cur && cur.alive) || [], epoch: (cur && cur.epoch) || 0, self: { port: ws.port, pid: process.pid, url: ws.publicUrl || ('http://localhost:' + ws.port) } };
         }
         case '/api/workspace': {
             const folders = vscode.workspace.workspaceFolders?.map(f => ({ uri: f.uri.fsPath, name: f.name, index: f.index })) || [];
@@ -2708,6 +2761,25 @@ function bridgeGenerateCloudMd(): string {
         '| POST | `/api/search` | `{query,path}` | 搜索 |',
         '| POST | `/api/edit` | `{path,edits}` | 编辑 |',
         '| GET | `/api/agents` | - | 在线设备列表(已接入本中枢的设备·含状态/主机/最后心跳) |',
+        '| GET | `/api/next` | - | **无缝接力**: 解析「下一个活接口」(current/alive/epoch) |',
+        '',
+        '## 无缝接力 · 重启/切号不断连',
+        '',
+        '> IDE 或窗口重启、切号时，账号 API 的**端口会变**；但 Token 机器级恒定，常驻桥(本公网隧道)独立进程不随窗口死。',
+        '> 故任何时候都能解析到「下一个活接口」，无需人工重发地址。',
+        '',
+        '权威真相文件(常驻桥可直接读，最稳)：`~/.dao/dao-conn-current.json`',
+        '```',
+        '{ "url","token","port","host","pid","epoch", "alive":[{port,pid,url,devinEmail,...}] }',
+        '```',
+        '- `epoch` 单调递增：只要它比你上次见到的大，就说明接口轮换了，重新解析即可。',
+        '- `alive` 列出当前所有活实例(多窗口/多账号)，`current` 取端口最小者为确定性 leader。',
+        '',
+        '**接力配方(重启后零人工)：** 经本公网隧道 `POST /api/exec` 读这份文件，拿到活端口+稳定 Token，继续操作：',
+        '```',
+        'POST /api/exec  { "cmd": "type %USERPROFILE%\\\\.dao\\\\dao-conn-current.json" }',
+        '```',
+        '或在仍有任一活窗口时直接 `GET /api/next` 一次拿到 `{current, alive, epoch}`。',
         '',
         '## 接入更多设备 · 一行 PowerShell',
         '',
@@ -3001,6 +3073,8 @@ async function bridgeLivenessTick(): Promise<void> {
     if (_bridgeLivenessInflight) return;
     _bridgeLivenessInflight = true;
     try {
+        // 无缝接力兜底: 周期裁剪死实例 + 刷新权威「当前接口」(即便无人 saveConnection 也自愈)
+        try { daoRefreshCurrent(); } catch { /* 守柔 */ }
         const cfg = vscode.workspace.getConfiguration('dao');
         if (!cfg.get<boolean>('bridgeLiveness', true)) return;
         const url = bridgeEffectiveUrl();
