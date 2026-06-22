@@ -1026,7 +1026,14 @@ function _initCfgUI(){
 var _capApplied = {};        // id → 上次已写入的 max_credits (避免重复 POST)
 var _balAlertTs = {};        // id → 上次低额提醒时间 (节流 10 分钟)
 var _quotaBusy = false, _quotaLiveBusy = false, _idleCursor = 0;
-function _hasLiveConv(a){ var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<180000); }
+// 道法自然·所见即所刷: 外壳(单网页)里正开着某号 Devin 对话标签 → 该号即"在看", 直接进高频额度轮,
+//   用户盯着对话时美金近实时跳动, 无需等对话追踪轮把它归类为 running。集合由 console.html 周期广播,
+//   标签关闭即从下一次广播中消失; 另加 90s TTL 兜底(广播彻底停了也不会永久高频)。
+var _dvOpenAccts = {};        // key(小写 email 或 id) → 最近一次广播时间戳
+function _isDvOpen(a){ if(!a) return false; var now=Date.now();
+  var e=(a.email||"").toLowerCase(), i=(a.id||"").toLowerCase();
+  return (!!_dvOpenAccts[e] && now-_dvOpenAccts[e]<90000) || (!!i && !!_dvOpenAccts[i] && now-_dvOpenAccts[i]<90000); }
+function _hasLiveConv(a){ if(_isDvOpen(a)) return true; var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<180000); }
 // 有对话(不必正在跑): 追踪到该号有对话且近 25 分钟内见过 → 视为「活跃号」, 额度每轮必刷(不进慢速轮转), 用户最关心的有对话账号额度近实时。
 function _hasConv(a){ var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<1500000); }
 async function applyConvCapFor(a){
@@ -1362,6 +1369,11 @@ _loop(autoBackupTick, 85000, 12000);
 //   (不止重载页面, 顺带刷新账号的额度及相关各项数据)。
 window.addEventListener("message", function(ev){ try{ var d=ev&&ev.data;
   if(d && d.__rtflow==="rtRefresh"){ try{ refreshTrack(); }catch(e){} try{ doRefreshAll(); }catch(e){} }
+  // 外壳广播"正开着 Devin 对话"的账号集合 → 纳入高频额度轮, 立即快刷一次 (所见即所刷)
+  else if(d && d.__rtflow==="liveAccts" && Object.prototype.toString.call(d.accts)==="[object Array]"){
+    var now=Date.now(), m={}; d.accts.forEach(function(k){ if(k) m[String(k).toLowerCase()]=now; });
+    _dvOpenAccts=m; try{ autoQuotaLiveTick(); }catch(e){}
+  }
 }catch(e){} });
 </script>
 </body></html>
