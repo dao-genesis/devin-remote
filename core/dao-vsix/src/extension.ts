@@ -9427,6 +9427,13 @@ async function daoServeBridgeRoute(routePath: string, urlObj: URL): Promise<any>
     if (routePath === '/__daobridge.js') {
         return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoDropBridgeJs(), headers: { 'Cache-Control': 'no-store', ...CORS } };
     }
+    // 防 HTTP 头非法字符: Content-Disposition 的 filename= 仅许 ASCII; 非 ASCII(如中文标题)直塞 →
+    //   Node 抛 "Invalid character in header content" → 500。故 ASCII 回退名 + RFC5987 filename*(UTF-8)。
+    const cdispo = (raw: string): string => {
+        const r = String(raw || 'file');
+        const ascii = r.replace(/[^\x20-\x7e]/g, '_').replace(/["\r\n]/g, '_');
+        return 'attachment; filename="' + ascii + '"; filename*=UTF-8\'\'' + encodeURIComponent(r);
+    };
     if (routePath === '/__dlfile') {
         const p = urlObj.searchParams.get('p') || '';
         try {
@@ -9437,7 +9444,7 @@ async function daoServeBridgeRoute(routePath: string, urlObj: URL): Promise<any>
             }
             const buf = fs.readFileSync(rp);
             const nm = path.basename(rp).replace(/^[a-z0-9]+-/i, '') || 'download';
-            return { _proxy: true, status: 200, contentType: 'application/octet-stream', binary: true, body: buf.toString('base64'), headers: { 'Content-Disposition': 'attachment; filename="' + nm.replace(/["\r\n]/g, '_') + '"', ...CORS } };
+            return { _proxy: true, status: 200, contentType: 'application/octet-stream', binary: true, body: buf.toString('base64'), headers: { 'Content-Disposition': cdispo(nm), ...CORS } };
         } catch (e) { return { _proxy: true, status: 500, contentType: 'text/plain; charset=utf-8', body: 'read error', headers: { ...CORS } }; }
     }
     if (routePath === '/__convmd') {
@@ -9447,7 +9454,7 @@ async function daoServeBridgeRoute(routePath: string, urlObj: URL): Promise<any>
         let md: { name?: string; text?: string } | null = null;
         try { if (rtintMd && typeof rtintMd.resolveConvMd === 'function') md = await rtintMd.resolveConvMd(email, sid); } catch (e) { md = null; }
         if (!md || !md.text) return { _proxy: true, status: 404, contentType: 'text/plain; charset=utf-8', body: '无法导出该会话 MD', headers: { ...CORS } };
-        return { _proxy: true, status: 200, contentType: 'text/markdown; charset=utf-8', body: md.text, headers: { 'Content-Disposition': 'attachment; filename="' + String(md.name || 'conversation.md').replace(/["\r\n]/g, '_') + '"', ...CORS } };
+        return { _proxy: true, status: 200, contentType: 'text/markdown; charset=utf-8', body: md.text, headers: { 'Content-Disposition': cdispo(md.name || 'conversation.md'), ...CORS } };
     }
     return null;
 }
@@ -9460,7 +9467,7 @@ function daoDropBridgeJs() {
         "function toast(t){try{var d=document.createElement('div');d.textContent=t;d.style.cssText='position:fixed;z-index:2147483647;left:50%;top:18px;transform:translateX(-50%);background:#11161d;color:#cdd3de;border:1px solid #2a313b;border-radius:8px;padding:8px 14px;font:13px sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.45)';(document.body||document.documentElement).appendChild(d);setTimeout(function(){try{d.parentNode.removeChild(d);}catch(e){}},2800);}catch(e){}}",
         "function mkFile(buf,ct,nm){try{return new File([buf],nm,{type:ct||'application/octet-stream'});}catch(e){var b=new Blob([buf],{type:ct||'application/octet-stream'});try{b.name=nm;}catch(e2){}return b;}}",
         "async function fetchFile(u,nm){var r=await fetch(u,{credentials:'same-origin'});if(!r.ok)throw new Error('HTTP '+r.status);var ct=r.headers.get('content-type')||'application/octet-stream';var buf=await r.arrayBuffer();return mkFile(buf,ct,nm);}",
-        "function feed(target,file){var done=false;try{var dt=new DataTransfer();dt.items.add(file);var inps=document.querySelectorAll('input[type=file]');for(var k=0;k<inps.length;k++){try{inps[k].files=dt.files;inps[k].dispatchEvent(new Event('input',{bubbles:true}));inps[k].dispatchEvent(new Event('change',{bubbles:true}));done=true;}catch(e){}}try{var ev;try{ev=new DragEvent('drop',{bubbles:true,cancelable:true});Object.defineProperty(ev,'dataTransfer',{value:dt});}catch(e2){ev=new Event('drop',{bubbles:true,cancelable:true});ev.dataTransfer=dt;}(target||document.body).dispatchEvent(ev);done=true;}catch(e3){}}catch(e){}return done;}",
+        "function feed(target,file){var done=false;try{var dt=new DataTransfer();dt.items.add(file);var ev;try{ev=new DragEvent('drop',{bubbles:true,cancelable:true});Object.defineProperty(ev,'dataTransfer',{value:dt});}catch(e2){ev=new Event('drop',{bubbles:true,cancelable:true});ev.dataTransfer=dt;}var consumed=false;try{consumed=((target||document.body).dispatchEvent(ev)===false);}catch(e3){}if(consumed)return true;var inps=document.querySelectorAll('input[type=file]');for(var k=0;k<inps.length;k++){try{inps[k].files=dt.files;inps[k].dispatchEvent(new Event('input',{bubbles:true}));inps[k].dispatchEvent(new Event('change',{bubbles:true}));done=true;}catch(e){}}}catch(e){}return done;}",
         "document.addEventListener('dragover',function(e){try{var ts=(e.dataTransfer&&e.dataTransfer.types)||[];var has=false;for(var i=0;i<ts.length;i++){if(ts[i]==='application/x-dao-file'||ts[i]==='application/x-dao-conv')has=true;}if(has){e.preventDefault();try{e.dataTransfer.dropEffect='copy';}catch(x){}}}catch(x){}},true);",
         "document.addEventListener('drop',function(e){try{var dtt=e.dataTransfer;if(!dtt)return;var fp='',cv='';try{fp=dtt.getData('application/x-dao-file');}catch(x){}try{cv=dtt.getData('application/x-dao-conv');}catch(x){}if(!fp&&!cv)return;e.preventDefault();e.stopPropagation();var tgt=e.target||document.body;toast('\\u23f3 \\u6b63\\u5728\\u4e0a\\u4f20\\u2026');(async function(){try{var f;if(fp){var o=JSON.parse(fp);f=await fetchFile(ORIGIN+'/__dlfile?p='+encodeURIComponent(o.path||''),(o.name||'file'));}else{var c=JSON.parse(cv);f=await fetchFile(ORIGIN+'/__convmd?email='+encodeURIComponent(c.email||'')+'&sid='+encodeURIComponent(c.sid||''),((c.title||c.sid||'conversation')+'.md'));}var ok=feed(tgt,f);toast(ok?('\\u2705 \\u5df2\\u6295\\u9012\\u4e0a\\u4f20 '+f.name):('\\u26a0 \\u672a\\u627e\\u5230\\u4e0a\\u4f20\\u6846 '+f.name));}catch(err){toast('\\u2715 \\u4e0a\\u4f20\\u5931\\u8d25: '+((err&&err.message)||err));}})();}catch(x){}},true);",
         "}catch(e){}})();"
@@ -9845,6 +9852,23 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
     var __uid = '${pinUid}';
     var __org = '${pinOrg}';
     var __orgName = '${(pinOrgName || '').replace(/['\\\\]/g, '')}';
+    // 帛书·「涤除玄览·能无疵乎」— 多实例多号同源(9920)共享 localStorage: 切到新号时上一号残留的
+    //   org 列表/路由缓存仍在 → SPA 据旧缓存误跳上一号 /org/<slug>(实测切 nuek 却跳 finley 的 shamkharcig)。
+    //   故: 检出 已存 auth1_session.userId 与本号不同 = 账号切换 → 清空 SPA 持久态(保留 dao/主题键),
+    //   令其据本号 auth-pinned API 重解析正确 org。同号重载 uid 相同 → 不清(保缓存·快)。
+    if (__a1 && __uid) {
+      try {
+        var __prev = JSON.parse(localStorage.getItem('auth1_session') || '{}');
+        if (__prev && __prev.userId && __prev.userId !== __uid) {
+          var __keep = /^(dao[-_]|theme|color-theme|workbench)/i;
+          for (var __i = localStorage.length - 1; __i >= 0; __i--) {
+            var __k = localStorage.key(__i);
+            if (__k && !__keep.test(__k)) { try { localStorage.removeItem(__k); } catch (e) {} }
+          }
+          try { if (window.indexedDB && indexedDB.databases) { indexedDB.databases().then(function(ds){ (ds||[]).forEach(function(d){ if (d && d.name) try { indexedDB.deleteDatabase(d.name); } catch(e){} }); }); } } catch (e) {}
+        }
+      } catch (e) {}
+    }
     if (__a1) {
       localStorage.setItem('auth1_session', JSON.stringify({ token: __a1, userId: __uid }));
       localStorage.setItem('migrated-to-unscoped-auth0-token-2025-12-18', 'true');
@@ -9903,10 +9927,16 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         // 帛书·「为之于其未有·治之于其未乱」— 认证桥接须在 SPA 任何引导脚本之前执行,
                         // 否则路由守卫可能先于 auth1_session 注入而读到空登录态 → 竞态跳转 /auth/login。
                         // 故注入于 <head> 起始(紧随 charset meta), 而非 </head> 之前。
+                        // 拖拽上传桥(同源): 本反代页与外壳下载/备份窗口同源 → 拖文件/会话到本页经桥取字节并投递
+                        //   Devin 上传框。须 内联 于 <head>(而非 </body> 前挂 <script src>): SPA 引导会清空/重建
+                        //   body, 外链脚本走网络往返期间标签已被 SPA 抹除 → 永不执行(实测 __daoDropBridge 不挂);
+                        //   内联脚本随首段 HTML 解析即同步执行, 其 document 级 drop/dragover 监听跨 body 重渲染长存。
+                        const dragBridgeInline = '<script>' + daoDropBridgeJs() + '</script>';
+                        const headInject = authBridge + dragBridgeInline;
                         if (/<head[^>]*>/i.test(html)) {
-                            html = html.replace(/(<head[^>]*>)/i, '$1' + authBridge);
+                            html = html.replace(/(<head[^>]*>)/i, '$1' + headInject);
                         } else {
-                            html = html.replace('</head>', authBridge + '</head>');
+                            html = html.replace('</head>', headInject + '</head>');
                         }
                         resolve({
                             _proxy: true,
@@ -9988,18 +10018,36 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
             fwdHeaders['Content-Length'] = Buffer.byteLength(reqBody).toString();
             if (req.headers?.['content-type']) fwdHeaders['Content-Type'] = req.headers['content-type'];
         }
+        // 道·多号并行不相悖: 逐请求按 dao_acct 钉账号注入对应 auth(而非恒用全局活动账号 ws.devinAuth1)。
+        //   病根: 旧逻辑对一切上游请求恒注入 ws.devinAuth1(活动/同步号), 覆盖客户端桥所带的本号 bearer
+        //   → 多实例第二号(如 nuek)的 /api 调用被钉成首号(finley)的 auth → 返首号 org → 串号(实测 nuek 跳
+        //   finley 的 shamkharcig)。dao_acct 来源: 本请求 url 查询(页面请求) → 否则取 Referer 的 dao_acct
+        //   (同源 /api XHR 的 Referer = 带 dao_acct 的本 tab 页面 URL·逐 tab 真实来源·不跨 tab 串)。皆无 →
+        //   回退全局活动号(单号场景不变)。
+        let _apiAuth1 = ws.devinAuth1, _apiOrg = ws.devinOrgId, _apiSess = ws.devinSessionToken;
+        try {
+            let _acctEmail = url.searchParams.get('dao_acct') || '';
+            if (!_acctEmail) {
+                const _ref = String((req.headers && (req.headers['referer'] || req.headers['referrer'])) || '');
+                if (_ref) { try { _acctEmail = new URL(_ref).searchParams.get('dao_acct') || ''; } catch { /* 守柔 */ } }
+            }
+            if (_acctEmail && mode === 'devin') {
+                const _sa = loadAccountAuth(_acctEmail);
+                if (_sa && _sa.auth1) { _apiAuth1 = _sa.auth1; _apiOrg = _sa.orgId || ''; _apiSess = ''; }
+            }
+        } catch { /* 守柔 */ }
         // 认证头: 所有请求都注入（不仅是API），因为Devin SPA需要认证Cookie
-        if (ws.devinAuth1) {
-            fwdHeaders['Authorization'] = 'Bearer ' + ws.devinAuth1;
-            fwdHeaders['X-Devin-Auth1-Token'] = ws.devinAuth1;
-            if (ws.devinOrgId) fwdHeaders['x-cog-org-id'] = ws.devinOrgId;
+        if (_apiAuth1) {
+            fwdHeaders['Authorization'] = 'Bearer ' + _apiAuth1;
+            fwdHeaders['X-Devin-Auth1-Token'] = _apiAuth1;
+            if (_apiOrg) fwdHeaders['x-cog-org-id'] = _apiOrg;
         }
         // Cookie注入 — 帛书·「大成若缺」— app.devin.ai通过Cookie识别登录态
         // auth1_token / devin_session_token / org_id → Devin SPA自动认证
         const cookies: string[] = [];
-        if (ws.devinAuth1) cookies.push(`auth1_token=${ws.devinAuth1}`);
-        if (ws.devinSessionToken) cookies.push(`devin_session_token=${ws.devinSessionToken}`);
-        if (ws.devinOrgId) cookies.push(`org_id=${ws.devinOrgId}`);
+        if (_apiAuth1) cookies.push(`auth1_token=${_apiAuth1}`);
+        if (_apiSess) cookies.push(`devin_session_token=${_apiSess}`);
+        if (_apiOrg) cookies.push(`org_id=${_apiOrg}`);
         if (cookies.length) fwdHeaders['Cookie'] = cookies.join('; ');
         // 转发Referer和Origin — 须改写为源站, 否则 localhost 触发 app.devin.ai 的 CSRF/CORS 拒绝
         fwdHeaders['Origin'] = upstreamBase;

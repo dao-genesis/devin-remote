@@ -1615,7 +1615,23 @@ async function _shellResolveOpen(opts) {
   const base = '/i/' + _shellAccKey(email); // 同源相对前缀 (隧道主口 9920 直达·公网设备无感)
   const pageRaw = String(opts.path || '').trim();
   const pagePath = pageRaw ? ('/' + pageRaw.replace(/^\/+/, '')) : '';
-  const url = pagePath ? (base + pagePath) : (sid ? (base + '/sessions/' + encodeURIComponent(sid)) : (base + '/'));
+  // 归一·整 SPA 同源直出: 账号页经同源反代 `/org|/sessions…?dao_acct=<email>` 开整 Devin SPA
+  //   (含真·上传框 → 拖拽桥可投递·对齐手机; 静态资源走缓存 → 提速; auth 按 dao_acct 逐页钉死注入·
+  //   多号并行各取各 auth 不串)。取代旧 `/i/` 服务端轻渲染页(无上传框 → 拖文件无处落)。
+  void base; // (旧 /i/ 前缀保留以兼容历史; 现统一走整 SPA 同源直出)
+  const acctQ = 'dao_acct=' + encodeURIComponent(email);
+  let url;
+  if (pagePath) {
+    url = pagePath + (pagePath.indexOf('?') >= 0 ? '&' : '?') + acctQ;
+  } else if (sid) {
+    url = '/sessions/' + encodeURIComponent(sid) + '?' + acctQ;
+  } else {
+    // 首页 → 同源根 '/'(带 dao_acct): SPA 据本号 auth-pinned API 自解析正确 org 跳 /org/<真 slug>。
+    //   不自拼 /org/<orgName>: orgName 是 org「显示名」非「URL slug」(实测 nuek 的 orgName=um94c,
+    //   但 /org/um94c 客户端 404) → 唯 SPA 自身知其真 slug。多号同源(9920)的残留缓存串号问题,
+    //   由注入桥的「账号切换即涤除上一号 localStorage 残留」闭环兜底(见 daoCloudProxyRoute authBridge)。
+    url = '/?' + acctQ;
+  }
   const short = email.split('@')[0];
   const fresh = !!opts.fresh; // 新建标签/汉堡「新建 Devin 标签」→ 每次开一张全新页(唯一 id·不折叠到已存在的账号首页)
   const id = email.toLowerCase() + '|' + (pagePath ? ('page' + pagePath) : (sid || 'home')) + (fresh ? ('|n' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36)) : '');
@@ -1633,6 +1649,26 @@ async function _shellResolveOpen(opts) {
   const label = title || (short + (pagePath ? (' · ' + (pageLabel || pagePath)) : (sid ? (' · ' + sid.slice(0, 8)) : '')));
   const status = String(opts.status || '').trim();
   return { type: 'open', id, label, url, accNo, dollars, status, email, devinId: sid };
+}
+// 道·同源全功能 Devin 页: 外壳内开 Devin(＋按钮/地址栏) → 经同源反代 `/org|/sessions…?dao_acct=<活动账号>`
+//   直出整 SPA。同源(主口 9920) → 与下载/备份窗口同文档 → 拖拽桥可用·无 CORS·静态资源走缓存提速;
+//   取代旧 `/__web?u=app.devin.ai`(注 <base href=app.devin.ai> → SPA 的 ES module 分包按绝对地址跨源
+//   import 被 CORS 全拦 → 整页空白)。返回同源相对路径; 非 Devin 站点或无登录态 → null(回落 /__web)。
+async function _shellDevinSameOrigin(rawUrl) {
+  try {
+    let u; try { u = new URL(String(rawUrl || '')); } catch (e) { return null; }
+    if (!/(^|\.)devin\.ai$/i.test(u.hostname)) return null;
+    const email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || '');
+    if (!email) return null;
+    const auth = await _resolveAuthForEmail(email);
+    if (!auth || !auth.auth1) return null;
+    // 首页留 '/'(同源根 + dao_acct → SPA 据 auth-pinned API 自解析真 slug 跳 /org/<真 slug>);
+    //   不自拼 /org/<orgName>(orgName 是显示名非 URL slug, 实测会 404)。串号由 authBridge 涤除残留兜底。
+    let p = u.pathname || '/';
+    if (p === '') p = '/';
+    const q = (u.search ? (u.search + '&') : '?') + 'dao_acct=' + encodeURIComponent(email);
+    return p + q;
+  } catch (e) { return null; }
 }
 // 独立 HTTP 外壳的宿主侧消息处理 (复刻 _wireMultiPanel, 但 send 经 SSE; 开标签经 _shellResolveOpen)。
 async function shellHandleMessage(sid, m) {
@@ -1717,7 +1753,8 @@ async function shellHandleMessage(sid, m) {
         // 站内新标签开任意网页/搜索(＋按钮·地址栏 URL/搜索词) → 经同源相对 /__web 代理直出
         //   (剥 XFO/CSP·隧道与本机内置浏览器两端皆可达, 不再弹外部系统浏览器·不再静默丢弃)。
         if (!m.url) return;
-        const abs = '/__web?u=' + encodeURIComponent(m.url);
+        let abs = await _shellDevinSameOrigin(m.url);
+        if (!abs) abs = '/__web?u=' + encodeURIComponent(m.url);
         if (m.hist) { try { _pushMultiHist(m.url, m.label || m.url, 'web'); send({ type: 'history', list: _getMultiHist() }); } catch (e) {} }
         send({ type: 'open', id: 'web:' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), url: abs, label: String(m.label || m.url || '网页').slice(0, 60) });
         return;
