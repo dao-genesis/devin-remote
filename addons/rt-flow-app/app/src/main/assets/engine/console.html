@@ -545,7 +545,7 @@
       ' …<br><span style="color:#6e7681">经中继边缘反代 · 首次数秒</span></div>';
     t.ld=ld; frames.appendChild(ld);
     fr.addEventListener("load", function(){ try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){} });
-    tabs.push(t); renderStrip(); selectTab(t.id);
+    tabs.push(t); renderStrip(); selectTab(t.id); broadcastLiveAccts();
     function go(src){ t.ready=true; if(t.ld){ t.ld.remove(); t.ld=null; } t.fr.src=src; }
     // 失败不外跳: 旧逻辑 openExternalNewTab(window.open 真站) 会另开浏览器标签、看着像「跳出页面」。
     //   改为在本标签内显示错误 + 重试, 永不离开单网页。
@@ -610,7 +610,20 @@
     if(tabs.length===0){ openPage("switch"); return; }
     if(active>=tabs.length) active=tabs.length-1;
     selectTab(tabs[Math.max(0,active)].id);
+    broadcastLiveAccts();
   }
+
+  // ── 道法自然·所见即所刷: 把「外壳里正开着 Devin 对话标签」的账号集合广播给各板块子页 ──
+  //   切号板据此把这些号纳入高频额度轮 → 用户正盯着的对话美金近实时跳动 (不必等追踪轮归类 running)。
+  //   每次标签增减即广播一次, 另加 3s 轻量周期广播 → 晚挂载的板块也能拿到、并刷新对端 TTL。
+  function broadcastLiveAccts(){
+    var seen={}, accts=[];
+    for(var i=0;i<tabs.length;i++){ var t=tabs[i];
+      if(t.kind==="web" && t.acct){ var k=String(t.acct).toLowerCase(); if(!seen[k]){ seen[k]=1; accts.push(t.acct); } } }
+    for(var j=0;j<tabs.length;j++){ var b=tabs[j];
+      if(b.pageKey && b.fr){ try{ b.fr.contentWindow.postMessage({__rtflow:"liveAccts", accts:accts}, "*"); }catch(e){} } }
+  }
+  setInterval(broadcastLiveAccts, 3000);
 
   // ── 📱 手机标签实时镜像 (browseListTabs 轮询 → 与 APK 当前开着的网页 1:1) ──────
   //   数量/标题/账号(邮箱·序号·组织)/active/橙色 viewers 全跟手机走; 互不干扰(只读镜像)。
