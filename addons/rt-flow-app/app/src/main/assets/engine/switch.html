@@ -1027,6 +1027,8 @@ var _capApplied = {};        // id → 上次已写入的 max_credits (避免重
 var _balAlertTs = {};        // id → 上次低额提醒时间 (节流 10 分钟)
 var _quotaBusy = false, _quotaLiveBusy = false, _idleCursor = 0;
 function _hasLiveConv(a){ var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<180000); }
+// 有对话(不必正在跑): 追踪到该号有对话且近 25 分钟内见过 → 视为「活跃号」, 额度每轮必刷(不进慢速轮转), 用户最关心的有对话账号额度近实时。
+function _hasConv(a){ var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<1500000); }
 async function applyConvCapFor(a){
   if(!_cfg("convCap",true) || !hasAuth(a)) return;
   var q=a.quota; if(!q||typeof q.dPct!=="number") return;   // 未知余额不动
@@ -1199,10 +1201,10 @@ async function autoQuotaTick(){
   if(_quotaBusy || _quotaLiveBusy) return; _quotaBusy=true;   // 与对话快轮互斥, 不叠加
   try{
     var accs=loadAcc().filter(hasAuth);
-    var idle=accs.filter(function(a){return !_hasLiveConv(a);});
-    var batch=accs.filter(_hasLiveConv);                          // 有对话 → 本轮必刷(高频)
-    // 冷启首轮全刷(消除死数据); 之后每轮转 8 个空闲号 → 全部号在数轮内都刷新, 不再"半天不动"
-    var idleN = _quotaWarmed ? 8 : idle.length;
+    var idle=accs.filter(function(a){return !_hasConv(a);});
+    var batch=accs.filter(_hasConv);                              // 有对话(含非实时) → 本轮必刷(高频), 不随空闲号慢速轮转
+    // 冷启首轮全刷(消除死数据); 之后每轮转 12 个空闲号 → 全部号在更少轮内都刷新, 不再"半天不动"
+    var idleN = _quotaWarmed ? 12 : idle.length;
     for(var n=0;n<idleN && idle.length;n++){ batch.push(idle[_idleCursor%idle.length]); _idleCursor++; }
     var seen={};
     for(var i=0;i<batch.length;i++){ var a=batch[i]; if(!a||seen[a.id])continue; seen[a.id]=1;
@@ -1347,14 +1349,19 @@ window.addEventListener("resize", function(){ if(!_notVisible() && _renderDirty)
 setInterval(render, 6000);
 // 自调度 + 抖动: 让 pollTrk / autoQuota / autoBackup 三个心跳错峰, 不在同一刻一起轰网络 (消除并发卡顿)。
 function _loop(fn, base, jitter){ (function tick(){ setTimeout(function(){ try{ fn(); }catch(e){} tick(); }, base + Math.floor(Math.random()*jitter)); })(); }
-setInterval(pollTrk, 12000);   // 30s→15s→12s: 跨设备同账号运行更接近实时 (主心跳保持稳定周期)
+setInterval(pollTrk, 10000);   // 30s→15s→12s→10s: 更快侦测有对话的号 → 其额度更快进入高频刷新(主心跳仍稳定)
 // 美刀额度: 冷启动尽快全量刷一遍(消除死数据); 之后每 ~12s 一轮, 错开 pollTrk 半个周期 + 抖动, 避免与状态轮询同刻并发
 setTimeout(autoQuotaTick, 1200);
-setTimeout(function(){ _loop(autoQuotaTick, 11000, 3000); }, 6000);   // 6s 相位偏移 → 与 12s 的 pollTrk 错峰
+setTimeout(function(){ _loop(autoQuotaTick, 8000, 2000); }, 6000);   // 11s→8s: 全量额度轮更快; 6s 相位偏移与 pollTrk 错峰
 // 对话使用中 → 金额近实时: 只刷在跑对话的号, ~4s 一轮(带抖动); 无在跑对话时自动空转不耗网络
-setTimeout(function(){ _loop(autoQuotaLiveTick, 3500, 1200); }, 2500);
+setTimeout(function(){ _loop(autoQuotaLiveTick, 2200, 800); }, 2500);   // 3.5s→2.2s: 正在跑对话的号额度更接近实时
 // 自动备份心跳: 始终增量备份(每 ~90s 轮一个账号, 带抖动), 与额度/清理解耦; 且仅在交互空闲时启动
 setTimeout(autoBackupTick, 9000);
 _loop(autoBackupTick, 85000, 12000);
+// 外壳「刷新」按钮(console.html #reload)→ 立刻刷新本板块全部已登录账号额度 + 对话追踪 + 重渲
+//   (不止重载页面, 顺带刷新账号的额度及相关各项数据)。
+window.addEventListener("message", function(ev){ try{ var d=ev&&ev.data;
+  if(d && d.__rtflow==="rtRefresh"){ try{ refreshTrack(); }catch(e){} try{ doRefreshAll(); }catch(e){} }
+}catch(e){} });
 </script>
 </body></html>
