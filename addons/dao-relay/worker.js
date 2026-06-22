@@ -113,6 +113,74 @@ function pxFindAcct(arr, acc) {
   return null;
 }
 
+// 边缘登录自愈 (与手机端 devin-core.js refreshQuotaFor 自愈同源):
+//   金库里的 auth1 会过期 → 单网页注入死令牌 → Devin 判未登录、弹登录页(= 用户反馈的「登录失效」)。
+//   故注入前先验活: 现存 auth1 仍活 → 直接用; 死了且金库存有账密 → 用账密重登换新 auth1(Step1 windsurf
+//   登录拿 auth1+userId, Step3 Devin post-auth 拿 orgId/orgName)再注入。令牌死了自己活过来, 无需手动。
+//   email→auth 结果 isolate 内缓存 30 分钟, 防同号反复重登。
+const _pxAuthCache = new Map();
+async function pxLogin(email, password) {
+  let j1 = {};
+  try {
+    const r1 = await fetch("https://windsurf.com/_devin-auth/password/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": PX_UA, "Origin": "https://windsurf.com", "Referer": "https://windsurf.com/account/login" },
+      body: JSON.stringify({ email: email, password: password }),
+    });
+    if (r1.status !== 200) return null;
+    j1 = await r1.json();
+  } catch (e) { return null; }
+  const auth1 = (j1 && (j1.token || j1.auth1_token)) || "";
+  if (!auth1) return null;
+  const userId = (j1 && j1.user_id) || "";
+  let orgId = "", orgName = "";
+  try {
+    const r3 = await fetch("https://app.devin.ai/api/users/post-auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": PX_UA, "Authorization": "Bearer " + auth1 },
+      body: "{}",
+    });
+    const j3 = await r3.json();
+    const org = (j3 && j3.org) || {};
+    orgId = org.org_id || (j3 && (j3.org_id || j3.orgId)) || "";
+    orgName = org.org_name || (j3 && (j3.org_name || j3.orgName)) || "";
+  } catch (e) {}
+  if (!orgId) return null;
+  return { auth1: auth1, userId: userId, orgId: orgId, orgName: orgName };
+}
+async function pxAuth1Alive(auth1, orgId) {
+  if (!auth1 || !orgId) return false;
+  try {
+    const bare = String(orgId).replace(/^org-/, "");
+    const r = await fetch("https://app.devin.ai/api/org-" + bare + "/billing/status", {
+      headers: { "User-Agent": PX_UA, "Authorization": "Bearer " + auth1, "x-cog-org-id": orgId },
+    });
+    return r.status === 200;
+  } catch (e) { return false; }
+}
+async function pxEnsureAuth(a) {
+  if (!a) return null;
+  const email = String(a.email || "");
+  const cached = email ? _pxAuthCache.get(email) : null;
+  if (cached && Date.now() - cached.ts < 1800000) return cached.auth;
+  if (a.auth1 && await pxAuth1Alive(a.auth1, a.orgId)) {
+    const auth = { auth1: a.auth1, userId: a.userId, orgId: a.orgId, orgName: a.orgName, email: email };
+    if (email) _pxAuthCache.set(email, { ts: Date.now(), auth: auth });
+    return auth;
+  }
+  if (a.email && a.password) {
+    const lr = await pxLogin(a.email, a.password);
+    if (lr && lr.auth1) {
+      const auth = { auth1: lr.auth1, userId: lr.userId, orgId: lr.orgId, orgName: lr.orgName, email: email };
+      _pxAuthCache.set(email, { ts: Date.now(), auth: auth });
+      return auth;
+    }
+  }
+  // 重登失败但有旧 auth1: 退而用旧令牌(让用户至少进到反代源的登录页, 而非外跳真站)。
+  if (a.auth1) return { auth1: a.auth1, userId: a.userId, orgId: a.orgId, orgName: a.orgName, email: email };
+  return null;
+}
+
 function pxResolveUpstream(pathname) {
   if (pathname.startsWith("/__ws/")) return { base: PX_WS, path: pathname.slice(5) };
   if (pathname.startsWith("/__reg/")) return { base: PX_REG, path: pathname.slice(6) };
@@ -561,11 +629,12 @@ export default {
       if (!sharedTokenOk(env, token)) return json({ error: "unauthorized" }, 401);
       const arr = await pxLoadAccounts(env, session, token);
       const a = pxFindAcct(arr, acc);
-      if (!a || !a.auth1) return json({ error: "acct_not_found_or_no_auth", acc: acc }, 404);
+      const auth = await pxEnsureAuth(a);
+      if (!auth || !auth.auth1) return json({ error: "acct_not_found_or_no_auth", acc: acc }, 404);
       if (!u.startsWith("/")) u = "/" + u;
       const encAcc = encodeURIComponent(acc);
       const prefix = "/i/" + encAcc;
-      const bundle = pxB64Enc({ auth1: a.auth1, userId: a.userId, orgId: a.orgId, orgName: a.orgName, email: a.email });
+      const bundle = pxB64Enc({ auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgName: auth.orgName, email: auth.email });
       const h = new Headers();
       h.set("content-type", "application/json");
       h.set("access-control-allow-origin", "*");
@@ -587,7 +656,7 @@ export default {
       let auth = ck["da_" + pxSafeKey(acc)] ? pxB64Dec(ck["da_" + pxSafeKey(acc)]) : null;
       if (!auth || !auth.auth1) {
         const s = ck.ds ? decodeURIComponent(ck.ds) : "", t = ck.dt ? decodeURIComponent(ck.dt) : "";
-        if (s && t) { const arr = await pxLoadAccounts(env, s, t); const a = pxFindAcct(arr, acc); if (a && a.auth1) auth = { auth1: a.auth1, userId: a.userId, orgId: a.orgId, orgName: a.orgName }; }
+        if (s && t) { const arr = await pxLoadAccounts(env, s, t); const a = pxFindAcct(arr, acc); const fresh = await pxEnsureAuth(a); if (fresh && fresh.auth1) auth = fresh; }
       }
       if (!auth || !auth.auth1) {
         return new Response("<!doctype html><meta charset=utf-8><body style='font:15px system-ui;padding:24px;color:#c9d1d9;background:#0d1117'><h3>会话已过期</h3><p>请回控台重新打开此 Devin 实例。</p>", { status: 401, headers: { "content-type": "text/html; charset=utf-8" } });
