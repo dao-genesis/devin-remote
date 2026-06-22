@@ -1209,9 +1209,10 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout chip = new LinearLayout(this);
             chip.setOrientation(LinearLayout.HORIZONTAL);
             chip.setGravity(Gravity.CENTER_VERTICAL);
-            // 道法自然·跨设备在场同步: 有其他设备(云端)正看/控此标签 → 橙色半透明底, 与控台 .tab.shared 同款视觉, 双向一致。
-            chip.setBackgroundColor(coView ? (idx == active ? 0xFF5A3D22 : 0xFF3A2C1B)
-                                           : (idx == active ? 0xFF1F3A45 : 0xFF1B1F26));
+            // 道法自然·跨设备在场同步: 任意用户(手机本体当前前置 / 云端控台正看控)停留此标签 → 橙色半透明底,
+            // 与控台 .mchip.live 同款视觉、双向一致 → 本机最前端页与他设备在场页皆橙色, 一眼见"有几人在哪操作"。
+            boolean viewed = (idx == active) || coView;   // idx==active = 手机本体当前最前端页 (一种在场)
+            chip.setBackgroundColor(viewed ? ((idx == active) ? 0xFF5A3D22 : 0xFF3A2C1B) : 0xFF1B1F26);
             chip.setPadding(dp(10), dp(5), dp(6), dp(5));
             LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             clp.rightMargin = dp(4);
