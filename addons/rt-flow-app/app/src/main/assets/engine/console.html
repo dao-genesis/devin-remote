@@ -106,6 +106,20 @@
   #menuPop .mi:hover{background:#1a2030}
   #menuPop .sep{height:1px;background:var(--border);margin:5px 4px}
   #menuPop .ic{width:20px;text-align:center}
+  #menuPop .mi .arr{margin-left:auto;color:var(--muted);font-size:11px;transition:transform .15s}
+  #menuPop .mi.open .arr{transform:rotate(90deg)}
+  #menuPop .subwrap{display:none;margin:2px 0 4px 8px;padding-left:6px;border-left:1px solid var(--border)}
+  #menuPop .subwrap.open{display:block}
+  #menuPop .mi.apkonly{opacity:.62}
+  #histPanel{position:absolute;top:46px;left:8px;width:min(360px,93vw);max-height:76vh;overflow-y:auto;
+             background:#11161e;border:1px solid var(--border);border-radius:12px;padding:8px;display:none;z-index:60;box-shadow:0 14px 40px #000a}
+  #histPanel.show{display:block}
+  #histPanel h4{margin:2px 4px 8px;font-size:13px;display:flex;align-items:center;gap:6px}
+  #histPanel h4 .clr{margin-left:auto;font-size:11px;color:var(--muted);cursor:pointer}
+  #histPanel .hrow{padding:8px 9px;border:1px solid var(--input-b);border-radius:8px;margin-bottom:6px;font-size:12px;cursor:pointer}
+  #histPanel .hrow:hover{border-color:var(--green);background:#13332b}
+  #histPanel .hrow .ht{color:var(--fg);word-break:break-all} #histPanel .hrow .hu{color:#6e7681;word-break:break-all;font-size:11px}
+  #histPanel .empty{color:var(--muted);font-size:12px;padding:10px 6px;text-align:center}
   #cfg{position:absolute;inset:0;background:rgba(8,11,16,.82);display:none;align-items:center;justify-content:center;z-index:99}
   #cfg.show{display:flex}
   #cfgCard{width:min(420px,93vw);background:#11161e;border:1px solid var(--border);border-radius:14px;padding:16px}
@@ -141,6 +155,7 @@
   <div id="mirror" class="empty"></div>
   <div id="frames">
     <div id="menuPop"></div>
+    <div id="histPanel"><h4>&#128340; 浏览历史<span class="clr" id="histClr">清空</span></h4><div id="histList"></div></div>
     <div id="dlPanel"><h4>&#128229; 下载</h4><div id="dlList"></div></div>
     <div id="launch"><div id="launchCard">
       <h3>新标签 — 选择板块, 或打开任意网址 / Devin 对话</h3>
@@ -414,10 +429,30 @@
       return res.body.text;
     });
   }
+  // ── 持久资源缓存 (stale-while-revalidate): 暖启动秒开 + 后台静默重验保鲜 ────────────
+  //   旧瓶颈: 每次冷启动都 no-store 重取板块 HTML+JS 依赖近 200KB → 「启动非常慢」。
+  //   板块是静态死文件、只随部署变 → 以 localStorage 持久缓存即时上屏(暖启动 0 网络),
+  //   再后台重验取真源更新缓存(下次开即新)。重验阈值 60s 防频繁重开狂刷; 手动「重载」强制取最新。
+  //   不会重蹈 #515 旧板病: 重验始终发生 → 单次开后即新鲜, 陈旧窗口仅首帧且有界(非 jsDelivr 的 ~12h)。
+  var ASSET_REVAL_MS = 60*1000;
+  function _ckey(name){ return "rtflow.console.ac."+name; }
+  function cacheGet(name){ try{ var s=localStorage.getItem(_ckey(name)); if(!s) return null; var o=JSON.parse(s);
+    return (o && typeof o.v==="string") ? o : null; }catch(e){ return null; } }
+  function cachePut(name, text){ try{ localStorage.setItem(_ckey(name), JSON.stringify({t:Date.now(), v:text})); }catch(e){} }
+  function cacheClearAll(){ try{ for(var i=localStorage.length-1;i>=0;i--){ var k=localStorage.key(i); if(k&&k.indexOf("rtflow.console.ac.")===0) localStorage.removeItem(k); } }catch(e){} }
+  function _netAsset(name){
+    return assetFromCdn(name).catch(function(){ return assetFromPhone(name); })
+      .then(function(txt){ ASSETS[name]=txt; cachePut(name, txt); return txt; });
+  }
   function asset(name){
     if(ASSETS[name]!=null) return Promise.resolve(ASSETS[name]);
-    return assetFromCdn(name).catch(function(){ return assetFromPhone(name); })
-      .then(function(txt){ ASSETS[name]=txt; return txt; });
+    var c=cacheGet(name);
+    if(c){
+      ASSETS[name]=c.v;                                              // 即时上屏 → 暖启动秒开
+      if(Date.now()-c.t > ASSET_REVAL_MS) _netAsset(name).catch(function(){}); // 后台重验, 下次开即新
+      return Promise.resolve(c.v);
+    }
+    return _netAsset(name);                                          // 冷启动: 取真源
   }
   function b64(str){ try{ return btoa(unescape(encodeURIComponent(str))); }catch(e){ return btoa(str); } }
 
@@ -458,6 +493,15 @@
     return Promise.all([ asset(file), rnSource() ]).then(function(r){
       return inlineDeps(r[0]).then(function(inl){ return injectRn(inl, r[1]); });
     });
+  }
+  // 首屏画完后, 浏览器空闲时把其余板块的 HTML+JS 依赖逐个预热进缓存 → 后续切板秒开 (道法自然·谋于未兆)。
+  var _prefetched=false;
+  function prefetchBoards(){
+    if(_prefetched) return; _prefetched=true;
+    var idle=window.requestIdleCallback||function(f){ return setTimeout(function(){ f(); },1500); };
+    var q=PAGES.map(function(p){ return p.file; });
+    (function step(){ if(!q.length) return; var f=q.shift();
+      buildSrcdoc(f).catch(function(){}).then(function(){ idle(step); }); })();
   }
 
   // ── 板块注册表 (与 APK 菜单同序同名) ────────────────────────────────────
@@ -529,14 +573,15 @@
   //   不同账号落不同前缀命名空间 → 多实例并行互不串号。取不到则优雅回退本机浏览器新标签打开。
   function b64url(s){ try{ return btoa(unescape(encodeURIComponent(s))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }catch(e){ return ""; } }
   function isDevinHost(h){ return /(^|\.)devin\.ai$/i.test(h) || /(^|\.)cognition\.ai$/i.test(h); }
-  function openInPage(url, acct, title){
+  function openInPage(url, acct, title, opts){
+    opts=opts||{};
     if(!/^[a-z]+:\/\//i.test(url)) url="https://"+url;
     acct=acct||"";
     for(var i=0;i<tabs.length;i++){ if(tabs[i].kind==="web" && tabs[i].url===url && (tabs[i].acct||"")===acct){ selectTab(tabs[i].id); return; } }
     var uo; try{ uo=new URL(url); }catch(e){ openExternalNewTab(url); return; }
     var pathq=(uo.pathname||"/")+(uo.search||"")+(uo.hash||"");
     var devin=isDevinHost(uo.hostname);
-    var t={ id:++seq, title:title||host(url), kind:"web", url:url, acct:acct, ready:false };
+    var t={ id:++seq, title:title||host(url), kind:"web", url:url, acct:acct, ready:false, incognito:!!opts.incognito };
     var fr=document.createElement("iframe"); fr.className="hidden";
     fr.setAttribute("allow","clipboard-read; clipboard-write");
     // sandbox 去掉 allow-top-navigation* → 子页(Devin SPA)即便做顶层跳转(framebust/跳真站登录页)
@@ -550,6 +595,7 @@
     t.ld=ld; frames.appendChild(ld);
     fr.addEventListener("load", function(){ try{ var d=fr.contentDocument; if(d&&d.title){ t.title=d.title; renderStrip(); } }catch(e){} });
     tabs.push(t); renderStrip(); selectTab(t.id); broadcastLiveAccts();
+    if(!t.incognito) histAdd(url, t.title, acct);
     function go(src){ t.ready=true; if(t.ld){ t.ld.remove(); t.ld=null; } t.fr.src=src; }
     // 失败不外跳: 旧逻辑 openExternalNewTab(window.open 真站) 会另开浏览器标签、看着像「跳出页面」。
     //   改为在本标签内显示错误 + 重试, 永不离开单网页。
@@ -704,6 +750,62 @@
   // ── 译 翻译 (板块均为内部中文页 → 与原生「内部页不可翻译」一致) ──
   document.getElementById("trBtn").onclick=function(){ toast("板块为内部中文页, 无需翻译; Devin 对话经手机反代在本页内原生打开"); };
 
+  // ── 🕐 浏览历史 (网页内打开过的 Devin 对话 / 外站; 无痕标签不记) ──
+  function histAll(){ try{ return JSON.parse(localStorage.getItem("rtflow.console.hist")||"[]"); }catch(e){ return []; } }
+  function histAdd(url, title, acct){
+    if(!url) return;
+    try{ var a=histAll().filter(function(h){ return h.url!==url; });
+      a.unshift({ url:url, title:title||host(url), acct:acct||"", ts:Date.now() });
+      if(a.length>120) a=a.slice(0,120);
+      localStorage.setItem("rtflow.console.hist", JSON.stringify(a)); }catch(e){}
+  }
+  var histPanel=document.getElementById("histPanel"), histList=document.getElementById("histList");
+  function renderHist(){ var a=histAll();
+    if(!a.length){ histList.innerHTML='<div class="empty">暂无浏览历史 · 网页内打开的 Devin 对话/外站会记于此 (无痕标签不记)</div>'; return; }
+    histList.innerHTML="";
+    a.forEach(function(h){ var r=document.createElement("div"); r.className="hrow";
+      r.innerHTML='<div class="ht">'+String(h.title||host(h.url))+(h.acct?(' · '+h.acct):'')+'</div><div class="hu">'+String(h.url)+'</div>';
+      r.onclick=function(){ histPanel.classList.remove("show"); openInPage(h.url, h.acct||"", h.title); };
+      histList.appendChild(r); });
+  }
+  document.getElementById("histPanel").addEventListener("click", function(e){ e.stopPropagation(); });
+  document.getElementById("histClr").onclick=function(e){ e.stopPropagation();
+    try{ localStorage.removeItem("rtflow.console.hist"); }catch(e2){} renderHist(); toast("已清空浏览历史"); };
+
+  // ── 页面工具: 后退/前进/页内查找/夜间/桌面/阅读, 作用于当前标签 (板块 blob 与 /i//e/ 反代均与本页同源, 可注入) ──
+  function curTab(){ return tabs[active]||null; }
+  function tabNav(dir){ var t=curTab(); if(!t||!t.fr){ toast("无当前标签"); return; }
+    try{ var h=t.fr.contentWindow.history; dir<0?h.back():h.forward(); }catch(e){ toast("此标签不支持前进/后退"); } }
+  function tabDoc(t){ try{ return t&&t.fr&&(t.fr.contentDocument||t.fr.contentWindow.document); }catch(e){ return null; } }
+  function tabFind(){ var t=curTab(); if(!t){ toast("无当前标签"); return; }
+    var kw=prompt("页内查找:"); if(!kw) return;
+    var w; try{ w=t.fr.contentWindow; }catch(e){ w=null; }
+    if(w&&w.find){ try{ w.focus(); var ok=w.find(kw,false,false,true,false,true,false); toast(ok?("已定位「"+kw+"」"):("未找到「"+kw+"」")); return; }catch(e){} }
+    toast("此页不支持页内查找");
+  }
+  function tabNight(){ var t=curTab(); if(!t||!t.fr){ toast("无当前标签"); return; }
+    t.night=!t.night;
+    t.fr.style.filter = t.night ? "invert(1) hue-rotate(180deg)" : "";
+    toast(t.night?"夜间模式开 (本标签)":"夜间模式关"); }
+  function tabReader(){ var t=curTab(); var d=tabDoc(t);
+    if(!d||!d.body){ toast("此页不支持阅读模式 (跨源)"); return; }
+    if(t._reader){ if(t._readerPrev!=null) d.body.style.cssText=t._readerPrev; t._reader=false; toast("阅读模式关"); return; }
+    t._readerPrev=d.body.style.cssText; t._reader=true;
+    try{ d.body.style.cssText="max-width:720px;margin:0 auto;padding:18px 22px;line-height:1.75;font-size:17px;background:#fbfaf7;color:#222"; toast("阅读模式开 (本标签)"); }
+    catch(e){ toast("此页不支持阅读模式"); }
+  }
+  function tabDesktop(){ var t=curTab(); if(!t||!t.fr){ toast("无当前标签"); return; }
+    t.desktop=!t.desktop;
+    // 网页端无服务端 UA 切换: 以等宽桌面视口 + 缩放近似呈现桌面版布局。
+    if(t.desktop){ t.fr.style.width="1280px"; t.fr.style.zoom=String(Math.min(1,(t.fr.parentElement.clientWidth||360)/1280)); toast("桌面版布局 (宽视口近似)"); }
+    else { t.fr.style.width=""; applyZoomTo(t.fr); toast("移动版布局"); }
+  }
+  function shareCurrent(){ var t=curTab(); var u=t&&t.kind==="web"?t.url:(location.origin+"/console?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN));
+    if(navigator.share){ navigator.share({ title:(t&&t.title)||"Devin Cloud", url:u }).catch(function(){}); }
+    else { try{ navigator.clipboard.writeText(u); toast("已复制本页网址"); }catch(e){ toast(u); } } }
+  function copyCurrentUrl(){ var t=curTab(); var u=t&&t.kind==="web"?t.url:("rtflow://"+((t&&t.pageKey)||"switch"));
+    try{ navigator.clipboard.writeText(u); toast("已复制网址"); }catch(e){ toast(u); } }
+
   // ── ☆ 收藏当前板块 ──
   function bookmarks(){ try{ return JSON.parse(localStorage.getItem("rtflow.console.bm")||"[]"); }catch(e){ return []; } }
   function saveBookmarks(a){ try{ localStorage.setItem("rtflow.console.bm", JSON.stringify(a)); }catch(e){} }
@@ -746,7 +848,8 @@
   }
   document.getElementById("reload").onclick=function(){ rtRefreshAccounts(); var t=tabs[active]; if(!t) return;
     if(t.kind==="web"){ var s=t.fr.src; t.fr.src="about:blank"; setTimeout(function(){ t.fr.src=s; },60); return; }
-    if(t.pageKey){ var k=t.pageKey; closeTab(t.id); openPage(k); } };
+    // 板块手动重载 = 强制取最新代码: 清掉内存与持久缓存, 再原生重渲 (避免「重载仍是旧板」的疑虑)。
+    if(t.pageKey){ var k=t.pageKey; ASSETS=Object.create(null); cacheClearAll(); closeTab(t.id); openPage(k); } };
 
   // ── 新标签面板 ──
   var launch=document.getElementById("launch"), segGrid=document.getElementById("segGrid");
@@ -765,34 +868,70 @@
 
   // ── 菜单 ──
   var menuPop=document.getElementById("menuPop");
-  function mi(ic,label,fn){ var d=document.createElement("div"); d.className="mi";
+  // mi: 普通项 (点后收起菜单)。opts.cls 加类; opts.parent 落到子菜单容器而非顶层。
+  function mi(ic,label,fn,opts){ opts=opts||{}; var d=document.createElement("div"); d.className="mi"+(opts.cls?(" "+opts.cls):"");
     d.innerHTML='<span class="ic">'+ic+'</span><span>'+label+'</span>';
-    d.onclick=function(){ menuPop.classList.remove("show"); fn(); }; menuPop.appendChild(d); }
-  function sep(){ var s=document.createElement("div"); s.className="sep"; menuPop.appendChild(s); }
+    d.onclick=function(e){ e.stopPropagation(); menuPop.classList.remove("show"); fn(); };
+    (opts.parent||menuPop).appendChild(d); return d; }
+  function sep(parent){ var s=document.createElement("div"); s.className="sep"; (parent||menuPop).appendChild(s); }
+  // miSub: 折叠子菜单 (点表头展开/收起, 不关菜单), builder(sub) 往 sub 容器加 mi。复刻原生 ▸ 子菜单。
+  function miSub(ic,label,builder){
+    var h=document.createElement("div"); h.className="mi";
+    h.innerHTML='<span class="ic">'+ic+'</span><span>'+label+'</span><span class="arr">▸</span>';
+    var wrap=document.createElement("div"); wrap.className="subwrap";
+    h.onclick=function(e){ e.stopPropagation(); var op=wrap.classList.toggle("open"); h.classList.toggle("open",op); };
+    menuPop.appendChild(h); menuPop.appendChild(wrap); builder(wrap);
+  }
   function buildMenu(){
     menuPop.innerHTML="";
     var hd=document.createElement("div"); hd.className="hd"; hd.id="__connhd";
     hd.innerHTML="中继: "+(_connOk==null?"检测中…":(_connOk?'<b class="ok">已连通</b>':'<b class="bad">未连通 (检查穿透/Token 或开 VPN)</b>'));
     menuPop.appendChild(hd); sep();
-    PAGES.forEach(function(p){ mi(p.ic, p.label, function(){ openPage(p.key); }); });
-    mi("🟢","新标签 (Devin 对话)", function(){ openExternalNewTab("https://app.devin.ai/"); });
+    // ── 与原生 APK ☰ 菜单同序同项 (MainActivity.showMenu) ──
+    mi("🔁","切号面板",        function(){ openPage("switch"); });
+    mi("☁","对话 / Cloud",     function(){ openPage("cloud"); });
+    mi("🌐","公网穿透",        function(){ openPage("tunnel"); });
+    mi("🚀","VPN 加速",        function(){ openPage("vpn"); });
+    mi("🟢","新标签 (Devin)",  function(){ openInPage("https://app.devin.ai/", "", "Devin"); });
+    mi("🕶","无痕标签",        function(){ openInPage("https://app.devin.ai/", "", "Devin (无痕)", {incognito:true}); toast("无痕标签 (不记浏览历史)"); });
+    mi("🕐","浏览历史",        function(){ renderHist(); histPanel.classList.add("show"); });
+    mi("⭐","书签收藏",        function(){ var a=bookmarks(); if(!a.length){ toast("暂无收藏 · 点 ☆ 收藏板块"); return; } a.forEach(function(k){ openPage(k); }); });
+    mi("🐵","用户脚本 (油猴)", function(){ openPage("scripts"); });
+    mi("🔑","Shizuku 权限 (自我 ADB)", function(){ openPage("shizuku"); });
+    miSub("🧰","页面工具", function(sub){
+      mi("◀","后退",            function(){ tabNav(-1); }, {parent:sub});
+      mi("▶","前进",            function(){ tabNav(1); },  {parent:sub});
+      mi("⌂","主页 (切号面板)", function(){ openPage("switch"); }, {parent:sub});
+      mi("🔍","页内查找",        function(){ tabFind(); },   {parent:sub});
+      mi("🖥","桌面版网站",      function(){ tabDesktop(); }, {parent:sub});
+      mi("📖","阅读模式",        function(){ tabReader(); },  {parent:sub});
+      mi("🌙","夜间模式",        function(){ tabNight(); },   {parent:sub});
+      mi("🐵","脚本菜单 (油猴)", function(){ openPage("scripts"); }, {parent:sub});
+      mi("📦","导出整机分享包",  function(){ toast("整机分享包为 APK 专属 (含 APK 本体+数据)。网页端用「复制接入链接」分享访问"); }, {parent:sub, cls:"apkonly"});
+      mi("📥","导入分享包",      function(){ toast("导入分享包为 APK 专属。网页端经接入链接 (session/token) 即同步金库数据"); }, {parent:sub, cls:"apkonly"});
+    });
+    miSub("🔗","分享 / 快捷", function(sub){
+      mi("📤","分享本页",  function(){ shareCurrent(); },  {parent:sub});
+      mi("🔗","复制网址",  function(){ copyCurrentUrl(); }, {parent:sub});
+      mi("➕","添加到主屏", function(){ toast("「添加到主屏」为 APK/系统能力; 网页端请用浏览器自带「添加到主屏幕」"); }, {parent:sub, cls:"apkonly"});
+    });
+    mi("📌","后台常驻 · 保活", function(){ toast("后台常驻·保活为 APK 专属 (防系统杀进程致整页重载)。网页端由浏览器标签托管, 切后台不被杀"); }, {cls:"apkonly"});
+    mi("⟳","检查更新 · 网页端", function(){ toast("网页端始终为最新 (随中继下发 GitHub main); 正在硬刷新…"); setTimeout(function(){ location.reload(); }, 600); });
     sep();
-    mi("⭐","书签收藏", function(){ var a=bookmarks(); if(!a.length){ toast("暂无收藏 · 点 ☆ 收藏板块"); return; }
-      a.forEach(function(k){ openPage(k); }); });
-    mi("🔗","复制接入链接", function(){ var u=location.origin+"/console?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN);
+    mi("📋","复制接入链接", function(){ var u=location.origin+"/console?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN);
       try{ navigator.clipboard.writeText(u); toast("已复制接入链接"); }catch(e){ toast(u); } });
     mi("⚙","接入设置 (Session/Token)", function(){ showCfg(); });
-    mi("↻","重连/刷新本页", function(){ location.reload(); });
   }
   document.getElementById("menuBtn").onclick=function(e){ e.stopPropagation();
     if(!menuPop.dataset.built){ buildMenu(); menuPop.dataset.built="1"; }
+    dlPanel.classList.remove("show"); histPanel.classList.remove("show");
     menuPop.classList.toggle("show"); };
-  document.addEventListener("click", function(){ menuPop.classList.remove("show"); dlPanel.classList.remove("show"); });
+  document.addEventListener("click", function(){ menuPop.classList.remove("show"); dlPanel.classList.remove("show"); histPanel.classList.remove("show"); });
   // 点进 iframe 内容(板块/网页)时, 点击落在子文档里 → 父文档的 document click 收不到, 旧逻辑下浮层不收
   // (要再点一次外壳才关 = 「菜单/下载要点两次」)。改为窗口失焦且焦点进入某 iframe 时即收起, 一次点击即关。
   window.addEventListener("blur", function(){
     if(document.activeElement && document.activeElement.tagName==="IFRAME"){
-      menuPop.classList.remove("show"); dlPanel.classList.remove("show");
+      menuPop.classList.remove("show"); dlPanel.classList.remove("show"); histPanel.classList.remove("show");
     }
   });
 
@@ -826,6 +965,8 @@
   if(!SESSION || !TOKEN){ showCfg(); }
   else { openPage("switch"); }
   ping(); setInterval(ping, 9000);
+  // 首屏 switch 画完后, 空闲预热其余板块 → 切板秒开。
+  if(SESSION && TOKEN){ (window.requestIdleCallback||function(f){setTimeout(f,2000);})(prefetchBoards); }
 })();
 </script>
 </body>
