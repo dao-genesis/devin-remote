@@ -5707,17 +5707,22 @@ function loadAccountPool(forceRefresh?: boolean): PoolAccount[] {
         const cfgAccts = vscode.workspace.getConfiguration('dao').get<any[]>('devinAccounts');
         if (Array.isArray(cfgAccts)) for (const a of cfgAccts) { if (a && a.email) add(a.email, a.password); }
     } catch { /* 守柔 */ }
-    // 来源2 (本源·真池): ~/.wam 切号板块账号库 — 反向注入与切号同源, 命中用户真实在用的账号。
-    //   配置 wam.accountsFile(若指定) > ~/.wam/accounts.md > ~/.wam/accounts-backup.json。
+    // 来源2 (本源·真池): ~/.wam 切号板块账号库 — 反向注入与切号(rt-flow)同源, 命中用户真实在用的账号。
+    //   候选顺序与 rt-flow loadAccountsFromFs 对齐(完全融合·数据对齐):
+    //   配置 wam.accountsFile > ~/.wam/accounts.md > ~/.wam/accounts-backup.json
+    //   (dao.accountsFile 仅作末位兜底, 不破坏与切号的同源优先级)。
     let wamLoaded = false;
     try {
         const cands: string[] = [];
         try {
-            const af = vscode.workspace.getConfiguration('wam').get<string>('accountsFile')
-                || vscode.workspace.getConfiguration('dao').get<string>('accountsFile') || '';
+            const af = vscode.workspace.getConfiguration('wam').get<string>('accountsFile') || '';
             if (af) cands.push(af);
         } catch { /* 守柔 */ }
         cands.push(WAM_ACCOUNTS_MD, WAM_ACCOUNTS_BACKUP);
+        try {
+            const daf = vscode.workspace.getConfiguration('dao').get<string>('accountsFile') || '';
+            if (daf) cands.push(daf);
+        } catch { /* 守柔 */ }
         for (const p of cands) {
             if (!p || !fs.existsSync(p)) continue;
             const raw = fs.readFileSync(p, 'utf8');
