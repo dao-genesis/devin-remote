@@ -545,17 +545,17 @@
     tabs.push(t); renderStrip(); selectTab(t.id);
     function go(src){ t.ready=true; if(t.ld){ t.ld.remove(); t.ld=null; } t.fr.src=src; }
     function fail(){ openExternalNewTab(url); closeTab(t.id); }
-    // 本源重构(Path SW): 一律走 UV 引擎 frame.html#<目标URL> —— 渲染/JS 改写在用户浏览器 SW 内完成。
-    //   目标 URL 经 hash 传入(不上 query·不进日志); Devin 先 /uv-init 把该号 auth 写入 HttpOnly Cookie。
-    var frame=ENDPOINT+"/uv/frame.html#"+encodeURIComponent(url);
+    // 同源前缀边缘反代 (Path A): Devin 账号 → /i-init 验证后回 /i/<账号>/<path>; 任意第三方站 → /e/<b64源站>/<path>。
+    //   页面 JS 在本浏览器原生执行(渲染/取数各设备各耗各资源), 中继/本机 LocalServer 仅边缘改写字节(剥框限·前缀化·注认证·webapp_host 防跳)。不用 UV/SW(Vite 分包经 302 自愈双实例致 useAuth 崩)。
     if(devin && acct){
-      fetch(ENDPOINT+"/uv-init", { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ s:SESSION, tk:TOKEN, acc:acct }) })
+      fetch(ENDPOINT+"/i-init", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ s:SESSION, tk:TOKEN, acc:acct, u:pathq }) })
         .then(function(r){ return r.ok ? r.json() : null; })
-        .then(function(j){ if(!j||!j.ok) throw new Error("uv_init_failed"); go(frame); })
+        .then(function(j){ if(!j||!j.ok||!j.redirect) throw new Error("i_init_failed"); go(ENDPOINT+j.redirect); })
         .catch(fail);
     } else {
-      go(frame);
+      var origin=uo.protocol+"//"+uo.host;
+      go(ENDPOINT+"/e/"+b64url(origin)+pathq);
     }
   }
 
