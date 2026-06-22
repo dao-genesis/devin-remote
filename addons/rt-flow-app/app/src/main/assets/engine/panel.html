@@ -52,7 +52,7 @@ function saveAcc(a){ localStorage.setItem("rtflow.accounts", JSON.stringify(a||[
 function getActive(){ return localStorage.getItem("rtflow.active")||""; }
 
 function renderStatus(){
-  var st={}; try{ st=JSON.parse(N.status?N.status():"{}"); }catch(e){}
+  var st={}; try{ var _o=JSON.parse(N.status?N.status():"{}"); if(_o&&typeof _o==="object"&&!Array.isArray(_o)) st=_o; }catch(e){}
   var dot=document.getElementById("dot"), s=document.getElementById("st"), ep=document.getElementById("ep");
   if(st.connected){ dot.classList.add("ok"); s.textContent="内网穿透已连接 · 可远程接入"; }
   else { dot.classList.remove("ok"); s.textContent="内网穿透连接中…"+(st.lastError?(" ("+st.lastError+")"):""); }

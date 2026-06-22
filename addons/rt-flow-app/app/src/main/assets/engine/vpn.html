@@ -99,7 +99,9 @@ function renderApps(){
 }
 // ── 实时状态 (原生 vpnStatus 每 2s 拉取) ──
 var _vapps=[];
-function _vpn(){ try{ return JSON.parse(N.vpnStatus?N.vpnStatus():"{}"); }catch(e){ return {}; } }
+// 安全解析: JSON.parse("null") 不抛错却返回 null → 下游读属性即崩; 一律收敛为对象。
+function _pj(raw){ try{ var o=JSON.parse(raw||"{}"); return (o&&typeof o==="object"&&!Array.isArray(o))?o:{}; }catch(e){ return {}; } }
+function _vpn(){ return _pj(N.vpnStatus?N.vpnStatus():""); }
 function refreshStatus(){
   var s=_vpn();
   var vpnOn=!!s.vpnActive, proxy=s.proxy||"", routed=s.proxyApplied||"";

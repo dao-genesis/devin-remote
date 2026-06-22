@@ -16,6 +16,9 @@
 (function () {
   var N = window.Native || {};
   function log(s){ try{ N.log && N.log(String(s)); }catch(e){} }
+  // 安全解析: JSON.parse("null")/标量不抛错却非对象 → 下游读属性即崩; 一律收敛 (对象/数组各自兜底)。
+  function _pjo(raw){ try{ var o=JSON.parse(raw||"{}"); return (o&&typeof o==="object"&&!Array.isArray(o))?o:{}; }catch(e){ return {}; } }
+  function _pja(raw){ try{ var o=JSON.parse(raw||"[]"); return Array.isArray(o)?o:[]; }catch(e){ return []; } }
   var DEVIN = "https://app.devin.ai/";
   // 版本号优先读真实 APK versionName (Native.appVer), 取不到才回退常量 → 页脚永不再僵化/落后于发版。
   var APP_VERSION = (function(){ try{ var v = N.appVer && N.appVer(); if(v) return String(v); }catch(e){} try{ var c = localStorage.getItem("rtflow.ver"); if(c) return String(c); }catch(e){} return "0.35.8"; })();
@@ -441,22 +444,22 @@
     // ══════════════════════════════════════════════════════════════════════
     // P7: 手机本体操控 (文件系统/相册/剪贴板/通知/分享/应用/设备信息)
     // ══════════════════════════════════════════════════════════════════════
-    phoneInfo: async function(){ return {ok:true, device: JSON.parse(N.phoneDeviceInfo?N.phoneDeviceInfo():"{}")}; },
-    phoneListFiles: async function(a){ return {ok:true, files: JSON.parse(N.phoneListFiles?N.phoneListFiles(a.dir||""):"[]")}; },
+    phoneInfo: async function(){ return {ok:true, device: _pjo(N.phoneDeviceInfo?N.phoneDeviceInfo():"")}; },
+    phoneListFiles: async function(a){ return {ok:true, files: _pja(N.phoneListFiles?N.phoneListFiles(a.dir||""):"")}; },
     phoneReadFile: async function(a){ if(!a||!a.path)return{ok:false,error:"需 path"}; return {ok:true, content: N.phoneReadFile?N.phoneReadFile(a.path, !!a.base64):""}; },
     phoneWriteFile: async function(a){ if(!a||!a.path||!a.content)return{ok:false,error:"需 path+content"}; return {ok: N.phoneWriteFile?N.phoneWriteFile(a.path, a.content):false}; },
-    phoneListPhotos: async function(a){ return {ok:true, photos: JSON.parse(N.phoneListPhotos?N.phoneListPhotos(a.limit||50):"[]")}; },
+    phoneListPhotos: async function(a){ return {ok:true, photos: _pja(N.phoneListPhotos?N.phoneListPhotos(a.limit||50):"")}; },
     phoneClipboard: async function(a){
       if(a&&a.set!==undefined){ N.phoneClipboardSet(a.set); return {ok:true, action:"set"}; }
       return {ok:true, text: N.phoneClipboardGet?N.phoneClipboardGet():""};
     },
     phoneShare: async function(a){ N.phoneShare(a.text||"", a.title||""); return {ok:true}; },
     phoneNotify: async function(a){ N.phoneNotify(a.title||"Devin Cloud", a.text||""); return {ok:true}; },
-    phoneInstalledApps: async function(){ return {ok:true, apps: JSON.parse(N.phoneInstalledApps?N.phoneInstalledApps():"[]")}; },
+    phoneInstalledApps: async function(){ return {ok:true, apps: _pja(N.phoneInstalledApps?N.phoneInstalledApps():"")}; },
     phoneLaunchApp: async function(a){ if(!a||!a.package)return{ok:false,error:"需 package"}; return {ok: N.phoneLaunchApp?N.phoneLaunchApp(a.package):false}; },
     // ── P7+: 高级手机操控 (电池/WiFi/振动/音量) ──
-    phoneBattery: async function(){ return {ok:true, battery: JSON.parse(N.phoneBattery?N.phoneBattery():"{}")}; },
-    phoneWifiInfo: async function(){ return {ok:true, wifi: JSON.parse(N.phoneWifiInfo?N.phoneWifiInfo():"{}")}; },
+    phoneBattery: async function(){ return {ok:true, battery: _pjo(N.phoneBattery?N.phoneBattery():"")}; },
+    phoneWifiInfo: async function(){ return {ok:true, wifi: _pjo(N.phoneWifiInfo?N.phoneWifiInfo():"")}; },
     phoneVibrate: async function(a){ N.phoneVibrate&&N.phoneVibrate(a.ms||200); return {ok:true}; },
     phoneVolume: async function(a){
       if(a&&a.set!==undefined){ N.phoneSetVolume&&N.phoneSetVolume(a.set|0); return {ok:true,action:"set"}; }
@@ -500,10 +503,10 @@
 
     // ── P9: 云端/本地 MD 生成 (完整 API 文档, 供穿透面板+远程导出) ──
     getCloudMd: async function(){
-      var c; try{c=JSON.parse(N.getConn?N.getConn():"{}");} catch(e){c={};}
+      var c=_pjo(N.getConn?N.getConn():"");
       // 全部可用接入渠道 (实时·随状态自动更新): 局域网直连 + cloudflared 主 + SSH 备 + 中继 + P2P。
-      var _tj={}; try{_tj=JSON.parse(N.tunnelStat?N.tunnelStat():"{}");}catch(e){}
-      var _lj={}; try{_lj=JSON.parse(N.lanDirect?N.lanDirect():"{}");}catch(e){}
+      var _tj=_pjo(N.tunnelStat?N.tunnelStat():"");
+      var _lj=_pjo(N.lanDirect?N.lanDirect():"");
       // 公网入口跟随当前生效通道: 去中心化隧道(cloudflared>ssh)优先, Worker 仅兜底 (道法自然·随情况变化)。
       var _btl=(_tj.tunnels&&_tj.tunnels.length)?_tj.tunnels:[];
       function _pickT(n){ for(var i=0;i<_btl.length;i++){ if(_btl[i].name===n&&_btl[i].url) return _btl[i].url; } return ""; }
@@ -813,7 +816,7 @@
     getEngineInfo: async function(){ return {ok:true, version: APP_VERSION, ua:navigator.userAgent, cmds:Object.keys(CMDS), accounts: loadAcc().length, withAuth: loadAcc().filter(function(x){return x.auth1&&x.orgId;}).length, remoteOps: N.isRemoteOpsEnabled?N.isRemoteOpsEnabled():false }; },
     // ── 在线自动更新: 云端经中继可查/可推 (安装仍需用户点一次「安装」) ──
     appCheckUpdate: async function(){ try{ return JSON.parse(N.appCheckUpdate?N.appCheckUpdate():"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },
-    keepAliveStatus: async function(){ try{ return {ok:true, keepAlive: JSON.parse(N.keepAliveStatus?N.keepAliveStatus():"{}")}; }catch(e){ return {ok:false,error:String(e)}; } },
+    keepAliveStatus: async function(){ try{ return {ok:true, keepAlive: _pjo(N.keepAliveStatus?N.keepAliveStatus():"")}; }catch(e){ return {ok:false,error:String(e)}; } },
     appInstallUpdate: async function(a){ try{ return JSON.parse(N.appInstallUpdate?N.appInstallUpdate((a&&a.url)||""):"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },
     deviceInfo: async function(){ var N=window.Native||{}; return {ok:true, ua:navigator.userAgent, platform:navigator.platform, lang:navigator.language, screen:{w:screen.width,h:screen.height,dpr:window.devicePixelRatio,orient:(screen.orientation||{}).type}, relay:typeof DaoRelayApp!=="undefined"?DaoRelayApp.status():{}, tabs:N.listTabs?(function(){try{return JSON.parse(N.listTabs()||"[]");}catch(e){return[];}})():[], conn:N.getConn?(function(){try{return JSON.parse(N.getConn()||"{}");}catch(e){return{};}})():{}, ts:Date.now()}; },
     listTabs: async function(){ var N=window.Native||{}; if(!N.listTabs)return{ok:false,error:"listTabs bridge unavailable"}; try{return{ok:true,tabs:JSON.parse(N.listTabs()||"[]")};}catch(e){return{ok:false,error:String(e)};} },

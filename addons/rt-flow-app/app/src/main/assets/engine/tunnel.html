@@ -250,8 +250,11 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <script>
 // ── Native 桥 shim: 把 dao-bridge 的 vscode.postMessage 协议映射到手机版中继 ──
 var N = window.Native || {};
-function _conn(){ try{ return JSON.parse(N.conn?N.conn():"{}"); }catch(e){ return {}; } }
-function _relay(){ try{ return JSON.parse(N.relayStatus?N.relayStatus():"{}"); }catch(e){ return {}; } }
+// 安全解析: JSON.parse("null") 不抛错却返回 null → 下游读属性即崩 (桥返回 "null"/空时的真凶)。
+// 一律收敛为对象, 非对象(null/数组/标量)回退 {}。
+function _pj(raw){ try{ var o=JSON.parse(raw||"{}"); return (o&&typeof o==="object"&&!Array.isArray(o))?o:{}; }catch(e){ return {}; } }
+function _conn(){ return _pj(N.conn?N.conn():""); }
+function _relay(){ return _pj(N.relayStatus?N.relayStatus():""); }
 // 「当前生效的最优公网入口」选取 (道法自然·对齐本源 AGENTS: 默认零账号中继 Worker, 隧道仅作冗余):
 //   零账号中继 Worker 始终在线、浏览器可直开 /console、无需任何隧道/凭证 → 作首选(connected 时);
 //   仅当中继暂掉线时, 才回落去中心化隧道(cloudflared 主 > SSH 备), 末位再以 Worker 兜底(即便未连)。
@@ -567,7 +570,7 @@ function copyVal(id){
 }
 initRelayCfg();
 // ── 路线B 去中心化隧道 (每设备自带 cloudflared) ──
-function _tunnel(){ try{ return JSON.parse(N.tunnelStat?N.tunnelStat():"{}"); }catch(e){ return {}; } }
+function _tunnel(){ return _pj(N.tunnelStat?N.tunnelStat():""); }
 function toggleDecentralTunnel(on){
   try{ N.setTunnelEnabled&&N.setTunnelEnabled(!!on); }catch(e){}
   updateDecentUI({enabled:on, connected:false, url:"", msg: on?'正在拉起本地 server + cloudflared…':'已停止'});
@@ -632,7 +635,7 @@ function refreshTunnel(){
 }
 refreshTunnel();
 // ── 局域网直连 (无感等效内网穿透·零中继零隧道) ──
-function _lan(){ try{ return JSON.parse(N.lanDirect?N.lanDirect():"{}"); }catch(e){ return {}; } }
+function _lan(){ return _pj(N.lanDirect?N.lanDirect():""); }
 function toggleLanDirect(on){
   try{ N.setLanDirect&&N.setLanDirect(!!on); }catch(e){}
   _result('lanDirect', true, on?'局域网直连已开 (本机绑 0.0.0.0, 同网可直连)':'局域网直连已关 (仅隧道开时才暴露)');
@@ -773,7 +776,7 @@ function refreshForceE2E(){
 }
 refreshForceE2E();
 // ── 后台保活 · 持久稳定化 (Native 桥: KeepAlive) ──
-function kaStat(){ try{ return JSON.parse(N.keepAliveStatus?N.keepAliveStatus():"{}"); }catch(e){ return {}; } }
+function kaStat(){ return _pj(N.keepAliveStatus?N.keepAliveStatus():""); }
 function kaRefresh(){
   var s=kaStat();
   var b=document.getElementById('kaBatt');
