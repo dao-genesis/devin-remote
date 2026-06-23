@@ -245,7 +245,12 @@
         if (role !== "a" || corr !== nonce || opened) return;   // 只认本次 offer 对应的 answer
         var obj = await unseal(key, full);
         if (!obj || obj.t !== "answer" || !obj.sdp) return;
-        try { await pc.setRemoteDescription({ type: "answer", sdp: obj.sdp }); answered = true; } catch (e) {}
+        try {
+          await pc.setRemoteDescription({ type: "answer", sdp: obj.sdp }); answered = true;
+          // 已收到应答 ⇒ 对端在线且信令通; 给 P2P 打洞一个较短宽限, 到点仍没开就判 ice_failed 提前降级,
+          //   不空等 WebRTC ~20s 的 connectionState=failed (能通常 <3s 就 open; 高效之中还有高效)。
+          setTimeout(function () { if (!opened && settle) settle.reject(new Error("ice_failed")); }, opts.p2pGraceMs || 8000);
+        } catch (e) {}
       });
     });
     function close() { try { sub.close(); } catch (e) {} try { if (dc) dc.close(); } catch (e) {} try { if (pc) pc.close(); } catch (e) {} }
