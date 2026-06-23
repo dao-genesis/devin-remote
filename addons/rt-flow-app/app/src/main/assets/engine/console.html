@@ -132,6 +132,41 @@
   #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#222;color:#fff;padding:9px 15px;
          border-radius:9px;font-size:13px;z-index:120;opacity:0;transition:.2s;max-width:84%;pointer-events:none}
   #toast.show{opacity:1}
+  /* 📥 下载: 可拖拽悬浮窗 (复刻 APK showDownloadPanel 的标题栏拖动) */
+  #dlPanel .dlhead{display:flex;align-items:center;gap:6px;margin:-10px -10px 8px;padding:9px 10px;background:#1f6feb;border-radius:12px 12px 0 0;cursor:move;user-select:none}
+  #dlPanel .dlhead .t{flex:1;color:#fff;font-size:13px} #dlPanel .dlhead .x{color:#fff;font-size:15px;cursor:pointer;padding:0 4px}
+  .dlrow .nm{color:var(--fg)} .dlact{font-size:12px}
+  /* 🌊 全服通 · 近期对话/备份: 可拖拽悬浮窗 (复刻 APK daoPanel, 不再是整页标签) */
+  #daoFloat{position:absolute;top:6px;right:8px;width:min(340px,92vw);height:min(72vh,560px);background:#0e1116;border:1px solid var(--border);
+            border-radius:12px;display:none;flex-direction:column;z-index:70;box-shadow:0 16px 46px #000b;overflow:hidden}
+  #daoFloat.show{display:flex}
+  #daoFloat .dfhead{display:flex;align-items:center;gap:6px;padding:9px 10px;background:#1f6feb;cursor:move;user-select:none;flex:0 0 auto}
+  #daoFloat .dfhead .t{flex:1;color:#fff;font-size:13px} #daoFloat .dfhead .x{color:#fff;font-size:16px;cursor:pointer;padding:0 4px}
+  #daoFloat .dfbody{flex:1;position:relative;background:#0e1116}
+  #daoFloat iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#0e1116}
+  #daoFloat .dfload{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px}
+  /* 🕐 浏览历史 / ⭐ 书签收藏: 独立整页 (复刻 APK openBrowserListTab, 不再是小浮层) */
+  #listPage{position:absolute;inset:0;background:var(--bg);display:none;flex-direction:column;z-index:55}
+  #listPage.show{display:flex}
+  #listPage .lphead{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bar);border-bottom:1px solid var(--border);flex:0 0 auto}
+  #listPage .lphead .t{flex:1;color:#9cdcfe;font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #listPage .lphead .btn{background:#161b22;color:var(--fg);border:1px solid var(--input-b);border-radius:6px;padding:6px 11px;font-size:12px;cursor:pointer}
+  #listPage .lpbody{flex:1;overflow-y:auto;padding:8px 12px 40px}
+  #listPage .sec{color:#7ee787;font-size:13px;font-weight:600;margin:12px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+  #listPage .sec.b{color:#9cdcfe}
+  #listPage .it{display:flex;align-items:center;border-bottom:1px solid var(--border)}
+  #listPage .it.dv{border-left:3px solid #2ea043}
+  #listPage .it .row{flex:1;min-width:0;padding:9px 8px;cursor:pointer}
+  #listPage .it .row:active{background:#1f3a45}
+  #listPage .it .t2{color:#e6edf3;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #listPage .it .u{color:#8b949e;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #listPage .more{padding:10px 12px;color:#8b949e;font-size:18px;cursor:pointer;user-select:none}#listPage .more:active{color:#fff}
+  #listPage .empty{color:#6e7681;padding:10px 4px;font-size:12px}
+  #lpSheet{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;z-index:80}
+  #lpSheet.show{display:flex}
+  #lpSheet .sheet{background:#161b22;width:100%;border-radius:14px 14px 0 0;padding:4px 0 14px;box-shadow:0 -4px 20px #0008}
+  #lpSheet .sh-u{color:#8b949e;font-size:12px;padding:12px 16px 10px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #lpSheet .sh-b{padding:14px 16px;color:#e6edf3;font-size:15px;cursor:pointer}#lpSheet .sh-b:active{background:#1f6feb33}#lpSheet .sh-b.del{color:#ff7b72}
 </style>
 </head>
 <body>
@@ -156,7 +191,9 @@
   <div id="frames">
     <div id="menuPop"></div>
     <div id="histPanel"><h4>&#128340; 浏览历史<span class="clr" id="histClr">清空</span></h4><div id="histList"></div></div>
-    <div id="dlPanel"><h4>&#128229; 下载</h4><div id="dlList"></div></div>
+    <div id="dlPanel"><div class="dlhead"><span class="t">&#128229; 下载管理</span><span class="x" id="dlClose">&#10005;</span></div><div id="dlList"></div></div>
+    <div id="daoFloat"><div class="dfhead"><span class="t">&#127754; 全服通 · 近期对话 / 备份</span><span class="x" id="daoClose">&#10005;</span></div><div class="dfbody"><div class="dfload">正在加载…</div></div></div>
+    <div id="listPage"><div class="lphead"><span class="t" id="lpTitle">浏览历史</span><button class="btn" id="lpClear">清空</button><button class="btn" id="lpClose">关闭</button></div><div class="lpbody" id="lpBody"></div><div id="lpSheet"><div class="sheet" id="lpSheetInner"></div></div></div>
     <div id="launch"><div id="launchCard">
       <h3>新标签 — 选择板块, 或打开任意网址 / Devin 对话</h3>
       <div class="grid" id="segGrid"></div>
@@ -784,15 +821,43 @@
   // ── 译 翻译 (板块均为内部中文页 → 与原生「内部页不可翻译」一致) ──
   document.getElementById("trBtn").onclick=function(){ toast("板块为内部中文页, 无需翻译; Devin 对话经手机反代在本页内原生打开"); };
 
-  // ── 🕐 浏览历史 (网页内打开过的 Devin 对话 / 外站; 无痕标签不记) ──
-  function histAll(){ try{ return JSON.parse(localStorage.getItem("rtflow.console.hist")||"[]"); }catch(e){ return []; } }
-  function histAdd(url, title, acct){
-    if(!url) return;
-    try{ var a=histAll().filter(function(h){ return h.url!==url; });
-      a.unshift({ url:url, title:title||host(url), acct:acct||"", ts:Date.now() });
-      if(a.length>120) a=a.slice(0,120);
-      localStorage.setItem("rtflow.console.hist", JSON.stringify(a)); _vaultPut("console_history", a); }catch(e){}
+  // ── 金库读写 (Promise 版): 与手机 APK 同一份金库, 同键同义 → 历史/书签/收藏跨端一致 ──
+  //   APK 内 Android 把 Native 注入外壳 WebView → 走 N.vaultLoad/Save; 纯网页外壳无 Native →
+  //   改走中继 /api/native 直连手机金库 (与各 blob 子页同一通道)。键名与 APK 严格对齐:
+  //   history_devin / history / bookmarks (见 MainActivity.showHistory/showBookmarks/addBookmark)。
+  function vaultGetAsync(key){
+    try{ var N=window.Native; if(N&&N.vaultLoad) return Promise.resolve(N.vaultLoad(key)); }catch(e){}
+    if(!SESSION||!TOKEN) return Promise.resolve(null);
+    return relay("/api/native", { m:"vaultLoad", a:[key] }, 9000).then(function(res){
+      try{ var b=res&&res.body; return (b&&Object.prototype.hasOwnProperty.call(b,"r"))?b.r:null; }catch(e){ return null; }
+    }).catch(function(){ return null; });
   }
+  function vaultSetAsync(key, val){
+    var s=(typeof val==="string")?val:JSON.stringify(val==null?[]:val);
+    try{ var N=window.Native; if(N&&N.vaultSave){ N.vaultSave(key, s); return Promise.resolve(); } }catch(e){}
+    if(!SESSION||!TOKEN) return Promise.resolve();
+    return relay("/api/native", { m:"vaultSave", a:[key, s] }, 9000).then(function(){}).catch(function(){});
+  }
+  function _parseArr(raw){ try{ var a=JSON.parse(raw||"[]"); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+  // 账号标识渲染: history_devin/bookmarks 里 account 可能是 accountJson 串或 email 串。
+  function _acctLabel(a){ if(!a) return ""; try{ var o=(typeof a==="string"&&a.charAt(0)==="{")?JSON.parse(a):a;
+    if(o&&typeof o==="object") return o.email||o.id||""; }catch(e){} return (typeof a==="string")?a:""; }
+
+  // ── 🕐 浏览历史: 写回手机金库 (与 APK 同键 history_devin / history) ──
+  function histAdd(url, title, acct){
+    if(!url || /^rtflow:/i.test(url) || /^about:/i.test(url) || /^file:/i.test(url)) return;
+    var devin = isDevinHost(host(url)) && !!acct;
+    var key = devin ? "history_devin" : "history";
+    vaultGetAsync(key).then(function(raw){
+      var a=_parseArr(raw).filter(function(h){ return h && h.url!==url; });
+      var e={ url:url, title:title||host(url), ts:Date.now() };
+      if(devin) e.account=acct;
+      a.push(e);                                  // 与 APK 一致: 新条目压尾, 展示时反序
+      if(a.length>200) a=a.slice(a.length-200);
+      vaultSetAsync(key, a);
+    });
+  }
+  function histAll(){ try{ return JSON.parse(localStorage.getItem("rtflow.console.hist")||"[]"); }catch(e){ return []; } }
   var histPanel=document.getElementById("histPanel"), histList=document.getElementById("histList");
   function renderHist(){ var a=histAll();
     if(!a.length){ histList.innerHTML='<div class="empty">暂无浏览历史 · 网页内打开的 Devin 对话/外站会记于此 (无痕标签不记)</div>'; return; }
@@ -882,13 +947,24 @@
   function copyCurrentUrl(){ var t=curTab(); var u=t&&t.kind==="web"?t.url:("rtflow://"+((t&&t.pageKey)||"switch"));
     try{ navigator.clipboard.writeText(u); toast("已复制网址"); }catch(e){ toast(u); } }
 
-  // ── ☆ 收藏当前板块 ──
+  // ── ☆ 收藏当前页 (与 APK addBookmark 同义: 收当前标签的 URL/板块到手机金库 bookmarks) ──
+  //   · web/Devin 标签 → 存其真实 URL (devin 多实例标签连账号一并存, 重开时注入鉴权)。
+  //   · 板块标签 → 存 rtflow://<key> 伪 URL, 列表里点开即回到该板块。再点 ☆ = 取消收藏。
   function bookmarks(){ try{ return JSON.parse(localStorage.getItem("rtflow.console.bm")||"[]"); }catch(e){ return []; } }
-  function saveBookmarks(a){ try{ localStorage.setItem("rtflow.console.bm", JSON.stringify(a)); }catch(e){} _vaultPut("console_bookmarks", a); }
-  document.getElementById("starBtn").onclick=function(){ var t=tabs[active]; if(!t||!t.pageKey){ toast("无可收藏的板块"); return; }
-    var a=bookmarks(), i=a.indexOf(t.pageKey);
-    if(i>=0){ a.splice(i,1); toast("已取消收藏 "+(t.title||t.pageKey)); } else { a.push(t.pageKey); toast("已收藏 "+(t.title||t.pageKey)); }
-    saveBookmarks(a); };
+  function _curBookmarkable(t){
+    if(!t) return null;
+    if(t.kind==="web" && t.url){ var dv=isDevinHost(host(t.url)) && !!t.acct;
+      return { url:t.url, title:t.title||host(t.url), account:dv?t.acct:undefined, devin:dv||undefined }; }
+    if(t.pageKey){ return { url:"rtflow://"+t.pageKey, title:t.title||t.pageKey }; }
+    return null;
+  }
+  document.getElementById("starBtn").onclick=function(){ var t=tabs[active]; var bk=_curBookmarkable(t);
+    if(!bk){ toast("无可收藏的页面"); return; }
+    vaultGetAsync("bookmarks").then(function(raw){ var a=_parseArr(raw);
+      for(var i=0;i<a.length;i++){ if(a[i]&&a[i].url===bk.url){ a.splice(i,1); vaultSetAsync("bookmarks",a); toast("已取消收藏 "+(bk.title||"")); return; } }
+      var e={ url:bk.url, title:bk.title, ts:Date.now() }; if(bk.devin){ e.devin=true; e.account=bk.account; }
+      a.push(e); vaultSetAsync("bookmarks",a); toast("已收藏 "+(bk.title||"")); });
+  };
 
   // ── 📥 下载管理 ──
   //   · 本会话网页端下载: 直接落入使用者浏览器下载器, 此处列出文件名 (window.__rnDownloads)。
@@ -934,16 +1010,125 @@
     }).join(""); }
     dlList.innerHTML = html || '<div class="empty">暂无下载 · 网页端下载直接落入浏览器下载管理器</div>';
   }
-  document.getElementById("dlBtn").onclick=function(e){ e.stopPropagation(); renderDl(); fetchPhoneDl(); dlPanel.classList.toggle("show"); menuPop.classList.remove("show"); };
+  document.getElementById("dlBtn").onclick=function(e){ e.stopPropagation(); renderDl(); fetchPhoneDl(); daoFloat.classList.remove("show"); dlPanel.classList.toggle("show"); menuPop.classList.remove("show"); };
+  document.getElementById("dlClose").onclick=function(e){ e.stopPropagation(); dlPanel.classList.remove("show"); };
   window.addEventListener("message", function(ev){ try{ var d=ev.data; if(!d) return;
     if(d.__rtflow==="download"&&d.name){ window.__rnDownloads.push({name:d.name,ts:Date.now()}); if(dlPanel.classList.contains("show")) renderDl(); }
     // 账号型「打开」(板块里点某号 ⚡/打开对话 → __rn._openDevin 回传): 在外壳里网页内原生开该号 Devin 标签
     // (经 /uv-init 注该号 auth → 登录态完整), 这是「单网页内打开官网并真登录」的本源落点。
-    else if(d.__rtflow==="openDevin"&&d.url){ openInPage(d.url, d.acct||"", d.title||""); }
+    else if(d.__rtflow==="openDevin"&&d.url){ daoFloat.classList.remove("show"); openInPage(d.url, d.acct||"", d.title||""); }
   }catch(e){} });
 
-  // ── 🗂 全服通 (= 全服通板块 daopan) ──
-  document.getElementById("daoBtn").onclick=function(){ dlPanel.classList.remove("show"); openPage("daopan"); };
+  // ── 悬浮窗拖拽: 标题栏按住拖动整窗 (复刻 APK head.setOnTouchListener; 触摸+鼠标双支持) ──
+  function makeDraggable(panel, handle){
+    if(!panel||!handle) return; var sx,sy,ox,oy,drag=false;
+    function down(e){ var p=(e.touches&&e.touches[0])||e; sx=p.clientX; sy=p.clientY;
+      var r=panel.getBoundingClientRect(); var pr=panel.parentElement?panel.parentElement.getBoundingClientRect():{left:0,top:0};
+      ox=r.left-pr.left; oy=r.top-pr.top;
+      panel.style.right="auto"; panel.style.left=ox+"px"; panel.style.top=oy+"px";
+      drag=true; if(e.cancelable) e.preventDefault(); }
+    function move(e){ if(!drag) return; var p=(e.touches&&e.touches[0])||e;
+      panel.style.left=(ox+p.clientX-sx)+"px"; panel.style.top=(oy+p.clientY-sy)+"px"; if(e.cancelable) e.preventDefault(); }
+    function up(){ drag=false; }
+    handle.addEventListener("mousedown",down); handle.addEventListener("touchstart",down,{passive:false});
+    document.addEventListener("mousemove",move); document.addEventListener("touchmove",move,{passive:false});
+    document.addEventListener("mouseup",up); document.addEventListener("touchend",up);
+  }
+  makeDraggable(dlPanel, dlPanel.querySelector(".dlhead"));
+
+  // ── 🌊 全服通 · 近期对话 / 对话备份: 可拖拽悬浮窗 (复刻 APK daoPanel, 不再当整页标签开) ──
+  //   内含 daopan.html (近期对话跨号实时 + 备份网页端), 经 blob: iframe 与本页同源原生直渲。
+  //   首建后保活, 开关只切显隐; 拖标题栏移动整窗。
+  var daoFloat=document.getElementById("daoFloat"), _daoBuilt=false;
+  function toggleDaoFloat(){
+    menuPop.classList.remove("show"); dlPanel.classList.remove("show");
+    if(daoFloat.classList.contains("show")){ daoFloat.classList.remove("show"); return; }
+    daoFloat.classList.add("show");
+    if(_daoBuilt) return; _daoBuilt=true;
+    buildSrcdoc("daopan.html").then(function(html){
+      var fr=document.createElement("iframe"); fr.setAttribute("allow","clipboard-read; clipboard-write; microphone"); fr.referrerPolicy="no-referrer";
+      var body=daoFloat.querySelector(".dfbody"); body.innerHTML=""; body.appendChild(fr);
+      try{ var blob=new Blob([html],{type:"text/html;charset=utf-8"}); fr.src=URL.createObjectURL(blob); }
+      catch(e){ fr.srcdoc=html; }
+      fr.addEventListener("load", function(){ _watchInput(fr); });
+    }).catch(function(){ var b=daoFloat.querySelector(".dfbody"); if(b) b.innerHTML='<div class="dfload">加载失败 · 检查穿透 / Token</div>'; _daoBuilt=false; });
+  }
+  document.getElementById("daoBtn").onclick=function(e){ e.stopPropagation(); toggleDaoFloat(); };
+  document.getElementById("daoClose").onclick=function(e){ e.stopPropagation(); daoFloat.classList.remove("show"); };
+  makeDraggable(daoFloat, daoFloat.querySelector(".dfhead"));
+
+  // ── 🕐 浏览历史 / ⭐ 书签收藏: 独立整页 (复刻 APK openBrowserListTab; 数据取手机金库) ──
+  //   两段: ⚡多实例 Devin (带账号·重开注入鉴权) + 🌐常规网页; 逐条 ⋮ → 打开/复制/分享/删除; 历史可清空。
+  var listPage=document.getElementById("listPage"), lpBody=document.getElementById("lpBody"),
+      lpTitle=document.getElementById("lpTitle"), lpSheet=document.getElementById("lpSheet"), lpSheetInner=document.getElementById("lpSheetInner");
+  var _lpMode="hist", _lpData=[], _lpSheetIdx=-1;
+  function openListPage(mode){
+    _lpMode=mode; lpTitle.textContent = mode==="bm" ? "⭐ 书签收藏" : "🕐 浏览历史";
+    document.getElementById("lpClear").style.display = mode==="bm" ? "none" : "";
+    menuPop.classList.remove("show"); dlPanel.classList.remove("show"); daoFloat.classList.remove("show");
+    listPage.classList.add("show"); lpSheet.classList.remove("show");
+    lpBody.innerHTML='<div class="empty">加载中…</div>';
+    if(mode==="bm"){
+      vaultGetAsync("bookmarks").then(function(raw){ var arr=_parseArr(raw), dv=[], nm=[];
+        for(var i=arr.length-1;i>=0;i--){ var e=arr[i]||{}; ((e.devin&&e.account)?dv:nm).push(e); }
+        renderListPage([{h:"⚡ 多实例 Devin 收藏", items:dv, empty:"暂无多实例收藏", dv:true},
+                        {h:"🌐 网页 / 板块收藏", items:nm, empty:"暂无书签 — 点地址栏 ☆ 收藏本页", dv:false}]); });
+    } else {
+      Promise.all([vaultGetAsync("history_devin"), vaultGetAsync("history")]).then(function(r){
+        var dvA=_parseArr(r[0]), nmA=_parseArr(r[1]), dv=[], nm=[];
+        for(var i=dvA.length-1;i>=0;i--) dv.push(dvA[i]); for(var j=nmA.length-1;j>=0;j--) nm.push(nmA[j]);
+        renderListPage([{h:"⚡ 多实例 Devin 登录历史", items:dv, empty:"暂无多实例登录记录", dv:true},
+                        {h:"🌐 常规网页浏览历史", items:nm, empty:"暂无常规浏览历史", dv:false}]); });
+    }
+  }
+  function renderListPage(sections){
+    _lpData=[]; var html="";
+    sections.forEach(function(sec){
+      html+='<div class="sec'+(sec.dv?"":" b")+'">'+_esc(sec.h)+'</div>';
+      if(!sec.items.length){ html+='<div class="empty">'+_esc(sec.empty)+'</div>'; return; }
+      sec.items.forEach(function(e){ if(!e||!e.url) return; var idx=_lpData.length;
+        _lpData.push({ url:e.url, title:e.title||"", account:e.account||"", devin:!!(e.devin&&e.account) });
+        var al=e.account?_acctLabel(e.account):""; var tt=e.title||e.url;
+        html+='<div class="it'+(sec.dv?" dv":"")+'"><div class="row" data-i="'+idx+'">'
+            +'<div class="t2">'+_esc(tt)+(al?(' · '+_esc(al)):'')+'</div>'
+            +'<div class="u">'+_esc(e.url)+'</div></div>'
+            +'<div class="more" data-i="'+idx+'">\u22EE</div></div>';
+      });
+    });
+    lpBody.innerHTML = html || '<div class="empty">暂无记录</div>';
+  }
+  function _lpOpen(e){ if(!e||!e.url) return;
+    if(/^rtflow:\/\//i.test(e.url)){ openPage(e.url.replace(/^rtflow:\/\//i,"").trim()); return; }
+    openInPage(e.url, e.devin?_acctLabel(e.account):"", e.title);
+  }
+  function lpSheetOpen(i){ var e=_lpData[i]; if(!e) return; _lpSheetIdx=i;
+    lpSheetInner.innerHTML='<div class="sh-u">'+_esc(e.title||e.url)+'</div>'
+      +'<div class="sh-b" data-a="open">在新标签打开</div>'
+      +'<div class="sh-b" data-a="copy">复制链接</div>'
+      +'<div class="sh-b" data-a="share">分享</div>'
+      +'<div class="sh-b del" data-a="del">删除</div>';
+    lpSheet.classList.add("show");
+  }
+  function _lpDelete(e){ var key = _lpMode==="bm" ? "bookmarks" : (e.devin?"history_devin":"history");
+    vaultGetAsync(key).then(function(raw){ var arr=_parseArr(raw).filter(function(h){ return h && h.url!==e.url; });
+      vaultSetAsync(key, arr).then(function(){ openListPage(_lpMode); toast("已删除"); }); });
+  }
+  lpBody.addEventListener("click", function(ev){
+    var more=ev.target.closest&&ev.target.closest(".more"); if(more){ lpSheetOpen(+more.getAttribute("data-i")); return; }
+    var row=ev.target.closest&&ev.target.closest(".row"); if(row){ var e=_lpData[+row.getAttribute("data-i")]; if(e){ listPage.classList.remove("show"); _lpOpen(e); } }
+  });
+  lpSheet.addEventListener("click", function(ev){
+    if(ev.target===lpSheet){ lpSheet.classList.remove("show"); return; }
+    var b=ev.target.closest&&ev.target.closest(".sh-b"); if(!b) return;
+    var a=b.getAttribute("data-a"), e=_lpData[_lpSheetIdx]; lpSheet.classList.remove("show"); if(!e) return;
+    if(a==="open"){ listPage.classList.remove("show"); _lpOpen(e); }
+    else if(a==="copy"){ try{ navigator.clipboard.writeText(e.url); toast("已复制链接"); }catch(x){ toast(e.url); } }
+    else if(a==="share"){ if(navigator.share){ navigator.share({ url:e.url }).catch(function(){}); } else { try{ navigator.clipboard.writeText(e.url); toast("已复制"); }catch(x){} } }
+    else if(a==="del"){ _lpDelete(e); }
+  });
+  document.getElementById("lpClose").onclick=function(){ listPage.classList.remove("show"); };
+  document.getElementById("lpClear").onclick=function(){ if(!confirm("清空全部浏览历史？")) return;
+    Promise.all([vaultSetAsync("history_devin",[]), vaultSetAsync("history",[])]).then(function(){ openListPage("hist"); toast("历史已清空"); }); };
 
   // ── 地址栏 ──
   function goAddr(){ var v=addr.value.trim(); if(!v) return;
@@ -1006,8 +1191,8 @@
     mi("🚀","VPN 加速",        function(){ openPage("vpn"); });
     mi("🟢","新标签 (Devin)",  function(){ openInPage("https://app.devin.ai/", "", "Devin"); });
     mi("🕶","无痕标签",        function(){ openInPage("https://app.devin.ai/", "", "Devin (无痕)", {incognito:true}); toast("无痕标签 (不记浏览历史)"); });
-    mi("🕐","浏览历史",        function(){ renderHist(); histPanel.classList.add("show"); });
-    mi("⭐","书签收藏",        function(){ var a=bookmarks(); if(!a.length){ toast("暂无收藏 · 点 ☆ 收藏板块"); return; } a.forEach(function(k){ openPage(k); }); });
+    mi("🕐","浏览历史",        function(){ openListPage("hist"); });
+    mi("⭐","书签收藏",        function(){ openListPage("bm"); });
     mi("🐵","用户脚本 (油猴)", function(){ openPage("scripts"); });
     mi("🔑","Shizuku 权限 (自我 ADB)", function(){ openPage("shizuku"); });
     miSub("🧰","页面工具", function(sub){
