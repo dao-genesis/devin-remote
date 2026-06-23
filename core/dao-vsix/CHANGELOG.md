@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.20
+- 根治「站内浏览器/搜索引擎 被墙站(google 等)打不开 → 只能搜不能用」(`genericWebProxy` `/__web`)。
+  - **真因(经 live 桥在用户机实测定位)**: 用户在国内, 本机常驻 Clash(`127.0.0.1:7890`)。实测 `curl google via 7890 → 200/1.6s`、`google 直连 → 黑洞超时(000/12s+)`、`bing 直连 → 302/0.3s`。但 `genericWebProxy` 先**直连**、仅在直连失败后**串行**回退代理, 且回退窗口被夹在 `14s(socket)→18s(hardTimer)` 间太窄 → 被墙站直连黑洞耗尽 18s 直接误判「此页打不开」, 代理赛道根本来不及。
+  - **修(并行赛道)**: 检出本机代理时, 「直连」与「经本机 Clash/V2Ray CONNECT 隧道」**两路同时取, 谁先成谁用**。国内站直连即刻命中; 被墙站直连黑洞而代理 1~2s 返回 → 不再误判。等价于让站内浏览器与系统浏览器同走代理路由。`hardTimer` 放宽到 22s 作纯兜底。
+  - 既有 3xx 重定向跟随、下载登记、注入改写、HTTP(非代理回退)路径不变; 无代理的机器行为不变(直连失败即错误页)。
+
 ## 3.50.19
 - 修「webview 面板的对话备份拖到代理网页不上传」: 拖拽上传桥(`/__daobridge.js`)读 `application/x-dao-conv{email,sid}`, 但面板的 `bkConvDragStart` 仅发 `application/json{type:dao-conv,devinId}`/`uri-list`(那是给「拖到路由/编辑器打开」用的) → **mime 不匹配**, 桥识别不了 → 上传无反应。
   - 修: `bkConvDragStart` **追加**发 `application/x-dao-conv{email,sid:devinId,title}`(与 `/shell` 一致); 保留原有 json/uri-list 不变 → 拖到路由=打开会话、拖到代理网页=上传该会话 MD, 两不相干。
