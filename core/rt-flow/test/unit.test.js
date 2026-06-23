@@ -572,6 +572,12 @@ function test(name, fn) {
       assert.ok(/inflight-stale-reset/.test(ext), "超时须 stale-reset 让新轮接管");
       assert.ok(/const myStart = Date\.now\(\);/.test(ext) && /if \(_poolReconcileStartMs === myStart\) _poolReconcileInflight = false;/.test(ext), "finally 须以令牌守卫, 仅本轮清 inflight");
     });
+    test("拖拽上传桥契约: webview 面板对话备份 dragstart 亦发 application/x-dao-conv{email,sid} (对齐 /shell·可拖入代理网页上传)", () => {
+      const m = ext.match(/function bkConvDragStart\([^)]*\)\{[\s\S]*?\n/);
+      assert.ok(m, "须有 bkConvDragStart");
+      const fn = m[0];
+      assert.ok(/setData\('application\/x-dao-conv',JSON\.stringify\(\{email:[^}]*sid:did/.test(fn), "须发 x-dao-conv 且 sid=devinId(桥读 sid 取 convmd)");
+    });
     test("genericWebProxy 套娃多层导航: 除 a[href]/GET表单, 亦拦 JS 整页跳转(location.assign/replace) 改经 /__web", () => {
       assert.ok(/function wrap\(h\)\{if\(typeof h==="string"&&h\.indexOf\(P\)===0\)return h;/.test(ext), "wrap 须防已代理 URL 二次套娃");
       assert.ok(/window\.location\.assign=function\(u\)\{return _asn\(wrap\(u\)\)\}/.test(ext), "须包裹 location.assign 经代理");
