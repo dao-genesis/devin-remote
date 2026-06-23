@@ -461,6 +461,10 @@ function handle(m){
     var bp=_bestPublic(); var base=(bp.base||"").replace(/\/$/,'');
     var u=base+"/relay/"+c.session;
     var web=_bestWeb();
+    // 永久稳定链接(刷新/隧道轮换都不失效): 当前若在广播临时隧道, 再附上零账号中继 /console ——
+    //   它由 Cloudflare 托管, HTML 永远能加载; 单网页已内置「通道自愈」, 打开即自动探活切到活通道。
+    var _wb=((_relay().activeUrl||c.url)||"").replace(/\/$/,'');
+    var _stableUrl=(_wb && web.kind!=='worker')?_webConsoleUrl(_wb,true):"";
     // 轻量级快速接入: 网页直开网址(浏览器) + 接入信息 + 两步授权 + curl 模板 + 软件/手机最常用命令。
     var block=[
       "═══ Devin Cloud 手机版 · 快速接入 ═══",
@@ -489,6 +493,11 @@ function handle(m){
     // 局域网直连 (零中继零隧道·同网最优): 若已取得局域网地址, 一并附上, 控制端同网时优先直连本机。
     try{ var l=_lan(); var us=(l&&l.urls)||[]; if(us.length){ block.push(""); block.push("【局域网直连·同网优先·零中继零隧道·直连本机】");
       us.forEach(function(x){ block.push("  直连入口: "+x+"/relay/"+(c.session||"")); }); } }catch(e){}
+    if(_stableUrl){ block.splice(4,0,
+      "",
+      "【永久稳定链接·刷新/隧道轮换都不失效·推荐收藏】",
+      "  "+_stableUrl,
+      "  ↑ 经零账号中继(始终在线·Cloudflare 托管), 上面临时隧道死了它也能开; 单网页已内置通道自愈, 打开即自动连活通道。"); }
     block=block.join("\n");
     try{N.clip&&N.clip(block);}catch(e){} _result('copyAccess',true,'已复制·轻量快速接入(接入信息+授权+常用命令+局域网直连), 全量见接入文档'); return; }
   if(op==='copyUrl'){ var u=c.url.replace(/\/$/,'')+"/relay/"+c.session; try{N.clip&&N.clip(u);}catch(e){} _result('copyUrl',true,'已复制公网入口'); return; }
