@@ -507,6 +507,42 @@ function test(name, fn) {
     });
   }
 
+  // ── 11c. devin_proxy · Service Worker 客户端持久缓存 (根治 IDE 内置 webview 路由慢) ──
+  //   真因: 同一反代下, 系统浏览器/手机/单页壳(真浏览器)各快一倍, 唯 IDE 内 webview 慢 —— webview
+  //   iframe 不像真浏览器持久缓存哈希不可变资产, 每次导航/切标/重载重取数百分片。注入同源 SW +
+  //   CacheStorage 补"浏览器级"缓存: 首载落 Cache, 之后跨导航/重载零代理零上游往返。
+  console.log("\n[devin_proxy · Service Worker 客户端持久缓存]");
+  {
+    const _fs = require("fs"), _path = require("path");
+    const src = _fs.readFileSync(_path.join(__dirname, "..", "devin_proxy.js"), "utf8");
+    test("SW 脚本: cache-first + 哈希不可变白名单 + skipWaiting/claim + 同源守卫", () => {
+      assert.ok(/const _swCode\s*=/.test(src), "须有 _swCode 常量");
+      assert.ok(/self\.addEventListener\('install',function\(e\)\{self\.skipWaiting\(\);\}\)/.test(src), "install 须 skipWaiting (即时接管)");
+      assert.ok(/self\.clients\.claim\(\)/.test(src), "activate 须 clients.claim (接管现存页)");
+      assert.ok(/var IM=\/\\\\\.\(\?:js\|css\|woff2\?/.test(src), "须含哈希不可变资产白名单 IM");
+      assert.ok(/if\(url\.origin!==self\.location\.origin\)return;/.test(src), "须只拦同源请求(不碰跨源)");
+      assert.ok(/cache\.match\(req\)\.then\(function\(hit\)\{/.test(src) && /if\(hit\)return hit;/.test(src), "须 cache-first (命中直返)");
+      assert.ok(/if\(resp&&resp\.status===200\)\{try\{cache\.put/.test(src), "未命中取网络且仅 200 落 Cache");
+      assert.ok(/if\(req\.method!=='GET'\)return;/.test(src), "非 GET 不缓存 (动态)");
+    });
+    test("SW 仅端口模式: 服务 /__dao_sw.js 与 HTML 注册均守 !isPrefix (前缀模式不启用·零相扰)", () => {
+      assert.ok(/const _SW_PATH = "\/__dao_sw\.js"/.test(src), "须有 _SW_PATH 常量");
+      assert.ok(/if \(!isPrefix && reqUrl\.pathname === _SW_PATH\)/.test(src), "须端口模式就地服务 SW 脚本");
+      assert.ok(/"Service-Worker-Allowed": "\/"/.test(src), "SW 脚本须带 Service-Worker-Allowed: / (允许根 scope)");
+      assert.ok(/const _swReg\s*=[\s\S]*navigator\.serviceWorker\.register\(/.test(src), "须有 _swReg 注册脚本");
+      assert.ok(/if \(!isPrefix\) \{\s*if \(\/<head/.test(src), "HTML 注册须守 !isPrefix (仅端口模式注入)");
+    });
+    test("SW 注册脚本: 特性检测降级 (无 serviceWorker 即跳过·零回归)", () => {
+      assert.ok(/if\('serviceWorker' in navigator\)/.test(src), "须特性检测 navigator.serviceWorker");
+      assert.ok(/\.catch\(function\(\)\{\}\)/.test(src), "注册失败须静默 (不阻断页面)");
+    });
+    test("vendor 同步: dao-vsix/rtflow/devin_proxy.js 含同款 SW (源↔打包一致)", () => {
+      const venP = _fs.readFileSync(_path.join(__dirname, "..", "..", "dao-vsix", "rtflow", "devin_proxy.js"), "utf8");
+      assert.ok(/const _swCode\s*=/.test(venP), "打包副本须含 _swCode");
+      assert.ok(/if \(!isPrefix && reqUrl\.pathname === _SW_PATH\)/.test(venP), "打包副本须含端口模式 SW 服务");
+    });
+  }
+
   // ── 11. 备份命名/结构 + listBackups (v4.8.3 编号·账号+密码表层·对话/账号信息分明) ──
   console.log("\n[备份命名/结构 · v4.8.3]");
   const fs = require("fs"), os = require("os"), path = require("path");
