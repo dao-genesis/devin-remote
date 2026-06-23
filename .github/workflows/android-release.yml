@@ -96,6 +96,44 @@ jobs:
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
           echo "rt-flow APK: versionName=$VN versionCode=$VC"
 
+      # latest.json 永不僵化根治:
+      #   病灶: 上面的自动升版分支才会回写 latest.json; 但「人工已正确升号」(改 build.gradle) 时不进该分支 →
+      #         APK 照常构建发版, 而 latest.json 从不同步 → 停在旧版 → 手机查更新 hasUpdate=false → 永远收不到新版。
+      #   修法: 无论是否自动升版, 这里都把 latest.json 的 versionCode/versionName/url 对齐到本次发版的版本,
+      #         有差异即提交回 main。GITHUB_TOKEN 的推送不触发 on:push(防递归), 故不会死循环。
+      - name: Sync latest.json to released version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          LATEST=addons/rt-flow-app/latest.json
+          VN="${{ steps.ver.outputs.vn }}"
+          VC="${{ steps.ver.outputs.vc }}"
+          TAG="${{ steps.ver.outputs.tag }}"
+          ASSET="${{ steps.ver.outputs.asset }}"
+          node -e '
+            const fs=require("fs"), f=process.argv[1];
+            const [vc,vn,tag,asset]=process.argv.slice(2);
+            const j=JSON.parse(fs.readFileSync(f,"utf8"));
+            const url=`https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/${asset}`;
+            let changed=false;
+            if(j.versionCode!==parseInt(vc,10)){ j.versionCode=parseInt(vc,10); changed=true; }
+            if(j.versionName!==vn){ j.versionName=vn; changed=true; }
+            if(j.url!==url){ j.url=url; changed=true; }
+            const head=`v${vn} · 自动发版`;
+            if(!(j.notes||"").startsWith("v"+vn)){ j.notes=head+"\n"+(j.notes||""); changed=true; }
+            if(changed){ fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n"); console.log("latest.json synced → v"+vn+" (code "+vc+")"); }
+            else { console.log("latest.json already at v"+vn+" → no change"); }
+          ' "$LATEST" "$VC" "$VN" "$TAG" "$ASSET"
+          if ! git diff --quiet -- "$LATEST"; then
+            git config user.name "rtflow-release-bot"
+            git config user.email "rtflow-release-bot@users.noreply.github.com"
+            git add "$LATEST"
+            git commit -m "release(rt-flow-app): 同步 latest.json → v$VN (code $VC)"
+            git push origin HEAD:main
+            echo "latest.json 已同步并提交回 main"
+          fi
+
       - name: Skip if release already has this APK
         id: gate
         env:
