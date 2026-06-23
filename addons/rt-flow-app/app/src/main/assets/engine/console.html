@@ -663,12 +663,28 @@
     }
   }
 
+  // ── 地址栏「网址 vs 搜索」判定 + 搜索引擎 (1:1 复刻 APK MainActivity.go()/searchUrl()) ──
+  //   旧病灶: 地址栏一律当网址 (openInPage 强行前缀 https://), 输入「关键词」变成 https://关键词 → 打不开,
+  //   等于「只能登录网址、没法用搜索引擎」。这里与原生 go() 同一判定: 带协议→直开; 含「.」且无空格→当域名补 https://;
+  //   否则→走搜索引擎。搜索结果经中继边缘反代在本控台内原生打开 (与手机 WebView 内搜索同体感)。
+  function isUrlLike(s){ return /^[a-z][a-z0-9+.\-]*:\/\//i.test(s) || (s.indexOf(".")>=0 && s.indexOf(" ")<0); }
+  function searchEngine(){ try{ var e=localStorage.getItem("rtflow.console.engine"); return (e==="baidu"||e==="bing"||e==="google")?e:"google"; }catch(e){ return "google"; } }
+  function setSearchEngine(e){ try{ localStorage.setItem("rtflow.console.engine", e); }catch(_){} }
+  function searchUrl(q){ var enc=encodeURIComponent(q);
+    switch(searchEngine()){
+      case "baidu": return "https://www.baidu.com/s?wd="+enc;
+      case "bing":  return "https://www.bing.com/search?q="+enc;
+      default:      return "https://www.google.com/search?q="+enc;
+    } }
   function openWeb(v){
+    v=String(v||"").trim(); if(!v) return;
     var map={"切号":"switch","穿透":"tunnel","公网穿透":"tunnel","对话":"cloud","cloud":"cloud","vpn":"vpn",
              "脚本":"scripts","用户脚本":"scripts","shizuku":"shizuku","全服通":"daopan","面板":"panel","控制面板":"panel"};
-    var lk=map[v.trim().toLowerCase()]||map[v.trim()];
+    var lk=map[v.toLowerCase()]||map[v];
     if(lk){ openPage(lk); return; }
-    openInPage(v, "", v);
+    if(/^rtflow:\/\//i.test(v)){ openPage(v.replace(/^rtflow:\/\//i,"").trim()); return; }
+    if(isUrlLike(v)){ openInPage(v, "", v); }
+    else { openInPage(searchUrl(v), "", "🔍 "+v); }   // 关键词 → 搜索引擎 (与 APK 同)
   }
 
   function renderStrip(){
@@ -1131,8 +1147,7 @@
     Promise.all([vaultSetAsync("history_devin",[]), vaultSetAsync("history",[])]).then(function(){ openListPage("hist"); toast("历史已清空"); }); };
 
   // ── 地址栏 ──
-  function goAddr(){ var v=addr.value.trim(); if(!v) return;
-    if(/^rtflow:\/\//i.test(v)){ openPage(v.replace(/^rtflow:\/\//i,"").trim()); return; } openWeb(v); }
+  function goAddr(){ var v=addr.value.trim(); if(!v) return; openWeb(v); }
   document.getElementById("go").onclick=goAddr;
   addr.addEventListener("keydown",function(e){ if(e.key==="Enter") goAddr(); });
   // 刷新按钮: 除重载当前页外, 同时通知所有已开板块子页立刻刷新账号各项数据(美金额度 + 对话追踪 + 重渲),
@@ -1195,6 +1210,11 @@
     mi("⭐","书签收藏",        function(){ openListPage("bm"); });
     mi("🐵","用户脚本 (油猴)", function(){ openPage("scripts"); });
     mi("🔑","Shizuku 权限 (自我 ADB)", function(){ openPage("shizuku"); });
+    miSub("🔎","搜索引擎 ("+({google:"Google",baidu:"百度",bing:"Bing"}[searchEngine()]||"Google")+")", function(sub){
+      [["google","Google"],["baidu","百度"],["bing","Bing"]].forEach(function(e){
+        mi(searchEngine()===e[0]?"✓":"　", e[1], function(){ setSearchEngine(e[0]); menuPop.dataset.built=""; toast("搜索引擎已设为 "+e[1]); }, {parent:sub});
+      });
+    });
     miSub("🧰","页面工具", function(sub){
       mi("◀","后退",            function(){ tabNav(-1); }, {parent:sub});
       mi("▶","前进",            function(){ tabNav(1); },  {parent:sub});
