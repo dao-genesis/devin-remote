@@ -5062,6 +5062,16 @@ public class MainActivity extends AppCompatActivity {
     private static final long MEM_HYGIENE_MS = 180000;   // 前台每 3 分钟保洁一轮
     private static final long MEM_TRIM_IDLE_MS = 90000;  // 后台标签闲置超 90s 才做轻量释放 (避免快速来回切换的标签被反复清缓存)
     private static final long IDLE_UNLOAD_MS = 900000;   // 后台普通网页标签闲置超 15 分钟 → 整页卸载 (选中即原样重建)
+    // ── 转后台后的「重度」内存保洁: 根治用户实测「即使超后台也没用·还是卡, 唯有放置几小时(等系统终于回收进程)才好」──
+    //   病根延伸: 本应用常驻前台服务(RelayService)使进程长生不死 → 系统极少 LMK 整体回收 → 转后台时旧逻辑只
+    //   pauseWeb(仅暂停渲染合成·不释放内存·不停 JS) 且把前台 memHygiene 取消, 后台遂「零回收」, 堆/缓存原样常驻;
+    //   回前台自然还是卡, 只有进程被系统(几小时后)杀掉才清零。修法: 转后台 BG_HYGIENE_DELAY_MS 后起一轮重度释放并
+    //   每 BG_HYGIENE_MS 续做 —— 全部标签(含原活动标签, 后台无任何标签可见)清 RAM 缓存+freeMemory, 闲置普通网页
+    //   标签整页卸载 → 「把它扔后台」真的能把占用降下来, 回前台即顺。JS 不全局冻结 → 远程自动化(execJs)仍可驱动。
+    private static final long BG_HYGIENE_DELAY_MS = 45000;   // 转后台 45s 后做首轮重度释放 (快速切回的不被无谓清理)
+    private static final long BG_HYGIENE_MS = 120000;        // 此后后台每 2 分钟续做一轮 → 久置后台占用持续下降而非常驻
+    private static final long ACTIVE_CACHE_BOUND_MS = 600000; // 前台活动标签每 ~10 分钟清一次 RAM 缓存 (无损·不重载·不丢态)
+    private long activeTabCacheTs = 0;
     private final Runnable memHygiene = new Runnable() {
         @Override public void run() {
             if (!appForeground) return;
@@ -5069,6 +5079,27 @@ public class MainActivity extends AppCompatActivity {
             main.postDelayed(this, MEM_HYGIENE_MS);
         }
     };
+    private final Runnable bgHygiene = new Runnable() {
+        @Override public void run() {
+            if (appForeground) return;   // 已回前台 → 交还给前台 memHygiene
+            try { trimAllTabsForBackground(); } catch (Exception ignored) {}
+            main.postDelayed(this, BG_HYGIENE_MS);
+        }
+    };
+    /** 转后台重度保洁: 无任何标签可见 → 对全部标签(含原活动标签)清 RAM 缓存+freeMemory; 再把闲置的
+     *  非活动·非账号·非内部 http(s) 网页标签整页卸载(选中即原样重建)。是「扔后台即能缓解卡顿」的关键。 */
+    private void trimAllTabsForBackground() {
+        for (int i = 0; i < tabs.size(); i++) {
+            Tab t = tabs.get(i);
+            if (t.web == null || t.pendingReloadUrl != null) continue;
+            try { t.web.clearCache(false); } catch (Exception ignored) {}
+            try { t.web.freeMemory(); } catch (Exception ignored) {}
+        }
+        for (int i = tabs.size() - 1; i >= 0; i--) {
+            if (tabs.get(i).pendingReloadUrl != null) continue;
+            unloadBackgroundTab(i);   // 内部已只对 非活动·非账号·非内部·http(s) 生效
+        }
+    }
     /** 前台主动内存保洁 (只动非活动后台标签)。轻量释放普遍适用; 长时间未访问的普通网页标签整页卸载以真正回收堆。 */
     private void trimBackgroundTabs() {
         long now = System.currentTimeMillis();
@@ -5087,6 +5118,17 @@ public class MainActivity extends AppCompatActivity {
             if (t.pendingReloadUrl != null) continue;
             if (t.lastShownAt > 0 && (now - t.lastShownAt) > IDLE_UNLOAD_MS) unloadBackgroundTab(i);
         }
+        // 活动标签长会话 RAM 缓存有界化: 旧逻辑前台保洁绝不碰活动标签 → 久居同一板块(如切号板持续轮询额度)
+        //   其 RAM 缓存只增不减, 是「用久了越用越卡」在前台的另一来源。这里仅清 RAM 缓存(clearCache(false) 不含磁盘)
+        //   并 freeMemory → 不重载·不丢滚动/表单; 用户正打字/语音/触摸时跳过, 避免资源重取造成的细微卡顿打断交互。
+        Tab at = cur();
+        if (at != null && at.web != null && at.pendingReloadUrl == null
+                && (now - activeTabCacheTs) > ACTIVE_CACHE_BOUND_MS
+                && !userInteracting(at, VIS_WATCH_MS)) {
+            try { at.web.clearCache(false); } catch (Exception ignored) {}
+            try { at.web.freeMemory(); } catch (Exception ignored) {}
+            activeTabCacheTs = now;
+        }
     }
 
     @Override protected void onPause() {
@@ -5101,6 +5143,9 @@ public class MainActivity extends AppCompatActivity {
         // App 整体转后台(切到别的应用/锁屏): 没有任何标签可见 → 暂停全部 WebView 的渲染合成/动画, 不再空耗 CPU/GPU/电量
         // (仿真浏览器: 不可见即不渲染)。JS 不停, 远程自动化仍可经 execJs 驱动; 镜像/截图取帧前各自 resumeWeb → 不受影响。
         for (int i = 0; i < tabs.size(); i++) pauseWeb(tabs.get(i).web);
+        // 转后台后起重度内存保洁 (45s 宽限避开快速切回); 续做直至回前台 → 久置后台占用持续下降, 回前台即顺。
+        main.removeCallbacks(bgHygiene);
+        main.postDelayed(bgHygiene, BG_HYGIENE_DELAY_MS);
         saveTabs();
     }
 
@@ -5221,6 +5266,7 @@ public class MainActivity extends AppCompatActivity {
         main.post(presenceTick);   // 前台巡检跨设备在场, 橙色标记随云端来去实时同步
         main.removeCallbacks(openAcctTick);
         main.post(openAcctTick);   // 前台保持「已打开账号标签」状态/额度实时识别 (不论是否在切号板块)
+        main.removeCallbacks(bgHygiene);   // 回前台 → 停后台重度保洁, 交还前台保洁
         main.removeCallbacks(memHygiene);
         main.postDelayed(memHygiene, MEM_HYGIENE_MS);   // 前台内存保洁: 主动有界化长会话占用, 根治「用久了越用越卡」
         // 长时间后台返回: 渲染线程可能被冻结(看着正常但点不动) → 当前标签探活(冻死则静默重载), 其余标签标记延迟探活。
@@ -5248,6 +5294,8 @@ public class MainActivity extends AppCompatActivity {
         appForeground = false;
         main.removeCallbacks(visWatchdog);
         main.removeCallbacks(presenceTick);
+        main.removeCallbacks(memHygiene);
+        main.removeCallbacks(bgHygiene);
         saveTabs();
         try { if (dlReceiver != null) unregisterReceiver(dlReceiver); } catch (Exception ignored) {}
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}
