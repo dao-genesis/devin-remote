@@ -810,13 +810,27 @@
   //   单网页与 APK 同源同步: 网页内收藏的板块 / 打开过的对话, 在手机本体、换机、重装后仍在; 反之亦然。
   //   · 写: 防抖 + 延后 (setTimeout) → 绝不阻塞你点击/输入的主线程 (vaultSave 为阻塞写)。
   //   · 读: 走读缓存 (冷读先回 null, 后台补齐) → 不阻塞主线程; 故以一次延后重试做回灌合并。
-  var _vaultPutT={};
+  //   关键: rn 垫片(window.Native)仅注入各 blob 子页, 本外壳 top window 没有 Native。APK 内由 Android
+  //   把 Native 注入外壳 WebView → 走 N.vaultSave/Load; 纯网页外壳无 Native → 改走中继 /api/native 直连
+  //   手机金库 (与子页同一通道)。两路同一份金库, 故网页收藏/历史与 APK 双向同步, 不再网页端只存 localStorage。
+  var _vaultPutT={}, _vaultCache={}, _vaultInflight={};
   function _vaultPut(key, val){
-    try{ var N=window.Native; if(!N||!N.vaultSave) return; var s=JSON.stringify(val==null?[]:val);
-      clearTimeout(_vaultPutT[key]); _vaultPutT[key]=setTimeout(function(){ try{ N.vaultSave(key, s); }catch(e){} }, 400);
+    try{ var s=JSON.stringify(val==null?[]:val); _vaultCache[key]=s;
+      clearTimeout(_vaultPutT[key]); _vaultPutT[key]=setTimeout(function(){
+        try{ var N=window.Native; if(N&&N.vaultSave){ N.vaultSave(key, s); return; } }catch(e){}
+        try{ if(SESSION&&TOKEN) relay("/api/native", { m:"vaultSave", a:[key, s] }, 8000); }catch(e){}
+      }, 400);
     }catch(e){}
   }
-  function _vaultGet(key){ try{ var N=window.Native; return (N&&N.vaultLoad)?N.vaultLoad(key):null; }catch(e){ return null; } }
+  function _vaultGet(key){
+    try{ var N=window.Native; if(N&&N.vaultLoad) return N.vaultLoad(key); }catch(e){}
+    // 网页外壳: 同步先回缓存 (冷读 null), 后台经中继异步取真值填缓存 → hydrate 重试时回灌合并。
+    try{ if(SESSION&&TOKEN&&!_vaultInflight[key]){ _vaultInflight[key]=1;
+      relay("/api/native", { m:"vaultLoad", a:[key] }, 8000).then(function(res){ _vaultInflight[key]=0;
+        try{ var b=res&&res.body; var r=(b&&Object.prototype.hasOwnProperty.call(b,"r"))?b.r:null; if(r!=null) _vaultCache[key]=r; }catch(e){}
+      }).catch(function(){ _vaultInflight[key]=0; }); } }catch(e){}
+    return Object.prototype.hasOwnProperty.call(_vaultCache,key)?_vaultCache[key]:null;
+  }
   function _hydrateFromVault(){
     try{
       var rb=_vaultGet("console_bookmarks");
