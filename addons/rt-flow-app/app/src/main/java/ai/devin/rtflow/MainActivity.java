@@ -466,7 +466,9 @@ public class MainActivity extends AppCompatActivity {
         int p = dp(6);
         bar.setPadding(p, p, p, p);
 
-        Button menu = chipBtn("≡");
+        // 菜单≡: 由 chipBtn 默认 minHeight≈48dp 撑得过高 → 改用 chipBtnBar 压到与地址栏等高
+        Button menu = chipBtnBar("\u2261");
+        ((LinearLayout.LayoutParams) menu.getLayoutParams()).leftMargin = 0;   // 首键贴左, 不留外间隔
         menu.setOnClickListener(this::showMenu);
 
         addr = new EditText(this);
@@ -510,11 +512,12 @@ public class MainActivity extends AppCompatActivity {
         // 双击缩放图标 → 复位 100%
         zicon.setOnClickListener(v -> { pageZoom = 100; zoomBar.setProgress(50); zoomLabel.setText("100%"); applyZoomActive(); });
 
-        Button go = chipBtnSm("→");
+        // 前往→: 由过小的 chipBtnSm 改为 chipBtnBar → 放大到与地址栏等高, 突出这个常用键
+        Button go = chipBtnBar("\u2192");
         go.setOnClickListener(v -> go(addr.getText().toString()));
         // 导航键(后退/前进/主页)已移入 ≡ → 页面工具收纳菜单 (基本用不到, 收起腾出工具栏空间)
         // 第一行下拉开关 (取代原翻译键位置): 点一下收起/展开第二行(缩放+动作键), 默认展开 → 用不到时收起省空间。
-        toolToggle = chipBtnSm("\u25BC");   // ▼ 展开 / ▶ 收起
+        toolToggle = chipBtnBar("\u25BC");   // ▼ 展开 / ▶ 收起 — 放大到与地址栏等高, 突出此键
         toolToggle.setOnClickListener(v -> toggleToolRow());
         // 网页栏五角星：点击收藏/取消收藏当前页 — 紧凑排布 (5 键紧贴, 占原 4 键宽)
         starBtn = chipBtnPk("\u2606");
@@ -610,6 +613,17 @@ public class MainActivity extends AppCompatActivity {
         b.setMinHeight(0); b.setMinimumHeight(0);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.leftMargin = dp(6);
+        b.setLayoutParams(lp);
+        return b;
+    }
+    // 第一行控件 (菜单≡ / 下拉开关▼ / 前往→): 高度对齐地址栏 — 既压低过高的菜单, 又放大过小的两个右键, 省高度又突出常用键
+    private Button chipBtnBar(String t) {
+        Button b = chipBtn(t);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        b.setPadding(dp(11), dp(7), dp(11), dp(7));
+        b.setMinHeight(0); b.setMinimumHeight(0);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = dp(4);
         b.setLayoutParams(lp);
         return b;
     }
