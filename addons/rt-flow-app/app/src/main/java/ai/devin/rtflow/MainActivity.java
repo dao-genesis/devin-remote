@@ -170,8 +170,9 @@ public class MainActivity extends AppCompatActivity {
         boolean desktop = false;     // 桌面版 UA
         boolean night = false;       // 夜间反色
         boolean translated = false;  // 整页翻译态 (跨页保持)
-        boolean lastEditable = false; // 最近一次前台巡检时页面是否有聚焦的可编辑元素 (正在打字/语音输入)
-        long lastEditableTs = 0;     // 上述「正在输入」状态的记录时刻 → 据此避免输入中被探活重载打断
+        boolean lastEditable = false; // 最近一次前台巡检时页面是否「正在交互」: 聚焦可编辑元素(打字) 或 麦克风/语音识别活跃(语音输入)
+        long lastEditableTs = 0;     // 上述「正在输入」状态的记录时刻 → 据此避免输入中被探活重载/可见性翻转打断
+        long lastTouchTs = 0;        // 最近一次用户在本页触摸(按下/滑动)的时刻 → 滚动/阅读/点麦克风也算「人在交互」, 据此避免破坏性重载打断
         String pendingReloadUrl = null; // 后台标签渲染进程被回收 → 延迟到选中时再重载 (避免多标签同时重载放大内存压力·消除卡死雪崩)
         boolean maybeStale = false;  // 长时间后台返回 → 渲染线程可能被系统冻结(看着正常但点击/下载等失效) → 选中/恢复时探活, 无响应则静默重载
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
@@ -216,6 +217,38 @@ public class MainActivity extends AppCompatActivity {
         return n;
     }
     private String lastPresenceSig = "";
+    // ── 标签条重绘 合并·防抖·按需 (根治「刷新账号每隔几秒卡一次/打断打字」) ──
+    // 账号池轮询会对全部账号(可达上百个)逐个回推 setTabStatus/setTabDollars, 旧逻辑每条都 main.post 一次
+    // renderTabStrip(全量 removeAllViews + 逐标签重建 GestureDetector/监听器) → 几秒一阵 UI 线程风暴,
+    // 顶掉软键盘/打断输入。改为: 内容签名去重(未变不重建) + 防抖合并(至多每 ~600ms 一次) + 交互中顺延
+    // (打字/语音/触摸时绝不重建标签条) → 「刷新账号」与「操作页面」道并行而不相悖。
+    private String lastStripSig = null;
+    private boolean stripRenderPending = false;
+    private final Runnable stripRenderTask = new Runnable() {
+        @Override public void run() {
+            stripRenderPending = false;
+            Tab a = cur();
+            // 正在打字/语音/触摸 → 再顺延, 绝不在交互中做 removeAllViews 全量重建 (那一下足以顶掉软键盘/打断语音)。
+            if (a != null && userInteracting(a, 1500)) { stripRenderPending = true; main.postDelayed(this, 1200); return; }
+            renderTabStrip();
+        }
+    };
+    /** 合并·防抖 重绘标签条: 高频数据推送(账号状态/额度/在场/标题)统一经此, 至多每 ~600ms 落一次且交互中顺延。 */
+    private void scheduleRenderTabStrip() {
+        if (stripRenderPending) return;
+        stripRenderPending = true;
+        main.postDelayed(stripRenderTask, 600);
+    }
+    /** 标签条内容签名: 活动页 + 各标签(显示文案 chipTitle 含状态点/额度/对话名 + 云端在场数)。仅此变化才需重建。 */
+    private String tabStripSig() {
+        long now = System.currentTimeMillis();
+        StringBuilder sb = new StringBuilder().append(active).append('#');
+        for (int i = 0; i < tabs.size(); i++) {
+            Tab t = tabs.get(i);
+            sb.append(chipTitle(t)).append('|').append(coViewerCount(t.vid, now)).append(';');
+        }
+        return sb.toString();
+    }
     /** 在场签名: 各标签 vid→云端在场数。仅变化才重绘标签条(省电·防抖)。 */
     private String presenceSig() {
         long now = System.currentTimeMillis();
@@ -232,7 +265,7 @@ public class MainActivity extends AppCompatActivity {
         String sig = presenceSig();
         if (sig.equals(lastPresenceSig)) return;
         lastPresenceSig = sig;
-        renderTabStrip();
+        scheduleRenderTabStrip();
     }
     // 前台期间每 3s 巡检在场(覆盖离场/TTL过期, 无对应 RPC 事件), 变化即重绘; 收到 claim 时另立即重绘。
     private final Runnable presenceTick = new Runnable() {
@@ -905,10 +938,14 @@ public class MainActivity extends AppCompatActivity {
             @Override public boolean shouldOverrideUrlLoading(WebView v, String u) { return handleExternalScheme(u); }
             @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
                 tab.url = u; if (tabOf(v) == active) setAddr(u);
-                if (!tab.internal && u != null && u.startsWith("http")) injectUserScripts(v, u, "start"); // 油猴 @run-at document-start
+                if (u != null && u.startsWith("http")) {
+                    // document-start 即挂麦克风/语音探针 → 早于页面脚本调用 getUserMedia, 确保语音一开始就被识别为「交互中」。
+                    try { v.evaluateJavascript(MIC_AND_EDIT_PROBE_JS, null); } catch (Exception ignored) {}
+                    if (!tab.internal) injectUserScripts(v, u, "start"); // 油猴 @run-at document-start
+                }
             }
             @Override public void onPageFinished(WebView v, String u) {
-                tab.url = u; renderTabStrip(); scheduleSaveTabs();
+                tab.url = u; scheduleRenderTabStrip(); scheduleSaveTabs();
                 if (!tab.incognito) addHistory(u, tab.title, tab);   // 无痕标签不记历史
                 if (pageZoom != 100) applyZoom(v);          // 缩放跨页/刷新保持
                 if (tab.night) applyNight(v, true);          // 夜间反色跨页保持
@@ -928,7 +965,7 @@ public class MainActivity extends AppCompatActivity {
                 if (u != null && u.startsWith("http")) {
                     tab.url = u;
                     if (tabOf(v) == active) setAddr(u);
-                    renderTabStrip(); scheduleSaveTabs();
+                    scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
                     if (!tab.internal) { installDownloadHook(v); installKbHelper(v); }
                 }
@@ -941,6 +978,11 @@ public class MainActivity extends AppCompatActivity {
             // 渲染进程被系统在内存压力下回收(WebView 变白/无响应需手动刷新)→ 自动重建该标签并重载, 用户无感恢复。
             @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
                 int idx = tabOf(v);
+                boolean crash = detail != null && detail.didCrash();
+                // 根因诊断: 渲染进程被系统在内存压力下回收(非崩溃) 是「整页被刷新打断」最可能的真凶 ——
+                //   多账号池/多标签把 WebView 共享渲染进程的内存撑高 → 系统杀渲染进程 → 前台官网被迫整页重载。
+                android.util.Log.w(FL, "onRenderProcessGone idx=" + idx + " didCrash=" + crash
+                        + " (renderer killed -> forced full reload; reduce memory pressure to avoid)");
                 if (idx < 0) { try { v.destroy(); } catch (Exception ignored) {} return true; }
                 recoverDeadTab(idx);
                 return true;   // 已处理: 系统不再杀进程
@@ -949,7 +991,7 @@ public class MainActivity extends AppCompatActivity {
         web.setWebChromeClient(new WebChromeClient() {
             @Override public void onReceivedTitle(WebView v, String t) {
                 if (t == null || t.isEmpty()) return;
-                tab.title = t; renderTabStrip();
+                tab.title = t; scheduleRenderTabStrip();
                 // 网页标题往往在 onPageFinished 之后才异步到达(尤其裸域名 301 跳 www), 此时回填,
                 // 否则该条历史会记成上一页的标题。同时回填跳转前的原始 URL。
                 if (!tab.incognito) {
@@ -1014,6 +1056,9 @@ public class MainActivity extends AppCompatActivity {
         final float[] tapFirst = new float[]{0f, 0f};   // 第一击落点 (同处判定锚点)
         final int sameSpot = tapSlop * 3;               // 三击须落在该半径内才算"同一处"
         web.setOnTouchListener((v, ev) -> {
+            // 「人此刻在这页上交互」的最广信号: 任何触摸(按下/滑动/抬起)都刷新 → 滚动阅读、点麦克风按钮、
+            //   长按选词等都算交互中, 据此在 EDIT_GUARD 窗口内拦下一切破坏性重载, 真正「与刷新井水不犯河水」。
+            tab.lastTouchTs = System.currentTimeMillis();
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     tapDown[0] = ev.getX(); tapDown[1] = ev.getY(); tapDownT[0] = System.currentTimeMillis();
@@ -1034,7 +1079,10 @@ public class MainActivity extends AppCompatActivity {
                         if (tapCnt[0] >= 3) {
                             tapCnt[0] = 0;
                             Tab a = cur();
-                            if (a != null && a.web == webRef) { try { webRef.reload(); toast("已刷新"); } catch (Exception ignored) {} }
+                            if (a != null && a.web == webRef) {
+                                android.util.Log.i(FL, "triple-tap manual reload (deliberate gesture)");
+                                try { webRef.reload(); toast("已刷新"); } catch (Exception ignored) {}
+                            }
                         }
                     } else { tapCnt[0] = 0; }
                     break;
@@ -1132,7 +1180,9 @@ public class MainActivity extends AppCompatActivity {
         try {
             int wi = tabOf(w);
             if (wi >= 0) { Tab wt = tabs.get(wi);
-                if (wt.lastEditable && (System.currentTimeMillis() - wt.lastEditableTs) < EDIT_GUARD_MS) return; }
+                // 打字/语音(含麦克风) 20s 内, 或最近 4s 内有触摸(滚动/点按进行中) → 跳过翻转, 那一帧的失焦足以顶掉
+                //   软键盘/打断语音听写。翻转无损(不重载·不丢态), 故非交互态时照常纠正卡死的 hidden 页。
+                if (userInteracting(wt, 4000)) return; }
         } catch (Exception ignored) {}
         try {
             // 只在真的卡 hidden 时才切可见性纠正 → 正常切标签无闪烁。
@@ -1140,6 +1190,7 @@ public class MainActivity extends AppCompatActivity {
                 if (val == null || !val.contains("hidden")) return;
                 try {
                     if (w.getVisibility() == android.view.View.VISIBLE) {
+                        android.util.Log.i(FL, "resumeWeb: page stuck hidden & user idle -> visibility flip to unfreeze");
                         // 跨帧切 INVISIBLE→VISIBLE: 逼 Chromium 把 page-visibility 当作真实的 hidden→visible 转变处理
                         // (同帧切会被合并成无变化而失效)。仅~1 帧不可见, 只在卡死恢复时触发, 用户无感。
                         w.setVisibility(android.view.View.INVISIBLE);
@@ -1210,6 +1261,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void renderTabStrip() {
         if (tabStripRow == null) return;
+        // 内容签名去重: 显示文案/在场/活动页 未变则直接跳过 (账号池逐号回推时绝大多数与已开标签无关 → 恒被此处挡下,
+        //   不做任何 removeAllViews) → 从源头掐断「刷新账号 → 标签条全量重建」的 UI 风暴。
+        String sig = tabStripSig();
+        if (sig.equals(lastStripSig)) { main.removeCallbacks(stripRenderTask); stripRenderPending = false; return; }
+        lastStripSig = sig;
+        main.removeCallbacks(stripRenderTask); stripRenderPending = false;
         tabStripRow.removeAllViews();
         for (int i = 0; i < tabs.size(); i++) {
             final int idx = i;
@@ -2551,14 +2608,14 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void setTabStatus(String accountId, String convName, String status) {
             if (accountId == null || accountId.isEmpty()) return;
             sTabStatus.put(accountId, new String[]{ convName == null ? "" : convName, status == null ? "" : status });
-            main.post(MainActivity.this::renderTabStrip);
+            main.post(MainActivity.this::scheduleRenderTabStrip);
         }
         /** 切号面板随额度刷新 → 推送该账号实时剩余美金 ("$5"/空), 显示在页签状态点左侧便于管理。 */
         @JavascriptInterface public void setTabDollars(String accountId, String dollars) {
             if (accountId == null || accountId.isEmpty()) return;
             if (dollars == null) dollars = "";
             if (dollars.isEmpty()) sTabDollars.remove(accountId); else sTabDollars.put(accountId, dollars);
-            main.post(MainActivity.this::renderTabStrip);
+            main.post(MainActivity.this::scheduleRenderTabStrip);
         }
         /** 打开系统 VPN 设置 (用户自行连接已配置的 VPN/导入的 Clash·sing-box·V2Ray 配置)。 */
         @JavascriptInterface public void openVpnSettings() {
@@ -4858,23 +4915,51 @@ public class MainActivity extends AppCompatActivity {
      *  关键: 必须连续两次(各 4s)无响应才判僵死并重载 —— 设备繁忙时单次回调迟到很常见, 单次超时即重载
      *  会在每次回前台时误重载、打断操作 (用户反映"刷新频繁打断")。给一次重试 → 仅真冻死才重载。 */
     private static final long EDIT_GUARD_MS = 20000;   // 最近 20s 内在输入 → 不做破坏性重载, 保住草稿
+    private static final String FL = "DAO_FLUENCY";     // 流畅度诊断 tag: 每条重载/可见性翻转都打点 → 真机经 logcat 可定位是哪条路径介入
+    /** 「用户此刻正与本页交互」: 打字/语音(lastEditable, 已含麦克风/语音识别) 在 20s 窗口内, 或最近 win 毫秒内有触摸
+     *  (滚动/阅读/点麦克风按钮)。任一为真即应让出一切破坏性动作 → 「刷新账号」与「操作官网」道并行而不相悖。 */
+    private boolean userInteracting(Tab t, long touchWin) {
+        if (t == null) return false;
+        long now = System.currentTimeMillis();
+        if (t.lastEditable && (now - t.lastEditableTs) < EDIT_GUARD_MS) return true;
+        return t.lastTouchTs > 0 && (now - t.lastTouchTs) < touchWin;
+    }
     /** 前台巡检时记录当前页是否有聚焦的可编辑元素 (input/textarea/contenteditable = 正在打字或语音输入)。
      *  页面僵死时本巡检的 JS 也回不来 → lastEditableTs 自然变陈旧, 不影响真冻死的恢复。 */
     private void recordEditable(final Tab t) {
         if (t == null || t.web == null) return;
         final WebView w = t.web;
         try {
-            // 递归探同源 iframe: 单网页外壳/各板块把对话与输入框嵌在子 iframe 里, 此时外层 activeElement 是
-            //   <iframe> 而非 input/textarea → 旧判定恒为「未输入」, 护栏失效会误重载打断打字/语音。逐层下探即正解。
-            w.evaluateJavascript(
-                "(function(){try{function ed(d){if(!d)return false;var a=d.activeElement;if(!a)return false;"
-                + "var g=(a.tagName||'').toLowerCase();if(g==='input'||g==='textarea'||a.isContentEditable)return true;"
-                + "if(g==='iframe'){try{return ed(a.contentDocument);}catch(e){return false;}}return false;}"
-                + "return ed(document)?'1':'0';}catch(e){return '0';}})()",
+            // 「正在交互」= 聚焦可编辑元素(打字) 或 麦克风/语音识别活跃(语音输入)。两者都置 lastEditable → 复用同一道
+            //   20s 护栏拦下破坏性重载/可见性翻转。逐层下探同源 iframe(单网页外壳把对话嵌在子页, 外层 activeElement
+            //   恒为 <iframe>)。语音根因: 听写期间往往无聚焦输入框 → 旧判定恒「未输入」→ 语音被刷新打断; 故于各层
+            //   幂等挂钩 getUserMedia / SpeechRecognition, 任一层正在采音即判「交互中」, 与打字同等受护。
+            w.evaluateJavascript(MIC_AND_EDIT_PROBE_JS,
                 val -> { if (tabOf(w) < 0) return; boolean ed = val != null && val.contains("1");
                     t.lastEditable = ed; if (ed) t.lastEditableTs = System.currentTimeMillis(); });
         } catch (Exception ignored) {}
     }
+    /** 自包含·幂等·递归: 每层同源 window 挂上麦克风/语音识别探针(若未挂), 再判该层(及子 iframe)是否聚焦可编辑元素
+     *  或正在采音。任一为真即返回 '1'(交互中)。挂钩只读旁观(包裹后仍调原实现) → 绝不改变页面采音/识别行为。 */
+    private static final String MIC_AND_EDIT_PROBE_JS =
+        "(function(){try{"
+        + "function hook(w){try{if(!w||w.__rtMicHooked)return;w.__rtMicHooked=1;if(w.__rtMic==null)w.__rtMic=0;"
+        + "var md=w.navigator&&w.navigator.mediaDevices;"
+        + "if(md&&md.getUserMedia){var o=md.getUserMedia.bind(md);md.getUserMedia=function(c){var p=o(c);"
+        + "try{if(c&&c.audio)p.then(function(s){try{var a=s.getAudioTracks?s.getAudioTracks():[];if(a&&a.length){w.__rtMic++;"
+        + "a.forEach(function(tk){var d=function(){w.__rtMic=Math.max(0,w.__rtMic-1);};tk.addEventListener('ended',d);"
+        + "var st=tk.stop&&tk.stop.bind(tk);if(st)tk.stop=function(){d();return st();};});}}catch(e){}}).catch(function(){});}catch(e){}"
+        + "return p;};}"
+        + "var SR=w.SpeechRecognition||w.webkitSpeechRecognition;"
+        + "if(SR&&SR.prototype&&!SR.prototype.__rtW){try{var ps=SR.prototype.start;SR.prototype.start=function(){w.__rtMic++;"
+        + "try{var dn=function(){w.__rtMic=Math.max(0,w.__rtMic-1);};this.addEventListener('end',dn);this.addEventListener('error',dn);}catch(e){}"
+        + "return ps.apply(this,arguments);};SR.prototype.__rtW=1;}catch(e){}}"
+        + "}catch(e){}}"
+        + "function chk(d,w){if(!d)return false;try{hook(w);}catch(e){}try{if(w&&w.__rtMic>0)return true;}catch(e){}"
+        + "var a=d.activeElement;if(a){var g=(a.tagName||'').toLowerCase();"
+        + "if(g==='input'||g==='textarea'||a.isContentEditable)return true;"
+        + "if(g==='iframe'){try{if(chk(a.contentDocument,a.contentWindow))return true;}catch(e){}}}return false;}"
+        + "return chk(document,window)?'1':'0';}catch(e){return '0';}})()";
     private void probeTabLiveness(final Tab t) { probeTabLiveness(t, 0); }
     private void probeTabLiveness(final Tab t, final int attempt) {
         if (t == null || t.web == null) return;
@@ -4890,9 +4975,11 @@ public class MainActivity extends AppCompatActivity {
             if (attempt < 1) { probeTabLiveness(t, attempt + 1); return; }   // 再给一次机会, 避免迟到回调被误判僵死
             // 用户正在输入/语音输入 (最近 ~20s 有聚焦可编辑元素) → 绝不破坏性重载 (会清空草稿·打断语音),
             //   改非破坏性唤醒。页面真冻死时该状态无法刷新 → 自然变陈旧, 下一轮探活即正常重载恢复。
-            if (t.lastEditable && (System.currentTimeMillis() - t.lastEditableTs) < EDIT_GUARD_MS) {
+            if (userInteracting(t, EDIT_GUARD_MS)) {
+                android.util.Log.i(FL, "probe: frozen but user interacting (type/voice/touch) -> wake only, NO reload");
                 try { resumeWeb(w); } catch (Exception ignored) {} return;
             }
+            android.util.Log.i(FL, "probe: tab truly frozen & idle -> silent reload to recover");
             try { w.reload(); } catch (Exception ignored) {}   // 连续无响应且非输入中 → 真冻死, 静默重载恢复交互
         }, 4000);
     }
