@@ -170,8 +170,9 @@ public class MainActivity extends AppCompatActivity {
         boolean desktop = false;     // 桌面版 UA
         boolean night = false;       // 夜间反色
         boolean translated = false;  // 整页翻译态 (跨页保持)
-        boolean lastEditable = false; // 最近一次前台巡检时页面是否有聚焦的可编辑元素 (正在打字/语音输入)
-        long lastEditableTs = 0;     // 上述「正在输入」状态的记录时刻 → 据此避免输入中被探活重载打断
+        boolean lastEditable = false; // 最近一次前台巡检时页面是否「正在交互」: 聚焦可编辑元素(打字) 或 麦克风/语音识别活跃(语音输入)
+        long lastEditableTs = 0;     // 上述「正在输入」状态的记录时刻 → 据此避免输入中被探活重载/可见性翻转打断
+        long lastTouchTs = 0;        // 最近一次用户在本页触摸(按下/滑动)的时刻 → 滚动/阅读/点麦克风也算「人在交互」, 据此避免破坏性重载打断
         String pendingReloadUrl = null; // 后台标签渲染进程被回收 → 延迟到选中时再重载 (避免多标签同时重载放大内存压力·消除卡死雪崩)
         boolean maybeStale = false;  // 长时间后台返回 → 渲染线程可能被系统冻结(看着正常但点击/下载等失效) → 选中/恢复时探活, 无响应则静默重载
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
@@ -905,7 +906,11 @@ public class MainActivity extends AppCompatActivity {
             @Override public boolean shouldOverrideUrlLoading(WebView v, String u) { return handleExternalScheme(u); }
             @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
                 tab.url = u; if (tabOf(v) == active) setAddr(u);
-                if (!tab.internal && u != null && u.startsWith("http")) injectUserScripts(v, u, "start"); // 油猴 @run-at document-start
+                if (u != null && u.startsWith("http")) {
+                    // document-start 即挂麦克风/语音探针 → 早于页面脚本调用 getUserMedia, 确保语音一开始就被识别为「交互中」。
+                    try { v.evaluateJavascript(MIC_AND_EDIT_PROBE_JS, null); } catch (Exception ignored) {}
+                    if (!tab.internal) injectUserScripts(v, u, "start"); // 油猴 @run-at document-start
+                }
             }
             @Override public void onPageFinished(WebView v, String u) {
                 tab.url = u; renderTabStrip(); scheduleSaveTabs();
@@ -941,6 +946,11 @@ public class MainActivity extends AppCompatActivity {
             // 渲染进程被系统在内存压力下回收(WebView 变白/无响应需手动刷新)→ 自动重建该标签并重载, 用户无感恢复。
             @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
                 int idx = tabOf(v);
+                boolean crash = detail != null && detail.didCrash();
+                // 根因诊断: 渲染进程被系统在内存压力下回收(非崩溃) 是「整页被刷新打断」最可能的真凶 ——
+                //   多账号池/多标签把 WebView 共享渲染进程的内存撑高 → 系统杀渲染进程 → 前台官网被迫整页重载。
+                android.util.Log.w(FL, "onRenderProcessGone idx=" + idx + " didCrash=" + crash
+                        + " (renderer killed -> forced full reload; reduce memory pressure to avoid)");
                 if (idx < 0) { try { v.destroy(); } catch (Exception ignored) {} return true; }
                 recoverDeadTab(idx);
                 return true;   // 已处理: 系统不再杀进程
@@ -1014,6 +1024,9 @@ public class MainActivity extends AppCompatActivity {
         final float[] tapFirst = new float[]{0f, 0f};   // 第一击落点 (同处判定锚点)
         final int sameSpot = tapSlop * 3;               // 三击须落在该半径内才算"同一处"
         web.setOnTouchListener((v, ev) -> {
+            // 「人此刻在这页上交互」的最广信号: 任何触摸(按下/滑动/抬起)都刷新 → 滚动阅读、点麦克风按钮、
+            //   长按选词等都算交互中, 据此在 EDIT_GUARD 窗口内拦下一切破坏性重载, 真正「与刷新井水不犯河水」。
+            tab.lastTouchTs = System.currentTimeMillis();
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     tapDown[0] = ev.getX(); tapDown[1] = ev.getY(); tapDownT[0] = System.currentTimeMillis();
@@ -1034,7 +1047,10 @@ public class MainActivity extends AppCompatActivity {
                         if (tapCnt[0] >= 3) {
                             tapCnt[0] = 0;
                             Tab a = cur();
-                            if (a != null && a.web == webRef) { try { webRef.reload(); toast("已刷新"); } catch (Exception ignored) {} }
+                            if (a != null && a.web == webRef) {
+                                android.util.Log.i(FL, "triple-tap manual reload (deliberate gesture)");
+                                try { webRef.reload(); toast("已刷新"); } catch (Exception ignored) {}
+                            }
                         }
                     } else { tapCnt[0] = 0; }
                     break;
@@ -1132,7 +1148,9 @@ public class MainActivity extends AppCompatActivity {
         try {
             int wi = tabOf(w);
             if (wi >= 0) { Tab wt = tabs.get(wi);
-                if (wt.lastEditable && (System.currentTimeMillis() - wt.lastEditableTs) < EDIT_GUARD_MS) return; }
+                // 打字/语音(含麦克风) 20s 内, 或最近 4s 内有触摸(滚动/点按进行中) → 跳过翻转, 那一帧的失焦足以顶掉
+                //   软键盘/打断语音听写。翻转无损(不重载·不丢态), 故非交互态时照常纠正卡死的 hidden 页。
+                if (userInteracting(wt, 4000)) return; }
         } catch (Exception ignored) {}
         try {
             // 只在真的卡 hidden 时才切可见性纠正 → 正常切标签无闪烁。
@@ -1140,6 +1158,7 @@ public class MainActivity extends AppCompatActivity {
                 if (val == null || !val.contains("hidden")) return;
                 try {
                     if (w.getVisibility() == android.view.View.VISIBLE) {
+                        android.util.Log.i(FL, "resumeWeb: page stuck hidden & user idle -> visibility flip to unfreeze");
                         // 跨帧切 INVISIBLE→VISIBLE: 逼 Chromium 把 page-visibility 当作真实的 hidden→visible 转变处理
                         // (同帧切会被合并成无变化而失效)。仅~1 帧不可见, 只在卡死恢复时触发, 用户无感。
                         w.setVisibility(android.view.View.INVISIBLE);
@@ -4858,23 +4877,51 @@ public class MainActivity extends AppCompatActivity {
      *  关键: 必须连续两次(各 4s)无响应才判僵死并重载 —— 设备繁忙时单次回调迟到很常见, 单次超时即重载
      *  会在每次回前台时误重载、打断操作 (用户反映"刷新频繁打断")。给一次重试 → 仅真冻死才重载。 */
     private static final long EDIT_GUARD_MS = 20000;   // 最近 20s 内在输入 → 不做破坏性重载, 保住草稿
+    private static final String FL = "DAO_FLUENCY";     // 流畅度诊断 tag: 每条重载/可见性翻转都打点 → 真机经 logcat 可定位是哪条路径介入
+    /** 「用户此刻正与本页交互」: 打字/语音(lastEditable, 已含麦克风/语音识别) 在 20s 窗口内, 或最近 win 毫秒内有触摸
+     *  (滚动/阅读/点麦克风按钮)。任一为真即应让出一切破坏性动作 → 「刷新账号」与「操作官网」道并行而不相悖。 */
+    private boolean userInteracting(Tab t, long touchWin) {
+        if (t == null) return false;
+        long now = System.currentTimeMillis();
+        if (t.lastEditable && (now - t.lastEditableTs) < EDIT_GUARD_MS) return true;
+        return t.lastTouchTs > 0 && (now - t.lastTouchTs) < touchWin;
+    }
     /** 前台巡检时记录当前页是否有聚焦的可编辑元素 (input/textarea/contenteditable = 正在打字或语音输入)。
      *  页面僵死时本巡检的 JS 也回不来 → lastEditableTs 自然变陈旧, 不影响真冻死的恢复。 */
     private void recordEditable(final Tab t) {
         if (t == null || t.web == null) return;
         final WebView w = t.web;
         try {
-            // 递归探同源 iframe: 单网页外壳/各板块把对话与输入框嵌在子 iframe 里, 此时外层 activeElement 是
-            //   <iframe> 而非 input/textarea → 旧判定恒为「未输入」, 护栏失效会误重载打断打字/语音。逐层下探即正解。
-            w.evaluateJavascript(
-                "(function(){try{function ed(d){if(!d)return false;var a=d.activeElement;if(!a)return false;"
-                + "var g=(a.tagName||'').toLowerCase();if(g==='input'||g==='textarea'||a.isContentEditable)return true;"
-                + "if(g==='iframe'){try{return ed(a.contentDocument);}catch(e){return false;}}return false;}"
-                + "return ed(document)?'1':'0';}catch(e){return '0';}})()",
+            // 「正在交互」= 聚焦可编辑元素(打字) 或 麦克风/语音识别活跃(语音输入)。两者都置 lastEditable → 复用同一道
+            //   20s 护栏拦下破坏性重载/可见性翻转。逐层下探同源 iframe(单网页外壳把对话嵌在子页, 外层 activeElement
+            //   恒为 <iframe>)。语音根因: 听写期间往往无聚焦输入框 → 旧判定恒「未输入」→ 语音被刷新打断; 故于各层
+            //   幂等挂钩 getUserMedia / SpeechRecognition, 任一层正在采音即判「交互中」, 与打字同等受护。
+            w.evaluateJavascript(MIC_AND_EDIT_PROBE_JS,
                 val -> { if (tabOf(w) < 0) return; boolean ed = val != null && val.contains("1");
                     t.lastEditable = ed; if (ed) t.lastEditableTs = System.currentTimeMillis(); });
         } catch (Exception ignored) {}
     }
+    /** 自包含·幂等·递归: 每层同源 window 挂上麦克风/语音识别探针(若未挂), 再判该层(及子 iframe)是否聚焦可编辑元素
+     *  或正在采音。任一为真即返回 '1'(交互中)。挂钩只读旁观(包裹后仍调原实现) → 绝不改变页面采音/识别行为。 */
+    private static final String MIC_AND_EDIT_PROBE_JS =
+        "(function(){try{"
+        + "function hook(w){try{if(!w||w.__rtMicHooked)return;w.__rtMicHooked=1;if(w.__rtMic==null)w.__rtMic=0;"
+        + "var md=w.navigator&&w.navigator.mediaDevices;"
+        + "if(md&&md.getUserMedia){var o=md.getUserMedia.bind(md);md.getUserMedia=function(c){var p=o(c);"
+        + "try{if(c&&c.audio)p.then(function(s){try{var a=s.getAudioTracks?s.getAudioTracks():[];if(a&&a.length){w.__rtMic++;"
+        + "a.forEach(function(tk){var d=function(){w.__rtMic=Math.max(0,w.__rtMic-1);};tk.addEventListener('ended',d);"
+        + "var st=tk.stop&&tk.stop.bind(tk);if(st)tk.stop=function(){d();return st();};});}}catch(e){}}).catch(function(){});}catch(e){}"
+        + "return p;};}"
+        + "var SR=w.SpeechRecognition||w.webkitSpeechRecognition;"
+        + "if(SR&&SR.prototype&&!SR.prototype.__rtW){try{var ps=SR.prototype.start;SR.prototype.start=function(){w.__rtMic++;"
+        + "try{var dn=function(){w.__rtMic=Math.max(0,w.__rtMic-1);};this.addEventListener('end',dn);this.addEventListener('error',dn);}catch(e){}"
+        + "return ps.apply(this,arguments);};SR.prototype.__rtW=1;}catch(e){}}"
+        + "}catch(e){}}"
+        + "function chk(d,w){if(!d)return false;try{hook(w);}catch(e){}try{if(w&&w.__rtMic>0)return true;}catch(e){}"
+        + "var a=d.activeElement;if(a){var g=(a.tagName||'').toLowerCase();"
+        + "if(g==='input'||g==='textarea'||a.isContentEditable)return true;"
+        + "if(g==='iframe'){try{if(chk(a.contentDocument,a.contentWindow))return true;}catch(e){}}}return false;}"
+        + "return chk(document,window)?'1':'0';}catch(e){return '0';}})()";
     private void probeTabLiveness(final Tab t) { probeTabLiveness(t, 0); }
     private void probeTabLiveness(final Tab t, final int attempt) {
         if (t == null || t.web == null) return;
@@ -4890,9 +4937,11 @@ public class MainActivity extends AppCompatActivity {
             if (attempt < 1) { probeTabLiveness(t, attempt + 1); return; }   // 再给一次机会, 避免迟到回调被误判僵死
             // 用户正在输入/语音输入 (最近 ~20s 有聚焦可编辑元素) → 绝不破坏性重载 (会清空草稿·打断语音),
             //   改非破坏性唤醒。页面真冻死时该状态无法刷新 → 自然变陈旧, 下一轮探活即正常重载恢复。
-            if (t.lastEditable && (System.currentTimeMillis() - t.lastEditableTs) < EDIT_GUARD_MS) {
+            if (userInteracting(t, EDIT_GUARD_MS)) {
+                android.util.Log.i(FL, "probe: frozen but user interacting (type/voice/touch) -> wake only, NO reload");
                 try { resumeWeb(w); } catch (Exception ignored) {} return;
             }
+            android.util.Log.i(FL, "probe: tab truly frozen & idle -> silent reload to recover");
             try { w.reload(); } catch (Exception ignored) {}   // 连续无响应且非输入中 → 真冻死, 静默重载恢复交互
         }, 4000);
     }
