@@ -217,6 +217,38 @@ public class MainActivity extends AppCompatActivity {
         return n;
     }
     private String lastPresenceSig = "";
+    // ── 标签条重绘 合并·防抖·按需 (根治「刷新账号每隔几秒卡一次/打断打字」) ──
+    // 账号池轮询会对全部账号(可达上百个)逐个回推 setTabStatus/setTabDollars, 旧逻辑每条都 main.post 一次
+    // renderTabStrip(全量 removeAllViews + 逐标签重建 GestureDetector/监听器) → 几秒一阵 UI 线程风暴,
+    // 顶掉软键盘/打断输入。改为: 内容签名去重(未变不重建) + 防抖合并(至多每 ~600ms 一次) + 交互中顺延
+    // (打字/语音/触摸时绝不重建标签条) → 「刷新账号」与「操作页面」道并行而不相悖。
+    private String lastStripSig = null;
+    private boolean stripRenderPending = false;
+    private final Runnable stripRenderTask = new Runnable() {
+        @Override public void run() {
+            stripRenderPending = false;
+            Tab a = cur();
+            // 正在打字/语音/触摸 → 再顺延, 绝不在交互中做 removeAllViews 全量重建 (那一下足以顶掉软键盘/打断语音)。
+            if (a != null && userInteracting(a, 1500)) { stripRenderPending = true; main.postDelayed(this, 1200); return; }
+            renderTabStrip();
+        }
+    };
+    /** 合并·防抖 重绘标签条: 高频数据推送(账号状态/额度/在场/标题)统一经此, 至多每 ~600ms 落一次且交互中顺延。 */
+    private void scheduleRenderTabStrip() {
+        if (stripRenderPending) return;
+        stripRenderPending = true;
+        main.postDelayed(stripRenderTask, 600);
+    }
+    /** 标签条内容签名: 活动页 + 各标签(显示文案 chipTitle 含状态点/额度/对话名 + 云端在场数)。仅此变化才需重建。 */
+    private String tabStripSig() {
+        long now = System.currentTimeMillis();
+        StringBuilder sb = new StringBuilder().append(active).append('#');
+        for (int i = 0; i < tabs.size(); i++) {
+            Tab t = tabs.get(i);
+            sb.append(chipTitle(t)).append('|').append(coViewerCount(t.vid, now)).append(';');
+        }
+        return sb.toString();
+    }
     /** 在场签名: 各标签 vid→云端在场数。仅变化才重绘标签条(省电·防抖)。 */
     private String presenceSig() {
         long now = System.currentTimeMillis();
@@ -233,7 +265,7 @@ public class MainActivity extends AppCompatActivity {
         String sig = presenceSig();
         if (sig.equals(lastPresenceSig)) return;
         lastPresenceSig = sig;
-        renderTabStrip();
+        scheduleRenderTabStrip();
     }
     // 前台期间每 3s 巡检在场(覆盖离场/TTL过期, 无对应 RPC 事件), 变化即重绘; 收到 claim 时另立即重绘。
     private final Runnable presenceTick = new Runnable() {
@@ -913,7 +945,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
             @Override public void onPageFinished(WebView v, String u) {
-                tab.url = u; renderTabStrip(); scheduleSaveTabs();
+                tab.url = u; scheduleRenderTabStrip(); scheduleSaveTabs();
                 if (!tab.incognito) addHistory(u, tab.title, tab);   // 无痕标签不记历史
                 if (pageZoom != 100) applyZoom(v);          // 缩放跨页/刷新保持
                 if (tab.night) applyNight(v, true);          // 夜间反色跨页保持
@@ -933,7 +965,7 @@ public class MainActivity extends AppCompatActivity {
                 if (u != null && u.startsWith("http")) {
                     tab.url = u;
                     if (tabOf(v) == active) setAddr(u);
-                    renderTabStrip(); scheduleSaveTabs();
+                    scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
                     if (!tab.internal) { installDownloadHook(v); installKbHelper(v); }
                 }
@@ -959,7 +991,7 @@ public class MainActivity extends AppCompatActivity {
         web.setWebChromeClient(new WebChromeClient() {
             @Override public void onReceivedTitle(WebView v, String t) {
                 if (t == null || t.isEmpty()) return;
-                tab.title = t; renderTabStrip();
+                tab.title = t; scheduleRenderTabStrip();
                 // 网页标题往往在 onPageFinished 之后才异步到达(尤其裸域名 301 跳 www), 此时回填,
                 // 否则该条历史会记成上一页的标题。同时回填跳转前的原始 URL。
                 if (!tab.incognito) {
@@ -1229,6 +1261,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void renderTabStrip() {
         if (tabStripRow == null) return;
+        // 内容签名去重: 显示文案/在场/活动页 未变则直接跳过 (账号池逐号回推时绝大多数与已开标签无关 → 恒被此处挡下,
+        //   不做任何 removeAllViews) → 从源头掐断「刷新账号 → 标签条全量重建」的 UI 风暴。
+        String sig = tabStripSig();
+        if (sig.equals(lastStripSig)) { main.removeCallbacks(stripRenderTask); stripRenderPending = false; return; }
+        lastStripSig = sig;
+        main.removeCallbacks(stripRenderTask); stripRenderPending = false;
         tabStripRow.removeAllViews();
         for (int i = 0; i < tabs.size(); i++) {
             final int idx = i;
@@ -2570,14 +2608,14 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void setTabStatus(String accountId, String convName, String status) {
             if (accountId == null || accountId.isEmpty()) return;
             sTabStatus.put(accountId, new String[]{ convName == null ? "" : convName, status == null ? "" : status });
-            main.post(MainActivity.this::renderTabStrip);
+            main.post(MainActivity.this::scheduleRenderTabStrip);
         }
         /** 切号面板随额度刷新 → 推送该账号实时剩余美金 ("$5"/空), 显示在页签状态点左侧便于管理。 */
         @JavascriptInterface public void setTabDollars(String accountId, String dollars) {
             if (accountId == null || accountId.isEmpty()) return;
             if (dollars == null) dollars = "";
             if (dollars.isEmpty()) sTabDollars.remove(accountId); else sTabDollars.put(accountId, dollars);
-            main.post(MainActivity.this::renderTabStrip);
+            main.post(MainActivity.this::scheduleRenderTabStrip);
         }
         /** 打开系统 VPN 设置 (用户自行连接已配置的 VPN/导入的 Clash·sing-box·V2Ray 配置)。 */
         @JavascriptInterface public void openVpnSettings() {
