@@ -572,6 +572,12 @@ function test(name, fn) {
       assert.ok(/inflight-stale-reset/.test(ext), "超时须 stale-reset 让新轮接管");
       assert.ok(/const myStart = Date\.now\(\);/.test(ext) && /if \(_poolReconcileStartMs === myStart\) _poolReconcileInflight = false;/.test(ext), "finally 须以令牌守卫, 仅本轮清 inflight");
     });
+    test("genericWebProxy 套娃多层导航: 除 a[href]/GET表单, 亦拦 JS 整页跳转(location.assign/replace) 改经 /__web", () => {
+      assert.ok(/function wrap\(h\)\{if\(typeof h==="string"&&h\.indexOf\(P\)===0\)return h;/.test(ext), "wrap 须防已代理 URL 二次套娃");
+      assert.ok(/window\.location\.assign=function\(u\)\{return _asn\(wrap\(u\)\)\}/.test(ext), "须包裹 location.assign 经代理");
+      assert.ok(/window\.location\.replace=function\(u\)\{return _rpl\(wrap\(u\)\)\}/.test(ext), "须包裹 location.replace 经代理");
+      assert.ok(/var _asn=window\.location\.assign\.bind\(window\.location\);/.test(ext), "_nav 须用原始 assign(绕开自身改写防自陷)");
+    });
   }
 
   // ── 11. 备份命名/结构 + listBackups (v4.8.3 编号·账号+密码表层·对话/账号信息分明) ──

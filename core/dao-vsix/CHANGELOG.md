@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.18
+- 改进「站内浏览器/搜索引擎多层页面点进去」(`genericWebProxy` `/__web` 代理): 此前仅拦 `<a href>` 点击与 GET 表单, **JS 驱动的整页跳转(`location.assign`/`location.replace`·搜索结果常用)未拦** → 套娃第二/三层页直跳真站致掉登录/空白。
+  - 包裹 `window.location.assign`/`replace` 经同源 `/__web` 代理(对齐官网反代既有 `__fix` 双保险); `_nav` 用**原始** assign 绕开自身改写防自陷; `wrap` 守 `indexOf(P)===0` 防已代理 URL 二次套娃。
+  - 点击捕获加 `defaultPrevented`/非左键 守卫, 不抢站点自身处理。
+  - 说明(诚实边界): 这解决了服务端渲染站点 + 重定向 + JS 整页跳转的多层点进; 但纯 JS-SPA 结果站(同源 XHR/fetch)与反爬站点需更底层的「路径式反代 + Service Worker(整browser塞进单页)」架构, 列为后续。
+
 ## 3.50.17
 - 根治「三套反向注入(知识库/Playbook/GitHub PAT)完全没跑通」: 全池反向注入闭环此前**永不收敛**。
   - **真因(经 live 桥实测 `~/.dao/dao-pool-reconcile.log` 定位)**: `devinBatchInject` 对账号池**全串行**(每号 10~20 次云端 API 串行: 登录+清旧+注准则/桥/Secret+全档案+回读校验), 实测 **144 账号 ~90-100 分钟/轮**。后果两层:
