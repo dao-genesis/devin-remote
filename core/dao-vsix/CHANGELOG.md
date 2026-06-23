@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.21
+- 根治「IDE 内官网路由慢」(同源反代 `devinCloudProxyRoute` + 客户端 Service Worker)。
+  - **真因(经 live 桥定位·读代码实证)**: IDE 内打开官网的真实热路径是主口 9920 同源反代 `devinCloudProxyRoute`(`/sessions|/org…?dao_acct=`),它只注入 authBridge+拖拽桥, **无 Service Worker**。而 VS Code webview 的 iframe **不持久化 HTTP 磁盘缓存**(即便资源带 `immutable`),故每次重载/切标/导航都向 9920 重取数百个哈希分片(本仓库 SPA 入口 ~469 chunk)→ 慢。3.50/PR#541 的 SW 只加在 rt-flow 端口模式,**从未覆盖这条热路径**,所以用户侧依旧慢。
+  - **修**: `devinCloudProxyRoute` 注入页内**同源 SW 注册**(scope `/`),主口新增 `/__dao_sw.js` 路由直出 SW(`Service-Worker-Allowed: /`)。SW cache-first **仅缓存同源哈希不可变静态资产**(.js/.css/字体/图等),跳过 `/api/`、`/__` 桥与 SW、所有 HTML/导航(无扩展名不匹配)→ HTML/登录态/接口恒走网络不缓存;资产首载落 CacheStorage(webview 中持久),之后跨导航/重载**零代理零上游往返**,媲美真浏览器磁盘缓存。
+  - 等价于把 PR#541 的客户端缓存补到 IDE 真正在用的同源反代上;无 SW 支持的环境特性检测降级=零回归。新部署=新哈希=新 URL=自然 cache-miss 取新,旧条目自然孤立。
+
 ## 3.50.20
 - 根治「站内浏览器/搜索引擎 被墙站(google 等)打不开 → 只能搜不能用」(`genericWebProxy` `/__web`)。
   - **真因(经 live 桥在用户机实测定位)**: 用户在国内, 本机常驻 Clash(`127.0.0.1:7890`)。实测 `curl google via 7890 → 200/1.6s`、`google 直连 → 黑洞超时(000/12s+)`、`bing 直连 → 302/0.3s`。但 `genericWebProxy` 先**直连**、仅在直连失败后**串行**回退代理, 且回退窗口被夹在 `14s(socket)→18s(hardTimer)` 间太窄 → 被墙站直连黑洞耗尽 18s 直接误判「此页打不开」, 代理赛道根本来不及。

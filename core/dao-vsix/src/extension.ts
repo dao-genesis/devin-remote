@@ -1568,6 +1568,13 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         if (br) return br;
     }
 
+    // ── 归一 · 客户端持久缓存 Service Worker (根治「IDE 内官网路由慢」) ──
+    //   VS Code webview 的 iframe 不持久化 HTTP 磁盘缓存 → 官网 SPA 每次重载/导航重取数百哈希分片。
+    //   同源注册 SW(scope '/') · cache-first 仅缓存哈希不可变静态资产 → 重载零代理/零上游往返。
+    if (route === '/__dao_sw.js') {
+        return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoCloudSwJs(), headers: { 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/' } };
+    }
+
     // 官网 SPA 根路径资源/接口 → 透传 app.devin.ai
     if (isAppProxyPassthrough(route)) {
         return await devinCloudProxyRoute('/devin-cloud' + route, url, req, 'devin', res);
@@ -9974,6 +9981,34 @@ async function daoServeBridgeRoute(routePath: string, urlObj: URL): Promise<any>
     return null;
 }
 
+// 道·客户端持久缓存(CacheStorage): VS Code webview 的 iframe 不像真浏览器持久化 HTTP 磁盘缓存 →
+//   同源官网 SPA 每次重载/切标/导航重取数百哈希分片(即「系统浏览器/手机/单页壳各快一倍, 唯独 IDE
+//   内 webview 慢」之真因——同一反代差只在客户端缓存)。此 SW cache-first 仅拦同源哈希不可变静态资产
+//   (.js/.css/字体/图等), 跳过 dao 面板自身路由(/api、/__ 桥与 SW)与所有 HTML/导航(无扩展名不匹配)
+//   → HTML 恒走网络、登录态/接口不缓存; 资产首载落 Cache, 之后跨导航/重载零网络往返, 媲美真浏览器。
+function daoCloudSwJs() {
+    return [
+        "var C='dao-cloud-assets-v1';",
+        "var IM=/\\.(?:js|css|woff2?|ttf|eot|otf|png|jpe?g|gif|svg|ico|wasm)(?:\\?|$)/i;",
+        "self.addEventListener('install',function(e){self.skipWaiting();});",
+        "self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim());});",
+        "self.addEventListener('fetch',function(event){",
+        "var req=event.request;",
+        "if(req.method!=='GET')return;",
+        "try{if(req.headers.get('range'))return;}catch(e){}",
+        "var url;try{url=new URL(req.url);}catch(e){return;}",
+        "if(url.origin!==self.location.origin)return;",
+        "var p=url.pathname;",
+        "if(p.indexOf('/__')===0||p.indexOf('/api/')===0)return;",
+        "if(!IM.test(p))return;",
+        "event.respondWith(caches.open(C).then(function(cache){return cache.match(req).then(function(hit){",
+        "if(hit)return hit;",
+        "return fetch(req).then(function(resp){if(resp&&resp.status===200){try{cache.put(req,resp.clone());}catch(e){}}return resp;});",
+        "});}).catch(function(){return fetch(req);}));",
+        "});"
+    ].join('');
+}
+
 function daoDropBridgeJs() {
     return [
         "(function(){try{",
@@ -10457,7 +10492,9 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         //   body, 外链脚本走网络往返期间标签已被 SPA 抹除 → 永不执行(实测 __daoDropBridge 不挂);
                         //   内联脚本随首段 HTML 解析即同步执行, 其 document 级 drop/dragover 监听跨 body 重渲染长存。
                         const dragBridgeInline = '<script>' + daoDropBridgeJs() + '</script>';
-                        const headInject = authBridge + dragBridgeInline;
+                        // 客户端持久缓存 SW 注册(同源·scope '/' · 仅缓存哈希不可变静态资产 → IDE webview 重载零往返)。
+                        const swRegInline = '<script>(function(){try{if(navigator.serviceWorker){navigator.serviceWorker.register("/__dao_sw.js",{scope:"/"}).catch(function(){});}}catch(e){}})();<\/script>';
+                        const headInject = authBridge + swRegInline + dragBridgeInline;
                         if (/<head[^>]*>/i.test(html)) {
                             html = html.replace(/(<head[^>]*>)/i, '$1' + headInject);
                         } else {
