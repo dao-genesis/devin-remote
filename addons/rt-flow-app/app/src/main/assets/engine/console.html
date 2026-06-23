@@ -1105,8 +1105,10 @@
       sec.items.forEach(function(e){ if(!e||!e.url) return; var idx=_lpData.length;
         _lpData.push({ url:e.url, title:e.title||"", account:e.account||"", devin:!!(e.devin&&e.account) });
         var al=e.account?_acctLabel(e.account):""; var tt=e.title||e.url;
+        // 与 APK appendRow 对齐: devin 历史 title 已含「· 邮箱」(devinHistName), 不再重复追加账号 → 避免双邮箱。
+        var showAl = al && tt.indexOf(al)===-1;
         html+='<div class="it'+(sec.dv?" dv":"")+'"><div class="row" data-i="'+idx+'">'
-            +'<div class="t2">'+_esc(tt)+(al?(' · '+_esc(al)):'')+'</div>'
+            +'<div class="t2">'+_esc(tt)+(showAl?(' · '+_esc(al)):'')+'</div>'
             +'<div class="u">'+_esc(e.url)+'</div></div>'
             +'<div class="more" data-i="'+idx+'">\u22EE</div></div>';
       });
