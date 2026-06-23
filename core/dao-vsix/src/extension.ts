@@ -8679,6 +8679,38 @@ function resolveBatchAccounts(opts: { accounts?: DaoBatchAccount[]; lines?: stri
     return [];
 }
 
+// ── 每账号「期望态签名」缓存 (~/.dao/dao-inject-sig.json: orgId → sig) ──────────────
+//   帛书·「为学者日益, 闻道者日损」: 已收敛之账号不必每轮重注. 期望态(token/桥URL/准则/桥MD/
+//   用户档案 K-P-S-MCP-Automation-额度)内容哈希为 sig; 某 org 缓存 sig == 当前期望 sig 即「已收敛」,
+//   经一次廉价 GET 验证缓存 auth 仍活后直接跳过其余全部上行写入. 唯期望态变(改档案/桥URL轮换/换token)
+//   方使 sig 变 → 触发该批重注收敛. 由此稳态核对 = 全池仅各一次 GET, 秒级完成 (不再 90 分钟串行).
+const INJECT_SIG_FILE = path.join(DAO_DIR, 'dao-inject-sig.json');
+function loadInjectSigMap(): Record<string, string> {
+    try { const j = JSON.parse(fs.readFileSync(INJECT_SIG_FILE, 'utf8')); return (j && typeof j === 'object' && !Array.isArray(j)) ? j : {}; } catch { return {}; }
+}
+function saveInjectSigMap(m: Record<string, string>): void {
+    try { fs.writeFileSync(INJECT_SIG_FILE, JSON.stringify(m, null, 2), 'utf8'); } catch { /* 守柔 */ }
+}
+function computeOrgInjectSig(token: string, url: string, rulesText: string, bridgeMd: string, p: InjectProfile): string {
+    const h = (s: string) => crypto.createHash('sha1').update(String(s || ''), 'utf8').digest('hex').slice(0, 12);
+    const items = JSON.stringify({
+        s: p.secrets.map(x => x.name + '=' + h(x.value)).sort(),
+        k: p.knowledge.map(x => x.name + ':' + h(x.body) + ':' + (x.trigger || '')).sort(),
+        pb: p.playbooks.map(x => x.title + ':' + h(x.body)).sort(),
+        m: p.mcps.map(x => mcpSlug(x) + ':' + h(x.url || x.command || '')).sort(),
+        a: (p.automations || []).map(x => x.name + ':' + h(x.prompt || '')).sort(),
+        ml: p.messageLimitAuto ? 'auto' : String(p.messageLimit),
+        mo: p.messageLimitOffset, en: p.enabled, ac: p.autoCleanup,
+    });
+    return h([token, url, h(rulesText), h(bridgeMd), items].join('|'));
+}
+function getBatchInjectConcurrency(): number {
+    try {
+        const c = vscode.workspace.getConfiguration('dao').get<number>('batchInjectConcurrency');
+        if (typeof c === 'number' && c >= 1) return Math.min(12, Math.floor(c));
+    } catch { /* 守柔 */ }
+    return 6;
+}
 async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchProgress> {
     const url = ws.publicUrl || (ws.port ? 'http://localhost:' + ws.port : '');
     const token = ws.token || bridgeToken || '';
@@ -8688,17 +8720,16 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
     // 批量反向注入全覆盖: 除固定道藏集(准则KB+桥KB+桥控制剧本+DAO_TOKEN),
     // 还把用户完整注入档案(用户自添 K/P/S/MCP/Automations/额度上限)逐账号注入到官网 org。
     const injectProfile = loadInjectProfile();
+    const desiredSig = computeOrgInjectSig(token, url, rulesText, bridgeMd, injectProfile);
+    const sigMap = loadInjectSigMap();
     daoBatchProgress = { total: accounts.length, done: 0, ok: 0, running: true, results: [], startedAt: new Date().toISOString() };
     const resultsFile = path.join(DAO_DIR, 'dao-batch-inject-results.json');
-    for (const a of accounts) {
+    const flush = () => { try { fs.writeFileSync(resultsFile, JSON.stringify(daoBatchProgress, null, 2), 'utf8'); } catch { /* 守柔 */ } };
+    // 单账号注入(纯函数式·只读全局期望态, 写自身 res 与 sigMap[orgId]; 无共享可变态 → 可并发)。
+    const injectOne = async (a: DaoBatchAccount): Promise<DaoBatchResult> => {
         const res: DaoBatchResult = { email: a.email, ok: false, auth: '', knowledge: false, bridge: false, playbook: false, secret: false, profile: false, cleaned: 0, verified: false };
         // 归零清理协同: RT Flow 已清理/出库的账号 → 批量自动注入守柔跳过 (除非用户主页单账号手动注入)。
-        if (isInjectSuppressedForEmail(a.email)) {
-            res.skipped = true; res.auth = 'skipped_cleaned';
-            daoBatchProgress.results.push(res); daoBatchProgress.done++;
-            try { fs.writeFileSync(resultsFile, JSON.stringify(daoBatchProgress, null, 2), 'utf8'); } catch { /* 守柔 */ }
-            continue;
-        }
+        if (isInjectSuppressedForEmail(a.email)) { res.skipped = true; res.auth = 'skipped_cleaned'; return res; }
         try {
             let auth1 = '', orgId = '';
             // 优先用按邮箱缓存的 auth1(切回即命中, 守柔省登录), GET 校验仍有效再用。
@@ -8707,9 +8738,14 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
                 const chk = await devinListKnowledge(saved.orgId, saved.auth1);
                 if (chk.ok) { auth1 = saved.auth1; orgId = saved.orgId; res.auth = 'cached'; }
             }
+            // 已收敛快路: 缓存 auth 仍活 且 该 org 缓存 sig == 当前期望 sig → 跳过全部上行写入(稳态秒级)。
+            if (auth1 && orgId && sigMap[orgId] === desiredSig) {
+                res.auth = 'skip-converged'; res.knowledge = res.bridge = res.secret = res.profile = res.playbook = res.verified = true; res.ok = true;
+                return res;
+            }
             if (!auth1) {
                 const auth = await devinAuthOnly(a.email, a.password);
-                if (!auth.ok) { res.error = auth.error; res.auth = 'login_failed'; daoBatchProgress.results.push(res); daoBatchProgress.done++; continue; }
+                if (!auth.ok) { res.error = auth.error; res.auth = 'login_failed'; return res; }
                 auth1 = auth.auth1!; orgId = auth.orgId!; res.auth = 'login';
             }
             res.orgId = orgId;
@@ -8739,15 +8775,31 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
             }
             // 成功 = 准则KB落地 + (无桥控制剧本或已注) + (无DAO_TOKEN或已注) + 用户完整档案已应用
             res.ok = (!rulesText || res.knowledge) && (!pbBody || res.playbook) && (!token || res.secret) && res.profile;
+            // 收敛即落 sig: 仅成功才记, 失败下轮重试(不误标已收敛)。
+            if (res.ok && orgId) sigMap[orgId] = desiredSig;
         } catch (e: any) { res.error = e?.message || String(e); }
-        if (res.ok) daoBatchProgress.ok++;
-        daoBatchProgress.results.push(res);
-        daoBatchProgress.done++;
-        try { fs.writeFileSync(resultsFile, JSON.stringify(daoBatchProgress, null, 2), 'utf8'); } catch { /* 守柔 */ }
-    }
+        return res;
+    };
+    // 有界并发池 — 帛书·「天下之至柔, 驰骋于天下之致坚」: 串行 ~40s/账号 × N 账号(实测 144 账号 ~96 分钟,
+    //   久过窗口重启周期 → 永不收敛). 改有界并发(默认 6, 守柔防 429), 稳态因 sig 快路再降至秒级。
+    const concurrency = Math.max(1, Math.min(getBatchInjectConcurrency(), accounts.length || 1));
+    let next = 0;
+    const worker = async (): Promise<void> => {
+        while (true) {
+            const i = next++;
+            if (i >= accounts.length) break;
+            const res = await injectOne(accounts[i]);
+            if (res.ok) daoBatchProgress!.ok++;
+            daoBatchProgress!.results.push(res);
+            daoBatchProgress!.done++;
+            if (daoBatchProgress!.done % 8 === 0) flush();
+        }
+    };
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    saveInjectSigMap(sigMap);
     daoBatchProgress.running = false;
     daoBatchProgress.finishedAt = new Date().toISOString();
-    try { fs.writeFileSync(resultsFile, JSON.stringify(daoBatchProgress, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    flush();
     return daoBatchProgress;
 }
 
@@ -9079,6 +9131,12 @@ const POOL_RECONCILE_INTERVAL_MS = 15 * 60 * 1000;
 let _poolReconcileTimer: ReturnType<typeof setInterval> | null = null;
 let _poolReconcileDebounce: ReturnType<typeof setTimeout> | null = null;
 let _poolReconcileInflight = false;
+let _poolReconcileStartMs = 0;
+// 看门狗上限: 单轮核对最长 20 分钟; 超过即视为僵死(挂死的上行 await / 进程半残),
+//   允许新一轮接管 — 根治曾观测到的 inflight 永久死锁(挂死的 daoBatchInjectAllAccounts
+//   令 finally 永不执行, 此后所有 watch/periodic 触发恒 skip=inflight, 反向注入全盘瘫痪)。
+//   (20 分钟从容覆盖最坏冷启全池串并行耗时 ~12-16 分, 不误判正常长跑为僵死。)
+const POOL_RECONCILE_MAX_MS = 20 * 60 * 1000;
 let _lastPoolReconcileSig = '';
 function computeAccountPoolSig(): string {
     try {
@@ -9104,10 +9162,17 @@ async function reconcileAccountPoolInject(reason: string, opts?: { force?: boole
     if (!p.enabled) { poolReconcileLog('trigger=' + reason + ' skip=disabled'); return skip; }
     const hasItems = !!(p.secrets.length || p.knowledge.length || p.playbooks.length || p.mcps.length || (p.automations && p.automations.length) || typeof p.messageLimit === 'number' || p.messageLimitAuto);
     if (!hasItems) { poolReconcileLog('trigger=' + reason + ' skip=empty-profile'); return skip; }
-    if (_poolReconcileInflight) { poolReconcileLog('trigger=' + reason + ' skip=inflight'); return skip; }
+    if (_poolReconcileInflight) {
+        const age = Date.now() - _poolReconcileStartMs;
+        if (age < POOL_RECONCILE_MAX_MS) { poolReconcileLog('trigger=' + reason + ' skip=inflight age=' + Math.round(age / 1000) + 's'); return skip; }
+        // 旧轮僵死超时 → 弃之, 新轮接管(旧轮若复活, 其 finally 持旧 token 不会误清新轮 inflight)。
+        poolReconcileLog('trigger=' + reason + ' inflight-stale-reset age=' + Math.round(age / 1000) + 's');
+    }
     const sig = computeAccountPoolSig();
     if (!(opts && opts.force) && sig === _lastPoolReconcileSig) { poolReconcileLog('trigger=' + reason + ' skip=unchanged-sig'); return skip; }
+    const myStart = Date.now();
     _poolReconcileInflight = true;
+    _poolReconcileStartMs = myStart;
     poolReconcileLog('trigger=' + reason + (opts && opts.force ? ' force=1' : '') + ' RUN sig-changed');
     try {
         const r = await daoBatchInjectAllAccounts();
@@ -9117,7 +9182,7 @@ async function reconcileAccountPoolInject(reason: string, opts?: { force?: boole
         poolReconcileLog('trigger=' + reason + ' DONE ok=' + r.okCount + '/' + r.total);
         try { sidebarCloudPanel?.refresh(); refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
         return { ok: r.ok, okCount: r.okCount, total: r.total, skipped: false };
-    } finally { _poolReconcileInflight = false; }
+    } finally { if (_poolReconcileStartMs === myStart) _poolReconcileInflight = false; }
 }
 function schedulePoolReconcile(reason: string): void {
     if (_poolReconcileDebounce) { clearTimeout(_poolReconcileDebounce); }

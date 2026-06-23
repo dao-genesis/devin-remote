@@ -2,6 +2,16 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.17
+- 根治「三套反向注入(知识库/Playbook/GitHub PAT)完全没跑通」: 全池反向注入闭环此前**永不收敛**。
+  - **真因(经 live 桥实测 `~/.dao/dao-pool-reconcile.log` 定位)**: `devinBatchInject` 对账号池**全串行**(每号 10~20 次云端 API 串行: 登录+清旧+注准则/桥/Secret+全档案+回读校验), 实测 **144 账号 ~90-100 分钟/轮**。后果两层:
+    - 单进程内: 该 ~90 分钟批跑期间, 所有 watch/periodic 触发恒 `skip=inflight`, 闭环空转;
+    - 跨进程: 用户测试时频繁重启窗口(每 ~50 分钟), 每次重启杀掉在跑的批 → 永远跑不到 `DONE`(日志可见最近 7 个 `RUN` 无一 `DONE`)。
+  - **修一·有界并发**: `devinBatchInject` 由全串行改**有界并发池**(默认 6·`dao.batchInjectConcurrency` 可调 1~12·守柔防 429), 冷启全池 ~96 分 → ~12-16 分。
+  - **修二·期望态签名快路**(`~/.dao/dao-inject-sig.json`): 每 org 缓存「期望态(token/桥URL/准则/桥MD/用户档案 K-P-S-MCP-Automation-额度)内容哈希」; 缓存 sig==当前期望 sig 即「已收敛」, 经一次廉价 GET 验证缓存 auth 仍活后跳过其余全部上行写入。**稳态核对 = 全池各一次 GET, 秒级完成**; 唯期望态变(改档案/桥URL轮换/换token)方触发重注收敛。
+  - **修三·inflight 看门狗**: `reconcileAccountPoolInject` 的 `_poolReconcileInflight` 由纯布尔改**带运行令牌(start 时戳)的时限守卫**(上限 20 分); 旧轮僵死超时即弃之、新轮接管(旧轮若复活, 其 finally 持旧令牌不误清新轮) → 杜绝「挂死令 finally 永不执行 → 永久 `skip=inflight` → 全盘瘫痪」。
+  - 量(quota)环与隧道存活环经 live `~/.dao/dao-loops.log` 实测**本就正常**(`[tunnel] probe ALIVE`/30s · `[quota] avail→cap`/60s), 本次不动。
+
 ## 3.50.0
 - MCP 归一化（综合 MCP）：反向注入到账号的「DAO Bridge MCP 使用文档」由「四大模块」升级为**五大模块综合归一 MCP**
   - 配套 `cloud/vm-replica/agent-vm/mcp_http.py`：单端点整合 `pc_*`/`browser_*`/`plugin_*`/`vscode_*`/`vm_*`（Windows 多 RDP）共 72 个工具，不再分而治之

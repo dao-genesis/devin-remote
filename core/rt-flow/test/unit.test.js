@@ -543,6 +543,37 @@ function test(name, fn) {
     });
   }
 
+  // ── 11d. dao-vsix · 全池反向注入闭环根治 (此前永不收敛: 144 账号全串行 ~90 分/轮 + inflight 永久死锁) ──
+  //   真因经 live 桥实测 ~/.dao/dao-pool-reconcile.log 定位: devinBatchInject 全串行太慢, 久过窗口重启周期 → 永不 DONE;
+  //   单进程内该期间一切触发恒 skip=inflight。三修: 有界并发 + 期望态签名快路 + inflight 看门狗(运行令牌)。
+  console.log("\n[dao-vsix · 全池反向注入闭环根治]");
+  {
+    const _fs = require("fs"), _path = require("path");
+    const ext = _fs.readFileSync(_path.join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts"), "utf8");
+    test("有界并发: devinBatchInject 用并发池(worker+next++)取代全串行, 默认 6·可配 1~12", () => {
+      assert.ok(/function getBatchInjectConcurrency\(\)/.test(ext), "须有 getBatchInjectConcurrency");
+      assert.ok(/batchInjectConcurrency/.test(ext), "须读 dao.batchInjectConcurrency 配置");
+      assert.ok(/Math\.min\(12,/.test(ext), "并发度须夹取上限 12");
+      assert.ok(/const worker = async \(\): Promise<void> =>/.test(ext), "须有并发 worker");
+      assert.ok(/const i = next\+\+;/.test(ext), "worker 须以 next\\+\\+ 取下一个账号(无锁队列)");
+      assert.ok(/await Promise\.all\(Array\.from\(\{ length: concurrency \}/.test(ext), "须并发启动 concurrency 个 worker");
+    });
+    test("期望态签名快路: 已收敛账号经一次廉价 GET 验证后跳过全部上行写入", () => {
+      assert.ok(/const INJECT_SIG_FILE = .*dao-inject-sig\.json/.test(ext), "须有 dao-inject-sig.json 缓存文件");
+      assert.ok(/function computeOrgInjectSig\(/.test(ext), "须有 computeOrgInjectSig");
+      assert.ok(/sigMap\[orgId\] === desiredSig/.test(ext), "须比对缓存 sig == 当前期望 sig");
+      assert.ok(/res\.auth = 'skip-converged'/.test(ext), "命中即标 skip-converged 并跳过");
+      assert.ok(/if \(res\.ok && orgId\) sigMap\[orgId\] = desiredSig;/.test(ext), "仅成功才落 sig(失败下轮重试)");
+    });
+    test("inflight 看门狗: 带运行令牌(start 时戳)的时限守卫, 超时新轮接管, 旧轮 finally 不误清", () => {
+      assert.ok(/const POOL_RECONCILE_MAX_MS = 20 \* 60 \* 1000;/.test(ext), "须有 20 分看门狗上限");
+      assert.ok(/let _poolReconcileStartMs = 0;/.test(ext), "须记录运行起始时戳");
+      assert.ok(/if \(age < POOL_RECONCILE_MAX_MS\)/.test(ext), "未超时才 skip=inflight");
+      assert.ok(/inflight-stale-reset/.test(ext), "超时须 stale-reset 让新轮接管");
+      assert.ok(/const myStart = Date\.now\(\);/.test(ext) && /if \(_poolReconcileStartMs === myStart\) _poolReconcileInflight = false;/.test(ext), "finally 须以令牌守卫, 仅本轮清 inflight");
+    });
+  }
+
   // ── 11. 备份命名/结构 + listBackups (v4.8.3 编号·账号+密码表层·对话/账号信息分明) ──
   console.log("\n[备份命名/结构 · v4.8.3]");
   const fs = require("fs"), os = require("os"), path = require("path");
