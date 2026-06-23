@@ -3148,8 +3148,17 @@ function startBridgeLivenessLoop(context: vscode.ExtensionContext): void {
 }
 
 // ═══ 单会话上限 · 额度跟随环 — 帛书·「反者道之动」 ═══
-//   启用 auto 时, 周期性据活动号最新剩余额度重算 cap = 剩余 ACU − offset, 仅变化才回写(守柔省网)。
-//   账号切换/批量注入时另由 devinApplyInjectProfile 即刻据本号算注; 此环负责活动号「额度刷新即跟随」。
+//   启用 auto 时, 周期性据活动号最新剩余额度重算 cap = quotaCapFromAvail(余额, offset), 仅变化才回写(守柔省网)。
+//   账号切换/批量注入时另由 applyInjectProfileToOrg 即刻据本号算注; 此环负责活动号「额度刷新即跟随」。
+//
+// 单会话上限计算 — 帛书·「大盈若盅·其用不窘」:
+//   余额充裕 → 留余量 off, cap = floor(余额 − off)(如 69 → 66);
+//   余额不足 off(最后一点小钱) → 不再钉死 1(那样残额永远花不掉, 此前根本错误),
+//     反而抬到 off+1(>off, 默认 4), 让最后一点能在一次对话里全部消耗完;
+//   负余额(欠费)同样收敛到 off+1。故 cap = max(floor(余额 − off), off + 1) — 恒 > off, 单调随余额增。
+function quotaCapFromAvail(avail: number, off: number): number {
+    return Math.max(Math.floor(avail - off), off + 1);
+}
 const QUOTA_AUTO_LIMIT_INTERVAL_MS = 60 * 1000;
 let _quotaAutoLimitTimer: ReturnType<typeof setInterval> | null = null;
 let _lastAutoLimitSig = '';
@@ -3161,7 +3170,7 @@ async function quotaAutoLimitTick(): Promise<void> {
         const avail = await devinFetchAvailableAcus(ws.devinOrgId, ws.devinAuth1);
         if (avail == null) return;
         const off = (typeof p.messageLimitOffset === 'number') ? p.messageLimitOffset : 3;
-        const cap = Math.max(Math.floor(avail - off), 1);
+        const cap = quotaCapFromAvail(avail, off);
         const sig = ws.devinOrgId + ':' + cap;
         if (sig === _lastAutoLimitSig) { daoLoopLog('quota', 'avail=' + avail + ' cap=' + cap + ' \u2192 \u4fdd\u6301(\u65e0\u53d8)'); return; }  // 无变化不重写 (守柔省网)
         const r = await devinSetMessageLimit(ws.devinOrgId, cap, ws.devinAuth1);
@@ -9203,7 +9212,7 @@ async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectPr
             const avail = await devinFetchAvailableAcus(orgId, auth1);
             if (avail != null) {
                 const off = (typeof p.messageLimitOffset === 'number') ? p.messageLimitOffset : 3;
-                const cap = Math.max(Math.floor(avail - off), 1);
+                const cap = quotaCapFromAvail(avail, off);
                 await devinSetMessageLimit(orgId, cap, auth1);
             }
         } catch { /* 守柔 */ }
