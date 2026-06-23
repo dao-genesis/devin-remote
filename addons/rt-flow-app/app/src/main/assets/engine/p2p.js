@@ -10,9 +10,11 @@
 //  获得真直连低延迟通道。两者复用同一 serveLocal → 同一鉴权/加密/命令集。
 // ═══════════════════════════════════════════════════════════════════════════
 (function () {
+  // 与 signal.js 对齐的多家公共 STUN (互不隶属 → 单点不可达不致命; 仅反射地址发现, 不中转数据)。
   var STUN = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
     { urls: "stun:stun.cloudflare.com:3478" }
   ];
   var conns = Object.create(null);   // id -> {pc, dc, ts}
