@@ -6980,8 +6980,10 @@ async function devinFetchQuota(apiKey: string, apiServerUrl?: string): Promise<a
             // 归一·真源 · billing/status 须带 x-cog-org-id, 否则 401「No organizations found」→ 配额恒空 → 全能板恒判未登录
             const br = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', { Authorization: 'Bearer ' + ws.devinAuth1, 'x-cog-org-id': ws.devinOrgId });
             if (br.status === 200 && br.json) {
-                const hasFunds = typeof br.json.overage_credits === 'number' && br.json.overage_credits < 0 && !br.json.billing_error;
-                return { planName: 'Trial', dailyQuotaRemainingPercent: hasFunds ? 100 : 0, weeklyQuotaRemainingPercent: hasFunds ? 100 : 0, overageActive: hasFunds, overageDollars: hasFunds ? Math.abs(br.json.overage_credits) : 0, _source: 'devin_billing' };
+                // 实测: 按需余额在 overage_credits, 正值=可用美元(账单页「Remaining balance」), 负值=已透支→视作 0。
+                const dollars = (typeof br.json.overage_credits === 'number' && isFinite(br.json.overage_credits)) ? Math.max(br.json.overage_credits, 0) : 0;
+                const hasFunds = dollars > 0 && !br.json.billing_error;
+                return { planName: 'Trial', dailyQuotaRemainingPercent: hasFunds ? 100 : 0, weeklyQuotaRemainingPercent: hasFunds ? 100 : 0, overageActive: hasFunds, overageDollars: dollars, _source: 'devin_billing' };
             }
             if (br.status === 401 || br.status === 403) { sawAuthFailure = true; }
         } catch {}
@@ -7002,7 +7004,7 @@ function devinParsePlanStatus(j: any): any {
     return { planName: gs(pi, 'planName', 'plan_name'), teamsTier: gs(pi, 'teamsTier', 'teams_tier'), planStart: gs(ps, 'planStart', 'plan_start'), planEnd: gs(ps, 'planEnd', 'plan_end'), weeklyQuotaRemainingPercent: weekly, dailyQuotaRemainingPercent: daily, availablePromptCredits: gi(ps, 'availablePromptCredits', 'available_prompt_credits'), availableFlowCredits: gi(ps, 'availableFlowCredits', 'available_flow_credits'), availableFlexCredits: gi(ps, 'availableFlexCredits', 'available_flex_credits'), _source: 'GetUserStatus' };
 }
 
-// 配额只显美金: billing/status 的 overage_credits<0 即可用余额 (绝对值=美金, 精确到分)
+// 配额只显美金: billing/status 的 overage_credits 正值即可用余额 (账单页「Remaining balance」, 精确到分; 负值=透支→0)
 // 与 rt-flow 同源 (app.devin.ai/api/{orgId}/billing/status)。无 auth1/org 或无余额则返 null。
 async function devinFetchOverageDollars(): Promise<number | null> {
     if (!(ws.devinAuth1 && ws.devinOrgId)) return null;
@@ -7011,7 +7013,7 @@ async function devinFetchOverageDollars(): Promise<number | null> {
         // 同源 · 带 x-cog-org-id (缺则 401)
         const br = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', { Authorization: 'Bearer ' + ws.devinAuth1, 'x-cog-org-id': ws.devinOrgId });
         if (br.status === 200 && br.json && typeof br.json.overage_credits === 'number' && !br.json.billing_error) {
-            return br.json.overage_credits < 0 ? Math.abs(br.json.overage_credits) : 0;
+            return Math.max(br.json.overage_credits, 0);
         }
     } catch {}
     return null;
@@ -7769,14 +7771,27 @@ async function devinSetMessageLimit(orgId: string, maxCredits: number, auth1: st
     return { ok: r.status === 200 || r.status === 201 || r.status === 204, status: r.status };
 }
 
-// 读本号剩余可用 ACU (billing/usage/stats.available_acus) — 供「单会话上限 = 剩余 − N」动态反注
+// 读本号「当前可用余额」→ 供「单会话上限 = 余额 − N」动态反注。
+//   余额随计划/订阅状态落在四处(多为互斥), 须四处合取最大者:
+//     billing/usage/stats : available_acus(订阅ACU余量) · balance(预付余额)
+//     billing/status      : available_credits(订阅信用余量) · overage_credits(按需/溢价信用 = 账单页「Remaining balance」)
+//   实测本号池(pro-trial·订阅已取消)真实余额恒在 overage_credits, 其余三者皆 0 → 旧版只读 stats 永远取 0 → cap 被钉 1
+//   (即「$69 余额却上限 $1」之根因)。故四者取最大为「余额」; 全 0 或负(欠费)→ 收敛为 0 → cap=1。
+//   守柔: 两端点皆未给出任一有效数字字段才返回 null(跳过管理, 不误改)。
 async function devinFetchAvailableAcus(orgId: string, auth1: string): Promise<number | null> {
     const bareOrgId = orgId.replace(/^org-/, '');
+    const h = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    let best: number | null = null;
+    const take = (v: any) => { if (typeof v === 'number' && isFinite(v)) { best = (best === null) ? v : Math.max(best, v); } };
     try {
-        const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/usage/stats', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-        if (r.status === 200 && r.json && typeof r.json.available_acus === 'number') return r.json.available_acus;
+        const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/usage/stats', h);
+        if (r.status === 200 && r.json) { take(r.json.available_acus); take(r.json.balance); }
     } catch { /* 守柔 */ }
-    return null;
+    try {
+        const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', h);
+        if (r.status === 200 && r.json) { take(r.json.available_credits); take(r.json.overage_credits); }
+    } catch { /* 守柔 */ }
+    return best;
 }
 
 // 列出本组织已安装的自定义 MCP (与官网 Connections 一致)
