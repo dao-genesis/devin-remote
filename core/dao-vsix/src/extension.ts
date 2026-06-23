@@ -5934,6 +5934,44 @@ function loadAccountAuth(email: string): SavedAccountAuth | null {
     if (!e) return null;
     return loadAccountsAuthStore()[e] || null;
 }
+// 落盘指定账号的真 auth1 记录(不经 ws.*) — 供按需取号/多实例钉号缓存。
+function saveAccountAuthRecord(email: string, rec: { auth1: string; orgId?: string; orgName?: string; userId?: string }): void {
+    const e = (email || '').trim().toLowerCase();
+    if (!e || !rec.auth1 || rec.auth1.startsWith('devin-session-token$')) return;
+    try {
+        const store = loadAccountsAuthStore();
+        const prev = store[e] || ({} as SavedAccountAuth);
+        store[e] = {
+            auth1: rec.auth1, orgId: rec.orgId || prev.orgId || '', orgName: rec.orgName || prev.orgName || '',
+            orgSlug: prev.orgSlug || '', userId: rec.userId || prev.userId || '', accountId: prev.accountId || '',
+            apiKey: prev.apiKey || '', apiServerUrl: prev.apiServerUrl || '', savedAt: new Date().toISOString(),
+        };
+        fs.mkdirSync(DAO_DIR, { recursive: true });
+        fs.writeFileSync(ACCOUNTS_AUTH_FILE, JSON.stringify(store, null, 2), 'utf8');
+    } catch { /* 守柔 */ }
+}
+// 道·多实例按需取号 — 帛书「既以为人己愈有」: 路由某账号(dao_acct)时若其真 auth1 未缓存,
+//   即用账号池密码即时登录取号并落盘, 令多实例对全池任一账号都渲染【该账号本身】,
+//   而非回退全局活动号(串号根治)。in-flight 去重防页面+XHR 并发重登。
+const _ensureAcctInflight = new Map<string, Promise<SavedAccountAuth | null>>();
+async function ensureAccountAuth(email: string): Promise<SavedAccountAuth | null> {
+    const e = (email || '').trim().toLowerCase();
+    if (!e) return null;
+    const cached = loadAccountAuth(e);
+    if (cached && cached.auth1) return cached;
+    const inflight = _ensureAcctInflight.get(e);
+    if (inflight) return inflight;
+    const p = (async (): Promise<SavedAccountAuth | null> => {
+        const password = findAccountPassword(e);
+        if (!password) return null;
+        const auth = await devinAuthOnly(e, password);
+        if (!auth.ok || !auth.auth1) return null;
+        saveAccountAuthRecord(e, { auth1: auth.auth1, orgId: auth.orgId, orgName: auth.orgName, userId: auth.userId });
+        return loadAccountAuth(e);
+    })().catch(() => null).finally(() => { _ensureAcctInflight.delete(e); });
+    _ensureAcctInflight.set(e, p);
+    return p;
+}
 
 // 归一·真源 · RT Flow 活跃账号 = 全能板唯一权威账号 (1:1 同步)
 // rt-flow 活跃号写在 ~/.wam/wam-state.json.activeEmail (切号即更新·跨窗口共享)。
@@ -8578,22 +8616,24 @@ interface DaoBatchProgress { total: number; done: number; ok: number; running: b
 let daoBatchProgress: DaoBatchProgress | null = null;
 
 // 仅登录取 auth1+orgId(login + devin post-auth), 不写 ws.*; 含 429 退避。
-async function devinAuthOnly(email: string, password: string, retry?: number): Promise<{ ok: boolean; auth1?: string; orgId?: string; error?: string }> {
+async function devinAuthOnly(email: string, password: string, retry?: number): Promise<{ ok: boolean; auth1?: string; orgId?: string; userId?: string; orgName?: string; error?: string }> {
     const n = retry || 0;
     const r1 = await devinJsonPost(DEVIN_URL_LOGIN, { Origin: DEVIN_WINDSURF, Referer: DEVIN_WINDSURF + '/account/login' }, { email, password });
     if (r1.status === 429 && n < 4) { await new Promise(ok => setTimeout(ok, Math.pow(2, n) * 3000)); return devinAuthOnly(email, password, n + 1); }
     const j1 = r1.json || {};
     const auth1 = j1.token || j1.auth1_token;
     if (r1.status !== 200 || !auth1) return { ok: false, error: 'login HTTP ' + r1.status + ': ' + (j1.detail || j1.error || 'no_token') };
-    let orgId = '';
+    const userId = j1.user_id || '';
+    let orgId = '', orgName = '';
     for (let i = 0; i < 2 && !orgId; i++) {
         const r3 = await devinJsonPost(DEVIN_URL_DEVIN_POST_AUTH, { Authorization: 'Bearer ' + auth1, 'Content-Type': 'application/json' }, {});
         const j3 = r3.json || {};
         orgId = (j3.org && j3.org.org_id) || j3.org_id || j3.orgId || '';
+        if (!orgName) orgName = (j3.org && j3.org.org_name) || j3.org_name || j3.orgName || '';
         if (!orgId) await new Promise(ok => setTimeout(ok, 1000));
     }
     if (!orgId) return { ok: false, error: 'no_org' };
-    return { ok: true, auth1, orgId };
+    return { ok: true, auth1, orgId, userId, orgName };
 }
 
 // 解析账号来源: 显式数组 / 多行 email:password 文本 / 本机账号池(loadAccountPool)。
@@ -10217,8 +10257,12 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         try {
                             const acctParam = url.searchParams.get('dao_acct');
                             if (acctParam) {
-                                const sa = loadAccountAuth(acctParam);
+                                const isActive = acctParam.trim().toLowerCase() === (ws.devinEmail || '').trim().toLowerCase();
+                                // 多实例钉号: 先缓存命中; 未缓存且为【他号】→ 按需取号(全池任一账号皆渲染本身, 不回退活动号串号)。
+                                let sa = loadAccountAuth(acctParam);
+                                if ((!sa || !sa.auth1) && !isActive) { sa = await ensureAccountAuth(acctParam); }
                                 if (sa && sa.auth1) { pinAuth1 = sa.auth1; pinUid = sa.userId || ''; pinOrg = sa.orgId || ''; pinOrgName = sa.orgName || ''; pinEmail = acctParam; }
+                                else if (!isActive) { pinAuth1 = ''; pinUid = ''; pinOrg = ''; pinOrgName = ''; pinEmail = acctParam; } // 取号失败: 宁空注入(SPA 自登录), 不冒名活动号
                             }
                         } catch { /* 守柔 */ }
                         const websiteAutoLogin = getWebsiteLoginMode() === 'auto';
@@ -10418,6 +10462,11 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
             if (_acctEmail && mode === 'devin') {
                 const _sa = loadAccountAuth(_acctEmail);
                 if (_sa && _sa.auth1) { _apiAuth1 = _sa.auth1; _apiOrg = _sa.orgId || ''; _apiSess = ''; }
+                else if (_acctEmail.trim().toLowerCase() !== (ws.devinEmail || '').trim().toLowerCase()) {
+                    // 显式他号但未缓存(页面注入已预热, 仍缺则后台取号) → 本次宁不注入·不冒名活动号(防串号)。
+                    ensureAccountAuth(_acctEmail).catch(() => { /* 守柔 */ });
+                    _apiAuth1 = ''; _apiOrg = ''; _apiSess = '';
+                }
             }
         } catch { /* 守柔 */ }
         // 认证头: 所有请求都注入（不仅是API），因为Devin SPA需要认证Cookie
