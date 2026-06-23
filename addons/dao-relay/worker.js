@@ -33,7 +33,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 // 鉴权/定址纯逻辑见 ./keys.js —— 不可从本入口再导出普通值/函数, 否则 workerd 启动即报错。
-import { VERSION, relayKey, sharedTokenOk } from "./keys.js";
+import { VERSION, relayKey, sharedTokenOk, pxIsImmutableAsset } from "./keys.js";
 
 function bearer(req) {
   const h = req.headers.get("authorization") || req.headers.get("Authorization") || "";
@@ -244,8 +244,38 @@ function pxGenericBridge(prefix, origin) {
     "}catch(e){}})();</script>";
 }
 
-// 单请求边缘反代: Worker 直取上游 → 剥安全头 → HTML 注桥/前缀化 / JS·CSS·JSON 改写 / SSE 直通 / 余透传。
+// 边缘强缓存包装: 哈希不可变二进制资源(字体/图片/wasm)按 (前缀+路径) 入 caches.default —
+//   首次回源一次, 此后全公网设备命中边缘, 不再回 app.devin.ai 取字节; 公网渲染数据由边缘 +
+//   浏览器自身承载, 穿透(中继 DO)始终只走核心 RPC/鉴权。键含 /i/<accKey> 前缀 → 账号间不串。
 async function pxProxy(req, opts) {
+  const method = req.method || "GET";
+  let cache = null, cacheKey = null;
+  try {
+    if (method === "GET" && pxIsImmutableAsset(opts.restPath) && typeof caches !== "undefined" && caches.default) {
+      cache = caches.default;
+      cacheKey = new Request(new URL(req.url).toString(), { method: "GET" });
+      const hit = await cache.match(cacheKey);
+      if (hit) return hit;
+    }
+  } catch (e) { cache = null; cacheKey = null; }
+
+  const resp = await pxProxyCore(req, opts);
+
+  try {
+    if (cache && cacheKey && resp && resp.status === 200) {
+      const h = new Headers(resp.headers);
+      h.set("cache-control", "public, max-age=31536000, immutable");
+      h.delete("set-cookie");
+      const cached = new Response(resp.clone().body, { status: resp.status, statusText: resp.statusText, headers: h });
+      await cache.put(cacheKey, cached.clone());
+      return cached;
+    }
+  } catch (e) { /* 缓存失败不影响返回 */ }
+  return resp;
+}
+
+// 单请求边缘反代: Worker 直取上游 → 剥安全头 → HTML 注桥/前缀化 / JS·CSS·JSON 改写 / SSE 直通 / 余透传。
+async function pxProxyCore(req, opts) {
   const prefix = opts.prefix;
   const isDevin = !opts.genericOrigin;
   const auth = opts.auth || {};
@@ -272,7 +302,10 @@ async function pxProxy(req, opts) {
     if (auth.orgId) fwd.set("x-cog-org-id", auth.orgId);
   }
   let up;
-  try { up = await fetch(u.toString(), { method: method, headers: fwd, body: body, redirect: "manual" }); }
+  const fetchInit = { method: method, headers: fwd, body: body, redirect: "manual" };
+  // 哈希不可变资源: 让 Cloudflare 自带缓存层也代为存上游字节, 进一步减少回 app.devin.ai 取数。
+  if (method === "GET" && pxIsImmutableAsset(upath)) fetchInit.cf = { cacheEverything: true, cacheTtl: 31536000 };
+  try { up = await fetch(u.toString(), fetchInit); }
   catch (e) { return new Response("upstream_fetch_failed: " + String((e && e.message) || e), { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } }); }
 
   const status = up.status;
