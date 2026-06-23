@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
-import { relayKey, sharedTokenOk, VERSION } from "../keys.js";
+import { relayKey, sharedTokenOk, VERSION, pxIsImmutableAsset } from "../keys.js";
 
 // repair.js 经浏览器 importScripts 加载(挂到 self), 这里在沙箱里 eval 出函数做纯逻辑单测。
 const repairUvJs = (() => {
@@ -47,6 +47,18 @@ test("sharedTokenOk: locked to shared secret when env.DAO_TOKEN set (private mod
   assert.strictEqual(sharedTokenOk(env, "s3cret"), true);
   assert.strictEqual(sharedTokenOk(env, "wrong"), false);
   assert.strictEqual(sharedTokenOk(env, ""), false);
+});
+
+test("pxIsImmutableAsset: 字体/图片/wasm 等二进制资源 → 可边缘强缓存", () => {
+  for (const p of ["/assets/x.woff2", "/a/b.WOFF", "/i.png", "/p.jpg", "/p.jpeg", "/s.svg", "/f.ico", "/m.wasm", "/v.mp4", "/x.png?v=abc"]) {
+    assert.strictEqual(pxIsImmutableAsset(p), true, p);
+  }
+});
+
+test("pxIsImmutableAsset: JS/CSS/HTML/API 不入强缓存(版本敏感/动态)", () => {
+  for (const p of ["/assets/x.js", "/assets/y.css", "/index.html", "/api/sessions", "/", "", "/x.js?v=1", "/foo.json"]) {
+    assert.strictEqual(pxIsImmutableAsset(p), false, p);
+  }
 });
 
 // —— repairUvJs: UV 把语句标签误当全局名重写 → 修复 ——

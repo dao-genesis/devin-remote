@@ -10,7 +10,7 @@
 // 故归一于此独立模块, 入口只导出 default 处理器与 RelayDO 类。
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const VERSION = "3.3.5-embed"; // (session,token) 配对模型 + WebSocket Hibernation(上量省钱) + GET /console 自托管单网页控制台。重新部署后 /health 报此值即生效。
+export const VERSION = "3.4.0-edgecache"; // (session,token) 配对模型 + WebSocket Hibernation(上量省钱) + GET /console 自托管单网页控制台。重新部署后 /health 报此值即生效。
 
 // DO 命名空间定址: session 与 token 共同决定实例 —— 「知道 session+token」即凭证。
 // 用 \u0000 作分隔(token/session 不含 NUL), 避免 "a"+"bc" 与 "ab"+"c" 撞键。
@@ -23,4 +23,13 @@ export function sharedTokenOk(env, token) {
   const shared = env && env.DAO_TOKEN ? String(env.DAO_TOKEN) : "";
   if (!shared) return true; // 未设共享密钥 = 零账号开放配对
   return token === shared;
+}
+
+// 哈希不可变静态资源(字体/图片/wasm 等二进制): 内容与账号/前缀无关, 边缘反代不改写之 →
+//   可在 caches.default + Cloudflare 缓存层强缓存。JS/CSS 不入此列(JS 含 __PXFX 预载补丁版本
+//   敏感, CSS 烘焙前缀), 由上游 cache-control 自管, 避免历史踩坑(旧预载补丁被永缓 → 改版后
+//   CSS 预载错位)。纯逻辑置此 → worker.js 引用且 node:test 可直测。
+export function pxIsImmutableAsset(restPath) {
+  const p = String(restPath || "").split("?")[0].toLowerCase();
+  return /\.(woff2?|ttf|otf|eot|png|jpe?g|gif|svg|ico|webp|avif|bmp|wasm|mp3|mp4|webm|ogg)$/.test(p);
 }

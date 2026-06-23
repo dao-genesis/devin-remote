@@ -25,6 +25,7 @@
 | 公网入站 | `POST /relay/<session>` `Authorization: Bearer <t>` | 按**相同的** `(session, token)` 定址 DO；命中已连接客户端才转发，否则 `502 no_agent`。body=`{path,method,body}` → 转发 `{type:request,id,...}`，等 `{type:response,id,status,body}` |
 | 健康检查 | `GET /` 或 `GET /health` | 免鉴权返回 `{status:"ok",service,version}` |
 | 单网页控制台 | `GET /console?session=<id>&token=<t>`（亦 `/app`） | 中继**自托管**整机控制台：任意公网设备浏览器打开即得 —— 所有标签 + 网页内切换 + 单页多实例 Devin + 实时投屏 + 反向点按/滚动/输入。即使设备侧 cloudflared/SSH/局域网全被拦截也能用（仅经 `/relay` RPC 驱动）。页面 `endpoint` 默认 `location.origin` → 同源走本 Worker `/relay/<session>`，无 CORS。内容取自仓库 `engine/console.html`（单一真源），5 分钟边缘缓存 |
+| 网页内原生直渲 | `GET /i/<accKey>/...` | 边缘**直取上游** `app.devin.ai`（不经设备隧道）→ 剥框限 + 注登录态 + 前缀化资源。Devin 渲染数据由边缘 + 公网浏览器自身承载，穿透(中继 DO)始终只走核心 RPC/鉴权。哈希不可变二进制资源(字体/图片/wasm)经 `caches.default` + Cloudflare 缓存层强缓存(按 `/i/<accKey>` 前缀键，账号间不串)，首次回源一次、此后全公网命中边缘，不再重复回 `app.devin.ai` 取字节 |
 | 心跳 | 客户端发 `{type:ping}` | 中继回 `{type:pong}` |
 
 ### 鉴权模型 —— 零账号配对（不是单一共享密钥）
