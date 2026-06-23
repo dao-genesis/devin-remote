@@ -400,13 +400,18 @@
   } catch (e) {}
 })();
 </script>
+<script src="signal.js"></script>
 <script>
 (function(){
   "use strict";
   function qp(k){ try{ return new URLSearchParams(location.search).get(k)||""; }catch(e){ return ""; } }
-  var SESSION = qp("session") || localStorage.getItem("rtflow.rn.session") || "";
-  var TOKEN   = qp("token") || qp("t") || localStorage.getItem("rtflow.rn.token") || "";
-  var ENDPOINT= (qp("endpoint") || localStorage.getItem("rtflow.rn.endpoint") || location.origin).replace(/\/+$/,"");
+  // 修正 PR #547 回归: 本 IIFE 在 strict 模式下引用了未声明的 CFG(见下方 STABLE_RELAY/候选清单),
+  //   会 ReferenceError 中止整段脚本 → relay() 与全部控台 UI 不初始化 =「(连稳定 /console 也)打不开」。
+  //   与首个 IIFE 同源: 优先采信外壳注入的 window.__RN_CFG, 否则空对象。
+  var CFG = (typeof window!=="undefined" && window.__RN_CFG && typeof window.__RN_CFG === "object") ? window.__RN_CFG : {};
+  var SESSION = CFG.session || qp("session") || localStorage.getItem("rtflow.rn.session") || "";
+  var TOKEN   = CFG.token || qp("token") || qp("t") || localStorage.getItem("rtflow.rn.token") || "";
+  var ENDPOINT= String(CFG.endpoint || qp("endpoint") || localStorage.getItem("rtflow.rn.endpoint") || location.origin).replace(/\/+$/,"");
   function persist(){ if(SESSION) localStorage.setItem("rtflow.rn.session",SESSION);
     if(TOKEN) localStorage.setItem("rtflow.rn.token",TOKEN);
     if(ENDPOINT) localStorage.setItem("rtflow.rn.endpoint",ENDPOINT); }
@@ -463,8 +468,8 @@
     }, function(){ _resolving=null; return null; });
     return _resolving;
   }
-  // ── 与手机的统一中继调用 (本页 + 各 srcdoc 板块共用同一通道) ─────────────
-  function relay(path, body, timeoutMs){
+  // ── HTTP 中继调用 (含通道自愈; P2P 不可用/未建连时的稳健兜底) ─────────────
+  function _relayHttp(path, body, timeoutMs){
     return _relayAt(ENDPOINT, path, body, timeoutMs).then(function(res){
       if(!_dead(res)) return res;
       return _resolveLive().then(function(found){ return found ? _relayAt(ENDPOINT, path, body, timeoutMs) : res; });
@@ -473,6 +478,48 @@
     });
   }
   //__FAILOVER_END__
+
+  //__P2P_START__ (经 test/console-failover.test.js 切片 eval 实测, 勿删标记)
+  // ── 默认数据面 = WebRTC P2P 直连 (signal.js·公共 ntfy 信令·0账号·不经 Worker) ──────────
+  //   道法自然·分而治之: 建连后 relay() 的 RPC 全走 P2P DataChannel → 重活点对点直连手机、
+  //   几乎不碰中继 → 根治用户「Worker 老掉/被限流」。信令仅一次性交换加密 SDP(借公共 ntfy),
+  //   中间层缩到最小。建不上(对称 NAT/无 WebCrypto/对端离线)时无缝回退 HTTP 自愈通道,
+  //   绝不让页面变坏 —— P2P 永远只是「能更好就更好」的加法, 失败零代价。
+  var _p2p = null, _p2pBusy = false, _p2pTries = 0;
+  function _p2pAlive(){ try{ return !!(_p2p && _p2p.dc && _p2p.dc.readyState === "open"); }catch(e){ return false; } }
+  function _p2pTry(){
+    if(_p2pBusy || _p2pAlive() || !SESSION || !TOKEN) return;
+    if(!(typeof window!=="undefined" && window.DaoSignal && window.DaoSignal.available && window.DaoSignal.available())) return;
+    _p2pBusy = true; _p2pTries++;
+    window.DaoSignal.connect({ session:SESSION, token:TOKEN, timeout:20000 }).then(function(sig){
+      _p2p = sig; _p2pBusy = false; _p2pTries = 0;
+      try{ if(sig.dc) sig.dc.addEventListener("close", function(){ _p2p=null; setTimeout(_p2pTry, 3000); }); }catch(e){}
+    }, function(){ _p2p=null; _p2pBusy=false;
+      setTimeout(_p2pTry, Math.min(60000, 8000*_p2pTries));   // 退避重试; 对端/隧道稍后上线即自动接管
+    });
+  }
+  // P2P 应答(serveLocal)与 HTTP 中继回包同构: {status, bodyText} → 归一成 relay() 的 {status, body}。
+  function _relayP2P(path, body){
+    return _p2p.rpc({ path:path, method:"POST", body: body||{} }).then(function(result){
+      var r; try{ r=JSON.parse(result); }catch(e){ r=null; }
+      if(!r || typeof r.status!=="number") throw new Error("p2p_bad_result");
+      var b; try{ b=JSON.parse(r.bodyText); }catch(e){ b={ error:"bad_json", raw:r.bodyText }; }
+      return { status:r.status, body:b };
+    });
+  }
+  // ── 与手机的统一中继调用 (本页 + 各 srcdoc 板块共用同一通道): P2P 优先, 不通无缝回退 HTTP ──
+  function relay(path, body, timeoutMs){
+    if(_p2pAlive()){
+      return _relayP2P(path, body).then(function(res){
+        return _dead(res) ? _relayHttp(path, body, timeoutMs) : res;   // P2P 通但应答异常 → 回退 HTTP(并触发自愈)
+      }, function(){
+        _p2p=null; setTimeout(_p2pTry, 1000);                          // P2P 链路异常 → 失效 + 后台重连, 本次走 HTTP
+        return _relayHttp(path, body, timeoutMs);
+      });
+    }
+    return _relayHttp(path, body, timeoutMs);
+  }
+  //__P2P_END__
 
   // 资源原文 (板块 HTML / 引擎 JS) = 全网一致的静态死文件 → 走公共 CDN 直取。
   //   旧架构的根本瓶颈: 板块 HTML + 其 JS 依赖近 200KB、需经"手机弱网中继"分 4 次往返取回,
@@ -1330,6 +1377,8 @@
   if(!SESSION || !TOKEN){ showCfg(); }
   else { openPage("switch"); }
   ping(); setInterval(ping, 9000);
+  // 启动默认 P2P 数据面 (加法式: 建得上则重活点对点直连手机、几乎不碰中继; 建不上一直走 HTTP 自愈)。
+  try{ _p2pTry(); setInterval(_p2pTry, 30000); }catch(e){}
   // 首屏 switch 画完后, 空闲预热其余板块 → 切板秒开。
   if(SESSION && TOKEN){ (window.requestIdleCallback||function(f){setTimeout(f,2000);})(prefetchBoards); }
 })();
