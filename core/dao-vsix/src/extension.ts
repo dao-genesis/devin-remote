@@ -10081,10 +10081,17 @@ async function genericWebProxy(targetUrl, depth = 0) {
                 + 'var PB=' + JSON.stringify(pBase) + ';'
                 + 'var P=((location.origin&&/^https?:/i.test(location.origin))?location.origin+"/__web?u=":PB),B=' + JSON.stringify(u.href) + ';'
                 + 'function ab(h){try{return new URL(h,B).href}catch(e){return ""}}'
-                + 'function go(h){var a=ab(h);if(/^https?:/i.test(a)){window.location.href=P+encodeURIComponent(a);return true}return false}'
-                + 'document.addEventListener("click",function(e){var t=e.target;var a=t&&t.closest?t.closest("a[href]"):null;if(!a)return;var h=a.getAttribute("href");if(!h||h.charAt(0)==="#"||/^(javascript|mailto|tel|data|blob):/i.test(h))return;if(go(h))e.preventDefault();},true);'
-                + 'document.addEventListener("submit",function(e){var f=e.target;if(!f||(f.method||"get").toLowerCase()!=="get")return;try{var u2=new URL(f.getAttribute("action")||B,B);u2.search=new URLSearchParams(new FormData(f)).toString();e.preventDefault();window.location.href=P+encodeURIComponent(u2.href);}catch(x){}},true);'
+                + 'function wrap(h){if(typeof h==="string"&&h.indexOf(P)===0)return h;var a=ab(h);return /^https?:/i.test(a)?(P+encodeURIComponent(a)):h}'
+                + 'function go(h){var a=ab(h);if(/^https?:/i.test(a)){_nav(P+encodeURIComponent(a));return true}return false}'
+                // _nav: 真实整页跳转(绕过被改写的 location.assign/replace), 防自陷套娃。
+                + 'var _asn=window.location.assign.bind(window.location);function _nav(x){try{_asn(x)}catch(e){window.location.href=x}}'
+                + 'document.addEventListener("click",function(e){if(e.defaultPrevented||e.button)return;var t=e.target;var a=t&&t.closest?t.closest("a[href]"):null;if(!a)return;var h=a.getAttribute("href");if(!h||h.charAt(0)==="#"||/^(javascript|mailto|tel|data|blob):/i.test(h))return;if(go(h))e.preventDefault();},true);'
+                + 'document.addEventListener("submit",function(e){var f=e.target;if(!f||(f.method||"get").toLowerCase()!=="get")return;try{var u2=new URL(f.getAttribute("action")||B,B);u2.search=new URLSearchParams(new FormData(f)).toString();e.preventDefault();_nav(P+encodeURIComponent(u2.href));}catch(x){}},true);'
                 + 'try{window.open=function(u){if(u){go(u)}return null};}catch(e){}'
+                // JS 驱动的整页跳转(搜索结果/SPA 多层点进) → 同样改经 /__web 代理, 否则套娃页直跳真站致掉登录/空白。
+                + 'try{window.location.assign=function(u){return _asn(wrap(u))};}catch(e){}'
+                + 'try{var _rpl=window.location.replace.bind(window.location);window.location.replace=function(u){return _rpl(wrap(u))};}catch(e){}'
+                // 注: location.href= setter 无法重定义, 故靠上面 click 捕获 + assign/replace 包裹作双保险。
                 + '})();<\/script>'
                 + '<script src="/__daobridge.js"><\/script>'; // 拖拽上传桥(下载文件/会话MD → 投递页面上传框)
             html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>' + inj) : (inj + html);
