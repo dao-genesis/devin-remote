@@ -217,29 +217,32 @@ public class MainActivity extends AppCompatActivity {
         return n;
     }
     private String lastPresenceSig = "";
-    // ── 标签条重绘 合并·防抖·按需 (根治「刷新账号每隔几秒卡一次/打断打字」) ──
-    // 账号池轮询会对全部账号(可达上百个)逐个回推 setTabStatus/setTabDollars, 旧逻辑每条都 main.post 一次
-    // renderTabStrip(全量 removeAllViews + 逐标签重建 GestureDetector/监听器) → 几秒一阵 UI 线程风暴,
-    // 顶掉软键盘/打断输入。改为: 内容签名去重(未变不重建) + 防抖合并(至多每 ~600ms 一次) + 交互中顺延
-    // (打字/语音/触摸时绝不重建标签条) → 「刷新账号」与「操作页面」道并行而不相悖。
-    private String lastStripSig = null;
+    // ── 标签条重绘: 合并·内容去重·「结构变才重建, 内容变只原地改文案」 (道并行而不相悖) ──
+    // 真因(v0.37.20 前): 账号池每轮对上百账号逐个回推 setTabStatus/setTabDollars, 每条都 main.post
+    // renderTabStrip(全量 removeAllViews + 逐标签重建手势/监听器) → 几秒一阵 UI 线程风暴, 打断输入。
+    // v0.37.20 曾改为「交互中顺延重建」, 但用户持续操作官网时 userInteracting 恒真 → 标签条永不刷新
+    // → 额度/状态识别冻结(反成新病). 正解: 把刷新做成「非破坏性原地更新」——
+    //   · 结构(开了哪些标签/顺序)未变 → 只对已存在的 chip setText/换色/增删在场角标, 绝不 removeAllViews,
+    //     既不夺焦/不打断打字语音, 又即时刷新额度与状态;
+    //   · 仅当用户自己开/关/拖动标签(结构变) 才整条重建(本就是用户主动操作)。
+    //   · 高频回推仍经内容签名去重(无可见变化直接跳过) + 轻防抖合并(把一轮上百条并成一次原地更新)。
+    // 于是「刷新账号」(原地刷文案) 与「操作页面」(输入) 真正并行不相悖, 额度/状态又恒为最新。
+    private String lastStripSig = null;     // 内容签名: 任何可见变化
+    private String lastStructSig = null;    // 结构签名: 仅标签集合/顺序变化 → 才需整条重建
     private boolean stripRenderPending = false;
     private final Runnable stripRenderTask = new Runnable() {
         @Override public void run() {
             stripRenderPending = false;
-            Tab a = cur();
-            // 正在打字/语音/触摸 → 再顺延, 绝不在交互中做 removeAllViews 全量重建 (那一下足以顶掉软键盘/打断语音)。
-            if (a != null && userInteracting(a, 1500)) { stripRenderPending = true; main.postDelayed(this, 1200); return; }
-            renderTabStrip();
+            renderTabStrip();   // 重绘已是非破坏性原地更新, 绝不夺焦/打断输入 → 无需顺延, 额度/状态即时刷新
         }
     };
-    /** 合并·防抖 重绘标签条: 高频数据推送(账号状态/额度/在场/标题)统一经此, 至多每 ~600ms 落一次且交互中顺延。 */
+    /** 合并·防抖 重绘标签条: 高频数据推送(账号状态/额度/在场/标题)统一经此, 把一轮上百条并成一次原地更新。 */
     private void scheduleRenderTabStrip() {
         if (stripRenderPending) return;
         stripRenderPending = true;
-        main.postDelayed(stripRenderTask, 600);
+        main.postDelayed(stripRenderTask, 250);
     }
-    /** 标签条内容签名: 活动页 + 各标签(显示文案 chipTitle 含状态点/额度/对话名 + 云端在场数)。仅此变化才需重建。 */
+    /** 标签条内容签名: 活动页 + 各标签(显示文案 chipTitle 含状态点/额度/对话名 + 云端在场数)。仅此变化才需更新。 */
     private String tabStripSig() {
         long now = System.currentTimeMillis();
         StringBuilder sb = new StringBuilder().append(active).append('#');
@@ -248,6 +251,45 @@ public class MainActivity extends AppCompatActivity {
             sb.append(chipTitle(t)).append('|').append(coViewerCount(t.vid, now)).append(';');
         }
         return sb.toString();
+    }
+    /** 标签条结构签名: 仅「开了哪些标签 + 顺序 + 数量」。变化(开/关/拖动标签)才整条重建; 否则原地更新文案/颜色/角标。 */
+    private String tabStructSig() {
+        StringBuilder sb = new StringBuilder().append(tabs.size()).append('#');
+        for (int i = 0; i < tabs.size(); i++) sb.append(System.identityHashCode(tabs.get(i))).append(';');
+        return sb.toString();
+    }
+    /** 非破坏性原地更新: 不 removeAllViews, 只改各 chip 的文案/颜色/在场角标 → 绝不夺焦/打断输入, 且即时刷新额度与状态。 */
+    private void updateTabStripInPlace() {
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < tabs.size(); i++) {
+            View cv = tabStripRow.getChildAt(i);
+            if (!(cv instanceof LinearLayout)) { lastStructSig = null; renderTabStrip(); return; } // 结构漂移 → 兜底整条重建
+            LinearLayout chip = (LinearLayout) cv;
+            Tab t = tabs.get(i);
+            int coN = coViewerCount(t.vid, now);
+            boolean coView = coN > 0;
+            boolean isActive = (i == active);
+            boolean viewed = isActive || coView;
+            chip.setBackgroundColor(viewed ? (isActive ? 0xFF5A3D22 : 0xFF3A2C1B) : 0xFF1B1F26);
+            View lv = chip.getChildAt(0);
+            if (lv instanceof TextView) {
+                ((TextView) lv).setText(chipTitle(t));
+                ((TextView) lv).setTextColor(isActive ? 0xFF9CDCFE : (coView ? 0xFFE3A877 : 0xFFAAB2BD));
+            }
+            // 在场角标 ☁N 增/删/改 也原地处理 (避免在场 TTL 每几秒翻转就整条 removeAllViews 重建 → 退回风暴)。
+            boolean hasBadge = chip.getChildCount() == 3;   // [label, co, x]
+            if (coView && !hasBadge) {
+                TextView co = new TextView(this);
+                co.setText(" \u2601" + coN); co.setTextColor(0xFFF0883E);
+                co.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10); co.setPadding(dp(3), 0, dp(1), 0);
+                chip.addView(co, 1);
+            } else if (coView) {
+                View bv = chip.getChildAt(1);
+                if (bv instanceof TextView) ((TextView) bv).setText(" \u2601" + coN);
+            } else if (hasBadge) {
+                chip.removeViewAt(1);
+            }
+        }
     }
     /** 在场签名: 各标签 vid→云端在场数。仅变化才重绘标签条(省电·防抖)。 */
     private String presenceSig() {
@@ -1261,12 +1303,19 @@ public class MainActivity extends AppCompatActivity {
 
     private void renderTabStrip() {
         if (tabStripRow == null) return;
-        // 内容签名去重: 显示文案/在场/活动页 未变则直接跳过 (账号池逐号回推时绝大多数与已开标签无关 → 恒被此处挡下,
-        //   不做任何 removeAllViews) → 从源头掐断「刷新账号 → 标签条全量重建」的 UI 风暴。
+        // 内容签名去重: 显示文案/在场/活动页 未变则直接跳过 (账号池逐号回推时绝大多数与已开标签无关 → 恒被此处挡下)。
         String sig = tabStripSig();
         if (sig.equals(lastStripSig)) { main.removeCallbacks(stripRenderTask); stripRenderPending = false; return; }
-        lastStripSig = sig;
         main.removeCallbacks(stripRenderTask); stripRenderPending = false;
+        lastStripSig = sig;
+        // 结构未变(还是这些标签、这个顺序) → 非破坏性原地更新文案/颜色/角标, 绝不 removeAllViews → 不打断输入, 即时刷新额度/状态。
+        String struct = tabStructSig();
+        if (struct.equals(lastStructSig) && tabStripRow.getChildCount() == tabs.size() + 1) {
+            updateTabStripInPlace();
+            return;
+        }
+        // 结构变了(用户开/关/拖动标签, 属主动操作) → 才整条重建。
+        lastStructSig = struct;
         tabStripRow.removeAllViews();
         for (int i = 0; i < tabs.size(); i++) {
             final int idx = i;
