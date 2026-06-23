@@ -10016,10 +10016,10 @@ async function genericWebProxy(targetUrl, depth = 0) {
     return await new Promise((resolve) => {
         let done = false;
         let proxyReq = null;
-        let triedTunnel = false;
         const finish = (v) => { if (done) return; done = true; try { clearTimeout(hardTimer); } catch (e361) { /* 守柔 */ } try { if (proxyReq) proxyReq.destroy(); } catch (e362) { /* 守柔 */ } resolve(v); };
         // 硬墙超时: 不论 socket 在连接/发送/接收哪一阶段卡住, 到点即返站内错误页, 杜绝隧道层 502 直出。
-        const hardTimer = setTimeout(() => finish(errPage('加载超时(网络不可达或站点过慢)', u.href)), 18000);
+        //   放宽到 22s 以容纳「直连黑洞超时 → 代理赛道仍能在限内返回」, 不再过早误判打不开。
+        const hardTimer = setTimeout(() => finish(errPage('加载超时(网络不可达或站点过慢)', u.href)), 22000);
         const isHttps = u.protocol === 'https:';
         const lib = isHttps ? https : http;
         const reqHeaders = {
@@ -10097,47 +10097,45 @@ async function genericWebProxy(targetUrl, depth = 0) {
             html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>' + inj) : (inj + html);
             finish({ _proxy: true, status: sc, contentType: 'text/html; charset=utf-8', body: html });
         };
-        // 道·直连被 RST/超时(如 GFW 下 github) → 经本机 VPN/代理 CONNECT 隧道复取一次。与官网代理/MCP 接测同策。
-        const viaTunnel = async (origMsg) => {
+        // 归一 · 取响应后统一处理重定向或落体, 直连/代理两赛道共用。
+        const handle = (sc, headers, raw) => {
             if (done) return;
-            const tr = await fetchViaTunnel(u, reqHeaders, 16000);
-            if (done) return;
-            if (!tr) { finish(errPage(origMsg || '网络不可达', u.href)); return; }
-            if (tr.status >= 300 && tr.status < 400 && tr.headers['location']) {
-                let loc = String(tr.headers['location']);
-                try { loc = new URL(loc, u.href).href; } catch (e) { /* 守柔 */ }
+            if (sc >= 300 && sc < 400 && headers && headers['location']) {
+                let loc = String(headers['location']);
+                try { loc = new URL(loc, u.href).href; } catch (e363) { /* 守柔 */ }
                 finish(genericWebProxy(loc, depth + 1));
                 return;
             }
-            await processBody(tr.status || 200, tr.headers, tr.raw);
+            processBody(sc || 200, headers || {}, raw || Buffer.alloc(0));
         };
-        const onConnErr = (e) => {
-            const msg = (e && e.message) || 'network error';
-            if (!triedTunnel && isHttps && (detectedProxyPort || detectProxyPort())) {
-                triedTunnel = true;
-                viaTunnel(msg);
-                return;
-            }
-            finish(errPage(msg, u.href));
-        };
+        // 道·并行赛道(天下莫柔弱于水, 而攻坚强者莫之能胜): 本机检出代理(Clash/V2Ray)时,
+        //   「直连」与「经本机代理 CONNECT 隧道」两路同时取, 谁先成谁用。国内站直连即刻命中;
+        //   被墙站(google 等)直连黑洞超时, 而代理 1~2s 即返 → 不再误判「打不开」, 媲美系统浏览器走代理。
+        const proxyPort = isHttps ? (detectedProxyPort || detectProxyPort()) : 0;
+        const hasProxy = proxyPort > 0;
+        let dFail = false, pFail = false;
+        const maybeErr = () => { if (done) return; if (dFail && (pFail || !hasProxy)) finish(errPage('网络不可达或站点拒绝代理', u.href)); };
+        const directFail = () => { dFail = true; maybeErr(); };
+        const proxyFail = () => { pFail = true; maybeErr(); };
+        // 直连赛道
         proxyReq = lib.request(options, (pr) => {
             const sc = pr.statusCode || 200;
-            // 3xx 重定向: 服务端跟随(相对 Location 按当前 URL 解析), 让 iframe 直接拿到最终页。
-            if (sc >= 300 && sc < 400 && pr.headers['location']) {
-                let loc = String(pr.headers['location']);
-                try { loc = new URL(loc, u.href).href; } catch (e363) { /* 守柔 */ }
-                pr.resume();
-                finish(genericWebProxy(loc, depth + 1));
-                return;
-            }
             const chunks = [];
-            pr.on('error', () => finish(errPage('读取响应失败', u.href)));
+            pr.on('error', () => directFail());
             pr.on('data', (c) => chunks.push(c));
-            pr.on('end', () => { processBody(sc, pr.headers, Buffer.concat(chunks)); });
+            pr.on('end', () => handle(sc, pr.headers, Buffer.concat(chunks)));
         });
-        proxyReq.on('error', onConnErr);
-        proxyReq.on('timeout', () => { try { proxyReq.destroy(); } catch (e) { /* 守柔 */ } onConnErr(new Error('加载超时')); });
+        proxyReq.on('error', () => directFail());
+        proxyReq.on('timeout', () => { try { proxyReq.destroy(); } catch (e) { /* 守柔 */ } directFail(); });
         proxyReq.end();
+        // 代理赛道(仅 https · 经本机 Clash/V2Ray CONNECT 隧道, 与官网代理/MCP 接测同策)
+        if (hasProxy) {
+            fetchViaTunnel(u, reqHeaders, 16000).then((tr) => {
+                if (done) return;
+                if (!tr) { proxyFail(); return; }
+                handle(tr.status || 200, tr.headers, tr.raw);
+            }).catch(() => proxyFail());
+        }
     });
 }
 
