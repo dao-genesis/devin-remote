@@ -124,6 +124,9 @@ public class MainActivity extends AppCompatActivity {
     private Button dlBtn;
     private Button daoBtn;
     private Button starBtn;
+    private LinearLayout toolRow;          // 第二行(缩放滑块 + 动作键组): 可收缩, 默认展开
+    private Button toolToggle;             // 第一行下拉开关: 点一下收起/展开第二行 (省空间·用不到时收起)
+    private boolean toolRowExpanded = true;
     private FrameLayout dlPanel;
     private LinearLayout dlListCol;
     private FrameLayout daoPanel;          // 全服通悬浮窗 (近期对话 / 备份网页端) — 建一次后保活, 开关只切显隐
@@ -510,41 +513,45 @@ public class MainActivity extends AppCompatActivity {
         Button go = chipBtnSm("→");
         go.setOnClickListener(v -> go(addr.getText().toString()));
         // 导航键(后退/前进/主页)已移入 ≡ → 页面工具收纳菜单 (基本用不到, 收起腾出工具栏空间)
-        // 网页栏五角星：点击收藏/取消收藏当前页 (像浏览器) — 略放大更易点
-        starBtn = chipBtnMd("\u2606");
+        // 第一行下拉开关 (取代原翻译键位置): 点一下收起/展开第二行(缩放+动作键), 默认展开 → 用不到时收起省空间。
+        toolToggle = chipBtnSm("\u25BC");   // ▼ 展开 / ▶ 收起
+        toolToggle.setOnClickListener(v -> toggleToolRow());
+        // 网页栏五角星：点击收藏/取消收藏当前页 — 紧凑排布 (5 键紧贴, 占原 4 键宽)
+        starBtn = chipBtnPk("\u2606");
         starBtn.setOnClickListener(v -> toggleBookmarkCurrent());
-        // 刷新按钮：原地重载当前标签的 WebView（保留多实例登录态）
-        Button reload = chipBtnMd("\u21BB");
-        reload.setOnClickListener(v -> reloadActive());
-        // 翻译按钮 (网址旁·一键整页翻译, 再点恢复原文) — 同电脑端 Chrome 体感
-        Button tr = chipBtnSm("\u8BD1");
+        // 翻译按钮 (由第一行迁入·排第二位·夹在 收藏↔刷新 之间): 一键整页翻译, 再点恢复原文 — 同电脑端 Chrome 体感
+        Button tr = chipBtnPk("\u8BD1");
         tr.setOnClickListener(v -> toggleTranslate());
+        // 刷新按钮：原地重载当前标签的 WebView（保留多实例登录态）
+        Button reload = chipBtnPk("\u21BB");
+        reload.setOnClickListener(v -> reloadActive());
         // 下载管理悬浮窗按钮
-        dlBtn = chipBtnMd("\uD83D\uDCE5");
+        dlBtn = chipBtnPk("\uD83D\uDCE5");
         dlBtn.setOnClickListener(v -> toggleDownloadPanel());
-        // 全服通悬浮窗按钮 (下载键右侧): 近期对话(跨号·实时) + 备份网页端
-        daoBtn = chipBtnMd("\uD83D\uDDC2");
+        // 全服通悬浮窗按钮: 近期对话(跨号·实时) + 备份网页端
+        daoBtn = chipBtnPk("\uD83D\uDDC2");
         daoBtn.setOnClickListener(v -> toggleDaoPanel());
 
-        // 第一行: 菜单 + 地址 + 前往
+        // 第一行: 菜单 + 地址 + 下拉开关 + 前往
         bar.addView(menu);
         bar.addView(addr);
-        bar.addView(tr);
+        bar.addView(toolToggle);
         bar.addView(go);
 
-        // 第二行: 导航键 + 缩放滑块(weight自适应) + 收藏/刷新/下载
-        LinearLayout btnRow = new LinearLayout(this);
-        btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        btnRow.setGravity(Gravity.CENTER_VERTICAL);
-        btnRow.setBackgroundColor(0xFF161B22);
-        btnRow.setPadding(dp(6), dp(1), dp(8), dp(4));
-        btnRow.addView(zicon);
-        btnRow.addView(zoomBar);
-        btnRow.addView(zoomLabel);
-        btnRow.addView(starBtn);
-        btnRow.addView(reload);
-        btnRow.addView(dlBtn);
-        btnRow.addView(daoBtn);
+        // 第二行(可收缩 toolRow): 🔍 + 缩放滑块(weight自适应) + 5 动作键紧贴 [收藏·翻译·刷新·下载·备份]
+        toolRow = new LinearLayout(this);
+        toolRow.setOrientation(LinearLayout.HORIZONTAL);
+        toolRow.setGravity(Gravity.CENTER_VERTICAL);
+        toolRow.setBackgroundColor(0xFF161B22);
+        toolRow.setPadding(dp(6), dp(1), dp(8), dp(4));
+        toolRow.addView(zicon);
+        toolRow.addView(zoomBar);
+        toolRow.addView(zoomLabel);
+        toolRow.addView(starBtn);
+        toolRow.addView(tr);
+        toolRow.addView(reload);
+        toolRow.addView(dlBtn);
+        toolRow.addView(daoBtn);
 
         // 标签条
         HorizontalScrollView strip = new HorizontalScrollView(this);
@@ -567,7 +574,7 @@ public class MainActivity extends AppCompatActivity {
         content.addView(autoHost);
 
         root.addView(bar);
-        root.addView(btnRow);
+        root.addView(toolRow);
         root.addView(strip);
         root.addView(content);
         return root;
@@ -605,6 +612,23 @@ public class MainActivity extends AppCompatActivity {
         lp.leftMargin = dp(6);
         b.setLayoutParams(lp);
         return b;
+    }
+    // 紧凑动作键 (第二行 5 键紧贴排布: 收藏·翻译·刷新·下载·备份) — 高度同 Md, 横向更窄+无间隔, 5 键占原 4 键宽
+    private Button chipBtnPk(String t) {
+        Button b = chipBtn(t);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        b.setPadding(dp(9), dp(3), dp(9), dp(3));
+        b.setMinHeight(0); b.setMinimumHeight(0);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = 0;   // 紧贴: 5 键之间无间隔
+        b.setLayoutParams(lp);
+        return b;
+    }
+    // 第一行下拉开关: 收起/展开第二行 (缩放滑块 + 动作键组)。默认展开。
+    private void toggleToolRow() {
+        toolRowExpanded = !toolRowExpanded;
+        if (toolRow != null) toolRow.setVisibility(toolRowExpanded ? View.VISIBLE : View.GONE);
+        if (toolToggle != null) toolToggle.setText(toolRowExpanded ? "\u25BC" : "\u25B6");  // ▼ 展开 / ▶ 收起
     }
     private void applyZoomActive() {
         if (active < 0 || active >= tabs.size()) return;
@@ -1404,7 +1428,14 @@ public class MainActivity extends AppCompatActivity {
             chip.setTag(idx);
             tabStripRow.addView(chip);
         }
+        // 「+」新标签键: 高度压到与标签等高 (原 Button 默认 minHeight≈48dp 撑得过高·占空间)
         Button plus = chipBtn("+");
+        plus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        plus.setPadding(dp(12), dp(5), dp(12), dp(5));
+        plus.setMinHeight(0); plus.setMinimumHeight(0);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        plp.gravity = Gravity.CENTER_VERTICAL;
+        plus.setLayoutParams(plp);
         plus.setOnClickListener(v -> newTab(DEVIN, null));
         tabStripRow.addView(plus);
         tabStripRow.setOnDragListener(tabDragListener);
