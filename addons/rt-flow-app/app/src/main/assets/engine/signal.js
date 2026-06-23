@@ -158,7 +158,9 @@
             return;
           }
           if (q.t === "rpc") {
-            var app = root.DaoRelayApp, result;
+            // DaoRelayApp 在 relay-app.js 里是 `const`(词法全局, 非 window 属性) → 同 p2p.js 以
+            //   裸名引用; typeof 守卫避免未定义环境(如单测 mock 改挂 window.DaoRelayApp)报 ReferenceError。
+            var app = (typeof DaoRelayApp !== "undefined") ? DaoRelayApp : (root && root.DaoRelayApp), result;
             // 与 p2p.js wireChannel 同契约: serveLocal 收 JSON 字符串帧 (E2E 解密→命令→重封)。
             var frameJson = (typeof q.frame === "string") ? q.frame : JSON.stringify(q.frame);
             try { result = (app && typeof app.serveLocal === "function") ? await app.serveLocal(frameJson) : { status: 503, bodyText: "serveLocal unavailable" }; }
