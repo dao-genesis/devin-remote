@@ -2,6 +2,11 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.19
+- 修「webview 面板的对话备份拖到代理网页不上传」: 拖拽上传桥(`/__daobridge.js`)读 `application/x-dao-conv{email,sid}`, 但面板的 `bkConvDragStart` 仅发 `application/json{type:dao-conv,devinId}`/`uri-list`(那是给「拖到路由/编辑器打开」用的) → **mime 不匹配**, 桥识别不了 → 上传无反应。
+  - 修: `bkConvDragStart` **追加**发 `application/x-dao-conv{email,sid:devinId,title}`(与 `/shell` 一致); 保留原有 json/uri-list 不变 → 拖到路由=打开会话、拖到代理网页=上传该会话 MD, 两不相干。
+  - (`/shell` 统一外壳的对话备份 `daowin` / 下载窗 `dlwin` 拖源本就发正确 mime, 不动。)
+
 ## 3.50.18
 - 改进「站内浏览器/搜索引擎多层页面点进去」(`genericWebProxy` `/__web` 代理): 此前仅拦 `<a href>` 点击与 GET 表单, **JS 驱动的整页跳转(`location.assign`/`location.replace`·搜索结果常用)未拦** → 套娃第二/三层页直跳真站致掉登录/空白。
   - 包裹 `window.location.assign`/`replace` 经同源 `/__web` 代理(对齐官网反代既有 `__fix` 双保险); `_nav` 用**原始** assign 绕开自身改写防自陷; `wrap` 守 `indexOf(P)===0` 防已代理 URL 二次套娃。
