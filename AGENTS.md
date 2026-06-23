@@ -176,6 +176,20 @@ module CORS 约束无解。故桌面端「公网渲染只传核心」的**正解
    页面+XHR 并发重登）；页面注入块与 `/api` 转发块均「他号未缓存 → 取号；取失败宁空注入不冒名」。
    验证：`curl 'localhost:9920/devin-cloud/api/users/post-auth?dao_acct=<他号>'` 应返**该号**的
    `org_id/org_name`，绝不返活动号的。
+8. **部署到用户机：`package.json` 必须字节级整份覆盖，禁用 PowerShell 文本写。** 实测一次部署把
+   `package.json` 写坏（变 40747 字节·某 description 少右引号·JSON 语法损坏）。IDE 对「manifest 解析
+   失败」的扩展会**静默跳过**——`dao.dao-vsix` 整个不被加载、9920 起不来，表象＝「插件整个跑不起来」，
+   且 exthost.log 里**连一行 `_doActivateExtension dao.dao-vsix` 都没有**（区别于「激活时崩」）。
+   **修法/铁律**：覆盖 `package.json`/`out/extension.js` 一律走 base64 二进制写（字节级一致），写后必跑
+   `[IO.File]::ReadAllBytes|UTF8(strict)|ConvertFrom-Json` 校验通过再 reload。排错口诀：插件「整个没」
+   先查 manifest 能否解析，别先怀疑业务代码。
+9. **新窗口/独立实例验证新版插件，必带 `--disable-workspace-trust`。** `dao.dao-vsix` 是
+   `extensionKind: workspace` 且**未声明 `capabilities.untrustedWorkspaces`** → 工作区未信任时（全新
+   `--user-data-dir` 首开即未信任）走限制模式被**禁用**，UI-only 兄弟扩展照常激活、唯独它不激活（极易
+   误判成它自身坏）。**正解（道并行而不相悖）**：保留用户原窗口只管连通（机控桥是独立常驻进程·不随窗口
+   生死），另起 `windsurf.cmd --user-data-dir <独立目录> --disable-workspace-trust --new-window <ws>`
+   加载新版（共享 `~/.dao` 账号态），切勿 reload 用户正在用的窗口。注：用户常驻实例已信任工作区，磁盘
+   修好后其下次正常重启会自动干净加载，无需任何额外参数。
 
 ---
 
