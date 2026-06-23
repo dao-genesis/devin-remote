@@ -33,7 +33,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 // 鉴权/定址纯逻辑见 ./keys.js —— 不可从本入口再导出普通值/函数, 否则 workerd 启动即报错。
-import { VERSION, relayKey, sharedTokenOk, pxIsImmutableAsset } from "./keys.js";
+import { VERSION, relayKey, sharedTokenOk, pxIsImmutableAsset, pxIsHashedCode } from "./keys.js";
 
 function bearer(req) {
   const h = req.headers.get("authorization") || req.headers.get("Authorization") || "";
@@ -303,8 +303,11 @@ async function pxProxyCore(req, opts) {
   }
   let up;
   const fetchInit = { method: method, headers: fwd, body: body, redirect: "manual" };
-  // 哈希不可变资源: 让 Cloudflare 自带缓存层也代为存上游字节, 进一步减少回 app.devin.ai 取数。
-  if (method === "GET" && pxIsImmutableAsset(upath)) fetchInit.cf = { cacheEverything: true, cacheTtl: 31536000 };
+  // 哈希不可变资源 + 内容哈希代码包: 给上游 fetch 挂 Cloudflare 缓存层 —— 缓存的是 **真实上游 URL**
+  //   (app.devin.ai/assets/<hash>.js) 的原始字节, 键与账号前缀无关 → 全公网跨账号/跨用户共享,
+  //   首个用户回源一次、余者均命中边缘 → 登录/渲染 Devin 时重型 JS/CSS 不再慢跨回 app.devin.ai。
+  //   代码包的「重写」仍每次在 Worker 跑(不缓存重写产物) → 无陈旧预载补丁之虑。
+  if (method === "GET" && (pxIsImmutableAsset(upath) || pxIsHashedCode(upath))) fetchInit.cf = { cacheEverything: true, cacheTtl: 31536000 };
   try { up = await fetch(u.toString(), fetchInit); }
   catch (e) { return new Response("upstream_fetch_failed: " + String((e && e.message) || e), { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } }); }
 

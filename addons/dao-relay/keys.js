@@ -10,7 +10,7 @@
 // 故归一于此独立模块, 入口只导出 default 处理器与 RelayDO 类。
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const VERSION = "3.4.0-edgecache"; // (session,token) 配对模型 + WebSocket Hibernation(上量省钱) + GET /console 自托管单网页控制台。重新部署后 /health 报此值即生效。
+export const VERSION = "3.5.0-edgecache-code"; // (session,token) 配对模型 + WebSocket Hibernation(上量省钱) + GET /console 自托管单网页控制台。重新部署后 /health 报此值即生效。
 
 // DO 命名空间定址: session 与 token 共同决定实例 —— 「知道 session+token」即凭证。
 // 用 \u0000 作分隔(token/session 不含 NUL), 避免 "a"+"bc" 与 "ab"+"c" 撞键。
@@ -32,4 +32,15 @@ export function sharedTokenOk(env, token) {
 export function pxIsImmutableAsset(restPath) {
   const p = String(restPath || "").split("?")[0].toLowerCase();
   return /\.(woff2?|ttf|otf|eot|png|jpe?g|gif|svg|ico|webp|avif|bmp|wasm|mp3|mp4|webm|ogg)$/.test(p);
+}
+
+// 内容哈希过的代码包 (Vite `name-[hash].js|css|mjs`, hash≥8 位 base62) —— 上游字节不可变。
+//   ⚠️ 与 pxIsImmutableAsset 不同: 这类文件 worker 仍需「每次重写」(注前缀/__PXFX 预载补丁版本敏感),
+//   故**不**入 caches.default 缓存重写后的产物(避免历史踩坑: 旧预载补丁被永缓 → 改版后预载错位)。
+//   仅用于给上游 fetch 挂 Cloudflare `cf.cacheEverything` 缓存层 —— 缓存的是 **app.devin.ai 原始字节**
+//   (键为真实上游 URL, 全公网跨账号/用户共享), 重写照常每次跑 → 既省回源慢跳, 又无陈旧重写之虞。
+//   严格要求 `-<8+位字母数字>.ext` 收尾, 不误匹配 main.js / index.css 等无哈希入口文件。
+export function pxIsHashedCode(restPath) {
+  const p = String(restPath || "").split("?")[0];
+  return /-[A-Za-z0-9_]{8,}\.(?:js|mjs|css)$/.test(p);
 }

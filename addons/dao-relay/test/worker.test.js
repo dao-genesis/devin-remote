@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
-import { relayKey, sharedTokenOk, VERSION, pxIsImmutableAsset } from "../keys.js";
+import { relayKey, sharedTokenOk, VERSION, pxIsImmutableAsset, pxIsHashedCode } from "../keys.js";
 
 // repair.js 经浏览器 importScripts 加载(挂到 self), 这里在沙箱里 eval 出函数做纯逻辑单测。
 const repairUvJs = (() => {
@@ -58,6 +58,24 @@ test("pxIsImmutableAsset: 字体/图片/wasm 等二进制资源 → 可边缘强
 test("pxIsImmutableAsset: JS/CSS/HTML/API 不入强缓存(版本敏感/动态)", () => {
   for (const p of ["/assets/x.js", "/assets/y.css", "/index.html", "/api/sessions", "/", "", "/x.js?v=1", "/foo.json"]) {
     assert.strictEqual(pxIsImmutableAsset(p), false, p);
+  }
+});
+
+test("pxIsHashedCode: 内容哈希过的 JS/CSS/MJS 代码包 → 上游可跨账号边缘缓存", () => {
+  for (const p of [
+    "/assets/index-Dk3f9a2B.js", "/assets/vendor-a1B2c3D4.css", "/assets/chunk-A1b2C3d4e5.mjs",
+    "/i/acc/assets/main-0123abcd.js", "/assets/x-ABCDEFGH12345678.js?v=1",
+  ]) {
+    assert.strictEqual(pxIsHashedCode(p), true, p);
+  }
+});
+
+test("pxIsHashedCode: 无哈希入口/动态文件 → 不缓存(每次重写照旧·避免陈旧)", () => {
+  for (const p of [
+    "/main.js", "/index.css", "/assets/app.js", "/assets/short-abc.js", // hash 不足 8 位
+    "/api/sessions", "/index.html", "/x.png", "", "/assets/nohyphen12345678.js",
+  ]) {
+    assert.strictEqual(pxIsHashedCode(p), false, p);
   }
 });
 
