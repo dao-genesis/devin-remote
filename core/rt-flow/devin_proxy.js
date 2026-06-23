@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// devin_proxy.js · v4.14.0 · IDE 内置浏览器自足注入反代 (不赖 dao-vsix) · 静态资源缓存提速 (内存 L1 + 磁盘 L2)
+// devin_proxy.js · v4.15.0 · IDE 内置浏览器自足注入反代 (不赖 dao-vsix) · 静态资源缓存提速 (内存 L1 + 磁盘 L2 + 客户端 Service Worker L0)
 // ───────────────────────────────────────────────────────────────────────────
 // 帛书·「天下之至柔·驰骋于天下之致坚；无有入于无间」: IDE 内置浏览器 (simpleBrowser /
 //   webview) 是受沙箱约束的 iframe — 无 CDP 端口可控, 无法如系统浏览器般经 CDP
@@ -73,6 +73,37 @@ function _cachePut(key, val) {
 function isCacheableAsset(p) {
   return /\.(js|css|woff2?|ttf|eot|otf|png|jpe?g|gif|svg|ico|wasm)(\?|$)/i.test(p);
 }
+
+// ═══ Service Worker · 客户端「浏览器级」持久资产缓存 (根治 IDE 内置 webview 路由慢) ═══════════
+// 帛书·「天下之至柔·驰骋于天下之致坚；无有入于无间」: VS Code 内置浏览器/webview 之 iframe 不像
+//   真浏览器那样把哈希不可变资产持久缓存到磁盘 → 每次导航/切标/重载都重取数百分片 (即
+//   「系统浏览器/手机/单页壳 = 真浏览器 各快一倍, 唯独 IDE 内 webview 慢」之真因——同一反代,
+//   差只在客户端缓存)。故由反代注入同源 Service Worker + CacheStorage: 首载落 Cache, 之后跨
+//   导航/跨标/重载即取本地 Cache (零代理往返·零上游往返), 媲美真浏览器磁盘缓存。
+//   仅端口模式注入 (每账号独立 origin·scope '/' 干净·资产与账号无关可共享); 前缀模式同源多账号
+//   共 scope 暂不启用以免相扰 (其经公网真浏览器, 本就有原生缓存, 无需 SW)。
+const _SW_PATH = "/__dao_sw.js";
+const _swCode =
+  "var C='dao-assets-v1';" +
+  "var IM=/\\.(?:js|css|woff2?|ttf|eot|otf|png|jpe?g|gif|svg|ico|wasm)(?:\\?|$)/i;" +
+  "self.addEventListener('install',function(e){self.skipWaiting();});" +
+  "self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim());});" +
+  "self.addEventListener('fetch',function(event){" +
+  "var req=event.request;" +
+  "if(req.method!=='GET')return;" +
+  "try{if(req.headers.get('range'))return;}catch(e){}" +
+  "var url;try{url=new URL(req.url);}catch(e){return;}" +
+  "if(url.origin!==self.location.origin)return;" +
+  "if(!IM.test(url.pathname))return;" +
+  "event.respondWith(caches.open(C).then(function(cache){return cache.match(req).then(function(hit){" +
+  "if(hit)return hit;" +
+  "return fetch(req).then(function(resp){if(resp&&resp.status===200){try{cache.put(req,resp.clone());}catch(e){}}return resp;});" +
+  "});}).catch(function(){return fetch(req);}));" +
+  "});";
+// SW 注册脚本 (注入 HTML <head>·端口模式)。async 注册, 不阻塞首屏。
+const _swReg =
+  "<script>(function(){try{if('serviceWorker' in navigator){navigator.serviceWorker.register(" +
+  JSON.stringify(_SW_PATH) + ").catch(function(){});}}catch(e){}})();</script>";
 
 // ═══ 磁盘二级缓存 (L2) ═══════════════════════════════════════════════════════
 // 帛书·「夫物芸芸·各复归其根」: 上面的内存缓存随进程消亡, IDE 重载/重开后内存全空,
@@ -355,6 +386,18 @@ async function handleRequest(req, res, auth, opts, _log) {
       res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" }); res.end("bridge error"); return;
     }
   }
+  // Service Worker 脚本就地服务 (端口模式·同源 scope '/')。须先于上游路由短路返回。
+  if (!isPrefix && reqUrl.pathname === _SW_PATH) {
+    res.writeHead(200, {
+      "Content-Type": "application/javascript; charset=utf-8",
+      "Service-Worker-Allowed": "/",
+      "Cache-Control": "no-cache",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(_swCode);
+    return;
+  }
+
   const up = resolveUpstream(reqUrl.pathname);
   const targetUrl = up.base + up.path + (reqUrl.search || "");
   const u = new URL(targetUrl);
@@ -519,6 +562,11 @@ async function handleRequest(req, res, auth, opts, _log) {
           if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + bridge);
           else if (/<\/head>/i.test(html)) html = html.replace(/<\/head>/i, bridge + "</head>");
           else html = bridge + html;
+          // Service Worker 注册 (端口模式·IDE webview 提速): 同源注册 → 该 origin 所有标签/导航共享 Cache。
+          if (!isPrefix) {
+            if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + _swReg);
+            else html = _swReg + html;
+          }
           // 拖拽上传桥: 内联于 <head>(随首段 HTML 同步执行·document 级监听跨 SPA body 重渲染长存)。
           //   不可用 </body> 前 <script src>: SPA 引导清空/重建 body, 外链脚本走网络往返期间标签已被抹除 →
           //   永不执行(实测 __daoDropBridge 不挂·拖拽无反应)。同源直服本反代端口 → 取字节 fetch 即达。
