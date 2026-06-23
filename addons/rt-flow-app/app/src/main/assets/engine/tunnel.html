@@ -255,6 +255,7 @@ var N = window.Native || {};
 function _pj(raw){ try{ var o=JSON.parse(raw||"{}"); return (o&&typeof o==="object"&&!Array.isArray(o))?o:{}; }catch(e){ return {}; } }
 function _conn(){ return _pj(N.conn?N.conn():""); }
 function _relay(){ return _pj(N.relayStatus?N.relayStatus():""); }
+//__CHANSEL_START__ (经 test/channel-select.test.js 切片 eval 实测, 勿删标记)
 // 「当前生效的最优公网入口」选取 (道法自然·对齐本源 AGENTS: 默认零账号中继 Worker, 隧道仅作冗余):
 //   零账号中继 Worker 始终在线、浏览器可直开 /console、无需任何隧道/凭证 → 作首选(connected 时);
 //   仅当中继暂掉线时, 才回落去中心化隧道(cloudflared 主 > SSH 备), 末位再以 Worker 兜底(即便未连)。
@@ -272,23 +273,23 @@ function _bestPublic(){
   if(w) return { base:w, kind:'worker', label:'零账号中继·兜底', online:!!r.connected };
   return { base:"", kind:'none', label:'(暂无可用公网入口)', online:false };
 }
-// 浏览器可直开的最优网页入口: 永远优先零账号中继 /console(始终在线·免隧道·免凭证), 退求隧道根/局域网根。
-//   这是「任意浏览器打开即与 APK 同款操作」唯一普适可靠的入口 — 不依赖被网络封锁的 cloudflared、不依赖
-//   随时回收子域的免账号 SSH 隧道。中继 /console 同源走 /relay RPC, 无 CORS, 零配置零账号。
+// 浏览器可直开的最优网页入口: 只要有 Worker 基址就永远优先零账号中继 /console —— 不再受「WSS 暂掉/被限流」门控。
+//   理由(道法自然·随实情修正): /console 由 Cloudflare 托管, HTML 永远能加载; 且单网页已内置「通道自愈」
+//   (PR #547: 自动探活切到活通道 + 重连)。即使 Worker WSS 暂掉/被限流, /console 也能打开并自愈, 远胜于把
+//   「在本网络注定 530/1033 的 cloudflared」当网页直开对外广播 —— 那才是用户「复制的链接打不开」的真凶。
+//   分享链接以「普适可达」为先: Worker(全网可开) > 隧道(全网但脆弱) > 局域网(仅同网)。
 function _bestWeb(){
   var c=_conn(), r=_relay();
   var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
-  // 仅当中继 Worker 确实连通时才把它作为浏览器直开入口; 掉线/被 CF 限流(429)时回落到当前生效公网隧道(cloudflared/SSH),
-  // 否则会把一个打不开的 workers.dev/console 当「网页直开」对外广播 (用户实测「公网链接产生不了」即此因)。
-  if(w && r.connected!==false) return { url:_webConsoleUrl(w,true), label:'零账号中继网控台(始终在线·免隧道)', kind:'worker', base:w };
+  if(w) return { url:_webConsoleUrl(w,true), kind:'worker', base:w,
+    label:(r.connected!==false?'零账号中继网控台(始终在线·免隧道)':'零账号中继网控台(自愈重连中·免隧道)') };
   var bp=_bestPublic();
   if(bp.base && bp.kind!=='worker') return { url:_webConsoleUrl(bp.base,true), label:bp.label, kind:bp.kind, base:bp.base };
   var l=_lan(); var us=(l&&l.urls)||[];
   if(us.length){ var lb=String(us[0]).replace(/\/$/,''); return { url:_webConsoleUrl(lb,true), label:'局域网直连(同网·零中继零隧道)', kind:'lan', base:lb }; }
-  // 末位兜底: 即便 Worker 未连通也总比空好 (用户可手动重试中继)。
-  if(w) return { url:_webConsoleUrl(w,true), label:'零账号中继·兜底(未连通·可重试)', kind:'worker', base:w };
   return { url:"", label:'(暂无)', kind:'none', base:"" };
 }
+//__CHANSEL_END__
 function _push(){
   var c=_conn(), r=_relay();
   var bp=_bestPublic(), isWorker=(bp.kind==='worker');
