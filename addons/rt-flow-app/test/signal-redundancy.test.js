@@ -52,6 +52,52 @@ function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { fai
   try { await S.connect({ session: "s" }); } catch (e) { threw = /need session\+token/.test(String(e.message)); }
   ok(threw, "D3 connect 缺 token → throw need session+token (建连前即拒)");
 
+  // E) 路线 C-2 去中心化中继兜底: 离线 mock broker 跑通 serve↔connect(forceRelay) 的 ping+rpc。
+  //    守护点: P2P 打洞失败(对称 NAT)且 Worker 被封(GFW)时, 控制面 RPC 仍可经公共 ntfy mesh
+  //            中继往返; 且中继路径与握手同享 token 加密门禁 (错 token 即不应答)。
+  const SERVER = "https://mock.local";
+  const topics = Object.create(null);                       // topic → Set(deliver callback)
+  global.WebSocket = function (url) {
+    const m = String(url).match(/\/([^/]+)\/ws$/); const topic = m ? m[1] : "";
+    const self = this; this.readyState = 1;
+    const cb = function (body) { if (self.onmessage) self.onmessage({ data: JSON.stringify({ event: "message", message: body }) }); };
+    (topics[topic] = topics[topic] || new Set()).add(cb);
+    this.close = function () { try { topics[topic].delete(cb); } catch (e) {} };
+    setTimeout(function () { if (self.onopen) self.onopen(); }, 0);
+  };
+  global.fetch = function (url, opts) {                     // POST = 向该 topic 全体订阅者投递报文
+    const m = String(url).match(/\/([^/]+)$/); const topic = m ? m[1] : "";
+    const subs = topics[topic]; const body = opts && opts.body;
+    if (subs) subs.forEach(function (cb) { setTimeout(function () { cb(body); }, 0); });
+    return Promise.resolve({ ok: true, status: 200, text: function () { return Promise.resolve(""); } });
+  };
+  global.RTCPeerConnection = function () {                  // forceRelay 路径会即刻 close 掉它, 仅需可构造
+    this.iceGatheringState = "complete"; this.connectionState = "new"; this.localDescription = { sdp: "x" };
+    this.createDataChannel = function () { return { binaryType: "", send: function () {}, close: function () {}, readyState: "connecting" }; };
+    this.createOffer = function () { return Promise.resolve({ type: "offer", sdp: "x" }); };
+    this.setLocalDescription = function () { return Promise.resolve(); };
+    this.setRemoteDescription = function () { return Promise.resolve(); };
+    this.createAnswer = function () { return Promise.resolve({ type: "answer", sdp: "y" }); };
+    this.addEventListener = function () {}; this.close = function () {};
+  };
+  global.window.DaoRelayApp = { serveLocal: function (frameJson) { var f = {}; try { f = JSON.parse(frameJson); } catch (e) {} return Promise.resolve(JSON.stringify({ status: 200, bodyText: JSON.stringify({ ok: true, echoPath: f.path || null }) })); } };
+
+  const served = await S.serve({ session: "sessE", token: "tokE", servers: [SERVER], connect: function () { return Promise.resolve({ ok: false }); } });
+  ok(served && served.ok === true, "E0 serve 启动 (mock broker)");
+  const sig = await S.connect({ session: "sessE", token: "tokE", servers: [SERVER], forceRelay: true });
+  ok(sig && sig.mode === "relay-ntfy", "E1 forceRelay → 返回去中心化中继句柄 (不依赖 ICE/WebRTC)");
+  const pong = await sig.ping();
+  ok(typeof pong === "number" && pong >= 0, "E2 中继 ping 往返成功 (经 ntfy mesh, 全程无 WebRTC)");
+  const r = await sig.rpc({ path: "/api/health", method: "GET" });
+  const robj = (typeof r === "string") ? JSON.parse(r) : r;
+  ok(robj && robj.status === 200, "E3 中继 rpc 往返: serveLocal 200 (控制面经 ntfy 中继可达)");
+  ok(robj && JSON.parse(robj.bodyText).echoPath === "/api/health", "E4 中继 rpc 帧完整投递 (path 原样回显)");
+  if (sig.close) sig.close();
+  let denied = false;
+  try { await S.connect({ session: "sessE", token: "WRONG", servers: [SERVER], forceRelay: true }); }
+  catch (e) { denied = /relay_timeout/.test(String(e.message)); }
+  ok(denied, "E5 token 不符 → 中继亦拒应答 (relay_timeout; 与握手同享加密门禁)");
+
   console.log(failures ? ("\n失败 " + failures + " 项 ✗") : "\n全通 ✓");
   process.exit(failures ? 1 : 0);
 })().catch(function (e) { console.error("测试异常:", e); process.exit(1); });

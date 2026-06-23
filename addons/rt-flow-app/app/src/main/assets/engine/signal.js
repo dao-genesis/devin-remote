@@ -26,6 +26,7 @@
   var DEFAULT_SERVERS = ["https://ntfy.sh", "https://ntfy.envs.net", "https://ntfy.adminforge.de", "https://ntfy.mzte.de"];
   var CHUNK = 1200;          // 单条信令分片上限 (规避公共 broker 4KB 报文限制)
   var ANSWER_TIMEOUT = 25000;
+  var RELAY_MAX_B64 = 48000; // 中继兜底单响应上限(~40 片); 控制面够用, 超出改走 P2P/Worker 防灌爆公共 broker
   var hasSubtle = (typeof crypto !== "undefined" && crypto.subtle && typeof crypto.subtle.digest === "function");
   // 多家公共 STUN (互不隶属 → 单点不可达不致命; 仅用于 NAT 反射地址发现, 不中转数据 → 仍 P2P 直连)。
   var STUN = [
@@ -127,20 +128,48 @@
     var key = await deriveKey(session, token);
     var topic = await topicFor(session);
     var handled = Object.create(null);   // nonce → ts (去重已处理 offer)
+    var dhandled = Object.create(null);  // id → ts (去重已处理的中继 RPC)
     var reasm = makeReasm();
     var sub = subscribe(servers, topic, function (raw) {
       reasm(raw, async function (corr, role, full) {
-        if (role !== "o") return;                 // 只认客户端 offer
-        var obj = await unseal(key, full);          // 解密失败=对端不知 token → 拒(门禁)
-        if (!obj || obj.t !== "offer" || !obj.sdp) return;
-        var nonce = obj.nonce || corr;
-        if (handled[nonce]) return; handled[nonce] = Date.now();
-        var res;
-        try { res = await connectFn({ offer: obj.sdp, ice: obj.ice }); } catch (e) { res = { ok: false, error: String(e) }; }
-        if (!res || !res.ok || !res.answer) return;
-        var payload = await seal(key, { t: "answer", nonce: nonce, sdp: res.answer });
-        publish(servers, topic, frameChunks(nonce, "a", payload));
-        var now = Date.now(); for (var k in handled) if (now - handled[k] > 180000) delete handled[k];
+        if (role === "o") {                       // 客户端 offer → P2P 握手
+          var obj = await unseal(key, full);          // 解密失败=对端不知 token → 拒(门禁)
+          if (!obj || obj.t !== "offer" || !obj.sdp) return;
+          var nonce = obj.nonce || corr;
+          if (handled[nonce]) return; handled[nonce] = Date.now();
+          var res;
+          try { res = await connectFn({ offer: obj.sdp, ice: obj.ice }); } catch (e) { res = { ok: false, error: String(e) }; }
+          if (!res || !res.ok || !res.answer) return;
+          var payload = await seal(key, { t: "answer", nonce: nonce, sdp: res.answer });
+          publish(servers, topic, frameChunks(nonce, "a", payload));
+          var now = Date.now(); for (var k in handled) if (now - handled[k] > 180000) delete handled[k];
+          return;
+        }
+        if (role === "q") {                       // 路线 C-2 · 去中心化中继兜底
+          // P2P ICE 打洞失败(对称/CGNAT)且 Worker 被封(GFW)时, 把**已加密**的控制面 RPC/ping
+          //   帧经同一公共 ntfy mesh 转发应答 —— 仍零账号、零中心、任一 broker 活即通。门禁同握手:
+          //   解密成功(=对端确实知 token)才应答; 公共 broker 全程只见密文。
+          var q = await unseal(key, full);
+          if (!q || !q.id) return;
+          if (dhandled[q.id]) return; dhandled[q.id] = Date.now();
+          var rnow = Date.now(); for (var dk in dhandled) if (rnow - dhandled[dk] > 180000) delete dhandled[dk];
+          if (q.t === "ping") {
+            publish(servers, topic, frameChunks(q.id, "s", await seal(key, { t: "pong", id: q.id, ts: Date.now() })));
+            return;
+          }
+          if (q.t === "rpc") {
+            var app = root.DaoRelayApp, result;
+            // 与 p2p.js wireChannel 同契约: serveLocal 收 JSON 字符串帧 (E2E 解密→命令→重封)。
+            var frameJson = (typeof q.frame === "string") ? q.frame : JSON.stringify(q.frame);
+            try { result = (app && typeof app.serveLocal === "function") ? await app.serveLocal(frameJson) : { status: 503, bodyText: "serveLocal unavailable" }; }
+            catch (e) { result = { status: 500, bodyText: String(e && e.message || e) }; }
+            var rpl = await seal(key, { t: "res", id: q.id, result: result });
+            // 控制面兜底: 大响应不宜灌公共 broker(触发限流) → 超阈值改回提示, 让调用方走 P2P/Worker。
+            if (rpl.length > RELAY_MAX_B64) rpl = await seal(key, { t: "res", id: q.id, result: { status: 413, bodyText: "relay payload too large; prefer P2P/Worker for bulk transfer" } });
+            publish(servers, topic, frameChunks(q.id, "s", rpl));
+            return;
+          }
+        }
       });
     });
     return { ok: true, topic: topic, servers: servers, close: sub.close };
@@ -161,7 +190,7 @@
     var nonce = uid();
     var pc = new RTCPeerConnection({ iceServers: ice });
     var dc = pc.createDataChannel("rpc"); dc.binaryType = "arraybuffer";
-    var seq = 0, waiters = Object.create(null);
+    var seq = 0, waiters = Object.create(null), relayWaiters = Object.create(null);
     dc.onmessage = function (ev) {
       var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
       if (!m) return;
@@ -203,6 +232,14 @@
     var reasm = makeReasm();
     var sub = subscribe(servers, topic, function (raw) {
       reasm(raw, async function (corr, role, full) {
+        if (role === "s") {                               // 中继兜底响应 (pong/res), 按 id 对号
+          var r = await unseal(key, full);
+          if (!r || !r.id) return;
+          var rw = relayWaiters[r.id]; if (!rw) return; delete relayWaiters[r.id];
+          if (r.t === "pong") rw.resolve({ pong: true, ts: r.ts });
+          else if (r.t === "res") rw.resolve(r.result);
+          return;
+        }
         if (role !== "a" || corr !== nonce || opened) return;   // 只认本次 offer 对应的 answer
         var obj = await unseal(key, full);
         if (!obj || obj.t !== "answer" || !obj.sdp) return;
@@ -210,6 +247,34 @@
       });
     });
     function close() { try { sub.close(); } catch (e) {} try { if (dc) dc.close(); } catch (e) {} try { if (pc) pc.close(); } catch (e) {} }
+    // 路线 C-2 客户端: P2P 失败时复用同一 topic/订阅, 把 RPC/ping 经公共 ntfy mesh 中继往返。
+    function buildRelayHandle() {
+      var rseq = 0;
+      function relaySend(t, frame, timeoutMs) {
+        return new Promise(function (resolve, reject) {
+          var id = "r" + (++rseq) + "-" + uid();
+          relayWaiters[id] = { resolve: resolve, reject: reject };
+          (async function () {
+            try { publish(servers, topic, frameChunks(id, "q", await seal(key, frame ? { t: t, id: id, frame: frame } : { t: t, id: id }))); }
+            catch (e) { if (relayWaiters[id]) { delete relayWaiters[id]; reject(e); } }
+          })();
+          setTimeout(function () { if (relayWaiters[id]) { delete relayWaiters[id]; reject(new Error("relay_timeout")); } }, timeoutMs || 30000);
+        });
+      }
+      return {
+        mode: "relay-ntfy", pc: null, dc: null, topic: topic, servers: servers, close: close,
+        rpc: function (frame) { return relaySend("rpc", frame, 30000); },
+        ping: function () { var t0 = (typeof performance !== "undefined" ? performance.now() : Date.now()); return relaySend("ping", null, 8000).then(function () { return (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0; }); }
+      };
+    }
+    // forceRelay: 已知 P2P 必不可达(对称 NAT/防火墙)时直接走去中心化中继, 省去 ICE 等待。
+    if (opts.forceRelay) {
+      try { if (dc) dc.close(); } catch (_) {}
+      try { if (pc) pc.close(); } catch (_) {}
+      var hr = buildRelayHandle();
+      await hr.ping();   // 探活: 中继不通则抛 relay_timeout
+      hr.forced = true; return hr;
+    }
     var offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await waitIce();
@@ -221,7 +286,18 @@
     // 等答超时只从「发出 offer」起算 —— 此前 ICE 收集已占去数秒, 不该吃进等答窗口。
     //   answered=true(已收到对端 answer)但仍超时 ⇒ ice_failed(建议填 TURN/隧道兜底); 否则 signal_timeout(对端离线/token 不符)。
     setTimeout(function () { if (!opened && settle) settle.reject(new Error(answered ? "ice_failed" : "signal_timeout")); }, opts.timeout || ANSWER_TIMEOUT);
-    try { return await ready; } finally { /* ready 失败时由调用方决定是否 close()→Worker 兜底 */ }
+    try {
+      return await ready;
+    } catch (e) {
+      // P2P 直连失败(对称 NAT 打洞失败/对端在线却连不上)。relayFallback!==false 时自动降级到
+      //   去中心化 ntfy 中继兜底(控制面): 关掉没用上的 DC/PC, 复用同一订阅探活一次, 通则返回中继句柄。
+      if (opts.relayFallback === false) { close(); throw e; }
+      try { if (dc) dc.close(); } catch (_) {}
+      try { if (pc) pc.close(); } catch (_) {}
+      var h = buildRelayHandle();
+      try { await h.ping(); h.fellBackFrom = String(e && e.message || e); return h; }
+      catch (e2) { close(); throw e; }
+    }
   }
 
   root.DaoSignal = {
