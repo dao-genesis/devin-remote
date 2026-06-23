@@ -1126,6 +1126,14 @@ public class MainActivity extends AppCompatActivity {
         if (w == null) return;
         try { w.onResume(); } catch (Exception ignored) {}
         try { w.resumeTimers(); } catch (Exception ignored) {}   // 全局: 恢复被冻结的所有 WebView 计时器
+        // 用户正在打字/语音输入 → 绝不切视图可见性: INVISIBLE→VISIBLE 这一帧会让 WebView 失焦,
+        //   足以顶掉软键盘/打断语音听写。此时只做无损唤醒(onResume+resumeTimers, 已在上方), 跳过可见性翻转。
+        //   (8s 看门狗每轮都会进来; 不护就会「输入中每 8s 被弹一下」。真冻死时本就非输入态, 不受影响。)
+        try {
+            int wi = tabOf(w);
+            if (wi >= 0) { Tab wt = tabs.get(wi);
+                if (wt.lastEditable && (System.currentTimeMillis() - wt.lastEditableTs) < EDIT_GUARD_MS) return; }
+        } catch (Exception ignored) {}
         try {
             // 只在真的卡 hidden 时才切可见性纠正 → 正常切标签无闪烁。
             w.evaluateJavascript("(function(){try{return document.visibilityState;}catch(e){return 'x';}})()", val -> {
@@ -4856,9 +4864,13 @@ public class MainActivity extends AppCompatActivity {
         if (t == null || t.web == null) return;
         final WebView w = t.web;
         try {
+            // 递归探同源 iframe: 单网页外壳/各板块把对话与输入框嵌在子 iframe 里, 此时外层 activeElement 是
+            //   <iframe> 而非 input/textarea → 旧判定恒为「未输入」, 护栏失效会误重载打断打字/语音。逐层下探即正解。
             w.evaluateJavascript(
-                "(function(){try{var a=document.activeElement;if(!a)return '0';var g=(a.tagName||'').toLowerCase();"
-                + "return (g==='input'||g==='textarea'||a.isContentEditable)?'1':'0';}catch(e){return '0';}})()",
+                "(function(){try{function ed(d){if(!d)return false;var a=d.activeElement;if(!a)return false;"
+                + "var g=(a.tagName||'').toLowerCase();if(g==='input'||g==='textarea'||a.isContentEditable)return true;"
+                + "if(g==='iframe'){try{return ed(a.contentDocument);}catch(e){return false;}}return false;}"
+                + "return ed(document)?'1':'0';}catch(e){return '0';}})()",
                 val -> { if (tabOf(w) < 0) return; boolean ed = val != null && val.contains("1");
                     t.lastEditable = ed; if (ed) t.lastEditableTs = System.currentTimeMillis(); });
         } catch (Exception ignored) {}
