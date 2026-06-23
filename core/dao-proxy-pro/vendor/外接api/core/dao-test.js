@@ -534,7 +534,7 @@ async function runSeededBaseCheck() {
   }
 
   const cases = [
-    ["swe-1-6", true, "基础版→播种测试桩(直接命中)"],
+    ["swe-1-6", false, "base passthrough to official (free coexist; not stub-hijacked)"],
     ["swe-1-6-fast", true, "Fast→deepseek(显式连线)"],
     ["swe-1-6-slow", false, "Slow→官方透传(未连线·播种桩不吞)"],
     ["claude-sonnet-4-6", true, "Claude族基名→deepseek(显式)"],
