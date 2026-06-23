@@ -221,7 +221,8 @@
         if (pc.iceGatheringState === "complete") return res();
         var done = false; function fin() { if (!done) { done = true; res(); } }
         pc.addEventListener("icegatheringstatechange", function () { if (pc.iceGatheringState === "complete") fin(); });
-        setTimeout(fin, 4000);
+        // host+srflx 候选通常 <1s 到齐(本端未配 TURN, 无需久等); 2.5s 封顶即发 offer, 缩短对端收到 offer 的等待。
+        setTimeout(fin, 2500);
       });
     }
     var opened = false, answered = false, settle = null;
@@ -249,7 +250,7 @@
           await pc.setRemoteDescription({ type: "answer", sdp: obj.sdp }); answered = true;
           // 已收到应答 ⇒ 对端在线且信令通; 给 P2P 打洞一个较短宽限, 到点仍没开就判 ice_failed 提前降级,
           //   不空等 WebRTC ~20s 的 connectionState=failed (能通常 <3s 就 open; 高效之中还有高效)。
-          setTimeout(function () { if (!opened && settle) settle.reject(new Error("ice_failed")); }, opts.p2pGraceMs || 8000);
+          setTimeout(function () { if (!opened && settle) settle.reject(new Error("ice_failed")); }, opts.p2pGraceMs || 4000);
         } catch (e) {}
       });
     });
