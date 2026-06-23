@@ -8632,13 +8632,21 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
             // 全覆盖: 把用户完整注入档案(K/P/S/MCP/Automations)注入该账号; 先清后注且单账号锁定项被跳过不覆盖。
             try { await applyInjectProfileToOrg(orgId, auth1, injectProfile); res.profile = true; res.playbook = true; } catch { /* 守柔 */ }
             // 校验: 回读知识库确认「道法自然准则」落地且正文完整(防截断/损坏)
-            try {
-                const back = await devinListKnowledge(orgId, auth1);
-                if (back.ok && back.learnings) {
-                    const hit = back.learnings.find((k: any) => k.name === DAO_RULES_KB_NAME);
-                    res.verified = !!(hit && typeof hit.body === 'string' && hit.body.length >= Math.max(0, rulesText.length - 4));
+            //   写后即读存在索引延迟(read-after-write lag) → 守柔退避重读至多3次(0/400/900ms);
+            //   命中即止, 仅未命中才退避, 不拖累正常路径 (verified 仅为诊断标志, 不参与 res.ok 判定)。
+            if (rulesText) {
+                const expLen = Math.max(0, rulesText.length - 4);
+                for (let attempt = 0; attempt < 3 && !res.verified; attempt++) {
+                    if (attempt > 0) await new Promise(r => setTimeout(r, attempt === 1 ? 400 : 900));
+                    try {
+                        const back = await devinListKnowledge(orgId, auth1);
+                        if (back.ok && back.learnings) {
+                            const hit = back.learnings.find((k: any) => k.name === DAO_RULES_KB_NAME);
+                            res.verified = !!(hit && typeof hit.body === 'string' && hit.body.length >= expLen);
+                        }
+                    } catch { /* 守柔 */ }
                 }
-            } catch { /* 守柔 */ }
+            }
             // 成功 = 准则KB落地 + (无桥控制剧本或已注) + (无DAO_TOKEN或已注) + 用户完整档案已应用
             res.ok = (!rulesText || res.knowledge) && (!pbBody || res.playbook) && (!token || res.secret) && res.profile;
         } catch (e: any) { res.error = e?.message || String(e); }
