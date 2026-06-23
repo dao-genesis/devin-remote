@@ -889,8 +889,8 @@ async function _pollOneAcc(a, realNo){
     if(N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }
   }catch(e){}
 }
-async function pollTrk(){
-  if(_notVisible()) return;     // 性能: 板块隐藏/后台 → 停轮询, 不再无谓轰网络(消除"刷新很忙")
+async function pollTrk(force){
+  if(!force && _notVisible()) return;     // 性能: 板块隐藏/后台 → 停轮询, 不再无谓轰网络(消除"刷新很忙"); force=用户点刷新, 不受门控
   if(_trkBusy)return; _trkBusy=true;
   _probeBudget=12; // 每轮事件流探测配额, 控网络开销
   var dot=document.getElementById("monDot"), mstat=document.getElementById("monStat");
@@ -1217,8 +1217,8 @@ async function dvRunAutoCleanNow(){
   toast("✓ 全流程完成: 清理"+cleaned+"·移出"+removed+(failed?("·失败"+failed):""));
 }
 var _quotaWarmed=false;   // 冷启动首轮: 全部已登录账号都刷一遍 → 一上来就是活数据, 不再满屏 $--
-async function autoQuotaTick(){
-  if(_notVisible()) return;     // 性能: 板块隐藏/后台 → 暂停额度刷新心跳, 显示时再补
+async function autoQuotaTick(force){
+  if(!force && _notVisible()) return;     // 性能: 板块隐藏/后台 → 暂停额度刷新心跳, 显示时再补; force=用户点刷新, 不受门控
   if(_quotaBusy || _quotaLiveBusy) return; _quotaBusy=true;   // 与对话快轮互斥, 不叠加
   try{
     var accs=loadAcc().filter(hasAuth);
@@ -1382,12 +1382,56 @@ _loop(autoBackupTick, 85000, 12000);
 // 外壳「刷新」按钮(console.html #reload)→ 立刻刷新本板块全部已登录账号额度 + 对话追踪 + 重渲
 //   (不止重载页面, 顺带刷新账号的额度及相关各项数据)。
 window.addEventListener("message", function(ev){ try{ var d=ev&&ev.data;
-  if(d && d.__rtflow==="rtRefresh"){ try{ refreshTrack(); }catch(e){} try{ doRefreshAll(); }catch(e){} }
+  if(d && d.__rtflow==="rtRefresh"){ try{ forceRefreshNow(d.acc||""); }catch(e){} }
   // 外壳广播"正开着 Devin 对话"的账号集合 → 纳入高频额度轮, 立即快刷一次 (所见即所刷)
   else if(d && d.__rtflow==="liveAccts" && Object.prototype.toString.call(d.accts)==="[object Array]"){
     var now=Date.now(), m={}; d.accts.forEach(function(k){ if(k) m[String(k).toLowerCase()]=now; });
     _dvOpenAccts=m; try{ autoQuotaLiveTick(); }catch(e){}
   }
 }catch(e){} });
+
+// ── 道并行而不相悖 · 已打开账号标签的实时识别 (即使切号板块在后台) ───────────────
+//   用户操作官网对话标签时, 切号板块被停泊到后台 → 其自身轮询/额度心跳被系统暂停(onPause), 状态/额度冻结。
+//   外壳(原生 APK / 网页 console)周期驱动本函数: 只刷「已打开为标签的账号」(数量少·1~7个),
+//   强制刷其额度 + 扫其会话状态, 即时回推顶部标签 (setTabDollars/setTabStatus)。
+//   全量 122 号轮仍受可见性门控(省网络); 这里只顾用户正在用的几个号 → 既实时, 又不卡。
+var _openBusy=false;
+async function refreshOpenAccts(){
+  if(_openBusy || _quotaBusy || _quotaLiveBusy) return;
+  var accs=loadAcc().filter(hasAuth).filter(_isDvOpen);
+  if(!accs.length) return;
+  _openBusy=true; _probeBudget=8;
+  try{
+    for(var i=0;i<accs.length;i++){ var a=accs[i];
+      try{ await DaoCore.refreshQuotaFor(a.id); }catch(e){}
+      try{ await _pollOneAcc(a, 0); }catch(e){}
+    }
+    paintDollars();
+  }catch(e){}
+  _openBusy=false;
+}
+// 外壳(原生/网页)广播「已打开的账号标签集合」→ 标记为在看(进高频额度轮) + 立即刷一次。
+function setOpenAccts(arr){
+  try{ if(typeof arr==="string") arr=JSON.parse(arr||"[]"); }catch(e){ arr=[]; }
+  var now=Date.now(), m={}; (arr||[]).forEach(function(k){ if(k) m[String(k).toLowerCase()]=now; });
+  _dvOpenAccts=m; try{ refreshOpenAccts(); }catch(e){}
+}
+// 外壳「刷新」按钮: 当前账号优先即时刷(额度+状态) → 再全量强制刷(绕过可见性门控)。点一下=立即识别清楚。
+async function forceRefreshNow(accId){
+  accId = accId ? String(accId) : "";
+  try{ if(accId) _dvOpenAccts[accId.toLowerCase()]=Date.now(); }catch(e){}
+  try{ toast("刷新中…"); }catch(e){}
+  try{
+    if(accId){ var a=loadAcc().filter(hasAuth).filter(function(x){return x.id===accId||(x.email||"").toLowerCase()===accId.toLowerCase();})[0];
+      if(a){ try{ await DaoCore.refreshQuotaFor(a.id); }catch(e){} try{ await _pollOneAcc(a,0); }catch(e){} paintDollars(); } }
+  }catch(e){}
+  try{ await pollTrk(true); }catch(e){}     // 全量状态追踪 (强制)
+  try{ await autoQuotaTick(true); }catch(e){} // 全量额度 (强制)
+  try{ paintDollars(); }catch(e){}
+  try{ toast("✓ 已刷新"); }catch(e){}
+}
+// 已打开账号的实时心跳: 不受可见性门控(只刷用户正开着的少数号), ~6s 一轮带抖动。
+//   原生 APK 另由 Native 侧每 ~6s 直接驱动 setOpenAccts() (后台 webview 自身计时器被 onPause 暂停时的兜底)。
+setTimeout(function(){ _loop(function(){ refreshOpenAccts(); }, 6000, 1500); }, 5000);
 </script>
 </body></html>

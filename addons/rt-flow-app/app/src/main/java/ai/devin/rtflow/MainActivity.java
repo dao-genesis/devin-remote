@@ -1205,6 +1205,8 @@ public class MainActivity extends AppCompatActivity {
         renderTabStrip();
         if (pageZoom != 100) applyZoom(t.web);
         resumeWeb(t.web);   // 选中即把页面拉回「可见+计时器运行」, 防止 visibilityState 卡 hidden 致交互冻死
+        // 切到账号标签 → 顺手命令切号引擎刷一次该号(状态+额度), 顶部标签金额即时显示·不等周期心跳。
+        if (t.accountJson != null) pushOpenAcctsToSwitch();
     }
 
     /** 把一个 WebView 强制拉回「页面可见 + 计时器运行」状态。
@@ -1715,15 +1717,71 @@ public class MainActivity extends AppCompatActivity {
         super.onBackPressed();
     }
 
-    /** 原地刷新当前标签的 WebView：同一实例 reload，sessionStorage 隔离的登录态不丢。 */
+    /** 原地刷新当前标签的 WebView：同一实例 reload，sessionStorage 隔离的登录态不丢。
+     *  并顺带强制切号引擎「立刻重识别当前账号的对话状态 + 额度」(即使切号板块在后台/已停泊)，
+     *  根治「点刷新无效 / 对话状态识别不到 / 额度数据老」。刷新引擎走后台 webview·与当前页交互道并行而不相悖。 */
     private void reloadActive() {
         if (active >= 0 && active < tabs.size() && tabs.get(active).web != null) {
-            tabs.get(active).web.reload();
+            Tab t = tabs.get(active);
+            t.web.reload();
+            triggerEngineRefresh(acctKeyOf(t));
             toast("刷新中…");
         } else {
             toast("无可刷新页面");
         }
     }
+
+    /** 定位切号引擎(switch.html)的 WebView —— 它承载账号池/对话状态/额度的全部探测通路。
+     *  无论它当前是前台标签还是被停泊到后台, 都能经 evaluateJavascript 驱动其引擎(不依赖其自身被冻结的计时器)。 */
+    private WebView switchWeb() {
+        for (Tab t : tabs) {
+            if (t.web != null && t.url != null && t.url.endsWith("switch.html")) return t.web;
+        }
+        return null;
+    }
+
+    /** 从账号标签取其账号键(id, 退回 email); 非账号标签返回空串。 */
+    private String acctKeyOf(Tab t) {
+        if (t == null || t.accountJson == null) return "";
+        try { JSONObject a = new JSONObject(t.accountJson); return a.optString("id", a.optString("email", "")); }
+        catch (Exception e) { return ""; }
+    }
+
+    /** 用户点刷新 → 命令切号引擎: 当前账号优先即时刷(额度+状态), 再全量强制刷(绕过可见性门控)。 */
+    private void triggerEngineRefresh(String accId) {
+        WebView sw = switchWeb();
+        if (sw == null) return;
+        final String arg = JSONObject.quote(accId == null ? "" : accId);
+        try { sw.evaluateJavascript("try{forceRefreshNow(" + arg + ")}catch(e){}", null); } catch (Exception ignored) {}
+    }
+
+    /** 把「当前已打开为标签的账号集合」推给切号引擎 → 这些号即使切号板块在后台也保持实时识别(状态+额度)，
+     *  确保顶部标签「不管有没有对话都实时显示金额」。只涉及用户正开着的少数号·轻量, 全量122号轮仍受门控省网络。 */
+    private void pushOpenAcctsToSwitch() {
+        WebView sw = switchWeb();
+        if (sw == null) return;
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (Tab t : tabs) {
+            if (t.accountJson == null) continue;
+            try {
+                JSONObject a = new JSONObject(t.accountJson);
+                String id = a.optString("id", "");
+                String email = a.optString("email", "");
+                if (!id.isEmpty()) arr.put(id.toLowerCase());
+                if (!email.isEmpty()) arr.put(email.toLowerCase());
+            } catch (Exception ignored) {}
+        }
+        try { sw.evaluateJavascript("try{setOpenAccts(" + arr.toString() + ")}catch(e){}", null); } catch (Exception ignored) {}
+    }
+
+    private static final long OPEN_REFRESH_MS = 6000;   // 已打开账号标签的实时刷新心跳周期(前台)
+    private final Runnable openAcctTick = new Runnable() {
+        @Override public void run() {
+            if (!appForeground) return;
+            pushOpenAcctsToSwitch();
+            main.postDelayed(this, OPEN_REFRESH_MS);
+        }
+    };
 
     // ── 浏览器功能 ────────────────────────────────────────────────────────
     private static final String DESKTOP_UA =
@@ -4951,6 +5009,7 @@ public class MainActivity extends AppCompatActivity {
         appForeground = false;
         main.removeCallbacks(visWatchdog);
         main.removeCallbacks(presenceTick);
+        main.removeCallbacks(openAcctTick);
         bgSince = System.currentTimeMillis();
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {} // 持久化其它网站登录 Cookie
         // App 整体转后台(切到别的应用/锁屏): 没有任何标签可见 → 暂停全部 WebView 的渲染合成/动画, 不再空耗 CPU/GPU/电量
@@ -5074,6 +5133,8 @@ public class MainActivity extends AppCompatActivity {
         main.postDelayed(visWatchdog, VIS_WATCH_MS);
         main.removeCallbacks(presenceTick);
         main.post(presenceTick);   // 前台巡检跨设备在场, 橙色标记随云端来去实时同步
+        main.removeCallbacks(openAcctTick);
+        main.post(openAcctTick);   // 前台保持「已打开账号标签」状态/额度实时识别 (不论是否在切号板块)
         // 长时间后台返回: 渲染线程可能被冻结(看着正常但点不动) → 当前标签探活(冻死则静默重载), 其余标签标记延迟探活。
         long bg = bgSince > 0 ? (System.currentTimeMillis() - bgSince) : 0;
         bgSince = 0;
