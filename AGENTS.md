@@ -78,21 +78,37 @@
   > 「/shell 多用户会话隔离」。
 - 各浏览器页的标签集 / 已开的 Devin 对话 iframe **本就按页隔离**（每次加载独立）。
 
-### ⚠️ 待完善：公网用户的「Devin 对话 / 多实例账号页」仍指向 localhost 端口
+### ✅ 已解决：公网用户的「Devin 对话 / 多实例账号页」同源直达（旧「待完善」已落地）
 
-`_shellResolveOpen` 开账号页时返回 `devin_proxy.ensureProxyForAccount` 的
-`http://localhost:<随机端口>/…`，该反代**绑在 127.0.0.1 的独立端口**，**未经 dao-bridge 隧道
-暴露**（隧道只暴露主端口 9920）。因此：
+旧病灶：`_shellResolveOpen` 曾返回 `http://localhost:<随机端口>/…`（绑 127.0.0.1·公网打不开）。
+**现状（已归一）**：`_shellResolveOpen` 一律返回**同源相对 URL** `/sessions/<id>?dao_acct=<email>`
+或 `/?dao_acct=<email>`，经**主端口 9920 同源反代**直出整 Devin SPA（`devinCloudProxyRoute`，
+mode=`devin`）。每请求按 `dao_acct`（页面 query / 同源 XHR 的 Referer）**钉号注入该账号 auth1**，
+多号并行各取各 auth 不串（见踩坑 7）。IDE 内（localhost:9920）与公网隧道（主口 9920）两端皆可达，
+含真·上传框 → 拖拽桥可投递，与手机 APK 网页一致。
 
-- **IDE 内 / 本机浏览器**：localhost 可达 → Devin 对话 iframe 正常。
-- **公网隧道用户**：`http://localhost:<port>` 指向**用户自己**的机器 → Devin 对话页加载不出来。
-  六大板块（blob-iframe + `/api/shell/*` 走 9920）不受影响，仍正常。
+> 公网暴露：`/shell` 与 `/api/shell/*` 免 token（见 extension.ts needAuth 白名单），公网用户经
+> dao-vsix 自带「公网穿透」板块（`bridgeStartTunnel` → cloudflared 快速隧道，绑 `ws.port` 9920）
+> 即可打开同一张归一网页。注意：`addons/dao-bridge`（整机直连·机控 /api/*）是**另一条**隧道，
+> 不代理 `/shell`；面向公网网页的隧道是 dao-vsix 本体的「公网穿透」板块。
 
-> 归一目标（“公网用户操作与 IDE 内完全一致”）的**最后一块**：把每账号反代改为经主端口 9920
-> 的**同源路径前缀**（如 `/i/<accKey>/…`）暴露，`_shellResolveOpen` 返回**同源相对 URL**
-> （`'self'` 已在 standalone shell 的 `frame-src` 白名单内）。需要 `devin_proxy` 支持前缀化
-> 服务（资产/接口路径重写 + 每账号 auth 注入），可参照现有 `/devin-cloud/*` 同源反代实现。
-> 此改动较大且需真实扩展宿主（VS Code）联调，宜单独成一支。
+### 道·公网渲染「穿透只传必要核心」（对照手机 APK 路线 · 三级缓存）
+
+手机 APK 由 WebView `shouldInterceptRequest` 在原生层剥 CSP/XFO 并直取 app.devin.ai，故渲染
+大头（JS/CSS bundle）走手机自身网络、隧道只传控制/鉴权。**桌面公网浏览器无此能力**：实测
+app.devin.ai 静态资产由 S3 下发、**无 `Access-Control-Allow-Origin` 头**，浏览器 ES module
+跨源 `import` 必被 CORS 拦死（旧 `/__web?u=app.devin.ai` 整页空白即此因）。302 跳真站亦受
+module CORS 约束无解。故桌面端「公网渲染只传核心」的**正解 = 同源反代 + 三级缓存**：
+
+1. **浏览器级**：不变资源（`/assets/*`）响应钉 `Cache-Control: public, max-age=31536000, immutable`
+   → 每个公网浏览器首取后本地缓存，后续导航/多实例零穿隧。
+2. **宿主磁盘 L2**（`~/.dao/asset-cache/`，键=`mode|path` 的 sha256）：内容哈希不变 → 落盘即永鲜；
+   **跨宿主重载、跨多公网用户共享同一份资产** → 每个 bundle 全局只穿隧一次。见 `staticCachePut`
+   / `staticCacheGetDisk`（extension.ts）。
+3. **宿主内存 L1**：热点资产 Map（上限 256），命中最快。
+
+> 经此，稳态隧道只承载 API/HTML 等**动态核心数据**（auth 注入后的对话流/列表），渲染负荷由公网
+> 浏览器自身缓存承担 —— 即用户所述「网页渲染消耗公网浏览器的数据、穿透只传必要核心」的桌面实现。
 
 ---
 
@@ -153,6 +169,13 @@
    均自动匹配）→ 校验通过、留在反代源、保持登录。配套把 HTML/JS/Location 的 `https://app.devin.ai`
    改为**裸前缀全量改写**（含单引号/反引号结尾），并加 `location.assign/replace`+`history` 运行时兜底。
    排错口诀：先 `curl <proxyPort>/<orgResolve JSON>` 看 `webapp_host` 是否=本地 Host；别再去怀疑 auth1。
+7. **多实例「串号」之真因 = 他号 auth1 未缓存时回退全局活动号（已修 · 3.50.14）。** `?dao_acct=<他号>`
+   开页时，旧逻辑若该号 auth1 不在 6 条缓存内即回退 `ws.devinAuth1`（活动/同步号）→ 全池未存号
+   一律冒名活动号渲染（实测开 mjeodo 却渲 finley 的 shamkharcig）。**修法**：新增 `saveAccountAuthRecord`
+   （落真 auth1 不污染 ws.*）+ `ensureAccountAuth`（按需用账号池密码登录取号并落盘·in-flight 去重防
+   页面+XHR 并发重登）；页面注入块与 `/api` 转发块均「他号未缓存 → 取号；取失败宁空注入不冒名」。
+   验证：`curl 'localhost:9920/devin-cloud/api/users/post-auth?dao_acct=<他号>'` 应返**该号**的
+   `org_id/org_name`，绝不返活动号的。
 
 ---
 

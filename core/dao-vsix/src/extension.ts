@@ -197,16 +197,42 @@ let _rtflowModule: RtflowModule | null = null;
 // ═══════════════════════════════════════════════════════════
 const upstreamHttpAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 24 });
 const upstreamHttpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 24, rejectUnauthorized: false });
-// 执今之道见小曰明 — Vite 内容哈希静态资源(/assets/*)内存缓存
-// 哈希变则键变 → 永不陈旧; 免重复穿隧道 → 二次导航秒开
-const staticAssetCache = new Map<string, { status: number; headers: any; body: string; contentType: string; binary?: boolean }>();
+// 执今之道见小曰明 — Vite 内容哈希静态资源(/assets/*)缓存 (内存 L1 + 磁盘 L2)
+// 哈希变则键变 → 永不陈旧; 免重复穿隧道 → 二次导航秒开。
+// 道·「穿透只传必要核心」: 公网用户的渲染负荷(JS/CSS/字体, 占带宽大头)经反代首取后落盘 L2,
+//   此后任一用户/任一次宿主重载皆命中本地缓存零穿隧 → 隧道只剩 API/HTML 等动态核心数据。
+//   (app.devin.ai 静态资产 S3 无 CORS 头, 浏览器无法跨源直取 ES module; 故同源反代 + 落盘
+//    L2 + 浏览器 immutable 缓存三级, 是桌面端「公网渲染只传核心」的正解。)
+interface StaticCacheVal { status: number; headers: any; body: string; contentType: string; binary?: boolean }
+const staticAssetCache = new Map<string, StaticCacheVal>();
 const STATIC_CACHE_MAX = 256;
-function staticCachePut(key: string, val: { status: number; headers: any; body: string; contentType: string; binary?: boolean }) {
+const STATIC_CACHE_DIR = path.join(os.homedir(), '.dao', 'asset-cache');
+function _staticCacheFile(key: string): string {
+    const safe = crypto.createHash('sha256').update(key).digest('hex');
+    return path.join(STATIC_CACHE_DIR, safe + '.json');
+}
+function staticCachePut(key: string, val: StaticCacheVal) {
     if (staticAssetCache.size >= STATIC_CACHE_MAX) {
         const first = staticAssetCache.keys().next().value;
         if (first !== undefined) staticAssetCache.delete(first);
     }
     staticAssetCache.set(key, val);
+    // 写穿磁盘 L2 (异步·不阻塞宿主; 失败守柔) → 跨宿主重载/多用户共享同一份资产
+    try {
+        fs.mkdir(STATIC_CACHE_DIR, { recursive: true }, () => {
+            try { fs.writeFile(_staticCacheFile(key), JSON.stringify(val), 'utf8', () => {}); } catch { /* 守柔 */ }
+        });
+    } catch { /* 守柔 */ }
+}
+// 从磁盘 L2 取并回灌内存 L1 (同步读·仅静态资产首次内存未命中时调用一次)。
+function staticCacheGetDisk(key: string): StaticCacheVal | null {
+    try {
+        const f = _staticCacheFile(key);
+        if (!fs.existsSync(f)) return null;
+        const val = JSON.parse(fs.readFileSync(f, 'utf8')) as StaticCacheVal;
+        if (val && typeof val.body === 'string') { staticAssetCache.set(key, val); return val; }
+    } catch { /* 守柔 */ }
+    return null;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -10095,7 +10121,8 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
     const isImmutableAsset = /\/assets\/.+\.(js|css|woff2?|ttf|png|jpg|jpeg|svg|ico|wasm)(\?|$)/i.test(targetPath);
     const cacheKey = mode + '|' + targetPath;
     if (isImmutableAsset && (req.method || 'GET') === 'GET') {
-        const hit = staticAssetCache.get(cacheKey);
+        // L1 内存 → L2 磁盘 (跨宿主重载/多用户共享; 命中即零穿隧, 隧道只剩动态核心数据)
+        const hit = staticAssetCache.get(cacheKey) || staticCacheGetDisk(cacheKey);
         if (hit) return { _proxy: true, status: hit.status, headers: hit.headers, body: hit.body, contentType: hit.contentType, binary: hit.binary };
     }
 
