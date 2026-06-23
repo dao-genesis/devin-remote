@@ -18,14 +18,20 @@
 //         不可用时 serve() 拒绝去中心化信令(不降级安全), Worker 兜底仍在。
 // ═══════════════════════════════════════════════════════════════════════════
 (function (root) {
-  // 默认公共 ntfy 实例 (多家 → 去中心化, 任一可达即通; 可自托管私有实例进一步去中心)。
-  var DEFAULT_SERVERS = ["https://ntfy.sh", "https://ntfy.envs.net"];
+  // 默认公共 ntfy 实例 (多家互不隶属 → 去中心化, 任一可达即通; 可自托管私有实例进一步去中心)。
+  //   单一 broker 会被限流/封锁(实测 Cloudflare 免费 Worker 触发 1015 限流、GFW 拦 SNI),
+  //   故默认就铺开多家**独立运营**的公共 ntfy 实例; 应答方对每家各持一条 WS 订阅、客户端向每家
+  //   各发一份信令, 只要有一家可达握手即成 —— 任何单点限流/封锁都不致命。各实例均已实测
+  //   支持匿名 POST 发布 + /<topic>/ws 订阅往返。
+  var DEFAULT_SERVERS = ["https://ntfy.sh", "https://ntfy.envs.net", "https://ntfy.adminforge.de", "https://ntfy.mzte.de"];
   var CHUNK = 1200;          // 单条信令分片上限 (规避公共 broker 4KB 报文限制)
   var ANSWER_TIMEOUT = 25000;
   var hasSubtle = (typeof crypto !== "undefined" && crypto.subtle && typeof crypto.subtle.digest === "function");
+  // 多家公共 STUN (互不隶属 → 单点不可达不致命; 仅用于 NAT 反射地址发现, 不中转数据 → 仍 P2P 直连)。
   var STUN = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
     { urls: "stun:stun.cloudflare.com:3478" }
   ];
 
