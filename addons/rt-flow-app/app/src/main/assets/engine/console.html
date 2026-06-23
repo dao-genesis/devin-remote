@@ -413,11 +413,29 @@
   persist();
   function relayUrl(){ return ENDPOINT + "/relay/" + encodeURIComponent(SESSION); }
 
-  // ── 与手机的统一中继调用 (本页 + 各 srcdoc 板块共用同一通道) ─────────────
-  function relay(path, body, timeoutMs){
+  //__FAILOVER_START__ (此块经 test/console-failover.test.js 切片 eval 实测, 勿删标记)
+  // ── 通道自愈 failover: 单网页不再被钉死在「打开它的那个(可能已死的)隧道域名」上 ──────────
+  //   病灶(用户「刷新通道后打不开」根因): ENDPOINT 初值 = 打开页面的源(location.origin)。临时隧道
+  //   (cloudflared/lhr.life)随重启轮换, 旧域名立刻 530/503 死亡 → 旧逻辑所有 relay() 都打这一个死域名
+  //   → 整页打不开, 且无任何回退。
+  //   修法: 任一调用「网络层失败 / 回 5xx / 无 agent」时, 自动按候选清单探活并切到活通道(稳定锚点 =
+  //   零账号中继 Worker, 始终在线·可跨源 CORS*), 切中即持久化, 后续直接走活通道。探活廉价(getState·6s),
+  //   成功路径零额外开销。绝不破坏: 全部候选皆死时原样返回原结果/原错误, 行为与旧版一致。
+  var STABLE_RELAY = String((CFG&&CFG.worker)||qp("worker")||"https://dao-relay-do.zhouyoukang.workers.dev").replace(/\/+$/,"");
+  function _candBases(){
+    var seen=Object.create(null), out=[];
+    function add(b){ b=String(b||"").replace(/\/+$/,""); if(b&&!seen[b]){ seen[b]=1; out.push(b); } }
+    add(ENDPOINT);
+    try{ add(localStorage.getItem("rtflow.rn.endpoint.good")); }catch(e){}
+    try{ var ex=(CFG&&CFG.endpoints)||[]; for(var i=0;i<ex.length;i++) add(ex[i]); }catch(e){}
+    add(STABLE_RELAY);
+    try{ add(location.origin); }catch(e){}
+    return out;
+  }
+  function _relayAt(base, path, body, timeoutMs){
     var ctrl = (typeof AbortController!=="undefined") ? new AbortController() : null;
     var to = ctrl ? setTimeout(function(){ try{ctrl.abort();}catch(e){} }, timeoutMs||30000) : null;
-    return fetch(relayUrl(), {
+    return fetch(base + "/relay/" + encodeURIComponent(SESSION), {
       method:"POST",
       headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+TOKEN },
       body: JSON.stringify({ path:path, method:"POST", body: body||{} }),
@@ -427,6 +445,34 @@
       return { status:r.status, body:j };
     }); }).finally(function(){ if(to) clearTimeout(to); });
   }
+  // 「通道已死」判定: 网络层失败(无 res) / 5xx(含隧道 530·中继 503) / agent 不在线。
+  //   不把 200 的 bad_json 当死 → 避免对个别非 JSON 正常响应误切换。
+  function _dead(res){ if(!res) return true; if(res.status===0||res.status>=502) return true;
+    var b=res.body; if(b&&(b.error==="no_agent"||b.error==="no_tunnel")) return true; return false; }
+  var _resolving=null;
+  function _resolveLive(){
+    if(_resolving) return _resolving;
+    var bases=_candBases();
+    _resolving=(function go(i){ if(i>=bases.length) return Promise.resolve(null);
+      return _relayAt(bases[i], "/api/rpc", {cmd:"getState"}, 6000)
+        .then(function(res){ return _dead(res)?go(i+1):bases[i]; }, function(){ return go(i+1); });
+    })(0).then(function(found){ _resolving=null;
+      if(found){ if(found!==ENDPOINT){ ENDPOINT=found; persist(); }
+        try{ localStorage.setItem("rtflow.rn.endpoint.good", found); }catch(e){} }
+      return found;
+    }, function(){ _resolving=null; return null; });
+    return _resolving;
+  }
+  // ── 与手机的统一中继调用 (本页 + 各 srcdoc 板块共用同一通道) ─────────────
+  function relay(path, body, timeoutMs){
+    return _relayAt(ENDPOINT, path, body, timeoutMs).then(function(res){
+      if(!_dead(res)) return res;
+      return _resolveLive().then(function(found){ return found ? _relayAt(ENDPOINT, path, body, timeoutMs) : res; });
+    }, function(err){
+      return _resolveLive().then(function(found){ if(found) return _relayAt(ENDPOINT, path, body, timeoutMs); throw err; });
+    });
+  }
+  //__FAILOVER_END__
 
   // 资源原文 (板块 HTML / 引擎 JS) = 全网一致的静态死文件 → 走公共 CDN 直取。
   //   旧架构的根本瓶颈: 板块 HTML + 其 JS 依赖近 200KB、需经"手机弱网中继"分 4 次往返取回,
