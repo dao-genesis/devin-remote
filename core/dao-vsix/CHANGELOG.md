@@ -2,6 +2,11 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.26
+- **闭合「内穿自愈环」的消费端(云端 Agent 不再依赖用户重发 URL)**。根因:发布端早已闭环(`bridgeLivenessTick` 每 30s 探活,死则刷新隧道并经 `reinjectBridgeToAllAccounts` 把新 URL 反向注入回知识条目「DAO Bridge 内网穿透文档」);唯一缺口是**消费端**——云端 Agent 旧 URL 打不通时去问用户,而不是**重读这条会被自动改写的知识条目**。
+  - `bridgeGenerateCloudMd()` 新增「⚡ 云端 Agent · 断线零人工自愈」配方段(随每次反向注入持久写入知识条目):健康探测 5xx/超时/DNS 失败 = 隧道已轮换 → 不问用户,重读本知识条目(插件 ≤30s 自动改写为新 URL)→ 仍旧则每 30s 重读、最多约 5 分钟接管。整条「自动识别→自动刷新→自动反注入本库→云端重读本库」链路闭合,零人工。
+  - 纯文档生成段新增,不触隧道/服务逻辑;构建护栏 `daoDropBridgeJs` 解析通过、rt-flow 119 PASS。
+
 ## 3.50.25
 - **根治两个拖拽上传(下载文件 / 近期对话内容 → 网页上传框)**。根因:外壳 `#convdrop` 覆盖层(`pointer-events:auto`·`inset:0`)拦截**对话拖拽**的 drop 后走 `reopen`(在网页打开)分支,从不上传;下载文件拖拽则**无外壳落点**、仅靠跨源 iframe 原生 DnD 投递,在 VS Code webview 跨源子帧里不稳。两者都没真正把内容喂进页面上传框。
   - **改为「外壳同源接住 drop → postMessage 命令内嵌桥执行上传」**:外壳(父文档)对对话卡/下载卡的 drop 100% 可靠接住(同文档),落点即 `postMessage({__daoUpload})` 给当前账号标签的 iframe;内嵌桥(`daoDropBridgeJs`)新增 `message` 监听 → `fetch` 同源 `/__convmd`|`/__dlfile` 取字节 → `feed()` 穿透 shadowDOM 喂入上传框。**不再依赖跨 iframe 原生 DnD**,两类拖拽走同一条稳路。
