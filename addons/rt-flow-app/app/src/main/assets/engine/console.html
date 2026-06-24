@@ -508,7 +508,7 @@
     });
   }
   // ── 与手机的统一中继调用 (本页 + 各 srcdoc 板块共用同一通道): P2P 优先, 不通无缝回退 HTTP ──
-  function relay(path, body, timeoutMs){
+  function _relayDirect(path, body, timeoutMs){
     if(_p2pAlive()){
       return _relayP2P(path, body).then(function(res){
         return _dead(res) ? _relayHttp(path, body, timeoutMs) : res;   // P2P 通但应答异常 → 回退 HTTP(并触发自愈)
@@ -518,6 +518,28 @@
       });
     }
     return _relayHttp(path, body, timeoutMs);
+  }
+  // ── 中继串行化队列 (根因级修复·道法自然): 手机端按帧串行应答 (RelayService 长轮询单帧出队),
+  //   本页同时发起的多路 RPC (镜像轮询 / 下载列表 / 金库 history+history_devin 双取 / claim / ping)
+  //   一旦并发涌入就互相挤占 → 后到者迟迟轮不到 → 8~12s 超时 / 504 → 历史半页空、镜像第二行消失、
+  //   下载列表空。实测: 三路 vaultLoad 并发 → 仅 1 路 200, 余 2 路 abort/504; 改串行后逐路皆 200。
+  //   修法: 所有 relay() 进单通道 FIFO (并发上限 1), 每帧超时从"真正派发(出队)"起算 —— 排队期间
+  //   不计时, 杜绝"还没轮到就先超时"。成功路径与旧版逐字节一致, 仅去除自相挤占。
+  var _rqQueue=[], _rqInFlight=0, _RQ_MAX=1;
+  function _rqPump(){
+    while(_rqInFlight<_RQ_MAX && _rqQueue.length){
+      var j=_rqQueue.shift(); _rqInFlight++;
+      (function(job){
+        var p; try{ p=_relayDirect(job.path, job.body, job.timeoutMs); }catch(e){ p=Promise.reject(e); }
+        Promise.resolve(p).then(function(r){ _rqInFlight--; _rqPump(); job.resolve(r); },
+                                function(e){ _rqInFlight--; _rqPump(); job.reject(e); });
+      })(j);
+    }
+  }
+  function relay(path, body, timeoutMs){
+    return new Promise(function(resolve, reject){
+      _rqQueue.push({ path:path, body:body, timeoutMs:timeoutMs, resolve:resolve, reject:reject }); _rqPump();
+    });
   }
   //__P2P_END__
 
@@ -859,9 +881,15 @@
   function internalKey(url){ try{ var m=String(url||"").match(/engine\/([a-z0-9_]+\.html)/i); return m?(FILE2KEY[m[1].toLowerCase()]||null):null; }catch(e){ return null; } }
   function acctTag(a){ if(!a||typeof a!=="object") return ""; var n=(a.no!=null&&a.no!=="")?("#"+a.no):""; var o=a.orgName||"";
     var s=[n,o].filter(Boolean).join(" "); return s||(a.email||""); }
-  var _mirrorSig="";
+  var _mirrorSig="", _mirrorEverLoaded=false;
   function renderMirror(){
-    if(!APK_TABS.length){ if(_mirrorSig!=="\u2205"){ _mirrorSig="\u2205"; mirrorEl.className="empty"; mirrorEl.innerHTML=""; } return; }
+    if(!APK_TABS.length){
+      // 双行页面栏: 第二行(手机标签镜像)恒在 —— 旧逻辑空标签即给 .empty(display:none)致「第二行没了」。
+      //   首轮未回前显「正在同步」, 确认手机无标签后显「暂无」, 始终保留该行不塌陷。
+      var es=_mirrorEverLoaded?"L\u2205":"\u2205";
+      if(_mirrorSig!==es){ _mirrorSig=es; mirrorEl.className="";
+        mirrorEl.innerHTML='<span class="mlab">\uD83D\uDCF1 '+(_mirrorEverLoaded?"手机当前无打开的网页标签":"正在同步手机标签…")+'</span>'; }
+      return; }
     // 在场去重统计: 所有标签 viewers 并集 (含 __phone__ 与各 web_* 客户端) → 当前正在操作的用户数。
     var seen={}, activeVid=0;
     APK_TABS.forEach(function(tb){ if(tb.active) activeVid=tb.id;
@@ -909,7 +937,7 @@
     if(_mirrorBusy || document.hidden || !SESSION || !TOKEN || _userBusy()) return;   // 你正在打字/语音 → 让出主线程, 输入间隙(~2.5s)再续刷镜像
     _mirrorBusy=true;
     relay("/api/rpc", { cmd:"browseListTabs" }, 12000).then(function(res){
-      if(res && res.status===200 && res.body && res.body.ok && res.body.tabs){ APK_TABS=res.body.tabs; renderMirror(); claimFront(); }
+      if(res && res.status===200 && res.body && res.body.ok){ _mirrorEverLoaded=true; APK_TABS=res.body.tabs||[]; renderMirror(); claimFront(); }
     }).catch(function(){}).finally(function(){ _mirrorBusy=false; });
   }
   function startMirror(){ if(_mirrorPollT) return; pollApkTabs(); _mirrorPollT=setInterval(pollApkTabs, 3500); }
@@ -1103,16 +1131,33 @@
     }).catch(function(){ toast("操作未送达 (检查穿透/远程操控)"); }); }catch(e){}
   }
   window._phoneDlAction=phoneDlAction;
+  // ── 经内网穿透取回手机下载文件字节 (downloadFetch RPC: 仅按序号取, 路径留在手机不外发) ──
+  //   取回后据 to: 'save'=落本机浏览器下载器; 'page'=注入当前 Devin 标签上传框。皆走加密中继, 公共 broker 只见密文。
+  function phoneDlFetch(idx, name, mime, to){
+    toast("经穿透取回 "+(name||"文件")+" …");
+    relay("/api/rpc", { cmd:"downloadFetch", index:idx, base64:true }, 30000).then(function(res){
+      var b=res&&res.body||{}; var b64=b.content||b.b64||b.data||"";
+      if(!b64){ toast("取回失败 "+(b.error?("· "+b.error):"(需手机端 v0.37.39+ 且已开远程操控)"),true); return; }
+      if(to==="page"){ injectFileToActiveTab(name||"download", mime||"application/octet-stream", b64); return; }
+      try{ var a=document.createElement("a"); a.href="data:"+(mime||"application/octet-stream")+";base64,"+b64; a.download=name||"download"; document.body.appendChild(a); a.click(); a.remove(); toast("✓ 已取到本机: "+(name||"")); }
+      catch(e){ toast("保存失败: "+(e&&e.message||e),true); }
+    }).catch(function(){ toast("取回未送达 (检查穿透/远程操控)"); });
+  }
+  window._phoneDlFetch=phoneDlFetch;
   function renderDl(){
     var sess=window.__rnDownloads, ph=_phoneDl||[]; var html="";
     if(ph.length){ html+=ph.slice().map(function(d){
       var idx=(typeof d.index==="number")?d.index:-1; var avail=d.avail!==false;
-      var acts=(idx>=0&&avail)?('<div style="margin-top:5px;display:flex;gap:6px">'
+      var nm=_esc(d.name||"download"), mm=_esc(d.mime||"application/octet-stream");
+      var acts=(idx>=0&&avail)?('<div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap">'
+        +'<span class="dlact" onclick="event.stopPropagation();_phoneDlFetch('+idx+',\''+nm+'\',\''+mm+'\',\'save\')" style="cursor:pointer;color:#d2a8ff">⬇ 取到本机</span>'
+        +'<span class="dlact" onclick="event.stopPropagation();_phoneDlFetch('+idx+',\''+nm+'\',\''+mm+'\',\'page\')" style="cursor:pointer;color:#f0883e">⬆ 传到当前页</span>'
         +'<span class="dlact" onclick="event.stopPropagation();_phoneDlAction('+idx+',\'open\')" style="cursor:pointer;color:#3fb950">打开</span>'
         +'<span class="dlact" onclick="event.stopPropagation();_phoneDlAction('+idx+',\'share\')" style="cursor:pointer;color:#58a6ff">分享</span>'
         +'<span class="dlact" onclick="event.stopPropagation();_phoneDlAction('+idx+',\'delete\')" style="cursor:pointer;color:#f85149">删除</span></div>'):'';
-      return '<div class="dlrow"><div class="nm">'+_esc(d.name||"download")+'</div>'
-        +'<div style="color:#7d8590">手机 · '+_esc(d.sizeText||"")+'</div>'+acts+'</div>';
+      var dragAttr=(idx>=0&&avail)?(' draggable="true" data-dlidx="'+idx+'" data-dlname="'+nm+'" data-dlmime="'+mm+'"'):'';
+      return '<div class="dlrow"'+dragAttr+'><div class="nm">'+nm+'</div>'
+        +'<div style="color:#7d8590">手机 · '+_esc(d.sizeText||"")+(idx>=0&&avail?' · 可拖拽/取回':"")+'</div>'+acts+'</div>';
     }).join(""); }
     if(sess.length){ html+=sess.slice().reverse().map(function(d){
       return '<div class="dlrow"><div class="nm">'+_esc(d.name||"download")+'</div><div style="color:#7d8590">本页 · '+(d.ts?new Date(d.ts).toLocaleTimeString():"")+'</div></div>';
@@ -1121,17 +1166,57 @@
   }
   document.getElementById("dlBtn").onclick=function(e){ e.stopPropagation(); renderDl(); fetchPhoneDl(); daoFloat.classList.remove("show"); dlPanel.classList.toggle("show"); menuPop.classList.remove("show"); };
   document.getElementById("dlClose").onclick=function(e){ e.stopPropagation(); dlPanel.classList.remove("show"); };
+  // 下载行网页拖拽: 载荷带文件名 + 序号(供拖到文本框/外部应用; 真正取字节走「取到本机/传到当前页」按钮经穿透)。
+  dlList.addEventListener("dragstart", function(ev){
+    var row=ev.target.closest&&ev.target.closest(".dlrow[data-dlidx]"); if(!row) return;
+    var idx=+row.getAttribute("data-dlidx"), nm=row.getAttribute("data-dlname")||"download", mm=row.getAttribute("data-dlmime")||"";
+    try{ var dt=ev.dataTransfer; if(dt){ dt.effectAllowed="copy";
+      dt.setData("text/plain", nm);
+      dt.setData("application/x-dao-drag", JSON.stringify({ type:"download", index:idx, name:nm, mime:mm })); } }catch(x){}
+  });
   window.addEventListener("message", function(ev){ try{ var d=ev.data; if(!d) return;
     if(d.__rtflow==="download"&&d.name){ window.__rnDownloads.push({name:d.name,ts:Date.now()}); if(dlPanel.classList.contains("show")) renderDl(); }
     // 账号型「打开」(板块里点某号 ⚡/打开对话 → __rn._openDevin 回传): 在外壳里网页内原生开该号 Devin 标签
     // (经 /uv-init 注该号 auth → 登录态完整), 这是「单网页内打开官网并真登录」的本源落点。
     else if(d.__rtflow==="openDevin"&&d.url){ daoFloat.classList.remove("show"); openInPage(d.url, d.acct||"", d.title||""); }
+    // 🌊 全服通近期对话 / 📥 下载项「⬆ 传到当前页」: 子页(同源)把经内网穿透取回的文件字节(b64)投递过来,
+    //   注入当前活动 Devin 标签的上传框 (Devin 标签经中继同源反代 → 父页可直接访问其 contentDocument)。
+    else if(d.__rtflow==="daoUploadFile"&&d.name){ injectFileToActiveTab(d.name, d.mime||"application/octet-stream", d.b64||""); }
   }catch(e){} });
+
+  // ── 把文件注入当前活动 Devin/网页标签的上传框 (同源反代标签可直达 contentDocument) ──
+  function _activeWebTab(){ var t=tabs[active]; return (t&&t.kind==="web")?t:null; }
+  function _b64ToU8(b64){ try{ var s=atob(b64||""); var u=new Uint8Array(s.length); for(var i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return u; }catch(e){ return new Uint8Array(0); } }
+  function injectFileToActiveTab(name, mime, b64){
+    var t=_activeWebTab();
+    if(!t){ toast("请先在控台内打开一个 Devin 标签作为上传目标"); return; }
+    var win, doc;
+    try{ win=t.fr.contentWindow; doc=t.fr.contentDocument; }catch(e){ win=null; doc=null; }
+    if(!win||!doc){ toast("当前标签跨源不可注入(请在生产控台内打开 Devin 标签)"); return; }
+    var inp=null;
+    try{ var ins=doc.querySelectorAll('input[type=file]'); inp=ins[ins.length-1]||null; }catch(e){}
+    if(!inp){ toast("当前页未找到上传框 · 先在该页点开「附件/上传」再传"); return; }
+    try{
+      var u8=_b64ToU8(b64);
+      var F=win.File||window.File, DT=win.DataTransfer||window.DataTransfer;
+      var file=new F([u8], name, { type:mime });
+      var dt=new DT(); dt.items.add(file);
+      inp.files=dt.files;
+      inp.dispatchEvent(new (win.Event||Event)("input", { bubbles:true }));
+      inp.dispatchEvent(new (win.Event||Event)("change", { bubbles:true }));
+      toast("✓ 已注入上传框: "+name);
+    }catch(e){ toast("注入失败: "+(e&&e.message||e),true); }
+  }
+  window.injectFileToActiveTab=injectFileToActiveTab;
 
   // ── 悬浮窗拖拽: 标题栏按住拖动整窗 (复刻 APK head.setOnTouchListener; 触摸+鼠标双支持) ──
   function makeDraggable(panel, handle){
     if(!panel||!handle) return; var sx,sy,ox,oy,drag=false;
-    function down(e){ var p=(e.touches&&e.touches[0])||e; sx=p.clientX; sy=p.clientY;
+    function down(e){
+      // 关闭❌等可点控件落在标题栏内: 旧逻辑此处 preventDefault(touchstart) 吞掉了其合成 click →
+      //   触屏上「关闭按钮没反应」「悬浮框关不掉」。落在 .x / 按钮 / 链接上时, 不拖拽、不拦默认 → 放行点击。
+      if(e.target && e.target.closest && e.target.closest(".x,button,a,input,select")) return;
+      var p=(e.touches&&e.touches[0])||e; sx=p.clientX; sy=p.clientY;
       var r=panel.getBoundingClientRect(); var pr=panel.parentElement?panel.parentElement.getBoundingClientRect():{left:0,top:0};
       ox=r.left-pr.left; oy=r.top-pr.top;
       panel.style.right="auto"; panel.style.left=ox+"px"; panel.style.top=oy+"px";

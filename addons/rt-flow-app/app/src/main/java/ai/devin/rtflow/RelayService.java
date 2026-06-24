@@ -1467,6 +1467,12 @@ public class RelayService extends Service {
             MainActivity m = MainActivity.sInstance;
             if (m != null) m.runOnUiThread(() -> m.ipcDownloadAction(recIdx, action));
         }
+        /** 网页控台「取到本机 / 传到当前页」: 按序号读手机下载文件字节(base64)。路径留在手机本机, 不外发。 */
+        @JavascriptInterface public String downloadFetch(int recIdx) {
+            if (!remoteOpsEnabled) return "";
+            MainActivity m = MainActivity.sInstance;
+            return m != null ? m.ipcReadDownload(recIdx) : "";
+        }
 
         @JavascriptInterface public String browseGetCookies(String url) {
             if (!remoteOpsEnabled) return "";
