@@ -406,6 +406,21 @@
     if(i>=0){ a.splice(i,1); shToast("已取消收藏"); } else { a.unshift({url:u,title:curTitle()}); shToast("已收藏"); }
     setBM(a); updateStar(); };
 
+  // 根挂载代理续命: 每 60s 对仍打开的根挂载标签 ping 手机 → 刷新其 (源站,账号) 代理活跃时刻。
+  // 手机端「空闲回收」据此只拆「浏览器已离开(关页/切站)」的代理, 对仍打开的实时会话(含 WebSocket/SSE
+  // 长连接·无 HTTP 请求经过)零误拆。只续命不新建 → 久用公网侧 socket/线程/隧道恒有界, 不再越攒越卡。
+  setInterval(function(){
+    try{
+      var seen={};
+      for(var i=0;i<tabs.length;i++){ var t=tabs[i];
+        if(t&&t.kind==="web"&&t.proxyOrigin){
+          var k=t.proxyOrigin+"|"+(t.acct||"_"); if(seen[k]) continue; seen[k]=1;
+          fetch("/pxkeep?target="+encodeURIComponent(t.proxyOrigin)+"&acct="+encodeURIComponent(t.acct||"")).catch(function(){});
+        }
+      }
+    }catch(e){}
+  },60000);
+
   // 下载 / 书签面板 (📥): 浏览器原生下载该号文件已落本设备; 此处汇总本次下载 + 书签
   var dlPanel=document.getElementById("dlPanel"); var downloads=[];
   window.addEventListener("message",function(ev){ var d=ev&&ev.data;

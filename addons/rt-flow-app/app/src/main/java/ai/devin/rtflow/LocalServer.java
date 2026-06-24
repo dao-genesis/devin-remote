@@ -53,6 +53,8 @@ public final class LocalServer {
         /** 公网根挂载: 为 (源站,账号) 的根挂载端口再起一条专属 cloudflared 快速隧道 → 返回 https 公网 URL。
          *  公网任意浏览器据此 iframe 内嵌即享根挂载(真实路径逐字一致, 不必回退 /px); 失败返回 ""。 */
         default String proxyPublicUrl(String target, String acct) { return ""; }
+        /** 控台对仍打开的根挂载标签续命: 刷新该 (站,号) 代理的活跃时刻 → 空闲回收只拆已离开(关页)的代理, 实时会话零误拆。 */
+        default void proxyKeepAlive(String target, String acct) {}
         /** /i-init: 校验 token + 该号有登录态 → 回 redirect 路径 (/i/<encAcc>/<u>); null=不可用。
          *  与 dao-relay Worker /i-init 一致(APK 自带金库, 故不下发 cookie, /i/ 每请求按 acct 直查)。 */
         default String iInitRedirect(String token, String acc, String u) { return null; }
@@ -235,6 +237,14 @@ public final class LocalServer {
                     write(out, (pu != null && !pu.isEmpty()) ? 200 : 502,
                           (pu != null && !pu.isEmpty()) ? "{\"url\":" + HttpBridge.jsonStr(pu) + "}" : "{\"error\":\"proxy_public_failed\"}");
                     sock.close(); return;
+                }
+                // 根挂载代理续命 /pxkeep?target=<enc>&acct=<enc>: 控台对仍打开的标签周期 ping → 刷新该代理活跃时刻,
+                // 使空闲回收只拆「浏览器已离开(关页)」的代理, 仍打开的实时会话(含长连接)零误拆。只续命不新建。
+                if (qe >= 0 ? pe.substring(0, qe).equals("/pxkeep") : pe.equals("/pxkeep")) {
+                    String target = urlDecode(queryParam(qs, "target"));
+                    String acct = urlDecode(queryParam(qs, "acct"));
+                    if (!target.isEmpty()) disp.proxyKeepAlive(target, acct);
+                    write(out, 200, "{\"ok\":1}"); sock.close(); return;
                 }
                 // 浏览器: 原样拿 APK 真实页面与其 JS 资源 (免鉴权拿页面; 页面内每个 RPC 仍需 Bearer Token)。
                 // 去掉 query (?session=...) 再匹配。

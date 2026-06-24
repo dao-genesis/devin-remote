@@ -38,6 +38,7 @@ public final class ProxyServer {
     private volatile ServerSocket server;
     private volatile int port = -1;
     private volatile boolean running = false;
+    private volatile long lastActive = System.currentTimeMillis();   // 最近一次有请求经此代理的时刻 → 供上层按空闲 TTL 拆除 (久用不再无界累积端口/线程/隧道)
     private Thread acceptThread;
     private final ExecutorService pool = Executors.newFixedThreadPool(16, r -> {
         Thread t = new Thread(r, "rtflow-proxy-w"); t.setDaemon(true); return t;
@@ -49,6 +50,8 @@ public final class ProxyServer {
 
     public int getPort() { return port; }
     public boolean isRunning() { return running; }
+    public long lastActive() { return lastActive; }
+    public void touch() { lastActive = System.currentTimeMillis(); }   // 控台浏览器对仍打开的标签续命 → 即便走长连接无 HTTP 请求经过, 也不被空闲回收误拆
     public String target() { return target; }
     public String acct() { return acct; }
 
@@ -57,6 +60,7 @@ public final class ProxyServer {
         server = new ServerSocket(0, 128, InetAddress.getByName("0.0.0.0"));
         port = server.getLocalPort();
         running = true;
+        lastActive = System.currentTimeMillis();
         acceptThread = new Thread(this::acceptLoop, "rtflow-proxy"); acceptThread.setDaemon(true); acceptThread.start();
         return port;
     }
@@ -65,6 +69,9 @@ public final class ProxyServer {
         running = false;
         try { if (server != null) server.close(); } catch (Exception ignored) {}
         server = null; port = -1;
+        // 关键: 必须连带关掉工作线程池, 否则即便停了 server, 这 16 条 fixed 线程仍常驻进程 →
+        //   旧逻辑只 close socket 不 shutdown pool, 每个 (站,号) 代理拆了也漏一池线程 → 久用线程数单调爬升。
+        try { pool.shutdownNow(); } catch (Exception ignored) {}
     }
 
     private void acceptLoop() {
@@ -76,6 +83,7 @@ public final class ProxyServer {
     }
 
     private void handle(Socket sock) {
+        lastActive = System.currentTimeMillis();
         try {
             sock.setSoTimeout(65000);
             BufferedInputStream in = new BufferedInputStream(sock.getInputStream());

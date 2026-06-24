@@ -81,6 +81,8 @@ public class RelayService extends Service {
         // 去中心化隧道默认开启: 服务一起即在本地 server 之上拉起两条独立公网后端 (cloudflared 主 + SSH 备),
         // 用户用默认配置即拥有「不经任何 Worker」的独立公网入口, 无需手动开。用户若曾手动关闭 ("0") 则尊重其选择。
         if (tunnelEnabledFlag()) main.postDelayed(this::startTunnel, 1800);
+        // 根挂载代理保洁: 周期回收空闲/超量的 (站,号) 代理与其隧道 → 公网侧占用恒有界 (根治久用越卡)。
+        main.postDelayed(proxySweeper, PROXY_SWEEP_MS);
     }
 
     /** 局域网直连开关 (默认开): 控制端与手机同网时可直连, 不依赖任何 Worker/隧道。 */
@@ -101,6 +103,7 @@ public class RelayService extends Service {
                     public String[] embedProxy(String method, String url, String acct, String body, String reqContentType, String reqHost) { return RelayService.this.embedProxy(method, url, acct, body, reqContentType, reqHost); }
                     public int proxyPort(String target, String acct) { return RelayService.this.proxyPort(target, acct); }
                     public String proxyPublicUrl(String target, String acct) { return RelayService.this.proxyPublicUrl(target, acct); }
+                    public void proxyKeepAlive(String target, String acct) { RelayService.this.proxyKeepAlive(target, acct); }
                     // 同源前缀边缘反代 (与 dao-relay Worker /i-init·/i/·/e/ 完全一致 → APK 与单网页同款在页渲染)
                     public String iInitRedirect(String token, String acc, String u) { return RelayService.this.iInitRedirect(token, acc, u); }
                     public String[] iProxy(String method, String prefix, String restPath, String acc, String genericOrigin, String body, String reqContentType, String reqHost) { return RelayService.this.iProxy(method, prefix, restPath, acc, genericOrigin, body, reqContentType, reqHost); }
@@ -309,6 +312,61 @@ public class RelayService extends Service {
     // 公网根挂载: 每 (源站,账号) 一条专属 cloudflared 快速隧道, 把其根挂载端口暴露成独立 https 公网 origin。
     private final java.util.Map<String, TunnelManager> proxyTunnels = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<String, String> proxyTunnelUrls = new java.util.concurrent.ConcurrentHashMap<>();
+    // ── 根挂载代理保洁: 根治「整体架构久用越卡」在公网侧的根因 ───────────────────────────────
+    //   病根: 每 (源站,账号) 经公网控台代理一次, 就 put 一个 ProxyServer(独占 ServerSocket + accept 线程 +
+    //   16 线程池) 和一条专属 cloudflared 隧道进程进 map, 而旧逻辑「关标签/切站/换号从不删项, 也无空闲回收」
+    //   → 久用多账号/多站浏览, 这些 socket·线程·fd·子进程单调累积、永不归还 → 进程膨胀卡顿, 唯重启清零。
+    //   修法: 每 PROXY_SWEEP_MS 扫一遍, 空闲超 PROXY_IDLE_TTL_MS(无请求经过)的整组拆除(server 连带线程池 +
+    //   专属隧道进程一起停), 下次访问按需原样重建; 再设硬上限 PROXY_MAX 兜底 LRU 淘汰 → 公网侧占用恒有界。
+    private static final long PROXY_IDLE_TTL_MS = 300000;   // (站,号) 代理空闲超 5 分钟无请求 → 整组拆除 (下次访问按需重建)
+    private static final long PROXY_SWEEP_MS    = 60000;    // 每 60s 保洁一轮
+    private static final int  PROXY_MAX         = 12;       // 同时存活的 (站,号) 代理硬上限, 超出按最久未活动 LRU 淘汰
+    private final Runnable proxySweeper = new Runnable() {
+        @Override public void run() {
+            try { pruneIdleProxies(); } catch (Exception ignored) {}
+            main.postDelayed(this, PROXY_SWEEP_MS);
+        }
+    };
+    /** 拆除一组 (站,号) 代理: 停 ProxyServer(socket+accept线程+线程池) + 其专属隧道进程, 并从三张表删项。 */
+    private void stopProxyEntry(String key) {
+        ProxyServer ps = proxyServers.remove(key);
+        if (ps != null) { try { ps.stop(); } catch (Exception ignored) {} }
+        TunnelManager tm = proxyTunnels.remove(key);
+        if (tm != null) { try { tm.stop(); } catch (Exception ignored) {} }
+        proxyTunnelUrls.remove(key);
+    }
+    /** 空闲回收 + 孤儿隧道清理 + 硬上限 LRU 淘汰 → 公网根挂载代理占用恒有界 (久用不再越攒越卡)。 */
+    private void pruneIdleProxies() {
+        long now = System.currentTimeMillis();
+        for (java.util.Map.Entry<String, ProxyServer> e : new java.util.ArrayList<>(proxyServers.entrySet())) {
+            ProxyServer ps = e.getValue();
+            if (ps == null || !ps.isRunning() || now - ps.lastActive() > PROXY_IDLE_TTL_MS) stopProxyEntry(e.getKey());
+        }
+        // 孤儿隧道: 对应代理端口已不存活的隧道进程 → 停 (无 server 可暴露, 留着只是漏个 cloudflared 进程)。
+        for (String key : new java.util.ArrayList<>(proxyTunnels.keySet())) {
+            if (!proxyServers.containsKey(key)) {
+                TunnelManager tm = proxyTunnels.remove(key);
+                if (tm != null) { try { tm.stop(); } catch (Exception ignored) {} }
+                proxyTunnelUrls.remove(key);
+            }
+        }
+        // 硬上限: 极端情形(短时间狂开多站多号)仍超量 → 按最久未活动淘汰至 PROXY_MAX, 防端口/线程无界。
+        if (proxyServers.size() > PROXY_MAX) {
+            java.util.List<java.util.Map.Entry<String, ProxyServer>> all = new java.util.ArrayList<>(proxyServers.entrySet());
+            all.sort((a, b) -> Long.compare(a.getValue().lastActive(), b.getValue().lastActive()));
+            int evict = all.size() - PROXY_MAX;
+            for (int i = 0; i < evict; i++) stopProxyEntry(all.get(i).getKey());
+        }
+    }
+    /** 全量拆除所有根挂载代理与其隧道 (服务销毁时调用, 不留任何 socket/线程/子进程)。 */
+    private void stopAllProxies() {
+        for (String key : new java.util.ArrayList<>(proxyServers.keySet())) stopProxyEntry(key);
+        for (String key : new java.util.ArrayList<>(proxyTunnels.keySet())) {
+            TunnelManager tm = proxyTunnels.remove(key);
+            if (tm != null) { try { tm.stop(); } catch (Exception ignored) {} }
+        }
+        proxyTunnelUrls.clear();
+    }
 
     /** 为 (目标站 origin, 账号) 分配/复用根挂载代理端口 → 端口号 (>0); -1 失败。同 (站,号) 复用同端口供 SPA 大量子资源共享。 */
     int proxyPort(String target, String acct) {
@@ -325,6 +383,20 @@ public class RelayService extends Service {
             proxyServers.put(key, ps);
             return port;
         } catch (Exception e) { return -1; }
+    }
+
+    /** 控台浏览器对仍打开的根挂载标签周期性续命: 只刷新已存在代理的活跃时刻, 绝不新建 (已关标签不会被复活)。
+     *  这样空闲回收只拆除「浏览器已离开(关页/切站)」的代理, 对仍打开的实时会话零影响 —— 即便其内 SPA 走
+     *  WebSocket/SSE 长连接、长时间无 HTTP 请求经过 handle(), 也由此续命不被误拆 → 回收安全无副作用。 */
+    void proxyKeepAlive(String target, String acct) {
+        try {
+            if (target == null || target.isEmpty()) return;
+            java.net.URL u = new java.net.URL(target);
+            String origin = u.getProtocol() + "://" + u.getHost() + (u.getPort() > 0 ? ":" + u.getPort() : "");
+            String key = origin + "|" + ((acct == null || acct.isEmpty()) ? "_" : acct);
+            ProxyServer ps = proxyServers.get(key);
+            if (ps != null) ps.touch();
+        } catch (Exception ignored) {}
     }
 
     /** 公网根挂载: 为 (源站,账号) 的根挂载端口再起一条专属 cloudflared 快速隧道 → 返回该端口的 https 公网 URL。
@@ -859,6 +931,8 @@ public class RelayService extends Service {
             // ── 网页内原生直渲: 为 (目标站, 账号) 起根挂载代理 + 专属公网隧道, 返回可被控台 iframe 的 https 公网 URL
             //    (剥 CSP/X-Frame-Options + 代账号注入 auth1) → Devin 多实例/任意第三方站皆在控台单页内原生操作。
             case "proxyPublicUrl": return proxyPublicUrl(argStr(a, 0), argStr(a, 1));
+            // 控台对仍打开的根挂载标签续命 → 空闲回收只拆已离开(关页)的代理, 实时会话(含长连接)零误拆。
+            case "proxyKeepAlive": proxyKeepAlive(argStr(a, 0), argStr(a, 1)); return null;
             // ── 金库读写 (与手机本体同一目录 Documents/DevinCloud) ──
             case "vaultLoad": return vaultRead(argStr(a, 0));
             case "vaultSave": vaultWrite(argStr(a, 0), argStr(a, 1)); return null;
@@ -1939,5 +2013,5 @@ public class RelayService extends Service {
         super.onTaskRemoved(rootIntent);
     }
     @Nullable @Override public IBinder onBind(Intent intent) { return null; }
-    @Override public void onDestroy() { instance = null; releaseWake(); stopTunnel(); if (engine != null) { engine.destroy(); engine = null; } super.onDestroy(); }
+    @Override public void onDestroy() { instance = null; releaseWake(); main.removeCallbacks(proxySweeper); stopAllProxies(); stopTunnel(); if (engine != null) { engine.destroy(); engine = null; } super.onDestroy(); }
 }
