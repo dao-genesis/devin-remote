@@ -549,17 +549,23 @@
   //   几乎不碰中继 → 根治用户「Worker 老掉/被限流」。信令仅一次性交换加密 SDP(借公共 ntfy),
   //   中间层缩到最小。建不上(对称 NAT/无 WebCrypto/对端离线)时无缝回退 HTTP 自愈通道,
   //   绝不让页面变坏 —— P2P 永远只是「能更好就更好」的加法, 失败零代价。
-  var _p2p = null, _p2pBusy = false, _p2pTries = 0;
+  var _p2p = null, _p2pBusy = false, _p2pTries = 0, _p2pNextTs = 0;
   function _p2pAlive(){ try{ return !!(_p2p && _p2p.dc && _p2p.dc.readyState === "open"); }catch(e){ return false; } }
   function _p2pTry(){
     if(_p2pBusy || _p2pAlive() || !SESSION || !TOKEN) return;
+    if(Date.now() < _p2pNextTs) return;   // 退避冷却: 硬失败网络(对称NAT/UDP受限)下不让 30s 轮询风暴式重握手 → 省电 + 不刷爆公共 broker(防 1015 限流)
     if(!(typeof window!=="undefined" && window.DaoSignal && window.DaoSignal.available && window.DaoSignal.available())) return;
     _p2pBusy = true; _p2pTries++;
-    window.DaoSignal.connect({ session:SESSION, token:TOKEN, timeout:20000 }).then(function(sig){
-      _p2p = sig; _p2pBusy = false; _p2pTries = 0;
+    // relayFallback:false —— 只接受「真 P2P 直连(STUN/TURN 均产出 dc)」, 绝不在控制端常驻那个 dc===null 的 ntfy 中继兜底句柄:
+    //   它永远过不了 _p2pAlive() → 既 never 被 relay() 采用、又因本函数每 30s 重连(不 close 旧句柄)而泄漏其 4 路常驻 ntfy 订阅。
+    //   控制端 HTTP 通道(Worker/手机直连隧道·无 48KB 上限)本就比 ntfy 控制面中继更优, 故 P2P 失败就老实回退 HTTP 自愈, 不留泄漏句柄。
+    window.DaoSignal.connect({ session:SESSION, token:TOKEN, timeout:20000, relayFallback:false }).then(function(sig){
+      _p2p = sig; _p2pBusy = false; _p2pTries = 0; _p2pNextTs = 0;
       try{ if(sig.dc) sig.dc.addEventListener("close", function(){ _p2p=null; setTimeout(_p2pTry, 3000); }); }catch(e){}
     }, function(){ _p2p=null; _p2pBusy=false;
-      setTimeout(_p2pTry, Math.min(60000, 8000*_p2pTries));   // 退避重试; 对端/隧道稍后上线即自动接管
+      var backoff = Math.min(120000, 8000*_p2pTries);
+      _p2pNextTs = Date.now() + backoff;                      // 退避冷却起点: 阻挡 30s 轮询在冷却内重握手; 对端/网络好转即自动接管
+      setTimeout(_p2pTry, backoff);
     });
   }
   // P2P 应答(serveLocal)与 HTTP 中继回包同构: {status, bodyText} → 归一成 relay() 的 {status, body}。
