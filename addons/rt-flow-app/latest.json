@@ -1,6 +1,6 @@
 {
-  "versionCode": 155,
-  "versionName": "0.37.51",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.51/DevinCloud-mobile-v0.37.51.apk",
-  "notes": "v0.37.51 · 久用卡顿·活动标签长会话 V8 堆/DOM 回收(极保守静默重载·保草稿不打断)\n• 病根: clearCache 清不动活动标签内 Devin SPA 自身的 V8 堆/游离 DOM —— 同一会话连开数小时堆只增不减, 是前台「越用越卡」最后、也是唯一只能靠重载真回收的根。\n• 解法(道法自然·与 probeTabLiveness 同「不打断」准则·更严护栏): 仅当 ①活动标签是 Devin 账号重型 SPA ②本页已连续运行>3h 未整页加载(堆确老化) ③用户已 20min 无任何交互(打字/语音/触摸→人已离开) ④App 前台 ⑤无联控观看 ⑥距上次回收>3h, 才静默 reload() → V8 堆/DOM 归零重建(经 URL 恢复会话·document-start 重注鉴权)。有输入焦点/有联控/人在交互 → 绝不重载, 不丢草稿不打断。\n• 观测: DAO_FLUENCY 打点 active-tab heap reclaim。所有判定皆 UI 线程, 无竞态。\n— — —\nv0.37.50 · 联控镜像帧「零每帧分配」收尾(复用降采样缓冲)\nv0.37.49 · 联控镜像满屏位图复用(消除每帧 ~10MB 分配抖动 GC)\nv0.37.48 · P2P Trickle ICE — 候选边收边发, 建连更快"
+  "versionCode": 156,
+  "versionName": "0.37.52",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.52/DevinCloud-mobile-v0.37.52.apk",
+  "notes": "v0.37.52 · 联控镜像热路径「零可避免每帧分配」彻底收口(复用 JPEG 编码缓冲 + 缩放矩形)\n• 承上 v0.37.49/50(满屏+缩图两块位图已复用): 镜像取帧每帧仍新建 1 个 ByteArrayOutputStream(JPEG 编码buf, 内部随帧扩容) + 2 个 Rect(降采样 src/dst)。\n• 本版复用三者: mirrorBos 每帧 reset 保留底层 byte[]; mirrorSrcRect/mirrorDstRect 复用 set。至此 2~5fps 连续联控取帧除「不可避免的输出 byte[]/base64 串」外零每帧分配, UI 线程 GC 抖动压到最低。\n• 久无联控随两块位图缓冲一并释放编码缓冲, 不常驻。所有访问皆 UI 线程, 无竞态。\n— — —\nv0.37.51 · 活动标签长会话 V8 堆/DOM 回收(极保守静默重载·保草稿不打断)\nv0.37.50 · 联控镜像帧零每帧位图分配(复用降采样缓冲)\nv0.37.49 · 联控镜像满屏位图复用(消除每帧 ~10MB 分配抖动 GC)"
 }
