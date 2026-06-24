@@ -34,7 +34,7 @@
 	],
 	"main": "./extension.js",
 	"scripts": {
-		"test": "node test/unit.test.js"
+		"test": "node test/unit.test.js && node test/console-failover.test.js"
 	},
 	"contributes": {
 		"viewsContainers": {

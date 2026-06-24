@@ -221,9 +221,12 @@
   <label>Session</label><input id="cfgSession" placeholder="rtflow-xxxxxxxx">
   <label>Token</label><input id="cfgToken" placeholder="xxxxxxxxxxxxxxxx">
   <label>Endpoint (可选)</label><input id="cfgEndpoint" placeholder="https://dao-relay-do.xxx.workers.dev">
-  <p class="cfgHint">留空 = 用默认中继(已是零账号·可直接用)。想完全不依赖项目方？
+  <p class="cfgHint">数据面<b>默认走 P2P 直连</b>(公共 ntfy 信令·0账号·不经 Worker), 打洞不通才回退中继。留空 Endpoint = 用默认中继(已零账号·可直接用)。想完全不依赖项目方？
     <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/zhouyoukang1234-spec/devin-remote/tree/main/addons/dao-relay" target="_blank" rel="noopener">一键自建中继 (零 Token)↗</a>
     部署完把你专属的 workers.dev 地址填到上面 Endpoint 即可。</p>
+  <label>零中心·公网直连链接 (发给别人即可 P2P 直连手机·无需任何 Worker)</label>
+  <div class="row" style="gap:6px"><input id="cfgShare" readonly style="flex:3" placeholder="填好 Session/Token 后自动生成"><button id="cfgCopy" style="flex:1">复制</button></div>
+  <p class="cfgHint">该链接的客户端页由<b>公共 CDN (jsDelivr) 托管</b>、不经你的 Worker; 对方一开即自动 P2P 直连 —— 真·去中心、零搭建。</p>
   <div class="row"><button id="cfgCancel">取消</button><button id="cfgSave" class="pri">保存并连接</button></div>
 </div></div>
 <div id="toast"></div>
@@ -1192,7 +1195,7 @@
       dt.setData("application/x-dao-drag", JSON.stringify({ type:"download", index:idx, name:nm, mime:mm })); } }catch(x){}
   });
   window.addEventListener("message", function(ev){ try{ var d=ev.data; if(!d) return;
-    if(d.__rtflow==="download"&&d.name){ window.__rnDownloads.push({name:d.name,ts:Date.now()}); if(dlPanel.classList.contains("show")) renderDl(); }
+    if(d.__rtflow==="download"&&d.name){ window.__rnDownloads.push({name:d.name,ts:Date.now()}); if(window.__rnDownloads.length>200) window.__rnDownloads.splice(0, window.__rnDownloads.length-200); if(dlPanel.classList.contains("show")) renderDl(); }
     // 账号型「打开」(板块里点某号 ⚡/打开对话 → __rn._openDevin 回传): 在外壳里网页内原生开该号 Devin 标签
     // (经 /uv-init 注该号 auth → 登录态完整), 这是「单网页内打开官网并真登录」的本源落点。
     else if(d.__rtflow==="openDevin"&&d.url){ daoFloat.classList.remove("show"); openInPage(d.url, d.acct||"", d.title||""); }
@@ -1485,10 +1488,19 @@
 
   // ── 接入设置浮层 ──
   var cfg=document.getElementById("cfg");
+  // 零中心公网直连链接: P2P 客户端页由公共 CDN 托管, 带 session/token 参数一开即自动直连手机, 不经任何 Worker。
+  var P2P_CLIENT_CDN="https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/p2p-client.html";
+  function shareLink(){ if(!SESSION||!TOKEN) return "";
+    return P2P_CLIENT_CDN+"?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN)+"&auto=1"; }
   function showCfg(){ document.getElementById("cfgSession").value=SESSION;
-    document.getElementById("cfgToken").value=TOKEN; document.getElementById("cfgEndpoint").value=ENDPOINT; cfg.classList.add("show"); }
+    document.getElementById("cfgToken").value=TOKEN; document.getElementById("cfgEndpoint").value=ENDPOINT;
+    var sh=document.getElementById("cfgShare"); if(sh) sh.value=shareLink(); cfg.classList.add("show"); }
   function hideCfg(){ cfg.classList.remove("show"); }
   document.getElementById("cfgCancel").onclick=hideCfg;
+  document.getElementById("cfgCopy").onclick=function(){ var v=shareLink(); if(!v){ toast("先填 Session/Token"); return; }
+    var ok=function(){ toast("已复制零中心直连链接"); };
+    try{ if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(v).then(ok,function(){ var e=document.getElementById("cfgShare"); e.focus(); e.select(); try{document.execCommand("copy");ok();}catch(_){ toast("复制失败, 请手动复制"); } }); }
+      else { var e2=document.getElementById("cfgShare"); e2.focus(); e2.select(); try{document.execCommand("copy");ok();}catch(_){ toast("复制失败, 请手动复制"); } } }catch(_){ toast("复制失败, 请手动复制"); } };
   document.getElementById("cfgSave").onclick=function(){
     SESSION=document.getElementById("cfgSession").value.trim();
     TOKEN=document.getElementById("cfgToken").value.trim();

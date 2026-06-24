@@ -75,6 +75,37 @@ npx wrangler deploy
 # npx wrangler secret put DAO_TOKEN
 ```
 
+### C. 纯 P2P 直连 · 零中心（推荐：大多数人连 Worker 都不需要）
+
+> 道法自然·为道日损：去中心化的**上策不是「自动化那条长链（GitHub→登 CF→建 Token→搭 Worker）」，
+> 而是让它根本不必要**。手机 APK 开机即在**公共 ntfy mesh**（ntfy.sh / ntfy.envs.net /
+> ntfy.adminforge.de / ntfy.mzte.de 四家互不隶属的公开实例）上监听，公网设备只需 `session + token`
+> 即经这层公共信令一次性交换**加密 SDP**（H(session+token) 派生 AES-GCM，公共 broker 全程只见密文），
+> 之后 RPC 全程走 **WebRTC P2P DataChannel 点对点直连手机**，**完全不经任何 Worker**（含项目方的）。
+
+而且**承载这个客户端页面的也不必是 Worker**——它是纯静态死文件，可经**公共 CDN 直开**：
+
+```
+https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/p2p-client.html
+```
+
+链接带参数即**一开即填、可选自动直连**（`session`/`token` 兼容短名 `s`/`t`）：
+
+```
+…/p2p-client.html?session=<id>&token=<t>&auto=1
+```
+
+于是「分发给别人用」= 把上面这条链接发出去，对方一开即 P2P 直连你的手机，**全程零账号、零搭建、零中心**
+（APK 内「接入设置」已内置「复制零中心直连链接」一键生成同款）。仅当对称 NAT/CGNAT 打洞失败时，才依次回退
+**同一公共 ntfy mesh 的去中心化中继**（路线C-2，仍零账号零中心）→ 自建 Worker（A/B）→ 项目方默认 Worker（末位兜底）。
+
+| 路线 | 数据面 | 依赖 | 何时用 |
+|---|---|---|---|
+| P2P 直连（默认） | WebRTC DataChannel 点对点 | 仅公共 ntfy 信令一次（不经 Worker） | 绝大多数网络 |
+| ntfy 去中心中继（C-2） | 公共 ntfy mesh 转发 | 公共 ntfy（不经 Worker） | 对称 NAT 打洞失败 |
+| 自建 Worker（A/B） | 你专属 `*.workers.dev` 中继 | 你自己的 CF 账号 | 想要固定专属域名 |
+| 项目方默认 Worker | 共享中继 | 项目方那一个 | 以上全不可用时的末位兜底 |
+
 ## 填进哪里
 
 部署后得到 `https://<name>.<account>.workers.dev`。把它填进：
