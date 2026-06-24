@@ -132,6 +132,16 @@ function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { fai
   ok(serveCalls === 1, "F3 幂等: 单次 rpc 仅触发一次 serveLocal (响应缓存/去重成立, 实=" + serveCalls + ")");
   if (fsig.close) fsig.close();
 
+  // G) 求真·不空耗(源码守卫): P2P 连接建立后(dc.onopen)应宽限后释放本次信令订阅(sub.close),
+  //    且 closeAttempt 须 clearTimeout 该宽限定时器 —— 否则一条活 P2P 连接整生命周期白占 4 路公共 ntfy WS。
+  //    (完整 onopen 流程需真 WebRTC, 难在 node mock 触发; 故以源码不变量守住此释放逻辑不被回退。)
+  const onopenIdx = src.indexOf("dc.onopen = function");
+  const onopenSeg = onopenIdx >= 0 ? src.slice(onopenIdx, onopenIdx + 400) : "";
+  ok(/graceTimer\s*=\s*setTimeout\([\s\S]*sub\.close\(\)/.test(onopenSeg), "G1 dc.onopen 后宽限释放信令订阅 (sub.close 收尽迟到 trickle 后关, 释放 4 路 ntfy WS)");
+  const closeAtIdx = src.indexOf("function closeAttempt()");
+  const closeAtSeg = closeAtIdx >= 0 ? src.slice(closeAtIdx, closeAtIdx + 200) : "";
+  ok(/clearTimeout\(graceTimer\)/.test(closeAtSeg), "G2 closeAttempt 清理宽限定时器 (连接提前关时不残留 sub.close 计时器)");
+
   console.log(failures ? ("\n失败 " + failures + " 项 ✗") : "\n全通 ✓");
   process.exit(failures ? 1 : 0);
 })().catch(function (e) { console.error("测试异常:", e); process.exit(1); });

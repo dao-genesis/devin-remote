@@ -465,11 +465,18 @@
             setTimeout(fin, hasTurn ? 4500 : 2500);
           });
         }
-        var opened = false, answered = false, settled = false;
-        function closeAttempt() { try { sub.close(); } catch (e) {} try { if (dc) dc.close(); } catch (e) {} try { if (pc) pc.close(); } catch (e) {} }
+        var opened = false, answered = false, settled = false, graceTimer = null;
+        function closeAttempt() { if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; } try { sub.close(); } catch (e) {} try { if (dc) dc.close(); } catch (e) {} try { if (pc) pc.close(); } catch (e) {} }
         function ok(v) { if (settled) return; settled = true; resolveAttempt(v); }
         function fail(e) { if (settled) return; settled = true; closeAttempt(); rejectAttempt(e); }
-        dc.onopen = function () { opened = true; ok({ pc: pc, dc: dc, rpc: rpc, ping: ping, topic: topic, close: closeAttempt, viaTurn: hasTurn }); };
+        dc.onopen = function () {
+          opened = true;
+          // 连接已建立: 数据面自此走 DataChannel 直连, 不再需要 ntfy 信令。宽限 30s 收尽迟到的 trickle 候选
+          //   (尤其 TURN relay)后, 关闭本次的信令订阅, 释放其 4 路常驻公共 ntfy WS —— 已开连接不因缺迟到候选
+          //   而断, 故安全释放; 否则一条活 P2P 连接的整个生命周期都白占着 4 路公共 broker 订阅(信令早已用完)。
+          graceTimer = setTimeout(function () { graceTimer = null; try { sub.close(); } catch (e) {} }, 30000);
+          ok({ pc: pc, dc: dc, rpc: rpc, ping: ping, topic: topic, close: closeAttempt, viaTurn: hasTurn });
+        };
         // 对端已应答(收到 answer)却仍 failed ⇒ ICE 打洞失败(NAT/防火墙), 与「压根没应答」区分开。
         pc.onconnectionstatechange = function () { if (pc.connectionState === "failed" && !opened) fail(new Error(answered ? "ice_failed" : "p2p_failed")); };
         var reasm = makeReasm();

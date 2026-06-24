@@ -1,6 +1,6 @@
 {
-  "versionCode": 162,
-  "versionName": "0.37.58",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.58/DevinCloud-mobile-v0.37.58.apk",
-  "notes": "v0.37.58 · 控制端 P2P 探测修复: 不再泄漏常驻 ntfy 订阅 + 退避冷却防握手风暴\n• 病灶: 浏览器控制端的 P2P 升级探测 _p2pTry 用默认 DaoSignal.connect, 在打不通 P2P 的网络(对称NAT/UDP受限)上会拿到一个 ntfy 中继兜底句柄(dc=null)。它永远过不了「P2P 判活」, 于是每 30s 轮询重连一次、且不关旧句柄 → 每轮泄漏 4 路常驻公共 ntfy 订阅, 越积越多 → 耗电 + 可能把你的出口 IP 刷到 ntfy 1015 限流。\n• 修复: _p2pTry 改为只求真 P2P(relayFallback:false, STUN/TURN 均产出 DataChannel 才接管), 不再常驻那个永不被用的中继句柄; 并加退避冷却, 硬失败网络下不再 30s 风暴式重握手。控制端 HTTP 通道(Worker/手机直连隧道·无 48KB 上限)本就更优, P2P 不通就老实回退它。\n• 纯加法、零协议改动; 新增切片单测(场景 P)+ 全套 JS 单测全绿; APK BUILD SUCCESSFUL。\n— — —\nv0.37.57 · 内网穿透传输求真: publicUrls 只列探活确认可达的公网入口\nv0.37.56 · 控制端优先走手机自带直连隧道, Worker 降为最后兜底\nv0.37.55 · cloudflared 拦截网络省电自愈(起即退超硬上限转 5min 慢探)\nv0.37.54 · 内网穿透 WSS 半开死链看门狗 + 中继转发只选活 socket"
+  "versionCode": 163,
+  "versionName": "0.37.59",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.59/DevinCloud-mobile-v0.37.59.apk",
+  "notes": "v0.37.59 · P2P 连接生命周期收口: 连上即释放信令订阅 + 断线必回收死连接(承 v0.37.58)\n• 底层 signal.js: P2P DataChannel 一旦 open, 数据面就走直连、不再需要 ntfy 信令。旧实现却让本次的 4 路公共 ntfy 订阅在整条连接生命周期一直挂着空耗。本版: dc.onopen 后宽限 30s 收尽迟到的 trickle 候选(尤其 TURN relay), 即关闭信令订阅释放 4 路 broker WS; 连接提前关时清理该定时器。已开连接不因缺迟到候选而断 → 安全释放。\n• 控制端 console.html: P2P 断线(移动网切换/Doze)时, _p2pTry 的 close 监听旧版只置空句柄、不 close() → 漏掉上一条连接的 RTCPeerConnection(ICE/STUN 绑定)+ 残余订阅。本版断开即 sig.close() 全回收再重连 → 杜绝重连周期累积泄漏。\n• 纯加法、零协议改动; 新增单测(console 场景 Q + signal 源码守卫 G1/G2)+ 全套 JS 单测全绿; APK BUILD SUCCESSFUL。控制端改动经 Worker 从 main 直供, 对浏览器控台即时生效。\n— — —\nv0.37.58 · 控制端 P2P 探测不泄漏常驻 ntfy 订阅 + 退避冷却防握手风暴\nv0.37.57 · 内网穿透传输求真: publicUrls 只列探活确认可达的公网入口\nv0.37.56 · 控制端优先走手机自带直连隧道, Worker 降为最后兜底\nv0.37.55 · cloudflared 拦截网络省电自愈(起即退超硬上限转 5min 慢探)"
 }
