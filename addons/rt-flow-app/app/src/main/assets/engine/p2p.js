@@ -21,14 +21,16 @@
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
   // 非 trickle ICE: 单次握手把全部候选塞进 SDP, 信令只需一来一回, 契合 HTTP 请求/响应。
-  function waitIce(pc) {
+  function waitIce(pc, capMs) {
     return new Promise(function (res) {
       if (pc.iceGatheringState === "complete") return res();
       var done = false;
       function fin() { if (!done) { done = true; try { pc.removeEventListener("icegatheringstatechange", chk); } catch (e) {} res(); } }
       function chk() { if (pc.iceGatheringState === "complete") fin(); }
       pc.addEventListener("icegatheringstatechange", chk);
-      setTimeout(fin, 4000);   // 兜底: 4s 仍未收集完也照发已有候选
+      // 兜底: 到点仍未 complete 也照发已有候选。仅 STUN 时 host+srflx 通常 <1s 到齐, 2.5s 封顶即可
+      //   发 answer(缩短客户端等答 → P2P 失败时更快降级); 有 TURN 时保留 4s 等 relay 候选。
+      setTimeout(fin, capMs || 4000);
     });
   }
 
@@ -87,7 +89,8 @@
       await pc.setRemoteDescription({ type: "offer", sdp: offer });
       var answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      await waitIce(pc);
+      var hasTurn = ice.some(function (s) { return /^turns?:/i.test(s.urls); });
+      await waitIce(pc, hasTurn ? 4000 : 2500);
     } catch (e) {
       try { pc.close(); } catch (_) {} delete conns[id];
       return { ok: false, error: "sdp_negotiation_failed", detail: String((e && e.message) || e) };
