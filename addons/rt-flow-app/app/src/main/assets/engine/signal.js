@@ -273,21 +273,39 @@
     var topic = await topicFor(session);
     var handled = Object.create(null);   // nonce → ts (去重已处理 offer)
     var dhandled = Object.create(null);  // id → ts (去重已处理的中继 RPC)
+    var pcByNonce = Object.create(null); // nonce → {addRemote, ts}  Trickle: 路由客户端后到的候选给对应 pc
+    var pendCand = Object.create(null);  // nonce → {ts, list}  候选先于 offer 到达时暂存, offer 落地即回灌
     await warmBrokers(servers);          // 应答方预热: 响应投递从健康 broker 起手, 不在死家上超时
     var reasm = makeReasm();
     var sub = subscribe(servers, topic, function (raw) {
       reasm(raw, async function (corr, role, full) {
-        if (role === "o") {                       // 客户端 offer → P2P 握手
+        if (role === "o") {                       // 客户端 offer / trickle 候选 → P2P 握手
           var obj = await unseal(key, full);          // 解密失败=对端不知 token → 拒(门禁)
-          if (!obj || obj.t !== "offer" || !obj.sdp) return;
+          if (!obj) return;
+          if (obj.t === "cand") {                     // Trickle: 客户端后到的候选, 路由给对应 pc(pc 未就绪则暂存回灌)
+            var pe = pcByNonce[obj.nonce];
+            if (pe && obj.cand) { try { pe.addRemote(obj.cand); } catch (e) {} }
+            else if (obj.cand) { var pcEnt = pendCand[obj.nonce] || (pendCand[obj.nonce] = { ts: Date.now(), list: [] }); pcEnt.list.push(obj.cand); }
+            return;
+          }
+          if (obj.t !== "offer" || !obj.sdp) return;
           var nonce = obj.nonce || corr;
           if (handled[nonce]) return; handled[nonce] = Date.now();
           var res;
-          try { res = await connectFn({ offer: obj.sdp, ice: obj.ice }); } catch (e) { res = { ok: false, error: String(e) }; }
+          // Trickle: 应答方 answer 之后才到的候选(尤其 TURN relay)经同一 topic 以 role "a" 回传客户端。
+          var sink = function (c) { (async function () { try { publish(servers, topic, frameChunks("c" + nonce + uid(), "a", await seal(key, { t: "cand", nonce: nonce, cand: c }))); } catch (e) {} })(); };
+          try { res = await connectFn({ offer: obj.sdp, ice: obj.ice, onLocalCandidate: sink }); } catch (e) { res = { ok: false, error: String(e) }; }
           if (!res || !res.ok || !res.answer) return;
+          if (typeof res.addRemoteCandidate === "function") {   // 注册候选路由 + 回灌先于 answer 到达的客户端候选
+            pcByNonce[nonce] = { addRemote: res.addRemoteCandidate, ts: Date.now() };
+            var pend = pendCand[nonce]; if (pend) { delete pendCand[nonce]; pend.list.forEach(function (c) { try { res.addRemoteCandidate(c); } catch (e) {} }); }
+          }
           var payload = await seal(key, { t: "answer", nonce: nonce, sdp: res.answer });
           publish(servers, topic, frameChunks(nonce, "a", payload));
-          var now = Date.now(); for (var k in handled) if (now - handled[k] > 180000) delete handled[k];
+          var now = Date.now();
+          for (var k in handled) if (now - handled[k] > 180000) delete handled[k];
+          for (var pk in pcByNonce) if (now - pcByNonce[pk].ts > 180000) delete pcByNonce[pk];
+          for (var ck in pendCand) if (now - pendCand[ck].ts > 180000) delete pendCand[ck];
           return;
         }
         if (role === "q") {                       // 路线 C-2 · 去中心化中继兜底
@@ -399,6 +417,20 @@
         var nonce = uid();
         var pc = new RTCPeerConnection({ iceServers: ice, iceCandidatePoolSize: 2 });
         var dc = pc.createDataChannel("rpc");
+        // ── Trickle ICE: 候选边收边发 (削去本端 gather 等待 + 补发封顶后才到的慢候选, 尤其 TURN relay) ──
+        //   offer 仍内嵌「发出时已有的候选」→ 老应答方照常可用(纯加法·零回归); 新应答方额外收 trickle 候选 → 更快更稳。
+        var offerSent = false, remoteSet = false, pendRemote = [], iceFin = null;
+        function trickleLocal(c) {
+          if (!offerSent || !c) return;   // 发 offer 前的候选已随 SDP 内嵌, 不重发
+          (async function () { try { publish(servers, topic, frameChunks("c" + nonce + uid(), "o", await seal(key, { t: "cand", nonce: nonce, cand: c }))); } catch (e) {} })();
+        }
+        function addRemoteCand(c) { if (!c) return; if (!remoteSet) { pendRemote.push(c); return; } try { pc.addIceCandidate(c); } catch (e) {} }
+        function flushRemote() { remoteSet = true; var q = pendRemote; pendRemote = []; q.forEach(function (c) { try { pc.addIceCandidate(c); } catch (e) {} }); }
+        pc.onicecandidate = function (ev) {
+          var c = ev && ev.candidate; if (!c) return;
+          if (iceFin && /typ srflx/.test(c.candidate || "")) iceFin();   // 首个反射地址即可发 offer, 其余 trickle 补发
+          trickleLocal(c.toJSON ? c.toJSON() : c);
+        };
         var seq = 0, waiters = Object.create(null);
         // dcWire: 收到的(可能分片重组后的)应用消息按 id 对号回调; 发送侧自动对大载荷分片+背压。
         var dcSend = dcWire(dc, function (m) {
@@ -426,9 +458,10 @@
         function waitIce() {
           return new Promise(function (res) {
             if (pc.iceGatheringState === "complete") return res();
-            var done = false; function fin() { if (!done) { done = true; res(); } }
+            var done = false; function fin() { if (!done) { done = true; iceFin = null; res(); } }
+            iceFin = fin;   // 首个 srflx 反射候选即提前结束等待(见 onicecandidate), 其余候选走 trickle 补发
             pc.addEventListener("icegatheringstatechange", function () { if (pc.iceGatheringState === "complete") fin(); });
-            // 纯 STUN: host+srflx 通常 <1s 到齐, 2.5s 封顶即发 offer; 有 TURN 时留 4.5s 等 relay 候选到齐。
+            // 封顶: 纯 STUN 2.5s / 有 TURN 4.5s; 实际通常 srflx <1s 即提前发 offer, relay 候选走 trickle, 不再死等。
             setTimeout(fin, hasTurn ? 4500 : 2500);
           });
         }
@@ -442,11 +475,13 @@
         var reasm = makeReasm();
         var sub = subscribe(servers, topic, function (raw) {
           reasm(raw, async function (corr, role, full) {
-            if (role !== "a" || corr !== nonce || opened) return;   // 只认本次 offer 对应的 answer
+            if (role !== "a" || opened) return;            // 本次 offer 对应的 answer / trickle 候选
             var obj = await unseal(key, full);
-            if (!obj || obj.t !== "answer" || !obj.sdp) return;
+            if (!obj || obj.nonce !== nonce) return;        // 按 nonce 对号(候选帧 corr 各异, 不能按 corr 过滤)
+            if (obj.t === "cand") { addRemoteCand(obj.cand); return; }   // Trickle: 应答方后到的候选
+            if (obj.t !== "answer" || !obj.sdp) return;
             try {
-              await pc.setRemoteDescription({ type: "answer", sdp: obj.sdp }); answered = true;
+              await pc.setRemoteDescription({ type: "answer", sdp: obj.sdp }); answered = true; flushRemote();
               // 已收到应答 ⇒ 对端在线且信令通; 给打洞一个宽限(有 TURN 时留更久等 relay 通道建立), 到点没开判 ice_failed 提前降级。
               setTimeout(function () { if (!opened) fail(new Error("ice_failed")); }, opts.p2pGraceMs || (hasTurn ? 8000 : 4000));
             } catch (e) {}
@@ -460,6 +495,7 @@
             var turn = ice.filter(function (s) { return /^turns?:/i.test(s.urls); });   // 把 TURN 同步给应答方(双方对称配置才能 relay)
             var payload = await seal(key, { t: "offer", nonce: nonce, sdp: pc.localDescription.sdp, ice: turn });
             publish(servers, topic, frameChunks(nonce, "o", payload));
+            offerSent = true;   // 之后到达的候选改走 trickle 补发(上面 SDP 已内嵌的不重发)
             setTimeout(function () { if (!opened) publish(servers, topic, frameChunks(nonce, "o", payload)); }, 2500);   // 补发(公共 broker 偶丢首包/应答方刚上线)
             // 等答超时只从「发出 offer」起算。answered 但超时 ⇒ ice_failed; 否则 signal_timeout(对端离线/token 不符)。
             setTimeout(function () { if (!opened) fail(new Error(answered ? "ice_failed" : "signal_timeout")); }, opts.timeout || ANSWER_TIMEOUT);
