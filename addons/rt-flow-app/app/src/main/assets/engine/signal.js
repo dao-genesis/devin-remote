@@ -29,11 +29,16 @@
   var RELAY_MAX_B64 = 48000; // 中继兜底单响应上限(~40 片); 控制面够用, 超出改走 P2P/Worker 防灌爆公共 broker
   var hasSubtle = (typeof crypto !== "undefined" && crypto.subtle && typeof crypto.subtle.digest === "function");
   // 多家公共 STUN (互不隶属 → 单点不可达不致命; 仅用于 NAT 反射地址发现, 不中转数据 → 仍 P2P 直连)。
+  //   GFW 友好: Google STUN 在中国大陆常被墙, 故并铺 cloudflare(境内可达) + 小米/腾讯境内 STUN +
+  //   nextcloud:443(受限网络下走 443 更易出网) → 反射地址发现成功率显著抬高, 直连率随之提升。
   var STUN = [
+    { urls: "stun:stun.cloudflare.com:3478" },
+    { urls: "stun:stun.miwifi.com:3478" },
+    { urls: "stun:stun.qq.com:3478" },
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun.cloudflare.com:3478" }
+    { urls: "stun:stun.nextcloud.com:443" }
   ];
 
   var TE = (typeof TextEncoder !== "undefined") ? new TextEncoder() : null;
@@ -65,6 +70,53 @@
     } catch (e) { return null; }
   }
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
+
+  // ── DataChannel 大载荷透明分片 + 背压 (路线B/C 直连数据面提速·超越 Worker 的关键) ──
+  //   病灶: 旧实现把整条 RPC 响应(含 downloadFetch 的 base64 文件内容, 可达数 MB)塞进**单次**
+  //     dc.send → 超 SCTP 单消息上限(部分 WebView ~256KB)直接失败, 且无背压时连发会撑爆发送缓冲。
+  //   解法: 应用层透明分片。> DC_FRAME 的消息切成 {t:"frag", m, i, n, p} 多帧顺序发, 接收端按 m
+  //     重组还原原始对象再交给 onObj; 小消息原样直发(零开销·全向后兼容)。发送侧遵循 bufferedAmount
+  //     背压(高水位暂停, onbufferedamountlow 续传) → 大文件 P2P 直连可靠满速, 不再受中继 413 上限制约。
+  var DC_FRAME = 49152;        // 单帧 48KB: 远低于 SCTP 256KB 上限, 兼容各 WebView; 留足 JSON 封装余量
+  var DC_HIWAT = 8388608;      // 发送缓冲高水位 8MB: 超过即暂停灌入, 等排空
+  var DC_LOWAT = 4194304;      // 低水位 4MB: 排空到此续传 (兼顾吞吐与内存)
+  function dcWire(dc, onObj) {
+    try { dc.binaryType = "arraybuffer"; } catch (e) {}
+    var rx = Object.create(null);   // mid -> {n, parts, got, ts}  分片重组缓冲
+    dc.onmessage = function (ev) {
+      var data = (typeof ev.data === "string") ? ev.data : (ev.data && ev.data.toString ? ev.data.toString() : "");
+      var m; try { m = JSON.parse(data); } catch (e) { return; }
+      if (!m) return;
+      if (m.t !== "frag") { onObj(m); return; }
+      var e = rx[m.m]; if (!e) e = rx[m.m] = { n: m.n, parts: new Array(m.n), got: 0, ts: Date.now() };
+      if (e.parts[m.i] === undefined) { e.parts[m.i] = m.p; e.got++; }
+      if (e.got >= e.n) {
+        var full = e.parts.join(""); delete rx[m.m];
+        var obj; try { obj = JSON.parse(full); } catch (_) { return; }
+        onObj(obj);
+      }
+      var now = Date.now(); for (var k in rx) if (now - rx[k].ts > 120000) delete rx[k];
+    };
+    try { dc.bufferedAmountLowThreshold = DC_LOWAT; } catch (e) {}
+    function send(obj) {
+      var s; try { s = JSON.stringify(obj); } catch (e) { return; }
+      if (s.length <= DC_FRAME) { try { dc.send(s); } catch (e) {} return; }
+      var mid = uid(), n = Math.ceil(s.length / DC_FRAME), i = 0;
+      function pump() {
+        while (i < n) {
+          if (typeof dc.bufferedAmount === "number" && dc.bufferedAmount > DC_HIWAT) {
+            dc.onbufferedamountlow = function () { dc.onbufferedamountlow = null; pump(); };
+            return;   // 背压: 等缓冲排空到低水位再续, 不撑爆发送队列
+          }
+          try { dc.send(JSON.stringify({ t: "frag", m: mid, i: i, n: n, p: s.slice(i * DC_FRAME, (i + 1) * DC_FRAME) })); }
+          catch (e) { return; }
+          i++;
+        }
+      }
+      pump();
+    }
+    return send;
+  }
 
   function normServers(s) {
     var list = Array.isArray(s) ? s.slice() : (typeof s === "string" && s ? s.split(/[\s,]+/) : []);
@@ -241,21 +293,21 @@
     var topic = await topicFor(session);
     await warmBrokers(servers);          // 客户端预热: 首发 offer/ping 从健康 broker 起手, 消除冷启停顿
     var nonce = uid();
-    var pc = new RTCPeerConnection({ iceServers: ice });
-    var dc = pc.createDataChannel("rpc"); dc.binaryType = "arraybuffer";
+    var pc = new RTCPeerConnection({ iceServers: ice, iceCandidatePoolSize: 2 });
+    var dc = pc.createDataChannel("rpc");
     var seq = 0, waiters = Object.create(null), relayWaiters = Object.create(null);
-    dc.onmessage = function (ev) {
-      var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+    // dcWire: 收到的(可能分片重组后的)应用消息按 id 对号回调; 发送侧自动对大载荷分片+背压。
+    var dcSend = dcWire(dc, function (m) {
       if (!m) return;
       var w = waiters[m.id]; if (!w) return; delete waiters[m.id];
       if (m.t === "pong") w.resolve({ pong: true, ts: m.ts });
       else if (m.t === "res") w.resolve(m.result);
-    };
+    });
     function rpc(frame) {
       return new Promise(function (resolve, reject) {
         if (!dc || dc.readyState !== "open") return reject(new Error("datachannel not open"));
         var id = String(++seq); waiters[id] = { resolve: resolve, reject: reject };
-        dc.send(JSON.stringify({ t: "rpc", id: id, frame: frame }));
+        dcSend({ t: "rpc", id: id, frame: frame });
         setTimeout(function () { if (waiters[id]) { delete waiters[id]; reject(new Error("timeout")); } }, 30000);
       });
     }
@@ -263,7 +315,7 @@
       return new Promise(function (resolve, reject) {
         var id = "p" + (++seq), t0 = (typeof performance !== "undefined" ? performance.now() : Date.now());
         waiters[id] = { resolve: function () { resolve((typeof performance !== "undefined" ? performance.now() : Date.now()) - t0); }, reject: reject };
-        try { dc.send(JSON.stringify({ t: "ping", id: id })); } catch (e) { reject(e); }
+        try { dcSend({ t: "ping", id: id }); } catch (e) { reject(e); }
         setTimeout(function () { if (waiters[id]) { delete waiters[id]; reject(new Error("timeout")); } }, 5000);
       });
     }
@@ -371,7 +423,9 @@
     serve: serve, connect: connect, topicFor: topicFor,
     available: function () { return !!hasSubtle; },
     DEFAULT_SERVERS: DEFAULT_SERVERS.slice(),
+    STUN: STUN.slice(),
+    dcWire: dcWire,   // DataChannel 大载荷透明分片+背压 (供 p2p.js 应答方 / p2p-client.html 客户端复用)
     // 纯函数测试面 (经 test/console-failover.test.js 验证去中心化信令的加密/分片不变量; 不改运行行为)
-    _internals: { deriveKey: deriveKey, seal: seal, unseal: unseal, normServers: normServers, frameChunks: frameChunks }
+    _internals: { deriveKey: deriveKey, seal: seal, unseal: unseal, normServers: normServers, frameChunks: frameChunks, dcWire: dcWire, DC_FRAME: DC_FRAME }
   };
 })(typeof window !== "undefined" ? window : this);

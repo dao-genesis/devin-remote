@@ -229,6 +229,70 @@ function loadSignal() {
     assert.strictEqual(reassembled, payload, "重组须逐字节还原");
   });
 
+  // ── signal.js dcWire: DataChannel 大载荷透明分片 + 背压 (超越 Worker 的数据面关键) ──
+  console.log("\n[signal.js dcWire 大载荷分片+背压]");
+  // 成对回环 mock: A.send 同步投递到 B.onmessage (反之亦然), bufferedAmount 恒 0 → 不触发背压。
+  function pairDC() {
+    function mk() { return { binaryType: "", bufferedAmount: 0, bufferedAmountLowThreshold: 0, onbufferedamountlow: null, onmessage: null, _peer: null, send: function (s) { var p = this._peer; if (p && typeof p.onmessage === "function") p.onmessage({ data: s }); } }; }
+    var a = mk(), b = mk(); a._peer = b; b._peer = a; return [a, b];
+  }
+  await test("dcWire 暴露为函数 + DC_FRAME 合理 (48KB 量级, 远低于 SCTP 256KB)", () => {
+    assert.strictEqual(typeof DS.dcWire, "function");
+    assert.ok(SI.DC_FRAME >= 16384 && SI.DC_FRAME <= 65536, "单帧应在 16~64KB 之间");
+  });
+  await test("多 MB 载荷分片→重组逐字节还原 (回环, 含非 ASCII)", () => {
+    var pair = pairDC(), got = null;
+    var sendA = DS.dcWire(pair[0], function () {});
+    DS.dcWire(pair[1], function (o) { got = o; });
+    var big = { t: "res", id: "9", result: "道".repeat(700000) + "Z" };  // ~2MB+ utf8, 远超单帧
+    sendA(big);
+    assert.deepStrictEqual(got, big, "重组须与原对象逐字节一致");
+  });
+  await test("小消息旁路: 不分片 (零开销·无 t:frag 包裹)", () => {
+    var sentRaw = [], got = null;
+    var dc = { binaryType: "", onmessage: null, send: function (s) { sentRaw.push(s); }, bufferedAmountLowThreshold: 0 };
+    var send = DS.dcWire(dc, function (o) { got = o; });
+    send({ t: "ping", id: "p1" });
+    assert.strictEqual(sentRaw.length, 1, "小消息应一次直发");
+    var parsed = JSON.parse(sentRaw[0]);
+    assert.strictEqual(parsed.t, "ping", "小消息不得被 frag 包裹");
+    // 回灌自身 onmessage 验证接收侧旁路同样还原
+    dc.onmessage({ data: sentRaw[0] });
+    assert.deepStrictEqual(got, { t: "ping", id: "p1" });
+  });
+  await test("乱序分片仍正确重组 (按 mid+index 归位)", () => {
+    var got = null;
+    var dc = { binaryType: "", onmessage: null, send: function () {}, bufferedAmountLowThreshold: 0 };
+    DS.dcWire(dc, function (o) { got = o; });
+    var original = { t: "res", id: "7", result: "payload-" + "q".repeat(300), arr: [1, 2, 3] };
+    var s = JSON.stringify(original), n = 4, size = Math.ceil(s.length / n), frames = [];
+    for (var i = 0; i < n; i++) frames.push({ t: "frag", m: "midX", i: i, n: n, p: s.slice(i * size, (i + 1) * size) });
+    [frames[3], frames[1], frames[0], frames[2]].forEach(function (f) { dc.onmessage({ data: JSON.stringify(f) }); });
+    assert.deepStrictEqual(got, original, "乱序到达也须无损重组");
+  });
+  await test("不完整分片不触发回调 (缺片即不交付)", () => {
+    var calls = 0;
+    var dc = { binaryType: "", onmessage: null, send: function () {}, bufferedAmountLowThreshold: 0 };
+    DS.dcWire(dc, function () { calls++; });
+    dc.onmessage({ data: JSON.stringify({ t: "frag", m: "m2", i: 0, n: 3, p: "aaa" }) });
+    dc.onmessage({ data: JSON.stringify({ t: "frag", m: "m2", i: 2, n: 3, p: "ccc" }) });
+    assert.strictEqual(calls, 0, "缺第 1 片时不得交付");
+  });
+  await test("背压: 缓冲超高水位即暂停, onbufferedamountlow 续传至发完", () => {
+    var sent = [];
+    var dc = { binaryType: "", bufferedAmount: 0, bufferedAmountLowThreshold: 0, onbufferedamountlow: null, onmessage: null,
+      send: function (s) { sent.push(s); this.bufferedAmount += s.length; } };  // 永不自动排空 → 必触发背压
+    var send = DS.dcWire(dc, function () {});
+    send({ t: "res", id: "1", result: "y".repeat(9 * 1024 * 1024) });  // 9MB → 帧数远多于高水位容量
+    var totalFrags = Math.ceil(JSON.stringify({ t: "res", id: "1", result: "y".repeat(9 * 1024 * 1024) }).length / SI.DC_FRAME);
+    assert.ok(sent.length < totalFrags, "应在发完前因高水位暂停");
+    assert.strictEqual(typeof dc.onbufferedamountlow, "function", "暂停时应挂起续传回调等排空");
+    var paused = sent.length;
+    dc.bufferedAmount = 0; dc.onbufferedamountlow();   // 模拟缓冲排空 → 续传
+    assert.ok(sent.length > paused, "排空后应续发剩余分片");
+    assert.strictEqual(sent.length, totalFrags, "最终应发完全部分片");
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
