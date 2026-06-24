@@ -179,6 +179,8 @@ public class MainActivity extends AppCompatActivity {
         String pendingReloadUrl = null; // 后台标签渲染进程被回收 → 延迟到选中时再重载 (避免多标签同时重载放大内存压力·消除卡死雪崩)
         boolean maybeStale = false;  // 长时间后台返回 → 渲染线程可能被系统冻结(看着正常但点击/下载等失效) → 选中/恢复时探活, 无响应则静默重载
         long lastShownAt = 0;        // 最近一次被选为前台标签的时刻 → 前台内存保洁据此卸载「长时间未访问」的后台普通网页标签
+        long loadedAt = 0;           // 最近一次整页加载(onPageStarted)时刻 → V8 堆龄代理; SPA 客户路由不重置堆故不更新
+        long lastHeapReclaimAt = 0;  // 最近一次活动标签堆回收重载时刻 → 防抖限频
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
     }
     private boolean adBlock = true;    // 广告/弹窗拦截: 默认内置开启 (无需用户操作·无开关)
@@ -1052,6 +1054,7 @@ public class MainActivity extends AppCompatActivity {
             @Override public boolean shouldOverrideUrlLoading(WebView v, String u) { return handleExternalScheme(u); }
             @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
                 tab.url = u; if (tabOf(v) == active) setAddr(u);
+                if (u != null && u.startsWith("http")) tab.loadedAt = System.currentTimeMillis();   // 整页加载 → V8 堆归零, 重计堆龄
                 if (u != null && u.startsWith("http")) {
                     // document-start 即挂麦克风/语音探针 → 早于页面脚本调用 getUserMedia, 确保语音一开始就被识别为「交互中」。
                     try { v.evaluateJavascript(MIC_AND_EDIT_PROBE_JS, null); } catch (Exception ignored) {}
@@ -5118,6 +5121,9 @@ public class MainActivity extends AppCompatActivity {
     private static final long BG_HYGIENE_DELAY_MS = 45000;   // 转后台 45s 后做首轮重度释放 (快速切回的不被无谓清理)
     private static final long BG_HYGIENE_MS = 120000;        // 此后后台每 2 分钟续做一轮 → 久置后台占用持续下降而非常驻
     private static final long ACTIVE_CACHE_BOUND_MS = 600000; // 前台活动标签每 ~10 分钟清一次 RAM 缓存 (无损·不重载·不丢态)
+    private static final long HEAP_AGE_MS = 3 * 3600000L;        // 活动账号标签连续运行超 3 小时 → V8 堆已老化, 可在空闲时回收
+    private static final long ACTIVE_RELOAD_IDLE_MS = 20 * 60000L; // 活动标签 20 分钟无任何交互(人已离开) 才允许堆回收重载
+    private static final long HEAP_RECLAIM_MIN_GAP = 3 * 3600000L; // 两次活动标签堆回收重载最小间隔 (防抖)
     private long activeTabCacheTs = 0;
     private final Runnable memHygiene = new Runnable() {
         @Override public void run() {
@@ -5187,6 +5193,23 @@ public class MainActivity extends AppCompatActivity {
             try { at.web.clearCache(false); } catch (Exception ignored) {}
             try { at.web.freeMemory(); } catch (Exception ignored) {}
             activeTabCacheTs = now;
+        }
+        // 活动标签长会话 V8 堆/DOM 回收: clearCache 清不动 Devin SPA 自身的 V8 堆/游离 DOM —— 同一会话连开数小时
+        //   堆只增不减, 是「用久越卡」在前台最后一个、也是唯一只能靠重载真回收的根。极保守护栏(与 probeTabLiveness
+        //   同一「不打断」准则·更严): 仅当 ①活动标签是 Devin 账号重型 SPA; ②本页已连续运行 HEAP_AGE_MS 未整页加载
+        //   → 堆确已老化; ③用户已 ACTIVE_RELOAD_IDLE_MS 无任何交互(打字/语音/触摸) → 人已离开不在用; ④App 在前台;
+        //   ⑤无联控观看; ⑥距上次回收 > HEAP_RECLAIM_MIN_GAP。命中即 reload() → 堆/DOM 归零重建(Devin 经 URL 恢复
+        //   会话·document-start 重注鉴权), 长会话占用真有界。有联控/有输入焦点/人在交互 → 绝不重载, 不丢草稿不打断。
+        if (at != null && at.web != null && at.pendingReloadUrl == null && at.accountJson != null && appForeground
+                && at.loadedAt > 0 && (now - at.loadedAt) > HEAP_AGE_MS
+                && !userInteracting(at, ACTIVE_RELOAD_IDLE_MS)
+                && (at.lastHeapReclaimAt == 0 || (now - at.lastHeapReclaimAt) > HEAP_RECLAIM_MIN_GAP)) {
+            java.util.concurrent.ConcurrentHashMap<String,Long> vw = tabViewers.get(at.vid);
+            if (vw == null || vw.isEmpty()) {   // 正被联控观看/驱动 → 不重载(不打断远程实时操作)
+                at.lastHeapReclaimAt = now;
+                android.util.Log.i(FL, "active-tab heap reclaim: long-lived idle Devin SPA -> silent reload to reclaim V8 heap");
+                try { at.web.reload(); } catch (Exception ignored) {}
+            }
         }
         enforceLiveTabCap(now);   // 数量上限闸: 即便都没到闲置卸载阈值, 也把后台常驻重型 WebView 压到上限内
         pruneViewers(now);
