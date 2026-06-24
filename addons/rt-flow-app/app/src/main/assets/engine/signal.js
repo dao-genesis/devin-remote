@@ -192,22 +192,33 @@
   }
   // 多服务器 WS 订阅 + 断线自动重连 (去中心化: 任一实例活着即收得到)。
   function subscribe(servers, topic, onMessage) {
-    var socks = [], stopped = false;
-    function dial(base) {
+    // 每家 broker 一个槽位(base/ws/lastRx): 重连复用同槽 → socks 不再只增不减(serve() 24/7 常驻不积废引用)。
+    var stopped = false, conns = servers.map(function (base) { return { base: base, ws: null, lastRx: 0 }; });
+    function dial(c) {
       if (stopped) return;
       var ws;
-      try { ws = new WebSocket(base.replace(/^http/i, "ws") + "/" + topic + "/ws"); }
-      catch (e) { setTimeout(function () { dial(base); }, 5000); return; }
+      try { ws = new WebSocket(c.base.replace(/^http/i, "ws") + "/" + topic + "/ws"); }
+      catch (e) { setTimeout(function () { dial(c); }, 5000); return; }
+      c.ws = ws; c.lastRx = Date.now();
+      ws.onopen = function () { c.lastRx = Date.now(); };
       ws.onmessage = function (ev) {
+        c.lastRx = Date.now();   // 任何入站帧(含 ntfy keepalive)都刷新存活时戳 → 看门狗据此判半开
         var d; try { d = JSON.parse(typeof ev.data === "string" ? ev.data : ""); } catch (e) { return; }
         if (d && d.event === "message" && typeof d.message === "string") onMessage(d.message);
       };
-      ws.onclose = function () { if (!stopped) setTimeout(function () { dial(base); }, 4000); };
+      ws.onclose = function () { if (c.ws === ws) c.ws = null; if (!stopped) setTimeout(function () { dial(c); }, 4000); };
       ws.onerror = function () { try { ws.close(); } catch (e) {} };
-      socks.push(ws);
     }
-    servers.forEach(dial);
-    return { close: function () { stopped = true; socks.forEach(function (w) { try { w.close(); } catch (e) {} }); } };
+    conns.forEach(dial);
+    // 半开死链看门狗 (承 v0.37.54 给 Worker WSS 加的同款, 对称补到去中心化 route-C):
+    //   移动网/NAT 重绑/Doze 常致 TCP 静默失效 —— 不发 FIN、onclose 永不触发, 订阅僵死「再也收不到
+    //   offer/中继帧却自以为在线」, 手机经 route-C 从此默默失联。ntfy 每 ~45s 必发 keepalive →
+    //   健康连接 lastRx 持续刷新; 据此 >90s 无任何入站即判半开, 主动 close 触发 4s 后重连(秒级自愈)。
+    var wd = setInterval(function () {
+      if (stopped) return; var now = Date.now();
+      conns.forEach(function (c) { if (c.ws && c.lastRx && now - c.lastRx > 90000) { try { c.ws.close(); } catch (e) {} } });
+    }, 20000);
+    return { close: function () { stopped = true; clearInterval(wd); conns.forEach(function (c) { try { if (c.ws) c.ws.close(); } catch (e) {} }); } };
   }
 
   // ── 零账号 TURN 兜底 (对称 NAT/CGNAT 直连打洞失败时的「全双工媒体中继」, 远胜 ntfy 控制面中继) ──
