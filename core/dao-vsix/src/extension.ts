@@ -3555,7 +3555,21 @@ async function bridgeLivenessTick(): Promise<void> {
             mcpUrl ? bridgeProbeAlive(mcpUrl, 6000, bridgeMcpToken()) : Promise.resolve(true),
         ]);
         // 打得通 → 保持稳定, 什么也不做 (不重注·省网)
-        if (bridgeOk && mcpOk) { _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0; daoLoopLog('tunnel', 'probe ALIVE (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 保持'); return; }
+        if (bridgeOk && mcpOk) {
+            _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0;
+            // 帛书·「守柔曰强」: 链路虽活, 仍须对账知识库所载地址 == 当前活址。
+            //   常驻桥轮换(旧→新)被探活视为「一直活」而走保持路径时, 旧的(曾中止过的)重注不会再触发
+            //   → 知识库滞留死址。此处发现实注地址漂移即补注(幂等·resolve-live 自守柔不覆盖死址·省网)。
+            const eff = bridgeEffectiveUrl();
+            if (eff && _lastInjectedBridgeUrl && eff !== _lastInjectedBridgeUrl) {
+                daoLoopLog('tunnel', 'probe ALIVE 但知识库滞留旧址(' + _lastInjectedBridgeUrl + ')→对账补注 ' + eff);
+                try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ }
+                bridgeScheduleReinject('liveness-reconcile');
+            } else {
+                daoLoopLog('tunnel', 'probe ALIVE (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 保持');
+            }
+            return;
+        }
         // 打不通 → 刷新
         try { console.log('[dao] bridge liveness DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新'); } catch { /* 守柔 */ }
         daoLoopLog('tunnel', 'probe DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新+重注');
@@ -3565,12 +3579,13 @@ async function bridgeLivenessTick(): Promise<void> {
             try {
                 const live = await bridgeResolveLiveConn(5000);
                 if (live && live.url) {
-                    const switched = (live.url !== bridgeUrl);
+                    // 重注判据: 进程内地址变了 或 知识库实注地址 ≠ 此活址(覆盖 bridgeUrl 已先行收敛、唯独 KB 滞留旧址的脱钩盲区)。
+                    const needReinject = (live.url !== bridgeUrl) || (live.url !== _lastInjectedBridgeUrl);
                     bridgeUrl = live.url; if (live.token) bridgeToken = live.token;
                     _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0;
-                    daoLoopLog('tunnel', 'DEAD→候选探活得活地址 ' + live.url + ' (src=' + live.source + ') → 无缝切换' + (switched ? '+重注' : ''));
+                    daoLoopLog('tunnel', 'DEAD→候选探活得活地址 ' + live.url + ' (src=' + live.source + ') → 无缝切换' + (needReinject ? '+重注' : ''));
                     try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
-                    if (switched) { try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ } bridgeScheduleReinject('liveness-switch-live'); refreshDaoCloudMiddlePanel(); }
+                    if (needReinject) { try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ } bridgeScheduleReinject('liveness-switch-live'); refreshDaoCloudMiddlePanel(); }
                     return;
                 }
             } catch { /* 守柔 */ }
@@ -9566,6 +9581,10 @@ function daoSyncDaoMcpIntoProfile(): void {
 //   触发: BRIDGE_DIR/conn.json 或 dao_vm/mcp_public.json 等变化(常驻桥重建隧道回写) → 防抖 1.5s → 仅当签名(URL/Token/端口)变化才扩散。
 //   守柔·省网(不重蹈批量并发卡网覆辙): 签名未变不重注; 逐 org 串行(非并发); KB 幂等 upsert, MCP 先删后建以更新 URL。
 let _lastBridgeReinjectSig = '';
+// 帛书·「知常曰明」: 记录「实际写进知识库的那条 URL」(非进程内 bridgeUrl, 非已发布 conn 签名)。
+//   根治隧道轮换后内部态(bridgeUrl)已收敛到活址、但知识库仍滞留旧死址的脱钩盲区:
+//   探活环(ALIVE/DEAD 两路)凡发现「当前活址 ≠ 上次实注地址」即强制补注, 令知识库恒指活址。
+let _lastInjectedBridgeUrl = '';
 let _bridgeReinjectInflight = false;
 let _bridgeReinjectTimer: ReturnType<typeof setTimeout> | null = null;
 function bridgeCurrentSig(): string {
@@ -9632,6 +9651,7 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
             injected++;
         }
         _lastBridgeReinjectSig = sig;
+        _lastInjectedBridgeUrl = bridgeUrl; // 记录实注活址 → 探活环据此对账, 杜绝 KB 与内部态脱钩
         try { console.log('[dao] bridge real-time reinject (' + reason + ') → ' + injected + ' org(s)'); } catch { /* 守柔 */ }
     } finally { _bridgeReinjectInflight = false; }
     return { injected, changed: true };
