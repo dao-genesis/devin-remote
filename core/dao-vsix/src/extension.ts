@@ -3320,6 +3320,21 @@ async function poolSteadyStateTick(): Promise<void> {
                         if (cleared) daoLoopLog('steady', 'org=' + orgId + ' 自动化隔离清理 ' + cleared + ' 条(止血)');
                     }
                 } catch { /* 守柔 */ }
+                // ④ 定时调度(cron)隔离清理: 每周烧额度的元凶, 同自动化一并根除(注入档未建调度→白名单空, 仅守人工锁)
+                try {
+                    const sl = await devinListSchedules(orgId, auth1);
+                    if (sl.ok && Array.isArray(sl.schedules)) {
+                        let clearedS = 0;
+                        for (const it of sl.schedules) {
+                            const sid = it.schedule_id || it.id;
+                            if (!sid) continue;
+                            const sname = String(it.prompt || it.description || it.name || sid);
+                            if (isManualLocked(orgId, 'schedules', sname)) continue;
+                            try { await devinDeleteSchedule(orgId, String(sid), auth1); clearedS++; } catch { /* 守柔 */ }
+                        }
+                        if (clearedS) daoLoopLog('steady', 'org=' + orgId + ' 定时调度隔离清理 ' + clearedS + ' 条(止周扣)');
+                    }
+                } catch { /* 守柔 */ }
             }
             // ② 单对话额度上限·每账号动态跟随
             if (p.messageLimitAuto) {
@@ -9005,8 +9020,8 @@ function saveInjectProfile(p: InjectProfile): void {
 // 道·「绝利一源」单账号手动锁定 — 用户在单账号 K/P/S/MCP 面板手动新建/锁定的条目,
 // 切账号反向注入 autoCleanup 时按 (orgId,kind,name) 豁免, 不被批量清理。守柔: 只防删, 永不多删。
 const INJECT_MANUAL_LOCKS_FILE = path.join(DAO_DIR, 'dao-inject-manual-locks.json');
-type ManualLockKind = 'knowledge' | 'playbooks' | 'secrets' | 'mcps' | 'automations';
-interface ManualLockOrg { knowledge: string[]; playbooks: string[]; secrets: string[]; mcps: string[]; }
+type ManualLockKind = 'knowledge' | 'playbooks' | 'secrets' | 'mcps' | 'automations' | 'schedules';
+interface ManualLockOrg { knowledge: string[]; playbooks: string[]; secrets: string[]; mcps: string[]; schedules?: string[]; }
 function loadManualLocks(): Record<string, ManualLockOrg> {
     try { const j = JSON.parse(fs.readFileSync(INJECT_MANUAL_LOCKS_FILE, 'utf8')); return (j && typeof j === 'object') ? j : {}; } catch { return {}; }
 }
@@ -9380,8 +9395,8 @@ function findAuth1ForOrg(orgId: string): string {
 // 先清后注 — 帛书·「为道日损·损之又损」: 注入前把该 org 内一切「非期望态 且 未被用户锁定」的旧注入残条全部清除。
 //   keep = 期望态名集(本次将 upsert 的 K/P/S/MCP/Automation) ∪ 固定道藏项(DAO_TOKEN) ∪ 用户单账号锁定项。
 //   清后随即由 applyInjectProfileToOrg 覆盖注入期望态 → 该 org 恰为「期望态 ∪ 用户锁定项」, 杜绝历史异名累积。
-async function resetOrgInjectables(orgId: string, auth1: string, p: InjectProfile): Promise<{ knowledge: number; playbooks: number; secrets: number; mcps: number; automations: number }> {
-    const removed = { knowledge: 0, playbooks: 0, secrets: 0, mcps: 0, automations: 0 };
+async function resetOrgInjectables(orgId: string, auth1: string, p: InjectProfile): Promise<{ knowledge: number; playbooks: number; secrets: number; mcps: number; automations: number; schedules: number }> {
+    const removed = { knowledge: 0, playbooks: 0, secrets: 0, mcps: 0, automations: 0, schedules: 0 };
     const lc = (s: string) => String(s || '').toLowerCase();
     // 期望保留集
     const keepK = new Set<string>(p.knowledge.map(k => k.name).filter(Boolean));
@@ -9444,6 +9459,17 @@ async function resetOrgInjectables(orgId: string, auth1: string, p: InjectProfil
             if (!xid || typeof it.name !== 'string') continue;
             if (keepA.has(it.name) || isManualLocked(orgId, 'automations', it.name)) continue;
             try { await devinDeleteAutomation(orgId, String(xid), auth1); removed.automations++; } catch { /* 守柔 */ }
+        }
+    } catch { /* 守柔 */ }
+    // 定时调度(cron) — 每周烧额度元凶; 注入档不建调度 → 全清非人工锁定项, 与自动化同理「先清后注」
+    try {
+        const sl = await devinListSchedules(orgId, auth1);
+        if (sl.ok && Array.isArray(sl.schedules)) for (const it of sl.schedules) {
+            const sid = it.schedule_id || it.id;
+            if (!sid) continue;
+            const sname = String(it.prompt || it.description || it.name || sid);
+            if (isManualLocked(orgId, 'schedules', sname)) continue;
+            try { await devinDeleteSchedule(orgId, String(sid), auth1); removed.schedules++; } catch { /* 守柔 */ }
         }
     } catch { /* 守柔 */ }
     return removed;
