@@ -2,6 +2,11 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.22
+- 根治「拖拽对话/文件到官网 → 提示『未找到上传框』(拖拽没用)」(拖拽桥 `daoDropBridgeJs` `feed()`)。
+  - **真因(经 live 桥在用户机 CDP 实测)**: 拖拽桥已正确触发(捕获合成 drop、解析 `application/x-dao-conv`、命中 `/__convmd` 拉取会话 MD),但 Devin 的 `input[type=file]` 与编辑器组件挂在 **shadow root** 内;原 `feed()` 用 `document.querySelectorAll('input[type=file]')` **不穿透 shadow DOM** → 顶层查到 0 个 → 无法注入 → 弹「未找到上传框」。实测仅穿透时可见 `deepFileInputs=1, deepEditors=1`。
+  - **修**: 新增 `deepCollect(sel)` 递归遍历所有 `shadowRoot` 收集匹配元素;`feed()` 改用 `deepCollect('input[type=file]')` 写入 `.files` 并派发 `input`/`change`;无文件输入时回退到 `deepCollect('textarea,[contenteditable=true]')` 的真实编辑器目标,依次派发 `dragenter`/`dragover`/`drop` 合成事件。一处定义(`/__daobridge.js` 与 `devinCloudProxyRoute` 内联同源),全平台(浏览器/手机/IDE)拖拽落地一致。
+
 ## 3.50.21
 - 根治「IDE 内官网路由慢」(同源反代 `devinCloudProxyRoute` + 客户端 Service Worker)。
   - **真因(经 live 桥定位·读代码实证)**: IDE 内打开官网的真实热路径是主口 9920 同源反代 `devinCloudProxyRoute`(`/sessions|/org…?dao_acct=`),它只注入 authBridge+拖拽桥, **无 Service Worker**。而 VS Code webview 的 iframe **不持久化 HTTP 磁盘缓存**(即便资源带 `immutable`),故每次重载/切标/导航都向 9920 重取数百个哈希分片(本仓库 SPA 入口 ~469 chunk)→ 慢。3.50/PR#541 的 SW 只加在 rt-flow 端口模式,**从未覆盖这条热路径**,所以用户侧依旧慢。
