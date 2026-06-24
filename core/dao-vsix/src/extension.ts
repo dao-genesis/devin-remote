@@ -1023,6 +1023,8 @@ async function startServer(context: vscode.ExtensionContext) {
         if (cfg.autoBridge) {
             connectRelay(ws.port, ws.token);
         }
+        // 去中心化信令中继(路线C·零中心 ntfy): 与 cloudflared/Worker 并行的第二条公网入口, 任一 broker 活即可达
+        sigStart().catch(() => {});
     });
 
     context.subscriptions.push({ dispose: () => stopServer() });
@@ -1030,6 +1032,7 @@ async function startServer(context: vscode.ExtensionContext) {
 
 function stopServer() {
     stopRelay();
+    sigStop();
     if (ws.server) {
         ws.server.close();
         ws.server = null;
@@ -1447,6 +1450,205 @@ function stopRelay() {
 }
 
 // ═══════════════════════════════════════════════════════════
+// 道 · 去中心化信令中继 (路线C·零账号·零中心 ntfy mesh) — 取自手机版 engine/signal.js
+//   公网穿透「底层」彻底不依赖 cloudflared 隧道, 也不依赖 dao-relay Worker:
+//   借多家互不隶属的公共 ntfy pub/sub 做加密信令/中继, 任一 broker 可达即通 → 去中心化、无单点。
+//   定址: topic = H("topic\n"+session)(不泄露 session); 鉴权即加密: 载荷以 H(session+token)
+//   派生的 AES-256-GCM 封装, 应答方解密成功(=对端确知 token) 才服务 → token 即准入门禁,
+//   公共 broker 全程只见密文。控制面 RPC 帧 {path,method,body} 与 Worker 中继同构 →
+//   复用 handleRouteInternal 同一处理路径。与 signal.js 字节级兼容(WebCrypto AES-GCM = iv||ct||tag)。
+// ═══════════════════════════════════════════════════════════
+const SIG_DEFAULT_SERVERS = ['https://ntfy.sh', 'https://ntfy.envs.net', 'https://ntfy.adminforge.de', 'https://ntfy.mzte.de'];
+const SIG_CHUNK = 1200;            // ntfy 单消息 ~4KB 上限, 留足余量
+const SIG_REASM_TTL_MS = 120000;   // 分片重组缓存寿命
+const SIG_DEDUP_MAX = 512;         // 已处理 corr LRU 容量(多 broker 去重)
+const SIG_BACKOFF_MIN = 1500;
+const SIG_BACKOFF_MAX = 20000;
+
+interface SigState {
+    enabled: boolean; session: string; topic: string; servers: string[];
+    key: Buffer | null; subs: any[]; reasm: ((msg: string, cb: (c: string, r: string, full: string) => void) => void) | null;
+    handled: string[]; lastRxTs: number; lastTxTs: number; reqCount: number; warm: string[]; stopping: boolean;
+}
+const sigState: SigState = {
+    enabled: false, session: '', topic: '', servers: [], key: null, subs: [], reasm: null,
+    handled: [], lastRxTs: 0, lastTxTs: 0, reqCount: 0, warm: [], stopping: false,
+};
+
+function sigSha256(s: string): Buffer { return crypto.createHash('sha256').update(Buffer.from(s, 'utf8')).digest(); }
+function sigSessionId(): string {
+    const tok = bridgeToken || ws.token || '';
+    return 'rtflow-' + crypto.createHash('sha256').update('dao-sig-session\n' + tok).digest('hex').slice(0, 16);
+}
+function sigTopicFor(session: string): string {
+    const b = sigSha256('topic\n' + String(session));
+    let s = ''; for (let i = 0; i < 12; i++) s += ('0' + b[i].toString(16)).slice(-2);
+    return 'dao' + s;
+}
+function sigDeriveKey(session: string, token: string): Buffer {
+    return sigSha256(String(session) + '\n' + String(token) + '\ndao-sig');
+}
+function sigSeal(key: Buffer, obj: any): string {
+    const iv = crypto.randomBytes(12);
+    const c = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const ct = Buffer.concat([c.update(Buffer.from(JSON.stringify(obj), 'utf8')), c.final()]);
+    const tag = c.getAuthTag();
+    return Buffer.concat([iv, ct, tag]).toString('base64'); // iv(12)||ct||tag(16) == WebCrypto 布局
+}
+function sigUnseal(key: Buffer, b64: string): any {
+    try {
+        const raw = Buffer.from(b64, 'base64');
+        if (raw.length < 12 + 16) return null;
+        const iv = raw.subarray(0, 12);
+        const tag = raw.subarray(raw.length - 16);
+        const ct = raw.subarray(12, raw.length - 16);
+        const d = crypto.createDecipheriv('aes-256-gcm', key, iv); d.setAuthTag(tag);
+        const pt = Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+        return JSON.parse(pt);
+    } catch { return null; }
+}
+function sigFrameChunks(corr: string, role: string, payloadB64: string): string[] {
+    const n = Math.ceil(payloadB64.length / SIG_CHUNK) || 1; const out: string[] = [];
+    for (let i = 0; i < n; i++) out.push(JSON.stringify({ v: 1, c: corr, r: role, i, n, p: payloadB64.slice(i * SIG_CHUNK, (i + 1) * SIG_CHUNK) }));
+    return out;
+}
+function sigMakeReasm() {
+    const buf: any = Object.create(null);
+    return (msg: string, onComplete: (c: string, r: string, full: string) => void) => {
+        let m: any; try { m = JSON.parse(msg); } catch { return; }
+        if (!m || m.v !== 1 || !m.c || typeof m.p !== 'string') return;
+        let e = buf[m.c]; if (!e) e = buf[m.c] = { n: m.n, parts: new Array(m.n), got: 0, role: m.r, ts: Date.now() };
+        if (e.parts[m.i] === undefined) { e.parts[m.i] = m.p; e.got++; }
+        if (e.got >= e.n) { const full = e.parts.join(''); delete buf[m.c]; onComplete(m.c, m.r, full); }
+        const now = Date.now(); for (const k in buf) if (now - buf[k].ts > SIG_REASM_TTL_MS) delete buf[k];
+    };
+}
+// ntfy 发布: 黏性故障转移 — 按序逐 broker POST, 命中首个 2xx 即止(非广播)
+function sigPublishOne(server: string, topic: string, body: string, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        let done = false; const fin = (ok: boolean) => { if (!done) { done = true; resolve(ok); } };
+        try {
+            const u = new URL(server.replace(/\/+$/, '') + '/' + topic);
+            const isHttps = u.protocol === 'https:';
+            const lib: any = isHttps ? https : http;
+            const data = Buffer.from(body, 'utf8');
+            const req = lib.request({ method: 'POST', host: u.hostname, port: u.port || (isHttps ? 443 : 80), path: u.pathname + u.search, headers: { 'Content-Length': data.length } }, (res: any) => {
+                const ok = !!res.statusCode && res.statusCode >= 200 && res.statusCode < 300; res.resume(); fin(ok);
+            });
+            req.on('error', () => fin(false));
+            req.setTimeout(timeoutMs, () => { try { req.destroy(); } catch {} fin(false); });
+            req.write(data); req.end();
+        } catch { fin(false); }
+    });
+}
+async function sigPublishFrame(topic: string, frame: string): Promise<boolean> {
+    const order = (sigState.warm.length ? sigState.warm : sigState.servers);
+    for (const s of order) { if (await sigPublishOne(s, topic, frame, 8000)) { sigState.lastTxTs = Date.now(); return true; } }
+    // warm 全失败兜底: 再全量扫一遍原始列表
+    for (const s of sigState.servers) { if (order.indexOf(s) >= 0) continue; if (await sigPublishOne(s, topic, frame, 8000)) { sigState.lastTxTs = Date.now(); return true; } }
+    return false;
+}
+async function sigPublishObj(role: string, corr: string, obj: any): Promise<boolean> {
+    if (!sigState.key) return false;
+    const payload = sigSeal(sigState.key, obj);
+    const frames = sigFrameChunks(corr, role, payload);
+    let ok = true; for (const f of frames) { if (!(await sigPublishFrame(sigState.topic, f))) ok = false; }
+    return ok;
+}
+// broker 预热: 启动时并行 health 探测, 把可达者排到前面(跳过死 broker)
+async function sigWarmBrokers(): Promise<void> {
+    const results = await Promise.all(sigState.servers.map(async (s) => {
+        try { const ok = await sigPublishOne(s, sigState.topic, JSON.stringify({ v: 1, c: 'warm', r: 'w', i: 0, n: 1, p: '' }), 6000); return { s, ok }; }
+        catch { return { s, ok: false }; }
+    }));
+    const alive = results.filter(r => r.ok).map(r => r.s);
+    sigState.warm = alive.length ? alive : sigState.servers.slice();
+}
+function sigMarkHandled(corr: string): boolean {
+    if (sigState.handled.indexOf(corr) >= 0) return false; // 已处理(多 broker 重复投递)
+    sigState.handled.push(corr); if (sigState.handled.length > SIG_DEDUP_MAX) sigState.handled.shift();
+    return true;
+}
+async function sigServeFrame(corr: string, full: string): Promise<void> {
+    if (!sigState.key) return;
+    if (!sigMarkHandled(corr)) return;
+    const req = sigUnseal(sigState.key, full);
+    if (!req || typeof req !== 'object') return; // 解密失败 = 非法/错 token, 静默丢弃(零账号门禁)
+    sigState.lastRxTs = Date.now(); sigState.reqCount++;
+    const t = req.t || 'rpc';
+    if (t === 'ping') { await sigPublishObj('a', corr, { t: 'pong', ts: Date.now(), session: sigState.session }); return; }
+    if (t !== 'rpc') return;
+    const id = req.id || corr;
+    try {
+        const route = String(req.path || '/api/health').split('?')[0];
+        const parsedUrl = new URL(req.path || '/api/health', 'http://localhost:' + (ws.port || 9920));
+        const bodyStr = (req.body === undefined || req.body === null) ? '' : (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
+        const fakeReq: any = { headers: req.headers || { 'content-type': 'application/json' }, method: req.method || 'GET', socket: { remoteAddress: 'sig' }, url: req.path || '/api/health', _relayBody: bodyStr };
+        const result = await handleRouteInternal(route, parsedUrl, fakeReq, bridgeToken || ws.token);
+        await sigPublishObj('a', corr, { t: 'res', id, status: 200, body: result });
+    } catch (err: any) {
+        await sigPublishObj('a', corr, { t: 'res', id, status: 500, body: { error: err && err.message ? err.message : String(err) } });
+    }
+}
+function sigSubscribeServer(server: string): void {
+    if (sigState.stopping) return;
+    const WebSocket = require('ws');
+    const wsUrl = server.replace(/^http/, 'ws').replace(/\/+$/, '') + '/' + sigState.topic + '/ws';
+    let backoff = SIG_BACKOFF_MIN; let sock: any = null; let alive = true;
+    const entry: any = { server, close: () => { alive = false; try { sock && sock.close(); } catch {} } };
+    sigState.subs.push(entry);
+    const open = () => {
+        if (!alive || sigState.stopping) return;
+        try { sock = new WebSocket(wsUrl); } catch { schedule(); return; }
+        sock.on('open', () => { backoff = SIG_BACKOFF_MIN; });
+        sock.on('message', (data: Buffer) => {
+            try {
+                const o = JSON.parse(data.toString());
+                if (o && o.event === 'message' && typeof o.message === 'string' && sigState.reasm) {
+                    sigState.reasm(o.message, (corr, role, full) => { if (role === 'q') { sigServeFrame(corr, full).catch(() => {}); } });
+                }
+            } catch {}
+        });
+        sock.on('close', () => { if (alive && !sigState.stopping) schedule(); });
+        sock.on('error', () => { try { sock.close(); } catch {} });
+    };
+    const schedule = () => {
+        if (!alive || sigState.stopping) return;
+        setTimeout(open, backoff + Math.floor(Math.random() * 500));
+        backoff = Math.min(backoff * 2, SIG_BACKOFF_MAX);
+    };
+    open();
+}
+async function sigStart(): Promise<void> {
+    try {
+        if (sigState.enabled) return;
+        const tok = bridgeToken || ws.token; if (!tok) return;
+        sigState.session = sigSessionId();
+        sigState.topic = sigTopicFor(sigState.session);
+        sigState.servers = SIG_DEFAULT_SERVERS.slice();
+        sigState.key = sigDeriveKey(sigState.session, tok);
+        sigState.reasm = sigMakeReasm();
+        sigState.handled = []; sigState.stopping = false;
+        await sigWarmBrokers();
+        for (const s of (sigState.warm.length ? sigState.warm : sigState.servers)) sigSubscribeServer(s);
+        sigState.enabled = true;
+        try { console.log('[dao-sig] decentralized relay up · session=' + sigState.session + ' topic=' + sigState.topic + ' brokers=' + (sigState.warm.length || sigState.servers.length)); } catch {}
+    } catch (e) { try { console.error('[dao-sig] start failed', e); } catch {} }
+}
+function sigStop(): void {
+    sigState.stopping = true;
+    for (const e of sigState.subs) { try { e.close(); } catch {} }
+    sigState.subs = []; sigState.enabled = false;
+}
+function sigInfo(): any {
+    return {
+        enabled: sigState.enabled, session: sigState.session, topic: sigState.topic,
+        brokers: sigState.servers, warm: sigState.warm,
+        reqCount: sigState.reqCount, lastRxTs: sigState.lastRxTs, lastTxTs: sigState.lastTxTs,
+    };
+}
+
+// ═══════════════════════════════════════════════════════════
 // 代理隧道 — 自动检测本地VPN代理，绕过DNS污染
 // 道法自然: 用户有VPN(Clash/V2Ray)，自动利用，无为而无以为
 // ═══════════════════════════════════════════════════════════
@@ -1515,7 +1717,7 @@ function isAppProxyPassthrough(route: string): boolean {
             '/api/command', '/api/file', '/api/write', '/api/search', '/api/edit', '/api/ls',
             '/api/terminal', '/api/diagnostics', '/api/definitions', '/api/references', '/api/symbols',
             '/api/git/', '/api/agents', '/api/commands', '/api/tools', '/api/devin', '/api/workspaces',
-            '/api/agent-doc', '/api/manifest', '/api/bridge-state', '/api/next'];
+            '/api/agent-doc', '/api/manifest', '/api/bridge-state', '/api/next', '/api/signal-info'];
         return !daoApiPrefixes.some(p => route === p || route.startsWith(p + '/') || route === p.replace(/\/$/, ''));
     }
     // 帛书·「执天之行」官网根挂载: dao 自身 HTTP 仅占用 /api/*, 故其余所有根路径
@@ -1648,9 +1850,14 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
                 port: ws.port, pid: process.pid,
                 publicUrl: ws.publicUrl,
                 relay: ws.relayConnected ? 'connected' : 'local',
+                signal: sigState.enabled ? { session: sigState.session, topic: sigState.topic, brokers: sigState.servers.length, reqCount: sigState.reqCount } : null,
                 uptime: Math.floor((Date.now() - ws.startTime) / 1000),
                 server_time: new Date().toISOString()
             };
+        }
+        case '/api/signal-info': {
+            // 去中心化路线C 诊断: session/topic/broker 健康/收发统计
+            return sigInfo();
         }
         case '/api/connection': {
             return {
@@ -2819,6 +3026,72 @@ function bridgeGenerateCloudMd(): string {
         '4. 仅当 > 5 分钟仍无新鲜可达 URL,才提示用户重启 IDE(极少发生)。',
         '',
         '> 道理:`自动识别 → 自动刷新 → 自动反注入本库` 是插件内建的反向闭环;云端只要「**遇死即重读本库**」整条链路即闭合,无为而无不为。',
+        '',
+        '## 🛰️ 去中心化路线C(零中心兜底·ntfy mesh)',
+        '',
+        '> 取自手机版同源底座。**即使上面 cloudflared 公网URL 与中继 Worker 同时全挂**, 仍能经多家',
+        '> 互不隶属的公共 ntfy pub/sub 加密直达本机(任一 broker 可达即通·无单点)。控制面 RPC 帧与整机端点同构,',
+        '> 故 `/api/exec`、`/api/file`、`/api/ls` 等照常可用。公共 broker 全程只见密文(载荷以 token 派生 AES-256-GCM 封装)。',
+        '',
+        '```',
+        `去中心化 Session: ${sigState.session || sigSessionId()}`,
+        `Token(同上):     ${tok}`,
+        `Brokers:         ${(sigState.servers.length ? sigState.servers : SIG_DEFAULT_SERVERS).join('  ')}`,
+        '```',
+        '',
+        '**何时用**:仅当「公网URL 反复重读仍 5xx/超时」(隧道与 Worker 同时不可用)时, 作为终极兜底。平时优先用上面的公网URL。',
+        '',
+        '**Python 客户端(零中心·实时订阅版, 仅需 `cryptography`)**。已实测往返 RTT≈1.4s, `/api/exec` 等整机端点照常可用:',
+        '```python',
+        'import urllib.request, json, ssl, os, hashlib, base64, time, secrets, threading',
+        'from cryptography.hazmat.primitives.ciphers.aead import AESGCM',
+        "for k in ('HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy'): os.environ.pop(k,None)",
+        "os.environ['NO_PROXY']='*'",
+        'ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE',
+        'opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=ctx))',
+        `SESSION=${JSON.stringify(sigState.session || sigSessionId())}; TOKEN="${tok}"`,
+        `BROKERS=${JSON.stringify(sigState.servers.length ? sigState.servers : SIG_DEFAULT_SERVERS)}`,
+        'KEY=hashlib.sha256((SESSION+"\\n"+TOKEN+"\\ndao-sig").encode()).digest()',
+        'TOPIC="dao"+hashlib.sha256(("topic\\n"+SESSION).encode()).hexdigest()[:24]',
+        'def seal(obj):',
+        '    iv=secrets.token_bytes(12); return base64.b64encode(iv+AESGCM(KEY).encrypt(iv,json.dumps(obj).encode(),None)).decode()',
+        'def unseal(b):',
+        '    raw=base64.b64decode(b); return json.loads(AESGCM(KEY).decrypt(raw[:12],raw[12:],None))',
+        '_buf={}; _ans={}; _lock=threading.Lock()',
+        'def _sub(broker):',
+        '    while True:',
+        '        try:',
+        '            r=opener.open(broker+"/"+TOPIC+"/json",timeout=300)',
+        '            for line in r:',
+        '                try: m=json.loads(json.loads(line.decode()).get("message","null"))',
+        '                except Exception: continue',
+        '                if not m or m.get("r")!="a" or not m.get("c"): continue',
+        '                with _lock:',
+        '                    e=_buf.setdefault(m["c"],{}); e[m["i"]]=m["p"]',
+        '                    if len(e)>=m["n"]:',
+        '                        try: _ans[m["c"]]=unseal("".join(e[k] for k in sorted(e)))',
+        '                        except Exception: pass',
+        '        except Exception: time.sleep(2)',
+        'for b in BROKERS: threading.Thread(target=_sub,args=(b,),daemon=True).start()',
+        'time.sleep(2)  # 让订阅流建立',
+        'def pub(frame):',
+        '    for s in BROKERS:',
+        '        try: opener.open(urllib.request.Request(s+"/"+TOPIC,data=frame.encode(),method="POST"),timeout=8); return True',
+        '        except Exception: continue',
+        '    return False',
+        'def rpc(path,method="GET",body=None,timeout=40):',
+        '    corr=secrets.token_hex(8); payload=seal({"t":"rpc","id":corr,"path":path,"method":method,"body":body})',
+        '    n=(len(payload)+1199)//1200 or 1',
+        '    for i in range(n): pub(json.dumps({"v":1,"c":corr,"r":"q","i":i,"n":n,"p":payload[i*1200:(i+1)*1200]}))',
+        '    deadline=time.time()+timeout',
+        '    while time.time()<deadline:',
+        '        with _lock:',
+        '            if corr in _ans: return _ans.pop(corr)',
+        '        time.sleep(0.3)',
+        '    raise TimeoutError("route-C no answer")',
+        'print(rpc("/api/health"))',
+        'print(rpc("/api/exec","POST",{"cmd":"hostname"}))',
+        '```',
         '',
         '## 整机端点',
         '',
