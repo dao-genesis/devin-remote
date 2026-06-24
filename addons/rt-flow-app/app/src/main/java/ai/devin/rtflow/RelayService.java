@@ -52,6 +52,11 @@ public class RelayService extends Service {
     // 路线A 扩展: 独立于 cloudflared 的第二条去中心化公网后端 (SSH 反向隧道·localhost.run 等), 与主隧道并行兜底。
     private SshTunnelManager sshTunnel;
     private volatile String sshUrl = "";           // SSH 后端当前公网 URL
+    // 传输求真 (承 v0.37.53 哲学): 隧道刚冒 URL ≠ 公网真可达。cloudflared 可"假活"(进程在跑·边缘 530);
+    //   localhost.run 等公共 SSH 边缘更常"发了 URL 即废"(转发瞬断·对公网回 503 "no tunnel here")。
+    //   故只有探活确认可达的入口才纳入 publicUrls —— 控制端/外部据此直连, 不该被未验证的死 URL 误导。
+    private volatile boolean cfVerified = false;    // cloudflared 公网 URL 是否经探活确认真可达
+    private volatile boolean sshVerified = false;   // SSH 备隧公网 URL 是否经探活确认真可达
     private int sshRetries = 0;                     // SSH 后端连续退出计数 (连通后清零)
     private int sshEdgeIdx = 0;                      // 当前所用公共 SSH 边缘下标 (退出后轮换兜底)
     private volatile int sshGen = 0;                 // SSH 隧道启动代次 (作废过期看门狗)
@@ -1022,7 +1027,7 @@ public class RelayService extends Service {
             int port = localServer.getPort();
             if (tunnel != null) tunnel.stop();
             tunnel = new TunnelManager(this, port, new NativeTunnel.Callback() {
-                public void onUrl(String url) { tunnelRetries = 0; writeUserFile("tunnel-url", url); updateTunnelStatus(url, true, "隧道已连通", 0, false); }
+                public void onUrl(String url) { tunnelRetries = 0; cfVerified = false; writeUserFile("tunnel-url", url); updateTunnelStatus(url, true, "隧道已连通", 0, false); kickVerify(true, url); }
                 public void onLog(String line) { android.util.Log.i("RTFlowTunnel", line); }
                 public void onExit(int code) { onTunnelExit(code); }
             });
@@ -1062,10 +1067,10 @@ public class RelayService extends Service {
                 final boolean ok = probeUrl(u + "/health", 10000);
                 main.post(() -> {
                     if (gen != tunnelGen || !tunnelEnabledFlag()) return;
-                    if (ok) { cfHealthFails = 0; cfHealthRestarts = 0; scheduleCfHealth(gen); return; }  // 真活 → 清零累计, 主隧道恢复正常
+                    if (ok) { cfHealthFails = 0; cfHealthRestarts = 0; if (!cfVerified) { cfVerified = true; rebroadcast(null); } scheduleCfHealth(gen); return; }  // 真活 → 清零累计·纳入 publicUrls, 主隧道恢复正常
                     cfHealthFails++;
                     if (cfHealthFails < 2) { scheduleCfHealth(gen); return; }   // 单次抑制抖动, 连失 2 次才动手
-                    cfHealthFails = 0;
+                    cfHealthFails = 0; cfVerified = false;
                     TunnelManager cur = tunnel;
                     if (cur != null) try { cur.stop(); } catch (Exception ignored) {}
                     if (cfHealthRestarts < CF_HEALTH_RESTART_CAP) {
@@ -1076,7 +1081,7 @@ public class RelayService extends Service {
                     } else {
                         // 连续重启仍 530 → 判定本网络拦截 Cloudflare 边缘: 如实标主隧道离线, 停 cf 省电, 慢探恢复 (备隧 SSH/中继始终兜底)。
                         android.util.Log.w("RTFlowTunnel", "cf edge persistently unreachable (530) → mark offline, slow recover");
-                        tunnel = null;
+                        tunnel = null; cfVerified = false;
                         final int rgen = ++tunnelGen;   // 作废本健康循环 + 任何在途看门狗
                         try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
                         updateTunnelStatus("", false, "cloudflared 边缘持续不可达(530·本网络疑拦截 Cloudflare) · 已回退备隧(SSH)/中继, 后台每5min重试…", tunnelRetries, true);
@@ -1099,7 +1104,7 @@ public class RelayService extends Service {
             if (sshTunnel != null) sshTunnel.stop();
             final String edge = SshTunnelManager.EDGES[sshEdgeIdx % SshTunnelManager.EDGES.length];
             sshTunnel = new SshTunnelManager(this, port, edge, new NativeTunnel.Callback() {
-                public void onUrl(String url) { sshRetries = 0; sshUrl = url; rebroadcast("备用隧道已连通 (" + edge + ")"); }
+                public void onUrl(String url) { sshRetries = 0; sshUrl = url; sshVerified = false; rebroadcast("备用隧道已连通 (" + edge + ")"); kickVerify(false, url); }
                 public void onLog(String line) { android.util.Log.i("RTFlowTunnel", "[ssh] " + line); }
                 public void onExit(int code) { onSshExit(code); }
             });
@@ -1125,7 +1130,7 @@ public class RelayService extends Service {
     /** SSH 后端退出: 轮换到下一个公共边缘, 持久退避重连 (与 cloudflared 同样永不彻底放弃)。 */
     private synchronized void onSshExit(int code) {
         if (!tunnelEnabledFlag()) return;
-        sshUrl = "";
+        sshUrl = ""; sshVerified = false;
         sshRetries++; sshEdgeIdx++;   // 换下一个边缘
         long delay = Math.min(2000L * sshRetries, TUNNEL_RETRY_CAP);
         rebroadcast(null);
@@ -1142,11 +1147,11 @@ public class RelayService extends Service {
                 final boolean ok = probeUrl(u + "/health", 10000);
                 main.post(() -> {
                     if (gen != sshGen || !tunnelEnabledFlag()) return;
-                    if (ok) { sshHealthFails = 0; scheduleSshHealth(gen); return; }
+                    if (ok) { sshHealthFails = 0; if (!sshVerified) { sshVerified = true; rebroadcast(null); } scheduleSshHealth(gen); return; }
                     sshHealthFails++;
                     if (sshHealthFails >= 2) {
                         android.util.Log.w("RTFlowTunnel", "[ssh] health probe failed → cycle edge");
-                        sshHealthFails = 0; sshUrl = ""; sshEdgeIdx++;
+                        sshHealthFails = 0; sshUrl = ""; sshVerified = false; sshEdgeIdx++;
                         SshTunnelManager t = sshTunnel;
                         if (t != null) try { t.stop(); } catch (Exception ignored) {}
                         rebroadcast(null);
@@ -1155,6 +1160,25 @@ public class RelayService extends Service {
                 });
             }, "rtflow-ssh-health").start();
         }, SSH_HEALTH_INTERVAL);
+    }
+    /** URL 刚冒出时公网转发常需 1~2s 才稳(localhost.run 尤甚, 且可能发了即废): 短延迟后探一次,
+     *  通过才把该入口纳入 publicUrls(传输求真)。失败则保持未验证→不进 publicUrls, 交周期健康探测续判/轮换。 */
+    private void kickVerify(final boolean isCf, final String url) {
+        if (url == null || url.isEmpty()) return;
+        final int cfg = tunnelGen, sg = sshGen;
+        main.postDelayed(() -> {
+            if (!tunnelEnabledFlag()) return;
+            if (isCf ? (tunnelGen != cfg) : (sshGen != sg)) return;   // 已被新一代取代
+            new Thread(() -> {
+                final boolean ok = probeUrl(url + "/health", 8000);
+                main.post(() -> {
+                    if (!tunnelEnabledFlag()) return;
+                    if (isCf) { if (tunnelGen != cfg) return; cfVerified = ok; }
+                    else      { if (sshGen != sg) return; sshVerified = ok; }
+                    if (ok) rebroadcast(null);   // 验证通过 → 纳入 publicUrls
+                });
+            }, "rtflow-verify").start();
+        }, 1500);
     }
     /** 轻量 GET 探测: 2xx/3xx/4xx 视为隧道在线; 5xx(含 localhost.run "no tunnel here" 503)或异常=死。 */
     private boolean probeUrl(String url, int timeoutMs) {
@@ -1176,6 +1200,7 @@ public class RelayService extends Service {
         sshGen++;
         if (sshTunnel != null) { sshTunnel.stop(); sshTunnel = null; }
         sshUrl = ""; sshRetries = 0; sshEdgeIdx = 0; sshHealthFails = 0;
+        cfVerified = false; sshVerified = false;
         if (!lanDirectFlag() && localServer != null) { localServer.stop(); localServer = null; localPort = -1; }
         tunnelRetries = 0; cfHealthFails = 0; cfHealthRestarts = 0;
         try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
@@ -1186,6 +1211,7 @@ public class RelayService extends Service {
      *  软上限后诚实提示"已回退中继"但后台仍持续重连 → 网络恢复即自动复活。
      *  关键: 中继(Worker) 与隧道并行, 隧道失败丝毫不影响中继 → 手机始终在线可远程接入。 */
     private synchronized void onTunnelExit(int code) {
+        cfVerified = false;
         if (!tunnelEnabledFlag()) { updateTunnelStatus("", false, "已停止", 0, false); return; }
         try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
         // 持久自愈: 隧道=公网入口, 永不彻底放弃。退避 2s/4s/6s…上限 60s, 后台无限重连 → 网络恢复即自动复活(真·无感常驻)。
@@ -1239,8 +1265,9 @@ public class RelayService extends Service {
             // 全部生效的去中心化公网入口 (主 cloudflared + 备用 SSH 反向隧道), 供面板逐条展示/复制。
             org.json.JSONArray tunnels = new org.json.JSONArray();
             org.json.JSONArray publicUrls = new org.json.JSONArray();
-            if (!cf.isEmpty()) { tunnels.put(new org.json.JSONObject().put("name", "cloudflared").put("url", cf)); publicUrls.put(cf); }
-            if (!ssh.isEmpty()) { tunnels.put(new org.json.JSONObject().put("name", "ssh").put("url", ssh)); publicUrls.put(ssh); }
+            // tunnels: 含全部已冒出的入口(供面板逐条展示·带 verified 真相标记); publicUrls: 仅"探活确认可达"者(供控制端/外部直连)。
+            if (!cf.isEmpty()) { tunnels.put(new org.json.JSONObject().put("name", "cloudflared").put("url", cf).put("verified", cfVerified)); if (cfVerified) publicUrls.put(cf); }
+            if (!ssh.isEmpty()) { tunnels.put(new org.json.JSONObject().put("name", "ssh").put("url", ssh).put("verified", sshVerified)); if (sshVerified) publicUrls.put(ssh); }
             o.put("sshUrl", ssh);
             o.put("tunnels", tunnels);
             o.put("publicUrls", publicUrls);

@@ -1,6 +1,6 @@
 {
-  "versionCode": 160,
-  "versionName": "0.37.56",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.56/DevinCloud-mobile-v0.37.56.apk",
-  "notes": "v0.37.56 · 控制端优先走手机自带直连隧道, 中继 Worker 真正降为最后兜底(用户北极星)\n• 依据(真机实测): 手机 LocalServer 经 cloudflared/SSH 暴露的 /relay/<session> 协议与中继 Worker 逐字节同构、且回 CORS *。即便经 Worker 控台打开, 浏览器也能跨源直连手机自己的公网隧道、几乎不碰中继。可你手机当前正是「cloudflared 被本网络拦 → SSH(lhr.life)在扛」, 而控制端却只认 Worker。\n• 本版: 控制端经当前活通道问一次手机 tunnelStat 拿 publicUrls(仅留 https, 避开 HTTPS 控台对 http 局域网的混合内容拦截), 后台探活; 某直连隧道确实可达即把 ENDPOINT 从 Worker 升级到它, 通道自愈候选清单里 Worker 也永远沉到直连之后。\n• 安全兜底: 仅当直连「探活确实通」才切; 一旦它死, 既有 _relayHttp 自愈无缝回退 Worker。纯加法——学不到/全不通则与旧版逐字节一致; P2P 直连仍是更优先的数据面, 本优化只提升 HTTP 兜底层。\n• console-failover 切片新增 5 项(候选排序/https 过滤/Worker→直连升级/死隧不升/已直连 no-op)实测真代码, 全套 JS 单测全绿; APK BUILD SUCCESSFUL。\n— — —\nv0.37.55 · cloudflared 拦截网络省电自愈(起即退超硬上限转 5min 慢探)\nv0.37.54 · 内网穿透 WSS 半开死链看门狗 + 中继转发只选活 socket\nv0.37.53 · 去中心化 P2P 客户端「传输真相」收口\nv0.37.52 · 联控镜像热路径零可避免每帧分配"
+  "versionCode": 161,
+  "versionName": "0.37.57",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.57/DevinCloud-mobile-v0.37.57.apk",
+  "notes": "v0.37.57 · 内网穿透「传输求真」: publicUrls 只列探活确认可达的公网入口(承 v0.37.53 哲学)\n• 真机实测复现: 手机 tunnelStat 报 sshUrl=xxx.lhr.life、connected:true, 但该 URL 实测回 503 \"no tunnel here\"(localhost.run 免费边缘发了 URL 即废/转发瞬断); cloudflared 同理可\"假活\"(进程在跑·边缘 530)。旧逻辑把刚冒出的 URL 立刻塞进 publicUrls → 控制端/外部据此直连会撞死链。\n• 本版: 隧道冒 URL 后先短延迟探活一次(+周期健康探测续判), 只有确认真可达的入口才纳入 publicUrls; cfVerified/sshVerified 双标志驱动。面板 tunnels 仍逐条展示全部入口并带 verified 真相标记。\n• 双向兜底: 与 v0.37.56 控制端「探活才切直连」同向——即便手机只剩 Worker 可达(本网络 cf 被拦+SSH 边缘抽风), publicUrls 据实为空、控制端老实走 Worker, 不误导不撞死。纯加法、零协议改动; APK BUILD SUCCESSFUL。\n— — —\nv0.37.56 · 控制端优先走手机自带直连隧道, Worker 降为最后兜底\nv0.37.55 · cloudflared 拦截网络省电自愈(起即退超硬上限转 5min 慢探)\nv0.37.54 · 内网穿透 WSS 半开死链看门狗 + 中继转发只选活 socket\nv0.37.53 · 去中心化 P2P 客户端「传输真相」收口"
 }
