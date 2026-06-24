@@ -60,12 +60,16 @@
 <pre id="log"></pre>
 
 <script>
-var STUN = [
+// GFW 友好: 优先复用 signal.js 同一份 STUN 清单(含境内可达 + nextcloud:443), 缺失时回落内置。
+var STUN = (window.DaoSignal && window.DaoSignal.STUN) ? window.DaoSignal.STUN.slice() : [
+  { urls: "stun:stun.cloudflare.com:3478" },
+  { urls: "stun:stun.miwifi.com:3478" },
+  { urls: "stun:stun.qq.com:3478" },
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
-  { urls: "stun:stun.cloudflare.com:3478" }
+  { urls: "stun:stun.nextcloud.com:443" }
 ];
-var pc = null, dc = null, seq = 0, waiters = Object.create(null);
+var pc = null, dc = null, dcSendFn = null, seq = 0, waiters = Object.create(null);
 var sig = null;   // 去中心化直连句柄 (DaoSignal.connect 返回 {pc,dc,rpc,ping,close})
 function onOpen(label){ setState(label,"#238636"); $("btnSend").disabled=false; $("btnPing").disabled=false; $("btnConnect").disabled=false; log("✓ DataChannel open — 之后 RPC 全程 P2P"); }
 function $(id){ return document.getElementById(id); }
@@ -104,16 +108,19 @@ async function connect(){
   if(!url){ log("✗ 去中心化未通且未填隧道URL, 无法兜底"); setState("失败","#da3633"); $("btnConnect").disabled=false; return; }
   setState("Worker兜底握手中…","#9e6a03");
   try{
-    pc = new RTCPeerConnection({ iceServers: ice });
+    pc = new RTCPeerConnection({ iceServers: ice, iceCandidatePoolSize: 2 });
     dc = pc.createDataChannel("rpc");
     dc.binaryType="arraybuffer";
     dc.onopen=function(){ onOpen("P2P 已直连 🟢 (Worker兜底信令)"); };
     dc.onclose=function(){ setState("通道关闭","#30363d"); $("btnSend").disabled=true; $("btnPing").disabled=true; };
-    dc.onmessage=function(ev){
-      var m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
+    // 大响应(如 downloadFetch base64)经 dcWire 透明分片+背压重组; 信令缺席时回落原逐条。
+    function onDcMsg(m){
+      if(!m) return;
       if(m.t==="pong"){ var w=waiters[m.id]; if(w){ delete waiters[m.id]; w.resolve({pong:true,ts:m.ts}); } return; }
       if(m.t==="res"){ var w2=waiters[m.id]; if(w2){ delete waiters[m.id]; w2.resolve(m.result); } }
-    };
+    }
+    if(window.DaoSignal && window.DaoSignal.dcWire){ dcSendFn = window.DaoSignal.dcWire(dc, onDcMsg); }
+    else { dcSendFn = function(o){ try{ dc.send(JSON.stringify(o)); }catch(e){} }; dc.onmessage=function(ev){ var m; try{ m=JSON.parse(ev.data); }catch(e){ return; } onDcMsg(m); }; }
     pc.onconnectionstatechange=function(){ log("• pc: "+pc.connectionState); if(pc.connectionState==="failed") setState("打洞失败 (NAT/UDP 受限)","#da3633"); };
     var offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -134,7 +141,7 @@ function rpcRaw(frame){
   return new Promise(function(resolve,reject){
     if(!dc || dc.readyState!=="open") return reject(new Error("datachannel 未就绪"));
     var id=String(++seq); waiters[id]={resolve:resolve,reject:reject};
-    dc.send(JSON.stringify({ t:"rpc", id:id, frame:frame }));
+    var send=dcSendFn||function(o){ dc.send(JSON.stringify(o)); }; send({ t:"rpc", id:id, frame:frame });
     setTimeout(function(){ if(waiters[id]){ delete waiters[id]; reject(new Error("timeout")); } }, 30000);
   });
 }
@@ -151,9 +158,9 @@ async function sendRpc(){
     log("✓ "+cmd+" ["+dt+"ms · P2P] →"); log(out);
   }catch(e){ log("✗ "+cmd+": "+String((e&&e.message)||e)); }
 }
-function ping(){ return new Promise(function(resolve,reject){ var id="p"+(++seq); waiters[id]={resolve:resolve,reject:reject}; var t0=performance.now(); dc.send(JSON.stringify({t:"ping",id:id})); waiters[id].resolve=function(){ resolve(performance.now()-t0); }; setTimeout(function(){ if(waiters[id]){delete waiters[id]; reject(new Error("to")); } },5000); }); }
+function ping(){ return new Promise(function(resolve,reject){ var id="p"+(++seq); waiters[id]={resolve:resolve,reject:reject}; var t0=performance.now(); (dcSendFn||function(o){ dc.send(JSON.stringify(o)); })({t:"ping",id:id}); waiters[id].resolve=function(){ resolve(performance.now()-t0); }; setTimeout(function(){ if(waiters[id]){delete waiters[id]; reject(new Error("to")); } },5000); }); }
 async function pingLoop(){ for(var i=0;i<5;i++){ try{ var ms=await (sig?sig.ping():ping()); log("ping#"+(i+1)+" = "+ms.toFixed(1)+"ms (P2P RTT)"); }catch(e){ log("ping#"+(i+1)+" timeout"); } } }
-function hangup(){ try{ if(sig) sig.close(); }catch(e){} sig=null; try{ if(dc) dc.close(); }catch(e){} try{ if(pc) pc.close(); }catch(e){} dc=null; pc=null; $("btnSend").disabled=true; $("btnPing").disabled=true; setState("未连接","#30363d"); }
+function hangup(){ try{ if(sig) sig.close(); }catch(e){} sig=null; try{ if(dc) dc.close(); }catch(e){} try{ if(pc) pc.close(); }catch(e){} dc=null; pc=null; dcSendFn=null; $("btnSend").disabled=true; $("btnPing").disabled=true; setState("未连接","#30363d"); }
 
 // ── 零中心一键分发: 从 URL 查询参数预填 (session/token/url/turn), ?auto=1 开页即直连 ──────
 //   道法自然·最小化用户参与: 宿主把带参链接 (经公共 CDN 托管本页·不经任何 Worker) 发给对端,

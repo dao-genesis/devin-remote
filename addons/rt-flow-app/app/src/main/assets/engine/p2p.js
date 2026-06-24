@@ -11,11 +11,16 @@
 // ═══════════════════════════════════════════════════════════════════════════
 (function () {
   // 与 signal.js 对齐的多家公共 STUN (互不隶属 → 单点不可达不致命; 仅反射地址发现, 不中转数据)。
-  var STUN = [
+  //   GFW 友好: Google STUN 境内常被墙 → 并铺 cloudflare/小米/腾讯境内 STUN + nextcloud:443。
+  //   优先复用 signal.js 的同一份清单(单点维护), 缺失时回落本地内置。
+  var STUN = (typeof window !== "undefined" && window.DaoSignal && window.DaoSignal.STUN) ? window.DaoSignal.STUN.slice() : [
+    { urls: "stun:stun.cloudflare.com:3478" },
+    { urls: "stun:stun.miwifi.com:3478" },
+    { urls: "stun:stun.qq.com:3478" },
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun.cloudflare.com:3478" }
+    { urls: "stun:stun.nextcloud.com:443" }
   ];
   var conns = Object.create(null);   // id -> {pc, dc, ts}
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
@@ -36,20 +41,30 @@
 
   // DataChannel 上的 RPC: 客户端发 {t:"rpc", id, frame}, 经与 HTTP 完全相同的
   // serveLocal(E2E 解密→命令→重封) 处理后回 {t:"res", id, result}。
+  //   大响应(如 downloadFetch 的 base64 文件内容)经 DaoSignal.dcWire 透明分片+背压, 不再受
+  //   SCTP 单消息上限制约 → 大文件 P2P 直连可靠满速 (信令缺席时回落原逐条直发, 向后兼容)。
   function wireChannel(dc) {
     try { dc.binaryType = "arraybuffer"; } catch (e) {}
-    dc.onmessage = function (ev) {
-      var msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    var wire = (typeof window !== "undefined" && window.DaoSignal && window.DaoSignal.dcWire) ? window.DaoSignal.dcWire : null;
+    function handle(send, msg) {
       if (!msg) return;
-      if (msg.t === "ping") { try { dc.send(JSON.stringify({ t: "pong", id: msg.id, ts: Date.now() })); } catch (e) {} return; }
+      if (msg.t === "ping") { try { send({ t: "pong", id: msg.id, ts: Date.now() }); } catch (e) {} return; }
       if (msg.t !== "rpc" || !msg.frame) return;
       var frameJson = (typeof msg.frame === "string") ? msg.frame : JSON.stringify(msg.frame);
       DaoRelayApp.serveLocal(frameJson).then(function (r) {
-        try { dc.send(JSON.stringify({ t: "res", id: msg.id, result: r })); } catch (e) {}
+        try { send({ t: "res", id: msg.id, result: r }); } catch (e) {}
       }, function (err) {
-        try { dc.send(JSON.stringify({ t: "res", id: msg.id, result: JSON.stringify({ status: 500, bodyText: JSON.stringify({ error: String(err) }) }) })); } catch (e) {}
+        try { send({ t: "res", id: msg.id, result: JSON.stringify({ status: 500, bodyText: JSON.stringify({ error: String(err) }) }) }); } catch (e) {}
       });
-    };
+    }
+    if (wire) {
+      var send = wire(dc, function (msg) { handle(send, msg); });
+    } else {
+      dc.onmessage = function (ev) {
+        var msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+        handle(function (o) { try { dc.send(JSON.stringify(o)); } catch (e) {} }, msg);
+      };
+    }
   }
 
   function sweep() {
@@ -77,7 +92,7 @@
       for (var i = 0; i < args.ice.length; i++) { var s = args.ice[i]; if (s && s.urls) ice.push(s); }
     }
     var id = uid();
-    var pc = new RTCPeerConnection({ iceServers: ice });
+    var pc = new RTCPeerConnection({ iceServers: ice, iceCandidatePoolSize: 2 });
     var rec = { pc: pc, dc: null, ts: Date.now() };
     conns[id] = rec;
     pc.ondatachannel = function (ev) { rec.dc = ev.channel; wireChannel(ev.channel); };
