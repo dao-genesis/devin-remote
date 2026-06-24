@@ -5368,6 +5368,33 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
     }
 
+    /** 网页控台「取到本机 / 传到当前页」: 按序号读手机下载文件字节并返回 base64 (路径/URI 解析留在本机, 不外发)。
+     *  上限 24MB, 超限返回空串(避免 OOM 与中继巨帧); 优先读本地文件, 回退 content:// URI。 */
+    public String ipcReadDownload(int recIdx) {
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("downloads", "[]"));
+            if (recIdx < 0 || recIdx >= arr.length()) return "";
+            org.json.JSONObject e = arr.getJSONObject(recIdx);
+            String path = e.optString("file", ""); String uri = e.optString("uri", "");
+            final long MAX = 24L * 1024 * 1024;
+            java.io.InputStream in = null;
+            try {
+                File f = path.isEmpty() ? null : new File(path);
+                if (f != null && f.exists() && !f.isDirectory()) {
+                    if (f.length() > MAX) return "";
+                    in = new java.io.FileInputStream(f);
+                } else if (!uri.isEmpty()) {
+                    in = getContentResolver().openInputStream(android.net.Uri.parse(uri));
+                }
+                if (in == null) return "";
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[65536]; int r; long total = 0;
+                while ((r = in.read(buf)) > 0) { total += r; if (total > MAX) return ""; bos.write(buf, 0, r); }
+                return android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
+            } finally { if (in != null) try { in.close(); } catch (Exception ignore) {} }
+        } catch (Exception e) { return ""; }
+    }
+
     /** 标签所属账号的「脱敏」标识 (供 browseListTabs 经中继外发): 仅 email/id/org/编号, 绝不含 password/auth1/token/apiKey。 */
     private String safeTabAccount(String accountJson) {
         if (accountJson == null || accountJson.isEmpty()) return "\"\"";

@@ -214,9 +214,9 @@ function renderRecent(){
       if(hay.indexOf(q)<0) return;
     }
     n++;
-    html+='<div class="rc" data-idx="'+idx+'">'+
+    html+='<div class="rc" data-idx="'+idx+'" draggable="true">'+
       '<div class="r1">'+
-        '<span class="grip" title="长按整张卡片拖到网页">&#10303;</span>'+
+        '<span class="grip" title="拖拽此卡到网页 / 长按拖到上传框">&#10303;</span>'+
         '<span class="acc-no">'+it.no+'</span>'+
         '<span class="st '+stClass(it.status)+'" title="'+_esc(it.status)+'"></span>'+
         '<span class="ti" title="'+_esc(it.title)+'">'+_esc(String(it.title).slice(0,70))+'</span>'+
@@ -226,6 +226,7 @@ function renderRecent(){
         '<span class="b" onclick="viewConv('+idx+')">&#128065; 查看</span>'+
         '<span class="b" onclick="openAcc('+idx+')" title="切到该账号并在网页端打开此对话">&#127760; 进入</span>'+
         '<span class="b" onclick="dlMd('+idx+')">&#11015; MD</span>'+
+        '<span class="b" onclick="uploadConv('+idx+')" title="把本对话记录经内网穿透取回并注入当前 Devin 标签的上传框">&#11014; 传到当前页</span>'+
         '<span class="b pri" onclick="dlZip('+idx+')">&#128230; 全部文件</span>'+
       '</div></div>';
   });
@@ -249,7 +250,38 @@ function bindCards(){
     card.addEventListener("mousedown",function(e){ start(e.clientX,e.clientY,e.target); });
     card.addEventListener("mouseup",cancel);
     card.addEventListener("mouseleave",cancel);
+    // 网页端无原生拖拽桥(N.startConvDrag 仅 APK WebView 有): 用 HTML5 拖拽承载对话引用,
+    //   拖到地址栏/文本框/外部应用皆可; 拖拽载荷含会话 URL + 结构化 JSON, 供父页(同源反代的
+    //   Devin 标签)接住做上传。起拖落在 .acts 上不触发(保证按钮可点)。
+    card.addEventListener("dragstart",function(e){
+      if(onBtn(e.target)){ try{ e.preventDefault(); }catch(x){} return; }
+      var idx=+card.getAttribute("data-idx"); var it=REC[idx]; if(!it){ return; }
+      var url="https://app.devin.ai/sessions/"+String(it.sid||"").replace(/^devin-/,"");
+      var pay={ type:"conv", sid:it.sid, no:it.no, title:it.title||it.sid,
+                accEmail:(it.acc&&(it.acc.email||it.acc.id))||"", url:url };
+      try{ var dt=e.dataTransfer; if(dt){
+        dt.effectAllowed="copyLink";
+        dt.setData("text/uri-list", url);
+        dt.setData("text/plain", (it.title||it.sid)+"\n"+url);
+        dt.setData("application/x-dao-drag", JSON.stringify(pay));
+      } }catch(x){}
+      try{ parent.postMessage({ __rtflow:"daoDragStart", payload:pay }, "*"); }catch(x){}
+    });
+    card.addEventListener("dragend",function(){ try{ parent.postMessage({ __rtflow:"daoDragEnd" }, "*"); }catch(x){} });
   })(cards[i]); }
+}
+// ── ⬆ 传到当前页: 把本对话「完整记录 MD」经内网穿透取回, 交父页注入当前 Devin 标签的上传框 ──
+async function uploadConv(idx){
+  var it=REC[idx]; if(!it) return; toast("取对话记录…");
+  try{
+    var r=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
+    if(!r||!r.ok){ toast("提取失败: "+((r&&r.error)||""),true); return; }
+    var fn=safeName((it.title||it.sid))+".md";
+    var b64; try{ b64=btoa(unescape(encodeURIComponent(r.md||""))); }catch(e){ b64=""; }
+    parent.postMessage({ __rtflow:"daoUploadFile", name:fn, mime:"text/markdown", b64:b64,
+                         meta:{ kind:"conv", sid:it.sid, title:it.title } }, "*");
+    toast("已投递到当前页上传框（若无 Devin 标签将提示）");
+  }catch(e){ toast("异常: "+e,true); }
 }
 function fireCard(card){
   var idx=+card.getAttribute("data-idx"); var it=REC[idx]; if(!it) return;
