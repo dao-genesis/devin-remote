@@ -21,7 +21,10 @@ Usage:  powershell -ExecutionPolicy Bypass -File start_mcp_stack.ps1
 param(
   [int]$PcPort   = $(if ($env:PC_PORT)   { [int]$env:PC_PORT }   else { 9050 }),
   [int]$McpPort  = $(if ($env:MCP_PORT)  { [int]$env:MCP_PORT }  else { 9100 }),
-  [string]$Token = $env:MCP_TOKEN
+  [string]$Token = $env:MCP_TOKEN,
+  # 归一: 默认不再自起第二条快速隧道 — 由常驻桥(dao-bridge)把 <桥URL>/mcp 反代到本机 MCP,
+  #       既免翻倍触发 Cloudflare 限流, 又随桥隧道自愈。仅 -OwnTunnel 时才回退到旧的独立隧道。
+  [switch]$OwnTunnel = [bool]$env:MCP_OWN_TUNNEL
 )
 
 $ErrorActionPreference = 'Continue'
@@ -65,6 +68,27 @@ if (Test-Listen $McpPort) {
 }
 
 # 3) cloudflared quick tunnel -> :McpPort
+#    归一·默认关闭: MCP 经常驻桥(dao-bridge)的 <桥URL>/mcp 对外, 不再自起脆弱的第二条隧道。
+if (-not $OwnTunnel) {
+  # 若历史上自起过隧道, 顺手收掉, 真正归一到单隧道。
+  Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match "127.0.0.1:$McpPort" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  $out = [ordered]@{
+    url       = $null
+    base      = $null
+    token     = $Token
+    mcp_port  = $McpPort
+    pc_port   = $PcPort
+    via       = 'dao-bridge'
+    note      = 'MCP 经常驻桥 <桥URL>/mcp 对外; 插件据此把注入地址定为 <桥URL>/mcp'
+    updated   = (Get-Date).ToString('o')
+  }
+  $pubPath = Join-Path $cfgDir 'mcp_public.json'
+  $out | ConvertTo-Json | Set-Content -LiteralPath $pubPath -Encoding UTF8
+  Write-Output ("mcp归一(经桥): mcp_public.json => " + ($out | ConvertTo-Json -Compress))
+  return
+}
 $cf = "$env:USERPROFILE\.dao\bin\cloudflared.exe"
 if (-not (Test-Path $cf)) { $cf = (Get-Command cloudflared.exe -ErrorAction SilentlyContinue).Source }
 $log = Join-Path $cfgDir 'mcp_tunnel.log'

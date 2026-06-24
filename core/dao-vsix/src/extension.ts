@@ -2882,10 +2882,7 @@ function bridgeGenerateCloudMd(): string {
 //   日常整机直连仍走简版内网穿透 MD; 需要更深层专业操作时, Agent 转用本 MCP。
 function bridgeGenerateMcpUsageMd(): string {
     let mcpUrl = '', mcpTok = '';
-    try {
-        const mf = path.join(process.env.ProgramData || 'C:\\ProgramData', 'dao_vm', 'mcp_public.json');
-        if (fs.existsSync(mf)) { const j = JSON.parse(fs.readFileSync(mf, 'utf8')); mcpUrl = String(j.url || ''); mcpTok = String(j.token || ''); }
-    } catch { /* 守柔 */ }
+    try { const ep = daoResolveMcpEndpoint(); if (ep) { mcpUrl = ep.url; mcpTok = ep.token; } } catch { /* 守柔 */ }
     const urlLine = mcpUrl || '(随隧道动态生成，已自动注入到账号 MCP 列表)';
     return [
         '# ☯ DAO Bridge MCP · 综合归一 MCP 使用文档',
@@ -2917,8 +2914,8 @@ function bridgeGenerateMcpUsageMd(): string {
         '2. 以标准 MCP 工具调用：先 `tools/list` 看可用工具，再 `tools/call` 传 `{name, arguments}`。',
         '3. 例：`browser_navigate {"url":"https://app.devin.ai"}`、`pc_screenshot {}`、`plugin_exec {"cmd":"hostname"}`、`vscode_command {"command":"workbench.action.files.save"}`。',
         '',
-        '> **URL 轮换自愈**：快速隧道地址重启会变；插件探测到旧地址打不通即刷新并重注新地址(打通则保持稳定)。',
-        '> 因此账号里 MCP 的 URL 始终指向当前可达的端点，无需手动维护。',
+        '> **归一·单隧道自愈**：MCP 已蹭在常驻桥(DAO Bridge)的耐用隧道上(`<桥URL>/mcp`)，不再自起第二条快速隧道。',
+        '> 桥隧道地址重启会变，但插件探测到旧地址打不通即刷新并重注新地址；因此账号里 MCP 的 URL 始终指向当前可达的端点，无需手动维护。',
         '',
         '*道法自然 · 无为而无不为*',
     ].join('\n');
@@ -9018,13 +9015,27 @@ function daoSyncPatSecretIntoProfile(): void {
 // 守柔·自愈: 公网快速隧道地址重启会变, 故每次激活幂等校正 — 仅当 url 变化时改写, 不制造无谓写入。
 const DAO_MCP_NAME = 'DAO Bridge MCP';
 const DAO_MCP_PUBLIC_FILE = path.join(process.env.ProgramData || 'C:\\ProgramData', 'dao_vm', 'mcp_public.json');
+// 归一 · 反注 MCP 蹭耐用桥隧道: 综合 MCP(mcp_http.py)的自起快速隧道既翻倍触发 Cloudflare 限流
+//   又死不自愈(常见 mcp_public.json 里 url=null)。故归一 — 优先把注入地址定为 <常驻桥URL>/mcp,
+//   由常驻桥(dao-bridge)把 /mcp 流式反代到本机 9100; 桥隧道单条且自愈, 杜绝第二条脆弱隧道。
+//   仅当桥 URL 暂不可知时, 才回退沿用 MCP 自身隧道地址(若存在)。token 取 MCP 服务端令牌(桥原样透传)。
+function daoResolveMcpEndpoint(): { url: string; token: string } | null {
+    let pub: any = {};
+    try { if (fs.existsSync(DAO_MCP_PUBLIC_FILE)) pub = JSON.parse(fs.readFileSync(DAO_MCP_PUBLIC_FILE, 'utf8')); } catch { return null; }
+    const token = String(pub.token || '').trim();
+    let base = String(bridgeUrl || '').trim();
+    if (!/^https?:\/\//.test(base)) { try { const c = bridgeReadPublishedConn(); if (c && c.url) base = String(c.url).trim(); } catch { /* 守柔 */ } }
+    if (/^https?:\/\//.test(base)) return { url: base.replace(/\/+$/, '') + '/mcp', token };
+    const legacy = String(pub.url || '').trim();
+    if (/^https?:\/\//.test(legacy)) return { url: legacy, token };
+    return null;
+}
 function daoSyncDaoMcpIntoProfile(): void {
     try {
-        if (!fs.existsSync(DAO_MCP_PUBLIC_FILE)) return;
-        let pub: any = {};
-        try { pub = JSON.parse(fs.readFileSync(DAO_MCP_PUBLIC_FILE, 'utf8')); } catch { return; }
-        const url = String(pub.url || '').trim();
-        const token = String(pub.token || '').trim();
+        const ep = daoResolveMcpEndpoint();
+        if (!ep) return;
+        const url = ep.url;
+        const token = ep.token;
         if (!/^https?:\/\//.test(url)) return;
         const p = loadInjectProfile();
         const idx = p.mcps.findIndex(m => m && m.name === DAO_MCP_NAME);
@@ -9052,7 +9063,7 @@ function bridgeCurrentSig(): string {
     let url = bridgeUrl || '', tok = bridgeToken || ws.token || '';
     try { const c = bridgeReadPublishedConn(); if (c) { if (c.url) url = c.url; if (c.token) tok = c.token; } } catch { /* 守柔 */ }
     let mcpUrl = '', mcpTok = '';
-    try { if (fs.existsSync(DAO_MCP_PUBLIC_FILE)) { const j = JSON.parse(fs.readFileSync(DAO_MCP_PUBLIC_FILE, 'utf8')); mcpUrl = String(j.url || ''); mcpTok = String(j.token || ''); } } catch { /* 守柔 */ }
+    try { const ep = daoResolveMcpEndpoint(); if (ep) { mcpUrl = ep.url; mcpTok = ep.token; } } catch { /* 守柔 */ }
     return [url, tok, String(ws.port || ''), mcpUrl, mcpTok].join('|');
 }
 async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: number; changed: boolean }> {

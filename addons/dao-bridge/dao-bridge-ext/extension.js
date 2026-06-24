@@ -18,7 +18,25 @@ const cp = require("child_process");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TRY_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-const BRIDGE_VERSION = "3.5.0";
+const BRIDGE_VERSION = "3.6.0";
+
+// 归一 · 反注 MCP 蹭耐用桥隧道: 综合 MCP(mcp_http.py)本机监听 9100, 其自起的快速隧道
+//   既翻倍触发 Cloudflare 限流又死不自愈。故由常驻桥把 /mcp 透明流式反代到本机 MCP,
+//   令账号里注入的 MCP 地址改为 <桥URL>/mcp — 单隧道归一, 随桥自愈, 杜绝第二条脆弱隧道。
+const MCP_PUBLIC_FILE = path.join(process.env.ProgramData || "C:\\ProgramData", "dao_vm", "mcp_public.json");
+let _mcpPortCache = { port: 9100, at: 0 };
+function resolveMcpPort() {
+  const now = Date.now();
+  if (now - _mcpPortCache.at < 5000) return _mcpPortCache.port;
+  let port = 9100;
+  try {
+    const j = JSON.parse(fs.readFileSync(MCP_PUBLIC_FILE, "utf8"));
+    const p = parseInt(j.mcp_port, 10);
+    if (p > 0 && p < 65536) port = p;
+  } catch (e) { /* 守柔 · 缺省 9100 */ }
+  _mcpPortCache = { port, at: now };
+  return port;
+}
 
 function daoDir() {
   const d = path.join(os.homedir(), ".dao", "bridge");
@@ -649,10 +667,16 @@ class WorkspaceServer {
       // HTTP 直连只做鉴权 + 收 body, 路由统一交给 handleApi
       this.server = http.createServer((req, res) => {
         if (req.method === "OPTIONS") {
-          res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type" });
+          res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Mcp-Session-Id, mcp-session-id, Last-Event-ID", "Access-Control-Expose-Headers": "Mcp-Session-Id, mcp-session-id" });
           return res.end();
         }
         const pathname = new URL(req.url, "http://x").pathname;
+        // 归一 · 反注 MCP: /mcp(及子路径)透明流式反代到本机综合 MCP(mcp_http.py)。
+        //   不走 handleApi 的整体收 body+JSON 封装(那会破坏 Streamable-HTTP/SSE),
+        //   亦不要求桥 master token —— MCP 服务端自带 Bearer 鉴权, 此处仅原样透传 Authorization。
+        if (pathname === "/mcp" || pathname.startsWith("/mcp/")) {
+          return this.proxyMcp(req, res);
+        }
         if (pathname === "/api/bootstrap.ps1" || pathname === "/bootstrap.ps1") {
           const hubUrl = this._bridgeRef && this._bridgeRef.url ? this._bridgeRef.url : ("http://127.0.0.1:" + this.port);
           const sb = Buffer.from(buildBootstrap(hubUrl), "utf8");
@@ -680,6 +704,26 @@ class WorkspaceServer {
       this.server.on("error", reject);
       this.server.listen(fixedPort || 0, "127.0.0.1", () => { this.port = this.server.address().port; resolve(this.port); });
     });
+  }
+
+  // 透明流式反代 /mcp → 本机综合 MCP (mcp_http.py · 127.0.0.1:<mcp_port>)。
+  //   双向 pipe: 请求体 req→上游, 响应 上游→res(JSON 或 SSE 皆原样流式), 不缓冲不改写。
+  //   原样透传 Authorization/Accept/Content-Type/Mcp-Session-Id 等头, 由 MCP 服务端自行鉴权。
+  proxyMcp(req, res) {
+    const mcpPort = resolveMcpPort();
+    const headers = Object.assign({}, req.headers, { host: "127.0.0.1:" + mcpPort });
+    const up = http.request({ host: "127.0.0.1", port: mcpPort, method: req.method || "GET", path: req.url || "/mcp", headers }, (ur) => {
+      const h = Object.assign({}, ur.headers);
+      h["Access-Control-Allow-Origin"] = "*";
+      h["Access-Control-Expose-Headers"] = "Mcp-Session-Id, mcp-session-id";
+      try { res.writeHead(ur.statusCode || 502, h); } catch (e) { /* 守柔 */ }
+      ur.pipe(res);
+    });
+    up.on("error", (e) => {
+      if (!res.headersSent) res.writeHead(502, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      try { res.end(JSON.stringify({ error: "mcp upstream unreachable: " + (e && e.message), port: mcpPort, hint: "start_mcp_stack.ps1 应已在 127.0.0.1:" + mcpPort + " 起 mcp_http.py" })); } catch (e2) { /* 守柔 */ }
+    });
+    req.pipe(up);
   }
 
   authToken(h) {
