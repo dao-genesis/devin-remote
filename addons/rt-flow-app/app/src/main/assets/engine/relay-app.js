@@ -18,8 +18,19 @@ const DaoRelayApp = (function () {
   let sock = null, connected = false, stopped = true;
   let cfg = { url: "", token: "", session: "" };
   let backoff = 1500, pingTimer = null, reTimer = null, connectTimer = null;
-  let lastError = null, lastConnectTs = 0, lastFrameTs = 0;
+  let lastError = null, lastConnectTs = 0, lastFrameTs = 0, lastRxTs = 0;
   let onStatus = null;
+  const STALE_TIMEOUT = 45000; // 连续 3× ping 周期(15s)无任何入站(连 pong 都收不到) → 判半开死链, 主动重连
+
+  //__LIVENESS_START__ (经 test/relay-liveness.test.js 切片 eval 实测, 勿删标记)
+  // 半开死链判定: 移动网/NAT 重绑/Doze 常致出站 WSS 静默失效——TCP 不发 FIN, onclose 永不触发,
+  //   客户端却仍自以为 connected, 心跳 send() 进缓冲不报错 → 中继侧 socket 早死、公网侧 no_agent/超时
+  //   长达数分钟。中继对每个 ping 自动回 pong → 健康连接每 15s 必有入站; 据此: 已连接却连续 staleMs
+  //   无任何入站即判半开。lastRxTs===0(刚 open 未收任何帧)不误杀。
+  function isHalfOpen(connected, lastRxTs, now, staleMs) {
+    return !!connected && lastRxTs > 0 && (now - lastRxTs) > staleMs;
+  }
+  //__LIVENESS_END__
   // ── 多中继端点·自动故障转移 (国内无感: workers.dev 常被运营商 SNI 拦截,
   //    可在 url 里用逗号/空格/换行分隔多个端点, 例如自有域名镜像; 客户端逐个轮询直到连通) ──
   let candidates = [];      // [baseUrl, ...] 去尾斜杠
@@ -203,11 +214,20 @@ const DaoRelayApp = (function () {
     }, CONNECT_TIMEOUT);
     mySock.onopen = () => {
       if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
-      connected = true; backoff = BACKOFF_MIN; lastConnectTs = Date.now(); lastError = null; activeUrl = base; emitStatus();
+      connected = true; backoff = BACKOFF_MIN; lastConnectTs = Date.now(); lastRxTs = Date.now(); lastError = null; activeUrl = base; emitStatus();
       if (pingTimer) clearInterval(pingTimer);
-      pingTimer = setInterval(() => { try { mySock.send(JSON.stringify({ type: "ping" })); } catch (e) {} }, 15000);
+      pingTimer = setInterval(() => {
+        // 半开死链自愈: 连续无入站(连中继自动回的 pong 都没)超阈值 → 主动关闭, 触发 onclose→重连。
+        if (isHalfOpen(connected, lastRxTs, Date.now(), STALE_TIMEOUT)) {
+          lastError = "心跳无回应 (疑似半开死链) → 主动重连"; emitStatus();
+          try { mySock.close(); } catch (e) {}   // → onclose → schedule() 重连
+          return;
+        }
+        try { mySock.send(JSON.stringify({ type: "ping" })); } catch (e) {}
+      }, 15000);
     };
     mySock.onmessage = async (ev) => {
+      lastRxTs = Date.now();   // 任何入站(含中继自动回的 pong)都刷新存活时戳 → 喂半开死链看门狗
       let m; try { m = JSON.parse(typeof ev.data === "string" ? ev.data : ""); } catch (e) { return; }
       if (!m || m.type === "pong") return;
       if (m.type === "request" && m.id) {
