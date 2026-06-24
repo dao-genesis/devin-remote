@@ -5544,148 +5544,6 @@ function _unlockUserStatusBody(bodyBuf, contentEncoding, rid) {
 _loadFullModelCatalog();
 
 /**
- * ★ v9.9.260+ · 模型解锁代理 · 执大象 天下往
- *
- * 拦截 GetUserSettings / GetCascadeModelConfigs → 注入全量模型目录
- *
- * 响应格式 (Connect-JSON):
- *   {"userSettings":{"cachedCascadeModelConfigs":[...]}}
- *
- * 注入策略 (v2 · 往而不害):
- *   1. 先请求LS原始响应 → 获取用户BYOK等原有模型
- *   2. 合并: 保留原有 + 补充目录中缺失的模型 (modelUid去重)
- *   3. 强制解锁: 所有模型 disabled=false → 突破账号权限限制
- *   4. 排序: isRecommended/isNew 优先 → creditMultiplier 升序
- *
- * 道义: 三十五章「往而不害」· 补充不破坏 · 原有模型保留
- *       「执大象 天下往」· 全量模型即大象 · 执之则天下往
- */
-function proxyToCloudWithModelUnlock(req, res, rid) {
-  const rpcName = (req.url || "").split("/").pop() || "?";
-  const unlockEnabled = _isModelUnlockEnabled();
-  const catalog = _fullModelCatalog || _loadFullModelCatalog();
-
-  if (!unlockEnabled || !catalog) {
-    log(
-      `#${rid} [model-unlock] 退化为透传 (enabled=${unlockEnabled}, catalog=${!!catalog})`,
-    );
-    proxyToCloud(req, res, undefined, rid);
-    return;
-  }
-
-  log(`#${rid} [model-unlock] 拦截 ${rpcName} → 合并全量模型目录`);
-
-  // ★ v2: 先收集请求body → 转发LS获取原始响应 → 合并
-  let reqBody = [];
-  req.on("data", (c) => reqBody.push(c));
-  req.on("end", () => {
-    reqBody = Buffer.concat(reqBody);
-    _proxyAndInject(req, res, rid, rpcName, catalog, reqBody);
-  });
-}
-
-/**
- * ★ v2 · 先请求LS原始响应 → 合并全量目录 → 强制解锁
- *
- * 流程:
- *   1. 转发请求到LS → 获取原始GetUserSettings响应
- *   2. 解析原始模型列表 → 保留用户BYOK等
- *   3. 合并全量目录 → modelUid去重
- *   4. 强制 disabled=false → 突破权限
- *   5. 返回合并后的响应
- *
- * 降级: 如果LS请求失败 → 直接返回全量目录 (往而不害)
- */
-function _proxyAndInject(req, res, rid, rpcName, catalog, reqBody) {
-  const route = routeUpstream(req.url);
-  const lsPort = route.port || CLOUD_PORT;
-  const lsHost = route.host || CLOUD_HOST;
-
-  // 构造转发请求
-  const headers = {};
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (!k.startsWith(":") && !H1_CONN_HEADERS.has(k)) headers[k] = v;
-  }
-  if (reqBody.length > 0) {
-    headers["content-length"] = String(reqBody.length);
-  }
-
-  const opts = {
-    hostname: "127.0.0.1",
-    port: lsPort,
-    path: req.url,
-    method: req.method,
-    headers,
-    timeout: 8000,
-  };
-
-  const lsReq = http.request(opts, (lsRes) => {
-    let body = [];
-    lsRes.on("data", (c) => body.push(c));
-    lsRes.on("end", () => {
-      body = Buffer.concat(body);
-      const status = lsRes.statusCode;
-
-      if (status !== 200) {
-        // LS返回非200 → 降级为直接返回全量目录
-        log(`#${rid} [model-unlock] LS返回${status} → 降级直接返回全量目录`);
-        _respondWithCatalog(res, catalog, rid);
-        return;
-      }
-
-      try {
-        const orig = JSON.parse(body.toString("utf8"));
-        // 递归查找 cachedCascadeModelConfigs
-        const existing = _extractModelConfigs(orig);
-        if (existing) {
-          // ★ 合并: 保留原有 + 补充缺失 + 强制解锁
-          _mergeAndUnlock(existing, catalog);
-          const outBody = JSON.stringify(orig);
-          res.writeHead(200, {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(outBody),
-          });
-          res.end(outBody);
-          log(
-            `#${rid} [model-unlock] 合并完成: ${existing.length} models (${outBody.length} bytes)`,
-          );
-        } else {
-          // 无cachedCascadeModelConfigs → 直接注入
-          _injectCatalogIntoResponse(orig, catalog);
-          const outBody = JSON.stringify(orig);
-          res.writeHead(200, {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(outBody),
-          });
-          res.end(outBody);
-          log(
-            `#${rid} [model-unlock] 注入完成: ${catalog.length} models (${outBody.length} bytes)`,
-          );
-        }
-      } catch (e) {
-        // JSON解析失败 → 降级
-        log(`#${rid} [model-unlock] LS响应解析失败: ${e.message} → 降级`);
-        _respondWithCatalog(res, catalog, rid);
-      }
-    });
-  });
-
-  lsReq.on("error", (e) => {
-    log(`#${rid} [model-unlock] LS请求失败: ${e.message} → 降级`);
-    _respondWithCatalog(res, catalog, rid);
-  });
-
-  lsReq.on("timeout", () => {
-    lsReq.destroy();
-    log(`#${rid} [model-unlock] LS请求超时 → 降级`);
-    _respondWithCatalog(res, catalog, rid);
-  });
-
-  if (reqBody.length > 0) lsReq.write(reqBody);
-  lsReq.end();
-}
-
-/**
  * 递归查找响应中的 cachedCascadeModelConfigs 数组
  */
 function _extractModelConfigs(obj) {
@@ -5761,23 +5619,6 @@ function _injectCatalogIntoResponse(obj, catalog) {
       _injectCatalogIntoResponse(obj[key], catalog);
     }
   }
-}
-
-/**
- * 降级: 直接返回全量目录
- */
-function _respondWithCatalog(res, catalog, rid) {
-  const models = Array.isArray(catalog) ? catalog : catalog.models || [];
-  const response = { userSettings: { cachedCascadeModelConfigs: models } };
-  const body = JSON.stringify(response);
-  res.writeHead(200, {
-    "Content-Type": "application/json",
-    "Content-Length": Buffer.byteLength(body),
-  });
-  res.end(body);
-  log(
-    `#${rid} [model-unlock] 降级返回: ${models.length} models, ${body.length} bytes`,
-  );
 }
 
 // (旧 _injectModelCatalog / _mergeModelCatalog 已由 v2 _extractModelConfigs / _mergeAndUnlock 替代)
@@ -5947,6 +5788,73 @@ function proxyToCloud(req, res, overrideBody, _rid) {
             }
           });
           return; // 已接管 · 不再 pipe
+        }
+      }
+      // ★ 模型解锁 · GetUserSettings/GetCascadeModelConfigs(JSON) 缓冲加性合并 · 往而不害
+      //   与上 GetUserStatus(proto) 对称: 复用真实上游响应 → 合并全量目录 → 写回
+      //   任何异常一律原样透传真实响应 (从不伪造 · 绝不丢弃真实 userSettings)
+      {
+        const _rpcPathS = route.path || req.url || "";
+        const _ctS = (h2resHeaders && h2resHeaders["content-type"]) || "";
+        const _ceS = (h2resHeaders && h2resHeaders["content-encoding"]) || "";
+        if (
+          _isModelUnlockEnabled() &&
+          status === 200 &&
+          /(GetUserSettings|GetCascadeModelConfigs)/i.test(_rpcPathS) &&
+          /json/i.test(_ctS)
+        ) {
+          const _catS = _fullModelCatalog || _loadFullModelCatalog();
+          if (_catS) {
+            let _sb = [],
+              _sn = 0;
+            const _sbMax = 4 * 1024 * 1024;
+            upStream.on("data", (c) => {
+              if (_sn < _sbMax) {
+                _sb.push(c);
+                _sn += c.length;
+              }
+            });
+            upStream.on("end", () => {
+              const orig = Buffer.concat(_sb);
+              let outBuf = orig; // 默认原样透传 · 往而不害
+              try {
+                const isGz =
+                  /gzip/i.test(_ceS) ||
+                  (orig.length > 2 && orig[0] === 0x1f && orig[1] === 0x8b);
+                const jsonBuf = isGz ? zlib.gunzipSync(orig) : orig;
+                const obj = JSON.parse(jsonBuf.toString("utf8"));
+                const existing = _extractModelConfigs(obj);
+                if (existing) _mergeAndUnlock(existing, _catS);
+                else _injectCatalogIntoResponse(obj, _catS);
+                const merged = Buffer.from(JSON.stringify(obj), "utf8");
+                outBuf = isGz ? zlib.gzipSync(merged) : merged;
+                log(
+                  `#${_rid} [model-unlock] GetUserSettings 加性合并 ${existing ? existing.length : (Array.isArray(_catS) ? _catS.length : 0)} 模型 · ${orig.length}→${outBuf.length}B`,
+                );
+              } catch (e) {
+                outBuf = orig; // 失败即原样透传 · 绝不伪造
+                log(
+                  `#${_rid} [model-unlock] GetUserSettings 合并异常→原样透传: ${e.message}`,
+                );
+              }
+              try {
+                const h = { ...resHeaders };
+                delete h["content-length"];
+                h["content-length"] = String(outBuf.length);
+                res.writeHead(status, h);
+                res.end(outBuf);
+              } catch (e2) {
+                log(`#${_rid} [model-unlock] 写回失败 → 502: ${e2.message}`);
+                try {
+                  if (!res.headersSent) {
+                    res.writeHead(502);
+                    res.end();
+                  }
+                } catch {}
+              }
+            });
+            return; // 已接管 · 不再 pipe
+          }
         }
       }
       try {
@@ -6141,11 +6049,13 @@ const _mainHandler = async (req, res) => {
       return;
     }
 
-    // ★ v9.9.260 · 模型解锁 · 反者道之动 · 执大象 天下往
-    //   GetUserSettings 响应注入全量模型目录 · 突破账号权限限制
+    // ★ 模型解锁 · 往而不害 · 复用真实上游 · 响应侧加性合并
+    //   GetUserSettings/GetCascadeModelConfigs 透传至真实上游 (server.codeium.com)
+    //   → 拿到真实 userSettings → 在 H2 响应回调里加性合并全量模型目录
+    //   (见 proxyToCloud 内 GetUserSettings JSON 分支) · 从不伪造 · 失败即原样透传
     //   道义: 三十五章「执大象 天下往 往而不害 安平太」
     if (kind === "MODEL_UNLOCK") {
-      proxyToCloudWithModelUnlock(req, res, rid);
+      proxyToCloud(req, res, undefined, rid);
       return;
     }
 
