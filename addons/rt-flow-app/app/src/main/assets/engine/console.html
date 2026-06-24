@@ -561,7 +561,9 @@
     //   控制端 HTTP 通道(Worker/手机直连隧道·无 48KB 上限)本就比 ntfy 控制面中继更优, 故 P2P 失败就老实回退 HTTP 自愈, 不留泄漏句柄。
     window.DaoSignal.connect({ session:SESSION, token:TOKEN, timeout:20000, relayFallback:false }).then(function(sig){
       _p2p = sig; _p2pBusy = false; _p2pTries = 0; _p2pNextTs = 0;
-      try{ if(sig.dc) sig.dc.addEventListener("close", function(){ _p2p=null; setTimeout(_p2pTry, 3000); }); }catch(e){}
+      // DataChannel 断开(移动网切换/Doze)时, 先 close() 释放这条死连接的 pc(ICE/STUN 绑定)与残余 ntfy 订阅,
+      //   再置空重连 —— 否则每次 P2P 重连周期都漏掉上一条连接的 RTCPeerConnection + 信令订阅, 越积越多。
+      try{ if(sig.dc) sig.dc.addEventListener("close", function(){ try{ if(sig.close) sig.close(); }catch(e){} _p2p=null; setTimeout(_p2pTry, 3000); }); }catch(e){}
     }, function(){ _p2p=null; _p2pBusy=false;
       var backoff = Math.min(120000, 8000*_p2pTries);
       _p2pNextTs = Date.now() + backoff;                      // 退避冷却起点: 阻挡 30s 轮询在冷却内重握手; 对端/网络好转即自动接管

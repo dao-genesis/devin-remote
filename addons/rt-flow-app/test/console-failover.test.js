@@ -244,6 +244,20 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     ok(calls === 1, "P 失败后退避冷却生效: 紧接的 _p2pTry 不立即重握手 (防 30s 轮询风暴/刷爆公共 broker)");
   }
 
+  // 场景 Q: P2P DataChannel 断开时, _p2pTry 注册的 close 监听会先 sig.close() 释放死连接的 pc+残余订阅, 再置空重连(防重连周期泄漏)。
+  {
+    let closeListener = null, closeCalls = 0;
+    const sig = { dc: { readyState: "open", addEventListener: (ev, fn) => { if (ev === "close") closeListener = fn; } }, rpc: () => Promise.resolve(JSON.stringify({ status: 200, bodyText: "{}" })), close: () => { closeCalls++; } };
+    const win = { DaoSignal: { available: () => true, connect: () => Promise.resolve(sig) } };
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://x.example", fetch: makeFetch({}, { total: 0, byBase: {} }), window: win }));
+    mod.p2pTry();
+    await new Promise(r => setTimeout(r, 0));
+    ok(mod.p2pAlive() && typeof closeListener === "function", "Q P2P 建连成功且注册了 dc close 监听");
+    sig.dc.readyState = "closed"; closeListener();   // 模拟移动网切换致 DataChannel 断开
+    ok(closeCalls === 1, "Q dc 断开 → 调 sig.close() 释放死连接 pc + 残余 ntfy 订阅(不漏)");
+    ok(!mod.p2pAlive(), "Q 断开后 _p2p 置空, 等退避后重连");
+  }
+
   // 场景 J (回归护栏): 主 IIFE 必须在使用前声明 CFG —— 防 PR#547 式 strict ReferenceError 崩整页。
   {
     const fIdx = src.indexOf("__FAILOVER_START__");
