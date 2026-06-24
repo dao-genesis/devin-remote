@@ -1576,18 +1576,22 @@ async function sigServeFrame(corr: string, full: string): Promise<void> {
     if (!req || typeof req !== 'object') return; // 解密失败 = 非法/错 token, 静默丢弃(零账号门禁)
     sigState.lastRxTs = Date.now(); sigState.reqCount++;
     const t = req.t || 'rpc';
-    if (t === 'ping') { await sigPublishObj('a', corr, { t: 'pong', ts: Date.now(), session: sigState.session }); return; }
+    // 应答方回复角色 's'(与手机版 signal.js buildRelayHandle 一致), 客户端只认 's' → 与 WebRTC answer('a') 解耦
+    if (t === 'ping') { await sigPublishObj('s', corr, { t: 'pong', id: req.id || corr, ts: Date.now(), session: sigState.session }); return; }
     if (t !== 'rpc') return;
     const id = req.id || corr;
+    // 兼容两种请求形: 直接 {path,method,body}; 或 {frame:{path,method,body}}(客户端包裹形)
+    let descr: any = req;
+    if (!req.path && req.frame) { try { descr = (typeof req.frame === 'string') ? JSON.parse(req.frame) : req.frame; } catch { descr = req; } }
     try {
-        const route = String(req.path || '/api/health').split('?')[0];
-        const parsedUrl = new URL(req.path || '/api/health', 'http://localhost:' + (ws.port || 9920));
-        const bodyStr = (req.body === undefined || req.body === null) ? '' : (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
-        const fakeReq: any = { headers: req.headers || { 'content-type': 'application/json' }, method: req.method || 'GET', socket: { remoteAddress: 'sig' }, url: req.path || '/api/health', _relayBody: bodyStr };
+        const route = String(descr.path || '/api/health').split('?')[0];
+        const parsedUrl = new URL(descr.path || '/api/health', 'http://localhost:' + (ws.port || 9920));
+        const bodyStr = (descr.body === undefined || descr.body === null) ? '' : (typeof descr.body === 'string' ? descr.body : JSON.stringify(descr.body));
+        const fakeReq: any = { headers: descr.headers || { 'content-type': 'application/json' }, method: descr.method || 'GET', socket: { remoteAddress: 'sig' }, url: descr.path || '/api/health', _relayBody: bodyStr };
         const result = await handleRouteInternal(route, parsedUrl, fakeReq, bridgeToken || ws.token);
-        await sigPublishObj('a', corr, { t: 'res', id, status: 200, body: result });
+        await sigPublishObj('s', corr, { t: 'res', id, status: 200, body: result });
     } catch (err: any) {
-        await sigPublishObj('a', corr, { t: 'res', id, status: 500, body: { error: err && err.message ? err.message : String(err) } });
+        await sigPublishObj('s', corr, { t: 'res', id, status: 500, body: { error: err && err.message ? err.message : String(err) } });
     }
 }
 function sigSubscribeServer(server: string): void {
@@ -3065,7 +3069,7 @@ function bridgeGenerateCloudMd(): string {
         '            for line in r:',
         '                try: m=json.loads(json.loads(line.decode()).get("message","null"))',
         '                except Exception: continue',
-        '                if not m or m.get("r")!="a" or not m.get("c"): continue',
+        '                if not m or m.get("r")!="s" or not m.get("c"): continue',
         '                with _lock:',
         '                    e=_buf.setdefault(m["c"],{}); e[m["i"]]=m["p"]',
         '                    if len(e)>=m["n"]:',
