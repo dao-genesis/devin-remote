@@ -759,7 +759,7 @@ html.m #hint{font-size:14px;padding:18px}
     <div id="splitbar" title="拖动调整分屏比例"></div>
     <div class="spin" id="spin"><span class="ld"></span>加载中…</div>
     <div id="drop">松开以拖入文件到当前窗口</div>
-    <div id="convdrop">🌐 松开 · 在网页中打开该对话</div>
+    <div id="convdrop">⬆ 松开 · 上传到当前网页</div>
   </div>
 </div>
 <div id="menu"></div>
@@ -772,7 +772,7 @@ html.m #hint{font-size:14px;padding:18px}
   <div class="dwbar" id="dwBarR"><input class="srch" id="dwQ" placeholder="检索 账号 / 对话名称…" autocomplete="off"/><button class="mini" id="dwRefresh">🔄 刷新</button></div>
   <div class="dwbar" id="dwBarB" style="display:none"><input class="srch" id="dwBQ" placeholder="检索 账号 / 备份名称…" autocomplete="off"/><button class="mini" id="dwRoot">📁 根目录</button></div>
   <div class="dwbody">
-    <div class="dwview on" id="dwViewR"><div class="tip">跨全部已登录账号 · 近期更新对话 · ⬇MD 秒存 · 📦全部文件含产出 · <b>拖对话卡到网页</b>即在网页中打开(对齐手机 APK)</div><div id="dwRecent"><div class="empty">加载中…</div></div></div>
+    <div class="dwview on" id="dwViewR"><div class="tip">跨全部已登录账号 · 近期更新对话 · ⬇MD 秒存 · 📦全部文件含产出 · <b>拖对话卡到网页</b>即上传该对话内容到当前网页上传框(🌐进入=在网页打开)</div><div id="dwRecent"><div class="empty">加载中…</div></div></div>
     <div class="dwview" id="dwViewB"><div id="dwBackup"><div class="empty">加载中…</div></div></div>
     <div id="cv"><div class="cvtop"><button class="dwx" id="cvBack">‹ 返回</button><div class="cvtabs" id="cvTabs"></div></div><div class="cvacts" id="cvActs"></div><div class="cvbody" id="cvBody"></div></div>
   </div>
@@ -780,7 +780,7 @@ html.m #hint{font-size:14px;padding:18px}
 <div id="dlwin">
   <div class="dwh" id="dlHead"><span>⬇</span><span class="t" id="dlTitle">下载</span><button class="dwx" id="dlClose">✕ 关闭</button></div>
   <div class="dwbar"><button class="mini" id="dlRefresh">🔄 刷新</button><button class="mini" id="dlFolder">📁 下载文件夹</button></div>
-  <div class="dlbody"><div class="tip">浏览器下载 · 在网页中下载的文件都会出现在这里(与对话备份无关 · 对齐手机 APK 下载悬浮窗)</div><div id="dlList"><div class="empty">加载中…</div></div></div>
+  <div class="dlbody"><div class="tip">浏览器下载 · 在网页中下载的文件都会出现在这里 · <b>拖文件卡到网页</b>即上传到当前网页上传框(与对话备份无关 · 对齐手机 APK)</div><div id="dlList"><div class="empty">加载中…</div></div></div>
 </div>
 <div class="dtoast" id="daotoast"></div>
 <script>
@@ -1124,10 +1124,18 @@ _dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.t
   var cva=el.getAttribute('data-cvact');if(cva){var cj=+el.getAttribute('data-i');if(cva==='md')daoCvMd(cj);else daoCvZip(cj);return;}
   var op=el.getAttribute('data-open');if(op){vscode.postMessage({type:'shellOpenFile',path:op});return;}
   var rv=el.getAttribute('data-reveal');if(rv){vscode.postMessage({type:'shellRevealFile',path:rv});return;}});
-// ── 归一 · 拖拽对话进网页(复刻手机端 startConvDrag): 拖近期对话/备份卡 → 落到网页区即在该账号网页中打开此对话 ──
-_dEl('daowin').addEventListener('dragstart',function(e){var el=e.target.closest&&e.target.closest('.rc[data-cdrag]');if(!el)return;var email=el.getAttribute('data-email')||'',sid=el.getAttribute('data-sid')||'',title=el.getAttribute('data-title')||'';if(!email||!sid){try{e.preventDefault();}catch(x){}daoToast('该对话暂无可定位会话, 无法拖入网页',true);return;}_convDrag={email:email,sid:sid,title:title};_convDragActive=true;el.classList.add('cdragging');try{e.dataTransfer.effectAllowed='copy';e.dataTransfer.setData('text/plain',title||sid);e.dataTransfer.setData('application/x-dao-conv',JSON.stringify(_convDrag));}catch(x){}var cd=_dEl('convdrop');if(cd)cd.className='on';});
-_dEl('daowin').addEventListener('dragend',function(){_convDragActive=false;var cd=_dEl('convdrop');if(cd)cd.className='';var dg=_dEl('daowin').querySelector('.rc.cdragging');if(dg)dg.classList.remove('cdragging');});
-(function(){var cd=_dEl('convdrop');if(!cd)return;cd.addEventListener('dragover',function(e){if(!_convDragActive)return;e.preventDefault();try{e.dataTransfer.dropEffect='copy';}catch(x){}});cd.addEventListener('drop',function(e){e.preventDefault();e.stopPropagation();cd.className='';var d=_convDrag;try{var s=e.dataTransfer.getData('application/x-dao-conv');if(s)d=JSON.parse(s);}catch(x){}_convDragActive=false;if(d&&d.email&&d.sid){vscode.postMessage({type:'reopen',email:d.email,devinId:d.sid});daoToast('🌐 已在网页打开 · '+String(d.title||d.sid).slice(0,24));daoClose();}_convDrag=null;});})();
+// ── 归一 · 拖拽上传到当前网页 (下载文件 / 近期对话 MD → 投递当前账号网页上传框) ──
+//   外壳同源可靠接住 drop(#convdrop 覆盖网页区)→ postMessage 命令该标签内嵌桥(/__daobridge.js)
+//   fetch /__dlfile|/__convmd 取字节 → feed 落上传框。不依赖跨 iframe 原生 DnD(webview 跨源 iframe 不稳)。
+//   「进入网页打开此对话」改由卡片上 🌐进入 按钮(data-act=enter)承担, 拖拽专司上传, 各司其职。
+var _uploadDrag=null;
+function _activeFrameWin(){try{var t=tabs[active];return (t&&t.frame&&t.frame.contentWindow)||null;}catch(e){return null;}}
+function _daoUploadToActive(p){if(!p)return false;var w=_activeFrameWin();if(!w){daoToast('请先打开一个账号网页标签再拖入上传',true);return false;}try{w.postMessage({__daoUpload:p},'*');return true;}catch(e){return false;}}
+function _showUploadDrop(txt){var cd=_dEl('convdrop');if(cd){cd.textContent=txt||'⬆ 松开 · 上传到当前网页';cd.className='on';}}
+function _hideUploadDrop(){var cd=_dEl('convdrop');if(cd)cd.className='';}
+_dEl('daowin').addEventListener('dragstart',function(e){var el=e.target.closest&&e.target.closest('.rc[data-cdrag]');if(!el)return;var email=el.getAttribute('data-email')||'',sid=el.getAttribute('data-sid')||'',title=el.getAttribute('data-title')||'';if(!email||!sid){try{e.preventDefault();}catch(x){}daoToast('该对话暂无可定位会话, 无法拖入网页',true);return;}_uploadDrag={kind:'conv',email:email,sid:sid,title:title};_convDragActive=true;el.classList.add('cdragging');try{e.dataTransfer.effectAllowed='copy';e.dataTransfer.setData('text/plain',title||sid);e.dataTransfer.setData('application/x-dao-conv',JSON.stringify({email:email,sid:sid,title:title}));}catch(x){}_showUploadDrop('⬆ 松开 · 上传此对话内容到当前网页');});
+_dEl('daowin').addEventListener('dragend',function(){_convDragActive=false;_uploadDrag=null;_hideUploadDrop();var dg=_dEl('daowin').querySelector('.rc.cdragging');if(dg)dg.classList.remove('cdragging');});
+(function(){var cd=_dEl('convdrop');if(!cd)return;cd.addEventListener('dragover',function(e){if(!_convDragActive)return;e.preventDefault();try{e.dataTransfer.dropEffect='copy';}catch(x){}});cd.addEventListener('drop',function(e){e.preventDefault();e.stopPropagation();cd.className='';_convDragActive=false;var p=_uploadDrag;try{var sc=e.dataTransfer.getData('application/x-dao-conv');if(sc){var o=JSON.parse(sc);p={kind:'conv',email:o.email,sid:o.sid,title:o.title};}else{var sf=e.dataTransfer.getData('application/x-dao-file');if(sf){var of=JSON.parse(sf);p={kind:'file',path:of.path,name:of.name};}}}catch(x){}if(_daoUploadToActive(p)){daoToast('⏳ 正在上传到当前网页 · '+String((p&&(p.title||p.name||p.sid))||'').slice(0,24));try{daoClose();}catch(_1){}try{dlClose();}catch(_2){}}_uploadDrag=null;});})();
 _dEl('dwClose').onclick=daoClose;
 _dEl('dwTabR').onclick=function(){daoTab('recent');};
 _dEl('dwTabB').onclick=function(){daoTab('backup');};
@@ -1147,8 +1155,8 @@ _dEl('dlRefresh').onclick=dlLoad;
 _dEl('dlFolder').onclick=function(){if(DAO_DL[0]&&DAO_DL[0].path)vscode.postMessage({type:'shellRevealFile',path:DAO_DL[0].path});else daoToast('暂无下载文件',true);};
 // ── 下载列表拖拽上传(参考手机 APK): 拖动文件卡 → 携带 file:// 路径与 DownloadURL, 可拖到网页上传区/其它应用 ──
 var _dlDrag=null;
-_dEl('dlwin').addEventListener('dragstart',function(e){var el=e.target.closest&&e.target.closest('.rc[data-dldrag]');if(!el)return;var p=el.getAttribute('data-dldrag')||'',nm=el.getAttribute('data-dlname')||'';if(!p){try{e.preventDefault();}catch(x){}daoToast('该文件无本地路径, 无法拖拽',true);return;}_dlDrag={path:p,name:nm};el.classList.add('cdragging');try{var uri='file:///'+String(p).replace(/\\\\/g,'/').replace(/^\\/+/,'');e.dataTransfer.effectAllowed='copyLink';e.dataTransfer.setData('text/uri-list',uri);e.dataTransfer.setData('text/plain',p);try{e.dataTransfer.setData('DownloadURL','application/octet-stream:'+nm+':'+uri);}catch(x2){}try{e.dataTransfer.setData('application/x-dao-file',JSON.stringify({path:p,name:nm}));}catch(x3){}}catch(x){}});
-_dEl('dlwin').addEventListener('dragend',function(){_dlDrag=null;var dg=_dEl('dlwin').querySelector('.rc.cdragging');if(dg)dg.classList.remove('cdragging');});
+_dEl('dlwin').addEventListener('dragstart',function(e){var el=e.target.closest&&e.target.closest('.rc[data-dldrag]');if(!el)return;var p=el.getAttribute('data-dldrag')||'',nm=el.getAttribute('data-dlname')||'';if(!p){try{e.preventDefault();}catch(x){}daoToast('该文件无本地路径, 无法拖拽',true);return;}_dlDrag={path:p,name:nm};_uploadDrag={kind:'file',path:p,name:nm};_convDragActive=true;el.classList.add('cdragging');try{var uri='file:///'+String(p).replace(/\\\\/g,'/').replace(/^\\/+/,'');e.dataTransfer.effectAllowed='copyLink';e.dataTransfer.setData('text/uri-list',uri);e.dataTransfer.setData('text/plain',p);try{e.dataTransfer.setData('DownloadURL','application/octet-stream:'+nm+':'+uri);}catch(x2){}try{e.dataTransfer.setData('application/x-dao-file',JSON.stringify({path:p,name:nm}));}catch(x3){}}catch(x){}_showUploadDrop('⬆ 松开 · 上传此文件到当前网页');});
+_dEl('dlwin').addEventListener('dragend',function(){_dlDrag=null;_uploadDrag=null;_convDragActive=false;_hideUploadDrop();var dg=_dEl('dlwin').querySelector('.rc.cdragging');if(dg)dg.classList.remove('cdragging');});
 _dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-dlopen],[data-dlrev],[data-dldel]');if(!el)return;
   var op=el.getAttribute('data-dlopen');if(op){vscode.postMessage({type:'shellOpenFile',path:op});return;}
   var rv=el.getAttribute('data-dlrev');if(rv){vscode.postMessage({type:'shellRevealFile',path:rv});return;}

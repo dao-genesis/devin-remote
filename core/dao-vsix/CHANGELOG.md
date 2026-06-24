@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.25
+- **根治两个拖拽上传(下载文件 / 近期对话内容 → 网页上传框)**。根因:外壳 `#convdrop` 覆盖层(`pointer-events:auto`·`inset:0`)拦截**对话拖拽**的 drop 后走 `reopen`(在网页打开)分支,从不上传;下载文件拖拽则**无外壳落点**、仅靠跨源 iframe 原生 DnD 投递,在 VS Code webview 跨源子帧里不稳。两者都没真正把内容喂进页面上传框。
+  - **改为「外壳同源接住 drop → postMessage 命令内嵌桥执行上传」**:外壳(父文档)对对话卡/下载卡的 drop 100% 可靠接住(同文档),落点即 `postMessage({__daoUpload})` 给当前账号标签的 iframe;内嵌桥(`daoDropBridgeJs`)新增 `message` 监听 → `fetch` 同源 `/__convmd`|`/__dlfile` 取字节 → `feed()` 穿透 shadowDOM 喂入上传框。**不再依赖跨 iframe 原生 DnD**,两类拖拽走同一条稳路。
+  - 对话拖拽语义从「在网页打开」改为「上传该对话 MD」;「在网页打开」由卡片上 🌐进入 按钮(`data-act=enter`)承担,各司其职。下载卡仍保留 `file://`/`DownloadURL`(可拖到其它应用),仅在落到本外壳网页区时改走上传。
+  - 构建护栏:`daoDropBridgeJs` `new Function()` 实解析通过(4132 chars);rt-flow 119 PASS。
+
 ## 3.50.24
 - **反注(MCP)归一 — 弃第二条脆弱隧道,蹭入常驻桥自愈主隧道**。根因:综合 MCP(`mcp_http.py` · 本机 9100)由 `start_mcp_stack.ps1` 自起**第二条** Cloudflare 快速隧道,既翻倍触发限流(1015/429)又**死不自愈**(常见 `mcp_public.json` 里 `url=null`),致账号里注入的 MCP 地址指向死端点。
   - **常驻桥(dao-bridge)新增 `/mcp` 透明流式反代**:`/mcp`(及子路径)双向 `pipe` 到本机 `127.0.0.1:<mcp_port>`(缺省 9100),不收 body 不改写(保全 Streamable-HTTP/SSE),原样透传 `Authorization` 由 MCP 服务端自行鉴权(桥层不要求 master token,与旧独立隧道同源安全模型)。
