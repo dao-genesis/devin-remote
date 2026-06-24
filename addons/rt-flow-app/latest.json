@@ -1,6 +1,6 @@
 {
-  "versionCode": 153,
-  "versionName": "0.37.49",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.49/DevinCloud-mobile-v0.37.49.apk",
-  "notes": "v0.37.49 · 久用卡顿·联控镜像帧「满屏位图复用」(消除每帧 ~10MB 分配抖动 GC)\n• 病根(架构维度·前台联控路径): 云端联控时镜像端按 2~5fps 连续取帧, 旧逻辑每帧 createBitmap 一张满屏 ARGB_8888 位图(1080x2400≈10MB)、画完即 recycle —— 不泄漏, 但「每帧十兆级分配/回收」在 UI 线程持续制造 GC 停顿, 是「操作过久越用越卡」在前台投屏/联控路径上的结构性成本。\n• 解法(道法自然·纯加法零回归): 复用同一张满屏位图(尺寸不变即复用·不再每帧新建), 画前 drawColor 不透明铺底既铺底又清上一帧(无残影); 只有真正用于编码的降采样副本才临时分配。镜像停止 8s 后于内存保洁周期释放该缓冲 → 不联控时不常驻这 ~10MB。\n• 观测: 足迹诊断(DAO_FLUENCY)新增 mirrorKB → 真机经 logcat 即可看到镜像缓冲占用与释放。所有访问皆在 UI 线程, 无竞态; ipcScreenshot(PNG·低频)保持原样避免残影。\n— — —\nv0.37.48 · P2P Trickle ICE — 候选边收边发, 建连更快 + 硬 NAT 直连率再升\nv0.37.47 · P2P 零账号 TURN 全双工兜底(对称 NAT/CGNAT 直连)\nv0.37.46 · 久用卡顿·并发重页 LRU 上限闸"
+  "versionCode": 154,
+  "versionName": "0.37.50",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.50/DevinCloud-mobile-v0.37.50.apk",
+  "notes": "v0.37.50 · 久用卡顿·联控镜像帧「零每帧分配」收尾(续 v0.37.49·复用降采样缓冲)\n• 病根(承上): v0.37.49 已复用满屏位图消除每帧 ~10MB 分配; 但默认 maxDim=1024 降采样路径仍每帧 createScaledBitmap 一张 ~2MB 临时位图 —— 联控热路径上最后一处每帧分配。\n• 解法(道法自然·纯加法零回归): 降采样目标位图亦复用(mirrorScaledBuf·尺寸不变即复用), 改用 Canvas.drawBitmap + FILTER_BITMAP 双线性过滤(与 createScaledBitmap(filter=true) 同画质), 满幅 dst 覆盖无残影 → 联控取帧热路径自此「零每帧位图分配」, GC 抖动进一步压平。\n• 释放/观测: 满屏+缩图两块缓冲统一于内存保洁(前台/后台)+ onDestroy 释放, 停止联控 8s 不常驻; DAO_FLUENCY 的 mirrorKB 计入两块缓冲。所有访问皆 UI 线程, 无竞态。\n— — —\nv0.37.49 · 久用卡顿·联控镜像帧满屏位图复用(消除每帧 ~10MB 分配抖动 GC)\nv0.37.48 · P2P Trickle ICE — 候选边收边发, 建连更快 + 硬 NAT 直连率再升\nv0.37.47 · P2P 零账号 TURN 全双工兜底(对称 NAT/CGNAT 直连)"
 }

@@ -5285,7 +5285,8 @@ public class MainActivity extends AppCompatActivity {
                 if (t.pendingReloadUrl != null) shells++; else if (i != active) parked++;
                 if (t.accountJson != null && t.pendingReloadUrl == null) acctLive++;   // 仍持活 WebView 的账号标签数 → 应随闲置卸载而恒有界
             }
-            long mirrorKb = (mirrorBuf != null && !mirrorBuf.isRecycled()) ? (long) mirrorBufW * mirrorBufH * 4 / 1024 : 0;
+            long mirrorKb = ((mirrorBuf != null && !mirrorBuf.isRecycled()) ? (long) mirrorBufW * mirrorBufH * 4 / 1024 : 0)
+                          + ((mirrorScaledBuf != null && !mirrorScaledBuf.isRecycled()) ? (long) mirrorScaledW * mirrorScaledH * 4 / 1024 : 0);
             android.util.Log.i(FL, "footprint[" + phase + "] tabs=" + tabs.size() + " parked=" + parked
                     + " shells=" + shells + " acctLive=" + acctLive + " lruEvict=" + lruEvicted + " viewers=" + tabViewers.size()
                     + " acctSt=" + sTabStatus.size() + " acctUsd=" + sTabDollars.size()
@@ -5463,7 +5464,8 @@ public class MainActivity extends AppCompatActivity {
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}
         destroyDaoPanel();   // 全服通悬浮窗 WebView 常驻 → Activity 销毁时一并释放
         try { if (mirrorBuf != null && !mirrorBuf.isRecycled()) mirrorBuf.recycle(); } catch (Exception ignored) {}
-        mirrorBuf = null; mirrorCanvas = null;
+        try { if (mirrorScaledBuf != null && !mirrorScaledBuf.isRecycled()) mirrorScaledBuf.recycle(); } catch (Exception ignored) {}
+        mirrorBuf = null; mirrorCanvas = null; mirrorScaledBuf = null; mirrorScaledCanvas = null;
         for (Tab t : tabs) { try { t.web.destroy(); } catch (Exception ignored) {} }
         tabs.clear();
         super.onDestroy();
@@ -5633,15 +5635,21 @@ public class MainActivity extends AppCompatActivity {
     //   MIRROR_BUF_IDLE_MS 后于内存保洁周期释放该缓冲 → 不联控时不常驻这 ~10MB。所有访问皆在 UI 线程, 无竞态。
     private android.graphics.Bitmap mirrorBuf;       // 复用的满屏位图
     private android.graphics.Canvas mirrorCanvas;    // 绑定 mirrorBuf 的画布
-    private int mirrorBufW = 0, mirrorBufH = 0;      // 当前缓冲尺寸
+    private int mirrorBufW = 0, mirrorBufH = 0;      // 当前满屏缓冲尺寸
+    private android.graphics.Bitmap mirrorScaledBuf; // 复用的「降采样」编码缓冲 (默认 maxDim=1024 下原本每帧新建 ~2MB)
+    private android.graphics.Canvas mirrorScaledCanvas;
+    private int mirrorScaledW = 0, mirrorScaledH = 0;
+    private android.graphics.Paint mirrorScalePaint;  // 双线性过滤的缩图画笔 (与 createScaledBitmap(filter=true) 同等画质)
     private volatile long lastMirrorAtMs = 0;        // 最近取镜像帧时刻 (闲置即释放缓冲)
     private static final long MIRROR_BUF_IDLE_MS = 8000;   // 镜像停止 8s 后释放复用缓冲
-    /** 镜像缓冲闲置释放: 停止取帧超 MIRROR_BUF_IDLE_MS 即回收满屏位图, 不再常驻 ~10MB。UI 线程调用。 */
+    /** 镜像缓冲闲置释放: 停止取帧超 MIRROR_BUF_IDLE_MS 即回收满屏+缩图两块缓冲, 不再常驻。UI 线程调用。 */
     private void releaseMirrorBufIfIdle() {
-        if (mirrorBuf == null) return;
+        if (mirrorBuf == null && mirrorScaledBuf == null) return;
         if (System.currentTimeMillis() - lastMirrorAtMs < MIRROR_BUF_IDLE_MS) return;
-        try { if (!mirrorBuf.isRecycled()) mirrorBuf.recycle(); } catch (Exception ignored) {}
+        try { if (mirrorBuf != null && !mirrorBuf.isRecycled()) mirrorBuf.recycle(); } catch (Exception ignored) {}
+        try { if (mirrorScaledBuf != null && !mirrorScaledBuf.isRecycled()) mirrorScaledBuf.recycle(); } catch (Exception ignored) {}
         mirrorBuf = null; mirrorCanvas = null; mirrorBufW = 0; mirrorBufH = 0;
+        mirrorScaledBuf = null; mirrorScaledCanvas = null; mirrorScaledW = 0; mirrorScaledH = 0;
     }
 
     // ── 投屏镜像 (任意公网/局域网浏览器实时镜像并反向操控某原生标签) ─────────────
@@ -5682,15 +5690,26 @@ public class MainActivity extends AppCompatActivity {
         }
         c.drawColor(0xFF0E1116);   // JPEG 无 alpha → 先铺底色(也清除上一帧, 复用无残影)
         t.web.draw(c);
-        android.graphics.Bitmap shot = bmp;   // 实际编码用位图: 降采样时为临时副本, 否则即复用缓冲本身
+        android.graphics.Bitmap shot = bmp;   // 实际编码用位图: 降采样时为复用缩图缓冲, 否则即满屏缓冲本身
         if (maxDim > 0 && Math.max(w, h) > maxDim) {   // 长边降采样, 控带宽
             float s = maxDim / (float) Math.max(w, h);
-            shot = android.graphics.Bitmap.createScaledBitmap(bmp, Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)), true);
+            int sw = Math.max(1, Math.round(w * s)), sh = Math.max(1, Math.round(h * s));
+            // 缩图缓冲亦复用: 尺寸不变即复用, 消除最后一处每帧 ~2MB 分配 → 热路径零每帧分配。
+            if (mirrorScaledBuf == null || mirrorScaledBuf.isRecycled() || mirrorScaledW != sw || mirrorScaledH != sh) {
+                if (mirrorScaledBuf != null && !mirrorScaledBuf.isRecycled()) { try { mirrorScaledBuf.recycle(); } catch (Exception ignored) {} }
+                mirrorScaledBuf = android.graphics.Bitmap.createBitmap(sw, sh, android.graphics.Bitmap.Config.ARGB_8888);
+                mirrorScaledCanvas = new android.graphics.Canvas(mirrorScaledBuf);
+                mirrorScaledW = sw; mirrorScaledH = sh;
+            }
+            if (mirrorScalePaint == null) mirrorScalePaint = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+            // 满幅 dst 覆盖整块 → 无上帧残留; 双线性过滤与 createScaledBitmap(filter=true) 同质。
+            mirrorScaledCanvas.drawBitmap(bmp, new android.graphics.Rect(0, 0, w, h), new android.graphics.Rect(0, 0, sw, sh), mirrorScalePaint);
+            shot = mirrorScaledBuf;
         }
         int bw = shot.getWidth(), bh = shot.getHeight();
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         shot.compress(android.graphics.Bitmap.CompressFormat.JPEG, Math.max(20, Math.min(90, quality)), bos);
-        if (shot != bmp) { try { shot.recycle(); } catch (Exception ignored) {} }   // 仅回收临时降采样副本; 满屏缓冲保留复用
+        // bmp / mirrorScaledBuf 均为复用缓冲 → 不每帧回收, 统一于闲置时释放。
         String b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
         JSONObject o = new JSONObject();
         o.put("ok", true); o.put("jpeg", b64); o.put("w", bw); o.put("h", bh);
