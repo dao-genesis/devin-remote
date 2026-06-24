@@ -25,16 +25,18 @@
   var conns = Object.create(null);   // id -> {pc, dc, ts}
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
-  // 非 trickle ICE: 单次握手把全部候选塞进 SDP, 信令只需一来一回, 契合 HTTP 请求/响应。
+  // ICE 候选收集: answer 仍内嵌「封顶时已有的候选」(向后兼容老客户端), 首个 srflx 反射候选即提前发
+  //   answer(缩短客户端等答), 其余候选(尤其慢到的 TURN relay)经 onLocalCandidate 走 trickle 补发回客户端。
   function waitIce(pc, capMs) {
     return new Promise(function (res) {
       if (pc.iceGatheringState === "complete") return res();
       var done = false;
-      function fin() { if (!done) { done = true; try { pc.removeEventListener("icegatheringstatechange", chk); } catch (e) {} res(); } }
+      function fin() { if (!done) { done = true; try { pc.removeEventListener("icegatheringstatechange", chk); } catch (e) {} try { pc.removeEventListener("icecandidate", onc); } catch (e) {} res(); } }
       function chk() { if (pc.iceGatheringState === "complete") fin(); }
+      function onc(ev) { if (ev && ev.candidate && /typ srflx/.test(ev.candidate.candidate || "")) fin(); }   // 首个反射地址即可发 answer
       pc.addEventListener("icegatheringstatechange", chk);
-      // 兜底: 到点仍未 complete 也照发已有候选。仅 STUN 时 host+srflx 通常 <1s 到齐, 2.5s 封顶即可
-      //   发 answer(缩短客户端等答 → P2P 失败时更快降级); 有 TURN 时保留 4s 等 relay 候选。
+      pc.addEventListener("icecandidate", onc);
+      // 兜底: 到点仍未 complete 也照发已有候选。仅 STUN 时 host+srflx 通常 <1s 到齐, 2.5s 封顶; 有 TURN 时保留 4s。
       setTimeout(fin, capMs || 4000);
     });
   }
@@ -100,6 +102,10 @@
       var s = pc.connectionState;
       if (s === "failed" || s === "closed" || s === "disconnected") { try { pc.close(); } catch (e) {} delete conns[id]; }
     };
+    // Trickle ICE: answer 之后才到的候选(尤其慢到的 TURN relay)经 onLocalCandidate 回传客户端; 此前的已内嵌 answer SDP。
+    var onLocalCand = (args && typeof args.onLocalCandidate === "function") ? args.onLocalCandidate : null;
+    var answerSent = false;
+    if (onLocalCand) pc.onicecandidate = function (ev) { var c = ev && ev.candidate; if (c && answerSent) { try { onLocalCand(c.toJSON ? c.toJSON() : c); } catch (e) {} } };
     try {
       await pc.setRemoteDescription({ type: "offer", sdp: offer });
       var answer = await pc.createAnswer();
@@ -110,7 +116,9 @@
       try { pc.close(); } catch (_) {} delete conns[id];
       return { ok: false, error: "sdp_negotiation_failed", detail: String((e && e.message) || e) };
     }
-    return { ok: true, id: id, answer: pc.localDescription.sdp, stun: STUN.map(function (s) { return s.urls; }) };
+    answerSent = true;   // 此后到达的候选 trickle 回客户端(此前的已内嵌 answer SDP → 向后兼容)
+    // 客户端 trickle 来的候选经 signal.serve 路由到此; pc 未就绪时由 serve 暂存回灌。
+    return { ok: true, id: id, answer: pc.localDescription.sdp, stun: STUN.map(function (s) { return s.urls; }), addRemoteCandidate: onLocalCand ? function (c) { try { pc.addIceCandidate(c); } catch (e) {} } : undefined };
   }
 
   window.P2P = {
