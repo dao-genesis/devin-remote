@@ -18,7 +18,7 @@ const cp = require("child_process");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TRY_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-const BRIDGE_VERSION = "3.6.0";
+const BRIDGE_VERSION = "3.7.0";
 
 // 归一 · 反注 MCP 蹭耐用桥隧道: 综合 MCP(mcp_http.py)本机监听 9100, 其自起的快速隧道
 //   既翻倍触发 Cloudflare 限流又死不自愈。故由常驻桥把 /mcp 透明流式反代到本机 MCP,
@@ -37,6 +37,33 @@ function resolveMcpPort() {
   _mcpPortCache = { port, at: now };
   return port;
 }
+
+// 归一·全功能公网可达: 二合一插件本体(dao-vsix)全功能 API 端口 — 由本体写入 plugin-api.json。
+//   桥把非自有路由透明反代到此端口, 令 /shell 六大板块 + /api/devin/* + /api/tools 等经单隧道直达。
+let _pluginPortCache = { port: 9920, at: 0 };
+function resolvePluginPort() {
+  const now = Date.now();
+  if (now - _pluginPortCache.at < 5000) return _pluginPortCache.port;
+  let port = 9920;
+  try {
+    const f = path.join(os.homedir(), ".dao", "bridge", "plugin-api.json");
+    const j = JSON.parse(fs.readFileSync(f, "utf8"));
+    const p = parseInt(j.port, 10);
+    if (p > 0 && p < 65536) port = p;
+  } catch (e) { /* 守柔 · 缺省 9920 */ }
+  _pluginPortCache = { port, at: now };
+  return port;
+}
+
+// 常驻桥自有路由(本机弹性底座: 即使插件本体窗口关闭仍可用)。其余一律反代到插件本体。
+const DAEMON_ROUTES = new Set([
+  "/api/health", "/api/bootstrap.ps1", "/bootstrap.ps1", "/api/bootstrap.sh", "/bootstrap.sh",
+  "/api/connect", "/api/poll", "/api/result", "/api/heartbeat", "/api/info", "/api/agents",
+  "/api/result-fetch", "/api/bridge-state", "/api/attempt-log", "/api/export-cloud-md", "/api/export-local-md",
+  "/api/exec", "/api/exec-sync", "/api/ls", "/api/read", "/api/write", "/api/agent/register",
+  "/api/agent/heartbeat", "/api/broadcast", "/api/config", "/api/bridge/restart",
+  "/api/account/logout", "/api/export/refresh", "/api/self/reload",
+]);
 
 function daoDir() {
   const d = path.join(os.homedir(), ".dao", "bridge");
@@ -689,6 +716,12 @@ class WorkspaceServer {
           res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Content-Length": sb.length, "Access-Control-Allow-Origin": "*" });
           return res.end(sb);
         }
+        // 归一·全功能公网可达: 非常驻桥自有路由 → 透明流式反代到二合一插件本体(dao-vsix).
+        //   /shell 六大板块、/api/devin/*、/api/tools、/__daobridge.js 等全功能经这条耐用隧道直达;
+        //   不走 handleApi 的收 body+JSON 封装(那会破坏 HTML/SSE/二进制), 鉴权交由本体自行处理。
+        if (!DAEMON_ROUTES.has(pathname)) {
+          return this.proxyPlugin(req, res);
+        }
         let body = "";
         req.on("data", (c) => (body += c));
         req.on("end", async () => {
@@ -722,6 +755,25 @@ class WorkspaceServer {
     up.on("error", (e) => {
       if (!res.headersSent) res.writeHead(502, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
       try { res.end(JSON.stringify({ error: "mcp upstream unreachable: " + (e && e.message), port: mcpPort, hint: "start_mcp_stack.ps1 应已在 127.0.0.1:" + mcpPort + " 起 mcp_http.py" })); } catch (e2) { /* 守柔 */ }
+    });
+    req.pipe(up);
+  }
+
+  // 透明流式反代 非桥自有路由 → 二合一插件本体(dao-vsix · 127.0.0.1:<pluginPort>)。
+  //   双向 pipe, 原样透传方法/路径/查询/头/体与上游响应(HTML/JSON/SSE/二进制皆不缓冲不改写),
+  //   鉴权交由本体自行处理。本体未监听(窗口关闭)时回 502 并提示, 不影响桥自有的弹性端点。
+  proxyPlugin(req, res) {
+    const port = resolvePluginPort();
+    const headers = Object.assign({}, req.headers, { host: "127.0.0.1:" + port });
+    const up = http.request({ host: "127.0.0.1", port, method: req.method || "GET", path: req.url || "/", headers }, (ur) => {
+      const h = Object.assign({}, ur.headers);
+      h["Access-Control-Allow-Origin"] = "*";
+      try { res.writeHead(ur.statusCode || 502, h); } catch (e) { /* 守柔 */ }
+      ur.pipe(res);
+    });
+    up.on("error", (e) => {
+      if (!res.headersSent) res.writeHead(502, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      try { res.end(JSON.stringify({ error: "plugin upstream unreachable: " + (e && e.message), port, hint: "二合一插件本体(dao-vsix)未在 127.0.0.1:" + port + " 监听; IDE 窗口可能已关闭" })); } catch (e2) { /* 守柔 */ }
     });
     req.pipe(up);
   }
@@ -866,6 +918,7 @@ class WorkspaceServer {
         status: "ok", service: "dao-bridge", version: BRIDGE_VERSION,
         host: wsInfo.host, workspace: wsInfo.name,
         agents_online: this.agentRegistry.size,
+        plugin_proxy_port: resolvePluginPort(),
         uptime: Math.floor((Date.now() - (this.startedAt || Date.now())) / 1000),
       } };
     }

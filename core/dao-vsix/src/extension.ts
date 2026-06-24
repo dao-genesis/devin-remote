@@ -1019,6 +1019,10 @@ async function startServer(context: vscode.ExtensionContext) {
         registerInstance(ws.port);
     updateWorkspaceRegistry();
         ws.saveConnection();
+        // 归一·全功能公网可达: 向常驻桥(dao-bridge)公布本体全功能 API 端口/令牌,
+        //   令桥把 /shell 六大板块 + /api/devin/* + /api/tools 等非桥自有路由透明反代到此处,
+        //   一条耐用隧道即暴露二合一插件全部底层(单网页公网操作全功能)。
+        bridgePublishPluginApi();
         // 桥: 自动建桥 — 出站WebSocket绕过NAT
         if (cfg.autoBridge) {
             connectRelay(ws.port, ws.token);
@@ -3052,6 +3056,23 @@ function bridgeStopTunnel() {
     bridgeUrl = '';
     bridgeSaveConnJson();
     refreshDaoCloudMiddlePanel();
+}
+
+// 归一·全功能公网可达: 公布本体全功能 API 端口/令牌, 供常驻桥(dao-bridge)反代落点。
+//   桥读取 ~/.dao/bridge/plugin-api.json 的 port → 把非桥自有路由透明反代到本体 → 单隧道暴露全功能。
+function bridgePublishPluginApi() {
+    try {
+        bridgeEnsureDir();
+        const data = {
+            port: ws.port || 9920,
+            token: ws.token,
+            host: os.hostname(),
+            pid: process.pid,
+            version: EXT_VERSION,
+            updated: new Date().toISOString(),
+        };
+        fs.writeFileSync(path.join(BRIDGE_DIR, 'plugin-api.json'), JSON.stringify(data, null, 2), 'utf8');
+    } catch { /* 守柔 */ }
 }
 
 function bridgeSaveConnJson() {
