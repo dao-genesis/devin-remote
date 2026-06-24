@@ -1,6 +1,6 @@
 {
-  "versionCode": 158,
-  "versionName": "0.37.54",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.54/DevinCloud-mobile-v0.37.54.apk",
-  "notes": "v0.37.54 · 内网穿透「半开死链」自愈(relay-app.js)+ 中继转发只选活 socket(dao-relay)\n• 病灶(手机版 WSS 内网穿透真实失效面): 移动网/NAT 重绑/Doze 常致出站 WSS 静默失效——TCP 不发 FIN, onclose 永不触发, 客户端却仍自以为 connected, 心跳 send() 进缓冲不报错 → 中继侧 socket 早死、公网侧 no_agent/超时长达数分钟才被动恢复。\n• 修法: 中继对每个 ping 自动回 pong → 健康连接每 15s 必有入站; 客户端据此加「半开看门狗」——已连接却连续 45s(3×心跳)无任何入站(连 pong 都收不到)即判半开死链, 主动 close 触发秒级重连。lastRxTs===0(刚连未收帧)不误杀, 7 项切片单测全绿。\n• 配套(中继 Worker dao-relay v3.6.0): 转发只选 readyState===OPEN 的 socket, 无活连接时短暂等客户端重连吸收窗口, 根治公网侧「首发 send_failed(WebSocket send() after close())·重试才通」; send 竞态再发一次, 仍失败返回 503 agent_reconnecting(retryable)。\n• 两侧协同: 客户端秒级自检死链重连 + 中继吸收重连窗口 → 内网穿透长连「断而不知」彻底收口。零协议改动、零回归; 全套单测(含新增 relay-liveness/pickOpenAgent)全绿。\n— — —\nv0.37.53 · 去中心化 P2P 客户端「传输真相」收口\nv0.37.52 · 联控镜像热路径零可避免每帧分配\nv0.37.51 · 活动标签长会话 V8 堆/DOM 回收\nv0.37.50 · 联控镜像帧零每帧位图分配"
+  "versionCode": 159,
+  "versionName": "0.37.55",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.55/DevinCloud-mobile-v0.37.55.apk",
+  "notes": "v0.37.55 · 内网穿透 cloudflared「拦截网络」省电自愈(真机实测驱动)\n• 病灶(经 live 通道读你手机 tunnelStat 实测): 你当前网络持续拦截 Cloudflare 边缘——cloudflared 起即退、已第 16 次退出(cfConnected:false),而备用隧道 SSH(lhr.life)与中继 Worker 正常兜住公网入口、手机始终在线。\n• 但 cloudflared 的「起即退」自愈旧逻辑退避上限只到 60s 便无限硬重连——在注定连不通的网络上每 32~60s 空起一个子进程、永不成功,白烧电/CPU/唤醒。健康探测路径早有「连续 530 后转 5min 慢探」的智能退避,唯独这条「起即退」路径缺。\n• 本版补齐对称逻辑: 连续退出超硬上限(10 次)即判定本网络拦 cf,重连转 5min 慢探(与 CF_RECOVER_INTERVAL 一致),省电且网络一变即秒级复活;备隧 SSH/中继全程并行兜底,连通性零损失。状态文案如实标「转省电慢探·每5min重试」。\n• 纯自愈退避优化,零协议改动、零回归;APK BUILD SUCCESSFUL,JS 全套单测全绿。\n— — —\nv0.37.54 · 内网穿透 WSS 半开死链看门狗 + 中继转发只选活 socket\nv0.37.53 · 去中心化 P2P 客户端「传输真相」收口\nv0.37.52 · 联控镜像热路径零可避免每帧分配\nv0.37.51 · 活动标签长会话 V8 堆/DOM 回收"
 }
