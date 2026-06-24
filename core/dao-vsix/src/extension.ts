@@ -1568,6 +1568,13 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         if (br) return br;
     }
 
+    // ── 归一 · 客户端持久缓存 Service Worker (根治「IDE 内官网路由慢」) ──
+    //   VS Code webview 的 iframe 不持久化 HTTP 磁盘缓存 → 官网 SPA 每次重载/导航重取数百哈希分片。
+    //   同源注册 SW(scope '/') · cache-first 仅缓存哈希不可变静态资产 → 重载零代理/零上游往返。
+    if (route === '/__dao_sw.js') {
+        return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoCloudSwJs(), headers: { 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/' } };
+    }
+
     // 官网 SPA 根路径资源/接口 → 透传 app.devin.ai
     if (isAppProxyPassthrough(route)) {
         return await devinCloudProxyRoute('/devin-cloud' + route, url, req, 'devin', res);
@@ -9974,6 +9981,34 @@ async function daoServeBridgeRoute(routePath: string, urlObj: URL): Promise<any>
     return null;
 }
 
+// 道·客户端持久缓存(CacheStorage): VS Code webview 的 iframe 不像真浏览器持久化 HTTP 磁盘缓存 →
+//   同源官网 SPA 每次重载/切标/导航重取数百哈希分片(即「系统浏览器/手机/单页壳各快一倍, 唯独 IDE
+//   内 webview 慢」之真因——同一反代差只在客户端缓存)。此 SW cache-first 仅拦同源哈希不可变静态资产
+//   (.js/.css/字体/图等), 跳过 dao 面板自身路由(/api、/__ 桥与 SW)与所有 HTML/导航(无扩展名不匹配)
+//   → HTML 恒走网络、登录态/接口不缓存; 资产首载落 Cache, 之后跨导航/重载零网络往返, 媲美真浏览器。
+function daoCloudSwJs() {
+    return [
+        "var C='dao-cloud-assets-v1';",
+        "var IM=/\\.(?:js|css|woff2?|ttf|eot|otf|png|jpe?g|gif|svg|ico|wasm)(?:\\?|$)/i;",
+        "self.addEventListener('install',function(e){self.skipWaiting();});",
+        "self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim());});",
+        "self.addEventListener('fetch',function(event){",
+        "var req=event.request;",
+        "if(req.method!=='GET')return;",
+        "try{if(req.headers.get('range'))return;}catch(e){}",
+        "var url;try{url=new URL(req.url);}catch(e){return;}",
+        "if(url.origin!==self.location.origin)return;",
+        "var p=url.pathname;",
+        "if(p.indexOf('/__')===0||p.indexOf('/api/')===0)return;",
+        "if(!IM.test(p))return;",
+        "event.respondWith(caches.open(C).then(function(cache){return cache.match(req).then(function(hit){",
+        "if(hit)return hit;",
+        "return fetch(req).then(function(resp){if(resp&&resp.status===200){try{cache.put(req,resp.clone());}catch(e){}}return resp;});",
+        "});}).catch(function(){return fetch(req);}));",
+        "});"
+    ].join('');
+}
+
 function daoDropBridgeJs() {
     return [
         "(function(){try{",
@@ -9982,7 +10017,8 @@ function daoDropBridgeJs() {
         "function toast(t){try{var d=document.createElement('div');d.textContent=t;d.style.cssText='position:fixed;z-index:2147483647;left:50%;top:18px;transform:translateX(-50%);background:#11161d;color:#cdd3de;border:1px solid #2a313b;border-radius:8px;padding:8px 14px;font:13px sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.45)';(document.body||document.documentElement).appendChild(d);setTimeout(function(){try{d.parentNode.removeChild(d);}catch(e){}},2800);}catch(e){}}",
         "function mkFile(buf,ct,nm){try{return new File([buf],nm,{type:ct||'application/octet-stream'});}catch(e){var b=new Blob([buf],{type:ct||'application/octet-stream'});try{b.name=nm;}catch(e2){}return b;}}",
         "async function fetchFile(u,nm){var r=await fetch(u,{credentials:'same-origin'});if(!r.ok)throw new Error('HTTP '+r.status);var ct=r.headers.get('content-type')||'application/octet-stream';var buf=await r.arrayBuffer();return mkFile(buf,ct,nm);}",
-        "function feed(target,file){var done=false;try{var dt=new DataTransfer();dt.items.add(file);var ev;try{ev=new DragEvent('drop',{bubbles:true,cancelable:true});Object.defineProperty(ev,'dataTransfer',{value:dt});}catch(e2){ev=new Event('drop',{bubbles:true,cancelable:true});ev.dataTransfer=dt;}var consumed=false;try{consumed=((target||document.body).dispatchEvent(ev)===false);}catch(e3){}if(consumed)return true;var inps=document.querySelectorAll('input[type=file]');for(var k=0;k<inps.length;k++){try{inps[k].files=dt.files;inps[k].dispatchEvent(new Event('input',{bubbles:true}));inps[k].dispatchEvent(new Event('change',{bubbles:true}));done=true;}catch(e){}}}catch(e){}return done;}",
+        "function deepCollect(sel){var out=[];function w(root){var es;try{es=root.querySelectorAll(sel);}catch(e){return;}for(var i=0;i<es.length;i++)out.push(es[i]);var all;try{all=root.querySelectorAll('*');}catch(e2){return;}for(var j=0;j<all.length;j++){if(all[j].shadowRoot)w(all[j].shadowRoot);}}w(document);return out;}",
+        "function feed(target,file){try{var dt=new DataTransfer();dt.items.add(file);var inps=deepCollect('input[type=file]');if(inps.length){for(var k=0;k<inps.length;k++){try{inps[k].files=dt.files;inps[k].dispatchEvent(new Event('input',{bubbles:true}));inps[k].dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}}return true;}var eds=deepCollect('textarea,[contenteditable=true]');var t=eds[0]||target||document.body;function mk(tp){var ev;try{ev=new DragEvent(tp,{bubbles:true,cancelable:true});Object.defineProperty(ev,'dataTransfer',{value:dt});}catch(e2){ev=new Event(tp,{bubbles:true,cancelable:true});ev.dataTransfer=dt;}return ev;}try{t.dispatchEvent(mk('dragenter'));t.dispatchEvent(mk('dragover'));var consumed=(t.dispatchEvent(mk('drop'))===false);return consumed;}catch(e3){return false;}}",
         "document.addEventListener('dragover',function(e){try{var ts=(e.dataTransfer&&e.dataTransfer.types)||[];var has=false;for(var i=0;i<ts.length;i++){if(ts[i]==='application/x-dao-file'||ts[i]==='application/x-dao-conv')has=true;}if(has){e.preventDefault();try{e.dataTransfer.dropEffect='copy';}catch(x){}}}catch(x){}},true);",
         "document.addEventListener('drop',function(e){try{var dtt=e.dataTransfer;if(!dtt)return;var fp='',cv='';try{fp=dtt.getData('application/x-dao-file');}catch(x){}try{cv=dtt.getData('application/x-dao-conv');}catch(x){}if(!fp&&!cv)return;e.preventDefault();e.stopPropagation();var tgt=e.target||document.body;toast('\\u23f3 \\u6b63\\u5728\\u4e0a\\u4f20\\u2026');(async function(){try{var f;if(fp){var o=JSON.parse(fp);f=await fetchFile(ORIGIN+'/__dlfile?p='+encodeURIComponent(o.path||''),(o.name||'file'));}else{var c=JSON.parse(cv);f=await fetchFile(ORIGIN+'/__convmd?email='+encodeURIComponent(c.email||'')+'&sid='+encodeURIComponent(c.sid||''),((c.title||c.sid||'conversation')+'.md'));}var ok=feed(tgt,f);toast(ok?('\\u2705 \\u5df2\\u6295\\u9012\\u4e0a\\u4f20 '+f.name):('\\u26a0 \\u672a\\u627e\\u5230\\u4e0a\\u4f20\\u6846 '+f.name));}catch(err){toast('\\u2715 \\u4e0a\\u4f20\\u5931\\u8d25: '+((err&&err.message)||err));}})();}catch(x){}},true);",
         "}catch(e){}})();"
@@ -10457,7 +10493,9 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         //   body, 外链脚本走网络往返期间标签已被 SPA 抹除 → 永不执行(实测 __daoDropBridge 不挂);
                         //   内联脚本随首段 HTML 解析即同步执行, 其 document 级 drop/dragover 监听跨 body 重渲染长存。
                         const dragBridgeInline = '<script>' + daoDropBridgeJs() + '</script>';
-                        const headInject = authBridge + dragBridgeInline;
+                        // 客户端持久缓存 SW 注册(同源·scope '/' · 仅缓存哈希不可变静态资产 → IDE webview 重载零往返)。
+                        const swRegInline = '<script>(function(){try{if(navigator.serviceWorker){navigator.serviceWorker.register("/__dao_sw.js",{scope:"/"}).catch(function(){});}}catch(e){}})();<\/script>';
+                        const headInject = authBridge + swRegInline + dragBridgeInline;
                         if (/<head[^>]*>/i.test(html)) {
                             html = html.replace(/(<head[^>]*>)/i, '$1' + headInject);
                         } else {
