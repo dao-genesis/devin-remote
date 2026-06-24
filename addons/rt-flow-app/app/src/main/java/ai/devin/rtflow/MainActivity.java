@@ -5154,6 +5154,7 @@ public class MainActivity extends AppCompatActivity {
         enforceLiveTabCap(bgNow);   // 后台亦施数量上限闸: 多号积压时不必等 30 分钟硬阈值即收敛到上限内
         pruneViewers(bgNow);
         pruneAccountMaps();
+        releaseMirrorBufIfIdle();   // 转后台久无联控 → 释放 ~10MB 镜像复用缓冲
         logFootprint("bg");
     }
     /** 前台主动内存保洁 (只动非活动后台标签)。轻量释放普遍适用; 长时间未访问的普通网页标签整页卸载以真正回收堆。 */
@@ -5190,6 +5191,7 @@ public class MainActivity extends AppCompatActivity {
         enforceLiveTabCap(now);   // 数量上限闸: 即便都没到闲置卸载阈值, 也把后台常驻重型 WebView 压到上限内
         pruneViewers(now);
         pruneAccountMaps();
+        releaseMirrorBufIfIdle();   // 久无联控 → 释放 ~10MB 镜像复用缓冲
         logFootprint("fg");
     }
 
@@ -5283,10 +5285,11 @@ public class MainActivity extends AppCompatActivity {
                 if (t.pendingReloadUrl != null) shells++; else if (i != active) parked++;
                 if (t.accountJson != null && t.pendingReloadUrl == null) acctLive++;   // 仍持活 WebView 的账号标签数 → 应随闲置卸载而恒有界
             }
+            long mirrorKb = (mirrorBuf != null && !mirrorBuf.isRecycled()) ? (long) mirrorBufW * mirrorBufH * 4 / 1024 : 0;
             android.util.Log.i(FL, "footprint[" + phase + "] tabs=" + tabs.size() + " parked=" + parked
                     + " shells=" + shells + " acctLive=" + acctLive + " lruEvict=" + lruEvicted + " viewers=" + tabViewers.size()
                     + " acctSt=" + sTabStatus.size() + " acctUsd=" + sTabDollars.size()
-                    + " nativeKB=" + natKb + " javaKB=" + javaKb);
+                    + " mirrorKB=" + mirrorKb + " nativeKB=" + natKb + " javaKB=" + javaKb);
         } catch (Exception ignored) {}
     }
 
@@ -5459,6 +5462,8 @@ public class MainActivity extends AppCompatActivity {
         try { if (dlReceiver != null) unregisterReceiver(dlReceiver); } catch (Exception ignored) {}
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}
         destroyDaoPanel();   // 全服通悬浮窗 WebView 常驻 → Activity 销毁时一并释放
+        try { if (mirrorBuf != null && !mirrorBuf.isRecycled()) mirrorBuf.recycle(); } catch (Exception ignored) {}
+        mirrorBuf = null; mirrorCanvas = null;
         for (Tab t : tabs) { try { t.web.destroy(); } catch (Exception ignored) {} }
         tabs.clear();
         super.onDestroy();
@@ -5620,6 +5625,25 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) { return ""; }
     }
 
+    // ── 镜像帧可复用缓冲 (根治联控期每帧新建满屏 ARGB_8888 位图 → 持续 ~10MB 分配抖动 GC) ──────
+    //   病根(架构维度): 云端联控时镜像端按 2~5fps 连续取帧, 旧逻辑每帧 createBitmap 一张满屏 ARGB_8888
+    //   (1080x2400≈10MB)+ 画完即 recycle —— 不泄漏, 但「每帧十兆级分配/回收」在 UI 线程持续制造 GC 停顿, 是
+    //   「操作过久越用越卡」在前台联控路径上的结构性成本。修法: 复用同一张满屏位图(尺寸不变即复用), 画前
+    //   drawColor 不透明铺底既铺底又清上一帧(无残影); 只有真正用于编码的降采样副本才临时分配。镜像停止
+    //   MIRROR_BUF_IDLE_MS 后于内存保洁周期释放该缓冲 → 不联控时不常驻这 ~10MB。所有访问皆在 UI 线程, 无竞态。
+    private android.graphics.Bitmap mirrorBuf;       // 复用的满屏位图
+    private android.graphics.Canvas mirrorCanvas;    // 绑定 mirrorBuf 的画布
+    private int mirrorBufW = 0, mirrorBufH = 0;      // 当前缓冲尺寸
+    private volatile long lastMirrorAtMs = 0;        // 最近取镜像帧时刻 (闲置即释放缓冲)
+    private static final long MIRROR_BUF_IDLE_MS = 8000;   // 镜像停止 8s 后释放复用缓冲
+    /** 镜像缓冲闲置释放: 停止取帧超 MIRROR_BUF_IDLE_MS 即回收满屏位图, 不再常驻 ~10MB。UI 线程调用。 */
+    private void releaseMirrorBufIfIdle() {
+        if (mirrorBuf == null) return;
+        if (System.currentTimeMillis() - lastMirrorAtMs < MIRROR_BUF_IDLE_MS) return;
+        try { if (!mirrorBuf.isRecycled()) mirrorBuf.recycle(); } catch (Exception ignored) {}
+        mirrorBuf = null; mirrorCanvas = null; mirrorBufW = 0; mirrorBufH = 0;
+    }
+
     // ── 投屏镜像 (任意公网/局域网浏览器实时镜像并反向操控某原生标签) ─────────────
     /** 镜像取帧: 截某标签为 JPEG(可降采样) + 尺寸/URL/标题/激活态 → JSON 字符串。任意线程可调(内部 marshal 到主线程)。 */
     public String ipcMirrorFrame(int tabIndex, int quality, int maxDim) {
@@ -5645,19 +5669,28 @@ public class MainActivity extends AppCompatActivity {
             t.web.layout(0, 0, w, h);
         }
         if (w <= 0 || h <= 0) return "{\"ok\":false,\"error\":\"no_size\"}";
-        android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
-        android.graphics.Canvas c = new android.graphics.Canvas(bmp);
-        c.drawColor(0xFF0E1116);   // JPEG 无 alpha → 先铺底色避免透明区发黑
+        lastMirrorAtMs = System.currentTimeMillis();
+        // 满屏位图复用: 尺寸不变即复用同一张, 避免每帧 ~10MB 分配/回收的 GC 抖动。
+        android.graphics.Bitmap bmp; android.graphics.Canvas c;
+        if (mirrorBuf != null && !mirrorBuf.isRecycled() && mirrorBufW == w && mirrorBufH == h) {
+            bmp = mirrorBuf; c = mirrorCanvas;
+        } else {
+            if (mirrorBuf != null && !mirrorBuf.isRecycled()) { try { mirrorBuf.recycle(); } catch (Exception ignored) {} }
+            bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
+            c = new android.graphics.Canvas(bmp);
+            mirrorBuf = bmp; mirrorCanvas = c; mirrorBufW = w; mirrorBufH = h;
+        }
+        c.drawColor(0xFF0E1116);   // JPEG 无 alpha → 先铺底色(也清除上一帧, 复用无残影)
         t.web.draw(c);
+        android.graphics.Bitmap shot = bmp;   // 实际编码用位图: 降采样时为临时副本, 否则即复用缓冲本身
         if (maxDim > 0 && Math.max(w, h) > maxDim) {   // 长边降采样, 控带宽
             float s = maxDim / (float) Math.max(w, h);
-            android.graphics.Bitmap sb = android.graphics.Bitmap.createScaledBitmap(bmp, Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)), true);
-            bmp.recycle(); bmp = sb;
+            shot = android.graphics.Bitmap.createScaledBitmap(bmp, Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)), true);
         }
-        int bw = bmp.getWidth(), bh = bmp.getHeight();
+        int bw = shot.getWidth(), bh = shot.getHeight();
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, Math.max(20, Math.min(90, quality)), bos);
-        bmp.recycle();
+        shot.compress(android.graphics.Bitmap.CompressFormat.JPEG, Math.max(20, Math.min(90, quality)), bos);
+        if (shot != bmp) { try { shot.recycle(); } catch (Exception ignored) {} }   // 仅回收临时降采样副本; 满屏缓冲保留复用
         String b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
         JSONObject o = new JSONObject();
         o.put("ok", true); o.put("jpeg", b64); o.put("w", bw); o.put("h", bh);

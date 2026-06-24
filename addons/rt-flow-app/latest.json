@@ -1,6 +1,6 @@
 {
-  "versionCode": 152,
-  "versionName": "0.37.48",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.48/DevinCloud-mobile-v0.37.48.apk",
-  "notes": "v0.37.48 · P2P Trickle ICE — 候选边收边发, 建连更快 + 硬 NAT 直连率再升(顺道为 TURN 补全慢候选)\n• 病根: 旧实现「非 trickle」——必须等 ICE 候选收齐(纯 STUN 封顶 2.5s·有 TURN 封顶 4.5s)才发 offer/answer, 双方各等一次 → 最坏叠加数秒建连延迟; 且封顶后才到的慢候选(尤其 TURN relay 候选常 >2.5s)被丢弃 → 硬 NAT 下少一类可用通道、直连率受损。\n• 解法(道法自然·纯加法零回归): ① 首个 srflx 反射候选到手即提前发 offer/answer(典型 gather 等待从 2.5s 降到 <1s); ② offer/answer 仍内嵌「发出时已有的候选」→ 老端照常可用(向后兼容); ③ 封顶后才到的候选(host/srflx/TURN relay)经同一公共 ntfy topic 加密增量补发(role o/a 的 {t:cand} 帧), 对端边收边 addIceCandidate → 慢候选不再丢、连接持续优化到最佳路径。候选先于 offer 到达时由应答方按 nonce 暂存回灌。\n• 架构: 客户端(signal.connect.attemptWebRTC)与应答方(p2p.connect)双侧 onicecandidate trickle; signal.serve 按 nonce 路由候选给对应 pc(pcByNonce + pendCand 暂存·均带 180s TTL 清理)。候选帧复用既有加密(H(session+token)→AES-GCM)与分片(frameChunks)→ 公共 broker 全程只见密文。\n• 护栏: 候选按 nonce 对号(不串攻); 无 trickle 的老端走内嵌候选不受影响; rt-flow 35 项单测全绿(加密/分片/TURN 解析不变量无回归)。\n— — —\nv0.37.47 · P2P 零账号 TURN 全双工兜底(对称 NAT/CGNAT 直连)\nv0.37.46 · 久用卡顿·并发重页 LRU 上限闸"
+  "versionCode": 153,
+  "versionName": "0.37.49",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.49/DevinCloud-mobile-v0.37.49.apk",
+  "notes": "v0.37.49 · 久用卡顿·联控镜像帧「满屏位图复用」(消除每帧 ~10MB 分配抖动 GC)\n• 病根(架构维度·前台联控路径): 云端联控时镜像端按 2~5fps 连续取帧, 旧逻辑每帧 createBitmap 一张满屏 ARGB_8888 位图(1080x2400≈10MB)、画完即 recycle —— 不泄漏, 但「每帧十兆级分配/回收」在 UI 线程持续制造 GC 停顿, 是「操作过久越用越卡」在前台投屏/联控路径上的结构性成本。\n• 解法(道法自然·纯加法零回归): 复用同一张满屏位图(尺寸不变即复用·不再每帧新建), 画前 drawColor 不透明铺底既铺底又清上一帧(无残影); 只有真正用于编码的降采样副本才临时分配。镜像停止 8s 后于内存保洁周期释放该缓冲 → 不联控时不常驻这 ~10MB。\n• 观测: 足迹诊断(DAO_FLUENCY)新增 mirrorKB → 真机经 logcat 即可看到镜像缓冲占用与释放。所有访问皆在 UI 线程, 无竞态; ipcScreenshot(PNG·低频)保持原样避免残影。\n— — —\nv0.37.48 · P2P Trickle ICE — 候选边收边发, 建连更快 + 硬 NAT 直连率再升\nv0.37.47 · P2P 零账号 TURN 全双工兜底(对称 NAT/CGNAT 直连)\nv0.37.46 · 久用卡顿·并发重页 LRU 上限闸"
 }
