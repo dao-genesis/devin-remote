@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.24
+- **反注(MCP)归一 — 弃第二条脆弱隧道,蹭入常驻桥自愈主隧道**。根因:综合 MCP(`mcp_http.py` · 本机 9100)由 `start_mcp_stack.ps1` 自起**第二条** Cloudflare 快速隧道,既翻倍触发限流(1015/429)又**死不自愈**(常见 `mcp_public.json` 里 `url=null`),致账号里注入的 MCP 地址指向死端点。
+  - **常驻桥(dao-bridge)新增 `/mcp` 透明流式反代**:`/mcp`(及子路径)双向 `pipe` 到本机 `127.0.0.1:<mcp_port>`(缺省 9100),不收 body 不改写(保全 Streamable-HTTP/SSE),原样透传 `Authorization` 由 MCP 服务端自行鉴权(桥层不要求 master token,与旧独立隧道同源安全模型)。
+  - **dao-vsix 注入地址归一**:新增 `daoResolveMcpEndpoint()` — 优先把注入 URL 定为 `<常驻桥URL>/mcp`(token 取 MCP 服务端令牌);仅当桥 URL 暂不可知时回退沿用 MCP 自身隧道地址。`bridgeCurrentSig()` 与 MCP 使用文档(KB)同步走此解析,随桥 URL 轮换自动重注。
+  - **`start_mcp_stack.ps1` 默认不再自起隧道**(`-OwnTunnel`/`MCP_OWN_TUNNEL` 可回退),并顺手收掉历史遗留的 `:9100` 快速隧道,真正收敛为单隧道。
+
 ## 3.50.23
 - **修复 3.50.22 引入的致命语法错误**: `feed()` 外层 `try{` 缺少配套 `catch` → 整段拖拽桥 `daoDropBridgeJs` IIFE 报 `Uncaught SyntaxError: Missing catch or finally after try`,**整个拖拽桥从不执行**(`window.__daoDropBridge` 永不置位、`document` 级 drop/dragover 监听从不注册)→ 用户侧「拖拽完全没用」。
   - **定位**: live CDP 实测代理会话页 → 注入 HTML 含桥脚本但 `window.__daoDropBridge=false`;`Log.entryAdded` 捕获 `Uncaught SyntaxError: Missing catch or finally after try`;源码 `feed()` 字符串大括号 16 开/15 合、`try` 4 个仅 3 个 `catch`。`node --check` 检不出(桥代码是字符串字面量,仅浏览器运行时解析)。
