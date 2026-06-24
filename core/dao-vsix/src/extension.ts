@@ -1594,27 +1594,50 @@ async function sigServeFrame(corr: string, full: string): Promise<void> {
         await sigPublishObj('s', corr, { t: 'res', id, status: 500, body: { error: err && err.message ? err.message : String(err) } });
     }
 }
+// 帛书·「大成若缺·用之如泥沙」: 订阅改走 ntfy HTTP JSON 流(GET /{topic}/json),
+//   不再依赖 `ws` 原生/打包模块 — 与发布路径(纯 https)同源, 部署零依赖、永不因缺 node_modules 而哑火。
+//   这正是「真机 enabled:false」根因(require('ws') 抛错被吞)的根治: 砍掉这条依赖。
 function sigSubscribeServer(server: string): void {
     if (sigState.stopping) return;
-    const WebSocket = require('ws');
-    const wsUrl = server.replace(/^http/, 'ws').replace(/\/+$/, '') + '/' + sigState.topic + '/ws';
-    let backoff = SIG_BACKOFF_MIN; let sock: any = null; let alive = true;
-    const entry: any = { server, close: () => { alive = false; try { sock && sock.close(); } catch {} } };
+    const base = server.replace(/\/+$/, '');
+    const streamUrl = base + '/' + sigState.topic + '/json';
+    let backoff = SIG_BACKOFF_MIN; let req: any = null; let alive = true;
+    const entry: any = { server, close: () => { alive = false; try { req && req.destroy(); } catch {} } };
     sigState.subs.push(entry);
     const open = () => {
         if (!alive || sigState.stopping) return;
-        try { sock = new WebSocket(wsUrl); } catch { schedule(); return; }
-        sock.on('open', () => { backoff = SIG_BACKOFF_MIN; });
-        sock.on('message', (data: Buffer) => {
-            try {
-                const o = JSON.parse(data.toString());
-                if (o && o.event === 'message' && typeof o.message === 'string' && sigState.reasm) {
-                    sigState.reasm(o.message, (corr, role, full) => { if (role === 'q') { sigServeFrame(corr, full).catch(() => {}); } });
-                }
-            } catch {}
-        });
-        sock.on('close', () => { if (alive && !sigState.stopping) schedule(); });
-        sock.on('error', () => { try { sock.close(); } catch {} });
+        let u: URL;
+        try { u = new URL(streamUrl); } catch { schedule(); return; }
+        const isHttps = u.protocol === 'https:';
+        const lib: any = isHttps ? https : http;
+        try {
+            req = lib.request({ method: 'GET', host: u.hostname, port: u.port || (isHttps ? 443 : 80), path: u.pathname + u.search, headers: { 'Accept': 'application/x-ndjson' } }, (res: any) => {
+                if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) { res.resume(); try { req.destroy(); } catch {} schedule(); return; }
+                backoff = SIG_BACKOFF_MIN;
+                res.setEncoding('utf8');
+                let buf = '';
+                res.on('data', (chunk: string) => {
+                    buf += chunk;
+                    let nl: number;
+                    while ((nl = buf.indexOf('\n')) >= 0) {
+                        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+                        if (!line) continue;
+                        try {
+                            const o = JSON.parse(line);
+                            if (o && o.event === 'message' && typeof o.message === 'string' && sigState.reasm) {
+                                sigState.reasm(o.message, (corr, role, full) => { if (role === 'q') { sigServeFrame(corr, full).catch(() => {}); } });
+                            }
+                        } catch {}
+                    }
+                    if (buf.length > 1 << 20) buf = ''; // 守柔: 防御异常大行累积
+                });
+                res.on('end', () => { if (alive && !sigState.stopping) schedule(); });
+                res.on('error', () => { if (alive && !sigState.stopping) schedule(); });
+            });
+            req.on('error', () => { if (alive && !sigState.stopping) schedule(); });
+            // ntfy 流为长连接, 不设整体超时; 仅靠 broker keepalive 维持, 断开即 end/error → 重连
+            req.end();
+        } catch { schedule(); }
     };
     const schedule = () => {
         if (!alive || sigState.stopping) return;
@@ -1721,7 +1744,8 @@ function isAppProxyPassthrough(route: string): boolean {
             '/api/command', '/api/file', '/api/write', '/api/search', '/api/edit', '/api/ls',
             '/api/terminal', '/api/diagnostics', '/api/definitions', '/api/references', '/api/symbols',
             '/api/git/', '/api/agents', '/api/commands', '/api/tools', '/api/devin', '/api/workspaces',
-            '/api/agent-doc', '/api/manifest', '/api/bridge-state', '/api/next', '/api/signal-info'];
+            '/api/agent-doc', '/api/manifest', '/api/bridge-state', '/api/next', '/api/signal-info',
+            '/api/signal-start', '/api/signal-stop'];
         return !daoApiPrefixes.some(p => route === p || route.startsWith(p + '/') || route === p.replace(/\/$/, ''));
     }
     // 帛书·「执天之行」官网根挂载: dao 自身 HTTP 仅占用 /api/*, 故其余所有根路径
@@ -1861,6 +1885,16 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         }
         case '/api/signal-info': {
             // 去中心化路线C 诊断: session/topic/broker 健康/收发统计
+            return sigInfo();
+        }
+        case '/api/signal-start': {
+            // 运行时(重)启动去中心化路线C — 无需重载窗口即可恢复(如 ws 模块补齐后)
+            try { sigStop(); } catch {}
+            await sigStart();
+            return sigInfo();
+        }
+        case '/api/signal-stop': {
+            sigStop();
             return sigInfo();
         }
         case '/api/connection': {
@@ -2767,8 +2801,47 @@ const BRIDGE_DIR = path.join(os.homedir(), '.dao', 'bridge');
 let bridgeProc: any = null;
 let bridgeUrl: string = '';
 let bridgeToken: string = '';
+// 帛书·「無死地」: cloudflared 脱宿主独立存活 — 日志/PID 落盘, 重载/重启宿主不带走隧道。
+const CF_LOG = path.join(BRIDGE_DIR, 'cloudflared.log');
+const CF_PID = path.join(BRIDGE_DIR, 'cloudflared.pid');
+let cfPollTimer: any = null;
 
 function bridgeEnsureDir() { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); }
+
+// 从 cloudflared 日志文件读取最新隧道 URL(排除 api. 注册端点子域)
+function cfReadUrlFromLog(): string {
+    try {
+        const txt = fs.readFileSync(CF_LOG, 'utf8');
+        const matches = txt.match(/https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/g);
+        if (matches && matches.length) return matches[matches.length - 1];
+    } catch {}
+    return '';
+}
+// PID 文件里的 cloudflared 是否仍存活(脱宿主孤儿进程仍在跑则复用, 不再新起隧道)
+function cfPidAlive(): number {
+    try {
+        const pid = parseInt(fs.readFileSync(CF_PID, 'utf8').trim(), 10);
+        if (pid > 0) { process.kill(pid, 0); return pid; }
+    } catch {}
+    return 0;
+}
+// 轮询日志捕获/跟随 URL(取代旧的进程事件流; detached 进程 stdio 已重定向到日志, 无事件可听)
+function bridgeStartUrlPoll(): void {
+    if (cfPollTimer) return;
+    let tries = 0;
+    cfPollTimer = setInterval(() => {
+        tries++;
+        const u = cfReadUrlFromLog();
+        if (u && u !== bridgeUrl) {
+            bridgeUrl = u;
+            try { bridgeSaveConnJson(); } catch {}
+            try { bridgeWriteArtifacts(); } catch {}
+            try { refreshDaoCloudMiddlePanel(); } catch {}
+            try { vscode.window.showInformationMessage(`Bridge 已打通: ${bridgeUrl}`); } catch {}
+        }
+        if ((u && tries >= 6) || tries >= 40) { clearInterval(cfPollTimer); cfPollTimer = null; }
+    }, 1500);
+}
 
 function bridgeSaveNamedToken(token: string) {
     bridgeEnsureDir();
@@ -2925,8 +2998,28 @@ function bridgeFindCloudflared(): string {
 async function bridgeStartTunnel(named: boolean) {
     const { spawn } = require('child_process');
     bridgeEnsureDir();
-    if (bridgeProc) { try { bridgeProc.kill(); } catch {} bridgeProc = null; }
     if (!bridgeToken) bridgeToken = crypto.randomBytes(24).toString('hex');
+    // ① 守柔复用(無死地): 上一个宿主留下的 cloudflared 仍脱宿主存活, 且日志含可达 URL
+    //    → 直接复用其隧道, 绝不新起第二条(杜绝隧道增殖/地址漂移)。这正是「窗口重载却不断线」的根。
+    if (!named) {
+        const existingPid = cfPidAlive();
+        if (existingPid) {
+            const u = cfReadUrlFromLog();
+            if (u) {
+                bridgeProc = null; // 不持有句柄: 它是孤儿进程, 仍在独立跑, 本宿主只跟随其日志
+                bridgeUrl = u;
+                bridgeSaveConnJson();
+                bridgeWriteArtifacts();
+                refreshDaoCloudMiddlePanel();
+                bridgeStartUrlPoll();
+                return;
+            }
+        }
+    }
+    // 决定新起隧道: 先清掉本进程句柄与任何残留孤儿, 避免双隧道
+    if (bridgeProc) { try { bridgeProc.kill(); } catch {} bridgeProc = null; }
+    const staleOrphan = cfPidAlive();
+    if (staleOrphan) { try { process.kill(staleOrphan); } catch {} }
     const cfPath = bridgeFindCloudflared();
     const targetPort = ws.port || 9920;
     const localUrl = `http://127.0.0.1:${targetPort}`;
@@ -2937,27 +3030,21 @@ async function bridgeStartTunnel(named: boolean) {
     } else {
         args = ['tunnel', '--url', localUrl, '--no-autoupdate'];
     }
-    bridgeProc = spawn(cfPath, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: false });
-    let urlCaptured = false;
-    const handleOutput = (data: Buffer) => {
-        const line = data.toString();
-        if (!urlCaptured) {
-            // 帛书·「不自见故明」: cloudflared 横幅会打印 api.trycloudflare.com(注册端点, 非隧道),
-            // 旧正则误抓为公网地址 → conn.json 存了占位 URL。此处排除 api. 子域, 只认真实隧道域名。
-            const m = line.match(/https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/);
-            if (m) {
-                bridgeUrl = m[0];
-                urlCaptured = true;
-                bridgeSaveConnJson();
-                bridgeWriteArtifacts();
-                refreshDaoCloudMiddlePanel();
-                vscode.window.showInformationMessage(`Bridge 已打通: ${bridgeUrl}`);
-            }
-        }
-    };
-    bridgeProc.stdout?.on('data', handleOutput);
-    bridgeProc.stderr?.on('data', handleOutput);
-    bridgeProc.on('exit', () => { bridgeProc = null; bridgeUrl = ''; bridgeSaveConnJson(); refreshDaoCloudMiddlePanel(); });
+    // 帛书·「無死地」: detached:true + stdio 重定向到日志文件 + unref()
+    //   → cloudflared 脱离扩展宿主独立存活; 宿主重载/重启不再带走隧道与 URL。
+    //   URL 改从日志文件轮询读取(detached 后无事件流可听)。
+    try { fs.writeFileSync(CF_LOG, ''); } catch {}
+    let out = 'ignore';
+    try { out = fs.openSync(CF_LOG, 'a') as any; } catch {}
+    try {
+        bridgeProc = spawn(cfPath, args, { stdio: ['ignore', out, out], detached: true });
+    } catch {
+        bridgeProc = spawn(cfPath, args, { stdio: 'ignore', detached: true });
+    }
+    try { if (bridgeProc && bridgeProc.pid) fs.writeFileSync(CF_PID, String(bridgeProc.pid)); } catch {}
+    try { bridgeProc.unref(); } catch {}
+    bridgeStartUrlPoll();
+    bridgeProc.on('exit', () => { bridgeProc = null; refreshDaoCloudMiddlePanel(); });
 }
 
 function bridgeStopTunnel() {
