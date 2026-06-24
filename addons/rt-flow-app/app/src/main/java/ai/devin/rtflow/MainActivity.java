@@ -5097,6 +5097,18 @@ public class MainActivity extends AppCompatActivity {
     private static final long MEM_TRIM_IDLE_MS = 90000;  // 后台标签闲置超 90s 才做轻量释放 (避免快速来回切换的标签被反复清缓存)
     private static final long IDLE_UNLOAD_MS = 900000;   // 后台普通网页标签闲置超 15 分钟 → 整页卸载 (选中即原样重建)
     private static final long ACCT_IDLE_UNLOAD_MS = 1800000; // 后台 Devin 账号标签闲置超 30 分钟(更金贵·阈值更宽) → 整页卸载, 选中即按原账号重注鉴权重建
+    // ── 后台常驻重型 WebView「数量上限闸」(LRU 丢弃) · 根治积极使用时的「越用越卡」────────────────
+    //   病根(前四轮收的是各类单调累积的「慢泄漏」, 这是另一维度的「快积压」): 闲置卸载只在标签闲到 15/30 分钟
+    //   才触发; 而用户积极使用时不停在多个账号/网页标签间来回切, 谁都到不了闲置阈值 → 全部 account/网页标签
+    //   常驻为重型 Devin SPA(各自一份 V8 堆+合成层+定时器), acctLive 随「开了多少标签」线性无界增长 → 多张重页
+    //   争抢同一渲染线程与内存 → GC 抖动/合成卡顿越用越重, 唯杀进程才清零。个别泄漏可以逐个堵, 但「并发重页
+    //   总数」本身才是主成本; 仿移动版 Chrome 的后台标签丢弃: 给后台常驻重型 WebView 数量「硬上限」, 超了就按
+    //   最久未访问优先整页卸载换空壳(选中即原样/按原账号重注鉴权重建) → 不论开多少标签, 并发重页恒有界 →
+    //   从结构上消除这一维度的累积(对「到底哪个计数在涨」鲁棒)。护栏与闲置卸载一致(跳过 活动/内部/空壳·账号
+    //   标签跳过被联控观看者), 且只动闲置超下方阈值的标签 → 正在来回切的工作集绝不被打断。
+    private static final int  MAX_LIVE_BG_HEAVY = 5;       // 后台常驻重型 http(s) WebView 上限(不含活动标签)
+    private static final long WEB_LRU_MIN_IDLE_MS = 90000;   // 普通网页标签: 闲置超 90s 才可因超限被丢弃(防来回切抖动)
+    private static final long ACCT_LRU_MIN_IDLE_MS = 300000; // 账号标签更金贵: 闲置超 5 分钟才可因超限被丢弃(短于 30 分钟硬阈值, 多号积压时更早收敛)
     // ── 转后台后的「重度」内存保洁: 根治用户实测「即使超后台也没用·还是卡, 唯有放置几小时(等系统终于回收进程)才好」──
     //   病根延伸: 本应用常驻前台服务(RelayService)使进程长生不死 → 系统极少 LMK 整体回收 → 转后台时旧逻辑只
     //   pauseWeb(仅暂停渲染合成·不释放内存·不停 JS) 且把前台 memHygiene 取消, 后台遂「零回收」, 堆/缓存原样常驻;
@@ -5139,6 +5151,7 @@ public class MainActivity extends AppCompatActivity {
             if (t.accountJson != null && t.lastShownAt > 0 && (bgNow - t.lastShownAt) > ACCT_IDLE_UNLOAD_MS)
                 unloadIdleAccountTab(i);
         }
+        enforceLiveTabCap(bgNow);   // 后台亦施数量上限闸: 多号积压时不必等 30 分钟硬阈值即收敛到上限内
         pruneViewers(bgNow);
         pruneAccountMaps();
         logFootprint("bg");
@@ -5174,10 +5187,46 @@ public class MainActivity extends AppCompatActivity {
             try { at.web.freeMemory(); } catch (Exception ignored) {}
             activeTabCacheTs = now;
         }
+        enforceLiveTabCap(now);   // 数量上限闸: 即便都没到闲置卸载阈值, 也把后台常驻重型 WebView 压到上限内
         pruneViewers(now);
         pruneAccountMaps();
         logFootprint("fg");
     }
+
+    /** 后台常驻重型 WebView「数量上限闸」(LRU 丢弃)。把仍持活 WebView 的后台 http(s) 标签(账号+普通网页)总数
+     *  压到 MAX_LIVE_BG_HEAVY 以内: 超限时按最久未访问(lastShownAt 升序)优先整页卸载换空壳, 选中即重建。
+     *  护栏: 跳过 活动标签/内部板块页/已是空壳(pendingReloadUrl) 的; 账号标签若正被联控观看则不动; 且仅丢弃
+     *  闲置超对应 LRU 阈值的标签 → 用户正来回切的工作集(刚访问过的)绝不被打断, 只收割真正积压的后台重页。 */
+    private void enforceLiveTabCap(long now) {
+        java.util.ArrayList<Integer> cand = new java.util.ArrayList<>();   // 可丢弃候选(已过 LRU 防抖窗)
+        int live = 0;
+        for (int i = 0; i < tabs.size(); i++) {
+            if (i == active) continue;
+            Tab t = tabs.get(i);
+            if (t.web == null || t.internal || t.pendingReloadUrl != null) continue;
+            String u = t.url;
+            if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) continue;
+            live++;   // 一张后台常驻重型 WebView
+            long idle = (t.lastShownAt > 0) ? (now - t.lastShownAt) : Long.MAX_VALUE;
+            if (t.accountJson != null) {
+                if (idle < ACCT_LRU_MIN_IDLE_MS) continue;     // 刚用过的账号标签不动(防来回切抖动)
+                java.util.concurrent.ConcurrentHashMap<String,Long> vw = tabViewers.get(t.vid);
+                if (vw != null && !vw.isEmpty()) continue;     // 正被联控观看/驱动 → 不打断
+            } else {
+                if (idle < WEB_LRU_MIN_IDLE_MS) continue;      // 刚用过的网页标签不动
+            }
+            cand.add(i);
+        }
+        if (live <= MAX_LIVE_BG_HEAVY || cand.isEmpty()) return;
+        java.util.Collections.sort(cand, (a, b) -> Long.compare(tabs.get(a).lastShownAt, tabs.get(b).lastShownAt)); // 最久未访问在前
+        int toEvict = live - MAX_LIVE_BG_HEAVY;
+        for (int k = 0; k < cand.size() && toEvict > 0; k++) {
+            int idx = cand.get(k);
+            if (tabs.get(idx).accountJson != null) unloadIdleAccountTab(idx); else unloadBackgroundTab(idx);
+            toEvict--; lruEvicted++;
+        }
+    }
+    private int lruEvicted = 0;   // 累计因数量上限被 LRU 丢弃的后台重型标签数 → 经 DAO_FLUENCY 足迹可观测上限闸是否在生效
 
     /** 联控在场表保洁: 去掉 (a) 已不存在标签的 vid 项, (b) TTL 过期的观看登记, (c) 清空后的空内层表。
      *  根因: 旧逻辑仅在收到 claim 时顺手清陈, 无 claim(无云端控台连入)时 tabViewers 只增不减, 且关标签从不删项 →
@@ -5235,7 +5284,7 @@ public class MainActivity extends AppCompatActivity {
                 if (t.accountJson != null && t.pendingReloadUrl == null) acctLive++;   // 仍持活 WebView 的账号标签数 → 应随闲置卸载而恒有界
             }
             android.util.Log.i(FL, "footprint[" + phase + "] tabs=" + tabs.size() + " parked=" + parked
-                    + " shells=" + shells + " acctLive=" + acctLive + " viewers=" + tabViewers.size()
+                    + " shells=" + shells + " acctLive=" + acctLive + " lruEvict=" + lruEvicted + " viewers=" + tabViewers.size()
                     + " acctSt=" + sTabStatus.size() + " acctUsd=" + sTabDollars.size()
                     + " nativeKB=" + natKb + " javaKB=" + javaKb);
         } catch (Exception ignored) {}
