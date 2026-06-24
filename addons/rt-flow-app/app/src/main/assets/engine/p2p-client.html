@@ -71,7 +71,16 @@ var STUN = (window.DaoSignal && window.DaoSignal.STUN) ? window.DaoSignal.STUN.s
 ];
 var pc = null, dc = null, dcSendFn = null, seq = 0, waiters = Object.create(null);
 var sig = null;   // 去中心化直连句柄 (DaoSignal.connect 返回 {pc,dc,rpc,ping,close})
-function onOpen(label){ setState(label,"#238636"); $("btnSend").disabled=false; $("btnPing").disabled=false; $("btnConnect").disabled=false; log("✓ DataChannel open — 之后 RPC 全程 P2P"); }
+var transport = { tag: "P2P", isRelay: false };   // 当前生效传输面真相: 供 ping/rpc 标注与状态显示
+// 传输真相: DaoSignal.connect 可能返回「真 P2P DataChannel」(.dc 就绪) 或「去中心化 ntfy 中继兜底」
+//   (.mode==="relay-ntfy", .dc===null)。二者体感天差地别(直连低延迟·满速 vs 中继控制面·48KB 上限),
+//   故据实区分显示, 不再一律谎报「P2P 直连」—— 让对照者一眼看清真实链路。
+function describeTransport(h){
+  if(h && h.mode==="relay-ntfy"){ return { tag:"中继", isRelay:true, color:"#9e6a03", state:"🟡 去中心化中继 (ntfy·控制面)", note:"P2P 打洞未通("+(h.fellBackFrom||"")+"), 已回退公共 ntfy 加密中继: 仍 0账号·不经 Worker, 但单响应≤48KB(大响应/截图/文件请走 P2P 或隧道兜底)" }; }
+  if(h && h.dc){ var viaTurn=!!h.viaTurn; return { tag:"P2P", isRelay:false, color:"#238636", state: viaTurn ? "🟢 P2P 直连 (TURN 中继候选·全双工)" : "🟢 P2P 直连 (去中心化·0账号)", note: viaTurn ? "纯 STUN 打洞未通, 经 TURN relay 候选建立全双工 P2P DataChannel(满速·无 48KB 限)" : "纯 STUN 打洞成功, RPC 全程 P2P DataChannel 直连" }; }
+  return { tag:"P2P", isRelay:false, color:"#238636", state:"🟢 已直连", note:"" };
+}
+function onOpen(label){ setState(label,"#238636"); $("btnSend").disabled=false; $("btnPing").disabled=false; $("btnConnect").disabled=false; }
 function $(id){ return document.getElementById(id); }
 function log(s){ var p=$("log"); p.textContent += (typeof s==="string"?s:JSON.stringify(s,null,2)) + "\n"; p.scrollTop=p.scrollHeight; }
 function setState(t,c){ var e=$("state"); e.textContent=t; e.style.background=c||"#30363d"; }
@@ -99,7 +108,11 @@ async function connect(){
     log("→ 路线C: 公共信令(ntfy)交换加密 SDP, 0账号不经 Worker…");
     try{
       sig = await DaoSignal.connect({ session:session, token:token, ice:extraIce, timeout:25000 });
-      onOpen("P2P 直连 🟢 (去中心化·0账号)");
+      transport = describeTransport(sig);
+      setState(transport.state, transport.color);
+      $("btnSend").disabled=false; $("btnPing").disabled=false; $("btnConnect").disabled=false;
+      log((transport.isRelay?"⚠ ":"✓ ")+transport.state);
+      if(transport.note) log("  └ "+transport.note);
       return;
     }catch(e){ var ec=String((e&&e.message)||e); var hint = ec==="ice_failed" ? "去中心化未通 (对端已应答但 P2P 打洞失败/对称NAT —— 可填 TURN 或用隧道兜底)" : (ec==="signal_timeout" ? "去中心化未通 (未收到对端应答 —— 检查手机在线与 session/token 是否一致)" : "去中心化未通 ("+ec+")"); log("• "+hint+(url?", 尝试 Worker 兜底…":"")); try{ if(sig) sig.close(); }catch(_){ } sig=null; }
   } else { log("• 本环境无 WebCrypto, 跳过去中心化"+(url?", 用 Worker 兜底":"")); }
@@ -111,7 +124,7 @@ async function connect(){
     pc = new RTCPeerConnection({ iceServers: ice, iceCandidatePoolSize: 2 });
     dc = pc.createDataChannel("rpc");
     dc.binaryType="arraybuffer";
-    dc.onopen=function(){ onOpen("P2P 已直连 🟢 (Worker兜底信令)"); };
+    dc.onopen=function(){ transport={ tag:"P2P", isRelay:false }; onOpen("🟢 P2P 已直连 (Worker 仅做一次性信令)"); log("✓ DataChannel open — RPC 全程 P2P (信令一次性经 Worker, 数据不经 Worker)"); };
     dc.onclose=function(){ setState("通道关闭","#30363d"); $("btnSend").disabled=true; $("btnPing").disabled=true; };
     // 大响应(如 downloadFetch base64)经 dcWire 透明分片+背压重组; 信令缺席时回落原逐条。
     function onDcMsg(m){
@@ -155,12 +168,13 @@ async function sendRpc(){
     var dt=(performance.now()-t0).toFixed(0);
     var r; try{ r=JSON.parse(result); }catch(e){ r=result; }
     var out=r; try{ if(r&&r.bodyText) out=JSON.parse(r.bodyText); }catch(e){}
-    log("✓ "+cmd+" ["+dt+"ms · P2P] →"); log(out);
+    log("✓ "+cmd+" ["+dt+"ms · "+transport.tag+"] →"); log(out);
+    if(r && r.status===413 && transport.isRelay) log("  └ ↑ 该响应超去中心化中继 48KB 上限(常见于多账号 getState): 需真 P2P 直连或隧道兜底才能拿全量");
   }catch(e){ log("✗ "+cmd+": "+String((e&&e.message)||e)); }
 }
 function ping(){ return new Promise(function(resolve,reject){ var id="p"+(++seq); waiters[id]={resolve:resolve,reject:reject}; var t0=performance.now(); (dcSendFn||function(o){ dc.send(JSON.stringify(o)); })({t:"ping",id:id}); waiters[id].resolve=function(){ resolve(performance.now()-t0); }; setTimeout(function(){ if(waiters[id]){delete waiters[id]; reject(new Error("to")); } },5000); }); }
-async function pingLoop(){ for(var i=0;i<5;i++){ try{ var ms=await (sig?sig.ping():ping()); log("ping#"+(i+1)+" = "+ms.toFixed(1)+"ms (P2P RTT)"); }catch(e){ log("ping#"+(i+1)+" timeout"); } } }
-function hangup(){ try{ if(sig) sig.close(); }catch(e){} sig=null; try{ if(dc) dc.close(); }catch(e){} try{ if(pc) pc.close(); }catch(e){} dc=null; pc=null; dcSendFn=null; $("btnSend").disabled=true; $("btnPing").disabled=true; setState("未连接","#30363d"); }
+async function pingLoop(){ var rttTag=transport.isRelay?"中继 RTT":"P2P RTT"; for(var i=0;i<5;i++){ try{ var ms=await (sig?sig.ping():ping()); log("ping#"+(i+1)+" = "+ms.toFixed(1)+"ms ("+rttTag+")"); }catch(e){ log("ping#"+(i+1)+" timeout"); } } }
+function hangup(){ try{ if(sig) sig.close(); }catch(e){} sig=null; transport={ tag:"P2P", isRelay:false }; try{ if(dc) dc.close(); }catch(e){} try{ if(pc) pc.close(); }catch(e){} dc=null; pc=null; dcSendFn=null; $("btnSend").disabled=true; $("btnPing").disabled=true; setState("未连接","#30363d"); }
 
 // ── 零中心一键分发: 从 URL 查询参数预填 (session/token/url/turn), ?auto=1 开页即直连 ──────
 //   道法自然·最小化用户参与: 宿主把带参链接 (经公共 CDN 托管本页·不经任何 Worker) 发给对端,
