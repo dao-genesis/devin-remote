@@ -1300,6 +1300,7 @@ public class MainActivity extends AppCompatActivity {
     private void closeTab(int idx) {
         if (idx < 0 || idx >= tabs.size()) return;
         Tab t = tabs.remove(idx);
+        try { tabViewers.remove(t.vid); } catch (Exception ignored) {}   // 关标签即清其联控在场登记 → tabViewers 不随开/关标签单调累积(久用泄漏根除·橙色在场计数不被死标签污染)
         try {
             android.view.View host = t.swipe != null ? t.swipe : t.web;
             if (host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
@@ -5099,6 +5100,8 @@ public class MainActivity extends AppCompatActivity {
             if (tabs.get(i).pendingReloadUrl != null) continue;
             unloadBackgroundTab(i);   // 内部已只对 非活动·非账号·非内部·http(s) 生效
         }
+        pruneViewers(System.currentTimeMillis());
+        logFootprint("bg");
     }
     /** 前台主动内存保洁 (只动非活动后台标签)。轻量释放普遍适用; 长时间未访问的普通网页标签整页卸载以真正回收堆。 */
     private void trimBackgroundTabs() {
@@ -5129,6 +5132,41 @@ public class MainActivity extends AppCompatActivity {
             try { at.web.freeMemory(); } catch (Exception ignored) {}
             activeTabCacheTs = now;
         }
+        pruneViewers(now);
+        logFootprint("fg");
+    }
+
+    /** 联控在场表保洁: 去掉 (a) 已不存在标签的 vid 项, (b) TTL 过期的观看登记, (c) 清空后的空内层表。
+     *  根因: 旧逻辑仅在收到 claim 时顺手清陈, 无 claim(无云端控台连入)时 tabViewers 只增不减, 且关标签从不删项 →
+     *  久用单调累积(慢泄漏) 且橙色在场计数可能把已关标签的陈旧观看者算进去。这里随内存保洁周期一并清理, 有界且即时纠偏。 */
+    private void pruneViewers(long now) {
+        try {
+            java.util.HashSet<Long> live = new java.util.HashSet<>();
+            for (int i = 0; i < tabs.size(); i++) live.add(tabs.get(i).vid);
+            java.util.Iterator<java.util.Map.Entry<Long, java.util.concurrent.ConcurrentHashMap<String,Long>>> it = tabViewers.entrySet().iterator();
+            while (it.hasNext()) {
+                java.util.Map.Entry<Long, java.util.concurrent.ConcurrentHashMap<String,Long>> e = it.next();
+                if (!live.contains(e.getKey())) { it.remove(); continue; }   // 标签已关 → 整项删
+                java.util.Iterator<java.util.Map.Entry<String,Long>> jt = e.getValue().entrySet().iterator();
+                while (jt.hasNext()) if (now - jt.next().getValue() > VIEW_TTL) jt.remove();   // 过期观看者删
+                if (e.getValue().isEmpty()) it.remove();                     // 内层清空 → 整项删
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /** 长会话内存足迹诊断: 每轮保洁打一行 native/dalvik 堆与标签数到 logcat(tag DAO_FLUENCY)。开销极低(纯 Java 计数),
+     *  真机经 `adb logcat -s DAO_FLUENCY` 即可定位「用久了越卡」到底是哪类占用单调爬升 → 把根因从猜测变为可观测。 */
+    private void logFootprint(String phase) {
+        try {
+            long natKb = android.os.Debug.getNativeHeapAllocatedSize() / 1024;
+            Runtime rt = Runtime.getRuntime();
+            long javaKb = (rt.totalMemory() - rt.freeMemory()) / 1024;
+            int parked = 0, shells = 0;
+            for (int i = 0; i < tabs.size(); i++) { if (tabs.get(i).pendingReloadUrl != null) shells++; else if (i != active) parked++; }
+            android.util.Log.i(FL, "footprint[" + phase + "] tabs=" + tabs.size() + " parked=" + parked
+                    + " shells=" + shells + " viewers=" + tabViewers.size()
+                    + " nativeKB=" + natKb + " javaKB=" + javaKb);
+        } catch (Exception ignored) {}
     }
 
     @Override protected void onPause() {
