@@ -142,6 +142,14 @@ function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { fai
   const closeAtSeg = closeAtIdx >= 0 ? src.slice(closeAtIdx, closeAtIdx + 200) : "";
   ok(/clearTimeout\(graceTimer\)/.test(closeAtSeg), "G2 closeAttempt 清理宽限定时器 (连接提前关时不残留 sub.close 计时器)");
 
+  // H) route-C 半开死链看门狗(源码守卫): subscribe 须有周期看门狗, 对 >90s 无任何入站(连 ntfy keepalive
+  //    都收不到)的半开 WS 主动 close 触发重连; 且每帧刷新 lastRx, close() 清理看门狗定时器。
+  const subIdx = src.indexOf("function subscribe(");
+  const subSeg = subIdx >= 0 ? src.slice(subIdx, subIdx + 2600) : "";
+  ok(/setInterval\(/.test(subSeg) && /lastRx/.test(subSeg), "H1 subscribe 有看门狗(setInterval)+ 按入站帧刷新 lastRx");
+  ok(/now\s*-\s*c\.lastRx\s*>\s*90000[\s\S]*?\.close\(\)/.test(subSeg), "H2 >90s 无入站即判半开并 close(触发自动重连)");
+  ok(/clearInterval\(wd\)/.test(subSeg), "H3 close() 清理看门狗定时器(不残留)");
+
   console.log(failures ? ("\n失败 " + failures + " 项 ✗") : "\n全通 ✓");
   process.exit(failures ? 1 : 0);
 })().catch(function (e) { console.error("测试异常:", e); process.exit(1); });
