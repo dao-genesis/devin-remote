@@ -99,8 +99,9 @@
   #urlInput{flex:1;height:36px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);
             border-radius:8px;padding:0 11px;font-size:13px;outline:none}
   #urlGo{background:var(--btn);color:#fff;border:0;border-radius:8px;padding:0 16px;font-size:14px;cursor:pointer}
-  #menuPop{position:absolute;top:46px;left:8px;background:#11161e;border:1px solid var(--border);border-radius:12px;
-           padding:6px;display:none;z-index:60;min-width:210px;max-height:78vh;overflow-y:auto;box-shadow:0 14px 40px #000a}
+  /* 汉堡菜单: fixed 锚到工具栏正下方(随 #strip 底边动态定位), 不被网页端独有的 #mirror 在场行下压 → 与 APK 落点一致 */
+  #menuPop{position:fixed;top:120px;left:8px;background:#11161e;border:1px solid var(--border);border-radius:12px;
+           padding:6px;display:none;z-index:70;min-width:210px;max-height:78vh;overflow-y:auto;box-shadow:0 14px 40px #000a}
   #menuPop.show{display:block}
   #menuPop .mi{padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:9px}
   #menuPop .mi:hover{background:#1a2030}
@@ -125,6 +126,8 @@
   #cfgCard{width:min(420px,93vw);background:#11161e;border:1px solid var(--border);border-radius:14px;padding:16px}
   #cfgCard h3{margin:0 0 10px;font-size:14px} #cfgCard p{color:var(--muted);font-size:12px;margin:0 0 10px}
   #cfgCard label{display:block;font-size:11px;color:var(--muted);margin:10px 0 4px}
+  #cfgCard .cfgHint{font-size:11px;color:var(--muted);line-height:1.55;margin:8px 0 0}
+  #cfgCard .cfgHint a{color:#9cdcfe;text-decoration:none} #cfgCard .cfgHint a:hover{text-decoration:underline}
   #cfgCard input{width:100%;height:34px;background:var(--input);color:var(--fg);border:1px solid var(--input-b);border-radius:8px;padding:0 11px;font-size:13px;outline:none}
   #cfgCard .row{display:flex;gap:8px;margin-top:14px}
   #cfgCard button{flex:1;height:36px;border-radius:8px;border:1px solid var(--input-b);background:#1c2230;color:var(--fg);cursor:pointer;font-size:13px}
@@ -145,6 +148,15 @@
   #daoFloat .dfbody{flex:1;position:relative;background:#0e1116}
   #daoFloat iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#0e1116}
   #daoFloat .dfload{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px}
+  /* 对话卡拖拽上传: 跟手幽灵(全屏) + 当前页落区高亮。落区接住=注入当前 Devin 标签上传框(同「传到当前页」)。 */
+  #daoDropZone{position:absolute;inset:0;z-index:68;display:none;align-items:center;justify-content:center;
+               background:rgba(31,111,235,.10);border:2px dashed rgba(31,111,235,.6);box-sizing:border-box;transition:background .12s}
+  #daoDropZone.show{display:flex} #daoDropZone.armed{background:rgba(31,111,235,.24);border-color:#1f6feb}
+  #daoDropZone .dz{background:#11161e;border:1px solid #1f6feb;border-radius:10px;padding:11px 18px;color:#e6edf3;font-size:14px;pointer-events:none;box-shadow:0 8px 26px #000a}
+  #daoGhost{position:fixed;z-index:200;pointer-events:none;display:none;max-width:62vw;background:#11304d;border:1px solid #1f6feb;
+            border-radius:9px;color:#e6edf3;font-size:12px;padding:7px 11px;box-shadow:0 10px 28px #000b;
+            transform:translate(-50%,-135%);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #daoGhost.show{display:block} #daoGhost b{color:#9cdcfe;font-weight:600}
   /* 🕐 浏览历史 / ⭐ 书签收藏: 独立整页 (复刻 APK openBrowserListTab, 不再是小浮层) */
   #listPage{position:absolute;inset:0;background:var(--bg);display:none;flex-direction:column;z-index:55}
   #listPage.show{display:flex}
@@ -199,14 +211,19 @@
       <div class="grid" id="segGrid"></div>
       <div id="urlRow"><input id="urlInput" inputmode="url" placeholder="https:// 任意网址"><button id="urlGo">打开</button></div>
     </div></div>
+    <div id="daoDropZone"><div class="dz">&#11014; 松手 — 上传到当前页</div></div>
   </div>
 </div>
+<div id="daoGhost"></div>
 <div id="cfg"><div id="cfgCard">
   <h3>接入设置</h3>
   <p>填入零账号中继的 Session 与 Token (复制接入链接里的同名参数)。Endpoint 留空即用本站。</p>
   <label>Session</label><input id="cfgSession" placeholder="rtflow-xxxxxxxx">
   <label>Token</label><input id="cfgToken" placeholder="xxxxxxxxxxxxxxxx">
   <label>Endpoint (可选)</label><input id="cfgEndpoint" placeholder="https://dao-relay-do.xxx.workers.dev">
+  <p class="cfgHint">留空 = 用默认中继(已是零账号·可直接用)。想完全不依赖项目方？
+    <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/zhouyoukang1234-spec/devin-remote/tree/main/addons/dao-relay" target="_blank" rel="noopener">一键自建中继 (零 Token)↗</a>
+    部署完把你专属的 workers.dev 地址填到上面 Endpoint 即可。</p>
   <div class="row"><button id="cfgCancel">取消</button><button id="cfgSave" class="pri">保存并连接</button></div>
 </div></div>
 <div id="toast"></div>
@@ -1182,6 +1199,12 @@
     // 🌊 全服通近期对话 / 📥 下载项「⬆ 传到当前页」: 子页(同源)把经内网穿透取回的文件字节(b64)投递过来,
     //   注入当前活动 Devin 标签的上传框 (Devin 标签经中继同源反代 → 父页可直接访问其 contentDocument)。
     else if(d.__rtflow==="daoUploadFile"&&d.name){ injectFileToActiveTab(d.name, d.mime||"application/octet-stream", d.b64||""); }
+    // ── 对话卡拖拽上传 (触摸: 子页跟手回报坐标, 父页画全屏幽灵+落区; 桌面: HTML5 拖拽起止) ──
+    else if(d.__rtflow==="daoCardDragStart"){ daoDragBegin(d.title||"对话"); }
+    else if(d.__rtflow==="daoCardDragMove"){ daoDragMove(d); }
+    else if(d.__rtflow==="daoCardDragEnd"){ daoDragFinish(); }
+    else if(d.__rtflow==="daoDragStart"){ daoDropZone.classList.add("show"); }      // 桌面 HTML5 拖拽: 亮起本页落区接住
+    else if(d.__rtflow==="daoDragEnd"){ daoDropZone.classList.remove("show","armed"); }
   }catch(e){} });
 
   // ── 把文件注入当前活动 Devin/网页标签的上传框 (同源反代标签可直达 contentDocument) ──
@@ -1250,6 +1273,33 @@
   document.getElementById("daoBtn").onclick=function(e){ e.stopPropagation(); toggleDaoFloat(); };
   document.getElementById("daoClose").onclick=function(e){ e.stopPropagation(); daoFloat.classList.remove("show"); };
   makeDraggable(daoFloat, daoFloat.querySelector(".dfhead"));
+
+  // ── 对话卡「拖到当前页 = 上传」(与「⬆ 传到当前页」按钮并存的第二种方式) ──────────────
+  //   触摸: daopan 子页跟手回报坐标(touch 捕获使手指移出 iframe 仍续报) → 这里画跟手幽灵 + 当前页落区高亮;
+  //         子页在松手且落点移出面板时自行 uploadConv(等效按钮)。父页落区高亮纯视觉。
+  //   桌面: daopan 卡片 HTML5 拖拽 → daoDragStart 亮起落区 → 落区原生接住 application/x-dao-drag → 回投 sid 上传。
+  var daoDropZone=document.getElementById("daoDropZone"), daoGhost=document.getElementById("daoGhost");
+  function _daoFrame(){ return daoFloat.querySelector("iframe"); }
+  function _postDao(msg){ try{ var fr=_daoFrame(); if(fr&&fr.contentWindow) fr.contentWindow.postMessage(msg, "*"); }catch(e){} }
+  function daoDragBegin(title){ daoGhost.innerHTML='<b>&#10303;</b> '+_esc(String(title).slice(0,46)); daoGhost.classList.add("show"); daoDropZone.classList.add("show"); }
+  function daoDragMove(d){
+    var fr=_daoFrame(); if(!fr){ return; } var r=fr.getBoundingClientRect();
+    var px=r.left+(d.x||0), py=r.top+(d.y||0);
+    daoGhost.style.left=px+"px"; daoGhost.style.top=py+"px";
+    var fb=daoFloat.getBoundingClientRect();                                  // 落点移出悬浮面板 = 进入"当前页"落区
+    var out=(px<fb.left||px>fb.right||py<fb.top||py>fb.bottom);
+    daoDropZone.classList.toggle("armed", out);
+  }
+  function daoDragFinish(){ daoGhost.classList.remove("show"); daoDropZone.classList.remove("show","armed"); }
+  // 桌面 HTML5 原生落区: 接住对话卡 → 据 sid 回投 daopan 复用 uploadConv (与按钮同一上传通道)
+  function _hasDaoType(e){ try{ var t=e.dataTransfer&&e.dataTransfer.types; return t&&Array.prototype.indexOf.call(t,"application/x-dao-drag")>=0; }catch(x){ return false; } }
+  daoDropZone.addEventListener("dragover", function(e){ if(_hasDaoType(e)){ e.preventDefault(); try{ e.dataTransfer.dropEffect="copy"; }catch(x){} daoDropZone.classList.add("armed"); } });
+  daoDropZone.addEventListener("dragleave", function(e){ if(e.target===daoDropZone) daoDropZone.classList.remove("armed"); });
+  daoDropZone.addEventListener("drop", function(e){ e.preventDefault(); daoDropZone.classList.remove("show","armed");
+    var raw=""; try{ raw=e.dataTransfer.getData("application/x-dao-drag"); }catch(x){}
+    var pay=null; try{ pay=JSON.parse(raw); }catch(x){}
+    if(pay && pay.type==="conv" && pay.sid){ _postDao({ __rtflow:"daoDoUploadBySid", sid:pay.sid }); }
+  });
 
   // ── 🕐 浏览历史 / ⭐ 书签收藏: 独立整页 (复刻 APK openBrowserListTab; 数据取手机金库) ──
   //   两段: ⚡多实例 Devin (带账号·重开注入鉴权) + 🌐常规网页; 逐条 ⋮ → 打开/复制/分享/删除; 历史可清空。
@@ -1422,6 +1472,7 @@
   document.getElementById("menuBtn").onclick=function(e){ e.stopPropagation();
     if(!menuPop.dataset.built){ buildMenu(); menuPop.dataset.built="1"; }
     dlPanel.classList.remove("show"); histPanel.classList.remove("show");
+    try{ var st=document.getElementById("strip").getBoundingClientRect(); menuPop.style.top=(st.bottom+2)+"px"; }catch(_e){}
     menuPop.classList.toggle("show"); };
   document.addEventListener("click", function(){ menuPop.classList.remove("show"); dlPanel.classList.remove("show"); histPanel.classList.remove("show"); });
   // 点进 iframe 内容(板块/网页)时, 点击落在子文档里 → 父文档的 document click 收不到, 旧逻辑下浮层不收
