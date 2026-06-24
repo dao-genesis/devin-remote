@@ -46,6 +46,7 @@ public class RelayService extends Service {
     private int tunnelRetries = 0;                 // cloudflared 连续异常退出计数 (连通后清零)
     private volatile int tunnelGen = 0;            // 隧道启动代次 (作废过期的无URL看门狗)
     private static final int TUNNEL_RETRY_SOFT = 3;   // 超过此次数仍持续重连, 但诚实提示已回退中继
+    private static final int TUNNEL_RETRY_HARD = 10;  // 连续退出超此数 = 本网络持续拦 cloudflared 边缘: 重连转 5min 慢探(省电), 备隧 SSH/中继已兜底, 网络变更即复活
     private static final long TUNNEL_RETRY_CAP = 60000L; // 重连退避上限 60s (隧道=公网入口, 永不彻底放弃→真·无感常驻)
     private static final long TUNNEL_URL_TIMEOUT = 50000L;// 起后 50s 仍拿不到公网URL=卡住, 重启隧道
     // 路线A 扩展: 独立于 cloudflared 的第二条去中心化公网后端 (SSH 反向隧道·localhost.run 等), 与主隧道并行兜底。
@@ -1188,11 +1189,17 @@ public class RelayService extends Service {
         if (!tunnelEnabledFlag()) { updateTunnelStatus("", false, "已停止", 0, false); return; }
         try { writeUserFile("tunnel-url", ""); } catch (Exception ignored) {}
         // 持久自愈: 隧道=公网入口, 永不彻底放弃。退避 2s/4s/6s…上限 60s, 后台无限重连 → 网络恢复即自动复活(真·无感常驻)。
+        //   但本网络若持续拦截 Cloudflare 边缘(cloudflared 起即退), 60s 一次的硬重连只会空烧电/CPU 而永不成功——
+        //   与健康探测路径同理(scheduleCfHealth 连续 530 后转 5min 慢探), 故连续退出超硬上限即转 CF_RECOVER_INTERVAL
+        //   慢探: 备隧(SSH)/中继已并行兜住公网入口, 慢探既省电又能在网络变更时秒级复活。
         tunnelRetries++;
         int attempt = tunnelRetries;
-        long delay = Math.min(2000L * attempt, TUNNEL_RETRY_CAP);
         boolean fallback = attempt > TUNNEL_RETRY_SOFT;  // 软上限后诚实提示已回退中继, 但仍持续重连
-        String msg = fallback
+        boolean hostile  = attempt > TUNNEL_RETRY_HARD;  // 硬上限后判本网络持续拦 cf 边缘 → 转慢探省电
+        long delay = hostile ? CF_RECOVER_INTERVAL : Math.min(2000L * attempt, TUNNEL_RETRY_CAP);
+        String msg = hostile
+                ? "去中心化隧道本网络持续拦截 Cloudflare 边缘(cloudflared 第" + attempt + "次退出) · 已回退备隧(SSH)/中继, 手机仍在线; 转省电慢探, 后台每" + (delay / 60000) + "min重试(网络变更即复活)…"
+                : fallback
                 ? "去中心化隧道暂连不上(cloudflared 第" + attempt + "次退出, 本网络疑拦截 Cloudflare 边缘) · 已回退中继, 手机仍在线; 后台每" + (delay / 1000) + "s持续重连…"
                 : "cloudflared 退出(" + code + ") · 第 " + attempt + " 次重连中(" + (delay / 1000) + "s)…";
         updateTunnelStatus("", false, msg, attempt, fallback);
