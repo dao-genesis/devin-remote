@@ -33,7 +33,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 // 鉴权/定址纯逻辑见 ./keys.js —— 不可从本入口再导出普通值/函数, 否则 workerd 启动即报错。
-import { VERSION, relayKey, sharedTokenOk, pxIsImmutableAsset, pxIsHashedCode } from "./keys.js";
+import { VERSION, relayKey, sharedTokenOk, pxIsImmutableAsset, pxIsHashedCode, pickOpenAgent } from "./keys.js";
 
 function bearer(req) {
   const h = req.headers.get("authorization") || req.headers.get("Authorization") || "";
@@ -764,7 +764,19 @@ export class DaoRelayDO {
   agentSocket() {
     let list = [];
     try { list = this.state.getWebSockets() || []; } catch (e) { list = []; }
-    return list.length ? list[list.length - 1] : null;
+    return pickOpenAgent(list);
+  }
+
+  // 客户端断线重连有一个短窗口(退避起步 ≤1.5s): 期间无 OPEN socket。与其立刻 no_agent 让公网侧
+  //   「首发失败·重试才通」, 不如短暂等其(重)上线, 把重连窗口对调用方透明吸收。最多 maxMs, 仍无则放弃。
+  async waitForAgent(maxMs) {
+    const start = Date.now();
+    let a = this.agentSocket();
+    while (!a && Date.now() - start < maxMs) {
+      await new Promise((r) => setTimeout(r, 150));
+      a = this.agentSocket();
+    }
+    return a;
   }
 
   async fetch(req) {
@@ -793,9 +805,13 @@ export class DaoRelayDO {
     }
 
     // 公网入站 → 转发给客户端
-    const agent = this.agentSocket();
+    let agent = this.agentSocket();
     if (!agent) {
-      return json({ error: "no_agent", hint: "no connected agent matches this session+token" }, 502);
+      // 客户端可能正在断线重连: 短暂等其(重)上线吸收重连窗口, 避免「首发失败·重试才通」。
+      agent = await this.waitForAgent(5000);
+      if (!agent) {
+        return json({ error: "no_agent", hint: "no connected agent matches this session+token" }, 502);
+      }
     }
     // 基础限流: 单实例(=单设备)滑动 10s 窗口上限, 防失控/被滥用驱动; 正常手动操作远不及此。
     if (!this.rateOk()) {
@@ -808,19 +824,35 @@ export class DaoRelayDO {
     const body = frame.body !== undefined ? frame.body : {};
     const id = "r" + (++this.seq) + "-" + Date.now();
 
+    const wire = JSON.stringify({ type: "request", id, path: reqPath, method, body });
     const out = await new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         resolve({ status: 504, body: { error: "agent_timeout" } });
       }, 60000);
       this.pending.set(id, { resolve, timer });
-      try {
-        agent.send(JSON.stringify({ type: "request", id, path: reqPath, method, body }));
-      } catch (e) {
-        clearTimeout(timer);
-        this.pending.delete(id);
-        resolve({ status: 502, body: { error: "send_failed", detail: String((e && e.message) || e) } });
-      }
+      // send 在 readyState 检查与实际发送之间仍可能撞上 socket 关闭(重连竞态): 重选活 socket 再发一次,
+      //   仍失败才如实返回「正在重连·可重试」(503·retryable), 不再是含糊的 send_failed。
+      const trySend = (sock, retriesLeft) => {
+        try {
+          sock.send(wire);
+        } catch (e) {
+          if (retriesLeft > 0) {
+            setTimeout(() => {
+              const fresh = this.agentSocket();
+              if (fresh) trySend(fresh, retriesLeft - 1);
+              else {
+                clearTimeout(timer); this.pending.delete(id);
+                resolve({ status: 503, body: { error: "agent_reconnecting", retryable: true, detail: String((e && e.message) || e) } });
+              }
+            }, 200);
+          } else {
+            clearTimeout(timer); this.pending.delete(id);
+            resolve({ status: 503, body: { error: "agent_reconnecting", retryable: true, detail: String((e && e.message) || e) } });
+          }
+        }
+      };
+      trySend(agent, 1);
     });
     return json(out.body, out.status || 200);
   }

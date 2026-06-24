@@ -10,7 +10,30 @@
 // 故归一于此独立模块, 入口只导出 default 处理器与 RelayDO 类。
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const VERSION = "3.5.0-edgecache-code"; // (session,token) 配对模型 + WebSocket Hibernation(上量省钱) + GET /console 自托管单网页控制台。重新部署后 /health 报此值即生效。
+export const VERSION = "3.6.0-agent-liveness"; // (session,token) 配对模型 + WebSocket Hibernation(上量省钱) + GET /console 自托管单网页控制台 + 转发只选「活」socket(吸收重连窗口·根治首发 send_failed)。重新部署后 /health 报此值即生效。
+
+// 从 hibernation 运行时回来的 WSS 列表里挑一个「确实 OPEN」的 agent socket。
+//   病灶(真机实测): 旧逻辑直接取 getWebSockets() 末位 → 客户端断线重连的窗口里, 末位可能是
+//   正在 CLOSING/CLOSED 的陈旧 socket, 对它 send() 抛 "Can't call WebSocket send() after close()"
+//   → 公网侧「首发失败·重试才通」。此处据 readyState 过滤, 只回真正可写的连接。
+//   readyState: 0 CONNECTING · 1 OPEN · 2 CLOSING · 3 CLOSED (WebSocket.READY_STATE_OPEN===1)。
+//   兼容性: 若运行时根本不暴露 readyState(全 undefined), 退化为旧行为(取末位), 绝不弄坏现状。
+export function pickOpenAgent(sockets) {
+  if (!Array.isArray(sockets) || sockets.length === 0) return null;
+  const OPEN = 1;
+  let sawReadyState = false;
+  for (let i = sockets.length - 1; i >= 0; i--) {
+    const ws = sockets[i];
+    if (!ws) continue;
+    const rs = ws.readyState;
+    if (rs === OPEN) return ws;          // 最近接入的 OPEN 连接优先
+    if (rs !== undefined && rs !== null) sawReadyState = true;
+  }
+  if (!sawReadyState) {                   // 运行时未报 readyState → 退化取末位(向后兼容)
+    for (let i = sockets.length - 1; i >= 0; i--) if (sockets[i]) return sockets[i];
+  }
+  return null;
+}
 
 // DO 命名空间定址: session 与 token 共同决定实例 —— 「知道 session+token」即凭证。
 // 用 \u0000 作分隔(token/session 不含 NUL), 避免 "a"+"bc" 与 "ab"+"c" 撞键。
