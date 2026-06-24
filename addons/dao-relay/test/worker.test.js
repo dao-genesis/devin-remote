@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
-import { relayKey, sharedTokenOk, VERSION, pxIsImmutableAsset, pxIsHashedCode } from "../keys.js";
+import { relayKey, sharedTokenOk, VERSION, pxIsImmutableAsset, pxIsHashedCode, pickOpenAgent } from "../keys.js";
 
 // repair.js 经浏览器 importScripts 加载(挂到 self), 这里在沙箱里 eval 出函数做纯逻辑单测。
 const repairUvJs = (() => {
@@ -77,6 +77,37 @@ test("pxIsHashedCode: 无哈希入口/动态文件 → 不缓存(每次重写照
   ]) {
     assert.strictEqual(pxIsHashedCode(p), false, p);
   }
+});
+
+// —— pickOpenAgent: 转发只选「确实 OPEN」的 agent socket(根治断线重连窗口的首发 send_failed) ——
+const OPEN = 1, CONNECTING = 0, CLOSING = 2, CLOSED = 3;
+const sock = (readyState) => ({ readyState, id: Symbol() });
+
+test("pickOpenAgent: 空/非数组 → null", () => {
+  assert.strictEqual(pickOpenAgent([]), null);
+  assert.strictEqual(pickOpenAgent(null), null);
+  assert.strictEqual(pickOpenAgent(undefined), null);
+});
+
+test("pickOpenAgent: 全部 CLOSING/CLOSED → null(绝不返回不可写 socket)", () => {
+  assert.strictEqual(pickOpenAgent([sock(CLOSED), sock(CLOSING)]), null);
+});
+
+test("pickOpenAgent: 末位 OPEN → 取末位(最新接入优先)", () => {
+  const a = sock(OPEN), b = sock(OPEN);
+  assert.strictEqual(pickOpenAgent([a, b]), b);
+});
+
+test("pickOpenAgent: 末位是重连中陈旧 socket(CLOSING/CLOSED), 跳过取更早的 OPEN", () => {
+  const live = sock(OPEN), stale = sock(CLOSED);
+  assert.strictEqual(pickOpenAgent([live, stale]), live, "末位 CLOSED 被跳过, 回更早的 OPEN");
+  const live2 = sock(OPEN);
+  assert.strictEqual(pickOpenAgent([live2, sock(CLOSING), sock(CONNECTING)]), live2);
+});
+
+test("pickOpenAgent: 运行时不暴露 readyState(全 undefined) → 退化取末位(向后兼容)", () => {
+  const a = { id: 1 }, b = { id: 2 };
+  assert.strictEqual(pickOpenAgent([a, b]), b);
 });
 
 // —— repairUvJs: UV 把语句标签误当全局名重写 → 修复 ——
