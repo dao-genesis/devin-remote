@@ -293,6 +293,40 @@ function loadSignal() {
     assert.strictEqual(sent.length, totalFrags, "最终应发完全部分片");
   });
 
+  // ── signal.js parseTurnRest: 零账号 TURN-REST 响应解析不变量 ──────────────
+  console.log("\n[signal.js parseTurnRest TURN-REST 响应解析]");
+  await test("parseTurnRest 暴露在 _internals", () => {
+    assert.strictEqual(typeof SI.parseTurnRest, "function");
+  });
+  await test("标准 turn-rest 格式 {username,password,uris} → ICE 条目", () => {
+    const ice = SI.parseTurnRest({ username: "1234:dao", password: "secret==", uris: ["turn:1.2.3.4:3478?transport=udp"], ttl: 1800 });
+    assert.strictEqual(ice.length, 1);
+    assert.strictEqual(ice[0].urls, "turn:1.2.3.4:3478?transport=udp");
+    assert.strictEqual(ice[0].username, "1234:dao");
+    assert.strictEqual(ice[0].credential, "secret==");
+  });
+  await test("备选 {user,credential,urls} 形态也能解析", () => {
+    const ice = SI.parseTurnRest({ user: "u", credential: "c", urls: ["turns:x.y:443"] });
+    assert.strictEqual(ice.length, 1);
+    assert.strictEqual(ice[0].urls, "turns:x.y:443");
+  });
+  await test("单字串 uri 包装为数组", () => {
+    const ice = SI.parseTurnRest({ username: "u", password: "p", uri: "turn:h:3478" });
+    assert.deepStrictEqual(ice, [{ urls: "turn:h:3478", username: "u", credential: "p" }]);
+  });
+  await test("过滤非 turn: 开头 URI(安全·只接受 TURN 协议)", () => {
+    const ice = SI.parseTurnRest({ username: "u", password: "p", uris: ["stun:h:3478", "http://x", "turn:ok:443"] });
+    assert.strictEqual(ice.length, 1);
+    assert.strictEqual(ice[0].urls, "turn:ok:443");
+  });
+  await test("缺字段/非对象/null → 空数组 (无 TURN 不崩)", () => {
+    assert.deepStrictEqual(SI.parseTurnRest(null), []);
+    assert.deepStrictEqual(SI.parseTurnRest({}), []);
+    assert.deepStrictEqual(SI.parseTurnRest("junk"), []);
+    assert.deepStrictEqual(SI.parseTurnRest({ username: "u", password: "p" }), []);  // 无 uris
+    assert.deepStrictEqual(SI.parseTurnRest({ uris: ["turn:h:1"] }), []);  // 无 cred
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
