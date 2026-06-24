@@ -77,12 +77,55 @@
     for (var i = 0; i < n; i++) out.push(JSON.stringify({ v: 1, c: corr, r: role, i: i, n: n, p: payloadB64.slice(i * CHUNK, (i + 1) * CHUNK) }));
     return out;
   }
-  function publish(servers, topic, frames) {
-    for (var s = 0; s < servers.length; s++) {
-      for (var f = 0; f < frames.length; f++) {
-        try { fetch(servers[s] + "/" + topic, { method: "POST", body: frames[f] }); } catch (e) {}
-      }
+  // 带超时的 fetch: 被限流/封锁/黑洞的 broker(如本机 IP 被 ntfy.sh 限流后连接挂起)不能拖死
+  //   整条故障转移链 → 单家封顶 4s 即中止, 立刻试下一家。
+  function fetchT(url, opts, ms) {
+    var ctl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var to = ctl ? setTimeout(function () { try { ctl.abort(); } catch (e) {} }, ms) : null;
+    var o = ctl ? Object.assign({}, opts, { signal: ctl.signal }) : opts;
+    return fetch(url, o).finally(function () { if (to) clearTimeout(to); });
+  }
+  var _pubStart = 0;   // 粘滞: 上次成功投递的 broker 下标。死 broker 只拖慢一次, 之后从可用家起手。
+  // 单帧投递: **顺序故障转移**(命中第一家 2xx 即止), 而非扇出到所有 broker。订阅方在所有 broker
+  //   同时在线, 任一家收下即送达; 故 happy-path 只发 1 个 POST(而非 N 家×N 倍), 大幅降低对单一
+  //   出口 IP 的 POST 速率 → 显著抬高公共 broker 的并发上限、少触发 429。全家失败才退避重试(带
+  //   jitter, 上限 3 次)。
+  async function publishFrame(servers, topic, frame, attempt) {
+    var n = servers.length; if (!n) return false;
+    var base = (_pubStart + (attempt || 0)) % n;
+    for (var k = 0; k < n; k++) {
+      var idx = (base + k) % n, url = servers[idx];
+      try { var r = await fetchT(url + "/" + topic, { method: "POST", body: frame }, 4000); if (r && r.ok) { _pubStart = idx; return true; } }
+      catch (e) {}
     }
+    if ((attempt || 0) < 3) { await new Promise(function (res) { setTimeout(res, 700 + 600 * (attempt || 0) + Math.random() * 400); }); return publishFrame(servers, topic, frame, (attempt || 0) + 1); }
+    return false;
+  }
+  function publish(servers, topic, frames) {
+    for (var f = 0; f < frames.length; f++) publishFrame(servers, topic, frames[f], 0);
+  }
+  // 启动预热: 并发探各 broker /v1/health, 把粘滞起点 _pubStart 指向**首个健康**的家, 这样首批
+  //   真实投递不必先在死/被限流的 broker(如本机被 ntfy.sh 限流)上白白超时 → 消除冷启动停顿。
+  //   带 TTL(30s) + in-flight 去重: 并发/连发的 connect 共用一次预热, 不重复刷探测。
+  var _warmTs = 0, _warmP = null;
+  function warmBrokers(servers, capMs) {
+    if (!servers || servers.length < 2) return Promise.resolve();
+    if (Date.now() - _warmTs < 30000) return Promise.resolve();
+    if (_warmP) return _warmP;
+    _warmP = new Promise(function (resolve) {
+      var done = false, pending = servers.length;
+      function finish() { if (done) return; done = true; _warmTs = Date.now(); _warmP = null; resolve(); }
+      // 探的是**可投递性**而非可达性: 某些被限流的 broker(如本机被 ntfy.sh 限)GET 仍 200 但 POST 挂起,
+      //   故用一个微小 POST(发到惰性探测 topic)实测能否发布, 命中健康家即设 _pubStart。
+      servers.forEach(function (u, i) {
+        fetchT(u + "/daowarm", { method: "POST", body: "w" }, capMs || 3000)
+          .then(function (r) { if (r && r.ok && !done) { _pubStart = i; finish(); } })
+          .catch(function () {})
+          .finally(function () { if (--pending === 0) finish(); });
+      });
+      setTimeout(finish, (capMs || 3000) + 200);
+    });
+    return _warmP;
   }
   function makeReasm() {
     var buf = Object.create(null);
@@ -129,6 +172,7 @@
     var topic = await topicFor(session);
     var handled = Object.create(null);   // nonce → ts (去重已处理 offer)
     var dhandled = Object.create(null);  // id → ts (去重已处理的中继 RPC)
+    await warmBrokers(servers);          // 应答方预热: 响应投递从健康 broker 起手, 不在死家上超时
     var reasm = makeReasm();
     var sub = subscribe(servers, topic, function (raw) {
       reasm(raw, async function (corr, role, full) {
@@ -151,10 +195,15 @@
           //   解密成功(=对端确实知 token)才应答; 公共 broker 全程只见密文。
           var q = await unseal(key, full);
           if (!q || !q.id) return;
-          if (dhandled[q.id]) return; dhandled[q.id] = Date.now();
-          var rnow = Date.now(); for (var dk in dhandled) if (rnow - dhandled[dk] > 180000) delete dhandled[dk];
+          // 幂等去重 + 响应缓存重发: 客户端在突发/限流下会幂等重传同一 id。若**请求**先前丢失,
+          //   重传现在才到 → 照常处理; 若**响应**丢失(已处理过), 重发缓存的密文响应帧, 不重复执行命令。
+          var prev = dhandled[q.id];
+          if (prev) { if (prev.frames) publish(servers, topic, prev.frames); return; }
+          var slot = dhandled[q.id] = { ts: Date.now() };
+          var rnow = Date.now(); for (var dk in dhandled) if (rnow - dhandled[dk].ts > 180000) delete dhandled[dk];
           if (q.t === "ping") {
-            publish(servers, topic, frameChunks(q.id, "s", await seal(key, { t: "pong", id: q.id, ts: Date.now() })));
+            slot.frames = frameChunks(q.id, "s", await seal(key, { t: "pong", id: q.id, ts: Date.now() }));
+            publish(servers, topic, slot.frames);
             return;
           }
           if (q.t === "rpc") {
@@ -168,7 +217,8 @@
             var rpl = await seal(key, { t: "res", id: q.id, result: result });
             // 控制面兜底: 大响应不宜灌公共 broker(触发限流) → 超阈值改回提示, 让调用方走 P2P/Worker。
             if (rpl.length > RELAY_MAX_B64) rpl = await seal(key, { t: "res", id: q.id, result: { status: 413, bodyText: "relay payload too large; prefer P2P/Worker for bulk transfer" } });
-            publish(servers, topic, frameChunks(q.id, "s", rpl));
+            slot.frames = frameChunks(q.id, "s", rpl);
+            publish(servers, topic, slot.frames);
             return;
           }
         }
@@ -189,6 +239,7 @@
     if (Array.isArray(opts.ice)) opts.ice.forEach(function (s) { if (s && s.urls) ice.push(s); });
     var key = await deriveKey(session, token);
     var topic = await topicFor(session);
+    await warmBrokers(servers);          // 客户端预热: 首发 offer/ping 从健康 broker 起手, 消除冷启停顿
     var nonce = uid();
     var pc = new RTCPeerConnection({ iceServers: ice });
     var dc = pc.createDataChannel("rpc"); dc.binaryType = "arraybuffer";
@@ -259,14 +310,22 @@
     function buildRelayHandle() {
       var rseq = 0;
       function relaySend(t, frame, timeoutMs) {
+        var TO = timeoutMs || 30000;
         return new Promise(function (resolve, reject) {
           var id = "r" + (++rseq) + "-" + uid();
-          relayWaiters[id] = { resolve: resolve, reject: reject };
+          var timers = [];
+          function clear() { for (var i = 0; i < timers.length; i++) clearTimeout(timers[i]); }
+          relayWaiters[id] = { resolve: function (v) { clear(); resolve(v); }, reject: function (e) { clear(); reject(e); } };
           (async function () {
-            try { publish(servers, topic, frameChunks(id, "q", await seal(key, frame ? { t: t, id: id, frame: frame } : { t: t, id: id }))); }
-            catch (e) { if (relayWaiters[id]) { delete relayWaiters[id]; reject(e); } }
+            var chunks;
+            try { chunks = frameChunks(id, "q", await seal(key, frame ? { t: t, id: id, frame: frame } : { t: t, id: id })); }
+            catch (e) { if (relayWaiters[id]) { delete relayWaiters[id]; clear(); reject(e); } return; }
+            publish(servers, topic, chunks);
+            // 突发/限流致单次投递丢失时, 幂等重传 (应答方按 id 去重 dhandled, 不会重复执行) → 提升并发可靠性。
+            //   带 jitter 错开并发客户端的重传, 避免再次形成同步突发又触发限流。
+            [1800, 5000].forEach(function (base) { var d = base + Math.random() * 1200; if (d < TO) timers.push(setTimeout(function () { if (relayWaiters[id]) publish(servers, topic, chunks); }, d)); });
           })();
-          setTimeout(function () { if (relayWaiters[id]) { delete relayWaiters[id]; reject(new Error("relay_timeout")); } }, timeoutMs || 30000);
+          timers.push(setTimeout(function () { if (relayWaiters[id]) { delete relayWaiters[id]; clear(); reject(new Error("relay_timeout")); } }, TO));
         });
       }
       return {

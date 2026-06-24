@@ -98,6 +98,40 @@ function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { fai
   catch (e) { denied = /relay_timeout/.test(String(e.message)); }
   ok(denied, "E5 token 不符 → 中继亦拒应答 (relay_timeout; 与握手同享加密门禁)");
 
+  // F) 故障转移 + 幂等: 首选 broker 全程被封(POST 503 / WS 不投递), 投递须自动转移到次选 broker;
+  //    且应答方对同一 rpc 仅执行一次命令 (响应缓存/去重), 守护并发幂等不变量。
+  const htopics = Object.create(null);                      // (host\u0000topic) → Set(cb)
+  function hkey(h, t) { return h + "\u0000" + t; }
+  global.WebSocket = function (url) {
+    const m = String(url).match(/^wss?:\/\/([^/]+)\/([^/]+)\/ws$/);
+    const host = m ? m[1] : "", topic = m ? m[2] : "";
+    const self = this; this.readyState = 1;
+    const cb = function (body) { if (self.onmessage) self.onmessage({ data: JSON.stringify({ event: "message", message: body }) }); };
+    if (host !== "dead.local") (htopics[hkey(host, topic)] = htopics[hkey(host, topic)] || new Set()).add(cb);  // 死 broker WS 不投递
+    this.close = function () { try { htopics[hkey(host, topic)].delete(cb); } catch (e) {} };
+    setTimeout(function () { if (self.onopen) self.onopen(); }, 0);
+  };
+  let serveCalls = 0;
+  global.fetch = function (url, opts) {
+    const m = String(url).match(/^https?:\/\/([^/]+)\/([^/]+)$/);
+    const host = m ? m[1] : "", topic = m ? m[2] : "";
+    if (host === "dead.local") return Promise.resolve({ ok: false, status: 503, text: function () { return Promise.resolve(""); } });  // 首选: 拒绝
+    const subs = htopics[hkey(host, topic)]; const body = opts && opts.body;
+    if (subs) subs.forEach(function (cb) { setTimeout(function () { cb(body); }, 0); });
+    return Promise.resolve({ ok: true, status: 200, text: function () { return Promise.resolve(""); } });
+  };
+  global.window.DaoRelayApp = { serveLocal: function (frameJson) { serveCalls++; var f = {}; try { f = JSON.parse(frameJson); } catch (e) {} return Promise.resolve(JSON.stringify({ status: 200, bodyText: JSON.stringify({ ok: true, echoPath: f.path || null }) })); } };
+
+  const fServed = await S.serve({ session: "sessF", token: "tokF", servers: ["https://dead.local", "https://good.local"], connect: function () { return Promise.resolve({ ok: false }); } });
+  ok(fServed && fServed.ok === true, "F0 serve 启动 (首选 dead.local + 次选 good.local)");
+  const fsig = await S.connect({ session: "sessF", token: "tokF", servers: ["https://dead.local", "https://good.local"], forceRelay: true });
+  ok(fsig && fsig.mode === "relay-ntfy", "F1 首选 broker 被封时 forceRelay 仍经次选 broker 建中继 (顺序故障转移)");
+  const fr = await fsig.rpc({ path: "/api/x", method: "GET" });
+  const frobj = (typeof fr === "string") ? JSON.parse(fr) : fr;
+  ok(frobj && frobj.status === 200, "F2 故障转移路径上 rpc 往返 200 (死 broker 不阻塞投递)");
+  ok(serveCalls === 1, "F3 幂等: 单次 rpc 仅触发一次 serveLocal (响应缓存/去重成立, 实=" + serveCalls + ")");
+  if (fsig.close) fsig.close();
+
   console.log(failures ? ("\n失败 " + failures + " 项 ✗") : "\n全通 ✓");
   process.exit(failures ? 1 : 0);
 })().catch(function (e) { console.error("测试异常:", e); process.exit(1); });
