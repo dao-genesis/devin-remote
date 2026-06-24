@@ -628,6 +628,8 @@ export async function activate(context: vscode.ExtensionContext) {
     try { startNetworkChangeWatch(context); } catch { /* 守柔 */ }
     // 账号库实时检测 + 全池反向注入闭环: 切号板块账号池/共享 auth 库/注入档案一变即全池核对注入(新增账号自动注入), 另周期自愈。
     try { startAccountPoolReconcileLoop(context); } catch { /* 守柔 */ }
+    // 池级稳态环(②全账号额度动态跟随 + ④自动化隔离清理): 不依赖注入签名, 周期巡全池止血+跟随余额。
+    try { startPoolSteadyStateLoop(context); } catch { /* 守柔 */ }
     setTimeout(() => { reconcileAccountPoolInject('activate', { force: true }).catch(() => { /* 守柔 */ }); }, 12000);
     context.subscriptions.push(
         vscode.commands.registerCommand('dao.startServer', () => startServer(context)),
@@ -2779,7 +2781,9 @@ function bridgeGenerateCloudMd(): string {
     const wsInfo = { name: vscode.workspace.workspaceFolders?.[0]?.name || 'workspace', root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', host: os.hostname() };
     const ts = new Date().toISOString();
     const tok = bridgeToken || ws.token;
-    const url = bridgeUrl || '(未连接)';
+    // ① 反向注入自愈: 公网URL 取「进程内隧道 ∪ 常驻桥已发布连接」的有效值, 不再只认进程内 bridgeUrl。
+    //   独立 dao-bridge 常驻桥持有隧道时, 进程内 bridgeUrl 恒空 → 旧法注入「(未连接)」害云端找不到端口; 此处回归活地址。
+    const url = bridgeEffectiveUrl() || '(未连接)';
     const port = ws.port || 9920;
     // 道法自然 · 回归本源 (dao-bridge 初始形态): 内网穿透文档只讲「整机直连」——
     //   接入信息 + 基础整机端点 + Python SDK。四大模块的深层操作已独立为 DAO Bridge MCP
@@ -3137,6 +3141,38 @@ function bridgeMcpToken(): string {
     } catch { /* 守柔 */ }
     return '';
 }
+// ① 反向注入自愈 · 活地址解析 — 帛书·「自知者明」:
+//   汇集候选公网地址(进程内隧道 + 各已发布 conn 文件), 按新鲜度逐一 /api/health 探活,
+//   返回首个真实可达的 {url, token}; 全死返回 null(交调用方「宁可不注入也不以死地址覆盖良态」)。
+//   根治: 多实例/旧实例把「(未连接)」或已轮换的死地址写回账号知识库, 致云端读库连不上端口。
+async function bridgeResolveLiveConn(timeoutMs: number = 5000): Promise<{ url: string; token: string; source: string } | null> {
+    const cands: { url: string; token: string; mtime: number; source: string }[] = [];
+    if (bridgeUrl) cands.push({ url: bridgeUrl, token: bridgeToken || ws.token || '', mtime: Number.MAX_SAFE_INTEGER, source: 'inprocess' });
+    const files = [
+        path.join(BRIDGE_DIR, 'conn.json'),
+        path.join(os.homedir(), '.dao', 'cf-hub-conn.json'),
+        path.join(BRIDGE_DIR, 'connection.json'),
+    ];
+    for (const f of files) {
+        try {
+            const st = fs.statSync(f);
+            const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+            const url = String(j.url || j.relayUrl || j.relay || '').trim();
+            if (!/^https?:\/\//.test(url) || /\/\/api\.trycloudflare\.com\/?$/.test(url)) continue;
+            cands.push({ url, token: String(j.token || ''), mtime: st.mtimeMs, source: path.basename(f) });
+        } catch { /* skip */ }
+    }
+    cands.sort((a, b) => b.mtime - a.mtime);  // 新鲜度降序: 先探最新轮换出的地址
+    const seen = new Set<string>();
+    for (const c of cands) {
+        if (seen.has(c.url)) continue;
+        seen.add(c.url);
+        const tok = c.token || bridgeToken || ws.token || '';
+        try { if (await bridgeProbeAlive(c.url, timeoutMs, tok)) { daoLoopLog('tunnel', 'resolve-live → ' + c.url + ' (src=' + c.source + ')'); return { url: c.url, token: tok, source: c.source }; } } catch { /* 守柔 */ }
+    }
+    daoLoopLog('tunnel', 'resolve-live → 无活地址(候选' + cands.length + '皆死)');
+    return null;
+}
 let _bridgeLivenessInflight = false;
 async function bridgeLivenessTick(): Promise<void> {
     if (_bridgeLivenessInflight) return;
@@ -3159,6 +3195,22 @@ async function bridgeLivenessTick(): Promise<void> {
         // 打不通 → 刷新
         try { console.log('[dao] bridge liveness DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新'); } catch { /* 守柔 */ }
         daoLoopLog('tunnel', 'probe DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新+重注');
+        // 0) ① 自愈优先: 在所有候选地址(进程内 ∪ 各已发布 conn)里探活择优 — 常驻桥可能已轮换出新活地址。
+        //    找到真实可达地址即「无缝切换」过去并重注知识库, 免去重启隧道(更快·更稳); 全死才落入下方重启兜底。
+        if (!bridgeOk) {
+            try {
+                const live = await bridgeResolveLiveConn(5000);
+                if (live && live.url) {
+                    const switched = (live.url !== bridgeUrl);
+                    bridgeUrl = live.url; if (live.token) bridgeToken = live.token;
+                    _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0;
+                    daoLoopLog('tunnel', 'DEAD→候选探活得活地址 ' + live.url + ' (src=' + live.source + ') → 无缝切换' + (switched ? '+重注' : ''));
+                    try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
+                    if (switched) { try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ } bridgeScheduleReinject('liveness-switch-live'); refreshDaoCloudMiddlePanel(); }
+                    return;
+                }
+            } catch { /* 守柔 */ }
+        }
         // 1) 重读已发布连接(常驻桥/host MCP 可能已轮换出新地址) → 采纳
         try { const c = bridgeReadPublishedConn(); if (c && c.url && c.url !== bridgeUrl) { bridgeUrl = c.url; if (c.token) bridgeToken = c.token; } } catch { /* 守柔 */ }
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
@@ -3225,6 +3277,71 @@ function startQuotaAutoLimitLoop(context: vscode.ExtensionContext): void {
     if (_quotaAutoLimitTimer) return;
     _quotaAutoLimitTimer = setInterval(() => { quotaAutoLimitTick().catch(() => { /* 守柔 */ }); }, QUOTA_AUTO_LIMIT_INTERVAL_MS);
     context.subscriptions.push({ dispose: () => { if (_quotaAutoLimitTimer) { clearInterval(_quotaAutoLimitTimer); _quotaAutoLimitTimer = null; } } });
+}
+
+// ═══ 池级稳态维护环 (②额度·全账号动态跟随 + ④自动化·隔离清理) — 帛书·「为道日损·损之又损」「不失其所者久也」 ═══
+//   病灶: 注入收敛后, devinBatchInject 的单账号 sig 快路会跳过 applyInjectProfileToOrg → 此后
+//     · 会话新生的自动化(周期烧额度) 不再被清理;  · 各号余额变动 不再被额度环捕捉(它只跟活动号)。
+//   故另设此「不依赖注入签名」的常驻稳态环, 周期巡所有已存 auth1 的账号, 对每号:
+//     ④ 隔离清理: 删除该号一切「非期望(不在档案 automations) 且 未被用户锁定」的自动化 → 止血·根除每周烧额度残留;
+//     ② 额度跟随: messageLimitAuto 时据本号当前余额重算 cap = 余额 − off, 仅变化才回写(守柔省网)。
+//   守柔: 单账号错误隔离; 仅档案 enabled 时巡; 清理受 injectReset 开关约束; 跳过被 RT Flow 清理/出库的账号。
+const POOL_STEADY_INTERVAL_MS = 5 * 60 * 1000;
+let _poolSteadyTimer: ReturnType<typeof setInterval> | null = null;
+let _poolSteadyInflight = false;
+const _steadyQuotaSig = new Map<string, number>();
+async function poolSteadyStateTick(): Promise<void> {
+    if (_poolSteadyInflight) return;
+    _poolSteadyInflight = true;
+    try {
+        const p = loadInjectProfile();
+        if (!p.enabled) return;
+        const sweepAutomations = getInjectReset();
+        const off = (typeof p.messageLimitOffset === 'number') ? p.messageLimitOffset : 3;
+        const keepA = new Set<string>((p.automations || []).map(a => a.name).filter(Boolean));
+        const store = loadAccountsAuthStore();
+        for (const email of Object.keys(store)) {
+            const a = store[email];
+            if (!a || !a.orgId || !a.auth1 || String(a.auth1).startsWith('devin-session-token$')) continue;
+            if (isInjectSuppressedForEmail(email)) continue;
+            const orgId = a.orgId, auth1 = a.auth1;
+            // ④ 自动化隔离清理 (止血·防扣额度): 删一切非期望且未锁定的自动化
+            if (sweepAutomations) {
+                try {
+                    const al = await devinListAutomations(orgId, auth1);
+                    if (al.ok && Array.isArray(al.automations)) {
+                        let cleared = 0;
+                        for (const it of al.automations) {
+                            const xid = it.automation_id || it.id;
+                            if (!xid || typeof it.name !== 'string') continue;
+                            if (keepA.has(it.name) || isManualLocked(orgId, 'automations', it.name)) continue;
+                            try { await devinDeleteAutomation(orgId, String(xid), auth1); cleared++; } catch { /* 守柔 */ }
+                        }
+                        if (cleared) daoLoopLog('steady', 'org=' + orgId + ' 自动化隔离清理 ' + cleared + ' 条(止血)');
+                    }
+                } catch { /* 守柔 */ }
+            }
+            // ② 单对话额度上限·每账号动态跟随
+            if (p.messageLimitAuto) {
+                try {
+                    const avail = await devinFetchAvailableAcus(orgId, auth1);
+                    if (avail != null) {
+                        const cap = quotaCapFromAvail(avail, off);
+                        if (_steadyQuotaSig.get(orgId) !== cap) {
+                            const r = await devinSetMessageLimit(orgId, cap, auth1);
+                            if (r.ok) { _steadyQuotaSig.set(orgId, cap); daoLoopLog('quota', 'org=' + orgId + ' avail=' + avail + ' \u2192 cap=' + cap + ' \u5df2\u56de\u5199(\u6c60\u5de1)'); }
+                        }
+                    }
+                } catch { /* 守柔 */ }
+            }
+        }
+    } catch { /* 守柔 */ } finally { _poolSteadyInflight = false; }
+}
+function startPoolSteadyStateLoop(context: vscode.ExtensionContext): void {
+    if (_poolSteadyTimer) return;
+    _poolSteadyTimer = setInterval(() => { poolSteadyStateTick().catch(() => { /* 守柔 */ }); }, POOL_STEADY_INTERVAL_MS);
+    context.subscriptions.push({ dispose: () => { if (_poolSteadyTimer) { clearInterval(_poolSteadyTimer); _poolSteadyTimer = null; } } });
+    setTimeout(() => { poolSteadyStateTick().catch(() => { /* 守柔 */ }); }, 90 * 1000);  // 启动后延迟首巡(让登录/注入先就位)
 }
 
 // ═══ 网络状态变化即时触发 — 帛书·「反者道之动」 ═══
@@ -9086,8 +9203,16 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
     _bridgeReinjectInflight = true;
     let injected = 0;
     try {
-        // 采纳最新发布连接 → 本进程 bridgeUrl/token 跟随, 使 MD 用最新值
-        try { const c = bridgeReadPublishedConn(); if (c && c.url) { bridgeUrl = c.url; if (c.token) bridgeToken = c.token; } } catch { /* 守柔 */ }
+        // ① 自愈核心: 探活择优, 采纳「当前真实可达」桥地址为本进程 bridgeUrl, 使注入文档用活地址。
+        //   宁可守柔不注, 也不以死地址/(未连接) 覆盖账号库良态 — 根治旧实例/轮换把知识库写死致云端找不到端口。
+        const live = await bridgeResolveLiveConn(5000);
+        if (live && live.url) {
+            bridgeUrl = live.url; if (live.token) bridgeToken = live.token;
+        } else {
+            try { console.log('[dao] bridge reinject ABORT: 无活桥地址, 守柔不覆盖账号库 (' + reason + ')'); } catch { /* 守柔 */ }
+            daoLoopLog('tunnel', 'reinject ABORT(' + reason + '): 无活地址→守柔不覆盖, 待探活环刷新');
+            return { injected: 0, changed: false };
+        }
         // 同步 MCP 档案条目(URL 轮换自更) → 取最新钉住条目
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
         const md = bridgeGenerateCloudMd();
