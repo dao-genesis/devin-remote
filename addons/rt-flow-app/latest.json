@@ -1,6 +1,6 @@
 {
-  "versionCode": 161,
-  "versionName": "0.37.57",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.57/DevinCloud-mobile-v0.37.57.apk",
-  "notes": "v0.37.57 · 内网穿透「传输求真」: publicUrls 只列探活确认可达的公网入口(承 v0.37.53 哲学)\n• 真机实测复现: 手机 tunnelStat 报 sshUrl=xxx.lhr.life、connected:true, 但该 URL 实测回 503 \"no tunnel here\"(localhost.run 免费边缘发了 URL 即废/转发瞬断); cloudflared 同理可\"假活\"(进程在跑·边缘 530)。旧逻辑把刚冒出的 URL 立刻塞进 publicUrls → 控制端/外部据此直连会撞死链。\n• 本版: 隧道冒 URL 后先短延迟探活一次(+周期健康探测续判), 只有确认真可达的入口才纳入 publicUrls; cfVerified/sshVerified 双标志驱动。面板 tunnels 仍逐条展示全部入口并带 verified 真相标记。\n• 双向兜底: 与 v0.37.56 控制端「探活才切直连」同向——即便手机只剩 Worker 可达(本网络 cf 被拦+SSH 边缘抽风), publicUrls 据实为空、控制端老实走 Worker, 不误导不撞死。纯加法、零协议改动; APK BUILD SUCCESSFUL。\n— — —\nv0.37.56 · 控制端优先走手机自带直连隧道, Worker 降为最后兜底\nv0.37.55 · cloudflared 拦截网络省电自愈(起即退超硬上限转 5min 慢探)\nv0.37.54 · 内网穿透 WSS 半开死链看门狗 + 中继转发只选活 socket\nv0.37.53 · 去中心化 P2P 客户端「传输真相」收口"
+  "versionCode": 162,
+  "versionName": "0.37.58",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.58/DevinCloud-mobile-v0.37.58.apk",
+  "notes": "v0.37.58 · 控制端 P2P 探测修复: 不再泄漏常驻 ntfy 订阅 + 退避冷却防握手风暴\n• 病灶: 浏览器控制端的 P2P 升级探测 _p2pTry 用默认 DaoSignal.connect, 在打不通 P2P 的网络(对称NAT/UDP受限)上会拿到一个 ntfy 中继兜底句柄(dc=null)。它永远过不了「P2P 判活」, 于是每 30s 轮询重连一次、且不关旧句柄 → 每轮泄漏 4 路常驻公共 ntfy 订阅, 越积越多 → 耗电 + 可能把你的出口 IP 刷到 ntfy 1015 限流。\n• 修复: _p2pTry 改为只求真 P2P(relayFallback:false, STUN/TURN 均产出 DataChannel 才接管), 不再常驻那个永不被用的中继句柄; 并加退避冷却, 硬失败网络下不再 30s 风暴式重握手。控制端 HTTP 通道(Worker/手机直连隧道·无 48KB 上限)本就更优, P2P 不通就老实回退它。\n• 纯加法、零协议改动; 新增切片单测(场景 P)+ 全套 JS 单测全绿; APK BUILD SUCCESSFUL。\n— — —\nv0.37.57 · 内网穿透传输求真: publicUrls 只列探活确认可达的公网入口\nv0.37.56 · 控制端优先走手机自带直连隧道, Worker 降为最后兜底\nv0.37.55 · cloudflared 拦截网络省电自愈(起即退超硬上限转 5min 慢探)\nv0.37.54 · 内网穿透 WSS 半开死链看门狗 + 中继转发只选活 socket"
 }

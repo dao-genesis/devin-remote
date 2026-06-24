@@ -230,6 +230,20 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     ok(counter.total === 0, "O no-op: 零额外 fetch");
   }
 
+  // 场景 P: _p2pTry 只求真 P2P (relayFallback:false 不常驻泄漏 ntfy 中继句柄) + 失败退避冷却 (防 30s 轮询风暴重握手)。
+  {
+    let calls = 0, lastOpts = null;
+    const win = { DaoSignal: { available: () => true, connect: function (o) { calls++; lastOpts = o; return Promise.reject(new Error("p2p_failed")); } } };
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://x.example", fetch: makeFetch({}, { total: 0, byBase: {} }), window: win }));
+    mod.p2pTry();
+    await new Promise(r => setTimeout(r, 0));   // 等 connect reject 落地
+    ok(calls === 1 && lastOpts && lastOpts.relayFallback === false, "P _p2pTry 请求真 P2P(relayFallback:false), 不建 dc===null 的常驻 ntfy 中继兜底句柄(防泄漏)");
+    ok(!mod.p2pAlive(), "P 真 P2P 失败 → 无 _p2p 句柄留存");
+    mod.p2pTry();   // 紧接再试: 应被退避冷却挡住
+    await new Promise(r => setTimeout(r, 0));
+    ok(calls === 1, "P 失败后退避冷却生效: 紧接的 _p2pTry 不立即重握手 (防 30s 轮询风暴/刷爆公共 broker)");
+  }
+
   // 场景 J (回归护栏): 主 IIFE 必须在使用前声明 CFG —— 防 PR#547 式 strict ReferenceError 崩整页。
   {
     const fIdx = src.indexOf("__FAILOVER_START__");
@@ -240,4 +254,5 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
 
   if (failures) { console.error("\n" + failures + " 项失败"); process.exit(1); }
   console.log("\n全部通过 ✓");
+  process.exit(0);   // _p2pTry 失败路径会挂 setTimeout 退避重试(产品行为正确), 测试断言完即显式退出, 不让该定时器吊住 node
 })().catch(e => { console.error("测试异常:", e); process.exit(1); });
