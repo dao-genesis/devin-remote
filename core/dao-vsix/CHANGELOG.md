@@ -2,6 +2,11 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.23
+- **修复 3.50.22 引入的致命语法错误**: `feed()` 外层 `try{` 缺少配套 `catch` → 整段拖拽桥 `daoDropBridgeJs` IIFE 报 `Uncaught SyntaxError: Missing catch or finally after try`,**整个拖拽桥从不执行**(`window.__daoDropBridge` 永不置位、`document` 级 drop/dragover 监听从不注册)→ 用户侧「拖拽完全没用」。
+  - **定位**: live CDP 实测代理会话页 → 注入 HTML 含桥脚本但 `window.__daoDropBridge=false`;`Log.entryAdded` 捕获 `Uncaught SyntaxError: Missing catch or finally after try`;源码 `feed()` 字符串大括号 16 开/15 合、`try` 4 个仅 3 个 `catch`。`node --check` 检不出(桥代码是字符串字面量,仅浏览器运行时解析)。
+  - **修**: `feed()` 外层 `try` 补 `}catch(e0){return false;}`(大括号 17/17、try/catch 4/4);新增构建期校验 —— 抽取 `daoDropBridgeJs()` 拼接串 `new Function()` 实解析,杜绝桥 JS 字符串语法错误再次蒙混过关。
+
 ## 3.50.22
 - 根治「拖拽对话/文件到官网 → 提示『未找到上传框』(拖拽没用)」(拖拽桥 `daoDropBridgeJs` `feed()`)。
   - **真因(经 live 桥在用户机 CDP 实测)**: 拖拽桥已正确触发(捕获合成 drop、解析 `application/x-dao-conv`、命中 `/__convmd` 拉取会话 MD),但 Devin 的 `input[type=file]` 与编辑器组件挂在 **shadow root** 内;原 `feed()` 用 `document.querySelectorAll('input[type=file]')` **不穿透 shadow DOM** → 顶层查到 0 个 → 无法注入 → 弹「未找到上传框」。实测仅穿透时可见 `deepFileInputs=1, deepEditors=1`。
