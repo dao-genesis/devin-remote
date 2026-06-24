@@ -1,6 +1,6 @@
 {
-  "versionCode": 156,
-  "versionName": "0.37.52",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.52/DevinCloud-mobile-v0.37.52.apk",
-  "notes": "v0.37.52 · 联控镜像热路径「零可避免每帧分配」彻底收口(复用 JPEG 编码缓冲 + 缩放矩形)\n• 承上 v0.37.49/50(满屏+缩图两块位图已复用): 镜像取帧每帧仍新建 1 个 ByteArrayOutputStream(JPEG 编码buf, 内部随帧扩容) + 2 个 Rect(降采样 src/dst)。\n• 本版复用三者: mirrorBos 每帧 reset 保留底层 byte[]; mirrorSrcRect/mirrorDstRect 复用 set。至此 2~5fps 连续联控取帧除「不可避免的输出 byte[]/base64 串」外零每帧分配, UI 线程 GC 抖动压到最低。\n• 久无联控随两块位图缓冲一并释放编码缓冲, 不常驻。所有访问皆 UI 线程, 无竞态。\n— — —\nv0.37.51 · 活动标签长会话 V8 堆/DOM 回收(极保守静默重载·保草稿不打断)\nv0.37.50 · 联控镜像帧零每帧位图分配(复用降采样缓冲)\nv0.37.49 · 联控镜像满屏位图复用(消除每帧 ~10MB 分配抖动 GC)"
+  "versionCode": 157,
+  "versionName": "0.37.53",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.53/DevinCloud-mobile-v0.37.53.apk",
+  "notes": "v0.37.53 · 去中心化 P2P 客户端「传输真相」收口(p2p-client.html 不再谎报 P2P)\n• 病灶(真机实测): DaoSignal.connect 在 P2P 打洞失败(对称NAT/UDP受限)时会无缝回退「公共 ntfy 加密中继」(0账号·不经 Worker, 但控制面单响应≤48KB)。旧 p2p-client.html 无论真直连还是回退中继, 一律绿标「✓ DataChannel open — RPC 全程 P2P」, 并把每条 RPC/ping 标注「P2P」——对照排障时被误导。\n• 本版据实区分三态: 🟢 P2P 直连(纯 STUN) / 🟢 P2P 直连(TURN 中继候选·全双工) / 🟡 去中心化中继(ntfy·控制面); ping 标注「P2P RTT」或「中继 RTT」, RPC 标注真实通道; 回退时点明 ice_failed 原因。\n• getState 等大响应在中继态触发 413(超 48KB 上限)时, 明确提示「需真 P2P 直连或隧道兜底才能拿全量」, 不再让用户对着空 413 困惑。\n• 纯客户端 UI/可观测性加法, 零协议改动、零回归; signal.js/console.html 行为不变, 35 项单测 + 信令冗余/通道选择/故障转移切片全绿。\n— — —\nv0.37.52 · 联控镜像热路径「零可避免每帧分配」彻底收口\nv0.37.51 · 活动标签长会话 V8 堆/DOM 回收\nv0.37.50 · 联控镜像帧零每帧位图分配\nv0.37.49 · 联控镜像满屏位图复用"
 }
