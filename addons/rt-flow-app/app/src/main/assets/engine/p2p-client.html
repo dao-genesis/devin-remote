@@ -27,7 +27,8 @@
 <h2>🛰️ Devin Cloud · P2P 直连客户端</h2>
 <div class="muted">
   路线C · <b>0 账号去中心化 WebRTC</b>。只需 <b>session + token</b> 即可直连 —— 信令借公共 pub/sub (ntfy 多家公开实例) 一次性交换加密 SDP, 之后 RPC 全程走 <b>P2P DataChannel</b>, <b>完全不经你的 Worker</b>。<br>
-  隧道 URL <b>可留空</b>; 仅当去中心化打洞失败时, 才用它走 Worker 兜底。curl 控制端照常 HTTP 可用。
+  隧道 URL <b>可留空</b>; 仅当去中心化打洞失败时, 才用它走 Worker 兜底。curl 控制端照常 HTTP 可用。<br>
+  <b>零中心分发</b>: 本页是纯静态死文件, 可经公共 CDN (jsDelivr / raw.githubusercontent) 直开、<b>无需任何 Worker 在线</b>; 链接带 <code>?session=&amp;token=</code> 参数即<b>一开即填</b>, 带 <code>&amp;auto=1</code> 则<b>开页自动直连</b>。
 </div>
 
 <div class="sec-box">
@@ -153,6 +154,27 @@ async function sendRpc(){
 function ping(){ return new Promise(function(resolve,reject){ var id="p"+(++seq); waiters[id]={resolve:resolve,reject:reject}; var t0=performance.now(); dc.send(JSON.stringify({t:"ping",id:id})); waiters[id].resolve=function(){ resolve(performance.now()-t0); }; setTimeout(function(){ if(waiters[id]){delete waiters[id]; reject(new Error("to")); } },5000); }); }
 async function pingLoop(){ for(var i=0;i<5;i++){ try{ var ms=await (sig?sig.ping():ping()); log("ping#"+(i+1)+" = "+ms.toFixed(1)+"ms (P2P RTT)"); }catch(e){ log("ping#"+(i+1)+" timeout"); } } }
 function hangup(){ try{ if(sig) sig.close(); }catch(e){} sig=null; try{ if(dc) dc.close(); }catch(e){} try{ if(pc) pc.close(); }catch(e){} dc=null; pc=null; $("btnSend").disabled=true; $("btnPing").disabled=true; setState("未连接","#30363d"); }
+
+// ── 零中心一键分发: 从 URL 查询参数预填 (session/token/url/turn), ?auto=1 开页即直连 ──────
+//   道法自然·最小化用户参与: 宿主把带参链接 (经公共 CDN 托管本页·不经任何 Worker) 发给对端,
+//   对端一开即填、可选自动直连 —— 全程零账号、零搭建、零中心。参数兼容 s/t 短名与隧道别名。
+(function initFromQuery(){
+  try{
+    var qs = new URLSearchParams(location.search || "");
+    function pick(){ for(var i=0;i<arguments.length;i++){ var v=qs.get(arguments[i]); if(v!=null && v!=="") return v; } return ""; }
+    var s = pick("session","s"), t = pick("token","t"),
+        u = pick("url","endpoint","worker"), tn = pick("turn");
+    if(s) $("session").value = s;
+    if(t) $("token").value = t;
+    if(u) $("url").value = u;
+    if(tn) $("turn").value = tn;
+    var auto = pick("auto","connect");
+    if(s && t && (auto==="1"||auto==="true"||auto==="yes")){
+      log("• 检测到 ?auto=1 → 开页自动发起去中心化直连…");
+      setTimeout(function(){ try{ connect(); }catch(e){} }, 300);
+    }
+  }catch(e){}
+})();
 </script>
 </body>
 </html>

@@ -370,6 +370,8 @@
   root.DaoSignal = {
     serve: serve, connect: connect, topicFor: topicFor,
     available: function () { return !!hasSubtle; },
-    DEFAULT_SERVERS: DEFAULT_SERVERS.slice()
+    DEFAULT_SERVERS: DEFAULT_SERVERS.slice(),
+    // 纯函数测试面 (经 test/console-failover.test.js 验证去中心化信令的加密/分片不变量; 不改运行行为)
+    _internals: { deriveKey: deriveKey, seal: seal, unseal: unseal, normServers: normServers, frameChunks: frameChunks }
   };
 })(typeof window !== "undefined" ? window : this);

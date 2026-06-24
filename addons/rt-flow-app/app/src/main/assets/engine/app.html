@@ -424,7 +424,7 @@
   // 下载 / 书签面板 (📥): 浏览器原生下载该号文件已落本设备; 此处汇总本次下载 + 书签
   var dlPanel=document.getElementById("dlPanel"); var downloads=[];
   window.addEventListener("message",function(ev){ var d=ev&&ev.data;
-    if(d&&d.__rtflow==="download"&&d.name){ downloads.unshift({name:d.name}); if(dlPanel.classList.contains("show")) renderDl(); } });
+    if(d&&d.__rtflow==="download"&&d.name){ downloads.unshift({name:d.name}); if(downloads.length>200) downloads.length=200; if(dlPanel.classList.contains("show")) renderDl(); } });
   function renderDl(){ var bm=getBM();
     var h='<h4>下载 (浏览器已保存到本设备)</h4>';
     h+= downloads.length? downloads.map(function(x){return '<div class="it">\u2b07 '+x.name+'</div>';}).join('') : '<div class="empty">暂无本次下载</div>';
