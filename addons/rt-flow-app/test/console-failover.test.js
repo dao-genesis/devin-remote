@@ -20,7 +20,8 @@ function makeModule(deps) {
     "var qp=deps.qp, persist=deps.persist, localStorage=deps.localStorage, location=deps.location, fetch=deps.fetch, window=deps.window;\n" +
     sliced + "\n" +
     "return { relay: relay, relayHttp: _relayHttp, getEndpoint: function(){ return ENDPOINT; }, candBases: _candBases,\n" +
-    "         p2pTry: _p2pTry, p2pAlive: _p2pAlive, setP2P: function(p){ _p2p=p; } };\n" +
+    "         p2pTry: _p2pTry, p2pAlive: _p2pAlive, setP2P: function(p){ _p2p=p; },\n" +
+    "         learnDirect: _learnDirect, preferDirect: _preferDirect, directUrls: _directUrls };\n" +
     "})";
   // eslint-disable-next-line no-eval
   return eval(factorySrc)(deps);
@@ -169,6 +170,64 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     ok(connected === 1 && mod.p2pAlive(), "I _p2pTry 经 DaoSignal 建连成功, P2P 接管");
     const res = await mod.relay("/api/rpc", { cmd: "getState" }, 5000);
     ok(res.body && res.body.via === "p2p" && counter.total === 0, "I 建连后 relay 自动走 P2P");
+  }
+
+  // 场景 K: 候选清单把「手机自带直连隧道」排在 Worker 之前 (Worker 仅兜底)。
+  {
+    const ls = makeLocalStorage();
+    ls.setItem("rtflow.rn.endpoints.direct", JSON.stringify(["https://phone-cf.trycloudflare.com"]));
+    const mod = makeModule(baseDeps({ ENDPOINT: WORKER, fetch: makeFetch({}, { total: 0, byBase: {} }), localStorage: ls, location: { origin: WORKER, protocol: "https:" } }));
+    const bases = mod.candBases();
+    const di = bases.indexOf("https://phone-cf.trycloudflare.com"), wi = bases.indexOf(WORKER);
+    ok(di >= 0, "K 候选清单含手机直连隧道");
+    ok(di >= 0 && wi >= 0 && di < wi, "K 直连隧道优先级高于 Worker (排在前)");
+  }
+
+  // 场景 L: learnDirect 仅保留 https 直连隧道 (滤除 http 局域网 → 防 HTTPS 控台混合内容拦截)。
+  {
+    const ls = makeLocalStorage();
+    const routes = { [WORKER]: { status: 200, body: { r: JSON.stringify({ publicUrls: ["https://ad8.lhr.life", "http://10.0.0.5:43379", "https://cf.trycloudflare.com"] }) } } };
+    const mod = makeModule(baseDeps({ ENDPOINT: WORKER, fetch: makeFetch(routes, { total: 0, byBase: {} }), localStorage: ls, location: { origin: WORKER, protocol: "https:" } }));
+    const urls = await mod.learnDirect();
+    ok(urls.length === 2 && urls.indexOf("http://10.0.0.5:43379") < 0, "L learnDirect 仅留 https (滤除 http 局域网)");
+    ok((JSON.parse(ls.getItem("rtflow.rn.endpoints.direct")) || []).length === 2, "L 直连清单已持久化 (仅 https)");
+  }
+
+  // 场景 M (核心): 经 Worker 打开 + 手机有可达直连隧道 → preferDirect 升级 ENDPOINT 到直连, Worker 退为兜底。
+  {
+    const direct = "https://ad8.lhr.life";
+    const routes = {
+      [WORKER]: { status: 200, body: { r: JSON.stringify({ publicUrls: [direct] }) } },
+      [direct]: { status: 200, body: { ok: true, state: "phone" } },
+    };
+    let persisted = 0; const ls = makeLocalStorage();
+    const mod = makeModule(baseDeps({ ENDPOINT: WORKER, fetch: makeFetch(routes, { total: 0, byBase: {} }), localStorage: ls, persist: () => { persisted++; }, location: { origin: WORKER, protocol: "https:" } }));
+    const live = await mod.preferDirect();
+    ok(live === direct, "M preferDirect 探到手机直连隧道可达");
+    ok(mod.getEndpoint() === direct, "M ENDPOINT 从 Worker 升级到手机直连隧道 (Worker 退为最后兜底)");
+    ok(persisted >= 1, "M 升级时持久化");
+  }
+
+  // 场景 N: 直连隧道探活不通 → 绝不升级, ENDPOINT 仍为 Worker (兜底不破)。
+  {
+    const direct = "https://dead.lhr.life";
+    const routes = {
+      [WORKER]: { status: 200, body: { r: JSON.stringify({ publicUrls: [direct] }) } },
+      [direct]: { status: 530, body: "<h1>1033</h1>" },
+    };
+    const mod = makeModule(baseDeps({ ENDPOINT: WORKER, fetch: makeFetch(routes, { total: 0, byBase: {} }), location: { origin: WORKER, protocol: "https:" } }));
+    const live = await mod.preferDirect();
+    ok(!live, "N 直连隧道探活不通 → 不升级");
+    ok(mod.getEndpoint() === WORKER, "N ENDPOINT 仍为 Worker (直连死则不动, 兜底不破)");
+  }
+
+  // 场景 O: 当前已非 Worker 端点 → preferDirect 直接 no-op (无需升级, 不空打探活)。
+  {
+    const counter = { total: 0, byBase: {} };
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://already.lhr.life", fetch: makeFetch({}, counter), location: { origin: "https://already.lhr.life", protocol: "https:" } }));
+    await mod.preferDirect();
+    ok(mod.getEndpoint() === "https://already.lhr.life", "O 已非 Worker 端点 → preferDirect 不动");
+    ok(counter.total === 0, "O no-op: 零额外 fetch");
   }
 
   // 场景 J (回归护栏): 主 IIFE 必须在使用前声明 CFG —— 防 PR#547 式 strict ReferenceError 崩整页。

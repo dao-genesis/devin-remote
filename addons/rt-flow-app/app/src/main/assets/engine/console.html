@@ -448,14 +448,58 @@
   //   成功路径零额外开销。绝不破坏: 全部候选皆死时原样返回原结果/原错误, 行为与旧版一致。
   var STABLE_RELAY = String((CFG&&CFG.worker)||qp("worker")||"https://dao-relay-do.zhouyoukang.workers.dev").replace(/\/+$/,"");
   function _candBases(){
-    var seen=Object.create(null), out=[];
-    function add(b){ b=String(b||"").replace(/\/+$/,""); if(b&&!seen[b]){ seen[b]=1; out.push(b); } }
+    // 收集时区分「直连(非 Worker)」与「Worker」: 直连隧道(手机自带 cloudflared/SSH)永远排在 Worker 之前,
+    //   Worker 永远沉到末尾兜底 —— 与 _preferDirect 同向贯彻「Worker 仅兜底」。location.origin 殿后。
+    var seen=Object.create(null), direct=[], worker=[], origin=null;
+    function add(b){ b=String(b||"").replace(/\/+$/,""); if(!b||seen[b]) return; seen[b]=1; (_isWorker(b)?worker:direct).push(b); }
     add(ENDPOINT);
     try{ add(localStorage.getItem("rtflow.rn.endpoint.good")); }catch(e){}
+    try{ var dl=_directUrls(); for(var k=0;k<dl.length;k++) add(dl[k]); }catch(e){}   // 手机自带直连隧道(cloudflared/SSH)
     try{ var ex=(CFG&&CFG.endpoints)||[]; for(var i=0;i<ex.length;i++) add(ex[i]); }catch(e){}
     add(STABLE_RELAY);
-    try{ add(location.origin); }catch(e){}
+    try{ var o=String((location&&location.origin)||"").replace(/\/+$/,""); if(o&&!seen[o]){ seen[o]=1; if(_isWorker(o)) worker.push(o); else origin=o; } }catch(e){}
+    var out=direct.slice();
+    for(var w=0;w<worker.length;w++) out.push(worker[w]);
+    if(origin) out.push(origin);
     return out;
+  }
+  // ── 优先走手机自带的「直连公网隧道」, 把中继 Worker 真正降为最后兜底 (用户北极星: Worker 仅兜底) ──────
+  //   依据(真机实测): 手机 LocalServer 经 cloudflared/SSH 暴露的 /relay/<session> 协议与中继 Worker
+  //   逐字节同构、且回 CORS *。故控制端只要拿到手机自己的公网隧道 URL, 即可直连它、几乎不碰中继。
+  //   做法: 经当前活通道问一次手机 tunnelStat 拿 publicUrls(仅留 https —— HTTPS 控台 fetch http 局域网
+  //   会被浏览器混合内容拦截), 存入候选清单(优先级高于 Worker)。仅当某直连隧道「探活确实通」才切到它;
+  //   一旦它死, 既有 _relayHttp 自愈无缝回退 Worker。纯加法: 学不到/全不通则与旧版逐字节一致。
+  function _directUrls(){ try{ var a=JSON.parse(localStorage.getItem("rtflow.rn.endpoints.direct")||"[]"); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+  function _isWorker(b){ return /\.workers\.dev/i.test(String(b||"")); }
+  function _httpsOnlyHere(){ try{ return String(location.protocol||"https:")==="https:"; }catch(e){ return true; } }
+  function _learnDirect(){
+    return _relayAt(ENDPOINT, "/api/native", { m:"tunnelStat", a:[] }, 8000).then(function(res){
+      try{
+        var r=res && res.body && res.body.r; var st=(typeof r==="string")?JSON.parse(r):r;
+        var urls=(st && st.publicUrls) || []; var keep=[], seen=Object.create(null);
+        for(var i=0;i<urls.length;i++){ var u=String(urls[i]||"").replace(/\/+$/,"");
+          if(!u || seen[u] || _isWorker(u)) continue;                 // 不把 Worker 当「直连」
+          if(_httpsOnlyHere() && !/^https:\/\//i.test(u)) continue;   // HTTPS 控台跳过 http 局域网(混合内容拦截)
+          seen[u]=1; keep.push(u); }
+        try{ localStorage.setItem("rtflow.rn.endpoints.direct", JSON.stringify(keep)); }catch(e){}
+        return keep;
+      }catch(e){ return []; }
+    }, function(){ return []; });
+  }
+  var _preferring=false;
+  function _preferDirect(){
+    if(_preferring || !_isWorker(ENDPOINT)) return Promise.resolve();   // 已直连/局域网 → 无需升级
+    _preferring=true;
+    return _learnDirect().then(function(urls){
+      return (function go(i){ if(i>=urls.length) return null;
+        return _relayAt(urls[i], "/api/rpc", {cmd:"getState"}, 6000)
+          .then(function(res){ return _dead(res)?go(i+1):urls[i]; }, function(){ return go(i+1); });
+      })(0);
+    }).then(function(live){
+      if(live && _isWorker(ENDPOINT)){ ENDPOINT=live; persist();
+        try{ localStorage.setItem("rtflow.rn.endpoint.good", live); }catch(e){} }
+      _preferring=false; return live;
+    }, function(){ _preferring=false; return null; });
   }
   function _relayAt(base, path, body, timeoutMs){
     var ctrl = (typeof AbortController!=="undefined") ? new AbortController() : null;
@@ -1527,6 +1571,8 @@
   ping(); setInterval(ping, 9000);
   // 启动默认 P2P 数据面 (加法式: 建得上则重活点对点直连手机、几乎不碰中继; 建不上一直走 HTTP 自愈)。
   try{ _p2pTry(); setInterval(_p2pTry, 30000); }catch(e){}
+  // HTTP 兜底也优先手机自带直连隧道: 若经 Worker 打开, 后台探一次手机 publicUrls, 通则升级、Worker 退为最后兜底。
+  try{ setTimeout(_preferDirect, 4000); setInterval(_preferDirect, 90000); }catch(e){}
   // 首屏 switch 画完后, 空闲预热其余板块 → 切板秒开。
   if(SESSION && TOKEN){ (window.requestIdleCallback||function(f){setTimeout(f,2000);})(prefetchBoards); }
 })();
