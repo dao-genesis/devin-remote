@@ -210,6 +210,55 @@
     return { close: function () { stopped = true; socks.forEach(function (w) { try { w.close(); } catch (e) {} }); } };
   }
 
+  // ── 零账号 TURN 兜底 (对称 NAT/CGNAT 直连打洞失败时的「全双工媒体中继」, 远胜 ntfy 控制面中继) ──
+  //   仅 STUN 时, 对称 NAT/CGNAT(移动网络常见) 双方都拿不到可直达的反射地址 → P2P 打洞必败,
+  //   旧实现只能降级 ntfy 去中心中继(控制面·48KB 单响应上限·传不了大文件)。引入零账号公共 TURN:
+  //   走 IETF turn-rest(draft-uberti) 的「免鉴权 REST 取临时凭证」端点(多家可自托管 → 仍去中心化),
+  //   ICE 自动以 relay 候选兜底 → 硬 NAT 下也能全双工直传(dcWire 满速·无 48KB 限制) → 真正超越 Worker。
+  //   关键(道法自然·能简不繁): TURN 只在「STUN 直连已确认失败(ice_failed)」后才取并重试一次 →
+  //   顺畅路径零额外开销/零延迟; 且 ICE 内部本就优先 host/srflx、relay 仅作末位 → 能直连绝不走中继。
+  var DEFAULT_TURN_REST = ["https://turn.elixir-webrtc.org"];   // 零账号 turn-rest 端点(可自托管 rel/coturn 扩展)
+  var _turnCache = null;   // {ice, exp} 临时凭证缓存(按 ttl), 避免连发重试重复取
+  // turn-rest 响应 → ICE iceServers 条目。兼容 {username,password,uris} 与 {username,credential,urls} 两形。
+  function parseTurnRest(obj) {
+    if (!obj || typeof obj !== "object") return [];
+    var user = obj.username || obj.user, cred = obj.password || obj.credential;
+    var uris = obj.uris || obj.urls || obj.uri || obj.url;
+    if (typeof uris === "string") uris = [uris];
+    if (!user || !cred || !Array.isArray(uris) || !uris.length) return [];
+    var out = [];
+    for (var i = 0; i < uris.length; i++) { var u = uris[i]; if (typeof u === "string" && /^turns?:/i.test(u)) out.push({ urls: u, username: String(user), credential: String(cred) }); }
+    return out;
+  }
+  // 向多家零账号 turn-rest 端点顺序取临时 TURN 凭证, 命中第一家即返回 ICE 条目(带 ttl 缓存·去重在飞)。
+  var _turnInflight = null;
+  async function fetchTurnServers(opts) {
+    opts = opts || {};
+    if (_turnCache && _turnCache.exp > Date.now() && _turnCache.ice.length) return _turnCache.ice;
+    if (_turnInflight) return _turnInflight;
+    var eps = (Array.isArray(opts.turnRest) && opts.turnRest.length) ? opts.turnRest : DEFAULT_TURN_REST;
+    _turnInflight = (async function () {
+      var u = "dao" + uid();
+      for (var i = 0; i < eps.length; i++) {
+        var base = (eps[i] || "").replace(/\/$/, "");
+        if (!/^https?:\/\//i.test(base)) continue;
+        try {
+          var r = await fetchT(base + "/?service=turn&username=" + encodeURIComponent(u), { method: "POST" }, 6000);
+          if (!r || !r.ok) continue;
+          var j = await r.json();
+          var ice = parseTurnRest(j);
+          if (ice.length) {
+            var ttl = (j && +j.ttl > 0) ? +j.ttl : 600;
+            _turnCache = { ice: ice, exp: Date.now() + Math.max(60, ttl - 60) * 1000 };
+            return ice;
+          }
+        } catch (e) {}
+      }
+      return [];
+    })();
+    try { return await _turnInflight; } finally { _turnInflight = null; }
+  }
+
   // ── 应答方 (手机引擎): 监听 topic, 解密 offer→P2P.connect→回 answer。零账号、不经 Worker。──
   //   connectFn(args) 返回 {ok, answer, ...} (即 window.P2P.connect)。
   async function serve(opts) {
@@ -287,79 +336,31 @@
     var session = opts.session, token = opts.token;
     if (!session || !token) throw new Error("need session+token");
     var servers = normServers(opts.servers);
-    var ice = STUN.slice();
-    if (Array.isArray(opts.ice)) opts.ice.forEach(function (s) { if (s && s.urls) ice.push(s); });
+    var baseIce = STUN.slice();   // 顺畅路径仅 STUN(+用户自带 ice); TURN 仅在 ice_failed 后追加重试
+    if (Array.isArray(opts.ice)) opts.ice.forEach(function (s) { if (s && s.urls) baseIce.push(s); });
     var key = await deriveKey(session, token);
     var topic = await topicFor(session);
     await warmBrokers(servers);          // 客户端预热: 首发 offer/ping 从健康 broker 起手, 消除冷启停顿
-    var nonce = uid();
-    var pc = new RTCPeerConnection({ iceServers: ice, iceCandidatePoolSize: 2 });
-    var dc = pc.createDataChannel("rpc");
-    var seq = 0, waiters = Object.create(null), relayWaiters = Object.create(null);
-    // dcWire: 收到的(可能分片重组后的)应用消息按 id 对号回调; 发送侧自动对大载荷分片+背压。
-    var dcSend = dcWire(dc, function (m) {
-      if (!m) return;
-      var w = waiters[m.id]; if (!w) return; delete waiters[m.id];
-      if (m.t === "pong") w.resolve({ pong: true, ts: m.ts });
-      else if (m.t === "res") w.resolve(m.result);
-    });
-    function rpc(frame) {
-      return new Promise(function (resolve, reject) {
-        if (!dc || dc.readyState !== "open") return reject(new Error("datachannel not open"));
-        var id = String(++seq); waiters[id] = { resolve: resolve, reject: reject };
-        dcSend({ t: "rpc", id: id, frame: frame });
-        setTimeout(function () { if (waiters[id]) { delete waiters[id]; reject(new Error("timeout")); } }, 30000);
-      });
-    }
-    function ping() {
-      return new Promise(function (resolve, reject) {
-        var id = "p" + (++seq), t0 = (typeof performance !== "undefined" ? performance.now() : Date.now());
-        waiters[id] = { resolve: function () { resolve((typeof performance !== "undefined" ? performance.now() : Date.now()) - t0); }, reject: reject };
-        try { dcSend({ t: "ping", id: id }); } catch (e) { reject(e); }
-        setTimeout(function () { if (waiters[id]) { delete waiters[id]; reject(new Error("timeout")); } }, 5000);
-      });
-    }
-    function waitIce() {
-      return new Promise(function (res) {
-        if (pc.iceGatheringState === "complete") return res();
-        var done = false; function fin() { if (!done) { done = true; res(); } }
-        pc.addEventListener("icegatheringstatechange", function () { if (pc.iceGatheringState === "complete") fin(); });
-        // host+srflx 候选通常 <1s 到齐(本端未配 TURN, 无需久等); 2.5s 封顶即发 offer, 缩短对端收到 offer 的等待。
-        setTimeout(fin, 2500);
-      });
-    }
-    var opened = false, answered = false, settle = null;
-    var ready = new Promise(function (resolve, reject) {
-      settle = { resolve: resolve, reject: reject };
-      dc.onopen = function () { opened = true; resolve({ pc: pc, dc: dc, rpc: rpc, ping: ping, topic: topic, close: close }); };
-      // 对端已应答(收到 answer)却仍 failed ⇒ 是 ICE 打洞失败(NAT/防火墙), 与「压根没应答」区分开。
-      pc.onconnectionstatechange = function () { if (pc.connectionState === "failed" && !opened) reject(new Error(answered ? "ice_failed" : "p2p_failed")); };
-    });
-    var reasm = makeReasm();
-    var sub = subscribe(servers, topic, function (raw) {
-      reasm(raw, async function (corr, role, full) {
-        if (role === "s") {                               // 中继兜底响应 (pong/res), 按 id 对号
+
+    // ── ntfy 去中心化中继兜底(控制面): 独立订阅 role "s", 与各次 P2P 尝试解耦 → 重试不重开订阅。──
+    var relayWaiters = Object.create(null), relaySub = null;
+    function ensureRelaySub() {
+      if (relaySub) return;
+      var rreasm = makeReasm();
+      relaySub = subscribe(servers, topic, function (raw) {
+        rreasm(raw, async function (corr, role, full) {
+          if (role !== "s") return;                         // 中继兜底响应 (pong/res), 按 id 对号
           var r = await unseal(key, full);
           if (!r || !r.id) return;
           var rw = relayWaiters[r.id]; if (!rw) return; delete relayWaiters[r.id];
           if (r.t === "pong") rw.resolve({ pong: true, ts: r.ts });
           else if (r.t === "res") rw.resolve(r.result);
-          return;
-        }
-        if (role !== "a" || corr !== nonce || opened) return;   // 只认本次 offer 对应的 answer
-        var obj = await unseal(key, full);
-        if (!obj || obj.t !== "answer" || !obj.sdp) return;
-        try {
-          await pc.setRemoteDescription({ type: "answer", sdp: obj.sdp }); answered = true;
-          // 已收到应答 ⇒ 对端在线且信令通; 给 P2P 打洞一个较短宽限, 到点仍没开就判 ice_failed 提前降级,
-          //   不空等 WebRTC ~20s 的 connectionState=failed (能通常 <3s 就 open; 高效之中还有高效)。
-          setTimeout(function () { if (!opened && settle) settle.reject(new Error("ice_failed")); }, opts.p2pGraceMs || 4000);
-        } catch (e) {}
+        });
       });
-    });
-    function close() { try { sub.close(); } catch (e) {} try { if (dc) dc.close(); } catch (e) {} try { if (pc) pc.close(); } catch (e) {} }
-    // 路线 C-2 客户端: P2P 失败时复用同一 topic/订阅, 把 RPC/ping 经公共 ntfy mesh 中继往返。
+    }
+    // 路线 C-2 客户端: P2P 失败时把 RPC/ping 经公共 ntfy mesh 中继往返(独立订阅, 不依赖任何 P2P 尝试)。
     function buildRelayHandle() {
+      ensureRelaySub();
       var rseq = 0;
       function relaySend(t, frame, timeoutMs) {
         var TO = timeoutMs || 30000;
@@ -381,41 +382,117 @@
         });
       }
       return {
-        mode: "relay-ntfy", pc: null, dc: null, topic: topic, servers: servers, close: close,
+        mode: "relay-ntfy", pc: null, dc: null, topic: topic, servers: servers,
+        close: function () { try { if (relaySub) relaySub.close(); } catch (e) {} },
         rpc: function (frame) { return relaySend("rpc", frame, 30000); },
         ping: function () { var t0 = (typeof performance !== "undefined" ? performance.now() : Date.now()); return relaySend("ping", null, 8000).then(function () { return (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0; }); }
       };
     }
+
+    // ── 一次完整的 WebRTC offer/answer 直连尝试。extraIce: 额外 ICE(如 TURN); 为空即纯 STUN 顺畅路径。──
+    //   成功 resolve {pc,dc,rpc,ping,close}; 失败 reject(ice_failed/signal_timeout/p2p_failed) 并自清本次 pc/dc/订阅。
+    function attemptWebRTC(extraIce) {
+      return new Promise(function (resolveAttempt, rejectAttempt) {
+        var ice = baseIce.slice();
+        if (Array.isArray(extraIce)) extraIce.forEach(function (s) { if (s && s.urls) ice.push(s); });
+        var hasTurn = ice.some(function (s) { return /^turns?:/i.test(s.urls); });
+        var nonce = uid();
+        var pc = new RTCPeerConnection({ iceServers: ice, iceCandidatePoolSize: 2 });
+        var dc = pc.createDataChannel("rpc");
+        var seq = 0, waiters = Object.create(null);
+        // dcWire: 收到的(可能分片重组后的)应用消息按 id 对号回调; 发送侧自动对大载荷分片+背压。
+        var dcSend = dcWire(dc, function (m) {
+          if (!m) return;
+          var w = waiters[m.id]; if (!w) return; delete waiters[m.id];
+          if (m.t === "pong") w.resolve({ pong: true, ts: m.ts });
+          else if (m.t === "res") w.resolve(m.result);
+        });
+        function rpc(frame) {
+          return new Promise(function (resolve, reject) {
+            if (!dc || dc.readyState !== "open") return reject(new Error("datachannel not open"));
+            var id = String(++seq); waiters[id] = { resolve: resolve, reject: reject };
+            dcSend({ t: "rpc", id: id, frame: frame });
+            setTimeout(function () { if (waiters[id]) { delete waiters[id]; reject(new Error("timeout")); } }, 30000);
+          });
+        }
+        function ping() {
+          return new Promise(function (resolve, reject) {
+            var id = "p" + (++seq), t0 = (typeof performance !== "undefined" ? performance.now() : Date.now());
+            waiters[id] = { resolve: function () { resolve((typeof performance !== "undefined" ? performance.now() : Date.now()) - t0); }, reject: reject };
+            try { dcSend({ t: "ping", id: id }); } catch (e) { reject(e); }
+            setTimeout(function () { if (waiters[id]) { delete waiters[id]; reject(new Error("timeout")); } }, 5000);
+          });
+        }
+        function waitIce() {
+          return new Promise(function (res) {
+            if (pc.iceGatheringState === "complete") return res();
+            var done = false; function fin() { if (!done) { done = true; res(); } }
+            pc.addEventListener("icegatheringstatechange", function () { if (pc.iceGatheringState === "complete") fin(); });
+            // 纯 STUN: host+srflx 通常 <1s 到齐, 2.5s 封顶即发 offer; 有 TURN 时留 4.5s 等 relay 候选到齐。
+            setTimeout(fin, hasTurn ? 4500 : 2500);
+          });
+        }
+        var opened = false, answered = false, settled = false;
+        function closeAttempt() { try { sub.close(); } catch (e) {} try { if (dc) dc.close(); } catch (e) {} try { if (pc) pc.close(); } catch (e) {} }
+        function ok(v) { if (settled) return; settled = true; resolveAttempt(v); }
+        function fail(e) { if (settled) return; settled = true; closeAttempt(); rejectAttempt(e); }
+        dc.onopen = function () { opened = true; ok({ pc: pc, dc: dc, rpc: rpc, ping: ping, topic: topic, close: closeAttempt, viaTurn: hasTurn }); };
+        // 对端已应答(收到 answer)却仍 failed ⇒ ICE 打洞失败(NAT/防火墙), 与「压根没应答」区分开。
+        pc.onconnectionstatechange = function () { if (pc.connectionState === "failed" && !opened) fail(new Error(answered ? "ice_failed" : "p2p_failed")); };
+        var reasm = makeReasm();
+        var sub = subscribe(servers, topic, function (raw) {
+          reasm(raw, async function (corr, role, full) {
+            if (role !== "a" || corr !== nonce || opened) return;   // 只认本次 offer 对应的 answer
+            var obj = await unseal(key, full);
+            if (!obj || obj.t !== "answer" || !obj.sdp) return;
+            try {
+              await pc.setRemoteDescription({ type: "answer", sdp: obj.sdp }); answered = true;
+              // 已收到应答 ⇒ 对端在线且信令通; 给打洞一个宽限(有 TURN 时留更久等 relay 通道建立), 到点没开判 ice_failed 提前降级。
+              setTimeout(function () { if (!opened) fail(new Error("ice_failed")); }, opts.p2pGraceMs || (hasTurn ? 8000 : 4000));
+            } catch (e) {}
+          });
+        });
+        (async function () {
+          try {
+            var offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            await waitIce();
+            var turn = ice.filter(function (s) { return /^turns?:/i.test(s.urls); });   // 把 TURN 同步给应答方(双方对称配置才能 relay)
+            var payload = await seal(key, { t: "offer", nonce: nonce, sdp: pc.localDescription.sdp, ice: turn });
+            publish(servers, topic, frameChunks(nonce, "o", payload));
+            setTimeout(function () { if (!opened) publish(servers, topic, frameChunks(nonce, "o", payload)); }, 2500);   // 补发(公共 broker 偶丢首包/应答方刚上线)
+            // 等答超时只从「发出 offer」起算。answered 但超时 ⇒ ice_failed; 否则 signal_timeout(对端离线/token 不符)。
+            setTimeout(function () { if (!opened) fail(new Error(answered ? "ice_failed" : "signal_timeout")); }, opts.timeout || ANSWER_TIMEOUT);
+          } catch (e) { fail(e instanceof Error ? e : new Error(String(e))); }
+        })();
+      });
+    }
+
     // forceRelay: 已知 P2P 必不可达(对称 NAT/防火墙)时直接走去中心化中继, 省去 ICE 等待。
     if (opts.forceRelay) {
-      try { if (dc) dc.close(); } catch (_) {}
-      try { if (pc) pc.close(); } catch (_) {}
       var hr = buildRelayHandle();
       await hr.ping();   // 探活: 中继不通则抛 relay_timeout
       hr.forced = true; return hr;
     }
-    var offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await waitIce();
-    var turn = ice.filter(function (s) { return /^turns?:/i.test(s.urls); });
-    var payload = await seal(key, { t: "offer", nonce: nonce, sdp: pc.localDescription.sdp, ice: turn });
-    publish(servers, topic, frameChunks(nonce, "o", payload));
-    // 稍后补发一次 (公共 broker 偶发丢首包 / 应答方刚上线)
-    setTimeout(function () { if (!opened) publish(servers, topic, frameChunks(nonce, "o", payload)); }, 2500);
-    // 等答超时只从「发出 offer」起算 —— 此前 ICE 收集已占去数秒, 不该吃进等答窗口。
-    //   answered=true(已收到对端 answer)但仍超时 ⇒ ice_failed(建议填 TURN/隧道兜底); 否则 signal_timeout(对端离线/token 不符)。
-    setTimeout(function () { if (!opened && settle) settle.reject(new Error(answered ? "ice_failed" : "signal_timeout")); }, opts.timeout || ANSWER_TIMEOUT);
+    var turnEnabled = opts.turn !== false;
     try {
-      return await ready;
+      return await attemptWebRTC(null);                 // ① 纯 STUN 顺畅路径(零额外开销/零延迟)
     } catch (e) {
-      // P2P 直连失败(对称 NAT 打洞失败/对端在线却连不上)。relayFallback!==false 时自动降级到
-      //   去中心化 ntfy 中继兜底(控制面): 关掉没用上的 DC/PC, 复用同一订阅探活一次, 通则返回中继句柄。
-      if (opts.relayFallback === false) { close(); throw e; }
-      try { if (dc) dc.close(); } catch (_) {}
-      try { if (pc) pc.close(); } catch (_) {}
+      var msg = String(e && e.message || e);
+      // ② 仅当「对端在线但打洞失败」(ice_failed) 才取零账号 TURN 重试一次 —— 对称 NAT/CGNAT 全双工兜底,
+      //    远胜末位 ntfy 控制面中继(无 48KB 限制·dcWire 满速)。signal_timeout(对端离线/token 不符)取 TURN 无意义。
+      if (turnEnabled && msg === "ice_failed") {
+        var turnIce = await fetchTurnServers(opts).catch(function () { return []; });
+        if (turnIce && turnIce.length) {
+          try { var h2 = await attemptWebRTC(turnIce); h2.fellBackFrom = msg; return h2; }
+          catch (e2) { msg = String(e2 && e2.message || e2); }
+        }
+      }
+      // ③ 末位: ntfy 去中心化中继(控制面). relayFallback===false 时不降级, 原样抛错。
+      if (opts.relayFallback === false) throw e;
       var h = buildRelayHandle();
-      try { await h.ping(); h.fellBackFrom = String(e && e.message || e); return h; }
-      catch (e2) { close(); throw e; }
+      try { await h.ping(); h.fellBackFrom = msg; return h; }
+      catch (e3) { try { h.close(); } catch (_) {} throw e; }
     }
   }
 
@@ -425,7 +502,7 @@
     DEFAULT_SERVERS: DEFAULT_SERVERS.slice(),
     STUN: STUN.slice(),
     dcWire: dcWire,   // DataChannel 大载荷透明分片+背压 (供 p2p.js 应答方 / p2p-client.html 客户端复用)
-    // 纯函数测试面 (经 test/console-failover.test.js 验证去中心化信令的加密/分片不变量; 不改运行行为)
-    _internals: { deriveKey: deriveKey, seal: seal, unseal: unseal, normServers: normServers, frameChunks: frameChunks, dcWire: dcWire, DC_FRAME: DC_FRAME }
+    // 纯函数测试面 (经 test/console-failover.test.js 验证去中心化信令的加密/分片/TURN解析不变量; 不改运行行为)
+    _internals: { deriveKey: deriveKey, seal: seal, unseal: unseal, normServers: normServers, frameChunks: frameChunks, dcWire: dcWire, DC_FRAME: DC_FRAME, parseTurnRest: parseTurnRest }
   };
 })(typeof window !== "undefined" ? window : this);

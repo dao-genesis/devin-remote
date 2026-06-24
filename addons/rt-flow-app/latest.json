@@ -1,6 +1,6 @@
 {
-  "versionCode": 150,
-  "versionName": "0.37.46",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.46/DevinCloud-mobile-v0.37.46.apk",
-  "notes": "v0.37.46 · 久用卡顿·并发重页「数量上限闸」(LRU 丢弃) — 从结构上根治积极使用时的越用越卡\n• 病根(前四轮收的是各类单调累积的「慢泄漏」: 联控在场表/公网代理线程池/账号态 static 表/闲置账号标签整页卸载; 本轮收的是另一维度的「快积压」): 闲置卸载只在标签闲到 15/30 分钟才触发; 而积极使用时用户不停在多个账号/网页标签间来回切, 谁都到不了闲置阈值 → 全部 account/网页标签常驻为重型 Devin SPA(各自一份 V8 堆+合成层+定时器), acctLive 随「开了多少标签」线性无界增长 → 多张重页争抢同一渲染线程与内存 → GC 抖动/合成卡顿越用越重, 唯杀进程才清零。个别泄漏可逐个堵, 但「并发重页总数」本身才是主成本。\n• 解法(仿移动版 Chrome 的后台标签丢弃·道法自然·有界): 给后台常驻重型 WebView 数量「硬上限」(默认 5, 不含活动标签), 超了就按最久未访问(LRU)优先整页卸载换空壳, 选中即原样/按原账号重注鉴权重建 → 不论开多少标签, 并发重页恒有界 → 从结构上消除这一维度的累积, 对「到底哪个计数在涨」鲁棒。\n• 护栏(绝不打断工作集): 跳过 活动标签/内部板块页/已是空壳; 账号标签若正被联控观看/驱动则不动; 且仅丢弃闲置超阈值的(普通网页 90s·账号标签 5 分钟)→ 用户正来回切的标签(刚访问过)绝不被卸载重载, 只收割真正积压在后台的重页。前台保洁(每 3 分钟)与转后台重度保洁两路均接入。\n• 可观测: DAO_FLUENCY 足迹新增 lruEvict(累计 LRU 丢弃数) → 真机 `adb logcat -s DAO_FLUENCY` 即可确认上限闸在生效、acctLive 恒有界。\n— — —\nv0.37.45 · P2P 数据面提速·彻底超越 Worker(大载荷透明分片 dcWire+背压) + GFW 友好 STUN 扩容 + ICE 预热"
+  "versionCode": 151,
+  "versionName": "0.37.47",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.47/DevinCloud-mobile-v0.37.47.apk",
+  "notes": "v0.37.47 · P2P 零账号 TURN 全双工兜底 — 对称 NAT/CGNAT 下也能直连(彻底超越 Worker)\n• 病根: 仅 STUN 时, 对称 NAT/CGNAT(移动网络常见) 打洞必败, 旧实现只能降级到 ntfy 去中心中继(控制面·48KB 单响应上限·传不了大文件), 性能远逊 Worker。\n• 解法(道法自然·零额外开销): 顺畅路径仍纯 STUN(零延迟·零 TURN 开销); 仅当 STUN 直连确认失败(ice_failed·对端已应答但打洞不通)时, 自动向零账号 TURN-REST 端点(IETF draft-uberti·可自托管 rel/coturn)取临时凭证, 注入 ICE 重试一次 → 双方经 TURN relay 建立全双工 DataChannel(dcWire 满速·无 48KB 限制) → 硬 NAT 下也能大文件 P2P 直传, 性能完全超越 Worker。取不到 TURN 才走末位 ntfy 控制面中继。\n• 架构: connect() 重构为 attemptWebRTC(extraIce) + 三级降级(STUN直连→TURN全双工→ntfy控制面中继), relay 订阅独立于各次 P2P 尝试(重试不重开)。TURN 凭证带 TTL 缓存+单飞(连发不重取)。应答方(手机)经 offer payload 自动获得相同 TURN → 双方对称 relay 候选。\n• 护栏: opts.turn=false 可禁用 TURN; signal_timeout(对端离线)不取 TURN(无意义); 新增 parseTurnRest 纯函数+6 项单测(全绿)。\n— — —\nv0.37.46 · 久用卡顿·并发重页 LRU 上限闸"
 }
