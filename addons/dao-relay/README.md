@@ -41,7 +41,29 @@
 **可选私有模式**：部署时若 `wrangler secret put DAO_TOKEN`，则额外要求 connect/relay 所用 token 必须等于它 ——
 把整个中继锁给一个固定密钥（企业自托管）。不设 `DAO_TOKEN`（默认）= 开放配对，零账号即用。
 
-## 部署
+## 去中心化模型 —— 谁都不必依赖谁
+
+这条链路**对终端用户已是零账号**：手机 APK / dao-bridge 出站时自带随机 `(session, token)`，
+普通使用者**不需要任何 Cloudflare / GitHub 账号、不需要建 Token、不需要建 Worker**，开机即通。
+
+唯一的「中心」只是**中继 Worker 本身**跑在谁的 Cloudflare 账号上（默认是项目方共享的那一个，
+免费套餐、只过控制/鉴权字节，不承载渲染大头）。若你**不想依赖项目方那一个**，下面任选其一即可
+各自持有、互不依赖——**没有人是单点**：
+
+### A. 一键自建 · 零 Token（最省事，推荐给"想自己掌控"的用户）
+
+点这个按钮，授权 Cloudflare（顺带授权 GitHub 克隆本子目录），它会**自动**建好你**专属**的中继，
+全程**不用手搓 API Token、不用装 wrangler、不用域名**：
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/zhouyoukang1234-spec/devin-remote/tree/main/addons/dao-relay)
+
+> 子目录 `addons/dao-relay` 自包含（自带 `package.json`/`wrangler.toml`/`worker.js`/`public/`，
+> 无外部依赖），Cloudflare 会把它当独立仓库根克隆后构建部署。DO 用 `new_sqlite_classes`
+> 迁移 = **免费套餐即可**，无需 Workers Paid。
+
+部署完拿到你自己的 `https://dao-relay-do.<你的子域>.workers.dev`，填进下方任一入口即生效。
+
+### B. 命令行自建（CI / 批量 / 企业）
 
 ```bash
 cd addons/dao-relay
@@ -53,9 +75,14 @@ npx wrangler deploy
 # npx wrangler secret put DAO_TOKEN
 ```
 
+## 填进哪里
+
 部署后得到 `https://<name>.<account>.workers.dev`。把它填进：
+- **网页控制台**（`/console` 或 APK 内）→ 汉堡菜单 ⚙「接入设置」→「Endpoint」框，或
 - 浏览器扩展「内网穿透」板的「中继地址」，或
 - Termux agent 的 `DAO_RELAY` 环境变量。
+
+留空则用项目方默认中继（仍是零账号、可直接用）。
 
 ## 公网驱动示例
 

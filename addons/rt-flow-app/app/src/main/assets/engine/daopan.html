@@ -62,7 +62,7 @@ iframe{border:0;width:100%;height:100%;display:block;background:#0e1116}
   </div>
   <div class="body">
     <div class="view on" id="recentView">
-      <div class="tip">跨全部已解锁账号 · 近期更新对话 · 实时刷新 · <b>长按对话卡</b>拖到网页窗口(已备份秒拖)</div>
+      <div class="tip">跨全部已解锁账号 · 近期更新对话 · 实时刷新 · 上传两种方式: 点 <b>⬆ 传到当前页</b> 或 <b>抓 ⠿ 拖出本框落到网页</b></div>
       <div id="recentList"><div class="empty">加载中…</div></div>
     </div>
     <div class="view" id="backupView">
@@ -83,6 +83,9 @@ iframe{border:0;width:100%;height:100%;display:block;background:#0e1116}
 <script src="dao-zip.js"></script>
 <script>
 var N = window.Native || {};
+// 网页端(经归一外壳 blob iframe 注入 __rn 垫片)与 APK(真原生桥)分流: 网页端拖拽=拖到当前页上传,
+// APK 端保留原生跨应用拖拽(N.startConvDrag)。__rnReady 仅由网页端注入的垫片置真。
+var IS_WEB = !!(window.__rnReady || window.__RN_CFG);
 var REC = [];               // 聚合排序后的近期对话 [{acc,no,sid,title,status,t,s}]
 var CONV_TABS = [];         // 多标签查看: [{acc,sid,title,md,loading}]
 var CONV_ACTIVE = -1;
@@ -234,28 +237,52 @@ function renderRecent(){
   bindCards();
 }
 
-// ── 长按整张对话卡拖拽: 触发原生全局拖拽(两形态由原生侧据本地备份/产出文件决定)。
-//    在动作按钮区(.acts)起按不触发拖拽, 保证 查看/MD/全部文件 仍可点。 ──
+// ── 对话卡拖拽 (点击+拖拽两种上传方式并存) ──────────────────────────────────
+//   · 网页端: 抓 ⠿ 手柄(或长按卡身)拖起 → 拖出悬浮面板落到网页(当前 Devin 标签) = 上传到当前页,
+//             与「⬆ 传到当前页」按钮等效, 复用 uploadConv。触摸捕获使手指移出 iframe 仍持续回报坐标,
+//             据此判定"落在面板外"。父页(console.html)绘制全屏幽灵 + 落区高亮(纯视觉)。
+//   · APK 端: 保留长按 → 原生跨应用拖拽 N.startConvDrag(两形态由原生侧据本地备份/产出文件决定)。
+//   · 桌面(鼠标): 走 HTML5 原生拖拽(下方 dragstart): 可拖到地址栏/外部, 亦可拖到本页落区接住=上传。
+//   起按落在动作区(.acts)一律不触发拖拽, 保证 查看/进入/MD/全部文件 仍可点。
+function _recIdxBySid(sid){ for(var i=0;i<REC.length;i++){ if(REC[i].sid===sid) return i; } return -1; }
 function bindCards(){
   var cards=document.querySelectorAll(".rc[data-idx]");
   for(var i=0;i<cards.length;i++){ (function(card){
-    var timer=null, sx=0, sy=0;
+    var lpTimer=null, sx=0, sy=0, dragging=false;
     function onBtn(t){ return !!(t && t.closest && t.closest(".acts")); }
-    function start(x,y,t){ if(onBtn(t)) return; sx=x; sy=y; card.classList.add("drag-arm"); timer=setTimeout(function(){ card.classList.remove("drag-arm"); fireCard(card); }, 360); }
-    function cancel(){ if(timer){ clearTimeout(timer); timer=null; } card.classList.remove("drag-arm"); }
-    card.addEventListener("touchstart",function(e){ start(e.touches[0].clientX,e.touches[0].clientY,e.target); },{passive:true});
-    card.addEventListener("touchmove",function(e){ var t=e.touches[0]; if(Math.abs(t.clientX-sx)>12||Math.abs(t.clientY-sy)>12) cancel(); },{passive:true});
-    card.addEventListener("touchend",cancel);
-    card.addEventListener("touchcancel",cancel);
-    card.addEventListener("mousedown",function(e){ start(e.clientX,e.clientY,e.target); });
-    card.addEventListener("mouseup",cancel);
-    card.addEventListener("mouseleave",cancel);
-    // 网页端无原生拖拽桥(N.startConvDrag 仅 APK WebView 有): 用 HTML5 拖拽承载对话引用,
-    //   拖到地址栏/文本框/外部应用皆可; 拖拽载荷含会话 URL + 结构化 JSON, 供父页(同源反代的
-    //   Devin 标签)接住做上传。起拖落在 .acts 上不触发(保证按钮可点)。
+    function onGrip(t){ return !!(t && t.closest && t.closest(".grip")); }
+    function idx(){ return +card.getAttribute("data-idx"); }
+    function clearLp(){ if(lpTimer){ clearTimeout(lpTimer); lpTimer=null; } }
+    function post(m){ try{ parent.postMessage(m, "*"); }catch(e){} }
+    function reset(){ clearLp(); if(dragging){ dragging=false; post({ __rtflow:"daoCardDragEnd" }); } card.classList.remove("drag-arm"); }
+    function beginDrag(){ if(dragging) return; dragging=true; clearLp(); card.classList.remove("drag-arm");
+      var it=REC[idx()]; try{ N.vibrate && N.vibrate(18); }catch(e){}
+      post({ __rtflow:"daoCardDragStart", title:(it&&(it.title||it.sid))||"对话" }); }
+    function moveDrag(x,y){ if(dragging) post({ __rtflow:"daoCardDragMove", x:x, y:y, vw:window.innerWidth, vh:window.innerHeight }); }
+    function endDrag(x,y){ if(!dragging){ reset(); return; } dragging=false; post({ __rtflow:"daoCardDragEnd" });
+      // 落点移出本 iframe(拖出面板到网页) → "拖到当前页 = 上传", 与按钮同路
+      if(x<0||x>window.innerWidth||y<0||y>window.innerHeight) uploadConv(idx()); }
+
+    card.addEventListener("touchstart",function(e){
+      var t=e.target; if(onBtn(t)) return; var p=e.touches[0]; sx=p.clientX; sy=p.clientY;
+      if(IS_WEB){
+        if(onGrip(t)){ beginDrag(); }                 // ⠿ 手柄 touch-action:none → 直接拖, 不滚动
+        else { card.classList.add("drag-arm"); lpTimer=setTimeout(function(){ card.classList.remove("drag-arm"); beginDrag(); }, 300); }
+      } else {                                          // APK: 长按 → 原生拖拽
+        card.classList.add("drag-arm"); lpTimer=setTimeout(function(){ card.classList.remove("drag-arm"); fireCard(card); }, 360);
+      }
+    },{passive:true});
+    card.addEventListener("touchmove",function(e){ var p=e.touches[0];
+      if(dragging){ moveDrag(p.clientX,p.clientY); if(e.cancelable) e.preventDefault(); return; }
+      if(Math.abs(p.clientX-sx)>12||Math.abs(p.clientY-sy)>12){ clearLp(); card.classList.remove("drag-arm"); }   // 移动=滚动/取消长按
+    },{passive:false});
+    card.addEventListener("touchend",function(e){ if(dragging){ var p=(e.changedTouches&&e.changedTouches[0])||{clientX:sx,clientY:sy}; endDrag(p.clientX,p.clientY); } else reset(); });
+    card.addEventListener("touchcancel",reset);
+
+    // 桌面鼠标: HTML5 原生拖拽承载对话引用; 父页落区接住后据 sid 复用 uploadConv 上传。起拖落 .acts 不触发。
     card.addEventListener("dragstart",function(e){
       if(onBtn(e.target)){ try{ e.preventDefault(); }catch(x){} return; }
-      var idx=+card.getAttribute("data-idx"); var it=REC[idx]; if(!it){ return; }
+      var it=REC[idx()]; if(!it){ return; }
       var url="https://app.devin.ai/sessions/"+String(it.sid||"").replace(/^devin-/,"");
       var pay={ type:"conv", sid:it.sid, no:it.no, title:it.title||it.sid,
                 accEmail:(it.acc&&(it.acc.email||it.acc.id))||"", url:url };
@@ -265,11 +292,14 @@ function bindCards(){
         dt.setData("text/plain", (it.title||it.sid)+"\n"+url);
         dt.setData("application/x-dao-drag", JSON.stringify(pay));
       } }catch(x){}
-      try{ parent.postMessage({ __rtflow:"daoDragStart", payload:pay }, "*"); }catch(x){}
+      post({ __rtflow:"daoDragStart", payload:pay });
     });
-    card.addEventListener("dragend",function(){ try{ parent.postMessage({ __rtflow:"daoDragEnd" }, "*"); }catch(x){} });
+    card.addEventListener("dragend",function(){ post({ __rtflow:"daoDragEnd" }); });
   })(cards[i]); }
 }
+// 父页(桌面 HTML5 落区接住 / 触摸落区)回投 sid → 复用「传到当前页」上传路径
+window.addEventListener("message", function(ev){ var d=ev&&ev.data; if(!d||d.__rtflow!=="daoDoUploadBySid"||!d.sid) return;
+  var i=_recIdxBySid(d.sid); if(i>=0) uploadConv(i); else toast("该对话已不在列表 · 刷新后重试",true); });
 // ── ⬆ 传到当前页: 把本对话「完整记录 MD」经内网穿透取回, 交父页注入当前 Devin 标签的上传框 ──
 async function uploadConv(idx){
   var it=REC[idx]; if(!it) return; toast("取对话记录…");

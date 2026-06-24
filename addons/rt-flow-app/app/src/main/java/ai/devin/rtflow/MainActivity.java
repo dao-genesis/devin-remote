@@ -764,6 +764,39 @@ public class MainActivity extends AppCompatActivity {
         tabs.set(idx, fresh);
     }
 
+    /** 卸载长时间闲置的后台 Devin 账号标签 —— 「用久了越卡」最深一层根因的归一收口。
+     *  病根: Devin 是常驻重型 SPA, 其 WebView 的 V8 堆 + (含已脱离的) DOM 随长会话只增不减; 而 account 标签
+     *  此前被排除在唯一能真正回收这部分占用的「整页卸载」之外(unloadBackgroundTab 跳过 accountJson!=null) ——
+     *  施于它的 clearCache(false)/freeMemory 只清 RAM 缓存, 回收不了 V8 堆与脱离 DOM。多实例多账号各开一张
+     *  长生 Devin SPA → 数小时后这些重页主导占用 → GC 抖动/合成卡顿越用越重, 转后台亦不解(后台也只清缓存不卸载) →
+     *  唯有彻底杀进程重开才清零, 正是用户所述顽疾。修法: 闲置足够久且无人联控观看的后台账号标签也整页卸载换空壳,
+     *  保留 accountJson → 选中时 makeTab 的 document-start 注入按原账号重注 auth1、自动重登重建, 占用真正还给系统 →
+     *  账号标签占用亦恒有界。安全护栏: 仅 非活动 · 账号标签 · 有可重载 http(s) · 且无联控在场观看者(不打断正被远程
+     *  观看/驱动的实例)。阈值取得比普通网页更宽(账号标签更金贵), 仅在保洁周期触发。 */
+    private void unloadIdleAccountTab(int idx) {
+        if (idx < 0 || idx >= tabs.size() || idx == active) return;
+        Tab t = tabs.get(idx);
+        if (t.internal || t.accountJson == null || t.pendingReloadUrl != null) return;
+        String u = (t.url != null && !t.url.isEmpty()) ? t.url : null;
+        if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) return;
+        java.util.concurrent.ConcurrentHashMap<String,Long> vw = tabViewers.get(t.vid);
+        if (vw != null && !vw.isEmpty()) return;   // 正被联控观看/驱动 → 不卸载 (不打断远程实时操作)
+        boolean incognito = t.incognito, night = t.night;
+        String title = t.title, titleOverride = t.titleOverride, acct = t.accountJson;
+        long vid = t.vid, shownAt = t.lastShownAt;
+        try {
+            android.view.View host = t.swipe != null ? t.swipe : t.web;
+            if (host != null && host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
+            if (t.web != null) t.web.destroy();
+        } catch (Exception ignored) {}
+        Tab fresh = makeTab(acct, false);     // 保留 accountJson → document-start 注入按原账号重注 auth1, 重建即自动重登
+        tabs.remove(tabs.size() - 1);
+        fresh.incognito = incognito; fresh.night = night; fresh.vid = vid;   // 保留 vid → 联控/在场寻址连续
+        fresh.url = u; fresh.title = title; fresh.titleOverride = titleOverride; fresh.lastShownAt = shownAt;
+        fresh.pendingReloadUrl = u;           // selectTab 命中即按原账号重注鉴权重建
+        tabs.set(idx, fresh);
+    }
+
     private void go(String input) {
         if (input == null) return;
         String s = input.trim();
@@ -5063,6 +5096,7 @@ public class MainActivity extends AppCompatActivity {
     private static final long MEM_HYGIENE_MS = 180000;   // 前台每 3 分钟保洁一轮
     private static final long MEM_TRIM_IDLE_MS = 90000;  // 后台标签闲置超 90s 才做轻量释放 (避免快速来回切换的标签被反复清缓存)
     private static final long IDLE_UNLOAD_MS = 900000;   // 后台普通网页标签闲置超 15 分钟 → 整页卸载 (选中即原样重建)
+    private static final long ACCT_IDLE_UNLOAD_MS = 1800000; // 后台 Devin 账号标签闲置超 30 分钟(更金贵·阈值更宽) → 整页卸载, 选中即按原账号重注鉴权重建
     // ── 转后台后的「重度」内存保洁: 根治用户实测「即使超后台也没用·还是卡, 唯有放置几小时(等系统终于回收进程)才好」──
     //   病根延伸: 本应用常驻前台服务(RelayService)使进程长生不死 → 系统极少 LMK 整体回收 → 转后台时旧逻辑只
     //   pauseWeb(仅暂停渲染合成·不释放内存·不停 JS) 且把前台 memHygiene 取消, 后台遂「零回收」, 堆/缓存原样常驻;
@@ -5096,11 +5130,16 @@ public class MainActivity extends AppCompatActivity {
             try { t.web.clearCache(false); } catch (Exception ignored) {}
             try { t.web.freeMemory(); } catch (Exception ignored) {}
         }
+        long bgNow = System.currentTimeMillis();
         for (int i = tabs.size() - 1; i >= 0; i--) {
-            if (tabs.get(i).pendingReloadUrl != null) continue;
+            Tab t = tabs.get(i);
+            if (t.pendingReloadUrl != null) continue;
             unloadBackgroundTab(i);   // 内部已只对 非活动·非账号·非内部·http(s) 生效
+            // 闲置足够久的后台 Devin 账号标签也整页卸载 → 后台占用真正下降(不只清缓存), 治「扔后台也没用」。
+            if (t.accountJson != null && t.lastShownAt > 0 && (bgNow - t.lastShownAt) > ACCT_IDLE_UNLOAD_MS)
+                unloadIdleAccountTab(i);
         }
-        pruneViewers(System.currentTimeMillis());
+        pruneViewers(bgNow);
         pruneAccountMaps();
         logFootprint("bg");
     }
@@ -5121,6 +5160,8 @@ public class MainActivity extends AppCompatActivity {
             Tab t = tabs.get(i);
             if (t.pendingReloadUrl != null) continue;
             if (t.lastShownAt > 0 && (now - t.lastShownAt) > IDLE_UNLOAD_MS) unloadBackgroundTab(i);
+            // 长时间未访问的后台 Devin 账号标签整页卸载(无人联控时) → 真正回收其 V8 堆/DOM, 根治账号标签侧「越用越卡」。
+            else if (t.accountJson != null && t.lastShownAt > 0 && (now - t.lastShownAt) > ACCT_IDLE_UNLOAD_MS) unloadIdleAccountTab(i);
         }
         // 活动标签长会话 RAM 缓存有界化: 旧逻辑前台保洁绝不碰活动标签 → 久居同一板块(如切号板持续轮询额度)
         //   其 RAM 缓存只增不减, 是「用久了越用越卡」在前台的另一来源。这里仅清 RAM 缓存(clearCache(false) 不含磁盘)
@@ -5187,10 +5228,14 @@ public class MainActivity extends AppCompatActivity {
             long natKb = android.os.Debug.getNativeHeapAllocatedSize() / 1024;
             Runtime rt = Runtime.getRuntime();
             long javaKb = (rt.totalMemory() - rt.freeMemory()) / 1024;
-            int parked = 0, shells = 0;
-            for (int i = 0; i < tabs.size(); i++) { if (tabs.get(i).pendingReloadUrl != null) shells++; else if (i != active) parked++; }
+            int parked = 0, shells = 0, acctLive = 0;
+            for (int i = 0; i < tabs.size(); i++) {
+                Tab t = tabs.get(i);
+                if (t.pendingReloadUrl != null) shells++; else if (i != active) parked++;
+                if (t.accountJson != null && t.pendingReloadUrl == null) acctLive++;   // 仍持活 WebView 的账号标签数 → 应随闲置卸载而恒有界
+            }
             android.util.Log.i(FL, "footprint[" + phase + "] tabs=" + tabs.size() + " parked=" + parked
-                    + " shells=" + shells + " viewers=" + tabViewers.size()
+                    + " shells=" + shells + " acctLive=" + acctLive + " viewers=" + tabViewers.size()
                     + " acctSt=" + sTabStatus.size() + " acctUsd=" + sTabDollars.size()
                     + " nativeKB=" + natKb + " javaKB=" + javaKb);
         } catch (Exception ignored) {}
