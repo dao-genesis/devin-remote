@@ -5101,6 +5101,7 @@ public class MainActivity extends AppCompatActivity {
             unloadBackgroundTab(i);   // 内部已只对 非活动·非账号·非内部·http(s) 生效
         }
         pruneViewers(System.currentTimeMillis());
+        pruneAccountMaps();
         logFootprint("bg");
     }
     /** 前台主动内存保洁 (只动非活动后台标签)。轻量释放普遍适用; 长时间未访问的普通网页标签整页卸载以真正回收堆。 */
@@ -5133,6 +5134,7 @@ public class MainActivity extends AppCompatActivity {
             activeTabCacheTs = now;
         }
         pruneViewers(now);
+        pruneAccountMaps();
         logFootprint("fg");
     }
 
@@ -5154,6 +5156,30 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
     }
 
+    /** 账号实时态静态表保洁: sTabStatus/sTabDollars 是 static(随进程恒存·跨 Activity 重建不灭), 由切号面板轮询每个
+     *  账号即 put 一项却从不按账号离场回收 → 久用(尤其多账号反复轮询)单调累积的慢泄漏。这里随内存保洁周期把两表
+     *  收敛到「当前仍打开的账号标签」对应的键(id 与 email·小写), 已无对应打开标签的陈旧账号态整项删 → 恒有界。 */
+    private void pruneAccountMaps() {
+        try {
+            java.util.HashSet<String> live = new java.util.HashSet<>();
+            for (int i = 0; i < tabs.size(); i++) {
+                String aj = tabs.get(i).accountJson;
+                if (aj == null) continue;
+                try {
+                    JSONObject a = new JSONObject(aj);
+                    String id = a.optString("id", "");
+                    String email = a.optString("email", "");
+                    if (!id.isEmpty()) { live.add(id); live.add(id.toLowerCase()); }
+                    if (!email.isEmpty()) { live.add(email); live.add(email.toLowerCase()); }
+                } catch (Exception ignored) {}
+            }
+            java.util.Iterator<java.util.Map.Entry<String, String[]>> st = sTabStatus.entrySet().iterator();
+            while (st.hasNext()) if (!live.contains(st.next().getKey())) st.remove();
+            java.util.Iterator<java.util.Map.Entry<String, String>> dl = sTabDollars.entrySet().iterator();
+            while (dl.hasNext()) if (!live.contains(dl.next().getKey())) dl.remove();
+        } catch (Exception ignored) {}
+    }
+
     /** 长会话内存足迹诊断: 每轮保洁打一行 native/dalvik 堆与标签数到 logcat(tag DAO_FLUENCY)。开销极低(纯 Java 计数),
      *  真机经 `adb logcat -s DAO_FLUENCY` 即可定位「用久了越卡」到底是哪类占用单调爬升 → 把根因从猜测变为可观测。 */
     private void logFootprint(String phase) {
@@ -5165,6 +5191,7 @@ public class MainActivity extends AppCompatActivity {
             for (int i = 0; i < tabs.size(); i++) { if (tabs.get(i).pendingReloadUrl != null) shells++; else if (i != active) parked++; }
             android.util.Log.i(FL, "footprint[" + phase + "] tabs=" + tabs.size() + " parked=" + parked
                     + " shells=" + shells + " viewers=" + tabViewers.size()
+                    + " acctSt=" + sTabStatus.size() + " acctUsd=" + sTabDollars.size()
                     + " nativeKB=" + natKb + " javaKB=" + javaKb);
         } catch (Exception ignored) {}
     }
