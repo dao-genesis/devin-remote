@@ -5663,6 +5663,9 @@ public class MainActivity extends AppCompatActivity {
     private android.graphics.Canvas mirrorScaledCanvas;
     private int mirrorScaledW = 0, mirrorScaledH = 0;
     private android.graphics.Paint mirrorScalePaint;  // 双线性过滤的缩图画笔 (与 createScaledBitmap(filter=true) 同等画质)
+    private ByteArrayOutputStream mirrorBos;          // 复用的 JPEG 编码缓冲 (每帧 reset 复用底层 byte[], 免每帧重建+扩容)
+    private final android.graphics.Rect mirrorSrcRect = new android.graphics.Rect();  // 复用: 降采样 src 矩形
+    private final android.graphics.Rect mirrorDstRect = new android.graphics.Rect();  // 复用: 降采样 dst 矩形
     private volatile long lastMirrorAtMs = 0;        // 最近取镜像帧时刻 (闲置即释放缓冲)
     private static final long MIRROR_BUF_IDLE_MS = 8000;   // 镜像停止 8s 后释放复用缓冲
     /** 镜像缓冲闲置释放: 停止取帧超 MIRROR_BUF_IDLE_MS 即回收满屏+缩图两块缓冲, 不再常驻。UI 线程调用。 */
@@ -5673,6 +5676,7 @@ public class MainActivity extends AppCompatActivity {
         try { if (mirrorScaledBuf != null && !mirrorScaledBuf.isRecycled()) mirrorScaledBuf.recycle(); } catch (Exception ignored) {}
         mirrorBuf = null; mirrorCanvas = null; mirrorBufW = 0; mirrorBufH = 0;
         mirrorScaledBuf = null; mirrorScaledCanvas = null; mirrorScaledW = 0; mirrorScaledH = 0;
+        mirrorBos = null;   // 释放编码缓冲底层 byte[] (久无联控不常驻)
     }
 
     // ── 投屏镜像 (任意公网/局域网浏览器实时镜像并反向操控某原生标签) ─────────────
@@ -5725,15 +5729,16 @@ public class MainActivity extends AppCompatActivity {
                 mirrorScaledW = sw; mirrorScaledH = sh;
             }
             if (mirrorScalePaint == null) mirrorScalePaint = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
-            // 满幅 dst 覆盖整块 → 无上帧残留; 双线性过滤与 createScaledBitmap(filter=true) 同质。
-            mirrorScaledCanvas.drawBitmap(bmp, new android.graphics.Rect(0, 0, w, h), new android.graphics.Rect(0, 0, sw, sh), mirrorScalePaint);
+            // 满幅 dst 覆盖整块 → 无上帧残留; 双线性过滤与 createScaledBitmap(filter=true) 同质。矩形复用免每帧新建。
+            mirrorSrcRect.set(0, 0, w, h); mirrorDstRect.set(0, 0, sw, sh);
+            mirrorScaledCanvas.drawBitmap(bmp, mirrorSrcRect, mirrorDstRect, mirrorScalePaint);
             shot = mirrorScaledBuf;
         }
         int bw = shot.getWidth(), bh = shot.getHeight();
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        shot.compress(android.graphics.Bitmap.CompressFormat.JPEG, Math.max(20, Math.min(90, quality)), bos);
+        if (mirrorBos == null) mirrorBos = new ByteArrayOutputStream(); else mirrorBos.reset();   // 复用编码缓冲: reset 保留底层 byte[], 免每帧重建+扩容
+        shot.compress(android.graphics.Bitmap.CompressFormat.JPEG, Math.max(20, Math.min(90, quality)), mirrorBos);
         // bmp / mirrorScaledBuf 均为复用缓冲 → 不每帧回收, 统一于闲置时释放。
-        String b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
+        String b64 = android.util.Base64.encodeToString(mirrorBos.toByteArray(), android.util.Base64.NO_WRAP);
         JSONObject o = new JSONObject();
         o.put("ok", true); o.put("jpeg", b64); o.put("w", bw); o.put("h", bh);
         o.put("url", t.web.getUrl() == null ? "" : t.web.getUrl());
