@@ -120,6 +120,25 @@ def _enum_top_windows():
     user32.EnumWindows(WNDENUMPROC(cb), 0)
     return out  # EnumWindows yields front-to-back
 
+# Transient popups (context menus, combo dropdowns, autosuggest, tooltips) are SEPARATE
+# top-level windows, NOT children of the active window -> tree-based find() can't see them.
+# Detecting them cheaply by window class is the "a menu popped up" signal.
+POPUP_CLASSES = ('#32768', 'ComboLBox', 'Auto-Suggest Dropdown', 'DropDown', 'tooltips_class32')
+
+def _popup_windows():
+    out = []
+    for hwnd, l, t, w, h in _enum_top_windows():
+        c = _cls(hwnd)
+        if c in POPUP_CLASSES:
+            out.append({'hwnd': int(hwnd), 'class': c, 'rect': [l, t, l + w, t + h]})
+    return out
+
+def _menu_open():
+    for p in _popup_windows():
+        if p['class'] == '#32768':
+            return p
+    return None
+
 def _capture_printwindow(w, h):
     hdc_screen = user32.GetDC(0)
     comp_dc = gdi32.CreateCompatibleDC(hdc_screen)
@@ -953,6 +972,28 @@ def _coarse_visual(region=None, cols=16, rows=16, frame=None):
         l, t, r, b = 0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
     return _grid_dhash(l, t, r, b, cols, rows, frame)
 
+def _region_gray(region=None, cols=12, rows=10, frame=None):
+    """Flat list of block-averaged cell grays for a region (or whole screen). Used as the
+    change-detection baseline: comparing absolute cell means with a threshold catches changes
+    that dHash misses -- scrolling text preserves left/right brightness ORDER (dHash bits don't
+    flip) yet every cell's mean shifts, so a mean-diff sees the scroll. This is what
+    where_changed uses, unified into act()'s verification."""
+    if region:
+        l, t, r, b = region
+    else:
+        l, t, r, b = 0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    g = _grid_gray(l, t, r, b, cols, rows, frame)
+    return [v for row in g for v in row]
+
+def _grays_differ(pre, region, thr=12):
+    """True iff any cell mean moved >= thr between the pre baseline and now (block-averaged)."""
+    if pre is None:
+        return None
+    cur = _region_gray(region)
+    if len(cur) != len(pre):
+        return True
+    return any(abs(c - p) >= thr for c, p in zip(cur, pre))
+
 def _crop_png(l, t, r, b):
     """PNG of just one screen rectangle (the surprising region) -- escalation payload only."""
     w, h, row_size, raw = _capture_bgr()
@@ -1026,6 +1067,8 @@ def observe(body):
         out['screen_hash'] = _coarse_visual()
     if body.get('tiles'):
         out['tiles'] = _tile_grid(reg, int(body.get('cols', 16)), int(body.get('rows', 16)))
+    if body.get('popups'):
+        out['popups'] = _popup_windows()
     return out
 
 def region_hash_rect(rect):
@@ -1085,7 +1128,8 @@ def wait_change(body):
     return {'ok': True, 'changed': False, 'sig': state_sig(), 'waited': timeout}
 
 # --- expectation evaluation (all LOCAL, no LLM, no full screenshot) ---
-def _eval_expect(expect, pre, pre_rh, rect, pre_visual=None, visual_region=None):
+def _eval_expect(expect, pre, pre_rh, rect, pre_visual=None, visual_region=None,
+                 pre_gray=None, pre_gray_vis=None):
     """Return (matched, reasons). expect is a dict of predicates, all AND-combined.
 
     'changed' is tree-first but auto-falls back to a coarse visual hash (pre_visual): canvas /
@@ -1102,6 +1146,8 @@ def _eval_expect(expect, pre, pre_rh, rect, pre_visual=None, visual_region=None)
             vis_changed = None
             if pre_visual is not None:
                 vis_changed = _coarse_visual(region=visual_region) != pre_visual
+            if not vis_changed and pre_gray_vis is not None:
+                vis_changed = _grays_differ(pre_gray_vis, visual_region)
             any_changed = tree_changed or bool(vis_changed)
             r = any_changed == bool(val)
             via = 'tree' if tree_changed else ('visual' if vis_changed else 'none')
@@ -1116,9 +1162,15 @@ def _eval_expect(expect, pre, pre_rh, rect, pre_visual=None, visual_region=None)
             r = val.lower() in (post['focus_class'] or '').lower()
         elif key == 'focus_text':
             r = val.lower() in (post['focus_text'] or '').lower()
+        elif key == 'menu_open':
+            r = bool(_menu_open()) == bool(val)
         elif key in ('appears', 'disappears'):
             q = val if isinstance(val, dict) else {'text': val}
             found = bool(find_in_root(int(fg or 0), q))
+            if not found and isinstance(val, (str, dict)):  # also scan transient popups
+                for p in _popup_windows():
+                    if find_in_root(p['hwnd'], q):
+                        found = True; break
             r = found if key == 'appears' else (not found)
         elif key == 'value':
             sel = dict(val); equals = sel.pop('equals', None); contains = sel.pop('contains', None)
@@ -1128,7 +1180,9 @@ def _eval_expect(expect, pre, pre_rh, rect, pre_visual=None, visual_region=None)
                 (contains.lower() in (txt or '').lower() if contains is not None else bool(els))
         elif key in ('region_changed', 'region_stable'):
             rr = val if isinstance(val, (list, tuple)) else rect
-            changed = (_grid_dhash(*rr) != pre_rh) if (rr and pre_rh is not None) else None
+            ch_d = (_grid_dhash(*rr) != pre_rh) if (rr and pre_rh is not None) else None
+            ch_t = _grays_differ(pre_gray, rr) if (rr and pre_gray is not None) else None
+            changed = None if (ch_d is None and ch_t is None) else (bool(ch_d) or bool(ch_t))
             r = (changed is True) if key == 'region_changed' else (changed is False)
         else:
             r = True  # unknown predicate => non-blocking
@@ -1188,11 +1242,14 @@ def act(body):
         watch = expect['region_changed']
     pre = state_sig()
     pre_rh = _grid_dhash(*watch) if watch else None
+    pre_gray = _region_gray(watch) if watch else None
     # visual fallback baseline for 'changed' (target region if known, else whole screen)
     vis_region = (watch or rect) if (watch or rect) else None
     pre_visual = _coarse_visual(region=vis_region) if 'changed' in expect else None
+    pre_gray_vis = _region_gray(vis_region) if 'changed' in expect else None
     _do_op(op, x, y, body)
-    matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect, pre_visual, vis_region)
+    matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect, pre_visual, vis_region,
+                                    pre_gray, pre_gray_vis)
     attempts = 1; ladder = []
     # reflex ladder: the human "no reaction -> click/double-click/retry again" instinct
     while not matched and attempts <= max_retry:
@@ -1221,7 +1278,8 @@ def act(body):
         else:
             strat = 'wait'; time.sleep(0.15)
         ladder.append(strat)
-        matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect, pre_visual, vis_region)
+        matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect, pre_visual, vis_region,
+                                        pre_gray, pre_gray_vis)
         attempts += 1
     res = {'ok': True, 'matched': matched, 'op': op, 'attempts': attempts,
            'reflex': ladder, 'reasons': reasons, 'target_xy': [x, y] if x is not None else None}
