@@ -338,6 +338,7 @@ def flow_probe(body):
         l, t, rr, b = region
         px_w = (rr - l) / max(1, cols); px_h = (b - t) / max(1, rows)
         out['flow'] = _vmodel.flow_axis(frames, cols, rows, px_w, px_h)
+        out['motion'] = _vmodel.motion_signature(frames, cols, rows, px_w, px_h)
         out['change'] = {k: _vmodel.change_descriptor(frames[0], frames[-1], cols, rows)[k]
                          for k in ('mag', 'cx', 'cy')}
     return out
@@ -1408,7 +1409,17 @@ def act(body):
     vis_region = (watch or rect) if (watch or rect) else None
     pre_visual = _coarse_visual(region=vis_region) if 'changed' in expect_pred else None
     pre_gray_vis = _region_gray(vis_region) if 'changed' in expect_pred else None
-    _do_op(op, x, y, body)
+    # round-26: for a DRAG that asserts an effect, capture sub-frames WHILE the button is held and
+    # distil the action->response motion signature (dyn). Threaded into verify/calibrate it becomes a
+    # second key dimension that tells a translating surface (pan) from a rotating one (orbit) a priori,
+    # even when every static appearance descriptor reads them as the same surface.
+    dyn_sig = None
+    if eff is not None and op == 'drag' and _vmodel is not None and eff_region and body.get('x2') is not None:
+        l_, t_, r_, b_ = eff_region
+        frames = drag_sampled(x, y, int(body['x2']), int(body['y2']), eff_region, 16, 16, samples=10)
+        dyn_sig = _vmodel.motion_signature(frames, 16, 16, (r_ - l_) / 16.0, (b_ - t_) / 16.0).get('sig')
+    else:
+        _do_op(op, x, y, body)
     matched, reasons = _eval_expect(expect_pred, pre, pre_rh, watch or rect, pre_visual, vis_region,
                                     pre_gray, pre_gray_vis)
     eff_res = None
@@ -1422,7 +1433,7 @@ def act(body):
         cal_ctx = _vmodel.context_radial(pre_eff, 16, 16)
         akey = eff.get('action') or op
         wm = _wm()
-        v = wm.verify(akey, ctx, obs, cal_ctx=cal_ctx)
+        v = wm.verify(akey, ctx, obs, cal_ctx=cal_ctx, dyn=dyn_sig)
         if eff.get('learn', True):
             wm.record(akey, ctx, obs); wm.save()
         # round-24/25 active-inference calibration. The verifying drag already MEASURED this surface's
@@ -1436,11 +1447,11 @@ def act(body):
                  and ((not v.get('gain_known'))
                       or (v.get('calibrated') and float(v.get('mag_ratio', 0.0)) > 0.5)))
         if eff.get('calibrate', True) and recal:
-            wm.calibrate(akey, ctx, obs, cal_ctx=cal_ctx); wm.save()
+            wm.calibrate(akey, ctx, obs, cal_ctx=cal_ctx, dyn=dyn_sig); wm.save()
         conf, esc = _vmodel.escalation_decision(v)
         eff_res = {'action': akey, 'region': list(eff_region),
                    'obs': {'mag': obs['mag'], 'cx': obs['cx'], 'cy': obs['cy']},
-                   'confidence': conf, 'escalate': esc, **v}
+                   'dyn': dyn_sig, 'confidence': conf, 'escalate': esc, **v}
         if v.get('known'):
             matched = matched and bool(v.get('match'))  # known mismatch is a real prediction error
         reasons.append('effect=%s(%s,%s)' % ('ok' if v.get('match') else ('novel' if not v.get('known')

@@ -185,6 +185,70 @@ def flow_axis(frames, cols, rows, px_w=1.0, px_h=1.0):
     return {'axis': round(axis, 3), 'sx': round(sx, 2), 'sy': round(sy, 2), 'pairs': pairs}
 
 
+def _ssd_shift(pre, cur, cols, rows, dx, dy):
+    """Sum of squared differences between cur and pre shifted by (dx,dy), over the overlap only,
+    returned as a per-pixel mean (so different overlap sizes stay comparable)."""
+    ss = 0.0; n = 0
+    for j in range(rows):
+        jj = j - dy
+        if jj < 0 or jj >= rows:
+            continue
+        for i in range(cols):
+            ii = i - dx
+            if ii < 0 or ii >= cols:
+                continue
+            d = cur[j * cols + i] - pre[jj * cols + ii]
+            ss += d * d; n += 1
+    return (ss / n) if n else None
+
+
+def motion_signature(frames, cols, rows, px_w=1.0, px_h=1.0, search=5):
+    """The action->response DYNAMIC signature (round-26): does ONE rigid global shift re-align the
+    frame after the gesture, or not?
+
+    Round-25 proved no static appearance key can separate look-alike surfaces (orbit and pan are nearly
+    identical snapshots: every static descriptor reads cross-cosine >= 0.96), so a gain calibration
+    keyed on appearance leaks between them and had to be healed AFTER the fact. What truly tells them
+    apart is HOW THEY RESPOND to the same drag: a panned grid TRANSLATES rigidly, so a single global
+    shift maps one sub-frame onto the next; an orbited cube ROTATES, so no single shift re-aligns it.
+
+    Two earlier flow models were built and MEASURED to fail here, and the failures shaped this design:
+    (1) per-block Lucas-Kanade gave residual-dominated noise on the sparse wireframe (orbit~pan dynamic
+    cosine 0.962, no better than static); (2) a global differential affine fit collapsed because the
+    per-sub-frame displacement is supra-pixel (~1.4 cells), which violates the brightness-constancy
+    linearisation -- translation explained ~0 for BOTH. The honest fix is a NON-differential test:
+    block-match. For each consecutive sub-frame pair we search integer shifts in +/- `search` cells for
+    the one minimising SSD, and read coherence = 1 - SSD_best / SSD_zero (how much a rigid shift reduces
+    misalignment, weighted by motion amount). A pan re-aligns almost perfectly (coherence -> 1); an orbit
+    barely improves (coherence -> 0). The signature is the L2-normalised pair [coherence, incoherence]:
+    a pan points to ~[1,0], an orbit to ~[0,1], so their cosine collapses well below the gain-borrow
+    threshold. As a second dimension of the calibration key this separates orbit from pan a priori, so a
+    gain is borrowed only across surfaces that both LOOK and MOVE alike -- no post-hoc self-heal."""
+    coh_w = 0.0; w_sum = 0.0; sdx = 0.0; sdy = 0.0; pairs = 0
+    for k in range(1, len(frames)):
+        pre = frames[k - 1]; cur = frames[k]
+        base = _ssd_shift(pre, cur, cols, rows, 0, 0)
+        if base is None or base < 1e-6:
+            continue
+        best = base; bdx = 0; bdy = 0
+        for dy in range(-search, search + 1):
+            for dx in range(-search, search + 1):
+                if dx == 0 and dy == 0:
+                    continue
+                ss = _ssd_shift(pre, cur, cols, rows, dx, dy)
+                if ss is not None and ss < best:
+                    best = ss; bdx = dx; bdy = dy
+        coh = max(0.0, 1.0 - best / base)
+        coh_w += coh * base; w_sum += base; sdx += bdx * base; sdy += bdy * base; pairs += 1
+    empty = {'sig': [0.0, 0.0], 'coherence': 0.0, 'shift': [0.0, 0.0], 'pairs': pairs}
+    if w_sum <= 0 or pairs == 0:
+        return empty
+    coh = coh_w / w_sum
+    return {'sig': [round(x, 4) for x in _l2([coh, max(0.0, 1.0 - coh)])],
+            'coherence': round(coh, 3), 'shift': [round(sdx / w_sum, 2), round(sdy / w_sum, 2)],
+            'pairs': pairs}
+
+
 def change_descriptor(pre, cur, cols, rows, out=4):
     """Describe the local visual change between two gray grids: how much (mag), where (centroid),
     a magnitude fingerprint 'fp' (down-pooled |delta|, says SOMETHING happened here), and a SIGNED
@@ -239,8 +303,8 @@ class WorldModel:
     def record(self, action_key, ctx, desc):
         self.ep.append({'a': action_key, 'ctx': ctx, 'd': desc})
 
-    def calibrate(self, action_key, ctx, obs, cal_ctx=None):
-        """Record this surface's LOCAL GAIN for an action from a single observation (round-24/25).
+    def calibrate(self, action_key, ctx, obs, cal_ctx=None, dyn=None):
+        """Record this surface's LOCAL GAIN for an action from a single observation (round-24/25/26).
 
         Round-23 proved magnitude is surface-specific gain, so cross-surface transfer can only trust
         the gain-invariant footprint and must flag gain_known=False. But the act of verifying ALREADY
@@ -251,20 +315,38 @@ class WorldModel:
 
         Round-25: the calibration is keyed on `cal_ctx`, a MOTION-INVARIANT descriptor (context_radial),
         not the spatially-rigid context_fp -- so a measured gain survives the surface transforming
-        ITSELF (a spinning orbit cube, a sliding pan map), which round-24 could not. We keep only the
-        most recent calibration per surface (deduped by that invariant key) so the gain tracks it."""
+        ITSELF (a spinning orbit cube, a sliding pan map), which round-24 could not.
+
+        Round-26: an optional `dyn` (the action->response motion_signature) becomes a SECOND dimension
+        of the key. The radial key cannot tell look-alike surfaces apart (orbit vs pan), but their
+        DYNAMICS differ, so two surfaces that look alike but move differently now get DISTINCT entries
+        (dedup requires both the static key AND the dynamic signature to agree) and a gain is reused
+        across an encounter only when BOTH match -- separating orbit from pan a priori, no self-heal."""
         key = cal_ctx if cal_ctx is not None else ctx
         self.cal = [c for c in self.cal
-                    if not (c.get('a') == action_key and cos(key, c.get('ctx') or []) >= 0.98)]
-        self.cal.append({'a': action_key, 'ctx': key, 'gain': obs['mag']})
+                    if not (c.get('a') == action_key and cos(key, c.get('ctx') or []) >= 0.98
+                            and (dyn is None or not c.get('dyn') or cos(dyn, c.get('dyn')) >= 0.9))]
+        rec = {'a': action_key, 'ctx': key, 'gain': obs['mag']}
+        if dyn is not None:
+            rec['dyn'] = dyn
+        self.cal.append(rec)
 
-    def _best_cal(self, action_key, ctx):
-        """Nearest stored gain calibration for this action: (gain, ctx_cosine) or (None, 0.0)."""
+    def _best_cal(self, action_key, ctx, dyn=None):
+        """Nearest stored gain calibration for this action: (gain, combined_sim) or (None, 0.0).
+
+        Round-26: when both the query and a stored calibration carry a motion signature `dyn`, the
+        match similarity is the WEAKER of the static (appearance) and dynamic (action->response)
+        cosines -- so a stored orbit gain (rotational dyn) will NOT be borrowed by a pan probe
+        (translational dyn) even though their appearance keys are near-identical. Backward compatible:
+        if either side lacks `dyn`, similarity is the static cosine alone (round-25 behaviour)."""
         best = None; bs = -1.0
         for c in self.cal:
             if c.get('a') != action_key:
                 continue
             s = cos(ctx, c.get('ctx') or []) if ctx is not None else 1.0
+            cdyn = c.get('dyn')
+            if dyn is not None and cdyn:
+                s = min(s, cos(dyn, cdyn))
             if s > bs:
                 bs = s; best = c
         return (best['gain'], bs) if best is not None else (None, 0.0)
@@ -276,7 +358,7 @@ class WorldModel:
     def seen(self, action_key):
         return sum(1 for e in self.ep if e['a'] == action_key)
 
-    def predict(self, action_key, ctx=None, cal_ctx=None, k=8, cal_thr=0.6):
+    def predict(self, action_key, ctx=None, cal_ctx=None, dyn=None, k=8, cal_thr=0.6):
         """Expected change descriptor for an action in a context: context-weighted average of the
         fingerprints/magnitudes of past episodes with that action. None if never seen.
 
@@ -312,14 +394,14 @@ class WorldModel:
         cal_gain, cal_sim = (None, 0.0)
         cal_key = cal_ctx if cal_ctx is not None else ctx
         if cal_key is not None and self.cal:
-            cal_gain, cal_sim = self._best_cal(action_key, cal_key)
+            cal_gain, cal_sim = self._best_cal(action_key, cal_key, dyn=dyn)
         calibrated = cal_gain is not None and cal_sim >= cal_thr
         if calibrated:
             pred['mag'] = cal_gain
         pred['calibrated'] = calibrated; pred['cal_sim'] = round(cal_sim, 3)
         return pred
 
-    def verify(self, action_key, ctx, obs, cal_ctx=None, fp_thr=0.8, mag_tol=0.5, locus_tol=0.18, mag_floor=0.0):
+    def verify(self, action_key, ctx, obs, cal_ctx=None, dyn=None, fp_thr=0.8, mag_tol=0.5, locus_tol=0.18, mag_floor=0.0):
         """Score an observed outcome against the learned expectation for this action, using only the
         features practice proved PHASE-STABLE: magnitude (how much), fp (the |delta| footprint), and
         centroid (where). 'present' = an effect of the expected footprint occurred; 'match' also
@@ -343,7 +425,7 @@ class WorldModel:
         delta is phase-DEPENDENT and anisotropy tracks object shape not motion. So 'direction' is
         reported advisory-only (sfp_sim/aniso_diff); deciding it needs temporal/flow or a vision
         escalation. known=False (novel action) is itself the genuine-surprise/escalation signal."""
-        pred = self.predict(action_key, ctx, cal_ctx=cal_ctx)
+        pred = self.predict(action_key, ctx, cal_ctx=cal_ctx, dyn=dyn)
         if pred is None:
             return {'known': False, 'match': False, 'reason': 'novel-action'}
         fp_sim = cos(pred['fp'], obs['fp'])
