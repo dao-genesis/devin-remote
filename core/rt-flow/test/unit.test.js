@@ -572,6 +572,15 @@ function test(name, fn) {
       assert.ok(/inflight-stale-reset/.test(ext), "超时须 stale-reset 让新轮接管");
       assert.ok(/const myStart = Date\.now\(\);/.test(ext) && /if \(_poolReconcileStartMs === myStart\) _poolReconcileInflight = false;/.test(ext), "finally 须以令牌守卫, 仅本轮清 inflight");
     });
+    test("route-C 订阅半开死链看门狗(与手机版 signal.js v0.37.60 对称): ntfy HTTP 流静默失效不发 FIN/error → 须靠 >90s 无入站主动重连", () => {
+      assert.ok(/const SIG_HALFOPEN_MS = 90000;/.test(ext), "须有 SIG_HALFOPEN_MS=90000 半开阈值");
+      assert.ok(/const SIG_WATCHDOG_MS = \d+;/.test(ext), "须有 SIG_WATCHDOG_MS 巡检周期");
+      assert.ok(/lastRx && Date\.now\(\) - lastRx > SIG_HALFOPEN_MS/.test(ext), "看门狗须 >SIG_HALFOPEN_MS 且 lastRx 非0(未连接不误杀)才判半开");
+      assert.ok(/setInterval\(\(\) => \{[\s\S]*?req && req\.destroy\(\)[\s\S]*?\}, SIG_WATCHDOG_MS\)/.test(ext), "半开须 destroy req 触发重连");
+      assert.ok(/clearInterval\(wd\)/.test(ext), "close 须清看门狗 timer(不泄漏)");
+      const dataIdx = ext.indexOf("res.on('data'");
+      assert.ok(dataIdx >= 0 && /lastRx = Date\.now\(\);/.test(ext.slice(dataIdx, dataIdx + 120)), "任何入站(含 keepalive)须刷新 lastRx");
+    });
     test("拖拽上传桥契约: webview 面板对话备份 dragstart 亦发 application/x-dao-conv{email,sid} (对齐 /shell·可拖入代理网页上传)", () => {
       const m = ext.match(/function bkConvDragStart\([^)]*\)\{[\s\S]*?\n/);
       assert.ok(m, "须有 bkConvDragStart");
