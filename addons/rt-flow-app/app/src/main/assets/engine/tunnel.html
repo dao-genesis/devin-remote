@@ -302,22 +302,59 @@ function _bestWeb(){
     label:(r.connected!==false?'零账号中继网控台(末位兜底·免隧道)':'零账号中继网控台(自愈重连中·末位兜底)') };
   return { url:"", label:'(暂无)', kind:'none', base:"" };
 }
+// 路线C(去中心化 ntfy mesh)是否就绪 = 手机端「当前生效通道」之真·本源主路。
+//   设备身份(session+token)齐备 → engine.html 的 startSignal 必已 DaoSignal.serve() 常驻应答(重试至就绪),
+//   控制端(浏览器 p2p-client / 云端 Agent)经多家公共 ntfy mesh + WebRTC 直达本机, 全程零 Worker。
+//   仅老 WebView 无 WebCrypto 时退化(serve 拒绝) → 此处据 DaoSignal.available() 保守判定。
+function _meshReady(){
+  var c=_conn(); if(!(c.session && c.token)) return false;
+  try{ if(typeof window!=="undefined" && window.DaoSignal && typeof window.DaoSignal.available==="function" && !window.DaoSignal.available()) return false; }catch(e){}
+  return true;
+}
+// 当前生效通道(道法自然·去中心化为本·彻底规避 Worker): 路线C一就绪即恒以「去中心化 P2P/ntfy mesh」
+//   为真·主路(不经任何 Worker); 仅当路线C不可得(老 WebView 缺 WebCrypto / 身份未就绪)才回落
+//   _bestPublic(去中心化隧道 > Worker 末位兜底)。返回 {kind,label,decentralized,worker,httpBase}。
+//   httpBase: 给「curl 兜底」用的 HTTP 入口(隧道优先, 否则 Worker); mesh 主路不经此 HTTP base。
+function _activeChannel(){
+  var bp=_bestPublic();
+  if(_meshReady()) return { kind:'mesh', decentralized:true, worker:false,
+    label:'去中心化 P2P / ntfy mesh(零账号·不经任何 Worker)',
+    httpBase:(bp.kind!=='worker'?bp.base:'') , httpKind:(bp.kind!=='worker'?bp.kind:'') };
+  return { kind:bp.kind, decentralized:(bp.kind!=='worker'), worker:(bp.kind==='worker'),
+    label:bp.label, httpBase:bp.base, httpKind:bp.kind };
+}
 //__CHANSEL_END__
+// 去中心化路线C的公共 ntfy broker 列表 (与 signal.js DEFAULT_SERVERS 同源·叠加用户自托管):
+//   供「接入信息/接入文档」标注 mesh 直达本机所需的 broker, 让云端 Agent 零 Worker 即可定址。
+function _meshBrokers(){
+  var arr=[]; try{ if(typeof window!=="undefined" && window.DaoSignal && window.DaoSignal.DEFAULT_SERVERS) arr=window.DaoSignal.DEFAULT_SERVERS.slice(); }catch(e){}
+  if(!arr.length) arr=["https://ntfy.sh","https://ntfy.envs.net","https://ntfy.adminforge.de","https://ntfy.mzte.de"];
+  try{ var c=_conn(), ex=c&&c.signalServers; if(Array.isArray(ex)) arr=arr.concat(ex); else if(typeof ex==="string"&&ex) arr=arr.concat(ex.split(/[\s,]+/)); }catch(e){}
+  var seen=Object.create(null), out=[]; arr.forEach(function(u){ u=(u||"").trim().replace(/\/$/,''); if(u&&!seen[u]){ seen[u]=1; out.push(u); } });
+  return out;
+}
 function _push(){
   var c=_conn(), r=_relay();
-  var bp=_bestPublic(), isWorker=(bp.kind==='worker');
-  var on = bp.base ? (isWorker ? !!r.connected : true) : false;
-  var pub = (on&&c.session)?(bp.base+"/relay/"+c.session):"—";
+  var ac=_activeChannel(), bp=_bestPublic(), isWorker=(bp.kind==='worker');
+  var meshOn=(ac.kind==='mesh');
+  // 在线判定(道法自然·去中心化为本): 路线C就绪即「已打通」(设备 serve 常驻·不依赖 Worker 在线);
+  //   否则按 HTTP 入口(隧道恒在线/Worker 看连通)。 → 手机端不再因 Worker 掉线而误显「未打通」。
+  var on = meshOn ? true : (bp.base ? (isWorker ? !!r.connected : true) : false);
+  // 浏览器直开入口(优先展示去中心化 P2P 网控台); curl 兜底 HTTP 入口走隧道/Worker。
+  var webUrl=""; try{ webUrl=_bestWeb().url||""; }catch(e){}
+  var pub = (c.session && ac.httpBase)?(ac.httpBase+"/relay/"+c.session):((bp.base&&c.session)?(bp.base+"/relay/"+c.session):"—");
   var nCand=(r.candidates&&r.candidates.length)||0;
-  var modeTxt = isWorker
-    ? ("中继 Worker·兜底 · relay·Durable Object"+(nCand>1?(" · "+nCand+"端点故障转移"):""))
-    : (bp.label+" · 去中心化直连·不经 Worker");
+  var modeTxt = meshOn
+    ? (ac.label+" · 设备 serve 常驻直连·不经 Worker")
+    : (isWorker
+        ? ("中继 Worker·兜底 · relay·Durable Object"+(nCand>1?(" · "+nCand+"端点故障转移"):""))
+        : (bp.label+" · 去中心化直连·不经 Worker"));
   var state={
-    url: on?pub:"", lastErr: on?null:(r.lastError||r.lastErr||null),
+    url: on?(meshOn?(webUrl||pub):pub):"", lastErr: on?null:(r.lastError||r.lastErr||null),
     ws:{name:"Devin Cloud 手机版", root: c.session||"-"},
-    port: isWorker?"DO":"tunnel", mode: modeTxt, protocol: isWorker?"wss":"https",
-    proxy:null, attempts:[{mode:bp.kind,proto:isWorker?"wss":"https",ok:on}], tries:(r.attempts||0),
-    agentCount: on?1:0, cfLoggedIn:false, cfEmail:"", session:c.session, channelLabel: bp.label
+    port: meshOn?"mesh":(isWorker?"DO":"tunnel"), mode: modeTxt, protocol: meshOn?"webrtc/ntfy":(isWorker?"wss":"https"),
+    proxy:null, attempts:[{mode:ac.kind,proto:meshOn?"webrtc/ntfy":(isWorker?"wss":"https"),ok:on}], tries:(r.attempts||0),
+    agentCount: on?1:0, cfLoggedIn:false, cfEmail:"", session:c.session, channelLabel: ac.label
   };
   _render(state);
   try{ renderChannels(); }catch(e){}
@@ -327,14 +364,22 @@ function _result(op,ok,text){ var o=document.getElementById('out'); if(o){o.clas
 // 唯一一份接入文档: 两大模块(① 软件本体含浏览器子模块 ② 手机本体)全部命令直接平铺, 无渐进式披露、无隐藏。
 function _cloudMd(){
   var c=_conn(); var bp=_bestPublic(); var pub=((bp.base||c.url)||"").replace(/\/$/,'')+"/relay/"+(c.session||""); var web=_bestWeb();
+  var ac=_activeChannel(), brokers=_meshBrokers(), isWk=(bp.kind==='worker');
   return [
     "# Devin Cloud 手机版 · 接入文档 (唯一·两大模块·全量展开)","",
     "> 手机已通过公网中继挂载, 任意云端 Agent (与你一样的 Devin Cloud) 可经隧道远程驱动。**两大模块、全部命令已直接平铺在下方**, 无渐进式披露、无隐藏、无文档级限制 — 读这一篇即可直接调用任意能力, 操作到底层 API。鉴权即边界: 持本 Token 即拥有对本机的完整接入(含 shell), Token 可随时刷新、务必保密。","",
     "## 接入信息",
+    "- 当前生效通道: **"+ac.label+"**",
     "- 网页直开(任意浏览器·零账号·去中心化 WebRTC P2P 直连·不经任何 Worker, 打开即与 APK 同款操作): `"+(web.url||"(等设备身份就绪)")+"`",
-    "- RPC 公网入口(给云端 Agent / curl·去中心化隧道优先, 中继 Worker 仅末位兜底): `"+pub+"`",
+    "- RPC①·去中心化路线C(云端 Agent 首选·零账号·全程不经任何 Worker·详见下「去中心化路线C」节): Session=`"+(c.session||"<SESSION>")+"`",
+    "- RPC②·"+(isWk?"末位兜底(中继 Worker·仅去中心化全被封时)":"去中心化隧道(独立于 Worker)")+"·HTTP 入口(curl): `"+pub+"`",
     "- 鉴权: `Authorization: Bearer "+(c.token||"<TOKEN>")+"`",
     "- Session: `"+(c.session||"<SESSION>")+"`","",
+    "## 去中心化路线C (零中心·ntfy mesh·彻底规避 Worker)",
+    "> 即使上面 HTTP 入口(去中心化隧道 / 中继 Worker)全挂, 仍能经多家互不隶属的公共 ntfy pub/sub 加密直达本机(任一 broker 可达即通·无单点)。控制面 RPC 帧与 HTTP 入口**同构**, 故 getState / browse* / phone* 等命令照常可用。公共 broker 全程只见密文(载荷以 token 派生 AES-256-GCM 封装)。",
+    "- Brokers: "+brokers.map(function(b){return "`"+b+"`";}).join(" "),
+    "- 浏览器客户端: 同源 `signal.js` 的 `DaoSignal.connect({session,token})` → `.rpc(frame)` / `.ping()` (网页直开链接已内置, 打开即走此路·零 Worker)。",
+    "- Node/Agent 客户端: 直接运行 `addons/rt-flow-app/tools/dao-mesh-rpc.mjs <session> <token> '<json-frame>'` —— 仅依赖公共 ntfy, 零 Worker。例: `node dao-mesh-rpc.mjs "+(c.session||"<SESSION>")+" "+(c.token||"<TOKEN>")+" '{\"path\":\"/api/rpc\",\"method\":\"POST\",\"body\":{\"cmd\":\"getState\"}}'`","",
     _channelsMd(),"",
     "## 调用方式",
     "```bash","curl -s -X POST "+pub+" \\","  -H 'Authorization: Bearer <TOKEN>' \\",
@@ -474,6 +519,7 @@ function handle(m){
   if(op==='copyAccess'){
     var bp=_bestPublic(); var base=(bp.base||"").replace(/\/$/,'');
     var u=base+"/relay/"+c.session;
+    var ac=_activeChannel(), brokers=_meshBrokers(), isWk=(bp.kind==='worker');
     var web=_bestWeb();
     // 兜底直开链接: 当主入口是去中心化 P2P 网控台时, 再附上中继 Worker /console 作兜底 ——
     //   仅当去中心化(CDN+ntfy+WebRTC)在对端被封/打不开时备用; 它由 Cloudflare 托管, 单网页内置通道自愈。
@@ -486,8 +532,13 @@ function handle(m){
       "  "+(web.url||"(等设备身份就绪后自动出现)"),
       "  ↑ 零账号·去中心化 WebRTC P2P 直连, 经["+web.label+"], 不经任何中转 Worker; 复制到电脑/平板/别的手机浏览器即可。含 Token, 仅发可信方。",
       "",
-      "当前生效通道: "+bp.label,
-      "RPC 接口(给云端 Agent / curl, 非浏览器直开): "+u,
+      "当前生效通道: "+ac.label,
+      "",
+      "【RPC·给云端 Agent / 程序 (非浏览器直开)】",
+      "  ① 去中心化路线C(首选·零账号·全程不经任何 Worker): 经多家公共 ntfy mesh 加密直达本机, 任一 broker 可达即通。",
+      "     Brokers: "+brokers.join("  "),
+      "     客户端: 同源 signal.js 的 DaoSignal.connect({session,token}).rpc(frame)/.ping() (浏览器直开已内置; Node/Agent 见接入文档「去中心化路线C」节·含可直接运行的 dao-mesh-rpc.mjs)。",
+      "  ② "+(isWk?"末位兜底(中继 Worker·仅去中心化全被封时·curl 直连)":"去中心化隧道(curl 直连·独立于 Worker)")+": "+u,
       "Token: "+(c.token||""),
       "Session: "+(c.session||""),
       "",
@@ -495,7 +546,7 @@ function handle(m){
       "  setRemoteOps {enable:true}   开启 浏览器/软件本体/手机操控",
       "  phoneEnsureControl           系统级接管(无障碍·点击/读屏)",
       "",
-      "调用模板:",
+      "调用模板(对应上面 ②·HTTP 入口):",
       "curl -s -X POST "+u+" -H 'Authorization: Bearer "+(c.token||"<TOKEN>")+"' -H 'Content-Type: application/json' -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\"}}'",
       "",
       "最常用命令(底层):",
@@ -901,8 +952,13 @@ function _channels(){
   out.push({label:"中继 Worker · 末位兜底（仅其他公网通道全不可用时）", online:!!r.connected, urls:(base&&sid)?[base+suf]:[], note: base?"已下放为最后手段·去中心化路径优先":"未配置"});
   out.push({label:"WebRTC P2P · 底层机制(经公共 ntfy 信令一次性交换 SDP)", online:!!p2pWeb, urls:[],
             note:"无需任何隧道/Worker: 公共 ntfy 多家实例做一次性加密信令, 之后 RPC 全程走 P2P DataChannel"});
-  // 标注「当前生效」通道 (= 公网网址/复制接入信息 实际选用的那条; 优先去中心化隧道, Worker 仅兜底)
-  try{ var bp=_bestPublic(); if(bp.base) out.forEach(function(ch){ ch.active=!!(ch.urls&&ch.urls.length&&ch.urls[0].indexOf(bp.base)===0); }); }catch(e){}
+  // 标注「当前生效」通道(道法自然·去中心化为本): 路线C(ntfy mesh)就绪 → 去中心化 P2P 网控台(out[0])
+  //   恒为当前生效(设备 serve 常驻·不经任何 Worker); 否则才按 _bestPublic 的 HTTP 入口(去中心化隧道 > Worker 末位兜底)匹配。
+  try{
+    var ac=_activeChannel();
+    if(ac.kind==='mesh' && out.length){ out[0].active=true; }
+    else { var bp=_bestPublic(); if(bp.base) out.forEach(function(ch){ ch.active=!!(ch.urls&&ch.urls.length&&ch.urls[0].indexOf(bp.base)===0); }); }
+  }catch(e){}
   return out;
 }
 // 接入文档用: 把当前所有可用渠道渲染成 Markdown 表 (随实时状态自动更新, 与面板总览同源)。
