@@ -12,7 +12,7 @@ const m = src.match(/\/\/__SUPERVISOR_START__[\s\S]*?\/\/__SUPERVISOR_END__/);
 if (!m) { console.error("FAIL: 未找到 //__SUPERVISOR_START__…//__SUPERVISOR_END__ 标记块"); process.exit(1); }
 
 // eslint-disable-next-line no-eval
-const S = eval("(function(){\n" + m[0] + "\nreturn { nextBackoff, shouldAutoReconnect, isChannelDead, RECONN_MIN, RECONN_MAX, MAX_MISSED, HEARTBEAT_MS }; })()");
+const S = eval("(function(){\n" + m[0] + "\nreturn { nextBackoff, shouldAutoReconnect, isChannelDead, shouldUpgrade, RECONN_MIN, RECONN_MAX, MAX_MISSED, HEARTBEAT_MS, FAST_RELAY_MS }; })()");
 
 let failures = 0;
 function ok(c, msg) { if (c) console.log("  ok  - " + msg); else { failures++; console.error("  FAIL- " + msg); } }
@@ -44,6 +44,18 @@ ok(S.isChannelDead(2, S.MAX_MISSED) === true, "2 次连续未回: 判通道死 �
 ok(S.isChannelDead(5, S.MAX_MISSED) === true, "5 次未回: 判死");
 // 心跳间隔须 >0 且不超过判死时窗内合理探测 (HEARTBEAT_MS × MAX_MISSED ≈ 检出时延)。
 ok(S.HEARTBEAT_MS > 0 && S.HEARTBEAT_MS <= 20000, "心跳间隔在 (0,20s] 合理区间");
+
+// ── 抢通(happy-eyeballs): P2P 抢跑窗口须 >0 且足够短 (体感秒开, 不让用户久等) ──
+const slice = m[0];
+ok(/FAST_RELAY_MS\s*=\s*\d+/.test(slice), "切片内声明 FAST_RELAY_MS (抢跑窗口可调)");
+ok(S.FAST_RELAY_MS > 0 && S.FAST_RELAY_MS <= 6000, "抢跑窗口在 (0,6s]: P2P 未及时通即并行起中继, 体感秒开");
+ok(S.FAST_RELAY_MS < S.RECONN_MAX, "抢跑窗口 < 退避上限 (中继兜底远早于放弃重连)");
+
+// ── 抢通升级判定: 仅「中继→真P2P直连」才值得无缝升级, 其余维持现状不折腾 ──
+ok(S.shouldUpgrade(true, false) === true, "当前中继·后到真P2P直连: 升级 (低延迟·满速·无48KB限)");
+ok(S.shouldUpgrade(true, true) === false, "当前中继·后到也是中继: 不折腾(同等链路)");
+ok(S.shouldUpgrade(false, false) === false, "当前已是直连·后到直连: 不折腾(已最优)");
+ok(S.shouldUpgrade(false, true) === false, "当前直连·后到中继: 绝不降级");
 
 if (failures) { console.error("\n" + failures + " FAILED"); process.exit(1); }
 console.log("\nALL PASS (p2p-client 自愈监督决策)");
