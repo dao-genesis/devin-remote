@@ -69,9 +69,22 @@ var STUN = (window.DaoSignal && window.DaoSignal.STUN) ? window.DaoSignal.STUN.s
   { urls: "stun:stun1.l.google.com:19302" },
   { urls: "stun:stun.nextcloud.com:443" }
 ];
+//__SUPERVISOR_START__  纯函数·自愈决策 (经 test/p2p-reconnect.test.js 切片 eval 验证, 不改运行行为)
+//   网页端要对标甚至超越 APK 的「持久、稳定」, 必须像 relay-app.js 一样自愈: 心跳探活 + 断线指数退避重连。
+var RECONN_MIN = 1000, RECONN_MAX = 30000, HEARTBEAT_MS = 15000, MAX_MISSED = 2;
+// 退避: 每次重连失败翻倍、封顶 RECONN_MAX; 成功复位 RECONN_MIN (与 APK BACKOFF_MIN/MAX 同构)。
+function nextBackoff(cur){ var n = (cur || RECONN_MIN) * 2; return n > RECONN_MAX ? RECONN_MAX : n; }
+// 是否应自愈: 用户主动「断开」后不再自动重连; 已在重连中不重入 (避免并发多条握手)。
+function shouldAutoReconnect(userHangup, reconnecting){ return !userHangup && !reconnecting; }
+// 心跳判死: 连续未回 pong 达阈值即判通道死 (半开死链/NAT重绑/对端离线), 触发自愈重连。
+function isChannelDead(missed, max){ return missed >= (max || MAX_MISSED); }
+//__SUPERVISOR_END__
+
 var pc = null, dc = null, dcSendFn = null, seq = 0, waiters = Object.create(null);
 var sig = null;   // 去中心化直连句柄 (DaoSignal.connect 返回 {pc,dc,rpc,ping,close})
 var transport = { tag: "P2P", isRelay: false };   // 当前生效传输面真相: 供 ping/rpc 标注与状态显示
+// 自愈监督运行态: 对标 APK relay-app.js 的「连接看门狗 + 退避重连 + 半开自检」, 让网页端持久稳定。
+var userHangup = false, chAlive = false, reconnecting = false, hbTimer = null, reconnTimer = null, hbInFlight = false, missedPings = 0, backoff = RECONN_MIN;
 // 传输真相: DaoSignal.connect 可能返回「真 P2P DataChannel」(.dc 就绪) 或「去中心化 ntfy 中继兜底」
 //   (.mode==="relay-ntfy", .dc===null)。二者体感天差地别(直连低延迟·满速 vs 中继控制面·48KB 上限),
 //   故据实区分显示, 不再一律谎报「P2P 直连」—— 让对照者一眼看清真实链路。
@@ -94,60 +107,83 @@ function waitIce(pc){
   });
 }
 
-async function connect(){
-  hangup();
+// ── 用户主动发起: 重置自愈状态 (清「已断开」标志 + 复位退避), 再建立连接。──
+function connect(){
+  userHangup=false; reconnecting=false; backoff=RECONN_MIN;
+  if(reconnTimer){ clearTimeout(reconnTimer); reconnTimer=null; }
+  return _establish(false);
+}
+
+// ── 建立一次连接 (首连与自愈重连共用)。返回 Promise<bool>: 是否拿到可用通道。──
+async function _establish(isReconnect){
+  hangupQuiet();   // 关掉上一条 (不置 userHangup, 不阻断自愈)
   var url=$("url").value.trim().replace(/\/$/,""), token=$("token").value.trim(), session=$("session").value.trim();
-  if(!session||!token){ log("✗ 去中心化直连需填 session + token (隧道URL 可留空)"); return; }
+  if(!session||!token){ log("✗ 去中心化直连需填 session + token (隧道URL 可留空)"); $("btnConnect").disabled=false; return false; }
   var ice=STUN.slice(), extraIce=[], turnRaw=($("turn").value||"").trim();
   if(turnRaw){ try{ var extra=JSON.parse(turnRaw); if(Array.isArray(extra)){ ice=ice.concat(extra); extraIce=extra; } }catch(e){ log("✗ TURN JSON 非法, 忽略"); } }
   $("btnConnect").disabled=true;
 
   // ── 路线C 优先: 0账号·去中心化信令 (公共 ntfy, 不经 Worker) ──
   if(window.DaoSignal && DaoSignal.available()){
-    setState("去中心化握手中…","#9e6a03");
-    log("→ 路线C: 公共信令(ntfy)交换加密 SDP, 0账号不经 Worker…");
+    setState((isReconnect?"自愈重连·":"")+"去中心化握手中…","#9e6a03");
+    log((isReconnect?"↻ 自愈重连: ":"→ ")+"路线C: 公共信令(ntfy)交换加密 SDP, 0账号不经 Worker…");
     try{
       sig = await DaoSignal.connect({ session:session, token:token, ice:extraIce, timeout:25000 });
       transport = describeTransport(sig);
       setState(transport.state, transport.color);
       $("btnSend").disabled=false; $("btnPing").disabled=false; $("btnConnect").disabled=false;
-      log((transport.isRelay?"⚠ ":"✓ ")+transport.state);
+      log((transport.isRelay?"⚠ ":"✓ ")+(isReconnect?"自愈重连成功 · ":"")+transport.state);
       if(transport.note) log("  └ "+transport.note);
-      return;
+      armLiveness();
+      return true;
     }catch(e){ var ec=String((e&&e.message)||e); var hint = ec==="ice_failed" ? "去中心化未通 (对端已应答但 P2P 打洞失败/对称NAT —— 可填 TURN 或用隧道兜底)" : (ec==="signal_timeout" ? "去中心化未通 (未收到对端应答 —— 检查手机在线与 session/token 是否一致)" : "去中心化未通 ("+ec+")"); log("• "+hint+(url?", 尝试 Worker 兜底…":"")); try{ if(sig) sig.close(); }catch(_){ } sig=null; }
   } else { log("• 本环境无 WebCrypto, 跳过去中心化"+(url?", 用 Worker 兜底":"")); }
 
-  // ── 兜底: Worker 隧道信令 (原路径) ──
-  if(!url){ log("✗ 去中心化未通且未填隧道URL, 无法兜底"); setState("失败","#da3633"); $("btnConnect").disabled=false; return; }
-  setState("Worker兜底握手中…","#9e6a03");
-  try{
-    pc = new RTCPeerConnection({ iceServers: ice, iceCandidatePoolSize: 2 });
-    dc = pc.createDataChannel("rpc");
-    dc.binaryType="arraybuffer";
-    dc.onopen=function(){ transport={ tag:"P2P", isRelay:false }; onOpen("🟢 P2P 已直连 (Worker 仅做一次性信令)"); log("✓ DataChannel open — RPC 全程 P2P (信令一次性经 Worker, 数据不经 Worker)"); };
-    dc.onclose=function(){ setState("通道关闭","#30363d"); $("btnSend").disabled=true; $("btnPing").disabled=true; };
-    // 大响应(如 downloadFetch base64)经 dcWire 透明分片+背压重组; 信令缺席时回落原逐条。
-    function onDcMsg(m){
-      if(!m) return;
-      if(m.t==="pong"){ var w=waiters[m.id]; if(w){ delete waiters[m.id]; w.resolve({pong:true,ts:m.ts}); } return; }
-      if(m.t==="res"){ var w2=waiters[m.id]; if(w2){ delete waiters[m.id]; w2.resolve(m.result); } }
-    }
-    if(window.DaoSignal && window.DaoSignal.dcWire){ dcSendFn = window.DaoSignal.dcWire(dc, onDcMsg); }
-    else { dcSendFn = function(o){ try{ dc.send(JSON.stringify(o)); }catch(e){} }; dc.onmessage=function(ev){ var m; try{ m=JSON.parse(ev.data); }catch(e){ return; } onDcMsg(m); }; }
-    pc.onconnectionstatechange=function(){ log("• pc: "+pc.connectionState); if(pc.connectionState==="failed") setState("打洞失败 (NAT/UDP 受限)","#da3633"); };
-    var offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await waitIce(pc);
-    log("→ 经隧道交换 SDP (一次性信令)…");
-    var headers={ "Content-Type":"application/json" }; if(token) headers["Authorization"]="Bearer "+token;
-    var resp = await fetch(url+"/relay/"+session, { method:"POST", headers:headers,
-      body: JSON.stringify({ path:"/api/rpc", method:"POST", body:{ cmd:"p2pConnect", offer: pc.localDescription.sdp, ice: ice.filter(function(s){ return /^turn/i.test(s.urls); }) } }) });
-    var j = await resp.json();
-    if(!j || !j.ok || !j.answer){ log("✗ 应答方拒绝/失败: "+JSON.stringify(j)); setState("信令失败","#da3633"); $("btnConnect").disabled=false; return; }
-    log("← 收到 answer, 建立 P2P 中… (STUN 打洞)");
-    await pc.setRemoteDescription({ type:"answer", sdp:j.answer });
-  }catch(e){ log("✗ "+String((e&&e.message)||e)); setState("异常","#da3633"); }
+  // ── 末位兜底: Worker 隧道信令 (一次性信令经 Worker, 数据走 P2P) ──
+  if(!url){ log("✗ 去中心化未通且未填隧道URL"+(isReconnect?", 自愈重连待对端上线…":", 无法兜底")); setState(isReconnect?"自愈重连中(待对端上线)":"失败","#da3633"); $("btnConnect").disabled=false; return false; }
+  setState((isReconnect?"自愈重连·":"")+"Worker兜底握手中…","#9e6a03");
+  var ok = await _establishWorker(url, token, session, ice);
   $("btnConnect").disabled=false;
+  return ok;
+}
+
+// Worker 兜底握手 (回调式 → 收敛为 Promise<bool>, 供自愈循环据实判定成败)。
+function _establishWorker(url, token, session, ice){
+  return new Promise(function(resolve){
+    var settled=false; function done(v){ if(settled) return; settled=true; resolve(v); }
+    try{
+      pc = new RTCPeerConnection({ iceServers: ice, iceCandidatePoolSize: 2 });
+      dc = pc.createDataChannel("rpc");
+      dc.binaryType="arraybuffer";
+      dc.onopen=function(){ transport={ tag:"P2P", isRelay:false }; onOpen("🟢 P2P 已直连 (Worker 仅做一次性信令)"); log("✓ DataChannel open — RPC 全程 P2P (信令一次性经 Worker, 数据不经 Worker)"); armLiveness(); done(true); };
+      dc.onclose=function(){ setState("通道关闭","#30363d"); $("btnSend").disabled=true; $("btnPing").disabled=true; onChannelDead("dc_close"); };
+      // 大响应(如 downloadFetch base64)经 dcWire 透明分片+背压重组; 信令缺席时回落原逐条。
+      function onDcMsg(m){
+        if(!m) return;
+        if(m.t==="pong"){ var w=waiters[m.id]; if(w){ delete waiters[m.id]; w.resolve({pong:true,ts:m.ts}); } return; }
+        if(m.t==="res"){ var w2=waiters[m.id]; if(w2){ delete waiters[m.id]; w2.resolve(m.result); } }
+      }
+      if(window.DaoSignal && window.DaoSignal.dcWire){ dcSendFn = window.DaoSignal.dcWire(dc, onDcMsg); }
+      else { dcSendFn = function(o){ try{ dc.send(JSON.stringify(o)); }catch(e){} }; dc.onmessage=function(ev){ var m; try{ m=JSON.parse(ev.data); }catch(e){ return; } onDcMsg(m); }; }
+      pc.onconnectionstatechange=function(){ log("• pc: "+pc.connectionState); if(pc.connectionState==="failed"){ setState("打洞失败 (NAT/UDP 受限)","#da3633"); done(false); onChannelDead("pc_failed"); } };
+      (async function(){
+        try{
+          var offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          await waitIce(pc);
+          log("→ 经隧道交换 SDP (一次性信令)…");
+          var headers={ "Content-Type":"application/json" }; if(token) headers["Authorization"]="Bearer "+token;
+          var resp = await fetch(url+"/relay/"+session, { method:"POST", headers:headers,
+            body: JSON.stringify({ path:"/api/rpc", method:"POST", body:{ cmd:"p2pConnect", offer: pc.localDescription.sdp, ice: ice.filter(function(s){ return /^turn/i.test(s.urls); }) } }) });
+          var j = await resp.json();
+          if(!j || !j.ok || !j.answer){ log("✗ 应答方拒绝/失败: "+JSON.stringify(j)); setState("信令失败","#da3633"); done(false); return; }
+          log("← 收到 answer, 建立 P2P 中… (STUN 打洞)");
+          await pc.setRemoteDescription({ type:"answer", sdp:j.answer });
+        }catch(e){ log("✗ "+String((e&&e.message)||e)); setState("异常","#da3633"); done(false); }
+      })();
+      setTimeout(function(){ done(false); }, 30000);   // 看门狗: 30s 未 open 视为本次失败 → 退避重连
+    }catch(e){ log("✗ "+String((e&&e.message)||e)); done(false); }
+  });
 }
 
 function rpcRaw(frame){
@@ -174,7 +210,54 @@ async function sendRpc(){
 }
 function ping(){ return new Promise(function(resolve,reject){ var id="p"+(++seq); waiters[id]={resolve:resolve,reject:reject}; var t0=performance.now(); (dcSendFn||function(o){ dc.send(JSON.stringify(o)); })({t:"ping",id:id}); waiters[id].resolve=function(){ resolve(performance.now()-t0); }; setTimeout(function(){ if(waiters[id]){delete waiters[id]; reject(new Error("to")); } },5000); }); }
 async function pingLoop(){ var rttTag=transport.isRelay?"中继 RTT":"P2P RTT"; for(var i=0;i<5;i++){ try{ var ms=await (sig?sig.ping():ping()); log("ping#"+(i+1)+" = "+ms.toFixed(1)+"ms ("+rttTag+")"); }catch(e){ log("ping#"+(i+1)+" timeout"); } } }
-function hangup(){ try{ if(sig) sig.close(); }catch(e){} sig=null; transport={ tag:"P2P", isRelay:false }; try{ if(dc) dc.close(); }catch(e){} try{ if(pc) pc.close(); }catch(e){} dc=null; pc=null; dcSendFn=null; $("btnSend").disabled=true; $("btnPing").disabled=true; setState("未连接","#30363d"); }
+// 静默拆链 (不置 userHangup·不动重连计划): 供自愈重连前清理上一条。
+function hangupQuiet(){ stopHeartbeat(); try{ if(sig) sig.close(); }catch(e){} sig=null; transport={ tag:"P2P", isRelay:false }; try{ if(dc) dc.close(); }catch(e){} try{ if(pc) pc.close(); }catch(e){} dc=null; pc=null; dcSendFn=null; }
+// 用户主动「断开」: 置 userHangup 永久止住自愈, 取消待执行重连, 复位 UI。
+function hangup(){ userHangup=true; reconnecting=false; chAlive=false; if(reconnTimer){ clearTimeout(reconnTimer); reconnTimer=null; } hangupQuiet(); $("btnSend").disabled=true; $("btnPing").disabled=true; setState("未连接","#30363d"); }
+
+// ── 自愈监督运行态 (对标 APK relay-app.js: 心跳探活 + 退避重连 + 唤醒/联网秒级自愈) ──
+function stopHeartbeat(){ if(hbTimer){ clearInterval(hbTimer); hbTimer=null; } hbInFlight=false; }
+// 连上即布防: 复位退避; P2P 模式额外挂 DataChannel close 监听 (静默关闭即判死, relay 模式由心跳兜底)。
+function armLiveness(){ chAlive=true; backoff=RECONN_MIN; missedPings=0; try{ if(sig && sig.dc){ sig.dc.addEventListener("close", function(){ onChannelDead("p2p_dc_close"); }); } }catch(e){} startHeartbeat(); }
+function startHeartbeat(){
+  stopHeartbeat(); missedPings=0;
+  hbTimer=setInterval(function(){
+    if(userHangup){ stopHeartbeat(); return; }
+    if(hbInFlight) return;                                   // 上一次心跳(最长~15s)未回前不叠发
+    if(!sig && !(dc && dc.readyState==="open")){ onChannelDead("no_channel"); return; }
+    hbInFlight=true;
+    var p = sig ? sig.ping() : ping();
+    Promise.resolve(p).then(
+      function(){ hbInFlight=false; missedPings=0; chAlive=true; },
+      function(){ hbInFlight=false; missedPings++; if(isChannelDead(missedPings,MAX_MISSED)){ log("⚠ 心跳连续 "+missedPings+" 次无回应 → 判通道死, 自愈重连…"); onChannelDead("heartbeat"); } }
+    );
+  }, HEARTBEAT_MS);
+}
+// 判死: 停心跳 → 进入退避重连 (用户已断开则不动)。
+function onChannelDead(reason){ if(!shouldAutoReconnect(userHangup, reconnecting)) return; chAlive=false; stopHeartbeat(); scheduleReconnect(reason); }
+function scheduleReconnect(reason){
+  if(reconnecting || userHangup) return;
+  reconnecting=true;
+  log("↻ 通道中断("+reason+") → "+(backoff/1000).toFixed(1)+"s 后自愈重连…");
+  setState("自愈重连中…("+Math.round(backoff/1000)+"s)","#9e6a03");
+  if(reconnTimer) clearTimeout(reconnTimer);
+  reconnTimer=setTimeout(function(){
+    reconnTimer=null;
+    _establish(true).then(function(okk){
+      reconnecting=false;
+      if(okk){ backoff=RECONN_MIN; }
+      else if(!userHangup){ backoff=nextBackoff(backoff); scheduleReconnect("retry"); }
+    }, function(){ reconnecting=false; if(!userHangup){ backoff=nextBackoff(backoff); scheduleReconnect("retry"); } });
+  }, backoff);
+}
+// 立即自愈: 网络恢复/标签页重新可见(笔记本唤醒·切回页面) → 即刻探活, 死则秒级重连, 不傻等退避 → 超越被动重连。
+function kickReconnect(){
+  if(userHangup || reconnecting) return;
+  if(!sig && !(dc && dc.readyState==="open")){ backoff=RECONN_MIN; scheduleReconnect("wake"); return; }
+  var p = sig ? sig.ping() : ping();
+  Promise.resolve(p).then(function(){ missedPings=0; chAlive=true; }, function(){ backoff=RECONN_MIN; onChannelDead("wake_probe"); });
+}
+try{ window.addEventListener("online", kickReconnect); document.addEventListener("visibilitychange", function(){ if(!document.hidden) kickReconnect(); }); }catch(e){}
 
 // ── 零中心一键分发: 从 URL 查询参数预填 (session/token/url/turn), ?auto=1 开页即直连 ──────
 //   道法自然·最小化用户参与: 宿主把带参链接 (经公共 CDN 托管本页·不经任何 Worker) 发给对端,
