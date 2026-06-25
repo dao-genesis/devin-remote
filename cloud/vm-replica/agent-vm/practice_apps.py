@@ -222,6 +222,23 @@ def scen_gestures(W, H):
     return rec
 
 
+def scen_filedialog(W, H):
+    # The ubiquitous Open/Save common dialog: a separate modal window with a filename field,
+    # file list, and buttons. Drive it as a human does -- open, type a name, read it back
+    # SEMANTICALLY (UIA value), cancel -- all without a single screenshot.
+    rec = {'app': 'notepad', 'archetype': 'file Open dialog (modal: type + UIA value read-back)', 'steps': [], 'matched': 0, 'bytes': 0}
+    post('launch', command='notepad'); time.sleep(1.5); post('activate', title='Notepad'); time.sleep(0.4)
+    step(rec, 'Ctrl+O -> Open dialog', op='key', key='ctrl+o', expect={'foreground': 'Open'})
+    fname = 'readme.txt'
+    # the filename field is focused on open; type into it, then verify its VALUE via UIA (not pixels)
+    step(rec, "type filename -> field value", op='type', text=fname,
+         expect={'state': {'text': 'File name', 'class': 'Edit', 'value': fname}})
+    step(rec, 'click Cancel -> back to Notepad', op='click', target={'text': 'Cancel'},
+         expect={'foreground': 'Notepad'})
+    kill('notepad.exe')
+    return rec
+
+
 def scen_seq(W, H):
     # act_seq: ONE planned, speculative chain ("7 + 8 =") with per-step self-verification --
     # one plan, zero per-step LLM/screenshot on the happy path. The core primitive shipped in
@@ -332,7 +349,7 @@ def main():
             print('agent did not start'); return
         _, di = post('desktop_info'); W, H = di['width'], di['height']
         print('screen', W, H)
-        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_mspaint_ribbon, scen_calc, scen_gestures, scen_state, scen_seq, scen_browser):
+        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_mspaint_ribbon, scen_calc, scen_gestures, scen_state, scen_seq, scen_filedialog, scen_browser):
             print('\n=== %s ===' % fn.__name__)
             try:
                 rec = fn(W, H)
