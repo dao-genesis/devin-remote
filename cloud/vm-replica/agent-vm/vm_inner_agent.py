@@ -551,6 +551,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             return find_elements(body)
         elif action == 'region_hash':
             return {'ok': True, 'hash': region_hash_rect(body['rect'])}
+        elif action == 'where_changed':
+            return where_changed(body)
         elif action == 'wait_change':
             return wait_change(body)
         elif action == 'act':
@@ -907,28 +909,49 @@ def state_sig():
             'focus_class': foc['class'], 'focus_text': foc['text'],
             'h': '%08x' % (zlib.crc32(composite.encode('utf-8', 'replace')) & 0xffffffff)}
 
-def _grid_dhash(l, t, r, b, cols=9, rows=8):
-    """64-bit dHash of a screen rectangle by sampling a cols x rows grayscale grid.
-    Samples only ~cols*rows points out of the captured frame => very cheap change detection."""
-    w, h, row_size, raw = _capture_bgr()
+def _grid_gray(l, t, r, b, cols, rows, frame=None, sub=4):
+    """Sample a cols x rows grayscale grid from a screen rectangle, averaging each cell over a
+    sub x sub block. Block-averaging (not a single center pixel) is what lets thin/sparse pixel
+    changes -- a 1px pencil stroke, a caret, a small icon -- still move a cell value, so the
+    visual change-detection works on canvas/custom-drawn apps with no control tree.
+    Reuses a pre-captured frame when given (avoids a redundant BitBlt)."""
+    w, h, row_size, raw = frame if frame else _capture_bgr()
     l = max(0, min(int(l), w - 1)); r = max(l + 1, min(int(r), w))
     t = max(0, min(int(t), h - 1)); b = max(t + 1, min(int(b), h))
     rw = r - l; rh = b - t
     g = [[0] * cols for _ in range(rows)]
     for j in range(rows):
-        yy = t + int((j + 0.5) * rh / rows)
-        yy = min(yy, h - 1)
-        base = yy * row_size
         for i in range(cols):
-            xx = l + int((i + 0.5) * rw / cols)
-            xx = min(xx, w - 1)
-            o = base + xx * 3
-            g[j][i] = (raw[o + 2] * 30 + raw[o + 1] * 59 + raw[o] * 11) // 100  # BGR->gray
+            acc = 0
+            for sj in range(sub):
+                yy = min(t + int((j + (sj + 0.5) / sub) * rh / rows), h - 1)
+                base = yy * row_size
+                for si in range(sub):
+                    xx = min(l + int((i + (si + 0.5) / sub) * rw / cols), w - 1)
+                    o = base + xx * 3
+                    acc += (raw[o + 2] * 30 + raw[o + 1] * 59 + raw[o] * 11) // 100  # BGR->gray
+            g[j][i] = acc // (sub * sub)
+    return g
+
+def _grid_dhash(l, t, r, b, cols=9, rows=8, frame=None):
+    """Difference-hash of a screen rectangle: cheap, robust change detection (no PNG).
+    Returns a hex string sized to (cols-1)*rows bits."""
+    g = _grid_gray(l, t, r, b, cols, rows, frame)
     bits = 0
     for j in range(rows):
         for i in range(cols - 1):
             bits = (bits << 1) | (1 if g[j][i] < g[j][i + 1] else 0)
-    return '%016x' % bits
+    width = ((cols - 1) * rows + 3) // 4
+    return ('%0*x') % (width, bits)
+
+def _coarse_visual(region=None, cols=16, rows=16, frame=None):
+    """A coarse whole-screen (or region) visual hash for the change-detection FALLBACK that
+    keeps 'changed' working on no-control-tree apps (canvas / custom-drawn / games)."""
+    if region:
+        l, t, r, b = region
+    else:
+        l, t, r, b = 0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    return _grid_dhash(l, t, r, b, cols, rows, frame)
 
 def _crop_png(l, t, r, b):
     """PNG of just one screen rectangle (the surprising region) -- escalation payload only."""
@@ -993,18 +1016,52 @@ def find_elements(body):
     return {'ok': True, 'root': root, 'count': len(els), 'elements': els}
 
 def observe(body):
-    """Cheap perception: state signature (+ optional region dHash / screen dHash)."""
+    """Cheap perception: state signature (+ optional region dHash / screen dHash / tile grid)."""
     sig = state_sig()
     out = {'ok': True, 'sig': sig}
     reg = body.get('region')
     if reg:
         out['region_hash'] = _grid_dhash(*reg)
     if body.get('screen_hash'):
-        out['screen_hash'] = _grid_dhash(0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
+        out['screen_hash'] = _coarse_visual()
+    if body.get('tiles'):
+        out['tiles'] = _tile_grid(reg, int(body.get('cols', 16)), int(body.get('rows', 16)))
     return out
 
 def region_hash_rect(rect):
     return _grid_dhash(*rect)
+
+def _tile_grid(region, cols, rows):
+    if region:
+        l, t, r, b = region
+    else:
+        l, t, r, b = 0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    g = _grid_gray(l, t, r, b, cols, rows)
+    return {'region': [l, t, r, b], 'cols': cols, 'rows': rows,
+            'gray': [v for row in g for v in row]}
+
+def where_changed(body):
+    """Localize WHERE the screen changed, for no-control-tree apps. First call (no baseline)
+    returns a tile baseline; pass it back next call to get changed cells + a union bbox in
+    screen coords -- the human 'something moved over there' signal, at ~hundreds of bytes."""
+    region = body.get('region'); cols = int(body.get('cols', 16)); rows = int(body.get('rows', 16))
+    cur = _tile_grid(region, cols, rows)
+    base = body.get('baseline')
+    if not base:
+        return {'ok': True, 'changed': None, 'baseline': cur}
+    thr = int(body.get('threshold', 12))
+    bg = base['gray']; cg = cur['gray']; l, t, r, b = cur['region']
+    cw = (r - l) / cols; ch = (b - t) / rows
+    cells = []; minx = miny = 1 << 30; maxx = maxy = -1
+    for j in range(rows):
+        for i in range(cols):
+            if abs(cg[j * cols + i] - bg[j * cols + i]) >= thr:
+                cells.append([i, j])
+                x0 = int(l + i * cw); y0 = int(t + j * ch)
+                x1 = int(l + (i + 1) * cw); y1 = int(t + (j + 1) * ch)
+                minx = min(minx, x0); miny = min(miny, y0); maxx = max(maxx, x1); maxy = max(maxy, y1)
+    bbox = [minx, miny, maxx, maxy] if cells else None
+    return {'ok': True, 'changed': bool(cells), 'cells': cells, 'bbox': bbox, 'baseline': cur}
 
 def wait_change(body):
     """Block until the state signature changes from baseline (or timeout). Event-style
@@ -1028,8 +1085,12 @@ def wait_change(body):
     return {'ok': True, 'changed': False, 'sig': state_sig(), 'waited': timeout}
 
 # --- expectation evaluation (all LOCAL, no LLM, no full screenshot) ---
-def _eval_expect(expect, pre, pre_rh, rect):
-    """Return (matched, reasons). expect is a dict of predicates, all AND-combined."""
+def _eval_expect(expect, pre, pre_rh, rect, pre_visual=None, visual_region=None):
+    """Return (matched, reasons). expect is a dict of predicates, all AND-combined.
+
+    'changed' is tree-first but auto-falls back to a coarse visual hash (pre_visual): canvas /
+    custom-drawn / game-like apps mutate pixels without any control-tree delta, so a purely
+    structural 'changed' would be blind to them. This keeps one predicate honest in both worlds."""
     if not expect:
         return True, ['no-expectation']
     post = state_sig(); reasons = []
@@ -1037,7 +1098,16 @@ def _eval_expect(expect, pre, pre_rh, rect):
     fg = user32.GetForegroundWindow()
     for key, val in expect.items():
         if key == 'changed':
-            r = (post['h'] != pre['h']) == bool(val)
+            tree_changed = post['h'] != pre['h']
+            vis_changed = None
+            if pre_visual is not None:
+                vis_changed = _coarse_visual(region=visual_region) != pre_visual
+            any_changed = tree_changed or bool(vis_changed)
+            r = any_changed == bool(val)
+            via = 'tree' if tree_changed else ('visual' if vis_changed else 'none')
+            reasons.append('changed=%s(%s)' % ('ok' if r else 'FAIL', via))
+            ok = ok and r
+            continue
         elif key == 'foreground':
             r = val.lower() in (post['fg_title'] or '').lower()
         elif key == 'foreground_regex':
@@ -1118,8 +1188,11 @@ def act(body):
         watch = expect['region_changed']
     pre = state_sig()
     pre_rh = _grid_dhash(*watch) if watch else None
+    # visual fallback baseline for 'changed' (target region if known, else whole screen)
+    vis_region = (watch or rect) if (watch or rect) else None
+    pre_visual = _coarse_visual(region=vis_region) if 'changed' in expect else None
     _do_op(op, x, y, body)
-    matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect)
+    matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect, pre_visual, vis_region)
     attempts = 1; ladder = []
     # reflex ladder: the human "no reaction -> click/double-click/retry again" instinct
     while not matched and attempts <= max_retry:
@@ -1138,11 +1211,17 @@ def act(body):
             elif strat == 'jitter':
                 _do_op(op, x + 3, y + 2, body)
         elif op in ('type', 'key'):
-            strat = 'retry'; time.sleep(0.08); _do_op(op, x, y, body)
+            # Keystrokes are NON-idempotent: re-emitting double-types text or toggles a toggle
+            # (Ctrl+B) right back off. The human reflex on "did that land?" is to wait & re-check,
+            # not to blindly retype. Only re-emit when the caller marks the op idempotent.
+            if body.get('idempotent'):
+                strat = 'retry'; time.sleep(0.08); _do_op(op, x, y, body)
+            else:
+                strat = 'wait'; time.sleep(0.18)
         else:
             strat = 'wait'; time.sleep(0.15)
         ladder.append(strat)
-        matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect)
+        matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect, pre_visual, vis_region)
         attempts += 1
     res = {'ok': True, 'matched': matched, 'op': op, 'attempts': attempts,
            'reflex': ladder, 'reasons': reasons, 'target_xy': [x, y] if x is not None else None}
