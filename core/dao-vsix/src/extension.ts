@@ -195,8 +195,11 @@ let _rtflowModule: RtflowModule | null = null;
 // 道 · 玄牝之门用之不堇 — 上游连接复用(keep-alive)
 // 免每请求重握手 → 官网导航/配置点击提速(原每次新建 TCP+TLS)
 // ═══════════════════════════════════════════════════════════
-const upstreamHttpAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 24 });
-const upstreamHttpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 24, rejectUnauthorized: false });
+const upstreamHttpAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 64, maxFreeSockets: 16 });
+const upstreamHttpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 64, maxFreeSockets: 16, rejectUnauthorized: false });
+// 道·通用网页代理(搜索引擎/任意站)连接池: 各站各自 keep-alive, 多路复用免 TLS 重握手, 根治搜索引擎「完全不可用」。
+const webProxyHttpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 10000, maxSockets: 32, maxFreeSockets: 8, rejectUnauthorized: false });
+const webProxyHttpAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 10000, maxSockets: 32, maxFreeSockets: 8 });
 // 执今之道见小曰明 — Vite 内容哈希静态资源(/assets/*)缓存 (内存 L1 + 磁盘 L2)
 // 哈希变则键变 → 永不陈旧; 免重复穿隧道 → 二次导航秒开。
 // 道·「穿透只传必要核心」: 公网用户的渲染负荷(JS/CSS/字体, 占带宽大头)经反代首取后落盘 L2,
@@ -10710,7 +10713,7 @@ async function genericWebProxy(targetUrl, depth = 0) {
             method: 'GET',
             headers: reqHeaders,
             timeout: 14000,
-            agent: false,
+            agent: isHttps ? webProxyHttpsAgent : webProxyHttpAgent,
         };
         if (isHttps) options.rejectUnauthorized = false;
         // 道·「天下之至柔驰骋于天下之致坚」— 响应体统一处理: 解压 → 下载登记 → HTML 注入(改写链接经同源代理)。直连/隧道两路共用。
