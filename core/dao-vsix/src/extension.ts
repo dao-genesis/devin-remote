@@ -3458,7 +3458,7 @@ async function bridgeAutoPersist(): Promise<void> {
         if (!bridgeUrl) { try { await bridgeStartTunnel(false); } catch { /* 守柔 */ } }
         // 内穿 MD 同步到当前账号 Knowledge(反向注入框架再扩散到所有账号) — 低频
         if (!throttled || windowChanged) { try { if (ws.devinAuth1 && ws.devinOrgId) await bridgeInjectKnowledge(); } catch { /* 守柔 */ } }
-        try { fs.writeFileSync(BRIDGE_AUTOSYNC_FILE, JSON.stringify({ lastMs: now, winKey, url: bridgeUrl || (pub && pub.url) || '', source: pub ? pub.source : 'started' }, null, 2), 'utf8'); } catch { /* 守柔 */ }
+        try { fs.writeFileSync(BRIDGE_AUTOSYNC_FILE, JSON.stringify({ lastMs: now, winKey, url: bridgeUrl || '', source: 'started' }, null, 2), 'utf8'); } catch { /* 守柔 */ }
         // v3.17.4 · 同步后扩散最新隧道信息到所有账号(签名变化才真正注, 守柔省网)
         bridgeScheduleReinject('autoPersist');
         refreshDaoCloudMiddlePanel();
