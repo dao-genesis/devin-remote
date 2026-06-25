@@ -211,12 +211,24 @@ class WorldModel:
         return {'mag': mag / n, 'cx': cx / n, 'cy': cy / n, 'aniso': aniso / n, 'fp': fp, 'sfp': sfp,
                 'n': n, 'ctx_sim': round(ctx_sim, 3)}
 
-    def verify(self, action_key, ctx, obs, fp_thr=0.8, mag_tol=0.5, locus_tol=0.18):
+    def verify(self, action_key, ctx, obs, fp_thr=0.8, mag_tol=0.5, locus_tol=0.18, mag_floor=0.0):
         """Score an observed outcome against the learned expectation for this action, using only the
         features practice proved PHASE-STABLE: magnitude (how much), fp (the |delta| footprint), and
-        centroid (where). 'present' = an effect of the expected size/footprint occurred; 'match'
-        also requires the SAME LOCUS. Both survive the full rotation cycle, so they reliably tell
-        rotate (big, on the cube) from a no-op (nothing) from a paint elsewhere (different locus).
+        centroid (where). 'present' = an effect of the expected footprint occurred; 'match' also
+        requires the SAME LOCUS. Both survive the full rotation cycle, so they reliably tell rotate
+        (big, on the cube) from a no-op (nothing) from a paint elsewhere (different locus).
+
+        GAIN INVARIANCE (the round-23 honesty fix): magnitude is an ABSOLUTE pixel-change amount and
+        is therefore SURFACE-SPECIFIC GAIN -- the same drag yields a bright stroke on a paint canvas
+        and a subtle shade shift on a 3D cube. A GENERIC affordance pools episodes from every surface,
+        so its predicted magnitude is an average of incommensurable gains that matches no single
+        surface; requiring obs to match it is provably wrong and was why cross-surface presence read
+        0/5 even when the footprint clearly transferred. The footprint 'fp' is already L2-normalised,
+        i.e. GAIN-INVARIANT: it says an effect of the right SHAPE happened regardless of sensitivity.
+        So we split by regime: on a FAMILIAR surface (interpolation, high ctx_sim) the predicted
+        magnitude is meaningful and a wrong size IS surprise -> presence still requires it. On a
+        TRANSFER (low ctx_sim, extrapolating gain across unlike surfaces) presence is gain-invariant
+        (shape + a non-noise effect) and the gain is flagged unknown rather than faked.
 
         Honest boundary found on the canvas: direction of a continuous motion (rotate vs tilt -- same
         size, same locus) is NOT decidable from one before/after pair by cheap features -- the signed
@@ -232,11 +244,19 @@ class WorldModel:
         mag_ratio = abs(pred['mag'] - obs['mag']) / denom
         locus_diff = math.hypot(pred['cx'] - obs['cx'], pred['cy'] - obs['cy'])
         aniso_diff = abs(pred.get('aniso', 0.0) - obs.get('aniso', 0.0))
-        present = (mag_ratio <= mag_tol) and (fp_sim >= fp_thr)
-        match = present and (locus_diff <= locus_tol)
         ctx_sim = pred.get('ctx_sim', 1.0)
         transfer = ctx_sim < 0.6  # prediction extrapolated from surfaces unlike this one
+        # gain-invariant: the right-shaped footprint occurred AND it was a real (non-noise) effect
+        effect_happened = obs['mag'] >= mag_floor
+        shape_present = (fp_sim >= fp_thr) and effect_happened
+        gain_known = not transfer
+        if transfer:
+            present = shape_present
+        else:
+            present = shape_present and (mag_ratio <= mag_tol)
+        match = present and (locus_diff <= locus_tol)
         return {'known': True, 'match': match, 'present': present, 'transfer': transfer,
+                'shape_present': shape_present, 'gain_known': gain_known,
                 'ctx_sim': ctx_sim, 'fp_sim': round(fp_sim, 3),
                 'locus_diff': round(locus_diff, 3), 'mag_ratio': round(mag_ratio, 3),
                 'aniso_diff': round(aniso_diff, 3), 'sfp_sim': round(sfp_sim, 3),
