@@ -50,9 +50,34 @@ def cos(a, b):
     return sum(x * y for x, y in zip(a, b)) / (na * nb)
 
 
-def context_fp(gray, cols, rows, out=4):
-    """A compact perceptual fingerprint of the current region (L2-normalised pooled grays)."""
-    return _l2(_pool(gray, cols, rows, out))
+def _grad_mag(gray, cols, rows):
+    """Per-cell gradient magnitude (|dx|+|dy|): an edge/structure map. Two surfaces with the same
+    average brightness but different LAYOUT (a centred cube vs a full grid vs a bottom strip) differ
+    here even when their pooled grays look alike."""
+    g = [0.0] * (cols * rows)
+    for j in range(rows):
+        for i in range(cols):
+            o = j * cols + i
+            dx = gray[o + 1] - gray[o] if i + 1 < cols else 0.0
+            dy = gray[o + cols] - gray[o] if j + 1 < rows else 0.0
+            g[o] = abs(dx) + abs(dy)
+    return g
+
+
+def _center(v):
+    m = sum(v) / len(v) if v else 0.0
+    return [x - m for x in v]
+
+
+def context_fp(gray, cols, rows, out=6):
+    """A discriminative perceptual fingerprint of the current region: pooled grays (WHERE it is bright)
+    plus pooled edge energy (WHERE the structure/layout is), each MEAN-CENTRED, then L2-normalised
+    together. The earlier 4x4 gray-only fingerprint saturated (every dark canvas shares the same dark
+    DC level, so cosine ~1 and the transfer/provenance signal was meaningless). Mean-centring removes
+    that shared background so only STRUCTURE drives similarity: a centred cube, a full grid, a bottom
+    timeline strip and a node box now read as different surfaces, making 'how familiar is this surface'
+    a real signal instead of always ~1."""
+    return _l2(_center(_pool(gray, cols, rows, out)) + _center(_pool(_grad_mag(gray, cols, rows), cols, rows, out)))
 
 
 def _lk_flow(pre, cur, cols, rows):
@@ -158,12 +183,21 @@ class WorldModel:
 
     def predict(self, action_key, ctx=None, k=8):
         """Expected change descriptor for an action in a context: context-weighted average of the
-        fingerprints/magnitudes of past episodes with that action. None if never seen."""
+        fingerprints/magnitudes of past episodes with that action. None if never seen.
+
+        For UNIVERSAL adaptability the action_key is a GENERIC gesture (e.g. 'drag', not
+        'drag_right_in_app_X'), so episodes from every surface pool into one affordance. The returned
+        'ctx_sim' (max cosine to any remembered context) is the honest provenance signal: high => this
+        surface resembles ones already practiced (interpolation); low => the prediction is a TRANSFER
+        extrapolated from dissimilar surfaces. We never fake certainty -- we report how far we reach."""
         cand = [e for e in self.ep if e['a'] == action_key]
         if not cand:
             return None
+        ctx_sim = 1.0
         if ctx is not None:
-            cand = sorted(cand, key=lambda e: -cos(ctx, e.get('ctx') or []))[:k]
+            sims = [cos(ctx, e.get('ctx') or []) for e in cand]
+            ctx_sim = max(sims) if sims else 0.0
+            cand = [c for _, c in sorted(zip(sims, cand), key=lambda z: -z[0])][:k]
         n = len(cand)
         L = len(cand[0]['d']['fp'])
         fp = [0.0] * L; sfp = [0.0] * L
@@ -174,7 +208,8 @@ class WorldModel:
                 sfp[i] += e['d'].get('sfp', [0.0] * L)[i]
             mag += e['d']['mag']; cx += e['d']['cx']; cy += e['d']['cy']; aniso += e['d'].get('aniso', 0.0)
         fp = _l2([v / n for v in fp]); sfp = _l2([v / n for v in sfp])
-        return {'mag': mag / n, 'cx': cx / n, 'cy': cy / n, 'aniso': aniso / n, 'fp': fp, 'sfp': sfp, 'n': n}
+        return {'mag': mag / n, 'cx': cx / n, 'cy': cy / n, 'aniso': aniso / n, 'fp': fp, 'sfp': sfp,
+                'n': n, 'ctx_sim': round(ctx_sim, 3)}
 
     def verify(self, action_key, ctx, obs, fp_thr=0.8, mag_tol=0.5, locus_tol=0.18):
         """Score an observed outcome against the learned expectation for this action, using only the
@@ -199,7 +234,10 @@ class WorldModel:
         aniso_diff = abs(pred.get('aniso', 0.0) - obs.get('aniso', 0.0))
         present = (mag_ratio <= mag_tol) and (fp_sim >= fp_thr)
         match = present and (locus_diff <= locus_tol)
-        return {'known': True, 'match': match, 'present': present, 'fp_sim': round(fp_sim, 3),
+        ctx_sim = pred.get('ctx_sim', 1.0)
+        transfer = ctx_sim < 0.6  # prediction extrapolated from surfaces unlike this one
+        return {'known': True, 'match': match, 'present': present, 'transfer': transfer,
+                'ctx_sim': ctx_sim, 'fp_sim': round(fp_sim, 3),
                 'locus_diff': round(locus_diff, 3), 'mag_ratio': round(mag_ratio, 3),
                 'aniso_diff': round(aniso_diff, 3), 'sfp_sim': round(sfp_sim, 3),
                 'pred_mag': round(pred['mag'], 3), 'obs_mag': round(obs['mag'], 3), 'n': pred['n']}

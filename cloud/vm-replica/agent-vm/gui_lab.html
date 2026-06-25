@@ -1,0 +1,48 @@
+<!doctype html><html><head><meta charset="utf-8"><title>gui-lab</title>
+<style>html,body{margin:0;background:#111}canvas{display:block;margin:0 auto;background:#1b1b22}</style>
+</head><body>
+<canvas id="c" width="640" height="420"></canvas>
+<script>
+// A multi-surface PURE-<canvas> lab for UNIVERSAL GUI-operation practice. No DOM controls, no
+// accessibility tree -- only pixels + the same human gestures (drag/click/scroll). Each surface is
+// a different strong-GUI archetype that humans operate the same way (hold and drag) but that paints
+// a different visual signature. The point is to grow ONE generic 'drag' affordance whose universal
+// part (an effect happens, localized near the cursor path) transfers to a never-practiced surface,
+// while the surface-specific part (exact footprint/direction) honestly does not.
+// Pick a surface with the URL hash: #orbit #pan #paint #timeline #node
+const c=document.getElementById('c'),x=c.getContext('2d'),W=640,H=420;
+const mode=(location.hash||'#orbit').slice(1);
+let ay=0.6,ax=0.5,ox=0,oy=0,strokes=[],node=[300,190],play=0.5,dragging=false,lx=0,ly=0;
+window.__truth=function(){return {mode,ay:+ay.toFixed(3),ax:+ax.toFixed(3),ox,oy,
+  node:[node[0]|0,node[1]|0],play:+play.toFixed(3),strokes:strokes.length};};
+const V=[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+const E=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+function bg(){x.fillStyle='#1b1b22';x.fillRect(0,0,W,H);}
+function drawOrbit(){const cx=320,cy=210,s=120,cY=Math.cos(ay),sY=Math.sin(ay),cX=Math.cos(ax),sX=Math.sin(ax);
+  const P=V.map(v=>{let[X,Y,Z]=v;let x1=X*cY-Z*sY,z1=X*sY+Z*cY;let y1=Y*cX-z1*sX,z2=Y*sX+z1*cX;let f=3/(3+z2);return[cx+x1*s*f,cy+y1*s*f];});
+  x.strokeStyle='#5cf';x.lineWidth=2;x.beginPath();for(const[a,b]of E){x.moveTo(P[a][0],P[a][1]);x.lineTo(P[b][0],P[b][1]);}x.stroke();}
+function drawPan(){x.strokeStyle='#4a7';x.lineWidth=1;const g=40;
+  for(let i=-1;i<W/g+1;i++){let px=((i*g+ox%g)+W)%W;x.beginPath();x.moveTo(px,0);x.lineTo(px,H);x.stroke();}
+  for(let j=-1;j<H/g+1;j++){let py=((j*g+oy%g)+H)%H;x.beginPath();x.moveTo(0,py);x.lineTo(W,py);x.stroke();}
+  x.fillStyle='#fc6';for(let i=0;i<8;i++)for(let j=0;j<5;j++){x.beginPath();x.arc(((i*80+ox)%W+W)%W,((j*84+oy)%H+H)%H,5,0,7);x.fill();}}
+function drawPaint(){x.strokeStyle='#f85';x.lineWidth=10;x.lineCap='round';
+  for(const st of strokes){if(st.length<2)continue;x.beginPath();x.moveTo(st[0][0],st[0][1]);for(const p of st)x.lineTo(p[0],p[1]);x.stroke();}}
+function drawTimeline(){x.fillStyle='#2a2a33';x.fillRect(40,170,560,80);
+  x.fillStyle='#69d';for(let i=0;i<56;i++){let h=10+40*Math.abs(Math.sin(i*0.7));x.fillRect(46+i*10,210-h/2,6,h);}
+  let px=40+560*Math.max(0,Math.min(1,play));x.strokeStyle='#fd5';x.lineWidth=3;x.beginPath();x.moveTo(px,160);x.lineTo(px,260);x.stroke();}
+function drawNode(){x.strokeStyle='#445';x.lineWidth=1;for(let i=0;i<W;i+=32){x.beginPath();x.moveTo(i,0);x.lineTo(i,H);x.stroke();}
+  x.fillStyle='#7d8';x.fillRect(node[0]-40,node[1]-26,80,52);x.fillStyle='#143';x.fillRect(node[0]-40,node[1]-26,80,14);}
+function draw(){bg();({orbit:drawOrbit,pan:drawPan,paint:drawPaint,timeline:drawTimeline,node:drawNode}[mode]||drawOrbit)();}
+function apply(px,py,dx,dy){
+  if(mode==='orbit'){ay+=dx*0.01;ax+=dy*0.01;}
+  else if(mode==='pan'){ox+=dx;oy+=dy;}
+  else if(mode==='paint'){if(strokes.length)strokes[strokes.length-1].push([px,py]);}
+  else if(mode==='timeline'){play+=dx/560;}
+  else if(mode==='node'){node[0]+=dx;node[1]+=dy;}
+}
+c.addEventListener('mousedown',e=>{const r=c.getBoundingClientRect();lx=e.clientX-r.left;ly=e.clientY-r.top;dragging=true;if(mode==='paint')strokes.push([[lx,ly]]);});
+window.addEventListener('mousemove',e=>{if(!dragging)return;const r=c.getBoundingClientRect(),px=e.clientX-r.left,py=e.clientY-r.top;apply(px,py,px-lx,py-ly);lx=px;ly=py;draw();});
+window.addEventListener('mouseup',()=>dragging=false);
+window.addEventListener('hashchange',()=>location.reload());
+draw();
+</script></body></html>
