@@ -55,6 +55,51 @@ def context_fp(gray, cols, rows, out=4):
     return _l2(_pool(gray, cols, rows, out))
 
 
+def _lk_flow(pre, cur, cols, rows):
+    """Global Lucas-Kanade optical flow between two gray grids: least-squares motion (u,v) from
+    spatial gradients (Ix,Iy) and the temporal difference (It). Returns (u,v,conf) where conf is the
+    smaller eigenvalue proxy (gradient structure strength). Principled motion estimate, not a shape
+    heuristic. u in cell-widths, v in cell-heights (caller may rescale to pixels for isotropy)."""
+    sxx = sxy = syy = sxt = syt = 0.0
+    for j in range(1, rows - 1):
+        for i in range(1, cols - 1):
+            o = j * cols + i
+            ix = (cur[o + 1] - cur[o - 1]) * 0.5
+            iy = (cur[o + cols] - cur[o - cols]) * 0.5
+            it = cur[o] - pre[o]
+            sxx += ix * ix; sxy += ix * iy; syy += iy * iy
+            sxt += ix * it; syt += iy * it
+    det = sxx * syy - sxy * sxy
+    if abs(det) < 1e-6:
+        return None
+    u = -(syy * sxt - sxy * syt) / det
+    v = -(sxx * syt - sxy * sxt) / det
+    tr = sxx + syy
+    conf = 0.5 * (tr - math.sqrt(max(0.0, tr * tr - 4 * det)))  # smaller eigenvalue
+    return u, v, conf
+
+
+def flow_axis(frames, cols, rows, px_w=1.0, px_h=1.0):
+    """The honest fix for the rotate-vs-tilt boundary: a TEMPORAL cue. Given a sequence of gray grids
+    captured DURING a continuous drag, accumulate per-sub-frame optical flow (Lucas-Kanade) and
+    report the dominant motion AXIS.
+
+    A single before/after pair cannot tell a horizontal rotate from a vertical tilt (same size, same
+    locus; signed delta is phase-dependent). Across sub-frames the true motion has a stable axis:
+    rotate moves features horizontally (|u| dominates), tilt vertically (|v|). px_w/px_h rescale cell
+    units to pixels so non-square cells do not bias the axis. Returns axis in [-1,1]: >0 horizontal
+    (rotate), <0 vertical (tilt); |axis| near 0 = ambiguous."""
+    sx = sy = 0.0; pairs = 0
+    for k in range(1, len(frames)):
+        fl = _lk_flow(frames[k - 1], frames[k], cols, rows)
+        if fl is None:
+            continue
+        u, v, conf = fl
+        sx += abs(u * px_w) * conf; sy += abs(v * px_h) * conf; pairs += 1
+    axis = (sx - sy) / (sx + sy) if (sx + sy) > 0 else 0.0
+    return {'axis': round(axis, 3), 'sx': round(sx, 2), 'sy': round(sy, 2), 'pairs': pairs}
+
+
 def change_descriptor(pre, cur, cols, rows, out=4):
     """Describe the local visual change between two gray grids: how much (mag), where (centroid),
     a magnitude fingerprint 'fp' (down-pooled |delta|, says SOMETHING happened here), and a SIGNED
