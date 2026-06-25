@@ -256,37 +256,50 @@ function _pj(raw){ try{ var o=JSON.parse(raw||"{}"); return (o&&typeof o==="obje
 function _conn(){ return _pj(N.conn?N.conn():""); }
 function _relay(){ return _pj(N.relayStatus?N.relayStatus():""); }
 //__CHANSEL_START__ (经 test/channel-select.test.js 切片 eval 实测, 勿删标记)
-// 「当前生效的最优公网入口」选取 (道法自然·对齐本源 AGENTS: 默认零账号中继 Worker, 隧道仅作冗余):
-//   零账号中继 Worker 始终在线、浏览器可直开 /console、无需任何隧道/凭证 → 作首选(connected 时);
-//   仅当中继暂掉线时, 才回落去中心化隧道(cloudflared 主 > SSH 备), 末位再以 Worker 兜底(即便未连)。
-//   旧实现把「可能掉线」的隧道排在中继之前且不探活 → 死隧道被当「当前生效通道」对外广播, 浏览器必打不开。
+// 公网入口选取 (道法自然·下放中继 Worker → 去中心化为本, Worker 仅末位兜底):
+//   ① 网页直开首选「去中心化 P2P 网控台」: 中立公共 CDN 托管的 p2p-client.html, 经多家公共 ntfy 信令
+//      + WebRTC 直连本机 serve() 应答方, 全程不经任何 Worker; 浏览器零账号、链接自带 session+token+auto=1。
+//   ② RPC/curl 公网入口首选已建立的去中心化隧道 (cloudflared 主 > SSH 备), 二者皆独立于中继 Worker;
+//      仅当去中心化路径都不可得时, 才以中继 Worker 末位兜底 (即便其在线也不再抢首位)。
 //   局域网仅同网可达, 不计入「公网」; P2P 是握手机制非基础 URL。
+// 去中心化网页直开宿主: 中立公共 CDN 托管的 p2p-client.html (非任何 Worker)。base 可由
+//   conn.webConsoleBase 覆写(自托管/换镜像 → 更彻底去中心), 默认 jsDelivr 取本仓库源文件 (含同目录 signal.js)。
+var P2P_WEB_DEFAULT = "https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/p2p-client.html";
+function _p2pWebBase(){ var c=_conn(); return String((c&&c.webConsoleBase)||P2P_WEB_DEFAULT).replace(/\s+/g,""); }
+function _p2pWebUrl(){
+  var c=_conn();
+  if(!c.session || !c.token) return "";   // 去中心化直连需 session+token 作定址(topic)+鉴权(密钥)
+  return _p2pWebBase()+"?session="+encodeURIComponent(c.session)+"&token="+encodeURIComponent(c.token)+"&auto=1";
+}
 function _bestPublic(){
   var c=_conn(), t=_tunnel(), r=_relay();
   var tl=(t&&t.tunnels&&t.tunnels.length)?t.tunnels:[];
   function pick(name){ for(var i=0;i<tl.length;i++){ if(tl[i].name===name && tl[i].url) return tl[i].url; } return ""; }
-  var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
-  if(w && r.connected!==false) return { base:w, kind:'worker', label:'零账号中继(始终在线·浏览器免隧道直开)', online:true };
   var cf=pick('cloudflared'), sh=pick('ssh');
+  // 去中心化优先(脱离对中继 Worker 的依赖): 已建立的 cloudflared / SSH 隧道直达本机, 独立于 Worker。
+  //   死隧道不会进 tunnels(原生摘除/标 fallback) → pick 返回空, 不会广播死链。
   if(cf) return { base:String(cf).replace(/\/$/,''), kind:'cloudflared', label:'cloudflared 去中心化隧道', online:true };
   if(sh) return { base:String(sh).replace(/\/$/,''), kind:'ssh', label:'SSH 反向隧道(独立于 Cloudflare)', online:true };
-  if(w) return { base:w, kind:'worker', label:'零账号中继·兜底', online:!!r.connected };
+  // 末位兜底: 中继 Worker (已下放; 在线与否都排最后, 不再抢首位)。
+  var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
+  if(w) return { base:w, kind:'worker', label:'零账号中继·末位兜底', online:!!r.connected };
   return { base:"", kind:'none', label:'(暂无可用公网入口)', online:false };
 }
-// 浏览器可直开的最优网页入口: 只要有 Worker 基址就永远优先零账号中继 /console —— 不再受「WSS 暂掉/被限流」门控。
-//   理由(道法自然·随实情修正): /console 由 Cloudflare 托管, HTML 永远能加载; 且单网页已内置「通道自愈」
-//   (PR #547: 自动探活切到活通道 + 重连)。即使 Worker WSS 暂掉/被限流, /console 也能打开并自愈, 远胜于把
-//   「在本网络注定 530/1033 的 cloudflared」当网页直开对外广播 —— 那才是用户「复制的链接打不开」的真凶。
-//   分享链接以「普适可达」为先: Worker(全网可开) > 隧道(全网但脆弱) > 局域网(仅同网)。
+// 浏览器可直开的最优网页入口 (道法自然·去中心化为本, Worker 由首选降为兜底):
+//   ① 去中心化 P2P 网控台(CDN 托管 p2p-client.html·公共 ntfy 信令·WebRTC, 完全不经 Worker);
+//   ② 活的去中心化隧道直供本机外壳; ③ 局域网直连; ④ 末位才回落中继 Worker /console。
 function _bestWeb(){
   var c=_conn(), r=_relay();
-  var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
-  if(w) return { url:_webConsoleUrl(w,true), kind:'worker', base:w,
-    label:(r.connected!==false?'零账号中继网控台(始终在线·免隧道)':'零账号中继网控台(自愈重连中·免隧道)') };
+  var p2p=_p2pWebUrl();
+  if(p2p) return { url:p2p, kind:'p2p-web', base:_p2pWebBase(),
+    label:'去中心化 P2P 网控台(CDN·零账号·不经 Worker)' };
   var bp=_bestPublic();
   if(bp.base && bp.kind!=='worker') return { url:_webConsoleUrl(bp.base,true), label:bp.label, kind:bp.kind, base:bp.base };
   var l=_lan(); var us=(l&&l.urls)||[];
   if(us.length){ var lb=String(us[0]).replace(/\/$/,''); return { url:_webConsoleUrl(lb,true), label:'局域网直连(同网·零中继零隧道)', kind:'lan', base:lb }; }
+  var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
+  if(w) return { url:_webConsoleUrl(w,true), kind:'worker', base:w,
+    label:(r.connected!==false?'零账号中继网控台(末位兜底·免隧道)':'零账号中继网控台(自愈重连中·末位兜底)') };
   return { url:"", label:'(暂无)', kind:'none', base:"" };
 }
 //__CHANSEL_END__
@@ -318,8 +331,8 @@ function _cloudMd(){
     "# Devin Cloud 手机版 · 接入文档 (唯一·两大模块·全量展开)","",
     "> 手机已通过公网中继挂载, 任意云端 Agent (与你一样的 Devin Cloud) 可经隧道远程驱动。**两大模块、全部命令已直接平铺在下方**, 无渐进式披露、无隐藏、无文档级限制 — 读这一篇即可直接调用任意能力, 操作到底层 API。鉴权即边界: 持本 Token 即拥有对本机的完整接入(含 shell), Token 可随时刷新、务必保密。","",
     "## 接入信息",
-    "- 网页直开(任意浏览器·零账号免隧道, 打开即与 APK 同款操作): `"+(web.url||"(等中继连通)")+"`",
-    "- RPC 公网入口(给云端 Agent / curl): `"+pub+"`",
+    "- 网页直开(任意浏览器·零账号·去中心化 WebRTC P2P 直连·不经任何 Worker, 打开即与 APK 同款操作): `"+(web.url||"(等设备身份就绪)")+"`",
+    "- RPC 公网入口(给云端 Agent / curl·去中心化隧道优先, 中继 Worker 仅末位兜底): `"+pub+"`",
     "- 鉴权: `Authorization: Bearer "+(c.token||"<TOKEN>")+"`",
     "- Session: `"+(c.session||"<SESSION>")+"`","",
     _channelsMd(),"",
@@ -462,16 +475,16 @@ function handle(m){
     var bp=_bestPublic(); var base=(bp.base||"").replace(/\/$/,'');
     var u=base+"/relay/"+c.session;
     var web=_bestWeb();
-    // 永久稳定链接(刷新/隧道轮换都不失效): 当前若在广播临时隧道, 再附上零账号中继 /console ——
-    //   它由 Cloudflare 托管, HTML 永远能加载; 单网页已内置「通道自愈」, 打开即自动探活切到活通道。
+    // 兜底直开链接: 当主入口是去中心化 P2P 网控台时, 再附上中继 Worker /console 作兜底 ——
+    //   仅当去中心化(CDN+ntfy+WebRTC)在对端被封/打不开时备用; 它由 Cloudflare 托管, 单网页内置通道自愈。
     var _wb=((_relay().activeUrl||c.url)||"").replace(/\/$/,'');
-    var _stableUrl=(_wb && web.kind!=='worker')?_webConsoleUrl(_wb,true):"";
+    var _fallbackUrl=(_wb && web.kind!=='worker')?_webConsoleUrl(_wb,true):"";
     // 轻量级快速接入: 网页直开网址(浏览器) + 接入信息 + 两步授权 + curl 模板 + 软件/手机最常用命令。
     var block=[
       "═══ Devin Cloud 手机版 · 快速接入 ═══",
       "【网页直开·任意浏览器打开即与本机 APK 同款操作】",
-      "  "+(web.url||"(等中继连通后自动出现)"),
-      "  ↑ 零账号·免隧道·免凭证, 经["+web.label+"]; 复制到电脑/平板/别的手机浏览器即可。含 Token, 仅发可信方。",
+      "  "+(web.url||"(等设备身份就绪后自动出现)"),
+      "  ↑ 零账号·去中心化 WebRTC P2P 直连, 经["+web.label+"], 不经任何中转 Worker; 复制到电脑/平板/别的手机浏览器即可。含 Token, 仅发可信方。",
       "",
       "当前生效通道: "+bp.label,
       "RPC 接口(给云端 Agent / curl, 非浏览器直开): "+u,
@@ -494,11 +507,11 @@ function handle(m){
     // 局域网直连 (零中继零隧道·同网最优): 若已取得局域网地址, 一并附上, 控制端同网时优先直连本机。
     try{ var l=_lan(); var us=(l&&l.urls)||[]; if(us.length){ block.push(""); block.push("【局域网直连·同网优先·零中继零隧道·直连本机】");
       us.forEach(function(x){ block.push("  直连入口: "+x+"/relay/"+(c.session||"")); }); } }catch(e){}
-    if(_stableUrl){ block.splice(4,0,
+    if(_fallbackUrl){ block.splice(4,0,
       "",
-      "【永久稳定链接·刷新/隧道轮换都不失效·推荐收藏】",
-      "  "+_stableUrl,
-      "  ↑ 经零账号中继(始终在线·Cloudflare 托管), 上面临时隧道死了它也能开; 单网页已内置通道自愈, 打开即自动连活通道。"); }
+      "【兜底直开链接·仅当上面去中心化直开打不开时再用】",
+      "  "+_fallbackUrl,
+      "  ↑ 经中继 Worker(已下放为末位兜底·Cloudflare 托管), 万一公共 CDN/ntfy 在对端被封时备用; 单网页已内置通道自愈。"); }
     block=block.join("\n");
     try{N.clip&&N.clip(block);}catch(e){} _result('copyAccess',true,'已复制·轻量快速接入(接入信息+授权+常用命令+局域网直连), 全量见接入文档'); return; }
   if(op==='copyUrl'){ var u=c.url.replace(/\/$/,'')+"/relay/"+c.session; try{N.clip&&N.clip(u);}catch(e){} _result('copyUrl',true,'已复制公网入口'); return; }
@@ -864,6 +877,12 @@ function refreshA11y(){
 function _channels(){
   var c=_conn(), t=_tunnel(), l=_lan(), r=_relay();
   var sid=c.session||"", suf="/relay/"+sid, out=[];
+  // 去中心化 P2P 网控台(首选·CDN 托管 p2p-client.html·公共 ntfy 信令·WebRTC 直连·完全不经 Worker):
+  //   设备 serve() 应答方常驻(身份就绪即在线), 任意浏览器打开链接即零账号直连本机。
+  var p2pWeb=""; try{ p2pWeb=_p2pWebUrl(); }catch(e){}
+  out.push({label:"去中心化 P2P 网控台 · CDN 直开(零账号·不经 Worker)", online:!!p2pWeb,
+            urls: p2pWeb?[p2pWeb]:[],
+            note: p2pWeb?"任意浏览器打开即经公共 ntfy 信令 + WebRTC 直连本机, 全程不经任何中转 Worker":"等设备 session+token 就绪后自动出现"});
   var lus=(l.urls||t.lanUrls||[]), lanOn=(l.lanDirect!==undefined?!!l.lanDirect:!!t.lanDirect);
   out.push({label:"局域网直连 · 零中继零隧道·同网最优", online:lanOn&&lus.length>0,
             urls: lus.map(function(x){return x+suf;})});
@@ -879,9 +898,9 @@ function _channels(){
     out.push({label:"去中心化隧道 (cloudflared 主 / SSH 备)", online:false, urls:[], note:"开启上方「去中心化隧道」即每设备独立免费公网入口"});
   }
   var base=((r.activeUrl||c.url)||"").replace(/\/$/,'');
-  out.push({label:"中继 Worker · 兜底（仅其他公网通道不可用时）", online:!!r.connected, urls:(base&&sid)?[base+suf]:[], note: base?"":"未配置"});
-  out.push({label:"WebRTC P2P · 真打洞(打开 p2p-client.html)", online:tl.length>0, urls:[],
-            note:"借任一公网入口握手一次, 之后 RPC 走 P2P DataChannel·不再经隧道"});
+  out.push({label:"中继 Worker · 末位兜底（仅其他公网通道全不可用时）", online:!!r.connected, urls:(base&&sid)?[base+suf]:[], note: base?"已下放为最后手段·去中心化路径优先":"未配置"});
+  out.push({label:"WebRTC P2P · 底层机制(经公共 ntfy 信令一次性交换 SDP)", online:!!p2pWeb, urls:[],
+            note:"无需任何隧道/Worker: 公共 ntfy 多家实例做一次性加密信令, 之后 RPC 全程走 P2P DataChannel"});
   // 标注「当前生效」通道 (= 公网网址/复制接入信息 实际选用的那条; 优先去中心化隧道, Worker 仅兜底)
   try{ var bp=_bestPublic(); if(bp.base) out.forEach(function(ch){ ch.active=!!(ch.urls&&ch.urls.length&&ch.urls[0].indexOf(bp.base)===0); }); }catch(e){}
   return out;
@@ -889,7 +908,7 @@ function _channels(){
 // 接入文档用: 把当前所有可用渠道渲染成 Markdown 表 (随实时状态自动更新, 与面板总览同源)。
 function _channelsMd(){
   var rows=["## 接入渠道总览 (本设备实时·任一可用·同一 Token/Session/E2E Key)","",
-            "> 控制端就近择优: 同网走局域网直连(最优), 跨网走去中心化隧道, 隧道不可用兜底中继; 愿意升级的客户端可走 WebRTC P2P。",
+            "> 控制端就近择优(去中心化为本·中继 Worker 已下放为末位兜底): 浏览器直开首选「去中心化 P2P 网控台」(CDN+ntfy 信令+WebRTC, 不经任何 Worker); 同网可走局域网直连(最优); 跨网 curl 走去中心化隧道(cloudflared/SSH); 仅当以上全不可用才回落中继 Worker。",
             "","| 渠道 | 状态 | 入口 |","|------|------|------|"];
   _channels().forEach(function(ch){
     var ent=(ch.urls&&ch.urls.length)?ch.urls.join("<br>"):(ch.note||"—");
