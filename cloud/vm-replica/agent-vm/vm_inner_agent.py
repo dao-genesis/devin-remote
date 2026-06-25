@@ -1414,7 +1414,7 @@ def act(body):
     # second key dimension that tells a translating surface (pan) from a rotating one (orbit) a priori,
     # even when every static appearance descriptor reads them as the same surface.
     dyn_sig = None
-    if eff is not None and op == 'drag' and _vmodel is not None and eff_region and body.get('x2') is not None:
+    if eff is not None and op == 'drag' and _vmodel is not None and eff_region and body.get('x2') is not None and eff.get('use_dyn', True):
         l_, t_, r_, b_ = eff_region
         frames = drag_sampled(x, y, int(body['x2']), int(body['y2']), eff_region, 16, 16, samples=10)
         dyn_sig = _vmodel.motion_signature(frames, 16, 16, (r_ - l_) / 16.0, (b_ - t_) / 16.0).get('sig')

@@ -683,3 +683,62 @@ pan 指向 ~[1,0]，orbit 指向 ~[0,1]，二者余弦**塌到借用阈值之下
 
 > 絕利一源，用師十倍——一次拖拽既证形、又裁增益、又量动学，一源三用。
 > 知静之不能尽别，乃问其动；动以辨之，借乃借对，不待事后之证伪。無為而無不為。
+
+---
+
+## 27. 第 27 轮：把 dyn 闸下放到**完整活体 act 路径**（终结"离线能用、活体休眠"）
+
+### 27.1 问题：闸只在离线谐振里响过，活体路径里从未真正发生过错借
+
+round-26 用 `practice_dynamic.py`（离线）证明了 dyn 能事前否决错借，但那是**人为孤立**
+出来的：只存 trainer 标定、再查 partner，逼出唯一候选。在**完整 act 路径**里，凡自身属
+迁移的面都会**自标定**，于是每个像同面最终各用自己正确的增益——错借在正常工作下根本
+不会冒头。这留下一道缝：**dyn 闸在真实 act() 调用链里其实从未被触发过**，"它能工作"只
+被离线证过。本轮要在活体路径里**真实地制造一次错借窗口**，再让 dyn 在其中事前拒借/借对。
+
+### 27.2 做法：活体 leave-one-out（留出像同对、只在非像同面上预存情节）
+
+`practice_dynamic_live.py` 全程走 HTTP `POST /act`（真实 `vm_inner_agent.py` 进程 + 真实
+Chrome lab），协议：
+
+- **阶段 1（训练情节，不存增益）**：在 `pan + paint + timeline + node` 上各拖 3 次
+  （`learn=True, calibrate=False`）。**故意把 orbit 留在外面**——pan 留在内，使 orbit 的
+  `|delta|` 足迹日后能经 round-23 的像同匹配被**认出**。
+- **阶段 2（冷遇 orbit，存唯一标定）**：对 orbit 冷拖一次 `calibrate=True`。orbit 足迹经
+  pan 像同被认出 → 触发再校准 → orbit 以**旋转 dyn** 存下它的标定（成为唯一候选）。
+- **阶段 3 A/B（熟悉 pan 面对 orbit 的旧标定）**：
+  - `use_dyn=False`：pan 读到 orbit 的像同标定，静态 cos 0.976 ≥ 0.6 → **借**（round-25 行为，
+    `calibrated=True`）——这正是要否决的泄漏。
+  - `use_dyn=True`：`min(静态 cos, 动态 cos)=0.496 < 0.6` → **事前否决**（round-26 行为，
+    `calibrated=False`）——闸在 act() 里真实触发。
+
+新增 `use_dyn` 开关（`vm_inner_agent.py` 拖拽分支 `eff.get('use_dyn', True)`，默认 True、
+向后兼容）使 A/B 可在同一活体进程里对照。
+
+### 27.3 活体实测结果（真实 act 路径，EXIT=0）
+
+```
+round-25  pan dyn=None           cal_sim=0.976  calibrated=True   present=True   <- 借（泄漏）
+round-26  pan dyn=[0.953,0.303]  cal_sim=0.496  calibrated=False  present=False  <- 事前否决
+RESULT: PASS -- the dynamic gate is no longer dormant; it fires end-to-end in act()
+```
+
+- `use_dyn=False` 复刻 round-25 的跨面错借（cal_sim 0.976，借成）；
+- `use_dyn=True` 在**完整 act() 链路**里把它事前挡掉（cal_sim 0.496）。闸不再休眠。
+- 否决后 pan 落回"形在、量未知"（present=False）——诚实，不伪造幅度匹配；若开 calibrate
+  它会就地标自己的增益，而非错借 orbit 的。
+
+**零回归**：universal/canvas/escalate/servo/goalseek/flow/calibrate +
+test_motion_signature + practice_dynamic 全绿（EXIT=0），冷拖 present 仍 2/5。
+
+### 27.4 诚实边界
+
+- 这只把 round-26 已证的闸从**离线谐振**搬进**活体路径**真实触发一次；它**没有**改变
+  dyn 的判别力，也未声称能区分 orbit/pan 以外的面。
+- A/B 靠的是 `use_dyn` 开关人为开/关 dyn 捕获；这是**对照实验脚手架**，非生产开关——
+  生产默认 `use_dyn=True`，闸常驻。
+- 阶段 2 能存下 orbit 标定，依赖 round-23 的像同认出（pan 留在情节里）；若像同链断，
+  这道活体窗口也就不存在——边界与前几轮一脉相承，未额外假设。
+
+> 不窺於牖，以知天道——离线已知其理；然知而未行，犹隱也。
+> 行於大道，唯施是畏：必使闸在真器真链里真响一次，方谓之闭环。無為而無不為。
