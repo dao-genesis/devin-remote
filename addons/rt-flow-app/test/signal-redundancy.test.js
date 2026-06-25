@@ -150,6 +150,15 @@ function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { fai
   ok(/now\s*-\s*c\.lastRx\s*>\s*90000[\s\S]*?\.close\(\)/.test(subSeg), "H2 >90s 无入站即判半开并 close(触发自动重连)");
   ok(/clearInterval\(wd\)/.test(subSeg), "H3 close() 清理看门狗定时器(不残留)");
 
+  // I) route-C 中继存活探测预算(源码守卫): relay 兜底/forceRelay 的 ping() 须用 RELAY_PING_TO(≥15s),
+  //    覆盖真机移动网 ntfy mesh 往返(实测 6~9s)+ 一次重传; 旧值 8000ms 卡往返边界 → 可用中继被误判 relay_timeout
+  //    而放弃、connect 误抛 ice_failed。守住「ping 预算明显大于单程往返」不被回退。
+  const pingDefIdx = src.indexOf("ping: function ()");
+  const pingDefSeg = pingDefIdx >= 0 ? src.slice(pingDefIdx, pingDefIdx + 220) : "";
+  ok(/relaySend\("ping",\s*null,\s*RELAY_PING_TO\)/.test(pingDefSeg), "I1 relay 兜底 ping() 用 RELAY_PING_TO(非硬编码 8000)");
+  const pingToVal = (function () { const m = src.match(/RELAY_PING_TO\s*=\s*(\d+)/); return m ? parseInt(m[1], 10) : 0; })();
+  ok(pingToVal >= 15000, "I2 RELAY_PING_TO ≥ 15000ms (覆盖 mesh 往返 6~9s + 重传, 实=" + pingToVal + ")");
+
   console.log(failures ? ("\n失败 " + failures + " 项 ✗") : "\n全通 ✓");
   process.exit(failures ? 1 : 0);
 })().catch(function (e) { console.error("测试异常:", e); process.exit(1); });
