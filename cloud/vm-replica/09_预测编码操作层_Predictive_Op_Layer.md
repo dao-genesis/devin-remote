@@ -124,3 +124,24 @@ act({ op, target, expect, retry? })
 实测 round-3：右键菜单 `menu_open` 弹出/关闭双向命中；`where_changed` 在文本滚动时定位到变化格而 dHash 漏判（佐证统一到瓦片均值的必要）。多应用实践合计 **15/15 命中、0 截图、0 视觉调用**（新增 context-menu 场景 2/2）。
 
 > 弹窗以枚举顶层窗见之，保形变化以瓦片均值察之。所缺者补之，所过者抑之，损之又损，以至于无为而无不为。
+
+---
+
+## 八、v3 round-4 · UI Automation：触达现代 UI 框架（最大杠杆）
+
+实践到"真正复杂的商业软件"，撞上**本源级最大坑**：
+
+6. **原生 HWND 控件树看不见现代 UI 框架。** `find` 走的是 `EnumChildWindows`/`GetWindow` 原生 Win32 句柄树——但 **Windows Ribbon（mspaint/wordpad/explorer）、WPF、UWP/XAML（Calculator）、Chromium/Electron、Qt** 这些框架的控件**根本没有 per-control HWND**（自绘 + 仅经辅助功能层暴露）。实测：mspaint 工具栏 HWND 树只有 `Ribbon`/`UIRibbonWorkPane` 容器；Calculator 整个按钮阵列在 HWND 树里**不可达**（此前只能"如实跳过"）。这正是商业软件的主体形态。
+   - → 新增 `uia.py`：**纯 ctypes COM** 实现的极简 `IUIAutomation` 客户端（零 pip 依赖，保持可冻结 EXE）。`CoCreateInstance(CUIAutomation)` → `ElementFromHandle(前台窗)` → `FindAll(Subtree, TrueCondition)` → 逐元素读 `Name/ControlType/ClassName/BoundingRectangle`，在 Python 端按 `text/class/control_type/regex` 过滤，返回 `center` 供点击。
+   - → `find` 改为 **`find_any`：先走最廉价的 HWND 树，空了再自动回退 UIA**（人类直觉：先看显眼控件，没有再调更丰富的辅助层）。`_resolve_target` / `appears` / `value` 同步走 `find_any`。响应带 `backend: tree|uia`。
+   - → 守护式可选导入：UIA 不可用时静默回退 HWND/视觉，**绝不硬依赖**。`vtable` 下标经实测校正（`get_CurrentBoundingRectangle`=43）；`HRESULT` 用 `c_long` 自查以免 ctypes 自动抛错破坏回退。
+
+实测 round-4（自身 console，`practice_apps.py`）：
+| 应用 | 此前 | 现在 | 路径 |
+|---|---|---|---|
+| **Calculator**（UWP/XAML） | 跳过·不可达 | **7+8=15 全程自动** | UIA find 按钮 + region 校验 + UIA 读回结果 |
+| **mspaint Ribbon** | 工具栏不可见 | 'Brushes' 按钮精确定位 @[470,181] | UIA find |
+
+合计 **21/21 命中、2279 字节、0 截图、0 视觉调用**。`find 'Add'` 命中 2 个（含 'Memory add'）→ 用 `regex:^Add$` 精确消歧（substring 默认便利，需要精确时给 regex）。
+
+> 显隐之控件，HWND 见其形于先，UI Automation 通其神于后。先廉后丰，先简后繁，函三层（树/UIA/视觉）于一 `find`，是谓"大制无割"。再实践、再完善，循环不止。

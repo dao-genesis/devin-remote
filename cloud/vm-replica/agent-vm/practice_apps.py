@@ -131,23 +131,59 @@ def scen_contextmenu(W, H):
 
 
 def scen_calc(W, H):
-    rec = {'app': 'calc', 'archetype': 'button grid (semantic find + value)', 'steps': [], 'matched': 0, 'bytes': 0}
-    post('launch', command='calc'); time.sleep(2.5)
-    # calc window title is "Calculator"; activate it
-    post('activate', title='Calculator'); time.sleep(0.6)
-    _, f = post('find', text='Seven')
+    # UWP/XAML: NO Win32 control tree -> previously unreachable. Now via UI Automation.
+    rec = {'app': 'calc', 'archetype': 'UWP/XAML button grid (UI Automation find)', 'steps': [], 'matched': 0, 'bytes': 0}
+    post('launch', command='calc'); time.sleep(2.8)
+    post('activate', title='Calculator'); time.sleep(0.8)
+    _, f = post('find', text='7', control_type='Button')
     if not f.get('count'):
-        _, f = post('find', text='7')
-    if not f.get('count'):
-        rec['note'] = 'calculator buttons not found in control tree (skipped)'
+        rec['note'] = 'calculator buttons not found (no UIA backend?)'
         print('   [-- ] calculator buttons not found -> skip')
         kill('Calculator.exe', 'CalculatorApp.exe', 'win32calc.exe')
         return rec
-    step(rec, "click '7'", op='click', target={'text': 'Seven'}, expect={'changed': True})
-    step(rec, "click '+'", op='click', target={'text': 'Plus'}, expect={'changed': True})
-    step(rec, "click '8'", op='click', target={'text': 'Eight'}, expect={'changed': True})
-    step(rec, "click '='", op='click', target={'text': 'Equals'}, expect={'changed': True})
+    rec['backend'] = f.get('backend')
+    print('   (find backend=%s, %d hit(s), e.g. center=%s)' % (f.get('backend'), f.get('count'), f['elements'][0]['center']))
+    # display strip = top ~10-32% of the calc window
+    _, wi = post('ui_info')
+    cw = [w for w in wi.get('windows', []) if 'Calculator' in (w.get('title') or '')]
+    if cw:
+        r = cw[0]['rect']; h0 = r[3] - r[1]
+        disp = [r[0], r[1] + int(h0 * 0.10), r[2], r[1] + int(h0 * 0.34)]
+    else:
+        disp = [0, 0, W, int(H * 0.3)]
+    # exact-name regex: 'Add' substring would also hit 'Memory add'
+    step(rec, "click '7' (UIA)", op='click', target={'regex': '^7$', 'control_type': 'Button'}, expect={'region_changed': disp})
+    step(rec, "click '+' (UIA)", op='click', target={'regex': '^Add$', 'control_type': 'Button'}, expect={'changed': True})
+    step(rec, "click '8' (UIA)", op='click', target={'regex': '^8$', 'control_type': 'Button'}, expect={'region_changed': disp})
+    step(rec, "click '=' (UIA)", op='click', target={'regex': '^Equals$', 'control_type': 'Button'}, expect={'region_changed': disp})
+    # semantic result check: the UWP display element reads '15' (7+8) -- read it back via UIA
+    _, r15 = post('find', text='15'); ok15 = bool(r15.get('count'))
+    rec['steps'].append({'desc': 'result reads 15 (UIA)', 'matched': ok15, 'via': 'uia', 'attempts': 1, 'bytes': 0})
+    rec['matched'] += 1 if ok15 else 0
+    print('   [%s] %-32s via=uia' % ('OK ' if ok15 else 'XX ', 'result reads 15 (UIA)'))
     kill('Calculator.exe', 'CalculatorApp.exe', 'win32calc.exe')
+    return rec
+
+
+def scen_mspaint_ribbon(W, H):
+    # Windows Ribbon framework: buttons are NOT HWNDs -> reachable only via UI Automation.
+    rec = {'app': 'mspaint', 'archetype': 'Ribbon (UI Automation find)', 'steps': [], 'matched': 0, 'bytes': 0}
+    post('launch', command='mspaint'); time.sleep(2.5); post('activate', title='Paint'); time.sleep(0.6)
+    _, f = post('find', text='Brushes', control_type='button')
+    if not f.get('count'):
+        rec['note'] = 'ribbon buttons not found (no UIA backend?)'
+        print('   [-- ] ribbon buttons not found -> skip')
+        kill('mspaint.exe')
+        return rec
+    rec['backend'] = f.get('backend')
+    print('   (find backend=%s, %d hit(s), e.g. %r center=%s)' % (f.get('backend'), f.get('count'), f['elements'][0]['text'], f['elements'][0]['center']))
+    # locating a ribbon tool is the win; assert we got a usable center via UIA
+    e = f['elements'][0]
+    ok = e.get('backend') == 'uia' and e['center'][0] > 0 and e['center'][1] > 0
+    rec['steps'].append({'desc': "find 'Brushes' ribbon button", 'matched': ok, 'via': 'uia', 'attempts': 1, 'bytes': 0})
+    rec['matched'] += 1 if ok else 0
+    print('   [%s] %-32s via=uia' % ('OK ' if ok else 'XX ', "find 'Brushes' ribbon button"))
+    kill('mspaint.exe')
     return rec
 
 
@@ -160,7 +196,7 @@ def main():
             print('agent did not start'); return
         _, di = post('desktop_info'); W, H = di['width'], di['height']
         print('screen', W, H)
-        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_calc):
+        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_mspaint_ribbon, scen_calc):
             print('\n=== %s ===' % fn.__name__)
             try:
                 rec = fn(W, H)

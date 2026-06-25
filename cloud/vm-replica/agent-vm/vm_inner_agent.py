@@ -20,6 +20,16 @@ PORT  = int(os.environ.get('VM_AGENT_PORT', '9001'))
 TOKEN = os.environ.get('VM_AGENT_TOKEN', '')          # '' => no auth (loopback only)
 BIND  = os.environ.get('VM_AGENT_BIND', '127.0.0.1')
 
+# Optional UI Automation backend (modern UI frameworks the raw HWND tree can't see:
+# Ribbon / WPF / UWP-XAML / Chromium / Qt). Guarded import (this embedded Python does
+# not auto-add the script dir to sys.path) -- if it fails, find() simply falls back to
+# the HWND walk / visual escalation, never a hard dependency.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import uia as _uia
+except Exception:
+    _uia = None
+
 user32 = ctypes.windll.user32
 gdi32  = ctypes.windll.gdi32
 try:
@@ -1050,11 +1060,34 @@ def find_in_root(root, q, max_depth=8):
                         'center': [(r[0] + r[2]) // 2, (r[1] + r[3]) // 2]})
     return out
 
+def _uia_find(root, q):
+    """UIA fallback mapped into the HWND-find result shape (text/class/rect/center).
+    Modern frameworks (Ribbon/WPF/UWP/Chromium/Qt) expose controls only via UIA, not HWNDs."""
+    if not _uia:
+        return []
+    try:
+        els = _uia.uia_find(int(root or 0), q)
+    except Exception:
+        return []
+    return [{'hwnd': 0, 'class': e.get('class', ''), 'text': e.get('name', ''), 'id': 0,
+             'rect': e.get('rect', [0, 0, 0, 0]), 'center': e.get('center', [0, 0]),
+             'control_type': e.get('control_type', ''), 'backend': 'uia'} for e in els]
+
+def find_any(root, q, max_depth=8):
+    """Semantic locate: raw HWND tree first (cheapest), then UIA fallback for modern
+    frameworks. Mirrors the human instinct -- look for the obvious control; if the
+    'obvious' layer has nothing, the richer accessibility layer still sees it."""
+    els = find_in_root(root, q, max_depth)
+    if els:
+        return els
+    return _uia_find(root, q)
+
 def find_elements(body):
     root = _root_hwnd(body)
-    q = body.get('query') or {k: body[k] for k in ('text', 'class', 'id', 'regex') if k in body}
-    els = find_in_root(root, q, int(body.get('max_depth', 8)))
-    return {'ok': True, 'root': root, 'count': len(els), 'elements': els}
+    q = body.get('query') or {k: body[k] for k in ('text', 'class', 'id', 'regex', 'control_type') if k in body}
+    els = find_any(root, q, int(body.get('max_depth', 8)))
+    backend = 'uia' if (els and els[0].get('backend') == 'uia') else 'tree'
+    return {'ok': True, 'root': root, 'count': len(els), 'elements': els, 'backend': backend}
 
 def observe(body):
     """Cheap perception: state signature (+ optional region dHash / screen dHash / tile grid)."""
@@ -1166,7 +1199,7 @@ def _eval_expect(expect, pre, pre_rh, rect, pre_visual=None, visual_region=None,
             r = bool(_menu_open()) == bool(val)
         elif key in ('appears', 'disappears'):
             q = val if isinstance(val, dict) else {'text': val}
-            found = bool(find_in_root(int(fg or 0), q))
+            found = bool(find_any(int(fg or 0), q))  # HWND tree + UIA (Ribbon/WPF/UWP/web)
             if not found and isinstance(val, (str, dict)):  # also scan transient popups
                 for p in _popup_windows():
                     if find_in_root(p['hwnd'], q):
@@ -1174,7 +1207,7 @@ def _eval_expect(expect, pre, pre_rh, rect, pre_visual=None, visual_region=None,
             r = found if key == 'appears' else (not found)
         elif key == 'value':
             sel = dict(val); equals = sel.pop('equals', None); contains = sel.pop('contains', None)
-            els = find_in_root(int(fg or 0), sel)
+            els = find_any(int(fg or 0), sel)
             txt = els[0]['text'] if els else None
             r = (txt == equals) if equals is not None else \
                 (contains.lower() in (txt or '').lower() if contains is not None else bool(els))
@@ -1199,7 +1232,7 @@ def _resolve_target(body):
     if isinstance(t, dict):
         if 'x' in t and 'y' in t:
             return int(t['x']), int(t['y']), None
-        els = find_in_root(_root_hwnd(body), t)
+        els = find_any(_root_hwnd(body), t, int(body.get('max_depth', 8)))
         nth = int(t.get('nth', 0))
         if els and nth < len(els):
             e = els[nth]; return e['center'][0], e['center'][1], e['rect']
