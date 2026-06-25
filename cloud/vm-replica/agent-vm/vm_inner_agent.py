@@ -1100,6 +1100,30 @@ def read_value(body):
     st = _uia_read(root, q)
     return {'ok': True, 'root': root, 'found': bool(st), 'state': st}
 
+def _find_anywhere(fg, q):
+    """Locate a control the way a human's eyes do: the active window first, then any transient
+    popup/dialog (which are SEPARATE top-level windows, not in the active window's tree)."""
+    els = find_any(int(fg or 0), q)
+    if els:
+        return els
+    for p in _popup_windows():
+        els = find_any(p['hwnd'], q)
+        if els:
+            return els
+    return []
+
+def _read_anywhere(fg, q):
+    """Semantic value/STATE, searching the active window then transient popups -- so checked/
+    state/value verify controls that live in a dialog or popup, not just the foreground tree."""
+    st = _uia_read(int(fg or 0), q)
+    if st:
+        return st
+    for p in _popup_windows():
+        st = _uia_read(p['hwnd'], q)
+        if st:
+            return st
+    return {}
+
 def find_elements(body):
     root = _root_hwnd(body)
     q = body.get('query') or {k: body[k] for k in ('text', 'class', 'id', 'regex', 'control_type') if k in body}
@@ -1217,28 +1241,24 @@ def _eval_expect(expect, pre, pre_rh, rect, pre_visual=None, visual_region=None,
             r = bool(_menu_open()) == bool(val)
         elif key in ('appears', 'disappears'):
             q = val if isinstance(val, dict) else {'text': val}
-            found = bool(find_any(int(fg or 0), q))  # HWND tree + UIA (Ribbon/WPF/UWP/web)
-            if not found and isinstance(val, (str, dict)):  # also scan transient popups
-                for p in _popup_windows():
-                    if find_in_root(p['hwnd'], q):
-                        found = True; break
+            found = bool(_find_anywhere(fg, q))  # active window + transient popups; HWND tree + UIA
             r = found if key == 'appears' else (not found)
         elif key == 'value':
             sel = dict(val); equals = sel.pop('equals', None); contains = sel.pop('contains', None)
-            els = find_any(int(fg or 0), sel)
+            els = _find_anywhere(fg, sel)
             txt = els[0]['text'] if els else None
             r = (txt == equals) if equals is not None else \
                 (contains.lower() in (txt or '').lower() if contains is not None else bool(els))
         elif key in ('checked', 'unchecked'):
             # semantic toggle STATE via UIA (read the meaning, not the pixels)
             sel = val if isinstance(val, dict) else {'text': val}
-            st = _uia_read(int(fg or 0), sel)
+            st = _read_anywhere(fg, sel)
             r = (st.get('toggle') == 1) if key == 'checked' else (st.get('toggle') == 0)
         elif key == 'state':
             # general semantic assertion: {'text':..,'toggle':1} / {'value':..,'equals':..} / 'selected'/'range'
             sel = dict(val)
             want = {k: sel.pop(k) for k in ('toggle', 'selected', 'value', 'range') if k in sel}
-            st = _uia_read(int(fg or 0), sel)
+            st = _read_anywhere(fg, sel)
             r = bool(st) and all(st.get(k) == v for k, v in want.items())
         elif key in ('region_changed', 'region_stable'):
             rr = val if isinstance(val, (list, tuple)) else rect
