@@ -131,6 +131,10 @@ def scen_contextmenu(W, H):
     post('act', op='type', target={'class': 'Edit'}, text='right-click me')
     ex, ey = int(W*0.4), int(H*0.4)
     step(rec, 'right-click -> menu_open', op='right_click', x=ex, y=ey, expect={'menu_open': True})
+    # the menu item is NOT in the active window's tree (round 3) -- assert it is still reachable
+    # via the unified active-window-then-popup resolution (popup-scoped UIA finds the MenuItem).
+    step(rec, "menu item 'Select All' reachable", op='mouse_move', x=ex + 8, y=ey + 8,
+         expect={'appears': {'text': 'Select all', 'control_type': 'MenuItem'}})
     step(rec, 'Esc -> menu closed', op='key', key='escape', expect={'menu_open': False})
     kill('notepad.exe')
     return rec
