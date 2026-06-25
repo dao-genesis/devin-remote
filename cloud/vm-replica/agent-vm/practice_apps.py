@@ -92,7 +92,11 @@ def scen_wordpad(W, H):
     post('launch', command='write'); time.sleep(2.5); post('activate', title='WordPad'); time.sleep(0.5)
     step(rec, 'type text', op='type', text='dao fa zi ran', expect={'changed': True})
     step(rec, 'select all (Ctrl+A)', op='key', key='ctrl+a', expect={'region_changed': [int(W*0.05), int(H*0.2), int(W*0.95), int(H*0.6)]})
-    step(rec, 'bold (Ctrl+B)', op='key', key='ctrl+b', expect={'region_changed': [int(W*0.05), int(H*0.2), int(W*0.95), int(H*0.6)]})
+    # bold-on-selected is masked by the selection highlight; verify SEMANTICALLY instead -- the
+    # Ribbon Bold button (UIA-located) highlights when active. Predict the effect WHERE it shows.
+    _, bb = post('find', text='Bold', control_type='Button')
+    bold_region = bb['elements'][0]['rect'] if bb.get('count') else [int(W*0.06), int(H*0.21), int(W*0.55), int(H*0.32)]
+    step(rec, 'bold (Ctrl+B) -> Bold btn active', op='key', key='ctrl+b', expect={'region_changed': bold_region})
     step(rec, 'type after bold', op='type', text=' BOLD', expect={'changed': True})
     kill('wordpad.exe')
     return rec
@@ -187,6 +191,44 @@ def scen_mspaint_ribbon(W, H):
     return rec
 
 
+def scen_browser(W, H):
+    # Chromium/web: drive the browser FRAME (address bar) AND target in-page DOM, both via UIA.
+    rec = {'app': 'chrome', 'archetype': 'Chromium web (frame + DOM via UI Automation)', 'steps': [], 'matched': 0, 'bytes': 0}
+    _, wi = post('ui_info')
+    cands = [w for w in wi.get('windows', []) if any(k in (w.get('title') or '') for k in ('Chrome', 'Chromium', 'Edge', 'Mozilla', 'Brave'))]
+    if not cands:
+        rec['note'] = 'no browser window present (skipped)'
+        print('   [-- ] no browser window -> skip')
+        return rec
+    r = cands[0]['rect']
+    post('activate', title=cands[0]['title'][:20]); time.sleep(0.5)
+    # frame-driving: focus the address bar (UIA Edit) and navigate -- a universal human pattern
+    _, ab = post('find', text='Address and search bar', control_type='Edit')
+    if ab.get('count'):
+        c = ab['elements'][0]['center']
+        post('act', op='click', x=c[0], y=c[1]); time.sleep(0.2)
+        post('act', op='key', key='ctrl+a'); post('act', op='type', text='example.com'); post('act', op='key', key='enter')
+        time.sleep(2.5)
+        ok_nav = True
+    else:
+        ok_nav = False
+    rec['steps'].append({'desc': 'navigate via address bar (UIA Edit)', 'matched': ok_nav, 'via': 'uia', 'attempts': 1, 'bytes': 0})
+    rec['matched'] += 1 if ok_nav else 0
+    print('   [%s] %-32s via=uia' % ('OK ' if ok_nav else 'XX ', 'navigate via address bar (UIA Edit)'))
+    # in-page DOM reachable: the example.com 'Learn more' hyperlink
+    _, lk = post('find', text='Learn more', control_type='Hyperlink')
+    ok_dom = bool(lk.get('count')) and lk['elements'][0]['center'][1] > 0
+    rec['steps'].append({'desc': "find web link 'Learn more' (DOM via UIA)", 'matched': ok_dom, 'via': 'uia', 'attempts': 1, 'bytes': 0})
+    rec['matched'] += 1 if ok_dom else 0
+    print('   [%s] %-32s via=uia%s' % ('OK ' if ok_dom else 'XX ', "find web link 'Learn more'",
+          (' center=%s' % lk['elements'][0]['center']) if ok_dom else ''))
+    if ok_dom:
+        page = [r[0], r[1] + 120, r[2], r[3]]  # below the toolbar
+        step(rec, "click web link -> page change", op='click', target={'text': 'Learn more', 'control_type': 'Hyperlink'},
+             expect={'region_changed': page})
+    return rec
+
+
 def main():
     env = dict(os.environ, VM_AGENT_PORT=str(PORT), VM_AGENT_TOKEN='', VM_AGENT_BIND='127.0.0.1')
     srv = subprocess.Popen([sys.executable, os.path.join(HERE, 'vm_inner_agent.py')], env=env)
@@ -196,7 +238,7 @@ def main():
             print('agent did not start'); return
         _, di = post('desktop_info'); W, H = di['width'], di['height']
         print('screen', W, H)
-        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_mspaint_ribbon, scen_calc):
+        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_mspaint_ribbon, scen_calc, scen_browser):
             print('\n=== %s ===' % fn.__name__)
             try:
                 rec = fn(W, H)
