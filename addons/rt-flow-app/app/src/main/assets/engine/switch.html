@@ -994,20 +994,39 @@ function toggleAdd(){ var b=document.getElementById("addBody"); var open=b.class
 function doAdd(){
   var raw=document.getElementById("addInput").value||"";
   if(!raw.trim()){ toast("请粘贴", true); return; }
-  var accs=loadAcc(); var added=0, updated=0; var jsonOk=false;
+  var accs=loadAcc(); var added=0, updated=0; var jsonOk=false; var touched=[];
+  function _touch(id){ if(id && touched.indexOf(id)<0) touched.push(id); }
   try{ var j=JSON.parse(raw.trim()); var arr=Array.isArray(j)?j:(j&&typeof j==="object"?[j]:null);
     if(arr&&arr.length&&arr.some(function(o){return o&&(o.auth1||o.email);})){
-      arr.forEach(function(o){ if(!o||(!o.email&&!o.auth1))return; o.id=o.id||o.email||("acc"+Math.random().toString(36).slice(2,8)); var k=accs.findIndex(function(x){return x.id===o.id||(o.email&&x.email===o.email);}); if(k>=0){accs[k]=Object.assign(accs[k],o);updated++;}else{accs.push(o);added++;} });
+      arr.forEach(function(o){ if(!o||(!o.email&&!o.auth1))return; o.id=o.id||o.email||("acc"+Math.random().toString(36).slice(2,8)); var k=accs.findIndex(function(x){return x.id===o.id||(o.email&&x.email===o.email);}); if(k>=0){accs[k]=Object.assign(accs[k],o);updated++;_touch(accs[k].id);}else{accs.push(o);added++;_touch(o.id);} });
       jsonOk=true; }
   }catch(e){}
   if(!jsonOk){ var r=window.parseAccountText?window.parseAccountText(raw):{accounts:[],tokens:[]};
-    (r.accounts||[]).forEach(function(p){ var id=p.email; var k=accs.findIndex(function(x){return x.id===id||x.email===id;}); var rec={id:id,email:p.email,password:p.password}; if(k>=0){accs[k]=Object.assign(accs[k],rec);updated++;}else{accs.push(rec);added++;} });
-    (r.tokens||[]).forEach(function(t){ var id="tok-"+t.slice(-8); var k=accs.findIndex(function(x){return x.id===id||x.auth1===t;}); var rec={id:id,email:id,auth1:t}; if(k>=0){accs[k]=Object.assign(accs[k],rec);updated++;}else{accs.push(rec);added++;} });
+    (r.accounts||[]).forEach(function(p){ var id=p.email; var k=accs.findIndex(function(x){return x.id===id||x.email===id;}); var rec={id:id,email:p.email,password:p.password}; if(k>=0){accs[k]=Object.assign(accs[k],rec);updated++;_touch(id);}else{accs.push(rec);added++;_touch(id);} });
+    (r.tokens||[]).forEach(function(t){ var id="tok-"+t.slice(-8); var k=accs.findIndex(function(x){return x.id===id||x.auth1===t;}); var rec={id:id,email:id,auth1:t}; if(k>=0){accs[k]=Object.assign(accs[k],rec);updated++;_touch(id);}else{accs.push(rec);added++;_touch(id);} });
   }
   saveAcc(accs); _orderIds=null; render();   // 解冻顺序: 重加曾被移除的账号必立即可见(消除幽灵态)
   document.getElementById("addInput").value="";
   toast("识号完成 · 新增 "+added+" · 更新 "+updated);
-  if(!jsonOk && (added+updated)>0) setTimeout(doLoginAll, 200);
+  // 添加即自动登录(无论 JSON / token / 邮箱密码) → 用户无需再点 🔑, 行直接翻为可注入态并显示美金额度。
+  if((added+updated)>0) setTimeout(function(){ autoActivateAdded(touched); }, 200);
+}
+// 添加后自动激活: 仅对本轮新增/更新且尚未解锁的号 —— 有邮箱密码者自动登录, 仅有 auth1(token)者直接补全 org/额度。
+//   成功即 render() 翻行并刷新美金额度, 让「添加→可用」一步到位 (道法自然·无为而无不为)。
+async function autoActivateAdded(ids){
+  var todo=loadAcc().filter(function(a){ return a && ids.indexOf(a.id)>=0 && !hasAuth(a) && (a.password||a.auth1); });
+  if(!todo.length){ render(); return; }
+  var done=0, fail=0;
+  for(var i=0;i<todo.length;i++){ var a=todo[i];
+    toast("自动登录 "+(i+1)+"/"+todo.length+" · "+String(a.email||a.id).split("@")[0]);
+    try{
+      var r = (a.email&&a.password) ? await DaoCore.loginAndStore(a.email,a.password)
+            : (a.auth1 ? await DaoCore.hydrateAuth1(a.id) : {ok:false,error:"无邮箱密码/令牌"});
+      if(r&&r.ok)done++; else fail++;
+    }catch(e){ fail++; }
+    render();
+  }
+  toast("✓ 自动登录完成 · 成功 "+done+(fail?(" · 失败 "+fail):""));
 }
 
 // ── 工具条配置 (localStorage 持久·对照桌面 _cfg 模式) ──
