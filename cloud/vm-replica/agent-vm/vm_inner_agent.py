@@ -342,6 +342,27 @@ def flow_probe(body):
                          for k in ('mag', 'cx', 'cy')}
     return out
 
+def region_centroid(body):
+    """Cheap pixel primitive: locate the bright OBJECT in a region by the centroid of above-mean
+    grays, in pixels and in [0,1] normalised coords. No semantics -- just 'where is the lit thing'.
+    This is the measurement side of a visual-servoing / goal-seek loop: read the object's position,
+    act to reduce the gap to a target, re-read. Returns mass=0 when the region is blank."""
+    region = body['region']; cols = int(body.get('cols', 24)); rows = int(body.get('rows', cols))
+    g = _region_gray(region, cols, rows)
+    m = sum(g) / len(g) if g else 0.0
+    sx = sy = sw = 0.0
+    for j in range(rows):
+        for i in range(cols):
+            w = g[j * cols + i] - m
+            if w > 0:
+                sx += w * i; sy += w * j; sw += w
+    l, t, r, b = region
+    if sw <= 0:
+        return {'ok': True, 'mass': 0.0}
+    nx = (sx / sw) / max(1, cols - 1); ny = (sy / sw) / max(1, rows - 1)
+    return {'ok': True, 'mass': round(sw, 2), 'nx': round(nx, 4), 'ny': round(ny, 4),
+            'px': int(l + nx * (r - l)), 'py': int(t + ny * (b - t))}
+
 def scroll(x, y, clicks):
     move_mouse(x, y); time.sleep(0.03)
     inp = INPUT(); inp.type = INPUT_MOUSE
@@ -637,6 +658,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             return act_seq(body)
         elif action == 'flow_probe':
             return flow_probe(body)
+        elif action == 'region_centroid':
+            return region_centroid(body)
         elif action == 'browser_launch':
             return browser_launch(body.get('url'))
         elif action == 'browser_navigate':
