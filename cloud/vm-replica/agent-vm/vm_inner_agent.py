@@ -30,6 +30,21 @@ try:
 except Exception:
     _uia = None
 
+try:
+    import vmodel as _vmodel
+except Exception:
+    _vmodel = None
+
+# Pixel-only world model: persisted affordance memory grown from practice. Lazily loaded so the
+# daemon and the practice scripts share one growing store on disk.
+_WM_PATH = os.path.join(os.path.expanduser('~'), '.dao_world_model.json')
+_WM = None
+def _wm():
+    global _WM
+    if _WM is None and _vmodel is not None:
+        _WM = _vmodel.WorldModel(_WM_PATH)
+    return _WM
+
 user32 = ctypes.windll.user32
 gdi32  = ctypes.windll.gdi32
 try:
@@ -1322,19 +1337,43 @@ def act(body):
     watch = expect.get('region') if isinstance(expect.get('region'), (list, tuple)) else rect
     if isinstance(expect.get('region_changed'), (list, tuple)):
         watch = expect['region_changed']
+    # world-model 'effect' predicate: verify the action's LOCAL VISUAL change against what practice
+    # has learned this action does here -- the pixel-only path for canvas/no-semantics apps.
+    eff = expect.get('effect') if isinstance(expect.get('effect'), dict) else None
+    expect_pred = {k: v for k, v in expect.items() if k != 'effect'}
+    eff_region = (eff.get('region') if eff else None) or watch or rect
+    pre_eff = _region_gray(eff_region, 16, 16) if (eff and _vmodel is not None and eff_region) else None
     pre = state_sig()
     pre_rh = _grid_dhash(*watch) if watch else None
     pre_gray = _region_gray(watch) if watch else None
     # visual fallback baseline for 'changed' (target region if known, else whole screen)
     vis_region = (watch or rect) if (watch or rect) else None
-    pre_visual = _coarse_visual(region=vis_region) if 'changed' in expect else None
-    pre_gray_vis = _region_gray(vis_region) if 'changed' in expect else None
+    pre_visual = _coarse_visual(region=vis_region) if 'changed' in expect_pred else None
+    pre_gray_vis = _region_gray(vis_region) if 'changed' in expect_pred else None
     _do_op(op, x, y, body)
-    matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect, pre_visual, vis_region,
+    matched, reasons = _eval_expect(expect_pred, pre, pre_rh, watch or rect, pre_visual, vis_region,
                                     pre_gray, pre_gray_vis)
+    eff_res = None
+    if pre_eff is not None:
+        cur_eff = _region_gray(eff_region, 16, 16)
+        obs = _vmodel.change_descriptor(pre_eff, cur_eff, 16, 16)
+        ctx = _vmodel.context_fp(pre_eff, 16, 16)
+        akey = eff.get('action') or op
+        wm = _wm()
+        v = wm.verify(akey, ctx, obs)
+        if eff.get('learn', True):
+            wm.record(akey, ctx, obs); wm.save()
+        eff_res = {'action': akey, 'region': list(eff_region),
+                   'obs': {'mag': obs['mag'], 'cx': obs['cx'], 'cy': obs['cy']}, **v}
+        if v.get('known'):
+            matched = matched and bool(v.get('match'))  # known mismatch is a real prediction error
+        reasons.append('effect=%s(%s)' % ('ok' if v.get('match') else ('novel' if not v.get('known')
+                       else 'FAIL'), akey))
     attempts = 1; ladder = []
-    # reflex ladder: the human "no reaction -> click/double-click/retry again" instinct
-    while not matched and attempts <= max_retry:
+    # reflex ladder: the human "no reaction -> click/double-click/retry again" instinct.
+    # Skipped when an 'effect' is asserted: canvas drags/scrolls are NON-idempotent, re-issuing them
+    # compounds the motion instead of re-checking; the world model just reports prediction error.
+    while not matched and attempts <= max_retry and eff is None:
         strat = None
         if op in ('click', 'double_click', 'right_click'):
             seq = ['wait', 'refocus', 'double', 'jitter']
@@ -1360,11 +1399,13 @@ def act(body):
         else:
             strat = 'wait'; time.sleep(0.15)
         ladder.append(strat)
-        matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect, pre_visual, vis_region,
+        matched, reasons = _eval_expect(expect_pred, pre, pre_rh, watch or rect, pre_visual, vis_region,
                                         pre_gray, pre_gray_vis)
         attempts += 1
     res = {'ok': True, 'matched': matched, 'op': op, 'attempts': attempts,
            'reflex': ladder, 'reasons': reasons, 'target_xy': [x, y] if x is not None else None}
+    if eff_res is not None:
+        res['effect'] = eff_res
     if not matched:
         # genuine surprise -> escalate with the MINIMAL extra perception the brain needs
         post = state_sig()
