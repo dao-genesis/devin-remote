@@ -446,3 +446,54 @@ never-practised click  : known=False -> NOVEL (correctly flagged, escalate)
 这把 §18 的迁移与 §20 的升级策略，在一个**真实桌面强 GUI**上一次性闭合：通用之象跨进程而往，似然每面再学，惑则升级。
 
 > 執大象，天下往——握住"拖"之大象，浏览器之画布与 mspaint 之画布皆往；其往也，知其所不知（ctx_sim=0）而睁眼，是以不殆。
+
+---
+
+## 二十三、增益无关的"在场"判定：形状跨面迁移，增益本就因面而异
+
+§18 的诚实遗留：通用 `drag` 在 5 个未见面上 known/transfer=True，但 present=**0/5**
+——"效果在场"一个都没认出来。复盘根因不在迁移，而在 `verify()` 的判据本身有错。
+
+`present` 旧式要求 `mag_ratio ≤ 0.5` **且** `fp_sim ≥ 0.8`。其中 `mag` 是**绝对像
+素变化量**，即**因面而异的增益**：同一拖拽在 paint 画布上是一道亮笔迹（mag 大），
+在 3D 立方体上只是一抹微调（mag 小）。通用 affordance 把各面 episode 汇成一个池，
+其预测 `mag` 是**互不可比增益的平均**，对任何单面都对不上；再拿它要求观测去匹配，
+是拿不可比的量做比较——**判据本身错了**，这才是 present=0/5 的真因，而非"迁移不
+行"。而 `fp`（|delta| 足迹）已 L2 归一化，**天然增益无关**：它只问"有没有发生对的
+形状的变化"，与该面灵敏度无关。
+
+**修法（分区制，round-23）**：
+- **熟悉面**（内插，ctx_sim 高）：预测 `mag` 有意义，尺寸错就是惊讶 → `present` 仍
+  要求 `mag_ratio ≤ 0.5`，**一字不改**（no-op/异locus/tilt 行为全保持）。
+- **迁移面**（ctx_sim < 0.6，跨异质面外推增益）：`present` 改为**增益无关**——只看
+  形状足迹是否吻合（`fp_sim ≥ 0.8`）加一道噪声地板（确有变化），并把增益显式标
+  `gain_known=False`，**不伪造**任何 magnitude 匹配。
+
+**实测（纯像素，零视觉；leave-one-out 五面）**：
+```
+held-out | known present shape transfer ctx_sim locus_diff fp_sim mag_ratio gain_known
+orbit    |  True  True    True  True      0.23    0.418   0.832   0.69      False
+pan      |  True  True    True  True      0.19    0.370   0.846   0.74      False
+paint    |  True  False   False True      0.00    0.003   0.539   0.54      False
+timeline |  True  False   False True      0.45    0.413   0.000   1.00      False
+node     |  True  False   False True      0.45    0.168   0.395   0.62      False
+   GAIN-INVARIANT presence (footprint shape transfers) on 2/5
+   effect PRESENT on 2/5 -- gain flagged UNKNOWN on transfers (no faked magnitude match)
+```
+
+**诚实结论**：
+- **present 0/5 → 2/5**，且这 2 面（orbit/pan，皆视口式各向同性拖拽）恰是 `fp_sim`
+  真高（0.83/0.85）的面；paint/timeline/node 的足迹**形状本就不同**（0.54/0.00/0.40
+  < 0.8），如实判 False——**不是放宽阈值凑数，是删掉了一条错误的要求**。
+- **增益不伪装**：所有迁移面 `gain_known=False`。模型如实说"形状我认得、增益这面我
+  还没标定"，而非旧式把"发生了但尺度不同"和"什么都没发生"混为一个 present=False。
+- **升级标签更准**：迁移面据 §20 从旧 `low_confidence`（先验完全不成立）变为
+  `transfer_unverified`（形状已迁移、仅 locus/增益待确认），escalate 仍为 True，无
+  行为回归，只是更诚实。
+- **熟悉面零回归**：orbit 复测 ctx_sim=1.00/transfer=False；canvas 的 no-op/paint/
+  tilt 全保持原状（present 严格判据仅作用于熟悉面）。
+
+增益这一维，正与 §19/§21 的伺服标定相接：**形状靠迁移免学，增益靠一次标定补齐**。
+
+> 大白如辱，廣德如不足——把"绝对量"这条伪确定性损去，只认归一之形，反得跨面之真；
+> 知增益之所不知而不饰，是以 present 由 0 而 2，由伪而实。為學者日益，聞道者日損。

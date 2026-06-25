@@ -72,7 +72,7 @@ def drag(cx, cy, region, learn):
 
 def main():
     print('=== leave-one-out: does a generic drag affordance transfer to an unseen surface? ===')
-    print('held-out | known present transfer ctx_sim locus_diff fp_sim mag_ratio')
+    print('held-out | known present shape transfer ctx_sim locus_diff fp_sim mag_ratio gain_known')
     rows = []
     for held in SURFACES:
         if os.path.exists(MODEL):
@@ -88,9 +88,10 @@ def main():
             cx, cy, region = goto(held)
             e = drag(cx, cy, region, False).get('effect', {})
             rows.append((held, e))
-            print('%-8s |  %-5s %-5s   %-5s   %5.2f    %5.3f   %5.3f  %5.2f' % (
-                held, e.get('known'), e.get('present'), e.get('transfer'),
-                e.get('ctx_sim', 0), e.get('locus_diff', 0), e.get('fp_sim', 0), e.get('mag_ratio', 0)))
+            print('%-8s |  %-5s %-5s   %-5s %-5s    %5.2f    %5.3f   %5.3f  %5.2f      %-5s' % (
+                held, e.get('known'), e.get('present'), e.get('shape_present'), e.get('transfer'),
+                e.get('ctx_sim', 0), e.get('locus_diff', 0), e.get('fp_sim', 0), e.get('mag_ratio', 0),
+                e.get('gain_known')))
         finally:
             srv.terminate(); time.sleep(0.6)
 
@@ -130,11 +131,14 @@ def main():
 
     known = sum(1 for _, e in rows if e.get('known'))
     present = sum(1 for _, e in rows if e.get('present'))
+    shape = sum(1 for _, e in rows if e.get('shape_present'))
     far = sum(1 for _, e in rows if e.get('transfer'))
     print('\n=== honest summary ===')
     print('   provenance: %d/%d unseen surfaces correctly read as far-transfer (low ctx_sim)' % (far, len(rows)))
     print('   drag RECOGNISED on %d/%d unseen surfaces (transfer, not re-learned)' % (known, len(rows)))
-    print('   effect PRESENT (expected ballpark) on %d/%d -- presence/locus transfer better than exact shape/size' % (present, len(rows)))
+    print('   GAIN-INVARIANT presence (footprint shape transfers) on %d/%d -- the surfaces whose' % (shape, len(rows)))
+    print('       |delta| footprint genuinely matches; the rest differ in shape (honest, not forced)' )
+    print('   effect PRESENT on %d/%d -- gain flagged UNKNOWN on transfers (no faked magnitude match)' % (present, len(rows)))
 
 
 if __name__ == '__main__':
