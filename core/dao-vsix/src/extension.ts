@@ -2993,12 +2993,7 @@ function bridgeHubApi(p: string): Promise<{ status: number; text: string }> {
 
 function bridgeFindCloudflared(): string {
     const { execSync } = require('child_process');
-    // 1. Check PATH
-    try {
-        const w = execSync('where cloudflared', { encoding: 'utf8', timeout: 5000 }).trim().split('\n')[0];
-        if (w && fs.existsSync(w.trim())) return w.trim();
-    } catch {}
-    // 2. Common locations
+    // 1. 已知位置优先(直接 .exe, 不走 npm wrapper 等间接脚本)
     const candidates = [
         path.join(os.homedir(), '.dao', 'bin', 'cloudflared.exe'),
         path.join(os.homedir(), '.dao', 'bin', 'cloudflared'),
@@ -3010,6 +3005,11 @@ function bridgeFindCloudflared(): string {
     for (const c of candidates) {
         if (fs.existsSync(c)) return c;
     }
+    // 2. PATH fallback(仅取 .exe 结尾的真实二进制, 跳过 npm wrapper 等脚本)
+    try {
+        const lines = execSync('where cloudflared', { encoding: 'utf8', timeout: 5000 }).trim().split('\n');
+        for (const l of lines) { const p = l.trim(); if (p && /\.exe$/i.test(p) && fs.existsSync(p)) return p; }
+    } catch {}
     return 'cloudflared'; // fallback to PATH
 }
 
