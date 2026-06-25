@@ -93,6 +93,8 @@ public class MainActivity extends AppCompatActivity {
 
     // 搜索引擎 (国内环境可切百度) — 持久化于 SharedPreferences
     private static final String PREF_SEARCH = "search_engine";
+    // 顶部页签每号实时美金 (id / 小写 email → "$X") — 持久化键: 进程被杀/重建/标签恢复后即时回显, 不必等引擎重探
+    private static final String PREF_TAB_DOLLARS = "tabDollars";
     // 账号标签实时状态: accountId → {convName, status}  (由切号面板追踪轮询经 Native.setTabStatus 推送)
     private static final java.util.Map<String, String[]> sTabStatus = new java.util.concurrent.ConcurrentHashMap<>();
     // 账号标签实时剩余美金: accountId/email → "$5"  (由切号面板 render() 随额度刷新经 Native.setTabDollars 推送, 显示在状态点左侧)
@@ -407,6 +409,7 @@ public class MainActivity extends AppCompatActivity {
         restoreDownloads();       // 下载记录: 卸载/重装后从共享保险箱回读 (文件落 Documents/DevinCloud/downloads)
         purgeUpdateRecords();     // 净化历史误记进「下载库」的更新包条目 (旧版遗留, 现一次性清掉)
         resumePendingUpdate();    // 上次更新下载若在 App 被杀时完成 (广播漏收) → 启动时认领并续装
+        loadTabDollars();         // 先回读上次页签美金 → 标签恢复即带金额显示, 不闪空白
         // 恢复上次标签 (持久化) 或首屏切号
         if (!restoreTabs()) {
             newTab(SWITCH, null);
@@ -1858,6 +1861,35 @@ public class MainActivity extends AppCompatActivity {
         try { sw.evaluateJavascript("try{setOpenAccts(" + arr.toString() + ")}catch(e){}", null); } catch (Exception ignored) {}
     }
 
+    // ── 顶部页签美金表持久化: 进程被杀/重建/标签恢复后即时回显上次金额, 不必等引擎重探 ──────────
+    private final Runnable saveTabDollarsTask = () -> {
+        try {
+            org.json.JSONObject o = new org.json.JSONObject();
+            for (java.util.Map.Entry<String, String> e : sTabDollars.entrySet()) {
+                if (e.getKey() != null && e.getValue() != null && !e.getValue().isEmpty()) o.put(e.getKey(), e.getValue());
+            }
+            final String s = o.toString();
+            ioExec.execute(() -> {
+                try { getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_TAB_DOLLARS, s).apply(); } catch (Exception ignored) {}
+            });
+        } catch (Exception ignored) {}
+    };
+    /** 页签美金表落盘 (防抖 1s · 后台单线程 I/O, 不卡 UI)。 */
+    private void scheduleSaveTabDollars() {
+        main.removeCallbacks(saveTabDollarsTask);
+        main.postDelayed(saveTabDollarsTask, 1000);
+    }
+    /** 启动时回读上次页签美金 → 标签恢复即带金额显示 (引擎尚未重探完也先有上次值, 金额「一直显示」)。 */
+    private void loadTabDollars() {
+        try {
+            String s = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_TAB_DOLLARS, "");
+            if (s == null || s.isEmpty()) return;
+            org.json.JSONObject o = new org.json.JSONObject(s);
+            java.util.Iterator<String> it = o.keys();
+            while (it.hasNext()) { String k = it.next(); String v = o.optString(k, ""); if (k != null && !k.isEmpty() && !v.isEmpty()) sTabDollars.put(k, v); }
+        } catch (Exception ignored) {}
+    }
+
     private static final long OPEN_REFRESH_MS = 6000;   // 已打开账号标签的实时刷新心跳周期(前台)
     private final Runnable openAcctTick = new Runnable() {
         @Override public void run() {
@@ -2805,7 +2837,11 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void setTabDollars(String accountId, String dollars) {
             if (accountId == null || accountId.isEmpty()) return;
             if (dollars == null) dollars = "";
-            if (dollars.isEmpty()) sTabDollars.remove(accountId); else sTabDollars.put(accountId, dollars);
+            // 空值 = 引擎此刻无该号额度(未刷/暂取不到) → 保留上次金额, 绝不抹空 (页签金额「一直显示」之本); 仅真有数值才更新。
+            if (dollars.isEmpty()) return;
+            if (dollars.equals(sTabDollars.get(accountId))) return;   // 未变: 免重渲染/重落盘
+            sTabDollars.put(accountId, dollars);
+            scheduleSaveTabDollars();
             main.post(MainActivity.this::scheduleRenderTabStrip);
         }
         /** 打开系统 VPN 设置 (用户自行连接已配置的 VPN/导入的 Clash·sing-box·V2Ray 配置)。 */
