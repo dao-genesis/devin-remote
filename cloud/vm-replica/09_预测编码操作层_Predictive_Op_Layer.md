@@ -371,3 +371,27 @@ final residual = 0.0012  (CONVERGED)
 - 仍是**通用底座**：测量只用"亮物体质心"、动作只用拖拽，对任何"拖一个东西到某处"的强 GUI（节点图、画布对象、滑块、地图标记…）同构可用；遇到无法测量的目标（语义性目标、不可见状态）才升级视觉——意外即升级的口子不变。
 
 > 為學者日益，聞道者日損，損之又損，以至於無為：测量减到一个质心、动作减到一次拖拽、智能减到"预测—逼近—纠正"，而界面自往于目标——无为而无不为。
+
+---
+
+## 二十、升级策略接进 act()：唯"真意外"才花视觉（confident→零视觉，surprise/low_confidence→升级）
+
+整套架构的命门是这一道闸：**不是每步都问视觉大模型，只有世界模型担保不了的那步才升级**。本节把 §17/§18 的判据（known/present/transfer）汇成一个决策 `vmodel.escalation_decision(v)`，并接进 daemon `act()` 的 effect 路径：
+
+- `surprise`（这手势在此从没见过，known=False）→ **升级**：这正是"唯意外才升级视觉"的触发点（此前 novel 不强制 matched=False，会漏升级，本次补上）。
+- `low_confidence`（认得手势，但结果偏离学到的先验：大小/footprint 不对）→ **升级**：去看实际发生了什么。
+- `transfer_unverified`（认得且先验成立，但是从不相似的面外推来的、精确结果没确认）→ **升级**：对"够不着的远迁移"诚实。
+- `confident`（熟悉面上 present 成立）→ **信任，零视觉**。
+
+`act()` 据此设 `res['escalate']` 与 `escalate_reason`，**仅在该升级时**才附最小裁剪图（effect 区域），否则连一张图都不发。
+
+**实测（纯像素，零视觉，gui_lab orbit）**：
+```
+=== escalation policy: vision only on genuine surprise ===
+confident      | matched=True  escalate=False reason=confident       image=no
+surprise       | matched=True  escalate=True  reason=surprise        image=YES   (novel gesture)
+low_confidence | matched=False escalate=True  reason=low_confidence  image=YES   (dead-zone drag: no change)
+```
+熟练动作零视觉直返；初见手势/偏离先验才升级、并只附一张区域小图。
+
+> 知人者智，自知者明——模型**知道自己何时不知道**，才在不知道处才睁眼，余处闭目而行。為學者日益，聞道者日損：把"每步看屏"损到"唯惑乃视"，无为而无不为。
