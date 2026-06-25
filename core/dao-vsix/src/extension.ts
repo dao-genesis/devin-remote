@@ -3550,32 +3550,17 @@ function bridgeMcpToken(): string {
 //   汇集候选公网地址(进程内隧道 + 各已发布 conn 文件), 按新鲜度逐一 /api/health 探活,
 //   返回首个真实可达的 {url, token}; 全死返回 null(交调用方「宁可不注入也不以死地址覆盖良态」)。
 //   根治: 多实例/旧实例把「(未连接)」或已轮换的死地址写回账号知识库, 致云端读库连不上端口。
+// 独立闭环(鸡犬相闻·不相往来): 只探测进程内自有隧道, 不读外部 conn 文件, 不采纳常驻桥地址。
 async function bridgeResolveLiveConn(timeoutMs: number = 5000): Promise<{ url: string; token: string; source: string } | null> {
-    const cands: { url: string; token: string; mtime: number; source: string }[] = [];
-    if (bridgeUrl) cands.push({ url: bridgeUrl, token: bridgeToken || ws.token || '', mtime: Number.MAX_SAFE_INTEGER, source: 'inprocess' });
-    const files = [
-        path.join(BRIDGE_DIR, 'conn.json'),
-        path.join(os.homedir(), '.dao', 'cf-hub-conn.json'),
-        path.join(BRIDGE_DIR, 'connection.json'),
-    ];
-    for (const f of files) {
-        try {
-            const st = fs.statSync(f);
-            const j = JSON.parse(fs.readFileSync(f, 'utf8'));
-            const url = String(j.url || j.relayUrl || j.relay || '').trim();
-            if (!/^https?:\/\//.test(url) || /\/\/api\.trycloudflare\.com\/?$/.test(url)) continue;
-            cands.push({ url, token: String(j.token || ''), mtime: st.mtimeMs, source: path.basename(f) });
-        } catch { /* skip */ }
-    }
-    cands.sort((a, b) => b.mtime - a.mtime);  // 新鲜度降序: 先探最新轮换出的地址
-    const seen = new Set<string>();
-    for (const c of cands) {
-        if (seen.has(c.url)) continue;
-        seen.add(c.url);
-        const tok = c.token || bridgeToken || ws.token || '';
-        try { if (await bridgeProbeAlive(c.url, timeoutMs, tok)) { daoLoopLog('tunnel', 'resolve-live → ' + c.url + ' (src=' + c.source + ')'); return { url: c.url, token: tok, source: c.source }; } } catch { /* 守柔 */ }
-    }
-    daoLoopLog('tunnel', 'resolve-live → 无活地址(候选' + cands.length + '皆死)');
+    if (!bridgeUrl) { daoLoopLog('tunnel', 'resolve-live → 无进程内隧道'); return null; }
+    const tok = bridgeToken || ws.token || '';
+    try {
+        if (await bridgeProbeAlive(bridgeUrl, timeoutMs, tok)) {
+            daoLoopLog('tunnel', 'resolve-live → ' + bridgeUrl + ' (src=inprocess)');
+            return { url: bridgeUrl, token: tok, source: 'inprocess' };
+        }
+    } catch { /* 守柔 */ }
+    daoLoopLog('tunnel', 'resolve-live → 进程内隧道探死');
     return null;
 }
 let _bridgeLivenessInflight = false;
@@ -3614,23 +3599,7 @@ async function bridgeLivenessTick(): Promise<void> {
         // 打不通 → 刷新
         try { console.log('[dao] bridge liveness DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新'); } catch { /* 守柔 */ }
         daoLoopLog('tunnel', 'probe DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新+重注');
-        // 0) ① 自愈优先: 在所有候选地址(进程内 ∪ 各已发布 conn)里探活择优 — 常驻桥可能已轮换出新活地址。
-        //    找到真实可达地址即「无缝切换」过去并重注知识库, 免去重启隧道(更快·更稳); 全死才落入下方重启兜底。
-        if (!bridgeOk) {
-            try {
-                const live = await bridgeResolveLiveConn(5000);
-                if (live && live.url) {
-                    // 重注判据: 进程内地址变了 或 知识库实注地址 ≠ 此活址(覆盖 bridgeUrl 已先行收敛、唯独 KB 滞留旧址的脱钩盲区)。
-                    const needReinject = (live.url !== bridgeUrl) || (live.url !== _lastInjectedBridgeUrl);
-                    bridgeUrl = live.url; if (live.token) bridgeToken = live.token;
-                    _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0;
-                    daoLoopLog('tunnel', 'DEAD→候选探活得活地址 ' + live.url + ' (src=' + live.source + ') → 无缝切换' + (needReinject ? '+重注' : ''));
-                    try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
-                    if (needReinject) { try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ } bridgeScheduleReinject('liveness-switch-live'); refreshDaoCloudMiddlePanel(); }
-                    return;
-                }
-            } catch { /* 守柔 */ }
-        }
+        // 独立闭环: 不在外部 conn 里找活地址, 直接走下方重启自有隧道。
         // 独立闭环(鸡犬相闻·不相往来): 不读常驻桥 conn, 仅管理自有进程内隧道。
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
         if (!bridgeOk) {
