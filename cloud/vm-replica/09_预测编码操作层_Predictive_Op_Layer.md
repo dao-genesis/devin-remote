@@ -145,3 +145,22 @@ act({ op, target, expect, retry? })
 合计 **21/21 命中、2279 字节、0 截图、0 视觉调用**。`find 'Add'` 命中 2 个（含 'Memory add'）→ 用 `regex:^Add$` 精确消歧（substring 默认便利，需要精确时给 regex）。
 
 > 显隐之控件，HWND 见其形于先，UI Automation 通其神于后。先廉后丰，先简后繁，函三层（树/UIA/视觉）于一 `find`，是谓"大制无割"。再实践、再完善，循环不止。
+
+---
+
+## 九、v3 round-5 · 浏览器/网页（Chromium）+ 语义状态内省
+
+实践到"商业软件主体"——**浏览器/网页/Electron**。两点本源发现：
+
+7. **Chromium 网页可经 UIA 语义触达（两层）。**
+   - **浏览器框架层**：地址栏（UIA `Edit` "Address and search bar"）、标签、工具栏按钮全部可达 → 可直接以"聚焦地址栏 + 输入 URL + 回车"驱动浏览器，这是最通用的人类上网模式。
+   - **网页 DOM 层**：导航到真实页面后，Chromium **把渲染进程的辅助功能树暴露给 UIA**——`Document` / `Text` / `Hyperlink` 等在 `FindAll(Subtree)` 中可见。实测：经我们自己的操作层从地址栏导航到 `example.com`，随即 UIA 命中页内超链接 `'Learn more' @[304,279]`，点击触发跳转（`region_changed` 命中）。即 **网页元素也能语义定位、无需读像素**。
+   - 注：新标签页（`chrome://newtab`）首帧未必暴露 DOM；导航到内容页后即可见（Chromium 按需开启 a11y）。深层大页面受 `max_results` 上限约束，够用即止。
+
+8. **预测要验"语义状态"，而非只看像素。** WordPad 选中后 `Ctrl+B` 加粗——文字变粗被**选区高亮遮蔽**，大区域瓦片均值几乎不动（像素层面人也难辨）。
+   - → `uia.py` 增 **控件状态内省**：`TogglePattern`（开/关/不定）、`SelectionItemPattern`（是否选中），`uia_find(..., want_state=True)` 时附带 `toggle`/`selected`。CheckBox/RadioButton/真 ToggleButton 由此可直接读状态校验。
+   - → WordPad 的 Bold 是 Ribbon 自绘按钮、**不暴露 TogglePattern**（实测 `toggle=None`）。但它**激活时按钮自身高亮**——于是改为**预测效果显现之处**：UIA 定位 Bold 按钮 `@[145,122,168,144]`，`Ctrl+B` 后只监视该按钮小矩形的 `region_changed`，稳定命中。"观其变于所变之处"，比盯整页更准更省。
+
+实测 round-5（自身 console）：新增 web 场景 3/3（地址栏导航 / 网页超链接 UIA 定位 / 点击跳转），wordpad bold 修复为语义校验。多应用合计 **24/24 命中、0 截图、0 视觉调用**。
+
+> 网页非化外之地，UI Automation 通浏览器之神，框架与 DOM 皆可语义而取。状态可读则不臆于像素，变化只观其所显之处。损之又损，以至于无为而无不为，循环不止，推进到底。
