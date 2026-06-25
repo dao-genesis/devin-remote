@@ -10322,6 +10322,8 @@ function buildHtml() {
 :root{--bg:#0e1116;--fg:#cdd3de;--border:#2d333b;--input-bg:#0d1117;--input-border:#30363d;--btn:#1f6feb;--btn-h:#388bfd;--green:#4ec9b0;--orange:#ce9178;--red:#f85149;--blue:#9cdcfe}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);color:var(--fg);padding:6px 8px;overflow-x:hidden}
+body.resizing *{animation-play-state:paused!important;transition:none!important}
+body.resizing .row{contain:strict;contain-intrinsic-size:auto 28px}
 .hd{margin-bottom:8px}
 .pool-bar{height:5px;background:#252525;border-radius:3px;margin:6px 0;overflow:hidden}
 .pool-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,${poolColor}88,${poolColor});transition:width .4s}
@@ -10339,7 +10341,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .add-body .add-actions button{background:var(--btn);color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:11px}
 .add-body .add-hint{font-size:10px;color:#555;margin-top:4px}
 .sec{display:flex;justify-content:space-between;align-items:center;color:#777;font-size:11px;margin:8px 0 3px;padding-bottom:3px;border-bottom:1px solid var(--border)}
-.row{display:flex;align-items:center;padding:3px 2px;border-bottom:1px solid #1a1a1a;gap:4px;user-select:none}
+.row{display:flex;align-items:center;padding:3px 2px;border-bottom:1px solid #1a1a1a;gap:4px;user-select:none;content-visibility:auto;contain-intrinsic-size:auto 28px}
 .run-sep{display:flex;align-items:center;justify-content:center;gap:6px;margin:3px 0;padding:2px 0;font-size:9px;font-weight:700;letter-spacing:.5px;color:#6cb3ff;border-top:1px dashed #2d4a63;border-bottom:1px dashed #2d4a63;background:#141c24;user-select:none}
 .row:hover{background:#2a2d2e}
 .row.sel{background:#1f3a45;box-shadow:inset 2px 0 0 var(--blue)}
@@ -10388,7 +10390,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-run .awa{color:#d29922;font-size:9px;font-weight:700;background:#332a13;border:1px solid #5a4a1e;border-radius:3px;padding:0 3px;white-space:nowrap;margin-left:2px}
 .dv-run .blk{color:#f44;font-size:9px;font-weight:700;background:#3a1a1a;border:1px solid #5a2a2a;border-radius:3px;padding:0 3px;white-space:nowrap;margin-left:2px}
 .dv-tag{color:#d7ba7d;font-size:9px;background:#332d1a;border:1px solid #5a4a1e;border-radius:3px;padding:0 3px;white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis}
-.dv-detail{display:none;background:#101417;border:1px solid #233;border-radius:4px;margin:0 2px 4px;padding:6px 8px;font-size:11px}
+.dv-detail{display:none;background:#101417;border:1px solid #233;border-radius:4px;margin:0 2px 4px;padding:6px 8px;font-size:11px;content-visibility:auto;contain-intrinsic-size:auto 0px}
 .dv-detail.open{display:block}
 .dv-detail .dv-h{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:5px}
 .dv-detail .dv-stat{color:#9cdcfe;font-size:10px;background:#16232c;border:1px solid #244;border-radius:3px;padding:1px 5px}
@@ -10563,7 +10565,7 @@ ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanS
 <button onclick="gitInjectPatAll()" class="conv-btn" title="PAT 反向注入: 把上面 PAT 框的 PAT 作为 GITHUB_PAT 密钥写入「全部账号」(若已勾选则仅勾选账号)·写后双读确认·dao-vsix 1.3.3 同源">&#128273; PAT注密钥</button>
 <span style="font-size:10px;color:#888">勾选→多 Devin 绑同一 GitHub</span>
 </div>
-<div id="list">${rows}</div>
+<div id="list" style="contain:layout style paint">${rows}</div>
 <div class="footer">WAM <span class="v">v${VERSION}</span><br>${_esc(store.accountsSource || "")}</div>
 <div class="toast" id="toast"></div>
 <script>
@@ -10692,6 +10694,9 @@ document.addEventListener('mouseup',()=>{_dragSel=false;});
 document.addEventListener('change',e=>{if(e.target.classList.contains('chk')){const i=parseInt(e.target.dataset.i);if(Number.isFinite(i))_lastSel=i;updateBatchBar();}});
 // v4.9.6 · 滚动位置持久化 — 根治 _broadcastUI 全量重建后回弹到顶("回主页"). 守柔: 程序复位期不计为用户滚动.
 // v4.9.7 · F2/F3: 增量更新去抖签名 — 状态/对话区每轮轮询若内容未变则不动 DOM, 根治"一刷新就闪/跳/回弹".
+// 道法自然 · resize 节流: 拖拽期暂停动画+强化 contain, 释放后恢复 · 根治大数据量面板拖拽卡顿
+let _resizeT;
+window.addEventListener('resize',function(){document.body.classList.add('resizing');clearTimeout(_resizeT);_resizeT=setTimeout(function(){document.body.classList.remove('resizing');},150);},{passive:true});
 let _scrTimer=null,_scrRestoring=false,_lastConvHtml='',_lastConvSig='',_lastRunKey='';
 function _saveScroll(){if(_scrRestoring)return;try{const el=document.scrollingElement||document.documentElement;const st=vscode.getState()||{};vscode.setState({...st,scrollTop:el.scrollTop|0});}catch(e){}}
 window.addEventListener('scroll',function(){if(_scrRestoring)return;if(_scrTimer)clearTimeout(_scrTimer);_scrTimer=setTimeout(_saveScroll,100);},{passive:true});
