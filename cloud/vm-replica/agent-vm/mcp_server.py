@@ -101,6 +101,8 @@ TOOLS = {
                         *(_vm({'x': {'type': I}, 'y': {'type': I}, 'x2': {'type': I}, 'y2': {'type': I},
                                'region': {'type': 'array', 'items': {'type': I}}, 'cols': {'type': I},
                                'samples': {'type': I}}))),
+    'vm_region_centroid': ('vm.region_centroid', "Cheap pixel primitive: locate the bright OBJECT in {region} by the centroid of above-mean grays -- returns {nx,ny} in [0,1], pixel {px,py}, and mass (0 if blank). No semantics, just 'where is the lit thing'. This is the measurement side of a visual-servoing / goal-seek loop on pure-canvas surfaces: read the object's position, drag to reduce the gap to a target, re-read, correct (active inference, zero vision).",
+                        *(_vm({'region': {'type': 'array', 'items': {'type': I}}, 'cols': {'type': I}, 'rows': {'type': I}}))),
     'vm_browser_launch':     ('vm.browser_launch',     'Launch/ensure Chrome or Edge inside the VM with CDP remote-debugging; optional initial url.',
                         *(_vm({'url': {'type': S}}, req=False))),
     'vm_browser_navigate':   ('vm.browser_navigate',   'Navigate the VM browser to a URL (CDP Page.navigate).',
