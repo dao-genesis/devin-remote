@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><title>canvas-lab</title>
+<style>html,body{margin:0;background:#111}canvas{display:block;margin:0 auto;background:#1b1b22}</style>
+</head><body>
+<canvas id="c" width="640" height="420"></canvas>
+<script>
+// A pure-<canvas> app: NO DOM controls, NO accessibility tree inside the canvas.
+// Continuous control: drag horizontally to rotate a wireframe cube (like a 3D viewport),
+// drag vertically to tilt. Left-click paints a dot (like a brush). window.__truth exposes
+// ground truth so a forward model can be validated -- the canvas itself reveals nothing.
+const c=document.getElementById('c'),x=c.getContext('2d');
+let ay=0.6, ax=0.5, strokes=[], dragging=false, lx=0, ly=0;
+window.__truth=function(){return {ay:+ay.toFixed(3), ax:+ax.toFixed(3), strokes:strokes.length};};
+const V=[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+const E=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+function draw(){
+  x.clearRect(0,0,640,420); x.fillStyle='#1b1b22'; x.fillRect(0,0,640,420);
+  const cx=320,cy=210,s=120,cosY=Math.cos(ay),sinY=Math.sin(ay),cosX=Math.cos(ax),sinX=Math.sin(ax);
+  const P=V.map(v=>{let[X,Y,Z]=v; let x1=X*cosY-Z*sinY, z1=X*sinY+Z*cosY; let y1=Y*cosX-z1*sinX, z2=Y*sinX+z1*cosX; let f=3/(3+z2); return [cx+x1*s*f, cy+y1*s*f];});
+  x.strokeStyle='#5cf'; x.lineWidth=2; x.beginPath();
+  for(const[a,b]of E){x.moveTo(P[a][0],P[a][1]); x.lineTo(P[b][0],P[b][1]);} x.stroke();
+  x.fillStyle='#f85'; for(const st of strokes){x.beginPath(); x.arc(st[0],st[1],16,0,7); x.fill();}
+}
+c.addEventListener('mousedown',e=>{const r=c.getBoundingClientRect(),px=e.clientX-r.left,py=e.clientY-r.top; if(e.shiftKey){strokes.push([px,py]); draw(); return;} dragging=true; lx=px; ly=py;});
+window.addEventListener('mousemove',e=>{if(!dragging)return; const r=c.getBoundingClientRect(),px=e.clientX-r.left,py=e.clientY-r.top; ay+=(px-lx)*0.01; ax+=(py-ly)*0.01; lx=px; ly=py; draw();});
+window.addEventListener('mouseup',()=>dragging=false);
+c.addEventListener('click',e=>{const r=c.getBoundingClientRect(); strokes.push([e.clientX-r.left,e.clientY-r.top]); draw();});
+draw();
+</script></body></html>
