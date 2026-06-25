@@ -515,9 +515,18 @@
       var _bestBase=(_pickT('cloudflared')||_pickT('ssh')||c.url||"").replace(/\/$/,'');
       var pub = (_bestBase&&c.session)?(_bestBase+"/relay/"+c.session):"(未配置)";
       var _sid=c.session||"", _suf="/relay/"+_sid;
+      // 去中心化路线C(ntfy mesh): 手机端真·主路, 设备身份就绪即 serve() 常驻应答, 全程不经任何 Worker。
+      var _brokers=[]; try{ if(window.DaoSignal&&DaoSignal.DEFAULT_SERVERS) _brokers=DaoSignal.DEFAULT_SERVERS.slice(); }catch(e){}
+      if(!_brokers.length) _brokers=["https://ntfy.sh","https://ntfy.envs.net","https://ntfy.adminforge.de","https://ntfy.mzte.de"];
+      try{ var _ex=c&&c.signalServers; if(Array.isArray(_ex)) _brokers=_brokers.concat(_ex); else if(typeof _ex==="string"&&_ex) _brokers=_brokers.concat(_ex.split(/[\s,]+/)); }catch(e){}
+      (function(){ var _sn={},_o=[]; _brokers.forEach(function(b){ b=(b||"").trim().replace(/\/$/,''); if(b&&!_sn[b]){_sn[b]=1;_o.push(b);} }); _brokers=_o; })();
+      var _meshReady = !!(c.session&&c.token); try{ if(window.DaoSignal&&DaoSignal.available&&!DaoSignal.available()) _meshReady=false; }catch(e){}
+      var _httpIsWk = !(_pickT('cloudflared')||_pickT('ssh'));   // HTTP 入口落到 Worker(无去中心化隧道)?
+      var _activeLabel = _meshReady ? "去中心化 P2P / ntfy mesh(零账号·不经任何 Worker)" : (_httpIsWk?"中继 Worker·末位兜底":"去中心化隧道(独立于 Worker)");
       var chRows=["## 一·补、全部可用接入渠道 (本设备实时·任一可用·同一 Token/Session/E2E Key)","",
-        "> 控制端就近择优: 同网走局域网直连(最优), 跨网走去中心化隧道, 隧道不可用兜底中继; 愿升级客户端可走 WebRTC P2P。",
+        "> 控制端就近择优(去中心化为本·中继 Worker 已下放为末位兜底): 首选去中心化路线C(ntfy mesh+WebRTC·不经任何 Worker); 同网走局域网直连(最优); 跨网 curl 走去中心化隧道; 仅当以上全不可用才回落中继 Worker。",
         "","| 渠道 | 状态 | 入口 |","|------|------|------|"];
+      chRows.push("| 去中心化路线C · ntfy mesh(零账号·不经任何 Worker·**首选**) | "+(_meshReady?"在线·设备 serve 常驻":"老 WebView 无 WebCrypto·不支持")+" | 经公共 ntfy 加密直达本机: Session=`"+_sid+"` · Brokers="+_brokers.join(",")+" · 客户端 `DaoSignal.connect({session,token})` 或 `tools/dao-mesh-rpc.mjs` |");
       var _lus=(_lj.urls||_tj.lanUrls||[]);
       chRows.push("| 局域网直连·零中继零隧道·同网最优 | "+(_lus.length?"在线":"离线/未开启")+" | "+(_lus.length?_lus.map(function(x){return x+_suf;}).join("<br>"):"—")+" |");
       var _tl=_btl;
@@ -540,13 +549,17 @@
         "> 鉴权即边界: 持有本 Token 即拥有对本机的完整接入(含 shell)。Token 即唯一闸门, 务必保密、可随时刷新。设备端 `setRemoteOps {enable:true}` 仅为首次一键知情同意(或 `phoneEnsureControl` 一键), 开后长期有效。",
         "",
         "## 一、接入信息",
-        "- 公网入口: `" + pub + "`",
+        "- 当前生效通道: **" + _activeLabel + "**",
+        "- RPC①·去中心化路线C(云端 Agent 首选·零账号·全程不经任何 Worker): 经多家公共 ntfy mesh 加密直达本机, 任一 broker 可达即通。",
+        "  - Brokers: " + _brokers.map(function(b){return "`"+b+"`";}).join(" "),
+        "  - 客户端: 同源 `signal.js` 的 `DaoSignal.connect({session,token})` → `.rpc(frame)`/`.ping()`; Node/Agent 直接 `node addons/rt-flow-app/tools/dao-mesh-rpc.mjs " + (c.session||"<SESSION>") + " <TOKEN> '{\"path\":\"/api/rpc\",\"method\":\"POST\",\"body\":{\"cmd\":\"getState\"}}'` (仅依赖公共 ntfy·零 Worker)。",
+        "- RPC②·" + (_httpIsWk?"末位兜底(中继 Worker·仅去中心化全被封时·curl 直连)":"去中心化隧道(curl 直连·独立于 Worker)") + "·HTTP 入口: `" + pub + "`",
         "- 鉴权: `Authorization: Bearer " + (c.token||"<TOKEN>") + "`",
         "- Session: `" + (c.session||"<SESSION>") + "`",
         "",
         chRows.join("\n"),
         "",
-        "## 二、调用方式",
+        "## 二、调用方式 (对应上面 RPC②·HTTP 入口; 去中心化路线C 见上「RPC①」)",
         "```bash",
         "curl -s -X POST " + pub + " \\",
         "  -H 'Authorization: Bearer <TOKEN>' \\",

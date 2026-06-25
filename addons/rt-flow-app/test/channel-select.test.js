@@ -25,7 +25,7 @@ function build(state) {
     "function _lan(){ return env.lan||{}; }\n" +
     "function _webConsoleUrl(base, withTok){ var c=_conn(); var isRelay=/\\.workers\\.dev/.test(base); return base+(isRelay?'/console':'/')+'?session='+(c.session||''); }\n" +
     sliced + "\n" +
-    "return { bestWeb: _bestWeb, bestPublic: _bestPublic, p2pWebUrl: _p2pWebUrl, P2P_WEB_DEFAULT: P2P_WEB_DEFAULT };\n" +
+    "return { bestWeb: _bestWeb, bestPublic: _bestPublic, p2pWebUrl: _p2pWebUrl, P2P_WEB_DEFAULT: P2P_WEB_DEFAULT, meshReady: _meshReady, activeChannel: _activeChannel };\n" +
     "})";
   // eslint-disable-next-line no-eval
   return eval(factorySrc)(state);
@@ -50,6 +50,12 @@ const ID = { session: "s1", token: "tok1" };   // 真实设备恒自带 session+
   ok(/auto=1/.test(w.url) && /session=s1/.test(w.url) && /token=tok1/.test(w.url), "1 链接自带 session+token+auto=1 (一开即直连)");
   // RPC/状态入口: 去中心化隧道优先于 Worker, 即便 Worker 在线。
   ok(mod.bestPublic().kind === "cloudflared", "1 _bestPublic = cloudflared (去中心化隧道优先于在线 Worker)");
+  // 当前生效通道: 身份就绪即路线C(ntfy mesh)恒为主路, 不经任何 Worker。
+  const ac1 = mod.activeChannel();
+  ok(mod.meshReady() === true, "1 _meshReady = true (session+token 就绪)");
+  ok(ac1.kind === "mesh", "1 _activeChannel = mesh (去中心化为本·真·主路)");
+  ok(ac1.decentralized === true && ac1.worker === false, "1 mesh 通道: decentralized 且非 Worker");
+  ok(/不经任何 Worker/.test(ac1.label), "1 mesh 标签注明「不经任何 Worker」");
 }
 
 // 场景2: 身份就绪 + Worker 掉线(connected:false) + cloudflared 在 → 网页直开仍恒去中心化 P2P。
@@ -67,6 +73,10 @@ const ID = { session: "s1", token: "tok1" };   // 真实设备恒自带 session+
   ok(mod.bestWeb().kind === "p2p-web", "3 只有 Worker: 网页直开仍 p2p-web (不经 Worker)");
   ok(mod.bestPublic().kind === "worker", "3 _bestPublic 才末位兜底 Worker (无去中心化隧道时)");
   ok(/末位兜底/.test(mod.bestPublic().label), "3 Worker 标注「末位兜底」(已下放)");
+  // 即便 HTTP 入口只剩 Worker, 当前生效通道仍是 mesh (设备 serve 常驻·不经 Worker); httpBase 不落 Worker。
+  const ac3 = mod.activeChannel();
+  ok(ac3.kind === "mesh", "3 _activeChannel 仍 mesh (身份就绪·HTTP 仅剩 Worker 不影响主路)");
+  ok(ac3.worker === false && ac3.httpBase === "", "3 mesh 主路 worker:false 且 httpBase 不回落 Worker");
 }
 
 // 场景4: 自托管覆写 webConsoleBase → 直开走自有源 (更彻底去中心)。
@@ -84,6 +94,10 @@ const ID = { session: "s1", token: "tok1" };   // 真实设备恒自带 session+
   const w = mod.bestWeb();
   ok(w.kind === "cloudflared", "5 缺 token: 去中心化无法定址 → 回落 cloudflared");
   ok(mod.p2pWebUrl() === "", "5 _p2pWebUrl 缺 token 返回空 (不可定址)");
+  // 缺 token → 路线C 不可定址, 当前生效通道回落 _bestPublic (此处 cloudflared 去中心化隧道)。
+  ok(mod.meshReady() === false, "5 _meshReady = false (缺 token)");
+  const ac5 = mod.activeChannel();
+  ok(ac5.kind === "cloudflared" && ac5.decentralized === true, "5 _activeChannel 回落 cloudflared (仍去中心化·非 Worker)");
 }
 
 // 场景6: 缺 token + 无隧道, 仅 Worker → 末位兜底 Worker /console。
