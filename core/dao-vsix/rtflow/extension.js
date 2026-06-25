@@ -814,7 +814,7 @@ function setActive(id){
     if(on)applyZoom(tabs[k]);}
   if(SBAR){if(split){SBAR.style.left=(splitRatio*100)+'%';SBAR.className='on';}else SBAR.className='';}
   if(tabs[active]){ADDR.value=tabs[active].url;ZL.textContent=Math.round((tabs[active].zoom||1)*100)+'%';}
-  spin(!!(tabs[active]&&tabs[active].loading));hideOverlay();syncStar();}
+  spin(!!(tabs[active]&&tabs[active].loading));hideOverlay();syncStar();schedLazyLoad();}
 function markStar(on){var sb=document.getElementById('bStar');if(sb){sb.textContent=on?'★':'☆';sb.classList.toggle('faved',!!on);}}
 // 收藏键 = 账号/对话标签 → 与宿主 favAdd 完全同构的 key, 保证「亮金↔取消」前后端一致命中。
 function _acctFavKey(id){var p=String(id||'').split('|');var email=(p[0]||'').toLowerCase();var tail=p[1]||'home';var did=(tail!=='home'&&tail.indexOf('page')!==0)?tail:'';return email+'|'+(did||'home');}
@@ -845,8 +845,14 @@ function setLoading(id,on){var t=tabs[id];if(!t){spin(!!on);return;}
   t.loading=!!on;_clrLoadTO(t);
   if(on){t._loadTO=setTimeout(function(){t.loading=false;t._loadTO=null;if(active===id)spin(false);},15000);}
   if(active===id)spin(!!on);}
+// 归一·多实例提速(对齐手机端·惰性加载): 新建/后台标签不预载 iframe, 仅当其成为活动(或分屏)标签时才挂 src;
+//   批量恢复(restoreTabs 连发 reopen→mkTab)经 80ms 去抖只加载最终活动页, 其余后台页点开即载, 杜绝 N 实例齐发拖慢整机。
+function _ensureLoaded(id){var t=tabs[id];if(!t||t._loaded||!t.url)return;t._loaded=true;t.frame.setAttribute('src',t.url);setLoading(id,true);}
+var _lazyT=null;
+function _lazyLoadVisible(){_lazyT=null;if(active)_ensureLoaded(active);if(_splitOn()&&splitId)_ensureLoaded(splitId);}
+function schedLazyLoad(){clearTimeout(_lazyT);_lazyT=setTimeout(_lazyLoadVisible,80);}
 function closeTab(id){var t=tabs[id];if(!t)return;_clrLoadTO(t);if(id===splitId)splitId=null;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];order=order.filter(function(x){return x!==id;});if(id.indexOf('board:')===0){var _bt=id.slice(6);var _b=BOARDS[_bt];if(_b){if(_b.url){try{URL.revokeObjectURL(_b.url)}catch(e){}}delete BOARDS[_bt];}}else{vscode.postMessage({type:'closed',id:id});}if(active===id){active=null;if(order.length)setActive(order[order.length-1]);}sync();schedPersist();}
-function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[id].url=m.url;tabs[id].frame.setAttribute('src',m.url);setLoading(id,true);}setActive(id);return;}
+function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[id].url=m.url;tabs[id]._loaded=false;}setActive(id);return;}
   var btn=document.createElement('div');btn.className='tab';
   var dot=document.createElement('span');dot.className='dot'+(m.status?(' '+m.status):'');btn.appendChild(dot);
   if(m.accNo){var no=document.createElement('span');no.className='no';no.textContent='#'+m.accNo;btn.appendChild(no);}
@@ -859,10 +865,10 @@ function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[
   x.onclick=function(e){e.stopPropagation();closeTab(id);};
   btn.title='双击复制账号密码';
   BAR.appendChild(btn);
-  var fr=document.createElement('iframe');fr.setAttribute('src',m.url);fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.display='none';
+  var fr=document.createElement('iframe');fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.display='none';
   fr.addEventListener('load',function(){setLoading(id,false);});fr.addEventListener('error',function(){setLoading(id,false);});
   S.appendChild(fr);
-  tabs[id]={btn:btn,frame:fr,url:m.url,email:m.email||'',zoom:1,meta:m,loading:false};order.push(id);applyZoom(tabs[id]);setActive(id);setLoading(id,true);sync();schedPersist();
+  tabs[id]={btn:btn,frame:fr,url:m.url,email:m.email||'',zoom:1,meta:m,loading:false,_loaded:false};order.push(id);applyZoom(tabs[id]);setActive(id);sync();schedPersist();
   vscode.postMessage({type:'histPush',url:m.url,label:m.label||'Devin',kind:'acc'});}
 // 归一 · 状态续接(对齐手机端会话保持): 持久化当前打开的标签集 → 宿主 globalState;
 //   重开 /shell 时宿主在 ready 回推 restoreTabs, 逐个还原(老用户停在原网页·新用户落主页)。
@@ -884,8 +890,8 @@ function navigate(v){v=(v||'').trim();if(!v)return;var isU=/^https?:\\/\\//i.tes
     else if(v.charAt(0)==='/'){vscode.postMessage({type:'openCloudPage',path:v});}
     else{openWebTab(ENG.value+encodeURIComponent(v),v);}
     try{ADDR.blur();}catch(e){}return;}
-  if(isU){var o=curOrigin();if(o&&v.indexOf(o)===0){t.url=v;t.frame.setAttribute('src',v);setLoading(active,true);}else{openWebTab(v,v);}return;}
-  if(v.charAt(0)==='/'){var u=curOrigin()+v;t.url=u;t.frame.setAttribute('src',u);setLoading(active,true);ADDR.value=u;return;}
+  if(isU){var o=curOrigin();if(o&&v.indexOf(o)===0){t.url=v;t._loaded=true;t.frame.setAttribute('src',v);setLoading(active,true);}else{openWebTab(v,v);}return;}
+  if(v.charAt(0)==='/'){var u=curOrigin()+v;t.url=u;t._loaded=true;t.frame.setAttribute('src',u);setLoading(active,true);ADDR.value=u;return;}
   openWebTab(ENG.value+encodeURIComponent(v),v);}
 // 归一 · 设备类型自动识别 (UA / ?m=1·见 _multiShellHtml MOBILE 注入) — 移除手动「切换 电脑版/手机版」(点击会重载致整体失效)。
 var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['🖥️','操作电脑本体','board:computer'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🔌','用户脚本 / 扩展','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
