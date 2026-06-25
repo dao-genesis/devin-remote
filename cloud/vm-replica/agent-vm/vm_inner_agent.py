@@ -312,6 +312,36 @@ def drag(x1, y1, x2, y2):
     u = INPUT(); u.type = INPUT_MOUSE; u.union.mi.dwFlags = MOUSEEVENTF_LEFTUP
     _send(u)
 
+def drag_sampled(x1, y1, x2, y2, region, cols=24, rows=24, samples=6):
+    """A drag that captures gray frames of `region` WHILE the button is held -- the continuous
+    motion a temporal/optical-flow cue needs. Returns the list of sub-frames (flat gray grids)."""
+    move_mouse(x1, y1); time.sleep(0.05)
+    d = INPUT(); d.type = INPUT_MOUSE; d.union.mi.dwFlags = MOUSEEVENTF_LEFTDOWN
+    _send(d); time.sleep(0.06)
+    frames = [_region_gray(region, cols, rows)]
+    for i in range(1, samples + 1):
+        move_mouse(int(x1 + (x2 - x1) * i / samples), int(y1 + (y2 - y1) * i / samples))
+        time.sleep(0.03)
+        frames.append(_region_gray(region, cols, rows))
+    u = INPUT(); u.type = INPUT_MOUSE; u.union.mi.dwFlags = MOUSEEVENTF_LEFTUP
+    _send(u)
+    return frames
+
+def flow_probe(body):
+    """Drag while sampling sub-frames, then report the temporal motion axis (rotate vs tilt) and
+    the overall before/after change descriptor. Pure pixels; the daemon-level direction cue."""
+    region = body['region']; cols = int(body.get('cols', 24)); rows = int(body.get('rows', cols))
+    frames = drag_sampled(int(body['x']), int(body['y']), int(body['x2']), int(body['y2']),
+                          region, cols, rows, int(body.get('samples', 6)))
+    out = {'ok': True, 'frames': len(frames)}
+    if _vmodel is not None:
+        l, t, rr, b = region
+        px_w = (rr - l) / max(1, cols); px_h = (b - t) / max(1, rows)
+        out['flow'] = _vmodel.flow_axis(frames, cols, rows, px_w, px_h)
+        out['change'] = {k: _vmodel.change_descriptor(frames[0], frames[-1], cols, rows)[k]
+                         for k in ('mag', 'cx', 'cy')}
+    return out
+
 def scroll(x, y, clicks):
     move_mouse(x, y); time.sleep(0.03)
     inp = INPUT(); inp.type = INPUT_MOUSE
@@ -605,6 +635,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             return act(body)
         elif action == 'act_seq':
             return act_seq(body)
+        elif action == 'flow_probe':
+            return flow_probe(body)
         elif action == 'browser_launch':
             return browser_launch(body.get('url'))
         elif action == 'browser_navigate':
