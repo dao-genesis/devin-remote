@@ -310,27 +310,6 @@ function domBadge(email){
   return ["o","token"];
 }
 function ovDollars(q){ return (q && typeof q.overageDollars==="number") ? q.overageDollars : 0; }
-// ── Free/试用号「积分制」额度 (与美金解耦·水无常形·一处归一) ───────────────
-//   Free 套餐没有美金超额(overageDollars≈0), 其真实可用资源是 prompt+flow 额度积分
-//   (GetUserStatus·availablePromptCredits/availableFlowCredits)。旧逻辑全链只看美金 →
-//   满额度 Free 号被误判为「$0·额度已用完·未激活」, 更被自动清理/归零判定当作低额号
-//   (备份后删旧对话, 勾选「归零移出库」时甚至移出账号库) → 用户感知「批量加进来却识别不了/用不了」。
-//   归一: 有美金按美金, 无美金按积分; 显示与「低额/归零」判定全部走此口径。
-function _acctCredits(q){
-  if(!q) return {prompt:0, flow:0, total:0};
-  var p=(typeof q.availablePromptCredits==="number")?q.availablePromptCredits:0;
-  var f=(typeof q.availableFlowCredits==="number")?q.availableFlowCredits:0;
-  return {prompt:p, flow:f, total:p+f};
-}
-function _creditFloor(){ var v=(typeof _cfg==="function")?parseFloat(_cfg("creditsThreshold",1000)):1000; return (isFinite(v)&&v>=0)?v:1000; }
-function _fmtCr(n){ return n>=1000 ? ((n/1000).toFixed(n%1000===0?0:1)+"k") : String(n); }
-// 页签短标签: 美金>0 显 $整数; 否则有积分显积分(prompt); 皆无 $0; 未刷新返回 null(不推·不抹)
-function _quotaTabLabel(a){
-  var q=(a&&a.quota)||{}; if(typeof q.dPct!=="number") return null;
-  var d=ovDollars(q); if(d>0) return "$"+Math.round(d);
-  var cr=_acctCredits(q); if(cr.total>0) return _fmtCr(cr.prompt);
-  return "$0";
-}
 // ── 美金额度就地刷新 (与结构 HTML 解耦·道法自然) ───────────────────
 //   额度是高频跳动的易变量; 把它从 rowHtml 结构里剥离, 仅就地 patch 对应 .eua-big 单元 +
 //   头部汇总 + 页签美金。如此「实时额度轮(~2.2s)」不再每轮重建整列 122 行 → 根除卡顿。
@@ -341,7 +320,7 @@ var _lastTabDol={};
 function _pushTabDol(a, force){
   if(!a || !(typeof N!=="undefined" && N.setTabDollars)) return;
   var q=a.quota||{}; if(typeof q.dPct!=="number") return;
-  var lbl=_quotaTabLabel(a); if(lbl==null) return; var key=a.id||"";
+  var lbl="$"+Math.round(ovDollars(q)); var key=a.id||"";
   if(!force && _lastTabDol[key]===lbl) return;
   _lastTabDol[key]=lbl;
   try{ N.setTabDollars(key, lbl); if(a.email) N.setTabDollars((a.email||"").toLowerCase(), lbl); }catch(e){}
@@ -349,10 +328,8 @@ function _pushTabDol(a, force){
 function _euaText(a){
   var q=a.quota||{}; var dollars=ovDollars(q);
   if(typeof q.dPct!=="number") return {t:"$--", c:"#666", ti:"未刷新额度"};
-  if(dollars>0) return {t:"$"+dollars.toFixed(2), c:(dollars<8?"#e8c84a":"#4ec9b0"), ti:"Extra Usage · 美金额度 $"+dollars.toFixed(2)};
-  var _cr=_acctCredits(q);
-  if(_cr.total>0) return {t:_fmtCr(_cr.prompt), c:"#b39ddb", ti:"Free/试用 · 可用积分 prompt "+_cr.prompt+" + flow "+_cr.flow+" (无美金超额·账号可用)"};
-  return {t:"$0", c:"#777", ti:"额度已用完"};
+  if(dollars<=0) return {t:"$0", c:"#777", ti:"额度已用完"};
+  return {t:"$"+dollars.toFixed(2), c:(dollars<8?"#e8c84a":"#4ec9b0"), ti:"Extra Usage · 美金额度 $"+dollars.toFixed(2)};
 }
 function paintDollars(accs){
   accs=accs||loadAcc();
@@ -363,10 +340,10 @@ function paintDollars(accs){
     if(el.title!==d.ti) el.title=d.ti;
   }
   // 头部「激活$/已验·总额度」汇总 (廉价文本)
-  var checkedCnt=0, usableCnt=0, totalD=0, totalCr=0;
-  accs.forEach(function(a){ var q=a.quota; if(q&&typeof q.dPct==="number"){checkedCnt++; var dd=ovDollars(q); var cc=_acctCredits(q); if(dd>0||cc.total>0) usableCnt++; if(dd>0) totalD+=dd; totalCr+=cc.total; } });
+  var checkedCnt=0, actCnt=0, totalD=0;
+  accs.forEach(function(a){ var q=a.quota; if(q&&typeof q.dPct==="number"){checkedCnt++; var dd=ovDollars(q); if(dd>0){actCnt++;totalD+=dd;}} });
   var sa=document.getElementById("st-act");
-  if(sa) sa.textContent = checkedCnt? (usableCnt+"/"+checkedCnt+"有额度"+(totalD>0?" $"+Math.round(totalD):"")+(totalCr>0?" · "+_fmtCr(totalCr)+"积分":"")) : "";
+  if(sa) sa.textContent = checkedCnt? (actCnt+"/"+checkedCnt+"激活"+(actCnt>0?" $"+Math.round(totalD):"")) : "";
   // 每号实时美金推到其页签 (变化才调原生桥 → 省每轮 ~122 次调用; 无额度则不推空, 永不抹掉已显金额)
   try{ accs.forEach(function(a){ _pushTabDol(a); }); }catch(e){}
 }
@@ -601,8 +578,7 @@ function dvOverviewHtml(a,i,sess,kn,pb,sc,git){
   var running=0,awaiting=0,blocked=0;
   sess.forEach(function(s){ var c=sessStatus(s)[0]; if(c==="running")running++; else if(c==="awaiting")awaiting++; else if(c==="blocked")blocked++; });
   var q=a.quota||{}; var dollars=ovDollars(q);
-  var _crd=_acctCredits(q);
-  var credits = dollars>0 ? ("额度 $"+dollars.toFixed(2)) : (_crd.total>0?("积分 "+_crd.prompt+"p/"+_crd.flow+"f"):(typeof q.dPct==="number"?"额度 $0.00":""));
+  var credits = dollars>0 ? ("额度 $"+dollars.toFixed(2)) : (typeof q.dPct==="number"?"额度 $0.00":"");
   var h='<div class="dv-h">';
   h+='<span class="dv-stat">对话 '+sess.length+(running?' · <span style="color:#4ec9b0">运行 '+running+'</span>':'')+(awaiting?' · <span style="color:#d29922">待输入 '+awaiting+'</span>':'')+(blocked?' · <span style="color:#f44">卡住 '+blocked+'</span>':'')+'</span>';
   h+='<span class="dv-stat dv-stat-c" title="点击查看知识库清单" onclick="dvTog(\'dvB'+i+'kn\')">知识库 '+kn.length+'</span>';
@@ -1108,8 +1084,6 @@ async function applyConvCapFor(a){
   if(!_cfg("convCap",true) || !hasAuth(a)) return;
   var q=a.quota; if(!q||typeof q.dPct!=="number") return;   // 未知余额不动
   var bal=ovDollars(q);
-  // Free/积分号(无美金超额但积分可用): 不按美金封顶(否则会被卡成 $0 不可用) → 放开让积分自然支配。
-  if(bal<=0 && _acctCredits(q).total>0){ if(_capApplied[a.id]===99999) return; try{ var rc=await DaoCloud.setMessageLimit(a,99999); if(rc&&rc.ok) _capApplied[a.id]=99999; }catch(e){} return; }
   var buffer=parseFloat(_cfg("convBuffer",3)); if(!(buffer>=0)) buffer=3;
   var drain=_cfg("convDrain",true);
   var target;
@@ -1133,7 +1107,6 @@ function _balAlert(a){
   var q=a.quota; if(!q||typeof q.dPct!=="number") return;
   if(!_hasLiveConv(a)) return;                       // 无进行中对话 → 不提醒
   var bal=ovDollars(q);
-  if(_acctCredits(q).total>0) return;                // 积分号有可用积分 → 美金$0属正常, 不误报"额度仅$0"
   if(bal<3){ var t=_balAlertTs[a.id]||0; if(Date.now()-t>300000){ _balAlertTs[a.id]=Date.now();
     _bigAlert("⚠ "+String(a.email||a.id).split("@")[0]+" 额度仅 $"+bal.toFixed(2)+" · 对话进行中, 请尽快处理");
     _vib(70);
@@ -1225,10 +1198,8 @@ async function autoCleanFor(a, force){
   var q=a.quota; if(!q||typeof q.dPct!=="number") return {state:"skip",reason:"额度未知"};
   var th=parseFloat(_cfg("autoThreshold",3)); if(!isFinite(th)) th=3;
   var bal=ovDollars(q);
-  var _cr=_acctCredits(q); var _crFloor=_creditFloor();
-  // 归一·额度耗尽判定: 美金<阈值 且 积分(prompt+flow)<门槛 才算「低额」; Free 满积分号(美金$0但积分充裕)绝不当作低额清理。
-  if(bal>=th || _cr.total>=_crFloor) return {state:"skip",reason:(bal>=th?("额度充足 $"+bal.toFixed(2)):("积分充裕 "+_cr.total)),bal:bal};
-  var zero=(bal<=0 && _cr.total<=0);   // 真·归零: 美金与积分皆尽
+  if(bal>=th) return {state:"skip",reason:"额度充足 $"+bal.toFixed(2),bal:bal};   // 额度足够 → 不清理(自动备份另行进行)
+  var zero=(bal<=0);
   if(!force && Date.now()-(_cleanTs[a.id]||0)<3600000) return {state:"skip",reason:"1h 内已清",bal:bal}; // 1h 内清过则跳过
   var bk=await fullBackupAccount(a);
   if(!bk.ok) return {state:"backup-fail",reason:"备份失败·不清理",bal:bal};      // 备份失败 → 绝不清理 (双保险)
@@ -1261,7 +1232,7 @@ async function dvRunAutoCleanNow(){
   toast("刷新额度中… "+accs.length+" 号");
   for(var i=0;i<accs.length;i++){ try{ await DaoCore.refreshQuotaFor(accs[i].id); }catch(e){} }
   accs=loadAcc().filter(hasAuth);
-  var cand=accs.filter(function(a){ var q=a.quota; if(!q||typeof q.dPct!=="number")return false; if(_hasLiveConv(a))return false; return ovDollars(q)<th && _acctCredits(q).total<_creditFloor(); });
+  var cand=accs.filter(function(a){ var q=a.quota; if(!q||typeof q.dPct!=="number")return false; if(_hasLiveConv(a))return false; return ovDollars(q)<th; });
   if(!cand.length){ toast("无低额(<$"+th+")且空闲的账号·无需清理"); return; }
   if(!confirm("将对 "+cand.length+" 个 低额(<$"+th+") 且无进行中对话 的账号执行全流程:\n全量备份(对话+知识+剧本+密钥+Git) → 水过无痕清理 → 归零者移出账号库。\n\n继续?")) return;
   var cleaned=0,removed=0,failed=0,skipped=0,log=[];
