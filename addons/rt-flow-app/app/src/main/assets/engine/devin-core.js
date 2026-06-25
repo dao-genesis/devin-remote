@@ -265,6 +265,27 @@
     return Object.assign({ ok: true }, r, { account: acc });
   }
 
+  // 用已有 auth1(粘贴 token / JSON 仅含 auth1 的号)补全 orgId/orgName + 额度 → hasAuth 成立,
+  //   切号行从「需登录(🔑)」翻为「可注入(⚡)」并显示美金额度。无邮箱密码也能识号即用。
+  async function hydrateAuth1(id) {
+    var acc = findAcc(id);
+    if (!acc || !acc.auth1) return { ok: false, error: "无 auth1" };
+    var r3 = await devinJsonPost(URL_DEVIN_POST_AUTH, { Authorization: "Bearer " + acc.auth1 }, {});
+    var j3 = r3.json || {};
+    var org = j3.org || {};
+    var orgId = org.org_id || j3.org_id || j3.orgId || "";
+    var orgName = org.org_name || j3.org_name || j3.orgName || "";
+    var orgSlug = org.org_slug || j3.org_slug || j3.orgSlug || "";
+    if (!orgId && org && typeof org === "object") { for (var k in org) { if (/org.?id/i.test(k)) { orgId = String(org[k]); break; } } }
+    if (!orgId) { acc.lastError = "auth1 无效或已过期"; upsertAcc(acc); return { ok: false, error: acc.lastError }; }
+    acc.orgId = orgId; acc.orgName = orgName; acc.orgSlug = orgSlug; acc.userId = acc.userId || j3.user_id || "";
+    acc.lastError = ""; acc.verifiedAt = Date.now();
+    var quota = null; try { quota = await devinFetchQuota(acc.apiKey, acc.windsurfKey, acc.auth1, orgId, acc.apiServerUrl); } catch (e) {}
+    if (quota) { acc.quota = quota; acc.plan = quota.planName || acc.plan; }
+    upsertAcc(acc);
+    return { ok: true, orgId: orgId, orgName: orgName, orgSlug: orgSlug, quota: quota, account: acc };
+  }
+
   // 校验 auth1 是否仍有效 (额度/billing 接口对死令牌回 401「No organizations found for auth1 user」)。
   async function auth1Alive(acc) {
     if (!acc || !acc.auth1 || !acc.orgId) return false;
@@ -309,7 +330,7 @@
     httpReq: httpReq, httpReqB64: httpReqB64, devinJsonPost: devinJsonPost, devinJsonGet: devinJsonGet,
     devinLogin: devinLogin, devinFetchQuota: devinFetchQuota,
     loadAcc: loadAcc, saveAcc: saveAcc, getActive: getActive, setActive: setActive, findAcc: findAcc, upsertAcc: upsertAcc,
-    loginAndStore: loginAndStore, refreshQuotaFor: refreshQuotaFor, refreshAllQuota: refreshAllQuota, auth1Alive: auth1Alive,
+    loginAndStore: loginAndStore, hydrateAuth1: hydrateAuth1, refreshQuotaFor: refreshQuotaFor, refreshAllQuota: refreshAllQuota, auth1Alive: auth1Alive,
     APP: APP, WINDSURF: WINDSURF
   };
 })(window);
