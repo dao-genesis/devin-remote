@@ -45,6 +45,8 @@ def _via(reasons):
             return 'region'
         if r.startswith('foreground'):
             return 'foreground'
+        if r.startswith('menu_open'):
+            return 'menu'
         if r.startswith('appears') or r.startswith('disappears'):
             return 'tree-find'
         if r.startswith('value'):
@@ -117,6 +119,17 @@ def scen_mspaint(W, H):
     return rec
 
 
+def scen_contextmenu(W, H):
+    rec = {'app': 'notepad', 'archetype': 'context menu (transient #32768 popup, off-tree)', 'steps': [], 'matched': 0, 'bytes': 0}
+    post('launch', command='notepad'); time.sleep(1.5); post('activate', title='Notepad'); time.sleep(0.4)
+    post('act', op='type', target={'class': 'Edit'}, text='right-click me')
+    ex, ey = int(W*0.4), int(H*0.4)
+    step(rec, 'right-click -> menu_open', op='right_click', x=ex, y=ey, expect={'menu_open': True})
+    step(rec, 'Esc -> menu closed', op='key', key='escape', expect={'menu_open': False})
+    kill('notepad.exe')
+    return rec
+
+
 def scen_calc(W, H):
     rec = {'app': 'calc', 'archetype': 'button grid (semantic find + value)', 'steps': [], 'matched': 0, 'bytes': 0}
     post('launch', command='calc'); time.sleep(2.5)
@@ -147,7 +160,7 @@ def main():
             print('agent did not start'); return
         _, di = post('desktop_info'); W, H = di['width'], di['height']
         print('screen', W, H)
-        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_calc):
+        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_calc):
             print('\n=== %s ===' % fn.__name__)
             try:
                 rec = fn(W, H)
