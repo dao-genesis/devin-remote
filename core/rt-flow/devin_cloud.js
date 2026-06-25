@@ -153,10 +153,31 @@ function migrateBackups(oldRoot, newRoot, opts) {
     const walk = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) walk(p); else { try { res.files++; res.bytes += fs.statSync(p).size; } catch (x) {} } } };
     walk(oldRoot);
     prog("迁移中: " + res.files + " 个文件 / " + (res.bytes / 1048576).toFixed(1) + " MB → " + newRoot);
+    // 迭代式逐文件拷贝 (栈式遍历·非递归): 规避 fs.cpSync 在大目录树/深层结构上的原生崩溃(Windows 0xC0000409),
+    // 且可逐文件容错、按字节累计真实进度。
     fs.mkdirSync(newRoot, { recursive: true });
-    fs.cpSync(oldRoot, newRoot, { recursive: true, force: true, errorOnExist: false });
-    res.ok = true;
-    prog("迁移完成");
+    let copied = 0, copiedBytes = 0, lastTick = 0;
+    const stack = [["", true]]; // [相对路径, 是否目录]
+    while (stack.length) {
+      const [rel, isDir] = stack.pop();
+      const srcP = rel ? path.join(oldRoot, rel) : oldRoot;
+      const dstP = rel ? path.join(newRoot, rel) : newRoot;
+      if (isDir) {
+        try { fs.mkdirSync(dstP, { recursive: true }); } catch (x) {}
+        let entries = [];
+        try { entries = fs.readdirSync(srcP, { withFileTypes: true }); } catch (x) { continue; }
+        for (const e of entries) stack.push([rel ? path.join(rel, e.name) : e.name, e.isDirectory()]);
+      } else {
+        try {
+          fs.copyFileSync(srcP, dstP);
+          copied++; copiedBytes += (() => { try { return fs.statSync(dstP).size; } catch (x) { return 0; } })();
+          if (copied - lastTick >= 500) { lastTick = copied; prog("已拷贝 " + copied + "/" + res.files + " 个文件 / " + (copiedBytes / 1048576).toFixed(1) + " MB"); }
+        } catch (x) { res.error = res.error || ("部分文件拷贝失败: " + String((x && x.message) || x)); }
+      }
+    }
+    res.copied = copied; res.copiedBytes = copiedBytes;
+    res.ok = (copied >= res.files);
+    prog("迁移完成: " + copied + "/" + res.files + " 个文件");
   } catch (e) {
     res.error = String((e && e.message) || e);
     prog("迁移失败: " + res.error);
