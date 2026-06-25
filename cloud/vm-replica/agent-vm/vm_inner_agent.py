@@ -660,6 +660,9 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             return flow_probe(body)
         elif action == 'region_centroid':
             return region_centroid(body)
+        elif action == 'gray':
+            return {'ok': True, 'gray': _region_gray(body.get('region'), int(body.get('cols', 16)),
+                                                     int(body.get('rows', 16)))}
         elif action == 'browser_launch':
             return browser_launch(body.get('url'))
         elif action == 'browser_navigate':
@@ -1413,17 +1416,27 @@ def act(body):
         cur_eff = _region_gray(eff_region, 16, 16)
         obs = _vmodel.change_descriptor(pre_eff, cur_eff, 16, 16)
         ctx = _vmodel.context_fp(pre_eff, 16, 16)
+        # round-25: a SECOND, motion-invariant key (centroid-radial) under which a measured gain is
+        # stored/retrieved, so it survives the surface transforming itself (spinning cube / sliding map)
+        # -- which the spatially-rigid context_fp could not. context_fp still drives episode provenance.
+        cal_ctx = _vmodel.context_radial(pre_eff, 16, 16)
         akey = eff.get('action') or op
         wm = _wm()
-        v = wm.verify(akey, ctx, obs)
+        v = wm.verify(akey, ctx, obs, cal_ctx=cal_ctx)
         if eff.get('learn', True):
             wm.record(akey, ctx, obs); wm.save()
-        # round-24 active-inference: a recognised gesture whose footprint SHAPE transferred but whose
-        # gain we could not vouch for (transfer, gain_known=False) was just physically measured by this
-        # very verification -- store that one observation as the surface's local gain so the NEXT drag
-        # here is held to a real size (gain_known True) with no extra action and no vision.
-        if eff.get('calibrate', True) and v.get('known') and v.get('shape_present') and not v.get('gain_known'):
-            wm.calibrate(akey, ctx, obs); wm.save()
+        # round-24/25 active-inference calibration. The verifying drag already MEASURED this surface's
+        # gain, so store it as the surface's local gain (keyed on the invariant cal_ctx) -- in two cases:
+        #  (a) shape transferred but gain was unknown (first probe): flip gain_known False->True next time.
+        #  (b) a stored gain was REUSED (calibrated) yet the measured size DISAGREED (mag_ratio > tol):
+        #      the invariant key cannot separate look-alike surfaces statically, so a reuse is only a
+        #      HYPOTHESIS; this very verification disconfirms it -> overwrite with the freshly measured
+        #      gain. A cross-surface leak thus self-heals in one encounter, zero extra actions, no vision.
+        recal = (v.get('known') and v.get('shape_present')
+                 and ((not v.get('gain_known'))
+                      or (v.get('calibrated') and float(v.get('mag_ratio', 0.0)) > 0.5)))
+        if eff.get('calibrate', True) and recal:
+            wm.calibrate(akey, ctx, obs, cal_ctx=cal_ctx); wm.save()
         conf, esc = _vmodel.escalation_decision(v)
         eff_res = {'action': akey, 'region': list(eff_region),
                    'obs': {'mag': obs['mag'], 'cx': obs['cx'], 'cy': obs['cy']},
