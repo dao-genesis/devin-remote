@@ -34,6 +34,27 @@ class GUID(ctypes.Structure):
 CLSID_CUIAutomation = '{FF48DBA4-60EF-4201-AA87-54103EEF594E}'
 IID_IUIAutomation = '{30CBE57D-D9D0-452A-AB13-7AC5AC4825EE}'
 
+# Semantic property ids (read STATE/VALUE via GetCurrentPropertyValue -> VARIANT, the path that
+# actually works for built-in providers; the pattern-object QI route does not in raw ctypes).
+PID_Value = 30045        # ValuePattern.Value (BSTR)   -- Edit/ComboBox text
+PID_ToggleState = 30086  # TogglePattern.ToggleState (I4: 0 off / 1 on / 2 indeterminate)
+PID_RangeValue = 30047   # RangeValuePattern.Value (R8) -- Slider/ProgressBar
+PID_IsSelected = 30079   # SelectionItemPattern.IsSelected (BOOL)
+# only report each property where it is meaningful for the control type (else providers return noise)
+_VALUE_TYPES = {'Edit', 'ComboBox', 'Spinner', 'Document', 'Hyperlink'}
+_TOGGLE_TYPES = {'CheckBox', 'RadioButton', 'Button', 'MenuItem', 'SplitButton'}
+_SELECT_TYPES = {'ListItem', 'TabItem', 'TreeItem', 'DataItem', 'MenuItem', 'RadioButton'}
+_RANGE_TYPES = {'Slider', 'ProgressBar', 'Spinner', 'ScrollBar'}
+
+
+class VARIANT(ctypes.Structure):
+    class _U(ctypes.Union):
+        _fields_ = [('llVal', ctypes.c_longlong), ('lVal', ctypes.c_long),
+                    ('boolVal', ctypes.c_short), ('bstrVal', ctypes.c_void_p), ('dblVal', ctypes.c_double)]
+    _anonymous_ = ('u',)
+    _fields_ = [('vt', ctypes.c_ushort), ('r1', ctypes.c_ushort), ('r2', ctypes.c_ushort),
+                ('r3', ctypes.c_ushort), ('u', _U)]
+
 # vtable indices (IUnknown occupies 0..2 on every interface)
 UIA_GetRootElement = 5
 UIA_ElementFromHandle = 6
@@ -119,10 +140,58 @@ def _el_rect(el):
     return [0, 0, 0, 0]
 
 
-def uia_find(hwnd=0, query=None, max_results=400):
+def _variant_py(v):
+    vt = v.vt
+    if vt == 8:  # VT_BSTR
+        s = ctypes.cast(v.bstrVal, ctypes.c_wchar_p).value if v.bstrVal else ''
+        return s or ''
+    if vt == 3:   # VT_I4
+        return v.lVal
+    if vt == 11:  # VT_BOOL (-1 true / 0 false)
+        return bool(v.boolVal)
+    if vt == 5:   # VT_R8
+        return v.dblVal
+    return None
+
+
+def _el_prop(el, pid):
+    """Read a UIA property via GetCurrentPropertyValue into a VARIANT, return a python value."""
+    var = VARIANT()
+    if _method(el, EL_GetCurrentPropertyValue, HR, ctypes.c_int, ctypes.POINTER(VARIANT))(el, pid, ctypes.byref(var)) != 0:
+        return None
+    try:
+        return _variant_py(var)
+    finally:
+        oleaut32.VariantClear(ctypes.byref(var))
+
+
+def _el_read_state(el, ctname):
+    """Semantic value/state for an element, only the properties meaningful for its control type."""
+    st = {}
+    if ctname in _VALUE_TYPES:
+        val = _el_prop(el, PID_Value)
+        if isinstance(val, str):
+            st['value'] = val
+    if ctname in _TOGGLE_TYPES:
+        ts = _el_prop(el, PID_ToggleState)
+        if isinstance(ts, int):
+            st['toggle'] = ts  # 0 off / 1 on / 2 indeterminate
+    if ctname in _SELECT_TYPES:
+        sel = _el_prop(el, PID_IsSelected)
+        if isinstance(sel, bool):
+            st['selected'] = sel
+    if ctname in _RANGE_TYPES:
+        rv = _el_prop(el, PID_RangeValue)
+        if isinstance(rv, float):
+            st['range'] = rv
+    return st
+
+
+def uia_find(hwnd=0, query=None, max_results=400, read_state=False):
     """Return named UIA elements under a window (or the desktop root if hwnd==0).
     query: dict with optional 'text'/'name', 'class', 'control_type' (name or id), 'regex'.
-    Each result: {name, control_type, class, rect, center, hwnd}. [] on any failure."""
+    Each result: {name, control_type, class, rect, center}. With read_state=True, matched
+    elements also carry semantic value/toggle/selected/range (where meaningful). [] on failure."""
     import re as _re
     query = query or {}
     want_text = (query.get('text') or query.get('name') or '').lower()
@@ -180,8 +249,11 @@ def uia_find(hwnd=0, query=None, max_results=400):
                     continue  # skip anonymous noise unless explicitly querying by class/type
                 rect = _el_rect(el)
                 cx = (rect[0] + rect[2]) // 2; cy = (rect[1] + rect[3]) // 2
-                out.append({'name': name, 'control_type': ctname, 'class': cls,
-                            'rect': rect, 'center': [cx, cy]})
+                item = {'name': name, 'control_type': ctname, 'class': cls,
+                        'rect': rect, 'center': [cx, cy]}
+                if read_state:
+                    item.update(_el_read_state(el, ctname))
+                out.append(item)
             finally:
                 _release(el)
         return out
@@ -191,3 +263,10 @@ def uia_find(hwnd=0, query=None, max_results=400):
         _release(arr); _release(cond); _release(root); _release(uia)
         if did_init:
             ole32.CoUninitialize()
+
+
+def uia_read(hwnd=0, query=None):
+    """Semantic value/state of the first element matching query: {name, control_type, value,
+    toggle, selected, range} (only the meaningful keys). {} on no match / any failure."""
+    els = uia_find(int(hwnd or 0), query, max_results=400, read_state=True)
+    return els[0] if els else {}

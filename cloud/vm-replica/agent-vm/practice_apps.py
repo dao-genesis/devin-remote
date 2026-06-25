@@ -51,6 +51,8 @@ def _via(reasons):
             return 'tree-find'
         if r.startswith('value'):
             return 'value'
+        if r.startswith('checked') or r.startswith('unchecked') or r.startswith('state'):
+            return 'uia-state'
     return '-'
 
 
@@ -216,6 +218,29 @@ def scen_gestures(W, H):
     return rec
 
 
+def scen_state(W, H):
+    # Verify a control's MEANING, not its pixels: read the checkbox toggle state via UIA and
+    # assert it with the semantic 'checked'/'unchecked' predicate (no region, no screenshot).
+    rec = {'app': 'notepad', 'archetype': 'semantic state read (UIA checkbox toggle)', 'steps': [], 'matched': 0, 'bytes': 0}
+    post('launch', command='notepad'); time.sleep(1.5); post('activate', title='Notepad'); time.sleep(0.4)
+    post('act', op='type', target={'class': 'Edit'}, text='find me')
+    post('act', op='key', key='ctrl+f'); time.sleep(0.8)
+    _, rd = post('read', text='Match case')
+    base = rd.get('state', {})
+    ok0 = rd.get('found') and base.get('toggle') == 0
+    rec['steps'].append({'desc': "read 'Match case' = unchecked", 'matched': ok0, 'via': 'value', 'attempts': 1, 'bytes': 0})
+    rec['matched'] += 1 if ok0 else 0
+    print('   [%s] %-32s via=value    state=%s' % ('OK ' if ok0 else 'XX ', "read 'Match case' = unchecked", base))
+    # click it, assert semantically that it is now checked (toggle flipped 0 -> 1)
+    step(rec, 'click -> checkbox checked', op='click', target={'text': 'Match case'},
+         expect={'checked': {'text': 'Match case'}})
+    # click again, assert it is back to unchecked
+    step(rec, 'click -> checkbox unchecked', op='click', target={'text': 'Match case'},
+         expect={'unchecked': {'text': 'Match case'}})
+    kill('notepad.exe')
+    return rec
+
+
 def scen_browser(W, H):
     # Chromium/web: drive the browser FRAME (address bar) AND target in-page DOM, both via UIA.
     rec = {'app': 'chrome', 'archetype': 'Chromium web (frame + DOM via UI Automation)', 'steps': [], 'matched': 0, 'bytes': 0}
@@ -263,7 +288,7 @@ def main():
             print('agent did not start'); return
         _, di = post('desktop_info'); W, H = di['width'], di['height']
         print('screen', W, H)
-        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_mspaint_ribbon, scen_calc, scen_gestures, scen_browser):
+        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_mspaint_ribbon, scen_calc, scen_gestures, scen_state, scen_browser):
             print('\n=== %s ===' % fn.__name__)
             try:
                 rec = fn(W, H)
