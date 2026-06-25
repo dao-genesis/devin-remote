@@ -1,0 +1,66 @@
+<!doctype html>
+<!-- Round-29: a GENUINELY EXTERNAL real GUI surface. Not our synthetic canvas: a third-party WebGL
+     map library (MapLibre GL) rendering LIVE network raster tiles (OpenStreetMap) with labels and
+     anti-aliasing. Two kinematics are exposed via the hash so the keys can be measured on a real app:
+       #webmap   -> left-drag PANS the map                (translation: one rigid shift -> COHERENT)
+       #webspin  -> left-drag ROTATES the bearing, pitch=0  (flat rotation: no single shift -> INCOHERENT)
+       #webtilt  -> left-drag ROTATES the bearing, pitch=60 (perspective rotation: also -> INCOHERENT)
+     The honest question: do footprint/gain/dyn survive a real third-party-rendered, network-textured
+     GUI -- including tile pop-in noise -- the way they survived our synthetic real_lab.html?
+     Round-29 clean finding (after fixing a stale-cache bug that had frozen webtilt at pitch=0): the dyn
+     key separates ROTATION from TRANSLATION exactly as the lab orbit-vs-pan did. A pan is coherent; ANY
+     bearing rotation -- flat (webspin) OR perspective (webtilt) -- is incoherent and the two group
+     together. The perspective pitch is NOT the axis; rotation-vs-translation is. #webtilt is kept as the
+     control proving the extra pitch does not change the rotation verdict on the same external surface. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>web-lab</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<style>html,body,#map{margin:0;height:100%;width:100%;background:#111}</style>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+</head>
+<body>
+<div id="map"></div>
+<div id="dbg" style="position:absolute;left:2px;top:2px;z-index:9;font:11px monospace;color:#000;background:#fff8;padding:1px 3px">init</div>
+<script>
+// Mode is fixed at load from the hash. Typing a URL that differs only in the hash is a same-document
+// navigation (no reload), which would freeze `mode`/`pitch` at the first-loaded value -- so force a
+// full reload whenever the hash changes, guaranteeing the measured mode always matches the URL.
+window.addEventListener('hashchange', () => location.reload());
+const mode = (location.hash || '#webmap').slice(1);
+const style = {
+  version: 8,
+  sources: {osm: {type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+                  tileSize: 256, attribution: 'OSM'}},
+  layers: [{id: 'osm', type: 'raster', source: 'osm'}]
+};
+const pitch0 = (mode === 'webtilt') ? 60 : 0;
+const map = new maplibregl.Map({
+  container: 'map', style: style,
+  center: [2.3522, 48.8566], zoom: 12, bearing: 0, pitch: pitch0,
+  fadeDuration: 0, attributionControl: false, interactive: true
+});
+window.__ready = false;
+const dbg = document.getElementById('dbg');
+const upd = () => { dbg.textContent = mode + ' pitch=' + map.getPitch().toFixed(0) + ' bearing=' + map.getBearing().toFixed(0); };
+map.on('idle', () => { window.__ready = true; upd(); });
+map.on('render', upd);
+
+if (mode === 'webspin' || mode === 'webtilt') {
+  // turn a plain left-drag into a bearing rotation. At pitch=0 (webspin) the whole field rotates
+  // rigidly in-plane; at pitch=60 (webtilt) the same rotation is seen in perspective, so the near
+  // (bottom) sweeps a large arc while the far (top) barely moves -- a genuinely non-rigid warp.
+  map.dragPan.disable();
+  let down = false, lastX = 0, b0 = 0;
+  const c = map.getCanvasContainer();
+  c.addEventListener('mousedown', e => { down = true; lastX = e.clientX; b0 = map.getBearing(); });
+  window.addEventListener('mousemove', e => {
+    if (!down) return;
+    map.setBearing(b0 + (e.clientX - lastX) * 0.6);
+  });
+  window.addEventListener('mouseup', () => { down = false; });
+}
+</script>
+</body>
+</html>
