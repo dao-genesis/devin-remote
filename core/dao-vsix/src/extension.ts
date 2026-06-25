@@ -2819,8 +2819,9 @@ let bridgeProc: any = null;
 let bridgeUrl: string = '';
 let bridgeToken: string = '';
 // 帛书·「無死地」: cloudflared 脱宿主独立存活 — 日志/PID 落盘, 重载/重启宿主不带走隧道。
-const CF_LOG = path.join(BRIDGE_DIR, 'cloudflared.log');
-const CF_PID = path.join(BRIDGE_DIR, 'cloudflared.pid');
+// 独立闭环(鸡犬相闻·不相往来): 用 -vsix 后缀, 与常驻桥各自管各自的 cloudflared, 互不干扰。
+const CF_LOG = path.join(BRIDGE_DIR, 'cloudflared-vsix.log');
+const CF_PID = path.join(BRIDGE_DIR, 'cloudflared-vsix.pid');
 let cfPollTimer: any = null;
 
 function bridgeEnsureDir() { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); }
@@ -3451,14 +3452,10 @@ async function bridgeAutoPersist(): Promise<void> {
         try { last = JSON.parse(fs.readFileSync(BRIDGE_AUTOSYNC_FILE, 'utf8')); } catch { /* 首次 */ }
         const now = Date.now();
         const winKey = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.hostname();
-        const pub = bridgeReadPublishedConn();
-        const connFresh = !!(pub && (pub.url || pub.relayUrl) && pub.ageMs < BRIDGE_SYNC_THROTTLE_MS);
         const throttled = !!(last.lastMs && (now - last.lastMs) < BRIDGE_SYNC_THROTTLE_MS);
         const windowChanged = !!(last.winKey && last.winKey !== winKey);
-        // 采纳已发布的新鲜连接 → 不与常驻桥重复起隧道(守柔)
-        if (pub && pub.url && pub.ageMs < BRIDGE_CONN_FRESH_MS) { bridgeUrl = pub.url; if (pub.token) bridgeToken = pub.token; }
-        // 无新鲜连接 → 起一条快速隧道(仅当 cloudflared 可用; spawn 失败守柔吞掉)
-        if (!connFresh) { try { await bridgeStartTunnel(false); } catch { /* 守柔 */ } }
+        // 独立闭环(鸡犬相闻·不相往来): 不读常驻桥 conn.json, 自己无隧道即自起, 与其他插件互不干扰。
+        if (!bridgeUrl) { try { await bridgeStartTunnel(false); } catch { /* 守柔 */ } }
         // 内穿 MD 同步到当前账号 Knowledge(反向注入框架再扩散到所有账号) — 低频
         if (!throttled || windowChanged) { try { if (ws.devinAuth1 && ws.devinOrgId) await bridgeInjectKnowledge(); } catch { /* 守柔 */ } }
         try { fs.writeFileSync(BRIDGE_AUTOSYNC_FILE, JSON.stringify({ lastMs: now, winKey, url: bridgeUrl || (pub && pub.url) || '', source: pub ? pub.source : 'started' }, null, 2), 'utf8'); } catch { /* 守柔 */ }
@@ -3527,10 +3524,8 @@ function bridgeProbeAlive(rawUrl: string, timeoutMs: number = 6000, token: strin
     });
 }
 function bridgeEffectiveUrl(): string {
-    if (bridgeUrl) return bridgeUrl;
-    // 含 relay-only 连接(仅 relayUrl 无透明 url): 旧法漏探 → 隧道断也不刷新。此处兜底取 relayUrl。
-    try { const c = bridgeReadPublishedConn(); if (c && (c.url || c.relayUrl)) return c.url || c.relayUrl || ''; } catch { /* 守柔 */ }
-    return '';
+    // 独立闭环(鸡犬相闻·不相往来): 只用进程内自有隧道 URL, 不读外部 conn.json, 不采纳常驻桥地址。
+    return bridgeUrl;
 }
 function bridgeEffectiveToken(): string {
     if (bridgeToken) return bridgeToken;
@@ -3636,23 +3631,16 @@ async function bridgeLivenessTick(): Promise<void> {
                 }
             } catch { /* 守柔 */ }
         }
-        // 1) 重读已发布连接(常驻桥/host MCP 可能已轮换出新地址) → 采纳
-        try { const c = bridgeReadPublishedConn(); if (c && c.url && c.url !== bridgeUrl) { bridgeUrl = c.url; if (c.token) bridgeToken = c.token; } } catch { /* 守柔 */ }
+        // 独立闭环(鸡犬相闻·不相往来): 不读常驻桥 conn, 仅管理自有进程内隧道。
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
-        // 2) 桥死 → 后端自动重启隧道 (用户诉求: 系统实时自检, 检测到问题就自动重启隧道)
         if (!bridgeOk) {
             _bridgeLivenessFail++;
-            const pub = bridgeReadPublishedConn();
-            const connFresh = !!(pub && pub.url && pub.ageMs < BRIDGE_SYNC_THROTTLE_MS);
             if (bridgeUrl) {
-                // 进程内隧道由本插件持有 → 停止+重启 (保持命名/快速模式), 让 cloudflared 重新建链
-                try { const wasNamed = !!bridgeReadNamedToken(); console.log('[dao] bridge DEAD → 自动重启隧道 (named=' + wasNamed + ', fail=' + _bridgeLivenessFail + ')'); bridgeStopTunnel(); await bridgeStartTunnel(wasNamed); } catch { /* 守柔 */ }
-            } else if (!connFresh) {
-                // 无进程内隧道且无新鲜发布连接 → (仅当 cloudflared 可用)起一条快速隧道
+                // 进程内隧道由本插件持有 → 停止+重启, 让 cloudflared 重新建链
+                try { const wasNamed = !!bridgeReadNamedToken(); console.log('[dao] tunnel DEAD → 自动重启 (named=' + wasNamed + ', fail=' + _bridgeLivenessFail + ')'); bridgeStopTunnel(); await bridgeStartTunnel(wasNamed); } catch { /* 守柔 */ }
+            } else {
+                // 无进程内隧道 → 自起快速隧道
                 try { await bridgeStartTunnel(false); } catch { /* 守柔 */ }
-            } else if (_bridgeLivenessFail >= 3) {
-                // 常驻桥发布连接仍探测为死且连续失败 → 兜底自起快速隧道, 不再死等常驻桥轮换
-                try { console.log('[dao] bridge DEAD x' + _bridgeLivenessFail + ' (常驻发布连接无效) → 兜底自起隧道'); await bridgeStartTunnel(false); } catch { /* 守柔 */ }
             }
         }
         // 3) 强制把最新地址重注到各账号(清签名 → 绕过"无变化不重注")
