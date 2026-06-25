@@ -622,3 +622,64 @@ universal/canvas/escalate/servo/goalseek/flow 全绿，冷拖单次 present 仍 
 > 反也者，道之动也——分不开的，便不强分；以"复用即假设、验证即裁决"顺其动而自正。
 > 絕利一源，用師十倍：验证那一下既证形、又裁增益、还自愈误借，一源而三用。
 > 知不变之不能尽别，故不饰其能别；borrow 而即验，错则即改，無為而無不為。
+
+---
+
+## 26. 动态签名：以"动作→响应"事前分开像同动异的面（round-26）
+
+round-25 留下的缺口很诚实：orbit 与 pan 在**一切静态描述子**上都几乎全等（centroid-radial 跨余弦 ~0.99），
+所以按外观键存的增益会**互借**（cal_sim≥0.6），错的尺寸只能等下一次拖拽证伪后**事后自愈**。本轮把第二维身份
+直接量在**拖拽过程之中**：pan 是**平移**（一次刚性整体位移即可把后一帧对齐回前一帧，块匹配相干 ~1），
+orbit 是**旋转**（没有任何单一位移能对齐，相干 ~0.2）。标定匹配改为 `min(static_cos, dynamic_cos)`，
+于是错借在**发生之前**就被否决。
+
+### 26.1 两条先被实测否定的路（实践refutes，再设计）
+
+诚实记录失败，因为失败塑形了正解：
+- **逐块 Lucas-Kanade 光流**：稀疏线框上每块光流被残差主导，orbit~pan 动态余弦 0.962，并不比静态 0.989 好——白做。
+- **全局差分仿射拟合**：每子帧位移约 1.4 格属**超像素**运动，违反亮度恒常的线性化前提，平移项对 orbit 与 pan
+  **双双解释≈0**——崩。
+
+正解只能是**非微分**的检验：块匹配（block-match）。对每对相邻子帧，在 ±`search` 格内暴力搜使 SSD 最小的整数位移，
+读相干 `coherence = 1 − SSD_best/SSD_zero`（一次刚性位移能把错位减掉多少，按运动量加权）。
+pan 几乎完全对齐（相干→1），orbit 几乎对不齐（相干→0）。签名取 L2 归一对 `[coherence, 1−coherence]`：
+pan 指向 ~[1,0]，orbit 指向 ~[0,1]，二者余弦**塌到借用阈值之下**。
+
+### 26.2 实现（最小、可选、向后兼容）
+
+- `vmodel._ssd_shift(pre,cur,cols,rows,dx,dy)`：在重叠区按**每像素均值** SSD（不同重叠面积可比）。
+- `vmodel.motion_signature(frames,cols,rows,...)`：上述块匹配相干，返回 `{sig=[coh,1−coh] (L2), coherence, shift, pairs}`。
+- `dyn`（可选 2 维）穿过 `calibrate(... , dyn=None)` / `predict(... , dyn=None)` / `verify(... , dyn=None)`；
+  `_best_cal()` 在**两侧都有 dyn 时**取 `min(static_cos, dynamic_cos)`——外观像还不够，**动也要像**才许借。
+  不传 dyn 时退化为 round-25 行为，零回归。
+- 活体 agent（`vm_inner_agent.py`）：对"声明了 effect 的 drag"在**按住期间**采子帧，蒸馏出 `dyn_sig`，
+  线进 verify/calibrate，并在 `eff_res['dyn']` 暴露给 harness。
+
+### 26.3 实测（纯像素，零视觉）
+
+**单元证明（`test_motion_signature.py`，合成帧，不依赖 lab）**：
+平移相干 1.000 sig [1,0]；旋转相干 0.187 sig [0.22,0.97]；动态跨余弦 **0.225 < 0.6**。
+外观键完全相同、动态相反时，增益**事前即不借**（combined_sim 0.225），无需自愈。
+
+**活体证据（`practice_dynamic.py`，真实采到的签名喂入受控世界模型）**：
+- orbit dyn=[0.21,0.98]，pan dyn=[0.95,0.30]；静态 radial cos **0.989**，动态 cos **0.496**。
+- round-25（仅静态键）：两个方向都会**借**（cal_sim 0.989）——这正是那个泄漏。
+- round-26（加 dyn 键）：两个方向都**事前否决**（cal_sim 0.496 < 0.6）——无需事后自愈。
+- 阳性对照：同一面自身增益**照样复用**（cal_sim 1.000）——dyn 只挡**错**的借，不挡**对**的复用。
+
+> 何以驱动闸门而非走完整 act 环：完整 act 路径里凡自身属迁移的面都会**自标定**，于是每个像同面最终各用**自己**正确的
+> 增益，跨面错借根本不会出现（那是系统在正常工作）。要**孤立**这道闸，便用真实采到的 dyn 签名与运动不变 radial 键，
+> 只存 trainer 的标定再查 partner——令 trainer 增益成为唯一候选，cal_sim 才恰好读出跨面匹配。完整 act 路径由
+> `practice_calibrate.py` / `test_calibrate_invariant.py` 另行回归。
+
+**零回归**：universal/canvas/escalate/servo/goalseek/flow/calibrate + 单元测试全绿（EXIT=0），冷拖 present 仍 2/5。
+
+### 26.4 诚实边界
+
+- dyn 分的是**平移 vs 旋转**这一**运动学类别**；paint(相干0.40)/timeline(0.006)/node(0.991) 也各有其动，
+  但本轮只用它解决 orbit↔pan 这对**静态像同、动态相异**的标定身份冲突，未声称它能区分一切面。
+- 块匹配在 ±`search` 格的整数网格上搜索，分辨率受网格与 search 半径限制；这是工程取舍，非普适最优。
+- 仍是"借而即验"的精神：dyn 把错借挡在事前，但**对**的复用与自愈机制（round-24/25）原样保留，互不替代。
+
+> 絕利一源，用師十倍——一次拖拽既证形、又裁增益、又量动学，一源三用。
+> 知静之不能尽别，乃问其动；动以辨之，借乃借对，不待事后之证伪。無為而無不為。
