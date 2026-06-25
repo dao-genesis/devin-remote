@@ -41,27 +41,63 @@ function _systemDriveLetter() {
   const m = r.match(/[A-Za-z]/);
   return (m ? m[0] : "C").toUpperCase();
 }
-// 列本地固定盘 (Windows): 优先 wmic(可辨 DriveType=3·排网络/可移动); 回落 statfs 枚举盘符。
-function listDataDrives() {
-  if (process.platform !== "win32") return [];
-  let drives = [];
+// CSV 解析: wmic /format:csv 首列是 Node(故 DeviceID 在 c[1]); PowerShell 行直接 DeviceID,Free,Size。
+function _parseDriveCsv(out, hasNode) {
+  const drives = [];
+  for (const line of String(out).split(/\r?\n/)) {
+    const c = line.split(",").map((x) => (x || "").trim());
+    const dev = hasNode ? c[1] : c[0];
+    const free = Number(hasNode ? c[2] : c[1]);
+    const size = Number(hasNode ? c[3] : c[2]);
+    if (dev && /^[A-Za-z]:$/.test(dev) && isFinite(free)) drives.push({ letter: dev[0].toUpperCase(), free, size: isFinite(size) ? size : 0 });
+  }
+  return drives;
+}
+// 现代 Windows(Win11 24H2 起已移除 wmic) → 用 CIM 取仅本地固定盘(DriveType=3)。
+function _queryFixedDrivesPS() {
+  try {
+    const ps = 'Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object { $_.DeviceID + "," + $_.FreeSpace + "," + $_.Size }';
+    const enc = Buffer.from(ps, "utf16le").toString("base64");
+    const out = require("child_process")
+      .execSync("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + enc, { timeout: 12000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] })
+      .toString();
+    const d = _parseDriveCsv(out, false);
+    return d.length ? d : null;
+  } catch (e) { return null; }
+}
+function _queryFixedDrivesWmic() {
   try {
     const out = require("child_process")
       .execSync('wmic logicaldisk where "DriveType=3" get DeviceID,FreeSpace,Size /format:csv', { timeout: 8000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] })
       .toString();
+    const d = _parseDriveCsv(out, true);
+    return d.length ? d : null;
+  } catch (e) { return null; }
+}
+// 网络映射盘符 (net use): 末路 statfs 枚举时据此排除, 守「仅本地数据盘」之约。
+function _networkDriveLetters() {
+  const set = new Set();
+  try {
+    const out = require("child_process")
+      .execSync("net use", { timeout: 6000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] })
+      .toString();
     for (const line of out.split(/\r?\n/)) {
-      const c = line.split(",");
-      if (c.length >= 4) {
-        const dev = (c[1] || "").trim();
-        const free = Number((c[2] || "").trim());
-        const size = Number((c[3] || "").trim());
-        if (/^[A-Za-z]:$/.test(dev) && isFinite(free)) drives.push({ letter: dev[0].toUpperCase(), free, size: isFinite(size) ? size : 0 });
-      }
+      const m = line.match(/\b([A-Za-z]):\s+\\\\/);
+      if (m) set.add(m[1].toUpperCase());
     }
-  } catch (e) { /* wmic 不存在/被禁 → 回落 */ }
-  if (!drives.length) {
+  } catch (e) {}
+  return set;
+}
+// 列本地固定盘 (Windows): CIM 优先(现代可靠·辨 DriveType=3 排网络/可移动) → wmic 回落 → 末路 statfs 枚举(排网络映射盘)。
+function listDataDrives() {
+  if (process.platform !== "win32") return [];
+  let drives = _queryFixedDrivesPS() || _queryFixedDrivesWmic();
+  if (!drives || !drives.length) {
+    const net = _networkDriveLetters();
+    drives = [];
     for (let i = 67; i <= 90; i++) { // C..Z
       const L = String.fromCharCode(i);
+      if (net.has(L)) continue; // 排网络盘(无 DriveType 信息时的守约)
       const root = L + ":\\";
       let free = -1;
       try { if (fs.existsSync(root)) free = _statfsFreeBytes(root); } catch (e) {}
@@ -72,14 +108,16 @@ function listDataDrives() {
   return drives.map((d) => Object.assign({ system: d.letter === sys }, d));
 }
 let _backupDefaultCache = null;
-// 自动择优备份根: 持久化选择优先(快·无 wmic) → 否则择最空数据盘并持久化 → 无则回落 home。
+// 持久化状态版本: 旧版(无 v 或 v<2)可能误选网络盘(wmic 缺失回落枚举所致), 故只信任 v>=2 的选择, 自愈历史脏状态。
+const DC_BACKUP_STATE_V = 2;
+// 自动择优备份根: 持久化选择优先(快·无需查盘) → 否则择最空数据盘并持久化 → 无则回落 home。
 function getOptimalBackupRoot() {
   if (_backupDefaultCache) return _backupDefaultCache;
   if (process.platform !== "win32") return (_backupDefaultCache = DC_HOME_BACKUP);
-  // 1) 持久化选择 (盘仍在即用·稳定不跳盘)
+  // 1) 持久化选择 (版本达标 + 盘仍在即用·稳定不跳盘; 旧版脏状态忽略并重选)
   try {
     const j = JSON.parse(fs.readFileSync(DC_BACKUP_ROOT_STATE, "utf8"));
-    if (j && j.root && fs.existsSync(path.parse(j.root).root || "")) return (_backupDefaultCache = j.root);
+    if (j && j.root && Number(j.v) >= DC_BACKUP_STATE_V && fs.existsSync(path.parse(j.root).root || "")) return (_backupDefaultCache = j.root);
   } catch (e) {}
   // 2) 择最空非系统固定盘 (需 ≥10GB 余量·避开微型恢复分区/U 盘残留)
   const MIN_FREE = 10 * 1024 * 1024 * 1024;
@@ -90,16 +128,16 @@ function getOptimalBackupRoot() {
   const root = path.join(cands[0].letter + ":\\", "DaoDevinBackups");
   try {
     fs.mkdirSync(DC_DIR, { recursive: true });
-    fs.writeFileSync(DC_BACKUP_ROOT_STATE, JSON.stringify({ root, chosenAt: Date.now(), sysDrive: sys, freeBytes: cands[0].free }));
+    fs.writeFileSync(DC_BACKUP_ROOT_STATE, JSON.stringify({ v: DC_BACKUP_STATE_V, root, chosenAt: Date.now(), sysDrive: sys, freeBytes: cands[0].free }));
   } catch (e) {}
   return (_backupDefaultCache = root);
 }
-// 显式记录选择(供迁移后钉住目标盘·使后续启动走快路径不再跑 wmic)。
+// 显式记录选择(供迁移后钉住目标盘·使后续启动走快路径不再查盘)。
 function setBackupRoot(root) {
   _backupDefaultCache = root || null;
   try {
     fs.mkdirSync(DC_DIR, { recursive: true });
-    fs.writeFileSync(DC_BACKUP_ROOT_STATE, JSON.stringify({ root, chosenAt: Date.now(), manual: true }));
+    fs.writeFileSync(DC_BACKUP_ROOT_STATE, JSON.stringify({ v: DC_BACKUP_STATE_V, root, chosenAt: Date.now(), manual: true }));
   } catch (e) {}
   return root;
 }
