@@ -60,3 +60,4 @@ addons/rt-flow-app/local.properties
 
 # 预测编码层基准产物（生成物，不入库）
 **/agent-vm/bench_predictive_result.json
+**/agent-vm/practice_apps_result.json
