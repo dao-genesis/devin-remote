@@ -742,3 +742,109 @@ test_motion_signature + practice_dynamic 全绿（EXIT=0），冷拖 present 仍
 
 > 不窺於牖，以知天道——离线已知其理；然知而未行，犹隱也。
 > 行於大道，唯施是畏：必使闸在真器真链里真响一次，方谓之闭环。無為而無不為。
+
+---
+
+## 28. 第 28 轮：三线并进——真实渲染存活 / 全表面动学测绘 / 三键巩固（活体实测，零回归）
+
+> 用户令："无为而无不为，所有方向全部推进一切，道法自然。" 故本轮不取单一前沿，而三线
+> 同测、各自闭环。无新机制被强加；只以**测量**揭示结构，let the data decide。
+
+### 28.1 方向一：三键能否在「真实渲染」下存活（dir-1，EXIT=0 PASS）
+
+迄今所有验证都在合成的 `gui_lab.html`（纯色块、硬边）。最大诚实缺口：predict→verify→
+calibrate 的三把钥匙——**足迹 fp（增益无关形状）、增益 mag（表面局部幅度）、动学签名 dyn
+（块匹配相干性）**——能否在带**逐像素纹理、平滑明暗、高光、暗角、抗锯齿**的真实风格页上
+存活。
+
+新增 `real_lab.html`：确定性程序化噪声纹理 + 分形八度叠加，渲出三个真实风格面，与
+`gui_lab.html` 同构的运动学：
+
+- `globe`：受裁剪的着色纹理球，拖拽**自转**（旋转运动学，似 orbit）；含高光 + 边缘明暗。
+- `photomap`：纹理卫星图，拖拽**平移**（平移运动学，似 pan）；含暗角。
+- `terrain`：**不同**纹理卫星图，亦平移。
+
+`practice_real.py` 经真实 HTTP `act()` 活体捕获三面的 dyn + radial + gain：
+
+```
+   globe     gain= 7.52  coherence=0.000  dyn=[0.000, 1.000]
+   photomap  gain=10.86  coherence=0.911  dyn=[0.9952, 0.0976]
+   terrain   gain=11.82  coherence=0.892  dyn=[0.9927, 0.1203]
+
+   STATIC radial cos:  globe~photomap=0.913  photomap~terrain=0.991  globe~terrain=0.920
+   DYNAMIC       cos:  globe~photomap=0.098  photomap~terrain=1.000  globe~terrain=0.120
+
+   gate(globe   -> photomap): borrow=False cal_sim=0.098  <- 旋转≠平移，应否决 ✓
+   gate(photomap-> terrain ): borrow=True  cal_sim=0.991  <- 既同动学又同外观，应允许 ✓
+```
+
+**诚实结论（PASS）**：纹理/明暗/抗锯齿不破坏三键。
+- 真实渲染在 3/3 面都产生**可测**的拖拽效应（gain 7.5–11.8）。
+- **静态 radial 几乎抹不开 globe 与两张地图**（cos 0.91–0.92，都"看起来"像有结构的图），
+  但 **dyn 一刀切开**：globe 相干性 0.0（自转，单一刚体位移对不齐），两张地图 0.89–0.91
+  （平移，一次刚体位移即对齐）。**动学是渲染无关的**——它问的是"一次刚性平移能否对齐
+  前后帧"，与表面长什么样无关。
+- 闸在真实渲染下仍正确开合：错借（旋转增益→平移图）被 0.098 事前否决；对借（两张同为
+  平移且外观相近的图）以 0.991 允许。
+
+### 28.2 方向二：全 5 面动学测绘——2/5 边界是诚实的，非局限（dir-2，EXIT=0）
+
+`exp_surfdyn.py` 把 dyn + 静态 radial 测遍全部 5 个实验室面：
+
+```
+   surface     gain   coh              shift dyn
+   orbit       6.21  0.176       [0.02, 0.14]  [0.209, 0.978]   <- 旋转
+   pan         8.51  0.758      [-0.61, 0.00]  [0.953, 0.303]   <- 平移
+   paint       3.28  0.257      [1.36, -0.68]  [0.327, 0.945]   <- 累积（不相干）
+   timeline    0.00  0.000       [0.00, 0.00]  [0.000, 1.000]   <- 太小（gain=0）
+   node        6.66  0.921     [-0.66, -1.89]  [0.996, 0.086]   <- 平移!
+
+   pan ~ node:   STATIC radial=0.945   DYNAMIC=0.975   <- 又像又同动!
+   orbit ~ pan:  STATIC radial=0.989   DYNAMIC=0.496
+```
+
+**关键发现与诚实抉择**：node 在**两把粗钥匙上都像 pan**——radial 外观 0.945、动学 0.975
+（都是平移、都相干）。天真地看，node 应被认成 pan 同类、可借增益。**但活体 `verify()`
+用的是完整二维足迹 `fp`，不是被压扁的一维 radial**：node 拖动的是一个**局部小控件**，pan
+平移的是**整片视场**——同一种运动**类型**，但变化的**空间分布**根本不同。完整 fp 把这道
+区别保住了，于是 node 仍 `present=False`。
+
+故本轮**不改 verify()、不放宽到 radial+dyn**。理由（道法自然，为者败之）：
+
+- dyn 与 radial 是**必要而不充分**的"同类候选"判据（确立 node↔pan 的运动学+粗外观亲缘）。
+- 完整足迹 fp 是**最终判别器**，它诚实地把"拖一个小部件"与"平移整张画布"分开。
+- 若为了把 node 凑成 present 而退到只看 radial+dyn，就等于**断言一个本不存在的外观等价**
+  ——把局部控件拖拽谎称为整场平移。**2/5（orbit/pan 在，paint/timeline/node 不在）是
+  诚实的前沿，不是缺陷。**
+
+> 為者敗之，執者失之。dyn 是新增的**运动学轴**，与 fp 的**外观轴**正交；测绘揭示了这张
+> 二轴图，而非要把每个面都塞进 present。天下神器，非可为者也。
+
+### 28.3 方向三：三键不变量巩固——零回归（dir-3，全绿）
+
+本轮三个新文件（`real_lab.html`、`practice_real.py`、`exp_surfdyn.py`）**纯增量**，未触
+任何生产代码（`vm_inner_agent.py` / `vmodel.py` 自 round-27 合并后逐字未改）。故按构造零
+回归风险，并实测复核：
+
+```
+practice_universal      EXIT=0
+practice_dynamic        EXIT=0
+test_motion_signature   EXIT=0
+practice_real (dir-1)   EXIT=0
+exp_surfdyn  (dir-2)    EXIT=0
+冷拖 present 仍 2/5
+```
+
+**三键不变量（rounds 23–28 锁定）**：
+1. **足迹 fp**（L2 归一 |delta| 形状）：增益无关，跨表面可迁移，是**外观/空间分布**判别器。
+2. **增益 mag**（绝对像素幅度）：表面特异，迁移时一次"验证即探针"就地标定（round-24）。
+3. **动学 dyn**（块匹配相干性 [coherence, incoherence]）：渲染无关，事前分开旋转与平移，
+   是**运动学**判别器；闸 `min(静态 cos, 动态 cos)` 只在外观与动学都同意时才允许借增益
+   （round-26），且已在完整 act() 链路真实触发（round-27）。
+
+**诚实边界**：三键各司其职——它们分开行为不同的面（orbit vs pan）、在真实渲染下存活、
+诚实标出差异（node 同动学但不同足迹）。它们**不**声称能让 paint/timeline/node 迁移；数据
+说不行，就如实记不行。
+
+> 損之又損，以至於無為，無為而無不為。三线并进，皆以測量收束，不强生机制：可巩固者巩固
+> 之，不可迁移者诚实记之。道法自然。
