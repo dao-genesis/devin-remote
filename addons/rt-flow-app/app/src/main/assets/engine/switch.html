@@ -314,6 +314,17 @@ function ovDollars(q){ return (q && typeof q.overageDollars==="number") ? q.over
 //   额度是高频跳动的易变量; 把它从 rowHtml 结构里剥离, 仅就地 patch 对应 .eua-big 单元 +
 //   头部汇总 + 页签美金。如此「实时额度轮(~2.2s)」不再每轮重建整列 122 行 → 根除卡顿。
 var _lastTabDol={};
+// 把单个账号的实时美金推到其顶部页签 (id 与小写 email 双键, 与原生 sTabDollars 查找一致)。
+//   · 无已知额度(quota.dPct 非数值) → 不推空串: 宁可保留上次金额, 也绝不把页签金额抹成空白 (页签金额「一直显示」之本)。
+//   · force=true 绕过变化缓存强推 → 外壳每 ~6s 广播「已开账号」时把上次金额钉回原生, 纵使原生侧曾保洁清表/重建标签亦自愈复现。
+function _pushTabDol(a, force){
+  if(!a || !(typeof N!=="undefined" && N.setTabDollars)) return;
+  var q=a.quota||{}; if(typeof q.dPct!=="number") return;
+  var lbl="$"+Math.round(ovDollars(q)); var key=a.id||"";
+  if(!force && _lastTabDol[key]===lbl) return;
+  _lastTabDol[key]=lbl;
+  try{ N.setTabDollars(key, lbl); if(a.email) N.setTabDollars((a.email||"").toLowerCase(), lbl); }catch(e){}
+}
 function _euaText(a){
   var q=a.quota||{}; var dollars=ovDollars(q);
   if(typeof q.dPct!=="number") return {t:"$--", c:"#666", ti:"未刷新额度"};
@@ -333,9 +344,8 @@ function paintDollars(accs){
   accs.forEach(function(a){ var q=a.quota; if(q&&typeof q.dPct==="number"){checkedCnt++; var dd=ovDollars(q); if(dd>0){actCnt++;totalD+=dd;}} });
   var sa=document.getElementById("st-act");
   if(sa) sa.textContent = checkedCnt? (actCnt+"/"+checkedCnt+"激活"+(actCnt>0?" $"+Math.round(totalD):"")) : "";
-  // 每号实时美金推到其页签 (仅变化的号才调原生桥 → 省每轮 ~122 次调用)
-  try{ if(N.setTabDollars){ accs.forEach(function(a){ var q=a.quota||{}; var lbl=(typeof q.dPct==="number")?("$"+Math.round(ovDollars(q))):"";
-        var key=a.id||""; if(_lastTabDol[key]!==lbl){ _lastTabDol[key]=lbl; N.setTabDollars(key, lbl); if(a.email) N.setTabDollars((a.email||"").toLowerCase(), lbl); } }); } }catch(e){}
+  // 每号实时美金推到其页签 (变化才调原生桥 → 省每轮 ~122 次调用; 无额度则不推空, 永不抹掉已显金额)
+  try{ accs.forEach(function(a){ _pushTabDol(a); }); }catch(e){}
 }
 
 // ── 行渲染 (1:1 桌面 Devin Cloud 手机版 row · 去 D/W 条·去自动切号·美金额度保留) ──
@@ -887,6 +897,7 @@ async function _pollOneAcc(a, realNo){
     var nm = top ? (top.title||"") : "";
     var stt = top ? (top.cls==="blocked"?"blocked":(top.cls==="awaiting"?"blocked":"running")) : "finished";
     if(N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }
+    _pushTabDol(DaoCore.findAcc(a.id)||a);   // 金额与状态同推: 凡有状态更新的页签必同时带上其(缓存)金额, 杜绝「有🟢对话名却无 $」
   }catch(e){}
 }
 async function pollTrk(force){
@@ -1426,6 +1437,7 @@ async function refreshOpenAccts(){
       try{ await _pollOneAcc(a, 0); }catch(e){}
     }
     paintDollars();
+    accs.forEach(function(a){ _pushTabDol(DaoCore.findAcc(a.id)||a, true); });   // 已开账号强推最新金额 (绕过变化缓存 → 自愈原生侧保洁/标签重建致的金额缺失)
   }catch(e){}
   _openBusy=false;
 }
@@ -1433,7 +1445,10 @@ async function refreshOpenAccts(){
 function setOpenAccts(arr){
   try{ if(typeof arr==="string") arr=JSON.parse(arr||"[]"); }catch(e){ arr=[]; }
   var now=Date.now(), m={}; (arr||[]).forEach(function(k){ if(k) m[String(k).toLowerCase()]=now; });
-  _dvOpenAccts=m; try{ refreshOpenAccts(); }catch(e){}
+  _dvOpenAccts=m;
+  // 外壳每 ~6s 广播一次已开账号 → 立刻把这些号的(缓存)金额强推回顶部页签, 不等异步网络刷新 → 页签金额恒显且持续自愈。
+  try{ loadAcc().filter(_isDvOpen).forEach(function(a){ _pushTabDol(a, true); }); }catch(e){}
+  try{ refreshOpenAccts(); }catch(e){}
 }
 // 外壳「刷新」按钮: 当前账号优先即时刷(额度+状态) → 再全量强制刷(绕过可见性门控)。点一下=立即识别清楚。
 async function forceRefreshNow(accId){
