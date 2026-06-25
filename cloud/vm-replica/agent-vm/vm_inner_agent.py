@@ -1418,12 +1418,14 @@ def act(body):
         v = wm.verify(akey, ctx, obs)
         if eff.get('learn', True):
             wm.record(akey, ctx, obs); wm.save()
+        conf, esc = _vmodel.escalation_decision(v)
         eff_res = {'action': akey, 'region': list(eff_region),
-                   'obs': {'mag': obs['mag'], 'cx': obs['cx'], 'cy': obs['cy']}, **v}
+                   'obs': {'mag': obs['mag'], 'cx': obs['cx'], 'cy': obs['cy']},
+                   'confidence': conf, 'escalate': esc, **v}
         if v.get('known'):
             matched = matched and bool(v.get('match'))  # known mismatch is a real prediction error
-        reasons.append('effect=%s(%s)' % ('ok' if v.get('match') else ('novel' if not v.get('known')
-                       else 'FAIL'), akey))
+        reasons.append('effect=%s(%s,%s)' % ('ok' if v.get('match') else ('novel' if not v.get('known')
+                       else 'FAIL'), akey, conf))
     attempts = 1; ladder = []
     # reflex ladder: the human "no reaction -> click/double-click/retry again" instinct.
     # Skipped when an 'effect' is asserted: canvas drags/scrolls are NON-idempotent, re-issuing them
@@ -1461,13 +1463,22 @@ def act(body):
            'reflex': ladder, 'reasons': reasons, 'target_xy': [x, y] if x is not None else None}
     if eff_res is not None:
         res['effect'] = eff_res
+    # escalation policy: spend vision ONLY on genuine surprise -- a hard prediction-error (not matched)
+    # OR a world-model verdict that says the cheap pixel check can't vouch for the outcome
+    # (surprise / low_confidence / transfer_unverified). A confident effect on a familiar surface, or
+    # any plain match, returns with ZERO vision.
+    eff_escalate = bool(eff_res and eff_res.get('escalate'))
+    res['escalate'] = (not matched) or eff_escalate
+    if eff_res is not None:
+        res['escalate_reason'] = eff_res.get('confidence') if res['escalate'] else 'confident'
     if not matched:
         # genuine surprise -> escalate with the MINIMAL extra perception the brain needs
         post = state_sig()
         res['prediction_error'] = {
             'pre': {k: pre[k] for k in ('fg_title', 'tree_hash', 'focus_class', 'h')},
             'post': {k: post[k] for k in ('fg_title', 'tree_hash', 'focus_class', 'h')}}
-        crop = watch or rect
+    if res['escalate']:
+        crop = (eff_region if eff_escalate else None) or watch or rect
         if not crop and x is not None:  # coordinate action -> crop a box around the point
             crop = [x - 160, y - 110, x + 160, y + 110]
         if crop:

@@ -241,3 +241,23 @@ class WorldModel:
                 'locus_diff': round(locus_diff, 3), 'mag_ratio': round(mag_ratio, 3),
                 'aniso_diff': round(aniso_diff, 3), 'sfp_sim': round(sfp_sim, 3),
                 'pred_mag': round(pred['mag'], 3), 'obs_mag': round(obs['mag'], 3), 'n': pred['n']}
+
+
+def escalation_decision(v):
+    """Turn a verify() result into the act-loop's perceive-more decision: WHEN is a cheap pixel check
+    enough, and WHEN must we spend vision? This is the 'only escalate on genuine surprise' gate the
+    whole pivot rests on -- not every step, only the ones the world model can't vouch for.
+      surprise            : never seen this gesture here -> escalate (the real novelty trigger)
+      low_confidence      : gesture recognised but the outcome is OFF its learned prior (size/footprint
+                            wrong) -> escalate to look at what actually happened
+      transfer_unverified : recognised AND the prior held, but extrapolated from unlike surfaces and we
+                            could not confirm the precise outcome -> escalate (honest about reaching far)
+      confident           : present on a familiar surface -> trust, ZERO vision
+    Returns (label, escalate_bool)."""
+    if not v.get('known'):
+        return ('surprise', True)
+    if not v.get('present'):
+        return ('low_confidence', True)
+    if v.get('transfer') and not v.get('match'):
+        return ('transfer_unverified', True)
+    return ('confident', False)
