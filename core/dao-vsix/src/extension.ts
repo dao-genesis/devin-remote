@@ -1468,6 +1468,8 @@ const SIG_REASM_TTL_MS = 120000;   // 分片重组缓存寿命
 const SIG_DEDUP_MAX = 512;         // 已处理 corr LRU 容量(多 broker 去重)
 const SIG_BACKOFF_MIN = 1500;
 const SIG_BACKOFF_MAX = 20000;
+const SIG_HALFOPEN_MS = 90000;     // >90s 无任何入站(连 ntfy keepalive 都收不到) 即判半开死链 → 主动重连
+const SIG_WATCHDOG_MS = 20000;     // 看门狗巡检周期
 
 interface SigState {
     enabled: boolean; session: string; topic: string; servers: string[];
@@ -1606,7 +1608,16 @@ function sigSubscribeServer(server: string): void {
     const base = server.replace(/\/+$/, '');
     const streamUrl = base + '/' + sigState.topic + '/json';
     let backoff = SIG_BACKOFF_MIN; let req: any = null; let alive = true;
-    const entry: any = { server, close: () => { alive = false; try { req && req.destroy(); } catch {} } };
+    // 半开死链看门狗(与手机版 signal.js route-C v0.37.60 对称): 静默失效的 TCP 流(NAT 重绑/休眠/网络切换)
+    //   不发 FIN 也不报错 → res 的 end/error 永不触发, 订阅就此僵死「再也收不到却自以为在线」, 桌面经
+    //   去中心化路线C 默默失联。ntfy 流每 ~45s 必有 keepalive 入站 → 健康连接持续刷新 lastRx; 据此 >90s
+    //   无任何入站即判半开、主动 destroy(触发 error/end → schedule 重连)。lastRx===0 即未连接, 不误杀。
+    let lastRx = 0;
+    const wd = setInterval(() => {
+        if (!alive || sigState.stopping) return;
+        if (lastRx && Date.now() - lastRx > SIG_HALFOPEN_MS) { lastRx = 0; try { req && req.destroy(); } catch {} }
+    }, SIG_WATCHDOG_MS);
+    const entry: any = { server, close: () => { alive = false; try { clearInterval(wd); } catch {} try { req && req.destroy(); } catch {} } };
     sigState.subs.push(entry);
     const open = () => {
         if (!alive || sigState.stopping) return;
@@ -1618,9 +1629,11 @@ function sigSubscribeServer(server: string): void {
             req = lib.request({ method: 'GET', host: u.hostname, port: u.port || (isHttps ? 443 : 80), path: u.pathname + u.search, headers: { 'Accept': 'application/x-ndjson' } }, (res: any) => {
                 if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) { res.resume(); try { req.destroy(); } catch {} schedule(); return; }
                 backoff = SIG_BACKOFF_MIN;
+                lastRx = Date.now();   // 连接确立即起看门狗计时
                 res.setEncoding('utf8');
                 let buf = '';
                 res.on('data', (chunk: string) => {
+                    lastRx = Date.now();   // 任何入站(含 keepalive)刷新存活
                     buf += chunk;
                     let nl: number;
                     while ((nl = buf.indexOf('\n')) >= 0) {
