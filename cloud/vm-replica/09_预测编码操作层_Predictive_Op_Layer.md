@@ -177,3 +177,23 @@ act({ op, target, expect, retry? })
 实测 round-6（自身 console）：新增手势场景 2/2（双击选词 / 滚动平移），多应用合计 **26/26 命中、0 截图、0 视觉调用**，均一次命中（`attempts=1`，引擎无需改动）。
 
 > 手之所触，目之所验。双击、拖拽、滚动皆人之本能；预测先行、观变于所变，机亦循之。无为而无不为，循环不止。
+
+---
+
+## 十一、v3 round-7 · 语义状态内省（读其义，非测其素）
+
+round-5 曾尝试以 **Pattern 对象 QI**（`GetCurrentPatternAs`）读控件状态，纯 ctypes 下对内置 provider 返回 `None` 失败、当时**如实回退、不发半成品**。本轮换对路子——**`GetCurrentPropertyValue` + `VARIANT`** 直接取属性值，一举打通：
+
+9. **控件的"意义"可直接读，无需臆测像素。** 定义最小 `VARIANT`（vt + union：BSTR/I4/BOOL/R8），对元素调 `GetCurrentPropertyValue(pid)`：
+   - `ToggleState`(30086, I4 0/1/2) — 复选框 / 开关按钮
+   - `Value.Value`(30045, BSTR) — 文本框 / 组合框文本
+   - `RangeValue.Value`(30047, R8) — 滑块 / 进度条
+   - `SelectionItem.IsSelected`(30079, BOOL) — 列表项 / 标签页
+   - **按控件类型择属性上报**（否则非该类控件会返回噪声，如窗口本身 toggle=2）。实测 Notepad「查找」对话框 `Match case` 复选框：点击前 `toggle=0`、点击后 `toggle=1`，语义清晰。
+   - 取值即 `VariantClear` 释放，零泄漏；纯 ctypes、零依赖、不破坏可冻结 EXE。
+
+   新增能力：`vm.read`（读控件 value/toggle/selected/range）+ `act.expect` 谓词 `checked`/`unchecked`/`state`——**以"它现在是否被勾选/值是否等于 X"这种语义断言来校验结果**，而非区域像素差或截图。这是 round-2「观其变于所变之处」的更进一步：**根本不必看"变"，直接问"是何"**。
+
+实测 round-7（自身 console）：新增 state 场景 3/3（读 toggle=0 / 点击后 `checked` 命中 / 再点 `unchecked` 命中，均 `attempts=1`）。多应用合计 **29/29 命中、2941 字节、0 截图、0 视觉调用**。
+
+> 大象无形，状态有名。读其义，则不臆于像素；问其是，则不卜于变化。属性既得，预测自明。损之又损，循环不止，推进到底。

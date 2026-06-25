@@ -578,6 +578,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             return observe(body)
         elif action == 'find':
             return find_elements(body)
+        elif action == 'read':
+            return read_value(body)
         elif action == 'region_hash':
             return {'ok': True, 'hash': region_hash_rect(body['rect'])}
         elif action == 'where_changed':
@@ -1082,6 +1084,22 @@ def find_any(root, q, max_depth=8):
         return els
     return _uia_find(root, q)
 
+def _uia_read(root, q):
+    """Semantic value/STATE of the first matching control (checkbox toggle, edit value, slider
+    range, selection) via UIA -- verify the *meaning* instead of inferring it from pixels."""
+    if not _uia:
+        return {}
+    try:
+        return _uia.uia_read(int(root or 0), q) or {}
+    except Exception:
+        return {}
+
+def read_value(body):
+    root = _root_hwnd(body)
+    q = body.get('query') or {k: body[k] for k in ('text', 'class', 'id', 'regex', 'control_type') if k in body}
+    st = _uia_read(root, q)
+    return {'ok': True, 'root': root, 'found': bool(st), 'state': st}
+
 def find_elements(body):
     root = _root_hwnd(body)
     q = body.get('query') or {k: body[k] for k in ('text', 'class', 'id', 'regex', 'control_type') if k in body}
@@ -1211,6 +1229,17 @@ def _eval_expect(expect, pre, pre_rh, rect, pre_visual=None, visual_region=None,
             txt = els[0]['text'] if els else None
             r = (txt == equals) if equals is not None else \
                 (contains.lower() in (txt or '').lower() if contains is not None else bool(els))
+        elif key in ('checked', 'unchecked'):
+            # semantic toggle STATE via UIA (read the meaning, not the pixels)
+            sel = val if isinstance(val, dict) else {'text': val}
+            st = _uia_read(int(fg or 0), sel)
+            r = (st.get('toggle') == 1) if key == 'checked' else (st.get('toggle') == 0)
+        elif key == 'state':
+            # general semantic assertion: {'text':..,'toggle':1} / {'value':..,'equals':..} / 'selected'/'range'
+            sel = dict(val)
+            want = {k: sel.pop(k) for k in ('toggle', 'selected', 'value', 'range') if k in sel}
+            st = _uia_read(int(fg or 0), sel)
+            r = bool(st) and all(st.get(k) == v for k, v in want.items())
         elif key in ('region_changed', 'region_stable'):
             rr = val if isinstance(val, (list, tuple)) else rect
             ch_d = (_grid_dhash(*rr) != pre_rh) if (rr and pre_rh is not None) else None
