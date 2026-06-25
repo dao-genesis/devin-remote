@@ -218,6 +218,46 @@ def scen_gestures(W, H):
     return rec
 
 
+def scen_seq(W, H):
+    # act_seq: ONE planned, speculative chain ("7 + 8 =") with per-step self-verification --
+    # one plan, zero per-step LLM/screenshot on the happy path. The core primitive shipped in
+    # round 1 but never practice-verified end-to-end until now.
+    rec = {'app': 'calc', 'archetype': 'act_seq speculative chain (plan once, verify each step)', 'steps': [], 'matched': 0, 'bytes': 0}
+    post('launch', command='calc'); time.sleep(2.8); post('activate', title='Calculator'); time.sleep(0.8)
+    _, f = post('find', text='7', control_type='Button')
+    if not f.get('count'):
+        rec['note'] = 'calculator buttons not found (no UIA backend?)'
+        print('   [-- ] calculator buttons not found -> skip')
+        kill('Calculator.exe', 'CalculatorApp.exe', 'win32calc.exe')
+        return rec
+    _, wi = post('ui_info')
+    cw = [w for w in wi.get('windows', []) if 'Calculator' in (w.get('title') or '')]
+    r = cw[0]['rect']; h0 = r[3] - r[1]
+    disp = [r[0], r[1] + int(h0 * 0.10), r[2], r[1] + int(h0 * 0.34)]
+    B = lambda rx: {'regex': rx, 'control_type': 'Button'}
+    chain = [
+        {'op': 'click', 'target': B('^7$'), 'expect': {'region_changed': disp}},
+        {'op': 'click', 'target': B('^Add$'), 'expect': {'changed': True}},
+        {'op': 'click', 'target': B('^8$'), 'expect': {'region_changed': disp}},
+        {'op': 'click', 'target': B('^Equals$'), 'expect': {'region_changed': disp}},
+    ]
+    n, sr = post('act_seq', steps=chain)
+    rec['bytes'] += n
+    ok = bool(sr.get('all_matched')) and sr.get('completed') == len(chain)
+    rec['steps'].append({'desc': 'act_seq 7+8= (one plan, %d steps)' % len(chain), 'matched': ok,
+                         'via': 'seq', 'attempts': 1, 'bytes': n})
+    rec['matched'] += 1 if ok else 0
+    print('   [%s] %-32s via=seq     completed=%s/%s' % ('OK ' if ok else 'XX ',
+          'act_seq 7+8= chain', sr.get('completed'), sr.get('total')))
+    # semantic result check: the UWP display reads 15
+    _, r15 = post('find', text='15'); ok15 = bool(r15.get('count'))
+    rec['steps'].append({'desc': 'chain result reads 15 (UIA)', 'matched': ok15, 'via': 'uia', 'attempts': 1, 'bytes': 0})
+    rec['matched'] += 1 if ok15 else 0
+    print('   [%s] %-32s via=uia' % ('OK ' if ok15 else 'XX ', 'chain result reads 15 (UIA)'))
+    kill('Calculator.exe', 'CalculatorApp.exe', 'win32calc.exe')
+    return rec
+
+
 def scen_state(W, H):
     # Verify a control's MEANING, not its pixels: read the checkbox toggle state via UIA and
     # assert it with the semantic 'checked'/'unchecked' predicate (no region, no screenshot).
@@ -288,7 +328,7 @@ def main():
             print('agent did not start'); return
         _, di = post('desktop_info'); W, H = di['width'], di['height']
         print('screen', W, H)
-        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_mspaint_ribbon, scen_calc, scen_gestures, scen_state, scen_browser):
+        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_mspaint_ribbon, scen_calc, scen_gestures, scen_state, scen_seq, scen_browser):
             print('\n=== %s ===' % fn.__name__)
             try:
                 rec = fn(W, H)
