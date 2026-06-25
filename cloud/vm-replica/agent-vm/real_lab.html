@@ -1,0 +1,98 @@
+<!doctype html><html><head><meta charset="utf-8"><title>real-lab</title>
+<style>html,body{margin:0;background:#000}canvas{display:block;margin:0 auto}</style>
+</head><body>
+<canvas id="c" width="640" height="420"></canvas>
+<script>
+// A REAL-RENDERING multi-surface lab (round-28 dir-1). Unlike gui_lab.html's clean wireframe, every
+// surface here is drawn with photographic complexity -- per-pixel procedural texture, smooth shading
+// gradients, a specular highlight, soft shadow and anti-aliasing -- so the captured frames look like a
+// real GUI (a 3-D globe / a satellite map) rather than a synthetic diagram. The KINEMATICS are kept
+// identical to the lab so the experiment isolates exactly one variable: does the footprint / gain /
+// dynamic-signature key survive REAL rendering?
+//   #globe    -> orbit-like: a shaded textured sphere ROTATES under drag (rotation kinematics)
+//   #photomap -> pan-like  : a textured satellite image TRANSLATES under drag (translation kinematics)
+//   #terrain  -> a second pan-like surface (different texture) to test footprint transfer across real maps
+const c=document.getElementById('c'),x=c.getContext('2d'),W=640,H=420;
+const mode=(location.hash||'#globe').slice(1);
+let ay=0.6,ax=0.3,ox=0,oy=0,dragging=false,lx=0,ly=0;
+window.__truth=function(){return {mode,ay:+ay.toFixed(3),ax:+ax.toFixed(3),ox:ox|0,oy:oy|0};};
+
+// --- deterministic value-noise texture (seeded) baked once into offscreen canvases ---
+function rng(seed){let s=seed>>>0;return function(){s=(s*1664525+1013904223)>>>0;return s/4294967296;};}
+function smooth(t){return t*t*(3-2*t);}
+function makeNoise(w,h,seed,scale){
+  const r=rng(seed),gw=(w/scale|0)+2,gh=(h/scale|0)+2,g=new Float32Array(gw*gh);
+  for(let i=0;i<g.length;i++)g[i]=r();
+  const out=new Float32Array(w*h);
+  for(let y=0;y<h;y++)for(let xx=0;xx<w;xx++){
+    const fx=xx/scale,fy=y/scale,ix=fx|0,iy=fy|0,tx=smooth(fx-ix),ty=smooth(fy-iy);
+    const a=g[iy*gw+ix],b=g[iy*gw+ix+1],cc=g[(iy+1)*gw+ix],d=g[(iy+1)*gw+ix+1];
+    out[y*w+xx]=(a*(1-tx)+b*tx)*(1-ty)+(cc*(1-tx)+d*tx)*ty;
+  }
+  return out;
+}
+// fractal sum of octaves for richer, photo-like texture
+function fractal(w,h,seed){
+  const o1=makeNoise(w,h,seed,64),o2=makeNoise(w,h,seed+7,24),o3=makeNoise(w,h,seed+19,9);
+  const out=new Float32Array(w*h);
+  for(let i=0;i<out.length;i++)out[i]=o1[i]*0.6+o2[i]*0.3+o3[i]*0.1;
+  return out;
+}
+function texCanvas(w,h,seed,palette){
+  const oc=document.createElement('canvas');oc.width=w;oc.height=h;
+  const octx=oc.getContext('2d'),img=octx.createImageData(w,h),f=fractal(w,h,seed);
+  for(let i=0;i<f.length;i++){const v=f[i],[r,g,b]=palette(v);img.data[i*4]=r;img.data[i*4+1]=g;img.data[i*4+2]=b;img.data[i*4+3]=255;}
+  octx.putImageData(img,0,0);return oc;
+}
+const TILE=768;
+const seaLand=v=> v<0.5?[20+v*60,60+v*120,120+v*150]:[60+(v-0.5)*120,110+(v-0.5)*200,50+(v-0.5)*120]; // ocean->land
+const terr=v=>{const g=80+v*150;return [g*0.9,g*0.7,g*0.5];}; // brown terrain
+const globeTex=texCanvas(TILE,TILE,1234,seaLand);
+const photoTex=texCanvas(TILE,TILE,5678,seaLand);
+const terrTex=texCanvas(TILE,TILE,9012,terr);
+
+function bg(){x.fillStyle='#05070d';x.fillRect(0,0,W,H);}
+
+function drawGlobe(){
+  const cx=320,cy=210,R=150;
+  // soft shadow under the globe
+  x.save();x.globalAlpha=0.4;x.fillStyle='#000';x.beginPath();x.ellipse(cx,cy+R+18,R*0.8,18,0,0,7);x.fill();x.restore();
+  // clip to disc, map texture with rotation offset so a drag visibly spins the surface
+  x.save();x.beginPath();x.arc(cx,cy,R,0,7);x.clip();
+  const sx=((ay*120)%TILE+TILE)%TILE, sy=Math.max(0,Math.min(TILE-2*R,(TILE-2*R)/2+ax*120));
+  // draw twice horizontally so the wrap is seamless under rotation
+  x.drawImage(globeTex,sx,sy,2*R,2*R,cx-R,cy-R,2*R,2*R);
+  if(sx>TILE-2*R)x.drawImage(globeTex,sx-TILE,sy,2*R,2*R,cx-R,cy-R,2*R,2*R);
+  // spherical shading: dark limb + bright specular -> real curved-surface look
+  const sh=x.createRadialGradient(cx-50,cy-50,10,cx,cy,R);
+  sh.addColorStop(0,'rgba(255,255,255,0.35)');sh.addColorStop(0.5,'rgba(255,255,255,0)');
+  sh.addColorStop(1,'rgba(0,0,10,0.75)');x.fillStyle=sh;x.fillRect(cx-R,cy-R,2*R,2*R);
+  x.restore();
+  // crisp rim (anti-aliased)
+  x.strokeStyle='rgba(180,210,255,0.6)';x.lineWidth=1.5;x.beginPath();x.arc(cx,cy,R,0,7);x.stroke();
+}
+function drawMap(tex){
+  // a textured satellite image that TRANSLATES under drag; tiled so panning always shows texture
+  const sx=((ox%TILE)+TILE)%TILE, sy=((oy%TILE)+TILE)%TILE;
+  for(let gx=-1;gx<=1;gx++)for(let gy=-1;gy<=1;gy++)
+    x.drawImage(tex,-sx+gx*TILE,-sy+gy*TILE);
+  // a vignette so the frame has real photographic falloff
+  const vg=x.createRadialGradient(W/2,H/2,80,W/2,H/2,360);
+  vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,0.55)');x.fillStyle=vg;x.fillRect(0,0,W,H);
+}
+function draw(){bg();
+  if(mode==='globe')drawGlobe();
+  else if(mode==='photomap')drawMap(photoTex);
+  else if(mode==='terrain')drawMap(terrTex);
+  else drawGlobe();
+}
+function apply(dx,dy){
+  if(mode==='globe'){ay+=dx*0.01;ax+=dy*0.01;}
+  else{ox+=dx;oy+=dy;}
+}
+c.addEventListener('mousedown',e=>{const r=c.getBoundingClientRect();lx=e.clientX-r.left;ly=e.clientY-r.top;dragging=true;});
+window.addEventListener('mousemove',e=>{if(!dragging)return;const r=c.getBoundingClientRect(),px=e.clientX-r.left,py=e.clientY-r.top;apply(px-lx,py-ly);lx=px;ly=py;draw();});
+window.addEventListener('mouseup',()=>dragging=false);
+window.addEventListener('hashchange',()=>location.reload());
+draw();
+</script></body></html>
