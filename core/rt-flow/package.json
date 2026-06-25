@@ -172,6 +172,16 @@
 				"category": "RT Flow"
 			},
 			{
+				"command": "wam.devinCleanupImmediate",
+				"title": "Devin Cloud: 立即清理 (备份→归零→出库·无模态·一气呵成)",
+				"category": "RT Flow"
+			},
+			{
+				"command": "wam.devinMigrateBackupRoot",
+				"title": "Devin Cloud: 迁移备份到数据盘 (非系统盘·自动择优)",
+				"category": "RT Flow"
+			},
+			{
 				"command": "wam.devinSetBackupDir",
 				"title": "Devin Cloud: Set Backup Folder (v4.6.0 · 独立于 Cascade)",
 				"category": "RT Flow"
