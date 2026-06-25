@@ -9,12 +9,12 @@
 // a different visual signature. The point is to grow ONE generic 'drag' affordance whose universal
 // part (an effect happens, localized near the cursor path) transfers to a never-practiced surface,
 // while the surface-specific part (exact footprint/direction) honestly does not.
-// Pick a surface with the URL hash: #orbit #pan #paint #timeline #node
+// Pick a surface with the URL hash: #orbit #pan #paint #timeline #node #slider
 const c=document.getElementById('c'),x=c.getContext('2d'),W=640,H=420;
 const mode=(location.hash||'#orbit').slice(1);
-let ay=0.6,ax=0.5,ox=0,oy=0,strokes=[],node=[300,190],play=0.5,dragging=false,lx=0,ly=0;
+let ay=0.6,ax=0.5,ox=0,oy=0,strokes=[],node=[300,190],play=0.5,knob=200,dragging=false,lx=0,ly=0;
 window.__truth=function(){return {mode,ay:+ay.toFixed(3),ax:+ax.toFixed(3),ox,oy,
-  node:[node[0]|0,node[1]|0],play:+play.toFixed(3),strokes:strokes.length};};
+  node:[node[0]|0,node[1]|0],play:+play.toFixed(3),knob:knob|0,strokes:strokes.length};};
 const V=[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
 const E=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
 function bg(){x.fillStyle='#1b1b22';x.fillRect(0,0,W,H);}
@@ -32,13 +32,16 @@ function drawTimeline(){x.fillStyle='#2a2a33';x.fillRect(40,170,560,80);
   let px=40+560*Math.max(0,Math.min(1,play));x.strokeStyle='#fd5';x.lineWidth=3;x.beginPath();x.moveTo(px,160);x.lineTo(px,260);x.stroke();}
 function drawNode(){x.strokeStyle='#445';x.lineWidth=1;for(let i=0;i<W;i+=32){x.beginPath();x.moveTo(i,0);x.lineTo(i,H);x.stroke();}
   x.fillStyle='#7d8';x.fillRect(node[0]-40,node[1]-26,80,52);x.fillStyle='#143';x.fillRect(node[0]-40,node[1]-26,80,14);}
-function draw(){bg();({orbit:drawOrbit,pan:drawPan,paint:drawPaint,timeline:drawTimeline,node:drawNode}[mode]||drawOrbit)();}
+function drawSlider(){x.strokeStyle='#334';x.lineWidth=6;x.beginPath();x.moveTo(60,210);x.lineTo(580,210);x.stroke();
+  x.fillStyle='#fe8';x.beginPath();x.arc(knob,210,15,0,7);x.fill();}
+function draw(){bg();({orbit:drawOrbit,pan:drawPan,paint:drawPaint,timeline:drawTimeline,node:drawNode,slider:drawSlider}[mode]||drawOrbit)();}
 function apply(px,py,dx,dy){
   if(mode==='orbit'){ay+=dx*0.01;ax+=dy*0.01;}
   else if(mode==='pan'){ox+=dx;oy+=dy;}
   else if(mode==='paint'){if(strokes.length)strokes[strokes.length-1].push([px,py]);}
   else if(mode==='timeline'){play+=dx/560;}
   else if(mode==='node'){node[0]+=dx;node[1]+=dy;}
+  else if(mode==='slider'){knob=Math.max(60,Math.min(580,knob+dx));}
 }
 c.addEventListener('mousedown',e=>{const r=c.getBoundingClientRect();lx=e.clientX-r.left;ly=e.clientY-r.top;dragging=true;if(mode==='paint')strokes.push([[lx,ly]]);});
 window.addEventListener('mousemove',e=>{if(!dragging)return;const r=c.getBoundingClientRect(),px=e.clientX-r.left,py=e.clientY-r.top;apply(px,py,px-lx,py-ly);lx=px;ly=py;draw();});
