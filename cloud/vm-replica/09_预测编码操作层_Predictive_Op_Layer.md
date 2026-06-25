@@ -421,3 +421,28 @@ node 三航点残差 ~0.003 全中；slider 增益自重标定为 0.00101（约 
 **诚实标注**：slider 两端（0.20/0.80）残差 ~0.035，是测量侧的轨道**中心牵引偏置**（亮旋钮质心被两侧轨道轻微拉向中心），中点 0.50 无偏；都在容差内但偏置真实存在——一维细长目标的质心测量有系统偏差，要更准得用模板/峰值而非整带质心。环本身跨面不变，**变的只是标定与测量精度**。
 
 > 大方無隅，大器免成：握住"测质心—预测拖—量残差—纠"这一象，node 之路、slider 之点皆可往；器不为某面而成，故能通各面。
+
+---
+
+## 二十二、跨真实 app 的迁移：浏览器里学的 drag，能认出 mspaint 的自绘画布吗
+
+此前所有迁移测试都在同一个 Chrome 进程内（不同 `<canvas>`、同一渲染器）。通用性的诚实之问是：只在**浏览器内**长出来的 generic `drag`，到一个**真正不同的面**——另一个进程、另一套光栅化、真实 OS 窗口边框——还认不认得？mspaint 的画布对绘图区没有任何可达语义（纯自绘像素），正是与 3D 视口同类的"无树强 GUI"，但**是真的**。
+
+做法：在浏览器实践台 5 面上练 `drag`，然后到 mspaint 画布上拖一笔（铅笔画线），断言 effect action=`drag`；再做一次从没学过的 click。
+
+**实测（纯像素，零视觉）**：
+```
+REAL APP = mspaint  window=Untitled - Paint  canvas region=[529,375,749,535]
+generic drag on mspaint: known=True present=False transfer=True ctx_sim=0.00 | escalate=True reason=low_confidence
+never-practised click  : known=False -> NOVEL (correctly flagged, escalate)
+```
+
+**诚实结论**：
+- **手势识别跨真实 app 迁移**：只在浏览器内长的 `drag`，在 mspaint（不同进程/光栅器）上 known=True、非重学。
+- **模型如实自报在外推**：ctx_sim=0.00（真·异质面），transfer=True；并据 §20 策略 escalate=True / reason=`low_confidence`——认得手势但精确结果对不上学到的先验，于是诚实升级去看。
+- **精确效果不迁移**：present=False。迁移的只有"拖会在光标路径附近引起一处局部变化"这条通用先验，不含具体笔迹形状/大小。
+- **新手势仍判初见**：没学过的 click 在真实 app 上照样 known=False。
+
+这把 §18 的迁移与 §20 的升级策略，在一个**真实桌面强 GUI**上一次性闭合：通用之象跨进程而往，似然每面再学，惑则升级。
+
+> 執大象，天下往——握住"拖"之大象，浏览器之画布与 mspaint 之画布皆往；其往也，知其所不知（ctx_sim=0）而睁眼，是以不殆。
