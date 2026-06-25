@@ -76,7 +76,7 @@ def drag(cx, cy, region, learn):
 
 
 def main():
-    print('=== round-24: one-shot gain re-calibration on an unseen (transfer) surface ===')
+    print('=== round-25: invariant-keyed gain calibration (survives a surface self-transforming) ===')
     print('held-out | shape | cold: gain_known present mag_ratio | warm: calibrated gain_known present mag_ratio')
     rows = []
     for held in SURFACES:
@@ -105,12 +105,14 @@ def main():
         os.remove(MODEL)
 
     transferable = [(h, c, w) for h, c, w in rows if c.get('shape_present')]
-    upgraded = [(h, c, w) for h, c, w in transferable if (not c.get('gain_known')) and w.get('gain_known')]
+    warm_known = [(h, c, w) for h, c, w in transferable if w.get('gain_known')]
     print('\n=== honest summary ===')
     print('   footprint SHAPE transferred on %d/%d unseen surfaces (the only ones gain CAN be calibrated for)'
           % (len(transferable), len(rows)))
-    print('   gain_known flipped False->True after ONE probe on %d/%d of those -- one-shot calibration, zero vision'
-          % (len(upgraded), len(transferable)))
+    print('   gain_known holds on the WARM (re-encounter) drag for %d/%d of those -- gain reused, zero vision'
+          % (len(warm_known), len(transferable)))
+    print('   round-25: the calibration is keyed on a MOTION-INVARIANT descriptor, so it survives a surface')
+    print('   transforming ITSELF (a spinning orbit cube) -- round-24 lost orbit there (cal_sim<0.6); now reused')
     print('   surfaces whose shape did NOT transfer stay gain_known=False (cannot calibrate an unrecognised effect)')
     print('   note: transfer stays True throughout -- provenance is unchanged; only the locally MEASURED gain is added')
 

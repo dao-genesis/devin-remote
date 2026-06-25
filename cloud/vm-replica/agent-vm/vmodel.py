@@ -80,6 +80,66 @@ def context_fp(gray, cols, rows, out=6):
     return _l2(_center(_pool(gray, cols, rows, out)) + _center(_pool(_grad_mag(gray, cols, rows), cols, rows, out)))
 
 
+def context_inv(gray, cols, rows, out=6):
+    """A rotation/translation-ROBUST perceptual fingerprint of a surface (round-25).
+
+    `context_fp` is spatially indexed (cell i,j carries gray/edge at that location), so when a surface
+    transforms ITSELF -- an orbit cube spins, a panned map slides -- the same content lands in
+    different cells and the cosine to a stored fingerprint collapses. That is why a gain calibration
+    keyed on `context_fp` could not be re-used on the next encounter with a self-transforming surface
+    (doc 09 round-24).
+
+    The fix is an ORDER-STATISTIC descriptor: pool to out*out, mean-centre, then SORT the values.
+    Sorting is permutation-invariant, so rotating/translating the content (which, at pooled-cell
+    resolution, mostly permutes which cell holds which value) leaves the sorted profile nearly
+    unchanged -- while still keeping the full quantile shape, so genuinely different surfaces (a small
+    bright cube on dark vs a bright full canvas vs a thin bottom strip) stay far apart. Gray quantiles
+    say HOW the brightness is distributed; edge quantiles say HOW MUCH structure there is. Concatenated
+    and L2-normalised, this is the key under which a measured gain survives the surface moving."""
+    gq = sorted(_center(_pool(gray, cols, rows, out)))
+    eq = sorted(_pool(_grad_mag(gray, cols, rows), cols, rows, out))
+    return _l2(gq + eq)
+
+
+def context_radial(gray, cols, rows, rings=5):
+    """Round-25, second attempt: a centroid-anchored RADIAL energy profile -- invariant to a surface
+    moving itself, yet still sensitive to its layout.
+
+    The order-statistic key (`context_inv`) was measured to be TOO invariant: it discards layout
+    entirely, so a small cube, a panned map and a timeline strip (similar brightness *distributions*,
+    different *shapes*) collapsed to cosine ~0.9 and a gain would leak across surfaces. The opposite
+    failure of `context_fp` is being too rigid (a spinning cube shifts every cell).
+
+    The middle path: anchor at the content's own CENTRE OF MASS, then bin energy into concentric
+    RINGS by distance from it. Rotating the content about its centre permutes WITHIN a ring (ring sums
+    unchanged); translating it moves the centroid WITH it (rings unchanged) -- so the profile is stable
+    under the surface's self-motion. But the radial SHAPE still differs by surface: a compact cube
+    concentrates energy in the inner rings, a space-filling map spreads it out, a thin strip is
+    lopsided -- so different surfaces stay separated. We profile both edge energy (structure) and
+    |gray - mean| (contrast mass). L2-normalised. Mass for the centroid is the edge map (robust to a
+    uniform background)."""
+    g = _grad_mag(gray, cols, rows)
+    m = sum(gray) / len(gray) if gray else 0.0
+    contrast = [abs(v - m) for v in gray]
+    sw = sx = sy = 0.0
+    for j in range(rows):
+        for i in range(cols):
+            w = g[j * cols + i]
+            sw += w; sx += w * i; sy += w * j
+    if sw <= 0:
+        return _l2([0.0] * (2 * rings))
+    ccx = sx / sw; ccy = sy / sw
+    rmax = math.sqrt(max((max(ccx, cols - 1 - ccx)) ** 2 + (max(ccy, rows - 1 - ccy)) ** 2, 1e-6))
+    edge_r = [0.0] * rings; con_r = [0.0] * rings
+    for j in range(rows):
+        for i in range(cols):
+            d = math.sqrt((i - ccx) ** 2 + (j - ccy) ** 2) / rmax
+            b = min(rings - 1, int(d * rings))
+            o = j * cols + i
+            edge_r[b] += g[o]; con_r[b] += contrast[o]
+    return _l2([x for x in edge_r] + [x for x in con_r])
+
+
 def _lk_flow(pre, cur, cols, rows):
     """Global Lucas-Kanade optical flow between two gray grids: least-squares motion (u,v) from
     spatial gradients (Ix,Iy) and the temporal difference (It). Returns (u,v,conf) where conf is the
@@ -179,20 +239,24 @@ class WorldModel:
     def record(self, action_key, ctx, desc):
         self.ep.append({'a': action_key, 'ctx': ctx, 'd': desc})
 
-    def calibrate(self, action_key, ctx, obs):
-        """Record this surface's LOCAL GAIN for an action from a single observation (round-24).
+    def calibrate(self, action_key, ctx, obs, cal_ctx=None):
+        """Record this surface's LOCAL GAIN for an action from a single observation (round-24/25).
 
         Round-23 proved magnitude is surface-specific gain, so cross-surface transfer can only trust
         the gain-invariant footprint and must flag gain_known=False. But the act of verifying ALREADY
         moved this surface and measured its response -- that one observation IS the gain. Storing it
-        (keyed by the surface's perceptual context) lets the NEXT prediction here use the measured gain
-        instead of an incommensurable cross-surface average, flipping gain_known False->True with zero
-        extra actions and zero vision: the verifying drag doubles as the calibration probe (active
-        inference). We keep only the most recent calibration per surface so the gain tracks the surface
-        as it is re-encountered."""
+        lets the NEXT prediction here use the measured gain instead of an incommensurable cross-surface
+        average, flipping gain_known False->True with zero extra actions and zero vision: the verifying
+        drag doubles as the calibration probe (active inference).
+
+        Round-25: the calibration is keyed on `cal_ctx`, a MOTION-INVARIANT descriptor (context_radial),
+        not the spatially-rigid context_fp -- so a measured gain survives the surface transforming
+        ITSELF (a spinning orbit cube, a sliding pan map), which round-24 could not. We keep only the
+        most recent calibration per surface (deduped by that invariant key) so the gain tracks it."""
+        key = cal_ctx if cal_ctx is not None else ctx
         self.cal = [c for c in self.cal
-                    if not (c.get('a') == action_key and cos(ctx, c.get('ctx') or []) >= 0.98)]
-        self.cal.append({'a': action_key, 'ctx': ctx, 'gain': obs['mag']})
+                    if not (c.get('a') == action_key and cos(key, c.get('ctx') or []) >= 0.98)]
+        self.cal.append({'a': action_key, 'ctx': key, 'gain': obs['mag']})
 
     def _best_cal(self, action_key, ctx):
         """Nearest stored gain calibration for this action: (gain, ctx_cosine) or (None, 0.0)."""
@@ -212,7 +276,7 @@ class WorldModel:
     def seen(self, action_key):
         return sum(1 for e in self.ep if e['a'] == action_key)
 
-    def predict(self, action_key, ctx=None, k=8, cal_thr=0.6):
+    def predict(self, action_key, ctx=None, cal_ctx=None, k=8, cal_thr=0.6):
         """Expected change descriptor for an action in a context: context-weighted average of the
         fingerprints/magnitudes of past episodes with that action. None if never seen.
 
@@ -246,15 +310,16 @@ class WorldModel:
         # a real size again. ctx_sim still reflects episode provenance (transfer stays honest); the
         # calibration only supplies the gain we physically measured here.
         cal_gain, cal_sim = (None, 0.0)
-        if ctx is not None and self.cal:
-            cal_gain, cal_sim = self._best_cal(action_key, ctx)
+        cal_key = cal_ctx if cal_ctx is not None else ctx
+        if cal_key is not None and self.cal:
+            cal_gain, cal_sim = self._best_cal(action_key, cal_key)
         calibrated = cal_gain is not None and cal_sim >= cal_thr
         if calibrated:
             pred['mag'] = cal_gain
         pred['calibrated'] = calibrated; pred['cal_sim'] = round(cal_sim, 3)
         return pred
 
-    def verify(self, action_key, ctx, obs, fp_thr=0.8, mag_tol=0.5, locus_tol=0.18, mag_floor=0.0):
+    def verify(self, action_key, ctx, obs, cal_ctx=None, fp_thr=0.8, mag_tol=0.5, locus_tol=0.18, mag_floor=0.0):
         """Score an observed outcome against the learned expectation for this action, using only the
         features practice proved PHASE-STABLE: magnitude (how much), fp (the |delta| footprint), and
         centroid (where). 'present' = an effect of the expected footprint occurred; 'match' also
@@ -278,7 +343,7 @@ class WorldModel:
         delta is phase-DEPENDENT and anisotropy tracks object shape not motion. So 'direction' is
         reported advisory-only (sfp_sim/aniso_diff); deciding it needs temporal/flow or a vision
         escalation. known=False (novel action) is itself the genuine-surprise/escalation signal."""
-        pred = self.predict(action_key, ctx)
+        pred = self.predict(action_key, ctx, cal_ctx=cal_ctx)
         if pred is None:
             return {'known': False, 'match': False, 'reason': 'novel-action'}
         fp_sim = cos(pred['fp'], obs['fp'])
