@@ -72,6 +72,24 @@ TOOLS = {
     'vm_sessions':     ('vm.sessions',     'List Windows sessions (quser) on the host.', {}, []),
     'vm_ui_tree':      ('vm.ui_tree',      'Dump the control tree (class/text/rect/ctrlId/visible) under a window; foreground window if none given. Element-level grounding.',
                         *(_vm({'title': {'type': S}, 'hwnd': {'type': I}, 'max_depth': {'type': I}}, req=False))),
+    # --- Predictive Operation Layer (active inference): predict -> act -> verify -> reflex ---
+    'vm_observe':      ('vm.observe',       'Cheap perception: compact state signature (foreground+focus+control-tree hash, hundreds of bytes, NO screenshot). Optional region/screen perceptual hash. Use to verify changes instead of re-screenshotting.',
+                        *(_vm({'region': {'type': 'array', 'items': {'type': I}, 'description': '[l,t,r,b] to also return a perceptual hash for'},
+                               'screen_hash': {'type': 'boolean'}}, req=False))),
+    'vm_find':         ('vm.find',          'Locate UI element(s) LOCALLY in the control tree by text/class/id/regex (no LLM vision grounding). Returns rect+center to act on semantically.',
+                        *(_vm({'text': {'type': S}, 'class': {'type': S}, 'id': {'type': I}, 'regex': {'type': S},
+                               'title': {'type': S, 'description': 'root window title; default foreground'}, 'max_depth': {'type': I}}, req=False))),
+    'vm_region_hash':  ('vm.region_hash',   'Return the 64-bit perceptual (dHash) of a screen rectangle [l,t,r,b]. 8 bytes; for cheap change detection.',
+                        *(_vm({'rect': {'type': 'array', 'items': {'type': I}}}))),
+    'vm_wait_change':  ('vm.wait_change',   'Block until the state signature (or a region) changes from a baseline, or timeout. Event-style verification (replaces screenshot polling).',
+                        *(_vm({'baseline': {'type': S}, 'region': {'type': 'array', 'items': {'type': I}},
+                               'timeout': {'type': N}, 'poll': {'type': N}}, req=False))),
+    'vm_act':          ('vm.act',           "Predict-act-verify in ONE call: perform op on a semantic target {text/class/id} or {x,y}, then verify a predicted outcome (expect) LOCALLY; reflex-retry on mismatch; only escalate (region PNG + signature diff) on genuine surprise. op: click/double_click/right_click/mouse_move/drag/scroll/type/key/hold_key. expect predicates: changed/foreground/foreground_regex/focus_class/appears/disappears/value/region_changed.",
+                        *(_vm({'op': {'type': S}, 'target': {'type': 'object'}, 'x': {'type': I}, 'y': {'type': I},
+                               'x2': {'type': I}, 'y2': {'type': I}, 'text': {'type': S}, 'key': {'type': S},
+                               'clicks': {'type': I}, 'duration': {'type': N}, 'expect': {'type': 'object'}, 'retry': {'type': I}}, req=False))),
+    'vm_act_seq':      ('vm.act_seq',       'Speculative multi-action: run a predicted chain of act() steps with per-step self-verification. One plan, zero per-step LLM/screenshot on the happy path; aborts+escalates at the first unrecoverable prediction error.',
+                        *(_vm({'steps': {'type': 'array', 'items': {'type': 'object'}}, 'stop_on_error': {'type': 'boolean'}}))),
     'vm_browser_launch':     ('vm.browser_launch',     'Launch/ensure Chrome or Edge inside the VM with CDP remote-debugging; optional initial url.',
                         *(_vm({'url': {'type': S}}, req=False))),
     'vm_browser_navigate':   ('vm.browser_navigate',   'Navigate the VM browser to a URL (CDP Page.navigate).',
@@ -107,6 +125,20 @@ def call_tool(name, args):
         return {'content': [
             {'type': 'image', 'data': res['image_base64'], 'mimeType': 'image/png'},
             {'type': 'text', 'text': meta}]}
+    # act/act_seq escalate on surprise with a cropped region PNG -> surface it as an image
+    # block so the brain only pays the vision cost on genuine prediction error.
+    crop = res.get('region_png_base64')
+    if not crop and isinstance(res.get('steps'), list):
+        for st in res['steps']:
+            if st.get('region_png_base64'):
+                crop = st['region_png_base64']; break
+    if crop:
+        slim = {k: v for k, v in res.items() if k != 'region_png_base64'}
+        if isinstance(slim.get('steps'), list):
+            slim['steps'] = [{k: v for k, v in s.items() if k != 'region_png_base64'} for s in slim['steps']]
+        return {'content': [
+            {'type': 'text', 'text': json.dumps(slim, ensure_ascii=False)},
+            {'type': 'image', 'data': crop, 'mimeType': 'image/png'}]}
     is_err = bool(res.get('error'))
     return {'content': [{'type': 'text', 'text': json.dumps(res, ensure_ascii=False)}], 'isError': is_err}
 

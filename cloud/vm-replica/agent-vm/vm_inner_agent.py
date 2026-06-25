@@ -14,7 +14,7 @@ Design goals vs v1:
 """
 import http.server, json, subprocess, os, sys, base64, ctypes, ctypes.wintypes
 import struct, threading, time, traceback, zlib, socketserver
-import socket, urllib.request, urllib.parse
+import socket, urllib.request, urllib.parse, re
 
 PORT  = int(os.environ.get('VM_AGENT_PORT', '9001'))
 TOKEN = os.environ.get('VM_AGENT_TOKEN', '')          # '' => no auth (loopback only)
@@ -57,6 +57,14 @@ user32.AttachThreadInput.argtypes = [_wt.DWORD, _wt.DWORD, ctypes.c_int]
 user32.GetWindowTextW.argtypes = [_VP, _wt.LPWSTR, ctypes.c_int]
 user32.GetWindowTextLengthW.argtypes = [_VP]
 SW_SHOW = 5; SW_RESTORE = 9
+
+# GetGUIThreadInfo => focused control of the foreground thread (cheap focus probe)
+class GUITHREADINFO(ctypes.Structure):
+    _fields_ = [('cbSize', _wt.DWORD), ('flags', _wt.DWORD),
+                ('hwndActive', _VP), ('hwndFocus', _VP), ('hwndCapture', _VP),
+                ('hwndMenuOwner', _VP), ('hwndMoveSize', _VP), ('hwndCaret', _VP),
+                ('rcCaret', _wt.RECT)]
+user32.GetGUIThreadInfo.argtypes = [_wt.DWORD, ctypes.POINTER(GUITHREADINFO)]
 
 # ====== Win32 screen capture ======
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -537,6 +545,18 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             if not h:
                 return {'ok': False, 'error': 'no root window'}
             return {'ok': True, 'root': ui_tree(h, int(body.get('max_depth', 6)))}
+        elif action == 'observe':
+            return observe(body)
+        elif action == 'find':
+            return find_elements(body)
+        elif action == 'region_hash':
+            return {'ok': True, 'hash': region_hash_rect(body['rect'])}
+        elif action == 'wait_change':
+            return wait_change(body)
+        elif action == 'act':
+            return act(body)
+        elif action == 'act_seq':
+            return act_seq(body)
         elif action == 'browser_launch':
             return browser_launch(body.get('url'))
         elif action == 'browser_navigate':
@@ -837,6 +857,330 @@ def browser_screenshot():
 
 def browser_targets():
     return {'ok': True, 'targets': _cdp_http('/list')}
+
+# ====== Predictive Operation Layer (active inference: predict -> act -> verify -> reflex) ======
+# Replaces the "screenshot -> LLM reads pixels -> coords -> screenshot to verify" poll loop
+# with cheap, structured, LOCAL verification. The LLM is only pulled in on genuine surprise
+# (prediction error that the reflex ladder cannot resolve). See 09_*.md for the rationale.
+
+def _focus_info():
+    """The focused control of the foreground thread (class/text/rect), cheap."""
+    gti = GUITHREADINFO(); gti.cbSize = ctypes.sizeof(GUITHREADINFO)
+    if not user32.GetGUIThreadInfo(0, ctypes.byref(gti)) or not gti.hwndFocus:
+        return {'hwnd': 0, 'class': '', 'text': '', 'rect': [0, 0, 0, 0]}
+    h = gti.hwndFocus
+    return {'hwnd': int(h), 'class': _cls(h), 'text': _ctrl_text(h)[:200], 'rect': _hrect(h)}
+
+def _flatten_tree(node, out, cap=2000):
+    out.append(node)
+    if len(out) >= cap:
+        return
+    for c in node.get('children', []):
+        _flatten_tree(c, out, cap)
+        if len(out) >= cap:
+            return
+
+def _tree_sig(hwnd, max_depth=4, cap=600):
+    """A stable, compact hash of a window's control tree (class|text|rect|id per node).
+    Tiny (8 hex chars) yet sensitive to the state changes that matter for verification."""
+    if not hwnd:
+        return '0', 0
+    nodes = []
+    _flatten_tree(ui_tree(hwnd, max_depth), nodes, cap)
+    parts = []
+    for n in nodes:
+        r = n.get('rect', [0, 0, 0, 0])
+        parts.append('%s|%s|%d,%d,%d,%d|%d' % (n.get('class', ''), (n.get('text') or '')[:80],
+                                               r[0], r[1], r[2], r[3], n.get('id', 0)))
+    blob = '\n'.join(parts).encode('utf-8', 'replace')
+    return '%08x' % (zlib.crc32(blob) & 0xffffffff), len(nodes)
+
+def state_sig():
+    """Compact signature of the desktop's interactive state. Hundreds of bytes, no PNG."""
+    fg = user32.GetForegroundWindow()
+    fg = int(fg or 0)
+    title = _win_title(fg) if fg else ''
+    th, nodes = _tree_sig(fg)
+    foc = _focus_info()
+    composite = '%d|%s|%s|%s|%d,%d' % (fg, title, th, foc['class'], foc['rect'][0], foc['rect'][1])
+    return {'fg_hwnd': fg, 'fg_title': title, 'tree_hash': th, 'tree_nodes': nodes,
+            'focus_class': foc['class'], 'focus_text': foc['text'],
+            'h': '%08x' % (zlib.crc32(composite.encode('utf-8', 'replace')) & 0xffffffff)}
+
+def _grid_dhash(l, t, r, b, cols=9, rows=8):
+    """64-bit dHash of a screen rectangle by sampling a cols x rows grayscale grid.
+    Samples only ~cols*rows points out of the captured frame => very cheap change detection."""
+    w, h, row_size, raw = _capture_bgr()
+    l = max(0, min(int(l), w - 1)); r = max(l + 1, min(int(r), w))
+    t = max(0, min(int(t), h - 1)); b = max(t + 1, min(int(b), h))
+    rw = r - l; rh = b - t
+    g = [[0] * cols for _ in range(rows)]
+    for j in range(rows):
+        yy = t + int((j + 0.5) * rh / rows)
+        yy = min(yy, h - 1)
+        base = yy * row_size
+        for i in range(cols):
+            xx = l + int((i + 0.5) * rw / cols)
+            xx = min(xx, w - 1)
+            o = base + xx * 3
+            g[j][i] = (raw[o + 2] * 30 + raw[o + 1] * 59 + raw[o] * 11) // 100  # BGR->gray
+    bits = 0
+    for j in range(rows):
+        for i in range(cols - 1):
+            bits = (bits << 1) | (1 if g[j][i] < g[j][i + 1] else 0)
+    return '%016x' % bits
+
+def _crop_png(l, t, r, b):
+    """PNG of just one screen rectangle (the surprising region) -- escalation payload only."""
+    w, h, row_size, raw = _capture_bgr()
+    l = max(0, min(int(l), w)); r = max(l, min(int(r), w))
+    t = max(0, min(int(t), h)); b = max(t, min(int(b), h))
+    cw = r - l; ch = b - t
+    if cw <= 0 or ch <= 0:
+        return None
+    scan = bytearray()
+    for y in range(t, b):
+        off = y * row_size + l * 3
+        row = bytearray(raw[off:off + cw * 3])
+        row[0::3], row[2::3] = row[2::3], row[0::3]  # BGR -> RGB
+        scan.append(0); scan += row
+    ihdr = struct.pack('>IIBBBBB', cw, ch, 8, 2, 0, 0, 0)
+    png = b'\x89PNG\r\n\x1a\n' + _png_chunk(b'IHDR', ihdr)
+    png += _png_chunk(b'IDAT', zlib.compress(bytes(scan), 6)) + _png_chunk(b'IEND', b'')
+    return base64.b64encode(png).decode()
+
+def _root_hwnd(body):
+    if body.get('hwnd') or body.get('root_hwnd'):
+        return int(body.get('hwnd') or body.get('root_hwnd'))
+    if body.get('title') or body.get('root_title'):
+        return find_window(body.get('title') or body.get('root_title'))
+    return int(user32.GetForegroundWindow() or 0)
+
+def _match_node(n, q):
+    if not n.get('visible', True) and not q.get('include_hidden'):
+        return False
+    txt = (n.get('text') or ''); cls = (n.get('class') or '')
+    if q.get('id') is not None and n.get('id') != int(q['id']):
+        return False
+    if q.get('class') and q['class'].lower() not in cls.lower():
+        return False
+    if q.get('regex'):
+        if not re.search(q['regex'], txt, re.I):
+            return False
+    elif q.get('text'):
+        if q['text'].lower() not in txt.lower():
+            return False
+    return True
+
+def find_in_root(root, q, max_depth=8):
+    if not root:
+        return []
+    nodes = []
+    _flatten_tree(ui_tree(root, max_depth), nodes)
+    out = []
+    for n in nodes:
+        if _match_node(n, q):
+            r = n.get('rect', [0, 0, 0, 0])
+            out.append({'hwnd': n['hwnd'], 'class': n.get('class', ''), 'text': n.get('text', ''),
+                        'id': n.get('id', 0), 'rect': r,
+                        'center': [(r[0] + r[2]) // 2, (r[1] + r[3]) // 2]})
+    return out
+
+def find_elements(body):
+    root = _root_hwnd(body)
+    q = body.get('query') or {k: body[k] for k in ('text', 'class', 'id', 'regex') if k in body}
+    els = find_in_root(root, q, int(body.get('max_depth', 8)))
+    return {'ok': True, 'root': root, 'count': len(els), 'elements': els}
+
+def observe(body):
+    """Cheap perception: state signature (+ optional region dHash / screen dHash)."""
+    sig = state_sig()
+    out = {'ok': True, 'sig': sig}
+    reg = body.get('region')
+    if reg:
+        out['region_hash'] = _grid_dhash(*reg)
+    if body.get('screen_hash'):
+        out['screen_hash'] = _grid_dhash(0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
+    return out
+
+def region_hash_rect(rect):
+    return _grid_dhash(*rect)
+
+def wait_change(body):
+    """Block until the state signature changes from baseline (or timeout). Event-style
+    verification: replaces re-screenshot polling with a tiny signature poll."""
+    base = body.get('baseline')
+    if base is None:
+        base = state_sig()['h']
+    reg = body.get('region'); base_rh = body.get('baseline_region_hash')
+    if reg and base_rh is None:
+        base_rh = _grid_dhash(*reg)
+    timeout = float(body.get('timeout', 5.0)); poll = float(body.get('poll', 0.1))
+    end = time.time() + timeout
+    while time.time() < end:
+        cur = state_sig()
+        changed = cur['h'] != base
+        if reg and not changed:
+            changed = _grid_dhash(*reg) != base_rh
+        if changed:
+            return {'ok': True, 'changed': True, 'sig': cur, 'waited': round(timeout - (end - time.time()), 3)}
+        time.sleep(poll)
+    return {'ok': True, 'changed': False, 'sig': state_sig(), 'waited': timeout}
+
+# --- expectation evaluation (all LOCAL, no LLM, no full screenshot) ---
+def _eval_expect(expect, pre, pre_rh, rect):
+    """Return (matched, reasons). expect is a dict of predicates, all AND-combined."""
+    if not expect:
+        return True, ['no-expectation']
+    post = state_sig(); reasons = []
+    ok = True
+    fg = user32.GetForegroundWindow()
+    for key, val in expect.items():
+        if key == 'changed':
+            r = (post['h'] != pre['h']) == bool(val)
+        elif key == 'foreground':
+            r = val.lower() in (post['fg_title'] or '').lower()
+        elif key == 'foreground_regex':
+            r = bool(re.search(val, post['fg_title'] or '', re.I))
+        elif key == 'focus_class':
+            r = val.lower() in (post['focus_class'] or '').lower()
+        elif key == 'focus_text':
+            r = val.lower() in (post['focus_text'] or '').lower()
+        elif key in ('appears', 'disappears'):
+            q = val if isinstance(val, dict) else {'text': val}
+            found = bool(find_in_root(int(fg or 0), q))
+            r = found if key == 'appears' else (not found)
+        elif key == 'value':
+            sel = dict(val); equals = sel.pop('equals', None); contains = sel.pop('contains', None)
+            els = find_in_root(int(fg or 0), sel)
+            txt = els[0]['text'] if els else None
+            r = (txt == equals) if equals is not None else \
+                (contains.lower() in (txt or '').lower() if contains is not None else bool(els))
+        elif key in ('region_changed', 'region_stable'):
+            rr = val if isinstance(val, (list, tuple)) else rect
+            changed = (_grid_dhash(*rr) != pre_rh) if (rr and pre_rh is not None) else None
+            r = (changed is True) if key == 'region_changed' else (changed is False)
+        else:
+            r = True  # unknown predicate => non-blocking
+        reasons.append('%s=%s' % (key, 'ok' if r else 'FAIL'))
+        ok = ok and r
+    return ok, reasons
+
+# --- the act() core: predict -> act -> verify -> reflex retry -> escalate-on-surprise ---
+_COORD_OPS = {'click', 'double_click', 'right_click', 'mouse_move', 'drag', 'scroll'}
+
+def _resolve_target(body):
+    """-> (x, y, rect | None). Semantic target resolved LOCALLY via the control tree."""
+    t = body.get('target')
+    if isinstance(t, dict):
+        if 'x' in t and 'y' in t:
+            return int(t['x']), int(t['y']), None
+        els = find_in_root(_root_hwnd(body), t)
+        nth = int(t.get('nth', 0))
+        if els and nth < len(els):
+            e = els[nth]; return e['center'][0], e['center'][1], e['rect']
+        return None, None, None
+    if 'x' in body and 'y' in body:
+        return int(body['x']), int(body['y']), None
+    return None, None, None
+
+def _do_op(op, x, y, body):
+    if op == 'click': click_at(x, y)
+    elif op == 'double_click': double_click_at(x, y)
+    elif op == 'right_click': right_click_at(x, y)
+    elif op == 'mouse_move': move_mouse(x, y)
+    elif op == 'scroll': scroll(x, y, int(body.get('clicks', body.get('amount', -3))))
+    elif op == 'drag': drag(x, y, int(body['x2']), int(body['y2']))
+    elif op == 'type':
+        if x is not None: click_at(x, y); time.sleep(0.05)
+        type_text(body.get('text', ''))
+    elif op == 'key':
+        if x is not None: click_at(x, y); time.sleep(0.05)
+        press_key(body.get('key', ''))
+    elif op == 'hold_key':
+        hold_key(body.get('key', ''), body.get('duration', 0.5))
+    else:
+        raise ValueError('unknown op: %s' % op)
+
+def act(body):
+    """Predict-act-verify with a local reflex ladder. Cheap on the happy path; only escalates
+    (returns a cropped region PNG + signature diff) when prediction error persists."""
+    op = body.get('op', 'click')
+    expect = body.get('expect') or {}
+    max_retry = int(body.get('retry', 3))
+    x, y, rect = _resolve_target(body)
+    if op in _COORD_OPS and x is None:
+        return {'ok': False, 'matched': False, 'error': 'target not found',
+                'target': body.get('target')}
+    # region to watch: explicit, else the resolved target rect
+    watch = expect.get('region') if isinstance(expect.get('region'), (list, tuple)) else rect
+    if isinstance(expect.get('region_changed'), (list, tuple)):
+        watch = expect['region_changed']
+    pre = state_sig()
+    pre_rh = _grid_dhash(*watch) if watch else None
+    _do_op(op, x, y, body)
+    matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect)
+    attempts = 1; ladder = []
+    # reflex ladder: the human "no reaction -> click/double-click/retry again" instinct
+    while not matched and attempts <= max_retry:
+        strat = None
+        if op in ('click', 'double_click', 'right_click'):
+            seq = ['wait', 'refocus', 'double', 'jitter']
+            strat = seq[(attempts - 1) % len(seq)]
+            if strat == 'wait':
+                time.sleep(0.18)
+            elif strat == 'refocus':
+                rh = _root_hwnd(body)
+                if rh: activate_window(rh)
+                time.sleep(0.05); _do_op(op, x, y, body)
+            elif strat == 'double':
+                double_click_at(x, y)
+            elif strat == 'jitter':
+                _do_op(op, x + 3, y + 2, body)
+        elif op in ('type', 'key'):
+            strat = 'retry'; time.sleep(0.08); _do_op(op, x, y, body)
+        else:
+            strat = 'wait'; time.sleep(0.15)
+        ladder.append(strat)
+        matched, reasons = _eval_expect(expect, pre, pre_rh, watch or rect)
+        attempts += 1
+    res = {'ok': True, 'matched': matched, 'op': op, 'attempts': attempts,
+           'reflex': ladder, 'reasons': reasons, 'target_xy': [x, y] if x is not None else None}
+    if not matched:
+        # genuine surprise -> escalate with the MINIMAL extra perception the brain needs
+        post = state_sig()
+        res['prediction_error'] = {
+            'pre': {k: pre[k] for k in ('fg_title', 'tree_hash', 'focus_class', 'h')},
+            'post': {k: post[k] for k in ('fg_title', 'tree_hash', 'focus_class', 'h')}}
+        crop = watch or rect
+        if not crop and x is not None:  # coordinate action -> crop a box around the point
+            crop = [x - 160, y - 110, x + 160, y + 110]
+        if crop:
+            png = _crop_png(*crop)
+            if png:
+                res['region_png_base64'] = png; res['region_rect'] = list(crop)
+    return res
+
+def act_seq(body):
+    """Speculative multi-action: run a predicted chain of act() steps with per-step
+    self-verification. One plan, zero per-step LLM/screenshot on the happy path; abort and
+    escalate at the first unrecoverable prediction error (stop_on_error default True)."""
+    steps = body.get('steps') or []
+    stop = body.get('stop_on_error', True)
+    results = []; ok_all = True
+    for i, st in enumerate(steps):
+        r = act(st)
+        results.append({'i': i, **{k: r[k] for k in ('matched', 'op', 'attempts', 'reflex')}})
+        if not r.get('matched'):
+            ok_all = False
+            results[-1]['prediction_error'] = r.get('prediction_error')
+            if 'region_png_base64' in r:
+                results[-1]['region_png_base64'] = r['region_png_base64']
+                results[-1]['region_rect'] = r.get('region_rect')
+            if stop:
+                break
+    return {'ok': True, 'all_matched': ok_all, 'completed': len(results), 'total': len(steps),
+            'steps': results}
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
