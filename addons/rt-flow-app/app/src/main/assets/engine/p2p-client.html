@@ -72,12 +72,18 @@ var STUN = (window.DaoSignal && window.DaoSignal.STUN) ? window.DaoSignal.STUN.s
 //__SUPERVISOR_START__  纯函数·自愈决策 (经 test/p2p-reconnect.test.js 切片 eval 验证, 不改运行行为)
 //   网页端要对标甚至超越 APK 的「持久、稳定」, 必须像 relay-app.js 一样自愈: 心跳探活 + 断线指数退避重连。
 var RECONN_MIN = 1000, RECONN_MAX = 30000, HEARTBEAT_MS = 15000, MAX_MISSED = 2;
+// 抢通(happy-eyeballs): 先给 P2P 直连一个 FAST_RELAY_MS 抢跑窗口; 到点仍未通, 并行起 ntfy 中继兜底,
+//   谁先就绪先用之 → 体感秒开(对标 APK); 之后 P2P 直连若打通, 自动「升级」并弃用中继 → 兼得低延迟满速。
+var FAST_RELAY_MS = 3500;
 // 退避: 每次重连失败翻倍、封顶 RECONN_MAX; 成功复位 RECONN_MIN (与 APK BACKOFF_MIN/MAX 同构)。
 function nextBackoff(cur){ var n = (cur || RECONN_MIN) * 2; return n > RECONN_MAX ? RECONN_MAX : n; }
 // 是否应自愈: 用户主动「断开」后不再自动重连; 已在重连中不重入 (避免并发多条握手)。
 function shouldAutoReconnect(userHangup, reconnecting){ return !userHangup && !reconnecting; }
 // 心跳判死: 连续未回 pong 达阈值即判通道死 (半开死链/NAT重绑/对端离线), 触发自愈重连。
 function isChannelDead(missed, max){ return missed >= (max || MAX_MISSED); }
+// 抢通升级判定: 当前生效是「ntfy 中继」而后到句柄是「真 P2P 直连」时, 才值得无缝升级 (低延迟·满速·无48KB限)。
+//   两者都中继 / 后到也是中继 / 当前已是直连 → 不折腾, 维持现状。
+function shouldUpgrade(curIsRelay, newIsRelay){ return !!curIsRelay && !newIsRelay; }
 //__SUPERVISOR_END__
 
 var pc = null, dc = null, dcSendFn = null, seq = 0, waiters = Object.create(null);
@@ -85,6 +91,7 @@ var sig = null;   // 去中心化直连句柄 (DaoSignal.connect 返回 {pc,dc,r
 var transport = { tag: "P2P", isRelay: false };   // 当前生效传输面真相: 供 ping/rpc 标注与状态显示
 // 自愈监督运行态: 对标 APK relay-app.js 的「连接看门狗 + 退避重连 + 半开自检」, 让网页端持久稳定。
 var userHangup = false, chAlive = false, reconnecting = false, hbTimer = null, reconnTimer = null, hbInFlight = false, missedPings = 0, backoff = RECONN_MIN;
+var dialGen = 0, lastDialErr = null;   // dialGen: 每次发起握手自增, 作废上一轮的后台抢通句柄; lastDialErr: 末次失败原因(供兜底提示)
 // 传输真相: DaoSignal.connect 可能返回「真 P2P DataChannel」(.dc 就绪) 或「去中心化 ntfy 中继兜底」
 //   (.mode==="relay-ntfy", .dc===null)。二者体感天差地别(直连低延迟·满速 vs 中继控制面·48KB 上限),
 //   故据实区分显示, 不再一律谎报「P2P 直连」—— 让对照者一眼看清真实链路。
@@ -126,17 +133,12 @@ async function _establish(isReconnect){
   // ── 路线C 优先: 0账号·去中心化信令 (公共 ntfy, 不经 Worker) ──
   if(window.DaoSignal && DaoSignal.available()){
     setState((isReconnect?"自愈重连·":"")+"去中心化握手中…","#9e6a03");
-    log((isReconnect?"↻ 自愈重连: ":"→ ")+"路线C: 公共信令(ntfy)交换加密 SDP, 0账号不经 Worker…");
-    try{
-      sig = await DaoSignal.connect({ session:session, token:token, ice:extraIce, timeout:25000 });
-      transport = describeTransport(sig);
-      setState(transport.state, transport.color);
-      $("btnSend").disabled=false; $("btnPing").disabled=false; $("btnConnect").disabled=false;
-      log((transport.isRelay?"⚠ ":"✓ ")+(isReconnect?"自愈重连成功 · ":"")+transport.state);
-      if(transport.note) log("  └ "+transport.note);
-      armLiveness();
-      return true;
-    }catch(e){ var ec=String((e&&e.message)||e); var hint = ec==="ice_failed" ? "去中心化未通 (对端已应答但 P2P 打洞失败/对称NAT —— 可填 TURN 或用隧道兜底)" : (ec==="signal_timeout" ? "去中心化未通 (未收到对端应答 —— 检查手机在线与 session/token 是否一致)" : "去中心化未通 ("+ec+")"); log("• "+hint+(url?", 尝试 Worker 兜底…":"")); try{ if(sig) sig.close(); }catch(_){ } sig=null; }
+    log((isReconnect?"↻ 自愈重连: ":"→ ")+"路线C: 公共信令(ntfy)交换加密 SDP, 0账号不经 Worker… (抢通: P2P 直连优先, ~"+(FAST_RELAY_MS/1000)+"s 未通即并行起 ntfy 中继先用, P2P 通后自动升级)");
+    var okC = await _raceConnect(session, token, extraIce, isReconnect);
+    if(okC) return true;
+    var ec=String((lastDialErr&&lastDialErr.message)||lastDialErr||"unknown");
+    var hint = ec==="ice_failed" ? "去中心化未通 (对端已应答但 P2P 打洞失败/对称NAT —— 可填 TURN 或用隧道兜底)" : (ec==="signal_timeout" ? "去中心化未通 (未收到对端应答 —— 检查手机在线与 session/token 是否一致)" : "去中心化未通 ("+ec+")"); log("• "+hint+(url?", 尝试 Worker 兜底…":""));
+    try{ if(sig) sig.close(); }catch(_){ } sig=null;
   } else { log("• 本环境无 WebCrypto, 跳过去中心化"+(url?", 用 Worker 兜底":"")); }
 
   // ── 末位兜底: Worker 隧道信令 (一次性信令经 Worker, 数据走 P2P) ──
@@ -145,6 +147,54 @@ async function _establish(isReconnect){
   var ok = await _establishWorker(url, token, session, ice);
   $("btnConnect").disabled=false;
   return ok;
+}
+
+// 启用一条已就绪句柄为当前生效通道 (首通 / 中继 / 升级 共用)。isUpgrade: 中继→P2P 直连的无缝升级。
+function _activate(handle, isReconnect, isUpgrade){
+  sig = handle;
+  transport = describeTransport(handle);
+  setState(transport.state, transport.color);
+  $("btnSend").disabled=false; $("btnPing").disabled=false; $("btnConnect").disabled=false;
+  log((isUpgrade?"⬆ ":(transport.isRelay?"⚠ ":"✓ "))+(isUpgrade?"已升级为 ":(isReconnect?"自愈重连成功 · ":""))+transport.state);
+  if(transport.note) log("  └ "+transport.note);
+  armLiveness();
+}
+
+// happy-eyeballs 抢通: P2P 直连(全路径含 TURN/中继兜底) 与「FAST_RELAY_MS 后并行起的 ntfy 中继」赛跑,
+//   谁先就绪先启用 → 秒开。之后若 P2P 直连(非中继)后到, 自动升级并弃用中继。返回 Promise<bool>。
+function _raceConnect(session, token, extraIce, isReconnect){
+  var gen = ++dialGen;
+  return new Promise(function(resolve){
+    var settled=false, relayTimer=null, primaryDone=false, relayDone=false;
+    function stale(){ return gen!==dialGen; }   // 已被新一轮握手/用户操作作废
+    function maybeFail(){ if(!settled && primaryDone && relayDone){ settled=true; resolve(false); } }
+    function win(h){
+      if(settled){ return false; }
+      settled=true;
+      if(relayTimer){ clearTimeout(relayTimer); relayTimer=null; }
+      if(stale()){ try{ h&&h.close&&h.close(); }catch(e){} resolve(false); return false; }
+      _activate(h, isReconnect, false);
+      resolve(true);
+      return true;
+    }
+    // ① 主路: P2P 直连优先 (内部 STUN→TURN→ntfy 中继全链兜底)
+    DaoSignal.connect({ session:session, token:token, ice:extraIce, timeout:25000 }).then(function(h){
+      primaryDone=true;
+      if(!settled){ win(h); return; }
+      // 中继已先启用: 仅当主路拿到「真 P2P 直连」(非中继) 且仍是当前轮, 才无缝升级
+      if(!stale() && sig && shouldUpgrade(transport.isRelay, describeTransport(h).isRelay)){
+        var old=sig; _activate(h, isReconnect, true); try{ old&&old.close&&old.close(); }catch(e){}
+      } else { try{ h&&h.close&&h.close(); }catch(e){} }
+    }, function(e){ primaryDone=true; lastDialErr=e; maybeFail(); });
+    // ② 抢跑窗口后并行起 ntfy 中继 (探活通过才返回 → 一就绪即可用)
+    relayTimer=setTimeout(function(){
+      relayTimer=null;
+      if(settled||stale()){ relayDone=true; maybeFail(); return; }
+      DaoSignal.connect({ session:session, token:token, ice:extraIce, forceRelay:true }).then(function(h){
+        relayDone=true; if(!win(h)){ try{ h&&h.close&&h.close(); }catch(e){} }
+      }, function(e){ relayDone=true; lastDialErr=lastDialErr||e; maybeFail(); });
+    }, FAST_RELAY_MS);
+  });
 }
 
 // Worker 兜底握手 (回调式 → 收敛为 Promise<bool>, 供自愈循环据实判定成败)。
