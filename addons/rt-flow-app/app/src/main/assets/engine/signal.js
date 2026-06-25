@@ -27,6 +27,7 @@
   var CHUNK = 1200;          // 单条信令分片上限 (规避公共 broker 4KB 报文限制)
   var ANSWER_TIMEOUT = 25000;
   var RELAY_MAX_B64 = 48000; // 中继兜底单响应上限(~40 片); 控制面够用, 超出改走 P2P/Worker 防灌爆公共 broker
+  var RELAY_PING_TO = 15000; // 中继存活探测预算: 须覆盖真机移动网 ntfy mesh 往返(6~9s)+一次重传, 否则可用中继被误判死链
   var hasSubtle = (typeof crypto !== "undefined" && crypto.subtle && typeof crypto.subtle.digest === "function");
   // 多家公共 STUN (互不隶属 → 单点不可达不致命; 仅用于 NAT 反射地址发现, 不中转数据 → 仍 P2P 直连)。
   //   GFW 友好: Google STUN 在中国大陆常被墙, 故并铺 cloudflare(境内可达) + 小米/腾讯境内 STUN +
@@ -414,7 +415,11 @@
         mode: "relay-ntfy", pc: null, dc: null, topic: topic, servers: servers,
         close: function () { try { if (relaySub) relaySub.close(); } catch (e) {} },
         rpc: function (frame) { return relaySend("rpc", frame, 30000); },
-        ping: function () { var t0 = (typeof performance !== "undefined" ? performance.now() : Date.now()); return relaySend("ping", null, 8000).then(function () { return (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0; }); }
+        // 存活探测预算 = RELAY_PING_TO(15s). 实测公共 ntfy mesh 往返(publish→应答方订阅投递→解封/处理→回 publish→
+        //   本端订阅投递→解封)在真机移动网常 6~9s; 旧值 8000ms 卡在往返边界 → relayFallback / forceRelay 的存活探测
+        //   频繁在「中继其实可用」时就 relay_timeout 而被放弃, 整个 connect 误抛 ice_failed(实测 rpc 紧接着 5.9s 即成功)。
+        //   抬到 15s 覆盖「一次重传(1.8/5s)+ 一程往返」, 让去中心化中继兜底真正可用; 真死则 15s 后照常落空。
+        ping: function () { var t0 = (typeof performance !== "undefined" ? performance.now() : Date.now()); return relaySend("ping", null, RELAY_PING_TO).then(function () { return (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0; }); }
       };
     }
 
