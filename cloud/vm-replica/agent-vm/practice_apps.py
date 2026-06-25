@@ -191,6 +191,31 @@ def scen_mspaint_ribbon(W, H):
     return rec
 
 
+def scen_gestures(W, H):
+    # Mouse gestures the earlier rounds didn't exercise: double-click (word select) and scroll
+    # (verified by tile-mean, which round-3 added precisely because dHash misses shape-preserving
+    # shifts). Drag is already covered by scen_mspaint (canvas strokes).
+    rec = {'app': 'notepad', 'archetype': 'gestures: double-click select + scroll (tile-mean)', 'steps': [], 'matched': 0, 'bytes': 0}
+    post('launch', command='notepad'); time.sleep(1.5); post('activate', title='Notepad'); time.sleep(0.4)
+    _, fe = post('find', **{'class': 'Edit'})
+    er = fe['elements'][0]['rect'] if fe.get('count') else [int(W*0.02), int(H*0.12), int(W*0.98), int(H*0.92)]
+    # double-click a word -> selection highlight appears on that line
+    post('act', op='type', x=er[0] + 8, y=er[1] + 8, text='alpha beta gamma delta epsilon')
+    time.sleep(0.2)
+    line0 = [er[0], er[1], er[2], er[1] + 28]
+    step(rec, 'double-click selects a word', op='double_click', x=er[0] + 70, y=er[1] + 10,
+         expect={'region_changed': line0})
+    # fill past the viewport, jump to top, then scroll down -> text shifts (tile-mean catches it)
+    post('act', op='key', key='ctrl+a'); post('act', op='key', key='delete')
+    post('act', op='type', x=er[0] + 8, y=er[1] + 8, text='\n'.join('row %02d ........' % i for i in range(80)))
+    post('act', op='key', key='ctrl+home'); time.sleep(0.3)
+    text_area = [er[0], er[1], er[2], er[3]]
+    step(rec, 'scroll down -> content shifts', op='scroll', x=(er[0]+er[2])//2, y=(er[1]+er[3])//2,
+         clicks=-8, expect={'region_changed': text_area})
+    kill('notepad.exe')
+    return rec
+
+
 def scen_browser(W, H):
     # Chromium/web: drive the browser FRAME (address bar) AND target in-page DOM, both via UIA.
     rec = {'app': 'chrome', 'archetype': 'Chromium web (frame + DOM via UI Automation)', 'steps': [], 'matched': 0, 'bytes': 0}
@@ -238,7 +263,7 @@ def main():
             print('agent did not start'); return
         _, di = post('desktop_info'); W, H = di['width'], di['height']
         print('screen', W, H)
-        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_mspaint_ribbon, scen_calc, scen_browser):
+        for fn in (scen_notepad, scen_wordpad, scen_mspaint, scen_contextmenu, scen_mspaint_ribbon, scen_calc, scen_gestures, scen_browser):
             print('\n=== %s ===' % fn.__name__)
             try:
                 rec = fn(W, H)
