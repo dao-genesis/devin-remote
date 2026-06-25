@@ -66,6 +66,15 @@ python vmctl.py vm.browser_launch   vm=vm01 url="https://example.com"
 python vmctl.py vm.browser_navigate vm=vm01 url="https://bing.com"
 python vmctl.py vm.browser_eval     vm=vm01 expression="document.title"
 python vmctl.py vm.ui_tree          vm=vm01                       # 元素树 grounding（P2）
+
+# 预测编码操作层（预测先行·本地校验·反射重试，远超截图+点击；详见 09_*.md）
+python vmctl.py vm.observe   vm=vm01                              # 紧凑状态签名（几百字节，替代整屏 PNG）
+python vmctl.py vm.find      vm=vm01 text="保存"                  # 本地语义定位 → rect/center（去坐标化）
+#   vm.act / vm.act_seq 带 expect 预测谓词（JSON），用 MCP 调用或下面的 SDK 形式：
+#   vm.act {"vm":"vm01","op":"key","key":"ctrl+f","expect":{"foreground":"Find"}}
+#   -> 命中即返回 matched:true（零截图、零视觉调用）；预测失败才反射重试、再失败才回传区域小图
+# 基线对比（在交互会话内跑）：python agent-vm/bench_predictive.py
+
 python vmctl.py vm.snapshot         vm=vm01 tag=base               # profile 快照（P1）
 python vmctl.py vm.restore          vm=vm01 tag=base               # 回滚到快照
 
