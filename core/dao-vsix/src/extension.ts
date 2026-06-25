@@ -3341,6 +3341,18 @@ function bridgeGenerateLocalMd(): string {
     return bridgeGenerateCloudMd();
 }
 
+// 帛书·「反者道之动也」: 哨兵占位符 → 实时完整 MD 的唯一展开点。
+// 本地注入档以哨兵存储(省体积), 任何「出云」前都必须在此展开为完整正文,
+// 否则账号云端知识库会出现 `__DAO_BRIDGE_*_MD__` 空壳(用户编辑器里看到的"全是空的")。
+function expandKbSentinel(name: string, body: string): string {
+    const b = (body || '').trim();
+    const isMcp = (b === DAO_MCP_KB_SENTINEL) || (name === DAO_MCP_KB_NAME && (b === DAO_BRIDGE_KB_SENTINEL || b === ''));
+    if (isMcp) { try { return bridgeGenerateMcpUsageMd(); } catch { return body; } }
+    const isBridge = (b === DAO_BRIDGE_KB_SENTINEL) || (name === DAO_BRIDGE_KB_NAME && b === '');
+    if (isBridge) { try { return bridgeGenerateCloudMd(); } catch { return body; } }
+    return body;
+}
+
 async function bridgeInjectKnowledge(): Promise<boolean> {
     if (!ws.devinAuth1 || !ws.devinOrgId) return false;
     const md = bridgeGenerateCloudMd();
@@ -4583,7 +4595,7 @@ function ipAddMcp(){sm('钉住 MCP (切号自动注入)','<input id="m1" placeho
 function ipMcpPreset(kind){if(kind==='github'){const a=document.getElementById('m1'),b=document.getElementById('m2'),c=document.getElementById('m3'),d=document.getElementById('m5');if(a)a.value='GitHub MCP';if(b)b.value='HTTP';if(c)c.value='https://api.githubcopilot.com/mcp/';if(d)d.value='GitHub official remote MCP'}}
 function ipAddAutomation(){sm('钉住 Automation (切号自动注入)','<input id="m1" placeholder="名称 name" style="width:100%;margin:4px 0"><textarea id="m2" placeholder="会话提示 prompt (webhook 触发 → start_session)" style="width:100%;height:80px;margin:4px 0"></textarea><p style="font-size:10px;color:var(--muted);margin:4px 0">默认: webhook:incoming 触发 + start_session(prompt) 动作。需高级 triggers/actions 可手编 dao-inject-profile.json。</p>',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.automations.push({name:n,prompt:document.getElementById('m2').value,enabled:false});ipSave();rInject()})}
 function ipEditSecret(i){const it=(S.injectProfile.secrets||[])[i];if(!it)return;sm('修改 Secret','<input id="m1" value="'+esc(it.name||'')+'" placeholder="名称 KEY" style="width:100%;margin:4px 0"><input id="m2" value="'+esc(it.value||'')+'" placeholder="值 value" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.secrets[i]={name:n,value:document.getElementById('m2').value};ipSave();rInject()})}
-function ipEditKnowledge(i){const it=(S.injectProfile.knowledge||[])[i];if(!it)return;sm('✂ 修改 Knowledge','<label style="font-size:11px;color:var(--muted)">名称</label><input id="m1" value="'+esc(it.name||'')+'" style="width:100%;margin:4px 0"><label style="font-size:11px;color:var(--muted)">正文 body (Markdown)</label><textarea id="m2" style="width:100%;height:200px;margin:4px 0;font-family:monospace;white-space:pre">'+esc(it.body||'')+'</textarea><label style="font-size:11px;color:var(--muted)">触发 trigger</label><input id="m3" value="'+esc(it.trigger||'')+'" placeholder="默认 Always" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.knowledge[i]={name:n,body:document.getElementById('m2').value,trigger:document.getElementById('m3').value.trim()||'Always'};ipSave();rInject()})}
+function ipEditKnowledge(i){const it=(S.injectProfile.knowledge||[])[i];if(!it)return;var _pv=it._preview||'';var _shown=_pv||(it.body||'');var _note=_pv?'<p style="font-size:10px;color:var(--success);line-height:1.5;margin:2px 0 4px">⟳ 实时完整正文预览(含当前隧道 URL/端口)·本地以占位哨兵存储省体积·推送云端时按当前隧道实时展开。不改动即保持哨兵; 若手改则按你的内容覆盖。</p>':'';sm('✂ 修改 Knowledge','<label style="font-size:11px;color:var(--muted)">名称</label><input id="m1" value="'+esc(it.name||'')+'" style="width:100%;margin:4px 0"><label style="font-size:11px;color:var(--muted)">正文 body (Markdown)</label>'+_note+'<textarea id="m2" style="width:100%;height:200px;margin:4px 0;font-family:monospace;white-space:pre">'+esc(_shown)+'</textarea><label style="font-size:11px;color:var(--muted)">触发 trigger</label><input id="m3" value="'+esc(it.trigger||'')+'" placeholder="默认 Always" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;var nb=document.getElementById('m2').value;var body=(_pv&&nb===_pv)?(it.body||''):nb;S.injectProfile.knowledge[i]={name:n,body:body,trigger:document.getElementById('m3').value.trim()||'Always'};ipSave();rInject()})}
 function ipEditPlaybook(i){const it=(S.injectProfile.playbooks||[])[i];if(!it)return;sm('✂ 修改 Playbook','<label style="font-size:11px;color:var(--muted)">标题 title</label><input id="m1" value="'+esc(it.title||'')+'" style="width:100%;margin:4px 0"><label style="font-size:11px;color:var(--muted)">正文 body</label><textarea id="m2" style="width:100%;height:200px;margin:4px 0;font-family:monospace;white-space:pre">'+esc(it.body||'')+'</textarea>',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.playbooks[i]={title:n,body:document.getElementById('m2').value};ipSave();rInject()})}
 function ipEditAutomation(i){const it=(S.injectProfile.automations||[])[i];if(!it)return;sm('✂ 修改 Automation','<input id="m1" value="'+esc(it.name||'')+'" placeholder="名称 name" style="width:100%;margin:4px 0"><textarea id="m2" placeholder="会话提示 prompt" style="width:100%;height:120px;margin:4px 0">'+esc(it.prompt||'')+'</textarea>',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;S.injectProfile.automations[i]={name:n,prompt:document.getElementById('m2').value,enabled:!!it.enabled};ipSave();rInject()})}
 function ipEditMcp(i){const it=(S.injectProfile.mcps||[])[i];if(!it)return;const isStdio=(it.transport==='STDIO');sm('✂ 修改 MCP','<input id="m1" value="'+esc(it.name||'')+'" placeholder="名称 name" style="width:100%;margin:4px 0"><select id="m2" style="width:100%;margin:4px 0"><option value="HTTP"'+(isStdio?'':' selected')+'>HTTP / SSE</option><option value="STDIO"'+(isStdio?' selected':'')+'>STDIO</option></select><input id="m3" value="'+esc(isStdio?(it.command||''):(it.url||''))+'" placeholder="URL 或 command" style="width:100%;margin:4px 0"><input id="m4" value="'+esc(isStdio?((it.args||[]).join(' ')):((it.headers&&it.headers.Authorization)||''))+'" placeholder="args / Authorization" style="width:100%;margin:4px 0"><input id="m5" value="'+esc(it.short_description||'')+'" placeholder="简介" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim();if(!n)return false;const tr=document.getElementById('m2').value;const f3=document.getElementById('m3').value.trim();const f4=document.getElementById('m4').value.trim();const sd=document.getElementById('m5').value.trim();const m={name:n,transport:tr,short_description:sd};if(tr==='STDIO'){m.command=f3;m.args=f4?f4.split(' ').filter(Boolean):[];m.env_variables=[]}else{m.url=f3;if(f4)m.headers={Authorization:f4}}S.injectProfile.mcps[i]=m;ipSave();rInject()})}
@@ -4598,7 +4610,7 @@ function rInject(){
   h+='<div class="card"><div class="cr"><span class="l">启用自动注入</span><span class="v">'+tgl(p.enabled,'ipToggle(&#39;enabled&#39;)')+'</span></div><div class="cr"><span class="l">切账号时清理旧账号</span><span class="v">'+tgl(p.autoCleanup,'ipToggle(&#39;autoCleanup&#39;)')+'</span></div>'+(p.lastInjectedOrg?'<div class="cr"><span class="l">上次注入 org</span><span class="v" style="font-size:10px">'+esc(p.lastInjectedOrg)+'</span></div>':'')+'</div>';
   const listSec=(title,kind,items,labelFn,addFn,editFn)=>{let s='<div class="st">'+title+' ('+items.length+')<button class="btn sm primary" style="float:right" onclick="'+addFn+'">+ 添加</button></div>';if(items.length){s+='<div class="card">';items.forEach((it,i)=>{s+='<div class="cr"><span class="l" style="font-size:12px">'+esc(labelFn(it))+'</span><span class="v">'+(editFn?'<button class="btn sm" title="查看 / 修改" onclick="'+editFn+'('+i+')">✏ 改</button> ':'')+'<button class="btn sm danger" onclick="ipRemove(&#39;'+kind+'&#39;,'+i+')">删</button></span></div>'});s+='</div>'}else{s+='<p style="font-size:11px;color:var(--muted);margin:4px 0 8px">（空）</p>'}return s};
   h+=listSec('🔑 Secrets','secrets',p.secrets,it=>it.name,'ipAddSecret()','ipEditSecret');
-  h+=listSec('📚 Knowledge','knowledge',p.knowledge,it=>it.name,'ipAddKnowledge()','ipEditKnowledge');
+  h+=listSec('📚 Knowledge','knowledge',p.knowledge,it=>{var n=(it._preview||it.body||'').length;return it.name+(n?(' · '+n+' 字'):'')},'ipAddKnowledge()','ipEditKnowledge');
   h+=listSec('📋 Playbooks','playbooks',p.playbooks,it=>it.title,'ipAddPlaybook()','ipEditPlaybook');
   h+=listSec('🔌 MCP (钉住)','mcps',p.mcps||[],it=>it.name+' · '+(it.transport||'STDIO'),'ipAddMcp()','ipEditMcp');
   h+=listSec('⚙️ Automations (钉住)','automations',p.automations||[],it=>it.name+(it.prompt?(' · '+String(it.prompt).slice(0,24)):''),'ipAddAutomation()','ipEditAutomation');
@@ -5168,7 +5180,17 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'getInjectProfile': {
                 // 自动注入自循环配置: 返回当前 profile 给面板渲染
                 const p = loadInjectProfile();
-                reply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: p.knowledge, playbooks: p.playbooks, mcps: p.mcps, automations: p.automations, messageLimit: p.messageLimit, messageLimitAuto: p.messageLimitAuto, messageLimitOffset: p.messageLimitOffset, lastInjectedOrg: p.lastInjectedOrg } });
+                // 帛书·「反者道之动也」: 本地存储以哨兵省体积, 但面板「查看」必须见到实时完整正文(含当前隧道 URL/端口),
+                //   否则用户在编辑器里只看到 `__DAO_BRIDGE_*_MD__` 空壳, 误以为"全是空的、端口也没有"。
+                //   仅附 `_preview`(展示用·实时生成), `body` 仍保持哨兵, 推送云端时再按当前隧道实时展开。
+                const knowledgeView = (p.knowledge || []).map(k => {
+                    try {
+                        const exp = expandKbSentinel(k.name || '', k.body || '');
+                        if (exp && exp !== (k.body || '')) return { ...k, _preview: exp };
+                    } catch { /* 守柔 */ }
+                    return k;
+                });
+                reply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: knowledgeView, playbooks: p.playbooks, mcps: p.mcps, automations: p.automations, messageLimit: p.messageLimit, messageLimitAuto: p.messageLimitAuto, messageLimitOffset: p.messageLimitOffset, lastInjectedOrg: p.lastInjectedOrg } });
                 break;
             }
             case 'setInjectProfile': {
@@ -5178,7 +5200,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     enabled: typeof msg.enabled === 'boolean' ? msg.enabled : cur.enabled,
                     autoCleanup: typeof msg.autoCleanup === 'boolean' ? msg.autoCleanup : cur.autoCleanup,
                     secrets: Array.isArray(msg.secrets) ? msg.secrets : cur.secrets,
-                    knowledge: Array.isArray(msg.knowledge) ? msg.knowledge : cur.knowledge,
+                    // 守柔: 剥离展示用 `_preview`(实时生成·不落盘), 仅存 {name, body(哨兵), trigger}, 杜绝把含旧隧道地址的快照冻结进档。
+                    knowledge: Array.isArray(msg.knowledge) ? msg.knowledge.map((k: any) => ({ name: k.name, body: k.body, trigger: k.trigger })) : cur.knowledge,
                     playbooks: Array.isArray(msg.playbooks) ? msg.playbooks : cur.playbooks,
                     mcps: Array.isArray(msg.mcps) ? msg.mcps : cur.mcps,
                     automations: Array.isArray(msg.automations) ? msg.automations : cur.automations,
@@ -7951,6 +7974,9 @@ async function devinUpsertSecret(orgId: string, name: string, value: string, aut
 }
 
 async function devinUpsertKnowledge(orgId: string, name: string, body: string, triggerDescription: string, auth1: string): Promise<{ ok: boolean }> {
+    // 帛书·「反者道之动也」根因收敛: 任何路径(含旧版插件/种入/批量)若把哨兵占位符当正文推上云端,
+    // 在唯一出云口实时展开为完整 MD — 杜绝账号云端知识库出现 `__DAO_BRIDGE_*_MD__` 空壳。
+    body = expandKbSentinel(name, body);
     // Find existing by name → delete → create
     const list = await devinListKnowledge(orgId, auth1);
     if (list.ok && list.learnings) {
@@ -9374,7 +9400,7 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
 // ═══════════════════════════════════════════════════════════
 const INJECT_PROFILE_FILE = path.join(DAO_DIR, 'dao-inject-profile.json');
 interface InjectProfileItemS { name: string; value: string }
-interface InjectProfileItemK { name: string; body: string; trigger?: string }
+interface InjectProfileItemK { name: string; body: string; trigger?: string; _preview?: string }
 interface InjectProfileItemP { title: string; body: string }
 // 钉住的 MCP — 切账号即幂等注入到新 org (如 GitHub MCP / 本地 141 HTTP MCP)
 interface InjectProfileItemM {
