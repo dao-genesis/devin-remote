@@ -564,32 +564,70 @@
       // DataChannel 断开(移动网切换/Doze)时, 先 close() 释放这条死连接的 pc(ICE/STUN 绑定)与残余 ntfy 订阅,
       //   再置空重连 —— 否则每次 P2P 重连周期都漏掉上一条连接的 RTCPeerConnection + 信令订阅, 越积越多。
       try{ if(sig.dc) sig.dc.addEventListener("close", function(){ try{ if(sig.close) sig.close(); }catch(e){} _p2p=null; setTimeout(_p2pTry, 3000); }); }catch(e){}
+      _rtClose();   // 真 P2P 全速直连已接管 → 释放去中心化中继档的常驻 ntfy 订阅(不并存空占 broker)
+      try{ if(typeof window!=="undefined" && window.addEventListener) window.addEventListener("pagehide", _rtClose); }catch(e){}
     }, function(){ _p2p=null; _p2pBusy=false;
       var backoff = Math.min(120000, 8000*_p2pTries);
       _p2pNextTs = Date.now() + backoff;                      // 退避冷却起点: 阻挡 30s 轮询在冷却内重握手; 对端/网络好转即自动接管
       setTimeout(_p2pTry, backoff);
     });
   }
-  // P2P 应答(serveLocal)与 HTTP 中继回包同构: {status, bodyText} → 归一成 relay() 的 {status, body}。
-  function _relayP2P(path, body){
-    return _p2p.rpc({ path:path, method:"POST", body: body||{} }).then(function(result){
-      var r; try{ r=JSON.parse(result); }catch(e){ r=null; }
-      if(!r || typeof r.status!=="number") throw new Error("p2p_bad_result");
-      var b; try{ b=JSON.parse(r.bodyText); }catch(e){ b={ error:"bad_json", raw:r.bodyText }; }
-      return { status:r.status, body:b };
+  // P2P / 去中心化中继句柄回包同构(serveLocal·role"s"): {status, bodyText} → 归一成 relay() 的 {status, body}。
+  function _normHandleRes(result){
+    // serveLocal 正常路径回 JSON 字符串 {status,bodyText}; 去中心化中继档的错误/超限路径(role"q":500/413)
+    //   直接回对象 {status,bodyText} —— 故二者皆容: 已是对象就直接用, 否则按字符串解析。
+    var r; if(result && typeof result==="object"){ r=result; } else { try{ r=JSON.parse(result); }catch(e){ r=null; } }
+    if(!r || typeof r.status!=="number") throw new Error("handle_bad_result");
+    var b; if(r.body && typeof r.body==="object"){ b=r.body; } else { try{ b=JSON.parse(r.bodyText); }catch(e){ b={ error:"bad_json", raw:r.bodyText }; } }
+    return { status:r.status, body:b };
+  }
+  function _relayP2P(path, body){ return _p2p.rpc({ path:path, method:"POST", body: body||{} }).then(_normHandleRes); }
+  // ── 路线 C-2 档: 去中心化 ntfy 中继 (0账号·不经 Worker·任一公共 broker 活即通) ──────────────
+  //   定位 = 真 P2P 直连(对称NAT/CGNAT/封UDP)与 Worker(被限流/被封)双双不可达时的「去中心化兜底」。
+  //   它经公共 ntfy mesh 往返(实测真机 ~4.6s/RPC·48KB 上限), 慢于健康 Worker, 故**不抢健康 Worker 的快路**:
+  //   仅当 _relayHttp 的全部候选(手机直连隧道→Worker)皆死(429/5xx/网络)时, 用尽这条去中心化路再兜底。
+  //   防泄漏(旧 _p2pTry 病灶教训): 全程**持久单例**句柄(forceRelay 跳过 ICE 等待), 复用之, 绝不每调用/每失败
+  //   就重建(每次 connect 各开一组常驻 ntfy 订阅)。页面卸载 / 真 P2P 接管时 _rtClose() 释放其订阅。
+  var _rt=null, _rtBusy=false, _rtTries=0, _rtNextTs=0;
+  function _rtAlive(){ return !!_rt; }
+  function _rtClose(){ try{ if(_rt && _rt.close) _rt.close(); }catch(e){} _rt=null; }
+  function _rtEnsure(){
+    if(_rtBusy || _rtAlive() || !SESSION || !TOKEN) return Promise.resolve(_rt);
+    if(Date.now() < _rtNextTs) return Promise.resolve(null);   // 退避冷却: 中继真死时不让每次失败都重连刷爆公共 broker
+    if(!(typeof window!=="undefined" && window.DaoSignal && window.DaoSignal.available && window.DaoSignal.available())) return Promise.resolve(null);
+    _rtBusy=true; _rtTries++;
+    return window.DaoSignal.connect({ session:SESSION, token:TOKEN, forceRelay:true }).then(function(h){
+      _rt=h; _rtBusy=false; _rtTries=0; _rtNextTs=0; return h;
+    }, function(){ _rt=null; _rtBusy=false; _rtNextTs=Date.now()+Math.min(120000, 8000*_rtTries); return null; });
+  }
+  function _relayRT(path, body){ return _rt.rpc({ path:path, method:"POST", body: body||{} }).then(_normHandleRes); }
+  // Worker 优先(健康时延迟低于 ntfy 中继); 全候选皆死 → 去中心化 ntfy 中继档(0账号)再兜底, 仍不行才返回死结果/抛原错。
+  function _viaWorkerThenRT(path, body, timeoutMs){
+    return _relayHttp(path, body, timeoutMs).then(function(res){
+      // 死(5xx/网络/agent离线)或**被限流(429)** → 用尽去中心化中继。429 正是用户「Worker 被限流」之痛:
+      //   它不在 _dead(只 >=502)内, 故单独纳入触发, 但不改 _dead 的端点切换语义(避免瞬时 429 抖动切换)。
+      if(!_dead(res) && !(res && res.status===429)) return res;
+      if(_rtAlive()){
+        return _relayRT(path, body).then(function(r2){ return _dead(r2)?res:r2; },
+          function(){ _rtClose(); setTimeout(_rtEnsure, 1000); return res; });   // 中继句柄坏 → 释放重建, 本次返回死结果
+      }
+      return _rtEnsure().then(function(h){
+        if(!h) return res;
+        return _relayRT(path, body).then(function(r2){ return _dead(r2)?res:r2; }, function(){ return res; });
+      });
     });
   }
-  // ── 与手机的统一中继调用 (本页 + 各 srcdoc 板块共用同一通道): P2P 优先, 不通无缝回退 HTTP ──
+  // ── 与手机的统一中继调用 (本页 + 各 srcdoc 板块共用同一通道): P2P 直连 优先 → Worker → 去中心化 ntfy 中继 ──
   function _relayDirect(path, body, timeoutMs){
     if(_p2pAlive()){
       return _relayP2P(path, body).then(function(res){
-        return _dead(res) ? _relayHttp(path, body, timeoutMs) : res;   // P2P 通但应答异常 → 回退 HTTP(并触发自愈)
+        return _dead(res) ? _viaWorkerThenRT(path, body, timeoutMs) : res;   // P2P 通但应答异常 → 回退 HTTP/中继(并触发自愈)
       }, function(){
-        _p2p=null; setTimeout(_p2pTry, 1000);                          // P2P 链路异常 → 失效 + 后台重连, 本次走 HTTP
-        return _relayHttp(path, body, timeoutMs);
+        _p2p=null; setTimeout(_p2pTry, 1000);                              // P2P 链路异常 → 失效 + 后台重连, 本次走 HTTP/中继
+        return _viaWorkerThenRT(path, body, timeoutMs);
       });
     }
-    return _relayHttp(path, body, timeoutMs);
+    return _viaWorkerThenRT(path, body, timeoutMs);
   }
   // ── 中继串行化队列 (根因级修复·道法自然): 手机端按帧串行应答 (RelayService 长轮询单帧出队),
   //   本页同时发起的多路 RPC (镜像轮询 / 下载列表 / 金库 history+history_devin 双取 / claim / ping)

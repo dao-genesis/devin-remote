@@ -258,6 +258,55 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     ok(!mod.p2pAlive(), "Q 断开后 _p2p 置空, 等退避后重连");
   }
 
+  // 场景 R (核心·去中心化兜底): Worker 全候选皆死(503) + DaoSignal 可用 → 用尽去中心化 ntfy 中继档(forceRelay), relay 经中继返回。
+  {
+    const counter = { total: 0, byBase: {} };
+    let connectCalls = 0, connectOpts = null, rtRpc = 0;
+    const win = { DaoSignal: { available: () => true, connect: function (o) {
+      connectCalls++; connectOpts = o;
+      return Promise.resolve({ dc: null, close: () => {}, rpc: function () { rtRpc++; return Promise.resolve(JSON.stringify({ status: 200, bodyText: JSON.stringify({ ok: true, via: "relay-ntfy" }) })); } });
+    } } };
+    const routes = { [WORKER]: { status: 503, body: "no tunnel here" } };
+    const mod = makeModule(baseDeps({ ENDPOINT: WORKER, fetch: makeFetch(routes, counter), window: win, location: { origin: WORKER, protocol: "https:" } }));
+    const res = await mod.relay("/api/rpc", { cmd: "getState" }, 5000);
+    ok(res.status === 200 && res.body && res.body.via === "relay-ntfy", "R Worker 全死→去中心化 ntfy 中继档兜底返回 {status,body}");
+    ok(connectCalls === 1 && connectOpts && connectOpts.forceRelay === true, "R 中继档经 forceRelay 建持久句柄(跳过 ICE 等待)");
+    ok(rtRpc === 1, "R 经中继句柄发了一次 RPC");
+  }
+
+  // 场景 S (不抢快路): Worker 健康(200) → 直接经 Worker 返回, 绝不建中继档(connect 0 次), 不让慢中继拖累健康快路。
+  {
+    let connectCalls = 0;
+    const win = { DaoSignal: { available: () => true, connect: function () { connectCalls++; return Promise.resolve({ dc: null, close: () => {}, rpc: () => Promise.resolve(JSON.stringify({ status: 200, bodyText: "{}" })) }); } } };
+    const routes = { [WORKER]: { status: 200, body: { ok: true, via: "worker" } } };
+    const mod = makeModule(baseDeps({ ENDPOINT: WORKER, fetch: makeFetch(routes, { total: 0, byBase: {} }), window: win, location: { origin: WORKER, protocol: "https:" } }));
+    const res = await mod.relay("/api/rpc", { cmd: "getState" }, 5000);
+    ok(res.status === 200 && res.body && res.body.via === "worker", "S Worker 健康→经 Worker 返回");
+    ok(connectCalls === 0, "S Worker 健康时绝不建去中心化中继档 (不抢健康快路·实际 connect " + connectCalls + " 次)");
+  }
+
+  // 场景 T (用户之痛·限流): Worker 回 429(被限流, 不在 _dead 内) → 仍引去中心化 ntfy 中继档兜底(0账号), 而非把 429 直接抛给板块。
+  {
+    let connectCalls = 0, rtRpc = 0;
+    const win = { DaoSignal: { available: () => true, connect: function (o) { connectCalls++; return Promise.resolve({ dc: null, close: () => {}, rpc: function () { rtRpc++; return Promise.resolve(JSON.stringify({ status: 200, bodyText: JSON.stringify({ ok: true, via: "relay-ntfy" }) })); } }); } } };
+    const routes = { [WORKER]: { status: 429, body: { error: "rate_limited" } } };
+    const mod = makeModule(baseDeps({ ENDPOINT: WORKER, fetch: makeFetch(routes, { total: 0, byBase: {} }), window: win, location: { origin: WORKER, protocol: "https:" } }));
+    const res = await mod.relay("/api/rpc", { cmd: "getState" }, 5000);
+    ok(res.status === 200 && res.body && res.body.via === "relay-ntfy", "T Worker 429 限流→去中心化中继档兜底(不把 429 抛给上层)");
+    ok(connectCalls === 1 && rtRpc === 1, "T 429 触发了中继档建连 + 一次中继 RPC");
+  }
+
+  // 场景 U (中继回包二态): 中继档 role"q" 超限/出错路径回**对象** {status,bodyText}(非 JSON 字符串) → _normHandleRes 须兼容, 不可 JSON.parse 对象抛错。
+  {
+    const win = { DaoSignal: { available: () => true, connect: function () { return Promise.resolve({ dc: null, close: () => {}, rpc: function () {
+      return Promise.resolve({ status: 413, bodyText: "relay payload too large; prefer P2P/Worker for bulk transfer" });   // role"q" 超限: 直接回对象
+    } }); } } };
+    const routes = { [WORKER]: { status: 503, body: "dead" } };
+    const mod = makeModule(baseDeps({ ENDPOINT: WORKER, fetch: makeFetch(routes, { total: 0, byBase: {} }), window: win, location: { origin: WORKER, protocol: "https:" } }));
+    const res = await mod.relay("/api/rpc", { cmd: "getState" }, 5000);
+    ok(res && res.status === 413, "U 中继档回对象(413 超限)被正确归一为 {status:413}, 不因 JSON.parse 对象而抛错");
+  }
+
   // 场景 J (回归护栏): 主 IIFE 必须在使用前声明 CFG —— 防 PR#547 式 strict ReferenceError 崩整页。
   {
     const fIdx = src.indexOf("__FAILOVER_START__");
