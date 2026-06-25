@@ -21,6 +21,7 @@ function makeModule(deps) {
     sliced + "\n" +
     "return { relay: relay, relayHttp: _relayHttp, getEndpoint: function(){ return ENDPOINT; }, candBases: _candBases,\n" +
     "         p2pTry: _p2pTry, p2pAlive: _p2pAlive, setP2P: function(p){ _p2p=p; },\n" +
+    "         rtRead: __rtRead, rtBust: __rtBust,\n" +
     "         learnDirect: _learnDirect, preferDirect: _preferDirect, directUrls: _directUrls };\n" +
     "})";
   // eslint-disable-next-line no-eval
@@ -305,6 +306,32 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     const mod = makeModule(baseDeps({ ENDPOINT: WORKER, fetch: makeFetch(routes, { total: 0, byBase: {} }), window: win, location: { origin: WORKER, protocol: "https:" } }));
     const res = await mod.relay("/api/rpc", { cmd: "getState" }, 5000);
     ok(res && res.status === 413, "U 中继档回对象(413 超限)被正确归一为 {status:413}, 不因 JSON.parse 对象而抛错");
+  }
+
+  // 场景 V (板块转移出 Worker·跨板块只读合并): __rtRead 对「同窗口并发的同一只读 RPC」只穿透一次,
+  //   TTL 内再读命中缓存零穿透, __rtBust 后强制重穿 —— 这是把六大板块高频轮询从 Worker 卸下、抗 429 的根因机制。
+  {
+    const counter = { total: 0, byBase: {} };
+    const routes = { [WORKER]: { status: 200, body: { r: { ok: true, bal: 17.27 } } } };
+    const mod = makeModule(baseDeps({ ENDPOINT: WORKER, fetch: makeFetch(routes, counter), location: { origin: WORKER, protocol: "https:" } }));
+    // 三个板块同窗口并发问同一 getState → 合并为 1 次穿透
+    const [a, b, c] = await Promise.all([
+      mod.rtRead("/api/native", { m: "getState", a: [] }, 5000),
+      mod.rtRead("/api/native", { m: "getState", a: [] }, 5000),
+      mod.rtRead("/api/native", { m: "getState", a: [] }, 5000),
+    ]);
+    ok(counter.total === 1, "V 三板块并发同一只读 → 仅 1 次穿透(合并), 实际 " + counter.total);
+    ok(a && a.status === 200 && a.body && a.body.r && a.body.r.bal === 17.27 && a === b && a === c, "V 三者同得 200 且为同一合并结果");
+    // TTL(1500ms)内再读 → 命中缓存, 仍是 1 次
+    const d = await mod.rtRead("/api/native", { m: "getState", a: [] }, 5000);
+    ok(counter.total === 1 && d.status === 200, "V TTL 内再读命中缓存零穿透");
+    // 写后 __rtBust → 强制重穿
+    mod.rtBust();
+    await mod.rtRead("/api/native", { m: "getState", a: [] }, 5000);
+    ok(counter.total === 2, "V __rtBust 后强制重穿(写改即时反映), 实际 " + counter.total);
+    // 不同请求体不串缓存
+    await mod.rtRead("/api/native", { m: "quota", a: [] }, 5000);
+    ok(counter.total === 3, "V 不同 RPC(quota) 不命中 getState 缓存");
   }
 
   // 场景 J (回归护栏): 主 IIFE 必须在使用前声明 CFG —— 防 PR#547 式 strict ReferenceError 崩整页。
