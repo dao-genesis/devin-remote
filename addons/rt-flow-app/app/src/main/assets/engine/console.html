@@ -257,6 +257,28 @@
 
   function frame(path, body) { return JSON.stringify({ path: path, method: "POST", body: body }); }
 
+  // ── 板块读/HTTP 并入外壳父页的失效转移通道 (P2P→直连隧道→Worker→去中心化 ntfy) + 跨板块只读合并 ──
+  //   旧病灶: 各板块子页在此**直接裸 fetch Worker**, 绕开父页 relay() 的失效转移与串行队列 → 直连/
+  //   去中心化只惠及父页少量调用, 板块高频数据轮询全压 Worker (正是 429 之源)。修法: 同源 blob 子页
+  //   可达 window.parent —— 读经 __rtRead(同请求合并+短TTL缓存)、HTTP 经 __rtRelay, 一并享直连隧道/
+  //   ntfy 兜底并转移出 Worker; 取不到父页(srcdoc 不透明源等)才裸 fetch 兜底 → 任何情形不劣于旧版。
+  function _parentFn(name) { try { var P = window.parent; if (P && P !== window && typeof P[name] === "function") return P; } catch (e) {} return null; }
+  function _rawRelay(path, body) {
+    return fetch(RELAY, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN }, body: frame(path, body) })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (t) { if (t == null) return null; try { return JSON.parse(t); } catch (e) { return null; } });
+  }
+  function _readVia(path, body) {
+    var P = _parentFn("__rtRead");
+    if (P) return P.__rtRead(path, body, 12000).then(function (res) { return (res && res.body != null) ? res.body : null; }, function () { return _rawRelay(path, body); });
+    return _rawRelay(path, body);
+  }
+  function _httpVia(body) {
+    var P = _parentFn("__rtRelay");
+    if (P) return P.__rtRelay("/api/http", body, 30000).then(function (res) { return (res && res.body != null) ? res.body : { status: 0, error: "empty" }; }, function () { return _rawRelay("/api/http", body).then(function (d) { return d || { status: 0, error: "relay_fail" }; }); });
+    return _rawRelay("/api/http", body).then(function (d) { return d || { status: 0, error: "relay_fail" }; });
+  }
+
   // 一次阻塞同步取值 (仅缓存未命中的首读用)
   function blockingFetch(m, args) {
     try {
@@ -273,10 +295,9 @@
   // 后台异步刷新缓存 (不阻塞主线程)
   function bgRefresh(m, args, k) {
     if (_inflight[k]) return; _inflight[k] = true;
-    fetch(RELAY, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN }, body: frame("/api/native", { m: m, a: args || [] }) })
-      .then(function (r) { return r.ok ? r.text() : null; })
-      .then(function (t) { _inflight[k] = false; if (t == null) return;
-        try { var d = JSON.parse(t); if (d && Object.prototype.hasOwnProperty.call(d, "r")) { _cache[k] = d.r; _ts[k] = Date.now(); } } catch (e) {} })
+    _readVia("/api/native", { m: m, a: args || [] })
+      .then(function (d) { _inflight[k] = false; if (d == null) return;
+        if (d && Object.prototype.hasOwnProperty.call(d, "r")) { _cache[k] = d.r; _ts[k] = Date.now(); } })
       .catch(function () { _inflight[k] = false; });
   }
   // 写/动作型方法: 不缓存; 执行后清空读缓存使后续读反映变更
@@ -291,7 +312,7 @@
   //   · 写/动作(用户点击触发, 渲染后才发生, 需正确返回值): 仍走一次阻塞同步, 完成后清读缓存。
   function syncCall(m, args) {
     var k = m + "|" + JSON.stringify(args || []);
-    if (isWrite(m)) { var w = blockingFetch(m, args); _cache = {}; _ts = {}; return w; }
+    if (isWrite(m)) { var w = blockingFetch(m, args); _cache = {}; _ts = {}; try { var P = _parentFn("__rtBust"); if (P) P.__rtBust(); } catch (e) {} return w; }
     if (!Object.prototype.hasOwnProperty.call(_cache, k)) {
       _cache[k] = null; _ts[k] = 0;   // 先占位返回 null, 不阻塞
       bgRefresh(m, args, k);           // 后台异步取真实值
@@ -306,13 +327,8 @@
   function httpBridge(b64) {
     return function (reqId, method, url, headersJson, body) {
       var headers = {}; try { headers = JSON.parse(headersJson || "{}"); } catch (e) {}
-      fetch(RELAY, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN },
-        body: frame("/api/http", { b64: !!b64, method: method || "GET", url: url, headers: headers, body: body == null ? "" : body })
-      }).then(function (r) { return r.text(); })
-        .then(function (t) { var res; try { res = JSON.parse(t); } catch (e) { res = { status: 0, error: "bad_json" }; }
-          try { window.__httpCb && window.__httpCb(reqId, res); } catch (e) {} })
+      _httpVia({ b64: !!b64, method: method || "GET", url: url, headers: headers, body: body == null ? "" : body })
+        .then(function (res) { try { window.__httpCb && window.__httpCb(reqId, res); } catch (e) {} })
         .catch(function (e) { try { window.__httpCb && window.__httpCb(reqId, { status: 0, error: String(e) }); } catch (_) {} });
     };
   }
@@ -651,6 +667,23 @@
       _rqQueue.push({ path:path, body:body, timeoutMs:timeoutMs, resolve:resolve, reject:reject }); _rqPump();
     });
   }
+  // ── 各板块子页(blob 同源)共用同一失效转移通道 + 跨板块只读合并 (根因级转移出 Worker·抗 429) ──────
+  //   暴露给子页 rn 垫片: __rtRelay = 失效转移 relay (P2P/直连隧道/ntfy 兜底·串行队列);
+  //   __rtRead = 只读「同请求合并 + 短TTL缓存」—— 多板块同窗口问同一 getState/额度只穿透一次,
+  //   砍掉触发 429 的冗余量并提速 (写后由子页 __rtBust 失效缓存使后续读反映变更)。
+  var _rrCache=Object.create(null), _rrFlight=Object.create(null), _RR_TTL=1500;
+  function _rrKey(path, body){ try{ return path+"|"+JSON.stringify(body||{}); }catch(e){ return path+"|?"; } }
+  function __rtRead(path, body, timeoutMs, ttl){
+    var k=_rrKey(path, body), t=(ttl==null?_RR_TTL:ttl), c=_rrCache[k];
+    if(c && (Date.now()-c.ts)<t) return Promise.resolve(c.res);
+    if(_rrFlight[k]) return _rrFlight[k];
+    var p=relay(path, body, timeoutMs).then(function(res){ _rrFlight[k]=null;
+      if(res && res.status>=200 && res.status<400) _rrCache[k]={ ts:Date.now(), res:res }; return res;
+    }, function(e){ _rrFlight[k]=null; throw e; });
+    _rrFlight[k]=p; return p;
+  }
+  function __rtBust(){ _rrCache=Object.create(null); }
+  try{ if(typeof window!=="undefined"){ window.__rtRelay=relay; window.__rtRead=__rtRead; window.__rtBust=__rtBust; } }catch(e){}
   //__P2P_END__
 
   // 资源原文 (板块 HTML / 引擎 JS) = 全网一致的静态死文件 → 走公共 CDN 直取。
