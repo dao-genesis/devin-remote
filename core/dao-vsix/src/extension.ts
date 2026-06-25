@@ -2819,8 +2819,9 @@ let bridgeProc: any = null;
 let bridgeUrl: string = '';
 let bridgeToken: string = '';
 // 帛书·「無死地」: cloudflared 脱宿主独立存活 — 日志/PID 落盘, 重载/重启宿主不带走隧道。
-const CF_LOG = path.join(BRIDGE_DIR, 'cloudflared.log');
-const CF_PID = path.join(BRIDGE_DIR, 'cloudflared.pid');
+// 独立闭环(鸡犬相闻·不相往来): 用 -vsix 后缀, 与常驻桥各自管各自的 cloudflared, 互不干扰。
+const CF_LOG = path.join(BRIDGE_DIR, 'cloudflared-vsix.log');
+const CF_PID = path.join(BRIDGE_DIR, 'cloudflared-vsix.pid');
 let cfPollTimer: any = null;
 
 function bridgeEnsureDir() { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); }
@@ -2992,12 +2993,7 @@ function bridgeHubApi(p: string): Promise<{ status: number; text: string }> {
 
 function bridgeFindCloudflared(): string {
     const { execSync } = require('child_process');
-    // 1. Check PATH
-    try {
-        const w = execSync('where cloudflared', { encoding: 'utf8', timeout: 5000 }).trim().split('\n')[0];
-        if (w && fs.existsSync(w.trim())) return w.trim();
-    } catch {}
-    // 2. Common locations
+    // 1. 已知位置优先(直接 .exe, 不走 npm wrapper 等间接脚本)
     const candidates = [
         path.join(os.homedir(), '.dao', 'bin', 'cloudflared.exe'),
         path.join(os.homedir(), '.dao', 'bin', 'cloudflared'),
@@ -3009,6 +3005,11 @@ function bridgeFindCloudflared(): string {
     for (const c of candidates) {
         if (fs.existsSync(c)) return c;
     }
+    // 2. PATH fallback(仅取 .exe 结尾的真实二进制, 跳过 npm wrapper 等脚本)
+    try {
+        const lines = execSync('where cloudflared', { encoding: 'utf8', timeout: 5000 }).trim().split('\n');
+        for (const l of lines) { const p = l.trim(); if (p && /\.exe$/i.test(p) && fs.existsSync(p)) return p; }
+    } catch {}
     return 'cloudflared'; // fallback to PATH
 }
 
@@ -3451,17 +3452,13 @@ async function bridgeAutoPersist(): Promise<void> {
         try { last = JSON.parse(fs.readFileSync(BRIDGE_AUTOSYNC_FILE, 'utf8')); } catch { /* 首次 */ }
         const now = Date.now();
         const winKey = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.hostname();
-        const pub = bridgeReadPublishedConn();
-        const connFresh = !!(pub && (pub.url || pub.relayUrl) && pub.ageMs < BRIDGE_SYNC_THROTTLE_MS);
         const throttled = !!(last.lastMs && (now - last.lastMs) < BRIDGE_SYNC_THROTTLE_MS);
         const windowChanged = !!(last.winKey && last.winKey !== winKey);
-        // 采纳已发布的新鲜连接 → 不与常驻桥重复起隧道(守柔)
-        if (pub && pub.url && pub.ageMs < BRIDGE_CONN_FRESH_MS) { bridgeUrl = pub.url; if (pub.token) bridgeToken = pub.token; }
-        // 无新鲜连接 → 起一条快速隧道(仅当 cloudflared 可用; spawn 失败守柔吞掉)
-        if (!connFresh) { try { await bridgeStartTunnel(false); } catch { /* 守柔 */ } }
+        // 独立闭环(鸡犬相闻·不相往来): 不读常驻桥 conn.json, 自己无隧道即自起, 与其他插件互不干扰。
+        if (!bridgeUrl) { try { await bridgeStartTunnel(false); } catch { /* 守柔 */ } }
         // 内穿 MD 同步到当前账号 Knowledge(反向注入框架再扩散到所有账号) — 低频
         if (!throttled || windowChanged) { try { if (ws.devinAuth1 && ws.devinOrgId) await bridgeInjectKnowledge(); } catch { /* 守柔 */ } }
-        try { fs.writeFileSync(BRIDGE_AUTOSYNC_FILE, JSON.stringify({ lastMs: now, winKey, url: bridgeUrl || (pub && pub.url) || '', source: pub ? pub.source : 'started' }, null, 2), 'utf8'); } catch { /* 守柔 */ }
+        try { fs.writeFileSync(BRIDGE_AUTOSYNC_FILE, JSON.stringify({ lastMs: now, winKey, url: bridgeUrl || '', source: 'started' }, null, 2), 'utf8'); } catch { /* 守柔 */ }
         // v3.17.4 · 同步后扩散最新隧道信息到所有账号(签名变化才真正注, 守柔省网)
         bridgeScheduleReinject('autoPersist');
         refreshDaoCloudMiddlePanel();
@@ -3527,10 +3524,8 @@ function bridgeProbeAlive(rawUrl: string, timeoutMs: number = 6000, token: strin
     });
 }
 function bridgeEffectiveUrl(): string {
-    if (bridgeUrl) return bridgeUrl;
-    // 含 relay-only 连接(仅 relayUrl 无透明 url): 旧法漏探 → 隧道断也不刷新。此处兜底取 relayUrl。
-    try { const c = bridgeReadPublishedConn(); if (c && (c.url || c.relayUrl)) return c.url || c.relayUrl || ''; } catch { /* 守柔 */ }
-    return '';
+    // 独立闭环(鸡犬相闻·不相往来): 只用进程内自有隧道 URL, 不读外部 conn.json, 不采纳常驻桥地址。
+    return bridgeUrl;
 }
 function bridgeEffectiveToken(): string {
     if (bridgeToken) return bridgeToken;
@@ -3555,32 +3550,17 @@ function bridgeMcpToken(): string {
 //   汇集候选公网地址(进程内隧道 + 各已发布 conn 文件), 按新鲜度逐一 /api/health 探活,
 //   返回首个真实可达的 {url, token}; 全死返回 null(交调用方「宁可不注入也不以死地址覆盖良态」)。
 //   根治: 多实例/旧实例把「(未连接)」或已轮换的死地址写回账号知识库, 致云端读库连不上端口。
+// 独立闭环(鸡犬相闻·不相往来): 只探测进程内自有隧道, 不读外部 conn 文件, 不采纳常驻桥地址。
 async function bridgeResolveLiveConn(timeoutMs: number = 5000): Promise<{ url: string; token: string; source: string } | null> {
-    const cands: { url: string; token: string; mtime: number; source: string }[] = [];
-    if (bridgeUrl) cands.push({ url: bridgeUrl, token: bridgeToken || ws.token || '', mtime: Number.MAX_SAFE_INTEGER, source: 'inprocess' });
-    const files = [
-        path.join(BRIDGE_DIR, 'conn.json'),
-        path.join(os.homedir(), '.dao', 'cf-hub-conn.json'),
-        path.join(BRIDGE_DIR, 'connection.json'),
-    ];
-    for (const f of files) {
-        try {
-            const st = fs.statSync(f);
-            const j = JSON.parse(fs.readFileSync(f, 'utf8'));
-            const url = String(j.url || j.relayUrl || j.relay || '').trim();
-            if (!/^https?:\/\//.test(url) || /\/\/api\.trycloudflare\.com\/?$/.test(url)) continue;
-            cands.push({ url, token: String(j.token || ''), mtime: st.mtimeMs, source: path.basename(f) });
-        } catch { /* skip */ }
-    }
-    cands.sort((a, b) => b.mtime - a.mtime);  // 新鲜度降序: 先探最新轮换出的地址
-    const seen = new Set<string>();
-    for (const c of cands) {
-        if (seen.has(c.url)) continue;
-        seen.add(c.url);
-        const tok = c.token || bridgeToken || ws.token || '';
-        try { if (await bridgeProbeAlive(c.url, timeoutMs, tok)) { daoLoopLog('tunnel', 'resolve-live → ' + c.url + ' (src=' + c.source + ')'); return { url: c.url, token: tok, source: c.source }; } } catch { /* 守柔 */ }
-    }
-    daoLoopLog('tunnel', 'resolve-live → 无活地址(候选' + cands.length + '皆死)');
+    if (!bridgeUrl) { daoLoopLog('tunnel', 'resolve-live → 无进程内隧道'); return null; }
+    const tok = bridgeToken || ws.token || '';
+    try {
+        if (await bridgeProbeAlive(bridgeUrl, timeoutMs, tok)) {
+            daoLoopLog('tunnel', 'resolve-live → ' + bridgeUrl + ' (src=inprocess)');
+            return { url: bridgeUrl, token: tok, source: 'inprocess' };
+        }
+    } catch { /* 守柔 */ }
+    daoLoopLog('tunnel', 'resolve-live → 进程内隧道探死');
     return null;
 }
 let _bridgeLivenessInflight = false;
@@ -3619,40 +3599,17 @@ async function bridgeLivenessTick(): Promise<void> {
         // 打不通 → 刷新
         try { console.log('[dao] bridge liveness DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新'); } catch { /* 守柔 */ }
         daoLoopLog('tunnel', 'probe DEAD (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 刷新+重注');
-        // 0) ① 自愈优先: 在所有候选地址(进程内 ∪ 各已发布 conn)里探活择优 — 常驻桥可能已轮换出新活地址。
-        //    找到真实可达地址即「无缝切换」过去并重注知识库, 免去重启隧道(更快·更稳); 全死才落入下方重启兜底。
-        if (!bridgeOk) {
-            try {
-                const live = await bridgeResolveLiveConn(5000);
-                if (live && live.url) {
-                    // 重注判据: 进程内地址变了 或 知识库实注地址 ≠ 此活址(覆盖 bridgeUrl 已先行收敛、唯独 KB 滞留旧址的脱钩盲区)。
-                    const needReinject = (live.url !== bridgeUrl) || (live.url !== _lastInjectedBridgeUrl);
-                    bridgeUrl = live.url; if (live.token) bridgeToken = live.token;
-                    _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0;
-                    daoLoopLog('tunnel', 'DEAD→候选探活得活地址 ' + live.url + ' (src=' + live.source + ') → 无缝切换' + (needReinject ? '+重注' : ''));
-                    try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
-                    if (needReinject) { try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ } bridgeScheduleReinject('liveness-switch-live'); refreshDaoCloudMiddlePanel(); }
-                    return;
-                }
-            } catch { /* 守柔 */ }
-        }
-        // 1) 重读已发布连接(常驻桥/host MCP 可能已轮换出新地址) → 采纳
-        try { const c = bridgeReadPublishedConn(); if (c && c.url && c.url !== bridgeUrl) { bridgeUrl = c.url; if (c.token) bridgeToken = c.token; } } catch { /* 守柔 */ }
+        // 独立闭环: 不在外部 conn 里找活地址, 直接走下方重启自有隧道。
+        // 独立闭环(鸡犬相闻·不相往来): 不读常驻桥 conn, 仅管理自有进程内隧道。
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
-        // 2) 桥死 → 后端自动重启隧道 (用户诉求: 系统实时自检, 检测到问题就自动重启隧道)
         if (!bridgeOk) {
             _bridgeLivenessFail++;
-            const pub = bridgeReadPublishedConn();
-            const connFresh = !!(pub && pub.url && pub.ageMs < BRIDGE_SYNC_THROTTLE_MS);
             if (bridgeUrl) {
-                // 进程内隧道由本插件持有 → 停止+重启 (保持命名/快速模式), 让 cloudflared 重新建链
-                try { const wasNamed = !!bridgeReadNamedToken(); console.log('[dao] bridge DEAD → 自动重启隧道 (named=' + wasNamed + ', fail=' + _bridgeLivenessFail + ')'); bridgeStopTunnel(); await bridgeStartTunnel(wasNamed); } catch { /* 守柔 */ }
-            } else if (!connFresh) {
-                // 无进程内隧道且无新鲜发布连接 → (仅当 cloudflared 可用)起一条快速隧道
+                // 进程内隧道由本插件持有 → 停止+重启, 让 cloudflared 重新建链
+                try { const wasNamed = !!bridgeReadNamedToken(); console.log('[dao] tunnel DEAD → 自动重启 (named=' + wasNamed + ', fail=' + _bridgeLivenessFail + ')'); bridgeStopTunnel(); await bridgeStartTunnel(wasNamed); } catch { /* 守柔 */ }
+            } else {
+                // 无进程内隧道 → 自起快速隧道
                 try { await bridgeStartTunnel(false); } catch { /* 守柔 */ }
-            } else if (_bridgeLivenessFail >= 3) {
-                // 常驻桥发布连接仍探测为死且连续失败 → 兜底自起快速隧道, 不再死等常驻桥轮换
-                try { console.log('[dao] bridge DEAD x' + _bridgeLivenessFail + ' (常驻发布连接无效) → 兜底自起隧道'); await bridgeStartTunnel(false); } catch { /* 守柔 */ }
             }
         }
         // 3) 强制把最新地址重注到各账号(清签名 → 绕过"无变化不重注")
@@ -3978,6 +3935,7 @@ const S={
   bridge:${JSON.stringify(bridge || null)},
   hostCaps:${JSON.stringify(hostCaps || { appName: 'VS Code', isCascade: false, hasConvTracking: false })},
   inject:null,
+  injectStatus:{},
   injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],automations:[],messageLimit:null,messageLimitAuto:true,messageLimitOffset:3,lastInjectedOrg:''},
   tab:'${_solo || 'overview'}',
   data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]},
@@ -4438,7 +4396,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='compInfo'){S.comp=S.comp||{};S.comp.info=d.info||null;if(S.tab==='computer')rComputer()}else if(d.type==='compResult'){S.comp=S.comp||{};S.comp.last={cmd:d.cmd,ok:d.ok,code:d.code,stdout:d.stdout,stderr:d.stderr};toast('命令'+(d.ok?'完成':'失败')+(d.code!=null?(' · 退出码 '+d.code):''),d.ok);if(S.tab==='computer')rComputer()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy)}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){toast(d.command+' '+(d.ok?'✓':'✗'),d.ok);if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='compInfo'){S.comp=S.comp||{};S.comp.info=d.info||null;if(S.tab==='computer')rComputer()}else if(d.type==='compResult'){S.comp=S.comp||{};S.comp.last={cmd:d.cmd,ok:d.ok,code:d.code,stdout:d.stdout,stderr:d.stderr};toast('命令'+(d.ok?'完成':'失败')+(d.code!=null?(' · 退出码 '+d.code):''),d.ok);if(S.tab==='computer')rComputer()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -4605,7 +4563,29 @@ function rInject(){
   const p=S.injectProfile||{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],automations:[],messageLimit:null};
   if(!Array.isArray(p.automations))p.automations=[];
   const tgl=(on,fn)=>'<span onclick="'+fn+'" style="cursor:pointer;display:inline-block;width:40px;height:20px;border-radius:10px;background:'+(on?'var(--success)':'var(--muted)')+';position:relative;vertical-align:middle"><span style="position:absolute;top:2px;left:'+(on?'22px':'2px')+';width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s"></span></span>';
-  let h='<div class="st">反向注入 · 通用自动注入 · 无为而无不为</div>';
+  // ── 实况状态面板 (道法自然·最小化反馈) ──
+  var is=S.injectStatus||{};
+  var ij=S.inject||{};
+  let h='<div class="st">☯ 反向注入 · 实况</div>';
+  h+='<div class="card" style="font-size:11px">';
+  // 隧道状态
+  var tAlive=is.tunnelAlive;
+  var tUrl=is.tunnelUrl||'';
+  h+='<div class="cr"><span class="l">隧道</span><span class="v" style="color:'+(tAlive?'var(--success)':'var(--warn)')+'">'+(tAlive?'● 在线':'○ 离线/启动中')+(tUrl?(' · <span style="font-size:10px;color:var(--muted)">'+esc(tUrl.replace(/^https:\/\//, '').slice(0,32))+(tUrl.length>38?'…':'')+'</span>'):'')+'</span></div>';
+  h+='<div class="cr"><span class="l">本地端口</span><span class="v">'+(is.localPort||'—')+'</span></div>';
+  if(is.tunnelFails>0)h+='<div class="cr"><span class="l">连续探活失败</span><span class="v" style="color:var(--warn)">'+is.tunnelFails+'</span></div>';
+  // 注入状态
+  var ijTime=ij.timestamp?new Date(ij.timestamp).toLocaleString():'';
+  h+='<div class="cr"><span class="l">上次注入</span><span class="v" style="font-size:10px">'+(ijTime||'<span style="color:var(--muted)">尚未注入</span>')+'</span></div>';
+  if(ij.knowledge!=null||ij.playbook!=null||ij.secret!=null){h+='<div class="cr"><span class="l">注入内容</span><span class="v" style="font-size:10px">K:'+(ij.knowledge||0)+' P:'+(ij.playbook||0)+' S:'+(ij.secret||0)+(ij.git?' G:✓':'')+'</span></div>';}
+  if(is.lastInjectedUrl)h+='<div class="cr"><span class="l">已注入 URL</span><span class="v" style="font-size:10px;color:var(--muted)">'+esc(is.lastInjectedUrl.replace(/^https:\/\//, '').slice(0,36))+(is.lastInjectedUrl.length>42?'…':'')+'</span></div>';
+  if(p.lastInjectedOrg)h+='<div class="cr"><span class="l">上次注入 org</span><span class="v" style="font-size:10px">'+esc(p.lastInjectedOrg)+'</span></div>';
+  // 运行时长
+  if(is.uptime){var m=Math.floor(is.uptime/60),hr=Math.floor(m/60);h+='<div class="cr"><span class="l">插件运行</span><span class="v" style="font-size:10px;color:var(--muted)">'+(hr>0?(hr+'h'+String(m%60).padStart(2,'0')+'m'):(m+'m'))+'</span></div>';}
+  h+='</div>';
+  // 一键诊断修复按钮
+  h+='<div class="br" style="margin:6px 0 10px"><button class="btn primary" onclick="cmd(&#39;injectDiagnose&#39;)" title="一键检测隧道 → 有问题自动重建 → 自动反向注入">🔧 一键诊断修复</button></div>';
+  h+='<div class="st">反向注入 · 通用自动注入 · 无为而无不为</div>';
   h+='<p style="font-size:11px;color:var(--muted);line-height:1.6;margin:4px 0 10px">通用模块：配置一次，此后账号随 IDE 登录自动切换时，系统按此清单<b>反向注入</b>到每个新账号，并(默认)清理旧账号的同名注入。默认道藏载荷：道法自然准则 · 内网穿透MD · 道德经/阴符经/道法自然 三剧本 · MCP 服务器同步。</p>';
   h+='<div class="card"><div class="cr"><span class="l">启用自动注入</span><span class="v">'+tgl(p.enabled,'ipToggle(&#39;enabled&#39;)')+'</span></div><div class="cr"><span class="l">切账号时清理旧账号</span><span class="v">'+tgl(p.autoCleanup,'ipToggle(&#39;autoCleanup&#39;)')+'</span></div>'+(p.lastInjectedOrg?'<div class="cr"><span class="l">上次注入 org</span><span class="v" style="font-size:10px">'+esc(p.lastInjectedOrg)+'</span></div>':'')+'</div>';
   const listSec=(title,kind,items,labelFn,addFn,editFn)=>{let s='<div class="st">'+title+' ('+items.length+')<button class="btn sm primary" style="float:right" onclick="'+addFn+'">+ 添加</button></div>';if(items.length){s+='<div class="card">';items.forEach((it,i)=>{s+='<div class="cr"><span class="l" style="font-size:12px">'+esc(labelFn(it))+'</span><span class="v">'+(editFn?'<button class="btn sm" title="查看 / 修改" onclick="'+editFn+'('+i+')">✏ 改</button> ':'')+'<button class="btn sm danger" onclick="ipRemove(&#39;'+kind+'&#39;,'+i+')">删</button></span></div>'});s+='</div>'}else{s+='<p style="font-size:11px;color:var(--muted);margin:4px 0 8px">（空）</p>'}return s};
@@ -4761,6 +4741,16 @@ function refreshDaoCloudMiddlePanel() {
         const s = JSON.parse(fs.readFileSync(ws.injectStateFile, 'utf8'));
         data.inject = { secret: s.secret, knowledge: s.knowledge, playbook: s.playbook, git: s.git, timestamp: s.timestamp };
     } catch { data.inject = null; }
+    // 反向注入实况状态(状态面板用)
+    data.injectStatus = {
+        tunnelUrl: bridgeUrl || '',
+        tunnelAlive: _bridgeLastAliveMs > 0 && (Date.now() - _bridgeLastAliveMs) < 90000,
+        tunnelLastAlive: _bridgeLastAliveMs || 0,
+        tunnelFails: _bridgeLivenessFail,
+        lastInjectedUrl: _lastInjectedBridgeUrl || '',
+        localPort: ws.port || 9920,
+        uptime: process.uptime(),
+    };
     postMiddle(data);
 }
 
@@ -4768,7 +4758,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'openRoutedPanel', 'compInfo', 'compRun', 'compTerminal', 'compOpenFile', 'compReveal'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'openRoutedPanel', 'compInfo', 'compRun', 'compTerminal', 'compOpenFile', 'compReveal', 'injectDiagnose'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -5832,6 +5822,30 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'bridgeInjectKnowledge': {
                 const injected = await bridgeInjectKnowledge();
                 reply({ type: 'actionResult', command: 'bridgeInjectKnowledge', ok: injected });
+                break;
+            }
+            // 一键诊断修复: 检测隧道 → 有问题自动重建 → 自动反向注入 → 刷新面板
+            case 'injectDiagnose': {
+                let diag = '诊断开始…\n';
+                const eff = bridgeEffectiveUrl();
+                diag += '隧道 URL: ' + (eff || '(无)') + '\n';
+                let alive = false;
+                if (eff) { try { alive = await bridgeProbeAlive(eff, 8000, bridgeEffectiveToken()); } catch { /* 守柔 */ } }
+                diag += '隧道探活: ' + (alive ? '✓ 在线' : '✗ 离线') + '\n';
+                if (!alive) {
+                    diag += '→ 自动重建隧道…\n';
+                    try { bridgeStopTunnel(); await bridgeStartTunnel(!!bridgeReadNamedToken()); diag += '→ 隧道重建完成 · URL: ' + (bridgeUrl || '(等待)') + '\n'; } catch { diag += '→ 隧道重建失败\n'; }
+                }
+                diag += '→ 执行反向注入…\n';
+                try {
+                    const injOk = await bridgeInjectKnowledge();
+                    diag += '→ 反向注入: ' + (injOk ? '✓ 成功' : '✗ 失败/无活地址') + '\n';
+                    try { _lastBridgeReinjectSig = ''; bridgeScheduleReinject('diagnose'); } catch { /* 守柔 */ }
+                } catch { diag += '→ 反向注入异常\n'; }
+                diag += '诊断完成。';
+                refreshDaoCloudMiddlePanel();
+                reply({ type: 'actionResult', command: 'injectDiagnose', ok: true, text: diag });
+                vscode.window.showInformationMessage(diag.split('\n').filter((l: string) => l.includes('✓') || l.includes('✗') || l.includes('完成')).join(' | ') || '诊断完成');
                 break;
             }
             // ═══ 移植自独立 dao-bridge: CloudFlare 控制台/登录/退出 + 能力自测 ═══
