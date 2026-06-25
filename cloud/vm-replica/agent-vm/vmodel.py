@@ -165,23 +165,54 @@ class WorldModel:
     def __init__(self, path=None):
         self.path = path
         self.ep = []
+        self.cal = []  # per-surface gain calibrations: {'a', 'ctx', 'gain'} (round-24)
         if path and os.path.exists(path):
             try:
-                self.ep = json.load(open(path, 'r', encoding='utf-8'))
+                data = json.load(open(path, 'r', encoding='utf-8'))
+                if isinstance(data, dict):  # round-24 format: episodes + calibrations
+                    self.ep = data.get('ep', []); self.cal = data.get('cal', [])
+                else:  # legacy format: a bare list of episodes
+                    self.ep = data
             except Exception:
-                self.ep = []
+                self.ep = []; self.cal = []
 
     def record(self, action_key, ctx, desc):
         self.ep.append({'a': action_key, 'ctx': ctx, 'd': desc})
 
+    def calibrate(self, action_key, ctx, obs):
+        """Record this surface's LOCAL GAIN for an action from a single observation (round-24).
+
+        Round-23 proved magnitude is surface-specific gain, so cross-surface transfer can only trust
+        the gain-invariant footprint and must flag gain_known=False. But the act of verifying ALREADY
+        moved this surface and measured its response -- that one observation IS the gain. Storing it
+        (keyed by the surface's perceptual context) lets the NEXT prediction here use the measured gain
+        instead of an incommensurable cross-surface average, flipping gain_known False->True with zero
+        extra actions and zero vision: the verifying drag doubles as the calibration probe (active
+        inference). We keep only the most recent calibration per surface so the gain tracks the surface
+        as it is re-encountered."""
+        self.cal = [c for c in self.cal
+                    if not (c.get('a') == action_key and cos(ctx, c.get('ctx') or []) >= 0.98)]
+        self.cal.append({'a': action_key, 'ctx': ctx, 'gain': obs['mag']})
+
+    def _best_cal(self, action_key, ctx):
+        """Nearest stored gain calibration for this action: (gain, ctx_cosine) or (None, 0.0)."""
+        best = None; bs = -1.0
+        for c in self.cal:
+            if c.get('a') != action_key:
+                continue
+            s = cos(ctx, c.get('ctx') or []) if ctx is not None else 1.0
+            if s > bs:
+                bs = s; best = c
+        return (best['gain'], bs) if best is not None else (None, 0.0)
+
     def save(self):
         if self.path:
-            json.dump(self.ep, open(self.path, 'w', encoding='utf-8'))
+            json.dump({'ep': self.ep, 'cal': self.cal}, open(self.path, 'w', encoding='utf-8'))
 
     def seen(self, action_key):
         return sum(1 for e in self.ep if e['a'] == action_key)
 
-    def predict(self, action_key, ctx=None, k=8):
+    def predict(self, action_key, ctx=None, k=8, cal_thr=0.6):
         """Expected change descriptor for an action in a context: context-weighted average of the
         fingerprints/magnitudes of past episodes with that action. None if never seen.
 
@@ -208,8 +239,20 @@ class WorldModel:
                 sfp[i] += e['d'].get('sfp', [0.0] * L)[i]
             mag += e['d']['mag']; cx += e['d']['cx']; cy += e['d']['cy']; aniso += e['d'].get('aniso', 0.0)
         fp = _l2([v / n for v in fp]); sfp = _l2([v / n for v in sfp])
-        return {'mag': mag / n, 'cx': cx / n, 'cy': cy / n, 'aniso': aniso / n, 'fp': fp, 'sfp': sfp,
+        pred = {'mag': mag / n, 'cx': cx / n, 'cy': cy / n, 'aniso': aniso / n, 'fp': fp, 'sfp': sfp,
                 'n': n, 'ctx_sim': round(ctx_sim, 3)}
+        # round-24: if this surface has been locally gain-calibrated, replace the (incommensurable)
+        # cross-surface average magnitude with the MEASURED surface gain, so a transfer can be held to
+        # a real size again. ctx_sim still reflects episode provenance (transfer stays honest); the
+        # calibration only supplies the gain we physically measured here.
+        cal_gain, cal_sim = (None, 0.0)
+        if ctx is not None and self.cal:
+            cal_gain, cal_sim = self._best_cal(action_key, ctx)
+        calibrated = cal_gain is not None and cal_sim >= cal_thr
+        if calibrated:
+            pred['mag'] = cal_gain
+        pred['calibrated'] = calibrated; pred['cal_sim'] = round(cal_sim, 3)
+        return pred
 
     def verify(self, action_key, ctx, obs, fp_thr=0.8, mag_tol=0.5, locus_tol=0.18, mag_floor=0.0):
         """Score an observed outcome against the learned expectation for this action, using only the
@@ -249,14 +292,19 @@ class WorldModel:
         # gain-invariant: the right-shaped footprint occurred AND it was a real (non-noise) effect
         effect_happened = obs['mag'] >= mag_floor
         shape_present = (fp_sim >= fp_thr) and effect_happened
-        gain_known = not transfer
-        if transfer:
-            present = shape_present
-        else:
+        # round-24: gain is known on a FAMILIAR surface (interpolation) OR once a transfer surface has
+        # been locally calibrated. When gain is known we hold the effect to a real SIZE again; on an
+        # un-calibrated transfer presence stays gain-invariant (shape only) and gain is flagged unknown.
+        calibrated = bool(pred.get('calibrated'))
+        gain_known = (not transfer) or calibrated
+        if gain_known:
             present = shape_present and (mag_ratio <= mag_tol)
+        else:
+            present = shape_present
         match = present and (locus_diff <= locus_tol)
         return {'known': True, 'match': match, 'present': present, 'transfer': transfer,
                 'shape_present': shape_present, 'gain_known': gain_known,
+                'calibrated': calibrated, 'cal_sim': pred.get('cal_sim', 0.0),
                 'ctx_sim': ctx_sim, 'fp_sim': round(fp_sim, 3),
                 'locus_diff': round(locus_diff, 3), 'mag_ratio': round(mag_ratio, 3),
                 'aniso_diff': round(aniso_diff, 3), 'sfp_sim': round(sfp_sim, 3),

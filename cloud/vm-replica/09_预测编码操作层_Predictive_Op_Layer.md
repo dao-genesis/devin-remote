@@ -497,3 +497,63 @@ node     |  True  False   False True      0.45    0.168   0.395   0.62      Fals
 
 > 大白如辱，廣德如不足——把"绝对量"这条伪确定性损去，只认归一之形，反得跨面之真；
 > 知增益之所不知而不饰，是以 present 由 0 而 2，由伪而实。為學者日益，聞道者日損。
+
+---
+
+## 24. 迁移面增益的一次性自标定：验证动作即探针（round-24）
+
+§23 诚实地停在一句话上：跨面迁移只能信**增益无关的形状足迹**，绝对幅度（增益）因面而
+异、跨面平均不可比，故迁移面一律 `gain_known=False`，不伪造尺寸匹配。留下的问题是：模
+型能不能**自己**把这条缺口补上，而不靠视觉？
+
+能，而且代价**早已付过**。要在一个新面上"验证"一次拖拽，agent 必须真的拖一次——而这
+一次观测，本身就量到了该面的响应，即它的增益。于是**验证动作天然兼作标定探针**（主动
+推断 active inference）：观测一次 → 存下该面局部增益 → 下一次在此面拖拽就能重新按真实
+尺寸来判（`gain_known` 由 False 翻 True），**零额外动作、零视觉**。
+
+**实现（round-24，三处外科改动）**：
+- `WorldModel.calibrate(action, ctx, obs)`：把单次观测的 `obs['mag']` 作为该面（以感知
+  指纹 `ctx` 为键）对该动作的**局部增益**存入 `self.cal`；同键（cos≥0.98）只留最新一条。
+- `predict()`：若当前 `ctx` 与某条标定的 cos ≥ `cal_thr`(0.6)，就用**实测增益**替换那个
+  互不可比的跨面平均 `mag`，并置 `calibrated=True`。`ctx_sim` 仍按 episode 出处计算——
+  **迁移身份不变**（仍是迁移），只是补上了"在此面亲手量到的增益"这一维。
+- `verify()`：`gain_known = (非迁移) 或 calibrated`。一旦 gain_known，`present` 重新要求
+  `mag_ratio ≤ mag_tol`（按真实尺寸判）；未标定的迁移仍只看形状。
+- 活体 agent（`vm_inner_agent`）在每次 verify 后自动闭环：`known ∧ shape_present ∧
+  ¬gain_known` 即 `calibrate()` 并落盘——识得手势、形状对、增益没底，就用这一次把增益量
+  下来。持久化格式从"裸 episode 列表"升级为 `{ep, cal}`，向后兼容旧文件。
+
+**实测（纯像素，零视觉；leave-one-out，冷拖=探针，暖拖=再遇）**：
+```
+held-out | shape | cold: gain_known present mag_ratio | warm: calibrated gain_known present mag_ratio
+orbit    | True  | False  True  0.694 | False False False 0.811
+pan      | True  | False  True  0.645 | True  True  False 0.006
+paint    | False | False  False 0.537 | False False False 0.999
+timeline | False | False  False 1.0   | False False False 1.0
+node     | False | False  False 0.617 | False False False 1.0
+```
+
+**诚实结论**：
+- **机制成立**：`pan` 一次探针即把增益锁定——`mag_ratio` 由 0.645 降到 **0.006**，
+  `gain_known` 由 False 翻 True，零视觉。这正是 §23 留下缺口的闭合。
+- **形状能标的才标得了增益**：只有足迹形状真迁移的 2 面（orbit/pan）触发标定；
+  paint/timeline/node 形状本就不认（shape=False），自然不标定、`gain_known` 仍 False——
+  **认不出形状的效果，谈不上标定它的增益**，如实不强求。
+- **诚实的边界：自变形面的上下文漂移**。`orbit` 冷拖存了标定，但立方体**被这一拖转动
+  了**，再遇时画面已不同（cal_sim < 0.6），旧标定按键对不上、不敢套用——故 warm
+  `calibrated=False`。增益标定以"这还是同一个面吗"的感知指纹为键，对会**自我改变外观**
+  的面（旋转/平移使视图漂移），第二次相遇可能已"面目全非"。这是真实存在的限制，记录在
+  案，不藏。
+- **present 暂仍 False 是另一维的事**：即便 pan 增益标定到 0.006，warm 的 present 仍
+  False，因为该次拖拽的**足迹形状**与所学不同（动态面逐拍 fp 会变，§14 已记）——增益维
+  的成功与形状维的逐拍方差是**正交**的两件事，不混为一谈。
+- **零回归**：未调用 calibrate 时（`self.cal` 空），predict/verify 与 round-23 完全一致；
+  universal/canvas/escalate/servo/goalseek/flow 全绿，present 仍 2/5（冷拖单次）。
+
+下一缺口（留给 round-25）：让感知指纹对"同一面的自变形"更稳健（旋转/平移近似不变的
+context），使 orbit 这类自变形面也能跨相遇复用增益——**形状靠迁移免学，增益靠一次标定
+补齐，而标定要认得出'还是这片面'**。
+
+> 絕利一源，用師十倍——验证那一下本就要花，省去它另起的"标定动作"，一源而十倍其用；
+> 知其所不知而不饰：pan 标得（0.006）则言成，orbit 漂移则言其漂移。聞道者日損，損其伪确定，
+> 而增益自一次而真。
