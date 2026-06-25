@@ -1418,6 +1418,12 @@ def act(body):
         v = wm.verify(akey, ctx, obs)
         if eff.get('learn', True):
             wm.record(akey, ctx, obs); wm.save()
+        # round-24 active-inference: a recognised gesture whose footprint SHAPE transferred but whose
+        # gain we could not vouch for (transfer, gain_known=False) was just physically measured by this
+        # very verification -- store that one observation as the surface's local gain so the NEXT drag
+        # here is held to a real size (gain_known True) with no extra action and no vision.
+        if eff.get('calibrate', True) and v.get('known') and v.get('shape_present') and not v.get('gain_known'):
+            wm.calibrate(akey, ctx, obs); wm.save()
         conf, esc = _vmodel.escalation_decision(v)
         eff_res = {'action': akey, 'region': list(eff_region),
                    'obs': {'mag': obs['mag'], 'cx': obs['cx'], 'cy': obs['cy']},
