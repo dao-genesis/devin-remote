@@ -153,6 +153,27 @@ becomes `https://www.iana.org/help/example-domains`.
 never the limit. When something "can't" work, suspect your own aim before
 blaming the platform; verify with `elementFromPoint` instead of inventing a law.
 
+### F045 — the test harness crashes on a legacy console codepage
+**Surface:** `python test_live.py` from a fresh Windows shell (no
+`PYTHONIOENCODING` set) aborts mid-run with
+`UnicodeEncodeError: 'charmap' codec can't encode...` — *before* any check can
+fail or pass. The toolkit drove the browser fine; the harness just couldn't
+*print* its own results.
+**Mechanism:** Python binds `sys.stdout` to the console codepage (e.g. `cp1252`
+on this VM). The result lines carry Unicode — CJK from the type-tests and the
+`—` em-dash detail separator — which cp1252 cannot encode, so the very act of
+reporting blows up. Forcing UTF-8 via `PYTHONIOENCODING=utf-8` masked it, but a
+plain `python test_live.py` (exactly what the environment blueprint runs) would
+crash in any future session.
+**Primitive:** at import time the harness reconfigures `sys.stdout`/`sys.stderr`
+to `encoding="utf-8", errors="backslashreplace"` when `.reconfigure` exists, so
+output is codepage-independent and never raises on an unrepresentable glyph.
+**Proof:** `unset PYTHONIOENCODING; python test_live.py` → `14/14 checks passed`.
+**Lesson (道法自然):** the report channel is part of the system. A tool that
+can act but cannot *speak its result* on the plainest console is not yet whole;
+make the floor (stdout) tolerate reality (any glyph) instead of demanding the
+environment be configured first.
+
 ### Test-harness friction — `id="name"` collides with `window.name`
 Not a product friction, but recorded because it cost real debugging time: a
 fixture used `<div id=name>`, and `name` resolves to the special global

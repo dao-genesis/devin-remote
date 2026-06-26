@@ -18,6 +18,14 @@ import sys
 import tempfile
 import time
 
+# Results carry Unicode (CJK type-tests, em-dash detail separators). A legacy
+# console codepage (e.g. cp1252 on Windows) would crash printing them, so force
+# the streams to UTF-8 where the runtime supports it.
+for _stream in (sys.stdout, sys.stderr):
+    _rc = getattr(_stream, "reconfigure", None)
+    if _rc is not None:
+        _rc(encoding="utf-8", errors="backslashreplace")
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from browser import Browser  # noqa: E402
