@@ -2192,6 +2192,52 @@ def round_key_activate(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_key_step(b: Browser, offline: bool) -> None:
+    print("R50: arrow-key step a keyboard-only slider (F086) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>slider</title>"
+            b"<div id=sld role=slider tabindex=0 aria-valuenow=5 aria-valuemin=0 "
+            b"aria-valuemax=10 style='width:200px;height:30px;border:1px solid'>"
+            b"val:5</div>"
+            b"<div id=plain style='width:200px;height:30px;border:1px solid'>"
+            b"notab</div>"
+            b"<script>var v=5;var s=document.getElementById('sld');"
+            b"s.addEventListener('keydown',function(e){"
+            b"if(e.key==='ArrowRight'&&v<10){v++;}"
+            b"else if(e.key==='ArrowLeft'&&v>0){v--;}else return;"
+            b"s.setAttribute('aria-valuenow',v);s.textContent='val:'+v;});</script>")
+    sp = _serve(8979, page)
+
+    def now() -> int:
+        return int(b.eval(
+            "document.getElementById('sld').getAttribute('aria-valuenow')"))
+    try:
+        b.navigate("http://127.0.0.1:8979/")
+        time.sleep(0.2)
+        # Neither a click nor Enter/Space moves a keyboard-only slider.
+        check("a click leaves the slider unmoved",
+              b.click("#sld") is True and now() == 5, repr(now()))
+        check("key_activate (Enter) also leaves it unmoved",
+              b.key_activate("#sld") is True and now() == 5, repr(now()))
+        # Arrow taps step it precisely.
+        check("key_step ArrowRight x3 steps it up to 8",
+              b.key_step("#sld", "ArrowRight", times=3) is True and now() == 8,
+              repr(now()))
+        check("key_step ArrowLeft x2 steps it back to 6",
+              b.key_step("#sld", "ArrowLeft", times=2) is True and now() == 6,
+              repr(now()))
+        check("a single default ArrowRight tap reaches 7",
+              b.key_step("#sld") is True and now() == 7, repr(now()))
+        # Honest refusals.
+        check("key_step on a non-focusable element returns False",
+              b.key_step("#plain", "ArrowRight") is False)
+        check("key_step on an absent element returns False",
+              b.key_step("#nope", "ArrowRight") is False)
+        check("key_step with an unknown key returns False and does nothing",
+              b.key_step("#sld", "NotAKey") is False and now() == 7, repr(now()))
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2210,7 +2256,8 @@ def main() -> int:
               round_ctrl_multi_select, round_shift_range_select,
               round_nested_submenu, round_drag_reorder,
               round_scroll_into_view, round_double_click,
-              round_press_hold, round_zoom_pane, round_key_activate]
+              round_press_hold, round_zoom_pane, round_key_activate,
+              round_key_step]
     for r in rounds:
         try:
             r(b, offline)

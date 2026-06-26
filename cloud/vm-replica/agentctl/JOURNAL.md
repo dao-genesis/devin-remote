@@ -1377,6 +1377,35 @@ whole art. 無有入於無間: the formless enters where there is no gap.
 
 ---
 
+## F086 — arrow-key step a keyboard-only slider (`key_step`) · R50
+
+**Friction:** Sliders, spinners, listboxes, menubars, radio groups, date pickers,
+tab strips — a huge family of widgets move *only* on `keydown` of
+Arrow/Home/End/Page keys against a focused element, and ignore the mouse. A
+`role="slider"` advances on `ArrowRight`; clicking it is a no-op and
+`key_activate` (F085, Enter/Space) never moves it either — yet both return `True`
+and lie. Setting a precise value is *N taps of an arrow*, not a click at a guessed
+pixel.
+**Mechanism:** `Input.dispatchKeyEvent` delivers to `document.activeElement`, and
+the widget's `keydown` handler reads `e.key` to decide its step direction. So the
+exact thing that distinguishes "increment" from "decrement" from "no-op" is the
+*named navigation key* — `ArrowRight` vs `ArrowLeft` vs anything else — carried on
+a faithful key event (right `key`/`code`/`windowsVirtualKeyCode`).
+**Primitive:** `Browser.key_step(selector, key="ArrowRight", times=1)` looks the
+key up in a navigation table (Arrows/Home/End/Page/Tab/Escape/Backspace/Delete →
+`False` for anything unknown, a refusal not a guess), focuses the element with the
+shared honest focus check (`_focus`, factored out of `key_activate`), then
+dispatches the key `times` times. Live: a click and an Enter both leave the slider
+at 5; `ArrowRight×3` → 8, `ArrowLeft×2` → 6, a default single tap → 7; a
+non-focusable element → `False`; an absent selector → `False`; an unknown key →
+`False` and the value is untouched. `288/288 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 知其雄，守其雌 — the value already sits at 5; you do not
+seize it to a pixel, you nudge it one notch at a time toward where it should rest.
+為者敗之 — clicking *forces* and fails; stepping *follows* the widget's own grammar
+(its key bindings) and succeeds. The strong grab loses; the soft tap arrives.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
