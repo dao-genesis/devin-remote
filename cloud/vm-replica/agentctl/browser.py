@@ -328,6 +328,26 @@ class Browser:
     def click_text(self, text: str, tag: str | None = None) -> bool:
         return self.click(text, by_text=True, tag=tag)
 
+    def context_click(self, selector: str, by_text: bool = False,
+                      tag: str | None = None, require_hit: bool = True) -> bool:
+        """Right-click to raise an app's own context menu (F067). Web apps replace
+        the OS menu with a DOM menu shown on the ``contextmenu`` event — a file
+        manager's row actions, an editor's spell menu, a data grid's cell options.
+        ``click`` only ever dispatches the **left** button, so that event never
+        fires and the menu (and every item inside it) stays unreachable. A human
+        presses the *right* button; Chrome raises ``contextmenu`` at the cursor.
+        We aim at the same hit-verified point ``click`` uses (so we don't fire into
+        an overlay and lie), then dispatch a right-button press/release, which
+        Chrome surfaces as a real ``contextmenu`` event the app handles. Returns
+        ``False`` if the target is absent or (under ``require_hit``) occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p:
+            return False
+        if p.get("occluded") and require_hit:
+            return False
+        self.click_xy(p["x"], p["y"], button="right")
+        return True
+
     def hover(self, selector: str) -> bool:
         c = self._center_of(selector)
         if not c:

@@ -1357,6 +1357,52 @@ def round_paste_pipeline(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_context_menu(b: Browser, offline: bool) -> None:
+    print("R31: raise an app's own right-click context menu (F067) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>ctx</title>"
+            b"<div id=t style='width:160px;height:100px;background:#cde'>row</div>"
+            b"<ul id=m style='display:none;position:fixed;margin:0'>"
+            b"<li id=del>Delete</li></ul>"
+            b"<script>var t=document.getElementById('t'),"
+            b"m=document.getElementById('m');window.__ctx=0;window.__left=0;"
+            b"t.addEventListener('click',function(){window.__left++;});"
+            b"t.addEventListener('contextmenu',function(e){e.preventDefault();"
+            b"  window.__ctx++;m.style.display='block';"
+            b"  m.style.left=e.clientX+'px';m.style.top=e.clientY+'px';});"
+            b"document.getElementById('del').addEventListener('click',function(){"
+            b"  window.__deleted=true;m.style.display='none';});"
+            b"</script>")
+    sp = _serve(8957, page)
+    try:
+        b.navigate("http://127.0.0.1:8957/")
+        time.sleep(0.2)
+        # Friction: a left click registers but never raises the contextmenu menu.
+        check("left click registers on the row", b.click_text("row") is True)
+        time.sleep(0.1)
+        check("a left click never raises the context menu",
+              b.eval("window.__left||0") >= 1 and b.eval("window.__ctx||0") == 0
+              and b.eval("getComputedStyle(document.getElementById('m'))"
+                         ".display") == "none")
+        # Primitive: context_click fires a real right-button contextmenu.
+        check("context_click reports it fired",
+              b.context_click("#t") is True)
+        check("the contextmenu event fired exactly once",
+              b.wait_for("window.__ctx===1", timeout=2),
+              repr(b.eval("window.__ctx||0")))
+        check("the app's own menu is now visible",
+              b.wait_for("getComputedStyle(document.getElementById('m'))"
+                         ".display==='block'", timeout=2))
+        # And its items are reachable.
+        check("a menu item raised by the right-click is clickable",
+              b.click_text("Delete") is True
+              and b.wait_for("window.__deleted===true", timeout=2))
+        # Truthful failure: an absent target is refused.
+        check("context_click refuses an absent target",
+              b.context_click("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1368,7 +1414,7 @@ def main() -> int:
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
               round_native_select, round_contenteditable, round_file_drop,
-              round_draw_path, round_paste_pipeline]
+              round_draw_path, round_paste_pipeline, round_context_menu]
     for r in rounds:
         try:
             r(b, offline)
