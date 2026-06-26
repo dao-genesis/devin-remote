@@ -309,6 +309,63 @@ class Browser:
                           {"type": t, "x": x, "y": y, "button": button,
                            "clickCount": 1})
 
+    def click_n_xy(self, x: float, y: float, count: int,
+                   button: str = "left") -> None:
+        """Click at ``x,y`` carrying ``clickCount`` (F071). A double (2) or triple
+        (3) press is what Chrome turns into a word- or paragraph-level selection;
+        ``click_xy`` hard-codes ``clickCount:1`` (a caret), so it can never select.
+        We escalate the count on the final press the way a human's repeated taps
+        do."""
+        self._move(x, y)
+        for n in range(1, count + 1):
+            self.cdp.call("Input.dispatchMouseEvent",
+                          {"type": "mousePressed", "x": x, "y": y,
+                           "button": button, "clickCount": n})
+            self.cdp.call("Input.dispatchMouseEvent",
+                          {"type": "mouseReleased", "x": x, "y": y,
+                           "button": button, "clickCount": n})
+
+    def _text_point_of(self, selector: str) -> dict | None:
+        """Centre of the element's first *text* rect (F071). A block's layout box
+        is often far wider than its glyphs, so its geometric centre falls in empty
+        space; double-clicking there selects nothing. A ``Range`` over the
+        contents reports the rectangles the text actually occupies — we aim at the
+        middle of the first one, a spot that lands on a real word."""
+        return self.eval(
+            "(function(){var el=window.__agentctl.deepQuery(%r);if(!el)return null;"
+            "var r=document.createRange();r.selectNodeContents(el);"
+            "var rs=r.getClientRects();if(!rs||!rs.length)return null;"
+            "var b=rs[0];return {x:b.left+b.width/2,y:b.top+b.height/2};})()"
+            % selector)
+
+    def select_word(self, selector: str) -> str | None:
+        """Double-click to select the word under a point (F071). Formatting
+        toolbars, "copy selection", highlight/define popovers all gate on a
+        *non-collapsed* Selection; a plain ``click`` collapses the caret to a
+        zero-width point and ``getSelection()`` stays empty, so the toolbar never
+        enables. A human double-clicks on a word. We aim at the element's first
+        text rect (not its wider layout box, whose centre is blank), then press
+        with ``clickCount:2`` — the signal Chrome turns into a word selection.
+        Returns the selected string (``''`` if nothing landed), or ``None`` if the
+        target is absent."""
+        p = self._text_point_of(selector)
+        if not p:
+            return None
+        self.click_n_xy(p["x"], p["y"], 2)
+        return self.eval("String(getSelection())")
+
+    def select_paragraph(self, selector: str) -> str | None:
+        """Triple-click to select the whole line/paragraph under a point (F071).
+        Same gate as :meth:`select_word`, one rung wider: a triple-click
+        (``clickCount:3``) selects the entire block, the unit a human grabs to
+        re-style or replace a paragraph. Returns the selected string, or ``None``
+        if the target is absent."""
+        p = self._text_point_of(selector)
+        if not p:
+            return None
+        self.click_n_xy(p["x"], p["y"], 3)
+        return self.eval("String(getSelection())")
+
     def click(self, selector: str, by_text: bool = False, tag: str | None = None,
               require_hit: bool = True) -> bool:
         # F061: aim at a point that actually reaches the element. hitPoint probes
