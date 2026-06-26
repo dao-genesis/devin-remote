@@ -6,6 +6,8 @@
        #webspin  -> left-drag ROTATES the bearing, pitch=0  (flat rotation: no single shift -> INCOHERENT)
        #webtilt  -> left-drag ROTATES the bearing, pitch=60 (perspective rotation: also -> INCOHERENT)
        #webzoom  -> left-drag SCROLL-ZOOMS about centre     (radial expansion: INCOHERENT, but DIVERGENT)
+       #webscale -> left-drag CSS-SCALES the rendered canvas about centre (round-31 control: a PURE image
+                    magnification -- no map.setZoom, so NO vector re-layout / tile re-fetch / label re-place)
      The honest question: do footprint/gain/dyn survive a real third-party-rendered, network-textured
      GUI -- including tile pop-in noise -- the way they survived our synthetic real_lab.html?
      Round-29 clean finding (after fixing a stale-cache bug that had frozen webtilt at pitch=0): the dyn
@@ -15,8 +17,13 @@
      control proving the extra pitch does not change the rotation verdict on the same external surface.
      Round-30 adds #webzoom: a scroll-zoom is ALSO incoherent (no single rigid shift), so the binary
      coherence key cannot tell it from a rotation. The flow_structure key (round-30) decomposes the
-     local flow into [translation, divergence, curl]: a zoom is DIVERGENT (radial), a rotation is CURL
-     (tangential), a pan is TRANSLATION -- so zoom finally earns its own honest class. -->
+     local flow into [translation, divergence, curl]; on CLEAN synthetic frames a zoom is DIVERGENT, a
+     rotation is CURL, a pan is TRANSLATION. But round-30 MEASURED that this 3-way split does NOT survive
+     external rendering (PARTIAL): finite-frame block-matching injects a motion-independent inward
+     divergence into EVERY mode, so a native map zoom does not cosine-separate from a rotation.
+     Round-31 adds #webscale to FALSIFIABLY isolate the cause: a pure CSS image-scale shares webzoom's
+     finite-frame border geometry but has NO MapLibre vector re-layout. If it also fails to separate, the
+     PARTIAL is pure border geometry; if it separates, MapLibre's vector re-layout is the culprit. -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -43,6 +50,7 @@ const style = {
 const pitch0 = (mode === 'webtilt') ? 60 : 0;
 const ROT = (mode === 'webspin' || mode === 'webtilt');
 const ZOOM = (mode === 'webzoom');
+const SCALE = (mode === 'webscale');
 const map = new maplibregl.Map({
   container: 'map', style: style,
   center: [2.3522, 48.8566], zoom: 12, bearing: 0, pitch: pitch0,
@@ -50,7 +58,8 @@ const map = new maplibregl.Map({
 });
 window.__ready = false;
 const dbg = document.getElementById('dbg');
-const upd = () => { dbg.textContent = mode + ' pitch=' + map.getPitch().toFixed(0) + ' bearing=' + map.getBearing().toFixed(0) + ' zoom=' + map.getZoom().toFixed(2); };
+const sc = () => { const m = /scale\(([\d.]+)\)/.exec(map.getCanvas().style.transform); return m ? parseFloat(m[1]) : 1; };
+const upd = () => { dbg.textContent = mode + ' pitch=' + map.getPitch().toFixed(0) + ' bearing=' + map.getBearing().toFixed(0) + ' zoom=' + map.getZoom().toFixed(2) + ' scale=' + sc().toFixed(3); };
 map.on('idle', () => { window.__ready = true; upd(); });
 map.on('render', upd);
 
@@ -67,6 +76,24 @@ if (ZOOM) {
   window.addEventListener('mousemove', e => {
     if (!down) return;
     map.setZoom(z0 + (e.clientX - lastX) * 0.006);
+  });
+  window.addEventListener('mouseup', () => { down = false; });
+}
+if (SCALE) {
+  // Round-31 control: a PURE image-scale zoom. We magnify the ALREADY-rendered canvas about its centre
+  // via a CSS transform, WITHOUT touching the map (no setZoom -> no vector re-layout, no tile re-fetch,
+  // no label re-placement). This is the textbook conformal divergence field, sharing webzoom's exact
+  // finite-frame border geometry -- so comparing the two isolates "border bias" from "vector re-layout"
+  // as the cause of zoom's PARTIAL external separation (round-30).
+  map.dragPan.disable(); map.scrollZoom.disable();
+  const cv = map.getCanvas();
+  cv.style.transformOrigin = 'center center';
+  let down = false, lastX = 0, s0 = 1;
+  const c = map.getCanvasContainer();
+  c.addEventListener('mousedown', e => { down = true; lastX = e.clientX; s0 = sc(); });
+  window.addEventListener('mousemove', e => {
+    if (!down) return;
+    cv.style.transform = 'scale(' + Math.max(0.2, s0 + (e.clientX - lastX) * 0.004) + ')';
   });
   window.addEventListener('mouseup', () => { down = false; });
 }
