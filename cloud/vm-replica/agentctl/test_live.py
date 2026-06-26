@@ -881,6 +881,91 @@ def round_rotation_invariant(b: Browser, offline: bool) -> None:
           b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
 
 
+def round_read_glyph(b: Browser, offline: bool) -> None:
+    print("R22: pick the control that READS the right glyph, not just its colour/shape (F058) — osctl")
+    # Two magenta buttons, same colour, same size, same outer shape. The ONLY
+    # difference is the white GLYPH the page draws on each ("A" vs "B"). We hold a
+    # reference ATLAS of candidate glyphs, but rendered SMALLER than the live
+    # buttons. A fixed-size edge match against the atlas is fooled by the size gap
+    # (reads every tile as the same letter); read_glyph classifies in the
+    # scale-free frame and reads each button correctly.
+    def tiles(rgb, w, h):
+        return [bl for bl in osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rgb,
+                                                    size=(w, h), min_count=200)
+                if bl["bbox"][2] - bl["bbox"][0] > 60 and bl["bbox"][3] - bl["bbox"][1] > 60]
+    # Phase 1: atlas — candidate glyphs A and B rendered SMALL (110 tiles, 80px font).
+    atlas_html = fixture("glyphatlas.html",
+                         "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+                         "<canvas id=c width=520 height=200></canvas><script>"
+                         "var x=document.getElementById('c').getContext('2d');"
+                         "x.fillStyle='#fff';x.fillRect(0,0,520,200);"
+                         "function t(ox,ch){x.fillStyle='#ff00ff';x.fillRect(ox,30,110,110);"
+                         "x.fillStyle='#fff';x.font='bold 80px sans-serif';x.textAlign='center';"
+                         "x.textBaseline='middle';x.fillText(ch,ox+55,88);}"
+                         "t(40,'A');t(300,'B');</script>")
+    b.navigate(atlas_html)
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    at = sorted(tiles(argb, aw, ah), key=lambda t: t["x"])
+    check("atlas segments into two reference glyphs", len(at) == 2, str([t["x"] for t in at]))
+    if len(at) != 2:
+        return
+    atlas = {"A": osctl.edge_signature(argb, (aw, ah), at[0]["bbox"]),
+             "B": osctl.edge_signature(argb, (aw, ah), at[1]["bbox"])}
+    atlas_edge = {}
+    for ch, t in (("A", at[0]), ("B", at[1])):
+        e, _ew, _eh = osctl.edge_map(argb, (aw, ah), t["bbox"])
+        atlas_edge[ch] = e
+    # Phase 2: scene — buttons LARGE (170 tiles, 120px font). LEFT='A' (target), RIGHT='B'.
+    scene = fixture("glyphscene.html",
+                    "<!doctype html><title>scene</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=760 height=320></canvas><script>"
+                    "var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,760,320);"
+                    "var L=[40,70,170,170],R=[520,70,170,170];"
+                    "function t(r,ch){x.fillStyle='#ff00ff';x.fillRect(r[0],r[1],r[2],r[3]);"
+                    "x.fillStyle='#fff';x.font='bold 120px sans-serif';x.textAlign='center';"
+                    "x.textBaseline='middle';x.fillText(ch,r[0]+r[2]/2,r[1]+r[3]/2);}"
+                    "t(L,'A');t(R,'B');"
+                    "function inb(p,r){return p[0]>=r[0]&&p[0]<=r[0]+r[2]&&p[1]>=r[1]&&p[1]<=r[1]+r[3];}"
+                    "c.addEventListener('click',function(e){var b=c.getBoundingClientRect(),"
+                    "p=[e.clientX-b.left,e.clientY-b.top];"
+                    "document.title=inb(p,L)?'TARGET-HIT':inb(p,R)?'DECOY':'MISS';});</script>")
+    b.navigate(scene)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    ts = sorted(tiles(rgb, w, h), key=lambda t: t["x"])
+    check("two same-colour, same-size buttons found", len(ts) == 2, str([t["x"] for t in ts]))
+    if len(ts) != 2:
+        return
+    target_tile, decoy_tile = ts[0], ts[1]
+    check("buttons are larger than the atlas glyphs",
+          (target_tile["bbox"][2] - target_tile["bbox"][0]) > (at[0]["bbox"][2] - at[0]["bbox"][0]) + 30,
+          f"btn={target_tile['bbox'][2]-target_tile['bbox'][0]} atlas={at[0]['bbox'][2]-at[0]['bbox'][0]}")
+    # Friction: fixed-size edge match against the atlas mis-reads the decoy.
+    def fixed_read(tile):
+        e, _ew, _eh = osctl.edge_map(rgb, (w, h), tile["bbox"])
+        sc = {}
+        for ch, ae in atlas_edge.items():
+            n = min(len(ae), len(e))
+            sc[ch] = osctl.edge_hamming(ae[:n], e[:n]) + abs(len(ae) - len(e))
+        return min(sc, key=sc.get)
+    check("fixed-size match mis-reads: it cannot tell the two glyphs apart",
+          fixed_read(target_tile) == fixed_read(decoy_tile),
+          f"target->{fixed_read(target_tile)} decoy->{fixed_read(decoy_tile)}")
+    # Primitive: read_glyph classifies in the scale-free frame.
+    check("read_glyph reads the target button as 'A'",
+          osctl.read_glyph(rgb, (w, h), target_tile["bbox"], atlas) == "A",
+          osctl.read_glyph(rgb, (w, h), target_tile["bbox"], atlas))
+    check("read_glyph reads the decoy button as 'B'",
+          osctl.read_glyph(rgb, (w, h), decoy_tile["bbox"], atlas) == "B",
+          osctl.read_glyph(rgb, (w, h), decoy_tile["bbox"], atlas))
+    pick = target_tile if osctl.read_glyph(rgb, (w, h), target_tile["bbox"], atlas) == "A" else decoy_tile
+    osctl.click(pick["x"], pick["y"])
+    check("glyph-read click hits the button that says 'A'",
+          b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -889,7 +974,7 @@ def main() -> int:
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_structure_match,
-              round_scale_invariant, round_rotation_invariant]
+              round_scale_invariant, round_rotation_invariant, round_read_glyph]
     for r in rounds:
         try:
             r(b, offline)

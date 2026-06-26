@@ -553,6 +553,44 @@ each such surrender is also a narrowing of what the descriptor can tell apart, s
 it is reached for last, not first (重為輕根：the heavier, more specific registers
 ground the lighter, more invariant ones).
 
+### F058 — two controls identical but for the word they bear
+**Surface:** two magenta buttons, **same** colour, **same** size, **same** outer
+shape — the only thing that sets them apart is the white **glyph** the page draws
+onto the canvas ("A" vs "B"). No DOM node carries the text; no colour or contour
+distinguishes them. A human reads the letter and clicks the right one. Every
+register up to `radial_profile` is blind here: they describe the tile, not the
+character on it.
+**Mechanism:** colour segmentation finds both tiles; structure could tell them
+apart only with the target's *own* rendering in hand. The honest tool we have is
+a reference **atlas** of candidate glyphs — but rendered at a different size than
+the live buttons (`bold 80px` swatch vs `bold 120px` button). A fixed-size edge
+match against that atlas is defeated by the size gap exactly as F056 was: it
+reads *both* live buttons as the same letter (`target→A`, `decoy→A`), so it
+cannot read text at all.
+**Primitive:** `osctl.read_glyph(rgb, size, bbox, atlas)` classifies in the
+scale-free frame built in F056. It takes the region's `edge_signature` and
+returns the `atlas` label whose signature is closest by `edge_hamming`; the atlas
+is `{label: edge_signature(...)}` built once from reference glyphs (the page's own
+scratch-canvas rendering, or a captured known control). Because the comparison is
+scale-free, a glyph recognises itself however large it was drawn: the live "A"
+button reads `A` (`131` vs `339`), the "B" button reads `B` (`213` vs `357`), and
+the click lands `TARGET-HIT` on the button that *says* "A". `92/92 checks
+passed`, deterministic across three runs. This is reading text from pixels
+reduced to its smallest honest form — not full OCR, but enough to pick the control
+that says the right thing. The perception ladder is now complete from raw hue to
+rendered meaning: hue (`find_color_blobs`) → patch (`match_template`) → rigid
+structure (`match_edges`) → scale-free structure (`edge_signature`) →
+rotation-&-scale-free structure (`radial_profile`) → **rendered glyph**
+(`read_glyph`).
+**Lesson (道法自然):** 道隱無名，始制有名 — the page hides its meaning behind nameless
+pixels; naming begins only when we render the candidate names ourselves and let
+the thing match the name it already wears. 不行而知 — we do not OCR the whole
+world; we carry only the few glyphs that matter and recognise among them, 少則得.
+And it builds on what came before rather than replacing it: `read_glyph` is
+`edge_signature` pointed at a labelled atlas — the highest register is the lowest
+one given a name to match against (大器晚成：the great vessel is the simple tool,
+late-completed, by being aimed).
+
 ---
 
 ## Frontier (next honest rounds)
@@ -563,8 +601,9 @@ will only grow a primitive once a real failure is reproduced.
 - **R-next: out-of-process (cross-site) iframes** — when the child context does
   *not* appear on the page session; needs `Target.setAutoAttach` + per-target
   `sessionId` routing (the plumbing for which already exists in `cdp.py`).
-- **R-next: text the page renders but never settles in the DOM** — canvas/WebGL
-  glyphs, where neither DOM text nor a colour/shape patch identifies a word;
-  needs reading rendered glyphs from pixels (the next register after structure).
+- **R-next: a glyph atlas wider than one alphabet** — `read_glyph` (F058) reads
+  among the few glyphs we carry; reading an *unknown* string needs per-character
+  segmentation across a baseline and a fuller atlas (true OCR territory). Grow it
+  only when a real control demands reading text we did not pre-enumerate.
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

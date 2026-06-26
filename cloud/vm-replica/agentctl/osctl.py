@@ -728,6 +728,31 @@ def profile_l1(a: list[float], b: list[float]) -> float:
     return sum(abs(a[i] - b[i]) for i in range(len(a)))
 
 
+def read_glyph(rgb: bytes, size: tuple[int, int],
+               bbox: tuple[int, int, int, int],
+               atlas: dict[str, list[int]],
+               nw: int = 48, nh: int = 48, thr: int = 24) -> str:
+    """Read which glyph occupies a region by matching an atlas (F058).
+
+    The end of the perception ladder: when a control carries text the page draws
+    straight onto a canvas — no DOM node, no distinguishing colour or outer shape,
+    *only* the rendered character sets one button apart from its twin. Colour
+    segmentation finds the tiles; structure tells them apart only if we already
+    hold the target's own rendering. A fixed-size edge match against a reference
+    *atlas* of candidate glyphs fails the moment the atlas was rendered at a
+    different size than the live control (a `bold 80px` swatch vs a `bold 120px`
+    button) — it reads every tile as the same letter. This classifies instead in
+    the scale-free frame: it takes the region's :func:`edge_signature` and returns
+    the ``atlas`` label whose signature is closest by :func:`edge_hamming`, so a
+    glyph recognises itself however large it was drawn. ``atlas`` is
+    ``{label: edge_signature(...)}`` built once from reference glyphs (rendered by
+    the page itself on a scratch canvas, or captured from a known control). This
+    is reading text from pixels reduced to its smallest honest form — not full
+    OCR, but enough to pick the control that *says* the right thing."""
+    sig = edge_signature(rgb, size, bbox, nw, nh, thr)
+    return min(atlas, key=lambda k: edge_hamming(atlas[k], sig))
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"
