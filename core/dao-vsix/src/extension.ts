@@ -2163,7 +2163,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     // 认证检查（relay请求也需认证，devin-cloud代理有自己的认证）
     // 归一 · 独立 HTTP 外壳须可被任意 IDE 内置浏览器/手机直接打开, 故 /shell 与 /api/shell/* 免 token
     //   (本地服务器默认仅绑 localhost; 远程经 DAO Bridge 隧道层把关)。
-    const needAuth = !route.startsWith('/api/health') && !route.startsWith('/devin-cloud/')
+    const needAuth = !route.startsWith('/api/health') && !route.startsWith('/devin-cloud')
         && !route.startsWith('/shell') && !route.startsWith('/api/shell')
         && !route.startsWith('/i/')
         && !route.startsWith('/__web')
@@ -2800,6 +2800,13 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         // 注入 Authorization 头 → 认证自动桥接
         // ═══════════════════════════════════════════════════════════
         default: {
+            // 道·同源底座: SPA config bundle 的硬编码后端域 → 同源前缀反代(携 auth1, 隧道只搬数据)
+            if (route.startsWith('/devin-cloud-api/')) {
+                return await devinCloudProxyRoute(route, url, req, 'api', res);
+            }
+            if (route.startsWith('/devin-cloud-backend/')) {
+                return await devinCloudProxyRoute(route, url, req, 'backend', res);
+            }
             // 缺陷10修复: 长前缀必须先检查，否则 /devin-cloud-ws-register/ 会匹配 /devin-cloud-ws/
             if (route.startsWith('/devin-cloud-ws-register/')) {
                 return await devinCloudProxyRoute(route, url, req, 'register', res);
@@ -6424,6 +6431,11 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
 const DEVIN_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36';
 const DEVIN_WINDSURF = 'https://windsurf.com';
 const DEVIN_APP = 'https://app.devin.ai';
+// 道·同源底座: SPA config bundle 仅硬编码这两个后端绝对域(api/backend), 经同源前缀反代 →
+//   穿透只搬认证后的轻量数据, 重渲染留在访问者浏览器(类手机 APK 路线)。auth.devin.ai 不反代:
+//   已注入 auth1_session 绕过登录, Auth0 全页跳转流难以洁净代理, 静默校验失败不阻渲染。
+const DEVIN_API = 'https://api.devin.ai';
+const DEVIN_BACKEND = 'https://backend.webapp.devin.ai';
 const DEVIN_TOKEN_PREFIX = 'devin-session-token$';
 const DEVIN_WSS_BASE = 'wss://app.devin.ai/api/acp/live';
 const DEVIN_URL_LOGIN = DEVIN_WINDSURF + '/_devin-auth/password/login';
@@ -11353,6 +11365,18 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
         proxyPrefix = '/devin-cloud-ws-ss/';
         targetPath = route.replace(proxyPrefix, '/') + (url.search || '');
         targetUrl = upstreamBase + targetPath;
+    } else if (mode === 'api') {
+        // /devin-cloud-api/xxx → https://api.devin.ai/xxx (公网 API · 携 auth1)
+        upstreamBase = DEVIN_API;
+        proxyPrefix = '/devin-cloud-api/';
+        targetPath = route.replace(proxyPrefix, '/') + (url.search || '');
+        targetUrl = upstreamBase + targetPath;
+    } else if (mode === 'backend') {
+        // /devin-cloud-backend/xxx → https://backend.webapp.devin.ai/xxx (webapp 后端 · 携 auth1)
+        upstreamBase = DEVIN_BACKEND;
+        proxyPrefix = '/devin-cloud-backend/';
+        targetPath = route.replace(proxyPrefix, '/') + (url.search || '');
+        targetUrl = upstreamBase + targetPath;
     } else {
         // /devin-cloud/xxx → https://app.devin.ai/xxx
         upstreamBase = DEVIN_APP;
@@ -11427,8 +11451,11 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                 if (proxyRes.statusCode && proxyRes.statusCode >= 300 && proxyRes.statusCode < 400) {
                     const location = proxyRes.headers['location'] || '';
                     if (location) {
-                        // 改写重定向URL: app.devin.ai → 同源代理(本地或公网隧道, 随 localBase)
-                        const rewritten = location.replace(DEVIN_APP + '/', `${localBase}/devin-cloud/`);
+                        // 改写重定向URL: app.devin.ai / api / backend → 同源代理(本地或公网隧道, 随 localBase)
+                        const rewritten = location
+                            .replace(DEVIN_APP + '/', `${localBase}/devin-cloud/`)
+                            .replace(DEVIN_API + '/', `${localBase}/devin-cloud-api/`)
+                            .replace(DEVIN_BACKEND + '/', `${localBase}/devin-cloud-backend/`);
                         resolve({
                             _proxy: true,
                             status: proxyRes.statusCode,
@@ -11540,6 +11567,9 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         // HTML页面: 改写绝对URL + 注入认证脚本
                         let html = decodedBody.toString('utf8');
                         // 缺陷5修复: 改写所有Devin相关域名
+                        // 道·同源底座: 后端绝对域先于 app 域改写(互不含子串, 顺序无碍但显式置前)
+                        html = html.replace(/https:\/\/api\.devin\.ai/g, `${localBase}/devin-cloud-api`);
+                        html = html.replace(/https:\/\/backend\.webapp\.devin\.ai/g, `${localBase}/devin-cloud-backend`);
                         html = html.replace(/https:\/\/app\.devin\.ai\//g, `${localBase}/`);
                         html = html.replace(/https:\/\/app\.devin\.ai"/g, `${localBase}/"`);
                         html = html.replace(/https:\/\/app\.devin\.ai(?!\/)/g, `${localBase}`);
@@ -11580,11 +11610,20 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         } catch { /* 守柔 */ }
                         const websiteAutoLogin = getWebsiteLoginMode() === 'auto';
                         const injA1 = (websiteAutoLogin && pinAuth1 && !pinAuth1.startsWith('devin-session-token$')) ? pinAuth1 : '';
+                        const cfgLocalHost = localBase.replace(/^https?:\/\//i, '');
                         const authBridge = `<script>
 // Dao Auth Bridge — 帛书·五十二「见小曰明·守柔曰强」
 // 自动注入认证到Devin页面 — 无为而无以为
 (function(){
   try {
+    // 0. 同源底座配置注入 — 帛书·「为之于其未有」: SPA 的 config bundle 读取 globalThis.__DEVIN_CONFIG__
+    //    覆盖 API_URL/WEBAPP_HOST。须在任何模块脚本前执行(本桥为 <head> 起始内联经典脚本, 先于 defer 模块),
+    //    令 SPA 原生把公网 API 指向同源前缀、把 webapp_host 认作当前主机 → 不再跨源逃逸至 app.devin.ai。
+    //    重渲染留在访问者浏览器, 隧道只搬认证后的轻量数据(类手机 APK 路线)。
+    window.__DEVIN_CONFIG__ = Object.assign({}, window.__DEVIN_CONFIG__, {
+      API_URL: '${localBase}/devin-cloud-api',
+      WEBAPP_HOST: '${cfgLocalHost}'
+    });
     // 1. localStorage 注入 — 帛书·「观天之道·执天之行」
     //    经真机抓取确认: Devin SPA 的登录态唯一真源是 localStorage['auth1_session']
     //    = {"token":"auth1_...","userId":"user-..."}  — SPA 据此判定已登录, 否则跳转 /auth/login
@@ -11637,8 +11676,10 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
     window.fetch = function(url, opts) {
       // Request 对象: 方法/体/头已内嵌, 原样透传(根挂载下已同源, 代理会注入认证)
       if (typeof url !== 'string') { return origFetch.call(this, url, opts); }
-      // 字符串 URL: 绝对 app.devin.ai → 根路径; 根相对原样保留
-      var newUrl = url.split('https://app.devin.ai').join('');
+      // 字符串 URL: 绝对 app.devin.ai → 根路径; api/backend → 同源前缀; 根相对原样保留
+      var newUrl = url.split('https://api.devin.ai').join('${localBase}/devin-cloud-api')
+                      .split('https://backend.webapp.devin.ai').join('${localBase}/devin-cloud-backend')
+                      .split('https://app.devin.ai').join('');
       opts = opts || {};
       if (needAuthHdr(newUrl) && typeof opts.headers === 'object' && opts.headers && !Array.isArray(opts.headers)) {
         if (!opts.headers['Authorization']) opts.headers['Authorization'] = 'Bearer ${injA1}';
@@ -11648,8 +11689,12 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
     };
     var origXHR = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url) {
-      // XHR.open 方法显式传入, 不会丢失; 仅改写绝对 app.devin.ai → 根路径
-      var newUrl = (typeof url === 'string') ? url.split('https://app.devin.ai').join('') : url;
+      // XHR.open 方法显式传入, 不会丢失; 改写绝对 app.devin.ai → 根路径; api/backend → 同源前缀
+      var newUrl = (typeof url === 'string')
+        ? url.split('https://api.devin.ai').join('${localBase}/devin-cloud-api')
+             .split('https://backend.webapp.devin.ai').join('${localBase}/devin-cloud-backend')
+             .split('https://app.devin.ai').join('')
+        : url;
       var result = origXHR.apply(this, [method, newUrl].concat(Array.prototype.slice.call(arguments, 2)));
       if (needAuthHdr(newUrl)) { try { this.setRequestHeader('Authorization', 'Bearer ${injA1}'); this.setRequestHeader('x-cog-org-id', '${pinOrg}'); } catch(e) {} }
       return result;
@@ -11691,6 +11736,11 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                     } else if (isJs) {
                         // JS文件: 改写绝对URL引用
                         let js = decodedBody.toString('utf8');
+                        // 道·同源底座根治: config bundle 硬编码的 api/backend 绝对域 → 同源前缀,
+                        //   令 SPA 原生构造同源后端地址(穿透只搬认证后数据)。须先于 app 域改写(api/backend
+                        //   不含 https://app.devin.ai 子串, 互不干涉)。
+                        js = js.replace(/https:\/\/api\.devin\.ai/g, `${localBase}/devin-cloud-api`);
+                        js = js.replace(/https:\/\/backend\.webapp\.devin\.ai/g, `${localBase}/devin-cloud-backend`);
                         js = js.replace(/https:\/\/app\.devin\.ai\//g, `${localBase}/devin-cloud/`);
                         js = js.replace(/https:\/\/app\.devin\.ai(?!\/)/g, `${localBase}/devin-cloud`);
                         if (okCache) safeHeaders['Cache-Control'] = 'public, max-age=31536000, immutable';
