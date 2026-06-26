@@ -22,7 +22,8 @@ function makeModule(deps) {
     "return { relay: relay, relayHttp: _relayHttp, getEndpoint: function(){ return ENDPOINT; }, candBases: _candBases,\n" +
     "         p2pTry: _p2pTry, p2pAlive: _p2pAlive, setP2P: function(p){ _p2p=p; },\n" +
     "         rtRead: __rtRead, rtBust: __rtBust,\n" +
-    "         learnDirect: _learnDirect, preferDirect: _preferDirect, directUrls: _directUrls };\n" +
+    "         learnDirect: _learnDirect, preferDirect: _preferDirect, directUrls: _directUrls,\n" +
+    "         proxyBase: _proxyBase, isStaticHost: _isStaticHost };\n" +
     "})";
   // eslint-disable-next-line no-eval
   return eval(factorySrc)(deps);
@@ -332,6 +333,54 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     // 不同请求体不串缓存
     await mod.rtRead("/api/native", { m: "quota", a: [] }, 5000);
     ok(counter.total === 3, "V 不同 RPC(quota) 不命中 getState 缓存");
+  }
+
+  // 场景 W (网页直开根因·反代端点解析): 从持久静态宿主(github.io/IPFS)开页时, openInPage
+  //   的 /i-init·/i//e/ 反代绝不能裸用静态 ENDPOINT(它无这些路由→必 404, 正是「控台开得出、
+  //   页面打不开」). _proxyBase 须解析到「真正服务反代的活端点」(设备隧道/Worker), 全不可达才 null。
+  {
+    // W1: ENDPOINT 已是活隧道(非静态) → 零探活直用, 不动 ENDPOINT。
+    const counter = { total: 0, byBase: {} };
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://live-tunnel.example",
+      fetch: makeFetch({ "https://live-tunnel.example": { status: 200, body: { ok: true } } }, counter),
+      location: { origin: "https://live-tunnel.example", protocol: "https:" } }));
+    const base = await mod.proxyBase();
+    ok(base === "https://live-tunnel.example", "W1 ENDPOINT 已是活端点 → 直用");
+    ok(counter.total === 0, "W1 非静态宿主零探活, 实际 " + counter.total);
+  }
+  {
+    // W2: 从 github.io 静态宿主开页 + Worker 活 → _proxyBase 探活切到 Worker(绝不回静态源)。
+    const counter = { total: 0, byBase: {} };
+    const routes = { [WORKER]: { status: 200, body: { ok: true, state: "default" } } };
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://zhouyoukang1234-spec.github.io",
+      fetch: makeFetch(routes, counter),
+      location: { origin: "https://zhouyoukang1234-spec.github.io", protocol: "https:" } }));
+    ok(mod.isStaticHost("https://zhouyoukang1234-spec.github.io"), "W2 github.io 判为静态引导宿主");
+    const base = await mod.proxyBase();
+    ok(base === WORKER, "W2 静态宿主开页 → 反代端点解析到活 Worker(非静态源), 实际 " + base);
+    ok(!mod.isStaticHost(base), "W2 解析结果绝非静态宿主");
+  }
+  {
+    // W3: 静态宿主 + 设备直连隧道活(优先于 Worker) → 解析到设备隧道。
+    const counter = { total: 0, byBase: {} };
+    const TUN = "https://dev-tunnel.trycloudflare.com";
+    const routes = { [TUN]: { status: 200, body: { ok: true } }, [WORKER]: { status: 200, body: { ok: true } } };
+    const ls = makeLocalStorage(); ls.setItem("rtflow.rn.endpoints.direct", JSON.stringify([TUN]));
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://zhouyoukang1234-spec.github.io",
+      fetch: makeFetch(routes, counter), localStorage: ls,
+      location: { origin: "https://zhouyoukang1234-spec.github.io", protocol: "https:" } }));
+    const base = await mod.proxyBase();
+    ok(base === TUN, "W3 设备直连隧道优先于 Worker 被选为反代端点, 实际 " + base);
+  }
+  {
+    // W4: 静态宿主 + 设备隧道与 Worker 全死 → 回 null(由 openInPage 显式提示, 绝不裸 fetch 静态源 404)。
+    const counter = { total: 0, byBase: {} };
+    const routes = { [WORKER]: { status: 503, body: "dead" } };
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://zhouyoukang1234-spec.github.io",
+      fetch: makeFetch(routes, counter),
+      location: { origin: "https://zhouyoukang1234-spec.github.io", protocol: "https:" } }));
+    const base = await mod.proxyBase();
+    ok(base === null, "W4 反代端点全不可达 → 回 null(不退化到静态源 404), 实际 " + base);
   }
 
   // 场景 J (回归护栏): 主 IIFE 必须在使用前声明 CFG —— 防 PR#547 式 strict ReferenceError 崩整页。

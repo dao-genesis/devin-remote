@@ -571,6 +571,22 @@
       return _resolveLive().then(function(found){ if(found) return _relayAt(ENDPOINT, path, body, timeoutMs); throw err; });
     });
   }
+  // ── 反代端点解析 (openInPage 的 /i-init·/i/<号>/·/e/<站>/ 专用) ───────────────
+  //   病灶: 反代路由只由「真正服务它们的 HTTP 端点」提供 —— 手机自带 cloudflared
+  //   直连隧道 (LocalServer) 或 零账号中继 Worker (pxProxy)。持久去中心化引导宿主
+  //   (github.io · IPFS 网关) 只发首字节、无 /i//e/ 路由。从静态宿主开页时 ENDPOINT
+  //   初值=该静态源, 且控制面常由 P2P/mesh 直供 (永不触发 _relayHttp→_resolveLive
+  //   升级) → ENDPOINT 恒为静态源 → openInPage 裸用它必 404 (网页内打开 Devin/任意站
+  //   全失败, 而控制面/手机操控仍正常 —— 正是「控台开得出、页面打不开」之根因)。
+  //   修法: 反代前先解析到「非静态宿主的活端点」: 已是则零开销直用; 否则经 _resolveLive
+  //   探活设备隧道/Worker (与控制面 failover 同候选/同优先级)。全不可达才回 null。
+  function _proxyBase(){
+    if(ENDPOINT && !_isStaticHost(ENDPOINT)) return Promise.resolve(ENDPOINT);
+    return _resolveLive().then(function(found){
+      if(found && !_isStaticHost(found)) return found;
+      return (ENDPOINT && !_isStaticHost(ENDPOINT)) ? ENDPOINT : null;
+    }, function(){ return (ENDPOINT && !_isStaticHost(ENDPOINT)) ? ENDPOINT : null; });
+  }
   //__FAILOVER_END__
 
   //__P2P_START__ (经 test/console-failover.test.js 切片 eval 实测, 勿删标记)
@@ -919,6 +935,7 @@
     function fail(e){
       var msg=(e&&e.message)?e.message:(typeof e==="string"?e:"登录态获取失败");
       if(msg==="i_init_failed") msg="取登录态失败(账号未登录或令牌已失效)";
+      if(msg==="no_proxy_endpoint") msg="未找到可达的反代端点 — 手机自带隧道与中继 Worker 均不可达。<br>请确认手机在线 (本控台仍可远程操控手机), 待隧道恢复后重试。";
       if(t.ld){
         t.ld.innerHTML='<div class="er">网页内打开「'+host(url)+'」失败：<br>'+msg+
           '<br><br><span style="color:#6e7681">已留在本控台 · 不会离开此页</span></div>'+
@@ -929,16 +946,21 @@
     }
     // 同源前缀边缘反代 (Path A): Devin 账号 → /i-init 验证后回 /i/<账号>/<path>; 任意第三方站 → /e/<b64源站>/<path>。
     //   页面 JS 在本浏览器原生执行(渲染/取数各设备各耗各资源), 中继/本机 LocalServer 仅边缘改写字节(剥框限·前缀化·注认证·webapp_host 防跳)。不用 UV/SW(Vite 分包经 302 自愈双实例致 useAuth 崩)。
-    if(devin && acct){
-      fetch(ENDPOINT+"/i-init", { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ s:SESSION, tk:TOKEN, acc:acct, u:pathq }) })
-        .then(function(r){ return r.ok ? r.json() : null; })
-        .then(function(j){ if(!j||!j.ok||!j.redirect) throw new Error("i_init_failed"); go(ENDPOINT+j.redirect); })
-        .catch(fail);
-    } else {
-      var origin=uo.protocol+"//"+uo.host;
-      go(ENDPOINT+"/e/"+b64url(origin)+pathq);
-    }
+    //   先经 _proxyBase 解析到「真正服务 /i//e/ 的活端点」(设备隧道/Worker, 绝不用静态引导宿主)
+    //   —— 否则从 github.io/IPFS 静态开页时裸用 ENDPOINT 必 404 (页面打不开之根因)。
+    _proxyBase().then(function(base){
+      if(!base){ fail(new Error("no_proxy_endpoint")); return; }
+      if(devin && acct){
+        fetch(base+"/i-init", { method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ s:SESSION, tk:TOKEN, acc:acct, u:pathq }) })
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(j){ if(!j||!j.ok||!j.redirect) throw new Error("i_init_failed"); go(base+j.redirect); })
+          .catch(fail);
+      } else {
+        var origin=uo.protocol+"//"+uo.host;
+        go(base+"/e/"+b64url(origin)+pathq);
+      }
+    }, function(){ fail(new Error("no_proxy_endpoint")); });
   }
 
   // ── 地址栏「网址 vs 搜索」判定 + 搜索引擎 (1:1 复刻 APK MainActivity.go()/searchUrl()) ──
