@@ -2129,6 +2129,48 @@ saw through what is fused.
 
 ---
 
+## F105 — read a multi-LINE text block (`segment_lines` / `read_block`) · R69
+
+**Friction:** `read_text` (F103/F104) projects ink down *columns* across the whole
+`bbox` — it assumes a single horizontal line. Point it at a block of stacked
+lines and every column is inked by *more than one* line at once: the column
+profile never falls blank between letters, the rows fuse vertically, and the run
+reads as garbage. Live: an `"OK"` over `"CAB"` block (two lines, blank leading
+between them) reads `'AXB'` — three merged columns, neither word. A column cut
+cannot part rows the page stacked one above another; that is `read_text`'s named
+boundary, reproduced.
+
+**Mechanism:** the cut is *orthogonal* to F103/F104. Where those split the ink by
+column blanks (the gaps *between letters*), lines are split by the blank leading
+*between rows*. `segment_lines` counts ink per *row* of the block and groups the
+inked rows into bands separated by ≥`row_gap` fully-blank rows — each band is the
+tight vertical extent of one text line, in top-to-bottom order. It refuses (`[]`)
+on blank ink and never invents a split inside a single line's x-height: it parts
+only the leading the page actually left.
+
+**Primitive:** `segment_lines(rgb, size, bbox, fg, tol, gap)` returns one bbox per
+line; `read_block(rgb, size, bbox, atlas, fg, …, row_gap)` segments the block into
+line bands and reads each as its own run with `read_text`, returning one string
+per line top-to-bottom. A single-line block yields a one-element list; a blank
+region yields `[]`. The horizontal machinery (`segment_run` → `split_run` →
+`read_glyph`) is reused unchanged per band.
+
+**Live (R69):** the atlas segments into six reference glyphs; a two-line `"OK"`/
+`"CAB"` block is located by colour; `read_text` over the *whole* block reads
+neither line (`'AXB'`, the friction); `segment_lines` parts it into two bands in
+strict top-to-bottom order, each shorter than the whole block; `read_block` reads
+`['OK','CAB']`; a three-line block reads `['OK','AB','OK']` and a single line
+reads `['OK']` with no per-block special-casing; a blank region yields no bands
+and `[]`. `436/436 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 反也者，道之動也 — F103/F104 read *along* the line by what
+parts letters left-to-right; F105 reads *down* the page by what parts lines
+top-to-bottom. The same projection, turned ninety degrees: presence of ink names
+the line, absence of ink (the leading) names the seam between lines. We cut only
+where the page already left a gap, and refuse to break a line that does not.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

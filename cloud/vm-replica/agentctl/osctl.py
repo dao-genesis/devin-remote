@@ -926,6 +926,82 @@ def read_text(rgb: bytes, size: tuple[int, int],
     return "".join(read_glyph(rgb, size, c, atlas, nw, nh, thr) for c in cells)
 
 
+def segment_lines(rgb: bytes, size: tuple[int, int],
+                  bbox: tuple[int, int, int, int],
+                  fg: tuple[int, int, int], tol: int = 60,
+                  gap: int = 4) -> list[tuple[int, int, int, int]]:
+    """Split a text *block* into per-line bboxes by row-ink bands (F105).
+
+    :func:`segment_run` and :func:`read_text` project ink down *columns* across
+    the whole ``bbox`` — they assume a single horizontal line. Point them at two
+    stacked lines and every column is inked by *both* lines at once: the column
+    profile never falls blank between letters, the rows fuse vertically, and the
+    run reads as garbage (live: an ``"OK"`` over ``"CAB"`` block reads ``'AXB'``,
+    three merged columns, not the two words). A column cut cannot part rows the
+    page stacked; that is :func:`read_text`'s named boundary.
+
+    The orthogonal projection parts them. This counts ink per *row* of ``bbox``
+    and groups the inked rows into bands separated by ``>= gap`` fully-blank rows
+    — the inter-line leading. Each band is the tight vertical extent of one text
+    line (x kept at the block's full width); reading order is top-to-bottom. It
+    returns ``[]`` on blank ink: it parts only the blank leading the page left
+    between lines and never invents a split inside a single line's x-height."""
+    x0, y0, x1, y1 = bbox
+    w, _h = size
+    tr, tg, tb = fg
+
+    def inked(y: int) -> bool:
+        row = y * w * 3
+        for x in range(x0, x1 + 1):
+            j = row + x * 3
+            if (abs(rgb[j] - tr) <= tol and abs(rgb[j + 1] - tg) <= tol
+                    and abs(rgb[j + 2] - tb) <= tol):
+                return True
+        return False
+
+    bands: list[tuple[int, int, int, int]] = []
+    start: int | None = None
+    blanks = 0
+    for y in range(y0, y1 + 1):
+        if inked(y):
+            if start is None:
+                start = y
+            blanks = 0
+        elif start is not None:
+            blanks += 1
+            if blanks >= gap:
+                bands.append((x0, start, x1, y - blanks))
+                start = None
+                blanks = 0
+    if start is not None:
+        bands.append((x0, start, x1, y1 - blanks))
+    return bands
+
+
+def read_block(rgb: bytes, size: tuple[int, int],
+               bbox: tuple[int, int, int, int],
+               atlas: dict[str, list[int]],
+               fg: tuple[int, int, int], tol: int = 60, gap: int = 2,
+               row_gap: int = 4,
+               nw: int = 48, nh: int = 48, thr: int = 24) -> list[str]:
+    """Read a multi-*line* text block from pixels (F105).
+
+    The rung above :func:`read_text`: where that reads one horizontal run, this
+    reads a *paragraph the page drew onto a canvas*. It :func:`segment_lines`-s
+    the block into per-line bands by the blank leading between them (``row_gap``),
+    then reads each band as an independent run with :func:`read_text`, returning
+    one string per line in top-to-bottom order. A single-line block yields a
+    one-element list (``read_text`` of the whole bbox); a blank region yields
+    ``[]``. It still reads only glyphs the ``atlas`` carries and only lines a
+    blank gap separates — it parts rows by absence of ink between them, never by
+    guessing where a wrapped line *should* break."""
+    bands = segment_lines(rgb, size, bbox, fg, tol, row_gap)
+    if not bands:
+        return []
+    return [read_text(rgb, size, band, atlas, fg, tol, gap,
+                      None, nw, nh, thr) for band in bands]
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"

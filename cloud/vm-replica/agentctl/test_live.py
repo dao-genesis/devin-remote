@@ -3249,6 +3249,98 @@ def round_read_kerned(b: Browser, offline: bool) -> None:
           osctl.split_run(rgb, sz, (5, 5, 25, 25), MAG, 3) == [])
 
 
+def round_read_block(b: Browser, offline: bool) -> None:
+    print("R69: read a multi-LINE text block — row bands then per-line read (F105) — osctl")
+    # read_text projects ink down columns over the whole bbox, assuming ONE line.
+    # Stack two lines and every column is inked by both at once: the rows fuse
+    # vertically and the block reads as garbage. segment_lines parts them by the
+    # blank leading between lines (orthogonal, row-ink projection); read_block
+    # reads each band as its own run, top-to-bottom.
+    MAG = (255, 0, 255)
+
+    def blobs(rgb, w, h):
+        bs = osctl.find_color_blobs(MAG, tol=60, rgb=rgb, size=(w, h), min_count=120)
+        return sorted(bs, key=lambda t: t["x"])
+    chars = "ABCOKX"
+    draws = "".join("x.fillText('%s',%d,100);" % (ch, 40 + i * 120)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("rb_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=760 height=160></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,760,160);"
+               "x.fillStyle='#f0f';x.font='bold 90px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = blobs(argb, aw, ah)
+    check("atlas segments into six reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def block(lines, lead=130, font_px=110):
+        d = []
+        for li, word in enumerate(lines):
+            y = 90 + li * lead
+            for ci, ch in enumerate(word):
+                d.append("x.fillText('%s',%d,%d);" % (ch, 40 + ci * 110, y))
+        b.navigate(fixture("rb_word.html",
+                   "<!doctype html><title>w</title><style>html,body{margin:0}</style>"
+                   "<canvas id=c width=560 height=360></canvas><script>"
+                   "var x=document.getElementById('c').getContext('2d');"
+                   "x.fillStyle='#fff';x.fillRect(0,0,560,360);"
+                   "x.fillStyle='#f0f';x.font='bold %dpx monospace';"
+                   "x.textAlign='left';x.textBaseline='middle';" % font_px
+                   + "".join(d) + "</script>"))
+        time.sleep(0.4)
+        w, h, rgb = osctl.capture_rgb()
+        loc = osctl.find_color(MAG, tol=60, rgb=rgb, size=(w, h))
+        return rgb, (w, h), (loc["bbox"] if loc else None)
+
+    lines = ["OK", "CAB"]
+    rgb, sz, blk = block(lines)
+    check("two-line block located on the canvas", blk is not None, repr(blk))
+    if blk is None:
+        return
+    # Friction: a single-run read over the whole block fuses the two lines.
+    flat = osctl.read_text(rgb, sz, blk, atlas, MAG)
+    check("read_text over the whole block does NOT read either line",
+          flat != "OK" and flat != "CAB" and flat != "OKCAB", repr(flat))
+    # segment_lines parts the block into one band per line.
+    bands = osctl.segment_lines(rgb, sz, blk, MAG)
+    check("segment_lines parts the block into two line bands",
+          len(bands) == len(lines), f"{len(bands)} bands")
+    check("line bands are in top-to-bottom order",
+          all(bands[i][1] < bands[i + 1][1] for i in range(len(bands) - 1)),
+          str([bd[1] for bd in bands]))
+    check("each band is narrower in height than the whole block",
+          all((bd[3] - bd[1]) < (blk[3] - blk[1]) for bd in bands),
+          str([(bd[3] - bd[1]) for bd in bands]))
+    # read_block reads each line correctly, top-to-bottom.
+    out = osctl.read_block(rgb, sz, blk, atlas, MAG)
+    check("read_block reads the two lines in order ['OK','CAB']",
+          out == lines, repr(out))
+    # A three-line block reads too — no per-block special-casing.
+    lines3 = ["OK", "AB", "OK"]
+    rgb3, sz3, blk3 = block(lines3, lead=110)
+    out3 = osctl.read_block(rgb3, sz3, blk3, atlas, MAG) if blk3 else []
+    check("read_block reads a three-line block ['OK','AB','OK']",
+          out3 == lines3, repr(out3))
+    # A single-line block yields a one-element list (read_text of the line).
+    rgb1, sz1, blk1 = block(["OK"])
+    out1 = osctl.read_block(rgb1, sz1, blk1, atlas, MAG) if blk1 else []
+    check("read_block on a single line returns one element ['OK']",
+          out1 == ["OK"], repr(out1))
+    # A blank region refuses: no bands, empty list.
+    check("segment_lines on a blank region returns no bands",
+          osctl.segment_lines(rgb, sz, (5, 5, 25, 25), MAG) == [])
+    check("read_block on a blank region returns the empty list",
+          osctl.read_block(rgb, sz, (5, 5, 25, 25), atlas, MAG) == [])
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -3274,7 +3366,8 @@ def main() -> int:
               round_touch_hold, round_double_tap, round_two_finger_tap,
               round_touch_drag, round_two_finger_pan,
               round_three_finger_swipe, round_edge_swipe,
-              round_touch_drag_to, round_read_text, round_read_kerned]
+              round_touch_drag_to, round_read_text, round_read_kerned,
+              round_read_block]
     for r in rounds:
         try:
             r(b, offline)
