@@ -909,37 +909,55 @@
   // ── 路线C 启动: 0账号·去中心化 WebRTC 信令应答方 (公共 ntfy pub/sub, 不经 Worker)。──
   //   用设备身份(session+token)既定址(topic=H(session))又鉴权(密钥=H(session+token))。
   //   公网客户端(console.html / p2p-client.html)优先走此直连, 不通才回落 Worker → 真·兜底。
+  //__SIGSERVE_START__  (test/signal-reserve.test.js 切片实测此应答方生命周期: 身份漂移即 re-serve)
   (function startSignal(){
     if (!(window.DaoSignal && DaoSignal.available && DaoSignal.available())) { log("signal: webcrypto 不可用, 去中心化信令禁用 (Worker 兜底仍在)"); return; }
     // 设备身份(session/token)由原生金库在引擎加载后**异步**就绪 → 引擎首跑时 getConn() 可能还空。
     //   此前一次性放弃会导致「设备重启→引擎先于身份起来→去中心化信令永不启动(直到重开 App)」。
     //   改为定时重读 getConn() 重试至就绪, 且 serve 失败/拒绝也重试 → 启动竞态自愈, 持久稳定。
-    var tries = 0, MAX = 60, started = false;
-    function attempt(){
-      if (started) return;
+    //   且 token 轮换(rotateToken)/relay 重启会改变派生密钥 H(session+token), 旧 serve 句柄
+    //   将无法解密新分享链接发来的 offer → 浏览器直开「未收到对端应答」。故每次都**实读**当前
+    //   设备身份, 一旦 (session,token) 漂移即关旧句柄、按新身份重起应答方 → 分享链接恒可打通。
+    var tries = 0, MAX = 60, serving = false;
+    var serveHandle = null, servedSession = null, servedToken = null;
+    function curId(){
+      var s = null, t = null;
+      try { var c2 = JSON.parse(N.getConn ? (N.getConn()||"{}") : "{}"); if (c2) { s = c2.session || null; t = c2.token || null; } } catch (e) {}
+      if (!s) s = _devSession; if (!t) t = _devToken;
+      return { s: s, t: t };
+    }
+    function tick(){
+      if (serving) return;
       try {
-        var s = _devSession, t = _devToken;
-        if (!s || !t) {
-          try { var c2 = JSON.parse(N.getConn ? (N.getConn()||"{}") : "{}"); if (c2) { if (c2.session) { s = _devSession = c2.session; } if (c2.token) { t = _devToken = c2.token; } } } catch (e) {}
-        }
-        if (!s || !t) {
-          if (++tries <= MAX) { setTimeout(attempt, 2000); }
-          else { log("signal: 设备身份持续未就绪(" + tries + "次), 暂停去中心化信令"); }
+        var id = curId();
+        if (!id.s || !id.t) {
+          if (!serveHandle && ++tries <= MAX) { setTimeout(tick, 2000); }
+          else if (!serveHandle) { log("signal: 设备身份持续未就绪(" + tries + "次), 暂停去中心化信令"); }
           return;
         }
-        // 用户可在 relay-config.json 填 signalServers (自托管 ntfy) → 叠加到内置多家公共 broker 之上。
+        _devSession = id.s; _devToken = id.t;
+        // 已在应答且身份未变 → 无需动作(周期巡检的常态分支)。
+        if (serveHandle && id.s === servedSession && id.t === servedToken) return;
+        // 首次启动, 或身份已轮换 → (重)建应答方, 始终应答「当前分享链接」对应的 topic+key。
+        serving = true;
         var _extra = null; try { _extra = conn && conn.signalServers; } catch (e) {}
         var _srv = (window.DaoSignal.DEFAULT_SERVERS || []).slice();
         if (Array.isArray(_extra)) _srv = _srv.concat(_extra);
         else if (typeof _extra === "string" && _extra) _srv = _srv.concat(_extra.split(/[\s,]+/));
-        DaoSignal.serve({ session: s, token: t, servers: _srv }).then(function(r){
-          if (r && r.ok) { started = true; log("signal serving (去中心化P2P) → topic=" + r.topic + " servers=" + (r.servers||[]).join(",")); }
-          else { log("signal serve 失败: " + (r && r.error) + (tries < MAX ? " → 稍后重试" : "")); if (++tries <= MAX) setTimeout(attempt, 3000); }
-        }, function(e){ log("signal serve err " + e + (tries < MAX ? " → 稍后重试" : "")); if (++tries <= MAX) setTimeout(attempt, 3000); });
-      } catch (e) { log("signal boot err " + e); if (++tries <= MAX) setTimeout(attempt, 3000); }
+        DaoSignal.serve({ session: id.s, token: id.t, servers: _srv }).then(function(r){
+          serving = false;
+          if (r && r.ok) {
+            var old = serveHandle; serveHandle = r; servedSession = id.s; servedToken = id.t; tries = 0;
+            try { if (old && old.close) old.close(); } catch (e) {}   // 关旧句柄(身份漂移时), 避免旧 topic 残留订阅
+            log("signal serving (去中心化P2P) → topic=" + r.topic + " servers=" + (r.servers||[]).join(","));
+          } else { log("signal serve 失败: " + (r && r.error) + (tries < MAX ? " → 稍后重试" : "")); if (++tries <= MAX) setTimeout(tick, 3000); }
+        }, function(e){ serving = false; log("signal serve err " + e + (tries < MAX ? " → 稍后重试" : "")); if (++tries <= MAX) setTimeout(tick, 3000); });
+      } catch (e) { serving = false; log("signal boot err " + e); if (++tries <= MAX) setTimeout(tick, 3000); }
     }
-    attempt();
+    tick();
+    setInterval(tick, 5000);   // 周期巡检设备身份漂移(token 轮换/relay 重启即自动 re-serve, 持久打通)
   })();
+  //__SIGSERVE_END__
 
   // ── 对话追踪·全局通知 (常驻引擎后台轮询, 软件被切后台/锁屏也能弹系统通知)。──
   //   仅在「状态跃迁」时通知, 不刷屏: active→卡住/待处理 弹一次; →结束 弹一次。
