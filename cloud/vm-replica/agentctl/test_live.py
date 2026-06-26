@@ -1403,6 +1403,48 @@ def round_context_menu(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_key_chord(b: Browser, offline: bool) -> None:
+    print("R32: fire a keyboard shortcut chord (modifier + key) (F068) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>chord</title>"
+            b"<input id=i>"
+            b"<script>var i=document.getElementById('i');window.__saved=0;"
+            b"window.__plain=0;window.__both=0;"
+            b"i.addEventListener('keydown',function(e){"
+            b"  if((e.key==='s'||e.key==='S')&&!e.ctrlKey)window.__plain++;"
+            b"  if((e.key==='s'||e.key==='S')&&e.ctrlKey&&!e.shiftKey){"
+            b"    e.preventDefault();window.__saved++;}"
+            b"  if((e.key==='S'||e.key==='s')&&e.ctrlKey&&e.shiftKey){"
+            b"    e.preventDefault();window.__both++;}});"
+            b"</script>")
+    sp = _serve(8958, page)
+    try:
+        b.navigate("http://127.0.0.1:8958/")
+        time.sleep(0.2)
+        b.click("#i")
+        # Friction: a bare key carries no modifier, so a Ctrl+S binding is dead.
+        b.press_key("s", "KeyS", 83)
+        time.sleep(0.1)
+        check("a bare key never triggers the Ctrl+S binding",
+              b.eval("window.__plain||0") >= 1 and b.eval("window.__saved||0") == 0,
+              repr((b.eval("window.__plain||0"), b.eval("window.__saved||0"))))
+        # Primitive: key_chord holds Ctrl, so the single-modifier binding fires.
+        check("key_chord(Ctrl+S) reports it fired",
+              b.key_chord("s", ctrl=True, code="KeyS", key_code=83) is True)
+        check("the Ctrl+S handler ran exactly once",
+              b.wait_for("window.__saved===1", timeout=2),
+              repr(b.eval("window.__saved||0")))
+        # And a two-modifier chord is distinguished from the one-modifier one.
+        check("key_chord(Ctrl+Shift+S) reports it fired",
+              b.key_chord("S", ctrl=True, shift=True, code="KeyS",
+                          key_code=83) is True)
+        check("the Ctrl+Shift+S handler ran (and Ctrl+S did not re-fire)",
+              b.wait_for("window.__both===1", timeout=2)
+              and b.eval("window.__saved||0") == 1,
+              repr((b.eval("window.__both||0"), b.eval("window.__saved||0"))))
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1414,7 +1456,8 @@ def main() -> int:
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
               round_native_select, round_contenteditable, round_file_drop,
-              round_draw_path, round_paste_pipeline, round_context_menu]
+              round_draw_path, round_paste_pipeline, round_context_menu,
+              round_key_chord]
     for r in rounds:
         try:
             r(b, offline)

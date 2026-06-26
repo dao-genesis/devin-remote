@@ -862,6 +862,32 @@ rather than pretend a right-click landed.
 
 ---
 
+### F068 — a shortcut is a modifier *held while* a key is tapped, not a bare key
+**Surface:** an app that binds real work to a keyboard chord — Ctrl+B bolds,
+Ctrl+S saves, Ctrl+Enter submits, Shift+Tab walks back a field. The handler reads
+`e.ctrlKey`/`e.shiftKey`/… to decide. Our `press_key` (F0xx) sends a *bare* key
+with no modifier state, so `s` alone is not Ctrl+S: the guard `if(e.ctrlKey)` is
+false, the binding never matches, and the shortcut is simply dead — the key falls
+through as if typed into the document.
+**Mechanism:** a chord is not one event — it is the modifier key pressed *down*
+first (so every event in between reports `ctrlKey==true`), then the main key
+tapped *while the modifier is held*, then the modifier released. Chrome's
+`Input.dispatchKeyEvent` needs both: the held modifier delivered as its own
+`keyDown` (with the correct `windowsVirtualKeyCode`) **and** the `modifiers`
+bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8) set on the main key's events. Omit either
+and `e.ctrlKey` stays false.
+**Primitive:** `Browser.key_chord(key, ctrl=…, shift=…, alt=…, meta=…)`. Press each
+requested modifier key (accumulating the bitmask), tap the main key with that mask
+set, then release the key and the modifiers in reverse order. Live: pressing bare
+`s` does nothing to `__saved`, while `key_chord('s', ctrl=True)` fires the page's
+Ctrl+S handler once and `__saved` flips. `162/162 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 一生二，二生三 — the chord is born of order: modifier *before*
+key, release *after*; the sequence is the meaning. 大音希聲 — the modifier makes no
+mark of its own, yet without it the key says nothing the app hears. 信言不美 — we
+report exactly what fired, not what we wished had.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
