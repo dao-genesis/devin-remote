@@ -2756,6 +2756,69 @@ def round_two_finger_tap(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_touch_drag(b: Browser, offline: bool) -> None:
+    print("R62: long-press-to-arm touch drag (F098) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>td</title>"
+            b"<style>html,body{margin:0}"
+            b"#b{width:240px;height:160px;background:#dde}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=b>drag</div><div id=veil></div>"
+            b"<script>window.armed=false;window.dragged=0;window.dropped=0;"
+            b"var arm=false,timer=null,sx=0;"
+            b"var el=document.getElementById('b');"
+            b"el.addEventListener('touchstart',function(e){"
+            b"sx=e.touches[0].clientX;arm=false;"
+            b"timer=setTimeout(function(){arm=true;window.armed=true;},200);"
+            b"},{passive:true});"
+            b"el.addEventListener('touchmove',function(e){"
+            b"if(!arm){clearTimeout(timer);return;}"
+            b"window.dragged=Math.round(e.touches[0].clientX-sx);"
+            b"},{passive:true});"
+            b"el.addEventListener('touchend',function(e){"
+            b"clearTimeout(timer);if(arm&&window.dragged!==0){window.dropped++;}"
+            b"arm=false;},{passive:true});"
+            b"</script>")
+    sp = _serve(8991, page)
+
+    def st():
+        return (b.eval("window.armed"), b.eval("window.dragged"),
+                b.eval("window.dropped"))
+
+    def reset() -> None:
+        b.eval("window.armed=false;window.dragged=0;window.dropped=0;")
+    try:
+        b.navigate("http://127.0.0.1:8991/")
+        time.sleep(0.2)
+        a, d, dp = st()
+        check("touch drag starts unfired", (a, d, dp) == (False, 0, 0),
+              repr((a, d, dp)))
+        # Friction: a swipe moves immediately, so the arm timer is cancelled
+        # (early move reads as a scroll) and the drag never engages.
+        check("swipe (immediate move) never arms the drag",
+              b.swipe("#b", 80, 0) is True and st()[2] == 0, repr(st()))
+        check("swipe left the handle un-armed", st()[0] is False, repr(st()))
+        # Friction: touch_hold dwells and arms but never moves, so the handle
+        # is picked up yet dropped in place — no reorder.
+        reset()
+        check("touch_hold arms but commits no drag",
+              b.touch_hold("#b", 0.3) is True
+              and st()[0] is True and st()[2] == 0, repr(st()))
+        # Primitive: press, dwell past the arm threshold, then drag and lift.
+        reset()
+        check("touch_drag arms then commits exactly one drag",
+              b.touch_drag("#b", 80, 0) is True
+              and st()[1] == 80 and st()[2] == 1, repr(st()))
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("touch_drag refuses through an overlay",
+              b.touch_drag("#b", 80, 0) is False)
+        check("nothing dropped while occluded", st()[2] == 1, repr(st()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("touch_drag on an absent element returns False",
+              b.touch_drag("#nope", 80, 0) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2778,7 +2841,8 @@ def main() -> int:
               round_key_step, round_triple_click, round_drag_by,
               round_middle_click, round_right_drag_by,
               round_tap, round_swipe, round_pinch, round_rotate,
-              round_touch_hold, round_double_tap, round_two_finger_tap]
+              round_touch_hold, round_double_tap, round_two_finger_tap,
+              round_touch_drag]
     for r in rounds:
         try:
             r(b, offline)

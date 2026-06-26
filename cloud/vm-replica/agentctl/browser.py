@@ -1019,6 +1019,46 @@ class Browser:
                       {"type": "touchEnd", "touchPoints": []})
         return True
 
+    def touch_drag(self, selector: str, dx: float, dy: float,
+                   arm: float = 0.25, by_text: bool = False,
+                   tag: str | None = None) -> bool:
+        """Drag an element by **long-pressing to arm, then moving the held touch**
+        (F098). A sortable list that reorders rows only after a press dwells long
+        enough to "pick up", a drag-handle that ignores a quick flick as a scroll, a
+        kanban card that lifts on long-press then follows the finger — these arm a
+        timer on ``touchstart`` and **cancel it on any ``touchmove`` that arrives
+        before it elapses**, treating an early move as a scroll, not a drag; only a
+        touch that stays still past the dwell, *then* travels, is accepted and
+        committed at ``touchend``. :meth:`swipe` (F092) starts moving immediately, so
+        the arm timer is cancelled and the drag never engages (travel reads as a
+        scroll). :meth:`touch_hold` (F095) dwells and arms but never moves, so the
+        handle is picked up yet dropped in place — no reorder. A mouse
+        :meth:`drag_by` (F088) makes no ``touchstart`` at all. The faithful gesture
+        is one finger that lands, *waits still* past the arm threshold, then drags
+        and lifts. We resolve the honest hit point (F061), refuse if occluded, press
+        one touch point, hold it motionless for ``arm`` seconds so the page's
+        pick-up timer fires, step it along ``(dx, dy)`` issuing ``touchMove`` events
+        so the live drag handler runs each frame, then lift with ``touchEnd``.
+        Returns ``True`` once the drag completes, ``False`` if the element is absent
+        or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        x, y = p["x"], p["y"]
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        time.sleep(arm)
+        steps = max(2, int((abs(dx) + abs(dy)) / 10) + 1)
+        for i in range(1, steps + 1):
+            mx = x + dx * i / steps
+            my = y + dy * i / steps
+            self.cdp.call("Input.dispatchTouchEvent",
+                          {"type": "touchMove",
+                           "touchPoints": [{"x": mx, "y": my}]})
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchEnd", "touchPoints": []})
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A
