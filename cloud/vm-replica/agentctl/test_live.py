@@ -4057,6 +4057,153 @@ def round_read_region(b: Browser, offline: bool) -> None:
         check("read_region of a uniform region is '' (no ink)", rru == "", repr(rru))
 
 
+def round_read_block_region(b: Browser, offline: bool) -> None:
+    print("R76: read a multi-LINE, multi-COLOUR block line by line (F112) — osctl")
+    # read_block parts lines but by ONE fg, so a block whose lines are different
+    # colours drops every line that one colour does not ink. read_region reads
+    # every colour but flattens the whole bbox into one x-sorted run, so two
+    # stacked lines interleave by column. read_block_region keeps both: it bands
+    # rows by ANY ink (palette), then read_regions each band top-to-bottom.
+    def hx(s):
+        s = s.lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+    def close(a, c, t=48):
+        return sum(abs(p - q) for p, q in zip(a, c)) <= t
+
+    MAG = (255, 0, 255)
+    RED, GRN, BLU = "#d32020", "#1f9d35", "#1565c0"
+    # One magenta-on-white atlas reads runs of any ink: O K G R E D N B L U Y.
+    chars = "OKGREDNBLUY"
+    draws = "".join("x.fillText('%s',%d,80);" % (ch, 24 + i * 96)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("br_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=1100 height=140></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,1100,140);"
+               "x.fillStyle='#f0f';x.font='bold 80px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = sorted(osctl.find_color_blobs(MAG, tol=60, rgb=argb, size=(aw, ah),
+                                       min_count=120), key=lambda t: t["x"])
+    check("atlas segments into eleven reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def field_bbox(rgbX, szX, bg="#ffffff", frac=16):
+        # capture_rgb grabs the whole desktop, so the white field abuts the
+        # browser chrome; crop a generous //8 off top/bottom (as R75) to keep
+        # the bookmarks-bar fringe out of the band.
+        bls = osctl.find_color_blobs(hx(bg), tol=30, rgb=rgbX, size=szX,
+                                     min_count=5000)
+        if not bls:
+            return None
+        x0, y0, x1, y1 = max(bls, key=lambda t: t["count"])["bbox"]
+        iw, ih = (x1 - x0) // frac, (y1 - y0) // 8
+        return (x0 + iw, y0 + ih, x1 - iw, y1 - ih)
+
+    def two_line(name, l1, l2):
+        # l1/l2 are [(word, colour, x), ...]; line 1 at y=180, line 2 at y=380,
+        # well clear of the chrome fringe at the field's top edge.
+        body = ("x.fillStyle='#fff';x.fillRect(0,0,900,520);"
+                "x.font='bold 80px monospace';x.textBaseline='middle';"
+                "x.textAlign='left';")
+        for word, col, x in l1:
+            body += "x.fillStyle='%s';x.fillText('%s',%d,180);" % (col, word, x)
+        for word, col, x in l2:
+            body += "x.fillStyle='%s';x.fillText('%s',%d,380);" % (col, word, x)
+        b.navigate(fixture(name,
+                   "<!doctype html><title>b</title><style>html,body{margin:0;"
+                   "background:#fff}</style>"
+                   "<canvas id=c width=900 height=520></canvas><script>"
+                   "var x=document.getElementById('c').getContext('2d');"
+                   + body + "</script>"))
+        time.sleep(0.4)
+        return osctl.capture_rgb()
+
+    # Scene A: two lines, two colours each. L1: OK(red) GO(grn). L2: NO(blu) BY(red).
+    w, h, rgb = two_line("br_two.html",
+                         [("OK", RED, 80), ("GO", GRN, 520)],
+                         [("NO", BLU, 80), ("BY", RED, 520)])
+    sz = (w, h)
+    bb = field_bbox(rgb, sz)
+    check("two-line two-colour block located", bb is not None, repr(bb))
+    if bb is None:
+        return
+    pal = osctl.palette(rgb, sz, bb)
+    inks = pal[1:]
+    three = (any(close(c, hx(RED)) for c in inks)
+             and any(close(c, hx(GRN)) for c in inks)
+             and any(close(c, hx(BLU)) for c in inks))
+    check("palette recovers background + the three inks", len(pal) == 4 and three,
+          repr(pal))
+
+    # FRICTION: read_region flattens both lines into one x-scramble — a line-2
+    # word (NO, blue, left) intrudes before a line-1 word (GO, green, right).
+    flat = osctl.read_region(rgb, sz, bb, atlas)
+    scrambled = ("N" in flat and "G" in flat
+                 and flat.index("N") < flat.index("G") and flat != "OKGONOBY")
+    check("FRICTION: read_region x-scrambles the two lines (not 'OKGONOBY')",
+          scrambled, repr(flat))
+
+    # RESOLUTION: read_block_region reads each line, every colour, top-to-bottom.
+    rbr = osctl.read_block_region(rgb, sz, bb, atlas)
+    check("read_block_region reads both lines across colours (['OKGO','NOBY'])",
+          rbr == ["OKGO", "NOBY"], repr(rbr))
+
+    # Scene B: lines of a SINGLE colour each — read_block(red) drops the green one.
+    w2, h2, rgb2 = two_line("br_mono.html",
+                            [("RED", RED, 80)], [("GRN", GRN, 80)])
+    bb2 = field_bbox(rgb2, (w2, h2))
+    if bb2 is not None:
+        rb_red = osctl.read_block(rgb2, (w2, h2), bb2, atlas, hx(RED))
+        check("FRICTION: read_block with the red ink drops the green line (['RED'])",
+              rb_red == ["RED"], repr(rb_red))
+        rbr2 = osctl.read_block_region(rgb2, (w2, h2), bb2, atlas)
+        check("read_block_region reads both mono-coloured lines (['RED','GRN'])",
+              rbr2 == ["RED", "GRN"], repr(rbr2))
+
+    # Scene C: order follows geometry top-to-bottom — swap the two lines.
+    w3, h3, rgb3 = two_line("br_swap.html",
+                           [("NO", BLU, 80), ("BY", RED, 520)],
+                           [("OK", RED, 80), ("GO", GRN, 520)])
+    bb3 = field_bbox(rgb3, (w3, h3))
+    if bb3 is not None:
+        rbr3 = osctl.read_block_region(rgb3, (w3, h3), bb3, atlas)
+        check("read_block_region orders lines top-to-bottom (['NOBY','OKGO'])",
+              rbr3 == ["NOBY", "OKGO"], repr(rbr3))
+
+    # Scene D: a single line — read_block_region is a one-element list = read_region.
+    w4, h4, rgb4 = two_line("br_one.html",
+                           [("OK", RED, 80), ("GO", GRN, 520)], [])
+    bb4 = field_bbox(rgb4, (w4, h4))
+    if bb4 is not None:
+        rbr4 = osctl.read_block_region(rgb4, (w4, h4), bb4, atlas)
+        rr4 = osctl.read_region(rgb4, (w4, h4), bb4, atlas)
+        check("read_block_region of one line equals [read_region] (['OKGO'])",
+              rbr4 == ["OKGO"] and rbr4 == [rr4], "%r/%r" % (rbr4, rr4))
+
+    # Scene E: a uniform block holds no ink — read_block_region reads [].
+    b.navigate(fixture("br_uni.html",
+               "<!doctype html><title>u</title><style>html,body{margin:0;"
+               "background:#0d2860}</style>"
+               "<canvas id=c width=900 height=520></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#0d2860';x.fillRect(0,0,900,520);</script>"))
+    time.sleep(0.4)
+    wu, hu, rgbu = osctl.capture_rgb()
+    bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
+    if bbu is not None:
+        rbru = osctl.read_block_region(rgbu, (wu, hu), bbu, atlas)
+        check("read_block_region of a uniform block is [] (no ink)", rbru == [],
+              repr(rbru))
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -4085,7 +4232,7 @@ def main() -> int:
               round_touch_drag_to, round_read_text, round_read_kerned,
               round_read_block, round_read_words, round_read_glyph_conf,
               round_read_text_conf, round_detect_fg, round_palette,
-              round_read_region]
+              round_read_region, round_read_block_region]
     for r in rounds:
         try:
             r(b, offline)

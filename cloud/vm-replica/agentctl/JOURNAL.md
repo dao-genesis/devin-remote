@@ -2436,6 +2436,54 @@ the line the eye already saw.
 
 ---
 
+## F112 — a region reads as one line: read the *block*, line by line
+
+**Friction.** F111's `read_region` gathers every ink's glyphs and sorts them by
+their **left edge** — one flat left-to-right run. Hand it a region holding *two
+stacked lines* (`OK GO` above `NO BY`) and the x-sort interleaves them: a
+left-most word on line 2 (`NO`) sorts *before* a right-most word on line 1
+(`GO`), so the block comes back x-scrambled (`"ONOKGBYO"`) — never the two lines
+the eye reads. F105's `read_block` *does* band rows into lines, but it bands by a
+**single** `fg`: give it lines drawn in *different* colours (a red line above a
+green line) and every line that colour does not ink is dropped — `read_block(red)`
+reads only `["RED"]`, the green line gone. Neither primitive reads a multi-line,
+multi-colour block whole.
+
+**Mechanism.** Ask `palette` for the region's inks (drop the background). Project
+**rows**: a row is *inked* if any pixel in it sits within `tol` of *any* ink — so
+a line drawn in any colour lights its rows. Group consecutive inked rows into
+**bands** separated by `row_gap` blank rows; each band is one line's y-span. Then
+hand each band's sub-bbox, **top-to-bottom**, to `read_region` — which already
+reads every colour in left-to-right order within the band. The block returns as a
+`list[str]`, one entry per line, in geometric reading order.
+
+**Primitive:** `read_block_region(rgb, size, bbox, atlas, ...)` returns the
+block's lines, each read across every colour, ordered top-to-bottom. Composition,
+not new machinery: `palette` (which inks) + row-ink projection (where the lines
+sit) + `read_region` per band (what each line says). A block with no ink above
+`palette`'s floor → `[]`; a single-line block → a one-element list equal to
+`[read_region(...)]`.
+
+**Live (R76):** one magenta atlas reads runs of any ink (`OKGREDNBLUY`). A
+two-line, two-colour block — `OK`(red) `GO`(green) over `NO`(blue) `BY`(red) —
+makes `read_region` return the x-scramble `"ONOKGBYO"` (the friction), while
+`read_block_region` reads `["OKGO", "NOBY"]`. Mono-coloured lines (`RED` red,
+`GRN` green) make `read_block(red)` drop the green line (`["RED"]`, the friction);
+`read_block_region` reads `["RED", "GRN"]`. Order follows geometry — swap the two
+lines and it reads `["NOBY", "OKGO"]`; a single line equals `[read_region]`
+(`["OKGO"]`); a uniform block reads `[]`. `527/527 checks passed`, deterministic
+×3. (`capture_rgb` grabs the whole desktop, so the white field abuts the browser
+chrome; the test crops `//8` off the field's top/bottom — as R75 — to keep the
+bookmarks-bar fringe out of the top band.)
+
+**Lesson (道法自然):** 知其白，守其黑 — but a page is not one line. F111 kept every
+colour in one order; F112 keeps every *line* in its own order, then every colour
+within it. The reader stops flattening height into width: rows say *where* the
+lines are, columns say *what* each line is, and the block speaks line by line as
+it was written.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

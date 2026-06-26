@@ -1278,6 +1278,75 @@ def read_region(rgb: bytes, size: tuple[int, int],
     return "".join(read_glyph(rgb, size, c, atlas, nw, nh, thr) for _, c in cells)
 
 
+def read_block_region(rgb: bytes, size: tuple[int, int],
+                      bbox: tuple[int, int, int, int],
+                      atlas: dict[str, list[int]],
+                      tol: int = 60, gap: int = 2, row_gap: int = 4,
+                      nw: int = 48, nh: int = 48, thr: int = 24,
+                      q: int = 16, min_pop: float = 0.002,
+                      min_dist: int = 96) -> list[str]:
+    """Read a multi-*line*, multi-*colour* block, line by line, in order (F112).
+
+    The two readers above each see only half of a coloured paragraph.
+    :func:`read_block` (F105) parts the lines — but by a *single* ``fg``, so
+    :func:`segment_lines` bands rows only where *that one colour* inks them: give
+    it a block whose first line is red and second green and it finds one band and
+    reads ``["RED"]``, the green line invisible (live). :func:`read_region` (F111)
+    reads *every* colour — but it flattens the whole ``bbox`` into one x-sorted run,
+    so two stacked lines interleave by column: ``"OK GO"`` over ``"NO BY"`` reads
+    ``"ONOKGBYO"``, every word shattered across the line break. One reader keeps the
+    colours and loses the rows; the other keeps the rows and loses the colours.
+
+    This keeps both. It asks :func:`palette` for the block's inks, then bands the
+    rows the way :func:`segment_lines` does but counting a row inked when *any* ink
+    touches it (not one named ``fg``) — so a line of any colour, or of several,
+    raises its own band, parted from its neighbours by ``>= row_gap`` blank rows of
+    leading. Each band, top-to-bottom, is then handed to :func:`read_region`, which
+    reads that line across all its colours in left-to-right order. The result is one
+    string per line: ``["OKGO", "NOBY"]`` where ``read_region`` alone read
+    ``"ONOKGBYO"`` and ``read_block`` alone read only the lines of its one colour.
+
+    Honest in the same frame as its parts: it parts rows only by the blank leading
+    the page left between lines (never guessing a wrap inside an x-height), reads
+    only glyphs the ``atlas`` carries, and reads *text* colours, not solid-fill
+    decorations. A block with no ink above :func:`palette`'s floor → ``[]``."""
+    inks = palette(rgb, size, bbox, q, min_pop, min_dist)[1:]
+    if not inks:
+        return []
+    x0, y0, x1, y1 = bbox
+    w, _h = size
+
+    def inked(y: int) -> bool:
+        row = y * w * 3
+        for x in range(x0, x1 + 1):
+            j = row + x * 3
+            pr, pg, pb = rgb[j], rgb[j + 1], rgb[j + 2]
+            for ir, ig, ib in inks:
+                if (abs(pr - ir) <= tol and abs(pg - ig) <= tol
+                        and abs(pb - ib) <= tol):
+                    return True
+        return False
+
+    bands: list[tuple[int, int, int, int]] = []
+    start: int | None = None
+    blanks = 0
+    for y in range(y0, y1 + 1):
+        if inked(y):
+            if start is None:
+                start = y
+            blanks = 0
+        elif start is not None:
+            blanks += 1
+            if blanks >= row_gap:
+                bands.append((x0, start, x1, y - blanks))
+                start = None
+                blanks = 0
+    if start is not None:
+        bands.append((x0, start, x1, y1 - blanks))
+    return [read_region(rgb, size, band, atlas, tol, gap, nw, nh, thr,
+                        q, min_pop, min_dist) for band in bands]
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"
