@@ -697,6 +697,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // 内穿持久化/智能刷新 — 延后触发(待服务器/凭证就绪), 低频去重, 采纳常驻桥发布的连接, 不另起隧道打扰
     setTimeout(() => { bridgeAutoPersist().catch(() => { /* 守柔 */ }); }, 4000);
     // v3.17.4 · 内穿实时反向注入: 监听隧道连接文件变化 → 防抖 → 仅签名变化才扩散到所有账号; 启动后延后做一次种入扩散。
+    try { bridgeLoadLastInject(); } catch { /* 守柔 */ } // 重载后恢复「上次实注配源」→ 探活环可据此核对有效性
     try { bridgeWatchForReinject(context); } catch { /* 守柔 */ }
     setTimeout(() => { bridgeScheduleReinject('activate'); }, 8000);
     // 端口/URL 实时更新 · 存活探测环: 打得通保持稳定, 打不通即刷新并重注新地址
@@ -757,6 +758,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 if (c === 'bridgeRefreshToken') {
                     if (!bridgeUrl) { vscode.window.showWarningMessage('当前为常驻桥持久化连接 · Token 由常驻服务管理。请先「启动隧道」再刷新。'); return { ok: false }; }
                     bridgeToken = crypto.randomBytes(24).toString('hex');
+                    bridgeSaveAuthToken(bridgeToken);
                     bridgeSaveConnJson();
                     try { bridgeWriteArtifacts(); } catch { /* 守柔 */ }
                     try { if (ws.devinAuth1 && ws.devinOrgId) await bridgeInjectKnowledge(); } catch { /* 守柔 */ }
@@ -3097,7 +3099,9 @@ function bridgeFindCloudflared(): string {
 async function bridgeStartTunnel(named: boolean) {
     const { spawn } = require('child_process');
     bridgeEnsureDir();
-    if (!bridgeToken) bridgeToken = crypto.randomBytes(24).toString('hex');
+    // 帛书·「重新模拟这个配源」: 令牌跨重载持久(載盤即復), 杜绝窗口重载凭空铸新牌致已发布令牌静默失效。
+    if (!bridgeToken) bridgeToken = bridgeLoadAuthToken() || crypto.randomBytes(24).toString('hex');
+    bridgeSaveAuthToken(bridgeToken);
     // ① 守柔复用(無死地): 上一个宿主留下的 cloudflared 仍脱宿主存活, 且日志含可达 URL
     //    → 直接复用其隧道, 绝不新起第二条(杜绝隧道增殖/地址漂移)。这正是「窗口重载却不断线」的根。
     if (!named) {
@@ -3611,6 +3615,74 @@ function bridgeEffectiveUrl(): string {
 function bridgeEffectiveToken(): string {
     return bridgeToken || ws.token || '';
 }
+// ═══ 主动有效性探测 — 帛书·「以实际有效性为基准」 ═══
+//   不止探"隧道是否 2xx 活着"(/api/health 免鉴权 → 隧道一通即 200, 验不出令牌失效),
+//   而是以**云端 Agent 真正会用的方式**探: 用**已发布的 token** 经**公网 URL** 打**需鉴权端点**(/api/next),
+//   2xx 才算"真正能连上并操作用户设备"; 401/403=令牌失效·5xx=隧道死·超时=不可达 → 皆为"无效"。
+//   据此, 令牌轮换(URL 不变)等"被动签名机制探不出"的脱钩盲区也被主动识别 → 即刷新即反注入。
+function bridgeProbeEffective(rawUrl: string, token: string, timeoutMs: number = 6000): Promise<{ ok: boolean; code: number; reason: string }> {
+    return new Promise((resolve) => {
+        let done = false;
+        const fin = (ok: boolean, code: number, reason: string) => { if (!done) { done = true; resolve({ ok, code, reason }); } };
+        if (!rawUrl || !token) { return fin(false, 0, 'no-url-or-token'); }
+        try {
+            const relay = /\/relay\//.test(rawUrl);
+            const u = new URL(rawUrl);
+            const isHttps = u.protocol === 'https:';
+            const mod = require(isHttps ? 'https' : 'http');
+            const headers: any = { 'Authorization': 'Bearer ' + token };
+            let postData: string | null = null;
+            const opts: any = { hostname: u.hostname, port: u.port || (isHttps ? 443 : 80), timeout: timeoutMs, headers };
+            if (relay) {
+                opts.method = 'POST';
+                opts.path = (u.pathname || '/') + (u.search || '');
+                postData = JSON.stringify({ path: '/api/next', method: 'GET', body: {} });
+                headers['Content-Type'] = 'application/json';
+                headers['Content-Length'] = Buffer.byteLength(postData);
+            } else {
+                opts.method = 'GET';
+                opts.path = '/api/next';
+            }
+            if (isHttps) opts.rejectUnauthorized = false;
+            const req = mod.request(opts, (r: any) => {
+                const sc = r.statusCode || 0;
+                let body = '';
+                r.setEncoding('utf8');
+                r.on('data', (c: string) => { if (body.length < 8192) body += c; });
+                r.on('end', () => {
+                    if (sc === 401 || sc === 403) return fin(false, sc, 'token-stale');
+                    if (sc < 200 || sc >= 300) return fin(false, sc, sc >= 500 ? 'tunnel-down' : 'http');
+                    if (relay) { try { const j = JSON.parse(body); return fin(!j.error, sc, j.error ? 'inner-error' : 'ok'); } catch { return fin(body.length > 0, sc, 'ok'); } }
+                    return fin(true, sc, 'ok');
+                });
+            });
+            req.on('timeout', () => { try { req.destroy(); } catch { /* 守柔 */ } fin(false, 0, 'timeout'); });
+            req.on('error', () => fin(false, 0, 'unreachable'));
+            if (postData) req.write(postData);
+            req.end();
+        } catch { fin(false, 0, 'exception'); }
+    });
+}
+// 令牌跨重载持久 + 「上次实注配源(URL+token)」落盘 — 重载后仍能比对"已发布配源是否仍有效"。
+function bridgeAuthTokenFile(): string { return path.join(BRIDGE_DIR, 'auth-token'); }
+function bridgeLoadAuthToken(): string {
+    try { const t = fs.readFileSync(bridgeAuthTokenFile(), 'utf8').trim(); if (t && t.length >= 16) return t; } catch { /* 守柔 */ }
+    return '';
+}
+function bridgeSaveAuthToken(t: string): void {
+    try { if (t) { bridgeEnsureDir(); fs.writeFileSync(bridgeAuthTokenFile(), t, 'utf8'); } } catch { /* 守柔 */ }
+}
+function bridgeLastInjectFile(): string { return path.join(BRIDGE_DIR, 'last-inject.json'); }
+function bridgeSaveLastInject(url: string, token: string): void {
+    try { bridgeEnsureDir(); fs.writeFileSync(bridgeLastInjectFile(), JSON.stringify({ url, token, ts: new Date().toISOString() }), 'utf8'); } catch { /* 守柔 */ }
+}
+function bridgeLoadLastInject(): void {
+    try {
+        const j = JSON.parse(fs.readFileSync(bridgeLastInjectFile(), 'utf8'));
+        if (j && typeof j.url === 'string' && j.url) _lastInjectedBridgeUrl = j.url;
+        if (j && typeof j.token === 'string' && j.token) _lastInjectedBridgeToken = j.token;
+    } catch { /* 守柔 */ }
+}
 function bridgeMcpUrl(): string {
     try {
         const mf = path.join(process.env.ProgramData || 'C:\\ProgramData', 'dao_vm', 'mcp_public.json');
@@ -3663,16 +3735,29 @@ async function bridgeLivenessTick(): Promise<void> {
         // 打得通 → 保持稳定, 什么也不做 (不重注·省网)
         if (bridgeOk && mcpOk) {
             _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0;
-            // 帛书·「守柔曰强」: 链路虽活, 仍须对账知识库所载地址 == 当前活址。
-            //   常驻桥轮换(旧→新)被探活视为「一直活」而走保持路径时, 旧的(曾中止过的)重注不会再触发
-            //   → 知识库滞留死址。此处发现实注地址漂移即补注(幂等·resolve-live 自守柔不覆盖死址·省网)。
+            // 帛书·「以实际有效性为基准」: 隧道 2xx 活着 ≠ 已发布配源能用。须主动核对「云端实读的 URL+token」仍真有效。
             const eff = bridgeEffectiveUrl();
-            if (eff && _lastInjectedBridgeUrl && eff !== _lastInjectedBridgeUrl) {
-                daoLoopLog('tunnel', 'probe ALIVE 但知识库滞留旧址(' + _lastInjectedBridgeUrl + ')→对账补注 ' + eff);
+            const effTok = bridgeEffectiveToken();
+            // (a) 地址漂移: 当前活址 ≠ 实注址 → 知识库滞留旧址, 补注。
+            const urlDrift = !!(eff && _lastInjectedBridgeUrl && eff !== _lastInjectedBridgeUrl);
+            // (b) 令牌漂移: 当前令牌 ≠ 已发布令牌 → 轮换却没人重注, 知识库令牌已失效, 补注(被动签名在 URL 不变时探不出此盲区)。
+            const tokDrift = !!(effTok && _lastInjectedBridgeToken && effTok !== _lastInjectedBridgeToken);
+            // (c) 实测有效性: 以云端 Agent 之法用「已发布 URL+token」打需鉴权端点; 隧道虽活但实测无效(401/5xx) → 补注。
+            let effDead = false, effReason = '';
+            const pubUrl = _lastInjectedBridgeUrl || eff;
+            const pubTok = _lastInjectedBridgeToken || effTok;
+            if (!urlDrift && !tokDrift && pubUrl && pubTok) {
+                try { const pe = await bridgeProbeEffective(pubUrl, pubTok, 6000); if (!pe.ok) { effDead = true; effReason = pe.reason + (pe.code ? '/' + pe.code : ''); } } catch { /* 守柔 */ }
+            }
+            if (urlDrift || tokDrift || effDead) {
+                const why = urlDrift ? 'url-drift(' + _lastInjectedBridgeUrl + '→' + eff + ')'
+                    : tokDrift ? 'token-drift(已发布令牌失配)'
+                    : 'published-ineffective(' + effReason + ')';
+                daoLoopLog('tunnel', 'probe ALIVE 但已发布配源失效[' + why + ']→主动刷新+反注入');
                 try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ }
-                bridgeScheduleReinject('liveness-reconcile');
+                bridgeScheduleReinject('liveness-effectiveness');
             } else {
-                daoLoopLog('tunnel', 'probe ALIVE (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 保持');
+                daoLoopLog('tunnel', 'probe ALIVE+EFFECTIVE (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 保持');
             }
             return;
         }
@@ -5884,6 +5969,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     break;
                 }
                 bridgeToken = crypto.randomBytes(24).toString('hex');
+                bridgeSaveAuthToken(bridgeToken);
                 bridgeSaveConnJson();
                 try { bridgeWriteArtifacts(); } catch { /* 守柔 */ }
                 let injected = false;
@@ -9733,6 +9819,9 @@ let _lastBridgeReinjectSig = '';
 //   根治隧道轮换后内部态(bridgeUrl)已收敛到活址、但知识库仍滞留旧死址的脱钩盲区:
 //   探活环(ALIVE/DEAD 两路)凡发现「当前活址 ≠ 上次实注地址」即强制补注, 令知识库恒指活址。
 let _lastInjectedBridgeUrl = '';
+// 帛书·「以实际有效性为基准」: 记录「实际写进知识库的那个 token」。令牌轮换(URL 不变)时,
+//   探活环比对此值即可识别"已发布令牌失配"→主动反注入(被动签名机制在 URL 不变时探不出此盲区)。
+let _lastInjectedBridgeToken = '';
 let _bridgeReinjectInflight = false;
 let _bridgeReinjectTimer: ReturnType<typeof setTimeout> | null = null;
 function bridgeCurrentSig(): string {
@@ -9800,6 +9889,8 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
         }
         _lastBridgeReinjectSig = sig;
         _lastInjectedBridgeUrl = bridgeUrl; // 记录实注活址 → 探活环据此对账, 杜绝 KB 与内部态脱钩
+        _lastInjectedBridgeToken = bridgeToken || ws.token || ''; // 记录实注令牌 → 令牌轮换即被探活环识别
+        try { bridgeSaveLastInject(_lastInjectedBridgeUrl, _lastInjectedBridgeToken); } catch { /* 守柔 */ }
         try { console.log('[dao] bridge real-time reinject (' + reason + ') → ' + injected + ' org(s)'); } catch { /* 守柔 */ }
     } finally { _bridgeReinjectInflight = false; }
     return { injected, changed: true };
