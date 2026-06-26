@@ -129,6 +129,30 @@ uses it for `exists` / `click` / `type`.
 **Proof:** R7 — plain `querySelector('.deep')` is `false`; `deep_query` finds the
 button inside the shadow root.
 
+### F044 — click-by-text lands on the wrong (wider) element *(honest correction)*
+**Surface:** `click_text("Learn more")` on `example.com` — a link that should
+navigate to `iana.org`.
+**First (wrong) diagnosis:** the click was dispatched, `click_text` returned
+`True`, yet `location.href` never changed. The tempting conclusion was *"CDP
+synthetic `Input.dispatchMouseEvent` is not trusted input, so the browser won't
+follow `<a href>` on a simulated click."* **That was false** — easy to believe,
+never verified, and it would have excused a real bug as a platform limit.
+**Real mechanism:** `byText` ranked candidates only by shortest `textContent`.
+The `<a>Learn more</a>` and its wrapping `<p>` have *identical* text
+(`"Learn more"`), and `walk()` yields the ancestor `<p>` first, so the wider
+paragraph box (≈770 px) won the tie. Its geometric center sat on paragraph
+whitespace, not the 80 px anchor — `elementFromPoint` at the click point
+returned `P`, not `A`. The click was real; it just hit the wrong target.
+**Primitive:** `byText` now ranks by *interactivity* first (`A`/`BUTTON`/form
+controls > `role=button|link` > `onclick`/`tabindex` > none), then shortest
+text, then **smallest bounding-box area** (the leaf). The anchor now wins; the
+synthetic click follows the link and navigates to `www.iana.org`.
+**Proof:** after the fix, `elementFromPoint` returns `A`, and `location.href`
+becomes `https://www.iana.org/help/example-domains`.
+**Lesson (道法自然):** a synthetic click *does* follow links — the floor was
+never the limit. When something "can't" work, suspect your own aim before
+blaming the platform; verify with `elementFromPoint` instead of inventing a law.
+
 ### Test-harness friction — `id="name"` collides with `window.name`
 Not a product friction, but recorded because it cost real debugging time: a
 fixture used `<div id=name>`, and `name` resolves to the special global
