@@ -724,6 +724,50 @@ class Browser:
                            "modifiers": held})
         return True
 
+    @staticmethod
+    def _key_descriptor(ch: str) -> dict:
+        """Map a single printable character to a CDP key descriptor (F069).
+
+        Returns ``key``/``code``/``windowsVirtualKeyCode`` so the dispatched event
+        carries a faithful ``e.key`` and ``e.code`` (what per-key handlers read),
+        not just inserted text."""
+        if "0" <= ch <= "9":
+            return {"key": ch, "code": "Digit" + ch,
+                    "windowsVirtualKeyCode": ord(ch)}
+        if "a" <= ch <= "z":
+            return {"key": ch, "code": "Key" + ch.upper(),
+                    "windowsVirtualKeyCode": ord(ch.upper())}
+        if "A" <= ch <= "Z":
+            return {"key": ch, "code": "Key" + ch,
+                    "windowsVirtualKeyCode": ord(ch)}
+        if ch == " ":
+            return {"key": " ", "code": "Space", "windowsVirtualKeyCode": 32}
+        return {"key": ch, "code": ""}
+
+    def type_keys(self, text: str, hold: float = 0.0) -> bool:
+        """Type ``text`` as a stream of **real per-key events** (F069). Segmented
+        fields — an OTP/passcode strip, a credit-card group, a "type each digit"
+        box — render one input per character and advance focus *inside a*
+        ``keydown`` handler reading ``e.key``. ``type_text`` delivers the whole
+        string with a single ``Input.insertText``: one ``input`` event on the first
+        box, **no ``keydown`` at all**, so focus never hops and only box one ever
+        sees anything. A human taps one key at a time and focus walks box to box. We
+        do exactly that: for every character dispatch a real ``keyDown`` (carrying
+        ``key``/``code``/``windowsVirtualKeyCode`` *and* the inserted ``text`` so
+        normal fields still receive the char) then ``keyUp`` — whatever currently
+        holds focus, including a box that just received it from its predecessor.
+        Returns ``True``."""
+        for ch in text:
+            d = self._key_descriptor(ch)
+            if "windowsVirtualKeyCode" in d:
+                d["nativeVirtualKeyCode"] = d["windowsVirtualKeyCode"]
+            self.cdp.call("Input.dispatchKeyEvent",
+                          {**d, "type": "keyDown", "text": ch})
+            self.cdp.call("Input.dispatchKeyEvent", {**d, "type": "keyUp"})
+            if hold:
+                time.sleep(hold)
+        return True
+
     # ---- F009: native file chooser bypass --------------------------------- #
     def set_file_input(self, selector: str, files: list[str]) -> None:
         node = self.cdp.call("DOM.getDocument", {"depth": 0})
