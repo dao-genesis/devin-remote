@@ -257,12 +257,78 @@ def round_virtual_scroll(b: Browser, offline: bool) -> None:
     check("missing row fails fast", b.scroll_to_text("Item 99999", container="#vp") is False)
 
 
+def _serve(port: int, body: bytes):
+    """Start a throwaway localhost HTTP server returning `body` for any GET."""
+    import http.server
+    import socketserver
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):  # silence
+            pass
+
+    socketserver.TCPServer.allow_reuse_address = True
+    httpd = socketserver.TCPServer(("127.0.0.1", port), H)
+    import threading
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+def round_xorigin_iframe(b: Browser, offline: bool) -> None:
+    print("R13: cross-origin iframe read/act (F049)")
+    # Two real origins: same IP, different port == cross-origin. The parent's JS
+    # is walled off from the child by the same-origin policy.
+    parent_port, child_port = 8901, 8902
+    parent = (b"<!doctype html><title>xo-parent</title><h1>parent</h1>"
+              b"<iframe id=f src='http://127.0.0.1:8902/c' "
+              b"style='width:300px;height:120px'></iframe>")
+    child = (b"<!doctype html><title>xo-child</title><body>"
+             b"<div id=secret>CHILD-SECRET-42</div>"
+             b"<button id=cb onclick=\"document.getElementById('secret')"
+             b".textContent='CHILD-CLICKED'\">go</button></body>")
+    sp = _serve(parent_port, parent)
+    sc = _serve(child_port, child)
+    try:
+        b.navigate(f"http://127.0.0.1:{parent_port}/")
+        time.sleep(0.3)
+        # Friction: parent JS cannot reach into the cross-origin child.
+        reach = b.eval("(function(){var f=document.getElementById('f');"
+                       "try{return f.contentDocument?"
+                       "f.contentDocument.getElementById('secret').textContent"
+                       ":null}catch(e){return 'ERR'}})()")
+        check("parent JS walled off from child (contentDocument null)",
+              reach is None, repr(reach))
+        check("deepQuery can't pierce cross-origin frame",
+              b.eval("!window.__agentctl.deepQuery('#secret')"))
+        # Primitive: address the child's own execution context via CDP.
+        check("eval_in_frame reads across the origin barrier",
+              b.eval_in_frame("8902", "document.getElementById('secret').textContent")
+              == "CHILD-SECRET-42")
+        check("eval_in_frame acts across the barrier (click)",
+              b.eval_in_frame("8902", "document.getElementById('cb').click(); true")
+              is True)
+        check("child state changed by cross-origin action",
+              b.eval_in_frame("8902", "document.getElementById('secret').textContent")
+              == "CHILD-CLICKED")
+        # A frame that doesn't exist fails fast rather than hanging.
+        check("absent frame returns None fast",
+              b.eval_in_frame("65535", "1", timeout=0.5) is None)
+    finally:
+        sp.shutdown()
+        sc.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
     rounds = [round_navigate_read, round_atomic_type, round_click_text, round_dialog,
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
-              round_hover_menu, round_dnd, round_virtual_scroll]
+              round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe]
     for r in rounds:
         try:
             r(b, offline)

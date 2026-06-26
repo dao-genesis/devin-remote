@@ -125,6 +125,57 @@ class Browser:
         except CDPError:
             pass
 
+    # ---- F049: cross-origin iframes --------------------------------------- #
+    def frames(self) -> list[dict]:
+        """Every execution context CDP currently sees, including cross-origin
+        child frames (which carry a distinct ``origin`` and ``frameId``)."""
+        out = []
+        for cid, ctx in self.cdp.contexts.items():
+            aux = ctx.get("auxData") or {}
+            out.append({"context_id": cid, "origin": ctx.get("origin"),
+                        "frame_id": aux.get("frameId"),
+                        "is_default": aux.get("isDefault")})
+        return out
+
+    def _frame_context(self, match: str) -> int | None:
+        best = None
+        for cid, ctx in self.cdp.contexts.items():
+            aux = ctx.get("auxData") or {}
+            if match in (ctx.get("origin") or "") or match == aux.get("frameId"):
+                if best is None or cid > best:  # prefer the freshest context
+                    best = cid
+        return best
+
+    def wait_frame(self, match: str, timeout: float = 5.0,
+                   interval: float = 0.1) -> int | None:
+        """Wait for a frame whose origin/frameId matches to register a context."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            cid = self._frame_context(match)
+            if cid is not None:
+                return cid
+            time.sleep(interval)
+        return None
+
+    def eval_in_frame(self, match: str, expr: str,
+                      await_promise: bool = False, timeout: float = 5.0):
+        """F049: read/act inside a cross-origin iframe's own execution context.
+
+        A cross-origin child blocks the parent's JS — ``iframe.contentDocument``
+        is ``null`` and ``deepQuery`` cannot pierce it — because the same-origin
+        policy forbids the parent *document* from touching it. CDP, though,
+        evaluates per **execution context** at the renderer level, beneath that
+        policy: addressing the child's own ``contextId`` reaches straight in to
+        read text or invoke ``element.click()``. ``match`` is a substring of the
+        frame's origin (e.g. a port) or its exact ``frameId``. Returns ``None``
+        if no such frame context exists.
+        """
+        cid = self.wait_frame(match, timeout=timeout)
+        if cid is None:
+            return None
+        return self.cdp.evaluate(expr, context_id=cid,
+                                 await_promise=await_promise)
+
     # ---- navigation (F003/F004: arrival, not just fired) ------------------ #
     def navigate(self, url: str, timeout: float = 30.0) -> str:
         self.cdp.call("Page.navigate", {"url": url}, timeout=timeout)

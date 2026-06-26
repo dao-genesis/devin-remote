@@ -255,6 +255,42 @@ primitive does not search harder, it *moves the world until the thing exists*,
 then acts — and knows when to stop (saturation) rather than chase a phantom.
 天下之物生於有，有生於無 — scroll calls the row out of nothing.
 
+### F049 — cross-origin iframes: the parent's JS is walled off from the child
+**Surface:** a page that embeds a frame from a *different origin* —
+`<iframe src="http://127.0.0.1:8902/c">` inside a page served from
+`127.0.0.1:8901` (same IP, different port ⇒ different origin). A human just
+reads the child's text or clicks its button; the agent, scripting from the
+parent, cannot.
+**Mechanism:** the same-origin policy forbids the parent *document* from
+touching a cross-origin child: `iframe.contentDocument` is `null` (or throws
+`SecurityError`), so neither parent script nor `deepQuery` — which walks
+`document`/shadow roots from the top frame — can see `#secret`. Querying harder
+from the parent can never cross this wall; the wall is by design. But the child
+is not invisible to *everyone*: Chrome gives it its own **execution context**,
+which CDP reports via `Runtime.executionContextCreated` (already tracked since
+F008) with the child's distinct `origin`/`frameId`. CDP evaluates *per context*
+at the renderer level, **beneath** the same-origin policy, which governs
+document-to-document access, not the debugger.
+**Primitive:** `frames()` lists every execution context (incl. cross-origin
+children); `eval_in_frame(match, expr)` resolves the context whose `origin`
+substring (e.g. a port) or exact `frameId` matches — preferring the freshest —
+waits briefly for it to register (`wait_frame`), then evaluates `expr` directly
+in it via `Runtime.evaluate{contextId}`. This both *reads* (`#secret` text) and
+*acts* (`element.click()`) inside the child. An absent frame returns `None`
+fast rather than hanging.
+**Proof:** R13 — parent `contentDocument` is `null` and `deepQuery('#secret')`
+fails (the wall is real), yet `eval_in_frame("8902", …)` reads `CHILD-SECRET-42`,
+clicks the child's button, and observes its state become `CHILD-CLICKED`; a
+non-existent frame returns `None` in <0.5s. `32/32 checks passed`.
+**Lesson (道法自然):** do not batter the wall the page raised on purpose —
+`為者敗之`. Stop addressing the child *through* the parent (the forbidden path)
+and address it *as itself*, on the channel that was never walled. 無有入於無間 —
+the formless (a per-context eval) enters where there is no gap. *(Note: here the
+cross-origin child stays in-process, so its context appears on the page session;
+a true out-of-process iframe (cross-site) would surface only under
+`Target.setAutoAttach` + `sessionId`. We built for the friction reproduced, not
+the one imagined.)*
+
 ---
 
 ## Frontier (next honest rounds)
@@ -262,8 +298,9 @@ then acts — and knows when to stop (saturation) rather than chase a phantom.
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
 
-- **R-next: cross-origin iframes** — separate processes; may need per-target
-  sessions (`Target.attachToTarget` + `sessionId`).
+- **R-next: out-of-process (cross-site) iframes** — when the child context does
+  *not* appear on the page session; needs `Target.setAutoAttach` + per-target
+  `sessionId` routing (the plumbing for which already exists in `cdp.py`).
 - **R-next: canvas / WebGL surfaces** — no DOM at all; pure pixel channel + OS
   input.
 - **R-next: focus & IME composition** — composed input for CJK via real IME, not
