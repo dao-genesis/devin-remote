@@ -972,6 +972,31 @@ grab.
 
 ---
 
+### F072 — drag-selecting an arbitrary character range
+**Surface:** styling/quoting/renaming a *precise span* — bolding exactly two of
+four words, quoting half a sentence, grabbing part of a label.
+**Friction:** `select_word`/`select_paragraph` (F071) only snap to whole words or
+blocks. There is no `clickCount` for "two-and-a-half words", so neither granularity
+can isolate `"beta gamma"` out of `"alpha beta gamma delta"`. The only thing that
+reaches it is a real *drag* from the first glyph to the last.
+**Mechanism:** Chrome grows the `Selection` character by character as the cursor
+moves **with the left button held down** — and the move events must carry that
+button state (`buttons:1`) or the frame's selection controller never treats them
+as a drag. The caret pixel for a character offset comes from collapsing a `Range`
+at that offset inside the right text node and reading its rect.
+**Primitive:** `Browser._caret_point_of(selector, offset)` walks the element's text
+nodes to the offset and returns the caret x/y; `Browser.select_range(selector,
+start, end)` presses at the start caret, moves through to the end caret carrying
+`buttons:1`, and releases — exactly the drag a human makes. Live: `select_range(6,
+16)` returns `'beta gamma'`, `(0,5)` returns `'alpha'`, an absent target returns
+`None`. `180/180 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 弱者道之用 — the move only works while it stays *soft*, the
+button held but not re-pressed; carrying the button state is what makes the drag
+real. 為之於未有 — we compute the caret before we press, so the drag has somewhere
+honest to start and end.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
