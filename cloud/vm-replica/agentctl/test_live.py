@@ -1176,6 +1176,40 @@ def round_native_select(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_contenteditable(b: Browser, offline: bool) -> None:
+    print("R27: replace text in a contenteditable editor with no .value (F063) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>editable</title>"
+            b"<div id=e contenteditable oninput=\"window.__n=(window.__n||0)+1\">"
+            b"OLD TEXT</div>")
+    sp = _serve(8953, page)
+    try:
+        b.navigate("http://127.0.0.1:8953/")
+        time.sleep(0.2)
+        check("editor has no value property",
+              b.eval("document.getElementById('e').value") is None)
+        # Friction: type_text can't clear a div (el.value='' is a no-op) so the
+        # old text survives and the new text merges into it.
+        b.type_text("#e", "NEW")
+        time.sleep(0.1)
+        check("type_text merges into the old text instead of replacing",
+              b.eval("document.getElementById('e').textContent") == "OLD TEXTNEW",
+              repr(b.eval("document.getElementById('e').textContent")))
+        # Primitive: set_editable selects-all then inserts — a clean replacement.
+        b.eval("var e=document.getElementById('e');e.textContent='OLD TEXT';"
+               "window.__n=0;true")
+        check("set_editable replaces the editor's whole contents",
+              b.set_editable("#e", "REPLACED") is True
+              and b.eval("document.getElementById('e').textContent") == "REPLACED",
+              repr(b.eval("document.getElementById('e').textContent")))
+        check("a real input event fired during the replace",
+              b.eval("window.__n||0") >= 1, repr(b.eval("window.__n||0")))
+        # Truthful failure: a non-editable / absent target is refused.
+        check("set_editable refuses an absent target",
+              b.set_editable("#nope", "x") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1186,7 +1220,7 @@ def main() -> int:
               round_template_match, round_settle, round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
-              round_native_select]
+              round_native_select, round_contenteditable]
     for r in rounds:
         try:
             r(b, offline)

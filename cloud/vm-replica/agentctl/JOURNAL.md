@@ -721,6 +721,35 @@ follows). 知止不殆 — when the option is absent we decline rather than fabr
 The human opens, scrolls, and clicks; we go straight to the meaning of the act —
 和其光，同其塵 — matching the page's own mechanism instead of miming the hand.
 
+### F063 — a text box with no text box: the contenteditable editor
+**Surface:** a rich editor — a comment body, a Slack/Gmail compose area, a Notion
+block. To the eye it is just a place to type, and a human selects-all and types
+over the old text. But it is a `<div contenteditable>`, not an `<input>`: it has
+**no `.value`**. `set_value` (the `HTMLInputElement.value` setter) throws
+`Illegal invocation` on a div, and `type_text`'s clear step — `el.value=''` — is a
+silent no-op, so the old text survives and the new text *merges* into it:
+typing `NEW` into `OLD TEXT` yields `OLD TEXTNEW`, not `NEW`.
+**Mechanism:** a contenteditable host keeps its content as **child DOM nodes**, not
+a string property; the editor's own model is driven by `beforeinput`/`input`
+events, not by assigning a value. A human's "replace everything" is two real acts:
+put a selection across the whole contents (Ctrl+A), then type — which deletes the
+selection and inserts. Poking a `.value` that does not exist skips the only
+channel the editor listens on.
+**Primitive:** `Browser.set_editable(selector, text)`. It focuses the editor,
+selects its entire contents through the **Selection API**
+(`Range.selectNodeContents` + `getSelection().addRange`), then issues
+`Input.insertText` over CDP — which replaces the selection and fires genuine
+`beforeinput`/`input`, so the editor's internal model updates exactly as if a human
+had typed. `OLD TEXT` becomes `REPLACED` cleanly, with one real `input` event; a
+target that is not an editable host returns `False` rather than pretending. The
+perception/actuation ladder now reaches **rich editors**. `130/130 checks passed`,
+deterministic ×3.
+**Lesson (道法自然):** 為者敗之 — assigning a `.value` the div never had is forcing a
+door that isn't there; we used the editor's own channel (selection + insertText)
+instead. 反者道之動 — the way forward was to *subtract* the old contents first
+(select-all) before adding the new, the same two-beat motion a human makes. 信言
+不美 — when the host isn't editable we say `False`, not a flattering success.
+
 ---
 
 ## Frontier (next honest rounds)
