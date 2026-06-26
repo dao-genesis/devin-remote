@@ -17,6 +17,10 @@ PRE-REGISTERED readout (set BEFORE measuring -- 為者敗之):
     may drop even when the label is right. Report whatever the live data shows; do NOT tune to a verdict.
 """
 import json, os, subprocess, sys, time, urllib.request
+try:
+    sys.stdout.reconfigure(encoding='utf-8')  # console may default to cp1252 on Windows
+except Exception:
+    pass
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import multiregion as MR
 import region_parse as RP
