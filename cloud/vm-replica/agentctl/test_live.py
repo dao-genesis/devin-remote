@@ -1862,6 +1862,56 @@ def round_shift_range_select(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_nested_submenu(b: Browser, offline: bool) -> None:
+    print("R43: walk a multi-level hover submenu and click the leaf (F079) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>submenu</title><style>"
+            b"ul{list-style:none;margin:0;padding:0}"
+            b"li{position:relative;padding:6px 12px;background:#eee;width:120px}"
+            b"li>ul{display:none;position:absolute;left:120px;top:0}"
+            b"li:hover>ul{display:block}</style>"
+            b"<ul><li id=file>File<ul>"
+            b"<li id=export>Export<ul>"
+            b"<li id=pdf>PDF</li><li id=png>PNG</li>"
+            b"</ul></li>"
+            b"<li id=close>Close</li>"
+            b"</ul></li></ul>"
+            b"<script>window.__hit='';"
+            b"document.getElementById('pdf').addEventListener('click',function(){"
+            b"window.__hit='PDF';});"
+            b"document.getElementById('png').addEventListener('click',function(){"
+            b"window.__hit='PNG';});</script>")
+    sp = _serve(8970, page)
+    try:
+        b.navigate("http://127.0.0.1:8970/")
+        time.sleep(0.2)
+        check("the depth-3 leaf is hidden until the path opens",
+              b.is_visible("#pdf") is False)
+        check("a direct click on the hidden leaf fails",
+              b.click("#pdf") is False)
+        check("nothing was activated by the failed click",
+              b.eval("window.__hit") == "", repr(b.eval("window.__hit")))
+        # hover_reveal (F046) opens only one level.
+        check("hover_reveal opens the first level", b.hover_reveal("#file", "#export"))
+        check("but the depth-3 leaf is still hidden one level down",
+              b.is_visible("#pdf") is False)
+        # menu_select walks the whole chain and clicks the leaf.
+        check("menu_select walks File>Export>PDF and clicks it",
+              b.menu_select(["#file", "#export", "#pdf"]) is True)
+        check("the leaf handler fired", b.eval("window.__hit") == "PDF",
+              repr(b.eval("window.__hit")))
+        # hover_chain alone leaves the path open so a sibling leaf is reachable.
+        b.navigate("http://127.0.0.1:8970/")
+        time.sleep(0.2)
+        check("hover_chain opens File>Export", b.hover_chain(["#file", "#export"]))
+        check("the sibling leaf is now visible", b.is_visible("#png") is True)
+        check("a wrong path returns False",
+              b.hover_chain(["#file", "#nope"]) is False)
+        check("menu_select on an empty path returns False",
+              b.menu_select([]) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1877,7 +1927,8 @@ def main() -> int:
               round_key_chord, round_per_key_type, round_wheel_pane,
               round_select_text, round_select_range, round_set_slider,
               round_closed_shadow, round_type_closed_shadow, round_marquee,
-              round_ctrl_multi_select, round_shift_range_select]
+              round_ctrl_multi_select, round_shift_range_select,
+              round_nested_submenu]
     for r in rounds:
         try:
             r(b, offline)

@@ -726,6 +726,39 @@ class Browser:
             return False
         return self.wait_visible(target_selector, timeout=timeout)
 
+    def hover_chain(self, selectors: list[str], timeout: float = 3.0) -> bool:
+        """Walk a *multi-level* hover menu, keeping every ancestor open (F079).
+        A leaf like File > Export > PDF only lays out once its whole ancestor chain
+        is hovered: hovering File reveals Export, hovering Export reveals PDF. A
+        direct ``click`` on the leaf fails — it has a zero-size ``display:none`` box
+        until the path is open — and ``hover_reveal`` (F046) opens only *one* level,
+        so it cannot reach a depth-3 item. The ancestors also stay open only while
+        the pointer is within the menu subtree, so the path must be traversed in
+        order, each parent revealing the next before we move onto it. We hover each
+        selector in turn, waiting for it to be visible before the move (so the menu
+        has laid out), which leaves the entire chain open. Returns ``False`` if any
+        level never appears (a wrong path, or a gap that re-closed the menu)."""
+        for i, sel in enumerate(selectors):
+            if i and not self.wait_visible(sel, timeout=timeout):
+                return False
+            if not self.hover(sel):
+                return False
+        return True
+
+    def menu_select(self, path: list[str], timeout: float = 3.0) -> bool:
+        """Open a nested hover menu along ``path`` and click its final item (F079).
+        ``path[:-1]`` are the levels to hover open (keeping each ancestor revealed
+        via :meth:`hover_chain`), and ``path[-1]`` is the leaf to click. This is the
+        whole gesture a human makes for File > Export > PDF in one call. Returns
+        ``False`` if the chain never opens or the leaf is absent/occluded."""
+        if not path:
+            return False
+        if len(path) > 1 and not self.hover_chain(path[:-1], timeout=timeout):
+            return False
+        if not self.wait_visible(path[-1], timeout=timeout):
+            return False
+        return self.click(path[-1])
+
     def dnd(self, source: str, target: str) -> bool:
         """F047: HTML5 drag-and-drop from source onto target.
 
