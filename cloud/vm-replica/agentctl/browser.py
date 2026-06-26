@@ -125,6 +125,57 @@ class Browser:
         except CDPError:
             pass
 
+    # ---- F049: cross-origin iframes --------------------------------------- #
+    def frames(self) -> list[dict]:
+        """Every execution context CDP currently sees, including cross-origin
+        child frames (which carry a distinct ``origin`` and ``frameId``)."""
+        out = []
+        for cid, ctx in self.cdp.contexts.items():
+            aux = ctx.get("auxData") or {}
+            out.append({"context_id": cid, "origin": ctx.get("origin"),
+                        "frame_id": aux.get("frameId"),
+                        "is_default": aux.get("isDefault")})
+        return out
+
+    def _frame_context(self, match: str) -> int | None:
+        best = None
+        for cid, ctx in self.cdp.contexts.items():
+            aux = ctx.get("auxData") or {}
+            if match in (ctx.get("origin") or "") or match == aux.get("frameId"):
+                if best is None or cid > best:  # prefer the freshest context
+                    best = cid
+        return best
+
+    def wait_frame(self, match: str, timeout: float = 5.0,
+                   interval: float = 0.1) -> int | None:
+        """Wait for a frame whose origin/frameId matches to register a context."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            cid = self._frame_context(match)
+            if cid is not None:
+                return cid
+            time.sleep(interval)
+        return None
+
+    def eval_in_frame(self, match: str, expr: str,
+                      await_promise: bool = False, timeout: float = 5.0):
+        """F049: read/act inside a cross-origin iframe's own execution context.
+
+        A cross-origin child blocks the parent's JS — ``iframe.contentDocument``
+        is ``null`` and ``deepQuery`` cannot pierce it — because the same-origin
+        policy forbids the parent *document* from touching it. CDP, though,
+        evaluates per **execution context** at the renderer level, beneath that
+        policy: addressing the child's own ``contextId`` reaches straight in to
+        read text or invoke ``element.click()``. ``match`` is a substring of the
+        frame's origin (e.g. a port) or its exact ``frameId``. Returns ``None``
+        if no such frame context exists.
+        """
+        cid = self.wait_frame(match, timeout=timeout)
+        if cid is None:
+            return None
+        return self.cdp.evaluate(expr, context_id=cid,
+                                 await_promise=await_promise)
+
     # ---- navigation (F003/F004: arrival, not just fired) ------------------ #
     def navigate(self, url: str, timeout: float = 30.0) -> str:
         self.cdp.call("Page.navigate", {"url": url}, timeout=timeout)
@@ -233,6 +284,71 @@ class Browser:
             return False
         return self.wait_visible(target_selector, timeout=timeout)
 
+    def dnd(self, source: str, target: str) -> bool:
+        """F047: HTML5 drag-and-drop from source onto target.
+
+        Native pointer-driven DnD over CDP (`mousePressed`→moves→`mouseReleased`)
+        is timing-nondeterministic: depending on the number/spacing of the
+        intermediate `mouseMoved`s, Chrome's drag controller may fire `dragstart`
+        yet never deliver the `drop`. Instead synthesize the exact event chain a
+        real drag produces — `dragstart→dragenter→dragover→drop→dragend` — sharing
+        one `DataTransfer` across all of them, so `setData` in `dragstart` is
+        readable via `getData` in `drop`, just as the page's handlers expect.
+        Pierces shadow roots via `deepQuery`. Returns False if either end is absent.
+        """
+        js = (
+            "(function(s,t){"
+            "var a=window.__agentctl.deepQuery(s),b=window.__agentctl.deepQuery(t);"
+            "if(!a||!b)return false;"
+            "var dt=new DataTransfer();"
+            "function fire(el,type){var r=el.getBoundingClientRect();"
+            "el.dispatchEvent(new DragEvent(type,{bubbles:true,cancelable:true,"
+            "composed:true,dataTransfer:dt,clientX:r.left+r.width/2,"
+            "clientY:r.top+r.height/2}));}"
+            "fire(a,'dragstart');fire(b,'dragenter');fire(b,'dragover');"
+            "fire(b,'drop');fire(a,'dragend');return true;"
+            f"}})({source!r},{target!r})"
+        )
+        return bool(self.eval(js))
+
+    def scroll_until(self, found_js: str, container: str | None = None,
+                     step: int = 180, max_steps: int = 150,
+                     settle: float = 0.05) -> bool:
+        """F048: scroll a container (or the window) until ``found_js`` is truthy.
+
+        Virtualized lists only keep the rows near the viewport in the DOM, so a
+        far item simply does not exist to be queried or clicked until you scroll
+        it into the render window. Step the scroll position, let the list
+        re-render (the ``settle`` pause), then re-test. Stops early when the
+        scroll position saturates (reached the end) so a missing item fails fast
+        instead of spinning ``max_steps`` times.
+        """
+        if self.eval(found_js):
+            return True
+        last = -1.0
+        for _ in range(max_steps):
+            if container:
+                pos = self.eval(
+                    "(function(){var c=window.__agentctl.deepQuery(%r);"
+                    "if(!c)return -1;c.scrollTop+=%d;return c.scrollTop;})()"
+                    % (container, step))
+            else:
+                self.scroll(step)
+                pos = self.eval("window.scrollY")
+            time.sleep(settle)
+            if self.eval(found_js):
+                return True
+            if pos == last:
+                break
+            last = pos if isinstance(pos, (int, float)) else last
+        return False
+
+    def scroll_to_text(self, text: str, container: str | None = None,
+                       **kw) -> bool:
+        """Scroll until a row containing ``text`` is rendered and visible."""
+        return self.scroll_until(
+            f"!!window.__agentctl.byText({text!r})", container, **kw)
+
     def scroll(self, dy: float, dx: float = 0.0, x: float = 400, y: float = 300) -> None:
         self.cdp.call("Input.dispatchMouseEvent",
                       {"type": "mouseWheel", "x": x, "y": y,
@@ -265,6 +381,39 @@ class Browser:
     def insert_text(self, text: str) -> None:
         """Insert text into whatever is focused (atomic)."""
         self.cdp.call("Input.insertText", {"text": text})
+
+    # ---- F051: IME / composition (CJK) ------------------------------------ #
+    def compose(self, selector: str | None, text: str,
+                stages: list[str] | None = None, commit: bool = True) -> bool:
+        """Enter text through the real IME composition lifecycle (F051).
+
+        ``insert_text`` and ``osctl.type_unicode`` both deliver the final
+        characters but fire **no** composition events — so a field that *gates*
+        on them (CJK type-ahead, pinyin search-as-you-type, rich editors that
+        suppress ``input`` while ``isComposing``) never reacts to the text. A
+        human's IME instead emits ``compositionstart`` → ``compositionupdate``…
+        (each with ``isComposing`` true) → ``compositionend`` on commit.
+
+        CDP's ``Input.imeSetComposition`` drives the renderer's IME directly,
+        beneath any key layout. We walk ``stages`` (default: progressive
+        prefixes of ``text``, mimicking candidates resolving) — each a
+        ``compositionupdate`` — then ``insert_text`` commits, firing
+        ``compositionend``. Pass explicit ``stages`` (e.g. ``["ni","你","你好"]``)
+        for a realistic romaji→hanzi progression, or ``commit=False`` to leave
+        the composition open. ``selector=None`` composes into whatever is
+        focused. Returns ``False`` if the field can't be focused.
+        """
+        if selector is not None and not self.click(selector):
+            return False
+        if stages is None:
+            stages = [text[:i] for i in range(1, len(text) + 1)]
+        for s in stages:
+            self.cdp.call("Input.imeSetComposition",
+                          {"text": s, "selectionStart": len(s),
+                           "selectionEnd": len(s)})
+        if commit:
+            self.cdp.call("Input.insertText", {"text": text})
+        return True
 
     def set_value(self, selector: str, value: str) -> bool:
         """DOM-level set + fire input/change (for React-style controlled inputs)."""

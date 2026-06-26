@@ -207,6 +207,182 @@ one that fails — it lies. The primitive does not force the menu; it *waits for
 the surface to become real* (`wait_visible`) before acting, then moves in one
 stroke. 弱也者，道之用也 — yield to the page's own timing rather than fight it.
 
+### F047 — HTML5 drag-and-drop: the native pointer drop is nondeterministic
+**Surface:** a `draggable=true` element dragged onto a dropzone whose `drop`
+handler reads `dataTransfer.getData(...)` set during `dragstart`. The human
+gesture is press-move-release.
+**Mechanism (measured, not assumed):** driving it with raw CDP pointer events —
+`mousePressed` at source, N×`mouseMoved`, `mouseReleased` at target — is *flaky in
+a way that depends on the move pattern*. Live probe over identical fixtures:
+`1 move → drop fired`, `2 moves → dragstart fired but the drop was silently
+lost (title unchanged)`, `5 moves @20ms → drop fired`. Chrome's internal drag
+controller couples to the OS drag loop and only sometimes promotes the moves into
+a completed drop. A "drag" that starts but never drops is the worst failure: it
+looks like motion happened.
+**Primitive:** `dnd(source, target)` skips the lossy pointer path and synthesizes
+the exact DOM event chain a real drag produces —
+`dragstart→dragenter→dragover→drop→dragend` — sharing **one** `DataTransfer`
+across all five, so `setData` in `dragstart` is readable by `getData` in `drop`,
+precisely what the page's handlers expect. Endpoints resolved via `deepQuery`
+(pierces shadow). Determinism check: synthetic path landed **10/10** drops vs the
+native path's intermittent loss.
+**Proof:** R11 — title goes `dnd` → `DROP:payload`. `21/21 checks passed`.
+**Lesson (道法自然):** do not fight the drag controller's hidden timing. The page
+speaks a five-event protocol with a single shared parcel (`DataTransfer`); speak
+*that* exactly, and the drop always lands. 為者敗之 — forcing the pointer fails;
+matching the page's own contract succeeds.
+
+### F048 — scroll-virtualized lists: the row does not exist until you reach it
+**Surface:** a 1000-row list in a 200px viewport that only materializes the ~10
+rows around the current scroll offset (`scroll`→re-render). A human flicks down
+until *Item 800* appears, then clicks it.
+**Mechanism:** virtualization keeps only the visible window in the DOM, so before
+scrolling, `byText("Item 800")` returns nothing and `click_text` simply fails —
+there is no element to hit. Querying harder does not help; the row literally is
+not there. Scrolling is not cosmetic, it is what *creates* the target.
+**Primitive:** `scroll_until(found_js, container)` steps the container's
+`scrollTop`, pauses (`settle`) for the list to re-render, and re-tests, returning
+as soon as the predicate holds. `scroll_to_text(text, container)` builds the
+`byText` predicate. A saturation guard compares successive scroll positions and
+stops the moment scrolling no longer advances, so a genuinely-absent row fails
+*fast* (≈1.3s) instead of spinning `max_steps`. After it returns, `click_text`
+lands normally.
+**Proof:** R12 — `Item 800` absent → naive click False → `scroll_to_text` brings
+it in → click yields `CLICK:800`; `Item 99999` returns False quickly.
+`26/26 checks passed`.
+**Lesson (道法自然):** you cannot grasp what has not yet come into being. The
+primitive does not search harder, it *moves the world until the thing exists*,
+then acts — and knows when to stop (saturation) rather than chase a phantom.
+天下之物生於有，有生於無 — scroll calls the row out of nothing.
+
+### F049 — cross-origin iframes: the parent's JS is walled off from the child
+**Surface:** a page that embeds a frame from a *different origin* —
+`<iframe src="http://127.0.0.1:8902/c">` inside a page served from
+`127.0.0.1:8901` (same IP, different port ⇒ different origin). A human just
+reads the child's text or clicks its button; the agent, scripting from the
+parent, cannot.
+**Mechanism:** the same-origin policy forbids the parent *document* from
+touching a cross-origin child: `iframe.contentDocument` is `null` (or throws
+`SecurityError`), so neither parent script nor `deepQuery` — which walks
+`document`/shadow roots from the top frame — can see `#secret`. Querying harder
+from the parent can never cross this wall; the wall is by design. But the child
+is not invisible to *everyone*: Chrome gives it its own **execution context**,
+which CDP reports via `Runtime.executionContextCreated` (already tracked since
+F008) with the child's distinct `origin`/`frameId`. CDP evaluates *per context*
+at the renderer level, **beneath** the same-origin policy, which governs
+document-to-document access, not the debugger.
+**Primitive:** `frames()` lists every execution context (incl. cross-origin
+children); `eval_in_frame(match, expr)` resolves the context whose `origin`
+substring (e.g. a port) or exact `frameId` matches — preferring the freshest —
+waits briefly for it to register (`wait_frame`), then evaluates `expr` directly
+in it via `Runtime.evaluate{contextId}`. This both *reads* (`#secret` text) and
+*acts* (`element.click()`) inside the child. An absent frame returns `None`
+fast rather than hanging.
+**Proof:** R13 — parent `contentDocument` is `null` and `deepQuery('#secret')`
+fails (the wall is real), yet `eval_in_frame("8902", …)` reads `CHILD-SECRET-42`,
+clicks the child's button, and observes its state become `CHILD-CLICKED`; a
+non-existent frame returns `None` in <0.5s. `32/32 checks passed`.
+**Lesson (道法自然):** do not batter the wall the page raised on purpose —
+`為者敗之`. Stop addressing the child *through* the parent (the forbidden path)
+and address it *as itself*, on the channel that was never walled. 無有入於無間 —
+the formless (a per-context eval) enters where there is no gap. *(Note: here the
+cross-origin child stays in-process, so its context appears on the page session;
+a true out-of-process iframe (cross-site) would surface only under
+`Target.setAutoAttach` + `sessionId`. We built for the friction reproduced, not
+the one imagined.)*
+
+### F050 — canvas targets: there is no DOM node, only pixels
+**Surface:** a target painted on `<canvas>` — a magenta rectangle drawn with
+`fillRect`, whose `click` handler hit-tests by `offsetX/offsetY`. A human just
+*sees* the coloured patch and clicks it.
+**Mechanism:** `<canvas>` is a single opaque element; everything inside is paint,
+not DOM. `deepQuery`, `byText`, `click_text` — every structural channel — is
+blind, because there is genuinely nothing there to match: no node, no text, no
+attribute. The target exists *only* as pixels on the screen. This is the one
+surface where the DOM perception channel is not merely awkward but absent; the
+agent must fall back to the other channel it has — its eyes.
+**Primitive:** `osctl.capture_rgb()` grabs the whole desktop (GDI `BitBlt`) into
+an in-memory RGB buffer whose dimensions equal `screen_size()` — the *same*
+space `osctl.click` normalises against, so a pixel found is a pixel clickable
+with no DOM→screen coordinate math. `osctl.find_color(target, tol)` scans for
+pixels within per-channel tolerance and returns the blob's centroid `{x,y,count,
+bbox}` in screen coordinates (or `None` — absence is reported, never
+hallucinated). Locate → `osctl.click(centroid)` → the canvas's own handler
+fires. Perception and action both happen purely in pixel/OS space, beneath the
+DOM entirely — the GUI's bottom layer.
+**Proof:** R14 — DOM search finds nothing and `click_text` fails (the target is
+invisible to structure); `find_color((255,0,255))` locates the 6300-px blob at
+its true centroid, an OS click there flips the title to `CANVAS-HIT`, and the
+*state change is re-confirmed through the same pixel channel* (the patch is now
+green). An off-screen colour returns `None`. `39/39 checks passed`.
+**Lesson (道法自然):** 五色令人目盲 only when you insist on one kind of seeing.
+When structure dissolves (no DOM), do not force it back into being — change the
+organ of perception. The agent has two eyes, DOM and pixel; on canvas only the
+second one opens. 視之不足見，用之不可既 — what cannot be read can still be seen
+and acted upon.
+
+> *Harness honesty (F049 teardown):* the two cross-origin fixture servers first
+> ran single-threaded; Chrome's keep-alive held the socket and `shutdown()`
+> intermittently deadlocked behind it. Switched to `ThreadingHTTPServer` +
+> daemon threads + `HTTP/1.0` so teardown can never block on a held connection.
+> The friction was in the *test*, not the primitive — fixed honestly, not hidden.
+
+### F051 — CJK input: the value arrives but the *composition* never happens
+**Surface:** a field that is *gated on the IME composition lifecycle* — it
+commits text only on `compositionend` (CJK type-ahead, pinyin search-as-you-go,
+rich editors that suppress `input` while `isComposing`). A human types romaji,
+watches candidates resolve (你→你好), and presses space/enter to commit.
+**Mechanism:** our two existing text channels both deliver the *final*
+characters but produce none of the composition events. `Input.insertText` fires
+a single `input:你好` — no `compositionstart`, no `compositionend`; the gated
+field never reacts (proven: `0,0,0` start/update/end). `osctl.type_unicode`
+(KEYEVENTF_UNICODE) fires per-char `keydown`+`input` with `isComposing=false` —
+still no composition. The text was *present* but the *event shape the page waits
+for* was absent. We were delivering the destination without the journey the page
+subscribes to.
+**Primitive:** `browser.compose(selector, text, stages=…)` drives CDP
+`Input.imeSetComposition` — the renderer's own IME entry point, beneath any
+keyboard layout. It walks candidate `stages` (default: progressive prefixes,
+or explicit `["ni","你","你好"]`), each emitting `compositionstart`/
+`compositionupdate` with `isComposing=true`, then commits via `insert_text`,
+firing `compositionend` — the exact lifecycle a human IME produces.
+`commit=False` leaves the composition open; `selector=None` composes into the
+focused field.
+**Proof:** R15 — `insert_text("你好")` sets the value yet leaves the gated field
+uncommitted (`0,0,0`, `out` empty); `compose(None,"你好",["ni","你","你好"])`
+yields `1,4,1` (start once, updates through every candidate, end once), the
+value is `你好`, and the compositionend-gated field finally reads
+`COMMITTED:你好`. `44/44 checks passed`.
+**Lesson (道法自然):** 大音希聲 — the page is not listening for the loud final
+characters, it is listening for the quiet shape of *becoming*. To deliver only
+the result is to skip the very signal subscribed to. 反者道之動 — go back through
+the gradual motion (start→update→end), and the formed text enters where the
+finished text could not. Address the page on the event it actually awaits.
+
+### F052 — one colour in two places: the average is a target that isn't there
+**Surface:** two identical magenta squares on a canvas — one decoy, one the real
+target. A human sees *two* patches and aims at the right one. F050's
+`find_color` sees only "magenta".
+**Mechanism:** `find_color` reduces every matching pixel to a single centroid —
+the *mean* position. With one region that mean is its centre; with two it is the
+midpoint of the gap *between* them, a point that belongs to neither square.
+Acting on it is worse than seeing nothing: the agent confidently clicks empty
+canvas (proven: flat centroid at x≈297 between regions at x≈107 and x≈487 → the
+click reports `MISS`). The colour channel told the truth (magenta is here) but
+the *aggregation* invented a phantom target by averaging two real ones.
+**Primitive:** `osctl.find_color_blobs(target, tol, min_count)` labels the
+matching pixels into connected components — union-find with 4-connectivity over
+*only* the matched pixels, so cost scales with the colour's area, not the whole
+screen — and returns one `{x, y, count, bbox}` per distinct region in screen
+coordinates, sorted by area. Now the two squares come back as two real
+centroids; choose by size or position (here the right-most) and the OS click
+lands dead-on (`TARGET-HIT`). `49/49 checks passed`.
+**Lesson (道法自然):** 少則得，多則惑 — collapse the many into one number and you
+gain a tidy answer but lose the truth; the mean of two things is often a third
+thing that does not exist. Do not average what is plural. Let each region stand
+as itself (萬物並作), then choose — perception must preserve multiplicity before
+the will selects among it.
+
 ---
 
 ## Frontier (next honest rounds)
@@ -214,15 +390,12 @@ stroke. 弱也者，道之用也 — yield to the page's own timing rather than 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
 
-- **R-next: drag & drop (HTML5 DnD)** — `dragstart/dragover/drop` with
-  `DataTransfer`, not just pointer moves.
-- **R-next: scroll-virtualized lists** — items that only exist in the DOM near the
-  viewport; needs scroll-until-found.
-- **R-next: cross-origin iframes** — separate processes; may need per-target
-  sessions (`Target.attachToTarget` + `sessionId`).
-- **R-next: canvas / WebGL surfaces** — no DOM at all; pure pixel channel + OS
-  input.
-- **R-next: focus & IME composition** — composed input for CJK via real IME, not
-  just `insertText`.
+- **R-next: out-of-process (cross-site) iframes** — when the child context does
+  *not* appear on the page session; needs `Target.setAutoAttach` + per-target
+  `sessionId` routing (the plumbing for which already exists in `cdp.py`).
+- **R-next: template-match locate** — when competing regions share the *same*
+  colour and differ only in shape/glyph; segmentation (F052) separates them but
+  cannot say *which* is the target — that needs matching a small reference patch
+  by appearance, not colour.
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

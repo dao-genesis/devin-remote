@@ -44,7 +44,10 @@ def fixture(name: str, html: str) -> str:
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
     _results.append((name, ok, detail))
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
+    line = f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else "")
+    # A non-UTF-8 console (e.g. cp1252) must not crash the suite on CJK details.
+    enc = sys.stdout.encoding or "ascii"
+    print(line.encode(enc, "backslashreplace").decode(enc))
     return ok
 
 
@@ -209,12 +212,273 @@ def round_hover_menu(b: Browser, offline: bool) -> None:
           b.wait_for("document.title==='SET-OK'", timeout=3), b.title())
 
 
+def round_dnd(b: Browser, offline: bool) -> None:
+    print("R11: HTML5 drag-and-drop (F047)")
+    html = fixture("dnd.html",
+                   "<!doctype html><title>dnd</title>"
+                   "<div id=src draggable=true>DRAG</div><div id=dst>DROP HERE</div>"
+                   "<script>"
+                   "src.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain','payload'));"
+                   "dst.addEventListener('dragover',e=>e.preventDefault());"
+                   "dst.addEventListener('drop',e=>{e.preventDefault();"
+                   "document.title='DROP:'+e.dataTransfer.getData('text/plain')});"
+                   "</script>")
+    b.navigate(html)
+    check("drop not yet fired", b.title() == "dnd", b.title())
+    check("dnd dispatched", b.dnd("#src", "#dst"))
+    check("drop handler ran with shared DataTransfer",
+          b.wait_for("document.title==='DROP:payload'", timeout=3), b.title())
+
+
+def round_virtual_scroll(b: Browser, offline: bool) -> None:
+    print("R12: scroll-virtualized list (F048)")
+    html = fixture("vlist.html",
+                   "<!doctype html><title>vlist</title><style>"
+                   "#vp{height:200px;width:200px;overflow:auto;border:1px solid #000;position:relative}"
+                   ".row{position:absolute;height:20px;left:0;right:0}</style>"
+                   "<div id=vp><div id=spacer></div></div><script>"
+                   "var N=1000,H=20,vp=document.getElementById('vp'),sp=document.getElementById('spacer');"
+                   "sp.style.height=(N*H)+'px';"
+                   "function render(){var top=vp.scrollTop,first=Math.floor(top/H),"
+                   "last=Math.min(N-1,Math.ceil((top+vp.clientHeight)/H));sp.innerHTML='';"
+                   "for(var i=first;i<=last;i++){var d=document.createElement('div');"
+                   "d.className='row';d.style.top=(i*H)+'px';d.textContent='Item '+i;"
+                   "d.onclick=(function(k){return function(){document.title='CLICK:'+k}})(i);"
+                   "sp.appendChild(d);}}"
+                   "vp.addEventListener('scroll',render);render();</script>")
+    b.navigate(html)
+    # Friction: a far row is not in the DOM at all, so a naive click can't find it.
+    check("far row absent before scroll",
+          b.eval("!window.__agentctl.byText('Item 800')"))
+    check("naive click_text fails on unrendered row", b.click_text("Item 800") is False)
+    # Primitive: scroll the container until the row materializes, then click it.
+    check("scroll_to_text materializes row", b.scroll_to_text("Item 800", container="#vp"))
+    b.click_text("Item 800")
+    check("clicked the scrolled-in row",
+          b.wait_for("document.title==='CLICK:800'", timeout=3), b.title())
+    # And a non-existent row fails fast (saturation guard, no infinite spin).
+    check("missing row fails fast", b.scroll_to_text("Item 99999", container="#vp") is False)
+
+
+def _serve(port: int, body: bytes):
+    """Start a throwaway localhost HTTP server returning `body` for any GET.
+
+    Uses a *threading* server with daemon worker threads: Chrome keeps the
+    iframe socket alive (HTTP keep-alive), and a single-threaded server's
+    ``shutdown()`` would then block behind that held connection — an intermittent
+    deadlock at teardown. Daemon worker threads let ``shutdown()`` return at once.
+    """
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.0"  # no persistent connection to wait on
+
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):  # silence
+            pass
+
+    http.server.ThreadingHTTPServer.allow_reuse_address = True
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), H)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+def round_xorigin_iframe(b: Browser, offline: bool) -> None:
+    print("R13: cross-origin iframe read/act (F049)")
+    # Two real origins: same IP, different port == cross-origin. The parent's JS
+    # is walled off from the child by the same-origin policy.
+    parent_port, child_port = 8901, 8902
+    parent = (b"<!doctype html><title>xo-parent</title><h1>parent</h1>"
+              b"<iframe id=f src='http://127.0.0.1:8902/c' "
+              b"style='width:300px;height:120px'></iframe>")
+    child = (b"<!doctype html><title>xo-child</title><body>"
+             b"<div id=secret>CHILD-SECRET-42</div>"
+             b"<button id=cb onclick=\"document.getElementById('secret')"
+             b".textContent='CHILD-CLICKED'\">go</button></body>")
+    sp = _serve(parent_port, parent)
+    sc = _serve(child_port, child)
+    try:
+        b.navigate(f"http://127.0.0.1:{parent_port}/")
+        time.sleep(0.3)
+        # Friction: parent JS cannot reach into the cross-origin child.
+        reach = b.eval("(function(){var f=document.getElementById('f');"
+                       "try{return f.contentDocument?"
+                       "f.contentDocument.getElementById('secret').textContent"
+                       ":null}catch(e){return 'ERR'}})()")
+        check("parent JS walled off from child (contentDocument null)",
+              reach is None, repr(reach))
+        check("deepQuery can't pierce cross-origin frame",
+              b.eval("!window.__agentctl.deepQuery('#secret')"))
+        # Primitive: address the child's own execution context via CDP.
+        check("eval_in_frame reads across the origin barrier",
+              b.eval_in_frame("8902", "document.getElementById('secret').textContent")
+              == "CHILD-SECRET-42")
+        check("eval_in_frame acts across the barrier (click)",
+              b.eval_in_frame("8902", "document.getElementById('cb').click(); true")
+              is True)
+        check("child state changed by cross-origin action",
+              b.eval_in_frame("8902", "document.getElementById('secret').textContent")
+              == "CHILD-CLICKED")
+        # A frame that doesn't exist fails fast rather than hanging.
+        check("absent frame returns None fast",
+              b.eval_in_frame("65535", "1", timeout=0.5) is None)
+    finally:
+        sp.shutdown()
+        sc.shutdown()
+
+
+def round_canvas_pixel(b: Browser, offline: bool) -> None:
+    print("R14: canvas target via the pixel channel (F050) — osctl")
+    # A target painted on <canvas> has NO DOM node: deep_query / click_text are
+    # blind to it. The only way in is to *see* the pixels and click the screen.
+    html = fixture("canvas.html",
+                   "<!doctype html><title>canvas</title>"
+                   "<style>html,body{margin:0}</style>"
+                   "<canvas id=c width=400 height=300 style='display:block'></canvas>"
+                   "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                   "x.fillStyle='#ffffff';x.fillRect(0,0,400,300);"
+                   "var RX=120,RY=90,RW=90,RH=70;"
+                   "x.fillStyle='#ff00ff';x.fillRect(RX,RY,RW,RH);"
+                   "c.addEventListener('click',function(e){"
+                   "var r=c.getBoundingClientRect();"
+                   "var px=e.clientX-r.left,py=e.clientY-r.top;"
+                   "if(px>=RX&&px<=RX+RW&&py>=RY&&py<=RY+RH){"
+                   "document.title='CANVAS-HIT';x.fillStyle='#00cc00';"
+                   "x.fillRect(RX,RY,RW,RH);}else{"
+                   "document.title='MISS';}});</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    # Friction: nothing in the DOM marks the target — text/selector search fails.
+    check("no DOM node for canvas-drawn target",
+          b.eval("!window.__agentctl.byText('HIT') && "
+                 "document.querySelectorAll('button,a').length===0"))
+    check("click_text blind to pixel-only target", b.click_text("HIT") is False)
+    # Pixel channel: capture the desktop, locate magenta, click its centroid.
+    w, h, rgb = osctl.capture_rgb()
+    check("capture matches click coordinate space", (w, h) == osctl.screen_size(),
+          f"{(w, h)} vs {osctl.screen_size()}")
+    hit = osctl.find_color((255, 0, 255), tol=40, rgb=rgb, size=(w, h))
+    check("located magenta target by pixels", hit is not None and hit["count"] > 500,
+          str(hit and {k: hit[k] for k in ("x", "y", "count")}))
+    if hit:
+        osctl.click(hit["x"], hit["y"])
+        check("OS click on the seen pixel hit the canvas target",
+              b.wait_for("document.title==='CANVAS-HIT'", timeout=3), b.title())
+        time.sleep(0.3)
+        # Confirm the state change *through the same pixel channel*: now green.
+        green = osctl.find_color((0, 204, 0), tol=40)
+        check("state change confirmed by pixels (target turned green)",
+              green is not None and green["count"] > 500,
+              str(green and green.get("count")))
+    # A colour that isn't on screen is reported absent, not hallucinated.
+    check("absent colour returns None",
+          osctl.find_color((1, 2, 3), tol=0) is None)
+
+
+def round_ime_compose(b: Browser, offline: bool) -> None:
+    print("R15: CJK input via real IME composition (F051)")
+    # A field gated on the composition lifecycle: it commits only on
+    # compositionend and counts start/update/end. Atomic insertText sets the
+    # value but fires none of these, so such a field never commits.
+    html = fixture(
+        "ime.html",
+        "<!doctype html><meta charset=utf-8><title>ime</title>"
+        "<input id=q><span id=out></span>"
+        "<script>var q=document.getElementById('q'),o=document.getElementById('out'),"
+        "S=0,U=0,E=0;"
+        "q.addEventListener('compositionstart',function(){S++;});"
+        "q.addEventListener('compositionupdate',function(){U++;});"
+        "q.addEventListener('compositionend',function(e){E++;"
+        "o.textContent='COMMITTED:'+e.data;});"
+        "window.__ime=function(){return S+','+U+','+E;};</script>")
+    b.navigate(html)
+    time.sleep(0.3)
+    val = lambda: b.eval("document.getElementById('q').value")  # noqa: E731
+    out = lambda: b.eval("document.getElementById('out').textContent")  # noqa: E731
+    cnt = lambda: b.eval("window.__ime()")  # noqa: E731
+    # Friction: atomic insertText fills the value but skips composition entirely,
+    # so the composition-gated field stays uncommitted.
+    b.eval("document.getElementById('q').focus()")
+    b.insert_text("\u4f60\u597d")
+    time.sleep(0.15)
+    check("insert_text fills value but fires no composition",
+          val() == "\u4f60\u597d" and out() == "" and cnt() == "0,0,0", cnt())
+    b.eval("var q=document.getElementById('q');q.value='';"
+           "document.getElementById('out').textContent='';q.focus();")
+    # Primitive: compose() drives the real IME lifecycle (romaji -> hanzi).
+    ok = b.compose(None, "\u4f60\u597d", stages=["ni", "\u4f60", "\u4f60\u597d"])
+    time.sleep(0.15)
+    check("compose returns ok", ok is True)
+    check("compose set the field value", val() == "\u4f60\u597d", repr(val()))
+    s, u, e = (int(x) for x in cnt().split(","))
+    check("composition lifecycle fired (start>=1, update>=1, end==1)",
+          s >= 1 and u >= 1 and e == 1, cnt())
+    check("field gated on compositionend now committed",
+          out() == "COMMITTED:\u4f60\u597d", repr(out()))
+
+
+def round_color_blobs(b: Browser, offline: bool) -> None:
+    print("R16: disambiguate same-colour targets via segmentation (F052) — osctl")
+    # Two identically-coloured squares. A flat colour locate averages all the
+    # magenta into one centroid that lands in the gap between them — a target
+    # that exists nowhere. Only segmentation recovers the two real regions.
+    html = fixture(
+        "blobs.html",
+        "<!doctype html><title>blobs</title>"
+        "<style>html,body{margin:0}</style>"
+        "<canvas id=c width=600 height=260 style='display:block'></canvas>"
+        "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+        "x.fillStyle='#ffffff';x.fillRect(0,0,600,260);"
+        "var A=[60,90,80,80],B=[440,90,80,80];"  # decoy, target
+        "x.fillStyle='#ff00ff';x.fillRect(A[0],A[1],A[2],A[3]);"
+        "x.fillRect(B[0],B[1],B[2],B[3]);"
+        "function inb(p,r){return p[0]>=r[0]&&p[0]<=r[0]+r[2]"
+        "&&p[1]>=r[1]&&p[1]<=r[1]+r[3];}"
+        "c.addEventListener('click',function(e){"
+        "var r=c.getBoundingClientRect(),p=[e.clientX-r.left,e.clientY-r.top];"
+        "if(inb(p,B)){document.title='TARGET-HIT';x.fillStyle='#00cc00';"
+        "x.fillRect(B[0],B[1],B[2],B[3]);}"
+        "else if(inb(p,A)){document.title='DECOY';}"
+        "else{document.title='MISS';}});</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    merged = osctl.find_color((255, 0, 255), tol=40, rgb=rgb, size=(w, h))
+    check("flat locate still finds the colour", merged is not None)
+    blobs = osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rgb, size=(w, h),
+                                   min_count=200)
+    check("segmentation separates the two regions", len(blobs) == 2,
+          str([bl["count"] for bl in blobs]))
+    if merged and len(blobs) == 2:
+        xs = sorted(bl["x"] for bl in blobs)
+        # Friction: the flat centroid sits in the empty gap between the regions.
+        check("flat centroid falls in the gap between the two regions",
+              xs[0] < merged["x"] < xs[1], f"{xs} mid={merged['x']}")
+        osctl.click(merged["x"], merged["y"])
+        check("flat-centroid click hits neither target (lands in gap)",
+              b.wait_for("document.title==='MISS'", timeout=3), b.title())
+        # Primitive: choose the intended region (right-most) and click it.
+        target = max(blobs, key=lambda bl: bl["x"])
+        osctl.click(target["x"], target["y"])
+        check("segmented click hits the intended right-most target",
+              b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
     rounds = [round_navigate_read, round_atomic_type, round_click_text, round_dialog,
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
-              round_hover_menu]
+              round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
+              round_canvas_pixel, round_ime_compose, round_color_blobs]
     for r in rounds:
         try:
             r(b, offline)
@@ -225,9 +489,11 @@ def main() -> int:
     passed = sum(1 for _, ok, _ in _results if ok)
     total = len(_results)
     print(f"\n=== {passed}/{total} checks passed ===")
+    enc = sys.stdout.encoding or "ascii"
     for name, ok, detail in _results:
         if not ok:
-            print(f"  FAILED: {name} :: {detail}")
+            s = f"  FAILED: {name} :: {detail}"
+            print(s.encode(enc, "backslashreplace").decode(enc))
     return 0 if passed == total else 1
 
 
