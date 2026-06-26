@@ -451,6 +451,34 @@ class Browser:
                       {"type": "mouseReleased", "x": x2, "y": y2,
                        "button": "left", "clickCount": 1})
 
+    def draw_path(self, points: list, hold: float = 0.012) -> bool:
+        """Trace a freehand stroke through ``points`` (F065). A drawing surface — a
+        signature pad, a sketch canvas, a map lasso — records a *path*
+        (``pointerdown`` → many ``pointermove`` → ``pointerup``), not two endpoints.
+        ``drag`` only walks a straight segment, so a pad that rejects a ruler-line
+        (a "draw something", an anti-bot stroke check) is never satisfied. A human's
+        pen sweeps a curve. We press at the first point, move through **every**
+        intermediate point in order (each a real ``mouseMoved``, which Chrome also
+        surfaces as a ``pointermove``), then release at the last — a connected,
+        arbitrarily-curved stroke. Needs at least two points; returns ``False``
+        otherwise."""
+        if not points or len(points) < 2:
+            return False
+        x0, y0 = points[0]
+        self._move(x0, y0)
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mousePressed", "x": x0, "y": y0,
+                       "button": "left", "clickCount": 1})
+        for x, y in points[1:]:
+            self._move(x, y)
+            if hold:
+                time.sleep(hold)
+        xn, yn = points[-1]
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mouseReleased", "x": xn, "y": yn,
+                       "button": "left", "clickCount": 1})
+        return True
+
     # ---- text input (atomic; F001/F002/F003) ------------------------------ #
     def type_text(self, selector: str, text: str, clear: bool = True) -> bool:
         """Focus a field and insert text atomically (no per-char race)."""

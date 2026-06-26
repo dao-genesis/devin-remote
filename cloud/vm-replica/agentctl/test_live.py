@@ -13,6 +13,7 @@ Run:  python test_live.py            (all rounds)
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 import tempfile
@@ -1250,6 +1251,63 @@ def round_file_drop(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def _max_deviation(pts) -> float:
+    """Greatest perpendicular distance of any interior point from the chord —
+    0 for a straight line, large for a curve."""
+    if not pts or len(pts) < 3:
+        return 0.0
+    (ax, ay), (bx, by) = pts[0], pts[-1]
+    length = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5 or 1.0
+    md = 0.0
+    for px, py in pts[1:-1]:
+        n = abs((by - ay) * px - (bx - ax) * py + bx * ay - by * ax)
+        md = max(md, n / length)
+    return md
+
+
+def round_draw_path(b: Browser, offline: bool) -> None:
+    print("R29: trace a freehand curve on a drawing canvas (F065) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>draw</title>"
+            b"<canvas id=c width=300 height=200 "
+            b"style='touch-action:none;border:1px solid #000'></canvas>"
+            b"<script>var c=document.getElementById('c');window.__pts=[];var d=false;"
+            b"function rel(e){var r=c.getBoundingClientRect();"
+            b"  return [Math.round(e.clientX-r.left),Math.round(e.clientY-r.top)];}"
+            b"c.addEventListener('pointerdown',function(e){d=true;window.__pts=[rel(e)];});"
+            b"c.addEventListener('pointermove',function(e){if(d)window.__pts.push(rel(e));});"
+            b"c.addEventListener('pointerup',function(e){d=false;window.__done=true;});"
+            b"</script>")
+    sp = _serve(8955, page)
+    try:
+        b.navigate("http://127.0.0.1:8955/")
+        time.sleep(0.2)
+        box = b._center_of("#c")
+        ox, oy = box["x"] - 100, box["y"]
+        # Friction: a straight drag traces a ruler line — zero bend.
+        b.drag(ox, oy, ox + 200, oy, steps=20)
+        time.sleep(0.2)
+        straight = b.eval("window.__pts")
+        check("a straight drag records a collinear (zero-bend) path",
+              len(straight) >= 3 and _max_deviation(straight) < 2.0,
+              repr((len(straight), round(_max_deviation(straight), 2))))
+        # Primitive: draw_path traces a real arc.
+        b.eval("window.__pts=[];window.__done=false;true")
+        pts = [[ox + i, oy - int(60 * math.sin(math.pi * i / 200))]
+               for i in range(0, 201, 8)]
+        check("draw_path reports it traced the stroke", b.draw_path(pts) is True)
+        check("the pointerup landed (stroke completed)",
+              b.wait_for("window.__done===true", timeout=2))
+        curve = b.eval("window.__pts")
+        check("the recorded path is a real curve, not a line",
+              len(curve) >= 10 and _max_deviation(curve) > 20.0,
+              repr((len(curve), round(_max_deviation(curve), 2))))
+        # Truthful failure: a path of fewer than two points is refused.
+        check("draw_path refuses an empty path", b.draw_path([]) is False)
+        check("draw_path refuses a single point", b.draw_path([[ox, oy]]) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1260,7 +1318,8 @@ def main() -> int:
               round_template_match, round_settle, round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
-              round_native_select, round_contenteditable, round_file_drop]
+              round_native_select, round_contenteditable, round_file_drop,
+              round_draw_path]
     for r in rounds:
         try:
             r(b, offline)
