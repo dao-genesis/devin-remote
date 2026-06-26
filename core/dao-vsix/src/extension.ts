@@ -1566,7 +1566,7 @@ const sigState: SigState = {
 
 function sigSha256(s: string): Buffer { return crypto.createHash('sha256').update(Buffer.from(s, 'utf8')).digest(); }
 function sigSessionId(): string {
-    const tok = bridgeToken || ws.token || '';
+    const tok = bridgeAuthoritativeToken();
     return 'rtflow-' + crypto.createHash('sha256').update('dao-sig-session\n' + tok).digest('hex').slice(0, 16);
 }
 function sigTopicFor(session: string): string {
@@ -1749,7 +1749,7 @@ function sigSubscribeServer(server: string): void {
 async function sigStart(): Promise<void> {
     try {
         if (sigState.enabled) return;
-        const tok = bridgeToken || ws.token; if (!tok) return;
+        const tok = bridgeAuthoritativeToken(); if (!tok) return;
         sigState.session = sigSessionId();
         sigState.topic = sigTopicFor(sigState.session);
         sigState.servers = SIG_DEFAULT_SERVERS.slice();
@@ -3198,7 +3198,7 @@ function bridgeWriteArtifacts() {
 function bridgeGenerateCloudMd(): string {
     const wsInfo = { name: vscode.workspace.workspaceFolders?.[0]?.name || 'workspace', root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', host: os.hostname() };
     const ts = new Date().toISOString();
-    const tok = bridgeToken || ws.token;
+    const tok = bridgeAuthoritativeToken();
     // ① 反向注入自愈: 公网URL 取「进程内隧道 ∪ 常驻桥已发布连接」的有效值, 不再只认进程内 bridgeUrl。
     //   独立 dao-bridge 常驻桥持有隧道时, 进程内 bridgeUrl 恒空 → 旧法注入「(未连接)」害云端找不到端口; 此处回归活地址。
     const url = bridgeEffectiveUrl() || '(未连接)';
@@ -3612,8 +3612,16 @@ function bridgeProbeAlive(rawUrl: string, timeoutMs: number = 6000, token: strin
 function bridgeEffectiveUrl(): string {
     return bridgeUrl || '';
 }
+// 帛书·「以实际有效性为基准·重新模拟配源」: 发布/探活/签名/去中心化会话一律取「服务端实际校验且
+//   机器级恒稳」的权威令牌 ws.token (即 dao-conn-current.json 之 token), 而非随隧道轮换的 bridgeToken。
+//   根治本源脱钩(错误认知): 旧法对外发布易变 bridgeToken, 重载/轮换即与 checkAuth 主令牌脱钩 →
+//   云端按知识库读到的令牌已与服务端真验源失配 → 401。两令牌 checkAuth 皆放行, 但唯 ws.token 跨
+//   重载恒稳 → 以其为「配源」即令「已发布令牌」永不因轮换失效, 无需被动等 URL 变才反注入。
+function bridgeAuthoritativeToken(): string {
+    return ws.token || bridgeToken || '';
+}
 function bridgeEffectiveToken(): string {
-    return bridgeToken || ws.token || '';
+    return bridgeAuthoritativeToken();
 }
 // ═══ 主动有效性探测 — 帛书·「以实际有效性为基准」 ═══
 //   不止探"隧道是否 2xx 活着"(/api/health 免鉴权 → 隧道一通即 200, 验不出令牌失效),
@@ -9825,8 +9833,9 @@ let _lastInjectedBridgeToken = '';
 let _bridgeReinjectInflight = false;
 let _bridgeReinjectTimer: ReturnType<typeof setTimeout> | null = null;
 function bridgeCurrentSig(): string {
-    let url = bridgeUrl || '', tok = bridgeToken || ws.token || '';
-    try { const c = bridgeReadPublishedConn(); if (c) { if (c.url) url = c.url; if (c.token) tok = c.token; } } catch { /* 守柔 */ }
+    let url = bridgeUrl || '';
+    const tok = bridgeAuthoritativeToken();
+    try { const c = bridgeReadPublishedConn(); if (c) { if (c.url) url = c.url; } } catch { /* 守柔 */ }
     let mcpUrl = '', mcpTok = '';
     try { const ep = daoResolveMcpEndpoint(); if (ep) { mcpUrl = ep.url; mcpTok = ep.token; } } catch { /* 守柔 */ }
     return [url, tok, String(ws.port || ''), mcpUrl, mcpTok].join('|');
@@ -9889,7 +9898,7 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
         }
         _lastBridgeReinjectSig = sig;
         _lastInjectedBridgeUrl = bridgeUrl; // 记录实注活址 → 探活环据此对账, 杜绝 KB 与内部态脱钩
-        _lastInjectedBridgeToken = bridgeToken || ws.token || ''; // 记录实注令牌 → 令牌轮换即被探活环识别
+        _lastInjectedBridgeToken = bridgeAuthoritativeToken(); // 记录实注令牌(权威恒稳源) → 探活环据此对账, 杜绝已发布令牌与服务端真验源脱钩
         try { bridgeSaveLastInject(_lastInjectedBridgeUrl, _lastInjectedBridgeToken); } catch { /* 守柔 */ }
         try { console.log('[dao] bridge real-time reinject (' + reason + ') → ' + injected + ' org(s)'); } catch { /* 守柔 */ }
     } finally { _bridgeReinjectInflight = false; }
