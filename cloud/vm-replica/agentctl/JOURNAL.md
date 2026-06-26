@@ -1159,6 +1159,35 @@ but by naming two ends and letting the span between fill itself. 萬物負陰而
 ctrl (toggle one) and shift (span the run) are the yin and yang of the same press;
 held apart, they cover every selection a human makes with a mouse.
 
+### F079 — Walk a multi-level hover submenu to a depth-3 leaf
+**Surface:** a menubar / cascading menu where File > Export > PDF only lays out
+once its whole ancestor chain is hovered — hovering File reveals Export, hovering
+Export reveals the PDF row.
+**Friction:** the leaf has a zero-size `display:none` box until the path is open,
+so a direct `click('#pdf')` fails (nothing is even hit) and `byText` cannot target
+it. `hover_reveal` (F046) opens exactly *one* level — it reveals Export but the
+depth-3 PDF stays hidden; nothing in the ladder walks a chain. The ancestors also
+stay open only while the pointer remains within the menu subtree, so a naive jump
+straight at the leaf would cross a gap that re-closes the menu.
+**Mechanism:** CSS `li:hover > ul { display:block }` keeps a submenu open while the
+cursor is over its parent *or* any descendant. Since each deeper `ul` is a descendant
+of the one above, hovering the chain in order (File, then Export) leaves every level
+laid out at once; a single-move `click` onto the leaf lands within the open subtree
+and so does not collapse it. The path must be traversed level by level, waiting for
+each to lay out before moving onto it.
+**Primitive:** `Browser.hover_chain(selectors)` hovers each selector in turn,
+waiting for it to become visible before the move, leaving the whole chain open;
+`Browser.menu_select(path)` hovers `path[:-1]` open and clicks `path[-1]` — the whole
+File > Export > PDF gesture in one call. Live: the leaf is hidden and a direct click
+fires nothing; `hover_reveal` opens only the first level; `menu_select` walks the
+chain and the PDF handler fires; `hover_chain` alone leaves a sibling leaf reachable;
+a wrong path and an empty path both return `False`. `233/233 checks passed`,
+deterministic ×3.
+**Lesson (道法自然):** 圖難於其易，為大於其細 — the deep leaf is reached not by
+lunging at it but by opening each easy level in order until the hard one lies open.
+千里之行，始於足下 — a chain is walked one foothold at a time; keep each parent held
+and the far rung reveals itself.
+
 ---
 
 ## Frontier (next honest rounds)
