@@ -103,7 +103,6 @@ function buildFlow() {
     "devin_cloud.js",
     "devin_proxy.js",
     "devin_web.js",
-    "devin_mirror.js",
     "devin_git.js",
     "dao_stuck.js",
     "_vscdb_helper.py",
