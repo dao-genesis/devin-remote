@@ -34,6 +34,9 @@ const DEVIN_UA =
 //   复用 socket 后首屏与切页显著提速; maxSockets 适度并行, 空闲 15s 回收。
 const _httpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 64, maxFreeSockets: 16, timeout: 60000 });
 
+// 预热逃生开关 (运维/对照基线): 置 DAO_NO_PREWARM=1 关闭后台预热。
+const DAO_NO_PREWARM = !!process.env.DAO_NO_PREWARM;
+
 // email → { server, port, auth }. 每账号独立端口 → origin 隔离 → 多实例不串号。
 const _servers = new Map();
 
@@ -339,6 +342,99 @@ function decode(buf, enc) {
     else if (enc === "deflate") zlib.inflate(buf, (e, b) => resolve(e ? buf : b));
     else resolve(buf);
   });
+}
+
+// ═══ 资源图预热 (prewarm) ════════════════════════════════════════════════════
+// 帛书·「为之于其未有·治之于其未乱」: IDE webview 首屏慢之真因 = SPA 模块图按依赖逐层
+//   向反代索取分片, 冷态每层皆一次上游往返 → 瀑布式串行累加 (实测冷首屏 DCL ~2s+)。
+//   而全部 ~480 分片并行取上游仅 ~150ms; 缓存预热后首屏 DCL ~0.5s (反超系统浏览器直连)。
+//   故反代一启动即后台并行抓全模块图入缓存 (L1+L2): 浏览器随后索取皆命中内存 → 瀑布塌缩。
+//   缓存键与账号无关·跨实例共享 → 首个实例预热, 其余多实例直接秒开 (正中"IDE 多实例慢于
+//   浏览器"之的)。换版 (入口分片哈希变) 自动重热; 失败守柔, 不阻正常反代。
+const _ASSET_RE = /\/assets\/[A-Za-z0-9_\-.]+\.(?:js|css)/g;
+let _prewarmKey = "";              // 已预热版本键 (入口分片名)
+const _prewarmActive = new Set();  // 正在预热的版本键 → 防重复并发
+
+function _fetchUp(targetPath, auth) {
+  return new Promise((resolve) => {
+    let u; try { u = new URL(DEVIN_APP + targetPath); } catch { return resolve(null); }
+    const headers = { "User-Agent": DEVIN_UA, Accept: "*/*", Host: u.hostname, "Accept-Encoding": "gzip", Origin: DEVIN_APP, Referer: DEVIN_APP + "/" };
+    if (auth && auth.auth1) headers["Authorization"] = "Bearer " + auth.auth1;
+    if (auth && auth.orgId) headers["x-cog-org-id"] = auth.orgId;
+    const r = https.request({ hostname: u.hostname, port: 443, path: targetPath, method: "GET", headers, timeout: 20000, rejectUnauthorized: false, agent: _httpsAgent }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", async () => {
+        const body = await decode(Buffer.concat(chunks), (res.headers["content-encoding"] || "").toLowerCase());
+        resolve({ status: res.statusCode || 0, ct: res.headers["content-type"] || "", body });
+      });
+    });
+    r.on("error", () => resolve(null));
+    r.on("timeout", () => { try { r.destroy(); } catch {} resolve(null); });
+    r.end();
+  });
+}
+
+// 与 handleRequest 的 JS/CSS 改写逐字一致 (源站绝对 URL → 本地基址)。
+function _rewriteAssetBody(body, ct, localBase) {
+  const isJs = ct.includes("javascript") || ct.includes("application/x-javascript");
+  const isCss = ct.includes("text/css");
+  if (!isJs && !isCss) return body;
+  const txt = body.toString("utf8");
+  if (isJs) {
+    if (txt.indexOf("https://app.devin.ai") < 0 && txt.indexOf("https://windsurf.com/") < 0 &&
+        txt.indexOf("https://register.windsurf.com/") < 0 && txt.indexOf("https://server.codeium.com/") < 0 &&
+        txt.indexOf("https://server.self-serve.windsurf.com/") < 0) return body;
+    return Buffer.from(txt.split("https://app.devin.ai").join(localBase)
+      .split("https://windsurf.com/").join(localBase + "/__ws/")
+      .split("https://register.windsurf.com/").join(localBase + "/__reg/")
+      .split("https://server.codeium.com/").join(localBase + "/__cdn/")
+      .split("https://server.self-serve.windsurf.com/").join(localBase + "/__ss/"), "utf8");
+  }
+  if (txt.indexOf("https://app.devin.ai/") < 0) return body;
+  return Buffer.from(txt.split("https://app.devin.ai/").join(localBase + "/"), "utf8");
+}
+
+// 后台预热 SPA 全模块图入缓存。BFS: index.html → 抓引用分片 → 扫分片再发现深层分片。
+async function _prewarmGraph(localBase, auth, log) {
+  try {
+    const idx = await _fetchUp("/", auth);
+    if (!idx || idx.status !== 200) return;
+    const html = idx.body.toString("utf8");
+    const key = ((html.match(/\/assets\/index-[A-Za-z0-9_\-.]+\.js/) || [])[0]) || String(html.length);
+    if (_prewarmKey === key || _prewarmActive.has(key)) return; // 已热/在热 → 守静
+    _prewarmActive.add(key);
+    const t0 = Date.now();
+    const seen = new Set();
+    let queue = [];
+    let m; while ((m = _ASSET_RE.exec(html))) { if (!seen.has(m[0])) { seen.add(m[0]); queue.push(m[0]); } }
+    let rounds = 0, fetched = 0;
+    const CONC = 32, MAX = 2000;
+    while (queue.length && rounds++ < 6 && seen.size < MAX) {
+      const next = [];
+      for (let i = 0; i < queue.length; i += CONC) {
+        const got = await Promise.all(queue.slice(i, i + CONC).map(async (p) => {
+          if (_assetCache.get(p)) return null;
+          const r = await _fetchUp(p, auth);
+          if (!r || r.status !== 200) return null;
+          const out = _rewriteAssetBody(r.body, r.ct, localBase);
+          const hdrs = { "Content-Type": r.ct || "application/octet-stream", "Cache-Control": "public, max-age=31536000, immutable", "Access-Control-Allow-Origin": "*" };
+          const ce = { status: 200, headers: hdrs, body: out, base: localBase };
+          _cachePut(p, ce); _diskPut(p, ce, localBase); fetched++;
+          return r.ct.includes("javascript") ? out.toString("utf8") : "";
+        }));
+        for (const txt of got) {
+          if (!txt) continue;
+          const re = new RegExp(_ASSET_RE.source, "g");
+          let mm; while ((mm = re.exec(txt))) { if (!seen.has(mm[0])) { seen.add(mm[0]); next.push(mm[0]); } }
+        }
+      }
+      queue = next;
+    }
+    _prewarmKey = key;
+    _prewarmActive.delete(key);
+    if (log) try { log("[proxy] prewarm done: " + fetched + " assets in " + (Date.now() - t0) + "ms"); } catch {}
+  } catch { _prewarmActive.delete(""); /* 守柔: 预热失败不阻正常反代 */ }
 }
 
 // 单账号请求处理: 取上游 → 剥安全头 → HTML 注入登录态 / JS 改写绝对 URL / 其余透传。
@@ -682,6 +778,8 @@ async function ensureProxyForAccount(email, auth, log) {
   const existing = _servers.get(key);
   if (existing && existing.port) {
     existing.auth = auth; // 刷新令牌 (auth1 可能已轮换)
+    // 复用既有端口亦触发预热 (自守版本键·已热即静) → 换版后重开实例自动重热。
+    if (!DAO_NO_PREWARM) setImmediate(() => { _prewarmGraph("http://localhost:" + existing.port, auth, log); });
     return { ok: true, port: existing.port, url: "http://localhost:" + existing.port + "/" };
   }
   const port = await pickFreePort();
@@ -704,6 +802,9 @@ async function ensureProxyForAccount(email, auth, log) {
   });
   _servers.set(key, entry);
   if (log) try { log("[proxy] " + key + " → http://localhost:" + port); } catch {}
+  // 帛书·「为之于其未有」: 反代一就绪即后台预热 SPA 全模块图入共享缓存 → 浏览器首屏
+  //   不再逐层向上游瀑布往返。跨账号共享 → 首个实例热, 余多实例秒开。失败守柔不阻反代。
+  if (!DAO_NO_PREWARM) setImmediate(() => { _prewarmGraph("http://localhost:" + port, auth, log); });
   return { ok: true, port, url: "http://localhost:" + port + "/" };
 }
 
