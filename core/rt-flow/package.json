@@ -172,6 +172,16 @@
 				"category": "RT Flow"
 			},
 			{
+				"command": "wam.devinCleanupImmediate",
+				"title": "Devin Cloud: 立即清理 (备份→归零→出库·无模态·一气呵成)",
+				"category": "RT Flow"
+			},
+			{
+				"command": "wam.devinMigrateBackupRoot",
+				"title": "Devin Cloud: 迁移备份到数据盘 (非系统盘·自动择优)",
+				"category": "RT Flow"
+			},
+			{
 				"command": "wam.devinSetBackupDir",
 				"title": "Devin Cloud: Set Backup Folder (v4.6.0 · 独立于 Cascade)",
 				"category": "RT Flow"
@@ -256,8 +266,8 @@
 				},
 				"wam.devinCloudAutoRemoveZeroQuota": {
 					"type": "boolean",
-					"default": false,
-					"description": "v4.9.6 · 默认关 · 归零移除(手动). 开启后: 额度完全归零(权威·available+overage≤移除阈值且无订阅)的账号在全量备份+清理无残留后从 RT Flow 账号库移除. 默认关: 仅清痕迹+本地留底, 账号保留由用户手动决定是否出库"
+					"default": true,
+					"description": "v4.9.12 · 默认开 · 归零移除闭环(道法自然·水过无痕). 额度完全归零(权威·available+overage≤移除阈值且无订阅)的账号在全量备份+清理无残留后自动从 RT Flow 账号库移除(出库·不再显示), 闭合 备份→清理→出库 整套循环. 取消勾选则仅清痕迹+本地留底, 账号保留由用户手动决定是否出库"
 				},
 				"wam.devinCloudAutoRemoveThreshold": {
 					"type": "number",

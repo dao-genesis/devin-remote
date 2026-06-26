@@ -10548,9 +10548,11 @@ ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanS
 <button onclick="dvExportMd()" class="conv-btn" title="导出 MD 操作指令·复制给本地 Agent 即可后端驱动全部功能">&#128196; 导出 MD</button>
 <button onclick="dvBackupAll()" class="conv-btn" title="备份所有(或已选)账号的全部 Devin Cloud 对话·增量">&#128190; 全部备份</button>
 <button onclick="dvWipeSel()" class="conv-btn conv-btn-s" title="水过无痕·清理已选账号的全部 Devin Cloud 痕迹">&#127754; 批量清理</button>
+<button onclick="dvCleanupNow()" class="conv-btn conv-btn-s" title="立即清理(参手机版·无模态): 对已选(无选→全部)账号 先全量备份→对话/账号整体归零→出库, 一气呵成">&#9889; 立即清理</button>
+<button onclick="dvMigrateRoot()" class="conv-btn" title="迁移备份到数据盘: 把 C 盘旧备份整体搬到自动择优的数据盘(非系统盘·剩余最大), 之后默认落该盘·不压系统盘">&#128190;&#10141; 迁移到数据盘</button>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" ${_cfg("devinCloudAutoBackup", true) ? "checked" : ""} onchange="dvToggleAuto(this.checked)">自动备份</label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.4.0 · 默认开 · 备份完成且额度低于阈值时自动水过无痕清理"><input type="checkbox" id="dvAutoClean" ${_cfg("devinCloudAutoCleanup", true) ? "checked" : ""} onchange="dvToggleCleanup(this.checked)">自动清理</label>
-<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.9.6 · 默认关·手动归零移除 · 勾选后:额度完全归零的账号在全量备份+清理无残留后从账号库移除(不再显示). 不勾则仅清痕迹+本地留底,账号保留"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", false) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
+<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.9.12 · 默认开·归零移除闭环 · 额度完全归零的账号在全量备份+清理无残留后自动从账号库移除(不再显示). 取消勾选则仅清痕迹+本地留底,账号保留"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", true) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.4.0 · 额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="${_cfg("devinCloudAutoBackupThreshold", 3)}" min="0" step="1" style="width:30px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetThreshold(this.value)"></label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.5.0 · 对话额度上限·知止不殆: 每对话上限=余额-缓冲·实时跟随余额; 余额≤停止阈值自动中停运行中对话"><input type="checkbox" id="dvConvCap" ${_cfg("devinCloudConvQuotaCap", true) ? "checked" : ""} onchange="dvToggleConvCap(this.checked)">对话上限</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.5.0 · 对话上限缓冲($): 每对话上限=余额-此缓冲 (余额$70→上限$67)">缓冲$<input type="number" id="dvConvBuf" value="${_cfg("devinCloudConvQuotaBuffer", 3)}" min="0" step="0.01" style="width:34px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetConvBuffer(this.value)"></label>
@@ -10613,6 +10615,11 @@ function dvSetTag(i){vscode.postMessage({type:'devinSetTag',index:i});}
 function dvExportMd(){vscode.postMessage({type:'devinExportMd',indices:_selIx()});}
 function dvBackupAll(){vscode.postMessage({type:'devinBackupAll',indices:_selIx()});}
 function dvWipeSel(){const ix=_selIx();if(!ix.length){showToast('\\u2717 先勾选账号');return;}vscode.postMessage({type:'devinWipe',indices:ix});}
+/* 立即清理(参手机版): 对已选(无选→全部)账号一键 先备份→对话/账号整体归零→出库, 全程 toast 无模态 · 道法自然 */
+function dvCleanupNow(){const ix=_selIx();showToast('\\u23F3 立即清理: 先备份再归零'+(ix.length?(' · 已选'+ix.length):' · 全部'));vscode.postMessage({type:'devinCleanupImmediate',indices:ix});}
+function dvCleanupNowOne(i){_clickFb(event);showToast('\\u23F3 立即清理本账号: 先备份再归零');vscode.postMessage({type:'devinCleanupImmediate',indices:[i]});}
+/* 迁移备份到数据盘: 把 C: 旧备份整体搬到自动择优的数据盘, 之后默认落该盘 */
+function dvMigrateRoot(){showToast('\\u23F3 迁移备份到数据盘…');vscode.postMessage({type:'devinMigrateBackupRoot'});}
 /* v4.7.0 · 单对话多选(支持 Shift 区间) + 查看/下载ZIP/清理 */
 let _dvcLast={};
 function _dvcChks(i){return [...document.querySelectorAll('.dvc-chk[data-i="'+i+'"]')];}
@@ -11186,6 +11193,7 @@ function _dvOverviewHtml(ov, i, gitSt) {
     '<button class="conv-btn conv-btn-s" onclick="dvLocalConvs(' + i + ')" title="从本地备份拉取本账号对话(已清零号也可查看正文/下载ZIP·数据已云→本地)·与上方云端残留并行可见">&#128194; 本地对话</button>' +
     '<button class="conv-btn conv-btn-s" onclick="dvSetTag(' + i + ')">&#127991;&#65039; 标签' + (tag ? "：" + _esc(tag) : "") + "</button>" +
     '<button class="conv-btn conv-btn-s" onclick="wp(' + i + ')" title="水过无痕清理本账号">&#127754; 水过无痕</button>' +
+    '<button class="conv-btn conv-btn-s" onclick="dvCleanupNowOne(' + i + ')" title="立即清理本账号(参手机版·无模态): 先全量备份→对话/账号整体归零→出库, 一气呵成">&#9889; 立即清理</button>' +
     "</div>" +
     '<div class="dv-local" id="dvLocal' + i + '" style="display:none;margin-top:6px;border-top:1px dashed #333;padding-top:6px"></div>';
   return h;
@@ -11711,8 +11719,8 @@ async function _dvAutoBackupRun() {
   const autoCleanup = !!_cfg("devinCloudAutoCleanup", true);
   // v4.9.6 · 清理阈值默认对齐备份阈值(动态·默3) → 「额度 < 3 即在全量备份校验后自动清理」(用户可调单一阈值 dvThreshold)
   const cleanupThreshold = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", threshold) || threshold);
-  // v4.9.6 · 归零移除改为「手动」(默认关) — 自动清理只清痕迹+本地留底, 账号是否出库由用户手动决定 (dvRmZero)
-  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", false);
+  // v4.9.12 · 归零移除默认开 — 闭合「备份→清理→出库」整套循环: 额度彻底归零的账号在全量备份(严格校验)+清理无残留后自动出库. 取消勾选 (dvRmZero=false) 则仅清痕迹+本地留底·账号保留.
+  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", true);
   const removeThreshold = Math.max(0, +_cfg("devinCloudAutoRemoveThreshold", 0) || 0);
   const removeEmails = [];
   for (const acc of _store.accounts) {
@@ -13936,6 +13944,100 @@ async function handleWebviewMessage(msg) {
         _broadcastUI();
         break;
       }
+      // 道法自然 · 立即清理(参手机版「立即清理」按钮): 无模态·一气呵成 — 对指定(无选→全部)账号 先全量备份(严格校验)→ 整体归零(对话/知识/剧本/密钥/Git)→ 出库.
+      //   与 devinCleanupZeroQuota 同骨架, 但: ① 不看额度(用户主动点即清, 专注「对话用完即归零」) ② 全程 toast 无模态(浏览器/手机版同样可用).
+      //   铁律: 备份未通过完整性校验 → 跳过不删 (先备份再移除·宁可不删不可误删).
+      case "devinCleanupImmediate": {
+        const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
+        const bkMode = _cfg("devinCloudBackupMode", "folder");
+        const idx = (Array.isArray(msg.indices) && msg.indices.length)
+          ? msg.indices.slice()
+          : _store.accounts.map((_, i) => i);
+        if (!idx.length) { _toast("\u2717 无账号可清理"); break; }
+        _toast("\u23F3 立即清理 " + idx.length + " 个账号 · 先备份再归零(无模态·一气呵成)");
+        const evictEmails = [];
+        let done = 0;
+        for (const i of idx) {
+          const r = await _dvAuthFor(i);
+          if (!r.ok) { _toast("\u2717 [" + (r.email || "?") + "] 登录失败 → 跳过"); continue; }
+          done++;
+          // 1. 全量备份 (严格校验·未过校验不删)
+          _toast("\u23F3 [" + done + "/" + idx.length + "] 留底 " + r.email.split("@")[0] + " …");
+          let backupOk = false;
+          try {
+            const naming = { accountNo: _dvAccountNo(r.email), password: (_store.accounts[i] && _store.accounts[i].password) || "" };
+            const br = bkMode === "folder"
+              ? await devinCloud.backupAccountFullFolders(r.auth, Object.assign({ targetDir: dir, incremental: false, turbo: true, onProgress: (m) => _toast("\u23F3 " + m) }, naming))
+              : await devinCloud.backupAccountFull(r.auth, Object.assign({ targetDir: dir, incremental: false, turbo: true, onProgress: (m) => _toast("\u23F3 " + m) }, naming));
+            backupOk = _dvBackupVerifiedFull(br);
+          } catch (be) { log("[cleanup-now] backup err " + r.email + ": " + ((be && be.message) || be)); }
+          if (!backupOk) { _toast("\u26A0 " + r.email.split("@")[0] + " 备份未过校验 → 跳过(不删·守柔)"); continue; }
+          // 2. 整体归零 (对话/知识/剧本/密钥)
+          _toast("\u23F3 归零 " + r.email.split("@")[0] + " …");
+          try {
+            const rep = await devinCloud.wipeAccount(r.auth, { onProgress: (m) => _toast("\u23F3 " + m) });
+            try { await devinGit.robustDisconnectGit(r.auth); } catch {}
+            _dvOverviewCache.delete(r.email.toLowerCase());
+            const clean = rep && rep.sessions.failed === 0 && rep.knowledge.failed === 0 && rep.playbooks.failed === 0 && rep.secrets.failed === 0;
+            if (clean) evictEmails.push(r.email);
+            _toast(
+              "\u2713 " + r.email.split("@")[0] + " 已归零: 对话" + rep.sessions.deleted + "/" + rep.sessions.found +
+                " 知识" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted +
+                (rep.errors.length ? " · " + rep.errors.length + " 项失败" : ""),
+            );
+          } catch (ce) { _toast("\u2717 归零失败 " + r.email.split("@")[0] + ": " + ((ce && ce.message) || ce)); }
+        }
+        // 3. 出库 (循环外·避免迭代中改数组) — 已备份+归零无残留方可出库
+        if (evictEmails.length) {
+          const ix = evictEmails
+            .map((em) => _store.accounts.findIndex((a) => (a.email || "").toLowerCase() === String(em).toLowerCase()))
+            .filter((i) => i >= 0);
+          if (ix.length) {
+            _store.removeBatch(ix);
+            _notify("info", "立即清理 · 全量备份+归零 → 出库 " + ix.length + " 个: " + evictEmails.join(", "));
+            log("[cleanup-now] 出库 " + ix.length + " 个 · " + evictEmails.join(", "));
+          }
+        }
+        _toast("\u2713 立即清理完成 · 出库 " + evictEmails.length + "/" + done + " (先备份再归零·一气呵成)");
+        _broadcastUI();
+        break;
+      }
+      // 道法自然 · 迁移备份到数据盘: 把现有(C 盘/home)备份整体搬到自动择优的数据盘(非系统盘·剩余最大), 之后默认落该盘 — 不再压系统盘.
+      case "devinMigrateBackupRoot": {
+        let newRoot = "";
+        try { newRoot = devinCloud.getOptimalBackupRoot(); } catch (e) {}
+        const homeRoot = (devinCloud.paths && devinCloud.paths.DC_HOME_BACKUP) || "";
+        const curCfg = _cfg("devinCloudBackupDir", "");
+        const oldRoot = curCfg || homeRoot;
+        if (!newRoot || path.resolve(newRoot) === path.resolve(oldRoot)) {
+          _toast("\u2713 当前备份已在数据盘(或无更优数据盘) · 无需迁移: " + (newRoot || oldRoot));
+          break;
+        }
+        _toast("\u23F3 迁移备份: " + oldRoot + " → " + newRoot);
+        let res;
+        try {
+          res = devinCloud.migrateBackups(oldRoot, newRoot, { onProgress: (m) => _toast("\u23F3 " + m) });
+        } catch (e) {
+          _toast("\u2717 迁移失败: " + String((e && e.message) || e));
+          break;
+        }
+        if (!res.ok) { _toast("\u2717 迁移失败: " + (res.error || "未知")); break; }
+        // 钉住目标盘 + 写 config (后续默认落数据盘)
+        try { devinCloud.setBackupRoot(newRoot); } catch (e) {}
+        try {
+          await vscode.workspace.getConfiguration("wam").update("devinCloudBackupDir", newRoot, vscode.ConfigurationTarget.Global);
+        } catch (e) {}
+        _toast(
+          res.skipped
+            ? ("\u2713 已切换默认备份盘 → " + newRoot + " (无既有备份需搬)")
+            : ("\u2713 迁移完成: " + res.files + " 文件 / " + (res.bytes / 1048576).toFixed(1) + " MB → " + newRoot + " · 默认已切此盘"),
+        );
+        _notify("info", "备份盘迁移 · " + oldRoot + " → " + newRoot + (res.skipped ? " (无既有备份)" : " · " + res.files + " 文件 / " + (res.bytes / 1048576).toFixed(1) + " MB"));
+        log("[migrate-root] " + oldRoot + " → " + newRoot + " · files=" + res.files + " bytes=" + res.bytes + " skipped=" + res.skipped);
+        _broadcastConvSection();
+        _broadcastUI();
+        break;
+      }
       // 设置账号标签 (防搞混) · 用扩展宿主 showInputBox (webview prompt 被屏蔽)
       case "devinSetTag": {
         const acc = _store.accounts[msg.index];
@@ -14925,6 +15027,14 @@ async function activate(context) {
     [
       "wam.devinCleanupZeroQuota",
       () => handleWebviewMessage({ type: "devinCleanupZeroQuota" }),
+    ],
+    [
+      "wam.devinCleanupImmediate",
+      () => handleWebviewMessage({ type: "devinCleanupImmediate", indices: [] }),
+    ],
+    [
+      "wam.devinMigrateBackupRoot",
+      () => handleWebviewMessage({ type: "devinMigrateBackupRoot" }),
     ],
     [
       "wam.devinWipeAccount",

@@ -23,7 +23,168 @@ const DC_AUTH_CACHE = path.join(DC_DIR, "auth_cache.json"); // email → {auth1,
 const DC_TAGS_FILE = path.join(DC_DIR, "account_tags.json"); // email → 标签(防搞混)
 const DC_BACKUP_STATE = path.join(DC_DIR, "backup_state.json"); // devinId → {eventCount, backedUpAt} 增量依据
 const DC_CLEANUP_STATE = path.join(DC_DIR, "cleanup_state.json"); // email → {backupCompletedAt, lastConvUpdateAt, cleanedAt} 24h冷却期
-const DC_BACKUP_DEFAULT = path.join(WAM_DIR, "devin_cloud_backups");
+const DC_HOME_BACKUP = path.join(WAM_DIR, "devin_cloud_backups"); // 旧默认(home·多落 C 盘)
+const DC_BACKUP_ROOT_STATE = path.join(DC_DIR, "backup_root.json"); // 持久化「自动数据盘」选择(稳定·不随空闲跳盘)
+
+// ── 数据盘自动择优 (道法自然·让备份自落用户数据盘, 不压系统盘) ──────────────
+//   规则: 仅本地固定盘(DriveType=3) · 排除系统盘(C:)与网络/可移动盘 · 取剩余空间最大者。
+//   一次择定即持久化, 之后只读缓存(空闲变化不来回跳盘); 无其他盘 → 回落 home(C 盘)。
+function _statfsFreeBytes(root) {
+  try {
+    if (typeof fs.statfsSync !== "function") return -1;
+    const s = fs.statfsSync(root);
+    return s.bavail * s.bsize;
+  } catch (e) { return -1; }
+}
+function _systemDriveLetter() {
+  const r = String(process.env.SystemDrive || (path.parse(os.homedir()).root) || "C:");
+  const m = r.match(/[A-Za-z]/);
+  return (m ? m[0] : "C").toUpperCase();
+}
+// CSV 解析: wmic /format:csv 首列是 Node(故 DeviceID 在 c[1]); PowerShell 行直接 DeviceID,Free,Size。
+function _parseDriveCsv(out, hasNode) {
+  const drives = [];
+  for (const line of String(out).split(/\r?\n/)) {
+    const c = line.split(",").map((x) => (x || "").trim());
+    const dev = hasNode ? c[1] : c[0];
+    const free = Number(hasNode ? c[2] : c[1]);
+    const size = Number(hasNode ? c[3] : c[2]);
+    if (dev && /^[A-Za-z]:$/.test(dev) && isFinite(free)) drives.push({ letter: dev[0].toUpperCase(), free, size: isFinite(size) ? size : 0 });
+  }
+  return drives;
+}
+// 现代 Windows(Win11 24H2 起已移除 wmic) → 用 CIM 取仅本地固定盘(DriveType=3)。
+function _queryFixedDrivesPS() {
+  try {
+    const ps = 'Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object { $_.DeviceID + "," + $_.FreeSpace + "," + $_.Size }';
+    const enc = Buffer.from(ps, "utf16le").toString("base64");
+    const out = require("child_process")
+      .execSync("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + enc, { timeout: 12000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] })
+      .toString();
+    const d = _parseDriveCsv(out, false);
+    return d.length ? d : null;
+  } catch (e) { return null; }
+}
+function _queryFixedDrivesWmic() {
+  try {
+    const out = require("child_process")
+      .execSync('wmic logicaldisk where "DriveType=3" get DeviceID,FreeSpace,Size /format:csv', { timeout: 8000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] })
+      .toString();
+    const d = _parseDriveCsv(out, true);
+    return d.length ? d : null;
+  } catch (e) { return null; }
+}
+// 网络映射盘符 (net use): 末路 statfs 枚举时据此排除, 守「仅本地数据盘」之约。
+function _networkDriveLetters() {
+  const set = new Set();
+  try {
+    const out = require("child_process")
+      .execSync("net use", { timeout: 6000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] })
+      .toString();
+    for (const line of out.split(/\r?\n/)) {
+      const m = line.match(/\b([A-Za-z]):\s+\\\\/);
+      if (m) set.add(m[1].toUpperCase());
+    }
+  } catch (e) {}
+  return set;
+}
+// 列本地固定盘 (Windows): CIM 优先(现代可靠·辨 DriveType=3 排网络/可移动) → wmic 回落 → 末路 statfs 枚举(排网络映射盘)。
+function listDataDrives() {
+  if (process.platform !== "win32") return [];
+  let drives = _queryFixedDrivesPS() || _queryFixedDrivesWmic();
+  if (!drives || !drives.length) {
+    const net = _networkDriveLetters();
+    drives = [];
+    for (let i = 67; i <= 90; i++) { // C..Z
+      const L = String.fromCharCode(i);
+      if (net.has(L)) continue; // 排网络盘(无 DriveType 信息时的守约)
+      const root = L + ":\\";
+      let free = -1;
+      try { if (fs.existsSync(root)) free = _statfsFreeBytes(root); } catch (e) {}
+      if (free >= 0) drives.push({ letter: L, free, size: 0 });
+    }
+  }
+  const sys = _systemDriveLetter();
+  return drives.map((d) => Object.assign({ system: d.letter === sys }, d));
+}
+let _backupDefaultCache = null;
+// 持久化状态版本: 旧版(无 v 或 v<2)可能误选网络盘(wmic 缺失回落枚举所致), 故只信任 v>=2 的选择, 自愈历史脏状态。
+const DC_BACKUP_STATE_V = 2;
+// 自动择优备份根: 持久化选择优先(快·无需查盘) → 否则择最空数据盘并持久化 → 无则回落 home。
+function getOptimalBackupRoot() {
+  if (_backupDefaultCache) return _backupDefaultCache;
+  if (process.platform !== "win32") return (_backupDefaultCache = DC_HOME_BACKUP);
+  // 1) 持久化选择 (版本达标 + 盘仍在即用·稳定不跳盘; 旧版脏状态忽略并重选)
+  try {
+    const j = JSON.parse(fs.readFileSync(DC_BACKUP_ROOT_STATE, "utf8"));
+    if (j && j.root && Number(j.v) >= DC_BACKUP_STATE_V && fs.existsSync(path.parse(j.root).root || "")) return (_backupDefaultCache = j.root);
+  } catch (e) {}
+  // 2) 择最空非系统固定盘 (需 ≥10GB 余量·避开微型恢复分区/U 盘残留)
+  const MIN_FREE = 10 * 1024 * 1024 * 1024;
+  const sys = _systemDriveLetter();
+  const cands = listDataDrives().filter((d) => d.letter !== sys && !d.system && d.free >= MIN_FREE);
+  if (!cands.length) return (_backupDefaultCache = DC_HOME_BACKUP); // 无够大数据盘 → 沿用 home
+  cands.sort((a, b) => b.free - a.free);
+  const root = path.join(cands[0].letter + ":\\", "DaoDevinBackups");
+  try {
+    fs.mkdirSync(DC_DIR, { recursive: true });
+    fs.writeFileSync(DC_BACKUP_ROOT_STATE, JSON.stringify({ v: DC_BACKUP_STATE_V, root, chosenAt: Date.now(), sysDrive: sys, freeBytes: cands[0].free }));
+  } catch (e) {}
+  return (_backupDefaultCache = root);
+}
+// 显式记录选择(供迁移后钉住目标盘·使后续启动走快路径不再查盘)。
+function setBackupRoot(root) {
+  _backupDefaultCache = root || null;
+  try {
+    fs.mkdirSync(DC_DIR, { recursive: true });
+    fs.writeFileSync(DC_BACKUP_ROOT_STATE, JSON.stringify({ v: DC_BACKUP_STATE_V, root, chosenAt: Date.now(), manual: true }));
+  } catch (e) {}
+  return root;
+}
+// 迁移既有备份: 递归拷贝 oldRoot → newRoot (不删源·安全), 回报文件数/字节数。
+function migrateBackups(oldRoot, newRoot, opts) {
+  opts = opts || {};
+  const prog = typeof opts.onProgress === "function" ? opts.onProgress : () => {};
+  const res = { ok: false, from: oldRoot, to: newRoot, files: 0, bytes: 0, skipped: false, error: "" };
+  try {
+    if (!oldRoot || !fs.existsSync(oldRoot)) { res.skipped = true; res.ok = true; prog("无既有备份可迁移"); return res; }
+    if (path.resolve(oldRoot) === path.resolve(newRoot)) { res.skipped = true; res.ok = true; prog("源与目标相同·跳过"); return res; }
+    // 统计
+    const walk = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) walk(p); else { try { res.files++; res.bytes += fs.statSync(p).size; } catch (x) {} } } };
+    walk(oldRoot);
+    prog("迁移中: " + res.files + " 个文件 / " + (res.bytes / 1048576).toFixed(1) + " MB → " + newRoot);
+    // 迭代式逐文件拷贝 (栈式遍历·非递归): 规避 fs.cpSync 在大目录树/深层结构上的原生崩溃(Windows 0xC0000409),
+    // 且可逐文件容错、按字节累计真实进度。
+    fs.mkdirSync(newRoot, { recursive: true });
+    let copied = 0, copiedBytes = 0, lastTick = 0;
+    const stack = [["", true]]; // [相对路径, 是否目录]
+    while (stack.length) {
+      const [rel, isDir] = stack.pop();
+      const srcP = rel ? path.join(oldRoot, rel) : oldRoot;
+      const dstP = rel ? path.join(newRoot, rel) : newRoot;
+      if (isDir) {
+        try { fs.mkdirSync(dstP, { recursive: true }); } catch (x) {}
+        let entries = [];
+        try { entries = fs.readdirSync(srcP, { withFileTypes: true }); } catch (x) { continue; }
+        for (const e of entries) stack.push([rel ? path.join(rel, e.name) : e.name, e.isDirectory()]);
+      } else {
+        try {
+          fs.copyFileSync(srcP, dstP);
+          copied++; copiedBytes += (() => { try { return fs.statSync(dstP).size; } catch (x) { return 0; } })();
+          if (copied - lastTick >= 500) { lastTick = copied; prog("已拷贝 " + copied + "/" + res.files + " 个文件 / " + (copiedBytes / 1048576).toFixed(1) + " MB"); }
+        } catch (x) { res.error = res.error || ("部分文件拷贝失败: " + String((x && x.message) || x)); }
+      }
+    }
+    res.copied = copied; res.copiedBytes = copiedBytes;
+    res.ok = (copied >= res.files);
+    prog("迁移完成: " + copied + "/" + res.files + " 个文件");
+  } catch (e) {
+    res.error = String((e && e.message) || e);
+    prog("迁移失败: " + res.error);
+  }
+  return res;
+}
+const DC_BACKUP_DEFAULT = getOptimalBackupRoot();
 
 // ── 软编码配置 (唯变所适) ──────────────────────────────────────────────────
 const CFG = {
@@ -2496,7 +2657,12 @@ class ZipWriter {
 module.exports = {
   CFG,
   configure,
-  paths: { WAM_DIR, DC_DIR, DC_AUTH_CACHE, DC_TAGS_FILE, DC_BACKUP_STATE, DC_CLEANUP_STATE, DC_BACKUP_DEFAULT },
+  paths: { WAM_DIR, DC_DIR, DC_AUTH_CACHE, DC_TAGS_FILE, DC_BACKUP_STATE, DC_CLEANUP_STATE, DC_BACKUP_DEFAULT, DC_HOME_BACKUP, DC_BACKUP_ROOT_STATE },
+  // 数据盘自动择优 + 迁移 (备份不压系统盘)
+  getOptimalBackupRoot,
+  listDataDrives,
+  setBackupRoot,
+  migrateBackups,
   // auth
   login,
   getAuth,
