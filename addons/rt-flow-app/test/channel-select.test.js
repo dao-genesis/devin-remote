@@ -45,8 +45,9 @@ const ID = { session: "s1", token: "tok1" };   // 真实设备恒自带 session+
     tunnel: { tunnels: [{ name: "cloudflared", url: CF }] } });
   const w = mod.bestWeb();
   ok(w.kind === "p2p-web", "1 身份就绪: _bestWeb = p2p-web (去中心化首选)");
-  ok(w.url.indexOf("cdn.jsdelivr.net") >= 0, "1 入口走 CDN 托管 p2p-client.html");
-  ok(w.url.indexOf(".workers.dev") < 0, "1 入口完全不含 Worker 域名 (脱离 Worker 依赖)");
+  ok(w.url.indexOf("surge.sh") >= 0 && w.url.indexOf("p2p-client.html") >= 0, "1 入口走中立 CDN (surge·text/html) 托管 p2p-client.html");
+  ok(w.url.indexOf("jsdelivr") < 0, "1 不再用 jsDelivr (它把 .html 当 text/plain·浏览器只显源码)");
+  ok(w.url.indexOf(".workers.dev") < 0 && w.url.indexOf("zhouyoukang") < 0, "1 入口完全不含 Worker 域名/私人标识 (彻底脱离 Worker 依赖)");
   ok(/auto=1/.test(w.url) && /session=s1/.test(w.url) && /token=tok1/.test(w.url), "1 链接自带 session+token+auto=1 (一开即直连)");
   // RPC/状态入口: 去中心化隧道优先于 Worker, 即便 Worker 在线。
   ok(mod.bestPublic().kind === "cloudflared", "1 _bestPublic = cloudflared (去中心化隧道优先于在线 Worker)");

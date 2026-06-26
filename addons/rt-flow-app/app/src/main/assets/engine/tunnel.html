@@ -262,9 +262,11 @@ function _relay(){ return _pj(N.relayStatus?N.relayStatus():""); }
 //   ② RPC/curl 公网入口首选已建立的去中心化隧道 (cloudflared 主 > SSH 备), 二者皆独立于中继 Worker;
 //      仅当去中心化路径都不可得时, 才以中继 Worker 末位兜底 (即便其在线也不再抢首位)。
 //   局域网仅同网可达, 不计入「公网」; P2P 是握手机制非基础 URL。
-// 去中心化网页直开宿主: 中立公共 CDN 托管的 p2p-client.html (非任何 Worker)。base 可由
-//   conn.webConsoleBase 覆写(自托管/换镜像 → 更彻底去中心), 默认 jsDelivr 取本仓库源文件 (含同目录 signal.js)。
-var P2P_WEB_DEFAULT = "https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/p2p-client.html";
+// 去中心化网页直开宿主: 中立公共静态托管的 p2p-client.html (非任何 Worker·无任何私人标识)。base 可由
+//   conn.webConsoleBase 覆写(自托管/换镜像 → 更彻底去中心)。默认走中立 CDN (surge.sh·多区 PoP),
+//   它正确以 text/html 下发(jsDelivr 会把 .html 当 text/plain 致浏览器只显示源码·不可执行), 且不含任何
+//   私人账号/域名标识; 同目录附 signal.js。
+var P2P_WEB_DEFAULT = "https://dao-cloud-console.surge.sh/p2p-client.html";
 function _p2pWebBase(){ var c=_conn(); return String((c&&c.webConsoleBase)||P2P_WEB_DEFAULT).replace(/\s+/g,""); }
 function _p2pWebUrl(){
   var c=_conn();
@@ -521,10 +523,14 @@ function handle(m){
     var u=base+"/relay/"+c.session;
     var ac=_activeChannel(), brokers=_meshBrokers(), isWk=(bp.kind==='worker');
     var web=_bestWeb();
-    // 兜底直开链接: 当主入口是去中心化 P2P 网控台时, 再附上中继 Worker /console 作兜底 ——
-    //   仅当去中心化(CDN+ntfy+WebRTC)在对端被封/打不开时备用; 它由 Cloudflare 托管, 单网页内置通道自愈。
+    // 路线C(去中心化 ntfy mesh)一旦转正为主路, 分享文案彻底剥离任何中继 Worker 私人域名 ——
+    //   不再印 Worker /console 兜底直开链接, 也不再把 Worker 当 RPC ②/curl 入口。仅当路线C不可得
+    //   (老 WebView 缺 WebCrypto / 身份未就绪)且唯一公网入口仍是 Worker 时, 才退化展示 Worker。
+    var _meshActive=(ac.kind==='mesh');
+    var _showHttp=!(_meshActive && isWk);   // mesh 主路 + 唯一 HTTP 入口是 Worker → 全部隐去, 不泄私人域名
+    // 兜底直开链接: 仅当主入口已是去中心化 P2P 网控台、且兜底本身不是 Worker(如局域网/隧道)时才附上。
     var _wb=((_relay().activeUrl||c.url)||"").replace(/\/$/,'');
-    var _fallbackUrl=(_wb && web.kind!=='worker')?_webConsoleUrl(_wb,true):"";
+    var _fallbackUrl=(_wb && web.kind!=='worker' && !_meshActive)?_webConsoleUrl(_wb,true):"";
     // 轻量级快速接入: 网页直开网址(浏览器) + 接入信息 + 两步授权 + curl 模板 + 软件/手机最常用命令。
     var block=[
       "═══ Devin Cloud 手机版 · 快速接入 ═══",
@@ -537,24 +543,27 @@ function handle(m){
       "【RPC·给云端 Agent / 程序 (非浏览器直开)】",
       "  ① 去中心化路线C(首选·零账号·全程不经任何 Worker): 经多家公共 ntfy mesh 加密直达本机, 任一 broker 可达即通。",
       "     Brokers: "+brokers.join("  "),
-      "     客户端: 同源 signal.js 的 DaoSignal.connect({session,token}).rpc(frame)/.ping() (浏览器直开已内置; Node/Agent 见接入文档「去中心化路线C」节·含可直接运行的 dao-mesh-rpc.mjs)。",
-      "  ② "+(isWk?"末位兜底(中继 Worker·仅去中心化全被封时·curl 直连)":"去中心化隧道(curl 直连·独立于 Worker)")+": "+u,
-      "Token: "+(c.token||""),
-      "Session: "+(c.session||""),
-      "",
-      "授权(用户各点一次「允许」即长期有效):",
-      "  setRemoteOps {enable:true}   开启 浏览器/软件本体/手机操控",
-      "  phoneEnsureControl           系统级接管(无障碍·点击/读屏)",
-      "",
-      "调用模板(对应上面 ②·HTTP 入口):",
-      "curl -s -X POST "+u+" -H 'Authorization: Bearer "+(c.token||"<TOKEN>")+"' -H 'Content-Type: application/json' -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\"}}'",
-      "",
-      "最常用命令(底层):",
-      "  软件/浏览器: browseOpen{url}(默认后台不打扰·foreground:true 才提到前台) · browseScreenshot{tabIndex} · browseExecJs{tabIndex,js} · getState",
-      "  手机底层:    phoneScreenCapture · phoneTap{x,y} · phoneDumpScreen · phoneShell{command}",
-      "",
-      "全量文档(两大模块·所有命令): 点「📄 接入文档 → 打开/复制」, 或调 getCloudMd。"
+      "     客户端: 同源 signal.js 的 DaoSignal.connect({session,token}).rpc(frame)/.ping() (浏览器直开已内置; Node/Agent 见接入文档「去中心化路线C」节·含可直接运行的 dao-mesh-rpc.mjs)。"
     ];
+    if(_showHttp){ block.push(
+      "  ② "+(isWk?"末位兜底(中继 Worker·仅去中心化全被封时·curl 直连)":"去中心化隧道(curl 直连·独立于 Worker)")+": "+u); }
+    block.push("Token: "+(c.token||""));
+    block.push("Session: "+(c.session||""));
+    block.push("");
+    block.push("授权(用户各点一次「允许」即长期有效):");
+    block.push("  setRemoteOps {enable:true}   开启 浏览器/软件本体/手机操控");
+    block.push("  phoneEnsureControl           系统级接管(无障碍·点击/读屏)");
+    block.push("");
+    if(_showHttp){
+      block.push("调用模板(对应上面 ②·HTTP 入口):");
+      block.push("curl -s -X POST "+u+" -H 'Authorization: Bearer "+(c.token||"<TOKEN>")+"' -H 'Content-Type: application/json' -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\"}}'");
+      block.push("");
+    }
+    block.push("最常用命令(底层):");
+    block.push("  软件/浏览器: browseOpen{url}(默认后台不打扰·foreground:true 才提到前台) · browseScreenshot{tabIndex} · browseExecJs{tabIndex,js} · getState");
+    block.push("  手机底层:    phoneScreenCapture · phoneTap{x,y} · phoneDumpScreen · phoneShell{command}");
+    block.push("");
+    block.push("全量文档(两大模块·所有命令): 点「📄 接入文档 → 打开/复制」, 或调 getCloudMd。");
     // 局域网直连 (零中继零隧道·同网最优): 若已取得局域网地址, 一并附上, 控制端同网时优先直连本机。
     try{ var l=_lan(); var us=(l&&l.urls)||[]; if(us.length){ block.push(""); block.push("【局域网直连·同网优先·零中继零隧道·直连本机】");
       us.forEach(function(x){ block.push("  直连入口: "+x+"/relay/"+(c.session||"")); }); } }catch(e){}
