@@ -687,6 +687,40 @@ open (the uncovered point) and, finding none, declined to act rather than preten
 知止不殆 — knowing when *not* to click is itself a capacity that exceeds blind
 screenshot-and-tap.
 
+### F062 — a dropdown whose list the page never paints
+**Surface:** a native `<select>`. A human clicks it, the operating system draws a
+popup list of options, they pick a row. We try the same: click the select, then
+click where the third row *appears* (~3 row-heights below). The value never
+changes, `onchange` never fires. The popup is **OS-drawn** — it is not in the DOM
+and not on the page's painted surface, so a coordinate click where the row looks
+to be lands on the page behind it (or on nothing). And `set_value` — built for
+`<input>`/`<textarea>` via the `HTMLInputElement.value` setter — throws
+`TypeError: Illegal invocation` when called on a `<select>` (wrong prototype).
+Both of our reach paths (pixel and value) miss.
+**Mechanism:** the option list is a native widget rendered by the browser/OS
+*outside* the web contents — there are no `elementFromPoint` hits for its rows and
+no pixels of it in a page screenshot. The selection state lives in the
+`HTMLSelectElement`: its `value`/`selectedIndex` and its `<option>` children. A
+human's *intent* ("choose Blue") maps to an option, not to a screen coordinate;
+chasing the coordinate is imitating the human's hand while ignoring the human's
+goal.
+**Primitive:** `Browser.select_option(selector, value|label|index)`. It finds the
+`<option>` matching the criterion (exact `value`, trimmed visible `label`, or
+positional `index`), sets the choice through the **real**
+`HTMLSelectElement.prototype.value` setter (so a framework's value tracker sees
+the change instead of being bypassed), aligns `selectedIndex`, and dispatches
+bubbling `input`+`change`. No popup is ever opened; the selection is made
+semantically and the page reacts exactly as if a human had picked the row — only
+faster and without the OS round-trip. An option that does not exist returns
+`False` rather than inventing a selection. `125/125 checks passed`, deterministic
+×3.
+**Lesson (道法自然):** 為者敗之 — forcing a click into a popup the page cannot even
+paint is pushing against a wall; we stopped chasing the OS-drawn pixels and acted
+where the state actually lives (執大象，天下往 — hold the great image and the rest
+follows). 知止不殆 — when the option is absent we decline rather than fabricate.
+The human opens, scrolls, and clicks; we go straight to the meaning of the act —
+和其光，同其塵 — matching the page's own mechanism instead of miming the hand.
+
 ---
 
 ## Frontier (next honest rounds)
