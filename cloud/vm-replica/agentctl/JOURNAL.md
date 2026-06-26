@@ -1512,6 +1512,42 @@ left click that "succeeds" never reached the handler at all.
 
 ---
 
+## F090 — right-button drag to pan a viewport (`right_drag_by`) · R54
+
+**Friction:** A map that pans on right-drag, a 3D viewport that orbits, a node
+editor that box-selects with the right button — these latch on a `mousedown` whose
+`button===2`, then read each `mousemove` only while `buttons & 2` is held, and on
+release `preventDefault` the context menu so the gesture reads as a drag rather than
+a menu request. `drag_by` (F088) carries the *left* button (`buttons:1`), so its
+held moves never satisfy the `buttons & 2` guard — the pane does not move one pixel,
+yet `drag_by` returns `True`: a silent lie. `context_menu` (F067) does press the
+right button, but only to *raise the menu* — it presses and releases in place,
+dragging nothing. The friction is button identity carried across a held drag.
+
+**Mechanism:** Chrome delivers `mousemove` events with `buttons:2` between a right
+`mousePressed` and `mouseReleased` only when each move itself carries the
+`buttons:2` mask; the live pan handler runs once per such frame. A context menu
+still fires on release, but an app that pans on right-drag suppresses it — the
+gesture is judged by the held-button moves, not by the menu.
+
+**Primitive:** `Browser.right_drag_by(selector, dx, dy)` resolves the honest hit
+point (F061), refuses if occluded, presses the right button (`buttons:2`), steps
+the cursor along `(dx, dy)` carrying `buttons:2` so the pan handler runs each frame,
+then releases at the offset point (`buttons:0`). Returns `True` once the drag
+completes, `False` if the handle is absent or occluded.
+
+**Live (R54):** a left `drag_by` over a right-drag pad leaves `panx` at `0` (the
+`buttons&2` guard never fires) though it returns `True`; `right_drag_by(+60)` pans
+to exactly `60` and `right_drag_by(-25)` back to exactly `35`; under a transparent
+veil `right_drag_by` → `False` and `panx` stays `35`; an absent selector → `False`.
+`315/315 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 知其雄，守其雌 — to pan a right-drag pane you must hold the
+button it watches for, not the one that happens to be under your hand. The honest
+drag refuses through an overlay rather than pretend a gesture it cannot land.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

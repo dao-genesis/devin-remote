@@ -577,6 +577,43 @@ class Browser:
                        "button": "left", "clickCount": 1})
         return True
 
+    def right_drag_by(self, selector: str, dx: float, dy: float,
+                      by_text: bool = False, tag: str | None = None) -> bool:
+        """Drag with the **right** button held by an exact pixel delta (F090). A map
+        or 3D viewport that pans on right-drag, a node editor that box-selects with
+        the right button, a canvas that orbits — these latch on a ``mousedown`` whose
+        ``button===2`` and then read each ``mousemove`` only while ``buttons & 2`` is
+        set; on release they ``preventDefault`` the context menu so the gesture reads
+        as a drag, not a menu request. :meth:`drag_by` (F088) carries the *left*
+        button (``buttons:1``), so its held moves never satisfy a ``buttons & 2``
+        guard — the pane never pans. :meth:`context_menu` (F067) does press the right
+        button but only to *raise the menu*: it presses and releases in place, moving
+        nothing. The friction is again button identity, this time across a held drag.
+        We resolve the honest hit point (F061), refuse if occluded, press the right
+        button (``buttons:2``), step the cursor along ``(dx, dy)`` carrying
+        ``buttons:2`` so the live pan handler runs each frame, and release at the
+        offset point. Returns ``True`` once the drag completes, ``False`` if the
+        handle is absent or occluded."""
+        s = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not s or s.get("occluded"):
+            return False
+        ex, ey = s["x"] + dx, s["y"] + dy
+        self._move(s["x"], s["y"])
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mousePressed", "x": s["x"], "y": s["y"],
+                       "button": "right", "buttons": 2, "clickCount": 1})
+        steps = max(2, int((abs(dx) + abs(dy)) / 10) + 1)
+        for i in range(1, steps + 1):
+            mx = s["x"] + dx * i / steps
+            my = s["y"] + dy * i / steps
+            self.cdp.call("Input.dispatchMouseEvent",
+                          {"type": "mouseMoved", "x": mx, "y": my,
+                           "button": "right", "buttons": 2})
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mouseReleased", "x": ex, "y": ey,
+                       "button": "right", "buttons": 0, "clickCount": 1})
+        return True
+
     def scroll_into_view(self, selector: str, by_text: bool = False,
                          timeout: float = 2.0) -> bool:
         """Bring an element clipped out of a scroll container back into view (F081).
