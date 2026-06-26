@@ -1476,6 +1476,42 @@ delta.
 
 ---
 
+## F089 — middle-click to fire an `auxclick` handler (`middle_click`) · R53
+
+**Friction:** Open-link-in-new-tab affordances, a tab strip's middle-click-to-close,
+an X11-style middle-click paste pad, any control gated on `event.button===1` answer
+only to the *middle* (wheel) button. A left `click` carries `button:"left"` — DOM
+button `0` — and Chrome folds it into a `click` event, so the `auxclick` handler
+never runs, yet `click` still returns `True`: a silent lie of success. The bare
+`click_xy` does accept a `button` argument, but it is purely geometric — no hit
+verification — and omits the `buttons:4` bitmask a faithful middle press carries, so
+it would fire blindly through an overlay.
+
+**Mechanism:** Chrome only synthesizes an `auxclick` (with `button:1`) from a press
+and release that both carry the middle button identity. The press must set
+`button:"middle"` with the `buttons:4` mask held; the release clears it to `0`. A
+left-button sequence at the same pixel produces a `click`, never an `auxclick` — the
+distinction is the button, not the coordinate.
+
+**Primitive:** `Browser.middle_click(selector)` resolves the honest hit point
+(F061 — refusing if every probe spot is occluded), then dispatches a middle
+`mousePressed` (`buttons:4`) / `mouseReleased` (`buttons:0`) at that point — exactly
+the sequence Chrome turns into an `auxclick` with `button:1`. Returns `True` once it
+fires, `False` if the element is absent or occluded.
+
+**Live (R53):** a plain `click` on the pad bumps the left-button counter and fires no
+`auxclick` (yet returns `True`); `middle_click` fires `auxclick` with `button:1` and
+does *not* also register a left click; under a transparent veil `middle_click` →
+`False` and no `auxclick` fires; an absent selector → `False`. `308/308 checks
+passed`, deterministic ×3.
+
+**Lesson (道法自然):** 名可名也，非恒名也 — a "click" is not one thing; the button
+that carries it is its true name. To wake a middle-only handler you must press the
+button it actually listens for, not merely land on the right pixel. 信言不美 — the
+left click that "succeeds" never reached the handler at all.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

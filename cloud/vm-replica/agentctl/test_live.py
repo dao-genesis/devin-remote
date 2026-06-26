@@ -2328,6 +2328,51 @@ def round_drag_by(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_middle_click(b: Browser, offline: bool) -> None:
+    print("R53: middle-click to fire an auxclick handler (F089) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>aux</title>"
+            b"<style>html,body{margin:0}"
+            b"#t{width:160px;height:80px;background:#cdf;font:16px monospace}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=t>target</div><div id=veil></div>"
+            b"<script>window.aux=0;window.lft=0;"
+            b"var t=document.getElementById('t');"
+            b"t.addEventListener('click',function(e){if(e.button===0)window.lft++;});"
+            b"t.addEventListener('auxclick',function(e){if(e.button===1)window.aux++;});"
+            b"</script>")
+    sp = _serve(8982, page)
+
+    def aux() -> int:
+        return b.eval("window.aux")
+
+    def lft() -> int:
+        return b.eval("window.lft")
+    try:
+        b.navigate("http://127.0.0.1:8982/")
+        time.sleep(0.2)
+        check("no events fired yet", aux() == 0 and lft() == 0, f"{aux()},{lft()}")
+        # Friction: a left click fires `click` (button 0), never the middle-only
+        # `auxclick` handler — yet it cheerfully returns True.
+        check("a left click fires click, not auxclick (but returns True)",
+              b.click("#t") is True and lft() == 1 and aux() == 0,
+              f"aux={aux()} lft={lft()}")
+        # Primitive: a faithful middle press/release fires auxclick with button 1.
+        check("middle_click fires auxclick (button 1)",
+              b.middle_click("#t") is True and aux() == 1, repr(aux()))
+        check("middle_click did not also fire a left click",
+              lft() == 1, repr(lft()))
+        # Honest refusals.
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("middle_click refuses through an overlay",
+              b.middle_click("#t") is False)
+        check("no auxclick fired while occluded", aux() == 1, repr(aux()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("middle_click on an absent element returns False",
+              b.middle_click("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2347,7 +2392,8 @@ def main() -> int:
               round_nested_submenu, round_drag_reorder,
               round_scroll_into_view, round_double_click,
               round_press_hold, round_zoom_pane, round_key_activate,
-              round_key_step, round_triple_click, round_drag_by]
+              round_key_step, round_triple_click, round_drag_by,
+              round_middle_click]
     for r in rounds:
         try:
             r(b, offline)
