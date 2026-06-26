@@ -1185,6 +1185,51 @@ class Browser:
                       {"type": "touchEnd", "touchPoints": []})
         return True
 
+    def touch_drag_to(self, selector: str, target: str,
+                      arm: float = 0.25, by_text: bool = False,
+                      tag: str | None = None,
+                      target_by_text: bool = False,
+                      target_tag: str | None = None) -> bool:
+        """Drag an element and **release it inside a target zone** (F102). A
+        swipe-to-dismiss that only fires past a snap line, a card you drag onto a
+        delete well, a tile that drops into a slot — these commit only when the
+        finger *lifts inside* the destination, reading the release coordinate at
+        ``touchend`` against the target's rectangle and **springing back** if it
+        landed short. A blind :meth:`touch_drag` (F098) by a *guessed* delta moves
+        the same finger the same way but stops wherever the number said, so a delta
+        that falls short of the well releases outside it and the page files it as a
+        spring-back — the gesture ran, yet nothing dropped, and ``touch_drag`` still
+        returns ``True``. The friction is the **release coordinate** relative to a
+        second element, not the act of dragging: you cannot hit a target you have
+        not measured. We resolve the honest hit point of the source (F061), refuse
+        if it is absent or occluded, then resolve the honest hit point of the
+        ``target`` (refusing if *it* is absent or occluded — there is nowhere to
+        drop), press one touch at the source, hold it motionless for ``arm`` seconds
+        so any pick-up timer fires, step it to the target's point issuing
+        ``touchMove`` events, and lift with ``touchEnd`` *over the zone*. Returns
+        ``True`` once the drop completes, ``False`` if either element is absent or
+        occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        q = self._hit_point_of(target, by_text=target_by_text, tag=target_tag)
+        if not q or q.get("occluded"):
+            return False
+        x, y = p["x"], p["y"]
+        dx, dy = q["x"] - x, q["y"] - y
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        time.sleep(arm)
+        steps = max(2, int((abs(dx) + abs(dy)) / 10) + 1)
+        for i in range(1, steps + 1):
+            self.cdp.call("Input.dispatchTouchEvent",
+                          {"type": "touchMove",
+                           "touchPoints": [{"x": x + dx * i / steps,
+                                            "y": y + dy * i / steps}]})
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchEnd", "touchPoints": []})
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A

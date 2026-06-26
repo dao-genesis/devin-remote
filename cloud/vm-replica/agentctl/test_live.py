@@ -3003,6 +3003,70 @@ def round_edge_swipe(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_touch_drag_to(b: Browser, offline: bool) -> None:
+    print("R66: drag to a target zone (F102) — cdp")
+    # A real drag surface claims the gesture: ``touch-action:none`` plus
+    # non-passive ``preventDefault`` stops the browser from turning a long
+    # horizontal stroke into an overscroll back-navigation. Without it Chrome
+    # eats the drag and navigates away — an artifact of the surface, not the
+    # primitive.
+    page = (b"<!doctype html><meta charset=utf-8><title>dragto</title>"
+            b"<style>html,body{margin:0;overscroll-behavior:none}"
+            b"#card{position:absolute;left:20px;top:80px;width:80px;height:80px;"
+            b"background:#7ad;touch-action:none}"
+            b"#zone{position:absolute;left:380px;top:60px;width:120px;height:120px;"
+            b"background:#efe;border:2px dashed #6a6}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=card>card</div><div id=zone>zone</div><div id=veil></div>"
+            b"<script>window.dropped=0;window.shortfall=0;var lx=null,ly=null;"
+            b"var card=document.getElementById('card');"
+            b"function inzone(x,y){var r=document.getElementById('zone').getBoundingClientRect();"
+            b"return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;}"
+            b"card.addEventListener('touchstart',function(e){e.preventDefault();"
+            b"lx=e.touches[0].clientX;ly=e.touches[0].clientY;},{passive:false});"
+            b"card.addEventListener('touchmove',function(e){e.preventDefault();"
+            b"lx=e.touches[0].clientX;ly=e.touches[0].clientY;},{passive:false});"
+            b"card.addEventListener('touchend',function(e){"
+            b"if(lx===null)return;"
+            b"if(inzone(lx,ly)){window.dropped=1;}else{window.shortfall=1;}"
+            b"lx=null;ly=null;},{passive:false});"
+            b"</script>")
+    sp = _serve(8999, page)
+
+    def st():
+        return (b.eval("window.dropped"), b.eval("window.shortfall"))
+
+    def reset() -> None:
+        b.eval("window.dropped=0;window.shortfall=0;")
+    try:
+        b.navigate("http://127.0.0.1:8999/")
+        time.sleep(0.2)
+        check("drag-to-zone starts unfired", st() == (0, 0), repr(st()))
+        # Friction: a blind touch_drag by a guessed delta releases short of the zone.
+        check("touch_drag (blind delta) springs back short of the zone",
+              b.touch_drag("#card", 30, 0) is True
+              and st()[0] == 0 and st()[1] == 1, repr(st()))
+        # Primitive: resolve the target and release inside it.
+        reset()
+        check("touch_drag_to drops the card inside the resolved zone",
+              b.touch_drag_to("#card", "#zone") is True
+              and st()[0] == 1 and st()[1] == 0, repr(st()))
+        # Occluded source refuses.
+        b.eval("document.getElementById('veil').style.display='block'")
+        reset()
+        check("touch_drag_to refuses when the source is occluded",
+              b.touch_drag_to("#card", "#zone") is False)
+        check("nothing dropped while occluded", st() == (0, 0), repr(st()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        # Absent endpoints refuse on either side.
+        check("touch_drag_to with an absent source returns False",
+              b.touch_drag_to("#nope", "#zone") is False)
+        check("touch_drag_to with an absent target returns False",
+              b.touch_drag_to("#card", "#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -3027,7 +3091,8 @@ def main() -> int:
               round_tap, round_swipe, round_pinch, round_rotate,
               round_touch_hold, round_double_tap, round_two_finger_tap,
               round_touch_drag, round_two_finger_pan,
-              round_three_finger_swipe, round_edge_swipe]
+              round_three_finger_swipe, round_edge_swipe,
+              round_touch_drag_to]
     for r in rounds:
         try:
             r(b, offline)

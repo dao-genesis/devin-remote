@@ -1989,6 +1989,54 @@ origin itself is the meaning.
 
 ---
 
+## F102 — drag to a target zone (`touch_drag_to`) · R66
+
+**Friction:** A swipe-to-dismiss that only fires past a snap line, a card you
+drag onto a delete well, a tile that drops into a slot — these commit only when
+the finger *lifts inside* the destination, reading the release coordinate at
+`touchend` against the target's rectangle and **springing back** if it landed
+short. A blind `touch_drag` (F098) by a *guessed* delta moves the same finger
+the same way but stops wherever the number said, so a delta that falls short of
+the well releases outside it and the page files it as a spring-back — the
+gesture ran, yet nothing dropped, and `touch_drag` still returns `True`. The
+friction is the **release coordinate** relative to a second element, not the act
+of dragging: you cannot hit a target you have not measured.
+
+**Mechanism:** The realistic surface latches the last touch point on every
+`touchmove` and, at `touchend`, tests it against `getBoundingClientRect()` of
+the zone: inside → `dropped=1`, outside → `shortfall=1`. A real drag surface
+must also *claim* the gesture (`touch-action:none` + non-passive
+`preventDefault`) or Chrome turns a long horizontal stroke into an overscroll
+back-navigation and the page never sees the drop at all. So the page records a
+shortfall under a blind delta that stops short, and a clean drop only when the
+finger is carried all the way onto the zone before lifting.
+
+**Primitive:** `Browser.touch_drag_to(selector, target, arm=0.25, ...)` resolves
+the honest hit point of the *source* (F061), refuses if it is absent or
+occluded, then resolves the honest hit point of the *target* (refusing if *it*
+is absent or occluded — there is nowhere to drop), presses one touch at the
+source, holds it motionless for `arm` seconds so any pick-up timer fires, steps
+it to the target's point issuing `touchMove` events, and lifts with `touchEnd`
+*over the zone*. Returns `True` once the drop completes, `False` if either
+element is absent or occluded.
+
+**Live (R66):** the page starts unfired (`dropped=0, shortfall=0`); a blind
+`touch_drag(+30,0)` releases short of the well (`dropped=0, shortfall=1`) while
+still returning `True`; `touch_drag_to("#card","#zone")` carries the finger onto
+the resolved zone and drops (`dropped=1, shortfall=0`); under a transparent veil
+the source is occluded and `touch_drag_to` → `False` with nothing dropped; an
+absent source *or* an absent target → `False`. `404/404 checks passed`,
+deterministic ×3.
+
+**Lesson (道法自然):** 千里之行，始於足下 — but the journey is judged by where the
+foot comes to rest, not by how far it was told to go. A blind delta is a number
+spoken into the dark; it moves honestly and lands nowhere. To drop a thing you
+must first *measure where it must land*, then carry the finger there and let go.
+知止 — knowing the stopping place is the whole of the gesture; the destination,
+not the distance, is the meaning.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
