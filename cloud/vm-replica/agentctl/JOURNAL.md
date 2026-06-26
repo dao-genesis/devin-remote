@@ -750,6 +750,31 @@ instead. 反者道之動 — the way forward was to *subtract* the old contents 
 (select-all) before adding the new, the same two-beat motion a human makes. 信言
 不美 — when the host isn't editable we say `False`, not a flattering success.
 
+### F064 — a file you can only give by letting go of it
+**Surface:** a dropzone — the dashed rectangle on Slack, Gmail, an avatar uploader
+that says "drop a file here". A human drags a file out of the OS file manager and
+releases it over the region. There is **no `<input type=file>`** anywhere: `F009
+set_file_input` has no node to target. And a coordinate drag (`dnd`, F047) moves
+DOM nodes within the page — it carries no file — so the dropzone's `drop` handler
+reads `e.dataTransfer.files` and finds it empty. Both file paths we own miss.
+**Mechanism:** the only thing the page ever receives from an OS file-drop is a
+`drop` **event** whose `DataTransfer` holds a `File`; the OS drag itself is
+invisible to the page. The handler doesn't care how the `DataTransfer` was filled,
+only that `files[0]` is a real `File` it can `FileReader`-read. The human's gesture
+(drag from desktop, release) is just packaging — the payload is the event.
+**Primitive:** `Browser.drop_file(selector, name, content, mime)`. It builds a real
+`File([content], name, {type})` inside a fresh `DataTransfer`, then dispatches
+`dragenter`→`dragover`→`drop` at the target's centre, forcing `dataTransfer` onto
+each event (the `DragEvent` constructor leaves it `null`). The dropzone fires its
+handler exactly once, `files[0].name`/`.type` are correct, and a `FileReader`
+reads the bytes back verbatim — the page cannot tell it from a human's drop. An
+absent target returns `False`. `137/137 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 弱者道之用 — we stopped trying to *drag* (mime the hand) and
+gave the page the one thing it actually consumes (the event with the file); the
+soft, indirect path is the working one. 大巧若拙 — no OS round-trip, no pixel
+chase; the file is handed over where the page reaches for it. 信言不美 — an absent
+dropzone is declined, not faked.
+
 ---
 
 ## Frontier (next honest rounds)
