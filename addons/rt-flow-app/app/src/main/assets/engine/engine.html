@@ -523,6 +523,8 @@
       var _meshReady = !!(c.session&&c.token); try{ if(window.DaoSignal&&DaoSignal.available&&!DaoSignal.available()) _meshReady=false; }catch(e){}
       var _httpIsWk = !(_pickT('cloudflared')||_pickT('ssh'));   // HTTP 入口落到 Worker(无去中心化隧道)?
       var _activeLabel = _meshReady ? "去中心化 P2P / ntfy mesh(零账号·不经任何 Worker)" : (_httpIsWk?"中继 Worker·末位兜底":"去中心化隧道(独立于 Worker)");
+      // 路线C主路且 HTTP 入口仅为 Worker → 全文档不外泄任何 Worker/私有域名 HTTP 入口(curl 兜底需自建去中心化隧道)。
+      var _httpAvail = !(_meshReady && _httpIsWk);
       var chRows=["## 一·补、全部可用接入渠道 (本设备实时·任一可用·同一 Token/Session/E2E Key)","",
         "> 控制端就近择优(去中心化为本·中继 Worker 已下放为末位兜底): 首选去中心化路线C(ntfy mesh+WebRTC·不经任何 Worker); 同网走局域网直连(最优); 跨网 curl 走去中心化隧道; 仅当以上全不可用才回落中继 Worker。",
         "","| 渠道 | 状态 | 入口 |","|------|------|------|"];
@@ -540,8 +542,25 @@
         chRows.push("| 去中心化隧道(cloudflared 主/SSH 备) | 离线/未开启 | 设备面板开启「去中心化隧道」即每设备独立免费公网入口 |");
       }
       var _wbase=(c.url||"").replace(/\/$/,''); var _wpub=(_wbase&&_sid)?(_wbase+_suf):"(未配置)";
-      chRows.push("| 中继 Worker·兜底(仅其他公网通道不可用时) | "+(_wbase?"已配置":"未配置")+" | "+_wpub+" |");
+      chRows.push("| 中继 Worker·兜底(仅其他公网通道不可用时) | "+(_wbase?(_httpAvail?"已配置":"已配置·去中心化主路下隐藏私域入口"):"未配置")+" | "+(_httpAvail?_wpub:"(去中心化主路·无需 Worker·私有域名不外泄)")+" |");
       chRows.push("| WebRTC P2P·真打洞 | "+(_tl.length?"可握手":"需先有公网入口")+" | 打开 p2p-client.html, 借任一公网入口握手一次, 之后 RPC 走 P2P DataChannel·不再经隧道 |");
+      // 调用方式: HTTP 入口可用则给 curl 兜底; 否则(去中心化主路·不外泄私有域名)给路线C 的 Node/浏览器客户端。
+      var _callMd = _httpAvail ? [
+        "## 二、调用方式 (对应上面 RPC②·HTTP 入口; 去中心化路线C 见上「RPC①」)",
+        "```bash",
+        "curl -s -X POST " + pub + " \\",
+        "  -H 'Authorization: Bearer <TOKEN>' \\",
+        "  -H 'Content-Type: application/json' \\",
+        "  -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\",\"<参数>\":\"<值>\"}}'",
+        "```"
+      ].join("\n") : [
+        "## 二、调用方式 (去中心化路线C·全程零 Worker·见上「RPC①」)",
+        "```bash",
+        "# 当前为去中心化主路(ntfy mesh), 不暴露任何 Worker/私有域名 HTTP 入口。Node/Agent 直接:",
+        "node addons/rt-flow-app/tools/dao-mesh-rpc.mjs " + (c.session||"<SESSION>") + " <TOKEN> '{\"path\":\"/api/rpc\",\"method\":\"POST\",\"body\":{\"cmd\":\"<命令>\"}}'",
+        "# 浏览器直开 p2p-client.html 已内置 DaoSignal.connect(); 如需 curl 兜底, 设备面板开启「去中心化隧道」(cloudflared/SSH)后此处自动出现独立入口。",
+        "```"
+      ].join("\n");
       var md = [
         "# Devin Cloud 手机版 · 接入文档 (唯一·两大模块·全量展开)",
         "",
@@ -553,19 +572,13 @@
         "- RPC①·去中心化路线C(云端 Agent 首选·零账号·全程不经任何 Worker): 经多家公共 ntfy mesh 加密直达本机, 任一 broker 可达即通。",
         "  - Brokers: " + _brokers.map(function(b){return "`"+b+"`";}).join(" "),
         "  - 客户端: 同源 `signal.js` 的 `DaoSignal.connect({session,token})` → `.rpc(frame)`/`.ping()`; Node/Agent 直接 `node addons/rt-flow-app/tools/dao-mesh-rpc.mjs " + (c.session||"<SESSION>") + " <TOKEN> '{\"path\":\"/api/rpc\",\"method\":\"POST\",\"body\":{\"cmd\":\"getState\"}}'` (仅依赖公共 ntfy·零 Worker)。",
-        "- RPC②·" + (_httpIsWk?"末位兜底(中继 Worker·仅去中心化全被封时·curl 直连)":"去中心化隧道(curl 直连·独立于 Worker)") + "·HTTP 入口: `" + pub + "`",
+        (_httpAvail ? ("- RPC②·" + (_httpIsWk?"末位兜底(中继 Worker·仅去中心化全被封时·curl 直连)":"去中心化隧道(curl 直连·独立于 Worker)") + "·HTTP 入口: `" + pub + "`") : "- RPC②·HTTP 入口: (当前去中心化主路(路线C)已足够; 无独立去中心化隧道时不提供 Worker HTTP 入口·避免外泄私有域名。需 curl 兜底请在设备面板开启「去中心化隧道」cloudflared/SSH)"),
         "- 鉴权: `Authorization: Bearer " + (c.token||"<TOKEN>") + "`",
         "- Session: `" + (c.session||"<SESSION>") + "`",
         "",
         chRows.join("\n"),
         "",
-        "## 二、调用方式 (对应上面 RPC②·HTTP 入口; 去中心化路线C 见上「RPC①」)",
-        "```bash",
-        "curl -s -X POST " + pub + " \\",
-        "  -H 'Authorization: Bearer <TOKEN>' \\",
-        "  -H 'Content-Type: application/json' \\",
-        "  -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"<命令>\",\"<参数>\":\"<值>\"}}'",
-        "```",
+        _callMd,
         "",
         "## 三、两大模块 (概览; 全部命令细节已内联于下方第六节)",
         "",

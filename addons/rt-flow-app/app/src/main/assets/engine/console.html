@@ -1611,8 +1611,9 @@
 
   // ── 接入设置浮层 ──
   var cfg=document.getElementById("cfg");
-  // 零中心公网直连链接: P2P 客户端页由公共 CDN 托管, 带 session/token 参数一开即自动直连手机, 不经任何 Worker。
-  var P2P_CLIENT_CDN="https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/p2p-client.html";
+  // 零中心公网直连链接: P2P 客户端页由中立公共 CDN 托管, 带 session/token 参数一开即自动直连手机, 不经任何 Worker。
+  // 用 surge.sh(多区 PoP·正确 text/html 下发); jsDelivr 会把 .html 当 text/plain 致浏览器只显源码不可执行。
+  var P2P_CLIENT_CDN="https://dao-cloud-console.surge.sh/p2p-client.html";
   function shareLink(){ if(!SESSION||!TOKEN) return "";
     return P2P_CLIENT_CDN+"?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN)+"&auto=1"; }
   function showCfg(){ document.getElementById("cfgSession").value=SESSION;
