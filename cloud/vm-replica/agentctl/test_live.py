@@ -2497,6 +2497,51 @@ def round_swipe(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_pinch(b: Browser, offline: bool) -> None:
+    print("R57: two-finger pinch to zoom a gesture view (F093) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>pinch</title>"
+            b"<style>html,body{margin:0}"
+            b"#m{width:320px;height:240px;background:#dfe}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=m>map</div><div id=veil></div>"
+            b"<script>window.scale=1;window.tm=0;var base=null;"
+            b"var m=document.getElementById('m');"
+            b"function dist(t){var a=t[0],b=t[1];"
+            b"return Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);}"
+            b"m.addEventListener('touchstart',function(e){"
+            b"if(e.touches.length===2){base=dist(e.touches);}},{passive:true});"
+            b"m.addEventListener('touchmove',function(e){"
+            b"if(e.touches.length===2&&base){window.scale=dist(e.touches)/base;"
+            b"window.tm++;}},{passive:true});"
+            b"m.addEventListener('touchend',function(e){"
+            b"if(e.touches.length<2){base=null;}},{passive:true});"
+            b"</script>")
+    sp = _serve(8986, page)
+
+    def scale() -> float:
+        return b.eval("window.scale")
+    try:
+        b.navigate("http://127.0.0.1:8986/")
+        time.sleep(0.2)
+        check("view starts at scale 1", scale() == 1, repr(scale()))
+        # Friction: a single travelling finger never satisfies a 2-touch handler.
+        check("swipe (one finger) does not zoom a pinch view",
+              b.swipe("#m", 100, 0) is True and scale() == 1, repr(scale()))
+        # Primitive: a faithful two-finger spread zooms by the distance ratio.
+        check("pinch(+60) spreads to exactly 4x (20px base -> 80px)",
+              b.pinch("#m", 60) is True and scale() == 4, repr(scale()))
+        check("pinch(-10) closes to exactly 0.5x (20px base -> 10px)",
+              b.pinch("#m", -10) is True and scale() == 0.5, repr(scale()))
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("pinch refuses through an overlay", b.pinch("#m", 40) is False)
+        check("nothing zoomed while occluded", scale() == 0.5, repr(scale()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("pinch on an absent element returns False",
+              b.pinch("#nope", 40) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2518,7 +2563,7 @@ def main() -> int:
               round_press_hold, round_zoom_pane, round_key_activate,
               round_key_step, round_triple_click, round_drag_by,
               round_middle_click, round_right_drag_by,
-              round_tap, round_swipe]
+              round_tap, round_swipe, round_pinch]
     for r in rounds:
         try:
             r(b, offline)

@@ -843,6 +843,45 @@ class Browser:
                       {"type": "touchEnd", "touchPoints": []})
         return True
 
+    def pinch(self, selector: str, amount: float,
+              by_text: bool = False, tag: str | None = None) -> bool:
+        """Pinch an element with **two** touch points to zoom a gesture-driven view
+        (F093). A map that scales on a two-finger pinch, an image viewer that zooms
+        to the pinch midpoint, a photo gallery that reads the spread between two
+        fingers — these compute the *distance* between two simultaneous touch points
+        each ``touchmove`` and never look at one finger or the mouse. :meth:`swipe`
+        (F092) carries a single travelling touch, so a two-finger distance stays
+        constant; :meth:`zoom_pane` (F068) sends a ``ctrl``+wheel, which a
+        pinch-only handler that reads ``e.touches.length===2`` never sees. The
+        friction is finger *count*: the view answers only to a pair that spreads or
+        closes. We resolve the honest hit point (F061), refuse if occluded, place
+        two touch points astride the center separated by a small base gap, then step
+        them symmetrically apart (``amount>0``) or together (``amount<0``) issuing
+        two-point ``touchMove`` events so the live pinch handler runs each frame, and
+        lift both with ``touchEnd``. Returns ``True`` once the pinch completes,
+        ``False`` if the element is absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        cx, cy = p["x"], p["y"]
+        base = 20.0
+        start = base / 2.0
+        end = (base + amount) / 2.0
+        steps = max(2, int(abs(amount) / 10) + 1)
+
+        def _pair(off: float):
+            return [{"x": cx - off, "y": cy, "id": 0},
+                    {"x": cx + off, "y": cy, "id": 1}]
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchStart", "touchPoints": _pair(start)})
+        for i in range(1, steps + 1):
+            off = start + (end - start) * i / steps
+            self.cdp.call("Input.dispatchTouchEvent",
+                          {"type": "touchMove", "touchPoints": _pair(off)})
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchEnd", "touchPoints": []})
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A

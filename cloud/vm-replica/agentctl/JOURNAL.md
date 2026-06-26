@@ -1615,6 +1615,43 @@ swipe refuses through an overlay rather than pretend a flick it cannot land.
 
 ---
 
+## F093 — two-finger pinch to zoom a gesture view (`pinch`) · R57
+
+**Friction:** A map that scales on a two-finger pinch, an image viewer that zooms
+to the pinch midpoint, a photo gallery that reads the spread between two fingers
+— these compute the *distance* between two simultaneous touch points each
+`touchmove` and gate on `e.touches.length===2`. `swipe` (F092) carries a single
+travelling touch, so the two-finger distance never changes and the view stays at
+scale `1` though `swipe` returns `True`; `zoom_pane` (F068) sends a `ctrl`+wheel,
+which a pinch-only handler that counts fingers never sees. The friction is finger
+*count*: the view answers only to a pair that spreads or closes.
+
+**Mechanism:** Two touch points dispatched together in one `dispatchTouchEvent`
+(`id:0` and `id:1`) make Chrome present `e.touches.length===2`; stepping both
+points symmetrically apart or together each `touchMove` changes the inter-finger
+distance, so the live pinch handler runs per frame and reads the running scale
+as `dist(touches)/base`. A base gap that grows from 20px to 80px reads as 4×; a
+gap that closes from 20px to 10px reads as 0.5×.
+
+**Primitive:** `Browser.pinch(selector, amount)` resolves the honest hit point
+(F061), refuses if occluded, places two points astride the center separated by a
+small base gap, then steps them symmetrically apart (`amount>0`) or together
+(`amount<0`) issuing two-point `touchMove` events so the pinch handler runs each
+frame, and lifts both with `touchEnd`. Returns `True` once the pinch completes,
+`False` if the element is absent or occluded.
+
+**Live (R57):** a one-finger `swipe` over a pinch view leaves `scale` at `1` (the
+handler ignores a single touch) though it returns `True`; `pinch(+60)` spreads a
+20px base to 80px → `scale` exactly `4`; `pinch(-10)` closes it to 10px → `scale`
+exactly `0.5`; under a transparent veil `pinch` → `False` and `scale` stays
+`0.5`; an absent selector → `False`. `335/335 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 二生三 — one finger can touch and travel but cannot make a
+gesture; only a *pair* whose separation changes spells zoom. The honest pinch
+refuses through an overlay rather than pretend a spread it cannot land.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
