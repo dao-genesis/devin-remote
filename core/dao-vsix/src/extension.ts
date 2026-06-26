@@ -1874,7 +1874,7 @@ function isAppProxyPassthrough(route: string): boolean {
             '/api/terminal', '/api/diagnostics', '/api/definitions', '/api/references', '/api/symbols',
             '/api/git/', '/api/agents', '/api/commands', '/api/tools', '/api/devin', '/api/workspaces',
             '/api/agent-doc', '/api/manifest', '/api/bridge-state', '/api/next', '/api/signal-info',
-            '/api/signal-start', '/api/signal-stop'];
+            '/api/signal-start', '/api/signal-stop', '/api/cap', '/api/input'];
         return !daoApiPrefixes.some(p => route === p || route.startsWith(p + '/') || route === p.replace(/\/$/, ''));
     }
     // 帛书·「执天之行」官网根挂载: dao 自身 HTTP 仅占用 /api/*, 故其余所有根路径
@@ -1882,6 +1882,281 @@ function isAppProxyPassthrough(route: string): boolean {
     // 如此 SPA 客户端路由器看到的是真实路径(/org/<slug>), 不再因 /devin-cloud 前缀而 404。
     if (route.startsWith('/relay') || route.startsWith('/connect')) return false;
     return true;
+}
+
+// ═══════════════════════════════════════════════════════════
+// 道 · 整机投屏控制底座 (知其雄守其雌) — 隧道只搬数据, 渲染/输入捕获在访问者浏览器
+//   常驻 PowerShell GUI worker(一次性载入 Win32): cap 截屏(JPEG) + 鼠/键注入(SetCursorPos/
+//   mouse_event/keybd_event/SendKeys)。软编码: 虚拟屏边界运行时探测, PowerShell 路径经 env 解析。
+//   worker 脚本随扩展自带(内联常量), 首用即写入 ~/.dao/dao-gui-worker.ps1 (内容变更才覆写)。
+// ═══════════════════════════════════════════════════════════
+const DAO_GUI_PS = path.join(DAO_DIR, 'dao-gui-worker.ps1');
+const DAO_GUI_WORKER_PS = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "Add-Type -AssemblyName System.Drawing",
+    "$sig = @'",
+    "using System;",
+    "using System.Runtime.InteropServices;",
+    "public static class DaoGui {",
+    "  [DllImport(\"user32.dll\")] public static extern bool SetCursorPos(int X, int Y);",
+    "  [DllImport(\"user32.dll\")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);",
+    "  [DllImport(\"user32.dll\")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);",
+    "}",
+    "'@",
+    "Add-Type -TypeDefinition $sig",
+    "$jpegEnc = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }",
+    "function Get-Bounds { return [System.Windows.Forms.SystemInformation]::VirtualScreen }",
+    "function Do-Cap($scale, $q) {",
+    "  $b = Get-Bounds",
+    "  $bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height)",
+    "  $g = [System.Drawing.Graphics]::FromImage($bmp)",
+    "  $g.CopyFromScreen($b.X, $b.Y, 0, 0, $bmp.Size)",
+    "  $g.Dispose()",
+    "  $out = $bmp",
+    "  if ($scale -lt 100) {",
+    "    $nw = [int]($b.Width * $scale / 100); $nh = [int]($b.Height * $scale / 100)",
+    "    if ($nw -lt 1) { $nw = 1 }; if ($nh -lt 1) { $nh = 1 }",
+    "    $nb = New-Object System.Drawing.Bitmap($nw, $nh)",
+    "    $ng = [System.Drawing.Graphics]::FromImage($nb)",
+    "    $ng.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBilinear",
+    "    $ng.DrawImage($bmp, 0, 0, $nw, $nh)",
+    "    $ng.Dispose(); $bmp.Dispose(); $out = $nb",
+    "  }",
+    "  $ep = New-Object System.Drawing.Imaging.EncoderParameters(1)",
+    "  $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]$q)",
+    "  $ms = New-Object System.IO.MemoryStream",
+    "  $out.Save($ms, $jpegEnc, $ep)",
+    "  $r = [Convert]::ToBase64String($ms.ToArray())",
+    "  $ms.Dispose(); $out.Dispose()",
+    "  return $r",
+    "}",
+    "while ($true) {",
+    "  $line = [Console]::In.ReadLine()",
+    "  if ($line -eq $null) { break }",
+    "  if ($line.Length -eq 0) { continue }",
+    "  $o = $null",
+    "  try { $o = $line | ConvertFrom-Json } catch { continue }",
+    "  if ($o -eq $null) { continue }",
+    "  $op = [string]$o.op",
+    "  if ($op -eq 'cap') {",
+    "    $s = 60; $q = 55",
+    "    try { $s = [int]$o.scale } catch {}",
+    "    try { $q = [int]$o.q } catch {}",
+    "    if ($s -lt 10) { $s = 10 }; if ($s -gt 100) { $s = 100 }",
+    "    if ($q -lt 20) { $q = 20 }; if ($q -gt 95) { $q = 95 }",
+    "    $b64 = Do-Cap $s $q",
+    "    [Console]::Out.WriteLine('CAP ' + [string]$o.id + ' ' + $b64)",
+    "    [Console]::Out.Flush()",
+    "    continue",
+    "  }",
+    "  $b = Get-Bounds",
+    "  $px = 0; $py = 0",
+    "  if ($o.nx -ne $null) { $px = [int]($b.X + [double]$o.nx * ($b.Width - 1)) }",
+    "  if ($o.ny -ne $null) { $py = [int]($b.Y + [double]$o.ny * ($b.Height - 1)) }",
+    "  switch ($op) {",
+    "    'move' { [void][DaoGui]::SetCursorPos($px, $py) }",
+    "    'btn' {",
+    "      [void][DaoGui]::SetCursorPos($px, $py)",
+    "      $btn = [string]$o.button; $act = [string]$o.action",
+    "      $down = 0x0002; $up = 0x0004",
+    "      if ($btn -eq 'right') { $down = 0x0008; $up = 0x0010 }",
+    "      elseif ($btn -eq 'middle') { $down = 0x0020; $up = 0x0040 }",
+    "      if ($act -eq 'down') { [DaoGui]::mouse_event([uint32]$down, 0, 0, 0, [UIntPtr]::Zero) }",
+    "      elseif ($act -eq 'up') { [DaoGui]::mouse_event([uint32]$up, 0, 0, 0, [UIntPtr]::Zero) }",
+    "      else { [DaoGui]::mouse_event([uint32]$down, 0, 0, 0, [UIntPtr]::Zero); [DaoGui]::mouse_event([uint32]$up, 0, 0, 0, [UIntPtr]::Zero) }",
+    "    }",
+    "    'scroll' {",
+    "      [void][DaoGui]::SetCursorPos($px, $py)",
+    "      $d = 0; try { $d = [int]$o.dy } catch {}",
+    "      if ($d -lt 0) { $d = 0x100000000 + $d }",
+    "      [DaoGui]::mouse_event([uint32]0x0800, 0, 0, [uint32]$d, [UIntPtr]::Zero)",
+    "    }",
+    "    'key' {",
+    "      $vk = 0; try { $vk = [int]$o.vk } catch {}",
+    "      if ($vk -gt 0) {",
+    "        $f = 0; if (-not $o.down) { $f = 2 }",
+    "        [DaoGui]::keybd_event([byte]$vk, 0, [uint32]$f, [UIntPtr]::Zero)",
+    "      }",
+    "    }",
+    "    'text' {",
+    "      $s = [string]$o.s",
+    "      if ($s.Length -gt 0) {",
+    "        $esc = ''",
+    "        foreach ($ch in $s.ToCharArray()) {",
+    "          if ('+^%~(){}[]'.IndexOf($ch) -ge 0) { $esc += '{' + $ch + '}' } else { $esc += $ch }",
+    "        }",
+    "        [System.Windows.Forms.SendKeys]::SendWait($esc)",
+    "      }",
+    "    }",
+    "  }",
+    "}",
+    ""
+].join('\r\n');
+
+interface PcGuiPending { resolve: (b64: string) => void; reject: (e: any) => void; timer: any; }
+const pcGui: { proc: any; buf: string; seq: number; pending: Map<number, PcGuiPending>; } = {
+    proc: null, buf: '', seq: 0, pending: new Map(),
+};
+
+function pcGuiPwshExe(): string {
+    const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+    const p = path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    try { if (fs.existsSync(p)) return p; } catch { /* 守柔 */ }
+    return 'powershell.exe';
+}
+
+function pcGuiWriteScript(): void {
+    let cur = '';
+    try { cur = fs.readFileSync(DAO_GUI_PS, 'utf8'); } catch { /* 守柔 */ }
+    if (cur !== DAO_GUI_WORKER_PS) {
+        try { fs.mkdirSync(DAO_DIR, { recursive: true }); } catch { /* 守柔 */ }
+        fs.writeFileSync(DAO_GUI_PS, DAO_GUI_WORKER_PS, 'utf8');
+    }
+}
+
+function pcGuiOnData(d: string): void {
+    pcGui.buf += d;
+    let idx: number;
+    while ((idx = pcGui.buf.indexOf('\n')) >= 0) {
+        const line = pcGui.buf.slice(0, idx).replace(/\r$/, '');
+        pcGui.buf = pcGui.buf.slice(idx + 1);
+        if (line.startsWith('CAP ')) {
+            const sp = line.indexOf(' ', 4);
+            if (sp < 0) continue;
+            const id = parseInt(line.slice(4, sp), 10);
+            const b64 = line.slice(sp + 1);
+            const pend = pcGui.pending.get(id);
+            if (pend) { clearTimeout(pend.timer); pcGui.pending.delete(id); pend.resolve(b64); }
+        }
+    }
+}
+
+function pcGuiReset(err: any): void {
+    pcGui.proc = null; pcGui.buf = '';
+    for (const [, pend] of pcGui.pending) { try { clearTimeout(pend.timer); pend.reject(err); } catch { /* 守柔 */ } }
+    pcGui.pending.clear();
+}
+
+function pcGuiEnsure(): boolean {
+    if (pcGui.proc && !pcGui.proc.killed) return true;
+    if (process.platform !== 'win32') return false;
+    try {
+        pcGuiWriteScript();
+        const p = childProcess.spawn(pcGuiPwshExe(),
+            ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', DAO_GUI_PS],
+            { windowsHide: true });
+        p.stdout.setEncoding('utf8');
+        p.stdout.on('data', (d: string) => pcGuiOnData(d));
+        p.stderr.on('data', () => { /* 守柔 */ });
+        p.on('error', (e: any) => pcGuiReset(e || new Error('gui-spawn-error')));
+        p.on('exit', () => pcGuiReset(new Error('gui-worker-exited')));
+        pcGui.proc = p;
+        return true;
+    } catch (e) { pcGui.proc = null; return false; }
+}
+
+function pcGuiCap(scale: number, q: number): Promise<string> {
+    return new Promise((resolve, reject) => {
+        if (!pcGuiEnsure()) { reject(new Error('gui-unavailable (platform=' + process.platform + ')')); return; }
+        const id = ++pcGui.seq;
+        const timer = setTimeout(() => { pcGui.pending.delete(id); reject(new Error('cap-timeout')); }, 8000);
+        pcGui.pending.set(id, { resolve, reject, timer });
+        try { pcGui.proc.stdin.write(JSON.stringify({ op: 'cap', id, scale, q }) + '\n'); }
+        catch (e) { clearTimeout(timer); pcGui.pending.delete(id); reject(e); }
+    });
+}
+
+function pcGuiInput(op: any): boolean {
+    if (!op || typeof op !== 'object' || !op.op) return false;
+    if (!pcGuiEnsure()) return false;
+    try { pcGui.proc.stdin.write(JSON.stringify(op) + '\n'); return true; }
+    catch (e) { return false; }
+}
+
+// 归一公网投屏控制台单页 — 满屏直投 + 指针/键盘/触摸捕获 + 自适应帧率。
+//   token 自页面 URL(?master_token= 或 ?t=)运行时取得, 作 Bearer 调 /api/cap、/api/input。
+//   渲染全在本页(blob→objectURL→img), 隧道只回 JPEG 字节; 输入只发轻量 JSON。无服务端插值。
+function getMirrorPageHtml(): string {
+    return [
+        '<!DOCTYPE html>',
+        '<html lang="zh"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">',
+        '<title>DAO 整机投屏控制台</title>',
+        '<style>',
+        '*{margin:0;padding:0;box-sizing:border-box}',
+        'html,body{width:100%;height:100%;background:#000;overflow:hidden;font:13px -apple-system,system-ui,sans-serif;color:#cdd3de;-webkit-user-select:none;user-select:none;touch-action:none}',
+        '#v{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#000;display:block}',
+        '#kb{position:fixed;left:-1000px;top:0;width:1px;height:1px;opacity:0}',
+        '#bar{position:fixed;top:0;left:50%;transform:translateX(-50%);display:flex;gap:8px;align-items:center;padding:6px 12px;background:rgba(16,20,28,.82);backdrop-filter:blur(8px);border-radius:0 0 12px 12px;z-index:10;transition:opacity .25s;font-size:12px}',
+        '#bar.hide{opacity:.12}',
+        '#bar button{background:#1f2a38;color:#cdd3de;border:1px solid #2c3a4d;border-radius:7px;padding:5px 9px;cursor:pointer;font-size:12px}',
+        '#bar button:hover{background:#27384c}',
+        '#bar button.on{background:#1a7f5a;border-color:#1a7f5a;color:#fff}',
+        '#st{font-variant-numeric:tabular-nums;min-width:120px;color:#7fd1a8}',
+        '#st.bad{color:#e06c75}',
+        'label{display:flex;align-items:center;gap:4px;color:#8a97a8}',
+        'input[type=range]{width:74px;vertical-align:middle}',
+        '</style></head><body>',
+        '<img id="v" alt="screen" draggable="false">',
+        '<input id="kb" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">',
+        '<div id="bar">',
+        '<span id="st">连接中…</span>',
+        '<label>清晰 <input id="rs" type="range" min="20" max="100" step="5" value="60"></label>',
+        '<label>画质 <input id="rq" type="range" min="20" max="90" step="5" value="55"></label>',
+        '<button id="bk" title="切换软键盘(手机)">⌨ 键盘</button>',
+        '<button id="bf" title="全屏">⛶ 全屏</button>',
+        '<button id="bp" title="暂停/继续投屏" class="on">⏸ 暂停</button>',
+        '</div>',
+        '<script>',
+        '(function(){',
+        'var qp=new URLSearchParams(location.search);',
+        'var TOKEN=qp.get("master_token")||qp.get("t")||qp.get("token")||"";',
+        'var H={"Authorization":"Bearer "+TOKEN};',
+        'var HJ={"Authorization":"Bearer "+TOKEN,"Content-Type":"application/json"};',
+        'var img=document.getElementById("v"),st=document.getElementById("st"),kb=document.getElementById("kb"),bar=document.getElementById("bar");',
+        'var scale=60,quality=55,running=true,inflight=false,lastUrl=null,minInterval=33;',
+        'document.getElementById("rs").oninput=function(){scale=parseInt(this.value,10)||60};',
+        'document.getElementById("rq").oninput=function(){quality=parseInt(this.value,10)||55};',
+        'function setSt(t,bad){st.textContent=t;st.className=bad?"bad":""}',
+        'function loop(){',
+        ' if(!running||inflight){return}',
+        ' inflight=true;var t0=performance.now();',
+        ' fetch("/api/cap?s="+scale+"&q="+quality,{headers:H,cache:"no-store"}).then(function(r){if(!r.ok){throw new Error("HTTP "+r.status)}return r.blob()}).then(function(b){',
+        '   var u=URL.createObjectURL(b);var old=lastUrl;lastUrl=u;',
+        '   img.onload=function(){if(old){URL.revokeObjectURL(old)}};img.src=u;',
+        '   var dt=Math.round(performance.now()-t0);var fps=dt>0?Math.round(1000/Math.max(dt,minInterval)):0;',
+        '   setSt(fps+" fps · "+dt+"ms · "+Math.round(b.size/1024)+"KB",false);',
+        '   inflight=false;setTimeout(loop,Math.max(0,minInterval-dt));',
+        ' }).catch(function(e){inflight=false;setSt("断: "+e.message,true);setTimeout(loop,1000)});',
+        '}',
+        'function mapXY(cx,cy){var rect=img.getBoundingClientRect();var iw=img.naturalWidth||rect.width,ih=img.naturalHeight||rect.height;var f=Math.min(rect.width/iw,rect.height/ih);var dw=iw*f,dh=ih*f;var ox=rect.left+(rect.width-dw)/2,oy=rect.top+(rect.height-dh)/2;var nx=(cx-ox)/dw,ny=(cy-oy)/dh;return{nx:Math.max(0,Math.min(1,nx)),ny:Math.max(0,Math.min(1,ny))}}',
+        'function send(op){try{fetch("/api/input",{method:"POST",headers:HJ,body:JSON.stringify(op),keepalive:true}).catch(function(){})}catch(e){}}',
+        'var BTN={0:"left",1:"middle",2:"right"};',
+        'var lastMove=0;',
+        'img.addEventListener("mousemove",function(e){var now=performance.now();if(now-lastMove<40)return;lastMove=now;var p=mapXY(e.clientX,e.clientY);send({op:"move",nx:p.nx,ny:p.ny})});',
+        'img.addEventListener("mousedown",function(e){e.preventDefault();var p=mapXY(e.clientX,e.clientY);send({op:"btn",nx:p.nx,ny:p.ny,button:BTN[e.button]||"left",action:"down"})});',
+        'img.addEventListener("mouseup",function(e){e.preventDefault();var p=mapXY(e.clientX,e.clientY);send({op:"btn",nx:p.nx,ny:p.ny,button:BTN[e.button]||"left",action:"up"})});',
+        'img.addEventListener("contextmenu",function(e){e.preventDefault()});',
+        'img.addEventListener("wheel",function(e){e.preventDefault();var p=mapXY(e.clientX,e.clientY);send({op:"scroll",nx:p.nx,ny:p.ny,dy:(e.deltaY>0?-120:120)})},{passive:false});',
+        'var tDown=false;',
+        'img.addEventListener("touchstart",function(e){e.preventDefault();var t=e.touches[0];if(!t)return;var p=mapXY(t.clientX,t.clientY);tDown=true;send({op:"btn",nx:p.nx,ny:p.ny,button:"left",action:"down"})},{passive:false});',
+        'img.addEventListener("touchmove",function(e){e.preventDefault();var t=e.touches[0];if(!t)return;var p=mapXY(t.clientX,t.clientY);send({op:"move",nx:p.nx,ny:p.ny})},{passive:false});',
+        'img.addEventListener("touchend",function(e){e.preventDefault();if(!tDown)return;tDown=false;send({op:"btn",button:"left",action:"up"})},{passive:false});',
+        'var VKN={"Backspace":8,"Tab":9,"Enter":13,"Shift":16,"Control":17,"Alt":18,"CapsLock":20,"Escape":27,"PageUp":33,"PageDown":34,"End":35,"Home":36,"ArrowLeft":37,"ArrowUp":38,"ArrowRight":39,"ArrowDown":40,"Insert":45,"Delete":46,"Meta":91,"OS":91,"ContextMenu":93};',
+        'function VK(e){var k=e.key;if(VKN[k]!=null)return VKN[k];if(k&&k.length===1){var c=k.toUpperCase().charCodeAt(0);if(c>=48&&c<=90)return c}var m=/^F(\\d{1,2})$/.exec(k||"");if(m){var n=parseInt(m[1],10);if(n>=1&&n<=12)return 111+n}return 0}',
+        'function onKeyDown(e){if(e.key==="F5"||e.key==="F11"||e.key==="F12")return;if(e.key&&e.key.length===1&&!e.ctrlKey&&!e.altKey&&!e.metaKey){send({op:"text",s:e.key});e.preventDefault();return}var vk=VK(e);if(vk){send({op:"key",vk:vk,down:true});e.preventDefault()}}',
+        'function onKeyUp(e){var vk=VK(e);if(vk){send({op:"key",vk:vk,down:false})}}',
+        'document.addEventListener("keydown",onKeyDown);document.addEventListener("keyup",onKeyUp);',
+        'document.getElementById("bk").onclick=function(){this.classList.toggle("on");if(this.classList.contains("on")){kb.focus()}else{kb.blur()}};',
+        'document.getElementById("bf").onclick=function(){if(!document.fullscreenElement){(document.documentElement.requestFullscreen||function(){})()}else{document.exitFullscreen()}};',
+        'document.getElementById("bp").onclick=function(){running=!running;this.classList.toggle("on",running);this.textContent=running?"⏸ 暂停":"▶ 继续";if(running)loop()};',
+        'var hideT=null;function pokeBar(){bar.classList.remove("hide");clearTimeout(hideT);hideT=setTimeout(function(){bar.classList.add("hide")},2600)}',
+        'document.addEventListener("mousemove",pokeBar);document.addEventListener("touchstart",pokeBar);pokeBar();',
+        'if(!TOKEN){setSt("缺 token (在网址后加 ?master_token=…)",true)}else{loop()}',
+        '})();',
+        '</script></body></html>'
+    ].join('\n');
 }
 
 async function handleRouteInternal(route: string, url: URL, req: any, token: string, res?: any): Promise<any> {
@@ -1894,6 +2169,15 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         && !route.startsWith('/__web')
         && !isAppProxyPassthrough(route);
     if (needAuth && !checkAuth(req)) throw new Error('unauthorized');
+
+    // ── 归一 · 公网整机投屏控制台 (任意环境浏览器登录即操控本机 · 参照手机 APK mirror) ──
+    //   知其雄守其雌: 渲染层(解帧绘制)与输入捕获全在访问者设备浏览器, 隧道只搬帧字节+输入 JSON。
+    //   整机控制面 → 强制 token (不随 /shell 免鉴权), 经 ?master_token= 或 Authorization Bearer 通过。
+    //   必须在 isAppProxyPassthrough 之前处理, 否则 /m 被当作官网 SPA 路径透传到 app.devin.ai。
+    if (route === '/m' || route === '/m/' || route === '/__mirror') {
+        if (!checkAuth(req)) throw new Error('unauthorized');
+        return { _proxy: true, status: 200, contentType: 'text/html; charset=utf-8', body: getMirrorPageHtml() };
+    }
 
     // ── 归一 · 六大板块「单板块」网页直出 (127.0.0.1) ──
     //   IDE webview 框架层封禁 blob:/srcdoc 子帧 → 板块经此本地 HTTP 路由当 iframe 加载,
@@ -2025,6 +2309,24 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         case '/api/signal-stop': {
             sigStop();
             return sigInfo();
+        }
+        case '/api/cap': {
+            // 整机帧抓取 (JPEG · 二进制) — 渲染在访问者浏览器, 此处只产数据 (守其雌)。
+            const s = Math.max(10, Math.min(100, parseInt(url.searchParams.get('s') || '60', 10) || 60));
+            const q = Math.max(20, Math.min(95, parseInt(url.searchParams.get('q') || '55', 10) || 55));
+            try {
+                const b64 = await pcGuiCap(s, q);
+                return { _proxy: true, status: 200, binary: true, contentType: 'image/jpeg', body: b64, headers: { 'Cache-Control': 'no-store' } };
+            } catch (e: any) {
+                return { _proxy: true, status: 503, contentType: 'text/plain; charset=utf-8', body: 'cap-error: ' + ((e && e.message) || String(e)) };
+            }
+        }
+        case '/api/input': {
+            // 鼠/键注入 — 访问者浏览器捕获的指针/键盘事件经此打到本机前台窗口 (守其雌·只搬数据)。
+            let ibody: any = {};
+            try { ibody = JSON.parse(await readBody(req) || '{}'); } catch (e) { ibody = {}; }
+            const ok = pcGuiInput(ibody);
+            return { ok };
         }
         case '/api/connection': {
             return {
