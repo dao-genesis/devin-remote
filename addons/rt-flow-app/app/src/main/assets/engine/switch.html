@@ -47,6 +47,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-trk-st.running{color:#4ec9b0;background:#13332b}
 .dv-trk-st.awaiting{color:#d29922;background:#332a13}
 .dv-trk-st.blocked{color:#f44;background:#3a1a1a}
+.dv-trk-st.exhausted{color:#ff9d4d;background:#3a2410;border:1px solid #6a4416}
 .dv-trk-no{flex-shrink:0;min-width:13px;height:13px;line-height:13px;text-align:center;font-size:9px;font-weight:700;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:3px;padding:0 2px}
 .dv-trk-who{color:#d7ba7d;flex-shrink:0;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dv-trk-tt{color:#bbb;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -88,6 +89,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-run .run{color:#4ec9b0;font-size:9px;font-weight:700;background:#13332b;border:1px solid #1e5a4a;border-radius:3px;padding:0 3px;white-space:nowrap}
 .dv-run .awa{color:#d29922;font-size:9px;font-weight:700;background:#332a13;border:1px solid #5a4a1e;border-radius:3px;padding:0 3px;white-space:nowrap;margin-left:2px}
 .dv-run .blk{color:#f44;font-size:9px;font-weight:700;background:#3a1a1a;border:1px solid #5a2a2a;border-radius:3px;padding:0 3px;white-space:nowrap;margin-left:2px}
+.dv-run .exh{color:#ff9d4d;font-size:9px;font-weight:700;background:#3a2410;border:1px solid #6a4416;border-radius:3px;padding:0 3px;white-space:nowrap;margin-left:2px}
 .acts{display:flex;gap:2px;flex-wrap:wrap}
 .b{width:20px;height:20px;border:none;border-radius:3px;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;padding:0}
 .b.sw{background:var(--btn);color:#fff}.b.sw:hover{background:var(--btn-h)}
@@ -125,6 +127,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 .dv-detail .dv-sess .st.awaiting{color:#d29922;background:#332a13}
 .dv-detail .dv-sess .st.blocked{color:#f44;background:#3a1a1a}
 .dv-detail .dv-sess .st.finished{color:#888;background:#222}
+.dv-detail .dv-sess .st.exhausted{color:#ff9d4d;background:#3a2410}
 .dv-detail .dv-sess .tt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dv-detail .dv-sess .dvc-acts{display:flex;gap:3px;flex:none;opacity:.7}
 .dv-detail .dv-acts{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
@@ -320,16 +323,23 @@ var _lastTabDol={};
 function _pushTabDol(a, force){
   if(!a || !(typeof N!=="undefined" && N.setTabDollars)) return;
   var q=a.quota||{}; if(typeof q.dPct!=="number") return;
+  // 美金余额尚未真取到(billing 瞬时失败且无历史值) → 不推 $0: 宁可保留页签上次金额, 也绝不误显 $0 (问题①)。
+  if(typeof q.overageDollars!=="number") return;
   var lbl="$"+Math.round(ovDollars(q)); var key=a.id||"";
   if(!force && _lastTabDol[key]===lbl) return;
   _lastTabDol[key]=lbl;
   try{ N.setTabDollars(key, lbl); if(a.email) N.setTabDollars((a.email||"").toLowerCase(), lbl); }catch(e){}
 }
 function _euaText(a){
-  var q=a.quota||{}; var dollars=ovDollars(q);
+  var q=a.quota||{};
   if(typeof q.dPct!=="number") return {t:"$--", c:"#666", ti:"未刷新额度"};
+  // 关键(问题①): 余额「未知」(billing 瞬时失败且无历史) ≠ 「已用完」。未知显 $-- 并提示稍后自动重试,
+  //   绝不把有额度的号误判成 $0「额度已用完」(那会连带触发自动清理·更危险)。
+  if(typeof q.overageDollars!=="number") return {t:"$--", c:"#888", ti:"美金额度暂未取到 · 稍后自动重试"};
+  var dollars=ovDollars(q);
   if(dollars<=0) return {t:"$0", c:"#777", ti:"额度已用完"};
-  return {t:"$"+dollars.toFixed(2), c:(dollars<8?"#e8c84a":"#4ec9b0"), ti:"Extra Usage · 美金额度 $"+dollars.toFixed(2)};
+  var sm=q.overageStale?" ·上次值":"";
+  return {t:"$"+dollars.toFixed(2), c:(dollars<8?"#e8c84a":"#4ec9b0"), ti:"Extra Usage · 美金额度 $"+dollars.toFixed(2)+sm};
 }
 function paintDollars(accs){
   accs=accs||loadAcc();
@@ -558,29 +568,51 @@ async function dvFetch(a,i,d){
 }
 // 解析 latest_status_contents (v2sessions 每条自带, JSON 字符串或对象): 内含真实 enum + user_action_required
 function _lscOf(s){ var x=s&&s.latest_status_contents; if(!x)return null; if(typeof x==="object")return x; try{return JSON.parse(x);}catch(e){return null;} }
-// 状态分类 (列表字段零成本即时判定)。优先级: 需你处理(action required) > 卡住 > 待输入 > 运行 > 完成。
-//  关键修复: 旧版只看顶层 status(常年=suspended/RUNNING), 漏了 latest_status_contents.user_action_required
-//  —— 这是 Devin 官方"需你处理/action required"信号, 漏读会把已卡住对话误判成正常。现直读该字段,
-//  全账号每轮即时命中, 不再依赖被节流的事件流探测。
+// 额度耗尽官方信号 (逆流到底层 latest_status_contents.reason): Devin 因配额耗尽休眠时,
+//   reason 命中下列模式。图中「Devin went to sleep because your usage quota has been exceeded」即此。
+var QUOTA_RE=/out_of_quota|usage_limit|insufficient|overage|exceeded|\bquota\b|out of (acu|credit)|credit.*exhaust|no.*credit/i;
+// 状态分类 (列表字段零成本即时判定)。优先级(逆流官方各标识底层):
+//   ① 额度耗尽(reason=out_of_quota/usage_limit_exceeded) > ② 需你处理(action required) >
+//   ③ 卡住/报错 > ④ 待输入 > ⑤ 完成(终态·已排除耗尽) > ⑥ 运行 > 空闲。
+//  关键修复:
+//   · 旧版把"额度耗尽"混进 finish/suspend → 误显「完成」(问题②)。现先验 latest_status_contents.reason,
+//     即便会话已 finished/suspended, 只要 reason 命中额度信号即单列 exhausted「额度耗尽」, 绝不当"完成"。
+//   · 旧版只看顶层 status, 漏了 user_action_required(官方"需你处理"信号)。
+//   · 终态再核 reason/activity_status/current_activity, 防后端把耗尽只写在非 enum 字段(问题③准确度)。
 function sessStatus(s){
-  var lsc=_lscOf(s);
-  var uar=lsc&&lsc.user_action_required;
+  var lsc=_lscOf(s)||{};
+  var reason=String(lsc.reason||"").toLowerCase();
+  var uar=lsc.user_action_required;
+  var en=String(lsc.enum||s.status_enum||s.status||s.statusClass||"").toLowerCase();
+  var status=String(s.status||"").toLowerCase();
+  var act=String(s.activity_status||"").toLowerCase();
+  var cur=String(s.current_activity||"").toLowerCase();
+  // ① 额度耗尽 — 权威 reason 信号最高优先 (即便已 finished/suspended 也单列, 绝不混入"完成")
+  if(QUOTA_RE.test(reason)) return ["exhausted","额度耗尽","quota"];
+  // ② 需你处理 (user_action_required 非空) — 官方权威信号, 标红醒目
   if(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null") return ["blocked","待处理","action"];
-  var en=String((lsc&&lsc.enum)||s.status_enum||s.status||s.statusClass||"").toLowerCase();
-  if(/block|stuck|fail|error/.test(en)) return ["blocked","卡住","error"];
+  // ③ 卡住/报错 (reason 或 enum 命中)
+  if(/error|failed|crash|stuck/.test(reason)||/block|stuck|fail|error/.test(en)) return ["blocked","卡住","error"];
+  // ④ 待输入
   if(/await|wait|ask|question|input|need|user/.test(en)) return ["awaiting","待输入"];
-  if(/finish|complet|expired|suspend|stopped|archiv|cancel/.test(en)) return ["finished","完成"];
-  if(/run|working|active|execut/.test(en)) return ["running","运行"];
-  return ["idle","空闲"];
+  // ⑤ 终态完成 — 再核底层各字段里是否藏额度信号(反者道之动), 命中则仍判耗尽
+  if(/finish|complet|expired|suspend|stopped|archiv|cancel|exited|deleted/.test(en+" "+status)){
+    if(QUOTA_RE.test(reason+" "+status+" "+act+" "+cur)) return ["exhausted","额度耗尽","quota"];
+    return ["finished","完成"];
+  }
+  // ⑥ 进行中 (enum/活动字段命中)
+  if(/run|working|active|execut|in_progress|streaming|coding|planning|testing|thinking|busy|resumed|started/.test(en+" "+act+" "+cur)) return ["running","运行"];
+  return (en||status)?["running","运行"]:["idle","空闲"];
 }
 function sessId(s){ return s.devin_id||s.session_id||s.id||""; }
 function dvOverviewHtml(a,i,sess,kn,pb,sc,git){
-  var running=0,awaiting=0,blocked=0;
-  sess.forEach(function(s){ var c=sessStatus(s)[0]; if(c==="running")running++; else if(c==="awaiting")awaiting++; else if(c==="blocked")blocked++; });
-  var q=a.quota||{}; var dollars=ovDollars(q);
-  var credits = dollars>0 ? ("额度 $"+dollars.toFixed(2)) : (typeof q.dPct==="number"?"额度 $0.00":"");
+  var running=0,awaiting=0,blocked=0,exhausted=0;
+  sess.forEach(function(s){ var c=sessStatus(s)[0]; if(c==="running")running++; else if(c==="awaiting")awaiting++; else if(c==="blocked")blocked++; else if(c==="exhausted")exhausted++; });
+  var q=a.quota||{};
+  // 余额未知(billing 瞬时失败) → 不显 $0.00, 显 $-- (问题①: 不误判已用完)
+  var credits = (typeof q.dPct!=="number") ? "" : (typeof q.overageDollars!=="number" ? "额度 $--" : (ovDollars(q)>0 ? ("额度 $"+ovDollars(q).toFixed(2)) : "额度 $0.00"));
   var h='<div class="dv-h">';
-  h+='<span class="dv-stat">对话 '+sess.length+(running?' · <span style="color:#4ec9b0">运行 '+running+'</span>':'')+(awaiting?' · <span style="color:#d29922">待输入 '+awaiting+'</span>':'')+(blocked?' · <span style="color:#f44">卡住 '+blocked+'</span>':'')+'</span>';
+  h+='<span class="dv-stat">对话 '+sess.length+(running?' · <span style="color:#4ec9b0">运行 '+running+'</span>':'')+(awaiting?' · <span style="color:#d29922">待输入 '+awaiting+'</span>':'')+(blocked?' · <span style="color:#f44">卡住 '+blocked+'</span>':'')+(exhausted?' · <span style="color:#ff9d4d">额度耗尽 '+exhausted+'</span>':'')+'</span>';
   h+='<span class="dv-stat dv-stat-c" title="点击查看知识库清单" onclick="dvTog(\'dvB'+i+'kn\')">知识库 '+kn.length+'</span>';
   h+='<span class="dv-stat dv-stat-c" title="点击查看剧本清单" onclick="dvTog(\'dvB'+i+'pb\')">剧本 '+pb.length+'</span>';
   h+='<span class="dv-stat dv-stat-c" title="点击查看密钥清单" onclick="dvTog(\'dvB'+i+'sc\')">密钥 '+sc.length+'</span>';
@@ -817,8 +849,8 @@ async function refineStuck(a, item){
     }catch(e){}
   }
   _sigMap[uuid]=rec;
-  // 即时红: 被你问/额度超限/报错 (探测命中才置)
-  if(rec.wait){ item.cls="blocked"; item._stuck=rec.reason||"await"; }
+  // 即时置态: 额度耗尽→exhausted(单列·会发通知); 被你问/报错→blocked卡住 (探测命中才置)
+  if(rec.wait){ item._stuck=rec.reason||"await"; item.cls=(rec.reason==="quota")?"exhausted":"blocked"; }
   // 真停滞红: 必须已有基线观测(probed) 且 列表+事件双签名连续 STUCK_MS 零变化 (working 有进度不会触发)
   else if(rec.probed && rec.sig!=null && (now-rec.since)>=STUCK_MS){ item.cls="blocked"; item._stuck="stall"; }
 }
@@ -828,26 +860,27 @@ function _saveUntracked(){ localStorage.setItem("rtflow.untracked", JSON.stringi
 function stopTrack(uuid){ _untrackedUuids.add(uuid); _saveUntracked(); paintTrk(); paintRowRun(); toast("已停止追踪此对话"); }
 function toggleConv(){ _convOpen=!_convOpen; localStorage.setItem("rtflow.convOpen",_convOpen?"1":"0"); var b=document.getElementById("convBody"); b.classList.toggle("collapsed",!_convOpen); document.getElementById("convArrow").innerHTML=_convOpen?"&#9660;":"&#9650;"; }
 function trkHtml(){
-  var totalRun=0,totalAwait=0,totalBlocked=0; var rows=[];
+  var totalRun=0,totalAwait=0,totalBlocked=0,totalExh=0; var rows=[];
   Object.keys(_trk).forEach(function(email){
     var st=_trk[email]; if(!st||(st.total|0)<=0)return; if(Date.now()-st.ts>180000)return;
-    totalRun+=st.running; totalAwait+=st.awaiting; totalBlocked+=st.blocked;
+    totalRun+=st.running; totalAwait+=st.awaiting; totalBlocked+=st.blocked; totalExh+=(st.exhausted||0);
     var noBadge=st.no?('<span class="dv-trk-no" title="账号编号 '+st.no+'">'+st.no+'</span>'):"";
     st.items.slice(0,6).forEach(function(it){
       if(it.uuid && _untrackedUuids.has(it.uuid)) return;
-      var cls=it.cls==="running"?"running":it.cls==="awaiting"?"awaiting":"blocked";
-      var lbl=cls==="running"?"运行":cls==="awaiting"?"待输入":(it._stuck==="action"?"待处理":it._stuck==="await"?"待你回复":it._stuck==="quota"?"额度超限":it._stuck==="error"?"报错":it._stuck==="stall"?"停滞":"卡住");
+      var cls=it.cls==="running"?"running":it.cls==="awaiting"?"awaiting":it.cls==="exhausted"?"exhausted":"blocked";
+      var lbl=cls==="running"?"运行":cls==="awaiting"?"待输入":cls==="exhausted"?"额度耗尽":(it._stuck==="action"?"待处理":it._stuck==="await"?"待你回复":it._stuck==="quota"?"额度耗尽":it._stuck==="error"?"报错":it._stuck==="stall"?"停滞":"卡住");
       var xBtn = it.uuid ? ' <span style="cursor:pointer;color:#666;margin-left:2px" onclick="stopTrack(\''+_esc(it.uuid)+'\')" title="停止追踪此对话(永久)">&times;</span>' : '';
       rows.push('<div class="dv-trk-item">'+noBadge+'<span class="dv-trk-st '+cls+'">'+lbl+'</span>'+
         '<span class="dv-trk-who">'+_esc(st.who)+'</span><span class="dv-trk-tt" title="'+_esc(it.title)+'">'+_esc(String(it.title||"").slice(0,30))+'</span>'+xBtn+'</div>');
     });
   });
-  var totalActive=totalRun+totalAwait+totalBlocked;
+  var totalActive=totalRun+totalAwait+totalBlocked+totalExh;
   if(totalActive===0&&!rows.length){ var cached=loadAcc().filter(hasAuth).length; return '<div class="dv-trk-empty">&#9729; Devin Cloud · '+(cached>0?("无活跃对话 · 已登 "+cached+" 号"):"无已登录账号·先登录")+'</div>'; }
   var sum='<div class="dv-trk-sum"><span class="dv-trk-tag">&#9729; Devin Cloud</span>'+
     '<span>运行<b style="color:#4ec9b0">'+totalRun+'</b></span>'+
     (totalAwait?'<span>待输入<b style="color:#d29922">'+totalAwait+'</b></span>':'')+
-    (totalBlocked?'<span>卡住<b style="color:#f44">'+totalBlocked+'</b></span>':'')+'</div>';
+    (totalBlocked?'<span>卡住<b style="color:#f44">'+totalBlocked+'</b></span>':'')+
+    (totalExh?'<span>额度耗尽<b style="color:#ff9d4d">'+totalExh+'</b></span>':'')+'</div>';
   return sum+rows.join("");
 }
 function paintTrk(){ var b=document.getElementById("convBody"); if(b) b.innerHTML=trkHtml(); }
@@ -860,18 +893,20 @@ function paintRowRun(){
     var stale=(!st||Date.now()-st.ts>180000||(st.total|0)<=0);
     if(el){
       if(stale){ el.innerHTML=""; }
-      else el.innerHTML=(st.running?'<span class="run" title="运行中">▶'+st.running+'</span>':'')+(st.awaiting?'<span class="awa" title="待输入">⏸'+st.awaiting+'</span>':'')+(st.blocked?'<span class="blk" title="卡住">■'+st.blocked+'</span>':'');
+      else el.innerHTML=(st.running?'<span class="run" title="运行中">▶'+st.running+'</span>':'')+(st.awaiting?'<span class="awa" title="待输入">⏸'+st.awaiting+'</span>':'')+(st.blocked?'<span class="blk" title="卡住">■'+st.blocked+'</span>':'')+((st.exhausted||0)?'<span class="exh" title="额度耗尽">⛁'+st.exhausted+'</span>':'');
     }
-    // 账号级健康着色: 该账号下任一对话卡住→整行+⚡按钮变红闪烁; 仅有待输入→橙; 否则清除
+    // 账号级健康着色: 该账号下任一对话卡住/额度耗尽→整行+⚡按钮变红闪烁; 仅有待输入→橙; 否则清除
     // (用户通常只开一个网页操作, 多对话里某个出问题需要在切号面板一眼看到)
+    var exh=(st&&st.exhausted)||0;
     if(rowEl){
       rowEl.classList.remove("acc-alert","acc-warn");
-      if(!stale && st.blocked>0) rowEl.classList.add("acc-alert");
+      if(!stale && (st.blocked>0||exh>0)) rowEl.classList.add("acc-alert");
       else if(!stale && st.awaiting>0) rowEl.classList.add("acc-warn");
     }
     if(swBtn){
       swBtn.classList.remove("sw-alert","sw-warn");
-      if(!stale && st.blocked>0){ swBtn.classList.add("sw-alert"); swBtn.title="有对话卡住("+st.blocked+") · 点击进入处理"; }
+      if(!stale && exh>0){ swBtn.classList.add("sw-alert"); swBtn.title="有对话额度耗尽("+exh+") · 点击进入处理"; }
+      else if(!stale && st.blocked>0){ swBtn.classList.add("sw-alert"); swBtn.title="有对话卡住("+st.blocked+") · 点击进入处理"; }
       else if(!stale && st.awaiting>0){ swBtn.classList.add("sw-warn"); swBtn.title="有对话待输入("+st.awaiting+") · 点击进入"; }
       else swBtn.title="多实例注入浏览器打开(即切号)";
     }
@@ -881,21 +916,22 @@ var _trkBusy=false;
 // 单账号会话扫描 → 写入 _trk (从 pollTrk 串行循环抽出, 供并发池调用)。
 async function _pollOneAcc(a, realNo){
   var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)return;
-  var running=0,awaiting=0,blocked=0,items=[];
-  (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var ssr=sessStatus(s); var cls=ssr[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked")return; items.push({cls:cls,title:s.title||s.name||"",uuid:uuid,fsig:_liveSig(s),_stuck:(cls==="blocked"?(ssr[2]||"action"):undefined)}); });
-  // 逆流兜底: running 项抓事件流判定 等你/额度/报错/停滞 → 转 blocked(卡住)
+  var running=0,awaiting=0,blocked=0,exhausted=0,items=[];
+  (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var ssr=sessStatus(s); var cls=ssr[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked"&&cls!=="exhausted")return; items.push({cls:cls,title:s.title||s.name||"",uuid:uuid,fsig:_liveSig(s),_stuck:(cls==="blocked"?(ssr[2]||"action"):(cls==="exhausted"?"quota":undefined))}); });
+  // 逆流兜底: running 项抓事件流判定 等你/额度/报错/停滞 → 转 卡住/额度耗尽
   for(var k=0;k<items.length;k++){ if(items[k].cls==="running"){ try{ await refineStuck(a, items[k]); }catch(e){} } }
-  items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="blocked")blocked++; });
-  var total=running+awaiting+blocked;
-  if(total>0) _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,total:total,items:items,ts:Date.now()};
+  items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="exhausted")exhausted++; else if(it.cls==="blocked")blocked++; });
+  var total=running+awaiting+blocked+exhausted;
+  if(total>0){ _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,exhausted:exhausted,total:total,items:items,ts:Date.now()}; if(exhausted>0) _quotaAlert(a,exhausted); }
   else delete _trk[(a.email||"").toLowerCase()];
   // 推送该账号"最需关注对话名+状态"到顶部标签 (卡住/待你>待输入>运行优先, 让需你处理的浮上来)
   try{
-    var top=items.filter(function(x){return x.cls==="blocked";})[0]
+    var top=items.filter(function(x){return x.cls==="exhausted";})[0]
+          || items.filter(function(x){return x.cls==="blocked";})[0]
           || items.filter(function(x){return x.cls==="awaiting";})[0]
           || items.filter(function(x){return x.cls==="running";})[0] || null;
     var nm = top ? (top.title||"") : "";
-    var stt = top ? (top.cls==="blocked"?"blocked":(top.cls==="awaiting"?"blocked":"running")) : "finished";
+    var stt = top ? ((top.cls==="blocked"||top.cls==="exhausted"||top.cls==="awaiting")?"blocked":"running") : "finished";
     if(N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }
     _pushTabDol(DaoCore.findAcc(a.id)||a);   // 金额与状态同推: 凡有状态更新的页签必同时带上其(缓存)金额, 杜绝「有🟢对话名却无 $」
   }catch(e){}
@@ -1082,7 +1118,7 @@ function _hasLiveConv(a){ if(_isDvOpen(a)) return true; var st=_trk[(a.email||""
 function _hasConv(a){ var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<1500000); }
 async function applyConvCapFor(a){
   if(!_cfg("convCap",true) || !hasAuth(a)) return;
-  var q=a.quota; if(!q||typeof q.dPct!=="number") return;   // 未知余额不动
+  var q=a.quota; if(!q||typeof q.dPct!=="number"||typeof q.overageDollars!=="number") return;   // 未知余额不动(美金未取到时绝不据 0 限额)
   var bal=ovDollars(q);
   var buffer=parseFloat(_cfg("convBuffer",3)); if(!(buffer>=0)) buffer=3;
   var drain=_cfg("convDrain",true);
@@ -1104,13 +1140,26 @@ function _bigAlert(msg){
 }
 // 额度<$3 提醒: 仅当该账号"有进行中对话"时才提醒 (无对话不打扰), 放大 + 震动。
 function _balAlert(a){
-  var q=a.quota; if(!q||typeof q.dPct!=="number") return;
+  var q=a.quota; if(!q||typeof q.dPct!=="number"||typeof q.overageDollars!=="number") return;  // 美金未知 → 不据 $0 误报
   if(!_hasLiveConv(a)) return;                       // 无进行中对话 → 不提醒
   var bal=ovDollars(q);
   if(bal<3){ var t=_balAlertTs[a.id]||0; if(Date.now()-t>300000){ _balAlertTs[a.id]=Date.now();
     _bigAlert("⚠ "+String(a.email||a.id).split("@")[0]+" 额度仅 $"+bal.toFixed(2)+" · 对话进行中, 请尽快处理");
     _vib(70);
   } }
+}
+// 额度耗尽提醒(问题②): 检测到该号有对话因配额耗尽休眠时主动弹横幅 + 震动 + 原生推送。
+//   根治「额度耗尽被误显示为对话已完成、不发通知」—— 现 sessStatus/refineStuck 单列 exhausted,
+//   一旦出现即触发, 不再静默当"完成"。节流 5 分钟一号, 避免反复刷屏 (无为·不扰民)。
+var _quotaAlertTs = {};
+function _quotaAlert(a, cnt){
+  if(!a||!(cnt>0)) return;
+  var t=_quotaAlertTs[a.id]||0; if(Date.now()-t<=300000) return;
+  _quotaAlertTs[a.id]=Date.now();
+  var who=String(a.email||a.id).split("@")[0];
+  var msg="🛑 "+who+" 额度已耗尽 · "+cnt+" 个对话因配额耗尽休眠, 请尽快充值/切号";
+  _bigAlert(msg); _vib(120);
+  try{ if(N.notify) N.notify("额度耗尽 · "+who, cnt+" 个对话因配额耗尽休眠, 请尽快处理"); }catch(e){}
 }
 // ════════════════════════════════════════════════════════════════════════
 //  备份/清理机制 (重构·道法自然):
@@ -1196,6 +1245,7 @@ async function autoCleanFor(a, force){
   if(!force && !_cfg("autoCleanup",true)) return {state:"skip",reason:"未开自动清理"};
   if(!hasAuth(a)) return {state:"skip",reason:"未登录"};
   var q=a.quota; if(!q||typeof q.dPct!=="number") return {state:"skip",reason:"额度未知"};
+  if(typeof q.overageDollars!=="number") return {state:"skip",reason:"美金余额未取到·不清理"};   // 余额未知绝不当 $0 触发清理(问题①防误删)
   var th=parseFloat(_cfg("autoThreshold",3)); if(!isFinite(th)) th=3;
   var bal=ovDollars(q);
   if(bal>=th) return {state:"skip",reason:"额度充足 $"+bal.toFixed(2),bal:bal};   // 额度足够 → 不清理(自动备份另行进行)
@@ -1232,7 +1282,7 @@ async function dvRunAutoCleanNow(){
   toast("刷新额度中… "+accs.length+" 号");
   for(var i=0;i<accs.length;i++){ try{ await DaoCore.refreshQuotaFor(accs[i].id); }catch(e){} }
   accs=loadAcc().filter(hasAuth);
-  var cand=accs.filter(function(a){ var q=a.quota; if(!q||typeof q.dPct!=="number")return false; if(_hasLiveConv(a))return false; return ovDollars(q)<th; });
+  var cand=accs.filter(function(a){ var q=a.quota; if(!q||typeof q.dPct!=="number"||typeof q.overageDollars!=="number")return false; if(_hasLiveConv(a))return false; return ovDollars(q)<th; });
   if(!cand.length){ toast("无低额(<$"+th+")且空闲的账号·无需清理"); return; }
   if(!confirm("将对 "+cand.length+" 个 低额(<$"+th+") 且无进行中对话 的账号执行全流程:\n全量备份(对话+知识+剧本+密钥+Git) → 水过无痕清理 → 归零者移出账号库。\n\n继续?")) return;
   var cleaned=0,removed=0,failed=0,skipped=0,log=[];
