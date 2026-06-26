@@ -542,6 +542,39 @@ class Browser:
                        "button": "left", "clickCount": 1})
         return True
 
+    def scroll_into_view(self, selector: str, by_text: bool = False,
+                         timeout: float = 2.0) -> bool:
+        """Bring an element clipped out of a scroll container back into view (F081).
+        A row can sit *in the DOM and laid out* yet be scrolled outside an
+        ``overflow:auto`` panel's clip box: its ``getBoundingClientRect`` coordinates
+        fall outside the clip, where ``elementFromPoint`` returns the container edge,
+        so :meth:`click` honestly refuses (occluded — F061) even though a human would
+        simply scroll the panel. ``scroll_until`` (F048) is for *virtual* lists where
+        the row is absent from the DOM until mounted; here the row already exists, it
+        is merely clipped. We ask the element's own scrollable ancestor chain to bring
+        it to centre (``scrollIntoView``) and poll until its hit point is no longer
+        occluded. Returns ``True`` once it is hittable, ``False`` if it is absent or
+        stays occluded by a *real* overlay (not mere clipping) — so it doubles as an
+        honest check that scrolling alone cannot expose it."""
+        if by_text:
+            tag_lit = "null"
+            locate = f"window.__agentctl.byText({selector!r},{tag_lit})"
+        else:
+            locate = f"window.__agentctl.deepQuery({selector!r})"
+        self._inject_helpers()
+        moved = self.eval(
+            f"(function(){{var el={locate};if(!el)return false;"
+            f"el.scrollIntoView({{block:'center',inline:'center'}});return true;}})()")
+        if not moved:
+            return False
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            p = self._hit_point_of(selector, by_text=by_text)
+            if p and not p.get("occluded"):
+                return True
+            time.sleep(0.08)
+        return False
+
     def ctrl_click(self, selector: str, by_text: bool = False) -> bool:
         """Ctrl+click to *toggle* an item into a discontiguous multi-selection
         (F077). A list / file grid / table picks several non-adjacent rows when you

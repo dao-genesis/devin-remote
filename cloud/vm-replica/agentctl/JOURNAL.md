@@ -1219,6 +1219,43 @@ midpoint in turn rather than leaping the whole gap.
 
 ---
 
+### F081 — Reveal an element clipped out of a scroll container
+**Surface:** a row sitting inside an `overflow:auto` panel (a settings list, a long
+dropdown, a chat backlog) that has been scrolled out of the panel's clip box — the
+row is fully laid out in the DOM, it is merely scrolled past the visible window.
+**Friction:** `click('#row15')` returns `False` and fires nothing. The row's
+`getBoundingClientRect` coordinates fall *outside* the panel's clip rectangle, so at
+that point `elementFromPoint` returns the container's edge, not the row; `_hit_point_of`
+sees every probe point occluded and `click` honestly refuses (F061). A human would
+just scroll the panel and click — but the ladder had no gesture to *scroll a clipped
+row back into its own container*. `scroll_until` (F048) does not apply: that is for
+*virtual* lists where the row is absent from the DOM until mounted; here the row
+already exists, it is only clipped.
+**Mechanism:** an element scrolled outside its scrollable ancestor's clip is painted
+nowhere, so hit-testing at its layout coordinates resolves to whatever *is* painted
+there (the container border). `Element.scrollIntoView({block:'center'})` walks the
+element's own scrollable-ancestor chain and scrolls each one so the element lands in
+the visible window — exactly the panels a human would drag. Once it is inside the clip
+again it paints, and `elementFromPoint` resolves back to it.
+**Primitive:** `Browser.scroll_into_view(selector)` injects helpers, locates the
+element (returning `False` if absent), calls `scrollIntoView({block:'center',
+inline:'center'})`, then polls `_hit_point_of` until the hit point is no longer
+occluded (returns `True`) or the timeout expires (returns `False`). The poll makes it
+an *honest* check: it returns `True` only when scrolling alone actually exposes the
+element, and `False` when a *real* overlay (not mere clipping) still covers it — so it
+distinguishes scroll-fixable clipping from overlay-occlusion that scrolling cannot
+cure. Live: a clipped `#row15` reports `occluded` and `click` refuses; after
+`scroll_into_view` the click fires the handler; an already-visible target returns
+`True`; an absent selector returns `False`. `249/249 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 知止不殆 — `click` refusing the clipped row (F061) was not a
+failure but knowing-when-not-to-act; the new gesture does not override that honesty,
+it removes the *cause* (scrolls the row into view) and then lets the honest click
+proceed. 見小曰明 — distinguish the small difference between a row merely clipped
+(curable by scrolling) and one truly buried under an overlay (not), and act only on
+the curable one.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
