@@ -479,6 +479,44 @@ patch when shape is plain, edge when colour deceives.
 
 ---
 
+### F056 — the same shape drawn bigger, the wrong shape at the right size
+**Surface:** the reference ring reappears, but **larger** — the page zoomed, ran
+at a higher DPI, or re-laid-out responsively — beside a **different shape** (a
+disk) drawn at the reference's *own* pixel size. A human still reads "ring"
+regardless of how big it was rendered. `match_edges` (F055) cannot: its
+reference mask is a fixed `ew`×`eh` pixel grid.
+**Mechanism:** a fixed-size edge mask is implicitly translation-only. When the
+matching shape is rendered at `1.5×`, its boundaries fall on entirely different
+pixels than the reference mask expects, so the Hamming distance explodes
+(`19298`) — while the wrong shape, sharing the reference's *size*, aligns its
+(few) edges and scores far lower (`281`). Structure-match therefore picks the
+**decoy** again, this time because *scale*, not colour, has moved. Re-sampling
+the thin edge mask directly does not help (`694` vs `281`): a one-pixel contour
+resamples into noise.
+**Primitive:** `osctl.edge_signature(rgb, size, bbox, nw, nh, thr)` collapses the
+size dependence *before* edging. It area-averages the region's luma down to a
+fixed `nw`×`nh` canonical grid (default 48×48) and thresholds the gradient
+*there*, so any rendering of the same shape — whatever its pixel dimensions —
+reduces to the **same** signature; compare two with `edge_hamming`. Segmentation
+already gives each candidate's true `bbox` (hence its size), so the idiom is:
+segment by colour, take one signature per candidate at the canonical grid, pick
+the lowest distance to the reference. Proven against the rescaled scene: the
+bigger-but-correct ring scores `24`, the right-size-but-wrong disk `117` — the
+signature picks the rescaled ring and the click lands `TARGET-HIT`, where the
+fixed mask landed on the decoy. `78/78 checks passed`, deterministic across
+three runs. The perception ladder now reads: hue (`find_color_blobs`) → patch
+(`match_template`) → rigid structure (`match_edges`) → **scale-free structure**
+(`edge_signature`).
+**Lesson (道法自然):** 大方無隅，大器晚成 — the great form has no fixed corner and
+no fixed measure; to know a shape you must first stop measuring it in the frame
+of how big it happened to be drawn. 為者敗之 — forcing the mask to the literal
+pixels fails the moment the world rescales; yield instead to a frame the shape
+shares with all its renderings, and the likeness is simply there. Each register
+discards one more accident — first position, then colour, now size — keeping only
+what is essentially the thing.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

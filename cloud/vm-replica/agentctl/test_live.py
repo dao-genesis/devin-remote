@@ -699,6 +699,101 @@ def round_structure_match(b: Browser, offline: bool) -> None:
           b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
 
 
+def round_scale_invariant(b: Browser, offline: bool) -> None:
+    print("R20: pick a rescaled target by canonical signature, not fixed size (F056) — osctl")
+    # The reference shape (a ring) reappears LARGER (a zoom / DPI / re-layout),
+    # beside a DIFFERENT shape (a disk) at the reference's own size. match_edges
+    # (R19) uses a fixed-size mask, so the bigger-but-correct shape no longer
+    # aligns and the same-size-but-wrong shape wins. Reducing each candidate to a
+    # canonical edge signature removes the size dependence.
+    ring = ("function ring(cx,cy,r,col){x.fillStyle=col;x.beginPath();"
+            "x.arc(cx,cy,r,0,7);x.fill();x.fillStyle='#ff00ff';"
+            "x.beginPath();x.arc(cx,cy,r/2,0,7);x.fill();}")
+    disk = ("function disk(cx,cy,r,col){x.fillStyle=col;x.beginPath();"
+            "x.arc(cx,cy,r,0,7);x.fill();}")
+    # Phase 1: reference ring on a 120 tile, captured alone.
+    proto = fixture("scstruct.html",
+                    "<!doctype html><title>scstruct</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=300 height=260 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,300,260);" + ring +
+                    "x.fillStyle='#ff00ff';x.fillRect(60,60,120,120);ring(120,120,40,'#fff');"
+                    "</script>")
+    b.navigate(proto)
+    time.sleep(0.5)
+    rw, rh, rrgb = osctl.capture_rgb()
+    rb = [bl for bl in osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rrgb,
+                                              size=(rw, rh), min_count=200)
+          if bl["bbox"][2] - bl["bbox"][0] > 80 and bl["bbox"][3] - bl["bbox"][1] > 80]
+    check("captured a reference tile", len(rb) == 1, str([bl["x"] for bl in rb]))
+    if not rb:
+        return
+    ref = rb[0]
+    ref_e, ew, eh = osctl.edge_map(rrgb, (rw, rh), ref["bbox"])
+    ref_sig = osctl.edge_signature(rrgb, (rw, rh), ref["bbox"])
+    check("reference signature has structure", sum(ref_sig) > 80, str(sum(ref_sig)))
+    # Phase 2: target = SAME ring, bigger (180 tile, r60) LEFT;
+    #          decoy  = disk at the reference size (120 tile, r40) RIGHT.
+    scene = fixture("scscene.html",
+                    "<!doctype html><title>scscene</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=760 height=260 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,760,260);" + ring + disk +
+                    "var TGT=[40,40,180,180],DEC=[560,70,120,120];"
+                    "x.fillStyle='#ff00ff';x.fillRect(TGT[0],TGT[1],180,180);"
+                    "x.fillStyle='#ff00ff';x.fillRect(DEC[0],DEC[1],120,120);"
+                    "ring(130,130,60,'#fff');disk(620,130,40,'#fff');"
+                    "function inb(p,r){return p[0]>=r[0]&&p[0]<=r[0]+r[2]"
+                    "&&p[1]>=r[1]&&p[1]<=r[1]+r[3];}"
+                    "c.addEventListener('click',function(e){"
+                    "var r=c.getBoundingClientRect(),p=[e.clientX-r.left,e.clientY-r.top];"
+                    "if(inb(p,TGT)){document.title='TARGET-HIT';}"
+                    "else if(inb(p,DEC)){document.title='DECOY';}"
+                    "else{document.title='MISS';}});</script>")
+    b.navigate(scene)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    blobs = [bl for bl in osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rgb,
+                                                 size=(w, h), min_count=200)
+             if bl["bbox"][2] - bl["bbox"][0] > 80 and bl["bbox"][3] - bl["bbox"][1] > 80]
+    check("two candidates of different sizes found", len(blobs) == 2,
+          str([(bl["x"], bl["bbox"][2] - bl["bbox"][0] + 1) for bl in blobs]))
+    if len(blobs) != 2:
+        return
+    blobs.sort(key=lambda bl: bl["x"])
+    target_blob, decoy_blob = blobs[0], blobs[1]
+    check("target is larger than the reference, decoy is reference-sized",
+          (target_blob["bbox"][2] - target_blob["bbox"][0] + 1) > ew + 20
+          and abs((decoy_blob["bbox"][2] - decoy_blob["bbox"][0] + 1) - ew) < 20,
+          f"tgt={target_blob['bbox'][2]-target_blob['bbox'][0]+1} dec={decoy_blob['bbox'][2]-decoy_blob['bbox'][0]+1} ref={ew}")
+    # Friction: a fixed-size edge mask cannot match the rescaled target.
+    fixed = []
+    for bl in blobs:
+        cand, _, _ = osctl.edge_map(rgb, (w, h), bl["bbox"])
+        n = min(len(ref_e), len(cand))
+        fixed.append((osctl.edge_hamming(ref_e[:n], cand[:n]) + abs(len(ref_e) - len(cand)), bl))
+    fixed_best = min(fixed, key=lambda t: t[0])[1]
+    check("fixed-size edge-match is fooled: it picks the reference-sized decoy",
+          fixed_best is decoy_blob,
+          f"fixed chose x={fixed_best['x']} target_x={target_blob['x']}")
+    # Primitive: canonical signature is size-independent.
+    sig = []
+    for bl in blobs:
+        s = osctl.edge_signature(rgb, (w, h), bl["bbox"])
+        sig.append((osctl.edge_hamming(ref_sig, s), bl))
+    sig_best_score, sig_best = min(sig, key=lambda t: t[0])
+    sig_worst = max(sig, key=lambda t: t[0])[0]
+    check("rescaled target scores below decoy on signature",
+          sig_best_score < sig_worst,
+          f"best={sig_best_score} worst={sig_worst}")
+    check("signature-match picks the rescaled target, not the decoy",
+          sig_best is target_blob,
+          f"sig chose x={sig_best['x']} target_x={target_blob['x']}")
+    osctl.click(sig_best["x"], sig_best["y"])
+    check("signature-matched click hits the rescaled target",
+          b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -706,7 +801,8 @@ def main() -> int:
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
-              round_template_match, round_settle, round_structure_match]
+              round_template_match, round_settle, round_structure_match,
+              round_scale_invariant]
     for r in rounds:
         try:
             r(b, offline)

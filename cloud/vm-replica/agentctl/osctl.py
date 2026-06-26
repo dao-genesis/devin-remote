@@ -636,6 +636,58 @@ def match_edges(ref_edges: list[int], ew: int, eh: int,
             "bbox": (tx, ty, tx + ew - 1, ty + eh - 1)}
 
 
+def edge_signature(rgb: bytes, size: tuple[int, int],
+                   bbox: tuple[int, int, int, int],
+                   nw: int = 48, nh: int = 48, thr: int = 24) -> list[int]:
+    """A scale-invariant structural fingerprint of a region (F056).
+
+    :func:`edge_map` / :func:`match_edges` are translation-only: the reference
+    mask is a fixed pixel size, so the *same* shape rendered larger (browser
+    zoom, high-DPI, a responsive re-layout) no longer aligns — and a *different*
+    shape at the reference's own size can score better. This collapses that
+    dependence on size: it area-averages the region's luma down to a fixed
+    ``nw``x``nh`` grid and thresholds the gradient there, so any rendering of the
+    same shape — whatever its pixel dimensions — reduces to the *same* signature.
+    Compare two signatures with :func:`edge_hamming` (lower = more alike).
+
+    Segmentation already yields each candidate's true ``bbox`` (hence its size),
+    so the idiom is: segment by colour, take one signature per candidate at the
+    canonical grid, and pick the lowest Hamming distance to the reference —
+    structure that no longer cares how big the thing was drawn."""
+    w, _h = size
+    x0, y0, x1, y1 = bbox
+    bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    g = [0] * (nw * nh)
+    for ny in range(nh):
+        sy0 = y0 + ny * bh // nh
+        sy1 = y0 + (ny + 1) * bh // nh
+        if sy1 <= sy0:
+            sy1 = sy0 + 1
+        for nx in range(nw):
+            sx0 = x0 + nx * bw // nw
+            sx1 = x0 + (nx + 1) * bw // nw
+            if sx1 <= sx0:
+                sx1 = sx0 + 1
+            s = cnt = 0
+            for yy in range(sy0, sy1):
+                base = yy * w * 3
+                for xx in range(sx0, sx1):
+                    j = base + xx * 3
+                    s += (rgb[j] * 299 + rgb[j + 1] * 587
+                          + rgb[j + 2] * 114) // 1000
+                    cnt += 1
+            g[ny * nw + nx] = s // cnt if cnt else 0
+    sig = [0] * (nw * nh)
+    for ny in range(1, nh - 1):
+        for nx in range(1, nw - 1):
+            i = ny * nw + nx
+            gx = g[i + 1] - g[i - 1]
+            gy = g[i + nw] - g[i - nw]
+            if (gx if gx >= 0 else -gx) + (gy if gy >= 0 else -gy) > thr:
+                sig[i] = 1
+    return sig
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"
