@@ -2373,6 +2373,52 @@ def round_middle_click(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_right_drag_by(b: Browser, offline: bool) -> None:
+    print("R54: right-button drag to pan a viewport (F090) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>rdrag</title>"
+            b"<style>html,body{margin:0}"
+            b"#pad{width:320px;height:200px;background:#cdf}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=pad>pan</div><div id=veil></div>"
+            b"<script>window.panx=0;window.lmoves=0;"
+            b"var pad=document.getElementById('pad'),drag=false,sx=0,base=0;"
+            b"pad.addEventListener('mousedown',function(e){if(e.button===2){"
+            b"drag=true;sx=e.clientX;e.preventDefault();}});"
+            b"window.addEventListener('mousemove',function(e){if(!drag)return;"
+            b"if(e.buttons&2){window.panx=base+(e.clientX-sx);window.lmoves++;}});"
+            b"window.addEventListener('mouseup',function(e){if(e.button===2){"
+            b"drag=false;base=window.panx;}});"
+            b"window.addEventListener('contextmenu',function(e){e.preventDefault();});"
+            b"</script>")
+    sp = _serve(8983, page)
+
+    def panx() -> int:
+        return b.eval("window.panx")
+    try:
+        b.navigate("http://127.0.0.1:8983/")
+        time.sleep(0.2)
+        check("pan starts at 0", panx() == 0, repr(panx()))
+        # Friction: a left drag carries buttons:1 — the buttons&2 pan guard never
+        # fires, so the viewport does not move at all.
+        check("left drag_by does not pan a right-drag viewport (buttons mismatch)",
+              b.drag_by("#pad", 80, 0) is True and panx() == 0, repr(panx()))
+        # Primitive: a faithful right-button drag pans by exactly the delta.
+        check("right_drag_by(+60) pans the viewport to exactly 60",
+              b.right_drag_by("#pad", 60, 0) is True and panx() == 60, repr(panx()))
+        check("right_drag_by(-25) pans back to exactly 35",
+              b.right_drag_by("#pad", -25, 0) is True and panx() == 35, repr(panx()))
+        # Honest refusals.
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("right_drag_by refuses through an overlay",
+              b.right_drag_by("#pad", 40, 0) is False)
+        check("nothing panned while occluded", panx() == 35, repr(panx()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("right_drag_by on an absent element returns False",
+              b.right_drag_by("#nope", 40, 0) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2393,7 +2439,7 @@ def main() -> int:
               round_scroll_into_view, round_double_click,
               round_press_hold, round_zoom_pane, round_key_activate,
               round_key_step, round_triple_click, round_drag_by,
-              round_middle_click]
+              round_middle_click, round_right_drag_by]
     for r in rounds:
         try:
             r(b, offline)
