@@ -70,16 +70,38 @@ window.__agentctl = (function () {
     }
     return null;
   }
+  function clickable(el) {
+    // A truthy rank => prefer this element as the real interactive target.
+    if (/^(A|BUTTON)$/.test(el.tagName)) return 3;
+    if (el.tagName === 'INPUT' || el.tagName === 'SELECT'
+        || el.tagName === 'TEXTAREA') return 3;
+    const role = (el.getAttribute && el.getAttribute('role')) || '';
+    if (role === 'button' || role === 'link') return 2;
+    if (el.onclick || (el.tabIndex >= 0)) return 1;
+    return 0;
+  }
+  function area(el) {
+    const r = el.getBoundingClientRect();
+    return r.width * r.height;
+  }
   function byText(text, tagHint) {
     const t = text.trim().toLowerCase();
-    let best = null, bestLen = 1e9;
+    // Among all visible elements whose text contains the target, pick the
+    // best *interactive* target. A wrapper <p> and its child <a> can share
+    // identical textContent ("Learn more"); ranking by text length alone
+    // keeps the wider ancestor, whose geometric center misses the anchor.
+    // Rank: clickable first, then smallest text, then smallest area (leaf).
+    let best = null, bestRank = -1, bestLen = 1e9, bestArea = 1e18;
     for (const el of walk(document)) {
       if (tagHint && el.tagName !== tagHint.toUpperCase()) continue;
       const own = (el.textContent || '').trim().toLowerCase();
       if (!own.includes(t)) continue;
       if (!visible(el)) continue;
-      // prefer the *smallest* element still containing the text (the leaf).
-      if (own.length < bestLen) { best = el; bestLen = own.length; }
+      const rank = clickable(el), len = own.length, a = area(el);
+      const better = rank > bestRank
+        || (rank === bestRank && len < bestLen)
+        || (rank === bestRank && len === bestLen && a < bestArea);
+      if (better) { best = el; bestRank = rank; bestLen = len; bestArea = a; }
     }
     return best;
   }
