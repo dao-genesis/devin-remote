@@ -565,6 +565,35 @@ class Browser:
         self.cdp.call("Input.insertText", {"text": text})
         return True
 
+    def drop_file(self, selector: str, name: str, content: str,
+                  mime: str = "text/plain") -> bool:
+        """Drop a file onto a dropzone (F064). Many uploaders (Slack, Gmail, an
+        image well) accept a file *dropped on a region* and have **no
+        ``<input type=file>``** to set: ``set_file_input`` (F009) has no node to
+        target, and a coordinate drag (``dnd``, F047) moves DOM elements but
+        carries no ``File`` — the dropzone's ``drop`` handler reads
+        ``e.dataTransfer.files`` and finds it empty. A human drags a file from the
+        OS file manager; the only thing the page actually receives is a ``drop``
+        event whose ``DataTransfer`` holds a ``File``. We construct exactly that: a
+        real ``File`` placed in a ``DataTransfer``, dispatched as
+        ``dragenter``→``dragover``→``drop`` at the target's centre (with
+        ``dataTransfer`` forced onto each event, since the constructor leaves it
+        null). The page reacts as if a human dropped the file. Returns ``False`` if
+        the target is absent."""
+        js = (
+            "(function(){var el=window.__agentctl.deepQuery(%r);if(!el)return false;"
+            "var dt=new DataTransfer();"
+            "dt.items.add(new File([%s],%s,{type:%s}));"
+            "var b=el.getBoundingClientRect();"
+            "var x=b.left+b.width/2,y=b.top+b.height/2;"
+            "['dragenter','dragover','drop'].forEach(function(t){"
+            "  var e=new DragEvent(t,{bubbles:true,cancelable:true,"
+            "    clientX:x,clientY:y});"
+            "  Object.defineProperty(e,'dataTransfer',{value:dt});"
+            "  el.dispatchEvent(e);});return true;})()"
+        ) % (selector, json.dumps(content), json.dumps(name), json.dumps(mime))
+        return bool(self.eval(js))
+
     def press_key(self, key: str, code: str | None = None,
                   key_code: int | None = None) -> None:
         base = {"key": key, "code": code or key}

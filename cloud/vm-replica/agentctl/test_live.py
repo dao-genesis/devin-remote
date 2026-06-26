@@ -1210,6 +1210,46 @@ def round_contenteditable(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_file_drop(b: Browser, offline: bool) -> None:
+    print("R28: drop a file onto a dropzone with no <input type=file> (F064) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>drop</title>"
+            b"<div id=z style='width:200px;height:120px'>drop here</div>"
+            b"<script>var z=document.getElementById('z');"
+            b"['dragenter','dragover'].forEach(function(t){"
+            b"  z.addEventListener(t,function(e){e.preventDefault();});});"
+            b"z.addEventListener('drop',function(e){e.preventDefault();"
+            b"  var f=e.dataTransfer.files[0];window.__name=f?f.name:null;"
+            b"  window.__type=f?f.type:null;"
+            b"  var r=new FileReader();r.onload=function(){window.__body=r.result;};"
+            b"  if(f)r.readAsText(f);window.__dropped=(window.__dropped||0)+1;});"
+            b"</script>")
+    sp = _serve(8954, page)
+    try:
+        b.navigate("http://127.0.0.1:8954/")
+        time.sleep(0.2)
+        check("the dropzone has no file input to set",
+              b.eval("!document.querySelector('input[type=file]')"))
+        check("no drop has happened yet", b.eval("window.__dropped||0") == 0)
+        # Primitive: drop_file synthesizes a real File in a DataTransfer.
+        check("drop_file reports it dropped",
+              b.drop_file("#z", "hello.txt", "HELLO DROP", "text/plain") is True)
+        check("the drop handler fired exactly once",
+              b.wait_for("window.__dropped===1", timeout=2),
+              repr(b.eval("window.__dropped||0")))
+        check("the dropped file carries the right name and type",
+              b.eval("window.__name") == "hello.txt"
+              and b.eval("window.__type") == "text/plain",
+              repr((b.eval("window.__name"), b.eval("window.__type"))))
+        check("the file's bytes are real and readable",
+              b.wait_for("window.__body==='HELLO DROP'", timeout=2),
+              repr(b.eval("window.__body")))
+        # Truthful failure: an absent dropzone is refused.
+        check("drop_file refuses an absent target",
+              b.drop_file("#nope", "x.txt", "x", "text/plain") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1220,7 +1260,7 @@ def main() -> int:
               round_template_match, round_settle, round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
-              round_native_select, round_contenteditable]
+              round_native_select, round_contenteditable, round_file_drop]
     for r in rounds:
         try:
             r(b, offline)
