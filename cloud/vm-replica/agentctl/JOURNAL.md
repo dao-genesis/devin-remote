@@ -1652,6 +1652,49 @@ refuses through an overlay rather than pretend a spread it cannot land.
 
 ---
 
+## F094 — two-finger rotate to twist a gesture view (`rotate`) · R58
+
+**Friction:** A map that spins to a heading, an image editor that turns a layer
+to a two-finger twist, a knob driven by a circular gesture — these read the
+*angle* of the line between two simultaneous touch points each `touchmove` and
+never look at the spread. `pinch` (F093) moves the two points apart or together,
+so their separation changes but the angle between them holds — a rotate-only
+handler sees nothing and the view stays at `0°` though `pinch` returns `True`;
+`swipe` (F092) carries a single travelling touch that has no angle at all. The
+friction is the *orientation* of a finger pair: the view answers only to a twist
+that holds the distance and turns the line.
+
+**Mechanism:** Two touch points dispatched together (`id:0` and `id:1`) on
+opposite ends of a fixed-radius diameter through the center make Chrome present
+`e.touches.length===2`; turning both around the center each `touchMove` changes
+`atan2(dy, dx)` of the line between them while `hypot(dx, dy)` is held constant,
+so a live rotate handler reads the running angle (normalized to `[-180, 180]`)
+and a pinch handler reads no scale change. A line that turns from `0°` to `90°`
+reads as a quarter-turn clockwise; the inter-finger distance never moves.
+
+**Primitive:** `Browser.rotate(selector, degrees)` resolves the honest hit point
+(F061), refuses if occluded, places two points on opposite ends of a radius-60
+diameter through the center, then turns both around the center by `degrees`
+(positive sweeps the line clockwise in screen space) issuing two-point
+`touchMove` events so the rotate handler runs each frame, and lifts both with
+`touchEnd`. The separation is held constant throughout, so a pinch handler reads
+`scale ≈ 1`. Returns `True` once the rotation completes, `False` if the element
+is absent or occluded.
+
+**Live (R58):** a two-finger `pinch` over a twist view leaves `rot` at `0` (the
+handler reads only the angle, which a spread does not change) though it returns
+`True`; `rotate(+90)` turns the line to exactly `90°`; the inter-finger distance
+holds so `scale` stays `1` (`|scale-1| < 1e-6`); `rotate(-45)` turns it to
+exactly `-45°`; under a transparent veil `rotate` → `False` and `rot` stays
+`-45`; an absent selector → `False`. `343/343 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 反也者，道之動也 — a pair of fingers can spread or turn,
+and the two motions are not the same motion seen twice; a twist holds the
+distance and moves the angle. The honest rotate refuses through an overlay
+rather than pretend a turn it cannot land.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

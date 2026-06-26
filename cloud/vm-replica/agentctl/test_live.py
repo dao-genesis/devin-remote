@@ -2542,6 +2542,59 @@ def round_pinch(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_rotate(b: Browser, offline: bool) -> None:
+    print("R58: two-finger rotate to twist a gesture view (F094) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>rotate</title>"
+            b"<style>html,body{margin:0}"
+            b"#m{width:320px;height:240px;background:#edf}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=m>map</div><div id=veil></div>"
+            b"<script>window.rot=0;window.scl=1;window.tm=0;var a0=null,d0=null;"
+            b"var m=document.getElementById('m');"
+            b"function ang(t){var a=t[0],b=t[1];"
+            b"return Math.atan2(b.clientY-a.clientY,b.clientX-a.clientX)*180/Math.PI;}"
+            b"function dst(t){var a=t[0],b=t[1];"
+            b"return Math.hypot(b.clientX-a.clientX,b.clientY-a.clientY);}"
+            b"m.addEventListener('touchstart',function(e){"
+            b"if(e.touches.length===2){a0=ang(e.touches);d0=dst(e.touches);}},{passive:true});"
+            b"m.addEventListener('touchmove',function(e){"
+            b"if(e.touches.length===2&&a0!==null){var d=ang(e.touches)-a0;"
+            b"while(d>180)d-=360;while(d<-180)d+=360;window.rot=Math.round(d);"
+            b"window.scl=dst(e.touches)/d0;window.tm++;}},{passive:true});"
+            b"m.addEventListener('touchend',function(e){"
+            b"if(e.touches.length<2){a0=null;}},{passive:true});"
+            b"</script>")
+    sp = _serve(8987, page)
+
+    def rot() -> float:
+        return b.eval("window.rot")
+
+    def scl() -> float:
+        return b.eval("window.scl")
+    try:
+        b.navigate("http://127.0.0.1:8987/")
+        time.sleep(0.2)
+        check("view starts unrotated", rot() == 0, repr(rot()))
+        # Friction: a pinch changes the spread, not the angle — no twist.
+        check("pinch does not rotate a twist view",
+              b.pinch("#m", 60) is True and rot() == 0, repr(rot()))
+        # Primitive: a faithful two-finger twist turns the line by the angle.
+        check("rotate(+90) twists to exactly 90 degrees",
+              b.rotate("#m", 90) is True and rot() == 90, repr(rot()))
+        check("rotate holds the inter-finger distance (no zoom)",
+              abs(scl() - 1.0) < 1e-6, repr(scl()))
+        check("rotate(-45) twists to exactly -45 degrees",
+              b.rotate("#m", -45) is True and rot() == -45, repr(rot()))
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("rotate refuses through an overlay", b.rotate("#m", 30) is False)
+        check("nothing twisted while occluded", rot() == -45, repr(rot()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("rotate on an absent element returns False",
+              b.rotate("#nope", 30) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2563,7 +2616,7 @@ def main() -> int:
               round_press_hold, round_zoom_pane, round_key_activate,
               round_key_step, round_triple_click, round_drag_by,
               round_middle_click, round_right_drag_by,
-              round_tap, round_swipe, round_pinch]
+              round_tap, round_swipe, round_pinch, round_rotate]
     for r in rounds:
         try:
             r(b, offline)

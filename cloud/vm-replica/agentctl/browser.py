@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import sys
 import time
@@ -878,6 +879,49 @@ class Browser:
             off = start + (end - start) * i / steps
             self.cdp.call("Input.dispatchTouchEvent",
                           {"type": "touchMove", "touchPoints": _pair(off)})
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchEnd", "touchPoints": []})
+        return True
+
+    def rotate(self, selector: str, degrees: float,
+               by_text: bool = False, tag: str | None = None) -> bool:
+        """Rotate an element with **two** touch points twisting about its center
+        (F094). A map that spins to a heading, an image editor that rotates a layer
+        to the two-finger twist, a knob driven by a circular gesture — these read
+        the *angle* of the line between two simultaneous touch points each
+        ``touchmove`` and never look at the spread. :meth:`pinch` (F093) moves the
+        two points apart or together, so their separation changes but the angle
+        between them does not — a rotate-only handler sees nothing; :meth:`swipe`
+        (F092) carries a single touch that has no angle at all. The friction is the
+        *orientation* of a finger pair: the view answers only to a twist that holds
+        the distance and turns the line. We resolve the honest hit point (F061),
+        refuse if occluded, place two points on opposite ends of a fixed-radius
+        diameter through the center, then turn both around the center by
+        ``degrees`` (positive sweeps the line clockwise in screen space) issuing
+        two-point ``touchMove`` events so the live rotate handler runs each frame,
+        and lift both with ``touchEnd``. The inter-finger distance is held constant
+        throughout, so a pinch handler reads no scale change. Returns ``True`` once
+        the rotation completes, ``False`` if the element is absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        cx, cy = p["x"], p["y"]
+        r = 60.0
+        steps = max(2, int(abs(degrees) / 10) + 1)
+
+        def _pair(deg: float):
+            a0 = math.radians(180.0 + deg)
+            a1 = math.radians(0.0 + deg)
+            return [{"x": cx + r * math.cos(a0), "y": cy + r * math.sin(a0),
+                     "id": 0},
+                    {"x": cx + r * math.cos(a1), "y": cy + r * math.sin(a1),
+                     "id": 1}]
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchStart", "touchPoints": _pair(0.0)})
+        for i in range(1, steps + 1):
+            self.cdp.call("Input.dispatchTouchEvent",
+                          {"type": "touchMove",
+                           "touchPoints": _pair(degrees * i / steps)})
         self.cdp.call("Input.dispatchTouchEvent",
                       {"type": "touchEnd", "touchPoints": []})
         return True
