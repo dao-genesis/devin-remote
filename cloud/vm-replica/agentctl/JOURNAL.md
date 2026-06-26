@@ -2484,6 +2484,49 @@ it was written.
 
 ---
 
+## F113 — a coloured line reads as one word: read the *words* across colours
+
+**Friction.** F111's `read_region` reads every colour of a line, but joins the
+glyph labels with *nothing* between them — hand it `OK GO` painted as a red `OK`
+beside a green `GO` and it reads `"OKGO"`, the word seam the page left between the
+two words dropped exactly as `read_text` dropped it before F106. F106's
+`read_words` *does* recover the seam — it measures the blank between cells and
+splits where the spacing turns bimodal — but it `segment_run`-s by a **single**
+`fg`: give it that two-colour line and it reads only one colour's word
+(`read_words(red)` → `"OK"`, the green word gone; `read_words(grn)` → `"GO"`).
+Neither primitive reads a multi-colour line *with* its spaces.
+
+**Mechanism.** Word spacing and colour are orthogonal axes that the two readers
+each collapsed: F111 kept every colour but flattened the spacing, F106 kept the
+spacing but flattened to one colour. The seam lives in the *gaps between cells*,
+which are bimodal (inter-letter gaps small and even, the word gap markedly
+wider) — and that signal survives no matter which inks sit on either side of it.
+
+**Primitive.** `read_region_words` composes the two. As `read_region`, it asks
+`palette` for the region's inks, drops the background, and `segment_run`-s each
+ink into per-glyph cells, gathering *every* cell from *every* colour and sorting
+by left edge — the one left-to-right order the eye reads. Then, as `read_words`,
+it takes the median cell-to-cell gap as the typical letter advance and inserts a
+single `' '` wherever a gap is `>= space_k` (1.8) times that median — a word
+seam, regardless of the colours flanking it. One line; use `read_block_region`
+first to part stacked lines.
+
+**Live (R77):** one magenta atlas reads runs of any ink. A two-colour line —
+red `OK`, wide gap, green `GO` — makes `read_region` read `"OKGO"` (seam dropped)
+and `read_words(red)`/`read_words(grn)` read only `"OK"`/`"GO"` (the frictions);
+`read_region_words` reads `"OK GO"`. Three words in three colours (`RED` red,
+`OK` green, `BY` blue) read `"RED OK BY"`; order follows geometry — green word
+left, red word right reads `"GO OK"`; a single-colour line equals `read_words`
+(`"OK GO"`); an evenly-tracked block invents no space (`"OKGO"`); a uniform
+region reads `""`. `539/539 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 大音希聲 — the space between words says as much as the words.
+F111 kept every colour, F106 kept every seam; each had let the other axis go.
+F113 keeps both: colour says *what* each glyph is, the gap says *where* one word
+ends and the next begins, and the line reads as the page spaced it.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
