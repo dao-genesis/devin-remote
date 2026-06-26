@@ -775,6 +775,33 @@ soft, indirect path is the working one. 大巧若拙 — no OS round-trip, no pi
 chase; the file is handed over where the page reaches for it. 信言不美 — an absent
 dropzone is declined, not faked.
 
+### F065 — a stroke is a path, not two endpoints
+**Surface:** a drawing canvas — a signature pad, a sketch box, a map lasso. A human
+sweeps a pen and the surface records the whole **path**: `pointerdown`, many
+`pointermove`, `pointerup`. Our `drag` (F047 family) walks a *straight line*
+between two endpoints — 20 samples that are all collinear (perpendicular deviation
+`0`). A pad that asks you to *draw* something (or an anti-bot check that rejects a
+ruler-straight signature) is never satisfied: the gesture has the right endpoints
+but the wrong shape.
+**Mechanism:** the canvas has no DOM for its strokes — the drawing lives in the
+*sequence* of pointer positions it receives. What distinguishes a signature from a
+line is the curvature carried by the intermediate points; `drag`'s linear
+interpolation throws exactly that away. Chrome turns each CDP `mouseMoved` into a
+`pointermove`, so the renderer will faithfully record any polyline we walk — we
+just have to walk the real one.
+**Primitive:** `Browser.draw_path(points)`. Press at the first point, emit a real
+`mouseMoved` through **every** intermediate point in order (preserving curvature),
+release at the last — one connected, arbitrarily-curved stroke. A 26-point arc is
+recorded with a perpendicular deviation of `59px` (a true bend) and the `pointerup`
+lands; a straight `drag` over the same span deviates `0`. Fewer than two points
+returns `False`. The actuation ladder now reaches **continuous gestures**, not just
+discrete clicks. `143/143 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 大直若屈 — the great straight looks bent: a real signature is
+*not* a straight line, and forcing the shortest path (`drag`) is the lie; we follow
+the curve the hand would. 為者敗之 — we stop interpolating a line through a surface
+that measures the curve. 少則得 — fewer than two points is no stroke, so we decline
+rather than invent one.
+
 ---
 
 ## Frontier (next honest rounds)
