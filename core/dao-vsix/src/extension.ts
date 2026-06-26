@@ -1047,10 +1047,16 @@ async function startServer(context: vscode.ExtensionContext) {
                 // 从代理响应中提取安全头（已剥离X-Frame-Options等）
                 if (result.headers) {
                     for (const [k, v] of Object.entries(result.headers as Record<string, string | string[]>)) {
-                        if (k.toLowerCase() === 'transfer-encoding') continue; // 跳过chunked
+                        const kl = k.toLowerCase();
+                        // 逐跳头(hop-by-hop)不可跨代理转发: chunked/连接控制原样回放令 webview 每资产强拆 TCP
+                        if (kl === 'transfer-encoding' || kl === 'connection' || kl === 'keep-alive' || kl === 'proxy-connection' || kl === 'te' || kl === 'trailer' || kl === 'upgrade') continue;
                         headers[k] = Array.isArray(v) ? v.join(', ') : v;
                     }
                 }
+                headers['Connection'] = 'keep-alive';
+                // 帛书·令 Node 协议层兑现 keep-alive: req.shouldKeepAlive=false 时会强制回 Connection: close
+                //   覆盖显式响应头, 故落 writeHead 前主动拨真, 令 socket 跨资产复用(根治隧道路重握手税)。
+                try { (res as any).shouldKeepAlive = true; } catch {}
                 // 处理3xx重定向
                 if (result.status && result.status >= 300 && result.status < 400) {
                     res.writeHead(result.status, headers);
@@ -11110,8 +11116,14 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                     if (kl === 'content-encoding') continue;
                     // 移除content-length，因为改写后长度变化
                     if (kl === 'content-length') continue;
+                    // 帛书·剥逐跳头(hop-by-hop): 上游 CloudFront 常回 Connection: close, 原样回放给 webview
+                    //   → 每个资产请求后强拆 TCP; 公网隧道路每资产重握手(真 RTT 税)。剥除并下方统一改 keep-alive,
+                    //   令 socket 跨资产复用 — 与 IDE 多实例那条 (devin_proxy.js _keepAliveHeaders) 同道。
+                    if (kl === 'connection' || kl === 'keep-alive' || kl === 'transfer-encoding' || kl === 'proxy-connection' || kl === 'proxy-authenticate' || kl === 'proxy-authorization' || kl === 'te' || kl === 'trailer' || kl === 'upgrade') continue;
                     safeHeaders[k] = v as string | string[];
                 }
+                safeHeaders['Connection'] = 'keep-alive';
+                safeHeaders['X-Dao-Ka'] = 'v498c';
 
                 // 道·「天下之至柔，驰骋于天下之致坚；无有入于无间」— SSE 流式直通(诚实待办兑现)
                 //   text/event-stream 不可缓冲: 旧路径 chunks.push→end 收齐才返回,

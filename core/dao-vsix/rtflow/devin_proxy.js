@@ -41,8 +41,13 @@ function _keepAliveHeaders(h) {
   const out = {};
   if (h) for (const k of Object.keys(h)) { if (!_HOP_HEADERS.has(k.toLowerCase())) out[k] = h[k]; }
   out["Connection"] = "keep-alive";
+  out["X-Dao-Ka"] = "v498";
   return out;
 }
+// Node http.Server 在 req 被判定 shouldKeepAlive=false 时会强制回 `Connection: close`,
+//   即便响应头显式置 keep-alive 亦被协议层覆盖。故落盘缓存重放/上游静态回写前,
+//   主动把 res.shouldKeepAlive 拨为 true, 令 socket 真正复用 (根治剩余 TCP 重握手税)。
+function _forceKeepAlive(res) { try { res.shouldKeepAlive = true; } catch {} }
 
 // 预热逃生开关 (运维/对照基线): 置 DAO_NO_PREWARM=1 关闭后台预热。
 const DAO_NO_PREWARM = !!process.env.DAO_NO_PREWARM;
@@ -520,6 +525,7 @@ async function handleRequest(req, res, auth, opts, _log) {
       const body = (hit.base && hit.base !== localBase)
         ? _rebaseAsset(hit.body, hit.base, localBase, _isTextCt(hit.headers))
         : hit.body;
+      _forceKeepAlive(res);
       res.writeHead(hit.status, _keepAliveHeaders(hit.headers));
       res.end(body);
       return;
@@ -529,6 +535,7 @@ async function handleRequest(req, res, auth, opts, _log) {
     if (disk) {
       const body = _rebaseAsset(disk.body, disk.base, localBase, disk.text);
       _cachePut(targetPath, { status: disk.status, headers: disk.headers, body, base: localBase }); // 提升入内存
+      _forceKeepAlive(res);
       res.writeHead(disk.status, _keepAliveHeaders(disk.headers));
       res.end(body);
       return;
@@ -624,6 +631,8 @@ async function handleRequest(req, res, auth, opts, _log) {
         safeHeaders[k] = proxyRes.headers[k];
       }
       safeHeaders["Connection"] = "keep-alive";
+      safeHeaders["X-Dao-Ka"] = "v498u";
+      _forceKeepAlive(res);
 
       // SSE 流式直通 (Devin Cloud 会话实时事件不可缓冲)。
       if (ct.includes("text/event-stream") && !res.headersSent) {
