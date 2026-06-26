@@ -199,6 +199,40 @@ class Browser:
         self._move(c["x"], c["y"])
         return True
 
+    def is_visible(self, selector: str) -> bool:
+        """True iff a (possibly shadow-nested) element is laid out and shown."""
+        return bool(self.eval(
+            f"(function(){{var el=window.__agentctl.deepQuery({selector!r});"
+            f"return el?window.__agentctl.visible(el):false;}})()"))
+
+    def wait_visible(self, selector: str, timeout: float = 5.0,
+                     interval: float = 0.12) -> bool:
+        """Poll until a selector is *visible* (not merely present in the DOM)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                if self.is_visible(selector):
+                    return True
+            except CDPError:
+                pass
+            time.sleep(interval)
+        return False
+
+    def hover_reveal(self, hover_selector: str, target_selector: str,
+                     timeout: float = 3.0) -> bool:
+        """F046: open a hover-only menu and wait for its content to appear.
+
+        CSS ``:hover`` submenus exist in the DOM but are ``display:none`` until
+        the trigger is hovered, so they have a zero-size box and ``byText``
+        (which filters on visibility) cannot target them. Move onto the trigger
+        first, *then* wait for the target to lay out. Pairs with a single-move
+        ``click`` so the pointer jumps straight to the revealed item without
+        crossing a gap that would re-close the menu (no intermediate hit-tests).
+        """
+        if not self.hover(hover_selector):
+            return False
+        return self.wait_visible(target_selector, timeout=timeout)
+
     def scroll(self, dy: float, dx: float = 0.0, x: float = 400, y: float = 300) -> None:
         self.cdp.call("Input.dispatchMouseEvent",
                       {"type": "mouseWheel", "x": x, "y": y,

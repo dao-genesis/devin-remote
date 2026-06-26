@@ -182,6 +182,31 @@ Always reference elements via `document.getElementById` and avoid reserved globa
 ids. (Honest note: the first green-vs-red flip here was the harness, not the
 browser primitive — we fixed the test, not faked the result.)
 
+### F046 — hover-only menus: the click lands on the visible ancestor
+**Surface:** a CSS `:hover` submenu — `<div id=menu>Menu<div class=submenu>
+<button>Settings</button></div></div>` with `#menu:hover .submenu{display:block}`
+(hidden otherwise). A human moves onto *Menu*, the submenu drops down, then
+clicks *Settings*. Driving it the obvious way — `click_text("Settings")` — does
+not fail loudly; it returns success and *nothing happens*.
+**Mechanism:** while the submenu is `display:none` it has a zero-size box, so the
+real `<button>` is not hittable and `byText` (which filters on visibility) skips
+it. But the *visible* trigger `#menu` has textContent `"Menu Settings"`, so the
+ranker happily matches the ancestor `div`, centers on it, and clicks — a real
+click on the wrong element. Title stays `hover`. The failure hides as a pass.
+**Primitive:** `hover_reveal(trigger, target)` moves the pointer onto the trigger
+(CDP `mouseMoved`, setting `:hover`), then `wait_visible(target)` polls
+`__agentctl.visible()` until the submenu actually lays out. Only then does
+`click_text` find the now-visible button and land on it. The follow-up click is a
+single `mouseMoved`→press straight to the item center, so the pointer never
+crosses a gap that would re-close a detached menu mid-move (no intermediate
+hit-tests). `is_visible`/`wait_visible` are the new shadow-piercing visibility probes.
+**Proof:** R10 — naive click leaves the title `hover`; after `hover_reveal` the
+same click flips it to `SET-OK`. `18/18 checks passed`.
+**Lesson (道法自然):** a click that "succeeds" on the wrong target is worse than
+one that fails — it lies. The primitive does not force the menu; it *waits for
+the surface to become real* (`wait_visible`) before acting, then moves in one
+stroke. 弱也者，道之用也 — yield to the page's own timing rather than fight it.
+
 ---
 
 ## Frontier (next honest rounds)
@@ -189,8 +214,6 @@ browser primitive — we fixed the test, not faked the result.)
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
 
-- **R-next: hover-only menus** — content that appears only on `mouseover` and
-  vanishes on move; needs a hover-hold that survives hit-test churn.
 - **R-next: drag & drop (HTML5 DnD)** — `dragstart/dragover/drop` with
   `DataTransfer`, not just pointer moves.
 - **R-next: scroll-virtualized lists** — items that only exist in the DOM near the
