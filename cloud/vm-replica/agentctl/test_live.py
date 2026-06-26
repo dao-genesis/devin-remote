@@ -2647,6 +2647,61 @@ def round_touch_hold(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_double_tap(b: Browser, offline: bool) -> None:
+    print("R60: touch double-tap to trip a fast double-tap gesture (F096) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>dt</title>"
+            b"<style>html,body{margin:0}"
+            b"#b{width:200px;height:120px;background:#dde}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=b>tap</div><div id=veil></div>"
+            b"<script>window.dt=0;window.tc=0;window.lastT=-9999;"
+            b"var el=document.getElementById('b');"
+            b"el.addEventListener('touchend',function(e){window.tc++;"
+            b"var n=Date.now();if(n-window.lastT<250){window.dt++;window.lastT=-9999;}"
+            b"else{window.lastT=n;}},{passive:true});"
+            b"</script>")
+    sp = _serve(8989, page)
+
+    def dt() -> int:
+        return b.eval("window.dt")
+
+    def tc() -> int:
+        return b.eval("window.tc")
+
+    def reset() -> None:
+        b.eval("window.dt=0;window.tc=0;window.lastT=-9999;")
+    try:
+        b.navigate("http://127.0.0.1:8989/")
+        time.sleep(0.2)
+        check("double-tap starts unfired", dt() == 0 and tc() == 0,
+              repr((dt(), tc())))
+        # Friction: a mouse double_click sends no touch events at all.
+        check("mouse double_click fires no touch double-tap",
+              b.double_click("#b") is True and tc() == 0 and dt() == 0,
+              repr((tc(), dt())))
+        # Friction: two taps spaced past the window only re-arm, never commit.
+        reset()
+        check("first slow tap fires one touchend",
+              b.tap("#b") is True and tc() == 1 and dt() == 0, repr((tc(), dt())))
+        time.sleep(0.4)
+        check("second tap past the window does not commit a double-tap",
+              b.tap("#b") is True and tc() == 2 and dt() == 0, repr((tc(), dt())))
+        # Primitive: two touch pairs inside the window commit exactly one double-tap.
+        reset()
+        check("double_tap commits one double-tap from two rapid touches",
+              b.double_tap("#b") is True and dt() == 1, repr(dt()))
+        check("double_tap fired exactly two touchends", tc() == 2, repr(tc()))
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("double_tap refuses through an overlay",
+              b.double_tap("#b") is False)
+        check("nothing fired while occluded", dt() == 1, repr(dt()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("double_tap on an absent element returns False",
+              b.double_tap("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2669,7 +2724,7 @@ def main() -> int:
               round_key_step, round_triple_click, round_drag_by,
               round_middle_click, round_right_drag_by,
               round_tap, round_swipe, round_pinch, round_rotate,
-              round_touch_hold]
+              round_touch_hold, round_double_tap]
     for r in rounds:
         try:
             r(b, offline)
