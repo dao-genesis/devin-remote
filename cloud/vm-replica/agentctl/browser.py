@@ -640,6 +640,30 @@ class Browser:
     def click_text(self, text: str, tag: str | None = None) -> bool:
         return self.click(text, by_text=True, tag=tag)
 
+    def double_click(self, selector: str, by_text: bool = False,
+                     tag: str | None = None) -> bool:
+        """Double-click to *activate* an element (F082). A file icon, a list row,
+        a rename-on-dblclick label, an editable cell — these open/commit only on a
+        ``dblclick`` event, never on a single ``click``. Two separate :meth:`click`
+        calls do **not** produce one: each ``click_xy`` carries ``clickCount:1``, so
+        Chrome's UA never raises its click-counter and the ``dblclick`` event is
+        never synthesised — the handler stays silent (the file never opens) while
+        ``click`` cheerfully reports success twice. ``click_n_xy`` (F071) does carry
+        an escalating ``clickCount`` but only at raw screen coordinates, for *text*
+        selection; it has no hit-verification, so it would fire blindly through an
+        overlay. Here we reuse the honest hit point (F061) — refusing if every probe
+        spot is occluded — then dispatch press/release with ``clickCount:1`` followed
+        by press/release with ``clickCount:2`` at that same point, which is exactly
+        the sequence Chrome turns into a ``dblclick``. Returns ``True`` once fired,
+        ``False`` if the element is absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p:
+            return False
+        if p.get("occluded"):
+            return False
+        self.click_n_xy(p["x"], p["y"], 2)
+        return True
+
     def _pierce_node(self, selector: str) -> int | None:
         """nodeId of the first element matching ``selector`` anywhere in the
         document — *including inside closed shadow roots* (F074) — or ``None``.
