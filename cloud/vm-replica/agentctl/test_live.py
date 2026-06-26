@@ -1912,6 +1912,59 @@ def round_nested_submenu(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_drag_reorder(b: Browser, offline: bool) -> None:
+    print("R44: pointer-driven drag-to-reorder of a sortable list (F080) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>sortable</title><style>"
+            b"#list{width:200px;margin:0;padding:0;list-style:none}"
+            b"#list li{height:40px;line-height:40px;padding-left:10px;"
+            b"background:#dde;margin:2px;user-select:none}</style>"
+            b"<ul id=list><li data-k=A>A</li><li data-k=B>B</li>"
+            b"<li data-k=C>C</li><li data-k=D>D</li></ul>"
+            b"<script>"
+            b"var list=document.getElementById('list');var drag=null;"
+            b"list.addEventListener('mousedown',function(e){"
+            b"if(e.target.tagName==='LI'){drag=e.target;e.preventDefault();}});"
+            b"document.addEventListener('mousemove',function(e){"
+            b"if(!drag)return;"
+            b"var sibs=[].slice.call(list.children);"
+            b"for(var i=0;i<sibs.length;i++){var s=sibs[i];if(s===drag)continue;"
+            b"var r=s.getBoundingClientRect();var mid=r.top+r.height/2;"
+            b"if(e.clientY<mid){list.insertBefore(drag,s);return;}}"
+            b"list.appendChild(drag);});"
+            b"document.addEventListener('mouseup',function(){drag=null;});"
+            b"window.__order=function(){return [].map.call(list.children,"
+            b"function(li){return li.dataset.k;}).join('');};"
+            b"</script>")
+    sp = _serve(8971, page)
+    try:
+        b.navigate("http://127.0.0.1:8971/")
+        time.sleep(0.2)
+        check("the list starts in order ABCD",
+              b.eval("window.__order()") == "ABCD", repr(b.eval("window.__order()")))
+        # dnd (HTML5 DragEvents) does nothing to a pointer-driven sortable.
+        b.dnd("li[data-k=A]", "li[data-k=C]")
+        check("dnd (DragEvents) leaves the order unchanged",
+              b.eval("window.__order()") == "ABCD", repr(b.eval("window.__order()")))
+        # Pointer-drag A to *after* C -> BCAD.
+        check("drag_reorder A after C returns True",
+              b.drag_reorder("li[data-k=A]", "li[data-k=C]", after=True) is True)
+        check("A landed after C (BCAD)",
+              b.eval("window.__order()") == "BCAD", repr(b.eval("window.__order()")))
+        # Re-load and drag D to *before* B -> ADBC.
+        b.navigate("http://127.0.0.1:8971/")
+        time.sleep(0.2)
+        check("drag_reorder D before B returns True",
+              b.drag_reorder("li[data-k=D]", "li[data-k=B]", after=False) is True)
+        check("D landed before B (ADBC)",
+              b.eval("window.__order()") == "ADBC", repr(b.eval("window.__order()")))
+        check("drag_reorder with an absent source returns False",
+              b.drag_reorder("li[data-k=Z]", "li[data-k=B]") is False)
+        check("drag_reorder with an absent target returns False",
+              b.drag_reorder("li[data-k=A]", "li[data-k=Z]") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1928,7 +1981,7 @@ def main() -> int:
               round_select_text, round_select_range, round_set_slider,
               round_closed_shadow, round_type_closed_shadow, round_marquee,
               round_ctrl_multi_select, round_shift_range_select,
-              round_nested_submenu]
+              round_nested_submenu, round_drag_reorder]
     for r in rounds:
         try:
             r(b, offline)
