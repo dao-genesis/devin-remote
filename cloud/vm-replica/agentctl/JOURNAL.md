@@ -1695,6 +1695,50 @@ rather than pretend a turn it cannot land.
 
 ---
 
+## F095 — touch long-press to arm a dwell-gated handler (`touch_hold`) · R59
+
+**Friction:** A mobile context menu, a "press and hold to react", a drag-handle
+that only arms after a long touch — these listen on `touchstart`, arm a timer,
+and commit only if neither `touchmove` nor `touchend` arrives before it elapses.
+`press_hold` (F083) holds the *mouse* down for a dwell, but Chrome manufactures
+no `touchstart` from a mouse press, so the touch long-press never even arms — its
+`touchstart` count stays `0` and nothing fires, though `press_hold` returns
+`True`. `tap` (F091) *does* fire `touchstart`, but lifts at once, so the dwell
+timer is cancelled by `touchend` before it elapses — again nothing commits, yet
+`tap` returns `True`. Two silent lies. The faithful gesture is a single touch
+pressed and held *motionless* past the dwell, then lifted.
+
+**Mechanism:** A page arms `setTimeout(fire, 350)` on `touchstart` and clears it
+on `touchmove`/`touchend`. A single `touchStart` at the hit point (no `id` pair,
+no move) leaves the timer running; Chrome's JS event loop runs it while the
+gesture stays down. Holding `0.6s` past a `350ms` dwell lets the timer fire
+exactly once; issuing *no* `touchMove` means a handler that cancels on movement
+never cancels. The closing `touchEnd` lands after the commit, so the lift cannot
+undo it. A mouse press touches none of this path (`touchstart` count unchanged);
+an instant tap arms then immediately clears it.
+
+**Primitive:** `Browser.touch_hold(selector, hold=0.6)` resolves the honest hit
+point (F061), refuses if occluded, presses one stationary touch point there,
+sleeps `hold` seconds while the page's dwell timer runs, then lifts with
+`touchEnd`. No `touchMove` is ever issued, so a movement-cancel handler keeps its
+timer armed. Returns `True` once the full press-hold-release completed, `False`
+if the element is absent or occluded.
+
+**Live (R59):** the page starts unfired (`lp=0`, `ts=0`); `press_hold` (mouse)
+leaves `ts=0` and `lp=0` though it returns `True` (no touch ever reaches the
+handler); `tap` raises `ts` to `1` but `lp` stays `0` (the lift cancels the
+timer); `touch_hold(0.6)` holds past the `350ms` dwell and `lp` becomes exactly
+`1`; it issues no move so `ts` is exactly `2`; under a transparent veil
+`touch_hold` → `False` and `lp` stays `1`; an absent selector → `False`.
+`351/351 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 弱也者，道之用也 — a touch that does nothing but stay,
+held still and unhurried, is what arms the gate; the mouse that pushes harder and
+the tap that strikes faster both miss it. The honest long-press neither forces
+nor feigns: it waits the dwell, or it refuses.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

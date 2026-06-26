@@ -926,6 +926,35 @@ class Browser:
                       {"type": "touchEnd", "touchPoints": []})
         return True
 
+    def touch_hold(self, selector: str, hold: float = 0.6,
+                   by_text: bool = False, tag: str | None = None) -> bool:
+        """Long-press an element with a stationary **touch** point held past a dwell
+        (F095). A mobile context menu, a "press and hold to react", a drag-handle
+        that only arms after a long touch — these listen on ``touchstart``, arm a
+        timer, and fire only if neither ``touchmove`` nor ``touchend`` arrives
+        before it elapses. :meth:`press_hold` (F083) holds the *mouse* down, but
+        Chrome manufactures no ``touchstart`` from a mouse press, so the touch
+        long-press never even arms (``touchstart`` count stays zero); :meth:`tap`
+        (F091) does fire ``touchstart`` but lifts immediately, so the dwell timer is
+        cancelled before it elapses and nothing commits. Both still return ``True``
+        — a silent lie. The faithful gesture is a single ``touchStart`` that *stays
+        down and still* for ``hold`` seconds while the page's dwell timer runs, then
+        a ``touchEnd``. We resolve the honest hit point (F061), refuse if occluded,
+        press one touch point there, hold it motionless past the dwell, then lift.
+        No ``touchMove`` is issued, so a handler that cancels on movement keeps its
+        timer armed. Returns ``True`` once the full press-hold-release completed,
+        ``False`` if the element is absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        x, y = p["x"], p["y"]
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        time.sleep(hold)
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchEnd", "touchPoints": []})
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A
