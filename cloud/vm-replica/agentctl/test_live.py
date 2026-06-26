@@ -1484,6 +1484,47 @@ def round_per_key_type(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_wheel_pane(b: Browser, offline: bool) -> None:
+    print("R34: wheel a custom pane that ignores scrollTop (F070) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>wheel</title>"
+            b"<div style='height:40px'></div>"
+            b"<div id=pane style='position:absolute;left:500px;top:200px;"
+            b"width:260px;height:160px;overflow:hidden;border:1px solid #888'>"
+            b"<div id=inner style='transform:translateY(0px)'></div></div>"
+            b"<script>var pane=document.getElementById('pane'),"
+            b"inner=document.getElementById('inner');var off=0;"
+            b"for(var i=0;i<40;i++){var r=document.createElement('div');"
+            b"r.textContent='row'+i;r.style.height='30px';inner.appendChild(r);}"
+            b"pane.addEventListener('wheel',function(e){e.preventDefault();"
+            b"off=Math.max(0,off+e.deltaY);"
+            b"inner.style.transform='translateY('+(-off)+'px)';},"
+            b"{passive:false});window.__off=function(){return off;};</script>")
+    sp = _serve(8960, page)
+    try:
+        b.navigate("http://127.0.0.1:8960/")
+        time.sleep(0.2)
+        # Friction A: scroll_until sets scrollTop, which this pane discards.
+        b.scroll_until("window.__off()>=300", container="#pane",
+                       step=120, max_steps=6)
+        check("a scrollTop-based scroll never moves a wheel-only pane",
+              b.eval("window.__off()") == 0, repr(b.eval("window.__off()")))
+        # Friction B: scroll() wheels at the fixed page centre, missing the pane.
+        for _ in range(5):
+            b.scroll(120)
+        check("a fixed-centre wheel misses an off-centre pane",
+              b.eval("window.__off()") == 0, repr(b.eval("window.__off()")))
+        # Primitive: wheel real events over the pane's own centre.
+        check("wheel_until reports it reached the target",
+              b.wheel_until("window.__off()>=300", "#pane", dy=120,
+                            max_steps=10) is True)
+        check("the pane advanced under real wheel events",
+              b.eval("window.__off()") >= 300, repr(b.eval("window.__off()")))
+        check("wheel_at on an absent pane returns False",
+              b.wheel_at("#nope", 120) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1496,7 +1537,7 @@ def main() -> int:
               round_oop_iframe, round_new_tab, round_occlusion,
               round_native_select, round_contenteditable, round_file_drop,
               round_draw_path, round_paste_pipeline, round_context_menu,
-              round_key_chord, round_per_key_type]
+              round_key_chord, round_per_key_type, round_wheel_pane]
     for r in rounds:
         try:
             r(b, offline)
