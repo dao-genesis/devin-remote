@@ -1308,6 +1308,55 @@ def round_draw_path(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_paste_pipeline(b: Browser, offline: bool) -> None:
+    print("R30: paste through an editor's transform pipeline (F066) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>paste</title>"
+            b"<div id=e contenteditable style='border:1px solid #000;"
+            b"min-height:40px'></div>"
+            b"<script>var e=document.getElementById('e');window.__n=0;"
+            b"e.addEventListener('paste',function(ev){ev.preventDefault();"
+            b"  window.__n++;"
+            b"  var t=(ev.clipboardData||window.clipboardData)"
+            b"        .getData('text/plain');window.__seen=t;"
+            b"  if(/^https?:\\/\\//.test(t)){var a=document.createElement('a');"
+            b"    a.href=t;a.textContent='[link]';e.appendChild(a);}"
+            b"  else{e.appendChild(document.createTextNode(t));}});"
+            b"</script>")
+    sp = _serve(8956, page)
+    try:
+        b.navigate("http://127.0.0.1:8956/")
+        time.sleep(0.2)
+        check("no paste has happened yet", b.eval("window.__n||0") == 0)
+        # Friction: set_editable writes raw text — the paste handler that turns a
+        # URL into a chip never runs, so no <a> is produced.
+        b.set_editable("#e", "https://example.com")
+        time.sleep(0.1)
+        check("writing text directly never triggers the paste transform",
+              b.eval("window.__n||0") == 0
+              and b.eval("!document.querySelector('#e a')"),
+              repr(b.eval("document.getElementById('e').innerHTML")))
+        # Primitive: paste_into dispatches a real paste with a DataTransfer, so the
+        # editor's own paste logic runs and rewrites the URL into a chip.
+        b.eval("document.getElementById('e').innerHTML='';window.__n=0;true")
+        check("paste_into reports it pasted",
+              b.paste_into("#e", "https://example.com") is True)
+        check("the paste handler fired exactly once",
+              b.wait_for("window.__n===1", timeout=2),
+              repr(b.eval("window.__n||0")))
+        check("the handler read the pasted text off the clipboard",
+              b.eval("window.__seen") == "https://example.com",
+              repr(b.eval("window.__seen")))
+        check("the editor's transform ran (URL became a link chip)",
+              b.eval("document.querySelector('#e a') && "
+                     "document.querySelector('#e a').textContent") == "[link]",
+              repr(b.eval("document.getElementById('e').innerHTML")))
+        # Truthful failure: an absent target is refused.
+        check("paste_into refuses an absent target",
+              b.paste_into("#nope", "x") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1319,7 +1368,7 @@ def main() -> int:
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
               round_native_select, round_contenteditable, round_file_drop,
-              round_draw_path]
+              round_draw_path, round_paste_pipeline]
     for r in rounds:
         try:
             r(b, offline)

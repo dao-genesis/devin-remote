@@ -804,6 +804,38 @@ rather than invent one.
 
 ---
 
+### F066 — a paste runs the editor's pipeline; writing text bypasses it
+**Surface:** a rich editor that *transforms* what you paste — a comment box that
+turns a bare URL into a link chip, a notes app that sanitises pasted HTML, a
+spreadsheet that splits a tab-separated paste into cells, a markdown field that
+renders on paste. We can already *write* text into such a field (`set_editable`
+F063, `type_text`), but writing puts the **raw** characters straight into the DOM:
+the editor's `paste` handler never fires, so the URL stays literal where a human's
+Ctrl+V would have produced a chip. Right text, wrong representation.
+**Mechanism:** a human's paste is not "characters appear" — it is a `paste` event
+whose `clipboardData` (a `DataTransfer`) carries the payload in one or more
+flavours (`text/plain`, `text/html`). The editor reads `getData(...)`, calls
+`preventDefault`, and inserts *its own* transformed nodes. Setting `.value` or
+`textContent` skips that event entirely; the transform code path is simply never
+entered. The `ClipboardEvent` constructor, like `DragEvent`, leaves `clipboardData`
+`null`, so a naïve `new ClipboardEvent('paste')` carries nothing.
+**Primitive:** `Browser.paste_into(selector, text, html=None)`. Focus the target,
+populate a fresh `DataTransfer` with the `text/plain` (and optional `text/html`)
+flavours, and dispatch a real `ClipboardEvent('paste')` with `clipboardData`
+forced on via `Object.defineProperty`. The editor's own paste logic runs: in the
+live round a pasted `https://example.com` is rewritten by the page into
+`<a>[link]</a>`, while `set_editable` of the same string leaves raw text and never
+fires the handler. Absent target returns `False`. `150/150 checks passed`,
+deterministic ×3.
+**Lesson (道法自然):** 反者道之動 — we stop pushing characters *in* and instead
+hand the editor the clipboard it expects, letting its own pipeline do the work
+(無為而無不為: we do nothing to the DOM ourselves, yet the chip appears). 弱者道之用
+— the soft channel (a data-bearing event) accomplishes what the forceful one
+(writing nodes) cannot. 信言不美 — no target, no paste; we return `False` instead
+of pretending.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

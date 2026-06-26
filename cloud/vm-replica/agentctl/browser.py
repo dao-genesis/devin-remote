@@ -622,6 +622,32 @@ class Browser:
         ) % (selector, json.dumps(content), json.dumps(name), json.dumps(mime))
         return bool(self.eval(js))
 
+    def paste_into(self, selector: str, text: str, html: str | None = None) -> bool:
+        """Paste into a field through its **paste pipeline** (F066). Rich editors
+        intercept ``paste`` to *transform* what arrives — sanitising HTML, turning a
+        bare URL into a link chip, converting markdown, splitting a spreadsheet
+        cell. Writing the text directly (``type_text``/``set_editable``) bypasses
+        that handler entirely, so the transform never fires and the editor stores
+        raw text where a human's Ctrl+V would have produced a chip. A human's paste
+        is a ``paste`` event whose ``clipboardData`` carries the payload; the editor
+        reads ``getData('text/plain')`` (or ``text/html``) and reacts. We build that
+        exactly: focus the target, populate a fresh ``DataTransfer`` with the
+        ``text/plain`` (and optional ``text/html``) flavours, and dispatch a real
+        ``ClipboardEvent('paste')`` with ``clipboardData`` forced on (the
+        constructor leaves it ``null``). The editor's own paste logic runs. Returns
+        ``False`` if the target is absent."""
+        js = (
+            "(function(){var el=window.__agentctl.deepQuery(%r);if(!el)return false;"
+            "el.focus();var dt=new DataTransfer();"
+            "dt.setData('text/plain',%s);"
+            "%s"
+            "var e=new ClipboardEvent('paste',{bubbles:true,cancelable:true});"
+            "Object.defineProperty(e,'clipboardData',{value:dt});"
+            "el.dispatchEvent(e);return true;})()"
+        ) % (selector, json.dumps(text),
+             ("dt.setData('text/html',%s);" % json.dumps(html)) if html else "")
+        return bool(self.eval(js))
+
     def press_key(self, key: str, code: str | None = None,
                   key_code: int | None = None) -> None:
         base = {"key": key, "code": code or key}
