@@ -1965,6 +1965,46 @@ def round_drag_reorder(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_scroll_into_view(b: Browser, offline: bool) -> None:
+    print("R45: reveal an element clipped out of a scroll container (F081) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>clip</title>"
+            b"<div id=box style='height:120px;width:200px;overflow:auto;"
+            b"border:1px solid'>"
+            b"<ul id=list style='list-style:none;margin:0;padding:0'></ul></div>"
+            b"<button id=after>after</button>"
+            b"<script>window.__hit='';var ul=document.getElementById('list');"
+            b"for(var i=0;i<20;i++){(function(i){var li=document.createElement('li');"
+            b"li.id='row'+i;li.textContent='row '+i;li.style.height='30px';"
+            b"li.addEventListener('click',function(){window.__hit='row'+i;});"
+            b"ul.appendChild(li);})(i);}"
+            b"document.getElementById('after').addEventListener('click',function(){"
+            b"window.__hit='after';});</script>")
+    sp = _serve(8972, page)
+    try:
+        b.navigate("http://127.0.0.1:8972/")
+        time.sleep(0.2)
+        # row15 is far below the 120px clip box -> clipped, click refuses.
+        check("the clipped row's hit point is occluded",
+              bool((b._hit_point_of("#row15") or {}).get("occluded")))
+        check("a direct click on the clipped row fails",
+              b.click("#row15") is False)
+        check("nothing was activated", b.eval("window.__hit") == "",
+              repr(b.eval("window.__hit")))
+        # scroll_into_view brings it back into the clip, then click works.
+        check("scroll_into_view exposes the clipped row",
+              b.scroll_into_view("#row15") is True)
+        check("the row is now clickable", b.click("#row15") is True)
+        check("the row handler fired", b.eval("window.__hit") == "row15",
+              repr(b.eval("window.__hit")))
+        # An element already in view scrolls to itself and stays hittable.
+        check("scroll_into_view on an already-visible element is True",
+              b.scroll_into_view("#after") is True)
+        check("scroll_into_view on an absent element returns False",
+              b.scroll_into_view("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1981,7 +2021,8 @@ def main() -> int:
               round_select_text, round_select_range, round_set_slider,
               round_closed_shadow, round_type_closed_shadow, round_marquee,
               round_ctrl_multi_select, round_shift_range_select,
-              round_nested_submenu, round_drag_reorder]
+              round_nested_submenu, round_drag_reorder,
+              round_scroll_into_view]
     for r in rounds:
         try:
             r(b, offline)
