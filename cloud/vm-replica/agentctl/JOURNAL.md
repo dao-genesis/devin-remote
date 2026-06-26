@@ -2261,6 +2261,52 @@ where the atlas cannot honestly answer.
 
 ---
 
+## F108 — read a line, marking glyphs the atlas cannot name (`read_text_conf`) · R72
+
+**Friction:** F107 cured the lie for *one* glyph, but `read_text` never propagated
+the confidence up: it classifies every cell with `read_glyph`, which returns the
+*nearest* label no matter how badly it fits. Draw a line holding a glyph the atlas
+never carried — a `"Z"` inside `"CZB"` — and `read_text` reads `"CCB"`: the unknown
+letter is silently rewritten as the closest known one, and the string lies about a
+character it never recognised. Reproduced live: the middle cell parts cleanly as a
+third glyph, yet the returned string names it a known letter. The friction
+re-appears the moment a *line* is read because confidence stopped at the glyph.
+
+**Mechanism:** there is no new pixel signal — the cure is *composition*.
+`read_text_conf` segments exactly as `read_text` does (blank columns, or
+`split_run` when `n` is given and the letters touch) but classifies each cell with
+`read_glyph_conf` instead of `read_glyph`. Each cell is named only when one atlas
+entry is both a good absolute fit (`best <= max_dist × ink`) and a clear winner
+(`runner-up >= conf_k × farther`); otherwise that position is written as the
+caller-chosen `unknown` mark (`"?"` by default). The string therefore *shows* its
+gaps — every position the reader could not honestly resolve is a visible mark, not
+a fabricated letter — so a caller can tell `"C?B"` (one glyph unreadable) from
+`"CAB"` (read whole).
+
+**Primitive:** `read_text_conf(rgb, size, bbox, atlas, fg, …, n=None,
+max_dist=0.6, conf_k=2.0, unknown="?")` returns the line with unreadable glyphs
+marked. `unknown=""` drops the unreadable cells instead of marking them. The
+segmentation (`segment_run`/`split_run`) and per-glyph gates (`read_glyph_conf`)
+are reused unchanged; the only new work is routing the cells through the honest
+reader.
+
+**Live (R72):** an all-known line `"CAB"` is read whole by both readers (no marks);
+a mixed line `"CZB"` is misread `"CCB"` by `read_text` (the friction) while
+`read_text_conf` returns `"C?B"`, keeping the known `C`/`B` and marking only the
+unknown; the mark sentinel is caller-chosen (`"C#B"`); `unknown=""` drops the cell
+(`"CB"`); an all-unknown line `"ZW"` becomes `"??"` while `read_text` still rewrites
+both to known letters; and loosening both gates makes `read_text_conf` accept the
+nearest match exactly like `read_text` (no marks). `480/480 checks passed`,
+deterministic ×3.
+
+**Lesson (道法自然):** 大成若缺，其用不敝 — a reading that *shows* where it is
+incomplete is more useful than one that hides its gaps behind invented letters.
+F107 gave one glyph the power to refuse; F108 carries that honesty up to the line,
+adding nothing new — 為學者日益，聞道者日損 — only composing the honest part so the
+whole inherits its silence.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

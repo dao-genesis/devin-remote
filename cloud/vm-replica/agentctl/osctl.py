@@ -971,6 +971,45 @@ def read_text(rgb: bytes, size: tuple[int, int],
     return "".join(read_glyph(rgb, size, c, atlas, nw, nh, thr) for c in cells)
 
 
+def read_text_conf(rgb: bytes, size: tuple[int, int],
+                   bbox: tuple[int, int, int, int],
+                   atlas: dict[str, list[int]],
+                   fg: tuple[int, int, int], tol: int = 60, gap: int = 2,
+                   n: int | None = None,
+                   nw: int = 48, nh: int = 48, thr: int = 24,
+                   max_dist: float = 0.6, conf_k: float = 2.0,
+                   unknown: str = "?") -> str:
+    """Read a run, *marking* each glyph the atlas cannot honestly name (F108).
+
+    :func:`read_text` classifies every cell with :func:`read_glyph`, which returns
+    the *nearest* atlas label no matter how badly it fits. Give it a line holding a
+    glyph the atlas never carried (a ``"Z"`` inside ``"CZB"``) and it reads
+    ``"CCB"``: the unknown letter is silently rewritten as the closest known one,
+    and the string lies about a character it never recognised. The friction
+    :func:`read_glyph_conf` cured for *one* glyph re-appears the moment a *line* is
+    read, because :func:`read_text` never propagated the confidence up.
+
+    This segments exactly as :func:`read_text` does (blank columns, or
+    :func:`split_run` when ``n`` is given and the letters touch) but classifies each
+    cell with :func:`read_glyph_conf`: a cell is named only when one atlas entry is
+    both a good absolute fit and a clear winner, and is written as ``unknown``
+    (``"?"`` by default) otherwise. The string therefore *shows* its gaps — every
+    position the reader could not honestly resolve is a visible mark, not a
+    fabricated letter — so a caller can tell ``"C?B"`` (one glyph unreadable) from
+    ``"CAB"`` (read whole).
+
+    Honest exactly where :func:`read_glyph_conf` is: the per-cell gates
+    (``max_dist`` / ``conf_k``) decide each mark, and an atlas of indistinguishable
+    near-twins will mark cells it cannot decide between rather than guess. Empty ink
+    → ``""``; choose ``unknown=""`` to drop unreadable cells instead of marking them.
+    """
+    cells = segment_run(rgb, size, bbox, fg, tol, gap)
+    if n is not None and len(cells) < n:
+        cells = split_run(rgb, size, bbox, fg, n, tol)
+    return "".join(read_glyph_conf(rgb, size, c, atlas, nw, nh, thr,
+                                   max_dist, conf_k, unknown) for c in cells)
+
+
 def read_words(rgb: bytes, size: tuple[int, int],
                bbox: tuple[int, int, int, int],
                atlas: dict[str, list[int]],

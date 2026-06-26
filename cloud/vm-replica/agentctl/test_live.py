@@ -3536,6 +3536,106 @@ def round_read_glyph_conf(b: Browser, offline: bool) -> None:
           forced in atlas, repr(forced))
 
 
+def round_read_text_conf(b: Browser, offline: bool) -> None:
+    print("R72: read a LINE, marking glyphs the atlas cannot name (F108) — osctl")
+    # read_text classifies each cell with read_glyph — the nearest label, always —
+    # so a line holding a glyph the atlas never carried is silently rewritten as the
+    # closest known letter ("CZB" -> "CCB"). read_text_conf classifies each cell with
+    # read_glyph_conf, writing '?' (caller-chosen) where no atlas entry honestly fits.
+    MAG = (255, 0, 255)
+
+    def blobs(rgb, w, h):
+        bs = osctl.find_color_blobs(MAG, tol=60, rgb=rgb, size=(w, h), min_count=120)
+        return sorted(bs, key=lambda t: t["x"])
+    chars = "ABCOKX"
+    draws = "".join("x.fillText('%s',%d,100);" % (ch, 40 + i * 120)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("tc_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=760 height=160></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,760,160);"
+               "x.fillStyle='#f0f';x.font='bold 90px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = blobs(argb, aw, ah)
+    check("atlas segments into six reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def line(text, font_px=64, dx=90):
+        draw, x = [], 40
+        for ch in text:
+            draw.append("x.fillText('%s',%d,100);" % (ch, x))
+            x += dx
+        b.navigate(fixture("tc_line.html",
+                   "<!doctype html><title>l</title><style>html,body{margin:0}</style>"
+                   "<canvas id=c width=%d height=200></canvas><script>"
+                   "var x=document.getElementById('c').getContext('2d');"
+                   "x.fillStyle='#fff';x.fillRect(0,0,%d,200);"
+                   "x.fillStyle='#f0f';x.font='bold %dpx monospace';"
+                   "x.textAlign='left';x.textBaseline='middle';"
+                   % (x + 80, x + 80, font_px) + "".join(draw) + "</script>"))
+        time.sleep(0.4)
+        w, h, rgb = osctl.capture_rgb()
+        loc = osctl.find_color(MAG, tol=60, rgb=rgb, size=(w, h))
+        return rgb, (w, h), (loc["bbox"] if loc else None)
+
+    # An all-KNOWN line: both readers agree and read it whole, no marks.
+    rgb, sz, bb = line("CAB")
+    check("known line 'CAB' located", bb is not None, repr(bb))
+    if bb is None:
+        return
+    check("read_text reads all-known line 'CAB'",
+          osctl.read_text(rgb, sz, bb, atlas, MAG) == "CAB",
+          repr(osctl.read_text(rgb, sz, bb, atlas, MAG)))
+    check("read_text_conf reads all-known line 'CAB' (no marks)",
+          osctl.read_text_conf(rgb, sz, bb, atlas, MAG) == "CAB",
+          repr(osctl.read_text_conf(rgb, sz, bb, atlas, MAG)))
+    # A line with ONE unknown glyph (Z absent from atlas): the friction, then the mark.
+    rgbz, szz, bbz = line("CZB")
+    check("mixed line 'CZB' located", bbz is not None, repr(bbz))
+    if bbz is None:
+        return
+    cells = osctl.segment_run(rgbz, szz, bbz, MAG)
+    check("mixed line parts into three cells", len(cells) == 3, str(len(cells)))
+    misread = osctl.read_text(rgbz, szz, bbz, atlas, MAG)
+    check("FRICTION: read_text rewrites unknown 'Z' as a known letter (not 'CZB')",
+          len(misread) == 3 and misread[1] in atlas and misread != "CZB", repr(misread))
+    check("read_text_conf marks the unknown middle glyph as 'C?B'",
+          osctl.read_text_conf(rgbz, szz, bbz, atlas, MAG) == "C?B",
+          repr(osctl.read_text_conf(rgbz, szz, bbz, atlas, MAG)))
+    # The known glyphs around the mark are still read correctly.
+    got = osctl.read_text_conf(rgbz, szz, bbz, atlas, MAG)
+    check("read_text_conf keeps the known glyphs ('C' _ 'B')",
+          len(got) == 3 and got[0] == "C" and got[2] == "B", repr(got))
+    # The mark sentinel is caller-chosen.
+    check("read_text_conf marks with a caller-chosen sentinel ('C#B')",
+          osctl.read_text_conf(rgbz, szz, bbz, atlas, MAG, unknown="#") == "C#B",
+          repr(osctl.read_text_conf(rgbz, szz, bbz, atlas, MAG, unknown="#")))
+    # unknown="" drops the unreadable cell instead of marking it.
+    check("read_text_conf with unknown='' drops the unreadable cell ('CB')",
+          osctl.read_text_conf(rgbz, szz, bbz, atlas, MAG, unknown="") == "CB",
+          repr(osctl.read_text_conf(rgbz, szz, bbz, atlas, MAG, unknown="")))
+    # A line of TWO unknowns marks both.
+    rgb2, sz2, bb2 = line("ZW")
+    if bb2 is not None:
+        g2 = osctl.read_text_conf(rgb2, sz2, bb2, atlas, MAG)
+        check("read_text_conf marks an all-unknown line ('ZW' -> '??')",
+              g2 == "??", repr(g2))
+        old2 = osctl.read_text(rgb2, sz2, bb2, atlas, MAG)
+        check("read_text still rewrites both unknowns to known letters",
+              len(old2) == 2 and all(c in atlas for c in old2), repr(old2))
+    # Loosening the gates lets read_text_conf accept the nearest match like read_text.
+    loose = osctl.read_text_conf(rgbz, szz, bbz, atlas, MAG, max_dist=9.0, conf_k=1.0)
+    check("loosened gates: read_text_conf matches read_text (no marks)",
+          loose == misread and "?" not in loose, repr(loose))
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -3562,7 +3662,8 @@ def main() -> int:
               round_touch_drag, round_two_finger_pan,
               round_three_finger_swipe, round_edge_swipe,
               round_touch_drag_to, round_read_text, round_read_kerned,
-              round_read_block, round_read_words, round_read_glyph_conf]
+              round_read_block, round_read_words, round_read_glyph_conf,
+              round_read_text_conf]
     for r in rounds:
         try:
             r(b, offline)
