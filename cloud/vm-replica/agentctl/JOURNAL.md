@@ -997,6 +997,32 @@ honest to start and end.
 
 ---
 
+### F073 — setting a custom slider to a precise value
+**Surface:** a volume / brightness / price-range / zoom control built from
+`<div>`s — drag a handle along a rail to a value.
+**Friction:** there is nothing to *write*. `set_value` reaches for a `.value`
+setter that a `<div>` has no descriptor for and throws *Illegal invocation*. The
+slider exposes no `scrollTop` either. It listens for `pointerdown` on the **thumb**
+and `pointermove` along the **track**, mapping the cursor's fraction of the rail to
+its value — so a plain `click` on the track does nothing (the press never lands on
+the handle), and `select_range`'s text-drag (F072) has no notion of a value.
+**Mechanism:** the only input the slider believes is a real drag of its handle:
+press at the thumb, move across the track with the button held (`buttons:1`, so a
+handler reading `e.buttons` still counts it as a drag), release at the target
+fraction. The value is the cursor's fraction of `track.getBoundingClientRect()`,
+so resolving both rects lets us aim at any fraction.
+**Primitive:** `Browser._rect_of(selector)` returns an element's viewport rect;
+`Browser.set_slider(thumb, track, fraction, axis="x")` presses the thumb centre,
+steps to `fraction` along the track carrying `buttons:1`, and releases. Live:
+`set_slider(0.73)` lands value `73`, `0.20` lands `20`, an absent handle returns
+`False`; `set_value` on the same `<div>` raises and a plain click leaves it at `0`.
+`187/187 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 大成若缺 — the slider looks finished but has no value to set;
+its completeness is in the gesture, not a property. 柔弱勝剛強 — we don't force a
+write the element refuses; we yield to the drag it actually listens for.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
