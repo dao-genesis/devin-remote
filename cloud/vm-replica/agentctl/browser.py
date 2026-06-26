@@ -955,6 +955,37 @@ class Browser:
                       {"type": "touchEnd", "touchPoints": []})
         return True
 
+    def double_tap(self, selector: str, interval: float = 0.12,
+                   by_text: bool = False, tag: str | None = None) -> bool:
+        """Tap an element **twice in quick succession with touch** to trip a
+        double-tap gesture (F096). A photo that zooms on a two-finger-quick
+        double-tap, a map that scales, a "like" that fires on a fast double touch —
+        these count two ``touchend`` events landing within a short window (often
+        ~250–300 ms) and ignore the mouse. :meth:`double_click` (F040) sends a *mouse*
+        double sequence and synthesizes ``dblclick``, but Chrome manufactures no
+        ``touchstart``/``touchend`` from it, so the touch double-tap counter never
+        advances — yet ``double_click`` returns ``True``: a silent lie. A single
+        :meth:`tap` (F091) fires exactly one ``touchend``, arming the window but never
+        completing it; a second tap that arrives too late (outside the page's
+        interval) only re-arms instead of committing. The faithful gesture is two
+        ``touchStart``/``touchEnd`` pairs separated by less than the page's window. We
+        resolve the honest hit point (F061), refuse if occluded, dispatch the first
+        touch pair, wait ``interval`` seconds (kept short so both land inside a tight
+        double-tap window), then dispatch the second pair. Returns ``True`` once both
+        taps fire, ``False`` if the element is absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        x, y = p["x"], p["y"]
+        for _ in range(2):
+            self.cdp.call("Input.dispatchTouchEvent",
+                          {"type": "touchStart",
+                           "touchPoints": [{"x": x, "y": y}]})
+            self.cdp.call("Input.dispatchTouchEvent",
+                          {"type": "touchEnd", "touchPoints": []})
+            time.sleep(interval)
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A

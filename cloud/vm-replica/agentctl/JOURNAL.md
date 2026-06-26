@@ -1739,6 +1739,47 @@ nor feigns: it waits the dwell, or it refuses.
 
 ---
 
+## F096 — touch double-tap to trip a fast double-tap gesture (`double_tap`) · R60
+
+**Friction:** A photo that zooms on a quick double-tap, a map that scales, a
+"like" that fires on a fast double touch — these count two `touchend` events
+landing within a short window (often ~250–300 ms) and ignore the mouse.
+`double_click` (F040) sends a *mouse* double sequence and synthesizes
+`dblclick`, but Chrome manufactures no `touchstart`/`touchend` from it, so the
+touch double-tap counter never advances (`tc` stays `0`), yet `double_click`
+returns `True`: a silent lie. A single `tap` (F091) fires exactly one
+`touchend`, arming the window but never completing it; a second tap that arrives
+*after* the window only re-arms (`dt` stays `0`). The faithful gesture is two
+`touchStart`/`touchEnd` pairs separated by less than the page's window.
+
+**Mechanism:** The page increments a counter on every `touchend` and, when the
+gap from the previous `touchend` is under `250 ms`, increments `dt` and resets
+the clock; otherwise it just records the new timestamp. A mouse double click
+touches none of this path. Two touch pairs `0.12 s` apart land well inside the
+`250 ms` window, so the second `touchend` sees a fresh prior timestamp and
+commits exactly one double-tap; a `0.4 s` gap between two single taps exceeds
+the window and only re-arms.
+
+**Primitive:** `Browser.double_tap(selector, interval=0.12)` resolves the honest
+hit point (F061), refuses if occluded, dispatches a `touchStart`/`touchEnd`
+pair, sleeps `interval` (short, so both land inside a tight double-tap window),
+then dispatches a second pair. Returns `True` once both taps fire, `False` if
+the element is absent or occluded.
+
+**Live (R60):** the page starts unfired (`dt=0`, `tc=0`); `double_click` (mouse)
+leaves `tc=0` and `dt=0` though it returns `True`; a single `tap` raises `tc` to
+`1` with `dt=0`, and a second tap `0.4 s` later reaches `tc=2` but `dt` stays
+`0` (past the window); `double_tap()` commits exactly one double-tap (`dt=1`)
+from `tc=2`; under a transparent veil `double_tap` → `False` and `dt` stays `1`;
+an absent selector → `False`. `360/360 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 二生三 — one touch is only a tap, two touches near in time
+become a new gesture the page recognises as a third thing. The mouse's louder
+double-strike speaks a language the touch handler cannot hear; the honest gesture
+is two quiet touches close enough to be read as one.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
