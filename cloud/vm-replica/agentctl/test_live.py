@@ -1675,6 +1675,41 @@ def round_closed_shadow(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_type_closed_shadow(b: Browser, offline: bool) -> None:
+    print("R39: type into an input sealed in a closed shadow root (F075) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>shadow input</title>"
+            b"<my-field></my-field>"
+            b"<script>class F extends HTMLElement{constructor(){super();"
+            b"var r=this.attachShadow({mode:'closed'});"
+            b"r.innerHTML='<input id=inp value=\"OLD\" style=\"padding:6px\">';"
+            b"this._inp=r.getElementById('inp');"
+            b"Object.defineProperty(this,'val',{get:()=>this._inp.value});}}"
+            b"customElements.define('my-field',F);"
+            b"window.__val=function(){return document.querySelector('my-field').val;};"
+            b"</script>")
+    sp = _serve(8965, page)
+    try:
+        b.navigate("http://127.0.0.1:8965/")
+        time.sleep(0.2)
+        check("deepQuery cannot reach the sealed input",
+              b.eval("!!window.__agentctl.deepQuery('#inp')") is False)
+        check("set_value cannot drive the sealed input",
+              b.set_value("#inp", "hello") is False)
+        check("type_text cannot drive the sealed input",
+              b.type_text("#inp", "hello") is False)
+        check("the sealed input still holds its original value",
+              b.eval("window.__val()") == "OLD", repr(b.eval("window.__val()")))
+        check("type_shadow drives the sealed input",
+              b.type_shadow("#inp", "agent123") is True)
+        time.sleep(0.05)
+        check("the sealed input now holds exactly the typed text",
+              b.eval("window.__val()") == "agent123", repr(b.eval("window.__val()")))
+        check("type_shadow on an absent selector returns False",
+              b.type_shadow("#nope", "x") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1689,7 +1724,7 @@ def main() -> int:
               round_draw_path, round_paste_pipeline, round_context_menu,
               round_key_chord, round_per_key_type, round_wheel_pane,
               round_select_text, round_select_range, round_set_slider,
-              round_closed_shadow]
+              round_closed_shadow, round_type_closed_shadow]
     for r in rounds:
         try:
             r(b, offline)
