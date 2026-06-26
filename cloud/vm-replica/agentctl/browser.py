@@ -260,6 +260,44 @@ class Browser:
         )
         return bool(self.eval(js))
 
+    def scroll_until(self, found_js: str, container: str | None = None,
+                     step: int = 180, max_steps: int = 150,
+                     settle: float = 0.05) -> bool:
+        """F048: scroll a container (or the window) until ``found_js`` is truthy.
+
+        Virtualized lists only keep the rows near the viewport in the DOM, so a
+        far item simply does not exist to be queried or clicked until you scroll
+        it into the render window. Step the scroll position, let the list
+        re-render (the ``settle`` pause), then re-test. Stops early when the
+        scroll position saturates (reached the end) so a missing item fails fast
+        instead of spinning ``max_steps`` times.
+        """
+        if self.eval(found_js):
+            return True
+        last = -1.0
+        for _ in range(max_steps):
+            if container:
+                pos = self.eval(
+                    "(function(){var c=window.__agentctl.deepQuery(%r);"
+                    "if(!c)return -1;c.scrollTop+=%d;return c.scrollTop;})()"
+                    % (container, step))
+            else:
+                self.scroll(step)
+                pos = self.eval("window.scrollY")
+            time.sleep(settle)
+            if self.eval(found_js):
+                return True
+            if pos == last:
+                break
+            last = pos if isinstance(pos, (int, float)) else last
+        return False
+
+    def scroll_to_text(self, text: str, container: str | None = None,
+                       **kw) -> bool:
+        """Scroll until a row containing ``text`` is rendered and visible."""
+        return self.scroll_until(
+            f"!!window.__agentctl.byText({text!r})", container, **kw)
+
     def scroll(self, dy: float, dx: float = 0.0, x: float = 400, y: float = 300) -> None:
         self.cdp.call("Input.dispatchMouseEvent",
                       {"type": "mouseWheel", "x": x, "y": y,

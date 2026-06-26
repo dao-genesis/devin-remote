@@ -232,6 +232,29 @@ speaks a five-event protocol with a single shared parcel (`DataTransfer`); speak
 *that* exactly, and the drop always lands. 為者敗之 — forcing the pointer fails;
 matching the page's own contract succeeds.
 
+### F048 — scroll-virtualized lists: the row does not exist until you reach it
+**Surface:** a 1000-row list in a 200px viewport that only materializes the ~10
+rows around the current scroll offset (`scroll`→re-render). A human flicks down
+until *Item 800* appears, then clicks it.
+**Mechanism:** virtualization keeps only the visible window in the DOM, so before
+scrolling, `byText("Item 800")` returns nothing and `click_text` simply fails —
+there is no element to hit. Querying harder does not help; the row literally is
+not there. Scrolling is not cosmetic, it is what *creates* the target.
+**Primitive:** `scroll_until(found_js, container)` steps the container's
+`scrollTop`, pauses (`settle`) for the list to re-render, and re-tests, returning
+as soon as the predicate holds. `scroll_to_text(text, container)` builds the
+`byText` predicate. A saturation guard compares successive scroll positions and
+stops the moment scrolling no longer advances, so a genuinely-absent row fails
+*fast* (≈1.3s) instead of spinning `max_steps`. After it returns, `click_text`
+lands normally.
+**Proof:** R12 — `Item 800` absent → naive click False → `scroll_to_text` brings
+it in → click yields `CLICK:800`; `Item 99999` returns False quickly.
+`26/26 checks passed`.
+**Lesson (道法自然):** you cannot grasp what has not yet come into being. The
+primitive does not search harder, it *moves the world until the thing exists*,
+then acts — and knows when to stop (saturation) rather than chase a phantom.
+天下之物生於有，有生於無 — scroll calls the row out of nothing.
+
 ---
 
 ## Frontier (next honest rounds)
@@ -239,8 +262,6 @@ matching the page's own contract succeeds.
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
 
-- **R-next: scroll-virtualized lists** — items that only exist in the DOM near the
-  viewport; needs scroll-until-found.
 - **R-next: cross-origin iframes** — separate processes; may need per-target
   sessions (`Target.attachToTarget` + `sessionId`).
 - **R-next: canvas / WebGL surfaces** — no DOM at all; pure pixel channel + OS

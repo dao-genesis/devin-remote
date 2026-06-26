@@ -227,12 +227,42 @@ def round_dnd(b: Browser, offline: bool) -> None:
           b.wait_for("document.title==='DROP:payload'", timeout=3), b.title())
 
 
+def round_virtual_scroll(b: Browser, offline: bool) -> None:
+    print("R12: scroll-virtualized list (F048)")
+    html = fixture("vlist.html",
+                   "<!doctype html><title>vlist</title><style>"
+                   "#vp{height:200px;width:200px;overflow:auto;border:1px solid #000;position:relative}"
+                   ".row{position:absolute;height:20px;left:0;right:0}</style>"
+                   "<div id=vp><div id=spacer></div></div><script>"
+                   "var N=1000,H=20,vp=document.getElementById('vp'),sp=document.getElementById('spacer');"
+                   "sp.style.height=(N*H)+'px';"
+                   "function render(){var top=vp.scrollTop,first=Math.floor(top/H),"
+                   "last=Math.min(N-1,Math.ceil((top+vp.clientHeight)/H));sp.innerHTML='';"
+                   "for(var i=first;i<=last;i++){var d=document.createElement('div');"
+                   "d.className='row';d.style.top=(i*H)+'px';d.textContent='Item '+i;"
+                   "d.onclick=(function(k){return function(){document.title='CLICK:'+k}})(i);"
+                   "sp.appendChild(d);}}"
+                   "vp.addEventListener('scroll',render);render();</script>")
+    b.navigate(html)
+    # Friction: a far row is not in the DOM at all, so a naive click can't find it.
+    check("far row absent before scroll",
+          b.eval("!window.__agentctl.byText('Item 800')"))
+    check("naive click_text fails on unrendered row", b.click_text("Item 800") is False)
+    # Primitive: scroll the container until the row materializes, then click it.
+    check("scroll_to_text materializes row", b.scroll_to_text("Item 800", container="#vp"))
+    b.click_text("Item 800")
+    check("clicked the scrolled-in row",
+          b.wait_for("document.title==='CLICK:800'", timeout=3), b.title())
+    # And a non-existent row fails fast (saturation guard, no infinite spin).
+    check("missing row fails fast", b.scroll_to_text("Item 99999", container="#vp") is False)
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
     rounds = [round_navigate_read, round_atomic_type, round_click_text, round_dialog,
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
-              round_hover_menu, round_dnd]
+              round_hover_menu, round_dnd, round_virtual_scroll]
     for r in rounds:
         try:
             r(b, offline)
