@@ -62,7 +62,11 @@ probe ALIVE+EFFECTIVE（持续稳定）
 
 ---
 
-## 5. 残留与后续
+## 5. 收尾根治（残留两项已闭环）
 
-- token-drift 已由自愈环每 ~30s 纠回，但仍会周期性短暂漂移；可进一步根治为「发布 token 永不再漂」（让发布源与 `ws.token` 同生命周期，消除中间态）。
-- 可继续压真机 44s 全图预热：调并发或加预取优先级排序（关键路径已先行，全图为后台 fire-and-forget，不阻塞首屏）。
+| # | 残留 | 根治 |
+|---|---|---|
+| 6 | token-drift 虽由自愈环每 ~30s 纠回，仍会周期性短暂漂移：根因是**发布路**多处以 `bridgeToken \|\| ws.token`（易变源优先）对外公布令牌，与服务端真验源 `ws.token` 脱钩，窗口重载随机铸新 `bridgeToken` 即令已发布令牌静默失效 | **发布 token 永不再漂**：所有对外公布/复制/conn.json/getState/候选 路径一律倒为 `ws.token \|\| bridgeToken`（机器级恒稳源优先、`bridgeToken` 退为回落）；`bridgeStartTunnel` 启动链优先 `ws.token`；「刷新 Token」由「凭空铸新随机牌」改为「重新同步发布权威 `ws.token` 并扩散到所有账号」；探活采纳外部候选令牌加 `!ws.token` 守恒护栏（永不以外部源覆盖 `ws.token`）。`checkAuth` 同时认 `ws.token` 与 `bridgeToken`，故内网回环鉴权不受影响 |
+| 7 | 真机全图预热 ~44s（分批栅栏：每批 `Promise.all` 须等最慢者才开下一批，尾部阻塞） | 关键路径阶段 + 全图 BFS 每轮均改用**有界并发工作池** `_drainPool`（N 个工人持续取活、一件完成立刻取下一件，持续满载无尾部阻塞），并发 32→48（`_httpsAgent.maxSockets=64`，留 16 socket 给实时供给）；语义不变（关键路径先暖、深层分片据 JS 体续扫），墙钟塌缩 |
+
+> 自检：`rt-flow` `npm test` 全绿（PASS 120 + PASS 35）；`build.js` / `render_check` OK；`_drainPool` 单测（并发上限、序保、空集、容错）通过；`core/rt-flow/devin_proxy.js` 与内嵌副本逐字节一致。

@@ -411,6 +411,31 @@ function _rewriteAssetBody(body, ct, localBase) {
   return Buffer.from(txt.split("https://app.devin.ai/").join(localBase + "/"), "utf8");
 }
 
+// 帛书·「水善利万物而有静」: 有界并发「工作池」— N 个工人持续从队列取活, 一件完成立刻取下一件,
+//   消除「分批栅栏」(旧法每批 Promise.all 须等最慢者才开下一批)的尾部阻塞。同等并发下持续满载,
+//   墙钟更短 → 真机 44s 全图预热进一步塌缩。结果按入参序回填 (深层分片发现仍据 JS 体扫描)。
+function _drainPool(items, conc, worker) {
+  return new Promise((resolve) => {
+    const n = items.length;
+    if (!n) return resolve([]);
+    const results = new Array(n);
+    let idx = 0, done = 0, active = 0;
+    const pump = () => {
+      while (active < conc && idx < n) {
+        const i = idx++; active++;
+        Promise.resolve(worker(items[i], i)).then(
+          (r) => { results[i] = r; },
+          () => { results[i] = undefined; },
+        ).then(() => {
+          active--; done++;
+          if (done === n) resolve(results); else pump();
+        });
+      }
+    };
+    pump();
+  });
+}
+
 // 后台预热 SPA 全模块图入缓存。BFS: index.html → 抓引用分片 → 扫分片再发现深层分片。
 async function _prewarmGraph(localBase, auth, log) {
   try {
@@ -425,43 +450,33 @@ async function _prewarmGraph(localBase, auth, log) {
     let queue = [];
     let m; while ((m = _ASSET_RE.exec(html))) { if (!seen.has(m[0])) { seen.add(m[0]); queue.push(m[0]); } }
     let rounds = 0, fetched = 0;
-    const CONC = 32, MAX = 2000;
+    const CONC = 48, MAX = 2000;
+    const _warmOne = async (p) => {
+      if (_assetCache.get(p)) return null;
+      const r = await _fetchUp(p, auth);
+      if (!r || r.status !== 200) return null;
+      const out = _rewriteAssetBody(r.body, r.ct, localBase);
+      const hdrs = { "Content-Type": r.ct || "application/octet-stream", "Cache-Control": "public, max-age=31536000, immutable", "Access-Control-Allow-Origin": "*" };
+      const ce = { status: 200, headers: hdrs, body: out, base: localBase };
+      _cachePut(p, ce); _diskPut(p, ce, localBase); fetched++;
+      return r.ct.includes("javascript") ? out.toString("utf8") : "";
+    };
     // 帛书·「为之于其未有, 治之于其未乱」: 先以最高优先级灌入口关键路径(index 直引的入口分片+CSS+
     //   modulepreload), 此即首屏所需集。其余深层 dynamic-import 分片走后台续抓。令"新账号首开"只等
-    //   首屏几片, 不等全图(根治冷窗口: 全图抓取虽 ~44s, 首屏集秒级即暖, 跨账号共享缓存即时命中)。
+    //   首屏几片, 不等全图(根治冷窗口: 全图抓取虽数十秒, 首屏集秒级即暖, 跨账号共享缓存即时命中)。
+    //   工作池持续满载 (非分批栅栏) → 尾部不再阻塞下一批, 同等并发墙钟更短。
     const critical = queue.slice();
     const ct0 = Date.now();
-    for (let i = 0; i < critical.length; i += CONC) {
-      await Promise.all(critical.slice(i, i + CONC).map(async (p) => {
-        if (_assetCache.get(p)) return;
-        const r = await _fetchUp(p, auth);
-        if (!r || r.status !== 200) return;
-        const out = _rewriteAssetBody(r.body, r.ct, localBase);
-        const hdrs = { "Content-Type": r.ct || "application/octet-stream", "Cache-Control": "public, max-age=31536000, immutable", "Access-Control-Allow-Origin": "*" };
-        const ce = { status: 200, headers: hdrs, body: out, base: localBase };
-        _cachePut(p, ce); _diskPut(p, ce, localBase); fetched++;
-      }));
-    }
+    await _drainPool(critical, CONC, _warmOne);
     _prewarmCritical = key; // 首屏集已暖 → 首开新账号即时命中, 无需等全图
     if (log) try { log("[proxy] critical-path warm: " + critical.length + " assets in " + (Date.now() - ct0) + "ms"); } catch {}
     while (queue.length && rounds++ < 6 && seen.size < MAX) {
       const next = [];
-      for (let i = 0; i < queue.length; i += CONC) {
-        const got = await Promise.all(queue.slice(i, i + CONC).map(async (p) => {
-          if (_assetCache.get(p)) return null;
-          const r = await _fetchUp(p, auth);
-          if (!r || r.status !== 200) return null;
-          const out = _rewriteAssetBody(r.body, r.ct, localBase);
-          const hdrs = { "Content-Type": r.ct || "application/octet-stream", "Cache-Control": "public, max-age=31536000, immutable", "Access-Control-Allow-Origin": "*" };
-          const ce = { status: 200, headers: hdrs, body: out, base: localBase };
-          _cachePut(p, ce); _diskPut(p, ce, localBase); fetched++;
-          return r.ct.includes("javascript") ? out.toString("utf8") : "";
-        }));
-        for (const txt of got) {
-          if (!txt) continue;
-          const re = new RegExp(_ASSET_RE.source, "g");
-          let mm; while ((mm = re.exec(txt))) { if (!seen.has(mm[0])) { seen.add(mm[0]); next.push(mm[0]); } }
-        }
+      const got = await _drainPool(queue, CONC, _warmOne);
+      for (const txt of got) {
+        if (!txt) continue;
+        const re = new RegExp(_ASSET_RE.source, "g");
+        let mm; while ((mm = re.exec(txt))) { if (!seen.has(mm[0])) { seen.add(mm[0]); next.push(mm[0]); } }
       }
       queue = next;
     }
