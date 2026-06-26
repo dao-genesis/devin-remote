@@ -327,6 +327,38 @@ and acted upon.
 > daemon threads + `HTTP/1.0` so teardown can never block on a held connection.
 > The friction was in the *test*, not the primitive — fixed honestly, not hidden.
 
+### F051 — CJK input: the value arrives but the *composition* never happens
+**Surface:** a field that is *gated on the IME composition lifecycle* — it
+commits text only on `compositionend` (CJK type-ahead, pinyin search-as-you-go,
+rich editors that suppress `input` while `isComposing`). A human types romaji,
+watches candidates resolve (你→你好), and presses space/enter to commit.
+**Mechanism:** our two existing text channels both deliver the *final*
+characters but produce none of the composition events. `Input.insertText` fires
+a single `input:你好` — no `compositionstart`, no `compositionend`; the gated
+field never reacts (proven: `0,0,0` start/update/end). `osctl.type_unicode`
+(KEYEVENTF_UNICODE) fires per-char `keydown`+`input` with `isComposing=false` —
+still no composition. The text was *present* but the *event shape the page waits
+for* was absent. We were delivering the destination without the journey the page
+subscribes to.
+**Primitive:** `browser.compose(selector, text, stages=…)` drives CDP
+`Input.imeSetComposition` — the renderer's own IME entry point, beneath any
+keyboard layout. It walks candidate `stages` (default: progressive prefixes,
+or explicit `["ni","你","你好"]`), each emitting `compositionstart`/
+`compositionupdate` with `isComposing=true`, then commits via `insert_text`,
+firing `compositionend` — the exact lifecycle a human IME produces.
+`commit=False` leaves the composition open; `selector=None` composes into the
+focused field.
+**Proof:** R15 — `insert_text("你好")` sets the value yet leaves the gated field
+uncommitted (`0,0,0`, `out` empty); `compose(None,"你好",["ni","你","你好"])`
+yields `1,4,1` (start once, updates through every candidate, end once), the
+value is `你好`, and the compositionend-gated field finally reads
+`COMMITTED:你好`. `44/44 checks passed`.
+**Lesson (道法自然):** 大音希聲 — the page is not listening for the loud final
+characters, it is listening for the quiet shape of *becoming*. To deliver only
+the result is to skip the very signal subscribed to. 反者道之動 — go back through
+the gradual motion (start→update→end), and the formed text enters where the
+finished text could not. Address the page on the event it actually awaits.
+
 ---
 
 ## Frontier (next honest rounds)
@@ -337,8 +369,6 @@ will only grow a primitive once a real failure is reproduced.
 - **R-next: out-of-process (cross-site) iframes** — when the child context does
   *not* appear on the page session; needs `Target.setAutoAttach` + per-target
   `sessionId` routing (the plumbing for which already exists in `cdp.py`).
-- **R-next: focus & IME composition** — composed input for CJK via real IME, not
-  just `insertText`.
 - **R-next: template-match locate** — find a target by a small reference patch
   (not a flat colour) when several similarly-coloured regions compete.
 

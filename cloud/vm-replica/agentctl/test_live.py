@@ -44,7 +44,10 @@ def fixture(name: str, html: str) -> str:
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
     _results.append((name, ok, detail))
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
+    line = f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else "")
+    # A non-UTF-8 console (e.g. cp1252) must not crash the suite on CJK details.
+    enc = sys.stdout.encoding or "ascii"
+    print(line.encode(enc, "backslashreplace").decode(enc))
     return ok
 
 
@@ -380,13 +383,55 @@ def round_canvas_pixel(b: Browser, offline: bool) -> None:
           osctl.find_color((1, 2, 3), tol=0) is None)
 
 
+def round_ime_compose(b: Browser, offline: bool) -> None:
+    print("R15: CJK input via real IME composition (F051)")
+    # A field gated on the composition lifecycle: it commits only on
+    # compositionend and counts start/update/end. Atomic insertText sets the
+    # value but fires none of these, so such a field never commits.
+    html = fixture(
+        "ime.html",
+        "<!doctype html><meta charset=utf-8><title>ime</title>"
+        "<input id=q><span id=out></span>"
+        "<script>var q=document.getElementById('q'),o=document.getElementById('out'),"
+        "S=0,U=0,E=0;"
+        "q.addEventListener('compositionstart',function(){S++;});"
+        "q.addEventListener('compositionupdate',function(){U++;});"
+        "q.addEventListener('compositionend',function(e){E++;"
+        "o.textContent='COMMITTED:'+e.data;});"
+        "window.__ime=function(){return S+','+U+','+E;};</script>")
+    b.navigate(html)
+    time.sleep(0.3)
+    val = lambda: b.eval("document.getElementById('q').value")  # noqa: E731
+    out = lambda: b.eval("document.getElementById('out').textContent")  # noqa: E731
+    cnt = lambda: b.eval("window.__ime()")  # noqa: E731
+    # Friction: atomic insertText fills the value but skips composition entirely,
+    # so the composition-gated field stays uncommitted.
+    b.eval("document.getElementById('q').focus()")
+    b.insert_text("\u4f60\u597d")
+    time.sleep(0.15)
+    check("insert_text fills value but fires no composition",
+          val() == "\u4f60\u597d" and out() == "" and cnt() == "0,0,0", cnt())
+    b.eval("var q=document.getElementById('q');q.value='';"
+           "document.getElementById('out').textContent='';q.focus();")
+    # Primitive: compose() drives the real IME lifecycle (romaji -> hanzi).
+    ok = b.compose(None, "\u4f60\u597d", stages=["ni", "\u4f60", "\u4f60\u597d"])
+    time.sleep(0.15)
+    check("compose returns ok", ok is True)
+    check("compose set the field value", val() == "\u4f60\u597d", repr(val()))
+    s, u, e = (int(x) for x in cnt().split(","))
+    check("composition lifecycle fired (start>=1, update>=1, end==1)",
+          s >= 1 and u >= 1 and e == 1, cnt())
+    check("field gated on compositionend now committed",
+          out() == "COMMITTED:\u4f60\u597d", repr(out()))
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
     rounds = [round_navigate_read, round_atomic_type, round_click_text, round_dialog,
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
-              round_canvas_pixel]
+              round_canvas_pixel, round_ime_compose]
     for r in rounds:
         try:
             r(b, offline)
@@ -397,9 +442,11 @@ def main() -> int:
     passed = sum(1 for _, ok, _ in _results if ok)
     total = len(_results)
     print(f"\n=== {passed}/{total} checks passed ===")
+    enc = sys.stdout.encoding or "ascii"
     for name, ok, detail in _results:
         if not ok:
-            print(f"  FAILED: {name} :: {detail}")
+            s = f"  FAILED: {name} :: {detail}"
+            print(s.encode(enc, "backslashreplace").decode(enc))
     return 0 if passed == total else 1
 
 

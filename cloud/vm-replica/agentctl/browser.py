@@ -382,6 +382,39 @@ class Browser:
         """Insert text into whatever is focused (atomic)."""
         self.cdp.call("Input.insertText", {"text": text})
 
+    # ---- F051: IME / composition (CJK) ------------------------------------ #
+    def compose(self, selector: str | None, text: str,
+                stages: list[str] | None = None, commit: bool = True) -> bool:
+        """Enter text through the real IME composition lifecycle (F051).
+
+        ``insert_text`` and ``osctl.type_unicode`` both deliver the final
+        characters but fire **no** composition events — so a field that *gates*
+        on them (CJK type-ahead, pinyin search-as-you-type, rich editors that
+        suppress ``input`` while ``isComposing``) never reacts to the text. A
+        human's IME instead emits ``compositionstart`` → ``compositionupdate``…
+        (each with ``isComposing`` true) → ``compositionend`` on commit.
+
+        CDP's ``Input.imeSetComposition`` drives the renderer's IME directly,
+        beneath any key layout. We walk ``stages`` (default: progressive
+        prefixes of ``text``, mimicking candidates resolving) — each a
+        ``compositionupdate`` — then ``insert_text`` commits, firing
+        ``compositionend``. Pass explicit ``stages`` (e.g. ``["ni","你","你好"]``)
+        for a realistic romaji→hanzi progression, or ``commit=False`` to leave
+        the composition open. ``selector=None`` composes into whatever is
+        focused. Returns ``False`` if the field can't be focused.
+        """
+        if selector is not None and not self.click(selector):
+            return False
+        if stages is None:
+            stages = [text[:i] for i in range(1, len(text) + 1)]
+        for s in stages:
+            self.cdp.call("Input.imeSetComposition",
+                          {"text": s, "selectionStart": len(s),
+                           "selectionEnd": len(s)})
+        if commit:
+            self.cdp.call("Input.insertText", {"text": text})
+        return True
+
     def set_value(self, selector: str, value: str) -> bool:
         """DOM-level set + fire input/change (for React-style controlled inputs)."""
         js = (
