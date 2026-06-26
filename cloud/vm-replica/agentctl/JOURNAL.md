@@ -515,6 +515,44 @@ shares with all its renderings, and the likeness is simply there. Each register
 discards one more accident — first position, then colour, now size — keeping only
 what is essentially the thing.
 
+### F057 — the same shape turned, the wrong shape left upright
+**Surface:** the reference glyph (a horizontal bar) reappears **rotated 90°** —
+the page re-laid-out, an icon spun, a control rotated under transform — beside a
+**different** glyph (a wide ellipse) left at the reference's *own* orientation. A
+human still reads "bar" however it is turned. `edge_signature` (F056) cannot: it
+is scale-free but still orientation-bound.
+**Mechanism:** the signature resamples the region onto a fixed `nw`×`nh` grid, so
+turning the bar 90° lights up *entirely different cells* — its signature distance
+explodes (`520`) — while the same-orientation ellipse, sharing the reference's
+upright layout, aligns its cells and scores far lower (`194`). Signature-match
+therefore picks the **decoy** yet again, this time because *angle*, not size or
+colour, has moved.
+**Primitive:** `osctl.radial_profile(rgb, size, bbox, bins, thr)` discards the
+angle. It edges the region, finds the centroid of the edge pixels, measures each
+edge pixel's distance to that centroid, normalises by the largest such distance
+(killing scale too), and histograms those normalised radii into `bins` buckets
+summed to 1. Rotating a shape about its centroid moves *no* pixel's radius, so
+the histogram is unchanged; rescaling divides every radius by one factor the
+normalisation cancels. Compare two with `osctl.profile_l1` (lower = more alike).
+It discards angular order, so it is deliberately *less* specific than the
+signature — pair it with `edge_signature` when orientation is fixed; reach for it
+only when the thing can turn. Proven against the rotated scene: the turned-but-
+correct bar scores `0.000`, the upright-but-wrong ellipse `0.393` — the profile
+picks the rotated bar and the click lands `TARGET-HIT`, where the signature
+landed on the decoy. `85/85 checks passed`, deterministic across three runs. The
+perception ladder now reads: hue (`find_color_blobs`) → patch (`match_template`)
+→ rigid structure (`match_edges`) → scale-free structure (`edge_signature`) →
+**rotation-&-scale-free structure** (`radial_profile`).
+**Lesson (道法自然):** 大方無隅 — the great form has no corner; to recognise a
+thing you must stop pinning it to the one orientation it happened to face. 反也
+者，道之動也 — turning is the way's own motion; meet it not by forcing the mask
+back upright but by choosing a frame (radius about the centre) in which turning
+*does not move anything at all*. The register grows by giving up one more
+specificity — angular order — and keeping only what rotation leaves invariant;
+each such surrender is also a narrowing of what the descriptor can tell apart, so
+it is reached for last, not first (重為輕根：the heavier, more specific registers
+ground the lighter, more invariant ones).
+
 ---
 
 ## Frontier (next honest rounds)
@@ -525,9 +563,6 @@ will only grow a primitive once a real failure is reproduced.
 - **R-next: out-of-process (cross-site) iframes** — when the child context does
   *not* appear on the page session; needs `Target.setAutoAttach` + per-target
   `sessionId` routing (the plumbing for which already exists in `cdp.py`).
-- **R-next: a structure that has rotated or rescaled** — `match_edges` is
-  translation-only; a target rotated or zoomed defeats a fixed mask. Needs an
-  orientation/scale-tolerant descriptor (the register after rigid structure).
 - **R-next: text the page renders but never settles in the DOM** — canvas/WebGL
   glyphs, where neither DOM text nor a colour/shape patch identifies a word;
   needs reading rendered glyphs from pixels (the next register after structure).

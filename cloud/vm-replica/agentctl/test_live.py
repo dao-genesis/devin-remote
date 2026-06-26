@@ -794,6 +794,93 @@ def round_scale_invariant(b: Browser, offline: bool) -> None:
           b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
 
 
+def round_rotation_invariant(b: Browser, offline: bool) -> None:
+    print("R21: pick a rotated target by radial profile, not fixed orientation (F057) — osctl")
+    # The reference glyph (a horizontal bar) reappears ROTATED 90° — now vertical
+    # — beside a DIFFERENT glyph (a wide ellipse) left at the reference's own
+    # orientation. edge_signature (R20) resamples to a fixed grid, so the turned
+    # bar lands on entirely different cells and the same-orientation ellipse scores
+    # a closer signature. A radial profile (edge mass vs distance-from-centroid) is
+    # unchanged by rotation, so it recognises the turned bar.
+    bar = ("function bar(cx,cy,hw,hh,rot,col){x.save();x.translate(cx,cy);x.rotate(rot);"
+           "x.fillStyle=col;x.fillRect(-hw,-hh,2*hw,2*hh);x.restore();}")
+    ell = ("function ell(cx,cy,rx,ry,col){x.save();x.translate(cx,cy);x.scale(rx/ry,1);"
+           "x.fillStyle=col;x.beginPath();x.arc(0,0,ry,0,7);x.fill();x.restore();}")
+    # Phase 1: reference horizontal bar on a 160 tile, captured alone.
+    proto = fixture("rtstruct.html",
+                    "<!doctype html><title>rtstruct</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=320 height=300 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,320,300);" + bar +
+                    "x.fillStyle='#ff00ff';x.fillRect(50,50,160,160);bar(130,130,62,22,0,'#fff');"
+                    "</script>")
+    b.navigate(proto)
+    time.sleep(0.5)
+    rw, rh, rrgb = osctl.capture_rgb()
+    rb = [bl for bl in osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rrgb,
+                                              size=(rw, rh), min_count=200)
+          if bl["bbox"][2] - bl["bbox"][0] > 90 and bl["bbox"][3] - bl["bbox"][1] > 90]
+    check("captured a reference tile", len(rb) == 1, str([bl["x"] for bl in rb]))
+    if not rb:
+        return
+    ref = rb[0]
+    ref_sig = osctl.edge_signature(rrgb, (rw, rh), ref["bbox"])
+    ref_rad = osctl.radial_profile(rrgb, (rw, rh), ref["bbox"])
+    check("reference radial profile is populated", abs(sum(ref_rad) - 1.0) < 1e-6
+          and max(ref_rad) > 0, f"sum={sum(ref_rad):.3f}")
+    # Phase 2: target = SAME bar rotated 90° (vertical) LEFT; decoy = wide ellipse RIGHT.
+    scene = fixture("rtscene.html",
+                    "<!doctype html><title>rtscene</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=760 height=300 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,760,300);" + bar + ell +
+                    "var TGT=[40,60,160,160],DEC=[520,60,160,160];"
+                    "x.fillStyle='#ff00ff';x.fillRect(TGT[0],TGT[1],160,160);"
+                    "x.fillStyle='#ff00ff';x.fillRect(DEC[0],DEC[1],160,160);"
+                    "bar(120,140,62,22,Math.PI/2,'#fff');ell(600,140,62,22,'#fff');"
+                    "function inb(p,r){return p[0]>=r[0]&&p[0]<=r[0]+r[2]"
+                    "&&p[1]>=r[1]&&p[1]<=r[1]+r[3];}"
+                    "c.addEventListener('click',function(e){"
+                    "var r=c.getBoundingClientRect(),p=[e.clientX-r.left,e.clientY-r.top];"
+                    "if(inb(p,TGT)){document.title='TARGET-HIT';}"
+                    "else if(inb(p,DEC)){document.title='DECOY';}"
+                    "else{document.title='MISS';}});</script>")
+    b.navigate(scene)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    blobs = [bl for bl in osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rgb,
+                                                 size=(w, h), min_count=200)
+             if bl["bbox"][2] - bl["bbox"][0] > 90 and bl["bbox"][3] - bl["bbox"][1] > 90]
+    check("two same-size candidates found", len(blobs) == 2, str([bl["x"] for bl in blobs]))
+    if len(blobs) != 2:
+        return
+    blobs.sort(key=lambda bl: bl["x"])
+    target_blob, decoy_blob = blobs[0], blobs[1]
+    # Friction: a fixed-orientation signature is fooled by the 90° turn.
+    sig = []
+    for bl in blobs:
+        sig.append((osctl.edge_hamming(ref_sig, osctl.edge_signature(rgb, (w, h), bl["bbox"])), bl))
+    sig_best = min(sig, key=lambda t: t[0])[1]
+    check("signature-match is fooled: it picks the same-orientation decoy",
+          sig_best is decoy_blob,
+          f"sig chose x={sig_best['x']} target_x={target_blob['x']}")
+    # Primitive: radial profile is rotation-invariant.
+    rad = []
+    for bl in blobs:
+        rad.append((osctl.profile_l1(ref_rad, osctl.radial_profile(rgb, (w, h), bl["bbox"])), bl))
+    rad_best_score, rad_best = min(rad, key=lambda t: t[0])
+    rad_worst = max(rad, key=lambda t: t[0])[0]
+    check("rotated target scores below decoy on radial profile",
+          rad_best_score < rad_worst,
+          f"best={rad_best_score:.3f} worst={rad_worst:.3f}")
+    check("radial-profile-match picks the rotated target, not the decoy",
+          rad_best is target_blob,
+          f"radial chose x={rad_best['x']} target_x={target_blob['x']}")
+    osctl.click(rad_best["x"], rad_best["y"])
+    check("rotation-invariant click hits the rotated target",
+          b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -802,7 +889,7 @@ def main() -> int:
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_structure_match,
-              round_scale_invariant]
+              round_scale_invariant, round_rotation_invariant]
     for r in rounds:
         try:
             r(b, offline)
