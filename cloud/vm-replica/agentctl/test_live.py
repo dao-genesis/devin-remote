@@ -185,11 +185,36 @@ def round_omnibox(b: Browser, offline: bool) -> None:
     check("address-bar atomic paste navigated", ok, b.title())
 
 
+def round_hover_menu(b: Browser, offline: bool) -> None:
+    print("R10: hover-only menu reveal (F046)")
+    html = fixture("hover.html",
+                   "<!doctype html><title>hover</title><style>"
+                   "#menu{position:absolute;top:40px;left:40px;width:120px;height:30px;background:#ccc}"
+                   ".submenu{display:none;position:absolute;top:30px;left:0;width:150px;background:#eee}"
+                   "#menu:hover .submenu{display:block}"
+                   ".submenu button{display:block;width:100%;height:30px}</style>"
+                   "<div id=menu>Menu<div class=submenu>"
+                   "<button id=set onclick=\"document.title='SET-OK'\">Settings</button>"
+                   "</div></div>")
+    b.navigate(html)
+    # Friction: the item is in the DOM but display:none, so a naive click_text
+    # lands on the visible ancestor (#menu) and silently does nothing.
+    check("submenu hidden before hover", b.is_visible(".submenu") is False)
+    b.click_text("Settings")
+    check("naive click misses hidden item (title unchanged)", b.title() == "hover", b.title())
+    # Primitive: hover the trigger, wait for the reveal, then the item is hittable.
+    check("hover_reveal opens menu", b.hover_reveal("#menu", ".submenu"))
+    b.click_text("Settings")
+    check("revealed item click took effect",
+          b.wait_for("document.title==='SET-OK'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
     rounds = [round_navigate_read, round_atomic_type, round_click_text, round_dialog,
-              round_frame, round_file_input, round_shadow, round_async, round_omnibox]
+              round_frame, round_file_input, round_shadow, round_async, round_omnibox,
+              round_hover_menu]
     for r in rounds:
         try:
             r(b, offline)
