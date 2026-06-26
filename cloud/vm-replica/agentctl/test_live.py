@@ -1593,6 +1593,55 @@ def round_select_range(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_set_slider(b: Browser, offline: bool) -> None:
+    print("R37: drag a custom slider to a precise value (F073) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>slider</title>"
+            b"<div id=track style='position:absolute;left:40px;top:80px;width:200px;"
+            b"height:8px;background:#ccc'>"
+            b"<div id=thumb style='position:absolute;left:0;top:-6px;width:20px;"
+            b"height:20px;background:#08f;border-radius:50%'></div></div>"
+            b"<script>(function(){"
+            b"var track=document.getElementById('track'),thumb=document.getElementById('thumb'),"
+            b"W=200,drag=false;"
+            b"function setFromX(cx){var r=track.getBoundingClientRect();"
+            b"var f=Math.max(0,Math.min(1,(cx-r.left)/W));"
+            b"thumb.style.left=(f*W-10)+'px';window.__val=Math.round(f*100);}"
+            b"thumb.addEventListener('pointerdown',function(e){drag=true;e.preventDefault();});"
+            b"window.addEventListener('pointermove',function(e){if(drag)setFromX(e.clientX);});"
+            b"window.addEventListener('pointerup',function(){drag=false;});"
+            b"window.__val=0;})();</script>")
+    sp = _serve(8963, page)
+    try:
+        b.navigate("http://127.0.0.1:8963/")
+        time.sleep(0.2)
+        # Friction: a div slider has no .value and ignores a plain click.
+        raised = False
+        try:
+            b.set_value("#thumb", "73")
+        except Exception:
+            raised = True
+        check("set_value cannot drive a div slider (no value property)", raised)
+        b.click("#track")
+        time.sleep(0.05)
+        check("a plain click on the track moves nothing",
+              b.eval("window.__val") == 0, repr(b.eval("window.__val")))
+        # Primitive: drag the handle to a precise fraction of the rail.
+        check("set_slider drives the handle to 73%",
+              b.set_slider("#thumb", "#track", 0.73) is True)
+        time.sleep(0.05)
+        check("the live slider value reaches the requested fraction",
+              b.eval("window.__val") == 73, repr(b.eval("window.__val")))
+        check("set_slider can land a different fraction",
+              b.set_slider("#thumb", "#track", 0.20) is True)
+        time.sleep(0.05)
+        check("the second fraction resolves independently",
+              b.eval("window.__val") == 20, repr(b.eval("window.__val")))
+        check("set_slider on an absent handle returns False",
+              b.set_slider("#nope", "#track", 0.5) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1606,7 +1655,7 @@ def main() -> int:
               round_native_select, round_contenteditable, round_file_drop,
               round_draw_path, round_paste_pipeline, round_context_menu,
               round_key_chord, round_per_key_type, round_wheel_pane,
-              round_select_text, round_select_range]
+              round_select_text, round_select_range, round_set_slider]
     for r in rounds:
         try:
             r(b, offline)

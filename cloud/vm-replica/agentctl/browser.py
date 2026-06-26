@@ -411,6 +411,58 @@ class Browser:
                        "button": "left", "clickCount": 1})
         return self.eval("String(getSelection())")
 
+    def _rect_of(self, selector: str) -> dict | None:
+        """The element's viewport rectangle (F073), or ``None`` if absent."""
+        return self.eval(
+            "(function(){var el=window.__agentctl.deepQuery(%r);if(!el)return null;"
+            "var r=el.getBoundingClientRect();"
+            "return {left:r.left,top:r.top,width:r.width,height:r.height};})()"
+            % selector)
+
+    def set_slider(self, thumb: str, track: str, fraction: float,
+                   axis: str = "x") -> bool:
+        """Drag a slider handle to ``fraction`` of its track (F073). A custom
+        slider — a volume/brightness/price control built from ``<div>``\\ s — has no
+        ``.value`` to set (``set_value`` raises *Illegal invocation* on a
+        ``<div>``) and ignores ``scrollTop``. It listens for ``pointerdown`` on the
+        *thumb*, then ``pointermove`` along the *track*, mapping the cursor's
+        fraction of the rail to a value — so a plain ``click`` on the track does
+        nothing (the press never lands on the thumb), and there is no value to
+        write. A human grabs the handle and slides it. We press at the thumb's
+        centre, move in steps to ``fraction`` along the track (carrying
+        ``buttons:1`` so a handler reading ``e.buttons`` still sees a drag), and
+        release. ``axis`` picks the rail's direction. ``fraction`` is clamped to
+        ``[0,1]``. Returns ``False`` if either element is absent."""
+        th = self._rect_of(thumb)
+        tr = self._rect_of(track)
+        if not th or not tr:
+            return False
+        f = max(0.0, min(1.0, fraction))
+        px = th["left"] + th["width"] / 2
+        py = th["top"] + th["height"] / 2
+        if axis == "y":
+            tx = tr["left"] + tr["width"] / 2
+            ty = tr["top"] + f * tr["height"]
+        else:
+            tx = tr["left"] + f * tr["width"]
+            ty = tr["top"] + tr["height"] / 2
+        self._move(px, py)
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mousePressed", "x": px, "y": py,
+                       "button": "left", "clickCount": 1})
+        span = abs(tx - px) + abs(ty - py)
+        steps = max(1, int(span / 12) + 1)
+        for i in range(1, steps + 1):
+            mx = px + (tx - px) * i / steps
+            my = py + (ty - py) * i / steps
+            self.cdp.call("Input.dispatchMouseEvent",
+                          {"type": "mouseMoved", "x": mx, "y": my,
+                           "button": "left", "buttons": 1})
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mouseReleased", "x": tx, "y": ty,
+                       "button": "left", "clickCount": 1})
+        return True
+
     def click(self, selector: str, by_text: bool = False, tag: str | None = None,
               require_hit: bool = True) -> bool:
         # F061: aim at a point that actually reaches the element. hitPoint probes
