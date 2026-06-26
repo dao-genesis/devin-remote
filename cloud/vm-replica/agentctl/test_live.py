@@ -2702,6 +2702,60 @@ def round_double_tap(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_two_finger_tap(b: Browser, offline: bool) -> None:
+    print("R61: two-finger tap that lands and lifts still (F097) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>tf</title>"
+            b"<style>html,body{margin:0}"
+            b"#b{width:240px;height:160px;background:#dde}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=b>two</div><div id=veil></div>"
+            b"<script>window.tf=0;var saw=false,moved=false;"
+            b"var el=document.getElementById('b');"
+            b"el.addEventListener('touchstart',function(e){"
+            b"if(e.touches.length===2){saw=true;}},{passive:true});"
+            b"el.addEventListener('touchmove',function(e){moved=true;},{passive:true});"
+            b"el.addEventListener('touchend',function(e){"
+            b"if(e.touches.length===0){if(saw&&!moved){window.tf++;}saw=false;moved=false;}"
+            b"},{passive:true});"
+            b"</script>")
+    sp = _serve(8990, page)
+
+    def tf() -> int:
+        return b.eval("window.tf")
+
+    def reset() -> None:
+        b.eval("window.tf=0;")
+    try:
+        b.navigate("http://127.0.0.1:8990/")
+        time.sleep(0.2)
+        check("two-finger tap starts unfired", tf() == 0, repr(tf()))
+        # Friction: a single-finger tap never arms the two-finger detector.
+        check("one-finger tap does not trip a two-finger tap",
+              b.tap("#b") is True and tf() == 0, repr(tf()))
+        # Friction: pinch lands two fingers but moves them, so a tap detector
+        # that drops on touchmove refuses to commit.
+        reset()
+        check("pinch (two fingers that move) does not commit a two-finger tap",
+              b.pinch("#b", 60) is True and tf() == 0, repr(tf()))
+        # Friction: rotate also moves two fingers and so never taps.
+        reset()
+        check("rotate (two fingers that turn) does not commit a two-finger tap",
+              b.rotate("#b", 45) is True and tf() == 0, repr(tf()))
+        # Primitive: two fingers down, lifted still, commit exactly one tap.
+        reset()
+        check("two_finger_tap commits one two-finger tap",
+              b.two_finger_tap("#b") is True and tf() == 1, repr(tf()))
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("two_finger_tap refuses through an overlay",
+              b.two_finger_tap("#b") is False)
+        check("nothing fired while occluded", tf() == 1, repr(tf()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("two_finger_tap on an absent element returns False",
+              b.two_finger_tap("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2724,7 +2778,7 @@ def main() -> int:
               round_key_step, round_triple_click, round_drag_by,
               round_middle_click, round_right_drag_by,
               round_tap, round_swipe, round_pinch, round_rotate,
-              round_touch_hold, round_double_tap]
+              round_touch_hold, round_double_tap, round_two_finger_tap]
     for r in rounds:
         try:
             r(b, offline)
