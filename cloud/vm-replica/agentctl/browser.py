@@ -514,6 +514,29 @@ class Browser:
         overlay covers it, like :meth:`click`) and press/release with the Ctrl
         modifier bit set on every mouse event — the exact stream the row's listener
         expects. Returns ``False`` if the target is absent or fully occluded."""
+        return self._modifier_click(selector, 2, by_text=by_text)
+
+    def shift_click(self, selector: str, by_text: bool = False) -> bool:
+        """Shift+click to select a contiguous *range* from the anchor (F078). After
+        an anchor click, Shift+clicking another row selects the whole run between
+        them — the universal file-manager / mail-list / table gesture. A plain
+        ``click`` carries no modifier, so a handler reading ``e.shiftKey`` sees
+        ``false`` and merely re-anchors: Shift+clicking row 4 after row 1 ends with
+        only ``{4}`` instead of ``{1,2,3,4}``. ``ctrl_click`` (F077) toggles a
+        *single* item and never fills the span. We aim at the same hit-verified
+        point as :meth:`click` (refusing if occluded) and press/release with the
+        Shift modifier bit (8) on every mouse event. The anchor is whatever the page
+        last clicked, so a typical use is ``click(first)`` then
+        ``shift_click(last)``. Returns ``False`` if the target is absent or fully
+        occluded."""
+        return self._modifier_click(selector, 8, by_text=by_text)
+
+    def _modifier_click(self, selector: str, modifiers: int,
+                        by_text: bool = False) -> bool:
+        """Hit-verified click carrying a CDP modifier bitmask (Ctrl=2, Shift=8,
+        Alt=1, Meta=4) on every mouse event — the shared core of :meth:`ctrl_click`
+        (F077) and :meth:`shift_click` (F078). Returns ``False`` if the target is
+        absent or fully occluded (F061 honesty)."""
         p = self._hit_point_of(selector, by_text=by_text)
         if not p or p.get("occluded"):
             return False
@@ -521,7 +544,8 @@ class Browser:
         for typ in ("mousePressed", "mouseReleased"):
             self.cdp.call("Input.dispatchMouseEvent",
                           {"type": typ, "x": p["x"], "y": p["y"],
-                           "button": "left", "clickCount": 1, "modifiers": 2})
+                           "button": "left", "clickCount": 1,
+                           "modifiers": modifiers})
         return True
 
     def click(self, selector: str, by_text: bool = False, tag: str | None = None,

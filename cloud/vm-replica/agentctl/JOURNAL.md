@@ -1136,6 +1136,31 @@ force, is what lets the set grow without erasing itself.
 
 ---
 
+### F078 — Shift+click to select a contiguous range
+**Surface:** a file manager / mail list / table where you click one row, then
+Shift+click another to select the entire run between them.
+**Friction:** a plain `click` carries no modifier, so a handler reading
+`e.shiftKey` sees `false` and merely re-anchors — Shift+clicking row 4 after row 1
+ends with only `{4}` instead of `{1,2,3,4}`. `ctrl_click` (F077) toggles a *single*
+item and never fills the span; nothing in the ladder draws a contiguous range.
+**Mechanism:** the row's `click` listener branches on `e.shiftKey` and an `anchor`
+the page recorded on the last plain click: with Shift it clears the set and adds
+every index between `min(anchor,i)` and `max(anchor,i)`; without it, it re-anchors.
+The deciding signal is again the modifier bit on the mouse event — `modifiers:8`
+(Shift) in `Input.dispatchMouseEvent` becomes `event.shiftKey`.
+**Primitive:** `Browser.shift_click(selector)` shares `ctrl_click`'s hit-verified
+core (`_modifier_click`, refusing if occluded — F061) and presses/releases with the
+Shift bit. Typical use is `click(first)` then `shift_click(last)`. Live: a plain
+second click leaves `[4]`; anchor `r1` + `shift_click(r4)` fills `[1,2,3,4]`;
+re-anchor `r3` + `shift_click(r0)` fills the backward range `[0,1,2,3]`; an absent
+target returns `False`. `222/222 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 大成若缺 — the range is completed not by touching each thing
+but by naming two ends and letting the span between fill itself. 萬物負陰而抱陽 —
+ctrl (toggle one) and shift (span the run) are the yin and yang of the same press;
+held apart, they cover every selection a human makes with a mouse.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

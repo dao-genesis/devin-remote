@@ -1814,6 +1814,54 @@ def round_ctrl_multi_select(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_shift_range_select(b: Browser, offline: bool) -> None:
+    print("R42: Shift+click selects a contiguous range from the anchor (F078) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>shiftclick</title>"
+            b"<ul id=list style='list-style:none;font:14px sans-serif'></ul>"
+            b"<script>window.__sel=new Set();window.__anchor=null;"
+            b"var ul=document.getElementById('list');"
+            b"function paint(){[].forEach.call(document.querySelectorAll('li'),"
+            b"function(li){var i=+li.dataset.i;"
+            b"li.style.background=window.__sel.has(i)?'#9cf':'';});}"
+            b"for(var i=0;i<6;i++){(function(i){var li=document.createElement('li');"
+            b"li.id='r'+i;li.dataset.i=i;li.textContent='row '+i;li.style.padding='4px';"
+            b"li.addEventListener('click',function(e){"
+            b"if(e.shiftKey&&window.__anchor!=null){window.__sel.clear();"
+            b"var a=Math.min(window.__anchor,i),b=Math.max(window.__anchor,i);"
+            b"for(var k=a;k<=b;k++)window.__sel.add(k);}"
+            b"else{window.__sel.clear();window.__sel.add(i);window.__anchor=i;}"
+            b"paint();});ul.appendChild(li);})(i);}"
+            b"window.__picked=function(){return [...window.__sel].sort("
+            b"function(a,b){return a-b;});};</script>")
+    sp = _serve(8969, page)
+    try:
+        b.navigate("http://127.0.0.1:8969/")
+        time.sleep(0.2)
+        b.click("#r1")
+        b.click("#r4")  # plain click only re-anchors
+        check("a plain second click does not fill the range",
+              b.eval("window.__picked()") == [4],
+              repr(b.eval("window.__picked()")))
+        # Anchor on r1, Shift+click r4 -> the whole run [1,2,3,4].
+        check("anchor click on r1", b.click("#r1") is True)
+        check("shift_click r4 selects the range",
+              b.shift_click("#r4") is True)
+        check("the range from anchor to target is filled",
+              b.eval("window.__picked()") == [1, 2, 3, 4],
+              repr(b.eval("window.__picked()")))
+        # Shift+click backward (r1 anchor still set by last range op? re-anchor).
+        check("re-anchor on r3", b.click("#r3") is True)
+        check("shift_click r0 selects backward range",
+              b.shift_click("#r0") is True)
+        check("the backward range is filled",
+              b.eval("window.__picked()") == [0, 1, 2, 3],
+              repr(b.eval("window.__picked()")))
+        check("shift_click on an absent item returns False",
+              b.shift_click("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1829,7 +1877,7 @@ def main() -> int:
               round_key_chord, round_per_key_type, round_wheel_pane,
               round_select_text, round_select_range, round_set_slider,
               round_closed_shadow, round_type_closed_shadow, round_marquee,
-              round_ctrl_multi_select]
+              round_ctrl_multi_select, round_shift_range_select]
     for r in rounds:
         try:
             r(b, offline)
