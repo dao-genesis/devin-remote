@@ -746,7 +746,7 @@ export async function activate(context: vscode.ExtensionContext) {
             let extra: any = {};
             try { extra = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.dao', 'bridge', 'connection.json'), 'utf8')) || {}; } catch { /* 守柔 */ }
             const url = c.url || extra.url || bridgeUrl || '';
-            const token = bridgeToken || extra.token || ws.token || '';
+            const token = ws.token || bridgeToken || extra.token || '';
             const port = c.port || extra.port || ws.port || 0;
             const host = c.host || (extra.workspace && extra.workspace.host) || '';
             const named = !!bridgeReadNamedToken();
@@ -765,7 +765,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 if (c === 'copyBridgeInfo') {
                     const cc = readBridgeConn() || {};
                     const url = cc.url || bridgeUrl || '';
-                    const tok = bridgeToken || ws.token || '';
+                    const tok = ws.token || bridgeToken || '';
                     await vscode.env.clipboard.writeText(`公网URL: ${url}\nToken:   ${tok}\nAuth:    Authorization: Bearer ${tok}`);
                     vscode.window.showInformationMessage('Bridge 接入信息已复制 (URL + Token)');
                     return { ok: !!(url || tok) };
@@ -775,13 +775,15 @@ export async function activate(context: vscode.ExtensionContext) {
                 if (c === 'bridgeRestart') { const wasNamed = !!bridgeReadNamedToken(); bridgeStopTunnel(); await bridgeStartTunnel(wasNamed); vscode.window.showInformationMessage('隧道已重启'); return { ok: true }; }
                 if (c === 'bridgeRefreshToken') {
                     if (!bridgeUrl) { vscode.window.showWarningMessage('当前为常驻桥持久化连接 · Token 由常驻服务管理。请先「启动隧道」再刷新。'); return { ok: false }; }
-                    bridgeToken = crypto.randomBytes(24).toString('hex');
+                    // 帛书·「知常曰明」: 对外令牌恒等机器级恒稳源 ws.token(永不再漂)。
+                    //   「刷新」即强制把权威令牌重新发布/扩散到所有账号(自愈漂移), 不再凭空铸新牌致脱钩。
+                    bridgeToken = ws.token || bridgeToken;
                     bridgeSaveAuthToken(bridgeToken);
                     bridgeSaveConnJson();
                     try { bridgeWriteArtifacts(); } catch { /* 守柔 */ }
                     try { if (ws.devinAuth1 && ws.devinOrgId) await bridgeInjectKnowledge(); } catch { /* 守柔 */ }
                     bridgeScheduleReinject('tokenRefresh');
-                    vscode.window.showInformationMessage('Bridge Token 已刷新 (旧牌仍短暂有效, 不断链)');
+                    vscode.window.showInformationMessage('Bridge Token 已重新同步发布 (机器级恒稳·永不再漂)');
                     return { ok: true };
                 }
                 if (c === 'openBridgeMd') {
@@ -3123,8 +3125,9 @@ function bridgeFindCloudflared(): string {
 async function bridgeStartTunnel(named: boolean) {
     const { spawn } = require('child_process');
     bridgeEnsureDir();
-    // 帛书·「重新模拟这个配源」: 令牌跨重载持久(載盤即復), 杜绝窗口重载凭空铸新牌致已发布令牌静默失效。
-    if (!bridgeToken) bridgeToken = bridgeLoadAuthToken() || crypto.randomBytes(24).toString('hex');
+    // 帛书·「知常曰明」: 对外令牌恒等机器级恒稳源 ws.token(載盤即復·永不再漂);
+    //   仅 ws.token 极早期缺位才回落持久 auth-token / 新铸, 杜绝窗口重载凭空铸新牌致已发布令牌静默失效。
+    bridgeToken = ws.token || bridgeToken || bridgeLoadAuthToken() || crypto.randomBytes(24).toString('hex');
     bridgeSaveAuthToken(bridgeToken);
     // ① 守柔复用(無死地): 上一个宿主留下的 cloudflared 仍脱宿主存活, 且日志含可达 URL
     //    → 直接复用其隧道, 绝不新起第二条(杜绝隧道增殖/地址漂移)。这正是「窗口重载却不断线」的根。
@@ -3202,7 +3205,7 @@ function bridgeSaveConnJson() {
     bridgeEnsureDir();
     const wsInfo = { name: vscode.workspace.workspaceFolders?.[0]?.name || '', root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '' };
     const data = {
-        url: bridgeUrl, token: bridgeToken || ws.token,
+        url: bridgeUrl, token: ws.token || bridgeToken,
         local_url: 'http://127.0.0.1:' + (ws.port || 9920),
         port: ws.port || 9920, workspace: wsInfo.name, root: wsInfo.root,
         host: os.hostname(), updated: new Date().toISOString(), version: EXT_VERSION,
@@ -3538,13 +3541,13 @@ function bridgeGetState(): any {
         version: EXT_VERSION,
     };
     if (bridgeUrl) {
-        return Object.assign({ connected: true, persistent: false, source: 'inprocess', url: bridgeUrl, token: bridgeToken || ws.token, host: os.hostname(), updated: new Date().toISOString() }, base);
+        return Object.assign({ connected: true, persistent: false, source: 'inprocess', url: bridgeUrl, token: ws.token || bridgeToken, host: os.hostname(), updated: new Date().toISOString() }, base);
     }
     const pub = bridgeReadPublishedConn();
     if (pub && (pub.url || pub.relayUrl) && pub.ageMs < BRIDGE_CONN_FRESH_MS) {
         return Object.assign({ connected: true, persistent: true, source: pub.source, url: pub.url || pub.relayUrl, relayUrl: pub.relayUrl, session: pub.session, token: pub.token || ws.token, host: pub.host || os.hostname(), updated: pub.updated, ageMs: pub.ageMs }, base);
     }
-    return Object.assign({ connected: false, persistent: false, source: '', url: '', token: bridgeToken || ws.token, host: os.hostname(), updated: new Date().toISOString() }, base);
+    return Object.assign({ connected: false, persistent: false, source: '', url: '', token: ws.token || bridgeToken, host: os.hostname(), updated: new Date().toISOString() }, base);
 }
 
 // 智能持久化/刷新 — 帛书·「治人事天莫若啬」: 低频、去重、不与常驻桥重复起隧道。
@@ -3736,7 +3739,7 @@ function bridgeMcpToken(): string {
 // 独立闭环(鸡犬相闻·不相往来): 只探测进程内自有隧道, 不读外部 conn 文件
 async function bridgeResolveLiveConn(timeoutMs: number = 5000): Promise<{ url: string; token: string; source: string } | null> {
     const cands: { url: string; token: string; mtime: number; source: string }[] = [];
-    if (bridgeUrl) cands.push({ url: bridgeUrl, token: bridgeToken || ws.token || '', mtime: Number.MAX_SAFE_INTEGER, source: 'inprocess' });
+    if (bridgeUrl) cands.push({ url: bridgeUrl, token: ws.token || bridgeToken || '', mtime: Number.MAX_SAFE_INTEGER, source: 'inprocess' });
     const seen = new Set<string>();
     for (const c of cands) {
         if (seen.has(c.url)) continue;
@@ -3804,7 +3807,7 @@ async function bridgeLivenessTick(): Promise<void> {
                 if (live && live.url) {
                     // 重注判据: 进程内地址变了 或 知识库实注地址 ≠ 此活址(覆盖 bridgeUrl 已先行收敛、唯独 KB 滞留旧址的脱钩盲区)。
                     const needReinject = (live.url !== bridgeUrl) || (live.url !== _lastInjectedBridgeUrl);
-                    bridgeUrl = live.url; if (live.token) bridgeToken = live.token;
+                    bridgeUrl = live.url; if (!ws.token && live.token) bridgeToken = live.token; // 守恒: 令牌恒以 ws.token 为准, 不被外部候选漂移
                     _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0;
                     daoLoopLog('tunnel', 'DEAD→候选探活得活地址 ' + live.url + ' (src=' + live.source + ') → 无缝切换' + (needReinject ? '+重注' : ''));
                     try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
@@ -5972,7 +5975,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'copyBridgeToken': {
-                const tok = bridgeToken || ws.token;
+                const tok = ws.token || bridgeToken;
                 if (tok) await vscode.env.clipboard.writeText(tok);
                 vscode.window.showInformationMessage('Bridge Token 已复制');
                 reply({ type: 'actionResult', command: 'copyBridgeToken', ok: !!tok });
@@ -5982,7 +5985,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'copyBridgeInfo': {
                 const c = readBridgeConn();
                 const url = (c && c.url) || bridgeUrl || '';
-                const tok = bridgeToken || ws.token || '';
+                const tok = ws.token || bridgeToken || '';
                 const block = `公网URL: ${url}\nToken:   ${tok}\nAuth:    Authorization: Bearer ${tok}`;
                 await vscode.env.clipboard.writeText(block);
                 vscode.window.showInformationMessage('Bridge 接入信息已复制 (URL + Token)');
@@ -6000,7 +6003,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     refreshReply({ type: 'actionResult', command: 'bridgeRefreshToken', ok: false });
                     break;
                 }
-                bridgeToken = crypto.randomBytes(24).toString('hex');
+                // 帛书·「知常曰明」: 对外令牌恒等机器级恒稳源 ws.token(永不再漂);「刷新」即强制重新发布/扩散权威令牌。
+                bridgeToken = ws.token || bridgeToken;
                 bridgeSaveAuthToken(bridgeToken);
                 bridgeSaveConnJson();
                 try { bridgeWriteArtifacts(); } catch { /* 守柔 */ }
@@ -9875,7 +9879,7 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
         //   宁可守柔不注, 也不以死地址/(未连接) 覆盖账号库良态 — 根治旧实例/轮换把知识库写死致云端找不到端口。
         const live = await bridgeResolveLiveConn(5000);
         if (live && live.url) {
-            bridgeUrl = live.url; if (live.token) bridgeToken = live.token;
+            bridgeUrl = live.url; if (!ws.token && live.token) bridgeToken = live.token; // 守恒: 令牌恒以 ws.token 为准, 不被外部候选漂移
         } else {
             try { console.log('[dao] bridge reinject ABORT: 无活桥地址, 守柔不覆盖账号库 (' + reason + ')'); } catch { /* 守柔 */ }
             daoLoopLog('tunnel', 'reinject ABORT(' + reason + '): 无活地址→守柔不覆盖, 待探活环刷新');
