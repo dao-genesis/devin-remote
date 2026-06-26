@@ -547,6 +547,39 @@ class Browser:
         self.click_xy(p["x"], p["y"])
         return True
 
+    def type_shadow(self, selector: str, text: str, clear: bool = True) -> bool:
+        """Type into an ``<input>``/``<textarea>`` sealed in a *closed* shadow root
+        (F075). ``click_shadow`` (F074) can press a sealed control, but typing is a
+        different blindness: ``type_text``/``set_value`` resolve their target with
+        ``deepQuery``, which is ``null`` past a closed root, so both return
+        ``False`` and the field stays empty. The keystrokes themselves, though, go
+        wherever focus is — they need no selector. We pierce the closed root for the
+        node (:meth:`_pierce_node`), give it focus through ``DOM.focus`` (which acts
+        on a CDP node id, not a page selector), optionally select-all + delete to
+        clear, then dispatch a real ``keyDown``/``keyUp`` per character (carrying
+        ``key``/``code`` and the inserted ``text``) — exactly the stream the field's
+        own listeners expect. Returns ``False`` if no such element exists."""
+        nid = self._pierce_node(selector)
+        if not nid:
+            return False
+        self.cdp.call("DOM.focus", {"nodeId": nid})
+        if clear:
+            self.key_chord("a", ctrl=True, code="KeyA", key_code=65)
+            self.cdp.call("Input.dispatchKeyEvent",
+                          {"type": "keyDown", "key": "Delete", "code": "Delete",
+                           "windowsVirtualKeyCode": 46, "nativeVirtualKeyCode": 46})
+            self.cdp.call("Input.dispatchKeyEvent",
+                          {"type": "keyUp", "key": "Delete", "code": "Delete",
+                           "windowsVirtualKeyCode": 46, "nativeVirtualKeyCode": 46})
+        for ch in text:
+            d = self._key_descriptor(ch)
+            if "windowsVirtualKeyCode" in d:
+                d["nativeVirtualKeyCode"] = d["windowsVirtualKeyCode"]
+            self.cdp.call("Input.dispatchKeyEvent",
+                          {**d, "type": "keyDown", "text": ch})
+            self.cdp.call("Input.dispatchKeyEvent", {**d, "type": "keyUp"})
+        return True
+
     def context_click(self, selector: str, by_text: bool = False,
                       tag: str | None = None, require_hit: bool = True) -> bool:
         """Right-click to raise an app's own context menu (F067). Web apps replace
