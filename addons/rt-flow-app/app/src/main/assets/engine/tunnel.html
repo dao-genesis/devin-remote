@@ -256,18 +256,18 @@ function _pj(raw){ try{ var o=JSON.parse(raw||"{}"); return (o&&typeof o==="obje
 function _conn(){ return _pj(N.conn?N.conn():""); }
 function _relay(){ return _pj(N.relayStatus?N.relayStatus():""); }
 //__CHANSEL_START__ (经 test/channel-select.test.js 切片 eval 实测, 勿删标记)
-// 公网入口选取 (道法自然·下放中继 Worker → 去中心化为本, Worker 仅末位兜底):
-//   ① 网页直开首选「去中心化 P2P 网控台」: 中立公共 CDN 托管的 console.html(完整 APK 同款 UI), 经多家公共 ntfy 信令
-//      + WebRTC 直连本机 serve() 应答方, 全程不经任何 Worker; 浏览器零账号、链接自带 session+token+auto=1。
-//   ② RPC/curl 公网入口首选已建立的去中心化隧道 (cloudflared 主 > SSH 备), 二者皆独立于中继 Worker;
-//      仅当去中心化路径都不可得时, 才以中继 Worker 末位兜底 (即便其在线也不再抢首位)。
+// 公网入口选取 (道法自然·去中心化为本·设备自托管为根, 第三方宿主/账号/Worker 皆仅可选兜底):
+//   ① 网页直开首选「设备自带零账号隧道」(cloudflared 主 > SSH 备) 直供本机 console.html ——
+//      网页与控制同源、同走设备自己的隧道, 不经任何第三方静态宿主/账号/Worker。这是根方案·默认。
+//   ② 次选局域网直连 (同网·零中继零隧道·亦本机自托管)。
+//   ③ 再次「去中心化 P2P 网控台」: 公共静态宿主托管的 console.html, 经多家公共 ntfy 信令 + WebRTC 直连
+//      本机 serve(), 不经任何 Worker —— 仅当设备 HTTP 隧道未就绪/被封时的零账号兜底 (其 URL 稳定·兼顾持久)。
+//   ④ 末位才回落中继 Worker /console。RPC/curl 公网入口 (_bestPublic) 同理: 去中心化隧道优先, Worker 末位兜底。
 //   局域网仅同网可达, 不计入「公网」; P2P 是握手机制非基础 URL。
-// 去中心化网页直开宿主: 公共静态托管的 console.html (完整 APK 同款 UI·非任何 Worker)。
-//   base 可由 conn.webConsoleBase 覆写(自托管/换镜像/换中立账号 → 更彻底去中心)。默认走
-//   GitHub Pages(仓库自给自页·同源·最稳·随 main 自动同鲜·正确以 text/html 下发), 不经任何 Worker。
-//   注: surge.sh(原首选·无账号标识)已被永久下架(HTTP 451·返回 Unavailable), 故改宿于稳定且
-//   随仓库自更新的 Pages; jsDelivr 会把 .html 当 text/plain(浏览器只显源码·不可执行)故不用。
-//   同目录附 signal.js 及各板块 HTML(console.html 同源优先取之·见其 CDN_BASES)。
+// 可选增强·公共静态网页直开宿主 (仅 ③ 兜底用·非默认根): console.html (完整 APK 同款 UI·非任何 Worker)。
+//   base 可由 conn.webConsoleBase 覆写(自托管/换镜像/换中立账号)。默认 GitHub Pages(仓库自给自页·随 main
+//   自动同鲜·正确 text/html); surge.sh(原首选·无账号标识)已被永久下架(HTTP 451)故弃; jsDelivr 把 .html
+//   当 text/plain 故不用。同目录附 signal.js 及各板块 HTML(console.html 同源优先取之·见其 CDN_BASES)。
 var P2P_WEB_DEFAULT = "https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html";
 function _p2pWebBase(){ var c=_conn(); return String((c&&c.webConsoleBase)||P2P_WEB_DEFAULT).replace(/\s+/g,""); }
 function _p2pWebUrl(){
@@ -289,18 +289,26 @@ function _bestPublic(){
   if(w) return { base:w, kind:'worker', label:'零账号中继·末位兜底', online:!!r.connected };
   return { base:"", kind:'none', label:'(暂无可用公网入口)', online:false };
 }
-// 浏览器可直开的最优网页入口 (道法自然·去中心化为本, Worker 由首选降为兜底):
-//   ① 去中心化 P2P 网控台(CDN 托管 console.html·公共 ntfy 信令·WebRTC, 完全不经 Worker);
-//   ② 活的去中心化隧道直供本机外壳; ③ 局域网直连; ④ 末位才回落中继 Worker /console。
+// 浏览器可直开的最优网页入口 (道法自然·设备自托管为根, 第三方宿主/Worker 仅可选兜底):
+//   ① 设备自带零账号隧道(cloudflared 主 > SSH 备) 直供本机 console.html(网页+控制同源·不经任何第三方);
+//   ② 局域网直连(同网·零中继零隧道); ③ 去中心化 P2P 网控台(公共静态宿主 + ntfy mesh·零 Worker·可选兜底·持久);
+//   ④ 末位才回落中继 Worker /console。
 function _bestWeb(){
   var c=_conn(), r=_relay();
+  // ① 根方案·默认首选: 设备自带零账号隧道直供本机整页 (cloudflared 主 > SSH 备, 皆独立于 Worker/账号)。
+  var bp=_bestPublic();
+  if(bp.base && (bp.kind==='cloudflared'||bp.kind==='ssh'))
+    return { url:_webConsoleUrl(bp.base,true), kind:bp.kind, base:bp.base,
+      label:'设备自带隧道·自托管 console.html('+bp.label+'·不经任何第三方宿主)' };
+  // ② 局域网直连 (同网·零中继零隧道·亦本机自托管)。
+  var l=_lan(); var us=(l&&l.urls)||[];
+  if(us.length){ var lb=String(us[0]).replace(/\/$/,''); return { url:_webConsoleUrl(lb,true), label:'局域网直连(同网·零中继零隧道·自托管)', kind:'lan', base:lb }; }
+  // ③ 可选兜底·去中心化 P2P 网控台: 公共静态宿主托管 console.html, 经 ntfy mesh + WebRTC 直连本机 serve();
+  //    设备 HTTP 隧道暂未就绪/被封时的零 Worker 兜底, 其 URL 稳定不随隧道轮换 → 兼顾持久。
   var p2p=_p2pWebUrl();
   if(p2p) return { url:p2p, kind:'p2p-web', base:_p2pWebBase(),
-    label:'去中心化 P2P 网控台(CDN·零账号·不经 Worker)' };
-  var bp=_bestPublic();
-  if(bp.base && bp.kind!=='worker') return { url:_webConsoleUrl(bp.base,true), label:bp.label, kind:bp.kind, base:bp.base };
-  var l=_lan(); var us=(l&&l.urls)||[];
-  if(us.length){ var lb=String(us[0]).replace(/\/$/,''); return { url:_webConsoleUrl(lb,true), label:'局域网直连(同网·零中继零隧道)', kind:'lan', base:lb }; }
+    label:'去中心化 P2P 网控台(可选兜底·公共静态宿主·零账号·不经 Worker)' };
+  // ④ 末位兜底: 中继 Worker /console。
   var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
   if(w) return { url:_webConsoleUrl(w,true), kind:'worker', base:w,
     label:(r.connected!==false?'零账号中继网控台(末位兜底·免隧道)':'零账号中继网控台(自愈重连中·末位兜底)') };
@@ -748,7 +756,7 @@ function _webConsoleBases(){
 }
 function _webConsoleUrl(base, withTok){
   var c=_conn(); var qs="?session="+encodeURIComponent(c.session||"");
-  if(withTok) qs+="&token="+encodeURIComponent(c.token||"");
+  if(withTok) qs+="&token="+encodeURIComponent(c.token||"")+"&auto=1";
   // 中继入口(=conn.url, 如 *.workers.dev): 走 Worker 自托管的 /console 纯 RPC 控制台 ——
   //   即使设备侧 cloudflared/SSH/局域网全被拦截也能用(仅需 /relay RPC)。
   // 局域网/LocalServer 入口: 仍取 / (本机直供的 app.html 外壳, 直连 /api/rpc)。
