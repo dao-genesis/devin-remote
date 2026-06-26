@@ -1082,6 +1082,34 @@ descriptor invokes the command.
 
 ---
 
+### F076 — rubber-band (marquee) selecting a group of items
+**Surface:** a file grid / photo board / canvas where you select *several* items
+at once by pressing on empty space and dragging a rectangle across them.
+**Friction:** there is no element to click. A plain `click` presses *on* one item
+(or on the void, which selects nothing), and `dnd` (F047) presses on a *source
+element* and drops on a *target* — it has no empty-void press and no rectangle.
+The selection is the *geometry of a band*, recomputed on every `pointermove`
+against each item's box; none of our gestures carry a moving rectangle over empty
+space.
+**Mechanism:** the band handler listens for a `pointerdown` whose target is the
+container itself (the void), records the start point, and on each held-button move
+toggles every item whose box intersects the `min/max` rectangle. So the gesture is
+a real press-drag-release that *starts on empty space* and carries `buttons:1`
+through the moves; the value is the corners, not whatever is under the cursor.
+**Primitive:** `Browser.marquee(container, x0, y0, x1, y1)` takes the two corners
+as fractions `[0,1]` of the container's box (resolution-independent), presses the
+first corner on the void, steps diagonally to the second carrying `buttons:1`, and
+releases. Live: a plain click selects `[]`; a band from the top-left corner across
+three items selects exactly `[0,1,2]` (not the far item `3`); a tighter band
+reselects only `[0]`; an absent container returns `False`. `206/206 checks
+passed`, deterministic ×3.
+**Lesson (道法自然):** 大方無隅 — the great square has no corners to grab; we select it
+by sweeping the void between the things, not by touching any one of them. 反者道之動
+— the band is born from where *nothing* is, and from that emptiness the whole group
+is moved.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
