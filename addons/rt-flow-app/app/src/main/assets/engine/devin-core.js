@@ -159,8 +159,13 @@
           var r = await devinJsonPost(tries[i], { "Connect-Protocol-Version": "1", "X-Api-Key": statusKey }, { metadata: metadata });
           if (r.status >= 200 && r.status < 300 && r.json) {
             var ps = parsePlanStatus(r.json);
+            // 美金余额(Extra Usage)走 billing/status; 它是高频跳动的真·余额。
+            //   billing 瞬时失败时 fetchOverageDollars 回 null → **不可**把余额当 0。
+            //   以 overageKnown 显式标注「本次是否真取到美金余额」, 让上游(refreshQuotaFor)在未知时
+            //   沿用上次已知值而非抹成 $0 → 根除「明明有额度却误显 $0 / 跳成旧空值」(问题①)。
             var od = await fetchOverageDollars(auth1, orgId);
-            if (od != null) ps.overageDollars = od;
+            if (od != null) { ps.overageDollars = od; ps.overageKnown = true; ps.overageTs = Date.now(); }
+            else { ps.overageKnown = false; }
             return ps;
           }
           if (r.status === 401 || r.status === 400) break;
@@ -175,7 +180,7 @@
         if (br.status === 200 && br.json) {
           var d = billingDollars(br.json);
           var has = br.json.has_subscription_or_credits === true || br.json.is_subscription_valid === true || d > 0;
-          return { planName: "Trial", dPct: has ? 100 : 0, wPct: has ? 100 : 0, overageActive: d > 0, overageDollars: d, _source: "devin_billing" };
+          return { planName: "Trial", dPct: has ? 100 : 0, wPct: has ? 100 : 0, overageActive: d > 0, overageDollars: d, overageKnown: true, overageTs: Date.now(), _source: "devin_billing" };
         }
       } catch (e) {}
     }
@@ -311,7 +316,18 @@
       return { ok: false, error: "auth1 过期且重登失败: " + (lr.error || ""), relogin: true };
     }
     if (!q && !acc.auth1) return { ok: false, error: "无 auth1, 需先登录" };
-    if (q) { acc.quota = q; acc.plan = q.planName || acc.plan; upsertAcc(acc); }
+    if (q) {
+      // 金额自愈(问题①根治): 本轮 billing 没真取到美金余额(overageKnown!==true)时,
+      //   **绝不**把余额抹成 0/旧空 —— 沿用上次已知的 overageDollars(标 stale), 等下一轮取到再覆盖。
+      //   这样「明明有额度却误显 $0」与「金额跳成很老的空值」两类误判从源头消失;
+      //   billing 正常时(overageKnown===true)直接用新值, 实时跟随余额跳动。
+      if (q.overageKnown !== true && acc.quota && typeof acc.quota.overageDollars === "number") {
+        q.overageDollars = acc.quota.overageDollars;
+        q.overageStale = true;
+        q.overageTs = acc.quota.overageTs || 0;
+      }
+      acc.quota = q; acc.plan = q.planName || acc.plan; upsertAcc(acc);
+    }
     return { ok: !!q, quota: q || acc.quota };
   }
 
