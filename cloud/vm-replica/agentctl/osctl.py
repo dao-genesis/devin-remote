@@ -495,6 +495,54 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
             "bbox": (tx, ty, tx + pw - 1, ty + ph - 1)}
 
 
+def wait_stable(target: tuple[int, int, int], tol: int = 24, move_tol: int = 3,
+                settle_frames: int = 3, interval: float = 0.12,
+                timeout: float = 6.0) -> dict | None:
+    """Locate a colour only once it has stopped moving (F054).
+
+    Every other primitive here reads a *single* ``capture_rgb`` snapshot, but a
+    live UI animates: by the time a synthesised click lands, an element that was
+    sliding/teleporting has moved on, so the click hits where the target *used
+    to be*. This samples the ``find_color`` centroid repeatedly and returns only
+    after it holds within ``move_tol`` pixels for ``settle_frames`` consecutive
+    samples — i.e. the motion has come to rest — yielding the *current* resting
+    position to act on. The result is the usual ``find_color`` dict plus
+    ``settled`` (bool) and ``samples`` (int).
+
+    If the target never settles within ``timeout`` the last seen locate is
+    returned with ``settled=False`` (or ``None`` if the colour was never found),
+    so the caller can decide whether to act on a still-moving target. Do not
+    poll faster than the animation's own cadence — ``interval`` should exceed a
+    frame/step so two samples can actually differ (大音希聲: read the page's own
+    rhythm, do not out-shout it)."""
+    deadline = time.time() + timeout
+    prev: tuple[int, int] | None = None
+    stable = 0
+    samples = 0
+    last: dict | None = None
+    while time.time() < deadline:
+        w, h, rgb = capture_rgb()
+        loc = find_color(target, tol=tol, rgb=rgb, size=(w, h))
+        samples += 1
+        if loc is not None:
+            last = loc
+            if prev is not None and abs(loc["x"] - prev[0]) <= move_tol \
+                    and abs(loc["y"] - prev[1]) <= move_tol:
+                stable += 1
+                if stable >= settle_frames:
+                    loc["samples"] = samples
+                    loc["settled"] = True
+                    return loc
+            else:
+                stable = 0
+            prev = (loc["x"], loc["y"])
+        time.sleep(interval)
+    if last is not None:
+        last["samples"] = samples
+        last["settled"] = False
+    return last
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"

@@ -550,6 +550,56 @@ def round_template_match(b: Browser, offline: bool) -> None:
               b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
 
 
+def round_settle(b: Browser, offline: bool) -> None:
+    print("R18: act on a moving target only once it settles (F054) — osctl")
+    # A magenta square toggles between two far-apart spots every 180ms for ~1.6s,
+    # then comes to rest at a third. Every primitive so far reads ONE capture —
+    # but a single snapshot is already stale by the time the OS click lands,
+    # because the square has moved on. Only sampling until motion stops recovers
+    # the real target. (Two non-overlapping spots make the miss deterministic:
+    # once the square has moved, the old coordinate cannot hit it.)
+    scene = fixture("settle.html",
+                    "<!doctype html><title>settle</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=600 height=320 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "var S=60,A=[40,40],B=[480,220],FINAL=[250,130],cur=A,t0=Date.now(),f=0;"
+                    "function draw(p){cur=p;x.fillStyle='#fff';x.fillRect(0,0,600,320);"
+                    "x.fillStyle='#ff00ff';x.fillRect(p[0],p[1],S,S);}draw(cur);"
+                    "var iv=setInterval(function(){"
+                    "if(Date.now()-t0>1600){draw(FINAL);clearInterval(iv);window.__settled=1;return;}"
+                    "f^=1;draw(f?B:A);},180);"
+                    "c.addEventListener('click',function(e){"
+                    "var r=c.getBoundingClientRect(),px=e.clientX-r.left,py=e.clientY-r.top;"
+                    "if(px>=cur[0]&&px<=cur[0]+S&&py>=cur[1]&&py<=cur[1]+S){document.title='HIT';}"
+                    "else{document.title='MISS';}});</script>")
+    b.navigate(scene)
+    time.sleep(0.25)
+    # Friction: capture the target now, while it animates. Acting on that one
+    # snapshot LATER (the unavoidable perceive→act gap; here we let the motion
+    # finish) lands on where the target *was*, never where it came to rest.
+    w, h, rgb = osctl.capture_rgb()
+    loc = osctl.find_color((255, 0, 255), tol=40, rgb=rgb, size=(w, h))
+    check("single capture located the moving target", loc is not None)
+    if loc:
+        b.wait_for("window.__settled===1", timeout=4)  # the target comes to rest
+        osctl.click(loc["x"], loc["y"])
+        check("stale single-capture click misses the now-rested target",
+              b.wait_for("document.title==='MISS'", timeout=2), b.title())
+    b.eval("document.title='settle'")
+    b.navigate(scene)  # replay the animation from the start
+    time.sleep(0.25)
+    # Primitive: sample until the target stops moving, then act on the rest spot.
+    st = osctl.wait_stable((255, 0, 255), tol=40, timeout=6.0)
+    check("wait_stable reports the target settled", bool(st and st.get("settled")),
+          f"samples={st.get('samples') if st else None}")
+    check("animation had actually finished when we acted",
+          bool(b.eval("window.__settled||0")))
+    if st:
+        osctl.click(st["x"], st["y"])
+        check("settled click hits the now-stationary target",
+              b.wait_for("document.title==='HIT'", timeout=2), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -557,7 +607,7 @@ def main() -> int:
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
-              round_template_match]
+              round_template_match, round_settle]
     for r in rounds:
         try:
             r(b, offline)
