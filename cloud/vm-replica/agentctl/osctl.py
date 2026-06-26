@@ -1135,6 +1135,54 @@ def read_block(rgb: bytes, size: tuple[int, int],
                       None, nw, nh, thr) for band in bands]
 
 
+def detect_fg(rgb: bytes, size: tuple[int, int],
+              bbox: tuple[int, int, int, int],
+              q: int = 16, min_dist: int = 120
+              ) -> tuple[tuple[int, int, int], tuple[int, int, int] | None]:
+    """Recover the foreground (ink) colour of a region from its pixels (F109).
+
+    Every reader below — :func:`segment_run`, :func:`read_text`, :func:`read_block`
+    — demands the caller pass ``fg``, the text colour, and segments by proximity to
+    it. But a control found by *layout* (a button's bounds, a label's box) arrives
+    with no colour attached: you know *where* the text is, not what colour the page
+    drew it. Without ``fg`` not one of those readers can run — the whole stack is
+    blind to text whose colour it was not told in advance. That is the friction:
+    location is not enough; reading needs the ink colour, and nothing here supplies
+    it from the pixels themselves.
+
+    The region carries the answer. A label is a large flat field of *background*
+    pixels with a sparse scatter of *ink* on top: quantise the region to ``q``-step
+    buckets and the background is simply the most frequent bucket, while the ink is
+    the most frequent bucket that lies *far* from it (L1 distance ``> min_dist``).
+    Anti-alias fringe colours sit *between* ink and background and are rarer than
+    either, so they never win. This returns ``(bg, fg)`` — ``fg`` ready to hand to
+    any reader (within its ``tol``, the quantised value still matches the true ink).
+
+    Honest about absence: a *uniform* region (a blank panel, a solid fill) has no
+    bucket far from its background, so ``fg`` is ``None`` — there is no ink to read,
+    and it says so rather than promoting a fringe or noise pixel to "the colour".
+    Feed a region that is mostly *not* its background (it fills more than half the
+    box) and the roles invert as you would expect; this assumes the common case of
+    sparse ink on a flat field, the shape a found control actually has."""
+    w, _ = size
+    x0, y0, x1, y1 = bbox
+    hist: dict[tuple[int, int, int], int] = {}
+    for y in range(y0, y1 + 1):
+        row = y * w
+        for x in range(x0, x1 + 1):
+            j = (row + x) * 3
+            key = (rgb[j] // q * q, rgb[j + 1] // q * q, rgb[j + 2] // q * q)
+            hist[key] = hist.get(key, 0) + 1
+    if not hist:
+        return (0, 0, 0), None
+    ranked = sorted(hist.items(), key=lambda kv: kv[1], reverse=True)
+    bg = ranked[0][0]
+    for col, _cnt in ranked[1:]:
+        if sum(abs(a - b) for a, b in zip(col, bg)) > min_dist:
+            return bg, col
+    return bg, None
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"

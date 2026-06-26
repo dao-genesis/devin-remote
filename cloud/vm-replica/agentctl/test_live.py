@@ -3636,6 +3636,123 @@ def round_read_text_conf(b: Browser, offline: bool) -> None:
           loose == misread and "?" not in loose, repr(loose))
 
 
+def round_detect_fg(b: Browser, offline: bool) -> None:
+    print("R73: recover a region's ink colour from its pixels (F109) — osctl")
+    # Every reader (segment_run/read_text/read_block) needs the caller to pass fg.
+    # A control found by layout has bounds but no colour, so the whole reading stack
+    # is blind to text whose colour it was not told. detect_fg recovers (bg, fg) from
+    # the region: bg = the dominant bucket, fg = the dominant bucket far from it; a
+    # uniform region yields fg=None. The atlas (magenta) reads lines drawn in *other*
+    # colours once detect_fg supplies the right fg — wrong fg reads nothing.
+    MAG = (255, 0, 255)
+
+    def hx(s):
+        s = s.lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+    def close(a, b, t=48):
+        return bool(a) and bool(b) and all(abs(x - y) <= t for x, y in zip(a, b))
+
+    # Build the reference atlas in magenta on white (same shapes as R71/R72).
+    def blobs(rgb, w, h):
+        bs = osctl.find_color_blobs(MAG, tol=60, rgb=rgb, size=(w, h), min_count=120)
+        return sorted(bs, key=lambda t: t["x"])
+    chars = "ABCOKX"
+    draws = "".join("x.fillText('%s',%d,100);" % (ch, 40 + i * 120)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("df_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=760 height=160></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,760,160);"
+               "x.fillStyle='#f0f';x.font='bold 90px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = blobs(argb, aw, ah)
+    check("atlas segments into six reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def colored(text, fg_hex, bg_hex, font_px=64):
+        # Draw text in fg_hex on a solid bg_hex field; locate the field as its
+        # largest blob and inset 20% so browser chrome never enters the region.
+        b.navigate(fixture("df_line.html",
+                   "<!doctype html><title>l</title><style>html,body{margin:0}"
+                   "body{background:%s}</style>"
+                   "<canvas id=c width=1000 height=500></canvas><script>"
+                   "var x=document.getElementById('c').getContext('2d');"
+                   "x.fillStyle='%s';x.fillRect(0,0,1000,500);"
+                   "x.fillStyle='%s';x.font='bold %dpx monospace';"
+                   "x.textAlign='center';x.textBaseline='middle';"
+                   "x.fillText('%s',500,250);</script>"
+                   % (bg_hex, bg_hex, fg_hex, font_px, text)))
+        time.sleep(0.4)
+        w, h, rgb = osctl.capture_rgb()
+        bl = osctl.find_color_blobs(hx(bg_hex), tol=50, rgb=rgb, size=(w, h),
+                                    min_count=5000)
+        if not bl:
+            return rgb, (w, h), None
+        x0, y0, x1, y1 = max(bl, key=lambda t: t["count"])["bbox"]
+        iw, ih = (x1 - x0) // 5, (y1 - y0) // 5
+        return rgb, (w, h), (x0 + iw, y0 + ih, x1 - iw, y1 - ih)
+
+    # Case 1: yellow ink on navy — detect_fg must recover both, then read with it.
+    rgb, sz, bb = colored("CAB", "#ffeb3b", "#0d2860")
+    check("yellow-on-navy region located", bb is not None, repr(bb))
+    if bb is None:
+        return
+    dbg, dfg = osctl.detect_fg(rgb, sz, bb)
+    check("detect_fg recovers the navy background", close(dbg, hx("#0d2860")),
+          repr(dbg))
+    check("detect_fg recovers the yellow ink", close(dfg, hx("#ffeb3b")), repr(dfg))
+    # FRICTION: the magenta atlas reader, told the WRONG fg, sees no ink and reads "".
+    wrong = osctl.read_text(rgb, sz, bb, atlas, MAG)
+    check("FRICTION: read_text with the wrong fg reads nothing (not 'CAB')",
+          wrong != "CAB", repr(wrong))
+    # Hand the detected fg to the very same reader and the line resolves.
+    got = osctl.read_text(rgb, sz, bb, atlas, dfg)
+    check("read_text with detect_fg's colour reads 'CAB'", got == "CAB", repr(got))
+
+    # Case 2: near-white ink on maroon — a different scheme recovers and reads.
+    rgb2, sz2, bb2 = colored("BACK", "#f5f5f5", "#5a0f14")
+    if bb2 is not None:
+        b2bg, b2fg = osctl.detect_fg(rgb2, sz2, bb2)
+        check("detect_fg recovers maroon bg and near-white ink",
+              close(b2bg, hx("#5a0f14")) and close(b2fg, hx("#f5f5f5")),
+              "%s/%s" % (b2bg, b2fg))
+        check("read_text with detect_fg reads 'BACK'",
+              osctl.read_text(rgb2, sz2, bb2, atlas, b2fg) == "BACK",
+              repr(osctl.read_text(rgb2, sz2, bb2, atlas, b2fg)))
+
+    # Case 3: black ink on green — the darkest-on-light scheme also recovers.
+    rgb3, sz3, bb3 = colored("OK", "#101010", "#b4eba0")
+    if bb3 is not None:
+        b3bg, b3fg = osctl.detect_fg(rgb3, sz3, bb3)
+        check("detect_fg recovers green bg and black ink",
+              close(b3bg, hx("#b4eba0")) and close(b3fg, hx("#101010")),
+              "%s/%s" % (b3bg, b3fg))
+        check("read_text with detect_fg reads 'OK'",
+              osctl.read_text(rgb3, sz3, bb3, atlas, b3fg) == "OK",
+              repr(osctl.read_text(rgb3, sz3, bb3, atlas, b3fg)))
+
+    # A UNIFORM region (a solid fill, no ink): detect_fg refuses — fg is None.
+    rgbu, szu, bbu = colored("", "#0d2860", "#0d2860")
+    if bbu is not None:
+        ubg, ufg = osctl.detect_fg(rgbu, szu, bbu)
+        check("detect_fg returns the field colour as bg on a uniform region",
+              close(ubg, hx("#0d2860")), repr(ubg))
+        check("detect_fg refuses (fg=None) when the region holds no ink",
+              ufg is None, repr(ufg))
+    # The gate is the distance: demanding an impossibly far ink refuses real ink too.
+    _, far = osctl.detect_fg(rgb, sz, bb, min_dist=10 ** 6)
+    check("detect_fg with an unreachable min_dist refuses (fg=None)",
+          far is None, repr(far))
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -3663,7 +3780,7 @@ def main() -> int:
               round_three_finger_swipe, round_edge_swipe,
               round_touch_drag_to, round_read_text, round_read_kerned,
               round_read_block, round_read_words, round_read_glyph_conf,
-              round_read_text_conf]
+              round_read_text_conf, round_detect_fg]
     for r in rounds:
         try:
             r(b, offline)

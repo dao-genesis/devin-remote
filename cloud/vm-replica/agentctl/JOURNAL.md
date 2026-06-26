@@ -2307,6 +2307,48 @@ whole inherits its silence.
 
 ---
 
+## F109 — a reader needs the ink colour, but layout only gives bounds
+
+**Friction.** Every reader in `osctl` — `segment_run`, `read_text`, `read_block`,
+`read_text_conf` — demands the caller pass `fg`, the text colour, and segments the
+region by proximity to it. But a control found by *layout* (a button's bounds, a
+label's box from the DOM) arrives with no colour attached: you know *where* the
+text is, not what colour the page drew it. Hand such a region to `read_text` with
+the wrong `fg` and it finds no ink at all and reads `""` — the whole reading stack
+is blind to text whose colour it was not told in advance. Location is not enough;
+reading needs the ink colour, and nothing supplied it from the pixels themselves.
+
+**Mechanism.** The region carries the answer. A label is a large flat field of
+*background* pixels with a sparse scatter of *ink* on top. Quantise the region to
+`q`-step buckets and histogram them: the background is simply the most frequent
+bucket, and the ink is the most frequent bucket that lies *far* from it (L1
+distance `> min_dist`). Anti-alias fringe colours sit *between* ink and background
+and are rarer than either, so they never win. A *uniform* region (a blank panel,
+a solid fill) has no bucket far from its background — so there is no ink, and
+`fg` is honestly `None` rather than a promoted fringe or noise pixel.
+
+**Primitive:** `detect_fg(rgb, size, bbox, q=16, min_dist=120)` returns `(bg, fg)`
+where `fg` is `None` when the region holds no ink. The quantised `fg` still falls
+within a reader's `tol` of the true colour, so it can be handed straight to
+`read_text`/`read_block` to unblock reading a region found by layout alone.
+
+**Live (R73):** a magenta atlas reads lines drawn in *other* colours once
+`detect_fg` supplies the right `fg`. Yellow-on-navy, near-white-on-maroon and
+black-on-green regions each have both colours recovered within tolerance; the same
+`read_text` told the *wrong* `fg` (magenta) reads `""` (the friction) but reads
+`"CAB"`/`"BACK"`/`"OK"` once given `detect_fg`'s colour; a uniform field returns
+its colour as `bg` and refuses `fg=None`; and demanding an unreachable `min_dist`
+refuses real ink too (`fg=None`) — the gate is the distance. `493/493 checks
+passed`, deterministic ×3.
+
+**Lesson (道法自然):** 知人者智，自知者明 — to know others is wisdom, to know
+oneself is clarity. The readers asked the caller to *know* the colour; F109 lets
+the region *know itself*, reading its own ink from its own pixels. And it keeps
+the F107/F108 honesty: where there is no ink to name, it says `None` rather than
+inventing one.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
