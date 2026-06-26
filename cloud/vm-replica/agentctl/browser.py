@@ -721,6 +721,40 @@ class Browser:
             time.sleep(0.03)
         return True
 
+    def key_activate(self, selector: str, key: str = "Enter",
+                     by_text: bool = False, tag: str | None = None) -> bool:
+        """Activate a control with the **keyboard** (F085). A great many custom and
+        ARIA controls bind their action to a *keydown* of Enter or Space on a
+        *focused* element — ``role="button"`` divs, listbox options, custom
+        checkboxes, menu items — and ignore mouse clicks outright: :meth:`click`
+        dispatches a pointer click the ``keydown`` handler never hears, so the
+        action stays dead while ``click`` returns ``True`` and lies. A human reaches
+        such a control by Tab-then-Enter, not the mouse. Crucially the keyboard
+        reaches a focusable element *even when a transparent overlay occludes the
+        pointer* — exactly where :meth:`click` (F061) honestly refuses — so this is
+        a second door when the first is blocked. We focus the element and verify it
+        actually took focus (an element with no ``tabindex`` and no native
+        focusability cannot be keyboard-activated → ``False``, an honest no), then
+        dispatch a faithful ``keyDown``/``keyUp`` for Enter (vk 13) or Space (vk 32)
+        so the handler reads the right ``e.key``. Returns ``True`` once fired,
+        ``False`` if the element is absent or cannot hold focus."""
+        if by_text:
+            tag_lit = "null" if tag is None else repr(tag)
+            locate = f"window.__agentctl.byText({selector!r},{tag_lit})"
+        else:
+            locate = f"window.__agentctl.deepQuery({selector!r})"
+        self._inject_helpers()
+        focused = self.eval(
+            f"(function(){{var el={locate};if(!el)return false;"
+            f"el.focus();return el===document.activeElement;}})()")
+        if not focused:
+            return False
+        desc = {"Enter": ("Enter", "Enter", 13),
+                " ": (" ", "Space", 32),
+                "Space": (" ", "Space", 32)}.get(key, (key, key, None))
+        self.press_key(desc[0], desc[1], desc[2])
+        return True
+
     def _pierce_node(self, selector: str) -> int | None:
         """nodeId of the first element matching ``selector`` anywhere in the
         document — *including inside closed shadow roots* (F074) — or ``None``.

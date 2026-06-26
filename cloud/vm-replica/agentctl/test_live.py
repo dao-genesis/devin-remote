@@ -2141,6 +2141,57 @@ def round_zoom_pane(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_key_activate(b: Browser, offline: bool) -> None:
+    print("R49: keyboard-activate a keydown-only control (F085) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>kbd</title>"
+            b"<div id=btn role=button tabindex=0 "
+            b"style='width:160px;height:40px;border:1px solid;padding:8px'>Submit</div>"
+            b"<div id=plain "
+            b"style='width:160px;height:40px;border:1px solid;padding:8px'>NoTab</div>"
+            b"<div id=veil style='position:fixed;inset:0;background:rgba(0,0,0,0);"
+            b"display:none'></div>"
+            b"<div id=log></div>"
+            b"<script>window.__fire=0;var d=document.getElementById('btn');"
+            b"d.addEventListener('keydown',function(e){"
+            b"if(e.key==='Enter'||e.key===' '){window.__fire++;"
+            b"document.getElementById('log').textContent='FIRED '+e.key;}});</script>")
+    sp = _serve(8978, page)
+    try:
+        b.navigate("http://127.0.0.1:8978/")
+        time.sleep(0.2)
+        # A mouse click never reaches a keydown-only handler.
+        check("a click leaves the keydown-only control dead",
+              b.click("#btn") is True and b.eval("window.__fire") == 0,
+              repr(b.eval("window.__fire")))
+        # key_activate focuses and presses Enter, which the handler hears.
+        check("key_activate fires the control with Enter",
+              b.key_activate("#btn") is True)
+        check("the keydown handler fired once with Enter",
+              b.eval("window.__fire") == 1
+              and b.eval("document.getElementById('log').textContent") == "FIRED Enter",
+              repr(b.eval("document.getElementById('log').textContent")))
+        # Space also activates it.
+        check("key_activate with Space fires too",
+              b.key_activate("#btn", key="Space") is True
+              and b.eval("window.__fire") == 2, repr(b.eval("window.__fire")))
+        # The keyboard reaches it even under a pointer-occluding overlay,
+        # exactly where click() honestly refuses.
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("click refuses through the overlay (F061)",
+              b.click("#btn") is False)
+        check("key_activate still reaches it through the overlay",
+              b.key_activate("#btn") is True and b.eval("window.__fire") == 3,
+              repr(b.eval("window.__fire")))
+        b.eval("document.getElementById('veil').style.display='none'")
+        # An element that cannot hold focus cannot be keyboard-activated.
+        check("key_activate on a non-focusable element returns False",
+              b.key_activate("#plain") is False)
+        check("key_activate on an absent element returns False",
+              b.key_activate("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2159,7 +2210,7 @@ def main() -> int:
               round_ctrl_multi_select, round_shift_range_select,
               round_nested_submenu, round_drag_reorder,
               round_scroll_into_view, round_double_click,
-              round_press_hold, round_zoom_pane]
+              round_press_hold, round_zoom_pane, round_key_activate]
     for r in rounds:
         try:
             r(b, offline)

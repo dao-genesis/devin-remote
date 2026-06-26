@@ -1345,6 +1345,38 @@ lets the same gesture become two. 同出而異名 — same wheel out, different 
 
 ---
 
+## F085 — keyboard-activate a keydown-only control (`key_activate`) · R49
+
+**Friction:** A great many custom and ARIA controls bind their action to a
+*keydown* of Enter or Space on a *focused* element — `role="button"` divs,
+listbox options, custom checkboxes, menu items — and ignore the mouse outright.
+`click` (F061) dispatches a pointer click the `keydown` handler never hears, so
+the action stays dead while `click` returns `True` and lies. A human reaches such
+a control by Tab-then-Enter, not the mouse. Sharper still: when a transparent
+overlay occludes the pointer, `click` honestly *refuses* — but the keyboard can
+still reach a focused element, a second door standing open where the first is
+walled.
+**Mechanism:** `Input.dispatchKeyEvent` delivers to `document.activeElement`, not
+to a coordinate, so it bypasses pointer hit-testing (and thus pointer occlusion)
+entirely. An element only receives keys if it can hold focus — native controls,
+or anything with `tabindex`; a bare `<div>` cannot. So focusing and checking
+`el===document.activeElement` is an honest test of keyboard-reachability.
+**Primitive:** `Browser.key_activate(selector, key="Enter")` locates the element
+(deepQuery / by-text), focuses it and verifies it actually took focus (no
+`tabindex` / not focusable → `False`, an honest no), then dispatches a faithful
+`keyDown`/`keyUp` for Enter (vk 13) or Space (vk 32) so the handler reads the
+right `e.key`. Live: a `click` leaves `__fire` at 0; `key_activate` fires it once
+with Enter, again with Space; under a transparent veil `click` returns `False`
+while `key_activate` *still* fires it (`__fire` 3); a non-focusable `<div>` →
+`False`; an absent selector → `False`. `280/280 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 天下之至柔，馳騁於天下之致堅 — the softest thing (a
+keystroke that carries no coordinate) rides through where the hardest push (a
+pointer click against an overlay) is stopped cold. When one door is walled,
+knowing the other door exists — and that it needs only focus, not force — is the
+whole art. 無有入於無間: the formless enters where there is no gap.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
