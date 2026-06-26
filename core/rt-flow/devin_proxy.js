@@ -34,6 +34,16 @@ const DEVIN_UA =
 //   复用 socket 后首屏与切页显著提速; maxSockets 适度并行, 空闲 15s 回收。
 const _httpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 64, maxFreeSockets: 16, timeout: 60000 });
 
+// 逐跳头集合 (RFC 7230 §6.1)。缓存命中重放时须剥之 —— 历史落盘条目 baked 了上游
+//   `Connection: close`, 原样回放即令 webview 每分片后拆 TCP; 剥后显式 keep-alive 复用 socket。
+const _HOP_HEADERS = new Set(["connection", "keep-alive", "proxy-connection", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
+function _keepAliveHeaders(h) {
+  const out = {};
+  if (h) for (const k of Object.keys(h)) { if (!_HOP_HEADERS.has(k.toLowerCase())) out[k] = h[k]; }
+  out["Connection"] = "keep-alive";
+  return out;
+}
+
 // 预热逃生开关 (运维/对照基线): 置 DAO_NO_PREWARM=1 关闭后台预热。
 const DAO_NO_PREWARM = !!process.env.DAO_NO_PREWARM;
 
@@ -510,7 +520,7 @@ async function handleRequest(req, res, auth, opts, _log) {
       const body = (hit.base && hit.base !== localBase)
         ? _rebaseAsset(hit.body, hit.base, localBase, _isTextCt(hit.headers))
         : hit.body;
-      res.writeHead(hit.status, hit.headers);
+      res.writeHead(hit.status, _keepAliveHeaders(hit.headers));
       res.end(body);
       return;
     }
@@ -519,7 +529,7 @@ async function handleRequest(req, res, auth, opts, _log) {
     if (disk) {
       const body = _rebaseAsset(disk.body, disk.base, localBase, disk.text);
       _cachePut(targetPath, { status: disk.status, headers: disk.headers, body, base: localBase }); // 提升入内存
-      res.writeHead(disk.status, disk.headers);
+      res.writeHead(disk.status, _keepAliveHeaders(disk.headers));
       res.end(body);
       return;
     }
@@ -586,6 +596,9 @@ async function handleRequest(req, res, auth, opts, _log) {
       }
 
       // 安全头剥离 — 反代核心: 去 X-Frame-Options/CSP 方可嵌入 IDE iframe。
+      //   并剥逐跳头 (RFC 7230 §6.1): 上游 CloudFront 对静态资源回 `Connection: close`,
+      //   若原样透传给 webview 则每个资源响应后即拆 TCP → 多实例首开数百分片各自重握手,
+      //   正是「IDE 内多实例慢于浏览器」之剩余税。剥之并显式置 keep-alive → 客户端复用 socket。
       const safeHeaders = {};
       for (const k of Object.keys(proxyRes.headers)) {
         const kl = k.toLowerCase();
@@ -597,11 +610,20 @@ async function handleRequest(req, res, auth, opts, _log) {
           kl === "x-content-type-options" ||
           kl === "content-encoding" ||
           kl === "content-length" ||
-          kl === "transfer-encoding"
+          kl === "transfer-encoding" ||
+          kl === "connection" ||
+          kl === "keep-alive" ||
+          kl === "proxy-connection" ||
+          kl === "proxy-authenticate" ||
+          kl === "proxy-authorization" ||
+          kl === "te" ||
+          kl === "trailer" ||
+          kl === "upgrade"
         )
           continue;
         safeHeaders[k] = proxyRes.headers[k];
       }
+      safeHeaders["Connection"] = "keep-alive";
 
       // SSE 流式直通 (Devin Cloud 会话实时事件不可缓冲)。
       if (ct.includes("text/event-stream") && !res.headersSent) {
