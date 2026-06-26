@@ -1949,6 +1949,44 @@ it simply lets the third point arrive, and the count itself is the meaning.
 道生一，一生二，二生三：each finger added is a turn of the same wheel, and the
 view reads only the number that has gathered.
 
+## F101 — edge swipe (`edge_swipe`) · R65
+
+**Friction:** A back-swipe, an edge drawer, a peek-from-the-side panel — these
+arm only when the touch *starts* inside a thin band hugging one border and then
+travels inward, reading `e.touches[0].clientX` at `touchstart` and ignoring any
+gesture that begins out in the body. A normal `swipe` (F092) starts at the
+*center* of the element, so the edge handler files it as a mid-start and never
+opens — the same finger, the same motion, but the wrong *origin*.
+
+**Mechanism:** The realistic handler latches the starting x at `touchstart`. On
+each `touchmove` it short-circuits to a `midstart` flag if the stroke began more
+than a small margin from the edge (`sx>24`); only a stroke born on the rim is
+measured for inward travel, opening once it passes a threshold. A page that
+watches both flags sees `midstart=1, opened=0` under a centered swipe and
+`opened≈dx, midstart=0` only when the stroke starts on the border — so the
+gesture is defined purely by *where the finger lands*, not by what it traces.
+
+**Primitive:** `Browser.edge_swipe(selector, dx, dy, edge="left", margin=4)`
+resolves the honest hit point (F061), refuses if occluded, reads the element
+rectangle (F073), places the first touch `margin` pixels inside the chosen
+`edge` (`"left"`/`"right"`/`"top"`/`"bottom"`) at the perpendicular center, then
+translates by `(dx, dy)` in steps issuing `touchMove` events so the handler sees
+the stroke leave the rim, and lifts with `touchEnd`. Returns `True` once the
+swipe completes, `False` if the element is absent or occluded.
+
+**Live (R65):** the page starts unfired (`opened=0, midstart=0`); a centered
+`swipe` files as a mid-start and never opens (`opened=0, midstart=1`); an
+`edge_swipe` born on the rim opens the gesture (`opened≥40, midstart=0`); under
+a transparent veil `edge_swipe` → `False` and nothing opens; an absent selector
+→ `False`. `397/397 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 大道甚夷 — the great way is very level, yet the gate is
+narrow. Two strokes can be identical in finger, force, and path and still differ
+in everything that matters, because one is born on the rim and one in the body.
+知其所止 — to know *where* a thing begins is to know whether it begins at all.
+The primitive does not push harder; it simply starts in the right place, and the
+origin itself is the meaning.
+
 ---
 
 ## Frontier (next honest rounds)

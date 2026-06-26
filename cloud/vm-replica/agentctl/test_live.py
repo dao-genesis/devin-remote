@@ -2953,6 +2953,56 @@ def round_three_finger_swipe(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_edge_swipe(b: Browser, offline: bool) -> None:
+    print("R65: edge swipe (F101) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>edge</title>"
+            b"<style>html,body{margin:0}"
+            b"#b{width:320px;height:220px;background:#dde}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=b>edge</div><div id=veil></div>"
+            b"<script>window.opened=0;window.midstart=0;var sx=null;"
+            b"var el=document.getElementById('b');"
+            b"el.addEventListener('touchstart',function(e){"
+            b"sx=e.touches[0].clientX;},{passive:true});"
+            b"el.addEventListener('touchmove',function(e){"
+            b"if(sx===null)return;"
+            b"if(sx>24){window.midstart=1;return;}"
+            b"var dx=e.touches[0].clientX-sx;"
+            b"if(dx>40){window.opened=Math.round(dx);}},{passive:true});"
+            b"el.addEventListener('touchend',function(e){sx=null;},{passive:true});"
+            b"</script>")
+    sp = _serve(8998, page)
+
+    def st():
+        return (b.eval("window.opened"), b.eval("window.midstart"))
+
+    def reset() -> None:
+        b.eval("window.opened=0;window.midstart=0;")
+    try:
+        b.navigate("http://127.0.0.1:8998/")
+        time.sleep(0.2)
+        check("edge swipe starts unfired", st() == (0, 0), repr(st()))
+        # Friction: a normal swipe starts mid-element, never on the rim.
+        check("swipe (mid-start) never opens the edge gesture",
+              b.swipe("#b", 120, 0) is True
+              and st()[0] == 0 and st()[1] == 1, repr(st()))
+        # Primitive: the stroke begins in the edge band and travels inward.
+        reset()
+        check("edge_swipe born on the rim opens the gesture",
+              b.edge_swipe("#b", 120, 0) is True
+              and st()[0] >= 40 and st()[1] == 0, repr(st()))
+        b.eval("document.getElementById('veil').style.display='block'")
+        reset()
+        check("edge_swipe refuses through an overlay",
+              b.edge_swipe("#b", 120, 0) is False)
+        check("nothing opened while occluded", st() == (0, 0), repr(st()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("edge_swipe on an absent element returns False",
+              b.edge_swipe("#nope", 120, 0) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2977,7 +3027,7 @@ def main() -> int:
               round_tap, round_swipe, round_pinch, round_rotate,
               round_touch_hold, round_double_tap, round_two_finger_tap,
               round_touch_drag, round_two_finger_pan,
-              round_three_finger_swipe]
+              round_three_finger_swipe, round_edge_swipe]
     for r in rounds:
         try:
             r(b, offline)

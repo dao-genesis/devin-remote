@@ -1137,6 +1137,54 @@ class Browser:
                       {"type": "touchEnd", "touchPoints": []})
         return True
 
+    def edge_swipe(self, selector: str, dx: float, dy: float,
+                   edge: str = "left", margin: float = 4.0,
+                   by_text: bool = False, tag: str | None = None) -> bool:
+        """Swipe a gesture that must **begin at the element's edge** (F101). A
+        back-swipe, an edge drawer, a peek-from-the-side panel — these arm only
+        when the touch *starts* inside a thin band hugging one border and then
+        travels inward, reading ``e.touches[0].clientX`` (or ``clientY``) at
+        ``touchstart`` and ignoring any gesture that begins out in the body. A
+        normal :meth:`swipe` (F092) starts at the *center* of the element, so the
+        edge handler files it as a mid-start and never opens — the same finger,
+        the same motion, but the wrong *origin*. The friction is the **start
+        coordinate**, not the path: the view answers only to a stroke born on the
+        rim. We resolve the honest hit point (F061), refuse if occluded, read the
+        element rectangle (F073), place the first touch ``margin`` pixels inside
+        the chosen ``edge`` (``"left"``/``"right"``/``"top"``/``"bottom"``) at the
+        perpendicular center, then translate by ``(dx, dy)`` in steps issuing
+        ``touchMove`` events so the handler sees the stroke leave the rim, and
+        lift with ``touchEnd``. Returns ``True`` once the swipe completes,
+        ``False`` if the element is absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        r = self._rect_of(selector)
+        if not r:
+            return False
+        left, top, w, h = r["left"], r["top"], r["width"], r["height"]
+        cx, cy = left + w / 2.0, top + h / 2.0
+        if edge == "right":
+            sx, sy = left + w - margin, cy
+        elif edge == "top":
+            sx, sy = cx, top + margin
+        elif edge == "bottom":
+            sx, sy = cx, top + h - margin
+        else:  # "left" (default)
+            sx, sy = left + margin, cy
+        steps = max(2, int((abs(dx) + abs(dy)) / 10) + 1)
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchStart",
+                       "touchPoints": [{"x": sx, "y": sy, "id": 0}]})
+        for i in range(1, steps + 1):
+            self.cdp.call("Input.dispatchTouchEvent",
+                          {"type": "touchMove",
+                           "touchPoints": [{"x": sx + dx * i / steps,
+                                            "y": sy + dy * i / steps, "id": 0}]})
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchEnd", "touchPoints": []})
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A
