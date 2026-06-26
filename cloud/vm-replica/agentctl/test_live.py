@@ -2047,6 +2047,51 @@ def round_double_click(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_press_hold(b: Browser, offline: bool) -> None:
+    print("R47: press-and-hold to confirm (F083) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>hold</title>"
+            b"<button id=del style='width:160px;height:44px'>Hold to delete</button>"
+            b"<div id=veil style='position:fixed;inset:0;background:rgba(0,0,0,0);"
+            b"display:none'></div>"
+            b"<div id=log></div>"
+            b"<script>window.__done=0;var t=null;"
+            b"var d=document.getElementById('del');"
+            b"d.addEventListener('mousedown',function(){t=setTimeout(function(){"
+            b"window.__done++;document.getElementById('log').textContent='DELETED';"
+            b"},500);});"
+            b"function cancel(){if(t){clearTimeout(t);t=null;}}"
+            b"d.addEventListener('mouseup',cancel);"
+            b"d.addEventListener('mouseleave',cancel);</script>")
+    sp = _serve(8974, page)
+    try:
+        b.navigate("http://127.0.0.1:8974/")
+        time.sleep(0.2)
+        # An instant click presses and releases before the 500ms timer elapses.
+        check("an instant click never commits the hold",
+              b.click("#del") is True and b.eval("window.__done") == 0)
+        # press_hold keeps the button down past the dwell, so the timer fires.
+        check("press_hold completes the gesture",
+              b.press_hold("#del", hold=0.8) is True)
+        check("the dwell timer committed exactly once",
+              b.eval("window.__done") == 1, repr(b.eval("window.__done")))
+        check("the action confirmed", b.eval(
+            "document.getElementById('log').textContent") == "DELETED")
+        # A hold shorter than the dwell is released too early to commit.
+        b.eval("window.__done=0;document.getElementById('log').textContent='';")
+        check("a too-short hold does not commit",
+              b.press_hold("#del", hold=0.15) is True
+              and b.eval("window.__done") == 0, repr(b.eval("window.__done")))
+        # Honest refusal under an overlay, and on an absent target.
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("press_hold refuses through an overlay",
+              b.press_hold("#del", hold=0.8) is False)
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("press_hold on an absent element returns False",
+              b.press_hold("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2064,7 +2109,8 @@ def main() -> int:
               round_closed_shadow, round_type_closed_shadow, round_marquee,
               round_ctrl_multi_select, round_shift_range_select,
               round_nested_submenu, round_drag_reorder,
-              round_scroll_into_view, round_double_click]
+              round_scroll_into_view, round_double_click,
+              round_press_hold]
     for r in rounds:
         try:
             r(b, offline)
