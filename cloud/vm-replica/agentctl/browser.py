@@ -693,6 +693,34 @@ class Browser:
                        "button": "left", "buttons": 0, "clickCount": 1})
         return True
 
+    def zoom_at(self, selector: str, steps: int = 1, out: bool = False,
+                by_text: bool = False, tag: str | None = None) -> bool:
+        """Pinch-zoom a pane with Ctrl+wheel (F084). A slippy map, an image or PDF
+        viewer, a diagram canvas — these tell *zoom* apart from *pan* by the wheel's
+        Ctrl modifier (``if(e.ctrlKey) zoom; else pan;``), which is exactly what
+        Chrome turns a trackpad pinch into. :meth:`wheel_at` (F070) dispatches a
+        ``mouseWheel`` with no modifiers, so it can only ever reach the *pan* branch
+        — the pane never scales — yet it returns ``True`` and lies about having
+        zoomed. We aim at the honest hit point (F061), refuse if occluded (a wheel
+        is delivered to the topmost element under the point, so an overlay would
+        swallow it), then dispatch ``mouseWheel`` carrying ``modifiers:2`` (Ctrl)
+        with ``deltaY<0`` to zoom in (``out=True`` for ``deltaY>0`` to zoom out),
+        repeated ``steps`` times — which the pane reads as ``e.ctrlKey`` and routes
+        to its zoom path. Returns ``True`` once the wheels fire, ``False`` if the
+        target is absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p:
+            return False
+        if p.get("occluded"):
+            return False
+        dy = 120 if out else -120
+        for _ in range(max(1, steps)):
+            self.cdp.call("Input.dispatchMouseEvent",
+                          {"type": "mouseWheel", "x": p["x"], "y": p["y"],
+                           "deltaX": 0, "deltaY": dy, "modifiers": 2})
+            time.sleep(0.03)
+        return True
+
     def _pierce_node(self, selector: str) -> int | None:
         """nodeId of the first element matching ``selector`` anywhere in the
         document — *including inside closed shadow roots* (F074) — or ``None``.

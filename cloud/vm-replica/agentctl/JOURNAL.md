@@ -1317,6 +1317,34 @@ what the rigid instantaneous click can never do; duration, not force, is the key
 
 ---
 
+## F084 — pinch-zoom a pane with Ctrl+wheel (`zoom_at`) · R48
+
+**Friction:** A slippy map, an image/PDF viewer, or a diagram canvas distinguishes
+*zoom* from *pan* by the wheel's Ctrl modifier — `if(e.ctrlKey) zoom; else pan;` —
+which is exactly what Chrome folds a trackpad pinch into. `wheel_at` (F070)
+dispatches a `mouseWheel` carrying no modifiers, so it can only ever reach the
+*pan* branch: the pane scrolls but never scales, yet `wheel_at` returns `True`
+and lies about having zoomed. A human pinches; we had no pinch.
+**Mechanism:** `Input.dispatchMouseEvent{type:mouseWheel}` accepts the same
+`modifiers` bitmask as a mouse event (Ctrl=2). The page's `wheel` handler reads
+`e.ctrlKey` off the synthesised event, so a wheel with `modifiers:2` is routed to
+the zoom path while an unmodified one pans — the modifier *is* the difference
+between scrolling and scaling.
+**Primitive:** `Browser.zoom_at(selector, steps=1, out=False)` aims at the honest
+hit point (F061) — refusing if occluded, since a wheel is delivered to the topmost
+element under the point and an overlay would swallow it — then dispatches
+`mouseWheel` with `modifiers:2` and `deltaY<0` to zoom in (`out=True` →
+`deltaY>0`), `steps` times. Live: a plain `wheel_at` leaves `__zoom` at 0 (only
+`__pan`); `zoom_at(steps=2)` fires the zoom branch twice and scales up while pan
+stays put; `zoom_at(out=True)` drives the scale back down; a transparent veil →
+`False` (nothing zoomed); an absent selector → `False`. `272/272 checks passed`,
+deterministic ×3.
+**Lesson (道法自然):** 道生一，一生二 — pan and zoom are two faces of one wheel,
+parted only by a single held key; naming that key (the Ctrl modifier) is what
+lets the same gesture become two. 同出而異名 — same wheel out, different name in.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

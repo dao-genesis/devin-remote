@@ -2092,6 +2092,55 @@ def round_press_hold(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_zoom_pane(b: Browser, offline: bool) -> None:
+    print("R48: pinch-zoom a pane with Ctrl+wheel (F084) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>zoom</title>"
+            b"<div id=map style='width:300px;height:200px;border:1px solid'></div>"
+            b"<div id=veil style='position:fixed;inset:0;background:rgba(0,0,0,0);"
+            b"display:none'></div>"
+            b"<div id=log></div>"
+            b"<script>window.__pan=0;window.__zoom=0;window.__scale=1;"
+            b"var m=document.getElementById('map');"
+            b"m.addEventListener('wheel',function(e){e.preventDefault();"
+            b"if(e.ctrlKey){window.__zoom++;window.__scale*=(e.deltaY<0?1.1:0.9);"
+            b"document.getElementById('log').textContent="
+            b"'ZOOM '+window.__scale.toFixed(2);}"
+            b"else{window.__pan++;document.getElementById('log').textContent='PAN';}},"
+            b"{passive:false});</script>")
+    sp = _serve(8975, page)
+    try:
+        b.navigate("http://127.0.0.1:8975/")
+        time.sleep(0.2)
+        # A plain wheel reaches only the pan branch; the pane never scales.
+        check("plain wheel_at pans, never zooms",
+              b.wheel_at("#map", -120) is True
+              and b.eval("window.__zoom") == 0
+              and b.eval("window.__pan") == 1, repr(b.eval("window.__pan")))
+        # zoom_at carries Ctrl, so the page routes it to its zoom path.
+        check("zoom_at zooms the pane in",
+              b.zoom_at("#map", steps=2) is True)
+        check("the zoom branch fired twice, pan unchanged",
+              b.eval("window.__zoom") == 2 and b.eval("window.__pan") == 1,
+              repr((b.eval("window.__zoom"), b.eval("window.__pan"))))
+        check("the pane scaled up", b.eval("window.__scale") > 1.0,
+              repr(b.eval("window.__scale")))
+        # Zooming out drives the scale back down.
+        check("zoom_at out shrinks the pane",
+              b.zoom_at("#map", steps=2, out=True) is True
+              and b.eval("window.__zoom") == 4, repr(b.eval("window.__zoom")))
+        # Honest refusal under an overlay, and on an absent target.
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("zoom_at refuses through an overlay",
+              b.zoom_at("#map") is False)
+        check("nothing zoomed while occluded",
+              b.eval("window.__zoom") == 4, repr(b.eval("window.__zoom")))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("zoom_at on an absent element returns False",
+              b.zoom_at("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2110,7 +2159,7 @@ def main() -> int:
               round_ctrl_multi_select, round_shift_range_select,
               round_nested_submenu, round_drag_reorder,
               round_scroll_into_view, round_double_click,
-              round_press_hold]
+              round_press_hold, round_zoom_pane]
     for r in rounds:
         try:
             r(b, offline)
