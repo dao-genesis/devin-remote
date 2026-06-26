@@ -27,6 +27,9 @@ const EXT_VERSION: string = (() => {
     return '1.3.2';
 })();
 const DAO_DIR = path.join(os.homedir(), '.dao');
+// 软编码·归一 — 帛书「道生一」: 本机 API 单一权威默认端口。package.json `dao.port` 默认与此恒同;
+//   全部 `ws.port || <数字>` 回落统一引此常量, 杜绝 9910/9921 等散落魔数与清单(9920)漂移失配。
+const DEFAULT_PORT = 9920;
 // 道·无缝接力(seamless handoff) — 帛书·「反者道之动」: 窗口/IDE 重启、切号时账号 API 端口会变,
 //   旧 dao-conn.json 只增不删 → 外部 Agent 无从判定「下一个活接口」, 连续性断需人工接管。
 //   此处让「谁是活的」成为磁盘上的自愈真相: 裁剪死 pid + 维护单一权威 dao-conn-current.json
@@ -1005,7 +1008,7 @@ export async function activate(context: vscode.ExtensionContext) {
 function getDaoConfig() {
     const config = vscode.workspace.getConfiguration('dao');
     return {
-        port: config.get<number>('port', 9910),
+        port: config.get<number>('port', DEFAULT_PORT),
         token: config.get<string>('token', ''),
         relayUrl: config.get<string>('relayUrl', ''),
         autoBridge: config.get<boolean>('autoBridge', true),
@@ -1700,7 +1703,7 @@ async function sigServeFrame(corr: string, full: string): Promise<void> {
     if (!req.path && req.frame) { try { descr = (typeof req.frame === 'string') ? JSON.parse(req.frame) : req.frame; } catch { descr = req; } }
     try {
         const route = String(descr.path || '/api/health').split('?')[0];
-        const parsedUrl = new URL(descr.path || '/api/health', 'http://localhost:' + (ws.port || 9920));
+        const parsedUrl = new URL(descr.path || '/api/health', 'http://localhost:' + (ws.port || DEFAULT_PORT));
         const bodyStr = (descr.body === undefined || descr.body === null) ? '' : (typeof descr.body === 'string' ? descr.body : JSON.stringify(descr.body));
         const fakeReq: any = { headers: descr.headers || { 'content-type': 'application/json' }, method: descr.method || 'GET', socket: { remoteAddress: 'sig' }, url: descr.path || '/api/health', _relayBody: bodyStr };
         const result = await handleRouteInternal(route, parsedUrl, fakeReq, bridgeToken || ws.token);
@@ -3076,7 +3079,7 @@ function bridgeLocalApi(p: string, method: string, body?: any): Promise<{ status
     return new Promise((resolve) => {
         const http = require('http');
         const data = body ? JSON.stringify(body) : null;
-        const req = http.request({ host: '127.0.0.1', port: ws.port || 9920, path: p, method: method || 'GET', headers: { Authorization: 'Bearer ' + (bridgeToken || ws.token), 'Content-Type': 'application/json' } }, (res: any) => {
+        const req = http.request({ host: '127.0.0.1', port: ws.port || DEFAULT_PORT, path: p, method: method || 'GET', headers: { Authorization: 'Bearer ' + (bridgeToken || ws.token), 'Content-Type': 'application/json' } }, (res: any) => {
             let d = ''; res.on('data', (c: any) => d += c); res.on('end', () => resolve({ status: res.statusCode, text: d }));
         });
         req.on('error', (e: any) => resolve({ status: 0, text: String(e.message) }));
@@ -3151,7 +3154,7 @@ async function bridgeStartTunnel(named: boolean) {
     const staleOrphan = cfPidAlive();
     if (staleOrphan) { try { process.kill(staleOrphan); } catch {} }
     const cfPath = bridgeFindCloudflared();
-    const targetPort = ws.port || 9920;
+    const targetPort = ws.port || DEFAULT_PORT;
     const localUrl = `http://127.0.0.1:${targetPort}`;
     let args: string[];
     if (named) {
@@ -3190,7 +3193,7 @@ function bridgePublishPluginApi() {
     try {
         bridgeEnsureDir();
         const data = {
-            port: ws.port || 9920,
+            port: ws.port || DEFAULT_PORT,
             token: ws.token,
             host: os.hostname(),
             pid: process.pid,
@@ -3206,8 +3209,8 @@ function bridgeSaveConnJson() {
     const wsInfo = { name: vscode.workspace.workspaceFolders?.[0]?.name || '', root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '' };
     const data = {
         url: bridgeUrl, token: ws.token || bridgeToken,
-        local_url: 'http://127.0.0.1:' + (ws.port || 9920),
-        port: ws.port || 9920, workspace: wsInfo.name, root: wsInfo.root,
+        local_url: 'http://127.0.0.1:' + (ws.port || DEFAULT_PORT),
+        port: ws.port || DEFAULT_PORT, workspace: wsInfo.name, root: wsInfo.root,
         host: os.hostname(), updated: new Date().toISOString(), version: EXT_VERSION,
     };
     fs.writeFileSync(path.join(BRIDGE_DIR, 'conn.json'), JSON.stringify(data, null, 2), 'utf8');
@@ -3229,7 +3232,7 @@ function bridgeGenerateCloudMd(): string {
     // ① 反向注入自愈: 公网URL 取「进程内隧道 ∪ 常驻桥已发布连接」的有效值, 不再只认进程内 bridgeUrl。
     //   独立 dao-bridge 常驻桥持有隧道时, 进程内 bridgeUrl 恒空 → 旧法注入「(未连接)」害云端找不到端口; 此处回归活地址。
     const url = bridgeEffectiveUrl() || '(未连接)';
-    const port = ws.port || 9920;
+    const port = ws.port || DEFAULT_PORT;
     // 道法自然 · 回归本源 (dao-bridge 初始形态): 内网穿透文档只讲「整机直连」——
     //   接入信息 + 基础整机端点 + Python SDK。四大模块的深层操作已独立为 DAO Bridge MCP
     //   (见「MCP 使用文档」), 本文档不再内联四大模块, 保持简明、日常即用。
@@ -3480,7 +3483,7 @@ async function bridgeInjectKnowledge(): Promise<boolean> {
         const listResult = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1);
         let matches: any[] = [];
         if (listResult.ok && listResult.learnings) {
-            matches = listResult.learnings.filter((k: any) => typeof k.name === 'string' && k.name !== DAO_MCP_KB_NAME && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作本地电脑')));
+            matches = listResult.learnings.filter((k: any) => typeof k.name === 'string' && k.name !== DAO_MCP_KB_NAME && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作用户本地电脑')));
         }
         if (matches.length) {
             // 取最早(稳定锚点)为留存条目; 其余重复删除。
@@ -3534,8 +3537,8 @@ function bridgeReadPublishedConn(): { url: string; token: string; relayUrl?: str
 // 帛书·「反者道之动」: 进程内隧道优先; 否则采纳常驻桥发布的新鲜连接 → 持久显示已连接。
 function bridgeGetState(): any {
     const base = {
-        localPort: ws.port || 9920,
-        localUrl: `http://127.0.0.1:${ws.port || 9920}`,
+        localPort: ws.port || DEFAULT_PORT,
+        localUrl: `http://127.0.0.1:${ws.port || DEFAULT_PORT}`,
         workspace: vscode.workspace.workspaceFolders?.[0]?.name || '',
         root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
         version: EXT_VERSION,
@@ -4942,7 +4945,7 @@ function refreshDaoCloudMiddlePanel() {
             tunnelLastAlive: _bridgeLastAliveMs || 0,
             tunnelFails: _bridgeLivenessFail,
             lastInjectedUrl: _lastInjectedBridgeUrl || '',
-            localPort: ws.port || 9920,
+            localPort: ws.port || DEFAULT_PORT,
             uptime: process.uptime(),
         };
     } catch { data.injectStatus = {}; }
@@ -4963,7 +4966,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'copyBridgeUrl': {
                 // 无公网(relay=local)时回落本机地址, 保证有可复制内容(不报错 ✗)。
                 const c = readBridgeConn();
-                const url = (c && c.url) || ws.publicUrl || ('http://localhost:' + (ws.port || 9921));
+                const url = (c && c.url) || ws.publicUrl || ('http://localhost:' + (ws.port || DEFAULT_PORT));
                 await vscode.env.clipboard.writeText(url);
                 reply({ type: 'actionResult', command: 'copyBridgeUrl', ok: !!url });
                 break;
@@ -4973,7 +4976,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const c = readBridgeConn();
                 const base = (c && c.url)
                     ? String(c.url).replace(/\/+$/, '')
-                    : (ws.publicUrl ? String(ws.publicUrl).replace(/\/+$/, '') : ('http://localhost:' + (ws.port || 9921)));
+                    : (ws.publicUrl ? String(ws.publicUrl).replace(/\/+$/, '') : ('http://localhost:' + (ws.port || DEFAULT_PORT)));
                 const u = base + '/shell';
                 await vscode.env.clipboard.writeText(u);
                 reply({ type: 'actionResult', command: 'copyBridgeShell', ok: !!u });
@@ -6994,7 +6997,7 @@ function agentApiCatalog(): { group: string; items: AgentApiEndpoint[] }[] {
 }
 
 function buildAgentApiDoc(): string {
-    const base = ws.publicUrl || ('http://localhost:' + (ws.port || 9920));
+    const base = ws.publicUrl || ('http://localhost:' + (ws.port || DEFAULT_PORT));
     const fence = '\u0060\u0060\u0060';
     const L: string[] = [];
     const now = new Date().toISOString();
@@ -7082,7 +7085,7 @@ function buildAgentManifest(): any {
         service: 'dao-vsix',
         version: EXT_VERSION,
         generatedAt: new Date().toISOString(),
-        baseUrl: ws.publicUrl || ('http://localhost:' + (ws.port || 9920)),
+        baseUrl: ws.publicUrl || ('http://localhost:' + (ws.port || DEFAULT_PORT)),
         auth: { scheme: 'Bearer', header: 'Authorization', queryParam: 'master_token', token: ws.token || '' },
         state: {
             loggedIn: !!ws.devinAuth1, accountSyncMode: getAccountSyncMode(), websiteLoginMode: getWebsiteLoginMode(),
@@ -10948,7 +10951,7 @@ async function genericWebProxy(targetUrl, depth = 0) {
                 return;
             }
             let html = body.toString('utf8');
-            const pBase = 'http://127.0.0.1:' + (ws && ws.port ? ws.port : 9921) + '/__web?u=';
+            const pBase = 'http://127.0.0.1:' + (ws && ws.port ? ws.port : DEFAULT_PORT) + '/__web?u=';
             const inj = '<base href="' + (u.origin + '/').replace(/"/g, '&quot;') + '">'
                 + '<script>(function(){'
                 + 'var PB=' + JSON.stringify(pBase) + ';'
