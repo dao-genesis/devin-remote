@@ -789,6 +789,60 @@ class Browser:
                        "button": "middle", "buttons": 0, "clickCount": 1})
         return True
 
+    def tap(self, selector: str, by_text: bool = False,
+            tag: str | None = None) -> bool:
+        """Tap an element with a real **touch** point to wake a touch-only handler
+        (F091). A mobile-first carousel, a swipeable gallery, a custom control built
+        on a touch library answer to ``touchstart`` / ``touchend`` and ignore the
+        mouse entirely. A :meth:`click` produces a mouse sequence and a synthesized
+        ``click`` — Chrome does *not* manufacture a ``touchstart`` from it — so the
+        touch handler never runs, yet :meth:`click` still returns ``True``: a silent
+        lie. The faithful gesture is a ``touchStart`` at the element followed by a
+        ``touchEnd``; Chrome then fires ``touchstart``/``touchend`` (and, as a real
+        device would, a compatibility ``click``). We resolve the honest hit point
+        (F061), refuse if every probe spot is occluded, then dispatch the touch pair
+        there. Returns ``True`` once it fires, ``False`` if the element is absent or
+        occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        x, y = p["x"], p["y"]
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchStart",
+                       "touchPoints": [{"x": x, "y": y}]})
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchEnd", "touchPoints": []})
+        return True
+
+    def swipe(self, selector: str, dx: float, dy: float,
+              by_text: bool = False, tag: str | None = None) -> bool:
+        """Swipe across an element with a held **touch** point (F092). A touch
+        carousel advances by a finger drag, a pull-to-refresh pane reads the touch
+        travel, a bottom-sheet is flung by ``touchmove`` distance — all gated on a
+        moving touch, never on the mouse. :meth:`drag_by` (F088) carries mouse
+        ``buttons:1`` moves, which a ``touchmove`` listener never sees; :meth:`tap`
+        (F091) touches but does not travel, so a distance-based swipe stays at zero.
+        We resolve the honest hit point (F061), refuse if occluded, press a touch
+        point, step it along ``(dx, dy)`` issuing ``touchMove`` events so the live
+        swipe handler runs each frame, then lift with ``touchEnd``. Returns ``True``
+        once the swipe completes, ``False`` if the element is absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        x, y = p["x"], p["y"]
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        steps = max(2, int((abs(dx) + abs(dy)) / 10) + 1)
+        for i in range(1, steps + 1):
+            mx = x + dx * i / steps
+            my = y + dy * i / steps
+            self.cdp.call("Input.dispatchTouchEvent",
+                          {"type": "touchMove",
+                           "touchPoints": [{"x": mx, "y": my}]})
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchEnd", "touchPoints": []})
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A
