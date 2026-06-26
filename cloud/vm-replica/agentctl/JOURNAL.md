@@ -836,6 +836,32 @@ of pretending.
 
 ---
 
+### F067 — a context menu answers the right button, not the left
+**Surface:** an app that replaces the OS menu with its own — a file manager's row
+actions, an editor's spell menu, a data grid's cell options. The menu (and every
+item inside it) only appears on the `contextmenu` event. Our `click` (and the
+whole click family) dispatches the **left** button exclusively, so `contextmenu`
+never fires: the menu stays `display:none` and its `Delete`/`Rename`/… items are
+unreachable no matter how precisely we aim.
+**Mechanism:** `contextmenu` is raised by the *right* button, not by a second
+left click. Chrome surfaces a right-button `Input.dispatchMouseEvent` press as a
+real `contextmenu` DOM event at the cursor — the same event a human's right-click
+produces — which the app's handler turns into a positioned menu. We still want the
+hit-verified aim point (F061) so we don't fire the right-click into an overlay and
+lie about it.
+**Primitive:** `Browser.context_click(selector)`. Resolve the same `hitPoint`
+`click` uses (refusing an occluded target under `require_hit`), then dispatch a
+**right**-button press/release there. Live: a left click bumps `__left` but leaves
+`__ctx==0` and the menu hidden; `context_click` raises `contextmenu` once, the
+app's menu becomes visible, and its `Delete` item is then clickable. Absent target
+returns `False`. `157/157 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 知其雄，守其雌 — knowing the dominant (left) button is not
+enough; the menu lives behind the one we'd overlook. 反者道之動 — the answer is
+the *other* button, not more of the same. 信言不美 — no target, no menu; we decline
+rather than pretend a right-click landed.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
