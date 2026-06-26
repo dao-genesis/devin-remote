@@ -2595,6 +2595,58 @@ def round_rotate(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_touch_hold(b: Browser, offline: bool) -> None:
+    print("R59: touch long-press to arm a dwell-gated handler (F095) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>lp</title>"
+            b"<style>html,body{margin:0}"
+            b"#b{width:220px;height:140px;background:#dde}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=b>hold</div><div id=veil></div>"
+            b"<script>window.lp=0;window.ts=0;var t=null;"
+            b"var el=document.getElementById('b');"
+            b"el.addEventListener('touchstart',function(e){window.ts++;"
+            b"t=setTimeout(function(){window.lp++;},350);},{passive:true});"
+            b"el.addEventListener('touchmove',function(e){"
+            b"if(t){clearTimeout(t);t=null;}},{passive:true});"
+            b"el.addEventListener('touchend',function(e){"
+            b"if(t){clearTimeout(t);t=null;}},{passive:true});"
+            b"</script>")
+    sp = _serve(8988, page)
+
+    def lp() -> int:
+        return b.eval("window.lp")
+
+    def ts() -> int:
+        return b.eval("window.ts")
+    try:
+        b.navigate("http://127.0.0.1:8988/")
+        time.sleep(0.2)
+        check("long-press starts unfired", lp() == 0 and ts() == 0,
+              repr((lp(), ts())))
+        # Friction: a mouse press sends no touchstart — the dwell never arms.
+        check("mouse press_hold never arms a touch long-press",
+              b.press_hold("#b", 0.6) is True and ts() == 0 and lp() == 0,
+              repr((ts(), lp())))
+        # Friction: a tap fires touchstart but lifts at once, cancelling the timer.
+        check("tap fires touchstart but cancels the dwell timer",
+              b.tap("#b") is True and ts() == 1 and lp() == 0,
+              repr((ts(), lp())))
+        # Primitive: a held, motionless touch lets the dwell timer elapse.
+        check("touch_hold holds past the dwell and fires once",
+              b.touch_hold("#b", 0.6) is True and lp() == 1, repr(lp()))
+        check("touch_hold issues no move (timer never cancelled)",
+              ts() == 2, repr(ts()))
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("touch_hold refuses through an overlay",
+              b.touch_hold("#b", 0.6) is False)
+        check("nothing fired while occluded", lp() == 1, repr(lp()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("touch_hold on an absent element returns False",
+              b.touch_hold("#nope", 0.6) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2616,7 +2668,8 @@ def main() -> int:
               round_press_hold, round_zoom_pane, round_key_activate,
               round_key_step, round_triple_click, round_drag_by,
               round_middle_click, round_right_drag_by,
-              round_tap, round_swipe, round_pinch, round_rotate]
+              round_tap, round_swipe, round_pinch, round_rotate,
+              round_touch_hold]
     for r in rounds:
         try:
             r(b, offline)
