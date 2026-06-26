@@ -472,13 +472,92 @@ def round_color_blobs(b: Browser, offline: bool) -> None:
               b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
 
 
+def round_template_match(b: Browser, offline: bool) -> None:
+    print("R17: pick same-colour target by appearance, not colour/position (F053) — osctl")
+    # Two identically-coloured, identically-sized squares differing ONLY by the
+    # black glyph inside. Colour-segmentation (F052) recovers both regions but
+    # cannot say which is the target, and position is arbitrary — here the
+    # target sits on the LEFT, so the R16 "right-most" heuristic picks the DECOY.
+    # Only matching a reference patch by appearance resolves it.
+    cross = ("x.fillStyle='#000';x.fillRect(X+34,Y+12,12,56);"
+             "x.fillRect(X+12,Y+34,56,12);")
+    tri = ("x.fillStyle='#000';x.beginPath();x.moveTo(X+40,Y+14);"
+           "x.lineTo(X+66,Y+66);x.lineTo(X+14,Y+66);x.closePath();x.fill();")
+    # Phase 1: render the target glyph ALONE and capture it as a reference patch.
+    proto = fixture("proto.html",
+                    "<!doctype html><title>proto</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=300 height=200 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,300,200);"
+                    "var X=110,Y=60;x.fillStyle='#ff00ff';x.fillRect(X,Y,80,80);" + cross
+                    + "</script>")
+    b.navigate(proto)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    sq = osctl.find_color((255, 0, 255), tol=40, rgb=rgb, size=(w, h))
+    check("captured a reference square", sq is not None and sq["count"] > 500)
+    patch, pw, ph = osctl.crop_rgb(rgb, (w, h), sq["bbox"])
+    check("reference patch cropped", pw > 40 and ph > 40, f"{pw}x{ph}")
+    # Phase 2: target(cross) LEFT, decoy(triangle) RIGHT.
+    scene = fixture("scene.html",
+                    "<!doctype html><title>scene</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=600 height=260 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,600,260);"
+                    "var TGT=[80,90,80,80],DEC=[440,90,80,80];"
+                    "x.fillStyle='#ff00ff';x.fillRect(TGT[0],TGT[1],80,80);"
+                    "x.fillRect(DEC[0],DEC[1],80,80);"
+                    "var X=TGT[0],Y=TGT[1];" + cross + "X=DEC[0];Y=DEC[1];" + tri +
+                    "function inb(p,r){return p[0]>=r[0]&&p[0]<=r[0]+r[2]"
+                    "&&p[1]>=r[1]&&p[1]<=r[1]+r[3];}"
+                    "c.addEventListener('click',function(e){"
+                    "var r=c.getBoundingClientRect(),p=[e.clientX-r.left,e.clientY-r.top];"
+                    "if(inb(p,TGT)){document.title='TARGET-HIT';}"
+                    "else if(inb(p,DEC)){document.title='DECOY';}"
+                    "else{document.title='MISS';}});</script>")
+    b.navigate(scene)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    blobs = osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rgb, size=(w, h),
+                                   min_count=200)
+    check("two same-colour candidates found", len(blobs) == 2,
+          str([bl["x"] for bl in blobs]))
+    if len(blobs) == 2:
+        # Friction: the position heuristic (right-most) lands on the DECOY.
+        right = max(blobs, key=lambda bl: bl["x"])
+        osctl.click(right["x"], right["y"])
+        check("right-most heuristic picks the wrong (decoy) square",
+              b.wait_for("document.title==='DECOY'", timeout=3), b.title())
+        b.eval("document.title='scene'")
+        # Primitive: score each candidate by appearance; lowest SAD wins.
+        scored = []
+        for bl in blobs:
+            x0, y0, x1, y1 = bl["bbox"]
+            m = osctl.match_template(patch, pw, ph, rgb=rgb, size=(w, h),
+                                     search=(x0 - 6, y0 - 6, x1 + 6, y1 + 6), step=2)
+            if m:
+                scored.append((m, bl))
+        check("template matched every candidate", len(scored) == 2)
+        best, _bl = min(scored, key=lambda t: t[0]["score"])
+        worst = max(scored, key=lambda t: t[0]["score"])[0]
+        check("target (cross) scores far below decoy (triangle)",
+              best["score"] * 4 < worst["score"],
+              f"best={best['score']} worst={worst['score']}")
+        check("best match is the left target, not the right-most",
+              best["x"] < right["x"], f"match_x={best['x']} rightmost_x={right['x']}")
+        osctl.click(best["x"], best["y"])
+        check("appearance-matched click hits the intended target",
+              b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
     rounds = [round_navigate_read, round_atomic_type, round_click_text, round_dialog,
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
-              round_canvas_pixel, round_ime_compose, round_color_blobs]
+              round_canvas_pixel, round_ime_compose, round_color_blobs,
+              round_template_match]
     for r in rounds:
         try:
             r(b, offline)

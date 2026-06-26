@@ -385,6 +385,37 @@ the will selects among it.
 
 ---
 
+### F053 — two things the same colour, the same size: only the shape tells them apart
+**Surface:** two magenta squares, identical in colour *and* size, differing only
+by the black glyph painted inside — one holds a cross (the target), one a
+triangle (the decoy). A human reads the *shapes* and aims at the cross. F052's
+`find_color_blobs` now correctly sees *two* regions, but both report the same
+colour and the same area; nothing in the colour channel distinguishes them.
+**Mechanism:** segmentation recovered the plurality (good) but the tie-breaker
+left to the caller is *position*, and position is arbitrary. Here the target is
+the LEFT square, so the natural R16 heuristic — "take the right-most" — lands
+confidently on the *decoy* (`DECOY`). The information that separates them is not
+where they are or what colour they are; it is what they *look like*. Colour and
+position are exhausted — appearance is the only remaining channel.
+**Primitive:** `osctl.crop_rgb(rgb, size, bbox)` cuts a reference patch out of a
+capture (turning *what was seen there once* into something recognisable
+elsewhere), and `osctl.match_template(patch, pw, ph, …, search, step)` slides
+that patch over a region and scores every offset by sum-of-absolute-difference
+on luma — lowest score is the closest match — returning `{x, y, score, bbox}`
+centred in screen coordinates. The idiom is *colour to narrow the field,
+appearance to choose within it*: `find_color_blobs` gives the candidates, then
+`match_template` scores each one's bbox against the reference. The cross scores
+`0` (it *is* the reference); the triangle scores `116764`. The agent picks the
+left target by appearance and the OS click lands dead-on (`TARGET-HIT`).
+`57/57 checks passed`.
+**Lesson (道法自然):** 瞽者善聽，聾者善視 — when one sense is exhausted, the way
+forward is *another* sense, not a louder guess on the same one. Colour had given
+all it could; forcing a position heuristic onto it (為者敗之) only manufactures a
+confident wrong answer. Let each channel speak in its own register — hue to
+gather, shape to decide — and the thing names itself.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
@@ -393,9 +424,11 @@ will only grow a primitive once a real failure is reproduced.
 - **R-next: out-of-process (cross-site) iframes** — when the child context does
   *not* appear on the page session; needs `Target.setAutoAttach` + per-target
   `sessionId` routing (the plumbing for which already exists in `cdp.py`).
-- **R-next: template-match locate** — when competing regions share the *same*
-  colour and differ only in shape/glyph; segmentation (F052) separates them but
-  cannot say *which* is the target — that needs matching a small reference patch
-  by appearance, not colour.
+- **R-next: a target that moves while you reach for it** — animated/transitioning
+  elements where a single capture is already stale by the time the click lands;
+  needs settle-detection (sample until the pixels stop changing) before acting.
+- **R-next: a target with no fixed colour at all** — gradients, photos, themed
+  icons where neither a hue nor a single patch matches; needs edge/structure
+  features that survive colour shifts (the next register after appearance).
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
