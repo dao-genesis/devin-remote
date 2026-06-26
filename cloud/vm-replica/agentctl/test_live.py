@@ -2819,6 +2819,80 @@ def round_touch_drag(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_two_finger_pan(b: Browser, offline: bool) -> None:
+    print("R63: two-finger pan / scroll (F099) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>pan</title>"
+            b"<style>html,body{margin:0}"
+            b"#b{width:260px;height:200px;background:#dde}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=b>pan</div><div id=veil></div>"
+            b"<script>window.panned=0;window.rejected=0;"
+            b"var d0=null,a0=0,mx0=0,my0=0;"
+            b"function dist(t){return Math.hypot("
+            b"t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);}"
+            b"function ang(t){return Math.atan2("
+            b"t[1].clientY-t[0].clientY,t[1].clientX-t[0].clientX);}"
+            b"var el=document.getElementById('b');"
+            b"el.addEventListener('touchstart',function(e){"
+            b"if(e.touches.length===2){d0=dist(e.touches);a0=ang(e.touches);"
+            b"mx0=(e.touches[0].clientX+e.touches[1].clientX)/2;"
+            b"my0=(e.touches[0].clientY+e.touches[1].clientY)/2;}"
+            b"},{passive:true});"
+            b"el.addEventListener('touchmove',function(e){"
+            b"if(e.touches.length!==2||d0===null)return;"
+            b"var dd=Math.abs(dist(e.touches)-d0);"
+            b"var da=Math.abs(ang(e.touches)-a0);"
+            b"var mx=(e.touches[0].clientX+e.touches[1].clientX)/2;"
+            b"var my=(e.touches[0].clientY+e.touches[1].clientY)/2;"
+            b"var tr=Math.hypot(mx-mx0,my-my0);"
+            b"if(dd>12||da>0.15){window.rejected=1;return;}"
+            b"if(tr>8){window.panned=Math.round(tr);}"
+            b"},{passive:true});"
+            b"el.addEventListener('touchend',function(e){d0=null;},{passive:true});"
+            b"</script>")
+    sp = _serve(8996, page)
+
+    def st():
+        return (b.eval("window.panned"), b.eval("window.rejected"))
+
+    def reset() -> None:
+        b.eval("window.panned=0;window.rejected=0;")
+    try:
+        b.navigate("http://127.0.0.1:8996/")
+        time.sleep(0.2)
+        check("two-finger pan starts unfired", st() == (0, 0), repr(st()))
+        # Friction: a one-finger swipe never reaches touches.length===2.
+        check("swipe (one finger) never pans",
+              b.swipe("#b", 80, 0) is True and st() == (0, 0), repr(st()))
+        # Friction: a pinch changes the spread, so a pan handler that rejects
+        # scale-change ignores it.
+        reset()
+        check("pinch (spread change) is rejected, not panned",
+              b.pinch("#b", 80) is True
+              and st()[0] == 0 and st()[1] == 1, repr(st()))
+        # Friction: a rotate turns the line, so a pan handler that rejects
+        # angle-change ignores it.
+        reset()
+        check("rotate (angle change) is rejected, not panned",
+              b.rotate("#b", 45) is True
+              and st()[0] == 0 and st()[1] == 1, repr(st()))
+        # Primitive: two points translate together — spread and angle fixed.
+        reset()
+        check("two_finger_pan slides the rigid pair and commits one pan",
+              b.two_finger_pan("#b", 80, 0) is True
+              and st()[0] == 80 and st()[1] == 0, repr(st()))
+        b.eval("document.getElementById('veil').style.display='block'")
+        reset()
+        check("two_finger_pan refuses through an overlay",
+              b.two_finger_pan("#b", 80, 0) is False)
+        check("nothing panned while occluded", st() == (0, 0), repr(st()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("two_finger_pan on an absent element returns False",
+              b.two_finger_pan("#nope", 80, 0) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2842,7 +2916,7 @@ def main() -> int:
               round_middle_click, round_right_drag_by,
               round_tap, round_swipe, round_pinch, round_rotate,
               round_touch_hold, round_double_tap, round_two_finger_tap,
-              round_touch_drag]
+              round_touch_drag, round_two_finger_pan]
     for r in rounds:
         try:
             r(b, offline)

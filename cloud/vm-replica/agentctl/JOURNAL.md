@@ -1866,6 +1866,50 @@ is the whole.
 
 ---
 
+## F099 — two-finger pan / scroll (`two_finger_pan`) · R63
+
+**Friction:** A map that scrolls under a two-finger drag, a touch pane that pans
+its content, an embedded scroller that moves only when a finger *pair* slides as
+one — these read two simultaneous touch points and accept the gesture only when
+both translate in parallel: the separation between them barely changes (no
+pinch) and the line through them does not turn (no rotate). `pinch` (F093)
+changes the spread, so a pan handler that rejects scale-change marks it
+`rejected`; `rotate` (F094) turns the line, so a pan handler that rejects
+angle-change marks it `rejected`; a one-finger `swipe` (F092) never reaches
+`touches.length===2` at all, so it neither pans nor is even rejected.
+
+**Mechanism:** The realistic pan handler latches the start distance, angle, and
+midpoint of a two-touch `touchstart`; on each two-touch `touchmove` it measures
+how much the spread (`Δdist`) and angle (`Δang`) drift and how far the midpoint
+has travelled. A spread drift past ~12px or an angle drift past ~0.15rad is read
+as a pinch or a rotate and rejected; only a near-rigid pair whose midpoint
+travels commits a pan. So the gesture has a *shape-preserving* requirement —
+both points must move by the **same vector** — that neither a pinch
+(antisymmetric motion) nor a rotate (arc motion) nor a single finger satisfies.
+
+**Primitive:** `Browser.two_finger_pan(selector, dx, dy, gap=60)` resolves the
+honest hit point (F061), refuses if occluded, places two touch points astride
+the center separated by `gap`, then translates *both* by the same `(dx, dy)`
+each step issuing two-point `touchMove` events — distance and angle held fixed
+while the midpoint travels — and lifts both with `touchEnd`. Returns `True` once
+the pan completes, `False` if the element is absent or occluded.
+
+**Live (R63):** the page starts unfired (`panned=0, rejected=0`); a one-finger
+`swipe` never pans (`0,0`); a `pinch` is rejected not panned (`panned=0,
+rejected=1`); a `rotate` is rejected not panned (`panned=0, rejected=1`);
+`two_finger_pan` slides the rigid pair and commits one pan (`panned=80,
+rejected=0`); under a transparent veil `two_finger_pan` → `False` and nothing
+pans; an absent selector → `False`. `384/384 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 知其雄，守其雌 — know the strong, keep to the soft. The
+pan is the gesture that *changes nothing about the pair* — it neither spreads
+(pinch) nor twists (rotate); its whole power is in holding its shape and moving
+together. The view trusts only the hand that does not deform. 萬物負陰而抱陽，
+中氣以為和: the two fingers are yin and yang held in balance, and the harmony
+between them — constant spread, constant angle — is what carries the motion.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

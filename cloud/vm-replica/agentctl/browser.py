@@ -1059,6 +1059,47 @@ class Browser:
                       {"type": "touchEnd", "touchPoints": []})
         return True
 
+    def two_finger_pan(self, selector: str, dx: float, dy: float,
+                       gap: float = 60.0, by_text: bool = False,
+                       tag: str | None = None) -> bool:
+        """Pan an element with **two fingers translating together** while holding
+        their spread and their angle (F099). A map that scrolls under a two-finger
+        drag, a touch pane that pans its content, an embedded scroller that moves
+        only when a finger *pair* slides as one — these read two simultaneous touch
+        points and accept the gesture only when both translate in parallel: the
+        separation between them barely changes (so it is not a pinch) and the line
+        through them does not turn (so it is not a rotate). :meth:`pinch` (F093)
+        changes the spread, so a pan handler that rejects scale-change ignores it;
+        :meth:`rotate` (F094) turns the line, so a pan handler that rejects
+        angle-change ignores it; a one-finger :meth:`swipe` (F092) never reaches
+        ``touches.length===2`` at all. The friction is a *rigid* finger pair: the
+        view answers only to two points that keep their shape and slide together.
+        We resolve the honest hit point (F061), refuse if occluded, place two touch
+        points astride the center separated by ``gap``, then translate *both* by the
+        same ``(dx, dy)`` each step issuing two-point ``touchMove`` events — so the
+        inter-finger distance and angle stay fixed while the midpoint travels — and
+        lift both with ``touchEnd``. Returns ``True`` once the pan completes,
+        ``False`` if the element is absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        cx, cy = p["x"], p["y"]
+        off = gap / 2.0
+        steps = max(2, int((abs(dx) + abs(dy)) / 10) + 1)
+
+        def _pair(sx: float, sy: float):
+            return [{"x": cx - off + sx, "y": cy + sy, "id": 0},
+                    {"x": cx + off + sx, "y": cy + sy, "id": 1}]
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchStart", "touchPoints": _pair(0.0, 0.0)})
+        for i in range(1, steps + 1):
+            self.cdp.call("Input.dispatchTouchEvent",
+                          {"type": "touchMove",
+                           "touchPoints": _pair(dx * i / steps, dy * i / steps)})
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchEnd", "touchPoints": []})
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A
