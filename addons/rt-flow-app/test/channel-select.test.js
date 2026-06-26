@@ -2,7 +2,7 @@
 // 实测 tunnel.html 的「公网入口选取」真代码 (切片 //__CHANSEL_START__…//__CHANSEL_END__ eval)。
 // 新本源契约 (道法自然·下放中继 Worker → 去中心化为本, Worker 仅末位兜底):
 //   ① 设备身份就绪(session+token)时, 浏览器直开入口(_bestWeb) 恒为「去中心化 P2P 网控台」
-//      (CDN 托管 p2p-client.html + 公共 ntfy 信令 + WebRTC), 完全不经任何 Worker。
+//      (CDN 托管 console.html·完整 APK 同款 UI + 公共 ntfy 信令 + WebRTC), 完全不经任何 Worker。
 //   ② RPC/状态公网入口(_bestPublic) 首选已建立的去中心化隧道(cloudflared 主 > SSH 备),
 //      仅当二者皆无时才以中继 Worker 末位兜底 (即便其在线也不再抢首位)。
 //   ③ 身份未就绪(缺 token)时, 去中心化直连无法定址, _bestWeb 顺次回落隧道 > 局域网 > Worker。
@@ -45,7 +45,7 @@ const ID = { session: "s1", token: "tok1" };   // 真实设备恒自带 session+
     tunnel: { tunnels: [{ name: "cloudflared", url: CF }] } });
   const w = mod.bestWeb();
   ok(w.kind === "p2p-web", "1 身份就绪: _bestWeb = p2p-web (去中心化首选)");
-  ok(w.url.indexOf("surge.sh") >= 0 && w.url.indexOf("p2p-client.html") >= 0, "1 入口走中立 CDN (surge·text/html) 托管 p2p-client.html");
+  ok(w.url.indexOf("surge.sh") >= 0 && w.url.indexOf("console.html") >= 0, "1 入口走中立 CDN (surge·text/html) 托管 console.html(完整 APK 同款 UI)");
   ok(w.url.indexOf("jsdelivr") < 0, "1 不再用 jsDelivr (它把 .html 当 text/plain·浏览器只显源码)");
   ok(w.url.indexOf(".workers.dev") < 0 && w.url.indexOf("zhouyoukang") < 0, "1 入口完全不含 Worker 域名/私人标识 (彻底脱离 Worker 依赖)");
   ok(/auto=1/.test(w.url) && /session=s1/.test(w.url) && /token=tok1/.test(w.url), "1 链接自带 session+token+auto=1 (一开即直连)");

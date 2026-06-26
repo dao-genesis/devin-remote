@@ -700,6 +700,12 @@
     "https://fastly.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/",
     "https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/"
   ];
+  // 同源优先 (道法自然·去私人标识): 本页若由中立静态站(surge / 自托管 / GitHub Pages)直发,
+  //   则各板块 HTML 与 signal.js 与本页同源同目录 —— 取之既不含任何私人账号标识、又与本页同鲜。
+  //   仅当本页源是 http(s) 且非上面的公共 CDN 域才前插(APK 内 file:// 直身路径不插, 免去一次无谓跨协议探测);
+  //   取不到再顺次回退下方公共 CDN。纯加法: 学不到/同源无该文件则与旧版逐字节一致。
+  var SELF_BASE = (function(){ try{ var h=String(location.href||"").split(/[?#]/)[0]; var i=h.lastIndexOf("/"); return i>=0?h.slice(0,i+1):""; }catch(e){ return ""; } })();
+  if(/^https?:\/\//i.test(SELF_BASE) && SELF_BASE.indexOf("githubusercontent")<0 && SELF_BASE.indexOf("jsdelivr")<0) CDN_BASES.unshift(SELF_BASE);
   function fetchTimeout(url, ms){
     return new Promise(function(resolve, reject){
       var done=false, ctl=(typeof AbortController!=="undefined")?new AbortController():null;
@@ -1611,9 +1617,10 @@
 
   // ── 接入设置浮层 ──
   var cfg=document.getElementById("cfg");
-  // 零中心公网直连链接: P2P 客户端页由中立公共 CDN 托管, 带 session/token 参数一开即自动直连手机, 不经任何 Worker。
-  // 用 surge.sh(多区 PoP·正确 text/html 下发); jsDelivr 会把 .html 当 text/plain 致浏览器只显源码不可执行。
-  var P2P_CLIENT_CDN="https://dao-cloud-console.surge.sh/p2p-client.html";
+  // 零中心公网直连链接: 分享「与本页同款的完整控台 console.html」(非裸调试页), 带 session/token 一开即自动直连手机, 不经任何 Worker。
+  //   道法自然·去私人标识: 首选本页自身 URL —— 同源、不含任何私人账号标识、与本页同鲜; 仅当本页非 http(s)
+  //   (如 APK 内 file:// 直身) 才回退中立公共 CDN(surge.sh·多区 PoP·正确 text/html 下发)托管的 console.html。
+  var P2P_CLIENT_CDN=(function(){ try{ var h=String(location.href||"").split(/[?#]/)[0]; if(/^https?:\/\/\S+console\.html$/i.test(h)) return h; }catch(e){} return "https://dao-cloud-console.surge.sh/console.html"; })();
   function shareLink(){ if(!SESSION||!TOKEN) return "";
     return P2P_CLIENT_CDN+"?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN)+"&auto=1"; }
   function showCfg(){ document.getElementById("cfgSession").value=SESSION;
