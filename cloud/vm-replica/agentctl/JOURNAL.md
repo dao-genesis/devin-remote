@@ -359,6 +359,30 @@ the result is to skip the very signal subscribed to. 反者道之動 — go back
 the gradual motion (start→update→end), and the formed text enters where the
 finished text could not. Address the page on the event it actually awaits.
 
+### F052 — one colour in two places: the average is a target that isn't there
+**Surface:** two identical magenta squares on a canvas — one decoy, one the real
+target. A human sees *two* patches and aims at the right one. F050's
+`find_color` sees only "magenta".
+**Mechanism:** `find_color` reduces every matching pixel to a single centroid —
+the *mean* position. With one region that mean is its centre; with two it is the
+midpoint of the gap *between* them, a point that belongs to neither square.
+Acting on it is worse than seeing nothing: the agent confidently clicks empty
+canvas (proven: flat centroid at x≈297 between regions at x≈107 and x≈487 → the
+click reports `MISS`). The colour channel told the truth (magenta is here) but
+the *aggregation* invented a phantom target by averaging two real ones.
+**Primitive:** `osctl.find_color_blobs(target, tol, min_count)` labels the
+matching pixels into connected components — union-find with 4-connectivity over
+*only* the matched pixels, so cost scales with the colour's area, not the whole
+screen — and returns one `{x, y, count, bbox}` per distinct region in screen
+coordinates, sorted by area. Now the two squares come back as two real
+centroids; choose by size or position (here the right-most) and the OS click
+lands dead-on (`TARGET-HIT`). `49/49 checks passed`.
+**Lesson (道法自然):** 少則得，多則惑 — collapse the many into one number and you
+gain a tidy answer but lose the truth; the mean of two things is often a third
+thing that does not exist. Do not average what is plural. Let each region stand
+as itself (萬物並作), then choose — perception must preserve multiplicity before
+the will selects among it.
+
 ---
 
 ## Frontier (next honest rounds)
@@ -369,7 +393,9 @@ will only grow a primitive once a real failure is reproduced.
 - **R-next: out-of-process (cross-site) iframes** — when the child context does
   *not* appear on the page session; needs `Target.setAutoAttach` + per-target
   `sessionId` routing (the plumbing for which already exists in `cdp.py`).
-- **R-next: template-match locate** — find a target by a small reference patch
-  (not a flat colour) when several similarly-coloured regions compete.
+- **R-next: template-match locate** — when competing regions share the *same*
+  colour and differ only in shape/glyph; segmentation (F052) separates them but
+  cannot say *which* is the target — that needs matching a small reference patch
+  by appearance, not colour.
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

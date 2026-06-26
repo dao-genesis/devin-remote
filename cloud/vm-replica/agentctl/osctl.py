@@ -332,6 +332,87 @@ def find_color(target: tuple[int, int, int], tol: int = 24,
             "bbox": (minx, miny, maxx, maxy)}
 
 
+def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
+                     rgb: bytes | None = None,
+                     size: tuple[int, int] | None = None,
+                     min_count: int = 1) -> list[dict]:
+    """Segment a colour into its *separate* regions (F052).
+
+    ``find_color`` collapses every matching pixel into one centroid — fine for a
+    lone target, but when the same colour appears twice the mean lands in the
+    empty gap *between* them and clicks nothing. This labels matching pixels into
+    connected components (4-connectivity, union-find over only the matched
+    pixels, so cost scales with the colour's area, not the screen) and returns
+    one ``{x, y, count, bbox}`` per region in *screen* coordinates, sorted by
+    pixel count (largest first). Pick by size or position; each centroid is a
+    real, clickable target. Regions smaller than ``min_count`` are dropped."""
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    tr, tg, tb = target
+    stride = w * 3
+    parent: dict[int, int] = {}
+
+    def find(a: int) -> int:
+        root = a
+        while parent[root] != root:
+            root = parent[root]
+        while parent[a] != root:  # path compression
+            parent[a], a = root, parent[a]
+        return root
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for y in range(h):
+        row = y * stride
+        base = y * w
+        up_base = base - w
+        for x in range(w):
+            i = row + x * 3
+            if (abs(rgb[i] - tr) <= tol and abs(rgb[i + 1] - tg) <= tol
+                    and abs(rgb[i + 2] - tb) <= tol):
+                key = base + x
+                parent[key] = key
+                if x > 0 and (key - 1) in parent:
+                    union(key - 1, key)
+                if y > 0 and (up_base + x) in parent:
+                    union(up_base + x, key)
+
+    agg: dict[int, dict] = {}
+    for key in parent:
+        root = find(key)
+        x, y = key % w, key // w
+        a = agg.get(root)
+        if a is None:
+            agg[root] = {"sx": x, "sy": y, "count": 1,
+                         "minx": x, "miny": y, "maxx": x, "maxy": y}
+        else:
+            a["sx"] += x
+            a["sy"] += y
+            a["count"] += 1
+            if x < a["minx"]:
+                a["minx"] = x
+            if x > a["maxx"]:
+                a["maxx"] = x
+            if y < a["miny"]:
+                a["miny"] = y
+            if y > a["maxy"]:
+                a["maxy"] = y
+
+    blobs = [{"x": a["sx"] // a["count"], "y": a["sy"] // a["count"],
+              "count": a["count"],
+              "bbox": (a["minx"], a["miny"], a["maxx"], a["maxy"])}
+             for a in agg.values() if a["count"] >= min_count]
+    blobs.sort(key=lambda b: b["count"], reverse=True)
+    return blobs
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"

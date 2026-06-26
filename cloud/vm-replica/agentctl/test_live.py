@@ -425,13 +425,60 @@ def round_ime_compose(b: Browser, offline: bool) -> None:
           out() == "COMMITTED:\u4f60\u597d", repr(out()))
 
 
+def round_color_blobs(b: Browser, offline: bool) -> None:
+    print("R16: disambiguate same-colour targets via segmentation (F052) — osctl")
+    # Two identically-coloured squares. A flat colour locate averages all the
+    # magenta into one centroid that lands in the gap between them — a target
+    # that exists nowhere. Only segmentation recovers the two real regions.
+    html = fixture(
+        "blobs.html",
+        "<!doctype html><title>blobs</title>"
+        "<style>html,body{margin:0}</style>"
+        "<canvas id=c width=600 height=260 style='display:block'></canvas>"
+        "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+        "x.fillStyle='#ffffff';x.fillRect(0,0,600,260);"
+        "var A=[60,90,80,80],B=[440,90,80,80];"  # decoy, target
+        "x.fillStyle='#ff00ff';x.fillRect(A[0],A[1],A[2],A[3]);"
+        "x.fillRect(B[0],B[1],B[2],B[3]);"
+        "function inb(p,r){return p[0]>=r[0]&&p[0]<=r[0]+r[2]"
+        "&&p[1]>=r[1]&&p[1]<=r[1]+r[3];}"
+        "c.addEventListener('click',function(e){"
+        "var r=c.getBoundingClientRect(),p=[e.clientX-r.left,e.clientY-r.top];"
+        "if(inb(p,B)){document.title='TARGET-HIT';x.fillStyle='#00cc00';"
+        "x.fillRect(B[0],B[1],B[2],B[3]);}"
+        "else if(inb(p,A)){document.title='DECOY';}"
+        "else{document.title='MISS';}});</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    merged = osctl.find_color((255, 0, 255), tol=40, rgb=rgb, size=(w, h))
+    check("flat locate still finds the colour", merged is not None)
+    blobs = osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rgb, size=(w, h),
+                                   min_count=200)
+    check("segmentation separates the two regions", len(blobs) == 2,
+          str([bl["count"] for bl in blobs]))
+    if merged and len(blobs) == 2:
+        xs = sorted(bl["x"] for bl in blobs)
+        # Friction: the flat centroid sits in the empty gap between the regions.
+        check("flat centroid falls in the gap between the two regions",
+              xs[0] < merged["x"] < xs[1], f"{xs} mid={merged['x']}")
+        osctl.click(merged["x"], merged["y"])
+        check("flat-centroid click hits neither target (lands in gap)",
+              b.wait_for("document.title==='MISS'", timeout=3), b.title())
+        # Primitive: choose the intended region (right-most) and click it.
+        target = max(blobs, key=lambda bl: bl["x"])
+        osctl.click(target["x"], target["y"])
+        check("segmented click hits the intended right-most target",
+              b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
     rounds = [round_navigate_read, round_atomic_type, round_click_text, round_dialog,
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
-              round_canvas_pixel, round_ime_compose]
+              round_canvas_pixel, round_ime_compose, round_color_blobs]
     for r in rounds:
         try:
             r(b, offline)
