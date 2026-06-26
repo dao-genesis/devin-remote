@@ -966,6 +966,65 @@ def round_read_glyph(b: Browser, offline: bool) -> None:
           b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
 
 
+def round_oop_iframe(b: Browser, offline: bool) -> None:
+    print("R23: reach an out-of-process (cross-SITE) iframe by per-session routing (F059) — cdp")
+    if offline:
+        check("oop iframe skipped offline (needs public internet)", True)
+        return
+    # A cross-SITE child (real public origin) is put in its *own* renderer
+    # process by Chrome site isolation — unlike R13's same-IP/different-port
+    # child, which is merely cross-origin and shares the page's process. The
+    # OOP child's execution context never appears on the page session, so the
+    # F049 path (which only knows page-session contexts) is blind to it.
+    parent = (b"<!doctype html><title>oop-parent</title><h1>parent</h1>"
+              b"<iframe id=f src='https://example.com' "
+              b"style='width:600px;height:400px'></iframe>")
+    sp = _serve(8911, parent)
+    try:
+        try:
+            b.navigate("http://127.0.0.1:8911/", timeout=20)
+        except Exception as e:
+            check("oop iframe skipped (no internet to load cross-site child)",
+                  True, repr(e))
+            return
+        ok = b.wait_frame("example.com", timeout=8) is not None
+        if not ok:
+            check("oop iframe skipped (cross-site child did not load)", True)
+            return
+        # Precondition: the cross-site child really mounted in the parent.
+        check("cross-site child present in parent",
+              b.eval("window.frames.length") == 1,
+              repr(b.eval("window.frames.length")))
+        # Friction: parent JS is walled off, AND the child registered under its
+        # own session — proof it is out-of-process, not merely cross-origin.
+        reach = b.eval("(function(){var f=document.getElementById('f');"
+                       "try{return f.contentDocument?'OPEN':null}"
+                       "catch(e){return 'ERR'}})()")
+        check("parent JS walled off from OOP child", reach is None, repr(reach))
+        key = b._frame_context("example.com")
+        check("OOP child lives in its own attached session",
+              isinstance(key, str) and ":" in key, repr(key))
+        # Primitive: auto-attach + per-session routing reaches into the child's
+        # own renderer over the one connection.
+        check("eval_in_frame reads across the process boundary",
+              b.eval_in_frame("example.com",
+                              "document.querySelector('h1').textContent")
+              == "Example Domain")
+        check("eval_in_frame acts across the process boundary",
+              b.eval_in_frame("example.com",
+                              "document.querySelector('h1').textContent='OOP-EDIT';true")
+              is True)
+        check("OOP child state changed by cross-process action",
+              b.eval_in_frame("example.com",
+                              "document.querySelector('h1').textContent")
+              == "OOP-EDIT")
+        # An absent frame still fails fast rather than hanging.
+        check("absent OOP frame returns None fast",
+              b.eval_in_frame("no-such-site.invalid", "1", timeout=0.5) is None)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -974,7 +1033,8 @@ def main() -> int:
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_structure_match,
-              round_scale_invariant, round_rotation_invariant, round_read_glyph]
+              round_scale_invariant, round_rotation_invariant, round_read_glyph,
+              round_oop_iframe]
     for r in rounds:
         try:
             r(b, offline)

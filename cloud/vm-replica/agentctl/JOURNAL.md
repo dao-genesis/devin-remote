@@ -593,14 +593,45 @@ late-completed, by being aimed).
 
 ---
 
+### F059 — a cross-SITE iframe the connection cannot see into
+**Surface:** a parent page embeds an iframe whose `src` is a *different site*
+(`https://example.com`). The child clearly loads (`window.frames.length === 1`)
+and a human reads it without thinking. But `eval_in_frame` (F049) — which served
+us for same-IP/different-port children — returns `None`: there is no execution
+context for the child on the page session at all. The frame is invisible to every
+DOM tool we have.
+**Mechanism:** Chrome **site isolation** puts a cross-*site* document in its own
+renderer **process**, reachable only through its own CDP **target/session**.
+R13's cross-origin child (same IP, different port) was *same-site* and shared the
+page's process, so its context still showed up on the page session. A cross-site
+child does not: its `Runtime.executionContextCreated` is emitted on a session that
+was never attached, so it never reaches us. The page session is not walled off by
+choice — it simply is not connected to that process.
+**Primitive:** auto-attach plus per-session routing, in `cdp.py`. On connect we
+call `Target.setAutoAttach{autoAttach, flatten:true}`; when a child target
+attaches we record its `sessionId`, enable `Runtime`/`Page` in it (fire-and-forget
+on the reader thread, per the F006 deadlock rule), and recurse so nested OOP
+frames attach too. Child contexts are keyed by `"<sessionId>:<contextId>"` (their
+ids are unique only within their own session), and `evaluate` resolves that key to
+the real session-local `contextId` and routes the command with its `sessionId`.
+One websocket now reaches every frame, in-process or not. `eval_in_frame` is
+unchanged at the call site: it reads `Example Domain` across the process boundary,
+edits the child's `<h1>`, and reads the change back; an absent frame still returns
+`None` fast. `99/99 checks passed`, deterministic across three runs.
+**Lesson (道法自然):** 將欲取之，必固與之 — to reach the walled child we did not push
+against the same-origin wall (為者敗之); we let the browser hand us a session for it
+and simply went through the door it opened. 玄德：長而不宰 — each new frame attaches
+and governs its own context; we route to it without flattening its identity into
+the parent's. The lowest layer (`cdp.py`) grew so the highest call (`eval_in_frame`)
+need not change — 大制無割, the great tailoring leaves no seam.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
 
-- **R-next: out-of-process (cross-site) iframes** — when the child context does
-  *not* appear on the page session; needs `Target.setAutoAttach` + per-target
-  `sessionId` routing (the plumbing for which already exists in `cdp.py`).
 - **R-next: a glyph atlas wider than one alphabet** — `read_glyph` (F058) reads
   among the few glyphs we carry; reading an *unknown* string needs per-character
   segmentation across a baseline and a fuller atlas (true OCR territory). Grow it

@@ -177,8 +177,14 @@ class CDP:
         self._listeners: dict[str, list] = {}
         self._reader: threading.Thread | None = None
         self._alive = False
-        # F008: execution-context bookkeeping (contextId -> info dict).
-        self.contexts: dict[int, dict] = {}
+        # F008: execution-context bookkeeping. Keyed by contextId for the page
+        # session, and by "<sessionId>:<contextId>" for out-of-process child
+        # frames (F059) whose ids are only unique within their own session.
+        self.contexts: dict = {}
+        # F059: out-of-process targets we auto-attached to (sessionId -> info)
+        # and the sessionId of the event currently being dispatched.
+        self.sessions: dict[str, dict] = {}
+        self._cur_session: str | None = None
         # F006: most recent JS dialog + optional auto-handling policy.
         self.last_dialog: dict | None = None
         self.auto_dialog: dict | None = None  # e.g. {"accept": True, "text": ""}
@@ -221,11 +227,20 @@ class CDP:
         self._reader.start()
         self.on_event("Runtime.executionContextCreated", self._on_ctx_created)
         self.on_event("Runtime.executionContextDestroyed", self._on_ctx_destroyed)
-        self.on_event("Runtime.executionContextsCleared", lambda p: self.contexts.clear())
+        self.on_event("Runtime.executionContextsCleared", self._on_ctx_cleared)
         self.on_event("Page.javascriptDialogOpening", self._on_dialog)
+        self.on_event("Target.attachedToTarget", self._on_attached)
+        self.on_event("Target.detachedFromTarget", self._on_detached)
         self.call("Page.enable")
         self.call("Runtime.enable")
         self.call("DOM.enable")
+        # F059: auto-attach to out-of-process child frames (cross-site iframes
+        # that site isolation puts in their own renderer process). With
+        # flatten=True their events/commands share this socket, tagged by
+        # sessionId, so a single connection reaches every frame.
+        self.call("Target.setAutoAttach", {"autoAttach": True,
+                                            "waitForDebuggerOnStart": False,
+                                            "flatten": True})
         return self
 
     # ---- event pump ------------------------------------------------------- #
@@ -252,6 +267,10 @@ class CDP:
             # protocol event
             method = msg.get("method", "")
             params = msg.get("params", {})
+            # F059: which (child) session emitted this event, so context
+            # bookkeeping can key it correctly. Single reader thread, so a
+            # plain attribute is safe for the duration of the dispatch.
+            self._cur_session = msg.get("sessionId")
             self.events.append(msg)
             if len(self.events) > 500:
                 self.events = self.events[-500:]
@@ -317,15 +336,52 @@ class CDP:
             raise CDPError(f"{method}: {msg['error']}")
         return msg.get("result", {})
 
-    # ---- F008: execution contexts ---------------------------------------- #
+    # ---- F008/F059: execution contexts (page + out-of-process frames) ----- #
+    def _ctx_key(self, cid):
+        """Page-session contexts key by their (globally-unique) id; child
+        out-of-process contexts key by ``<sessionId>:<id>`` because their ids
+        are only unique within their own session."""
+        return f"{self._cur_session}:{cid}" if self._cur_session else cid
+
     def _on_ctx_created(self, params: dict) -> None:
         ctx = params.get("context", {})
         cid = ctx.get("id")
         if cid is not None:
-            self.contexts[cid] = ctx
+            ctx["__session"] = self._cur_session
+            self.contexts[self._ctx_key(cid)] = ctx
 
     def _on_ctx_destroyed(self, params: dict) -> None:
-        self.contexts.pop(params.get("executionContextId"), None)
+        self.contexts.pop(self._ctx_key(params.get("executionContextId")), None)
+
+    def _on_ctx_cleared(self, _params: dict) -> None:
+        # Clear only the contexts belonging to the session that cleared.
+        sess = self._cur_session
+        for k in [k for k, c in self.contexts.items()
+                  if c.get("__session") == sess]:
+            self.contexts.pop(k, None)
+
+    # ---- F059: out-of-process target attach ------------------------------- #
+    def _on_attached(self, params: dict) -> None:
+        sess = params.get("sessionId")
+        if not sess:
+            return
+        self.sessions[sess] = params.get("targetInfo", {})
+        # Runs on the reader thread, so every call must be fire-and-forget
+        # (F006): waiting for a reply here would block the only thread that can
+        # deliver it. Enable the child's Runtime so its contexts register, and
+        # recurse so nested OOP frames attach too.
+        self.send("Runtime.enable", {}, session_id=sess)
+        self.send("Page.enable", {}, session_id=sess)
+        self.send("Target.setAutoAttach", {"autoAttach": True,
+                                            "waitForDebuggerOnStart": False,
+                                            "flatten": True}, session_id=sess)
+
+    def _on_detached(self, params: dict) -> None:
+        sess = params.get("sessionId")
+        self.sessions.pop(sess, None)
+        for k in [k for k, c in self.contexts.items()
+                  if c.get("__session") == sess]:
+            self.contexts.pop(k, None)
 
     # ---- F006: JS dialogs ------------------------------------------------- #
     def _on_dialog(self, params: dict) -> None:
@@ -360,9 +416,20 @@ class CDP:
             "returnByValue": return_by_value,
             "awaitPromise": await_promise,
         }
+        # F059: a context_id may be a page-session id or a child key recorded in
+        # self.contexts. Resolve it to the real (session-local) contextId and
+        # route the command to that frame's own session so out-of-process
+        # iframes are reachable over the one connection.
+        session_id = None
         if context_id is not None:
-            params["contextId"] = context_id
-        res = self.call("Runtime.evaluate", params, timeout=timeout)
+            ctx = self.contexts.get(context_id)
+            if ctx is not None:
+                session_id = ctx.get("__session")
+                params["contextId"] = ctx.get("id")
+            else:
+                params["contextId"] = context_id
+        res = self.call("Runtime.evaluate", params, timeout=timeout,
+                        session_id=session_id)
         if res.get("exceptionDetails"):
             exc = res["exceptionDetails"]
             msg = exc.get("exception", {}).get("description") or exc.get("text")

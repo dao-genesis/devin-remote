@@ -137,13 +137,16 @@ class Browser:
                         "is_default": aux.get("isDefault")})
         return out
 
-    def _frame_context(self, match: str) -> int | None:
+    def _frame_context(self, match: str):
+        # contexts preserve insertion order, so the *last* match is the freshest
+        # registration of that frame (a reload re-registers a new context). Keys
+        # may be a page-session int id or an out-of-process "<sessionId>:<id>"
+        # string (F059), so we never order-compare them — we just take the last.
         best = None
         for cid, ctx in self.cdp.contexts.items():
             aux = ctx.get("auxData") or {}
             if match in (ctx.get("origin") or "") or match == aux.get("frameId"):
-                if best is None or cid > best:  # prefer the freshest context
-                    best = cid
+                best = cid
         return best
 
     def wait_frame(self, match: str, timeout: float = 5.0,
