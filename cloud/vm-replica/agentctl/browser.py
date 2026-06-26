@@ -463,6 +463,45 @@ class Browser:
                        "button": "left", "clickCount": 1})
         return True
 
+    def marquee(self, container: str, x0: float, y0: float,
+                x1: float, y1: float) -> bool:
+        """Rubber-band (marquee) select by dragging a rectangle over a container
+        (F076). A file grid / canvas / photo board selects *several* items at once
+        when you press on empty space and drag a box across them — each
+        ``pointermove`` recomputes which item boxes the band intersects. A plain
+        ``click`` selects nothing (it presses *on* an item or fires no band), and
+        ``dnd`` (F047) presses on a *source element* then drops on a *target* — it
+        has no empty-void press and no rectangle. The corners ``(x0,y0)`` and
+        ``(x1,y1)`` are fractions ``[0,1]`` of the container's box, so the gesture
+        is resolution-independent; the start should fall on empty space (where the
+        band handler listens). We press the first corner, step diagonally to the
+        second carrying ``buttons:1`` (so a handler reading ``e.buttons`` keeps the
+        band live), and release. Returns ``False`` if the container is absent."""
+        r = self._rect_of(container)
+        if not r:
+            return False
+        def at(fx: float, fy: float) -> tuple[float, float]:
+            return (r["left"] + max(0.0, min(1.0, fx)) * r["width"],
+                    r["top"] + max(0.0, min(1.0, fy)) * r["height"])
+        px, py = at(x0, y0)
+        qx, qy = at(x1, y1)
+        self._move(px, py)
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mousePressed", "x": px, "y": py,
+                       "button": "left", "clickCount": 1})
+        span = abs(qx - px) + abs(qy - py)
+        steps = max(1, int(span / 12) + 1)
+        for i in range(1, steps + 1):
+            mx = px + (qx - px) * i / steps
+            my = py + (qy - py) * i / steps
+            self.cdp.call("Input.dispatchMouseEvent",
+                          {"type": "mouseMoved", "x": mx, "y": my,
+                           "button": "left", "buttons": 1})
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mouseReleased", "x": qx, "y": qy,
+                       "button": "left", "clickCount": 1})
+        return True
+
     def click(self, selector: str, by_text: bool = False, tag: str | None = None,
               require_hit: bool = True) -> bool:
         # F061: aim at a point that actually reaches the element. hitPoint probes

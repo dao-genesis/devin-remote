@@ -1710,6 +1710,67 @@ def round_type_closed_shadow(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_marquee(b: Browser, offline: bool) -> None:
+    print("R40: rubber-band (marquee) select a group of items (F076) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>marquee</title>"
+            b"<div id=board style='position:absolute;left:0;top:0;width:400px;"
+            b"height:300px;border:1px solid #999'>"
+            b"<div class=item data-i=0 style='position:absolute;left:30px;top:30px;"
+            b"width:40px;height:40px;background:#ccc'></div>"
+            b"<div class=item data-i=1 style='position:absolute;left:120px;top:30px;"
+            b"width:40px;height:40px;background:#ccc'></div>"
+            b"<div class=item data-i=2 style='position:absolute;left:30px;top:120px;"
+            b"width:40px;height:40px;background:#ccc'></div>"
+            b"<div class=item data-i=3 style='position:absolute;left:250px;top:200px;"
+            b"width:40px;height:40px;background:#ccc'></div>"
+            b"</div>"
+            b"<script>(function(){var board=document.getElementById('board');"
+            b"var sx,sy,band=false;window.__selected=function(){return "
+            b"[].slice.call(document.querySelectorAll('.item.sel')).map(function(e){"
+            b"return +e.dataset.i;}).sort(function(a,b){return a-b;});};"
+            b"board.addEventListener('pointerdown',function(e){"
+            b"if(e.target!==board)return;band=true;var r=board.getBoundingClientRect();"
+            b"sx=e.clientX-r.left;sy=e.clientY-r.top;"
+            b"[].forEach.call(document.querySelectorAll('.item'),function(it){"
+            b"it.classList.remove('sel');});});"
+            b"window.addEventListener('pointermove',function(e){if(!band)return;"
+            b"var r=board.getBoundingClientRect();var cx=e.clientX-r.left,"
+            b"cy=e.clientY-r.top;var x0=Math.min(sx,cx),x1=Math.max(sx,cx),"
+            b"y0=Math.min(sy,cy),y1=Math.max(sy,cy);"
+            b"[].forEach.call(document.querySelectorAll('.item'),function(it){"
+            b"var l=it.offsetLeft,t=it.offsetTop,w=it.offsetWidth,h=it.offsetHeight;"
+            b"var hit=!(l>x1||l+w<x0||t>y1||t+h<y0);"
+            b"it.classList.toggle('sel',hit);});});"
+            b"window.addEventListener('pointerup',function(){band=false;});})();"
+            b"</script>")
+    sp = _serve(8966, page)
+    try:
+        b.navigate("http://127.0.0.1:8966/")
+        time.sleep(0.2)
+        b.click("#board")
+        time.sleep(0.05)
+        check("a plain click selects no items",
+              b.eval("window.__selected()") == [], repr(b.eval("window.__selected()")))
+        # Band from the empty top-left corner across items 0,1,2 (not 3, far away).
+        check("marquee drags a selection rectangle",
+              b.marquee("#board", 0.02, 0.03, 0.45, 0.6) is True)
+        time.sleep(0.05)
+        check("the band selects exactly the enclosed items",
+              b.eval("window.__selected()") == [0, 1, 2],
+              repr(b.eval("window.__selected()")))
+        # A tighter band only catches the top-left item.
+        check("a second, smaller band reselects independently",
+              b.marquee("#board", 0.02, 0.03, 0.2, 0.3) is True)
+        time.sleep(0.05)
+        check("the smaller band selects only the corner item",
+              b.eval("window.__selected()") == [0],
+              repr(b.eval("window.__selected()")))
+        check("marquee on an absent container returns False",
+              b.marquee("#nope", 0, 0, 0.5, 0.5) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1724,7 +1785,7 @@ def main() -> int:
               round_draw_path, round_paste_pipeline, round_context_menu,
               round_key_chord, round_per_key_type, round_wheel_pane,
               round_select_text, round_select_range, round_set_slider,
-              round_closed_shadow, round_type_closed_shadow]
+              round_closed_shadow, round_type_closed_shadow, round_marquee]
     for r in rounds:
         try:
             r(b, offline)
