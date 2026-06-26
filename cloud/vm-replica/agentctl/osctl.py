@@ -1235,6 +1235,49 @@ def palette(rgb: bytes, size: tuple[int, int],
     return kept
 
 
+def read_region(rgb: bytes, size: tuple[int, int],
+                bbox: tuple[int, int, int, int],
+                atlas: dict[str, list[int]],
+                tol: int = 60, gap: int = 2,
+                nw: int = 48, nh: int = 48, thr: int = 24,
+                q: int = 16, min_pop: float = 0.002, min_dist: int = 96) -> str:
+    """Read *all* text in a region, across every colour, in reading order (F111).
+
+    :func:`read_text` segments by a *single* ``fg`` — :func:`segment_run` marks a
+    column inked only where a pixel sits within ``tol`` of that one colour. Hand it
+    a region holding two differently-coloured words (a red ``"OK"`` beside a green
+    ``"GO"``, a black label next to a coloured value) and it reads only the run of
+    its given colour: every other-coloured glyph is *background* to it, and the
+    line comes back half-read. :func:`palette` (F110) can now *name* every ink in
+    the region, but naming is not reading — there was still no primitive that turns
+    the whole multi-coloured region into the string a human sees.
+
+    This is that primitive. It asks :func:`palette` for the region's colours, drops
+    the first (the background — the most pixels are the field the text sits on), and
+    for *each* remaining ink :func:`segment_run`-s the region by that colour into
+    per-glyph cells. Every cell from every ink is then gathered and **sorted by its
+    left edge**, so the glyphs fall back into the single left-to-right order the eye
+    reads regardless of which colour drew them, and each is classified in the
+    scale-free frame (:func:`read_glyph` against ``atlas``). The labels join into the
+    region's full text: ``"OKGO"`` where one ``fg`` read only ``"OK"``.
+
+    Honest about its frame. It reads each ink as a *run of glyphs*: an ink that is a
+    solid fill (a coloured badge, a progress bar) has no inter-glyph blanks and
+    segments as one wide cell that :func:`read_glyph` will mislabel — ``read_region``
+    reads the *text* colours of a region, not its decorations, and the caller scopes
+    ``bbox`` to a text area. Ordering is by left edge, so words separated in x merge
+    correctly; truly interleaved colours (a single word painted letter-by-letter in
+    alternating inks) order by each glyph's own column, which is still reading order.
+    Empty region (no ink above :func:`palette`'s floor) → ``""``."""
+    inks = palette(rgb, size, bbox, q, min_pop, min_dist)[1:]
+    cells: list[tuple[int, tuple[int, int, int, int]]] = []
+    for ink in inks:
+        for c in segment_run(rgb, size, bbox, ink, tol, gap):
+            cells.append((c[0], c))
+    cells.sort(key=lambda t: t[0])
+    return "".join(read_glyph(rgb, size, c, atlas, nw, nh, thr) for _, c in cells)
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"

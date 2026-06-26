@@ -2392,6 +2392,48 @@ together. F109 named the one; F110 names them all, and — keeping the F107–F1
 honesty — names *only* those the page truly drew, letting the fringe dissolve
 into the colour it borders rather than promoting it to an ink of its own.
 
+## F111 — naming the colours is not reading them: read the *whole* region
+
+**Friction.** `read_text` segments by a *single* `fg`: `segment_run` marks a
+column inked only where a pixel sits within `tol` of that one colour. Hand it a
+region holding two differently-coloured words — a red `OK` beside a green `GO`, a
+black label next to a coloured value — and it reads only the run of *its* colour;
+every other-coloured glyph is **background** to it, and the line comes back
+half-read. F110's `palette` could finally *name* every ink in the region, but
+naming is not reading: there was still no primitive that turns the whole
+multi-coloured region into the string a human actually sees.
+
+**Mechanism.** Ask `palette` for the region's colours, drop the first (the
+background — the field the text sits on holds the most pixels), and for *each*
+remaining ink `segment_run` the region by that colour into per-glyph cells.
+Gather every cell from every ink and **sort by its left edge**: the glyphs fall
+back into the single left-to-right order the eye reads, regardless of which
+colour drew them. Each is then classified scale-free (`read_glyph` against the
+atlas) and the labels join into the region's full text — `"OKGO"` where one `fg`
+read only `"OK"`.
+
+**Primitive:** `read_region(rgb, size, bbox, atlas, ...)` returns the region's
+full text across every colour, in reading order. Honest about its frame: it reads
+each ink as a *run of glyphs*, so a solid coloured fill (a badge, a progress bar)
+has no inter-glyph blanks and segments as one wide cell `read_glyph` will
+mislabel — `read_region` reads the *text* colours of a region, not its
+decorations, and the caller scopes `bbox` to a text area. An empty region (no ink
+above `palette`'s floor) → `""`.
+
+**Live (R75):** one magenta atlas reads runs of any ink. With `OK` (red) beside
+`GO` (green) on white, `read_text` given the red ink reads only `"OK"` and given
+the green only `"GO"` (the friction, both directions); `read_region` reads
+`"OKGO"`. Order follows *geometry, not palette frequency* — swap the sides and it
+reads `"GOOK"`. Three coloured words `RED`/`GRN`/`BLU` read back `"REDGRNBLU"`; a
+single-ink region agrees with `read_text` (`"RED"`); a uniform region reads `""`.
+`517/517 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 知其白，守其黑，為天下式 — know the white, keep the black,
+be the world's pattern. F110 *knew* the colours; F111 *keeps* them all in the one
+order they were drawn. The reader stops belonging to a single ink: the region
+speaks once, in every colour at once, and the glyphs sort themselves back into
+the line the eye already saw.
+
 ---
 
 ## Frontier (next honest rounds)

@@ -3913,6 +3913,150 @@ def round_palette(b: Browser, offline: bool) -> None:
           len(palf) == 1 and close(palf[0], hx(WHT)), repr(palf))
 
 
+def round_read_region(b: Browser, offline: bool) -> None:
+    print("R75: read EVERY colour's text in a region, in order (F111) — osctl")
+    # read_text segments by ONE fg, so a region with a red word beside a green
+    # one comes back half-read: the other colour is background to it. palette now
+    # names every ink, but naming is not reading. read_region asks palette for the
+    # colours, segments the region by each ink, then sorts every glyph cell by its
+    # left edge — the whole multi-coloured region read back in the order the eye
+    # sees, regardless of which colour drew each word.
+    def hx(s):
+        s = s.lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+    def close(a, c, t=48):
+        return sum(abs(p - q) for p, q in zip(a, c)) <= t
+
+    MAG = (255, 0, 255)
+    WHT = "#ffffff"
+    RED, GRN, BLU = "#d32020", "#1f9d35", "#1565c0"
+    # One magenta-on-white atlas (magenta is rare on screen) reads runs of any
+    # ink. Cover every letter the scenes draw: O K G R E D N B L U.
+    chars = "OKGREDNBLU"
+    draws = "".join("x.fillText('%s',%d,80);" % (ch, 24 + i * 96)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("rr_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=1000 height=140></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,1000,140);"
+               "x.fillStyle='#f0f';x.font='bold 80px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = sorted(osctl.find_color_blobs(MAG, tol=60, rgb=argb, size=(aw, ah),
+                                       min_count=120), key=lambda t: t["x"])
+    check("atlas segments into ten reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def field_bbox(rgbX, szX, bg=WHT, frac=12):
+        bls = osctl.find_color_blobs(hx(bg), tol=30, rgb=rgbX, size=szX,
+                                     min_count=5000)
+        if not bls:
+            return None
+        x0, y0, x1, y1 = max(bls, key=lambda t: t["count"])["bbox"]
+        iw, ih = (x1 - x0) // frac, (y1 - y0) // 8
+        return (x0 + iw, y0 + ih, x1 - iw, y1 - ih)
+
+    def two_word(name, w1, c1, w2, c2):
+        b.navigate(fixture(name,
+                   "<!doctype html><title>p</title><style>html,body{margin:0}"
+                   "body{background:#fff}</style>"
+                   "<canvas id=c width=1100 height=300></canvas><script>"
+                   "var x=document.getElementById('c').getContext('2d');"
+                   "x.fillStyle='#fff';x.fillRect(0,0,1100,300);"
+                   "x.font='bold 84px monospace';x.textBaseline='middle';"
+                   "x.textAlign='left';"
+                   "x.fillStyle='%s';x.fillText('%s',150,150);"
+                   "x.fillStyle='%s';x.fillText('%s',620,150);</script>"
+                   % (c1, w1, c2, w2)))
+        time.sleep(0.4)
+        return osctl.capture_rgb()
+
+    # Scene A: 'OK' (red) beside 'GO' (green) on white.
+    w, h, rgb = two_word("rr_two.html", "OK", RED, "GO", GRN)
+    sz = (w, h)
+    bb = field_bbox(rgb, sz)
+    check("two-ink region located", bb is not None, repr(bb))
+    if bb is None:
+        return
+    pal = osctl.palette(rgb, sz, bb)
+    inks = pal[1:]
+    two = (any(close(c, hx(RED)) for c in inks)
+           and any(close(c, hx(GRN)) for c in inks))
+    check("palette recovers background + both inks", len(pal) == 3 and two, repr(pal))
+
+    # FRICTION: read_text over the whole region with ONE ink reads only its word.
+    rt_red = osctl.read_text(rgb, sz, bb, atlas, hx(RED))
+    rt_grn = osctl.read_text(rgb, sz, bb, atlas, hx(GRN))
+    check("FRICTION: read_text with the red ink reads only 'OK' (green dropped)",
+          rt_red == "OK", repr(rt_red))
+    check("FRICTION: read_text with the green ink reads only 'GO' (red dropped)",
+          rt_grn == "GO", repr(rt_grn))
+
+    # RESOLUTION: read_region reads both words, in left-to-right order.
+    rr = osctl.read_region(rgb, sz, bb, atlas)
+    check("read_region reads BOTH words across colours ('OKGO')", rr == "OKGO",
+          repr(rr))
+
+    # Scene C: order follows geometry, not palette frequency — swap the sides.
+    w2, h2, rgb2 = two_word("rr_swap.html", "GO", GRN, "OK", RED)
+    bb2 = field_bbox(rgb2, (w2, h2))
+    if bb2 is not None:
+        rr2 = osctl.read_region(rgb2, (w2, h2), bb2, atlas)
+        check("read_region orders by geometry not palette ('GOOK')", rr2 == "GOOK",
+              repr(rr2))
+
+    # Scene B: THREE coloured words 'RED' 'GRN' 'BLU' — all read, in order.
+    b.navigate(fixture("rr_three.html",
+               "<!doctype html><title>p3</title><style>html,body{margin:0}"
+               "body{background:#fff}</style>"
+               "<canvas id=c width=1300 height=300></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,1300,300);"
+               "x.font='bold 80px monospace';x.textBaseline='middle';"
+               "x.textAlign='left';"
+               "x.fillStyle='%s';x.fillText('RED',80,150);"
+               "x.fillStyle='%s';x.fillText('GRN',540,150);"
+               "x.fillStyle='%s';x.fillText('BLU',1000,150);</script>"
+               % (RED, GRN, BLU)))
+    time.sleep(0.4)
+    w3, h3, rgb3 = osctl.capture_rgb()
+    bb3 = field_bbox(rgb3, (w3, h3), frac=16)
+    if bb3 is not None:
+        rr3 = osctl.read_region(rgb3, (w3, h3), bb3, atlas)
+        check("read_region reads all three coloured words ('REDGRNBLU')",
+              rr3 == "REDGRNBLU", repr(rr3))
+
+    # Scene D: a single-colour region — read_region agrees with read_text.
+    w4, h4, rgb4 = two_word("rr_one.html", "RED", RED, "", RED)
+    bb4 = field_bbox(rgb4, (w4, h4))
+    if bb4 is not None:
+        rr4 = osctl.read_region(rgb4, (w4, h4), bb4, atlas)
+        rt4 = osctl.read_text(rgb4, (w4, h4), bb4, atlas, hx(RED))
+        check("read_region of a single-ink region equals read_text ('RED')",
+              rr4 == "RED" and rr4 == rt4, "%r/%r" % (rr4, rt4))
+
+    # Scene E: a uniform region holds no ink — read_region reads "".
+    b.navigate(fixture("rr_uni.html",
+               "<!doctype html><title>u</title><style>html,body{margin:0}"
+               "body{background:#0d2860}</style>"
+               "<canvas id=c width=900 height=300></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#0d2860';x.fillRect(0,0,900,300);</script>"))
+    time.sleep(0.4)
+    wu, hu, rgbu = osctl.capture_rgb()
+    bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
+    if bbu is not None:
+        rru = osctl.read_region(rgbu, (wu, hu), bbu, atlas)
+        check("read_region of a uniform region is '' (no ink)", rru == "", repr(rru))
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -3940,7 +4084,8 @@ def main() -> int:
               round_three_finger_swipe, round_edge_swipe,
               round_touch_drag_to, round_read_text, round_read_kerned,
               round_read_block, round_read_words, round_read_glyph_conf,
-              round_read_text_conf, round_detect_fg, round_palette]
+              round_read_text_conf, round_detect_fg, round_palette,
+              round_read_region]
     for r in rounds:
         try:
             r(b, offline)
