@@ -543,6 +543,28 @@ class Browser:
         ) % (selector, json.dumps(crit))
         return bool(self.eval(js))
 
+    def set_editable(self, selector: str, text: str) -> bool:
+        """Replace the text of a ``contenteditable`` editor (F063). Rich editors
+        (a comment body, a Slack/Gmail compose area) are ``<div contenteditable>``
+        with **no ``.value``**: ``set_value`` throws ``Illegal invocation`` on a div,
+        and ``type_text``'s clear step (``el.value=''``) is a no-op, so old text
+        survives and new text merges into it. A human selects all (Ctrl+A) then
+        types over the selection. We do exactly that *mechanism*: focus the editor,
+        select its whole contents through the Selection API, then ``Input.insertText``
+        — which replaces the selection and fires real ``beforeinput``/``input`` (so
+        the editor's model updates), instead of poking a ``.value`` that isn't there.
+        Returns ``False`` if the target isn't an editable host."""
+        ok = self.eval(
+            "(function(){var el=window.__agentctl.deepQuery(%r);"
+            "if(!el||!el.isContentEditable)return false;el.focus();"
+            "var r=document.createRange();r.selectNodeContents(el);"
+            "var s=getSelection();s.removeAllRanges();s.addRange(r);return true;})()"
+            % selector)
+        if not ok:
+            return False
+        self.cdp.call("Input.insertText", {"text": text})
+        return True
+
     def press_key(self, key: str, code: str | None = None,
                   key_code: int | None = None) -> None:
         base = {"key": key, "code": code or key}
