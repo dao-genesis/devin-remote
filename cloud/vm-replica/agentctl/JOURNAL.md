@@ -1548,6 +1548,73 @@ drag refuses through an overlay rather than pretend a gesture it cannot land.
 
 ---
 
+## F091 — touch tap to wake a touch-only handler (`tap`) · R55
+
+**Friction:** A mobile-first carousel, a swipeable gallery, a custom control
+built on a touch library answer only to `touchstart` / `touchend` and ignore the
+mouse entirely. A `click` (F060) produces a mouse sequence and a synthesized
+`click` — Chrome does *not* manufacture a `touchstart` from it — so the touch
+handler never runs, yet `click` returns `True`: a silent lie. The friction is
+input *modality*: the element listens on the touch channel, and the mouse channel
+is the only one a click drives.
+
+**Mechanism:** CDP's `Input.dispatchTouchEvent` injects a real touch point.
+A `touchStart` at the element followed by a `touchEnd` makes Chrome fire
+`touchstart` / `touchend` (and, as a real device would, a compatibility `click`).
+That is the gesture a touch-only handler is waiting for; the mouse path never
+reaches it.
+
+**Primitive:** `Browser.tap(selector)` resolves the honest hit point (F061),
+refuses if every probe spot is occluded, then dispatches a `touchStart` there
+followed by a `touchEnd`. Returns `True` once it fires, `False` if the element is
+absent or occluded.
+
+**Live (R55):** a `click` on a touch-only pad leaves `ts` at `0` (the touch
+handler never sees the mouse) though it returns `True` and bumps the
+compatibility `clk`; `tap` raises `ts` to exactly `1`; under a transparent veil
+`tap` → `False` and `ts` stays `1`; an absent selector → `False`.
+`328/328 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 知其雄，守其雌 — to wake a touch handler you must touch,
+not click; the mouse is the wrong channel and pressing it harder will not help.
+The honest tap refuses through an overlay rather than pretend a finger it cannot
+land.
+
+---
+
+## F092 — touch swipe to drive a touchmove carousel (`swipe`) · R56
+
+**Friction:** A touch carousel advances by a finger drag, a pull-to-refresh pane
+reads the touch travel, a bottom-sheet is flung by `touchmove` distance — all
+gated on a *moving* touch, never on the mouse. `drag_by` (F088) carries mouse
+`buttons:1` moves, which a `touchmove` listener never sees, so the carousel
+stays at zero though `drag_by` returns `True`; `tap` (F091) touches but does not
+travel, so a distance-based swipe reads no displacement. The friction is a held
+touch that must *move*.
+
+**Mechanism:** Between a `touchStart` and a `touchEnd`, each `touchMove` carrying
+the moved point makes Chrome fire `touchmove`; the live swipe handler runs once
+per such frame and reads the running displacement from the start point. Stepping
+the point along `(dx, dy)` reproduces a faithful finger drag.
+
+**Primitive:** `Browser.swipe(selector, dx, dy)` resolves the honest hit point
+(F061), refuses if occluded, presses a touch point, steps it along `(dx, dy)`
+issuing `touchMove` events so the swipe handler runs each frame, then lifts with
+`touchEnd`. Returns `True` once the swipe completes, `False` if the element is
+absent or occluded.
+
+**Live (R56):** a left `drag_by` over a touch carousel leaves `dist` at `0` (no
+`touchmove` ever fires) though it returns `True`; `swipe(+120)` drives `dist` to
+exactly `120` and `swipe(-60)` to exactly `-60`; under a transparent veil
+`swipe` → `False` and `dist` stays `-60`; an absent selector → `False`.
+`328/328 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 大器免成 — a swipe is not a tap struck harder nor a mouse
+drag relabelled; it is the one gesture that both touches and travels. The honest
+swipe refuses through an overlay rather than pretend a flick it cannot land.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

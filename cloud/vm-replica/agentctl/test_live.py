@@ -2419,6 +2419,84 @@ def round_right_drag_by(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_tap(b: Browser, offline: bool) -> None:
+    print("R55: touch tap to wake a touch-only handler (F091) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>tap</title>"
+            b"<style>html,body{margin:0}"
+            b"#b{width:160px;height:90px;background:#cfc}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=b>touch</div><div id=veil></div>"
+            b"<script>window.ts=0;window.clk=0;"
+            b"var el=document.getElementById('b');"
+            b"el.addEventListener('touchstart',function(e){window.ts++;},{passive:true});"
+            b"el.addEventListener('click',function(e){window.clk++;});"
+            b"</script>")
+    sp = _serve(8984, page)
+
+    def ts() -> int:
+        return b.eval("window.ts")
+
+    def clk() -> int:
+        return b.eval("window.clk")
+    try:
+        b.navigate("http://127.0.0.1:8984/")
+        time.sleep(0.2)
+        check("no touchstart yet", ts() == 0, repr(ts()))
+        check("a mouse click never fires touchstart (but returns True)",
+              b.click("#b") is True and clk() == 1 and ts() == 0,
+              f"clk={clk()} ts={ts()}")
+        check("tap fires a real touchstart", b.tap("#b") is True and ts() == 1,
+              repr(ts()))
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("tap refuses through an overlay", b.tap("#b") is False)
+        check("no touchstart fired while occluded", ts() == 1, repr(ts()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("tap on an absent element returns False", b.tap("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
+def round_swipe(b: Browser, offline: bool) -> None:
+    print("R56: touch swipe to drive a touchmove carousel (F092) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>swipe</title>"
+            b"<style>html,body{margin:0}"
+            b"#c{width:320px;height:160px;background:#fec}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=c>carousel</div><div id=veil></div>"
+            b"<script>window.dist=0;window.moves=0;"
+            b"var c=document.getElementById('c'),sx=0,on=false;"
+            b"c.addEventListener('touchstart',function(e){on=true;sx=e.touches[0].clientX;},{passive:true});"
+            b"c.addEventListener('touchmove',function(e){if(!on)return;"
+            b"window.dist=e.touches[0].clientX-sx;window.moves++;},{passive:true});"
+            b"c.addEventListener('touchend',function(e){on=false;},{passive:true});"
+            b"</script>")
+    sp = _serve(8985, page)
+
+    def dist() -> int:
+        return b.eval("window.dist")
+    try:
+        b.navigate("http://127.0.0.1:8985/")
+        time.sleep(0.2)
+        check("carousel starts at 0", dist() == 0, repr(dist()))
+        # Friction: a left mouse drag is invisible to a touchmove listener.
+        check("left drag_by does not drive a touch carousel (no touchmove)",
+              b.drag_by("#c", 100, 0) is True and dist() == 0, repr(dist()))
+        # Primitive: a faithful touch swipe travels exactly the delta.
+        check("swipe(+120) drives the carousel to exactly 120",
+              b.swipe("#c", 120, 0) is True and dist() == 120, repr(dist()))
+        check("swipe(-60) drives the carousel to exactly -60",
+              b.swipe("#c", -60, 0) is True and dist() == -60, repr(dist()))
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("swipe refuses through an overlay",
+              b.swipe("#c", 80, 0) is False)
+        check("nothing moved while occluded", dist() == -60, repr(dist()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("swipe on an absent element returns False",
+              b.swipe("#nope", 80, 0) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2439,7 +2517,8 @@ def main() -> int:
               round_scroll_into_view, round_double_click,
               round_press_hold, round_zoom_pane, round_key_activate,
               round_key_step, round_triple_click, round_drag_by,
-              round_middle_click, round_right_drag_by]
+              round_middle_click, round_right_drag_by,
+              round_tap, round_swipe]
     for r in rounds:
         try:
             r(b, offline)
