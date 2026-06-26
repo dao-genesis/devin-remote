@@ -915,6 +915,33 @@ keys fired and where focus landed, not a string we wished had stuck.
 
 ---
 
+### F070 — a custom pane turns on the wheel, not on scrollTop
+**Surface:** a scroller that is not a native scroll container — a zoomable map, a
+carousel, an "infinite" feed that loads more on wheel, a virtualized pane that
+translates its own content. It has no scrollbar; it listens for `wheel` at the
+cursor and moves its content itself. `scroll_until(container=…)` does
+`c.scrollTop += step`, which such a pane silently discards (`off` stays `0`); and
+`scroll(dy)` *does* dispatch a real wheel, but at a fixed page-centre point
+(`400,300`), so when the pane sits elsewhere the wheel lands on the wrong element
+and the pane never moves.
+**Mechanism:** the pane only advances on a `wheel` event delivered *over itself*.
+Assigning `scrollTop` to a non-scrolling element is a no-op; a wheel at the wrong
+coordinates is consumed by whatever is under those coordinates. A human points at
+*that* pane and turns the wheel — the event must carry the pane's own centre.
+**Primitive:** `Browser.wheel_at(selector, dy, dx=0)` resolves the element's centre
+and dispatches `Input.dispatchMouseEvent` `mouseWheel` there, so the pane's own
+`wheel` handler fires; `Browser.wheel_until(found_js, selector, …)` steps it until
+a condition holds (letting the pane re-render between turns). Live: a scrollTop
+scroll and a fixed-centre wheel both leave `off==0`; `wheel_until` over the pane's
+centre drives `off` past the target. Absent pane returns `False`. `170/170 checks
+passed`, deterministic ×3.
+**Lesson (道法自然):** 圖難於其易 — we stop forcing a scrollbar that isn't there and
+give the pane the one signal it answers. 其安易持 — aim at the thing itself, not the
+middle of the screen. 信言不美 — no pane, no wheel; we return `False` rather than
+spin against a target that isn't there.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

@@ -459,6 +459,42 @@ class Browser:
                       {"type": "mouseWheel", "x": x, "y": y,
                        "deltaX": dx, "deltaY": dy})
 
+    def wheel_at(self, selector: str, dy: float, dx: float = 0.0) -> bool:
+        """Dispatch a real wheel event over a *specific* pane (F070). A custom
+        scroller — a zoomable map, a carousel, an "infinite" feed, a virtualized
+        list that translates its own content — is not a native scroll container:
+        it has no scrollbar and ignores ``scrollTop`` (so ``scroll_until``'s
+        ``c.scrollTop+=`` is discarded), and ``scroll`` wheels at a fixed
+        page-centre point that misses a pane sitting elsewhere. A human points at
+        *that* pane and turns the wheel. We resolve the element's centre and
+        dispatch ``Input.dispatchMouseEvent`` ``mouseWheel`` there, so the pane's
+        own ``wheel`` handler fires. Returns ``False`` if the target is absent."""
+        c = self._center_of(selector)
+        if not c:
+            return False
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mouseWheel", "x": c["x"], "y": c["y"],
+                       "deltaX": dx, "deltaY": dy})
+        return True
+
+    def wheel_until(self, found_js: str, selector: str, dy: float = 120,
+                    dx: float = 0.0, max_steps: int = 40,
+                    settle: float = 0.04) -> bool:
+        """Wheel a pane (F070) until ``found_js`` is truthy. Steps real wheel
+        events over ``selector`` (via :meth:`wheel_at`), letting the pane re-render
+        between turns, for surfaces that only advance on ``wheel`` (not on
+        ``scrollTop``). Returns ``True`` once satisfied, ``False`` if the target is
+        absent or the condition never holds within ``max_steps``."""
+        if self.eval(found_js):
+            return True
+        for _ in range(max_steps):
+            if not self.wheel_at(selector, dy, dx):
+                return False
+            time.sleep(settle)
+            if self.eval(found_js):
+                return True
+        return False
+
     def drag(self, x1: float, y1: float, x2: float, y2: float, steps: int = 12) -> None:
         self._move(x1, y1)
         self.cdp.call("Input.dispatchMouseEvent",
