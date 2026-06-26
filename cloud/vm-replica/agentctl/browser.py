@@ -738,21 +738,68 @@ class Browser:
         dispatch a faithful ``keyDown``/``keyUp`` for Enter (vk 13) or Space (vk 32)
         so the handler reads the right ``e.key``. Returns ``True`` once fired,
         ``False`` if the element is absent or cannot hold focus."""
+        if not self._focus(selector, by_text=by_text, tag=tag):
+            return False
+        desc = {"Enter": ("Enter", "Enter", 13),
+                " ": (" ", "Space", 32),
+                "Space": (" ", "Space", 32)}.get(key, (key, key, None))
+        self.press_key(desc[0], desc[1], desc[2])
+        return True
+
+    def _focus(self, selector: str, by_text: bool = False,
+               tag: str | None = None) -> bool:
+        """Focus ``selector`` and return whether it actually took focus. An element
+        with no ``tabindex`` and no native focusability cannot hold focus, so this
+        is an honest test of keyboard-reachability (used by :meth:`key_activate` and
+        :meth:`key_step`)."""
         if by_text:
             tag_lit = "null" if tag is None else repr(tag)
             locate = f"window.__agentctl.byText({selector!r},{tag_lit})"
         else:
             locate = f"window.__agentctl.deepQuery({selector!r})"
         self._inject_helpers()
-        focused = self.eval(
+        return bool(self.eval(
             f"(function(){{var el={locate};if(!el)return false;"
-            f"el.focus();return el===document.activeElement;}})()")
-        if not focused:
+            f"el.focus();return el===document.activeElement;}})()"))
+
+    _NAV_KEYS = {
+        "ArrowRight": ("ArrowRight", "ArrowRight", 39),
+        "ArrowLeft": ("ArrowLeft", "ArrowLeft", 37),
+        "ArrowUp": ("ArrowUp", "ArrowUp", 38),
+        "ArrowDown": ("ArrowDown", "ArrowDown", 40),
+        "Home": ("Home", "Home", 36),
+        "End": ("End", "End", 35),
+        "PageUp": ("PageUp", "PageUp", 33),
+        "PageDown": ("PageDown", "PageDown", 34),
+        "Tab": ("Tab", "Tab", 9),
+        "Escape": ("Escape", "Escape", 27),
+        "Backspace": ("Backspace", "Backspace", 8),
+        "Delete": ("Delete", "Delete", 46),
+    }
+
+    def key_step(self, selector: str, key: str = "ArrowRight", times: int = 1,
+                 by_text: bool = False, tag: str | None = None) -> bool:
+        """Drive a control by repeated **arrow / navigation keystrokes** (F086).
+        Sliders, spinners, listboxes, menubars, radio groups, date pickers, tab
+        strips — a huge family of widgets that move *only* on ``keydown`` of
+        Arrow/Home/End/Page keys against a focused element, ignoring the mouse. A
+        ``role="slider"`` advances on ``ArrowRight``; clicking it is a no-op and
+        :meth:`key_activate` (Enter/Space) never moves it either, yet both return
+        ``True``. Setting a precise value is *N taps of an arrow*, not a click at a
+        guessed pixel. We focus the element (honest focus check — :meth:`_focus`),
+        then dispatch a faithful ``keyDown``/``keyUp`` for the named navigation key
+        ``times`` times, each carrying the right ``key``/``code``/``windowsVirtualKeyCode``
+        so the handler reads ``e.key``. Returns ``True`` once the taps fire,
+        ``False`` if the element is absent, cannot hold focus, or ``key`` is not a
+        known navigation key."""
+        desc = self._NAV_KEYS.get(key)
+        if desc is None:
             return False
-        desc = {"Enter": ("Enter", "Enter", 13),
-                " ": (" ", "Space", 32),
-                "Space": (" ", "Space", 32)}.get(key, (key, key, None))
-        self.press_key(desc[0], desc[1], desc[2])
+        if not self._focus(selector, by_text=by_text, tag=tag):
+            return False
+        for _ in range(max(1, times)):
+            self.press_key(desc[0], desc[1], desc[2])
+            time.sleep(0.01)
         return True
 
     def _pierce_node(self, selector: str) -> int | None:
