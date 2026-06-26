@@ -368,6 +368,7 @@ function decode(buf, enc) {
 //   浏览器"之的)。换版 (入口分片哈希变) 自动重热; 失败守柔, 不阻正常反代。
 const _ASSET_RE = /\/assets\/[A-Za-z0-9_\-.]+\.(?:js|css)/g;
 let _prewarmKey = "";              // 已预热版本键 (入口分片名)
+let _prewarmCritical = "";         // 首屏关键路径已暖的版本键 (先于全图完成)
 const _prewarmActive = new Set();  // 正在预热的版本键 → 防重复并发
 
 function _fetchUp(targetPath, auth) {
@@ -425,6 +426,24 @@ async function _prewarmGraph(localBase, auth, log) {
     let m; while ((m = _ASSET_RE.exec(html))) { if (!seen.has(m[0])) { seen.add(m[0]); queue.push(m[0]); } }
     let rounds = 0, fetched = 0;
     const CONC = 32, MAX = 2000;
+    // 帛书·「为之于其未有, 治之于其未乱」: 先以最高优先级灌入口关键路径(index 直引的入口分片+CSS+
+    //   modulepreload), 此即首屏所需集。其余深层 dynamic-import 分片走后台续抓。令"新账号首开"只等
+    //   首屏几片, 不等全图(根治冷窗口: 全图抓取虽 ~44s, 首屏集秒级即暖, 跨账号共享缓存即时命中)。
+    const critical = queue.slice();
+    const ct0 = Date.now();
+    for (let i = 0; i < critical.length; i += CONC) {
+      await Promise.all(critical.slice(i, i + CONC).map(async (p) => {
+        if (_assetCache.get(p)) return;
+        const r = await _fetchUp(p, auth);
+        if (!r || r.status !== 200) return;
+        const out = _rewriteAssetBody(r.body, r.ct, localBase);
+        const hdrs = { "Content-Type": r.ct || "application/octet-stream", "Cache-Control": "public, max-age=31536000, immutable", "Access-Control-Allow-Origin": "*" };
+        const ce = { status: 200, headers: hdrs, body: out, base: localBase };
+        _cachePut(p, ce); _diskPut(p, ce, localBase); fetched++;
+      }));
+    }
+    _prewarmCritical = key; // 首屏集已暖 → 首开新账号即时命中, 无需等全图
+    if (log) try { log("[proxy] critical-path warm: " + critical.length + " assets in " + (Date.now() - ct0) + "ms"); } catch {}
     while (queue.length && rounds++ < 6 && seen.size < MAX) {
       const next = [];
       for (let i = 0; i < queue.length; i += CONC) {
@@ -875,6 +894,8 @@ module.exports = {
   stopAll,
   buildAuthBridge,
   setBridgeServe,
+  // 预热状态自省: criticalWarm=首屏关键路径已暖(可即时供首开新账号), fullWarm=全模块图已暖。
+  prewarmStatus: () => ({ criticalWarm: !!_prewarmCritical, fullWarm: !!_prewarmKey, key: _prewarmKey || _prewarmCritical }),
   // 供单测访问磁盘二级缓存内部 (非对外 API)。
   _diskCache: { _diskCacheDir, _diskKey, _diskPut, _diskGet, _diskEvict, _isTextCt, _rebaseAsset, ASSET_DISK_MAX },
 };

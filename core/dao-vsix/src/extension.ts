@@ -248,6 +248,7 @@ function staticCacheGetDisk(key: string): StaticCacheVal | null {
 //   DAO_NO_PREWARM=1 可关。
 const _CLOUD_ASSET_RE = /\/assets\/[A-Za-z0-9_\-.]+\.(?:js|css)/g;
 let _cloudPrewarmKey = '';                       // 已预热版本键 (入口分片名)
+let _cloudPrewarmCritical = '';                  // 首屏关键路径已暖的版本键 (先于全图完成)
 const _cloudPrewarmActive = new Set<string>();   // 正在预热的版本键 → 防重复并发
 
 // 经本机服务自取一条路由 (复用 handleRouteInternal → devinCloudProxyRoute 全部抓取/改写/落盘
@@ -284,6 +285,22 @@ async function _prewarmCloudGraph(token: string): Promise<void> {
         while ((m = re0.exec(html))) { if (!seen.has(m[0])) { seen.add(m[0]); queue.push(m[0]); } }
         let rounds = 0, fetched = 0;
         const CONC = 32, MAX = 2000;
+        // 帛书·先以最高优先级灌首屏关键路径 (index 直引入口分片+CSS+modulepreload), 余深层 dynamic-
+        //   import 分片后台续抓 → 首个公网设备"首开"只等首屏几片·不等全图 (根治冷窗口)。
+        const critical = queue.slice();
+        const ct0 = Date.now();
+        for (let i = 0; i < critical.length; i += CONC) {
+            await Promise.all(critical.slice(i, i + CONC).map(async (p) => {
+                const r = await _cloudProbe('/devin-cloud' + p, token);
+                if (r) fetched++;
+            }));
+        }
+        _cloudPrewarmCritical = key;
+        try {
+            const cl = '[' + new Date().toISOString().slice(11, 19) + '] [cloud] critical-path warm: ' + critical.length + ' assets in ' + (Date.now() - ct0) + 'ms\n';
+            fs.appendFile(path.join(DAO_DIR, 'cloud-prewarm.log'), cl, () => {});
+            console.log(cl.trim());
+        } catch { /* 守柔 */ }
         while (queue.length && rounds++ < 6 && seen.size < MAX) {
             const next: string[] = [];
             for (let i = 0; i < queue.length; i += CONC) {
@@ -304,6 +321,7 @@ async function _prewarmCloudGraph(token: string): Promise<void> {
         }
         _cloudPrewarmKey = key;
         _cloudPrewarmActive.delete(key);
+        void _cloudPrewarmCritical;
         try {
             const line = '[' + new Date().toISOString().slice(11, 19) + '] [cloud] prewarm done: ' + fetched + ' assets in ' + (Date.now() - t0) + 'ms\n';
             fs.appendFile(path.join(DAO_DIR, 'cloud-prewarm.log'), line, () => {});
