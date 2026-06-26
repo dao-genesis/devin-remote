@@ -1,11 +1,15 @@
 "use strict";
 // 实测 tunnel.html 的「公网入口选取」真代码 (切片 //__CHANSEL_START__…//__CHANSEL_END__ eval)。
-// 本源契约 (道法自然·去中心化为本·设备自托管为根, 第三方宿主/账号/Worker 皆仅可选兜底):
-//   ① 网页直开入口(_bestWeb) 首选「设备自带零账号隧道」(cloudflared 主 > SSH 备) 直供本机 console.html ——
-//      网页与控制同源、同走设备自己的隧道, 不经任何第三方静态宿主/账号/Worker。这是根方案·默认。
-//   ② 次选局域网直连; ③ 再次「去中心化 P2P 网控台」(公共静态宿主 + 公共 ntfy mesh + WebRTC·零 Worker·
-//      可选兜底·URL 稳定兼顾持久); ④ 末位才回落中继 Worker /console。
-//   ⑤ RPC/状态公网入口(_bestPublic) 同理: 去中心化隧道(cloudflared 主 > SSH 备)优先, Worker 末位兜底。
+// 本源契约 (道法自然·反则道之动也·分层收敛三难·永不 1033 死链):
+//   物理边界: 设备本机无法既零账号又持久地当公网 HTTP 首字节宿主 (零账号快速隧道 trycloudflare 先天临时·
+//     重启即换 URL → 卡片发出时活·对方打开时已死 = 1033 死链)。
+//   收敛架构 (各取所长·分层):
+//   ① 身份(session+token)就绪 → 网页直开(_bestWeb) 默认 = 持久去中心化引导宿主(Pages/IPFS·恒在线·永不
+//      1033)开页, 链接只带稳定 session+token; 设备此刻活隧道作 &direct= 可选「直连提速」提示(活则提速·死也
+//      不影响开页), 通信全程走 ntfy mesh。kind='p2p-web'。
+//   ② 缺身份(无 session/token·无法 mesh 定址)时退化: 设备活隧道直供 console.html(cloudflared 主 > SSH 备)>
+//      局域网 > Worker /console 末位。
+//   ③ RPC/状态公网入口(_bestPublic) 不变: 去中心化隧道(cloudflared 主 > SSH 备)优先, Worker 末位兜底。
 // 无框架: node test/channel-select.test.js, 退出码非 0 即失败。
 const fs = require("fs");
 const path = require("path");
@@ -41,18 +45,21 @@ const CF = "https://spots-vegetable-warehouse-vast.trycloudflare.com";
 const SSH = "https://ssh-tunnel.example.net";
 const ID = { session: "s1", token: "tok1" };   // 真实设备恒自带 session+token
 
-// 场景1: 设备身份就绪 + Worker 连通 + cloudflared 也在 → 网页直开 = 设备自带隧道·自托管 console.html(根方案首选)。
+// 场景1: 设备身份就绪 + Worker 连通 + cloudflared 也在 → 网页直开 = 持久去中心化引导宿主开页(永不 1033),
+//        附设备活隧道作 &direct= 提速提示, 通信走 mesh。
 {
   const mod = build({ conn: Object.assign({ url: WORKER }, ID), relay: { connected: true, activeUrl: WORKER },
     tunnel: { tunnels: [{ name: "cloudflared", url: CF }] } });
   const w = mod.bestWeb();
-  ok(w.kind === "cloudflared", "1 身份就绪+隧道在: _bestWeb = cloudflared (设备自带隧道·自托管·根方案首选)");
-  ok(w.url.indexOf("trycloudflare.com") >= 0, "1 入口走设备自带零账号隧道域 (本机自托管 console.html·不经任何第三方宿主)");
-  ok(w.url.indexOf("github.io") < 0, "1 首选不再走 GitHub Pages (第三方账号宿主降为可选兜底·非默认根)");
-  ok(w.url.indexOf("surge.sh") < 0, "1 不用 surge.sh (已被永久下架·HTTP 451·返回 Unavailable)");
-  ok(w.url.indexOf(".workers.dev") < 0, "1 入口完全不含 Worker 域名 (彻底脱离 Worker 依赖)");
-  ok(/auto=1/.test(w.url) && /session=s1/.test(w.url) && /token=tok1/.test(w.url), "1 链接自带 session+token+auto=1 (一开即直连)");
-  ok(/不经任何第三方宿主/.test(w.label), "1 标签注明「不经任何第三方宿主」(设备自托管)");
+  ok(w.kind === "p2p-web", "1 身份就绪+隧道在: _bestWeb = p2p-web (持久去中心化引导宿主开页·永不 1033)");
+  ok(w.url.indexOf(mod.P2P_WEB_DEFAULT) === 0, "1 开页首字节走持久宿主 (恒在线·非临时隧道·永不 1033)");
+  ok(w.url.indexOf("surge.sh") < 0, "1 不用 surge.sh (已被永久下架·HTTP 451)");
+  ok(w.url.indexOf(".workers.dev") < 0, "1 开页入口完全不含 Worker 域名 (彻底脱离 Worker 依赖)");
+  ok(/auto=1/.test(w.url) && /session=s1/.test(w.url) && /token=tok1/.test(w.url), "1 链接只带稳定 session+token+auto=1 (永不僵死)");
+  ok(/[?&]direct=/.test(w.url), "1 附 &direct= 设备活隧道提速提示 (③ 加速层)");
+  ok(decodeURIComponent(w.url).indexOf("trycloudflare.com") >= 0, "1 &direct 指向设备此刻活隧道 (活则直连提速)");
+  ok(w.direct === CF, "1 web.direct = 设备活隧道 base");
+  ok(/永不 1033/.test(w.label), "1 标签注明「永不 1033」(首字节来自持久宿主)");
   // RPC/状态入口: 去中心化隧道优先于 Worker, 即便 Worker 在线。
   ok(mod.bestPublic().kind === "cloudflared", "1 _bestPublic = cloudflared (去中心化隧道优先于在线 Worker)");
   // 当前生效通道: 身份就绪即路线C(ntfy mesh)恒为主路, 不经任何 Worker。
@@ -63,23 +70,25 @@ const ID = { session: "s1", token: "tok1" };   // 真实设备恒自带 session+
   ok(/不经任何 Worker/.test(ac1.label), "1 mesh 标签注明「不经任何 Worker」");
 }
 
-// 场景2: 身份就绪 + Worker 掉线(connected:false) + cloudflared 在 → 网页直开仍恒走设备自带隧道。
+// 场景2: 身份就绪 + Worker 掉线(connected:false) + cloudflared 在 → 网页直开仍走持久宿主, &direct 仍指活隧道。
 {
   const mod = build({ conn: Object.assign({ url: WORKER }, ID), relay: { connected: false, activeUrl: WORKER },
     tunnel: { tunnels: [{ name: "cloudflared", url: CF }] } });
-  ok(mod.bestWeb().kind === "cloudflared", "2 Worker 掉线无影响: _bestWeb 恒走设备自带隧道 (不依赖 Worker 在线)");
+  const w = mod.bestWeb();
+  ok(w.kind === "p2p-web", "2 Worker 掉线无影响: _bestWeb 恒走持久宿主开页 (不依赖 Worker 在线)");
+  ok(/[?&]direct=/.test(w.url) && w.direct === CF, "2 仍附 &direct= 设备活隧道提速提示");
   ok(mod.bestPublic().kind === "cloudflared", "2 _bestPublic = cloudflared");
 }
 
-// 场景3: 身份就绪 + 只有 Worker (无隧道无局域网) → 网页直开回落「去中心化 P2P 网控台」(公共静态宿主·零 Worker),
-//        而非中继 Worker; RPC 入口才末位兜底 Worker。
+// 场景3: 身份就绪 + 只有 Worker (无隧道无局域网) → 网页直开走持久宿主开页(零 &direct·永不 1033), 不经 Worker。
 {
   const mod = build({ conn: Object.assign({ url: WORKER }, ID), relay: { connected: true, activeUrl: WORKER },
     tunnel: { tunnels: [] } });
   const w = mod.bestWeb();
-  ok(w.kind === "p2p-web", "3 无隧道无局域网: 网页直开回落 p2p-web (去中心化·零 Worker 兜底·非中继 Worker)");
-  ok(w.url.indexOf(".workers.dev") < 0, "3 兜底入口仍完全不含 Worker 域名");
-  ok(/可选兜底/.test(w.label), "3 p2p-web 标注「可选兜底」(非默认根)");
+  ok(w.kind === "p2p-web", "3 无隧道无局域网: 网页直开走持久宿主开页 (去中心化·零 Worker·永不 1033)");
+  ok(w.url.indexOf(".workers.dev") < 0, "3 开页入口仍完全不含 Worker 域名");
+  ok(!/[?&]direct=/.test(w.url) && w.direct === "", "3 无活隧道 → 不附 &direct (仅 mesh 通信·照样开页连通)");
+  ok(/永不 1033/.test(w.label), "3 标签注明「永不 1033」");
   ok(mod.bestPublic().kind === "worker", "3 _bestPublic 才末位兜底 Worker (无去中心化隧道时)");
   ok(/末位兜底/.test(mod.bestPublic().label), "3 Worker 标注「末位兜底」(已下放)");
   // 当前生效通道仍是 mesh (设备 serve 常驻·不经 Worker); httpBase 不落 Worker。
@@ -88,13 +97,13 @@ const ID = { session: "s1", token: "tok1" };   // 真实设备恒自带 session+
   ok(ac3.worker === false && ac3.httpBase === "", "3 mesh 主路 worker:false 且 httpBase 不回落 Worker");
 }
 
-// 场景4: 自托管覆写 webConsoleBase + 无隧道 → 直开走自有源 (更彻底去中心)。
+// 场景4: 自托管覆写 webConsoleBase + 无隧道 → 开页走自有持久源 (更彻底去中心·永不 1033)。
 {
   const SELF = "https://pages.example.dev/p2p.html";
   const mod = build({ conn: Object.assign({ url: WORKER, webConsoleBase: SELF }, ID), relay: { connected: true },
     tunnel: { tunnels: [] } });
   const w = mod.bestWeb();
-  ok(w.kind === "p2p-web" && w.url.indexOf(SELF) === 0, "4 无隧道时 webConsoleBase 覆写生效: 直开走自托管源");
+  ok(w.kind === "p2p-web" && w.url.indexOf(SELF) === 0, "4 无隧道时 webConsoleBase 覆写生效: 开页走自托管持久源");
 }
 
 // 场景5: 身份未就绪(缺 token) + cloudflared → 仍首选设备自带隧道根 (隧道为根·不依赖身份定址)。

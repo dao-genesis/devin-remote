@@ -256,24 +256,44 @@ function _pj(raw){ try{ var o=JSON.parse(raw||"{}"); return (o&&typeof o==="obje
 function _conn(){ return _pj(N.conn?N.conn():""); }
 function _relay(){ return _pj(N.relayStatus?N.relayStatus():""); }
 //__CHANSEL_START__ (经 test/channel-select.test.js 切片 eval 实测, 勿删标记)
-// 公网入口选取 (道法自然·去中心化为本·设备自托管为根, 第三方宿主/账号/Worker 皆仅可选兜底):
-//   ① 网页直开首选「设备自带零账号隧道」(cloudflared 主 > SSH 备) 直供本机 console.html ——
-//      网页与控制同源、同走设备自己的隧道, 不经任何第三方静态宿主/账号/Worker。这是根方案·默认。
-//   ② 次选局域网直连 (同网·零中继零隧道·亦本机自托管)。
-//   ③ 再次「去中心化 P2P 网控台」: 公共静态宿主托管的 console.html, 经多家公共 ntfy 信令 + WebRTC 直连
-//      本机 serve(), 不经任何 Worker —— 仅当设备 HTTP 隧道未就绪/被封时的零账号兜底 (其 URL 稳定·兼顾持久)。
-//   ④ 末位才回落中继 Worker /console。RPC/curl 公网入口 (_bestPublic) 同理: 去中心化隧道优先, Worker 末位兜底。
-//   局域网仅同网可达, 不计入「公网」; P2P 是握手机制非基础 URL。
-// 可选增强·公共静态网页直开宿主 (仅 ③ 兜底用·非默认根): console.html (完整 APK 同款 UI·非任何 Worker)。
-//   base 可由 conn.webConsoleBase 覆写(自托管/换镜像/换中立账号)。默认 GitHub Pages(仓库自给自页·随 main
-//   自动同鲜·正确 text/html); surge.sh(原首选·无账号标识)已被永久下架(HTTP 451)故弃; jsDelivr 把 .html
+// 网页直开入口选取 (道法自然·反则道之动也·收敛三难于「分层」):
+//   物理边界(三难·不可兼得): 设备本机无法既「零账号」又「持久」地当公网 HTTP 首字节宿主 ——
+//     零账号快速隧道(trycloudflare)先天临时(重启即换 URL/被回收 → 卡片发出时活·对方打开时已死 = 1033 死链);
+//     具名隧道持久却要账号 token; 真正「零账号 + 持久」只能把首字节交给「内容寻址的去中心化网络/常驻静态宿主」。
+//   收敛最优架构(分层·各取所长):
+//   ① 首字节(开页)= 持久去中心化引导宿主 (内容寻址 IPFS CID·多镜像 / 仓库自给自页 Pages·恒在线·永不 1033)。
+//      链接只带稳定的 session+token → 旧链接永不僵死。这是默认·根。
+//   ② 通信(数据面)= 去中心化路线C·ntfy mesh + WebRTC P2P (零账号·全程不经任何 Worker)。开页后恒走此路。
+//   ③ 加速层(可选)= 设备此刻的活隧道作 &direct=<tunnel> 提示: 活则页面直连它提速(自托管体验), 死也不影响开页 ——
+//      因首字节来自持久宿主、通信走 mesh, 设备隧道生灭与「能否打开+能否连」彻底解耦。
+//   ④ 缺身份(无 session/token·无法 mesh 定址)时退化: 设备活隧道直供 console.html > 局域网 > Worker /console 末位。
+//   RPC/curl 公网入口 (_bestPublic): 去中心化隧道优先, Worker 末位兜底 (不变)。
+// 持久去中心化引导宿主 (①·首字节来源·完整 APK 同款 UI console.html·非任何 Worker):
+//   base 可由 conn.webConsoleBase 覆写(换 IPFS CID 网关/自托管/中立账号)。默认 GitHub Pages(仓库自给自页·随
+//   main 自动同鲜·恒在线·正确 text/html·永不 1033); 另随附 IPFS CID 多网关镜像(内容寻址·零账号·账号中立·见
+//   _durableMirrors)作账号中立可选项。surge.sh(原无账号标识)已被永久下架(HTTP 451)故弃; jsDelivr 把 .html
 //   当 text/plain 故不用。同目录附 signal.js 及各板块 HTML(console.html 同源优先取之·见其 CDN_BASES)。
 var P2P_WEB_DEFAULT = "https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html";
+// 账号中立·内容寻址持久镜像 (IPFS CID·多公共网关·零账号·CID 永不失效)。__IPFS_CID__ 由发布脚本填实测 CID。
+//   首字节默认走 Pages(恒在线·最稳); 用户愿要「无账号标识」可把 webConsoleBase 覆写为下列任一网关 URL。
+var P2P_WEB_IPFS_CID = "bafybeifwt5i5dhytdpkwirclhnnyijp42imfxmir4nfbzhtbbsyi7i6mae";
+function _durableMirrors(){
+  var base=_p2pWebBase(), out=[base];
+  var cid=P2P_WEB_IPFS_CID; if(cid && cid.indexOf("__")!==0){
+    ["https://"+cid+".ipfs.dweb.link/console.html","https://ipfs.io/ipfs/"+cid+"/console.html",
+     "https://"+cid+".ipfs.cf-ipfs.com/console.html"].forEach(function(u){ if(out.indexOf(u)<0) out.push(u); });
+  }
+  if(out.indexOf(P2P_WEB_DEFAULT)<0) out.push(P2P_WEB_DEFAULT);
+  return out;
+}
 function _p2pWebBase(){ var c=_conn(); return String((c&&c.webConsoleBase)||P2P_WEB_DEFAULT).replace(/\s+/g,""); }
-function _p2pWebUrl(){
+function _p2pWebUrl(direct){
   var c=_conn();
   if(!c.session || !c.token) return "";   // 去中心化直连需 session+token 作定址(topic)+鉴权(密钥)
-  return _p2pWebBase()+"?session="+encodeURIComponent(c.session)+"&token="+encodeURIComponent(c.token)+"&auto=1";
+  var u=_p2pWebBase()+"?session="+encodeURIComponent(c.session)+"&token="+encodeURIComponent(c.token)+"&auto=1";
+  // 设备此刻活隧道作可选「直连提速」提示(③ 加速层): 页面活则优先直连它, 死也不影响开页(首字节来自持久宿主)。
+  if(direct) u+="&direct="+encodeURIComponent(String(direct).replace(/\/$/,''));
+  return u;
 }
 function _bestPublic(){
   var c=_conn(), t=_tunnel(), r=_relay();
@@ -289,26 +309,27 @@ function _bestPublic(){
   if(w) return { base:w, kind:'worker', label:'零账号中继·末位兜底', online:!!r.connected };
   return { base:"", kind:'none', label:'(暂无可用公网入口)', online:false };
 }
-// 浏览器可直开的最优网页入口 (道法自然·设备自托管为根, 第三方宿主/Worker 仅可选兜底):
-//   ① 设备自带零账号隧道(cloudflared 主 > SSH 备) 直供本机 console.html(网页+控制同源·不经任何第三方);
-//   ② 局域网直连(同网·零中继零隧道); ③ 去中心化 P2P 网控台(公共静态宿主 + ntfy mesh·零 Worker·可选兜底·持久);
-//   ④ 末位才回落中继 Worker /console。
+// 浏览器可直开的最优网页入口 (道法自然·反则道之动也·分层收敛三难):
+//   ① 默认·根: 持久去中心化引导宿主直开(链接只带稳定 session+token → 永不 1033 死链), 设备此刻活隧道作
+//      &direct= 可选提速提示(活则页面直连提速·死也不影响开页), 通信全程走 ntfy mesh。
+//   ② 缺身份(无 session/token·无法 mesh 定址)时退化: 设备活隧道直供 console.html > 局域网 > Worker /console 末位。
 function _bestWeb(){
   var c=_conn(), r=_relay();
-  // ① 根方案·默认首选: 设备自带零账号隧道直供本机整页 (cloudflared 主 > SSH 备, 皆独立于 Worker/账号)。
   var bp=_bestPublic();
-  if(bp.base && (bp.kind==='cloudflared'||bp.kind==='ssh'))
-    return { url:_webConsoleUrl(bp.base,true), kind:bp.kind, base:bp.base,
+  var direct=(bp.base && (bp.kind==='cloudflared'||bp.kind==='ssh'))?bp.base:"";
+  // ① 根方案·默认首选: 持久去中心化引导宿主开页(恒在线·永不 1033), 附设备活隧道作 &direct 提速提示, 通信走 mesh。
+  var p2p=_p2pWebUrl(direct);
+  if(p2p) return { url:p2p, kind:'p2p-web', base:_p2pWebBase(), direct:direct,
+    label:(direct?'持久去中心化引导宿主开页(永不 1033)+ 设备活隧道直连提速 + ntfy mesh 通信(零 Worker)'
+                 :'持久去中心化引导宿主开页(永不 1033)+ ntfy mesh 通信(零账号·零 Worker)') };
+  // ②a 退化(无身份): 设备自带零账号隧道直供本机整页 (cloudflared 主 > SSH 备, 皆独立于 Worker/账号)。
+  if(direct)
+    return { url:_webConsoleUrl(direct,true), kind:bp.kind, base:direct,
       label:'设备自带隧道·自托管 console.html('+bp.label+'·不经任何第三方宿主)' };
-  // ② 局域网直连 (同网·零中继零隧道·亦本机自托管)。
+  // ②b 局域网直连 (同网·零中继零隧道·亦本机自托管)。
   var l=_lan(); var us=(l&&l.urls)||[];
   if(us.length){ var lb=String(us[0]).replace(/\/$/,''); return { url:_webConsoleUrl(lb,true), label:'局域网直连(同网·零中继零隧道·自托管)', kind:'lan', base:lb }; }
-  // ③ 可选兜底·去中心化 P2P 网控台: 公共静态宿主托管 console.html, 经 ntfy mesh + WebRTC 直连本机 serve();
-  //    设备 HTTP 隧道暂未就绪/被封时的零 Worker 兜底, 其 URL 稳定不随隧道轮换 → 兼顾持久。
-  var p2p=_p2pWebUrl();
-  if(p2p) return { url:p2p, kind:'p2p-web', base:_p2pWebBase(),
-    label:'去中心化 P2P 网控台(可选兜底·公共静态宿主·零账号·不经 Worker)' };
-  // ④ 末位兜底: 中继 Worker /console。
+  // ②c 末位兜底: 中继 Worker /console。
   var w=((r.activeUrl||c.url)||"").replace(/\/$/,'');
   if(w) return { url:_webConsoleUrl(w,true), kind:'worker', base:w,
     label:(r.connected!==false?'零账号中继网控台(末位兜底·免隧道)':'零账号中继网控台(自愈重连中·末位兜底)') };
