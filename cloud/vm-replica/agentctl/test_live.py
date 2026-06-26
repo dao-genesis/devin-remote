@@ -1025,6 +1025,65 @@ def round_oop_iframe(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_new_tab(b: Browser, offline: bool) -> None:
+    print("R24: drive a tab opened by a target=_blank click (F060) — cdp")
+    import urllib.request
+    tok = str(int(time.time() * 1000) % 1000000)
+    opener = (b"<!doctype html><title>opener</title><h1>opener</h1>"
+              b"<a id=lnk href='http://127.0.0.1:8932/s-" + tok.encode() +
+              b"' target=_blank>open second</a>")
+    second = (b"<!doctype html><title>tab-" + tok.encode() + b"</title>"
+              b"<h1 id=h>SECOND-" + tok.encode() + b"</h1>"
+              b"<button id=go onclick=\"document.title='SECOND-CLICKED'\">go</button>")
+    sp = _serve(8931, opener)
+    sc = _serve(8932, second)
+    try:
+        b.navigate("http://127.0.0.1:8931/")
+        time.sleep(0.2)
+        # Friction: the link opens a *new top-level tab*. The connection stays on
+        # the opener; the new tab is a separate page target the opener session
+        # cannot read or drive (site-isolation auto-attach reaches child frames,
+        # not sibling tabs).
+        b.click_text("open second")
+        time.sleep(0.5)
+        urls = [p["url"] for p in b.pages()]
+        check("new tab target appears in the browser",
+              any(f"s-{tok}" in u for u in urls), repr(urls))
+        check("opener session still reads the opener, not the new tab",
+              b.eval("document.title") == "opener", b.eval("document.title"))
+        # Primitive: switch to (drive) the new tab, as a human clicks it.
+        check("switch_page focuses the new tab", b.switch_page(f"s-{tok}"))
+        check("new tab is now readable",
+              b.eval("document.getElementById('h').textContent") == f"SECOND-{tok}",
+              b.eval("document.title"))
+        # And actable: helpers re-injected, click drives the switched tab.
+        check("agentctl helpers present on the switched tab",
+              b.eval("!!window.__agentctl"))
+        b.click_text("go")
+        check("click acts on the switched tab",
+              b.wait_for("document.title==='SECOND-CLICKED'", timeout=3),
+              b.eval("document.title"))
+        # And we can switch back to the opener.
+        check("switch_page returns to the opener", b.switch_page("8931/"))
+        check("opener is driveable again",
+              b.eval("document.title") == "opener", b.eval("document.title"))
+        # A tab that never opened fails fast rather than hanging.
+        check("switch to absent tab fails fast",
+              b.switch_page("no-such-tab", timeout=0.5) is False)
+    finally:
+        # Close the spawned tab so repeated full-suite runs stay deterministic.
+        try:
+            for p in b.pages():
+                if f"s-{tok}" in (p["url"] or ""):
+                    urllib.request.urlopen(
+                        f"http://127.0.0.1:{b.cdp.port}/json/close/{p['target_id']}",
+                        timeout=5).read()
+        except Exception:
+            pass
+        sp.shutdown()
+        sc.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1034,7 +1093,7 @@ def main() -> int:
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
-              round_oop_iframe]
+              round_oop_iframe, round_new_tab]
     for r in rounds:
         try:
             r(b, offline)

@@ -222,6 +222,14 @@ class CDP:
         host = hostport.split(":")[0]
         port = int(hostport.split(":")[1]) if ":" in hostport else 80
         self.ws = _WS(host, port, "/" + path)
+        # F060: connect() is re-entrant — switching to another top-level tab
+        # re-points this same CDP at a new target. Reset per-connection state so
+        # listeners aren't double-registered and no context/session from the old
+        # tab leaks into the new one.
+        self.contexts.clear()
+        self.sessions.clear()
+        self._cur_session = None
+        self._listeners.clear()
         self._alive = True
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()

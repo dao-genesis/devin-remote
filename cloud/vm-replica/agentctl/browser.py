@@ -179,6 +179,36 @@ class Browser:
         return self.cdp.evaluate(expr, context_id=cid,
                                  await_promise=await_promise)
 
+    # ---- F060: new top-level tabs / popup windows ------------------------- #
+    def pages(self) -> list[dict]:
+        """Every open top-level tab/window, newest first. A ``target=_blank``
+        link or ``window.open`` spawns one of these — a separate page target the
+        opener's session cannot see into."""
+        return [{"title": p.get("title"), "url": p.get("url"),
+                 "target_id": p.get("id"), "ws": p.get("webSocketDebuggerUrl")}
+                for p in self.cdp.list_pages()]
+
+    def switch_page(self, match: str, timeout: float = 5.0,
+                    interval: float = 0.2) -> bool:
+        """Drive a *different* top-level tab whose url/title contains ``match``
+        (F060). A click that opens a new tab leaves the connection on the opener;
+        site-isolation auto-attach (F059) only reaches child frames, not sibling
+        top-level targets. So we re-point this connection at the new tab's own
+        devtools endpoint — the programmatic equivalent of a human clicking the
+        new tab — and re-inject helpers. Returns True once switched."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for p in self.cdp.list_pages():
+                if match in (p.get("url") or "") or match in (p.get("title") or ""):
+                    ws = p.get("webSocketDebuggerUrl")
+                    if ws:
+                        self.cdp.close()
+                        self.cdp.connect(ws_url=ws)
+                        self._inject_helpers()
+                        return True
+            time.sleep(interval)
+        return False
+
     # ---- navigation (F003/F004: arrival, not just fired) ------------------ #
     def navigate(self, url: str, timeout: float = 30.0) -> str:
         self.cdp.call("Page.navigate", {"url": url}, timeout=timeout)

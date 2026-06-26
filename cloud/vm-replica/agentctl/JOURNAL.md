@@ -625,6 +625,34 @@ and governs its own context; we route to it without flattening its identity into
 the parent's. The lowest layer (`cdp.py`) grew so the highest call (`eval_in_frame`)
 need not change — 大制無割, the great tailoring leaves no seam.
 
+### F060 — a new tab the connection never followed
+**Surface:** a `target=_blank` link (or `window.open`) is clicked. A human sees a
+new tab pop to the front and simply works in it. We click it, and a new page target
+**does** appear in `/json/list` — but `document.title` still reads the *opener*.
+Everything we evaluate, type, or click lands on the old tab. The new tab is on
+screen yet completely undriveable.
+**Mechanism:** a new top-level tab is its own **page target** with its own devtools
+websocket. Unlike F059's cross-site *child frame* — which Chrome auto-attaches to the
+opener's session because it belongs to the same page — a sibling **top-level** target
+is attached to nobody. `Target.setAutoAttach` only cascades to subframes of the page
+we are on, not to brand-new pages. So our one connection stays bolted to the opener;
+the new tab emits its contexts on a socket we never opened.
+**Primitive:** `Browser.switch_page(match)` (+ `pages()`), backed by a re-entrant
+`CDP.connect`. We list page targets over HTTP, find the one whose url/title contains
+`match`, **close the current websocket and connect to that tab's own
+`webSocketDebuggerUrl`**, then re-inject helpers. `connect()` now clears its
+per-connection state (contexts, sessions, listeners) so the old tab's bookkeeping
+never leaks into the new one and listeners are not double-registered. The result is
+the programmatic act of *clicking the new tab*: after `switch_page("s-…")` we read
+its `<h1>`, `click_text("go")` drives it, and `switch_page("8931/")` returns to the
+opener; an absent tab fails fast. `108/108 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 不行而知，不見而名 — we did not try to force the opener's session
+to peer into a tab it was never connected to (為者敗之); we let the browser keep each
+tab whole and simply moved our attention to where the action already was. 知人者智，自知者明
+— the connection learned to *know which page it is on* and to let go of the old one
+(`connect` clears itself) before taking up the new; 為學日益，為道日損 — the primitive
+grows by what it releases, not only by what it adds.
+
 ---
 
 ## Frontier (next honest rounds)
