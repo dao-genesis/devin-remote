@@ -1129,6 +1129,53 @@ def round_occlusion(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_native_select(b: Browser, offline: bool) -> None:
+    print("R26: choose from a native <select> whose popup is OS-drawn (F062) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>select</title>"
+            b"<select id=s onchange=\"window.__v=this.value;"
+            b"window.__n=(window.__n||0)+1\">"
+            b"<option value=red>Red</option>"
+            b"<option value=green>Green</option>"
+            b"<option value=blue>Blue</option></select>")
+    sp = _serve(8952, page)
+    try:
+        b.navigate("http://127.0.0.1:8952/")
+        time.sleep(0.2)
+        check("select starts on its first option",
+              b.eval("document.getElementById('s').value") == "red")
+        # Friction: a coordinate click where the 'Blue' row visually appears lands
+        # on the page, not the OS popup — the value never changes.
+        c = b._center_of("#s")
+        b.click("#s")
+        time.sleep(0.2)
+        b.click_xy(c["x"], c["y"] + 54)
+        time.sleep(0.1)
+        check("a coordinate click into the OS popup selects nothing",
+              b.eval("document.getElementById('s').value") == "red"
+              and b.eval("window.__v||null") is None)
+        # Primitive: select_option picks by value and fires a real change.
+        b.eval("window.__v=null;window.__n=0;true")
+        check("select_option by value chooses Blue", b.select_option("#s", value="blue") is True)
+        check("the select now reflects Blue",
+              b.eval("document.getElementById('s').value") == "blue")
+        check("a bubbling change fired exactly once",
+              b.eval("window.__v") == "blue" and b.eval("window.__n") == 1,
+              repr((b.eval("window.__v"), b.eval("window.__n"))))
+        # By visible label and by index, too.
+        check("select_option by label chooses Green",
+              b.select_option("#s", label="Green") is True
+              and b.eval("document.getElementById('s').value") == "green")
+        check("select_option by index chooses the first option",
+              b.select_option("#s", index=0) is True
+              and b.eval("document.getElementById('s').value") == "red")
+        # Truthful failure: an option that does not exist is not invented.
+        check("select_option refuses an absent option",
+              b.select_option("#s", value="purple") is False
+              and b.eval("document.getElementById('s').value") == "red")
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1138,7 +1185,8 @@ def main() -> int:
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
-              round_oop_iframe, round_new_tab, round_occlusion]
+              round_oop_iframe, round_new_tab, round_occlusion,
+              round_native_select]
     for r in rounds:
         try:
             r(b, offline)

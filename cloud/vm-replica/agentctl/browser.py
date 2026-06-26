@@ -22,6 +22,7 @@ of sleeping and hoping.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import sys
 import time
@@ -509,6 +510,37 @@ class Browser:
             "el.dispatchEvent(new Event('input',{bubbles:true}));"
             "el.dispatchEvent(new Event('change',{bubbles:true}));return true;})()"
         ) % (selector, value)
+        return bool(self.eval(js))
+
+    def select_option(self, selector: str, *, value: str | None = None,
+                      label: str | None = None, index: int | None = None) -> bool:
+        """Choose an option from a native ``<select>`` (F062). Clicking a select
+        opens an **OS-drawn** popup that is neither in the DOM nor on the page's
+        painted surface — a coordinate click where a row *looks* to be lands on
+        nothing, and ``set_value`` (an ``<input>`` setter) throws ``Illegal
+        invocation`` on a select. So we make the choice semantically: find the
+        matching ``<option>`` by ``value`` / visible ``label`` / ``index``, set it
+        through the real ``HTMLSelectElement.value`` setter (so React's value
+        tracker is updated, not bypassed), and fire bubbling ``input``+``change``.
+        Faster and surer than a human opening, scrolling, and clicking the popup.
+        Returns True once the select actually reflects the chosen option."""
+        crit = {"value": value, "label": label, "index": index}
+        js = (
+            "(function(){var s=window.__agentctl.deepQuery(%r);"
+            "if(!s||s.tagName!=='SELECT')return false;"
+            "var c=%s;var opt=null;"
+            "for(var i=0;i<s.options.length;i++){var o=s.options[i];"
+            "  if(c.index!=null){if(i===c.index){opt=o;break;}continue;}"
+            "  if(c.value!=null&&o.value===c.value){opt=o;break;}"
+            "  if(c.label!=null&&(o.textContent||'').trim()===c.label){opt=o;break;}}"
+            "if(!opt)return false;"
+            "var set=Object.getOwnPropertyDescriptor("
+            "  HTMLSelectElement.prototype,'value').set;"
+            "set.call(s,opt.value);s.selectedIndex=opt.index;"
+            "s.dispatchEvent(new Event('input',{bubbles:true}));"
+            "s.dispatchEvent(new Event('change',{bubbles:true}));"
+            "return s.value===opt.value;})()"
+        ) % (selector, json.dumps(crit))
         return bool(self.eval(js))
 
     def press_key(self, key: str, code: str | None = None,
