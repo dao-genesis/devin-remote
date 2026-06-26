@@ -3341,6 +3341,97 @@ def round_read_block(b: Browser, offline: bool) -> None:
           osctl.read_block(rgb, sz, (5, 5, 25, 25), atlas, MAG) == [])
 
 
+def round_read_words(b: Browser, offline: bool) -> None:
+    print("R70: read a line WITH word spaces — gap-bimodality (F106) — osctl")
+    # read_text joins per-glyph cells with nothing between them: it records WHERE
+    # the cells are, never the WIDTH of the blank between them, so a line with a
+    # real word gap ("OK  CAB") reads "OKCAB" — the space is dropped. The gaps are
+    # bimodal: letter gaps cluster small, the word gap is markedly wider.
+    # read_words takes the median gap as the letter spacing and inserts ' ' where
+    # a gap is >= space_k x that median.
+    MAG = (255, 0, 255)
+
+    def blobs(rgb, w, h):
+        bs = osctl.find_color_blobs(MAG, tol=60, rgb=rgb, size=(w, h), min_count=120)
+        return sorted(bs, key=lambda t: t["x"])
+    chars = "ABCOKX"
+    draws = "".join("x.fillText('%s',%d,100);" % (ch, 40 + i * 120)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("rw_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=760 height=160></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,760,160);"
+               "x.fillStyle='#f0f';x.font='bold 90px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = blobs(argb, aw, ah)
+    check("atlas segments into six reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def line(words, letter_adv=70, word_gap=130, font_px=64):
+        d, x = [], 40
+        for word in words:
+            for ch in word:
+                d.append("x.fillText('%s',%d,100);" % (ch, x))
+                x += letter_adv
+            x += word_gap
+        b.navigate(fixture("rw_line.html",
+                   "<!doctype html><title>w</title><style>html,body{margin:0}</style>"
+                   "<canvas id=c width=900 height=200></canvas><script>"
+                   "var x=document.getElementById('c').getContext('2d');"
+                   "x.fillStyle='#fff';x.fillRect(0,0,900,200);"
+                   "x.fillStyle='#f0f';x.font='bold %dpx monospace';"
+                   "x.textAlign='left';x.textBaseline='middle';" % font_px
+                   + "".join(d) + "</script>"))
+        time.sleep(0.4)
+        w, h, rgb = osctl.capture_rgb()
+        loc = osctl.find_color(MAG, tol=60, rgb=rgb, size=(w, h))
+        return rgb, (w, h), (loc["bbox"] if loc else None)
+
+    rgb, sz, ln = line(["OK", "CAB"])
+    check("two-word line located on the canvas", ln is not None, repr(ln))
+    if ln is None:
+        return
+    # The gaps are bimodal: the inter-word gap is wider than the letter gaps.
+    cells = osctl.segment_run(rgb, sz, ln, MAG)
+    gaps = [cells[i + 1][0] - cells[i][2] for i in range(len(cells) - 1)]
+    check("line segments into five glyph cells", len(cells) == 5, f"{len(cells)} cells")
+    check("the word gap is markedly wider than the letter gaps",
+          len(gaps) == 4 and max(gaps) >= 1.8 * sorted(gaps)[len(gaps) // 2],
+          str(gaps))
+    # Friction: read_text drops the space.
+    flat = osctl.read_text(rgb, sz, ln, atlas, MAG)
+    check("read_text drops the word space (reads 'OKCAB')", flat == "OKCAB", repr(flat))
+    # read_words recovers it.
+    out = osctl.read_words(rgb, sz, ln, atlas, MAG)
+    check("read_words reads 'OK CAB' with the space restored", out == "OK CAB", repr(out))
+    check("read_words inserts exactly one space (two words)",
+          out.count(" ") == 1, repr(out))
+    # A single word gets no spurious space.
+    rgb1, sz1, ln1 = line(["CAB"])
+    out1 = osctl.read_words(rgb1, sz1, ln1, atlas, MAG) if ln1 else None
+    check("read_words on a single word reads 'CAB' (no invented space)",
+          out1 == "CAB", repr(out1))
+    # Three words read with two spaces, in order.
+    rgb3, sz3, ln3 = line(["OK", "AB", "OK"])
+    out3 = osctl.read_words(rgb3, sz3, ln3, atlas, MAG) if ln3 else None
+    check("read_words reads three words 'OK AB OK'", out3 == "OK AB OK", repr(out3))
+    check("read_words inserts exactly two spaces (three words)",
+          out3 is not None and out3.count(" ") == 2, repr(out3))
+    # A demanding space_k refuses to split the same line (knows its threshold).
+    strict = osctl.read_words(rgb, sz, ln, atlas, MAG, space_k=99.0)
+    check("a high space_k refuses to split (reads 'OKCAB')", strict == "OKCAB", repr(strict))
+    # A blank region reads the empty string.
+    check("read_words on a blank region returns ''",
+          osctl.read_words(rgb, sz, (5, 5, 25, 25), atlas, MAG) == "")
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -3367,7 +3458,7 @@ def main() -> int:
               round_touch_drag, round_two_finger_pan,
               round_three_finger_swipe, round_edge_swipe,
               round_touch_drag_to, round_read_text, round_read_kerned,
-              round_read_block]
+              round_read_block, round_read_words]
     for r in rounds:
         try:
             r(b, offline)

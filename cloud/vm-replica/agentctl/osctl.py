@@ -926,6 +926,55 @@ def read_text(rgb: bytes, size: tuple[int, int],
     return "".join(read_glyph(rgb, size, c, atlas, nw, nh, thr) for c in cells)
 
 
+def read_words(rgb: bytes, size: tuple[int, int],
+               bbox: tuple[int, int, int, int],
+               atlas: dict[str, list[int]],
+               fg: tuple[int, int, int], tol: int = 60, gap: int = 2,
+               space_k: float = 1.8,
+               nw: int = 48, nh: int = 48, thr: int = 24) -> str:
+    """Read a line *with its word spaces* from pixels (F106).
+
+    :func:`read_text` :func:`segment_run`-s a line into per-glyph cells and joins
+    the labels with *nothing* between them — it records only *where* the inked
+    cells are, never the *width* of the blank between them. Draw a line with a
+    real word gap (``"OK  CAB"``) and it reads ``"OKCAB"``: the space the page
+    left between words is dropped, because a blank column is a blank column to it
+    whether it parts two letters or two words. ``read_text`` cannot tell an
+    inter-letter gap from an inter-word gap — that is its named boundary.
+
+    The gaps between cells carry the missing signal: they are *bimodal*. The gaps
+    *inside* a word (between its letters) cluster small and roughly equal; the gap
+    *between* words is markedly wider. This reads each cell as in :func:`read_text`,
+    measures the horizontal blank between every adjacent pair, takes the median
+    gap as the typical inter-letter spacing, and inserts a single ``' '`` wherever
+    a gap is ``>= space_k`` times that median — a clear word seam, not a letter's
+    own spacing. The labels join in reading order with spaces only at those seams.
+
+    Honest only where the spacing is *bimodal*: it needs the letter gaps to
+    cluster below the word gap (true for words of more than one letter). When the
+    gaps are uniform — a single word, evenly-tracked display type where the word
+    gap barely exceeds the letter gap — no gap clears the threshold and it reads
+    the run as a single space-less word rather than inventing a break. It never
+    splits a run it cannot read (empty ink → ``""``) and never guesses a space the
+    spacing does not justify; raise ``space_k`` to demand a wider seam, lower it to
+    split more eagerly."""
+    cells = segment_run(rgb, size, bbox, fg, tol, gap)
+    if not cells:
+        return ""
+    labels = [read_glyph(rgb, size, c, atlas, nw, nh, thr) for c in cells]
+    if len(cells) == 1:
+        return labels[0]
+    gaps = [cells[i + 1][0] - cells[i][2] for i in range(len(cells) - 1)]
+    srt = sorted(gaps)
+    med = srt[len(srt) // 2]
+    out = [labels[0]]
+    for i, g in enumerate(gaps):
+        if med > 0 and g >= space_k * med:
+            out.append(" ")
+        out.append(labels[i + 1])
+    return "".join(out)
+
+
 def segment_lines(rgb: bytes, size: tuple[int, int],
                   bbox: tuple[int, int, int, int],
                   fg: tuple[int, int, int], tol: int = 60,

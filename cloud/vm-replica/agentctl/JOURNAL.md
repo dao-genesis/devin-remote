@@ -2171,6 +2171,49 @@ where the page already left a gap, and refuse to break a line that does not.
 
 ---
 
+## F106 — read a line WITH its word spaces (`read_words`) · R70
+
+**Friction:** `read_text` (F103/F104) `segment_run`-s a line into per-glyph cells
+and joins their labels with *nothing* between them — it records only *where* the
+inked cells sit, never the *width* of the blank between them. A blank column is a
+blank column to it whether it parts two letters or two words. Draw a real word
+gap (`"OK  CAB"`) and it reads `'OKCAB'`: the space the page left between words is
+dropped. `read_text` cannot tell an inter-letter gap from an inter-word gap — that
+is its named boundary, reproduced live.
+
+**Mechanism:** the missing signal is in the gaps themselves — they are *bimodal*.
+The gaps *inside* a word (between its letters) cluster small and roughly equal;
+the gap *between* words is markedly wider. `read_words` reads each cell exactly as
+`read_text` does, measures the horizontal blank between every adjacent pair, takes
+the **median** gap as the typical inter-letter spacing, and inserts a single `' '`
+wherever a gap is `>= space_k` times that median — a clear word seam, not a
+letter's own spacing. Honest only where the spacing is bimodal: a single word, or
+evenly-tracked type whose word gap barely exceeds its letter gap, clears no
+threshold and reads as one space-less run rather than inventing a break. Empty ink
+→ `""`; raise `space_k` to demand a wider seam, lower it to split more eagerly.
+
+**Primitive:** `read_words(rgb, size, bbox, atlas, fg, …, space_k=1.8)` returns the
+line as a single string with spaces only at the word seams. The cell machinery
+(`segment_run` → `split_run` → `read_glyph`) is reused unchanged; the only new
+work is the median-gap threshold over the inter-cell gaps.
+
+**Live (R70):** the atlas segments into six reference glyphs; a two-word `"OK  CAB"`
+line is located by colour and segments into five glyph cells with four gaps whose
+maximum (the word gap) is `>= 1.8 ×` the median (bimodal, confirmed); `read_text`
+over the line reads `'OKCAB'` (the friction); `read_words` reads `'OK CAB'` with
+exactly one space restored; a single word `"CAB"` reads `'CAB'` with no invented
+space; three words read `'OK AB OK'` with exactly two spaces in order; a demanding
+`space_k=99` refuses to split the same line (`'OKCAB'`); a blank region yields
+`''`. `448/448 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 信者信之，不信者亦信之 — F103/F104/F105 cut where the page
+left a *gap*; F106 listens to *how wide* the gap is. The same blanks that part the
+letters also part the words — the page already wrote the spacing, two scales of it
+at once, and we only had to stop discarding the wider scale. We trust the gap the
+page made, and refuse to trust one it did not.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
