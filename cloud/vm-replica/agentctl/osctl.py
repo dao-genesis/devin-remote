@@ -1183,6 +1183,58 @@ def detect_fg(rgb: bytes, size: tuple[int, int],
     return bg, None
 
 
+def palette(rgb: bytes, size: tuple[int, int],
+            bbox: tuple[int, int, int, int],
+            q: int = 16, min_pop: float = 0.002, min_dist: int = 96
+            ) -> list[tuple[int, int, int]]:
+    """Recover *every* distinct colour in a region, frequency order (F110).
+
+    :func:`detect_fg` answers "what is the one ink colour here?" — it returns the
+    single most frequent bucket far from the background. But a region rarely holds
+    just one ink: a status line draws a red word beside a green one, syntax
+    highlighting paints three or four colours into one box, a label sits next to a
+    coloured badge. Hand such a region to :func:`detect_fg` and it keeps only the
+    most frequent ink and *silently drops the rest* — and since every reader
+    (:func:`read_text`, :func:`read_block`) segments by a *single* ``fg``, the
+    other-coloured words become unreadable. You cannot read what you were never
+    told the colour of, and one ``fg`` can only name one colour.
+
+    The region still carries the whole answer. Quantise to ``q``-step buckets and
+    walk them in descending frequency, admitting a bucket only when it is at least
+    ``min_dist`` (L1) from every colour already kept *and* holds at least
+    ``min_pop`` of the region's pixels. The ``min_dist`` guard fuses each true
+    colour's anti-alias fringe into the colour it edges (the fringe sits *between*
+    two colours and is rarer than either, so it is never admitted as its own),
+    and ``min_pop`` drops stray noise. The result is the region's palette: the
+    background first (most pixels), then each ink, each ready to hand to a reader.
+
+    Honest about the floor: a colour rarer than ``min_pop`` is not reported — a
+    one-pixel speck is noise, not a colour the page meant to draw. Lower
+    ``min_pop`` to surface fainter inks at the cost of admitting fringe; the
+    default keeps only colours a reader could actually segment a glyph from."""
+    w, _ = size
+    x0, y0, x1, y1 = bbox
+    hist: dict[tuple[int, int, int], int] = {}
+    tot = 0
+    for y in range(y0, y1 + 1):
+        row = y * w
+        for x in range(x0, x1 + 1):
+            j = (row + x) * 3
+            key = (rgb[j] // q * q, rgb[j + 1] // q * q, rgb[j + 2] // q * q)
+            hist[key] = hist.get(key, 0) + 1
+            tot += 1
+    if not hist:
+        return []
+    floor = max(1, int(min_pop * tot))
+    kept: list[tuple[int, int, int]] = []
+    for col, cnt in sorted(hist.items(), key=lambda kv: kv[1], reverse=True):
+        if cnt < floor:
+            break
+        if all(sum(abs(a - b) for a, b in zip(col, c)) > min_dist for c in kept):
+            kept.append(col)
+    return kept
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"

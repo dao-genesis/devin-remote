@@ -2349,6 +2349,51 @@ inventing one.
 
 ---
 
+## F110 — one ink is not enough: a region holds a *palette*
+
+**Friction.** `detect_fg` (F109) answers a single question — "what is the *one*
+ink colour here?" — and returns the most frequent bucket far from the background.
+But a region rarely holds just one ink: a status line draws a red word beside a
+green one, syntax highlighting paints three or four colours into one box, a label
+sits next to a coloured badge. Hand such a two-ink region to `detect_fg` and it
+keeps only the *most frequent* ink and **silently drops the rest**. And since
+every reader (`read_text`, `read_block`) segments by a *single* `fg`, the
+other-coloured words become unreadable: you cannot read what you were never told
+the colour of, and one `fg` can only ever name one colour.
+
+**Mechanism.** The region still carries the whole answer. Quantise to `q`-step
+buckets and walk them in *descending frequency*, admitting a bucket only when it
+is at least `min_dist` (L1) from every colour already kept *and* holds at least
+`min_pop` of the region's pixels. The `min_dist` guard fuses each true colour's
+anti-alias fringe into the colour it edges (the fringe sits *between* two colours
+and is rarer than either, so it is never admitted as its own); `min_pop` drops
+stray noise. The result is the region's **palette**: the background first (most
+pixels), then each ink in turn — each ready to hand to a reader.
+
+**Primitive:** `palette(rgb, size, bbox, q=16, min_pop=0.002, min_dist=96)`
+returns `list[tuple[int,int,int]]`, background-first, frequency-ordered. A colour
+rarer than `min_pop` is honestly *not reported* — a one-pixel speck is noise, not
+a colour the page meant to draw.
+
+**Live (R74):** a magenta atlas (magenta is rare on screen, unlike black chrome)
+reads runs drawn in *any* ink once the right `fg` is supplied. In a region with
+`RED` (red) beside `GRN` (green) on white, `detect_fg` names exactly *one* of the
+two inks and drops the other (the friction); its lone colour then reads the
+other-coloured word as `""`. `palette` recovers all three colours — white
+background first, then both inks, *and nothing else* (no fringe admitted) — and
+each recovered colour reads its own word (`"RED"`, `"GRN"`). A three-colour region
+yields all three inks; a uniform region yields a single colour (no inks); an
+unreachable `min_pop` honestly keeps only the background. `507/507 checks
+passed`, deterministic ×3.
+
+**Lesson (道法自然):** 萬物負陰而抱陽 — the ten thousand things carry yin and
+embrace yang. A region is not one colour against a ground; it is many, held
+together. F109 named the one; F110 names them all, and — keeping the F107–F109
+honesty — names *only* those the page truly drew, letting the fringe dissolve
+into the colour it borders rather than promoting it to an ink of its own.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

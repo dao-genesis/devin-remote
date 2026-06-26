@@ -3753,6 +3753,166 @@ def round_detect_fg(b: Browser, offline: bool) -> None:
           far is None, repr(far))
 
 
+def round_palette(b: Browser, offline: bool) -> None:
+    print("R74: recover EVERY distinct colour in a region (F110) — osctl")
+    # detect_fg answers "the one ink colour"; a region with TWO inks (a red word
+    # beside a green one, syntax highlighting) keeps only the most frequent and
+    # silently drops the rest. Since every reader segments by a single fg, the
+    # other-coloured word is then unreadable. palette walks the region's buckets
+    # in frequency order, admitting each colour far from those already kept and
+    # above a population floor — the full palette (bg first, then every ink),
+    # each ready to hand to read_text. detect_fg names one; palette names all.
+    def hx(s):
+        s = s.lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+    def close(a, c, t=48):
+        return bool(a) and bool(c) and all(abs(x - y) <= t for x, y in zip(a, c))
+
+    # Build a magenta-on-white atlas (magenta is rare on screen, unlike black
+    # chrome): read_glyph matches structure, not colour, so one atlas reads runs
+    # drawn in any ink once the right fg is supplied.
+    MAG = (255, 0, 255)
+    chars = "REDGN"
+    draws = "".join("x.fillText('%s',%d,80);" % (ch, 30 + i * 110)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("pal_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=640 height=140></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,640,140);"
+               "x.fillStyle='#f0f';x.font='bold 80px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = sorted(osctl.find_color_blobs(MAG, tol=60, rgb=argb, size=(aw, ah),
+                                       min_count=120), key=lambda t: t["x"])
+    check("atlas segments into five reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    RED, GRN, WHT = "#d32020", "#1f9d35", "#ffffff"
+    # Two inks in one region: 'RED' (red) and 'GRN' (green) on a white field.
+    b.navigate(fixture("pal_two.html",
+               "<!doctype html><title>p</title><style>html,body{margin:0}"
+               "body{background:#fff}</style>"
+               "<canvas id=c width=1100 height=300></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,1100,300);"
+               "x.font='bold 84px monospace';x.textBaseline='middle';"
+               "x.textAlign='left';"
+               "x.fillStyle='%s';x.fillText('RED',120,150);"
+               "x.fillStyle='%s';x.fillText('GRN',640,150);</script>"
+               % (RED, GRN)))
+    time.sleep(0.4)
+    w, h, rgb = osctl.capture_rgb()
+    sz = (w, h)
+    bl = osctl.find_color_blobs(hx(WHT), tol=30, rgb=rgb, size=sz, min_count=5000)
+    check("two-ink region located", bool(bl), str(len(bl)))
+    if not bl:
+        return
+    x0, y0, x1, y1 = max(bl, key=lambda t: t["count"])["bbox"]
+    iw, ih = (x1 - x0) // 8, (y1 - y0) // 8
+    bb = (x0 + iw, y0 + ih, x1 - iw, y1 - ih)
+
+    # FRICTION: detect_fg can name exactly one of the two inks, never both.
+    dbg, dfg = osctl.detect_fg(rgb, sz, bb)
+    check("detect_fg recovers the white background", close(dbg, hx(WHT)), repr(dbg))
+    r_red, r_grn = close(dfg, hx(RED)), close(dfg, hx(GRN))
+    check("FRICTION: detect_fg names exactly one of the two inks (drops the other)",
+          r_red != r_grn, "%s red=%s grn=%s" % (dfg, r_red, r_grn))
+
+    # RESOLUTION: palette recovers the background and BOTH inks, nothing else.
+    pal = osctl.palette(rgb, sz, bb)
+    check("palette's first colour is the white background", close(pal[0], hx(WHT)),
+          repr(pal[0]) if pal else "[]")
+    p_red = next((c for c in pal[1:] if close(c, hx(RED))), None)
+    p_grn = next((c for c in pal[1:] if close(c, hx(GRN))), None)
+    check("palette recovers the red ink", p_red is not None, repr(pal))
+    check("palette recovers the green ink", p_grn is not None, repr(pal))
+    check("palette is exactly background + two inks (no fringe admitted)",
+          len(pal) == 3, repr(pal))
+
+    # Each recovered colour actually reads its word (union of that ink's glyphs).
+    # Confine to blobs inside the located white field: the live screen carries
+    # stray red/green specks in browser chrome that would otherwise balloon the
+    # union far beyond the canvas.
+    def word_bbox(col):
+        bs = [t for t in osctl.find_color_blobs(col, tol=60, rgb=rgb, size=sz,
+                                                min_count=80)
+              if x0 <= t["x"] <= x1 and y0 <= t["y"] <= y1]
+        if not bs:
+            return None
+        return (min(t["bbox"][0] for t in bs), min(t["bbox"][1] for t in bs),
+                max(t["bbox"][2] for t in bs), max(t["bbox"][3] for t in bs))
+    rb, gb = word_bbox(hx(RED)), word_bbox(hx(GRN))
+    check("read 'RED' with palette's red colour",
+          rb is not None and osctl.read_text(rgb, sz, rb, atlas, p_red) == "RED",
+          repr(osctl.read_text(rgb, sz, rb, atlas, p_red)) if rb else "None")
+    check("read 'GRN' with palette's green colour",
+          gb is not None and osctl.read_text(rgb, sz, gb, atlas, p_grn) == "GRN",
+          repr(osctl.read_text(rgb, sz, gb, atlas, p_grn)) if gb else "None")
+    # The cost of detect_fg's single colour: the other-coloured word reads "".
+    other_bb, other_txt = (gb, "GRN") if r_red else (rb, "RED")
+    if other_bb is not None:
+        check("FRICTION: detect_fg's lone colour cannot read the other-coloured word",
+              osctl.read_text(rgb, sz, other_bb, atlas, dfg) != other_txt,
+              repr(osctl.read_text(rgb, sz, other_bb, atlas, dfg)))
+
+    # THREE inks: three coloured bars on white — palette recovers all three.
+    BLU = "#1565c0"
+    b.navigate(fixture("pal_three.html",
+               "<!doctype html><title>p3</title><style>html,body{margin:0}"
+               "body{background:#fff}</style>"
+               "<canvas id=c width=900 height=300></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,900,300);"
+               "x.fillStyle='%s';x.fillRect(100,110,80,80);"
+               "x.fillStyle='%s';x.fillRect(410,110,80,80);"
+               "x.fillStyle='%s';x.fillRect(720,110,80,80);</script>"
+               % (RED, GRN, BLU)))
+    time.sleep(0.4)
+    w3, h3, rgb3 = osctl.capture_rgb()
+    bl3 = osctl.find_color_blobs(hx(WHT), tol=30, rgb=rgb3, size=(w3, h3),
+                                 min_count=5000)
+    if bl3:
+        a0, b0, a1, b1 = max(bl3, key=lambda t: t["count"])["bbox"]
+        jw, jh = (a1 - a0) // 8, (b1 - b0) // 8
+        bb3 = (a0 + jw, b0 + jh, a1 - jw, b1 - jh)
+        pal3 = osctl.palette(rgb3, (w3, h3), bb3)
+        inks3 = pal3[1:]
+        all3 = (any(close(c, hx(RED)) for c in inks3)
+                and any(close(c, hx(GRN)) for c in inks3)
+                and any(close(c, hx(BLU)) for c in inks3))
+        check("palette recovers all three inks from a three-colour region", all3,
+              repr(pal3))
+
+    # A UNIFORM region holds no ink: palette is just the one field colour.
+    b.navigate(fixture("pal_uni.html",
+               "<!doctype html><title>u</title><style>html,body{margin:0}"
+               "body{background:#0d2860}</style>"
+               "<canvas id=c width=900 height=300></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#0d2860';x.fillRect(0,0,900,300);</script>"))
+    time.sleep(0.4)
+    wu, hu, rgbu = osctl.capture_rgb()
+    blu = osctl.find_color_blobs(hx("#0d2860"), tol=40, rgb=rgbu, size=(wu, hu),
+                                 min_count=5000)
+    if blu:
+        u0, v0, u1, v1 = max(blu, key=lambda t: t["count"])["bbox"]
+        kw, kh = (u1 - u0) // 8, (v1 - v0) // 8
+        palu = osctl.palette(rgbu, (wu, hu), (u0 + kw, v0 + kh, u1 - kw, v1 - kh))
+        check("palette of a uniform region is a single colour (no inks)",
+              len(palu) == 1 and close(palu[0], hx("#0d2860")), repr(palu))
+    # The floor is honest: demanding an unreachable min_pop drops the inks too.
+    palf = osctl.palette(rgb, sz, bb, min_pop=0.9)
+    check("palette with an unreachable min_pop keeps only the background",
+          len(palf) == 1 and close(palf[0], hx(WHT)), repr(palf))
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -3780,7 +3940,7 @@ def main() -> int:
               round_three_finger_swipe, round_edge_swipe,
               round_touch_drag_to, round_read_text, round_read_kerned,
               round_read_block, round_read_words, round_read_glyph_conf,
-              round_read_text_conf, round_detect_fg]
+              round_read_text_conf, round_detect_fg, round_palette]
     for r in rounds:
         try:
             r(b, offline)
