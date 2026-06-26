@@ -1289,6 +1289,34 @@ separates selecting from opening.
 
 ---
 
+## F083 — press-and-hold to confirm (`press_hold`) · R47
+
+**Friction:** A "hold to delete", "press and hold to confirm", press-to-talk, or
+a long-press menu commits only when the button stays physically down for some
+dwell. The handler arms a timer on `mousedown` and fires only if `mouseup` has
+*not* arrived when it elapses. `click` presses and releases within a millisecond,
+so the dwell timer is always cancelled first — the action never commits — yet
+`click` returns `True` and lies about having confirmed.
+**Mechanism:** the gesture is not an event but a *duration*: the page reads real
+time between `mousedown` and `mouseup` (or samples `buttons & 1` while it waits).
+CDP lets us hold that interval open — dispatch `mousePressed`, then genuinely
+wait, then `mouseReleased` — so the button is held down for as long as the dwell
+needs, exactly as a human finger would.
+**Primitive:** `Browser.press_hold(selector, hold=0.6)` aims at the honest hit
+point (F061), refuses if occluded, moves there, dispatches `mousePressed`
+(`buttons:1`), sleeps `hold` seconds while the page's dwell timer runs, then
+`mouseReleased`. Live: an instant `click` leaves `__done` at 0; `press_hold(hold=0.8)`
+past the 500ms dwell commits exactly once and reads `DELETED`; a `hold=0.15`
+shorter than the dwell releases too early and does not commit; a transparent veil
+makes it refuse (`False`); an absent selector returns `False`. `264/264 checks
+passed`, deterministic ×3.
+**Lesson (道法自然):** 弱者道之用 — the soft act here is *waiting*, not striking;
+the page yields not to a harder click but to a patient one that simply stays.
+天下之至柔，馳騁於天下之致堅 — keeping the button gently down past the dwell is
+what the rigid instantaneous click can never do; duration, not force, is the key.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

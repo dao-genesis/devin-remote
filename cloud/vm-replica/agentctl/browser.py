@@ -664,6 +664,35 @@ class Browser:
         self.click_n_xy(p["x"], p["y"], 2)
         return True
 
+    def press_hold(self, selector: str, hold: float = 0.6,
+                   by_text: bool = False, tag: str | None = None) -> bool:
+        """Press and *hold* an element, then release (F083). A
+        "hold to delete", "press and hold to confirm", press-to-talk, or a
+        long-press menu commits only when the button stays down for some dwell:
+        the handler arms a timer on ``mousedown`` and fires only if ``mouseup`` has
+        *not* arrived when it elapses. :meth:`click` presses and releases within a
+        millisecond, so the timer is always cancelled first — the action never
+        commits, yet ``click`` returns ``True`` and lies. We aim at the honest hit
+        point (F061), refuse if occluded, press, *keep the button down* for ``hold``
+        seconds while the page's dwell timer runs, then release. Returns ``True``
+        once the full press-hold-release completed, ``False`` if the element is
+        absent or occluded. The dwell happens with the button physically down, so a
+        page reading ``buttons & 1`` during the wait sees it held."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p:
+            return False
+        if p.get("occluded"):
+            return False
+        self._move(p["x"], p["y"])
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mousePressed", "x": p["x"], "y": p["y"],
+                       "button": "left", "buttons": 1, "clickCount": 1})
+        time.sleep(hold)
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mouseReleased", "x": p["x"], "y": p["y"],
+                       "button": "left", "buttons": 0, "clickCount": 1})
+        return True
+
     def _pierce_node(self, selector: str) -> int | None:
         """nodeId of the first element matching ``selector`` anywhere in the
         document — *including inside closed shadow roots* (F074) — or ``None``.
