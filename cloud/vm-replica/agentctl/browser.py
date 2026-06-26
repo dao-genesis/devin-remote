@@ -105,7 +105,38 @@ window.__agentctl = (function () {
     }
     return best;
   }
-  return {visible, center, deepQuery, byText};
+  // F061: the point we will actually click. A trusted click lands on whatever
+  // paints topmost at (x,y) — not necessarily the element we located. An overlay
+  // (scrim, sticky header, cookie wall) sitting above the target swallows the
+  // click. So probe a few points across the element's box and return the first
+  // where elementFromPoint resolves back into the element (so the click truly
+  // reaches it — exactly the visible spot a human would aim for). If every
+  // sampled point is covered, report the target as occluded with its blocker
+  // rather than firing a click that lies.
+  function hitPoint(el) {
+    if (!el || !visible(el)) return null;
+    let r = el.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) {
+      el.scrollIntoView({block: 'center', inline: 'center'});
+      r = el.getBoundingClientRect();
+    }
+    if (r.width <= 0 || r.height <= 0) return null;
+    const fx = [0.5, 0.5, 0.5, 0.3, 0.7, 0.5, 0.5, 0.15, 0.85];
+    const fy = [0.5, 0.3, 0.7, 0.5, 0.5, 0.15, 0.85, 0.5, 0.5];
+    for (let i = 0; i < fx.length; i++) {
+      const x = r.left + r.width * fx[i], y = r.top + r.height * fy[i];
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) continue;
+      const hit = document.elementFromPoint(x, y);
+      if (hit && (hit === el || el.contains(hit))) {
+        return {x: x, y: y, w: r.width, h: r.height, occluded: false};
+      }
+    }
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const blk = document.elementFromPoint(cx, cy);
+    return {x: cx, y: cy, w: r.width, h: r.height, occluded: true,
+            blocker: (blk && (blk.id || blk.tagName)) || null};
+  }
+  return {visible, center, deepQuery, byText, hitPoint};
 })();
 """
 
@@ -244,6 +275,17 @@ class Browser:
                   f"return el?window.__agentctl.center(el):null;}})()")
         return self.eval(js)
 
+    def _hit_point_of(self, selector: str, by_text: bool = False,
+                      tag: str | None = None):
+        self._inject_helpers()
+        if by_text:
+            tag_lit = repr(tag) if tag else "null"
+            locate = f"window.__agentctl.byText({selector!r},{tag_lit})"
+        else:
+            locate = f"window.__agentctl.deepQuery({selector!r})"
+        return self.eval(f"(function(){{var el={locate};"
+                         f"return el?window.__agentctl.hitPoint(el):null;}})()")
+
     def exists(self, selector: str) -> bool:
         return bool(self.eval(
             f"!!window.__agentctl.deepQuery({selector!r})"))
@@ -266,11 +308,20 @@ class Browser:
                           {"type": t, "x": x, "y": y, "button": button,
                            "clickCount": 1})
 
-    def click(self, selector: str, by_text: bool = False, tag: str | None = None) -> bool:
-        c = self._center_of(selector, by_text=by_text, tag=tag)
-        if not c:
+    def click(self, selector: str, by_text: bool = False, tag: str | None = None,
+              require_hit: bool = True) -> bool:
+        # F061: aim at a point that actually reaches the element. hitPoint probes
+        # the element's box and returns the first spot whose top-most paint is the
+        # element (or a descendant). If every spot is covered by an overlay it
+        # reports ``occluded`` — we refuse to fire a click that would land on the
+        # blocker and lie about success. ``require_hit=False`` falls back to the
+        # raw center for callers that knowingly want a geometric click.
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p:
             return False
-        self.click_xy(c["x"], c["y"])
+        if p.get("occluded") and require_hit:
+            return False
+        self.click_xy(p["x"], p["y"])
         return True
 
     def click_text(self, text: str, tag: str | None = None) -> bool:

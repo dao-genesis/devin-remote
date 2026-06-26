@@ -653,6 +653,40 @@ tab whole and simply moved our attention to where the action already was. 知人
 (`connect` clears itself) before taking up the new; 為學日益，為道日損 — the primitive
 grows by what it releases, not only by what it adds.
 
+### F061 — a click the overlay ate, and the success that lied
+**Surface:** we locate a button, read its bounding box, and click its center. The
+call returns `True` — yet the page never reacted. A transparent fixed scrim (a
+modal backdrop, a cookie wall, a sticky header at 0.001 opacity) covers the
+viewport: the button shows through visually, but every click lands on the scrim.
+`elementFromPoint(center)` resolves to `scrim`, not the button. The element is
+*visible* by every DOM test (`offsetParent`, rects, computed style) and still
+unreachable. Worse, the old `click` reported success because it dispatched a
+mouse event at a coordinate — it never checked *what* would receive it.
+**Mechanism:** a trusted click is delivered by the compositor to whatever paints
+**topmost** at (x,y), via hit-testing — not to the element we queried. Visibility
+and hit-testability are different questions: `visible(el)` asks "does it paint?",
+hit-testing asks "is it on top *here*?". An overlay with a higher stacking order
+(or simply later in paint order) intercepts the event regardless of opacity. A
+human never has this bug: they aim at the spot that *looks* clickable and, if a
+wall is in the way, they see the wall.
+**Primitive:** `hitPoint(el)` (helper JS) + `Browser._hit_point_of`, wired into
+`click(require_hit=True)`. We scroll the element into view, then probe nine points
+across its box (center, edges, inner corners) and return the first where
+`elementFromPoint` resolves back to the element *or a descendant* — the visible
+spot a human would actually aim for. If every sampled point is covered we report
+`occluded:true` with the `blocker`, and `click` **refuses to fire** rather than
+dispatching an event that lands on the scrim and lies about success. Partial
+occlusion (top half walled) is handled by aiming at the clear lower point;
+`require_hit=False` preserves a deliberate geometric click for callers that want
+it. `117/117 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 信言不美，美言不信 — a click that *claims* success without
+verifying it reached the target is a beautiful lie; we made `click` speak the
+truth even when the truth is "I could not reach it." 為者敗之 — we did not force a
+synthetic event through a wall; we looked for the door the layout already leaves
+open (the uncovered point) and, finding none, declined to act rather than pretend.
+知止不殆 — knowing when *not* to click is itself a capacity that exceeds blind
+screenshot-and-tap.
+
 ---
 
 ## Frontier (next honest rounds)

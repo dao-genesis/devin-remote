@@ -1084,6 +1084,51 @@ def round_new_tab(b: Browser, offline: bool) -> None:
         sc.shutdown()
 
 
+def round_occlusion(b: Browser, offline: bool) -> None:
+    print("R25: refuse to fire a click an overlay would swallow (F061) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>occlude</title><style>"
+            b"#t{position:absolute;left:60px;top:200px;width:160px;height:48px}"
+            b"#scrim{position:fixed;inset:0;background:rgba(0,0,0,0.001);z-index:9}"
+            b"</style>"
+            b"<button id=t onclick=\"window.__hit=(window.__hit||0)+1\">CONFIRM</button>"
+            b"<div id=scrim onclick=\"window.__s=(window.__s||0)+1\"></div>")
+    sp = _serve(8951, page)
+    try:
+        b.navigate("http://127.0.0.1:8951/")
+        time.sleep(0.2)
+        c = b._center_of("#t")
+        # Friction: the element's own center hit-tests to the overlay, not it.
+        top = b.eval(f"(function(){{var e=document.elementFromPoint({c['x']},{c['y']});"
+                     f"return e?e.id:null;}})()")
+        check("overlay sits on top of the target's center", top == "scrim", repr(top))
+        # Primitive: hit-verified click sees full occlusion and refuses to fire.
+        hp = b._hit_point_of("#t")
+        check("hitPoint reports the target fully occluded",
+              hp is not None and hp.get("occluded") is True
+              and hp.get("blocker") == "scrim", repr(hp))
+        check("click refuses to fire into the overlay", b.click("#t") is False)
+        check("target never received the swallowed click",
+              b.eval("window.__hit||0") == 0, repr(b.eval("window.__hit||0")))
+        # Uncover the lower half: now a real spot on the target is reachable.
+        b.eval("var s=document.getElementById('scrim');s.style.top='0px';"
+               "s.style.height='224px';s.style.bottom='auto';true")
+        hp2 = b._hit_point_of("#t")
+        check("hitPoint finds a clear point once partly uncovered",
+              hp2 is not None and hp2.get("occluded") is False, repr(hp2))
+        check("click now reaches the target", b.click("#t") is True)
+        check("target received exactly the real click",
+              b.eval("window.__hit||0") == 1, repr(b.eval("window.__hit||0")))
+        check("overlay never absorbed a stray click",
+              b.eval("window.__s||0") == 0, repr(b.eval("window.__s||0")))
+        # require_hit=False still allows a deliberate geometric click.
+        b.eval("var s=document.getElementById('scrim');s.style.top='0px';"
+               "s.style.height='100%';s.style.bottom='auto';true")
+        check("geometric click is still available on request",
+              b.click("#t", require_hit=False) is True)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1093,7 +1138,7 @@ def main() -> int:
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
-              round_oop_iframe, round_new_tab]
+              round_oop_iframe, round_new_tab, round_occlusion]
     for r in rounds:
         try:
             r(b, offline)
