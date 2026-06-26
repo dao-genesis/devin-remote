@@ -479,19 +479,224 @@ patch when shape is plain, edge when colour deceives.
 
 ---
 
+### F056 — the same shape drawn bigger, the wrong shape at the right size
+**Surface:** the reference ring reappears, but **larger** — the page zoomed, ran
+at a higher DPI, or re-laid-out responsively — beside a **different shape** (a
+disk) drawn at the reference's *own* pixel size. A human still reads "ring"
+regardless of how big it was rendered. `match_edges` (F055) cannot: its
+reference mask is a fixed `ew`×`eh` pixel grid.
+**Mechanism:** a fixed-size edge mask is implicitly translation-only. When the
+matching shape is rendered at `1.5×`, its boundaries fall on entirely different
+pixels than the reference mask expects, so the Hamming distance explodes
+(`19298`) — while the wrong shape, sharing the reference's *size*, aligns its
+(few) edges and scores far lower (`281`). Structure-match therefore picks the
+**decoy** again, this time because *scale*, not colour, has moved. Re-sampling
+the thin edge mask directly does not help (`694` vs `281`): a one-pixel contour
+resamples into noise.
+**Primitive:** `osctl.edge_signature(rgb, size, bbox, nw, nh, thr)` collapses the
+size dependence *before* edging. It area-averages the region's luma down to a
+fixed `nw`×`nh` canonical grid (default 48×48) and thresholds the gradient
+*there*, so any rendering of the same shape — whatever its pixel dimensions —
+reduces to the **same** signature; compare two with `edge_hamming`. Segmentation
+already gives each candidate's true `bbox` (hence its size), so the idiom is:
+segment by colour, take one signature per candidate at the canonical grid, pick
+the lowest distance to the reference. Proven against the rescaled scene: the
+bigger-but-correct ring scores `24`, the right-size-but-wrong disk `117` — the
+signature picks the rescaled ring and the click lands `TARGET-HIT`, where the
+fixed mask landed on the decoy. `78/78 checks passed`, deterministic across
+three runs. The perception ladder now reads: hue (`find_color_blobs`) → patch
+(`match_template`) → rigid structure (`match_edges`) → **scale-free structure**
+(`edge_signature`).
+**Lesson (道法自然):** 大方無隅，大器晚成 — the great form has no fixed corner and
+no fixed measure; to know a shape you must first stop measuring it in the frame
+of how big it happened to be drawn. 為者敗之 — forcing the mask to the literal
+pixels fails the moment the world rescales; yield instead to a frame the shape
+shares with all its renderings, and the likeness is simply there. Each register
+discards one more accident — first position, then colour, now size — keeping only
+what is essentially the thing.
+
+### F057 — the same shape turned, the wrong shape left upright
+**Surface:** the reference glyph (a horizontal bar) reappears **rotated 90°** —
+the page re-laid-out, an icon spun, a control rotated under transform — beside a
+**different** glyph (a wide ellipse) left at the reference's *own* orientation. A
+human still reads "bar" however it is turned. `edge_signature` (F056) cannot: it
+is scale-free but still orientation-bound.
+**Mechanism:** the signature resamples the region onto a fixed `nw`×`nh` grid, so
+turning the bar 90° lights up *entirely different cells* — its signature distance
+explodes (`520`) — while the same-orientation ellipse, sharing the reference's
+upright layout, aligns its cells and scores far lower (`194`). Signature-match
+therefore picks the **decoy** yet again, this time because *angle*, not size or
+colour, has moved.
+**Primitive:** `osctl.radial_profile(rgb, size, bbox, bins, thr)` discards the
+angle. It edges the region, finds the centroid of the edge pixels, measures each
+edge pixel's distance to that centroid, normalises by the largest such distance
+(killing scale too), and histograms those normalised radii into `bins` buckets
+summed to 1. Rotating a shape about its centroid moves *no* pixel's radius, so
+the histogram is unchanged; rescaling divides every radius by one factor the
+normalisation cancels. Compare two with `osctl.profile_l1` (lower = more alike).
+It discards angular order, so it is deliberately *less* specific than the
+signature — pair it with `edge_signature` when orientation is fixed; reach for it
+only when the thing can turn. Proven against the rotated scene: the turned-but-
+correct bar scores `0.000`, the upright-but-wrong ellipse `0.393` — the profile
+picks the rotated bar and the click lands `TARGET-HIT`, where the signature
+landed on the decoy. `85/85 checks passed`, deterministic across three runs. The
+perception ladder now reads: hue (`find_color_blobs`) → patch (`match_template`)
+→ rigid structure (`match_edges`) → scale-free structure (`edge_signature`) →
+**rotation-&-scale-free structure** (`radial_profile`).
+**Lesson (道法自然):** 大方無隅 — the great form has no corner; to recognise a
+thing you must stop pinning it to the one orientation it happened to face. 反也
+者，道之動也 — turning is the way's own motion; meet it not by forcing the mask
+back upright but by choosing a frame (radius about the centre) in which turning
+*does not move anything at all*. The register grows by giving up one more
+specificity — angular order — and keeping only what rotation leaves invariant;
+each such surrender is also a narrowing of what the descriptor can tell apart, so
+it is reached for last, not first (重為輕根：the heavier, more specific registers
+ground the lighter, more invariant ones).
+
+### F058 — two controls identical but for the word they bear
+**Surface:** two magenta buttons, **same** colour, **same** size, **same** outer
+shape — the only thing that sets them apart is the white **glyph** the page draws
+onto the canvas ("A" vs "B"). No DOM node carries the text; no colour or contour
+distinguishes them. A human reads the letter and clicks the right one. Every
+register up to `radial_profile` is blind here: they describe the tile, not the
+character on it.
+**Mechanism:** colour segmentation finds both tiles; structure could tell them
+apart only with the target's *own* rendering in hand. The honest tool we have is
+a reference **atlas** of candidate glyphs — but rendered at a different size than
+the live buttons (`bold 80px` swatch vs `bold 120px` button). A fixed-size edge
+match against that atlas is defeated by the size gap exactly as F056 was: it
+reads *both* live buttons as the same letter (`target→A`, `decoy→A`), so it
+cannot read text at all.
+**Primitive:** `osctl.read_glyph(rgb, size, bbox, atlas)` classifies in the
+scale-free frame built in F056. It takes the region's `edge_signature` and
+returns the `atlas` label whose signature is closest by `edge_hamming`; the atlas
+is `{label: edge_signature(...)}` built once from reference glyphs (the page's own
+scratch-canvas rendering, or a captured known control). Because the comparison is
+scale-free, a glyph recognises itself however large it was drawn: the live "A"
+button reads `A` (`131` vs `339`), the "B" button reads `B` (`213` vs `357`), and
+the click lands `TARGET-HIT` on the button that *says* "A". `92/92 checks
+passed`, deterministic across three runs. This is reading text from pixels
+reduced to its smallest honest form — not full OCR, but enough to pick the control
+that says the right thing. The perception ladder is now complete from raw hue to
+rendered meaning: hue (`find_color_blobs`) → patch (`match_template`) → rigid
+structure (`match_edges`) → scale-free structure (`edge_signature`) →
+rotation-&-scale-free structure (`radial_profile`) → **rendered glyph**
+(`read_glyph`).
+**Lesson (道法自然):** 道隱無名，始制有名 — the page hides its meaning behind nameless
+pixels; naming begins only when we render the candidate names ourselves and let
+the thing match the name it already wears. 不行而知 — we do not OCR the whole
+world; we carry only the few glyphs that matter and recognise among them, 少則得.
+And it builds on what came before rather than replacing it: `read_glyph` is
+`edge_signature` pointed at a labelled atlas — the highest register is the lowest
+one given a name to match against (大器晚成：the great vessel is the simple tool,
+late-completed, by being aimed).
+
+---
+
+### F059 — a cross-SITE iframe the connection cannot see into
+**Surface:** a parent page embeds an iframe whose `src` is a *different site*
+(`https://example.com`). The child clearly loads (`window.frames.length === 1`)
+and a human reads it without thinking. But `eval_in_frame` (F049) — which served
+us for same-IP/different-port children — returns `None`: there is no execution
+context for the child on the page session at all. The frame is invisible to every
+DOM tool we have.
+**Mechanism:** Chrome **site isolation** puts a cross-*site* document in its own
+renderer **process**, reachable only through its own CDP **target/session**.
+R13's cross-origin child (same IP, different port) was *same-site* and shared the
+page's process, so its context still showed up on the page session. A cross-site
+child does not: its `Runtime.executionContextCreated` is emitted on a session that
+was never attached, so it never reaches us. The page session is not walled off by
+choice — it simply is not connected to that process.
+**Primitive:** auto-attach plus per-session routing, in `cdp.py`. On connect we
+call `Target.setAutoAttach{autoAttach, flatten:true}`; when a child target
+attaches we record its `sessionId`, enable `Runtime`/`Page` in it (fire-and-forget
+on the reader thread, per the F006 deadlock rule), and recurse so nested OOP
+frames attach too. Child contexts are keyed by `"<sessionId>:<contextId>"` (their
+ids are unique only within their own session), and `evaluate` resolves that key to
+the real session-local `contextId` and routes the command with its `sessionId`.
+One websocket now reaches every frame, in-process or not. `eval_in_frame` is
+unchanged at the call site: it reads `Example Domain` across the process boundary,
+edits the child's `<h1>`, and reads the change back; an absent frame still returns
+`None` fast. `99/99 checks passed`, deterministic across three runs.
+**Lesson (道法自然):** 將欲取之，必固與之 — to reach the walled child we did not push
+against the same-origin wall (為者敗之); we let the browser hand us a session for it
+and simply went through the door it opened. 玄德：長而不宰 — each new frame attaches
+and governs its own context; we route to it without flattening its identity into
+the parent's. The lowest layer (`cdp.py`) grew so the highest call (`eval_in_frame`)
+need not change — 大制無割, the great tailoring leaves no seam.
+
+### F060 — a new tab the connection never followed
+**Surface:** a `target=_blank` link (or `window.open`) is clicked. A human sees a
+new tab pop to the front and simply works in it. We click it, and a new page target
+**does** appear in `/json/list` — but `document.title` still reads the *opener*.
+Everything we evaluate, type, or click lands on the old tab. The new tab is on
+screen yet completely undriveable.
+**Mechanism:** a new top-level tab is its own **page target** with its own devtools
+websocket. Unlike F059's cross-site *child frame* — which Chrome auto-attaches to the
+opener's session because it belongs to the same page — a sibling **top-level** target
+is attached to nobody. `Target.setAutoAttach` only cascades to subframes of the page
+we are on, not to brand-new pages. So our one connection stays bolted to the opener;
+the new tab emits its contexts on a socket we never opened.
+**Primitive:** `Browser.switch_page(match)` (+ `pages()`), backed by a re-entrant
+`CDP.connect`. We list page targets over HTTP, find the one whose url/title contains
+`match`, **close the current websocket and connect to that tab's own
+`webSocketDebuggerUrl`**, then re-inject helpers. `connect()` now clears its
+per-connection state (contexts, sessions, listeners) so the old tab's bookkeeping
+never leaks into the new one and listeners are not double-registered. The result is
+the programmatic act of *clicking the new tab*: after `switch_page("s-…")` we read
+its `<h1>`, `click_text("go")` drives it, and `switch_page("8931/")` returns to the
+opener; an absent tab fails fast. `108/108 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 不行而知，不見而名 — we did not try to force the opener's session
+to peer into a tab it was never connected to (為者敗之); we let the browser keep each
+tab whole and simply moved our attention to where the action already was. 知人者智，自知者明
+— the connection learned to *know which page it is on* and to let go of the old one
+(`connect` clears itself) before taking up the new; 為學日益，為道日損 — the primitive
+grows by what it releases, not only by what it adds.
+
+### F061 — a click the overlay ate, and the success that lied
+**Surface:** we locate a button, read its bounding box, and click its center. The
+call returns `True` — yet the page never reacted. A transparent fixed scrim (a
+modal backdrop, a cookie wall, a sticky header at 0.001 opacity) covers the
+viewport: the button shows through visually, but every click lands on the scrim.
+`elementFromPoint(center)` resolves to `scrim`, not the button. The element is
+*visible* by every DOM test (`offsetParent`, rects, computed style) and still
+unreachable. Worse, the old `click` reported success because it dispatched a
+mouse event at a coordinate — it never checked *what* would receive it.
+**Mechanism:** a trusted click is delivered by the compositor to whatever paints
+**topmost** at (x,y), via hit-testing — not to the element we queried. Visibility
+and hit-testability are different questions: `visible(el)` asks "does it paint?",
+hit-testing asks "is it on top *here*?". An overlay with a higher stacking order
+(or simply later in paint order) intercepts the event regardless of opacity. A
+human never has this bug: they aim at the spot that *looks* clickable and, if a
+wall is in the way, they see the wall.
+**Primitive:** `hitPoint(el)` (helper JS) + `Browser._hit_point_of`, wired into
+`click(require_hit=True)`. We scroll the element into view, then probe nine points
+across its box (center, edges, inner corners) and return the first where
+`elementFromPoint` resolves back to the element *or a descendant* — the visible
+spot a human would actually aim for. If every sampled point is covered we report
+`occluded:true` with the `blocker`, and `click` **refuses to fire** rather than
+dispatching an event that lands on the scrim and lies about success. Partial
+occlusion (top half walled) is handled by aiming at the clear lower point;
+`require_hit=False` preserves a deliberate geometric click for callers that want
+it. `117/117 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 信言不美，美言不信 — a click that *claims* success without
+verifying it reached the target is a beautiful lie; we made `click` speak the
+truth even when the truth is "I could not reach it." 為者敗之 — we did not force a
+synthetic event through a wall; we looked for the door the layout already leaves
+open (the uncovered point) and, finding none, declined to act rather than pretend.
+知止不殆 — knowing when *not* to click is itself a capacity that exceeds blind
+screenshot-and-tap.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
 
-- **R-next: out-of-process (cross-site) iframes** — when the child context does
-  *not* appear on the page session; needs `Target.setAutoAttach` + per-target
-  `sessionId` routing (the plumbing for which already exists in `cdp.py`).
-- **R-next: a structure that has rotated or rescaled** — `match_edges` is
-  translation-only; a target rotated or zoomed defeats a fixed mask. Needs an
-  orientation/scale-tolerant descriptor (the register after rigid structure).
-- **R-next: text the page renders but never settles in the DOM** — canvas/WebGL
-  glyphs, where neither DOM text nor a colour/shape patch identifies a word;
-  needs reading rendered glyphs from pixels (the next register after structure).
+- **R-next: a glyph atlas wider than one alphabet** — `read_glyph` (F058) reads
+  among the few glyphs we carry; reading an *unknown* string needs per-character
+  segmentation across a baseline and a fuller atlas (true OCR territory). Grow it
+  only when a real control demands reading text we did not pre-enumerate.
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

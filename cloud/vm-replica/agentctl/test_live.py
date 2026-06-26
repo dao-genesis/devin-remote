@@ -699,6 +699,436 @@ def round_structure_match(b: Browser, offline: bool) -> None:
           b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
 
 
+def round_scale_invariant(b: Browser, offline: bool) -> None:
+    print("R20: pick a rescaled target by canonical signature, not fixed size (F056) — osctl")
+    # The reference shape (a ring) reappears LARGER (a zoom / DPI / re-layout),
+    # beside a DIFFERENT shape (a disk) at the reference's own size. match_edges
+    # (R19) uses a fixed-size mask, so the bigger-but-correct shape no longer
+    # aligns and the same-size-but-wrong shape wins. Reducing each candidate to a
+    # canonical edge signature removes the size dependence.
+    ring = ("function ring(cx,cy,r,col){x.fillStyle=col;x.beginPath();"
+            "x.arc(cx,cy,r,0,7);x.fill();x.fillStyle='#ff00ff';"
+            "x.beginPath();x.arc(cx,cy,r/2,0,7);x.fill();}")
+    disk = ("function disk(cx,cy,r,col){x.fillStyle=col;x.beginPath();"
+            "x.arc(cx,cy,r,0,7);x.fill();}")
+    # Phase 1: reference ring on a 120 tile, captured alone.
+    proto = fixture("scstruct.html",
+                    "<!doctype html><title>scstruct</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=300 height=260 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,300,260);" + ring +
+                    "x.fillStyle='#ff00ff';x.fillRect(60,60,120,120);ring(120,120,40,'#fff');"
+                    "</script>")
+    b.navigate(proto)
+    time.sleep(0.5)
+    rw, rh, rrgb = osctl.capture_rgb()
+    rb = [bl for bl in osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rrgb,
+                                              size=(rw, rh), min_count=200)
+          if bl["bbox"][2] - bl["bbox"][0] > 80 and bl["bbox"][3] - bl["bbox"][1] > 80]
+    check("captured a reference tile", len(rb) == 1, str([bl["x"] for bl in rb]))
+    if not rb:
+        return
+    ref = rb[0]
+    ref_e, ew, eh = osctl.edge_map(rrgb, (rw, rh), ref["bbox"])
+    ref_sig = osctl.edge_signature(rrgb, (rw, rh), ref["bbox"])
+    check("reference signature has structure", sum(ref_sig) > 80, str(sum(ref_sig)))
+    # Phase 2: target = SAME ring, bigger (180 tile, r60) LEFT;
+    #          decoy  = disk at the reference size (120 tile, r40) RIGHT.
+    scene = fixture("scscene.html",
+                    "<!doctype html><title>scscene</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=760 height=260 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,760,260);" + ring + disk +
+                    "var TGT=[40,40,180,180],DEC=[560,70,120,120];"
+                    "x.fillStyle='#ff00ff';x.fillRect(TGT[0],TGT[1],180,180);"
+                    "x.fillStyle='#ff00ff';x.fillRect(DEC[0],DEC[1],120,120);"
+                    "ring(130,130,60,'#fff');disk(620,130,40,'#fff');"
+                    "function inb(p,r){return p[0]>=r[0]&&p[0]<=r[0]+r[2]"
+                    "&&p[1]>=r[1]&&p[1]<=r[1]+r[3];}"
+                    "c.addEventListener('click',function(e){"
+                    "var r=c.getBoundingClientRect(),p=[e.clientX-r.left,e.clientY-r.top];"
+                    "if(inb(p,TGT)){document.title='TARGET-HIT';}"
+                    "else if(inb(p,DEC)){document.title='DECOY';}"
+                    "else{document.title='MISS';}});</script>")
+    b.navigate(scene)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    blobs = [bl for bl in osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rgb,
+                                                 size=(w, h), min_count=200)
+             if bl["bbox"][2] - bl["bbox"][0] > 80 and bl["bbox"][3] - bl["bbox"][1] > 80]
+    check("two candidates of different sizes found", len(blobs) == 2,
+          str([(bl["x"], bl["bbox"][2] - bl["bbox"][0] + 1) for bl in blobs]))
+    if len(blobs) != 2:
+        return
+    blobs.sort(key=lambda bl: bl["x"])
+    target_blob, decoy_blob = blobs[0], blobs[1]
+    check("target is larger than the reference, decoy is reference-sized",
+          (target_blob["bbox"][2] - target_blob["bbox"][0] + 1) > ew + 20
+          and abs((decoy_blob["bbox"][2] - decoy_blob["bbox"][0] + 1) - ew) < 20,
+          f"tgt={target_blob['bbox'][2]-target_blob['bbox'][0]+1} dec={decoy_blob['bbox'][2]-decoy_blob['bbox'][0]+1} ref={ew}")
+    # Friction: a fixed-size edge mask cannot match the rescaled target.
+    fixed = []
+    for bl in blobs:
+        cand, _, _ = osctl.edge_map(rgb, (w, h), bl["bbox"])
+        n = min(len(ref_e), len(cand))
+        fixed.append((osctl.edge_hamming(ref_e[:n], cand[:n]) + abs(len(ref_e) - len(cand)), bl))
+    fixed_best = min(fixed, key=lambda t: t[0])[1]
+    check("fixed-size edge-match is fooled: it picks the reference-sized decoy",
+          fixed_best is decoy_blob,
+          f"fixed chose x={fixed_best['x']} target_x={target_blob['x']}")
+    # Primitive: canonical signature is size-independent.
+    sig = []
+    for bl in blobs:
+        s = osctl.edge_signature(rgb, (w, h), bl["bbox"])
+        sig.append((osctl.edge_hamming(ref_sig, s), bl))
+    sig_best_score, sig_best = min(sig, key=lambda t: t[0])
+    sig_worst = max(sig, key=lambda t: t[0])[0]
+    check("rescaled target scores below decoy on signature",
+          sig_best_score < sig_worst,
+          f"best={sig_best_score} worst={sig_worst}")
+    check("signature-match picks the rescaled target, not the decoy",
+          sig_best is target_blob,
+          f"sig chose x={sig_best['x']} target_x={target_blob['x']}")
+    osctl.click(sig_best["x"], sig_best["y"])
+    check("signature-matched click hits the rescaled target",
+          b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
+
+
+def round_rotation_invariant(b: Browser, offline: bool) -> None:
+    print("R21: pick a rotated target by radial profile, not fixed orientation (F057) — osctl")
+    # The reference glyph (a horizontal bar) reappears ROTATED 90° — now vertical
+    # — beside a DIFFERENT glyph (a wide ellipse) left at the reference's own
+    # orientation. edge_signature (R20) resamples to a fixed grid, so the turned
+    # bar lands on entirely different cells and the same-orientation ellipse scores
+    # a closer signature. A radial profile (edge mass vs distance-from-centroid) is
+    # unchanged by rotation, so it recognises the turned bar.
+    bar = ("function bar(cx,cy,hw,hh,rot,col){x.save();x.translate(cx,cy);x.rotate(rot);"
+           "x.fillStyle=col;x.fillRect(-hw,-hh,2*hw,2*hh);x.restore();}")
+    ell = ("function ell(cx,cy,rx,ry,col){x.save();x.translate(cx,cy);x.scale(rx/ry,1);"
+           "x.fillStyle=col;x.beginPath();x.arc(0,0,ry,0,7);x.fill();x.restore();}")
+    # Phase 1: reference horizontal bar on a 160 tile, captured alone.
+    proto = fixture("rtstruct.html",
+                    "<!doctype html><title>rtstruct</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=320 height=300 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,320,300);" + bar +
+                    "x.fillStyle='#ff00ff';x.fillRect(50,50,160,160);bar(130,130,62,22,0,'#fff');"
+                    "</script>")
+    b.navigate(proto)
+    time.sleep(0.5)
+    rw, rh, rrgb = osctl.capture_rgb()
+    rb = [bl for bl in osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rrgb,
+                                              size=(rw, rh), min_count=200)
+          if bl["bbox"][2] - bl["bbox"][0] > 90 and bl["bbox"][3] - bl["bbox"][1] > 90]
+    check("captured a reference tile", len(rb) == 1, str([bl["x"] for bl in rb]))
+    if not rb:
+        return
+    ref = rb[0]
+    ref_sig = osctl.edge_signature(rrgb, (rw, rh), ref["bbox"])
+    ref_rad = osctl.radial_profile(rrgb, (rw, rh), ref["bbox"])
+    check("reference radial profile is populated", abs(sum(ref_rad) - 1.0) < 1e-6
+          and max(ref_rad) > 0, f"sum={sum(ref_rad):.3f}")
+    # Phase 2: target = SAME bar rotated 90° (vertical) LEFT; decoy = wide ellipse RIGHT.
+    scene = fixture("rtscene.html",
+                    "<!doctype html><title>rtscene</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=760 height=300 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,760,300);" + bar + ell +
+                    "var TGT=[40,60,160,160],DEC=[520,60,160,160];"
+                    "x.fillStyle='#ff00ff';x.fillRect(TGT[0],TGT[1],160,160);"
+                    "x.fillStyle='#ff00ff';x.fillRect(DEC[0],DEC[1],160,160);"
+                    "bar(120,140,62,22,Math.PI/2,'#fff');ell(600,140,62,22,'#fff');"
+                    "function inb(p,r){return p[0]>=r[0]&&p[0]<=r[0]+r[2]"
+                    "&&p[1]>=r[1]&&p[1]<=r[1]+r[3];}"
+                    "c.addEventListener('click',function(e){"
+                    "var r=c.getBoundingClientRect(),p=[e.clientX-r.left,e.clientY-r.top];"
+                    "if(inb(p,TGT)){document.title='TARGET-HIT';}"
+                    "else if(inb(p,DEC)){document.title='DECOY';}"
+                    "else{document.title='MISS';}});</script>")
+    b.navigate(scene)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    blobs = [bl for bl in osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rgb,
+                                                 size=(w, h), min_count=200)
+             if bl["bbox"][2] - bl["bbox"][0] > 90 and bl["bbox"][3] - bl["bbox"][1] > 90]
+    check("two same-size candidates found", len(blobs) == 2, str([bl["x"] for bl in blobs]))
+    if len(blobs) != 2:
+        return
+    blobs.sort(key=lambda bl: bl["x"])
+    target_blob, decoy_blob = blobs[0], blobs[1]
+    # Friction: a fixed-orientation signature is fooled by the 90° turn.
+    sig = []
+    for bl in blobs:
+        sig.append((osctl.edge_hamming(ref_sig, osctl.edge_signature(rgb, (w, h), bl["bbox"])), bl))
+    sig_best = min(sig, key=lambda t: t[0])[1]
+    check("signature-match is fooled: it picks the same-orientation decoy",
+          sig_best is decoy_blob,
+          f"sig chose x={sig_best['x']} target_x={target_blob['x']}")
+    # Primitive: radial profile is rotation-invariant.
+    rad = []
+    for bl in blobs:
+        rad.append((osctl.profile_l1(ref_rad, osctl.radial_profile(rgb, (w, h), bl["bbox"])), bl))
+    rad_best_score, rad_best = min(rad, key=lambda t: t[0])
+    rad_worst = max(rad, key=lambda t: t[0])[0]
+    check("rotated target scores below decoy on radial profile",
+          rad_best_score < rad_worst,
+          f"best={rad_best_score:.3f} worst={rad_worst:.3f}")
+    check("radial-profile-match picks the rotated target, not the decoy",
+          rad_best is target_blob,
+          f"radial chose x={rad_best['x']} target_x={target_blob['x']}")
+    osctl.click(rad_best["x"], rad_best["y"])
+    check("rotation-invariant click hits the rotated target",
+          b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
+
+
+def round_read_glyph(b: Browser, offline: bool) -> None:
+    print("R22: pick the control that READS the right glyph, not just its colour/shape (F058) — osctl")
+    # Two magenta buttons, same colour, same size, same outer shape. The ONLY
+    # difference is the white GLYPH the page draws on each ("A" vs "B"). We hold a
+    # reference ATLAS of candidate glyphs, but rendered SMALLER than the live
+    # buttons. A fixed-size edge match against the atlas is fooled by the size gap
+    # (reads every tile as the same letter); read_glyph classifies in the
+    # scale-free frame and reads each button correctly.
+    def tiles(rgb, w, h):
+        return [bl for bl in osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rgb,
+                                                    size=(w, h), min_count=200)
+                if bl["bbox"][2] - bl["bbox"][0] > 60 and bl["bbox"][3] - bl["bbox"][1] > 60]
+    # Phase 1: atlas — candidate glyphs A and B rendered SMALL (110 tiles, 80px font).
+    atlas_html = fixture("glyphatlas.html",
+                         "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+                         "<canvas id=c width=520 height=200></canvas><script>"
+                         "var x=document.getElementById('c').getContext('2d');"
+                         "x.fillStyle='#fff';x.fillRect(0,0,520,200);"
+                         "function t(ox,ch){x.fillStyle='#ff00ff';x.fillRect(ox,30,110,110);"
+                         "x.fillStyle='#fff';x.font='bold 80px sans-serif';x.textAlign='center';"
+                         "x.textBaseline='middle';x.fillText(ch,ox+55,88);}"
+                         "t(40,'A');t(300,'B');</script>")
+    b.navigate(atlas_html)
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    at = sorted(tiles(argb, aw, ah), key=lambda t: t["x"])
+    check("atlas segments into two reference glyphs", len(at) == 2, str([t["x"] for t in at]))
+    if len(at) != 2:
+        return
+    atlas = {"A": osctl.edge_signature(argb, (aw, ah), at[0]["bbox"]),
+             "B": osctl.edge_signature(argb, (aw, ah), at[1]["bbox"])}
+    atlas_edge = {}
+    for ch, t in (("A", at[0]), ("B", at[1])):
+        e, _ew, _eh = osctl.edge_map(argb, (aw, ah), t["bbox"])
+        atlas_edge[ch] = e
+    # Phase 2: scene — buttons LARGE (170 tiles, 120px font). LEFT='A' (target), RIGHT='B'.
+    scene = fixture("glyphscene.html",
+                    "<!doctype html><title>scene</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=760 height=320></canvas><script>"
+                    "var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,760,320);"
+                    "var L=[40,70,170,170],R=[520,70,170,170];"
+                    "function t(r,ch){x.fillStyle='#ff00ff';x.fillRect(r[0],r[1],r[2],r[3]);"
+                    "x.fillStyle='#fff';x.font='bold 120px sans-serif';x.textAlign='center';"
+                    "x.textBaseline='middle';x.fillText(ch,r[0]+r[2]/2,r[1]+r[3]/2);}"
+                    "t(L,'A');t(R,'B');"
+                    "function inb(p,r){return p[0]>=r[0]&&p[0]<=r[0]+r[2]&&p[1]>=r[1]&&p[1]<=r[1]+r[3];}"
+                    "c.addEventListener('click',function(e){var b=c.getBoundingClientRect(),"
+                    "p=[e.clientX-b.left,e.clientY-b.top];"
+                    "document.title=inb(p,L)?'TARGET-HIT':inb(p,R)?'DECOY':'MISS';});</script>")
+    b.navigate(scene)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    ts = sorted(tiles(rgb, w, h), key=lambda t: t["x"])
+    check("two same-colour, same-size buttons found", len(ts) == 2, str([t["x"] for t in ts]))
+    if len(ts) != 2:
+        return
+    target_tile, decoy_tile = ts[0], ts[1]
+    check("buttons are larger than the atlas glyphs",
+          (target_tile["bbox"][2] - target_tile["bbox"][0]) > (at[0]["bbox"][2] - at[0]["bbox"][0]) + 30,
+          f"btn={target_tile['bbox'][2]-target_tile['bbox'][0]} atlas={at[0]['bbox'][2]-at[0]['bbox'][0]}")
+    # Friction: fixed-size edge match against the atlas mis-reads the decoy.
+    def fixed_read(tile):
+        e, _ew, _eh = osctl.edge_map(rgb, (w, h), tile["bbox"])
+        sc = {}
+        for ch, ae in atlas_edge.items():
+            n = min(len(ae), len(e))
+            sc[ch] = osctl.edge_hamming(ae[:n], e[:n]) + abs(len(ae) - len(e))
+        return min(sc, key=sc.get)
+    check("fixed-size match mis-reads: it cannot tell the two glyphs apart",
+          fixed_read(target_tile) == fixed_read(decoy_tile),
+          f"target->{fixed_read(target_tile)} decoy->{fixed_read(decoy_tile)}")
+    # Primitive: read_glyph classifies in the scale-free frame.
+    check("read_glyph reads the target button as 'A'",
+          osctl.read_glyph(rgb, (w, h), target_tile["bbox"], atlas) == "A",
+          osctl.read_glyph(rgb, (w, h), target_tile["bbox"], atlas))
+    check("read_glyph reads the decoy button as 'B'",
+          osctl.read_glyph(rgb, (w, h), decoy_tile["bbox"], atlas) == "B",
+          osctl.read_glyph(rgb, (w, h), decoy_tile["bbox"], atlas))
+    pick = target_tile if osctl.read_glyph(rgb, (w, h), target_tile["bbox"], atlas) == "A" else decoy_tile
+    osctl.click(pick["x"], pick["y"])
+    check("glyph-read click hits the button that says 'A'",
+          b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
+
+
+def round_oop_iframe(b: Browser, offline: bool) -> None:
+    print("R23: reach an out-of-process (cross-SITE) iframe by per-session routing (F059) — cdp")
+    if offline:
+        check("oop iframe skipped offline (needs public internet)", True)
+        return
+    # A cross-SITE child (real public origin) is put in its *own* renderer
+    # process by Chrome site isolation — unlike R13's same-IP/different-port
+    # child, which is merely cross-origin and shares the page's process. The
+    # OOP child's execution context never appears on the page session, so the
+    # F049 path (which only knows page-session contexts) is blind to it.
+    parent = (b"<!doctype html><title>oop-parent</title><h1>parent</h1>"
+              b"<iframe id=f src='https://example.com' "
+              b"style='width:600px;height:400px'></iframe>")
+    sp = _serve(8911, parent)
+    try:
+        try:
+            b.navigate("http://127.0.0.1:8911/", timeout=20)
+        except Exception as e:
+            check("oop iframe skipped (no internet to load cross-site child)",
+                  True, repr(e))
+            return
+        ok = b.wait_frame("example.com", timeout=8) is not None
+        if not ok:
+            check("oop iframe skipped (cross-site child did not load)", True)
+            return
+        # Precondition: the cross-site child really mounted in the parent.
+        check("cross-site child present in parent",
+              b.eval("window.frames.length") == 1,
+              repr(b.eval("window.frames.length")))
+        # Friction: parent JS is walled off, AND the child registered under its
+        # own session — proof it is out-of-process, not merely cross-origin.
+        reach = b.eval("(function(){var f=document.getElementById('f');"
+                       "try{return f.contentDocument?'OPEN':null}"
+                       "catch(e){return 'ERR'}})()")
+        check("parent JS walled off from OOP child", reach is None, repr(reach))
+        key = b._frame_context("example.com")
+        check("OOP child lives in its own attached session",
+              isinstance(key, str) and ":" in key, repr(key))
+        # Primitive: auto-attach + per-session routing reaches into the child's
+        # own renderer over the one connection.
+        check("eval_in_frame reads across the process boundary",
+              b.eval_in_frame("example.com",
+                              "document.querySelector('h1').textContent")
+              == "Example Domain")
+        check("eval_in_frame acts across the process boundary",
+              b.eval_in_frame("example.com",
+                              "document.querySelector('h1').textContent='OOP-EDIT';true")
+              is True)
+        check("OOP child state changed by cross-process action",
+              b.eval_in_frame("example.com",
+                              "document.querySelector('h1').textContent")
+              == "OOP-EDIT")
+        # An absent frame still fails fast rather than hanging.
+        check("absent OOP frame returns None fast",
+              b.eval_in_frame("no-such-site.invalid", "1", timeout=0.5) is None)
+    finally:
+        sp.shutdown()
+
+
+def round_new_tab(b: Browser, offline: bool) -> None:
+    print("R24: drive a tab opened by a target=_blank click (F060) — cdp")
+    import urllib.request
+    tok = str(int(time.time() * 1000) % 1000000)
+    opener = (b"<!doctype html><title>opener</title><h1>opener</h1>"
+              b"<a id=lnk href='http://127.0.0.1:8932/s-" + tok.encode() +
+              b"' target=_blank>open second</a>")
+    second = (b"<!doctype html><title>tab-" + tok.encode() + b"</title>"
+              b"<h1 id=h>SECOND-" + tok.encode() + b"</h1>"
+              b"<button id=go onclick=\"document.title='SECOND-CLICKED'\">go</button>")
+    sp = _serve(8931, opener)
+    sc = _serve(8932, second)
+    try:
+        b.navigate("http://127.0.0.1:8931/")
+        time.sleep(0.2)
+        # Friction: the link opens a *new top-level tab*. The connection stays on
+        # the opener; the new tab is a separate page target the opener session
+        # cannot read or drive (site-isolation auto-attach reaches child frames,
+        # not sibling tabs).
+        b.click_text("open second")
+        time.sleep(0.5)
+        urls = [p["url"] for p in b.pages()]
+        check("new tab target appears in the browser",
+              any(f"s-{tok}" in u for u in urls), repr(urls))
+        check("opener session still reads the opener, not the new tab",
+              b.eval("document.title") == "opener", b.eval("document.title"))
+        # Primitive: switch to (drive) the new tab, as a human clicks it.
+        check("switch_page focuses the new tab", b.switch_page(f"s-{tok}"))
+        check("new tab is now readable",
+              b.eval("document.getElementById('h').textContent") == f"SECOND-{tok}",
+              b.eval("document.title"))
+        # And actable: helpers re-injected, click drives the switched tab.
+        check("agentctl helpers present on the switched tab",
+              b.eval("!!window.__agentctl"))
+        b.click_text("go")
+        check("click acts on the switched tab",
+              b.wait_for("document.title==='SECOND-CLICKED'", timeout=3),
+              b.eval("document.title"))
+        # And we can switch back to the opener.
+        check("switch_page returns to the opener", b.switch_page("8931/"))
+        check("opener is driveable again",
+              b.eval("document.title") == "opener", b.eval("document.title"))
+        # A tab that never opened fails fast rather than hanging.
+        check("switch to absent tab fails fast",
+              b.switch_page("no-such-tab", timeout=0.5) is False)
+    finally:
+        # Close the spawned tab so repeated full-suite runs stay deterministic.
+        try:
+            for p in b.pages():
+                if f"s-{tok}" in (p["url"] or ""):
+                    urllib.request.urlopen(
+                        f"http://127.0.0.1:{b.cdp.port}/json/close/{p['target_id']}",
+                        timeout=5).read()
+        except Exception:
+            pass
+        sp.shutdown()
+        sc.shutdown()
+
+
+def round_occlusion(b: Browser, offline: bool) -> None:
+    print("R25: refuse to fire a click an overlay would swallow (F061) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>occlude</title><style>"
+            b"#t{position:absolute;left:60px;top:200px;width:160px;height:48px}"
+            b"#scrim{position:fixed;inset:0;background:rgba(0,0,0,0.001);z-index:9}"
+            b"</style>"
+            b"<button id=t onclick=\"window.__hit=(window.__hit||0)+1\">CONFIRM</button>"
+            b"<div id=scrim onclick=\"window.__s=(window.__s||0)+1\"></div>")
+    sp = _serve(8951, page)
+    try:
+        b.navigate("http://127.0.0.1:8951/")
+        time.sleep(0.2)
+        c = b._center_of("#t")
+        # Friction: the element's own center hit-tests to the overlay, not it.
+        top = b.eval(f"(function(){{var e=document.elementFromPoint({c['x']},{c['y']});"
+                     f"return e?e.id:null;}})()")
+        check("overlay sits on top of the target's center", top == "scrim", repr(top))
+        # Primitive: hit-verified click sees full occlusion and refuses to fire.
+        hp = b._hit_point_of("#t")
+        check("hitPoint reports the target fully occluded",
+              hp is not None and hp.get("occluded") is True
+              and hp.get("blocker") == "scrim", repr(hp))
+        check("click refuses to fire into the overlay", b.click("#t") is False)
+        check("target never received the swallowed click",
+              b.eval("window.__hit||0") == 0, repr(b.eval("window.__hit||0")))
+        # Uncover the lower half: now a real spot on the target is reachable.
+        b.eval("var s=document.getElementById('scrim');s.style.top='0px';"
+               "s.style.height='224px';s.style.bottom='auto';true")
+        hp2 = b._hit_point_of("#t")
+        check("hitPoint finds a clear point once partly uncovered",
+              hp2 is not None and hp2.get("occluded") is False, repr(hp2))
+        check("click now reaches the target", b.click("#t") is True)
+        check("target received exactly the real click",
+              b.eval("window.__hit||0") == 1, repr(b.eval("window.__hit||0")))
+        check("overlay never absorbed a stray click",
+              b.eval("window.__s||0") == 0, repr(b.eval("window.__s||0")))
+        # require_hit=False still allows a deliberate geometric click.
+        b.eval("var s=document.getElementById('scrim');s.style.top='0px';"
+               "s.style.height='100%';s.style.bottom='auto';true")
+        check("geometric click is still available on request",
+              b.click("#t", require_hit=False) is True)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -706,7 +1136,9 @@ def main() -> int:
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
-              round_template_match, round_settle, round_structure_match]
+              round_template_match, round_settle, round_structure_match,
+              round_scale_invariant, round_rotation_invariant, round_read_glyph,
+              round_oop_iframe, round_new_tab, round_occlusion]
     for r in rounds:
         try:
             r(b, offline)

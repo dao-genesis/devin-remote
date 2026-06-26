@@ -636,6 +636,123 @@ def match_edges(ref_edges: list[int], ew: int, eh: int,
             "bbox": (tx, ty, tx + ew - 1, ty + eh - 1)}
 
 
+def edge_signature(rgb: bytes, size: tuple[int, int],
+                   bbox: tuple[int, int, int, int],
+                   nw: int = 48, nh: int = 48, thr: int = 24) -> list[int]:
+    """A scale-invariant structural fingerprint of a region (F056).
+
+    :func:`edge_map` / :func:`match_edges` are translation-only: the reference
+    mask is a fixed pixel size, so the *same* shape rendered larger (browser
+    zoom, high-DPI, a responsive re-layout) no longer aligns — and a *different*
+    shape at the reference's own size can score better. This collapses that
+    dependence on size: it area-averages the region's luma down to a fixed
+    ``nw``x``nh`` grid and thresholds the gradient there, so any rendering of the
+    same shape — whatever its pixel dimensions — reduces to the *same* signature.
+    Compare two signatures with :func:`edge_hamming` (lower = more alike).
+
+    Segmentation already yields each candidate's true ``bbox`` (hence its size),
+    so the idiom is: segment by colour, take one signature per candidate at the
+    canonical grid, and pick the lowest Hamming distance to the reference —
+    structure that no longer cares how big the thing was drawn."""
+    w, _h = size
+    x0, y0, x1, y1 = bbox
+    bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    g = [0] * (nw * nh)
+    for ny in range(nh):
+        sy0 = y0 + ny * bh // nh
+        sy1 = y0 + (ny + 1) * bh // nh
+        if sy1 <= sy0:
+            sy1 = sy0 + 1
+        for nx in range(nw):
+            sx0 = x0 + nx * bw // nw
+            sx1 = x0 + (nx + 1) * bw // nw
+            if sx1 <= sx0:
+                sx1 = sx0 + 1
+            s = cnt = 0
+            for yy in range(sy0, sy1):
+                base = yy * w * 3
+                for xx in range(sx0, sx1):
+                    j = base + xx * 3
+                    s += (rgb[j] * 299 + rgb[j + 1] * 587
+                          + rgb[j + 2] * 114) // 1000
+                    cnt += 1
+            g[ny * nw + nx] = s // cnt if cnt else 0
+    sig = [0] * (nw * nh)
+    for ny in range(1, nh - 1):
+        for nx in range(1, nw - 1):
+            i = ny * nw + nx
+            gx = g[i + 1] - g[i - 1]
+            gy = g[i + nw] - g[i - nw]
+            if (gx if gx >= 0 else -gx) + (gy if gy >= 0 else -gy) > thr:
+                sig[i] = 1
+    return sig
+
+
+def radial_profile(rgb: bytes, size: tuple[int, int],
+                   bbox: tuple[int, int, int, int],
+                   bins: int = 24, thr: int = 40) -> list[float]:
+    """A rotation- *and* scale-invariant structural descriptor (F057).
+
+    :func:`edge_signature` is scale-free but still orientation-bound: it
+    resamples onto a fixed grid, so the *same* shape turned by 90° lights up
+    entirely different cells and a *different* shape left at the reference's
+    orientation can score a closer signature. This removes the angle too. It
+    edges the region (:func:`edge_map`), finds the centroid of the edge pixels,
+    measures each edge pixel's distance to that centroid, normalises by the
+    largest such distance (kills scale), and histograms those normalised radii
+    into ``bins`` buckets summed to 1. Rotating a shape about its centroid moves
+    no pixel's radius, so the histogram is unchanged; rescaling divides every
+    radius by the same factor, which the normalisation cancels. The histogram is
+    therefore a fingerprint of the shape's *radial mass*, independent of how it
+    is turned or sized. Compare two profiles with :func:`profile_l1` (lower =
+    more alike). It discards angular order, so distinct shapes that happen to
+    share a radial distribution can collide — pair with :func:`edge_signature`
+    when orientation is in fact fixed; reach for this only when it can rotate."""
+    edges, ew, _eh = edge_map(rgb, size, bbox, thr)
+    pts = [(i % ew, i // ew) for i, v in enumerate(edges) if v]
+    if not pts:
+        return [0.0] * bins
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+    ds = [((px - cx) ** 2 + (py - cy) ** 2) ** 0.5 for px, py in pts]
+    mr = max(ds) or 1.0
+    hist = [0] * bins
+    for d in ds:
+        hist[int(d / mr * (bins - 1) + 0.5)] += 1
+    tot = sum(hist) or 1
+    return [hc / tot for hc in hist]
+
+
+def profile_l1(a: list[float], b: list[float]) -> float:
+    """L1 (city-block) distance between two equal-length radial profiles."""
+    return sum(abs(a[i] - b[i]) for i in range(len(a)))
+
+
+def read_glyph(rgb: bytes, size: tuple[int, int],
+               bbox: tuple[int, int, int, int],
+               atlas: dict[str, list[int]],
+               nw: int = 48, nh: int = 48, thr: int = 24) -> str:
+    """Read which glyph occupies a region by matching an atlas (F058).
+
+    The end of the perception ladder: when a control carries text the page draws
+    straight onto a canvas — no DOM node, no distinguishing colour or outer shape,
+    *only* the rendered character sets one button apart from its twin. Colour
+    segmentation finds the tiles; structure tells them apart only if we already
+    hold the target's own rendering. A fixed-size edge match against a reference
+    *atlas* of candidate glyphs fails the moment the atlas was rendered at a
+    different size than the live control (a `bold 80px` swatch vs a `bold 120px`
+    button) — it reads every tile as the same letter. This classifies instead in
+    the scale-free frame: it takes the region's :func:`edge_signature` and returns
+    the ``atlas`` label whose signature is closest by :func:`edge_hamming`, so a
+    glyph recognises itself however large it was drawn. ``atlas`` is
+    ``{label: edge_signature(...)}`` built once from reference glyphs (rendered by
+    the page itself on a scratch canvas, or captured from a known control). This
+    is reading text from pixels reduced to its smallest honest form — not full
+    OCR, but enough to pick the control that *says* the right thing."""
+    sig = edge_signature(rgb, size, bbox, nw, nh, thr)
+    return min(atlas, key=lambda k: edge_hamming(atlas[k], sig))
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"

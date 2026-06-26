@@ -105,7 +105,38 @@ window.__agentctl = (function () {
     }
     return best;
   }
-  return {visible, center, deepQuery, byText};
+  // F061: the point we will actually click. A trusted click lands on whatever
+  // paints topmost at (x,y) — not necessarily the element we located. An overlay
+  // (scrim, sticky header, cookie wall) sitting above the target swallows the
+  // click. So probe a few points across the element's box and return the first
+  // where elementFromPoint resolves back into the element (so the click truly
+  // reaches it — exactly the visible spot a human would aim for). If every
+  // sampled point is covered, report the target as occluded with its blocker
+  // rather than firing a click that lies.
+  function hitPoint(el) {
+    if (!el || !visible(el)) return null;
+    let r = el.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) {
+      el.scrollIntoView({block: 'center', inline: 'center'});
+      r = el.getBoundingClientRect();
+    }
+    if (r.width <= 0 || r.height <= 0) return null;
+    const fx = [0.5, 0.5, 0.5, 0.3, 0.7, 0.5, 0.5, 0.15, 0.85];
+    const fy = [0.5, 0.3, 0.7, 0.5, 0.5, 0.15, 0.85, 0.5, 0.5];
+    for (let i = 0; i < fx.length; i++) {
+      const x = r.left + r.width * fx[i], y = r.top + r.height * fy[i];
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) continue;
+      const hit = document.elementFromPoint(x, y);
+      if (hit && (hit === el || el.contains(hit))) {
+        return {x: x, y: y, w: r.width, h: r.height, occluded: false};
+      }
+    }
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const blk = document.elementFromPoint(cx, cy);
+    return {x: cx, y: cy, w: r.width, h: r.height, occluded: true,
+            blocker: (blk && (blk.id || blk.tagName)) || null};
+  }
+  return {visible, center, deepQuery, byText, hitPoint};
 })();
 """
 
@@ -137,13 +168,16 @@ class Browser:
                         "is_default": aux.get("isDefault")})
         return out
 
-    def _frame_context(self, match: str) -> int | None:
+    def _frame_context(self, match: str):
+        # contexts preserve insertion order, so the *last* match is the freshest
+        # registration of that frame (a reload re-registers a new context). Keys
+        # may be a page-session int id or an out-of-process "<sessionId>:<id>"
+        # string (F059), so we never order-compare them — we just take the last.
         best = None
         for cid, ctx in self.cdp.contexts.items():
             aux = ctx.get("auxData") or {}
             if match in (ctx.get("origin") or "") or match == aux.get("frameId"):
-                if best is None or cid > best:  # prefer the freshest context
-                    best = cid
+                best = cid
         return best
 
     def wait_frame(self, match: str, timeout: float = 5.0,
@@ -175,6 +209,36 @@ class Browser:
             return None
         return self.cdp.evaluate(expr, context_id=cid,
                                  await_promise=await_promise)
+
+    # ---- F060: new top-level tabs / popup windows ------------------------- #
+    def pages(self) -> list[dict]:
+        """Every open top-level tab/window, newest first. A ``target=_blank``
+        link or ``window.open`` spawns one of these — a separate page target the
+        opener's session cannot see into."""
+        return [{"title": p.get("title"), "url": p.get("url"),
+                 "target_id": p.get("id"), "ws": p.get("webSocketDebuggerUrl")}
+                for p in self.cdp.list_pages()]
+
+    def switch_page(self, match: str, timeout: float = 5.0,
+                    interval: float = 0.2) -> bool:
+        """Drive a *different* top-level tab whose url/title contains ``match``
+        (F060). A click that opens a new tab leaves the connection on the opener;
+        site-isolation auto-attach (F059) only reaches child frames, not sibling
+        top-level targets. So we re-point this connection at the new tab's own
+        devtools endpoint — the programmatic equivalent of a human clicking the
+        new tab — and re-inject helpers. Returns True once switched."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for p in self.cdp.list_pages():
+                if match in (p.get("url") or "") or match in (p.get("title") or ""):
+                    ws = p.get("webSocketDebuggerUrl")
+                    if ws:
+                        self.cdp.close()
+                        self.cdp.connect(ws_url=ws)
+                        self._inject_helpers()
+                        return True
+            time.sleep(interval)
+        return False
 
     # ---- navigation (F003/F004: arrival, not just fired) ------------------ #
     def navigate(self, url: str, timeout: float = 30.0) -> str:
@@ -211,6 +275,17 @@ class Browser:
                   f"return el?window.__agentctl.center(el):null;}})()")
         return self.eval(js)
 
+    def _hit_point_of(self, selector: str, by_text: bool = False,
+                      tag: str | None = None):
+        self._inject_helpers()
+        if by_text:
+            tag_lit = repr(tag) if tag else "null"
+            locate = f"window.__agentctl.byText({selector!r},{tag_lit})"
+        else:
+            locate = f"window.__agentctl.deepQuery({selector!r})"
+        return self.eval(f"(function(){{var el={locate};"
+                         f"return el?window.__agentctl.hitPoint(el):null;}})()")
+
     def exists(self, selector: str) -> bool:
         return bool(self.eval(
             f"!!window.__agentctl.deepQuery({selector!r})"))
@@ -233,11 +308,20 @@ class Browser:
                           {"type": t, "x": x, "y": y, "button": button,
                            "clickCount": 1})
 
-    def click(self, selector: str, by_text: bool = False, tag: str | None = None) -> bool:
-        c = self._center_of(selector, by_text=by_text, tag=tag)
-        if not c:
+    def click(self, selector: str, by_text: bool = False, tag: str | None = None,
+              require_hit: bool = True) -> bool:
+        # F061: aim at a point that actually reaches the element. hitPoint probes
+        # the element's box and returns the first spot whose top-most paint is the
+        # element (or a descendant). If every spot is covered by an overlay it
+        # reports ``occluded`` — we refuse to fire a click that would land on the
+        # blocker and lie about success. ``require_hit=False`` falls back to the
+        # raw center for callers that knowingly want a geometric click.
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p:
             return False
-        self.click_xy(c["x"], c["y"])
+        if p.get("occluded") and require_hit:
+            return False
+        self.click_xy(p["x"], p["y"])
         return True
 
     def click_text(self, text: str, tag: str | None = None) -> bool:
