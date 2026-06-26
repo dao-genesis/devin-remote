@@ -1278,6 +1278,59 @@ def read_region(rgb: bytes, size: tuple[int, int],
     return "".join(read_glyph(rgb, size, c, atlas, nw, nh, thr) for _, c in cells)
 
 
+def read_region_words(rgb: bytes, size: tuple[int, int],
+                      bbox: tuple[int, int, int, int],
+                      atlas: dict[str, list[int]],
+                      tol: int = 60, gap: int = 2, space_k: float = 1.8,
+                      nw: int = 48, nh: int = 48, thr: int = 24,
+                      q: int = 16, min_pop: float = 0.002,
+                      min_dist: int = 96) -> str:
+    """Read all text in a region across every colour, *with its word spaces* (F113).
+
+    :func:`read_region` (F111) gathers every ink's glyph cells, sorts them by left
+    edge and joins the labels with *nothing* between them — so a two-colour line
+    ``"OK GO"`` (red ``OK`` beside green ``GO``) reads ``"OKGO"``: the word gap the
+    page left is dropped, exactly as :func:`read_text` dropped it before F106.
+    :func:`read_words` (F106) recovers the space, but it :func:`segment_run`-s by a
+    *single* ``fg``, so on that two-colour line it reads only one colour's word
+    (``"OK"`` given red, ``"GO"`` given green) — never the whole line with its seam.
+
+    This composes the two. As :func:`read_region`, it asks :func:`palette` for the
+    region's inks (dropping the background) and :func:`segment_run`-s each ink into
+    per-glyph cells, gathering every cell from every colour and sorting by left
+    edge — the single left-to-right order the eye reads. Then, as :func:`read_words`,
+    it measures the horizontal blank between adjacent cells, takes the median as the
+    typical inter-letter gap, and inserts a single ``' '`` wherever a gap is
+    ``>= space_k`` times that median — a word seam, regardless of which colours sit
+    on either side. ``"OK GO"`` where :func:`read_region` read ``"OKGO"`` and
+    :func:`read_words` read only ``"OK"``.
+
+    Honest where :func:`read_region` and :func:`read_words` are: it reads a single
+    *line* (use :func:`read_block_region` first to part stacked lines), each ink as
+    a run of glyphs, and only splits where the spacing is *bimodal* — a region whose
+    cells are evenly tracked yields no seam rather than an invented space. Empty
+    region (no ink above :func:`palette`'s floor) → ``""``."""
+    inks = palette(rgb, size, bbox, q, min_pop, min_dist)[1:]
+    cells: list[tuple[int, int, int, int]] = []
+    for ink in inks:
+        cells.extend(segment_run(rgb, size, bbox, ink, tol, gap))
+    if not cells:
+        return ""
+    cells.sort(key=lambda c: c[0])
+    labels = [read_glyph(rgb, size, c, atlas, nw, nh, thr) for c in cells]
+    if len(cells) == 1:
+        return labels[0]
+    gaps = [cells[i + 1][0] - cells[i][2] for i in range(len(cells) - 1)]
+    srt = sorted(gaps)
+    med = srt[len(srt) // 2]
+    out = [labels[0]]
+    for i, g in enumerate(gaps):
+        if med > 0 and g >= space_k * med:
+            out.append(" ")
+        out.append(labels[i + 1])
+    return "".join(out)
+
+
 def read_block_region(rgb: bytes, size: tuple[int, int],
                       bbox: tuple[int, int, int, int],
                       atlas: dict[str, list[int]],
