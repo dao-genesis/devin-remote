@@ -2893,6 +2893,66 @@ def round_two_finger_pan(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_three_finger_swipe(b: Browser, offline: bool) -> None:
+    print("R64: three-finger swipe (F100) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>3f</title>"
+            b"<style>html,body{margin:0}"
+            b"#b{width:300px;height:220px;background:#dde}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}"
+            b"</style><div id=b>three</div><div id=veil></div>"
+            b"<script>window.swiped3=0;window.maxn=0;"
+            b"function mid(t){var x=0,y=0;for(var i=0;i<t.length;i++){"
+            b"x+=t[i].clientX;y+=t[i].clientY;}return[x/t.length,y/t.length];}"
+            b"var m0=null;"
+            b"var el=document.getElementById('b');"
+            b"el.addEventListener('touchstart',function(e){"
+            b"window.maxn=Math.max(window.maxn,e.touches.length);"
+            b"if(e.touches.length===3){m0=mid(e.touches);}},{passive:true});"
+            b"el.addEventListener('touchmove',function(e){"
+            b"window.maxn=Math.max(window.maxn,e.touches.length);"
+            b"if(e.touches.length!==3||!m0)return;"
+            b"var m=mid(e.touches);var tr=Math.hypot(m[0]-m0[0],m[1]-m0[1]);"
+            b"if(tr>8){window.swiped3=Math.round(tr);}},{passive:true});"
+            b"el.addEventListener('touchend',function(e){"
+            b"if(e.touches.length===0)m0=null;},{passive:true});"
+            b"</script>")
+    sp = _serve(8997, page)
+
+    def st():
+        return (b.eval("window.swiped3"), b.eval("window.maxn"))
+
+    def reset() -> None:
+        b.eval("window.swiped3=0;window.maxn=0;")
+    try:
+        b.navigate("http://127.0.0.1:8997/")
+        time.sleep(0.2)
+        check("three-finger swipe starts unfired", st() == (0, 0), repr(st()))
+        # Friction: one finger never raises the touch count past one.
+        check("swipe (one finger) never reaches three",
+              b.swipe("#b", 80, 0) is True
+              and st()[0] == 0 and st()[1] == 1, repr(st()))
+        # Friction: two fingers reach two and stop — never the third.
+        reset()
+        check("two_finger_pan (two fingers) never reaches three",
+              b.two_finger_pan("#b", 80, 0) is True
+              and st()[0] == 0 and st()[1] == 2, repr(st()))
+        # Primitive: three points abreast translate together.
+        reset()
+        check("three_finger_swipe slides a rigid trio and commits",
+              b.three_finger_swipe("#b", 80, 0) is True
+              and st()[0] == 80 and st()[1] == 3, repr(st()))
+        b.eval("document.getElementById('veil').style.display='block'")
+        reset()
+        check("three_finger_swipe refuses through an overlay",
+              b.three_finger_swipe("#b", 80, 0) is False)
+        check("nothing swiped while occluded", st() == (0, 0), repr(st()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("three_finger_swipe on an absent element returns False",
+              b.three_finger_swipe("#nope", 80, 0) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2916,7 +2976,8 @@ def main() -> int:
               round_middle_click, round_right_drag_by,
               round_tap, round_swipe, round_pinch, round_rotate,
               round_touch_hold, round_double_tap, round_two_finger_tap,
-              round_touch_drag, round_two_finger_pan]
+              round_touch_drag, round_two_finger_pan,
+              round_three_finger_swipe]
     for r in rounds:
         try:
             r(b, offline)

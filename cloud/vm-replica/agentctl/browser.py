@@ -1100,6 +1100,43 @@ class Browser:
                       {"type": "touchEnd", "touchPoints": []})
         return True
 
+    def three_finger_swipe(self, selector: str, dx: float, dy: float,
+                           gap: float = 50.0, by_text: bool = False,
+                           tag: str | None = None) -> bool:
+        """Swipe an element with **three fingers translating together** (F100). A
+        system-style app switcher, a three-finger scroll, a gesture pad that
+        switches workspaces — these fire only when *three* simultaneous touch
+        points slide as one, reading ``e.touches.length===3`` and ignoring any
+        smaller count. A one-finger :meth:`swipe` (F092) never raises the count
+        past one; a two-finger :meth:`two_finger_pan` (F099) reaches two and stops
+        — neither ever presents the third finger the handler waits for. The
+        friction is finger *count*: the gesture answers only to a trio that moves
+        in unison. We resolve the honest hit point (F061), refuse if occluded,
+        place three touch points abreast across the center (spaced by ``gap``),
+        then translate *all three* by the same ``(dx, dy)`` each step issuing
+        three-point ``touchMove`` events so the live handler sees a rigid triad
+        travel, and lift all with ``touchEnd``. Returns ``True`` once the swipe
+        completes, ``False`` if the element is absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        cx, cy = p["x"], p["y"]
+        steps = max(2, int((abs(dx) + abs(dy)) / 10) + 1)
+
+        def _trio(sx: float, sy: float):
+            return [{"x": cx - gap + sx, "y": cy + sy, "id": 0},
+                    {"x": cx + sx, "y": cy + sy, "id": 1},
+                    {"x": cx + gap + sx, "y": cy + sy, "id": 2}]
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchStart", "touchPoints": _trio(0.0, 0.0)})
+        for i in range(1, steps + 1):
+            self.cdp.call("Input.dispatchTouchEvent",
+                          {"type": "touchMove",
+                           "touchPoints": _trio(dx * i / steps, dy * i / steps)})
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchEnd", "touchPoints": []})
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A
