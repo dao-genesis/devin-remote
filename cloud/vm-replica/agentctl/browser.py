@@ -233,6 +233,33 @@ class Browser:
             return False
         return self.wait_visible(target_selector, timeout=timeout)
 
+    def dnd(self, source: str, target: str) -> bool:
+        """F047: HTML5 drag-and-drop from source onto target.
+
+        Native pointer-driven DnD over CDP (`mousePressed`→moves→`mouseReleased`)
+        is timing-nondeterministic: depending on the number/spacing of the
+        intermediate `mouseMoved`s, Chrome's drag controller may fire `dragstart`
+        yet never deliver the `drop`. Instead synthesize the exact event chain a
+        real drag produces — `dragstart→dragenter→dragover→drop→dragend` — sharing
+        one `DataTransfer` across all of them, so `setData` in `dragstart` is
+        readable via `getData` in `drop`, just as the page's handlers expect.
+        Pierces shadow roots via `deepQuery`. Returns False if either end is absent.
+        """
+        js = (
+            "(function(s,t){"
+            "var a=window.__agentctl.deepQuery(s),b=window.__agentctl.deepQuery(t);"
+            "if(!a||!b)return false;"
+            "var dt=new DataTransfer();"
+            "function fire(el,type){var r=el.getBoundingClientRect();"
+            "el.dispatchEvent(new DragEvent(type,{bubbles:true,cancelable:true,"
+            "composed:true,dataTransfer:dt,clientX:r.left+r.width/2,"
+            "clientY:r.top+r.height/2}));}"
+            "fire(a,'dragstart');fire(b,'dragenter');fire(b,'dragover');"
+            "fire(b,'drop');fire(a,'dragend');return true;"
+            f"}})({source!r},{target!r})"
+        )
+        return bool(self.eval(js))
+
     def scroll(self, dy: float, dx: float = 0.0, x: float = 400, y: float = 300) -> None:
         self.cdp.call("Input.dispatchMouseEvent",
                       {"type": "mouseWheel", "x": x, "y": y,

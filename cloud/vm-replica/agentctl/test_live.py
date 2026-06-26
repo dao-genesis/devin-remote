@@ -209,12 +209,30 @@ def round_hover_menu(b: Browser, offline: bool) -> None:
           b.wait_for("document.title==='SET-OK'", timeout=3), b.title())
 
 
+def round_dnd(b: Browser, offline: bool) -> None:
+    print("R11: HTML5 drag-and-drop (F047)")
+    html = fixture("dnd.html",
+                   "<!doctype html><title>dnd</title>"
+                   "<div id=src draggable=true>DRAG</div><div id=dst>DROP HERE</div>"
+                   "<script>"
+                   "src.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain','payload'));"
+                   "dst.addEventListener('dragover',e=>e.preventDefault());"
+                   "dst.addEventListener('drop',e=>{e.preventDefault();"
+                   "document.title='DROP:'+e.dataTransfer.getData('text/plain')});"
+                   "</script>")
+    b.navigate(html)
+    check("drop not yet fired", b.title() == "dnd", b.title())
+    check("dnd dispatched", b.dnd("#src", "#dst"))
+    check("drop handler ran with shared DataTransfer",
+          b.wait_for("document.title==='DROP:payload'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
     rounds = [round_navigate_read, round_atomic_type, round_click_text, round_dialog,
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
-              round_hover_menu]
+              round_hover_menu, round_dnd]
     for r in rounds:
         try:
             r(b, offline)

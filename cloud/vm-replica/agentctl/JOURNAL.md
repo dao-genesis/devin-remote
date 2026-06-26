@@ -207,6 +207,31 @@ one that fails — it lies. The primitive does not force the menu; it *waits for
 the surface to become real* (`wait_visible`) before acting, then moves in one
 stroke. 弱也者，道之用也 — yield to the page's own timing rather than fight it.
 
+### F047 — HTML5 drag-and-drop: the native pointer drop is nondeterministic
+**Surface:** a `draggable=true` element dragged onto a dropzone whose `drop`
+handler reads `dataTransfer.getData(...)` set during `dragstart`. The human
+gesture is press-move-release.
+**Mechanism (measured, not assumed):** driving it with raw CDP pointer events —
+`mousePressed` at source, N×`mouseMoved`, `mouseReleased` at target — is *flaky in
+a way that depends on the move pattern*. Live probe over identical fixtures:
+`1 move → drop fired`, `2 moves → dragstart fired but the drop was silently
+lost (title unchanged)`, `5 moves @20ms → drop fired`. Chrome's internal drag
+controller couples to the OS drag loop and only sometimes promotes the moves into
+a completed drop. A "drag" that starts but never drops is the worst failure: it
+looks like motion happened.
+**Primitive:** `dnd(source, target)` skips the lossy pointer path and synthesizes
+the exact DOM event chain a real drag produces —
+`dragstart→dragenter→dragover→drop→dragend` — sharing **one** `DataTransfer`
+across all five, so `setData` in `dragstart` is readable by `getData` in `drop`,
+precisely what the page's handlers expect. Endpoints resolved via `deepQuery`
+(pierces shadow). Determinism check: synthetic path landed **10/10** drops vs the
+native path's intermittent loss.
+**Proof:** R11 — title goes `dnd` → `DROP:payload`. `21/21 checks passed`.
+**Lesson (道法自然):** do not fight the drag controller's hidden timing. The page
+speaks a five-event protocol with a single shared parcel (`DataTransfer`); speak
+*that* exactly, and the drop always lands. 為者敗之 — forcing the pointer fails;
+matching the page's own contract succeeds.
+
 ---
 
 ## Frontier (next honest rounds)
@@ -214,8 +239,6 @@ stroke. 弱也者，道之用也 — yield to the page's own timing rather than 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
 
-- **R-next: drag & drop (HTML5 DnD)** — `dragstart/dragover/drop` with
-  `DataTransfer`, not just pointer moves.
 - **R-next: scroll-virtualized lists** — items that only exist in the DOM near the
   viewport; needs scroll-until-found.
 - **R-next: cross-origin iframes** — separate processes; may need per-target
