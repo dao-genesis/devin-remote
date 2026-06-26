@@ -238,6 +238,80 @@ function staticCacheGetDisk(key: string): StaticCacheVal | null {
     return null;
 }
 
+// ═══ 公网同源资源图预热 (cloud prewarm) ═══════════════════════════════════════
+// 帛书·「为之于其未有·治之于其未乱」: IDE 多实例那条 (devin_proxy) 已启动即预热; 而公网
+//   同源这条 (devinCloudProxyRoute, 缓存 ~/.dao/asset-cache) 原为惰性填充 — 仅被请求时落盘,
+//   故第一个公网设备打开仍走整条冷模块图瀑布 (正是 IDE 侧已解决之症, 只是发生在公网路)。
+//   今搬同一道理到公网路: 服务一就绪即后台并行自取全 SPA 模块图 (BFS·经本机 /devin-cloud
+//   反代, 与惰性路逐字一致地落 L1 内存 + L2 磁盘), 首个公网设备即命中宿主暖缓存 → 隧道只剩
+//   API/HTML 动态核心 (知雄守雌)。换版 (入口分片哈希变) 自动重热; 失败守柔不阻服务;
+//   DAO_NO_PREWARM=1 可关。
+const _CLOUD_ASSET_RE = /\/assets\/[A-Za-z0-9_\-.]+\.(?:js|css)/g;
+let _cloudPrewarmKey = '';                       // 已预热版本键 (入口分片名)
+const _cloudPrewarmActive = new Set<string>();   // 正在预热的版本键 → 防重复并发
+
+// 经本机服务自取一条路由 (复用 handleRouteInternal → devinCloudProxyRoute 全部抓取/改写/落盘
+//   逻辑, 零重复实现; 命中缓存即返回·未命中则首取并落 L1+L2)。仅取正文供 BFS 发现深层分片。
+async function _cloudProbe(route: string, token: string): Promise<{ body: string; ct: string } | null> {
+    try {
+        if (!ws.port) return null;
+        const url = new URL(route, `http://localhost:${ws.port}`);
+        const fakeReq: any = { headers: { host: 'localhost' }, method: 'GET', socket: { remoteAddress: '127.0.0.1' }, url: route };
+        const r: any = await handleRouteInternal(route, url, fakeReq, token);
+        if (r && r._proxy && (r.status === 200 || r.status === undefined)) {
+            const body = (!r.binary && typeof r.body === 'string') ? r.body : '';
+            return { body, ct: r.contentType || '' };
+        }
+    } catch { /* 守柔 */ }
+    return null;
+}
+
+// 后台预热公网 SPA 全模块图入同源缓存。BFS: index → 抓引用分片 → 扫分片再发现深层分片。
+async function _prewarmCloudGraph(token: string): Promise<void> {
+    if (process.env.DAO_NO_PREWARM || !ws.port) return;
+    try {
+        const idx = await _cloudProbe('/devin-cloud/', token);
+        if (!idx || !idx.body) return;
+        const html = idx.body;
+        const key = ((html.match(/\/assets\/index-[A-Za-z0-9_\-.]+\.js/) || [])[0]) || String(html.length);
+        if (_cloudPrewarmKey === key || _cloudPrewarmActive.has(key)) return; // 已热/在热 → 守静
+        _cloudPrewarmActive.add(key);
+        const t0 = Date.now();
+        const seen = new Set<string>();
+        let queue: string[] = [];
+        let m: RegExpExecArray | null;
+        const re0 = new RegExp(_CLOUD_ASSET_RE.source, 'g');
+        while ((m = re0.exec(html))) { if (!seen.has(m[0])) { seen.add(m[0]); queue.push(m[0]); } }
+        let rounds = 0, fetched = 0;
+        const CONC = 32, MAX = 2000;
+        while (queue.length && rounds++ < 6 && seen.size < MAX) {
+            const next: string[] = [];
+            for (let i = 0; i < queue.length; i += CONC) {
+                const got = await Promise.all(queue.slice(i, i + CONC).map(async (p) => {
+                    const r = await _cloudProbe('/devin-cloud' + p, token);
+                    if (!r) return '';
+                    fetched++;
+                    return r.ct.includes('javascript') ? r.body : '';
+                }));
+                for (const txt of got) {
+                    if (!txt) continue;
+                    const re = new RegExp(_CLOUD_ASSET_RE.source, 'g');
+                    let mm: RegExpExecArray | null;
+                    while ((mm = re.exec(txt))) { if (!seen.has(mm[0])) { seen.add(mm[0]); next.push(mm[0]); } }
+                }
+            }
+            queue = next;
+        }
+        _cloudPrewarmKey = key;
+        _cloudPrewarmActive.delete(key);
+        try {
+            const line = '[' + new Date().toISOString().slice(11, 19) + '] [cloud] prewarm done: ' + fetched + ' assets in ' + (Date.now() - t0) + 'ms\n';
+            fs.appendFile(path.join(DAO_DIR, 'cloud-prewarm.log'), line, () => {});
+            console.log(line.trim());
+        } catch { /* 守柔 */ }
+    } catch { _cloudPrewarmActive.clear(); /* 守柔: 预热失败不阻服务 */ }
+}
+
 // ═══════════════════════════════════════════════════════════
 // 器 · WorkspaceState — 每窗口专属状态
 // 一窗口 = 一工作区 = 一Devin账号 = 一relay会话 = 一公网URL
@@ -1032,6 +1106,10 @@ async function startServer(context: vscode.ExtensionContext) {
         }
         // 去中心化信令中继(路线C·零中心 ntfy): 与 cloudflared/Worker 并行的第二条公网入口, 任一 broker 活即可达
         sigStart().catch(() => {});
+        // 公网同源资源图预热: 服务一就绪即后台并行抓全 SPA 模块图入 ~/.dao/asset-cache (L1+L2),
+        //   令首个公网设备即命中宿主暖缓存·隧道只剩动态核心 (与 devin_proxy 多实例预热同理)。
+        //   fire-and-forget·不阻服务监听; 失败守柔。
+        setImmediate(() => { _prewarmCloudGraph(ws.token).catch(() => {}); });
     });
 
     context.subscriptions.push({ dispose: () => stopServer() });
