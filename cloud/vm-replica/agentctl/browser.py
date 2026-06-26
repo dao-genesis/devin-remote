@@ -986,6 +986,39 @@ class Browser:
             time.sleep(interval)
         return True
 
+    def two_finger_tap(self, selector: str, gap: float = 40.0,
+                       by_text: bool = False, tag: str | None = None) -> bool:
+        """Tap an element with **two fingers at once and lift without moving**
+        (F097). A map that recenters on a two-finger tap, a viewer that zooms *out*
+        one step, a trackpad-style "secondary tap" — these arm when
+        ``e.touches.length`` reaches ``2`` on ``touchstart``, drop on any
+        ``touchmove``, and commit at the final ``touchend`` (``touches.length===0``)
+        only if no move arrived. :meth:`tap` (F091) lands a single finger, so the
+        ``===2`` arm never trips; :meth:`pinch` (F093) and :meth:`rotate` (F094) do
+        land two fingers but then *move* them, so a tap detector that drops on
+        ``touchmove`` refuses; a mouse never makes a ``touchstart`` at all. The
+        friction is a finger pair that touches and lifts *still*. Note Chrome always
+        decomposes a multi-touch press/release into per-finger events — two
+        ``touchstart`` (lengths ``1`` then ``2``) and two ``touchend`` (``1`` then
+        ``0``) — so a faithful detector must read the pair at the *final* lift, not
+        demand a simultaneous release. We resolve the honest hit point (F061),
+        refuse if occluded, place two points astride the center ``gap`` px apart,
+        and lift both with a single ``touchEnd`` (no ``touchMove`` between). Returns
+        ``True`` once both fingers touch and lift, ``False`` if the element is
+        absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p or p.get("occluded"):
+            return False
+        cx, cy = p["x"], p["y"]
+        off = gap / 2.0
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchStart",
+                       "touchPoints": [{"x": cx - off, "y": cy, "id": 0},
+                                       {"x": cx + off, "y": cy, "id": 1}]})
+        self.cdp.call("Input.dispatchTouchEvent",
+                      {"type": "touchEnd", "touchPoints": []})
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A

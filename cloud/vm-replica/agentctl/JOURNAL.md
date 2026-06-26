@@ -1780,6 +1780,48 @@ is two quiet touches close enough to be read as one.
 
 ---
 
+## F097 — two-finger tap that lands and lifts still (`two_finger_tap`) · R61
+
+**Friction:** A map that recenters on a two-finger tap, a viewer that zooms *out*
+one step, a trackpad-style "secondary tap" — these arm when `e.touches.length`
+reaches `2` on `touchstart`, drop on any `touchmove`, and commit at the final
+`touchend` only if no move arrived. `tap` (F091) lands a single finger, so the
+`===2` arm never trips (`tf` stays `0`). `pinch` (F093) and `rotate` (F094) do
+land two fingers, but they then *move* them, so a tap detector that drops on
+`touchmove` refuses (`tf` stays `0`). A mouse makes no `touchstart` at all. The
+faithful gesture is a finger *pair* that touches and lifts without moving.
+
+**Mechanism:** Chrome always decomposes a multi-touch press/release into
+per-finger events: a single `Input.dispatchTouchEvent` with two points fires two
+`touchstart` events (`touches.length` `1` then `2`), and lifting with
+`touchPoints:[]` fires two `touchend` events (`1` then `0`). So there is no way
+to lift two fingers truly simultaneously at the DOM layer — a robust detector
+must read the pair at the *final* lift (`touches.length===0`), not demand a
+single combined release. An early probe page that reset its "saw two" flag on
+*every* `touchend` never committed, because the first finger's lift cleared the
+flag before the second arrived; a detector that only clears at `length===0` is
+the honest, realistic model.
+
+**Primitive:** `Browser.two_finger_tap(selector, gap=40.0)` resolves the honest
+hit point (F061), refuses if occluded, places two touch points astride the
+center `gap` px apart, and lifts both with one `touchEnd` — no `touchMove`
+between. Returns `True` once both fingers touch and lift, `False` if the element
+is absent or occluded.
+
+**Live (R61):** the page starts unfired (`tf=0`); a one-finger `tap` leaves
+`tf=0` (never armed); `pinch` and `rotate` each land two fingers but move them,
+so `tf` stays `0`; `two_finger_tap()` commits exactly one tap (`tf=1`); under a
+transparent veil `two_finger_tap` → `False` and `tf` stays `1`; an absent
+selector → `False`. `368/368 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 弱也者，道之用也 — the gesture's power is its stillness. A
+pinch and a rotate are louder (they move), and the page reads movement as "not a
+tap"; only two fingers that arrive and depart *quietly* are heard. And because no
+two fingers ever truly lift as one, the honest detector waits for the last finger
+to leave rather than insisting they go together.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
