@@ -2214,6 +2214,53 @@ page made, and refuse to trust one it did not.
 
 ---
 
+## F107 — read a glyph only when it CLEARLY fits (`read_glyph_conf`) · R71
+
+**Friction:** `read_glyph` (F058) returns `min(atlas, key=…)` — the *nearest* label,
+always. It has no way to say "I do not know this." Point it at a glyph the atlas
+never held (a `"Z"` against an atlas of `"ABCOKX"`) and it returns the closest
+*wrong* letter with the same outward confidence as a true read. The closest of a
+bad lot is still reported as a read. `read_glyph` cannot express ignorance — that
+is its named boundary, reproduced live (unknown `Z`/`M`/`5` each named as some
+atlas letter).
+
+**Mechanism:** the distance to the best match carries the missing signal, on two
+axes that separate cleanly. A glyph that *is* in the atlas matches its own
+signature with a *small* Hamming distance relative to the live ink it sets
+(measured `best/on ≈ 0.22–0.38`), and beats the runner-up by a wide *margin*
+(`≈ 3.5–7×`); an *unknown* glyph's nearest match is both far in absolute terms
+(`best/on ≈ 0.95–1.40`) and barely closer than the runner-up (`margin ≈ 1.0–1.3`)
+— nothing stands out. `read_glyph_conf` admits the best label only if it passes
+*both* gates: the nearest distance is `<= max_dist` (0.6) times the live ink's set
+cells *and* the runner-up is `>= conf_k` (2.0) times farther. Fail either and it
+returns `unknown` (`""` by default). Honest only where the atlas entries are
+themselves distinguishable: hold two near-twins and a true match may not clear
+`conf_k` — it refuses rather than guess, which is the honest answer when the
+reference itself cannot tell them apart.
+
+**Primitive:** `read_glyph_conf(rgb, size, bbox, atlas, …, max_dist=0.6,
+conf_k=2.0, unknown="")` returns the label when one entry clearly fits, else the
+chosen sentinel. The signature/Hamming machinery (`edge_signature`,
+`edge_hamming`) is reused unchanged; the only new work is the two-gate decision
+over the sorted distances.
+
+**Live (R71):** the atlas segments into six reference glyphs; a known `"A"` drawn
+at a *different* size is a tight fit (`best <= 0.6 × ink`) and a clear winner
+(`runner-up >= 2×`), named `'A'` by both readers; an unknown `"Z"` is a poor fit
+*and* has no clear winner, so `read_glyph` misreads it (the friction) while
+`read_glyph_conf` returns `''`; two further unknowns (`M`, `5`) are refused while
+`read_glyph` still misreads them; the refusal sentinel is caller-chosen (`'?'`); a
+blank region returns `''`; and loosening both gates accepts the nearest match
+again (it knows its own threshold). `466/466 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 知人者知也，自知者明也 — F058 always *knew* a glyph; F107
+learns to know *whether* it knows one. The nearest label is not the same as a
+read; the distance the page set already says whether anything truly fits. We add
+the power to refuse — 知止不殆 — naming only what stands out, and staying silent
+where the atlas cannot honestly answer.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

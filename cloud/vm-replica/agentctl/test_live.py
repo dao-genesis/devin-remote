@@ -3432,6 +3432,110 @@ def round_read_words(b: Browser, offline: bool) -> None:
           osctl.read_words(rgb, sz, (5, 5, 25, 25), atlas, MAG) == "")
 
 
+def round_read_glyph_conf(b: Browser, offline: bool) -> None:
+    print("R71: read a glyph only when it CLEARLY fits — refuse unknowns (F107) — osctl")
+    # read_glyph returns min(atlas, key=...) — the nearest label, always. Point it
+    # at a glyph the atlas never held and it returns the closest WRONG letter; it
+    # cannot say "I do not know this". read_glyph_conf admits the best label only
+    # when it is both a good absolute fit (best <= max_dist x live ink) AND a clear
+    # winner (runner-up >= conf_k x farther); otherwise it returns '' (refuses).
+    MAG = (255, 0, 255)
+
+    def blobs(rgb, w, h):
+        bs = osctl.find_color_blobs(MAG, tol=60, rgb=rgb, size=(w, h), min_count=120)
+        return sorted(bs, key=lambda t: t["x"])
+    # Atlas of six glyphs; Z M W 5 8 are deliberately NOT in it.
+    chars = "ABCOKX"
+    draws = "".join("x.fillText('%s',%d,100);" % (ch, 40 + i * 120)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("rc_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=760 height=160></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,760,160);"
+               "x.fillStyle='#f0f';x.font='bold 90px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = blobs(argb, aw, ah)
+    check("atlas segments into six reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def one(ch, font_px=120):
+        b.navigate(fixture("rc_one.html",
+                   "<!doctype html><title>g</title><style>html,body{margin:0}</style>"
+                   "<canvas id=c width=240 height=240></canvas><script>"
+                   "var x=document.getElementById('c').getContext('2d');"
+                   "x.fillStyle='#fff';x.fillRect(0,0,240,240);"
+                   "x.fillStyle='#f0f';x.font='bold %dpx monospace';"
+                   "x.textAlign='center';x.textBaseline='middle';"
+                   "x.fillText('%s',120,120);</script>" % (font_px, ch)))
+        time.sleep(0.4)
+        w, h, rgb = osctl.capture_rgb()
+        loc = osctl.find_color(MAG, tol=60, rgb=rgb, size=(w, h))
+        return rgb, (w, h), (loc["bbox"] if loc else None)
+
+    def dist_stats(rgb, sz, bb):
+        sig = osctl.edge_signature(rgb, sz, bb)
+        on = sum(sig)
+        scored = sorted(osctl.edge_hamming(atlas[k], sig) for k in atlas)
+        return on, scored[0], scored[1]
+
+    # A KNOWN glyph (in atlas), drawn at a DIFFERENT size than the atlas: both the
+    # old reader and the honest reader name it, and it is a tight, decisive fit.
+    rgb, sz, bb = one("A")
+    check("known glyph 'A' located", bb is not None, repr(bb))
+    if bb is None:
+        return
+    on, best, second = dist_stats(rgb, sz, bb)
+    check("known 'A' is a good absolute fit (best <= 0.6 x ink)", best <= 0.6 * on,
+          f"best={best} on={on} frac={best / max(on, 1):.3f}")
+    check("known 'A' is a clear winner (runner-up >= 2x farther)", second >= 2 * max(best, 1),
+          f"best={best} second={second} margin={second / max(best, 1):.2f}")
+    check("read_glyph names known 'A' correctly",
+          osctl.read_glyph(rgb, sz, bb, atlas) == "A")
+    check("read_glyph_conf names known 'A' correctly",
+          osctl.read_glyph_conf(rgb, sz, bb, atlas) == "A")
+    # An UNKNOWN glyph (never in the atlas): the friction, then the refusal.
+    rgbz, szz, bbz = one("Z")
+    check("unknown glyph 'Z' located", bbz is not None, repr(bbz))
+    if bbz is None:
+        return
+    onz, bestz, secondz = dist_stats(rgbz, szz, bbz)
+    misread = osctl.read_glyph(rgbz, szz, bbz, atlas)
+    check("FRICTION: read_glyph names unknown 'Z' as some atlas letter",
+          misread in atlas, repr(misread))
+    check("unknown 'Z' is a poor absolute fit (best > 0.6 x ink)", bestz > 0.6 * onz,
+          f"best={bestz} on={onz} frac={bestz / max(onz, 1):.3f}")
+    check("unknown 'Z' has no clear winner (runner-up < 2x farther)",
+          secondz < 2 * max(bestz, 1),
+          f"best={bestz} second={secondz} margin={secondz / max(bestz, 1):.2f}")
+    check("read_glyph_conf REFUSES unknown 'Z' (returns '')",
+          osctl.read_glyph_conf(rgbz, szz, bbz, atlas) == "", repr(misread))
+    # Two more unknowns refused, confirming it is not a one-off.
+    for u in ("M", "5"):
+        ru, su, bu = one(u)
+        got = osctl.read_glyph_conf(ru, su, bu, atlas) if bu else None
+        check("read_glyph_conf refuses unknown '%s'" % u, got == "", repr(got))
+        old = osctl.read_glyph(ru, su, bu, atlas) if bu else None
+        check("read_glyph still misreads unknown '%s' as %r" % (u, old),
+              old in atlas, repr(old))
+    # The refusal sentinel is caller-chosen.
+    check("read_glyph_conf returns the chosen unknown sentinel",
+          osctl.read_glyph_conf(rgbz, szz, bbz, atlas, unknown="?") == "?")
+    # A blank region is unknown, not a letter.
+    check("read_glyph_conf on a blank region returns ''",
+          osctl.read_glyph_conf(rgb, sz, (5, 5, 25, 25), atlas) == "")
+    # Loosening the gates accepts the nearest match again (knows its own threshold).
+    forced = osctl.read_glyph_conf(rgbz, szz, bbz, atlas, max_dist=9.0, conf_k=1.0)
+    check("loosened gates accept the nearest match (no longer refuses)",
+          forced in atlas, repr(forced))
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -3458,7 +3562,7 @@ def main() -> int:
               round_touch_drag, round_two_finger_pan,
               round_three_finger_swipe, round_edge_swipe,
               round_touch_drag_to, round_read_text, round_read_kerned,
-              round_read_block, round_read_words]
+              round_read_block, round_read_words, round_read_glyph_conf]
     for r in rounds:
         try:
             r(b, offline)

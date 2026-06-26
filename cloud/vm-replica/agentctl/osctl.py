@@ -753,6 +753,51 @@ def read_glyph(rgb: bytes, size: tuple[int, int],
     return min(atlas, key=lambda k: edge_hamming(atlas[k], sig))
 
 
+def read_glyph_conf(rgb: bytes, size: tuple[int, int],
+                    bbox: tuple[int, int, int, int],
+                    atlas: dict[str, list[int]],
+                    nw: int = 48, nh: int = 48, thr: int = 24,
+                    max_dist: float = 0.6, conf_k: float = 2.0,
+                    unknown: str = "") -> str:
+    """Read a glyph only when one atlas entry *clearly* fits (F107).
+
+    :func:`read_glyph` returns ``min(atlas, key=…)`` — the *nearest* label, always.
+    It has no way to say "I do not know this": point it at a glyph the atlas never
+    held (a ``"Z"`` against an atlas of ``"ABCOKX"``) and it confidently returns the
+    closest wrong letter. The closest of a bad lot is still returned as if it were
+    read. ``read_glyph`` cannot express ignorance — that is its named boundary.
+
+    The distance to the best match carries the missing signal, on two axes. A glyph
+    that *is* in the atlas matches its own signature with a *small* Hamming distance
+    relative to the live ink it sets, and beats every other atlas entry by a wide
+    *margin*; an *unknown* glyph's nearest match is both far in absolute terms (it
+    overlaps no reference well) and barely closer than the runner-up (nothing stands
+    out). This reads the signature, then admits the best label only if it passes
+    *both* gates: the nearest distance is ``<= max_dist`` times the live ink's set
+    cells (a real fit, not the least-bad), *and* the runner-up is ``>= conf_k``
+    times farther (a clear winner, not a coin-flip among look-alikes). Fail either
+    and it returns ``unknown`` (``""`` by default) — it refuses to name what it
+    cannot recognise.
+
+    Honest only where the atlas entries are themselves distinguishable: hold two
+    near-twins (``"O"`` and ``"0"``) and a true ``"O"`` may not clear ``conf_k`` —
+    it refuses rather than guess between them, which is the honest answer when the
+    reference cannot tell them apart. Empty ink → ``unknown``. Raise ``max_dist`` /
+    lower ``conf_k`` to accept looser matches; lower ``max_dist`` / raise ``conf_k``
+    to demand a tighter, more decisive fit before it will commit to a label."""
+    sig = edge_signature(rgb, size, bbox, nw, nh, thr)
+    on = sum(sig)
+    if on == 0:
+        return unknown
+    scored = sorted((edge_hamming(atlas[k], sig), k) for k in atlas)
+    best_d, best_k = scored[0]
+    if best_d > max_dist * on:
+        return unknown
+    if len(scored) > 1 and scored[1][0] < conf_k * max(best_d, 1):
+        return unknown
+    return best_k
+
+
 def segment_run(rgb: bytes, size: tuple[int, int],
                 bbox: tuple[int, int, int, int],
                 fg: tuple[int, int, int], tol: int = 60,
