@@ -366,6 +366,51 @@ class Browser:
         self.click_n_xy(p["x"], p["y"], 3)
         return self.eval("String(getSelection())")
 
+    def _caret_point_of(self, selector: str, offset: int) -> dict | None:
+        """Pixel position of the caret at character ``offset`` inside an element's
+        text (F072). Walks the element's text nodes, finds the node that holds the
+        offset, collapses a ``Range`` there and reads its rect — the x/y a human's
+        cursor would sit at between two glyphs."""
+        return self.eval(
+            "(function(){var el=window.__agentctl.deepQuery(%r);if(!el)return null;"
+            "var w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT),n,acc=0,off=%d;"
+            "while(n=w.nextNode()){var len=n.nodeValue.length;"
+            "if(off<=acc+len){var r=document.createRange();"
+            "r.setStart(n,off-acc);r.setEnd(n,off-acc);"
+            "var rs=r.getClientRects(),b=rs.length?rs[0]:r.getBoundingClientRect();"
+            "return {x:b.left,y:b.top+(b.height||16)/2};}acc+=len;}return null;})()"
+            % (selector, offset))
+
+    def select_range(self, selector: str, start: int, end: int) -> str | None:
+        """Drag-select an arbitrary character range ``[start, end)`` (F072).
+        ``select_word``/``select_paragraph`` (F071) only snap to whole words or
+        blocks; a precise span — bolding exactly two of four words, quoting half a
+        sentence — has no ``clickCount``. A human presses on the first glyph, drags
+        to the last, and Chrome grows the Selection under the moving cursor. We
+        resolve the caret pixel for ``start`` and ``end`` (via a collapsed
+        ``Range`` at each offset), press at the first, move through to the second,
+        and release — a real drag that selects exactly that span. Returns the
+        selected string, or ``None`` if the target/offsets are absent."""
+        a = self._caret_point_of(selector, start)
+        b = self._caret_point_of(selector, end)
+        if not a or not b:
+            return None
+        self._move(a["x"], a["y"])
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mousePressed", "x": a["x"], "y": a["y"],
+                       "button": "left", "clickCount": 1})
+        steps = max(1, int(abs(b["x"] - a["x"]) / 12) + 1)
+        for i in range(1, steps + 1):
+            mx = a["x"] + (b["x"] - a["x"]) * i / steps
+            my = a["y"] + (b["y"] - a["y"]) * i / steps
+            self.cdp.call("Input.dispatchMouseEvent",
+                          {"type": "mouseMoved", "x": mx, "y": my,
+                           "button": "left", "buttons": 1})
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mouseReleased", "x": b["x"], "y": b["y"],
+                       "button": "left", "clickCount": 1})
+        return self.eval("String(getSelection())")
+
     def click(self, selector: str, by_text: bool = False, tag: str | None = None,
               require_hit: bool = True) -> bool:
         # F061: aim at a point that actually reaches the element. hitPoint probes

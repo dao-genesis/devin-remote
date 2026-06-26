@@ -1564,6 +1564,35 @@ def round_select_text(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_select_range(b: Browser, offline: bool) -> None:
+    print("R36: drag-select an arbitrary character range (F072) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>range</title>"
+            b"<p id=p style='font:16px monospace'>alpha beta gamma delta</p>"
+            b"<script>window.__sel=function(){return String(getSelection());};"
+            b"</script>")
+    sp = _serve(8962, page)
+    try:
+        b.navigate("http://127.0.0.1:8962/")
+        time.sleep(0.2)
+        # Friction: word/paragraph granularity (F071) can't isolate a half-span.
+        # Primitive: drag-select chars [6,16) of "alpha beta gamma delta".
+        got = b.select_range("#p", 6, 16)
+        time.sleep(0.05)
+        check("select_range returns exactly the requested span",
+              got == "beta gamma", repr(got))
+        check("the live Selection matches the requested span",
+              b.eval("window.__sel()") == "beta gamma",
+              repr(b.eval("window.__sel()")))
+        # A different span on the same node resolves independently.
+        got2 = b.select_range("#p", 0, 5)
+        check("a second range selects a different span",
+              got2 == "alpha", repr(got2))
+        check("select_range on an absent target returns None",
+              b.select_range("#nope", 0, 3) is None)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1577,7 +1606,7 @@ def main() -> int:
               round_native_select, round_contenteditable, round_file_drop,
               round_draw_path, round_paste_pipeline, round_context_menu,
               round_key_chord, round_per_key_type, round_wheel_pane,
-              round_select_text]
+              round_select_text, round_select_range]
     for r in rounds:
         try:
             r(b, offline)
