@@ -502,6 +502,46 @@ class Browser:
                        "button": "left", "clickCount": 1})
         return True
 
+    def drag_reorder(self, source: str, target: str, after: bool = False,
+                     by_text: bool = False) -> bool:
+        """Pointer-driven drag-to-reorder of a sortable list (F080). A SortableJS /
+        drag-handle list reorders by listening to raw *mouse/pointer* events:
+        ``mousedown`` on a row grabs it, every ``mousemove`` splices the row past
+        whichever sibling midpoint the cursor crossed, ``mouseup`` drops it. It never
+        uses the HTML5 drag API, so ``dnd`` (F047) — which synthesizes
+        ``dragstart/dragover/drop`` DragEvents — fires nothing the handler hears and
+        the order is unchanged. ``marquee`` (F076) presses on empty void and draws a
+        rectangle; it grabs no row. We press on the source row's hit-verified point
+        (refusing if occluded, like :meth:`click`), step the cursor in small
+        increments toward the target carrying ``buttons:1`` so the live ``mousemove``
+        reorder runs every frame, and release. ``after`` aims past the target's
+        midpoint so the row lands *after* it (else *before*). Returns ``False`` if
+        either row is absent or the source is occluded."""
+        s = self._hit_point_of(source, by_text=by_text)
+        if not s or s.get("occluded"):
+            return False
+        r = self._rect_of(target)
+        if not r:
+            return False
+        tx = r["left"] + r["width"] / 2
+        ty = r["top"] + (0.85 if after else 0.15) * r["height"]
+        self._move(s["x"], s["y"])
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mousePressed", "x": s["x"], "y": s["y"],
+                       "button": "left", "clickCount": 1})
+        span = abs(tx - s["x"]) + abs(ty - s["y"])
+        steps = max(2, int(span / 10) + 1)
+        for i in range(1, steps + 1):
+            mx = s["x"] + (tx - s["x"]) * i / steps
+            my = s["y"] + (ty - s["y"]) * i / steps
+            self.cdp.call("Input.dispatchMouseEvent",
+                          {"type": "mouseMoved", "x": mx, "y": my,
+                           "button": "left", "buttons": 1})
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mouseReleased", "x": tx, "y": ty,
+                       "button": "left", "clickCount": 1})
+        return True
+
     def ctrl_click(self, selector: str, by_text: bool = False) -> bool:
         """Ctrl+click to *toggle* an item into a discontiguous multi-selection
         (F077). A list / file grid / table picks several non-adjacent rows when you

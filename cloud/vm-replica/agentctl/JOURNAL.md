@@ -1188,6 +1188,35 @@ lunging at it but by opening each easy level in order until the hard one lies op
 千里之行，始於足下 — a chain is walked one foothold at a time; keep each parent held
 and the far rung reveals itself.
 
+### F080 — Pointer-driven drag-to-reorder of a sortable list
+**Surface:** a SortableJS / drag-handle list (todo rows, playlist, kanban column)
+where you grab a row and drag it to a new slot, and the list reorders live as you
+move.
+**Friction:** the list reorders by listening to raw `mousedown`/`mousemove`/`mouseup`
+— it never touches the HTML5 drag API. `dnd` (F047) synthesizes
+`dragstart/dragover/drop` DragEvents, which this handler does not listen to, so the
+order is left completely unchanged. `marquee` (F076) presses on empty *void* and
+drags a rectangle to band-select; it grabs no row at all. Nothing in the ladder
+grabs a specific element and carries it along a live pointer path.
+**Mechanism:** `mousedown` on a row stores it as the dragged node; each `mousemove`
+walks the siblings and `insertBefore`s the dragged node ahead of the first sibling
+whose vertical midpoint the cursor has passed (else appends it last); `mouseup`
+drops. The reorder is recomputed *every* `mousemove`, so the cursor must actually
+travel through the intervening rows carrying `buttons:1` — a single jump would skip
+the splice. The deciding signal is the live stream of `buttons:1` moves, not a
+DragEvent.
+**Primitive:** `Browser.drag_reorder(source, target, after=False)` presses on the
+source row's hit-verified point (refusing if occluded — F061), steps the cursor in
+~10px increments toward the target carrying `buttons:1` so the live reorder runs each
+frame, and releases; `after` aims past the target's midpoint (lands after) else above
+it (lands before). Live: `dnd` leaves `ABCD` untouched; `drag_reorder(A, C,
+after=True)` yields `BCAD`; `drag_reorder(D, B, after=False)` yields `ADBC`; an absent
+source or target returns `False`. `241/241 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 弱者道之用 — the soft, continuous stream of small moves is what
+works where the one hard DragEvent is ignored; the list yields only to the gesture it
+is actually listening for. 圖難於其易 — to move a row across three slots, cross each
+midpoint in turn rather than leaping the whole gap.
+
 ---
 
 ## Frontier (next honest rounds)
