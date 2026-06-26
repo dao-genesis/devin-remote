@@ -413,6 +413,88 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
     return blobs
 
 
+def crop_rgb(rgb: bytes, size: tuple[int, int], bbox: tuple[int, int, int, int]
+             ) -> tuple[bytes, int, int]:
+    """Cut a ``(patch, pw, ph)`` sub-image out of a capture.
+
+    Turns *what the agent saw there* (e.g. a ``find_color`` bbox) into a
+    reusable reference patch for ``match_template`` — the bridge between seeing
+    a thing once and recognising it elsewhere. ``bbox`` is inclusive
+    ``(minx, miny, maxx, maxy)`` in the capture's coordinate space."""
+    w, _h = size
+    x0, y0, x1, y1 = bbox
+    pw, ph = x1 - x0 + 1, y1 - y0 + 1
+    stride = w * 3
+    out = bytearray(pw * ph * 3)
+    for py in range(ph):
+        src = (y0 + py) * stride + x0 * 3
+        dst = py * pw * 3
+        out[dst:dst + pw * 3] = rgb[src:src + pw * 3]
+    return bytes(out), pw, ph
+
+
+def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
+                   size: tuple[int, int] | None = None,
+                   search: tuple[int, int, int, int] | None = None,
+                   step: int = 1) -> dict | None:
+    """Locate a reference patch by *appearance*, not colour (F053).
+
+    ``find_color``/``find_color_blobs`` see only hue, so two regions that share
+    a colour but differ in shape (a glyph, an icon, a button state) are
+    indistinguishable to them — and position is an arbitrary tie-breaker. This
+    slides the ``pw``x``ph`` RGB ``patch`` over the captured desktop and scores
+    every offset by sum-of-absolute-difference on luma; the lowest score is the
+    closest match. Returns ``{x, y, score, bbox}`` centred on the match in
+    *screen* coordinates (``score`` 0 = identical), or ``None`` if the search
+    area is smaller than the patch.
+
+    Cost is ``search_area x patch_area``, so constrain ``search``
+    ``(minx, miny, maxx, maxy)`` — typically a ``find_color_blobs`` bbox padded
+    by a few pixels — to keep the slide cheap; raise ``step`` for a coarse pass.
+    The idiom is colour to narrow the field, appearance to choose within it
+    (少則得): segment by colour, then ``match_template`` each candidate and take
+    the lowest score."""
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    if search is None:
+        sx0, sy0, sx1, sy1 = 0, 0, w - 1, h - 1
+    else:
+        sx0, sy0, sx1, sy1 = search
+        sx0, sy0 = max(0, sx0), max(0, sy0)
+        sx1, sy1 = min(w - 1, sx1), min(h - 1, sy1)
+    aw, ah = sx1 - sx0 + 1, sy1 - sy0 + 1
+    if aw < pw or ah < ph:
+        return None
+    pl = bytearray(pw * ph)
+    for i in range(pw * ph):
+        pl[i] = (patch[i * 3] * 299 + patch[i * 3 + 1] * 587
+                 + patch[i * 3 + 2] * 114) // 1000
+    best: tuple[int, int, int] | None = None
+    for oy in range(0, ah - ph + 1, step):
+        for ox in range(0, aw - pw + 1, step):
+            s = 0
+            for py in range(ph):
+                base = ((sy0 + oy + py) * w + (sx0 + ox)) * 3
+                pbase = py * pw
+                for px in range(pw):
+                    j = base + px * 3
+                    lum = (rgb[j] * 299 + rgb[j + 1] * 587
+                           + rgb[j + 2] * 114) // 1000
+                    d = lum - pl[pbase + px]
+                    s += d if d >= 0 else -d
+            if best is None or s < best[0]:
+                best = (s, sx0 + ox, sy0 + oy)
+    if best is None:
+        return None
+    score, tx, ty = best
+    return {"x": tx + pw // 2, "y": ty + ph // 2, "score": score,
+            "bbox": (tx, ty, tx + pw - 1, ty + ph - 1)}
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"
