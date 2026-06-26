@@ -942,6 +942,36 @@ spin against a target that isn't there.
 
 ---
 
+### F071 — selecting a word / paragraph, not just placing a caret
+**Surface:** grabbing a *span of text* — to bold it, copy it, highlight/annotate,
+or trigger a define-on-select popover.
+**Friction:** every one of those gates on a **non-collapsed** `Selection`. A plain
+`click` collapses the caret to a zero-width point, so `getSelection().toString()`
+is `''` and the formatting button (and the popover) never enables. There is no
+`.value` to set and no API call the app is watching — it watches the user's drag
+or multi-tap. Worse, the obvious "click the element" lands on the *centre of its
+layout box*, which for a block is far past the glyphs, in blank space — a
+double-click there selects nothing.
+**Mechanism:** Chrome turns a mouse press carrying `clickCount:2` into a
+word-level selection and `clickCount:3` into a paragraph-level one — the same
+escalation a human's repeated taps produce. And a `Range.selectNodeContents(el)`
+reports `getClientRects()`, the rectangles the *text* actually occupies, so we can
+aim at a real word instead of the box centre.
+**Primitive:** `Browser.click_n_xy(x,y,count)` presses/releases with escalating
+`clickCount`; `Browser.select_word(selector)` aims at the first text rect's centre
+and double-clicks, returning the selected string; `Browser.select_paragraph`
+triple-clicks for the whole block. Live: a plain click leaves `__sel==''` and Bold
+disabled; `select_word` returns a single word (`'gamma'`) and flips Bold on;
+`select_paragraph` returns the whole line; an absent target returns `None`.
+`176/176 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 其安易持，其未兆易謀 — selection is held before it is acted
+on; we make the held state first, then the toolbar follows by itself. 大方無隅 —
+the block's box has no honest corner to aim at; we aim at the text's own edge.
+信言不美 — no text, no selection; we return `None` rather than report a caret as a
+grab.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

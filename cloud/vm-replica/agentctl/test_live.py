@@ -1525,6 +1525,45 @@ def round_wheel_pane(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_select_text(b: Browser, offline: bool) -> None:
+    print("R35: select a word / paragraph, not just a caret (F071) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>select</title>"
+            b"<p id=p style='font:16px monospace'>alpha beta gamma delta</p>"
+            b"<button id=bold disabled>Bold</button>"
+            b"<script>document.addEventListener('selectionchange',function(){"
+            b"var s=String(getSelection());"
+            b"document.getElementById('bold').disabled=(s.length===0);"
+            b"window.__sel=s;});window.__sel='';</script>")
+    sp = _serve(8961, page)
+    try:
+        b.navigate("http://127.0.0.1:8961/")
+        time.sleep(0.2)
+        # Friction: a plain click collapses the caret — no selection, Bold off.
+        b.click("#p")
+        time.sleep(0.05)
+        check("a plain click leaves the selection empty",
+              b.eval("window.__sel") == "", repr(b.eval("window.__sel")))
+        check("the formatting button stays disabled after a click",
+              b.eval("document.getElementById('bold').disabled") is True)
+        # Primitive: double-click selects a word and flips the toolbar on.
+        word = b.select_word("#p")
+        time.sleep(0.05)
+        check("select_word returns a single non-empty word",
+              isinstance(word, str) and word.strip() != ""
+              and " " not in word.strip(), repr(word))
+        check("the word selection enables the formatting button",
+              b.eval("document.getElementById('bold').disabled") is False)
+        # Primitive: triple-click selects the whole paragraph.
+        para = b.select_paragraph("#p")
+        check("select_paragraph returns the full paragraph text",
+              isinstance(para, str) and "alpha beta gamma delta" in para,
+              repr(para))
+        check("select_word on an absent target returns None",
+              b.select_word("#nope") is None)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1537,7 +1576,8 @@ def main() -> int:
               round_oop_iframe, round_new_tab, round_occlusion,
               round_native_select, round_contenteditable, round_file_drop,
               round_draw_path, round_paste_pipeline, round_context_menu,
-              round_key_chord, round_per_key_type, round_wheel_pane]
+              round_key_chord, round_per_key_type, round_wheel_pane,
+              round_select_text]
     for r in rounds:
         try:
             r(b, offline)
