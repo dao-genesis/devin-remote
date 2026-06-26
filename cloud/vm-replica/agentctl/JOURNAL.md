@@ -1256,6 +1256,39 @@ the curable one.
 
 ---
 
+### F082 — Double-click to activate an element
+**Surface:** a file icon, a list row, a rename-on-double-click label, an editable
+grid cell — anything that *opens* or *commits* only when you double-click it, where a
+single click merely selects.
+**Friction:** `double_click`-gated handlers never fire. A single `click('#file')`
+dispatches one `click` event and the `dblclick` handler stays silent (the file never
+opens). Calling `click` *twice* does not fix it either: each `click_xy` carries
+`clickCount:1`, so Chrome's user-agent never raises its click-counter and so never
+synthesises a `dblclick` — yet `click` cheerfully returns `True` both times, lying
+about having opened the file. `click_n_xy` (F071) *does* escalate `clickCount`, but
+only at raw screen coordinates for *text* selection (word/paragraph) — it has no
+hit-verification, so it would fire blindly through an overlay.
+**Mechanism:** Chrome turns a press/release with `clickCount:1` immediately followed
+by a press/release with `clickCount:2` (same button, same point) into a `dblclick`
+event — the counter, not two independent clicks, is what the UA folds into the
+gesture. CDP exposes the counter directly via `Input.dispatchMouseEvent`'s
+`clickCount`.
+**Primitive:** `Browser.double_click(selector)` reuses the honest hit point (F061) —
+refusing if every probe spot is occluded — then calls `click_n_xy(x, y, 2)` at that
+point, dispatching the clickCount:1→clickCount:2 sequence Chrome reads as a
+`dblclick`. Live: a single (and a repeated) `click` leaves `__open` at 0; one
+`double_click` fires the handler exactly once and the label reads `OPENED`; a
+transparent veil makes it refuse (`False`, nothing opened); an absent selector returns
+`False`. `257/257 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 信言不美 — two cheerful single clicks that each *say* success
+are not a double-click; the truthful gesture is the one Chrome actually folds into a
+`dblclick`, and the primitive that refuses through a veil tells the truth where the
+naive one would lie. 同出而異名 — single-click (select) and double-click (open) flow
+from the same press, differing only by the counter; naming the counter is what
+separates selecting from opening.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

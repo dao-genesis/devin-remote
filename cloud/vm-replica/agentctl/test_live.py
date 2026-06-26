@@ -2005,6 +2005,48 @@ def round_scroll_into_view(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_double_click(b: Browser, offline: bool) -> None:
+    print("R46: double-click to activate an element (F082) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>dbl</title>"
+            b"<div id=file style='width:120px;height:40px;border:1px solid;"
+            b"padding:8px'>report.txt</div>"
+            b"<div id=veil style='position:fixed;inset:0;background:rgba(0,0,0,0);"
+            b"display:none'></div>"
+            b"<div id=log></div>"
+            b"<script>window.__open=0;window.__single=0;"
+            b"var f=document.getElementById('file');"
+            b"f.addEventListener('click',function(){window.__single++;});"
+            b"f.addEventListener('dblclick',function(){window.__open++;"
+            b"document.getElementById('log').textContent='OPENED';});</script>")
+    sp = _serve(8973, page)
+    try:
+        b.navigate("http://127.0.0.1:8973/")
+        time.sleep(0.2)
+        # A single click — even repeated — never raises the dblclick event.
+        check("a single click fires no dblclick",
+              b.click("#file") is True and b.eval("window.__open") == 0)
+        b.click("#file")
+        check("two separate clicks still fire no dblclick",
+              b.eval("window.__open") == 0, repr(b.eval("window.__open")))
+        # double_click escalates clickCount and Chrome synthesises dblclick.
+        check("double_click activates the element", b.double_click("#file") is True)
+        check("the dblclick handler fired exactly once",
+              b.eval("window.__open") == 1, repr(b.eval("window.__open")))
+        check("the element opened", b.eval(
+            "document.getElementById('log').textContent") == "OPENED")
+        # An honest refusal when a transparent veil covers the target.
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("double_click refuses through an overlay",
+              b.double_click("#file") is False)
+        check("nothing opened while occluded",
+              b.eval("window.__open") == 1, repr(b.eval("window.__open")))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("double_click on an absent element returns False",
+              b.double_click("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2022,7 +2064,7 @@ def main() -> int:
               round_closed_shadow, round_type_closed_shadow, round_marquee,
               round_ctrl_multi_select, round_shift_range_select,
               round_nested_submenu, round_drag_reorder,
-              round_scroll_into_view]
+              round_scroll_into_view, round_double_click]
     for r in rounds:
         try:
             r(b, offline)
