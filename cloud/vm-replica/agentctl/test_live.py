@@ -1445,6 +1445,45 @@ def round_key_chord(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_per_key_type(b: Browser, offline: bool) -> None:
+    print("R33: type a segmented OTP field with real per-key events (F069) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>otp</title>"
+            b"<div id=otp>"
+            b"<input class=d maxlength=1><input class=d maxlength=1>"
+            b"<input class=d maxlength=1><input class=d maxlength=1></div>"
+            b"<script>var ds=[].slice.call(document.querySelectorAll('.d'));"
+            b"window.__keys=0;"
+            b"ds.forEach(function(el,idx){el.addEventListener('keydown',"
+            b"function(e){if(e.key.length===1&&/[0-9]/.test(e.key)){"
+            b"  e.preventDefault();window.__keys++;el.value=e.key;"
+            b"  if(ds[idx+1])ds[idx+1].focus();}});});"
+            b"window.__code=function(){return ds.map(function(e){"
+            b"return e.value||'_';}).join('');};</script>")
+    sp = _serve(8959, page)
+    try:
+        b.navigate("http://127.0.0.1:8959/")
+        time.sleep(0.2)
+        # Friction: type_text -> one insertText, no keydown; focus never advances.
+        b.type_text("#otp .d", "1234")
+        time.sleep(0.1)
+        check("type_text fills only the first box (no per-key advance)",
+              b.eval("window.__code()") != "1234"
+              and b.eval("window.__keys||0") == 0,
+              repr((b.eval("window.__code()"), b.eval("window.__keys||0"))))
+        b.eval("(function(){var ds=document.querySelectorAll('.d');"
+               "ds.forEach(function(e){e.value='';});window.__keys=0;"
+               "ds[0].focus();})()")
+        # Primitive: per-key real events advance focus box to box.
+        check("type_keys reports it fired",
+              b.type_keys("1234") is True)
+        check("every box filled in order via per-key keydown",
+              b.wait_for("window.__code()==='1234'", timeout=2)
+              and b.eval("window.__keys||0") == 4,
+              repr((b.eval("window.__code()"), b.eval("window.__keys||0"))))
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1457,7 +1496,7 @@ def main() -> int:
               round_oop_iframe, round_new_tab, round_occlusion,
               round_native_select, round_contenteditable, round_file_drop,
               round_draw_path, round_paste_pipeline, round_context_menu,
-              round_key_chord]
+              round_key_chord, round_per_key_type]
     for r in rounds:
         try:
             r(b, offline)

@@ -888,6 +888,33 @@ report exactly what fired, not what we wished had.
 
 ---
 
+### F069 — a segmented field advances on each key, not on one inserted string
+**Surface:** a field that splits its value across one input *per character* and
+moves focus inside a `keydown` handler — an OTP/passcode strip, a card-number
+group, a "type each digit" box. The advance logic reads `e.key` on every
+keystroke. Our `type_text` delivers the whole string with a single
+`Input.insertText`: one `input` event on the *first* box and **no `keydown` at
+all**, so the handler never runs, focus never hops, and only box one is touched
+(`1234` → `1___`). Right characters, wrong destination.
+**Mechanism:** a human does not paste a string into a segmented field — they tap
+one key at a time, and *between* taps the page itself moves focus to the next box.
+What the page needs is a stream of real `keyDown`/`keyUp` events each carrying a
+faithful `e.key`/`e.code`; `Input.insertText` carries none of that. Whatever holds
+focus at the moment of each keyDown receives that character — including a box that
+was handed focus by its predecessor's handler one event earlier.
+**Primitive:** `Browser.type_keys(text)`. For each character, resolve a key
+descriptor (`key`/`code`/`windowsVirtualKeyCode`) and dispatch a real `keyDown`
+(with the inserted `text` too, so plain fields still get the char) then `keyUp`.
+Focus walks box to box exactly as under a human's fingers. Live: `type_text`
+leaves `1___` and fires zero keydowns; `type_keys('1234')` fills `1234` across all
+four boxes via four real keydowns. `165/165 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 大器免成 — the value is not stamped whole; it is completed
+key by key, each tap making room for the next. 守柔曰強 — the patient per-key stream
+reaches where the forceful single insert cannot. 信言不美 — we report exactly which
+keys fired and where focus landed, not a string we wished had stuck.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
