@@ -1,17 +1,22 @@
 <!doctype html>
 <!-- Round-29: a GENUINELY EXTERNAL real GUI surface. Not our synthetic canvas: a third-party WebGL
      map library (MapLibre GL) rendering LIVE network raster tiles (OpenStreetMap) with labels and
-     anti-aliasing. Two kinematics are exposed via the hash so the keys can be measured on a real app:
+     anti-aliasing. Kinematics are exposed via the hash so the keys can be measured on a real app:
        #webmap   -> left-drag PANS the map                (translation: one rigid shift -> COHERENT)
        #webspin  -> left-drag ROTATES the bearing, pitch=0  (flat rotation: no single shift -> INCOHERENT)
        #webtilt  -> left-drag ROTATES the bearing, pitch=60 (perspective rotation: also -> INCOHERENT)
+       #webzoom  -> left-drag SCROLL-ZOOMS about centre     (radial expansion: INCOHERENT, but DIVERGENT)
      The honest question: do footprint/gain/dyn survive a real third-party-rendered, network-textured
      GUI -- including tile pop-in noise -- the way they survived our synthetic real_lab.html?
      Round-29 clean finding (after fixing a stale-cache bug that had frozen webtilt at pitch=0): the dyn
      key separates ROTATION from TRANSLATION exactly as the lab orbit-vs-pan did. A pan is coherent; ANY
      bearing rotation -- flat (webspin) OR perspective (webtilt) -- is incoherent and the two group
      together. The perspective pitch is NOT the axis; rotation-vs-translation is. #webtilt is kept as the
-     control proving the extra pitch does not change the rotation verdict on the same external surface. -->
+     control proving the extra pitch does not change the rotation verdict on the same external surface.
+     Round-30 adds #webzoom: a scroll-zoom is ALSO incoherent (no single rigid shift), so the binary
+     coherence key cannot tell it from a rotation. The flow_structure key (round-30) decomposes the
+     local flow into [translation, divergence, curl]: a zoom is DIVERGENT (radial), a rotation is CURL
+     (tangential), a pan is TRANSLATION -- so zoom finally earns its own honest class. -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -36,6 +41,8 @@ const style = {
   layers: [{id: 'osm', type: 'raster', source: 'osm'}]
 };
 const pitch0 = (mode === 'webtilt') ? 60 : 0;
+const ROT = (mode === 'webspin' || mode === 'webtilt');
+const ZOOM = (mode === 'webzoom');
 const map = new maplibregl.Map({
   container: 'map', style: style,
   center: [2.3522, 48.8566], zoom: 12, bearing: 0, pitch: pitch0,
@@ -43,11 +50,27 @@ const map = new maplibregl.Map({
 });
 window.__ready = false;
 const dbg = document.getElementById('dbg');
-const upd = () => { dbg.textContent = mode + ' pitch=' + map.getPitch().toFixed(0) + ' bearing=' + map.getBearing().toFixed(0); };
+const upd = () => { dbg.textContent = mode + ' pitch=' + map.getPitch().toFixed(0) + ' bearing=' + map.getBearing().toFixed(0) + ' zoom=' + map.getZoom().toFixed(2); };
 map.on('idle', () => { window.__ready = true; upd(); });
 map.on('render', upd);
 
-if (mode === 'webspin' || mode === 'webtilt') {
+if (ZOOM) {
+  // turn a plain horizontal left-drag into a SCROLL-ZOOM about the map centre. setZoom keeps the
+  // centre fixed, so every feature moves radially outward (zoom-in) -- a curl-free, divergent field,
+  // distinct from the pan's uniform translation and the spin's tangential swirl. The gain is gentle
+  // (~1.3 zoom levels over the full drag) to keep per-sub-frame radial shift inside the block-match
+  // search window and to limit tile pop-in.
+  map.dragPan.disable(); map.scrollZoom.disable();
+  let down = false, lastX = 0, z0 = 0;
+  const c = map.getCanvasContainer();
+  c.addEventListener('mousedown', e => { down = true; lastX = e.clientX; z0 = map.getZoom(); });
+  window.addEventListener('mousemove', e => {
+    if (!down) return;
+    map.setZoom(z0 + (e.clientX - lastX) * 0.006);
+  });
+  window.addEventListener('mouseup', () => { down = false; });
+}
+if (ROT) {
   // turn a plain left-drag into a bearing rotation. At pitch=0 (webspin) the whole field rotates
   // rigidly in-plane; at pitch=60 (webtilt) the same rotation is seen in perspective, so the near
   // (bottom) sweeps a large arc while the far (top) barely moves -- a genuinely non-rigid warp.
