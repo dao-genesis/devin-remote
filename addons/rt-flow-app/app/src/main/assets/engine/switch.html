@@ -777,10 +777,18 @@ async function gitDisconnect(i){ var a=loadAcc()[i]; if(!a)return; if(!confirm("
 //  对话追踪 (Devin Cloud · 1:1 桌面 _dvStatusAggHtml + _dvRunPoll · 去 Cascade)
 // ════════════════════════════════════════════════════════════════════════
 var _trk = {}; // email → {no,who,running,awaiting,blocked,total,items,ts}
-// _trk 跨刷新持久化: 对话结束/提号页重载后, 先回放上次"运行态"即时上色(秒出),
-//   随后 pollTrk 实时校正 → 消除"刷新后初始化识别非常慢"的空窗。仅回放 180s 内的近况。
-function _saveTrk(){ try{ var o={}; Object.keys(_trk).forEach(function(e){ var s=_trk[e]; if(s&&Date.now()-(s.ts||0)<180000) o[e]=s; }); localStorage.setItem("rtflow.trk", JSON.stringify(o)); }catch(e){} }
-function _loadTrk(){ try{ var o=JSON.parse(localStorage.getItem("rtflow.trk")||"{}"); Object.keys(o).forEach(function(e){ var s=o[e]; if(s&&Date.now()-(s.ts||0)<180000) _trk[e]=s; }); }catch(e){} }
+// _trk 跨刷新/切后台持久化 (道·守柔不失): 状态绝不因「刷新页面/切后台/手机任意微动作」而瞬灭变灰。
+//   根因(已治): 旧版到处用 180s 硬时窗砍掉上色, 而后台时系统会暂停 webview 计时器(轮询停摆),
+//     ts 一过 180s 即被判 stale → 全体变灰; 回前台又先按陈旧 ts 画成灰再慢慢轮询恢复 → 「一点风吹草动就变灰」。
+//   两段式时窗 — 区分「已确认新鲜」与「显示保留」:
+//     · TRK_LIVE_MS 内 = 刚轮询确认的实时态;
+//     · 直到 TRK_HOLD_MS = 仅在轮询暂停(后台/隐藏/刚刷新)期间, 继续沿用上次"运行态"上色(亮灯不灭),
+//       回到前台立即强制重轮询自校正。
+//   亮→灰只由「一次成功轮询确认该号已无活跃对话」触发(见 _pollOneAcc 的 delete), 绝不因计时器到点而误灰。
+var TRK_LIVE_MS = 180000;     // 3min: 视为"刚确认"的新鲜窗
+var TRK_HOLD_MS = 1800000;    // 30min: 显示保留窗 (后台冻结期沿用上次态, 不误灰; 超此才真陈旧不回放)
+function _saveTrk(){ try{ var o={}; Object.keys(_trk).forEach(function(e){ var s=_trk[e]; if(s&&Date.now()-(s.ts||0)<TRK_HOLD_MS) o[e]=s; }); localStorage.setItem("rtflow.trk", JSON.stringify(o)); }catch(e){} }
+function _loadTrk(){ try{ var o=JSON.parse(localStorage.getItem("rtflow.trk")||"{}"); Object.keys(o).forEach(function(e){ var s=o[e]; if(s&&Date.now()-(s.ts||0)<TRK_HOLD_MS) _trk[e]=s; }); }catch(e){} }
 // 并发池: 以账号为中心同时(默认6路)拉取会话, 把 72 号的串行等待压成并行 → 跨设备运行近实时识别。
 async function _pool(items, conc, fn){
   var idx=0; var n=items.length; conc=Math.max(1,Math.min(conc|0||1,n));
@@ -862,7 +870,7 @@ function toggleConv(){ _convOpen=!_convOpen; localStorage.setItem("rtflow.convOp
 function trkHtml(){
   var totalRun=0,totalAwait=0,totalBlocked=0,totalExh=0; var rows=[];
   Object.keys(_trk).forEach(function(email){
-    var st=_trk[email]; if(!st||(st.total|0)<=0)return; if(Date.now()-st.ts>180000)return;
+    var st=_trk[email]; if(!st||(st.total|0)<=0)return; if(Date.now()-st.ts>TRK_HOLD_MS)return;
     totalRun+=st.running; totalAwait+=st.awaiting; totalBlocked+=st.blocked; totalExh+=(st.exhausted||0);
     var noBadge=st.no?('<span class="dv-trk-no" title="账号编号 '+st.no+'">'+st.no+'</span>'):"";
     st.items.slice(0,6).forEach(function(it){
@@ -890,10 +898,11 @@ function paintRowRun(){
     var el=document.getElementById("dvRun"+i);
     var rowEl=document.querySelector('.row[data-i="'+i+'"]');
     var swBtn=rowEl?rowEl.querySelector('.b.sw'):null;
-    var stale=(!st||Date.now()-st.ts>180000||(st.total|0)<=0);
+    var stale=(!st||Date.now()-st.ts>TRK_HOLD_MS||(st.total|0)<=0);
+    var holding=(!stale && Date.now()-st.ts>TRK_LIVE_MS);   // 后台冻结沿用上次态: 上色不灭, 仅淡显示意「待回前台校正」
     if(el){
-      if(stale){ el.innerHTML=""; }
-      else el.innerHTML=(st.running?'<span class="run" title="运行中">▶'+st.running+'</span>':'')+(st.awaiting?'<span class="awa" title="待输入">⏸'+st.awaiting+'</span>':'')+(st.blocked?'<span class="blk" title="卡住">■'+st.blocked+'</span>':'')+((st.exhausted||0)?'<span class="exh" title="额度耗尽">⛁'+st.exhausted+'</span>':'');
+      if(stale){ el.innerHTML=""; el.style.opacity=""; }
+      else { el.style.opacity=holding?"0.55":""; el.title=holding?"后台冻结·沿用上次状态·回前台自动校正":""; el.innerHTML=(st.running?'<span class="run" title="运行中">▶'+st.running+'</span>':'')+(st.awaiting?'<span class="awa" title="待输入">⏸'+st.awaiting+'</span>':'')+(st.blocked?'<span class="blk" title="卡住">■'+st.blocked+'</span>':'')+((st.exhausted||0)?'<span class="exh" title="额度耗尽">⛁'+st.exhausted+'</span>':''); }
     }
     // 账号级健康着色: 该账号下任一对话卡住/额度耗尽→整行+⚡按钮变红闪烁; 仅有待输入→橙; 否则清除
     // (用户通常只开一个网页操作, 多对话里某个出问题需要在切号面板一眼看到)
@@ -911,6 +920,23 @@ function paintRowRun(){
       else swBtn.title="多实例注入浏览器打开(即切号)";
     }
   });
+}
+// 顶部账号页签状态点(绿/红)只由轮询期 setTabStatus 推送; 后台计时器被暂停时不会重推 → 回前台/重载瞬间灯会暗。
+// 故回前台/重载时先用缓存 _trk 即刻重点亮灯 (不等网络): 只点亮运行/卡住态, 绝不从缓存变灰(变灰只由一次成功轮询确认)。
+function _repushTabsFromTrk(){
+  try{ loadAcc().forEach(function(a){
+    var st=_trk[(a.email||"").toLowerCase()];
+    if(!st || Date.now()-(st.ts||0)>TRK_HOLD_MS || (st.total|0)<=0) return;
+    var items=st.items||[];
+    var top=items.filter(function(x){return x.cls==="exhausted";})[0]
+          || items.filter(function(x){return x.cls==="blocked";})[0]
+          || items.filter(function(x){return x.cls==="awaiting";})[0]
+          || items.filter(function(x){return x.cls==="running";})[0] || null;
+    if(!top) return;
+    var nm=top.title||"";
+    var stt=(top.cls==="blocked"||top.cls==="exhausted"||top.cls==="awaiting")?"blocked":"running";
+    if(N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }
+  }); }catch(e){}
 }
 var _trkBusy=false;
 // 单账号会话扫描 → 写入 _trk (从 pollTrk 串行循环抽出, 供并发池调用)。
@@ -1441,10 +1467,20 @@ _initCfgUI();
 _loadTrk();          // 先回放上次运行态 → render() 即刻给在跑的账号上色, 消除刷新后空窗
 render();
 paintTrk();          // 详情区也立即铺上缓存的运行清单
+_repushTabsFromTrk();// 顶部页签绿灯也从缓存即刻重点亮(刷新后不等网络)
 pollTrk();           // 随后实时校正(并发, 近实时)
-function _resumeVisible(){ render(); pollTrk(); try{ autoQuotaTick(); }catch(e){} }   // 重新可见: 渲染+运行态+额度各补一次
+// 重新可见(道·守柔不失): 回前台先用缓存态即刻复原上色(绝不先闪成灰), 内存若被系统回收则从持久化重载,
+//   随后强制重轮询自校正(force 绕过隐藏门控)。这样「切后台/刷新/手机微动作」回来时亮灯不灭、秒校正。
+function _resumeVisible(){
+  try{ if(!Object.keys(_trk).length) _loadTrk(); }catch(e){}   // webview 被回收→从盘回放
+  render(); paintTrk(); paintRowRun(); _repushTabsFromTrk();   // 先按缓存上色+重亮顶部页签灯, 不闪灰
+  pollTrk(true);                                              // 强制重轮询自校正(不受 _notVisible 门控)
+  try{ autoQuotaTick(true); }catch(e){}
+}
 window.addEventListener("focus", _resumeVisible);  // 回到面板即刷新
-document.addEventListener("visibilitychange", function(){ if(!document.hidden) _resumeVisible(); });
+document.addEventListener("visibilitychange", function(){ if(document.hidden){ try{ _saveTrk(); }catch(e){} } else { _resumeVisible(); } });
+window.addEventListener("pageshow", function(e){ if(e&&e.persisted) _resumeVisible(); });   // bfcache 恢复(手机浏览器/WebView 返回)
+window.addEventListener("pagehide", function(){ try{ _saveTrk(); }catch(e){} });            // 挂起前落盘 → 回放必有据
 // 性能: 板块 iframe 由隐藏(display:none, 视口 0)切到显示会触发 resize → 补一次脏渲染+刷新(否则隐藏期暂停的数据不补)
 window.addEventListener("resize", function(){ if(!_notVisible() && _renderDirty) _resumeVisible(); });
 setInterval(render, 6000);
