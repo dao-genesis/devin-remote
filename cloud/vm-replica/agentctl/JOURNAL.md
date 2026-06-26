@@ -1023,6 +1023,36 @@ write the element refuses; we yield to the drag it actually listens for.
 
 ---
 
+### F074 — clicking inside a closed shadow root
+**Surface:** a packaged web component — a design-system button, a payment field,
+a media player's controls — built with `attachShadow({mode:'closed'})`, which
+renders on screen but seals its internals from every script.
+**Friction:** there is no path *through the page* to the inner element. A closed
+root sets `host.shadowRoot` to `null`, so `deepQuery` (which walks
+`el.shadowRoot`) sees nothing, `document.querySelector('#go')` returns nothing,
+and `click('#go')` returns `False` — yet a human points at the visible button and
+clicks it without a thought. Visible ≠ reachable-by-selector.
+**Mechanism:** the closed root is sealed only to *page JavaScript*. The CDP DOM
+domain still sees it: `DOM.getDocument{pierce:true}` returns every shadow root
+(each tagged `shadowRootType:"closed"`) as a node, and `DOM.querySelector` run
+*within that node's id* resolves selectors in its subtree. From the matched node
+`DOM.getBoxModel` gives the on-screen quad, whose centre is where a human would
+aim.
+**Primitive:** `Browser._pierce_node(selector)` collects the document plus every
+(nested) shadow root from a pierced `DOM.getDocument` and queries each in document
+order; `Browser._point_of_node(nid)` reads its content-box centre;
+`Browser.click_shadow(selector)` clicks that point with a real trusted event.
+Live: the host's `shadowRoot` is `null`, `deepQuery`/`click` both fail on `#go`,
+but `click_shadow('#go')` fires the sealed button's own handler; an absent
+selector returns `False`. `193/193 checks passed`, deterministic ×3.
+**Lesson (道法自然):** 塞其悶，閉其門 — the component closes its doors, but the door
+is closed only to those who knock from inside the page; the body that observes
+from outside (CDP) still walks straight in. 不窺於牖，以知天道 — we do not peer
+through the page's window at all; we read the layout the renderer already drew and
+aim where a hand would.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
