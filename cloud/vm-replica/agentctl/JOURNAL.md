@@ -1053,6 +1053,35 @@ aim where a hand would.
 
 ---
 
+### F075 — typing into an input inside a closed shadow root
+**Surface:** a sealed component that holds an *editable* field — a design-system
+search box, a packaged payment input, a chat composer in a closed root.
+**Friction:** `click_shadow` (F074) can *press* a sealed control, but typing is a
+different blindness. `type_text`/`set_value` resolve their target with `deepQuery`,
+which is `null` past a closed root, so both return `False` and the field keeps its
+old value — a human, meanwhile, just clicks it and types.
+**Mechanism:** the keystrokes need no selector at all — they flow to whatever
+holds focus. So the only missing piece is *putting focus inside the sealed root*.
+`DOM.focus` acts on a CDP node id (not a page selector), so the same pierced node
+that F074 clicks can be focused; then a real `keyDown`/`keyUp` per character lands
+in the field. Clearing first needs the editing command, not a blind keystroke:
+Ctrl+A select-all only fires Chrome's *Select All* if the event carries the real
+`code:"KeyA"` and `windowsVirtualKeyCode:65` — a bare `key:"a"` is ignored and the
+new text merely prepends (`OLD` → `agent123LD`).
+**Primitive:** `Browser.type_shadow(selector, text, clear=True)` pierces the closed
+root (:meth:`_pierce_node`), focuses the node via `DOM.focus`, optionally
+select-all (a fully-described Ctrl+A chord) + Delete, then dispatches per-character
+`keyDown`/`keyUp` carrying `key`/`code`/`text`. Live: `deepQuery`, `set_value` and
+`type_text` all fail on the sealed `#inp` (it keeps `OLD`), but `type_shadow`
+leaves exactly `agent123`; an absent selector returns `False`. `200/200 checks
+passed`, deterministic ×3.
+**Lesson (道法自然):** 機在目 — the keystrokes go where the eye (focus) is, not where
+the name points; move focus and the typing follows. 名亦既有，夫亦將知止 — a half-named
+chord (`key` without `code`/VK) is no name the browser answers to; only the full
+descriptor invokes the command.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
