@@ -502,6 +502,28 @@ class Browser:
                        "button": "left", "clickCount": 1})
         return True
 
+    def ctrl_click(self, selector: str, by_text: bool = False) -> bool:
+        """Ctrl+click to *toggle* an item into a discontiguous multi-selection
+        (F077). A list / file grid / table picks several non-adjacent rows when you
+        hold Ctrl (Meta on mac) and click each — the handler reads ``e.ctrlKey`` and
+        adds that row to the set instead of replacing it. A plain ``click`` (F061)
+        carries no modifier, so every handler sees ``ctrlKey:false`` and collapses
+        the selection to just the last item: picking 0,2,4 ends with only ``{4}``.
+        ``marquee`` (F076) drags a *contiguous* rectangle and so cannot skip the
+        items in between. We aim at the element's hit-verified point (refusing if an
+        overlay covers it, like :meth:`click`) and press/release with the Ctrl
+        modifier bit set on every mouse event — the exact stream the row's listener
+        expects. Returns ``False`` if the target is absent or fully occluded."""
+        p = self._hit_point_of(selector, by_text=by_text)
+        if not p or p.get("occluded"):
+            return False
+        self._move(p["x"], p["y"])
+        for typ in ("mousePressed", "mouseReleased"):
+            self.cdp.call("Input.dispatchMouseEvent",
+                          {"type": typ, "x": p["x"], "y": p["y"],
+                           "button": "left", "clickCount": 1, "modifiers": 2})
+        return True
+
     def click(self, selector: str, by_text: bool = False, tag: str | None = None,
               require_hit: bool = True) -> bool:
         # F061: aim at a point that actually reaches the element. hitPoint probes

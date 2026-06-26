@@ -1771,6 +1771,49 @@ def round_marquee(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_ctrl_multi_select(b: Browser, offline: bool) -> None:
+    print("R41: Ctrl+click toggles a discontiguous multi-selection (F077) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>ctrlclick</title>"
+            b"<ul id=list style='list-style:none;font:14px sans-serif'></ul>"
+            b"<script>window.__sel=new Set();var ul=document.getElementById('list');"
+            b"for(var i=0;i<6;i++){(function(i){var li=document.createElement('li');"
+            b"li.id='r'+i;li.textContent='row '+i;li.style.padding='4px';"
+            b"li.addEventListener('click',function(e){"
+            b"if(e.ctrlKey||e.metaKey){if(window.__sel.has(i))window.__sel.delete(i);"
+            b"else window.__sel.add(i);}else{window.__sel.clear();window.__sel.add(i);}"
+            b"li.style.background=window.__sel.has(i)?'#9cf':'';});ul.appendChild(li);"
+            b"})(i);}"
+            b"window.__picked=function(){return [...window.__sel].sort("
+            b"function(a,b){return a-b;});};</script>")
+    sp = _serve(8968, page)
+    try:
+        b.navigate("http://127.0.0.1:8968/")
+        time.sleep(0.2)
+        # Plain clicks collapse the selection to the last item.
+        for i in (0, 2, 4):
+            b.click("#r%d" % i)
+        check("plain clicks collapse to a single item",
+              b.eval("window.__picked()") == [4],
+              repr(b.eval("window.__picked()")))
+        b.eval("window.__sel.clear()")
+        # Ctrl+click accumulates a discontiguous set.
+        check("ctrl_click 0 toggles it in", b.ctrl_click("#r0") is True)
+        check("ctrl_click 2 toggles it in", b.ctrl_click("#r2") is True)
+        check("ctrl_click 4 toggles it in", b.ctrl_click("#r4") is True)
+        check("the discontiguous set is exactly {0,2,4}",
+              b.eval("window.__picked()") == [0, 2, 4],
+              repr(b.eval("window.__picked()")))
+        # Ctrl+click an already-selected item toggles it back out.
+        check("ctrl_click 2 again toggles it out", b.ctrl_click("#r2") is True)
+        check("the set is now {0,4}",
+              b.eval("window.__picked()") == [0, 4],
+              repr(b.eval("window.__picked()")))
+        check("ctrl_click on an absent item returns False",
+              b.ctrl_click("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1785,7 +1828,8 @@ def main() -> int:
               round_draw_path, round_paste_pipeline, round_context_menu,
               round_key_chord, round_per_key_type, round_wheel_pane,
               round_select_text, round_select_range, round_set_slider,
-              round_closed_shadow, round_type_closed_shadow, round_marquee]
+              round_closed_shadow, round_type_closed_shadow, round_marquee,
+              round_ctrl_multi_select]
     for r in rounds:
         try:
             r(b, offline)

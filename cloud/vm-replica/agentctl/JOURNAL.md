@@ -1110,6 +1110,32 @@ is moved.
 
 ---
 
+### F077 — Ctrl+click to build a discontiguous (multi) selection
+**Surface:** a list / file grid / table where you pick *several non-adjacent* rows
+by holding Ctrl (Meta on mac) and clicking each one in turn.
+**Friction:** a plain `click` (F061) carries no modifier, so every handler reading
+`e.ctrlKey` sees `false` and *replaces* the selection instead of *toggling* — clicking
+0, then 2, then 4 ends with only `{4}`. `marquee` (F076) drags a *contiguous*
+rectangle and therefore cannot skip the items in between; there is no gesture in the
+ladder that adds one item to an existing set while leaving a gap.
+**Mechanism:** the row's `click` listener branches on `e.ctrlKey || e.metaKey`: with
+the modifier it flips that item's membership in a `Set`; without it, it clears the
+set and adds only the clicked item. The deciding signal is the modifier *bit on the
+mouse event itself*, not a separate keystroke — Chrome's `Input.dispatchMouseEvent`
+takes a `modifiers` bitmask (Ctrl = 2) that becomes `event.ctrlKey` at the listener.
+**Primitive:** `Browser.ctrl_click(selector)` aims at the same hit-verified point as
+`click` (refusing if an overlay covers it — F061 honesty), then presses and releases
+with `modifiers:2` on every mouse event. Live: plain clicks on 0,2,4 collapse to
+`[4]`; `ctrl_click` on 0,2,4 accumulates to `[0,2,4]`; a second `ctrl_click` on 2
+toggles it back out to `[0,4]`; an absent target returns `False`. `214/214 checks
+passed`, deterministic ×3.
+**Lesson (道法自然):** 同出而異名 — the same press, named differently by one held bit,
+gives opposite meanings (replace vs. add). 知其雄，守其雌 — to gather the scattered
+you must *withhold* the default (the collapse) and hold the modifier; restraint, not
+force, is what lets the set grow without erasing itself.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
