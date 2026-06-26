@@ -680,6 +680,50 @@ class Browser:
     def press_enter(self) -> None:
         self.press_key("Enter", "Enter", 13)
 
+    def key_chord(self, key: str, ctrl: bool = False, shift: bool = False,
+                  alt: bool = False, meta: bool = False, code: str | None = None,
+                  key_code: int | None = None) -> bool:
+        """Fire a keyboard shortcut chord — modifier(s) held while a key is pressed
+        (F068). Apps bind real work to chords: Ctrl+B bold, Ctrl+S save, Ctrl+Enter
+        submit, Shift+Tab back-field. ``press_key`` sends a *bare* key with no
+        modifier state, so a handler that checks ``e.ctrlKey``/``e.shiftKey`` never
+        matches and the binding is simply dead — pressing ``s`` alone is not Ctrl+S.
+        A human holds the modifier *down*, taps the key, then lets go. We do exactly
+        that: press each modifier key (so Chrome reports ``ctrlKey``… on every event
+        in between), tap the main key with the modifier **bitmask** set, then
+        release the key and the modifiers in reverse order. Returns ``True``."""
+        mask = (1 if alt else 0) | (2 if ctrl else 0) | (4 if meta else 0) \
+            | (8 if shift else 0)
+        mods = []
+        if ctrl:
+            mods.append(("Control", "ControlLeft", 17))
+        if shift:
+            mods.append(("Shift", "ShiftLeft", 16))
+        if alt:
+            mods.append(("Alt", "AltLeft", 18))
+        if meta:
+            mods.append(("Meta", "MetaLeft", 91))
+        held = 0
+        for mk, mc, mvk in mods:
+            held = (held | {17: 2, 16: 8, 18: 1, 91: 4}[mvk])
+            self.cdp.call("Input.dispatchKeyEvent",
+                          {"type": "keyDown", "key": mk, "code": mc,
+                           "windowsVirtualKeyCode": mvk, "nativeVirtualKeyCode": mvk,
+                           "modifiers": held})
+        base = {"key": key, "code": code or key, "modifiers": mask}
+        if key_code is not None:
+            base["windowsVirtualKeyCode"] = key_code
+            base["nativeVirtualKeyCode"] = key_code
+        self.cdp.call("Input.dispatchKeyEvent", {**base, "type": "keyDown"})
+        self.cdp.call("Input.dispatchKeyEvent", {**base, "type": "keyUp"})
+        for mk, mc, mvk in reversed(mods):
+            held = (held & ~{17: 2, 16: 8, 18: 1, 91: 4}[mvk])
+            self.cdp.call("Input.dispatchKeyEvent",
+                          {"type": "keyUp", "key": mk, "code": mc,
+                           "windowsVirtualKeyCode": mvk, "nativeVirtualKeyCode": mvk,
+                           "modifiers": held})
+        return True
+
     # ---- F009: native file chooser bypass --------------------------------- #
     def set_file_input(self, selector: str, files: list[str]) -> None:
         node = self.cdp.call("DOM.getDocument", {"depth": 0})
