@@ -1642,6 +1642,39 @@ def round_set_slider(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_closed_shadow(b: Browser, offline: bool) -> None:
+    print("R38: click an element sealed in a closed shadow root (F074) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>closed shadow</title>"
+            b"<my-widget></my-widget>"
+            b"<script>class W extends HTMLElement{constructor(){super();"
+            b"var r=this.attachShadow({mode:'closed'});"
+            b"r.innerHTML='<button id=go style=\"padding:8px\">Inner Go</button>';"
+            b"r.getElementById('go').addEventListener('click',function(){"
+            b"window.__clicked=true;});}}"
+            b"customElements.define('my-widget',W);window.__clicked=false;</script>")
+    sp = _serve(8964, page)
+    try:
+        b.navigate("http://127.0.0.1:8964/")
+        time.sleep(0.2)
+        # Friction: a closed shadow root hides the inner control from page JS.
+        check("the host's shadowRoot is null (closed)",
+              b.eval("document.querySelector('my-widget').shadowRoot") is None)
+        check("deepQuery cannot find an element inside a closed root",
+              b.eval("!!window.__agentctl.deepQuery('#go')") is False)
+        check("a selector click misses the sealed element",
+              b.click("#go") is False)
+        # Primitive: pierce the closed root via CDP and click the real element.
+        check("click_shadow reaches the sealed button",
+              b.click_shadow("#go") is True)
+        time.sleep(0.05)
+        check("the sealed button's handler actually fired",
+              b.eval("window.__clicked") is True)
+        check("click_shadow on an absent selector returns False",
+              b.click_shadow("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -1655,7 +1688,8 @@ def main() -> int:
               round_native_select, round_contenteditable, round_file_drop,
               round_draw_path, round_paste_pipeline, round_context_menu,
               round_key_chord, round_per_key_type, round_wheel_pane,
-              round_select_text, round_select_range, round_set_slider]
+              round_select_text, round_select_range, round_set_slider,
+              round_closed_shadow]
     for r in rounds:
         try:
             r(b, offline)

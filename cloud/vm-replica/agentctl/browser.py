@@ -482,6 +482,71 @@ class Browser:
     def click_text(self, text: str, tag: str | None = None) -> bool:
         return self.click(text, by_text=True, tag=tag)
 
+    def _pierce_node(self, selector: str) -> int | None:
+        """nodeId of the first element matching ``selector`` anywhere in the
+        document — *including inside closed shadow roots* (F074) — or ``None``.
+        ``deepQuery`` walks shadow roots via ``el.shadowRoot``, which is ``null``
+        for a ``mode:'closed'`` root, so page JS can never see inside one. CDP's
+        DOM domain can: ``DOM.getDocument{pierce:true}`` returns every shadow root
+        (each tagged ``shadowRootType:'closed'``) as a context node, and
+        ``DOM.querySelector`` run *within* that node's id resolves selectors in its
+        subtree. We collect the document plus every (nested) shadow root and query
+        each in document order, returning the first hit."""
+        doc = self.cdp.call("DOM.getDocument", {"depth": -1, "pierce": True})
+        roots: list[int] = []
+
+        def collect(node: dict) -> None:
+            name = node.get("nodeName", "")
+            if name == "#document" or node.get("shadowRootType"):
+                roots.append(node["nodeId"])
+            for c in node.get("children") or []:
+                collect(c)
+            for s in node.get("shadowRoots") or []:
+                collect(s)
+
+        collect(doc["root"])
+        for rid in roots:
+            try:
+                q = self.cdp.call("DOM.querySelector",
+                                  {"nodeId": rid, "selector": selector})
+            except Exception:
+                continue
+            if q.get("nodeId"):
+                return q["nodeId"]
+        return None
+
+    def _point_of_node(self, node_id: int) -> dict | None:
+        """Centre of a CDP node's content box (F074), or ``None`` if it has no
+        layout box (display:none / detached)."""
+        try:
+            box = self.cdp.call("DOM.getBoxModel", {"nodeId": node_id})
+        except Exception:
+            return None
+        q = box.get("model", {}).get("content")
+        if not q or len(q) < 8:
+            return None
+        return {"x": (q[0] + q[2] + q[4] + q[6]) / 4,
+                "y": (q[1] + q[3] + q[5] + q[7]) / 4}
+
+    def click_shadow(self, selector: str) -> bool:
+        """Click an element sealed inside a *closed* shadow root (F074). A web
+        component built with ``attachShadow({mode:'closed'})`` — a design-system
+        control, a payment field, a media player's buttons — renders on screen and
+        a human clicks it fine, but ``click``/``deepQuery`` resolve through
+        ``el.shadowRoot`` (``null`` when closed) and return ``False``: the control
+        is invisible to every page script and to our DOM tools. We locate it
+        through the CDP DOM tree instead (:meth:`_pierce_node`), read its box
+        geometry, and click its centre with a real trusted event. Returns ``False``
+        if no such element exists or it has no layout box."""
+        nid = self._pierce_node(selector)
+        if not nid:
+            return False
+        p = self._point_of_node(nid)
+        if not p:
+            return False
+        self.click_xy(p["x"], p["y"])
+        return True
+
     def context_click(self, selector: str, by_text: bool = False,
                       tag: str | None = None, require_hit: bool = True) -> bool:
         """Right-click to raise an app's own context menu (F067). Web apps replace
