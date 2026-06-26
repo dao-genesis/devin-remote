@@ -245,8 +245,12 @@ def _png(width: int, height: int, rgb: bytes) -> bytes:
             + chunk(b"IEND", b""))
 
 
-def screenshot(path: str) -> str:
-    """Capture the whole virtual desktop to a PNG via GDI BitBlt."""
+def capture_rgb() -> tuple[int, int, bytes]:
+    """Grab the whole desktop into memory as ``(w, h, rgb)`` (3 bytes/pixel,
+    row-major, top-down) via GDI BitBlt — the raw pixel channel the agent sees.
+
+    The dimensions match ``screen_size()`` (the same space ``_abs``/``click``
+    normalise against), so a pixel located here is directly clickable."""
     w, h = screen_size()
     sdc = user32.GetDC(0)
     mdc = gdi32.CreateCompatibleDC(sdc)
@@ -274,10 +278,58 @@ def screenshot(path: str) -> str:
     gdi32.DeleteObject(bmp)
     gdi32.DeleteDC(mdc)
     user32.ReleaseDC(0, sdc)
+    return w, h, bytes(rgb)
 
+
+def screenshot(path: str) -> str:
+    """Capture the whole virtual desktop to a PNG via GDI BitBlt."""
+    w, h, rgb = capture_rgb()
     with open(path, "wb") as f:
-        f.write(_png(w, h, bytes(rgb)))
+        f.write(_png(w, h, rgb))
     return path
+
+
+def find_color(target: tuple[int, int, int], tol: int = 24,
+               rgb: bytes | None = None, size: tuple[int, int] | None = None
+               ) -> dict | None:
+    """Locate a colour on the desktop purely by pixels (no DOM).
+
+    Scans for pixels within ``tol`` (per-channel) of ``target`` and returns the
+    centroid ``{x, y, count, bbox}`` in *screen* coordinates — exactly what
+    ``osctl.click`` consumes — or ``None`` if the colour is absent. Pass an
+    existing ``rgb``/``size`` to reuse one capture for several lookups."""
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    tr, tg, tb = target
+    sx = sy = n = 0
+    minx = miny = 1 << 30
+    maxx = maxy = -1
+    stride = w * 3
+    for y in range(h):
+        row = y * stride
+        for x in range(w):
+            i = row + x * 3
+            if (abs(rgb[i] - tr) <= tol and abs(rgb[i + 1] - tg) <= tol
+                    and abs(rgb[i + 2] - tb) <= tol):
+                sx += x
+                sy += y
+                n += 1
+                if x < minx:
+                    minx = x
+                if x > maxx:
+                    maxx = x
+                if y < miny:
+                    miny = y
+                if y > maxy:
+                    maxy = y
+    if n == 0:
+        return None
+    return {"x": sx // n, "y": sy // n, "count": n,
+            "bbox": (minx, miny, maxx, maxy)}
 
 
 if __name__ == "__main__":

@@ -291,6 +291,42 @@ a true out-of-process iframe (cross-site) would surface only under
 `Target.setAutoAttach` + `sessionId`. We built for the friction reproduced, not
 the one imagined.)*
 
+### F050 — canvas targets: there is no DOM node, only pixels
+**Surface:** a target painted on `<canvas>` — a magenta rectangle drawn with
+`fillRect`, whose `click` handler hit-tests by `offsetX/offsetY`. A human just
+*sees* the coloured patch and clicks it.
+**Mechanism:** `<canvas>` is a single opaque element; everything inside is paint,
+not DOM. `deepQuery`, `byText`, `click_text` — every structural channel — is
+blind, because there is genuinely nothing there to match: no node, no text, no
+attribute. The target exists *only* as pixels on the screen. This is the one
+surface where the DOM perception channel is not merely awkward but absent; the
+agent must fall back to the other channel it has — its eyes.
+**Primitive:** `osctl.capture_rgb()` grabs the whole desktop (GDI `BitBlt`) into
+an in-memory RGB buffer whose dimensions equal `screen_size()` — the *same*
+space `osctl.click` normalises against, so a pixel found is a pixel clickable
+with no DOM→screen coordinate math. `osctl.find_color(target, tol)` scans for
+pixels within per-channel tolerance and returns the blob's centroid `{x,y,count,
+bbox}` in screen coordinates (or `None` — absence is reported, never
+hallucinated). Locate → `osctl.click(centroid)` → the canvas's own handler
+fires. Perception and action both happen purely in pixel/OS space, beneath the
+DOM entirely — the GUI's bottom layer.
+**Proof:** R14 — DOM search finds nothing and `click_text` fails (the target is
+invisible to structure); `find_color((255,0,255))` locates the 6300-px blob at
+its true centroid, an OS click there flips the title to `CANVAS-HIT`, and the
+*state change is re-confirmed through the same pixel channel* (the patch is now
+green). An off-screen colour returns `None`. `39/39 checks passed`.
+**Lesson (道法自然):** 五色令人目盲 only when you insist on one kind of seeing.
+When structure dissolves (no DOM), do not force it back into being — change the
+organ of perception. The agent has two eyes, DOM and pixel; on canvas only the
+second one opens. 視之不足見，用之不可既 — what cannot be read can still be seen
+and acted upon.
+
+> *Harness honesty (F049 teardown):* the two cross-origin fixture servers first
+> ran single-threaded; Chrome's keep-alive held the socket and `shutdown()`
+> intermittently deadlocked behind it. Switched to `ThreadingHTTPServer` +
+> daemon threads + `HTTP/1.0` so teardown can never block on a held connection.
+> The friction was in the *test*, not the primitive — fixed honestly, not hidden.
+
 ---
 
 ## Frontier (next honest rounds)
@@ -301,9 +337,9 @@ will only grow a primitive once a real failure is reproduced.
 - **R-next: out-of-process (cross-site) iframes** — when the child context does
   *not* appear on the page session; needs `Target.setAutoAttach` + per-target
   `sessionId` routing (the plumbing for which already exists in `cdp.py`).
-- **R-next: canvas / WebGL surfaces** — no DOM at all; pure pixel channel + OS
-  input.
 - **R-next: focus & IME composition** — composed input for CJK via real IME, not
   just `insertText`.
+- **R-next: template-match locate** — find a target by a small reference patch
+  (not a flat colour) when several similarly-coloured regions compete.
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

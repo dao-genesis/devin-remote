@@ -258,23 +258,32 @@ def round_virtual_scroll(b: Browser, offline: bool) -> None:
 
 
 def _serve(port: int, body: bytes):
-    """Start a throwaway localhost HTTP server returning `body` for any GET."""
+    """Start a throwaway localhost HTTP server returning `body` for any GET.
+
+    Uses a *threading* server with daemon worker threads: Chrome keeps the
+    iframe socket alive (HTTP keep-alive), and a single-threaded server's
+    ``shutdown()`` would then block behind that held connection — an intermittent
+    deadlock at teardown. Daemon worker threads let ``shutdown()`` return at once.
+    """
     import http.server
-    import socketserver
+    import threading
 
     class H(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.0"  # no persistent connection to wait on
+
         def do_GET(self):  # noqa: N802
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
         def log_message(self, *a):  # silence
             pass
 
-    socketserver.TCPServer.allow_reuse_address = True
-    httpd = socketserver.TCPServer(("127.0.0.1", port), H)
-    import threading
+    http.server.ThreadingHTTPServer.allow_reuse_address = True
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), H)
+    httpd.daemon_threads = True
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
 
@@ -323,12 +332,61 @@ def round_xorigin_iframe(b: Browser, offline: bool) -> None:
         sc.shutdown()
 
 
+def round_canvas_pixel(b: Browser, offline: bool) -> None:
+    print("R14: canvas target via the pixel channel (F050) — osctl")
+    # A target painted on <canvas> has NO DOM node: deep_query / click_text are
+    # blind to it. The only way in is to *see* the pixels and click the screen.
+    html = fixture("canvas.html",
+                   "<!doctype html><title>canvas</title>"
+                   "<style>html,body{margin:0}</style>"
+                   "<canvas id=c width=400 height=300 style='display:block'></canvas>"
+                   "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                   "x.fillStyle='#ffffff';x.fillRect(0,0,400,300);"
+                   "var RX=120,RY=90,RW=90,RH=70;"
+                   "x.fillStyle='#ff00ff';x.fillRect(RX,RY,RW,RH);"
+                   "c.addEventListener('click',function(e){"
+                   "var r=c.getBoundingClientRect();"
+                   "var px=e.clientX-r.left,py=e.clientY-r.top;"
+                   "if(px>=RX&&px<=RX+RW&&py>=RY&&py<=RY+RH){"
+                   "document.title='CANVAS-HIT';x.fillStyle='#00cc00';"
+                   "x.fillRect(RX,RY,RW,RH);}else{"
+                   "document.title='MISS';}});</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    # Friction: nothing in the DOM marks the target — text/selector search fails.
+    check("no DOM node for canvas-drawn target",
+          b.eval("!window.__agentctl.byText('HIT') && "
+                 "document.querySelectorAll('button,a').length===0"))
+    check("click_text blind to pixel-only target", b.click_text("HIT") is False)
+    # Pixel channel: capture the desktop, locate magenta, click its centroid.
+    w, h, rgb = osctl.capture_rgb()
+    check("capture matches click coordinate space", (w, h) == osctl.screen_size(),
+          f"{(w, h)} vs {osctl.screen_size()}")
+    hit = osctl.find_color((255, 0, 255), tol=40, rgb=rgb, size=(w, h))
+    check("located magenta target by pixels", hit is not None and hit["count"] > 500,
+          str(hit and {k: hit[k] for k in ("x", "y", "count")}))
+    if hit:
+        osctl.click(hit["x"], hit["y"])
+        check("OS click on the seen pixel hit the canvas target",
+              b.wait_for("document.title==='CANVAS-HIT'", timeout=3), b.title())
+        time.sleep(0.3)
+        # Confirm the state change *through the same pixel channel*: now green.
+        green = osctl.find_color((0, 204, 0), tol=40)
+        check("state change confirmed by pixels (target turned green)",
+              green is not None and green["count"] > 500,
+              str(green and green.get("count")))
+    # A colour that isn't on screen is reported absent, not hallucinated.
+    check("absent colour returns None",
+          osctl.find_color((1, 2, 3), tol=0) is None)
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
     rounds = [round_navigate_read, round_atomic_type, round_click_text, round_dialog,
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
-              round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe]
+              round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
+              round_canvas_pixel]
     for r in rounds:
         try:
             r(b, offline)
