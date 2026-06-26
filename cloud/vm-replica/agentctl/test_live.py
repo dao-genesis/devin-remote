@@ -3067,6 +3067,102 @@ def round_touch_drag_to(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_read_text(b: Browser, offline: bool) -> None:
+    print("R67: read a multi-glyph WORD off the canvas, not just one letter (F103) — osctl")
+    # F058 read_glyph reads ONE pre-isolated character. A word the page draws
+    # straight onto a canvas ("BOXCAB") is one ink run with no per-letter node;
+    # point read_glyph at the whole run and it reduces it to a single signature
+    # and returns ONE wrong letter. read_text must first SEGMENT the run into
+    # per-glyph cells (column projection over the foreground colour), then read
+    # each cell in the scale-free frame and join them in reading order.
+    MAG = (255, 0, 255)
+
+    def blobs(rgb, w, h):
+        bs = osctl.find_color_blobs(MAG, tol=60, rgb=rgb, size=(w, h), min_count=120)
+        return sorted(bs, key=lambda t: t["x"])
+    # Phase 1: atlas — candidate glyphs A B C O K X rendered SMALL (90px),
+    # spaced so each is its own colour blob.
+    chars = "ABCOKX"
+    draws = "".join("x.fillText('%s',%d,100);" % (ch, 40 + i * 120)
+                    for i, ch in enumerate(chars))
+    atlas_html = fixture("rt_atlas.html",
+                         "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+                         "<canvas id=c width=760 height=160></canvas><script>"
+                         "var x=document.getElementById('c').getContext('2d');"
+                         "x.fillStyle='#fff';x.fillRect(0,0,760,160);"
+                         "x.fillStyle='#f0f';x.font='bold 90px monospace';"
+                         "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>")
+    b.navigate(atlas_html)
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = blobs(argb, aw, ah)
+    check("atlas segments into six reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def scene(word, font_px=150):
+        html = fixture("rt_word.html",
+                       "<!doctype html><title>w</title><style>html,body{margin:0}</style>"
+                       "<canvas id=c width=1100 height=240></canvas><script>"
+                       "var x=document.getElementById('c').getContext('2d');"
+                       "x.fillStyle='#fff';x.fillRect(0,0,1100,240);"
+                       "x.fillStyle='#f0f';x.font='bold %dpx monospace';"
+                       "x.textAlign='left';x.textBaseline='middle';"
+                       "x.fillText(%r,30,120);</script>" % (font_px, word))
+        b.navigate(html)
+        time.sleep(0.4)
+        w, h, rgb = osctl.capture_rgb()
+        loc = osctl.find_color(MAG, tol=60, rgb=rgb, size=(w, h))
+        return rgb, (w, h), (loc["bbox"] if loc else None)
+
+    word = "BOXCAB"
+    rgb, sz, run = scene(word)
+    check("word run located on the canvas", run is not None, repr(run))
+    if run is None:
+        return
+    # The scene is drawn LARGER than the atlas — a fixed-size match would be
+    # fooled; read_glyph/read_text classify scale-free.
+    check("scene word is larger than the atlas glyphs",
+          (run[3] - run[1]) > (ab[0]["bbox"][3] - ab[0]["bbox"][1]) + 20,
+          f"word_h={run[3]-run[1]} atlas_h={ab[0]['bbox'][3]-ab[0]['bbox'][1]}")
+    # Friction: a single-glyph read of the whole run yields ONE letter, not the word.
+    whole = osctl.read_glyph(rgb, sz, run, atlas)
+    check("read_glyph over the whole run returns a single letter, not the word",
+          len(whole) == 1 and whole != word, repr(whole))
+    # Segmentation cuts the run into one cell per glyph, in reading order.
+    cells = osctl.segment_run(rgb, sz, run, MAG)
+    check("segment_run cuts the run into one cell per glyph",
+          len(cells) == len(word), f"{len(cells)} cells vs {len(word)} glyphs")
+    check("segmented cells are in left-to-right reading order",
+          all(cells[i][0] < cells[i + 1][0] for i in range(len(cells) - 1)),
+          str([c[0] for c in cells]))
+    # Primitive: read_text segments then reads each cell, joining in order.
+    check("read_text reads the whole word 'BOXCAB'",
+          osctl.read_text(rgb, sz, run, atlas, MAG) == word,
+          osctl.read_text(rgb, sz, run, atlas, MAG))
+    # A different word reads correctly too (no per-word special-casing).
+    word2 = "OK"
+    rgb2, sz2, run2 = scene(word2)
+    check("read_text reads a different word 'OK'",
+          run2 is not None and osctl.read_text(rgb2, sz2, run2, atlas, MAG) == word2,
+          osctl.read_text(rgb2, sz2, run2, atlas, MAG) if run2 else "no run")
+    # A single-glyph run degenerates to read_glyph (one cell, one letter).
+    word3 = "X"
+    rgb3, sz3, run3 = scene(word3)
+    check("read_text on a single-glyph run reads that one glyph",
+          run3 is not None and osctl.read_text(rgb3, sz3, run3, atlas, MAG) == word3,
+          osctl.read_text(rgb3, sz3, run3, atlas, MAG) if run3 else "no run")
+    # Empty (blank) region: nothing inked → segment finds no cells, read is "".
+    blank = (5, 5, 25, 25)
+    check("segment_run on a blank region finds no glyphs",
+          osctl.segment_run(rgb3, sz3, blank, MAG) == [], repr(blank))
+    check("read_text on a blank region returns the empty string",
+          osctl.read_text(rgb3, sz3, blank, atlas, MAG) == "")
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -3092,7 +3188,7 @@ def main() -> int:
               round_touch_hold, round_double_tap, round_two_finger_tap,
               round_touch_drag, round_two_finger_pan,
               round_three_finger_swipe, round_edge_swipe,
-              round_touch_drag_to]
+              round_touch_drag_to, round_read_text]
     for r in rounds:
         try:
             r(b, offline)

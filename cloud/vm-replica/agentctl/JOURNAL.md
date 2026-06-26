@@ -2037,14 +2037,68 @@ not the distance, is the meaning.
 
 ---
 
+## F103 — read a multi-glyph word off the canvas (`read_text` / `segment_run`) · R67
+
+**Friction:** `read_glyph` (F058) reads *one* pre-isolated character: it reduces
+a region to a single `edge_signature` and returns the closest atlas label. A
+word the page draws straight onto a canvas — `"BOXCAB"` painted as one magenta
+run with no per-letter DOM node — is still *one* ink region, so pointing
+`read_glyph` at the whole run collapses six glyphs into one signature and returns
+a single wrong letter (`'O'` for the run, not `"BOXCAB"`). You cannot read a
+string you have not first *cut into letters*; the friction is segmentation, not
+classification.
+
+**Mechanism:** `segment_run` projects every column inside the run's bbox, marks
+a column *inked* when any pixel there is within `tol` of the foreground colour,
+and walks left-to-right opening a cell at the first inked column and closing it
+once `gap` consecutive blank columns prove the inter-letter space. Each cell is
+then tightened to its actual inked rows so the bbox hugs the glyph (what
+`edge_signature` wants), and the cells are returned in reading order. The cut is
+honest only where letters are parted by ≥ `gap` blank columns — glyphs that
+*touch* (tight kerning, italic overhang) share a column and merge into one cell;
+projection cannot part what the rendering joined, and that is its named boundary,
+not a thing to fake.
+
+**Primitive:** `read_text(rgb, size, bbox, atlas, fg, ...)` `segment_run`s the
+run by the foreground colour into per-glyph cells, classifies each cell in the
+scale-free frame (`read_glyph` against the reference `atlas`), and joins the
+labels in reading order. Reads only glyphs the `atlas` carries and only runs
+`segment_run` can part; returns `""` when nothing inked is found. The atlas is
+rendered *small* (90px) while the scene word is drawn *large* (150px) — a
+fixed-size match would read every cell as the same letter, so classification
+stays in `edge_signature`'s scale-free frame.
+
+**Live (R67):** the atlas canvas segments into six reference glyphs; the word run
+is located by colour and is larger than the atlas glyphs; `read_glyph` over the
+whole run returns a single letter (`'O'`), reproducing the friction; `segment_run`
+cuts the run into exactly six cells in strict left-to-right order; `read_text`
+reads `"BOXCAB"`, and a different word `"OK"` and a single glyph `"X"` with no
+per-word special-casing; a blank region yields no cells and `read_text` returns
+`""`. `415/415 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 道生一，一生二，二生三，三生萬物 — the run is the undivided one;
+to read it you must let it become many. `read_glyph` knows a single thing whole;
+a word is not a bigger glyph but a *sequence*, and the act that makes reading
+possible is the cut, not the gaze. 知止 again: the segmenter stops at the blank
+column the rendering itself left between letters — it parts only what was already
+parted, and refuses to invent a boundary where the ink runs together.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
 
-- **R-next: a glyph atlas wider than one alphabet** — `read_glyph` (F058) reads
-  among the few glyphs we carry; reading an *unknown* string needs per-character
-  segmentation across a baseline and a fuller atlas (true OCR territory). Grow it
-  only when a real control demands reading text we did not pre-enumerate.
+- **R-next: touching / kerned glyphs** — `segment_run` (F103) parts letters only
+  where ≥`gap` blank columns separate them; a script font, italic overhang, or
+  tight kerning joins two glyphs in one column and they merge into one cell. The
+  honest next step is a sub-column cut (valley detection in the column-ink
+  profile, or a connected-component pass) — grow it only when a real control
+  draws text whose letters genuinely touch.
+- **R-next: an atlas built from the live page, not a fixture** — F103's atlas is
+  rendered by the test itself; reading a *real* canvas control means capturing
+  reference glyphs from the page's own rendering (a scratch canvas the app
+  exposes, or known on-screen labels) before `read_text` can name unknown runs.
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

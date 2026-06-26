@@ -753,6 +753,104 @@ def read_glyph(rgb: bytes, size: tuple[int, int],
     return min(atlas, key=lambda k: edge_hamming(atlas[k], sig))
 
 
+def segment_run(rgb: bytes, size: tuple[int, int],
+                bbox: tuple[int, int, int, int],
+                fg: tuple[int, int, int], tol: int = 60,
+                gap: int = 2) -> list[tuple[int, int, int, int]]:
+    """Split a horizontal text *run* into one bbox per glyph (F103).
+
+    :func:`read_glyph` reads a *single* pre-isolated character; point it at a
+    whole word and it reduces the entire ink to one ``edge_signature`` and
+    returns one wrong label — you cannot read a string you have not first cut
+    into letters. This cuts it: inside ``bbox`` it projects each column,
+    marking the column *inked* if any pixel there is within ``tol`` of the
+    foreground colour ``fg``, then walks the columns left-to-right opening a
+    cell at the first inked column and closing it once ``gap`` consecutive blank
+    columns prove the inter-letter space. Each cell is tightened to the actual
+    inked rows so the returned bbox hugs the glyph (what ``edge_signature``
+    wants). Returns the per-glyph bboxes in *reading order* (left to right).
+
+    The cut is honest only where letters are parted by at least ``gap`` blank
+    columns: glyphs that *touch* (tight kerning, script/italic overhang) share a
+    column and merge into one cell — segmentation by projection cannot part what
+    the rendering joined, and that is its named boundary, not a thing to fake.
+    Lower ``gap`` cuts more eagerly (risking splitting a single wide glyph),
+    raise it to keep close letters whole."""
+    w, _h = size
+    x0, y0, x1, y1 = bbox
+    tr, tg, tb = fg
+
+    def inked_col(x: int) -> bool:
+        for y in range(y0, y1 + 1):
+            j = (y * w + x) * 3
+            if (abs(rgb[j] - tr) <= tol and abs(rgb[j + 1] - tg) <= tol
+                    and abs(rgb[j + 2] - tb) <= tol):
+                return True
+        return False
+
+    cols = [inked_col(x) for x in range(x0, x1 + 1)]
+    cells: list[tuple[int, int]] = []
+    start: int | None = None
+    blanks = 0
+    for i, ink in enumerate(cols):
+        if ink:
+            if start is None:
+                start = i
+            blanks = 0
+        elif start is not None:
+            blanks += 1
+            if blanks >= gap:
+                cells.append((x0 + start, x0 + i - blanks))
+                start = None
+                blanks = 0
+    if start is not None:
+        cells.append((x0 + start, x0 + len(cols) - 1 - blanks))
+
+    out: list[tuple[int, int, int, int]] = []
+    for cx0, cx1 in cells:
+        miny, maxy = 1 << 30, -1
+        for y in range(y0, y1 + 1):
+            row = y * w * 3
+            for x in range(cx0, cx1 + 1):
+                j = row + x * 3
+                if (abs(rgb[j] - tr) <= tol and abs(rgb[j + 1] - tg) <= tol
+                        and abs(rgb[j + 2] - tb) <= tol):
+                    if y < miny:
+                        miny = y
+                    if y > maxy:
+                        maxy = y
+                    break
+        if maxy >= 0:
+            out.append((cx0, miny, cx1, maxy))
+    return out
+
+
+def read_text(rgb: bytes, size: tuple[int, int],
+              bbox: tuple[int, int, int, int],
+              atlas: dict[str, list[int]],
+              fg: tuple[int, int, int], tol: int = 60, gap: int = 2,
+              nw: int = 48, nh: int = 48, thr: int = 24) -> str:
+    """Read a multi-glyph text run from pixels (F103).
+
+    The rung above :func:`read_glyph`: where that reads one character we already
+    isolated, this reads a *word the page drew straight onto a canvas* — no DOM,
+    no per-letter node, only the rendered run. It :func:`segment_run`-s the run
+    inside ``bbox`` by the foreground colour ``fg`` into per-glyph cells, then
+    classifies each cell in the scale-free frame (:func:`read_glyph` against the
+    reference ``atlas``), concatenating the labels in reading order into the
+    string. ``atlas`` is ``{label: edge_signature(...)}`` built once from
+    reference glyphs (rendered by the page on a scratch canvas, or captured from
+    known controls) — exactly as :func:`read_glyph` consumes.
+
+    Still not full OCR: it reads only glyphs the ``atlas`` carries, and only a
+    run whose letters :func:`segment_run` can part (see its boundary on touching
+    glyphs). It returns ``""`` when nothing inked is found. This is reading a
+    *string* reduced to its smallest honest form — segment by colour, read each
+    by structure, in order."""
+    cells = segment_run(rgb, size, bbox, fg, tol, gap)
+    return "".join(read_glyph(rgb, size, c, atlas, nw, nh, thr) for c in cells)
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"
