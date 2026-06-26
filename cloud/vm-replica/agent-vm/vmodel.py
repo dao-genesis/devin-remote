@@ -249,6 +249,109 @@ def motion_signature(frames, cols, rows, px_w=1.0, px_h=1.0, search=5):
             'pairs': pairs}
 
 
+def _block_ssd(pre, cur, cols, rows, i0, i1, j0, j1, dx, dy):
+    """Mean SSD over cur's block [i0,i1)x[j0,j1) vs pre shifted by (dx,dy), overlap only."""
+    ss = 0.0; n = 0
+    for j in range(j0, j1):
+        jj = j - dy
+        if jj < 0 or jj >= rows:
+            continue
+        for i in range(i0, i1):
+            ii = i - dx
+            if ii < 0 or ii >= cols:
+                continue
+            d = cur[j * cols + i] - pre[jj * cols + ii]
+            ss += d * d; n += 1
+    return (ss / n) if n else None
+
+
+def flow_structure(frames, cols, rows, search=5, blocks=4):
+    """Round-30: the FLOW-STRUCTURE signature -- WHICH KIND of motion is this, decomposed into
+    [translation, divergence, curl]. This is the honest answer to a limit `motion_signature` exposes.
+
+    `motion_signature` (round-26) asks only one binary question: does ONE rigid global shift re-align
+    the frame? A pan answers yes (coherent); ANYTHING that is not a single rigid translation answers
+    no (incoherent). Measured externally (round-29/30): a flat bearing rotation, a perspective
+    rotation AND a scroll-zoom are ALL incoherent, so the 2-D [coherence,incoherence] key groups
+    zoom together with rotation and cannot tell them apart. That key is a translation detector, not a
+    motion-type taxonomy.
+
+    The fix is a Helmholtz-style decomposition of the LOCAL flow field. We tile the frame into
+    blocks*blocks super-blocks and block-match EACH block independently (integer search +/-`search`),
+    giving a per-block displacement field weighted by that block's motion amount (base SSD). We then
+    fit the field to a CONFORMAL model  f = a + s*(r-rbar) + w*perp(r-rbar)  by weighted least squares
+    (positions centred on their own weighted centroid), reading three orthogonal components:
+      - translation T = |a|, the bulk displacement -- a pan has a large, uniform field.
+      - divergence  D = the scale rate s -- a zoom pushes every block radially out/in from the motion
+                        centre (curl-free, div != 0). The intercept a absorbs ANY offset between the
+                        frame centre and the true motion centre, so D is centre-invariant.
+      - curl        C = the rotation rate w -- a rotation swirls blocks tangentially (div-free).
+    The signature is the L2-normalised [T, |D|, |C|]: on clean (synthetic) frames a pan -> ~[1,0,0], a
+    zoom -> ~[0,1,0], a rotation -> ~[0,0,1] (see test_flow_structure.py). This is purely ADDITIVE --
+    motion_signature is unchanged, so the locked orbit-vs-pan invariant still holds.
+
+    HONEST EXTERNAL-RENDERING BOUNDARY (round-30, measured on MapLibre+OSM): on a real WebGL map the
+    3-way separation does NOT survive. Finite-frame block-matching injects a motion-INDEPENDENT inward
+    divergence at the edges (border blocks can only match inward), so EVERY mode -- even a pure pan --
+    reads a strong |D|; and a zoom's true radial signal lives in that same noisy outer ring. Sub-pixel
+    refinement does not help, so the limit is the rendering geometry, not the matcher. Net: pan still
+    reads translation-dominant and zoom still reads divergence-dominant, but a ROTATION also reads
+    divergence-dominant, so zoom does NOT cosine-separate from rotation externally (round-30 = PARTIAL).
+    The ROBUST external key remains the binary motion_signature coherence (pan coherent; rotation AND
+    zoom incoherent); flow_structure's fine taxonomy is reliable only on clean internal frames."""
+    fx = []; fy = []; bx = []; by = []; wt = []
+    for k in range(1, len(frames)):
+        pre = frames[k - 1]; cur = frames[k]
+        for bj in range(blocks):
+            j0 = bj * rows // blocks; j1 = max(j0 + 1, (bj + 1) * rows // blocks)
+            for bi in range(blocks):
+                i0 = bi * cols // blocks; i1 = max(i0 + 1, (bi + 1) * cols // blocks)
+                base = _block_ssd(pre, cur, cols, rows, i0, i1, j0, j1, 0, 0)
+                if base is None or base < 1e-6:
+                    continue
+                best = base; bdx = 0; bdy = 0
+                for dy in range(-search, search + 1):
+                    for dx in range(-search, search + 1):
+                        if dx == 0 and dy == 0:
+                            continue
+                        ss = _block_ssd(pre, cur, cols, rows, i0, i1, j0, j1, dx, dy)
+                        if ss is not None and ss < best:
+                            best = ss; bdx = dx; bdy = dy
+                bcx = (i0 + i1 - 1) / 2.0; bcy = (j0 + j1 - 1) / 2.0
+                fx.append(float(bdx)); fy.append(float(bdy)); bx.append(bcx); by.append(bcy); wt.append(base)
+    w_sum = sum(wt)
+    empty = {'sig': [0.0, 0.0, 0.0], 'trans': 0.0, 'div': 0.0, 'curl': 0.0, 'blocks': len(wt)}
+    if w_sum <= 0 or not wt:
+        return empty
+    # Fit the field to a CONFORMAL model  f = a + s*(r-rbar) + w*perp(r-rbar)  by weighted least
+    # squares, where r is the block position centred on its OWN weighted centroid. The intercept a
+    # absorbs the bulk translation AND any offset between the frame centre and the true motion centre
+    # (a map zoom anchors on the canvas centre, not the probe centre), so the scale s (divergence) and
+    # rotation w (curl) come out clean and centre-invariant -- strictly better than decomposing about
+    # an assumed centre. Centroid-centring decouples s and w into two closed-form ratios.
+    xbar = sum(b * w for b, w in zip(bx, wt)) / w_sum
+    ybar = sum(b * w for b, w in zip(by, wt)) / w_sum
+    fxb = sum(f * w for f, w in zip(fx, wt)) / w_sum
+    fyb = sum(f * w for f, w in zip(fy, wt)) / w_sum
+    trans = math.sqrt(fxb * fxb + fyb * fyb)
+    den = 0.0; ssc = 0.0; scc = 0.0
+    for f_x, f_y, b_x, b_y, w in zip(fx, fy, bx, by, wt):
+        px = b_x - xbar; py = b_y - ybar
+        gx = f_x - fxb; gy = f_y - fyb
+        den += w * (px * px + py * py)
+        ssc += w * (px * gx + py * gy)     # scale (divergence) numerator
+        scc += w * (px * gy - py * gx)     # rotation (curl) numerator
+    if den <= 0:
+        div = 0.0; curl = 0.0
+    else:
+        rms = math.sqrt(den / w_sum)        # mean lever arm -> express rates in displacement units
+        div = (ssc / den) * rms
+        curl = (scc / den) * rms
+    return {'sig': [round(x, 4) for x in _l2([trans, abs(div), abs(curl)])],
+            'trans': round(trans, 3), 'div': round(div, 3), 'curl': round(curl, 3),
+            'blocks': len(wt)}
+
+
 def change_descriptor(pre, cur, cols, rows, out=4):
     """Describe the local visual change between two gray grids: how much (mag), where (centroid),
     a magnitude fingerprint 'fp' (down-pooled |delta|, says SOMETHING happened here), and a SIGNED

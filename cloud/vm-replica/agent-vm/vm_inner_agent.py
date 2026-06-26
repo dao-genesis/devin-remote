@@ -339,8 +339,12 @@ def flow_probe(body):
         px_w = (rr - l) / max(1, cols); px_h = (b - t) / max(1, rows)
         out['flow'] = _vmodel.flow_axis(frames, cols, rows, px_w, px_h)
         out['motion'] = _vmodel.motion_signature(frames, cols, rows, px_w, px_h)
+        if hasattr(_vmodel, 'flow_structure'):
+            out['flowstruct'] = _vmodel.flow_structure(frames, cols, rows)
         out['change'] = {k: _vmodel.change_descriptor(frames[0], frames[-1], cols, rows)[k]
                          for k in ('mag', 'cx', 'cy')}
+    if body.get('frames_out'):
+        out['raw_frames'] = frames; out['cols'] = cols; out['rows'] = rows
     return out
 
 def region_centroid(body):
