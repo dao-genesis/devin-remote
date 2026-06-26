@@ -1910,6 +1910,47 @@ between them — constant spread, constant angle — is what carries the motion.
 
 ---
 
+## F100 — three-finger swipe (`three_finger_swipe`) · R64
+
+**Friction:** A system-style app switcher, a three-finger scroll, a gesture pad
+that switches workspaces — these fire only when *three* simultaneous touch
+points slide as one, reading `e.touches.length===3` and ignoring any smaller
+count. A one-finger `swipe` (F092) never raises the count past one; a two-finger
+`two_finger_pan` (F099) reaches two and stops — neither ever presents the third
+finger the handler waits for, so neither moves the view.
+
+**Mechanism:** The realistic handler latches the *midpoint of all three* touch
+points on a three-touch `touchstart`, then on each three-touch `touchmove`
+measures how far that midpoint has travelled, committing once it passes a small
+threshold. The whole gate is the count: the body of both handlers short-circuits
+unless `e.touches.length===3`. A page that watches the running maximum count
+sees `1` under a one-finger swipe, `2` under a two-finger pan, and only `3` when
+the trio lands — so the gesture is defined purely by *how many fingers* arrive
+together, not by what they trace.
+
+**Primitive:** `Browser.three_finger_swipe(selector, dx, dy, gap=50)` resolves
+the honest hit point (F061), refuses if occluded, places three touch points
+abreast across the center (spaced by `gap`), then translates *all three* by the
+same `(dx, dy)` each step issuing three-point `touchMove` events — so a rigid
+triad travels — and lifts all with `touchEnd`. Returns `True` once the swipe
+completes, `False` if the element is absent or occluded.
+
+**Live (R64):** the page starts unfired (`swiped3=0, maxn=0`); a one-finger
+`swipe` never reaches three (`swiped3=0, maxn=1`); a `two_finger_pan` never
+reaches three (`swiped3=0, maxn=2`); `three_finger_swipe` slides the rigid trio
+and commits (`swiped3=80, maxn=3`); under a transparent veil
+`three_finger_swipe` → `False` and nothing swipes; an absent selector → `False`.
+`391/391 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 三生萬物 — three begets the ten-thousand things. One
+finger taps, two fingers pinch and pan, but the third finger opens a whole new
+class of gesture the view answers to. The primitive does not strain for novelty;
+it simply lets the third point arrive, and the count itself is the meaning.
+道生一，一生二，二生三：each finger added is a turn of the same wheel, and the
+view reads only the number that has gathered.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
