@@ -542,6 +542,41 @@ class Browser:
                        "button": "left", "clickCount": 1})
         return True
 
+    def drag_by(self, selector: str, dx: float, dy: float,
+                by_text: bool = False) -> bool:
+        """Press a handle and drag it by an exact pixel delta (F088). A splitter /
+        resize grip / pane divider sets a size from *how far the cursor travelled*:
+        it grabs on ``mousedown`` and each ``mousemove`` adds the cursor's pixel
+        offset to the panel's width. There is no destination *element* to aim at —
+        the result is the delta itself — so :meth:`drag_reorder` (F080), which
+        slides to a *target element's* midpoint, lands at that element's
+        uncontrolled position, not a chosen size; :meth:`set_slider` (F073) needs a
+        track to map a fraction onto; a plain :meth:`click` presses and releases at
+        one point and moves the divider not at all. We press on the handle's
+        hit-verified point (refusing if occluded, like :meth:`click`), step the
+        cursor by exactly ``(dx, dy)`` in small increments carrying ``buttons:1`` so
+        the live resize runs every frame, and release at the offset point. Returns
+        ``False`` if the handle is absent or occluded."""
+        s = self._hit_point_of(selector, by_text=by_text)
+        if not s or s.get("occluded"):
+            return False
+        ex, ey = s["x"] + dx, s["y"] + dy
+        self._move(s["x"], s["y"])
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mousePressed", "x": s["x"], "y": s["y"],
+                       "button": "left", "clickCount": 1})
+        steps = max(2, int((abs(dx) + abs(dy)) / 10) + 1)
+        for i in range(1, steps + 1):
+            mx = s["x"] + dx * i / steps
+            my = s["y"] + dy * i / steps
+            self.cdp.call("Input.dispatchMouseEvent",
+                          {"type": "mouseMoved", "x": mx, "y": my,
+                           "button": "left", "buttons": 1})
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mouseReleased", "x": ex, "y": ey,
+                       "button": "left", "clickCount": 1})
+        return True
+
     def scroll_into_view(self, selector: str, by_text: bool = False,
                          timeout: float = 2.0) -> bool:
         """Bring an element clipped out of a scroll container back into view (F081).

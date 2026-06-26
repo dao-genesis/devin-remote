@@ -2277,6 +2277,57 @@ def round_triple_click(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_drag_by(b: Browser, offline: bool) -> None:
+    print("R52: drag a splitter handle by an exact pixel delta (F088) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>resize</title>"
+            b"<style>#row{display:flex;width:600px;height:120px;font:14px monospace}"
+            b"#panel{width:200px;background:#cde;overflow:hidden}"
+            b"#grip{width:10px;background:#444;cursor:col-resize}"
+            b"#rest{flex:1;background:#eee}"
+            b"#veil{position:fixed;inset:0;background:rgba(0,0,0,0);display:none}</style>"
+            b"<div id=row><div id=panel>panel</div><div id=grip></div>"
+            b"<div id=rest>rest</div></div><div id=veil></div>"
+            b"<script>var g=document.getElementById('grip'),p=document.getElementById('panel'),"
+            b"drag=null;g.addEventListener('mousedown',function(e){"
+            b"drag={x:e.clientX,w:p.getBoundingClientRect().width};e.preventDefault();});"
+            b"window.addEventListener('mousemove',function(e){if(!drag)return;"
+            b"p.style.width=Math.max(40,drag.w+(e.clientX-drag.x))+'px';});"
+            b"window.addEventListener('mouseup',function(){drag=null;});</script>")
+    sp = _serve(8981, page)
+
+    def width() -> float:
+        return b.eval("document.getElementById('panel').getBoundingClientRect().width")
+    try:
+        b.navigate("http://127.0.0.1:8981/")
+        time.sleep(0.2)
+        w0 = width()
+        check("panel starts at its base width", abs(w0 - 200) < 2, w0)
+        # A plain click on the grip presses+releases at one point — no travel,
+        # no resize.
+        check("click on the grip leaves the width unchanged",
+              b.click("#grip") is True and abs(width() - w0) < 2, width())
+        # drag_by carries the cursor a precise delta; the panel grows by it.
+        check("drag_by(+120) widens the panel by ~120px",
+              b.drag_by("#grip", 120, 0) is True
+              and abs(width() - (w0 + 120)) < 6, width())
+        w1 = width()
+        # A negative delta shrinks it back by the same precise amount.
+        check("drag_by(-80) narrows the panel by ~80px",
+              b.drag_by("#grip", -80, 0) is True
+              and abs(width() - (w1 - 80)) < 6, width())
+        w2 = width()
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("drag_by refuses through an overlay",
+              b.drag_by("#grip", 60, 0) is False)
+        check("nothing moved while the grip was occluded",
+              abs(width() - w2) < 2, width())
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("drag_by on an absent handle returns False",
+              b.drag_by("#nope", 50, 0) is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2296,7 +2347,7 @@ def main() -> int:
               round_nested_submenu, round_drag_reorder,
               round_scroll_into_view, round_double_click,
               round_press_hold, round_zoom_pane, round_key_activate,
-              round_key_step, round_triple_click]
+              round_key_step, round_triple_click, round_drag_by]
     for r in rounds:
         try:
             r(b, offline)

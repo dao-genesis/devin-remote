@@ -1438,6 +1438,44 @@ folds into `clickCount:3`.
 
 ---
 
+## F088 — drag a splitter handle by an exact pixel delta (`drag_by`) · R52
+
+**Friction:** Resizing a pane — dragging the divider between a sidebar and the
+content, a column-resize grip, a split-view bar — sets a size from *how far the
+cursor travelled*, not from where it landed. There is no destination element to
+aim at: the result you want is the delta itself ("make this 120px wider"). A
+plain `click` presses and releases at one point — zero travel — so the divider
+does not move; `drag_reorder` (F080) slides to a *target element's* midpoint and
+so lands at that element's uncontrolled layout position (in the probe it widened
+to 628, not a chosen size); `set_slider` (F073) needs a bounded *track* to map a
+fraction onto, which a free splitter has not got.
+
+**Mechanism:** The handle grabs on `mousedown` (recording the start x and the
+panel's current width) and on every `mousemove` recomputes `width = startW +
+(e.clientX − startX)`. The size is a running integral of the cursor's pixel
+offset, so only a real press-move-release that *carries* the pointer by the exact
+delta — with `buttons:1` live on each move so the handler's drag stays armed —
+reproduces it. A single click integrates to nothing.
+
+**Primitive:** `Browser.drag_by(selector, dx, dy)` resolves the handle's honest
+hit point (F061 — refuses if every probe spot is occluded, like `click`), presses
+there, steps the cursor by exactly `(dx, dy)` in ~10px increments carrying
+`buttons:1`, and releases at the offset point. Returns `True` once the gesture
+fires, `False` if the handle is absent or occluded.
+
+**Live (R52):** a panel starts at 200px; a `click` on the grip leaves it at 200;
+`drag_by(+120)` widens it to ~320; `drag_by(-80)` narrows it to ~240; under a
+transparent veil `drag_by` → `False` and the width does not budge; an absent
+handle → `False`. `301/301 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 圖難於其易，為大於其細 — a size is not chosen by pointing
+at a destination but by accumulating small honest steps; the divider obeys the
+*path*, not the endpoint. 信言不美 — a `click` that "succeeds" on the grip has
+moved nothing; the truthful gesture is the one that carries the pointer the whole
+delta.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
