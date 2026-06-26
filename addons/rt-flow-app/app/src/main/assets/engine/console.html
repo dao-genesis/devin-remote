@@ -452,6 +452,14 @@
     if(TOKEN) localStorage.setItem("rtflow.rn.token",TOKEN);
     if(ENDPOINT) localStorage.setItem("rtflow.rn.endpoint",ENDPOINT); }
   persist();
+  // 收敛架构③·加速层: 分享链接可带 &direct=<设备此刻活隧道>。页面由持久去中心化引导宿主(Pages/IPFS)开,
+  //   通信走 mesh; 若 direct 还活则把它当「直连提速」候选(失败由 failover 无缝回退 mesh/Worker), 死也不影响开页。
+  (function(){ try{
+    var d=String(qp("direct")||"").replace(/\/+$/,"");
+    if(!d || !/^https:\/\//i.test(d) || /\.workers\.dev/i.test(d)) return;
+    var a=JSON.parse(localStorage.getItem("rtflow.rn.endpoints.direct")||"[]"); if(!Array.isArray(a)) a=[];
+    if(a.indexOf(d)<0){ a.unshift(d); localStorage.setItem("rtflow.rn.endpoints.direct", JSON.stringify(a)); }
+  }catch(e){} })();
   function relayUrl(){ return ENDPOINT + "/relay/" + encodeURIComponent(SESSION); }
 
   //__FAILOVER_START__ (此块经 test/console-failover.test.js 切片 eval 实测, 勿删标记)
@@ -467,7 +475,9 @@
     // 收集时区分「直连(非 Worker)」与「Worker」: 直连隧道(手机自带 cloudflared/SSH)永远排在 Worker 之前,
     //   Worker 永远沉到末尾兜底 —— 与 _preferDirect 同向贯彻「Worker 仅兜底」。location.origin 殿后。
     var seen=Object.create(null), direct=[], worker=[], origin=null;
-    function add(b){ b=String(b||"").replace(/\/+$/,""); if(!b||seen[b]) return; seen[b]=1; (_isWorker(b)?worker:direct).push(b); }
+    function add(b){ b=String(b||"").replace(/\/+$/,""); if(!b||seen[b]) return; seen[b]=1;
+      if(_isStaticHost(b)) return;   // 持久引导宿主只开页·不服务 /relay, 不入 relay 候选(通信走 mesh)
+      (_isWorker(b)?worker:direct).push(b); }
     add(ENDPOINT);
     try{ add(localStorage.getItem("rtflow.rn.endpoint.good")); }catch(e){}
     try{ var dl=_directUrls(); for(var k=0;k<dl.length;k++) add(dl[k]); }catch(e){}   // 手机自带直连隧道(cloudflared/SSH)
@@ -487,6 +497,10 @@
   //   一旦它死, 既有 _relayHttp 自愈无缝回退 Worker。纯加法: 学不到/全不通则与旧版逐字节一致。
   function _directUrls(){ try{ var a=JSON.parse(localStorage.getItem("rtflow.rn.endpoints.direct")||"[]"); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
   function _isWorker(b){ return /\.workers\.dev/i.test(String(b||"")); }
+  // 持久去中心化引导宿主(首字节来源): 仅供静态开页, 不服务 /relay → 不可当 relay 探活候选, 通信恒走 mesh。
+  function _isStaticHost(b){ return /(\.github\.io|\.ipfs\.dweb\.link|\bipfs\.io\b|\.ipfs\.cf-ipfs\.com|\bgateway\.pinata\.cloud\b)/i.test(String(b||"")); }
+  // 零账号快速隧道(trycloudflare/lhr.life/loca.lt 等)先天临时·URL 重启即换 → 不可作分享链接的持久宿主。
+  function _isEphemeralTunnel(b){ return /(\.trycloudflare\.com|\.lhr\.life|\.loca\.lt|\.ngrok[\-.]|\.ngrok\.io|\btunnelto\.dev\b)/i.test(String(b||"")); }
   function _httpsOnlyHere(){ try{ return String(location.protocol||"https:")==="https:"; }catch(e){ return true; } }
   function _learnDirect(){
     return _relayAt(ENDPOINT, "/api/native", { m:"tunnelStat", a:[] }, 8000).then(function(res){
@@ -1617,35 +1631,35 @@
 
   // ── 接入设置浮层 ──
   var cfg=document.getElementById("cfg");
-  // 零中心公网直连链接: 分享「与本页同款的完整控台 console.html」(非裸调试页), 带 session/token 一开即自动直连手机, 不经任何 Worker。
-  //   道法自然·设备自托管为根·同源优先: 凡本页经 http(s) 服务(设备自带零账号隧道 / 局域网 / 自托管源),
-  //   分享链接一律回指本源 —— 彻底自给自页, 不外求任何第三方账号宿主。设备 LocalServer 在 / 与 /console.html
-  //   皆服务 console.html, 故 origin+"/console.html" 恒可达。仅当本页非 http(s)(APK 内 file:// 直身)或
-  //   经中继 Worker(*.workers.dev·其 /console 非 /console.html, 自指恐 404)时, 才回退公共静态宿主(可选增强·非默认根):
-  //   GitHub Pages(仓库自给自页·随 main 自动同鲜·text/html); surge.sh 已被永久下架(HTTP 451)故弃。
+  // 持久去中心化引导宿主(收敛架构①·首字节来源): 分享「与本页同款的完整控台 console.html」, 链接只带稳定
+  //   session/token → 永不 1033 死链。道法自然·反则道之动也: 临时隧道 URL 重启即换, 故绝不把它当分享宿主;
+  //   首字节恒来自「恒在线的持久宿主」—— 本页若由持久宿主(GitHub Pages 仓库自给自页 / IPFS 内容寻址网关·非
+  //   临时隧道·非 Worker)经 http(s) 载入则自指本源; 否则(APK file:// / 临时隧道 / 局域网 / Worker)回退 Pages。
+  var P2P_CLIENT_CDN_FALLBACK="https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html";
   var P2P_CLIENT_CDN=(function(){
     try{
       var u=new URL(String(location.href||""));
-      if(/^https?:$/i.test(u.protocol)){
+      if(/^https?:$/i.test(u.protocol) && !_isWorker(u.host||"") && !_isEphemeralTunnel(u.host||"")
+         && !/^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(u.host||"")){
         var p=u.pathname||"/";
-        if(/console\.html$/i.test(p)) return u.origin+p;                 // 本页即 console.html → 直接自指(同源同鲜)
-        if(!/\.workers\.dev$/i.test(u.host||"")) return u.origin+"/console.html";  // 设备自带隧道/局域网根供 → 自指本源
+        if(/console\.html$/i.test(p)) return u.origin+p;       // 本页即持久宿主上的 console.html → 自指(同源同鲜)
+        if(_isStaticHost(u.host||"")) return u.origin+p;       // IPFS 网关等持久静态宿主 → 自指当前路径
       }
     }catch(e){}
-    return "https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html";
+    return P2P_CLIENT_CDN_FALLBACK;
   })();
-  // 道法自然·mesh 地址簿做持久: 分享链接首选「设备此刻的活隧道」——
-  //   设备零账号快速隧道 URL 重启会变, 故旧链接易僵。解法不靠固定域/账号, 而是经去中心化 mesh
-  //   (route-C·session+token 派生)向已连本机问 tunnelStat 拿当前 publicUrls(_directUrls 已缓存),
-  //   让分享链接恒指向设备此刻的活隧道 console.html → 不论本页从何处(设备隧道/局域网/Pages 兜底)载入,
-  //   都派发「直指设备自托管活入口」的链接, 旧链接随设备重连自愈。学不到活隧道才回退 P2P_CLIENT_CDN(本源/Pages)。
-  function shareBase(){
+  function shareBase(){ return P2P_CLIENT_CDN; }
+  // 设备此刻活隧道作 &direct= 可选「直连提速」提示(收敛架构③): 经 mesh 地址簿(_directUrls 已缓存 tunnelStat
+  //   publicUrls)取最新活隧道。它死也不影响开页(首字节来自持久宿主、通信走 mesh) → 旧链接永不僵死。
+  function _shareDirect(){
     try{ var d=_directUrls(); for(var i=0;i<d.length;i++){ var b=String(d[i]||"").replace(/\/+$/,"");
-      if(b && /^https:\/\//i.test(b) && !_isWorker(b)) return b+"/console.html"; } }catch(e){}
-    return P2P_CLIENT_CDN;
+      if(b && /^https:\/\//i.test(b) && !_isWorker(b) && !_isStaticHost(b)) return b; } }catch(e){}
+    return "";
   }
   function shareLink(){ if(!SESSION||!TOKEN) return "";
-    return shareBase()+"?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN)+"&auto=1"; }
+    var u=shareBase()+"?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN)+"&auto=1";
+    var d=_shareDirect(); if(d) u+="&direct="+encodeURIComponent(d);
+    return u; }
   function showCfg(){ document.getElementById("cfgSession").value=SESSION;
     document.getElementById("cfgToken").value=TOKEN; document.getElementById("cfgEndpoint").value=ENDPOINT;
     var sh=document.getElementById("cfgShare"); if(sh) sh.value=shareLink(); cfg.classList.add("show"); }
