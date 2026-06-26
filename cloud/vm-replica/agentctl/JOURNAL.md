@@ -1820,6 +1820,50 @@ tap"; only two fingers that arrive and depart *quietly* are heard. And because n
 two fingers ever truly lift as one, the honest detector waits for the last finger
 to leave rather than insisting they go together.
 
+## F098 — long-press-to-arm touch drag (`touch_drag`) · R62
+
+**Friction:** A sortable list that reorders rows only after a press dwells long
+enough to "pick up", a drag-handle that ignores a quick flick as a scroll, a
+kanban card that lifts on long-press then follows the finger — these arm a timer
+on `touchstart` and **cancel it on any `touchmove` that arrives before it
+elapses**, treating an early move as a scroll, not a drag; only a touch that
+stays still past the dwell, *then* travels, is accepted and committed at
+`touchend`. `swipe` (F092) starts moving immediately, so the arm timer is
+cancelled and the drag never engages (`armed` stays `false`, `dropped` stays
+`0`). `touch_hold` (F095) dwells and arms (`armed=true`) but never moves, so the
+handle is picked up yet dropped in place — `dropped` stays `0`. A mouse
+`drag_by` (F088) makes no `touchstart` at all.
+
+**Mechanism:** The realistic pick-up handler is a state machine: `touchstart`
+starts a `setTimeout(arm, 200ms)`; a `touchmove` while *not yet armed* clears the
+timer (an early move is a scroll); once armed, `touchmove` records travel; and
+`touchend` commits only if armed *and* travel ≠ 0. So the gesture has an
+order-of-operations requirement — **be still first, move second** — that neither
+a pure swipe (move-only) nor a pure long-press (still-only) satisfies. The honest
+primitive must press, *wait out the arm window with no `touchMove`*, and only
+then step the held point.
+
+**Primitive:** `Browser.touch_drag(selector, dx, dy, arm=0.25)` resolves the
+honest hit point (F061), refuses if occluded, presses one touch point, holds it
+motionless for `arm` seconds so the page's pick-up timer fires, steps it along
+`(dx, dy)` issuing `touchMove` events so the live drag handler runs each frame,
+then lifts with `touchEnd`. Returns `True` once the drag completes, `False` if
+the element is absent or occluded.
+
+**Live (R62):** the page starts unfired (`armed=false, dragged=0, dropped=0`); a
+`swipe` moves immediately so it never arms and `dropped` stays `0`; a
+`touch_hold` arms (`armed=true`) but commits no drag (`dropped=0`); `touch_drag`
+arms then commits exactly one drag (`dragged=80, dropped=1`); under a transparent
+veil `touch_drag` → `False` and `dropped` stays `1`; an absent selector →
+`False`. `376/376 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 知止所以不殆 — knowing when to stop keeps you from harm.
+The drag is granted only to the finger that first holds *still*: the page reads
+an immediate move as a scroll and refuses it. Power here is sequenced restraint —
+be quiet long enough to be trusted, then act. 反也者，道之動也: the swipe and the
+long-press are each one half of the gesture, and only their union, in order,
+is the whole.
+
 ---
 
 ## Frontier (next honest rounds)
