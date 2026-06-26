@@ -416,6 +416,33 @@ gather, shape to decide — and the thing names itself.
 
 ---
 
+### F054 — a single snapshot is already a lie about a moving target
+**Surface:** a magenta square animates — toggling between two far-apart spots,
+then coming to rest at a third. A human waits for it to stop before reaching for
+it. Every primitive so far (`find_color`, `find_color_blobs`, `match_template`)
+reads *one* `capture_rgb` snapshot.
+**Mechanism:** perception and action are not simultaneous. A snapshot fixes the
+target's position at time *t*, but the synthesised click lands at *t+δ* — and in
+that gap a live element has moved on. The capture was *true when taken* and
+*false when acted on*. Proven: capture the square mid-animation, let it come to
+rest, then click the captured coordinate → it lands where the square *was*,
+hitting bare canvas (`MISS`). The colour channel was right; it was *stale*. No
+amount of better locating fixes this — the flaw is acting on a frozen past.
+**Primitive:** `osctl.wait_stable(target, tol, move_tol, settle_frames,
+interval, timeout)` samples the `find_color` centroid repeatedly and returns
+only once it holds within `move_tol` pixels for `settle_frames` consecutive
+samples — i.e. the motion has actually come to rest — handing back the *present*
+position (`{…, settled, samples}`). Now the click is aimed at where the target
+*is*, and it lands dead-on (`HIT`). If it never settles within `timeout`, the
+last seen locate is returned with `settled=False` so the caller decides.
+`62/62 checks passed`, deterministic across three runs.
+**Lesson (道法自然):** 重為輕根，靜為躁君 — stillness governs motion; do not act on
+the first restless glimpse. 大音希聲 — listen to the page's own rhythm and let the
+target come to rest before reaching for it; the patient hand, not the fast one,
+lands true (躁勝寒，靚勝炅，請靚可以為天下正).
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
@@ -424,9 +451,6 @@ will only grow a primitive once a real failure is reproduced.
 - **R-next: out-of-process (cross-site) iframes** — when the child context does
   *not* appear on the page session; needs `Target.setAutoAttach` + per-target
   `sessionId` routing (the plumbing for which already exists in `cdp.py`).
-- **R-next: a target that moves while you reach for it** — animated/transitioning
-  elements where a single capture is already stale by the time the click lands;
-  needs settle-detection (sample until the pixels stop changing) before acting.
 - **R-next: a target with no fixed colour at all** — gradients, photos, themed
   icons where neither a hue nor a single patch matches; needs edge/structure
   features that survive colour shifts (the next register after appearance).
