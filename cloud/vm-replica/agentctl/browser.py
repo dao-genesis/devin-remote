@@ -720,6 +720,38 @@ class Browser:
         self.click_n_xy(p["x"], p["y"], 3)
         return True
 
+    def middle_click(self, selector: str, by_text: bool = False,
+                     tag: str | None = None) -> bool:
+        """Middle-click (the wheel button) to fire a control's ``auxclick`` (F089).
+        Open-link-in-new-tab affordances, a tab's middle-click-to-close, a custom
+        paste-on-middle pad, any handler gated on ``event.button===1`` respond only
+        to the *middle* button — never to a left :meth:`click`. The friction is the
+        button identity, not the geometry: a left press carries ``button:"left"``
+        (DOM button ``0``) and Chrome folds it into ``click``, so the ``auxclick``
+        handler stays silent while :meth:`click` still returns ``True``. The bare
+        :meth:`click_xy` does take a ``button`` argument but it is geometric — no
+        hit verification — and omits the ``buttons:4`` mask a faithful middle press
+        carries, so it would fire blindly through an overlay. Here we resolve the
+        honest hit point (F061), refuse if every probe spot is occluded, then
+        dispatch a middle press/release (``buttons:4`` down, ``0`` up) at that point
+        — exactly the sequence Chrome turns into an ``auxclick`` with ``button:1``.
+        Returns ``True`` once it fires, ``False`` if the element is absent or
+        occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p:
+            return False
+        if p.get("occluded"):
+            return False
+        x, y = p["x"], p["y"]
+        self._move(x, y)
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mousePressed", "x": x, "y": y,
+                       "button": "middle", "buttons": 4, "clickCount": 1})
+        self.cdp.call("Input.dispatchMouseEvent",
+                      {"type": "mouseReleased", "x": x, "y": y,
+                       "button": "middle", "buttons": 0, "clickCount": 1})
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A
