@@ -2,6 +2,13 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.34
+- **反者道之动 · 重锚本源(去芜投屏 + 深化同源 SPA 反代)**。整机投屏(`/m`·`/api/cap`·`/api/input`·常驻 PowerShell GUI worker + rt-flow `devinMirror` CDP 截帧兜底)是「搬像素」的歧路:重资产/渲染仍留本机,隧道搬重像素流。本源应为「仿手机集团」——真·渲染与重资产全跑在公网访问者自己的浏览器里, 隧道只搬轻量认证数据与资源(知其雄·守其雌)。
+  - **去芜**: 删 extension.ts 全部整机投屏代码;删 rt-flow `devin_mirror.js`(源+vendored)、`extension.js` 四个 `/__mirror/*` 路由、`devin_cloud.js` 的 `buildMirrorHtml`/对话视图「🖥️ 官网本体」入口、`dao-one/build.js` vendor 清单条目;删 4 个 mirror 单测。rt-flow PASS 115+35。
+  - **深化(根缺口)**: `devinCloudProxyRoute` 的 `localBase` **恒钉 `http://localhost:<port>`** —— 经公网隧道访问时, SPA 内所有绝对回链(资源/重定向/认证桥 `needAuthHdr`/fetch+XHR 鉴权匹配)全指向访问者本机 localhost(不可达)→ 资源加载失败 / 逃逸至 app.devin.ai/auth/login。**这正是当年要投屏兜底的真因**。
+  - **归一**: `localBase` 随访问者来源动态生成 —— `x-forwarded-host`(cloudflared/中继必置)→ `host` 头 → 皆缺回落 `ws.publicUrl`;本地(localhost/127.0.0.1/::1)仍回链 localhost(原行为不变), 公网则回链同源公网域(访问者浏览器自身可达)。静态资源缓存键并入 `localBase` 分桶, 杜绝公网改写版污染本地访问(或反之)。3xx 重定向亦随 `localBase` 改写。
+  - 构建护栏 `daoDropBridgeJs` 解析通过(4132 chars);rt-flow 源↔vendored 逐字节一致。
+
 ## 3.50.26
 - **闭合「内穿自愈环」的消费端(云端 Agent 不再依赖用户重发 URL)**。根因:发布端早已闭环(`bridgeLivenessTick` 每 30s 探活,死则刷新隧道并经 `reinjectBridgeToAllAccounts` 把新 URL 反向注入回知识条目「DAO Bridge 内网穿透文档」);唯一缺口是**消费端**——云端 Agent 旧 URL 打不通时去问用户,而不是**重读这条会被自动改写的知识条目**。
   - `bridgeGenerateCloudMd()` 新增「⚡ 云端 Agent · 断线零人工自愈」配方段(随每次反向注入持久写入知识条目):健康探测 5xx/超时/DNS 失败 = 隧道已轮换 → 不问用户,重读本知识条目(插件 ≤30s 自动改写为新 URL)→ 仍旧则每 30s 重读、最多约 5 分钟接管。整条「自动识别→自动刷新→自动反注入本库→云端重读本库」链路闭合,零人工。

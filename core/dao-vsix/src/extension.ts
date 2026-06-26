@@ -11361,13 +11361,37 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
         targetUrl = upstreamBase + targetPath;
     }
 
+    // 道·「知其雄·守其雌」— 回链基址须随访问者所在而生, 非恒钉本机。
+    //   病根: localBase 恒为 http://localhost:<port> → 经公网隧道访问时, SPA 内所有
+    //   绝对回链 (资源/重定向/认证桥) 全指向访问者本机 localhost(不可达) → 白屏/逃逸至 app.devin.ai。
+    //   归一: Host 为 localhost/127.0.0.1/::1 = IDE 内置浏览器本地访问 → 回链 localhost(原行为);
+    //   否则 = 经隧道/中继的公网访问 → 回链同源公网域(访问者浏览器自身可达), 隧道只搬轻量 HTTP 数据。
+    //   取源优先级: x-forwarded-host(cloudflared/中继必置, 最可靠) → host 头 → 皆缺则回落 ws.publicUrl。
+    const _hh = (req && req.headers) || {};
+    const _xfHost = String(_hh['x-forwarded-host'] || '').split(',')[0].trim();
+    const _hostHdr = String(_hh['host'] || '').trim();
+    const _reqHost = _xfHost || _hostHdr;
+    const _isLocalHost = !_reqHost || /^(localhost|127\.0\.0\.1|\[?::1\]?)(:\d+)?$/i.test(_reqHost);
+    const _fwdProto = (String(_hh['x-forwarded-proto'] || '').split(',')[0].trim()) || 'https';
+    let localBase: string;
+    if (_isLocalHost) {
+        localBase = `http://localhost:${ws.port}`;
+    } else if (_reqHost) {
+        localBase = `${_fwdProto}://${_reqHost}`;
+    } else {
+        // 极罕见: 非本地却无 host 头 → 回落内建公网 URL, 仍胜过钉死 localhost
+        localBase = ws.publicUrl || `http://localhost:${ws.port}`;
+    }
+
     // 判断是静态资源还是页面请求
     const isPageRequest = !targetPath.match(/\.(js|css|png|jpg|svg|ico|woff2?|ttf|eot|map|json|wasm)(\?|$)/i);
     const isApiRequest = targetPath.startsWith('/api/');
 
     // 道·「不辱以靜」— 仅对内容哈希的不变资源(/assets/*)缓存: 哈希变则键变, 绝不陈旧
     const isImmutableAsset = /\/assets\/.+\.(js|css|woff2?|ttf|png|jpg|jpeg|svg|ico|wasm)(\?|$)/i.test(targetPath);
-    const cacheKey = mode + '|' + targetPath;
+    // 道·「不貳」— JS 资源内的绝对回链按 localBase 改写, 故缓存键须按回链基址分桶,
+    //   否则公网改写版会污染本地访问(或反之)。非 JS 资源逐字节同构, 同桶不碍。
+    const cacheKey = mode + '|' + localBase + '|' + targetPath;
     if (isImmutableAsset && (req.method || 'GET') === 'GET') {
         // L1 内存 → L2 磁盘 (跨宿主重载/多用户共享; 命中即零穿隧, 隧道只剩动态核心数据)
         const hit = staticAssetCache.get(cacheKey) || staticCacheGetDisk(cacheKey);
@@ -11403,8 +11427,8 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                 if (proxyRes.statusCode && proxyRes.statusCode >= 300 && proxyRes.statusCode < 400) {
                     const location = proxyRes.headers['location'] || '';
                     if (location) {
-                        // 改写重定向URL: app.devin.ai → 本地代理
-                        const rewritten = location.replace(DEVIN_APP + '/', `http://localhost:${ws.port}/devin-cloud/`);
+                        // 改写重定向URL: app.devin.ai → 同源代理(本地或公网隧道, 随 localBase)
+                        const rewritten = location.replace(DEVIN_APP + '/', `${localBase}/devin-cloud/`);
                         resolve({
                             _proxy: true,
                             status: proxyRes.statusCode,
@@ -11422,6 +11446,7 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                 const contentType = proxyRes.headers['content-type'] || '';
                 const isHtml = contentType.includes('text/html');
                 const isJs = contentType.includes('javascript') || contentType.includes('application/x-javascript');
+                const isJson = contentType.includes('application/json') || contentType.includes('+json');
 
                 // 缺陷10修复: 检测gzip/br压缩 — 要求上游发送未压缩内容
                 // 如果上游返回了压缩内容，我们无法改写，必须请求未压缩的
@@ -11497,7 +11522,7 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                 proxyRes.on('data', (chunk: Buffer) => chunks.push(chunk));
                 proxyRes.on('end', async () => {
                     const rawBody = Buffer.concat(chunks);
-                    const localBase = `http://localhost:${ws.port}`;
+                    // localBase 已在函数顶部按访问者来源(本地/公网隧道)归一计算, 此处复用
                     const okCache = isImmutableAsset && proxyRes.statusCode === 200;
 
                     // 道·「不言之教·无为之益」— 解压改异步, 移出扩展宿主事件循环
@@ -11527,6 +11552,13 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         html = html.replace(/https:\/\/server\.self-serve\.windsurf\.com\//g, `${localBase}/devin-cloud-ws-ss/`);
                         // 官网根挂载: SPA 的根相对资源 (/assets/*.js) 原样保留 —
                         // dao 服务器已将非 /api 根路径透传至 app.devin.ai, 故无需改写前缀。
+                        // 知其雄·守其雌: 内联引导态(如 window.__INITIAL_STATE__)中的 webapp_host 同样归一为
+                        //   当前访问主机, 杜绝 SPA 据此判跨主机而硬跳 app.devin.ai 逃逸出隧道。
+                        {
+                            const localHost = localBase.replace(/^https?:\/\//i, '');
+                            html = html.replace(/("webapp_host"\s*:\s*)"[^"]*"/g, `$1"${localHost}"`);
+                            html = html.replace(/("webappHost"\s*:\s*)"[^"]*"/g, `$1"${localHost}"`);
+                        }
 
                         // 注入认证桥接脚本 — 帛书·五十二「见小曰明·守柔曰强」
                         // 无为而无以为: 自动注入Cookie → Devin SPA自动识别登录态
@@ -11668,6 +11700,26 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                             status: proxyRes.statusCode,
                             headers: safeHeaders,
                             body: js,
+                            contentType,
+                        });
+                    } else if (isJson && !isImmutableAsset) {
+                        // JSON API 响应: 改写 webapp_host → 当前访问者来源主机 (同源归一)
+                        // 帛书·「知其雄·守其雌」根因: 真·Devin SPA 引导时取组织 JSON 的 webapp_host,
+                        //   若 webapp_host !== window.location.host 即判为「跨主机/异源组织」, 遂硬跳
+                        //   https://<webapp_host>/login?next=/org/<name>&internal_org=...  去换组织会话 —
+                        //   这一跳逃出隧道(回到 app.devin.ai/auth/login), 同源反代前功尽弃。
+                        //   令同源反代下 webapp_host 恒等于当前访问主机(隧道域/localhost) → SPA 认其已在
+                        //   本组织归属主机 → 不再跨跳, 原生渲染 /org/<name>。重资产/渲染皆在访问者浏览器,
+                        //   隧道只搬认证后的轻量 JSON — 即「重渲染在端, 穿透只传数据」之本源。
+                        let bodyStr = decodedBody.toString('utf8');
+                        const localHost = localBase.replace(/^https?:\/\//i, '');
+                        bodyStr = bodyStr.replace(/("webapp_host"\s*:\s*)"[^"]*"/g, `$1"${localHost}"`);
+                        bodyStr = bodyStr.replace(/("webappHost"\s*:\s*)"[^"]*"/g, `$1"${localHost}"`);
+                        resolve({
+                            _proxy: true,
+                            status: proxyRes.statusCode,
+                            headers: safeHeaders,
+                            body: bodyStr,
                             contentType,
                         });
                     } else {

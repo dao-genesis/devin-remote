@@ -263,7 +263,6 @@ const { URL } = require("node:url");
 const devinCloud = require("./devin_cloud");
 const devinWeb = require("./devin_web"); // v4.8.0 · 浏览器多实例隔离+账号注入 (自足·CDP 注入 auth1_session)
 const devinProxy = require("./devin_proxy"); // v4.8.2 · IDE 内置浏览器自足注入反代 (每账号独立端口·多实例·不赖 dao-vsix)
-const devinMirror = require("./devin_mirror"); // 归一投屏兜底 · 宿主真·官网本体 CDP 截帧+输入回传 (auth1 整窗登录态·只在服务端)
 const devinGit = require("./devin_git"); // 第三板块 · Git(GitHub) 接入 (整合 devin-git-auth 核心)
 
 // v4.8.2 · IDE 内置浏览器多实例 webview 标签登记 (email → WebviewPanel) · 同号复用·异号并行
@@ -1471,10 +1470,6 @@ function _shellAccRoute(pathOnly) {
   if (p === '/favicon.ico') return { kind: 'favicon' };
   if (p === '/__dao/create') return { kind: 'create' };
   if (p === '/__dao/sessions') return { kind: 'sessionsJson' };
-  if (p === '/__mirror/frame') return { kind: 'mirrorFrame' };
-  if (p === '/__mirror/input') return { kind: 'mirrorInput' };
-  if (p === '/__mirror/nav') return { kind: 'mirrorNav' };
-  if (p === '/mirror') return { kind: 'mirror' };
   const m = p.match(/^\/sessions\/([^\/?]+)/);
   if (m) return { kind: 'conv', id: decodeURIComponent(m[1]) };
   return { kind: 'list' };
@@ -1557,35 +1552,6 @@ async function shellAccountProxy(accKey, restPath, req, res) {
       let title = route.id;
       try { const d = await devinCloud.getSessionDetail(authObj, route.id); if (d && (d.title || d.name)) title = d.title || d.name; } catch (e) {}
       _html(200, devinCloud.buildConversationHtml(title, route.id, events || [], { account: email, base }));
-      return;
-    }
-    // ── 投屏兜底: 宿主真·官网本体 CDP 截帧 + 归一化输入回传 (auth1 整窗登录态, 只在服务端) ──
-    if (route.kind === 'mirror') {
-      const qp = new URLSearchParams(qIdx >= 0 ? rest.slice(qIdx + 1) : '');
-      _html(200, devinCloud.buildMirrorHtml(email, { base, path: qp.get('path') || '' }));
-      return;
-    }
-    if (route.kind === 'mirrorFrame') {
-      const qp = new URLSearchParams(qIdx >= 0 ? rest.slice(qIdx + 1) : '');
-      try {
-        const fr = await devinMirror.frame(accKey, authObj, { quality: parseInt(qp.get('q'), 10) || 55 });
-        _json(fr && fr.ok ? 200 : 502, fr || { ok: false, error: 'no frame' });
-      } catch (e) { _json(502, { ok: false, error: (e && e.message) || 'mirror frame fail' }); }
-      return;
-    }
-    if (route.kind === 'mirrorInput' || route.kind === 'mirrorNav') {
-      let body = '';
-      await new Promise((resolve) => {
-        try { req.on('data', (d) => { body += d; if (body.length > 1e5) body = body.slice(0, 1e5); }); req.on('end', resolve); req.on('error', resolve); }
-        catch (e) { resolve(); }
-      });
-      let j = {}; try { j = JSON.parse(body || '{}'); } catch (e) {}
-      try {
-        const r = route.kind === 'mirrorNav'
-          ? await devinMirror.navigate(accKey, authObj, String(j.path || ''))
-          : await devinMirror.input(accKey, authObj, j);
-        _json(r && r.ok ? 200 : 502, r || { ok: false });
-      } catch (e) { _json(502, { ok: false, error: (e && e.message) || 'mirror input fail' }); }
       return;
     }
     // 默认: 原生对话列表
