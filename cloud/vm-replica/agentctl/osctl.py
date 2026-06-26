@@ -825,12 +825,77 @@ def segment_run(rgb: bytes, size: tuple[int, int],
     return out
 
 
+def split_run(rgb: bytes, size: tuple[int, int],
+              bbox: tuple[int, int, int, int],
+              fg: tuple[int, int, int], n: int, tol: int = 60,
+              frac: float = 0.6) -> list[tuple[int, int, int, int]]:
+    """Cut a run of ``n`` *touching* glyphs apart at the ink valleys (F104).
+
+    :func:`segment_run` parts letters only where ``gap`` fully-blank columns
+    separate them; tight kerning, an italic overhang or a script font joins two
+    glyphs in a shared column and they merge into one wide cell — a blank-column
+    cut cannot part what the rendering joined. The honest extra knowledge that
+    *does* part them is the **glyph count** ``n``: when two letters merely touch,
+    the seam between them is a local *minimum* in the per-column ink count (the
+    pinch where only the overlap inks the column), shallower than either letter's
+    own body. This counts the ink in every column of ``bbox``, finds the interior
+    local minima, and takes the ``n - 1`` *shallowest* of them (those at or below
+    ``frac`` of the peak column — a real pinch, not a letter's own waist) as the
+    seams, cutting the run there and tightening each piece to its inked rows with
+    :func:`segment_run`.
+
+    This is honest only where the glyphs *touch* rather than *fuse*: it needs the
+    count ``n`` (you must know how many letters to expect) and it assumes the
+    inter-letter seams are the shallowest column minima — true when letters meet
+    at a thin overlap, false when a stroke of one letter fully fills the seam
+    column. It returns fewer than ``n`` cells when it cannot find ``n - 1`` honest
+    seams: it parts what genuinely pinches and refuses to invent a cut where the
+    ink runs solid. ``n <= 1`` (or no seam) yields the whole run as a single
+    tightened cell."""
+    x0, y0, x1, y1 = bbox
+    w, _h = size
+    tr, tg, tb = fg
+
+    def whole() -> list[tuple[int, int, int, int]]:
+        c = segment_run(rgb, size, bbox, fg, tol, gap=1)
+        return c if c else [bbox]
+
+    if n <= 1:
+        return whole()
+    prof = []
+    for x in range(x0, x1 + 1):
+        c = 0
+        for y in range(y0, y1 + 1):
+            j = (y * w + x) * 3
+            if (abs(rgb[j] - tr) <= tol and abs(rgb[j + 1] - tg) <= tol
+                    and abs(rgb[j + 2] - tb) <= tol):
+                c += 1
+        prof.append(c)
+    peak = max(prof) if prof else 0
+    if peak == 0:
+        return []
+    mins: list[tuple[int, int]] = []
+    for i in range(2, len(prof) - 2):
+        if (prof[i] <= prof[i - 1] and prof[i] <= prof[i + 1]
+                and prof[i] < prof[i - 2] and prof[i] < prof[i + 2]
+                and prof[i] <= frac * peak):
+            mins.append((prof[i], x0 + i))
+    seams = sorted(x for _v, x in sorted(mins)[: n - 1])
+    bounds = [x0] + seams + [x1]
+    out: list[tuple[int, int, int, int]] = []
+    for a, c in zip(bounds, bounds[1:]):
+        cells = segment_run(rgb, size, (a, y0, c, y1), fg, tol, gap=1)
+        out += cells if cells else [(a, y0, c, y1)]
+    return out
+
+
 def read_text(rgb: bytes, size: tuple[int, int],
               bbox: tuple[int, int, int, int],
               atlas: dict[str, list[int]],
               fg: tuple[int, int, int], tol: int = 60, gap: int = 2,
+              n: int | None = None,
               nw: int = 48, nh: int = 48, thr: int = 24) -> str:
-    """Read a multi-glyph text run from pixels (F103).
+    """Read a multi-glyph text run from pixels (F103, kerned via F104).
 
     The rung above :func:`read_glyph`: where that reads one character we already
     isolated, this reads a *word the page drew straight onto a canvas* — no DOM,
@@ -842,12 +907,22 @@ def read_text(rgb: bytes, size: tuple[int, int],
     reference glyphs (rendered by the page on a scratch canvas, or captured from
     known controls) — exactly as :func:`read_glyph` consumes.
 
-    Still not full OCR: it reads only glyphs the ``atlas`` carries, and only a
-    run whose letters :func:`segment_run` can part (see its boundary on touching
-    glyphs). It returns ``""`` when nothing inked is found. This is reading a
-    *string* reduced to its smallest honest form — segment by colour, read each
-    by structure, in order."""
+    Pass ``n`` (the expected glyph count) to read a run whose letters *touch*:
+    when blank-column :func:`segment_run` yields fewer than ``n`` cells the
+    letters share a column (tight kerning, overhang), and this falls back to
+    :func:`split_run`, parting them at the ``n - 1`` shallowest column-ink valleys
+    (F104). Without ``n`` it segments by blanks alone and reads only runs whose
+    letters are parted by a gap.
+
+    Still not full OCR: it reads only glyphs the ``atlas`` carries, and (without
+    ``n``) only a run whose letters :func:`segment_run` can part; with ``n`` it
+    parts touching glyphs but not ones that truly *fuse* (see :func:`split_run`).
+    It returns ``""`` when nothing inked is found. This is reading a *string*
+    reduced to its smallest honest form — segment by colour, read each by
+    structure, in order."""
     cells = segment_run(rgb, size, bbox, fg, tol, gap)
+    if n is not None and len(cells) < n:
+        cells = split_run(rgb, size, bbox, fg, n, tol)
     return "".join(read_glyph(rgb, size, c, atlas, nw, nh, thr) for c in cells)
 
 

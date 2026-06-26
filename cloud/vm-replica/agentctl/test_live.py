@@ -3163,6 +3163,92 @@ def round_read_text(b: Browser, offline: bool) -> None:
           osctl.read_text(rgb3, sz3, blank, atlas, MAG) == "")
 
 
+def round_read_kerned(b: Browser, offline: bool) -> None:
+    print("R68: read a word whose letters TOUCH — valley split by glyph count (F104) — osctl")
+    # segment_run (F103) parts letters only where blank columns separate them.
+    # Draw glyphs that OVERLAP (negative kerning) so adjacent letters share a
+    # column: segment_run merges them into one wide cell and read_text reads one
+    # wrong letter. split_run uses the glyph COUNT n to cut at the n-1 shallowest
+    # column-ink valleys (the pinch where only the overlap inks the column).
+    MAG = (255, 0, 255)
+
+    def blobs(rgb, w, h):
+        bs = osctl.find_color_blobs(MAG, tol=60, rgb=rgb, size=(w, h), min_count=120)
+        return sorted(bs, key=lambda t: t["x"])
+    chars = "ABCOKX"
+    draws = "".join("x.fillText('%s',%d,100);" % (ch, 40 + i * 120)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("rk_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=760 height=160></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,760,160);"
+               "x.fillStyle='#f0f';x.font='bold 90px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = blobs(argb, aw, ah)
+    check("atlas segments into six reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def kerned(word, ov=40, font_px=130):
+        # advance each glyph by (100-ov)px at 130px so neighbours overlap
+        x, d = 30, []
+        for ch in word:
+            d.append("x.fillText('%s',%d,120);" % (ch, x))
+            x += 100 - ov
+        b.navigate(fixture("rk_word.html",
+                   "<!doctype html><title>w</title><style>html,body{margin:0}</style>"
+                   "<canvas id=c width=900 height=240></canvas><script>"
+                   "var x=document.getElementById('c').getContext('2d');"
+                   "x.fillStyle='#fff';x.fillRect(0,0,900,240);"
+                   "x.fillStyle='#f0f';x.font='bold %dpx monospace';"
+                   "x.textAlign='left';x.textBaseline='middle';" % font_px
+                   + "".join(d) + "</script>"))
+        time.sleep(0.4)
+        w, h, rgb = osctl.capture_rgb()
+        loc = osctl.find_color(MAG, tol=60, rgb=rgb, size=(w, h))
+        return rgb, (w, h), (loc["bbox"] if loc else None)
+
+    word = "CAB"
+    rgb, sz, run = kerned(word)
+    check("kerned word run located on the canvas", run is not None, repr(run))
+    if run is None:
+        return
+    # Friction: blank-column segmentation merges the touching letters.
+    seg = osctl.segment_run(rgb, sz, run, MAG)
+    check("segment_run merges touching letters into too-few cells",
+          len(seg) < len(word), f"{len(seg)} cells for {len(word)} glyphs")
+    check("read_text WITHOUT a count misreads the touching run",
+          osctl.read_text(rgb, sz, run, atlas, MAG) != word,
+          osctl.read_text(rgb, sz, run, atlas, MAG))
+    # split_run uses the count to part them at the ink valleys.
+    cut = osctl.split_run(rgb, sz, run, MAG, len(word))
+    check("split_run parts the touching run into one cell per glyph",
+          len(cut) == len(word), f"{len(cut)} cells")
+    check("split cells are in left-to-right reading order",
+          all(cut[i][0] < cut[i + 1][0] for i in range(len(cut) - 1)),
+          str([c[0] for c in cut]))
+    check("read_text WITH the count reads the touching word 'CAB'",
+          osctl.read_text(rgb, sz, run, atlas, MAG, n=len(word)) == word,
+          osctl.read_text(rgb, sz, run, atlas, MAG, n=len(word)))
+    # A different touching pair reads correctly too.
+    rgb2, sz2, run2 = kerned("AB")
+    check("read_text WITH the count reads a different touching word 'AB'",
+          run2 is not None and osctl.read_text(rgb2, sz2, run2, atlas, MAG, n=2) == "AB",
+          osctl.read_text(rgb2, sz2, run2, atlas, MAG, n=2) if run2 else "no run")
+    # n=1 returns the whole run as a single tightened cell (no false seam).
+    check("split_run with n=1 returns a single cell",
+          len(osctl.split_run(rgb, sz, run, MAG, 1)) == 1)
+    # A blank region yields no cut at all (refuses to invent seams).
+    check("split_run on a blank region returns no cells",
+          osctl.split_run(rgb, sz, (5, 5, 25, 25), MAG, 3) == [])
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -3188,7 +3274,7 @@ def main() -> int:
               round_touch_hold, round_double_tap, round_two_finger_tap,
               round_touch_drag, round_two_finger_pan,
               round_three_finger_swipe, round_edge_swipe,
-              round_touch_drag_to, round_read_text]
+              round_touch_drag_to, round_read_text, round_read_kerned]
     for r in rounds:
         try:
             r(b, offline)

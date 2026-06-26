@@ -2085,17 +2085,55 @@ parted, and refuses to invent a boundary where the ink runs together.
 
 ---
 
+## F104 — read a word whose letters TOUCH (`split_run`) · R68
+
+**Friction:** `segment_run` (F103) parts letters only where ≥`gap` *fully blank*
+columns separate them. Tight kerning, an italic overhang, or a script font joins
+two glyphs in one shared column — there is no blank seam — so they merge into one
+wide cell. Live: a `"CAB"` drawn with 40 px of negative kerning segments into
+**one** cell, and `read_text` reduces the whole run to a single `edge_signature`
+and returns `'A'`, not `"CAB"`. A blank-column cut cannot part what the rendering
+joined; that is `segment_run`'s named boundary, reproduced.
+
+**Mechanism:** the honest extra knowledge that *does* part touching letters is the
+**glyph count** `n`. When two letters merely touch, the seam between them is a
+local *minimum* in the per-column ink count — the pinch where only the thin
+overlap inks the column, shallower than either letter's own body. `split_run`
+counts the ink in every column of the run, finds the interior local minima, and
+takes the `n - 1` *shallowest* of them (those at or below `frac`·peak — a real
+pinch, not a letter's own waist) as the seams, cutting there and tightening each
+piece to its inked rows with `segment_run`. It returns fewer than `n` cells when
+it cannot find `n - 1` honest seams, and refuses (`[]`) on blank ink — it parts
+what genuinely pinches and never invents a cut where the ink runs solid.
+
+**Primitive:** `split_run(rgb, size, bbox, fg, n, tol, frac)` returns the `n`
+per-glyph bboxes of a touching run in reading order. `read_text` gains an optional
+`n`: when blank-column `segment_run` yields fewer than `n` cells it falls back to
+`split_run`, so the *same* call reads both spaced and kerned runs. Without `n`
+the F103 behaviour is unchanged.
+
+**Live (R68):** the atlas segments into six reference glyphs; a kerned `"CAB"`
+run is located by colour; `segment_run` merges it into one cell and `read_text`
+*without* a count misreads it (`'A'`), reproducing the friction; `split_run` with
+`n=3` parts it into three cells in strict left-to-right order; `read_text` *with*
+`n` reads `"CAB"`, and a different touching pair `"AB"` reads correctly with no
+per-word special-casing; `split_run` with `n=1` returns a single cell and on a
+blank region returns `[]`. `425/425 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 反也者，道之動也 — where F103 read the word by the *blanks*
+between letters (presence), F104 reads it by the *valleys* within the ink
+(absence inside the joined form). The cut lives not in the strokes but in the
+pinch between them; and only the count — knowing how many to expect — tells the
+inter-letter seam from a letter's own waist. We part what touches and refuse to
+saw through what is fused.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
 
-- **R-next: touching / kerned glyphs** — `segment_run` (F103) parts letters only
-  where ≥`gap` blank columns separate them; a script font, italic overhang, or
-  tight kerning joins two glyphs in one column and they merge into one cell. The
-  honest next step is a sub-column cut (valley detection in the column-ink
-  profile, or a connected-component pass) — grow it only when a real control
-  draws text whose letters genuinely touch.
 - **R-next: an atlas built from the live page, not a fixture** — F103's atlas is
   rendered by the test itself; reading a *real* canvas control means capturing
   reference glyphs from the page's own rendering (a scratch canvas the app
