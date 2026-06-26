@@ -543,6 +543,99 @@ def wait_stable(target: tuple[int, int, int], tol: int = 24, move_tol: int = 3,
     return last
 
 
+def edge_map(rgb: bytes, size: tuple[int, int],
+             bbox: tuple[int, int, int, int], thr: int = 40
+             ) -> tuple[list[int], int, int]:
+    """Reduce a region to its *structure* — a binary edge mask (F055).
+
+    ``match_template`` scores absolute luma, so a uniform colour/brightness
+    shift over the whole target swamps the shape difference: the *same* shape in
+    a shifted colour scores worse than a *different* shape in the reference
+    colour. An edge mask keeps only where luma *changes* (the gradient), which is
+    where one region meets another — and that geometry is unchanged when the
+    fill colour shifts. This returns ``(edges, ew, eh)`` where ``edges`` is a
+    row-major list of 0/1 over the ``bbox``: 1 where the local gradient
+    magnitude (``|dL/dx| + |dL/dy|``) exceeds ``thr``. Border pixels are 0.
+    Pair with :func:`match_edges` / :func:`edge_hamming` to locate by shape."""
+    w, _h = size
+    x0, y0, x1, y1 = bbox
+    bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    lum = [0] * (bw * bh)
+    for yy in range(bh):
+        base = ((y0 + yy) * w + x0) * 3
+        row = yy * bw
+        for xx in range(bw):
+            j = base + xx * 3
+            lum[row + xx] = (rgb[j] * 299 + rgb[j + 1] * 587
+                             + rgb[j + 2] * 114) // 1000
+    edges = [0] * (bw * bh)
+    for yy in range(1, bh - 1):
+        row = yy * bw
+        for xx in range(1, bw - 1):
+            i = row + xx
+            gx = lum[i + 1] - lum[i - 1]
+            gy = lum[i + bw] - lum[i - bw]
+            g = (gx if gx >= 0 else -gx) + (gy if gy >= 0 else -gy)
+            if g > thr:
+                edges[i] = 1
+    return edges, bw, bh
+
+
+def edge_hamming(a: list[int], b: list[int]) -> int:
+    """Count differing pixels between two equal-length edge masks."""
+    return sum(1 for i in range(len(a)) if a[i] != b[i])
+
+
+def match_edges(ref_edges: list[int], ew: int, eh: int,
+                rgb: bytes | None = None, size: tuple[int, int] | None = None,
+                search: tuple[int, int, int, int] | None = None,
+                step: int = 1, thr: int = 40) -> dict | None:
+    """Locate a reference *shape* irrespective of its colour (F055).
+
+    Companion to :func:`match_template` for targets whose colour cannot be
+    relied upon (gradients, photos, theme-shifted icons, hover/active states
+    that recolour but do not reshape). ``ref_edges`` is an ``ew``x``eh`` mask
+    from :func:`edge_map` of the reference; this slides that window over the
+    search region, recomputing each candidate's edge mask the same way, and
+    scores by :func:`edge_hamming`. Lowest score wins. Returns ``{x, y, score,
+    bbox}`` centred on the match in *screen* coordinates, or ``None`` if the
+    search area is smaller than the window.
+
+    Cost is ``search_area x window_area``; constrain ``search`` (a
+    ``find_color_blobs`` bbox padded a little) and the idiom holds — colour to
+    narrow the field, *structure* to choose within it when colour itself has
+    moved."""
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    if search is None:
+        sx0, sy0, sx1, sy1 = 0, 0, w - 1, h - 1
+    else:
+        sx0, sy0, sx1, sy1 = search
+        sx0, sy0 = max(0, sx0), max(0, sy0)
+        sx1, sy1 = min(w - 1, sx1), min(h - 1, sy1)
+    aw, ah = sx1 - sx0 + 1, sy1 - sy0 + 1
+    if aw < ew or ah < eh:
+        return None
+    best: tuple[int, int, int] | None = None
+    for oy in range(0, ah - eh + 1, step):
+        for ox in range(0, aw - ew + 1, step):
+            cand, _, _ = edge_map(rgb, (w, h),
+                                  (sx0 + ox, sy0 + oy,
+                                   sx0 + ox + ew - 1, sy0 + oy + eh - 1), thr)
+            s = edge_hamming(ref_edges, cand)
+            if best is None or s < best[0]:
+                best = (s, sx0 + ox, sy0 + oy)
+    if best is None:
+        return None
+    score, tx, ty = best
+    return {"x": tx + ew // 2, "y": ty + eh // 2, "score": score,
+            "bbox": (tx, ty, tx + ew - 1, ty + eh - 1)}
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"

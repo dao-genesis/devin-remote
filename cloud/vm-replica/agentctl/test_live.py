@@ -600,6 +600,105 @@ def round_settle(b: Browser, offline: bool) -> None:
               b.wait_for("document.title==='HIT'", timeout=2), b.title())
 
 
+def round_structure_match(b: Browser, offline: bool) -> None:
+    print("R19: pick a colour-shifted target by structure, not appearance (F055) — osctl")
+    # Two magenta tiles (segmentable), each holding a black glyph drawn in a
+    # DIFFERENT colour from the reference. The LEFT tile is the SAME shape as the
+    # reference (a ring) but recoloured; the RIGHT tile is a DIFFERENT shape (a
+    # disk) in the reference's own colour. Absolute-luma matching (R17) is
+    # dominated by the colour shift, so it picks the wrong tile; only matching on
+    # edges — where shape lives, invariant to fill colour — resolves it.
+    ring = ("function ring(cx,cy,col){x.fillStyle=col;x.beginPath();"
+            "x.arc(cx,cy,40,0,7);x.fill();x.fillStyle='#ff00ff';"
+            "x.beginPath();x.arc(cx,cy,20,0,7);x.fill();}")
+    disk = ("function disk(cx,cy,col){x.fillStyle=col;x.beginPath();"
+            "x.arc(cx,cy,40,0,7);x.fill();}")
+    # Phase 1: reference = a ring in WHITE on a magenta tile, captured alone.
+    proto = fixture("estruct.html",
+                    "<!doctype html><title>estruct</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=300 height=240 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,300,240);" + ring +
+                    "x.fillStyle='#ff00ff';x.fillRect(60,50,120,120);ring(120,110,'#fff');"
+                    "</script>")
+    b.navigate(proto)
+    time.sleep(0.5)
+    rw, rh, rrgb = osctl.capture_rgb()
+    rb = osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rrgb, size=(rw, rh),
+                                min_count=200)
+    rb = [bl for bl in rb if bl["bbox"][2] - bl["bbox"][0] > 80
+          and bl["bbox"][3] - bl["bbox"][1] > 80]
+    check("captured a reference tile", len(rb) == 1, str([bl["x"] for bl in rb]))
+    if not rb:
+        return
+    ref = rb[0]
+    patch, pw, ph = osctl.crop_rgb(rrgb, (rw, rh), ref["bbox"])
+    ref_e, ew, eh = osctl.edge_map(rrgb, (rw, rh), ref["bbox"])
+    check("reference edge mask has structure", sum(ref_e) > 100, str(sum(ref_e)))
+    # Phase 2: target = ring in BLACK (same shape, shifted colour) LEFT;
+    #          decoy  = disk in WHITE (different shape, reference colour) RIGHT.
+    scene = fixture("escene.html",
+                    "<!doctype html><title>escene</title><style>html,body{margin:0}</style>"
+                    "<canvas id=c width=640 height=240 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "x.fillStyle='#fff';x.fillRect(0,0,640,240);" + ring + disk +
+                    "var TGT=[60,50,120,120],DEC=[460,50,120,120];"
+                    "x.fillStyle='#ff00ff';x.fillRect(TGT[0],TGT[1],120,120);"
+                    "x.fillStyle='#ff00ff';x.fillRect(DEC[0],DEC[1],120,120);"
+                    "ring(120,110,'#000');disk(520,110,'#fff');"
+                    "function inb(p,r){return p[0]>=r[0]&&p[0]<=r[0]+r[2]"
+                    "&&p[1]>=r[1]&&p[1]<=r[1]+r[3];}"
+                    "c.addEventListener('click',function(e){"
+                    "var r=c.getBoundingClientRect(),p=[e.clientX-r.left,e.clientY-r.top];"
+                    "if(inb(p,TGT)){document.title='TARGET-HIT';}"
+                    "else if(inb(p,DEC)){document.title='DECOY';}"
+                    "else{document.title='MISS';}});</script>")
+    b.navigate(scene)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    blobs = osctl.find_color_blobs((255, 0, 255), tol=40, rgb=rgb, size=(w, h),
+                                   min_count=200)
+    blobs = [bl for bl in blobs if bl["bbox"][2] - bl["bbox"][0] > 80
+             and bl["bbox"][3] - bl["bbox"][1] > 80]
+    check("two same-tile-colour candidates found", len(blobs) == 2,
+          str([bl["x"] for bl in blobs]))
+    if len(blobs) != 2:
+        return
+    blobs.sort(key=lambda bl: bl["x"])
+    target_blob, decoy_blob = blobs[0], blobs[1]
+    # Friction: appearance (luma SAD) is dominated by the colour shift, so the
+    # target (same shape, recoloured) scores WORSE than the decoy.
+    luma = []
+    for bl in blobs:
+        x0, y0, x1, y1 = bl["bbox"]
+        m = osctl.match_template(patch, pw, ph, rgb=rgb, size=(w, h),
+                                 search=(x0 - 4, y0 - 4, x1 + 4, y1 + 4), step=2)
+        luma.append((m, bl))
+    luma_best = min(luma, key=lambda t: t[0]["score"])[1]
+    check("luma-match is fooled: it picks the decoy (wrong shape, right colour)",
+          luma_best is decoy_blob,
+          f"luma chose x={luma_best['x']} target_x={target_blob['x']}")
+    # Primitive: edge (structure) matching survives the colour shift.
+    edge = []
+    for bl in blobs:
+        x0, y0, x1, y1 = bl["bbox"]
+        m = osctl.match_edges(ref_e, ew, eh, rgb=rgb, size=(w, h),
+                              search=(x0 - 4, y0 - 4, x1 + 4, y1 + 4), step=2)
+        edge.append((m, bl))
+    check("edge matched every candidate", all(m for m, _ in edge))
+    edge_best_m, edge_best = min(edge, key=lambda t: t[0]["score"])
+    edge_worst = max(edge, key=lambda t: t[0]["score"])[0]
+    check("target (same shape) scores below decoy on edges",
+          edge_best_m["score"] < edge_worst["score"],
+          f"best={edge_best_m['score']} worst={edge_worst['score']}")
+    check("edge-match picks the colour-shifted target, not the decoy",
+          edge_best is target_blob,
+          f"edge chose x={edge_best['x']} target_x={target_blob['x']}")
+    osctl.click(edge_best_m["x"], edge_best_m["y"])
+    check("structure-matched click hits the colour-shifted target",
+          b.wait_for("document.title==='TARGET-HIT'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -607,7 +706,7 @@ def main() -> int:
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
-              round_template_match, round_settle]
+              round_template_match, round_settle, round_structure_match]
     for r in rounds:
         try:
             r(b, offline)

@@ -443,6 +443,42 @@ lands true (躁勝寒，靚勝炅，請靚可以為天下正).
 
 ---
 
+### F055 — the same shape in another colour, the wrong shape in the right colour
+**Surface:** two tiles, one segmentable colour, each holding a glyph drawn in a
+*different* colour from a captured reference. The LEFT tile is the **same shape**
+as the reference (a ring) but recoloured (white → black); the RIGHT tile is a
+**different shape** (a solid disk) painted in the reference's *own* colour. A
+human reads "ring" instantly and ignores that it darkened. `match_template`
+(F053) cannot — it scores absolute luma.
+**Mechanism:** sum-of-absolute-difference on luma is dominated by the *uniform*
+part of the difference. Recolouring a shape changes every one of its pixels by a
+large constant, so the matching shape racks up a huge score (`538812`), while a
+*different* shape that merely fills a small hole in the reference's colour scores
+far lower (`105250`). Appearance-matching therefore picks the **decoy** — the
+wrong shape — because colour, not shape, drives the metric. The signal we want
+(geometry) is swamped by the signal we don't (fill colour).
+**Primitive:** `osctl.edge_map(rgb, size, bbox, thr)` reduces a region to a
+binary edge mask — 1 where the local luma gradient `|dL/dx|+|dL/dy|` exceeds
+`thr`, i.e. only where one region *meets* another. That boundary geometry is
+exactly what survives a uniform recolour. `osctl.match_edges(ref_edges, ew, eh,
+…, search, step)` slides the reference mask over a region and scores each offset
+by `edge_hamming` (count of differing edge pixels); lowest wins, returning
+`{x, y, score, bbox}` in screen coordinates. Proven against the same scene: the
+same-shape target scores `63`, the wrong-shape decoy `280` — edge-match picks the
+recoloured ring and the click lands `TARGET-HIT`, where luma-match landed on the
+decoy. `70/70 checks passed`, deterministic across three runs. The idiom layers:
+colour to narrow the field (`find_color_blobs`), appearance when colour is
+trustworthy (`match_template`), **structure** when colour itself has moved
+(`match_edges`).
+**Lesson (道法自然):** 大成若缺 — the ring is *defined by its hole*; what is
+absent carries the shape, and only the edge mask, which keeps boundaries and
+discards fill, can read it. 反也者，道之動也 — do not chase the loud, uniform
+difference (colour); attend to where things *change* (the gradient), for that is
+where form lives. Each sense answers a different lie: hue when colour is true,
+patch when shape is plain, edge when colour deceives.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
@@ -451,8 +487,11 @@ will only grow a primitive once a real failure is reproduced.
 - **R-next: out-of-process (cross-site) iframes** — when the child context does
   *not* appear on the page session; needs `Target.setAutoAttach` + per-target
   `sessionId` routing (the plumbing for which already exists in `cdp.py`).
-- **R-next: a target with no fixed colour at all** — gradients, photos, themed
-  icons where neither a hue nor a single patch matches; needs edge/structure
-  features that survive colour shifts (the next register after appearance).
+- **R-next: a structure that has rotated or rescaled** — `match_edges` is
+  translation-only; a target rotated or zoomed defeats a fixed mask. Needs an
+  orientation/scale-tolerant descriptor (the register after rigid structure).
+- **R-next: text the page renders but never settles in the DOM** — canvas/WebGL
+  glyphs, where neither DOM text nor a colour/shape patch identifies a word;
+  needs reading rendered glyphs from pixels (the next register after structure).
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
