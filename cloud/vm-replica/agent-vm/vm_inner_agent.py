@@ -35,6 +35,14 @@ try:
 except Exception:
     _vmodel = None
 
+# round-33: the end-to-end motion classifier (additive; fuses the locked round-29 coherence key and
+# the round-32 interior-only structure into one honest 3-way label {pan, rotation, zoom}). Optional --
+# loaded only if present so the daemon still runs where it is absent.
+try:
+    import motion_class as _mclass
+except Exception:
+    _mclass = None
+
 # Pixel-only world model: persisted affordance memory grown from practice. Lazily loaded so the
 # daemon and the practice scripts share one growing store on disk.
 _WM_PATH = os.path.join(os.path.expanduser('~'), '.dao_world_model.json')
@@ -343,6 +351,13 @@ def flow_probe(body):
             out['flowstruct'] = _vmodel.flow_structure(frames, cols, rows)
         out['change'] = {k: _vmodel.change_descriptor(frames[0], frames[-1], cols, rows)[k]
                          for k in ('mag', 'cx', 'cy')}
+        # round-33: opt-in end-to-end classification. Off by default (zero change to existing callers);
+        # when requested it returns the live honest motion class for THIS drag straight from the daemon,
+        # so the decision is made in the live path, not reconstructed offline by the harness.
+        if body.get('classify') and _mclass is not None:
+            out['motion_class'] = _mclass.classify(
+                frames, cols, rows,
+                search=int(body.get('search', 4)), blocks=int(body.get('blocks', 12)))
     if body.get('frames_out'):
         out['raw_frames'] = frames; out['cols'] = cols; out['rows'] = rows
     return out
