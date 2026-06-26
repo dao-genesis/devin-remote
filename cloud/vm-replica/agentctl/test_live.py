@@ -2238,6 +2238,45 @@ def round_key_step(b: Browser, offline: bool) -> None:
         sp.shutdown()
 
 
+def round_triple_click(b: Browser, offline: bool) -> None:
+    print("R51: triple-click to select a paragraph (F087) — cdp")
+    page = (b"<!doctype html><meta charset=utf-8><title>triple</title>"
+            b"<p id=para style='width:300px;font:16px monospace'>"
+            b"alpha beta gamma delta</p>"
+            b"<div id=veil style='position:fixed;inset:0;background:rgba(0,0,0,0);"
+            b"display:none'></div>")
+    sp = _serve(8980, page)
+
+    def sel() -> str:
+        return b.eval("String(window.getSelection())")
+    try:
+        b.navigate("http://127.0.0.1:8980/")
+        time.sleep(0.2)
+        b.eval("window.getSelection().removeAllRanges()")
+        # A single click only drops a caret — selects nothing.
+        check("a single click selects no text",
+              b.click("#para") is True and sel() == "", repr(sel()))
+        b.eval("window.getSelection().removeAllRanges()")
+        # A double-click selects only one word.
+        check("double_click selects just one word",
+              b.double_click("#para") is True and sel() == "delta", repr(sel()))
+        b.eval("window.getSelection().removeAllRanges()")
+        # A triple-click selects the whole paragraph.
+        check("triple_click selects the whole paragraph",
+              b.triple_click("#para") is True
+              and sel() == "alpha beta gamma delta", repr(sel()))
+        b.eval("window.getSelection().removeAllRanges()")
+        b.eval("document.getElementById('veil').style.display='block'")
+        check("triple_click refuses through an overlay",
+              b.triple_click("#para") is False)
+        check("nothing was selected while occluded", sel() == "", repr(sel()))
+        b.eval("document.getElementById('veil').style.display='none'")
+        check("triple_click on an absent element returns False",
+              b.triple_click("#nope") is False)
+    finally:
+        sp.shutdown()
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -2257,7 +2296,7 @@ def main() -> int:
               round_nested_submenu, round_drag_reorder,
               round_scroll_into_view, round_double_click,
               round_press_hold, round_zoom_pane, round_key_activate,
-              round_key_step]
+              round_key_step, round_triple_click]
     for r in rounds:
         try:
             r(b, offline)
