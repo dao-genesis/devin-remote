@@ -1618,9 +1618,10 @@
   // ── 接入设置浮层 ──
   var cfg=document.getElementById("cfg");
   // 零中心公网直连链接: 分享「与本页同款的完整控台 console.html」(非裸调试页), 带 session/token 一开即自动直连手机, 不经任何 Worker。
-  //   道法自然·去私人标识: 首选本页自身 URL —— 同源、不含任何私人账号标识、与本页同鲜; 仅当本页非 http(s)
-  //   (如 APK 内 file:// 直身) 才回退中立公共 CDN(surge.sh·多区 PoP·正确 text/html 下发)托管的 console.html。
-  var P2P_CLIENT_CDN=(function(){ try{ var h=String(location.href||"").split(/[?#]/)[0]; if(/^https?:\/\/\S+console\.html$/i.test(h)) return h; }catch(e){} return "https://dao-cloud-console.surge.sh/console.html"; })();
+  //   道法自然·同源优先: 首选本页自身 URL —— 同源、与本页同鲜; 仅当本页非 http(s)(如 APK 内 file:// 直身)
+  //   才回退公共静态宿主托管的 console.html。回退宿主用 GitHub Pages(仓库自给自页·最稳·随 main 自动同鲜·
+  //   正确 text/html 下发); 原 surge.sh 已被永久下架(HTTP 451)故弃。
+  var P2P_CLIENT_CDN=(function(){ try{ var h=String(location.href||"").split(/[?#]/)[0]; if(/^https?:\/\/\S+console\.html$/i.test(h)) return h; }catch(e){} return "https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html"; })();
   function shareLink(){ if(!SESSION||!TOKEN) return "";
     return P2P_CLIENT_CDN+"?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN)+"&auto=1"; }
   function showCfg(){ document.getElementById("cfgSession").value=SESSION;
