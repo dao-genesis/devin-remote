@@ -664,6 +664,27 @@ class Browser:
         self.click_n_xy(p["x"], p["y"], 2)
         return True
 
+    def triple_click(self, selector: str, by_text: bool = False,
+                     tag: str | None = None) -> bool:
+        """Triple-click to select a whole **line / paragraph** of text (F087). To
+        replace an entire field line — a title, a chat draft, one paragraph in a
+        rich editor — a human triple-clicks to select the block, then types over it.
+        A single :meth:`click` only drops a caret (selects nothing) and
+        :meth:`double_click` selects a single *word*; neither can grab the line, yet
+        both return ``True``. The difference is purely the click-counter: a
+        paragraph selection is the gesture Chrome synthesises at ``clickCount:3``,
+        which only a press/release escalating 1→2→3 at one point produces. We reuse
+        the honest hit point (F061) — refusing if every probe spot is occluded —
+        then drive ``click_n_xy(...,3)``. Returns ``True`` once the triple fires,
+        ``False`` if the element is absent or occluded."""
+        p = self._hit_point_of(selector, by_text=by_text, tag=tag)
+        if not p:
+            return False
+        if p.get("occluded"):
+            return False
+        self.click_n_xy(p["x"], p["y"], 3)
+        return True
+
     def press_hold(self, selector: str, hold: float = 0.6,
                    by_text: bool = False, tag: str | None = None) -> bool:
         """Press and *hold* an element, then release (F083). A

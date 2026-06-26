@@ -1406,6 +1406,38 @@ seize it to a pixel, you nudge it one notch at a time toward where it should res
 
 ---
 
+## F087 — triple-click to select a whole line / paragraph (`triple_click`) · R51
+
+**Friction:** To replace an entire line of text — a title field, a chat draft, one
+paragraph in a rich editor — a human triple-clicks to select the block, then types
+over it. A single `click` only drops a caret (selects *nothing*) and `double_click`
+(F082) selects a single *word*; neither can grab the line, yet both return `True`
+and lie about having selected it.
+
+**Mechanism:** The only thing distinguishing word-select from line-select is the
+click counter Chrome folds successive `mousedown`s into. A caret is `clickCount:1`,
+a word is `clickCount:2`, a paragraph is `clickCount:3` — and Chrome only raises
+that counter when one uninterrupted press/release sequence escalates 1→2→3 at the
+*same point*. Two separate `click`s never reach 3; `click_n_xy(...,3)` does.
+
+**Primitive:** `Browser.triple_click(selector)` resolves the honest hit point
+(F061 — nine probes inside the box, refusing if every spot is occluded), then drives
+`click_n_xy(x,y,3)`. Returns `True` once the triple fires, `False` if the element is
+absent or occluded.
+
+**Live (R51):** a single click selects `''`; `double_click` selects just `delta`;
+`triple_click` selects the whole `alpha beta gamma delta`; under a transparent veil
+`triple_click` → `False` and nothing is selected; an absent selector → `False`.
+`294/294 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 慎終如始，則無敗事 — the same gesture (a press at one point)
+yields caret, word, or line depending only on how far it is carried; the line is not
+seized by force but by letting the count ripen to three. 信言不美 — two clicks that
+each "succeed" are not a triple-click; the honest gesture is the one Chrome truly
+folds into `clickCount:3`.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
