@@ -4358,6 +4358,170 @@ def round_read_region_words(b, offline):
               rrwu == "", repr(rrwu))
 
 
+def round_read_block_region_words(b, offline):
+    print("R78: read a multi-LINE, multi-COLOUR block WITH its word spaces "
+          "(F114) — osctl")
+    # read_block_region (F112) keeps rows + colours but reads each band with
+    # read_region, dropping every line's word seam -> ['OKGO','NOBY'].
+    # read_region_words (F113) keeps the seam but flattens the whole bbox into
+    # one x-sorted run, so two stacked lines scramble together. This bands the
+    # rows like read_block_region, then reads each band with read_region_words:
+    # rows AND seams -> ['OK GO','NO BY'].
+    if offline:
+        return
+
+    def hx(s):
+        s = s.lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+    def close(a, c, t=48):
+        return sum(abs(p - q) for p, q in zip(a, c)) <= t
+
+    MAG = (255, 0, 255)
+    RED, GRN, BLU = "#d32020", "#1f9d35", "#1565c0"
+    chars = "OKGREDNBLUY"
+    draws = "".join("x.fillText('%s',%d,80);" % (ch, 24 + i * 96)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("bw_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=1100 height=140></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,1100,140);"
+               "x.fillStyle='#f0f';x.font='bold 80px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = sorted(osctl.find_color_blobs(MAG, tol=60, rgb=argb, size=(aw, ah),
+                                       min_count=120), key=lambda t: t["x"])
+    check("bw atlas segments into eleven reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def field_bbox(rgbX, szX, bg="#ffffff", frac=16):
+        bls = osctl.find_color_blobs(hx(bg), tol=30, rgb=rgbX, size=szX,
+                                     min_count=5000)
+        if not bls:
+            return None
+        x0, y0, x1, y1 = max(bls, key=lambda t: t["count"])["bbox"]
+        iw, ih = (x1 - x0) // frac, (y1 - y0) // 8
+        return (x0 + iw, y0 + ih, x1 - iw, y1 - ih)
+
+    def two_line(name, l1, l2):
+        # l1/l2 are [(word, colour, x), ...]; line 1 at y=180, line 2 at y=380.
+        body = ("x.fillStyle='#fff';x.fillRect(0,0,900,520);"
+                "x.font='bold 80px monospace';x.textBaseline='middle';"
+                "x.textAlign='left';")
+        for word, col, x in l1:
+            body += "x.fillStyle='%s';x.fillText('%s',%d,180);" % (col, word, x)
+        for word, col, x in l2:
+            body += "x.fillStyle='%s';x.fillText('%s',%d,380);" % (col, word, x)
+        b.navigate(fixture(name,
+                   "<!doctype html><title>b</title><style>html,body{margin:0;"
+                   "background:#fff}</style>"
+                   "<canvas id=c width=900 height=520></canvas><script>"
+                   "var x=document.getElementById('c').getContext('2d');"
+                   + body + "</script>"))
+        time.sleep(0.4)
+        return osctl.capture_rgb()
+
+    # Scene A: two lines, each a word seam. L1: OK(red) GO(grn). L2: NO(blu) BY(red).
+    w, h, rgb = two_line("bw_two.html",
+                         [("OK", RED, 80), ("GO", GRN, 520)],
+                         [("NO", BLU, 80), ("BY", RED, 520)])
+    sz = (w, h)
+    bb = field_bbox(rgb, sz)
+    check("bw two-line word-seam block located", bb is not None, repr(bb))
+    if bb is None:
+        return
+    pal = osctl.palette(rgb, sz, bb)
+    inks = pal[1:]
+    three = (any(close(c, hx(RED)) for c in inks)
+             and any(close(c, hx(GRN)) for c in inks)
+             and any(close(c, hx(BLU)) for c in inks))
+    check("bw palette recovers background + the three inks",
+          len(pal) == 4 and three, repr(pal))
+
+    # FRICTION: read_block_region keeps the rows but drops each line's word seam.
+    rbr = osctl.read_block_region(rgb, sz, bb, atlas)
+    check("FRICTION: read_block_region drops the per-line word seam "
+          "(['OKGO','NOBY'])", rbr == ["OKGO", "NOBY"], repr(rbr))
+    # FRICTION: read_region_words keeps the seam but scrambles the two rows into
+    # one x-sorted string — a line-2 glyph (N) intrudes before a line-1 glyph (G).
+    flat = osctl.read_region_words(rgb, sz, bb, atlas)
+    scrambled = (isinstance(flat, str) and "N" in flat and "G" in flat
+                 and flat.index("N") < flat.index("G")
+                 and flat not in ("OK GO", "NO BY"))
+    check("FRICTION: read_region_words x-scrambles the two rows together",
+          scrambled, repr(flat))
+    # RESOLUTION: rows AND seams, line by line.
+    rbw = osctl.read_block_region_words(rgb, sz, bb, atlas)
+    check("read_block_region_words reads both lines with seams "
+          "(['OK GO','NO BY'])", rbw == ["OK GO", "NO BY"], repr(rbw))
+
+    # Scene B: order follows geometry top-to-bottom — swap the two lines.
+    w2, h2, rgb2 = two_line("bw_swap.html",
+                            [("NO", BLU, 80), ("BY", RED, 520)],
+                            [("OK", RED, 80), ("GO", GRN, 520)])
+    bb2 = field_bbox(rgb2, (w2, h2))
+    if bb2 is not None:
+        rbw2 = osctl.read_block_region_words(rgb2, (w2, h2), bb2, atlas)
+        check("read_block_region_words orders lines top-to-bottom "
+              "(['NO BY','OK GO'])", rbw2 == ["NO BY", "OK GO"], repr(rbw2))
+
+    # Scene C: three words / three colours on each line.
+    w3, h3, rgb3 = two_line("bw_three.html",
+                            [("RED", RED, 80), ("OK", GRN, 400), ("BY", BLU, 640)],
+                            [("GO", GRN, 80), ("NO", BLU, 340), ("RED", RED, 560)])
+    bb3 = field_bbox(rgb3, (w3, h3))
+    if bb3 is not None:
+        rbw3 = osctl.read_block_region_words(rgb3, (w3, h3), bb3, atlas)
+        check("read_block_region_words reads three words per line across colours "
+              "(['RED OK BY','GO NO RED'])",
+              rbw3 == ["RED OK BY", "GO NO RED"], repr(rbw3))
+
+    # Scene D: a single line — read_block_region_words is [read_region_words].
+    w4, h4, rgb4 = two_line("bw_one.html",
+                            [("OK", RED, 80), ("GO", GRN, 520)], [])
+    bb4 = field_bbox(rgb4, (w4, h4))
+    if bb4 is not None:
+        rbw4 = osctl.read_block_region_words(rgb4, (w4, h4), bb4, atlas)
+        rrw4 = osctl.read_region_words(rgb4, (w4, h4), bb4, atlas)
+        check("read_block_region_words of one line equals [read_region_words] "
+              "(['OK GO'])", rbw4 == ["OK GO"] and rbw4 == [rrw4],
+              "%r/%r" % (rbw4, rrw4))
+
+    # Scene E: evenly-tracked lines (no wide gap) invent no space. Glyphs are
+    # placed one-by-one at an even 72px advance, as R77's evenly-tracked scene.
+    w5, h5, rgb5 = two_line("bw_even.html",
+                            [("O", RED, 80), ("K", RED, 152),
+                             ("G", GRN, 224), ("O", GRN, 296)],
+                            [("N", BLU, 80), ("O", BLU, 152),
+                             ("B", RED, 224), ("Y", RED, 296)])
+    bb5 = field_bbox(rgb5, (w5, h5))
+    if bb5 is not None:
+        rbw5 = osctl.read_block_region_words(rgb5, (w5, h5), bb5, atlas)
+        check("read_block_region_words of an evenly-tracked block invents no "
+              "space (['OKGO','NOBY'])", rbw5 == ["OKGO", "NOBY"], repr(rbw5))
+
+    # Scene F: a uniform block holds no ink — read_block_region_words reads [].
+    b.navigate(fixture("bw_uni.html",
+               "<!doctype html><title>u</title><style>html,body{margin:0;"
+               "background:#0d2860}</style>"
+               "<canvas id=c width=900 height=520></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#0d2860';x.fillRect(0,0,900,520);</script>"))
+    time.sleep(0.4)
+    wu, hu, rgbu = osctl.capture_rgb()
+    bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
+    if bbu is not None:
+        rbwu = osctl.read_block_region_words(rgbu, (wu, hu), bbu, atlas)
+        check("read_block_region_words of a uniform block is [] (no ink)",
+              rbwu == [], repr(rbwu))
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -4387,7 +4551,7 @@ def main() -> int:
               round_read_block, round_read_words, round_read_glyph_conf,
               round_read_text_conf, round_detect_fg, round_palette,
               round_read_region, round_read_block_region,
-              round_read_region_words]
+              round_read_region_words, round_read_block_region_words]
     for r in rounds:
         try:
             r(b, offline)

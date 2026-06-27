@@ -2527,6 +2527,53 @@ ends and the next begins, and the line reads as the page spaced it.
 
 ---
 
+## F114 — a coloured paragraph reads as run-on lines: read the *words* across rows
+
+**Friction.** F112's `read_block_region` parts a coloured paragraph into its lines
+and reads each across every colour — but each band is read through F111's
+`read_region`, which joins a line's glyph cells with *nothing* between them. So a
+block whose lines each carry a word seam, `OK GO` over `NO BY`, reads
+`["OKGO", "NOBY"]`: rows kept, colours kept, every word gap *inside* a line
+dropped — the F113 friction, now one level up at block scope. F113's
+`read_region_words` *does* recover a line's seams, but it flattens the whole
+`bbox` into one x-sorted run, so handed a two-line block its lines interleave by
+column and every word shatters across the line break (`OK GO`/`NO BY` →
+`"ONOKGBYO"`). One reader keeps the rows and loses the seams; the other keeps the
+seams and loses the rows.
+
+**Mechanism.** Three axes — colour, row, word seam — and each prior reader had let
+one go. F111 dropped seams; F112 kept rows + colours but inherited F111's dropped
+seam; F113 kept colours + seams but flattened the rows. Rows live in the *blank
+leading* between bands; seams live in the *bimodal gaps* within a band. The two
+signals are independent: band first by vertical blanks, then split each band's
+horizontal gaps — neither erases the other.
+
+**Primitive.** `read_block_region_words` composes F112's banding with F113's
+reader. The row-banding both share is now `_band_rows` (a row inked by *any*
+palette ink, lines parted by `>= row_gap` blank leading) — F112 and F114 read a
+block by the *same* rows, differing only in how each band is then read: F112 hands
+each band to `read_region`, F114 to `read_region_words`. Every line comes back
+across all its colours *and* with the `' '` at each seam its spacing is bimodal
+about: `["OK GO", "NO BY"]`.
+
+**Live (R78):** one magenta atlas reads runs of any ink. A two-line block — red
+`OK` / green `GO` over blue `NO` / red `BY` — makes `read_block_region` read
+`["OKGO","NOBY"]` (rows kept, seams dropped) and `read_region_words` read
+`"ONOKGBYO"` (seams kept, rows scrambled) — the two frictions; then
+`read_block_region_words` reads `["OK GO","NO BY"]`. Order follows geometry
+top-to-bottom (swap → `["NO BY","OK GO"]`); three words per line across three
+colours read `["RED OK BY","GO NO RED"]`; a single line equals
+`[read_region_words]`; an evenly-tracked block invents no space
+(`["OKGO","NOBY"]`); a uniform block reads `[]`. `550/550 checks passed`,
+deterministic ×3.
+
+**Lesson (道法自然):** 三生萬物 — colour, row, and seam are three axes; a reader that
+collapses any one of them run-ons the page. F112 found the rows, F113 found the
+seams; F114 holds both at once, and the paragraph reads as the page laid it out —
+each line whole, each word parted where the spacing parts it.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

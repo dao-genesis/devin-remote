@@ -1366,6 +1366,22 @@ def read_block_region(rgb: bytes, size: tuple[int, int],
     inks = palette(rgb, size, bbox, q, min_pop, min_dist)[1:]
     if not inks:
         return []
+    bands = _band_rows(rgb, size, bbox, inks, tol, row_gap)
+    return [read_region(rgb, size, band, atlas, tol, gap, nw, nh, thr,
+                        q, min_pop, min_dist) for band in bands]
+
+
+def _band_rows(rgb: bytes, size: tuple[int, int],
+               bbox: tuple[int, int, int, int],
+               inks: list[tuple[int, int, int]],
+               tol: int, row_gap: int) -> list[tuple[int, int, int, int]]:
+    """Band a region's rows into per-line bboxes by *any* ink (F112/F114).
+
+    A row counts as inked when *any* colour in ``inks`` touches it (not one named
+    ``fg``), so a line of any colour — or of several — raises its own band, parted
+    from its neighbours by ``>= row_gap`` blank rows of leading. Shared by
+    :func:`read_block_region` and :func:`read_block_region_words` so the two read a
+    block by the *same* rows, differing only in how each band is then read."""
     x0, y0, x1, y1 = bbox
     w, _h = size
 
@@ -1396,8 +1412,53 @@ def read_block_region(rgb: bytes, size: tuple[int, int],
                 blanks = 0
     if start is not None:
         bands.append((x0, start, x1, y1 - blanks))
-    return [read_region(rgb, size, band, atlas, tol, gap, nw, nh, thr,
-                        q, min_pop, min_dist) for band in bands]
+    return bands
+
+
+def read_block_region_words(rgb: bytes, size: tuple[int, int],
+                            bbox: tuple[int, int, int, int],
+                            atlas: dict[str, list[int]],
+                            tol: int = 60, gap: int = 2, row_gap: int = 4,
+                            space_k: float = 1.8,
+                            nw: int = 48, nh: int = 48, thr: int = 24,
+                            q: int = 16, min_pop: float = 0.002,
+                            min_dist: int = 96) -> list[str]:
+    """Read a multi-*line*, multi-*colour* block *with its word spaces* (F114).
+
+    :func:`read_block_region` (F112) parts a coloured paragraph into lines and reads
+    each across every colour — but through :func:`read_region`, which joins a line's
+    glyph cells with *nothing* between them. So a block whose lines each carry a word
+    seam, ``"OK GO"`` over ``"NO BY"``, reads ``["OKGO", "NOBY"]``: the rows are kept,
+    the colours are kept, but every word gap inside a line is dropped — the F113
+    friction, now one level up at block scope. :func:`read_region_words` (F113)
+    recovers a line's seams, but it flattens the *whole* ``bbox`` into one x-sorted
+    run, so handed a two-line block its lines interleave by column and every word
+    shatters across the line break. One reader keeps the rows and loses the seams;
+    the other keeps the seams and loses the rows.
+
+    This keeps both. It bands the block's rows exactly as :func:`read_block_region`
+    does (:func:`_band_rows`, a row inked by *any* palette ink, lines parted by
+    ``>= row_gap`` blank leading), then reads each band, top-to-bottom, with
+    :func:`read_region_words` instead of :func:`read_region` — so every line comes
+    back across all its colours *and* with the ``' '`` at each word seam its spacing
+    is bimodal about. The result is one spaced string per line:
+    ``["OK GO", "NO BY"]`` where :func:`read_block_region` read ``["OKGO", "NOBY"]``
+    and :func:`read_region_words` alone scrambled the rows together.
+
+    Honest in the union of its parts' frames: it parts rows only by the blank leading
+    the page left between lines (never a wrap inside an x-height), reads each line's
+    inks as runs of glyphs, splits a line only where its spacing is *bimodal* (an
+    evenly-tracked line yields no invented space), reads only glyphs the ``atlas``
+    carries, and reads *text* colours, not solid-fill decorations. A single-line
+    block is ``[read_region_words(...)]``; a block with no ink above
+    :func:`palette`'s floor → ``[]``."""
+    inks = palette(rgb, size, bbox, q, min_pop, min_dist)[1:]
+    if not inks:
+        return []
+    bands = _band_rows(rgb, size, bbox, inks, tol, row_gap)
+    return [read_region_words(rgb, size, band, atlas, tol, gap, space_k,
+                              nw, nh, thr, q, min_pop, min_dist)
+            for band in bands]
 
 
 if __name__ == "__main__":
