@@ -4946,6 +4946,44 @@ whole has no blind edge precisely because each piece admits its limit.
 
 ---
 
+## F171 — the toggle verb + an async-race lesson: UIA TogglePattern (`uia_toggle`/`uia_toggle_state`, R132)
+
+**Ground: Windows Server 2022. Chrome checkbox.**
+
+**Friction.** The modern-app action set had press (`uia_invoke`), write
+(`uia_set_value`), aim (`uia_focus`) — but a checkbox is none of those; it is a
+*state to flip*. There was no semantic way to toggle it short of computing a pixel
+and clicking.
+
+**Defect surfaced by driving it (the real lesson).** The first `uia_toggle` issued
+the flip *and* read back the new ToggleState to return it. Live, that returned
+`"off"` — yet the DOM `.checked` was already `True` and a read a moment later said
+`"on"`. Chrome updates its UIA ToggleState **asynchronously** across the
+accessibility bridge; reading it in the same breath as the flip is stale. So the
+primitive was redesigned: `uia_toggle` returns only **whether it acted** (True), like
+`uia_invoke`, and the settled state is read by `uia_toggle_state` afterward.
+
+**Primitives.**
+- `osctl.uia_toggle(win, name, ctype)` → True if the flip was issued (TogglePattern
+  `Toggle`, vtable 3).
+- `osctl.uia_toggle_state(win, name, ctype)` → `"on"`/`"off"`/`"indeterminate"`/`""`
+  (TogglePattern `get_CurrentToggleState`, vtable 4) — the read dual.
+
+**Live:** Chrome `<input type=checkbox>`; initial state `"off"`; `uia_toggle` → True,
+DOM `.checked` → True; settled `uia_toggle_state` → `"on"`. R132 (`round_uia_toggle`,
+3 checks); `_probe_uiatoggle.py` standalone. Full suite **833/833** clean.
+
+**Lesson (道法自然).** 為而弗恃 — *act, but do not presume.* The flawed design presumed
+the action's result was instantly knowable by the actor; the bridge proved it is not.
+Separating *acting* from *knowing* is not a workaround but the correct shape: the
+verb reports that it acted, the read reports what now *is*, after the world has
+settled. 生而弗有，為而弗恃，長而弗宰 — the floor does the deed and lets the truth be read
+from the world, rather than asserting the outcome from its own act. Every write still
+demands its read dual (反者道之動), and here the dual is not decoration but the *only*
+honest source of the post-state.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

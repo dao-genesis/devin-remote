@@ -166,6 +166,14 @@ uia_focus = getattr(_be, "uia_focus", lambda win, name=None, ctype=None: False)
 # editor) where uia_get_value (single-line value fields) returns empty and the native
 # window_text (native HWNDs only) cannot reach at all. "" if no TextPattern.
 uia_text = getattr(_be, "uia_text", lambda win, name=None, ctype=None, max_len=20000: "")
+# UIA toggle (F171): flip a checkbox/switch by meaning via TogglePattern (returns
+# True if the flip was issued) — the semantic state verb completing the modern-app
+# action set (invoke=press, set_value=write, focus=aim, toggle=flip). It does NOT
+# return the new state: a modern app updates ToggleState asynchronously across the
+# a11y bridge, so read the settled truth with uia_toggle_state a moment later (the
+# read dual; "on"/"off"/"indeterminate"). False/"" where no TogglePattern.
+uia_toggle = getattr(_be, "uia_toggle", lambda win, name=None, ctype=None: False)
+uia_toggle_state = getattr(_be, "uia_toggle_state", lambda win, name=None, ctype=None: "")
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

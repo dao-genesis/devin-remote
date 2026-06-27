@@ -54,6 +54,11 @@ _GETPROP = 10   # GetCurrentPropertyValue
 _TEXT_DOCRANGE = 7    # IUIAutomationTextPattern::get_DocumentRange
 _RANGE_GETTEXT = 12   # IUIAutomationTextRange::GetText
 _UIA_TextPatternId = 10014
+# IUIAutomationTogglePattern vtable indices
+_TOGGLE = 3           # IUIAutomationTogglePattern::Toggle
+_TOGGLE_STATE = 4     # IUIAutomationTogglePattern::get_CurrentToggleState
+_UIA_TogglePatternId = 10015
+_TOGGLE_NAMES = {0: "off", 1: "on", 2: "indeterminate"}
 # IUIAutomationElementArray vtable indices
 _ARR_LEN = 3    # get_Length
 _ARR_GET = 4    # GetElement
@@ -458,6 +463,58 @@ def uia_text(win: int, name=None, ctype=None, max_len: int = 20000) -> str:
                 return s
             finally:
                 _release(rng.value)
+        finally:
+            _release(tp)
+    finally:
+        _release(el)
+
+
+def uia_toggle_state(win: int, name=None, ctype=None) -> str:
+    """Read the toggle state of an element found by meaning (a checkbox, a toggle
+    switch) via the UIA TogglePattern: "on" / "off" / "indeterminate", or "" if the
+    element has no TogglePattern. The read dual of :func:`uia_toggle`."""
+    uia = _get_uia()
+    if not uia:
+        return ""
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return ""
+    try:
+        tp = _pattern(el, _UIA_TogglePatternId)
+        if not tp:
+            return ""
+        try:
+            st = ctypes.c_int()
+            if _vcall(tp, _TOGGLE_STATE, ctypes.c_long,
+                      [ctypes.POINTER(ctypes.c_int)], ctypes.byref(st)) != 0:
+                return ""
+            return _TOGGLE_NAMES.get(st.value, "")
+        finally:
+            _release(tp)
+    finally:
+        _release(el)
+
+
+def uia_toggle(win: int, name=None, ctype=None) -> bool:
+    """Toggle an element found by meaning (a checkbox / toggle switch) via the UIA
+    TogglePattern — the semantic state-flip inside native and modern apps alike, no
+    mouse, no pixels. Returns True if the flip was issued. It deliberately does NOT
+    return the new state: across the accessibility bridge a modern app (Chrome)
+    updates its ToggleState *asynchronously*, so a state read in the same breath is
+    stale — read the settled truth with :func:`uia_toggle_state` a moment later (the
+    action reports that it acted; the read reports what is)."""
+    uia = _get_uia()
+    if not uia:
+        return False
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return False
+    try:
+        tp = _pattern(el, _UIA_TogglePatternId)
+        if not tp:
+            return False
+        try:
+            return _vcall(tp, _TOGGLE, ctypes.c_long, []) == 0
         finally:
             _release(tp)
     finally:

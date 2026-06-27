@@ -1319,6 +1319,52 @@ def round_uia_focus(b: Browser, offline: bool) -> None:
         time.sleep(0.3)
 
 
+def round_uia_toggle(b: Browser, offline: bool) -> None:
+    print("R132: flip a checkbox by MEANING via UIA TogglePattern (F171) — osctl")
+    # The modern-app action set so far: invoke (press a button), set_value (write a
+    # field), focus (aim the keyboard). A checkbox is none of those — it is a STATE
+    # to flip. uia_toggle issues the flip through the TogglePattern; uia_toggle_state
+    # reads the settled state. Driving it surfaced a real async race: a modern app
+    # (Chrome) updates its ToggleState asynchronously across the a11y bridge, so a
+    # state read *in the same breath* as the flip is stale — hence uia_toggle returns
+    # only whether it acted (like uia_invoke), and the settled truth is read after.
+    if not sys.platform.startswith("win"):
+        print("  (skip R132: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_toggle"):
+        check("osctl exposes uia_toggle", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — toggle check skipped)")
+        return
+    b.navigate("data:text/html,<input type=checkbox id=cb><label for=cb>AGREE</label>")
+    time.sleep(1.2)
+    state0 = ""
+    for _ in range(10):  # Chrome turns on its a11y tree lazily
+        state0 = osctl.uia_toggle_state(ch["id"], ctype="CheckBox")
+        if state0:
+            break
+        time.sleep(0.5)
+    check("uia_toggle_state reads the checkbox's initial state 'off'",
+          state0 == "off", f"state0={state0!r}")
+    issued = osctl.uia_toggle(ch["id"], ctype="CheckBox")
+    time.sleep(0.4)
+    checked = b.eval("document.getElementById('cb').checked")
+    check("uia_toggle flips the checkbox by meaning (DOM .checked confirms the flip "
+          "really happened)", issued is True and checked is True,
+          f"issued={issued} checked={checked}")
+    settled = osctl.uia_toggle_state(ch["id"], ctype="CheckBox")
+    check("uia_toggle_state reports the settled state 'on' after the flip (read dual; "
+          "action and read separated to dodge the async-update race)",
+          settled == "on", f"settled={settled!r}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
 def round_uia_text(b: Browser, offline: bool) -> None:
     print("R131: read text OUT of a modern app via UIA TextPattern (F170) — osctl")
     # uia_get_value reads single-line value fields; native window_text reads native
@@ -8453,7 +8499,7 @@ def main() -> int:
               round_pixel, round_window_text, round_set_window_text,
               round_control_at, round_find_control, round_menu, round_uia,
               round_uia_find, round_uia_value, round_uia_drive, round_uia_focus,
-              round_uia_text,
+              round_uia_text, round_uia_toggle,
               round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,

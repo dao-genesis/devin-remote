@@ -781,7 +781,7 @@ def capture_rgb(x: int = 0, y: int = 0,
 try:
     from _uia_win import (uia_name, uia_children, uia_find,
                           uia_set_value, uia_get_value, uia_invoke, uia_focus,
-                          uia_text)
+                          uia_text, uia_toggle, uia_toggle_state)
 except Exception:  # pragma: no cover - UIA unavailable
     def uia_name(win: int) -> str:
         return ""
@@ -805,4 +805,10 @@ except Exception:  # pragma: no cover - UIA unavailable
         return False
 
     def uia_text(win: int, name=None, ctype=None, max_len: int = 20000) -> str:
+        return ""
+
+    def uia_toggle(win: int, name=None, ctype=None) -> bool:
+        return False
+
+    def uia_toggle_state(win: int, name=None, ctype=None) -> str:
         return ""
