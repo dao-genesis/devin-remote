@@ -2574,6 +2574,48 @@ each line whole, each word parted where the spacing parts it.
 
 ---
 
+## F115 — reading a word is not reaching it: locate the word to *click* it
+
+**Friction.** Every reader from F103 on answers *what* the pixels say and throws
+the rest away. `segment_run` knows each glyph's bbox, but `read_region` /
+`read_region_words` fold those cells into one joined string and the positions are
+gone. So an agent that has just *read* `"GO"` off a `<canvas>` button still cannot
+*press* it: there is no DOM node for `Browser.click`/`click_text` to find, and the
+pixel finders (`find_color`, `template_match`) locate by *colour* or *bitmap* —
+never by the *word* the eye read. Reading and acting were split halves: you could
+name the text, or you could find a shape, but not click the text you named.
+
+**Mechanism.** The position was never missing — it was *discarded*. Each glyph
+cell `segment_run` returns is already a bbox in the same screen frame `capture_rgb`
+and `click` share (R14 proved that frame is the click coordinate space). The
+readers just collapsed the cells to labels. To click a read word you keep the
+cells: group them into words exactly where `read_region_words` finds its seams
+(the bimodal gap), read each group, and the matching group's *union bbox* is where
+that word sits on screen.
+
+**Primitive.** `locate_word(region, target)` gathers every ink's cells
+(`palette` + `segment_run`), sorts left-to-right, groups at gaps `>= space_k` the
+median (the F113 seam), reads each group (`read_glyph` against the atlas), and
+returns the first group whose label equals `target` as its union bbox — or `None`
+if the region does not hold that word (or the atlas cannot spell it). Its centre
+fed to `osctl.click` presses the very word that was read. Repeated words return
+the leftmost (reading order).
+
+**Live (R79):** three coloured text "buttons" — red `OK`, green `GO`, blue `BY` —
+painted on a `<canvas>` with no DOM nodes. `read_region_words` names them
+(`"OK GO BY"`) but yields no place to click; `locate_word` returns a bbox for each
+in reading order (`OK` left of `GO` left of `BY`) and `None` for an absent `"ZZ"`.
+Then the loop closes: `click`-ing the centre of the located `"GO"` makes the canvas
+report `HIT:GO`, and locating-and-clicking `"OK"` reports `HIT:OK` — the agent
+presses the word it read, not a hard-wired spot. `558/558 checks passed`,
+deterministic ×3.
+
+**Lesson (道法自然):** 知行合一 — to read without being able to act is to know half a
+thing. The whole tower F103→F114 learned to *see* text on raw pixels; F115 turns
+seeing into reaching, and the agent at last presses the button it can only read.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
