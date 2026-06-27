@@ -3428,6 +3428,40 @@ the question is *what is here* is to walk far to learn what lay underfoot.
 
 ---
 
+## F138 — `cursor_pos`: read where the pointer is (R102)
+
+**Friction.** The whole pointer family *writes* position — `move`, `drag`,
+`glide`, every click that takes ``(x, y)`` — but nothing ever *read* it back. That
+asymmetry bites three ways: (1) `move` sends *absolute* coordinates rescaled to
+the 0–65535 virtual-desktop range, so on a DPI-scaled or multi-monitor desktop the
+landing pixel can differ from what was asked, with no way to confirm; (2) a
+relative nudge ("5px right of wherever I am" for a slider/resize handle) is
+impossible without first knowing the current point; (3) polite flows that move the
+cursor aside then restore it had nothing to restore *to*.
+
+**Mechanism.** Call ``GetCursorPos`` and return ``(x, y)`` in screen pixels — the
+read-side dual of `move`.
+
+**Primitive.** `cursor_pos()`.
+
+**Live (R102):** a commanded `move` to screen centre is confirmed landed within
+``<=2px``; a nudge computed *from* the read (``base.x + 40``) moves exactly 40px
+right (impossible without reading first); and a third move to a distinct point is
+tracked (not a stale constant). `728/728 checks passed`, deterministic ×3.
+
+**Honest note.** It returns the *system* cursor in *physical* screen pixels, which
+on a DPI-scaled desktop may not equal the logical coordinates `move` was given —
+that is exactly the gap it exists to expose, not hide. On this VM the rescale is
+1:1 so the read is exact; the ``<=2px`` tolerance is there only for the
+65535-range rounding, and is honest about that rounding rather than asserting a
+false zero.
+
+**Lesson (道法自然):** 知人者智，自知者明 — to know others is wit; to know
+oneself is clarity. A hand that can only act and never feel where it is moves
+blind; the loop closes when the mover can also know its own place.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

@@ -5383,6 +5383,39 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_cursor_pos(b: Browser, offline: bool) -> None:
+    print("R102: OS-level cursor_pos — read where the pointer is, dual of move (F138) — osctl")
+    # The pointer family only ever WROTE position (move/drag/glide/click). Nothing
+    # read it back, so a move could not be confirmed and a relative nudge ("+N from
+    # wherever I am") was impossible. cursor_pos calls GetCursorPos and returns it.
+    w, h = osctl.screen_size()
+    # 1) A commanded move lands where asked (within the absolute-rescale rounding).
+    tx, ty = w // 2, h // 2
+    osctl.move(tx, ty)
+    time.sleep(0.1)
+    here = osctl.cursor_pos()
+    check("cursor_pos confirms a move landed where asked (<=2px)",
+          abs(here[0] - tx) <= 2 and abs(here[1] - ty) <= 2,
+          f"asked=({tx},{ty}) got={here}")
+    # 2) A relative nudge computed FROM the read — impossible without reading first.
+    base = osctl.cursor_pos()
+    osctl.move(base[0] + 40, base[1])
+    time.sleep(0.1)
+    after = osctl.cursor_pos()
+    check("a read-relative +40px nudge moves exactly 40px right",
+          abs((after[0] - base[0]) - 40) <= 2 and abs(after[1] - base[1]) <= 2,
+          f"base={base} after={after} dx={after[0] - base[0]}")
+    # 3) It tracks a fresh, distinct point (not a stale constant).
+    px, py = w // 3, h // 3
+    osctl.move(px, py)
+    time.sleep(0.1)
+    third = osctl.cursor_pos()
+    check("cursor_pos tracks a distinct new point",
+          abs(third[0] - px) <= 2 and abs(third[1] - py) <= 2
+          and (abs(third[0] - here[0]) > 10 or abs(third[1] - here[1]) > 10),
+          f"asked=({px},{py}) got={third} prev={here}")
+
+
 def round_sample_color(b: Browser, offline: bool) -> None:
     print("R101: OS-level sample_color — read the colour at a place, inverse of find_color (F137) — osctl")
     # A status surface is green or red; the agent does not know which — that is the
@@ -6228,7 +6261,8 @@ def main() -> int:
               round_mod_drag, round_glide, round_mod_taps,
               round_wait_until_stable, round_wait_for_change,
               round_region_diff, round_locate_change,
-              round_locate_change_blobs, round_sample_color]
+              round_locate_change_blobs, round_sample_color,
+              round_cursor_pos]
     for r in rounds:
         try:
             r(b, offline)
