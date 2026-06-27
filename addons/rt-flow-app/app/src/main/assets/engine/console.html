@@ -758,21 +758,22 @@
   //   与 Worker 自托管 console.html(同样取 raw·5min 边缘缓存)同源同鲜 → 外壳与板块永不错位。
   //   jsDelivr(@main 边缘缓存 ~12h·且按 min/raw 变体分别缓存, purge 难全覆盖→曾整日发旧板)退为加速回退。
   var ASSETS = Object.create(null);
-  // 道法自然·去私人标识·内容寻址优先: 各板块 HTML/signal.js 首选从内容寻址 IPFS 网关(零账号·零凭证·账号中立)取,
-  //   多家公共网关互为镜像(任一可达即通)。CID 是「含全部 engine 文件的目录」→ base+name 即取该文件。仅当 IPFS
-  //   全挂才回退 raw.githubusercontent / jsDelivr(账号相关·末位)。SELF_BASE(同源)仍恒居最前(见下方 unshift)。
+  // 子页(各板块 HTML/signal.js)取源优先级: SELF_BASE(同源·本页所在宿主) 恒居最前(见下方 unshift) → 本页若由
+  //   GitHub Pages 直发, 子页与本页同源同目录、同鲜、零额外账号标识。其后为 raw.githubusercontent / jsDelivr
+  //   (实际可达的 main 源)。IPFS 内容寻址网关为「可选镜像」: 仅当该 CID 被实际 pin 才可达(否则公共网关 504·每次
+  //   ~28s 超时), 故列于最末作账号中立增益, 不拖慢常态。
   var _CONSOLE_IPFS_CID = "bafybeifwt5i5dhytdpkwirclhnnyijp42imfxmir4nfbzhtbbsyi7i6mae";
   var CDN_BASES = [];
-  if(_CONSOLE_IPFS_CID && _CONSOLE_IPFS_CID.indexOf("__")!==0){
-    CDN_BASES.push("https://"+_CONSOLE_IPFS_CID+".ipfs.dweb.link/",
-                   "https://ipfs.io/ipfs/"+_CONSOLE_IPFS_CID+"/",
-                   "https://"+_CONSOLE_IPFS_CID+".ipfs.cf-ipfs.com/");
-  }
   CDN_BASES.push(
     "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/",
     "https://fastly.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/",
     "https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/"
   );
+  if(_CONSOLE_IPFS_CID && _CONSOLE_IPFS_CID.indexOf("__")!==0){
+    CDN_BASES.push("https://"+_CONSOLE_IPFS_CID+".ipfs.dweb.link/",
+                   "https://ipfs.io/ipfs/"+_CONSOLE_IPFS_CID+"/",
+                   "https://"+_CONSOLE_IPFS_CID+".ipfs.w3s.link/");
+  }
   // 同源优先 (道法自然·去私人标识): 本页若由中立静态站(surge / 自托管 / GitHub Pages)直发,
   //   则各板块 HTML 与 signal.js 与本页同源同目录 —— 取之既不含任何私人账号标识、又与本页同鲜。
   //   仅当本页源是 http(s) 且非上面的公共 CDN 域才前插(APK 内 file:// 直身路径不插, 免去一次无谓跨协议探测);
@@ -1705,14 +1706,13 @@
   var cfg=document.getElementById("cfg");
   // 持久去中心化引导宿主(收敛架构①·首字节来源): 分享「与本页同款的完整控台 console.html」, 链接只带稳定
   //   session/token → 永不 1033 死链。道法自然·反则道之动也: 临时隧道 URL 重启即换, 故绝不把它当分享宿主;
-  //   首字节恒来自「恒在线的持久宿主」—— 本页若由持久宿主(IPFS 内容寻址网关 / GitHub Pages·非临时隧道·非
-  //   Worker)经 http(s) 载入则自指本源; 否则(APK file:// / 临时隧道 / 局域网 / Worker)回退默认持久宿主。
-  //   默认持久宿主 = 内容寻址 IPFS 网关(零账号·零凭证·账号中立·脱离任何个人 GitHub); 个人 Pages 仅作末位兜底。
+  //   首字节恒来自「恒在线的持久宿主」—— 本页若由持久宿主(GitHub Pages / 已 pin 的 IPFS 内容寻址网关·非临时隧道·
+  //   非 Worker)经 http(s) 载入则自指本源; 否则(APK file:// / 临时隧道 / 局域网 / Worker)回退默认持久宿主。
+  //   默认持久宿主 = 无状态静态多租户 Pages console.html (CDN 无限并发·零识别·零用户数据·能服务所有用户·人人可达);
+  //   想自托管者经 conn.webConsoleBase 一处覆写即长期生效(各自最小化)。IPFS 网关仅作已 pin 时的账号中立可选镜像。
   var P2P_CLIENT_IPFS_CID="bafybeifwt5i5dhytdpkwirclhnnyijp42imfxmir4nfbzhtbbsyi7i6mae";
   var P2P_CLIENT_GITHUB_FALLBACK="https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html";
-  var P2P_CLIENT_CDN_FALLBACK=(P2P_CLIENT_IPFS_CID && P2P_CLIENT_IPFS_CID.indexOf("__")!==0)
-    ? ("https://"+P2P_CLIENT_IPFS_CID+".ipfs.dweb.link/console.html")
-    : P2P_CLIENT_GITHUB_FALLBACK;
+  var P2P_CLIENT_CDN_FALLBACK=P2P_CLIENT_GITHUB_FALLBACK;
   var P2P_CLIENT_CDN=(function(){
     try{
       var u=new URL(String(location.href||""));
