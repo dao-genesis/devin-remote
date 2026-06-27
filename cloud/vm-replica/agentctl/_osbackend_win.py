@@ -424,6 +424,59 @@ def terminate_window(win: int) -> bool:
         kernel32.CloseHandle(h)
 
 
+_WM_GETTEXT = 0x000D
+_WM_GETTEXTLENGTH = 0x000E
+user32.SendMessageW.restype = ctypes.c_long
+user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT,
+                                wintypes.WPARAM, wintypes.LPARAM]
+user32.GetClassNameW.restype = ctypes.c_int
+user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+_ENUMCHILDPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+user32.EnumChildWindows.argtypes = [wintypes.HWND, _ENUMCHILDPROC, wintypes.LPARAM]
+
+
+def window_text(win: int) -> str:
+    """Read the *text a window carries* — not its pixels, its actual content.
+    ``WM_GETTEXT`` returns a top-level window's title, but for a child *control*
+    (an edit box, a label, a button) it returns the control's live text: what the
+    field holds, what the label says. The floor could see only painted pixels
+    (OCR, fragile) or a window's outer title; this reads the semantic string the
+    OS already knows — exact, no recognition error. Cross-process safe (unlike
+    ``GetWindowText``, which only fetches titles across processes)."""
+    hwnd = wintypes.HWND(win)
+    if not user32.IsWindow(hwnd):
+        return ""
+    n = user32.SendMessageW(hwnd, _WM_GETTEXTLENGTH, 0, 0)
+    if n <= 0:
+        return ""
+    buf = ctypes.create_unicode_buffer(n + 1)
+    user32.SendMessageW(hwnd, _WM_GETTEXT, n + 1, ctypes.addressof(buf))
+    return buf.value
+
+
+def child_windows(win: int) -> list:
+    """Descend into a window's *controls* — the edit boxes, labels, buttons it is
+    built from — as ``[{"id","class","text"}, …]``. The floor could enumerate
+    top-level windows but never look *inside* one; yet a window's meaning lives in
+    its controls. ``EnumChildWindows`` walks them; each carries its class
+    (``Edit``, ``Button``, ``Static``) and, via :func:`window_text`, its content —
+    semantic structure no screenshot exposes."""
+    hwnd = wintypes.HWND(win)
+    if not user32.IsWindow(hwnd):
+        return []
+    out: list = []
+
+    def _cb(child, _lp):
+        cls = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(child, cls, 256)
+        out.append({"id": int(child), "class": cls.value,
+                    "text": window_text(int(child))})
+        return True
+
+    user32.EnumChildWindows(hwnd, _ENUMCHILDPROC(_cb), 0)
+    return out
+
+
 _GWL_EXSTYLE = -20
 _WS_EX_TOPMOST = 0x00000008
 _HWND_TOPMOST = wintypes.HWND(-1)

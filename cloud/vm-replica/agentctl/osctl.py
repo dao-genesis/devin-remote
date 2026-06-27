@@ -95,6 +95,13 @@ key_state = getattr(_be, "key_state", lambda vk: {"down": False, "toggled": Fals
 # completing the input floor alongside key_state. Empty on an older floor.
 mouse_state = getattr(_be, "mouse_state", lambda: {"left": False, "right": False,
                                                    "middle": False, "pos": (0, 0)})
+# Semantic content reads: window_text reads the *text a window/control carries*
+# (a window title, or — for a child control — an edit box's content, a label's
+# words) via the OS text protocol, exact and OCR-free; child_windows descends into
+# a window's controls ({id,class,text}). The floor could see only pixels or outer
+# titles; this reads the meaning the OS already holds. Empty on an older floor.
+window_text = getattr(_be, "window_text", lambda win: "")
+child_windows = getattr(_be, "child_windows", lambda win: [])
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

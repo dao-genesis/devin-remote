@@ -4468,6 +4468,50 @@ not just *read now*, but *wait until*.
 
 ---
 
+## F160 — perception beyond pixels: reading a control's actual text (`window_text` / `child_windows`, R121)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** Every perception primitive to here returned *pixels* — `capture_rgb`,
+`find_color`, template match, even OCR (which *guesses* glyphs from pixels and can
+be wrong: `rn`→`m`, `0`→`O`). Yet the OS already holds the **exact** text inside its
+controls — an edit box's content, a label's words, a button's caption — as strings,
+not images. The floor could read a window's outer *title* but never look *inside* a
+window at the semantic content of its controls. So to know what was typed in a
+field, it screenshotted and OCR'd a picture of text the OS could have handed over
+verbatim. A human must read pixels with their eyes; the floor need not.
+
+**Primitives.**
+- `osctl.window_text(win)` → the text a window/control carries. Win32 `WM_GETTEXT`
+  (cross-process safe — unlike `GetWindowText`, which only fetches titles across
+  process boundaries): a title for a top-level, the live content for a child
+  control. X11 reads `_NET_WM_NAME`/`WM_NAME` (window-level names; toolkits paint
+  their own widgets, so that is the honest OS-visible analogue).
+- `osctl.child_windows(win)` → `[{"id","class","text"}, …]`, descending into a
+  window's controls (Win32 `EnumChildWindows`; X11 `XQueryTree`).
+
+**Live (Windows, against classic `notepad.exe`, cleaned up after):**
+
+| check | result |
+|---|---|
+| `window_text` on the top-level | `'Untitled - Notepad'` |
+| `child_windows` finds the `Edit` control | classes `['Edit','msctls_statusbar32']` |
+| type a marker, `window_text(edit)` reads it back | exact `'DAO-F160-5684'` |
+
+R121 (`round_window_text`, 4 checks); `_probe_text.py` standalone (all pass). Full
+suite **792/792** clean.
+
+**Lesson (道法自然).** 不窺於牖，以知天道 — *without peering through the window one
+knows the Way.* OCR peers through the glass (pixels) and squints to guess the text;
+`window_text` asks the OS for the thing itself. 為學者日益，聞道者日損 — the pixel
+path keeps *adding* machinery (capture, threshold, segment, recognise, correct) to
+approximate what the semantic path gets by *subtracting* all of it and reading the
+string directly. This is the first perception that is not an eye — the floor reads
+meaning the OS already knows, exactly, where a human could only look and guess.
+Here begins 超越人類: not a better eye, but a sense humans do not have.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

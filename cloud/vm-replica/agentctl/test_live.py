@@ -1260,6 +1260,76 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_window_text(b: Browser, offline: bool) -> None:
+    print("R121: READ a control's actual TEXT content, not its pixels (F160) — osctl")
+    # Every perception primitive so far returned *pixels* — capture, find_color,
+    # template match, even OCR (which guesses glyphs from pixels and can be wrong).
+    # But the OS already knows the exact text inside its controls: an edit box's
+    # content, a label's words, a button's caption — strings, not images. The floor
+    # could read a window's outer title but never look *inside* a window at the
+    # semantic content its controls carry. window_text reads that string exactly
+    # (no recognition error); child_windows descends into the controls. This is
+    # perception beyond pixels — a step past what an eye can do.
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    if not win:
+        print("  (skip R121: native control-text read exercised on the Windows floor)")
+        return
+    for name in ("window_text", "child_windows"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+    mark = "DAO-F160-" + str(os.getpid())
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is found to read inside of", note is not None,
+              "no notepad window")
+        if not note:
+            return
+        title = osctl.window_text(note["id"])
+        check("window_text on the top-level returns its title string",
+              "Notepad" in title or "Untitled" in title, f"title={title!r}")
+
+        kids = osctl.child_windows(note["id"])
+        edit = next((k for k in kids if k["class"] in ("Edit", "RichEditD2DPT")), None)
+        check("child_windows descends into the window and finds its Edit control "
+              "(structure no screenshot exposes)", edit is not None,
+              f"classes={[k['class'] for k in kids]}")
+        if not edit:
+            return
+
+        osctl.activate_window(note["id"])
+        time.sleep(0.5)
+        osctl.type_unicode(mark)
+        time.sleep(0.6)
+        got = osctl.window_text(edit["id"])
+        check("window_text reads back the EXACT typed content of the edit control "
+              "— semantic text, not OCR'd pixels", mark in got, f"got={got!r}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_pixel(b: Browser, offline: bool) -> None:
     print("R120: READ one pixel, and WAIT for a screen spot to change colour (F159) — osctl")
     # Perception so far was all-or-nothing: capture_rgb grabs (and find_color
@@ -7717,7 +7787,7 @@ def main() -> int:
               round_window, round_clip_relay, round_zorder, round_window_under,
               round_window_lifecycle, round_window_state, round_active_window,
               round_topmost, round_window_pid, round_key_state, round_mouse_state,
-              round_pixel, round_move, round_desktop,
+              round_pixel, round_window_text, round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

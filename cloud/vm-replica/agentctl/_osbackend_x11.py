@@ -394,6 +394,50 @@ def _win_title(win: int) -> str:
     return ""
 
 
+def _wm_class(win: int) -> str:
+    raw = _prop(win, _atom("WM_CLASS"), 31)  # 31 = XA_STRING
+    if not raw:
+        return ""
+    parts = raw.split(b"\x00")
+    return (parts[1] if len(parts) > 1 and parts[1] else parts[0]).decode(
+        "utf-8", "replace")
+
+
+def window_text(win: int) -> str:
+    """Read the *text a window carries* — its name/title via ``_NET_WM_NAME`` /
+    ``WM_NAME``. On Windows this also reaches *inside* to a child control's content
+    (an edit box's text); on X11 toolkits paint their own widgets, so the OS sees
+    only window-level names — this returns that, the closest honest analogue. The
+    semantic string the OS holds, OCR-free."""
+    with _lock:
+        return _win_title(win)
+
+
+def child_windows(win: int) -> list:
+    """Descend into a window's child windows as ``[{"id","class","text"}, …]``
+    (``XQueryTree`` children; class from ``WM_CLASS``, text from
+    :func:`window_text`). The floor could enumerate top-level windows but never
+    look *inside* one. Mirrors the Win32 ``EnumChildWindows`` (where children are
+    the actual edit/label/button controls; under X11 they are the sub-windows the
+    toolkit chose to create)."""
+    with _lock:
+        root_r = ctypes.c_ulong(); parent_r = ctypes.c_ulong()
+        kids = ctypes.POINTER(ctypes.c_ulong)(); nkids = ctypes.c_uint()
+        if not _x.XQueryTree(_dpy, win, ctypes.byref(root_r), ctypes.byref(parent_r),
+                             ctypes.byref(kids), ctypes.byref(nkids)):
+            return []
+        out = []
+        try:
+            for i in range(nkids.value):
+                c = int(kids[i])
+                out.append({"id": c & 0xFFFFFFFF, "class": _wm_class(c),
+                            "text": _win_title(c)})
+        finally:
+            if kids:
+                _x.XFree(ctypes.cast(kids, ctypes.c_void_p))
+        return out
+
+
 def list_windows() -> list:
     """Enumerate top-level windows the window manager manages (EWMH
     ``_NET_CLIENT_LIST``), newest last. Each item is ``{"id", "title"}``.
