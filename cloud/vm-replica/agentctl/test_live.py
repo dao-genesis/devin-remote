@@ -601,6 +601,63 @@ def round_settle(b: Browser, offline: bool) -> None:
               b.wait_for("document.title==='HIT'", timeout=2), b.title())
 
 
+def round_reach(b: Browser, offline: bool) -> None:
+    print("R105: click a CONTINUOUSLY moving target by predictive foveated reach (F144) — osctl")
+    # R18 waits for motion to STOP. But a target need not stop — a menu/handle
+    # can be clicked mid-glide. The classic snapshot+click can't: a whole-screen
+    # find_color is hundreds of ms (millions of pixels in Python), so by the time
+    # the OS click lands the element has slid well past the snapshot. osctl.reach
+    # does it the way the eye does: acquire coarsely (low-acuity periphery), refine
+    # in a small fovea, estimate velocity from two foveal samples, and click where
+    # the target *will be* — cancelling the perceive→act latency.
+    scene = fixture("reach.html",
+                    "<!doctype html><title>reach</title>"
+                    "<style>html,body{margin:0;overflow:hidden}</style>"
+                    "<canvas id=c width=1200 height=600 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "var S=70,y=260,lo=60,hi=1200-S-60,px=lo,dir=1,spd=600,"
+                    "last=performance.now(),cur=px;"
+                    "function draw(p){cur=p;x.fillStyle='#fff';x.fillRect(0,0,1200,600);"
+                    "x.fillStyle='#ff00ff';x.fillRect(p,y,S,S);}"
+                    "function tick(now){var dt=(now-last)/1000;last=now;px+=dir*spd*dt;"
+                    "if(px>hi){px=hi;dir=-1;}if(px<lo){px=lo;dir=1;}draw(px);"
+                    "requestAnimationFrame(tick);}draw(px);requestAnimationFrame(tick);"
+                    "window.__hits=0;window.__tot=0;"
+                    "c.addEventListener('click',function(e){"
+                    "var r=c.getBoundingClientRect(),cx=e.clientX-r.left,cy=e.clientY-r.top;"
+                    "window.__tot++;"
+                    "if(cx>=cur&&cx<=cur+S&&cy>=y&&cy<=y+S){window.__hits++;}});"
+                    "</script>")
+    mag = (255, 0, 255)
+    n = 6
+
+    b.navigate(scene)
+    time.sleep(0.4)
+    # Friction: snapshot+click on a moving target. Scan the whole screen, then
+    # click that (already stale) point. It lands behind the glide almost always.
+    for _ in range(n):
+        w, h, rgb = osctl.capture_rgb()
+        loc = osctl.find_color(mag, tol=40, rgb=rgb, size=(w, h))
+        if loc:
+            osctl.click(loc["x"], loc["y"])
+        time.sleep(0.12)
+    stale_hits = int(b.eval("window.__hits||0"))
+    check("snapshot+click mostly MISSES the moving target (stale)",
+          stale_hits <= 1, f"{stale_hits}/{n} hit")
+
+    b.navigate(scene)  # fresh counters
+    time.sleep(0.4)
+    # Primitive: predictive foveated reach clicks where it WILL be.
+    for _ in range(n):
+        osctl.reach(mag, tol=40, lead=0.03)
+        time.sleep(0.12)
+    reach_hits = int(b.eval("window.__hits||0"))
+    check("predictive reach HITS the moving target (foveal + velocity lead)",
+          reach_hits >= n - 1, f"{reach_hits}/{n} hit")
+    check("reach strictly beats snapshot+click on the same moving target",
+          reach_hits > stale_hits, f"reach={reach_hits} stale={stale_hits}")
+
+
 def round_structure_match(b: Browser, offline: bool) -> None:
     print("R19: pick a colour-shifted target by structure, not appearance (F055) — osctl")
     # Two magenta tiles (segmentable), each holding a black glyph drawn in a
@@ -6325,7 +6382,7 @@ def main() -> int:
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
-              round_template_match, round_settle, round_structure_match,
+              round_template_match, round_settle, round_reach, round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
               round_native_select, round_contenteditable, round_file_drop,

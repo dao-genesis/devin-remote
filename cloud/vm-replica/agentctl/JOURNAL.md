@@ -3707,6 +3707,59 @@ until sampling was cheap enough to simply see faster. 無為而無不為.
 
 ---
 
+## F144 — low-acuity periphery + predictive reach: click a *still-moving* target (R105)
+
+**Friction (reproduced live, on this VM's real Chrome).** F143 (`wait_stable`) waits for
+motion to *stop*. But a target need not stop — a menu, a handle, a card still easing into
+place is a legitimate click target *mid-glide*. Driving live Chrome with a magenta square
+sliding continuously, the classic snapshot+click **missed essentially every time**: at
+200 px/s 1/20, at 450 px/s 0/20, at 900 px/s 0/20, at 1500 px/s 1/20, with mean error
+growing 58→300 px. Timing the loop named the culprit exactly: a whole-screen `find_color`
+**scan is ~232 ms** (≈1.9 M pixels in pure Python) — by the time the click lands the
+element has slid 200+ px. The perceive→act gap was not a constant to tune around; it was a
+*slow perception* to fix.
+
+**Why this is structural (referencing the visuomotor system).** Two corrections, each the
+way the eye/hand actually works, neither a threshold hack:
+
+1. **Acquire with the periphery, refine with the fovea.** The retina's periphery is
+   *low-resolution* — it does not read every receptor. So `find_color` grew a `step`
+   (acuity) knob: sample every n-th pixel on every n-th row, ~1/n² the work. Measured on
+   the live screen: step=1 → 202 ms; **step=4 → 13 ms (16×), centroid only ~2 px off**;
+   step=8 → 3 ms (67×), ~4 px. A coarse scan finds *where* the target is in a few ms, then
+   `foveate` re-reads that small window at full acuity. (`wait_stable`'s saccade now scans
+   coarsely too — re-acquisition that used to cost 232 ms is ~13 ms.)
+2. **Predict, don't chase.** Smooth pursuit does not aim where the target *is* — that image
+   is already one neural delay old; it estimates the target's **velocity** and aims where it
+   *will be*. `osctl.reach` samples the fovea twice (~12 ms apart) for a velocity, then
+   clicks the position extrapolated `lead` seconds ahead — `lead` being the measured
+   perceive→click-lands latency. A live `lead` sweep at 900 px/s found the optimum at
+   **~0.03 s** (mean error 30 px at lead=0 → **6 px** at 0.03), so that is the default.
+
+**Live A/B (same scenes, this VM), snapshot+click vs `reach`:**
+
+| speed | snapshot+click | reach0 (foveal, no predict) | **reach (predictive)** |
+|------:|:--------------:|:---------------------------:|:----------------------:|
+| 200 px/s | 1/20 (58 px) | 20/20 (8.9 px) | **20/20 (4.2 px)** |
+| 450 px/s | 0/20 (119 px) | 20/20 (14 px) | **20/20 (3.7 px)** |
+| 900 px/s | 0/20 (232 px) | 19/20 (30 px) | **18/20 (8.4 px)** |
+| 1500 px/s | 1/20 (300 px) | 1/20 (47 px) | **20/20 (11 px)** |
+
+The middle column shows the fovea alone fixes low/mid speed but **breaks at 1500 px/s**
+(the residual latency exceeds the target half-width); prediction is what conquers high
+speed (1/20 → 20/20). In total, snapshot+click landed ~3/80 across speeds; predictive reach
+~78/80. R105 (`round_reach`) bakes this in as a permanent check: stale 0/6 vs reach 6/6 on a
+600 px/s glide. Full suite **740/741** at the content viewport (only the pre-existing R103
+window-placement delta remains); R18 and all OCR unaffected — `step` defaults to 1 (identical),
+`reach` is additive, and the coarse saccade left `wait_stable` 5/5 on `_probe_settle.py`.
+
+**Lesson (道法自然).** 大音希聲 — the fix was not a faster whole-screen stare but *less*
+looking: low-acuity where acuity is wasted, and aiming at the not-yet (the target's future)
+rather than the already-gone (its last snapshot). 為學者日益，聞道者日損: we did not add a
+chase loop, we subtracted scanned pixels and subtracted the latency by prediction. 無為而無不為.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

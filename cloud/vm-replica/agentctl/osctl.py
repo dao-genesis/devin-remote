@@ -430,14 +430,25 @@ def screenshot(path: str) -> str:
 
 
 def find_color(target: tuple[int, int, int], tol: int = 24,
-               rgb: bytes | None = None, size: tuple[int, int] | None = None
-               ) -> dict | None:
+               rgb: bytes | None = None, size: tuple[int, int] | None = None,
+               step: int = 1) -> dict | None:
     """Locate a colour on the desktop purely by pixels (no DOM).
 
     Scans for pixels within ``tol`` (per-channel) of ``target`` and returns the
     centroid ``{x, y, count, bbox}`` in *screen* coordinates — exactly what
     ``osctl.click`` consumes — or ``None`` if the colour is absent. Pass an
-    existing ``rgb``/``size`` to reuse one capture for several lookups."""
+    existing ``rgb``/``size`` to reuse one capture for several lookups.
+
+    ``step`` is *acuity*: with ``step=1`` every pixel is examined (full acuity);
+    with ``step=n`` only every n-th pixel on every n-th row is sampled, so the
+    scan does ``~1/n²`` the work. A whole-screen scan in pure Python is millions
+    of pixels and dominates a perceive→act loop (hundreds of ms); the retina's
+    *periphery* is likewise low-resolution — it does not read every receptor.
+    A coarse ``step`` finds *where* a solid region is in a fraction of the time
+    (the centroid of a uniform blob is unbiased under regular subsampling); then
+    re-locate at full acuity in a small window (see :func:`foveate`) to refine.
+    ``count`` is the number of *matched samples* (≈ area/step²), so a threshold
+    on ``count`` must account for ``step``. ``bbox`` is rounded to the sample grid."""
     if rgb is None:
         w, h, rgb = capture_rgb()
     else:
@@ -445,14 +456,15 @@ def find_color(target: tuple[int, int, int], tol: int = 24,
             raise ValueError("size required when rgb is provided")
         w, h = size
     tr, tg, tb = target
+    s = max(1, int(step))
     sx = sy = n = 0
     minx = miny = 1 << 30
     maxx = maxy = -1
-    stride = w * 3
-    for y in range(h):
-        row = y * stride
-        for x in range(w):
-            i = row + x * 3
+    xstep = 3 * s
+    for y in range(0, h, s):
+        row = y * w * 3
+        i = row
+        for x in range(0, w, s):
             if (abs(rgb[i] - tr) <= tol and abs(rgb[i + 1] - tg) <= tol
                     and abs(rgb[i + 2] - tb) <= tol):
                 sx += x
@@ -466,6 +478,7 @@ def find_color(target: tuple[int, int, int], tol: int = 24,
                     miny = y
                 if y > maxy:
                     maxy = y
+            i += xstep
     if n == 0:
         return None
     return {"x": sx // n, "y": sy // n, "count": n,
@@ -589,6 +602,64 @@ def foveate(target: tuple[int, int, int], center: tuple[int, int],
         loc["bbox"] = (a + x0, b + y0, c + x0, d + y0)
     loc["roi"] = (x0, y0, rw, rh)
     return loc
+
+
+def reach(target: tuple[int, int, int], tol: int = 24, step: int = 4,
+          radius: int = 90, lead: float = 0.03, gap: float = 0.012,
+          click_fn=None) -> dict | None:
+    """Click a target that may still be moving, by *predictive* foveated reach (F144).
+
+    The honest failure this fixes (reproduced live): locate-then-click reads one
+    snapshot, but a synthesised click lands tens of ms later, so on a moving
+    element it hits where the target *used to be* — at 900 px/s the classic
+    full-screen ``find_color``+click missed every time (~265 px off), because the
+    232 ms whole-screen scan alone is ages of motion. Two corrections, both how
+    the visuomotor system actually does it:
+
+    1. **Acquire with the periphery, refine with the fovea.** A coarse ``step``
+       scan finds *where* the target roughly is in a few ms (low-acuity, like
+       peripheral vision), then :func:`foveate` re-reads that small window at full
+       acuity — total acquire is ms, not hundreds of ms, so the target is still in
+       the fovea when we look again.
+    2. **Predict, don't chase.** Smooth pursuit does not aim where the target *is*
+       (that image is already old by one neural delay); it estimates the target's
+       velocity and aims where it *will be*. So sample the fovea twice (``gap`` s
+       apart) for a velocity, then click the position extrapolated ``lead`` seconds
+       ahead — ``lead`` being the perceive→click-lands latency. With ``lead=0`` this
+       degrades to a pure (non-predictive) foveated reach.
+
+    Returns ``{x, y, vx, vy, settled}`` — the *clicked* screen point and the
+    measured pixel/second velocity — or ``None`` if the target was never found.
+    ``click_fn`` defaults to :func:`click`; pass one to intercept (tests/dry-run)."""
+    do_click = click_fn or click
+
+    def acquire() -> dict | None:  # coarse, whole-screen (periphery)
+        w, h, rgb = capture_rgb()
+        return find_color(target, tol=tol, rgb=rgb, size=(w, h), step=step)
+
+    a = acquire()
+    if a is None:
+        return None
+    t0 = time.time()
+    p0 = foveate(target, (a["x"], a["y"]), radius=radius, tol=tol) or a
+    if gap > 0:
+        time.sleep(gap)
+    t1 = time.time()
+    p1 = foveate(target, (p0["x"], p0["y"]), radius=radius, tol=tol)
+    if p1 is None:                       # left the fovea → re-acquire (saccade)
+        a = acquire()
+        if a is None:
+            return None
+        p1 = foveate(target, (a["x"], a["y"]), radius=radius, tol=tol) or a
+        t1 = time.time()
+    dt = t1 - t0
+    vx = (p1["x"] - p0["x"]) / dt if dt > 0 else 0.0
+    vy = (p1["y"] - p0["y"]) / dt if dt > 0 else 0.0
+    px = int(round(p1["x"] + vx * lead))
+    py = int(round(p1["y"] + vy * lead))
+    do_click(px, py)
+    return {"x": px, "y": py, "vx": vx, "vy": vy,
+            "settled": abs(vx) < 1.0 and abs(vy) < 1.0}
 
 
 def crop_rgb(rgb: bytes, size: tuple[int, int], bbox: tuple[int, int, int, int]
@@ -995,7 +1066,8 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
 
 def wait_stable(target: tuple[int, int, int], tol: int = 24, move_tol: int = 3,
                 settle_frames: int = 3, interval: float = 0.12,
-                timeout: float = 6.0, radius: int = 80) -> dict | None:
+                timeout: float = 6.0, radius: int = 80,
+                scan_step: int = 4) -> dict | None:
     """Locate a colour only once it has stopped moving — by foveated pursuit (F054/F143).
 
     Every other primitive here reads a *single* ``capture_rgb`` snapshot, but a
@@ -1035,12 +1107,15 @@ def wait_stable(target: tuple[int, int, int], tol: int = 24, move_tol: int = 3,
     anchor: tuple[int, int] | None = None
     anchor_t = 0.0
 
-    def saccade() -> dict | None:  # full-screen re-acquire
+    def saccade() -> dict | None:  # full-screen re-acquire (coarse/peripheral)
         nonlocal samples, saccades
         w, h, rgb = capture_rgb()
         samples += 1
         saccades += 1
-        return find_color(target, tol=tol, rgb=rgb, size=(w, h))
+        # A saccade only needs to find *where* the target roughly is; the fovea
+        # then refines it. So scan at low acuity (``scan_step``) — a whole-screen
+        # full-acuity scan is hundreds of ms and would itself undersample motion.
+        return find_color(target, tol=tol, rgb=rgb, size=(w, h), step=scan_step)
 
     # Acquire: saccade until the target is first seen (or time out).
     while time.time() < deadline:
