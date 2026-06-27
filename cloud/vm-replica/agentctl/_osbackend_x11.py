@@ -133,10 +133,26 @@ def mouse_wheel(notches: int, horizontal: bool = False) -> None:
             _x.XFlush(_dpy)
 
 
-def capture_rgb() -> tuple[int, int, bytes]:
-    w, h = screen_size()
+def capture_rgb(x: int = 0, y: int = 0,
+                w: "int | None" = None, h: "int | None" = None
+                ) -> tuple[int, int, bytes]:
+    """Grab the root, or a sub-rectangle (foveal window) of it, as (w, h, rgb).
+
+    With no args this is the full-screen grab. Given x/y/w/h it asks XGetImage for
+    only that rectangle — a smaller, faster read used for foveated, high-rate
+    sampling. The rectangle is clamped to the screen so a window partly off-screen
+    still returns a valid image."""
+    sw, sh = screen_size()
+    if w is None:
+        w = sw
+    if h is None:
+        h = sh
+    x = max(0, min(int(x), sw - 1))
+    y = max(0, min(int(y), sh - 1))
+    w = max(1, min(int(w), sw - x))
+    h = max(1, min(int(h), sh - y))
     with _lock:
-        img_p = _x.XGetImage(_dpy, _root, 0, 0, w, h, _ALLPLANES, _ZPIXMAP)
+        img_p = _x.XGetImage(_dpy, _root, x, y, w, h, _ALLPLANES, _ZPIXMAP)
         if not img_p:
             raise RuntimeError("XGetImage failed")
         img = ctypes.cast(img_p, ctypes.POINTER(_XImage)).contents

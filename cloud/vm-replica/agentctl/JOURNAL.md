@@ -3585,45 +3585,125 @@ on being faithful):
 - **Capture.** `XGetImage` of the root, BGRA→RGB into the same tight `w*h*3` buffer
   the GDI grab produced, freeing the image each time so repeated grabs don't leak.
 
-**Live (Linux, X11, 1600×1200):** `710/738 checks passed`, deterministic ×2
-(identical failure sets both runs). Every input/gesture/capture primitive and
-every *single-ink* perception primitive (find_color, blobs, edges, templates,
+**Live (Linux, X11):** at the **maximised 1600-wide** window, `703–710/738`,
+deterministic across runs. Every input/gesture/capture primitive and every
+*single-ink* perception primitive (find_color, blobs, edges, templates,
 read_glyph/read_text/read_words, detect_fg, the whole wait/settle/diff family,
 cursor_pos) passes live against real Chrome. The X11 leaves were independently
 proven first in `_x11proto.py` / `_x11e2e.py` (magenta-pixel click, Unicode type,
 clipboard paste) before being folded in.
 
-**Honest note (the 28 deltas — all perception-layer, none in the floor).** The
-remaining failures are not OS-backend defects; they are places where the
-*pixel-level perception* was calibrated against Windows rendering/timing and is
-sensitive to this Linux box's:
-- **Font rasterisation (FreeType vs ClearType).** All multi-colour OCR rounds
-  (`palette` and its dependants `read_region`/`read_block_region`/`…_words`).
-  `palette` clusters quantised colour buckets above a population floor taken over
-  the *whole* region; FreeType's heavier anti-alias spreads a small word's ink
-  across more buckets, so one ink of three can fall under the floor and drop out,
-  and a run's *leading* glyph (its left edge sub-pixel-shifted) is segmented one
-  column off and misread (O→D, R→L, N→L). Single-ink reads, which dominate real
-  use, are unaffected.
-- **Animation cadence resonance.** `wait_stable` on the R18 fixture: this box's
-  whole-screen `find_color` scan + the default 0.12 s poll happens to beat against
-  the fixture's 180 ms teleport, so the centroid aliases to one phase and "settles"
-  early; and the multi-green-cluster R97 scene pulls `find_color`'s centroid off
-  the panel. Both are cadence/centroid coincidences of *this* display, not wrong
-  input or capture.
+**Honest note (the ~28 deltas — harness geometry & cadence, none in the floor).**
+The remaining failures are not OS-backend defects, and — this round corrects an
+earlier guess that blamed FreeType anti-aliasing — they are overwhelmingly a
+single, *demonstrated* cause: **the fixtures' `field_bbox` helper crops a fixed
+fraction of the located white field, and on a window wider than the canvas that
+fraction bites into the leftmost word.** The multi-colour OCR fixtures draw a
+1100–1300 px canvas, but maximised the viewport is ~1600 wide, so the white field
+that `find_color_blobs(white)` returns is the whole viewport — ~280 px wider than
+the canvas. A symmetric `width/16` (or `/8`) inset then lands *inside* the
+left-aligned first word. Proven with `_probe_region_clip.py` on scene B
+(`RED`/`GRN`/`BLU`): maximised, the leading `R` is captured **30 px** wide (vs
+35–42 px for full glyphs), its left stem clipped, and `read_glyph` returns `L`
+→ `LEDGRNBLU`. Resize the window so the viewport ≈ the canvas (≈1320 wide) and the
+same leading `R` is captured **42 px** wide and matches `R` at Hamming distance 5
+→ `REDGRNBLU`. With that one geometry change **27 of the 28 deltas vanish and the
+suite reaches `737/738`** — no primitive or test touched. On Windows the suite ran
+at a viewport where the field ≈ the canvas, so the inset never clipped; this is
+why the deltas are Linux-only without being a Linux defect.
 
-These are the next honest frontier (make `palette` ink-detection AA-robust;
-make the wait/settle family resonance- and multi-cluster-robust) — to be pushed
-into per the project's rule: grow/adjust a primitive only from a reproduced
-failure, and only in a way that is correct on *both* grounds. They are recorded
-here rather than hidden behind a Linux-only threshold tweak that would risk the
-Windows reading the same primitives were tuned for.
+The two residuals are likewise harness-geometry/timing, not floor defects:
+- **R18 `wait_stable`** — *capture-rate aliasing*: a full-screen `capture_rgb` +
+  `find_color` scan is slow enough that consecutive samples can fall an even number
+  of the fixture's 180 ms teleports apart and read the *same* spot, so the motion is
+  undersampled (Nyquist) and it can "settle" early. It is cadence-dependent (it
+  passes or fails with the exact per-iteration timing), not an input/capture error.
+  **(Resolved structurally in F143 by foveated pursuit — see below.)**
+- **R103 green centroid** — the check builds its target box from a *screen* fraction
+  `(w//2, 0.6·h)` and expects the full-page green's centroid to land inside it, so it
+  depends on where the window sits on the captured screen. `find_color` returns the
+  correct centroid of the green; the assumption is about window placement.
+
+The lesson recorded for the next rounds: these are **environment/harness** surfaces,
+to be met by running the suite at a viewport that matches the fixtures (field ≈
+canvas) rather than by a Linux-only threshold tweak that would risk the Windows
+reading the same primitives were tuned for. A first hardening was attempted for R18
+(a wall-clock hold + non-resonant poll); it did **not** fix the aliasing, because a
+slow *full-screen* capture undersamples the motion outright — jitter cannot add
+samples that were never taken. That dead end pointed at the real cause (sampling
+*rate*, not sampling *phase*) and is resolved properly in F143 below: do not poll
+the whole wall faster — foveate. The discipline held throughout: grow a primitive
+only from a reproduced failure, and only with a fix proven correct on *both* grounds.
 
 **Lesson (道法自然):** 上善若水，水善利萬物而不爭 — the highest good is like water,
 which benefits all things by taking the shape of whatever holds it. The toolkit
 does not argue with the OS; it lets the OS be the vessel and flows the same way on
 each. 無為而無不為 — name the floor, do nothing above it that knows the floor's
 name, and it runs everywhere.
+
+---
+
+## F142 — the fovea: ROI capture (`capture_rgb(x,y,w,h)`, `foveate`)
+
+**Friction (reproduced, from F141's R18 residual).** Every read until now grabbed
+the *whole* screen. That is how a human would operate a GUI if the only way to see
+were to photograph the entire wall and scan every pixel — and it is exactly why
+`wait_stable` undersampled: a full-screen `find_color` is millions of pixels in
+Python, slow enough that the sampler runs slower than a 180 ms animation step, so it
+Nyquist-aliases the motion (F141, R18). Polling "the whole wall" faster is not the
+answer; the eye never did that.
+
+**Why this is structural (referencing the visual system).** A human retina is not
+uniform: a tiny central **fovea** carries nearly all the acuity over ~1–2° of arc,
+and the eye *aims* it where the signal is, re-reading that small patch many times a
+second while the periphery stays coarse. The cost of "looking" is thereby decoupled
+from the size of the scene. The OS floor already had the one call needed to give the
+toolkit a fovea — both `XGetImage` and GDI `BitBlt` take a *source rectangle* — it
+was simply never exposed. So F142 widens the leaf, on **both** backends identically,
+to `capture_rgb(x, y, w, h)`: grab only a sub-rectangle (clamped to the screen).
+
+`osctl.foveate(target, center, radius)` is the fovea built on it: grab a `2·radius`
+window around an expected point, locate inside it, and map the hit back to *screen*
+coordinates so it drops straight into `click`. And — 大音希聲 — its `None` is a
+signal, not a non-answer: target-not-in-window *means* the thing has left the fovea
+(it moved, or the aim was wrong), the cue to saccade.
+
+**Live (Linux, X11):** a 160×160 foveal grab is **~0.2 ms vs ~6.4 ms** for the
+full screen (**~41× faster**), and `foveate` returns the identical screen centroid
+as the full-screen `find_color` (`dx=dy=0`). Proven in `_probe_fovea.py`.
+
+## F143 — smooth pursuit + saccade: `wait_stable` rebuilt on the fovea
+
+**Friction.** The same R18 — a synthesised click on a moving target lands where the
+target *used to be*, and the F054 fixed-rate full-screen poll could falsely "settle"
+mid-flight (it failed live: `settled click hits … :: MISS`).
+
+**Why this is structural (referencing oculomotor control).** The eye tracks a moving
+thing with two complementary motions: **smooth pursuit** keeps the fovea on a target
+that stays roughly in view, and a fast **saccade** re-points it when the target jumps
+out of the foveal window. Loss of the target *from the fovea* is itself the cue to
+saccade. `wait_stable` is rebuilt exactly so: acquire once with a full grab, then
+*pursue* inside a fovea via `foveate` at a fast poll (foveal grabs are cheap, so the
+sampler finally out-paces the motion). While the fovea keeps the target within
+`move_tol` it is at rest — hold that for a wall-clock `settle_frames·interval` and it
+is settled. The instant the target leaves the fovea, that absence triggers one
+full-screen **saccade** to re-acquire and the hold restarts. Dense sampling is foveal
+(no undersampling); leaving the fovea resets the hold (cannot false-settle mid-motion).
+No cadence is tuned to any display — correct on **both** grounds by construction.
+
+**Live, A/B at the same geometry (1320):** committed F141 floor → `736/738`, failing
+`settled click hits the now-stationary target :: MISS` (R18 aliases). With F143 →
+`737/738`, R18 fully passes, the only residual the pre-existing R103 green-centroid
+(window-placement, untouched). At **maximised 1600**, R18 also passes (`samples=33`,
+`settled click … HIT`); the remaining failures there are purely the F141 OCR
+viewport-crop deltas. A focused 5× repro (`_probe_settle.py`) settles in ~2.0 s every
+time with `saccades≈5` (it re-acquires after each teleport and settles only at the
+true rest). So R18 is fixed at **both** viewports — a sampling-rate cure, not a phase
+hack: 反也者道之動 — the dead end (jitter) pointed straight at the way through (foveate).
+
+**Lesson (道法自然):** 為學者日益，聞道者日損 — the earlier instinct was to *add*
+timing machinery to a full-screen poll; the Tao was to *subtract* the scanned area
+until sampling was cheap enough to simply see faster. 無為而無不為.
 
 ---
 

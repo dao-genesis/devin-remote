@@ -13,9 +13,9 @@ primitive exists lives in [`JOURNAL.md`](./JOURNAL.md) — read that first.
 |---|---|
 | `cdp.py` | Minimal Chrome DevTools Protocol client: hand-rolled RFC 6455 WebSocket, JSON-RPC correlation, a background reader thread, execution-context tracking, and a fire-and-forget `send` for on-thread handlers. |
 | `browser.py` | Human-like gestures over CDP: `navigate`, `click`/`click_text`, `type_text`/`insert_text`, `set_value`, `set_file_input`, `expect_dialog`, `wait_for`/`wait_change`, shadow-piercing `exists`, `screenshot`. |
-| `osctl.py` | The floor below the DOM (platform-agnostic): mouse+keys, clipboard, `omnibox_go` (atomic address-bar paste), a screen grab with a dependency-free PNG encoder, plus the whole gesture + perception (locate/read/template/wait) vocabulary. Selects an OS backend at import. |
-| `_osbackend_win.py` | Windows leaf primitives: `SendInput` mouse/keys, clipboard, GDI `BitBlt` capture. |
-| `_osbackend_x11.py` | Linux leaf primitives: X11 + XTEST mouse/keys, selection-owner clipboard, `XGetImage` capture (pure `ctypes`, no `python-xlib`). |
+| `osctl.py` | The floor below the DOM (platform-agnostic): mouse+keys, clipboard, `omnibox_go` (atomic address-bar paste), a screen grab with a dependency-free PNG encoder, plus the whole gesture + perception (locate/read/template/wait) vocabulary. Includes a **fovea** — `capture_rgb(x,y,w,h)` ROI grab + `foveate()` — and a foveated-pursuit `wait_stable`. Selects an OS backend at import. |
+| `_osbackend_win.py` | Windows leaf primitives: `SendInput` mouse/keys, clipboard, GDI `BitBlt` capture (whole screen or a source sub-rectangle). |
+| `_osbackend_x11.py` | Linux leaf primitives: X11 + XTEST mouse/keys, selection-owner clipboard, `XGetImage` capture (whole screen or a sub-rectangle; pure `ctypes`, no `python-xlib`). |
 | `test_live.py` | End-to-end proof. Drives a real Chrome through every friction family. |
 
 ## Prerequisites
@@ -27,6 +27,11 @@ primitive exists lives in [`JOURNAL.md`](./JOURNAL.md) — read that first.
   `_osbackend_x11` on Linux (X11 + XTEST; needs `libX11`/`libXtst` and a reachable
   `DISPLAY`). `cdp.py` + `browser.py` are platform-agnostic. macOS has no backend
   yet.
+- Running `test_live.py`: a few multi-colour OCR fixtures locate the white "field"
+  as the whole viewport and inset a fixed fraction, so they assume the **viewport ≈
+  the canvas**. Run the browser at a content-sized window (~1320 wide), not
+  maximised on a much wider screen, or the inset clips the leftmost glyph of the
+  left-aligned word. See `_probe_region_clip.py` and JOURNAL F141.
 
 ## Quick start
 
