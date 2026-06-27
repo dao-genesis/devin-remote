@@ -2,6 +2,20 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.38
+- **MCP 知识库归一 · 与内穿同源的「实时反向注入 + 断线零人工自愈」(闻道者日损)**。
+  - **MCP 使用文档(第三篇知识)精简 + 软编码**: `bridgeGenerateMcpUsageMd()` 重写——
+工具表不再硬编码,改由 `daoMcpToolDefs()` 按前缀(`pc_`/`browser_`/`plugin_`/`vscode_`)
+**实时归组自生成**(数量/名称恒与实际 `/mcp` 一致·为变所适·永不走样);删去过时的 `vm_*`
+虚列;补上与内穿文档同源的「断线零人工自愈」配方(端点死→重读本条目拿当前可达 `/mcp`);
+正文「本机」行实时回显 主机/工作区/插件版本/工具数。最小描述撬动最大能力。
+  - **实时反向注入随状态刷新**: `bridgeCurrentSig()` 签名扩入「主机 / 工作区名 / 根目录
+/ 插件版本 / 工具数」(不含易变时间戳·杜绝无谓 churn) → 设备/IDE/工具集/版本任一变化即翻
+签名,存活探测环每跳(≤30s)以签名守柔重注(`liveness-state`),`onDidChangeWorkspaceFolders`
+即时触发——令 MCP/内穿两篇知识恒随用户各设备与 IDE 整体状态实时刷新,你每次连上读到的都是最新。
+  - 自检: `node --check`(src+out)、dao-vsix/dao-one 构建、render_check、rt-flow 测试全过、
+rtflow 源↔vendored 一致。
+
 ## 3.50.37
 - **核心 MCP 板块大升级 · 浏览器模块对齐 Playwright/Chrome-DevTools-MCP(把插件当浏览器用·与「我操作自己浏览器」对等)**。`browser_*` 由原 5 工具(launch/navigate/eval/screenshot/targets)扩为完整一套(CDP 原生·零 npm 依赖): `browser_snapshot`(页内注入 `__daoB` 助手·产可交互元素「无障碍快照」带 `ref`·Playwright 杀手锏)、`browser_click/type/hover/select/press_key/scroll/drag`(走 CDP `Input.*` **可信输入事件**·ref|selector|x,y|nx,ny 多种定位)、`browser_wait`(selector 出现/消失|text|ms)、`browser_back/forward/reload`、`browser_get_text/get_html`、`browser_console/network`(页内 console+fetch/XHR 钩子缓冲)、`browser_tabs`(list/new/select/close)、`browser_upload`(`DOM.setFileInputFiles`)、`browser_close`。
 - **软件本体「公开所有端口」**: 新增 `plugin_api`(直通任意 `/api/*`·route 必以 /api/ 开头) + `plugin_reload`(热修·须 `{confirm:true}` 才重启窗口)。

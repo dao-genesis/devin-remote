@@ -4291,41 +4291,55 @@ function bridgeGenerateCloudMd(): string {
 // 道法自然 · MCP 使用文档 (四大模块) — 反向注入为第三篇知识。讲清四大模块 MCP「是什么/怎么用」,
 //   日常整机直连仍走简版内网穿透 MD; 需要更深层专业操作时, Agent 转用本 MCP。
 function bridgeGenerateMcpUsageMd(): string {
-    let mcpUrl = '', mcpTok = '';
-    try { const ep = daoResolveMcpEndpoint(); if (ep) { mcpUrl = ep.url; mcpTok = ep.token; } } catch { /* 守柔 */ }
-    const urlLine = mcpUrl || '(随隧道动态生成，已自动注入到账号 MCP 列表)';
+    let mcpUrl = '';
+    try { const ep = daoResolveMcpEndpoint(); if (ep) { mcpUrl = ep.url; } } catch { /* 守柔 */ }
+    const endpoint = mcpUrl || '(随隧道动态生成·已自动注入到账号 MCP 列表)';
+    // 软编码: 工具按前缀归组, 数量/名称全由 daoMcpToolDefs() 实时生成 → 永不与实际 /mcp 走样(为变所适)。
+    const groups: { [k: string]: string[] } = {}; const order: string[] = [];
+    try {
+        for (const t of daoMcpToolDefs()) {
+            const g = (String(t.name).split('_')[0] || 'misc') + '_*';
+            if (!groups[g]) { groups[g] = []; order.push(g); }
+            groups[g].push(t.name);
+        }
+    } catch { /* 守柔 */ }
+    const meta: { [k: string]: string } = {
+        'pc_*': '操作整机(鼠键/截屏/执行/文件/剪贴板·对等你操作自己电脑)',
+        'browser_*': '把插件当浏览器(Chrome CDP·Playwright/Chrome-MCP 级·对等你操作自己浏览器)',
+        'plugin_*': '软件本体(公开所有 /api 端口·读写/编辑/搜索/终端/git/热修)',
+        'vscode_*': 'IDE 对等(命令/诊断/定义/引用/符号/打开/活动编辑器)',
+    };
+    let total = 0;
+    const rows = order.map(g => { total += groups[g].length; return '| `' + g + '` | ' + (meta[g] || '') + ' | ' + groups[g].length + ' · ' + groups[g].join(' / ') + ' |'; });
+    const host = os.hostname();
+    const wsName = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0] && vscode.workspace.workspaceFolders[0].name) || '';
     return [
-        '# ☯ DAO Bridge MCP · 综合归一 MCP 使用文档',
+        '# ☯ DAO Bridge MCP · 归一 MCP 使用文档',
         '',
-        '> 五大模块(浏览器 / 整机 GUI / 插件本体 / VSCode / Windows 多 RDP)整合归一为单一综合 MCP，以 **MCP(Model Context Protocol)** 形态对外开放。',
-        '> 已作为自定义 MCP **反向注入到账号**(HTTP 传输，无需手动配置)；Agent 直接以 MCP 工具调用即可。',
-        '> 日常「整机直连(读写文件/执行命令)」走另一篇内网穿透文档；需要更深层专业操作时用本 MCP。',
+        '> 一个公网 MCP 端点统摄四模块——把你的电脑 / 浏览器 / IDE / 插件本体当作我自己的来操作(对等·浑然一体)。',
+        '> 已作为自定义 MCP **反向注入到账号**(HTTP/Streamable·无需手动配置)；先 `tools/list` 再 `tools/call`。',
         '',
-        '## 是什么',
+        '## 接入',
         '',
-        '- 名称：`DAO Bridge MCP`(HTTP 传输 / Streamable HTTP)。',
-        '- 端点：' + urlLine,
-        '- 鉴权：' + (mcpTok ? '`Authorization: Bearer <已随注入下发>`' : '(无 token 或随注入下发)'),
-        '- 本质：把本机已实测的计算机控制底座 + 二合一插件操作面，统一代理为一个公网 MCP 端点。',
+        '- 端点：' + endpoint,
+        '- 鉴权：`Authorization: Bearer <已随注入下发>`',
+        '- 本机：' + host + (wsName ? ' · 工作区 ' + wsName : '') + ' · 插件 v' + EXT_VERSION + ' · 工具 ' + total + ' 个',
         '',
-        '## 五大模块工具组(综合归一·不分而治之)',
+        '## 四模块工具(归一·软编码实时自生成)',
         '',
-        '| 工具组 | 模块 | 能力 |',
+        '| 组 | 模块 | 工具 |',
         '|---|---|---|',
-        '| `pc_*` | 操作整机 | exec / screenshot / 鼠键(click/type/key/drag/scroll) / 文件读写 / 窗口枚举 / `pc_ui_tree` 控件级定位 / activate |',
-        '| `browser_*` | 浏览器 | Chrome CDP(Playwright/Chrome-MCP 级)：snapshot(带 ref) / click / type / hover / select / press_key / scroll / wait / back / forward / reload / get_text / get_html / console / network / tabs / upload / drag / close / launch / navigate / eval / screenshot / targets |',
-        '| `plugin_*` | 插件本体/工作区 | health / exec / ls / file / write / edit / search / terminal / git / tools |',
-        '| `vscode_*` | VSCode 暴露 | command / commands / diagnostics / definitions / references / symbols |',
-        '| `vm_*` | Windows 多 RDP | 每账号隔离会话 create/attach/destroy/snapshot + 会话内整机面(与 `pc_*` 同构·带 `vm` 目标) |',
+        ...rows,
         '',
-        '## 怎么用',
+        '## 断线零人工自愈(务必先读·与内穿文档同源)',
         '',
-        '1. 在账号的 MCP 列表里确认 `DAO Bridge MCP` 已启用(由反向注入自动写入)。',
-        '2. 以标准 MCP 工具调用：先 `tools/list` 看可用工具，再 `tools/call` 传 `{name, arguments}`。',
-        '3. 例：`browser_navigate {"url":"https://app.devin.ai"}`、`pc_screenshot {}`、`plugin_exec {"cmd":"hostname"}`、`vscode_command {"command":"workbench.action.files.save"}`。',
+        '> 端点随隧道重启而变。插件已自带闭环：**自动识别 → 打不通自动刷新 → 自动把新地址反向注入回本条目**。',
         '',
-        '> **归一·单隧道自愈**：MCP 已蹭在常驻桥(DAO Bridge)的耐用隧道上(`<桥URL>/mcp`)，不再自起第二条快速隧道。',
-        '> 桥隧道地址重启会变，但插件探测到旧地址打不通即刷新并重注新地址；因此账号里 MCP 的 URL 始终指向当前可达的端点，无需手动维护。',
+        '1. 用上面端点调 `tools/list`。**2xx=活** → 直接 `tools/call`。',
+        '2. 若 5xx/超时/DNS 失败=隧道已轮换：**不要问用户**，重读本知识条目拿当前可达 `/mcp`(看「本机」行时效)。',
+        '3. 重读仍旧址(插件正在重建)：每 30s 重读一次、最多约 5 分钟；新址出现且 `tools/list` 通即接管。',
+        '',
+        '> 设备 / IDE / 工具集 / 版本任一变化，插件即重生成本文并反向注入 → 你每次连上读到的恒是最新。',
         '',
         '*道法自然 · 无为而无不为*',
     ].join('\n');
@@ -4674,7 +4688,10 @@ async function bridgeLivenessTick(): Promise<void> {
                 try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ }
                 bridgeScheduleReinject('liveness-effectiveness');
             } else {
-                daoLoopLog('tunnel', 'probe ALIVE+EFFECTIVE (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 保持');
+                daoLoopLog('tunnel', 'probe ALIVE+EFFECTIVE (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 保持·态签名核对');
+                // 端点稳态但「设备/IDE/工作区/工具集/版本」可能已变 → 签名守柔重注(签名未变即空转·省网),
+                //   令 MCP/内穿两篇知识恒随用户各设备与 IDE 整体状态实时刷新(与内穿同逻辑·闻道者日损)。
+                bridgeScheduleReinject('liveness-state');
             }
             return;
         }
@@ -10753,7 +10770,13 @@ function bridgeCurrentSig(): string {
     try { const c = bridgeReadPublishedConn(); if (c) { if (c.url) url = c.url; } } catch { /* 守柔 */ }
     let mcpUrl = '', mcpTok = '';
     try { const ep = daoResolveMcpEndpoint(); if (ep) { mcpUrl = ep.url; mcpTok = ep.token; } } catch { /* 守柔 */ }
-    return [url, tok, String(ws.port || ''), mcpUrl, mcpTok].join('|');
+    // 软编码·实时态: 设备/IDE/工作区/工具集/版本任一变即翻签名 → 反向注入随之刷新(不含易变时间戳, 杜绝无谓 churn)。
+    //   令 MCP/内穿两篇知识恒随「用户各设备与 IDE 整体状态」更新, 你每次连上读到的都是最新(与内穿同逻辑)。
+    const host = os.hostname();
+    const wsName = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0] && vscode.workspace.workspaceFolders[0].name) || '';
+    const root = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0] && vscode.workspace.workspaceFolders[0].uri.fsPath) || '';
+    let toolN = 0; try { toolN = daoMcpToolDefs().length; } catch { /* 守柔 */ }
+    return [url, tok, String(ws.port || ''), mcpUrl, mcpTok, host, wsName, root, EXT_VERSION, String(toolN)].join('|');
 }
 async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: number; changed: boolean }> {
     if (_bridgeReinjectInflight) return { injected: 0, changed: false };
@@ -10835,6 +10858,8 @@ function bridgeWatchForReinject(context: vscode.ExtensionContext): void {
             context.subscriptions.push({ dispose: () => { try { w.close(); } catch { /* 守柔 */ } } });
         } catch { /* 守柔 */ }
     }
+    // IDE 整体状态变更即时反注(签名守柔·未变即空转): 工作区文件夹增删 → 知识库「本机/工作区」行随之刷新。
+    try { context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => bridgeScheduleReinject('ws-change'))); } catch { /* 守柔 */ }
 }
 // ═══════════════════════════════════════════════════════════
 // 账号库实时检测 + 全池反向注入闭环 — 帛书·「周行而不殆·独立而不改」
