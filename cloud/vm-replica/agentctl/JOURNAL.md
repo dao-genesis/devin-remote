@@ -3503,6 +3503,42 @@ haste misreads.
 
 ---
 
+## F140 — `wait_for_color_gone`: wait until a colour leaves (R104)
+
+**Friction.** The disappearance twin of `wait_for_color`. The blocker is often a
+coloured surface that must *go away* before you proceed: a loading veil tinted a
+brand colour, an error banner red until the input is fixed, a modal backdrop.
+`wait_until_stable` is the wrong tool — a *static* overlay is perfectly stable, so
+it reports "ready" while the veil still covers everything; `wait_for_change` trips
+on any unrelated motion underneath. What you mean is "wait until *this colour* is
+essentially absent".
+
+**Mechanism.** Poll `find_color` every `interval` until at most `max_count` pixels
+within `tol` of `target` remain; return `{gone, count, elapsed}`. The same patient
+polling as `wait_for_color`, watching the colour thin out rather than arrive.
+
+**Primitive.** `wait_for_color_gone(target, tol=24, max_count=30, interval=0.05, timeout=5.0)`.
+
+**Live (R104):** a full green veil covers the page (754k px), then clears to white
+after 1000ms. On one trigger the two waiters run in sequence: `wait_until_stable`
+falsely reports ready in ~0.1s *while the veil is still fully present* (green still
+754k); then `wait_for_color_gone(green)` keeps waiting until green truly leaves
+(drops to ~91 stray px, below the 400 floor) and reports `gone`, with a strictly
+larger `elapsed` than the stability wait. `738/738 checks passed`, deterministic ×3.
+
+**Honest note.** Symmetric to F139: it is whole-screen `find_color` under a clock,
+and the `max_count` floor (not zero) is the honest part — ~91 green pixels live in
+the browser chrome that never leave, so demanding *exactly* zero would hang
+forever. It waits for the colour to become *negligible*, not absent; the test uses
+400 because the irreducible stray count is ~91.
+
+**Lesson (道法自然):** 萬物並作，吾以觀復 — the ten thousand things rise, and I
+watch them return. A still veil is not absence; ready is not the cessation of
+motion but the going-out of the thing itself. 知止所以不殆 — know what to wait for,
+and you do not stumble.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

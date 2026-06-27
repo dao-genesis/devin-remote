@@ -1029,6 +1029,36 @@ def wait_for_color(target: tuple[int, int, int], tol: int = 24,
     return None
 
 
+def wait_for_color_gone(target: tuple[int, int, int], tol: int = 24,
+                        max_count: int = 30, interval: float = 0.05,
+                        timeout: float = 5.0) -> dict:
+    """Wait until a colour *leaves* the screen (F140).
+
+    The disappearance twin of :func:`wait_for_color`. The blocker is often a
+    coloured surface that must *go away* before you proceed: a loading veil tinted
+    a brand colour, an error banner that stays red until the input is fixed, a
+    modal backdrop. ``wait_until_stable`` is the wrong tool here — a *static*
+    overlay is perfectly stable, so it reports "ready" while the veil still covers
+    everything; and ``wait_for_change`` trips on any unrelated motion underneath.
+    What you actually mean is "wait until *this colour* is essentially absent".
+    This polls :func:`find_color` every ``interval`` until at most ``max_count``
+    pixels within ``tol`` of ``target`` remain, then returns ``{gone, count,
+    elapsed}`` — ``gone`` is whether it cleared before ``timeout``. The same patient
+    polling as ``wait_for_color``, watching for the colour to thin out rather than
+    arrive: appearance and vanishing are one waiting, faced two ways."""
+    start = time.time()
+    deadline = start + timeout
+    last = -1
+    while time.time() < deadline:
+        w, h, rgb = capture_rgb()
+        r = find_color(target, tol=tol, rgb=rgb, size=(w, h))
+        last = r["count"] if r is not None else 0
+        if last <= max_count:
+            return {"gone": True, "count": last, "elapsed": time.time() - start}
+        time.sleep(interval)
+    return {"gone": False, "count": last, "elapsed": time.time() - start}
+
+
 def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
                    size: tuple[int, int] | None = None,
                    search: tuple[int, int, int, int] | None = None,
