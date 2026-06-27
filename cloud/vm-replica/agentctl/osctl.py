@@ -180,6 +180,13 @@ uia_toggle_state = getattr(_be, "uia_toggle_state", lambda win, name=None, ctype
 # toggle, selection settles asynchronously, so the action only reports that it acted.
 uia_select = getattr(_be, "uia_select", lambda win, name=None, ctype=None: False)
 uia_is_selected = getattr(_be, "uia_is_selected", lambda win, name=None, ctype=None: None)
+# UIA expand/collapse (F173): open or close a dropdown / tree node / disclosure
+# (<details>, combobox) by meaning via ExpandCollapsePattern (actions return True if
+# issued); uia_expand_state reads the settled "collapsed"/"expanded"/"partial"/"leaf"
+# (read dual). The reveal verb — making hidden structure appear before reading it.
+uia_expand = getattr(_be, "uia_expand", lambda win, name=None, ctype=None: False)
+uia_collapse = getattr(_be, "uia_collapse", lambda win, name=None, ctype=None: False)
+uia_expand_state = getattr(_be, "uia_expand_state", lambda win, name=None, ctype=None: "")
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

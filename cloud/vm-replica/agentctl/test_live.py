@@ -1319,6 +1319,54 @@ def round_uia_focus(b: Browser, offline: bool) -> None:
         time.sleep(0.3)
 
 
+def round_uia_expand(b: Browser, offline: bool) -> None:
+    print("R134: open/close a disclosure by MEANING via UIA ExpandCollapsePattern (F173) — osctl")
+    # Some structure is hidden until revealed — a dropdown, a tree node, a <details>
+    # disclosure. uia_expand/uia_collapse open and close it by meaning through the
+    # ExpandCollapsePattern; uia_expand_state reads the settled state. This is the
+    # reveal verb: it makes hidden children appear so the rest of the floor can read
+    # and act on them. Same act/read split as toggle/select.
+    if not sys.platform.startswith("win"):
+        print("  (skip R134: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_expand"):
+        check("osctl exposes uia_expand", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — expand check skipped)")
+        return
+    b.navigate("data:text/html,<details id=d><summary>MORE</summary><p>hidden body</p></details>")
+    time.sleep(1.2)
+    st0 = ""
+    for _ in range(10):  # Chrome turns on its a11y tree lazily
+        st0 = osctl.uia_expand_state(ch["id"], "MORE")
+        if st0:
+            break
+        time.sleep(0.5)
+    check("uia_expand_state reads the disclosure's initial 'collapsed' state",
+          st0 == "collapsed", f"st0={st0!r}")
+    opened = osctl.uia_expand(ch["id"], "MORE")
+    time.sleep(0.4)
+    is_open = b.eval("document.getElementById('d').open")
+    check("uia_expand opens the disclosure by meaning (DOM .open confirms), and the "
+          "settled state reads 'expanded'",
+          opened is True and is_open is True
+          and osctl.uia_expand_state(ch["id"], "MORE") == "expanded",
+          f"opened={opened} dom_open={is_open}")
+    closed = osctl.uia_collapse(ch["id"], "MORE")
+    time.sleep(0.4)
+    is_closed = b.eval("document.getElementById('d').open")
+    check("uia_collapse closes the disclosure by meaning (DOM .open confirms)",
+          closed is True and is_closed is False,
+          f"closed={closed} dom_open={is_closed}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
 def round_uia_select(b: Browser, offline: bool) -> None:
     print("R133: choose an item by MEANING via UIA SelectionItemPattern (F172) — osctl")
     # Toggle flips a two-state checkbox; selection is the choose-ONE-of-many verb —
@@ -8544,7 +8592,7 @@ def main() -> int:
               round_pixel, round_window_text, round_set_window_text,
               round_control_at, round_find_control, round_menu, round_uia,
               round_uia_find, round_uia_value, round_uia_drive, round_uia_focus,
-              round_uia_text, round_uia_toggle, round_uia_select,
+              round_uia_text, round_uia_toggle, round_uia_select, round_uia_expand,
               round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,

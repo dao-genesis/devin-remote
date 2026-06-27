@@ -63,6 +63,12 @@ _TOGGLE_NAMES = {0: "off", 1: "on", 2: "indeterminate"}
 _SELITEM_SELECT = 3       # IUIAutomationSelectionItemPattern::Select
 _SELITEM_ISSELECTED = 6   # IUIAutomationSelectionItemPattern::get_CurrentIsSelected
 _UIA_SelectionItemPatternId = 10010
+# IUIAutomationExpandCollapsePattern vtable indices
+_EC_EXPAND = 3        # IUIAutomationExpandCollapsePattern::Expand
+_EC_COLLAPSE = 4      # IUIAutomationExpandCollapsePattern::Collapse
+_EC_STATE = 5         # IUIAutomationExpandCollapsePattern::get_CurrentExpandCollapseState
+_UIA_ExpandCollapsePatternId = 10005
+_EC_NAMES = {0: "collapsed", 1: "expanded", 2: "partial", 3: "leaf"}
 # IUIAutomationElementArray vtable indices
 _ARR_LEN = 3    # get_Length
 _ARR_GET = 4    # GetElement
@@ -571,5 +577,63 @@ def uia_is_selected(win: int, name=None, ctype=None):
             return bool(v.value)
         finally:
             _release(sp)
+    finally:
+        _release(el)
+
+
+def _ec_act(win, name, ctype, vidx):
+    uia = _get_uia()
+    if not uia:
+        return False
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return False
+    try:
+        ec = _pattern(el, _UIA_ExpandCollapsePatternId)
+        if not ec:
+            return False
+        try:
+            return _vcall(ec, vidx, ctypes.c_long, []) == 0
+        finally:
+            _release(ec)
+    finally:
+        _release(el)
+
+
+def uia_expand(win: int, name=None, ctype=None) -> bool:
+    """Expand an element found by meaning (a dropdown, a tree node, a <details>
+    disclosure) via the UIA ExpandCollapsePattern. Returns True if Expand was issued;
+    read the settled truth with :func:`uia_expand_state` (it settles asynchronously)."""
+    return _ec_act(win, name, ctype, _EC_EXPAND)
+
+
+def uia_collapse(win: int, name=None, ctype=None) -> bool:
+    """Collapse an element found by meaning via the UIA ExpandCollapsePattern — the
+    dual of :func:`uia_expand`. Returns True if Collapse was issued."""
+    return _ec_act(win, name, ctype, _EC_COLLAPSE)
+
+
+def uia_expand_state(win: int, name=None, ctype=None) -> str:
+    """Read the expand/collapse state of an element found by meaning:
+    "collapsed"/"expanded"/"partial"/"leaf", or "" if no ExpandCollapsePattern. The
+    read dual of :func:`uia_expand`/:func:`uia_collapse`."""
+    uia = _get_uia()
+    if not uia:
+        return ""
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return ""
+    try:
+        ec = _pattern(el, _UIA_ExpandCollapsePatternId)
+        if not ec:
+            return ""
+        try:
+            st = ctypes.c_int()
+            if _vcall(ec, _EC_STATE, ctypes.c_long,
+                      [ctypes.POINTER(ctypes.c_int)], ctypes.byref(st)) != 0:
+                return ""
+            return _EC_NAMES.get(st.value, "")
+        finally:
+            _release(ec)
     finally:
         _release(el)

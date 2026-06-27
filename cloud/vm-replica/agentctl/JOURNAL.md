@@ -5016,6 +5016,37 @@ convenience: press / write / aim / flip / **choose**.
 
 ---
 
+## F173 — the reveal verb: UIA ExpandCollapsePattern (`uia_expand`/`uia_collapse`/`uia_expand_state`, R134)
+
+**Ground: Windows Server 2022. Chrome `<details>` disclosure.**
+
+**Friction.** Some structure does not exist on screen until *revealed* — a dropdown's
+options, a tree node's children, a `<details>` disclosure's body. Every read and
+action verb the floor had operated on what was already present; none could *make
+hidden structure appear*. Without a reveal verb, half a modern UI's content is
+unreachable except by hunting a pixel and clicking.
+
+**Primitives (the act/read split, now habitual).**
+- `osctl.uia_expand(win, name, ctype)` → True if `Expand` was issued (vtable 3).
+- `osctl.uia_collapse(win, name, ctype)` → True if `Collapse` was issued (vtable 4).
+- `osctl.uia_expand_state(win, name, ctype)` →
+  `"collapsed"`/`"expanded"`/`"partial"`/`"leaf"`/`""` (vtable 5) — the settled read.
+
+**Live:** Chrome `<details><summary>MORE</summary>`; initial `"collapsed"`,
+DOM `.open`=False; `uia_expand` → True, DOM `.open`=True, settled `"expanded"`;
+`uia_collapse` → True, DOM `.open`=False. R134 (`round_uia_expand`, 3 checks);
+`_probe_uiaexpand.py` standalone. Full suite **839/839** clean.
+
+**Lesson (道法自然).** 天下萬物生於有，有生於無 — *all things are born of the manifest, and the
+manifest of the hidden.* A UI's full content is not all manifest at once; much waits,
+latent, behind a disclosure. The reveal verb is how the floor calls the hidden into
+the manifest so the rest of perception can act on it — expand, then read the children
+that did not exist a moment before. 啟其悶，濟其事 — open what is shut, and the work can
+proceed. With this the modern-app verb set is whole across the common joints:
+press / write / aim / flip / choose / **reveal**, each with its settled read dual.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
