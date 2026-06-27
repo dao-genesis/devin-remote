@@ -5383,6 +5383,62 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_press_hold(b: Browser, offline: bool) -> None:
+    print("R90: OS-level press_hold — a sustained stationary press (F126) — osctl")
+    # A button arms a 500ms timer on mousedown; releasing before it fires
+    # cancels it. An instant click can never let the timer fire; press_hold
+    # keeps the button down past the threshold so it confirms (green, CONFIRMED).
+    html = fixture("press_hold.html",
+                   "<!doctype html><meta charset=utf-8><title>idle</title>"
+                   "<style>html,body{margin:0}#b{position:absolute;left:120px;"
+                   "top:150px;width:240px;height:150px;background:#3366cc}</style>"
+                   "<div id=b></div><script>window.__conf=0;var t=null;"
+                   "var b=document.getElementById('b');"
+                   "b.addEventListener('mousedown',function(){t=setTimeout("
+                   "function(){window.__conf++;b.style.background='#11bb33';"
+                   "document.title='CONFIRMED';},500);});"
+                   "function cancel(){if(t){clearTimeout(t);t=null;}}"
+                   "b.addEventListener('mouseup',cancel);"
+                   "b.addEventListener('mouseleave',cancel);</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    check("capture matches click coordinate space", (w, h) == osctl.screen_size(),
+          f"{(w, h)} vs {osctl.screen_size()}")
+    btn = osctl.find_color((51, 102, 204), tol=40, rgb=rgb, size=(w, h))
+    check("located the hold button by pixels",
+          btn is not None and btn["count"] > 20000,
+          str(btn and {k: btn[k] for k in ("x", "y", "count")}))
+    if btn is None:
+        return
+    # Friction: an instant click releases before the timer fires.
+    osctl.click(btn["x"], btn["y"])
+    time.sleep(0.7)
+    check("an instant click never confirms a press-and-hold control",
+          b.title() != "CONFIRMED" and b.eval("window.__conf") == 0,
+          f"title={b.title()} conf={b.eval('window.__conf')}")
+    # Primitive: a sustained hold past the threshold confirms.
+    osctl.press_hold(btn["x"], btn["y"], duration=0.8)
+    check("press_hold holds long enough to confirm",
+          b.wait_for("document.title==='CONFIRMED'", timeout=3), b.title())
+    check("exactly one confirmation fired from the hold",
+          b.eval("window.__conf") == 1, repr(b.eval("window.__conf")))
+    time.sleep(0.3)
+    green = osctl.find_color((17, 187, 51), tol=45)
+    check("state change confirmed by pixels (button turned green)",
+          green is not None and green["count"] > 20000,
+          str(green and green.get("count")))
+    # A short hold below the threshold still does not confirm (the line is real).
+    b.navigate(html)
+    time.sleep(0.4)
+    btn2 = osctl.find_color((51, 102, 204), tol=40)
+    osctl.press_hold(btn2["x"], btn2["y"], duration=0.15)
+    time.sleep(0.7)
+    check("a hold shorter than the threshold does not confirm",
+          b.title() != "CONFIRMED" and b.eval("window.__conf") == 0,
+          f"title={b.title()} conf={b.eval('window.__conf')}")
+
+
 def round_triple_click(b: Browser, offline: bool) -> None:
     print("R89: OS-level triple_click — select a whole line/paragraph (F125) — osctl")
     # The click-multiplicity ladder: one click places the caret (empty
@@ -5557,7 +5613,8 @@ def main() -> int:
               round_locate_word, round_locate_block_word,
               round_locate_phrase, round_wait_for_phrase, round_scroll,
               round_scroll_to_phrase, round_drag_stroke, round_double_click,
-              round_middle_click, round_mod_click, round_triple_click]
+              round_middle_click, round_mod_click, round_triple_click,
+              round_press_hold]
     for r in rounds:
         try:
             r(b, offline)

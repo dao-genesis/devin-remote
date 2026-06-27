@@ -2993,6 +2993,36 @@ you cannot leap to, climb the rung you already stand on once more.
 
 ---
 
+## F126 — `press_hold`: the sustained press (R90)
+
+**Friction.** Every press in the toolkit was either *instant* (`click` —
+mouse-down and mouse-up in the same breath) or *moving* (`drag` — held, but
+travelling). Nothing could press a point and simply *stay* there. A
+hold-to-confirm button, an autorepeat stepper, a long-press that arms a timer on
+`mousedown` — all answer only a still, sustained press, and a `click` releases
+before any such timer can fire. Duration in one place was the one quantity the
+channel could not express.
+
+**Mechanism.** Button down at the point, `time.sleep(duration)` with no movement,
+button up. Between the down and the up the cursor does not stir, so a timer armed
+on `mousedown` is allowed to reach its threshold before `mouseup`/`mouseleave`
+would cancel it.
+
+**Primitive.** `press_hold(x, y, duration=0.8, right=False)`.
+
+**Live (R90):** a button arms a 500 ms timer on `mousedown`; releasing earlier
+cancels it. An instant `click` never confirms (`__conf==0`) — the friction.
+`press_hold(.., 0.8)` holds past the threshold: it confirms exactly once, title →
+`CONFIRMED`, and the change is read back through the pixels (button green). A
+`press_hold(.., 0.15)` below the threshold still does not confirm — the duration
+is doing the work, not the press alone. `654/654 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 致虛極，守靜篤 — some doors open not to force but to
+stillness held. To act is not always to strike and withdraw; sometimes the whole
+gesture is to press, and then to *remain*, until what waits on duration arrives.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

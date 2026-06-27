@@ -148,6 +148,27 @@ def double_click(x: int | None = None, y: int | None = None,
     click(right=right)
 
 
+def press_hold(x: int | None = None, y: int | None = None,
+               duration: float = 0.8, right: bool = False) -> None:
+    """Press a point and hold it still for ``duration``, then release (F126).
+
+    :func:`click` is instant — down and up in the same breath — and :func:`drag`
+    holds but *moves*. Neither can satisfy a control that answers only a
+    *sustained, stationary* press: a hold-to-confirm button, an autorepeat
+    stepper, a long-press that arms a timer. This presses the button down, waits
+    ``duration`` without moving, then releases — so a timer started on
+    ``mousedown`` is allowed to fire before ``mouseup`` cancels it, which a
+    click never permits."""
+    if x is not None:
+        move(x, y)
+        time.sleep(0.02)
+    down = MOUSEEVENTF_RIGHTDOWN if right else MOUSEEVENTF_LEFTDOWN
+    up = MOUSEEVENTF_RIGHTUP if right else MOUSEEVENTF_LEFTUP
+    _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=_MOUSEINPUT(0, 0, 0, down, 0, 0))))
+    time.sleep(duration)
+    _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=_MOUSEINPUT(0, 0, 0, up, 0, 0))))
+
+
 def triple_click(x: int | None = None, y: int | None = None,
                  gap: float = 0.05) -> None:
     """Three presses at one point — select a whole line/paragraph (F125).
