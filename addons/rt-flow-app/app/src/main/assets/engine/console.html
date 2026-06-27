@@ -585,14 +585,35 @@
   //   初值=该静态源, 且控制面常由 P2P/mesh 直供 (永不触发 _relayHttp→_resolveLive
   //   升级) → ENDPOINT 恒为静态源 → openInPage 裸用它必 404 (网页内打开 Devin/任意站
   //   全失败, 而控制面/手机操控仍正常 —— 正是「控台开得出、页面打不开」之根因)。
-  //   修法: 反代前先解析到「非静态宿主的活端点」: 已是则零开销直用; 否则经 _resolveLive
-  //   探活设备隧道/Worker (与控制面 failover 同候选/同优先级)。全不可达才回 null。
+  //   修法: 反代前先解析到「非静态宿主的活端点」, 全不可达才回 null。
+  //
+  //   ⚡ 渲染基址 ≠ 控制面端点 (道·分而治之): 控制面是「低延迟·小 RPC」, 故 _candBases/_preferDirect
+  //   让**设备自带直连隧道优先**(就近·点对点)。但 _proxyBase 服务的是「app.devin.ai 大体积静态资产」
+  //   (内容哈希不变·与账号无关·数百个 module 分包) —— 对它**设备临时隧道是最差路径**:
+  //     ① 三跳「浏览器→隧道→手机上行→S3」, 远慢于「稳定中继边缘直取 S3」(实测 0.09s/命中);
+  //     ② 临时隧道(trycloudflare/lhr.life)域名每次重启即轮换, 公网浏览器 immutable 缓存按 origin 键
+  //        → 域名一换缓存全失效 → 每次重下数百模块(用户「公网渲染非常慢·达不到 APK」之根);
+  //     ③ 隧道死(530/503)时整页卡转圈(_proxyBase 旧逻辑裸用活但慢/已死的 ENDPOINT, 无失效转移)。
+  //   稳定中继(Worker)在 Cloudflare 边缘直取上游、回 immutable+CORS*、域名恒定 → 浏览器缓存跨会话长存
+  //   → 二次秒开、且**全程不经手机**(零中心依赖·彻底去中心化的渲染面)。故渲染基址**恒优先稳定中继**,
+  //   仅当它探活不通才回退当前活通道(设备隧道)兜底。控制面策略(_relayDirect/_preferDirect)不受影响。
+  var _proxyBaseGood=null;
   function _proxyBase(){
+    // 已在稳定中继上(控制面自愈保证其健康) → 直用, 零额外探活。
+    if(ENDPOINT && _isWorker(ENDPOINT) && !_isStaticHost(ENDPOINT)) return Promise.resolve(ENDPOINT);
+    if(_proxyBaseGood && !_isStaticHost(_proxyBaseGood)) return Promise.resolve(_proxyBaseGood);
+    function fallback(){ return (ENDPOINT && !_isStaticHost(ENDPOINT)) ? ENDPOINT : null; }
+    function viaResolve(){ return _resolveLive().then(function(f){ return (f&&!_isStaticHost(f))?f:fallback(); }, fallback); }
+    var wk=STABLE_RELAY;
+    if(wk && _isWorker(wk) && !_isStaticHost(wk)){
+      // 优先把渲染钉到稳定中继边缘(快·域名稳·不经手机); 它探活不通才回退设备隧道/活端点。
+      return _relayAt(wk, "/api/rpc", {cmd:"getState"}, 6000).then(function(res){
+        if(!_deadEndpoint(res)){ _proxyBaseGood=wk; return wk; }
+        return viaResolve();
+      }, viaResolve);
+    }
     if(ENDPOINT && !_isStaticHost(ENDPOINT)) return Promise.resolve(ENDPOINT);
-    return _resolveLive().then(function(found){
-      if(found && !_isStaticHost(found)) return found;
-      return (ENDPOINT && !_isStaticHost(ENDPOINT)) ? ENDPOINT : null;
-    }, function(){ return (ENDPOINT && !_isStaticHost(ENDPOINT)) ? ENDPOINT : null; });
+    return viaResolve();
   }
   //__FAILOVER_END__
 
@@ -940,6 +961,7 @@
     // 失败不外跳: 旧逻辑 openExternalNewTab(window.open 真站) 会另开浏览器标签、看着像「跳出页面」。
     //   改为在本标签内显示错误 + 重试, 永不离开单网页。
     function fail(e){
+      _proxyBaseGood=null;   // 渲染失败 → 清掉缓存的反代基址, 「重试」时重新探活解析(可能中继刚恢复/已切活端点)
       var msg=(e&&e.message)?e.message:(typeof e==="string"?e:"登录态获取失败");
       if(msg==="i_init_failed") msg="取登录态失败(账号未登录或令牌已失效)";
       if(msg==="no_proxy_endpoint") msg="未找到可达的反代端点 — 手机自带隧道与中继 Worker 均不可达。<br>请确认手机在线 (本控台仍可远程操控手机), 待隧道恢复后重试。";
