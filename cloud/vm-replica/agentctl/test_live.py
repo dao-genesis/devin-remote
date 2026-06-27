@@ -4633,6 +4633,120 @@ def round_locate_word(b, offline):
           b.wait_for("document.title==='HIT:OK'", timeout=3), b.title())
 
 
+def round_locate_block_word(b, offline):
+    print("R80: find a word anywhere in a multi-LINE block and click it "
+          "(F116) — osctl")
+    # locate_word (F115) reaches a word in ONE line; hand it a two-line block and
+    # the lines interleave by column (the pre-F114 scramble), so no word's run
+    # forms and every locate_word returns None. locate_block_word bands the rows
+    # first (like read_block_region_words), runs locate_word within each band, and
+    # returns the matching word's bbox — found where it sits in the paragraph.
+    if offline:
+        return
+
+    def hx(s):
+        s = s.lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+    MAG = (255, 0, 255)
+    chars = "OKGREDNBLUY"
+    draws = "".join("x.fillText('%s',%d,80);" % (ch, 24 + i * 96)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("bl_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=1100 height=140></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,1100,140);"
+               "x.fillStyle='#f0f';x.font='bold 80px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = sorted(osctl.find_color_blobs(MAG, tol=60, rgb=argb, size=(aw, ah),
+                                       min_count=120), key=lambda t: t["x"])
+    check("bl atlas segments into eleven reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def field_bbox(rgbX, szX, frac=16):
+        bls = osctl.find_color_blobs(hx("#ffffff"), tol=30, rgb=rgbX, size=szX,
+                                     min_count=5000)
+        if not bls:
+            return None
+        x0, y0, x1, y1 = max(bls, key=lambda t: t["count"])["bbox"]
+        iw, ih = (x1 - x0) // frac, (y1 - y0) // 8
+        return (x0 + iw, y0 + ih, x1 - iw, y1 - ih)
+
+    # Two lines of coloured text "buttons"; the canvas reports which word's drawn
+    # rect a click landed in. L1: OK(red) GO(grn). L2: NO(blue) BY(red).
+    b.navigate(fixture("bl_btn.html",
+               "<!doctype html><title>btn</title><style>html,body{margin:0;"
+               "background:#fff}</style>"
+               "<canvas id=c width=900 height=560></canvas><script>"
+               "var c=document.getElementById('c'),x=c.getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,900,560);"
+               "x.font='bold 80px monospace';x.textBaseline='middle';"
+               "x.textAlign='left';"
+               "var W=[['OK','#d32020',100,180],['GO','#1f9d35',520,180],"
+               "['NO','#1565c0',100,400],['BY','#d32020',520,400]];var R=[];"
+               "for(var i=0;i<W.length;i++){x.fillStyle=W[i][1];"
+               "x.fillText(W[i][0],W[i][2],W[i][3]);"
+               "R.push([W[i][0],W[i][2],W[i][2]+x.measureText(W[i][0]).width,"
+               "W[i][3]-40,W[i][3]+40]);}"
+               "c.addEventListener('click',function(e){"
+               "var r=c.getBoundingClientRect();"
+               "var px=e.clientX-r.left,py=e.clientY-r.top,hit='MISS';"
+               "for(var i=0;i<R.length;i++){if(px>=R[i][1]&&px<=R[i][2]"
+               "&&py>=R[i][3]&&py<=R[i][4])hit=R[i][0];}"
+               "document.title='HIT:'+hit;});</script>"))
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    sz = (w, h)
+    bb = field_bbox(rgb, sz)
+    check("bl two-line button block located", bb is not None, repr(bb))
+    if bb is None:
+        return
+
+    # The block reads as lines, but the line-deep locator cannot find a word in it.
+    lines = osctl.read_block_region_words(rgb, sz, bb, atlas)
+    check("read_block_region_words names the two lines (['OK GO','NO BY'])",
+          lines == ["OK GO", "NO BY"], repr(lines))
+    flat = [osctl.locate_word(rgb, sz, bb, atlas, t) for t in ("OK", "GO", "NO", "BY")]
+    check("FRICTION: flat locate_word finds no word in a two-line block "
+          "(lines interleave by column)", all(f is None for f in flat), repr(flat))
+
+    # The block locator finds each word where it sits, in reading order.
+    box = {t: osctl.locate_block_word(rgb, sz, bb, atlas, t)
+           for t in ("OK", "GO", "NO", "BY")}
+    have = all(v is not None for v in box.values())
+    check("locate_block_word returns a bbox for every word in the block", have,
+          repr(box))
+    if not have:
+        return
+    rows_ok = (box["OK"][1] < box["NO"][1] and box["GO"][1] < box["BY"][1])
+    cols_ok = (box["OK"][0] < box["GO"][0] and box["NO"][0] < box["BY"][0])
+    check("locate_block_word boxes sit in their lines (L1 above L2)", rows_ok,
+          "%d/%d vs %d/%d" % (box["OK"][1], box["GO"][1], box["NO"][1], box["BY"][1]))
+    check("locate_block_word boxes order left-to-right within a line", cols_ok,
+          "%d<%d / %d<%d" % (box["OK"][0], box["GO"][0], box["NO"][0], box["BY"][0]))
+    check("locate_block_word of an absent word is None",
+          osctl.locate_block_word(rgb, sz, bb, atlas, "ZZ") is None)
+
+    # READ -> ACT across rows: click a word on the SECOND line.
+    by = box["BY"]
+    osctl.click((by[0] + by[2]) // 2, (by[1] + by[3]) // 2)
+    check("clicking located 'BY' on line two presses it (read->act, block scope)",
+          b.wait_for("document.title==='HIT:BY'", timeout=3), b.title())
+    # And a word on the FIRST line, to prove it is not row-hardwired.
+    b.eval("document.title='btn'")
+    ok = box["OK"]
+    osctl.click((ok[0] + ok[2]) // 2, (ok[1] + ok[3]) // 2)
+    check("clicking located 'OK' on line one presses it (distinct row)",
+          b.wait_for("document.title==='HIT:OK'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -4663,7 +4777,7 @@ def main() -> int:
               round_read_text_conf, round_detect_fg, round_palette,
               round_read_region, round_read_block_region,
               round_read_region_words, round_read_block_region_words,
-              round_locate_word]
+              round_locate_word, round_locate_block_word]
     for r in rounds:
         try:
             r(b, offline)
