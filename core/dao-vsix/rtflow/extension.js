@@ -10092,7 +10092,7 @@ function _hasLiveConv(email) {
   try {
     const st = _dvStatusAgg.get(String(email || "").toLowerCase());
     if (!st || (st.total | 0) <= 0) return false;
-    if (Date.now() - (st.ts || 0) > 180000) return false;
+    if (Date.now() - (st.ts || 0) > DV_STATUS_HOLD_MS) return false;
     return ((st.running | 0) + (st.awaiting | 0) + (st.blocked | 0)) > 0;
   } catch {
     return false;
@@ -10770,6 +10770,11 @@ const _dvStatusAgg = new Map();
 //   连续空持续超窗才判定对话真的结束并移除 ("对话结束了那就OK")。
 const _dvEmptySince = new Map();
 const DV_STATUS_STICKY_MS = 90000; // 维持已知状态的宽限窗(默 90s ≈ 跨 1~2 个轮询周期)
+// 道·守柔不失: 显示保留窗(默 30min)。与手机版 switch.html 的 TRK_HOLD_MS 同源同理 ——
+//   面板/角标/排序「显示新鲜度」绝不因计时器到点而误灰; 状态由 running→消失只由
+//   _dvRunPoll 一次成功轮询确认空(超 DV_STATUS_STICKY_MS 宽限)主动 delete 触发,
+//   而非「ts 一过 3min 就当陈旧不显示」。轮询若暂态停摆(进程繁忙/网络抖动)亦沿用上次态。
+const DV_STATUS_HOLD_MS = 1800000;
 let _dvPreloadTimer = null;
 
 // ═══ v4.8.4 · 跨窗口选主 (singleton sweeps · 釜底抽薪根治多窗口网络并发风暴) ═══
@@ -10872,7 +10877,7 @@ function _dvRenderFromShared() {
     const items = [];
     for (const [_em, _st] of _dvStatusAgg) {
       if (!_st || (_st.total | 0) <= 0) continue;
-      if (Date.now() - _st.ts > 180000) continue;
+      if (Date.now() - _st.ts > DV_STATUS_HOLD_MS) continue;
       items.push({
         email: _em,
         running: _st.running,
@@ -11292,7 +11297,7 @@ async function _dvRunPoll() {
     const items = [];
     for (const [_em, _st] of _dvStatusAgg) {
       if (!_st || (_st.total | 0) <= 0) continue;
-      if (Date.now() - _st.ts > 180000) continue; // 与 _dvStatusAggHtml 同口径(3min)
+      if (Date.now() - _st.ts > DV_STATUS_HOLD_MS) continue; // 与 _dvStatusAggHtml 同口径(显示保留窗)
       items.push({
         email: _em,
         running: _st.running, awaiting: _st.awaiting, blocked: _st.blocked,
@@ -11460,7 +11465,7 @@ function _dvStatusAggHtml() {
   const rows = [];
   for (const [email, st] of _dvStatusAgg) {
     if (!st || (st.total | 0) <= 0) continue;
-    if (Date.now() - st.ts > 180000) continue; // 3min 过期不显示
+    if (Date.now() - st.ts > DV_STATUS_HOLD_MS) continue; // 显示保留窗内不撤(只由确认轮询清)
     totalRun += st.running; totalAwait += st.awaiting; totalBlocked += st.blocked;
     const who = st.tag || email.split("@")[0];
     const no = st.no || _dvAccountNo(email); // 账号编号 (与侧栏勾选框旁一致)
