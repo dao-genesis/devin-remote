@@ -5383,6 +5383,71 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_glide(b: Browser, offline: bool) -> None:
+    print("R94: OS-level glide — a button-less continuous mousemove path (F130) — osctl")
+    # A path-dependent hover menu: the target only "opens" if the cursor's path
+    # crossed the parent gate first (a nested-menu rule). A teleport (move) onto
+    # the target skips the gate and never opens it; a glide traces the path
+    # through the gate and opens it. The hover twin of drag.
+    html = fixture("glide.html",
+                   "<!doctype html><meta charset=utf-8><title>x</title>"
+                   "<style>html,body{margin:0;height:100%}#g{position:fixed;"
+                   "left:330px;top:120px;width:140px;height:300px;"
+                   "background:#cc8800}#t{position:fixed;left:560px;top:120px;"
+                   "width:140px;height:300px;background:#3366cc}</style>"
+                   "<div id=g></div><div id=t></div><script>window.__moves=0;"
+                   "window.__gate=0;addEventListener('mousemove',function(){"
+                   "window.__moves++;});var g=document.getElementById('g'),"
+                   "t=document.getElementById('t');g.addEventListener("
+                   "'mouseenter',function(){window.__gate++;});"
+                   "t.addEventListener('mouseenter',function(){"
+                   "document.title=window.__gate>0?'REACHED':'SKIPPED';});"
+                   "</script>")
+
+    def fresh() -> tuple[int, int, int, int] | None:
+        b.navigate(html)
+        time.sleep(0.5)
+        w, h, rgb = osctl.capture_rgb()
+        gate = osctl.find_color((204, 136, 0), tol=40, rgb=rgb, size=(w, h))
+        tgt = osctl.find_color((51, 102, 204), tol=40, rgb=rgb, size=(w, h))
+        if gate is None or tgt is None:
+            return None
+        return gate["x"], gate["y"], tgt["x"], tgt["y"]
+
+    pts = fresh()
+    check("located the gate and target by pixels", pts is not None, repr(pts))
+    if pts is None:
+        return
+    gx, gy, tx, ty = pts
+    # Friction: a teleport jumps straight onto the target, skipping the gate —
+    # the path is never traced, so the hover menu does not open.
+    osctl.move(100, ty)
+    time.sleep(0.1)
+    osctl.move(tx, ty)
+    time.sleep(0.3)
+    check("a teleport skips the gate (no path) — menu stays shut (SKIPPED)",
+          b.title() == "SKIPPED", b.title())
+    check("a teleport crossed no gate (gate count 0)",
+          b.eval("window.__gate") == 0, repr(b.eval("window.__gate")))
+    tele_moves = b.eval("window.__moves")
+    # Primitive: glide traces a continuous path that passes through the gate.
+    pts = fresh()
+    check("gate/target re-located for the glide", pts is not None, repr(pts))
+    if pts is None:
+        return
+    gx, gy, tx, ty = pts
+    osctl.glide(100, ty, tx, ty, steps=40)
+    time.sleep(0.3)
+    check("glide traced the path through the gate — menu opens (REACHED)",
+          b.wait_for("document.title==='REACHED'", timeout=3), b.title())
+    check("glide crossed the gate exactly on the way (gate count 1)",
+          b.eval("window.__gate") == 1, repr(b.eval("window.__gate")))
+    glide_moves = b.eval("window.__moves")
+    check("glide emitted a continuous stream, the teleport did not",
+          glide_moves > 10 and tele_moves <= 3,
+          f"glide={glide_moves} teleport={tele_moves}")
+
+
 def round_mod_drag(b: Browser, offline: bool) -> None:
     print("R93: OS-level mod_drag — a modifier held across the whole stroke (F129) — osctl")
     # A canvas drag where Shift constrains the handle to its starting Y (a
@@ -5783,7 +5848,7 @@ def main() -> int:
               round_scroll_to_phrase, round_drag_stroke, round_double_click,
               round_middle_click, round_mod_click, round_triple_click,
               round_press_hold, round_key_hold, round_mod_scroll,
-              round_mod_drag]
+              round_mod_drag, round_glide]
     for r in rounds:
         try:
             r(b, offline)

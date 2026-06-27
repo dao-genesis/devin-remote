@@ -3127,6 +3127,44 @@ lets the other run free. The constraint is what makes the straightness effortles
 
 ---
 
+## F130 — `glide`: the button-less path (R94)
+
+**Friction.** `move` jumps the cursor straight to a point — one `mousemove` at
+the destination, nothing in between — and `drag` glides but with a button
+*down*. Neither can trace a button-less path. Yet much of a GUI answers only to
+the cursor's *journey*, not its arrival: a hover trail, a parallax that tracks
+the pointer, a slider that scrubs on bare `mousemove`, and above all a nested
+menu that keeps its submenu open only while the cursor crosses from parent into
+child — teleport onto the child and the parent's hover lapses, so the submenu
+never opens.
+
+**Mechanism.** `move` to the start, then many small `move`s along the line with
+no button — every element under the path sees the cursor pass through. It is
+`drag` without the press: the hover twin of the held stroke.
+
+**Primitive.** `glide(x0, y0, x1, y1, steps=24, pause=0.01)`.
+
+**Live (R94):** a path-dependent hover menu — the target opens (`REACHED`) only
+if the cursor's path crossed the parent gate first. A teleport (`move`) jumps
+straight onto the target, crossing no gate (`__gate==0`, only two moves), so the
+menu stays shut (`SKIPPED`) — the friction. A `glide` from left of the gate to
+the target traces a continuous stream (40 steps), crosses the gate exactly once
+(`__gate==1`), and the menu opens (`REACHED`). `681/681 checks passed`,
+deterministic ×3.
+
+**Honest note.** The exact `mousemove` count drifts run to run, so the test does
+not assert an absolute count; it asserts the *relative* shape (glide emits a
+stream, the teleport ≤3) plus the path-crossing signal (`__gate`) and the visible
+menu state. The fixture leaves a gap between gate and target, so it keys on
+*whether the path entered the gate at all*, not on the cursor still being inside
+it at arrival — the honest signal for "the journey passed through here."
+
+**Lesson (道法自然):** 千里之行，始於足下 — the destination is not the road. A
+leap arrives at the same point a walk does, but only the walk has *been* to every
+place between; some doors are opened only by what the path touched on the way.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
