@@ -148,6 +148,26 @@ def double_click(x: int | None = None, y: int | None = None,
     click(right=right)
 
 
+def triple_click(x: int | None = None, y: int | None = None,
+                 gap: float = 0.05) -> None:
+    """Three presses at one point — select a whole line/paragraph (F125).
+
+    The click-multiplicity ladder: one click places the caret, two
+    (:func:`double_click`) select the word under it, three select the whole
+    line or paragraph. A double-click can never reach the third rung — to
+    grab a full line for replacement you need the triple. This presses three
+    times at the same point, each ``gap`` apart and all inside the OS
+    double-click window, so the page counts up to ``detail===3``."""
+    if x is not None:
+        move(x, y)
+        time.sleep(0.02)
+    click()
+    time.sleep(gap)
+    click()
+    time.sleep(gap)
+    click()
+
+
 def middle_click(x: int | None = None, y: int | None = None) -> None:
     """Press the middle (wheel) button at a point (F123).
 
