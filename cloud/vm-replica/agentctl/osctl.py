@@ -257,6 +257,28 @@ def drag(x0: int, y0: int, x1: int, y1: int,
     _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
 
 
+def mod_drag(x0: int, y0: int, x1: int, y1: int, *mods: int,
+             steps: int = 24, pause: float = 0.01,
+             hold: float = 0.05, right: bool = False) -> None:
+    """Drag with modifier keys held down through the whole stroke (F129).
+
+    A plain :func:`drag` moves a handle freely. But a held modifier changes what
+    the drag *means*: Shift constrains it to an axis (a straight horizontal or
+    vertical move), Ctrl/Alt turns a move into a copy, a modifier-drag extends a
+    selection. The handler reads ``e.shiftKey`` / ``e.ctrlKey`` on every
+    ``mousemove`` of the stroke, so the modifier must be down across the entire
+    drag — not merely tapped before it. This holds each ``mods`` VK down, runs
+    the same stroke as :func:`drag`, then releases them in reverse. It is to
+    ``drag`` what :func:`mod_click` is to ``click`` and :func:`mod_scroll`
+    is to ``scroll`` — the third member of the modifier-held family."""
+    for vk in mods:
+        key_down(vk)
+    time.sleep(0.01)
+    drag(x0, y0, x1, y1, steps=steps, pause=pause, hold=hold, right=right)
+    for vk in reversed(mods):
+        key_up(vk)
+
+
 def scroll(dy: int = 0, dx: int = 0,
            x: int | None = None, y: int | None = None,
            pause: float = 0.01) -> None:

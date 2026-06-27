@@ -3090,6 +3090,43 @@ did, and that was enough to turn scrolling into zooming.
 
 ---
 
+## F129 — `mod_drag`: the modifier across the stroke (R93)
+
+**Friction.** A plain `drag` moves a handle freely. But a held modifier changes
+what the drag *means*: Shift constrains it to an axis (a straight horizontal or
+vertical move), Ctrl/Alt turns a move into a copy, a modifier-drag extends a
+selection. The handler reads `e.shiftKey` on every `mousemove` of the stroke, so
+the modifier must be down across the *entire* drag — not merely tapped before it.
+`mod_click` (F124) and `mod_scroll` (F128) held a modifier through a click and a
+wheel; the drag had no such member, so a constrained or copy drag was unreachable.
+
+**Mechanism.** Hold each `mods` VK down, run the same stroke as `drag`, release
+the modifiers in reverse — every `mousemove` of the stroke carries the modifier.
+The third member of the modifier-held family (`mod_click` / `mod_scroll` /
+`mod_drag`).
+
+**Primitive.** `mod_drag(x0, y0, x1, y1, *mods, steps, pause, hold, right)`.
+
+**Live (R93):** a canvas drag where Shift constrains the handle to its starting Y.
+The dropzone sits horizontally from the handle, but the endpoint passed to the
+drag overshoots upward in Y — so a plain `drag` follows the diagonal and lands
+above the zone (`DROP-MISS`, zero moves with the modifier): the friction. The
+same endpoint under `mod_drag(.., VK_SHIFT)` locks Y and travels purely
+horizontally into the zone (`DROP-OK`), with Shift held on *every* move of the
+stroke (`shift == moves`), not merely tapped. `674/674 checks passed`,
+deterministic ×3.
+
+**Honest note.** The mousemove count drifts by one between runs (19 vs 20), so
+the test does not assert an absolute count; it asserts the *relative* invariant
+(`shift == moves`, every move carried the modifier) and the visible outcome
+(`DROP-OK` only under Shift).
+
+**Lesson (道法自然):** 直而不肆 — to go straight is not to force; the hand that
+would draw a true line does not fight its own tremor but *binds* one axis and
+lets the other run free. The constraint is what makes the straightness effortless.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
