@@ -43,6 +43,18 @@ def fixture(name: str, html: str) -> str:
     return "file:///" + path.replace("\\", "/")
 
 
+def _drop_chrome_seam(bbox, margin: int = 18):
+    """Push a captured page-field's top edge down past the browser's toolbar/content
+    seam. capture_rgb grabs the whole desktop, so a dark page field abuts Chrome's
+    chrome; the ~2px-tall light seam at that boundary is invisible on a white field
+    (white-on-white) but reads as ink on a dark field. Cropping it out restores the
+    region to the page content the assertion actually means. None passes through."""
+    if not bbox:
+        return bbox
+    x0, y0, x1, y1 = bbox
+    return (x0, y0 + margin, x1, y1)
+
+
 def check(name: str, ok: bool, detail: str = "") -> bool:
     _results.append((name, ok, detail))
     line = f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else "")
@@ -1072,6 +1084,1681 @@ def round_zorder(b: Browser, offline: bool) -> None:
                 pass
         time.sleep(0.3)
         os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_window_under(b: Browser, offline: bool) -> None:
+    print("R112: SEE which window owns a screen pixel before clicking it (F151) — osctl")
+    # R109 proved the mouse follows the *stack*: a click lands on whoever owns
+    # that pixel, so to reach an occluded window you must first RAISE it. But
+    # raising was a blind write — the floor could reorder the stack yet never
+    # *read* it, so it clicked without knowing whether the intended window or an
+    # occluder actually sat under the cursor. Screenshot+click is doubly blind:
+    # pixels carry colour, never window identity. window_under(x,y) closes that
+    # gap — it reports the top-level the pixel belongs to, the read-side dual of
+    # activate_window. Two consoles overlap at one pixel; the floor must name the
+    # window under it, and watch that name change as the stack is reordered.
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R112: no konsole on this Linux host)")
+        return
+    if not hasattr(osctl, "window_under"):
+        check("osctl exposes window_under", False, "missing primitive")
+        return
+
+    px, py = 450, 380  # inside both frames positioned below
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    procs = []
+    try:
+        procs.append(launch("UWIN-A"))
+        time.sleep(2.2)
+        procs.append(launch("UWIN-B"))  # launched later -> on top of the stack
+        time.sleep(2.4)
+        wins = osctl.list_windows()
+        a = next((w for w in wins if "UWIN-A" in (w.get("title") or "")), None)
+        bb = next((w for w in wins if "UWIN-B" in (w.get("title") or "")), None)
+        check("list_windows enumerates both overlapping windows by title",
+              a is not None and bb is not None,
+              f"A={'y' if a else 'n'} B={'y' if bb else 'n'}")
+        if not a or not bb:
+            return
+
+        # Stack them so a single pixel sits inside BOTH window bodies.
+        osctl.move_window(a["id"], 120, 120, 640, 420)
+        time.sleep(0.4)
+        osctl.move_window(bb["id"], 170, 170, 640, 420)  # overlaps A
+        time.sleep(0.5)
+        osctl.activate_window(bb["id"])  # B is the top one at the shared pixel
+        time.sleep(0.5)
+
+        # The pixel belongs to the TOP (occluding) window — what a click would hit.
+        top_owner = osctl.window_under(px, py)
+        check("window_under names the TOP window owning the shared pixel",
+              top_owner == bb["id"], f"under={top_owner!r} B={bb['id']} A={a['id']}")
+
+        # Raise A; the SAME pixel now belongs to A — the stack read tracks the write.
+        osctl.activate_window(a["id"])
+        time.sleep(0.6)
+        raised_owner = osctl.window_under(px, py)
+        check("after raising A, window_under reports the pixel now belongs to A",
+              raised_owner == a["id"], f"under={raised_owner!r} A={a['id']}")
+
+        # A pixel outside both windows must not be attributed to either of them.
+        sw, sh = osctl.screen_size()
+        far = osctl.window_under(sw - 3, sh // 2)
+        check("window_under does not misattribute a pixel outside both windows",
+              far not in (a["id"], bb["id"]), f"under={far!r}")
+
+        check("the floor can SEE pixel ownership and watch it follow the Z-order",
+              top_owner == bb["id"] and raised_owner == a["id"],
+              f"top={top_owner!r} raised={raised_owner!r}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_window_lifecycle(b: Browser, offline: bool) -> None:
+    print("R113: WAIT for a window to appear, then CLOSE it by identity (F152) — osctl")
+    # F146 addressed an *existing* window; F151 read which window owns a pixel.
+    # But a window is not eternal: launching an app births a window after a
+    # delay, and finishing with it should close it. Two gaps remained. (1) Code
+    # that lists/activates the instant after spawning RACES the window's birth and
+    # finds nothing — F118's wait_for waits on pixels, but pixels carry no
+    # identity. wait_window waits on the window itself. (2) The floor could raise,
+    # move, read a window but never DISMISS one; screenshot+click would have to
+    # hunt the ✕ pixel. close_window asks the window to close by identity, the
+    # graceful path (the app's own close handlers), and wait_window_closed
+    # confirms it. Birth and death, both addressed by name — not by pixel.
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R113: no konsole on this Linux host)")
+        return
+    for name in ("wait_window", "close_window", "wait_window_closed", "window_exists"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    p = None
+    try:
+        # (1a) A window that never appears must time out — no false positive.
+        t0 = time.time()
+        miss = osctl.wait_window("DAO-NOEXIST-ZZZ", timeout=1.0)
+        check("wait_window times out on a window that never appears",
+              miss is None and (time.time() - t0) >= 0.9, f"miss={miss!r}")
+
+        # (1b) Spawn the window and wait for it to be BORN, by identity.
+        p = launch("ULIFE-X")
+        w = osctl.wait_window("ULIFE-X", timeout=10.0)
+        check("wait_window blocks until the launched window is born",
+              w is not None, f"win={w!r}")
+        if not w:
+            return
+        wid = w["id"]
+        check("window_exists reports the window as live", osctl.window_exists(wid),
+              f"id={wid}")
+
+        # (2) Close it BY IDENTITY (graceful), then confirm death two ways.
+        accepted = osctl.close_window(wid)
+        gone = osctl.wait_window_closed(wid, timeout=8.0)
+        still_listed = any("ULIFE-X" in (x.get("title") or "")
+                           for x in osctl.list_windows())
+        check("close_window dismisses the window by identity, and it stays gone",
+              accepted and gone and not still_listed,
+              f"accepted={accepted} gone={gone} still_listed={still_listed}")
+        check("window_exists flips to False once the window has closed",
+              not osctl.window_exists(wid), f"id={wid}")
+    finally:
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_uia_focus(b: Browser, offline: bool) -> None:
+    print("R130: focus an element by MEANING via UIA, then type with the keyboard (F169) — osctl")
+    # uia_set_value writes through the ValuePattern — but not every modern input
+    # offers one (rich text, contenteditable, custom canvases). uia_focus bridges
+    # the gap: it moves keyboard focus to an element found by meaning (UIA SetFocus),
+    # and then the universal keyboard floor (osctl.tap) types into it. Semantic
+    # locate handed to the keystroke floor — the two floors cooperating.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R130: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_focus"):
+        check("osctl exposes uia_focus", False, "missing primitive")
+        return
+
+    vk = {"d": 0x44, "a": 0x41, "o": 0x4F}
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available for UIA focus", note is not None, "none")
+        if not note:
+            return
+        ok = osctl.uia_focus(note["id"], ctype="Edit")
+        check("uia_focus sets keyboard focus to the Edit found by meaning (SetFocus)",
+              ok is True, f"ok={ok}")
+        time.sleep(0.4)
+        for ch in "dao":
+            osctl.tap(vk[ch])
+            time.sleep(0.1)
+        time.sleep(0.4)
+        edit = next((k for k in osctl.child_windows(note["id"])
+                     if k["class"] == "Edit"), None)
+        txt = osctl.window_text(edit["id"]) if edit else ""
+        check("the keyboard floor types into the UIA-focused element (locate→keyboard "
+              "bridge)", txt == "dao", f"text={txt!r}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.3)
+
+
+def round_uia_modern_value(b: Browser, offline: bool) -> None:
+    print("R137: read back a MODERN input's value by meaning — Legacy fallback (F176) — osctl")
+    # R128 proved uia_set_value WRITES into a modern app (cross-floor via Notepad's
+    # native read). But driving a Chrome <input> surfaced a real defect: the write
+    # lands (DOM confirms) yet uia_get_value returned "" — Chrome answers a ValuePattern
+    # WRITE but not a ValuePattern READ for text inputs. The write's read dual was
+    # silently blank on modern apps. Fix: uia_get_value falls back to the
+    # LegacyIAccessible (MSAA) value, which carries the live text. This round drives an
+    # actual Chrome input and proves the dual is now whole: set by meaning, read by
+    # meaning, DOM agrees with both.
+    if not sys.platform.startswith("win"):
+        print("  (skip R137: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_get_value"):
+        check("osctl exposes uia_get_value", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — modern-value check skipped)")
+        return
+    b.navigate("data:text/html,<input id=t type=text aria-label=Name value=PresetVal>")
+    time.sleep(1.2)
+    preset = ""
+    for _ in range(10):  # Chrome turns on its a11y tree lazily
+        preset = osctl.uia_get_value(ch["id"], "Name", "Edit")
+        if preset:
+            break
+        time.sleep(0.5)
+    check("uia_get_value reads a modern input's preset value by meaning (where the "
+          "ValuePattern read alone returns '' — Legacy fallback carries it)",
+          preset == "PresetVal", f"preset={preset!r}")
+    wrote = osctl.uia_set_value(ch["id"], "ChangedByMeaning", "Name", "Edit")
+    time.sleep(0.3)
+    dom = b.eval("document.getElementById('t').value")
+    back = osctl.uia_get_value(ch["id"], "Name", "Edit")
+    check("write-then-read dual is whole on a modern app: uia_set_value lands (DOM "
+          "confirms) and uia_get_value reads back exactly what was written",
+          wrote is True and dom == "ChangedByMeaning" and back == "ChangedByMeaning",
+          f"wrote={wrote} dom={dom!r} back={back!r}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
+def round_uia_range(b: Browser, offline: bool) -> None:
+    print("R136: read/set a slider's value by MEANING via UIA RangeValuePattern (F175) — osctl")
+    # A slider/progress bar/scrollbar is not a field of text nor a state to flip — it
+    # is a NUMBER within a range. uia_range_value reads {value,min,max}; uia_set_range_value
+    # sets it to a number directly through the RangeValuePattern — no mouse drag, no
+    # pixel arithmetic. (Unlike toggle/select this read settles synchronously.)
+    if not sys.platform.startswith("win"):
+        print("  (skip R136: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_set_range_value"):
+        check("osctl exposes uia_set_range_value", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — range check skipped)")
+        return
+    b.navigate("data:text/html,<input type=range id=s min=0 max=100 value=20 aria-label=Volume>")
+    time.sleep(1.2)
+    rv = None
+    for _ in range(10):  # Chrome turns on its a11y tree lazily
+        rv = osctl.uia_range_value(ch["id"], "Volume", "Slider")
+        if rv is not None:
+            break
+        time.sleep(0.5)
+    check("uia_range_value reads the slider's value and bounds (value=20, min=0, max=100)",
+          bool(rv) and rv["value"] == 20 and rv["min"] == 0 and rv["max"] == 100,
+          f"rv={rv}")
+    ok = osctl.uia_set_range_value(ch["id"], 75, "Volume", "Slider")
+    time.sleep(0.3)
+    dom = b.eval("document.getElementById('s').value")
+    check("uia_set_range_value sets the slider to 75 by meaning (DOM .value confirms), "
+          "no mouse drag", ok is True and str(dom) == "75", f"ok={ok} dom={dom}")
+    rv2 = osctl.uia_range_value(ch["id"], "Volume", "Slider")
+    check("uia_range_value read-back agrees the value is now 75",
+          bool(rv2) and rv2["value"] == 75, f"rv2={rv2}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
+def round_uia_scroll(b: Browser, offline: bool) -> None:
+    print("R135: bring an off-screen element into reach by MEANING via UIA ScrollItemPattern (F174) — osctl")
+    # An element below the fold has no on-screen pixels — the pixel executor cannot
+    # click what is not painted. uia_scroll_into_view asks the element's own scroll
+    # container to bring it into the viewport (the element-level dual of moving an
+    # off-screen window back on screen, F149). The proof closes cross-floor: after the
+    # scroll, uia_find returns the element's now-VISIBLE rect, inside the window, so
+    # the pixel floor can finally reach it.
+    if not sys.platform.startswith("win"):
+        print("  (skip R135: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_scroll_into_view"):
+        check("osctl exposes uia_scroll_into_view", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — scroll-into-view check skipped)")
+        return
+    b.navigate("data:text/html,<button id=top>TOP</button>"
+               "<div style='height:3000px'></div><button id=bot>BOTTOMBTN</button>")
+    time.sleep(1.2)
+    for _ in range(10):  # warm Chrome's lazily-enabled a11y tree
+        if osctl.uia_find(ch["id"], name="BOTTOMBTN", ctype="Button"):
+            break
+        time.sleep(0.5)
+    innerh = b.eval("window.innerHeight")
+    top_before = b.eval("document.getElementById('bot').getBoundingClientRect().top")
+    check("the bottom button starts below the fold (no on-screen pixels to click)",
+          isinstance(top_before, (int, float)) and top_before > innerh,
+          f"top_before={top_before} innerH={innerh}")
+    issued = osctl.uia_scroll_into_view(ch["id"], "BOTTOMBTN", "Button")
+    time.sleep(0.5)
+    top_after = b.eval("document.getElementById('bot').getBoundingClientRect().top")
+    check("uia_scroll_into_view brings the element into the viewport by meaning "
+          "(DOM rect confirms it crossed into view)",
+          issued is True and isinstance(top_after, (int, float))
+          and 0 <= top_after <= innerh, f"issued={issued} top_after={top_after}")
+    g = osctl.window_geometry(ch["id"])
+    f = osctl.uia_find(ch["id"], name="BOTTOMBTN", ctype="Button")
+    inside = bool(g and f and f.get("rect")
+                  and g["y"] <= (f["rect"][1] + f["rect"][3]) // 2 <= g["y"] + g["h"])
+    check("cross-floor: uia_find now yields an in-window rect for the element, so the "
+          "pixel executor can finally reach what was off-screen",
+          inside, f"rect={f.get('rect') if f else None} geo={g}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
+def round_uia_expand(b: Browser, offline: bool) -> None:
+    print("R134: open/close a disclosure by MEANING via UIA ExpandCollapsePattern (F173) — osctl")
+    # Some structure is hidden until revealed — a dropdown, a tree node, a <details>
+    # disclosure. uia_expand/uia_collapse open and close it by meaning through the
+    # ExpandCollapsePattern; uia_expand_state reads the settled state. This is the
+    # reveal verb: it makes hidden children appear so the rest of the floor can read
+    # and act on them. Same act/read split as toggle/select.
+    if not sys.platform.startswith("win"):
+        print("  (skip R134: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_expand"):
+        check("osctl exposes uia_expand", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — expand check skipped)")
+        return
+    b.navigate("data:text/html,<details id=d><summary>MORE</summary><p>hidden body</p></details>")
+    time.sleep(1.2)
+    st0 = ""
+    for _ in range(10):  # Chrome turns on its a11y tree lazily
+        st0 = osctl.uia_expand_state(ch["id"], "MORE")
+        if st0:
+            break
+        time.sleep(0.5)
+    check("uia_expand_state reads the disclosure's initial 'collapsed' state",
+          st0 == "collapsed", f"st0={st0!r}")
+    opened = osctl.uia_expand(ch["id"], "MORE")
+    time.sleep(0.4)
+    is_open = b.eval("document.getElementById('d').open")
+    check("uia_expand opens the disclosure by meaning (DOM .open confirms), and the "
+          "settled state reads 'expanded'",
+          opened is True and is_open is True
+          and osctl.uia_expand_state(ch["id"], "MORE") == "expanded",
+          f"opened={opened} dom_open={is_open}")
+    closed = osctl.uia_collapse(ch["id"], "MORE")
+    time.sleep(0.4)
+    is_closed = b.eval("document.getElementById('d').open")
+    check("uia_collapse closes the disclosure by meaning (DOM .open confirms)",
+          closed is True and is_closed is False,
+          f"closed={closed} dom_open={is_closed}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
+def round_uia_select(b: Browser, offline: bool) -> None:
+    print("R133: choose an item by MEANING via UIA SelectionItemPattern (F172) — osctl")
+    # Toggle flips a two-state checkbox; selection is the choose-ONE-of-many verb —
+    # a radio button, a list option, a tab. uia_select issues the choice through the
+    # SelectionItemPattern; uia_is_selected reads the settled truth. Same act/read
+    # split as toggle (F171): selection settles asynchronously across the a11y bridge,
+    # so the action reports only that it acted.
+    if not sys.platform.startswith("win"):
+        print("  (skip R133: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_select"):
+        check("osctl exposes uia_select", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — select check skipped)")
+        return
+    b.navigate("data:text/html,<input type=radio name=g id=r1><label for=r1>Alpha</label>"
+               "<input type=radio name=g id=r2><label for=r2>Beta</label>")
+    time.sleep(1.2)
+    sel0 = None
+    for _ in range(10):  # Chrome turns on its a11y tree lazily
+        sel0 = osctl.uia_is_selected(ch["id"], "Beta", "RadioButton")
+        if sel0 is not None:
+            break
+        time.sleep(0.5)
+    check("uia_is_selected reads the radio's initial unselected state",
+          sel0 is False, f"sel0={sel0!r}")
+    issued = osctl.uia_select(ch["id"], "Beta", "RadioButton")
+    time.sleep(0.4)
+    checked = b.eval("document.getElementById('r2').checked")
+    check("uia_select chooses the radio by meaning (DOM .checked confirms the choice "
+          "really happened)", issued is True and checked is True,
+          f"issued={issued} checked={checked}")
+    settled = osctl.uia_is_selected(ch["id"], "Beta", "RadioButton")
+    check("uia_is_selected reports the settled selected state after the choice "
+          "(read dual; action and read separated to dodge the async-update race)",
+          settled is True, f"settled={settled!r}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
+def round_uia_toggle(b: Browser, offline: bool) -> None:
+    print("R132: flip a checkbox by MEANING via UIA TogglePattern (F171) — osctl")
+    # The modern-app action set so far: invoke (press a button), set_value (write a
+    # field), focus (aim the keyboard). A checkbox is none of those — it is a STATE
+    # to flip. uia_toggle issues the flip through the TogglePattern; uia_toggle_state
+    # reads the settled state. Driving it surfaced a real async race: a modern app
+    # (Chrome) updates its ToggleState asynchronously across the a11y bridge, so a
+    # state read *in the same breath* as the flip is stale — hence uia_toggle returns
+    # only whether it acted (like uia_invoke), and the settled truth is read after.
+    if not sys.platform.startswith("win"):
+        print("  (skip R132: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_toggle"):
+        check("osctl exposes uia_toggle", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — toggle check skipped)")
+        return
+    b.navigate("data:text/html,<input type=checkbox id=cb><label for=cb>AGREE</label>")
+    time.sleep(1.2)
+    state0 = ""
+    for _ in range(10):  # Chrome turns on its a11y tree lazily
+        state0 = osctl.uia_toggle_state(ch["id"], ctype="CheckBox")
+        if state0:
+            break
+        time.sleep(0.5)
+    check("uia_toggle_state reads the checkbox's initial state 'off'",
+          state0 == "off", f"state0={state0!r}")
+    issued = osctl.uia_toggle(ch["id"], ctype="CheckBox")
+    time.sleep(0.4)
+    checked = b.eval("document.getElementById('cb').checked")
+    check("uia_toggle flips the checkbox by meaning (DOM .checked confirms the flip "
+          "really happened)", issued is True and checked is True,
+          f"issued={issued} checked={checked}")
+    settled = osctl.uia_toggle_state(ch["id"], ctype="CheckBox")
+    check("uia_toggle_state reports the settled state 'on' after the flip (read dual; "
+          "action and read separated to dodge the async-update race)",
+          settled == "on", f"settled={settled!r}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
+def round_uia_text(b: Browser, offline: bool) -> None:
+    print("R131: read text OUT of a modern app via UIA TextPattern (F170) — osctl")
+    # uia_get_value reads single-line value fields; native window_text reads native
+    # HWNDs. Neither can read the rendered body of a modern document — Chrome paints
+    # its page in one HWND (no native text to GETTEXT) and exposes no ValuePattern for
+    # the page body (uia_get_value returns ""). uia_text goes through the UIA
+    # TextPattern (DocumentRange.GetText) — the accessibility tree's own text spine —
+    # and reads the page's actual rendered text. The deep read dual that completes
+    # perception INTO modern apps.
+    if not sys.platform.startswith("win"):
+        print("  (skip R131: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_text"):
+        check("osctl exposes uia_text", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — modern-app text read skipped)")
+        return
+    marker = "DAOFLOW-MARKER-7"
+    b.navigate(f"data:text/html,<h1>{marker}</h1><p>the%20floor%20reads%20me</p>")
+    time.sleep(1.2)
+    txt = ""
+    for _ in range(10):  # Chrome turns its a11y tree on lazily when UIA first asks
+        txt = osctl.uia_text(ch["id"], ctype="Document")
+        if marker in txt:
+            break
+        time.sleep(0.5)
+    check("uia_text reads the rendered page text out of a modern app (Chrome) via "
+          "TextPattern, where window_text/uia_get_value cannot",
+          marker in txt and "reads me" in txt, f"text={txt[:80]!r}")
+    # the contrast: the single-line value spine carries the document's URL (its Legacy
+    # value), never the *rendered body* — the phrase painted into the page is absent,
+    # so TextPattern is the necessary deep read. (The marker itself leaks into the
+    # data: URL, so the body phrase is the honest discriminator.)
+    val = osctl.uia_get_value(ch["id"], ctype="Document")
+    check("uia_get_value (single-line value spine) does NOT carry the rendered "
+          "document body — so TextPattern is the necessary deep read",
+          "reads me" not in val, f"val={val[:60]!r}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
+def round_uia_drive(b: Browser, offline: bool) -> None:
+    print("R129: drive a modern UWP app end-to-end by semantic action (F168) — osctl")
+    # The proof that the modern-app loop truly closes: take the Windows Calculator
+    # (a UWP app — one HWND, no native controls, no OS menu) and compute 5 + 3 = 8
+    # purely by MEANING — uia_invoke each button by its accessible name, then read
+    # the result element by name. No pixels, no coordinates, no keystrokes. Driving
+    # it surfaced a real matching defect: substring name matching pressed
+    # 'Memory add' when asked for 'Add' (it appears earlier in the tree), so
+    # _find_ptr now prefers an EXACT name match — verified here that
+    # uia_find(name='Add') returns 'Add', not 'Memory add'.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R129: UWP/UIA is Windows-only)")
+        return
+    if not hasattr(osctl, "uia_invoke"):
+        check("osctl exposes uia_invoke", False, "missing primitive")
+        return
+
+    subprocess.Popen(["calc.exe"])
+    calc = None
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        calc = next((w for w in osctl.list_windows()
+                     if "Calc" in (w.get("title") or "")), None)
+        if calc and osctl.uia_find(calc["id"], name="Equals", ctype="Button"):
+            break
+        time.sleep(0.5)
+    if not calc:
+        print("  (Calculator unavailable on this host — modern-app drive skipped)")
+        return
+    try:
+        osctl.activate_window(calc["id"])
+        time.sleep(0.8)
+        # the exact-match fix: 'Add' must resolve to 'Add', never 'Memory add'
+        add = osctl.uia_find(calc["id"], name="Add", ctype="Button")
+        check("exact-preferred match: uia_find(name='Add') returns 'Add', not the "
+              "earlier-in-tree 'Memory add' (defect surfaced by driving calc)",
+              bool(add) and add.get("name") == "Add", f"add={add}")
+        invoked = all(osctl.uia_invoke(calc["id"], name=nm, ctype="Button")
+                      for nm in ("5", "Add", "3", "Equals")
+                      if (time.sleep(0.4) or True))
+        check("uia_invoke presses each Calculator button by accessible name "
+              "(InvokePattern, no pixels)", invoked, "an invoke returned False")
+        time.sleep(0.6)
+        # the result 8 surfaces as a Text element named '8'
+        result = None
+        for _ in range(6):
+            result = osctl.uia_find(calc["id"], name="8", ctype="Text")
+            if result:
+                break
+            time.sleep(0.4)
+        check("5 + 3 = 8 computed end-to-end by MEANING inside a UWP app "
+              "(result Text element named '8' present)",
+              bool(result) and result.get("name") == "8", f"result={result}")
+    finally:
+        os.system("taskkill /F /IM CalculatorApp.exe >NUL 2>&1")
+        os.system("taskkill /F /IM Calculator.exe >NUL 2>&1")
+        os.system("taskkill /F /IM calc.exe >NUL 2>&1")
+        time.sleep(0.3)
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.3)
+
+
+def round_uia_value(b: Browser, offline: bool) -> None:
+    print("R128: write an element's value through UIA, reaching modern apps (F167) — osctl")
+    # set_window_text (F161) writes a control's text by native HWND identity — but
+    # modern apps have no native control to write to. uia_set_value writes through
+    # the accessibility tree's ValuePattern, so it can set a field's value INSIDE
+    # Chrome/Electron/UWP. Proven cross-floor on Notepad: write via UIA, then the
+    # NATIVE window_text reads back exactly what UIA wrote — the accessibility write
+    # and the native read agree. (uia_get_value/uia_invoke ship as the read/press
+    # duals; classic Notepad's multiline Document doesn't expose Value on *read*, a
+    # real UIA quirk, so the write is confirmed through the native floor.)
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R128: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_set_value"):
+        check("osctl exposes uia_set_value", False, "missing primitive")
+        return
+
+    mark = "DAO-F167-" + str(os.getpid())
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available for UIA value write", note is not None, "none")
+        if not note:
+            return
+        ok = osctl.uia_set_value(note["id"], mark, ctype="Edit")
+        check("uia_set_value writes through the UIA ValuePattern (no native HWND write)",
+              ok is True, f"ok={ok}")
+        time.sleep(0.3)
+        edit = next((k for k in osctl.child_windows(note["id"])
+                     if k["class"] == "Edit"), None)
+        native = osctl.window_text(edit["id"]) if edit else ""
+        check("cross-floor: the native window_text reads back exactly the UIA-written "
+              "value (accessibility write agrees with native read)",
+              native == mark, f"native={native!r}")
+        gv = osctl.uia_get_value(note["id"], ctype="Edit")
+        check("uia_get_value is callable and returns a string (read dual)",
+              isinstance(gv, str), f"type={type(gv).__name__}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.3)
+
+
+def round_uia_find(b: Browser, offline: bool) -> None:
+    print("R127: locate an element by MEANING inside a modern app via UIA (F166) — osctl")
+    # find_control (F163) locates a native control by meaning and returns a pixel
+    # rect — but only for native child HWNDs, blind to modern apps. uia_find is its
+    # UIA analogue: it searches the accessibility tree (so it reaches INSIDE
+    # Chrome/Electron/UWP) by accessible name and/or control type, and returns the
+    # element's screen rect — closing the loop back to the mouse for modern apps
+    # too. Cross-floor proof: the UIA-found rect's centre, fed to control_at (the
+    # pixel->native floor), resolves to the matching native control — the
+    # accessibility floor and the pixel floor agree on where the thing is.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R127: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_find"):
+        check("osctl exposes uia_find", False, "missing primitive")
+        return
+
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available for UIA search", note is not None, "none")
+        if note:
+            osctl.set_window_state(note["id"], "normal")
+            osctl.move_window(note["id"], 160, 160, 720, 520)
+            time.sleep(0.5)
+            e = osctl.uia_find(note["id"], ctype="Edit")
+            ok = bool(e and e.get("rect") and e["rect"][2] > 0 and e["rect"][3] > 0)
+            check("uia_find locates the Edit by meaning and returns a real screen rect",
+                  ok, f"e={e}")
+            if ok:
+                x, y, w, h = e["rect"]
+                native = osctl.control_at(x + w // 2, y + h // 2)
+                check("cross-floor: the UIA rect's centre resolves via control_at to "
+                      "the native Edit (accessibility floor agrees with pixel floor)",
+                      native is not None and native.get("class") == "Edit",
+                      f"native={native}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if ch:
+        g = osctl.window_geometry(ch["id"])
+        pane = osctl.uia_find(ch["id"], ctype="Pane")
+        check("semantic locate works INSIDE the modern app (Chrome) and yields a "
+              "clickable rect within the window",
+              bool(pane and pane.get("rect") and g
+                   and pane["rect"][0] >= g["x"] - 5 and pane["rect"][1] >= g["y"] - 5),
+              f"pane={pane} win={g}")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.3)
+    else:
+        print("  (no Chrome window — modern-app locate check skipped)")
+
+
+def round_uia(b: Browser, offline: bool) -> None:
+    print("R126: UIA read sees inside modern apps where Win32 is blind (F165) — osctl")
+    # The whole semantic layer so far (child_windows/window_text/window_menu) reads
+    # *native* controls — real child HWNDs and OS menus. It is blind to modern apps:
+    # Chrome/Electron/UWP paint everything in one HWND with no child controls and no
+    # OS menu, so child_windows returns ~nothing. UIA is the OS accessibility tree
+    # that DOES see inside them. uia_name/uia_children give a uniform semantic read
+    # across native AND modern software — the floor's perception made whole.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R126: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_children"):
+        check("osctl exposes uia_name/uia_children", False, "missing primitive")
+        return
+
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available to read via UIA", note is not None, "none")
+        if note:
+            nm = osctl.uia_name(note["id"])
+            check("uia_name reads a native window's accessible name",
+                  bool(nm) and "Notepad" in nm, f"name={nm!r}")
+            kids = osctl.uia_children(note["id"])
+            check("uia_children enumerates the window's UIA elements with control types",
+                  bool(kids) and any(k.get("type") in ("Edit", "Document") for k in kids),
+                  f"kids={[k.get('type') for k in kids]}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+
+    # the real point: a modern app (the running Chrome) — UIA penetrates it where
+    # the Win32 child_windows path sees only a single generic legacy child.
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if ch:
+        uia_kids = osctl.uia_children(ch["id"])
+        check("UIA sees inside the modern app (Chrome) where Win32 is blind",
+              len(uia_kids) >= 1, f"uia={len(uia_kids)} elements")
+        check("uia_name reads Chrome's accessible name (modern app, no Win32 title "
+              "for a cross-process reader)", bool(osctl.uia_name(ch["id"])),
+              "empty name")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.3)
+    else:
+        print("  (no Chrome window present — modern-app penetration check skipped)")
+
+
+def round_menu(b: Browser, offline: bool) -> None:
+    print("R125: read an app's command menu and invoke a command BY ID (F164) — osctl")
+    # The floor could read controls and their text, locate them by meaning, click
+    # them by identity. But a window's *actions* — its verbs — live in its menus,
+    # invisible to every screenshot until a click opens them. window_menu exposes
+    # that whole command vocabulary (File/Edit/…), each leaf carrying its id;
+    # invoke_menu executes one by id — no menu opened, no mouse moved, no focus
+    # held. This is the semantic ACTION floor, the action dual of the semantic read
+    # floor (window_text/find_control): the verb performed by name, not by hunting
+    # its pixels. Proven by invoking Notepad's Time/Date command and watching the
+    # timestamp it writes into the Edit appear.
+    import re
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R125: OS menu vocabulary is a Windows-native surface)")
+        return
+    if not hasattr(osctl, "window_menu") or not hasattr(osctl, "invoke_menu"):
+        check("osctl exposes window_menu/invoke_menu", False, "missing primitive")
+        return
+
+    def _find_item(items, needle):
+        for it in items:
+            if needle.lower() in (it.get("label") or "").lower() and it.get("id"):
+                return it
+            hit = _find_item(it.get("items") or [], needle)
+            if hit:
+                return hit
+        return None
+
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available to read commands from", note is not None, "none")
+        if not note:
+            return
+        menu = osctl.window_menu(note["id"])
+        labels = [m.get("label") or "" for m in menu]
+        check("window_menu reads the app's command vocabulary incl. File/Edit/Help",
+              bool(menu) and all(any(k in l for l in labels) for k in ("File", "Edit", "Help")),
+              f"labels={labels}")
+        td = _find_item(menu, "Date")
+        check("the Time/Date command is found in the tree with a command id",
+              td is not None and td.get("id"), f"td={td}")
+        if not td:
+            return
+        edit = next((k for k in osctl.child_windows(note["id"])
+                     if k["class"] == "Edit"), None)
+        if edit:
+            osctl.set_window_text(edit["id"], "")
+            time.sleep(0.2)
+        before = osctl.window_text(edit["id"]) if edit else ""
+        ok = osctl.invoke_menu(note["id"], td["id"])
+        time.sleep(0.4)
+        after = osctl.window_text(edit["id"]) if edit else ""
+        check("invoke_menu executes the command BY ID — no menu opened, no mouse — "
+              "and the timestamp it inserts proves the verb ran",
+              ok and after and after != before and bool(re.search(r"\d{1,2}:\d{2}", after)),
+              f"ok={ok} before={before!r} after={after!r}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_find_control(b: Browser, offline: bool) -> None:
+    print("R124: locate a control by MEANING and get its pixel rect (F163) — osctl")
+    # control_at (F162) maps a pixel to a control: location -> identity. This is its
+    # inverse — find_control maps a control's meaning (class/text) to where it is:
+    # identity -> location, returning a screen rect the mouse can click. Together
+    # they make addressing a control bidirectional, and find_control closes the
+    # loop back to the actuator floor: a semantic search yields a pixel target, no
+    # visual scanning. The proof is the round-trip: find a control by meaning, then
+    # control_at its centre must return the SAME control — meaning and location are
+    # two faces of one thing (名與實).
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R124: native meaning->location resolution on the Windows floor)")
+        return
+    if not hasattr(osctl, "find_control"):
+        check("osctl exposes find_control", False, "missing primitive")
+        return
+    mark = "DAO-F163-" + str(os.getpid())
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available to search inside", note is not None, "none")
+        if not note:
+            return
+        osctl.set_window_state(note["id"], "normal")
+        osctl.move_window(note["id"], 140, 140, 720, 520)
+        time.sleep(0.5)
+        ek = next((k for k in osctl.child_windows(note["id"])
+                   if k["class"] == "Edit"), None)
+        if ek:
+            osctl.set_window_text(ek["id"], mark)
+            time.sleep(0.3)
+        c = osctl.find_control(note["id"], cls="Edit")
+        check("find_control locates the Edit by meaning and returns a real screen "
+              "rect (a pixel target for the mouse)",
+              c is not None and c["class"] == "Edit" and c["rect"][2] > 0 and c["rect"][3] > 0,
+              f"control={c}")
+        if not c:
+            return
+        rect = c["rect"]
+        cx, cy = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
+        back = osctl.control_at(cx, cy)
+        check("round-trip find_control->control_at returns the SAME control "
+              "(meaning <-> location are inverse)",
+              back is not None and back["id"] == c["id"],
+              f"back={back['id'] if back else None} find={c['id']}")
+        ct = osctl.find_control(note["id"], text=mark[:8])
+        check("find by TEXT substring finds the same control",
+              ct is not None and ct["id"] == c["id"],
+              f"bytext={ct['id'] if ct else None}")
+        check("a non-existent control yields None (no false positive)",
+              osctl.find_control(note["id"], cls="NoSuchClassXYZ") is None, "got match")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_control_at(b: Browser, offline: bool) -> None:
+    print("R123: resolve a screen PIXEL to the semantic CONTROL behind it (F162) — osctl")
+    # Two perception worlds have grown side by side: the pixel floor (capture,
+    # find_color, window_under — *where* things are) and the semantic floor
+    # (window_text, child_windows — *what* things mean). They never touched: a
+    # pixel the eye found carried no meaning; a control's meaning had no place on
+    # screen. control_at(x,y) joins them — it descends to the leaf control under a
+    # point and reads it, so "there is something at this pixel" becomes "this is an
+    # Edit control holding THIS text." This is what an accessibility inspector does,
+    # and it is the bridge from seeing to understanding.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R123: native pixel→control resolution on the Windows floor)")
+        return
+    if not hasattr(osctl, "control_at"):
+        check("osctl exposes control_at", False, "missing primitive")
+        return
+    mark = "DAO-F162-" + str(os.getpid())
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available to point at", note is not None, "none")
+        if not note:
+            return
+        osctl.set_window_state(note["id"], "normal")
+        osctl.move_window(note["id"], 120, 120, 700, 500)
+        time.sleep(0.5)
+        edit = next((k for k in osctl.child_windows(note["id"])
+                     if k["class"] in ("Edit", "RichEditD2DPT")), None)
+        if edit:
+            osctl.set_window_text(edit["id"], mark)
+            time.sleep(0.3)
+        g = osctl.window_geometry(note["id"])
+        cx, cy = g["x"] + g["w"] // 2, g["y"] + g["h"] // 2
+        c = osctl.control_at(cx, cy)
+        check("control_at resolves the pixel to the leaf Edit control (pixel → "
+              "semantic control)", c is not None and c["class"] in ("Edit", "RichEditD2DPT"),
+              f"control={c}")
+        check("the resolved control's top-level is the Notepad window (pixel keyed "
+              "to the right window identity)", c is not None and c["top"] == note["id"],
+              f"top={c['top'] if c else None} note={note['id']}")
+        check("control_at reads the very text living under that pixel — seeing "
+              "becomes understanding", c is not None and mark in (c["text"] or ""),
+              f"text={c['text'] if c else None!r}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_set_window_text(b: Browser, offline: bool) -> None:
+    print("R122: WRITE a control's content directly by identity, no focus/typing (F161) — osctl")
+    # F160 read a control's text; this is its write dual. To fill a field the floor
+    # otherwise had to: activate the window, ensure focus on the right control,
+    # then emit keystroke after keystroke — slow, focus-fragile (a popup steals
+    # focus mid-type), and corruptible (a stuck modifier upper-cases it all).
+    # set_window_text hands the exact string to the control in ONE message: no
+    # focus, no keys, instant, verbatim, even if the window is occluded. A power
+    # past the human hand, which can only type into whatever currently holds focus.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R122: native direct control-write exercised on the Windows floor)")
+        return
+    if not hasattr(osctl, "set_window_text"):
+        check("osctl exposes set_window_text", False, "missing primitive")
+        return
+    mark = "DAO-F161-" + str(os.getpid())
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is found to write into", note is not None, "none")
+        if not note:
+            return
+        edit = next((k for k in osctl.child_windows(note["id"])
+                     if k["class"] in ("Edit", "RichEditD2DPT")), None)
+        check("its Edit control is located", edit is not None, "no edit")
+        if not edit:
+            return
+        # deliberately do NOT activate the window or press any key
+        ok = osctl.set_window_text(edit["id"], mark)
+        time.sleep(0.3)
+        got = osctl.window_text(edit["id"])
+        check("set_window_text fills the control with the exact string with no "
+              "focus and no keystroke (write dual of window_text)",
+              ok and got == mark, f"ok={ok} got={got!r}")
+        ok2 = osctl.set_window_text(edit["id"], "REPLACED")
+        time.sleep(0.3)
+        check("a second write replaces (not appends to) the content",
+              ok2 and osctl.window_text(edit["id"]) == "REPLACED",
+              f"got={osctl.window_text(edit['id'])!r}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_window_text(b: Browser, offline: bool) -> None:
+    print("R121: READ a control's actual TEXT content, not its pixels (F160) — osctl")
+    # Every perception primitive so far returned *pixels* — capture, find_color,
+    # template match, even OCR (which guesses glyphs from pixels and can be wrong).
+    # But the OS already knows the exact text inside its controls: an edit box's
+    # content, a label's words, a button's caption — strings, not images. The floor
+    # could read a window's outer title but never look *inside* a window at the
+    # semantic content its controls carry. window_text reads that string exactly
+    # (no recognition error); child_windows descends into the controls. This is
+    # perception beyond pixels — a step past what an eye can do.
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    if not win:
+        print("  (skip R121: native control-text read exercised on the Windows floor)")
+        return
+    for name in ("window_text", "child_windows"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+    mark = "DAO-F160-" + str(os.getpid())
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is found to read inside of", note is not None,
+              "no notepad window")
+        if not note:
+            return
+        title = osctl.window_text(note["id"])
+        check("window_text on the top-level returns its title string",
+              "Notepad" in title or "Untitled" in title, f"title={title!r}")
+
+        kids = osctl.child_windows(note["id"])
+        edit = next((k for k in kids if k["class"] in ("Edit", "RichEditD2DPT")), None)
+        check("child_windows descends into the window and finds its Edit control "
+              "(structure no screenshot exposes)", edit is not None,
+              f"classes={[k['class'] for k in kids]}")
+        if not edit:
+            return
+
+        osctl.activate_window(note["id"])
+        time.sleep(0.5)
+        osctl.type_unicode(mark)
+        time.sleep(0.6)
+        got = osctl.window_text(edit["id"])
+        check("window_text reads back the EXACT typed content of the edit control "
+              "— semantic text, not OCR'd pixels", mark in got, f"got={got!r}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_pixel(b: Browser, offline: bool) -> None:
+    print("R120: READ one pixel, and WAIT for a screen spot to change colour (F159) — osctl")
+    # Perception so far was all-or-nothing: capture_rgb grabs (and find_color
+    # scans) the whole desktop. But the commonest question is tiny — "what colour
+    # is THIS spot right now?" — and the floor had no cheap way to ask it, nor any
+    # way to WAIT on it. wait_window could wait for a window to exist; nothing
+    # could wait for a visual state (a light turning green, a spinner stopping, a
+    # render finishing) — the thing a human does by watching the screen. pixel()
+    # is the atom (a 1x1 foveal read); wait_pixel polls it with tolerance+timeout,
+    # the visual-state dual of wait_window.
+    for name in ("pixel", "wait_pixel"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+    w, h, full = osctl.capture_rgb()
+    x, y = w // 2, h // 2
+    off = (y * w + x) * 3
+    ref = (full[off], full[off + 1], full[off + 2])
+    check("pixel() reads one spot identically to the same coord in a full grab "
+          "(the atom of perception, cheaply)", osctl.pixel(x, y) == ref,
+          f"pixel={osctl.pixel(x, y)} full={ref}")
+
+    t0 = time.monotonic()
+    hit = osctl.wait_pixel(x, y, ref, tol=12, timeout=2.0)
+    dt = time.monotonic() - t0
+    check("wait_pixel returns immediately when the spot already holds the colour",
+          hit and dt < 0.5, f"hit={hit} dt={dt:.3f}")
+
+    impossible = ((ref[0] + 128) % 256, (ref[1] + 128) % 256, (ref[2] + 128) % 256)
+    t0 = time.monotonic()
+    miss = osctl.wait_pixel(x, y, impossible, tol=2, timeout=1.0)
+    dt = time.monotonic() - t0
+    check("wait_pixel times out (returns False) for a colour that never appears, "
+          "honouring the deadline", (not miss) and 0.9 < dt < 1.7,
+          f"matched={miss} dt={dt:.3f}")
+
+
+def round_mouse_state(b: Browser, offline: bool) -> None:
+    print("R119: READ which mouse buttons are pressed right now (F158) — osctl")
+    # F157 gave the keyboard its read; the mouse button was the last input WRITE
+    # with no read. mouse_button could press and release, but nothing could ask
+    # "is a button down?". So a drag whose button-up was lost left the floor
+    # silently stuck in a pressed state — every later move became an unwanted drag,
+    # invisible until something broke far downstream. mouse_state() is the
+    # button-read dual: {"left","right","middle": bool, "pos": (x,y)}. This closes
+    # the input floor — every actuator (keyboard, mouse) now has its mirror read.
+    if not hasattr(osctl, "mouse_state"):
+        check("osctl exposes mouse_state", False, "missing primitive")
+        return
+    osctl.move(3, 3)  # neutral corner — never press where it could hit live UI
+    time.sleep(0.2)
+    try:
+        s0 = osctl.mouse_state()
+        check("mouse_state reports buttons up at rest and a cursor position",
+              s0.get("left") is False and isinstance(s0.get("pos"), tuple),
+              f"left={s0.get('left')} pos={s0.get('pos')}")
+        osctl._mouse_button("left", True)
+        time.sleep(0.15)
+        s1 = osctl.mouse_state()
+        check("the left button reads PRESSED while held, and only it "
+              "(right/middle stay up)",
+              s1.get("left") is True and not s1.get("right") and not s1.get("middle"),
+              f"l={s1.get('left')} r={s1.get('right')} m={s1.get('middle')}")
+    finally:
+        osctl._mouse_button("left", False)
+        time.sleep(0.15)
+    s2 = osctl.mouse_state()
+    check("the left button reads up again once released (a stuck drag would be "
+          "visible now)", s2.get("left") is False, f"left={s2.get('left')}")
+
+
+def round_key_state(b: Browser, offline: bool) -> None:
+    print("R118: READ a key's live state — is it down? is the lock on? (F157) — osctl")
+    # The floor could press and release keys (key_down/key_up) but never *read*
+    # them back. So it typed blind: a modifier left held, or a CapsLock silently
+    # toggled on, would corrupt everything typed afterward with no way to notice.
+    # key_state(vk) is the read dual — {"down": physical press, "toggled": the
+    # CapsLock/NumLock latch} — letting the floor confirm its own keyboard before
+    # it commits text. No window or app needed; this is the raw input floor.
+    if not hasattr(osctl, "key_state"):
+        check("osctl exposes key_state", False, "missing primitive")
+        return
+    VK_SHIFT, VK_CAPITAL = 0x10, 0x14
+
+    def tap(vk):
+        osctl.key_down(vk)
+        time.sleep(0.05)
+        osctl.key_up(vk)
+        time.sleep(0.15)
+
+    try:
+        osctl.key_up(VK_SHIFT)
+        time.sleep(0.1)
+        s0 = osctl.key_state(VK_SHIFT).get("down")
+        osctl.key_down(VK_SHIFT)
+        time.sleep(0.1)
+        s1 = osctl.key_state(VK_SHIFT).get("down")
+        osctl.key_up(VK_SHIFT)
+        time.sleep(0.1)
+        s2 = osctl.key_state(VK_SHIFT).get("down")
+        check("key_state reads a modifier as DOWN only while it is held "
+              "(press/release made visible)",
+              s0 is False and s1 is True and s2 is False,
+              f"up0={s0} held={s1} up1={s2}")
+
+        t0 = osctl.key_state(VK_CAPITAL).get("toggled")
+        tap(VK_CAPITAL)
+        t1 = osctl.key_state(VK_CAPITAL).get("toggled")
+        tap(VK_CAPITAL)
+        t2 = osctl.key_state(VK_CAPITAL).get("toggled")
+        check("key_state tracks the CapsLock latch across a toggle and back "
+              "(the silent typo-maker, now observable)",
+              t1 != t0 and t2 == t0, f"{t0}->{t1}->{t2}")
+        if t2 != t0:  # restore as found
+            tap(VK_CAPITAL)
+    finally:
+        osctl.key_up(VK_SHIFT)
+
+
+def round_window_pid(b: Browser, offline: bool) -> None:
+    print("R117: identify a window by its PROCESS, force-kill when close won't (F156) — osctl")
+    # Every window read so far keyed off the title or the handle. But a title can
+    # COLLIDE — two consoles, two editors, two browser windows can share the exact
+    # same caption — so the title is not an identity. The owning process is: each
+    # window belongs to a pid. That identity also unlocks the forceful end. F152's
+    # close_window is the *graceful* death (WM_CLOSE / _NET_CLOSE_WINDOW, the app's
+    # own path); but a hung window or a stubborn modal can ignore it. Then a human
+    # opens Task Manager and kills the process. terminate_window is that escalation
+    # by identity — the forceful death dual of the graceful close.
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R117: no konsole on this Linux host)")
+        return
+    for name in ("window_pid", "terminate_window", "wait_window_closed"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    procs = []
+    try:
+        # Two windows with the IDENTICAL title — the title cannot tell them apart.
+        procs.append(launch("UPID-SAME"))
+        time.sleep(2.0)
+        procs.append(launch("UPID-SAME"))
+        time.sleep(2.2)
+        same = [w for w in osctl.list_windows()
+                if "UPID-SAME" in (w.get("title") or "")]
+        check("two windows can share an identical title", len(same) >= 2,
+              f"n={len(same)}")
+        if len(same) < 2:
+            return
+        a, bb = same[0], same[1]
+        pa, pb = osctl.window_pid(a["id"]), osctl.window_pid(bb["id"])
+        check("window_pid gives each a process identity the title cannot",
+              bool(pa) and bool(pb) and pa != pb, f"pa={pa!r} pb={pb!r}")
+
+        # Forceful kill of A by its window; the other same-titled window survives.
+        ok = osctl.terminate_window(a["id"])
+        gone = osctl.wait_window_closed(a["id"], timeout=6.0)
+        check("terminate_window force-ends the window when a graceful close might "
+              "be ignored", ok and gone, f"ok={ok} gone={gone}")
+        check("the OTHER identically-titled window (different pid) is unharmed",
+              osctl.window_exists(bb["id"]), f"b_pid={pb} exists={osctl.window_exists(bb['id'])}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_topmost(b: Browser, offline: bool) -> None:
+    print("R116: PIN a window always-on-top — stack diverges from focus (F155) — osctl")
+    # F151 read the stack (window_under: which window owns a pixel), F154 read
+    # focus (active_window: which window owns the keyboard). Normally they move
+    # together — raising a window both stacks and focuses it. always-on-top is the
+    # one deliberate exception: a pinned window stays on TOP of the stack even when
+    # another window holds FOCUS. This is the proof the two reads measure genuinely
+    # different axes: with A pinned and B focused, the shared pixel belongs to A
+    # while the keyboard belongs to B. set_window_topmost writes the pin by
+    # identity; is_window_topmost reads it. (Screenshot+click cannot pin anything.)
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R116: no konsole on this Linux host)")
+        return
+    for name in ("set_window_topmost", "is_window_topmost", "window_under",
+                 "active_window"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    procs = []
+    try:
+        procs.append(launch("UTOP-A"))
+        osctl.wait_window("UTOP-A", timeout=8.0)
+        procs.append(launch("UTOP-B"))
+        osctl.wait_window("UTOP-B", timeout=8.0)
+        a = next((w for w in osctl.list_windows() if "UTOP-A" in (w.get("title") or "")), None)
+        bb = next((w for w in osctl.list_windows() if "UTOP-B" in (w.get("title") or "")), None)
+        check("two windows enumerated for the topmost test",
+              a is not None and bb is not None,
+              f"A={'y' if a else 'n'} B={'y' if bb else 'n'}")
+        if not a or not bb:
+            return
+
+        osctl.move_window(a["id"], 120, 120, 640, 420)
+        time.sleep(0.4)
+        osctl.move_window(bb["id"], 170, 170, 640, 420)  # overlaps A
+        time.sleep(0.4)
+        px, py = 450, 380
+
+        check("a fresh window is not pinned topmost",
+              not osctl.is_window_topmost(a["id"]),
+              f"is={osctl.is_window_topmost(a['id'])}")
+
+        ok = osctl.set_window_topmost(a["id"], True)
+        time.sleep(0.4)
+        check("set_window_topmost pins A, and is_window_topmost reads it back",
+              ok and osctl.is_window_topmost(a["id"]),
+              f"ok={ok} is={osctl.is_window_topmost(a['id'])}")
+
+        # The crux: focus B, but the shared pixel stays with topmost A.
+        osctl.activate_window(bb["id"])
+        time.sleep(0.6)
+        af = osctl.active_window()
+        owner = osctl.window_under(px, py)
+        check("with A pinned, focus goes to B yet the shared pixel stays with A "
+              "(stack diverges from focus)",
+              af == bb["id"] and owner == a["id"],
+              f"active={af!r} under={owner!r} A={a['id']} B={bb['id']}")
+
+        # Unpin: the pixel now follows focus to B again.
+        osctl.set_window_topmost(a["id"], False)
+        time.sleep(0.3)
+        osctl.activate_window(bb["id"])
+        time.sleep(0.6)
+        owner2 = osctl.window_under(px, py)
+        check("after unpin, stack and focus re-converge on B",
+              not osctl.is_window_topmost(a["id"]) and owner2 == bb["id"],
+              f"is={osctl.is_window_topmost(a['id'])} under={owner2!r} B={bb['id']}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_active_window(b: Browser, offline: bool) -> None:
+    print("R115: READ which window holds keyboard focus right now (F154) — osctl")
+    # F151 gave the stack-read dual of activate_window (window_under: which window
+    # owns a PIXEL — where a click lands). Its twin was missing: which window owns
+    # FOCUS — where a keystroke lands. The keyboard follows focus, the mouse
+    # follows the stack; the floor could WRITE focus (activate_window/focus_window)
+    # but never READ it, so it typed blind, unable to confirm input would reach the
+    # intended app. active_window() closes that: the focus-read dual. A real defect
+    # surfaced building this — Windows' foreground lock let only the FIRST
+    # activate_window take and silently denied later switches; lifting
+    # SPI_SETFOREGROUNDLOCKTIMEOUT made repeated activation reliable.
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R115: no konsole on this Linux host)")
+        return
+    if not hasattr(osctl, "active_window"):
+        check("osctl exposes active_window", False, "missing primitive")
+        return
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    procs = []
+    try:
+        procs.append(launch("UACT-A"))
+        osctl.wait_window("UACT-A", timeout=8.0)
+        procs.append(launch("UACT-B"))
+        bb = osctl.wait_window("UACT-B", timeout=8.0)
+        a = next((w for w in osctl.list_windows()
+                  if "UACT-A" in (w.get("title") or "")), None)
+        check("two windows enumerated for the focus test",
+              a is not None and bb is not None,
+              f"A={'y' if a else 'n'} B={'y' if bb else 'n'}")
+        if not a or not bb:
+            return
+
+        osctl.activate_window(a["id"])
+        time.sleep(0.7)
+        af = osctl.active_window()
+        check("active_window reports A after A is activated",
+              af == a["id"], f"active={af!r} A={a['id']} B={bb['id']}")
+
+        # The crux: a SECOND switch must also take — this is the defect F154 fixed.
+        osctl.activate_window(bb["id"])
+        time.sleep(0.7)
+        bf = osctl.active_window()
+        check("active_window tracks a SECOND switch to B (foreground-lock defeated)",
+              bf == bb["id"], f"active={bf!r} A={a['id']} B={bb['id']}")
+
+        # Write-by-name (focus_window) and read (active_window) must agree.
+        osctl.focus_window("UACT-A")
+        time.sleep(0.7)
+        ff = osctl.active_window()
+        check("focus_window (write by name) and active_window (read) agree",
+              ff == a["id"], f"active={ff!r} A={a['id']}")
+
+        check("keyboard follows focus while the read tracks every write",
+              af == a["id"] and bf == bb["id"] and ff == a["id"],
+              f"af={af!r} bf={bf!r} ff={ff!r}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_window_state(b: Browser, offline: bool) -> None:
+    print("R114: read and set a window's SHOW-STATE — min/max/restore (F153) — osctl")
+    # F149 moved a window (where it is); F151 read pixel ownership; F152 birth and
+    # death. One axis of a window's being was still untouched: *how it is shown*.
+    # Geometry says where a window sits, never whether it is minimized (no pixels
+    # at all) or maximized (filling the work area). A screenshot cannot tell a
+    # maximized window from one merely sized to the screen, nor a minimized window
+    # from a closed one. window_state reads this axis; set_window_state writes the
+    # everyday title-bar gestures by identity, not by hunting min/max-button pixels.
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R114: no konsole on this Linux host)")
+        return
+    for name in ("window_state", "set_window_state", "wait_window"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    p = None
+    try:
+        p = launch("USTATE-X")
+        w = osctl.wait_window("USTATE-X", timeout=10.0)
+        if not w:
+            check("state: launch the test window", False, "missing window")
+            return
+        wid = w["id"]
+        sw, sh = osctl.screen_size()
+
+        osctl.set_window_state(wid, "normal")
+        time.sleep(0.6)
+        check("a freshly-shown window reads as normal",
+              osctl.window_state(wid) == "normal", f"state={osctl.window_state(wid)!r}")
+
+        # Maximize, and corroborate the *read* against pixels: a maximized window
+        # really does span (almost) the whole screen width.
+        osctl.set_window_state(wid, "maximized")
+        time.sleep(0.9)
+        smax = osctl.window_state(wid)
+        g = osctl.window_geometry(wid) or {"w": 0}
+        check("set_window_state maximizes, and window_state + geometry agree",
+              smax == "maximized" and g.get("w", 0) >= int(sw * 0.85),
+              f"state={smax!r} w={g.get('w')} screen_w={sw}")
+
+        # Minimize: the show-state read flips, while the window still EXISTS
+        # (distinct from closed) — a distinction a screenshot cannot make.
+        osctl.set_window_state(wid, "minimized")
+        time.sleep(0.9)
+        smin = osctl.window_state(wid)
+        check("set_window_state minimizes, yet the window still exists (not closed)",
+              smin == "minimized" and osctl.window_exists(wid),
+              f"state={smin!r} exists={osctl.window_exists(wid)}")
+
+        # Restore to normal even from minimized (must not bounce back to maximized).
+        osctl.set_window_state(wid, "normal")
+        time.sleep(0.9)
+        check("restore returns to normal even coming from minimized",
+              osctl.window_state(wid) == "normal", f"state={osctl.window_state(wid)!r}")
+
+        check("an unknown state is rejected, not silently applied",
+              osctl.set_window_state(wid, "bogus") is False, "bogus accepted")
+    finally:
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
         for w in osctl.list_windows():
             if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
                 osctl.activate_window(w["id"])
@@ -4776,12 +6463,20 @@ def round_read_region(b: Browser, offline: bool) -> None:
                "<canvas id=c width=900 height=300></canvas><script>"
                "var x=document.getElementById('c').getContext('2d');"
                "x.fillStyle='#0d2860';x.fillRect(0,0,900,300);</script>"))
+    # Poll until the prior scene's ink has actually cleared from the screen: a fixed
+    # sleep can capture before Chrome repaints, leaving a stale glyph that contaminates
+    # this 'no ink' assertion. The true state is uniform, so we wait for the repaint.
     time.sleep(0.4)
-    wu, hu, rgbu = osctl.capture_rgb()
-    bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
-    if bbu is not None:
-        rru = osctl.read_region(rgbu, (wu, hu), bbu, atlas)
-        check("read_region of a uniform region is '' (no ink)", rru == "", repr(rru))
+    rru = None
+    for _ in range(14):
+        wu, hu, rgbu = osctl.capture_rgb()
+        bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
+        bbu = _drop_chrome_seam(bbu)
+        rru = "" if bbu is None else osctl.read_region(rgbu, (wu, hu), bbu, atlas)
+        if rru == "":
+            break
+        time.sleep(0.25)
+    check("read_region of a uniform region is '' (no ink)", rru == "", repr(rru))
 
 
 def round_read_block_region(b: Browser, offline: bool) -> None:
@@ -4922,13 +6617,19 @@ def round_read_block_region(b: Browser, offline: bool) -> None:
                "<canvas id=c width=900 height=520></canvas><script>"
                "var x=document.getElementById('c').getContext('2d');"
                "x.fillStyle='#0d2860';x.fillRect(0,0,900,520);</script>"))
+    # Poll until the prior scene's ink clears (repaint race); the true state is uniform.
     time.sleep(0.4)
-    wu, hu, rgbu = osctl.capture_rgb()
-    bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
-    if bbu is not None:
-        rbru = osctl.read_block_region(rgbu, (wu, hu), bbu, atlas)
-        check("read_block_region of a uniform block is [] (no ink)", rbru == [],
-              repr(rbru))
+    rbru = None
+    for _ in range(14):
+        wu, hu, rgbu = osctl.capture_rgb()
+        bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
+        bbu = _drop_chrome_seam(bbu)
+        rbru = [] if bbu is None else osctl.read_block_region(rgbu, (wu, hu), bbu, atlas)
+        if rbru == []:
+            break
+        time.sleep(0.25)
+    check("read_block_region of a uniform block is [] (no ink)", rbru == [],
+          repr(rbru))
 
 
 def round_read_region_words(b, offline):
@@ -5076,13 +6777,19 @@ def round_read_region_words(b, offline):
                "<canvas id=c width=900 height=360></canvas><script>"
                "var x=document.getElementById('c').getContext('2d');"
                "x.fillStyle='#0d2860';x.fillRect(0,0,900,360);</script>"))
+    # Poll until the prior scene's ink clears (repaint race); the true state is uniform.
     time.sleep(0.4)
-    wu, hu, rgbu = osctl.capture_rgb()
-    bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
-    if bbu is not None:
-        rrwu = osctl.read_region_words(rgbu, (wu, hu), bbu, atlas)
-        check("read_region_words of a uniform region is '' (no ink)",
-              rrwu == "", repr(rrwu))
+    rrwu = None
+    for _ in range(14):
+        wu, hu, rgbu = osctl.capture_rgb()
+        bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
+        bbu = _drop_chrome_seam(bbu)
+        rrwu = "" if bbu is None else osctl.read_region_words(rgbu, (wu, hu), bbu, atlas)
+        if rrwu == "":
+            break
+        time.sleep(0.25)
+    check("read_region_words of a uniform region is '' (no ink)",
+          rrwu == "", repr(rrwu))
 
 
 def round_read_block_region_words(b, offline):
@@ -5240,13 +6947,19 @@ def round_read_block_region_words(b, offline):
                "<canvas id=c width=900 height=520></canvas><script>"
                "var x=document.getElementById('c').getContext('2d');"
                "x.fillStyle='#0d2860';x.fillRect(0,0,900,520);</script>"))
+    # Poll until the prior scene's ink clears (repaint race); the true state is uniform.
     time.sleep(0.4)
-    wu, hu, rgbu = osctl.capture_rgb()
-    bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
-    if bbu is not None:
-        rbwu = osctl.read_block_region_words(rgbu, (wu, hu), bbu, atlas)
-        check("read_block_region_words of a uniform block is [] (no ink)",
-              rbwu == [], repr(rbwu))
+    rbwu = None
+    for _ in range(14):
+        wu, hu, rgbu = osctl.capture_rgb()
+        bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
+        bbu = _drop_chrome_seam(bbu)
+        rbwu = [] if bbu is None else osctl.read_block_region_words(rgbu, (wu, hu), bbu, atlas)
+        if rbwu == []:
+            break
+        time.sleep(0.25)
+    check("read_block_region_words of a uniform block is [] (no ink)",
+          rbwu == [], repr(rbwu))
 
 
 def round_locate_word(b, offline):
@@ -7053,7 +8766,15 @@ def main() -> int:
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_reach, round_steer,
-              round_window, round_clip_relay, round_zorder, round_move, round_desktop,
+              round_window, round_clip_relay, round_zorder, round_window_under,
+              round_window_lifecycle, round_window_state, round_active_window,
+              round_topmost, round_window_pid, round_key_state, round_mouse_state,
+              round_pixel, round_window_text, round_set_window_text,
+              round_control_at, round_find_control, round_menu, round_uia,
+              round_uia_find, round_uia_value, round_uia_drive, round_uia_focus,
+              round_uia_text, round_uia_toggle, round_uia_select, round_uia_expand,
+              round_uia_scroll, round_uia_range, round_uia_modern_value,
+              round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

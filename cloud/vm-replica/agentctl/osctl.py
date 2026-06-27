@@ -51,6 +51,153 @@ activate_window = getattr(_be, "activate_window", lambda win: False)
 # — only moving it can. Fall back gracefully on an older floor that lacks them.
 window_geometry = getattr(_be, "window_geometry", lambda win: None)
 move_window = getattr(_be, "move_window", lambda win, x, y, w=0, h=0: False)
+# Read which window owns a screen pixel — the Z-order read-side dual of
+# activate_window. The keyboard follows focus, but the mouse follows the stack:
+# a click lands on whoever owns that pixel. This lets the floor *see* which
+# window sits under a point before committing a click. None on bare desktop or
+# an older floor that lacks the primitive.
+window_under = getattr(_be, "window_under", lambda x, y: None)
+# Window lifecycle: close a window *by identity* (graceful, runs the app's own
+# close path — not a process kill) and read whether a window still exists. Both
+# fall back gracefully on an older floor.
+close_window = getattr(_be, "close_window", lambda win: False)
+window_exists = getattr(_be, "window_exists", lambda win: False)
+# Window show-state: read/set minimized vs maximized vs normal. Geometry says
+# *where* a window is, never *how it is shown* — a maximized window fills the work
+# area, a minimized one has no pixels at all. None / no-op on an older floor.
+window_state = getattr(_be, "window_state", lambda win: None)
+set_window_state = getattr(_be, "set_window_state", lambda win, state: False)
+# Read which window holds keyboard focus right now — the focus-read dual of
+# activate_window, as window_under is its stack-read dual. The keyboard follows
+# focus; this lets the floor confirm its typing will land where intended. None if
+# nothing is focused or on an older floor.
+active_window = getattr(_be, "active_window", lambda: None)
+# Always-on-top pinning: a topmost window stays above ordinary windows even when
+# it does NOT hold focus — the one case where the stack and focus deliberately
+# diverge (keep a reference window visible while typing into another). Read dual
+# tells whether a window is pinned. No-op / False on an older floor.
+set_window_topmost = getattr(_be, "set_window_topmost", lambda win, on=True: False)
+is_window_topmost = getattr(_be, "is_window_topmost", lambda win: False)
+# Window→process identity: a title can collide (two consoles, two Notepads), but
+# the owning pid tells them apart and is what lets the floor escalate from a
+# graceful close (close_window) to a forceful kill (terminate_window) when an app
+# ignores the polite request. None / no-op on an older floor.
+window_pid = getattr(_be, "window_pid", lambda win: None)
+terminate_window = getattr(_be, "terminate_window", lambda win: False)
+# Read a key's live state {"down","toggled"}: the floor could press/release keys
+# but never read them, so a stuck modifier or a silently-on CapsLock/NumLock would
+# corrupt all later typing undetectably. The read dual of key_down/key_up. Empty
+# state on an older floor.
+key_state = getattr(_be, "key_state", lambda vk: {"down": False, "toggled": False})
+# Read which mouse buttons are pressed now + cursor pos: mouse_button could press
+# /release but nothing could read the buttons, so a drag whose button-up was lost
+# left the floor silently stuck pressed. The button-read dual of mouse_button,
+# completing the input floor alongside key_state. Empty on an older floor.
+mouse_state = getattr(_be, "mouse_state", lambda: {"left": False, "right": False,
+                                                   "middle": False, "pos": (0, 0)})
+# Semantic content reads: window_text reads the *text a window/control carries*
+# (a window title, or — for a child control — an edit box's content, a label's
+# words) via the OS text protocol, exact and OCR-free; child_windows descends into
+# a window's controls ({id,class,text}). The floor could see only pixels or outer
+# titles; this reads the meaning the OS already holds. Empty on an older floor.
+window_text = getattr(_be, "window_text", lambda win: "")
+child_windows = getattr(_be, "child_windows", lambda win: [])
+# Write a control's text directly by identity (write dual of window_text): to fill
+# a field the floor otherwise had to focus the window, focus the control, and type
+# char-by-char (slow, focus-fragile, modifier-corruptible). WM_SETTEXT hands the
+# exact string over in one message — focus-independent, instant, even occluded.
+# On X11 it writes the window name (toolkits own widget text). No-op on older floor.
+set_window_text = getattr(_be, "set_window_text", lambda win, text: False)
+# Which CONTROL (not just top-level window) owns a screen pixel, and what it says:
+# {"id","class","text","top"}. window_under answers which window a click lands in;
+# this descends to the leaf control under the point and reads it — joining the
+# pixel the eye sees to the semantic control behind it (what an a11y inspector
+# does). None on bare desktop / older floor.
+control_at = getattr(_be, "control_at", lambda x, y: None)
+# Find a control inside a window by its MEANING (class and/or text, case-insensitive
+# substring) and get WHERE it is: {"id","class","text","rect":(x,y,w,h)} in screen
+# coords. The dual of control_at: that answers "what is at this pixel?" (location →
+# identity); this answers "where is the control that means X?" (identity → location).
+# Returning the rect closes the loop back to the mouse — a semantic find yields a
+# pixel target to click, no visual scanning. None if not found / older floor.
+find_control = getattr(_be, "find_control", lambda top, cls=None, text=None: None)
+# Read a window's MENU BAR as a tree — the app's own command vocabulary
+# (File/Edit/…), each leaf carrying its command id; and invoke a command BY ID.
+# A window's *actions* live in its menus, invisible to every screenshot until a
+# click opens them; this exposes the verbs an app offers (named, addressable) and
+# executes one without opening the menu, moving the mouse, or holding focus — the
+# action by name, not by pixel-hunt. Windows-native (OS menus); [] / False where
+# the app draws its own menus (most X11 toolkits) or on an older floor.
+window_menu = getattr(_be, "window_menu", lambda win: [])
+invoke_menu = getattr(_be, "invoke_menu", lambda win, command_id: False)
+# UI Automation read (F165): the OS accessibility tree, which sees INSIDE modern
+# apps (Chrome/Electron/UWP) that paint everything in one HWND with no child
+# controls and no OS menu — exactly where child_windows/window_menu are blind.
+# uia_name -> a window's accessible name; uia_children -> its child elements as
+# [{"name","type"}] (type = UIA control-type: Button/Edit/Tab/Document/…). The
+# semantic floor made uniform across native AND modern software; "" / [] where
+# UIA is unavailable (non-Windows / older floor), with the Win32+pixel fallback.
+uia_name = getattr(_be, "uia_name", lambda win: "")
+uia_children = getattr(_be, "uia_children", lambda win: [])
+# UIA find (F166): locate a descendant element by MEANING (accessible name and/or
+# control type) anywhere in a window's accessibility tree, and get WHERE it is:
+# {"name","type","rect":(x,y,w,h)} in screen coords. The UIA analogue of
+# find_control, but it reaches INSIDE modern apps (Chrome/Electron/UWP); returning
+# the rect closes the loop to the mouse — a semantic search yields a pixel target
+# to click, no visual scanning. None if not found / UIA unavailable.
+uia_find = getattr(_be, "uia_find", lambda win, name=None, ctype=None: None)
+# UIA action (F167): operate elements found by MEANING through the accessibility
+# tree, reaching INSIDE modern apps (Chrome/Electron/UWP) that have no native HWND
+# to write to or click. uia_set_value writes a field's value (modern-app dual of
+# set_window_text); uia_get_value reads it back; uia_invoke presses a button/link
+# by what it means (UIA analogue of invoke_menu) — no mouse, no pixels. False / ""
+# where UIA or the pattern is unavailable, with the pixel/keystroke floor as fallback.
+uia_set_value = getattr(_be, "uia_set_value", lambda win, value, name=None, ctype=None: False)
+uia_get_value = getattr(_be, "uia_get_value", lambda win, name=None, ctype=None: "")
+uia_invoke = getattr(_be, "uia_invoke", lambda win, name=None, ctype=None: False)
+# UIA focus (F169): the bridge from semantic LOCATE to the keystroke floor. Some
+# modern inputs (rich text, contenteditable, custom canvases) expose no ValuePattern
+# to write through, but CAN be focused through the accessibility tree; once focused,
+# the universal keyboard floor (osctl.type/key) types into them. False if no element
+# / UIA unavailable.
+uia_focus = getattr(_be, "uia_focus", lambda win, name=None, ctype=None: False)
+# UIA TextPattern read (F170): read an element's full text via DocumentRange.GetText
+# — the deep read that reaches INTO modern documents (a Chrome/Electron page, a rich
+# editor) where uia_get_value (single-line value fields) returns empty and the native
+# window_text (native HWNDs only) cannot reach at all. "" if no TextPattern.
+uia_text = getattr(_be, "uia_text", lambda win, name=None, ctype=None, max_len=20000: "")
+# UIA toggle (F171): flip a checkbox/switch by meaning via TogglePattern (returns
+# True if the flip was issued) — the semantic state verb completing the modern-app
+# action set (invoke=press, set_value=write, focus=aim, toggle=flip). It does NOT
+# return the new state: a modern app updates ToggleState asynchronously across the
+# a11y bridge, so read the settled truth with uia_toggle_state a moment later (the
+# read dual; "on"/"off"/"indeterminate"). False/"" where no TogglePattern.
+uia_toggle = getattr(_be, "uia_toggle", lambda win, name=None, ctype=None: False)
+uia_toggle_state = getattr(_be, "uia_toggle_state", lambda win, name=None, ctype=None: "")
+# UIA select (F172): choose an item (radio button, list option, tab) by meaning via
+# SelectionItemPattern (returns True if Select was issued) — the semantic choose-one
+# verb, with uia_is_selected (True/False/None) as its settled read dual. As with
+# toggle, selection settles asynchronously, so the action only reports that it acted.
+uia_select = getattr(_be, "uia_select", lambda win, name=None, ctype=None: False)
+uia_is_selected = getattr(_be, "uia_is_selected", lambda win, name=None, ctype=None: None)
+# UIA expand/collapse (F173): open or close a dropdown / tree node / disclosure
+# (<details>, combobox) by meaning via ExpandCollapsePattern (actions return True if
+# issued); uia_expand_state reads the settled "collapsed"/"expanded"/"partial"/"leaf"
+# (read dual). The reveal verb — making hidden structure appear before reading it.
+uia_expand = getattr(_be, "uia_expand", lambda win, name=None, ctype=None: False)
+uia_collapse = getattr(_be, "uia_collapse", lambda win, name=None, ctype=None: False)
+uia_expand_state = getattr(_be, "uia_expand_state", lambda win, name=None, ctype=None: "")
+# UIA scroll-into-view (F174): bring an element below the fold / off-screen into the
+# visible viewport by meaning via ScrollItemPattern (True if issued) — modern-content
+# "bring into reach", the element-level dual of moving an off-screen window back on
+# screen (F149). After it, uia_find returns the now-visible rect for the pixel floor.
+uia_scroll_into_view = getattr(_be, "uia_scroll_into_view", lambda win, name=None, ctype=None: False)
+# UIA range value (F175): read/set a ranged control (slider, progress bar, scrollbar)
+# by meaning via RangeValuePattern. uia_range_value -> {"value","min","max"} (read
+# dual); uia_set_range_value sets a slider to a number with no mouse drag (True if
+# set; the provider clamps to its own min/max). None/False where no RangeValuePattern.
+uia_range_value = getattr(_be, "uia_range_value", lambda win, name=None, ctype=None: None)
+uia_set_range_value = getattr(_be, "uia_set_range_value", lambda win, value, name=None, ctype=None: False)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the
@@ -102,6 +249,50 @@ def focus_window(match: str, settle: float = 0.25) -> dict | None:
     if settle:
         time.sleep(settle)
     return hit
+
+
+def wait_window(match: str, timeout: float = 10.0, settle: float = 0.0,
+                interval: float = 0.1) -> dict | None:
+    """Block until a top-level window whose title contains ``match`` exists, then
+    return its ``{"id","title",...}`` — or ``None`` if none appears in ``timeout``
+    seconds (F152).
+
+    The screen is a process in time: launching an app, opening a dialog, or a new
+    document all *create a window after a delay*. Code that lists/activates the
+    window the instant after spawning races the window's birth and addresses
+    nothing. F118's ``wait_for`` waits for *pixels* to appear, but pixels carry no
+    identity — two same-looking windows are indistinguishable, and a window can
+    exist while occluded with no visible pixels. This waits on window *identity*
+    (``list_windows``), the dual of waiting on appearance. Case-insensitive
+    substring; most-recent match wins. ``settle`` optionally sleeps once found."""
+    deadline = time.time() + timeout
+    m = match.lower()
+    while True:
+        hit = None
+        for w in list_windows():
+            if m in (w.get("title") or "").lower():
+                hit = w
+        if hit is not None:
+            if settle:
+                time.sleep(settle)
+            return hit
+        if time.time() >= deadline:
+            return None
+        time.sleep(interval)
+
+
+def wait_window_closed(win: int, timeout: float = 10.0,
+                       interval: float = 0.1) -> bool:
+    """Block until window id ``win`` no longer exists, returning True once it is
+    gone or False on timeout (F152) — the read that confirms a ``close_window``
+    actually took, the closing dual of ``wait_window``."""
+    deadline = time.time() + timeout
+    while True:
+        if not window_exists(win):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval)
 
 
 # ---- mouse gestures (platform-agnostic, built on the backend leaves) ------- #
@@ -462,6 +653,39 @@ def capture_rgb(x: int = 0, y: int = 0,
     returned buffer is ROI-local (its origin is the rectangle's top-left); use
     :func:`foveate` when you want screen-coordinate results back."""
     return _be.capture_rgb(x, y, w, h)
+
+
+def pixel(x: int, y: int) -> "tuple[int, int, bytes]":
+    """Read the colour of a *single* screen pixel as ``(r, g, b)``. The atom of
+    perception: ``find_color`` and template matching grab and scan the whole
+    desktop, but the commonest question — *what colour is this one spot right
+    now?* (is the indicator green, has the cell filled, did the dot light up) —
+    needs only one pixel. A 1×1 foveal ``capture_rgb`` is the cheapest read the
+    floor can make, and the basis on which :func:`wait_pixel` polls."""
+    _w, _h, rgb = capture_rgb(int(x), int(y), 1, 1)
+    return (rgb[0], rgb[1], rgb[2])
+
+
+def wait_pixel(x: int, y: int, rgb: "tuple[int, int, int]", tol: int = 12,
+               timeout: float = 5.0, interval: float = 0.05) -> bool:
+    """Block until the pixel at ``(x, y)`` comes within ``tol`` (per-channel) of
+    ``rgb``, or ``timeout`` elapses; True if it matched, False on timeout.
+
+    The floor could wait for a *window* to exist (:func:`wait_window`) but had no
+    way to wait for a *visual* state — a button enabling, a spinner stopping, a
+    progress bar reaching the end, a light turning green. Polling whole-screen
+    grabs in a loop is wasteful; this watches one pixel cheaply. The visual-state
+    dual of ``wait_window`` — perception-driven waiting, what a human does when
+    they watch a screen for something to change."""
+    deadline = time.monotonic() + timeout
+    tr, tg, tb = rgb
+    while True:
+        r, g, b = pixel(x, y)
+        if abs(r - tr) <= tol and abs(g - tg) <= tol and abs(b - tb) <= tol:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
 
 
 def screenshot(path: str) -> str:

@@ -4065,6 +4065,1051 @@ holds both directions rather than forcing one.
 
 ---
 
+## F151 — see which window owns a pixel before clicking it (`window_under`, R112)
+
+**Ground: Windows Server 2022.** The cross-platform floor (F141) had only ever
+been exercised live on the X11 ground; this round was discovered, built and
+verified on the **Win32** backend, then mirrored back to X11 for parity.
+
+**Friction.** F148 established that the mouse follows the *stack*: a click lands
+on whoever owns that pixel in the Z-order, so reaching an occluded window means
+first *raising* it (`activate_window`). But raising was a **blind write** — the
+floor could reorder the stack yet had no way to *read* it back. So before a
+click it could not answer the most basic question: *which window is actually
+under this point right now — the one I intend, or an occluder?* Official
+screenshot+click is doubly blind here: a screenshot carries colour, never window
+identity; two windows of the same colour are indistinguishable, and nothing in
+the pixel says where one window ends and the next begins.
+
+**Primitive.** `osctl.window_under(x, y)` → the top-level window id that owns the
+screen pixel, or `None` for bare desktop/root. It is the **read-side dual of
+`activate_window`**: the latter *writes* the stack, this *reads* it, and the id
+it returns keys directly against `list_windows`.
+
+- **Win32**: `WindowFromPoint(POINT)` resolves the deepest window at the point;
+  `GetAncestor(hwnd, GA_ROOT)` lifts that to its top-level root so the result is
+  the same id `list_windows`/`activate_window` speak.
+- **X11**: `XTranslateCoordinates(root, root, x, y)` gives the toplevel under the
+  point, but a reparenting WM wraps the client in frame/decoration windows, so
+  that is usually a *frame*, not the `_NET_CLIENT_LIST` id. We descend the
+  subtree (`XQueryTree`, topmost child first) to the window bearing `WM_STATE`
+  (the ICCCM client window), and only return it if it is actually managed
+  (present in `_NET_CLIENT_LIST`).
+
+**Live A/B (two consoles overlapping at one pixel, Windows):**
+
+| step | `window_under(450,380)` | meaning |
+|---|:---:|---|
+| B launched last, on top | `B` | the pixel a click would hit is B's, not A's |
+| `activate_window(A)` (raise A) | `A` | the read tracks the write — ownership flipped |
+| a pixel outside both frames | not A, not B | no misattribution to our windows |
+
+R112 (`round_window_under`, 5 checks) bakes it in; `_probe_under.py` is the
+standalone reproduction. Cross-platform: runs natively on Windows (cmd consoles)
+and on a konsole-equipped X11 host.
+
+**Lesson (道法自然).** 知人者智，自知者明 — *knowing others is wisdom; knowing
+oneself is clarity.* The hand learned to reorder the stack (F148) long before the
+eye could see it; a faculty that can only *act* and never *perceive its own act*
+is half-blind. 反者道之動 — the Way moves by opposites: every write the floor
+grows eventually demands its reading dual (`move`→`cursor_pos`, `set_clipboard`→
+`get_clipboard`, `activate_window`→`window_under`), and the floor is only whole
+when both directions are present.
+
+---
+
+## F152 — a window has a life: wait for it to be born, close it by identity (`wait_window` / `close_window`, R113)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** Every window primitive so far (F146 address, F148 raise, F149 move,
+F150 desktop, F151 read) assumed the window *already exists and will keep
+existing*. But a window has a lifetime. Two ends of it had no primitive:
+
+- **Birth is delayed.** Launching an app, opening a dialog, spawning a document —
+  the window appears *after* a delay. Code that lists/activates the instant after
+  spawning races the window's birth and addresses nothing. F118's `wait_for`
+  waits for *pixels* to appear, but pixels carry no identity: two same-looking
+  windows are indistinguishable, and a window can already exist while fully
+  occluded with zero visible pixels. The floor could wait on appearance but not
+  on *identity*.
+- **Death had no gesture.** The floor could raise, move, read a window — but
+  never *dismiss* one. Screenshot+click would have to hunt the ✕-button pixel;
+  killing the process is a sledgehammer that skips the app's own close path.
+
+**Primitives.**
+- `osctl.wait_window(match, timeout)` → blocks until a top-level whose title
+  contains `match` exists, returns it (or `None` on timeout). Polls
+  `list_windows` — waiting on window *identity*, the dual of waiting on pixels.
+- `osctl.close_window(win)` → asks a window to close *by identity*, the graceful
+  path a human's ✕ click takes: Win32 `PostMessage(WM_CLOSE)`, X11 EWMH
+  `_NET_CLOSE_WINDOW` client message. It runs the app's own close handlers, not a
+  process kill.
+- `osctl.window_exists(win)` / `wait_window_closed(win, timeout)` → the read that
+  confirms a close actually took; the closing dual of `wait_window`.
+
+**Live (Windows, cmd consoles):**
+
+| step | call | outcome |
+|---|---|---|
+| no such window | `wait_window("DAO-NOEXIST", 1.0)` | `None` after ~1s — no false positive |
+| launch console, then wait | `wait_window("ULIFE-X", 10)` | returns `{id, title}` once born |
+| while alive | `window_exists(id)` | `True` |
+| close by identity | `close_window(id)` → `wait_window_closed(id)` | gone; dropped from `list_windows`; `window_exists` → `False` |
+
+R113 (`round_window_lifecycle`, 5 checks); `_probe_life.py` is the standalone
+reproduction (7/7). Full suite **761/761** clean.
+
+**Lesson (道法自然).** 出生入死 — *coming into life, going into death.* The floor
+had learned to operate windows but treated them as eternal fixtures; a complete
+hand must meet a window at both ends of its existence — wait for it to arrive,
+and let it go — addressing each *by name*, never by groping at pixels. 反者道之動
+again: birth (`wait_window`) and death (`close_window`/`wait_window_closed`) are
+duals, and the floor grows whole by holding both.
+
+---
+
+## F153 — how a window is *shown*: minimize, maximize, restore (`window_state` / `set_window_state`, R114)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** The floor could now address (F146), raise (F148), move (F149), read
+ownership of (F151), and end (F152) a window — but every one of those concerns
+*where* the window is or *whether* it is. None touched *how it is shown*. A window
+also lives along a show-state axis: **minimized** (no on-screen pixels at all),
+**maximized** (filling the work area), **normal**. Geometry cannot express it: a
+maximized window and a window merely sized to the screen have identical rects, and
+a minimized window and a closed one both have no pixels — a screenshot cannot tell
+them apart. The floor had no way to read this axis, nor to perform the most
+ordinary title-bar gestures a human does dozens of times an hour.
+
+**Primitives.**
+- `osctl.window_state(win)` → `"minimized"` / `"maximized"` / `"normal"` (or None
+  if gone). Win32 `IsIconic`/`IsZoomed`; X11 ICCCM `WM_STATE`==IconicState for
+  minimized, `_NET_WM_STATE` carrying both MAXIMIZED_VERT and _HORZ for maximized.
+- `osctl.set_window_state(win, state)` → the gesture by identity. Win32
+  `ShowWindow` (SW_MINIMIZE / SW_MAXIMIZE / **SW_SHOWNORMAL**); X11
+  `XIconifyWindow` + EWMH `_NET_WM_STATE` add/remove of the two MAXIMIZED atoms.
+
+**Live (Windows, cmd console):**
+
+| step | `window_state` | corroboration |
+|---|:---:|---|
+| fresh | `normal` | — |
+| `set_window_state(maximized)` | `maximized` | `window_geometry().w` = 1296 ≈ screen 1280 |
+| `set_window_state(minimized)` | `minimized` | `window_exists` still True (≠ closed) |
+| `set_window_state(normal)` | `normal` | returns to normal *even from minimized* |
+| `set_window_state("bogus")` | — | returns False, nothing applied |
+
+**Defect found & fixed in practice.** First run: restoring from *minimized* with
+`SW_RESTORE` (9) bounced the window back to **maximized**, because SW_RESTORE
+restores the *prior* show-state, not the normal one. Probe caught it
+(`_probe_state.py`); fixed by mapping `"normal"` to `SW_SHOWNORMAL` (1), which
+forces normal size/position regardless of prior state. The maximize check is
+cross-validated against pixels (`window_geometry`), so the *read* cannot drift
+from the *reality* — perception and actuation pinned to each other.
+
+R114 (`round_window_state`, 5 checks); `_probe_state.py` standalone (5/5). Full
+suite **766/766** clean.
+
+**Lesson (道法自然).** 大成若缺 — *the greatest completion seems incomplete.* Each
+new window primitive revealed one more axis the floor had silently assumed away:
+position, then stack, then existence, now show-state. Completeness is not a
+destination but the steady exposure and filling of these unspoken assumptions —
+and only a *read* pinned to a *pixel* (maximized ↔ geometry) keeps the filling
+honest rather than self-certifying.
+
+---
+
+## F154 — which window has the keyboard: read focus, and fix repeated activation (`active_window`, R115)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** F151 gave one of the two read-duals of `activate_window`:
+`window_under` — which window owns a *pixel*, i.e. where a *click* lands (the
+mouse follows the stack). Its twin was still missing: which window owns *focus*,
+i.e. where a *keystroke* lands (the keyboard follows focus). The floor could
+*write* focus (`activate_window`, `focus_window`) but never *read* it, so it typed
+blind — no way to confirm a `type`/key would reach the intended app rather than
+whatever silently held focus.
+
+**Primitive.** `osctl.active_window()` → the id of the window holding keyboard
+focus now, or None. Win32 `GetForegroundWindow`; X11 reads EWMH
+`_NET_ACTIVE_WINDOW` off the root. The focus-read dual of `activate_window`, as
+`window_under` is its stack-read dual.
+
+**Defect surfaced & fixed in practice (the real prize).** Building the read
+exposed a writer defect that had been invisible without it. The probe activated A
+(read: A ✓), then activated B — and `active_window` still reported **A**. The
+third check ("focus_window agrees") only *looked* green because A was already
+focused, a no-op agreement masking the failure. Root cause: **Windows'
+foreground lock**. `SetForegroundWindow` grants only the *first* foreground change
+a process makes after user input and silently denies the rest
+(`ForegroundLockTimeout`) — so `activate_window` worked once and failed on every
+switch after, quietly leaving the keyboard pointed at the wrong window. The
+`AttachThreadInput` workaround already in `activate_window` was not enough. Fix:
+zero `SPI_SETFOREGROUNDLOCKTIMEOUT` once at backend import, after which every
+subsequent `activate_window` takes reliably. After the fix: activate A → A,
+activate B → **B**, focus_window(A) → A. This hardens not just F154 but every
+window-addressing round that switches focus more than once.
+
+R115 (`round_active_window`, 5 checks, incl. the explicit *second-switch* assert);
+`_probe_active.py` standalone (3/3 after fix; it was 2/3 that *found* the bug).
+Full suite **771/771** clean.
+
+**Lesson (道法自然).** 反者道之動 — *the Way moves by opposites.* The read
+(`active_window`) was not merely the missing half of a pair; building it is what
+made the writer's silent failure *visible at all*. A faculty that can only act
+and never perceive its own act cannot even know it has failed. The dual is not
+decoration — it is the floor's only honest mirror. 知人者智，自知者明: knowing the
+window is wisdom; the floor knowing *its own* focus is clarity.
+
+---
+
+## F155 — always-on-top: where the stack and focus deliberately diverge (`set_window_topmost` / `is_window_topmost`, R116)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** F151 reads the *stack* (`window_under` — which window owns a pixel,
+where a click lands); F154 reads *focus* (`active_window` — which window owns the
+keyboard). On a normal desktop the two move together: raising a window both
+stacks it and focuses it, so nothing had yet *proved* they are independent axes
+rather than two names for one thing. And the floor had no way to express the one
+case where a human deliberately splits them: pinning a reference window
+*always-on-top* so it stays visible while typing into another.
+
+**Primitives.**
+- `osctl.set_window_topmost(win, on=True)` → pin/unpin always-on-top by identity.
+  Win32 `SetWindowPos(HWND_TOPMOST/HWND_NOTOPMOST)`; X11 EWMH `_NET_WM_STATE`
+  add/remove of `_NET_WM_STATE_ABOVE`.
+- `osctl.is_window_topmost(win)` → read the pin. Win32 `WS_EX_TOPMOST` ext-style;
+  X11 `_NET_WM_STATE_ABOVE` membership. The read dual of the write.
+
+**Live (Windows, two overlapping consoles sharing one pixel):**
+
+| step | `active_window` (focus) | `window_under(px)` (stack) |
+|---|:---:|:---:|
+| pin A, then activate B | **B** | **A** — topmost wins the pixel |
+| unpin A, activate B | **B** | **B** — axes re-converge |
+
+That single row where focus = B but the pixel = A is the whole point: it proves
+`active_window` and `window_under` measure genuinely different things. A
+screenshot+click floor cannot pin anything, and cannot even perceive the split.
+
+R116 (`round_topmost`, 5 checks); `_probe_topmost.py` standalone (6/6). Full suite
+**776/776** clean.
+
+**Lesson (道法自然).** 萬物負陰而抱陽 — *all things carry yin and embrace yang.*
+Stack and focus had ridden together so faithfully they looked like one; only by
+*forcing* them apart (the topmost pin) does the floor confirm it holds two
+independent truths, each with its own read. Wholeness is not sameness — it is
+holding distinct opposites at once and knowing which is which.
+
+---
+
+## F156 — a window's process identity, and the forceful death (`window_pid` / `terminate_window`, R117)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** Every window read so far keyed off the *title* or the *handle*. But
+a title can **collide** — two consoles, two editors, two browser windows can carry
+the exact same caption — so a title is not an identity; addressing "the window
+titled X" is ambiguous when two exist. And F152 gave only the *graceful* death
+(`close_window` → WM_CLOSE / _NET_CLOSE_WINDOW, the app's own close path); a hung
+window or a stubborn modal can simply ignore it, leaving the floor no recourse. A
+human in that spot opens Task Manager and kills the process — an escalation the
+floor could not make.
+
+**Primitives.**
+- `osctl.window_pid(win)` → the owning OS process id (Win32
+  `GetWindowThreadProcessId`; X11 `_NET_WM_PID`). Identity *beyond the title*: it
+  tells two same-titled windows apart and groups one app's windows.
+- `osctl.terminate_window(win)` → force the owning process to end (Win32
+  `OpenProcess(PROCESS_TERMINATE)`+`TerminateProcess`; X11 `SIGKILL` the pid). The
+  *forceful* death dual of the graceful `close_window`.
+
+**Live (Windows, two consoles with the SAME title):**
+
+| check | result |
+|---|---|
+| two windows share the identical title "UPID-SAME" | n = 2 |
+| `window_pid` of each | **3804 ≠ 2488** — distinct identity the title can't give |
+| `terminate_window(A)` then `wait_window_closed(A)` | gone |
+| the other same-titled window (pid 2488) | unharmed |
+
+R117 (`round_window_pid`, 4 checks); `_probe_pid.py` standalone (6/6). Full suite
+**780/780** clean.
+
+**Lesson (道法自然).** 名可名也，非恒名也 — *a name that can be named is not the
+constant name.* The title is a name, and names collide and change; the process is
+the window's constant identity beneath the name. And death has two faces: the
+graceful asking (`close_window`) and, when that is refused, the forceful ending
+(`terminate_window`). A floor that could only ask politely was at the mercy of any
+app that would not answer; holding both the gentle and the absolute completes its
+authority over a window's end.
+
+---
+
+## F157 — reading the floor's own keyboard (`key_state`, R118)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** For 156 rounds the floor could *press* and *release* keys
+(`key_down`/`key_up`) but had no way to *read* them back. It typed entirely blind
+to its own keyboard. Two silent corruptions live in that blindness: a modifier
+left held (a `key_down(Shift)` whose `key_up` never fires turns every later letter
+upper-case) and a toggled lock (`CapsLock`/`NumLock` flipped on by a stray tap
+silently inverts case / digit-vs-arrow) — neither detectable, because the write
+side cannot see the latch it set. This is the keyboard's missing read dual, the
+twin of F154's `active_window` (which read *where* keys land; this reads *what*
+the keyboard itself holds).
+
+**Primitive.**
+- `osctl.key_state(vk)` → `{"down": bool, "toggled": bool}`. `down` = the physical
+  press (Win32 `GetAsyncKeyState` high bit; X11 `XQueryKeymap` keymap bit);
+  `toggled` = the lock latch (Win32 `GetKeyState` low bit; X11 Xkb `locked_mods`).
+
+**Live (Windows, no window/app needed — raw input floor):**
+
+| check | result |
+|---|---|
+| Shift: up → held → released | `down` False → **True** → False |
+| CapsLock: read, toggle, toggle back | `toggled` False → **True** → False |
+
+R118 (`round_key_state`, 2 checks); `_probe_keystate.py` standalone (5/5). Full
+suite **782/782** clean.
+
+**Lesson (道法自然).** 自知者明 — *to know oneself is clarity.* F154 was 知人
+(knowing *which* window holds focus, outward); this is 自知 (the floor knowing
+*its own* hand). A power that cannot perceive itself acts blind and cannot tell a
+clean act from a corrupted one; only with a read of its own state can the floor
+trust what it writes. Every write this session has now grown its read — the
+keyboard was the last actuator still typing into the dark.
+
+---
+
+## F158 — reading the floor's own mouse buttons; the input floor closes (`mouse_state`, R119)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** F157 gave the keyboard its read; the mouse *button* was the last
+input **write** with no read. `mouse_button` could press and release, but nothing
+could ask "is a button down right now?" A drag is press → move → release; if the
+release event is ever lost (an exception between the down and the up, a gesture
+abandoned mid-way), the button stays logically held and **every later move
+becomes an unwanted drag** — selecting text, dragging icons, smearing the desktop
+— invisible to the floor until something breaks far downstream. The button had no
+mirror.
+
+**Primitive.**
+- `osctl.mouse_state()` → `{"left","right","middle": bool, "pos": (x,y)}`. Win32
+  reads each button via `GetAsyncKeyState(VK_LBUTTON/…)`; X11 reads the live button
+  bits from `XQueryPointer`'s mask. The button-read dual of `mouse_button`, and it
+  folds in the cursor position so one call answers "where is the pointer and what
+  is it holding?"
+
+**Live (Windows, pressed at a neutral corner, always released):**
+
+| check | result |
+|---|---|
+| at rest | left **up**, pos reported |
+| while left held | left **down**, right/middle up |
+| after release | left **up** (a stuck drag would show here) |
+
+R119 (`round_mouse_state`, 3 checks); `_probe_mousestate.py` standalone (5/5). Full
+suite **785/785** clean.
+
+**Lesson (道法自然).** 知人者智，自知者明 — and now the self-knowing is complete.
+Across F151–F158 every actuator finally grew its mirror: the stack (`window_under`),
+focus (`active_window`), window state/identity/end, the keyboard (`key_state`), and
+now the mouse (`mouse_state`). 反者道之動 — the Way moves by opposites: a power that
+only acts is half a power; only when each write can be read does the floor act with
+open eyes instead of in the dark. The input floor is whole.
+
+---
+
+## F159 — the atom of perception, and waiting for visual state (`pixel` / `wait_pixel`, R120)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** Perception was all-or-nothing. `capture_rgb` grabs the whole desktop
+and `find_color` scans it; but the most frequent question is tiny — *what colour is
+**this** spot right now?* (is the indicator green, has the cell filled, did the
+light come on) — and there was no atomic way to ask it. Worse, there was no way to
+**wait** on a visual state. `wait_window` could block until a window is *born*, but
+nothing could block until something *looks* a certain way — a button enabling, a
+spinner stopping, a progress bar finishing, a render settling — which is exactly
+what a human does: watch the screen until it changes.
+
+**Primitives (platform-agnostic, built on `capture_rgb` — no backend duplication).**
+- `osctl.pixel(x, y)` → `(r, g, b)` for one spot, a 1×1 foveal read: the cheapest
+  perception the floor can make.
+- `osctl.wait_pixel(x, y, rgb, tol, timeout, interval)` → block until that spot
+  comes within `tol` of `rgb`, or time out. The visual-state dual of `wait_window`.
+
+**Live (Windows, deterministic — reads the live screen, changes nothing):**
+
+| check | result |
+|---|---|
+| `pixel(cx,cy)` vs same coord in full `capture_rgb` | identical `(255,255,255)` |
+| `wait_pixel` for the colour already there | True in **0.016 s** |
+| `wait_pixel` for a colour that never appears (1 s deadline) | False in **1.016 s** |
+
+R120 (`round_pixel`, 3 checks); `_probe_pixel.py` standalone (3/3). Full suite
+**788/788** clean.
+
+**Lesson (道法自然).** 見小曰明 — *to see the small is clarity.* The whole-screen
+grab is the grand gesture; real attention is a single point, watched over time.
+And waiting is not idleness — `wait_pixel` is 無為 that is not inaction: the floor
+stops *doing* and simply *watches*, letting the world arrive at the state it needs
+before it acts. After F158 closed the input floor (every write its read), F159
+begins giving perception the same temporal depth the actuators already trust:
+not just *read now*, but *wait until*.
+
+---
+
+## F160 — perception beyond pixels: reading a control's actual text (`window_text` / `child_windows`, R121)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** Every perception primitive to here returned *pixels* — `capture_rgb`,
+`find_color`, template match, even OCR (which *guesses* glyphs from pixels and can
+be wrong: `rn`→`m`, `0`→`O`). Yet the OS already holds the **exact** text inside its
+controls — an edit box's content, a label's words, a button's caption — as strings,
+not images. The floor could read a window's outer *title* but never look *inside* a
+window at the semantic content of its controls. So to know what was typed in a
+field, it screenshotted and OCR'd a picture of text the OS could have handed over
+verbatim. A human must read pixels with their eyes; the floor need not.
+
+**Primitives.**
+- `osctl.window_text(win)` → the text a window/control carries. Win32 `WM_GETTEXT`
+  (cross-process safe — unlike `GetWindowText`, which only fetches titles across
+  process boundaries): a title for a top-level, the live content for a child
+  control. X11 reads `_NET_WM_NAME`/`WM_NAME` (window-level names; toolkits paint
+  their own widgets, so that is the honest OS-visible analogue).
+- `osctl.child_windows(win)` → `[{"id","class","text"}, …]`, descending into a
+  window's controls (Win32 `EnumChildWindows`; X11 `XQueryTree`).
+
+**Live (Windows, against classic `notepad.exe`, cleaned up after):**
+
+| check | result |
+|---|---|
+| `window_text` on the top-level | `'Untitled - Notepad'` |
+| `child_windows` finds the `Edit` control | classes `['Edit','msctls_statusbar32']` |
+| type a marker, `window_text(edit)` reads it back | exact `'DAO-F160-5684'` |
+
+R121 (`round_window_text`, 4 checks); `_probe_text.py` standalone (all pass). Full
+suite **792/792** clean.
+
+**Lesson (道法自然).** 不窺於牖，以知天道 — *without peering through the window one
+knows the Way.* OCR peers through the glass (pixels) and squints to guess the text;
+`window_text` asks the OS for the thing itself. 為學者日益，聞道者日損 — the pixel
+path keeps *adding* machinery (capture, threshold, segment, recognise, correct) to
+approximate what the semantic path gets by *subtracting* all of it and reading the
+string directly. This is the first perception that is not an eye — the floor reads
+meaning the OS already knows, exactly, where a human could only look and guess.
+Here begins 超越人類: not a better eye, but a sense humans do not have.
+
+---
+
+## F161 — writing a control directly by identity (`set_window_text`, R122)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** F160 let the floor *read* a control's text; this is its write dual.
+To *fill* a field the floor otherwise had to: activate the window, ensure focus
+landed on the right control, then emit keystroke after keystroke. That path is
+slow (one message per character), focus-fragile (a popup or notification stealing
+focus mid-type drops the rest into the void or the wrong control), and corruptible
+(a stuck modifier or CapsLock — the very thing F157 exposed — silently mangles it).
+The hand could only type into whatever happened to hold focus *right now*.
+
+**Primitive.**
+- `osctl.set_window_text(win, text)` → hand the exact string to a control in a
+  single `WM_SETTEXT` (Win32): no focus change, no keystrokes, instant, verbatim,
+  and it works even when the window is occluded or unfocused. X11 writes the
+  window name (`_NET_WM_NAME`/`WM_NAME`) — toolkits own their widget text, so the
+  OS-level write reaches the window's name, the honest analogue of the read side.
+
+**Live (Windows, against `notepad.exe`, never activated or typed into):**
+
+| check | result |
+|---|---|
+| `set_window_text(edit, mark)` then read back | exact `'DAO-F161-4176'` |
+| a second write | replaces, not appends → `'REPLACED'` |
+
+R122 (`round_set_window_text`, 4 checks); `_probe_settext.py` standalone (all pass).
+Full suite **796/796** clean.
+
+**Lesson (道法自然).** 為而弗恃 — *acts, yet does not rely on force.* The keystroke
+path *forces* text through the narrow gate of focus, one character at a time, at
+the mercy of whatever else grabs the keyboard. `WM_SETTEXT` does not push against
+that gate at all — it sets the thing it means directly, 無為 in the sense of
+effortless: no struggle for focus, no race with a popup, no per-key labor. F160
+and F161 now form a complete semantic pair — read the meaning the OS holds, write
+the meaning the OS will hold — beside the pixel/keystroke floor, not replacing it
+but transcending it where the OS offers a truer door.
+
+---
+
+## F162 — the bridge: resolving a pixel to the control behind it (`control_at`, R123)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** Two perception worlds had grown side by side and never touched. The
+**pixel floor** (`capture_rgb`, `find_color`, template match, `window_under`) knew
+*where* things are but not what they mean — a found pixel is just a colour at a
+coordinate. The **semantic floor** (F160 `window_text`, `child_windows`, F161
+`set_window_text`) knew *what* controls mean but had no place for them on screen —
+a control handle is identity without location. So the floor could see a coloured
+region and could read a control's text, but could not say *"the thing at this
+pixel is that control."* Every visual find had to be re-grounded by guesswork to
+act on it semantically.
+
+**Primitive.**
+- `osctl.control_at(x, y)` → `{"id","class","text","top"}`: descends to the **leaf
+  control** under a screen point (Win32 `WindowFromPoint`; X11 tree descent via
+  repeated `XTranslateCoordinates`), reports its class, its text (via
+  `window_text`), and its owning top-level. Where `window_under` returns *which
+  window* a click lands in, this returns *which control* and *what it says*. This
+  is exactly what an accessibility inspector does on hover.
+
+**Live (Windows, Notepad placed at a known rect, pointed at its centre):**
+
+| check | result |
+|---|---|
+| pixel → leaf control | class `Edit` |
+| control's top-level | the Notepad window (ids match) |
+| control's text under the pixel | exact `'DAO-F162-5432'` |
+
+R123 (`round_control_at`, 4 checks); `_probe_controlat.py` standalone (all pass).
+Full suite **800/800** clean — the suite crosses 800.
+
+**Lesson (道法自然).** 二生三，三生萬物 — *two beget three, and three the ten thousand
+things.* The pixel world (一) and the semantic world (二) each, alone, were half-
+blind; `control_at` is the 三 that joins them, and from that joining the real
+repertoire becomes possible — see a thing, know what it is, read what it holds,
+act on it by identity. 知人者智，自知者明: the floor already knew itself (its own
+keyboard, mouse, windows) and knew the world (pixels, controls); here those two
+knowings meet in a single act. Seeing becomes understanding. This is the seam
+where 超越人類 stops being a slogan: a human hovering a control sees pixels and
+*infers* meaning; the floor reads the meaning and the location at once, exactly.
+
+---
+
+## F163 — addressing a control by meaning (`find_control`, R124)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** F162's `control_at` answered *what is at this pixel?* — location →
+identity. But the far commoner question runs the other way: *where is the control
+that means X?* — the OK button, the address bar, the password field. The floor had
+no inverse: to act on a known control it either scanned pixels for a visual
+pattern (fragile, theme-dependent) or already had to know the coordinate. A name
+without a place cannot be clicked.
+
+**Primitive.**
+- `osctl.find_control(top, cls=None, text=None)` → the first control inside
+  ``top`` matching class and/or text (case-insensitive substring), as
+  ``{"id","class","text","rect":(x,y,w,h)}`` in **screen coordinates** — or None.
+  Win32 walks `EnumChildWindows` + `GetWindowRect`; X11 recurses `XQueryTree` and
+  maps each hit to absolute coords. Returning the *rect* closes the loop back to
+  the actuator floor: a semantic search hands the mouse a pixel target, no visual
+  scanning at all.
+
+**Live (Windows, against `notepad.exe`):**
+
+| check | result |
+|---|---|
+| find Edit by class → screen rect | `(148, 191, 704, 438)` |
+| **round-trip** `find_control`→`control_at(centre)` | same control id |
+| find same control by text substring | same id |
+| non-existent class | `None` (no false positive) |
+
+R124 (`round_find_control`, 5 checks); `_probe_findctl.py` standalone (all pass).
+Full suite **805/805** clean.
+
+**Lesson (道法自然).** 名與實 — *name and substance.* `control_at` reads the name
+off the substance at a place; `find_control` finds the place from the name. The
+round-trip — name → place → name returning the *same* control — is the proof they
+are 反 (inverse), 反者道之動: the floor can now move freely between *what a thing
+is* and *where it is*, in either direction, and neither is primary. And because
+`find_control` ends in a pixel rect, the semantic layer does not float free of the
+hand — it 復歸 (returns) to the actuator floor: understand a thing, then click
+exactly where it lives. The two worlds the bridge (F162) joined are now fully
+two-way, and the loop perceive → understand → locate → act is closed without one
+pixel of guesswork.
+
+---
+
+## F164 — the verbs of an app: reading and invoking its menu (`window_menu` / `invoke_menu`, R125)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** The floor could now read controls, locate them by meaning, write
+and click them — but all of that is the *nouns* of an application (its fields, its
+labels, its buttons). An app's *verbs* — Save, Copy, Find, Insert-Date — live in
+its **menus**, and a menu is invisible to every screenshot until a click opens it,
+then vanishes again. To run a command the floor had to *perform the choreography*:
+move to the menu bar, click to open, find the item among those that appeared,
+click it — every step a pixel gamble, and the whole transient structure unreadable
+in between. The actions an app offers had no names the floor could see or speak.
+
+**Primitives (Windows-native — OS menus).**
+- `osctl.window_menu(win)` → the menu bar as a tree: `[{label, id, sep, items}]`,
+  every leaf carrying its **command id** (`GetMenu` + `GetMenuString`/`GetSubMenu`/
+  `GetMenuItemID`). The whole command vocabulary, read without opening a thing.
+- `osctl.invoke_menu(win, id)` → executes a command **by its id**, posting the
+  `WM_COMMAND` the menu itself would have sent — no menu opened, no mouse moved,
+  no focus held, works even occluded. The verb performed by name.
+- X11 returns `[]`/`False`: toolkits draw their own menus, so there is no OS menu
+  to read — honest asymmetry, like the rest of the semantic layer.
+
+**Live (Windows, against `notepad.exe`):**
+
+| check | result |
+|---|---|
+| `window_menu` top-level | `['&File','&Edit','F&ormat','&View','&Help']` |
+| Time/Date command located in tree | `{label:'Time/&Date\\tF5', id:26}` |
+| `invoke_menu(win, 26)` then read the Edit | `'5:16 PM 6/27/2026'` (timestamp inserted) |
+
+R125 (`round_menu`, 4 checks); `_probe_menu.py` standalone (all pass). Full suite
+**809/809** clean.
+
+**Lesson (道法自然).** 道隱無名，始制有名 — *the Way hides, nameless; once shaped, it
+has names.* A menu, unopened, is the app's repertoire held latent and unnamed; the
+human must *enact* it (open, hunt, click) each time to touch one verb. `window_menu`
+brings the whole latent repertoire into the named and the visible at once, and
+`invoke_menu` performs the chosen verb 弗為而成 — accomplished without the doing,
+no choreography, no mouse, the command run straight by its name. The floor now has
+both halves of agency: the *nouns* (F160–F163: read, write, locate, click a
+control) and the *verbs* (F164: read and invoke an app's commands). Seeing,
+understanding, and acting are all semantic now — the pixel/keystroke floor remains
+underneath as the universal fallback, but where the OS offers a true name, the
+floor speaks it. 超越人類: a human can hold only the menu they have opened; the
+floor holds the entire command tree and fires any verb in it, instantly, by name.
+
+---
+
+## F165 — seeing inside modern apps: UI Automation read (`uia_name` / `uia_children`, R126)
+
+**Ground: Windows Server 2022. Pure-ctypes raw COM — zero new dependencies.**
+
+**Friction (surfaced by the very browser the floor runs on).** The whole semantic
+layer F160–F164 reads *native* controls — real child HWNDs (`child_windows`,
+`window_text`, `find_control`) and OS menus (`window_menu`). Pointed at the
+**modern** app it lives beside — Chrome — it goes nearly blind: `child_windows`
+returns a single generic `Chrome Legacy Window` and the menu is empty, because
+Chrome (like Electron and UWP) paints its entire UI inside one HWND with no child
+controls and no OS menu. The semantic floor worked on Notepad and could not see a
+tab, an address bar, a button in the browser running the tests. A floor that means
+to operate *everything* cannot be blind to most of today's software.
+
+**Primitives (Windows-native; raw `IUIAutomation` COM via ctypes vtable calls).**
+- `osctl.uia_name(win)` → a window's accessible **name** from the OS accessibility
+  tree (the same tree a screen reader uses).
+- `osctl.uia_children(win)` → its child UIA elements as `[{"name","type"}]`, where
+  `type` is the control-type name (Button, Edit, Tab, Document, Pane, …) — seeing
+  *inside* modern apps where `child_windows` cannot.
+- Implemented in `_uia_win.py`: `CoCreateInstance(CUIAutomation)` →
+  `ElementFromHandle` → `GetCurrentPropertyValue`(Name/ControlType) and
+  `FindAll`(children, TrueCondition). Best-effort: any failure degrades to
+  `""`/`[]`, so the backend always imports and callers fall back to the
+  Win32 / pixel floor. Non-Windows returns the same empty defaults.
+
+**Live:**
+
+| target | `child_windows` (Win32) | `uia_children` (UIA) |
+|---|---|---|
+| Notepad (native) | Edit, status bar | `Edit "Text Editor"`, `StatusBar`, `TitleBar`, `MenuBar` |
+| **Chrome (modern)** | **1 generic** `Chrome Legacy Window` | `"x"`, `TitleBar`, `Pane` — **sees inside** |
+
+`uia_name`: Notepad → `'Untitled - Notepad'`, Chrome → `'x - Google Chrome for
+Testing'`. R126 (`round_uia`, 5 checks); `_probe_uia.py` standalone (all pass).
+Full suite **814/814** clean.
+
+**Lesson (道法自然).** 無有入於無間 — *the formless enters where there is no gap.*
+The Win32 reader needs a seam — a real child window, an OS menu — to grip; a modern
+app offers none, presenting one smooth opaque HWND. UIA does not pry at the surface
+but enters through the accessibility tree the app already publishes about itself,
+and there the interior — tabs, panes, documents — is plainly there. This is 反者道
+之動 again at the level of *which floor reads*: the native reader and the UIA reader
+are opposites (one grips native seams, one reads the published tree), and the floor
+needs both to perceive *all* software, not a subset. With F165 the semantic
+perception is no longer a Notepad trick — it is uniform across native and modern,
+and the floor can finally see the inside of the browser it has been driving blind.
+
+---
+
+## F166 — semantic locate inside modern apps: UIA find (`uia_find`, R127)
+
+**Ground: Windows Server 2022. Pure-ctypes raw COM.**
+
+**Friction.** F165 let the floor *see* inside modern apps, and F163's `find_control`
+could turn a meaning into a clickable rect — but only for *native* child HWNDs.
+Pointed at Chrome, `find_control` finds nothing: there are no native children to
+match. So the floor could now *see* a tab or a button in Chrome (F165) yet still
+had no way to turn "the element that means X" into a pixel the mouse can hit —
+the modern-app half of addressing-by-meaning was missing.
+
+**Primitive.**
+- `osctl.uia_find(win, name=None, ctype=None)` → the first descendant in the
+  window's **accessibility tree** matching accessible name (case-insensitive
+  substring) and/or control type, as `{"name","type","rect":(x,y,w,h)}` in screen
+  coordinates — or None. The UIA analogue of `find_control`, but it reaches
+  *inside* Chrome/Electron/UWP. `FindAll(Descendants, TrueCondition)` then filter;
+  the rect comes from the `BoundingRectangle` property (a SAFEARRAY of 4 R8 parsed
+  in ctypes). Returning the rect closes the loop back to the pixel actuator for
+  modern apps too.
+
+**Live:**
+
+| check | result |
+|---|---|
+| `uia_find(notepad, type=Edit)` → rect | `(168, 211, 704, 438)` |
+| **cross-floor:** that rect's centre → `control_at` | native `Edit` (same place) |
+| `uia_find(chrome, type=Pane)` → rect | `(8, 0, 1284, 732)`, inside the window |
+
+R127 (`round_uia_find`, 4 checks); `_probe_uiafind.py` standalone (all pass). Full
+suite **818/818** clean.
+
+**Lesson (道法自然).** The deep proof here is the **cross-floor agreement**: a thing
+located through the accessibility tree (UIA, *meaning*) and the same thing read
+through the pixel/native floor (`control_at`, *substance*) return the **same place**.
+天得一以清，地得一以寧 — *the one obtained, and all is settled.* Two utterly different
+descriptions of reality — the published semantic tree and the raw window-from-point
+— converge on one coordinate; that convergence is what makes acting on understanding
+*trustworthy*. And it is the modern-app completion of 反者道之動: F163 (native
+locate) and F166 (UIA locate) are the two opposites whose union lets the floor turn
+*any* meaning, in *any* app, into a pixel the hand can strike — perceive →
+understand → locate → act, now universal.
+
+---
+
+## F167 — acting inside modern apps: UIA value write & invoke (`uia_set_value` / `uia_get_value` / `uia_invoke`, R128)
+
+**Ground: Windows Server 2022. Pure-ctypes raw COM.**
+
+**Friction.** F165–F166 gave the floor *sight* and *locate* inside modern apps,
+but its semantic *actions* were still native-only: `set_window_text` writes a
+control by its HWND, `invoke_menu` posts a WM_COMMAND to an OS menu — and a modern
+app has neither. So the floor could see a Chrome address bar and find its rect, yet
+to *fill* it still had to fall back to clicking the pixel and typing. The
+semantic-action half of the modern-app loop was missing.
+
+**Primitives (UIA control patterns via raw COM).**
+- `osctl.uia_set_value(win, value, name=None, ctype=None)` → writes a field's value
+  through the **ValuePattern** of an element found by meaning — the modern-app dual
+  of `set_window_text`, reaching inside Chrome/Electron/UWP.
+- `osctl.uia_get_value(win, …)` → its read dual (ValuePattern get_CurrentValue).
+- `osctl.uia_invoke(win, name=None, ctype=None)` → presses a button/link via the
+  **InvokePattern** — the UIA analogue of `invoke_menu`, no mouse, no pixels.
+- Implemented via `IUIAutomationElement::GetCurrentPattern` (vtable 16) → the
+  pattern interface, then its method (SetValue/Invoke at vtable 3). BSTR args via
+  `SysAllocString`.
+
+**Live (Notepad, cross-floor):**
+
+| check | result |
+|---|---|
+| `uia_set_value(note, mark, type=Edit)` | `True` (through ValuePattern) |
+| native `window_text` reads it back | `'DAO-F167-…'` — **exactly the UIA-written value** |
+| `uia_get_value` callable → str | `str` (multiline Document returns "" on read — a real UIA quirk) |
+
+R128 (`round_uia_value`, 4 checks); `_probe_uiaval.py` standalone. Full suite
+**822/822** clean (the harness even self-recovered its CDP link after the round —
+the live floor proving its own resilience).
+
+**Lesson (道法自然).** 為而弗恃 — *act, yet do not lean on it.* The UIA write does not
+seize the field by force (focus, keystrokes, pixels); it asks the accessibility
+contract the app already honours, and the value is simply *there* — confirmed by an
+entirely independent floor (native `window_text`) reading back precisely what was
+written. That two unrelated mechanisms — the accessibility write and the native
+read — agree to the character is the same 得一 (obtaining-the-one) convergence as
+F166, now on the *action* side. The modern-app loop is whole: **see** (F165) →
+**locate** (F166) → **write/press** (F167), each a true semantic verb, each falling
+back to the universal pixel/keystroke floor only when no contract is offered. The
+floor now operates native and modern software alike, by meaning, end to end.
+
+---
+
+## F168 — driving a modern UWP app by pure meaning + exact-preferred match (R129)
+
+**Ground: Windows Server 2022. Windows Calculator (UWP).**
+
+**Friction (surfaced only by actually driving an app, not by probing one call).**
+F165–F167 each verified a *single* UIA call. The real test is a *sequence*: take
+the Calculator — a UWP app with one HWND, no native controls, no OS menu — and
+compute `5 + 3 = 8` entirely by meaning. Doing so immediately exposed a defect in
+the matcher: `uia_invoke(name="Add")` pressed **"Memory add"**, because name
+matching was *substring* and "Memory add" appears earlier in the tree than "Add".
+A semantic floor that picks the wrong verb because another verb happens to contain
+its name as a substring is not trustworthy — the friction only appeared because a
+real multi-step task was run, exactly as 道法自然 predicts.
+
+**Fix.** `_find_ptr` (shared by `uia_find` and all UIA action helpers) now prefers
+an **exact** case-insensitive name match anywhere in scope, keeping the first
+substring hit only as a fallback. `uia_find(name="Add")` → "Add", never "Memory
+add"; `find_control`-style "by meaning" is preserved for partial names.
+
+**Live (no pixels, no coordinates, no keystrokes):**
+
+| step | call | result |
+|---|---|---|
+| press 5, +, 3, = | `uia_invoke(calc, name=…, ctype="Button")` ×4 | all True |
+| read the answer | `uia_find(calc, name="8", ctype="Text")` | `Text "8"` — **5 + 3 = 8** |
+| exact match | `uia_find(calc, name="Add", ctype="Button")` | `"Add"` (not "Memory add") |
+
+R129 (`round_uia_drive`, 3 checks); `_probe_uiadrive.py` standalone. Full suite
+**825/825** clean.
+
+**Lesson (道法自然).** 大成若缺，其用不敝 — *great completion seems flawed, yet its use
+never fails.* The whole UIA arc (F165–F167) looked complete after single-call
+proofs, but only an actual end-to-end task revealed the substring flaw; the
+completion was *seeming*, the use would have failed in practice. This is the method
+itself, demonstrated: 為學者日益，聞道者日損 — do not add speculative features; run the
+real thing until a real contradiction surfaces, then resolve exactly that. The
+payoff is concrete and beyond a human's reach: the floor computed an arithmetic
+result by reaching into a modern app's accessibility tree and pressing its verbs by
+name — no screen reading, no aiming, no typing — the see→locate→act loop closed on
+software a screenshot-and-click operator can only fumble at.
+
+---
+
+## F169 — bridging semantic locate to the keyboard floor: UIA focus (`uia_focus`, R130)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** `uia_set_value` (F167) writes through the ValuePattern — but not every
+modern input offers one. Rich-text editors, `contenteditable` regions, custom
+canvas widgets expose no ValuePattern at all; the floor could *find* them (F166) and
+*see* them (F165) yet had no semantic way to put text in them. The only fallback was
+to compute a pixel and click — back to aiming.
+
+**Primitive.**
+- `osctl.uia_focus(win, name=None, ctype=None)` → moves keyboard focus to an element
+  found by meaning, via UIA `SetFocus` (IUIAutomationElement vtable 3). Once focused,
+  the *universal keyboard floor* (`osctl.tap`/`key_down`/`key_up`) types into it.
+
+**Live:** `uia_focus(notepad, type=Edit)` → True; then tapping `d`,`a`,`o` on the
+keyboard floor yields `window_text == "dao"` — the keystrokes landed in the element
+that was focused purely by meaning. R130 (`round_uia_focus`, 3 checks);
+`_probe_uiafocus.py` standalone. Full suite **828/828** clean.
+
+**Lesson (道法自然).** 天下之至柔，馳騁於天下之至堅 — *the softest in the world overruns the
+hardest.* The accessibility tree (soft, abstract, just names) and the raw keyboard
+(hard, physical, just scancodes) are the two extremes of the stack; `uia_focus` is
+the hinge where the soft meaning steers the hard keystroke. The two floors that
+looked independent — semantic UIA and the universal keyboard — turn out to
+*cooperate*: UIA does the one thing the keyboard cannot (aim by meaning), the
+keyboard does the one thing UIA cannot here (deliver text where no ValuePattern
+exists). 弱也者，道之用也 — the floor doesn't force a single mechanism to do everything;
+it lets each be weak where another is strong, and the whole becomes able to put text
+into *any* field, ValuePattern or not.
+
+---
+
+## F170 — reading text OUT of a modern app: UIA TextPattern (`uia_text`, R131)
+
+**Ground: Windows Server 2022. Chrome.**
+
+**Friction (surfaced by probing the read side across both worlds).** The floor had
+three text reads, each blind outside its world: `window_text` (native HWND only —
+Chrome has no native text to `WM_GETTEXT`), `uia_get_value` (single-line
+ValuePattern — returns "" for a document body, confirmed live: Chrome's Document
+ValuePattern read is empty), and `uia_name` (the element's label, not its content).
+There was no way to read the *rendered body text* of a modern document.
+
+**Primitive.**
+- `osctl.uia_text(win, name=None, ctype=None, max_len=20000)` → the element's full
+  text via the UIA **TextPattern** (`get_DocumentRange` → `GetText`), the
+  accessibility tree's own text spine. Reaches into Chrome/Electron pages and rich
+  editors. "" if no TextPattern.
+
+**Live:** Chrome navigated to `data:text/html,<h1>DAOFLOW-MARKER-7</h1>…`;
+`uia_text(chrome, ctype="Document")` → `"DAOFLOW-MARKER-7 the floor reads me"`, while
+`uia_get_value` on the same Document returns `""` — proving TextPattern is the
+*necessary* deep read, not a duplicate of the value spine. (Chrome enables its a11y
+tree lazily when a UIA client first asks, so the read retries briefly.) Vtable
+indices confirmed by probe before integration: TextPattern `get_DocumentRange` = 7,
+TextRange `GetText` = 12. R131 (`round_uia_text`, 2 checks); `_probe_uiatext.py`
+standalone. Full suite **830/830** clean.
+
+**Lesson (道法自然).** 知其白，守其黑 — *know the white, keep to the black.* Three reads
+each shone in their own light and were dark elsewhere; completeness was not one read
+that does everything but knowing exactly where each is dark and growing the one that
+illuminates it. The perception floor now reads text from native controls
+(`window_text`), value fields (`uia_get_value`), labels (`uia_name`), and now the
+rendered body of modern documents (`uia_text`) — each kept to its own province, the
+set of them leaving no dark corner. 大方無隅 — the great square has no corners; the
+whole has no blind edge precisely because each piece admits its limit.
+
+---
+
+## F171 — the toggle verb + an async-race lesson: UIA TogglePattern (`uia_toggle`/`uia_toggle_state`, R132)
+
+**Ground: Windows Server 2022. Chrome checkbox.**
+
+**Friction.** The modern-app action set had press (`uia_invoke`), write
+(`uia_set_value`), aim (`uia_focus`) — but a checkbox is none of those; it is a
+*state to flip*. There was no semantic way to toggle it short of computing a pixel
+and clicking.
+
+**Defect surfaced by driving it (the real lesson).** The first `uia_toggle` issued
+the flip *and* read back the new ToggleState to return it. Live, that returned
+`"off"` — yet the DOM `.checked` was already `True` and a read a moment later said
+`"on"`. Chrome updates its UIA ToggleState **asynchronously** across the
+accessibility bridge; reading it in the same breath as the flip is stale. So the
+primitive was redesigned: `uia_toggle` returns only **whether it acted** (True), like
+`uia_invoke`, and the settled state is read by `uia_toggle_state` afterward.
+
+**Primitives.**
+- `osctl.uia_toggle(win, name, ctype)` → True if the flip was issued (TogglePattern
+  `Toggle`, vtable 3).
+- `osctl.uia_toggle_state(win, name, ctype)` → `"on"`/`"off"`/`"indeterminate"`/`""`
+  (TogglePattern `get_CurrentToggleState`, vtable 4) — the read dual.
+
+**Live:** Chrome `<input type=checkbox>`; initial state `"off"`; `uia_toggle` → True,
+DOM `.checked` → True; settled `uia_toggle_state` → `"on"`. R132 (`round_uia_toggle`,
+3 checks); `_probe_uiatoggle.py` standalone. Full suite **833/833** clean.
+
+**Lesson (道法自然).** 為而弗恃 — *act, but do not presume.* The flawed design presumed
+the action's result was instantly knowable by the actor; the bridge proved it is not.
+Separating *acting* from *knowing* is not a workaround but the correct shape: the
+verb reports that it acted, the read reports what now *is*, after the world has
+settled. 生而弗有，為而弗恃，長而弗宰 — the floor does the deed and lets the truth be read
+from the world, rather than asserting the outcome from its own act. Every write still
+demands its read dual (反者道之動), and here the dual is not decoration but the *only*
+honest source of the post-state.
+
+---
+
+## F172 — the selection verb: UIA SelectionItemPattern (`uia_select`/`uia_is_selected`, R133)
+
+**Ground: Windows Server 2022. Chrome radio buttons.**
+
+**Friction.** Toggle (F171) flips a two-state checkbox; but choosing *one of many* —
+a radio button, a list option, a tab — is a different verb the floor lacked. There
+was no semantic way to pick one short of computing its pixel and clicking.
+
+**Primitives (the same act/read split the toggle race taught).**
+- `osctl.uia_select(win, name, ctype)` → True if `Select` was issued
+  (SelectionItemPattern `Select`, vtable 3).
+- `osctl.uia_is_selected(win, name, ctype)` → True / False / None (no pattern)
+  (SelectionItemPattern `get_CurrentIsSelected`, vtable 6) — the settled read dual.
+
+The action returns only that it acted; selection (like toggle) settles
+asynchronously across the a11y bridge, so the post-state is read separately.
+
+**Live:** Chrome `<input type=radio>` Alpha/Beta; `uia_is_selected("Beta")` → False;
+`uia_select("Beta")` → True, DOM `r2.checked` → True; settled
+`uia_is_selected("Beta")` → True. R133 (`round_uia_select`, 3 checks);
+`_probe_uiaselect.py` standalone. Full suite **836/836** clean.
+
+**Lesson (道法自然).** 多藏必厚亡 — *the more hoarded, the greater the loss.* A checkbox
+and a radio look alike, and a naive floor would force one verb (Toggle) onto both;
+but a radio is not a toggle — it is a *choice within a set*, and pressing it does not
+"flip" it, it *elects* it (and de-elects its siblings). Honoring the distinct pattern
+the platform already publishes (SelectionItem, not Toggle) is 因而制之 — model after
+what is, do not impose. The verb set grows by the world's own joints, not the floor's
+convenience: press / write / aim / flip / **choose**.
+
+---
+
+## F173 — the reveal verb: UIA ExpandCollapsePattern (`uia_expand`/`uia_collapse`/`uia_expand_state`, R134)
+
+**Ground: Windows Server 2022. Chrome `<details>` disclosure.**
+
+**Friction.** Some structure does not exist on screen until *revealed* — a dropdown's
+options, a tree node's children, a `<details>` disclosure's body. Every read and
+action verb the floor had operated on what was already present; none could *make
+hidden structure appear*. Without a reveal verb, half a modern UI's content is
+unreachable except by hunting a pixel and clicking.
+
+**Primitives (the act/read split, now habitual).**
+- `osctl.uia_expand(win, name, ctype)` → True if `Expand` was issued (vtable 3).
+- `osctl.uia_collapse(win, name, ctype)` → True if `Collapse` was issued (vtable 4).
+- `osctl.uia_expand_state(win, name, ctype)` →
+  `"collapsed"`/`"expanded"`/`"partial"`/`"leaf"`/`""` (vtable 5) — the settled read.
+
+**Live:** Chrome `<details><summary>MORE</summary>`; initial `"collapsed"`,
+DOM `.open`=False; `uia_expand` → True, DOM `.open`=True, settled `"expanded"`;
+`uia_collapse` → True, DOM `.open`=False. R134 (`round_uia_expand`, 3 checks);
+`_probe_uiaexpand.py` standalone. Full suite **839/839** clean.
+
+**Lesson (道法自然).** 天下萬物生於有，有生於無 — *all things are born of the manifest, and the
+manifest of the hidden.* A UI's full content is not all manifest at once; much waits,
+latent, behind a disclosure. The reveal verb is how the floor calls the hidden into
+the manifest so the rest of perception can act on it — expand, then read the children
+that did not exist a moment before. 啟其悶，濟其事 — open what is shut, and the work can
+proceed. With this the modern-app verb set is whole across the common joints:
+press / write / aim / flip / choose / **reveal**, each with its settled read dual.
+
+---
+
+## F174 — bringing an element into reach: UIA ScrollItemPattern (`uia_scroll_into_view`, R135)
+
+**Ground: Windows Server 2022. Chrome, a button 3000px below the fold.**
+
+**Friction.** An element below the fold has *no on-screen pixels* — the pixel
+executor cannot click what is not painted, and `uia_find` returns a rect outside the
+window. The floor could locate the element by meaning but could not *reach* it.
+
+**Primitive.**
+- `osctl.uia_scroll_into_view(win, name, ctype)` → True if `ScrollIntoView` was
+  issued (ScrollItemPattern, vtable 3) — asks the element's own scroll container to
+  bring it into the viewport.
+
+**Live (cross-floor proof):** Chrome page with a button at `rect.top=3029`
+(`innerHeight=645`, below the fold); `uia_scroll_into_view("BOTTOMBTN")` → True,
+`scrollY` 0→2413, button `rect.top`→616 (in view); and crucially `uia_find` then
+returns rect `(16, 703, 100, 21)` *inside* the window `0..740` — the pixel executor
+can now reach what had no pixels a moment before. R135 (`round_uia_scroll`, 3 checks);
+`_probe_uiascroll.py` standalone. Full suite **842/842** clean.
+
+**Lesson (道法自然).** This is the element-level twin of F149 (moving an off-screen
+*window* back on screen): there the unit of reach was a window, here it is an element
+within a scroll container, but the principle is one — 將欲取之，必固張之 — to act on a
+thing you must first bring it within reach. Locating by meaning is not enough;
+*reaching* completes it. And the completion is cross-floor: the semantic verb
+(ScrollIntoView) hands the pixel floor a now-valid rect — 天得一以清，地得一以寧 — the two
+worlds agree on one place, the seen and the meant made to coincide so the deed can
+land.
+
+---
+
+## F175 — the magnitude verb: UIA RangeValuePattern (`uia_range_value`/`uia_set_range_value`, R136)
+
+**Ground: Windows Server 2022. Chrome `<input type=range>`.**
+
+**Friction.** A slider, a progress bar, a scrollbar is neither a field of text
+(ValuePattern), nor a state to flip (Toggle), nor a choice among items (Selection) —
+it is a *number within bounds*. To set it the floor would otherwise have to compute
+the pixel offset along the track and drag — brittle arithmetic over a moving target.
+
+**Primitives.**
+- `osctl.uia_range_value(win, name, ctype)` → `{"value", "min", "max"}` (floats) or
+  None (RangeValuePattern `get_CurrentValue`/`Maximum`/`Minimum`, vtable 4/6/7).
+- `osctl.uia_set_range_value(win, value, name, ctype)` → True if `SetValue` succeeded
+  (vtable 3, the value passed as a C `double` through the COM call) — set a slider to
+  a number directly, no mouse drag. The provider clamps to its own min/max.
+
+**Live:** Chrome slider min=0/max=100/value=20; `uia_range_value` → that triple;
+`uia_set_range_value(75)` → True, DOM `.value`→"75"; read-back → 75. (Unlike
+toggle/select this read settles synchronously.) R136 (`round_uia_range`, 3 checks);
+`_probe_uiarange.py` standalone. Full suite **845/845** clean.
+
+**Lesson (道法自然).** 圖難於其易 — *plan the hard through the easy.* Setting a slider by
+dragging its handle along a pixel track is the hard way — fragile to skin, scale, and
+sub-pixel rounding; the platform already publishes the easy way, a number with known
+bounds, and the floor merely speaks it. The C `double` crossing the raw COM vtable is
+the one new mechanical wrinkle (every prior pattern took ints or void) — proven by
+probe before integration, in keeping with 千里之行，始於足下. The semantic verb set now
+matches the kinds of controls the world actually has: text / state / choice / reveal /
+reach / **magnitude**.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

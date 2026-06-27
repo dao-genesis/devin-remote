@@ -24,6 +24,8 @@ Exposes the exact names ``osctl`` expects from a backend: ``screen_size``,
 from __future__ import annotations
 
 import ctypes
+import os
+import signal
 import threading
 import time
 
@@ -71,6 +73,10 @@ _xt.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, 
 # them as c_ulong, not c_uint32.
 _x.XInternAtom.restype = ctypes.c_ulong
 _x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+_x.XChangeProperty.restype = ctypes.c_int
+_x.XChangeProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+                               ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
+                               ctypes.c_char_p, ctypes.c_int]
 _x.XGetWindowProperty.restype = ctypes.c_int
 _x.XGetWindowProperty.argtypes = [
     ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long, ctypes.c_long,
@@ -82,6 +88,8 @@ _x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
                           ctypes.c_long, ctypes.c_void_p]
 _x.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
 _x.XMapRaised.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+_x.XIconifyWindow.restype = ctypes.c_int
+_x.XIconifyWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int]
 # Geometry read + move/resize. XGetGeometry gives size in the window's own
 # coords; XTranslateCoordinates maps its (0,0) to the root to get absolute x,y.
 _x.XGetGeometry.restype = ctypes.c_int
@@ -98,6 +106,12 @@ _x.XTranslateCoordinates.argtypes = [
 _x.XMoveResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
                                  ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
 _x.XMoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
+# Walk the window tree to map a screen pixel to the client window that owns it.
+_x.XQueryTree.restype = ctypes.c_int
+_x.XQueryTree.argtypes = [
+    ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+    ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong)),
+    ctypes.POINTER(ctypes.c_uint)]
 
 
 class _XImage(ctypes.Structure):
@@ -151,6 +165,28 @@ def mouse_button(button: str, down: bool) -> None:
     with _lock:
         _xt.XTestFakeButtonEvent(_dpy, _BUTTON[button], 1 if down else 0, 0)
         _x.XFlush(_dpy)
+
+
+_BTN_MASK = {"left": 0x0100, "middle": 0x0200, "right": 0x0400}  # Button1/2/3Mask
+
+
+def mouse_state() -> dict:
+    """Read which mouse buttons are pressed *right now* plus the cursor position:
+    ``{"left","right","middle": bool, "pos": (x,y)}``. ``mouse_button`` could
+    press/release but nothing could *read* the buttons, so a drag whose button-up
+    was lost left the floor silently stuck pressed, dragging every later move.
+    ``XQueryPointer``'s modifier/button mask carries the live button bits; the
+    button-read dual of ``mouse_button`` (mirrors the Win32 backend)."""
+    rr = ctypes.c_ulong(); cr = ctypes.c_ulong()
+    rx = ctypes.c_int(); ry = ctypes.c_int(); wx = ctypes.c_int(); wy = ctypes.c_int()
+    mask = ctypes.c_uint()
+    with _lock:
+        _x.XQueryPointer(_dpy, _root, ctypes.byref(rr), ctypes.byref(cr),
+                         ctypes.byref(rx), ctypes.byref(ry), ctypes.byref(wx),
+                         ctypes.byref(wy), ctypes.byref(mask))
+    s = {name: bool(mask.value & bit) for name, bit in _BTN_MASK.items()}
+    s["pos"] = (rx.value, ry.value)
+    return s
 
 
 def mouse_wheel(notches: int, horizontal: bool = False) -> None:
@@ -242,6 +278,43 @@ def key_up(vk: int) -> None:
         _x.XFlush(_dpy)
 
 
+class _XkbStateRec(ctypes.Structure):
+    _fields_ = [("group", ctypes.c_ubyte), ("locked_group", ctypes.c_ubyte),
+                ("base_group", ctypes.c_ushort), ("latched_group", ctypes.c_ushort),
+                ("mods", ctypes.c_ubyte), ("base_mods", ctypes.c_ubyte),
+                ("latched_mods", ctypes.c_ubyte), ("locked_mods", ctypes.c_ubyte),
+                ("compat_state", ctypes.c_ubyte), ("grab_mods", ctypes.c_ubyte),
+                ("compat_grab_mods", ctypes.c_ubyte), ("lookup_mods", ctypes.c_ubyte),
+                ("compat_lookup_mods", ctypes.c_ubyte), ("ptr_buttons", ctypes.c_ushort)]
+
+
+_XKB_USE_CORE_KBD = 0x0100
+_LOCK_MASK = 0x02   # CapsLock
+_MOD2_MASK = 0x10   # NumLock (conventional)
+_VK_LOCKMASK = {0x14: _LOCK_MASK, 0x90: _MOD2_MASK}  # VK_CAPITAL, VK_NUMLOCK
+
+
+def key_state(vk: int) -> dict:
+    """Read a key's live state: ``{"down": bool, "toggled": bool}``. The floor
+    could *press*/*release* keys but never *read* them, so it held modifiers and
+    typed blind — a stuck Shift or a silently-on CapsLock would corrupt all
+    later typing undetectably. ``down`` comes from ``XQueryKeymap`` (the physical
+    keymap bitmap); ``toggled`` from the Xkb locked-mods (CapsLock/NumLock). The
+    read dual of the keyboard writes (mirrors the Win32 backend)."""
+    with _lock:
+        keys = (ctypes.c_char * 32)()
+        _x.XQueryKeymap(_dpy, keys)
+        kc = _x.XKeysymToKeycode(_dpy, _vk_keysym(vk))
+        down = bool(keys[kc >> 3][0] & (1 << (kc & 7))) if 0 <= kc < 256 else False
+        toggled = False
+        mask = _VK_LOCKMASK.get(vk)
+        if mask is not None:
+            st = _XkbStateRec()
+            if _x.XkbGetState(_dpy, _XKB_USE_CORE_KBD, ctypes.byref(st)) == 0:
+                toggled = bool(st.locked_mods & mask)
+        return {"down": down, "toggled": toggled}
+
+
 def _find_scratch_keycode() -> int:
     kmin = ctypes.c_int(); kmax = ctypes.c_int()
     _x.XDisplayKeycodes(_dpy, ctypes.byref(kmin), ctypes.byref(kmax))
@@ -325,6 +398,120 @@ def _win_title(win: int) -> str:
     return ""
 
 
+def _wm_class(win: int) -> str:
+    raw = _prop(win, _atom("WM_CLASS"), 31)  # 31 = XA_STRING
+    if not raw:
+        return ""
+    parts = raw.split(b"\x00")
+    return (parts[1] if len(parts) > 1 and parts[1] else parts[0]).decode(
+        "utf-8", "replace")
+
+
+def window_text(win: int) -> str:
+    """Read the *text a window carries* — its name/title via ``_NET_WM_NAME`` /
+    ``WM_NAME``. On Windows this also reaches *inside* to a child control's content
+    (an edit box's text); on X11 toolkits paint their own widgets, so the OS sees
+    only window-level names — this returns that, the closest honest analogue. The
+    semantic string the OS holds, OCR-free."""
+    with _lock:
+        return _win_title(win)
+
+
+_PROP_REPLACE = 0  # PropModeReplace
+
+
+def set_window_text(win: int, text: str) -> bool:
+    """*Write* the text a window carries — the write dual of :func:`window_text`.
+    On Windows ``WM_SETTEXT`` sets a child control's content directly; on X11
+    toolkits own their widget text, so the OS-level write reaches the window
+    *name* (``_NET_WM_NAME`` UTF-8 + ``WM_NAME``) — the honest analogue of the
+    read side. Returns True."""
+    data = text.encode("utf-8")
+    with _lock:
+        for atom, typ in ((_atom("_NET_WM_NAME"), _atom("UTF8_STRING")),
+                          (_atom("WM_NAME"), 31)):  # 31 = XA_STRING
+            _x.XChangeProperty(_dpy, win, atom, typ, 8, _PROP_REPLACE,
+                               data, len(data))
+        _x.XFlush(_dpy)
+    return True
+
+
+def child_windows(win: int) -> list:
+    """Descend into a window's child windows as ``[{"id","class","text"}, …]``
+    (``XQueryTree`` children; class from ``WM_CLASS``, text from
+    :func:`window_text`). The floor could enumerate top-level windows but never
+    look *inside* one. Mirrors the Win32 ``EnumChildWindows`` (where children are
+    the actual edit/label/button controls; under X11 they are the sub-windows the
+    toolkit chose to create)."""
+    with _lock:
+        root_r = ctypes.c_ulong(); parent_r = ctypes.c_ulong()
+        kids = ctypes.POINTER(ctypes.c_ulong)(); nkids = ctypes.c_uint()
+        if not _x.XQueryTree(_dpy, win, ctypes.byref(root_r), ctypes.byref(parent_r),
+                             ctypes.byref(kids), ctypes.byref(nkids)):
+            return []
+        out = []
+        try:
+            for i in range(nkids.value):
+                c = int(kids[i])
+                out.append({"id": c & 0xFFFFFFFF, "class": _wm_class(c),
+                            "text": _win_title(c)})
+        finally:
+            if kids:
+                _x.XFree(ctypes.cast(kids, ctypes.c_void_p))
+        return out
+
+
+def _abs_rect(win: int) -> tuple:
+    root = ctypes.c_ulong(); gx = ctypes.c_int(); gy = ctypes.c_int()
+    gw = ctypes.c_uint(); gh = ctypes.c_uint(); bw = ctypes.c_uint(); d = ctypes.c_uint()
+    if not _x.XGetGeometry(_dpy, win, ctypes.byref(root), ctypes.byref(gx),
+                           ctypes.byref(gy), ctypes.byref(gw), ctypes.byref(gh),
+                           ctypes.byref(bw), ctypes.byref(d)):
+        return (0, 0, 0, 0)
+    ax = ctypes.c_int(); ay = ctypes.c_int(); ch = ctypes.c_ulong()
+    _x.XTranslateCoordinates(_dpy, win, _root, 0, 0, ctypes.byref(ax),
+                             ctypes.byref(ay), ctypes.byref(ch))
+    return (int(ax.value), int(ay.value), int(gw.value), int(gh.value))
+
+
+def _walk_tree(win: int, cl, tl, depth: int = 0):
+    if depth > 64:
+        return None
+    root_r = ctypes.c_ulong(); parent_r = ctypes.c_ulong()
+    kids = ctypes.POINTER(ctypes.c_ulong)(); nkids = ctypes.c_uint()
+    if not _x.XQueryTree(_dpy, win, ctypes.byref(root_r), ctypes.byref(parent_r),
+                         ctypes.byref(kids), ctypes.byref(nkids)):
+        return None
+    try:
+        for i in range(nkids.value):
+            c = int(kids[i])
+            ccls = _wm_class(c); ctext = _win_title(c)
+            if (cl is None or cl in ccls.lower()) and \
+               (tl is None or tl in (ctext or "").lower()):
+                return {"id": c & 0xFFFFFFFF, "class": ccls, "text": ctext,
+                        "rect": _abs_rect(c)}
+            hit = _walk_tree(c, cl, tl, depth + 1)
+            if hit:
+                return hit
+    finally:
+        if kids:
+            _x.XFree(ctypes.cast(kids, ctypes.c_void_p))
+    return None
+
+
+def find_control(top: int, cls=None, text=None):
+    """Find a child window inside ``top`` by its *meaning* (class and/or name,
+    case-insensitive substring) and report *where it is*:
+    ``{"id","class","text","rect":(x,y,w,h)}`` in screen coords, or None. The dual
+    of :func:`control_at` — that maps a pixel to a control, this maps a control's
+    meaning to a pixel rect the mouse can click. (Win32 children are real controls;
+    under X11 toolkits often paint one window, so the matchable tree is shallower —
+    the honest analogue.)"""
+    with _lock:
+        return _walk_tree(int(top), cls.lower() if cls else None,
+                          text.lower() if text else None)
+
+
 def list_windows() -> list:
     """Enumerate top-level windows the window manager manages (EWMH
     ``_NET_CLIENT_LIST``), newest last. Each item is ``{"id", "title"}``.
@@ -376,6 +563,286 @@ def activate_window(win: int) -> bool:
         _x.XFlush(_dpy)
         _x.XSync(_dpy, 0)
         return bool(ok)
+
+
+def close_window(win: int) -> bool:
+    """Ask the WM to close a window *by identity* via an EWMH
+    ``_NET_CLOSE_WINDOW`` client message (what a pager's close button sends) —
+    the graceful path that runs the app's own close handlers, unlike killing the
+    process. Screenshot+click would have to hunt the ✕ pixel."""
+    with _lock:
+        class _CM(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                        ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                        ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                        ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+        ev = _CM(type=33, send_event=1, display=_dpy, window=win,  # 33 = ClientMessage
+                 message_type=_atom("_NET_CLOSE_WINDOW"), format=32)
+        ev.data[0] = 0          # timestamp (CurrentTime)
+        ev.data[1] = 2          # source indication: pager
+        SUBSTRUCTURE = (1 << 19) | (1 << 20)  # Redirect | Notify
+        ok = _x.XSendEvent(_dpy, _root, 0, SUBSTRUCTURE, ctypes.byref(ev))
+        _x.XFlush(_dpy)
+        _x.XSync(_dpy, 0)
+        return bool(ok)
+
+
+def window_exists(win: int) -> bool:
+    """Whether the WM still manages this window (present in ``_NET_CLIENT_LIST``)
+    — the read that lets the floor wait for a window to appear or confirm it has
+    closed."""
+    with _lock:
+        raw = _prop(_root, _atom("_NET_CLIENT_LIST"), 33)  # 33 = XA_WINDOW
+        if not raw:
+            return False
+        wl = ctypes.c_long
+        n = len(raw) // ctypes.sizeof(wl)
+        ids = {int(w) & 0xFFFFFFFF
+               for w in ctypes.cast(raw, ctypes.POINTER(wl * n)).contents}
+        return (int(win) & 0xFFFFFFFF) in ids
+
+
+def active_window() -> "int | None":
+    """Which top-level window currently holds keyboard focus — the id a ``type``
+    or key press would reach right now — or None. The keyboard follows *focus*
+    while the mouse follows the *stack*: ``activate_window`` could *write* focus
+    yet nothing could *read* it, so the floor typed blind. Read EWMH
+    ``_NET_ACTIVE_WINDOW`` off the root — the focus-read dual of
+    ``activate_window``, as ``window_under`` is the stack-read dual."""
+    with _lock:
+        raw = _prop(_root, _atom("_NET_ACTIVE_WINDOW"), 33)  # 33 = XA_WINDOW
+        if not raw or len(raw) < ctypes.sizeof(ctypes.c_long):
+            return None
+        win = int(ctypes.cast(raw, ctypes.POINTER(ctypes.c_long))[0]) & 0xFFFFFFFF
+        return win or None
+
+
+def _net_wm_state(win: int, action: int, p1: int, p2: int = 0) -> bool:
+    """Send an EWMH ``_NET_WM_STATE`` client message (action 0=remove, 1=add,
+    2=toggle) to add/remove up to two state atoms at once — the request a pager
+    makes to (un)maximize a window."""
+    class _CM(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                    ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                    ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                    ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+    ev = _CM(type=33, send_event=1, display=_dpy, window=win,
+             message_type=_atom("_NET_WM_STATE"), format=32)
+    ev.data[0] = action
+    ev.data[1] = p1
+    ev.data[2] = p2
+    ev.data[3] = 2  # source indication: pager
+    SUBSTRUCTURE = (1 << 19) | (1 << 20)
+    ok = _x.XSendEvent(_dpy, _root, 0, SUBSTRUCTURE, ctypes.byref(ev))
+    _x.XFlush(_dpy)
+    return bool(ok)
+
+
+def window_state(win: int) -> "str | None":
+    """Read a window's show-state — ``"minimized"``, ``"maximized"`` or
+    ``"normal"`` — or None if unmanaged. Geometry tells *where* a window is, not
+    *how it is shown*: minimized via ICCCM ``WM_STATE`` (IconicState); maximized
+    when ``_NET_WM_STATE`` carries both MAXIMIZED_VERT and _HORZ. A screenshot
+    cannot tell a maximized window from one merely sized to the screen, nor a
+    minimized window from a closed one."""
+    with _lock:
+        if not window_exists(win):
+            return None
+        wsa = _atom("WM_STATE")
+        raw = _prop(win, wsa, wsa)
+        if raw and len(raw) >= ctypes.sizeof(ctypes.c_long):
+            st = ctypes.cast(raw, ctypes.POINTER(ctypes.c_long))[0]
+            if st == 3:  # IconicState
+                return "minimized"
+        raw = _prop(win, _atom("_NET_WM_STATE"), 4)  # 4 = XA_ATOM
+        if raw:
+            al = ctypes.c_long
+            n = len(raw) // ctypes.sizeof(al)
+            atoms = {int(a) for a in ctypes.cast(raw, ctypes.POINTER(al * n)).contents}
+            if {_atom("_NET_WM_STATE_MAXIMIZED_VERT"),
+                _atom("_NET_WM_STATE_MAXIMIZED_HORZ")} <= atoms:
+                return "maximized"
+        return "normal"
+
+
+def set_window_state(win: int, state: str) -> bool:
+    """Minimize / maximize / restore a window *by identity* — the everyday
+    title-bar gestures. Minimize via ``XIconifyWindow`` (ICCCM); maximize/restore
+    by adding/removing the two ``_NET_WM_STATE_MAXIMIZED_*`` atoms via EWMH.
+    Screenshot+click would have to hunt the min/max-button pixels. Unknown state
+    returns False."""
+    if state not in ("minimized", "maximized", "normal"):
+        return False
+    with _lock:
+        if not window_exists(win):
+            return False
+        mv = _atom("_NET_WM_STATE_MAXIMIZED_VERT")
+        mh = _atom("_NET_WM_STATE_MAXIMIZED_HORZ")
+        if state == "minimized":
+            ok = bool(_x.XIconifyWindow(_dpy, win, _screen))
+        elif state == "maximized":
+            ok = _net_wm_state(win, 1, mv, mh)  # 1 = add
+        else:  # normal
+            _net_wm_state(win, 0, mv, mh)       # 0 = remove maximize
+            _x.XMapRaised(_dpy, win)            # de-iconify if minimized
+            ok = True
+        _x.XSync(_dpy, 0)
+        return ok
+
+
+def window_pid(win: int) -> "int | None":
+    """Which OS process owns a window — its identity *beyond the title*. Two
+    windows can share an identical title, which a title cannot tell apart; the
+    owning pid can, and it is what lets the floor escalate a graceful close to a
+    forceful kill. Read EWMH ``_NET_WM_PID`` (a CARDINAL); None if absent."""
+    with _lock:
+        raw = _prop(win, _atom("_NET_WM_PID"), 6)  # 6 = XA_CARDINAL
+        if not raw or len(raw) < ctypes.sizeof(ctypes.c_long):
+            return None
+        pid = int(ctypes.cast(raw, ctypes.POINTER(ctypes.c_long))[0])
+        return pid or None
+
+
+def terminate_window(win: int) -> bool:
+    """Force the owning process of a window to end — the *forceful* death dual to
+    the graceful ``close_window`` (_NET_CLOSE_WINDOW). When an app ignores the
+    polite close (a hung window, a modal that won't dismiss), this kills the pid
+    behind it (``SIGKILL``). Works for a local client carrying ``_NET_WM_PID``;
+    returns False if no pid is known or the kill fails."""
+    pid = window_pid(win)
+    if not pid:
+        return False
+    try:
+        os.kill(pid, signal.SIGKILL)
+        return True
+    except OSError:
+        return False
+
+
+def is_window_topmost(win: int) -> bool:
+    """Whether a window is pinned *always-on-top* — it stays above ordinary
+    windows even without focus, decoupling the stack from focus. Read as
+    ``_NET_WM_STATE_ABOVE`` in ``_NET_WM_STATE``; the read dual of
+    ``set_window_topmost``."""
+    with _lock:
+        raw = _prop(win, _atom("_NET_WM_STATE"), 4)  # 4 = XA_ATOM
+        if not raw:
+            return False
+        al = ctypes.c_long
+        n = len(raw) // ctypes.sizeof(al)
+        atoms = {int(a) for a in ctypes.cast(raw, ctypes.POINTER(al * n)).contents}
+        return _atom("_NET_WM_STATE_ABOVE") in atoms
+
+
+def set_window_topmost(win: int, on: bool = True) -> bool:
+    """Pin / unpin a window *always-on-top* by identity — it then stays above
+    non-topmost windows regardless of focus, the one case where stack and focus
+    must deliberately diverge. EWMH ``_NET_WM_STATE`` add/remove of
+    ``_NET_WM_STATE_ABOVE``."""
+    with _lock:
+        if not window_exists(win):
+            return False
+        return _net_wm_state(win, 1 if on else 0, _atom("_NET_WM_STATE_ABOVE"))
+
+
+def _has_wm_state(win: int) -> bool:
+    ws = _atom("WM_STATE")
+    return _prop(win, ws, ws) is not None
+
+
+def _client_of(win: int, depth: int = 0) -> "int | None":
+    """Descend a window subtree to the managed client window (the one bearing
+    ``WM_STATE``), the ICCCM way — a reparenting WM wraps the client in frame/
+    decoration windows, so the window directly under a pixel is usually a frame,
+    not the id ``list_windows`` reports."""
+    if win == 0 or depth > 8:
+        return None
+    if _has_wm_state(win):
+        return win
+    root_r = ctypes.c_ulong()
+    parent_r = ctypes.c_ulong()
+    kids = ctypes.POINTER(ctypes.c_ulong)()
+    nkids = ctypes.c_uint()
+    if not _x.XQueryTree(_dpy, win, ctypes.byref(root_r), ctypes.byref(parent_r),
+                         ctypes.byref(kids), ctypes.byref(nkids)):
+        return None
+    found = None
+    try:
+        # Topmost child is last in XQueryTree order; search front-to-back.
+        for i in range(nkids.value - 1, -1, -1):
+            found = _client_of(int(kids[i]), depth + 1)
+            if found is not None:
+                break
+    finally:
+        if kids:
+            _x.XFree(kids)
+    return found
+
+
+def window_under(x: int, y: int) -> "int | None":
+    """Which top-level window owns the screen pixel ``(x, y)`` — the id a real
+    mouse click there would land on, or None if the point is bare root.
+
+    A click lands on whoever owns that pixel in the Z-order; the keyboard follows
+    focus, but the mouse follows the stack. ``activate_window`` could *write* the
+    stack, yet nothing could *read* it, so the floor clicked blind. We translate
+    the point through the root to the toplevel beneath it, then descend to the
+    ``WM_STATE``-bearing client so the result keys against ``list_windows``. Only
+    a window the WM actually manages (in ``_NET_CLIENT_LIST``) is returned."""
+    with _lock:
+        cx = ctypes.c_int()
+        cy = ctypes.c_int()
+        child = ctypes.c_ulong()
+        _x.XTranslateCoordinates(_dpy, _root, _root, int(x), int(y),
+                                 ctypes.byref(cx), ctypes.byref(cy),
+                                 ctypes.byref(child))
+        top = child.value
+        if not top:
+            return None
+        client = _client_of(top) or top
+        # Confirm it is a managed client before reporting it.
+        raw = _prop(_root, _atom("_NET_CLIENT_LIST"), 33)  # 33 = XA_WINDOW
+        if raw:
+            wl = ctypes.c_long
+            n = len(raw) // ctypes.sizeof(wl)
+            managed = {int(w) & 0xFFFFFFFF
+                       for w in ctypes.cast(raw, ctypes.POINTER(wl * n)).contents}
+            for cand in (client, top):
+                if (int(cand) & 0xFFFFFFFF) in managed:
+                    return int(cand) & 0xFFFFFFFF
+            return None
+        return int(client) & 0xFFFFFFFF
+
+
+def control_at(x: int, y: int) -> "dict | None":
+    """Which *control* (leaf window) owns the screen pixel ``(x, y)`` and what it
+    says: ``{"id","class","text","top"}``. Where :func:`window_under` returns the
+    managed top-level a click lands in, this descends the window tree to the
+    deepest child under the point and reads its name/class — joining the pixel the
+    eye sees to the semantic window behind it. (Win32 controls are real child
+    windows with text; under X11 toolkits often paint one window, so the leaf may
+    be the client itself — the honest OS-visible analogue.) None on bare root."""
+    with _lock:
+        cur = _root
+        cx, cy = int(x), int(y)
+        top = None
+        for _ in range(64):  # bounded descent through the window tree
+            nx = ctypes.c_int(); ny = ctypes.c_int(); child = ctypes.c_ulong()
+            _x.XTranslateCoordinates(_dpy, _root, cur, cx, cy,
+                                     ctypes.byref(nx), ctypes.byref(ny),
+                                     ctypes.byref(child))
+            if not child.value:
+                break
+            if top is None:
+                top = child.value
+            cur = child.value
+        if cur == _root or not cur:
+            return None
+        client = _client_of(top) if top else None
+        return {"id": int(cur) & 0xFFFFFFFF, "class": _wm_class(cur),
+                "text": _win_title(cur),
+                "top": (int(client) & 0xFFFFFFFF) if client else
+                       (int(top) & 0xFFFFFFFF if top else None)}
 
 
 _ALL_DESKTOPS = 0xFFFFFFFF  # _NET_WM_DESKTOP sentinel: window shown on every desktop
