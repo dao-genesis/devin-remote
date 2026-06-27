@@ -3056,6 +3056,40 @@ sounded longer. What a quantity *is* (a key pressed) differs from how long it is
 
 ---
 
+## F128 — `mod_scroll`: the modifier on the wheel (R92)
+
+**Friction.** A plain `scroll` always *scrolls* — the page or a pane moves. But
+the same wheel under a held modifier means something else entirely: Ctrl+wheel
+*zooms* a browser, a map, an image viewer, an editor's font; Shift+wheel scrolls
+sideways. The page reads `e.ctrlKey` on each `wheel` event, so the modifier must
+be down *while* the notch fires. The channel could scroll, and could hold keys,
+but had no way to hold a key across the wheel — so zoom-by-wheel was unreachable.
+
+**Mechanism.** Hold each `mods` VK down, scroll (the same wheel as `scroll`,
+reusing its `x`/`y` placement so it lands on the element under the cursor),
+release the modifiers in reverse — every notch carries the modifier. It is to
+`scroll` what `mod_click` (F124) is to `click`.
+
+**Primitive.** `mod_scroll(dy, dx, *mods, x, y, pause)`.
+
+**Live (R92):** a page treats Ctrl+wheel as zoom (adjusts `__zoom`,
+`preventDefault`) and a plain wheel as ordinary scroll. A plain `scroll` never
+reaches the zoom path (`__zoom==0`) — the friction. `mod_scroll(3, 0,
+VK_CONTROL)` drives `__zoom` to 3 with *no* notch leaking to the plain-scroll
+path, the title reads `Z3`, and a plain scroll afterward leaves the zoom
+untouched (the modifier was released). `667/667 checks passed`, deterministic ×3.
+
+**Honest note.** Wheel notches coalesce when they fire too fast — a plain scroll
+of three notches sometimes registered as two. So the test does not assert an
+absolute plain-notch count; it asserts the *relative* invariant (mod_scroll adds
+nothing to the plain path) and widens `pause` so the zoom notches stay distinct.
+
+**Lesson (道法自然):** 同謂之玄 — the same motion, under a different holding,
+becomes a different thing. The wheel did not change; what was held alongside it
+did, and that was enough to turn scrolling into zooming.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
