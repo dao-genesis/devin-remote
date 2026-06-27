@@ -5383,6 +5383,86 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_mod_click(b: Browser, offline: bool) -> None:
+    print("R88: OS-level mod_click — Ctrl/Shift-click multi & range select (F124) — osctl")
+    # Four items. A plain click selects one and drops the rest; Ctrl-click adds
+    # one (toggles), Shift-click takes a contiguous range. The modifier must be
+    # held while the mouse goes down so the page reads e.ctrlKey/e.shiftKey.
+    # Each selected item shows a green inner block, so the count is also pixels.
+    html = fixture("mod_click.html",
+                   "<!doctype html><meta charset=utf-8><title>none</title>"
+                   "<style>html,body{margin:0}.b{position:absolute;top:160px;"
+                   "width:110px;height:110px}.m{position:absolute;top:185px;"
+                   "width:60px;height:60px;background:#11bb33;display:none}"
+                   ".on .m{display:block}</style><div id=wrap></div><script>"
+                   "var cols=['#e6194b','#f58231','#4363d8','#911eb4'];"
+                   "var lefts=[40,180,320,460];"
+                   "var w=document.getElementById('wrap');window.__sel=[];var anchor=0;"
+                   "for(var i=0;i<4;i++){var d=document.createElement('div');"
+                   "d.className='b';d.style.left=lefts[i]+'px';"
+                   "d.style.background=cols[i];d.dataset.i=i;"
+                   "var m=document.createElement('div');m.className='m';"
+                   "m.style.left=(lefts[i]+25)+'px';d.appendChild(m);w.appendChild(d);"
+                   "d.addEventListener('click',function(e){var k=+this.dataset.i;"
+                   "if(e.ctrlKey){var p=window.__sel.indexOf(k);"
+                   "if(p<0)window.__sel.push(k);else window.__sel.splice(p,1);anchor=k;}"
+                   "else if(e.shiftKey){var lo=Math.min(anchor,k),hi=Math.max(anchor,k);"
+                   "window.__sel=[];for(var j=lo;j<=hi;j++)window.__sel.push(j);}"
+                   "else{window.__sel=[k];anchor=k;}var on={};"
+                   "window.__sel.forEach(function(v){on[v]=1;});"
+                   "[].forEach.call(document.querySelectorAll('.b'),function(el){"
+                   "el.className=on[+el.dataset.i]?'b on':'b';});"
+                   "document.title=window.__sel.slice().sort(function(a,b){"
+                   "return a-b;}).join(',')||'none';});}</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    check("capture matches click coordinate space", (w, h) == osctl.screen_size(),
+          f"{(w, h)} vs {osctl.screen_size()}")
+    cols = [(230, 25, 75), (245, 130, 49), (67, 99, 216), (145, 30, 180)]
+    cen = [osctl.find_color(c, tol=40, rgb=rgb, size=(w, h)) for c in cols]
+    check("located all four items by pixels",
+          all(c is not None and c["count"] > 8000 for c in cen),
+          str([c and c["count"] for c in cen]))
+    if not all(cen):
+        return
+    pts = [(c["x"], c["y"]) for c in cen]
+    osctl.click(*pts[0])
+    time.sleep(0.2)
+    check("a plain click selects exactly one item",
+          b.title() == "0" and b.eval("window.__sel.length") == 1,
+          f"title={b.title()}")
+    # Friction: a plain click on another item drops the first.
+    osctl.click(*pts[2])
+    time.sleep(0.2)
+    check("a second plain click replaces, not extends, the selection",
+          b.title() == "2" and b.eval("window.__sel.length") == 1,
+          f"title={b.title()}")
+    # Primitive: Ctrl-click adds without dropping.
+    osctl.mod_click(pts[0][0], pts[0][1], osctl.VK_CONTROL)
+    time.sleep(0.2)
+    check("Ctrl-click extends the selection to two items",
+          b.title() == "0,2" and b.eval("window.__sel.length") == 2,
+          f"title={b.title()}")
+    # Primitive: Shift-click takes the contiguous range from the anchor.
+    osctl.mod_click(pts[3][0], pts[3][1], osctl.VK_SHIFT)
+    time.sleep(0.2)
+    check("Shift-click selects the contiguous range to the anchor",
+          b.title() == "0,1,2,3" and b.eval("window.__sel.length") == 4,
+          f"title={b.title()}")
+    time.sleep(0.2)
+    green = osctl.find_color((17, 187, 51), tol=45)
+    check("all four selections confirmed by pixels (four green markers)",
+          green is not None and green["count"] > 11000,
+          str(green and green.get("count")))
+    # The modifiers were released: a plain click collapses to one again.
+    osctl.click(*pts[1])
+    time.sleep(0.2)
+    check("a plain click after mod_click collapses to one (modifiers released)",
+          b.title() == "1" and b.eval("window.__sel.length") == 1,
+          f"title={b.title()}")
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -5416,7 +5496,7 @@ def main() -> int:
               round_locate_word, round_locate_block_word,
               round_locate_phrase, round_wait_for_phrase, round_scroll,
               round_scroll_to_phrase, round_drag_stroke, round_double_click,
-              round_middle_click]
+              round_middle_click, round_mod_click]
     for r in rounds:
         try:
             r(b, offline)

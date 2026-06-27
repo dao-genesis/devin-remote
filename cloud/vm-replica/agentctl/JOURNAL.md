@@ -2928,6 +2928,39 @@ down the name that was always missing; the world it opens was waiting all along.
 
 ---
 
+## F124 — `mod_click`: the held modifier (R88)
+
+**Friction.** A plain `click` *replaces* a selection — click item B and item A
+lets go. To extend a selection you must hold a key *while* the mouse goes down:
+Ctrl-click adds one, Shift-click takes a contiguous range. The channel had keys
+(`key_down`/`key_up`) and had the click, but never one *inside* the other — and
+order is the whole point. Pressing Ctrl, releasing it, then clicking is three
+separate events; the page reads `e.ctrlKey === false` on a click whose modifier
+was already let go. Multi-select and range-select were simply unreachable.
+
+**Mechanism.** Hold each modifier VK down, click, then release them in reverse —
+so the modifier is down across the entire button cycle and the click event
+carries `ctrlKey`/`shiftKey`. The same nesting `chord` does for keys, now wrapped
+around a mouse press.
+
+**Primitive.** `mod_click(x, y, *mods, right=False)` — `mods` are VK codes
+(`VK_CONTROL`, `VK_SHIFT`, …); built on `key_down`, `click`, `key_up`.
+
+**Live (R88):** four items located by four distinct colours, each showing a green
+inner block when selected (so the count is also pixels). A plain click selects
+one; a second plain click *replaces* it (the friction). `mod_click(.., VK_CONTROL)`
+extends to two without dropping; `mod_click(.., VK_SHIFT)` fills the contiguous
+range to the anchor (all four) — confirmed by four green markers in the pixels.
+A plain click afterward collapses back to one, proving the modifiers were
+released, not left stuck down. `641/641 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 將欲翕之，必固張之 — to gather many you must first hold
+open. The difference between replacing and extending is not a different click but
+a held breath around the same one; what the press means depends on what is held
+while it lands.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

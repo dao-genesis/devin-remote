@@ -164,6 +164,28 @@ def middle_click(x: int | None = None, y: int | None = None) -> None:
         _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
 
 
+def mod_click(x: int | None = None, y: int | None = None,
+              *mods: int, right: bool = False) -> None:
+    """Click with modifier keys held down through the press (F124).
+
+    A plain :func:`click` *replaces* a selection — click item B and item A
+    lets go. To extend a selection (Ctrl-click adds one, Shift-click takes a
+    range) the modifier must be held *while* the mouse goes down, so the page
+    reads ``e.ctrlKey`` / ``e.shiftKey`` on the click. The channel could press
+    keys and could click, but never one inside the other; this holds each
+    ``mods`` VK down, clicks, then releases them in reverse — the modifier is
+    down across the whole button cycle, not merely before or after it."""
+    if x is not None:
+        move(x, y)
+        time.sleep(0.02)
+    for vk in mods:
+        key_down(vk)
+    time.sleep(0.01)
+    click(right=right)
+    for vk in reversed(mods):
+        key_up(vk)
+
+
 def drag(x0: int, y0: int, x1: int, y1: int,
          steps: int = 24, pause: float = 0.01,
          hold: float = 0.05, right: bool = False) -> None:
