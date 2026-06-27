@@ -1319,6 +1319,57 @@ def round_uia_focus(b: Browser, offline: bool) -> None:
         time.sleep(0.3)
 
 
+def round_uia_scroll(b: Browser, offline: bool) -> None:
+    print("R135: bring an off-screen element into reach by MEANING via UIA ScrollItemPattern (F174) — osctl")
+    # An element below the fold has no on-screen pixels — the pixel executor cannot
+    # click what is not painted. uia_scroll_into_view asks the element's own scroll
+    # container to bring it into the viewport (the element-level dual of moving an
+    # off-screen window back on screen, F149). The proof closes cross-floor: after the
+    # scroll, uia_find returns the element's now-VISIBLE rect, inside the window, so
+    # the pixel floor can finally reach it.
+    if not sys.platform.startswith("win"):
+        print("  (skip R135: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_scroll_into_view"):
+        check("osctl exposes uia_scroll_into_view", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — scroll-into-view check skipped)")
+        return
+    b.navigate("data:text/html,<button id=top>TOP</button>"
+               "<div style='height:3000px'></div><button id=bot>BOTTOMBTN</button>")
+    time.sleep(1.2)
+    for _ in range(10):  # warm Chrome's lazily-enabled a11y tree
+        if osctl.uia_find(ch["id"], name="BOTTOMBTN", ctype="Button"):
+            break
+        time.sleep(0.5)
+    innerh = b.eval("window.innerHeight")
+    top_before = b.eval("document.getElementById('bot').getBoundingClientRect().top")
+    check("the bottom button starts below the fold (no on-screen pixels to click)",
+          isinstance(top_before, (int, float)) and top_before > innerh,
+          f"top_before={top_before} innerH={innerh}")
+    issued = osctl.uia_scroll_into_view(ch["id"], "BOTTOMBTN", "Button")
+    time.sleep(0.5)
+    top_after = b.eval("document.getElementById('bot').getBoundingClientRect().top")
+    check("uia_scroll_into_view brings the element into the viewport by meaning "
+          "(DOM rect confirms it crossed into view)",
+          issued is True and isinstance(top_after, (int, float))
+          and 0 <= top_after <= innerh, f"issued={issued} top_after={top_after}")
+    g = osctl.window_geometry(ch["id"])
+    f = osctl.uia_find(ch["id"], name="BOTTOMBTN", ctype="Button")
+    inside = bool(g and f and f.get("rect")
+                  and g["y"] <= (f["rect"][1] + f["rect"][3]) // 2 <= g["y"] + g["h"])
+    check("cross-floor: uia_find now yields an in-window rect for the element, so the "
+          "pixel executor can finally reach what was off-screen",
+          inside, f"rect={f.get('rect') if f else None} geo={g}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
 def round_uia_expand(b: Browser, offline: bool) -> None:
     print("R134: open/close a disclosure by MEANING via UIA ExpandCollapsePattern (F173) — osctl")
     # Some structure is hidden until revealed — a dropdown, a tree node, a <details>
@@ -8593,6 +8644,7 @@ def main() -> int:
               round_control_at, round_find_control, round_menu, round_uia,
               round_uia_find, round_uia_value, round_uia_drive, round_uia_focus,
               round_uia_text, round_uia_toggle, round_uia_select, round_uia_expand,
+              round_uia_scroll,
               round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,

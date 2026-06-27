@@ -69,6 +69,9 @@ _EC_COLLAPSE = 4      # IUIAutomationExpandCollapsePattern::Collapse
 _EC_STATE = 5         # IUIAutomationExpandCollapsePattern::get_CurrentExpandCollapseState
 _UIA_ExpandCollapsePatternId = 10005
 _EC_NAMES = {0: "collapsed", 1: "expanded", 2: "partial", 3: "leaf"}
+# IUIAutomationScrollItemPattern vtable indices
+_SCROLLINTOVIEW = 3   # IUIAutomationScrollItemPattern::ScrollIntoView
+_UIA_ScrollItemPatternId = 10017
 # IUIAutomationElementArray vtable indices
 _ARR_LEN = 3    # get_Length
 _ARR_GET = 4    # GetElement
@@ -635,5 +638,30 @@ def uia_expand_state(win: int, name=None, ctype=None) -> str:
             return _EC_NAMES.get(st.value, "")
         finally:
             _release(ec)
+    finally:
+        _release(el)
+
+
+def uia_scroll_into_view(win: int, name=None, ctype=None) -> bool:
+    """Scroll an element found by meaning into the visible viewport via the UIA
+    ScrollItemPattern — the modern-content "bring into reach", the element-level dual
+    of moving an off-screen window back on screen (F149). An element below the fold has
+    no on-screen pixels to click; this asks its own scroll container to bring it into
+    view, after which uia_find returns its now-visible rect and the pixel executor can
+    reach it. Returns True if ScrollIntoView was issued."""
+    uia = _get_uia()
+    if not uia:
+        return False
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return False
+    try:
+        sp = _pattern(el, _UIA_ScrollItemPatternId)
+        if not sp:
+            return False
+        try:
+            return _vcall(sp, _SCROLLINTOVIEW, ctypes.c_long, []) == 0
+        finally:
+            _release(sp)
     finally:
         _release(el)

@@ -5047,6 +5047,37 @@ press / write / aim / flip / choose / **reveal**, each with its settled read dua
 
 ---
 
+## F174 — bringing an element into reach: UIA ScrollItemPattern (`uia_scroll_into_view`, R135)
+
+**Ground: Windows Server 2022. Chrome, a button 3000px below the fold.**
+
+**Friction.** An element below the fold has *no on-screen pixels* — the pixel
+executor cannot click what is not painted, and `uia_find` returns a rect outside the
+window. The floor could locate the element by meaning but could not *reach* it.
+
+**Primitive.**
+- `osctl.uia_scroll_into_view(win, name, ctype)` → True if `ScrollIntoView` was
+  issued (ScrollItemPattern, vtable 3) — asks the element's own scroll container to
+  bring it into the viewport.
+
+**Live (cross-floor proof):** Chrome page with a button at `rect.top=3029`
+(`innerHeight=645`, below the fold); `uia_scroll_into_view("BOTTOMBTN")` → True,
+`scrollY` 0→2413, button `rect.top`→616 (in view); and crucially `uia_find` then
+returns rect `(16, 703, 100, 21)` *inside* the window `0..740` — the pixel executor
+can now reach what had no pixels a moment before. R135 (`round_uia_scroll`, 3 checks);
+`_probe_uiascroll.py` standalone. Full suite **842/842** clean.
+
+**Lesson (道法自然).** This is the element-level twin of F149 (moving an off-screen
+*window* back on screen): there the unit of reach was a window, here it is an element
+within a scroll container, but the principle is one — 將欲取之，必固張之 — to act on a
+thing you must first bring it within reach. Locating by meaning is not enough;
+*reaching* completes it. And the completion is cross-floor: the semantic verb
+(ScrollIntoView) hands the pixel floor a now-valid rect — 天得一以清，地得一以寧 — the two
+worlds agree on one place, the seen and the meant made to coincide so the deed can
+land.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

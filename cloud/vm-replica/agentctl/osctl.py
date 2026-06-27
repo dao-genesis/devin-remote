@@ -187,6 +187,11 @@ uia_is_selected = getattr(_be, "uia_is_selected", lambda win, name=None, ctype=N
 uia_expand = getattr(_be, "uia_expand", lambda win, name=None, ctype=None: False)
 uia_collapse = getattr(_be, "uia_collapse", lambda win, name=None, ctype=None: False)
 uia_expand_state = getattr(_be, "uia_expand_state", lambda win, name=None, ctype=None: "")
+# UIA scroll-into-view (F174): bring an element below the fold / off-screen into the
+# visible viewport by meaning via ScrollItemPattern (True if issued) — modern-content
+# "bring into reach", the element-level dual of moving an off-screen window back on
+# screen (F149). After it, uia_find returns the now-visible rect for the pixel floor.
+uia_scroll_into_view = getattr(_be, "uia_scroll_into_view", lambda win, name=None, ctype=None: False)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the
