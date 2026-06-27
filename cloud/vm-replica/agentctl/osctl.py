@@ -118,6 +118,30 @@ def move(x: int, y: int) -> None:
     _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
 
 
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+
+def cursor_pos() -> tuple[int, int]:
+    """Read where the pointer actually is, in screen pixels (F138).
+
+    The whole pointer family *writes* position — :func:`move`, :func:`drag`,
+    :func:`glide`, every click that takes ``(x, y)`` — but nothing ever *read* it
+    back. That asymmetry bites in three real ways. (1) ``move`` sends *absolute*
+    coordinates rescaled to the 0–65535 virtual-desktop range; on a DPI-scaled or
+    multi-monitor desktop the landing pixel can differ from what was asked, and
+    there was no way to confirm where the cursor truly came to rest. (2) A
+    relative nudge — "5px right of wherever I am" for a slider or resize handle —
+    is impossible without first knowing the current point. (3) Polite flows that
+    move the cursor aside and then restore it had nothing to restore *to*. This
+    calls ``GetCursorPos`` and returns ``(x, y)`` — the read-side dual of
+    :func:`move`, closing the loop the pointer family left open."""
+    pt = _POINT()
+    if not user32.GetCursorPos(ctypes.byref(pt)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return (pt.x, pt.y)
+
+
 def click(x: int | None = None, y: int | None = None, right: bool = False) -> None:
     if x is not None:
         move(x, y)
