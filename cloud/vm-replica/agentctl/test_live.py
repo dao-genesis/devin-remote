@@ -859,6 +859,128 @@ def round_window(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_clip_relay(b: Browser, offline: bool) -> None:
+    print("R108: RELAY the clipboard into the right app among many — copy here, paste THERE by name (F147) — osctl")
+    # F146 proved typed input reaches the addressed window. The fuller multi-app
+    # act is a *clipboard relay*: content copied in one place must be delivered
+    # into a SPECIFIC other window — by identity, not by clicking a guessed pixel.
+    # Official screenshot+click cannot do this (no window identity, no clipboard
+    # addressing). Here the floor fuses four faculties: set the clipboard, address
+    # the target window by name (focus_window), and paste with the platform's
+    # terminal-paste chord (Ctrl+Shift+V on X11 terminals, Ctrl+V on Windows). The
+    # pasted payload must land — intact — in the intended window, not whatever
+    # held focus. No new primitive: this is the composition, locked as a guard.
+    import shutil
+    import subprocess
+    import tempfile
+
+    mark = os.path.join(tempfile.gettempdir(), "dao_relay_round.txt")
+    payload = "DAOPAY-7c3f"
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R108: no konsole on this Linux host)")
+        return
+
+    def launch(tag, title):
+        env = dict(os.environ)
+        if win:
+            env["WTAG"] = tag
+            return subprocess.Popen(["cmd", "/k", f"title {title}"], env=env,
+                                    creationflags=0x00000010)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "WTAG=" + tag, "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def paste_chord():
+        # A terminal does not paste on Ctrl+V (that is a SIGINT-ish no-op / literal);
+        # X11 terminals use Ctrl+Shift+V. Windows consoles accept Ctrl+V.
+        if win:
+            osctl.chord(osctl.VK_CONTROL, osctl.VK_V)
+        else:
+            osctl.chord(osctl.VK_CONTROL, osctl.VK_SHIFT, osctl.VK_V)
+
+    def relay():
+        # echo <tag> <pasted-clipboard> > marker  — the tag reveals WHICH window
+        # received it; the pasted text reveals whether the clipboard crossed.
+        var = "%WTAG%" if win else "$WTAG"
+        osctl.type_unicode("echo " + var + " ")
+        time.sleep(0.1)
+        paste_chord()
+        time.sleep(0.2)
+        osctl.type_unicode(" > " + mark)
+        osctl.tap(osctl.VK_RETURN)
+        time.sleep(0.7)
+
+    procs = []
+    try:
+        procs.append(launch("A", "DAOREL-A"))
+        time.sleep(2.2)
+        procs.append(launch("B", "DAOREL-B"))
+        time.sleep(2.4)
+        wins = osctl.list_windows()
+        a = next((w for w in wins if "DAOREL-A" in (w.get("title") or "")), None)
+        bb = next((w for w in wins if "DAOREL-B" in (w.get("title") or "")), None)
+        if not a or not bb:
+            check("relay: enumerate both windows", False, "missing a window")
+            return
+
+        osctl.set_clipboard(payload)
+        time.sleep(0.15)
+
+        # No addressing: B holds focus; we INTEND A. The relay lands in B.
+        osctl.activate_window(bb["id"])
+        time.sleep(0.5)
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        relay()
+        open_got = ""
+        try:
+            with open(mark) as f:
+                open_got = f.read().strip()
+        except OSError:
+            pass
+        check("without addressing, the paste lands in the WRONG window",
+              not open_got.startswith("A"), f"marker={open_got!r} (intended A)")
+
+        # Addressed: focus A by name, relay -> payload crosses into A.
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        osctl.focus_window("DAOREL-A")
+        relay()
+        got = ""
+        try:
+            with open(mark) as f:
+                got = f.read().strip()
+        except OSError:
+            pass
+        check("focus_window delivers the clipboard payload into the INTENDED window",
+              got == "A " + payload, f"marker={got!r}")
+        check("clipboard relay crosses into the addressed window, not the focused one",
+              not open_got.startswith("A") and got == "A " + payload,
+              f"no-addr={open_got!r} addr={got!r}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if not win:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_structure_match(b: Browser, offline: bool) -> None:
     print("R19: pick a colour-shifted target by structure, not appearance (F055) — osctl")
     # Two magenta tiles (segmentable), each holding a black glyph drawn in a
@@ -6584,7 +6706,7 @@ def main() -> int:
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_reach, round_steer,
-              round_window,
+              round_window, round_clip_relay,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

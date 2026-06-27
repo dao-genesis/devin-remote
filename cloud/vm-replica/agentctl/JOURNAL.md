@@ -3884,6 +3884,53 @@ name. 無為而無不為.
 
 ---
 
+## F147 — the clipboard relay: copy here, paste *there* by name (R108)
+
+**Reframing toward fusion (各方面東西要高效的搭配).** F146 gave the floor a window's *name*;
+typed input now reaches the intended app. But the act a person performs across apps all day
+is richer: **copy something here, paste it into that other window**. It is the moment all
+four faculties must move as one — the eye (find the window), the hand (raise it), the
+clipboard (hold the content), the keyboard (the paste chord). And it is a place official
+screenshot+click is doubly blind: it has neither window identity *nor* clipboard addressing;
+it can only click a guessed pixel and hope the right app has focus.
+
+**Reproduced friction (live, this VM).** Two terminals `DAOREL-A`/`DAOREL-B`; the clipboard
+holds `DAOPAY-7c3f`; we *intend* to deliver it into A. With B holding focus and **no
+addressing**, the relay (`echo $WTAG <paste> > marker`) wrote **`B DAOPAY-7c3f`** — the
+payload crossed into the *wrong* window. After `focus_window("DAOREL-A")` it wrote
+**`A DAOPAY-7c3f`** — delivered, intact, into the intended window.
+
+**No new primitive — the composition was already there (無為).** This needed nothing new on
+the floor: `set_clipboard` + `focus_window` (F146) + `chord`. The honest contribution is to
+*prove and lock* the fusion, not to invent a leaf for it. 為學者日益，聞道者日損 — we add by
+subtracting frictions, and here the friction was already dissolved by F146; what remained was
+to confirm the whole gesture composes.
+
+**One real app-detail learned (worth recording).** A terminal does **not** paste on
+`Ctrl+V` — that is the wrong chord there (a literal / interrupt). X11 terminals paste on
+`Ctrl+Shift+V`; Windows consoles accept `Ctrl+V`. So the existing `paste_text` (which uses
+`Ctrl+V`, correct for web inputs) is *not* universal; R108 selects the terminal chord per
+platform. The lesson is small but exact: the paste **chord is app-class-specific**, even
+though the clipboard underneath is one.
+
+**Live A/B (same two terminals):**
+
+| step | marker | outcome |
+|---|:---:|---|
+| no addressing (B focused, A intended) | `B DAOPAY-7c3f` | payload crossed into the **wrong** app |
+| `focus_window("DAOREL-A")` then paste | `A DAOPAY-7c3f` | payload delivered into the **intended** app |
+
+R108 (`round_clip_relay`) bakes it in (3 checks): wrong-window without addressing, payload
+delivered to the intended window, and the strict A/B. Portable — X11 terminals use
+`Ctrl+Shift+V`, Windows consoles `Ctrl+V`; skips gracefully without a terminal.
+
+**Lesson (道法自然).** 三生萬物 — once the floor had moving (F144), keyboard-servoing (F145),
+and *naming* windows (F146), the cross-app clipboard relay was not a new thing to build but a
+*combination* that already existed in latent form. The system rises not only by adding
+faculties but by letting the ones it has **move together**. 無為而無不為.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
