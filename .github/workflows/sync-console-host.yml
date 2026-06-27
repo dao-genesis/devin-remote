@@ -48,17 +48,23 @@ jobs:
             echo "no_token=0" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Mirror engine static shell → ${{ env.DEST_REPO }} gh-pages
+      # 尽力镜像: 任一步失败(含该独立账号邮箱未验证而被 GitHub 拦 push)只告警不红 CI。
+      # 主路不依赖此步: 项目方 Pages 为恒鲜兜底, 客户端 _durableMirrors 失败链自动转该镜像。
+      - name: Mirror engine static shell → ${{ env.DEST_REPO }} gh-pages (best-effort)
         if: steps.guard.outputs.no_token == '0'
+        continue-on-error: true
         run: |
-          set -e
-          rm -rf /tmp/dao-host && mkdir -p /tmp/dao-host
-          cp "$SRC"/*.html "$SRC"/*.js /tmp/dao-host/
+          rm -rf /tmp/dao-host && mkdir -p /tmp/dao-host || exit 0
+          cp "$SRC"/*.html "$SRC"/*.js /tmp/dao-host/ || exit 0
           touch /tmp/dao-host/.nojekyll   # 让 Pages 原样服务下划线文件(如 __rn.js)
-          cd /tmp/dao-host
+          cd /tmp/dao-host || exit 0
           git init -q && git checkout -q -b gh-pages
           git -c user.email=dao-bot@users.noreply.github.com -c user.name=dao-console-sync add -A
           git -c user.email=dao-bot@users.noreply.github.com -c user.name=dao-console-sync \
-            commit -q -m "sync console host from ${GITHUB_REPOSITORY}@${GITHUB_SHA::12}"
-          git push -q --force "https://x-access-token:${HDOUGLE_PAGES_TOKEN}@github.com/${DEST_REPO}.git" gh-pages
-          echo "::notice::已同步 console.html 等静态壳到 https://hdougle.github.io/dao-console/console.html"
+            commit -q -m "sync console host from ${GITHUB_REPOSITORY}@${GITHUB_SHA::12}" || true
+          if git push -q --force "https://x-access-token:${HDOUGLE_PAGES_TOKEN}@github.com/${DEST_REPO}.git" gh-pages; then
+            echo "::notice::已同步 console.html 等静态壳到 https://hdougle.github.io/dao-console/console.html"
+          else
+            echo "::warning::独立账号宿主推送被拒(多为该账号邮箱未验证); 主路不受影响, 待验证邮箱后自动恢复。"
+          fi
+          exit 0
