@@ -1260,6 +1260,99 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_window_state(b: Browser, offline: bool) -> None:
+    print("R114: read and set a window's SHOW-STATE — min/max/restore (F153) — osctl")
+    # F149 moved a window (where it is); F151 read pixel ownership; F152 birth and
+    # death. One axis of a window's being was still untouched: *how it is shown*.
+    # Geometry says where a window sits, never whether it is minimized (no pixels
+    # at all) or maximized (filling the work area). A screenshot cannot tell a
+    # maximized window from one merely sized to the screen, nor a minimized window
+    # from a closed one. window_state reads this axis; set_window_state writes the
+    # everyday title-bar gestures by identity, not by hunting min/max-button pixels.
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R114: no konsole on this Linux host)")
+        return
+    for name in ("window_state", "set_window_state", "wait_window"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    p = None
+    try:
+        p = launch("USTATE-X")
+        w = osctl.wait_window("USTATE-X", timeout=10.0)
+        if not w:
+            check("state: launch the test window", False, "missing window")
+            return
+        wid = w["id"]
+        sw, sh = osctl.screen_size()
+
+        osctl.set_window_state(wid, "normal")
+        time.sleep(0.6)
+        check("a freshly-shown window reads as normal",
+              osctl.window_state(wid) == "normal", f"state={osctl.window_state(wid)!r}")
+
+        # Maximize, and corroborate the *read* against pixels: a maximized window
+        # really does span (almost) the whole screen width.
+        osctl.set_window_state(wid, "maximized")
+        time.sleep(0.9)
+        smax = osctl.window_state(wid)
+        g = osctl.window_geometry(wid) or {"w": 0}
+        check("set_window_state maximizes, and window_state + geometry agree",
+              smax == "maximized" and g.get("w", 0) >= int(sw * 0.85),
+              f"state={smax!r} w={g.get('w')} screen_w={sw}")
+
+        # Minimize: the show-state read flips, while the window still EXISTS
+        # (distinct from closed) — a distinction a screenshot cannot make.
+        osctl.set_window_state(wid, "minimized")
+        time.sleep(0.9)
+        smin = osctl.window_state(wid)
+        check("set_window_state minimizes, yet the window still exists (not closed)",
+              smin == "minimized" and osctl.window_exists(wid),
+              f"state={smin!r} exists={osctl.window_exists(wid)}")
+
+        # Restore to normal even from minimized (must not bounce back to maximized).
+        osctl.set_window_state(wid, "normal")
+        time.sleep(0.9)
+        check("restore returns to normal even coming from minimized",
+              osctl.window_state(wid) == "normal", f"state={osctl.window_state(wid)!r}")
+
+        check("an unknown state is rejected, not silently applied",
+              osctl.set_window_state(wid, "bogus") is False, "bogus accepted")
+    finally:
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_move(b: Browser, offline: bool) -> None:
     print("R110: MOVE a window that was pushed OFF-screen back into reach (F149) — osctl")
     # R109 proved *raising* reaches an occluded window. But raising only reorders
@@ -7235,7 +7328,7 @@ def main() -> int:
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_reach, round_steer,
               round_window, round_clip_relay, round_zorder, round_window_under,
-              round_window_lifecycle, round_move, round_desktop,
+              round_window_lifecycle, round_window_state, round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

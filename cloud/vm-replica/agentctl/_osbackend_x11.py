@@ -82,6 +82,8 @@ _x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
                           ctypes.c_long, ctypes.c_void_p]
 _x.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
 _x.XMapRaised.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+_x.XIconifyWindow.restype = ctypes.c_int
+_x.XIconifyWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int]
 # Geometry read + move/resize. XGetGeometry gives size in the window's own
 # coords; XTranslateCoordinates maps its (0,0) to the root to get absolute x,y.
 _x.XGetGeometry.restype = ctypes.c_int
@@ -419,6 +421,79 @@ def window_exists(win: int) -> bool:
         ids = {int(w) & 0xFFFFFFFF
                for w in ctypes.cast(raw, ctypes.POINTER(wl * n)).contents}
         return (int(win) & 0xFFFFFFFF) in ids
+
+
+def _net_wm_state(win: int, action: int, p1: int, p2: int = 0) -> bool:
+    """Send an EWMH ``_NET_WM_STATE`` client message (action 0=remove, 1=add,
+    2=toggle) to add/remove up to two state atoms at once — the request a pager
+    makes to (un)maximize a window."""
+    class _CM(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                    ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                    ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                    ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+    ev = _CM(type=33, send_event=1, display=_dpy, window=win,
+             message_type=_atom("_NET_WM_STATE"), format=32)
+    ev.data[0] = action
+    ev.data[1] = p1
+    ev.data[2] = p2
+    ev.data[3] = 2  # source indication: pager
+    SUBSTRUCTURE = (1 << 19) | (1 << 20)
+    ok = _x.XSendEvent(_dpy, _root, 0, SUBSTRUCTURE, ctypes.byref(ev))
+    _x.XFlush(_dpy)
+    return bool(ok)
+
+
+def window_state(win: int) -> "str | None":
+    """Read a window's show-state — ``"minimized"``, ``"maximized"`` or
+    ``"normal"`` — or None if unmanaged. Geometry tells *where* a window is, not
+    *how it is shown*: minimized via ICCCM ``WM_STATE`` (IconicState); maximized
+    when ``_NET_WM_STATE`` carries both MAXIMIZED_VERT and _HORZ. A screenshot
+    cannot tell a maximized window from one merely sized to the screen, nor a
+    minimized window from a closed one."""
+    with _lock:
+        if not window_exists(win):
+            return None
+        wsa = _atom("WM_STATE")
+        raw = _prop(win, wsa, wsa)
+        if raw and len(raw) >= ctypes.sizeof(ctypes.c_long):
+            st = ctypes.cast(raw, ctypes.POINTER(ctypes.c_long))[0]
+            if st == 3:  # IconicState
+                return "minimized"
+        raw = _prop(win, _atom("_NET_WM_STATE"), 4)  # 4 = XA_ATOM
+        if raw:
+            al = ctypes.c_long
+            n = len(raw) // ctypes.sizeof(al)
+            atoms = {int(a) for a in ctypes.cast(raw, ctypes.POINTER(al * n)).contents}
+            if {_atom("_NET_WM_STATE_MAXIMIZED_VERT"),
+                _atom("_NET_WM_STATE_MAXIMIZED_HORZ")} <= atoms:
+                return "maximized"
+        return "normal"
+
+
+def set_window_state(win: int, state: str) -> bool:
+    """Minimize / maximize / restore a window *by identity* — the everyday
+    title-bar gestures. Minimize via ``XIconifyWindow`` (ICCCM); maximize/restore
+    by adding/removing the two ``_NET_WM_STATE_MAXIMIZED_*`` atoms via EWMH.
+    Screenshot+click would have to hunt the min/max-button pixels. Unknown state
+    returns False."""
+    if state not in ("minimized", "maximized", "normal"):
+        return False
+    with _lock:
+        if not window_exists(win):
+            return False
+        mv = _atom("_NET_WM_STATE_MAXIMIZED_VERT")
+        mh = _atom("_NET_WM_STATE_MAXIMIZED_HORZ")
+        if state == "minimized":
+            ok = bool(_x.XIconifyWindow(_dpy, win, _screen))
+        elif state == "maximized":
+            ok = _net_wm_state(win, 1, mv, mh)  # 1 = add
+        else:  # normal
+            _net_wm_state(win, 0, mv, mh)       # 0 = remove maximize
+            _x.XMapRaised(_dpy, win)            # de-iconify if minimized
+            ok = True
+        _x.XSync(_dpy, 0)
+        return ok
 
 
 def _has_wm_state(win: int) -> bool:

@@ -62,6 +62,11 @@ window_under = getattr(_be, "window_under", lambda x, y: None)
 # fall back gracefully on an older floor.
 close_window = getattr(_be, "close_window", lambda win: False)
 window_exists = getattr(_be, "window_exists", lambda win: False)
+# Window show-state: read/set minimized vs maximized vs normal. Geometry says
+# *where* a window is, never *how it is shown* — a maximized window fills the work
+# area, a minimized one has no pixels at all. None / no-op on an older floor.
+window_state = getattr(_be, "window_state", lambda win: None)
+set_window_state = getattr(_be, "set_window_state", lambda win, state: False)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

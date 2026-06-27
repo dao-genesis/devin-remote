@@ -327,6 +327,50 @@ def window_exists(win: int) -> bool:
     return bool(user32.IsWindow(wintypes.HWND(win)))
 
 
+user32.IsZoomed.restype = wintypes.BOOL
+user32.IsZoomed.argtypes = [wintypes.HWND]
+
+_SW_SHOWNORMAL = 1
+_SW_MAXIMIZE = 3
+_SW_MINIMIZE = 6
+# "normal" uses SW_SHOWNORMAL, not SW_RESTORE: restoring a *minimized* window with
+# SW_RESTORE returns it to its prior (maybe maximized) state, whereas
+# SW_SHOWNORMAL forces the normal size/position regardless of prior state.
+_WIN_STATES = {"minimized": _SW_MINIMIZE, "maximized": _SW_MAXIMIZE,
+               "normal": _SW_SHOWNORMAL}
+
+
+def window_state(win: int) -> "str | None":
+    """Read a window's show-state — ``"minimized"``, ``"maximized"`` or
+    ``"normal"`` — or None if the handle is gone. Geometry (``window_geometry``)
+    tells *where* a window is, but not *how it is shown*: a maximized window fills
+    the work area, a minimized one has no on-screen pixels at all. The floor could
+    move/raise/close a window yet was blind to this axis of its state, and a
+    screenshot cannot tell a maximized window from one merely sized to the screen,
+    nor a minimized window from a closed one."""
+    hwnd = wintypes.HWND(win)
+    if not user32.IsWindow(hwnd):
+        return None
+    if user32.IsIconic(hwnd):
+        return "minimized"
+    if user32.IsZoomed(hwnd):
+        return "maximized"
+    return "normal"
+
+
+def set_window_state(win: int, state: str) -> bool:
+    """Minimize / maximize / restore a window *by identity* via ``ShowWindow`` —
+    the everyday gestures a human does with the title-bar buttons. ``"minimized"``
+    gets a window out of the way without closing it; ``"maximized"`` fills the
+    work area; ``"normal"`` restores. Screenshot+click would have to hunt the
+    min/max-button pixels. Unknown state returns False."""
+    sw = _WIN_STATES.get(state)
+    if sw is None or not user32.IsWindow(wintypes.HWND(win)):
+        return False
+    user32.ShowWindow(wintypes.HWND(win), sw)
+    return True
+
+
 def window_under(x: int, y: int) -> "int | None":
     """Which top-level window owns the screen pixel ``(x, y)`` — the id that a
     real mouse click there would land on, or None if the point is bare desktop.

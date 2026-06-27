@@ -4169,6 +4169,58 @@ duals, and the floor grows whole by holding both.
 
 ---
 
+## F153 — how a window is *shown*: minimize, maximize, restore (`window_state` / `set_window_state`, R114)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** The floor could now address (F146), raise (F148), move (F149), read
+ownership of (F151), and end (F152) a window — but every one of those concerns
+*where* the window is or *whether* it is. None touched *how it is shown*. A window
+also lives along a show-state axis: **minimized** (no on-screen pixels at all),
+**maximized** (filling the work area), **normal**. Geometry cannot express it: a
+maximized window and a window merely sized to the screen have identical rects, and
+a minimized window and a closed one both have no pixels — a screenshot cannot tell
+them apart. The floor had no way to read this axis, nor to perform the most
+ordinary title-bar gestures a human does dozens of times an hour.
+
+**Primitives.**
+- `osctl.window_state(win)` → `"minimized"` / `"maximized"` / `"normal"` (or None
+  if gone). Win32 `IsIconic`/`IsZoomed`; X11 ICCCM `WM_STATE`==IconicState for
+  minimized, `_NET_WM_STATE` carrying both MAXIMIZED_VERT and _HORZ for maximized.
+- `osctl.set_window_state(win, state)` → the gesture by identity. Win32
+  `ShowWindow` (SW_MINIMIZE / SW_MAXIMIZE / **SW_SHOWNORMAL**); X11
+  `XIconifyWindow` + EWMH `_NET_WM_STATE` add/remove of the two MAXIMIZED atoms.
+
+**Live (Windows, cmd console):**
+
+| step | `window_state` | corroboration |
+|---|:---:|---|
+| fresh | `normal` | — |
+| `set_window_state(maximized)` | `maximized` | `window_geometry().w` = 1296 ≈ screen 1280 |
+| `set_window_state(minimized)` | `minimized` | `window_exists` still True (≠ closed) |
+| `set_window_state(normal)` | `normal` | returns to normal *even from minimized* |
+| `set_window_state("bogus")` | — | returns False, nothing applied |
+
+**Defect found & fixed in practice.** First run: restoring from *minimized* with
+`SW_RESTORE` (9) bounced the window back to **maximized**, because SW_RESTORE
+restores the *prior* show-state, not the normal one. Probe caught it
+(`_probe_state.py`); fixed by mapping `"normal"` to `SW_SHOWNORMAL` (1), which
+forces normal size/position regardless of prior state. The maximize check is
+cross-validated against pixels (`window_geometry`), so the *read* cannot drift
+from the *reality* — perception and actuation pinned to each other.
+
+R114 (`round_window_state`, 5 checks); `_probe_state.py` standalone (5/5). Full
+suite **766/766** clean.
+
+**Lesson (道法自然).** 大成若缺 — *the greatest completion seems incomplete.* Each
+new window primitive revealed one more axis the floor had silently assumed away:
+position, then stack, then existence, now show-state. Completeness is not a
+destination but the steady exposure and filling of these unspoken assumptions —
+and only a *read* pinned to a *pixel* (maximized ↔ geometry) keeps the filling
+honest rather than self-certifying.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
