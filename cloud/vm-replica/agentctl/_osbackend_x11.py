@@ -461,6 +461,57 @@ def child_windows(win: int) -> list:
         return out
 
 
+def _abs_rect(win: int) -> tuple:
+    root = ctypes.c_ulong(); gx = ctypes.c_int(); gy = ctypes.c_int()
+    gw = ctypes.c_uint(); gh = ctypes.c_uint(); bw = ctypes.c_uint(); d = ctypes.c_uint()
+    if not _x.XGetGeometry(_dpy, win, ctypes.byref(root), ctypes.byref(gx),
+                           ctypes.byref(gy), ctypes.byref(gw), ctypes.byref(gh),
+                           ctypes.byref(bw), ctypes.byref(d)):
+        return (0, 0, 0, 0)
+    ax = ctypes.c_int(); ay = ctypes.c_int(); ch = ctypes.c_ulong()
+    _x.XTranslateCoordinates(_dpy, win, _root, 0, 0, ctypes.byref(ax),
+                             ctypes.byref(ay), ctypes.byref(ch))
+    return (int(ax.value), int(ay.value), int(gw.value), int(gh.value))
+
+
+def _walk_tree(win: int, cl, tl, depth: int = 0):
+    if depth > 64:
+        return None
+    root_r = ctypes.c_ulong(); parent_r = ctypes.c_ulong()
+    kids = ctypes.POINTER(ctypes.c_ulong)(); nkids = ctypes.c_uint()
+    if not _x.XQueryTree(_dpy, win, ctypes.byref(root_r), ctypes.byref(parent_r),
+                         ctypes.byref(kids), ctypes.byref(nkids)):
+        return None
+    try:
+        for i in range(nkids.value):
+            c = int(kids[i])
+            ccls = _wm_class(c); ctext = _win_title(c)
+            if (cl is None or cl in ccls.lower()) and \
+               (tl is None or tl in (ctext or "").lower()):
+                return {"id": c & 0xFFFFFFFF, "class": ccls, "text": ctext,
+                        "rect": _abs_rect(c)}
+            hit = _walk_tree(c, cl, tl, depth + 1)
+            if hit:
+                return hit
+    finally:
+        if kids:
+            _x.XFree(ctypes.cast(kids, ctypes.c_void_p))
+    return None
+
+
+def find_control(top: int, cls=None, text=None):
+    """Find a child window inside ``top`` by its *meaning* (class and/or name,
+    case-insensitive substring) and report *where it is*:
+    ``{"id","class","text","rect":(x,y,w,h)}`` in screen coords, or None. The dual
+    of :func:`control_at` — that maps a pixel to a control, this maps a control's
+    meaning to a pixel rect the mouse can click. (Win32 children are real controls;
+    under X11 toolkits often paint one window, so the matchable tree is shallower —
+    the honest analogue.)"""
+    with _lock:
+        return _walk_tree(int(top), cls.lower() if cls else None,
+                          text.lower() if text else None)
+
+
 def list_windows() -> list:
     """Enumerate top-level windows the window manager manages (EWMH
     ``_NET_CLIENT_LIST``), newest last. Each item is ``{"id", "title"}``.

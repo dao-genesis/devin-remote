@@ -114,6 +114,13 @@ set_window_text = getattr(_be, "set_window_text", lambda win, text: False)
 # pixel the eye sees to the semantic control behind it (what an a11y inspector
 # does). None on bare desktop / older floor.
 control_at = getattr(_be, "control_at", lambda x, y: None)
+# Find a control inside a window by its MEANING (class and/or text, case-insensitive
+# substring) and get WHERE it is: {"id","class","text","rect":(x,y,w,h)} in screen
+# coords. The dual of control_at: that answers "what is at this pixel?" (location →
+# identity); this answers "where is the control that means X?" (identity → location).
+# Returning the rect closes the loop back to the mouse — a semantic find yields a
+# pixel target to click, no visual scanning. None if not found / older floor.
+find_control = getattr(_be, "find_control", lambda top, cls=None, text=None: None)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

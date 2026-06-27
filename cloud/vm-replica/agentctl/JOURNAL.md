@@ -4597,6 +4597,51 @@ where 超越人類 stops being a slogan: a human hovering a control sees pixels 
 
 ---
 
+## F163 — addressing a control by meaning (`find_control`, R124)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** F162's `control_at` answered *what is at this pixel?* — location →
+identity. But the far commoner question runs the other way: *where is the control
+that means X?* — the OK button, the address bar, the password field. The floor had
+no inverse: to act on a known control it either scanned pixels for a visual
+pattern (fragile, theme-dependent) or already had to know the coordinate. A name
+without a place cannot be clicked.
+
+**Primitive.**
+- `osctl.find_control(top, cls=None, text=None)` → the first control inside
+  ``top`` matching class and/or text (case-insensitive substring), as
+  ``{"id","class","text","rect":(x,y,w,h)}`` in **screen coordinates** — or None.
+  Win32 walks `EnumChildWindows` + `GetWindowRect`; X11 recurses `XQueryTree` and
+  maps each hit to absolute coords. Returning the *rect* closes the loop back to
+  the actuator floor: a semantic search hands the mouse a pixel target, no visual
+  scanning at all.
+
+**Live (Windows, against `notepad.exe`):**
+
+| check | result |
+|---|---|
+| find Edit by class → screen rect | `(148, 191, 704, 438)` |
+| **round-trip** `find_control`→`control_at(centre)` | same control id |
+| find same control by text substring | same id |
+| non-existent class | `None` (no false positive) |
+
+R124 (`round_find_control`, 5 checks); `_probe_findctl.py` standalone (all pass).
+Full suite **805/805** clean.
+
+**Lesson (道法自然).** 名與實 — *name and substance.* `control_at` reads the name
+off the substance at a place; `find_control` finds the place from the name. The
+round-trip — name → place → name returning the *same* control — is the proof they
+are 反 (inverse), 反者道之動: the floor can now move freely between *what a thing
+is* and *where it is*, in either direction, and neither is primary. And because
+`find_control` ends in a pixel rect, the semantic layer does not float free of the
+hand — it 復歸 (returns) to the actuator floor: understand a thing, then click
+exactly where it lives. The two worlds the bridge (F162) joined are now fully
+two-way, and the loop perceive → understand → locate → act is closed without one
+pixel of guesswork.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

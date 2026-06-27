@@ -470,6 +470,43 @@ def set_window_text(win: int, text: str) -> bool:
     return bool(user32.SendMessageW(hwnd, _WM_SETTEXT, 0, ctypes.addressof(buf)))
 
 
+def find_control(top: int, cls: "str | None" = None,
+                 text: "str | None" = None) -> "dict | None":
+    """Find a control inside ``top`` by its *meaning* — its class and/or its text
+    — and report *where it is*: ``{"id","class","text","rect":(x,y,w,h)}`` in
+    screen coordinates, or None. The dual of :func:`control_at`: that answers
+    *what is at this pixel?* (location → identity); this answers *where is the
+    control that means X?* (identity → location). Matching is case-insensitive
+    substring for both ``cls`` and ``text`` (either may be omitted). Returning the
+    screen rect closes the loop back to the actuator floor — a semantic find hands
+    a pixel target the mouse can click, no visual scanning."""
+    hwnd = wintypes.HWND(top)
+    if not user32.IsWindow(hwnd):
+        return None
+    cl = cls.lower() if cls else None
+    tl = text.lower() if text else None
+    found: dict = {}
+
+    def _cb(child, _lp):
+        cbuf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(child, cbuf, 256)
+        ccls = cbuf.value
+        ctext = window_text(int(child))
+        if cl is not None and cl not in ccls.lower():
+            return True
+        if tl is not None and tl not in (ctext or "").lower():
+            return True
+        rect = wintypes.RECT()
+        user32.GetWindowRect(child, ctypes.byref(rect))
+        found.update({"id": int(child), "class": ccls, "text": ctext,
+                      "rect": (rect.left, rect.top,
+                               rect.right - rect.left, rect.bottom - rect.top)})
+        return False  # stop at the first match
+
+    user32.EnumChildWindows(hwnd, _ENUMCHILDPROC(_cb), 0)
+    return found or None
+
+
 def child_windows(win: int) -> list:
     """Descend into a window's *controls* — the edit boxes, labels, buttons it is
     built from — as ``[{"id","class","text"}, …]``. The floor could enumerate

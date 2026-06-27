@@ -1260,6 +1260,82 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_find_control(b: Browser, offline: bool) -> None:
+    print("R124: locate a control by MEANING and get its pixel rect (F163) — osctl")
+    # control_at (F162) maps a pixel to a control: location -> identity. This is its
+    # inverse — find_control maps a control's meaning (class/text) to where it is:
+    # identity -> location, returning a screen rect the mouse can click. Together
+    # they make addressing a control bidirectional, and find_control closes the
+    # loop back to the actuator floor: a semantic search yields a pixel target, no
+    # visual scanning. The proof is the round-trip: find a control by meaning, then
+    # control_at its centre must return the SAME control — meaning and location are
+    # two faces of one thing (名與實).
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R124: native meaning->location resolution on the Windows floor)")
+        return
+    if not hasattr(osctl, "find_control"):
+        check("osctl exposes find_control", False, "missing primitive")
+        return
+    mark = "DAO-F163-" + str(os.getpid())
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available to search inside", note is not None, "none")
+        if not note:
+            return
+        osctl.set_window_state(note["id"], "normal")
+        osctl.move_window(note["id"], 140, 140, 720, 520)
+        time.sleep(0.5)
+        ek = next((k for k in osctl.child_windows(note["id"])
+                   if k["class"] == "Edit"), None)
+        if ek:
+            osctl.set_window_text(ek["id"], mark)
+            time.sleep(0.3)
+        c = osctl.find_control(note["id"], cls="Edit")
+        check("find_control locates the Edit by meaning and returns a real screen "
+              "rect (a pixel target for the mouse)",
+              c is not None and c["class"] == "Edit" and c["rect"][2] > 0 and c["rect"][3] > 0,
+              f"control={c}")
+        if not c:
+            return
+        rect = c["rect"]
+        cx, cy = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
+        back = osctl.control_at(cx, cy)
+        check("round-trip find_control->control_at returns the SAME control "
+              "(meaning <-> location are inverse)",
+              back is not None and back["id"] == c["id"],
+              f"back={back['id'] if back else None} find={c['id']}")
+        ct = osctl.find_control(note["id"], text=mark[:8])
+        check("find by TEXT substring finds the same control",
+              ct is not None and ct["id"] == c["id"],
+              f"bytext={ct['id'] if ct else None}")
+        check("a non-existent control yields None (no false positive)",
+              osctl.find_control(note["id"], cls="NoSuchClassXYZ") is None, "got match")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_control_at(b: Browser, offline: bool) -> None:
     print("R123: resolve a screen PIXEL to the semantic CONTROL behind it (F162) — osctl")
     # Two perception worlds have grown side by side: the pixel floor (capture,
@@ -7920,7 +7996,7 @@ def main() -> int:
               round_window_lifecycle, round_window_state, round_active_window,
               round_topmost, round_window_pid, round_key_state, round_mouse_state,
               round_pixel, round_window_text, round_set_window_text,
-              round_control_at, round_move, round_desktop,
+              round_control_at, round_find_control, round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
