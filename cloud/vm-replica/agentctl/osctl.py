@@ -84,6 +84,11 @@ is_window_topmost = getattr(_be, "is_window_topmost", lambda win: False)
 # ignores the polite request. None / no-op on an older floor.
 window_pid = getattr(_be, "window_pid", lambda win: None)
 terminate_window = getattr(_be, "terminate_window", lambda win: False)
+# Read a key's live state {"down","toggled"}: the floor could press/release keys
+# but never read them, so a stuck modifier or a silently-on CapsLock/NumLock would
+# corrupt all later typing undetectably. The read dual of key_down/key_up. Empty
+# state on an older floor.
+key_state = getattr(_be, "key_state", lambda vk: {"down": False, "toggled": False})
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

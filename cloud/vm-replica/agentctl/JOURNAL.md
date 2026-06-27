@@ -4350,6 +4350,44 @@ authority over a window's end.
 
 ---
 
+## F157 — reading the floor's own keyboard (`key_state`, R118)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** For 156 rounds the floor could *press* and *release* keys
+(`key_down`/`key_up`) but had no way to *read* them back. It typed entirely blind
+to its own keyboard. Two silent corruptions live in that blindness: a modifier
+left held (a `key_down(Shift)` whose `key_up` never fires turns every later letter
+upper-case) and a toggled lock (`CapsLock`/`NumLock` flipped on by a stray tap
+silently inverts case / digit-vs-arrow) — neither detectable, because the write
+side cannot see the latch it set. This is the keyboard's missing read dual, the
+twin of F154's `active_window` (which read *where* keys land; this reads *what*
+the keyboard itself holds).
+
+**Primitive.**
+- `osctl.key_state(vk)` → `{"down": bool, "toggled": bool}`. `down` = the physical
+  press (Win32 `GetAsyncKeyState` high bit; X11 `XQueryKeymap` keymap bit);
+  `toggled` = the lock latch (Win32 `GetKeyState` low bit; X11 Xkb `locked_mods`).
+
+**Live (Windows, no window/app needed — raw input floor):**
+
+| check | result |
+|---|---|
+| Shift: up → held → released | `down` False → **True** → False |
+| CapsLock: read, toggle, toggle back | `toggled` False → **True** → False |
+
+R118 (`round_key_state`, 2 checks); `_probe_keystate.py` standalone (5/5). Full
+suite **782/782** clean.
+
+**Lesson (道法自然).** 自知者明 — *to know oneself is clarity.* F154 was 知人
+(knowing *which* window holds focus, outward); this is 自知 (the floor knowing
+*its own* hand). A power that cannot perceive itself acts blind and cannot tell a
+clean act from a corrupted one; only with a read of its own state can the floor
+trust what it writes. Every write this session has now grown its read — the
+keyboard was the last actuator still typing into the dark.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

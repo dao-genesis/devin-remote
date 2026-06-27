@@ -152,6 +152,25 @@ def key_up(vk: int) -> None:
     _send(_INPUT(INPUT_KEYBOARD, _INPUTUNION(ki=ki)))
 
 
+user32.GetAsyncKeyState.restype = wintypes.SHORT
+user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+user32.GetKeyState.restype = wintypes.SHORT
+user32.GetKeyState.argtypes = [ctypes.c_int]
+
+
+def key_state(vk: int) -> dict:
+    """Read a key's live state: ``{"down": bool, "toggled": bool}``. The floor
+    could *press* and *release* keys (`key_down`/`key_up`) but never *read* them,
+    so it held modifiers and typed blind — a stuck Shift or a silently-on CapsLock
+    would corrupt everything typed after, undetectably. ``down`` is the physical
+    press (``GetAsyncKeyState`` high bit); ``toggled`` is the lock/latch
+    (``GetKeyState`` low bit) that matters for CapsLock/NumLock/ScrollLock. The
+    read dual of the keyboard writes."""
+    down = bool(user32.GetAsyncKeyState(int(vk)) & 0x8000)
+    toggled = bool(user32.GetKeyState(int(vk)) & 0x0001)
+    return {"down": down, "toggled": toggled}
+
+
 def type_unicode(text: str) -> None:
     inputs = []
     for ch in text:

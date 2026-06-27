@@ -252,6 +252,43 @@ def key_up(vk: int) -> None:
         _x.XFlush(_dpy)
 
 
+class _XkbStateRec(ctypes.Structure):
+    _fields_ = [("group", ctypes.c_ubyte), ("locked_group", ctypes.c_ubyte),
+                ("base_group", ctypes.c_ushort), ("latched_group", ctypes.c_ushort),
+                ("mods", ctypes.c_ubyte), ("base_mods", ctypes.c_ubyte),
+                ("latched_mods", ctypes.c_ubyte), ("locked_mods", ctypes.c_ubyte),
+                ("compat_state", ctypes.c_ubyte), ("grab_mods", ctypes.c_ubyte),
+                ("compat_grab_mods", ctypes.c_ubyte), ("lookup_mods", ctypes.c_ubyte),
+                ("compat_lookup_mods", ctypes.c_ubyte), ("ptr_buttons", ctypes.c_ushort)]
+
+
+_XKB_USE_CORE_KBD = 0x0100
+_LOCK_MASK = 0x02   # CapsLock
+_MOD2_MASK = 0x10   # NumLock (conventional)
+_VK_LOCKMASK = {0x14: _LOCK_MASK, 0x90: _MOD2_MASK}  # VK_CAPITAL, VK_NUMLOCK
+
+
+def key_state(vk: int) -> dict:
+    """Read a key's live state: ``{"down": bool, "toggled": bool}``. The floor
+    could *press*/*release* keys but never *read* them, so it held modifiers and
+    typed blind — a stuck Shift or a silently-on CapsLock would corrupt all
+    later typing undetectably. ``down`` comes from ``XQueryKeymap`` (the physical
+    keymap bitmap); ``toggled`` from the Xkb locked-mods (CapsLock/NumLock). The
+    read dual of the keyboard writes (mirrors the Win32 backend)."""
+    with _lock:
+        keys = (ctypes.c_char * 32)()
+        _x.XQueryKeymap(_dpy, keys)
+        kc = _x.XKeysymToKeycode(_dpy, _vk_keysym(vk))
+        down = bool(keys[kc >> 3][0] & (1 << (kc & 7))) if 0 <= kc < 256 else False
+        toggled = False
+        mask = _VK_LOCKMASK.get(vk)
+        if mask is not None:
+            st = _XkbStateRec()
+            if _x.XkbGetState(_dpy, _XKB_USE_CORE_KBD, ctypes.byref(st)) == 0:
+                toggled = bool(st.locked_mods & mask)
+        return {"down": down, "toggled": toggled}
+
+
 def _find_scratch_keycode() -> int:
     kmin = ctypes.c_int(); kmax = ctypes.c_int()
     _x.XDisplayKeycodes(_dpy, ctypes.byref(kmin), ctypes.byref(kmax))

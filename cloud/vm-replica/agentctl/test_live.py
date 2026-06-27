@@ -1260,6 +1260,54 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_key_state(b: Browser, offline: bool) -> None:
+    print("R118: READ a key's live state — is it down? is the lock on? (F157) — osctl")
+    # The floor could press and release keys (key_down/key_up) but never *read*
+    # them back. So it typed blind: a modifier left held, or a CapsLock silently
+    # toggled on, would corrupt everything typed afterward with no way to notice.
+    # key_state(vk) is the read dual — {"down": physical press, "toggled": the
+    # CapsLock/NumLock latch} — letting the floor confirm its own keyboard before
+    # it commits text. No window or app needed; this is the raw input floor.
+    if not hasattr(osctl, "key_state"):
+        check("osctl exposes key_state", False, "missing primitive")
+        return
+    VK_SHIFT, VK_CAPITAL = 0x10, 0x14
+
+    def tap(vk):
+        osctl.key_down(vk)
+        time.sleep(0.05)
+        osctl.key_up(vk)
+        time.sleep(0.15)
+
+    try:
+        osctl.key_up(VK_SHIFT)
+        time.sleep(0.1)
+        s0 = osctl.key_state(VK_SHIFT).get("down")
+        osctl.key_down(VK_SHIFT)
+        time.sleep(0.1)
+        s1 = osctl.key_state(VK_SHIFT).get("down")
+        osctl.key_up(VK_SHIFT)
+        time.sleep(0.1)
+        s2 = osctl.key_state(VK_SHIFT).get("down")
+        check("key_state reads a modifier as DOWN only while it is held "
+              "(press/release made visible)",
+              s0 is False and s1 is True and s2 is False,
+              f"up0={s0} held={s1} up1={s2}")
+
+        t0 = osctl.key_state(VK_CAPITAL).get("toggled")
+        tap(VK_CAPITAL)
+        t1 = osctl.key_state(VK_CAPITAL).get("toggled")
+        tap(VK_CAPITAL)
+        t2 = osctl.key_state(VK_CAPITAL).get("toggled")
+        check("key_state tracks the CapsLock latch across a toggle and back "
+              "(the silent typo-maker, now observable)",
+              t1 != t0 and t2 == t0, f"{t0}->{t1}->{t2}")
+        if t2 != t0:  # restore as found
+            tap(VK_CAPITAL)
+    finally:
+        osctl.key_up(VK_SHIFT)
+
+
 def round_window_pid(b: Browser, offline: bool) -> None:
     print("R117: identify a window by its PROCESS, force-kill when close won't (F156) — osctl")
     # Every window read so far keyed off the title or the handle. But a title can
@@ -7597,7 +7645,8 @@ def main() -> int:
               round_template_match, round_settle, round_reach, round_steer,
               round_window, round_clip_relay, round_zorder, round_window_under,
               round_window_lifecycle, round_window_state, round_active_window,
-              round_topmost, round_window_pid, round_move, round_desktop,
+              round_topmost, round_window_pid, round_key_state,
+              round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
