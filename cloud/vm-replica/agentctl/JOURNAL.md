@@ -3023,6 +3023,39 @@ gesture is to press, and then to *remain*, until what waits on duration arrives.
 
 ---
 
+## F127 — `key_hold`: the sustained key (R91)
+
+**Friction.** `tap` presses and releases a key in the same breath — the key is
+down for essentially zero time. But many controls integrate over *how long* a
+key is held: a game that advances a character each frame while a direction key is
+down, a hold-to-charge action, a modifier kept down across other events. The
+keyboard channel could tap and chord, but could not *dwell* on a key. `press_hold`
+(F126) gave the mouse a sustained press; the keyboard had no twin.
+
+**Mechanism.** `key_down(vk)`, `time.sleep(duration)`, `key_up(vk)` — the exact
+shape of `press_hold`, in the keyboard channel. The key stays logically down for
+the whole `duration`, so any flag set on `keydown` remains set until release.
+
+**Primitive.** `key_hold(vk, duration=0.8)`.
+
+**Live (R91):** a page sets `held=true` on `keydown(ArrowRight)`, clears it on
+`keyup`, and a 50 ms interval advances `__pos` while held. An instant `tap`
+accrues nothing (`__pos==0`) — the friction. `key_hold(VK_RIGHT, 0.8)` accrues
+many steps (≥5) while the key is down; once released the integrator stops, and
+the title mirrors the accrued position. `660/660 checks passed`, deterministic ×3.
+
+**Honest note.** SendInput sends *one* `keydown`, not an OS autorepeat stream — a
+held synthetic key does not emit repeated `keydown` events. So `key_hold` is
+honest only for controls that integrate over the *held state* (a flag set on
+`keydown`), which is how game-style movement and hold-to-charge actually work; it
+is not a substitute for OS keyboard autorepeat (that would need repeated taps).
+
+**Lesson (道法自然):** 大音希聲 — the longest note is not struck harder but
+sounded longer. What a quantity *is* (a key pressed) differs from how long it is
+*held*; some answers come only to duration, on either hand.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
