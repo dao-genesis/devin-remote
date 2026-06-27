@@ -755,6 +755,36 @@ def wait_until_stable(bbox: tuple[int, int, int, int], settle: int = 3,
             "captures": captures, "elapsed": time.time() - start}
 
 
+def sample_color(bbox: tuple[int, int, int, int], rgb: bytes | None = None,
+                 size: tuple[int, int] | None = None) -> dict:
+    """Read the mean colour of a screen region — the inverse of find_color (F137).
+
+    :func:`find_color` answers *where is this known colour?*; it forces you to
+    name a colour up front. But often the colour is the very unknown: a status
+    dot is green or red, a toggle's fill tells its state — and you cannot search
+    for the answer you are trying to read. To guess and ``find_color`` each
+    candidate is backwards. This crops ``bbox`` and averages it, returning
+    ``{r, g, b, count}`` — the colour that is actually *there*, which the caller
+    can then classify or compare. The dual of `find_color`: one maps colour→place,
+    this maps place→colour. Pass an existing ``rgb``/``size`` to reuse a capture."""
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    patch, pw, ph = crop_rgb(rgb, (w, h), bbox)
+    n = pw * ph
+    if n == 0:
+        raise ValueError("empty bbox")
+    sr = sg = sb = 0
+    for i in range(0, len(patch), 3):
+        sr += patch[i]
+        sg += patch[i + 1]
+        sb += patch[i + 2]
+    return {"r": sr // n, "g": sg // n, "b": sb // n, "count": n}
+
+
 def locate_change(before: bytes, after: bytes, size: tuple[int, int],
                   tol: int = 12, min_count: int = 30) -> dict | None:
     """Find *where* the screen changed between two captures (F135).

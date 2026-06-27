@@ -3394,6 +3394,40 @@ both. Divide only where there is a real seam, but there, divide.
 
 ---
 
+## F137 — `sample_color`: read the colour at a place (R101)
+
+**Friction.** `find_color` maps *colour → place*: it forces you to name the
+colour up front and only confirms presence. But the colour is often the very
+unknown — a status surface is green or red, a toggle's fill tells its state — and
+you cannot search for the answer you are trying to read. To guess a colour and
+`find_color` each candidate is backwards: blind iteration to learn one fact.
+
+**Mechanism.** Crop ``bbox`` and average it, returning ``{r, g, b, count}`` — the
+colour that is actually *there*, which the caller classifies or compares. The
+exact dual of `find_color`: one maps colour→place, this maps place→colour.
+
+**Primitive.** `sample_color(bbox, rgb=None, size=None)`.
+
+**Live (R101):** the whole page is the status surface (so the screen centre is
+solid fill regardless of DPI/scroll). `sample_color` reads the green state
+(g dominant by >80), then after a flip reads the red state (r dominant by >80),
+and the two reads are >150 apart in colour. The friction made concrete: a stale
+guess of "green" run through `find_color` on the same patch finds *nothing* after
+the flip — `find_color` is blind to the state, while `sample_color` just told it.
+`725/725 checks passed`, deterministic ×3.
+
+**Honest note.** It returns the *mean*, which blurs a multicolour region into mud
+(text on a button averages toward grey); the honest use is a tight bbox on solid
+fill, or as a building block under a future dominant-colour/`palette` read. Mean
+is also vulnerable to a single bright outlier — but for the solid indicators it is
+meant for, it is exact (it read ``#1faa3c`` and ``#cc2222`` to the digit).
+
+**Lesson (道法自然):** 不窺於牖，以知天道 — you need not search the whole sky to
+know its colour; look once at the patch before you. To ask *where is green* when
+the question is *what is here* is to walk far to learn what lay underfoot.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
