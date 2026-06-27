@@ -5383,6 +5383,70 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_locate_change_blobs(b: Browser, offline: bool) -> None:
+    print("R100: OS-level locate_change_blobs — separate simultaneous changes (F136) — osctl")
+    # Two toasts appear in different corners at once. locate_change collapses both
+    # into one centroid stranded in the empty gap between them (clicks nothing);
+    # locate_change_blobs labels the changed pixels into connected components and
+    # returns one clickable centroid per toast. The F052 find_color->blobs lesson,
+    # now on change itself.
+    html = fixture("locate_change_blobs.html",
+                   "<!doctype html><meta charset=utf-8><title>x</title>"
+                   "<style>html,body{margin:0;height:100%;background:#fff}"
+                   ".t{position:absolute;width:130px;height:80px;display:none}"
+                   "#a{left:60px;top:90px;background:#e23a3a}"
+                   "#b{left:700px;top:430px;background:#2a7de2}</style>"
+                   "<div id=a class=t></div><div id=b class=t></div>"
+                   "<script>window.__show=function(){"
+                   "document.getElementById('a').style.display='block';"
+                   "document.getElementById('b').style.display='block';};"
+                   "</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, before = osctl.capture_rgb()
+    b.eval("window.__show()")
+    time.sleep(0.3)
+    w2, h2, after = osctl.capture_rgb()
+    # Where the two toasts actually are (by their own colours), for cross-check.
+    ra = osctl.find_color((226, 58, 58), tol=30, rgb=after, size=(w2, h2))
+    rb = osctl.find_color((42, 125, 226), tol=30, rgb=after, size=(w2, h2))
+    check("both toasts present by colour", ra is not None and rb is not None,
+          f"red={ra and (ra['x'], ra['y'])} blue={rb and (rb['x'], rb['y'])}")
+    if ra is None or rb is None:
+        return
+    # Friction: the single-centroid locator is stranded between the two toasts.
+    one = osctl.locate_change(before, after, (w, h), tol=12, min_count=30)
+    check("locate_change collapses both changes into one centroid",
+          one is not None, repr(one and (one["x"], one["y"])))
+    if one is not None:
+        da = abs(one["x"] - ra["x"]) + abs(one["y"] - ra["y"])
+        db = abs(one["x"] - rb["x"]) + abs(one["y"] - rb["y"])
+        check("that single centroid lands on neither toast (stranded between)",
+              da > 150 and db > 150, f"dist_red={da} dist_blue={db}")
+    # Primitive: segment into two separate, clickable regions.
+    blobs = osctl.locate_change_blobs(before, after, (w, h), tol=12,
+                                      min_count=500)
+    check("locate_change_blobs returns exactly two regions", len(blobs) == 2,
+          f"n={len(blobs)} " + repr([(bl["x"], bl["y"], bl["count"])
+                                     for bl in blobs]))
+    if len(blobs) != 2:
+        return
+    # Each toast has a blob centred on it (order-independent: match by nearest).
+    def near(pt, blist, r):
+        return any(abs(pt["x"] - bl["x"]) <= r and abs(pt["y"] - bl["y"]) <= r
+                   for bl in blist)
+    check("one blob is centred on the red toast", near(ra, blobs, 20),
+          f"red=({ra['x']},{ra['y']}) blobs="
+          + repr([(bl["x"], bl["y"]) for bl in blobs]))
+    check("one blob is centred on the blue toast", near(rb, blobs, 20),
+          f"blue=({rb['x']},{rb['y']}) blobs="
+          + repr([(bl["x"], bl["y"]) for bl in blobs]))
+    check("the two blobs are distinct (not the same region)",
+          abs(blobs[0]["x"] - blobs[1]["x"])
+          + abs(blobs[0]["y"] - blobs[1]["y"]) > 150,
+          repr([(bl["x"], bl["y"]) for bl in blobs]))
+
+
 def round_locate_change(b: Browser, offline: bool) -> None:
     print("R99: OS-level locate_change — find WHERE the screen changed (F135) — osctl")
     # A click makes a toast appear at a spot the caller never names. find_color
@@ -6114,7 +6178,8 @@ def main() -> int:
               round_press_hold, round_key_hold, round_mod_scroll,
               round_mod_drag, round_glide, round_mod_taps,
               round_wait_until_stable, round_wait_for_change,
-              round_region_diff, round_locate_change]
+              round_region_diff, round_locate_change,
+              round_locate_change_blobs]
     for r in rounds:
         try:
             r(b, offline)
