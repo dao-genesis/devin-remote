@@ -3707,6 +3707,364 @@ until sampling was cheap enough to simply see faster. 無為而無不為.
 
 ---
 
+## F144 — low-acuity periphery + predictive reach: click a *still-moving* target (R105)
+
+**Friction (reproduced live, on this VM's real Chrome).** F143 (`wait_stable`) waits for
+motion to *stop*. But a target need not stop — a menu, a handle, a card still easing into
+place is a legitimate click target *mid-glide*. Driving live Chrome with a magenta square
+sliding continuously, the classic snapshot+click **missed essentially every time**: at
+200 px/s 1/20, at 450 px/s 0/20, at 900 px/s 0/20, at 1500 px/s 1/20, with mean error
+growing 58→300 px. Timing the loop named the culprit exactly: a whole-screen `find_color`
+**scan is ~232 ms** (≈1.9 M pixels in pure Python) — by the time the click lands the
+element has slid 200+ px. The perceive→act gap was not a constant to tune around; it was a
+*slow perception* to fix.
+
+**Why this is structural (referencing the visuomotor system).** Two corrections, each the
+way the eye/hand actually works, neither a threshold hack:
+
+1. **Acquire with the periphery, refine with the fovea.** The retina's periphery is
+   *low-resolution* — it does not read every receptor. So `find_color` grew a `step`
+   (acuity) knob: sample every n-th pixel on every n-th row, ~1/n² the work. Measured on
+   the live screen: step=1 → 202 ms; **step=4 → 13 ms (16×), centroid only ~2 px off**;
+   step=8 → 3 ms (67×), ~4 px. A coarse scan finds *where* the target is in a few ms, then
+   `foveate` re-reads that small window at full acuity. (`wait_stable`'s saccade now scans
+   coarsely too — re-acquisition that used to cost 232 ms is ~13 ms.)
+2. **Predict, don't chase.** Smooth pursuit does not aim where the target *is* — that image
+   is already one neural delay old; it estimates the target's **velocity** and aims where it
+   *will be*. `osctl.reach` samples the fovea twice (~12 ms apart) for a velocity, then
+   clicks the position extrapolated `lead` seconds ahead — `lead` being the measured
+   perceive→click-lands latency. A live `lead` sweep at 900 px/s found the optimum at
+   **~0.03 s** (mean error 30 px at lead=0 → **6 px** at 0.03), so that is the default.
+
+**Live A/B (same scenes, this VM), snapshot+click vs `reach`:**
+
+| speed | snapshot+click | reach0 (foveal, no predict) | **reach (predictive)** |
+|------:|:--------------:|:---------------------------:|:----------------------:|
+| 200 px/s | 1/20 (58 px) | 20/20 (8.9 px) | **20/20 (4.2 px)** |
+| 450 px/s | 0/20 (119 px) | 20/20 (14 px) | **20/20 (3.7 px)** |
+| 900 px/s | 0/20 (232 px) | 19/20 (30 px) | **18/20 (8.4 px)** |
+| 1500 px/s | 1/20 (300 px) | 1/20 (47 px) | **20/20 (11 px)** |
+
+The middle column shows the fovea alone fixes low/mid speed but **breaks at 1500 px/s**
+(the residual latency exceeds the target half-width); prediction is what conquers high
+speed (1/20 → 20/20). In total, snapshot+click landed ~3/80 across speeds; predictive reach
+~78/80. R105 (`round_reach`) bakes this in as a permanent check: stale 0/6 vs reach 6/6 on a
+600 px/s glide. Full suite **740/741** at the content viewport (only the pre-existing R103
+window-placement delta remains); R18 and all OCR unaffected — `step` defaults to 1 (identical),
+`reach` is additive, and the coarse saccade left `wait_stable` 5/5 on `_probe_settle.py`.
+
+**Lesson (道法自然).** 大音希聲 — the fix was not a faster whole-screen stare but *less*
+looking: low-acuity where acuity is wasted, and aiming at the not-yet (the target's future)
+rather than the already-gone (its last snapshot). 為學者日益，聞道者日損: we did not add a
+chase loop, we subtracted scanned pixels and subtracted the latency by prediction. 無為而無不為.
+
+---
+
+## F145 — the keyboard is a servo, not a typewriter (closed-loop keyboard control)
+
+**Reframing (反者道之動).** The goal was never to beat the official screenshot+click
+at its own game; it is to do what that primitive *cannot*. So this round asked: what
+on a screen cannot be placed by a click at all? Answer: a control that moves only while
+a **key is held** and *coasts* after release — a momentum scrubber, a key-repeat slider,
+a game character. A click has nothing to grab; you must *drive* it with the keyboard.
+
+**Reproduced friction (live, this VM's real keyboard).** A canvas knob that accelerates
+while ArrowRight/Left is held and decays after release, with a goal band. The honest
+open-loop attempt — read once, hold the key for the distance-estimated time `t=√(2d/a)`,
+release — **landed 0/12 in band, mean error ~244–272 px**: acceleration and the
+post-release coast are unmodelled, so it always overshoots. No click can help; the
+control is keyboard-only.
+
+**Why this is structural (referencing motor control).** The hand does not place a
+momentum control open-loop either. It uses a **ballistic** phase (move fast toward the
+goal while *watching*) released *before* arrival to leave room for the coast, then a
+**corrective** phase of small impulses until inside the target — saccade-and-correct,
+with proprioception telling it the limb has come to rest. `osctl.steer` is exactly that,
+fused with vision:
+
+1. **Perceive by pixels, move by the real keyboard.** Both the controlled element and
+   the goal are located with `find_color`/`foveate` (the goal band is just another
+   colour on screen); motion is genuine OS key events (XTEST), not a DOM write.
+2. **Ballistic + predictive release.** Hold the key toward the goal, sampling position
+   every ~12 ms; estimate velocity and release once the predicted stop (`pos + |v|·coast`)
+   reaches the goal, so the coast carries it the rest of the way.
+3. **Rest, then correct.** The decisive fix: do **not** re-measure on a fixed sleep — the
+   element is still coasting, and correcting mid-coast oscillates (first cut: 4/12). Wait
+   until perception shows it has actually *stopped* (two consecutive sub-pixel deltas),
+   then nudge with 20 ms impulses until the centre is inside the band. 知止所以不殆 —
+   know when it has stopped before acting again.
+
+**Live A/B (same scenes, this VM), open-loop hold vs `steer`:**
+
+| method | in-band | mean \|err\| |
+|---|:---:|:---:|
+| open-loop (one reading, timed hold) | 0/12 | ~244–272 px |
+| inline servo (page-readout corrective) | 11–12/12 | ~25 px |
+| **`osctl.steer` (pure-pixel perception)** | **12/12** | **~12 px** |
+
+The shipped primitive, perceiving *both* knob and goal purely by pixels, beats even the
+inline version that peeked at the page state — because rest-by-perception removes the
+mid-coast mis-correction. R106 (`round_steer`) bakes it in: open-loop 0/4 vs steer 4/4.
+
+**Generality beyond the browser (不局限於一瀏覽器).** The same `osctl` floor drove a
+*native* app end-to-end this session — KDE Konsole: an OS click to focus (mouse), then
+`type_unicode` of a shell command and Return (keyboard), verified by the marker file it
+wrote. The floor is application-agnostic: it acts on the X11 screen, not on a DOM. (It
+still has **no window-enumeration/activation primitive** — a real gap for addressing the
+*right* window among many; logged here as the next honest surface.)
+
+**Lesson (道法自然).** A click is one impulse; many controls integrate over *held* time and
+*coast* after. The keyboard is therefore not a typewriter but a **servo** — and the same
+perceive→predict→correct loop that hit a moving target (F144) drives a moving control,
+just with keys instead of a click. 大音希聲: the signal that it is *safe to correct* is the
+*absence* of motion (rest), perceived, not assumed. 無為而無不為.
+
+---
+
+## F146 — address the *right* window among many (`list_windows` / `activate_window` / `focus_window`, R107)
+
+**The gap F145 logged.** Every keyboard and clipboard gesture in this floor acts on
+*whatever window holds focus*. In a single browser that is invisible; on a real desktop —
+the user's actual machine, many apps open at once — it is a silent, dangerous bug: a typed
+command or a paste lands in the **wrong window**. And this is precisely a place the official
+screenshot+click *cannot* help: it can click a visible pixel, but it cannot **address a
+window by identity**, nor raise one that is occluded or behind another. There was no
+primitive to enumerate windows or bring a chosen one forward.
+
+**Reproduced friction (live, this VM).** Two KDE Konsole windows, `DAOWIN-A` and `DAOWIN-B`,
+each launched with a distinct `WTAG` env var so the *same* typed command —
+`echo $WTAG > marker` — records which window actually received the keystrokes. With B
+focused (it opened last) but A *intended*, typing with no addressing wrote **`B`** to the
+marker — input went to the wrong window. There is no click that fixes this; the target is
+identity, not a pixel.
+
+**The primitive (referencing how a person does it).** A person does not type blindly into
+whatever is on top — they *find* the window they mean (by its title in the taskbar) and
+*click it to the front* first. Two leaves on the OS floor, one gesture above them:
+
+1. **`list_windows()`** — the eye that finds the right window. X11: read the window
+   manager's `_NET_CLIENT_LIST` (EWMH) off the root and each window's `_NET_WM_NAME`
+   (UTF-8, falling back to `WM_NAME`). Windows: `EnumWindows` + `GetWindowTextW`. Returns
+   `[{"id", "title"}, …]`.
+2. **`activate_window(id)`** — raise + focus by identity. X11: send the EWMH
+   `_NET_ACTIVE_WINDOW` client message to the root (the request a pager/taskbar makes) then
+   `XMapRaised`/`XRaiseWindow`. Windows: `SetForegroundWindow` with the documented
+   attach-thread-input dance to defeat the foreground lock, restoring if minimised.
+3. **`focus_window(match)`** (platform-agnostic, above the leaves) — find the window whose
+   title contains `match` and activate it, so the *next* `type`/`tap`/paste reaches the
+   intended app.
+
+**The 64-bit gotcha (worth recording).** EWMH list/window properties are `format 32`, but
+libX11 returns format-32 data as an array of C **`long`** — 8 bytes each on a 64-bit box,
+not 4. Reading them as `uint32` silently doubles the count and yields garbage ids. The
+backend reads them as `c_long`/`ctypes.sizeof(c_long)`.
+
+**Live A/B (same two windows, this VM):**
+
+| step | marker | outcome |
+|---|:---:|---|
+| no addressing (B focused, A intended) | `B` | input went to the **wrong** window |
+| `focus_window("DAOWIN-A")` then type | `A` | input went to the **intended** window |
+
+R107 (`round_window`) bakes it in (4 checks: enumerate both, wrong-window without
+addressing, right-window with `focus_window`, and the strict A/B). `activate_window` was
+independently confirmed live — after the call `xdotool getactivewindow` and the root's
+`_NET_ACTIVE_WINDOW` both reported our target window.
+
+**A second friction found in passing (honest).** While building the probe, `type_unicode`
+with a trailing `'\n'` did **not** submit the command in a terminal — both commands
+concatenated on one prompt line. A literal newline codepoint is not the Return key; the
+fix is an explicit `tap(VK_RETURN)`. Documented so the next round does not relearn it.
+
+**Lesson (道法自然).** 知人者知也，自知者明也 — to act on the right thing you must first
+*know which thing it is*. The floor could already move and type with a person's precision,
+but it was blind to *which* window it was speaking to; giving it the eye to enumerate and
+the hand to raise-by-name closes that. 始制有名 — once things have names, address them by
+name. 無為而無不為.
+
+---
+
+## F147 — the clipboard relay: copy here, paste *there* by name (R108)
+
+**Reframing toward fusion (各方面東西要高效的搭配).** F146 gave the floor a window's *name*;
+typed input now reaches the intended app. But the act a person performs across apps all day
+is richer: **copy something here, paste it into that other window**. It is the moment all
+four faculties must move as one — the eye (find the window), the hand (raise it), the
+clipboard (hold the content), the keyboard (the paste chord). And it is a place official
+screenshot+click is doubly blind: it has neither window identity *nor* clipboard addressing;
+it can only click a guessed pixel and hope the right app has focus.
+
+**Reproduced friction (live, this VM).** Two terminals `DAOREL-A`/`DAOREL-B`; the clipboard
+holds `DAOPAY-7c3f`; we *intend* to deliver it into A. With B holding focus and **no
+addressing**, the relay (`echo $WTAG <paste> > marker`) wrote **`B DAOPAY-7c3f`** — the
+payload crossed into the *wrong* window. After `focus_window("DAOREL-A")` it wrote
+**`A DAOPAY-7c3f`** — delivered, intact, into the intended window.
+
+**No new primitive — the composition was already there (無為).** This needed nothing new on
+the floor: `set_clipboard` + `focus_window` (F146) + `chord`. The honest contribution is to
+*prove and lock* the fusion, not to invent a leaf for it. 為學者日益，聞道者日損 — we add by
+subtracting frictions, and here the friction was already dissolved by F146; what remained was
+to confirm the whole gesture composes.
+
+**One real app-detail learned (worth recording).** A terminal does **not** paste on
+`Ctrl+V` — that is the wrong chord there (a literal / interrupt). X11 terminals paste on
+`Ctrl+Shift+V`; Windows consoles accept `Ctrl+V`. So the existing `paste_text` (which uses
+`Ctrl+V`, correct for web inputs) is *not* universal; R108 selects the terminal chord per
+platform. The lesson is small but exact: the paste **chord is app-class-specific**, even
+though the clipboard underneath is one.
+
+**Live A/B (same two terminals):**
+
+| step | marker | outcome |
+|---|:---:|---|
+| no addressing (B focused, A intended) | `B DAOPAY-7c3f` | payload crossed into the **wrong** app |
+| `focus_window("DAOREL-A")` then paste | `A DAOPAY-7c3f` | payload delivered into the **intended** app |
+
+R108 (`round_clip_relay`) bakes it in (3 checks): wrong-window without addressing, payload
+delivered to the intended window, and the strict A/B. Portable — X11 terminals use
+`Ctrl+Shift+V`, Windows consoles `Ctrl+V`; skips gracefully without a terminal.
+
+**Lesson (道法自然).** 三生萬物 — once the floor had moving (F144), keyboard-servoing (F145),
+and *naming* windows (F146), the cross-app clipboard relay was not a new thing to build but a
+*combination* that already existed in latent form. The system rises not only by adding
+faculties but by letting the ones it has **move together**. 無為而無不為.
+
+---
+
+## F148 — raising an occluded window so the *mouse* reaches it (R109)
+
+**The other half of addressing.** F146/F147 routed the **keyboard** by input-focus — and on
+X11 input-focus is independent of stacking, so even a *covered* window receives keystrokes
+once activated. The **mouse** is a different animal: a click lands on whichever window owns
+that pixel in the **Z-order**. When two windows overlap, clicking the shared pixel hits the
+*top* one. So to operate an occluded window *with the mouse* you must first **raise** it —
+exactly what screenshot+click cannot do (it can only click the visible top pixel; it has no
+way to bring a covered window forward).
+
+**Reproduced friction (live, this VM).** Two konsoles at overlapping geometry —
+`ZWIN-A` at `+120+120`, `ZWIN-B` at `+170+170` (B on top). Clicking the shared body pixel
+`(420,360)` and typing wrote **`CLICK-B`** — the click hit the occluding window. After
+`focus_window("ZWIN-A")` (which `activate_window` raises via `_NET_ACTIVE_WINDOW` +
+`XMapRaised`/`XRaiseWindow`), clicking the **same** pixel wrote **`CLICK-A`** — the mouse now
+reached the intended, formerly-covered window.
+
+**This is a distinct mechanism, not a re-dress of R107/R108.** Those proved *focus* routing
+(keyboard); this proves *stacking* (mouse). The same `activate_window` serves both, which is
+the honest economy: one act of raising-by-name satisfies the keyboard (focus) and the mouse
+(Z-order) at once. 大制無割 — the right cut leaves nothing to re-cut.
+
+**Live A/B (same two overlapping terminals, identical click point):**
+
+| step | marker | outcome |
+|---|:---:|---|
+| click shared pixel, B occluding A | `CLICK-B` | mouse hit the **top** window |
+| `focus_window("ZWIN-A")` then click | `CLICK-A` | mouse reached the **raised** window |
+
+R109 (`round_zorder`) bakes it in (3 checks): top-window-hit without raising, raised-window
+reached after `activate_window`, strict redirection. Linux/konsole only for now — forcing a
+deterministic window *overlap* on Windows needs a move primitive the floor has not grown yet
+(no friction reproduced there), so it skips gracefully on Windows. `_probe_relay.py` covers
+F147; F148's reproduction lives in the round itself.
+
+**Lesson (道法自然).** 見小曰明 — the small, easily-missed distinction (focus ≠ stacking) is
+exactly where the real defect hides. A system that only ever drove the keyboard would have
+*claimed* to "address windows" while silently failing every mouse click on a covered one. We
+only earn the claim by living the mouse case too. 無為而無不為.
+
+**Side-friction caught while validating F148: a transient CDP drop cascaded.** Two of four
+full-suite runs lost the Chrome debug websocket *mid-run* (once deep in the perception rounds,
+once right after a window round) — a transient socket close under heavy off-CDP activity, not
+a code defect (every affected round passes standalone). But the harness had no recovery: once
+`CDP._alive` went False, **every** later round threw `CDP not connected`, turning one hiccup
+into ~50 false failures. Fixed structurally, not by re-running until lucky: `Browser.reconnect()`
+re-attaches to the live page (the tab survives a socket drop; only the connection died) and the
+harness self-heals between rounds — the round the drop landed in still counts, but the suite
+stays honest after it. 弱也者道之用也 — the connection's weakness (it can drop) is answered not
+by force but by yielding-and-reattaching.
+
+## F149 — moving a window back into reach (R110)
+
+**The third pathway of addressing.** F146/F147 routed the **keyboard** by focus; F148 raised a
+covered window so the **mouse** reaches it by Z-order. But raising only reorders the *stack* —
+it does nothing for a window placed **off the visible screen**: there is then no on-screen
+pixel that belongs to it, so no click can land on it, raised or not. The only remedy is to
+**move it back into view**. Screenshot+click cannot reposition a window at all.
+
+**Reproduced friction (live, this VM).** A konsole `MVWIN` on-screen at `+200+200` is driven
+fine. `move_window(id, screen_w+100, 300)` pushes it fully off the right edge (`window_geometry`
+confirms `x=1700` on a 1600-wide screen). Now even `activate_window(id)` (raise) cannot help —
+clicking the body-centre it used to occupy hits empty desktop and the typed marker never
+arrives (`SENTINEL` unchanged). After `move_window(id, 200, 200)` the **same** click lands and
+writes `MV-M`.
+
+**Live A/B (one konsole, pushed off then moved back):**
+
+| step | marker | outcome |
+|---|:---:|---|
+| off-screen, then `activate_window` (raise) + click old spot | `SENTINEL` | unreachable — raising can't rescue it |
+| `move_window` back into view + click | `MV-M` | the click reaches it |
+
+Two new primitives on both backends: `window_geometry(id)` (X11 `XGetGeometry` +
+`XTranslateCoordinates`; Windows `GetWindowRect`) tells the floor *where a window actually is*;
+`move_window(id, x, y, w=0, h=0)` relocates it (X11 EWMH `_NET_MOVERESIZE_WINDOW` + core
+`XMoveResizeWindow` fallback; Windows `SetWindowPos`). Note KWin *clamps initial placement*
+on-screen but honours an explicit `_NET_MOVERESIZE_WINDOW` off-screen — which is exactly what
+makes the friction reproducible. The move-back needs a follow-up `activate_window` for the WM
+to re-grant focus to a window that had left the screen. R110 (`round_move`) bakes it in
+(4 checks); `_probe_move.py` is the standalone reproduction. Linux/konsole only for the round.
+
+**Lesson (道法自然).** 樸散則為器 — one act of *addressing a window* splinters, under honest
+pressure, into three distinct tools: focus (keyboard), stacking (mouse), and **position**.
+Each was invisible until the case that needs it was lived. A system that stopped at "raise"
+would silently fail every off-screen window. 大制無割 — the whole is served only by not
+papering over the seams between these three.
+
+## F150 — reaching a window on another virtual desktop (R111)
+
+**The fourth addressing axis: workspace.** Focus (R107), Z-order (R109), and position (R110)
+all silently assume the window shares the **current** workspace. A window on another virtual
+desktop has *no on-screen pixels whatsoever* — no click can reach it, no matter its focus,
+stacking, or coordinates. First the floor must even be able to **see** this: `list_windows`
+now reports each window's `"desktop"`, so a window whose desktop ≠ `current_desktop()` is
+known to be off-screen-by-workspace. Then two genuinely distinct remedies exist — and they are
+*not* the same gesture:
+
+- **GO THERE** — `set_desktop(n)` switches the shown workspace (what clicking a pager cell
+  does); `activate_window` likewise *follows* a window to its desktop. You leave where you were.
+- **BRING HERE** — `move_window_to_desktop(win, current_desktop())` pulls the window onto the
+  workspace you are already on, **without leaving it**. `activate_window`'s "follow" cannot
+  express this — sometimes you want the window to come to your work, not your work to scatter.
+
+**Live A/B (one konsole, sent to workspace 1 while we stay on 0):**
+
+| step | marker | outcome |
+|---|:---:|---|
+| `move_window_to_desktop(w,1)`, then click its coords from desktop 0 | `SENTINEL` | unreachable — no pixels on this workspace |
+| `set_desktop(1)` (go there) + click | `VD-D` | reachable |
+| back to 0, `move_window_to_desktop(w,0)` (bring here) + click | `VD-D` | reachable **without leaving desktop 0** |
+
+X11 via EWMH: read `_NET_CURRENT_DESKTOP` / `_NET_NUMBER_OF_DESKTOPS` / `_NET_WM_DESKTOP`
+(`num_desktops`/`current_desktop`/`window_desktop` + the new `desktop` field on `list_windows`);
+act via `_NET_CURRENT_DESKTOP` / `_NET_WM_DESKTOP` client messages (`set_desktop` /
+`move_window_to_desktop`). KWin honours a runtime `_NET_NUMBER_OF_DESKTOPS` bump, which makes
+the friction reproducible on this single-desktop VM (the round uses `wmctrl -n 2` as *setup*;
+the floor only reads/switches/moves, it does not create workspaces). A subtle correctness trap
+caught in review: `list_windows` and `window_desktop` hold the backend `_lock`, and
+`threading.Lock` is **not** reentrant — calling `current_desktop()` (which re-locks) from
+inside them would deadlock; both read `_NET_CURRENT_DESKTOP` inline instead. R111 (`round_desktop`,
+5 checks) bakes it in; `_probe_desktop.py` is the standalone reproduction. Linux-only — Windows
+virtual-desktop COM (`IVirtualDesktopManager`) has a GUID that shifts every OS build, so the
+floor offers graceful no-op fallbacks there rather than ship something unstable; the round
+skips on Windows.
+
+**Lesson (道法自然).** 知人者智，自知者明 — before the hand can act, the eye must *know* the
+window is elsewhere; perception (`list_windows` carrying `desktop`) had to grow before the act
+was even meaningful. And 反者道之動 — "bring it here" is the reverse of "go there"; the same
+need (operate that window) is met by moving either the self or the window, and a complete floor
+holds both directions rather than forcing one.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

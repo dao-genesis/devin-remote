@@ -601,6 +601,733 @@ def round_settle(b: Browser, offline: bool) -> None:
               b.wait_for("document.title==='HIT'", timeout=2), b.title())
 
 
+def round_reach(b: Browser, offline: bool) -> None:
+    print("R105: click a CONTINUOUSLY moving target by predictive foveated reach (F144) — osctl")
+    # R18 waits for motion to STOP. But a target need not stop — a menu/handle
+    # can be clicked mid-glide. The classic snapshot+click can't: a whole-screen
+    # find_color is hundreds of ms (millions of pixels in Python), so by the time
+    # the OS click lands the element has slid well past the snapshot. osctl.reach
+    # does it the way the eye does: acquire coarsely (low-acuity periphery), refine
+    # in a small fovea, estimate velocity from two foveal samples, and click where
+    # the target *will be* — cancelling the perceive→act latency.
+    scene = fixture("reach.html",
+                    "<!doctype html><title>reach</title>"
+                    "<style>html,body{margin:0;overflow:hidden}</style>"
+                    "<canvas id=c width=1200 height=600 style='display:block'></canvas>"
+                    "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                    "var S=70,y=260,lo=60,hi=1200-S-60,px=lo,dir=1,spd=600,"
+                    "last=performance.now(),cur=px;"
+                    "function draw(p){cur=p;x.fillStyle='#fff';x.fillRect(0,0,1200,600);"
+                    "x.fillStyle='#ff00ff';x.fillRect(p,y,S,S);}"
+                    "function tick(now){var dt=(now-last)/1000;last=now;px+=dir*spd*dt;"
+                    "if(px>hi){px=hi;dir=-1;}if(px<lo){px=lo;dir=1;}draw(px);"
+                    "requestAnimationFrame(tick);}draw(px);requestAnimationFrame(tick);"
+                    "window.__hits=0;window.__tot=0;"
+                    "c.addEventListener('click',function(e){"
+                    "var r=c.getBoundingClientRect(),cx=e.clientX-r.left,cy=e.clientY-r.top;"
+                    "window.__tot++;"
+                    "if(cx>=cur&&cx<=cur+S&&cy>=y&&cy<=y+S){window.__hits++;}});"
+                    "</script>")
+    mag = (255, 0, 255)
+    n = 6
+
+    b.navigate(scene)
+    time.sleep(0.4)
+    # Friction: snapshot+click on a moving target. Scan the whole screen, then
+    # click that (already stale) point. It lands behind the glide almost always.
+    for _ in range(n):
+        w, h, rgb = osctl.capture_rgb()
+        loc = osctl.find_color(mag, tol=40, rgb=rgb, size=(w, h))
+        if loc:
+            osctl.click(loc["x"], loc["y"])
+        time.sleep(0.12)
+    stale_hits = int(b.eval("window.__hits||0"))
+    check("snapshot+click mostly MISSES the moving target (stale)",
+          stale_hits <= 1, f"{stale_hits}/{n} hit")
+
+    b.navigate(scene)  # fresh counters
+    time.sleep(0.4)
+    # Primitive: predictive foveated reach clicks where it WILL be.
+    for _ in range(n):
+        osctl.reach(mag, tol=40, lead=0.03)
+        time.sleep(0.12)
+    reach_hits = int(b.eval("window.__hits||0"))
+    check("predictive reach HITS the moving target (foveal + velocity lead)",
+          reach_hits >= n - 1, f"{reach_hits}/{n} hit")
+    check("reach strictly beats snapshot+click on the same moving target",
+          reach_hits > stale_hits, f"reach={reach_hits} stale={stale_hits}")
+
+
+def round_steer(b: Browser, offline: bool) -> None:
+    print("R106: drive a KEYBOARD-moved momentum control to a goal by closed-loop servo (F145) — osctl")
+    # R105 clicks a moving target. But some things move only while a KEY is held
+    # and *coast* after release (a momentum scrubber / key-repeat slider / game
+    # character) — a click cannot place them at all, and open-loop (hold the key
+    # for a distance-estimated time) overshoots because acceleration + coast are
+    # unknown. osctl.steer does it the way the motor system does: a ballistic hold
+    # while *perceiving by pixels*, released predictively before arrival, then small
+    # corrective impulses until inside the goal band. Eyes + hand fused; perception
+    # is pixels, motion is the real keyboard.
+    scene = fixture(
+        "steer.html",
+        "<!doctype html><title>steer</title>"
+        "<style>html,body{margin:0;overflow:hidden;background:#fff}</style>"
+        "<canvas id=c width=1200 height=300 style='display:block'></canvas>"
+        "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+        "var W=1200,KN=44,y=130,px=80,vx=0,dir=0,ACC=2600,FR=4.0,MAXV=1400;"
+        "var TW=70,T=Math.round(520+Math.random()*560);"
+        "var last=performance.now();"
+        "function draw(){x.fillStyle='#fff';x.fillRect(0,0,W,300);"
+        "x.fillStyle='#00c000';x.fillRect(T,y-20,TW,KN+40);"
+        "x.fillStyle='#ff00ff';x.fillRect(px,y,KN,KN);}"
+        "function step(now){var dt=Math.min(0.05,(now-last)/1000);last=now;"
+        "vx+=dir*ACC*dt;"
+        "if(dir===0){var d=Math.exp(-FR*dt);vx*=d;if(Math.abs(vx)<2)vx=0;}"
+        "if(vx>MAXV)vx=MAXV;if(vx<-MAXV)vx=-MAXV;"
+        "px+=vx*dt;if(px<0){px=0;vx=0;}if(px>W-KN){px=W-KN;vx=0;}"
+        "draw();requestAnimationFrame(step);}"
+        "addEventListener('keydown',function(e){"
+        "if(e.key==='ArrowRight'){dir=1;e.preventDefault();}"
+        "else if(e.key==='ArrowLeft'){dir=-1;e.preventDefault();}});"
+        "addEventListener('keyup',function(e){"
+        "if(e.key==='ArrowRight'||e.key==='ArrowLeft'){dir=0;e.preventDefault();}});"
+        "draw();requestAnimationFrame(step);"
+        "window.__st=function(){return {px:px,vx:vx,t:T,tw:TW,kn:KN};};"
+        "</script>")
+    mag, green = (255, 0, 255), (0, 192, 0)
+    n = 4
+
+    def focus():
+        osctl.click(360, 300)
+        time.sleep(0.15)
+
+    def settle_page():
+        t = time.time()
+        while time.time() - t < 2.0:
+            s = b.eval("window.__st()")
+            if abs(s["vx"]) < 2:
+                return s
+            time.sleep(0.03)
+        return b.eval("window.__st()")
+
+    def in_band(s):
+        goal_left = s["t"] + s["tw"] / 2 - s["kn"] / 2
+        return abs(s["px"] - goal_left) <= s["tw"] / 2
+
+    # Friction: open-loop. One reading, hold the key for a distance-estimated
+    # duration, release, let it coast. Overshoots — the coast is unmodelled.
+    open_hits = 0
+    for _ in range(n):
+        b.navigate(scene)
+        time.sleep(0.3)
+        focus()
+        s = b.eval("window.__st()")
+        goal_left = s["t"] + s["tw"] / 2 - s["kn"] / 2
+        dist = goal_left - s["px"]
+        key = osctl.VK_RIGHT if dist > 0 else osctl.VK_LEFT
+        osctl.key_hold(key, duration=(2 * abs(dist) / 2600.0) ** 0.5)
+        if in_band(settle_page()):
+            open_hits += 1
+    check("open-loop keyboard hold mostly OVERSHOOTS the momentum control",
+          open_hits <= 1, f"{open_hits}/{n} in-band")
+
+    # Primitive: closed-loop servo, perceiving BOTH knob and goal band by pixels.
+    steer_hits = 0
+    for _ in range(n):
+        b.navigate(scene)
+        time.sleep(0.3)
+        focus()
+        w, h, rgb = osctl.capture_rgb()
+        band = osctl.find_color(green, tol=40, rgb=rgb, size=(w, h), step=4)
+        if band is not None:
+            half = (band["bbox"][2] - band["bbox"][0]) / 2
+            osctl.steer(mag, band["x"], axis="x",
+                        band=max(12, half * 0.6), coast=0.25)
+        if in_band(settle_page()):
+            steer_hits += 1
+    check("closed-loop steer LANDS the keyboard control inside the goal band",
+          steer_hits >= n - 1, f"{steer_hits}/{n} in-band")
+    check("steer strictly beats open-loop on the same momentum control",
+          steer_hits > open_hits, f"steer={steer_hits} open={open_hits}")
+
+
+def round_window(b: Browser, offline: bool) -> None:
+    print("R107: ADDRESS the right window among many — input must not land in the wrong app (F146) — osctl")
+    # Every keyboard/clipboard gesture acts on whatever window holds focus. In a
+    # single browser that is fine, but on a real desktop (the user's machine,
+    # many apps open) input silently lands in the WRONG window — and official
+    # screenshot+click has the same blind spot: it can click a visible pixel but
+    # cannot address a window by identity or raise an occluded one. We open two
+    # terminals, each exporting a distinct tag; the SAME typed command echoes the
+    # tag of whichever window received the keys. No addressing (wrong window
+    # focused) -> wrong tag; focus_window(name) first -> the intended tag.
+    import shutil
+    import subprocess
+    import tempfile
+
+    mark = os.path.join(tempfile.gettempdir(), "dao_win_round.txt")
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R107: no konsole on this Linux host)")
+        return
+
+    def launch(tag, title):
+        env = dict(os.environ)
+        if win:
+            env["WTAG"] = tag
+            return subprocess.Popen(
+                ["cmd", "/k", f"title {title}"], env=env,
+                creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "WTAG=" + tag, "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def run_cmd():
+        if win:
+            osctl.type_unicode("echo %WTAG%> " + mark)
+        else:
+            osctl.type_unicode("echo $WTAG > " + mark)
+        osctl.tap(osctl.VK_RETURN)  # a literal '\n' does NOT submit in a terminal
+        time.sleep(0.6)
+
+    def read_mark():
+        try:
+            with open(mark) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    procs = []
+    try:
+        procs.append(launch("A", "DAOWIN-A"))
+        time.sleep(2.2)
+        procs.append(launch("B", "DAOWIN-B"))
+        time.sleep(2.4)
+
+        wins = osctl.list_windows()
+        a = next((w for w in wins if "DAOWIN-A" in (w.get("title") or "")), None)
+        bb = next((w for w in wins if "DAOWIN-B" in (w.get("title") or "")), None)
+        check("list_windows enumerates both opened windows by title",
+              a is not None and bb is not None,
+              f"A={'y' if a else 'n'} B={'y' if bb else 'n'}")
+        if not a or not bb:
+            return
+
+        # Friction: B is focused; we INTEND to drive A. With no addressing the
+        # floor types into whatever holds focus -> the wrong window (B).
+        osctl.activate_window(bb["id"])
+        time.sleep(0.5)
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        run_cmd()
+        open_got = read_mark()
+        check("without addressing, keyboard input lands in the WRONG window",
+              open_got != "A", f"marker={open_got!r} (intended A)")
+
+        # Fix: address window A by name, then type -> lands in A.
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        hit = osctl.focus_window("DAOWIN-A")
+        run_cmd()
+        fixed_got = read_mark()
+        check("focus_window routes keyboard input to the INTENDED window",
+              fixed_got == "A" and hit is not None, f"marker={fixed_got!r}")
+        check("window addressing strictly fixes wrong-window input",
+              open_got != "A" and fixed_got == "A",
+              f"no-addr={open_got!r} addr={fixed_got!r}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if not win:
+            os.system("pkill -9 konsole 2>/dev/null")
+        # Re-activate the browser so later rounds are not left on a dead window.
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_clip_relay(b: Browser, offline: bool) -> None:
+    print("R108: RELAY the clipboard into the right app among many — copy here, paste THERE by name (F147) — osctl")
+    # F146 proved typed input reaches the addressed window. The fuller multi-app
+    # act is a *clipboard relay*: content copied in one place must be delivered
+    # into a SPECIFIC other window — by identity, not by clicking a guessed pixel.
+    # Official screenshot+click cannot do this (no window identity, no clipboard
+    # addressing). Here the floor fuses four faculties: set the clipboard, address
+    # the target window by name (focus_window), and paste with the platform's
+    # terminal-paste chord (Ctrl+Shift+V on X11 terminals, Ctrl+V on Windows). The
+    # pasted payload must land — intact — in the intended window, not whatever
+    # held focus. No new primitive: this is the composition, locked as a guard.
+    import shutil
+    import subprocess
+    import tempfile
+
+    mark = os.path.join(tempfile.gettempdir(), "dao_relay_round.txt")
+    payload = "DAOPAY-7c3f"
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R108: no konsole on this Linux host)")
+        return
+
+    def launch(tag, title):
+        env = dict(os.environ)
+        if win:
+            env["WTAG"] = tag
+            return subprocess.Popen(["cmd", "/k", f"title {title}"], env=env,
+                                    creationflags=0x00000010)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "WTAG=" + tag, "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def paste_chord():
+        # A terminal does not paste on Ctrl+V (that is a SIGINT-ish no-op / literal);
+        # X11 terminals use Ctrl+Shift+V. Windows consoles accept Ctrl+V.
+        if win:
+            osctl.chord(osctl.VK_CONTROL, osctl.VK_V)
+        else:
+            osctl.chord(osctl.VK_CONTROL, osctl.VK_SHIFT, osctl.VK_V)
+
+    def relay():
+        # echo <tag> <pasted-clipboard> > marker  — the tag reveals WHICH window
+        # received it; the pasted text reveals whether the clipboard crossed.
+        var = "%WTAG%" if win else "$WTAG"
+        osctl.type_unicode("echo " + var + " ")
+        time.sleep(0.1)
+        paste_chord()
+        time.sleep(0.2)
+        osctl.type_unicode(" > " + mark)
+        osctl.tap(osctl.VK_RETURN)
+        time.sleep(0.7)
+
+    procs = []
+    try:
+        procs.append(launch("A", "DAOREL-A"))
+        time.sleep(2.2)
+        procs.append(launch("B", "DAOREL-B"))
+        time.sleep(2.4)
+        wins = osctl.list_windows()
+        a = next((w for w in wins if "DAOREL-A" in (w.get("title") or "")), None)
+        bb = next((w for w in wins if "DAOREL-B" in (w.get("title") or "")), None)
+        if not a or not bb:
+            check("relay: enumerate both windows", False, "missing a window")
+            return
+
+        osctl.set_clipboard(payload)
+        time.sleep(0.15)
+
+        # No addressing: B holds focus; we INTEND A. The relay lands in B.
+        osctl.activate_window(bb["id"])
+        time.sleep(0.5)
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        relay()
+        open_got = ""
+        try:
+            with open(mark) as f:
+                open_got = f.read().strip()
+        except OSError:
+            pass
+        check("without addressing, the paste lands in the WRONG window",
+              not open_got.startswith("A"), f"marker={open_got!r} (intended A)")
+
+        # Addressed: focus A by name, relay -> payload crosses into A.
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        osctl.focus_window("DAOREL-A")
+        relay()
+        got = ""
+        try:
+            with open(mark) as f:
+                got = f.read().strip()
+        except OSError:
+            pass
+        check("focus_window delivers the clipboard payload into the INTENDED window",
+              got == "A " + payload, f"marker={got!r}")
+        check("clipboard relay crosses into the addressed window, not the focused one",
+              not open_got.startswith("A") and got == "A " + payload,
+              f"no-addr={open_got!r} addr={got!r}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if not win:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_zorder(b: Browser, offline: bool) -> None:
+    print("R109: RAISE an occluded window so a MOUSE click reaches it (F148) — osctl")
+    # R107/R108 routed the KEYBOARD by input-focus. The mouse is different: a
+    # click lands on whatever window owns that pixel in the Z-order. When two
+    # windows OVERLAP, clicking the shared pixel hits the top one — so to operate
+    # an occluded window with the mouse you must first RAISE it. Screenshot+click
+    # cannot do this at all: it can only click the visible (top) pixel and has no
+    # way to bring a covered window forward. activate_window raises Z-order; this
+    # proves a subsequent click at the very same pixel then reaches the intended
+    # window. (Linux/konsole only — forcing window overlap on Windows needs a
+    # move primitive we have not grown yet; skips gracefully there.)
+    import shutil
+    import subprocess
+
+    if sys.platform.startswith("win"):
+        print("  (skip R109: needs a window-move primitive on Windows)")
+        return
+    term = shutil.which("konsole")
+    if term is None:
+        print("  (skip R109: no konsole on this Linux host)")
+        return
+
+    mark = os.path.join(__import__("tempfile").gettempdir(), "dao_zorder_round.txt")
+    ox, oy = 420, 360  # a pixel inside BOTH window bodies (see geometry below)
+
+    def launch(tag, title, geom):
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "--geometry", geom,
+             "-e", "env", "WTAG=" + tag, "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def click_then_mark():
+        osctl.click(ox, oy)
+        time.sleep(0.4)
+        osctl.type_unicode("echo ZC-$WTAG > " + mark)
+        osctl.tap(osctl.VK_RETURN)
+        time.sleep(0.7)
+
+    def read():
+        try:
+            with open(mark) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    procs = []
+    try:
+        procs.append(launch("A", "ZWIN-A", "640x420+120+120"))
+        time.sleep(2.2)
+        procs.append(launch("B", "ZWIN-B", "640x420+170+170"))  # overlaps A, on top
+        time.sleep(2.6)
+        wins = osctl.list_windows()
+        a = next((w for w in wins if "ZWIN-A" in (w.get("title") or "")), None)
+        bb = next((w for w in wins if "ZWIN-B" in (w.get("title") or "")), None)
+        if not a or not bb:
+            check("zorder: enumerate both overlapping windows", False, "missing a window")
+            return
+
+        # Friction: B is on top at the shared pixel; clicking it hits B (wrong).
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        click_then_mark()
+        occluded = read()
+        check("clicking the shared pixel hits the TOP (occluding) window",
+              occluded == "ZC-B", f"marker={occluded!r}")
+
+        # Fix: raise A by name, then the SAME click reaches A.
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        osctl.focus_window("ZWIN-A")
+        click_then_mark()
+        raised = read()
+        check("after activate_window the same click reaches the RAISED window",
+              raised == "ZC-A", f"marker={raised!r}")
+        check("raising Z-order strictly redirects the mouse to the intended window",
+              occluded == "ZC-B" and raised == "ZC-A",
+              f"occluded={occluded!r} raised={raised!r}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_move(b: Browser, offline: bool) -> None:
+    print("R110: MOVE a window that was pushed OFF-screen back into reach (F149) — osctl")
+    # R109 proved *raising* reaches an occluded window. But raising only reorders
+    # the stack — it cannot help a window placed *off* the visible screen: there
+    # is then no on-screen pixel that belongs to it, so no click can land on it,
+    # raised or not. Only MOVING it back into view can. Screenshot+click cannot
+    # reposition a window at all. activate_window stacks; move_window relocates.
+    # (Linux/konsole only — Windows places windows too but driving konsole here.)
+    import shutil
+    import subprocess
+
+    if sys.platform.startswith("win"):
+        print("  (skip R110: driving konsole; Windows path covered by move_window itself)")
+        return
+    term = shutil.which("konsole")
+    if term is None:
+        print("  (skip R110: no konsole on this Linux host)")
+        return
+    if not hasattr(osctl, "move_window"):
+        check("osctl exposes move_window", False, "missing primitive")
+        return
+
+    sw, _sh = osctl.screen_size()
+    mark = os.path.join(__import__("tempfile").gettempdir(), "dao_move_round.txt")
+
+    def launch():
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=MVWIN", "--geometry",
+             "640x420+200+200", "-e", "env", "WTAG=M", "bash", "--norc", "-i"],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def click_mark(cx, cy):
+        osctl.click(cx, cy)
+        time.sleep(0.4)
+        osctl.type_unicode("echo MV-$WTAG > " + mark)
+        osctl.tap(osctl.VK_RETURN)
+        time.sleep(0.7)
+
+    def read():
+        try:
+            with open(mark) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    p = None
+    try:
+        p = launch()
+        time.sleep(2.6)
+        win = next((w for w in osctl.list_windows()
+                    if "MVWIN" in (w.get("title") or "")), None)
+        if not win:
+            check("move: enumerate the launched window", False, "missing window")
+            return
+        wid = win["id"]
+        g0 = osctl.window_geometry(wid)
+        if not g0:
+            check("move: read window geometry", False, "geometry unavailable")
+            return
+
+        # Push it fully off the right edge, then confirm it really left the screen.
+        with open(mark, "w") as f:
+            f.write("SENTINEL")
+        osctl.move_window(wid, sw + 100, 300)
+        time.sleep(1.2)
+        goff = osctl.window_geometry(wid) or {}
+        check("move_window pushes a window off the visible screen",
+              goff.get("x", 0) >= sw, f"x={goff.get('x')!r} screen_w={sw}")
+
+        # Friction: even RAISING it cannot rescue an off-screen window — clicking
+        # the spot it used to occupy now hits empty desktop, so input never reaches it.
+        osctl.activate_window(wid)
+        time.sleep(0.4)
+        cx, cy = g0["x"] + g0["w"] // 2, g0["y"] + g0["h"] // 2
+        click_mark(cx, cy)
+        off = read()
+        check("an off-screen window stays unreachable even when raised",
+              off == "SENTINEL", f"marker={off!r}")
+
+        # Fix: move it back into view, then the click reaches it.
+        with open(mark, "w") as f:
+            f.write("SENTINEL")
+        osctl.move_window(wid, 200, 200)
+        time.sleep(1.5)
+        osctl.activate_window(wid)
+        time.sleep(0.5)
+        g1 = osctl.window_geometry(wid) or g0
+        cx, cy = g1["x"] + g1["w"] // 2, g1["y"] + g1["h"] // 2
+        click_mark(cx, cy)
+        on = read()
+        check("move_window brings it back so the click reaches it", on == "MV-M",
+              f"marker={on!r}")
+        check("moving (not raising) is what rescues an off-screen window",
+              off == "SENTINEL" and on == "MV-M", f"off={off!r} on={on!r}")
+    finally:
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
+def round_desktop(b: Browser, offline: bool) -> None:
+    print("R111: reach a window living on ANOTHER virtual desktop (F150) — osctl")
+    # Focus (R107), Z-order (R109), position (R110) all assume the window shares
+    # the CURRENT workspace. A window on another virtual desktop has no on-screen
+    # pixels at all — no click reaches it. The floor must first SEE that (its
+    # desktop != current) and then either GO THERE (set_desktop) or BRING IT HERE
+    # (move_window_to_desktop -> current, without leaving). Screenshot+click is
+    # blind to every workspace but the current one. (Linux + multi-desktop WM.)
+    import shutil
+    import subprocess
+
+    if sys.platform.startswith("win"):
+        print("  (skip R111: Windows virtual-desktop API is build-unstable; X11 path proven)")
+        return
+    term = shutil.which("konsole")
+    if term is None:
+        print("  (skip R111: no konsole on this Linux host)")
+        return
+    if not hasattr(osctl, "move_window_to_desktop"):
+        check("osctl exposes virtual-desktop primitives", False, "missing")
+        return
+    if osctl.num_desktops() < 2 and shutil.which("wmctrl"):
+        subprocess.run(["wmctrl", "-n", "2"], check=False)
+        time.sleep(0.5)
+    if osctl.num_desktops() < 2:
+        print("  (skip R111: WM exposes no second virtual desktop)")
+        return
+
+    mark = os.path.join(__import__("tempfile").gettempdir(), "dao_desktop_round.txt")
+    home_desk = osctl.current_desktop()
+
+    def launch():
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=VDWIN", "--geometry",
+             "640x420+200+200", "-e", "env", "WTAG=D", "bash", "--norc", "-i"],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def click_mark(cx, cy):
+        osctl.click(cx, cy)
+        time.sleep(0.4)
+        osctl.type_unicode("echo VD-$WTAG > " + mark)
+        osctl.tap(osctl.VK_RETURN)
+        time.sleep(0.7)
+
+    def read():
+        try:
+            with open(mark) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    other = 1 if home_desk == 0 else 0
+    p = None
+    try:
+        osctl.set_desktop(home_desk)
+        time.sleep(0.4)
+        p = launch()
+        time.sleep(2.6)
+        win = next((w for w in osctl.list_windows()
+                    if "VDWIN" in (w.get("title") or "")), None)
+        if not win:
+            check("desktop: enumerate the launched window", False, "missing window")
+            return
+        wid = win["id"]
+        g = osctl.window_geometry(wid)
+        if not g:
+            check("desktop: read window geometry", False, "geometry unavailable")
+            return
+        cx, cy = g["x"] + g["w"] // 2, g["y"] + g["h"] // 2
+
+        # Send it to the other workspace while we stay put; the floor must SEE it move.
+        osctl.move_window_to_desktop(wid, other)
+        time.sleep(1.0)
+        seen = next((w.get("desktop") for w in osctl.list_windows()
+                     if w["id"] == wid), None)
+        check("list_windows perceives the window on its other workspace",
+              seen == other, f"reported desktop={seen!r} expected={other}")
+
+        # Friction: off-workspace window — its coords now hit the empty home desktop.
+        with open(mark, "w") as f:
+            f.write("SENTINEL")
+        click_mark(cx, cy)
+        off = read()
+        check("a window on another workspace is unreachable by any click",
+              off == "SENTINEL", f"marker={off!r}")
+
+        # Remedy GO-THERE: switch the shown workspace to it, then the click lands.
+        osctl.set_desktop(other)
+        time.sleep(0.8)
+        osctl.activate_window(wid)
+        time.sleep(0.5)
+        with open(mark, "w") as f:
+            f.write("SENTINEL")
+        click_mark(cx, cy)
+        there = read()
+        check("set_desktop (go there) makes the off-workspace window reachable",
+              there == "VD-D", f"marker={there!r}")
+
+        # Remedy BRING-HERE: go home, then pull the window onto the home workspace
+        # WITHOUT leaving it — something activate_window's "follow" cannot do.
+        osctl.set_desktop(home_desk)
+        time.sleep(0.8)
+        osctl.move_window_to_desktop(wid, home_desk)
+        time.sleep(1.0)
+        osctl.activate_window(wid)
+        time.sleep(0.5)
+        with open(mark, "w") as f:
+            f.write("SENTINEL")
+        click_mark(cx, cy)
+        here = read()
+        check("move_window_to_desktop (bring here) pulls it onto the current workspace",
+              here == "VD-D" and osctl.current_desktop() == home_desk,
+              f"marker={here!r} current={osctl.current_desktop()}")
+        check("a window's workspace is a third addressing axis beyond focus/stack/position",
+              off == "SENTINEL" and there == "VD-D" and here == "VD-D",
+              f"off={off!r} there={there!r} here={here!r}")
+    finally:
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        os.system("pkill -9 konsole 2>/dev/null")
+        try:
+            osctl.set_desktop(home_desk)
+        except Exception:
+            pass
+        time.sleep(0.3)
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_structure_match(b: Browser, offline: bool) -> None:
     print("R19: pick a colour-shifted target by structure, not appearance (F055) — osctl")
     # Two magenta tiles (segmentable), each holding a black glyph drawn in a
@@ -6325,7 +7052,9 @@ def main() -> int:
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
-              round_template_match, round_settle, round_structure_match,
+              round_template_match, round_settle, round_reach, round_steer,
+              round_window, round_clip_relay, round_zorder, round_move, round_desktop,
+              round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
               round_native_select, round_contenteditable, round_file_drop,
@@ -6364,6 +7093,16 @@ def main() -> int:
             r(b, offline)
         except Exception as e:
             check(r.__name__ + " (exception)", False, repr(e))
+        # Self-heal: a transient debug-socket drop must not cascade into dozens
+        # of false "CDP not connected" failures across every later round. If the
+        # connection died during a round, reconnect before the next one — the
+        # round it died in still counts, but the suite stays honest after it.
+        if not getattr(b.cdp, "_alive", True):
+            try:
+                b.reconnect()
+                print(f"  (recovered: CDP reconnected after {r.__name__})")
+            except Exception as e:
+                print(f"  (reconnect failed after {r.__name__}: {e!r})")
     b.close()
 
     passed = sum(1 for _, ok, _ in _results if ok)

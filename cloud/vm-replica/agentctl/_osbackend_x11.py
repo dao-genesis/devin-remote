@@ -66,6 +66,39 @@ _xt.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int
 _xt.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
 _xt.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
 
+# Window enumeration / activation (EWMH). format-32 properties come back as an
+# array of C `long` (8 bytes on 64-bit) — the classic libX11 gotcha — so we read
+# them as c_ulong, not c_uint32.
+_x.XInternAtom.restype = ctypes.c_ulong
+_x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+_x.XGetWindowProperty.restype = ctypes.c_int
+_x.XGetWindowProperty.argtypes = [
+    ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long, ctypes.c_long,
+    ctypes.c_int, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+    ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_ulong),
+    ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte))]
+_x.XSendEvent.restype = ctypes.c_int
+_x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                          ctypes.c_long, ctypes.c_void_p]
+_x.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+_x.XMapRaised.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+# Geometry read + move/resize. XGetGeometry gives size in the window's own
+# coords; XTranslateCoordinates maps its (0,0) to the root to get absolute x,y.
+_x.XGetGeometry.restype = ctypes.c_int
+_x.XGetGeometry.argtypes = [
+    ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+    ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint),
+    ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)]
+_x.XTranslateCoordinates.restype = ctypes.c_int
+_x.XTranslateCoordinates.argtypes = [
+    ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_ulong)]
+_x.XMoveResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                                 ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
+_x.XMoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
+
 
 class _XImage(ctypes.Structure):
     _fields_ = [
@@ -252,6 +285,237 @@ def type_unicode(text: str) -> None:
         zero = (ctypes.c_ulong * 2)(0, 0)
         _x.XChangeKeyboardMapping(_dpy, _scratch, 2, zero, 1)
         _x.XSync(_dpy, 0)
+
+
+# ---- windows (EWMH enumerate + activate) ---------------------------------- #
+def _atom(name: str) -> int:
+    return _x.XInternAtom(_dpy, name.encode(), 0)
+
+
+def _prop(win: int, prop_atom: int, req_type: int) -> bytes | None:
+    """Read a window property as raw bytes (or None). Handles the 64-bit format-32
+    quirk by always fetching as bytes via the returned format/nitems."""
+    actual_type = ctypes.c_ulong()
+    actual_fmt = ctypes.c_int()
+    nitems = ctypes.c_ulong()
+    bytes_after = ctypes.c_ulong()
+    data = ctypes.POINTER(ctypes.c_ubyte)()
+    r = _x.XGetWindowProperty(_dpy, win, prop_atom, 0, 1 << 20, 0, req_type,
+                              ctypes.byref(actual_type), ctypes.byref(actual_fmt),
+                              ctypes.byref(nitems), ctypes.byref(bytes_after),
+                              ctypes.byref(data))
+    if r != 0 or not data:
+        return None
+    fmt = actual_fmt.value
+    n = nitems.value
+    width = {8: 1, 16: 2, 32: ctypes.sizeof(ctypes.c_long)}.get(fmt, 0)
+    nbytes = n * width
+    out = bytes(bytearray(ctypes.cast(
+        data, ctypes.POINTER(ctypes.c_ubyte * nbytes)).contents)) if nbytes else b""
+    _x.XFree(data)
+    return out
+
+
+def _win_title(win: int) -> str:
+    for prop_atom, typ in ((_atom("_NET_WM_NAME"), _atom("UTF8_STRING")),
+                           (_atom("WM_NAME"), 31)):  # 31 = XA_STRING
+        raw = _prop(win, prop_atom, typ)
+        if raw:
+            return raw.split(b"\x00", 1)[0].decode("utf-8", "replace")
+    return ""
+
+
+def list_windows() -> list:
+    """Enumerate top-level windows the window manager manages (EWMH
+    ``_NET_CLIENT_LIST``), newest last. Each item is ``{"id", "title"}``.
+
+    This is the eye that *finds the right window* — the floor previously acted
+    only on whatever happened to hold focus, so on a busy desktop input could
+    land in the wrong place. Each item also carries ``"desktop"`` (the workspace
+    it lives on; -1 = sticky) so the floor can *see* a window is off the current
+    workspace — invisible and unclickable until switched to or pulled over.
+    Falls back to an empty list if the WM is not EWMH."""
+    with _lock:
+        raw = _prop(_root, _atom("_NET_CLIENT_LIST"), 33)  # 33 = XA_WINDOW
+        if not raw:
+            return []
+        wl = ctypes.c_long
+        n = len(raw) // ctypes.sizeof(wl)
+        ids = ctypes.cast(raw, ctypes.POINTER(wl * n)).contents
+        cur = _read_card(_root, "_NET_CURRENT_DESKTOP")  # read inline; _lock held
+        cur = cur if cur is not None else 0
+        out = []
+        for w in ids:
+            if not int(w):
+                continue
+            d = _read_card(int(w), "_NET_WM_DESKTOP")
+            out.append({"id": int(w) & 0xFFFFFFFF, "title": _win_title(int(w)),
+                        "desktop": (-1 if d == _ALL_DESKTOPS else d)
+                        if d is not None else cur})
+        return out
+
+
+def activate_window(win: int) -> bool:
+    """Raise and focus a window by id via an EWMH ``_NET_ACTIVE_WINDOW`` client
+    message to the root (the request a pager/taskbar makes), then map+raise it.
+    Returns True if the request was dispatched."""
+    with _lock:
+        class _CM(ctypes.Structure):  # XClientMessageEvent (data as 5 longs)
+            _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                        ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                        ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                        ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+        ev = _CM(type=33, send_event=1, display=_dpy, window=win,  # 33 = ClientMessage
+                 message_type=_atom("_NET_ACTIVE_WINDOW"), format=32)
+        ev.data[0] = 2          # source indication: pager
+        ev.data[1] = 0          # timestamp (CurrentTime)
+        SUBSTRUCTURE = (1 << 19) | (1 << 20)  # Redirect | Notify
+        ok = _x.XSendEvent(_dpy, _root, 0, SUBSTRUCTURE, ctypes.byref(ev))
+        _x.XMapRaised(_dpy, win)
+        _x.XRaiseWindow(_dpy, win)
+        _x.XFlush(_dpy)
+        _x.XSync(_dpy, 0)
+        return bool(ok)
+
+
+_ALL_DESKTOPS = 0xFFFFFFFF  # _NET_WM_DESKTOP sentinel: window shown on every desktop
+
+
+def _read_card(win: int, name: str) -> int | None:
+    raw = _prop(win, _atom(name), 6)  # 6 = XA_CARDINAL
+    if not raw:
+        return None
+    wl = ctypes.c_long
+    if len(raw) < ctypes.sizeof(wl):
+        return None
+    return int(ctypes.cast(raw, ctypes.POINTER(wl)).contents.value) & 0xFFFFFFFF
+
+
+def num_desktops() -> int:
+    """How many virtual desktops (workspaces) the WM advertises
+    (``_NET_NUMBER_OF_DESKTOPS``); 1 if the WM has none."""
+    with _lock:
+        n = _read_card(_root, "_NET_NUMBER_OF_DESKTOPS")
+        return n if n else 1
+
+
+def current_desktop() -> int:
+    """Index of the workspace currently shown (``_NET_CURRENT_DESKTOP``)."""
+    with _lock:
+        n = _read_card(_root, "_NET_CURRENT_DESKTOP")
+        return n if n is not None else 0
+
+
+def window_desktop(win: int) -> int:
+    """Which workspace a window lives on (``_NET_WM_DESKTOP``); -1 means it is
+    sticky (shown on all desktops). A window whose desktop differs from
+    :func:`current_desktop` has *no on-screen pixels* — no click can reach it
+    until the workspace is switched or the window is pulled over."""
+    with _lock:
+        n = _read_card(win, "_NET_WM_DESKTOP")
+        if n is None:
+            cur = _read_card(_root, "_NET_CURRENT_DESKTOP")  # inline; _lock held
+            return cur if cur is not None else 0
+        return -1 if n == _ALL_DESKTOPS else n
+
+
+def _root_card_msg(name: str, win: int, d0: int, d1: int = 0) -> bool:
+    class _CM(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                    ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                    ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                    ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+    ev = _CM(type=33, send_event=1, display=_dpy, window=win,
+             message_type=_atom(name), format=32)
+    ev.data[0] = d0
+    ev.data[1] = d1
+    SUBSTRUCTURE = (1 << 19) | (1 << 20)
+    ok = _x.XSendEvent(_dpy, _root, 0, SUBSTRUCTURE, ctypes.byref(ev))
+    _x.XFlush(_dpy)
+    _x.XSync(_dpy, 0)
+    return bool(ok)
+
+
+def set_desktop(n: int) -> bool:
+    """Switch the shown workspace to ``n`` (``_NET_CURRENT_DESKTOP``) — *go there*,
+    the way clicking a pager cell does."""
+    with _lock:
+        return _root_card_msg("_NET_CURRENT_DESKTOP", _root, int(n), 0)
+
+
+def move_window_to_desktop(win: int, n: int) -> bool:
+    """Send a window to workspace ``n`` (``_NET_WM_DESKTOP``). With ``n`` equal to
+    :func:`current_desktop` this *brings the window here* — onto the visible
+    workspace without leaving it, which ``activate_window`` (which instead
+    *follows* the window to its desktop) cannot express. ``n`` of -1 makes it
+    sticky (all desktops)."""
+    with _lock:
+        d0 = _ALL_DESKTOPS if int(n) < 0 else int(n)
+        return _root_card_msg("_NET_WM_DESKTOP", win, d0, 2)  # 2 = source: pager
+
+
+def window_geometry(win: int) -> dict | None:
+    """Absolute on-screen geometry of a window as ``{"x","y","w","h"}`` (the
+    outer position the WM placed it at), or None if the window is gone. Lets the
+    floor *know where a window actually is* — the prerequisite for deciding it is
+    off-screen and must be moved into view."""
+    with _lock:
+        root = ctypes.c_ulong()
+        gx, gy = ctypes.c_int(), ctypes.c_int()
+        gw, gh = ctypes.c_uint(), ctypes.c_uint()
+        bw, depth = ctypes.c_uint(), ctypes.c_uint()
+        if not _x.XGetGeometry(_dpy, win, ctypes.byref(root), ctypes.byref(gx),
+                               ctypes.byref(gy), ctypes.byref(gw), ctypes.byref(gh),
+                               ctypes.byref(bw), ctypes.byref(depth)):
+            return None
+        ax, ay = ctypes.c_int(), ctypes.c_int()
+        child = ctypes.c_ulong()
+        _x.XTranslateCoordinates(_dpy, win, _root, 0, 0, ctypes.byref(ax),
+                                 ctypes.byref(ay), ctypes.byref(child))
+        return {"x": int(ax.value), "y": int(ay.value),
+                "w": int(gw.value), "h": int(gh.value)}
+
+
+def move_window(win: int, x: int, y: int, w: int = 0, h: int = 0) -> bool:
+    """Move (and optionally resize) a window by id via an EWMH
+    ``_NET_MOVERESIZE_WINDOW`` client message to the root, so the WM honours it
+    the same way a user drag would. ``w``/``h`` of 0 leave that dimension alone.
+
+    This is what *raising* (activate_window) cannot do: a window placed off the
+    visible screen stays unreachable no matter how it is stacked — only moving it
+    back into view lets a click land on it. Official screenshot+click has no way
+    to reposition a window at all."""
+    with _lock:
+        flags = (1 << 8) | (1 << 9)          # x, y supplied
+        if w:
+            flags |= (1 << 10)
+        if h:
+            flags |= (1 << 11)
+        flags |= (2 << 12)                   # source indication: pager
+        flags |= 1                           # gravity: NorthWest (default)
+
+        class _CM(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                        ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                        ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                        ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+        ev = _CM(type=33, send_event=1, display=_dpy, window=win,  # 33 = ClientMessage
+                 message_type=_atom("_NET_MOVERESIZE_WINDOW"), format=32)
+        ev.data[0] = flags
+        ev.data[1] = int(x)
+        ev.data[2] = int(y)
+        ev.data[3] = int(w)
+        ev.data[4] = int(h)
+        SUBSTRUCTURE = (1 << 19) | (1 << 20)  # Redirect | Notify
+        ok = _x.XSendEvent(_dpy, _root, 0, SUBSTRUCTURE, ctypes.byref(ev))
+        # Fallback for non-EWMH WMs: also issue the core request directly.
+        if w and h:
+            _x.XMoveResizeWindow(_dpy, win, int(x), int(y), int(w), int(h))
+        else:
+            _x.XMoveWindow(_dpy, win, int(x), int(y))
+        _x.XFlush(_dpy)
+        _x.XSync(_dpy, 0)
+        return bool(ok)
 
 
 # ---- clipboard (selection owner on its own display connection) ------------ #
