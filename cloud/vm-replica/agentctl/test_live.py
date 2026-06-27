@@ -5383,6 +5383,49 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_wait_for_color_gone(b: Browser, offline: bool) -> None:
+    print("R104: OS-level wait_for_color_gone — wait until a colour leaves, past a static veil (F140) — osctl")
+    # A coloured blocker must GO AWAY before proceeding: a loading veil, an error
+    # banner that stays red, a modal backdrop. wait_until_stable is wrong — a
+    # STATIC veil is perfectly stable, so it reports "ready" while the veil still
+    # covers everything. wait_for_color_gone waits for the colour itself to thin.
+    html = fixture("wait_for_color_gone.html",
+                   "<!doctype html><meta charset=utf-8><title>x</title>"
+                   "<style>html,body{margin:0;height:100%;background:#1faa3c}"
+                   "</style><script>window.__clear=function(){setTimeout("
+                   "function(){"
+                   "document.documentElement.style.background='#ffffff';"
+                   "document.body.style.background='#ffffff';},1000);};"
+                   "</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    green = (31, 170, 60)
+    w, h, rgb = osctl.capture_rgb()
+    cx, cy = w // 2, int(h * 0.6)
+    bbox = (cx - 100, cy - 60, cx + 100, cy + 60)
+    start = osctl.find_color(green, tol=24, rgb=rgb, size=(w, h))
+    start_n = start["count"] if start else 0
+    check("the coloured veil is present before it clears",
+          start_n >= 400, f"green px at start={start_n}")
+    # One trigger; the two waiters run in sequence on the same event.
+    b.eval("window.__clear()")
+    st = osctl.wait_until_stable(bbox, settle=2, interval=0.05, timeout=3.0)
+    w2, h2, rgb2 = osctl.capture_rgb()
+    still = osctl.find_color(green, tol=24, rgb=rgb2, size=(w2, h2))
+    still_n = still["count"] if still else 0
+    check("wait_until_stable falsely reports ready while the veil still covers",
+          st["stable"] and still_n >= 400,
+          f"stable={st['stable']} elapsed={round(st['elapsed'],3)} green={still_n}")
+    # wait_for_color_gone keeps waiting until the green actually leaves.
+    res = osctl.wait_for_color_gone(green, tol=24, max_count=400, timeout=3.0)
+    check("wait_for_color_gone returns only once the colour has left",
+          res["gone"] and res["count"] <= 400, repr(res))
+    check("wait_for_color_gone was more patient than wait_until_stable",
+          res["elapsed"] > st["elapsed"],
+          f"gone_elapsed={round(res['elapsed'],3)} "
+          f"stable_elapsed={round(st['elapsed'],3)}")
+
+
 def round_wait_for_color(b: Browser, offline: bool) -> None:
     print("R103: OS-level wait_for_color — wait for a specific colour, past a spinner (F139) — osctl")
     # wait_for_change fires on ANY difference, so a click that starts a spinner
@@ -6314,7 +6357,8 @@ def main() -> int:
               round_wait_until_stable, round_wait_for_change,
               round_region_diff, round_locate_change,
               round_locate_change_blobs, round_sample_color,
-              round_cursor_pos, round_wait_for_color]
+              round_cursor_pos, round_wait_for_color,
+              round_wait_for_color_gone]
     for r in rounds:
         try:
             r(b, offline)
