@@ -5383,6 +5383,60 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_region_diff(b: Browser, offline: bool) -> None:
+    print("R98: OS-level region_diff — tolerant pixel comparison vs exact (F134) — osctl")
+    # The two visual waits judge sameness by exact byte-equality, which is
+    # brittle: a +2/channel shift (invisible noise) makes an exact compare report
+    # EVERY pixel as changed. region_diff with a tolerance looks past that noise
+    # yet still catches a real color change. The measured form of equality.
+    html = fixture("region_diff.html",
+                   "<!doctype html><meta charset=utf-8><title>x</title>"
+                   "<style>html,body{margin:0;height:100%;background:#fff}"
+                   "#box{position:absolute;left:60px;top:140px;width:200px;"
+                   "height:140px;background:#808080}</style><div id=box></div>"
+                   "<script>window.__set=function(c){"
+                   "document.getElementById('box').style.background=c;};"
+                   "</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    blobs = osctl.find_color_blobs((128, 128, 128), tol=20, rgb=rgb,
+                                   size=(w, h), min_count=2000)
+    check("located the gray box as a blob", len(blobs) >= 1,
+          f"blobs={len(blobs)}")
+    if not blobs:
+        return
+    x0, y0, x1, y1 = blobs[0]["bbox"]
+    bbox = (x0 + 8, y0 + 8, x1 - 8, y1 - 8)  # interior, past edge antialiasing
+    base, pw, ph = osctl.crop_rgb(rgb, (w, h), bbox)
+    # A re-capture of the unchanged box is clean: zero difference at tol 0.
+    _w, _h, r0 = osctl.capture_rgb()
+    same, _, _ = osctl.crop_rgb(r0, (_w, _h), bbox)
+    d_same = osctl.region_diff(base, same, tol=0)
+    check("an unchanged re-capture has zero exact difference",
+          d_same["pixels"] == 0, repr(d_same))
+    # Friction: a +2/channel shift is invisible noise, but exact compare flags
+    # essentially the whole box; a tolerant compare ignores it.
+    b.eval("window.__set('#828282')")
+    time.sleep(0.3)
+    _w, _h, r1 = osctl.capture_rgb()
+    noise, _, _ = osctl.crop_rgb(r1, (_w, _h), bbox)
+    d_noise_exact = osctl.region_diff(base, noise, tol=0)
+    d_noise_tol = osctl.region_diff(base, noise, tol=8)
+    check("exact compare over-fires on a +2 noise shift (most pixels 'changed')",
+          d_noise_exact["frac"] > 0.5, repr(d_noise_exact))
+    check("tolerant compare ignores the noise shift (no pixels exceed tol)",
+          d_noise_tol["pixels"] == 0, repr(d_noise_tol))
+    # Signal: a real color change is caught even under the same tolerance.
+    b.eval("window.__set('#22cc44')")
+    time.sleep(0.3)
+    _w, _h, r2 = osctl.capture_rgb()
+    sig, _, _ = osctl.crop_rgb(r2, (_w, _h), bbox)
+    d_sig_tol = osctl.region_diff(base, sig, tol=8)
+    check("tolerant compare still catches a real color change",
+          d_sig_tol["frac"] > 0.5, repr(d_sig_tol))
+
+
 def round_wait_for_change(b: Browser, offline: bool) -> None:
     print("R97: OS-level wait_for_change — wait for a region to first differ (F133) — osctl")
     # A gray box turns green 600ms after the trigger (delayed onset). Reading the
@@ -6012,7 +6066,8 @@ def main() -> int:
               round_middle_click, round_mod_click, round_triple_click,
               round_press_hold, round_key_hold, round_mod_scroll,
               round_mod_drag, round_glide, round_mod_taps,
-              round_wait_until_stable, round_wait_for_change]
+              round_wait_until_stable, round_wait_for_change,
+              round_region_diff]
     for r in rounds:
         try:
             r(b, offline)

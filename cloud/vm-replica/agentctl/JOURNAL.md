@@ -3278,6 +3278,44 @@ into a frame that has already moved on.
 
 ---
 
+## F134 — `region_diff`: the measured form of equality (R98)
+
+**Friction.** `wait_until_stable` and `wait_for_change` (F132/F133) both judge
+sameness by exact byte-equality — and that is brittle. A real desktop jitters at
+the bottom bit: subpixel text rendering, a one-level antialiasing wobble, a
+gradient's dithering. A shift of ``+2`` per channel is invisible to the eye yet
+makes an exact compare report *every* pixel as changed, so "did it change?" fires
+on noise and "has it settled?" never settles. The two waits assumed an equality
+they had no tolerant way to measure.
+
+**Mechanism.** Compare two equal-size RGB patches pixel-by-pixel and count those
+whose per-channel difference exceeds ``tol``, returning ``{pixels, total,
+frac}``. ``tol=0`` *is* the exact compare; raising ``tol`` looks past
+sensor/render noise and sees only real change. A pure function over two patches —
+no capture, no timing — so it is deterministic and composes under the waits.
+
+**Primitive.** `region_diff(a, b, tol=0)`.
+
+**Live (R98):** a ``#808080`` box. An unchanged re-capture has zero exact
+difference (the capture itself is clean). Then ``#808080 → #828282`` — a +2/channel
+shift, invisible noise: exact compare flags >50% of the box (it over-fires,
+``frac>0.5`` at ``tol=0``) while ``tol=8`` flags *zero* pixels. A real change
+``→ #22cc44`` is still caught under the same ``tol=8`` (``frac>0.5``). `707/707
+checks passed`, deterministic ×3.
+
+**Honest note.** The measured truth here is stark: a humanly-invisible +2 shift
+makes exact equality declare the *entire* region changed. That is the precise
+reason F132/F133's exact compares are honest only in a noise-free fixture;
+`region_diff(tol>0)` is the form they would take against a real, dithering
+desktop. Kept standalone (not retrofitted into the merged waits) to avoid
+changing their tested behaviour — but it is the foundation they now stand on.
+
+**Lesson (道法自然):** 明道若昧 — the clear way looks dim. Exact sight that
+counts every flicker as change sees less truly than a softened gaze that takes in
+only what matters; precision past the point of meaning is its own blindness.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
