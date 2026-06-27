@@ -777,7 +777,7 @@
   //   GitHub Pages 直发, 子页与本页同源同目录、同鲜、零额外账号标识。其后为 raw.githubusercontent / jsDelivr
   //   (实际可达的 main 源)。IPFS 内容寻址网关为「可选镜像」: 仅当该 CID 被实际 pin 才可达(否则公共网关 504·每次
   //   ~28s 超时), 故列于最末作账号中立增益, 不拖慢常态。
-  var _CONSOLE_IPFS_CID = "bafybeifwt5i5dhytdpkwirclhnnyijp42imfxmir4nfbzhtbbsyi7i6mae";
+  var _CONSOLE_IPFS_CID = "bafybeidqzektpm63jsqk5bwbrdqnw32rmjof42xxcyljezdax3sua5kscq";
   var CDN_BASES = [];
   CDN_BASES.push(
     "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/",
@@ -1725,7 +1725,7 @@
   //   非 Worker)经 http(s) 载入则自指本源; 否则(APK file:// / 临时隧道 / 局域网 / Worker)回退默认持久宿主。
   //   默认持久宿主 = 无状态静态多租户 Pages console.html (CDN 无限并发·零识别·零用户数据·能服务所有用户·人人可达);
   //   想自托管者经 conn.webConsoleBase 一处覆写即长期生效(各自最小化)。IPFS 网关仅作已 pin 时的账号中立可选镜像。
-  var P2P_CLIENT_IPFS_CID="bafybeifwt5i5dhytdpkwirclhnnyijp42imfxmir4nfbzhtbbsyi7i6mae";
+  var P2P_CLIENT_IPFS_CID="bafybeidqzektpm63jsqk5bwbrdqnw32rmjof42xxcyljezdax3sua5kscq";
   // 默认回退首字节宿主 = 独立中立账号 Pages (彻底脱离项目方个人账号); 项目方 Pages 作等价独立账号冗余镜像。
   //   两个 github.io 互为账号冗余, 皆经 Fastly CDN 国内可达; 本页若自持久静态宿主直发则自指本源(下方自指逻辑)。
   var P2P_CLIENT_HDOUGLE="https://hdougle.github.io/dao-console/console.html";

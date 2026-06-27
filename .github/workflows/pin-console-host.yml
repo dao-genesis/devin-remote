@@ -1,0 +1,71 @@
+name: Pin Console Host to IPFS
+
+# 本源去中心化首字节宿主: 每次发版(或手动)把无状态静态壳 engine 目录 pin 到 Pinata,
+# 取确定性 CIDv1 内容寻址 → 任意公共 IPFS 网关(dweb.link/ipfs.io/w3s.link)可达,
+# 账号中立·不依赖任何 GitHub 账号。CID 由内容决定: 内容不变则 CID 不变(幂等重 pin·恒鲜);
+# 内容若变则新 CID 自动写回 tunnel.html/console.html 常量并提交回 main。
+on:
+  push:
+    tags:
+      - 'rtflow-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pin-console-host
+  cancel-in-progress: false
+
+jobs:
+  pin-console:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Pin engine directory to Pinata (deterministic CIDv1)
+        id: pin
+        env:
+          PINATA_JWT: ${{ secrets.PINATA_JWT }}
+        run: |
+          if [ -z "$PINATA_JWT" ]; then echo "PINATA_JWT 未配置, 跳过(不阻断发版)"; echo "cid=" >> "$GITHUB_OUTPUT"; exit 0; fi
+          python3 .github/scripts/pin_pinata.py | tee /tmp/pin.out
+          CID=$(grep -oE 'bafybei[a-z0-9]+' /tmp/pin.out | head -1)
+          echo "cid=$CID" >> "$GITHUB_OUTPUT"
+
+      - name: Verify public gateways resolve the CID
+        if: steps.pin.outputs.cid != ''
+        run: |
+          CID=${{ steps.pin.outputs.cid }}
+          ok=0
+          for g in "https://ipfs.io/ipfs/$CID/console.html" "https://$CID.ipfs.dweb.link/console.html" "https://$CID.ipfs.w3s.link/console.html"; do
+            code=$(curl -s -m 60 -o /dev/null -w '%{http_code}' -L "$g" || echo 000)
+            echo "$g -> $code"; [ "$code" = "200" ] && ok=$((ok+1))
+          done
+          echo "gateways_ok=$ok / 3"
+          [ "$ok" -ge 1 ] || { echo "::warning::公共网关暂未解析(可能 DHT 传播中), 不阻断发版"; }
+
+      - name: Write CID into constants if changed, commit back to main
+        if: steps.pin.outputs.cid != ''
+        run: |
+          CID=${{ steps.pin.outputs.cid }}
+          ENG=addons/rt-flow-app/app/src/main/assets/engine
+          changed=0
+          if ! grep -q "$CID" "$ENG/tunnel.html"; then
+            sed -i -E "s/(var P2P_WEB_IPFS_CID = \")bafybei[a-z0-9]+(\";)/\1$CID\2/" "$ENG/tunnel.html"; changed=1
+          fi
+          if ! grep -q "$CID" "$ENG/console.html"; then
+            sed -i -E "s/(var P2P_CLIENT_IPFS_CID=\")bafybei[a-z0-9]+(\";)/\1$CID\2/" "$ENG/console.html"; changed=1
+          fi
+          if [ "$changed" = "1" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add "$ENG/tunnel.html" "$ENG/console.html"
+            git commit -m "chore(ipfs): 自动同步首字节宿主 IPFS CID 到 $CID [skip ci]"
+            git push origin HEAD:main || echo "::warning::push 回 main 失败(分支保护?), CID 已 pin·常量未自动回写"
+          else
+            echo "常量已是最新 CID $CID, 无需提交。"
+          fi

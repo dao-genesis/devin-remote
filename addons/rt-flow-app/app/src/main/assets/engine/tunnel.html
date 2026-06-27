@@ -281,7 +281,7 @@ function _relay(){ return _pj(N.relayStatus?N.relayStatus():""); }
 //   公共网关 504; 故不作默认, 仅在 _durableMirrors 末段列出 —— 一旦有人 pin 即自动账号中立可用。
 //   surge.sh(原无账号标识)已被永久下架(HTTP 451)故弃; jsDelivr 把 .html 当 text/plain 故不用;
 //   Cloudflare *.workers.dev / *.pages.dev 国内被 SNI 屏蔽故不作首字节宿主 (见 channel-select 契约: 开页入口零 Worker 域)。
-var P2P_WEB_IPFS_CID = "bafybeifwt5i5dhytdpkwirclhnnyijp42imfxmir4nfbzhtbbsyi7i6mae";
+var P2P_WEB_IPFS_CID = "bafybeidqzektpm63jsqk5bwbrdqnw32rmjof42xxcyljezdax3sua5kscq";
 // 默认首字节宿主 = 独立中立账号的无状态静态多租户 Pages console.html (CDN 无限并发·零识别·零用户数据·能服务所有用户)。
 var P2P_WEB_HDOUGLE = "https://hdougle.github.io/dao-console/console.html";
 // 项目方 Pages 作等价独立账号冗余镜像 (自随 main 自动更新·恒鲜)。
