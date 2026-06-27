@@ -755,6 +755,43 @@ def wait_until_stable(bbox: tuple[int, int, int, int], settle: int = 3,
             "captures": captures, "elapsed": time.time() - start}
 
 
+def wait_for_change(bbox: tuple[int, int, int, int],
+                    baseline: bytes | None = None,
+                    interval: float = 0.05, timeout: float = 5.0
+                    ) -> dict:
+    """Wait until a screen region *first differs* from a baseline (F133).
+
+    ``wait_until_stable`` waits for motion to *end*; ``wait_for_phrase`` waits for
+    a *known word*. But the most common post-action wait is neither: after a
+    click you often need to know merely that *something happened* — a button lit
+    up, a badge appeared, a spinner began, a row got selected — without knowing
+    the eventual text or colour, and before any of it has settled. Reading
+    immediately races the change and sees the old frame, so the agent concludes
+    nothing happened and acts twice. This captures (or accepts) a ``baseline``
+    snapshot of the region, then re-captures every ``interval`` until a capture
+    differs from it. Returns ``{changed, captures, elapsed}`` — ``changed`` is
+    whether the onset arrived before ``timeout``. The idiom is
+    ``baseline = crop; act(); wait_for_change(bbox, baseline)`` then optionally
+    ``wait_until_stable``: catch the change beginning, then its coming to rest.
+    The onset twin of ``wait_until_stable``'s cessation."""
+    start = time.time()
+    if baseline is None:
+        w, h, rgb = capture_rgb()
+        baseline, _pw, _ph = crop_rgb(rgb, (w, h), bbox)
+    deadline = start + timeout
+    captures = 0
+    while time.time() < deadline:
+        w, h, rgb = capture_rgb()
+        patch, _pw, _ph = crop_rgb(rgb, (w, h), bbox)
+        captures += 1
+        if patch != baseline:
+            return {"changed": True, "captures": captures,
+                    "elapsed": time.time() - start}
+        time.sleep(interval)
+    return {"changed": False, "captures": captures,
+            "elapsed": time.time() - start}
+
+
 def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
                    size: tuple[int, int] | None = None,
                    search: tuple[int, int, int, int] | None = None,

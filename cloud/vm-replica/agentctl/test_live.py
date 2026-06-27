@@ -5383,6 +5383,57 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_wait_for_change(b: Browser, offline: bool) -> None:
+    print("R97: OS-level wait_for_change — wait for a region to first differ (F133) — osctl")
+    # A gray box turns green 600ms after the trigger (delayed onset). Reading the
+    # region immediately still sees the gray baseline, so an eager agent concludes
+    # nothing happened; wait_for_change keeps sampling until the box first differs
+    # from the captured baseline and reports the onset. The onset twin of
+    # wait_until_stable.
+    html = fixture("wait_change.html",
+                   "<!doctype html><meta charset=utf-8><title>x</title>"
+                   "<style>html,body{margin:0;height:100%;background:#fff}"
+                   "#box{position:absolute;left:60px;top:140px;width:160px;"
+                   "height:120px;background:#888}</style><div id=box></div>"
+                   "<script>window.__go=function(){setTimeout(function(){"
+                   "document.getElementById('box').style.background='#22cc44';"
+                   "document.title='ON';},600);};</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    box = osctl.find_color((136, 136, 136), tol=30, rgb=rgb, size=(w, h))
+    check("located the gray box by pixels",
+          box is not None and box["count"] > 5000,
+          str(box and {k: box[k] for k in ("x", "y", "count")}))
+    if box is None:
+        return
+    bbox = box["bbox"]
+    base, _, _ = osctl.crop_rgb(rgb, (w, h), bbox)
+    # Fire the delayed change, then prove the friction: an immediate read still
+    # equals the baseline and the title has not flipped yet.
+    b.eval("window.__go()")
+    _w, _h, r2 = osctl.capture_rgb()
+    p2, _, _ = osctl.crop_rgb(r2, (_w, _h), bbox)
+    check("an immediate read still matches the baseline (change not yet here)",
+          p2 == base, f"equal={p2 == base}")
+    check("the onset has not flipped the title yet", b.title() != "ON",
+          b.title())
+    # Primitive: wait until the region first differs from the baseline.
+    res = osctl.wait_for_change(bbox, baseline=base, interval=0.05, timeout=5.0)
+    check("wait_for_change reports the onset arrived", res["changed"] is True,
+          repr(res))
+    check("it actually waited for the delayed onset (elapsed>=0.3s)",
+          res["elapsed"] >= 0.3, repr(res["elapsed"]))
+    check("it sampled more than once before the change (captures>=2)",
+          res["captures"] >= 2, repr(res["captures"]))
+    # After the onset, the region truly differs from the baseline and ON is set.
+    _w, _h, r3 = osctl.capture_rgb()
+    p3, _, _ = osctl.crop_rgb(r3, (_w, _h), bbox)
+    check("the region now differs from the baseline", p3 != base,
+          f"equal={p3 == base}")
+    check("the change committed (title ON)", b.title() == "ON", b.title())
+
+
 def round_wait_until_stable(b: Browser, offline: bool) -> None:
     print("R96: OS-level wait_until_stable — wait for a region to stop moving (F132) — osctl")
     # A red block slides across a band for ~1.2s then rests. Sampling the band
@@ -5961,7 +6012,7 @@ def main() -> int:
               round_middle_click, round_mod_click, round_triple_click,
               round_press_hold, round_key_hold, round_mod_scroll,
               round_mod_drag, round_glide, round_mod_taps,
-              round_wait_until_stable]
+              round_wait_until_stable, round_wait_for_change]
     for r in rounds:
         try:
             r(b, offline)
