@@ -5383,6 +5383,77 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_mod_drag(b: Browser, offline: bool) -> None:
+    print("R93: OS-level mod_drag — a modifier held across the whole stroke (F129) — osctl")
+    # A canvas drag where Shift constrains the handle to its starting Y (a
+    # straight horizontal move). The dropzone sits horizontally from the handle,
+    # but the endpoint passed to the drag overshoots upward in Y: a plain drag
+    # follows the diagonal and misses; a Shift-drag locks Y and lands in it.
+    # Drag twin of mod_click/mod_scroll.
+    html = fixture("mod_drag.html",
+                   "<!doctype html><meta charset=utf-8><title>drag</title>"
+                   "<style>html,body{margin:0}</style>"
+                   "<canvas id=c width=700 height=460 style='display:block'></canvas>"
+                   "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                   "var HX=80,HY=180,HW=90,HH=90,DX=520,DY=170,DW=140,DH=120;"
+                   "function paint(hx,hy,ok){x.fillStyle='#ffffff';"
+                   "x.fillRect(0,0,700,460);x.fillStyle=ok?'#00cc00':'#00cccc';"
+                   "x.fillRect(DX,DY,DW,DH);x.fillStyle='#ff00ff';"
+                   "x.fillRect(hx,hy,HW,HH);}var hx=HX,hy=HY,drag=null;"
+                   "paint(hx,hy,false);window.__moves=0;window.__shift=0;"
+                   "c.addEventListener('mousedown',function(e){if(e.button!==0)"
+                   "return;var r=c.getBoundingClientRect();var px=e.clientX-r.left,"
+                   "py=e.clientY-r.top;if(px>=hx&&px<=hx+HW&&py>=hy&&py<=hy+HH){"
+                   "drag={dx:px-hx,dy:py-hy,sy:hy};window.__moves=0;"
+                   "window.__shift=0;}});c.addEventListener('mousemove',"
+                   "function(e){if(!drag)return;var r=c.getBoundingClientRect();"
+                   "hx=e.clientX-r.left-drag.dx;var ny=e.clientY-r.top-drag.dy;"
+                   "hy=e.shiftKey?drag.sy:ny;window.__moves++;if(e.shiftKey)"
+                   "window.__shift++;paint(hx,hy,false);});"
+                   "c.addEventListener('mouseup',function(e){if(!drag)return;"
+                   "drag=null;var cx=hx+HW/2,cy=hy+HH/2;var ok=(cx>=DX&&cx<=DX+DW"
+                   "&&cy>=DY&&cy<=DY+DH);paint(hx,hy,ok);"
+                   "document.title=ok?'DROP-OK':'DROP-MISS';});</script>")
+
+    def setup() -> tuple[int, int, int, int] | None:
+        b.navigate(html)
+        time.sleep(0.5)
+        w, h, rgb = osctl.capture_rgb()
+        handle = osctl.find_color((255, 0, 255), tol=40, rgb=rgb, size=(w, h))
+        if handle is None or handle["count"] < 3000:
+            return None
+        # Endpoint overshoots upward in Y so only a Y-locked (Shift) stroke lands.
+        return handle["x"], handle["y"], handle["x"] + 465, handle["y"] - 120
+
+    pts = setup()
+    check("located the magenta handle by pixels", pts is not None, repr(pts))
+    if pts is None:
+        return
+    x0, y0, tx, ty = pts
+    # Friction: a plain drag follows the diagonal endpoint and misses the zone,
+    # and no move carried the modifier.
+    osctl.drag(x0, y0, tx, ty, steps=28)
+    time.sleep(0.3)
+    check("a plain drag to the diagonal endpoint misses (DROP-MISS)",
+          b.title() == "DROP-MISS", b.title())
+    check("a plain drag carried no modifier (shift count 0)",
+          b.eval("window.__shift") == 0, repr(b.eval("window.__shift")))
+    # Primitive: Shift held across the stroke locks Y, so the same endpoint lands.
+    pts = setup()
+    check("handle re-located for the modifier stroke", pts is not None, repr(pts))
+    if pts is None:
+        return
+    x0, y0, tx, ty = pts
+    osctl.mod_drag(x0, y0, tx, ty, osctl.VK_SHIFT, steps=28)
+    check("mod_drag with Shift constrains Y and lands in the zone (DROP-OK)",
+          b.wait_for("document.title==='DROP-OK'", timeout=3), b.title())
+    moves = b.eval("window.__moves")
+    shift = b.eval("window.__shift")
+    check("the stroke was continuous (moves>1)", moves > 1, repr(moves))
+    check("Shift was held on every move of the stroke (not merely tapped)",
+          shift == moves and moves > 1, f"shift={shift} moves={moves}")
+
+
 def round_mod_scroll(b: Browser, offline: bool) -> None:
     print("R92: OS-level mod_scroll — a modifier held through the wheel (F128) — osctl")
     # A page treats Ctrl+wheel as zoom (adjusts __zoom, preventDefault) and a
@@ -5711,7 +5782,8 @@ def main() -> int:
               round_locate_phrase, round_wait_for_phrase, round_scroll,
               round_scroll_to_phrase, round_drag_stroke, round_double_click,
               round_middle_click, round_mod_click, round_triple_click,
-              round_press_hold, round_key_hold, round_mod_scroll]
+              round_press_hold, round_key_hold, round_mod_scroll,
+              round_mod_drag]
     for r in rounds:
         try:
             r(b, offline)
