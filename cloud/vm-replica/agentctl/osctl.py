@@ -998,6 +998,37 @@ def wait_for_change(bbox: tuple[int, int, int, int],
             "elapsed": time.time() - start}
 
 
+def wait_for_color(target: tuple[int, int, int], tol: int = 24,
+                   min_count: int = 30, interval: float = 0.05,
+                   timeout: float = 5.0) -> dict | None:
+    """Wait until a *specific* colour appears on screen (F139).
+
+    ``wait_for_change`` waits for *any* difference, and that is exactly its
+    weakness as a done-signal: a click usually starts a spinner, a skeleton
+    shimmer, a progress bar — motion that is *not* the outcome — so the first
+    change fires on the busy state and the agent proceeds as if finished. The
+    real signal is often a particular colour arriving: a status dot going green,
+    an error turning a field red, a toggle filling in. You cannot wait for that
+    with ``wait_for_change`` (the spinner trips it first) nor with a bare
+    ``find_color`` (it races the change and sees the old frame). This polls
+    :func:`find_color` every ``interval`` until at least ``min_count`` pixels
+    within ``tol`` of ``target`` exist, then returns its ``{x, y, count, bbox}``
+    — already a click target — plus ``elapsed``; ``None`` if it never arrives by
+    ``timeout``. It is to ``find_color`` what ``wait_for_phrase`` is to the text
+    readers: the same locate, made patient. Waits for the *meaning*, not the
+    motion."""
+    start = time.time()
+    deadline = start + timeout
+    while time.time() < deadline:
+        w, h, rgb = capture_rgb()
+        r = find_color(target, tol=tol, rgb=rgb, size=(w, h))
+        if r is not None and r["count"] >= min_count:
+            r["elapsed"] = time.time() - start
+            return r
+        time.sleep(interval)
+    return None
+
+
 def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
                    size: tuple[int, int] | None = None,
                    search: tuple[int, int, int, int] | None = None,

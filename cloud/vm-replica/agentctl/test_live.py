@@ -5383,6 +5383,58 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_wait_for_color(b: Browser, offline: bool) -> None:
+    print("R103: OS-level wait_for_color — wait for a specific colour, past a spinner (F139) — osctl")
+    # wait_for_change fires on ANY difference, so a click that starts a spinner
+    # trips it before the real outcome. The true done-signal is often a colour
+    # arriving (a status dot going green). wait_for_color polls find_color until
+    # that colour is really present, then returns it as a click target.
+    html = fixture("wait_for_color.html",
+                   "<!doctype html><meta charset=utf-8><title>x</title>"
+                   "<style>html,body{margin:0;height:100%;background:#ffffff}"
+                   "</style><script>window.__go=function(){"
+                   "document.documentElement.style.background='#888888';"
+                   "document.body.style.background='#888888';"
+                   "setTimeout(function(){"
+                   "document.documentElement.style.background='#1faa3c';"
+                   "document.body.style.background='#1faa3c';},1000);};"
+                   "</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    green = (31, 170, 60)
+    w, h, rgb = osctl.capture_rgb()
+    cx, cy = w // 2, int(h * 0.6)
+    bbox = (cx - 100, cy - 60, cx + 100, cy + 60)
+    base, _, _ = osctl.crop_rgb(rgb, (w, h), bbox)
+    pre = osctl.find_color(green, tol=24, rgb=rgb, size=(w, h))
+    pre_n = pre["count"] if pre else 0
+    check("the target green is absent before the action (below threshold)",
+          pre_n < 400, f"green px on white page={pre_n}")
+    # One trigger; then race the two waiters in sequence on the same event.
+    b.eval("window.__go()")
+    ch = osctl.wait_for_change(bbox, baseline=base, timeout=3.0)
+    check("wait_for_change fires fast on the spinner (not the outcome)",
+          ch["changed"] and ch["elapsed"] < 0.6, repr(ch))
+    w2, h2, rgb2 = osctl.capture_rgb()
+    mid = osctl.find_color(green, tol=24, rgb=rgb2, size=(w2, h2))
+    mid_n = mid["count"] if mid else 0
+    check("at the moment change fired, the green has NOT arrived yet",
+          mid_n < 400, f"green px when change fired={mid_n}")
+    # wait_for_color keeps waiting through the spinner until green truly fills.
+    res = osctl.wait_for_color(green, tol=24, min_count=400, timeout=3.0)
+    check("wait_for_color returns once the green actually appears",
+          res is not None and res["count"] >= 400,
+          repr(res if res is None else {k: res[k] for k in ("count",)}))
+    inside = (res is not None and bbox[0] <= res["x"] <= bbox[2]
+              and bbox[1] <= res["y"] <= bbox[3])
+    check("its centroid is a real click target on the green surface",
+          inside, repr(None if res is None else (res["x"], res["y"])))
+    check("wait_for_color was more patient than wait_for_change (meaning>motion)",
+          res is not None and res["elapsed"] > ch["elapsed"],
+          f"color_elapsed={None if res is None else round(res['elapsed'],3)} "
+          f"change_elapsed={round(ch['elapsed'],3)}")
+
+
 def round_cursor_pos(b: Browser, offline: bool) -> None:
     print("R102: OS-level cursor_pos — read where the pointer is, dual of move (F138) — osctl")
     # The pointer family only ever WROTE position (move/drag/glide/click). Nothing
@@ -6262,7 +6314,7 @@ def main() -> int:
               round_wait_until_stable, round_wait_for_change,
               round_region_diff, round_locate_change,
               round_locate_change_blobs, round_sample_color,
-              round_cursor_pos]
+              round_cursor_pos, round_wait_for_color]
     for r in rounds:
         try:
             r(b, offline)
