@@ -2616,6 +2616,44 @@ seeing into reaching, and the agent at last presses the button it can only read.
 
 ---
 
+## F116 — reaching a word in a paragraph: locate it across the block's lines
+
+**Friction.** F115's `locate_word` reaches a word *in one line*: it sorts every
+cell in the bbox by left edge and groups by the gaps between. Hand it a two-line
+block and the lines interleave by column — exactly the scramble
+`read_region_words` suffered before F114 — so a word's cells shuffle among the
+other line's, no run forms, and *every* `locate_word` returns `None`. The reach
+F115 opened was line-deep; a paragraph closed it again. Reading climbed line →
+block at F112/F114; reaching had not yet made the same climb.
+
+**Mechanism.** The same banding that let F114 read a block lets F116 reach into
+one. Rows live in the blank leading between lines (`_band_rows`); within a band a
+word's cells group only against its own line's neighbours. Band first, locate
+within each band, and a word is found where it sits in the paragraph — its run
+formed against its own line, its bbox in the screen frame `capture_rgb`/`click`
+share.
+
+**Primitive.** `locate_block_word(region, target)` asks `palette` for the inks,
+bands the rows with `_band_rows` (a row inked by *any* ink, lines parted by
+`>= row_gap` blank leading — the same partition F114 reads by), and runs
+`locate_word` within each band top-to-bottom, returning the first band's match.
+Reading order top-to-bottom then left-to-right; a word no line holds → `None`.
+
+**Live (R80):** two lines of coloured text buttons on a `<canvas>` — red `OK` /
+green `GO` over blue `NO` / red `BY`, no DOM nodes. `read_block_region_words`
+names the lines (`["OK GO","NO BY"]`) but flat `locate_word` finds *none* of the
+four words (`[None,None,None,None]` — the friction). `locate_block_word` returns a
+bbox for each, line one above line two, left-to-right within a line, and `None`
+for an absent `"ZZ"`. The loop closes across rows: clicking the located `"BY"` on
+the *second* line reports `HIT:BY`, clicking `"OK"` on the first reports `HIT:OK`.
+`568/568 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 為學者日益 — reach must climb wherever reading climbed. F114
+taught the eye to read a paragraph line by line; F116 teaches the hand to reach
+into it the same way, and the agent presses any word on any line it can read.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

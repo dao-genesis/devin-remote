@@ -1522,6 +1522,50 @@ def locate_word(rgb: bytes, size: tuple[int, int],
     return None
 
 
+def locate_block_word(rgb: bytes, size: tuple[int, int],
+                      bbox: tuple[int, int, int, int],
+                      atlas: dict[str, list[int]], target: str,
+                      tol: int = 60, gap: int = 2, row_gap: int = 4,
+                      space_k: float = 1.8,
+                      nw: int = 48, nh: int = 48, thr: int = 24,
+                      q: int = 16, min_pop: float = 0.002,
+                      min_dist: int = 96) -> tuple[int, int, int, int] | None:
+    """Find a word anywhere in a multi-*line* block and return its bbox (F116).
+
+    :func:`locate_word` (F115) finds a word *in a single line*: it sorts every
+    cell in the ``bbox`` by left edge and groups them by the gaps between. Hand it
+    a two-line block and its lines interleave by column exactly as
+    :func:`read_region_words` scrambled before F114 — a word on the second line
+    has its cells shuffled in among the first line's, so its run never forms and
+    the word is unfindable (or a bogus group spanning two lines reads as noise).
+    The reach :func:`locate_word` opened was line-deep; a paragraph closed it
+    again.
+
+    This bands the block's rows first, exactly as :func:`read_block_region` and
+    :func:`read_block_region_words` do (:func:`_band_rows`, a row inked by *any*
+    palette ink, lines parted by ``>= row_gap`` blank leading), then runs
+    :func:`locate_word` within each band, top band to bottom, returning the bbox of
+    the first band that holds ``target``. So a word is found *where it sits in the
+    paragraph* — its cells grouped only against its own line's neighbours, never a
+    line above or below — and its bbox, in the screen frame :func:`capture_rgb` and
+    :func:`click` share, is the place to press it.
+
+    Honest in the union of its parts' frames: it parts rows only by the blank
+    leading the page left between lines, reads each line's words at the bimodal
+    seam, reads only glyphs the ``atlas`` carries and *text* colours, and returns
+    the first match top-to-bottom then left-to-right (reading order). A word no
+    line holds — or the atlas cannot spell — returns ``None``, not a guess."""
+    inks = palette(rgb, size, bbox, q, min_pop, min_dist)[1:]
+    if not inks:
+        return None
+    for band in _band_rows(rgb, size, bbox, inks, tol, row_gap):
+        hit = locate_word(rgb, size, band, atlas, target, tol, gap, space_k,
+                          nw, nh, thr, q, min_pop, min_dist)
+        if hit is not None:
+            return hit
+    return None
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"
