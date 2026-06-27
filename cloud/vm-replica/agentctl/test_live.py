@@ -1079,6 +1079,117 @@ def round_zorder(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_move(b: Browser, offline: bool) -> None:
+    print("R110: MOVE a window that was pushed OFF-screen back into reach (F149) — osctl")
+    # R109 proved *raising* reaches an occluded window. But raising only reorders
+    # the stack — it cannot help a window placed *off* the visible screen: there
+    # is then no on-screen pixel that belongs to it, so no click can land on it,
+    # raised or not. Only MOVING it back into view can. Screenshot+click cannot
+    # reposition a window at all. activate_window stacks; move_window relocates.
+    # (Linux/konsole only — Windows places windows too but driving konsole here.)
+    import shutil
+    import subprocess
+
+    if sys.platform.startswith("win"):
+        print("  (skip R110: driving konsole; Windows path covered by move_window itself)")
+        return
+    term = shutil.which("konsole")
+    if term is None:
+        print("  (skip R110: no konsole on this Linux host)")
+        return
+    if not hasattr(osctl, "move_window"):
+        check("osctl exposes move_window", False, "missing primitive")
+        return
+
+    sw, _sh = osctl.screen_size()
+    mark = os.path.join(__import__("tempfile").gettempdir(), "dao_move_round.txt")
+
+    def launch():
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=MVWIN", "--geometry",
+             "640x420+200+200", "-e", "env", "WTAG=M", "bash", "--norc", "-i"],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def click_mark(cx, cy):
+        osctl.click(cx, cy)
+        time.sleep(0.4)
+        osctl.type_unicode("echo MV-$WTAG > " + mark)
+        osctl.tap(osctl.VK_RETURN)
+        time.sleep(0.7)
+
+    def read():
+        try:
+            with open(mark) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    p = None
+    try:
+        p = launch()
+        time.sleep(2.6)
+        win = next((w for w in osctl.list_windows()
+                    if "MVWIN" in (w.get("title") or "")), None)
+        if not win:
+            check("move: enumerate the launched window", False, "missing window")
+            return
+        wid = win["id"]
+        g0 = osctl.window_geometry(wid)
+        if not g0:
+            check("move: read window geometry", False, "geometry unavailable")
+            return
+
+        # Push it fully off the right edge, then confirm it really left the screen.
+        with open(mark, "w") as f:
+            f.write("SENTINEL")
+        osctl.move_window(wid, sw + 100, 300)
+        time.sleep(1.2)
+        goff = osctl.window_geometry(wid) or {}
+        check("move_window pushes a window off the visible screen",
+              goff.get("x", 0) >= sw, f"x={goff.get('x')!r} screen_w={sw}")
+
+        # Friction: even RAISING it cannot rescue an off-screen window — clicking
+        # the spot it used to occupy now hits empty desktop, so input never reaches it.
+        osctl.activate_window(wid)
+        time.sleep(0.4)
+        cx, cy = g0["x"] + g0["w"] // 2, g0["y"] + g0["h"] // 2
+        click_mark(cx, cy)
+        off = read()
+        check("an off-screen window stays unreachable even when raised",
+              off == "SENTINEL", f"marker={off!r}")
+
+        # Fix: move it back into view, then the click reaches it.
+        with open(mark, "w") as f:
+            f.write("SENTINEL")
+        osctl.move_window(wid, 200, 200)
+        time.sleep(1.5)
+        osctl.activate_window(wid)
+        time.sleep(0.5)
+        g1 = osctl.window_geometry(wid) or g0
+        cx, cy = g1["x"] + g1["w"] // 2, g1["y"] + g1["h"] // 2
+        click_mark(cx, cy)
+        on = read()
+        check("move_window brings it back so the click reaches it", on == "MV-M",
+              f"marker={on!r}")
+        check("moving (not raising) is what rescues an off-screen window",
+              off == "SENTINEL" and on == "MV-M", f"off={off!r} on={on!r}")
+    finally:
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_structure_match(b: Browser, offline: bool) -> None:
     print("R19: pick a colour-shifted target by structure, not appearance (F055) — osctl")
     # Two magenta tiles (segmentable), each holding a black glyph drawn in a
@@ -6804,7 +6915,7 @@ def main() -> int:
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_reach, round_steer,
-              round_window, round_clip_relay, round_zorder,
+              round_window, round_clip_relay, round_zorder, round_move,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

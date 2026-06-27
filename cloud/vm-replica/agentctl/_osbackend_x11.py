@@ -82,6 +82,22 @@ _x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
                           ctypes.c_long, ctypes.c_void_p]
 _x.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
 _x.XMapRaised.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+# Geometry read + move/resize. XGetGeometry gives size in the window's own
+# coords; XTranslateCoordinates maps its (0,0) to the root to get absolute x,y.
+_x.XGetGeometry.restype = ctypes.c_int
+_x.XGetGeometry.argtypes = [
+    ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+    ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint),
+    ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)]
+_x.XTranslateCoordinates.restype = ctypes.c_int
+_x.XTranslateCoordinates.argtypes = [
+    ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_ulong)]
+_x.XMoveResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                                 ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
+_x.XMoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
 
 
 class _XImage(ctypes.Structure):
@@ -345,6 +361,70 @@ def activate_window(win: int) -> bool:
         ok = _x.XSendEvent(_dpy, _root, 0, SUBSTRUCTURE, ctypes.byref(ev))
         _x.XMapRaised(_dpy, win)
         _x.XRaiseWindow(_dpy, win)
+        _x.XFlush(_dpy)
+        _x.XSync(_dpy, 0)
+        return bool(ok)
+
+
+def window_geometry(win: int) -> dict | None:
+    """Absolute on-screen geometry of a window as ``{"x","y","w","h"}`` (the
+    outer position the WM placed it at), or None if the window is gone. Lets the
+    floor *know where a window actually is* — the prerequisite for deciding it is
+    off-screen and must be moved into view."""
+    with _lock:
+        root = ctypes.c_ulong()
+        gx, gy = ctypes.c_int(), ctypes.c_int()
+        gw, gh = ctypes.c_uint(), ctypes.c_uint()
+        bw, depth = ctypes.c_uint(), ctypes.c_uint()
+        if not _x.XGetGeometry(_dpy, win, ctypes.byref(root), ctypes.byref(gx),
+                               ctypes.byref(gy), ctypes.byref(gw), ctypes.byref(gh),
+                               ctypes.byref(bw), ctypes.byref(depth)):
+            return None
+        ax, ay = ctypes.c_int(), ctypes.c_int()
+        child = ctypes.c_ulong()
+        _x.XTranslateCoordinates(_dpy, win, _root, 0, 0, ctypes.byref(ax),
+                                 ctypes.byref(ay), ctypes.byref(child))
+        return {"x": int(ax.value), "y": int(ay.value),
+                "w": int(gw.value), "h": int(gh.value)}
+
+
+def move_window(win: int, x: int, y: int, w: int = 0, h: int = 0) -> bool:
+    """Move (and optionally resize) a window by id via an EWMH
+    ``_NET_MOVERESIZE_WINDOW`` client message to the root, so the WM honours it
+    the same way a user drag would. ``w``/``h`` of 0 leave that dimension alone.
+
+    This is what *raising* (activate_window) cannot do: a window placed off the
+    visible screen stays unreachable no matter how it is stacked — only moving it
+    back into view lets a click land on it. Official screenshot+click has no way
+    to reposition a window at all."""
+    with _lock:
+        flags = (1 << 8) | (1 << 9)          # x, y supplied
+        if w:
+            flags |= (1 << 10)
+        if h:
+            flags |= (1 << 11)
+        flags |= (2 << 12)                   # source indication: pager
+        flags |= 1                           # gravity: NorthWest (default)
+
+        class _CM(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                        ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                        ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                        ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+        ev = _CM(type=33, send_event=1, display=_dpy, window=win,  # 33 = ClientMessage
+                 message_type=_atom("_NET_MOVERESIZE_WINDOW"), format=32)
+        ev.data[0] = flags
+        ev.data[1] = int(x)
+        ev.data[2] = int(y)
+        ev.data[3] = int(w)
+        ev.data[4] = int(h)
+        SUBSTRUCTURE = (1 << 19) | (1 << 20)  # Redirect | Notify
+        ok = _x.XSendEvent(_dpy, _root, 0, SUBSTRUCTURE, ctypes.byref(ev))
+        # Fallback for non-EWMH WMs: also issue the core request directly.
+        if w and h:
+            _x.XMoveResizeWindow(_dpy, win, int(x), int(y), int(w), int(h))
+        else:
+            _x.XMoveWindow(_dpy, win, int(x), int(y))
         _x.XFlush(_dpy)
         _x.XSync(_dpy, 0)
         return bool(ok)

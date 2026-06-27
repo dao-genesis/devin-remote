@@ -3982,6 +3982,43 @@ harness self-heals between rounds — the round the drop landed in still counts,
 stays honest after it. 弱也者道之用也 — the connection's weakness (it can drop) is answered not
 by force but by yielding-and-reattaching.
 
+## F149 — moving a window back into reach (R110)
+
+**The third pathway of addressing.** F146/F147 routed the **keyboard** by focus; F148 raised a
+covered window so the **mouse** reaches it by Z-order. But raising only reorders the *stack* —
+it does nothing for a window placed **off the visible screen**: there is then no on-screen
+pixel that belongs to it, so no click can land on it, raised or not. The only remedy is to
+**move it back into view**. Screenshot+click cannot reposition a window at all.
+
+**Reproduced friction (live, this VM).** A konsole `MVWIN` on-screen at `+200+200` is driven
+fine. `move_window(id, screen_w+100, 300)` pushes it fully off the right edge (`window_geometry`
+confirms `x=1700` on a 1600-wide screen). Now even `activate_window(id)` (raise) cannot help —
+clicking the body-centre it used to occupy hits empty desktop and the typed marker never
+arrives (`SENTINEL` unchanged). After `move_window(id, 200, 200)` the **same** click lands and
+writes `MV-M`.
+
+**Live A/B (one konsole, pushed off then moved back):**
+
+| step | marker | outcome |
+|---|:---:|---|
+| off-screen, then `activate_window` (raise) + click old spot | `SENTINEL` | unreachable — raising can't rescue it |
+| `move_window` back into view + click | `MV-M` | the click reaches it |
+
+Two new primitives on both backends: `window_geometry(id)` (X11 `XGetGeometry` +
+`XTranslateCoordinates`; Windows `GetWindowRect`) tells the floor *where a window actually is*;
+`move_window(id, x, y, w=0, h=0)` relocates it (X11 EWMH `_NET_MOVERESIZE_WINDOW` + core
+`XMoveResizeWindow` fallback; Windows `SetWindowPos`). Note KWin *clamps initial placement*
+on-screen but honours an explicit `_NET_MOVERESIZE_WINDOW` off-screen — which is exactly what
+makes the friction reproducible. The move-back needs a follow-up `activate_window` for the WM
+to re-grant focus to a window that had left the screen. R110 (`round_move`) bakes it in
+(4 checks); `_probe_move.py` is the standalone reproduction. Linux/konsole only for the round.
+
+**Lesson (道法自然).** 樸散則為器 — one act of *addressing a window* splinters, under honest
+pressure, into three distinct tools: focus (keyboard), stacking (mouse), and **position**.
+Each was invisible until the case that needs it was lived. A system that stopped at "raise"
+would silently fail every off-screen window. 大制無割 — the whole is served only by not
+papering over the seams between these three.
+
 ---
 
 ## Frontier (next honest rounds)

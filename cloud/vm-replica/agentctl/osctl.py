@@ -46,6 +46,11 @@ _mouse_wheel = _be.mouse_wheel
 # predates them, fall back to no-ops so import never breaks on an older floor.
 list_windows = getattr(_be, "list_windows", lambda: [])
 activate_window = getattr(_be, "activate_window", lambda win: False)
+# Window geometry (read where a window is) + move/resize (put it back in view).
+# Raising stacks a window; it cannot rescue one placed *off* the visible screen
+# — only moving it can. Fall back gracefully on an older floor that lacks them.
+window_geometry = getattr(_be, "window_geometry", lambda win: None)
+move_window = getattr(_be, "move_window", lambda win, x, y, w=0, h=0: False)
 
 # ---- pointer position (read side) ----------------------------------------- #
 def cursor_pos() -> "tuple[int, int]":

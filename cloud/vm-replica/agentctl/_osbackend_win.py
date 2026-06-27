@@ -213,6 +213,11 @@ user32.GetForegroundWindow.restype = wintypes.HWND
 user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+user32.GetWindowRect.restype = wintypes.BOOL
+user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                                ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+user32.SetWindowPos.restype = wintypes.BOOL
 kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 
 _SW_RESTORE = 9
@@ -260,6 +265,31 @@ def activate_window(win: int) -> bool:
     for tid in attached:
         user32.AttachThreadInput(cur, tid, False)
     return ok
+
+
+def window_geometry(win: int) -> "dict | None":
+    """Absolute on-screen geometry ``{"x","y","w","h"}`` of a window via
+    ``GetWindowRect`` (the outer frame), or None if the handle is gone — the
+    prerequisite for deciding a window is off-screen and must be moved back."""
+    rect = wintypes.RECT()
+    if not user32.GetWindowRect(wintypes.HWND(win), ctypes.byref(rect)):
+        return None
+    return {"x": int(rect.left), "y": int(rect.top),
+            "w": int(rect.right - rect.left), "h": int(rect.bottom - rect.top)}
+
+
+def move_window(win: int, x: int, y: int, w: int = 0, h: int = 0) -> bool:
+    """Move (and optionally resize) a window via ``SetWindowPos``. ``w``/``h`` of
+    0 keep the current size (SWP_NOSIZE). Raising stacks a window; only moving it
+    can rescue one placed off the visible screen."""
+    hwnd = wintypes.HWND(win)
+    if not w or not h:
+        cur = window_geometry(win) or {"w": 0, "h": 0}
+        w = w or cur["w"]
+        h = h or cur["h"]
+    # 0x0004 SWP_NOZORDER | 0x0010 SWP_NOACTIVATE
+    return bool(user32.SetWindowPos(hwnd, None, int(x), int(y), int(w), int(h),
+                                    0x0004 | 0x0010))
 
 
 # ---- GDI screen capture --------------------------------------------------- #
