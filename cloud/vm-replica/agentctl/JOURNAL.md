@@ -2731,6 +2731,43 @@ acting on what has passed; sight at last moves in time as it moved in space.
 
 ---
 
+## F119 — the window is not the world: roll the wheel to see past the fold
+
+**Friction.** The agent could move and click anywhere it could *see* — but it
+could only ever see one screenful. `capture_rgb` is the viewport, and every reader
+and locator F103→F118 searches within it. Content past the fold — the rest of a
+page, a list below the window, a result rendered lower than the screen is tall —
+simply was not in the pixels, so `locate_phrase` returned `None` for text that
+*exists* but is scrolled away, and nothing in the toolkit could bring it into
+view. Sight had climbed in space (glyph→block) and in time (F118), but stayed
+boxed inside the window frame; a button one line below the fold was as unreachable
+as one on another planet.
+
+**Mechanism.** The surface is larger than the window; to see the rest, move the
+window over it. The OS already carries that motion as the mouse wheel — a
+`WHEEL_DELTA` event per notch through `SendInput`, the same trusted channel
+`click`/`type_unicode` use — and after it, a fresh `capture_rgb` simply holds
+different pixels the unchanged readers can work on.
+
+**Primitive.** `scroll(dy, dx, x, y)` rolls the wheel a notch at a time:
+`dy < 0` toward the user (page moves up, revealing content *below*), `dy > 0` away
+(revealing *above*), `dx` likewise horizontal, each notch one `MOUSEEVENTF_WHEEL`/
+`HWHEEL` event sent over `(x, y)` when given so it lands on the pane under the
+cursor. No reader changes — only which screenful they read.
+
+**Live (R83):** a 3000 px page whose only button, a blue `GO` canvas, sits far
+below the fold. At rest `scrollY == 0` and `locate_phrase("GO")` is `None` (the
+friction — it exists but is off-screen). `scroll(dy=-40)` rolls the page down
+(`scrollY` grows past 500), a fresh capture now holds `GO`, and clicking it reports
+`HIT:GO` — reach past the fold. `scroll(dy=40)` rolls back to the top. `594/594
+checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 其出也彌遠 — what the window cannot hold, motion can reach. F119
+unboxes sight from the viewport: the readers were never the limit, only the one
+frame they were given; let the frame move and the whole surface comes within view.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
