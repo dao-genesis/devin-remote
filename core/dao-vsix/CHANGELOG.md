@@ -2,6 +2,13 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.37
+- **核心 MCP 板块大升级 · 浏览器模块对齐 Playwright/Chrome-DevTools-MCP(把插件当浏览器用·与「我操作自己浏览器」对等)**。`browser_*` 由原 5 工具(launch/navigate/eval/screenshot/targets)扩为完整一套(CDP 原生·零 npm 依赖): `browser_snapshot`(页内注入 `__daoB` 助手·产可交互元素「无障碍快照」带 `ref`·Playwright 杀手锏)、`browser_click/type/hover/select/press_key/scroll/drag`(走 CDP `Input.*` **可信输入事件**·ref|selector|x,y|nx,ny 多种定位)、`browser_wait`(selector 出现/消失|text|ms)、`browser_back/forward/reload`、`browser_get_text/get_html`、`browser_console/network`(页内 console+fetch/XHR 钩子缓冲)、`browser_tabs`(list/new/select/close)、`browser_upload`(`DOM.setFileInputFiles`)、`browser_close`。
+- **软件本体「公开所有端口」**: 新增 `plugin_api`(直通任意 `/api/*`·route 必以 /api/ 开头) + `plugin_reload`(热修·须 `{confirm:true}` 才重启窗口)。
+- **VSCode 对等**: `vscode_open`(打开+定位 line/char) + `vscode_active`(读活动编辑器/选区/可见范围/选中文本)。
+- **整机对等**: `pc_drag`(归一化拖拽) + `pc_key_combo`(组合键·依次按下逆序抬起) + `pc_clipboard`(`vscode.env.clipboard` 读写)。
+- 全部新增工具委托既有内部处理器/`vscode` API/CDP, 不引重依赖(大巧若拙)。自检: `node --check`(src+out)、dao-vsix/dao-one 构建、render_check、rt-flow 测试全过、rtflow 源↔vendored 一致。
+
 ## 3.50.36
 - **公网「诡异网页」/shell 路由官网对话掉登录之根治(踩坑 6 · webapp_host=null 漏改)**。实测从公网隧道打开 `…/?dao_acct=<号>` 的 `/sessions` 已登录正常,但进 `/org/<slug>` 即**硬跳真站 `app.devin.ai/login?next=…&internal_org=…`**逃出隧道→掉登录。CDP 抓包定位: Devin SPA 引导调 `/api/users/post-auth` 返回 `"webapp_host":null`,SPA(`useEnterprisePrimaryOrgNavigation`)据此**回落默认主机 app.devin.ai** 做组织跳转。同源反代的 `webapp_host` 改写正则**仅匹配带引号字符串值**(`"webapp_host":"…"`),**漏改 `null`** → 保留 null → SPA 逃逸。
   - **修法**: 把 `webapp_host`/`webappHost` 的改写正则扩为同时匹配字符串值与 `null` 字面量,一并归一为本次请求 Host(隧道域/localhost 自适应)。落地三处: `src/extension.ts`(HTML 内联引导态 + JSON API 响应 `devinCloudProxyRoute`)、`core/rt-flow/devin_proxy.js`(IDE 内多实例反代)及其 vendored 副本 `core/dao-vsix/rtflow/devin_proxy.js`。
