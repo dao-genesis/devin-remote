@@ -319,6 +319,21 @@ def chord(*vks: int) -> None:
         key_up(vk)
 
 
+def key_hold(vk: int, duration: float = 0.8) -> None:
+    """Hold a key down for ``duration``, then release (F127).
+
+    :func:`tap` presses and releases in the same breath — the key is down for
+    essentially zero time. But many controls integrate over *how long* a key is
+    held: a game that advances a character each frame while a direction key is
+    down, a hold-to-charge action, a held modifier kept down across other
+    events. For those, an instant ``tap`` accrues nothing. This holds the key
+    down for ``duration`` so the time-in-state is real. It is the keyboard twin
+    of :func:`press_hold`."""
+    key_down(vk)
+    time.sleep(duration)
+    key_up(vk)
+
+
 def type_unicode(text: str) -> None:
     """Inject text as trusted Unicode key events (bypasses layout)."""
     inputs = []
@@ -332,6 +347,7 @@ def type_unicode(text: str) -> None:
 # Common virtual-key codes.
 VK_RETURN, VK_TAB, VK_ESCAPE, VK_CONTROL, VK_MENU, VK_SHIFT = 0x0D, 0x09, 0x1B, 0x11, 0x12, 0x10
 VK_L, VK_V, VK_A, VK_C = 0x4C, 0x56, 0x41, 0x43
+VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN = 0x25, 0x26, 0x27, 0x28
 
 
 # ---- clipboard ------------------------------------------------------------ #

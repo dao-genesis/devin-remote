@@ -5383,6 +5383,53 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_key_hold(b: Browser, offline: bool) -> None:
+    print("R91: OS-level key_hold — a sustained key press (F127) — osctl")
+    # A game-style control: ArrowRight held sets a flag; a 50ms interval advances
+    # __pos while held. An instant tap accrues ~nothing; key_hold holds the key
+    # down long enough for the integrator to accumulate. Keyboard twin of R90.
+    html = fixture("key_hold.html",
+                   "<!doctype html><meta charset=utf-8><title>0</title>"
+                   "<style>html,body{margin:0;height:100%}#f{position:absolute;"
+                   "left:0;top:0;width:300px;height:200px;background:#4488dd}"
+                   "</style><div id=f></div><script>window.__pos=0;var held=false;"
+                   "addEventListener('keydown',function(e){if(e.key==='ArrowRight'"
+                   "){held=true;e.preventDefault();}});"
+                   "addEventListener('keyup',function(e){if(e.key==='ArrowRight'){"
+                   "held=false;}});setInterval(function(){if(held){window.__pos++;"
+                   "document.title=String(window.__pos);}},50);</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    check("capture matches click coordinate space", (w, h) == osctl.screen_size(),
+          f"{(w, h)} vs {osctl.screen_size()}")
+    pad = osctl.find_color((68, 136, 221), tol=40, rgb=rgb, size=(w, h))
+    check("located the focus pad by pixels",
+          pad is not None and pad["count"] > 20000,
+          str(pad and {k: pad[k] for k in ("x", "y", "count")}))
+    if pad is None:
+        return
+    osctl.click(pad["x"], pad["y"])  # focus the page so key events land
+    time.sleep(0.2)
+    # Friction: an instant tap is down for ~0ms — the integrator never advances.
+    osctl.tap(osctl.VK_RIGHT)
+    time.sleep(0.4)
+    base = b.eval("window.__pos")
+    check("an instant tap accrues nothing on a held-key control",
+          base == 0, repr(base))
+    # Primitive: a sustained hold lets the time-in-state accumulate.
+    osctl.key_hold(osctl.VK_RIGHT, duration=0.8)
+    time.sleep(0.2)
+    pos = b.eval("window.__pos")
+    check("key_hold accrues many steps while the key is down",
+          pos - base >= 5, f"delta={pos - base}")
+    time.sleep(0.4)
+    check("the key released after the hold (integrator stopped advancing)",
+          b.eval("window.__pos") == pos, f"{b.eval('window.__pos')} vs {pos}")
+    check("title reflects the accrued position",
+          b.title() == str(pos) and pos > 0, f"title={b.title()} pos={pos}")
+
+
 def round_press_hold(b: Browser, offline: bool) -> None:
     print("R90: OS-level press_hold — a sustained stationary press (F126) — osctl")
     # A button arms a 500ms timer on mousedown; releasing before it fires
@@ -5614,7 +5661,7 @@ def main() -> int:
               round_locate_phrase, round_wait_for_phrase, round_scroll,
               round_scroll_to_phrase, round_drag_stroke, round_double_click,
               round_middle_click, round_mod_click, round_triple_click,
-              round_press_hold]
+              round_press_hold, round_key_hold]
     for r in rounds:
         try:
             r(b, offline)
