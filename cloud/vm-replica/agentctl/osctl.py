@@ -121,6 +121,15 @@ control_at = getattr(_be, "control_at", lambda x, y: None)
 # Returning the rect closes the loop back to the mouse — a semantic find yields a
 # pixel target to click, no visual scanning. None if not found / older floor.
 find_control = getattr(_be, "find_control", lambda top, cls=None, text=None: None)
+# Read a window's MENU BAR as a tree — the app's own command vocabulary
+# (File/Edit/…), each leaf carrying its command id; and invoke a command BY ID.
+# A window's *actions* live in its menus, invisible to every screenshot until a
+# click opens them; this exposes the verbs an app offers (named, addressable) and
+# executes one without opening the menu, moving the mouse, or holding focus — the
+# action by name, not by pixel-hunt. Windows-native (OS menus); [] / False where
+# the app draws its own menus (most X11 toolkits) or on an older floor.
+window_menu = getattr(_be, "window_menu", lambda win: [])
+invoke_menu = getattr(_be, "invoke_menu", lambda win, command_id: False)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

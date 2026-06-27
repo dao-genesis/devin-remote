@@ -4642,6 +4642,55 @@ pixel of guesswork.
 
 ---
 
+## F164 — the verbs of an app: reading and invoking its menu (`window_menu` / `invoke_menu`, R125)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** The floor could now read controls, locate them by meaning, write
+and click them — but all of that is the *nouns* of an application (its fields, its
+labels, its buttons). An app's *verbs* — Save, Copy, Find, Insert-Date — live in
+its **menus**, and a menu is invisible to every screenshot until a click opens it,
+then vanishes again. To run a command the floor had to *perform the choreography*:
+move to the menu bar, click to open, find the item among those that appeared,
+click it — every step a pixel gamble, and the whole transient structure unreadable
+in between. The actions an app offers had no names the floor could see or speak.
+
+**Primitives (Windows-native — OS menus).**
+- `osctl.window_menu(win)` → the menu bar as a tree: `[{label, id, sep, items}]`,
+  every leaf carrying its **command id** (`GetMenu` + `GetMenuString`/`GetSubMenu`/
+  `GetMenuItemID`). The whole command vocabulary, read without opening a thing.
+- `osctl.invoke_menu(win, id)` → executes a command **by its id**, posting the
+  `WM_COMMAND` the menu itself would have sent — no menu opened, no mouse moved,
+  no focus held, works even occluded. The verb performed by name.
+- X11 returns `[]`/`False`: toolkits draw their own menus, so there is no OS menu
+  to read — honest asymmetry, like the rest of the semantic layer.
+
+**Live (Windows, against `notepad.exe`):**
+
+| check | result |
+|---|---|
+| `window_menu` top-level | `['&File','&Edit','F&ormat','&View','&Help']` |
+| Time/Date command located in tree | `{label:'Time/&Date\\tF5', id:26}` |
+| `invoke_menu(win, 26)` then read the Edit | `'5:16 PM 6/27/2026'` (timestamp inserted) |
+
+R125 (`round_menu`, 4 checks); `_probe_menu.py` standalone (all pass). Full suite
+**809/809** clean.
+
+**Lesson (道法自然).** 道隱無名，始制有名 — *the Way hides, nameless; once shaped, it
+has names.* A menu, unopened, is the app's repertoire held latent and unnamed; the
+human must *enact* it (open, hunt, click) each time to touch one verb. `window_menu`
+brings the whole latent repertoire into the named and the visible at once, and
+`invoke_menu` performs the chosen verb 弗為而成 — accomplished without the doing,
+no choreography, no mouse, the command run straight by its name. The floor now has
+both halves of agency: the *nouns* (F160–F163: read, write, locate, click a
+control) and the *verbs* (F164: read and invoke an app's commands). Seeing,
+understanding, and acting are all semantic now — the pixel/keystroke floor remains
+underneath as the universal fallback, but where the OS offers a true name, the
+floor speaks it. 超越人類: a human can hold only the menu they have opened; the
+floor holds the entire command tree and fires any verb in it, instantly, by name.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

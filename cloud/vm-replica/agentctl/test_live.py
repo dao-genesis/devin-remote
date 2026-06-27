@@ -1260,6 +1260,88 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_menu(b: Browser, offline: bool) -> None:
+    print("R125: read an app's command menu and invoke a command BY ID (F164) — osctl")
+    # The floor could read controls and their text, locate them by meaning, click
+    # them by identity. But a window's *actions* — its verbs — live in its menus,
+    # invisible to every screenshot until a click opens them. window_menu exposes
+    # that whole command vocabulary (File/Edit/…), each leaf carrying its id;
+    # invoke_menu executes one by id — no menu opened, no mouse moved, no focus
+    # held. This is the semantic ACTION floor, the action dual of the semantic read
+    # floor (window_text/find_control): the verb performed by name, not by hunting
+    # its pixels. Proven by invoking Notepad's Time/Date command and watching the
+    # timestamp it writes into the Edit appear.
+    import re
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R125: OS menu vocabulary is a Windows-native surface)")
+        return
+    if not hasattr(osctl, "window_menu") or not hasattr(osctl, "invoke_menu"):
+        check("osctl exposes window_menu/invoke_menu", False, "missing primitive")
+        return
+
+    def _find_item(items, needle):
+        for it in items:
+            if needle.lower() in (it.get("label") or "").lower() and it.get("id"):
+                return it
+            hit = _find_item(it.get("items") or [], needle)
+            if hit:
+                return hit
+        return None
+
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available to read commands from", note is not None, "none")
+        if not note:
+            return
+        menu = osctl.window_menu(note["id"])
+        labels = [m.get("label") or "" for m in menu]
+        check("window_menu reads the app's command vocabulary incl. File/Edit/Help",
+              bool(menu) and all(any(k in l for l in labels) for k in ("File", "Edit", "Help")),
+              f"labels={labels}")
+        td = _find_item(menu, "Date")
+        check("the Time/Date command is found in the tree with a command id",
+              td is not None and td.get("id"), f"td={td}")
+        if not td:
+            return
+        edit = next((k for k in osctl.child_windows(note["id"])
+                     if k["class"] == "Edit"), None)
+        if edit:
+            osctl.set_window_text(edit["id"], "")
+            time.sleep(0.2)
+        before = osctl.window_text(edit["id"]) if edit else ""
+        ok = osctl.invoke_menu(note["id"], td["id"])
+        time.sleep(0.4)
+        after = osctl.window_text(edit["id"]) if edit else ""
+        check("invoke_menu executes the command BY ID — no menu opened, no mouse — "
+              "and the timestamp it inserts proves the verb ran",
+              ok and after and after != before and bool(re.search(r"\d{1,2}:\d{2}", after)),
+              f"ok={ok} before={before!r} after={after!r}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_find_control(b: Browser, offline: bool) -> None:
     print("R124: locate a control by MEANING and get its pixel rect (F163) — osctl")
     # control_at (F162) maps a pixel to a control: location -> identity. This is its
@@ -7996,7 +8078,8 @@ def main() -> int:
               round_window_lifecycle, round_window_state, round_active_window,
               round_topmost, round_window_pid, round_key_state, round_mouse_state,
               round_pixel, round_window_text, round_set_window_text,
-              round_control_at, round_find_control, round_move, round_desktop,
+              round_control_at, round_find_control, round_menu,
+              round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

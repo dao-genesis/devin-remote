@@ -470,6 +470,67 @@ def set_window_text(win: int, text: str) -> bool:
     return bool(user32.SendMessageW(hwnd, _WM_SETTEXT, 0, ctypes.addressof(buf)))
 
 
+_WM_COMMAND = 0x0111
+_MF_BYPOSITION = 0x0400
+user32.GetMenu.restype = wintypes.HMENU
+user32.GetMenu.argtypes = [wintypes.HWND]
+user32.GetMenuItemCount.restype = ctypes.c_int
+user32.GetMenuItemCount.argtypes = [wintypes.HMENU]
+user32.GetSubMenu.restype = wintypes.HMENU
+user32.GetSubMenu.argtypes = [wintypes.HMENU, ctypes.c_int]
+user32.GetMenuItemID.restype = ctypes.c_uint
+user32.GetMenuItemID.argtypes = [wintypes.HMENU, ctypes.c_int]
+user32.GetMenuStringW.restype = ctypes.c_int
+user32.GetMenuStringW.argtypes = [wintypes.HMENU, ctypes.c_uint,
+                                  wintypes.LPWSTR, ctypes.c_int, ctypes.c_uint]
+
+
+def _read_menu(hmenu, depth: int = 0) -> list:
+    if not hmenu or depth > 16:
+        return []
+    out = []
+    n = user32.GetMenuItemCount(hmenu)
+    for i in range(n):
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetMenuStringW(hmenu, i, buf, 256, _MF_BYPOSITION)
+        label = buf.value
+        sub = user32.GetSubMenu(hmenu, i)
+        item = {"label": label,
+                "id": int(user32.GetMenuItemID(hmenu, i)) if not sub else None,
+                "sep": (not label and not sub),
+                "items": _read_menu(sub, depth + 1) if sub else []}
+        out.append(item)
+    return out
+
+
+def window_menu(win: int) -> list:
+    """Read a window's *menu bar* as a tree — the application's own command
+    vocabulary (File/Edit/…), each leaf carrying its command ``id``. The floor
+    could read controls, but a window's *actions* live in its menus, invisible to
+    every screenshot until the user clicks to open them. ``GetMenu`` + the
+    ``GetMenuString``/``GetSubMenu``/``GetMenuItemID`` family expose the whole
+    structure without opening a thing — the verbs an app offers, named and
+    addressable. Empty if the window has no OS menu (many modern apps draw their
+    own)."""
+    hwnd = wintypes.HWND(win)
+    if not user32.IsWindow(hwnd):
+        return []
+    return _read_menu(user32.GetMenu(hwnd))
+
+
+def invoke_menu(win: int, command_id: int) -> bool:
+    """Invoke a menu command *by its id* — the action dual of :func:`window_menu`.
+    A human must open the menu, move to the item, and click; this posts the
+    ``WM_COMMAND`` the menu would have sent, straight to the window — no opening,
+    no mouse, no focus, working even if the window is occluded. The verb is
+    executed by name, not by hunting its pixels. Returns True if delivered."""
+    hwnd = wintypes.HWND(win)
+    if not user32.IsWindow(hwnd):
+        return False
+    user32.SendMessageW(hwnd, _WM_COMMAND, int(command_id), 0)
+    return True
+
+
 def find_control(top: int, cls: "str | None" = None,
                  text: "str | None" = None) -> "dict | None":
     """Find a control inside ``top`` by its *meaning* — its class and/or its text
