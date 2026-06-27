@@ -2899,6 +2899,35 @@ intent.
 
 ---
 
+## F123 — `middle_click`: the third button (R87)
+
+**Friction.** `click` encoded only two flags — left and right. The wheel button
+did not exist in the channel at all. Yet middle-click is its own verb on the web:
+`button===1`, the `auxclick` event, open-link-in-a-new-background-tab,
+paste-on-X11, autoscroll. A left or right click can never stand in for it, and
+no composition of the two produces it — the down/up flags for the middle button
+were simply absent.
+
+**Mechanism.** Add the two missing SendInput flags (`MIDDLEDOWN`/`MIDDLEUP`) and
+send one pair at the point, exactly as `click` does for its buttons. Nothing
+clever — the gap was that a name had never been written down.
+
+**Primitive.** `middle_click(x, y)` — move once, then one middle button cycle.
+
+**Live (R87):** an amber pad counts left clicks and middle (`auxclick`,
+`button===1`) separately, opening (green, title `MIDDLE`) only on a true middle
+click. A left `click` leaves it shut (`__mid==0`) while counting as one left
+click — the friction. `middle_click` opens it: exactly one middle click lands,
+no phantom left click is added, the title flips to `MIDDLE`, and the change is
+read back through the pixels (the pad is green). A `middle_click` on empty page
+background opens nothing. `633/633 checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 三生萬物 — two were named, the third was not, and a whole
+family of gestures stayed shut. To complete a thing is sometimes only to write
+down the name that was always missing; the world it opens was waiting all along.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

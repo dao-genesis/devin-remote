@@ -5323,6 +5323,66 @@ def round_double_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} dbl={b.eval('window.__dbl')}")
 
 
+def round_middle_click(b: Browser, offline: bool) -> None:
+    print("R87: OS-level middle_click — the third mouse button (F123) — osctl")
+    # A pad counts left clicks and middle (auxclick, button===1) separately,
+    # and opens (green, title MIDDLE) only on a true middle click. click()
+    # encodes only left/right, so a left click can never stand in for it.
+    html = fixture("middle_click.html",
+                   "<!doctype html><meta charset=utf-8><title>start</title>"
+                   "<style>html,body{margin:0}#p{position:absolute;left:120px;"
+                   "top:140px;width:260px;height:160px;background:#cc7a00}</style>"
+                   "<div id=p></div><script>window.__left=0;window.__mid=0;"
+                   "var p=document.getElementById('p');"
+                   "p.addEventListener('click',function(e){"
+                   "if(e.button===0)window.__left++;});"
+                   "p.addEventListener('auxclick',function(e){if(e.button===1){"
+                   "window.__mid++;p.style.background='#11bb33';"
+                   "document.title='MIDDLE';}});"
+                   "p.addEventListener('mousedown',function(e){"
+                   "if(e.button===1)e.preventDefault();});</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    check("capture matches click coordinate space", (w, h) == osctl.screen_size(),
+          f"{(w, h)} vs {osctl.screen_size()}")
+    pad = osctl.find_color((204, 122, 0), tol=40, rgb=rgb, size=(w, h))
+    check("located the amber pad by pixels",
+          pad is not None and pad["count"] > 20000,
+          str(pad and {k: pad[k] for k in ("x", "y", "count")}))
+    if pad is None:
+        return
+    # Friction: a left click is not a middle click.
+    osctl.click(pad["x"], pad["y"])
+    time.sleep(0.3)
+    check("a left click does not register as a middle click",
+          b.title() != "MIDDLE" and b.eval("window.__mid") == 0,
+          f"title={b.title()} mid={b.eval('window.__mid')}")
+    check("the left click did register on its own button",
+          b.eval("window.__left") == 1, repr(b.eval("window.__left")))
+    # Primitive: middle_click fires a true aux click (button===1).
+    osctl.middle_click(pad["x"], pad["y"])
+    check("middle_click fires the middle button (auxclick)",
+          b.wait_for("document.title==='MIDDLE'", timeout=3), b.title())
+    check("exactly one middle click landed",
+          b.eval("window.__mid") == 1, repr(b.eval("window.__mid")))
+    check("middle_click did not add a left click",
+          b.eval("window.__left") == 1, repr(b.eval("window.__left")))
+    time.sleep(0.3)
+    green = osctl.find_color((17, 187, 51), tol=45)
+    check("state change confirmed by pixels (pad turned green)",
+          green is not None and green["count"] > 20000,
+          str(green and green.get("count")))
+    # A middle_click on empty page background opens nothing.
+    b.navigate(html)
+    time.sleep(0.4)
+    osctl.middle_click(pad["x"] + 380, pad["y"])
+    time.sleep(0.3)
+    check("middle_click on empty page background opens nothing",
+          b.title() != "MIDDLE" and b.eval("window.__mid") == 0,
+          f"title={b.title()} mid={b.eval('window.__mid')}")
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -5355,7 +5415,8 @@ def main() -> int:
               round_read_region_words, round_read_block_region_words,
               round_locate_word, round_locate_block_word,
               round_locate_phrase, round_wait_for_phrase, round_scroll,
-              round_scroll_to_phrase, round_drag_stroke, round_double_click]
+              round_scroll_to_phrase, round_drag_stroke, round_double_click,
+              round_middle_click]
     for r in rounds:
         try:
             r(b, offline)
