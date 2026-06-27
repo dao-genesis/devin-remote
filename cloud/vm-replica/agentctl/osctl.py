@@ -715,6 +715,46 @@ def crop_rgb(rgb: bytes, size: tuple[int, int], bbox: tuple[int, int, int, int]
     return bytes(out), pw, ph
 
 
+def wait_until_stable(bbox: tuple[int, int, int, int], settle: int = 3,
+                      interval: float = 0.08, timeout: float = 6.0
+                      ) -> dict:
+    """Wait until a screen region stops changing, by pixels (F132).
+
+    ``wait_for_phrase`` waits for *text* to appear, but much of a GUI moves
+    without ever spelling anything: a panel slides in, a spinner turns, a list
+    reflows, a fade settles. Act mid-transition and the target is still in
+    flight — the click lands where the thing *was*, not where it comes to rest.
+    Nothing in the pixel channel waited for *motion to end*. This re-captures the
+    ``bbox`` region every ``interval`` and compares it byte-for-byte to the last
+    capture; once ``settle`` consecutive captures are identical, the region is
+    judged at rest. Returns ``{stable, changes, captures, elapsed}`` — ``stable``
+    is whether it settled before ``timeout``, ``changes`` how many times the
+    region differed (proof it really was moving), so the caller can both wait and
+    confirm something happened. The visual twin of ``wait_for_phrase``: one waits
+    for a word, the other for stillness."""
+    deadline = time.time() + timeout
+    start = time.time()
+    prev: bytes | None = None
+    stable = changes = captures = 0
+    while time.time() < deadline:
+        w, h, rgb = capture_rgb()
+        patch, _pw, _ph = crop_rgb(rgb, (w, h), bbox)
+        captures += 1
+        if prev is not None and patch == prev:
+            stable += 1
+            if stable >= settle:
+                return {"stable": True, "changes": changes,
+                        "captures": captures, "elapsed": time.time() - start}
+        else:
+            if prev is not None:
+                changes += 1
+            stable = 0
+        prev = patch
+        time.sleep(interval)
+    return {"stable": False, "changes": changes,
+            "captures": captures, "elapsed": time.time() - start}
+
+
 def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
                    size: tuple[int, int] | None = None,
                    search: tuple[int, int, int, int] | None = None,
