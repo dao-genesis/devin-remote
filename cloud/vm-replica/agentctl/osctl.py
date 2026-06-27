@@ -127,6 +127,25 @@ def click(x: int | None = None, y: int | None = None, right: bool = False) -> No
         _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
 
 
+def double_click(x: int | None = None, y: int | None = None,
+                 right: bool = False, gap: float = 0.05) -> None:
+    """Two presses at one point within the double-click window (F122).
+
+    :func:`click` fires a single click; a control bound to ``dblclick`` — a
+    row that opens only on double-click, double-click-to-select-a-word, a
+    handle that resets on double-tap — never answers it. This presses twice
+    in quick succession at the *same* point so the window pairs them into a
+    ``dblclick``. ``gap`` must stay under the system double-click threshold
+    (default ~500 ms); a slower pair reads as two unrelated single clicks,
+    which is exactly the friction this steps over."""
+    if x is not None:
+        move(x, y)
+        time.sleep(0.02)
+    click(right=right)
+    time.sleep(gap)
+    click(right=right)
+
+
 def drag(x0: int, y0: int, x1: int, y1: int,
          steps: int = 24, pause: float = 0.01,
          hold: float = 0.05, right: bool = False) -> None:
