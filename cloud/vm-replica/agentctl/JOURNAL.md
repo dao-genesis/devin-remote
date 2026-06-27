@@ -4876,6 +4876,39 @@ software a screenshot-and-click operator can only fumble at.
 
 ---
 
+## F169 — bridging semantic locate to the keyboard floor: UIA focus (`uia_focus`, R130)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** `uia_set_value` (F167) writes through the ValuePattern — but not every
+modern input offers one. Rich-text editors, `contenteditable` regions, custom
+canvas widgets expose no ValuePattern at all; the floor could *find* them (F166) and
+*see* them (F165) yet had no semantic way to put text in them. The only fallback was
+to compute a pixel and click — back to aiming.
+
+**Primitive.**
+- `osctl.uia_focus(win, name=None, ctype=None)` → moves keyboard focus to an element
+  found by meaning, via UIA `SetFocus` (IUIAutomationElement vtable 3). Once focused,
+  the *universal keyboard floor* (`osctl.tap`/`key_down`/`key_up`) types into it.
+
+**Live:** `uia_focus(notepad, type=Edit)` → True; then tapping `d`,`a`,`o` on the
+keyboard floor yields `window_text == "dao"` — the keystrokes landed in the element
+that was focused purely by meaning. R130 (`round_uia_focus`, 3 checks);
+`_probe_uiafocus.py` standalone. Full suite **828/828** clean.
+
+**Lesson (道法自然).** 天下之至柔，馳騁於天下之至堅 — *the softest in the world overruns the
+hardest.* The accessibility tree (soft, abstract, just names) and the raw keyboard
+(hard, physical, just scancodes) are the two extremes of the stack; `uia_focus` is
+the hinge where the soft meaning steers the hard keystroke. The two floors that
+looked independent — semantic UIA and the universal keyboard — turn out to
+*cooperate*: UIA does the one thing the keyboard cannot (aim by meaning), the
+keyboard does the one thing UIA cannot here (deliver text where no ValuePattern
+exists). 弱也者，道之用也 — the floor doesn't force a single mechanism to do everything;
+it lets each be weak where another is strong, and the whole becomes able to put text
+into *any* field, ValuePattern or not.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

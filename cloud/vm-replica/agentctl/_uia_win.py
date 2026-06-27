@@ -47,6 +47,7 @@ _IID_IUIAutomation = _guid("{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
 _EFH = 6        # ElementFromHandle
 _CTRUE = 21     # CreateTrueCondition
 # IUIAutomationElement vtable indices
+_SETFOCUS = 3   # SetFocus
 _FINDALL = 6    # FindAll
 _GETPROP = 10   # GetCurrentPropertyValue
 # IUIAutomationElementArray vtable indices
@@ -396,5 +397,24 @@ def uia_invoke(win: int, name=None, ctype=None) -> bool:
             return _vcall(ip, _INVOKE, ctypes.c_long, []) == 0
         finally:
             _release(ip)
+    finally:
+        _release(el)
+
+
+def uia_focus(win: int, name=None, ctype=None) -> bool:
+    """Move keyboard focus to an element found by meaning (name/type) via the UIA
+    ``SetFocus`` — the bridge from semantic *locate* to the keystroke floor. Some
+    modern inputs (rich text, contenteditable, custom canvases) expose no
+    ValuePattern to write through, but they *can* be focused through the
+    accessibility tree; once focused, the universal keyboard floor types into them.
+    Returns True if focus was set."""
+    uia = _get_uia()
+    if not uia:
+        return False
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return False
+    try:
+        return _vcall(el, _SETFOCUS, ctypes.c_long, []) == 0
     finally:
         _release(el)

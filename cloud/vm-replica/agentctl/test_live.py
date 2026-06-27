@@ -1260,6 +1260,65 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_uia_focus(b: Browser, offline: bool) -> None:
+    print("R130: focus an element by MEANING via UIA, then type with the keyboard (F169) — osctl")
+    # uia_set_value writes through the ValuePattern — but not every modern input
+    # offers one (rich text, contenteditable, custom canvases). uia_focus bridges
+    # the gap: it moves keyboard focus to an element found by meaning (UIA SetFocus),
+    # and then the universal keyboard floor (osctl.tap) types into it. Semantic
+    # locate handed to the keystroke floor — the two floors cooperating.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R130: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_focus"):
+        check("osctl exposes uia_focus", False, "missing primitive")
+        return
+
+    vk = {"d": 0x44, "a": 0x41, "o": 0x4F}
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available for UIA focus", note is not None, "none")
+        if not note:
+            return
+        ok = osctl.uia_focus(note["id"], ctype="Edit")
+        check("uia_focus sets keyboard focus to the Edit found by meaning (SetFocus)",
+              ok is True, f"ok={ok}")
+        time.sleep(0.4)
+        for ch in "dao":
+            osctl.tap(vk[ch])
+            time.sleep(0.1)
+        time.sleep(0.4)
+        edit = next((k for k in osctl.child_windows(note["id"])
+                     if k["class"] == "Edit"), None)
+        txt = osctl.window_text(edit["id"]) if edit else ""
+        check("the keyboard floor types into the UIA-focused element (locate→keyboard "
+              "bridge)", txt == "dao", f"text={txt!r}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.3)
+
+
 def round_uia_drive(b: Browser, offline: bool) -> None:
     print("R129: drive a modern UWP app end-to-end by semantic action (F168) — osctl")
     # The proof that the modern-app loop truly closes: take the Windows Calculator
@@ -8350,7 +8409,7 @@ def main() -> int:
               round_topmost, round_window_pid, round_key_state, round_mouse_state,
               round_pixel, round_window_text, round_set_window_text,
               round_control_at, round_find_control, round_menu, round_uia,
-              round_uia_find, round_uia_value, round_uia_drive,
+              round_uia_find, round_uia_value, round_uia_drive, round_uia_focus,
               round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,

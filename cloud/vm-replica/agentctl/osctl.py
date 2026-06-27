@@ -155,6 +155,12 @@ uia_find = getattr(_be, "uia_find", lambda win, name=None, ctype=None: None)
 uia_set_value = getattr(_be, "uia_set_value", lambda win, value, name=None, ctype=None: False)
 uia_get_value = getattr(_be, "uia_get_value", lambda win, name=None, ctype=None: "")
 uia_invoke = getattr(_be, "uia_invoke", lambda win, name=None, ctype=None: False)
+# UIA focus (F169): the bridge from semantic LOCATE to the keystroke floor. Some
+# modern inputs (rich text, contenteditable, custom canvases) expose no ValuePattern
+# to write through, but CAN be focused through the accessibility tree; once focused,
+# the universal keyboard floor (osctl.type/key) types into them. False if no element
+# / UIA unavailable.
+uia_focus = getattr(_be, "uia_focus", lambda win, name=None, ctype=None: False)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the
