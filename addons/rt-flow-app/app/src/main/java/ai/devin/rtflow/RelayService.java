@@ -955,7 +955,12 @@ public class RelayService extends Service {
             case "vpnStatus": case "detectProxy": case "currentProxy":
             case "shizukuGrantAll": case "shizukuShell": case "appCheckUpdate":
             case "appInstallUpdate": case "rotateRelayToken": return "";
-            default: return null;
+            // ── 值返回型方法 (appVer / 用户脚本板块 / GM 存储 / 取数指引): 委派给本体真桥,
+            //    使公网归一网页经 route-C 与手机 APK 取同一权威源、1:1 同步。本体被杀则返回 null。
+            default: {
+                MainActivity host = MainActivity.sInstance;
+                return host != null ? host.relayNativeInvoke(m, a) : null;
+            }
         }
     }
     private static String argStr(org.json.JSONArray a, int i) { return a != null && i < a.length() ? a.optString(i, "") : ""; }
