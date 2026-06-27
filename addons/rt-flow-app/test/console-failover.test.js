@@ -339,14 +339,30 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
   //   的 /i-init·/i//e/ 反代绝不能裸用静态 ENDPOINT(它无这些路由→必 404, 正是「控台开得出、
   //   页面打不开」). _proxyBase 须解析到「真正服务反代的活端点」(设备隧道/Worker), 全不可达才 null。
   {
-    // W1: ENDPOINT 已是活隧道(非静态) → 零探活直用, 不动 ENDPOINT。
+    // W1 (渲染基址 ≠ 控制面·核心): ENDPOINT 是「活但临时的设备隧道」(控制面 _preferDirect 升级而来),
+    //   渲染 app.devin.ai 静态资产却应改用**稳定中继边缘**(快·域名稳·不经手机) → _proxyBase 返回 Worker,
+    //   而非裸用慢/易轮换的设备临时隧道。控制面 ENDPOINT 不被 _proxyBase 改动。
     const counter = { total: 0, byBase: {} };
-    const mod = makeModule(baseDeps({ ENDPOINT: "https://live-tunnel.example",
-      fetch: makeFetch({ "https://live-tunnel.example": { status: 200, body: { ok: true } } }, counter),
-      location: { origin: "https://live-tunnel.example", protocol: "https:" } }));
+    const routes = {
+      "https://phone.lhr.life": { status: 200, body: { ok: true } },
+      [WORKER]: { status: 200, body: { ok: true, state: "default" } },
+    };
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://phone.lhr.life",
+      fetch: makeFetch(routes, counter),
+      location: { origin: "https://phone.lhr.life", protocol: "https:" } }));
     const base = await mod.proxyBase();
-    ok(base === "https://live-tunnel.example", "W1 ENDPOINT 已是活端点 → 直用");
-    ok(counter.total === 0, "W1 非静态宿主零探活, 实际 " + counter.total);
+    ok(base === WORKER, "W1 设备临时隧道在控制面活, 但渲染基址改用稳定中继 Worker(不经手机·边缘缓存), 实际 " + base);
+    ok(mod.getEndpoint() === "https://phone.lhr.life", "W1 _proxyBase 不篡改控制面 ENDPOINT");
+  }
+  {
+    // W1b: 已在稳定中继(Worker)上 → 渲染基址零额外探活直用。
+    const counter = { total: 0, byBase: {} };
+    const mod = makeModule(baseDeps({ ENDPOINT: WORKER,
+      fetch: makeFetch({ [WORKER]: { status: 200, body: { ok: true } } }, counter),
+      location: { origin: WORKER, protocol: "https:" } }));
+    const base = await mod.proxyBase();
+    ok(base === WORKER, "W1b ENDPOINT 已是稳定中继 → 直用");
+    ok(counter.total === 0, "W1b 已在中继上零探活, 实际 " + counter.total);
   }
   {
     // W2: 从 github.io 静态宿主开页 + Worker 活 → _proxyBase 探活切到 Worker(绝不回静态源)。
@@ -361,7 +377,8 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     ok(!mod.isStaticHost(base), "W2 解析结果绝非静态宿主");
   }
   {
-    // W3: 静态宿主 + 设备直连隧道活(优先于 Worker) → 解析到设备隧道。
+    // W3 (渲染策略·与控制面相反): 静态宿主开页 + 设备直连隧道活 + Worker 活 → 渲染基址选**稳定中继**,
+    //   不选设备临时隧道(控制面 _candBases 才让设备直连优先; 渲染大头走稳定边缘更快·域名稳·不经手机)。
     const counter = { total: 0, byBase: {} };
     const TUN = "https://dev-tunnel.trycloudflare.com";
     const routes = { [TUN]: { status: 200, body: { ok: true } }, [WORKER]: { status: 200, body: { ok: true } } };
@@ -370,7 +387,19 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
       fetch: makeFetch(routes, counter), localStorage: ls,
       location: { origin: "https://zhouyoukang1234-spec.github.io", protocol: "https:" } }));
     const base = await mod.proxyBase();
-    ok(base === TUN, "W3 设备直连隧道优先于 Worker 被选为反代端点, 实际 " + base);
+    ok(base === WORKER, "W3 渲染基址优先稳定中继 Worker(非设备临时隧道), 实际 " + base);
+  }
+  {
+    // W3b (兜底不破): 稳定中继探活不通 + 设备直连隧道活 → 渲染回退到设备隧道(渲染仍可用, 不因偏好中继而失渲)。
+    const counter = { total: 0, byBase: {} };
+    const TUN = "https://dev-tunnel.trycloudflare.com";
+    const routes = { [TUN]: { status: 200, body: { ok: true } }, [WORKER]: { status: 503, body: "dead" } };
+    const ls = makeLocalStorage(); ls.setItem("rtflow.rn.endpoints.direct", JSON.stringify([TUN]));
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://zhouyoukang1234-spec.github.io",
+      fetch: makeFetch(routes, counter), localStorage: ls,
+      location: { origin: "https://zhouyoukang1234-spec.github.io", protocol: "https:" } }));
+    const base = await mod.proxyBase();
+    ok(base === TUN, "W3b 稳定中继死 → 渲染回退设备直连隧道(兜底), 实际 " + base);
   }
   {
     // W4: 静态宿主 + 设备隧道与 Worker 全死 → 回 null(由 openInPage 显式提示, 绝不裸 fetch 静态源 404)。
