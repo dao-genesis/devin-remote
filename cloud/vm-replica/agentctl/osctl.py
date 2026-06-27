@@ -108,6 +108,12 @@ child_windows = getattr(_be, "child_windows", lambda win: [])
 # exact string over in one message — focus-independent, instant, even occluded.
 # On X11 it writes the window name (toolkits own widget text). No-op on older floor.
 set_window_text = getattr(_be, "set_window_text", lambda win, text: False)
+# Which CONTROL (not just top-level window) owns a screen pixel, and what it says:
+# {"id","class","text","top"}. window_under answers which window a click lands in;
+# this descends to the leaf control under the point and reads it — joining the
+# pixel the eye sees to the semantic control behind it (what an a11y inspector
+# does). None on bare desktop / older floor.
+control_at = getattr(_be, "control_at", lambda x, y: None)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

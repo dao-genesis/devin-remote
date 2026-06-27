@@ -1260,6 +1260,74 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_control_at(b: Browser, offline: bool) -> None:
+    print("R123: resolve a screen PIXEL to the semantic CONTROL behind it (F162) — osctl")
+    # Two perception worlds have grown side by side: the pixel floor (capture,
+    # find_color, window_under — *where* things are) and the semantic floor
+    # (window_text, child_windows — *what* things mean). They never touched: a
+    # pixel the eye found carried no meaning; a control's meaning had no place on
+    # screen. control_at(x,y) joins them — it descends to the leaf control under a
+    # point and reads it, so "there is something at this pixel" becomes "this is an
+    # Edit control holding THIS text." This is what an accessibility inspector does,
+    # and it is the bridge from seeing to understanding.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R123: native pixel→control resolution on the Windows floor)")
+        return
+    if not hasattr(osctl, "control_at"):
+        check("osctl exposes control_at", False, "missing primitive")
+        return
+    mark = "DAO-F162-" + str(os.getpid())
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available to point at", note is not None, "none")
+        if not note:
+            return
+        osctl.set_window_state(note["id"], "normal")
+        osctl.move_window(note["id"], 120, 120, 700, 500)
+        time.sleep(0.5)
+        edit = next((k for k in osctl.child_windows(note["id"])
+                     if k["class"] in ("Edit", "RichEditD2DPT")), None)
+        if edit:
+            osctl.set_window_text(edit["id"], mark)
+            time.sleep(0.3)
+        g = osctl.window_geometry(note["id"])
+        cx, cy = g["x"] + g["w"] // 2, g["y"] + g["h"] // 2
+        c = osctl.control_at(cx, cy)
+        check("control_at resolves the pixel to the leaf Edit control (pixel → "
+              "semantic control)", c is not None and c["class"] in ("Edit", "RichEditD2DPT"),
+              f"control={c}")
+        check("the resolved control's top-level is the Notepad window (pixel keyed "
+              "to the right window identity)", c is not None and c["top"] == note["id"],
+              f"top={c['top'] if c else None} note={note['id']}")
+        check("control_at reads the very text living under that pixel — seeing "
+              "becomes understanding", c is not None and mark in (c["text"] or ""),
+              f"text={c['text'] if c else None!r}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_set_window_text(b: Browser, offline: bool) -> None:
     print("R122: WRITE a control's content directly by identity, no focus/typing (F161) — osctl")
     # F160 read a control's text; this is its write dual. To fill a field the floor
@@ -7852,7 +7920,7 @@ def main() -> int:
               round_window_lifecycle, round_window_state, round_active_window,
               round_topmost, round_window_pid, round_key_state, round_mouse_state,
               round_pixel, round_window_text, round_set_window_text,
-              round_move, round_desktop,
+              round_control_at, round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

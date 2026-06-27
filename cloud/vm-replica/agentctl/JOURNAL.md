@@ -4552,6 +4552,51 @@ but transcending it where the OS offers a truer door.
 
 ---
 
+## F162 — the bridge: resolving a pixel to the control behind it (`control_at`, R123)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** Two perception worlds had grown side by side and never touched. The
+**pixel floor** (`capture_rgb`, `find_color`, template match, `window_under`) knew
+*where* things are but not what they mean — a found pixel is just a colour at a
+coordinate. The **semantic floor** (F160 `window_text`, `child_windows`, F161
+`set_window_text`) knew *what* controls mean but had no place for them on screen —
+a control handle is identity without location. So the floor could see a coloured
+region and could read a control's text, but could not say *"the thing at this
+pixel is that control."* Every visual find had to be re-grounded by guesswork to
+act on it semantically.
+
+**Primitive.**
+- `osctl.control_at(x, y)` → `{"id","class","text","top"}`: descends to the **leaf
+  control** under a screen point (Win32 `WindowFromPoint`; X11 tree descent via
+  repeated `XTranslateCoordinates`), reports its class, its text (via
+  `window_text`), and its owning top-level. Where `window_under` returns *which
+  window* a click lands in, this returns *which control* and *what it says*. This
+  is exactly what an accessibility inspector does on hover.
+
+**Live (Windows, Notepad placed at a known rect, pointed at its centre):**
+
+| check | result |
+|---|---|
+| pixel → leaf control | class `Edit` |
+| control's top-level | the Notepad window (ids match) |
+| control's text under the pixel | exact `'DAO-F162-5432'` |
+
+R123 (`round_control_at`, 4 checks); `_probe_controlat.py` standalone (all pass).
+Full suite **800/800** clean — the suite crosses 800.
+
+**Lesson (道法自然).** 二生三，三生萬物 — *two beget three, and three the ten thousand
+things.* The pixel world (一) and the semantic world (二) each, alone, were half-
+blind; `control_at` is the 三 that joins them, and from that joining the real
+repertoire becomes possible — see a thing, know what it is, read what it holds,
+act on it by identity. 知人者智，自知者明: the floor already knew itself (its own
+keyboard, mouse, windows) and knew the world (pixels, controls); here those two
+knowings meet in a single act. Seeing becomes understanding. This is the seam
+where 超越人類 stops being a slogan: a human hovering a control sees pixels and
+*infers* meaning; the floor reads the meaning and the location at once, exactly.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

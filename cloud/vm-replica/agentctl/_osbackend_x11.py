@@ -763,6 +763,37 @@ def window_under(x: int, y: int) -> "int | None":
         return int(client) & 0xFFFFFFFF
 
 
+def control_at(x: int, y: int) -> "dict | None":
+    """Which *control* (leaf window) owns the screen pixel ``(x, y)`` and what it
+    says: ``{"id","class","text","top"}``. Where :func:`window_under` returns the
+    managed top-level a click lands in, this descends the window tree to the
+    deepest child under the point and reads its name/class — joining the pixel the
+    eye sees to the semantic window behind it. (Win32 controls are real child
+    windows with text; under X11 toolkits often paint one window, so the leaf may
+    be the client itself — the honest OS-visible analogue.) None on bare root."""
+    with _lock:
+        cur = _root
+        cx, cy = int(x), int(y)
+        top = None
+        for _ in range(64):  # bounded descent through the window tree
+            nx = ctypes.c_int(); ny = ctypes.c_int(); child = ctypes.c_ulong()
+            _x.XTranslateCoordinates(_dpy, _root, cur, cx, cy,
+                                     ctypes.byref(nx), ctypes.byref(ny),
+                                     ctypes.byref(child))
+            if not child.value:
+                break
+            if top is None:
+                top = child.value
+            cur = child.value
+        if cur == _root or not cur:
+            return None
+        client = _client_of(top) if top else None
+        return {"id": int(cur) & 0xFFFFFFFF, "class": _wm_class(cur),
+                "text": _win_title(cur),
+                "top": (int(client) & 0xFFFFFFFF) if client else
+                       (int(top) & 0xFFFFFFFF if top else None)}
+
+
 _ALL_DESKTOPS = 0xFFFFFFFF  # _NET_WM_DESKTOP sentinel: window shown on every desktop
 
 

@@ -598,6 +598,25 @@ def window_under(x: int, y: int) -> "int | None":
     return int(root) if root else None
 
 
+def control_at(x: int, y: int) -> "dict | None":
+    """Which *control* — not just which top-level window — owns the screen pixel
+    ``(x, y)``, and what it says: ``{"id","class","text","top"}`` (``top`` = the
+    owning top-level root). Where :func:`window_under` answers *which window* a
+    click lands in, this descends to the leaf control under the point and reads its
+    text — joining the two perception worlds: a pixel the eye sees is resolved to
+    the semantic control behind it (an Edit, a Button, a label) and its content.
+    This is what an accessibility inspector does. None on bare desktop."""
+    pt = wintypes.POINT(int(x), int(y))
+    hwnd = user32.WindowFromPoint(pt)
+    if not hwnd:
+        return None
+    cls = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(wintypes.HWND(hwnd), cls, 256)
+    root = user32.GetAncestor(wintypes.HWND(hwnd), _GA_ROOT)
+    return {"id": int(hwnd), "class": cls.value, "text": window_text(int(hwnd)),
+            "top": int(root) if root else None}
+
+
 # ---- GDI screen capture --------------------------------------------------- #
 SRCCOPY = 0x00CC0020
 DIB_RGB_COLORS = 0
