@@ -773,3 +773,16 @@ def capture_rgb(x: int = 0, y: int = 0,
     gdi32.DeleteDC(mdc)
     user32.ReleaseDC(0, sdc)
     return w, h, bytes(rgb)
+
+
+# --- F165: UI Automation read access (sees inside modern apps) ----------------
+# Best-effort raw-COM UIA in pure ctypes; any failure degrades to empty results
+# so the backend still imports and callers fall back to the Win32 / pixel floor.
+try:
+    from _uia_win import uia_name, uia_children
+except Exception:  # pragma: no cover - UIA unavailable
+    def uia_name(win: int) -> str:
+        return ""
+
+    def uia_children(win: int) -> list:
+        return []

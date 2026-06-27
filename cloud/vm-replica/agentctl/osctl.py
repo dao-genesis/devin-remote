@@ -130,6 +130,15 @@ find_control = getattr(_be, "find_control", lambda top, cls=None, text=None: Non
 # the app draws its own menus (most X11 toolkits) or on an older floor.
 window_menu = getattr(_be, "window_menu", lambda win: [])
 invoke_menu = getattr(_be, "invoke_menu", lambda win, command_id: False)
+# UI Automation read (F165): the OS accessibility tree, which sees INSIDE modern
+# apps (Chrome/Electron/UWP) that paint everything in one HWND with no child
+# controls and no OS menu — exactly where child_windows/window_menu are blind.
+# uia_name -> a window's accessible name; uia_children -> its child elements as
+# [{"name","type"}] (type = UIA control-type: Button/Edit/Tab/Document/…). The
+# semantic floor made uniform across native AND modern software; "" / [] where
+# UIA is unavailable (non-Windows / older floor), with the Win32+pixel fallback.
+uia_name = getattr(_be, "uia_name", lambda win: "")
+uia_children = getattr(_be, "uia_children", lambda win: [])
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

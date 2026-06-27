@@ -4691,6 +4691,56 @@ floor holds the entire command tree and fires any verb in it, instantly, by name
 
 ---
 
+## F165 — seeing inside modern apps: UI Automation read (`uia_name` / `uia_children`, R126)
+
+**Ground: Windows Server 2022. Pure-ctypes raw COM — zero new dependencies.**
+
+**Friction (surfaced by the very browser the floor runs on).** The whole semantic
+layer F160–F164 reads *native* controls — real child HWNDs (`child_windows`,
+`window_text`, `find_control`) and OS menus (`window_menu`). Pointed at the
+**modern** app it lives beside — Chrome — it goes nearly blind: `child_windows`
+returns a single generic `Chrome Legacy Window` and the menu is empty, because
+Chrome (like Electron and UWP) paints its entire UI inside one HWND with no child
+controls and no OS menu. The semantic floor worked on Notepad and could not see a
+tab, an address bar, a button in the browser running the tests. A floor that means
+to operate *everything* cannot be blind to most of today's software.
+
+**Primitives (Windows-native; raw `IUIAutomation` COM via ctypes vtable calls).**
+- `osctl.uia_name(win)` → a window's accessible **name** from the OS accessibility
+  tree (the same tree a screen reader uses).
+- `osctl.uia_children(win)` → its child UIA elements as `[{"name","type"}]`, where
+  `type` is the control-type name (Button, Edit, Tab, Document, Pane, …) — seeing
+  *inside* modern apps where `child_windows` cannot.
+- Implemented in `_uia_win.py`: `CoCreateInstance(CUIAutomation)` →
+  `ElementFromHandle` → `GetCurrentPropertyValue`(Name/ControlType) and
+  `FindAll`(children, TrueCondition). Best-effort: any failure degrades to
+  `""`/`[]`, so the backend always imports and callers fall back to the
+  Win32 / pixel floor. Non-Windows returns the same empty defaults.
+
+**Live:**
+
+| target | `child_windows` (Win32) | `uia_children` (UIA) |
+|---|---|---|
+| Notepad (native) | Edit, status bar | `Edit "Text Editor"`, `StatusBar`, `TitleBar`, `MenuBar` |
+| **Chrome (modern)** | **1 generic** `Chrome Legacy Window` | `"x"`, `TitleBar`, `Pane` — **sees inside** |
+
+`uia_name`: Notepad → `'Untitled - Notepad'`, Chrome → `'x - Google Chrome for
+Testing'`. R126 (`round_uia`, 5 checks); `_probe_uia.py` standalone (all pass).
+Full suite **814/814** clean.
+
+**Lesson (道法自然).** 無有入於無間 — *the formless enters where there is no gap.*
+The Win32 reader needs a seam — a real child window, an OS menu — to grip; a modern
+app offers none, presenting one smooth opaque HWND. UIA does not pry at the surface
+but enters through the accessibility tree the app already publishes about itself,
+and there the interior — tabs, panes, documents — is plainly there. This is 反者道
+之動 again at the level of *which floor reads*: the native reader and the UIA reader
+are opposites (one grips native seams, one reads the published tree), and the floor
+needs both to perceive *all* software, not a subset. With F165 the semantic
+perception is no longer a Notepad trick — it is uniform across native and modern,
+and the floor can finally see the inside of the browser it has been driving blind.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

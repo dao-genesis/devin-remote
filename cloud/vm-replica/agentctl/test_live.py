@@ -1260,6 +1260,73 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_uia(b: Browser, offline: bool) -> None:
+    print("R126: UIA read sees inside modern apps where Win32 is blind (F165) — osctl")
+    # The whole semantic layer so far (child_windows/window_text/window_menu) reads
+    # *native* controls — real child HWNDs and OS menus. It is blind to modern apps:
+    # Chrome/Electron/UWP paint everything in one HWND with no child controls and no
+    # OS menu, so child_windows returns ~nothing. UIA is the OS accessibility tree
+    # that DOES see inside them. uia_name/uia_children give a uniform semantic read
+    # across native AND modern software — the floor's perception made whole.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R126: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_children"):
+        check("osctl exposes uia_name/uia_children", False, "missing primitive")
+        return
+
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available to read via UIA", note is not None, "none")
+        if note:
+            nm = osctl.uia_name(note["id"])
+            check("uia_name reads a native window's accessible name",
+                  bool(nm) and "Notepad" in nm, f"name={nm!r}")
+            kids = osctl.uia_children(note["id"])
+            check("uia_children enumerates the window's UIA elements with control types",
+                  bool(kids) and any(k.get("type") in ("Edit", "Document") for k in kids),
+                  f"kids={[k.get('type') for k in kids]}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+
+    # the real point: a modern app (the running Chrome) — UIA penetrates it where
+    # the Win32 child_windows path sees only a single generic legacy child.
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if ch:
+        uia_kids = osctl.uia_children(ch["id"])
+        check("UIA sees inside the modern app (Chrome) where Win32 is blind",
+              len(uia_kids) >= 1, f"uia={len(uia_kids)} elements")
+        check("uia_name reads Chrome's accessible name (modern app, no Win32 title "
+              "for a cross-process reader)", bool(osctl.uia_name(ch["id"])),
+              "empty name")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.3)
+    else:
+        print("  (no Chrome window present — modern-app penetration check skipped)")
+
+
 def round_menu(b: Browser, offline: bool) -> None:
     print("R125: read an app's command menu and invoke a command BY ID (F164) — osctl")
     # The floor could read controls and their text, locate them by meaning, click
@@ -8078,7 +8145,7 @@ def main() -> int:
               round_window_lifecycle, round_window_state, round_active_window,
               round_topmost, round_window_pid, round_key_state, round_mouse_state,
               round_pixel, round_window_text, round_set_window_text,
-              round_control_at, round_find_control, round_menu,
+              round_control_at, round_find_control, round_menu, round_uia,
               round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
