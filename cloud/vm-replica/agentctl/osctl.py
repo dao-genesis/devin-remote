@@ -161,6 +161,11 @@ uia_invoke = getattr(_be, "uia_invoke", lambda win, name=None, ctype=None: False
 # the universal keyboard floor (osctl.type/key) types into them. False if no element
 # / UIA unavailable.
 uia_focus = getattr(_be, "uia_focus", lambda win, name=None, ctype=None: False)
+# UIA TextPattern read (F170): read an element's full text via DocumentRange.GetText
+# — the deep read that reaches INTO modern documents (a Chrome/Electron page, a rich
+# editor) where uia_get_value (single-line value fields) returns empty and the native
+# window_text (native HWNDs only) cannot reach at all. "" if no TextPattern.
+uia_text = getattr(_be, "uia_text", lambda win, name=None, ctype=None, max_len=20000: "")
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

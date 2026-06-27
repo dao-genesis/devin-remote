@@ -50,6 +50,10 @@ _CTRUE = 21     # CreateTrueCondition
 _SETFOCUS = 3   # SetFocus
 _FINDALL = 6    # FindAll
 _GETPROP = 10   # GetCurrentPropertyValue
+# IUIAutomationTextPattern / IUIAutomationTextRange vtable indices
+_TEXT_DOCRANGE = 7    # IUIAutomationTextPattern::get_DocumentRange
+_RANGE_GETTEXT = 12   # IUIAutomationTextRange::GetText
+_UIA_TextPatternId = 10014
 # IUIAutomationElementArray vtable indices
 _ARR_LEN = 3    # get_Length
 _ARR_GET = 4    # GetElement
@@ -416,5 +420,45 @@ def uia_focus(win: int, name=None, ctype=None) -> bool:
         return False
     try:
         return _vcall(el, _SETFOCUS, ctypes.c_long, []) == 0
+    finally:
+        _release(el)
+
+
+def uia_text(win: int, name=None, ctype=None, max_len: int = 20000) -> str:
+    """Read an element's full text via the UIA TextPattern (DocumentRange.GetText)
+    — the proper way to read text *out of* modern documents (a Chrome/Electron page,
+    a rich editor) where the ValuePattern returns empty or is absent. The deep read
+    dual that reaches where :func:`uia_get_value` (single-line value fields) and the
+    native :func:`window_text` (native HWNDs only) cannot. "" if no element or no
+    TextPattern. ``max_len`` bounds a huge document."""
+    uia = _get_uia()
+    if not uia:
+        return ""
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return ""
+    try:
+        tp = _pattern(el, _UIA_TextPatternId)
+        if not tp:
+            return ""
+        try:
+            rng = ctypes.c_void_p()
+            if _vcall(tp, _TEXT_DOCRANGE, ctypes.c_long,
+                      [ctypes.POINTER(ctypes.c_void_p)],
+                      ctypes.byref(rng)) != 0 or not rng.value:
+                return ""
+            try:
+                out = ctypes.c_void_p()
+                if _vcall(rng.value, _RANGE_GETTEXT, ctypes.c_long,
+                          [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+                          max_len, ctypes.byref(out)) != 0 or not out.value:
+                    return ""
+                s = ctypes.wstring_at(out.value)
+                _oleaut.SysFreeString(out.value)
+                return s
+            finally:
+                _release(rng.value)
+        finally:
+            _release(tp)
     finally:
         _release(el)

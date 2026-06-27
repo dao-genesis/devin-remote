@@ -1319,6 +1319,49 @@ def round_uia_focus(b: Browser, offline: bool) -> None:
         time.sleep(0.3)
 
 
+def round_uia_text(b: Browser, offline: bool) -> None:
+    print("R131: read text OUT of a modern app via UIA TextPattern (F170) — osctl")
+    # uia_get_value reads single-line value fields; native window_text reads native
+    # HWNDs. Neither can read the rendered body of a modern document — Chrome paints
+    # its page in one HWND (no native text to GETTEXT) and exposes no ValuePattern for
+    # the page body (uia_get_value returns ""). uia_text goes through the UIA
+    # TextPattern (DocumentRange.GetText) — the accessibility tree's own text spine —
+    # and reads the page's actual rendered text. The deep read dual that completes
+    # perception INTO modern apps.
+    if not sys.platform.startswith("win"):
+        print("  (skip R131: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_text"):
+        check("osctl exposes uia_text", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — modern-app text read skipped)")
+        return
+    marker = "DAOFLOW-MARKER-7"
+    b.navigate(f"data:text/html,<h1>{marker}</h1><p>the%20floor%20reads%20me</p>")
+    time.sleep(1.2)
+    txt = ""
+    for _ in range(10):  # Chrome turns its a11y tree on lazily when UIA first asks
+        txt = osctl.uia_text(ch["id"], ctype="Document")
+        if marker in txt:
+            break
+        time.sleep(0.5)
+    check("uia_text reads the rendered page text out of a modern app (Chrome) via "
+          "TextPattern, where window_text/uia_get_value cannot",
+          marker in txt and "reads me" in txt, f"text={txt[:80]!r}")
+    # the contrast: the single-line ValuePattern read returns nothing for the body
+    val = osctl.uia_get_value(ch["id"], ctype="Document")
+    check("uia_get_value (single-line value spine) does NOT carry the document body "
+          "— so TextPattern is the necessary deep read", marker not in val,
+          f"val={val[:40]!r}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
 def round_uia_drive(b: Browser, offline: bool) -> None:
     print("R129: drive a modern UWP app end-to-end by semantic action (F168) — osctl")
     # The proof that the modern-app loop truly closes: take the Windows Calculator
@@ -8410,6 +8453,7 @@ def main() -> int:
               round_pixel, round_window_text, round_set_window_text,
               round_control_at, round_find_control, round_menu, round_uia,
               round_uia_find, round_uia_value, round_uia_drive, round_uia_focus,
+              round_uia_text,
               round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,

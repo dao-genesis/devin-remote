@@ -4909,6 +4909,43 @@ into *any* field, ValuePattern or not.
 
 ---
 
+## F170 — reading text OUT of a modern app: UIA TextPattern (`uia_text`, R131)
+
+**Ground: Windows Server 2022. Chrome.**
+
+**Friction (surfaced by probing the read side across both worlds).** The floor had
+three text reads, each blind outside its world: `window_text` (native HWND only —
+Chrome has no native text to `WM_GETTEXT`), `uia_get_value` (single-line
+ValuePattern — returns "" for a document body, confirmed live: Chrome's Document
+ValuePattern read is empty), and `uia_name` (the element's label, not its content).
+There was no way to read the *rendered body text* of a modern document.
+
+**Primitive.**
+- `osctl.uia_text(win, name=None, ctype=None, max_len=20000)` → the element's full
+  text via the UIA **TextPattern** (`get_DocumentRange` → `GetText`), the
+  accessibility tree's own text spine. Reaches into Chrome/Electron pages and rich
+  editors. "" if no TextPattern.
+
+**Live:** Chrome navigated to `data:text/html,<h1>DAOFLOW-MARKER-7</h1>…`;
+`uia_text(chrome, ctype="Document")` → `"DAOFLOW-MARKER-7 the floor reads me"`, while
+`uia_get_value` on the same Document returns `""` — proving TextPattern is the
+*necessary* deep read, not a duplicate of the value spine. (Chrome enables its a11y
+tree lazily when a UIA client first asks, so the read retries briefly.) Vtable
+indices confirmed by probe before integration: TextPattern `get_DocumentRange` = 7,
+TextRange `GetText` = 12. R131 (`round_uia_text`, 2 checks); `_probe_uiatext.py`
+standalone. Full suite **830/830** clean.
+
+**Lesson (道法自然).** 知其白，守其黑 — *know the white, keep to the black.* Three reads
+each shone in their own light and were dark elsewhere; completeness was not one read
+that does everything but knowing exactly where each is dark and growing the one that
+illuminates it. The perception floor now reads text from native controls
+(`window_text`), value fields (`uia_get_value`), labels (`uia_name`), and now the
+rendered body of modern documents (`uia_text`) — each kept to its own province, the
+set of them leaving no dark corner. 大方無隅 — the great square has no corners; the
+whole has no blind edge precisely because each piece admits its limit.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

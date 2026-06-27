@@ -780,7 +780,8 @@ def capture_rgb(x: int = 0, y: int = 0,
 # so the backend still imports and callers fall back to the Win32 / pixel floor.
 try:
     from _uia_win import (uia_name, uia_children, uia_find,
-                          uia_set_value, uia_get_value, uia_invoke, uia_focus)
+                          uia_set_value, uia_get_value, uia_invoke, uia_focus,
+                          uia_text)
 except Exception:  # pragma: no cover - UIA unavailable
     def uia_name(win: int) -> str:
         return ""
@@ -802,3 +803,6 @@ except Exception:  # pragma: no cover - UIA unavailable
 
     def uia_focus(win: int, name=None, ctype=None) -> bool:
         return False
+
+    def uia_text(win: int, name=None, ctype=None, max_len: int = 20000) -> str:
+        return ""
