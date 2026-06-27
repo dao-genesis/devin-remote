@@ -2192,6 +2192,20 @@ function daoMcpText(v) { return { content: [{ type: 'text', text: typeof v === '
 function daoMcpImage(b64, mime) { return { content: [{ type: 'image', data: b64, mimeType: mime || 'image/jpeg' }] }; }
 function daoMcpErr(msg) { return { content: [{ type: 'text', text: 'ERROR: ' + msg }], isError: true }; }
 function daoClamp(v, lo, hi, dflt) { const n = parseInt(String(v), 10); if (!isFinite(n)) return dflt; return Math.max(lo, Math.min(hi, n)); }
+// ── pc_ui_tree / pc_activate 底座 · UI Automation 控件树 + 窗口激活(帛书·「执大象·天下往」) ──
+//   PowerShell 脚本以 base64 内嵌(规避 JS 字面量转义), 运行时按需自写 ~/.dao 并经 execFileSync(-File) 同步执行。
+function daoWriteB64Script(name, b64) {
+    const fp = path.join(DAO_DIR, name);
+    try { const want = Buffer.from(b64, 'base64'); let cur = null; try { cur = fs.readFileSync(fp); } catch (e) { /* 守柔 */ }
+        if (!cur || !cur.equals(want)) { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(fp, want); } } catch (e) { /* 守柔 */ }
+    return fp;
+}
+function daoRunPwshFile(file, args, timeoutMs) {
+    const a = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file].concat(args || []);
+    return String(childProcess.execFileSync(pcGuiPwshExe(), a, { encoding: 'utf8', timeout: timeoutMs || 20000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }));
+}
+const PC_UIA_TREE_PS_B64 = 'cGFyYW0oW3N0cmluZ10kdGl0bGU9IiIsW2ludF0kcGlkXz0wLFtpbnRdJGRlcHRoPTQsW2ludF0kY2FwPTIwMCkNCiRFcnJvckFjdGlvblByZWZlcmVuY2U9J1N0b3AnDQpBZGQtVHlwZSAtQXNzZW1ibHlOYW1lIFVJQXV0b21hdGlvbkNsaWVudCxVSUF1dG9tYXRpb25UeXBlcyxXaW5kb3dzQmFzZSB8IE91dC1OdWxsDQppZigtbm90ICgnRGFvLkZnJyAtYXMgW3R5cGVdKSl7IEFkZC1UeXBlIC1OYW1lc3BhY2UgRGFvIC1OYW1lIEZnIC1NZW1iZXJEZWZpbml0aW9uICdbRGxsSW1wb3J0KCJ1c2VyMzIuZGxsIildIHB1YmxpYyBzdGF0aWMgZXh0ZXJuIFN5c3RlbS5JbnRQdHIgR2V0Rm9yZWdyb3VuZFdpbmRvdygpOycgfCBPdXQtTnVsbCB9DQokQUU9W1N5c3RlbS5XaW5kb3dzLkF1dG9tYXRpb24uQXV0b21hdGlvbkVsZW1lbnRdOyAkVFM9W1N5c3RlbS5XaW5kb3dzLkF1dG9tYXRpb24uVHJlZVNjb3BlXTsgJFdBTEs9W1N5c3RlbS5XaW5kb3dzLkF1dG9tYXRpb24uVHJlZVdhbGtlcl06OkNvbnRyb2xWaWV3V2Fsa2VyDQokcm9vdD0kQUU6OlJvb3RFbGVtZW50DQojIHBpY2sgdGFyZ2V0IHdpbmRvdw0KJHRhcmdldD0kbnVsbA0KJHdpbnM9JHJvb3QuRmluZEFsbCgkVFM6OkNoaWxkcmVuLFtTeXN0ZW0uV2luZG93cy5BdXRvbWF0aW9uLkNvbmRpdGlvbl06OlRydWVDb25kaXRpb24pDQpmb3JlYWNoKCR3IGluICR3aW5zKXsgdHJ5ew0KICBpZigkcGlkXyAtZ3QgMCAtYW5kICR3LkN1cnJlbnQuUHJvY2Vzc0lkIC1lcSAkcGlkXyl7JHRhcmdldD0kdzticmVha30NCiAgaWYoJHRpdGxlIC1uZSAiIiAtYW5kICR3LkN1cnJlbnQuTmFtZSAtbGlrZSAiKiR0aXRsZSoiKXskdGFyZ2V0PSR3O2JyZWFrfQ0KfWNhdGNoe30gfQ0KaWYoLW5vdCAkdGFyZ2V0KXsgIyBmb3JlZ3JvdW5kDQogICRmZz1bRGFvLkZnXTo6R2V0Rm9yZWdyb3VuZFdpbmRvdygpOyBmb3JlYWNoKCR3IGluICR3aW5zKXsgdHJ5eyBpZihbU3lzdGVtLkludFB0cl0kdy5DdXJyZW50Lk5hdGl2ZVdpbmRvd0hhbmRsZSAtZXEgJGZnKXskdGFyZ2V0PSR3O2JyZWFrfSB9Y2F0Y2h7fSB9DQp9DQppZigtbm90ICR0YXJnZXQpeyBXcml0ZS1PdXRwdXQgJ3siZXJyb3IiOiJubyB0YXJnZXQgd2luZG93In0nOyBleGl0IH0NCiRzY3JpcHQ6bj0wDQpmdW5jdGlvbiBOb2RlKCRlbCwkZCl7DQogIGlmKCRzY3JpcHQ6biAtZ2UgJGNhcCAtb3IgJGQgLWx0IDApe3JldHVybiAkbnVsbH0NCiAgJHNjcmlwdDpuKysNCiAgJGM9JGVsLkN1cnJlbnQNCiAgJHI9JGMuQm91bmRpbmdSZWN0YW5nbGUNCiAgJG89W29yZGVyZWRdQHtuYW1lPSRjLk5hbWU7dHlwZT0kYy5Db250cm9sVHlwZS5Qcm9ncmFtbWF0aWNOYW1lIC1yZXBsYWNlICdDb250cm9sVHlwZVwuJywnJzthaWQ9JGMuQXV0b21hdGlvbklkO3g9W2ludF0kci5YO3k9W2ludF0kci5ZO3c9W2ludF0kci5XaWR0aDtoPVtpbnRdJHIuSGVpZ2h0fQ0KICAka2lkcz1AKCkNCiAgaWYoJGQgLWd0IDApeyAkY2g9JFdBTEsuR2V0Rmlyc3RDaGlsZCgkZWwpOyB3aGlsZSgkY2ggLWFuZCAkc2NyaXB0Om4gLWx0ICRjYXApeyAka249Tm9kZSAkY2ggKCRkLTEpOyBpZigka24peyRraWRzKz0ka259OyAkY2g9JFdBTEsuR2V0TmV4dFNpYmxpbmcoJGNoKSB9IH0NCiAgaWYoJGtpZHMuQ291bnQpeyRvLmNoaWxkcmVuPSRraWRzfQ0KICByZXR1cm4gJG8NCn0NCiR0cmVlPU5vZGUgJHRhcmdldCAkZGVwdGgNCltwc2N1c3RvbW9iamVjdF1Ae3dpbmRvdz0kdGFyZ2V0LkN1cnJlbnQuTmFtZTtwaWQ9JHRhcmdldC5DdXJyZW50LlByb2Nlc3NJZDtub2Rlcz0kc2NyaXB0Om47dHJlZT0kdHJlZX0gfCBDb252ZXJ0VG8tSnNvbiAtRGVwdGggMzAgLUNvbXByZXNzDQo=';
+const PC_ACTIVATE_PS_B64 = 'cGFyYW0oW3N0cmluZ10kdGl0bGU9IiIsW2ludF0kcGlkXz0wKQ0KJEVycm9yQWN0aW9uUHJlZmVyZW5jZT0nU3RvcCcNCmlmKC1ub3QgKCdEYW9XaW4nIC1hcyBbdHlwZV0pKXsgQWRkLVR5cGUgQCcNCnVzaW5nIFN5c3RlbTt1c2luZyBTeXN0ZW0uUnVudGltZS5JbnRlcm9wU2VydmljZXM7dXNpbmcgU3lzdGVtLlRleHQ7DQpwdWJsaWMgY2xhc3MgRGFvV2luew0KIFtEbGxJbXBvcnQoInVzZXIzMi5kbGwiKV0gcHVibGljIHN0YXRpYyBleHRlcm4gYm9vbCBTZXRGb3JlZ3JvdW5kV2luZG93KEludFB0ciBoKTsNCiBbRGxsSW1wb3J0KCJ1c2VyMzIuZGxsIildIHB1YmxpYyBzdGF0aWMgZXh0ZXJuIGJvb2wgU2hvd1dpbmRvdyhJbnRQdHIgaCxpbnQgbik7DQogW0RsbEltcG9ydCgidXNlcjMyLmRsbCIpXSBwdWJsaWMgc3RhdGljIGV4dGVybiBib29sIElzV2luZG93VmlzaWJsZShJbnRQdHIgaCk7DQogW0RsbEltcG9ydCgidXNlcjMyLmRsbCIpXSBwdWJsaWMgc3RhdGljIGV4dGVybiBpbnQgR2V0V2luZG93VGV4dChJbnRQdHIgaCxTdHJpbmdCdWlsZGVyIHMsaW50IG4pOw0KIFtEbGxJbXBvcnQoInVzZXIzMi5kbGwiKV0gcHVibGljIHN0YXRpYyBleHRlcm4gYm9vbCBFbnVtV2luZG93cyhFbnVtUHJvYyBjYixJbnRQdHIgbCk7DQogW0RsbEltcG9ydCgidXNlcjMyLmRsbCIpXSBwdWJsaWMgc3RhdGljIGV4dGVybiB1aW50IEdldFdpbmRvd1RocmVhZFByb2Nlc3NJZChJbnRQdHIgaCxvdXQgdWludCBwaWQpOw0KIHB1YmxpYyBkZWxlZ2F0ZSBib29sIEVudW1Qcm9jKEludFB0ciBoLEludFB0ciBsKTsNCn0NCidAIH0NCiRmb3VuZD1bSW50UHRyXTo6WmVybzsgJGZvdW5kVGl0bGU9IiINCiRjYj1bRGFvV2luK0VudW1Qcm9jXXsgcGFyYW0oJGgsJGwpDQogIGlmKC1ub3QgW0Rhb1dpbl06OklzV2luZG93VmlzaWJsZSgkaCkpe3JldHVybiAkdHJ1ZX0NCiAgJHNiPU5ldy1PYmplY3QgVGV4dC5TdHJpbmdCdWlsZGVyIDUxMjsgW0Rhb1dpbl06OkdldFdpbmRvd1RleHQoJGgsJHNiLDUxMil8T3V0LU51bGw7ICR0PSRzYi5Ub1N0cmluZygpDQogIGlmKCR0IC1lcSAiIil7cmV0dXJuICR0cnVlfQ0KICAkcD0wOyBbRGFvV2luXTo6R2V0V2luZG93VGhyZWFkUHJvY2Vzc0lkKCRoLFtyZWZdJHApfE91dC1OdWxsDQogIGlmKCgkcGlkXyAtZ3QgMCAtYW5kICRwIC1lcSAkcGlkXykgLW9yICgkdGl0bGUgLW5lICIiIC1hbmQgJHQgLWxpa2UgIiokdGl0bGUqIikpeyAkc2NyaXB0OmZvdW5kPSRoOyAkc2NyaXB0OmZvdW5kVGl0bGU9JHQ7IHJldHVybiAkZmFsc2UgfQ0KICByZXR1cm4gJHRydWUNCn0NCltEYW9XaW5dOjpFbnVtV2luZG93cygkY2IsW0ludFB0cl06Olplcm8pfE91dC1OdWxsDQppZigkZm91bmQgLWVxIFtJbnRQdHJdOjpaZXJvKXsgV3JpdGUtT3V0cHV0ICd7Im9rIjpmYWxzZSwiZXJyb3IiOiJ3aW5kb3cgbm90IGZvdW5kIn0nOyBleGl0IH0NCltEYW9XaW5dOjpTaG93V2luZG93KCRmb3VuZCw5KXxPdXQtTnVsbCAgIyBTV19SRVNUT1JFDQokb2s9W0Rhb1dpbl06OlNldEZvcmVncm91bmRXaW5kb3coJGZvdW5kKQ0KW3BzY3VzdG9tb2JqZWN0XUB7b2s9JG9rO3RpdGxlPSRzY3JpcHQ6Zm91bmRUaXRsZX0gfCBDb252ZXJ0VG8tSnNvbiAtQ29tcHJlc3MNCg==';
 
 // ── browser_* · Chrome DevTools Protocol (CDP) ──
 function daoCdpHttpGet(p) {
@@ -2469,6 +2483,8 @@ function daoMcpToolDefs() {
         { name: 'pc_drag', description: '整机鼠标拖拽(归一化坐标 from→to)', inputSchema: S({ fromNx: { type: 'number' }, fromNy: { type: 'number' }, toNx: { type: 'number' }, toNy: { type: 'number' }, button: { type: 'string' } }, ['fromNx', 'fromNy', 'toNx', 'toNy']) },
         { name: 'pc_key_combo', description: '整机组合键(vks=Windows 虚拟键码数组·依次按下逆序抬起·如 [17,67]=Ctrl+C)', inputSchema: S({ vks: { type: 'array' } }, ['vks']) },
         { name: 'pc_clipboard', description: '剪贴板读/写(给 text 即写, 否则读)', inputSchema: S({ text: { type: 'string' } }) },
+        { name: 'pc_ui_tree', description: '整机窗口 UI Automation 控件树 JSON(name/type/aid/坐标)·缺省取前台窗口·可指定 title(模糊)或 pid·depth 深度·cap 节点上限', inputSchema: S({ title: { type: 'string' }, pid: { type: 'number' }, depth: { type: 'number' }, cap: { type: 'number' } }) },
+        { name: 'pc_activate', description: '激活/前置整机窗口(SW_RESTORE+SetForegroundWindow)·按 title(模糊)或 pid', inputSchema: S({ title: { type: 'string' }, pid: { type: 'number' } }) },
         // plugin_* 补全 (软件本体·公开所有端口 + 热修)
         { name: 'plugin_api', description: '直通插件任意 /api/* 端点(公开所有端口·route 必以 /api/ 开头)', inputSchema: S({ route: { type: 'string' }, method: { type: 'string' }, body: { type: 'object' }, query: { type: 'object' } }, ['route']) },
         { name: 'plugin_reload', description: '热修: 重载扩展宿主窗口(慎用·会重启当前 IDE 窗口加载新码)', inputSchema: S({ confirm: { type: 'boolean' } }) },
@@ -2641,6 +2657,25 @@ async function daoMcpCallTool(name, a) {
             return ok ? daoMcpText('ok') : daoMcpErr('gui-unavailable');
         }
         case 'pc_clipboard': { if (a.text !== undefined) { await vscode.env.clipboard.writeText(String(a.text)); return daoMcpText('ok'); } return daoMcpText(await vscode.env.clipboard.readText()); }
+        case 'pc_ui_tree': {
+            const f = daoWriteB64Script('dao-uia-tree.ps1', PC_UIA_TREE_PS_B64);
+            const args = [];
+            if (a.title) args.push('-title', String(a.title));
+            if (a.pid) args.push('-pid_', String(parseInt(a.pid, 10) || 0));
+            args.push('-depth', String(daoClamp(a.depth, 1, 12, 4)));
+            args.push('-cap', String(daoClamp(a.cap, 10, 1000, 200)));
+            try { const out = daoRunPwshFile(f, args, 25000); try { return daoMcpText(JSON.parse(out)); } catch (eP) { return daoMcpText(out.trim()); } }
+            catch (e) { return daoMcpErr('pc_ui_tree: ' + (e && e.message || e)); }
+        }
+        case 'pc_activate': {
+            if (!a.title && !a.pid) return daoMcpErr('pc_activate: title 或 pid 必填');
+            const f = daoWriteB64Script('dao-activate.ps1', PC_ACTIVATE_PS_B64);
+            const args = [];
+            if (a.title) args.push('-title', String(a.title));
+            if (a.pid) args.push('-pid_', String(parseInt(a.pid, 10) || 0));
+            try { const out = daoRunPwshFile(f, args, 12000); try { return daoMcpText(JSON.parse(out)); } catch (eP) { return daoMcpText(out.trim()); } }
+            catch (e) { return daoMcpErr('pc_activate: ' + (e && e.message || e)); }
+        }
         // ── plugin_* 补全 (软件本体·公开所有端口 + 热修) ──
         case 'plugin_api': { const route = String(a.route || ''); if (!route.startsWith('/api/')) return daoMcpErr('route must start with /api/'); const m = (a.method || (a.body !== undefined ? 'POST' : 'GET')).toUpperCase(); const body = a.body !== undefined ? a.body : (m === 'POST' ? {} : null); return daoMcpText(await daoMcpInvoke(route, body, a.query)); }
         case 'plugin_reload': { if (!a.confirm) return daoMcpErr('plugin_reload 会重启当前 IDE 窗口·须传 {confirm:true} 明确确认'); setTimeout(() => { try { vscode.commands.executeCommand('workbench.action.reloadWindow'); } catch (e) { /* 守柔 */ } }, 400); return daoMcpText('reload-scheduled (400ms)'); }

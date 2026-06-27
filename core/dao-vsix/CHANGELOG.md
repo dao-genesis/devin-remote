@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.39
+- **归一补全 · `pc_ui_tree` + `pc_activate` 回归(59 工具全量·与知识库文档逐字对齐·大成若缺其用不敝)**。
+  - 3.50.37 大升级时 `pc_*` 仅补到 13(drag/key_combo/clipboard),漏掉线上既有的 `pc_ui_tree`(整机窗口 UI Automation 控件树·name/type/aid/坐标)与 `pc_activate`(SW_RESTORE+SetForegroundWindow 按 title/pid 前置窗口)两件,致 `/mcp` 由 59 退化为 57、与「DAO Bridge MCP 使用文档」所载 15 个 `pc_*` 不符。本次按线上 3.50.33 实现原样归位:PowerShell 脚本以 base64 内嵌(`PC_UIA_TREE_PS_B64`/`PC_ACTIVATE_PS_B64`·规避 JS 字面量转义),经 `daoWriteB64Script` 自写 `~/.dao` + `daoRunPwshFile`(execFileSync `-File`)同步执行。
+  - 复得 `pc_*`=15、四模块合计 `/mcp`=59,恒与知识库文档/`tools/list` 一致。
+  - 自检: `node --check`(src+out)、dao-vsix 构建、render_check、rt-flow 测试(115+35)全过、rtflow 源↔vendored 一致、内嵌 base64 构建后解码回 1841/1627 字节合法 PowerShell。
+
 ## 3.50.38
 - **MCP 知识库归一 · 与内穿同源的「实时反向注入 + 断线零人工自愈」(闻道者日损)**。
   - **MCP 使用文档(第三篇知识)精简 + 软编码**: `bridgeGenerateMcpUsageMd()` 重写——
