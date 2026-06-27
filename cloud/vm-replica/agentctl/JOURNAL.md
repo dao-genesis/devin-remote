@@ -2694,6 +2694,43 @@ it is, and presses it where its middle truly lies.
 
 ---
 
+## F118 — the screen is a process in time: wait for a word to appear
+
+**Friction.** Every locator F115→F117 reads a *single frame* — one `capture_rgb`,
+one search. But a GUI unfolds in time: a result paints after a click, a page
+settles after a load. So the one capture an agent takes the instant it acts
+catches the screen *before* the word it waits for, and `locate_phrase` honestly
+returns `None` for text a heartbeat from existing. Acting and observing were one
+tick apart — the agent that clicks and reads in the same breath reads the *old*
+screen. Reading climbed glyph→word→line→block→phrase in *space*; it had not yet
+moved in *time*.
+
+**Mechanism.** Finding is a snapshot; appearing is a transition. To see a
+transition you must look more than once. Re-capture on a fixed cadence and run the
+spatial locator each time; the first frame that holds the target is the moment it
+appeared, and its bbox is already in the click frame.
+
+**Primitive.** `wait_for_phrase(bbox, atlas, target, timeout, interval)` loops:
+`capture_rgb` → `locate_phrase` over `bbox`, returning the hit the moment the
+target first appears, or `None` at the `timeout` deadline (never blocking forever,
+never guessing a place). It takes a screen *region* and recaptures itself rather
+than a fixed `rgb`, because the pixels it waits on do not yet exist when it is
+called. So `click(button); box = wait_for_phrase(field, atlas, "OK"); click(box…)`
+reads the screen as it *becomes*, not as it *was*.
+
+**Live (R82):** a blue `GO` button that paints the red result `OK` ~700 ms after
+it is pressed. Clicking `GO` then capturing at once misses the result
+(`locate_phrase` → `None`, the friction); `wait_for_phrase("OK")` returns its bbox
+the moment it appears, `None` for a word that never comes (short deadline). The
+loop closes through time: clicking the awaited `OK` reports `HIT:OK`. `586/586
+checks passed`, deterministic ×3.
+
+**Lesson (道法自然):** 動其機，萬化安 — the eye that only blinks once sees a still world.
+F118 lets the eye stay open, and the agent waits for what is coming instead of
+acting on what has passed; sight at last moves in time as it moved in space.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
