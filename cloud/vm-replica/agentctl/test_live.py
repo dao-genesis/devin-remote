@@ -1260,6 +1260,43 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_pixel(b: Browser, offline: bool) -> None:
+    print("R120: READ one pixel, and WAIT for a screen spot to change colour (F159) — osctl")
+    # Perception so far was all-or-nothing: capture_rgb grabs (and find_color
+    # scans) the whole desktop. But the commonest question is tiny — "what colour
+    # is THIS spot right now?" — and the floor had no cheap way to ask it, nor any
+    # way to WAIT on it. wait_window could wait for a window to exist; nothing
+    # could wait for a visual state (a light turning green, a spinner stopping, a
+    # render finishing) — the thing a human does by watching the screen. pixel()
+    # is the atom (a 1x1 foveal read); wait_pixel polls it with tolerance+timeout,
+    # the visual-state dual of wait_window.
+    for name in ("pixel", "wait_pixel"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+    w, h, full = osctl.capture_rgb()
+    x, y = w // 2, h // 2
+    off = (y * w + x) * 3
+    ref = (full[off], full[off + 1], full[off + 2])
+    check("pixel() reads one spot identically to the same coord in a full grab "
+          "(the atom of perception, cheaply)", osctl.pixel(x, y) == ref,
+          f"pixel={osctl.pixel(x, y)} full={ref}")
+
+    t0 = time.monotonic()
+    hit = osctl.wait_pixel(x, y, ref, tol=12, timeout=2.0)
+    dt = time.monotonic() - t0
+    check("wait_pixel returns immediately when the spot already holds the colour",
+          hit and dt < 0.5, f"hit={hit} dt={dt:.3f}")
+
+    impossible = ((ref[0] + 128) % 256, (ref[1] + 128) % 256, (ref[2] + 128) % 256)
+    t0 = time.monotonic()
+    miss = osctl.wait_pixel(x, y, impossible, tol=2, timeout=1.0)
+    dt = time.monotonic() - t0
+    check("wait_pixel times out (returns False) for a colour that never appears, "
+          "honouring the deadline", (not miss) and 0.9 < dt < 1.7,
+          f"matched={miss} dt={dt:.3f}")
+
+
 def round_mouse_state(b: Browser, offline: bool) -> None:
     print("R119: READ which mouse buttons are pressed right now (F158) — osctl")
     # F157 gave the keyboard its read; the mouse button was the last input WRITE
@@ -7680,7 +7717,7 @@ def main() -> int:
               round_window, round_clip_relay, round_zorder, round_window_under,
               round_window_lifecycle, round_window_state, round_active_window,
               round_topmost, round_window_pid, round_key_state, round_mouse_state,
-              round_move, round_desktop,
+              round_pixel, round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

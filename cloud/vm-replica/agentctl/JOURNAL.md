@@ -4428,6 +4428,46 @@ open eyes instead of in the dark. The input floor is whole.
 
 ---
 
+## F159 — the atom of perception, and waiting for visual state (`pixel` / `wait_pixel`, R120)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** Perception was all-or-nothing. `capture_rgb` grabs the whole desktop
+and `find_color` scans it; but the most frequent question is tiny — *what colour is
+**this** spot right now?* (is the indicator green, has the cell filled, did the
+light come on) — and there was no atomic way to ask it. Worse, there was no way to
+**wait** on a visual state. `wait_window` could block until a window is *born*, but
+nothing could block until something *looks* a certain way — a button enabling, a
+spinner stopping, a progress bar finishing, a render settling — which is exactly
+what a human does: watch the screen until it changes.
+
+**Primitives (platform-agnostic, built on `capture_rgb` — no backend duplication).**
+- `osctl.pixel(x, y)` → `(r, g, b)` for one spot, a 1×1 foveal read: the cheapest
+  perception the floor can make.
+- `osctl.wait_pixel(x, y, rgb, tol, timeout, interval)` → block until that spot
+  comes within `tol` of `rgb`, or time out. The visual-state dual of `wait_window`.
+
+**Live (Windows, deterministic — reads the live screen, changes nothing):**
+
+| check | result |
+|---|---|
+| `pixel(cx,cy)` vs same coord in full `capture_rgb` | identical `(255,255,255)` |
+| `wait_pixel` for the colour already there | True in **0.016 s** |
+| `wait_pixel` for a colour that never appears (1 s deadline) | False in **1.016 s** |
+
+R120 (`round_pixel`, 3 checks); `_probe_pixel.py` standalone (3/3). Full suite
+**788/788** clean.
+
+**Lesson (道法自然).** 見小曰明 — *to see the small is clarity.* The whole-screen
+grab is the grand gesture; real attention is a single point, watched over time.
+And waiting is not idleness — `wait_pixel` is 無為 that is not inaction: the floor
+stops *doing* and simply *watches*, letting the world arrive at the state it needs
+before it acts. After F158 closed the input floor (every write its read), F159
+begins giving perception the same temporal depth the actuators already trust:
+not just *read now*, but *wait until*.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

@@ -552,6 +552,39 @@ def capture_rgb(x: int = 0, y: int = 0,
     return _be.capture_rgb(x, y, w, h)
 
 
+def pixel(x: int, y: int) -> "tuple[int, int, bytes]":
+    """Read the colour of a *single* screen pixel as ``(r, g, b)``. The atom of
+    perception: ``find_color`` and template matching grab and scan the whole
+    desktop, but the commonest question — *what colour is this one spot right
+    now?* (is the indicator green, has the cell filled, did the dot light up) —
+    needs only one pixel. A 1×1 foveal ``capture_rgb`` is the cheapest read the
+    floor can make, and the basis on which :func:`wait_pixel` polls."""
+    _w, _h, rgb = capture_rgb(int(x), int(y), 1, 1)
+    return (rgb[0], rgb[1], rgb[2])
+
+
+def wait_pixel(x: int, y: int, rgb: "tuple[int, int, int]", tol: int = 12,
+               timeout: float = 5.0, interval: float = 0.05) -> bool:
+    """Block until the pixel at ``(x, y)`` comes within ``tol`` (per-channel) of
+    ``rgb``, or ``timeout`` elapses; True if it matched, False on timeout.
+
+    The floor could wait for a *window* to exist (:func:`wait_window`) but had no
+    way to wait for a *visual* state — a button enabling, a spinner stopping, a
+    progress bar reaching the end, a light turning green. Polling whole-screen
+    grabs in a loop is wasteful; this watches one pixel cheaply. The visual-state
+    dual of ``wait_window`` — perception-driven waiting, what a human does when
+    they watch a screen for something to change."""
+    deadline = time.monotonic() + timeout
+    tr, tg, tb = rgb
+    while True:
+        r, g, b = pixel(x, y)
+        if abs(r - tr) <= tol and abs(g - tg) <= tol and abs(b - tb) <= tol:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
+
+
 def screenshot(path: str) -> str:
     """Capture the whole virtual desktop to a PNG via GDI BitBlt."""
     w, h, rgb = capture_rgb()
