@@ -1461,6 +1461,47 @@ def read_block_region_words(rgb: bytes, size: tuple[int, int],
             for band in bands]
 
 
+def _line_words(rgb: bytes, size: tuple[int, int],
+                bbox: tuple[int, int, int, int],
+                atlas: dict[str, list[int]],
+                tol: int, gap: int, space_k: float, nw: int, nh: int, thr: int,
+                q: int, min_pop: float, min_dist: int
+                ) -> list[tuple[str, tuple[int, int, int, int]]]:
+    """Read one line's words as ``(label, bbox)`` pairs in reading order (F115/F117).
+
+    The shared spine under :func:`locate_word` and :func:`locate_phrase`: it
+    gathers every ink's glyph cells across ``bbox`` (:func:`palette` +
+    :func:`segment_run`), sorts them left-to-right, groups them into words at the
+    *bimodal* seam (a gap ``>= space_k`` times the median cell gap — the F113
+    boundary), reads each group (:func:`read_glyph` against ``atlas``), and returns
+    each word's label paired with the union bbox of its cells (tight to the word's
+    ink, in :func:`capture_rgb`/:func:`click` screen coordinates). One *line*: band
+    a block first. Empty region → ``[]``."""
+    inks = palette(rgb, size, bbox, q, min_pop, min_dist)[1:]
+    cells: list[tuple[int, int, int, int]] = []
+    for ink in inks:
+        cells.extend(segment_run(rgb, size, bbox, ink, tol, gap))
+    if not cells:
+        return []
+    cells.sort(key=lambda c: c[0])
+    gaps = [cells[i + 1][0] - cells[i][2] for i in range(len(cells) - 1)]
+    med = sorted(gaps)[len(gaps) // 2] if gaps else 0
+    groups: list[list[tuple[int, int, int, int]]] = []
+    cur = [cells[0]]
+    for i, g in enumerate(gaps):
+        if med > 0 and g >= space_k * med:
+            groups.append(cur)
+            cur = []
+        cur.append(cells[i + 1])
+    groups.append(cur)
+    out: list[tuple[str, tuple[int, int, int, int]]] = []
+    for grp in groups:
+        label = "".join(read_glyph(rgb, size, c, atlas, nw, nh, thr) for c in grp)
+        out.append((label, (min(c[0] for c in grp), min(c[1] for c in grp),
+                            max(c[2] for c in grp), max(c[3] for c in grp))))
+    return out
+
+
 def locate_word(rgb: bytes, size: tuple[int, int],
                 bbox: tuple[int, int, int, int],
                 atlas: dict[str, list[int]], target: str,
@@ -1497,28 +1538,10 @@ def locate_word(rgb: bytes, size: tuple[int, int],
     words only where the spacing is bimodal. A word the region does not hold — or
     that the atlas cannot spell — returns ``None`` rather than a guessed location;
     repeated words return the *leftmost* match (reading order)."""
-    inks = palette(rgb, size, bbox, q, min_pop, min_dist)[1:]
-    cells: list[tuple[int, int, int, int]] = []
-    for ink in inks:
-        cells.extend(segment_run(rgb, size, bbox, ink, tol, gap))
-    if not cells:
-        return None
-    cells.sort(key=lambda c: c[0])
-    gaps = [cells[i + 1][0] - cells[i][2] for i in range(len(cells) - 1)]
-    med = sorted(gaps)[len(gaps) // 2] if gaps else 0
-    groups: list[list[tuple[int, int, int, int]]] = []
-    cur = [cells[0]]
-    for i, g in enumerate(gaps):
-        if med > 0 and g >= space_k * med:
-            groups.append(cur)
-            cur = []
-        cur.append(cells[i + 1])
-    groups.append(cur)
-    for grp in groups:
-        label = "".join(read_glyph(rgb, size, c, atlas, nw, nh, thr) for c in grp)
+    for label, box in _line_words(rgb, size, bbox, atlas, tol, gap, space_k,
+                                  nw, nh, thr, q, min_pop, min_dist):
         if label == target:
-            return (min(c[0] for c in grp), min(c[1] for c in grp),
-                    max(c[2] for c in grp), max(c[3] for c in grp))
+            return box
     return None
 
 
@@ -1563,6 +1586,57 @@ def locate_block_word(rgb: bytes, size: tuple[int, int],
                           nw, nh, thr, q, min_pop, min_dist)
         if hit is not None:
             return hit
+    return None
+
+
+def locate_phrase(rgb: bytes, size: tuple[int, int],
+                  bbox: tuple[int, int, int, int],
+                  atlas: dict[str, list[int]], target: str,
+                  tol: int = 60, gap: int = 2, row_gap: int = 4,
+                  space_k: float = 1.8,
+                  nw: int = 48, nh: int = 48, thr: int = 24,
+                  q: int = 16, min_pop: float = 0.002,
+                  min_dist: int = 96) -> tuple[int, int, int, int] | None:
+    """Find a multi-*word* phrase and return the bbox spanning it (F117).
+
+    :func:`locate_word`/:func:`locate_block_word` (F115/F116) reach a *single*
+    word: each matches one run between seams, so a button labelled across a word
+    space — ``Sign In``, ``Add To Cart``, here ``OK GO`` — is unfindable. Ask
+    :func:`locate_word` for ``"OK GO"`` and it never matches (no single run carries
+    the space); ask it for ``"OK"`` and you get only that word's box, its centre
+    landing on *half* the button, not its middle. The locators could name where one
+    word sits but not where a labelled control — a *run of words* — spans.
+
+    This matches a phrase. It bands the block's rows (:func:`_band_rows`, as
+    :func:`locate_block_word`) and within each line reads the words in order
+    (:func:`_line_words`, the F115 spine), then slides a window over that line's
+    word labels for the consecutive run equal to ``target`` split on spaces. The
+    first match returns the **union bbox of exactly those words** — the whole
+    label's extent, whose centre is the control's true middle, in
+    :func:`capture_rgb`/:func:`click` screen coordinates. A one-word ``target`` is
+    :func:`locate_block_word`; a phrase no line carries in order → ``None``.
+
+    Honest in its parts' frames: the words must be *consecutive on one line* (it
+    never stitches a phrase across a line break or out of reading order), it parts
+    words only at the bimodal seam, reads only ``atlas`` glyphs and *text* colours,
+    and returns the first match top-to-bottom, left-to-right. A phrase the page
+    never wrote — or the atlas cannot spell — returns ``None``, not a guess."""
+    want = target.split(" ")
+    if not want:
+        return None
+    inks = palette(rgb, size, bbox, q, min_pop, min_dist)[1:]
+    if not inks:
+        return None
+    n = len(want)
+    for band in _band_rows(rgb, size, bbox, inks, tol, row_gap):
+        words = _line_words(rgb, size, band, atlas, tol, gap, space_k,
+                            nw, nh, thr, q, min_pop, min_dist)
+        labels = [w[0] for w in words]
+        for i in range(len(words) - n + 1):
+            if labels[i:i + n] == want:
+                boxes = [w[1] for w in words[i:i + n]]
+                return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                        max(b[2] for b in boxes), max(b[3] for b in boxes))
     return None
 
 

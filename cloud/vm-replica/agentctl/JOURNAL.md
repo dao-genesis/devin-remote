@@ -2654,6 +2654,46 @@ into it the same way, and the agent presses any word on any line it can read.
 
 ---
 
+## F117 — a button is a phrase, not a word: locate the run of words it spans
+
+**Friction.** `locate_word`/`locate_block_word` (F115/F116) reach a *single* word —
+each matches one run between seams. But controls are labelled across spaces:
+`Sign In`, `Add To Cart`, here `OK GO`. Ask `locate_block_word` for `"OK GO"` and
+it never matches (no single run carries the space); ask for `"OK"` and you get
+only that word's box, its centre landing on *half* the button. The locators could
+say where one word sits but not where a labelled control — a *run of words* —
+spans, nor where its true middle is.
+
+**Mechanism.** A phrase is a *consecutive run of words on one line*. The cells were
+already grouped into words at the bimodal seam (the F115 spine, now factored as
+`_line_words`, returning each word's `(label, bbox)`); a phrase is just a window
+over that per-line word list whose labels match `target.split(' ')`. Its extent is
+the union of exactly those words' boxes, and that union's centre — unlike any one
+word's — is the control's middle.
+
+**Primitive.** `locate_phrase(region, target)` bands the rows (`_band_rows`, like
+`locate_block_word`), reads each line's words in order (`_line_words`), and slides
+a window of `len(words)` over each line's labels for the consecutive run equal to
+the phrase, returning the union bbox of exactly those words. A one-word target is
+`locate_block_word`; a phrase no line carries in order → `None`. (`locate_word`
+was refactored onto the same `_line_words` spine — no behaviour change.)
+
+**Live (R81):** a multi-word button `OK GO` (red `OK` beside green `GO`, one
+clickable span) over a single `NO`. `read_block_region_words` reads the label as
+one line (`["OK GO","NO"]`); `locate_block_word("OK GO")` is `None` (the friction)
+while each word locates singly. `locate_phrase("OK GO")` spans `OK`'s left edge
+through `GO`'s right (the whole label), its centre falling *between* the two word
+centres (the control's middle), `None` for an absent `"NO BY"`, and equal to
+`locate_block_word` for a single word. The loop closes on the control: clicking the
+phrase's centre presses the multi-word button (`HIT:OKGO`). `579/579 checks
+passed`, deterministic ×3.
+
+**Lesson (道法自然):** 大制無割 — a button is one thing though many words paint it. F115
+found a word, F116 found it on any line; F117 sees the whole label as the control
+it is, and presses it where its middle truly lies.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
