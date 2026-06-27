@@ -3240,6 +3240,44 @@ act well you first wait for the restless to come to rest, then move once, surely
 
 ---
 
+## F133 — `wait_for_change`: wait for the onset of change (R97)
+
+**Friction.** `wait_until_stable` waits for motion to *end*; `wait_for_phrase`
+waits for a *known word*. But the most common post-action wait is neither: after
+a click you often need to know merely that *something happened* — a button lit
+up, a badge appeared, a spinner began, a row got selected — without knowing the
+eventual text or colour, and before any of it has settled. Reading immediately
+races the change and sees the old frame, so the agent concludes nothing happened
+and acts twice (double-submits, re-clicks).
+
+**Mechanism.** Capture (or accept) a ``baseline`` snapshot of the region, then
+re-capture every ``interval`` until a capture differs from it. Returns
+``{changed, captures, elapsed}``. The idiom pairs with F132:
+``baseline = crop; act(); wait_for_change(bbox, baseline)`` then
+``wait_until_stable`` — catch the change beginning, then its coming to rest.
+
+**Primitive.** `wait_for_change(bbox, baseline=None, interval=0.05, timeout=5.0)`.
+
+**Live (R97):** a gray box turns green 600ms after the trigger. An immediate read
+still equals the baseline and the title has not flipped — the friction, an eager
+read would miss it. `wait_for_change` samples until the box first differs
+(``changed=True``, ``elapsed>=0.3s`` so it genuinely waited for the delayed onset,
+``captures>=2``); afterwards the region differs from the baseline and ``ON`` is
+set. `702/702 checks passed`, deterministic ×3.
+
+**Honest note.** Onset is exact byte-inequality against the baseline, so it fires
+on the *first* differing pixel — sensitive by design (it must not miss a subtle
+change), which means a region that also carries incidental motion (a caret in the
+same bbox) would trip it early. Scope the bbox to the element you expect to
+change. It is the deliberate mirror of `wait_until_stable`: one fires on the first
+difference, the other only after many identities.
+
+**Lesson (道法自然):** 其安易持，其未兆易謀 — what has not yet stirred is easy to
+plan for; watch for the first sign of motion and you are never caught by acting
+into a frame that has already moved on.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
