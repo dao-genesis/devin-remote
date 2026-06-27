@@ -269,21 +269,31 @@ function _relay(){ return _pj(N.relayStatus?N.relayStatus():""); }
 //   ④ 缺身份(无 session/token·无法 mesh 定址)时退化: 设备活隧道直供 console.html > 局域网 > Worker /console 末位。
 //   RPC/curl 公网入口 (_bestPublic): 去中心化隧道优先, Worker 末位兜底 (不变)。
 // 持久去中心化引导宿主 (①·首字节来源·完整 APK 同款 UI console.html·非任何 Worker):
-//   base 可由 conn.webConsoleBase 覆写(换 IPFS CID 网关/自托管/中立账号)。默认 GitHub Pages(仓库自给自页·随
-//   main 自动同鲜·恒在线·正确 text/html·永不 1033); 另随附 IPFS CID 多网关镜像(内容寻址·零账号·账号中立·见
-//   _durableMirrors)作账号中立可选项。surge.sh(原无账号标识)已被永久下架(HTTP 451)故弃; jsDelivr 把 .html
-//   当 text/plain 故不用。同目录附 signal.js 及各板块 HTML(console.html 同源优先取之·见其 CDN_BASES)。
-var P2P_WEB_DEFAULT = "https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html";
-// 账号中立·内容寻址持久镜像 (IPFS CID·多公共网关·零账号·CID 永不失效)。__IPFS_CID__ 由发布脚本填实测 CID。
-//   首字节默认走 Pages(恒在线·最稳); 用户愿要「无账号标识」可把 webConsoleBase 覆写为下列任一网关 URL。
+//   base 可由 conn.webConsoleBase 覆写(换自托管/中立账号)。默认 = 内容寻址 IPFS 网关(零账号·零凭证·账号中立·
+//   内容哈希恒鲜·永不 1033·完全脱离任何个人 GitHub 账号); 多家公共 IPFS 网关互为镜像(任一可达即通·见
+//   _durableMirrors), 个人 GitHub Pages 降为末位兜底(仅 IPFS 网关全挂才用)。surge.sh(原无账号标识)已被永久
+//   下架(HTTP 451)故弃; jsDelivr 把 .html 当 text/plain 故不用。IPFS CID 是「含 console.html + signal.js +
+//   各板块 HTML 的目录」, 故 console.html 同源(同一 CID 目录)取子页·整链自包含(见其 CDN_BASES)。
+// 账号中立·内容寻址持久镜像 (IPFS CID·多公共网关·零账号·零凭证·CID 永不失效·完全脱离任何个人 GitHub 账号)。
+//   __IPFS_CID__ 由发布脚本填实测 CID; 该 CID 是「含 console.html + signal.js + 各板块 HTML 的目录」, 故从此处开页时
+//   console.html 取同源(同一 CID 目录)子页, 整链零账号自包含 (绝不回落 raw.githubusercontent 的个人仓)。
 var P2P_WEB_IPFS_CID = "bafybeifwt5i5dhytdpkwirclhnnyijp42imfxmir4nfbzhtbbsyi7i6mae";
+// 道法自然·去中心化首字节宿主默认 = 内容寻址 IPFS 网关 (零账号·零凭证·账号中立·内容哈希恒鲜·永不 1033)。
+//   github.io 由「默认」降级为末位兜底镜像 (仅当所有 IPFS 公共网关皆不可达时才用·见 _durableMirrors)。
+var P2P_WEB_GITHUB_FALLBACK = "https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html";
+var P2P_WEB_DEFAULT = (P2P_WEB_IPFS_CID && P2P_WEB_IPFS_CID.indexOf("__")!==0)
+  ? ("https://"+P2P_WEB_IPFS_CID+".ipfs.dweb.link/console.html")   // 内容寻址·账号中立·默认首选
+  : P2P_WEB_GITHUB_FALLBACK;                                       // 极端: CID 未填实 → 暂用 Pages 兜底
 function _durableMirrors(){
   var base=_p2pWebBase(), out=[base];
   var cid=P2P_WEB_IPFS_CID; if(cid && cid.indexOf("__")!==0){
+    // 多家互不隶属的公共 IPFS 网关 (任一可达即通·无单点·全部账号中立内容寻址)
     ["https://"+cid+".ipfs.dweb.link/console.html","https://ipfs.io/ipfs/"+cid+"/console.html",
-     "https://"+cid+".ipfs.cf-ipfs.com/console.html"].forEach(function(u){ if(out.indexOf(u)<0) out.push(u); });
+     "https://"+cid+".ipfs.cf-ipfs.com/console.html","https://"+cid+".ipfs.w3s.link/console.html",
+     "https://cloudflare-ipfs.com/ipfs/"+cid+"/console.html"].forEach(function(u){ if(out.indexOf(u)<0) out.push(u); });
   }
-  if(out.indexOf(P2P_WEB_DEFAULT)<0) out.push(P2P_WEB_DEFAULT);
+  // 末位兜底: 个人 GitHub Pages (仅 IPFS 网关全挂时才会轮到·非默认·账号相关故压最后)
+  if(out.indexOf(P2P_WEB_GITHUB_FALLBACK)<0) out.push(P2P_WEB_GITHUB_FALLBACK);
   return out;
 }
 function _p2pWebBase(){ var c=_conn(); return String((c&&c.webConsoleBase)||P2P_WEB_DEFAULT).replace(/\s+/g,""); }

@@ -787,8 +787,34 @@ var _trk = {}; // email → {no,who,running,awaiting,blocked,total,items,ts}
 //   亮→灰只由「一次成功轮询确认该号已无活跃对话」触发(见 _pollOneAcc 的 delete), 绝不因计时器到点而误灰。
 var TRK_LIVE_MS = 180000;     // 3min: 视为"刚确认"的新鲜窗
 var TRK_HOLD_MS = 1800000;    // 30min: 显示保留窗 (后台冻结期沿用上次态, 不误灰; 超此才真陈旧不回放)
-function _saveTrk(){ try{ var o={}; Object.keys(_trk).forEach(function(e){ var s=_trk[e]; if(s&&Date.now()-(s.ts||0)<TRK_HOLD_MS) o[e]=s; }); localStorage.setItem("rtflow.trk", JSON.stringify(o)); }catch(e){} }
+function _saveTrkLocalOnly(){ try{ var o={}; Object.keys(_trk).forEach(function(e){ var s=_trk[e]; if(s&&Date.now()-(s.ts||0)<TRK_HOLD_MS) o[e]=s; }); localStorage.setItem("rtflow.trk", JSON.stringify(o)); }catch(e){} }
+function _saveTrk(){ _saveTrkLocalOnly(); _mirrorTrkToVault(); }
 function _loadTrk(){ try{ var o=JSON.parse(localStorage.getItem("rtflow.trk")||"{}"); Object.keys(o).forEach(function(e){ var s=o[e]; if(s&&Date.now()-(s.ts||0)<TRK_HOLD_MS) _trk[e]=s; }); }catch(e){} }
+// ── 对话追踪状态「跨设备共享」(道法自然·二者同源): _trk 写入共享金库 (Documents/DevinCloud, 经 Native.vaultSave;
+//   网页外壳无 Native 时由 __rn 垫片经中继直连手机金库) → 手机轮询出的「哪些对话在跑/待你/卡住/额度耗尽」即刻
+//   镜像到任意浏览器网页版, 不再「各存各的 localStorage·打开即全新空环境」。与账号库(restoreAccountsFromVault) 同机制。
+//   合并: 按账号 email 各带 ts, 新者胜(谁刚轮询过谁权威); 账号转空闲写新 ts 墓碑(total:0)→ 跨设备同步熄灯, 绝不被旧「运行」回放覆盖。
+var _trkVaultT=0;
+function _mirrorTrkToVault(){
+  try{ if(!N.vaultSave) return; clearTimeout(_trkVaultT);
+    _trkVaultT=setTimeout(function(){ try{
+      var vault={}; try{ if(N.vaultLoad){ var raw=N.vaultLoad("rtflow.trk"); if(raw) vault=JSON.parse(raw)||{}; } }catch(e){}
+      var now=Date.now();
+      Object.keys(_trk).forEach(function(e){ var s=_trk[e]; if(!s) return; var v=vault[e]; if(!v || (s.ts||0)>=(v.ts||0)) vault[e]=s; });   // 本机新于金库 → 推上去 (read-modify-write 合并, 不抹掉他设备更鲜的号)
+      Object.keys(vault).forEach(function(e){ var v=vault[e]; if(!v||now-(v.ts||0)>=TRK_HOLD_MS) delete vault[e]; });                  // 陈旧/过期墓碑剔除, 金库不肿
+      N.vaultSave("rtflow.trk", JSON.stringify(vault));
+    }catch(e){} }, 2500);
+  }catch(e){}
+}
+function _restoreTrkFromVault(){
+  try{ if(!N.vaultLoad) return; var raw=N.vaultLoad("rtflow.trk"); if(!raw) return;   // 网页垫片首读 cache miss 回 null → 由下方延时重试兜住
+    var o; try{ o=JSON.parse(raw); }catch(e){ return; } if(!o||typeof o!=="object") return;
+    var now=Date.now(), changed=false;
+    Object.keys(o).forEach(function(e){ var s=o[e]; if(!s||now-(s.ts||0)>=TRK_HOLD_MS) return;
+      var cur=_trk[e]; if(!cur || (s.ts||0)>(cur.ts||0)){ _trk[e]=s; changed=true; } });   // 金库新者胜 → 即刻镜像手机最新追踪态
+    if(changed){ _saveTrkLocalOnly(); try{ paintTrk(); paintRowRun(); _repushTabsFromTrk(); }catch(e){} }
+  }catch(e){}
+}
 // 并发池: 以账号为中心同时(默认6路)拉取会话, 把 72 号的串行等待压成并行 → 跨设备运行近实时识别。
 async function _pool(items, conc, fn){
   var idx=0; var n=items.length; conc=Math.max(1,Math.min(conc|0||1,n));
@@ -864,7 +890,8 @@ async function refineStuck(a, item){
 }
 function _pruneSig(){ var now=Date.now(); for(var k in _sigMap){ if(_sigMap.hasOwnProperty(k)&&(now-(_sigMap[k].since||0))>1800000) delete _sigMap[k]; } }
 var _untrackedUuids = (function(){try{return new Set(JSON.parse(localStorage.getItem("rtflow.untracked")||"[]"));}catch(e){return new Set();}})();
-function _saveUntracked(){ localStorage.setItem("rtflow.untracked", JSON.stringify(Array.from(_untrackedUuids))); }
+function _saveUntracked(){ var s=JSON.stringify(Array.from(_untrackedUuids)); try{ localStorage.setItem("rtflow.untracked", s); }catch(e){} try{ if(N.vaultSave) N.vaultSave("rtflow.untracked", s); }catch(e){} }   // 已停追踪列表亦跨设备共享 (并集·单调增)
+function _restoreUntrackedFromVault(){ try{ if(!N.vaultLoad) return; var raw=N.vaultLoad("rtflow.untracked"); if(!raw) return; var arr=JSON.parse(raw); if(!Array.isArray(arr)) return; var add=false; arr.forEach(function(u){ if(u&&!_untrackedUuids.has(u)){ _untrackedUuids.add(u); add=true; } }); if(add){ try{ localStorage.setItem("rtflow.untracked", JSON.stringify(Array.from(_untrackedUuids))); }catch(e){} try{ paintTrk(); paintRowRun(); }catch(e){} } }catch(e){} }
 function stopTrack(uuid){ _untrackedUuids.add(uuid); _saveUntracked(); paintTrk(); paintRowRun(); toast("已停止追踪此对话"); }
 function toggleConv(){ _convOpen=!_convOpen; localStorage.setItem("rtflow.convOpen",_convOpen?"1":"0"); var b=document.getElementById("convBody"); b.classList.toggle("collapsed",!_convOpen); document.getElementById("convArrow").innerHTML=_convOpen?"&#9660;":"&#9650;"; }
 function trkHtml(){
@@ -949,7 +976,7 @@ async function _pollOneAcc(a, realNo){
   items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="exhausted")exhausted++; else if(it.cls==="blocked")blocked++; });
   var total=running+awaiting+blocked+exhausted;
   if(total>0){ _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,exhausted:exhausted,total:total,items:items,ts:Date.now()}; if(exhausted>0) _quotaAlert(a,exhausted); }
-  else delete _trk[(a.email||"").toLowerCase()];
+  else _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:0,awaiting:0,blocked:0,exhausted:0,total:0,items:[],ts:Date.now()};   // 墓碑(非删除): 转空闲也带新 ts → 经金库跨设备同步熄灯, 显示侧 total<=0 一律按无活跃处理
   // 推送该账号"最需关注对话名+状态"到顶部标签 (卡住/待你>待输入>运行优先, 让需你处理的浮上来)
   try{
     var top=items.filter(function(x){return x.cls==="exhausted";})[0]
@@ -1465,14 +1492,18 @@ document.getElementById("convBody").classList.toggle("collapsed",!_convOpen);
 document.getElementById("convArrow").innerHTML=_convOpen?"&#9660;":"&#9650;";
 _initCfgUI();
 _loadTrk();          // 先回放上次运行态 → render() 即刻给在跑的账号上色, 消除刷新后空窗
+_restoreTrkFromVault(); _restoreUntrackedFromVault();   // 再叠加金库共享态 → 网页版打开即镜像手机当前追踪 (不必等自身轮询)
 render();
 paintTrk();          // 详情区也立即铺上缓存的运行清单
 _repushTabsFromTrk();// 顶部页签绿灯也从缓存即刻重点亮(刷新后不等网络)
+// 金库读在网页垫片首访为 cache miss(回 null·后台异步填) → 与账号库同款多次延时重试, 权限/缓存到位后必镜像。
+[800,2000,4000,8000].forEach(function(ms){ setTimeout(function(){ _restoreTrkFromVault(); _restoreUntrackedFromVault(); }, ms); });
 pollTrk();           // 随后实时校正(并发, 近实时)
 // 重新可见(道·守柔不失): 回前台先用缓存态即刻复原上色(绝不先闪成灰), 内存若被系统回收则从持久化重载,
 //   随后强制重轮询自校正(force 绕过隐藏门控)。这样「切后台/刷新/手机微动作」回来时亮灯不灭、秒校正。
 function _resumeVisible(){
   try{ if(!Object.keys(_trk).length) _loadTrk(); }catch(e){}   // webview 被回收→从盘回放
+  try{ _restoreTrkFromVault(); _restoreUntrackedFromVault(); }catch(e){}   // 回前台先叠加金库共享态(他设备/手机的最新追踪), 再自校正
   render(); paintTrk(); paintRowRun(); _repushTabsFromTrk();   // 先按缓存上色+重亮顶部页签灯, 不闪灰
   pollTrk(true);                                              // 强制重轮询自校正(不受 _notVisible 门控)
   try{ autoQuotaTick(true); }catch(e){}

@@ -5549,10 +5549,38 @@ public class MainActivity extends AppCompatActivity {
               .append(",\"account\":").append(safeTabAccount(t.accountJson))
               .append(",\"internal\":").append(t.internal)
               .append(",\"active\":").append(i == active)
+              .append(tabMetaJson(t))
               .append(",\"viewers\":").append(viewersJson(t.vid, i == active, now))
               .append("}");
         }
         return sb.append("]").toString();
+    }
+
+    /** 标签实时态 (该号最活跃对话名/状态/剩余额度) JSON 片段, 供 ipcListTabs 外发给网页控台第二行镜像,
+     *  让网页与手机原生标签条 1:1 同步显示对话状态点 + 美金额度 (数据源同 chipTitle: sTabStatus/sTabDollars)。 */
+    private String tabMetaJson(Tab t) {
+        String convName = "", status = "", dollars = "";
+        if (t != null && t.accountJson != null) {
+            try {
+                JSONObject a = new JSONObject(t.accountJson);
+                String id = a.optString("id", a.optString("email", ""));
+                String email = a.optString("email", id);
+                String emailLc = email.toLowerCase();
+                String money = sTabDollars.get(id);
+                if (money == null) money = sTabDollars.get(emailLc);
+                if (money != null) dollars = money;
+                String[] sta = sTabStatus.get(id);
+                if (sta == null) sta = sTabStatus.get(email);
+                if (sta == null) sta = sTabStatus.get(emailLc);
+                if (sta != null) {
+                    convName = sta[0] == null ? "" : sta[0];
+                    status = sta[1] == null ? "" : sta[1];
+                }
+            } catch (Exception ignored) {}
+        }
+        return ",\"convName\":" + JSONObject.quote(convName)
+             + ",\"status\":" + JSONObject.quote(status)
+             + ",\"dollars\":" + JSONObject.quote(dollars);
     }
 
     /** 下载列表 (供网页控台 📥 悬浮窗 1:1 呈现手机下载管理): 仅外发文件名/大小/状态/mime/序号, 不含绝对路径。 */

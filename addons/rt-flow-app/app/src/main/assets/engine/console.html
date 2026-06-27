@@ -75,6 +75,11 @@
   .mchip.live .dot{background:#ff9f1c;box-shadow:0 0 5px #ff9f1c}
   .mchip .mt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
   .mchip .ma{color:#6e7681;font-size:10px;white-space:nowrap;flex:0 0 auto}
+  /* 道法自然·1:1 镜像手机标签状态点: 运行🟢 / 卡顿·等待🟠 / 阻塞🔴 (数据源 = ipcListTabs 的 status, 同手机原生 statusDot) */
+  .mchip .dot.run{background:#2ea043;box-shadow:0 0 5px #2ea043}
+  .mchip .dot.wait{background:#ff9f1c;box-shadow:0 0 5px #ff9f1c}
+  .mchip .dot.block{background:#f85149;box-shadow:0 0 5px #f85149}
+  .mchip .m$ {color:#3fb950;font-size:10px;font-weight:700;white-space:nowrap;flex:0 0 auto}
   #mirror .mpeople{flex:0 0 auto;font-size:11px;color:#ff9f1c;font-weight:600;margin-right:5px}
   #frames{position:relative;flex:1 1 auto;background:var(--bg)}
   #frames iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
@@ -753,11 +758,21 @@
   //   与 Worker 自托管 console.html(同样取 raw·5min 边缘缓存)同源同鲜 → 外壳与板块永不错位。
   //   jsDelivr(@main 边缘缓存 ~12h·且按 min/raw 变体分别缓存, purge 难全覆盖→曾整日发旧板)退为加速回退。
   var ASSETS = Object.create(null);
-  var CDN_BASES = [
+  // 道法自然·去私人标识·内容寻址优先: 各板块 HTML/signal.js 首选从内容寻址 IPFS 网关(零账号·零凭证·账号中立)取,
+  //   多家公共网关互为镜像(任一可达即通)。CID 是「含全部 engine 文件的目录」→ base+name 即取该文件。仅当 IPFS
+  //   全挂才回退 raw.githubusercontent / jsDelivr(账号相关·末位)。SELF_BASE(同源)仍恒居最前(见下方 unshift)。
+  var _CONSOLE_IPFS_CID = "bafybeifwt5i5dhytdpkwirclhnnyijp42imfxmir4nfbzhtbbsyi7i6mae";
+  var CDN_BASES = [];
+  if(_CONSOLE_IPFS_CID && _CONSOLE_IPFS_CID.indexOf("__")!==0){
+    CDN_BASES.push("https://"+_CONSOLE_IPFS_CID+".ipfs.dweb.link/",
+                   "https://ipfs.io/ipfs/"+_CONSOLE_IPFS_CID+"/",
+                   "https://"+_CONSOLE_IPFS_CID+".ipfs.cf-ipfs.com/");
+  }
+  CDN_BASES.push(
     "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/",
     "https://fastly.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/",
     "https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/"
-  ];
+  );
   // 同源优先 (道法自然·去私人标识): 本页若由中立静态站(surge / 自托管 / GitHub Pages)直发,
   //   则各板块 HTML 与 signal.js 与本页同源同目录 —— 取之既不含任何私人账号标识、又与本页同鲜。
   //   仅当本页源是 http(s) 且非上面的公共 CDN 域才前插(APK 内 file:// 直身路径不插, 免去一次无谓跨协议探测);
@@ -1096,6 +1111,10 @@
   function acctTag(a){ if(!a||typeof a!=="object") return ""; var n=(a.no!=null&&a.no!=="")?("#"+a.no):""; var o=a.orgName||"";
     var s=[n,o].filter(Boolean).join(" "); return s||(a.email||""); }
   var _mirrorSig="", _mirrorEverLoaded=false;
+  // 对话状态 → 状态点 CSS 类 (1:1 复刻手机原生 statusDot: 运行🟢 / 卡顿·等待🟠 / 阻塞🔴)
+  function statusClass(s){ s=String(s||"").toLowerCase(); if(!s) return "";
+    if(s.indexOf("block")>=0||s.indexOf("stuck")>=0||s.indexOf("wait")>=0) return s.indexOf("block")>=0?"block":"wait";
+    if(s.indexOf("run")>=0||s.indexOf("work")>=0||s.indexOf("active")>=0) return "run"; return ""; }
   function renderMirror(){
     if(!APK_TABS.length){
       // 双行页面栏: 第二行(手机标签镜像)恒在 —— 旧逻辑空标签即给 .empty(display:none)致「第二行没了」。
@@ -1113,7 +1132,7 @@
     var people=Object.keys(seen).length;
     // 签名防抖 (复刻 APK presenceSig): 数据未变则跳过整条 DOM 重建 → 消除每 3.5s 轮询的无谓回流/GC/闭包分配。
     var sig=people+"|"+FRONT_VID+"||"+APK_TABS.map(function(tb){
-      return tb.id+":"+(tb.active?1:0)+":"+((tb.viewers&&tb.viewers.length)||0)+":"+(tb.title||"")+":"+acctTag(tb.account)+":"+(tb.internal?internalKey(tb.url):(tb.url||"")); }).join("~");
+      return tb.id+":"+(tb.active?1:0)+":"+((tb.viewers&&tb.viewers.length)||0)+":"+(tb.title||"")+":"+acctTag(tb.account)+":"+(tb.internal?internalKey(tb.url):(tb.url||""))+":"+(tb.status||"")+":"+(tb.convName||"")+":"+(tb.dollars||""); }).join("~");
     if(sig===_mirrorSig) return;
     _mirrorSig=sig;
     mirrorEl.className=""; mirrorEl.innerHTML="";
@@ -1127,9 +1146,11 @@
       var mine=(tb.id===FRONT_VID);
       var c=document.createElement("div");
       c.className="mchip"+(tb.active?" on":"")+(live?" live":"")+(mine?" me":"");
-      var dot=document.createElement("span"); dot.className="dot"; c.appendChild(dot);
+      var scls=statusClass(tb.status);
+      var dot=document.createElement("span"); dot.className="dot"+(scls?(" "+scls):""); c.appendChild(dot);
+      if(tb.dollars){ var dl=document.createElement("span"); dl.className="m$"; dl.textContent=tb.dollars; c.appendChild(dl); }
       var t=document.createElement("span"); t.className="mt";
-      t.textContent=tb.title||(key?("板块 "+key):host(tb.url)); c.appendChild(t);
+      t.textContent=tb.convName||tb.title||(key?("板块 "+key):host(tb.url)); c.appendChild(t);
       var vc=(tb.viewers&&tb.viewers.length)||0;
       if(vc>1){ var vb=document.createElement("span"); vb.className="ma"; vb.textContent="👥"+vc; c.appendChild(vb); }
       var at=acctTag(tb.account); if(at){ var a=document.createElement("span"); a.className="ma"; a.textContent=at; c.appendChild(a); }
@@ -1684,9 +1705,14 @@
   var cfg=document.getElementById("cfg");
   // 持久去中心化引导宿主(收敛架构①·首字节来源): 分享「与本页同款的完整控台 console.html」, 链接只带稳定
   //   session/token → 永不 1033 死链。道法自然·反则道之动也: 临时隧道 URL 重启即换, 故绝不把它当分享宿主;
-  //   首字节恒来自「恒在线的持久宿主」—— 本页若由持久宿主(GitHub Pages 仓库自给自页 / IPFS 内容寻址网关·非
-  //   临时隧道·非 Worker)经 http(s) 载入则自指本源; 否则(APK file:// / 临时隧道 / 局域网 / Worker)回退 Pages。
-  var P2P_CLIENT_CDN_FALLBACK="https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html";
+  //   首字节恒来自「恒在线的持久宿主」—— 本页若由持久宿主(IPFS 内容寻址网关 / GitHub Pages·非临时隧道·非
+  //   Worker)经 http(s) 载入则自指本源; 否则(APK file:// / 临时隧道 / 局域网 / Worker)回退默认持久宿主。
+  //   默认持久宿主 = 内容寻址 IPFS 网关(零账号·零凭证·账号中立·脱离任何个人 GitHub); 个人 Pages 仅作末位兜底。
+  var P2P_CLIENT_IPFS_CID="bafybeifwt5i5dhytdpkwirclhnnyijp42imfxmir4nfbzhtbbsyi7i6mae";
+  var P2P_CLIENT_GITHUB_FALLBACK="https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html";
+  var P2P_CLIENT_CDN_FALLBACK=(P2P_CLIENT_IPFS_CID && P2P_CLIENT_IPFS_CID.indexOf("__")!==0)
+    ? ("https://"+P2P_CLIENT_IPFS_CID+".ipfs.dweb.link/console.html")
+    : P2P_CLIENT_GITHUB_FALLBACK;
   var P2P_CLIENT_CDN=(function(){
     try{
       var u=new URL(String(location.href||""));
