@@ -4221,6 +4221,51 @@ honest rather than self-certifying.
 
 ---
 
+## F154 — which window has the keyboard: read focus, and fix repeated activation (`active_window`, R115)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** F151 gave one of the two read-duals of `activate_window`:
+`window_under` — which window owns a *pixel*, i.e. where a *click* lands (the
+mouse follows the stack). Its twin was still missing: which window owns *focus*,
+i.e. where a *keystroke* lands (the keyboard follows focus). The floor could
+*write* focus (`activate_window`, `focus_window`) but never *read* it, so it typed
+blind — no way to confirm a `type`/key would reach the intended app rather than
+whatever silently held focus.
+
+**Primitive.** `osctl.active_window()` → the id of the window holding keyboard
+focus now, or None. Win32 `GetForegroundWindow`; X11 reads EWMH
+`_NET_ACTIVE_WINDOW` off the root. The focus-read dual of `activate_window`, as
+`window_under` is its stack-read dual.
+
+**Defect surfaced & fixed in practice (the real prize).** Building the read
+exposed a writer defect that had been invisible without it. The probe activated A
+(read: A ✓), then activated B — and `active_window` still reported **A**. The
+third check ("focus_window agrees") only *looked* green because A was already
+focused, a no-op agreement masking the failure. Root cause: **Windows'
+foreground lock**. `SetForegroundWindow` grants only the *first* foreground change
+a process makes after user input and silently denies the rest
+(`ForegroundLockTimeout`) — so `activate_window` worked once and failed on every
+switch after, quietly leaving the keyboard pointed at the wrong window. The
+`AttachThreadInput` workaround already in `activate_window` was not enough. Fix:
+zero `SPI_SETFOREGROUNDLOCKTIMEOUT` once at backend import, after which every
+subsequent `activate_window` takes reliably. After the fix: activate A → A,
+activate B → **B**, focus_window(A) → A. This hardens not just F154 but every
+window-addressing round that switches focus more than once.
+
+R115 (`round_active_window`, 5 checks, incl. the explicit *second-switch* assert);
+`_probe_active.py` standalone (3/3 after fix; it was 2/3 that *found* the bug).
+Full suite **771/771** clean.
+
+**Lesson (道法自然).** 反者道之動 — *the Way moves by opposites.* The read
+(`active_window`) was not merely the missing half of a pair; building it is what
+made the writer's silent failure *visible at all*. A faculty that can only act
+and never perceive its own act cannot even know it has failed. The dual is not
+decoration — it is the floor's only honest mirror. 知人者智，自知者明: knowing the
+window is wisdom; the floor knowing *its own* focus is clarity.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

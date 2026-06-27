@@ -67,6 +67,11 @@ window_exists = getattr(_be, "window_exists", lambda win: False)
 # area, a minimized one has no pixels at all. None / no-op on an older floor.
 window_state = getattr(_be, "window_state", lambda win: None)
 set_window_state = getattr(_be, "set_window_state", lambda win, state: False)
+# Read which window holds keyboard focus right now — the focus-read dual of
+# activate_window, as window_under is its stack-read dual. The keyboard follows
+# focus; this lets the floor confirm its typing will land where intended. None if
+# nothing is focused or on an older floor.
+active_window = getattr(_be, "active_window", lambda: None)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

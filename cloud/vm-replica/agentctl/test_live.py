@@ -1260,6 +1260,95 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_active_window(b: Browser, offline: bool) -> None:
+    print("R115: READ which window holds keyboard focus right now (F154) — osctl")
+    # F151 gave the stack-read dual of activate_window (window_under: which window
+    # owns a PIXEL — where a click lands). Its twin was missing: which window owns
+    # FOCUS — where a keystroke lands. The keyboard follows focus, the mouse
+    # follows the stack; the floor could WRITE focus (activate_window/focus_window)
+    # but never READ it, so it typed blind, unable to confirm input would reach the
+    # intended app. active_window() closes that: the focus-read dual. A real defect
+    # surfaced building this — Windows' foreground lock let only the FIRST
+    # activate_window take and silently denied later switches; lifting
+    # SPI_SETFOREGROUNDLOCKTIMEOUT made repeated activation reliable.
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R115: no konsole on this Linux host)")
+        return
+    if not hasattr(osctl, "active_window"):
+        check("osctl exposes active_window", False, "missing primitive")
+        return
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    procs = []
+    try:
+        procs.append(launch("UACT-A"))
+        osctl.wait_window("UACT-A", timeout=8.0)
+        procs.append(launch("UACT-B"))
+        bb = osctl.wait_window("UACT-B", timeout=8.0)
+        a = next((w for w in osctl.list_windows()
+                  if "UACT-A" in (w.get("title") or "")), None)
+        check("two windows enumerated for the focus test",
+              a is not None and bb is not None,
+              f"A={'y' if a else 'n'} B={'y' if bb else 'n'}")
+        if not a or not bb:
+            return
+
+        osctl.activate_window(a["id"])
+        time.sleep(0.7)
+        af = osctl.active_window()
+        check("active_window reports A after A is activated",
+              af == a["id"], f"active={af!r} A={a['id']} B={bb['id']}")
+
+        # The crux: a SECOND switch must also take — this is the defect F154 fixed.
+        osctl.activate_window(bb["id"])
+        time.sleep(0.7)
+        bf = osctl.active_window()
+        check("active_window tracks a SECOND switch to B (foreground-lock defeated)",
+              bf == bb["id"], f"active={bf!r} A={a['id']} B={bb['id']}")
+
+        # Write-by-name (focus_window) and read (active_window) must agree.
+        osctl.focus_window("UACT-A")
+        time.sleep(0.7)
+        ff = osctl.active_window()
+        check("focus_window (write by name) and active_window (read) agree",
+              ff == a["id"], f"active={ff!r} A={a['id']}")
+
+        check("keyboard follows focus while the read tracks every write",
+              af == a["id"] and bf == bb["id"] and ff == a["id"],
+              f"af={af!r} bf={bf!r} ff={ff!r}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_window_state(b: Browser, offline: bool) -> None:
     print("R114: read and set a window's SHOW-STATE — min/max/restore (F153) — osctl")
     # F149 moved a window (where it is); F151 read pixel ownership; F152 birth and
@@ -7328,7 +7417,8 @@ def main() -> int:
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_reach, round_steer,
               round_window, round_clip_relay, round_zorder, round_window_under,
-              round_window_lifecycle, round_window_state, round_move, round_desktop,
+              round_window_lifecycle, round_window_state, round_active_window,
+              round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

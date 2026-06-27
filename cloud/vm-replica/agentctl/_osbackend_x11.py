@@ -423,6 +423,21 @@ def window_exists(win: int) -> bool:
         return (int(win) & 0xFFFFFFFF) in ids
 
 
+def active_window() -> "int | None":
+    """Which top-level window currently holds keyboard focus — the id a ``type``
+    or key press would reach right now — or None. The keyboard follows *focus*
+    while the mouse follows the *stack*: ``activate_window`` could *write* focus
+    yet nothing could *read* it, so the floor typed blind. Read EWMH
+    ``_NET_ACTIVE_WINDOW`` off the root — the focus-read dual of
+    ``activate_window``, as ``window_under`` is the stack-read dual."""
+    with _lock:
+        raw = _prop(_root, _atom("_NET_ACTIVE_WINDOW"), 33)  # 33 = XA_WINDOW
+        if not raw or len(raw) < ctypes.sizeof(ctypes.c_long):
+            return None
+        win = int(ctypes.cast(raw, ctypes.POINTER(ctypes.c_long))[0]) & 0xFFFFFFFF
+        return win or None
+
+
 def _net_wm_state(win: int, action: int, p1: int, p2: int = 0) -> bool:
     """Send an EWMH ``_NET_WM_STATE`` client message (action 0=remove, 1=add,
     2=toggle) to add/remove up to two state atoms at once — the request a pager

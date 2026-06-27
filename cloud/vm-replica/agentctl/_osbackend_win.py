@@ -219,8 +219,25 @@ user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
                                 ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
 user32.SetWindowPos.restype = wintypes.BOOL
 kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+user32.SystemParametersInfoW.restype = wintypes.BOOL
+user32.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT,
+                                         ctypes.c_void_p, wintypes.UINT]
 
 _SW_RESTORE = 9
+
+# Lift Windows' foreground lock once. Without this, SetForegroundWindow grants
+# only the *first* foreground change a process requests after user input and
+# silently denies later ones (ForegroundLockTimeout) — so activate_window worked
+# the first time and failed on every switch after, leaving the keyboard pointed
+# at the wrong window. Zeroing SPI_SETFOREGROUNDLOCKTIMEOUT makes every
+# subsequent activate_window take reliably. (Surfaced live by R115/F154.)
+_SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001
+_SPIF_SENDCHANGE = 0x0002
+try:
+    user32.SystemParametersInfoW(_SPI_SETFOREGROUNDLOCKTIMEOUT, 0,
+                                 ctypes.c_void_p(0), _SPIF_SENDCHANGE)
+except Exception:
+    pass
 
 
 def list_windows() -> list:
@@ -325,6 +342,18 @@ def window_exists(win: int) -> bool:
     """Whether a window handle still refers to a live window (``IsWindow``) — the
     read that lets the floor wait for a window to appear or confirm it has gone."""
     return bool(user32.IsWindow(wintypes.HWND(win)))
+
+
+def active_window() -> "int | None":
+    """Which top-level window currently holds keyboard focus — the id a ``type``
+    or key press would reach right now — or None if none does. The keyboard
+    follows *focus* while the mouse follows the *stack*: ``activate_window``/
+    ``focus_window`` could *write* focus, yet nothing could *read* it, so the
+    floor typed blind, unable to confirm its input would land where intended.
+    ``GetForegroundWindow`` is the focus-read dual of ``activate_window``, as
+    ``window_under`` is the stack-read dual."""
+    hwnd = user32.GetForegroundWindow()
+    return int(hwnd) if hwnd else None
 
 
 user32.IsZoomed.restype = wintypes.BOOL
