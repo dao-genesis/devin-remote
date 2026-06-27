@@ -1190,6 +1190,144 @@ def round_move(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_desktop(b: Browser, offline: bool) -> None:
+    print("R111: reach a window living on ANOTHER virtual desktop (F150) — osctl")
+    # Focus (R107), Z-order (R109), position (R110) all assume the window shares
+    # the CURRENT workspace. A window on another virtual desktop has no on-screen
+    # pixels at all — no click reaches it. The floor must first SEE that (its
+    # desktop != current) and then either GO THERE (set_desktop) or BRING IT HERE
+    # (move_window_to_desktop -> current, without leaving). Screenshot+click is
+    # blind to every workspace but the current one. (Linux + multi-desktop WM.)
+    import shutil
+    import subprocess
+
+    if sys.platform.startswith("win"):
+        print("  (skip R111: Windows virtual-desktop API is build-unstable; X11 path proven)")
+        return
+    term = shutil.which("konsole")
+    if term is None:
+        print("  (skip R111: no konsole on this Linux host)")
+        return
+    if not hasattr(osctl, "move_window_to_desktop"):
+        check("osctl exposes virtual-desktop primitives", False, "missing")
+        return
+    if osctl.num_desktops() < 2 and shutil.which("wmctrl"):
+        subprocess.run(["wmctrl", "-n", "2"], check=False)
+        time.sleep(0.5)
+    if osctl.num_desktops() < 2:
+        print("  (skip R111: WM exposes no second virtual desktop)")
+        return
+
+    mark = os.path.join(__import__("tempfile").gettempdir(), "dao_desktop_round.txt")
+    home_desk = osctl.current_desktop()
+
+    def launch():
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=VDWIN", "--geometry",
+             "640x420+200+200", "-e", "env", "WTAG=D", "bash", "--norc", "-i"],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def click_mark(cx, cy):
+        osctl.click(cx, cy)
+        time.sleep(0.4)
+        osctl.type_unicode("echo VD-$WTAG > " + mark)
+        osctl.tap(osctl.VK_RETURN)
+        time.sleep(0.7)
+
+    def read():
+        try:
+            with open(mark) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    other = 1 if home_desk == 0 else 0
+    p = None
+    try:
+        osctl.set_desktop(home_desk)
+        time.sleep(0.4)
+        p = launch()
+        time.sleep(2.6)
+        win = next((w for w in osctl.list_windows()
+                    if "VDWIN" in (w.get("title") or "")), None)
+        if not win:
+            check("desktop: enumerate the launched window", False, "missing window")
+            return
+        wid = win["id"]
+        g = osctl.window_geometry(wid)
+        if not g:
+            check("desktop: read window geometry", False, "geometry unavailable")
+            return
+        cx, cy = g["x"] + g["w"] // 2, g["y"] + g["h"] // 2
+
+        # Send it to the other workspace while we stay put; the floor must SEE it move.
+        osctl.move_window_to_desktop(wid, other)
+        time.sleep(1.0)
+        seen = next((w.get("desktop") for w in osctl.list_windows()
+                     if w["id"] == wid), None)
+        check("list_windows perceives the window on its other workspace",
+              seen == other, f"reported desktop={seen!r} expected={other}")
+
+        # Friction: off-workspace window — its coords now hit the empty home desktop.
+        with open(mark, "w") as f:
+            f.write("SENTINEL")
+        click_mark(cx, cy)
+        off = read()
+        check("a window on another workspace is unreachable by any click",
+              off == "SENTINEL", f"marker={off!r}")
+
+        # Remedy GO-THERE: switch the shown workspace to it, then the click lands.
+        osctl.set_desktop(other)
+        time.sleep(0.8)
+        osctl.activate_window(wid)
+        time.sleep(0.5)
+        with open(mark, "w") as f:
+            f.write("SENTINEL")
+        click_mark(cx, cy)
+        there = read()
+        check("set_desktop (go there) makes the off-workspace window reachable",
+              there == "VD-D", f"marker={there!r}")
+
+        # Remedy BRING-HERE: go home, then pull the window onto the home workspace
+        # WITHOUT leaving it — something activate_window's "follow" cannot do.
+        osctl.set_desktop(home_desk)
+        time.sleep(0.8)
+        osctl.move_window_to_desktop(wid, home_desk)
+        time.sleep(1.0)
+        osctl.activate_window(wid)
+        time.sleep(0.5)
+        with open(mark, "w") as f:
+            f.write("SENTINEL")
+        click_mark(cx, cy)
+        here = read()
+        check("move_window_to_desktop (bring here) pulls it onto the current workspace",
+              here == "VD-D" and osctl.current_desktop() == home_desk,
+              f"marker={here!r} current={osctl.current_desktop()}")
+        check("a window's workspace is a third addressing axis beyond focus/stack/position",
+              off == "SENTINEL" and there == "VD-D" and here == "VD-D",
+              f"off={off!r} there={there!r} here={here!r}")
+    finally:
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        os.system("pkill -9 konsole 2>/dev/null")
+        try:
+            osctl.set_desktop(home_desk)
+        except Exception:
+            pass
+        time.sleep(0.3)
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_structure_match(b: Browser, offline: bool) -> None:
     print("R19: pick a colour-shifted target by structure, not appearance (F055) — osctl")
     # Two magenta tiles (segmentable), each holding a black glyph drawn in a
@@ -6915,7 +7053,7 @@ def main() -> int:
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_reach, round_steer,
-              round_window, round_clip_relay, round_zorder, round_move,
+              round_window, round_clip_relay, round_zorder, round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

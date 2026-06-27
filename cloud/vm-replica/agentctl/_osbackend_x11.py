@@ -331,7 +331,10 @@ def list_windows() -> list:
 
     This is the eye that *finds the right window* — the floor previously acted
     only on whatever happened to hold focus, so on a busy desktop input could
-    land in the wrong place. Falls back to an empty list if the WM is not EWMH."""
+    land in the wrong place. Each item also carries ``"desktop"`` (the workspace
+    it lives on; -1 = sticky) so the floor can *see* a window is off the current
+    workspace — invisible and unclickable until switched to or pulled over.
+    Falls back to an empty list if the WM is not EWMH."""
     with _lock:
         raw = _prop(_root, _atom("_NET_CLIENT_LIST"), 33)  # 33 = XA_WINDOW
         if not raw:
@@ -339,8 +342,17 @@ def list_windows() -> list:
         wl = ctypes.c_long
         n = len(raw) // ctypes.sizeof(wl)
         ids = ctypes.cast(raw, ctypes.POINTER(wl * n)).contents
-        return [{"id": int(w) & 0xFFFFFFFF, "title": _win_title(int(w))}
-                for w in ids if int(w)]
+        cur = _read_card(_root, "_NET_CURRENT_DESKTOP")  # read inline; _lock held
+        cur = cur if cur is not None else 0
+        out = []
+        for w in ids:
+            if not int(w):
+                continue
+            d = _read_card(int(w), "_NET_WM_DESKTOP")
+            out.append({"id": int(w) & 0xFFFFFFFF, "title": _win_title(int(w)),
+                        "desktop": (-1 if d == _ALL_DESKTOPS else d)
+                        if d is not None else cur})
+        return out
 
 
 def activate_window(win: int) -> bool:
@@ -364,6 +376,82 @@ def activate_window(win: int) -> bool:
         _x.XFlush(_dpy)
         _x.XSync(_dpy, 0)
         return bool(ok)
+
+
+_ALL_DESKTOPS = 0xFFFFFFFF  # _NET_WM_DESKTOP sentinel: window shown on every desktop
+
+
+def _read_card(win: int, name: str) -> int | None:
+    raw = _prop(win, _atom(name), 6)  # 6 = XA_CARDINAL
+    if not raw:
+        return None
+    wl = ctypes.c_long
+    if len(raw) < ctypes.sizeof(wl):
+        return None
+    return int(ctypes.cast(raw, ctypes.POINTER(wl)).contents.value) & 0xFFFFFFFF
+
+
+def num_desktops() -> int:
+    """How many virtual desktops (workspaces) the WM advertises
+    (``_NET_NUMBER_OF_DESKTOPS``); 1 if the WM has none."""
+    with _lock:
+        n = _read_card(_root, "_NET_NUMBER_OF_DESKTOPS")
+        return n if n else 1
+
+
+def current_desktop() -> int:
+    """Index of the workspace currently shown (``_NET_CURRENT_DESKTOP``)."""
+    with _lock:
+        n = _read_card(_root, "_NET_CURRENT_DESKTOP")
+        return n if n is not None else 0
+
+
+def window_desktop(win: int) -> int:
+    """Which workspace a window lives on (``_NET_WM_DESKTOP``); -1 means it is
+    sticky (shown on all desktops). A window whose desktop differs from
+    :func:`current_desktop` has *no on-screen pixels* — no click can reach it
+    until the workspace is switched or the window is pulled over."""
+    with _lock:
+        n = _read_card(win, "_NET_WM_DESKTOP")
+        if n is None:
+            cur = _read_card(_root, "_NET_CURRENT_DESKTOP")  # inline; _lock held
+            return cur if cur is not None else 0
+        return -1 if n == _ALL_DESKTOPS else n
+
+
+def _root_card_msg(name: str, win: int, d0: int, d1: int = 0) -> bool:
+    class _CM(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                    ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                    ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                    ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+    ev = _CM(type=33, send_event=1, display=_dpy, window=win,
+             message_type=_atom(name), format=32)
+    ev.data[0] = d0
+    ev.data[1] = d1
+    SUBSTRUCTURE = (1 << 19) | (1 << 20)
+    ok = _x.XSendEvent(_dpy, _root, 0, SUBSTRUCTURE, ctypes.byref(ev))
+    _x.XFlush(_dpy)
+    _x.XSync(_dpy, 0)
+    return bool(ok)
+
+
+def set_desktop(n: int) -> bool:
+    """Switch the shown workspace to ``n`` (``_NET_CURRENT_DESKTOP``) — *go there*,
+    the way clicking a pager cell does."""
+    with _lock:
+        return _root_card_msg("_NET_CURRENT_DESKTOP", _root, int(n), 0)
+
+
+def move_window_to_desktop(win: int, n: int) -> bool:
+    """Send a window to workspace ``n`` (``_NET_WM_DESKTOP``). With ``n`` equal to
+    :func:`current_desktop` this *brings the window here* — onto the visible
+    workspace without leaving it, which ``activate_window`` (which instead
+    *follows* the window to its desktop) cannot express. ``n`` of -1 makes it
+    sticky (all desktops)."""
+    with _lock:
+        d0 = _ALL_DESKTOPS if int(n) < 0 else int(n)
+        return _root_card_msg("_NET_WM_DESKTOP", win, d0, 2)  # 2 = source: pager
 
 
 def window_geometry(win: int) -> dict | None:

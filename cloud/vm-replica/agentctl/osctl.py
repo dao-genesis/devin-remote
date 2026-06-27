@@ -51,6 +51,15 @@ activate_window = getattr(_be, "activate_window", lambda win: False)
 # — only moving it can. Fall back gracefully on an older floor that lacks them.
 window_geometry = getattr(_be, "window_geometry", lambda win: None)
 move_window = getattr(_be, "move_window", lambda win, x, y, w=0, h=0: False)
+# Virtual desktops (workspaces). A window on another workspace has no on-screen
+# pixels — addressing it needs more than focus/stack/position: either *go there*
+# (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the
+# floor *see* which workspace a window lives on. No-ops on a WM without desktops.
+num_desktops = getattr(_be, "num_desktops", lambda: 1)
+current_desktop = getattr(_be, "current_desktop", lambda: 0)
+window_desktop = getattr(_be, "window_desktop", lambda win: 0)
+set_desktop = getattr(_be, "set_desktop", lambda n: False)
+move_window_to_desktop = getattr(_be, "move_window_to_desktop", lambda win, n: False)
 
 # ---- pointer position (read side) ----------------------------------------- #
 def cursor_pos() -> "tuple[int, int]":

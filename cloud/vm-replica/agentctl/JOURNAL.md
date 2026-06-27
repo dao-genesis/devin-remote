@@ -4019,6 +4019,50 @@ Each was invisible until the case that needs it was lived. A system that stopped
 would silently fail every off-screen window. 大制無割 — the whole is served only by not
 papering over the seams between these three.
 
+## F150 — reaching a window on another virtual desktop (R111)
+
+**The fourth addressing axis: workspace.** Focus (R107), Z-order (R109), and position (R110)
+all silently assume the window shares the **current** workspace. A window on another virtual
+desktop has *no on-screen pixels whatsoever* — no click can reach it, no matter its focus,
+stacking, or coordinates. First the floor must even be able to **see** this: `list_windows`
+now reports each window's `"desktop"`, so a window whose desktop ≠ `current_desktop()` is
+known to be off-screen-by-workspace. Then two genuinely distinct remedies exist — and they are
+*not* the same gesture:
+
+- **GO THERE** — `set_desktop(n)` switches the shown workspace (what clicking a pager cell
+  does); `activate_window` likewise *follows* a window to its desktop. You leave where you were.
+- **BRING HERE** — `move_window_to_desktop(win, current_desktop())` pulls the window onto the
+  workspace you are already on, **without leaving it**. `activate_window`'s "follow" cannot
+  express this — sometimes you want the window to come to your work, not your work to scatter.
+
+**Live A/B (one konsole, sent to workspace 1 while we stay on 0):**
+
+| step | marker | outcome |
+|---|:---:|---|
+| `move_window_to_desktop(w,1)`, then click its coords from desktop 0 | `SENTINEL` | unreachable — no pixels on this workspace |
+| `set_desktop(1)` (go there) + click | `VD-D` | reachable |
+| back to 0, `move_window_to_desktop(w,0)` (bring here) + click | `VD-D` | reachable **without leaving desktop 0** |
+
+X11 via EWMH: read `_NET_CURRENT_DESKTOP` / `_NET_NUMBER_OF_DESKTOPS` / `_NET_WM_DESKTOP`
+(`num_desktops`/`current_desktop`/`window_desktop` + the new `desktop` field on `list_windows`);
+act via `_NET_CURRENT_DESKTOP` / `_NET_WM_DESKTOP` client messages (`set_desktop` /
+`move_window_to_desktop`). KWin honours a runtime `_NET_NUMBER_OF_DESKTOPS` bump, which makes
+the friction reproducible on this single-desktop VM (the round uses `wmctrl -n 2` as *setup*;
+the floor only reads/switches/moves, it does not create workspaces). A subtle correctness trap
+caught in review: `list_windows` and `window_desktop` hold the backend `_lock`, and
+`threading.Lock` is **not** reentrant — calling `current_desktop()` (which re-locks) from
+inside them would deadlock; both read `_NET_CURRENT_DESKTOP` inline instead. R111 (`round_desktop`,
+5 checks) bakes it in; `_probe_desktop.py` is the standalone reproduction. Linux-only — Windows
+virtual-desktop COM (`IVirtualDesktopManager`) has a GUID that shifts every OS build, so the
+floor offers graceful no-op fallbacks there rather than ship something unstable; the round
+skips on Windows.
+
+**Lesson (道法自然).** 知人者智，自知者明 — before the hand can act, the eye must *know* the
+window is elsewhere; perception (`list_windows` carrying `desktop`) had to grow before the act
+was even meaningful. And 反者道之動 — "bring it here" is the reverse of "go there"; the same
+need (operate that window) is met by moving either the self or the window, and a complete floor
+holds both directions rather than forcing one.
+
 ---
 
 ## Frontier (next honest rounds)
