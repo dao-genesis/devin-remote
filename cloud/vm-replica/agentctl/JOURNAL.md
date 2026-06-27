@@ -3821,6 +3821,69 @@ just with keys instead of a click. 大音希聲: the signal that it is *safe to 
 
 ---
 
+## F146 — address the *right* window among many (`list_windows` / `activate_window` / `focus_window`, R107)
+
+**The gap F145 logged.** Every keyboard and clipboard gesture in this floor acts on
+*whatever window holds focus*. In a single browser that is invisible; on a real desktop —
+the user's actual machine, many apps open at once — it is a silent, dangerous bug: a typed
+command or a paste lands in the **wrong window**. And this is precisely a place the official
+screenshot+click *cannot* help: it can click a visible pixel, but it cannot **address a
+window by identity**, nor raise one that is occluded or behind another. There was no
+primitive to enumerate windows or bring a chosen one forward.
+
+**Reproduced friction (live, this VM).** Two KDE Konsole windows, `DAOWIN-A` and `DAOWIN-B`,
+each launched with a distinct `WTAG` env var so the *same* typed command —
+`echo $WTAG > marker` — records which window actually received the keystrokes. With B
+focused (it opened last) but A *intended*, typing with no addressing wrote **`B`** to the
+marker — input went to the wrong window. There is no click that fixes this; the target is
+identity, not a pixel.
+
+**The primitive (referencing how a person does it).** A person does not type blindly into
+whatever is on top — they *find* the window they mean (by its title in the taskbar) and
+*click it to the front* first. Two leaves on the OS floor, one gesture above them:
+
+1. **`list_windows()`** — the eye that finds the right window. X11: read the window
+   manager's `_NET_CLIENT_LIST` (EWMH) off the root and each window's `_NET_WM_NAME`
+   (UTF-8, falling back to `WM_NAME`). Windows: `EnumWindows` + `GetWindowTextW`. Returns
+   `[{"id", "title"}, …]`.
+2. **`activate_window(id)`** — raise + focus by identity. X11: send the EWMH
+   `_NET_ACTIVE_WINDOW` client message to the root (the request a pager/taskbar makes) then
+   `XMapRaised`/`XRaiseWindow`. Windows: `SetForegroundWindow` with the documented
+   attach-thread-input dance to defeat the foreground lock, restoring if minimised.
+3. **`focus_window(match)`** (platform-agnostic, above the leaves) — find the window whose
+   title contains `match` and activate it, so the *next* `type`/`tap`/paste reaches the
+   intended app.
+
+**The 64-bit gotcha (worth recording).** EWMH list/window properties are `format 32`, but
+libX11 returns format-32 data as an array of C **`long`** — 8 bytes each on a 64-bit box,
+not 4. Reading them as `uint32` silently doubles the count and yields garbage ids. The
+backend reads them as `c_long`/`ctypes.sizeof(c_long)`.
+
+**Live A/B (same two windows, this VM):**
+
+| step | marker | outcome |
+|---|:---:|---|
+| no addressing (B focused, A intended) | `B` | input went to the **wrong** window |
+| `focus_window("DAOWIN-A")` then type | `A` | input went to the **intended** window |
+
+R107 (`round_window`) bakes it in (4 checks: enumerate both, wrong-window without
+addressing, right-window with `focus_window`, and the strict A/B). `activate_window` was
+independently confirmed live — after the call `xdotool getactivewindow` and the root's
+`_NET_ACTIVE_WINDOW` both reported our target window.
+
+**A second friction found in passing (honest).** While building the probe, `type_unicode`
+with a trailing `'\n'` did **not** submit the command in a terminal — both commands
+concatenated on one prompt line. A literal newline codepoint is not the Return key; the
+fix is an explicit `tap(VK_RETURN)`. Documented so the next round does not relearn it.
+
+**Lesson (道法自然).** 知人者知也，自知者明也 — to act on the right thing you must first
+*know which thing it is*. The floor could already move and type with a person's precision,
+but it was blind to *which* window it was speaking to; giving it the eye to enumerate and
+the hand to raise-by-name closes that. 始制有名 — once things have names, address them by
+name. 無為而無不為.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

@@ -42,6 +42,10 @@ set_clipboard = _be.set_clipboard
 get_clipboard = _be.get_clipboard
 _mouse_button = _be.mouse_button
 _mouse_wheel = _be.mouse_wheel
+# Window addressing (enumerate + activate). Backends expose these; if a backend
+# predates them, fall back to no-ops so import never breaks on an older floor.
+list_windows = getattr(_be, "list_windows", lambda: [])
+activate_window = getattr(_be, "activate_window", lambda win: False)
 
 # ---- pointer position (read side) ----------------------------------------- #
 def cursor_pos() -> "tuple[int, int]":
@@ -59,6 +63,31 @@ def cursor_pos() -> "tuple[int, int]":
     reads the pointer's current position and returns ``(x, y)`` — the read-side
     dual of :func:`move`, closing the loop the pointer family left open."""
     return _be.cursor_pos()
+
+
+def focus_window(match: str, settle: float = 0.25) -> dict | None:
+    """Bring the window whose title contains ``match`` to the front, by name (F146).
+
+    The floor's keyboard and clipboard always act on *whatever window holds
+    focus* — fine in a single browser, but on a real desktop (the user's actual
+    machine, many apps open) input silently lands in the wrong window. The
+    official screenshot+click primitive has the same blind spot: it can click a
+    visible pixel but cannot *address a window by identity* or raise an occluded
+    one. This finds the right window among all top-levels (`list_windows`) and
+    activates it (`activate_window`), so a subsequent ``type``/``tap``/paste
+    reaches the intended app. Case-insensitive substring; most-recent match wins.
+    Returns the chosen ``{"id", "title"}`` or ``None`` if no window matches."""
+    m = match.lower()
+    hit = None
+    for w in list_windows():
+        if m in (w.get("title") or "").lower():
+            hit = w
+    if hit is None:
+        return None
+    activate_window(hit["id"])
+    if settle:
+        time.sleep(settle)
+    return hit
 
 
 # ---- mouse gestures (platform-agnostic, built on the backend leaves) ------- #

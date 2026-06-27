@@ -66,6 +66,23 @@ _xt.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int
 _xt.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
 _xt.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
 
+# Window enumeration / activation (EWMH). format-32 properties come back as an
+# array of C `long` (8 bytes on 64-bit) — the classic libX11 gotcha — so we read
+# them as c_ulong, not c_uint32.
+_x.XInternAtom.restype = ctypes.c_ulong
+_x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+_x.XGetWindowProperty.restype = ctypes.c_int
+_x.XGetWindowProperty.argtypes = [
+    ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long, ctypes.c_long,
+    ctypes.c_int, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+    ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_ulong),
+    ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte))]
+_x.XSendEvent.restype = ctypes.c_int
+_x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                          ctypes.c_long, ctypes.c_void_p]
+_x.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+_x.XMapRaised.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+
 
 class _XImage(ctypes.Structure):
     _fields_ = [
@@ -252,6 +269,85 @@ def type_unicode(text: str) -> None:
         zero = (ctypes.c_ulong * 2)(0, 0)
         _x.XChangeKeyboardMapping(_dpy, _scratch, 2, zero, 1)
         _x.XSync(_dpy, 0)
+
+
+# ---- windows (EWMH enumerate + activate) ---------------------------------- #
+def _atom(name: str) -> int:
+    return _x.XInternAtom(_dpy, name.encode(), 0)
+
+
+def _prop(win: int, prop_atom: int, req_type: int) -> bytes | None:
+    """Read a window property as raw bytes (or None). Handles the 64-bit format-32
+    quirk by always fetching as bytes via the returned format/nitems."""
+    actual_type = ctypes.c_ulong()
+    actual_fmt = ctypes.c_int()
+    nitems = ctypes.c_ulong()
+    bytes_after = ctypes.c_ulong()
+    data = ctypes.POINTER(ctypes.c_ubyte)()
+    r = _x.XGetWindowProperty(_dpy, win, prop_atom, 0, 1 << 20, 0, req_type,
+                              ctypes.byref(actual_type), ctypes.byref(actual_fmt),
+                              ctypes.byref(nitems), ctypes.byref(bytes_after),
+                              ctypes.byref(data))
+    if r != 0 or not data:
+        return None
+    fmt = actual_fmt.value
+    n = nitems.value
+    width = {8: 1, 16: 2, 32: ctypes.sizeof(ctypes.c_long)}.get(fmt, 0)
+    nbytes = n * width
+    out = bytes(bytearray(ctypes.cast(
+        data, ctypes.POINTER(ctypes.c_ubyte * nbytes)).contents)) if nbytes else b""
+    _x.XFree(data)
+    return out
+
+
+def _win_title(win: int) -> str:
+    for prop_atom, typ in ((_atom("_NET_WM_NAME"), _atom("UTF8_STRING")),
+                           (_atom("WM_NAME"), 31)):  # 31 = XA_STRING
+        raw = _prop(win, prop_atom, typ)
+        if raw:
+            return raw.split(b"\x00", 1)[0].decode("utf-8", "replace")
+    return ""
+
+
+def list_windows() -> list:
+    """Enumerate top-level windows the window manager manages (EWMH
+    ``_NET_CLIENT_LIST``), newest last. Each item is ``{"id", "title"}``.
+
+    This is the eye that *finds the right window* — the floor previously acted
+    only on whatever happened to hold focus, so on a busy desktop input could
+    land in the wrong place. Falls back to an empty list if the WM is not EWMH."""
+    with _lock:
+        raw = _prop(_root, _atom("_NET_CLIENT_LIST"), 33)  # 33 = XA_WINDOW
+        if not raw:
+            return []
+        wl = ctypes.c_long
+        n = len(raw) // ctypes.sizeof(wl)
+        ids = ctypes.cast(raw, ctypes.POINTER(wl * n)).contents
+        return [{"id": int(w) & 0xFFFFFFFF, "title": _win_title(int(w))}
+                for w in ids if int(w)]
+
+
+def activate_window(win: int) -> bool:
+    """Raise and focus a window by id via an EWMH ``_NET_ACTIVE_WINDOW`` client
+    message to the root (the request a pager/taskbar makes), then map+raise it.
+    Returns True if the request was dispatched."""
+    with _lock:
+        class _CM(ctypes.Structure):  # XClientMessageEvent (data as 5 longs)
+            _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                        ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                        ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                        ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+        ev = _CM(type=33, send_event=1, display=_dpy, window=win,  # 33 = ClientMessage
+                 message_type=_atom("_NET_ACTIVE_WINDOW"), format=32)
+        ev.data[0] = 2          # source indication: pager
+        ev.data[1] = 0          # timestamp (CurrentTime)
+        SUBSTRUCTURE = (1 << 19) | (1 << 20)  # Redirect | Notify
+        ok = _x.XSendEvent(_dpy, _root, 0, SUBSTRUCTURE, ctypes.byref(ev))
+        _x.XMapRaised(_dpy, win)
+        _x.XRaiseWindow(_dpy, win)
+        _x.XFlush(_dpy)
+        _x.XSync(_dpy, 0)
+        return bool(ok)
 
 
 # ---- clipboard (selection owner on its own display connection) ------------ #

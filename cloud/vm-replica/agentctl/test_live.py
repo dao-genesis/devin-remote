@@ -751,6 +751,114 @@ def round_steer(b: Browser, offline: bool) -> None:
           steer_hits > open_hits, f"steer={steer_hits} open={open_hits}")
 
 
+def round_window(b: Browser, offline: bool) -> None:
+    print("R107: ADDRESS the right window among many — input must not land in the wrong app (F146) — osctl")
+    # Every keyboard/clipboard gesture acts on whatever window holds focus. In a
+    # single browser that is fine, but on a real desktop (the user's machine,
+    # many apps open) input silently lands in the WRONG window — and official
+    # screenshot+click has the same blind spot: it can click a visible pixel but
+    # cannot address a window by identity or raise an occluded one. We open two
+    # terminals, each exporting a distinct tag; the SAME typed command echoes the
+    # tag of whichever window received the keys. No addressing (wrong window
+    # focused) -> wrong tag; focus_window(name) first -> the intended tag.
+    import shutil
+    import subprocess
+    import tempfile
+
+    mark = os.path.join(tempfile.gettempdir(), "dao_win_round.txt")
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R107: no konsole on this Linux host)")
+        return
+
+    def launch(tag, title):
+        env = dict(os.environ)
+        if win:
+            env["WTAG"] = tag
+            return subprocess.Popen(
+                ["cmd", "/k", f"title {title}"], env=env,
+                creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "WTAG=" + tag, "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def run_cmd():
+        if win:
+            osctl.type_unicode("echo %WTAG%> " + mark)
+        else:
+            osctl.type_unicode("echo $WTAG > " + mark)
+        osctl.tap(osctl.VK_RETURN)  # a literal '\n' does NOT submit in a terminal
+        time.sleep(0.6)
+
+    def read_mark():
+        try:
+            with open(mark) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    procs = []
+    try:
+        procs.append(launch("A", "DAOWIN-A"))
+        time.sleep(2.2)
+        procs.append(launch("B", "DAOWIN-B"))
+        time.sleep(2.4)
+
+        wins = osctl.list_windows()
+        a = next((w for w in wins if "DAOWIN-A" in (w.get("title") or "")), None)
+        bb = next((w for w in wins if "DAOWIN-B" in (w.get("title") or "")), None)
+        check("list_windows enumerates both opened windows by title",
+              a is not None and bb is not None,
+              f"A={'y' if a else 'n'} B={'y' if bb else 'n'}")
+        if not a or not bb:
+            return
+
+        # Friction: B is focused; we INTEND to drive A. With no addressing the
+        # floor types into whatever holds focus -> the wrong window (B).
+        osctl.activate_window(bb["id"])
+        time.sleep(0.5)
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        run_cmd()
+        open_got = read_mark()
+        check("without addressing, keyboard input lands in the WRONG window",
+              open_got != "A", f"marker={open_got!r} (intended A)")
+
+        # Fix: address window A by name, then type -> lands in A.
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        hit = osctl.focus_window("DAOWIN-A")
+        run_cmd()
+        fixed_got = read_mark()
+        check("focus_window routes keyboard input to the INTENDED window",
+              fixed_got == "A" and hit is not None, f"marker={fixed_got!r}")
+        check("window addressing strictly fixes wrong-window input",
+              open_got != "A" and fixed_got == "A",
+              f"no-addr={open_got!r} addr={fixed_got!r}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if not win:
+            os.system("pkill -9 konsole 2>/dev/null")
+        # Re-activate the browser so later rounds are not left on a dead window.
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_structure_match(b: Browser, offline: bool) -> None:
     print("R19: pick a colour-shifted target by structure, not appearance (F055) — osctl")
     # Two magenta tiles (segmentable), each holding a black glyph drawn in a
@@ -6476,6 +6584,7 @@ def main() -> int:
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_reach, round_steer,
+              round_window,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

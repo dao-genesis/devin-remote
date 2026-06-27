@@ -197,6 +197,71 @@ def get_clipboard() -> str:
         user32.CloseClipboard()
 
 
+# ---- windows (enumerate + activate) --------------------------------------- #
+_WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+user32.EnumWindows.argtypes = [_WNDENUMPROC, wintypes.LPARAM]
+user32.IsWindowVisible.argtypes = [wintypes.HWND]
+user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+user32.GetWindowTextLengthW.restype = ctypes.c_int
+user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.GetWindowTextW.restype = ctypes.c_int
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.BringWindowToTop.argtypes = [wintypes.HWND]
+user32.IsIconic.argtypes = [wintypes.HWND]
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+_SW_RESTORE = 9
+
+
+def list_windows() -> list:
+    """Enumerate visible, titled top-level windows as ``{"id", "title"}``.
+
+    The floor's keyboard/clipboard always act on whatever window holds focus, so
+    on a busy desktop input can land in the wrong window — and screenshot+click
+    cannot address a window by identity either. This is the eye that finds the
+    right window; ``EnumWindows`` walks top-levels in Z-order (topmost first)."""
+    out = []
+
+    def cb(hwnd, _lparam):
+        if user32.IsWindowVisible(hwnd):
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n > 0:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                user32.GetWindowTextW(hwnd, buf, n + 1)
+                out.append({"id": int(hwnd) if hwnd else 0, "title": buf.value})
+        return True
+
+    user32.EnumWindows(_WNDENUMPROC(cb), 0)
+    return out
+
+
+def activate_window(win: int) -> bool:
+    """Raise and focus a window by id. Defeats Windows' foreground lock by briefly
+    attaching to the current foreground thread's input queue (the documented
+    SetForegroundWindow workaround), then restores if minimised."""
+    hwnd = wintypes.HWND(win)
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, _SW_RESTORE)
+    fg = user32.GetForegroundWindow()
+    cur = kernel32.GetCurrentThreadId()
+    tgt_tid = user32.GetWindowThreadProcessId(hwnd, None)
+    fg_tid = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+    attached = []
+    for tid in (fg_tid, tgt_tid):
+        if tid and tid != cur and user32.AttachThreadInput(cur, tid, True):
+            attached.append(tid)
+    user32.BringWindowToTop(hwnd)
+    ok = bool(user32.SetForegroundWindow(hwnd))
+    for tid in attached:
+        user32.AttachThreadInput(cur, tid, False)
+    return ok
+
+
 # ---- GDI screen capture --------------------------------------------------- #
 SRCCOPY = 0x00CC0020
 DIB_RGB_COLORS = 0
