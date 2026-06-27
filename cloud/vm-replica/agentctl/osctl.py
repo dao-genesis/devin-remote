@@ -755,6 +755,32 @@ def wait_until_stable(bbox: tuple[int, int, int, int], settle: int = 3,
             "captures": captures, "elapsed": time.time() - start}
 
 
+def region_diff(a: bytes, b: bytes, tol: int = 0) -> dict:
+    """Count how many pixels two equal-size RGB patches differ by (F134).
+
+    ``wait_until_stable`` and ``wait_for_change`` judge sameness by exact
+    byte-equality — and that is brittle. A real desktop jitters at the bottom
+    bit: subpixel text rendering, a one-level antialiasing wobble, a gradient's
+    dithering. A shift of ``+2`` per channel is invisible to the eye yet makes an
+    exact compare report *every* pixel as changed, so "did it change?" fires on
+    noise and "has it settled?" never settles. This compares ``a`` and ``b``
+    pixel-by-pixel and counts those whose per-channel difference exceeds ``tol``,
+    returning ``{pixels, total, frac}``. With ``tol=0`` it is the exact compare;
+    raise ``tol`` to look past sensor/render noise and see only real change. It
+    is the measured form of equality the two waits assumed — the foundation a
+    robust change/settle test stands on."""
+    if len(a) != len(b):
+        raise ValueError("patches differ in size")
+    n = 0
+    for i in range(0, len(a), 3):
+        if (abs(a[i] - b[i]) > tol or abs(a[i + 1] - b[i + 1]) > tol
+                or abs(a[i + 2] - b[i + 2]) > tol):
+            n += 1
+    total = len(a) // 3
+    return {"pixels": n, "total": total,
+            "frac": (n / total if total else 0.0)}
+
+
 def wait_for_change(bbox: tuple[int, int, int, int],
                     baseline: bytes | None = None,
                     interval: float = 0.05, timeout: float = 5.0
