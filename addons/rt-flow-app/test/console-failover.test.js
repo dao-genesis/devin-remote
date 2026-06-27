@@ -383,6 +383,37 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     ok(base === null, "W4 反代端点全不可达 → 回 null(不退化到静态源 404), 实际 " + base);
   }
 
+  // 场景 X (用户之痛·回收隧道抢答 405): 主端点是被陌生 nginx 接管的回收临时隧道域名(对 /relay 回 405 HTML →
+  //   解析成 bad_json), 旧 _dead 只看 >=502 会误判其"活"而钉死在死域名上(刷新通道后打不开)。_deadEndpoint 把
+  //   「4xx+非JSON体」判死 → 失效转移切到在线 Worker。
+  {
+    const counter = { total: 0, byBase: {} };
+    const NGINX405 = "<html>\r\n<head><title>405 Not Allowed</title></head>\r\n<body><center><h1>405 Not Allowed</h1></center><hr><center>nginx</center></body>\r\n</html>";
+    const routes = {
+      "https://recycled.trycloudflare.com": { status: 405, body: NGINX405 },
+      [WORKER]: { status: 200, body: { ok: true, state: "default" } },
+    };
+    const ls = makeLocalStorage();
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://recycled.trycloudflare.com", fetch: makeFetch(routes, counter),
+      localStorage: ls, location: { origin: "https://recycled.trycloudflare.com", protocol: "https:" } }));
+    const res = await mod.relay("/api/rpc", { cmd: "getState" }, 5000);
+    ok(res.status === 200 && res.body && res.body.ok === true, "X 回收隧道 405 抢答→自愈后返回在线 Worker 的 200");
+    ok(mod.getEndpoint() === WORKER, "X ENDPOINT 已切到在线 Worker(不钉死在陌生 nginx 405 死域名)");
+    ok(ls.getItem("rtflow.rn.endpoint.good") === WORKER, "X 已持久化 endpoint.good=Worker");
+  }
+
+  // 场景 Y (护栏·勿误杀本机中继真错): P2P/ntfy 中继档 role"q" 回 413 纯文本(非 JSON) 是合法应答, 必须原样
+  //   归一透出(走宽松 _dead·不经 _deadEndpoint), 不可因"4xx+非JSON"被误判死而吞掉。
+  {
+    const win = { DaoSignal: { available: () => true, connect: function () { return Promise.resolve({ dc: null, close: () => {},
+      rpc: function () { return Promise.resolve({ status: 413, bodyText: "relay payload too large; prefer P2P/Worker for bulk transfer" }); } }); } } };
+    const routes = { [WORKER]: { status: 503, body: "dead" } };
+    const mod = makeModule(baseDeps({ ENDPOINT: WORKER, fetch: makeFetch(routes, { total: 0, byBase: {} }), window: win,
+      location: { origin: WORKER, protocol: "https:" } }));
+    const res = await mod.relay("/api/rpc", { cmd: "getState" }, 5000);
+    ok(res && res.status === 413, "Y 中继档 413 纯文本(4xx+非JSON)仍原样透出, 不被 _deadEndpoint 误杀");
+  }
+
   // 场景 J (回归护栏): 主 IIFE 必须在使用前声明 CFG —— 防 PR#547 式 strict ReferenceError 崩整页。
   {
     const fIdx = src.indexOf("__FAILOVER_START__");

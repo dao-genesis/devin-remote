@@ -523,7 +523,7 @@
     return _learnDirect().then(function(urls){
       return (function go(i){ if(i>=urls.length) return null;
         return _relayAt(urls[i], "/api/rpc", {cmd:"getState"}, 6000)
-          .then(function(res){ return _dead(res)?go(i+1):urls[i]; }, function(){ return go(i+1); });
+          .then(function(res){ return _deadEndpoint(res)?go(i+1):urls[i]; }, function(){ return go(i+1); });
       })(0);
     }).then(function(live){
       if(live && _isWorker(ENDPOINT)){ ENDPOINT=live; persist();
@@ -548,13 +548,20 @@
   //   不把 200 的 bad_json 当死 → 避免对个别非 JSON 正常响应误切换。
   function _dead(res){ if(!res) return true; if(res.status===0||res.status>=502) return true;
     var b=res.body; if(b&&(b.error==="no_agent"||b.error==="no_tunnel")) return true; return false; }
+  // 「HTTP 端点是否真活」判定 (仅用于 HTTP _relayAt 结果的探活/切换, 比 _dead 更严):
+  //   _dead 之外, 再把「4xx + 非 JSON 体(bad_json)」也判死 —— 临时隧道(trycloudflare/lhr.life)URL 被回收后
+  //   常由陌生 nginx 接管, 对 /relay POST 多半回 405/404 的 HTML(解析失败成 bad_json)。这不是本机中继, 必须
+  //   判死换通道, 而非钉死在死域名上(用户「刷新通道后打不开」之根)。本机中继真错码(429 限流等)体为合法 JSON,
+  //   故不会落入此列; 而 P2P/ntfy 中继档的 role"q" 413 纯文本是合法应答, 走 _dead(宽松)不经本判定 → 不误杀。
+  function _deadEndpoint(res){ if(_dead(res)) return true;
+    return !!(res && res.status>=400 && res.body && res.body.error==="bad_json"); }
   var _resolving=null;
   function _resolveLive(){
     if(_resolving) return _resolving;
     var bases=_candBases();
     _resolving=(function go(i){ if(i>=bases.length) return Promise.resolve(null);
       return _relayAt(bases[i], "/api/rpc", {cmd:"getState"}, 6000)
-        .then(function(res){ return _dead(res)?go(i+1):bases[i]; }, function(){ return go(i+1); });
+        .then(function(res){ return _deadEndpoint(res)?go(i+1):bases[i]; }, function(){ return go(i+1); });
     })(0).then(function(found){ _resolving=null;
       if(found){ if(found!==ENDPOINT){ ENDPOINT=found; persist(); }
         try{ localStorage.setItem("rtflow.rn.endpoint.good", found); }catch(e){} }
@@ -565,7 +572,7 @@
   // ── HTTP 中继调用 (含通道自愈; P2P 不可用/未建连时的稳健兜底) ─────────────
   function _relayHttp(path, body, timeoutMs){
     return _relayAt(ENDPOINT, path, body, timeoutMs).then(function(res){
-      if(!_dead(res)) return res;
+      if(!_deadEndpoint(res)) return res;
       return _resolveLive().then(function(found){ return found ? _relayAt(ENDPOINT, path, body, timeoutMs) : res; });
     }, function(err){
       return _resolveLive().then(function(found){ if(found) return _relayAt(ENDPOINT, path, body, timeoutMs); throw err; });
@@ -652,7 +659,7 @@
     return _relayHttp(path, body, timeoutMs).then(function(res){
       // 死(5xx/网络/agent离线)或**被限流(429)** → 用尽去中心化中继。429 正是用户「Worker 被限流」之痛:
       //   它不在 _dead(只 >=502)内, 故单独纳入触发, 但不改 _dead 的端点切换语义(避免瞬时 429 抖动切换)。
-      if(!_dead(res) && !(res && res.status===429)) return res;
+      if(!_deadEndpoint(res) && !(res && res.status===429)) return res;
       if(_rtAlive()){
         return _relayRT(path, body).then(function(r2){ return _dead(r2)?res:r2; },
           function(){ _rtClose(); setTimeout(_rtEnsure, 1000); return res; });   // 中继句柄坏 → 释放重建, 本次返回死结果
