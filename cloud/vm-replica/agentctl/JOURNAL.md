@@ -3354,6 +3354,46 @@ watched the place before and after; the difference itself points the way.
 
 ---
 
+## F136 — `locate_change_blobs`: separate simultaneous changes (R100)
+
+**Friction.** `locate_change` (F135) collapses every changed pixel into one
+centroid — and its own honest note named the trap: when two unrelated things
+change at once (a toast in one corner, a badge in another), the mean lands in the
+empty gap between them and clicks nothing. This is the exact F052 lesson
+(`find_color` → `find_color_blobs`) recurring, now on change rather than on a
+static colour.
+
+**Mechanism.** Label the changed pixels (per-channel ``tol``, as `locate_change`)
+into connected components by union-find — 4-connectivity over only the changed
+pixels, so cost scales with the change's area, not the screen — and return one
+``{x, y, count, bbox}`` per region in screen coordinates, sorted by pixel count.
+Each centroid is a real, clickable target; regions under ``min_count`` are
+dropped.
+
+**Primitive.** `locate_change_blobs(before, after, size, tol=12, min_count=30)`.
+
+**Live (R100):** two toasts appear in different corners at once. `locate_change`'s
+single centroid is stranded >150px (Manhattan) from *both* toasts — on neither.
+`locate_change_blobs` returns exactly two regions; matched order-independently,
+one is centred on the red toast and one on the blue (each within ``<=20px`` of
+that toast's own colour centroid), and the two are >150px apart. `720/720 checks
+passed`, deterministic ×3.
+
+**Honest note.** Connectivity is 4-neighbour over thresholded pixels: two changes
+that visually touch (overlapping toasts, a single reflow spanning a gap of <1px)
+merge into one blob, and a single change broken by an antialiased seam could split
+into two. The fixture keeps the toasts well separated so the segmentation is
+unambiguous; a real desktop with adjacent changes would need a dilation/merge
+pass, which is its own round if that failure is ever reproduced. Counts are equal
+(both 130×80), so the sort order between them is a tie — the test matches by
+nearest rather than assuming order, which is why it is deterministic.
+
+**Lesson (道法自然):** 大制不割 — the great tailoring makes no needless cut, yet
+what is truly two must be kept two; to fold two answers into one mean is to lose
+both. Divide only where there is a real seam, but there, divide.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

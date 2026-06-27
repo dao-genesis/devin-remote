@@ -802,6 +802,85 @@ def locate_change(before: bytes, after: bytes, size: tuple[int, int],
             "bbox": (minx, miny, maxx, maxy)}
 
 
+def locate_change_blobs(before: bytes, after: bytes, size: tuple[int, int],
+                        tol: int = 12, min_count: int = 30) -> list[dict]:
+    """Segment screen change into its *separate* regions (F136).
+
+    :func:`locate_change` collapses every changed pixel into one centroid — fine
+    when a single thing arrives, but when two unrelated things change at once (a
+    toast in one corner, a badge in another) the mean lands in the empty gap
+    between them and clicks nothing. This is to :func:`locate_change` what
+    :func:`find_color_blobs` is to :func:`find_color`: it labels the changed
+    pixels into connected components (4-connectivity, union-find over only the
+    changed pixels, so cost scales with the change's area, not the screen) and
+    returns one ``{x, y, count, bbox}`` per region in *screen* coordinates,
+    sorted by pixel count (largest first). Each centroid is a real, clickable
+    target; regions smaller than ``min_count`` are dropped. The same friction
+    (F052) once met on a static colour, now met on change itself."""
+    w, h = size
+    if len(before) != len(after):
+        raise ValueError("captures differ in size")
+    stride = w * 3
+    parent: dict[int, int] = {}
+
+    def find(a: int) -> int:
+        root = a
+        while parent[root] != root:
+            root = parent[root]
+        while parent[a] != root:  # path compression
+            parent[a], a = root, parent[a]
+        return root
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for y in range(h):
+        row = y * stride
+        base = y * w
+        up_base = base - w
+        for x in range(w):
+            i = row + x * 3
+            if (abs(before[i] - after[i]) > tol
+                    or abs(before[i + 1] - after[i + 1]) > tol
+                    or abs(before[i + 2] - after[i + 2]) > tol):
+                key = base + x
+                parent[key] = key
+                if x > 0 and (key - 1) in parent:
+                    union(key - 1, key)
+                if y > 0 and (up_base + x) in parent:
+                    union(up_base + x, key)
+
+    agg: dict[int, dict] = {}
+    for key in parent:
+        root = find(key)
+        x, y = key % w, key // w
+        a = agg.get(root)
+        if a is None:
+            agg[root] = {"sx": x, "sy": y, "count": 1,
+                         "minx": x, "miny": y, "maxx": x, "maxy": y}
+        else:
+            a["sx"] += x
+            a["sy"] += y
+            a["count"] += 1
+            if x < a["minx"]:
+                a["minx"] = x
+            if x > a["maxx"]:
+                a["maxx"] = x
+            if y < a["miny"]:
+                a["miny"] = y
+            if y > a["maxy"]:
+                a["maxy"] = y
+
+    blobs = [{"x": a["sx"] // a["count"], "y": a["sy"] // a["count"],
+              "count": a["count"],
+              "bbox": (a["minx"], a["miny"], a["maxx"], a["maxy"])}
+             for a in agg.values() if a["count"] >= min_count]
+    blobs.sort(key=lambda b: b["count"], reverse=True)
+    return blobs
+
+
 def region_diff(a: bytes, b: bytes, tol: int = 0) -> dict:
     """Count how many pixels two equal-size RGB patches differ by (F134).
 
