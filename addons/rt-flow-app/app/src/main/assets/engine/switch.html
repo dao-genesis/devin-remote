@@ -1139,7 +1139,7 @@ var _dvOpenAccts = {};        // key(小写 email 或 id) → 最近一次广播
 function _isDvOpen(a){ if(!a) return false; var now=Date.now();
   var e=(a.email||"").toLowerCase(), i=(a.id||"").toLowerCase();
   return (!!_dvOpenAccts[e] && now-_dvOpenAccts[e]<90000) || (!!i && !!_dvOpenAccts[i] && now-_dvOpenAccts[i]<90000); }
-function _hasLiveConv(a){ if(_isDvOpen(a)) return true; var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<180000); }
+function _hasLiveConv(a){ if(_isDvOpen(a)) return true; var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<TRK_HOLD_MS); }  // 道·守柔不失: 与显示同窗(后台冻结期沿用), 不因计时器到点而误判"非活跃"→顶置/急刷/清理候选皆稳
 // 有对话(不必正在跑): 追踪到该号有对话且近 25 分钟内见过 → 视为「活跃号」, 额度每轮必刷(不进慢速轮转), 用户最关心的有对话账号额度近实时。
 function _hasConv(a){ var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<1500000); }
 async function applyConvCapFor(a){
