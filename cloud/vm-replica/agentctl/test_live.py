@@ -5170,6 +5170,102 @@ def round_scroll_to_phrase(b, offline):
           osctl.scroll_to_phrase(bb3, atlas, "ZZ", step=6, max_steps=8) is None)
 
 
+def round_drag_stroke(b: Browser, offline: bool) -> None:
+    print("R85: OS-level drag — carry a canvas handle to a dropzone (F121) — osctl")
+    # A handle (magenta) and a dropzone (cyan) painted on <canvas>: no DOM node
+    # marks either, so the only channel is OS input on the seen pixels. osctl
+    # could press a point (click) and roll the wheel (scroll), but had no held
+    # stroke — it could not *carry* the handle across to the zone. Every prior
+    # drag round drove CDP's b.drag; the pure OS channel had no drag at all.
+    html = fixture("drag_stroke.html",
+                   "<!doctype html><meta charset=utf-8><title>drag</title>"
+                   "<style>html,body{margin:0}</style>"
+                   "<canvas id=c width=700 height=460 style='display:block'></canvas>"
+                   "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+                   "var HX=80,HY=180,HW=90,HH=90,DX=520,DY=150,DW=140,DH=150;"
+                   "function paint(hx,hy,ok){x.fillStyle='#ffffff';x.fillRect(0,0,700,460);"
+                   "x.fillStyle=ok?'#00cc00':'#00cccc';x.fillRect(DX,DY,DW,DH);"
+                   "x.fillStyle='#ff00ff';x.fillRect(hx,hy,HW,HH);}"
+                   "var hx=HX,hy=HY,drag=null;paint(hx,hy,false);"
+                   "window.__moves=0;window.__down=null;window.__end=null;"
+                   "c.addEventListener('contextmenu',function(e){e.preventDefault();});"
+                   "c.addEventListener('mousedown',function(e){if(e.button!==0)return;"
+                   "var r=c.getBoundingClientRect();"
+                   "var px=e.clientX-r.left,py=e.clientY-r.top;"
+                   "if(px>=hx&&px<=hx+HW&&py>=hy&&py<=hy+HH){drag={dx:px-hx,dy:py-hy};"
+                   "window.__down=[Math.round(px),Math.round(py)];window.__moves=0;}});"
+                   "c.addEventListener('mousemove',function(e){if(!drag)return;"
+                   "var r=c.getBoundingClientRect();hx=e.clientX-r.left-drag.dx;"
+                   "hy=e.clientY-r.top-drag.dy;window.__moves++;paint(hx,hy,false);});"
+                   "c.addEventListener('mouseup',function(e){if(!drag)return;drag=null;"
+                   "var r=c.getBoundingClientRect();var px=e.clientX-r.left,py=e.clientY-r.top;"
+                   "window.__end=[Math.round(px),Math.round(py)];"
+                   "var cx=hx+HW/2,cy=hy+HH/2;var ok=(cx>=DX&&cx<=DX+DW&&cy>=DY&&cy<=DY+DH);"
+                   "paint(hx,hy,ok);document.title=ok?'DROP-OK':'DROP-MISS';});</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    # Friction: nothing in the DOM marks the handle or the zone.
+    check("no DOM node for the canvas handle/dropzone",
+          b.eval("document.querySelectorAll('button,a,[draggable]').length===0"))
+    w, h, rgb = osctl.capture_rgb()
+    check("capture matches click coordinate space", (w, h) == osctl.screen_size(),
+          f"{(w, h)} vs {osctl.screen_size()}")
+    handle = osctl.find_color((255, 0, 255), tol=40, rgb=rgb, size=(w, h))
+    drop = osctl.find_color((0, 204, 204), tol=45, rgb=rgb, size=(w, h))
+    check("located the magenta handle by pixels",
+          handle is not None and handle["count"] > 3000,
+          str(handle and {k: handle[k] for k in ("x", "y", "count")}))
+    check("the cyan dropzone is painted (present on screen)",
+          drop is not None and drop["count"] > 300,
+          str(drop and {k: drop[k] for k in ("x", "y", "count")}))
+    if handle is None or drop is None:
+        return
+    # The handle is a solid 90x90 block, so find_color returns its exact centre;
+    # the dropzone centre sits a known canvas delta away (drop_centre -
+    # handle_centre = (590-125, 225-225) = (465, 0)) and the canvas maps 1:1 to
+    # the screen, so the screen target is the handle anchor plus that delta. We
+    # do not trust the cyan centroid for the endpoint: a hollow/!thin colour can
+    # pick up stray same-hue pixels elsewhere and drift, whereas the solid
+    # magenta anchor is unambiguous.
+    tx, ty = handle["x"] + 465, handle["y"]
+    # Friction: a click presses the handle but carries it nowhere.
+    osctl.click(handle["x"], handle["y"])
+    time.sleep(0.3)
+    check("click alone cannot carry the handle (no DROP-OK)",
+          b.title() != "DROP-OK", b.title())
+    check("click produced no held travel (moves==0)",
+          b.eval("window.__moves") == 0, repr(b.eval("window.__moves")))
+    # Primitive: drag holds the button down and glides the handle across.
+    osctl.drag(handle["x"], handle["y"], tx, ty, steps=28)
+    check("drag carried the handle into the dropzone (DROP-OK)",
+          b.wait_for("document.title==='DROP-OK'", timeout=3), b.title())
+    check("drag was a continuous stroke, not a teleport (moves>1)",
+          b.eval("window.__moves") > 1, repr(b.eval("window.__moves")))
+    down = b.eval("window.__down")
+    check("press landed inside the handle",
+          down is not None and 80 <= down[0] <= 170 and 180 <= down[1] <= 270,
+          repr(down))
+    end = b.eval("window.__end")
+    check("release landed inside the dropzone",
+          end is not None and 520 <= end[0] <= 660 and 150 <= end[1] <= 300,
+          repr(end))
+    time.sleep(0.3)
+    green = osctl.find_color((0, 204, 0), tol=45)
+    check("state change confirmed by pixels (dropzone turned green)",
+          green is not None and green["count"] > 5000,
+          str(green and green.get("count")))
+    # Honest: a right-button drag does not trip the left-button handler.
+    b.navigate(html)
+    time.sleep(0.4)
+    w2, h2, rgb2 = osctl.capture_rgb()
+    hd2 = osctl.find_color((255, 0, 255), tol=40, rgb=rgb2, size=(w2, h2))
+    if hd2:
+        osctl.drag(hd2["x"], hd2["y"], hd2["x"] + 465, hd2["y"], steps=20, right=True)
+        time.sleep(0.3)
+        check("a right-button drag leaves the left-drag handler untriggered",
+              b.title() != "DROP-OK", b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -5202,7 +5298,7 @@ def main() -> int:
               round_read_region_words, round_read_block_region_words,
               round_locate_word, round_locate_block_word,
               round_locate_phrase, round_wait_for_phrase, round_scroll,
-              round_scroll_to_phrase]
+              round_scroll_to_phrase, round_drag_stroke]
     for r in rounds:
         try:
             r(b, offline)
