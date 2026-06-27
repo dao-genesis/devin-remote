@@ -98,6 +98,12 @@ _x.XTranslateCoordinates.argtypes = [
 _x.XMoveResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
                                  ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
 _x.XMoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
+# Walk the window tree to map a screen pixel to the client window that owns it.
+_x.XQueryTree.restype = ctypes.c_int
+_x.XQueryTree.argtypes = [
+    ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+    ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong)),
+    ctypes.POINTER(ctypes.c_uint)]
 
 
 class _XImage(ctypes.Structure):
@@ -376,6 +382,75 @@ def activate_window(win: int) -> bool:
         _x.XFlush(_dpy)
         _x.XSync(_dpy, 0)
         return bool(ok)
+
+
+def _has_wm_state(win: int) -> bool:
+    ws = _atom("WM_STATE")
+    return _prop(win, ws, ws) is not None
+
+
+def _client_of(win: int, depth: int = 0) -> "int | None":
+    """Descend a window subtree to the managed client window (the one bearing
+    ``WM_STATE``), the ICCCM way — a reparenting WM wraps the client in frame/
+    decoration windows, so the window directly under a pixel is usually a frame,
+    not the id ``list_windows`` reports."""
+    if win == 0 or depth > 8:
+        return None
+    if _has_wm_state(win):
+        return win
+    root_r = ctypes.c_ulong()
+    parent_r = ctypes.c_ulong()
+    kids = ctypes.POINTER(ctypes.c_ulong)()
+    nkids = ctypes.c_uint()
+    if not _x.XQueryTree(_dpy, win, ctypes.byref(root_r), ctypes.byref(parent_r),
+                         ctypes.byref(kids), ctypes.byref(nkids)):
+        return None
+    found = None
+    try:
+        # Topmost child is last in XQueryTree order; search front-to-back.
+        for i in range(nkids.value - 1, -1, -1):
+            found = _client_of(int(kids[i]), depth + 1)
+            if found is not None:
+                break
+    finally:
+        if kids:
+            _x.XFree(kids)
+    return found
+
+
+def window_under(x: int, y: int) -> "int | None":
+    """Which top-level window owns the screen pixel ``(x, y)`` — the id a real
+    mouse click there would land on, or None if the point is bare root.
+
+    A click lands on whoever owns that pixel in the Z-order; the keyboard follows
+    focus, but the mouse follows the stack. ``activate_window`` could *write* the
+    stack, yet nothing could *read* it, so the floor clicked blind. We translate
+    the point through the root to the toplevel beneath it, then descend to the
+    ``WM_STATE``-bearing client so the result keys against ``list_windows``. Only
+    a window the WM actually manages (in ``_NET_CLIENT_LIST``) is returned."""
+    with _lock:
+        cx = ctypes.c_int()
+        cy = ctypes.c_int()
+        child = ctypes.c_ulong()
+        _x.XTranslateCoordinates(_dpy, _root, _root, int(x), int(y),
+                                 ctypes.byref(cx), ctypes.byref(cy),
+                                 ctypes.byref(child))
+        top = child.value
+        if not top:
+            return None
+        client = _client_of(top) or top
+        # Confirm it is a managed client before reporting it.
+        raw = _prop(_root, _atom("_NET_CLIENT_LIST"), 33)  # 33 = XA_WINDOW
+        if raw:
+            wl = ctypes.c_long
+            n = len(raw) // ctypes.sizeof(wl)
+            managed = {int(w) & 0xFFFFFFFF
+                       for w in ctypes.cast(raw, ctypes.POINTER(wl * n)).contents}
+            for cand in (client, top):
+                if (int(cand) & 0xFFFFFFFF) in managed:
+                    return int(cand) & 0xFFFFFFFF
+            return None
+        return int(client) & 0xFFFFFFFF
 
 
 _ALL_DESKTOPS = 0xFFFFFFFF  # _NET_WM_DESKTOP sentinel: window shown on every desktop

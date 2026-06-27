@@ -4065,6 +4065,59 @@ holds both directions rather than forcing one.
 
 ---
 
+## F151 — see which window owns a pixel before clicking it (`window_under`, R112)
+
+**Ground: Windows Server 2022.** The cross-platform floor (F141) had only ever
+been exercised live on the X11 ground; this round was discovered, built and
+verified on the **Win32** backend, then mirrored back to X11 for parity.
+
+**Friction.** F148 established that the mouse follows the *stack*: a click lands
+on whoever owns that pixel in the Z-order, so reaching an occluded window means
+first *raising* it (`activate_window`). But raising was a **blind write** — the
+floor could reorder the stack yet had no way to *read* it back. So before a
+click it could not answer the most basic question: *which window is actually
+under this point right now — the one I intend, or an occluder?* Official
+screenshot+click is doubly blind here: a screenshot carries colour, never window
+identity; two windows of the same colour are indistinguishable, and nothing in
+the pixel says where one window ends and the next begins.
+
+**Primitive.** `osctl.window_under(x, y)` → the top-level window id that owns the
+screen pixel, or `None` for bare desktop/root. It is the **read-side dual of
+`activate_window`**: the latter *writes* the stack, this *reads* it, and the id
+it returns keys directly against `list_windows`.
+
+- **Win32**: `WindowFromPoint(POINT)` resolves the deepest window at the point;
+  `GetAncestor(hwnd, GA_ROOT)` lifts that to its top-level root so the result is
+  the same id `list_windows`/`activate_window` speak.
+- **X11**: `XTranslateCoordinates(root, root, x, y)` gives the toplevel under the
+  point, but a reparenting WM wraps the client in frame/decoration windows, so
+  that is usually a *frame*, not the `_NET_CLIENT_LIST` id. We descend the
+  subtree (`XQueryTree`, topmost child first) to the window bearing `WM_STATE`
+  (the ICCCM client window), and only return it if it is actually managed
+  (present in `_NET_CLIENT_LIST`).
+
+**Live A/B (two consoles overlapping at one pixel, Windows):**
+
+| step | `window_under(450,380)` | meaning |
+|---|:---:|---|
+| B launched last, on top | `B` | the pixel a click would hit is B's, not A's |
+| `activate_window(A)` (raise A) | `A` | the read tracks the write — ownership flipped |
+| a pixel outside both frames | not A, not B | no misattribution to our windows |
+
+R112 (`round_window_under`, 5 checks) bakes it in; `_probe_under.py` is the
+standalone reproduction. Cross-platform: runs natively on Windows (cmd consoles)
+and on a konsole-equipped X11 host.
+
+**Lesson (道法自然).** 知人者智，自知者明 — *knowing others is wisdom; knowing
+oneself is clarity.* The hand learned to reorder the stack (F148) long before the
+eye could see it; a faculty that can only *act* and never *perceive its own act*
+is half-blind. 反者道之動 — the Way moves by opposites: every write the floor
+grows eventually demands its reading dual (`move`→`cursor_pos`, `set_clipboard`→
+`get_clipboard`, `activate_window`→`window_under`), and the floor is only whole
+when both directions are present.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

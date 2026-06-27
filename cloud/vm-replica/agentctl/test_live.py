@@ -1079,6 +1079,104 @@ def round_zorder(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_window_under(b: Browser, offline: bool) -> None:
+    print("R112: SEE which window owns a screen pixel before clicking it (F151) — osctl")
+    # R109 proved the mouse follows the *stack*: a click lands on whoever owns
+    # that pixel, so to reach an occluded window you must first RAISE it. But
+    # raising was a blind write — the floor could reorder the stack yet never
+    # *read* it, so it clicked without knowing whether the intended window or an
+    # occluder actually sat under the cursor. Screenshot+click is doubly blind:
+    # pixels carry colour, never window identity. window_under(x,y) closes that
+    # gap — it reports the top-level the pixel belongs to, the read-side dual of
+    # activate_window. Two consoles overlap at one pixel; the floor must name the
+    # window under it, and watch that name change as the stack is reordered.
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R112: no konsole on this Linux host)")
+        return
+    if not hasattr(osctl, "window_under"):
+        check("osctl exposes window_under", False, "missing primitive")
+        return
+
+    px, py = 450, 380  # inside both frames positioned below
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    procs = []
+    try:
+        procs.append(launch("UWIN-A"))
+        time.sleep(2.2)
+        procs.append(launch("UWIN-B"))  # launched later -> on top of the stack
+        time.sleep(2.4)
+        wins = osctl.list_windows()
+        a = next((w for w in wins if "UWIN-A" in (w.get("title") or "")), None)
+        bb = next((w for w in wins if "UWIN-B" in (w.get("title") or "")), None)
+        check("list_windows enumerates both overlapping windows by title",
+              a is not None and bb is not None,
+              f"A={'y' if a else 'n'} B={'y' if bb else 'n'}")
+        if not a or not bb:
+            return
+
+        # Stack them so a single pixel sits inside BOTH window bodies.
+        osctl.move_window(a["id"], 120, 120, 640, 420)
+        time.sleep(0.4)
+        osctl.move_window(bb["id"], 170, 170, 640, 420)  # overlaps A
+        time.sleep(0.5)
+        osctl.activate_window(bb["id"])  # B is the top one at the shared pixel
+        time.sleep(0.5)
+
+        # The pixel belongs to the TOP (occluding) window — what a click would hit.
+        top_owner = osctl.window_under(px, py)
+        check("window_under names the TOP window owning the shared pixel",
+              top_owner == bb["id"], f"under={top_owner!r} B={bb['id']} A={a['id']}")
+
+        # Raise A; the SAME pixel now belongs to A — the stack read tracks the write.
+        osctl.activate_window(a["id"])
+        time.sleep(0.6)
+        raised_owner = osctl.window_under(px, py)
+        check("after raising A, window_under reports the pixel now belongs to A",
+              raised_owner == a["id"], f"under={raised_owner!r} A={a['id']}")
+
+        # A pixel outside both windows must not be attributed to either of them.
+        sw, sh = osctl.screen_size()
+        far = osctl.window_under(sw - 3, sh // 2)
+        check("window_under does not misattribute a pixel outside both windows",
+              far not in (a["id"], bb["id"]), f"under={far!r}")
+
+        check("the floor can SEE pixel ownership and watch it follow the Z-order",
+              top_owner == bb["id"] and raised_owner == a["id"],
+              f"top={top_owner!r} raised={raised_owner!r}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_move(b: Browser, offline: bool) -> None:
     print("R110: MOVE a window that was pushed OFF-screen back into reach (F149) — osctl")
     # R109 proved *raising* reaches an occluded window. But raising only reorders
@@ -7053,7 +7151,8 @@ def main() -> int:
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_reach, round_steer,
-              round_window, round_clip_relay, round_zorder, round_move, round_desktop,
+              round_window, round_clip_relay, round_zorder, round_window_under,
+              round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

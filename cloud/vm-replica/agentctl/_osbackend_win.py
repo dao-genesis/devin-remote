@@ -292,6 +292,33 @@ def move_window(win: int, x: int, y: int, w: int = 0, h: int = 0) -> bool:
                                     0x0004 | 0x0010))
 
 
+user32.WindowFromPoint.restype = wintypes.HWND
+user32.WindowFromPoint.argtypes = [wintypes.POINT]
+user32.GetAncestor.restype = wintypes.HWND
+user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+
+_GA_ROOT = 2
+
+
+def window_under(x: int, y: int) -> "int | None":
+    """Which top-level window owns the screen pixel ``(x, y)`` — the id that a
+    real mouse click there would land on, or None if the point is bare desktop.
+
+    A click lands on whatever window owns that pixel in the Z-order; the keyboard
+    follows focus, but the mouse follows the stack. ``activate_window`` can *write*
+    the stack, yet nothing could *read* it — so the floor clicked blind, unable to
+    tell whether the intended window or an occluder sits under the cursor.
+    ``WindowFromPoint`` resolves the deepest window at the point; ``GetAncestor``
+    lifts that to its top-level root so the result keys against ``list_windows``.
+    Screenshot+click is blind to this: pixels carry no window identity."""
+    pt = wintypes.POINT(int(x), int(y))
+    hwnd = user32.WindowFromPoint(pt)
+    if not hwnd:
+        return None
+    root = user32.GetAncestor(wintypes.HWND(hwnd), _GA_ROOT)
+    return int(root) if root else None
+
+
 # ---- GDI screen capture --------------------------------------------------- #
 SRCCOPY = 0x00CC0020
 DIB_RGB_COLORS = 0

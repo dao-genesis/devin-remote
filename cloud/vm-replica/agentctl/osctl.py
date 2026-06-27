@@ -51,6 +51,12 @@ activate_window = getattr(_be, "activate_window", lambda win: False)
 # — only moving it can. Fall back gracefully on an older floor that lacks them.
 window_geometry = getattr(_be, "window_geometry", lambda win: None)
 move_window = getattr(_be, "move_window", lambda win, x, y, w=0, h=0: False)
+# Read which window owns a screen pixel — the Z-order read-side dual of
+# activate_window. The keyboard follows focus, but the mouse follows the stack:
+# a click lands on whoever owns that pixel. This lets the floor *see* which
+# window sits under a point before committing a click. None on bare desktop or
+# an older floor that lacks the primitive.
+window_under = getattr(_be, "window_under", lambda x, y: None)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the
