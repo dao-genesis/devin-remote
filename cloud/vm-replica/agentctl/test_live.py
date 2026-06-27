@@ -5266,6 +5266,63 @@ def round_drag_stroke(b: Browser, offline: bool) -> None:
               b.title() != "DROP-OK", b.title())
 
 
+def round_double_click(b: Browser, offline: bool) -> None:
+    print("R86: OS-level double_click — open a dblclick-only pad (F122) — osctl")
+    # A pad counts single clicks and opens only on dblclick. A single click()
+    # call fires exactly one click and can never reach the dblclick handler;
+    # and two clicks spaced past the OS double-click window stay two unrelated
+    # singles. double_click pairs two presses inside that window at one point.
+    html = fixture("double_click.html",
+                   "<!doctype html><meta charset=utf-8><title>start</title>"
+                   "<style>html,body{margin:0}#p{position:absolute;left:120px;"
+                   "top:140px;width:260px;height:160px;background:#3344ff}</style>"
+                   "<div id=p></div><script>window.__clicks=0;window.__dbl=0;"
+                   "var p=document.getElementById('p');"
+                   "p.addEventListener('click',function(){window.__clicks++;});"
+                   "p.addEventListener('dblclick',function(){window.__dbl++;"
+                   "p.style.background='#11bb33';document.title='OPENED';});</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    check("capture matches click coordinate space", (w, h) == osctl.screen_size(),
+          f"{(w, h)} vs {osctl.screen_size()}")
+    pad = osctl.find_color((51, 68, 255), tol=40, rgb=rgb, size=(w, h))
+    check("located the blue pad by pixels",
+          pad is not None and pad["count"] > 20000,
+          str(pad and {k: pad[k] for k in ("x", "y", "count")}))
+    if pad is None:
+        return
+    # Friction: a single click fires one click, never a dblclick.
+    osctl.click(pad["x"], pad["y"])
+    time.sleep(0.3)
+    check("a single click does not open the dblclick-only pad",
+          b.title() != "OPENED" and b.eval("window.__dbl") == 0,
+          f"title={b.title()} dbl={b.eval('window.__dbl')}")
+    check("the single click did register (one click, not zero)",
+          b.eval("window.__clicks") == 1, repr(b.eval("window.__clicks")))
+    # Primitive: double_click pairs two presses inside the window → dblclick.
+    osctl.double_click(pad["x"], pad["y"])
+    check("double_click opens the pad (dblclick fired)",
+          b.wait_for("document.title==='OPENED'", timeout=3), b.title())
+    check("exactly one dblclick fired from the pair",
+          b.eval("window.__dbl") == 1, repr(b.eval("window.__dbl")))
+    time.sleep(0.3)
+    green = osctl.find_color((17, 187, 51), tol=45)
+    check("state change confirmed by pixels (pad turned green)",
+          green is not None and green["count"] > 20000,
+          str(green and green.get("count")))
+    # A double_click on empty page background opens nothing (no false trigger).
+    # The point is well inside the viewport, clear of the pad and the browser
+    # chrome — a corner like (20,20) lands on the window frame, not the page.
+    b.navigate(html)
+    time.sleep(0.4)
+    osctl.double_click(pad["x"] + 380, pad["y"])
+    time.sleep(0.3)
+    check("double_click on empty page background opens nothing",
+          b.title() != "OPENED" and b.eval("window.__dbl") == 0,
+          f"title={b.title()} dbl={b.eval('window.__dbl')}")
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -5298,7 +5355,7 @@ def main() -> int:
               round_read_region_words, round_read_block_region_words,
               round_locate_word, round_locate_block_word,
               round_locate_phrase, round_wait_for_phrase, round_scroll,
-              round_scroll_to_phrase, round_drag_stroke]
+              round_scroll_to_phrase, round_drag_stroke, round_double_click]
     for r in rounds:
         try:
             r(b, offline)

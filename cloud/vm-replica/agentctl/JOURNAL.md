@@ -2854,6 +2854,51 @@ while it moves. To carry, do not leap — hold, and travel.
 
 ---
 
+## F122 — `double_click`: the paired press (R86)
+
+**Friction.** `click` fires exactly one click. A control bound to `dblclick` —
+a list row that opens only on double-click, double-click-to-select-a-word, a
+handle that resets on a double-tap — never answers a single press, and one
+`click()` call can never reach it. The OS-input channel could tap, hold-and-drag
+(F121), and roll, but it could not pair two presses into the one gesture the page
+is waiting for.
+
+**Mechanism.** Two presses at the *same* point, close enough in time that the
+window pairs them into a `dblclick`. Two requirements, both real: the presses
+must land on the same pixel (so the second `click` does not move), and they must
+fall inside the system double-click interval. `double_click` presses, waits a
+`gap` well under that interval, presses again — so the page sees `click, click,
+dblclick`, not two strangers.
+
+**Primitive.** `double_click(x, y, right=False, gap=0.05)` — move once, then two
+button cycles `gap` apart at that fixed point. Built on `click`, not beside it:
+the pair *is* two clicks, only timed and co-located.
+
+**Live (R86):** a blue pad that counts single clicks and opens (turns green,
+title `OPENED`) only on `dblclick`. A single `click` leaves it shut
+(`__dbl==0`) while still registering as one click — the friction. `double_click`
+opens it: exactly one `dblclick` fires, the title flips to `OPENED`, and the
+change is read *back through the pixels* (the pad is now green). A `double_click`
+out on the empty page background opens nothing. `622/622 checks passed`,
+deterministic ×3.
+
+**Honest note.** The probe first assumed a *slow* pair of clicks would stay two
+singles — that the timing alone draws the line. It does not, reliably: the
+measured double-click window here is generous and jittery (a 0.8 s gap paired
+in-suite though it did not in isolation), so "slow clicks never pair" is not a
+deterministic truth and was cut from the round. The honest, repeatable line is
+the one kept: *one `click()` call cannot open a `dblclick` control; `double_click`
+can.* An early `double_click(20, 20)` also destabilised the shared Chrome — a
+screen corner is the window frame, not the page — so the off-target check now
+aims at empty page background inside the viewport.
+
+**Lesson (道法自然):** 將欲拾之，必故張之 — some doors open only to the second
+knock. To act once is to be heard once; the gesture the page waits for is not a
+louder press but a *paired* one, two taps the window can bind into a single
+intent.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
