@@ -19,6 +19,8 @@ from ctypes import wintypes
 _ole32 = ctypes.windll.ole32
 _oleaut = ctypes.windll.oleaut32
 _oleaut.SysFreeString.argtypes = [ctypes.c_void_p]
+_oleaut.SysAllocString.restype = ctypes.c_void_p
+_oleaut.SysAllocString.argtypes = [ctypes.c_wchar_p]
 
 
 class _GUID(ctypes.Structure):
@@ -56,6 +58,15 @@ _UIA_ControlTypeProperty = 30003
 _UIA_BoundingRectangleProperty = 30001
 _TreeScope_Children = 2
 _TreeScope_Descendants = 4
+
+# IUIAutomationElement::GetCurrentPattern is vtable index 16; pattern objects then
+# expose their own methods at index 3+.
+_GETPATTERN = 16
+_UIA_InvokePatternId = 10000
+_UIA_ValuePatternId = 10002
+_INVOKE = 3        # IUIAutomationInvokePattern::Invoke
+_VALUE_SET = 3     # IUIAutomationValuePattern::SetValue
+_VALUE_GET = 4     # IUIAutomationValuePattern::get_CurrentValue
 
 # Control-type ids → readable names (the common ones).
 _CONTROL_TYPES = {
@@ -271,4 +282,135 @@ def uia_find(win: int, name=None, ctype=None, max_scan: int = 6000):
     finally:
         _release(cond.value)
         _release(arr.value)
+        _release(el)
+
+
+def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
+    """Return the raw element pointer of the first descendant of ``win`` matching
+    name/type, or None. Caller must _release() it. Shared by the action helpers."""
+    el = _element(uia, win)
+    if not el:
+        return None
+    cond = ctypes.c_void_p()
+    arr = ctypes.c_void_p()
+    nl = name.lower() if name else None
+    match = None
+    try:
+        if _vcall(uia, _CTRUE, ctypes.c_long, [ctypes.POINTER(ctypes.c_void_p)],
+                  ctypes.byref(cond)) != 0:
+            return None
+        if _vcall(el, _FINDALL, ctypes.c_long,
+                  [ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)],
+                  _TreeScope_Descendants, cond, ctypes.byref(arr)) != 0 or not arr.value:
+            return None
+        n = ctypes.c_int()
+        _vcall(arr.value, _ARR_LEN, ctypes.c_long,
+               [ctypes.POINTER(ctypes.c_int)], ctypes.byref(n))
+        for i in range(min(n.value, max_scan)):
+            ce = ctypes.c_void_p()
+            if _vcall(arr.value, _ARR_GET, ctypes.c_long,
+                      [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+                      i, ctypes.byref(ce)) != 0 or not ce.value:
+                continue
+            t = _CONTROL_TYPES.get(_prop_int(ce.value, _UIA_ControlTypeProperty))
+            if ctype is not None and (t or "").lower() != ctype.lower():
+                _release(ce.value); continue
+            if nl is not None and nl not in (_prop_bstr(ce.value, _UIA_NameProperty) or "").lower():
+                _release(ce.value); continue
+            match = ce.value
+            break
+        return match
+    finally:
+        _release(cond.value)
+        _release(arr.value)
+        _release(el)
+
+
+def _pattern(el, pattern_id):
+    p = ctypes.c_void_p()
+    if _vcall(el, _GETPATTERN, ctypes.c_long,
+              [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+              pattern_id, ctypes.byref(p)) != 0:
+        return None
+    return p.value
+
+
+def uia_set_value(win: int, value: str, name=None, ctype=None) -> bool:
+    """Write ``value`` into an element found by meaning (name/type), via the UIA
+    ValuePattern — the modern-app-capable write, the UIA dual of the native
+    :func:`set_window_text`. Because it goes through the accessibility tree it can
+    set the text of fields *inside* Chrome/Electron/UWP (an address bar, a search
+    box) that have no native HWND to write to. Returns True on success."""
+    uia = _get_uia()
+    if not uia:
+        return False
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return False
+    bstr = None
+    try:
+        vp = _pattern(el, _UIA_ValuePatternId)
+        if not vp:
+            return False
+        try:
+            bstr = _oleaut.SysAllocString(value)
+            hr = _vcall(vp, _VALUE_SET, ctypes.c_long, [ctypes.c_void_p], bstr)
+            return hr == 0
+        finally:
+            _release(vp)
+    finally:
+        if bstr:
+            _oleaut.SysFreeString(bstr)
+        _release(el)
+
+
+def uia_get_value(win: int, name=None, ctype=None) -> str:
+    """Read the ValuePattern value of an element found by meaning — the read dual
+    of :func:`uia_set_value`, reaching inside modern apps. "" if unavailable."""
+    uia = _get_uia()
+    if not uia:
+        return ""
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return ""
+    try:
+        vp = _pattern(el, _UIA_ValuePatternId)
+        if not vp:
+            return ""
+        try:
+            v = _VARIANT()
+            if _vcall(vp, _VALUE_GET, ctypes.c_long,
+                      [ctypes.POINTER(_VARIANT)], ctypes.byref(v)) != 0:
+                return ""
+            if v.vt == 8 and v.val:
+                s = ctypes.wstring_at(v.val)
+                _oleaut.SysFreeString(v.val)
+                return s
+            return ""
+        finally:
+            _release(vp)
+    finally:
+        _release(el)
+
+
+def uia_invoke(win: int, name=None, ctype=None) -> bool:
+    """Invoke an element found by meaning (name/type) via the UIA InvokePattern —
+    the semantic *action* inside modern apps (the UIA analogue of invoke_menu).
+    Presses a button/link by what it means, no mouse, no pixels, even in
+    Chrome/Electron/UWP. Returns True if invoked."""
+    uia = _get_uia()
+    if not uia:
+        return False
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return False
+    try:
+        ip = _pattern(el, _UIA_InvokePatternId)
+        if not ip:
+            return False
+        try:
+            return _vcall(ip, _INVOKE, ctypes.c_long, []) == 0
+        finally:
+            _release(ip)
+    finally:
         _release(el)

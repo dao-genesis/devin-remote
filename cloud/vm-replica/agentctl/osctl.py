@@ -146,6 +146,15 @@ uia_children = getattr(_be, "uia_children", lambda win: [])
 # the rect closes the loop to the mouse — a semantic search yields a pixel target
 # to click, no visual scanning. None if not found / UIA unavailable.
 uia_find = getattr(_be, "uia_find", lambda win, name=None, ctype=None: None)
+# UIA action (F167): operate elements found by MEANING through the accessibility
+# tree, reaching INSIDE modern apps (Chrome/Electron/UWP) that have no native HWND
+# to write to or click. uia_set_value writes a field's value (modern-app dual of
+# set_window_text); uia_get_value reads it back; uia_invoke presses a button/link
+# by what it means (UIA analogue of invoke_menu) — no mouse, no pixels. False / ""
+# where UIA or the pattern is unavailable, with the pixel/keystroke floor as fallback.
+uia_set_value = getattr(_be, "uia_set_value", lambda win, value, name=None, ctype=None: False)
+uia_get_value = getattr(_be, "uia_get_value", lambda win, name=None, ctype=None: "")
+uia_invoke = getattr(_be, "uia_invoke", lambda win, name=None, ctype=None: False)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

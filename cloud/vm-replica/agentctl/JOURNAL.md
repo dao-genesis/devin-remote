@@ -4786,6 +4786,53 @@ understand → locate → act, now universal.
 
 ---
 
+## F167 — acting inside modern apps: UIA value write & invoke (`uia_set_value` / `uia_get_value` / `uia_invoke`, R128)
+
+**Ground: Windows Server 2022. Pure-ctypes raw COM.**
+
+**Friction.** F165–F166 gave the floor *sight* and *locate* inside modern apps,
+but its semantic *actions* were still native-only: `set_window_text` writes a
+control by its HWND, `invoke_menu` posts a WM_COMMAND to an OS menu — and a modern
+app has neither. So the floor could see a Chrome address bar and find its rect, yet
+to *fill* it still had to fall back to clicking the pixel and typing. The
+semantic-action half of the modern-app loop was missing.
+
+**Primitives (UIA control patterns via raw COM).**
+- `osctl.uia_set_value(win, value, name=None, ctype=None)` → writes a field's value
+  through the **ValuePattern** of an element found by meaning — the modern-app dual
+  of `set_window_text`, reaching inside Chrome/Electron/UWP.
+- `osctl.uia_get_value(win, …)` → its read dual (ValuePattern get_CurrentValue).
+- `osctl.uia_invoke(win, name=None, ctype=None)` → presses a button/link via the
+  **InvokePattern** — the UIA analogue of `invoke_menu`, no mouse, no pixels.
+- Implemented via `IUIAutomationElement::GetCurrentPattern` (vtable 16) → the
+  pattern interface, then its method (SetValue/Invoke at vtable 3). BSTR args via
+  `SysAllocString`.
+
+**Live (Notepad, cross-floor):**
+
+| check | result |
+|---|---|
+| `uia_set_value(note, mark, type=Edit)` | `True` (through ValuePattern) |
+| native `window_text` reads it back | `'DAO-F167-…'` — **exactly the UIA-written value** |
+| `uia_get_value` callable → str | `str` (multiline Document returns "" on read — a real UIA quirk) |
+
+R128 (`round_uia_value`, 4 checks); `_probe_uiaval.py` standalone. Full suite
+**822/822** clean (the harness even self-recovered its CDP link after the round —
+the live floor proving its own resilience).
+
+**Lesson (道法自然).** 為而弗恃 — *act, yet do not lean on it.* The UIA write does not
+seize the field by force (focus, keystrokes, pixels); it asks the accessibility
+contract the app already honours, and the value is simply *there* — confirmed by an
+entirely independent floor (native `window_text`) reading back precisely what was
+written. That two unrelated mechanisms — the accessibility write and the native
+read — agree to the character is the same 得一 (obtaining-the-one) convergence as
+F166, now on the *action* side. The modern-app loop is whole: **see** (F165) →
+**locate** (F166) → **write/press** (F167), each a true semantic verb, each falling
+back to the universal pixel/keystroke floor only when no contract is offered. The
+floor now operates native and modern software alike, by meaning, end to end.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

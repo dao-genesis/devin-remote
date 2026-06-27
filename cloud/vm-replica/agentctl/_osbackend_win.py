@@ -779,7 +779,8 @@ def capture_rgb(x: int = 0, y: int = 0,
 # Best-effort raw-COM UIA in pure ctypes; any failure degrades to empty results
 # so the backend still imports and callers fall back to the Win32 / pixel floor.
 try:
-    from _uia_win import uia_name, uia_children, uia_find
+    from _uia_win import (uia_name, uia_children, uia_find,
+                          uia_set_value, uia_get_value, uia_invoke)
 except Exception:  # pragma: no cover - UIA unavailable
     def uia_name(win: int) -> str:
         return ""
@@ -789,3 +790,12 @@ except Exception:  # pragma: no cover - UIA unavailable
 
     def uia_find(win: int, name=None, ctype=None):
         return None
+
+    def uia_set_value(win: int, value, name=None, ctype=None) -> bool:
+        return False
+
+    def uia_get_value(win: int, name=None, ctype=None) -> str:
+        return ""
+
+    def uia_invoke(win: int, name=None, ctype=None) -> bool:
+        return False

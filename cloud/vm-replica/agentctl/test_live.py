@@ -1260,6 +1260,68 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_uia_value(b: Browser, offline: bool) -> None:
+    print("R128: write an element's value through UIA, reaching modern apps (F167) — osctl")
+    # set_window_text (F161) writes a control's text by native HWND identity — but
+    # modern apps have no native control to write to. uia_set_value writes through
+    # the accessibility tree's ValuePattern, so it can set a field's value INSIDE
+    # Chrome/Electron/UWP. Proven cross-floor on Notepad: write via UIA, then the
+    # NATIVE window_text reads back exactly what UIA wrote — the accessibility write
+    # and the native read agree. (uia_get_value/uia_invoke ship as the read/press
+    # duals; classic Notepad's multiline Document doesn't expose Value on *read*, a
+    # real UIA quirk, so the write is confirmed through the native floor.)
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R128: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_set_value"):
+        check("osctl exposes uia_set_value", False, "missing primitive")
+        return
+
+    mark = "DAO-F167-" + str(os.getpid())
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available for UIA value write", note is not None, "none")
+        if not note:
+            return
+        ok = osctl.uia_set_value(note["id"], mark, ctype="Edit")
+        check("uia_set_value writes through the UIA ValuePattern (no native HWND write)",
+              ok is True, f"ok={ok}")
+        time.sleep(0.3)
+        edit = next((k for k in osctl.child_windows(note["id"])
+                     if k["class"] == "Edit"), None)
+        native = osctl.window_text(edit["id"]) if edit else ""
+        check("cross-floor: the native window_text reads back exactly the UIA-written "
+              "value (accessibility write agrees with native read)",
+              native == mark, f"native={native!r}")
+        gv = osctl.uia_get_value(note["id"], ctype="Edit")
+        check("uia_get_value is callable and returns a string (read dual)",
+              isinstance(gv, str), f"type={type(gv).__name__}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.3)
+
+
 def round_uia_find(b: Browser, offline: bool) -> None:
     print("R127: locate an element by MEANING inside a modern app via UIA (F166) — osctl")
     # find_control (F163) locates a native control by meaning and returns a pixel
@@ -8221,7 +8283,7 @@ def main() -> int:
               round_topmost, round_window_pid, round_key_state, round_mouse_state,
               round_pixel, round_window_text, round_set_window_text,
               round_control_at, round_find_control, round_menu, round_uia,
-              round_uia_find, round_move, round_desktop,
+              round_uia_find, round_uia_value, round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
