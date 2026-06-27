@@ -65,6 +65,8 @@ MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
+MOUSEEVENTF_MIDDLEDOWN = 0x0020
+MOUSEEVENTF_MIDDLEUP = 0x0040
 MOUSEEVENTF_WHEEL = 0x0800
 MOUSEEVENTF_HWHEEL = 0x1000
 WHEEL_DELTA = 120
@@ -144,6 +146,22 @@ def double_click(x: int | None = None, y: int | None = None,
     click(right=right)
     time.sleep(gap)
     click(right=right)
+
+
+def middle_click(x: int | None = None, y: int | None = None) -> None:
+    """Press the middle (wheel) button at a point (F123).
+
+    :func:`click` only encodes left and right; the channel had no third
+    button at all. Middle-click is its own verb on the web — ``button===1``,
+    the ``auxclick`` event, open-link-in-a-new-background-tab, paste-on-X11,
+    autoscroll. A left or right click can never stand in for it. This sends
+    one ``MIDDLEDOWN``/``MIDDLEUP`` pair so the page sees a true aux click."""
+    if x is not None:
+        move(x, y)
+        time.sleep(0.02)
+    for flag in (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP):
+        mi = _MOUSEINPUT(0, 0, 0, flag, 0, 0)
+        _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
 
 
 def drag(x0: int, y0: int, x1: int, y1: int,
