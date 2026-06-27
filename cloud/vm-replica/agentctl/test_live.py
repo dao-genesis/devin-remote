@@ -4747,6 +4747,123 @@ def round_locate_block_word(b, offline):
           b.wait_for("document.title==='HIT:OK'", timeout=3), b.title())
 
 
+def round_locate_phrase(b, offline):
+    print("R81: find a multi-WORD phrase and click its span (F117) — osctl")
+    # locate_word/locate_block_word (F115/F116) reach a SINGLE word, so a button
+    # labelled across a space ('OK GO') is unfindable: ask for 'OK GO' and nothing
+    # matches; ask for 'OK' and the box covers half the control. locate_phrase
+    # bands rows, reads each line's words in order, and slides a window for the
+    # consecutive run equal to the phrase, returning the bbox spanning exactly
+    # those words — whose centre is the control's true middle.
+    if offline:
+        return
+
+    def hx(s):
+        s = s.lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+    MAG = (255, 0, 255)
+    chars = "OKGREDNBLUY"
+    draws = "".join("x.fillText('%s',%d,80);" % (ch, 24 + i * 96)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("ph_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=1100 height=140></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,1100,140);"
+               "x.fillStyle='#f0f';x.font='bold 80px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = sorted(osctl.find_color_blobs(MAG, tol=60, rgb=argb, size=(aw, ah),
+                                       min_count=120), key=lambda t: t["x"])
+    check("ph atlas segments into eleven reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def field_bbox(rgbX, szX, frac=16):
+        bls = osctl.find_color_blobs(hx("#ffffff"), tol=30, rgb=rgbX, size=szX,
+                                     min_count=5000)
+        if not bls:
+            return None
+        x0, y0, x1, y1 = max(bls, key=lambda t: t["count"])["bbox"]
+        iw, ih = (x1 - x0) // frac, (y1 - y0) // 8
+        return (x0 + iw, y0 + ih, x1 - iw, y1 - ih)
+
+    # A multi-word button 'OK GO' (red OK beside green GO, one clickable span) on
+    # line 1; a single 'NO' button on line 2.
+    b.navigate(fixture("ph_btn.html",
+               "<!doctype html><title>btn</title><style>html,body{margin:0;"
+               "background:#fff}</style>"
+               "<canvas id=c width=900 height=560></canvas><script>"
+               "var c=document.getElementById('c'),x=c.getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,900,560);"
+               "x.font='bold 80px monospace';x.textBaseline='middle';"
+               "x.textAlign='left';"
+               "x.fillStyle='#d32020';x.fillText('OK',100,180);"
+               "x.fillStyle='#1f9d35';x.fillText('GO',300,180);"
+               "x.fillStyle='#1565c0';x.fillText('NO',100,400);"
+               "var BX=100,BX2=300+x.measureText('GO').width;"
+               "c.addEventListener('click',function(e){"
+               "var r=c.getBoundingClientRect();"
+               "var px=e.clientX-r.left,py=e.clientY-r.top;"
+               "if(px>=BX&&px<=BX2&&py>=140&&py<=220)document.title='HIT:OKGO';"
+               "else if(px>=100&&px<=100+x.measureText('NO').width&&py>=360"
+               "&&py<=440)document.title='HIT:NO';else document.title='MISS';"
+               "});</script>"))
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    sz = (w, h)
+    bb = field_bbox(rgb, sz)
+    check("ph button block located", bb is not None, repr(bb))
+    if bb is None:
+        return
+
+    lines = osctl.read_block_region_words(rgb, sz, bb, atlas)
+    check("read_block_region_words reads the 'OK GO' label as one line "
+          "(['OK GO','NO'])", lines == ["OK GO", "NO"], repr(lines))
+
+    # FRICTION: the single-word locator cannot match a phrase that holds a space.
+    check("FRICTION: locate_block_word('OK GO') is None (single-word locator)",
+          osctl.locate_block_word(rgb, sz, bb, atlas, "OK GO") is None)
+    box_ok = osctl.locate_block_word(rgb, sz, bb, atlas, "OK")
+    box_go = osctl.locate_block_word(rgb, sz, bb, atlas, "GO")
+    have1 = box_ok is not None and box_go is not None
+    check("the two words are locatable singly", have1,
+          "%r/%r" % (box_ok, box_go))
+    if not have1:
+        return
+
+    # locate_phrase spans exactly the run of words.
+    ph = osctl.locate_phrase(rgb, sz, bb, atlas, "OK GO")
+    check("locate_phrase('OK GO') returns a bbox", ph is not None, repr(ph))
+    if ph is None:
+        return
+    spans = ph[0] <= box_ok[0] and ph[2] >= box_go[2] and ph[2] > box_ok[2]
+    check("locate_phrase spans OK's left through GO's right (the whole label)",
+          spans, "%r vs OK %r GO %r" % (ph, box_ok, box_go))
+    cx = (ph[0] + ph[2]) // 2
+    ok_c = (box_ok[0] + box_ok[2]) // 2
+    go_c = (box_go[0] + box_go[2]) // 2
+    check("the phrase centre is the control's middle (between the two words)",
+          ok_c < cx < go_c, "%d < %d < %d" % (ok_c, cx, go_c))
+
+    # A phrase no line carries in order is None; one word is locate_block_word.
+    check("locate_phrase of an absent phrase is None",
+          osctl.locate_phrase(rgb, sz, bb, atlas, "NO BY") is None)
+    check("locate_phrase of a single word equals locate_block_word ('NO')",
+          osctl.locate_phrase(rgb, sz, bb, atlas, "NO")
+          == osctl.locate_block_word(rgb, sz, bb, atlas, "NO"))
+
+    # READ -> ACT: clicking the phrase centre presses the multi-word control.
+    osctl.click(cx, (ph[1] + ph[3]) // 2)
+    check("clicking the located phrase 'OK GO' presses the multi-word button",
+          b.wait_for("document.title==='HIT:OKGO'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -4777,7 +4894,8 @@ def main() -> int:
               round_read_text_conf, round_detect_fg, round_palette,
               round_read_region, round_read_block_region,
               round_read_region_words, round_read_block_region_words,
-              round_locate_word, round_locate_block_word]
+              round_locate_word, round_locate_block_word,
+              round_locate_phrase]
     for r in rounds:
         try:
             r(b, offline)
