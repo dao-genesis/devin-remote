@@ -4963,6 +4963,108 @@ def round_wait_for_phrase(b, offline):
           b.wait_for("document.title==='HIT:OK'", timeout=3), b.title())
 
 
+def round_scroll(b, offline):
+    print("R83: scroll a below-the-fold button into view and click it "
+          "(F119) — osctl")
+    # capture_rgb is one screenful; every reader/locator searches within it, so
+    # content past the fold is simply not in the pixels and locate_phrase returns
+    # None for text that exists but is scrolled away. scroll() rolls the wheel so a
+    # fresh capture shows what came into the frame — the window can move across a
+    # surface larger than itself.
+    if offline:
+        return
+
+    def hx(s):
+        s = s.lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+    MAG = (255, 0, 255)
+    chars = "OKGREDNBLUY"
+    draws = "".join("x.fillText('%s',%d,80);" % (ch, 24 + i * 96)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("sc_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=1100 height=140></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,1100,140);"
+               "x.fillStyle='#f0f';x.font='bold 80px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = sorted(osctl.find_color_blobs(MAG, tol=60, rgb=argb, size=(aw, ah),
+                                       min_count=120), key=lambda t: t["x"])
+    check("sc atlas segments into eleven reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def field_bbox(rgbX, szX, frac=16):
+        bls = osctl.find_color_blobs(hx("#ffffff"), tol=30, rgb=rgbX, size=szX,
+                                     min_count=5000)
+        if not bls:
+            return None
+        x0, y0, x1, y1 = max(bls, key=lambda t: t["count"])["bbox"]
+        iw, ih = (x1 - x0) // frac, (y1 - y0) // 8
+        return (x0 + iw, y0 + ih, x1 - iw, y1 - ih)
+
+    # A tall page whose only button, a blue 'GO' canvas, sits far below the fold.
+    b.navigate(fixture("sc_tall.html",
+               "<!doctype html><title>t</title><style>html,body{margin:0;"
+               "background:#fff}#sp{height:3000px}"
+               "#c{position:absolute;top:2600px;left:40px}</style>"
+               "<div id=sp></div><canvas id=c width=400 height=160></canvas>"
+               "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,400,160);"
+               "x.font='bold 80px monospace';x.textBaseline='middle';"
+               "x.textAlign='left';"
+               "x.fillStyle='#1565c0';x.fillText('GO',60,90);"
+               "var GW=x.measureText('GO').width;"
+               "c.addEventListener('click',function(e){"
+               "var r=c.getBoundingClientRect();"
+               "var px=e.clientX-r.left,py=e.clientY-r.top;"
+               "if(px>=60&&px<=60+GW&&py>=50&&py<=130)document.title='HIT:GO';"
+               "});</script>"))
+    time.sleep(0.5)
+    check("the tall page starts at the top (scrollY 0)",
+          b.eval("window.scrollY") == 0, repr(b.eval("window.scrollY")))
+    w, h, rgb = osctl.capture_rgb()
+    sz = (w, h)
+    bb = field_bbox(rgb, sz)
+    check("sc field located", bb is not None, repr(bb))
+    if bb is None:
+        return
+    check("FRICTION: the below-fold 'GO' is not on screen (locate_phrase None)",
+          osctl.locate_phrase(rgb, sz, bb, atlas, "GO") is None)
+
+    # Roll the wheel down; the page moves and 'GO' comes into the frame.
+    osctl.scroll(dy=-40, x=w // 2, y=h // 2)
+    time.sleep(0.4)
+    sy_down = b.eval("window.scrollY")
+    check("scroll(dy<0) moves the page down (scrollY grows)", sy_down > 500,
+          repr(sy_down))
+    w2, h2, rgb2 = osctl.capture_rgb()
+    bb2 = field_bbox(rgb2, (w2, h2))
+    gob = osctl.locate_phrase(rgb2, (w2, h2), bb2, atlas, "GO") if bb2 else None
+    check("'GO' is now on screen after scrolling (locate_phrase finds it)",
+          gob is not None, repr(gob))
+    if gob is None:
+        return
+
+    # READ -> ACT on content that was beyond the fold.
+    osctl.click((gob[0] + gob[2]) // 2, (gob[1] + gob[3]) // 2)
+    check("clicking the scrolled-in 'GO' presses it (reach past the fold)",
+          b.wait_for("document.title==='HIT:GO'", timeout=3), b.title())
+
+    # Roll the wheel back up; the page returns toward the top.
+    osctl.scroll(dy=40, x=w // 2, y=h // 2)
+    time.sleep(0.4)
+    sy_up = b.eval("window.scrollY")
+    check("scroll(dy>0) moves the page back up (scrollY shrinks)", sy_up < sy_down,
+          "%r -> %r" % (sy_down, sy_up))
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -4994,7 +5096,7 @@ def main() -> int:
               round_read_region, round_read_block_region,
               round_read_region_words, round_read_block_region_words,
               round_locate_word, round_locate_block_word,
-              round_locate_phrase, round_wait_for_phrase]
+              round_locate_phrase, round_wait_for_phrase, round_scroll]
     for r in rounds:
         try:
             r(b, offline)

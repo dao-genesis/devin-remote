@@ -65,6 +65,9 @@ MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
+MOUSEEVENTF_WHEEL = 0x0800
+MOUSEEVENTF_HWHEEL = 0x1000
+WHEEL_DELTA = 120
 
 ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
 
@@ -122,6 +125,44 @@ def click(x: int | None = None, y: int | None = None, right: bool = False) -> No
     for flag in (down, up):
         mi = _MOUSEINPUT(0, 0, 0, flag, 0, 0)
         _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
+
+
+def scroll(dy: int = 0, dx: int = 0,
+           x: int | None = None, y: int | None = None,
+           pause: float = 0.01) -> None:
+    """Mouse-wheel scroll, one notch at a time (F119).
+
+    The agent could move and click anywhere it could *see*, but it could only ever
+    see one screenful: :func:`capture_rgb` is the viewport, and every reader and
+    locator searches within it. Content past the fold — the rest of a page, a list
+    below the window, a result that renders lower than the screen is tall — simply
+    was not in the pixels, so :func:`locate_phrase` returned ``None`` for text that
+    exists but is scrolled away, and nothing in the toolkit could bring it into
+    view. Sight was bounded by the window frame.
+
+    This is the wheel. ``dy`` notches scroll vertically — ``dy < 0`` rolls the
+    wheel toward the user (the page moves *up*, revealing content *below*), ``dy >
+    0`` rolls away (revealing content *above*) — and ``dx`` scrolls horizontally
+    the same way; each notch is one ``WHEEL_DELTA`` event, sent over ``(x, y)`` when
+    given so the wheel lands on the element under the cursor (a scroll pane, not
+    just the page). After scrolling, a fresh :func:`capture_rgb` shows what rolled
+    into the frame, and the readers and locators work on it unchanged — the window
+    can now be moved across a surface larger than itself."""
+    if x is not None:
+        move(x, y)
+        time.sleep(0.02)
+
+    def wheel(flag: int, notches: int) -> None:
+        d = WHEEL_DELTA if notches > 0 else -WHEEL_DELTA
+        for _ in range(abs(notches)):
+            mi = _MOUSEINPUT(0, 0, d & 0xFFFFFFFF, flag, 0, 0)
+            _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
+            time.sleep(pause)
+
+    if dy:
+        wheel(MOUSEEVENTF_WHEEL, dy)
+    if dx:
+        wheel(MOUSEEVENTF_HWHEEL, dx)
 
 
 # ---- keyboard ------------------------------------------------------------- #
