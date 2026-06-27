@@ -3462,6 +3462,47 @@ blind; the loop closes when the mover can also know its own place.
 
 ---
 
+## F139 — `wait_for_color`: wait for a specific colour, not any motion (R103)
+
+**Friction.** `wait_for_change` waits for *any* difference — and that is exactly
+its weakness as a done-signal. A click usually starts a spinner, a skeleton
+shimmer, a progress bar first: motion that is *not* the outcome. So the first
+change fires on the busy state and the agent proceeds as if finished. The real
+signal is often a particular colour arriving — a status dot going green, a field
+turning red, a toggle filling. You cannot wait for that with `wait_for_change`
+(the spinner trips it) nor with a bare `find_color` (it races the change and sees
+the old frame).
+
+**Mechanism.** Poll `find_color` every `interval` until at least `min_count`
+pixels within `tol` of `target` exist, then return its `{x, y, count, bbox}`
+(already a click target) plus `elapsed`; `None` if it never arrives by `timeout`.
+It is to `find_color` what `wait_for_phrase` is to the text readers: the same
+locate, made patient.
+
+**Primitive.** `wait_for_color(target, tol=24, min_count=30, interval=0.05, timeout=5.0)`.
+
+**Live (R103):** a trigger flips the surface gray (spinner) for 1000ms, then
+green. On one trigger, the two waiters run in sequence: `wait_for_change` fires in
+``<0.6s`` on the spinner while the green has *not* yet arrived (green pixels below
+the 400 threshold); then `wait_for_color(green)` keeps waiting through the spinner
+and returns only once green truly fills (754k px), with a centroid that lands a
+real click target on the surface, and a strictly larger `elapsed` than the
+any-change wait — meaning over motion. `734/734 checks passed`, deterministic ×3.
+
+**Honest note.** It is whole-screen `find_color` under a clock, so it inherits
+that cost and that blind spot: ~91 stray green pixels live in the browser chrome,
+so a naive `min_count=1` would false-fire instantly. The `min_count` floor is what
+makes it honest — it waits for a *meaningful amount* of the colour, not a single
+matching pixel; the test sets 400 precisely because the stray count is ~91. For a
+known region, pass a tighter search via the colour's expected `bbox` upstream.
+
+**Lesson (道法自然):** 致虛極，守靜篤 — the spinner is the ten-thousand things
+stirring; do not mistake their motion for the end. Hold to the stillness and wait
+for the one true colour to return, then act. 躁勝寒，靜勝熱 — patience reads what
+haste misreads.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
