@@ -1725,6 +1725,67 @@ def wait_for_phrase(bbox: tuple[int, int, int, int],
         time.sleep(interval)
 
 
+def scroll_to_phrase(bbox: tuple[int, int, int, int],
+                     atlas: dict[str, list[int]], target: str,
+                     step: int = 5, max_steps: int = 40,
+                     x: int | None = None, y: int | None = None,
+                     settle: float = 0.25,
+                     tol: int = 60, gap: int = 2, row_gap: int = 4,
+                     space_k: float = 1.8,
+                     nw: int = 48, nh: int = 48, thr: int = 24,
+                     q: int = 16, min_pop: float = 0.002,
+                     min_dist: int = 96) -> tuple[int, int, int, int] | None:
+    """Scroll until a word or phrase comes into view, then return its bbox (F120).
+
+    :func:`scroll` (F119) can reach past the fold, but only by a *guessed* amount:
+    the caller must know how many notches the target lies below, and a fixed roll
+    over- or under-shoots — too few and the word never enters the frame, too many
+    and it flies past the top and out again (the F119 probe lost ``GO`` at the
+    first overshoot). And :func:`locate_phrase` still only reads the one screenful
+    it is handed. To *find* text on a surface taller than the window you must
+    search and scroll together, and know when to stop.
+
+    This marries the two. It looks for ``target`` in the current frame
+    (:func:`locate_phrase` over ``bbox``); finding it, returns its bbox at once.
+    Else it rolls the wheel down ``step`` notches over ``(x, y)`` (the region's
+    centre by default) and looks again, walking the surface one screenful at a
+    time, up to ``max_steps`` rolls — so ``box = scroll_to_phrase(field, atlas,
+    "SUBMIT")`` brings a button anywhere down a long page into view and hands back
+    where to press it, the window walking itself to the text instead of the caller
+    counting notches.
+
+    It bounds the search by ``max_steps`` rather than by pixels-stopped-changing,
+    and that is deliberate honesty: a long blank stretch scrolls past while the
+    captured screen does not change a single byte (the scrollbar thumb does not
+    register in a GDI grab), so "the frame held still" cannot tell *bottomed out*
+    from *still travelling through emptiness* — a pixel-only reader simply has no
+    truthful bottom signal, and pretending one (stopping on a still frame) would
+    abandon a target that lies just past the blank. So it promises only to look
+    across ``max_steps`` successive screenfuls; set ``max_steps`` to cover the
+    surface (``page_height / screenful`` rolls of ``step``).
+
+    Honest in its parts' frames at every step (banded rows, bimodal seams,
+    ``atlas`` glyphs, text colours) and honest about its reach: it reads only what
+    each roll reveals and declares failure only after exhausting ``max_steps``.
+    Leaves the surface scrolled at wherever it found the target (or as far as it
+    walked); a word no screenful within reach holds — or the atlas cannot spell —
+    returns ``None``."""
+    if x is None:
+        x = (bbox[0] + bbox[2]) // 2
+    if y is None:
+        y = (bbox[1] + bbox[3]) // 2
+    for i in range(max_steps):
+        w, h, rgb = capture_rgb()
+        hit = locate_phrase(rgb, (w, h), bbox, atlas, target, tol, gap, row_gap,
+                            space_k, nw, nh, thr, q, min_pop, min_dist)
+        if hit is not None:
+            return hit
+        if i < max_steps - 1:
+            scroll(dy=-step, x=x, y=y)
+            time.sleep(settle)
+    return None
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"

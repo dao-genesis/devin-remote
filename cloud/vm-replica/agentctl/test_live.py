@@ -5065,6 +5065,111 @@ def round_scroll(b, offline):
           "%r -> %r" % (sy_down, sy_up))
 
 
+def round_scroll_to_phrase(b, offline):
+    print("R84: walk a long page to a target by text alone, then click it "
+          "(F120) — osctl")
+    # scroll() (F119) reaches past the fold only by a guessed amount — a fixed roll
+    # under- or over-shoots. scroll_to_phrase searches and scrolls together: it
+    # rolls a step at a time, looking for the target each frame, up to max_steps,
+    # so the window walks itself to the text instead of the caller counting
+    # notches.
+    if offline:
+        return
+
+    def hx(s):
+        s = s.lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+    MAG = (255, 0, 255)
+    chars = "OKGREDNBLUY"
+    draws = "".join("x.fillText('%s',%d,80);" % (ch, 24 + i * 96)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("s2_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=1100 height=140></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,1100,140);"
+               "x.fillStyle='#f0f';x.font='bold 80px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = sorted(osctl.find_color_blobs(MAG, tol=60, rgb=argb, size=(aw, ah),
+                                       min_count=120), key=lambda t: t["x"])
+    check("s2 atlas segments into eleven reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def field_bbox(rgbX, szX, frac=16):
+        bls = osctl.find_color_blobs(hx("#ffffff"), tol=30, rgb=rgbX, size=szX,
+                                     min_count=5000)
+        if not bls:
+            return None
+        x0, y0, x1, y1 = max(bls, key=lambda t: t["count"])["bbox"]
+        iw, ih = (x1 - x0) // frac, (y1 - y0) // 8
+        return (x0 + iw, y0 + ih, x1 - iw, y1 - ih)
+
+    tall = ("<!doctype html><title>t</title><style>html,body{margin:0;"
+            "background:#fff}#sp{height:3000px}"
+            "#c{position:absolute;top:2600px;left:40px}</style>"
+            "<div id=sp></div><canvas id=c width=400 height=160></canvas>"
+            "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+            "x.fillStyle='#fff';x.fillRect(0,0,400,160);"
+            "x.font='bold 80px monospace';x.textBaseline='middle';"
+            "x.textAlign='left';"
+            "x.fillStyle='#1565c0';x.fillText('GO',60,90);"
+            "var GW=x.measureText('GO').width;"
+            "c.addEventListener('click',function(e){"
+            "var r=c.getBoundingClientRect();"
+            "var px=e.clientX-r.left,py=e.clientY-r.top;"
+            "if(px>=60&&px<=60+GW&&py>=50&&py<=130)document.title='HIT:GO';"
+            "});</script>")
+
+    b.navigate(fixture("s2_tall.html", tall))
+    time.sleep(0.5)
+    check("the tall page starts at the top (scrollY 0)",
+          b.eval("window.scrollY") == 0, repr(b.eval("window.scrollY")))
+    w, h, rgb = osctl.capture_rgb()
+    sz = (w, h)
+    bb = field_bbox(rgb, sz)
+    check("s2 field located", bb is not None, repr(bb))
+    if bb is None:
+        return
+
+    # FRICTION: one fixed roll undershoots — 'GO' is still off-screen.
+    osctl.scroll(dy=-6, x=w // 2, y=h // 2)
+    time.sleep(0.3)
+    w1, h1, rgb1 = osctl.capture_rgb()
+    bbf = field_bbox(rgb1, (w1, h1))
+    check("FRICTION: a single fixed scroll undershoots ('GO' not yet visible)",
+          osctl.locate_phrase(rgb1, (w1, h1), bbf, atlas, "GO") is None
+          if bbf else False)
+
+    # scroll_to_phrase walks the rest of the way and finds it.
+    box = osctl.scroll_to_phrase(bb, atlas, "GO", step=6, max_steps=8)
+    check("scroll_to_phrase walks the page and returns the target's bbox",
+          box is not None, repr(box))
+    sy = b.eval("window.scrollY")
+    check("the page scrolled to bring 'GO' into view", sy > 500, repr(sy))
+    if box is None:
+        return
+
+    # READ -> ACT: press a button found by text alone, anywhere down the page.
+    osctl.click((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
+    check("clicking the walked-to 'GO' presses it (find by text, then act)",
+          b.wait_for("document.title==='HIT:GO'", timeout=3), b.title())
+
+    # A word on no reachable screenful: walk to the end, then None.
+    b.navigate(fixture("s2_tall.html", tall))
+    time.sleep(0.5)
+    w3, h3, rgb3 = osctl.capture_rgb()
+    bb3 = field_bbox(rgb3, (w3, h3))
+    check("scroll_to_phrase of an absent word returns None (walked to the end)",
+          osctl.scroll_to_phrase(bb3, atlas, "ZZ", step=6, max_steps=8) is None)
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -5096,7 +5201,8 @@ def main() -> int:
               round_read_region, round_read_block_region,
               round_read_region_words, round_read_block_region_words,
               round_locate_word, round_locate_block_word,
-              round_locate_phrase, round_wait_for_phrase, round_scroll]
+              round_locate_phrase, round_wait_for_phrase, round_scroll,
+              round_scroll_to_phrase]
     for r in rounds:
         try:
             r(b, offline)
