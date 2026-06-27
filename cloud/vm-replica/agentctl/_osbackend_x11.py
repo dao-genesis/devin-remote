@@ -511,6 +511,32 @@ def set_window_state(win: int, state: str) -> bool:
         return ok
 
 
+def is_window_topmost(win: int) -> bool:
+    """Whether a window is pinned *always-on-top* — it stays above ordinary
+    windows even without focus, decoupling the stack from focus. Read as
+    ``_NET_WM_STATE_ABOVE`` in ``_NET_WM_STATE``; the read dual of
+    ``set_window_topmost``."""
+    with _lock:
+        raw = _prop(win, _atom("_NET_WM_STATE"), 4)  # 4 = XA_ATOM
+        if not raw:
+            return False
+        al = ctypes.c_long
+        n = len(raw) // ctypes.sizeof(al)
+        atoms = {int(a) for a in ctypes.cast(raw, ctypes.POINTER(al * n)).contents}
+        return _atom("_NET_WM_STATE_ABOVE") in atoms
+
+
+def set_window_topmost(win: int, on: bool = True) -> bool:
+    """Pin / unpin a window *always-on-top* by identity — it then stays above
+    non-topmost windows regardless of focus, the one case where stack and focus
+    must deliberately diverge. EWMH ``_NET_WM_STATE`` add/remove of
+    ``_NET_WM_STATE_ABOVE``."""
+    with _lock:
+        if not window_exists(win):
+            return False
+        return _net_wm_state(win, 1 if on else 0, _atom("_NET_WM_STATE_ABOVE"))
+
+
 def _has_wm_state(win: int) -> bool:
     ws = _atom("WM_STATE")
     return _prop(win, ws, ws) is not None

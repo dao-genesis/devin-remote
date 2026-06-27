@@ -344,6 +344,39 @@ def window_exists(win: int) -> bool:
     return bool(user32.IsWindow(wintypes.HWND(win)))
 
 
+user32.GetWindowLongW.restype = wintypes.LONG
+user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+
+_GWL_EXSTYLE = -20
+_WS_EX_TOPMOST = 0x00000008
+_HWND_TOPMOST = wintypes.HWND(-1)
+_HWND_NOTOPMOST = wintypes.HWND(-2)
+
+
+def is_window_topmost(win: int) -> bool:
+    """Whether a window is pinned *always-on-top* — it stays above ordinary
+    windows even when it does not hold focus, decoupling the stack from focus.
+    Read via the ``WS_EX_TOPMOST`` extended style; the read dual of
+    ``set_window_topmost``."""
+    ex = user32.GetWindowLongW(wintypes.HWND(win), _GWL_EXSTYLE)
+    return bool(ex & _WS_EX_TOPMOST)
+
+
+def set_window_topmost(win: int, on: bool = True) -> bool:
+    """Pin / unpin a window *always-on-top* by identity. A topmost window stays
+    above non-topmost ones regardless of focus — so the floor can keep a reference
+    window visible while typing into another, the one case where the stack and
+    focus must deliberately diverge. ``SetWindowPos`` with ``HWND_TOPMOST`` /
+    ``HWND_NOTOPMOST`` (keeping position & size)."""
+    hwnd = wintypes.HWND(win)
+    if not user32.IsWindow(hwnd):
+        return False
+    after = _HWND_TOPMOST if on else _HWND_NOTOPMOST
+    # 0x0001 SWP_NOSIZE | 0x0002 SWP_NOMOVE | 0x0010 SWP_NOACTIVATE
+    return bool(user32.SetWindowPos(hwnd, after, 0, 0, 0, 0,
+                                    0x0001 | 0x0002 | 0x0010))
+
+
 def active_window() -> "int | None":
     """Which top-level window currently holds keyboard focus — the id a ``type``
     or key press would reach right now — or None if none does. The keyboard

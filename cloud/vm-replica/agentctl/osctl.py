@@ -72,6 +72,12 @@ set_window_state = getattr(_be, "set_window_state", lambda win, state: False)
 # focus; this lets the floor confirm its typing will land where intended. None if
 # nothing is focused or on an older floor.
 active_window = getattr(_be, "active_window", lambda: None)
+# Always-on-top pinning: a topmost window stays above ordinary windows even when
+# it does NOT hold focus — the one case where the stack and focus deliberately
+# diverge (keep a reference window visible while typing into another). Read dual
+# tells whether a window is pinned. No-op / False on an older floor.
+set_window_topmost = getattr(_be, "set_window_topmost", lambda win, on=True: False)
+is_window_topmost = getattr(_be, "is_window_topmost", lambda win: False)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

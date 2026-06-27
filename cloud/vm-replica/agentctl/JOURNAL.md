@@ -4266,6 +4266,47 @@ window is wisdom; the floor knowing *its own* focus is clarity.
 
 ---
 
+## F155 — always-on-top: where the stack and focus deliberately diverge (`set_window_topmost` / `is_window_topmost`, R116)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** F151 reads the *stack* (`window_under` — which window owns a pixel,
+where a click lands); F154 reads *focus* (`active_window` — which window owns the
+keyboard). On a normal desktop the two move together: raising a window both
+stacks it and focuses it, so nothing had yet *proved* they are independent axes
+rather than two names for one thing. And the floor had no way to express the one
+case where a human deliberately splits them: pinning a reference window
+*always-on-top* so it stays visible while typing into another.
+
+**Primitives.**
+- `osctl.set_window_topmost(win, on=True)` → pin/unpin always-on-top by identity.
+  Win32 `SetWindowPos(HWND_TOPMOST/HWND_NOTOPMOST)`; X11 EWMH `_NET_WM_STATE`
+  add/remove of `_NET_WM_STATE_ABOVE`.
+- `osctl.is_window_topmost(win)` → read the pin. Win32 `WS_EX_TOPMOST` ext-style;
+  X11 `_NET_WM_STATE_ABOVE` membership. The read dual of the write.
+
+**Live (Windows, two overlapping consoles sharing one pixel):**
+
+| step | `active_window` (focus) | `window_under(px)` (stack) |
+|---|:---:|:---:|
+| pin A, then activate B | **B** | **A** — topmost wins the pixel |
+| unpin A, activate B | **B** | **B** — axes re-converge |
+
+That single row where focus = B but the pixel = A is the whole point: it proves
+`active_window` and `window_under` measure genuinely different things. A
+screenshot+click floor cannot pin anything, and cannot even perceive the split.
+
+R116 (`round_topmost`, 5 checks); `_probe_topmost.py` standalone (6/6). Full suite
+**776/776** clean.
+
+**Lesson (道法自然).** 萬物負陰而抱陽 — *all things carry yin and embrace yang.*
+Stack and focus had ridden together so faithfully they looked like one; only by
+*forcing* them apart (the topmost pin) does the floor confirm it holds two
+independent truths, each with its own read. Wholeness is not sameness — it is
+holding distinct opposites at once and knowing which is which.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

@@ -1260,6 +1260,108 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_topmost(b: Browser, offline: bool) -> None:
+    print("R116: PIN a window always-on-top — stack diverges from focus (F155) — osctl")
+    # F151 read the stack (window_under: which window owns a pixel), F154 read
+    # focus (active_window: which window owns the keyboard). Normally they move
+    # together — raising a window both stacks and focuses it. always-on-top is the
+    # one deliberate exception: a pinned window stays on TOP of the stack even when
+    # another window holds FOCUS. This is the proof the two reads measure genuinely
+    # different axes: with A pinned and B focused, the shared pixel belongs to A
+    # while the keyboard belongs to B. set_window_topmost writes the pin by
+    # identity; is_window_topmost reads it. (Screenshot+click cannot pin anything.)
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R116: no konsole on this Linux host)")
+        return
+    for name in ("set_window_topmost", "is_window_topmost", "window_under",
+                 "active_window"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    procs = []
+    try:
+        procs.append(launch("UTOP-A"))
+        osctl.wait_window("UTOP-A", timeout=8.0)
+        procs.append(launch("UTOP-B"))
+        osctl.wait_window("UTOP-B", timeout=8.0)
+        a = next((w for w in osctl.list_windows() if "UTOP-A" in (w.get("title") or "")), None)
+        bb = next((w for w in osctl.list_windows() if "UTOP-B" in (w.get("title") or "")), None)
+        check("two windows enumerated for the topmost test",
+              a is not None and bb is not None,
+              f"A={'y' if a else 'n'} B={'y' if bb else 'n'}")
+        if not a or not bb:
+            return
+
+        osctl.move_window(a["id"], 120, 120, 640, 420)
+        time.sleep(0.4)
+        osctl.move_window(bb["id"], 170, 170, 640, 420)  # overlaps A
+        time.sleep(0.4)
+        px, py = 450, 380
+
+        check("a fresh window is not pinned topmost",
+              not osctl.is_window_topmost(a["id"]),
+              f"is={osctl.is_window_topmost(a['id'])}")
+
+        ok = osctl.set_window_topmost(a["id"], True)
+        time.sleep(0.4)
+        check("set_window_topmost pins A, and is_window_topmost reads it back",
+              ok and osctl.is_window_topmost(a["id"]),
+              f"ok={ok} is={osctl.is_window_topmost(a['id'])}")
+
+        # The crux: focus B, but the shared pixel stays with topmost A.
+        osctl.activate_window(bb["id"])
+        time.sleep(0.6)
+        af = osctl.active_window()
+        owner = osctl.window_under(px, py)
+        check("with A pinned, focus goes to B yet the shared pixel stays with A "
+              "(stack diverges from focus)",
+              af == bb["id"] and owner == a["id"],
+              f"active={af!r} under={owner!r} A={a['id']} B={bb['id']}")
+
+        # Unpin: the pixel now follows focus to B again.
+        osctl.set_window_topmost(a["id"], False)
+        time.sleep(0.3)
+        osctl.activate_window(bb["id"])
+        time.sleep(0.6)
+        owner2 = osctl.window_under(px, py)
+        check("after unpin, stack and focus re-converge on B",
+              not osctl.is_window_topmost(a["id"]) and owner2 == bb["id"],
+              f"is={osctl.is_window_topmost(a['id'])} under={owner2!r} B={bb['id']}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_active_window(b: Browser, offline: bool) -> None:
     print("R115: READ which window holds keyboard focus right now (F154) — osctl")
     # F151 gave the stack-read dual of activate_window (window_under: which window
@@ -7418,7 +7520,7 @@ def main() -> int:
               round_template_match, round_settle, round_reach, round_steer,
               round_window, round_clip_relay, round_zorder, round_window_under,
               round_window_lifecycle, round_window_state, round_active_window,
-              round_move, round_desktop,
+              round_topmost, round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
