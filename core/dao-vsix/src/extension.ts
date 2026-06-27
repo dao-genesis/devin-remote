@@ -11967,8 +11967,10 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         //   当前访问主机, 杜绝 SPA 据此判跨主机而硬跳 app.devin.ai 逃逸出隧道。
                         {
                             const localHost = localBase.replace(/^https?:\/\//i, '');
-                            html = html.replace(/("webapp_host"\s*:\s*)"[^"]*"/g, `$1"${localHost}"`);
-                            html = html.replace(/("webappHost"\s*:\s*)"[^"]*"/g, `$1"${localHost}"`);
+                            // 守柔·并理 null: 上游可能下发 "webapp_host":null(SPA 据此回落默认主机 app.devin.ai
+                            //   → 跨主机硬跳逃出隧道)。故字符串值与 null 字面量一并改写为当前请求主机。
+                            html = html.replace(/("webapp_host"\s*:\s*)(?:"[^"]*"|null)/g, `$1"${localHost}"`);
+                            html = html.replace(/("webappHost"\s*:\s*)(?:"[^"]*"|null)/g, `$1"${localHost}"`);
                         }
 
                         // 注入认证桥接脚本 — 帛书·五十二「见小曰明·守柔曰强」
@@ -12144,8 +12146,11 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         //   隧道只搬认证后的轻量 JSON — 即「重渲染在端, 穿透只传数据」之本源。
                         let bodyStr = decodedBody.toString('utf8');
                         const localHost = localBase.replace(/^https?:\/\//i, '');
-                        bodyStr = bodyStr.replace(/("webapp_host"\s*:\s*)"[^"]*"/g, `$1"${localHost}"`);
-                        bodyStr = bodyStr.replace(/("webappHost"\s*:\s*)"[^"]*"/g, `$1"${localHost}"`);
+                        // 知其雄·守其雌 + 并理 null: post-auth/组织 JSON 实测下发 "webapp_host":null,
+                        //   旧正则仅匹配带引号字符串 → 漏改 null → SPA 取 null webappHost 回落默认主机
+                        //   app.devin.ai, 令 /org/<slug> 硬跳真站 /login(逃出隧道·掉登录)。故 null 一并归一。
+                        bodyStr = bodyStr.replace(/("webapp_host"\s*:\s*)(?:"[^"]*"|null)/g, `$1"${localHost}"`);
+                        bodyStr = bodyStr.replace(/("webappHost"\s*:\s*)(?:"[^"]*"|null)/g, `$1"${localHost}"`);
                         resolve({
                             _proxy: true,
                             status: proxyRes.statusCode,
