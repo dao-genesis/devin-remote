@@ -346,6 +346,48 @@ def window_exists(win: int) -> bool:
 
 user32.GetWindowLongW.restype = wintypes.LONG
 user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND,
+                                            ctypes.POINTER(wintypes.DWORD)]
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.TerminateProcess.restype = wintypes.BOOL
+kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+_PROCESS_TERMINATE = 0x0001
+
+
+def window_pid(win: int) -> "int | None":
+    """Which OS process owns a window — its identity *beyond the title*. Two
+    windows can share an identical title (two consoles, two Notepads), so a title
+    cannot tell them apart; the owning pid can, and it is what lets the floor
+    escalate from a graceful close to a forceful kill. ``GetWindowThreadProcessId``
+    fills the pid; None if the handle is gone."""
+    if not user32.IsWindow(wintypes.HWND(win)):
+        return None
+    pid = wintypes.DWORD(0)
+    user32.GetWindowThreadProcessId(wintypes.HWND(win), ctypes.byref(pid))
+    return int(pid.value) or None
+
+
+def terminate_window(win: int) -> bool:
+    """Force the owning process of a window to end — the *forceful* death dual to
+    the graceful ``close_window`` (WM_CLOSE). When an app ignores the polite close
+    (a hung window, a modal that won't dismiss), this is the escalation a human
+    reaches for via Task Manager: ``OpenProcess(PROCESS_TERMINATE)`` +
+    ``TerminateProcess``. Returns False if the window/pid is already gone."""
+    pid = window_pid(win)
+    if not pid:
+        return False
+    h = kernel32.OpenProcess(_PROCESS_TERMINATE, False, pid)
+    if not h:
+        return False
+    try:
+        return bool(kernel32.TerminateProcess(h, 1))
+    finally:
+        kernel32.CloseHandle(h)
+
 
 _GWL_EXSTYLE = -20
 _WS_EX_TOPMOST = 0x00000008

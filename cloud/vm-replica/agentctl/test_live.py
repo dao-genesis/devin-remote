@@ -1260,6 +1260,83 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_window_pid(b: Browser, offline: bool) -> None:
+    print("R117: identify a window by its PROCESS, force-kill when close won't (F156) — osctl")
+    # Every window read so far keyed off the title or the handle. But a title can
+    # COLLIDE — two consoles, two editors, two browser windows can share the exact
+    # same caption — so the title is not an identity. The owning process is: each
+    # window belongs to a pid. That identity also unlocks the forceful end. F152's
+    # close_window is the *graceful* death (WM_CLOSE / _NET_CLOSE_WINDOW, the app's
+    # own path); but a hung window or a stubborn modal can ignore it. Then a human
+    # opens Task Manager and kills the process. terminate_window is that escalation
+    # by identity — the forceful death dual of the graceful close.
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R117: no konsole on this Linux host)")
+        return
+    for name in ("window_pid", "terminate_window", "wait_window_closed"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    procs = []
+    try:
+        # Two windows with the IDENTICAL title — the title cannot tell them apart.
+        procs.append(launch("UPID-SAME"))
+        time.sleep(2.0)
+        procs.append(launch("UPID-SAME"))
+        time.sleep(2.2)
+        same = [w for w in osctl.list_windows()
+                if "UPID-SAME" in (w.get("title") or "")]
+        check("two windows can share an identical title", len(same) >= 2,
+              f"n={len(same)}")
+        if len(same) < 2:
+            return
+        a, bb = same[0], same[1]
+        pa, pb = osctl.window_pid(a["id"]), osctl.window_pid(bb["id"])
+        check("window_pid gives each a process identity the title cannot",
+              bool(pa) and bool(pb) and pa != pb, f"pa={pa!r} pb={pb!r}")
+
+        # Forceful kill of A by its window; the other same-titled window survives.
+        ok = osctl.terminate_window(a["id"])
+        gone = osctl.wait_window_closed(a["id"], timeout=6.0)
+        check("terminate_window force-ends the window when a graceful close might "
+              "be ignored", ok and gone, f"ok={ok} gone={gone}")
+        check("the OTHER identically-titled window (different pid) is unharmed",
+              osctl.window_exists(bb["id"]), f"b_pid={pb} exists={osctl.window_exists(bb['id'])}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_topmost(b: Browser, offline: bool) -> None:
     print("R116: PIN a window always-on-top — stack diverges from focus (F155) — osctl")
     # F151 read the stack (window_under: which window owns a pixel), F154 read
@@ -7520,7 +7597,7 @@ def main() -> int:
               round_template_match, round_settle, round_reach, round_steer,
               round_window, round_clip_relay, round_zorder, round_window_under,
               round_window_lifecycle, round_window_state, round_active_window,
-              round_topmost, round_move, round_desktop,
+              round_topmost, round_window_pid, round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

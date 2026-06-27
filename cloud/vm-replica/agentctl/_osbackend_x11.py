@@ -24,6 +24,8 @@ Exposes the exact names ``osctl`` expects from a backend: ``screen_size``,
 from __future__ import annotations
 
 import ctypes
+import os
+import signal
 import threading
 import time
 
@@ -509,6 +511,35 @@ def set_window_state(win: int, state: str) -> bool:
             ok = True
         _x.XSync(_dpy, 0)
         return ok
+
+
+def window_pid(win: int) -> "int | None":
+    """Which OS process owns a window — its identity *beyond the title*. Two
+    windows can share an identical title, which a title cannot tell apart; the
+    owning pid can, and it is what lets the floor escalate a graceful close to a
+    forceful kill. Read EWMH ``_NET_WM_PID`` (a CARDINAL); None if absent."""
+    with _lock:
+        raw = _prop(win, _atom("_NET_WM_PID"), 6)  # 6 = XA_CARDINAL
+        if not raw or len(raw) < ctypes.sizeof(ctypes.c_long):
+            return None
+        pid = int(ctypes.cast(raw, ctypes.POINTER(ctypes.c_long))[0])
+        return pid or None
+
+
+def terminate_window(win: int) -> bool:
+    """Force the owning process of a window to end — the *forceful* death dual to
+    the graceful ``close_window`` (_NET_CLOSE_WINDOW). When an app ignores the
+    polite close (a hung window, a modal that won't dismiss), this kills the pid
+    behind it (``SIGKILL``). Works for a local client carrying ``_NET_WM_PID``;
+    returns False if no pid is known or the kill fails."""
+    pid = window_pid(win)
+    if not pid:
+        return False
+    try:
+        os.kill(pid, signal.SIGKILL)
+        return True
+    except OSError:
+        return False
 
 
 def is_window_topmost(win: int) -> bool:

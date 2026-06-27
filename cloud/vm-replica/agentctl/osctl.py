@@ -78,6 +78,12 @@ active_window = getattr(_be, "active_window", lambda: None)
 # tells whether a window is pinned. No-op / False on an older floor.
 set_window_topmost = getattr(_be, "set_window_topmost", lambda win, on=True: False)
 is_window_topmost = getattr(_be, "is_window_topmost", lambda win: False)
+# Window→process identity: a title can collide (two consoles, two Notepads), but
+# the owning pid tells them apart and is what lets the floor escalate from a
+# graceful close (close_window) to a forceful kill (terminate_window) when an app
+# ignores the polite request. None / no-op on an older floor.
+window_pid = getattr(_be, "window_pid", lambda win: None)
+terminate_window = getattr(_be, "terminate_window", lambda win: False)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

@@ -4307,6 +4307,49 @@ holding distinct opposites at once and knowing which is which.
 
 ---
 
+## F156 — a window's process identity, and the forceful death (`window_pid` / `terminate_window`, R117)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** Every window read so far keyed off the *title* or the *handle*. But
+a title can **collide** — two consoles, two editors, two browser windows can carry
+the exact same caption — so a title is not an identity; addressing "the window
+titled X" is ambiguous when two exist. And F152 gave only the *graceful* death
+(`close_window` → WM_CLOSE / _NET_CLOSE_WINDOW, the app's own close path); a hung
+window or a stubborn modal can simply ignore it, leaving the floor no recourse. A
+human in that spot opens Task Manager and kills the process — an escalation the
+floor could not make.
+
+**Primitives.**
+- `osctl.window_pid(win)` → the owning OS process id (Win32
+  `GetWindowThreadProcessId`; X11 `_NET_WM_PID`). Identity *beyond the title*: it
+  tells two same-titled windows apart and groups one app's windows.
+- `osctl.terminate_window(win)` → force the owning process to end (Win32
+  `OpenProcess(PROCESS_TERMINATE)`+`TerminateProcess`; X11 `SIGKILL` the pid). The
+  *forceful* death dual of the graceful `close_window`.
+
+**Live (Windows, two consoles with the SAME title):**
+
+| check | result |
+|---|---|
+| two windows share the identical title "UPID-SAME" | n = 2 |
+| `window_pid` of each | **3804 ≠ 2488** — distinct identity the title can't give |
+| `terminate_window(A)` then `wait_window_closed(A)` | gone |
+| the other same-titled window (pid 2488) | unharmed |
+
+R117 (`round_window_pid`, 4 checks); `_probe_pid.py` standalone (6/6). Full suite
+**780/780** clean.
+
+**Lesson (道法自然).** 名可名也，非恒名也 — *a name that can be named is not the
+constant name.* The title is a name, and names collide and change; the process is
+the window's constant identity beneath the name. And death has two faces: the
+graceful asking (`close_window`) and, when that is refused, the forceful ending
+(`terminate_window`). A floor that could only ask politely was at the mercy of any
+app that would not answer; holding both the gentle and the absolute completes its
+authority over a window's end.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
