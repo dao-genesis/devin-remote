@@ -2768,6 +2768,47 @@ frame they were given; let the frame move and the whole surface comes within vie
 
 ---
 
+## F120 — walk the surface to the text: scroll and search as one
+
+**Friction.** F119 can reach past the fold, but only by a *guessed* amount: the
+caller must know how many notches the target lies below, and a fixed roll over- or
+under-shoots — too few and the word never enters the frame, too many and it flies
+past the top and out again (the F119 probe lost `GO` at the first overshoot, found
+it only when the page clamped at its bottom). And `locate_phrase` still reads only
+the one screenful it is handed. To *find* text on a surface taller than the window,
+scrolling and searching cannot be two separate acts.
+
+**Mechanism.** Make them one loop: read the frame for the target; if absent, roll
+one step and read again, walking the surface a screenful at a time. The bound is a
+step count, *not* a "pixels stopped changing" bottom test — because a long blank
+stretch scrolls past while the captured screen does not change a single byte (the
+scrollbar thumb does not register in a GDI grab; measured: `scrollY` 0→600→1200→
+1800 with zero sampled pixel diff). A pixel-only reader has no truthful bottom
+signal, so stopping on a still frame would abandon a target lying just past the
+blank. Honesty is to promise only a bounded walk.
+
+**Primitive.** `scroll_to_phrase(bbox, atlas, target, step, max_steps)` loops
+`locate_phrase` → `scroll(dy=-step)` up to `max_steps` rolls, returning the
+target's bbox the step it comes into view, or `None` once the walk is exhausted.
+So `box = scroll_to_phrase(field, atlas, "SUBMIT")` brings a button anywhere down
+a long page into view and hands back where to press it — the window walking itself
+to the text instead of the caller counting notches.
+
+**Live (R84):** a 3000 px page whose blue `GO` sits at 2600. A single fixed
+`scroll(dy=-6)` undershoots — `GO` still off-screen (the friction).
+`scroll_to_phrase("GO")` walks down step by step until `GO` enters the frame
+(`scrollY` 2355) and returns its bbox; clicking it reports `HIT:GO` — a control
+found by *text alone*, anywhere down the page. An absent word walks to the end and
+returns `None`. `602/602 checks passed`, deterministic ×3 (one earlier R18/F054
+moving-target flake cleared on rerun).
+
+**Lesson (道法自然):** 馳騁於天下 — the eye need not leap the whole gulf at once; step by
+step the window crosses a surface larger than itself, and what cannot be reached
+in one bound is reached by walking. F119 gave motion; F120 gives the motion a
+purpose — go until the text is seen, and no further claim than that.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
