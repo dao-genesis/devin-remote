@@ -3585,39 +3585,52 @@ on being faithful):
 - **Capture.** `XGetImage` of the root, BGRA→RGB into the same tight `w*h*3` buffer
   the GDI grab produced, freeing the image each time so repeated grabs don't leak.
 
-**Live (Linux, X11, 1600×1200):** `710/738 checks passed`, deterministic ×2
-(identical failure sets both runs). Every input/gesture/capture primitive and
-every *single-ink* perception primitive (find_color, blobs, edges, templates,
+**Live (Linux, X11):** at the **maximised 1600-wide** window, `703–710/738`,
+deterministic across runs. Every input/gesture/capture primitive and every
+*single-ink* perception primitive (find_color, blobs, edges, templates,
 read_glyph/read_text/read_words, detect_fg, the whole wait/settle/diff family,
 cursor_pos) passes live against real Chrome. The X11 leaves were independently
 proven first in `_x11proto.py` / `_x11e2e.py` (magenta-pixel click, Unicode type,
 clipboard paste) before being folded in.
 
-**Honest note (the 28 deltas — all perception-layer, none in the floor).** The
-remaining failures are not OS-backend defects; they are places where the
-*pixel-level perception* was calibrated against Windows rendering/timing and is
-sensitive to this Linux box's:
-- **Font rasterisation (FreeType vs ClearType).** All multi-colour OCR rounds
-  (`palette` and its dependants `read_region`/`read_block_region`/`…_words`).
-  `palette` clusters quantised colour buckets above a population floor taken over
-  the *whole* region; FreeType's heavier anti-alias spreads a small word's ink
-  across more buckets, so one ink of three can fall under the floor and drop out,
-  and a run's *leading* glyph (its left edge sub-pixel-shifted) is segmented one
-  column off and misread (O→D, R→L, N→L). Single-ink reads, which dominate real
-  use, are unaffected.
-- **Animation cadence resonance.** `wait_stable` on the R18 fixture: this box's
-  whole-screen `find_color` scan + the default 0.12 s poll happens to beat against
-  the fixture's 180 ms teleport, so the centroid aliases to one phase and "settles"
-  early; and the multi-green-cluster R97 scene pulls `find_color`'s centroid off
-  the panel. Both are cadence/centroid coincidences of *this* display, not wrong
-  input or capture.
+**Honest note (the ~28 deltas — harness geometry & cadence, none in the floor).**
+The remaining failures are not OS-backend defects, and — this round corrects an
+earlier guess that blamed FreeType anti-aliasing — they are overwhelmingly a
+single, *demonstrated* cause: **the fixtures' `field_bbox` helper crops a fixed
+fraction of the located white field, and on a window wider than the canvas that
+fraction bites into the leftmost word.** The multi-colour OCR fixtures draw a
+1100–1300 px canvas, but maximised the viewport is ~1600 wide, so the white field
+that `find_color_blobs(white)` returns is the whole viewport — ~280 px wider than
+the canvas. A symmetric `width/16` (or `/8`) inset then lands *inside* the
+left-aligned first word. Proven with `_probe_region_clip.py` on scene B
+(`RED`/`GRN`/`BLU`): maximised, the leading `R` is captured **30 px** wide (vs
+35–42 px for full glyphs), its left stem clipped, and `read_glyph` returns `L`
+→ `LEDGRNBLU`. Resize the window so the viewport ≈ the canvas (≈1320 wide) and the
+same leading `R` is captured **42 px** wide and matches `R` at Hamming distance 5
+→ `REDGRNBLU`. With that one geometry change **27 of the 28 deltas vanish and the
+suite reaches `737/738`** — no primitive or test touched. On Windows the suite ran
+at a viewport where the field ≈ the canvas, so the inset never clipped; this is
+why the deltas are Linux-only without being a Linux defect.
 
-These are the next honest frontier (make `palette` ink-detection AA-robust;
-make the wait/settle family resonance- and multi-cluster-robust) — to be pushed
-into per the project's rule: grow/adjust a primitive only from a reproduced
-failure, and only in a way that is correct on *both* grounds. They are recorded
-here rather than hidden behind a Linux-only threshold tweak that would risk the
-Windows reading the same primitives were tuned for.
+The two residuals are likewise harness-geometry/timing, not floor defects:
+- **R18 `wait_stable`** — *capture-rate aliasing*: a full-screen `capture_rgb` +
+  `find_color` scan is slow enough that consecutive samples can fall an even number
+  of the fixture's 180 ms teleports apart and read the *same* spot, so the motion is
+  undersampled (Nyquist) and it can "settle" early. It is cadence-dependent (it
+  passes or fails with the exact per-iteration timing), not an input/capture error.
+- **R103 green centroid** — the check builds its target box from a *screen* fraction
+  `(w//2, 0.6·h)` and expects the full-page green's centroid to land inside it, so it
+  depends on where the window sits on the captured screen. `find_color` returns the
+  correct centroid of the green; the assumption is about window placement.
+
+The lesson recorded for the next rounds: these are **environment/harness** surfaces,
+to be met by running the suite at a viewport that matches the fixtures (field ≈
+canvas) rather than by a Linux-only threshold tweak that would risk the Windows
+reading the same primitives were tuned for. A genuine primitive hardening was
+attempted for R18 (a wall-clock hold + non-resonant poll) but, since a slow
+full-screen capture *undersamples* the motion outright, it did not reliably fix the
+aliasing in live trials, so it was **not shipped** — per the rule: grow a primitive
+only from a reproduced failure, and only with a fix proven correct on *both* grounds.
 
 **Lesson (道法自然):** 上善若水，水善利萬物而不爭 — the highest good is like water,
 which benefits all things by taking the shape of whatever holds it. The toolkit

@@ -27,6 +27,11 @@ primitive exists lives in [`JOURNAL.md`](./JOURNAL.md) — read that first.
   `_osbackend_x11` on Linux (X11 + XTEST; needs `libX11`/`libXtst` and a reachable
   `DISPLAY`). `cdp.py` + `browser.py` are platform-agnostic. macOS has no backend
   yet.
+- Running `test_live.py`: a few multi-colour OCR fixtures locate the white "field"
+  as the whole viewport and inset a fixed fraction, so they assume the **viewport ≈
+  the canvas**. Run the browser at a content-sized window (~1320 wide), not
+  maximised on a much wider screen, or the inset clips the leftmost glyph of the
+  left-aligned word. See `_probe_region_clip.py` and JOURNAL F141.
 
 ## Quick start
 
