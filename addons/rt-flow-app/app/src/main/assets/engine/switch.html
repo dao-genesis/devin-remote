@@ -1518,6 +1518,12 @@ setInterval(render, 6000);
 // 自调度 + 抖动: 让 pollTrk / autoQuota / autoBackup 三个心跳错峰, 不在同一刻一起轰网络 (消除并发卡顿)。
 function _loop(fn, base, jitter){ (function tick(){ setTimeout(function(){ try{ fn(); }catch(e){} tick(); }, base + Math.floor(Math.random()*jitter)); })(); }
 setInterval(pollTrk, 10000);   // 30s→15s→12s→10s: 更快侦测有对话的号 → 其额度更快进入高频刷新(主心跳仍稳定)
+// ── 网页镜像·持续回拉手机金库 (道法自然·二者同源·实时一致) ────────────────────────────────
+//   手机(原生外壳)才是对话追踪权威: 它原生快轮全量账号, _trk 写入共享金库。网页外壳(__rn 垫片)若只靠
+//   自身经桥逐号轮询, 对 100+ 账号既慢又易被限流 → 面板长时间空/滞后, 与手机不一致。故网页端持续(~4s)
+//   回拉金库的 rtflow.trk / rtflow.untracked / accounts → 对话追踪/已停追踪/账号库近实时镜像手机权威态,
+//   不空等自身慢轮即刻"完全同步完全一致"。仅网页镜像(__rnReady)启用; 原生手机自身即权威, 无需回拉。
+if(window.__rnReady){ _loop(function(){ try{ _restoreTrkFromVault(); }catch(e){} try{ _restoreUntrackedFromVault(); }catch(e){} try{ if(typeof restoreAccountsFromVault==="function") restoreAccountsFromVault(); }catch(e){} }, 4000, 1500); }
 // 美刀额度: 冷启动尽快全量刷一遍(消除死数据); 之后每 ~12s 一轮, 错开 pollTrk 半个周期 + 抖动, 避免与状态轮询同刻并发
 setTimeout(autoQuotaTick, 1200);
 setTimeout(function(){ _loop(autoQuotaTick, 8000, 2000); }, 6000);   // 11s→8s: 全量额度轮更快; 6s 相位偏移与 pollTrk 错峰
