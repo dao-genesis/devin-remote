@@ -2809,6 +2809,51 @@ purpose — go until the text is seen, and no further claim than that.
 
 ---
 
+## F121 — `drag`: the held stroke (R85)
+
+**Friction.** The OS-input channel — the one that works on bare pixels, with no
+DOM and no CDP, the channel that lets agentctl operate *any* window — could press
+a point (`click`) and roll the wheel (`scroll`), but it could not *hold and carry*.
+A slider thumb, a canvas signature, a text selection, a list reorder: all of these
+need the button held down while the cursor travels, and none of them yield to a
+press-and-release at a single point. Every drag round in the suite so far (R44
+reorder, R52 splitter, R54 pan, the touch rounds) drove **CDP's** `b.drag` —
+synthetic events dispatched *into* the page. The pure OS channel, which is blind
+to the DOM and answers only to what it sees, had no stroke at all. A handle painted
+on a `<canvas>` could be *seen* and *pressed* but never *moved*.
+
+**Mechanism.** Press at the start, then glide: button down, many small `move`s
+interpolated along the line, button up at the end. The interpolation is the whole
+point — a single jump from start to end reads to a `mousemove`-driven handler as a
+teleport, and most drag listeners ignore it; the path must be continuous for the
+page to follow. `steps` controls how finely the line is walked, `hold` gives the
+press and release a beat to register.
+
+**Primitive.** `drag(x0, y0, x1, y1, steps=24, hold=0.05, right=False)` —
+button-down at `(x0,y0)`, interpolated travel to `(x1,y1)`, button-up; `right=True`
+strokes with the secondary button. So `drag(*handle, *zone)` carries a canvas
+handle across to a dropzone, and the page sees the whole journey, not just the ends.
+
+**Live (R85):** a magenta handle and a cyan dropzone painted on a `<canvas>` —
+no DOM node marks either, so only the pixel channel reaches them. A plain
+`click` on the handle presses it but carries it nowhere (`window.__moves==0`,
+title stays `DROP-MISS`) — the friction. `drag` from the handle to the zone is a
+continuous stroke (`__moves` ≈ 20, not a teleport); the handle lands inside the
+zone, the title flips to `DROP-OK`, and the change is confirmed *back through the
+pixels* (the zone is now green). The handle, a solid 90×90 block, is located by
+its exact centroid; the zone sits a known canvas delta away, so the endpoint is
+anchored on the clean handle rather than a hollow colour's drifting centroid. A
+right-button drag leaves the left-only handler untriggered. `614/614 checks
+passed`, R85 deterministic ×3 (the suite's pre-existing R9 omnibox OS-paste round
+flaked once on focus timing and cleared on rerun; unrelated to `drag`).
+
+**Lesson (道法自然):** 天下之至柔，馳騁於天下之致堅 — the softest thing, a held
+and gliding touch, runs through the hardest. `click` only taps; the world of
+sliders, strokes, and selections opens only to a hand that presses and *stays*
+while it moves. To carry, do not leap — hold, and travel.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

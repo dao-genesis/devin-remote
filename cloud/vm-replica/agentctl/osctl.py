@@ -127,6 +127,36 @@ def click(x: int | None = None, y: int | None = None, right: bool = False) -> No
         _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
 
 
+def drag(x0: int, y0: int, x1: int, y1: int,
+         steps: int = 24, pause: float = 0.01,
+         hold: float = 0.05, right: bool = False) -> None:
+    """Press at (x0,y0), glide to (x1,y1) in steps, release (F121).
+
+    :func:`click` only presses a point; a slider thumb, a canvas stroke, a
+    text selection, a list reorder all need a *held* move. This is that
+    stroke: button down at the start, many small moves along the line,
+    button up at the end. ``steps`` makes the motion continuous so
+    drag-aware listeners (``mousemove`` while the button is held) see the
+    path, not just the endpoints — a single jump from start to end reads
+    as a teleport and most drag handlers ignore it."""
+    down = MOUSEEVENTF_RIGHTDOWN if right else MOUSEEVENTF_LEFTDOWN
+    up = MOUSEEVENTF_RIGHTUP if right else MOUSEEVENTF_LEFTUP
+    move(x0, y0)
+    time.sleep(0.02)
+    mi = _MOUSEINPUT(0, 0, 0, down, 0, 0)
+    _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
+    time.sleep(hold)
+    n = max(1, steps)
+    for i in range(1, n + 1):
+        mx = round(x0 + (x1 - x0) * i / n)
+        my = round(y0 + (y1 - y0) * i / n)
+        move(mx, my)
+        time.sleep(pause)
+    time.sleep(hold)
+    mi = _MOUSEINPUT(0, 0, 0, up, 0, 0)
+    _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
+
+
 def scroll(dy: int = 0, dx: int = 0,
            x: int | None = None, y: int | None = None,
            pause: float = 0.01) -> None:
