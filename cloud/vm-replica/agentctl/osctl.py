@@ -192,6 +192,12 @@ uia_expand_state = getattr(_be, "uia_expand_state", lambda win, name=None, ctype
 # "bring into reach", the element-level dual of moving an off-screen window back on
 # screen (F149). After it, uia_find returns the now-visible rect for the pixel floor.
 uia_scroll_into_view = getattr(_be, "uia_scroll_into_view", lambda win, name=None, ctype=None: False)
+# UIA range value (F175): read/set a ranged control (slider, progress bar, scrollbar)
+# by meaning via RangeValuePattern. uia_range_value -> {"value","min","max"} (read
+# dual); uia_set_range_value sets a slider to a number with no mouse drag (True if
+# set; the provider clamps to its own min/max). None/False where no RangeValuePattern.
+uia_range_value = getattr(_be, "uia_range_value", lambda win, name=None, ctype=None: None)
+uia_set_range_value = getattr(_be, "uia_set_range_value", lambda win, value, name=None, ctype=None: False)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

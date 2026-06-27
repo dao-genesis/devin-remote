@@ -72,6 +72,12 @@ _EC_NAMES = {0: "collapsed", 1: "expanded", 2: "partial", 3: "leaf"}
 # IUIAutomationScrollItemPattern vtable indices
 _SCROLLINTOVIEW = 3   # IUIAutomationScrollItemPattern::ScrollIntoView
 _UIA_ScrollItemPatternId = 10017
+# IUIAutomationRangeValuePattern vtable indices
+_RV_SET = 3       # IUIAutomationRangeValuePattern::SetValue (double)
+_RV_GET = 4       # IUIAutomationRangeValuePattern::get_CurrentValue
+_RV_MAX = 6       # IUIAutomationRangeValuePattern::get_CurrentMaximum
+_RV_MIN = 7       # IUIAutomationRangeValuePattern::get_CurrentMinimum
+_UIA_RangeValuePatternId = 10003
 # IUIAutomationElementArray vtable indices
 _ARR_LEN = 3    # get_Length
 _ARR_GET = 4    # GetElement
@@ -663,5 +669,59 @@ def uia_scroll_into_view(win: int, name=None, ctype=None) -> bool:
             return _vcall(sp, _SCROLLINTOVIEW, ctypes.c_long, []) == 0
         finally:
             _release(sp)
+    finally:
+        _release(el)
+
+
+def uia_range_value(win: int, name=None, ctype=None):
+    """Read a ranged control (a slider, a progress bar, a scrollbar) found by meaning
+    via the UIA RangeValuePattern. Returns a dict {"value", "min", "max"} (floats), or
+    None if the element has no RangeValuePattern. The read dual of
+    :func:`uia_set_range_value`."""
+    uia = _get_uia()
+    if not uia:
+        return None
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return None
+    try:
+        rv = _pattern(el, _UIA_RangeValuePatternId)
+        if not rv:
+            return None
+        try:
+            out = {}
+            for key, idx in (("value", _RV_GET), ("max", _RV_MAX), ("min", _RV_MIN)):
+                d = ctypes.c_double()
+                if _vcall(rv, idx, ctypes.c_long,
+                          [ctypes.POINTER(ctypes.c_double)], ctypes.byref(d)) != 0:
+                    return None
+                out[key] = d.value
+            return out
+        finally:
+            _release(rv)
+    finally:
+        _release(el)
+
+
+def uia_set_range_value(win: int, value: float, name=None, ctype=None) -> bool:
+    """Set a ranged control (a slider, a scrollbar) found by meaning to ``value`` via
+    the UIA RangeValuePattern SetValue — set a slider to a number by meaning, no mouse
+    drag. Returns True if SetValue succeeded (the value is clamped to the control's
+    own min/max by the provider). Read the result with :func:`uia_range_value`."""
+    uia = _get_uia()
+    if not uia:
+        return False
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return False
+    try:
+        rv = _pattern(el, _UIA_RangeValuePatternId)
+        if not rv:
+            return False
+        try:
+            return _vcall(rv, _RV_SET, ctypes.c_long, [ctypes.c_double],
+                          ctypes.c_double(float(value))) == 0
+        finally:
+            _release(rv)
     finally:
         _release(el)

@@ -5078,6 +5078,38 @@ land.
 
 ---
 
+## F175 — the magnitude verb: UIA RangeValuePattern (`uia_range_value`/`uia_set_range_value`, R136)
+
+**Ground: Windows Server 2022. Chrome `<input type=range>`.**
+
+**Friction.** A slider, a progress bar, a scrollbar is neither a field of text
+(ValuePattern), nor a state to flip (Toggle), nor a choice among items (Selection) —
+it is a *number within bounds*. To set it the floor would otherwise have to compute
+the pixel offset along the track and drag — brittle arithmetic over a moving target.
+
+**Primitives.**
+- `osctl.uia_range_value(win, name, ctype)` → `{"value", "min", "max"}` (floats) or
+  None (RangeValuePattern `get_CurrentValue`/`Maximum`/`Minimum`, vtable 4/6/7).
+- `osctl.uia_set_range_value(win, value, name, ctype)` → True if `SetValue` succeeded
+  (vtable 3, the value passed as a C `double` through the COM call) — set a slider to
+  a number directly, no mouse drag. The provider clamps to its own min/max.
+
+**Live:** Chrome slider min=0/max=100/value=20; `uia_range_value` → that triple;
+`uia_set_range_value(75)` → True, DOM `.value`→"75"; read-back → 75. (Unlike
+toggle/select this read settles synchronously.) R136 (`round_uia_range`, 3 checks);
+`_probe_uiarange.py` standalone. Full suite **845/845** clean.
+
+**Lesson (道法自然).** 圖難於其易 — *plan the hard through the easy.* Setting a slider by
+dragging its handle along a pixel track is the hard way — fragile to skin, scale, and
+sub-pixel rounding; the platform already publishes the easy way, a number with known
+bounds, and the floor merely speaks it. The C `double` crossing the raw COM vtable is
+the one new mechanical wrinkle (every prior pattern took ints or void) — proven by
+probe before integration, in keeping with 千里之行，始於足下. The semantic verb set now
+matches the kinds of controls the world actually has: text / state / choice / reveal /
+reach / **magnitude**.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

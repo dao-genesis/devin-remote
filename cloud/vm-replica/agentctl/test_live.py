@@ -1319,6 +1319,48 @@ def round_uia_focus(b: Browser, offline: bool) -> None:
         time.sleep(0.3)
 
 
+def round_uia_range(b: Browser, offline: bool) -> None:
+    print("R136: read/set a slider's value by MEANING via UIA RangeValuePattern (F175) — osctl")
+    # A slider/progress bar/scrollbar is not a field of text nor a state to flip — it
+    # is a NUMBER within a range. uia_range_value reads {value,min,max}; uia_set_range_value
+    # sets it to a number directly through the RangeValuePattern — no mouse drag, no
+    # pixel arithmetic. (Unlike toggle/select this read settles synchronously.)
+    if not sys.platform.startswith("win"):
+        print("  (skip R136: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_set_range_value"):
+        check("osctl exposes uia_set_range_value", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — range check skipped)")
+        return
+    b.navigate("data:text/html,<input type=range id=s min=0 max=100 value=20 aria-label=Volume>")
+    time.sleep(1.2)
+    rv = None
+    for _ in range(10):  # Chrome turns on its a11y tree lazily
+        rv = osctl.uia_range_value(ch["id"], "Volume", "Slider")
+        if rv is not None:
+            break
+        time.sleep(0.5)
+    check("uia_range_value reads the slider's value and bounds (value=20, min=0, max=100)",
+          bool(rv) and rv["value"] == 20 and rv["min"] == 0 and rv["max"] == 100,
+          f"rv={rv}")
+    ok = osctl.uia_set_range_value(ch["id"], 75, "Volume", "Slider")
+    time.sleep(0.3)
+    dom = b.eval("document.getElementById('s').value")
+    check("uia_set_range_value sets the slider to 75 by meaning (DOM .value confirms), "
+          "no mouse drag", ok is True and str(dom) == "75", f"ok={ok} dom={dom}")
+    rv2 = osctl.uia_range_value(ch["id"], "Volume", "Slider")
+    check("uia_range_value read-back agrees the value is now 75",
+          bool(rv2) and rv2["value"] == 75, f"rv2={rv2}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
 def round_uia_scroll(b: Browser, offline: bool) -> None:
     print("R135: bring an off-screen element into reach by MEANING via UIA ScrollItemPattern (F174) — osctl")
     # An element below the fold has no on-screen pixels — the pixel executor cannot
@@ -8644,7 +8686,7 @@ def main() -> int:
               round_control_at, round_find_control, round_menu, round_uia,
               round_uia_find, round_uia_value, round_uia_drive, round_uia_focus,
               round_uia_text, round_uia_toggle, round_uia_select, round_uia_expand,
-              round_uia_scroll,
+              round_uia_scroll, round_uia_range,
               round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,

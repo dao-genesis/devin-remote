@@ -784,7 +784,8 @@ try:
                           uia_text, uia_toggle, uia_toggle_state,
                           uia_select, uia_is_selected,
                           uia_expand, uia_collapse, uia_expand_state,
-                          uia_scroll_into_view)
+                          uia_scroll_into_view,
+                          uia_range_value, uia_set_range_value)
 except Exception:  # pragma: no cover - UIA unavailable
     def uia_name(win: int) -> str:
         return ""
@@ -832,4 +833,10 @@ except Exception:  # pragma: no cover - UIA unavailable
         return ""
 
     def uia_scroll_into_view(win: int, name=None, ctype=None) -> bool:
+        return False
+
+    def uia_range_value(win: int, name=None, ctype=None):
+        return None
+
+    def uia_set_range_value(win: int, value, name=None, ctype=None) -> bool:
         return False
