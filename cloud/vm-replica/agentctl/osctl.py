@@ -139,6 +139,13 @@ invoke_menu = getattr(_be, "invoke_menu", lambda win, command_id: False)
 # UIA is unavailable (non-Windows / older floor), with the Win32+pixel fallback.
 uia_name = getattr(_be, "uia_name", lambda win: "")
 uia_children = getattr(_be, "uia_children", lambda win: [])
+# UIA find (F166): locate a descendant element by MEANING (accessible name and/or
+# control type) anywhere in a window's accessibility tree, and get WHERE it is:
+# {"name","type","rect":(x,y,w,h)} in screen coords. The UIA analogue of
+# find_control, but it reaches INSIDE modern apps (Chrome/Electron/UWP); returning
+# the rect closes the loop to the mouse — a semantic search yields a pixel target
+# to click, no visual scanning. None if not found / UIA unavailable.
+uia_find = getattr(_be, "uia_find", lambda win, name=None, ctype=None: None)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

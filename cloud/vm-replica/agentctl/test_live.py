@@ -1260,6 +1260,81 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_uia_find(b: Browser, offline: bool) -> None:
+    print("R127: locate an element by MEANING inside a modern app via UIA (F166) — osctl")
+    # find_control (F163) locates a native control by meaning and returns a pixel
+    # rect — but only for native child HWNDs, blind to modern apps. uia_find is its
+    # UIA analogue: it searches the accessibility tree (so it reaches INSIDE
+    # Chrome/Electron/UWP) by accessible name and/or control type, and returns the
+    # element's screen rect — closing the loop back to the mouse for modern apps
+    # too. Cross-floor proof: the UIA-found rect's centre, fed to control_at (the
+    # pixel->native floor), resolves to the matching native control — the
+    # accessibility floor and the pixel floor agree on where the thing is.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R127: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_find"):
+        check("osctl exposes uia_find", False, "missing primitive")
+        return
+
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is available for UIA search", note is not None, "none")
+        if note:
+            osctl.set_window_state(note["id"], "normal")
+            osctl.move_window(note["id"], 160, 160, 720, 520)
+            time.sleep(0.5)
+            e = osctl.uia_find(note["id"], ctype="Edit")
+            ok = bool(e and e.get("rect") and e["rect"][2] > 0 and e["rect"][3] > 0)
+            check("uia_find locates the Edit by meaning and returns a real screen rect",
+                  ok, f"e={e}")
+            if ok:
+                x, y, w, h = e["rect"]
+                native = osctl.control_at(x + w // 2, y + h // 2)
+                check("cross-floor: the UIA rect's centre resolves via control_at to "
+                      "the native Edit (accessibility floor agrees with pixel floor)",
+                      native is not None and native.get("class") == "Edit",
+                      f"native={native}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if ch:
+        g = osctl.window_geometry(ch["id"])
+        pane = osctl.uia_find(ch["id"], ctype="Pane")
+        check("semantic locate works INSIDE the modern app (Chrome) and yields a "
+              "clickable rect within the window",
+              bool(pane and pane.get("rect") and g
+                   and pane["rect"][0] >= g["x"] - 5 and pane["rect"][1] >= g["y"] - 5),
+              f"pane={pane} win={g}")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.3)
+    else:
+        print("  (no Chrome window — modern-app locate check skipped)")
+
+
 def round_uia(b: Browser, offline: bool) -> None:
     print("R126: UIA read sees inside modern apps where Win32 is blind (F165) — osctl")
     # The whole semantic layer so far (child_windows/window_text/window_menu) reads
@@ -8146,7 +8221,7 @@ def main() -> int:
               round_topmost, round_window_pid, round_key_state, round_mouse_state,
               round_pixel, round_window_text, round_set_window_text,
               round_control_at, round_find_control, round_menu, round_uia,
-              round_move, round_desktop,
+              round_uia_find, round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

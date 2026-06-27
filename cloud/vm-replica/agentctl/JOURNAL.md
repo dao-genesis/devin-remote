@@ -4741,6 +4741,51 @@ and the floor can finally see the inside of the browser it has been driving blin
 
 ---
 
+## F166 — semantic locate inside modern apps: UIA find (`uia_find`, R127)
+
+**Ground: Windows Server 2022. Pure-ctypes raw COM.**
+
+**Friction.** F165 let the floor *see* inside modern apps, and F163's `find_control`
+could turn a meaning into a clickable rect — but only for *native* child HWNDs.
+Pointed at Chrome, `find_control` finds nothing: there are no native children to
+match. So the floor could now *see* a tab or a button in Chrome (F165) yet still
+had no way to turn "the element that means X" into a pixel the mouse can hit —
+the modern-app half of addressing-by-meaning was missing.
+
+**Primitive.**
+- `osctl.uia_find(win, name=None, ctype=None)` → the first descendant in the
+  window's **accessibility tree** matching accessible name (case-insensitive
+  substring) and/or control type, as `{"name","type","rect":(x,y,w,h)}` in screen
+  coordinates — or None. The UIA analogue of `find_control`, but it reaches
+  *inside* Chrome/Electron/UWP. `FindAll(Descendants, TrueCondition)` then filter;
+  the rect comes from the `BoundingRectangle` property (a SAFEARRAY of 4 R8 parsed
+  in ctypes). Returning the rect closes the loop back to the pixel actuator for
+  modern apps too.
+
+**Live:**
+
+| check | result |
+|---|---|
+| `uia_find(notepad, type=Edit)` → rect | `(168, 211, 704, 438)` |
+| **cross-floor:** that rect's centre → `control_at` | native `Edit` (same place) |
+| `uia_find(chrome, type=Pane)` → rect | `(8, 0, 1284, 732)`, inside the window |
+
+R127 (`round_uia_find`, 4 checks); `_probe_uiafind.py` standalone (all pass). Full
+suite **818/818** clean.
+
+**Lesson (道法自然).** The deep proof here is the **cross-floor agreement**: a thing
+located through the accessibility tree (UIA, *meaning*) and the same thing read
+through the pixel/native floor (`control_at`, *substance*) return the **same place**.
+天得一以清，地得一以寧 — *the one obtained, and all is settled.* Two utterly different
+descriptions of reality — the published semantic tree and the raw window-from-point
+— converge on one coordinate; that convergence is what makes acting on understanding
+*trustworthy*. And it is the modern-app completion of 反者道之動: F163 (native
+locate) and F166 (UIA locate) are the two opposites whose union lets the floor turn
+*any* meaning, in *any* app, into a pixel the hand can strike — perceive →
+understand → locate → act, now universal.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
