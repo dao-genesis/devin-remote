@@ -5383,6 +5383,56 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_mod_scroll(b: Browser, offline: bool) -> None:
+    print("R92: OS-level mod_scroll — a modifier held through the wheel (F128) — osctl")
+    # A page treats Ctrl+wheel as zoom (adjusts __zoom, preventDefault) and a
+    # plain wheel as ordinary scroll. A plain scroll leaves __zoom at 0; a
+    # mod_scroll with Ctrl moves it. Wheel twin of mod_click.
+    html = fixture("mod_scroll.html",
+                   "<!doctype html><meta charset=utf-8><title>z</title>"
+                   "<style>html,body{margin:0;height:3000px}#p{position:fixed;"
+                   "left:60px;top:140px;width:260px;height:160px;"
+                   "background:#7744cc}</style><div id=p></div><script>"
+                   "window.__zoom=0;window.__plain=0;addEventListener('wheel',"
+                   "function(e){if(e.ctrlKey){e.preventDefault();window.__zoom+="
+                   "(e.deltaY<0?1:-1);document.title='Z'+window.__zoom;}else{"
+                   "window.__plain++;}},{passive:false});</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    check("capture matches click coordinate space", (w, h) == osctl.screen_size(),
+          f"{(w, h)} vs {osctl.screen_size()}")
+    p = osctl.find_color((119, 68, 204), tol=40, rgb=rgb, size=(w, h))
+    check("located the zoom pad by pixels",
+          p is not None and p["count"] > 20000,
+          str(p and {k: p[k] for k in ("x", "y", "count")}))
+    if p is None:
+        return
+    # Friction: a plain scroll is read as ordinary scroll, never zoom.
+    # A wide pause keeps notches from coalescing so the counts are stable.
+    osctl.scroll(dy=-3, x=p["x"], y=p["y"], pause=0.05)
+    time.sleep(0.3)
+    plain_before = b.eval("window.__plain")
+    check("a plain scroll never reaches the Ctrl+wheel zoom path",
+          b.eval("window.__zoom") == 0 and plain_before >= 1,
+          f"zoom={b.eval('window.__zoom')} plain={plain_before}")
+    # Primitive: the modifier rides every notch, so the wheel becomes zoom.
+    osctl.mod_scroll(3, 0, osctl.VK_CONTROL, x=p["x"], y=p["y"], pause=0.05)
+    time.sleep(0.3)
+    check("mod_scroll carries Ctrl through the wheel (zoom fired all 3 notches)",
+          b.eval("window.__zoom") == 3, repr(b.eval("window.__zoom")))
+    check("no mod_scroll notch leaked to the plain-scroll path",
+          b.eval("window.__plain") == plain_before,
+          f"{b.eval('window.__plain')} vs {plain_before}")
+    check("title reflects the zoom level reached only via the modifier",
+          b.title() == "Z3", b.title())
+    # The modifier released afterward: a plain scroll again does not zoom.
+    osctl.scroll(dy=-2, x=p["x"], y=p["y"])
+    time.sleep(0.3)
+    check("the modifier was released after mod_scroll (plain scroll again)",
+          b.eval("window.__zoom") == 3, repr(b.eval("window.__zoom")))
+
+
 def round_key_hold(b: Browser, offline: bool) -> None:
     print("R91: OS-level key_hold — a sustained key press (F127) — osctl")
     # A game-style control: ArrowRight held sets a flag; a 50ms interval advances
@@ -5661,7 +5711,7 @@ def main() -> int:
               round_locate_phrase, round_wait_for_phrase, round_scroll,
               round_scroll_to_phrase, round_drag_stroke, round_double_click,
               round_middle_click, round_mod_click, round_triple_click,
-              round_press_hold, round_key_hold]
+              round_press_hold, round_key_hold, round_mod_scroll]
     for r in rounds:
         try:
             r(b, offline)

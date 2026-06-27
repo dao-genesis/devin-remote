@@ -295,6 +295,29 @@ def scroll(dy: int = 0, dx: int = 0,
         wheel(MOUSEEVENTF_HWHEEL, dx)
 
 
+def mod_scroll(dy: int = 0, dx: int = 0, *mods: int,
+               x: int | None = None, y: int | None = None,
+               pause: float = 0.01) -> None:
+    """Scroll the wheel with modifier keys held down through it (F128).
+
+    A plain :func:`scroll` always *scrolls* — the page (or a pane) moves. But the
+    same wheel under a held modifier means something else entirely: Ctrl+wheel
+    *zooms* a browser, a map, an image viewer, an editor's font; Shift+wheel
+    scrolls sideways. The page reads ``e.ctrlKey`` / ``e.shiftKey`` on each
+    ``wheel`` event, so the modifier must be down *while* the notch fires —
+    pressing Ctrl before and releasing after is not enough if the wheel lands in
+    between with no key held. This holds each ``mods`` VK down, scrolls (the same
+    wheel as :func:`scroll`, reusing its ``x``/``y`` placement), then releases
+    them in reverse, so every notch carries the modifier. It is to ``scroll``
+    what :func:`mod_click` is to ``click``."""
+    for vk in mods:
+        key_down(vk)
+    time.sleep(0.01)
+    scroll(dy=dy, dx=dx, x=x, y=y, pause=pause)
+    for vk in reversed(mods):
+        key_up(vk)
+
+
 # ---- keyboard ------------------------------------------------------------- #
 def key_down(vk: int) -> None:
     ki = _KEYBDINPUT(vk, 0, 0, 0, 0)
