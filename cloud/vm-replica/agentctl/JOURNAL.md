@@ -2961,6 +2961,38 @@ while it lands.
 
 ---
 
+## F125 — `triple_click`: the third rung (R89)
+
+**Friction.** The click-multiplicity ladder has three rungs: one click places
+the caret, two (`double_click`, F122) select the *word* under it, three select
+the whole *line or paragraph*. `double_click` reaches the second rung and stops
+there — to grab a full line for replacement (a common edit), the third press was
+unreachable. The channel could tap and pair, but never count to three.
+
+**Mechanism.** Three presses at the same point, each `gap` apart, all inside the
+OS double-click window, so the page counts up to `detail===3`. The same shape as
+`double_click` with one more click — the ladder built one rung higher.
+
+**Primitive.** `triple_click(x, y, gap=0.05)`.
+
+**Live (R89):** a paragraph of words on a coloured band. A single click leaves the
+selection empty (caret only); `double_click` on a word grabs exactly one token
+(no internal space, a proper substring of the line); `triple_click` at the same
+point takes the entire paragraph — strictly more than the word. `647/647 checks
+passed`, deterministic ×3.
+
+**Honest note.** The rungs only stay distinct if the gestures do not chain: a
+`click` followed immediately by a `double_click` at the *same* point is itself
+three presses in the window — a triple — and selected the whole line. So each
+rung is tested on a fresh page load, which is also the honest reading of the
+mechanism: multiplicity is counted from the *last reset*, not per call.
+
+**Lesson (道法自然):** 一生二，二生三，三生萬物 — each rung is the one below it
+plus a single further step, and only the third opens the whole. To reach a thing
+you cannot leap to, climb the rung you already stand on once more.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

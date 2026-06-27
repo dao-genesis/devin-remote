@@ -5383,6 +5383,67 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_triple_click(b: Browser, offline: bool) -> None:
+    print("R89: OS-level triple_click — select a whole line/paragraph (F125) — osctl")
+    # The click-multiplicity ladder: one click places the caret (empty
+    # selection), double_click grabs the word under it, triple_click takes the
+    # whole paragraph. Each gesture runs on a fresh load so the clicks do not
+    # chain across gestures (three clicks at one point inside the OS window are
+    # exactly what makes a triple).
+    text = "alpha beta gamma delta epsilon zeta"
+    html = ("<!doctype html><meta charset=utf-8><title>sel</title>"
+            "<style>html,body{margin:0}#t{position:absolute;left:60px;top:170px;"
+            "width:560px;background:#d8b14a;font:28px monospace;padding:18px}"
+            "</style><p id=t>" + text + "</p>")
+    fx = fixture("triple_click.html", html)
+
+    def band_word_point():
+        w, h, rgb = osctl.capture_rgb()
+        band = osctl.find_color((216, 177, 74), tol=40, rgb=rgb, size=(w, h))
+        return band, (w, h)
+
+    b.navigate(fx)
+    time.sleep(0.5)
+    band, size = band_word_point()
+    check("capture matches click coordinate space", size == osctl.screen_size(),
+          f"{size} vs {osctl.screen_size()}")
+    check("located the text band by pixels",
+          band is not None and band["count"] > 20000,
+          str(band and {k: band[k] for k in ("x", "y", "count")}))
+    if band is None:
+        return
+    # A word sits left of centre; the centroid can land on a space.
+    wx, wy = band["x"] - 220, band["y"]
+
+    # Caret only: a single click selects nothing.
+    osctl.click(wx, wy)
+    time.sleep(0.2)
+    check("a single click leaves the selection empty (caret only)",
+          b.eval("window.getSelection().toString()") == "",
+          repr(b.eval("window.getSelection().toString()")))
+
+    # Word: double_click grabs exactly one token (the second rung).
+    b.navigate(fx)
+    time.sleep(0.4)
+    osctl.double_click(wx, wy)
+    time.sleep(0.2)
+    sel2 = (b.eval("window.getSelection().toString()") or "").strip()
+    check("double_click selects a single word, not the whole line",
+          sel2 != "" and " " not in sel2 and sel2 in text and sel2 != text,
+          repr(sel2))
+
+    # Line/paragraph: triple_click takes the whole text (the third rung).
+    b.navigate(fx)
+    time.sleep(0.4)
+    osctl.triple_click(wx, wy)
+    time.sleep(0.2)
+    sel3 = (b.eval("window.getSelection().toString()") or "").strip()
+    check("triple_click selects the entire paragraph",
+          sel3 == text, repr(sel3))
+    check("triple_click reaches a rung double_click cannot (more than a word)",
+          len(sel3) > len(sel2), f"{len(sel3)} vs {len(sel2)}")
+
+
 def round_mod_click(b: Browser, offline: bool) -> None:
     print("R88: OS-level mod_click — Ctrl/Shift-click multi & range select (F124) — osctl")
     # Four items. A plain click selects one and drops the rest; Ctrl-click adds
@@ -5496,7 +5557,7 @@ def main() -> int:
               round_locate_word, round_locate_block_word,
               round_locate_phrase, round_wait_for_phrase, round_scroll,
               round_scroll_to_phrase, round_drag_stroke, round_double_click,
-              round_middle_click, round_mod_click]
+              round_middle_click, round_mod_click, round_triple_click]
     for r in rounds:
         try:
             r(b, offline)
