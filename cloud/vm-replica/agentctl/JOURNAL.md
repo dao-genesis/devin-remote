@@ -3316,6 +3316,44 @@ only what matters; precision past the point of meaning is its own blindness.
 
 ---
 
+## F135 — `locate_change`: find *where* the screen changed (R99)
+
+**Friction.** `find_color` needs the colour; `locate_phrase` needs the words —
+both require knowing the target in advance. But after an action the thing that
+appears is often unknown in both: a toast slides in at an unpredictable corner, a
+badge lights up somewhere on a toolbar, a newly-selected row highlights. You know
+*something* arrived, but not its colour, text, or position — so neither locator
+can aim at it.
+
+**Mechanism.** Diff ``before`` against ``after`` pixel-by-pixel (per-channel
+``tol``, ignoring render noise the way `region_diff` does) and return the
+centroid and bounding box of the changed pixels — ``{x, y, count, bbox}`` in
+screen coordinates, exactly what `click` consumes — or ``None`` past
+``min_count``. The geometry sibling of `region_diff`: one counts, the other
+locates.
+
+**Primitive.** `locate_change(before, after, size, tol=12, min_count=30)`.
+
+**Live (R99):** a toast appears at a spot the test never names. Identical captures
+localise to ``None`` (no false target). After the toast shows, `locate_change`
+returns a region of ``count>5000`` with real bbox extent; cross-checked against
+`find_color` of the toast's own colour, the diff centroid coincides within
+``<=10px`` — proof it localised correctly *without being told* colour or
+position. `713/713 checks passed`, deterministic ×3.
+
+**Honest note.** It localises *all* change at once into a single bbox+centroid:
+if two unrelated things change in different corners, the centroid lands in the
+empty middle (the `find_color` → `find_color_blobs` lesson, F052, recurs here).
+The honest scope is "one thing arrived"; segmenting multiple simultaneous changes
+into separate targets would be its own round (a `locate_change_blobs`), built only
+when a real two-change failure is reproduced.
+
+**Lesson (道法自然):** 為之於未有，治之於未亂 — act on a thing while it is still
+nameless. To answer where the world stirred you need not its name, only to have
+watched the place before and after; the difference itself points the way.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

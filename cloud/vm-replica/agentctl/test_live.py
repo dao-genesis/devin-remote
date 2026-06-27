@@ -5383,6 +5383,53 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_locate_change(b: Browser, offline: bool) -> None:
+    print("R99: OS-level locate_change — find WHERE the screen changed (F135) — osctl")
+    # A click makes a toast appear at a spot the caller never names. find_color
+    # needs the colour and locate_phrase needs the words; locate_change needs
+    # neither — it diffs before vs after and returns the centroid/bbox of whatever
+    # arrived. We cross-check against find_color of the toast's own colour to
+    # prove the localisation is correct, without the primitive being told where.
+    html = fixture("locate_change.html",
+                   "<!doctype html><meta charset=utf-8><title>x</title>"
+                   "<style>html,body{margin:0;height:100%;background:#fff}"
+                   "#t{position:absolute;left:430px;top:300px;width:150px;"
+                   "height:90px;background:#e23a3a;display:none}</style>"
+                   "<div id=t></div><script>window.__show=function(){"
+                   "document.getElementById('t').style.display='block';};"
+                   "</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, before = osctl.capture_rgb()
+    # Identical captures localise to nothing — no false target.
+    none_res = osctl.locate_change(before, before, (w, h), tol=12, min_count=30)
+    check("identical captures yield no change location", none_res is None,
+          repr(none_res))
+    # Trigger the unknown toast, capture after, localise the difference.
+    b.eval("window.__show()")
+    time.sleep(0.3)
+    w2, h2, after = osctl.capture_rgb()
+    res = osctl.locate_change(before, after, (w, h), tol=12, min_count=30)
+    check("locate_change found a changed region", res is not None,
+          repr(res and {k: res[k] for k in ("x", "y", "count")}))
+    if res is None:
+        return
+    check("the changed region is substantial (count>5000)",
+          res["count"] > 5000, repr(res["count"]))
+    x0, y0, x1, y1 = res["bbox"]
+    check("the changed bbox has real extent", x1 - x0 > 40 and y1 - y0 > 30,
+          repr(res["bbox"]))
+    # Correctness: the diff centroid coincides with the toast's own colour
+    # centroid — found without naming colour or position.
+    fc = osctl.find_color((226, 58, 58), tol=30, rgb=after, size=(w2, h2))
+    check("cross-check: toast located by its colour too", fc is not None,
+          repr(fc and {k: fc[k] for k in ("x", "y", "count")}))
+    if fc is not None:
+        check("diff centroid coincides with the colour centroid (<=10px)",
+              abs(res["x"] - fc["x"]) <= 10 and abs(res["y"] - fc["y"]) <= 10,
+              f"diff=({res['x']},{res['y']}) color=({fc['x']},{fc['y']})")
+
+
 def round_region_diff(b: Browser, offline: bool) -> None:
     print("R98: OS-level region_diff — tolerant pixel comparison vs exact (F134) — osctl")
     # The two visual waits judge sameness by exact byte-equality, which is
@@ -6067,7 +6114,7 @@ def main() -> int:
               round_press_hold, round_key_hold, round_mod_scroll,
               round_mod_drag, round_glide, round_mod_taps,
               round_wait_until_stable, round_wait_for_change,
-              round_region_diff]
+              round_region_diff, round_locate_change]
     for r in rounds:
         try:
             r(b, offline)
