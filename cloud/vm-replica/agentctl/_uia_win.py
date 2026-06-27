@@ -78,6 +78,9 @@ _RV_GET = 4       # IUIAutomationRangeValuePattern::get_CurrentValue
 _RV_MAX = 6       # IUIAutomationRangeValuePattern::get_CurrentMaximum
 _RV_MIN = 7       # IUIAutomationRangeValuePattern::get_CurrentMinimum
 _UIA_RangeValuePatternId = 10003
+# IUIAutomationLegacyIAccessiblePattern vtable indices
+_LEG_VALUE = 8    # IUIAutomationLegacyIAccessiblePattern::get_CurrentValue (BSTR)
+_UIA_LegacyIAccessiblePatternId = 10018
 # IUIAutomationElementArray vtable indices
 _ARR_LEN = 3    # get_Length
 _ARR_GET = 4    # GetElement
@@ -377,9 +380,48 @@ def uia_set_value(win: int, value: str, name=None, ctype=None) -> bool:
         _release(el)
 
 
+def _value_pattern_text(el) -> str:
+    vp = _pattern(el, _UIA_ValuePatternId)
+    if not vp:
+        return ""
+    try:
+        v = _VARIANT()
+        if _vcall(vp, _VALUE_GET, ctypes.c_long,
+                  [ctypes.POINTER(_VARIANT)], ctypes.byref(v)) != 0:
+            return ""
+        if v.vt == 8 and v.val:
+            s = ctypes.wstring_at(v.val)
+            _oleaut.SysFreeString(v.val)
+            return s
+        return ""
+    finally:
+        _release(vp)
+
+
+def _legacy_value_text(el) -> str:
+    lp = _pattern(el, _UIA_LegacyIAccessiblePatternId)
+    if not lp:
+        return ""
+    try:
+        out = ctypes.c_void_p()
+        if _vcall(lp, _LEG_VALUE, ctypes.c_long,
+                  [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(out)) != 0 or not out.value:
+            return ""
+        s = ctypes.wstring_at(out.value)
+        _oleaut.SysFreeString(out.value)
+        return s
+    finally:
+        _release(lp)
+
+
 def uia_get_value(win: int, name=None, ctype=None) -> str:
-    """Read the ValuePattern value of an element found by meaning — the read dual
-    of :func:`uia_set_value`, reaching inside modern apps. "" if unavailable."""
+    """Read the value of an element found by meaning — the read dual of
+    :func:`uia_set_value`, reaching inside modern apps. Tries the ValuePattern first;
+    if that comes back empty it falls back to the LegacyIAccessible value. The fallback
+    is not cosmetic: Chrome (and other modern apps) accept a ValuePattern *write* to a
+    text input but return "" from the ValuePattern *read* — driving a form proved the
+    write landed (DOM confirmed) while the read dual was silently blank. LegacyIAccessible
+    (the MSAA bridge) carries the live text in that case. "" if neither yields text."""
     uia = _get_uia()
     if not uia:
         return ""
@@ -387,21 +429,7 @@ def uia_get_value(win: int, name=None, ctype=None) -> str:
     if not el:
         return ""
     try:
-        vp = _pattern(el, _UIA_ValuePatternId)
-        if not vp:
-            return ""
-        try:
-            v = _VARIANT()
-            if _vcall(vp, _VALUE_GET, ctypes.c_long,
-                      [ctypes.POINTER(_VARIANT)], ctypes.byref(v)) != 0:
-                return ""
-            if v.vt == 8 and v.val:
-                s = ctypes.wstring_at(v.val)
-                _oleaut.SysFreeString(v.val)
-                return s
-            return ""
-        finally:
-            _release(vp)
+        return _value_pattern_text(el) or _legacy_value_text(el)
     finally:
         _release(el)
 

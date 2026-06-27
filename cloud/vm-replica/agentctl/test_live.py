@@ -43,6 +43,18 @@ def fixture(name: str, html: str) -> str:
     return "file:///" + path.replace("\\", "/")
 
 
+def _drop_chrome_seam(bbox, margin: int = 18):
+    """Push a captured page-field's top edge down past the browser's toolbar/content
+    seam. capture_rgb grabs the whole desktop, so a dark page field abuts Chrome's
+    chrome; the ~2px-tall light seam at that boundary is invisible on a white field
+    (white-on-white) but reads as ink on a dark field. Cropping it out restores the
+    region to the page content the assertion actually means. None passes through."""
+    if not bbox:
+        return bbox
+    x0, y0, x1, y1 = bbox
+    return (x0, y0 + margin, x1, y1)
+
+
 def check(name: str, ok: bool, detail: str = "") -> bool:
     _results.append((name, ok, detail))
     line = f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else "")
@@ -1319,6 +1331,52 @@ def round_uia_focus(b: Browser, offline: bool) -> None:
         time.sleep(0.3)
 
 
+def round_uia_modern_value(b: Browser, offline: bool) -> None:
+    print("R137: read back a MODERN input's value by meaning — Legacy fallback (F176) — osctl")
+    # R128 proved uia_set_value WRITES into a modern app (cross-floor via Notepad's
+    # native read). But driving a Chrome <input> surfaced a real defect: the write
+    # lands (DOM confirms) yet uia_get_value returned "" — Chrome answers a ValuePattern
+    # WRITE but not a ValuePattern READ for text inputs. The write's read dual was
+    # silently blank on modern apps. Fix: uia_get_value falls back to the
+    # LegacyIAccessible (MSAA) value, which carries the live text. This round drives an
+    # actual Chrome input and proves the dual is now whole: set by meaning, read by
+    # meaning, DOM agrees with both.
+    if not sys.platform.startswith("win"):
+        print("  (skip R137: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_get_value"):
+        check("osctl exposes uia_get_value", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — modern-value check skipped)")
+        return
+    b.navigate("data:text/html,<input id=t type=text aria-label=Name value=PresetVal>")
+    time.sleep(1.2)
+    preset = ""
+    for _ in range(10):  # Chrome turns on its a11y tree lazily
+        preset = osctl.uia_get_value(ch["id"], "Name", "Edit")
+        if preset:
+            break
+        time.sleep(0.5)
+    check("uia_get_value reads a modern input's preset value by meaning (where the "
+          "ValuePattern read alone returns '' — Legacy fallback carries it)",
+          preset == "PresetVal", f"preset={preset!r}")
+    wrote = osctl.uia_set_value(ch["id"], "ChangedByMeaning", "Name", "Edit")
+    time.sleep(0.3)
+    dom = b.eval("document.getElementById('t').value")
+    back = osctl.uia_get_value(ch["id"], "Name", "Edit")
+    check("write-then-read dual is whole on a modern app: uia_set_value lands (DOM "
+          "confirms) and uia_get_value reads back exactly what was written",
+          wrote is True and dom == "ChangedByMeaning" and back == "ChangedByMeaning",
+          f"wrote={wrote} dom={dom!r} back={back!r}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
 def round_uia_range(b: Browser, offline: bool) -> None:
     print("R136: read/set a slider's value by MEANING via UIA RangeValuePattern (F175) — osctl")
     # A slider/progress bar/scrollbar is not a field of text nor a state to flip — it
@@ -1585,11 +1643,14 @@ def round_uia_text(b: Browser, offline: bool) -> None:
     check("uia_text reads the rendered page text out of a modern app (Chrome) via "
           "TextPattern, where window_text/uia_get_value cannot",
           marker in txt and "reads me" in txt, f"text={txt[:80]!r}")
-    # the contrast: the single-line ValuePattern read returns nothing for the body
+    # the contrast: the single-line value spine carries the document's URL (its Legacy
+    # value), never the *rendered body* — the phrase painted into the page is absent,
+    # so TextPattern is the necessary deep read. (The marker itself leaks into the
+    # data: URL, so the body phrase is the honest discriminator.)
     val = osctl.uia_get_value(ch["id"], ctype="Document")
-    check("uia_get_value (single-line value spine) does NOT carry the document body "
-          "— so TextPattern is the necessary deep read", marker not in val,
-          f"val={val[:40]!r}")
+    check("uia_get_value (single-line value spine) does NOT carry the rendered "
+          "document body — so TextPattern is the necessary deep read",
+          "reads me" not in val, f"val={val[:60]!r}")
     b.navigate("about:blank")
     time.sleep(0.3)
 
@@ -6402,12 +6463,20 @@ def round_read_region(b: Browser, offline: bool) -> None:
                "<canvas id=c width=900 height=300></canvas><script>"
                "var x=document.getElementById('c').getContext('2d');"
                "x.fillStyle='#0d2860';x.fillRect(0,0,900,300);</script>"))
+    # Poll until the prior scene's ink has actually cleared from the screen: a fixed
+    # sleep can capture before Chrome repaints, leaving a stale glyph that contaminates
+    # this 'no ink' assertion. The true state is uniform, so we wait for the repaint.
     time.sleep(0.4)
-    wu, hu, rgbu = osctl.capture_rgb()
-    bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
-    if bbu is not None:
-        rru = osctl.read_region(rgbu, (wu, hu), bbu, atlas)
-        check("read_region of a uniform region is '' (no ink)", rru == "", repr(rru))
+    rru = None
+    for _ in range(14):
+        wu, hu, rgbu = osctl.capture_rgb()
+        bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
+        bbu = _drop_chrome_seam(bbu)
+        rru = "" if bbu is None else osctl.read_region(rgbu, (wu, hu), bbu, atlas)
+        if rru == "":
+            break
+        time.sleep(0.25)
+    check("read_region of a uniform region is '' (no ink)", rru == "", repr(rru))
 
 
 def round_read_block_region(b: Browser, offline: bool) -> None:
@@ -6548,13 +6617,19 @@ def round_read_block_region(b: Browser, offline: bool) -> None:
                "<canvas id=c width=900 height=520></canvas><script>"
                "var x=document.getElementById('c').getContext('2d');"
                "x.fillStyle='#0d2860';x.fillRect(0,0,900,520);</script>"))
+    # Poll until the prior scene's ink clears (repaint race); the true state is uniform.
     time.sleep(0.4)
-    wu, hu, rgbu = osctl.capture_rgb()
-    bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
-    if bbu is not None:
-        rbru = osctl.read_block_region(rgbu, (wu, hu), bbu, atlas)
-        check("read_block_region of a uniform block is [] (no ink)", rbru == [],
-              repr(rbru))
+    rbru = None
+    for _ in range(14):
+        wu, hu, rgbu = osctl.capture_rgb()
+        bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
+        bbu = _drop_chrome_seam(bbu)
+        rbru = [] if bbu is None else osctl.read_block_region(rgbu, (wu, hu), bbu, atlas)
+        if rbru == []:
+            break
+        time.sleep(0.25)
+    check("read_block_region of a uniform block is [] (no ink)", rbru == [],
+          repr(rbru))
 
 
 def round_read_region_words(b, offline):
@@ -6702,13 +6777,19 @@ def round_read_region_words(b, offline):
                "<canvas id=c width=900 height=360></canvas><script>"
                "var x=document.getElementById('c').getContext('2d');"
                "x.fillStyle='#0d2860';x.fillRect(0,0,900,360);</script>"))
+    # Poll until the prior scene's ink clears (repaint race); the true state is uniform.
     time.sleep(0.4)
-    wu, hu, rgbu = osctl.capture_rgb()
-    bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
-    if bbu is not None:
-        rrwu = osctl.read_region_words(rgbu, (wu, hu), bbu, atlas)
-        check("read_region_words of a uniform region is '' (no ink)",
-              rrwu == "", repr(rrwu))
+    rrwu = None
+    for _ in range(14):
+        wu, hu, rgbu = osctl.capture_rgb()
+        bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
+        bbu = _drop_chrome_seam(bbu)
+        rrwu = "" if bbu is None else osctl.read_region_words(rgbu, (wu, hu), bbu, atlas)
+        if rrwu == "":
+            break
+        time.sleep(0.25)
+    check("read_region_words of a uniform region is '' (no ink)",
+          rrwu == "", repr(rrwu))
 
 
 def round_read_block_region_words(b, offline):
@@ -6866,13 +6947,19 @@ def round_read_block_region_words(b, offline):
                "<canvas id=c width=900 height=520></canvas><script>"
                "var x=document.getElementById('c').getContext('2d');"
                "x.fillStyle='#0d2860';x.fillRect(0,0,900,520);</script>"))
+    # Poll until the prior scene's ink clears (repaint race); the true state is uniform.
     time.sleep(0.4)
-    wu, hu, rgbu = osctl.capture_rgb()
-    bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
-    if bbu is not None:
-        rbwu = osctl.read_block_region_words(rgbu, (wu, hu), bbu, atlas)
-        check("read_block_region_words of a uniform block is [] (no ink)",
-              rbwu == [], repr(rbwu))
+    rbwu = None
+    for _ in range(14):
+        wu, hu, rgbu = osctl.capture_rgb()
+        bbu = field_bbox(rgbu, (wu, hu), bg="#0d2860")
+        bbu = _drop_chrome_seam(bbu)
+        rbwu = [] if bbu is None else osctl.read_block_region_words(rgbu, (wu, hu), bbu, atlas)
+        if rbwu == []:
+            break
+        time.sleep(0.25)
+    check("read_block_region_words of a uniform block is [] (no ink)",
+          rbwu == [], repr(rbwu))
 
 
 def round_locate_word(b, offline):
@@ -8686,7 +8773,7 @@ def main() -> int:
               round_control_at, round_find_control, round_menu, round_uia,
               round_uia_find, round_uia_value, round_uia_drive, round_uia_focus,
               round_uia_text, round_uia_toggle, round_uia_select, round_uia_expand,
-              round_uia_scroll, round_uia_range,
+              round_uia_scroll, round_uia_range, round_uia_modern_value,
               round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
