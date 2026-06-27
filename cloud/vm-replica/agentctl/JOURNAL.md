@@ -4833,6 +4833,49 @@ floor now operates native and modern software alike, by meaning, end to end.
 
 ---
 
+## F168 — driving a modern UWP app by pure meaning + exact-preferred match (R129)
+
+**Ground: Windows Server 2022. Windows Calculator (UWP).**
+
+**Friction (surfaced only by actually driving an app, not by probing one call).**
+F165–F167 each verified a *single* UIA call. The real test is a *sequence*: take
+the Calculator — a UWP app with one HWND, no native controls, no OS menu — and
+compute `5 + 3 = 8` entirely by meaning. Doing so immediately exposed a defect in
+the matcher: `uia_invoke(name="Add")` pressed **"Memory add"**, because name
+matching was *substring* and "Memory add" appears earlier in the tree than "Add".
+A semantic floor that picks the wrong verb because another verb happens to contain
+its name as a substring is not trustworthy — the friction only appeared because a
+real multi-step task was run, exactly as 道法自然 predicts.
+
+**Fix.** `_find_ptr` (shared by `uia_find` and all UIA action helpers) now prefers
+an **exact** case-insensitive name match anywhere in scope, keeping the first
+substring hit only as a fallback. `uia_find(name="Add")` → "Add", never "Memory
+add"; `find_control`-style "by meaning" is preserved for partial names.
+
+**Live (no pixels, no coordinates, no keystrokes):**
+
+| step | call | result |
+|---|---|---|
+| press 5, +, 3, = | `uia_invoke(calc, name=…, ctype="Button")` ×4 | all True |
+| read the answer | `uia_find(calc, name="8", ctype="Text")` | `Text "8"` — **5 + 3 = 8** |
+| exact match | `uia_find(calc, name="Add", ctype="Button")` | `"Add"` (not "Memory add") |
+
+R129 (`round_uia_drive`, 3 checks); `_probe_uiadrive.py` standalone. Full suite
+**825/825** clean.
+
+**Lesson (道法自然).** 大成若缺，其用不敝 — *great completion seems flawed, yet its use
+never fails.* The whole UIA arc (F165–F167) looked complete after single-call
+proofs, but only an actual end-to-end task revealed the substring flaw; the
+completion was *seeming*, the use would have failed in practice. This is the method
+itself, demonstrated: 為學者日益，聞道者日損 — do not add speculative features; run the
+real thing until a real contradiction surfaces, then resolve exactly that. The
+payoff is concrete and beyond a human's reach: the floor computed an arithmetic
+result by reaching into a modern app's accessibility tree and pressing its verbs by
+name — no screen reading, no aiming, no typing — the see→locate→act loop closed on
+software a screenshot-and-click operator can only fumble at.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

@@ -245,56 +245,32 @@ def uia_find(win: int, name=None, ctype=None, max_scan: int = 6000):
     uia = _get_uia()
     if not uia:
         return None
-    el = _element(uia, win)
+    el = _find_ptr(uia, win, name, ctype, max_scan)
     if not el:
         return None
-    cond = ctypes.c_void_p()
-    arr = ctypes.c_void_p()
-    nl = name.lower() if name else None
     try:
-        if _vcall(uia, _CTRUE, ctypes.c_long, [ctypes.POINTER(ctypes.c_void_p)],
-                  ctypes.byref(cond)) != 0:
-            return None
-        if _vcall(el, _FINDALL, ctypes.c_long,
-                  [ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)],
-                  _TreeScope_Descendants, cond, ctypes.byref(arr)) != 0 or not arr.value:
-            return None
-        n = ctypes.c_int()
-        _vcall(arr.value, _ARR_LEN, ctypes.c_long,
-               [ctypes.POINTER(ctypes.c_int)], ctypes.byref(n))
-        for i in range(min(n.value, max_scan)):
-            ce = ctypes.c_void_p()
-            if _vcall(arr.value, _ARR_GET, ctypes.c_long,
-                      [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
-                      i, ctypes.byref(ce)) != 0 or not ce.value:
-                continue
-            try:
-                t = _CONTROL_TYPES.get(_prop_int(ce.value, _UIA_ControlTypeProperty))
-                if ctype is not None and (t or "").lower() != ctype.lower():
-                    continue
-                nm = _prop_bstr(ce.value, _UIA_NameProperty)
-                if nl is not None and nl not in (nm or "").lower():
-                    continue
-                return {"name": nm, "type": t, "rect": _prop_rect(ce.value)}
-            finally:
-                _release(ce.value)
-        return None
+        return {"name": _prop_bstr(el, _UIA_NameProperty),
+                "type": _CONTROL_TYPES.get(_prop_int(el, _UIA_ControlTypeProperty)),
+                "rect": _prop_rect(el)}
     finally:
-        _release(cond.value)
-        _release(arr.value)
         _release(el)
 
 
 def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
-    """Return the raw element pointer of the first descendant of ``win`` matching
-    name/type, or None. Caller must _release() it. Shared by the action helpers."""
+    """Return the raw element pointer of the descendant of ``win`` best matching
+    name/type, or None. Caller must _release() it. Shared by uia_find and the
+    action helpers. Matching prefers an **exact** (case-insensitive) name equality
+    over a mere substring: driving the calculator showed substring matching picks
+    ``'Memory add'`` when you asked for ``'Add'`` (it appears earlier in the tree),
+    so an exact name, if one exists anywhere in scope, always wins; the first
+    substring match is kept only as a fallback."""
     el = _element(uia, win)
     if not el:
         return None
     cond = ctypes.c_void_p()
     arr = ctypes.c_void_p()
     nl = name.lower() if name else None
-    match = None
+    fuzzy = None  # first substring match, kept if no exact match is found
     try:
         if _vcall(uia, _CTRUE, ctypes.c_long, [ctypes.POINTER(ctypes.c_void_p)],
                   ctypes.byref(cond)) != 0:
@@ -315,11 +291,19 @@ def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
             t = _CONTROL_TYPES.get(_prop_int(ce.value, _UIA_ControlTypeProperty))
             if ctype is not None and (t or "").lower() != ctype.lower():
                 _release(ce.value); continue
-            if nl is not None and nl not in (_prop_bstr(ce.value, _UIA_NameProperty) or "").lower():
-                _release(ce.value); continue
-            match = ce.value
-            break
-        return match
+            if nl is None:
+                fuzzy = ce.value  # type-only search: first match wins
+                break
+            cand = (_prop_bstr(ce.value, _UIA_NameProperty) or "").lower()
+            if cand == nl:
+                if fuzzy:
+                    _release(fuzzy)
+                return ce.value  # exact match always wins
+            if nl in cand and fuzzy is None:
+                fuzzy = ce.value  # keep as fallback, do not release
+            else:
+                _release(ce.value)
+        return fuzzy
     finally:
         _release(cond.value)
         _release(arr.value)

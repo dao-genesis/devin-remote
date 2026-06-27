@@ -1260,6 +1260,73 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_uia_drive(b: Browser, offline: bool) -> None:
+    print("R129: drive a modern UWP app end-to-end by semantic action (F168) — osctl")
+    # The proof that the modern-app loop truly closes: take the Windows Calculator
+    # (a UWP app — one HWND, no native controls, no OS menu) and compute 5 + 3 = 8
+    # purely by MEANING — uia_invoke each button by its accessible name, then read
+    # the result element by name. No pixels, no coordinates, no keystrokes. Driving
+    # it surfaced a real matching defect: substring name matching pressed
+    # 'Memory add' when asked for 'Add' (it appears earlier in the tree), so
+    # _find_ptr now prefers an EXACT name match — verified here that
+    # uia_find(name='Add') returns 'Add', not 'Memory add'.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R129: UWP/UIA is Windows-only)")
+        return
+    if not hasattr(osctl, "uia_invoke"):
+        check("osctl exposes uia_invoke", False, "missing primitive")
+        return
+
+    subprocess.Popen(["calc.exe"])
+    calc = None
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        calc = next((w for w in osctl.list_windows()
+                     if "Calc" in (w.get("title") or "")), None)
+        if calc and osctl.uia_find(calc["id"], name="Equals", ctype="Button"):
+            break
+        time.sleep(0.5)
+    if not calc:
+        print("  (Calculator unavailable on this host — modern-app drive skipped)")
+        return
+    try:
+        osctl.activate_window(calc["id"])
+        time.sleep(0.8)
+        # the exact-match fix: 'Add' must resolve to 'Add', never 'Memory add'
+        add = osctl.uia_find(calc["id"], name="Add", ctype="Button")
+        check("exact-preferred match: uia_find(name='Add') returns 'Add', not the "
+              "earlier-in-tree 'Memory add' (defect surfaced by driving calc)",
+              bool(add) and add.get("name") == "Add", f"add={add}")
+        invoked = all(osctl.uia_invoke(calc["id"], name=nm, ctype="Button")
+                      for nm in ("5", "Add", "3", "Equals")
+                      if (time.sleep(0.4) or True))
+        check("uia_invoke presses each Calculator button by accessible name "
+              "(InvokePattern, no pixels)", invoked, "an invoke returned False")
+        time.sleep(0.6)
+        # the result 8 surfaces as a Text element named '8'
+        result = None
+        for _ in range(6):
+            result = osctl.uia_find(calc["id"], name="8", ctype="Text")
+            if result:
+                break
+            time.sleep(0.4)
+        check("5 + 3 = 8 computed end-to-end by MEANING inside a UWP app "
+              "(result Text element named '8' present)",
+              bool(result) and result.get("name") == "8", f"result={result}")
+    finally:
+        os.system("taskkill /F /IM CalculatorApp.exe >NUL 2>&1")
+        os.system("taskkill /F /IM Calculator.exe >NUL 2>&1")
+        os.system("taskkill /F /IM calc.exe >NUL 2>&1")
+        time.sleep(0.3)
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.3)
+
+
 def round_uia_value(b: Browser, offline: bool) -> None:
     print("R128: write an element's value through UIA, reaching modern apps (F167) — osctl")
     # set_window_text (F161) writes a control's text by native HWND identity — but
@@ -8283,7 +8350,8 @@ def main() -> int:
               round_topmost, round_window_pid, round_key_state, round_mouse_state,
               round_pixel, round_window_text, round_set_window_text,
               round_control_at, round_find_control, round_menu, round_uia,
-              round_uia_find, round_uia_value, round_move, round_desktop,
+              round_uia_find, round_uia_value, round_uia_drive,
+              round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
