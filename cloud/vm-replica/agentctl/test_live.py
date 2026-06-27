@@ -658,6 +658,99 @@ def round_reach(b: Browser, offline: bool) -> None:
           reach_hits > stale_hits, f"reach={reach_hits} stale={stale_hits}")
 
 
+def round_steer(b: Browser, offline: bool) -> None:
+    print("R106: drive a KEYBOARD-moved momentum control to a goal by closed-loop servo (F145) — osctl")
+    # R105 clicks a moving target. But some things move only while a KEY is held
+    # and *coast* after release (a momentum scrubber / key-repeat slider / game
+    # character) — a click cannot place them at all, and open-loop (hold the key
+    # for a distance-estimated time) overshoots because acceleration + coast are
+    # unknown. osctl.steer does it the way the motor system does: a ballistic hold
+    # while *perceiving by pixels*, released predictively before arrival, then small
+    # corrective impulses until inside the goal band. Eyes + hand fused; perception
+    # is pixels, motion is the real keyboard.
+    scene = fixture(
+        "steer.html",
+        "<!doctype html><title>steer</title>"
+        "<style>html,body{margin:0;overflow:hidden;background:#fff}</style>"
+        "<canvas id=c width=1200 height=300 style='display:block'></canvas>"
+        "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+        "var W=1200,KN=44,y=130,px=80,vx=0,dir=0,ACC=2600,FR=4.0,MAXV=1400;"
+        "var TW=70,T=Math.round(520+Math.random()*560);"
+        "var last=performance.now();"
+        "function draw(){x.fillStyle='#fff';x.fillRect(0,0,W,300);"
+        "x.fillStyle='#00c000';x.fillRect(T,y-20,TW,KN+40);"
+        "x.fillStyle='#ff00ff';x.fillRect(px,y,KN,KN);}"
+        "function step(now){var dt=Math.min(0.05,(now-last)/1000);last=now;"
+        "vx+=dir*ACC*dt;"
+        "if(dir===0){var d=Math.exp(-FR*dt);vx*=d;if(Math.abs(vx)<2)vx=0;}"
+        "if(vx>MAXV)vx=MAXV;if(vx<-MAXV)vx=-MAXV;"
+        "px+=vx*dt;if(px<0){px=0;vx=0;}if(px>W-KN){px=W-KN;vx=0;}"
+        "draw();requestAnimationFrame(step);}"
+        "addEventListener('keydown',function(e){"
+        "if(e.key==='ArrowRight'){dir=1;e.preventDefault();}"
+        "else if(e.key==='ArrowLeft'){dir=-1;e.preventDefault();}});"
+        "addEventListener('keyup',function(e){"
+        "if(e.key==='ArrowRight'||e.key==='ArrowLeft'){dir=0;e.preventDefault();}});"
+        "draw();requestAnimationFrame(step);"
+        "window.__st=function(){return {px:px,vx:vx,t:T,tw:TW,kn:KN};};"
+        "</script>")
+    mag, green = (255, 0, 255), (0, 192, 0)
+    n = 4
+
+    def focus():
+        osctl.click(360, 300)
+        time.sleep(0.15)
+
+    def settle_page():
+        t = time.time()
+        while time.time() - t < 2.0:
+            s = b.eval("window.__st()")
+            if abs(s["vx"]) < 2:
+                return s
+            time.sleep(0.03)
+        return b.eval("window.__st()")
+
+    def in_band(s):
+        goal_left = s["t"] + s["tw"] / 2 - s["kn"] / 2
+        return abs(s["px"] - goal_left) <= s["tw"] / 2
+
+    # Friction: open-loop. One reading, hold the key for a distance-estimated
+    # duration, release, let it coast. Overshoots — the coast is unmodelled.
+    open_hits = 0
+    for _ in range(n):
+        b.navigate(scene)
+        time.sleep(0.3)
+        focus()
+        s = b.eval("window.__st()")
+        goal_left = s["t"] + s["tw"] / 2 - s["kn"] / 2
+        dist = goal_left - s["px"]
+        key = osctl.VK_RIGHT if dist > 0 else osctl.VK_LEFT
+        osctl.key_hold(key, duration=(2 * abs(dist) / 2600.0) ** 0.5)
+        if in_band(settle_page()):
+            open_hits += 1
+    check("open-loop keyboard hold mostly OVERSHOOTS the momentum control",
+          open_hits <= 1, f"{open_hits}/{n} in-band")
+
+    # Primitive: closed-loop servo, perceiving BOTH knob and goal band by pixels.
+    steer_hits = 0
+    for _ in range(n):
+        b.navigate(scene)
+        time.sleep(0.3)
+        focus()
+        w, h, rgb = osctl.capture_rgb()
+        band = osctl.find_color(green, tol=40, rgb=rgb, size=(w, h), step=4)
+        if band is not None:
+            half = (band["bbox"][2] - band["bbox"][0]) / 2
+            osctl.steer(mag, band["x"], axis="x",
+                        band=max(12, half * 0.6), coast=0.25)
+        if in_band(settle_page()):
+            steer_hits += 1
+    check("closed-loop steer LANDS the keyboard control inside the goal band",
+          steer_hits >= n - 1, f"{steer_hits}/{n} in-band")
+    check("steer strictly beats open-loop on the same momentum control",
+          steer_hits > open_hits, f"steer={steer_hits} open={open_hits}")
+
+
 def round_structure_match(b: Browser, offline: bool) -> None:
     print("R19: pick a colour-shifted target by structure, not appearance (F055) — osctl")
     # Two magenta tiles (segmentable), each holding a black glyph drawn in a
@@ -6382,7 +6475,8 @@ def main() -> int:
               round_frame, round_file_input, round_shadow, round_async, round_omnibox,
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
-              round_template_match, round_settle, round_reach, round_structure_match,
+              round_template_match, round_settle, round_reach, round_steer,
+              round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
               round_native_select, round_contenteditable, round_file_drop,

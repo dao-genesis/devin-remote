@@ -3760,6 +3760,67 @@ chase loop, we subtracted scanned pixels and subtracted the latency by predictio
 
 ---
 
+## F145 — the keyboard is a servo, not a typewriter (closed-loop keyboard control)
+
+**Reframing (反者道之動).** The goal was never to beat the official screenshot+click
+at its own game; it is to do what that primitive *cannot*. So this round asked: what
+on a screen cannot be placed by a click at all? Answer: a control that moves only while
+a **key is held** and *coasts* after release — a momentum scrubber, a key-repeat slider,
+a game character. A click has nothing to grab; you must *drive* it with the keyboard.
+
+**Reproduced friction (live, this VM's real keyboard).** A canvas knob that accelerates
+while ArrowRight/Left is held and decays after release, with a goal band. The honest
+open-loop attempt — read once, hold the key for the distance-estimated time `t=√(2d/a)`,
+release — **landed 0/12 in band, mean error ~244–272 px**: acceleration and the
+post-release coast are unmodelled, so it always overshoots. No click can help; the
+control is keyboard-only.
+
+**Why this is structural (referencing motor control).** The hand does not place a
+momentum control open-loop either. It uses a **ballistic** phase (move fast toward the
+goal while *watching*) released *before* arrival to leave room for the coast, then a
+**corrective** phase of small impulses until inside the target — saccade-and-correct,
+with proprioception telling it the limb has come to rest. `osctl.steer` is exactly that,
+fused with vision:
+
+1. **Perceive by pixels, move by the real keyboard.** Both the controlled element and
+   the goal are located with `find_color`/`foveate` (the goal band is just another
+   colour on screen); motion is genuine OS key events (XTEST), not a DOM write.
+2. **Ballistic + predictive release.** Hold the key toward the goal, sampling position
+   every ~12 ms; estimate velocity and release once the predicted stop (`pos + |v|·coast`)
+   reaches the goal, so the coast carries it the rest of the way.
+3. **Rest, then correct.** The decisive fix: do **not** re-measure on a fixed sleep — the
+   element is still coasting, and correcting mid-coast oscillates (first cut: 4/12). Wait
+   until perception shows it has actually *stopped* (two consecutive sub-pixel deltas),
+   then nudge with 20 ms impulses until the centre is inside the band. 知止所以不殆 —
+   know when it has stopped before acting again.
+
+**Live A/B (same scenes, this VM), open-loop hold vs `steer`:**
+
+| method | in-band | mean \|err\| |
+|---|:---:|:---:|
+| open-loop (one reading, timed hold) | 0/12 | ~244–272 px |
+| inline servo (page-readout corrective) | 11–12/12 | ~25 px |
+| **`osctl.steer` (pure-pixel perception)** | **12/12** | **~12 px** |
+
+The shipped primitive, perceiving *both* knob and goal purely by pixels, beats even the
+inline version that peeked at the page state — because rest-by-perception removes the
+mid-coast mis-correction. R106 (`round_steer`) bakes it in: open-loop 0/4 vs steer 4/4.
+
+**Generality beyond the browser (不局限於一瀏覽器).** The same `osctl` floor drove a
+*native* app end-to-end this session — KDE Konsole: an OS click to focus (mouse), then
+`type_unicode` of a shell command and Return (keyboard), verified by the marker file it
+wrote. The floor is application-agnostic: it acts on the X11 screen, not on a DOM. (It
+still has **no window-enumeration/activation primitive** — a real gap for addressing the
+*right* window among many; logged here as the next honest surface.)
+
+**Lesson (道法自然).** A click is one impulse; many controls integrate over *held* time and
+*coast* after. The keyboard is therefore not a typewriter but a **servo** — and the same
+perceive→predict→correct loop that hit a moving target (F144) drives a moving control,
+just with keys instead of a click. 大音希聲: the signal that it is *safe to correct* is the
+*absence* of motion (rest), perceived, not assumed. 無為而無不為.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

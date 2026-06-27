@@ -662,6 +662,113 @@ def reach(target: tuple[int, int, int], tol: int = 24, step: int = 4,
             "settled": abs(vx) < 1.0 and abs(vy) < 1.0}
 
 
+def steer(target: tuple[int, int, int], goal: int, axis: str = "x",
+          tol: int = 24, step: int = 4, radius: int = 80,
+          pos_key: int | None = None, neg_key: int | None = None,
+          coast: float = 0.25, gap: float = 0.012, band: float = 8.0,
+          taps: int = 10, settle: float = 1.2, max_ballistic: float = 4.0,
+          perceive_fn=None) -> dict | None:
+    """Drive a *keyboard-moved* control to a perceived ``goal`` by closed-loop servo (F145).
+
+    The honest failure this fixes (reproduced live): some things move only while a
+    key is **held** and *coast* after release (a momentum scrubber, a key-repeat
+    slider, a game character). You cannot hit them open-loop — from one snapshot you
+    can hold the key for a distance-estimated time, but the acceleration and the
+    post-release coast are unknown, so you overshoot (live: 0/12 in-band, ~244 px).
+    A click cannot help — the control is keyboard-driven. So do it the way the motor
+    system does: a **ballistic** phase (hold the key toward the goal while *watching*),
+    released *predictively* before arrival to leave room for the coast, then a
+    **corrective** phase of small impulses until inside the goal band (saccade-and-
+    correct). Eyes + hand, fused: perception is by pixels, motion is the real keyboard.
+
+    ``goal`` is the target coordinate **on the chosen ``axis``** in *screen* pixels
+    (e.g. the centre of a band located by :func:`find_color`). ``perceive_fn`` returns
+    the controlled element's current ``(cx, cy)`` screen centre (default: a coarse
+    :func:`find_color` of ``target`` refined in the fovea). ``pos_key``/``neg_key``
+    are the keys that move it in the +/- axis direction (default arrow keys). ``coast``
+    is the release lead as a fraction of the measured speed (stopping-distance ≈
+    ``|v|·coast``); ``band`` is the half-width to land inside; ``taps`` short
+    corrective ``key_hold`` pulses. Returns ``{x, y, err, reached, pulses}``."""
+    ax = 0 if axis == "x" else 1
+    if pos_key is None:
+        pos_key = VK_RIGHT if ax == 0 else VK_DOWN
+    if neg_key is None:
+        neg_key = VK_LEFT if ax == 0 else VK_UP
+
+    def perceive():
+        if perceive_fn is not None:
+            return perceive_fn()
+        w, h, rgb = capture_rgb()
+        loc = find_color(target, tol=tol, rgb=rgb, size=(w, h), step=step)
+        if loc is None:
+            return None
+        f = foveate(target, (loc["x"], loc["y"]), radius=radius, tol=tol) or loc
+        return (f["x"], f["y"])
+
+    def rest():
+        """Wait until the element stops moving (perceived Δ≈0) — proprioceptive
+        'limb has come to rest'. A fixed sleep would re-perceive mid-coast and
+        mis-correct; here we measure *that it actually stopped*. Require two
+        consecutive sub-pixel deltas so a slow coast isn't mistaken for rest."""
+        last = perceive()
+        t = time.time()
+        stable = 0
+        while time.time() - t < settle:
+            time.sleep(0.03)
+            p = perceive()
+            if p is None or last is None:
+                last = p
+                continue
+            stable = stable + 1 if abs(p[ax] - last[ax]) < 1.0 else 0
+            last = p
+            if stable >= 2:
+                return p
+        return last
+
+    cur = perceive()
+    if cur is None:
+        return None
+    c = cur[ax]
+    sign = 1 if goal > c else -1
+    key = pos_key if sign > 0 else neg_key
+
+    # Ballistic: hold toward the goal, watch by pixels, release predictively.
+    key_down(key)
+    prev, tprev = c, time.time()
+    t0 = tprev
+    try:
+        while time.time() - t0 < max_ballistic:
+            time.sleep(gap)
+            p = perceive()
+            if p is None:
+                continue
+            c = p[ax]
+            tn = time.time()
+            v = (c - prev) / (tn - tprev) if tn > tprev else 0.0
+            prev, tprev = c, tn
+            remaining = (goal - c) * sign
+            if remaining <= abs(v) * coast or remaining <= 0:
+                break
+    finally:
+        key_up(key)
+
+    # Corrective: small impulses until the centre is inside the goal band. Wait
+    # for actual rest before each measurement so we correct position, not coast.
+    pulses = 0
+    cur = rest() or cur
+    for _ in range(taps):
+        c = cur[ax]
+        err = c - goal
+        if abs(err) <= band:
+            break
+        key_hold(neg_key if err > 0 else pos_key, duration=0.02)
+        pulses += 1
+        cur = rest() or cur
+    err = cur[ax] - goal
+    return {"x": cur[0], "y": cur[1], "err": err,
+            "reached": abs(err) <= band, "pulses": pulses}
+
+
 def crop_rgb(rgb: bytes, size: tuple[int, int], bbox: tuple[int, int, int, int]
              ) -> tuple[bytes, int, int]:
     """Cut a ``(patch, pw, ph)`` sub-image out of a capture.
