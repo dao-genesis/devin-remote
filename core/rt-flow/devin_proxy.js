@@ -785,7 +785,11 @@ async function handleRequest(req, res, auth, opts, _log) {
           let txt = body.toString("utf8");
           if (txt.indexOf("webapp_host") >= 0) {
             const reqHost = (req.headers && req.headers.host) ? String(req.headers.host) : "localhost";
-            txt = txt.replace(/("webapp_host"\s*:\s*")[^"]*(")/g, "$1" + reqHost + "$2");
+            // 守柔·并理 null: 上游实测下发 "webapp_host":null(post-auth/组织 JSON) → SPA 据此回落默认
+            //   主机 app.devin.ai → /org/<slug> 跨主机硬跳真站 /login(掉登录之真因)。旧正则仅匹配带引号
+            //   字符串值, 漏改 null。故字符串值与 null 字面量一并改写为本次请求 Host。
+            txt = txt.replace(/("webapp_host"\s*:\s*)(?:"[^"]*"|null)/g, '$1"' + reqHost + '"');
+            txt = txt.replace(/("webappHost"\s*:\s*)(?:"[^"]*"|null)/g, '$1"' + reqHost + '"');
           }
           res.writeHead(status, safeHeaders);
           res.end(Buffer.from(txt, "utf8"));

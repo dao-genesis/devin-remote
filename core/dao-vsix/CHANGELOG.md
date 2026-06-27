@@ -2,6 +2,11 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.36
+- **公网「诡异网页」/shell 路由官网对话掉登录之根治(踩坑 6 · webapp_host=null 漏改)**。实测从公网隧道打开 `…/?dao_acct=<号>` 的 `/sessions` 已登录正常,但进 `/org/<slug>` 即**硬跳真站 `app.devin.ai/login?next=…&internal_org=…`**逃出隧道→掉登录。CDP 抓包定位: Devin SPA 引导调 `/api/users/post-auth` 返回 `"webapp_host":null`,SPA(`useEnterprisePrimaryOrgNavigation`)据此**回落默认主机 app.devin.ai** 做组织跳转。同源反代的 `webapp_host` 改写正则**仅匹配带引号字符串值**(`"webapp_host":"…"`),**漏改 `null`** → 保留 null → SPA 逃逸。
+  - **修法**: 把 `webapp_host`/`webappHost` 的改写正则扩为同时匹配字符串值与 `null` 字面量,一并归一为本次请求 Host(隧道域/localhost 自适应)。落地三处: `src/extension.ts`(HTML 内联引导态 + JSON API 响应 `devinCloudProxyRoute`)、`core/rt-flow/devin_proxy.js`(IDE 内多实例反代)及其 vendored 副本 `core/dao-vsix/rtflow/devin_proxy.js`。
+  - 验证: 改后公网 `/org/<slug>?dao_acct=<活号>` 不再跨主机硬跳,留在隧道同源渲染官网对话。自检: rt-flow 35 PASS、node --check 通过、dao-vsix/dao-one 构建通过、render_check 通过、rtflow vendored 内容一致(忽略既有 CRLF)。
+
 ## 3.50.35
 - **正本清源 · 四大模块综合 MCP 入本源(原为运行时外科追加, 今永驻 src)**。`/mcp`(Streamable HTTP·JSON-RPC)端点 + 31 工具(`pc_*`/`browser_*`/`plugin_*`/`vscode_*`)此前仅以运行时 payload(`~/.dao/mcp-deploy/apply-mcp.js` 外科追加进 `out/extension.js`)存在 —— **一经重建即丢**。现整段(`daoMcpHandle`/`daoMcpProcessRpc`/`daoMcpCallTool`/`daoMcpToolDefs` + 零依赖原生 WebSocket CDP 客户端 `daoCdpBatch` + `daoCdpEnsureChrome`/`daoCdpPickPage`)落入 `src/extension.ts`，并在 `handleRouteInternal` 顶部(先于 `needAuth`/`isAppProxyPassthrough`)接管 `/mcp`，杜绝被当作官网 SPA 透传。
   - **修 `plugin_git` 404(根因)**: 旧版无 `/api/git/status` 路由 → MCP `plugin_git` 经 `daoMcpInvoke` 落空透传上游 → uvicorn 404。现 `plugin_git` 自给自足:先试 `/api/git/status`(vscode.git API),不可用即回退 `daoGitStatusViaCli()`——`childProcess` 直跑 `git`(workspace 根)解析 porcelain(分支/staged/changes/untracked/ahead/behind/冲突),不依赖路由是否存在或 git 扩展是否激活。
