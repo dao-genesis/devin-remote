@@ -306,7 +306,10 @@
       .catch(function () { _inflight[k] = false; });
   }
   // 写/动作型方法: 不缓存; 执行后清空读缓存使后续读反映变更
-  function isWrite(m) { return /^(set|save|apply|clear|rotate|request|open|install|delete|toggle|grant|restart|launch|reload|seal|usSave|gmSet|gmDel|e2e(Seal|Open))/.test(m); }
+  function isWrite(m) { return /^(set|save|apply|clear|rotate|request|open|install|delete|toggle|grant|restart|launch|reload|seal|usSave|gmSet|gmDel|e2e(Seal|Open))/.test(m)
+    // 用户脚本「动作型」(点击触发·渲染后才发生·须真执行并取真返回值, 不能落读缓存返回 null) → 走阻塞同步;
+    //   注意排除 usList/usGetSource(渲染期高频只读, 阻塞会冻主线程)。
+    || /^(usInstall|usDelete|usDeleteMany|usToggle|usToggleMany|usImport|usExportAll|usCheckUpdate|accessGuideMd)$/.test(m); }
 
   var _cache = {}, _ts = {}, _inflight = {}, TTL = 2000;
   // 值返回型 Native → 同步桥 (页面零改动)。
@@ -427,7 +430,8 @@
     "openVpnSettings", "launchApp", "shizukuStatus", "shizukuRequest", "shizukuGrantAll", "shizukuShell",
     "shizukuOpenManager", "vaultSave", "vaultLoad", "vaultSaveBackup", "vaultSaveBackupB64", "vaultListBackups",
     "vaultReadBackup", "vaultListBackupAccounts", "vaultReadBackupB64", "usList", "usGetSource", "usSaveCode",
-    "usInstall", "usDelete", "usToggle", "gmGet", "gmSet", "gmDel", "gmList"];
+    "usInstall", "usDelete", "usToggle", "gmGet", "gmSet", "gmDel", "gmList", "appVer",
+    "usCheckUpdate", "usDeleteMany", "usExportAll", "usImport", "usToggleMany", "accessGuideMd"];
   R.forEach(function (m) { if (!(m in Native)) Native[m] = rpc(m); });
 
   window.Native = Native;
@@ -438,6 +442,17 @@
       var acc = syncCall("vaultLoad", ["accounts"]);
       if (acc && typeof acc === "string" && acc.length > 2) localStorage.setItem("rtflow.accounts", acc);
     }
+  } catch (e) {}
+
+  // 版本号同步(对照手机真实版本·免僵化): 预热 appVer(中继读·首调 null·后台补齐) → 写入共享
+  //   localStorage.rtflow.ver, 供各板块页脚(switch/panel/shizuku/userscripts)同步显示真实 APK 版本,
+  //   不再让公网网页显示僵化的旧版本号。
+  try {
+    var _vt = 0;
+    (function warmVer(){
+      try { var v = Native.appVer && Native.appVer(); if (v) { localStorage.setItem("rtflow.ver", String(v).replace(/^v/, "")); return; } } catch (e) {}
+      if (++_vt < 12) setTimeout(warmVer, 800);
+    })();
   } catch (e) {}
 })();
 </script>

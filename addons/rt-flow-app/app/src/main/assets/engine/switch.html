@@ -282,8 +282,8 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 <script>
 var N = window.Native || {};
 var DEVIN = "https://app.devin.ai/";
-// 版本号优先读真实 APK 版本(Native.appVer), 回退 localStorage → 升级后页脚即时刷新, 永不僵化
-try{ var _v=(N.appVer&&N.appVer())||localStorage.getItem("rtflow.ver"); var _e=document.getElementById("appVer"); if(_v&&_e){ _e.textContent="v"+_v; localStorage.setItem("rtflow.ver",_v); } }catch(e){}
+// 版本号优先读真实 APK 版本(Native.appVer·中继读首调 null·后台补齐 → 自重试), 回退 localStorage → 升级后页脚即时刷新, 永不僵化
+(function _setVer(t){ try{ var _v=(N.appVer&&N.appVer())||localStorage.getItem("rtflow.ver"); var _e=document.getElementById("appVer"); if(_v&&_e){ _v=String(_v).replace(/^v/,""); _e.textContent="v"+_v; localStorage.setItem("rtflow.ver",_v); return; } }catch(e){} if((t||0)<12) setTimeout(function(){_setVer((t||0)+1);}, 800); })(0);
 var _mode = localStorage.getItem("rtflow.mode") || "wam";
 var _convOpen = localStorage.getItem("rtflow.convOpen") !== "0";
 // ── 多选状态 (以账号 id 为准, 跨重渲染持久; 修复"打钩后自动消失"): ──

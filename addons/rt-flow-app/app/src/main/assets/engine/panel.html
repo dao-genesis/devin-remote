@@ -45,14 +45,16 @@
   </div>
 
 <script>
-var N = window.Panel || {};
-try{ var _v=localStorage.getItem("rtflow.ver"); var _e=document.getElementById("ver"); if(_v&&_e) _e.textContent="v"+_v; }catch(e){}
+var N = window.Native || window.Panel || {};
+// 版本号读真实 APK 版本(Native.appVer·中继读首调 null·后台补齐 → 自重试), 回退 localStorage, 不再僵化显示旧版本
+(function _setVer(t){ try{ var _v=(N.appVer&&N.appVer())||localStorage.getItem("rtflow.ver"); var _e=document.getElementById("ver"); if(_v&&_e){ _v=String(_v).replace(/^v/,""); _e.textContent="v"+_v; localStorage.setItem("rtflow.ver",_v); return; } }catch(e){} if((t||0)<12) setTimeout(function(){_setVer((t||0)+1);}, 800); })(0);
 function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
 function saveAcc(a){ localStorage.setItem("rtflow.accounts", JSON.stringify(a||[])); }
 function getActive(){ return localStorage.getItem("rtflow.active")||""; }
 
 function renderStatus(){
-  var st={}; try{ var _o=JSON.parse(N.status?N.status():"{}"); if(_o&&typeof _o==="object"&&!Array.isArray(_o)) st=_o; }catch(e){}
+  // 连接状态读真实中继状态(Native.relayStatus → {connected,...}); 旧代码调不存在的 N.status() 恒空 → 永远「连接中…」
+  var st={}; try{ var _src=N.relayStatus||N.status; var _o=JSON.parse(_src?_src():"{}"); if(_o&&typeof _o==="object"&&!Array.isArray(_o)) st=_o; }catch(e){}
   var dot=document.getElementById("dot"), s=document.getElementById("st"), ep=document.getElementById("ep");
   if(st.connected){ dot.classList.add("ok"); s.textContent="内网穿透已连接 · 可远程接入"; }
   else { dot.classList.remove("ok"); s.textContent="内网穿透连接中…"+(st.lastError?(" ("+st.lastError+")"):""); }
@@ -78,7 +80,8 @@ document.getElementById("imp").onclick=function(){
     saveAcc(accs); document.getElementById("json").value=""; renderAccts();
   }catch(e){ alert("JSON 解析失败"); }
 };
-document.getElementById("restart").onclick=function(){ try{ N.restart(); }catch(e){} };
+// 重启中继服务: 原生桥方法名是 relayRestart(旧代码调不存在的 N.restart() → 按钮恒哑火), 兼容回退
+document.getElementById("restart").onclick=function(){ try{ (N.relayRestart||N.restart||function(){})(); N.notify&&N.notify("已重启中继服务"); }catch(e){} };
 renderStatus(); renderAccts();
 setInterval(renderStatus, 1500);
 </script>
