@@ -279,6 +279,31 @@ def mod_drag(x0: int, y0: int, x1: int, y1: int, *mods: int,
         key_up(vk)
 
 
+def glide(x0: int, y0: int, x1: int, y1: int,
+          steps: int = 24, pause: float = 0.01) -> None:
+    """Move the cursor along a path with NO button held (F130).
+
+    :func:`move` jumps the cursor straight to a point — one ``mousemove`` at the
+    destination, nothing in between — and :func:`drag` glides but with a button
+    *down*. Neither can trace a button-less path. Yet much of a GUI answers only
+    to the cursor's *journey*, not its arrival: a hover trail, a parallax that
+    tracks the pointer, a slider that scrubs on bare ``mousemove``, and above all
+    a nested menu that keeps its submenu open only while the cursor crosses from
+    parent into child — teleport onto the child and the parent's hover lapses, so
+    the submenu never opens. This glides from ``(x0,y0)`` to ``(x1,y1)`` in many
+    small steps with no button, so every element along the line sees the cursor
+    pass through. It is :func:`drag` without the press — the hover twin of the
+    held stroke."""
+    move(x0, y0)
+    time.sleep(pause)
+    n = max(1, steps)
+    for i in range(1, n + 1):
+        mx = round(x0 + (x1 - x0) * i / n)
+        my = round(y0 + (y1 - y0) * i / n)
+        move(mx, my)
+        time.sleep(pause)
+
+
 def scroll(dy: int = 0, dx: int = 0,
            x: int | None = None, y: int | None = None,
            pause: float = 0.01) -> None:
