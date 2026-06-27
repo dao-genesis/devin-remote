@@ -3165,6 +3165,44 @@ place between; some doors are opened only by what the path touched on the way.
 
 ---
 
+## F131 — `mod_taps`: one modifier across a sequence (R95)
+
+**Friction.** `chord` presses a modifier with one key and releases both in the
+same breath — perfect for a single combo. But some input is a *run* under one
+sustained modifier: Shift held while several Arrow taps extend a selection one
+cell at a time, Alt held across a digit sequence to compose a code, a modifier
+held while several keys are struck and the result committed only on the
+modifier's *keyup*. A loop of `chord` releases the modifier between every key, so
+each keystroke looks like its own combo and the run never coheres. `mod_click` /
+`mod_scroll` / `mod_drag` held a modifier through one pointer action; the
+keyboard had no member that held one across a *sequence* of taps.
+
+**Mechanism.** Hold each `mods` VK down, tap every key in `keys` in order with
+the modifier still down, then release the modifiers in reverse — one continuous
+hold across the sequence. To `chord` what a held stroke is to a single press.
+
+**Primitive.** `mod_taps(*mods, keys=(), pause=0.03)`.
+
+**Live (R95):** a page appends each letter typed while Shift is held to a buffer
+and commits it (to the title) on Shift's keyup. A loop of `chord(Shift, k)` over
+A,B,C releases Shift after each letter, so it commits three times (`__commits==3`)
+and only the last letter survives (`WORD:C`) — the friction. `mod_taps(Shift,
+keys=(A,B,C))` holds Shift across the whole run, so it commits once
+(`__commits==1`) and the sequence coheres into one word (`WORD:ABC`).
+`687/687 checks passed`, deterministic ×3.
+
+**Honest note.** SendInput sets the real keyboard state, so the letter keydowns
+genuinely report `shiftKey=true` while the VK is held — the grouping is a true
+OS-level hold, not a synthesized flag. The fixture is keyup-committed precisely
+so that the *number of modifier releases* is observable; that count (3 vs 1) is
+the unforgeable evidence that the hold spanned the run.
+
+**Lesson (道法自然):** 慎終如始，則無敗事 — to hold from first stroke to last
+without loosening is what lets many acts become one; the grip that never lapses
+mid-way is the whole of the deed.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
