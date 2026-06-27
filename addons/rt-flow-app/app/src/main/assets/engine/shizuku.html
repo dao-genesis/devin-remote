@@ -113,7 +113,7 @@ function runShell(){
     catch(e){ pre.textContent=r; }
   },30);
 }
-try{ var v=(N.appVer&&N.appVer())||localStorage.getItem('rtflow.ver'); if(v){ document.getElementById('foot').textContent='Devin Cloud 手机版 · v'+v+' · 道法自然'; localStorage.setItem('rtflow.ver',v); } }catch(e){}
+(function _setVer(t){ try{ var v=(N.appVer&&N.appVer())||localStorage.getItem('rtflow.ver'); if(v){ v=String(v).replace(/^v/,''); document.getElementById('foot').textContent='Devin Cloud 手机版 · v'+v+' · 道法自然'; localStorage.setItem('rtflow.ver',v); return; } }catch(e){} if((t||0)<12) setTimeout(function(){_setVer((t||0)+1);}, 800); })(0);
 refresh();
 setInterval(refresh, 4000);
 </script>
