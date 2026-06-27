@@ -402,7 +402,9 @@ def _png(width: int, height: int, rgb: bytes) -> bytes:
             + chunk(b"IEND", b""))
 
 
-def capture_rgb() -> "tuple[int, int, bytes]":
+def capture_rgb(x: int = 0, y: int = 0,
+                w: "int | None" = None, h: "int | None" = None
+                ) -> "tuple[int, int, bytes]":
     """Grab the whole desktop into memory as ``(w, h, rgb)`` (3 bytes/pixel,
     row-major, top-down) — the raw pixel channel the agent sees.
 
@@ -410,8 +412,13 @@ def capture_rgb() -> "tuple[int, int, bytes]":
     against), so a pixel located here is directly clickable. The grab itself is
     the backend's job (GDI ``BitBlt`` on Windows, ``XGetImage`` on Linux); both
     return this identical byte layout, so the perception side never sees the
-    difference."""
-    return _be.capture_rgb()
+    difference.
+
+    With ``x/y/w/h`` it grabs only that sub-rectangle (a *foveal* window): a much
+    smaller read, so it can be repeated far faster than a whole-screen grab. The
+    returned buffer is ROI-local (its origin is the rectangle's top-left); use
+    :func:`foveate` when you want screen-coordinate results back."""
+    return _be.capture_rgb(x, y, w, h)
 
 
 def screenshot(path: str) -> str:
@@ -544,6 +551,44 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
              for a in agg.values() if a["count"] >= min_count]
     blobs.sort(key=lambda b: b["count"], reverse=True)
     return blobs
+
+
+def foveate(target: tuple[int, int, int], center: tuple[int, int],
+            radius: int = 80, tol: int = 24,
+            locate=None) -> dict | None:
+    """Locate ``target`` inside a small window around ``center`` (F142).
+
+    The eye does not read its whole field at full acuity — a high-resolution
+    *fovea* covers a tiny solid angle and is aimed where it expects the signal,
+    which is why it can re-check a spot many times a second. This is that fovea:
+    grab only a ``2·radius`` square around ``center`` (a fraction of the pixels of
+    a whole-screen grab, so far cheaper to repeat) and run a normal locate inside
+    it, then map the hit back to *screen* coordinates so the result drops straight
+    into ``click``. Returns ``find_color``'s ``{x, y, count, bbox}`` (plus the
+    ``roi`` used) in screen space, or ``None`` if ``target`` is not in the window —
+    and *absence is information*: it means the thing has left the fovea (moved, or
+    the aim was wrong), the cue to saccade with a full grab and re-acquire.
+
+    ``locate`` defaults to :func:`find_color`; pass any ``(target, tol, rgb, size)``
+    locator (e.g. a ``find_color_blobs`` wrapper) to foveate with it instead."""
+    sw, sh = screen_size()
+    cx, cy = int(center[0]), int(center[1])
+    r = max(1, int(radius))
+    x0 = max(0, min(cx - r, sw - 1))
+    y0 = max(0, min(cy - r, sh - 1))
+    w = max(1, min(2 * r, sw - x0))
+    h = max(1, min(2 * r, sh - y0))
+    rw, rh, rgb = capture_rgb(x0, y0, w, h)
+    loc = (locate or find_color)(target, tol=tol, rgb=rgb, size=(rw, rh))
+    if loc is None:
+        return None
+    loc["x"] += x0
+    loc["y"] += y0
+    if loc.get("bbox") is not None:
+        a, b, c, d = loc["bbox"]
+        loc["bbox"] = (a + x0, b + y0, c + x0, d + y0)
+    loc["roi"] = (x0, y0, rw, rh)
+    return loc
 
 
 def crop_rgb(rgb: bytes, size: tuple[int, int], bbox: tuple[int, int, int, int]
@@ -950,48 +995,93 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
 
 def wait_stable(target: tuple[int, int, int], tol: int = 24, move_tol: int = 3,
                 settle_frames: int = 3, interval: float = 0.12,
-                timeout: float = 6.0) -> dict | None:
-    """Locate a colour only once it has stopped moving (F054).
+                timeout: float = 6.0, radius: int = 80) -> dict | None:
+    """Locate a colour only once it has stopped moving — by foveated pursuit (F054/F143).
 
     Every other primitive here reads a *single* ``capture_rgb`` snapshot, but a
     live UI animates: by the time a synthesised click lands, an element that was
-    sliding/teleporting has moved on, so the click hits where the target *used
-    to be*. This samples the ``find_color`` centroid repeatedly and returns only
-    after it holds within ``move_tol`` pixels for ``settle_frames`` consecutive
-    samples — i.e. the motion has come to rest — yielding the *current* resting
-    position to act on. The result is the usual ``find_color`` dict plus
-    ``settled`` (bool) and ``samples`` (int).
+    sliding/teleporting has moved on, so the click hits where the target *used to
+    be*. The result is the usual ``find_color`` dict plus ``settled`` (bool),
+    ``samples`` (int) and ``saccades`` (full-screen re-acquisitions).
 
-    If the target never settles within ``timeout`` the last seen locate is
-    returned with ``settled=False`` (or ``None`` if the colour was never found),
-    so the caller can decide whether to act on a still-moving target. Do not
-    poll faster than the animation's own cadence — ``interval`` should exceed a
-    frame/step so two samples can actually differ (大音希聲: read the page's own
-    rhythm, do not out-shout it)."""
+    Why pursuit, not a fixed-rate full-screen poll. A whole-screen ``find_color``
+    scan is *slow* (millions of pixels in Python), so a fixed poll samples the
+    page only a few times a second — slower than a 180 ms animation step. Then two
+    successive samples can land an even number of steps apart and read the *same*
+    spot, so the motion is **undersampled** (Nyquist) and it can "settle" mid-flight.
+    The eye does not solve this by staring at the whole wall faster; it *foveates* —
+    a tiny high-acuity window it can re-read tens of times a second — and **pursues**
+    the target, **saccading** only when the target leaves that window. So here:
+    acquire once with a full grab, then track inside a ``2·radius`` fovea via
+    :func:`foveate` at a fast poll. While the fovea keeps finding the target within
+    ``move_tol`` it is at rest; hold that for a wall-clock ``settle_frames·interval``
+    seconds and it is settled. The instant the target leaves the fovea — a teleport,
+    or a slide past the window — that *absence* is the motion signal (大音希聲: the
+    silence is the note): re-anchor with one full-screen saccade and keep pursuing.
+    Because the dense sampling is foveal (cheap) the sampler always out-paces the
+    motion, and because leaving the fovea resets the hold, it cannot false-settle
+    mid-motion — on either platform, with no cadence tuning to a particular display.
+
+    If the target never settles within ``timeout`` the last seen locate is returned
+    with ``settled=False`` (or ``None`` if the colour was never found)."""
     deadline = time.time() + timeout
-    prev: tuple[int, int] | None = None
-    stable = 0
+    hold = max(0.0, settle_frames * interval)
+    # Foveal polling is cheap, so sample fast — far above any UI step — but cap the
+    # rate so a stationary target does not busy-spin the CPU.
+    pursue_dt = min(0.02, interval / 4) if interval > 0 else 0.0
     samples = 0
+    saccades = 0
     last: dict | None = None
-    while time.time() < deadline:
+    anchor: tuple[int, int] | None = None
+    anchor_t = 0.0
+
+    def saccade() -> dict | None:  # full-screen re-acquire
+        nonlocal samples, saccades
         w, h, rgb = capture_rgb()
-        loc = find_color(target, tol=tol, rgb=rgb, size=(w, h))
         samples += 1
+        saccades += 1
+        return find_color(target, tol=tol, rgb=rgb, size=(w, h))
+
+    # Acquire: saccade until the target is first seen (or time out).
+    while time.time() < deadline:
+        loc = saccade()
         if loc is not None:
             last = loc
-            if prev is not None and abs(loc["x"] - prev[0]) <= move_tol \
-                    and abs(loc["y"] - prev[1]) <= move_tol:
-                stable += 1
-                if stable >= settle_frames:
-                    loc["samples"] = samples
-                    loc["settled"] = True
-                    return loc
-            else:
-                stable = 0
-            prev = (loc["x"], loc["y"])
-        time.sleep(interval)
+            anchor = (loc["x"], loc["y"])
+            anchor_t = time.time()
+            break
+        time.sleep(pursue_dt)
+
+    # Pursue: foveate around the last known spot; saccade on loss.
+    while anchor is not None and time.time() < deadline:
+        loc = foveate(target, anchor, radius=radius, tol=tol)
+        samples += 1
+        if loc is None:                      # left the fovea → it moved
+            loc = saccade()
+            if loc is None:
+                time.sleep(pursue_dt)
+                continue
+            last = loc
+            anchor = (loc["x"], loc["y"])
+            anchor_t = time.time()           # motion → restart the hold
+            time.sleep(pursue_dt)
+            continue
+        last = loc
+        if abs(loc["x"] - anchor[0]) <= move_tol \
+                and abs(loc["y"] - anchor[1]) <= move_tol:
+            if time.time() - anchor_t >= hold:
+                loc["samples"] = samples
+                loc["saccades"] = saccades
+                loc["settled"] = True
+                return loc
+        else:                                # drifted within the fovea → recenter
+            anchor = (loc["x"], loc["y"])
+            anchor_t = time.time()
+        time.sleep(pursue_dt)
+
     if last is not None:
         last["samples"] = samples
+        last["saccades"] = saccades
         last["settled"] = False
     return last
 

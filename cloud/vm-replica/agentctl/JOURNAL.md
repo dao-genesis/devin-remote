@@ -3618,6 +3618,7 @@ The two residuals are likewise harness-geometry/timing, not floor defects:
   of the fixture's 180 ms teleports apart and read the *same* spot, so the motion is
   undersampled (Nyquist) and it can "settle" early. It is cadence-dependent (it
   passes or fails with the exact per-iteration timing), not an input/capture error.
+  **(Resolved structurally in F143 by foveated pursuit — see below.)**
 - **R103 green centroid** — the check builds its target box from a *screen* fraction
   `(w//2, 0.6·h)` and expects the full-page green's centroid to land inside it, so it
   depends on where the window sits on the captured screen. `find_color` returns the
@@ -3626,10 +3627,12 @@ The two residuals are likewise harness-geometry/timing, not floor defects:
 The lesson recorded for the next rounds: these are **environment/harness** surfaces,
 to be met by running the suite at a viewport that matches the fixtures (field ≈
 canvas) rather than by a Linux-only threshold tweak that would risk the Windows
-reading the same primitives were tuned for. A genuine primitive hardening was
-attempted for R18 (a wall-clock hold + non-resonant poll) but, since a slow
-full-screen capture *undersamples* the motion outright, it did not reliably fix the
-aliasing in live trials, so it was **not shipped** — per the rule: grow a primitive
+reading the same primitives were tuned for. A first hardening was attempted for R18
+(a wall-clock hold + non-resonant poll); it did **not** fix the aliasing, because a
+slow *full-screen* capture undersamples the motion outright — jitter cannot add
+samples that were never taken. That dead end pointed at the real cause (sampling
+*rate*, not sampling *phase*) and is resolved properly in F143 below: do not poll
+the whole wall faster — foveate. The discipline held throughout: grow a primitive
 only from a reproduced failure, and only with a fix proven correct on *both* grounds.
 
 **Lesson (道法自然):** 上善若水，水善利萬物而不爭 — the highest good is like water,
@@ -3637,6 +3640,70 @@ which benefits all things by taking the shape of whatever holds it. The toolkit
 does not argue with the OS; it lets the OS be the vessel and flows the same way on
 each. 無為而無不為 — name the floor, do nothing above it that knows the floor's
 name, and it runs everywhere.
+
+---
+
+## F142 — the fovea: ROI capture (`capture_rgb(x,y,w,h)`, `foveate`)
+
+**Friction (reproduced, from F141's R18 residual).** Every read until now grabbed
+the *whole* screen. That is how a human would operate a GUI if the only way to see
+were to photograph the entire wall and scan every pixel — and it is exactly why
+`wait_stable` undersampled: a full-screen `find_color` is millions of pixels in
+Python, slow enough that the sampler runs slower than a 180 ms animation step, so it
+Nyquist-aliases the motion (F141, R18). Polling "the whole wall" faster is not the
+answer; the eye never did that.
+
+**Why this is structural (referencing the visual system).** A human retina is not
+uniform: a tiny central **fovea** carries nearly all the acuity over ~1–2° of arc,
+and the eye *aims* it where the signal is, re-reading that small patch many times a
+second while the periphery stays coarse. The cost of "looking" is thereby decoupled
+from the size of the scene. The OS floor already had the one call needed to give the
+toolkit a fovea — both `XGetImage` and GDI `BitBlt` take a *source rectangle* — it
+was simply never exposed. So F142 widens the leaf, on **both** backends identically,
+to `capture_rgb(x, y, w, h)`: grab only a sub-rectangle (clamped to the screen).
+
+`osctl.foveate(target, center, radius)` is the fovea built on it: grab a `2·radius`
+window around an expected point, locate inside it, and map the hit back to *screen*
+coordinates so it drops straight into `click`. And — 大音希聲 — its `None` is a
+signal, not a non-answer: target-not-in-window *means* the thing has left the fovea
+(it moved, or the aim was wrong), the cue to saccade.
+
+**Live (Linux, X11):** a 160×160 foveal grab is **~0.2 ms vs ~6.4 ms** for the
+full screen (**~41× faster**), and `foveate` returns the identical screen centroid
+as the full-screen `find_color` (`dx=dy=0`). Proven in `_probe_fovea.py`.
+
+## F143 — smooth pursuit + saccade: `wait_stable` rebuilt on the fovea
+
+**Friction.** The same R18 — a synthesised click on a moving target lands where the
+target *used to be*, and the F054 fixed-rate full-screen poll could falsely "settle"
+mid-flight (it failed live: `settled click hits … :: MISS`).
+
+**Why this is structural (referencing oculomotor control).** The eye tracks a moving
+thing with two complementary motions: **smooth pursuit** keeps the fovea on a target
+that stays roughly in view, and a fast **saccade** re-points it when the target jumps
+out of the foveal window. Loss of the target *from the fovea* is itself the cue to
+saccade. `wait_stable` is rebuilt exactly so: acquire once with a full grab, then
+*pursue* inside a fovea via `foveate` at a fast poll (foveal grabs are cheap, so the
+sampler finally out-paces the motion). While the fovea keeps the target within
+`move_tol` it is at rest — hold that for a wall-clock `settle_frames·interval` and it
+is settled. The instant the target leaves the fovea, that absence triggers one
+full-screen **saccade** to re-acquire and the hold restarts. Dense sampling is foveal
+(no undersampling); leaving the fovea resets the hold (cannot false-settle mid-motion).
+No cadence is tuned to any display — correct on **both** grounds by construction.
+
+**Live, A/B at the same geometry (1320):** committed F141 floor → `736/738`, failing
+`settled click hits the now-stationary target :: MISS` (R18 aliases). With F143 →
+`737/738`, R18 fully passes, the only residual the pre-existing R103 green-centroid
+(window-placement, untouched). At **maximised 1600**, R18 also passes (`samples=33`,
+`settled click … HIT`); the remaining failures there are purely the F141 OCR
+viewport-crop deltas. A focused 5× repro (`_probe_settle.py`) settles in ~2.0 s every
+time with `saccades≈5` (it re-acquires after each teleport and settles only at the
+true rest). So R18 is fixed at **both** viewports — a sampling-rate cure, not a phase
+hack: 反也者道之動 — the dead end (jitter) pointed straight at the way through (foveate).
+
+**Lesson (道法自然):** 為學者日益，聞道者日損 — the earlier instinct was to *add*
+timing machinery to a full-screen poll; the Tao was to *subtract* the scanned area
+until sampling was cheap enough to simply see faster. 無為而無不為.
 
 ---
 

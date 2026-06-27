@@ -211,13 +211,28 @@ class _BITMAPINFOHEADER(ctypes.Structure):
                 ("biClrImportant", wintypes.DWORD)]
 
 
-def capture_rgb() -> tuple[int, int, bytes]:
-    w, h = screen_size()
+def capture_rgb(x: int = 0, y: int = 0,
+                w: "int | None" = None, h: "int | None" = None
+                ) -> tuple[int, int, bytes]:
+    """Grab the whole screen, or a sub-rectangle (foveal window), as (w, h, rgb).
+
+    With no args this is the full-screen grab. Given x/y/w/h, ``BitBlt`` copies only
+    that source rectangle of the screen DC — a smaller, faster read for foveated,
+    high-rate sampling. The rectangle is clamped to the screen."""
+    sw, sh = screen_size()
+    if w is None:
+        w = sw
+    if h is None:
+        h = sh
+    x = max(0, min(int(x), sw - 1))
+    y = max(0, min(int(y), sh - 1))
+    w = max(1, min(int(w), sw - x))
+    h = max(1, min(int(h), sh - y))
     sdc = user32.GetDC(0)
     mdc = gdi32.CreateCompatibleDC(sdc)
     bmp = gdi32.CreateCompatibleBitmap(sdc, w, h)
     gdi32.SelectObject(mdc, bmp)
-    gdi32.BitBlt(mdc, 0, 0, w, h, sdc, 0, 0, SRCCOPY)
+    gdi32.BitBlt(mdc, 0, 0, w, h, sdc, x, y, SRCCOPY)
 
     bih = _BITMAPINFOHEADER()
     bih.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
