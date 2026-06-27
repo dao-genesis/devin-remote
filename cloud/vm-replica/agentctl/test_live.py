@@ -5383,6 +5383,58 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_mod_taps(b: Browser, offline: bool) -> None:
+    print("R95: OS-level mod_taps — one modifier held across a tap sequence (F131) — osctl")
+    # A page appends each letter typed while Shift is held to a buffer, and
+    # commits the buffer (to the title) on Shift's keyup. A loop of chord
+    # releases Shift after every letter, so each commits alone and only the last
+    # survives; mod_taps holds Shift across the whole run, so it commits as one
+    # word on a single keyup. The sequence twin of chord.
+    html = fixture("mod_taps.html",
+                   "<!doctype html><meta charset=utf-8><title>x</title>"
+                   "<style>html,body{margin:0;height:100%}#p{position:absolute;"
+                   "left:0;top:0;width:320px;height:220px;background:#22aa66}"
+                   "</style><div id=p></div><script>window.__buf='';"
+                   "window.__commits=0;addEventListener('keydown',function(e){"
+                   "if(e.shiftKey&&e.key.length===1){window.__buf+=e.key;"
+                   "e.preventDefault();}});addEventListener('keyup',"
+                   "function(e){if(e.key==='Shift'){window.__commits++;"
+                   "document.title='WORD:'+window.__buf;window.__buf='';}});"
+                   "</script>")
+
+    def focus() -> bool:
+        b.navigate(html)
+        time.sleep(0.5)
+        w, h, rgb = osctl.capture_rgb()
+        pad = osctl.find_color((34, 170, 102), tol=40, rgb=rgb, size=(w, h))
+        if pad is None or pad["count"] < 20000:
+            return False
+        osctl.click(pad["x"], pad["y"])  # give the document keyboard focus
+        time.sleep(0.2)
+        return True
+
+    A, B, C = 0x41, 0x42, 0x43
+    check("focused the typing pad by pixels", focus())
+    # Friction: a loop of chord releases Shift after each letter, so each commits
+    # on its own keyup and only the final letter remains.
+    for k in (A, B, C):
+        osctl.chord(osctl.VK_SHIFT, k)
+        time.sleep(0.05)
+    time.sleep(0.2)
+    check("a chord loop releases Shift between keys (3 separate commits)",
+          b.eval("window.__commits") == 3, repr(b.eval("window.__commits")))
+    check("the run never cohered under chord (only the last letter survived)",
+          b.title() == "WORD:C", b.title())
+    # Primitive: one sustained hold across the whole sequence commits once.
+    check("re-focused the pad for the held sequence", focus())
+    osctl.mod_taps(osctl.VK_SHIFT, keys=(A, B, C))
+    time.sleep(0.2)
+    check("mod_taps held Shift across the run (a single keyup commit)",
+          b.eval("window.__commits") == 1, repr(b.eval("window.__commits")))
+    check("the whole sequence cohered into one word (WORD:ABC)",
+          b.title() == "WORD:ABC", b.title())
+
+
 def round_glide(b: Browser, offline: bool) -> None:
     print("R94: OS-level glide — a button-less continuous mousemove path (F130) — osctl")
     # A path-dependent hover menu: the target only "opens" if the cursor's path
@@ -5848,7 +5900,7 @@ def main() -> int:
               round_scroll_to_phrase, round_drag_stroke, round_double_click,
               round_middle_click, round_mod_click, round_triple_click,
               round_press_hold, round_key_hold, round_mod_scroll,
-              round_mod_drag, round_glide]
+              round_mod_drag, round_glide, round_mod_taps]
     for r in rounds:
         try:
             r(b, offline)

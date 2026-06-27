@@ -304,6 +304,31 @@ def glide(x0: int, y0: int, x1: int, y1: int,
         time.sleep(pause)
 
 
+def mod_taps(*mods: int, keys: "tuple[int, ...] | list[int]" = (),
+             pause: float = 0.03) -> None:
+    """Hold modifier keys down across a whole *sequence* of taps (F131).
+
+    :func:`chord` presses a modifier with one key and releases both in the same
+    breath — perfect for a single combo. But some input is a *run* under one
+    sustained modifier: Shift held while several Arrow taps extend a selection
+    one cell at a time, Alt held across a digit sequence to compose a code, a
+    modifier held while several keys are struck and the result committed only on
+    the modifier's *keyup*. A loop of :func:`chord` releases the modifier between
+    every key, so each keystroke looks like its own combo and the run never
+    coheres. This holds each ``mods`` VK down, taps every key in ``keys`` in
+    order with the modifier still down, then releases the modifiers in reverse —
+    one continuous hold across the sequence. It is to :func:`chord` what a held
+    stroke is to a single press."""
+    for vk in mods:
+        key_down(vk)
+    time.sleep(0.01)
+    for k in keys:
+        tap(k)
+        time.sleep(pause)
+    for vk in reversed(mods):
+        key_up(vk)
+
+
 def scroll(dy: int = 0, dx: int = 0,
            x: int | None = None, y: int | None = None,
            pause: float = 0.01) -> None:
