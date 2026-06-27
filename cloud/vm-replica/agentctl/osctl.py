@@ -755,6 +755,53 @@ def wait_until_stable(bbox: tuple[int, int, int, int], settle: int = 3,
             "captures": captures, "elapsed": time.time() - start}
 
 
+def locate_change(before: bytes, after: bytes, size: tuple[int, int],
+                  tol: int = 12, min_count: int = 30) -> dict | None:
+    """Find *where* the screen changed between two captures (F135).
+
+    ``find_color`` needs the colour, ``locate_phrase`` needs the words — both
+    require knowing the target in advance. But after an action the thing that
+    appears is often unknown in both: a toast slides in at an unpredictable
+    corner, a badge lights up somewhere on a toolbar, a newly-selected row
+    highlights. You don't know its colour or text, only that *something* arrived.
+    This diffs ``before`` against ``after`` pixel-by-pixel (per-channel ``tol``,
+    so it ignores render noise the way :func:`region_diff` does) and returns the
+    centroid and bounding box of the changed pixels — ``{x, y, count, bbox}`` in
+    *screen* coordinates, exactly what :func:`click` consumes — or ``None`` if
+    nothing changed past ``min_count`` pixels. It closes the loop the read stack
+    left open: act, see *where* the world answered, then act there — without ever
+    naming the target. The localiser to :func:`region_diff`'s counter."""
+    w, h = size
+    if len(before) != len(after):
+        raise ValueError("captures differ in size")
+    sx = sy = n = 0
+    minx = miny = 1 << 30
+    maxx = maxy = -1
+    stride = w * 3
+    for y in range(h):
+        row = y * stride
+        for x in range(w):
+            i = row + x * 3
+            if (abs(before[i] - after[i]) > tol
+                    or abs(before[i + 1] - after[i + 1]) > tol
+                    or abs(before[i + 2] - after[i + 2]) > tol):
+                sx += x
+                sy += y
+                n += 1
+                if x < minx:
+                    minx = x
+                if x > maxx:
+                    maxx = x
+                if y < miny:
+                    miny = y
+                if y > maxy:
+                    maxy = y
+    if n < min_count:
+        return None
+    return {"x": sx // n, "y": sy // n, "count": n,
+            "bbox": (minx, miny, maxx, maxy)}
+
+
 def region_diff(a: bytes, b: bytes, tol: int = 0) -> dict:
     """Count how many pixels two equal-size RGB patches differ by (F134).
 
