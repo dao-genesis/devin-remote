@@ -3203,6 +3203,43 @@ mid-way is the whole of the deed.
 
 ---
 
+## F132 — `wait_until_stable`: wait for motion to end (R96)
+
+**Friction.** `wait_for_phrase` waits for *text* to appear, but much of a GUI
+moves without ever spelling anything: a panel slides in, a spinner turns, a list
+reflows, a fade settles. Act mid-transition and the target is still in flight —
+the click lands where the thing *was*, not where it comes to rest. The read side
+could wait for a *word* but had nothing that waited for *stillness*.
+
+**Mechanism.** Re-capture the ``bbox`` region every ``interval`` and compare it
+byte-for-byte to the previous capture; once ``settle`` consecutive captures are
+identical, the region is at rest. Returns ``{stable, changes, captures,
+elapsed}`` — ``changes`` proves the region really moved before it settled, so the
+caller can both wait *and* confirm something happened. Reuses ``crop_rgb`` (the
+existing region cutter), so no new capture machinery.
+
+**Primitive.** `wait_until_stable(bbox, settle=3, interval=0.08, timeout=6.0)`.
+
+**Live (R96):** a red block slides across a band for ~1.2s then rests. Two
+captures a beat apart just after the trigger differ (a single snapshot would read
+a position still in flight) and the title is not yet ``REST`` — the friction.
+`wait_until_stable` keeps sampling until the band stops, reports ``stable=True``
+with ``changes>=3`` (real motion observed), by which point ``REST`` is set; a
+fresh re-capture of the settled region then matches. `694/694 checks passed`,
+deterministic ×3.
+
+**Honest note.** Stability is judged by exact byte-equality of consecutive
+region captures — robust for a discrete settle (an element coming to a fixed
+rest), but a region with perpetual micro-motion (a blinking caret, a looping
+spinner) would never satisfy it, so `timeout` is a real bound and `stable=False`
+is a legitimate outcome, not only an error. The visual twin of `wait_for_phrase`
+honestly carries the same "bounded wait" contract.
+
+**Lesson (道法自然):** 重為輕根，靜為躁君 — stillness is the ruler of motion; to
+act well you first wait for the restless to come to rest, then move once, surely.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

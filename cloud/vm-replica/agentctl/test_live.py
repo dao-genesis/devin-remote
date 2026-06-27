@@ -5383,6 +5383,66 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_wait_until_stable(b: Browser, offline: bool) -> None:
+    print("R96: OS-level wait_until_stable — wait for a region to stop moving (F132) — osctl")
+    # A red block slides across a band for ~1.2s then rests. Sampling the band
+    # right after the trigger catches it mid-flight (two quick captures differ);
+    # wait_until_stable keeps sampling until the band stops changing, reports it
+    # settled with a positive change count, and only then is REST true. The
+    # visual twin of wait_for_phrase.
+    html = fixture("wait_stable.html",
+                   "<!doctype html><meta charset=utf-8><title>x</title>"
+                   "<style>html,body{margin:0;height:100%;background:#fff}"
+                   "#blk{position:absolute;top:160px;left:20px;width:80px;"
+                   "height:80px;background:#dd2222}</style><div id=blk></div>"
+                   "<script>var b=document.getElementById('blk');"
+                   "var t0=0,dur=1200,x0=20,x1=600,id=null;"
+                   "window.__go=function(){t0=performance.now();"
+                   "if(id)cancelAnimationFrame(id);(function step(now){"
+                   "var k=Math.min(1,(now-t0)/dur);b.style.left=(x0+(x1-x0)*k)"
+                   "+'px';if(k<1){id=requestAnimationFrame(step);}else{"
+                   "document.title='REST';}})(t0);};</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    blk = osctl.find_color((221, 34, 34), tol=40, rgb=rgb, size=(w, h))
+    check("located the block by pixels at rest-start",
+          blk is not None and blk["count"] > 3000,
+          str(blk and {k: blk[k] for k in ("x", "y", "count")}))
+    if blk is None:
+        return
+    y = blk["y"]
+    bbox = (0, max(0, y - 50), min(w - 1, 740), min(h - 1, y + 50))
+    # Fire the slide, then prove the friction in pure pixels: two captures a beat
+    # apart differ, so a single snapshot would read a position still in flight.
+    b.eval("window.__go()")
+    _w, _h, r1 = osctl.capture_rgb()
+    p1, _, _ = osctl.crop_rgb(r1, (_w, _h), bbox)
+    time.sleep(0.15)
+    _w, _h, r2 = osctl.capture_rgb()
+    p2, _, _ = osctl.crop_rgb(r2, (_w, _h), bbox)
+    check("the region is still moving just after the trigger (snapshots differ)",
+          p1 != p2, f"equal={p1 == p2}")
+    check("the slide has not rested yet (title not REST)",
+          b.title() != "REST", b.title())
+    # Primitive: wait until the region stops changing, then it is safe to read.
+    res = osctl.wait_until_stable(bbox, settle=3, interval=0.08, timeout=6.0)
+    check("wait_until_stable reports the region settled",
+          res["stable"] is True, repr(res))
+    check("it observed real motion before settling (changes>=3)",
+          res["changes"] >= 3, repr(res["changes"]))
+    check("the slide had finished by the time it settled (REST)",
+          b.title() == "REST", b.title())
+    # And once judged stable, a fresh capture matches the settled frame.
+    _w, _h, r3 = osctl.capture_rgb()
+    p3, _, _ = osctl.crop_rgb(r3, (_w, _h), bbox)
+    time.sleep(0.15)
+    _w, _h, r4 = osctl.capture_rgb()
+    p4, _, _ = osctl.crop_rgb(r4, (_w, _h), bbox)
+    check("the settled region stays unchanged on re-capture",
+          p3 == p4, f"equal={p3 == p4}")
+
+
 def round_mod_taps(b: Browser, offline: bool) -> None:
     print("R95: OS-level mod_taps — one modifier held across a tap sequence (F131) — osctl")
     # A page appends each letter typed while Shift is held to a buffer, and
@@ -5900,7 +5960,8 @@ def main() -> int:
               round_scroll_to_phrase, round_drag_stroke, round_double_click,
               round_middle_click, round_mod_click, round_triple_click,
               round_press_hold, round_key_hold, round_mod_scroll,
-              round_mod_drag, round_glide, round_mod_taps]
+              round_mod_drag, round_glide, round_mod_taps,
+              round_wait_until_stable]
     for r in rounds:
         try:
             r(b, offline)
