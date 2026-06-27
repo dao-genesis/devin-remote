@@ -1,0 +1,64 @@
+name: Sync console host (independent-account Pages)
+
+# 道法自然 · 首字节宿主去中心化持久化: 往 main 推 engine 静态壳(console.html 等)即自动镜像到
+# 独立中立账号 hdougle/dao-console 的 gh-pages → https://hdougle.github.io/dao-console/console.html
+# 自随 main 恒鲜。该宿主是默认首字节引导宿主(P2P_WEB_DEFAULT), 彻底脱离项目方个人 GitHub 账号;
+# 项目方自身 Pages 作等价独立账号冗余镜像(自随 main 自动更新)。两个 github.io 互为账号冗余、皆经
+# Fastly CDN 国内可达、CDN 无限并发, 任一账号/仓库被下架另一仍服务全体用户。
+#
+# 需在仓库 Secrets 配置:
+#   HDOUGLE_PAGES_TOKEN —— hdougle 账号的 classic PAT(repo scope), 仅用于推送 dao-console 静态镜像。
+# 缺该 secret 时本流程优雅跳过(不阻断合并); 配上即自动同步。
+# 注: 该流程为「尽力镜像」—— 推送失败(如该独立账号邮箱未验证而被 GitHub 拦截 push)只告警不红 CI;
+#   失败不影响主路: 项目方自身 Pages 为恒鲜失败兜底, 客户端 _durableMirrors 失败链自动转该镜像。
+#   一旦该账号邮箱验证通过, 后续推送即自动恢复, 该独立账号宿主随 main 恒鲜。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "addons/rt-flow-app/app/src/main/assets/engine/**"
+      - ".github/workflows/sync-console-host.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-console-host
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      HDOUGLE_PAGES_TOKEN: ${{ secrets.HDOUGLE_PAGES_TOKEN }}
+      DEST_REPO: hdougle/dao-console
+      SRC: addons/rt-flow-app/app/src/main/assets/engine
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — skip if token missing
+        id: guard
+        run: |
+          if [ -z "$HDOUGLE_PAGES_TOKEN" ]; then
+            echo "no_token=1" >> "$GITHUB_OUTPUT"
+            echo "::warning::HDOUGLE_PAGES_TOKEN 未配置, 跳过独立账号宿主同步。"
+          else
+            echo "no_token=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mirror engine static shell → ${{ env.DEST_REPO }} gh-pages
+        if: steps.guard.outputs.no_token == '0'
+        run: |
+          set -e
+          rm -rf /tmp/dao-host && mkdir -p /tmp/dao-host
+          cp "$SRC"/*.html "$SRC"/*.js /tmp/dao-host/
+          touch /tmp/dao-host/.nojekyll   # 让 Pages 原样服务下划线文件(如 __rn.js)
+          cd /tmp/dao-host
+          git init -q && git checkout -q -b gh-pages
+          git -c user.email=dao-bot@users.noreply.github.com -c user.name=dao-console-sync add -A
+          git -c user.email=dao-bot@users.noreply.github.com -c user.name=dao-console-sync \
+            commit -q -m "sync console host from ${GITHUB_REPOSITORY}@${GITHUB_SHA::12}"
+          git push -q --force "https://x-access-token:${HDOUGLE_PAGES_TOKEN}@github.com/${DEST_REPO}.git" gh-pages
+          echo "::notice::已同步 console.html 等静态壳到 https://hdougle.github.io/dao-console/console.html"
