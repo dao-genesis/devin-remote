@@ -59,6 +59,10 @@ _TOGGLE = 3           # IUIAutomationTogglePattern::Toggle
 _TOGGLE_STATE = 4     # IUIAutomationTogglePattern::get_CurrentToggleState
 _UIA_TogglePatternId = 10015
 _TOGGLE_NAMES = {0: "off", 1: "on", 2: "indeterminate"}
+# IUIAutomationSelectionItemPattern vtable indices
+_SELITEM_SELECT = 3       # IUIAutomationSelectionItemPattern::Select
+_SELITEM_ISSELECTED = 6   # IUIAutomationSelectionItemPattern::get_CurrentIsSelected
+_UIA_SelectionItemPatternId = 10010
 # IUIAutomationElementArray vtable indices
 _ARR_LEN = 3    # get_Length
 _ARR_GET = 4    # GetElement
@@ -517,5 +521,55 @@ def uia_toggle(win: int, name=None, ctype=None) -> bool:
             return _vcall(tp, _TOGGLE, ctypes.c_long, []) == 0
         finally:
             _release(tp)
+    finally:
+        _release(el)
+
+
+def uia_select(win: int, name=None, ctype=None) -> bool:
+    """Select an item found by meaning (a radio button, a list option, a tab) via the
+    UIA SelectionItemPattern — the semantic *choose-one* verb, no mouse, no pixels.
+    Returns True if Select was issued. Like :func:`uia_toggle`, it reports only that
+    it acted; read the settled truth with :func:`uia_is_selected` (selection settles
+    asynchronously across the a11y bridge in modern apps)."""
+    uia = _get_uia()
+    if not uia:
+        return False
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return False
+    try:
+        sp = _pattern(el, _UIA_SelectionItemPatternId)
+        if not sp:
+            return False
+        try:
+            return _vcall(sp, _SELITEM_SELECT, ctypes.c_long, []) == 0
+        finally:
+            _release(sp)
+    finally:
+        _release(el)
+
+
+def uia_is_selected(win: int, name=None, ctype=None):
+    """Read whether an item found by meaning is selected, via the UIA
+    SelectionItemPattern — the read dual of :func:`uia_select`. Returns True/False, or
+    None if the element has no SelectionItemPattern."""
+    uia = _get_uia()
+    if not uia:
+        return None
+    el = _find_ptr(uia, win, name, ctype)
+    if not el:
+        return None
+    try:
+        sp = _pattern(el, _UIA_SelectionItemPatternId)
+        if not sp:
+            return None
+        try:
+            v = ctypes.c_int()
+            if _vcall(sp, _SELITEM_ISSELECTED, ctypes.c_long,
+                      [ctypes.POINTER(ctypes.c_int)], ctypes.byref(v)) != 0:
+                return None
+            return bool(v.value)
+        finally:
+            _release(sp)
     finally:
         _release(el)

@@ -1319,6 +1319,51 @@ def round_uia_focus(b: Browser, offline: bool) -> None:
         time.sleep(0.3)
 
 
+def round_uia_select(b: Browser, offline: bool) -> None:
+    print("R133: choose an item by MEANING via UIA SelectionItemPattern (F172) — osctl")
+    # Toggle flips a two-state checkbox; selection is the choose-ONE-of-many verb —
+    # a radio button, a list option, a tab. uia_select issues the choice through the
+    # SelectionItemPattern; uia_is_selected reads the settled truth. Same act/read
+    # split as toggle (F171): selection settles asynchronously across the a11y bridge,
+    # so the action reports only that it acted.
+    if not sys.platform.startswith("win"):
+        print("  (skip R133: UIA is the Windows accessibility tree)")
+        return
+    if not hasattr(osctl, "uia_select"):
+        check("osctl exposes uia_select", False, "missing primitive")
+        return
+
+    ch = next((w for w in osctl.list_windows()
+               if "Chrome" in (w.get("title") or "")
+               or "Chromium" in (w.get("title") or "")), None)
+    if not ch:
+        print("  (no Chrome window present — select check skipped)")
+        return
+    b.navigate("data:text/html,<input type=radio name=g id=r1><label for=r1>Alpha</label>"
+               "<input type=radio name=g id=r2><label for=r2>Beta</label>")
+    time.sleep(1.2)
+    sel0 = None
+    for _ in range(10):  # Chrome turns on its a11y tree lazily
+        sel0 = osctl.uia_is_selected(ch["id"], "Beta", "RadioButton")
+        if sel0 is not None:
+            break
+        time.sleep(0.5)
+    check("uia_is_selected reads the radio's initial unselected state",
+          sel0 is False, f"sel0={sel0!r}")
+    issued = osctl.uia_select(ch["id"], "Beta", "RadioButton")
+    time.sleep(0.4)
+    checked = b.eval("document.getElementById('r2').checked")
+    check("uia_select chooses the radio by meaning (DOM .checked confirms the choice "
+          "really happened)", issued is True and checked is True,
+          f"issued={issued} checked={checked}")
+    settled = osctl.uia_is_selected(ch["id"], "Beta", "RadioButton")
+    check("uia_is_selected reports the settled selected state after the choice "
+          "(read dual; action and read separated to dodge the async-update race)",
+          settled is True, f"settled={settled!r}")
+    b.navigate("about:blank")
+    time.sleep(0.3)
+
+
 def round_uia_toggle(b: Browser, offline: bool) -> None:
     print("R132: flip a checkbox by MEANING via UIA TogglePattern (F171) — osctl")
     # The modern-app action set so far: invoke (press a button), set_value (write a
@@ -8499,7 +8544,7 @@ def main() -> int:
               round_pixel, round_window_text, round_set_window_text,
               round_control_at, round_find_control, round_menu, round_uia,
               round_uia_find, round_uia_value, round_uia_drive, round_uia_focus,
-              round_uia_text, round_uia_toggle,
+              round_uia_text, round_uia_toggle, round_uia_select,
               round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,

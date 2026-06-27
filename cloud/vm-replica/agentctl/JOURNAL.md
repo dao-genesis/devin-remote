@@ -4984,6 +4984,38 @@ honest source of the post-state.
 
 ---
 
+## F172 — the selection verb: UIA SelectionItemPattern (`uia_select`/`uia_is_selected`, R133)
+
+**Ground: Windows Server 2022. Chrome radio buttons.**
+
+**Friction.** Toggle (F171) flips a two-state checkbox; but choosing *one of many* —
+a radio button, a list option, a tab — is a different verb the floor lacked. There
+was no semantic way to pick one short of computing its pixel and clicking.
+
+**Primitives (the same act/read split the toggle race taught).**
+- `osctl.uia_select(win, name, ctype)` → True if `Select` was issued
+  (SelectionItemPattern `Select`, vtable 3).
+- `osctl.uia_is_selected(win, name, ctype)` → True / False / None (no pattern)
+  (SelectionItemPattern `get_CurrentIsSelected`, vtable 6) — the settled read dual.
+
+The action returns only that it acted; selection (like toggle) settles
+asynchronously across the a11y bridge, so the post-state is read separately.
+
+**Live:** Chrome `<input type=radio>` Alpha/Beta; `uia_is_selected("Beta")` → False;
+`uia_select("Beta")` → True, DOM `r2.checked` → True; settled
+`uia_is_selected("Beta")` → True. R133 (`round_uia_select`, 3 checks);
+`_probe_uiaselect.py` standalone. Full suite **836/836** clean.
+
+**Lesson (道法自然).** 多藏必厚亡 — *the more hoarded, the greater the loss.* A checkbox
+and a radio look alike, and a naive floor would force one verb (Toggle) onto both;
+but a radio is not a toggle — it is a *choice within a set*, and pressing it does not
+"flip" it, it *elects* it (and de-elects its siblings). Honoring the distinct pattern
+the platform already publishes (SelectionItem, not Toggle) is 因而制之 — model after
+what is, do not impose. The verb set grows by the world's own joints, not the floor's
+convenience: press / write / aim / flip / **choose**.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

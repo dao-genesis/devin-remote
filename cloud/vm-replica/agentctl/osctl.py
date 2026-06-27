@@ -174,6 +174,12 @@ uia_text = getattr(_be, "uia_text", lambda win, name=None, ctype=None, max_len=2
 # read dual; "on"/"off"/"indeterminate"). False/"" where no TogglePattern.
 uia_toggle = getattr(_be, "uia_toggle", lambda win, name=None, ctype=None: False)
 uia_toggle_state = getattr(_be, "uia_toggle_state", lambda win, name=None, ctype=None: "")
+# UIA select (F172): choose an item (radio button, list option, tab) by meaning via
+# SelectionItemPattern (returns True if Select was issued) — the semantic choose-one
+# verb, with uia_is_selected (True/False/None) as its settled read dual. As with
+# toggle, selection settles asynchronously, so the action only reports that it acted.
+uia_select = getattr(_be, "uia_select", lambda win, name=None, ctype=None: False)
+uia_is_selected = getattr(_be, "uia_is_selected", lambda win, name=None, ctype=None: None)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the
