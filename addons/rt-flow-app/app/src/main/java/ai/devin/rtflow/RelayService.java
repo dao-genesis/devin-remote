@@ -1180,7 +1180,12 @@ public class RelayService extends Service {
             }, "rtflow-verify").start();
         }, 1500);
     }
-    /** 轻量 GET 探测: 2xx/3xx/4xx 视为隧道在线; 5xx(含 localhost.run "no tunnel here" 503)或异常=死。 */
+    /** 隧道「真活」探测 (验身·非验通): GET <url>/health 必须 200 且响应体带本机 LocalServer 身份标记
+     *  ("rtflow-local-tunnel")。
+     *  道·名可名也非恒名也: 快速隧道(trycloudflare/lhr.life)URL 重启即换、且常被回收后由陌生 nginx 接管 ——
+     *  那台陌生服务器对 /health 多半回 405(Method Not Allowed)/200(它自己的首页) 等"假活"码。旧逻辑
+     *  "2xx/3xx/4xx 即在线"会把这种死链当活, 抢进 publicUrls 污染在线判定(用户所述「失活临时隧道抢答 405
+     *  污染在线判定」之根)。改为验身: 唯有回我们自己 /health 的身份标记才算真活, 陌生服务器一律判死。 */
     private boolean probeUrl(String url, int timeoutMs) {
         java.net.HttpURLConnection c = null;
         try {
@@ -1188,8 +1193,12 @@ public class RelayService extends Service {
             c.setConnectTimeout(timeoutMs); c.setReadTimeout(timeoutMs);
             c.setInstanceFollowRedirects(false);
             c.setRequestMethod("GET");
-            int code = c.getResponseCode();
-            return code >= 200 && code < 500;
+            if (c.getResponseCode() != 200) return false;   // 非 200 一律死 (陌生 nginx 405 / CF 边缘 530 / 503…)
+            java.io.InputStream is = c.getInputStream();
+            byte[] buf = new byte[512]; int n = 0, r;
+            while (n < buf.length && (r = is.read(buf, n, buf.length - n)) > 0) n += r;
+            String body = new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8);
+            return body.contains("rtflow-local-tunnel");   // 验身: 必是本机 LocalServer 的 /health, 陌生服务器无此标记
         } catch (Exception e) { return false; }
         finally { if (c != null) try { c.disconnect(); } catch (Exception ignored) {} }
     }
