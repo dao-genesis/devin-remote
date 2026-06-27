@@ -231,14 +231,19 @@
     //  仅看顶层 status(常年 suspended/RUNNING) 会漏掉 Devin 官方"需你处理"信号, 导致已卡住对话被判正常。
     trackStuck: async function(){
       function lsc(s){ var x=s&&s.latest_status_contents; if(!x)return null; if(typeof x==="object")return x; try{return JSON.parse(x);}catch(e){return null;} }
+      // 额度耗尽官方信号 (逆流 latest_status_contents.reason, 与 switch.html QUOTA_RE 同源·正本清源)
+      var QUOTA_RE=/out_of_quota|usage_limit|insufficient|overage|exceeded|\bquota\b|out of (acu|credit)|credit.*exhaust|no.*credit/i;
       var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var hits=[];
       for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.listSessions(accs[i], 50); if(!r.ok)continue;
         (r.sessions||[]).forEach(function(s){
           var o=lsc(s); var uar=o&&o.user_action_required;
           var actionReq=(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null");
           var en=String((o&&o.enum)||s.status_enum||s.status||"").toLowerCase();
+          // 额度耗尽信号最高优先 (即便 finished/suspended 也单列, 绝不混入完成/卡住; 反者道之动核各底层字段)
+          var qsig=String((o&&o.reason)||"")+" "+String(s.status||"")+" "+en+" "+String(s.activity_status||"")+" "+String(s.current_activity||"");
           var reason="";
-          if(actionReq) reason="action_required";
+          if(QUOTA_RE.test(qsig)) reason="quota";
+          else if(actionReq) reason="action_required";
           else if(/block|stuck|fail|error/.test(en)) reason="blocked";
           else if(/await|wait|ask|question|input|need/.test(en)) reason="awaiting";
           else if(/run|working|active|execut/.test(en) && !/finish|complet|suspend|stopped|expired|archiv|cancel/.test(en)) reason="running";
@@ -969,6 +974,45 @@
     function savePrev(o){ try { localStorage.setItem(PREV_KEY, JSON.stringify(o)); } catch(e){} }
     function notify(tag, title, text){ try { if (N.notifyGlobal) N.notifyGlobal(String(tag), String(title), String(text)); } catch(e){} }
     function watchEnabled(){ try { var v = localStorage.getItem("rtflow.convwatch.off"); return v !== "1"; } catch(e){ return true; } }
+    // ── 额度通知·真·系统推送 (与对话卡座同款 notifyGlobal: 锁屏/切后台亦达; 来源精确·按账号节流·不刷屏) ──
+    var QKEY = "rtflow.convwatch.quota";          // email -> {ts, cnt}  额度耗尽节流
+    var QLKEY = "rtflow.convwatch.qlow";          // email -> {ts}       额度即将耗尽节流
+    var QUOTA_THROTTLE = 30*60*1000;              // 同账号「已耗尽」通知 >=30 分钟一次 (仍耗尽则定时提醒一次, 不扰民)
+    var QLOW_THROTTLE = 6*3600*1000;              // 同账号「即将耗尽」预警 >=6 小时一次
+    var QLOW_PCT = 10;                            // 日额度剩余 <= 此值且无 extra usage 缓冲 -> 即将耗尽
+    function _ls(k){ try{ return JSON.parse(localStorage.getItem(k)||"{}")||{}; }catch(e){ return {}; } }
+    function _ss(k,o){ try{ localStorage.setItem(k, JSON.stringify(o)); }catch(e){} }
+    // 额度耗尽: 按账号聚合 N 个休眠对话, 跃迁(从无到有/数目增加)或超节流窗即真推送一次; 恢复(本轮无)即清, 下次再耗尽立报。
+    function quotaWatch(byAcct, now){
+      var q = _ls(QKEY), nq = {};
+      Object.keys(byAcct).forEach(function(email){
+        var cnt = byAcct[email]|0; if(cnt<=0) return;
+        var p = q[email], transition = !p || (p.cnt|0) < cnt, stale = p && (now - (p.ts||0) >= QUOTA_THROTTLE);
+        if (transition || stale) {
+          var who = String(email).split("@")[0];
+          notify("quota-" + email, "\uD83D\uDED1 " + who + " \u989d\u5ea6\u5df2\u8017\u5c3d", cnt + " \u4e2a\u5bf9\u8bdd\u56e0\u914d\u989d\u8017\u5c3d\u4f11\u7720, \u8bf7\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+          nq[email] = { ts: now, cnt: cnt };
+        } else { nq[email] = { ts: (p&&p.ts)||now, cnt: cnt }; }
+      });
+      _ss(QKEY, nq);   // 未出现在本轮的账号自动清出 -> 视为恢复
+    }
+    // 额度即将耗尽: 主动预警 (仅当 quota.dPct 为数值且 ∈(0,阈值] 且无 extra usage 美金缓冲 -> 杜绝 stale/未知误报)。
+    function quotaLowWatch(accs, now){
+      var s = _ls(QLKEY), ns = {};
+      accs.forEach(function(a){
+        var qd = a.quota; if(!qd || typeof qd.dPct !== "number") return;
+        var pct = qd.dPct, ovg = (typeof qd.overageDollars === "number") ? qd.overageDollars : 0;
+        if(pct>0 && pct<=QLOW_PCT && ovg<=0){
+          var p = s[a.email], last = (p&&p.ts)||0;
+          if(now-last >= QLOW_THROTTLE){
+            var who = String(a.email||a.id).split("@")[0];
+            notify("qlow-" + a.email, "\u26a0\ufe0f " + who + " \u989d\u5ea6\u5373\u5c06\u8017\u5c3d", "\u65e5\u989d\u5ea6\u4ec5\u5269 " + pct + "%, \u5efa\u8bae\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+            ns[a.email] = { ts: now };
+          } else ns[a.email] = { ts: last };
+        }
+      });
+      _ss(QLKEY, ns);
+    }
     async function tick(){
       if (!watchEnabled()) return;
       var accs = []; try { accs = loadAcc().filter(function(x){ return x.auth1 && x.orgId; }); } catch(e){}
@@ -977,9 +1021,11 @@
       if (!r || !r.ok || !Array.isArray(r.sessions)) return;
       var prev = loadPrev(), next = {}, now = Date.now();
       // 本轮 active(running/awaiting) 与 attention(action_required/blocked) 集合
-      var cur = Object.create(null);
+      var cur = Object.create(null), quotaByAcct = Object.create(null);
       r.sessions.forEach(function(s){
         var sid = s.sid; if (!sid) return;
+        // 额度耗尽单独聚合 (仍登记进 cur·phase=quota -> 既不误判「已结束」, 又不触发卡住通知)。
+        if (s.reason === "quota") { cur[sid] = { phase: "quota", title: s.title || sid, email: s.email || "" }; var k = s.email || "?"; quotaByAcct[k] = (quotaByAcct[k]||0) + 1; return; }
         var phase = (s.reason === "action_required" || s.reason === "blocked" || s.reason === "awaiting") ? "stuck" : "active";
         cur[sid] = { phase: phase, title: s.title || sid, email: s.email || "", reason: s.reason, label: s.actionLabel };
       });
@@ -999,6 +1045,9 @@
         }
       });
       savePrev(next);
+      // 额度通知 (真·系统推送, 与对话卡座同款): 已耗尽聚合 + 即将耗尽预警。
+      try { quotaWatch(quotaByAcct, now); } catch(e){}
+      try { quotaLowWatch(accs, now); } catch(e){}
     }
     setTimeout(function(){ tick(); setInterval(tick, POLL_MS); }, FIRST_DELAY);
     log("convwatch armed (对话追踪·全局通知, 轮询 " + (POLL_MS/1000) + "s)");
