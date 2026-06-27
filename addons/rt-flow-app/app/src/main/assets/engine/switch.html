@@ -795,12 +795,22 @@ function _loadTrk(){ try{ var o=JSON.parse(localStorage.getItem("rtflow.trk")||"
 //   镜像到任意浏览器网页版, 不再「各存各的 localStorage·打开即全新空环境」。与账号库(restoreAccountsFromVault) 同机制。
 //   合并: 按账号 email 各带 ts, 新者胜(谁刚轮询过谁权威); 账号转空闲写新 ts 墓碑(total:0)→ 跨设备同步熄灯, 绝不被旧「运行」回放覆盖。
 var _trkVaultT=0;
+// 金库写入前压扁单条: 闲置号只留熄灯所需(total:0+ts), 活跃号裁到展示所需(≤6 条·标题截断) →
+//   封装后体积稳低于中继单响应上限(RELAY_MAX_B64=48KB), 使对话追踪经 ntfy mesh 零-Worker 亦必达,
+//   不再因 138 号堆满冗余墓碑而逼近上限触发 413 → 网页间歇"无活跃对话"。
+function _trkSlim(s){
+  if(!s) return s;
+  if((s.total|0)<=0) return { total:0, ts:s.ts||0 };
+  var items=(s.items||[]).slice(0,6).map(function(it){ return { uuid:it.uuid, title:String(it.title||"").slice(0,48), cls:it.cls, _stuck:it._stuck }; });
+  return { no:s.no, who:s.who, running:s.running, awaiting:s.awaiting, blocked:s.blocked, exhausted:s.exhausted||0, total:s.total, items:items, ts:s.ts||0 };
+}
 function _mirrorTrkToVault(){
+  if(window.__rnReady) return;   // 网页镜像端只读金库·绝不回写: 手机原生轮询才是对话追踪权威; 网页自身慢轮/空轮若回写会以新 ts 盖掉手机真数据 → 间歇空白。
   try{ if(!N.vaultSave) return; clearTimeout(_trkVaultT);
     _trkVaultT=setTimeout(function(){ try{
       var vault={}; try{ if(N.vaultLoad){ var raw=N.vaultLoad("rtflow.trk"); if(raw) vault=JSON.parse(raw)||{}; } }catch(e){}
       var now=Date.now();
-      Object.keys(_trk).forEach(function(e){ var s=_trk[e]; if(!s) return; var v=vault[e]; if(!v || (s.ts||0)>=(v.ts||0)) vault[e]=s; });   // 本机新于金库 → 推上去 (read-modify-write 合并, 不抹掉他设备更鲜的号)
+      Object.keys(_trk).forEach(function(e){ var s=_trk[e]; if(!s) return; var v=vault[e]; if(!v || (s.ts||0)>=(v.ts||0)) vault[e]=_trkSlim(s); });   // 本机新于金库 → 压扁后推上去 (read-modify-write 合并, 不抹掉他设备更鲜的号)
       Object.keys(vault).forEach(function(e){ var v=vault[e]; if(!v||now-(v.ts||0)>=TRK_HOLD_MS) delete vault[e]; });                  // 陈旧/过期墓碑剔除, 金库不肿
       N.vaultSave("rtflow.trk", JSON.stringify(vault));
     }catch(e){} }, 2500);
