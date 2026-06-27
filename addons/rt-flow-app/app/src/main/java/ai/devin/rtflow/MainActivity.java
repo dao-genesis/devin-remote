@@ -4738,6 +4738,43 @@ public class MainActivity extends AppCompatActivity {
         }
     }
     private String appVersionName() { try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception e) { return "?"; } }
+
+    /** 公网中继 (RelayService.nativeInvoke) 落到 default 时, 把「值返回型」原生方法委派到本体真桥,
+     *  让经 GitHub Pages / route-C 打开的归一网页与手机 APK 1:1 取到同一权威源 (版本/用户脚本/取数指引/GM 存储)。
+     *  纯设备/原生UI 动作仍由 RelayService 自身的安全默认拦截, 不在此暴露。
+     *  注意: 含 httpGetText 的方法 (usInstall/usCheckUpdate) 仅可在非主线程调用; RelayService 工作线程满足。 */
+    public Object relayNativeInvoke(String m, org.json.JSONArray a) {
+        if (m == null) return null;
+        Bridge nb = new Bridge(null);
+        UserScriptBridge ub = new UserScriptBridge(null);
+        try {
+            switch (m) {
+                case "appVer": return nb.appVer();
+                // ── 用户脚本板块 (userscripts.html) ──
+                case "usList": return nb.usList();
+                case "usGetSource": return nb.usGetSource(rniStr(a, 0));
+                case "usSaveCode": return nb.usSaveCode(rniStr(a, 0));
+                case "usInstall": return nb.usInstall(rniStr(a, 0));
+                case "usDelete": nb.usDelete(rniStr(a, 0)); return null;
+                case "usToggle": nb.usToggle(rniStr(a, 0), rniBool(a, 1)); return null;
+                case "usToggleMany": nb.usToggleMany(rniStr(a, 0), rniBool(a, 1)); return null;
+                case "usDeleteMany": nb.usDeleteMany(rniStr(a, 0)); return null;
+                case "usExportAll": return nb.usExportAll();
+                case "usImport": return nb.usImport(rniStr(a, 0));
+                case "usCheckUpdate": return nb.usCheckUpdate(rniStr(a, 0));
+                // ── 油猴 GM_* 跨页存储 ──
+                case "gmGet": return ub.gmGet(rniStr(a, 0), rniStr(a, 1));
+                case "gmSet": ub.gmSet(rniStr(a, 0), rniStr(a, 1), rniStr(a, 2)); return null;
+                case "gmDel": ub.gmDel(rniStr(a, 0), rniStr(a, 1)); return null;
+                case "gmList": return ub.gmList(rniStr(a, 0));
+                // ── daopan 下载包内「取数指引.md」 ──
+                case "accessGuideMd": return nb.accessGuideMd(rniStr(a, 0), rniStr(a, 1), rniStr(a, 2));
+                default: return null;
+            }
+        } catch (Throwable t) { return null; }
+    }
+    private static String rniStr(org.json.JSONArray a, int i) { return a != null && i < a.length() ? a.optString(i, "") : ""; }
+    private static boolean rniBool(org.json.JSONArray a, int i) { return a != null && i < a.length() && a.optBoolean(i, false); }
     private int appVersionCode() {
         try {
             android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
