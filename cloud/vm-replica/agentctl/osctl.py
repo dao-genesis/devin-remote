@@ -89,6 +89,12 @@ terminate_window = getattr(_be, "terminate_window", lambda win: False)
 # corrupt all later typing undetectably. The read dual of key_down/key_up. Empty
 # state on an older floor.
 key_state = getattr(_be, "key_state", lambda vk: {"down": False, "toggled": False})
+# Read which mouse buttons are pressed now + cursor pos: mouse_button could press
+# /release but nothing could read the buttons, so a drag whose button-up was lost
+# left the floor silently stuck pressed. The button-read dual of mouse_button,
+# completing the input floor alongside key_state. Empty on an older floor.
+mouse_state = getattr(_be, "mouse_state", lambda: {"left": False, "right": False,
+                                                   "middle": False, "pos": (0, 0)})
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

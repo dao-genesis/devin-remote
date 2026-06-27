@@ -4388,6 +4388,46 @@ keyboard was the last actuator still typing into the dark.
 
 ---
 
+## F158 — reading the floor's own mouse buttons; the input floor closes (`mouse_state`, R119)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** F157 gave the keyboard its read; the mouse *button* was the last
+input **write** with no read. `mouse_button` could press and release, but nothing
+could ask "is a button down right now?" A drag is press → move → release; if the
+release event is ever lost (an exception between the down and the up, a gesture
+abandoned mid-way), the button stays logically held and **every later move
+becomes an unwanted drag** — selecting text, dragging icons, smearing the desktop
+— invisible to the floor until something breaks far downstream. The button had no
+mirror.
+
+**Primitive.**
+- `osctl.mouse_state()` → `{"left","right","middle": bool, "pos": (x,y)}`. Win32
+  reads each button via `GetAsyncKeyState(VK_LBUTTON/…)`; X11 reads the live button
+  bits from `XQueryPointer`'s mask. The button-read dual of `mouse_button`, and it
+  folds in the cursor position so one call answers "where is the pointer and what
+  is it holding?"
+
+**Live (Windows, pressed at a neutral corner, always released):**
+
+| check | result |
+|---|---|
+| at rest | left **up**, pos reported |
+| while left held | left **down**, right/middle up |
+| after release | left **up** (a stuck drag would show here) |
+
+R119 (`round_mouse_state`, 3 checks); `_probe_mousestate.py` standalone (5/5). Full
+suite **785/785** clean.
+
+**Lesson (道法自然).** 知人者智，自知者明 — and now the self-knowing is complete.
+Across F151–F158 every actuator finally grew its mirror: the stack (`window_under`),
+focus (`active_window`), window state/identity/end, the keyboard (`key_state`), and
+now the mouse (`mouse_state`). 反者道之動 — the Way moves by opposites: a power that
+only acts is half a power; only when each write can be read does the floor act with
+open eyes instead of in the dark. The input floor is whole.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

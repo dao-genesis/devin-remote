@@ -1260,6 +1260,40 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_mouse_state(b: Browser, offline: bool) -> None:
+    print("R119: READ which mouse buttons are pressed right now (F158) — osctl")
+    # F157 gave the keyboard its read; the mouse button was the last input WRITE
+    # with no read. mouse_button could press and release, but nothing could ask
+    # "is a button down?". So a drag whose button-up was lost left the floor
+    # silently stuck in a pressed state — every later move became an unwanted drag,
+    # invisible until something broke far downstream. mouse_state() is the
+    # button-read dual: {"left","right","middle": bool, "pos": (x,y)}. This closes
+    # the input floor — every actuator (keyboard, mouse) now has its mirror read.
+    if not hasattr(osctl, "mouse_state"):
+        check("osctl exposes mouse_state", False, "missing primitive")
+        return
+    osctl.move(3, 3)  # neutral corner — never press where it could hit live UI
+    time.sleep(0.2)
+    try:
+        s0 = osctl.mouse_state()
+        check("mouse_state reports buttons up at rest and a cursor position",
+              s0.get("left") is False and isinstance(s0.get("pos"), tuple),
+              f"left={s0.get('left')} pos={s0.get('pos')}")
+        osctl._mouse_button("left", True)
+        time.sleep(0.15)
+        s1 = osctl.mouse_state()
+        check("the left button reads PRESSED while held, and only it "
+              "(right/middle stay up)",
+              s1.get("left") is True and not s1.get("right") and not s1.get("middle"),
+              f"l={s1.get('left')} r={s1.get('right')} m={s1.get('middle')}")
+    finally:
+        osctl._mouse_button("left", False)
+        time.sleep(0.15)
+    s2 = osctl.mouse_state()
+    check("the left button reads up again once released (a stuck drag would be "
+          "visible now)", s2.get("left") is False, f"left={s2.get('left')}")
+
+
 def round_key_state(b: Browser, offline: bool) -> None:
     print("R118: READ a key's live state — is it down? is the lock on? (F157) — osctl")
     # The floor could press and release keys (key_down/key_up) but never *read*
@@ -7645,7 +7679,7 @@ def main() -> int:
               round_template_match, round_settle, round_reach, round_steer,
               round_window, round_clip_relay, round_zorder, round_window_under,
               round_window_lifecycle, round_window_state, round_active_window,
-              round_topmost, round_window_pid, round_key_state,
+              round_topmost, round_window_pid, round_key_state, round_mouse_state,
               round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,

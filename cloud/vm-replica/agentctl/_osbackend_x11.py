@@ -163,6 +163,28 @@ def mouse_button(button: str, down: bool) -> None:
         _x.XFlush(_dpy)
 
 
+_BTN_MASK = {"left": 0x0100, "middle": 0x0200, "right": 0x0400}  # Button1/2/3Mask
+
+
+def mouse_state() -> dict:
+    """Read which mouse buttons are pressed *right now* plus the cursor position:
+    ``{"left","right","middle": bool, "pos": (x,y)}``. ``mouse_button`` could
+    press/release but nothing could *read* the buttons, so a drag whose button-up
+    was lost left the floor silently stuck pressed, dragging every later move.
+    ``XQueryPointer``'s modifier/button mask carries the live button bits; the
+    button-read dual of ``mouse_button`` (mirrors the Win32 backend)."""
+    rr = ctypes.c_ulong(); cr = ctypes.c_ulong()
+    rx = ctypes.c_int(); ry = ctypes.c_int(); wx = ctypes.c_int(); wy = ctypes.c_int()
+    mask = ctypes.c_uint()
+    with _lock:
+        _x.XQueryPointer(_dpy, _root, ctypes.byref(rr), ctypes.byref(cr),
+                         ctypes.byref(rx), ctypes.byref(ry), ctypes.byref(wx),
+                         ctypes.byref(wy), ctypes.byref(mask))
+    s = {name: bool(mask.value & bit) for name, bit in _BTN_MASK.items()}
+    s["pos"] = (rx.value, ry.value)
+    return s
+
+
 def mouse_wheel(notches: int, horizontal: bool = False) -> None:
     # X core buttons: 4 up, 5 down, 6 left, 7 right — one press/release per notch.
     if horizontal:

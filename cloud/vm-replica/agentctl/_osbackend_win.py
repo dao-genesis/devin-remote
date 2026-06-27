@@ -132,6 +132,22 @@ def mouse_button(button: str, down: bool) -> None:
     _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
 
 
+_VK_BUTTON = {"left": 0x01, "right": 0x02, "middle": 0x04}  # VK_L/R/MBUTTON
+
+
+def mouse_state() -> dict:
+    """Read which mouse buttons are pressed *right now* plus the cursor position:
+    ``{"left","right","middle": bool, "pos": (x,y)}``. ``mouse_button`` could
+    *press* and *release* but nothing could *read* the buttons, so a drag whose
+    button-up was lost (a half-finished drag) left the floor silently stuck in a
+    pressed state, dragging every later move. The button-read dual of
+    ``mouse_button``, completing the input floor alongside ``key_state``."""
+    s = {name: bool(user32.GetAsyncKeyState(vk) & 0x8000)
+         for name, vk in _VK_BUTTON.items()}
+    s["pos"] = cursor_pos()
+    return s
+
+
 def mouse_wheel(notches: int, horizontal: bool = False) -> None:
     """Emit ``abs(notches)`` wheel events; sign follows the Windows convention."""
     flag = MOUSEEVENTF_HWHEEL if horizontal else MOUSEEVENTF_WHEEL
