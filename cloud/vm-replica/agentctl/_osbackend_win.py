@@ -300,6 +300,33 @@ user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
 _GA_ROOT = 2
 
 
+user32.PostMessageW.restype = wintypes.BOOL
+user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                wintypes.LPARAM]
+user32.IsWindow.restype = wintypes.BOOL
+user32.IsWindow.argtypes = [wintypes.HWND]
+
+_WM_CLOSE = 0x0010
+
+
+def close_window(win: int) -> bool:
+    """Ask a window to close *by identity*, the graceful way a human clicking its
+    ✕ would — ``WM_CLOSE`` runs the app's own close path (its "save changes?"
+    prompt, cleanup), unlike killing the process. Screenshot+click would have to
+    hunt the close-button pixel; this addresses the window itself. Returns False
+    if the handle is already gone."""
+    hwnd = wintypes.HWND(win)
+    if not user32.IsWindow(hwnd):
+        return False
+    return bool(user32.PostMessageW(hwnd, _WM_CLOSE, 0, 0))
+
+
+def window_exists(win: int) -> bool:
+    """Whether a window handle still refers to a live window (``IsWindow``) — the
+    read that lets the floor wait for a window to appear or confirm it has gone."""
+    return bool(user32.IsWindow(wintypes.HWND(win)))
+
+
 def window_under(x: int, y: int) -> "int | None":
     """Which top-level window owns the screen pixel ``(x, y)`` — the id that a
     real mouse click there would land on, or None if the point is bare desktop.

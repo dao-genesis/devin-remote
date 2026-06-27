@@ -4118,6 +4118,57 @@ when both directions are present.
 
 ---
 
+## F152 — a window has a life: wait for it to be born, close it by identity (`wait_window` / `close_window`, R113)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** Every window primitive so far (F146 address, F148 raise, F149 move,
+F150 desktop, F151 read) assumed the window *already exists and will keep
+existing*. But a window has a lifetime. Two ends of it had no primitive:
+
+- **Birth is delayed.** Launching an app, opening a dialog, spawning a document —
+  the window appears *after* a delay. Code that lists/activates the instant after
+  spawning races the window's birth and addresses nothing. F118's `wait_for`
+  waits for *pixels* to appear, but pixels carry no identity: two same-looking
+  windows are indistinguishable, and a window can already exist while fully
+  occluded with zero visible pixels. The floor could wait on appearance but not
+  on *identity*.
+- **Death had no gesture.** The floor could raise, move, read a window — but
+  never *dismiss* one. Screenshot+click would have to hunt the ✕-button pixel;
+  killing the process is a sledgehammer that skips the app's own close path.
+
+**Primitives.**
+- `osctl.wait_window(match, timeout)` → blocks until a top-level whose title
+  contains `match` exists, returns it (or `None` on timeout). Polls
+  `list_windows` — waiting on window *identity*, the dual of waiting on pixels.
+- `osctl.close_window(win)` → asks a window to close *by identity*, the graceful
+  path a human's ✕ click takes: Win32 `PostMessage(WM_CLOSE)`, X11 EWMH
+  `_NET_CLOSE_WINDOW` client message. It runs the app's own close handlers, not a
+  process kill.
+- `osctl.window_exists(win)` / `wait_window_closed(win, timeout)` → the read that
+  confirms a close actually took; the closing dual of `wait_window`.
+
+**Live (Windows, cmd consoles):**
+
+| step | call | outcome |
+|---|---|---|
+| no such window | `wait_window("DAO-NOEXIST", 1.0)` | `None` after ~1s — no false positive |
+| launch console, then wait | `wait_window("ULIFE-X", 10)` | returns `{id, title}` once born |
+| while alive | `window_exists(id)` | `True` |
+| close by identity | `close_window(id)` → `wait_window_closed(id)` | gone; dropped from `list_windows`; `window_exists` → `False` |
+
+R113 (`round_window_lifecycle`, 5 checks); `_probe_life.py` is the standalone
+reproduction (7/7). Full suite **761/761** clean.
+
+**Lesson (道法自然).** 出生入死 — *coming into life, going into death.* The floor
+had learned to operate windows but treated them as eternal fixtures; a complete
+hand must meet a window at both ends of its existence — wait for it to arrive,
+and let it go — addressing each *by name*, never by groping at pixels. 反者道之動
+again: birth (`wait_window`) and death (`close_window`/`wait_window_closed`) are
+duals, and the floor grows whole by holding both.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

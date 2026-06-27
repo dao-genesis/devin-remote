@@ -57,6 +57,11 @@ move_window = getattr(_be, "move_window", lambda win, x, y, w=0, h=0: False)
 # window sits under a point before committing a click. None on bare desktop or
 # an older floor that lacks the primitive.
 window_under = getattr(_be, "window_under", lambda x, y: None)
+# Window lifecycle: close a window *by identity* (graceful, runs the app's own
+# close path — not a process kill) and read whether a window still exists. Both
+# fall back gracefully on an older floor.
+close_window = getattr(_be, "close_window", lambda win: False)
+window_exists = getattr(_be, "window_exists", lambda win: False)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the
@@ -108,6 +113,50 @@ def focus_window(match: str, settle: float = 0.25) -> dict | None:
     if settle:
         time.sleep(settle)
     return hit
+
+
+def wait_window(match: str, timeout: float = 10.0, settle: float = 0.0,
+                interval: float = 0.1) -> dict | None:
+    """Block until a top-level window whose title contains ``match`` exists, then
+    return its ``{"id","title",...}`` — or ``None`` if none appears in ``timeout``
+    seconds (F152).
+
+    The screen is a process in time: launching an app, opening a dialog, or a new
+    document all *create a window after a delay*. Code that lists/activates the
+    window the instant after spawning races the window's birth and addresses
+    nothing. F118's ``wait_for`` waits for *pixels* to appear, but pixels carry no
+    identity — two same-looking windows are indistinguishable, and a window can
+    exist while occluded with no visible pixels. This waits on window *identity*
+    (``list_windows``), the dual of waiting on appearance. Case-insensitive
+    substring; most-recent match wins. ``settle`` optionally sleeps once found."""
+    deadline = time.time() + timeout
+    m = match.lower()
+    while True:
+        hit = None
+        for w in list_windows():
+            if m in (w.get("title") or "").lower():
+                hit = w
+        if hit is not None:
+            if settle:
+                time.sleep(settle)
+            return hit
+        if time.time() >= deadline:
+            return None
+        time.sleep(interval)
+
+
+def wait_window_closed(win: int, timeout: float = 10.0,
+                       interval: float = 0.1) -> bool:
+    """Block until window id ``win`` no longer exists, returning True once it is
+    gone or False on timeout (F152) — the read that confirms a ``close_window``
+    actually took, the closing dual of ``wait_window``."""
+    deadline = time.time() + timeout
+    while True:
+        if not window_exists(win):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval)
 
 
 # ---- mouse gestures (platform-agnostic, built on the backend leaves) ------- #

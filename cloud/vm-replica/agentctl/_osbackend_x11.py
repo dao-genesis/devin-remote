@@ -384,6 +384,43 @@ def activate_window(win: int) -> bool:
         return bool(ok)
 
 
+def close_window(win: int) -> bool:
+    """Ask the WM to close a window *by identity* via an EWMH
+    ``_NET_CLOSE_WINDOW`` client message (what a pager's close button sends) —
+    the graceful path that runs the app's own close handlers, unlike killing the
+    process. Screenshot+click would have to hunt the ✕ pixel."""
+    with _lock:
+        class _CM(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                        ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                        ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                        ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+        ev = _CM(type=33, send_event=1, display=_dpy, window=win,  # 33 = ClientMessage
+                 message_type=_atom("_NET_CLOSE_WINDOW"), format=32)
+        ev.data[0] = 0          # timestamp (CurrentTime)
+        ev.data[1] = 2          # source indication: pager
+        SUBSTRUCTURE = (1 << 19) | (1 << 20)  # Redirect | Notify
+        ok = _x.XSendEvent(_dpy, _root, 0, SUBSTRUCTURE, ctypes.byref(ev))
+        _x.XFlush(_dpy)
+        _x.XSync(_dpy, 0)
+        return bool(ok)
+
+
+def window_exists(win: int) -> bool:
+    """Whether the WM still manages this window (present in ``_NET_CLIENT_LIST``)
+    — the read that lets the floor wait for a window to appear or confirm it has
+    closed."""
+    with _lock:
+        raw = _prop(_root, _atom("_NET_CLIENT_LIST"), 33)  # 33 = XA_WINDOW
+        if not raw:
+            return False
+        wl = ctypes.c_long
+        n = len(raw) // ctypes.sizeof(wl)
+        ids = {int(w) & 0xFFFFFFFF
+               for w in ctypes.cast(raw, ctypes.POINTER(wl * n)).contents}
+        return (int(win) & 0xFFFFFFFF) in ids
+
+
 def _has_wm_state(win: int) -> bool:
     ws = _atom("WM_STATE")
     return _prop(win, ws, ws) is not None

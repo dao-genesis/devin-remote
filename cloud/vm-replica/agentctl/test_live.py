@@ -1177,6 +1177,89 @@ def round_window_under(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_window_lifecycle(b: Browser, offline: bool) -> None:
+    print("R113: WAIT for a window to appear, then CLOSE it by identity (F152) — osctl")
+    # F146 addressed an *existing* window; F151 read which window owns a pixel.
+    # But a window is not eternal: launching an app births a window after a
+    # delay, and finishing with it should close it. Two gaps remained. (1) Code
+    # that lists/activates the instant after spawning RACES the window's birth and
+    # finds nothing — F118's wait_for waits on pixels, but pixels carry no
+    # identity. wait_window waits on the window itself. (2) The floor could raise,
+    # move, read a window but never DISMISS one; screenshot+click would have to
+    # hunt the ✕ pixel. close_window asks the window to close by identity, the
+    # graceful path (the app's own close handlers), and wait_window_closed
+    # confirms it. Birth and death, both addressed by name — not by pixel.
+    import shutil
+    import subprocess
+
+    win = sys.platform.startswith("win")
+    term = None if win else shutil.which("konsole")
+    if not win and term is None:
+        print("  (skip R113: no konsole on this Linux host)")
+        return
+    for name in ("wait_window", "close_window", "wait_window_closed", "window_exists"):
+        if not hasattr(osctl, name):
+            check(f"osctl exposes {name}", False, "missing primitive")
+            return
+
+    def launch(title):
+        if win:
+            return subprocess.Popen(["cmd", "/k", f"title {title}"],
+                                    creationflags=0x00000010)  # CREATE_NEW_CONSOLE
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "-e",
+             "env", "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    p = None
+    try:
+        # (1a) A window that never appears must time out — no false positive.
+        t0 = time.time()
+        miss = osctl.wait_window("DAO-NOEXIST-ZZZ", timeout=1.0)
+        check("wait_window times out on a window that never appears",
+              miss is None and (time.time() - t0) >= 0.9, f"miss={miss!r}")
+
+        # (1b) Spawn the window and wait for it to be BORN, by identity.
+        p = launch("ULIFE-X")
+        w = osctl.wait_window("ULIFE-X", timeout=10.0)
+        check("wait_window blocks until the launched window is born",
+              w is not None, f"win={w!r}")
+        if not w:
+            return
+        wid = w["id"]
+        check("window_exists reports the window as live", osctl.window_exists(wid),
+              f"id={wid}")
+
+        # (2) Close it BY IDENTITY (graceful), then confirm death two ways.
+        accepted = osctl.close_window(wid)
+        gone = osctl.wait_window_closed(wid, timeout=8.0)
+        still_listed = any("ULIFE-X" in (x.get("title") or "")
+                           for x in osctl.list_windows())
+        check("close_window dismisses the window by identity, and it stays gone",
+              accepted and gone and not still_listed,
+              f"accepted={accepted} gone={gone} still_listed={still_listed}")
+        check("window_exists flips to False once the window has closed",
+              not osctl.window_exists(wid), f"id={wid}")
+    finally:
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        if win:
+            os.system("taskkill /F /IM cmd.exe >NUL 2>&1")
+        else:
+            os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_move(b: Browser, offline: bool) -> None:
     print("R110: MOVE a window that was pushed OFF-screen back into reach (F149) — osctl")
     # R109 proved *raising* reaches an occluded window. But raising only reorders
@@ -7152,7 +7235,7 @@ def main() -> int:
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_reach, round_steer,
               round_window, round_clip_relay, round_zorder, round_window_under,
-              round_move, round_desktop,
+              round_window_lifecycle, round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
