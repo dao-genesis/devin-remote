@@ -272,21 +272,25 @@ function _relay(){ return _pj(N.relayStatus?N.relayStatus():""); }
 //   base 可由 conn.webConsoleBase 覆写 —— 这是「自托管/中立账号」的唯一开关: 任何用户只需在自己设备配置里
 //   填一次自己的宿主(自己的 Pages / 自己的设备隧道 / 自己 pin 的 IPFS CID), 此后其生成的所有链接长期生效,
 //   小到不能再小、一次即持续 (别人用别人的号·各自最小化)。
-// 默认 = 项目 GitHub Pages 的 console.html。它是一份「无状态静态文件」, 经 GitHub/Fastly CDN 无限并发分发给
-//   所有用户: 宿主从不识别任何人、从不经手任何用户数据(全部数据走 P2P 路线C), 每个链接自带的 session/token/
-//   direct 各自路由到各自设备 → 天然多租户、可大规模批量使用, 故「保持」为默认 (反者道之动: 静态首字节宿主
-//   非中心化瓶颈, 而是人人共用的零状态引导器)。
+// 默认 = 独立中立账号(非项目方个人号)的 GitHub Pages console.html。它是一份「无状态静态文件」, 经 GitHub/Fastly
+//   CDN 无限并发分发给所有用户: 宿主从不识别任何人、从不经手任何用户数据(全部数据走 P2P 路线C), 每个链接自带
+//   的 session/token/direct 各自路由到各自设备 → 天然多租户、可大规模批量使用 (反者道之动: 静态首字节宿主非中心化
+//   瓶颈, 而是人人共用的零状态引导器)。两个 github.io 各属独立账号、互为冗余: 任一账号/仓库被下架, 另一仍服务全体
+//   → 首字节宿主不再是任何单一账号的单点 (彻底脱离项目方个人账号·去中心化持久化)。皆经 Fastly CDN, 国内可达。
 // IPFS 内容寻址网关为「可选镜像」: 仅当该 CID 被实际 pin 到 IPFS 网络(由发布流程或用户自行 pin)才可达, 否则
 //   公共网关 504; 故不作默认, 仅在 _durableMirrors 末段列出 —— 一旦有人 pin 即自动账号中立可用。
-//   surge.sh(原无账号标识)已被永久下架(HTTP 451)故弃; jsDelivr 把 .html 当 text/plain 故不用。
+//   surge.sh(原无账号标识)已被永久下架(HTTP 451)故弃; jsDelivr 把 .html 当 text/plain 故不用;
+//   Cloudflare *.workers.dev / *.pages.dev 国内被 SNI 屏蔽故不作首字节宿主 (见 channel-select 契约: 开页入口零 Worker 域)。
 var P2P_WEB_IPFS_CID = "bafybeifwt5i5dhytdpkwirclhnnyijp42imfxmir4nfbzhtbbsyi7i6mae";
-// 默认首字节宿主 = 无状态静态多租户 Pages console.html (CDN 无限并发·零识别·零用户数据·能服务所有用户)。
+// 默认首字节宿主 = 独立中立账号的无状态静态多租户 Pages console.html (CDN 无限并发·零识别·零用户数据·能服务所有用户)。
+var P2P_WEB_HDOUGLE = "https://hdougle.github.io/dao-console/console.html";
+// 项目方 Pages 作等价独立账号冗余镜像 (自随 main 自动更新·恒鲜)。
 var P2P_WEB_GITHUB_FALLBACK = "https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html";
-var P2P_WEB_DEFAULT = P2P_WEB_GITHUB_FALLBACK;
+var P2P_WEB_DEFAULT = P2P_WEB_HDOUGLE;
 function _durableMirrors(){
   var base=_p2pWebBase(), out=[base];
-  // 始终把无状态 Pages 默认放进可达集 (CDN 无限并发·人人可达)。
-  if(out.indexOf(P2P_WEB_GITHUB_FALLBACK)<0) out.push(P2P_WEB_GITHUB_FALLBACK);
+  // 两个独立账号 Pages 互为冗余 (账号中立·CDN 无限并发·国内可达·任一被下架另一仍服务全体)。
+  [P2P_WEB_HDOUGLE, P2P_WEB_GITHUB_FALLBACK].forEach(function(u){ if(out.indexOf(u)<0) out.push(u); });
   // 可选内容寻址镜像: 仅当 CID 被实际 pin 才可达 (否则公共网关 504), 故列于 Pages 之后作账号中立增益。
   var cid=P2P_WEB_IPFS_CID; if(cid && cid.indexOf("__")!==0){
     ["https://"+cid+".ipfs.dweb.link/console.html","https://ipfs.io/ipfs/"+cid+"/console.html",
