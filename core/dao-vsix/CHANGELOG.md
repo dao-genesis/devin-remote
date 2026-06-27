@@ -2,6 +2,11 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.35
+- **正本清源 · 四大模块综合 MCP 入本源(原为运行时外科追加, 今永驻 src)**。`/mcp`(Streamable HTTP·JSON-RPC)端点 + 31 工具(`pc_*`/`browser_*`/`plugin_*`/`vscode_*`)此前仅以运行时 payload(`~/.dao/mcp-deploy/apply-mcp.js` 外科追加进 `out/extension.js`)存在 —— **一经重建即丢**。现整段(`daoMcpHandle`/`daoMcpProcessRpc`/`daoMcpCallTool`/`daoMcpToolDefs` + 零依赖原生 WebSocket CDP 客户端 `daoCdpBatch` + `daoCdpEnsureChrome`/`daoCdpPickPage`)落入 `src/extension.ts`，并在 `handleRouteInternal` 顶部(先于 `needAuth`/`isAppProxyPassthrough`)接管 `/mcp`，杜绝被当作官网 SPA 透传。
+  - **修 `plugin_git` 404(根因)**: 旧版无 `/api/git/status` 路由 → MCP `plugin_git` 经 `daoMcpInvoke` 落空透传上游 → uvicorn 404。现 `plugin_git` 自给自足:先试 `/api/git/status`(vscode.git API),不可用即回退 `daoGitStatusViaCli()`——`childProcess` 直跑 `git`(workspace 根)解析 porcelain(分支/staged/changes/untracked/ahead/behind/冲突),不依赖路由是否存在或 git 扩展是否激活。
+  - 整机 GUI 控制底座(`pcGui*` worker + `getMirrorPageHtml`)本就在源;本次只补缺失的 MCP 层。自检: `node build.js` + `node --check` 通过、dao-one 构建通过、render_check 通过、rt-flow 35 PASS、rtflow vendored 逐字节一致。
+
 ## 3.50.34
 - **反者道之动 · 重锚本源(去芜投屏 + 深化同源 SPA 反代)**。整机投屏(`/m`·`/api/cap`·`/api/input`·常驻 PowerShell GUI worker + rt-flow `devinMirror` CDP 截帧兜底)是「搬像素」的歧路:重资产/渲染仍留本机,隧道搬重像素流。本源应为「仿手机集团」——真·渲染与重资产全跑在公网访问者自己的浏览器里, 隧道只搬轻量认证数据与资源(知其雄·守其雌)。
   - **去芜**: 删 extension.ts 全部整机投屏代码;删 rt-flow `devin_mirror.js`(源+vendored)、`extension.js` 四个 `/__mirror/*` 路由、`devin_cloud.js` 的 `buildMirrorHtml`/对话视图「🖥️ 官网本体」入口、`dao-one/build.js` vendor 清单条目;删 4 个 mirror 单测。rt-flow PASS 115+35。
