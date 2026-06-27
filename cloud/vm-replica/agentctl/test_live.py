@@ -4522,6 +4522,117 @@ def round_read_block_region_words(b, offline):
               rbwu == [], repr(rbwu))
 
 
+def round_locate_word(b, offline):
+    print("R79: find a word by its TEXT and click it (F115) — osctl")
+    # Every reader F103+ returns WHAT the text says and drops WHERE it sat, so an
+    # agent that reads 'GO' off a <canvas> button still cannot press it (no DOM
+    # node; the pixel finders locate by colour/bitmap, not by word). locate_word
+    # gathers the glyph cells, groups them into words, reads each, and returns the
+    # matching word's bbox — in the same screen coords capture_rgb/click share.
+    # Hand its centre to osctl.click and the agent presses the word it read.
+    if offline:
+        return
+
+    def hx(s):
+        s = s.lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+    MAG = (255, 0, 255)
+    RED, GRN, BLU = "#d32020", "#1f9d35", "#1565c0"
+    chars = "OKGREDNBLUY"
+    draws = "".join("x.fillText('%s',%d,80);" % (ch, 24 + i * 96)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("lw_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=1100 height=140></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,1100,140);"
+               "x.fillStyle='#f0f';x.font='bold 80px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = sorted(osctl.find_color_blobs(MAG, tol=60, rgb=argb, size=(aw, ah),
+                                       min_count=120), key=lambda t: t["x"])
+    check("lw atlas segments into eleven reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def field_bbox(rgbX, szX, frac=16):
+        bls = osctl.find_color_blobs(hx("#ffffff"), tol=30, rgb=rgbX, size=szX,
+                                     min_count=5000)
+        if not bls:
+            return None
+        x0, y0, x1, y1 = max(bls, key=lambda t: t["count"])["bbox"]
+        iw, ih = (x1 - x0) // frac, (y1 - y0) // 8
+        return (x0 + iw, y0 + ih, x1 - iw, y1 - ih)
+
+    # Three coloured text "buttons" on a canvas. Each carries no DOM node; the
+    # canvas reports which word's drawn x-range a click landed in.
+    b.navigate(fixture("lw_btn.html",
+               "<!doctype html><title>btn</title><style>html,body{margin:0;"
+               "background:#fff}</style>"
+               "<canvas id=c width=900 height=360></canvas><script>"
+               "var c=document.getElementById('c'),x=c.getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,900,360);"
+               "x.font='bold 80px monospace';x.textBaseline='middle';"
+               "x.textAlign='left';"
+               "var W=[['OK','#d32020',100],['GO','#1f9d35',420],"
+               "['BY','#1565c0',700]];var R=[];"
+               "for(var i=0;i<W.length;i++){x.fillStyle=W[i][1];"
+               "x.fillText(W[i][0],W[i][2],200);"
+               "R.push([W[i][0],W[i][2],W[i][2]+x.measureText(W[i][0]).width]);}"
+               "c.addEventListener('click',function(e){"
+               "var r=c.getBoundingClientRect();"
+               "var px=e.clientX-r.left,py=e.clientY-r.top,hit='MISS';"
+               "for(var i=0;i<R.length;i++){if(px>=R[i][1]&&px<=R[i][2]"
+               "&&py>=160&&py<=240)hit=R[i][0];}"
+               "document.title='HIT:'+hit;});</script>"))
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    sz = (w, h)
+    bb = field_bbox(rgb, sz)
+    check("lw button row located", bb is not None, repr(bb))
+    if bb is None:
+        return
+
+    # The reader names the words but hands back no place to click them.
+    txt = osctl.read_region_words(rgb, sz, bb, atlas)
+    check("read_region_words names the words but yields no position ('OK GO BY')",
+          txt == "OK GO BY", repr(txt))
+
+    # locate_word returns WHERE each word sits, in reading order, absent -> None.
+    box_ok = osctl.locate_word(rgb, sz, bb, atlas, "OK")
+    box_go = osctl.locate_word(rgb, sz, bb, atlas, "GO")
+    box_by = osctl.locate_word(rgb, sz, bb, atlas, "BY")
+    have = box_ok is not None and box_go is not None and box_by is not None
+    check("locate_word returns a bbox for each present word", have,
+          "%r/%r/%r" % (box_ok, box_go, box_by))
+    if not have:
+        return
+    ordered = box_ok[0] < box_go[0] < box_by[0]
+    check("locate_word boxes fall in reading order (OK<GO<BY by x)", ordered,
+          "%d/%d/%d" % (box_ok[0], box_go[0], box_by[0]))
+    check("locate_word of an absent word is None",
+          osctl.locate_word(rgb, sz, bb, atlas, "ZZ") is None)
+
+    # READ -> ACT: click the centre of the located word; the canvas (no DOM node
+    # for the text) confirms the press landed on that very word.
+    cx, cy = (box_go[0] + box_go[2]) // 2, (box_go[1] + box_go[3]) // 2
+    osctl.click(cx, cy)
+    check("clicking the located word 'GO' presses it (read->act closed)",
+          b.wait_for("document.title==='HIT:GO'", timeout=3), b.title())
+
+    # Not hard-wired to one word: locating and clicking 'OK' presses 'OK'.
+    b.eval("document.title='btn'")
+    cx2, cy2 = (box_ok[0] + box_ok[2]) // 2, (box_ok[1] + box_ok[3]) // 2
+    osctl.click(cx2, cy2)
+    check("clicking the located word 'OK' presses it (distinct target)",
+          b.wait_for("document.title==='HIT:OK'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -4551,7 +4662,8 @@ def main() -> int:
               round_read_block, round_read_words, round_read_glyph_conf,
               round_read_text_conf, round_detect_fg, round_palette,
               round_read_region, round_read_block_region,
-              round_read_region_words, round_read_block_region_words]
+              round_read_region_words, round_read_block_region_words,
+              round_locate_word]
     for r in rounds:
         try:
             r(b, offline)

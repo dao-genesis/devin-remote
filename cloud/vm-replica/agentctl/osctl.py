@@ -1461,6 +1461,67 @@ def read_block_region_words(rgb: bytes, size: tuple[int, int],
             for band in bands]
 
 
+def locate_word(rgb: bytes, size: tuple[int, int],
+                bbox: tuple[int, int, int, int],
+                atlas: dict[str, list[int]], target: str,
+                tol: int = 60, gap: int = 2, space_k: float = 1.8,
+                nw: int = 48, nh: int = 48, thr: int = 24,
+                q: int = 16, min_pop: float = 0.002,
+                min_dist: int = 96) -> tuple[int, int, int, int] | None:
+    """Find a word by its *text* and return *where* it sits — its bbox (F115).
+
+    Every reader from F103 on answers *what* the pixels say and throws the rest
+    away: :func:`segment_run` knows each glyph's bbox, but :func:`read_region` and
+    :func:`read_region_words` fold those cells into a single joined string and the
+    positions are gone. So an agent that has just *read* ``"GO"`` off a ``<canvas>``
+    button still cannot *press* it — there is no DOM node for :func:`Browser.click`
+    to find, and the pixel finders (:func:`find_color`, :func:`template_match`)
+    locate by *colour* or *bitmap*, never by the *word* the eye actually read.
+    Reading and acting were split: you could name the text or you could find a
+    shape, but not click the text you named.
+
+    This closes that loop. It gathers every ink's glyph cells across the region
+    (:func:`palette` + :func:`segment_run`, as :func:`read_region_words`), sorts
+    them left-to-right and groups them into words at the same *bimodal* gap a seam
+    lives in (a run of cells, then a gap ``>= space_k`` times the median cell gap,
+    then the next word). Each group is read in the scale-free frame
+    (:func:`read_glyph` against ``atlas``) and compared to ``target``; the first
+    group whose label matches returns the **union bbox of its cells** — tight to the
+    word's ink, in the same screen coordinates :func:`capture_rgb` and
+    :func:`click` share. Hand that bbox's centre to :func:`click` and the agent
+    presses the very word it read.
+
+    Honest in the frame of its readers: ``target`` is a *single* word (it matches a
+    run between seams, never a string with its own space), it reads only glyphs the
+    ``atlas`` carries and *text* colours, not solid-fill decorations, and it parts
+    words only where the spacing is bimodal. A word the region does not hold — or
+    that the atlas cannot spell — returns ``None`` rather than a guessed location;
+    repeated words return the *leftmost* match (reading order)."""
+    inks = palette(rgb, size, bbox, q, min_pop, min_dist)[1:]
+    cells: list[tuple[int, int, int, int]] = []
+    for ink in inks:
+        cells.extend(segment_run(rgb, size, bbox, ink, tol, gap))
+    if not cells:
+        return None
+    cells.sort(key=lambda c: c[0])
+    gaps = [cells[i + 1][0] - cells[i][2] for i in range(len(cells) - 1)]
+    med = sorted(gaps)[len(gaps) // 2] if gaps else 0
+    groups: list[list[tuple[int, int, int, int]]] = []
+    cur = [cells[0]]
+    for i, g in enumerate(gaps):
+        if med > 0 and g >= space_k * med:
+            groups.append(cur)
+            cur = []
+        cur.append(cells[i + 1])
+    groups.append(cur)
+    for grp in groups:
+        label = "".join(read_glyph(rgb, size, c, atlas, nw, nh, thr) for c in grp)
+        if label == target:
+            return (min(c[0] for c in grp), min(c[1] for c in grp),
+                    max(c[2] for c in grp), max(c[3] for c in grp))
+    return None
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"
