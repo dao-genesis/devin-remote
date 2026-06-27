@@ -105,6 +105,32 @@ async function pxLoadAccounts(env, session, token) {
   if (arr.length) _pxAcctCache.set(session, { ts: Date.now(), arr: arr });
   return arr;
 }
+// 跨源 cookieless 登录态库 (与手机 LocalServer「/i 每请求按 acct 直查」同构):
+//   github.com Pages 等静态宿主开页 ≠ workers.dev → /i-init 的 Set-Cookie 被跨源 fetch 丢弃、且
+//   SameSite=Lax 不随跨站 iframe 顶层导航回传 → 旧逻辑必「会话已过期」。故 /i-init 把该号登录态落进
+//   一个全局 DO 的持久存储(按 acct 键·短 TTL), /i/ 无 cookie 时回退取库 → 跨源照开。命中后由 /i/ 在该页
+//   响应补种同站 cookie, 之后 iframe 内同站子请求(资源/接口)照常携带 → 既跨源可开、又同站高效。
+const PX_ISTORE_NAME = "__px_i_authstore_v1";
+function pxStoreDO(env) { return env.DAO_RELAY.get(env.DAO_RELAY.idFromName(PX_ISTORE_NAME)); }
+async function pxStorePut(env, acc, auth) {
+  try {
+    await pxStoreDO(env).fetch(new Request("https://do/i-store", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ acc: acc, auth: auth, ttl: 7200 }),
+    }));
+  } catch (e) {}
+}
+async function pxStoreGet(env, acc) {
+  try {
+    const r = await pxStoreDO(env).fetch(new Request("https://do/i-fetch", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ acc: acc }),
+    }));
+    const j = await r.json();
+    return (j && j.ok && j.auth && j.auth.auth1) ? j.auth : null;
+  } catch (e) { return null; }
+}
+
 function pxFindAcct(arr, acc) {
   acc = String(acc || "");
   for (const a of arr) { if (a && (a.email === acc || a.id === acc || String(a.no) === acc)) return a; }
@@ -667,6 +693,8 @@ export default {
       const a = pxFindAcct(arr, acc);
       const auth = await pxEnsureAuth(a);
       if (!auth || !auth.auth1) return json({ error: "acct_not_found_or_no_auth", acc: acc }, 404);
+      // 跨源 cookieless 兜底: 落库该号登录态 → /i/ 无 cookie(跨源开页)时按 acct 取库照开。
+      await pxStorePut(env, acc, { auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgName: auth.orgName, email: auth.email });
       if (!u.startsWith("/")) u = "/" + u;
       const encAcc = encodeURIComponent(acc);
       const prefix = "/i/" + encAcc;
@@ -690,14 +718,30 @@ export default {
       const restPath = (sl >= 0 ? after.slice(sl) : "/") + (url.search || "");
       const ck = pxCookies(req);
       let auth = ck["da_" + pxSafeKey(acc)] ? pxB64Dec(ck["da_" + pxSafeKey(acc)]) : null;
+      let setCk = false;
       if (!auth || !auth.auth1) {
         const s = ck.ds ? decodeURIComponent(ck.ds) : "", t = ck.dt ? decodeURIComponent(ck.dt) : "";
         if (s && t) { const arr = await pxLoadAccounts(env, s, t); const a = pxFindAcct(arr, acc); const fresh = await pxEnsureAuth(a); if (fresh && fresh.auth1) auth = fresh; }
       }
       if (!auth || !auth.auth1) {
+        // 跨源开页(无 cookie): 回退 /i-init 落库的 cookieless 登录态(按 acct·与手机 LocalServer 同构)。
+        const stored = await pxStoreGet(env, acc);
+        if (stored && stored.auth1) { auth = stored; setCk = true; }
+      }
+      if (!auth || !auth.auth1) {
         return new Response("<!doctype html><meta charset=utf-8><body style='font:15px system-ui;padding:24px;color:#c9d1d9;background:#0d1117'><h3>会话已过期</h3><p>请回控台重新打开此 Devin 实例。</p>", { status: 401, headers: { "content-type": "text/html; charset=utf-8" } });
       }
-      return pxProxy(req, { prefix: prefix, restPath: restPath, auth: auth, host: url.host });
+      const iResp = await pxProxy(req, { prefix: prefix, restPath: restPath, auth: auth, host: url.host });
+      // 仅首个无 cookie 的页面导航(非不可变资源)补种同站 cookie → 之后 iframe 内同站子请求自带、无需再取库。
+      if (setCk && !pxIsImmutableAsset(restPath)) {
+        try {
+          const h = new Headers(iResp.headers);
+          const bundle = pxB64Enc({ auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgName: auth.orgName, email: auth.email });
+          h.append("Set-Cookie", "da_" + pxSafeKey(acc) + "=" + bundle + "; Path=" + prefix + "; Max-Age=7200; HttpOnly; Secure; SameSite=Lax");
+          return new Response(iResp.body, { status: iResp.status, statusText: iResp.statusText, headers: h });
+        } catch (e) { return iResp; }
+      }
+      return iResp;
     }
 
     // 任意第三方站同源前缀代理 /e/<b64origin>/...
@@ -781,6 +825,26 @@ export class DaoRelayDO {
 
   async fetch(req) {
     const url = new URL(req.url);
+
+    // 跨源 cookieless 渲染登录态库 (全局 DO 实例·与 agent 无关·仅持久存储): i-init 写, /i/ 无 cookie 时读。
+    //   按 acct 键存登录态 bundle + 过期戳; 取库时顺手清过期项。SQLite DO 存储强一致、跨 isolate/colo 可靠。
+    if (url.pathname === "/i-store") {
+      let b = {}; try { b = await req.json(); } catch (e) {}
+      const acc = String((b && b.acc) || ""); if (!acc) return json({ error: "no_acc" }, 400);
+      const ttl = Math.max(60, Math.min(7200, Number(b && b.ttl) || 7200));
+      try { await this.state.storage.put("ia:" + acc, { auth: (b && b.auth) || null, exp: Date.now() + ttl * 1000 }); } catch (e) {}
+      return json({ ok: true });
+    }
+    if (url.pathname === "/i-fetch") {
+      let b = {}; try { b = await req.json(); } catch (e) {}
+      const acc = String((b && b.acc) || ""); if (!acc) return json({ error: "no_acc" }, 400);
+      let rec = null; try { rec = await this.state.storage.get("ia:" + acc); } catch (e) { rec = null; }
+      if (!rec || !rec.auth || (rec.exp && rec.exp < Date.now())) {
+        if (rec) { try { await this.state.storage.delete("ia:" + acc); } catch (e) {} }
+        return json({ ok: false });
+      }
+      return json({ ok: true, auth: rec.auth });
+    }
 
     // 客户端 WSS 接入 (Hibernation: 用 state.acceptWebSocket, 空闲可驱逐、WSS 保活)
     if (url.pathname === "/connect") {
