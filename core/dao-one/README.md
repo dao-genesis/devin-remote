@@ -24,7 +24,7 @@ dao-one **不是**把四套引擎并排成四个侧栏视图, 而是**以 dao-vs
 └──────────────┴──────────────────────────────────────────────────┘
 ```
 
-> 六大板块(本源·见 [`AGENTS.md`](../../AGENTS.md) 第二节)= `overview`🏠 / `switch`🔀 /
+> 六大板块(本源·见 [`AGENTS.md`](https://github.com/zhouyoukang1234-spec/devin-remote/blob/main/AGENTS.md) 第二节)= `overview`🏠 / `switch`🔀 /
 > `bridge`🌐 / `backups`💬 / `inject`💉 / `mcp`🧩。dao-one 在 `bridge` 之后插入第 7 板
 > `proxy`🔀(Proxy Pro)。单号 Knowledge/Playbook/Secret/Git/自动化蓝图已收归主页(`overview`),
 > 全号批量在反向注入(`inject`)。
