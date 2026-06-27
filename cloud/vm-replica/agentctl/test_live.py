@@ -5383,6 +5383,55 @@ def round_middle_click(b: Browser, offline: bool) -> None:
           f"title={b.title()} mid={b.eval('window.__mid')}")
 
 
+def round_sample_color(b: Browser, offline: bool) -> None:
+    print("R101: OS-level sample_color — read the colour at a place, inverse of find_color (F137) — osctl")
+    # A status surface is green or red; the agent does not know which — that is the
+    # very thing it checks. find_color maps colour->place: it can only confirm a
+    # colour you already named, so to read state you'd have to guess. sample_color
+    # maps place->colour: it reads what is actually there. The whole page is the
+    # surface, so the screen centre is solid fill regardless of DPI/scroll.
+    html = fixture("sample_color.html",
+                   "<!doctype html><meta charset=utf-8><title>x</title>"
+                   "<style>html,body{margin:0;height:100%;background:#1faa3c}"
+                   "</style><script>window.__set=function(c){"
+                   "document.body.style.background=c;"
+                   "document.documentElement.style.background=c;};</script>")
+    b.navigate(html)
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    cx, cy = w // 2, int(h * 0.6)
+    bbox = (cx - 80, cy - 40, cx + 80, cy + 40)
+    green = osctl.sample_color(bbox, rgb=rgb, size=(w, h))
+    check("sample_color reads the green surface (g dominant)",
+          green["g"] > green["r"] + 80 and green["g"] > green["b"] + 80,
+          repr(green))
+    # find_color on this very patch confirms green is present — but only because
+    # we guessed "green"; that is the tool sample_color replaces.
+    patch, pw, ph = osctl.crop_rgb(rgb, (w, h), bbox)
+    fc_green = osctl.find_color((31, 170, 60), tol=30, rgb=patch, size=(pw, ph))
+    check("find_color confirms green only when green is guessed",
+          fc_green is not None, repr(fc_green is not None))
+    # Flip the surface to red. The agent still does not know the colour a priori.
+    b.eval("window.__set('#cc2222')")
+    time.sleep(0.3)
+    w2, h2, rgb2 = osctl.capture_rgb()
+    red = osctl.sample_color(bbox, rgb=rgb2, size=(w2, h2))
+    check("sample_color reads the red surface (r dominant)",
+          red["r"] > red["g"] + 80 and red["r"] > red["b"] + 80, repr(red))
+    # The friction made concrete: a guess of "green" now finds nothing in the
+    # patch, so find_color cannot tell you the state; sample_color just did.
+    patch2, pw2, ph2 = osctl.crop_rgb(rgb2, (w2, h2), bbox)
+    fc_green2 = osctl.find_color((31, 170, 60), tol=30, rgb=patch2,
+                                 size=(pw2, ph2))
+    check("a stale green guess finds nothing after the flip (find_color blind)",
+          fc_green2 is None, repr(fc_green2))
+    # And the two reads are unmistakably different colours.
+    check("the two state reads are far apart in colour",
+          abs(green["r"] - red["r"]) + abs(green["g"] - red["g"]) > 150,
+          f"green={green['r'],green['g'],green['b']} "
+          f"red={red['r'],red['g'],red['b']}")
+
+
 def round_locate_change_blobs(b: Browser, offline: bool) -> None:
     print("R100: OS-level locate_change_blobs — separate simultaneous changes (F136) — osctl")
     # Two toasts appear in different corners at once. locate_change collapses both
@@ -6179,7 +6228,7 @@ def main() -> int:
               round_mod_drag, round_glide, round_mod_taps,
               round_wait_until_stable, round_wait_for_change,
               round_region_diff, round_locate_change,
-              round_locate_change_blobs]
+              round_locate_change_blobs, round_sample_color]
     for r in rounds:
         try:
             r(b, offline)
