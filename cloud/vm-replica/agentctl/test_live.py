@@ -1260,6 +1260,70 @@ def round_window_lifecycle(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_set_window_text(b: Browser, offline: bool) -> None:
+    print("R122: WRITE a control's content directly by identity, no focus/typing (F161) — osctl")
+    # F160 read a control's text; this is its write dual. To fill a field the floor
+    # otherwise had to: activate the window, ensure focus on the right control,
+    # then emit keystroke after keystroke — slow, focus-fragile (a popup steals
+    # focus mid-type), and corruptible (a stuck modifier upper-cases it all).
+    # set_window_text hands the exact string to the control in ONE message: no
+    # focus, no keys, instant, verbatim, even if the window is occluded. A power
+    # past the human hand, which can only type into whatever currently holds focus.
+    import subprocess
+
+    if not sys.platform.startswith("win"):
+        print("  (skip R122: native direct control-write exercised on the Windows floor)")
+        return
+    if not hasattr(osctl, "set_window_text"):
+        check("osctl exposes set_window_text", False, "missing primitive")
+        return
+    mark = "DAO-F161-" + str(os.getpid())
+    p = None
+    note = None
+    try:
+        p = subprocess.Popen(["notepad.exe"])
+        osctl.wait_window("Notepad", timeout=8.0)
+        time.sleep(1.0)
+        note = next((w for w in osctl.list_windows()
+                     if "Notepad" in (w.get("title") or "")
+                     or "Untitled" in (w.get("title") or "")), None)
+        check("a Notepad window is found to write into", note is not None, "none")
+        if not note:
+            return
+        edit = next((k for k in osctl.child_windows(note["id"])
+                     if k["class"] in ("Edit", "RichEditD2DPT")), None)
+        check("its Edit control is located", edit is not None, "no edit")
+        if not edit:
+            return
+        # deliberately do NOT activate the window or press any key
+        ok = osctl.set_window_text(edit["id"], mark)
+        time.sleep(0.3)
+        got = osctl.window_text(edit["id"])
+        check("set_window_text fills the control with the exact string with no "
+              "focus and no keystroke (write dual of window_text)",
+              ok and got == mark, f"ok={ok} got={got!r}")
+        ok2 = osctl.set_window_text(edit["id"], "REPLACED")
+        time.sleep(0.3)
+        check("a second write replaces (not appends to) the content",
+              ok2 and osctl.window_text(edit["id"]) == "REPLACED",
+              f"got={osctl.window_text(edit['id'])!r}")
+    finally:
+        try:
+            if note:
+                osctl.terminate_window(note["id"])
+            elif p:
+                p.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        os.system("taskkill /F /IM notepad.exe >NUL 2>&1")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_window_text(b: Browser, offline: bool) -> None:
     print("R121: READ a control's actual TEXT content, not its pixels (F160) — osctl")
     # Every perception primitive so far returned *pixels* — capture, find_color,
@@ -7787,7 +7851,8 @@ def main() -> int:
               round_window, round_clip_relay, round_zorder, round_window_under,
               round_window_lifecycle, round_window_state, round_active_window,
               round_topmost, round_window_pid, round_key_state, round_mouse_state,
-              round_pixel, round_window_text, round_move, round_desktop,
+              round_pixel, round_window_text, round_set_window_text,
+              round_move, round_desktop,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,

@@ -4512,6 +4512,46 @@ Here begins 超越人類: not a better eye, but a sense humans do not have.
 
 ---
 
+## F161 — writing a control directly by identity (`set_window_text`, R122)
+
+**Ground: Windows Server 2022.**
+
+**Friction.** F160 let the floor *read* a control's text; this is its write dual.
+To *fill* a field the floor otherwise had to: activate the window, ensure focus
+landed on the right control, then emit keystroke after keystroke. That path is
+slow (one message per character), focus-fragile (a popup or notification stealing
+focus mid-type drops the rest into the void or the wrong control), and corruptible
+(a stuck modifier or CapsLock — the very thing F157 exposed — silently mangles it).
+The hand could only type into whatever happened to hold focus *right now*.
+
+**Primitive.**
+- `osctl.set_window_text(win, text)` → hand the exact string to a control in a
+  single `WM_SETTEXT` (Win32): no focus change, no keystrokes, instant, verbatim,
+  and it works even when the window is occluded or unfocused. X11 writes the
+  window name (`_NET_WM_NAME`/`WM_NAME`) — toolkits own their widget text, so the
+  OS-level write reaches the window's name, the honest analogue of the read side.
+
+**Live (Windows, against `notepad.exe`, never activated or typed into):**
+
+| check | result |
+|---|---|
+| `set_window_text(edit, mark)` then read back | exact `'DAO-F161-4176'` |
+| a second write | replaces, not appends → `'REPLACED'` |
+
+R122 (`round_set_window_text`, 4 checks); `_probe_settext.py` standalone (all pass).
+Full suite **796/796** clean.
+
+**Lesson (道法自然).** 為而弗恃 — *acts, yet does not rely on force.* The keystroke
+path *forces* text through the narrow gate of focus, one character at a time, at
+the mercy of whatever else grabs the keyboard. `WM_SETTEXT` does not push against
+that gate at all — it sets the thing it means directly, 無為 in the sense of
+effortless: no struggle for focus, no race with a popup, no per-key labor. F160
+and F161 now form a complete semantic pair — read the meaning the OS holds, write
+the meaning the OS will hold — beside the pixel/keystroke floor, not replacing it
+but transcending it where the OS offers a truer door.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

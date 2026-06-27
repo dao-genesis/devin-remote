@@ -424,6 +424,7 @@ def terminate_window(win: int) -> bool:
         kernel32.CloseHandle(h)
 
 
+_WM_SETTEXT = 0x000C
 _WM_GETTEXT = 0x000D
 _WM_GETTEXTLENGTH = 0x000E
 user32.SendMessageW.restype = ctypes.c_long
@@ -452,6 +453,21 @@ def window_text(win: int) -> str:
     buf = ctypes.create_unicode_buffer(n + 1)
     user32.SendMessageW(hwnd, _WM_GETTEXT, n + 1, ctypes.addressof(buf))
     return buf.value
+
+
+def set_window_text(win: int, text: str) -> bool:
+    """*Write* a control's text directly by identity — the write dual of
+    :func:`window_text`. To put text in a field the floor otherwise had to focus
+    the window, focus the right control, then type it character by character:
+    slow, focus-fragile (a popup steals focus mid-type), and corruptible (a stuck
+    modifier upper-cases everything). ``WM_SETTEXT`` hands the exact string to the
+    control in one message — focus-independent, instant, verbatim, even if the
+    window is occluded. Returns True on success."""
+    hwnd = wintypes.HWND(win)
+    if not user32.IsWindow(hwnd):
+        return False
+    buf = ctypes.create_unicode_buffer(text)
+    return bool(user32.SendMessageW(hwnd, _WM_SETTEXT, 0, ctypes.addressof(buf)))
 
 
 def child_windows(win: int) -> list:

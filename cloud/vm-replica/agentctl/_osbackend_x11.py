@@ -73,6 +73,10 @@ _xt.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, 
 # them as c_ulong, not c_uint32.
 _x.XInternAtom.restype = ctypes.c_ulong
 _x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+_x.XChangeProperty.restype = ctypes.c_int
+_x.XChangeProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+                               ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
+                               ctypes.c_char_p, ctypes.c_int]
 _x.XGetWindowProperty.restype = ctypes.c_int
 _x.XGetWindowProperty.argtypes = [
     ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long, ctypes.c_long,
@@ -411,6 +415,25 @@ def window_text(win: int) -> str:
     semantic string the OS holds, OCR-free."""
     with _lock:
         return _win_title(win)
+
+
+_PROP_REPLACE = 0  # PropModeReplace
+
+
+def set_window_text(win: int, text: str) -> bool:
+    """*Write* the text a window carries — the write dual of :func:`window_text`.
+    On Windows ``WM_SETTEXT`` sets a child control's content directly; on X11
+    toolkits own their widget text, so the OS-level write reaches the window
+    *name* (``_NET_WM_NAME`` UTF-8 + ``WM_NAME``) — the honest analogue of the
+    read side. Returns True."""
+    data = text.encode("utf-8")
+    with _lock:
+        for atom, typ in ((_atom("_NET_WM_NAME"), _atom("UTF8_STRING")),
+                          (_atom("WM_NAME"), 31)):  # 31 = XA_STRING
+            _x.XChangeProperty(_dpy, win, atom, typ, 8, _PROP_REPLACE,
+                               data, len(data))
+        _x.XFlush(_dpy)
+    return True
 
 
 def child_windows(win: int) -> list:

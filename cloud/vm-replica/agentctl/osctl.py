@@ -102,6 +102,12 @@ mouse_state = getattr(_be, "mouse_state", lambda: {"left": False, "right": False
 # titles; this reads the meaning the OS already holds. Empty on an older floor.
 window_text = getattr(_be, "window_text", lambda win: "")
 child_windows = getattr(_be, "child_windows", lambda win: [])
+# Write a control's text directly by identity (write dual of window_text): to fill
+# a field the floor otherwise had to focus the window, focus the control, and type
+# char-by-char (slow, focus-fragile, modifier-corruptible). WM_SETTEXT hands the
+# exact string over in one message — focus-independent, instant, even occluded.
+# On X11 it writes the window name (toolkits own widget text). No-op on older floor.
+set_window_text = getattr(_be, "set_window_text", lambda win, text: False)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the
