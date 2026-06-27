@@ -1640,6 +1640,50 @@ def locate_phrase(rgb: bytes, size: tuple[int, int],
     return None
 
 
+def wait_for_phrase(bbox: tuple[int, int, int, int],
+                    atlas: dict[str, list[int]], target: str,
+                    timeout: float = 5.0, interval: float = 0.15,
+                    tol: int = 60, gap: int = 2, row_gap: int = 4,
+                    space_k: float = 1.8,
+                    nw: int = 48, nh: int = 48, thr: int = 24,
+                    q: int = 16, min_pop: float = 0.002,
+                    min_dist: int = 96) -> tuple[int, int, int, int] | None:
+    """Wait until a word or phrase *appears* on screen, then return its bbox (F118).
+
+    Every locator from F115 on reads a *single frame*: it asks :func:`capture_rgb`
+    once and finds the target in that snapshot. But a GUI is a process in time — a
+    result paints after a click, a page settles after a load — so the one capture
+    an agent takes the instant it acts catches the screen *before* the word it
+    waits for, and :func:`locate_phrase` honestly returns ``None`` for text that is
+    a heartbeat from existing. Acting and observing were one tick apart: you could
+    find what is already drawn, but not *wait* for what is coming. An agent that
+    clicks and reads in the same breath reads the old screen.
+
+    This closes the act → observe → act loop. It re-captures the screen on a fixed
+    cadence (``interval`` seconds) and runs :func:`locate_phrase` over ``bbox`` each
+    time, returning the moment the target first appears — its bbox in the same
+    screen frame :func:`capture_rgb` and :func:`click` share, ready to press. If the
+    text never shows within ``timeout`` seconds it returns ``None`` rather than
+    blocking forever or guessing a place. So ``click(button); box =
+    wait_for_phrase(field, atlas, "DONE"); click(box…)`` reads the screen as it
+    *becomes*, not as it *was*.
+
+    Honest in :func:`locate_phrase`'s frame at every poll (banded rows, bimodal
+    seams, ``atlas`` glyphs, text colours, reading order) and honest about time: it
+    promises only to look until the deadline, and a target that never arrives —
+    or the atlas cannot spell — returns ``None``."""
+    deadline = time.monotonic() + timeout
+    while True:
+        w, h, rgb = capture_rgb()
+        hit = locate_phrase(rgb, (w, h), bbox, atlas, target, tol, gap, row_gap,
+                            space_k, nw, nh, thr, q, min_pop, min_dist)
+        if hit is not None:
+            return hit
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(interval)
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"

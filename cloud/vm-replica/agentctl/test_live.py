@@ -4864,6 +4864,105 @@ def round_locate_phrase(b, offline):
           b.wait_for("document.title==='HIT:OKGO'", timeout=3), b.title())
 
 
+def round_wait_for_phrase(b, offline):
+    print("R82: wait for a result word to APPEAR, then click it "
+          "(act->observe->act, F118) — osctl")
+    # Every locator reads a single frame; the capture an agent takes the instant
+    # it clicks catches the screen BEFORE the delayed result paints, so
+    # locate_phrase honestly returns None for text a heartbeat from existing.
+    # wait_for_phrase re-captures on a cadence and returns the moment the target
+    # first appears (or None at the deadline) — closing act->observe->act.
+    if offline:
+        return
+
+    def hx(s):
+        s = s.lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+    MAG = (255, 0, 255)
+    chars = "OKGREDNBLUY"
+    draws = "".join("x.fillText('%s',%d,80);" % (ch, 24 + i * 96)
+                    for i, ch in enumerate(chars))
+    b.navigate(fixture("wt_atlas.html",
+               "<!doctype html><title>atlas</title><style>html,body{margin:0}</style>"
+               "<canvas id=c width=1100 height=140></canvas><script>"
+               "var x=document.getElementById('c').getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,1100,140);"
+               "x.fillStyle='#f0f';x.font='bold 80px monospace';"
+               "x.textAlign='left';x.textBaseline='middle';" + draws + "</script>"))
+    time.sleep(0.5)
+    aw, ah, argb = osctl.capture_rgb()
+    ab = sorted(osctl.find_color_blobs(MAG, tol=60, rgb=argb, size=(aw, ah),
+                                       min_count=120), key=lambda t: t["x"])
+    check("wt atlas segments into eleven reference glyphs", len(ab) == len(chars),
+          str([t["x"] for t in ab]))
+    if len(ab) != len(chars):
+        return
+    atlas = {chars[i]: osctl.edge_signature(argb, (aw, ah), ab[i]["bbox"])
+             for i in range(len(chars))}
+
+    def field_bbox(rgbX, szX, frac=16):
+        bls = osctl.find_color_blobs(hx("#ffffff"), tol=30, rgb=rgbX, size=szX,
+                                     min_count=5000)
+        if not bls:
+            return None
+        x0, y0, x1, y1 = max(bls, key=lambda t: t["count"])["bbox"]
+        iw, ih = (x1 - x0) // frac, (y1 - y0) // 8
+        return (x0 + iw, y0 + ih, x1 - iw, y1 - ih)
+
+    # A blue 'GO' button; clicking it paints the red result 'OK' ~700ms later.
+    b.navigate(fixture("wt_btn.html",
+               "<!doctype html><title>btn</title><style>html,body{margin:0;"
+               "background:#fff}</style>"
+               "<canvas id=c width=900 height=560></canvas><script>"
+               "var c=document.getElementById('c'),x=c.getContext('2d');"
+               "x.fillStyle='#fff';x.fillRect(0,0,900,560);"
+               "x.font='bold 80px monospace';x.textBaseline='middle';"
+               "x.textAlign='left';"
+               "x.fillStyle='#1565c0';x.fillText('GO',100,160);"
+               "var GW=x.measureText('GO').width,DR=null;"
+               "function go(){setTimeout(function(){x.fillStyle='#d32020';"
+               "x.fillText('OK',100,400);DR=[100,100+x.measureText('OK').width,"
+               "360,440];document.title='DRAWN';},700);}"
+               "c.addEventListener('click',function(e){"
+               "var r=c.getBoundingClientRect();"
+               "var px=e.clientX-r.left,py=e.clientY-r.top;"
+               "if(px>=100&&px<=100+GW&&py>=120&&py<=200){go();return;}"
+               "if(DR&&px>=DR[0]&&px<=DR[1]&&py>=DR[2]&&py<=DR[3])"
+               "document.title='HIT:OK';});</script>"))
+    time.sleep(0.5)
+    w, h, rgb = osctl.capture_rgb()
+    sz = (w, h)
+    bb = field_bbox(rgb, sz)
+    check("wt button field located", bb is not None, repr(bb))
+    if bb is None:
+        return
+    gobox = osctl.locate_phrase(rgb, sz, bb, atlas, "GO")
+    check("the 'GO' button is locatable", gobox is not None, repr(gobox))
+    if gobox is None:
+        return
+
+    # Click GO, then capture immediately — the result has not painted yet.
+    osctl.click((gobox[0] + gobox[2]) // 2, (gobox[1] + gobox[3]) // 2)
+    w2, h2, rgb2 = osctl.capture_rgb()
+    check("FRICTION: a single locate right after the click misses the delayed "
+          "result", osctl.locate_phrase(rgb2, (w2, h2), bb, atlas, "OK") is None)
+
+    # Wait for the result to appear; it does, and its bbox is returned.
+    box = osctl.wait_for_phrase(bb, atlas, "OK", timeout=5.0)
+    check("wait_for_phrase returns the result's bbox once it appears",
+          box is not None, repr(box))
+    if box is None:
+        return
+    check("wait_for_phrase of a word that never appears is None (deadline)",
+          osctl.wait_for_phrase(bb, atlas, "NOPE", timeout=0.6) is None)
+
+    # READ -> ACT after observing: click the result that we waited for.
+    osctl.click((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
+    check("clicking the awaited result 'OK' presses it (act->observe->act)",
+          b.wait_for("document.title==='HIT:OK'", timeout=3), b.title())
+
+
 def main() -> int:
     offline = "--offline" in sys.argv
     b = Browser()
@@ -4895,7 +4994,7 @@ def main() -> int:
               round_read_region, round_read_block_region,
               round_read_region_words, round_read_block_region_words,
               round_locate_word, round_locate_block_word,
-              round_locate_phrase]
+              round_locate_phrase, round_wait_for_phrase]
     for r in rounds:
         try:
             r(b, offline)
