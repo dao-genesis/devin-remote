@@ -1,128 +1,50 @@
-"""agentctl.osctl — OS-level input, clipboard and screen capture (Windows).
+"""agentctl.osctl — OS-level input, clipboard and screen capture.
 
 CDP can only reach what lives *inside* a page.  Real GUIs leak outside the DOM:
 the omnibox, Chrome's own "Leave site?" / basic-auth / file-chooser dialogs,
 other windows entirely (F005).  ``osctl`` is the escape hatch — it drives the
-machine through Win32 ``SendInput`` (trusted input), the clipboard, and a GDI
-screen grab — so the agent keeps operating where the browser channel goes blind.
+machine through trusted synthetic input, the clipboard, and a screen grab — so
+the agent keeps operating where the browser channel goes blind.
 
 The standout primitive is **atomic paste into the omnibox**: per-character typing
 into Chrome's address bar loses keystrokes to history autocomplete (F003).  The
 robust path is clipboard + Ctrl+V — one trusted event, nothing to race.
 
-No third-party deps (no PIL/mss on this VM): the PNG encoder is hand-rolled with
-``zlib`` so a desktop screenshot is always available for the perception side.
+The OS floor is the one platform-specific layer, so it is delegated to a backend
+chosen at import (F141): Win32 ``SendInput``/GDI on Windows, X11 + XTEST on Linux
+(``_osbackend_win`` / ``_osbackend_x11``). Everything below this header — the
+gesture vocabulary and the whole perception side — is platform-agnostic and built
+only on the backend's leaf primitives. No third-party deps on either ground: the
+PNG encoder is hand-rolled with ``zlib`` so a screenshot is always available.
 """
 
 from __future__ import annotations
 
-import ctypes
 import struct
+import sys
 import time
 import zlib
-from ctypes import wintypes
 
-user32 = ctypes.WinDLL("user32", use_last_error=True)
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+if sys.platform.startswith("win"):
+    import _osbackend_win as _be
+elif sys.platform.startswith("linux"):
+    import _osbackend_x11 as _be
+else:  # pragma: no cover - no OS backend for this ground yet
+    raise ImportError(f"osctl: no OS backend for platform {sys.platform!r}")
 
-# 64-bit safety: handles/pointers must NOT default to 32-bit int return, or they
-# get truncated and the next call dereferences a null/garbage pointer.
-_wp = wintypes
-kernel32.GlobalAlloc.restype = _wp.HGLOBAL
-kernel32.GlobalAlloc.argtypes = [_wp.UINT, ctypes.c_size_t]
-kernel32.GlobalLock.restype = ctypes.c_void_p
-kernel32.GlobalLock.argtypes = [_wp.HGLOBAL]
-kernel32.GlobalUnlock.argtypes = [_wp.HGLOBAL]
-user32.SetClipboardData.restype = _wp.HANDLE
-user32.SetClipboardData.argtypes = [_wp.UINT, _wp.HANDLE]
-user32.GetClipboardData.restype = _wp.HANDLE
-user32.GetClipboardData.argtypes = [_wp.UINT]
-user32.GetDC.restype = _wp.HDC
-user32.GetDC.argtypes = [_wp.HWND]
-user32.ReleaseDC.argtypes = [_wp.HWND, _wp.HDC]
-gdi32.CreateCompatibleDC.restype = _wp.HDC
-gdi32.CreateCompatibleDC.argtypes = [_wp.HDC]
-gdi32.CreateCompatibleBitmap.restype = _wp.HBITMAP
-gdi32.CreateCompatibleBitmap.argtypes = [_wp.HDC, ctypes.c_int, ctypes.c_int]
-gdi32.SelectObject.restype = _wp.HGDIOBJ
-gdi32.SelectObject.argtypes = [_wp.HDC, _wp.HGDIOBJ]
-gdi32.BitBlt.argtypes = [_wp.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-                         ctypes.c_int, _wp.HDC, ctypes.c_int, ctypes.c_int,
-                         _wp.DWORD]
-gdi32.GetDIBits.argtypes = [_wp.HDC, _wp.HBITMAP, _wp.UINT, _wp.UINT,
-                            ctypes.c_void_p, ctypes.c_void_p, _wp.UINT]
-gdi32.DeleteObject.argtypes = [_wp.HGDIOBJ]
-gdi32.DeleteDC.argtypes = [_wp.HDC]
+# Leaf primitives supplied by the platform backend. Every gesture and reader
+# below is written once, against these names only — never the raw OS calls.
+screen_size = _be.screen_size
+move = _be.move
+key_down = _be.key_down
+key_up = _be.key_up
+set_clipboard = _be.set_clipboard
+get_clipboard = _be.get_clipboard
+_mouse_button = _be.mouse_button
+_mouse_wheel = _be.mouse_wheel
 
-# ---- SendInput plumbing --------------------------------------------------- #
-INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
-KEYEVENTF_KEYUP = 0x0002
-KEYEVENTF_UNICODE = 0x0004
-MOUSEEVENTF_MOVE = 0x0001
-MOUSEEVENTF_ABSOLUTE = 0x8000
-MOUSEEVENTF_LEFTDOWN = 0x0002
-MOUSEEVENTF_LEFTUP = 0x0004
-MOUSEEVENTF_RIGHTDOWN = 0x0008
-MOUSEEVENTF_RIGHTUP = 0x0010
-MOUSEEVENTF_MIDDLEDOWN = 0x0020
-MOUSEEVENTF_MIDDLEUP = 0x0040
-MOUSEEVENTF_WHEEL = 0x0800
-MOUSEEVENTF_HWHEEL = 0x1000
-WHEEL_DELTA = 120
-
-ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
-
-
-class _MOUSEINPUT(ctypes.Structure):
-    _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
-                ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
-                ("time", wintypes.DWORD), ("dwExtraInfo", ULONG_PTR)]
-
-
-class _KEYBDINPUT(ctypes.Structure):
-    _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
-                ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
-                ("dwExtraInfo", ULONG_PTR)]
-
-
-class _INPUTUNION(ctypes.Union):
-    _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT)]
-
-
-class _INPUT(ctypes.Structure):
-    _fields_ = [("type", wintypes.DWORD), ("u", _INPUTUNION)]
-
-
-def _send(*inputs: _INPUT) -> None:
-    n = len(inputs)
-    arr = (_INPUT * n)(*inputs)
-    sent = user32.SendInput(n, arr, ctypes.sizeof(_INPUT))
-    if sent != n:
-        raise ctypes.WinError(ctypes.get_last_error())
-
-
-def screen_size() -> tuple[int, int]:
-    return (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
-
-
-# ---- mouse ---------------------------------------------------------------- #
-def _abs(x: int, y: int) -> tuple[int, int]:
-    w, h = screen_size()
-    return int(x * 65535 / max(w - 1, 1)), int(y * 65535 / max(h - 1, 1))
-
-
-def move(x: int, y: int) -> None:
-    ax, ay = _abs(x, y)
-    mi = _MOUSEINPUT(ax, ay, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, 0, 0)
-    _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
-
-
-class _POINT(ctypes.Structure):
-    _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
-
-
-def cursor_pos() -> tuple[int, int]:
+# ---- pointer position (read side) ----------------------------------------- #
+def cursor_pos() -> "tuple[int, int]":
     """Read where the pointer actually is, in screen pixels (F138).
 
     The whole pointer family *writes* position — :func:`move`, :func:`drag`,
@@ -134,23 +56,21 @@ def cursor_pos() -> tuple[int, int]:
     relative nudge — "5px right of wherever I am" for a slider or resize handle —
     is impossible without first knowing the current point. (3) Polite flows that
     move the cursor aside and then restore it had nothing to restore *to*. This
-    calls ``GetCursorPos`` and returns ``(x, y)`` — the read-side dual of
-    :func:`move`, closing the loop the pointer family left open."""
-    pt = _POINT()
-    if not user32.GetCursorPos(ctypes.byref(pt)):
-        raise ctypes.WinError(ctypes.get_last_error())
-    return (pt.x, pt.y)
+    reads the pointer's current position and returns ``(x, y)`` — the read-side
+    dual of :func:`move`, closing the loop the pointer family left open."""
+    return _be.cursor_pos()
+
+
+# ---- mouse gestures (platform-agnostic, built on the backend leaves) ------- #
 
 
 def click(x: int | None = None, y: int | None = None, right: bool = False) -> None:
     if x is not None:
         move(x, y)
         time.sleep(0.02)
-    down = MOUSEEVENTF_RIGHTDOWN if right else MOUSEEVENTF_LEFTDOWN
-    up = MOUSEEVENTF_RIGHTUP if right else MOUSEEVENTF_LEFTUP
-    for flag in (down, up):
-        mi = _MOUSEINPUT(0, 0, 0, flag, 0, 0)
-        _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
+    button = "right" if right else "left"
+    _mouse_button(button, True)
+    _mouse_button(button, False)
 
 
 def double_click(x: int | None = None, y: int | None = None,
@@ -186,11 +106,10 @@ def press_hold(x: int | None = None, y: int | None = None,
     if x is not None:
         move(x, y)
         time.sleep(0.02)
-    down = MOUSEEVENTF_RIGHTDOWN if right else MOUSEEVENTF_LEFTDOWN
-    up = MOUSEEVENTF_RIGHTUP if right else MOUSEEVENTF_LEFTUP
-    _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=_MOUSEINPUT(0, 0, 0, down, 0, 0))))
+    button = "right" if right else "left"
+    _mouse_button(button, True)
     time.sleep(duration)
-    _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=_MOUSEINPUT(0, 0, 0, up, 0, 0))))
+    _mouse_button(button, False)
 
 
 def triple_click(x: int | None = None, y: int | None = None,
@@ -224,9 +143,8 @@ def middle_click(x: int | None = None, y: int | None = None) -> None:
     if x is not None:
         move(x, y)
         time.sleep(0.02)
-    for flag in (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP):
-        mi = _MOUSEINPUT(0, 0, 0, flag, 0, 0)
-        _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
+    _mouse_button("middle", True)
+    _mouse_button("middle", False)
 
 
 def mod_click(x: int | None = None, y: int | None = None,
@@ -263,12 +181,10 @@ def drag(x0: int, y0: int, x1: int, y1: int,
     drag-aware listeners (``mousemove`` while the button is held) see the
     path, not just the endpoints — a single jump from start to end reads
     as a teleport and most drag handlers ignore it."""
-    down = MOUSEEVENTF_RIGHTDOWN if right else MOUSEEVENTF_LEFTDOWN
-    up = MOUSEEVENTF_RIGHTUP if right else MOUSEEVENTF_LEFTUP
+    button = "right" if right else "left"
     move(x0, y0)
     time.sleep(0.02)
-    mi = _MOUSEINPUT(0, 0, 0, down, 0, 0)
-    _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
+    _mouse_button(button, True)
     time.sleep(hold)
     n = max(1, steps)
     for i in range(1, n + 1):
@@ -277,8 +193,7 @@ def drag(x0: int, y0: int, x1: int, y1: int,
         move(mx, my)
         time.sleep(pause)
     time.sleep(hold)
-    mi = _MOUSEINPUT(0, 0, 0, up, 0, 0)
-    _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
+    _mouse_button(button, False)
 
 
 def mod_drag(x0: int, y0: int, x1: int, y1: int, *mods: int,
@@ -378,17 +293,16 @@ def scroll(dy: int = 0, dx: int = 0,
         move(x, y)
         time.sleep(0.02)
 
-    def wheel(flag: int, notches: int) -> None:
-        d = WHEEL_DELTA if notches > 0 else -WHEEL_DELTA
+    def wheel(notches: int, horizontal: bool) -> None:
+        step = 1 if notches > 0 else -1
         for _ in range(abs(notches)):
-            mi = _MOUSEINPUT(0, 0, d & 0xFFFFFFFF, flag, 0, 0)
-            _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
+            _mouse_wheel(step, horizontal)
             time.sleep(pause)
 
     if dy:
-        wheel(MOUSEEVENTF_WHEEL, dy)
+        wheel(dy, False)
     if dx:
-        wheel(MOUSEEVENTF_HWHEEL, dx)
+        wheel(dx, True)
 
 
 def mod_scroll(dy: int = 0, dx: int = 0, *mods: int,
@@ -415,16 +329,6 @@ def mod_scroll(dy: int = 0, dx: int = 0, *mods: int,
 
 
 # ---- keyboard ------------------------------------------------------------- #
-def key_down(vk: int) -> None:
-    ki = _KEYBDINPUT(vk, 0, 0, 0, 0)
-    _send(_INPUT(INPUT_KEYBOARD, _INPUTUNION(ki=ki)))
-
-
-def key_up(vk: int) -> None:
-    ki = _KEYBDINPUT(vk, 0, KEYEVENTF_KEYUP, 0, 0)
-    _send(_INPUT(INPUT_KEYBOARD, _INPUTUNION(ki=ki)))
-
-
 def tap(vk: int) -> None:
     key_down(vk)
     key_up(vk)
@@ -454,13 +358,8 @@ def key_hold(vk: int, duration: float = 0.8) -> None:
 
 
 def type_unicode(text: str) -> None:
-    """Inject text as trusted Unicode key events (bypasses layout)."""
-    inputs = []
-    for ch in text:
-        for flags in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
-            ki = _KEYBDINPUT(0, ord(ch), flags, 0, 0)
-            inputs.append(_INPUT(INPUT_KEYBOARD, _INPUTUNION(ki=ki)))
-    _send(*inputs)
+    """Inject text as trusted Unicode key events (bypasses the keyboard layout)."""
+    return _be.type_unicode(text)
 
 
 # Common virtual-key codes.
@@ -469,42 +368,7 @@ VK_L, VK_V, VK_A, VK_C = 0x4C, 0x56, 0x41, 0x43
 VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN = 0x25, 0x26, 0x27, 0x28
 
 
-# ---- clipboard ------------------------------------------------------------ #
-CF_UNICODETEXT = 13
-GMEM_MOVEABLE = 0x0002
-
-
-def set_clipboard(text: str) -> None:
-    if not user32.OpenClipboard(0):
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        user32.EmptyClipboard()
-        data = text.encode("utf-16-le") + b"\x00\x00"
-        h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
-        ptr = kernel32.GlobalLock(h)
-        ctypes.memmove(ptr, data, len(data))
-        kernel32.GlobalUnlock(h)
-        if not user32.SetClipboardData(CF_UNICODETEXT, h):
-            raise ctypes.WinError(ctypes.get_last_error())
-    finally:
-        user32.CloseClipboard()
-
-
-def get_clipboard() -> str:
-    if not user32.OpenClipboard(0):
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        h = user32.GetClipboardData(CF_UNICODETEXT)
-        if not h:
-            return ""
-        ptr = kernel32.GlobalLock(h)
-        text = ctypes.wstring_at(ptr)
-        kernel32.GlobalUnlock(h)
-        return text
-    finally:
-        user32.CloseClipboard()
-
-
+# ---- clipboard (set_clipboard / get_clipboard come from the backend) ------- #
 def paste_text(text: str) -> None:
     """F003: atomic paste — set clipboard, then Ctrl+V (one trusted event)."""
     set_clipboard(text)
@@ -521,20 +385,7 @@ def omnibox_go(url: str) -> None:
     tap(VK_RETURN)
 
 
-# ---- GDI screen capture + hand-rolled PNG --------------------------------- #
-SRCCOPY = 0x00CC0020
-DIB_RGB_COLORS = 0
-
-
-class _BITMAPINFOHEADER(ctypes.Structure):
-    _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
-                ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
-                ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
-                ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
-                ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD),
-                ("biClrImportant", wintypes.DWORD)]
-
-
+# ---- hand-rolled PNG encoder (stdlib only) -------------------------------- #
 def _png(width: int, height: int, rgb: bytes) -> bytes:
     def chunk(tag: bytes, data: bytes) -> bytes:
         return (struct.pack(">I", len(data)) + tag + data
@@ -551,40 +402,16 @@ def _png(width: int, height: int, rgb: bytes) -> bytes:
             + chunk(b"IEND", b""))
 
 
-def capture_rgb() -> tuple[int, int, bytes]:
+def capture_rgb() -> "tuple[int, int, bytes]":
     """Grab the whole desktop into memory as ``(w, h, rgb)`` (3 bytes/pixel,
-    row-major, top-down) via GDI BitBlt — the raw pixel channel the agent sees.
+    row-major, top-down) — the raw pixel channel the agent sees.
 
-    The dimensions match ``screen_size()`` (the same space ``_abs``/``click``
-    normalise against), so a pixel located here is directly clickable."""
-    w, h = screen_size()
-    sdc = user32.GetDC(0)
-    mdc = gdi32.CreateCompatibleDC(sdc)
-    bmp = gdi32.CreateCompatibleBitmap(sdc, w, h)
-    gdi32.SelectObject(mdc, bmp)
-    gdi32.BitBlt(mdc, 0, 0, w, h, sdc, 0, 0, SRCCOPY)
-
-    bih = _BITMAPINFOHEADER()
-    bih.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
-    bih.biWidth = w
-    bih.biHeight = -h  # top-down
-    bih.biPlanes = 1
-    bih.biBitCount = 32
-    bih.biCompression = 0
-    buf = ctypes.create_string_buffer(w * h * 4)
-    gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bih), DIB_RGB_COLORS)
-
-    # BGRA -> RGB
-    bgra = bytes(buf.raw)
-    rgb = bytearray(w * h * 3)
-    rgb[0::3] = bgra[2::4]
-    rgb[1::3] = bgra[1::4]
-    rgb[2::3] = bgra[0::4]
-
-    gdi32.DeleteObject(bmp)
-    gdi32.DeleteDC(mdc)
-    user32.ReleaseDC(0, sdc)
-    return w, h, bytes(rgb)
+    The dimensions match ``screen_size()`` (the same space ``click`` normalises
+    against), so a pixel located here is directly clickable. The grab itself is
+    the backend's job (GDI ``BitBlt`` on Windows, ``XGetImage`` on Linux); both
+    return this identical byte layout, so the perception side never sees the
+    difference."""
+    return _be.capture_rgb()
 
 
 def screenshot(path: str) -> str:

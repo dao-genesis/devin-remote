@@ -3539,6 +3539,94 @@ and you do not stumble.
 
 ---
 
+## F141 — the OS floor becomes cross-platform (pluggable backends)
+
+**Friction (the most fundamental yet).** Every primitive from F001 to F140 was
+verified on Windows, because `osctl` *was* Windows: it opened with
+`ctypes.WinDLL("user32")` and spoke `SendInput` + GDI `BitBlt` directly. On a
+Linux desktop — the GUI this agent actually has to operate here — `osctl` could
+not even be imported (`WinDLL` does not exist), so the whole 738-check suite, and
+any future F-round, was unrunnable on this machine. The toolkit that exists to
+let an AI operate *its* screen could not operate *this* screen. That is not a
+missing feature; it is the ground being only half-laid.
+
+**Why this is structural, not a port.** The platform-specific surface is tiny and
+lives entirely at the bottom: grab the screen, move/press the mouse, press a key,
+read/own the clipboard, read the cursor. Everything above it — locating colours,
+segmenting glyphs, reading text, matching templates, the wait/settle family, the
+gesture vocabulary (`click`/`drag`/`scroll`/`chord`/…) — is pure arithmetic over a
+`(w, h, rgb)` buffer and a handful of leaf calls. It never cared which OS drew the
+pixels. So the fix is not to fork the toolkit per OS; it is to name the floor as
+an interface and let the platform supply it. 大制無割 — the great cut makes no cut.
+
+**Mechanism.** `osctl` now selects a backend at import by `sys.platform`:
+`_osbackend_win` (Win32 `SendInput`/GDI, extracted verbatim from the old osctl)
+or `_osbackend_x11` (pure-ctypes X11 + the XTEST extension). Both export the exact
+same leaf API — `screen_size`, `move`, `cursor_pos`, `mouse_button`, `mouse_wheel`,
+`key_down`, `key_up`, `type_unicode`, `set_clipboard`, `get_clipboard`,
+`capture_rgb` — and `(w, h, rgb)` is the identical byte layout on both. The rest of
+`osctl.py` is rewritten once against those names and never touches a raw OS call.
+No third-party deps on either ground (no python-xlib, no PIL): the X11 backend is
+hand-bound ctypes, the PNG encoder stays `zlib`.
+
+The three X11 corners that took real care (each a leaf the perception side relies
+on being faithful):
+- **Unicode typing without a layout.** Bind the target keysym to a spare keycode
+  (`XChangeKeyboardMapping`), strike it via XTEST, then clear it — with `XSync` +
+  small sleeps between chars so a stale binding can never autorepeat into
+  `"hll333…"`. The Win side injects the same text via `KEYEVENTF_UNICODE`; both
+  bypass the active layout, so CJK/emoji go in verbatim.
+- **Clipboard as a selection owner.** X has no global buffer — the owner serves the
+  text to each paster on demand. A daemon thread on its own display connection
+  answers `SelectionRequest` for `CLIPBOARD`/`PRIMARY`, so Chrome's Ctrl+V receives
+  it. (Bug paid down: the reply event is `XSelectionEvent` — 9 fields, *no* `owner`
+  — not the 10-field request struct; reusing the wrong struct corrupted memory and
+  hung CDP. Match the spec exactly.)
+- **Capture.** `XGetImage` of the root, BGRA→RGB into the same tight `w*h*3` buffer
+  the GDI grab produced, freeing the image each time so repeated grabs don't leak.
+
+**Live (Linux, X11, 1600×1200):** `710/738 checks passed`, deterministic ×2
+(identical failure sets both runs). Every input/gesture/capture primitive and
+every *single-ink* perception primitive (find_color, blobs, edges, templates,
+read_glyph/read_text/read_words, detect_fg, the whole wait/settle/diff family,
+cursor_pos) passes live against real Chrome. The X11 leaves were independently
+proven first in `_x11proto.py` / `_x11e2e.py` (magenta-pixel click, Unicode type,
+clipboard paste) before being folded in.
+
+**Honest note (the 28 deltas — all perception-layer, none in the floor).** The
+remaining failures are not OS-backend defects; they are places where the
+*pixel-level perception* was calibrated against Windows rendering/timing and is
+sensitive to this Linux box's:
+- **Font rasterisation (FreeType vs ClearType).** All multi-colour OCR rounds
+  (`palette` and its dependants `read_region`/`read_block_region`/`…_words`).
+  `palette` clusters quantised colour buckets above a population floor taken over
+  the *whole* region; FreeType's heavier anti-alias spreads a small word's ink
+  across more buckets, so one ink of three can fall under the floor and drop out,
+  and a run's *leading* glyph (its left edge sub-pixel-shifted) is segmented one
+  column off and misread (O→D, R→L, N→L). Single-ink reads, which dominate real
+  use, are unaffected.
+- **Animation cadence resonance.** `wait_stable` on the R18 fixture: this box's
+  whole-screen `find_color` scan + the default 0.12 s poll happens to beat against
+  the fixture's 180 ms teleport, so the centroid aliases to one phase and "settles"
+  early; and the multi-green-cluster R97 scene pulls `find_color`'s centroid off
+  the panel. Both are cadence/centroid coincidences of *this* display, not wrong
+  input or capture.
+
+These are the next honest frontier (make `palette` ink-detection AA-robust;
+make the wait/settle family resonance- and multi-cluster-robust) — to be pushed
+into per the project's rule: grow/adjust a primitive only from a reproduced
+failure, and only in a way that is correct on *both* grounds. They are recorded
+here rather than hidden behind a Linux-only threshold tweak that would risk the
+Windows reading the same primitives were tuned for.
+
+**Lesson (道法自然):** 上善若水，水善利萬物而不爭 — the highest good is like water,
+which benefits all things by taking the shape of whatever holds it. The toolkit
+does not argue with the OS; it lets the OS be the vessel and flows the same way on
+each. 無為而無不為 — name the floor, do nothing above it that knows the floor's
+name, and it runs everywhere.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
