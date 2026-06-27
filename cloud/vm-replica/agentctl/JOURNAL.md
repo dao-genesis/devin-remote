@@ -3931,6 +3931,59 @@ faculties but by letting the ones it has **move together**. 無為而無不為.
 
 ---
 
+## F148 — raising an occluded window so the *mouse* reaches it (R109)
+
+**The other half of addressing.** F146/F147 routed the **keyboard** by input-focus — and on
+X11 input-focus is independent of stacking, so even a *covered* window receives keystrokes
+once activated. The **mouse** is a different animal: a click lands on whichever window owns
+that pixel in the **Z-order**. When two windows overlap, clicking the shared pixel hits the
+*top* one. So to operate an occluded window *with the mouse* you must first **raise** it —
+exactly what screenshot+click cannot do (it can only click the visible top pixel; it has no
+way to bring a covered window forward).
+
+**Reproduced friction (live, this VM).** Two konsoles at overlapping geometry —
+`ZWIN-A` at `+120+120`, `ZWIN-B` at `+170+170` (B on top). Clicking the shared body pixel
+`(420,360)` and typing wrote **`CLICK-B`** — the click hit the occluding window. After
+`focus_window("ZWIN-A")` (which `activate_window` raises via `_NET_ACTIVE_WINDOW` +
+`XMapRaised`/`XRaiseWindow`), clicking the **same** pixel wrote **`CLICK-A`** — the mouse now
+reached the intended, formerly-covered window.
+
+**This is a distinct mechanism, not a re-dress of R107/R108.** Those proved *focus* routing
+(keyboard); this proves *stacking* (mouse). The same `activate_window` serves both, which is
+the honest economy: one act of raising-by-name satisfies the keyboard (focus) and the mouse
+(Z-order) at once. 大制無割 — the right cut leaves nothing to re-cut.
+
+**Live A/B (same two overlapping terminals, identical click point):**
+
+| step | marker | outcome |
+|---|:---:|---|
+| click shared pixel, B occluding A | `CLICK-B` | mouse hit the **top** window |
+| `focus_window("ZWIN-A")` then click | `CLICK-A` | mouse reached the **raised** window |
+
+R109 (`round_zorder`) bakes it in (3 checks): top-window-hit without raising, raised-window
+reached after `activate_window`, strict redirection. Linux/konsole only for now — forcing a
+deterministic window *overlap* on Windows needs a move primitive the floor has not grown yet
+(no friction reproduced there), so it skips gracefully on Windows. `_probe_relay.py` covers
+F147; F148's reproduction lives in the round itself.
+
+**Lesson (道法自然).** 見小曰明 — the small, easily-missed distinction (focus ≠ stacking) is
+exactly where the real defect hides. A system that only ever drove the keyboard would have
+*claimed* to "address windows" while silently failing every mouse click on a covered one. We
+only earn the claim by living the mouse case too. 無為而無不為.
+
+**Side-friction caught while validating F148: a transient CDP drop cascaded.** Two of four
+full-suite runs lost the Chrome debug websocket *mid-run* (once deep in the perception rounds,
+once right after a window round) — a transient socket close under heavy off-CDP activity, not
+a code defect (every affected round passes standalone). But the harness had no recovery: once
+`CDP._alive` went False, **every** later round threw `CDP not connected`, turning one hiccup
+into ~50 false failures. Fixed structurally, not by re-running until lucky: `Browser.reconnect()`
+re-attaches to the live page (the tab survives a socket drop; only the connection died) and the
+harness self-heals between rounds — the round the drop landed in still counts, but the suite
+stays honest after it. 弱也者道之用也 — the connection's weakness (it can drop) is answered not
+by force but by yielding-and-reattaching.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

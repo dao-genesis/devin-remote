@@ -145,8 +145,26 @@ window.__agentctl = (function () {
 
 class Browser:
     def __init__(self, cdp: CDP | None = None, port: int = 29229):
+        self._port = port
         self.cdp = cdp or CDP(port=port).connect()
         self._inject_helpers()
+
+    def reconnect(self) -> bool:
+        """Re-establish a dropped CDP connection. The debug websocket can close
+        transiently (e.g. the renderer hiccups under heavy off-CDP activity);
+        that should wedge nothing more than the in-flight call. Re-attaches to
+        the live page and re-injects the page helpers. Returns True once
+        reconnected."""
+        try:
+            self.cdp.close()
+        except Exception:
+            pass
+        # The tab itself survives a transient socket drop, so re-attach to the
+        # live page (connect() picks an existing target) rather than minting a
+        # new one.
+        self.cdp = CDP(port=self._port).connect()
+        self._inject_helpers()
+        return True
 
     # ---- low-level -------------------------------------------------------- #
     def eval(self, expr: str, await_promise: bool = False, timeout: float = 20.0):

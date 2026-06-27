@@ -981,6 +981,104 @@ def round_clip_relay(b: Browser, offline: bool) -> None:
         time.sleep(0.4)
 
 
+def round_zorder(b: Browser, offline: bool) -> None:
+    print("R109: RAISE an occluded window so a MOUSE click reaches it (F148) — osctl")
+    # R107/R108 routed the KEYBOARD by input-focus. The mouse is different: a
+    # click lands on whatever window owns that pixel in the Z-order. When two
+    # windows OVERLAP, clicking the shared pixel hits the top one — so to operate
+    # an occluded window with the mouse you must first RAISE it. Screenshot+click
+    # cannot do this at all: it can only click the visible (top) pixel and has no
+    # way to bring a covered window forward. activate_window raises Z-order; this
+    # proves a subsequent click at the very same pixel then reaches the intended
+    # window. (Linux/konsole only — forcing window overlap on Windows needs a
+    # move primitive we have not grown yet; skips gracefully there.)
+    import shutil
+    import subprocess
+
+    if sys.platform.startswith("win"):
+        print("  (skip R109: needs a window-move primitive on Windows)")
+        return
+    term = shutil.which("konsole")
+    if term is None:
+        print("  (skip R109: no konsole on this Linux host)")
+        return
+
+    mark = os.path.join(__import__("tempfile").gettempdir(), "dao_zorder_round.txt")
+    ox, oy = 420, 360  # a pixel inside BOTH window bodies (see geometry below)
+
+    def launch(tag, title, geom):
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR", "/tmp/runtime-ubuntu")
+        return subprocess.Popen(
+            [term, "--separate", "-p", "tabtitle=" + title, "--geometry", geom,
+             "-e", "env", "WTAG=" + tag, "bash", "--norc", "-i"], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def click_then_mark():
+        osctl.click(ox, oy)
+        time.sleep(0.4)
+        osctl.type_unicode("echo ZC-$WTAG > " + mark)
+        osctl.tap(osctl.VK_RETURN)
+        time.sleep(0.7)
+
+    def read():
+        try:
+            with open(mark) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    procs = []
+    try:
+        procs.append(launch("A", "ZWIN-A", "640x420+120+120"))
+        time.sleep(2.2)
+        procs.append(launch("B", "ZWIN-B", "640x420+170+170"))  # overlaps A, on top
+        time.sleep(2.6)
+        wins = osctl.list_windows()
+        a = next((w for w in wins if "ZWIN-A" in (w.get("title") or "")), None)
+        bb = next((w for w in wins if "ZWIN-B" in (w.get("title") or "")), None)
+        if not a or not bb:
+            check("zorder: enumerate both overlapping windows", False, "missing a window")
+            return
+
+        # Friction: B is on top at the shared pixel; clicking it hits B (wrong).
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        click_then_mark()
+        occluded = read()
+        check("clicking the shared pixel hits the TOP (occluding) window",
+              occluded == "ZC-B", f"marker={occluded!r}")
+
+        # Fix: raise A by name, then the SAME click reaches A.
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        osctl.focus_window("ZWIN-A")
+        click_then_mark()
+        raised = read()
+        check("after activate_window the same click reaches the RAISED window",
+              raised == "ZC-A", f"marker={raised!r}")
+        check("raising Z-order strictly redirects the mouse to the intended window",
+              occluded == "ZC-B" and raised == "ZC-A",
+              f"occluded={occluded!r} raised={raised!r}")
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        os.system("pkill -9 konsole 2>/dev/null")
+        for w in osctl.list_windows():
+            if "Chrome" in (w.get("title") or "") or "Chromium" in (w.get("title") or ""):
+                osctl.activate_window(w["id"])
+                break
+        time.sleep(0.4)
+
+
 def round_structure_match(b: Browser, offline: bool) -> None:
     print("R19: pick a colour-shifted target by structure, not appearance (F055) — osctl")
     # Two magenta tiles (segmentable), each holding a black glyph drawn in a
@@ -6706,7 +6804,7 @@ def main() -> int:
               round_hover_menu, round_dnd, round_virtual_scroll, round_xorigin_iframe,
               round_canvas_pixel, round_ime_compose, round_color_blobs,
               round_template_match, round_settle, round_reach, round_steer,
-              round_window, round_clip_relay,
+              round_window, round_clip_relay, round_zorder,
               round_structure_match,
               round_scale_invariant, round_rotation_invariant, round_read_glyph,
               round_oop_iframe, round_new_tab, round_occlusion,
@@ -6746,6 +6844,16 @@ def main() -> int:
             r(b, offline)
         except Exception as e:
             check(r.__name__ + " (exception)", False, repr(e))
+        # Self-heal: a transient debug-socket drop must not cascade into dozens
+        # of false "CDP not connected" failures across every later round. If the
+        # connection died during a round, reconnect before the next one — the
+        # round it died in still counts, but the suite stays honest after it.
+        if not getattr(b.cdp, "_alive", True):
+            try:
+                b.reconnect()
+                print(f"  (recovered: CDP reconnected after {r.__name__})")
+            except Exception as e:
+                print(f"  (reconnect failed after {r.__name__}: {e!r})")
     b.close()
 
     passed = sum(1 for _, ok, _ in _results if ok)
