@@ -1730,7 +1730,8 @@
   //   两个 github.io 互为账号冗余, 皆经 Fastly CDN 国内可达; 本页若自持久静态宿主直发则自指本源(下方自指逻辑)。
   var P2P_CLIENT_HDOUGLE="https://hdougle.github.io/dao-console/console.html";
   var P2P_CLIENT_GITHUB_FALLBACK="https://zhouyoukang1234-spec.github.io/devin-remote/addons/rt-flow-app/app/src/main/assets/engine/console.html";
-  var P2P_CLIENT_CDN_FALLBACK=P2P_CLIENT_HDOUGLE;
+  // 默认回退首字节宿主 = 项目方 Pages (自随 main 自动更新·实测 200 text/html); hdougle 账号当前未发布 Pages→404, 降为次级冗余。
+  var P2P_CLIENT_CDN_FALLBACK=P2P_CLIENT_GITHUB_FALLBACK;
   var P2P_CLIENT_CDN=(function(){
     try{
       var u=new URL(String(location.href||""));

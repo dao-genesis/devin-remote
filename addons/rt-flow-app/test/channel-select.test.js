@@ -45,6 +45,13 @@ const CF = "https://spots-vegetable-warehouse-vast.trycloudflare.com";
 const SSH = "https://ssh-tunnel.example.net";
 const ID = { session: "s1", token: "tok1" };   // 真实设备恒自带 session+token
 
+// 死宿主护栏: 默认首字节宿主必须是活的项目方 Pages, 绝不是已 404 的 hdougle (用户实测网页直开 404 之根因·防回归)。
+{
+  const mod0 = build({ conn: ID });
+  ok(/zhouyoukang1234-spec\.github\.io/.test(mod0.P2P_WEB_DEFAULT), "0 默认首字节宿主 = 活的项目方 Pages (实测 200 text/html)");
+  ok(mod0.P2P_WEB_DEFAULT.indexOf("hdougle.github.io") < 0, "0 默认首字节宿主绝不指向已 404 的 hdougle (网页直开报错之根因·防回归)");
+}
+
 // 场景1: 设备身份就绪 + Worker 连通 + cloudflared 也在 → 网页直开 = 持久去中心化引导宿主开页(永不 1033),
 //        附设备活隧道作 &direct= 提速提示, 通信走 mesh。
 {

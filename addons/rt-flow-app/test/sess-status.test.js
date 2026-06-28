@@ -71,10 +71,10 @@ const sessStatus = eval("(function(){\n" + seg[0] + "\nreturn sessStatus;})()");
 // ── 源级护栏: 状态传播链完整 ──
 ok(/cls!=="running"&&cls!=="awaiting"&&cls!=="blocked"&&cls!=="exhausted"/.test(switchSrc),
    "源级: _pollOneAcc 收集 exhausted 项 (不被过滤丢弃)");
-ok(/if\(exhausted>0\) _quotaAlert\(a,exhausted\)/.test(switchSrc),
-   "源级: _pollOneAcc 检测到 exhausted 即触发 _quotaAlert");
-ok(/function _quotaAlert\(a, cnt\)/.test(switchSrc),
-   "源级: 存在额度耗尽通知函数 _quotaAlert");
+ok(/if\(exhausted>0\)\{[\s\S]*?_quotaAlert\(a,exhausted,/.test(switchSrc),
+   "源级: _pollOneAcc 检测到 exhausted 即触发 _quotaAlert(带对话名)");
+ok(/function _quotaAlert\(a, cnt, convName\)/.test(switchSrc),
+   "源级: 存在额度耗尽通知函数 _quotaAlert(消息主体用对话名)");
 ok(/_quotaAlertTs\[a\.id\]/.test(switchSrc),
    "源级: _quotaAlert 按账号节流 (_quotaAlertTs)");
 ok(/totalExh\+=\(st\.exhausted\|\|0\)/.test(switchSrc),
@@ -87,6 +87,22 @@ ok(/st\.exhausted\?'<span class="exh"/.test(switchSrc) || /\(st\.exhausted\|\|0\
    "源级: paintRowRun 行内显示 exhausted 指示");
 ok(/rec\.reason==="quota"\)\?"exhausted":"blocked"/.test(switchSrc),
    "源级: refineStuck 事件流命中额度 → exhausted (而非 blocked)");
+
+// ── 源级护栏: 标签/通知「最新对话名优先」(用户要求·防漂移) ──
+ok(/function _sessTs\(s\)/.test(switchSrc),
+   "源级: 存在 _sessTs 会话活跃时间戳解析(择取最新对话)");
+ok(/var latestName="", latestTs=-1/.test(switchSrc),
+   "源级: _pollOneAcc 计算该账号最新对话名 latestName");
+ok(/var nm = top \? \(top\.title\|\|""\) : latestName/.test(switchSrc),
+   "源级: 无需关注对话时标签回退「最新对话名」而非空(空才由原生回退账号名)");
+ok(/items:items,latest:latestName/.test(switchSrc) && /items:\[\],latest:latestName/.test(switchSrc),
+   "源级: _trk 持久化 latest(活跃与墓碑两态皆带最新对话名)");
+ok(/else \{ nm=st\.latest\|\|""; stt="finished"; if\(!nm\) return; \}/.test(switchSrc),
+   "源级: _repushTabsFromTrk 空闲账号即刻重显缓存最新对话名");
+ok(/function _convNameOf\(a\)/.test(switchSrc),
+   "源级: 存在 _convNameOf 统一取「对话名为消息主体」");
+ok(/_bigAlert\("⚠ "\+_convNameOf\(a\)\+" 额度仅/.test(switchSrc),
+   "源级: 低额提醒以对话名为主体(不前缀账号名)");
 
 if (failures) { console.error("\n" + failures + " 项失败 ✗"); process.exit(1); }
 console.log("\n全部通过 ✓");
