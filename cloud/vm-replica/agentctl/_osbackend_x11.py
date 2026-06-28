@@ -1392,10 +1392,34 @@ def _find_acc(at, fr, name, ctype):
     return _walk(at, fr, visit)
 
 
+def _click_rect(win: int, rect) -> bool:
+    """Land a real left-click on a control's screen rect — the bridge that joins
+    the semantic floor to the gesture floor. Raise the owning window first so the
+    click reaches it, aim at the rect's centre, then press/release through the
+    same XTEST path every other click uses. Meaning chose the target; pixels are
+    only the delivery."""
+    x, y, w, h = rect
+    if w <= 0 or h <= 0:
+        return False
+    activate_window(win)
+    time.sleep(0.08)
+    move(x + w // 2, y + h // 2)
+    time.sleep(0.04)
+    mouse_button("left", True)
+    mouse_button("left", False)
+    return True
+
+
 def uia_invoke(win: int, name=None, ctype=None) -> bool:
     """Press a control by meaning — fire its default action (Action.do_action 0)
     on the element matched by name/role. The semantic dual of a mouse click that
-    needs no pixels: a button, menu item or link actuated by *what it is*."""
+    needs no pixels: a button, menu item or link actuated by *what it is*.
+
+    When the matched control exposes no Action (a text region, a canvas, any
+    click-only surface a toolkit never wired for accessibility), fall through to
+    the gesture floor: locate its rect by meaning and land a real click there.
+    So invoke-by-meaning answers for *any* visible control, not only the ones a
+    toolkit happened to make actionable."""
     at = _atspi()
     if not at:
         return False
@@ -1409,11 +1433,16 @@ def uia_invoke(win: int, name=None, ctype=None) -> bool:
                 return False
             try:
                 action = at.atspi_accessible_get_action_iface(acc)
-                if not action:
-                    return False
-                ok = bool(at.atspi_action_do_action(action, 0, None))
-                _unref(action)
-                return ok
+                if action:
+                    ok = bool(at.atspi_action_do_action(action, 0, None))
+                    _unref(action)
+                    if ok:
+                        return True
+                # no Action, or it refused — fall back to a real click on the rect
+                rect = _acc_rect(at, acc)
+                if rect:
+                    return _click_rect(win, rect)
+                return False
             finally:
                 _unref(acc)
         finally:
@@ -1507,5 +1536,34 @@ def uia_focus(win: int, name=None, ctype=None) -> bool:
                 return ok
             finally:
                 _unref(acc)
+        finally:
+            _unref(fr)
+
+
+def uia_click(win: int, name=None, ctype=None) -> bool:
+    """Click a control located purely by meaning — find it by name/role, then
+    land a real left-click on its screen rect via the gesture floor. The explicit
+    union of the two floors: semantics choose *what*, pixels deliver the *where*.
+    Use it for any visible control regardless of whether the toolkit exposed an
+    Action (text regions, canvases, custom widgets); uia_invoke calls into this
+    same path when a control has no actionable interface."""
+    at = _atspi()
+    if not at:
+        return False
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return False
+        try:
+            acc = _find_acc(at, fr, name, ctype)
+            if not acc:
+                return False
+            try:
+                rect = _acc_rect(at, acc)
+            finally:
+                _unref(acc)
+            if not rect:
+                return False
+            return _click_rect(win, rect)
         finally:
             _unref(fr)
