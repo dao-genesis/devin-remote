@@ -2,6 +2,11 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.45
+- **browser_emulate `reset` 据实测根治为「可靠复位桌面」**。v3.50.44 落地后继续 live 实测发现：无状态短连里，由「已亡会话」设下的设备度量覆写是孤儿态——新连的 `clearDeviceMetricsOverride`、`setDeviceMetricsOverride{width:0}` 皆无法清除（reset 后视口仍停在 390）；但实测确证**新连的 `setDeviceMetricsOverride(新值)` 可全局覆盖生效**（实测 400→1100 即时改变）。
+  - 修法：`reset` 改为先以桌面度量（默认 1280×800·dsf 1·mobile false）覆盖（可靠复位桌面布局），再于同一会话内 `clearDeviceMetricsOverride`（此时本会话拥有该覆写，clear 可真正移除→回归原生）；二者叠加确保稳定复位。`reset` 可传 `width/height` 自定义。
+  - 自检：`node --check`、`build`、rt-flow 115+35 全过。仅改 `core/dao-vsix/src/extension.ts`。
+
 ## 3.50.44
 - **browser_emulate 据「实践暴露的缺陷」据实收敛（道法自然·不虚报）**。围绕 emulate 做了三轮实测螺旋，最终落到「只承诺可靠落地的能力」：
   - v3.50.43 曾试图用 `Page.addScriptToEvaluateOnNewDocument` 注入持久客户端 UA 覆写补偿会话级 UA override 的失效——但 live 实测（固定 targetId 串测 emulate→navigate→eval）证明：**该注入脚本同样是会话级**，`daoCdpBatch` 连接一断即被 Chrome 清除（`navigator.userAgent` 仍回落桌面、`reset` 报 `Script not found`）。
