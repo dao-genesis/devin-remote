@@ -2652,7 +2652,18 @@ async function daoMcpCallTool(name, a) {
         }
         case 'browser_emulate': {
             const t = await daoCdpPickPage(a.targetId);
-            if (a.reset) { await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Emulation.clearDeviceMetricsOverride' }, { method: 'Emulation.setTouchEmulationEnabled', params: { enabled: false } }]); return daoMcpText('reset'); }
+            if (a.reset) {
+                // 实测: 无状态短连里, 由「已亡会话」设下的设备度量覆写是孤儿态——新连的 clearDeviceMetricsOverride / width:0 皆无法清除它;
+                //   但新连的「setDeviceMetricsOverride(新值)」可全局覆盖生效。故 reset 先以桌面度量覆盖(可靠复位桌面布局),
+                //   再于同一会话内 clear(此时本会话拥有该覆写, clear 可真正移除 → 回归原生); 二者叠加确保稳定复位。
+                const rw = Math.round(+(a.width || 1280)); const rh = Math.round(+(a.height || 800));
+                await daoCdpBatch(t.webSocketDebuggerUrl, [
+                    { method: 'Emulation.setDeviceMetricsOverride', params: { width: rw, height: rh, deviceScaleFactor: 1, mobile: false } },
+                    { method: 'Emulation.setTouchEmulationEnabled', params: { enabled: false } },
+                    { method: 'Emulation.clearDeviceMetricsOverride' },
+                ]);
+                return daoMcpText({ reset: { width: rw, height: rh }, note: '已复位桌面视口(默认 1280×800·可传 width/height 自定义)' });
+            }
             const presets = {
                 iphone: { width: 390, height: 844, deviceScaleFactor: 3, mobile: true },
                 pixel: { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true },
