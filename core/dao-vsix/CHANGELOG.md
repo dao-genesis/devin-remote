@@ -2,6 +2,14 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.51
+- **路线C(ntfy mesh)兜底通道根治为「整机全权可用」**。经 mesh 实测发现:除免鉴权 `/api/health` 外, `/api/exec`、`/api/file`、`/api/write` 等需鉴权整机端点经 mesh 一律 `500 unauthorized` —— 兜底通道形同半残(cloudflared 公网URL 全挂时, 云端连不上也操作不了机器, 正是用户所报「端口断了根本连不上、账号信息全没更新」的兜底缺口)。
+  - 根因:`sigServeFrame` 构造的 `fakeReq` 不带 `Authorization` 头, `checkAuth` 必判 unauthorized。但 mesh 帧以 token 派生的 AES-256-GCM 封装, **`sigUnseal` 成功 ⟺ 调用方持有正确 token** —— 解封成功本身即等同鉴权。
+  - 修法:解封成功后向 `fakeReq` 注入权威 `Bearer`(`bridgeAuthoritativeToken`), 令 mesh 兜底通道全整机端点照常可用。cloudflared 公网URL 与中继 Worker 同时全挂时, 云端仍可经多家公共 ntfy broker 加密直达本机全权操作。
+- **反向注入加「公网实活闸门」: 死址/(未连接) 不得覆盖账号库良态**。实测发现 `bridgeAutoPersist → bridgeInjectKnowledge` 路径无活性校验, 隧道未捕获(`publicUrl=null`)时径直把死址写进知识库 → 云端读到连不上端口。
+  - 修法:`bridgeInjectKnowledge` 注入前先 `bridgeResolveLiveConn` 公网实活校验; 全死则守柔退出不覆盖, 待探活环重建隧道后再注(与 `reinjectBridgeToAllAccounts` 同闸门)。
+  - 自检:`node build.js`(转译+桥JS语法)、rt-flow 35 单测 未受影响。仅改 `core/dao-vsix/src/extension.ts`。
+
 ## 3.50.45
 - **browser_emulate `reset` 据实测根治为「可靠复位桌面」**。v3.50.44 落地后继续 live 实测发现：无状态短连里，由「已亡会话」设下的设备度量覆写是孤儿态——新连的 `clearDeviceMetricsOverride`、`setDeviceMetricsOverride{width:0}` 皆无法清除（reset 后视口仍停在 390）；但实测确证**新连的 `setDeviceMetricsOverride(新值)` 可全局覆盖生效**（实测 400→1100 即时改变）。
   - 修法：`reset` 改为先以桌面度量（默认 1280×800·dsf 1·mobile false）覆盖（可靠复位桌面布局），再于同一会话内 `clearDeviceMetricsOverride`（此时本会话拥有该覆写，clear 可真正移除→回归原生）；二者叠加确保稳定复位。`reset` 可传 `width/height` 自定义。

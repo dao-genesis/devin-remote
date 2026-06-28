@@ -1705,7 +1705,15 @@ async function sigServeFrame(corr: string, full: string): Promise<void> {
         const route = String(descr.path || '/api/health').split('?')[0];
         const parsedUrl = new URL(descr.path || '/api/health', 'http://localhost:' + (ws.port || DEFAULT_PORT));
         const bodyStr = (descr.body === undefined || descr.body === null) ? '' : (typeof descr.body === 'string' ? descr.body : JSON.stringify(descr.body));
-        const fakeReq: any = { headers: descr.headers || { 'content-type': 'application/json' }, method: descr.method || 'GET', socket: { remoteAddress: 'sig' }, url: descr.path || '/api/health', _relayBody: bodyStr };
+        // 帛书·「解之即得·不疑其门」: sigUnseal 已成功 ⟺ 调用方持有正确 token(AES-256 密钥由 token 派生,
+        //   错 token 必解密失败已在 1694 行静默丢弃)→ 解封成功本身即等同鉴权。故此处注入权威 Bearer,
+        //   令 /api/exec、/api/file、/api/write 等需鉴权整机端点经 mesh 兜底通道照常可用。
+        //   根治: 旧法 fakeReq 不带 Authorization, checkAuth 必判 unauthorized → 路线C 仅能打免鉴权
+        //   /api/health, 形同半残(用户报「兜底通道操作不了机器」)。客户端自带 headers 仍可覆盖(取并集后强置 auth)。
+        const sigAuthTok = bridgeAuthoritativeToken() || bridgeToken || ws.token || '';
+        const fakeHeaders: any = Object.assign({ 'content-type': 'application/json' }, descr.headers || {});
+        if (sigAuthTok) { fakeHeaders['authorization'] = 'Bearer ' + sigAuthTok; delete fakeHeaders['Authorization']; }
+        const fakeReq: any = { headers: fakeHeaders, method: descr.method || 'GET', socket: { remoteAddress: 'sig' }, url: descr.path || '/api/health', _relayBody: bodyStr };
         const result = await handleRouteInternal(route, parsedUrl, fakeReq, bridgeToken || ws.token);
         await sigPublishObj('s', corr, { t: 'res', id, status: 200, body: result });
     } catch (err: any) {
@@ -4477,6 +4485,14 @@ function expandKbSentinel(name: string, body: string): string {
 
 async function bridgeInjectKnowledge(): Promise<boolean> {
     if (!ws.devinAuth1 || !ws.devinOrgId) return false;
+    // 帛书·「宁守柔而不以死覆生」: 注入前先公网实活校验本进程隧道地址。探到活址即收敛 bridgeUrl→注活址;
+    //   若全死(含 bridgeUrl 空 / 502 / 530)则**不以 (未连接)/死址覆盖账号库良态**, 守柔退出, 待探活环重建隧道后再注。
+    //   根治: autoPersist 路径旧法无此闸门, 隧道未捕获(publicUrl=null)时径直把死址/(未连接)写进知识库 → 云端读到连不上。
+    try {
+        const live = await bridgeResolveLiveConn(5000);
+        if (live && live.url) { bridgeUrl = live.url; if (!ws.token && live.token) bridgeToken = live.token; }
+        else { daoLoopLog('tunnel', 'injectKnowledge ABORT: 无活地址→守柔不覆盖良态'); return false; }
+    } catch { /* 守柔 */ }
     const md = bridgeGenerateCloudMd();
     const knowledgeName = DAO_BRIDGE_KB_NAME;
     const trigger = DAO_BRIDGE_KB_TRIGGER;
