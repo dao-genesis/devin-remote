@@ -466,12 +466,21 @@ def goto_cell(win: int, ref: str, retries: int = 2, pause: float = 0.4) -> bool:
 
 
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
-# pixels — addressing it needs more than focus/stack/position: either *go there*
-# (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the
-# floor *see* which workspace a window lives on. No-ops on a WM without desktops.
+# pixels (the same nothing-to-click as a minimized window, F192) — yet the semantic
+# floor reaches it by provider identity all the same (F199). Read side lets the
+# floor *see* which workspace a window lives on, and `window_on_current_desktop`
+# answers the one cross-platform question that decides *meaning vs pixels*: does this
+# window have pixels right now? On X11 the workspace identity is an integer index
+# (EWMH); on Windows it is the desktop's GUID string (the documented
+# IVirtualDesktopManager) — both compared for equality, never arithmetic. The act
+# verbs (`set_desktop`/`move_window_to_desktop`) are EWMH on X11; on Windows the
+# documented API cannot switch/count and refuses to move a *foreign* window
+# (E_ACCESSDENIED), so those stay truthful no-ops there — the floor drives the
+# off-workspace window in place by meaning instead. No-ops on a WM without desktops.
 num_desktops = getattr(_be, "num_desktops", lambda: 1)
 current_desktop = getattr(_be, "current_desktop", lambda: 0)
 window_desktop = getattr(_be, "window_desktop", lambda win: 0)
+window_on_current_desktop = getattr(_be, "window_on_current_desktop", lambda win: True)
 set_desktop = getattr(_be, "set_desktop", lambda n: False)
 move_window_to_desktop = getattr(_be, "move_window_to_desktop", lambda win, n: False)
 

@@ -938,6 +938,16 @@ def move_window_to_desktop(win: int, n: int) -> bool:
         return _root_card_msg("_NET_WM_DESKTOP", win, d0, 2)  # 2 = source: pager
 
 
+def window_on_current_desktop(win: int) -> bool:
+    """Whether ``win`` is on the **currently shown** workspace — i.e. whether it has
+    on-screen pixels at all. The cross-platform read the floor needs to decide
+    *meaning vs pixels*: a window off the current workspace is as pixel-less as a
+    minimized one (the screenshot loop cannot touch it; the semantic floor still
+    can). A sticky window (``-1``, shown on every desktop) is always present."""
+    d = window_desktop(win)
+    return d == -1 or d == current_desktop()
+
+
 def window_geometry(win: int) -> dict | None:
     """Absolute on-screen geometry of a window as ``{"x","y","w","h"}`` (the
     outer position the WM placed it at), or None if the window is gone. Lets the

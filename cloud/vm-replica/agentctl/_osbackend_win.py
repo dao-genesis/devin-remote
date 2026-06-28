@@ -736,6 +736,160 @@ def set_window_state(win: int, state: str) -> bool:
     return True
 
 
+# ---- virtual desktops (workspaces) — documented IVirtualDesktopManager ------ #
+# A window on a virtual desktop other than the one shown has *zero on-screen
+# pixels* (the same nothing-to-click as a minimized window, F192) — yet the
+# semantic floor reaches it by provider identity all the same (proven live: a WPF
+# fixture parked on another desktop is driven by uia_set_value/uia_invoke/uia_text
+# with no pixels). What the floor was *blind* to was the workspace axis itself: on
+# X11 it reads it via EWMH (_NET_WM_DESKTOP), but on Windows these were no-ops, so
+# it could not even tell that a window had no pixels *because it lives elsewhere*,
+# and would waste the pixel channel on it. Windows answers this through the
+# **documented** COM interface IVirtualDesktopManager — stable across builds,
+# unlike the undocumented IVirtualDesktopManagerInternal that enumerates/switches/
+# moves-foreign-windows. So the floor reports exactly what that API answers
+# truthfully (is-on-current, which-desktop-id) and is honestly silent on what it
+# does not: counting and switching live only in the unstable internal interface,
+# and MoveWindowToDesktop returns E_ACCESSDENIED for a *foreign-process* window —
+# so num_desktops/current_desktop(index)/set_desktop/move_window_to_desktop are
+# left as the truthful no-op defaults rather than faked, and are not needed,
+# because the floor operates the off-workspace window in place by meaning.
+class _GUID(ctypes.Structure):
+    _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+
+ole32 = ctypes.WinDLL("ole32", use_last_error=True)
+ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+ole32.CoInitializeEx.restype = ctypes.c_long
+ole32.CoCreateInstance.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD,
+                                   ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+ole32.CoCreateInstance.restype = ctypes.c_long
+ole32.CLSIDFromString.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(_GUID)]
+ole32.CLSIDFromString.restype = ctypes.c_long
+ole32.StringFromGUID2.argtypes = [ctypes.POINTER(_GUID), wintypes.LPWSTR, ctypes.c_int]
+ole32.StringFromGUID2.restype = ctypes.c_int
+
+_CLSID_VDM = "{aa509086-5ca9-4c25-8f95-589d3c07b48a}"
+_IID_IVDM = "{a5cd92ff-29be-454c-8d04-d82879fb3f1b}"
+_COINIT_APARTMENTTHREADED = 0x2
+_CLSCTX_ALL = 23
+_RPC_E_CHANGED_MODE = -2147417850  # 0x80010106 — COM already inited other-model: fine
+_NULL_GUID = "{00000000-0000-0000-0000-000000000000}"
+
+
+def _mk_guid(s: str) -> _GUID:
+    g = _GUID()
+    ole32.CLSIDFromString(s, ctypes.byref(g))
+    return g
+
+
+def _guid_str(g: _GUID) -> str:
+    buf = ctypes.create_unicode_buffer(64)
+    ole32.StringFromGUID2(ctypes.byref(g), buf, 64)
+    return buf.value
+
+
+def _vdm():
+    """Create a fresh IVirtualDesktopManager on the *calling* thread (COM interface
+    pointers are apartment-bound, so this is never cached across threads). Returns
+    ``(ptr, is_on_current, get_desktop_id, release)`` or None if COM/the interface
+    is unavailable (e.g. a Windows build or session with no virtual-desktop host)."""
+    hr = ole32.CoInitializeEx(None, _COINIT_APARTMENTTHREADED)
+    if hr < 0 and hr != _RPC_E_CHANGED_MODE:
+        return None
+    p = ctypes.c_void_p()
+    if (ole32.CoCreateInstance(ctypes.byref(_mk_guid(_CLSID_VDM)), None, _CLSCTX_ALL,
+                               ctypes.byref(_mk_guid(_IID_IVDM)), ctypes.byref(p)) < 0
+            or not p):
+        return None
+    vt = ctypes.cast(p, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+    # IUnknown: 0 QueryInterface, 1 AddRef, 2 Release.
+    # IVirtualDesktopManager: 3 IsWindowOnCurrentVirtualDesktop, 4 GetWindowDesktopId.
+    is_on = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, wintypes.HWND,
+                               ctypes.POINTER(wintypes.BOOL))(vt[3])
+    get_id = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, wintypes.HWND,
+                                ctypes.POINTER(_GUID))(vt[4])
+    release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vt[2])
+    return p, is_on, get_id, release
+
+
+def window_on_current_desktop(win: int) -> bool:
+    """Whether ``win`` is on the **currently shown** virtual desktop — i.e. whether
+    it has on-screen pixels at all. A window on another workspace is as pixel-less
+    as a minimized one: the screenshot+click loop cannot touch it, but the semantic
+    floor still can, by identity. The authoritative read is
+    ``IsWindowOnCurrentVirtualDesktop`` (works for foreign-process windows). On a
+    host without virtual-desktop support every window is on the only desktop, so
+    this answers True."""
+    com = _vdm()
+    if not com:
+        return True
+    p, is_on, _get, release = com
+    try:
+        b = wintypes.BOOL()
+        if is_on(p, wintypes.HWND(int(win)), ctypes.byref(b)) < 0:
+            return True
+        return bool(b.value)
+    finally:
+        release(p)
+
+
+def window_desktop(win: int) -> str:
+    """The **identity** of the workspace a window lives on, as the desktop's GUID
+    string (``GetWindowDesktopId``). Windows has no stable *integer* workspace index
+    in the documented API (that lives only in the build-fragile internal interface),
+    so the honest handle is the GUID — an opaque identity you compare for *equality*
+    (same string ⟺ same workspace; equal to :func:`current_desktop` ⟺ on screen),
+    never arithmetic. This is the Windows dual of the X11 backend's integer
+    ``window_desktop``: each ground reports the workspace by its own native identity.
+    Returns ``""`` if the id cannot be read (some bare shell windows report the null
+    GUID)."""
+    com = _vdm()
+    if not com:
+        return ""
+    p, _is_on, get_id, release = com
+    try:
+        g = _GUID()
+        if get_id(p, wintypes.HWND(int(win)), ctypes.byref(g)) < 0:
+            return ""
+        s = _guid_str(g)
+        return "" if s == _NULL_GUID else s
+    finally:
+        release(p)
+
+
+def current_desktop() -> str:
+    """The identity (GUID string) of the **currently shown** workspace — the value
+    :func:`window_desktop` returns for a window that is on screen now. The documented
+    API has no direct "which desktop is current", so this reads it off any window that
+    *is* on the current desktop (``IsWindowOnCurrentVirtualDesktop`` true) and reports
+    that window's desktop id. Returns ``""`` only if nothing but the bare shell occupies
+    the current desktop (rare)."""
+    com = _vdm()
+    if not com:
+        return ""
+    p, is_on, get_id, release = com
+    try:
+        cands = []
+        fg = user32.GetForegroundWindow()
+        if fg:
+            cands.append(int(fg))
+        cands += [w["id"] for w in list_windows()]
+        for h in cands:
+            hwnd = wintypes.HWND(int(h))
+            b = wintypes.BOOL()
+            if is_on(p, hwnd, ctypes.byref(b)) == 0 and b.value:
+                g = _GUID()
+                if get_id(p, hwnd, ctypes.byref(g)) == 0:
+                    s = _guid_str(g)
+                    if s != _NULL_GUID:
+                        return s
+        return ""
+    finally:
+        release(p)
+
+
 def window_under(x: int, y: int) -> "int | None":
     """Which top-level window owns the screen pixel ``(x, y)`` — the id that a
     real mouse click there would land on, or None if the point is bare desktop.

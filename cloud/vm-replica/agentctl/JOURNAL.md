@@ -6421,10 +6421,83 @@ student.
 
 ---
 
+## F199 — drive a window on **another virtual desktop** (zero pixels by *workspace*) · the floor learns to *see* the workspace axis on Windows
+
+**Friction.** F192 proved the floor drives a *minimized* window — no pixels by show-state — by
+meaning. The user's frontier has a twin: a window on a **non-current virtual desktop** has no
+on-screen pixels either, by *workspace*. Operating a WPF fixture parked on a second Windows
+desktop, the semantic verbs reached it fine — but the floor was **blind to the workspace axis
+itself**. On X11 it reads it via EWMH (`_NET_WM_DESKTOP`), but on Windows
+`window_desktop`/`current_desktop`/`num_desktops` were the no-op defaults
+(`0`/`0`/`1`): the floor could not even *tell* a window had no pixels *because it lives on
+another workspace*, so it could not decide between the meaning channel and the (useless) pixel
+channel. A floor that cannot see why a window is dark cannot reason about it.
+
+**Mechanism — answer exactly what the *documented* API answers, and no more.** Windows exposes
+virtual desktops through two COM interfaces. The **documented** `IVirtualDesktopManager`
+(`CLSID_VirtualDesktopManager`) is stable across builds and answers two questions for *any*
+window, including foreign-process ones: `IsWindowOnCurrentVirtualDesktop(hwnd)` and
+`GetWindowDesktopId(hwnd)→GUID`. Everything else — enumerate the desktops, switch the shown one,
+move a *foreign* window between them — lives only in the **undocumented**
+`IVirtualDesktopManagerInternal`, whose vtable shifts build to build (the classic source of
+breakage in this space). So the Windows backend binds the documented interface by pure `ctypes`
+(a fresh instance per call, since COM pointers are apartment-bound — kin to F194's per-thread
+UIA) and grows the **read** verbs truthfully:
+
+```python
+window_on_current_desktop(win) -> bool   # IsWindowOnCurrentVirtualDesktop — has pixels right now?
+window_desktop(win)            -> str    # GetWindowDesktopId — the workspace's GUID identity
+current_desktop()              -> str    # GUID of the shown workspace (read off any on-current window)
+```
+
+`window_on_current_desktop` is the one cross-platform question that decides *meaning vs pixels*,
+so it is added to **both** grounds (X11 derives it: `window_desktop == current_desktop` or sticky).
+The workspace identity differs by ground — an **integer index** on X11 (EWMH), a **GUID string** on
+Windows (no stable integer index exists in the documented API) — but the *contract* is identical:
+an opaque handle compared for **equality** (same handle ⟺ same workspace; equal to
+`current_desktop()` ⟺ on screen), never arithmetic. 知其雄，守其雌 — hold the elegant integer where
+the ground offers one, keep the humbler GUID where it does not.
+
+**Two honest boundaries (recorded, not faked).** (1) The documented `MoveWindowToDesktop` returns
+**`E_ACCESSDENIED` (0x80070005)** for a *foreign-process* window (measured on this VM) — so the
+floor does **not** fake "bring it here" on Windows; `move_window_to_desktop`/`set_desktop`/
+`num_desktops` stay the truthful no-op defaults there, and the floor instead drives the
+off-workspace window *in place* by meaning. (2) `current_desktop()` returns `""` when only the
+bare shell occupies the current desktop (a freshly created empty one), because every
+non-shell window reports the null GUID — recorded, not papered.
+
+**Live (this VM).** `_probe_vdesk.py` **8/8 green**: baseline the floor sees the fixture on the
+current desktop (`on=True`, `window_desktop == current_desktop`); after `Win+Ctrl+D` parks it on
+the prior desktop the floor **now sees it dark** (`window_on_current_desktop → False`) and reports
+its workspace identity (a stable GUID, unchanged, differing from the new current); the semantic
+floor still **drives the pixel-less window** — `uia_set_value`(`ACROSS-DESKTOP-道法自然`, read
+back exact), `uia_invoke`(ping → `PONG`), `uia_text`(multiline+CJK); and the documented
+`MoveWindowToDesktop` is shown to **deny** the foreign window (`0x80070005`), with
+`osctl.move_window_to_desktop` correctly a no-op. **No regression** — `_probe_winverbs.py`
+**15/15** unchanged (the new `ole32` binding at import disturbs nothing). Pure stdlib.
+
+**Lesson (道法自然).** 視之不足見，聽之不足聞，用之不可既 — what cannot be *seen* (a window on another
+workspace) can still be *used*. F192 closed the eyes by show-state; F199 closes them by workspace,
+and the same semantic floor reaches through. 知止不殆: the deeper discipline here is knowing where the
+*platform* stops — to bind the **documented**, stable interface and report only what it can answer,
+declining the undocumented one that would read further but break on the next build. 為而弗恃 — give
+the floor eyes for the workspace axis, but do not lean on a move the OS forbids; operate where the
+window already is.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
+
+- **A window with zero on-screen pixels *by workspace*, not just show-state. — SOLVED, F199.**
+  F192 drove a *minimized* window by meaning; F199 does the twin — a window on another **virtual
+  desktop** — and teaches the floor to *see* the workspace axis on Windows (it was X11-only)
+  through the documented `IVirtualDesktopManager` (`window_on_current_desktop`/`window_desktop`),
+  declining the build-fragile internal interface that would switch/move-foreign/count. Proven
+  `_probe_vdesk.py` 8/8: a fixture parked on a second desktop is driven by `uia_set_value`/
+  `uia_invoke`/`uia_text` while the floor correctly reports it dark. Kept here only as a pointer.
 
 - **R-next: an atlas built from the live page, not a fixture. — SOLVED, F198.**
   `learn_glyphs` turns a patch of real on-screen text whose string is *known* (a tree-reported
