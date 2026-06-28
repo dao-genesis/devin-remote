@@ -105,6 +105,15 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   custom-drawn editor (Notepad++/Scintilla) carries no TextPattern and is invisible to
   the native `window_text`, yet publishes its whole buffer as a `Pane`'s Name — the Name
   *is* the tree's report of that element's text, so the read is truth, not a guess (F191).
+- `read_selection(restore=True)` — read content that is **drawn, not in the tree**.
+  Some surfaces paint their content with no element behind it — LibreOffice Calc renders
+  its whole cell grid as one custom control (`uia_text` over the sheet returns only
+  `"Sheet Sheet1"`, never a cell), as do most terminals and canvas-drawn views. Such
+  content is still *copyable*: the caller positions the selection by meaning + keyboard
+  (click a cell, `Ctrl+A` a field, shift-arrow a range), this verb does the `Ctrl+C` and
+  returns the text, clearing the clipboard to a sentinel first (a no-op copy returns `""`,
+  not a stale value) and restoring the prior clipboard. The cross-platform complement of
+  `uia_text` — meaning for the tree, the copy channel for pixels (JOURNAL F195).
 - `uia_find_item(win, item, container_ctype=)` — reach an item a long **virtualized**
   list (WPF/UWP/WinUI) has not materialized into the tree, where plain `uia_find`
   finds nothing: asks the container (UIA `ItemContainerPattern`) to *realize* it by

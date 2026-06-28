@@ -6256,6 +6256,40 @@ it returns or not.
 
 ---
 
+## F195 — read what is *drawn*, not in the tree: the universal copy channel · cross-platform
+
+**Friction.** Operating LibreOffice Calc by meaning, the *write* works — focus the grid by
+meaning, type, and `道法自然` lands in A1 — but the *read* finds nothing. Calc renders its
+whole cell grid as **one painted custom control**: there is no per-cell UIA element, so
+`uia_text`/`uia_get_value` over the sheet return only the table's own name (`"Sheet Sheet1"`),
+never a cell's contents. Scanning every control type for the written value by Name or
+ValuePattern finds **zero** hits (measured on this VM). This is the F188/canvas family: the
+content exists on screen but not in the accessibility tree.
+
+**The fix — don't fight the tree, use the channel the content already travels on.** Drawn
+content that a human can read is content a human can **select and copy**. `read_selection`
+performs the copy on the *caller's* current selection and returns the text: it clears the
+clipboard to a sentinel first (so a no-op copy returns `""`, never a stale value) and restores
+the prior clipboard afterward (the read leaves no trace). It is the deliberate complement of
+`uia_text` — *meaning* for what is in the tree, the *copy channel* for what is only drawn —
+and it is cross-platform (Ctrl+C + clipboard, no UIA). The caller still positions the
+selection by meaning + keyboard (click a cell, `Ctrl+A` a field, shift-arrow a range); the
+verb only turns a positioned selection into text.
+
+**Live (this VM).** `_probe_readsel.py` **5/5** against real Calc: `uia_text` over the drawn
+grid is empty of cell content (the gap); a CJK cell (`道法自然`) and a numeric cell (`31415`)
+written by meaning each **read back exactly** through `read_selection`; the prior clipboard is
+**restored** (`SENTINEL-PRIOR-VALUE` survives the read); and a shift-selected `A1:A2` range
+returns **both** cells (`"道法自然\r\n31415\r\n"`). The same channel reads a terminal, a
+canvas-drawn code view, any custom-painted surface.
+
+**Lesson (道法自然).** 夫唯不爭，故天下莫能與之爭 — do not wrestle a provider into exposing a tree
+it never built; take the content where it already flows freely. 上善若水 — the copy channel is
+water: it fills whatever surface holds text (tree or pixels) without forcing any of them. The
+floor now reads by meaning where the tree speaks, and by the copy channel where it is silent.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
@@ -6265,13 +6299,15 @@ will only grow a primitive once a real failure is reproduced.
   rendered by the test itself; reading a *real* canvas control means capturing
   reference glyphs from the page's own rendering (a scratch canvas the app
   exposes, or known on-screen labels) before `read_text` can name unknown runs.
-- **A spreadsheet cell by meaning (LibreOffice Calc / VCL).** Calc exposes the sheet
-  as one `Table "Sheet Sheet1"` but does **not** name or realize individual cells to a
-  cross-process reader (`uia_find("B2")` finds nothing; `uia_find("A1")` wrongly matches
-  the *Name Box*). The Name-Box navigation path is unreliable too: `uia_focus` on the VCL
-  ComboBox returns True yet keyboard focus stays on the sheet (a VCL "SetFocus lies", kin
-  to F190), so a typed `Ctrl+A` selects the whole sheet, not the box. A real cell-realize
-  verb (GridItem/Table patterns, or a click-anchored Name-Box navigation) should only be
-  grown once one approach proves robust against VCL — not forced as a fragile leaf.
+- **Addressing an *arbitrary* spreadsheet cell by its reference (LibreOffice Calc / VCL).**
+  *Reading* a cell by meaning is solved (F195: position the selection, read the copy channel),
+  and writing works by focusing the grid by meaning + typing. What remains is *navigating to a
+  named cell* like `B2` purely by meaning: Calc exposes the sheet as one `Table "Sheet Sheet1"`
+  with no per-cell element (`uia_find("B2")` finds nothing; `uia_find("A1")` wrongly matches the
+  *Name Box*), and the Name-Box path is unreliable — `uia_focus` on the VCL ComboBox returns
+  True yet keyboard focus stays on the sheet (a VCL "SetFocus lies", kin to F190), so a typed
+  `Ctrl+A` selects the whole sheet, not the box. Today the floor reaches an arbitrary cell by
+  `Ctrl+Home` + arrow steps (deterministic) or a pixel click on the Name Box; a clean
+  navigate-by-reference verb should only be grown once one approach proves robust against VCL.
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

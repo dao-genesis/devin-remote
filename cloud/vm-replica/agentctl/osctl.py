@@ -799,6 +799,31 @@ def paste_text(text: str) -> None:
     chord(VK_CONTROL, VK_V)
 
 
+def read_selection(restore: bool = True, settle: float = 0.12) -> str:
+    """F195: read the *current selection* as text through the universal copy channel.
+
+    Many surfaces **draw** their content instead of placing it in the accessibility
+    tree, so there is no element for ``uia_text`` / ``uia_get_value`` to read and they
+    return empty: LibreOffice Calc renders its whole cell grid as one painted custom
+    control (no per-cell UIA node — verified on this VM), and the same is true of most
+    terminals, canvas-drawn code views and custom-painted lists. But that content is
+    still *copyable*. The caller positions the selection by meaning + keyboard (click a
+    cell, ``Ctrl+A`` a field, shift-arrow a range); this verb performs the copy and
+    returns the text. It clears the clipboard to a sentinel first so a no-op copy
+    returns ``""`` rather than a stale value, and (by default) restores the prior
+    clipboard so the read leaves no trace. The complement of ``uia_text``: meaning for
+    what is in the tree, the copy channel for what is only drawn."""
+    prior = get_clipboard() if restore else None
+    set_clipboard("")
+    time.sleep(0.02)
+    chord(VK_CONTROL, VK_C)
+    time.sleep(settle)
+    out = get_clipboard()
+    if restore:
+        set_clipboard(prior or "")
+    return out
+
+
 def omnibox_go(url: str) -> None:
     """Focus Chrome's address bar (Ctrl+L), atomic-paste a URL, Enter."""
     chord(VK_CONTROL, VK_L)
