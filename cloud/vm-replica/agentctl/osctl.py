@@ -47,6 +47,12 @@ get_clipboard = _be.get_clipboard
 # that predates these (e.g. an X11 ground without a file-list selection bridge).
 get_clipboard_files = getattr(_be, "get_clipboard_files", lambda: [])
 set_clipboard_files = getattr(_be, "set_clipboard_files", lambda paths, move=False: False)
+# Image clipboard (CF_DIB): the third clipboard tongue (text / files / image). Lets
+# the floor *see* an image an app put on the clipboard ("Copy image", a chart, a
+# screenshot tool) as pixels its own perception reads, and paste one into Paint/docs.
+_get_clipboard_image_rgb = getattr(_be, "get_clipboard_image_rgb", lambda: None)
+_set_clipboard_image_rgb = getattr(_be, "set_clipboard_image_rgb",
+                                   lambda w, h, rgb: False)
 _mouse_button = _be.mouse_button
 _mouse_wheel = _be.mouse_wheel
 # Window addressing (enumerate + activate). Backends expose these; if a backend
@@ -1039,6 +1045,88 @@ def _png(width: int, height: int, rgb: bytes) -> bytes:
             + chunk(b"IHDR", ihdr)
             + chunk(b"IDAT", zlib.compress(bytes(raw), 6))
             + chunk(b"IEND", b""))
+
+
+def _decode_png_rgb(blob: bytes) -> "tuple[int, int, bytes]":
+    """Decode a PNG produced by :func:`_png` (8-bit RGB, no interlace) back to
+    ``(w, h, rgb)``. Supports the standard PNG row filters (None/Sub/Up/Average/
+    Paeth) so it reads any baseline truecolour PNG, not only filter-0 ones. The
+    inverse of :func:`_png`; used by :func:`set_clipboard_image` to load an image
+    the floor wrote (a screenshot, a captured region) before placing it on the
+    clipboard. Raises on a non-RGB/interlaced/16-bit PNG (honest, not silent)."""
+    if blob[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    i, w, h, idat = 8, 0, 0, bytearray()
+    while i < len(blob):
+        n = struct.unpack(">I", blob[i:i + 4])[0]
+        tag = blob[i + 4:i + 8]
+        data = blob[i + 8:i + 8 + n]
+        if tag == b"IHDR":
+            w, h, bit, ctype, _, _, interlace = struct.unpack(">IIBBBBB", data)
+            if bit != 8 or ctype != 2 or interlace != 0:
+                raise ValueError("only 8-bit truecolour, non-interlaced PNG")
+        elif tag == b"IDAT":
+            idat += data
+        elif tag == b"IEND":
+            break
+        i += 12 + n
+    raw = zlib.decompress(bytes(idat))
+    stride = w * 3
+    out = bytearray(h * stride)
+    prev = bytearray(stride)
+    pos = 0
+    for y in range(h):
+        ft = raw[pos]; pos += 1
+        line = bytearray(raw[pos:pos + stride]); pos += stride
+        if ft == 1:        # Sub
+            for x in range(3, stride):
+                line[x] = (line[x] + line[x - 3]) & 0xFF
+        elif ft == 2:      # Up
+            for x in range(stride):
+                line[x] = (line[x] + prev[x]) & 0xFF
+        elif ft == 3:      # Average
+            for x in range(stride):
+                a = line[x - 3] if x >= 3 else 0
+                line[x] = (line[x] + ((a + prev[x]) >> 1)) & 0xFF
+        elif ft == 4:      # Paeth
+            for x in range(stride):
+                a = line[x - 3] if x >= 3 else 0
+                b = prev[x]
+                c = prev[x - 3] if x >= 3 else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[x] = (line[x] + pr) & 0xFF
+        out[y * stride:(y + 1) * stride] = line
+        prev = line
+    return w, h, bytes(out)
+
+
+def get_clipboard_image(path: str) -> "str | None":
+    """Materialise the image on the clipboard (``CF_DIB``) as a PNG at ``path`` and
+    return that path, or ``None`` when the clipboard holds no bitmap. The image
+    twin of :func:`get_clipboard`: when an app does "Copy" of a picture (a chart
+    from a spreadsheet, a region from a screenshot tool, a selection in an image
+    editor) the payload is a *bitmap*, invisible to the text and file clipboards.
+    Once written, the floor's own perception (:func:`find_color`, template match,
+    :func:`ocr`) reads it like any screenshot."""
+    rgb = _get_clipboard_image_rgb()
+    if not rgb:
+        return None
+    w, h, data = rgb
+    with open(path, "wb") as f:
+        f.write(_png(w, h, data))
+    return path
+
+
+def set_clipboard_image(path: str) -> bool:
+    """Place the PNG at ``path`` on the clipboard as a ``CF_DIB``, so a Ctrl+V into
+    Paint, a document, a chat box or any image target pastes it. The image twin of
+    :func:`set_clipboard`. ``path`` is a PNG the floor can read (e.g. one it wrote
+    via :func:`screenshot`)."""
+    with open(path, "rb") as f:
+        w, h, rgb = _decode_png_rgb(f.read())
+    return bool(_set_clipboard_image_rgb(w, h, rgb))
 
 
 def capture_rgb(x: int = 0, y: int = 0,

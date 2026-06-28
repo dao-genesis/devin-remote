@@ -27,6 +27,8 @@ kernel32.GlobalAlloc.argtypes = [_wp.UINT, ctypes.c_size_t]
 kernel32.GlobalLock.restype = ctypes.c_void_p
 kernel32.GlobalLock.argtypes = [_wp.HGLOBAL]
 kernel32.GlobalUnlock.argtypes = [_wp.HGLOBAL]
+kernel32.GlobalSize.restype = ctypes.c_size_t
+kernel32.GlobalSize.argtypes = [_wp.HGLOBAL]
 user32.SetClipboardData.restype = _wp.HANDLE
 user32.SetClipboardData.argtypes = [_wp.UINT, _wp.HANDLE]
 user32.GetClipboardData.restype = _wp.HANDLE
@@ -1052,6 +1054,89 @@ def capture_rgb(x: int = 0, y: int = 0,
     gdi32.DeleteDC(mdc)
     user32.ReleaseDC(0, sdc)
     return w, h, bytes(rgb)
+
+
+CF_DIB = 8
+
+
+def get_clipboard_image_rgb():
+    """The image on the clipboard (``CF_DIB``) as ``(w, h, rgb)`` top-down, 3 B/px —
+    the same layout as :func:`capture_rgb`, so the floor's pixel perception can read
+    it directly. ``None`` when the clipboard holds no bitmap. A ``CF_DIB`` is a
+    ``BITMAPINFOHEADER`` + (optional bitfield masks / colour table) + pixel rows
+    padded to 4 bytes, bottom-up unless ``biHeight`` is negative — no file header."""
+    if not user32.OpenClipboard(0):
+        return None
+    try:
+        h = user32.GetClipboardData(CF_DIB)
+        if not h:
+            return None
+        ptr = kernel32.GlobalLock(h)
+        if not ptr:
+            return None
+        blob = ctypes.string_at(ptr, kernel32.GlobalSize(h))
+        kernel32.GlobalUnlock(h)
+    finally:
+        user32.CloseClipboard()
+    if len(blob) < 40:
+        return None
+    bih = _BITMAPINFOHEADER.from_buffer_copy(blob[:40])
+    if bih.biSize < 40 or bih.biBitCount not in (24, 32):
+        return None  # palettised/exotic DIBs left honest-None until a real case
+    w, hh = bih.biWidth, abs(bih.biHeight)
+    topdown = bih.biHeight < 0
+    off = bih.biSize + (12 if bih.biCompression == 3 else 0) + bih.biClrUsed * 4
+    bpp = bih.biBitCount // 8
+    stride = ((w * bih.biBitCount + 31) // 32) * 4
+    px = blob[off:]
+    rgb = bytearray(w * hh * 3)
+    for row in range(hh):
+        src = row if topdown else (hh - 1 - row)
+        line = px[src * stride: src * stride + w * bpp]
+        if len(line) < w * bpp:
+            return None
+        dst = bytearray(w * 3)
+        dst[0::3] = line[2::bpp]
+        dst[1::3] = line[1::bpp]
+        dst[2::3] = line[0::bpp]
+        rgb[row * w * 3:(row + 1) * w * 3] = dst
+    return w, hh, bytes(rgb)
+
+
+def set_clipboard_image_rgb(w: int, h: int, rgb: bytes) -> bool:
+    """Place an image on the clipboard as a 24-bit ``CF_DIB`` (bottom-up, rows padded
+    to 4 bytes), so a Ctrl+V into Paint / a document / any image target pastes it.
+    The non-text, non-file third clipboard tongue. ``rgb`` is top-down 3 B/px, the
+    same layout :func:`capture_rgb` / :func:`get_clipboard_image_rgb` produce."""
+    stride = ((w * 24 + 31) // 32) * 4
+    bih = _BITMAPINFOHEADER()
+    bih.biSize = 40
+    bih.biWidth = w
+    bih.biHeight = h  # positive: bottom-up
+    bih.biPlanes = 1
+    bih.biBitCount = 24
+    bih.biCompression = 0
+    bih.biSizeImage = stride * h
+    body = bytearray(stride * h)
+    for row in range(h):
+        src = rgb[row * w * 3:(row + 1) * w * 3]
+        dst = bytearray(stride)
+        dst[0:w * 3:3] = src[2::3]
+        dst[1:w * 3:3] = src[1::3]
+        dst[2:w * 3:3] = src[0::3]
+        body[(h - 1 - row) * stride:(h - row) * stride] = dst
+    payload = bytes(bih) + bytes(body)
+    if not user32.OpenClipboard(0):
+        return False
+    try:
+        user32.EmptyClipboard()
+        hg = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(payload))
+        p = kernel32.GlobalLock(hg)
+        ctypes.memmove(p, payload, len(payload))
+        kernel32.GlobalUnlock(hg)
+        return bool(user32.SetClipboardData(CF_DIB, hg))
+    finally:
+        user32.CloseClipboard()
 
 
 # --- F165: UI Automation read access (sees inside modern apps) ----------------

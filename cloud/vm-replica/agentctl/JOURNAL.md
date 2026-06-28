@@ -6645,6 +6645,53 @@ silently requires — is the kind of small truth that decides whether the paste 
 
 ---
 
+## F203 — the **image clipboard** (CF_DIB): the third clipboard tongue
+
+**Friction (forward practice).** F202 gave the *file* clipboard; the clipboard's third native format
+is a **bitmap**. When an app does "Copy" of a picture — a chart from a spreadsheet, a region from a
+screenshot tool, a selection in an image editor, "Copy as image" anywhere — the payload is `CF_DIB`,
+and it is invisible to *both* the text clipboard (`get_clipboard()`→`""`) and the file clipboard
+(`get_clipboard_files()`→`[]`). So the floor could neither *see* an image a user/app had copied nor
+*originate* one to paste into Paint or a document. With text (F003) and files (F202) covered, the
+bitmap was the last blind spot in the one surface every app shares.
+
+**Mechanism — read/write `CF_DIB`, reusing the floor's own PNG codec.**
+
+```python
+get_clipboard_image(path) -> path | None   # CF_DIB -> (w,h,rgb) -> PNG the floor can perceive
+set_clipboard_image(path) -> bool          # PNG -> (w,h,rgb) -> CF_DIB on the clipboard
+```
+
+The backend parses a `CF_DIB` (a headerless `BITMAPINFOHEADER` + bottom-up, 4-byte-padded rows;
+handles 24/32-bit and the `BI_BITFIELDS` mask block) into the **same `(w,h,rgb)` top-down layout
+`capture_rgb` produces**, so a clipboard image flows straight into the floor's existing perception
+(`find_color`, template match, `ocr`) — a screenshot by another name. Origination is the inverse:
+build a 24-bit bottom-up DIB. The serialisation to/from disk reuses the hand-rolled `zlib` PNG
+encoder `_png` and its new inverse `_decode_png_rgb` (full None/Sub/Up/Average/Paeth filter support),
+so no new image dependency enters — the floor already speaks PNG for screenshots.
+
+**Honest boundary.** Reads 24/32-bit DIBs; palettised/16-bit/exotic DIBs return `None` (not a wrong
+guess) until a real case appears. `_decode_png_rgb` is baseline truecolour 8-bit, non-interlaced —
+which is exactly what `_png` writes — and raises (not silently mangles) on anything else. Windows-only;
+X11's image selection is a separate target, a truthful no-op for now.
+
+**Live (this VM).** `_probe_clipimage.py` **6/6**: `set_clipboard_image` originates a bitmap; with it
+present the text and file clipboards both read empty (the friction); `get_clipboard_image` materialises
+it and the round-trip is **pixel-exact** (every pixel of a 5×4 pattern). Then an **external** app
+(Windows PowerShell `Clipboard.SetImage` on a solid 40×24 bitmap) copies an image and the floor reads
+it back at the right dimensions and centre colour `(18,52,86)` — so the floor now *sees* what another
+program copied as a picture. **No regression** — `_probe_winverbs.py` **15/15**, `_probe_opaque.py`
+**7/7**, `_probe_clipfiles.py` **7/7**. Pure stdlib.
+
+**Lesson (道法自然).** 大制無割 — text, files, and images are not three problems but one surface seen
+three ways; the floor already had the parts (a DIB is a screenshot, a PNG it already writes), so the
+"new" capability was mostly *recognising the unity* and wiring the existing pieces, adding only the
+small honest format work. 萬物負陰而抱陽: every read primitive (`get_clipboard_image`) implies its write
+(`set_clipboard_image`); completing the pair is what makes the clipboard a true two-way channel rather
+than a one-way peek.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

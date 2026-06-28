@@ -175,6 +175,13 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   Explorer needs to copy vs. move), so the floor can see what a user copied and paste files into any
   shell target. Proven `_probe_clipfiles.py` 7/7 incl. a live Explorer Ctrl+V copy (JOURNAL F202).
   Windows-only; `[]`/`False` no-op on X11 (the `text/uri-list` selection) until a real failure.
+- `get_clipboard_image(path)` / `set_clipboard_image(path)` — the **image clipboard** (`CF_DIB`),
+  the third clipboard tongue (text / files / image). An app's "Copy" of a picture is a bitmap,
+  invisible to the text and file clipboards. These materialise a copied image as a PNG the floor's
+  own perception (`find_color`/template/`ocr`) reads — a screenshot by another name — and originate
+  one to paste into Paint/docs. Reuses the floor's `zlib` PNG codec (`_png` + `_decode_png_rgb`), no
+  new dep. Proven `_probe_clipimage.py` 6/6 (pixel-exact round-trip + reads an external app's
+  `Clipboard.SetImage`) (JOURNAL F203). Reads 24/32-bit DIBs; `None` on exotic DIBs; Windows-only.
 
 Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
 `invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:
