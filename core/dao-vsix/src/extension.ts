@@ -4237,9 +4237,26 @@ function selfUpdateCompareVer(a: string, b: string): number {
 function selfUpdateFindCli(): string {
     const { execSync } = require('child_process');
     const ideName = path.basename(process.execPath).replace(/\.exe$/i, '').toLowerCase();
-    for (const name of [ideName, 'code', 'windsurf', 'cursor', 'devin']) {
+    const names = [ideName, 'code', 'windsurf', 'cursor', 'devin', 'devin-desktop'];
+    // ① 先按安装目录推导 bin CLI(根治: VSCode 系发行版 CLI 多在 <安装根>/bin/*.cmd, 常不在 PATH。
+    //    旧法仅靠 `where` → CLI 不在 PATH 即找不到 → 自更新静默失败, 这是"更新闭环没生效"的真因)。
+    try {
+        const exeDir = path.dirname(process.execPath);            // 如 E:\Windsurf
+        const isWin = process.platform === 'win32';
+        const binDirs = [path.join(exeDir, 'bin'), path.join(exeDir, '..', 'bin'), exeDir];
+        for (const d of binDirs) {
+            for (const n of names) {
+                for (const ext of isWin ? ['.cmd', '.exe', ''] : ['', '.sh']) {
+                    try { const p = path.join(d, n + ext); if (fs.existsSync(p)) return p; } catch { /* 守柔 */ }
+                }
+            }
+        }
+    } catch { /* 守柔 */ }
+    // ② 退路: PATH 查找(where/which)
+    const finder = process.platform === 'win32' ? 'where' : 'which';
+    for (const name of names) {
         try {
-            const lines = execSync(`where ${name}`, { encoding: 'utf8', timeout: 5000 }).trim().split('\n');
+            const lines = execSync(`${finder} ${name}`, { encoding: 'utf8', timeout: 5000 }).trim().split('\n');
             for (const l of lines) { const p = l.trim(); if (p && fs.existsSync(p)) return p; }
         } catch {}
     }
