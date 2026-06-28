@@ -1817,27 +1817,57 @@ function sigInfo(): any {
 // 道法自然: 用户有VPN(Clash/V2Ray)，自动利用，无为而无以为
 // ═══════════════════════════════════════════════════════════
 
+let _proxyDetectTs = 0;
+let _proxyProbing = false;
+// 同步快探(不阻塞事件循环): 仅查环境变量/配置文件(纯内存/单次读盘)。端口实探交给异步 _refreshProxyPort。
 function detectProxyPort(): number {
     if (detectedProxyPort) return detectedProxyPort;
+    // ① 环境变量(Clash/V2Ray/系统代理常设)
     const envProxy = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.ALL_PROXY || '';
     if (envProxy) {
-        const m = envProxy.match(/127\.0\.0\.1:(\d+)/);
-        if (m) { detectedProxyPort = parseInt(m[1]); return detectedProxyPort; }
+        const m = envProxy.match(/(?:127\.0\.0\.1|localhost):(\d+)/i);
+        if (m) { detectedProxyPort = parseInt(m[1]); _proxyDetectTs = Date.now(); return detectedProxyPort; }
     }
+    // ② 配置文件
     try {
         const f = JSON.parse(fs.readFileSync(GLOBAL_CONFIG_FILE, 'utf8'));
-        if (f.proxyPort) { detectedProxyPort = f.proxyPort; return detectedProxyPort; }
+        if (f.proxyPort) { detectedProxyPort = f.proxyPort; _proxyDetectTs = Date.now(); return detectedProxyPort; }
     } catch {}
-    for (const p of PROXY_PORTS) {
-        try {
-            const s = new net.Socket();
-            s.connect(p, '127.0.0.1');
-            s.destroy();
-            detectedProxyPort = p;
-            return p;
-        } catch {}
-    }
-    return 0;
+    // 端口未知 → 触发后台异步实探(非阻塞), 本次先返 0(直连赛道照走), 探到后下次即用。
+    _refreshProxyPort();
+    return detectedProxyPort || 0;
+}
+// 异步端口实探: 单 net.connect(真正等连接结果) 逐口验证 + Windows 系统代理注册表。
+//   根治旧法 net.Socket.connect 误判(connect 非阻塞·try/catch 捕不到拒绝 → 永远误设 7890)。
+//   周期 60s 重探: 代理可能在插件启动后才开、或重启换端口。
+function _refreshProxyPort(): void {
+    if (_proxyProbing) return;
+    // 节流: 命中后 60s 内不重探; 未命中(0)后 15s 内不重探(代理刚开也能较快接管, 又不致每请求探一次)。
+    if (_proxyDetectTs && Date.now() - _proxyDetectTs < (detectedProxyPort ? 60000 : 15000)) return;
+    _proxyProbing = true;
+    const finishProbe = (port: number) => { detectedProxyPort = port; _proxyDetectTs = Date.now(); _proxyProbing = false; };
+    // 真实 TCP 连接验证(等 connect/error 事件, 350ms 超时), 逐口短路命中即用。
+    const probe = (idx: number): void => {
+        if (idx >= PROXY_PORTS.length) {
+            // 全部端口未中 → 退查 Windows 系统代理注册表(异步 exec, 不阻塞)
+            try {
+                require('child_process').exec('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer', { timeout: 2500 }, (e: any, out: string) => {
+                    const m = !e && out ? out.match(/ProxyServer\s+REG_SZ\s+(?:socks5?=|https?:\/\/)?(?:127\.0\.0\.1|localhost):(\d+)/i) : null;
+                    finishProbe(m ? parseInt(m[1]) : 0);
+                });
+            } catch { finishProbe(0); }
+            return;
+        }
+        const p = PROXY_PORTS[idx];
+        const s = new net.Socket();
+        let settled = false;
+        const next = (ok: boolean) => { if (settled) return; settled = true; try { s.destroy(); } catch { /* 守柔 */ } if (ok) finishProbe(p); else probe(idx + 1); };
+        s.setTimeout(350, () => next(false));
+        s.once('connect', () => next(true));
+        s.once('error', () => next(false));
+        try { s.connect(p, '127.0.0.1'); } catch { next(false); }
+    };
+    probe(0);
 }
 
 function createProxyTunnel(hostname: string): Promise<tls.TLSSocket | null> {
@@ -11900,6 +11930,28 @@ function _dechunk(buf) {
 }
 // 道·经本机 VPN/代理 CONNECT 隧道发起原生 GET, 解析原始 HTTP 响应(状态/头/体)。直连被墙站点(GFW RST)的兜底通路。
 function fetchViaTunnel(u, headers, timeoutMs) {
+    // HTTP 站点经代理: 标准 HTTP 代理是「整 URL 作请求行」(GET http://host/path), 非 CONNECT 隧道。
+    //   CONNECT+TLS 仅适用 HTTPS。此前 HTTP 站点根本不走代理(isHttps?...:0)→ 被墙 HTTP 站直连必败。
+    if (u.protocol === 'http:') {
+        return new Promise((resolve) => {
+            const proxyPort = detectedProxyPort || detectProxyPort();
+            if (!proxyPort) { resolve(null); return; }
+            let done = false;
+            const fin = (r) => { if (!done) { done = true; resolve(r); } };
+            const chunks = [];
+            const pr = http.request({
+                host: '127.0.0.1', port: proxyPort, method: 'GET',
+                path: u.href, headers: Object.assign({}, headers, { Host: u.host }),
+                timeout: timeoutMs || 16000,
+            }, (res) => {
+                res.on('data', (c) => chunks.push(c));
+                res.on('end', () => fin({ status: res.statusCode || 200, headers: res.headers, raw: Buffer.concat(chunks) }));
+            });
+            pr.on('error', () => fin(null));
+            pr.on('timeout', () => { try { pr.destroy(); } catch (e) { /* 守柔 */ } fin(null); });
+            pr.end();
+        });
+    }
     return new Promise((resolve) => {
         let done = false;
         const fin = (r) => { if (!done) { done = true; resolve(r); } };
@@ -12151,10 +12203,10 @@ async function genericWebProxy(targetUrl, depth = 0) {
         // 道·并行赛道(天下莫柔弱于水, 而攻坚强者莫之能胜): 本机检出代理(Clash/V2Ray)时,
         //   「直连」与「经本机代理 CONNECT 隧道」两路同时取, 谁先成谁用。国内站直连即刻命中;
         //   被墙站(google 等)直连黑洞超时, 而代理 1~2s 即返 → 不再误判「打不开」, 媲美系统浏览器走代理。
-        const proxyPort = isHttps ? (detectedProxyPort || detectProxyPort()) : 0;
+        const proxyPort = detectedProxyPort || detectProxyPort();
         const hasProxy = proxyPort > 0;
         let dFail = false, pFail = false;
-        const maybeErr = () => { if (done) return; if (dFail && (pFail || !hasProxy)) finish(errPage('网络不可达或站点拒绝代理', u.href)); };
+        const maybeErr = () => { if (done) return; if (dFail && (pFail || !hasProxy)) finish(errPage(hasProxy ? '代理连接失败(直连与代理均不可达)' : '网络不可达(未检测到本地代理·如有 Clash/V2Ray 请确认已启动)', u.href)); };
         const directFail = () => { dFail = true; maybeErr(); };
         const proxyFail = () => { pFail = true; maybeErr(); };
         // 直连赛道
@@ -12168,7 +12220,7 @@ async function genericWebProxy(targetUrl, depth = 0) {
         proxyReq.on('error', () => directFail());
         proxyReq.on('timeout', () => { try { proxyReq.destroy(); } catch (e) { /* 守柔 */ } directFail(); });
         proxyReq.end();
-        // 代理赛道(仅 https · 经本机 Clash/V2Ray CONNECT 隧道, 与官网代理/MCP 接测同策)
+        // 代理赛道(经本机 Clash/V2Ray: https 走 CONNECT 隧道, http 走标准代理 GET; 与官网代理/MCP 接测同策)
         if (hasProxy) {
             fetchViaTunnel(u, reqHeaders, 16000).then((tr) => {
                 if (done) return;
