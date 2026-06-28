@@ -63,6 +63,12 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   descendant as a list. Where `uia_children` sees only *direct* children, this reads
   a whole **collection** by meaning — a file manager's rows, a result set — that
   lives far below the top window (F184).
+- `uia_rows(win, container_ctype=)` — rebuild a details/report view's **rows** from a
+  *flattened* tree. A multi-column list often scatters each cell into a separate
+  sibling (the name in an `edit`, the size/date in `text`s) with no per-row parent, so
+  `uia_find_all` cannot say which cells belong together. This regroups them by geometry
+  — cluster by vertical band, order by x, drop the row-wrapper that merely repeats the
+  name — returning `[[cell, …], …]` in visual row/column order (JOURNAL F196).
 - `uia_invoke` — fire a control's default action with no pixels; **falls through
   to a real click** on the rect when a control exposes no action (text regions,
   canvases — JOURNAL F179), so invoke-by-meaning answers for *any* visible control.

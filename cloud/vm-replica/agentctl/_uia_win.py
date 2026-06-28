@@ -483,6 +483,78 @@ def uia_find_all(win: int, name=None, ctype=None, max_scan: int = 6000) -> list:
         _release(el)
 
 
+def uia_rows(win: int, container_name=None, container_ctype="list",
+             cell_ctypes=("edit", "text", "dataitem", "listitem"),
+             y_tol: int = 8) -> list:
+    """Rebuild a details/report view's **rows** from a *flattened* tree (F196).
+
+    A multi-column list — a file manager (7-Zip), a task list, a mail view — often
+    exposes each column cell as a *separate sibling* element with no per-row parent:
+    :func:`uia_find_all` hands back the names in one place and the sizes/dates in
+    another, so you can read each cell by meaning yet cannot read *the row for X* as a
+    unit (the row that pairs ``desktop.ini`` with its ``402`` bytes and its date).
+    This regroups the scattered cells by geometry — exactly what the eye does: keep
+    only cells inside the container's rect, cluster them into rows by vertical band
+    (rect top within ``y_tol`` px of the band), and order each row left-to-right by x.
+    Returns ``[[cell, …], …]`` in visual row/column order. It relies only on rects
+    (which UIA reports reliably even when it scatters the elements) and Names, so it is
+    provider-agnostic; and it composes the already hang-proof :func:`uia_find` /
+    :func:`uia_find_all` then does pure-Python geometry, so it cannot itself hang."""
+    cont = uia_find(win, name=container_name, ctype=container_ctype)
+    if not cont or not cont.get("rect"):
+        return []
+    cx, cy, cw, ch = cont["rect"]
+    x2, y2 = cx + cw, cy + ch
+    cells = []
+    seen = set()
+    for ct in cell_ctypes:
+        for e in uia_find_all(win, ctype=ct):
+            nm = (e.get("name") or "").strip()
+            r = e.get("rect")
+            if not nm or not r:
+                continue
+            if not (cx - 2 <= r[0] < x2 and cy - 2 <= r[1] < y2):
+                continue  # outside the list body (toolbar/header/status bar)
+            key = (r[0], r[1], nm)
+            if key in seen:
+                continue
+            seen.add(key)
+            cells.append((r[1], r[0], r[0] + r[2], nm))  # (top, left, right, text)
+    cells.sort()
+    rows = []
+    cur = []
+    band = None
+    for top, left, right, nm in cells:
+        if band is not None and abs(top - band) > y_tol:
+            rows.append(_row_columns(cur))
+            cur = []
+            band = None
+        cur.append((left, right, nm))
+        if band is None:
+            band = top
+    if cur:
+        rows.append(_row_columns(cur))
+    return [r for r in rows if r]
+
+
+def _row_columns(cells):
+    """Order one geometric row's cells into columns, dropping any row-*wrapper*. A
+    details view often carries both the per-column cells (a name ``edit``, a size/date
+    ``text``) and a single ``listitem`` spanning the whole row — the wrapper duplicates
+    the name. A wrapper is exactly the cell that spatially *contains* two or more of the
+    others, so drop those and keep the leaves, ordered left-to-right. Containment (not
+    text equality) is the test, so two columns that legitimately share a value — the
+    equal Modified/Created dates of a folder — are both preserved."""
+    kept = []
+    for i, (l, r, t) in enumerate(cells):
+        encloses = sum(1 for j, (l2, r2, _) in enumerate(cells)
+                       if j != i and l - 2 <= l2 and r2 <= r + 2)
+        if encloses >= 2:
+            continue
+        kept.append((l, t))
+    return [t for _, t in sorted(kept)]
+
+
 def _pattern(el, pattern_id):
     p = ctypes.c_void_p()
     if _vcall(el, _GETPATTERN, ctypes.c_long,
@@ -578,18 +650,18 @@ def uia_get_value(win: int, name=None, ctype=None) -> str:
 
 
 def _invoke_worker(win, name, ctype, res, done):
-    """Run a single InvokePattern call in its *own* STA with its *own* UIA instance
-    and freshly-resolved element. Self-contained so it can be abandoned (daemon) if
-    it blocks in a modal handler without poisoning the main thread's UIA."""
+    """Run a single InvokePattern call on its *own* per-thread STA + UIA (F194's
+    thread-local :func:`_get_uia`) with a freshly-resolved element. Self-contained so
+    it can be abandoned (daemon) if it blocks in a modal handler without poisoning the
+    main thread's UIA; the same per-thread lifecycle every :func:`_hangproof` worker
+    uses, so a completed worker tears its UIA down (no leak) and an abandoned one
+    leaks only its single instance."""
     try:
-        _ole32.CoInitializeEx(None, 0x2)  # this thread's own apartment
-        pp = ctypes.c_void_p()
-        hr = _ole32.CoCreateInstance(ctypes.byref(_CLSID_CUIAutomation), None, 1,
-                                     ctypes.byref(_IID_IUIAutomation), ctypes.byref(pp))
-        if hr != 0 or not pp.value:
+        uia = _get_uia()  # this thread's own apartment + UIA instance
+        if not uia:
             res[0] = False
             return
-        el = _find_ptr(pp.value, win, name, ctype)
+        el = _find_ptr(uia, win, name, ctype)
         if not el:
             res[0] = False
             return
@@ -607,6 +679,7 @@ def _invoke_worker(win, name, ctype, res, done):
     except Exception:
         res[0] = False
     finally:
+        _teardown_uia()
         done.set()
 
 

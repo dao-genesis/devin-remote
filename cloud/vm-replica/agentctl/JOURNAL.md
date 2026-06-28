@@ -6290,6 +6290,48 @@ floor now reads by meaning where the tree speaks, and by the copy channel where 
 
 ---
 
+## F196 — read a *row* the tree scattered into cells · `uia_rows` rebuilds a flattened details view by geometry
+
+**Friction.** Operating 7-Zip's File Manager by meaning, every cell is *readable* — `uia_find_all`
+hands back the file names (in `edit` elements) and, separately, the sizes and dates (in `text`
+elements) — yet you cannot read **the row for `desktop.ini`**: the one fact that pairs that name
+with its `402` bytes and its dates. The provider exposes the grid as a *flattened* list: each
+column cell is a separate sibling with no per-row parent (measured on this VM — the name lives in
+an `edit` at x∈[118,200], its size in a `text` at x≈274, its dates at x≈374/474; a single
+full-width `listitem` at x∈[114,874] wraps them but only repeats the name). So reading a record as
+a unit by meaning was impossible — the cells were all there, just un-associated.
+
+**The fix — rebuild the row the way the eye does: by geometry.** `uia_rows` keeps only the cells
+inside the list container's rect (dropping toolbar/header/status text), clusters them into rows by
+**vertical band** (rect top within `y_tol` px), and orders each row **left-to-right by x**. The
+row-wrapper `listitem` that duplicates the name is removed by a containment test — a cell that
+spatially *encloses two or more others* is a wrapper, not a column — chosen over collapsing equal
+text precisely so a folder's **equal Modified/Created dates are both preserved**. It relies only on
+rects (which UIA reports reliably even as it scatters the elements) and Names, so it is
+provider-agnostic; and it *composes* the already hang-proof `uia_find`/`uia_find_all` then does
+pure-Python geometry, so it inherits F194's safety and **cannot itself hang** — no decorator needed.
+
+**Live (this VM).** `_probe_rows.py` **5/5** against the real 7-Zip File Manager in
+`C:\Users\Administrator\Documents`: `uia_rows` returns one row per visible entry (all five known
+names present); the flattening is shown real (name in an `edit`, size in a separate `text`); the
+`desktop.ini` row pairs the name **with its `402` size** in one reconstructed row; every row is in
+left-to-right column order (name leftmost); and rows come back top-to-bottom in visual order.
+
+**日損 (same change, subtracted).** F193's `uia_invoke` worker hand-rolled its own
+`CoInitializeEx`/`CoCreateInstance` — duplicating the per-thread UIA lifecycle that F194's
+thread-local `_get_uia`/`_teardown_uia` now own. The worker now uses them, deleting ~10 lines of
+bootstrap and giving invoke the *same* teardown (no leak) as every other verb. Proven unchanged:
+`_probe_modal.py` **4/4** (invoke still returns in ~6s on a real modal, file lands on disk),
+regression `_probe_winverbs.py` **15/15**.
+
+**Lesson (道法自然).** 萬物並作，吾以觀復 — the parts were all present; seeing the whole was a matter of
+watching how they return to their rows. We did not force the provider to build a tree it never
+built (F195's restraint); we read the geometry it *does* report and let the record reassemble
+itself. And 為學者日益，聞道者日損 in one stroke: a new verb added (`uia_rows`), a duplicated apartment
+bootstrap removed — the floor grew a capability while shrinking its code.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

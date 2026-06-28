@@ -155,6 +155,12 @@ uia_find = getattr(_be, "uia_find", lambda win, name=None, ctype=None: None)
 # read a COLLECTION by meaning (a file list's rows, an image's layers, search hits) that
 # live far below the top window. name matches Name/AutomationId/HelpText, ctype filters.
 uia_find_all = getattr(_be, "uia_find_all", lambda win, name=None, ctype=None, max_scan=6000: [])
+# uia_rows (F196): rebuild a details/report view's ROWS from a flattened tree. A
+# multi-column list often scatters each cell into a separate sibling element with no
+# per-row parent, so uia_find_all yields names and sizes/dates apart and you cannot read
+# "the row for X" as a unit. This regroups the cells by geometry — cluster by vertical
+# band, order by x — returning [[cell,…],…] in visual row/column order.
+uia_rows = getattr(_be, "uia_rows", lambda win, container_name=None, container_ctype="list", cell_ctypes=("edit", "text", "dataitem", "listitem"), y_tol=8: [])
 # UIA action (F167): operate elements found by MEANING through the accessibility
 # tree, reaching INSIDE modern apps (Chrome/Electron/UWP) that have no native HWND
 # to write to or click. uia_set_value writes a field's value (modern-app dual of
