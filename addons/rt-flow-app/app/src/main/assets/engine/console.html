@@ -1441,27 +1441,54 @@
     else if(d.__rtflow==="daoDragEnd"){ daoDropZone.classList.remove("show","armed"); }
   }catch(e){} });
 
-  // ── 把文件注入当前活动 Devin/网页标签的上传框 (同源反代标签可直达 contentDocument) ──
+  // ── 把文件注入「子 Devin 网页」标签的上传框 (同源反代标签可直达 contentDocument) ──
+  //   收口(用户「上传逻辑仍有问题」): ①目标不再死盯当前活动标签 —— 全服通悬浮窗常覆盖在切号面板(非 web)
+  //   之上, 旧逻辑取 tabs[active] 必落空报「请先打开 Devin 标签」。现遍历所有 web 标签、优先活动者、否则取
+  //   最近一个可同源访问(反代 Devin)的标签, 并切到它让用户看见落入。②除 <input type=file> 外, 再对编辑器
+  //   /落区派发带 DataTransfer 的 drop 事件兜底 —— Devin 输入框支持拖拽投文件, 无显式上传框时仍可投递。
   function _activeWebTab(){ var t=tabs[active]; return (t&&t.kind==="web")?t:null; }
+  function _docOf(t){ try{ return (t&&t.fr&&t.fr.contentDocument)||null; }catch(e){ return null; } }
+  function _uploadTargetTab(){
+    var t=_activeWebTab(); if(t&&_docOf(t)) return t;                  // 活动标签即可同源注入 → 首选
+    for(var i=tabs.length-1;i>=0;i--){ var x=tabs[i]; if(x&&x.kind==="web"&&_docOf(x)) return x; }  // 否则最近的可注入 web 标签
+    return null;
+  }
   function _b64ToU8(b64){ try{ var s=atob(b64||""); var u=new Uint8Array(s.length); for(var i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return u; }catch(e){ return new Uint8Array(0); } }
-  function injectFileToActiveTab(name, mime, b64){
-    var t=_activeWebTab();
-    if(!t){ toast("请先在控台内打开一个 Devin 标签作为上传目标"); return; }
-    var win, doc;
-    try{ win=t.fr.contentWindow; doc=t.fr.contentDocument; }catch(e){ win=null; doc=null; }
-    if(!win||!doc){ toast("当前标签跨源不可注入(请在生产控台内打开 Devin 标签)"); return; }
-    var inp=null;
-    try{ var ins=doc.querySelectorAll('input[type=file]'); inp=ins[ins.length-1]||null; }catch(e){}
-    if(!inp){ toast("当前页未找到上传框 · 先在该页点开「附件/上传」再传"); return; }
+  function _fireDrop(win, doc, file){
+    // 找 Devin 输入区(contenteditable / textarea / 拖放区) → 派发 dragenter/over/drop(带 files) 兜底注入
+    var tgt=null;
+    try{ tgt=doc.querySelector('[data-testid*="drop"],[class*="dropzone"],[contenteditable="true"],textarea')||doc.body; }catch(e){ tgt=doc.body; }
+    if(!tgt) return false;
     try{
-      var u8=_b64ToU8(b64);
-      var F=win.File||window.File, DT=win.DataTransfer||window.DataTransfer;
-      var file=new F([u8], name, { type:mime });
-      var dt=new DT(); dt.items.add(file);
-      inp.files=dt.files;
-      inp.dispatchEvent(new (win.Event||Event)("input", { bubbles:true }));
-      inp.dispatchEvent(new (win.Event||Event)("change", { bubbles:true }));
-      toast("✓ 已注入上传框: "+name);
+      var DT=win.DataTransfer||window.DataTransfer, dt=new DT(); dt.items.add(file);
+      ["dragenter","dragover","drop"].forEach(function(type){
+        var ev; try{ ev=new (win.DragEvent||window.DragEvent)(type,{bubbles:true,cancelable:true}); }catch(_){ ev=new (win.Event||Event)(type,{bubbles:true,cancelable:true}); }
+        try{ Object.defineProperty(ev,"dataTransfer",{value:dt}); }catch(_){}
+        tgt.dispatchEvent(ev);
+      });
+      return true;
+    }catch(e){ return false; }
+  }
+  function injectFileToActiveTab(name, mime, b64){
+    var t=_uploadTargetTab();
+    if(!t){ toast("请先在控台内打开一个子 Devin 标签作为上传目标(点账号 → 进入对话)",true); return; }
+    if(tabs[active]!==t){ try{ selectTab(t.id); }catch(e){} try{ daoFloat.classList.remove("show"); }catch(e){} }  // 切到目标标签让用户看见落入
+    var win=null, doc=_docOf(t); try{ win=t.fr.contentWindow; }catch(e){}
+    if(!win||!doc){ toast("目标标签跨源不可注入(请在控台内打开反代 Devin 标签)",true); return; }
+    try{
+      var u8=_b64ToU8(b64), F=win.File||window.File, file=new F([u8], name, { type:mime||"application/octet-stream" });
+      var inp=null; try{ var ins=doc.querySelectorAll('input[type=file]'); inp=ins[ins.length-1]||null; }catch(e){}
+      if(inp){
+        var DT=win.DataTransfer||window.DataTransfer, dt=new DT(); dt.items.add(file);
+        inp.files=dt.files;
+        inp.dispatchEvent(new (win.Event||Event)("input", { bubbles:true }));
+        inp.dispatchEvent(new (win.Event||Event)("change", { bubbles:true }));
+        toast("✓ 已注入上传框: "+name);
+      } else if(_fireDrop(win, doc, file)){
+        toast("✓ 已投递到输入区(拖放): "+name);
+      } else {
+        toast("目标页未找到上传框/输入区 · 先在该页点开对话输入框再传",true);
+      }
     }catch(e){ toast("注入失败: "+(e&&e.message||e),true); }
   }
   window.injectFileToActiveTab=injectFileToActiveTab;

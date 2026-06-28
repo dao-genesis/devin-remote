@@ -104,5 +104,56 @@ ok(/function _convNameOf\(a\)/.test(switchSrc),
 ok(/_bigAlert\("⚠ "\+_convNameOf\(a\)\+" 额度仅/.test(switchSrc),
    "源级: 低额提醒以对话名为主体(不前缀账号名)");
 
+// ── 公网单网页 ≈ APK 数据齐平: 四处收口护栏 (本轮 v0.37.100) ──────────────────
+const cloudSrc  = fs.readFileSync(path.join(ENGINE, "devin-cloud.js"), "utf8");
+const engineSrc = fs.readFileSync(path.join(ENGINE, "engine.html"), "utf8");
+const daopanSrc = fs.readFileSync(path.join(ENGINE, "daopan.html"), "utf8");
+const consoleSrc= fs.readFileSync(path.join(ENGINE, "console.html"), "utf8");
+
+// ① canonical sessStatus 为共享单一真源 (web/device 共用 → 与 APK 完全一致)
+ok(/function sessStatus\(s\)/.test(cloudSrc) && /sessStatus:\s*sessStatus/.test(cloudSrc),
+   "源级: devin-cloud.js 导出 canonical sessStatus (单一真源)");
+{
+  const seg2 = cloudSrc.match(/var QUOTA_RE\s*=[\s\S]*?\n\s*(?=root\.DaoCloud)/);
+  if (!seg2) { console.error("FAIL: devin-cloud.js 未找到 sessStatus 区段"); process.exit(1); }
+  const ss = eval("(function(){\n" + seg2[0] + "\nreturn sessStatus;})()");
+  ok(ss({ status:"finished", latest_status_contents:{ reason:"out_of_quota" } })[0] === "exhausted",
+     "devin-cloud.sessStatus: finished+out_of_quota → exhausted (与 switch.html 同判)");
+  ok(ss({ latest_status_contents:{ user_action_required:true } })[0] === "blocked",
+     "devin-cloud.sessStatus: user_action_required → blocked");
+  ok(ss({ latest_status_contents:{ enum:"running" } })[0] === "running",
+     "devin-cloud.sessStatus: enum=running → running");
+}
+
+// ② engine.html 设备命令 recentConvAll: 原生 6 路并发聚合一次返回, 每条带 canonical [cls,label]
+ok(/recentConvAll:\s*async function\(a\)/.test(engineSrc),
+   "源级: engine.html 存在设备命令 recentConvAll (原生跨号聚合)");
+ok(/DaoCloud\.sessStatus\?DaoCloud\.sessStatus\(s\)/.test(engineSrc),
+   "源级: recentConvAll 每条带 canonical sessStatus 的 [cls,label]");
+ok(/return\s*\{\s*ok:true,\s*total:[\s\S]*?list:\s*out\.slice/.test(engineSrc),
+   "源级: recentConvAll 返回 {ok,total,accounts,list} 一帧取齐");
+
+// ③ daopan.html 公网端: 一次 RPC 从设备聚合 (秒出·不再逐号穿透卡 0/N)
+ok(/function _relayRPC\(cmd, args, timeoutMs\)/.test(daopanSrc) && /__rtRelay/.test(daopanSrc),
+   "源级: daopan.html _relayRPC 经父页失效转移通道 __rtRelay 调设备命令");
+ok(/async function _recentViaDevice\(\)/.test(daopanSrc) && /recentConvAll/.test(daopanSrc),
+   "源级: daopan.html _recentViaDevice 调 recentConvAll");
+ok(/if\(IS_WEB\)\{\s*try\{\s*if\(await _recentViaDevice\(\)\)\{\s*_busy=false;\s*return;\s*\}/.test(daopanSrc),
+   "源级: loadRecent 公网优先一次 RPC 聚合, 失败再回退逐号 (兜底)");
+ok(/it\.cls\|\|stClass\(it\.status\)/.test(daopanSrc) && /it\.label\|\|it\.status/.test(daopanSrc),
+   "源级: daopan 渲染用 canonical cls/label (回退旧 stClass)");
+
+// ④ console.html 上传通道收口: 跨标签解析目标 + drop 事件兜底
+ok(/function _uploadTargetTab\(\)/.test(consoleSrc),
+   "源级: console.html _uploadTargetTab 遍历所有 web 标签 (不死盯活动标签)");
+ok(/for\(var i=tabs\.length-1;i>=0;i--\)\{ var x=tabs\[i\]; if\(x&&x\.kind==="web"&&_docOf\(x\)\) return x;/.test(consoleSrc),
+   "源级: _uploadTargetTab 回退最近一个可同源注入的 web 标签");
+ok(/function _fireDrop\(win, doc, file\)/.test(consoleSrc) && /\["dragenter","dragover","drop"\]/.test(consoleSrc),
+   "源级: console.html _fireDrop 对输入区派发 DataTransfer drop 兜底 (无 input 时)");
+ok(/}\s*else if\(_fireDrop\(win, doc, file\)\)\{/.test(consoleSrc),
+   "源级: injectFileToActiveTab 无 <input type=file> 时走 _fireDrop 兜底");
+ok(/if\(tabs\[active\]!==t\)\{ try\{ selectTab\(t\.id\)/.test(consoleSrc),
+   "源级: 注入前切到目标标签让用户看见落入 (全服通悬浮窗覆盖切号面板时仍准)");
+
 if (failures) { console.error("\n" + failures + " 项失败 ✗"); process.exit(1); }
 console.log("\n全部通过 ✓");
