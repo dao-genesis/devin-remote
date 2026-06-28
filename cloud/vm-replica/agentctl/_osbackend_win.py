@@ -9,12 +9,15 @@ everything above them (gestures, perception) is platform-agnostic and lives in
 from __future__ import annotations
 
 import ctypes
+import os
+import struct
 import time
 from ctypes import wintypes
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 
 # 64-bit safety: handles/pointers must NOT default to 32-bit int return, or they
 # get truncated and the next call dereferences a null/garbage pointer.
@@ -28,6 +31,10 @@ user32.SetClipboardData.restype = _wp.HANDLE
 user32.SetClipboardData.argtypes = [_wp.UINT, _wp.HANDLE]
 user32.GetClipboardData.restype = _wp.HANDLE
 user32.GetClipboardData.argtypes = [_wp.UINT]
+user32.RegisterClipboardFormatW.restype = _wp.UINT
+user32.RegisterClipboardFormatW.argtypes = [_wp.LPCWSTR]
+shell32.DragQueryFileW.restype = _wp.UINT
+shell32.DragQueryFileW.argtypes = [_wp.HANDLE, _wp.UINT, _wp.LPWSTR, _wp.UINT]
 user32.GetDC.restype = _wp.HDC
 user32.GetDC.argtypes = [_wp.HWND]
 user32.ReleaseDC.argtypes = [_wp.HWND, _wp.HDC]
@@ -228,6 +235,65 @@ def get_clipboard() -> str:
         text = ctypes.wstring_at(ptr)
         kernel32.GlobalUnlock(h)
         return text
+    finally:
+        user32.CloseClipboard()
+
+
+CF_HDROP = 15
+
+
+def get_clipboard_files() -> list:
+    """The files currently on the clipboard (``CF_HDROP``), as absolute paths; ``[]``
+    when the clipboard holds no file list. The non-text twin of :func:`get_clipboard`:
+    when a user (or app) does Ctrl+C in Explorer the payload is a *file list*, not
+    text, so the text clipboard is blind to it."""
+    if not user32.OpenClipboard(0):
+        return []
+    try:
+        h = user32.GetClipboardData(CF_HDROP)
+        if not h:
+            return []
+        n = shell32.DragQueryFileW(h, 0xFFFFFFFF, None, 0)
+        out = []
+        for i in range(n):
+            need = shell32.DragQueryFileW(h, i, None, 0)
+            buf = ctypes.create_unicode_buffer(need + 1)
+            shell32.DragQueryFileW(h, i, buf, need + 1)
+            out.append(buf.value)
+        return out
+    finally:
+        user32.CloseClipboard()
+
+
+def set_clipboard_files(paths, move: bool = False) -> bool:
+    """Place a **file list** on the clipboard (``CF_HDROP`` + the *Preferred
+    DropEffect* that tells Explorer copy vs. move), so a subsequent Ctrl+V in
+    Explorer or any shell target transfers the files. The non-text twin of
+    :func:`set_clipboard`. Builds the ``DROPFILES`` header (20 bytes; wide, double-
+    NUL-terminated path list) by hand. False if the clipboard could not be opened."""
+    abs_paths = [os.path.abspath(p) for p in paths]
+    files = ("\x00".join(abs_paths) + "\x00\x00").encode("utf-16-le")
+    # DROPFILES: pFiles(offset=20), pt.x, pt.y, fNC(0), fWide(1)
+    payload = struct.pack("<IiiII", 20, 0, 0, 0, 1) + files
+    if not user32.OpenClipboard(0):
+        return False
+    try:
+        user32.EmptyClipboard()
+        h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(payload))
+        ptr = kernel32.GlobalLock(h)
+        ctypes.memmove(ptr, payload, len(payload))
+        kernel32.GlobalUnlock(h)
+        if not user32.SetClipboardData(CF_HDROP, h):
+            return False
+        eff = struct.pack("<I", 2 if move else 1)  # DROPEFFECT_MOVE / _COPY
+        fmt = user32.RegisterClipboardFormatW("Preferred DropEffect")
+        if fmt:
+            he = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(eff))
+            pe = kernel32.GlobalLock(he)
+            ctypes.memmove(pe, eff, len(eff))
+            kernel32.GlobalUnlock(he)
+            user32.SetClipboardData(fmt, he)
+        return True
     finally:
         user32.CloseClipboard()
 

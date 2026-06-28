@@ -41,6 +41,12 @@ key_down = _be.key_down
 key_up = _be.key_up
 set_clipboard = _be.set_clipboard
 get_clipboard = _be.get_clipboard
+# File clipboard (CF_HDROP): copy/paste *files* between Explorer and apps. The
+# non-text twin of the clipboard above — a Ctrl+C in Explorer puts a file list,
+# not text, so get_clipboard is blind to it. Fall back to [] / False on a backend
+# that predates these (e.g. an X11 ground without a file-list selection bridge).
+get_clipboard_files = getattr(_be, "get_clipboard_files", lambda: [])
+set_clipboard_files = getattr(_be, "set_clipboard_files", lambda paths, move=False: False)
 _mouse_button = _be.mouse_button
 _mouse_wheel = _be.mouse_wheel
 # Window addressing (enumerate + activate). Backends expose these; if a backend

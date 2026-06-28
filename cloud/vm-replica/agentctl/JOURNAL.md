@@ -6601,6 +6601,50 @@ discipline: match the channel to what the window actually offers, neither more n
 
 ---
 
+## F202 — the **file clipboard** (CF_HDROP): see and originate the way a human moves data between apps
+
+**Friction (forward practice).** The floor's clipboard was text-only (`CF_UNICODETEXT`). But the
+commonest cross-application transfer on a desktop is *not* text: when a user does Ctrl+C in Explorer
+(or "Copy" in any shell view, a file manager, an email attachment list), the payload is a **file
+list** (`CF_HDROP`), and `get_clipboard()` returns `""`. So the floor was blind two ways at once — it
+could neither *see* what a user had copied (it looked empty) nor *originate* a file copy to paste
+somewhere. For an agent meant to "operate all software", moving files between apps is table-stakes,
+and it had no hands for it.
+
+**Mechanism — the non-text twin of the clipboard, by hand in pure ctypes.**
+
+```python
+get_clipboard_files() -> [path, …]          # read CF_HDROP (DragQueryFileW)
+set_clipboard_files(paths, move=False) -> bool   # write CF_HDROP + "Preferred DropEffect"
+```
+
+`get_clipboard_files` reads the dropped-file list via `DragQueryFileW`. `set_clipboard_files` builds
+the `DROPFILES` structure by hand — the 20-byte header (`pFiles=20`, point, `fNC=0`, `fWide=1`) followed
+by the wide, double-NUL-terminated path list — and *also* registers the **`"Preferred DropEffect"`**
+format (DROPEFFECT_COPY/MOVE), because without it Explorer cannot tell a paste-copy from a paste-move
+and the Ctrl+V silently does nothing. That second format is the non-obvious detail that makes the
+paste actually land.
+
+**Honest boundary.** Windows-only for now: the X11 ground's file clipboard is the fragmented
+`text/uri-list` selection target, left a truthful `[]`/`False` no-op (the `getattr` fallback) until a
+real Linux failure is reproduced — 知止不殆.
+
+**Live (this VM).** `_probe_clipfiles.py` **7/7**: with a file copied by an *external* app (PowerShell
+`Set-Clipboard`), the text channel reads `""` (the friction) while `get_clipboard_files()` reads the
+path — so the floor now *sees* a real app's copy; `set_clipboard_files` round-trips; and end-to-end the
+floor sets a file list, opens a **real Explorer window** at a destination folder, sends Ctrl+V, and the
+file **lands** there — a genuine OS file-copy driven by the clipboard, verified a *copy* (the source
+survives) with matching content. **No regression** — `_probe_winverbs.py` **15/15**, `_probe_opaque.py`
+**7/7**, `_probe_tray.py` **8/8**. Pure stdlib.
+
+**Lesson (道法自然).** 大道甚夷 — the data path humans use most (drag a file, copy a file) looked beneath
+notice next to the semantic floor's cleverness, yet its absence was a plain hole in "operate all
+software". 為而不爭: the fix adds no new gesture, only teaches the existing clipboard a second native
+tongue (files, not just text), and the honest detail — the Preferred-DropEffect format Explorer
+silently requires — is the kind of small truth that decides whether the paste is real or theatre.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

@@ -168,6 +168,13 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   *switch channels deliberately* — drive by **pixels+keyboard** (`screenshot`/`find_color`/`pixel`
   + `tap`/`drag`/`click`) where meaning is absent. Proven `_probe_opaque.py` 7/7 (and live on real
   Inkscape: rectangle drawn + filled #FF0000 entirely by keys+pixels) (JOURNAL F201).
+- `get_clipboard_files()` / `set_clipboard_files(paths, move=False)` — the **file clipboard**
+  (`CF_HDROP`), the non-text twin of `set_clipboard`/`get_clipboard`: a Ctrl+C in Explorer puts a
+  *file list*, not text, so the text channel reads `""`. These read the dropped-file list
+  (`DragQueryFileW`) and originate one (hand-built `DROPFILES` + the `"Preferred DropEffect"` format
+  Explorer needs to copy vs. move), so the floor can see what a user copied and paste files into any
+  shell target. Proven `_probe_clipfiles.py` 7/7 incl. a live Explorer Ctrl+V copy (JOURNAL F202).
+  Windows-only; `[]`/`False` no-op on X11 (the `text/uri-list` selection) until a real failure.
 
 Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
 `invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:
