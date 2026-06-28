@@ -657,9 +657,14 @@ def uia_toggle(win: int, name=None, ctype=None) -> bool:
 def uia_select(win: int, name=None, ctype=None) -> bool:
     """Select an item found by meaning (a radio button, a list option, a tab) via the
     UIA SelectionItemPattern — the semantic *choose-one* verb, no mouse, no pixels.
-    Returns True if Select was issued. Like :func:`uia_toggle`, it reports only that
-    it acted; read the settled truth with :func:`uia_is_selected` (selection settles
-    asynchronously across the a11y bridge in modern apps)."""
+
+    Many real controls mean "choose me" but do not implement SelectionItemPattern: a
+    Qt ``QTabBar`` tab, for instance, exposes only **InvokePattern** (it switches the
+    page when *invoked*, not *selected*). So when the selection pattern is absent —
+    or its ``Select`` fails — this falls back to invoking the element, which is the
+    same human gesture (click the tab) by a different UIA name. Returns True if either
+    path acted. Like :func:`uia_toggle`, it reports only that it acted; read the
+    settled truth with :func:`uia_is_selected`."""
     uia = _get_uia()
     if not uia:
         return False
@@ -668,12 +673,21 @@ def uia_select(win: int, name=None, ctype=None) -> bool:
         return False
     try:
         sp = _pattern(el, _UIA_SelectionItemPatternId)
-        if not sp:
+        if sp:
+            try:
+                if _vcall(sp, _SELITEM_SELECT, ctypes.c_long, []) == 0:
+                    return True
+            finally:
+                _release(sp)
+        # Fallback: a control that means "choose one" but only models InvokePattern
+        # (Qt tabs, some custom lists) — invoking it is the same gesture.
+        ip = _pattern(el, _UIA_InvokePatternId)
+        if not ip:
             return False
         try:
-            return _vcall(sp, _SELITEM_SELECT, ctypes.c_long, []) == 0
+            return _vcall(ip, _INVOKE, ctypes.c_long, []) == 0
         finally:
-            _release(sp)
+            _release(ip)
     finally:
         _release(el)
 
