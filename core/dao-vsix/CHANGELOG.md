@@ -2,11 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
-## 3.50.43
-- **browser_emulate 据「实践暴露的缺陷」夯实（道法自然·实测驱动）**。v3.50.42 落地后 live 实测发现：设备**视口(width/height)与触摸**经「无状态短连」可跨连接、跨导航持久生效 ✓，但 **UA 覆写与精确 DPR 是 CDP 会话级**——`daoCdpBatch` 连接一断即被 Chrome 清除 → UA 永远回落桌面。
-  - 修法：emulate 改为在同一批次内 `Page.enable` + 设备度量 + 触摸 + 会话级 UA override **再叠加** `Page.addScriptToEvaluateOnNewDocument` 注入「持久客户端覆写脚本」（随 target 跨导航存活），覆写 `navigator.userAgent/appVersion/platform/maxTouchPoints/devicePixelRatio` → 客户端检测(responsive/UA 嗅探)稳定按移动端走。
-  - 注入脚本标识符按 `targetId` 存入进程级 `daoCdpUaScripts`，`reset=true` 时 `Page.removeScriptToEvaluateOnNewDocument` 干净移除并清设备度量/触摸/会话 UA。返回体含 `note` 据实标注「viewport/touch 即时生效；UA/platform/dpr 于下次导航刷新后稳定」；服务端凭请求头判设备的站点仍需持久会话（后续螺旋）。
-  - 自检：`node --check`、`build`、rt-flow 115+35 全过；live 实测 emulate 后导航 → navigator.userAgent/maxTouchPoints 稳定按设备呈现。仅改 `core/dao-vsix/src/extension.ts`。
+## 3.50.44
+- **browser_emulate 据「实践暴露的缺陷」据实收敛（道法自然·不虚报）**。围绕 emulate 做了三轮实测螺旋，最终落到「只承诺可靠落地的能力」：
+  - v3.50.43 曾试图用 `Page.addScriptToEvaluateOnNewDocument` 注入持久客户端 UA 覆写补偿会话级 UA override 的失效——但 live 实测（固定 targetId 串测 emulate→navigate→eval）证明：**该注入脚本同样是会话级**，`daoCdpBatch` 连接一断即被 Chrome 清除（`navigator.userAgent` 仍回落桌面、`reset` 报 `Script not found`）。
+  - 经实测确证的「页面级·跨无状态短连与跨导航持久」覆写只有：**设备度量（视口 width/height）+ 触摸**（`Emulation.setDeviceMetricsOverride` / `setTouchEmulationEnabled`）。故 v3.50.44 将 emulate 收敛为这两项，移除不持久的 UA 注入与脚本追踪态；返回体 `note` 据实标注「视口+触摸持久生效（含跨导航）；完整 UA/请求头模拟需常驻 CDP 会话，暂未提供」，`reset` 干净还原、无报错。
+  - 完整 UA/请求头级设备模拟 + 实时 screencast「镜像观看」需要为 target 维持一条常驻 CDP 连接（当前 24+3 工具均为无状态短连），属后续架构螺旋——据实交予用户定夺，不在本版投机引入。
+  - 自检：`node --check`、`build`、rt-flow 115+35 全过；live 实测 emulate 后跨导航视口/触摸保持、`reset` 无报错。仅改 `core/dao-vsix/src/extension.ts`。
 
 ## 3.50.42
 - **browser_\* 浏览器板块对齐手机 APK / Playwright·Chrome-MCP（道并行而不相悖·additive）**。browser_\* 经独立 `--user-data-dir` 隔离 Chrome（CDP 9333）运行——与用户主浏览器互不相干，既可操作该实例内「已打开的多标签页」（持久 profile·`browser_targets`/`browser_tabs` 全可寻址、每条工具按 `targetId` 路由并行实例），也可新开多标签后台操作而不干扰用户前台；用户可切到该 Chrome 窗口实时观看全过程。
