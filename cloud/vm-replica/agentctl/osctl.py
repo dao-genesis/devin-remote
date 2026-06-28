@@ -747,6 +747,51 @@ def wait_window_closed(win: int, timeout: float = 10.0,
         time.sleep(interval)
 
 
+def wait_control(win: int, name=None, ctype=None, timeout: float = 8.0,
+                 interval: float = 0.25, max_scan: int = 4000) -> "dict | None":
+    """Block until a control matching ``name``/``ctype`` appears *inside* ``win`` by
+    **meaning**, then return its ``uia_find`` dict (``{name,type,aid,help,rect}``) —
+    or ``None`` on timeout. The semantic dual of :func:`wait_window` (whole new
+    window) and :func:`wait_pixel` (a colour): a GUI is a process in time *within* a
+    window too — clicking a menu item opens a dialog whose **OK** button appears a
+    beat later; expanding a panel, switching a tab, or a list finishing its load all
+    make a control *materialise in an existing window* after a delay. Acting the
+    instant after the trigger races that birth and finds nothing; pixel waits are
+    blind to whether the control is *operable* yet, only that something was drawn.
+    This polls ``uia_find`` so the very next step can invoke/type against a control
+    the floor has just confirmed is present — the synchronization every multi-step
+    interaction needs, expressed in meaning rather than pixels. Returns ``None``
+    (never raises) on a backend without UIA, so a caller can fall back to a pixel
+    wait. Pure composition of :func:`uia_find`."""
+    deadline = time.time() + timeout
+    while True:
+        hit = uia_find(win, name=name, ctype=ctype, max_scan=max_scan)
+        if hit is not None:
+            return hit
+        if time.time() >= deadline:
+            return None
+        time.sleep(interval)
+
+
+def wait_control_gone(win: int, name=None, ctype=None, timeout: float = 8.0,
+                      interval: float = 0.25, max_scan: int = 4000) -> bool:
+    """Block until a control matching ``name``/``ctype`` is **no longer** present in
+    ``win`` (or ``win`` itself is gone), returning True once absent or False on
+    timeout. The disappearance dual of :func:`wait_control`: the readiness signal of
+    countless operations is something *vanishing* — a "Loading…"/spinner clearing, a
+    progress dialog's controls going away, a validation error dismissing once a field
+    is fixed. Waiting for the next control to appear is not enough when the gate is an
+    old one leaving; this is that gate. Pure composition of :func:`uia_find`."""
+    deadline = time.time() + timeout
+    while True:
+        if not window_exists(win) or uia_find(win, name=name, ctype=ctype,
+                                              max_scan=max_scan) is None:
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval)
+
+
 # ---- mouse gestures (platform-agnostic, built on the backend leaves) ------- #
 
 

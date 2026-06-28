@@ -6784,6 +6784,51 @@ already present in one's own ground.
 
 ---
 
+## F206 — `wait_control` / `wait_control_gone`: semantic synchronization in time
+
+**Friction (forward practice).** A GUI is a process in time *within* a window, not only at window birth.
+Clicking a menu item opens a dialog whose **OK** appears a beat later; a panel expands; a tab's content
+loads; a "Loading…" spinner clears. The floor could wait for a whole new *window* (`wait_window`, F152)
+or for *pixels* (`wait_pixel`), but had **no wait for a control to become operable by meaning inside an
+existing window**. So every multi-step interaction either *raced the control's birth* — acted the
+instant after the trigger, found nothing, failed — or slept a fixed guess (too short → flaky; too long →
+slow). Pixel waits don't help: they confirm something was *drawn*, not that it is an *operable control*
+the floor can address by name.
+
+**Mechanism — poll `uia_find`, both polarities.**
+
+```python
+wait_control(win, name=, ctype=, timeout=8) -> uia_find dict | None   # appears
+wait_control_gone(win, name=, ctype=, timeout=8) -> bool              # disappears
+```
+
+`wait_control` is the semantic dual of `wait_window`/`wait_pixel`: it returns the control's
+`{name,type,aid,rect}` the moment it is present, so the very next step can invoke/type against a target
+the floor has just *confirmed* exists. `wait_control_gone` is the disappearance dual — the readiness gate
+that is something *leaving* (a spinner clearing, a progress dialog's controls vanishing, a validation
+error dismissing). Both are **pure composition** of `uia_find`; `None`/`False` (never raise) on a backend
+without UIA, so a caller can fall back to a pixel wait.
+
+**Honest boundary.** Polls (default 0.25s) rather than subscribing to UIA events — simpler, backend-
+agnostic, and bounded by `timeout`; a control flickering in and out faster than the poll could be missed
+(no real case yet). On an opaque window (F201) it returns `None`/`True` (nothing to find by meaning) and
+the caller uses the pixel wait, exactly as F201/F205 prescribe.
+
+**Live (this VM).** `_probe_waitctl.py` **5/5** against a window that *changes after it is already up*
+(two `DispatcherTimer`s add a `ready` button at ~1.4s and remove a `spinner` at ~2.6s): a control present
+from the start returns in 0.08s; the late `ready` button is waited for and returned (absent at start,
+1.43s wait); a control that never appears returns `None` exactly at the 1.2s deadline; `wait_control_gone`
+on a *permanent* control honestly blocks then times out `False` (1.43s); and the removed spinner is
+reported gone. **No regression** — `_probe_winverbs.py` **15/15**, `_probe_observe.py` **6/6**. Pure stdlib.
+
+**Lesson (道法自然).** 動其機，萬化安 (《陰符經》) — acting in phase with the screen's own unfolding, rather
+than against it, is what makes a sequence of operations hold together; the floor's earlier verbs were all
+*spatial* (where), this is the missing *temporal* one (when). 反也者，道之動也: appearance and
+disappearance are one motion seen from two sides, so the wait had to come as a pair — to wait only for
+things to arrive is to be stuck whenever the gate is something departing.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

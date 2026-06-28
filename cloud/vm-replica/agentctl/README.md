@@ -195,6 +195,13 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   `uia_focused`. Inventories the **foreground** window's actionable controls by default (background
   windows listed without a scan unless `deep=True`); flags `opaque` windows so the agent knows to use
   pixels. No new OS binding. Proven `_probe_observe.py` 6/6 (JOURNAL F205).
+- `wait_control(win, name=, ctype=, timeout=8)` / `wait_control_gone(...)` — wait for a control to
+  **appear / disappear by meaning** inside a window (returns the `uia_find` dict / bool). The semantic,
+  in-window dual of `wait_window` (new window) and `wait_pixel` (a colour): a dialog's OK button appears
+  a beat after its trigger, a spinner clears later — synchronization every multi-step interaction needs,
+  expressed in meaning not pixels. Pure composition of `uia_find`; `None`/`False` (never raises) without
+  UIA so a caller can fall back to a pixel wait. Proven `_probe_waitctl.py` 5/5 against a window that
+  mutates after it is up (JOURNAL F206).
 
 Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
 `invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:
