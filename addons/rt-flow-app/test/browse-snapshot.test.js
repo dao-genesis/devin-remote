@@ -82,11 +82,24 @@ const submit = el("button", { text: "提交" });
 const form = el("form", { children: [email, note, role, submit] });
 const hiddenBtn = el("button", { text: "隐藏按钮", style: { visibility: "visible", display: "none" } });
 const hiddenWrap = el("div", { children: [hiddenBtn] });
-const body = el("body", { children: [nav, h1, form, hiddenWrap] });
+// 显式 draggable 拖拽源(div·非默认可交互) + 纯 div 落区(无可达 role → 不入册, 仅 selector 可达)
+const chipEl = el("div", { text: "拖我", attrs: { id: "dragA", draggable: "true" } });
+const dropEl = el("div", { text: "落区", attrs: { id: "drop" } });
+const body = el("body", { children: [nav, h1, form, hiddenWrap, chipEl, dropEl] });
 
+// 极简 querySelector: 支持 '#id'(供 drag 的 fromSel/toSel 兜底); 其余(如 label[for=]) 返回 null
+function _findById(node, id) {
+  for (const c of (node.children || [])) {
+    if (c._attrs && c._attrs.id === id) return c;
+    const r = _findById(c, id);
+    if (r) return r;
+  }
+  return null;
+}
 const doc = {
   body, documentElement: body, title: "测试页", activeElement: null,
-  getElementById() { return null; },
+  getElementById(id) { return _findById(body, id); },
+  querySelector(sel) { return (typeof sel === "string" && sel[0] === "#") ? _findById(body, sel.slice(1)) : null; },
 };
 const win = {
   __daoRefs: null,
@@ -123,10 +136,13 @@ ok(/- textbox "邮箱" \[ref=e3\]/.test(tree), "input→role=textbox、aria-labe
 ok(/- textbox "备注"/.test(tree), "textarea→role=textbox、placeholder 作 name");
 ok(/- combobox/.test(tree), "select→role=combobox");
 ok(/- button "提交"/.test(tree), "button→role=button、可见文本作 name");
-ok(snap.count === 7, "仅 7 个可交互/标题元素入册(隐藏 button 被剔除), 实得 " + snap.count);
+ok(snap.count === 8, "8 个可交互/标题元素入册(隐藏 button 剔除·draggable div 入册·纯 div 落区不入册), 实得 " + snap.count);
 ok(!/隐藏按钮/.test(tree), "display:none 的元素不出现在快照");
-ok(win.__daoRefs && win.__daoRefs.length === 7, "window.__daoRefs 登记 7 个元素供 ref 操作");
+ok(win.__daoRefs && win.__daoRefs.length === 8, "window.__daoRefs 登记 8 个元素供 ref 操作");
 ok(win.__daoRefs[6] === submit, "ref e6 指向真实 submit 元素");
+ok(/- div "拖我" \[draggable\] \[ref=e7\]/.test(tree), "显式 draggable=true 的 div 入册并标注 [draggable](对齐 Playwright/Chrome-MCP 拖拽源)");
+ok(win.__daoRefs[7] === chipEl, "ref e7 指向真实 draggable 源元素");
+ok(!/落区/.test(tree), "纯 div(无 role/draggable)落区不入册(与 Playwright 一致)");
 
 // ── ② 按 ref 点击 ──
 events.length = 0;
@@ -172,6 +188,8 @@ ok(/if\(op==='drag'\)/.test(src), "源级: __daoAct 含 drag 操作(ref→ref �
 ok(/if\(op==='scrollto'\)/.test(src), "源级: __daoAct 含 scrollto 操作(按 ref 滚动入视)");
 ok(/if\(op==='upload'\)/.test(src), "源级: __daoAct 含 upload 操作(File+DataTransfer 注入)");
 ok(/tag==='iframe'/.test(src), "源级: snapshot 含同源 iframe 递归");
+ok(/getAttribute\('draggable'\)==='true'/.test(src), "源级: hot()/stt() 按显式 draggable=true 捕获并标注拖拽源");
+ok(/fromSel|toSel/.test(src) && /toSelector/.test(src), "源级: browseDragRef + drag 操作支持 selector/toSelector(CSS) 兜底");
 
 // ── 接入文档一致性: getCloudMd / tunnel.html 必须宣告完整 ref 命令集 + 多实例契约 ──
 const tunnelSrc = fs.readFileSync(
