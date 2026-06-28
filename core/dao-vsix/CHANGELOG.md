@@ -2,6 +2,13 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.41
+- **站内搜索/外链内嵌提速 + 关于说明归正（无为·additive·不破坏既有反代）**。
+  - **内嵌网页/搜索首屏提速**：`genericWebProxy` 注入页在 `<base>` 之后追加 `<link rel="preconnect"/dns-prefetch href=源站 origin>`，浏览器提前完成源站 DNS/TCP/TLS 握手，搜索结果页/外链页的子资源（图/样式/脚本，经 base href 直取源站）更快到位，逼近系统浏览器级首屏。纯增量、不改请求/改写逻辑。
+  - **关于·说明归正**：归一面板「关于」原文仍称「外部站点设 X-Frame-Options 不可内嵌，搜索/外链经系统浏览器打开」，与现状（`/__web` 站内代理剥 XFO/CSP·直连+本机代理双赛道·链接/表单/整页跳转自动续走代理·内嵌直出）不符；据实改为内嵌直出说明，个别强校验/需登录态站点回退系统浏览器。
+  - 复核确认搜索引擎链路（`/__web` → `genericWebProxy`：XFO/CSP 剥离、`<base>` 注入、点击/GET 表单/`window.open`/`location.assign,replace` 全拦改经代理、3xx 重定向跟随、gzip/br/deflate 解压、下载落盘、直连+代理双赛道、22s 硬超时错误页）完备；多视图加载链路（80ms 去抖批量恢复只载活动页·其余点开即载、上游 keep-alive、改写资产缓存）完备——本版在其上做 additive 提速，未改其结构。
+  - 自检：`node --check`（rt-flow 源 + vendored + dao-vsix out）、render_check、rt-flow 测试（115+35）全过、rtflow 源↔vendored 逐字一致、构建后 `out/extension.js` 含 preconnect 注入。
+
 ## 3.50.40
 - **归一面板（多实例标签栏）对齐手机 APK · 标签状态实时化（守柔·不破坏既有窗口）**。
   - **状态指示灯实时化**：标签状态点（🟢running / 🟠awaiting·待输入 / 🟠blocked·卡住额度耗尽 / 🔵finished / 默认灰）由仅「开标签那一刻」升级为 20s 轮询实时刷新——宿主 `_multiTabStatusTick()` 仅对「已打开的少量标签」按账号一次 `listRunningSessions` 命中即分类（`devin_cloud.classifySession`），经新 `tabUpdate` 消息回推前端更新状态点。
