@@ -14,7 +14,10 @@ This file is the spine of the project. `agentctl` is not designed top-down; it
 > not been forced to grow.
 
 Every primitive below is validated live against a real Chrome on the CDP
-endpoint (`127.0.0.1:29229`) via `test_live.py` — **14/14 checks green**.
+endpoint (`127.0.0.1:29229`) — and, from F177 on, against native apps on the
+agent's own Linux/X11 VM — via `test_live.py`: **~800 live checks across 137
+friction rounds**. (The count below grows round by round; the totals quoted in
+early entries are that round's running total, not the final figure.)
 
 ---
 
