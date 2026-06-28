@@ -118,7 +118,7 @@ ok(snap.url === "https://x.test/p" && snap.title === "测试页", "快照带 url
 const tree = snap.tree;
 ok(/- link "登录" \[ref=e0\]/.test(tree), "a→role=link、name=登录、ref=e0(DOM 序首个)");
 ok(/- link "注册" \[ref=e1\]/.test(tree), "第二个链接 ref=e1");
-ok(/- heading "欢迎" \[ref=e2\]/.test(tree), "h1→role=heading");
+ok(/- heading "欢迎" \[level=1\] \[ref=e2\]/.test(tree), "h1→role=heading、[level=1](对齐 Playwright aria heading level)");
 ok(/- textbox "邮箱" \[ref=e3\]/.test(tree), "input→role=textbox、aria-label 作 name");
 ok(/- textbox "备注"/.test(tree), "textarea→role=textbox、placeholder 作 name");
 ok(/- combobox/.test(tree), "select→role=combobox");
@@ -162,10 +162,12 @@ ok(rStale.ok === false && /ref_stale/.test(rStale.error), "失效 ref → ref_st
 [
   "browseSnapshot", "browseClickRef", "browseTypeRef", "browseHoverRef",
   "browseSelectRef", "browsePressKey", "browseGetText", "browseConsoleEnable", "browseConsole",
+  "browseNetworkEnable", "browseNetwork", "browseWait", "browseDragRef",
 ].forEach((c) => ok(new RegExp(c + ":\\s*async function").test(src), "源级: CMDS 含命令 " + c));
 ok(/Accessibility\.getFullAXTree/.test(src), "源级: cdp facade 映射 Accessibility.getFullAXTree→快照");
 ok(/Input\.dispatchKeyEvent/.test(src), "源级: cdp facade 含 Input.dispatchKeyEvent");
-ok(/命令列表 \(29\)/.test(src), "源级: 浏览器模块文档命令数升至 29");
+ok(/命令列表 \(33\)/.test(src), "源级: 浏览器模块文档命令数升至 33");
+ok(/if\(op==='drag'\)/.test(src), "源级: __daoAct 含 drag 操作(ref→ref 拖拽序列)");
 
 console.log(failures === 0 ? "\nbrowse-snapshot: ALL PASS" : "\nbrowse-snapshot: " + failures + " FAIL");
 process.exit(failures === 0 ? 0 : 1);
