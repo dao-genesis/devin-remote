@@ -66,6 +66,9 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
 - `uia_invoke` — fire a control's default action with no pixels; **falls through
   to a real click** on the rect when a control exposes no action (text regions,
   canvases — JOURNAL F179), so invoke-by-meaning answers for *any* visible control.
+  **Modal-safe**: the synchronous Invoke runs on a timed daemon thread, so a button
+  whose handler opens a *modal* dialog returns control after `timeout` instead of
+  freezing the agent (JOURNAL F193).
 - `uia_click` — the union made explicit: locate by meaning, deliver a real click.
 - `uia_drag` — the held-stroke dual of `uia_click`: locate a *source* and a *target*
   control by meaning and run a genuine press-glide-release between them (reorder a
