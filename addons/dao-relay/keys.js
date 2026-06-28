@@ -10,7 +10,7 @@
 // 故归一于此独立模块, 入口只导出 default 处理器与 RelayDO 类。
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const VERSION = "3.6.0-agent-liveness"; // (session,token) 配对模型 + WebSocket Hibernation(上量省钱) + GET /console 自托管单网页控制台 + 转发只选「活」socket(吸收重连窗口·根治首发 send_failed)。重新部署后 /health 报此值即生效。
+export const VERSION = "3.7.0-i-ws-proxy"; // (session,token) 配对模型 + WebSocket Hibernation(上量省钱) + GET /console 自托管单网页控制台 + 转发只选「活」socket + /i/ 反代补全 WebSocket 升级代理(注入鉴权·根治网页内 Devin「一直连接中」)。重新部署后 /health 报此值即生效。
 
 // 从 hibernation 运行时回来的 WSS 列表里挑一个「确实 OPEN」的 agent socket。
 //   病灶(真机实测): 旧逻辑直接取 getWebSockets() 末位 → 客户端断线重连的窗口里, 末位可能是
