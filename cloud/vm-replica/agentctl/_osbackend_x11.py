@@ -1270,17 +1270,45 @@ def _acc_rect(at, acc):
     return rect
 
 
+def _iou(a, b):
+    """Intersection-over-union of two (x, y, w, h) screen rects — 0 when they
+    don't overlap, 1 when identical. The pixel-space measure of 'are these two
+    the same window'."""
+    if not a or not b:
+        return 0.0
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ix = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    iy = max(0, min(ay + ah, by + bh) - max(ay, by))
+    inter = ix * iy
+    if inter <= 0:
+        return 0.0
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
 def _atspi_frame_for(at, win):
     """Map an X window id to its AT-SPI frame accessible. Identity crosses the
-    two worlds by process id (EWMH _NET_WM_PID == atspi app pid); the window
-    title disambiguates when one app owns several frames. Caller owns the
-    returned ref (must _unref)."""
+    two worlds by process id (EWMH _NET_WM_PID == atspi app pid); when one app
+    owns several frames (a main window plus a modal dialog) two signals tell
+    them apart — first an exact title match, then *screen geometry*.
+
+    Geometry matters because a modal dialog's window-manager title and its
+    accessible frame name frequently disagree: KiCad's create-file prompt is the
+    X window "Confirmation" but the AT-SPI alert names itself "Question", so a
+    title compare alone falls back to the main frame and every uia_* verb then
+    reads the wrong window. The frame whose accessible extents best overlap the
+    X window's rect is unambiguously the one those pixels belong to. Caller owns
+    the returned ref (must _unref)."""
     pid = window_pid(win)
     title = (window_text(win) or "").strip()
+    geom = window_geometry(win)
+    wrect = (geom["x"], geom["y"], geom["w"], geom["h"]) if geom else None
     desk = at.atspi_get_desktop(0)
     if not desk:
         return None
-    best = None
+    title_hit = None
+    cands = []                       # (fr, extents) for same-pid frames, in order
     try:
         for app in _acc_children(at, desk):
             app_pid = at.atspi_accessible_get_process_id(app, None)
@@ -1291,18 +1319,32 @@ def _atspi_frame_for(at, win):
                     _unref(fr)
                     continue
                 nm = _acc_name(at, fr).strip()
-                if title and nm == title:
-                    _unref(best) if best else None
-                    _unref(app)
-                    _unref(desk)
-                    return fr
-                if pid_match and best is None:
-                    best = fr            # keep as fallback, don't unref
+                if title and nm == title and title_hit is None:
+                    title_hit = fr      # keep, don't unref
+                elif pid_match:
+                    cands.append((fr, _acc_rect(at, fr)))
                 else:
                     _unref(fr)
             _unref(app)
     finally:
         _unref(desk)
+    # Exact title match wins — cheapest and surest when the names align.
+    if title_hit is not None:
+        for fr, _ in cands:
+            _unref(fr)
+        return title_hit
+    # Else disambiguate same-pid frames by which one the X window's pixels cover.
+    best = None
+    if cands:
+        if wrect is not None:
+            fr, ext = max(cands, key=lambda c: _iou(wrect, c[1]))
+            if _iou(wrect, ext) >= 0.25:
+                best = fr
+        if best is None:
+            best = cands[0][0]          # honest fallback: first same-pid frame
+    for fr, _ in cands:
+        if fr is not best:
+            _unref(fr)
     return best
 
 
