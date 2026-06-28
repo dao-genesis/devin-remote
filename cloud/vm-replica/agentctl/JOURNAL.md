@@ -6156,10 +6156,76 @@ the same semantic floor, with the eyes closed.
 
 ---
 
+## F193 — a button that opens a **modal** must not *freeze* the agent · `uia_invoke` dispatches on a timed daemon thread
+
+**Friction.** Operating a real app (DB Browser for SQLite) by meaning, `uia_invoke(win,
+name="New Database")` **never returned**. The button is honest and the Invoke *succeeds* —
+it opens a Save-file dialog — but `IUIAutomationInvokePattern::Invoke` is **synchronous**,
+and the control's handler runs a **modal** message loop that does not return until the
+dialog is dismissed. The floor initialises COM as a single-threaded apartment (STA), so the
+blocked call sits on the **only** thread the agent has: the agent is frozen, holding a modal
+open, with no way to even *see* the dialog it just summoned. A floor that can be hung by a
+button that *worked* is not a floor.
+
+**Mechanism.** Move the one blocking call off the agent's thread. `uia_invoke` now runs the
+find-and-Invoke on a **daemon thread that builds its own STA + its own UIA instance** (COM
+objects can't cross apartments, so the worker re-resolves the element itself — kin to F165's
+per-process cache, now per-thread), and `join`s it with a `timeout`:
+
+```python
+def uia_invoke(win, name=None, ctype=None, timeout: float = 6.0) -> bool:
+    ...
+    th = threading.Thread(target=_invoke_worker, args=(...), daemon=True); th.start()
+    if done.wait(timeout):
+        return bool(res[0])          # returned in time: the real True/False
+    return True                      # still blocked in a modal handler — dispatched, do not hang
+```
+
+A genuinely missing element/pattern returns `False` *fast* (the find is cheap), so the
+timeout fires **only** on a real block — and then returns `True`, because the action *was*
+dispatched and the modal is now up, ready to be driven. The orphaned worker ends harmlessly
+the moment the dialog closes.
+
+**Live (this VM), by meaning.** `_probe_modal.py` runs **4/4 green** against real DB Browser:
+`uia_invoke("New Database")` **returns in 6.03 s instead of hanging**; the *"Choose a filename
+to save under"* modal is confirmed up; the flow is completed and **`daoprobe.db` actually
+appears on disk**. **No regression** — `_probe_winverbs.py` **15/15** (the `ping` button, which
+opens no modal, still returns its real result through the worker, fast).
+
+**The honest seam (why the dialog is finished by keys).** The native file dialog is *driven*
+through the floor's **keyboard** channel, not by meaning — because reaching into it by meaning
+hits a *second*, distinct wall (recorded as a frontier below): UIA's `FindAll` traverses the
+**whole** subtree, and the dialog's virtualised shell list view stalls that walk. The two
+findings are kept separate: F193 is "Invoke must not block the agent" (fixed, proven); the
+FindAll-walk stall is "a read must not block the agent either" (diagnosed, not yet fixed).
+The floor completes the task today by using the channel that *does* work — meaning to summon
+the modal, keys to fill it — and degrades to the truthful boundary rather than faking a reach.
+
+**Lesson (道法自然).** 動其機，萬化安 — move the one moving part (the blocking call) off the
+agent's single thread and the whole stays at rest, free to act. 為而弗恃 — invoke, but do not
+lean on the call *returning* as proof; the modal that appears, and the file that lands on
+disk, are the proof. A synchronous door, opened on a thread you can abandon, no longer locks
+you in the room.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
+
+- **A read must not hang on a pathological provider either (the FindAll-walk stall).**
+  `_find_ptr` (under `uia_find` / `uia_get_value` / `uia_text` / every locate verb) calls
+  `IUIAutomationElement::FindAll(TreeScope_Descendants, …)`, which **realises the entire
+  subtree** before returning. On a native Win32 file dialog that subtree contains a
+  virtualised shell list view, and the walk **stalls indefinitely** — `uia_get_value(dlg,
+  ctype="edit")` never returns. Scoping the search by a **ControlType property condition**
+  was tried and **does not help**: a condition filters the *results*, not the *traversal*,
+  so FindAll still walks the world (verified on this VM — still hangs). The real fix is to
+  generalise F193 — run the whole locate-and-read on a **timed daemon thread with its own
+  STA+UIA** so it returns a sentinel instead of freezing the agent — but that is a refactor
+  across every read verb and will only be grown once the worker-find is proven not to
+  regress the fast path. Until then the floor reaches such dialogs by the keyboard channel.
 
 - **R-next: an atlas built from the live page, not a fixture** — F103's atlas is
   rendered by the test itself; reading a *real* canvas control means capturing

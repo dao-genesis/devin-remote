@@ -14,6 +14,7 @@ Everything is best-effort: any failure yields empty results so the backend never
 breaks, and callers fall back to the Win32 / pixel floor.
 """
 import ctypes
+import threading
 from ctypes import wintypes
 
 _ole32 = ctypes.windll.ole32
@@ -520,27 +521,65 @@ def uia_get_value(win: int, name=None, ctype=None) -> str:
         _release(el)
 
 
-def uia_invoke(win: int, name=None, ctype=None) -> bool:
+def _invoke_worker(win, name, ctype, res, done):
+    """Run a single InvokePattern call in its *own* STA with its *own* UIA instance
+    and freshly-resolved element. Self-contained so it can be abandoned (daemon) if
+    it blocks in a modal handler without poisoning the main thread's UIA."""
+    try:
+        _ole32.CoInitializeEx(None, 0x2)  # this thread's own apartment
+        pp = ctypes.c_void_p()
+        hr = _ole32.CoCreateInstance(ctypes.byref(_CLSID_CUIAutomation), None, 1,
+                                     ctypes.byref(_IID_IUIAutomation), ctypes.byref(pp))
+        if hr != 0 or not pp.value:
+            res[0] = False
+            return
+        el = _find_ptr(pp.value, win, name, ctype)
+        if not el:
+            res[0] = False
+            return
+        try:
+            ip = _pattern(el, _UIA_InvokePatternId)
+            if not ip:
+                res[0] = False
+                return
+            try:
+                res[0] = _vcall(ip, _INVOKE, ctypes.c_long, []) == 0
+            finally:
+                _release(ip)
+        finally:
+            _release(el)
+    except Exception:
+        res[0] = False
+    finally:
+        done.set()
+
+
+def uia_invoke(win: int, name=None, ctype=None, timeout: float = 6.0) -> bool:
     """Invoke an element found by meaning (name/type) via the UIA InvokePattern —
     the semantic *action* inside modern apps (the UIA analogue of invoke_menu).
     Presses a button/link by what it means, no mouse, no pixels, even in
-    Chrome/Electron/UWP. Returns True if invoked."""
-    uia = _get_uia()
-    if not uia:
+    Chrome/Electron/UWP. Returns True if invoked.
+
+    Never hangs the agent. ``InvokePattern::Invoke`` is *synchronous* in an STA: a
+    control whose handler spins a **modal** dialog (a Save/Open file dialog behind a
+    toolbar button) does not return from Invoke until that dialog is dismissed, so a
+    naive call freezes the caller forever (F193). The call runs on a daemon thread
+    with its own apartment + UIA instance; if it has not returned within ``timeout``
+    the agent regains control with ``True`` — the action *was* dispatched and the
+    modal is now up, ready to be driven by meaning — and the orphaned worker ends
+    harmlessly when the dialog closes. A genuinely missing element/pattern returns
+    ``False`` fast (the find is cheap), so the timeout only ever fires on a real
+    block."""
+    if not _get_uia():
         return False
-    el = _find_ptr(uia, win, name, ctype)
-    if not el:
-        return False
-    try:
-        ip = _pattern(el, _UIA_InvokePatternId)
-        if not ip:
-            return False
-        try:
-            return _vcall(ip, _INVOKE, ctypes.c_long, []) == 0
-        finally:
-            _release(ip)
-    finally:
-        _release(el)
+    res = [None]
+    done = threading.Event()
+    th = threading.Thread(target=_invoke_worker,
+                          args=(win, name, ctype, res, done), daemon=True)
+    th.start()
+    if done.wait(timeout):
+        return bool(res[0])
+    return True  # dispatched but still blocked in a modal handler — do not hang
 
 
 def uia_focus(win: int, name=None, ctype=None) -> bool:
