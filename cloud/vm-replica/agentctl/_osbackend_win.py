@@ -998,7 +998,7 @@ try:
                           uia_select, uia_is_selected,
                           uia_expand, uia_collapse, uia_expand_state,
                           uia_scroll_into_view, uia_find_item,
-                          uia_range_value, uia_set_range_value)
+                          uia_range_value, uia_set_range_value, tray_icons)
 except Exception:  # pragma: no cover - UIA unavailable
     def uia_name(win: int) -> str:
         return ""
@@ -1064,3 +1064,6 @@ except Exception:  # pragma: no cover - UIA unavailable
     def uia_find_item(win: int, item, container_name=None,
                       container_ctype: str = "list", max_scan: int = 6000):
         return None
+
+    def tray_icons() -> list:
+        return []

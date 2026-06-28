@@ -19,6 +19,9 @@ import threading
 from ctypes import wintypes
 
 _ole32 = ctypes.windll.ole32
+_user32 = ctypes.windll.user32
+_user32.FindWindowW.restype = ctypes.c_void_p
+_user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
 _oleaut = ctypes.windll.oleaut32
 _oleaut.SysFreeString.argtypes = [ctypes.c_void_p]
 _oleaut.SysAllocString.restype = ctypes.c_void_p
@@ -481,6 +484,112 @@ def uia_find_all(win: int, name=None, ctype=None, max_scan: int = 6000) -> list:
         _release(cond.value)
         _release(arr.value)
         _release(el)
+
+
+def _scope_findall(el, uia, max_scan: int = 4000) -> list:
+    """Every descendant element pointer of element ``el`` (TreeScope_Descendants),
+    as a list of raw pointers the caller must ``_release()``. The element-rooted
+    twin of the window-rooted walk inside :func:`uia_find_all` — used to descend a
+    sub-tree (a toolbar, an overflow flyout) that is not itself a window with an
+    HWND. [] on any failure."""
+    cond = ctypes.c_void_p()
+    arr = ctypes.c_void_p()
+    ptrs = []
+    try:
+        if _vcall(uia, _CTRUE, ctypes.c_long, [ctypes.POINTER(ctypes.c_void_p)],
+                  ctypes.byref(cond)) != 0:
+            return []
+        if _vcall(el, _FINDALL, ctypes.c_long,
+                  [ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)],
+                  _TreeScope_Descendants, cond, ctypes.byref(arr)) != 0 or not arr.value:
+            return []
+        n = ctypes.c_int()
+        _vcall(arr.value, _ARR_LEN, ctypes.c_long,
+               [ctypes.POINTER(ctypes.c_int)], ctypes.byref(n))
+        for i in range(min(n.value, max_scan)):
+            ce = ctypes.c_void_p()
+            if _vcall(arr.value, _ARR_GET, ctypes.c_long,
+                      [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+                      i, ctypes.byref(ce)) == 0 and ce.value:
+                ptrs.append(ce.value)
+        return ptrs
+    finally:
+        _release(cond.value)
+        _release(arr.value)
+
+
+@_hangproof([])
+def tray_icons() -> list:
+    """Enumerate the **system-tray (notification-area) icons by meaning**, as
+    ``[{"name","help","aid","rect":(x,y,w,h)}, …]`` in screen coordinates.
+
+    The friction this dissolves (F200): an app resident *only* in the tray owns no
+    normal top-level window, so :func:`list_windows` never returns it — and the host
+    that *does* contain the icons, ``Shell_TrayWnd``, is itself an untitled
+    explorer window the floor does not enumerate. So a window minimised to the tray
+    is the deepest zero-pixel case yet: nothing in the meaning-floor's window list
+    even hints the app is alive. UIA *can* reach the icon (it is a ``Button`` whose
+    Name is the icon's tooltip), but only if you already know the magic class name —
+    knowledge an agent operating by meaning does not have. This verb is that
+    knowledge: it walks the two ``"…Notification Area"`` toolbars of ``Shell_TrayWnd``
+    (promoted icons) plus the overflow flyout (hidden icons), returning every icon
+    as a meaning+rect the floor can then right-click / invoke. The taskbar's own
+    buttons (Start, Search, Task View, running apps) are *not* notification icons and
+    are correctly excluded by scoping to the notification-area toolbars. [] where
+    there is no Windows tray (other backends) or UIA is unavailable."""
+    uia = _get_uia()
+    if not uia:
+        return []
+    out = []
+    seen = set()
+
+    def _collect(root_el):
+        for ce in _scope_findall(root_el, uia):
+            try:
+                if _CONTROL_TYPES.get(_prop_int(ce, _UIA_ControlTypeProperty)) != "Button":
+                    continue
+                rect = _prop_rect(ce)
+                if not rect:
+                    continue
+                nm = _prop_bstr(ce, _UIA_NameProperty) or ""
+                key = (nm, rect)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({"name": nm, "rect": rect,
+                            "help": _prop_bstr(ce, _UIA_HelpTextProperty) or "",
+                            "aid": _prop_bstr(ce, _UIA_AutomationIdProperty) or ""})
+            finally:
+                _release(ce)
+
+    tray = _user32.FindWindowW("Shell_TrayWnd", None)
+    if tray:
+        el = _element(uia, int(tray))
+        if el:
+            try:
+                for sub in _scope_findall(el, uia):
+                    try:
+                        t = _CONTROL_TYPES.get(_prop_int(sub, _UIA_ControlTypeProperty))
+                        nm = _prop_bstr(sub, _UIA_NameProperty) or ""
+                        if t == "ToolBar" and "notification area" in nm.lower():
+                            _collect(sub)
+                    finally:
+                        _release(sub)
+            finally:
+                _release(el)
+    # the overflow flyout (hidden icons) is a separate top-level: class name varies
+    # by Windows build, and every button inside it is a tray icon.
+    for cls in ("NotifyIconOverflowWindow", "TopLevelWindowForOverflowXamlIsland"):
+        ov = _user32.FindWindowW(cls, None)
+        if not ov:
+            continue
+        el = _element(uia, int(ov))
+        if el:
+            try:
+                _collect(el)
+            finally:
+                _release(el)
+    return out
 
 
 def uia_rows(win: int, container_name=None, container_ctype="list",

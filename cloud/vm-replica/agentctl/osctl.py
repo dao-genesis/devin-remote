@@ -317,6 +317,60 @@ uia_set_range_value = getattr(_be, "uia_set_range_value", lambda win, value, nam
 # by name, scrolls it into view, and returns its now-visible {"name","type","rect"}
 # so the pixel floor can reach it and the other uia_* verbs see the realized element.
 uia_find_item = getattr(_be, "uia_find_item", lambda win, item, container_name=None, container_ctype="list", max_scan=6000: None)
+# tray_icons (F200): the system tray (notification area) is the deepest zero-pixel
+# surface — an app resident there owns no top-level window, so list_windows never
+# names it, and the host that holds the icons (Shell_TrayWnd) is an untitled shell
+# window the floor does not enumerate either. This returns every tray icon by
+# MEANING — [{"name","help","aid","rect"}] in screen coords — closing the loop to
+# the mouse (right-click the rect for the icon's context menu) so an app that has
+# retreated entirely to the tray is still operable. [] on a backend with no tray.
+tray_icons = getattr(_be, "tray_icons", lambda: [])
+
+
+def _tray_find(name: str):
+    """The one tray icon whose name/tooltip/aid best matches ``name`` — exact
+    (case-insensitive) wins over a substring, mirroring uia_find's preference."""
+    nl = name.lower()
+    fuzzy = None
+    for ic in tray_icons():
+        fields = [(ic.get("name") or "").lower(), (ic.get("help") or "").lower(),
+                  (ic.get("aid") or "").lower()]
+        if nl in fields:
+            return ic
+        if fuzzy is None and any(nl in f for f in fields):
+            fuzzy = ic
+    return fuzzy
+
+
+def tray_invoke(name: str, right: bool = False, pause: float = 0.4) -> bool:
+    """Click a **system-tray icon by meaning** — ``tray_invoke("OneDrive")``. Finds
+    the icon via :func:`tray_icons` and clicks its centre (``right=True`` for the
+    context menu). The mouse is the honest actuator here: a tray icon exposes only a
+    legacy IAccessible default action, not a real UIA Invoke pattern, so a real
+    click is what a human (and a screen reader's "do default") does. Returns True iff
+    an icon matched ``name``. Pair with :func:`tray_context` to also pick a menu item."""
+    ic = _tray_find(name)
+    if not ic or not ic.get("rect"):
+        return False
+    x, y, w, h = ic["rect"]
+    click(x + w // 2, y + h // 2, right=right)
+    time.sleep(pause)
+    return True
+
+
+def tray_context(name: str, *path: str, pause: float = 0.45) -> bool:
+    """Right-click a **tray icon by meaning** then pick from its context menu by
+    meaning — ``tray_context("DaoTray", "Quit")``. The tray's twin of
+    :func:`uia_context`: a NotifyIcon's menu opens as the same untitled native
+    ``#32768`` popup that ``list_windows`` cannot see, so the path is walked through
+    :func:`menu_windows` exactly as for any other context menu. Returns True iff the
+    icon matched and every name on the path was found and clicked. Composed of
+    existing floor verbs, so one implementation serves every backend that has a tray."""
+    if not path:
+        return False
+    if not tray_invoke(name, right=True, pause=pause):
+        return False
+    return _walk_menu_path(path, pause)
 
 
 def uia_menu(win: int, *path: str, pause: float = 0.45) -> bool:

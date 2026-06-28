@@ -6486,10 +6486,76 @@ window already is.
 
 ---
 
+## F200 — operate an app that lives **entirely in the system tray** (no top-level window at all) · the deepest zero-pixel surface
+
+**Friction.** F192 drove a *minimized* window; F199 a window on another *virtual desktop*. Both
+still appeared in `list_windows`. An app **minimised to the notification area (system tray)** has
+**no top-level window at all** — its sole presence is a `NotifyIcon` button living inside
+`Shell_TrayWnd`, the untitled shell window the floor never enumerates (titled top-levels only). So
+the meaning-floor's window list gives *no hint the app is even alive*: it is more invisible than a
+minimized or off-workspace window, which at least still have a window object. UIA *can* reach the
+icon — it is a `Button` whose Name is the tooltip — but only if you already know to look inside the
+magic class `Shell_TrayWnd`, knowledge an agent operating *by meaning* does not possess. The tray
+was a blind spot the floor could not even name.
+
+**Mechanism — give the floor the tray as a first-class surface, then reuse what already works.**
+A single new leaf (`tray_icons()`, Windows via the same pure-ctypes UIA as F165) enumerates the
+notification area *by meaning*: it walks the two `"…Notification Area"` toolbars of `Shell_TrayWnd`
+(promoted icons) plus the overflow flyout (`NotifyIconOverflowWindow` / the WinUI island; hidden
+icons), returning each icon as `{"name","help","aid","rect"}` in screen coordinates. Scoping to the
+notification-area toolbars is what makes it *honest*: the taskbar's own buttons (Start, Search, Task
+View, running apps) are siblings in the same `Shell_TrayWnd` tree but are **not** tray icons, and
+they fall outside those toolbars, so they are correctly excluded. The *operating* half needs no new
+machinery at all — a `NotifyIcon`'s context menu opens as the same untitled native `#32768` popup
+that F186's `uia_context` already walks via `menu_windows()`. So two thin compositions finish it:
+
+```python
+tray_icons()                       -> [{"name","help","aid","rect"}, …]   # discover by meaning
+tray_invoke(name, right=False)     -> bool   # click the icon (right=True for its menu)
+tray_context(name, *path)          -> bool   # right-click + walk the context menu by meaning
+```
+
+The mouse is the *honest* actuator for the click: a tray icon exposes only a legacy IAccessible
+default action, not a real UIA Invoke pattern, so a real click on the reported rect is exactly what
+a human (or a screen reader's "do default") does — the semantic search hands the pixel floor a
+target, the loop closes. `tray_context` is the tray's exact twin of `uia_context`.
+
+**Honest boundary.** `tray_icons()` returns `[]` on a backend with no Windows tray (the X11 status
+area / StatusNotifier is a different, fragmented protocol and is left a truthful no-op until a real
+Linux tray app demands it — 知止不殆, do not build a primitive ahead of a reproduced failure).
+
+**Live (this VM).** `_probe_tray.py` **8/8 green** against a WinForms `NotifyIcon` fixture whose
+only Form is hidden (`ShowInTaskbar=$false`, never shown) so the process owns **no** top-level
+window: (1) the app is absent from `list_windows` (pure tray residency); (2) `tray_icons()`
+discovers it by meaning (the tooltip) with a screen rect; (3) `tray_context(TITLE, "Ping Sentinel")`
+and `…("Mark Done")` right-click it and pick menu items by meaning, and the effects **land** — the
+hidden app writes the sentinel file — with no visible window ever touched; (4) `tray_icons()`
+excludes the Start/Search/Task-View taskbar buttons. The fixture is finally quit through its *own*
+tray menu (`tray_context(TITLE, "Quit")`). **No regression** — `_probe_winverbs.py` **15/15** and
+`_probe_vdesk.py` **8/8** unchanged. Pure stdlib.
+
+**Lesson (道法自然).** 為學者日益，聞道者日損 — the tray looked like it needed a whole new operating
+stack, yet the round *subtracted*: discovery was the only true gap, and once the floor could *name*
+the tray, F186's context-menu walk already operated it. 大音希聲 — the deepest hiding place (an app
+with no window) yields to the smallest addition (one enumerator), because the meaning-floor's
+existing verbs were already general. 萬物並作而不相害: minimized (F192), off-workspace (F199), and
+tray-resident (F200) are three faces of one truth — *pixels are not where meaning lives* — and the
+same floor reaches all three.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
+
+- **An app with *no top-level window at all* — resident entirely in the system tray. — SOLVED, F200.**
+  The deepest zero-pixel surface: a window minimized to the notification area is absent from
+  `list_windows` (its only presence is a `NotifyIcon` inside the untitled `Shell_TrayWnd`). `tray_icons()`
+  enumerates the tray *by meaning* (scoped to the notification-area toolbars + overflow flyout, excluding
+  taskbar buttons), and `tray_context()` reuses F186's `#32768` menu walk to operate it. Proven
+  `_probe_tray.py` 8/8: a hidden-Form NotifyIcon fixture, absent from `list_windows`, is discovered by its
+  tooltip and driven through its context menu (effects verified via a sentinel file). Kept here as a pointer.
 
 - **A window with zero on-screen pixels *by workspace*, not just show-state. — SOLVED, F199.**
   F192 drove a *minimized* window by meaning; F199 does the twin — a window on another **virtual
