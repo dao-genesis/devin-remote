@@ -4187,6 +4187,100 @@ function bridgeStopTunnel() {
     refreshDaoCloudMiddlePanel();
 }
 
+// ═══════════════════════════════════════════════════════════
+// 帛书·「反者道之动」— VSIX 自更新: 从 GitHub Release 检查/下载最新 VSIX, 安装后提示重载。
+//   根治: 桌面端无 VSIX 自更新机制 → 插件永远停在安装时版本, 新修复/新功能均无法自动落地,
+//   用户误以为「推了就生效」实际代码从未变化。自带 GitHub 镜像多路回落(直连+国内加速)。
+// ═══════════════════════════════════════════════════════════
+let _selfUpdateLastCheck = 0;
+const SELF_UPDATE_INTERVAL = 6 * 3600 * 1000;
+const SELF_UPDATE_DIR = path.join(DAO_DIR, 'update');
+const SELF_UPDATE_REPO = 'zhouyoukang1234-spec/devin-remote';
+const SELF_UPDATE_TAG_PREFIX = 'dao-vsix-v';
+
+function selfUpdateCompareVer(a: string, b: string): number {
+    const pa = a.split('.').map(Number), pb = b.split('.').map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const va = pa[i] || 0, vb = pb[i] || 0; if (va !== vb) return va - vb; }
+    return 0;
+}
+
+function selfUpdateFindCli(): string {
+    const { execSync } = require('child_process');
+    const ideName = path.basename(process.execPath).replace(/\.exe$/i, '').toLowerCase();
+    for (const name of [ideName, 'code', 'windsurf', 'cursor', 'devin']) {
+        try {
+            const lines = execSync(`where ${name}`, { encoding: 'utf8', timeout: 5000 }).trim().split('\n');
+            for (const l of lines) { const p = l.trim(); if (p && fs.existsSync(p)) return p; }
+        } catch {}
+    }
+    return '';
+}
+
+function selfUpdateGhMirrors(u: string): string[] {
+    return [u, 'https://ghfast.top/' + u, 'https://gh-proxy.com/' + u, 'https://mirror.ghproxy.com/' + u, 'https://ghproxy.net/' + u];
+}
+
+function selfUpdateHttpGet(url: string, ms: number): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const mod = url.startsWith('https') ? https : require('http');
+        const req = mod.get(url, { timeout: ms, headers: { 'User-Agent': 'dao-vsix/' + EXT_VERSION } }, (res: any) => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) { selfUpdateHttpGet(res.headers.location, ms).then(resolve, reject); return; }
+            if (res.statusCode !== 200) { reject(new Error('HTTP ' + res.statusCode)); return; }
+            let d = ''; res.on('data', (c: any) => { d += c; }); res.on('end', () => resolve(d)); res.on('error', reject);
+        });
+        req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    });
+}
+
+function selfUpdateDownload(url: string, dst: string, ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        const mod = url.startsWith('https') ? https : require('http');
+        const req = mod.get(url, { timeout: ms, headers: { 'User-Agent': 'dao-vsix/' + EXT_VERSION } }, (res: any) => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) { selfUpdateDownload(res.headers.location, dst, ms).then(resolve); return; }
+            if (res.statusCode !== 200) { resolve(false); return; }
+            const ws2 = fs.createWriteStream(dst); res.pipe(ws2);
+            ws2.on('finish', () => { ws2.close(); resolve(true); }); ws2.on('error', () => resolve(false));
+        });
+        req.on('error', () => resolve(false)); req.on('timeout', () => { req.destroy(); resolve(false); });
+    });
+}
+
+async function bridgeSelfUpdateCheck(): Promise<void> {
+    if (Date.now() - _selfUpdateLastCheck < SELF_UPDATE_INTERVAL) return;
+    _selfUpdateLastCheck = Date.now();
+    try {
+        const apiUrl = `https://api.github.com/repos/${SELF_UPDATE_REPO}/releases?per_page=15`;
+        let body = '';
+        for (const m of selfUpdateGhMirrors(apiUrl)) { try { body = await selfUpdateHttpGet(m, 15000); break; } catch {} }
+        if (!body) { daoLoopLog('update', '自更新: 无法访问 releases API(含镜像)'); return; }
+        const rels = JSON.parse(body); if (!Array.isArray(rels)) return;
+        let latVer = '', dlUrl = '';
+        for (const r of rels) {
+            const tag = r.tag_name || ''; if (!tag.startsWith(SELF_UPDATE_TAG_PREFIX)) continue;
+            const v = tag.slice(SELF_UPDATE_TAG_PREFIX.length);
+            if (!latVer || selfUpdateCompareVer(v, latVer) > 0) { latVer = v; const a = (r.assets || []).find((x: any) => x.name && x.name.endsWith('.vsix')); if (a) dlUrl = a.browser_download_url; }
+        }
+        if (!latVer || !dlUrl) return;
+        if (selfUpdateCompareVer(latVer, EXT_VERSION) <= 0) { daoLoopLog('update', `自更新: 已是最新 v${EXT_VERSION}`); return; }
+        daoLoopLog('update', `自更新: 发现 v${latVer}(当前 v${EXT_VERSION})→下载`);
+        fs.mkdirSync(SELF_UPDATE_DIR, { recursive: true });
+        const vsixPath = path.join(SELF_UPDATE_DIR, `dao-vsix-${latVer}.vsix`);
+        if (!(fs.existsSync(vsixPath) && fs.statSync(vsixPath).size > 10000)) {
+            let ok = false;
+            for (const m of selfUpdateGhMirrors(dlUrl)) { try { if (await selfUpdateDownload(m, vsixPath, 120000)) { ok = true; break; } } catch {} }
+            if (!ok || !fs.existsSync(vsixPath) || fs.statSync(vsixPath).size < 10000) { daoLoopLog('update', '自更新: VSIX 下载失败'); try { fs.unlinkSync(vsixPath); } catch {} return; }
+        }
+        const cli = selfUpdateFindCli();
+        if (!cli) { daoLoopLog('update', '自更新: 未找到 IDE CLI'); return; }
+        daoLoopLog('update', `自更新: 安装 v${latVer} via ${path.basename(cli)}`);
+        const { execSync } = require('child_process');
+        try { execSync(`"${cli}" --install-extension "${vsixPath}" --force`, { encoding: 'utf8', timeout: 60000 }); } catch (e: any) { daoLoopLog('update', `自更新: 安装失败 ${e.message || e}`); return; }
+        daoLoopLog('update', `自更新: v${latVer} 安装成功→等待重载`);
+        vscode.window.showInformationMessage(`DAO 插件已更新到 v${latVer}（当前 v${EXT_VERSION}），重载窗口即生效。`, '立即重载', '稍后').then((c) => { if (c === '立即重载') vscode.commands.executeCommand('workbench.action.reloadWindow'); });
+        try { for (const f of fs.readdirSync(SELF_UPDATE_DIR)) { if (f.endsWith('.vsix') && f !== path.basename(vsixPath)) try { fs.unlinkSync(path.join(SELF_UPDATE_DIR, f)); } catch {} } } catch {}
+    } catch (e: any) { daoLoopLog('update', `自更新: 异常 ${e.message || e}`); }
+}
+
 // 归一·全功能公网可达: 公布本体全功能 API 端口/令牌, 供常驻桥(dao-bridge)反代落点。
 //   桥读取 ~/.dao/bridge/plugin-api.json 的 port → 把非桥自有路由透明反代到本体 → 单隧道暴露全功能。
 function bridgePublishPluginApi() {
@@ -4822,9 +4916,11 @@ async function bridgeLivenessTick(): Promise<void> {
                 bridgeScheduleReinject('liveness-effectiveness');
             } else {
                 daoLoopLog('tunnel', 'probe ALIVE+EFFECTIVE (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 保持·态签名核对');
-                // 端点稳态但「设备/IDE/工作区/工具集/版本」可能已变 → 签名守柔重注(签名未变即空转·省网),
+                // 端点稳态但「设备/IDE/工具集/版本」可能已变 → 签名守柔重注(签名未变即空转·省网),
                 //   令 MCP/内穿两篇知识恒随用户各设备与 IDE 整体状态实时刷新(与内穿同逻辑·闻道者日损)。
                 bridgeScheduleReinject('liveness-state');
+                // 帛书·「反者道之动」: 稳态下低频检查 VSIX 自更新(6h节奏, 守柔不阻塞)
+                try { bridgeSelfUpdateCheck().catch(() => {}); } catch {}
             }
             return;
         }

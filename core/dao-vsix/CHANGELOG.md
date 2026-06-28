@@ -2,6 +2,14 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.52
+- **VSIX 自更新模块(根治「插件不会自己更新」)**。桌面端此前无 VSIX 自更新机制 → 插件永远停在安装时版本, 新修复/新功能均无法自动落地。
+  - 稳态下每 6h 低频检查 GitHub Release 最新 `dao-vsix-v*` 标签(守柔不阻塞)。
+  - 发现新版 → 自动下载 VSIX(自带 GitHub 直连 + 国内 5 路加速镜像多路回落, 任一可达即通)。
+  - 自动检测 IDE CLI(`code`/`windsurf`/`cursor`/`devin`)→ `--install-extension --force` → 弹出「立即重载」通知, 一键即生效。
+  - 旧版 VSIX 自动清理, 下载失败守柔退出不影响正常运行。
+  - 自检:`node build.js`(转译+桥JS语法)、rt-flow 35 单测 OK。仅改 `core/dao-vsix/src/extension.ts`。
+
 ## 3.50.51
 - **路线C(ntfy mesh)兜底通道根治为「整机全权可用」**。经 mesh 实测发现:除免鉴权 `/api/health` 外, `/api/exec`、`/api/file`、`/api/write` 等需鉴权整机端点经 mesh 一律 `500 unauthorized` —— 兜底通道形同半残(cloudflared 公网URL 全挂时, 云端连不上也操作不了机器, 正是用户所报「端口断了根本连不上、账号信息全没更新」的兜底缺口)。
   - 根因:`sigServeFrame` 构造的 `fakeReq` 不带 `Authorization` 头, `checkAuth` 必判 unauthorized。但 mesh 帧以 token 派生的 AES-256-GCM 封装, **`sigUnseal` 成功 ⟺ 调用方持有正确 token** —— 解封成功本身即等同鉴权。
