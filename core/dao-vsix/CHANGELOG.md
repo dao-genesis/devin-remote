@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.58
+- **内穿自愈纳入常驻桥(dao-bridge)已发布连接 — 根治冷启动机「自有 quick-tunnel 抖动→注入死址/(未连接)」**。冷启动机上 dao-vsix 自起的 cloudflare quick-tunnel 常在注册主机名后 ~30-60s 即 DNS 失活(NXDOMAIN)抖动;旧 `bridgeResolveLiveConn()` 仅含「进程内 `bridgeUrl`」单一候选 → 抖动时探活全死 → 落入「鸡犬相闻」自重启隧道死循环, 永远收敛不到稳定地址。
+  - `bridgeResolveLiveConn()` 新增候选: 常驻桥 `bridgeReadPublishedConn()` 的新鲜(`<BRIDGE_CONN_FRESH_MS`)已发布连接(经其代理直达本机 `dao-vsix:port`), 探活/签名一律配机器级权威令牌 `bridgeAuthoritativeToken()`。死探时即「无缝切换」到该活址并反注入, 免去自重启抖动。
+  - `bridgeEffectiveUrl()` 同步: 进程内隧道空时回退常驻桥已发布活址, 杜绝注入「(未连接)」(对齐 `bridgeGenerateCloudMd` 既有注释「进程内隧道 ∪ 常驻桥已发布连接」之意图)。
+  - 去中心化 ntfy mesh(路线C)仍为零中心兜底: 即便两路 cloudflare 同时抖动, 远程经多家公共 broker 加密直达本机不受影响。
+
 ## 3.50.57
 - **项③ 近期对话精简(对齐手机 APK·随附 rt-flow v4.26.5)**。悬浮窗「☁ 近期对话」tab 此前无上限渲染整份近期对话列表(宿主已限 80 条),过长成负担。改为无搜索时只显示最近 `DAO_REC_VIEW_MAX=34` 条(已按 updatedAt 降序),底部提示「仅显示最近 N 条·共 M 条」;搜索时仍跨全量匹配;全量历史按号分层保留在「🗂 对话记录(备份)」tab。同步捆绑 `rtflow/extension.js`。
 
