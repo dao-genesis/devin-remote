@@ -111,6 +111,9 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   custom-drawn editor (Notepad++/Scintilla) carries no TextPattern and is invisible to
   the native `window_text`, yet publishes its whole buffer as a `Pane`'s Name — the Name
   *is* the tree's report of that element's text, so the read is truth, not a guess (F191).
+  With **no target**, it reads the window's *primary* text container (`Document` → `Edit`),
+  not whatever descendant comes first — so `uia_text(win)` over a console returns the whole
+  scrollback, not a scrollbar's name (F208).
 - `read_selection(restore=True)` — read content that is **drawn, not in the tree**.
   Some surfaces paint their content with no element behind it — LibreOffice Calc renders
   its whole cell grid as one custom control (`uia_text` over the sheet returns only

@@ -32,8 +32,11 @@ def main():
           f"uia_text reads modern-app page text via TextPattern")
     val = osctl.uia_get_value(ch["id"], ctype="Document")
     print(f"uia_get_value(Document) -> {val[:40]!r}")
-    print(f"[{'PASS' if marker not in val else 'FAIL'}] "
-          f"ValuePattern does NOT carry the document body (TextPattern is necessary)")
+    # Chrome's Document ValuePattern returns the URL (which percent-encodes the body),
+    # never the rendered body text — so the decoded phrase "floor reads me" (real spaces)
+    # proves the body is reachable only through TextPattern, not ValuePattern.
+    print(f"[{'PASS' if 'floor reads me' not in val else 'FAIL'}] "
+          f"ValuePattern does NOT carry the rendered document body (TextPattern is necessary)")
     b.navigate("about:blank")
 
 

@@ -926,42 +926,66 @@ def uia_text(win: int, name=None, ctype=None, max_len: int = 20000) -> str:
     on a ``Pane``'s Name, where ``window_text`` (native HWNDs only) is blind and the
     pattern read is empty (F191). The Name *is* what the accessibility tree reports
     as that element's text, so the fallback reads truth, not a guess. "" if no element
-    or no text by either channel. ``max_len`` bounds a huge document."""
+    or no text by either channel. ``max_len`` bounds a huge document.
+
+    With **no target** (neither ``name`` nor ``ctype``), this reads the window's
+    *primary* text rather than whatever descendant happens to come first: a console's
+    whole scrollback sits on its ``Document`` (TextPattern), but the first child a
+    type-less scan reaches is a scrollbar — so "read this window's text" would silently
+    return a scrollbar's name. It therefore resolves to the main text container in
+    priority order (``Document`` → ``Edit``), and only falls back to the first-element
+    read when none carries text."""
     uia = _get_uia()
     if not uia:
         return ""
+    if name is None and ctype is None:
+        for cand in ("Document", "Edit"):
+            el = _find_ptr(uia, win, None, cand)
+            if el:
+                try:
+                    s = _element_text(el, max_len)
+                finally:
+                    _release(el)
+                if s:
+                    return s
     el = _find_ptr(uia, win, name, ctype)
     if not el:
         return ""
     try:
-        s = ""
-        tp = _pattern(el, _UIA_TextPatternId)
-        if tp:
-            try:
-                rng = ctypes.c_void_p()
-                if _vcall(tp, _TEXT_DOCRANGE, ctypes.c_long,
-                          [ctypes.POINTER(ctypes.c_void_p)],
-                          ctypes.byref(rng)) == 0 and rng.value:
-                    try:
-                        out = ctypes.c_void_p()
-                        if _vcall(rng.value, _RANGE_GETTEXT, ctypes.c_long,
-                                  [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
-                                  max_len, ctypes.byref(out)) == 0 and out.value:
-                            s = ctypes.wstring_at(out.value)
-                            _oleaut.SysFreeString(out.value)
-                    finally:
-                        _release(rng.value)
-            finally:
-                _release(tp)
-        if not s:
-            # No TextPattern (or empty) — a custom editor publishes its buffer as
-            # the element's Name (Scintilla/Notepad++). Read that channel.
-            s = _prop_bstr(el, _UIA_NameProperty)
-            if len(s) > max_len:
-                s = s[:max_len]
-        return s
+        return _element_text(el, max_len)
     finally:
         _release(el)
+
+
+def _element_text(el, max_len: int) -> str:
+    """Read one element's full text: the UIA TextPattern (DocumentRange.GetText) if it
+    models one, else the accessible Name (where a custom-drawn editor publishes its
+    buffer). Shared by :func:`uia_text` so the no-target path and the targeted path read
+    by the same rules."""
+    s = ""
+    tp = _pattern(el, _UIA_TextPatternId)
+    if tp:
+        try:
+            rng = ctypes.c_void_p()
+            if _vcall(tp, _TEXT_DOCRANGE, ctypes.c_long,
+                      [ctypes.POINTER(ctypes.c_void_p)],
+                      ctypes.byref(rng)) == 0 and rng.value:
+                try:
+                    out = ctypes.c_void_p()
+                    if _vcall(rng.value, _RANGE_GETTEXT, ctypes.c_long,
+                              [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+                              max_len, ctypes.byref(out)) == 0 and out.value:
+                        s = ctypes.wstring_at(out.value)
+                        _oleaut.SysFreeString(out.value)
+                finally:
+                    _release(rng.value)
+        finally:
+            _release(tp)
+    if not s:
+        s = _prop_bstr(el, _UIA_NameProperty)
+        if len(s) > max_len:
+            s = s[:max_len]
+    return s
 
 
 @_hangproof("")

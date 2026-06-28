@@ -6875,6 +6875,47 @@ refined by *role* (act on the field, not its caption) to pick the one that can a
 
 ---
 
+## F208 — `uia_text(win)` must read the window's *primary* text, not its first descendant
+
+**Friction (forward practice, real Windows console).** Driving a `conhost` window through the floor to
+read a command's output: `uia_text(win, ctype="Document")` correctly returned the **whole 20 000-char
+scrollback** (the console exposes its buffer as a real `Document` TextPattern provider), and so did
+`read_selection` (Ctrl+A + copy, F195) — but `uia_text(win)` with **no target** returned only **8
+characters**: the *accessible Name of a scrollbar*. A type-less, name-less descendant scan returns the
+first element it reaches (here a `ScrollBar` named `"Vertical"`), so "read this window's text" silently
+answered with chrome instead of content — the F207 class of bug (a plausible-looking but wrong result),
+now in a *read* verb.
+
+**Mechanism — resolve to the primary text container when no target is pinned.** When `uia_text` is given
+neither `name` nor `ctype`, it now resolves the window's main readable surface in priority order
+(`Document` → `Edit`) and returns the first that actually carries text; only if none does does it fall
+back to the prior first-element read. The per-element extraction (TextPattern `DocumentRange.GetText`,
+else the accessible Name where a custom editor publishes its buffer — Scintilla/Notepad++, F191) is
+factored into `_element_text` so the no-target path and the targeted path read by **identical** rules.
+A targeted `uia_text(win, ctype=…)`/`uia_text(win, name=…)` is unchanged.
+
+**Honest boundary.** A console's grid, like LibreOffice Calc's (F195) and GTK's canvas (F201), is *drawn*,
+not modelled per-glyph — but conhost still publishes the buffer on a `Document` TextPattern, so meaning
+*does* reach it; where it would not, `read_selection` (the universal copy channel) remains the floor's
+already-owned fallback, proven here too.
+
+**Live (this VM).** `_probe_console.py` **4/4** on a real `cmd` console printing a marker: the `Document`
+read carries it; `uia_text(win)` with no target now carries it (was a scrollbar name); `read_selection`
+carries it; and fresh `echo` output appears in the next `uia_text(win)`. **No regression** —
+`_probe_uiatext.py` (F170) still green (its negative ValuePattern assertion hardened: Chrome's `Document`
+ValuePattern returns the *URL*, which percent-encodes the body, so the decoded phrase `"floor reads me"`
+proves the body is reachable only through TextPattern), `_probe_winverbs.py` **15/15**,
+`_probe_setvalue.py` **5/5**. Pure stdlib.
+
+**Lesson (道法自然).** 大方無隅 — the obvious reading of "the text of this window" has no single corner to
+grab; a window is many elements, and the *first* one is rarely the one that matters. The verb must carry
+a notion of *primacy* (the content surface), not merely *firstness* (tree order) — the same refinement
+F207 made for writing (act on the field, not its caption) now made for reading (read the document, not the
+scrollbar). 知人者智，自知者明: the floor grew not a new power but a clearer sense of *what it was being
+asked for*.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
