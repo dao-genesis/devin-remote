@@ -34,6 +34,15 @@ class _VARIANT(ctypes.Structure):
                 ("val", ctypes.c_void_p), ("pad", ctypes.c_void_p)]
 
 
+def _variant_bstr(s):
+    """A VT_BSTR VARIANT carrying ``s`` — the by-value argument FindItemByProperty
+    matches against. Caller must VariantClear it to free the BSTR."""
+    v = _VARIANT()
+    v.vt = 8  # VT_BSTR
+    v.val = _oleaut.SysAllocString(s)
+    return v
+
+
 def _guid(s):
     g = _GUID()
     _ole32.CLSIDFromString(ctypes.c_wchar_p(s), ctypes.byref(g))
@@ -72,6 +81,9 @@ _EC_NAMES = {0: "collapsed", 1: "expanded", 2: "partial", 3: "leaf"}
 # IUIAutomationScrollItemPattern vtable indices
 _SCROLLINTOVIEW = 3   # IUIAutomationScrollItemPattern::ScrollIntoView
 _UIA_ScrollItemPatternId = 10017
+# IUIAutomationItemContainerPattern vtable indices
+_IC_FINDITEM = 3      # IUIAutomationItemContainerPattern::FindItemByProperty
+_UIA_ItemContainerPatternId = 10019
 # IUIAutomationRangeValuePattern vtable indices
 _RV_SET = 3       # IUIAutomationRangeValuePattern::SetValue (double)
 _RV_GET = 4       # IUIAutomationRangeValuePattern::get_CurrentValue
@@ -729,6 +741,60 @@ def uia_range_value(win: int, name=None, ctype=None):
             _release(rv)
     finally:
         _release(el)
+
+
+def uia_find_item(win: int, item: str, container_name=None,
+                  container_ctype: str = "list", max_scan: int = 6000):
+    """Find a *virtualized* item by meaning and realize it — the bridge that
+    ``uia_find`` cannot cross. A long modern list (WPF/UWP/WinUI) only materializes
+    the rows near the viewport into the UIA tree; an item below the fold has no
+    element at all, so ``uia_find`` (a Descendants walk) returns None for it and
+    ``uia_scroll_into_view`` has nothing to scroll. This asks the *container* (found
+    by ``container_name``/``container_ctype``, default a List) for the item by name
+    via the UIA ItemContainerPattern, which forces the provider to realize it, then
+    scrolls it into view and reports its now-visible screen ``rect`` —
+    ``{"name","type","rect"}`` — so the pixel actuator can click it and the realized
+    element is now reachable by the other ``uia_*`` verbs. None if no container, no
+    ItemContainerPattern, or no such item (JOURNAL F183)."""
+    uia = _get_uia()
+    if not uia:
+        return None
+    cont = _find_ptr(uia, win, container_name, container_ctype, max_scan)
+    if not cont:
+        return None
+    try:
+        ic = _pattern(cont, _UIA_ItemContainerPatternId)
+        if not ic:
+            return None
+        try:
+            var = _variant_bstr(item)
+            found = ctypes.c_void_p()
+            try:
+                hr = _vcall(ic, _IC_FINDITEM, ctypes.c_long,
+                            [ctypes.c_void_p, ctypes.c_int, _VARIANT,
+                             ctypes.POINTER(ctypes.c_void_p)],
+                            None, _UIA_NameProperty, var, ctypes.byref(found))
+            finally:
+                _oleaut.VariantClear(ctypes.byref(var))
+            if hr != 0 or not found.value:
+                return None
+            try:
+                sp = _pattern(found.value, _UIA_ScrollItemPatternId)
+                if sp:
+                    try:
+                        _vcall(sp, _SCROLLINTOVIEW, ctypes.c_long, [])
+                    finally:
+                        _release(sp)
+                return {"name": _prop_bstr(found.value, _UIA_NameProperty),
+                        "type": _CONTROL_TYPES.get(
+                            _prop_int(found.value, _UIA_ControlTypeProperty)),
+                        "rect": _prop_rect(found.value)}
+            finally:
+                _release(found.value)
+        finally:
+            _release(ic)
+    finally:
+        _release(cont)
 
 
 def uia_set_range_value(win: int, value: float, name=None, ctype=None) -> bool:

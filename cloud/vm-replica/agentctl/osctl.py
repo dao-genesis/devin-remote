@@ -204,6 +204,13 @@ uia_scroll_into_view = getattr(_be, "uia_scroll_into_view", lambda win, name=Non
 # set; the provider clamps to its own min/max). None/False where no RangeValuePattern.
 uia_range_value = getattr(_be, "uia_range_value", lambda win, name=None, ctype=None: None)
 uia_set_range_value = getattr(_be, "uia_set_range_value", lambda win, value, name=None, ctype=None: False)
+# UIA find-item (F183): locate a *virtualized* list item by meaning that uia_find
+# cannot — a long modern list (WPF/UWP/WinUI) only materializes rows near the
+# viewport into the a11y tree, so an item below the fold has no element to find or
+# scroll. uia_find_item asks the container via ItemContainerPattern to realize it
+# by name, scrolls it into view, and returns its now-visible {"name","type","rect"}
+# so the pixel floor can reach it and the other uia_* verbs see the realized element.
+uia_find_item = getattr(_be, "uia_find_item", lambda win, item, container_name=None, container_ctype="list", max_scan=6000: None)
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the

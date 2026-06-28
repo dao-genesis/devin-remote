@@ -5521,6 +5521,71 @@ days. Single-frame apps never felt it; it took an app that shows two faces at on
 
 ---
 
+## F183 — the second ground walks: prove the whole semantic floor on Windows, and reach a *virtualized* item · WPF/UWP
+
+**Friction.** F177–F182 grew and proved the semantic floor on **Linux/AT-SPI**.
+The Windows dual (`_uia_win.py`, the UIA COM tree in raw `ctypes`) had been
+*written* — every verb, every vtable index — but **never run on Windows**, so the
+README honestly hedged that the richer Windows verbs "degrade to truthful no-ops
+on a ground that has not yet been forced to grow them." A floor you have not stood
+on is a claim, not a capability. This round stood on it: a fresh Windows VM, a
+deterministic WPF fixture exposing one of every UIA-bearing control, and every
+`uia_*` verb driven through its read-dual.
+
+**What the standing exposed.**
+- **The vtable indices are correct.** All nineteen verbs act on a first-class UIA
+  provider (WPF): `set_value`/`get_value` (Unicode round-trip `'héllo 道 42'`),
+  `toggle`/`toggle_state`, `expand`/`collapse`/`expand_state` (ComboBox + TreeItem),
+  `select`/`is_selected`, `range_value`/`set_range_value` (Slider 10→75),
+  `invoke` (Button → `'PONG'`), `text` (multiline + CJK). The "no-ops" narrative
+  was **stale**, not true — the floor was live; only the proof was missing.
+- **Provider depth is the real variable, not the verb.** The *same* verbs on a
+  **WinForms** fixture pass only for the patterns its legacy-MSAA→UIA bridge
+  surfaces (Toggle, SelectionItem, ExpandCollapse-on-TreeItem, Value) and return
+  *honest empties* for the rest (no RangeValue/ScrollItem/Text/ComboBox-expand).
+  The floor reports what the control *is*, never crashes on what it lacks — F177's
+  "degrade to truthful empties" holds across the Win32/UWP gap exactly as designed.
+- **The one true gap: virtualization.** A long modern list (WPF/UWP/WinUI) only
+  materializes the rows near the viewport into the UIA tree. `row-38` of a 41-row
+  `ListBox` has **no element at all**: `uia_find` (a Descendants walk) returns None,
+  and `uia_scroll_into_view` — which needs the element first — has nothing to scroll.
+  Meaning is present (the item exists, by name) but unreachable through the existing
+  verbs.
+
+**Primitive grown — `uia_find_item` (ask the *container* to realize it).** UIA has
+one mechanism built for exactly this: `ItemContainerPattern.FindItemByProperty`,
+which a virtualizing container implements to *materialize and return* an item by
+property without the caller scrolling blind. The new verb finds the container by
+meaning, asks it for the item by `Name`, then `ScrollIntoView`s the realized element
+and returns its now-visible screen `rect` — the same *meaning → geometry → pixel*
+bridge `uia_find` already is, extended to items that did not exist a moment ago.
+After it, the element is in the tree and every other `uia_*` verb sees it. It needed
+a `VT_BSTR` VARIANT passed **by value** through the COM vtable (the `_variant_bstr`
+helper); ctypes carries the MS-x64 struct-by-value ABI correctly — no crash, the
+returned pointer is live.
+
+**Live (this VM).** `_probe_winverbs.py` launches its own WPF fixture and runs
+**15/15 green**: the virtualized `row-38` is invisible to `uia_find`, `uia_find_item`
+realizes it at `rect (62,290,479,20)`, `uia_select` then reports `is_selected=True`,
+and a missing `row-999` returns `None` (honest). A parity gap closed alongside:
+`list_windows` on Windows now carries `pid` (via `GetWindowThreadProcessId`), as the
+X11 sibling always has — addressing a window by its process, not only its title.
+
+**No regression.** The X11 ground is untouched (`uia_find_item` is additive, exposed
+through the same `getattr` fallback that returns `None` where a backend has not grown
+it — so AT-SPI degrades truthfully until an equivalent realize-verb is forced there).
+Pure stdlib, no new deps; the Win backend still imports with UIA absent.
+
+**Lesson (道法自然).** 上士聞道，堇而行之 — the upper student, hearing the way,
+*walks* it. The Windows floor was already whole in code; it became real only by being
+trodden. And 反者道之動: the one true gap was not a missing verb but a thing that
+**isn't there until asked** — the remedy was not to scan harder but to ask the
+container to bring the item into being. 為而弗恃: the floor acts and does not presume
+— where a control has no pattern it says so, and only a *real* absence (the unrealized
+row) grew a new primitive.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
