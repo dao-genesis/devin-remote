@@ -4805,9 +4805,16 @@ function bridgeProbeAlive(rawUrl: string, timeoutMs: number = 6000, token: strin
         } catch { fin(false); }
     });
 }
-// 独立闭环(鸡犬相闻·不相往来): 只用进程内自有隧道, 不读外部 conn.json
+// 帛书·「以实际有效性为基准·反者道之动」: 公网URL 取「进程内隧道 ∪ 常驻桥已发布连接」的有效值。
+//   进程内自有隧道(quick-tunnel)优先; 其空/死(常驻桥 dao-bridge 持有稳定隧道、bridgeUrl 恒空)时
+//   回归常驻桥已发布的新鲜活地址 → 杜绝注入「(未连接)」/死址致云端连不上(见 bridgeGenerateCloudMd 注)。
 function bridgeEffectiveUrl(): string {
-    return bridgeUrl || '';
+    if (bridgeUrl) return bridgeUrl;
+    try {
+        const pub = bridgeReadPublishedConn();
+        if (pub && pub.url && pub.ageMs < BRIDGE_CONN_FRESH_MS) return pub.url;
+    } catch { /* 守柔 */ }
+    return '';
 }
 // 帛书·「以实际有效性为基准·重新模拟配源」: 发布/探活/签名/去中心化会话一律取「服务端实际校验且
 //   机器级恒稳」的权威令牌 ws.token (即 dao-conn-current.json 之 token), 而非随隧道轮换的 bridgeToken。
@@ -4910,6 +4917,14 @@ function bridgeMcpToken(): string {
 async function bridgeResolveLiveConn(timeoutMs: number = 5000): Promise<{ url: string; token: string; source: string } | null> {
     const cands: { url: string; token: string; mtime: number; source: string }[] = [];
     if (bridgeUrl) cands.push({ url: bridgeUrl, token: ws.token || bridgeToken || '', mtime: Number.MAX_SAFE_INTEGER, source: 'inprocess' });
+    // 进程内隧道死/空时, 纳入常驻桥(dao-bridge)已发布的稳定隧道为候选(经其代理直达本机 dao-vsix:port);
+    //   探活/注入须配机器级权威令牌(bridgeAuthoritativeToken), 而非常驻桥自身 token。
+    try {
+        const pub = bridgeReadPublishedConn();
+        if (pub && pub.url && pub.ageMs < BRIDGE_CONN_FRESH_MS) {
+            cands.push({ url: pub.url, token: bridgeAuthoritativeToken() || pub.token || '', mtime: Date.now() - pub.ageMs, source: pub.source || 'published' });
+        }
+    } catch { /* 守柔 */ }
     const seen = new Set<string>();
     for (const c of cands) {
         if (seen.has(c.url)) continue;
