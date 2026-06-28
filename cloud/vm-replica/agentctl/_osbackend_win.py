@@ -1149,8 +1149,12 @@ try:
                           uia_select, uia_is_selected,
                           uia_expand, uia_collapse, uia_expand_state,
                           uia_scroll_into_view, uia_find_item,
-                          uia_range_value, uia_set_range_value, tray_icons)
+                          uia_range_value, uia_set_range_value, tray_icons,
+                          uia_focused)
 except Exception:  # pragma: no cover - UIA unavailable
+    def uia_focused():
+        return None
+
     def uia_name(win: int) -> str:
         return ""
 

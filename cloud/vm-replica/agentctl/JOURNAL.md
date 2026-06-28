@@ -6692,6 +6692,47 @@ than a one-way peek.
 
 ---
 
+## F204 — read the **keyboard focus** desktop-wide: where will my keystrokes land?
+
+**Friction (forward practice).** Every locate verb answers "where is control X in window W"
+(`uia_find`). But a keypress is *not* aimed at a control by name — it goes to whatever currently holds
+**focus**, and that target was invisible to the floor. After clicking a field, pressing Tab, or when a
+dialog pops up, the floor had no way to *verify* where its next `type_unicode`/`tap` would land; it
+typed blind and trusted that the prior click/focus had taken. The mouse has a visible cursor and the
+floor always knows the click point; the keyboard's aim point had no such read.
+
+**Mechanism.** `IUIAutomation::GetFocusedElement` (vtable 8), wrapped exactly like the other UIA reads
+(`@_hangproof`, per-thread STA):
+
+```python
+uia_focused() -> {"name","type","aid","help","rect":(x,y,w,h),"pid"} | None
+```
+
+The one element that owns the keyboard *right now*, across every app at once — the keyboard's twin of
+the mouse cursor. `pid` names the owning process, so the floor can distinguish "focus is in my target
+app" from "a modal/another app grabbed it". `rect` makes the focus target also a clickable point,
+closing the same locate→actuate loop `_prop_rect` gives `uia_find`. It is a pure read; it neither
+moves focus nor types.
+
+**Honest boundary.** Returns `None` on a backend without UIA, and on a focus owner that exposes no UIA
+element (a fully opaque/GTK surface — F201 — reports its top-level or nothing). For those, focus
+verification falls back to the pixel channel (caret/highlight), as F201 already prescribes.
+
+**Live (this VM).** `_probe_focus.py` **5/5**: focusing the WPF fixture's text field by meaning makes
+`uia_focused()` report *that* `Edit`; moving focus to the button reports the `Button` instead (focus
+tracked live); `pid` equals the fixture's own process id (so the floor knows *which* app holds focus);
+the focused element carries a screen rect; and the payoff — typing after reading focus lands exactly
+where `uia_focused` pointed (the field's value becomes the typed text). **No regression** —
+`_probe_winverbs.py` **15/15**, `_probe_tray.py` **8/8**, `_probe_clipimage.py` **6/6**. Pure stdlib.
+
+**Lesson (道法自然).** 知人者智，自知者明 — F201 taught the floor to know a window's blind spot; F204 teaches
+it to know *its own aim*. Acting without first reading where the act will land is the root of blind
+flailing; a single cheap read before each commit (where is focus? is it in my app?) turns hopeful
+typing into verified typing. 為而不爭: the verb does nothing — it only *sees* — yet it is what lets every
+later keystroke be deliberate.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

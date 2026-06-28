@@ -285,6 +285,11 @@ def uia_drag(win, name=None, ctype=None, to_name=None, to_ctype=None,
 # the universal keyboard floor (osctl.type/key) types into them. False if no element
 # / UIA unavailable.
 uia_focus = getattr(_be, "uia_focus", lambda win, name=None, ctype=None: False)
+# Read which element holds keyboard focus *right now*, desktop-wide (F204): the dual
+# of uia_find — "where will my keystrokes land?" Returns {name,type,aid,help,rect,pid}
+# or None. Lets the floor verify a focus move landed (clicked the right field, Tab
+# went where intended, no dialog stole focus) before it commits input. None w/o UIA.
+uia_focused = getattr(_be, "uia_focused", lambda: None)
 # UIA TextPattern read (F170): read an element's full text via DocumentRange.GetText
 # — the deep read that reaches INTO modern documents (a Chrome/Electron page, a rich
 # editor) where uia_get_value (single-line value fields) returns empty and the native

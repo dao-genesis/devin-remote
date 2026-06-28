@@ -182,6 +182,12 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   one to paste into Paint/docs. Reuses the floor's `zlib` PNG codec (`_png` + `_decode_png_rgb`), no
   new dep. Proven `_probe_clipimage.py` 6/6 (pixel-exact round-trip + reads an external app's
   `Clipboard.SetImage`) (JOURNAL F203). Reads 24/32-bit DIBs; `None` on exotic DIBs; Windows-only.
+- `uia_focused()` — the element holding **keyboard focus** right now, desktop-wide, as
+  `{name,type,aid,help,rect,pid}` or `None`. The dual of `uia_find`: not "where is control X" but
+  "where will my keystrokes land?" — the keyboard's twin of the mouse cursor. Lets the floor verify a
+  focus move landed (clicked the right field, Tab went where intended, no dialog stole focus, and via
+  `pid` that focus is in the target app) *before* committing input. Pure read. Proven `_probe_focus.py`
+  5/5 (focus tracked field→button, pid = owner, typing lands where it points) (JOURNAL F204).
 
 Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
 `invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:

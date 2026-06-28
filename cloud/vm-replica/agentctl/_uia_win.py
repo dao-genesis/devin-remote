@@ -59,6 +59,7 @@ _IID_IUIAutomation = _guid("{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
 
 # IUIAutomation vtable indices (after IUnknown 0..2)
 _EFH = 6        # ElementFromHandle
+_GETFOCUSED = 8  # GetFocusedElement
 _CTRUE = 21     # CreateTrueCondition
 # IUIAutomationElement vtable indices
 _SETFOCUS = 3   # SetFocus
@@ -107,6 +108,7 @@ _UIA_ControlTypeProperty = 30003
 _UIA_BoundingRectangleProperty = 30001
 _UIA_AutomationIdProperty = 30011   # stable developer-assigned id (semantic handle)
 _UIA_HelpTextProperty = 30013       # tooltip / accessible help string
+_UIA_ProcessIdProperty = 30002      # owning process id (which app the focus is in)
 _TreeScope_Children = 2
 _TreeScope_Descendants = 4
 
@@ -365,6 +367,40 @@ def uia_find(win: int, name=None, ctype=None, max_scan: int = 6000):
                 "rect": _prop_rect(el)}
     finally:
         _release(el)
+
+
+@_hangproof(None)
+def uia_focused():
+    """The element that currently holds the **keyboard focus**, anywhere on the
+    desktop, as ``{"name","type","aid","help","rect":(x,y,w,h),"pid"}`` — or ``None``
+    when nothing focusable does (e.g. the desktop itself). Where :func:`uia_find`
+    asks "where is the control named X in window W", this asks the dual question the
+    floor needs before it *types*: "**where will my keystrokes land right now?**" —
+    the one element that will receive `type_text`/`tap`, across every app at once.
+
+    It is the keyboard's twin of the mouse cursor: a click is aimed at a point, but a
+    keypress is aimed at whatever holds focus, and that target is otherwise invisible.
+    Reading it lets the floor *verify a focus move landed* (did clicking that field,
+    or Tabbing, actually put focus where intended) before committing input — closing
+    the loop the way `_prop_rect` closes the locate→click loop. ``pid`` says which
+    application owns the focus, so the floor can tell "focus is in my target app"
+    from "a dialog/another app stole it". Returns ``None`` on a backend without UIA."""
+    uia = _get_uia()
+    if not uia:
+        return None
+    el = ctypes.c_void_p()
+    if _vcall(uia, _GETFOCUSED, ctypes.c_long,
+              [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(el)) != 0 or not el.value:
+        return None
+    try:
+        return {"name": _prop_bstr(el.value, _UIA_NameProperty),
+                "type": _CONTROL_TYPES.get(_prop_int(el.value, _UIA_ControlTypeProperty)),
+                "aid": _prop_bstr(el.value, _UIA_AutomationIdProperty),
+                "help": _prop_bstr(el.value, _UIA_HelpTextProperty),
+                "rect": _prop_rect(el.value),
+                "pid": _prop_int(el.value, _UIA_ProcessIdProperty)}
+    finally:
+        _release(el.value)
 
 
 def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
