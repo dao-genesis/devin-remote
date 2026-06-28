@@ -145,6 +145,12 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   `menu_windows()` exactly as `uia_menu` walks a menubar. The two menu verbs share one
   walk that searches `list_windows()`+`menu_windows()`, so both native and Qt/wx menus,
   menubar and context, are driven by one code path (JOURNAL F186).
+- `goto_cell(win, ref)` — navigate a spreadsheet to an arbitrary cell **by reference**,
+  e.g. `goto_cell(win, "B2")`. The grid is one drawn canvas with no per-cell element, and
+  the Name Box is a VCL ComboBox whose `uia_focus` lies; so this *clicks* the meaning-found
+  Name Box (a real click focuses it), types the reference, and verifies the jump via the
+  box's own readback — with a geometry fallback that self-heals a box left poisoned by a
+  rejected reference, and an up-front reject of non-references (JOURNAL F197).
 
 Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
 `invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:

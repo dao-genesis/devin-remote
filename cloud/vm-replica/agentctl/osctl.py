@@ -20,6 +20,7 @@ PNG encoder is hand-rolled with ``zlib`` so a screenshot is always available.
 
 from __future__ import annotations
 
+import re
 import struct
 import sys
 import time
@@ -391,6 +392,77 @@ def uia_context(win: int, target: str, *path: str, ctype=None, pause: float = 0.
     click(x + w // 2, y + h // 2, right=True)
     time.sleep(pause)
     return _walk_menu_path(path, pause)
+
+
+_CELLREF = re.compile(r"^\$?[A-Za-z]{1,3}\$?[0-9]{1,7}$")
+
+
+def goto_cell(win: int, ref: str, retries: int = 2, pause: float = 0.4) -> bool:
+    """Navigate a spreadsheet to an arbitrary cell *by reference* (``goto_cell(win, "B2")``),
+    purely by meaning and verified — the cell-navigation friction the JOURNAL frontier left open.
+
+    A spreadsheet draws its grid as one canvas with no per-cell element, so there is
+    nothing to ``uia_find("B2")``; and the Name Box (the cell-reference box) is a VCL
+    ComboBox whose ``uia_focus`` returns True yet never actually takes keyboard focus (the
+    "SetFocus lies" of the F190 family), so a typed reference lands in the sheet instead of
+    the box. The reliable anchor is the meaning the provider *does* expose plus the geometry
+    it *does* report: the Name Box is the one ComboBox whose displayed Name is itself a cell
+    reference (it always shows the active cell), so find it by that meaning and *click* its
+    centre — a real click focuses it where SetFocus lied — then select-all, type the
+    reference and press Enter. That same box is the oracle: afterwards its Name is the new
+    active cell, so the move is verified and retried (clearing any half-typed edit with Esc,
+    and a leading Esc cancels any ambient in-cell edit first) before reporting a failure.
+    Composed of hang-proof finds + click + keys, so no new COM and it
+    cannot itself hang. Returns True iff the active cell became ``ref``."""
+    if not _CELLREF.match(ref.strip()):
+        return False  # not a single-cell reference — reject up front, never poison the box
+    target = ref.strip().upper().replace("$", "")
+    tap(0x1B)  # cancel any ambient in-cell edit so the walk starts from a clean grid
+    time.sleep(0.15)
+
+    def _namebox():
+        top = [e for e in uia_find_all(win, ctype="combobox")
+               if e.get("rect") and e["rect"][1] < 160]
+        # Clean state: the Name Box is the combobox whose displayed Name *is* a cell
+        # reference (it shows the active cell). Prefer that — it is meaning, not position.
+        named = [e for e in top if _CELLREF.match((e.get("name") or "").strip())]
+        if named:
+            named.sort(key=lambda e: e["rect"][1])
+            return named[0]
+        # Poisoned/edit state: a rejected reference (or a half-typed one) stays in the box,
+        # so its Name is no longer a cell reference and the meaning match fails. Fall back to
+        # the geometry the provider always reports: the Name Box is the leftmost combobox of
+        # the formula-bar row (lowest of the far-left column — the font pickers sit above it).
+        # Finding it this way lets the click+Ctrl+A overwrite the bad text and recover.
+        if not top:
+            return None
+        minx = min(e["rect"][0] for e in top)
+        leftcol = [e for e in top if e["rect"][0] <= minx + 6]
+        leftcol.sort(key=lambda e: -e["rect"][1])
+        return leftcol[0]
+
+    got = ""
+    for _ in range(retries + 1):
+        nb = _namebox()
+        if not nb or not nb.get("rect"):
+            tap(0x1B)  # ESC — bail out of any open editor, then retry the lookup
+            time.sleep(0.2)
+            continue
+        _click_center(nb["rect"])
+        time.sleep(pause)
+        chord(0x11, 0x41)            # Ctrl+A — replace whatever the box holds
+        time.sleep(0.1)
+        type_unicode(ref)
+        time.sleep(0.1)
+        tap(0x0D)                    # Enter — commit the jump
+        time.sleep(pause)
+        cur = _namebox()
+        got = (cur.get("name") if cur else "") or ""
+        if got.strip().upper().replace("$", "") == target:
+            return True
+        tap(0x1B)                    # cancel a stray in-cell edit before retrying
+        time.sleep(0.2)
+    return False
 
 
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
