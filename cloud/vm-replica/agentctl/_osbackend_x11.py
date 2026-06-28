@@ -23,9 +23,13 @@ Exposes the exact names ``osctl`` expects from a backend: ``screen_size``,
 
 from __future__ import annotations
 
+import base64
 import ctypes
+import json
 import os
 import signal
+import subprocess
+import sys
 import threading
 import time
 
@@ -1115,6 +1119,10 @@ class _AtspiRect(ctypes.Structure):
 
 
 _ATSPI_COORD_SCREEN = 0
+# AtspiStateType.DEFUNCT — a node whose remote peer has been destroyed. Stable
+# public-ABI enum value (atspi-constants.h: INVALID=0…DEFUNCT=6). A live app
+# mutates its tree as we walk it; touching a defunct node is a use-after-free.
+_ATSPI_STATE_DEFUNCT = 6
 
 # A control-type word the floor speaks -> the AT-SPI role name it means.
 _ROLE_ALIAS = {
@@ -1174,6 +1182,10 @@ def _atspi():
         at.atspi_accessible_get_value_iface.argtypes = [ctypes.c_void_p]
         at.atspi_value_get_current_value.restype = ctypes.c_double
         at.atspi_value_get_current_value.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_accessible_get_state_set.restype = ctypes.c_void_p
+        at.atspi_accessible_get_state_set.argtypes = [ctypes.c_void_p]
+        at.atspi_state_set_contains.restype = ctypes.c_int
+        at.atspi_state_set_contains.argtypes = [ctypes.c_void_p, ctypes.c_int]
         at.atspi_rect_free.restype = None
         at.atspi_rect_free.argtypes = [ctypes.c_void_p]
         g.g_free.argtypes = [ctypes.c_void_p]
@@ -1194,8 +1206,15 @@ def _gstr(ptr):
     return s
 
 
+# Set True only inside the ephemeral worker process (see _atspi_call). There the
+# process is about to exit, so we deliberately never unref what the tree walk
+# touches — leaking is free and the OS reclaims every byte on exit, while not
+# unref'ing is what makes the walk crash-proof against a live, mutating tree.
+_LEAK_REFS = False
+
+
 def _unref(acc):
-    if acc:
+    if acc and not _LEAK_REFS:
         _atspi_state["go"].g_object_unref(acc)
 
 
@@ -1207,8 +1226,26 @@ def _acc_role(at, acc):
     return _gstr(at.atspi_accessible_get_role_name(acc, None))
 
 
+def _acc_defunct(at, acc):
+    """True if this accessible's remote peer is gone (STATE_DEFUNCT). A live app
+    rebuilds its accessible tree while we walk it (press '=' in a calculator and
+    whole subtrees are torn down); reading or unref'ing a node whose peer already
+    died is a use-after-free that segfaults the floor. Checking the state set is
+    the libatspi-correct way to know a handle is still safe to touch before we
+    recurse into it."""
+    ss = at.atspi_accessible_get_state_set(acc)
+    if not ss:
+        return False
+    try:
+        return bool(at.atspi_state_set_contains(ss, _ATSPI_STATE_DEFUNCT))
+    finally:
+        _unref(ss)
+
+
 def _acc_children(at, acc):
     n = at.atspi_accessible_get_child_count(acc, None)
+    if n <= 0 or n > 100000:   # a defunct/garbage node can report a nonsense count
+        return []
     out = []
     for i in range(n):
         c = at.atspi_accessible_get_child_at_index(acc, i, None)
@@ -1286,22 +1323,40 @@ def _match(at, acc, name, ctype):
 def _walk(at, acc, fn, depth=0, _budget=None):
     """Depth-first visit. fn(acc) may return a truthy value to stop early (that
     value is returned). Bounded by depth and a node budget so a pathological
-    tree can never hang the floor."""
+    tree can never hang the floor.
+
+    Children are fetched and released **one at a time**, never collected up
+    front. A live app rebuilds its accessible tree as we walk it, and every
+    synchronous AT-SPI call pumps libatspi's event loop — which *force-disposes*
+    a node the instant its remote peer goes defunct, regardless of the ref we
+    hold. So holding a fistful of sibling refs across a recursive descent is a
+    use-after-free waiting to happen (the GLib 'old_ref > 0' double-free that
+    segfaulted on gnome-calculator, F180). Keeping exactly one child ref live at
+    a time shrinks that window to nothing, and the DEFUNCT guard below skips a
+    node whose peer already died."""
     if _budget is None:
         _budget = [4000]
     if depth > 40 or _budget[0] <= 0:
         return None
     _budget[0] -= 1
+    if _acc_defunct(at, acc):    # the app tore this node down mid-walk — don't touch it
+        return None
     hit = fn(acc, depth)
     if hit:
         return hit
-    for c in _acc_children(at, acc):
+    n = at.atspi_accessible_get_child_count(acc, None)
+    if n <= 0 or n > 100000:     # a defunct/garbage node can report a nonsense count
+        return None
+    for i in range(n):
+        c = at.atspi_accessible_get_child_at_index(acc, i, None)
+        if not c:
+            continue
         r = _walk(at, c, fn, depth + 1, _budget)
         if r is not None:
-            # Each accessible holds its own ref (get_child_at_index is transfer
-            # full), so unref'ing an ancestor never frees the match. Only skip
-            # the unref when the match IS this child — then its ref passes to
-            # the caller (used by _find_acc, which returns a live accessible).
+            # get_child_at_index is transfer-full, so unref'ing this child never
+            # frees the match found deeper. Only skip the unref when the match IS
+            # this child — its ref then passes to the caller (used by _find_acc,
+            # which returns a live accessible).
             if r is not c:
                 _unref(c)
             return r
@@ -1309,7 +1364,7 @@ def _walk(at, acc, fn, depth=0, _budget=None):
     return None
 
 
-def uia_name(win: int) -> str:
+def _impl_uia_name(win: int) -> str:
     """The accessible name a window carries at the a11y layer — its frame name
     as the toolkit reports it (often richer/cleaner than the raw WM title). The
     semantic dual of window_text that reads from the app's own accessibility,
@@ -1327,7 +1382,7 @@ def uia_name(win: int) -> str:
             _unref(fr)
 
 
-def uia_children(win: int) -> list:
+def _impl_uia_children(win: int) -> list:
     """Enumerate the *real controls inside* a window as
     ``[{"name","ctype","rect"}, …]`` — the buttons, menu items, fields and
     labels the toolkit painted, which child_windows (opaque sub-windows) could
@@ -1358,7 +1413,7 @@ def uia_children(win: int) -> list:
         return out
 
 
-def uia_find(win: int, name=None, ctype=None):
+def _impl_uia_find(win: int, name=None, ctype=None):
     """Locate one control inside a window by meaning — by accessible name and/or
     role — and return ``{"name","ctype","rect":(x,y,w,h)}`` (screen rect) or
     None. The crucial bridge: semantics in, geometry out, so the pixel/input
@@ -1410,7 +1465,7 @@ def _click_rect(win: int, rect) -> bool:
     return True
 
 
-def uia_invoke(win: int, name=None, ctype=None) -> bool:
+def _impl_uia_invoke(win: int, name=None, ctype=None) -> bool:
     """Press a control by meaning — fire its default action (Action.do_action 0)
     on the element matched by name/role. The semantic dual of a mouse click that
     needs no pixels: a button, menu item or link actuated by *what it is*.
@@ -1449,7 +1504,7 @@ def uia_invoke(win: int, name=None, ctype=None) -> bool:
             _unref(fr)
 
 
-def uia_get_value(win: int, name=None, ctype=None) -> str:
+def _impl_uia_get_value(win: int, name=None, ctype=None) -> str:
     """Read a control's text content by meaning — the full text of the matched
     element (Text interface), or its numeric Value as a string when it carries
     no text. The read dual of uia_set_value; reaches inside the widget the X
@@ -1484,7 +1539,7 @@ def uia_get_value(win: int, name=None, ctype=None) -> str:
             _unref(fr)
 
 
-def uia_set_value(win: int, value: str, name=None, ctype=None) -> bool:
+def _impl_uia_set_value(win: int, value: str, name=None, ctype=None) -> bool:
     """Write a control's text by meaning — replace the matched editable field's
     contents (EditableText.set_text_contents) with no keystroke stream at all.
     The write dual of uia_get_value; the toolkit's own text, set directly."""
@@ -1513,7 +1568,7 @@ def uia_set_value(win: int, value: str, name=None, ctype=None) -> bool:
             _unref(fr)
 
 
-def uia_focus(win: int, name=None, ctype=None) -> bool:
+def _impl_uia_focus(win: int, name=None, ctype=None) -> bool:
     """Give keyboard focus to a control by meaning (Component.grab_focus) — so a
     field found semantically can then receive the keyboard floor's typing."""
     at = _atspi()
@@ -1540,7 +1595,7 @@ def uia_focus(win: int, name=None, ctype=None) -> bool:
             _unref(fr)
 
 
-def uia_click(win: int, name=None, ctype=None) -> bool:
+def _impl_uia_click(win: int, name=None, ctype=None) -> bool:
     """Click a control located purely by meaning — find it by name/role, then
     land a real left-click on its screen rect via the gesture floor. The explicit
     union of the two floors: semantics choose *what*, pixels deliver the *where*.
@@ -1567,3 +1622,130 @@ def uia_click(win: int, name=None, ctype=None) -> bool:
             return _click_rect(win, rect)
         finally:
             _unref(fr)
+
+
+# ── The semantic floor, isolated ────────────────────────────────────────────
+# Each verb above walks the accessible tree of a *live* app — one that rebuilds
+# its tree while we read it. libatspi force-finalizes a node the instant its
+# remote peer goes defunct, regardless of the ref we hold, so a long-lived floor
+# that unrefs what it traversed eventually double-frees and segfaults (F180,
+# first surfaced driving gnome-calculator). We dissolve this by running every
+# walk in an ephemeral worker process that leaks freely: not unref'ing makes the
+# walk crash-proof, and the OS reclaims every byte the instant the worker exits,
+# so the parent floor neither crashes nor leaks. A worker that dies anyway on a
+# truly pathological tree just yields the verb's honest empty — degradation, not
+# death. The verbs themselves are unchanged; only *where* they run moved.
+
+_WORKER_IMPL = {
+    "name": _impl_uia_name,
+    "children": _impl_uia_children,
+    "find": _impl_uia_find,
+    "invoke": _impl_uia_invoke,
+    "get_value": _impl_uia_get_value,
+    "set_value": _impl_uia_set_value,
+    "focus": _impl_uia_focus,
+    "click": _impl_uia_click,
+}
+_WORKER_DEFAULT = {
+    "name": "", "children": [], "find": None, "invoke": False,
+    "get_value": "", "set_value": False, "focus": False, "click": False,
+}
+_WORKER_PATH = os.path.abspath(__file__)
+_RESULT_TAG = "\x01ATSPI_RESULT\x01"
+
+
+def _retuple(verb, res):
+    """JSON has no tuples; restore rect tuples so callers comparing against
+    ``(x, y, w, h)`` keep working (find/children report rects)."""
+    def fix(d):
+        if isinstance(d, dict) and isinstance(d.get("rect"), list):
+            d["rect"] = tuple(d["rect"])
+        return d
+    if verb == "find" and isinstance(res, dict):
+        return fix(res)
+    if verb == "children" and isinstance(res, list):
+        return [fix(d) for d in res]
+    return res
+
+
+def _atspi_call(verb, win, **kw):
+    """Run a semantic-floor verb in a short-lived, crash-isolated worker."""
+    default = _WORKER_DEFAULT[verb]
+    if _LEAK_REFS:
+        # Already inside a worker (a verb that re-enters) — run directly.
+        try:
+            return _WORKER_IMPL[verb](win, **kw)
+        except Exception:
+            return default
+    req = base64.b64encode(
+        json.dumps({"verb": verb, "win": int(win), "kw": kw}).encode("utf-8")
+    ).decode("ascii")
+    try:
+        p = subprocess.run(
+            [sys.executable, _WORKER_PATH, "__atspi_worker__", req],
+            capture_output=True, timeout=30,
+        )
+    except Exception:
+        return default
+    for line in reversed(p.stdout.decode("utf-8", "replace").splitlines()):
+        if line.startswith(_RESULT_TAG):
+            try:
+                return _retuple(verb, json.loads(line[len(_RESULT_TAG):]))
+            except Exception:
+                return default
+    return default
+
+
+def uia_name(win: int) -> str:
+    return _atspi_call("name", win)
+
+
+def uia_children(win: int) -> list:
+    return _atspi_call("children", win)
+
+
+def uia_find(win: int, name=None, ctype=None):
+    return _atspi_call("find", win, name=name, ctype=ctype)
+
+
+def uia_invoke(win: int, name=None, ctype=None) -> bool:
+    return _atspi_call("invoke", win, name=name, ctype=ctype)
+
+
+def uia_get_value(win: int, name=None, ctype=None) -> str:
+    return _atspi_call("get_value", win, name=name, ctype=ctype)
+
+
+def uia_set_value(win: int, value: str, name=None, ctype=None) -> bool:
+    return _atspi_call("set_value", win, value=value, name=name, ctype=ctype)
+
+
+def uia_focus(win: int, name=None, ctype=None) -> bool:
+    return _atspi_call("focus", win, name=name, ctype=ctype)
+
+
+def uia_click(win: int, name=None, ctype=None) -> bool:
+    return _atspi_call("click", win, name=name, ctype=ctype)
+
+
+def _atspi_worker_main(req_b64: str) -> None:
+    """Entry point of the ephemeral worker: do the one walk, print the result,
+    and exit hard. ``_LEAK_REFS`` makes the walk never touch a dead pointer."""
+    global _LEAK_REFS
+    _LEAK_REFS = True
+    verb = None
+    try:
+        req = json.loads(base64.b64decode(req_b64).decode("utf-8"))
+        verb = req["verb"]
+        res = _WORKER_IMPL[verb](req["win"], **req.get("kw", {}))
+    except Exception:
+        res = _WORKER_DEFAULT.get(verb, None)
+    try:
+        sys.stdout.write(_RESULT_TAG + json.dumps(res) + "\n")
+        sys.stdout.flush()
+    finally:
+        os._exit(0)
+
+
+if __name__ == "__main__" and len(sys.argv) >= 3 and sys.argv[1] == "__atspi_worker__":
+    _atspi_worker_main(sys.argv[2])

@@ -5316,6 +5316,73 @@ not forcing every control into one mechanism, every control is operable.
 
 ---
 
+## F180 — the semantic floor survives a *living* tree: walk in an ephemeral body
+
+**Ground: Ubuntu 22.04, X11 (KDE Plasma). The agent's own VM.**
+
+**Friction (a real app, found by using it).** Installed `gnome-calculator` (GTK)
+and drove arithmetic purely by meaning: `uia_invoke('7'), ('+'), ('5'), ('=')` —
+every press returned `True`. Then read the answer back by walking the tree
+again — and the **whole floor process segfaulted** (exit 139), each time after a
+flurry of GLib screams: `invalid unclassed pointer in cast to 'AtspiObject'`,
+`g_object_unref: assertion 'old_ref > 0' failed`. The arithmetic worked; *seeing
+its result* killed the floor. KWrite (F178/F179, 314–347 controls) never did
+this — the difference is that a calculator **rebuilds its accessible tree on
+every `=`**, and its tree is large and volatile (407→422 nodes, 325 of them menu
+items that pop in and out).
+
+**Mechanism (the deepest pointer fault yet — not ours alone).** Every
+synchronous AT-SPI call pumps libatspi's own GLib event loop while it waits for
+the D-Bus reply. During that pump, libatspi processes the app's
+*children-changed / defunct* events and **force-finalizes** any node whose remote
+peer just died — *regardless of the ref we hold*. So a long-lived walker that
+collects child refs and unrefs them as it recurses will, on a mutating tree,
+eventually call `g_object_unref` on an object libatspi already freed → the
+`old_ref > 0` double-free → SIGSEGV. Three escalating fixes proved the diagnosis:
+a `STATE_DEFUNCT` guard before touching a node *reduced* the crash but lost the
+TOCTOU race; fetching children **one at a time** (never holding a fistful of
+sibling refs) reduced it further but still lost; making `_unref` a **no-op
+(leak)** ran 15/15 hard cycles spotless — proving the fatal call is precisely our
+unref of a node the toolkit's own event loop already reclaimed.
+
+**Fix (grow the smallest robust primitive — give the volatile work its own
+ephemeral body).** Not unref'ing is crash-proof but leaks in a long-lived floor.
+Both horns dissolve at once if the walk runs in a **short-lived worker process**:
+- `_atspi_call(verb, win, **kw)` spawns `python3 _osbackend_x11.py
+  __atspi_worker__ <req>`; the child sets `_LEAK_REFS = True`, runs the one verb,
+  prints a tagged JSON result, and `os._exit(0)`.
+- In that ephemeral body **leaking is free** — the OS reclaims every byte the
+  instant it exits — so the walk *never unrefs a dead node and never crashes*.
+- The long-lived parent floor never touches the fragile tree, so it can **neither
+  crash nor leak**. A worker that dies anyway on a truly pathological tree just
+  yields the verb's honest empty (`""`, `[]`, `None`, `False`) — degradation, not
+  death. The eight `uia_*` verbs are unchanged; only *where* they run moved
+  (`uia_X` → thin wrapper → `_atspi_call` → `_impl_uia_X` in the child).
+
+**Live (this VM, `_probe_atspi_calc.py`, 2/2).**
+- **Arithmetic by meaning, checked against the app's own readout**: `123 × 8`
+  driven entirely through `uia_invoke`, and `uia_children` reads `984` straight
+  off the calculator's own display — an oracle the floor cannot fake.
+- **The mutation race is gone**: 12 interleaved `press(7,+,9,=)` + full re-walk
+  cycles on the live, rebuilding tree — **no segfault**, every walk returns. The
+  exact sequence that killed the floor now runs to completion.
+- **No regression**: KWrite `uia_name/children/find` and the F179 invoke→click→
+  type→`get_value` round-trip (CJK and all) still pass through the new isolation;
+  `find`'s rect survives the JSON crossing as a tuple.
+
+**Lesson (道法自然).** 出生入死 — what lives also dies; the accessible tree is
+not a fixture but a *living* thing that is born and torn down under your hand. To
+read a living thing safely, do not grip it in a body that must outlive it; lend
+it a body that dies with the reading. 夫唯不爭，故天下莫能與之爭 — by *not*
+contending to free what the toolkit already freed, the floor cannot be made to
+crash. 無有入於無間: the formless worker enters the volatile tree, takes what it
+needs, and dissolves, leaving the long-lived floor untouched — 生而弗有，為而弗恃.
+(Known, deliberately un-pre-solved: the per-call spawn costs latency; a persistent
+recycling worker is the next optimization, to be grown only when a real workload
+makes that friction bite.)
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
