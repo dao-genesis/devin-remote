@@ -19,6 +19,9 @@ import threading
 from ctypes import wintypes
 
 _ole32 = ctypes.windll.ole32
+_user32 = ctypes.windll.user32
+_user32.FindWindowW.restype = ctypes.c_void_p
+_user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
 _oleaut = ctypes.windll.oleaut32
 _oleaut.SysFreeString.argtypes = [ctypes.c_void_p]
 _oleaut.SysAllocString.restype = ctypes.c_void_p
@@ -56,6 +59,7 @@ _IID_IUIAutomation = _guid("{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
 
 # IUIAutomation vtable indices (after IUnknown 0..2)
 _EFH = 6        # ElementFromHandle
+_GETFOCUSED = 8  # GetFocusedElement
 _CTRUE = 21     # CreateTrueCondition
 # IUIAutomationElement vtable indices
 _SETFOCUS = 3   # SetFocus
@@ -104,6 +108,7 @@ _UIA_ControlTypeProperty = 30003
 _UIA_BoundingRectangleProperty = 30001
 _UIA_AutomationIdProperty = 30011   # stable developer-assigned id (semantic handle)
 _UIA_HelpTextProperty = 30013       # tooltip / accessible help string
+_UIA_ProcessIdProperty = 30002      # owning process id (which app the focus is in)
 _TreeScope_Children = 2
 _TreeScope_Descendants = 4
 
@@ -115,6 +120,7 @@ _UIA_ValuePatternId = 10002
 _INVOKE = 3        # IUIAutomationInvokePattern::Invoke
 _VALUE_SET = 3     # IUIAutomationValuePattern::SetValue
 _VALUE_GET = 4     # IUIAutomationValuePattern::get_CurrentValue
+_VALUE_READONLY = 5  # IUIAutomationValuePattern::get_CurrentIsReadOnly
 
 # Control-type ids → readable names (the common ones).
 _CONTROL_TYPES = {
@@ -364,6 +370,40 @@ def uia_find(win: int, name=None, ctype=None, max_scan: int = 6000):
         _release(el)
 
 
+@_hangproof(None)
+def uia_focused():
+    """The element that currently holds the **keyboard focus**, anywhere on the
+    desktop, as ``{"name","type","aid","help","rect":(x,y,w,h),"pid"}`` — or ``None``
+    when nothing focusable does (e.g. the desktop itself). Where :func:`uia_find`
+    asks "where is the control named X in window W", this asks the dual question the
+    floor needs before it *types*: "**where will my keystrokes land right now?**" —
+    the one element that will receive `type_text`/`tap`, across every app at once.
+
+    It is the keyboard's twin of the mouse cursor: a click is aimed at a point, but a
+    keypress is aimed at whatever holds focus, and that target is otherwise invisible.
+    Reading it lets the floor *verify a focus move landed* (did clicking that field,
+    or Tabbing, actually put focus where intended) before committing input — closing
+    the loop the way `_prop_rect` closes the locate→click loop. ``pid`` says which
+    application owns the focus, so the floor can tell "focus is in my target app"
+    from "a dialog/another app stole it". Returns ``None`` on a backend without UIA."""
+    uia = _get_uia()
+    if not uia:
+        return None
+    el = ctypes.c_void_p()
+    if _vcall(uia, _GETFOCUSED, ctypes.c_long,
+              [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(el)) != 0 or not el.value:
+        return None
+    try:
+        return {"name": _prop_bstr(el.value, _UIA_NameProperty),
+                "type": _CONTROL_TYPES.get(_prop_int(el.value, _UIA_ControlTypeProperty)),
+                "aid": _prop_bstr(el.value, _UIA_AutomationIdProperty),
+                "help": _prop_bstr(el.value, _UIA_HelpTextProperty),
+                "rect": _prop_rect(el.value),
+                "pid": _prop_int(el.value, _UIA_ProcessIdProperty)}
+    finally:
+        _release(el.value)
+
+
 def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
     """Return the raw element pointer of the descendant of ``win`` best matching
     name/type, or None. Caller must _release() it. Shared by uia_find and the
@@ -374,7 +414,15 @@ def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
     substring match is kept only as a fallback. ``name`` is tested against the
     accessible Name *and* the AutomationId (exact on either wins) and, as a last
     resort, a substring of Name/AutomationId/HelpText — so icon controls that leave
-    Name empty but carry a semantic AutomationId/tooltip stay reachable."""
+    Name empty but carry a semantic AutomationId/tooltip stay reachable.
+
+    One further preference, learned from a real Replace dialog (Notepad++): a field's
+    **caption** is a static ``Text`` carrying the *same* accessible name as the input
+    it labels (label, ComboBox and Edit were all ``"Replace with:"``). The label sits
+    first in tree order, so a naive exact match returns the *uneditable caption* and a
+    later write silently no-ops. When the caller did not pin a ``ctype``, an exact
+    match on a ``Text`` control is therefore held as a fallback only: an actionable
+    (non-``Text``) control with the same exact name, if one exists, wins."""
     el = _element(uia, win)
     if not el:
         return None
@@ -382,6 +430,7 @@ def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
     arr = ctypes.c_void_p()
     nl = name.lower() if name else None
     fuzzy = None  # first substring match, kept if no exact match is found
+    label = None  # exact match on a static Text caption, kept only as a fallback
     try:
         if _vcall(uia, _CTRUE, ctypes.c_long, [ctypes.POINTER(ctypes.c_void_p)],
                   ctypes.byref(cond)) != 0:
@@ -408,14 +457,26 @@ def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
             nm = (_prop_bstr(ce.value, _UIA_NameProperty) or "").lower()
             aid = (_prop_bstr(ce.value, _UIA_AutomationIdProperty) or "").lower()
             if nm == nl or aid == nl:
+                if ctype is None and t == "Text":
+                    if label is None:
+                        label = ce.value  # caption fallback, keep scanning
+                    else:
+                        _release(ce.value)
+                    continue
                 if fuzzy:
                     _release(fuzzy)
-                return ce.value  # exact Name or AutomationId always wins
+                if label:
+                    _release(label)
+                return ce.value  # exact, actionable Name/AutomationId match wins
             ht = (_prop_bstr(ce.value, _UIA_HelpTextProperty) or "").lower()
             if fuzzy is None and (nl in nm or nl in aid or nl in ht):
                 fuzzy = ce.value  # keep as fallback, do not release
             else:
                 _release(ce.value)
+        if label:
+            if fuzzy:
+                _release(fuzzy)
+            return label
         return fuzzy
     finally:
         _release(cond.value)
@@ -481,6 +542,112 @@ def uia_find_all(win: int, name=None, ctype=None, max_scan: int = 6000) -> list:
         _release(cond.value)
         _release(arr.value)
         _release(el)
+
+
+def _scope_findall(el, uia, max_scan: int = 4000) -> list:
+    """Every descendant element pointer of element ``el`` (TreeScope_Descendants),
+    as a list of raw pointers the caller must ``_release()``. The element-rooted
+    twin of the window-rooted walk inside :func:`uia_find_all` — used to descend a
+    sub-tree (a toolbar, an overflow flyout) that is not itself a window with an
+    HWND. [] on any failure."""
+    cond = ctypes.c_void_p()
+    arr = ctypes.c_void_p()
+    ptrs = []
+    try:
+        if _vcall(uia, _CTRUE, ctypes.c_long, [ctypes.POINTER(ctypes.c_void_p)],
+                  ctypes.byref(cond)) != 0:
+            return []
+        if _vcall(el, _FINDALL, ctypes.c_long,
+                  [ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)],
+                  _TreeScope_Descendants, cond, ctypes.byref(arr)) != 0 or not arr.value:
+            return []
+        n = ctypes.c_int()
+        _vcall(arr.value, _ARR_LEN, ctypes.c_long,
+               [ctypes.POINTER(ctypes.c_int)], ctypes.byref(n))
+        for i in range(min(n.value, max_scan)):
+            ce = ctypes.c_void_p()
+            if _vcall(arr.value, _ARR_GET, ctypes.c_long,
+                      [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+                      i, ctypes.byref(ce)) == 0 and ce.value:
+                ptrs.append(ce.value)
+        return ptrs
+    finally:
+        _release(cond.value)
+        _release(arr.value)
+
+
+@_hangproof([])
+def tray_icons() -> list:
+    """Enumerate the **system-tray (notification-area) icons by meaning**, as
+    ``[{"name","help","aid","rect":(x,y,w,h)}, …]`` in screen coordinates.
+
+    The friction this dissolves (F200): an app resident *only* in the tray owns no
+    normal top-level window, so :func:`list_windows` never returns it — and the host
+    that *does* contain the icons, ``Shell_TrayWnd``, is itself an untitled
+    explorer window the floor does not enumerate. So a window minimised to the tray
+    is the deepest zero-pixel case yet: nothing in the meaning-floor's window list
+    even hints the app is alive. UIA *can* reach the icon (it is a ``Button`` whose
+    Name is the icon's tooltip), but only if you already know the magic class name —
+    knowledge an agent operating by meaning does not have. This verb is that
+    knowledge: it walks the two ``"…Notification Area"`` toolbars of ``Shell_TrayWnd``
+    (promoted icons) plus the overflow flyout (hidden icons), returning every icon
+    as a meaning+rect the floor can then right-click / invoke. The taskbar's own
+    buttons (Start, Search, Task View, running apps) are *not* notification icons and
+    are correctly excluded by scoping to the notification-area toolbars. [] where
+    there is no Windows tray (other backends) or UIA is unavailable."""
+    uia = _get_uia()
+    if not uia:
+        return []
+    out = []
+    seen = set()
+
+    def _collect(root_el):
+        for ce in _scope_findall(root_el, uia):
+            try:
+                if _CONTROL_TYPES.get(_prop_int(ce, _UIA_ControlTypeProperty)) != "Button":
+                    continue
+                rect = _prop_rect(ce)
+                if not rect:
+                    continue
+                nm = _prop_bstr(ce, _UIA_NameProperty) or ""
+                key = (nm, rect)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({"name": nm, "rect": rect,
+                            "help": _prop_bstr(ce, _UIA_HelpTextProperty) or "",
+                            "aid": _prop_bstr(ce, _UIA_AutomationIdProperty) or ""})
+            finally:
+                _release(ce)
+
+    tray = _user32.FindWindowW("Shell_TrayWnd", None)
+    if tray:
+        el = _element(uia, int(tray))
+        if el:
+            try:
+                for sub in _scope_findall(el, uia):
+                    try:
+                        t = _CONTROL_TYPES.get(_prop_int(sub, _UIA_ControlTypeProperty))
+                        nm = _prop_bstr(sub, _UIA_NameProperty) or ""
+                        if t == "ToolBar" and "notification area" in nm.lower():
+                            _collect(sub)
+                    finally:
+                        _release(sub)
+            finally:
+                _release(el)
+    # the overflow flyout (hidden icons) is a separate top-level: class name varies
+    # by Windows build, and every button inside it is a tray icon.
+    for cls in ("NotifyIconOverflowWindow", "TopLevelWindowForOverflowXamlIsland"):
+        ov = _user32.FindWindowW(cls, None)
+        if not ov:
+            continue
+        el = _element(uia, int(ov))
+        if el:
+            try:
+                _collect(el)
+            finally:
+                _release(el)
+    return out
 
 
 def uia_rows(win: int, container_name=None, container_ctype="list",
@@ -583,9 +750,23 @@ def uia_set_value(win: int, value: str, name=None, ctype=None) -> bool:
         if not vp:
             return False
         try:
+            ro = ctypes.c_int(0)
+            if _vcall(vp, _VALUE_READONLY, ctypes.c_long,
+                      [ctypes.POINTER(ctypes.c_int)], ctypes.byref(ro)) == 0 and ro.value:
+                return False  # read-only target (e.g. a static caption): SetValue
+                              # would return S_OK yet write nothing — refuse honestly
+            before = _value_pattern_text(el)
             bstr = _oleaut.SysAllocString(value)
             hr = _vcall(vp, _VALUE_SET, ctypes.c_long, [ctypes.c_void_p], bstr)
-            return hr == 0
+            after = _value_pattern_text(el)
+            if hr != 0:
+                return False
+            # SetValue can return S_OK yet write nothing (a read-only field whose
+            # IsReadOnly the provider under-reports). Treat the write as successful
+            # only if the value actually became what we asked, or at least changed
+            # from before (a field that normalises its input still counts).
+            after = _value_pattern_text(el)
+            return after == value or after != before
         finally:
             _release(vp)
     finally:
@@ -745,42 +926,66 @@ def uia_text(win: int, name=None, ctype=None, max_len: int = 20000) -> str:
     on a ``Pane``'s Name, where ``window_text`` (native HWNDs only) is blind and the
     pattern read is empty (F191). The Name *is* what the accessibility tree reports
     as that element's text, so the fallback reads truth, not a guess. "" if no element
-    or no text by either channel. ``max_len`` bounds a huge document."""
+    or no text by either channel. ``max_len`` bounds a huge document.
+
+    With **no target** (neither ``name`` nor ``ctype``), this reads the window's
+    *primary* text rather than whatever descendant happens to come first: a console's
+    whole scrollback sits on its ``Document`` (TextPattern), but the first child a
+    type-less scan reaches is a scrollbar — so "read this window's text" would silently
+    return a scrollbar's name. It therefore resolves to the main text container in
+    priority order (``Document`` → ``Edit``), and only falls back to the first-element
+    read when none carries text."""
     uia = _get_uia()
     if not uia:
         return ""
+    if name is None and ctype is None:
+        for cand in ("Document", "Edit"):
+            el = _find_ptr(uia, win, None, cand)
+            if el:
+                try:
+                    s = _element_text(el, max_len)
+                finally:
+                    _release(el)
+                if s:
+                    return s
     el = _find_ptr(uia, win, name, ctype)
     if not el:
         return ""
     try:
-        s = ""
-        tp = _pattern(el, _UIA_TextPatternId)
-        if tp:
-            try:
-                rng = ctypes.c_void_p()
-                if _vcall(tp, _TEXT_DOCRANGE, ctypes.c_long,
-                          [ctypes.POINTER(ctypes.c_void_p)],
-                          ctypes.byref(rng)) == 0 and rng.value:
-                    try:
-                        out = ctypes.c_void_p()
-                        if _vcall(rng.value, _RANGE_GETTEXT, ctypes.c_long,
-                                  [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
-                                  max_len, ctypes.byref(out)) == 0 and out.value:
-                            s = ctypes.wstring_at(out.value)
-                            _oleaut.SysFreeString(out.value)
-                    finally:
-                        _release(rng.value)
-            finally:
-                _release(tp)
-        if not s:
-            # No TextPattern (or empty) — a custom editor publishes its buffer as
-            # the element's Name (Scintilla/Notepad++). Read that channel.
-            s = _prop_bstr(el, _UIA_NameProperty)
-            if len(s) > max_len:
-                s = s[:max_len]
-        return s
+        return _element_text(el, max_len)
     finally:
         _release(el)
+
+
+def _element_text(el, max_len: int) -> str:
+    """Read one element's full text: the UIA TextPattern (DocumentRange.GetText) if it
+    models one, else the accessible Name (where a custom-drawn editor publishes its
+    buffer). Shared by :func:`uia_text` so the no-target path and the targeted path read
+    by the same rules."""
+    s = ""
+    tp = _pattern(el, _UIA_TextPatternId)
+    if tp:
+        try:
+            rng = ctypes.c_void_p()
+            if _vcall(tp, _TEXT_DOCRANGE, ctypes.c_long,
+                      [ctypes.POINTER(ctypes.c_void_p)],
+                      ctypes.byref(rng)) == 0 and rng.value:
+                try:
+                    out = ctypes.c_void_p()
+                    if _vcall(rng.value, _RANGE_GETTEXT, ctypes.c_long,
+                              [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+                              max_len, ctypes.byref(out)) == 0 and out.value:
+                        s = ctypes.wstring_at(out.value)
+                        _oleaut.SysFreeString(out.value)
+                finally:
+                    _release(rng.value)
+        finally:
+            _release(tp)
+    if not s:
+        s = _prop_bstr(el, _UIA_NameProperty)
+        if len(s) > max_len:
+            s = s[:max_len]
+    return s
 
 
 @_hangproof("")

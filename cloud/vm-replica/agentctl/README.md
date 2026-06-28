@@ -42,7 +42,7 @@ that matter:
 | `osctl.py` | The floor below the DOM (platform-agnostic): mouse+keys, clipboard, `omnibox_go` (atomic address-bar paste), a screen grab with a dependency-free PNG encoder, the whole gesture + perception (locate/read/template/wait) vocabulary, **and the semantic floor** (`uia_*`) — see below. Includes a **fovea** — `capture_rgb(x,y,w,h)` ROI grab + `foveate()` — a **low-acuity periphery** (`find_color(..., step=n)` coarse scan), a foveated-pursuit `wait_stable`, and a **predictive reach** (`reach()`: acquire→foveate→estimate velocity→click where the target *will be*) for clicking still-moving targets, plus a **closed-loop keyboard servo** (`steer()`: ballistic key-hold→predictive release→rest-then-correct) for driving a *keyboard-moved* momentum control to a perceived goal, and **window addressing** (`list_windows()`/`activate_window()`/`focus_window(name)`: EWMH on X11, `EnumWindows`/`SetForegroundWindow` on Windows) so input reaches the *intended* window among many, not just whatever holds focus — which composes into a **cross-window clipboard relay** (`set_clipboard` → `focus_window(name)` → terminal-paste chord), delivering copied content into a window *by identity*; and **window geometry + move** (`window_geometry(id)` / `move_window(id,x,y,w,h)`) so a window pushed *off* the visible screen — which raising cannot rescue — can be relocated back into reach; and **virtual-desktop addressing** (`num_desktops`/`current_desktop`/`window_desktop`, plus `window_on_current_desktop(id)` — the one cross-platform read that says whether a window has on-screen pixels *right now* — and, where the ground supports it, `set_desktop(n)` to *go there* and `move_window_to_desktop(id,n)` to *bring it here*) so a window on another workspace — which has no on-screen pixels at all — can be *seen* and reached by meaning. On X11 the workspace is an EWMH integer index; on Windows it is the documented `IVirtualDesktopManager`'s GUID identity (F199; the switch/move/count verbs there live only in the build-fragile *internal* interface, so they stay truthful no-ops and the floor drives the off-workspace window in place by meaning). Selects an OS backend at import. |
 | `_osbackend_win.py` | Windows leaf primitives: `SendInput` mouse/keys, clipboard, GDI `BitBlt` capture (whole screen or a source sub-rectangle), window enumerate/activate (`EnumWindows`/`SetForegroundWindow`), geometry/move (`GetWindowRect`/`SetWindowPos`), show-state (`IsIconic`/`IsZoomed`/`ShowWindow`), and **virtual-desktop reads** via the documented `IVirtualDesktopManager` COM (`IsWindowOnCurrentVirtualDesktop`/`GetWindowDesktopId`, F199). |
 | `_osbackend_x11.py` | Linux leaf primitives: X11 + XTEST mouse/keys, selection-owner clipboard, `XGetImage` capture (whole screen or a sub-rectangle; pure `ctypes`, no `python-xlib`), window enumerate/activate (EWMH `_NET_CLIENT_LIST`/`_NET_ACTIVE_WINDOW`), geometry/move (`XGetGeometry`+`XTranslateCoordinates` / EWMH `_NET_MOVERESIZE_WINDOW`), virtual desktops (EWMH `_NET_CURRENT_DESKTOP`/`_NET_NUMBER_OF_DESKTOPS`/`_NET_WM_DESKTOP`), and the **AT-SPI semantic floor** (`libatspi.so.0` bound by pure `ctypes`: map an X window → its accessible frame by `_NET_WM_PID`, walk the toolkit's own control tree). |
-| `_uia_win.py` | Windows semantic floor: the UIAutomation COM tree bound by `ctypes` — the Windows dual of the AT-SPI binding above. Carries the full verb set (toggle/select/expand/range-value/scroll/text) plus `uia_find_item`, which realizes a *virtualized* list item via `ItemContainerPattern` (F183); `uia_find` matches Name/AutomationId/HelpText and `uia_find_all` reads a whole collection by meaning (F184). |
+| `_uia_win.py` | Windows semantic floor: the UIAutomation COM tree bound by `ctypes` — the Windows dual of the AT-SPI binding above. Carries the full verb set (toggle/select/expand/range-value/scroll/text) plus `uia_find_item`, which realizes a *virtualized* list item via `ItemContainerPattern` (F183); `uia_find` matches Name/AutomationId/HelpText and `uia_find_all` reads a whole collection by meaning (F184); also `tray_icons()`, which enumerates the system-tray notification area by meaning so an app with no top-level window is still reachable (F200). |
 | `test_live.py` | End-to-end proof. Drives a real Chrome (and native apps) through every friction family — **~800 live checks across 137 rounds**. |
 
 ## The semantic floor (`uia_*`) — perceive and act by *meaning*
@@ -111,6 +111,9 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   custom-drawn editor (Notepad++/Scintilla) carries no TextPattern and is invisible to
   the native `window_text`, yet publishes its whole buffer as a `Pane`'s Name — the Name
   *is* the tree's report of that element's text, so the read is truth, not a guess (F191).
+  With **no target**, it reads the window's *primary* text container (`Document` → `Edit`),
+  not whatever descendant comes first — so `uia_text(win)` over a console returns the whole
+  scrollback, not a scrollbar's name (F208).
 - `read_selection(restore=True)` — read content that is **drawn, not in the tree**.
   Some surfaces paint their content with no element behind it — LibreOffice Calc renders
   its whole cell grid as one custom control (`uia_text` over the sheet returns only
@@ -151,6 +154,64 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   Name Box (a real click focuses it), types the reference, and verifies the jump via the
   box's own readback — with a geometry fallback that self-heals a box left poisoned by a
   rejected reference, and an up-front reject of non-references (JOURNAL F197).
+- `tray_icons()` / `tray_invoke(name)` / `tray_context(name, *path)` — operate an app
+  resident **entirely in the system tray**, which owns *no* top-level window (the deepest
+  zero-pixel surface: absent from `list_windows`, its only presence a `NotifyIcon` inside the
+  untitled `Shell_TrayWnd`). `tray_icons()` enumerates the notification area *by meaning* —
+  scoped to the `"…Notification Area"` toolbars + overflow flyout, so taskbar buttons
+  (Start/Search/Task View) are excluded — returning each icon's `{name,help,aid,rect}`;
+  `tray_context` right-clicks an icon by meaning then walks its `#32768` context menu via the
+  same `menu_windows()` path as `uia_context`. Proven `_probe_tray.py` 8/8 on a hidden-Form
+  NotifyIcon fixture (JOURNAL F200). `[]`/no-op on a backend with no Windows tray.
+- `window_opaque(win)` — True when a window has **pixels but no operable meaning**: its a11y
+  tree exposes only the OS window frame (caption buttons + System menu), no application control.
+  The inverse of the zero-pixel frontier — a GTK app on Windows (Inkscape's whole client area is
+  one opaque UIA `Pane`; File/Edit/the palette are invisible), a game, a bare `<canvas>`. It
+  disambiguates `uia_find → None` ("wrong name" vs "no semantic surface here"), so the floor can
+  *switch channels deliberately* — drive by **pixels+keyboard** (`screenshot`/`find_color`/`pixel`
+  + `tap`/`drag`/`click`) where meaning is absent. Proven `_probe_opaque.py` 7/7 (and live on real
+  Inkscape: rectangle drawn + filled #FF0000 entirely by keys+pixels) (JOURNAL F201).
+- `get_clipboard_files()` / `set_clipboard_files(paths, move=False)` — the **file clipboard**
+  (`CF_HDROP`), the non-text twin of `set_clipboard`/`get_clipboard`: a Ctrl+C in Explorer puts a
+  *file list*, not text, so the text channel reads `""`. These read the dropped-file list
+  (`DragQueryFileW`) and originate one (hand-built `DROPFILES` + the `"Preferred DropEffect"` format
+  Explorer needs to copy vs. move), so the floor can see what a user copied and paste files into any
+  shell target. Proven `_probe_clipfiles.py` 7/7 incl. a live Explorer Ctrl+V copy (JOURNAL F202).
+  Windows-only; `[]`/`False` no-op on X11 (the `text/uri-list` selection) until a real failure.
+- `get_clipboard_image(path)` / `set_clipboard_image(path)` — the **image clipboard** (`CF_DIB`),
+  the third clipboard tongue (text / files / image). An app's "Copy" of a picture is a bitmap,
+  invisible to the text and file clipboards. These materialise a copied image as a PNG the floor's
+  own perception (`find_color`/template/`ocr`) reads — a screenshot by another name — and originate
+  one to paste into Paint/docs. Reuses the floor's `zlib` PNG codec (`_png` + `_decode_png_rgb`), no
+  new dep. Proven `_probe_clipimage.py` 6/6 (pixel-exact round-trip + reads an external app's
+  `Clipboard.SetImage`) (JOURNAL F203). Reads 24/32-bit DIBs; `None` on exotic DIBs; Windows-only.
+- `uia_focused()` — the element holding **keyboard focus** right now, desktop-wide, as
+  `{name,type,aid,help,rect,pid}` or `None`. The dual of `uia_find`: not "where is control X" but
+  "where will my keystrokes land?" — the keyboard's twin of the mouse cursor. Lets the floor verify a
+  focus move landed (clicked the right field, Tab went where intended, no dialog stole focus, and via
+  `pid` that focus is in the target app) *before* committing input. Pure read. Proven `_probe_focus.py`
+  5/5 (focus tracked field→button, pid = owner, typing lands where it points) (JOURNAL F204).
+- `screen_observe(deep=False)` — **one structured per-step observation**: `{active, focus, windows:[{id,
+  title,rect,active,opaque,actions:[{name,type,aid,rect}…]}]}`. The perception primitive the public
+  AI-GUI frameworks are built around (UFO's control inventory, OmniParser/Agent-S's set-of-marks),
+  assembled purely from `list_windows`+`active_window`+`window_geometry`+`window_opaque`+`uia_find_all`+
+  `uia_focused`. Inventories the **foreground** window's actionable controls by default (background
+  windows listed without a scan unless `deep=True`); flags `opaque` windows so the agent knows to use
+  pixels. No new OS binding. Proven `_probe_observe.py` 6/6 (JOURNAL F205).
+- `wait_control(win, name=, ctype=, timeout=8)` / `wait_control_gone(...)` — wait for a control to
+  **appear / disappear by meaning** inside a window (returns the `uia_find` dict / bool). The semantic,
+  in-window dual of `wait_window` (new window) and `wait_pixel` (a colour): a dialog's OK button appears
+  a beat after its trigger, a spinner clears later — synchronization every multi-step interaction needs,
+  expressed in meaning not pixels. Pure composition of `uia_find`; `None`/`False` (never raises) without
+  UIA so a caller can fall back to a pixel wait. Proven `_probe_waitctl.py` 5/5 against a window that
+  mutates after it is up (JOURNAL F206).
+- `uia_set_value(win, value, name=, ctype=)` — sets a field **by meaning**, hardened by F207 (forward
+  practice on a real Notepad++ Replace dialog whose label+combo+edit were all named `"Replace with:"`):
+  when no `ctype` is pinned it now targets the **actionable** control, not its same-named static caption,
+  and the keyboard-floor fallback is held to a **read-back proof** — it returns `False` (rather than a
+  data-destroying false success) when a write into a read-only/label target changes nothing, while staying
+  optimistic only for fields whose value cannot be read back at all. Proven `_probe_setvalue.py` 5/5
+  (JOURNAL F207).
 
 Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
 `invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:

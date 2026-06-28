@@ -41,6 +41,18 @@ key_down = _be.key_down
 key_up = _be.key_up
 set_clipboard = _be.set_clipboard
 get_clipboard = _be.get_clipboard
+# File clipboard (CF_HDROP): copy/paste *files* between Explorer and apps. The
+# non-text twin of the clipboard above — a Ctrl+C in Explorer puts a file list,
+# not text, so get_clipboard is blind to it. Fall back to [] / False on a backend
+# that predates these (e.g. an X11 ground without a file-list selection bridge).
+get_clipboard_files = getattr(_be, "get_clipboard_files", lambda: [])
+set_clipboard_files = getattr(_be, "set_clipboard_files", lambda paths, move=False: False)
+# Image clipboard (CF_DIB): the third clipboard tongue (text / files / image). Lets
+# the floor *see* an image an app put on the clipboard ("Copy image", a chart, a
+# screenshot tool) as pixels its own perception reads, and paste one into Paint/docs.
+_get_clipboard_image_rgb = getattr(_be, "get_clipboard_image_rgb", lambda: None)
+_set_clipboard_image_rgb = getattr(_be, "set_clipboard_image_rgb",
+                                   lambda w, h, rgb: False)
 _mouse_button = _be.mouse_button
 _mouse_wheel = _be.mouse_wheel
 # Window addressing (enumerate + activate). Backends expose these; if a backend
@@ -198,11 +210,31 @@ def uia_set_value(win, value, name=None, ctype=None) -> bool:
     field" holds whether the toolkit models a truthful ValuePattern, a lying one, or only
     lets a person type. Composed of existing leaves (``uia_find`` + the click/key floor).
     Returns True once the value is written or typed; falls back to the pattern's own claim
-    only when the field can be neither clicked nor focused (e.g. off-screen)."""
+    only when the field can be neither clicked nor focused (e.g. off-screen).
+
+    The keyboard floor can lie too: typing into a **read-only** field (a caption, a
+    disabled box, a log view) changes nothing, yet a click+type would blindly report
+    success — exactly the bug a real Notepad++ Replace dialog exposed, where the label,
+    combo and edit all shared one name. So the typed path is held to the *same* proof as
+    the pattern path: a read-back. The write is trusted only when the value actually
+    became ``value`` or at least *changed* from before; it stays optimistic only when the
+    field's value cannot be read back at all (a Scintilla editor exposes no value), so a
+    truly-unobservable-but-working field is not wrongly failed."""
     value = str(value)
+    before = uia_get_value(win, name=name, ctype=ctype)
     pattern_ok = _uia_set_value_pattern(win, value, name=name, ctype=ctype)
     if pattern_ok and uia_get_value(win, name=name, ctype=ctype) == value:
         return True  # pattern wrote it and a read-back proves it
+
+    def _landed() -> bool:
+        after = uia_get_value(win, name=name, ctype=ctype)
+        if after == value:
+            return True              # exact: the value took
+        if after != before:
+            return True              # changed (a field that normalises its input)
+        return before == "" and after == ""  # unobservable value → stay optimistic;
+        #                                       readable and unchanged → it did not land
+
     # Unconfirmed: pattern refused, or claimed success without a confirming read-back.
     el = uia_find(win, name=name, ctype=ctype)
     if el and el.get("rect"):
@@ -210,10 +242,10 @@ def uia_set_value(win, value, name=None, ctype=None) -> bool:
         if w > 0 and h > 0:
             click(x + w // 2, y + h // 2)  # a real click cannot lie about focus
             _type_into_focused(value)
-            return True
+            return _landed()
     if uia_focus(win, name=name, ctype=ctype):
         _type_into_focused(value)
-        return True
+        return _landed()
     return pattern_ok  # cannot reach the keyboard floor — trust the pattern's claim
 
 
@@ -273,6 +305,11 @@ def uia_drag(win, name=None, ctype=None, to_name=None, to_ctype=None,
 # the universal keyboard floor (osctl.type/key) types into them. False if no element
 # / UIA unavailable.
 uia_focus = getattr(_be, "uia_focus", lambda win, name=None, ctype=None: False)
+# Read which element holds keyboard focus *right now*, desktop-wide (F204): the dual
+# of uia_find — "where will my keystrokes land?" Returns {name,type,aid,help,rect,pid}
+# or None. Lets the floor verify a focus move landed (clicked the right field, Tab
+# went where intended, no dialog stole focus) before it commits input. None w/o UIA.
+uia_focused = getattr(_be, "uia_focused", lambda: None)
 # UIA TextPattern read (F170): read an element's full text via DocumentRange.GetText
 # — the deep read that reaches INTO modern documents (a Chrome/Electron page, a rich
 # editor) where uia_get_value (single-line value fields) returns empty and the native
@@ -317,6 +354,165 @@ uia_set_range_value = getattr(_be, "uia_set_range_value", lambda win, value, nam
 # by name, scrolls it into view, and returns its now-visible {"name","type","rect"}
 # so the pixel floor can reach it and the other uia_* verbs see the realized element.
 uia_find_item = getattr(_be, "uia_find_item", lambda win, item, container_name=None, container_ctype="list", max_scan=6000: None)
+# tray_icons (F200): the system tray (notification area) is the deepest zero-pixel
+# surface — an app resident there owns no top-level window, so list_windows never
+# names it, and the host that holds the icons (Shell_TrayWnd) is an untitled shell
+# window the floor does not enumerate either. This returns every tray icon by
+# MEANING — [{"name","help","aid","rect"}] in screen coords — closing the loop to
+# the mouse (right-click the rect for the icon's context menu) so an app that has
+# retreated entirely to the tray is still operable. [] on a backend with no tray.
+tray_icons = getattr(_be, "tray_icons", lambda: [])
+
+
+def _tray_find(name: str):
+    """The one tray icon whose name/tooltip/aid best matches ``name`` — exact
+    (case-insensitive) wins over a substring, mirroring uia_find's preference."""
+    nl = name.lower()
+    fuzzy = None
+    for ic in tray_icons():
+        fields = [(ic.get("name") or "").lower(), (ic.get("help") or "").lower(),
+                  (ic.get("aid") or "").lower()]
+        if nl in fields:
+            return ic
+        if fuzzy is None and any(nl in f for f in fields):
+            fuzzy = ic
+    return fuzzy
+
+
+def tray_invoke(name: str, right: bool = False, pause: float = 0.4) -> bool:
+    """Click a **system-tray icon by meaning** — ``tray_invoke("OneDrive")``. Finds
+    the icon via :func:`tray_icons` and clicks its centre (``right=True`` for the
+    context menu). The mouse is the honest actuator here: a tray icon exposes only a
+    legacy IAccessible default action, not a real UIA Invoke pattern, so a real
+    click is what a human (and a screen reader's "do default") does. Returns True iff
+    an icon matched ``name``. Pair with :func:`tray_context` to also pick a menu item."""
+    ic = _tray_find(name)
+    if not ic or not ic.get("rect"):
+        return False
+    x, y, w, h = ic["rect"]
+    click(x + w // 2, y + h // 2, right=right)
+    time.sleep(pause)
+    return True
+
+
+def tray_context(name: str, *path: str, pause: float = 0.45) -> bool:
+    """Right-click a **tray icon by meaning** then pick from its context menu by
+    meaning — ``tray_context("DaoTray", "Quit")``. The tray's twin of
+    :func:`uia_context`: a NotifyIcon's menu opens as the same untitled native
+    ``#32768`` popup that ``list_windows`` cannot see, so the path is walked through
+    :func:`menu_windows` exactly as for any other context menu. Returns True iff the
+    icon matched and every name on the path was found and clicked. Composed of
+    existing floor verbs, so one implementation serves every backend that has a tray."""
+    if not path:
+        return False
+    if not tray_invoke(name, right=True, pause=pause):
+        return False
+    return _walk_menu_path(path, pause)
+
+
+# A window's UIA tree always carries its *frame* even when the toolkit inside
+# exposes nothing: the OS-drawn caption buttons and the system menu. These names
+# (and the structural control types) are scaffolding, never an app's operable
+# control, so window_opaque discounts them when asking "is there any meaning here?"
+_OPAQUE_CHROME_NAMES = frozenset(
+    {"minimize", "maximize", "restore", "close", "system",
+     "application", "move", "size"})
+_OPAQUE_ACTIONABLE = frozenset(
+    {"Button", "MenuItem", "Edit", "Document", "CheckBox", "RadioButton",
+     "ComboBox", "Tab", "TabItem", "Hyperlink", "ListItem", "TreeItem",
+     "Slider", "Spinner", "SplitButton", "DataItem", "Text", "List", "Tree"})
+
+
+def window_opaque(win: int, max_scan: int = 1500) -> bool:
+    """True when a window has **pixels but no operable meaning** — its UIA/AT-SPI
+    tree exposes no application control, only the OS window frame (the caption
+    buttons + system menu). Such a window must be driven by the **pixel+keyboard**
+    channel, not by meaning: a GTK app on Windows (Inkscape exposes its whole client
+    area as a single opaque ``Pane`` — File/Edit/the toolbox/the palette are all
+    invisible to UIA), a game, a video surface, a bare ``<canvas>``.
+
+    The friction this dissolves (F201): ``uia_find(win, name=…) → None`` is
+    *ambiguous* — it means **either** "that control isn't here, try another name"
+    **or** "this whole window has no semantic surface, stop searching by meaning".
+    An agent that cannot tell them apart wastes its turns guessing names at a wall.
+    ``window_opaque`` answers the second question directly, so the floor can *switch
+    channels deliberately*: meaning where it exists, pixels+keys where it does not —
+    知止不殆, knowing where the meaning-floor stops is itself part of operating it.
+
+    Honest boundary: this is a heuristic over the a11y tree, not an oracle. It
+    discounts controls whose names match the OS frame (``Close``/``Minimize``/… and
+    the ``System`` menu), so a *real* app whose **only** actionable control happens
+    to be named exactly "Close" could read as opaque — vanishingly rare for a
+    genuinely operable window, and recorded rather than papered over. Frame names
+    are English here; a localized OS frame would need its own name set."""
+    if not window_exists(win):
+        return False
+    for e in uia_find_all(win, max_scan=max_scan):
+        if (e.get("type") in _OPAQUE_ACTIONABLE
+                and (e.get("name") or "").strip().lower() not in _OPAQUE_CHROME_NAMES):
+            return False
+    return True
+
+
+def _actionable(elems: list) -> list:
+    """Keep only the elements an agent could act on — the F201 actionable control
+    types, minus the OS window-frame chrome — so an observation is decision-ready
+    rather than raw a11y noise."""
+    out = []
+    for e in elems:
+        if (e.get("type") in _OPAQUE_ACTIONABLE
+                and (e.get("name") or "").strip().lower() not in _OPAQUE_CHROME_NAMES):
+            out.append({"name": e.get("name") or "", "type": e.get("type"),
+                        "aid": e.get("aid") or "", "rect": e.get("rect")})
+    return out
+
+
+def screen_observe(deep: bool = False, max_actions: int = 400,
+                   max_scan: int = 4000) -> dict:
+    """One structured snapshot of the whole screen — the per-step *observation* a
+    GUI agent reasons over — composed from the floor's own reads:
+
+        {
+          "active":  <hwnd or None>,             # the foreground window's id
+          "focus":   {name,type,aid,rect,pid} | None,   # where keystrokes land now
+          "windows": [ {"id","title","rect","active","opaque","actions":[…]}, … ],
+        }
+
+    Each window carries its frame ``rect`` and an ``opaque`` flag (F201: pixels but
+    no operable meaning), and — for the **foreground** window by default — its list
+    of *actionable* controls (`{name,type,aid,rect}`, the F201 control types minus
+    frame chrome), so the snapshot is decision-ready, not raw tree dump. The active
+    window is the one an agent almost always acts in; scanning every window's full
+    a11y tree each step is costly and rarely needed, so background windows are listed
+    (id/title/rect/opaque) without an action scan unless ``deep=True``.
+
+    This is the perception primitive the public AI-GUI frameworks are built around —
+    UFO's per-app *control inventory*, OmniParser / Agent-S's *set-of-marks* of
+    labelled, clickable regions: one call that answers "what is on screen and what can
+    I do right now?" Here it is assembled from `list_windows` + `active_window` +
+    `window_geometry` + `window_opaque` + `uia_find_all` + `uia_focused`, so it speaks
+    *meaning* where a window offers it and flags ``opaque`` where the agent must drop
+    to the pixel+keyboard channel — the floor's own discipline, surfaced as one read.
+    On a backend without UIA, ``actions`` is ``[]`` and ``opaque`` ``False`` (the
+    pixel floor still applies); the window list and geometry remain truthful."""
+    act = active_window()
+    obs = {"active": act, "focus": uia_focused(), "windows": []}
+    budget = max_actions
+    for w in list_windows():
+        wid = w.get("id")
+        entry = {"id": wid, "title": w.get("title") or "",
+                 "rect": None, "active": wid == act, "opaque": False, "actions": []}
+        geo = window_geometry(wid)
+        if geo:
+            entry["rect"] = (geo["x"], geo["y"], geo["w"], geo["h"])
+        if deep or wid == act:
+            entry["opaque"] = window_opaque(wid, max_scan=max_scan)
+            if not entry["opaque"] and budget > 0:
+                acts = _actionable(uia_find_all(wid, max_scan=max_scan))
+                entry["actions"] = acts[:budget]
+                budget -= len(entry["actions"])
+        obs["windows"].append(entry)
+    return obs
 
 
 def uia_menu(win: int, *path: str, pause: float = 0.45) -> bool:
@@ -565,6 +761,51 @@ def wait_window_closed(win: int, timeout: float = 10.0,
     deadline = time.time() + timeout
     while True:
         if not window_exists(win):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval)
+
+
+def wait_control(win: int, name=None, ctype=None, timeout: float = 8.0,
+                 interval: float = 0.25, max_scan: int = 4000) -> "dict | None":
+    """Block until a control matching ``name``/``ctype`` appears *inside* ``win`` by
+    **meaning**, then return its ``uia_find`` dict (``{name,type,aid,help,rect}``) —
+    or ``None`` on timeout. The semantic dual of :func:`wait_window` (whole new
+    window) and :func:`wait_pixel` (a colour): a GUI is a process in time *within* a
+    window too — clicking a menu item opens a dialog whose **OK** button appears a
+    beat later; expanding a panel, switching a tab, or a list finishing its load all
+    make a control *materialise in an existing window* after a delay. Acting the
+    instant after the trigger races that birth and finds nothing; pixel waits are
+    blind to whether the control is *operable* yet, only that something was drawn.
+    This polls ``uia_find`` so the very next step can invoke/type against a control
+    the floor has just confirmed is present — the synchronization every multi-step
+    interaction needs, expressed in meaning rather than pixels. Returns ``None``
+    (never raises) on a backend without UIA, so a caller can fall back to a pixel
+    wait. Pure composition of :func:`uia_find`."""
+    deadline = time.time() + timeout
+    while True:
+        hit = uia_find(win, name=name, ctype=ctype, max_scan=max_scan)
+        if hit is not None:
+            return hit
+        if time.time() >= deadline:
+            return None
+        time.sleep(interval)
+
+
+def wait_control_gone(win: int, name=None, ctype=None, timeout: float = 8.0,
+                      interval: float = 0.25, max_scan: int = 4000) -> bool:
+    """Block until a control matching ``name``/``ctype`` is **no longer** present in
+    ``win`` (or ``win`` itself is gone), returning True once absent or False on
+    timeout. The disappearance dual of :func:`wait_control`: the readiness signal of
+    countless operations is something *vanishing* — a "Loading…"/spinner clearing, a
+    progress dialog's controls going away, a validation error dismissing once a field
+    is fixed. Waiting for the next control to appear is not enough when the gate is an
+    old one leaving; this is that gate. Pure composition of :func:`uia_find`."""
+    deadline = time.time() + timeout
+    while True:
+        if not window_exists(win) or uia_find(win, name=name, ctype=ctype,
+                                              max_scan=max_scan) is None:
             return True
         if time.time() >= deadline:
             return False
@@ -935,6 +1176,88 @@ def _png(width: int, height: int, rgb: bytes) -> bytes:
             + chunk(b"IHDR", ihdr)
             + chunk(b"IDAT", zlib.compress(bytes(raw), 6))
             + chunk(b"IEND", b""))
+
+
+def _decode_png_rgb(blob: bytes) -> "tuple[int, int, bytes]":
+    """Decode a PNG produced by :func:`_png` (8-bit RGB, no interlace) back to
+    ``(w, h, rgb)``. Supports the standard PNG row filters (None/Sub/Up/Average/
+    Paeth) so it reads any baseline truecolour PNG, not only filter-0 ones. The
+    inverse of :func:`_png`; used by :func:`set_clipboard_image` to load an image
+    the floor wrote (a screenshot, a captured region) before placing it on the
+    clipboard. Raises on a non-RGB/interlaced/16-bit PNG (honest, not silent)."""
+    if blob[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    i, w, h, idat = 8, 0, 0, bytearray()
+    while i < len(blob):
+        n = struct.unpack(">I", blob[i:i + 4])[0]
+        tag = blob[i + 4:i + 8]
+        data = blob[i + 8:i + 8 + n]
+        if tag == b"IHDR":
+            w, h, bit, ctype, _, _, interlace = struct.unpack(">IIBBBBB", data)
+            if bit != 8 or ctype != 2 or interlace != 0:
+                raise ValueError("only 8-bit truecolour, non-interlaced PNG")
+        elif tag == b"IDAT":
+            idat += data
+        elif tag == b"IEND":
+            break
+        i += 12 + n
+    raw = zlib.decompress(bytes(idat))
+    stride = w * 3
+    out = bytearray(h * stride)
+    prev = bytearray(stride)
+    pos = 0
+    for y in range(h):
+        ft = raw[pos]; pos += 1
+        line = bytearray(raw[pos:pos + stride]); pos += stride
+        if ft == 1:        # Sub
+            for x in range(3, stride):
+                line[x] = (line[x] + line[x - 3]) & 0xFF
+        elif ft == 2:      # Up
+            for x in range(stride):
+                line[x] = (line[x] + prev[x]) & 0xFF
+        elif ft == 3:      # Average
+            for x in range(stride):
+                a = line[x - 3] if x >= 3 else 0
+                line[x] = (line[x] + ((a + prev[x]) >> 1)) & 0xFF
+        elif ft == 4:      # Paeth
+            for x in range(stride):
+                a = line[x - 3] if x >= 3 else 0
+                b = prev[x]
+                c = prev[x - 3] if x >= 3 else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[x] = (line[x] + pr) & 0xFF
+        out[y * stride:(y + 1) * stride] = line
+        prev = line
+    return w, h, bytes(out)
+
+
+def get_clipboard_image(path: str) -> "str | None":
+    """Materialise the image on the clipboard (``CF_DIB``) as a PNG at ``path`` and
+    return that path, or ``None`` when the clipboard holds no bitmap. The image
+    twin of :func:`get_clipboard`: when an app does "Copy" of a picture (a chart
+    from a spreadsheet, a region from a screenshot tool, a selection in an image
+    editor) the payload is a *bitmap*, invisible to the text and file clipboards.
+    Once written, the floor's own perception (:func:`find_color`, template match,
+    :func:`ocr`) reads it like any screenshot."""
+    rgb = _get_clipboard_image_rgb()
+    if not rgb:
+        return None
+    w, h, data = rgb
+    with open(path, "wb") as f:
+        f.write(_png(w, h, data))
+    return path
+
+
+def set_clipboard_image(path: str) -> bool:
+    """Place the PNG at ``path`` on the clipboard as a ``CF_DIB``, so a Ctrl+V into
+    Paint, a document, a chat box or any image target pastes it. The image twin of
+    :func:`set_clipboard`. ``path`` is a PNG the floor can read (e.g. one it wrote
+    via :func:`screenshot`)."""
+    with open(path, "rb") as f:
+        w, h, rgb = _decode_png_rgb(f.read())
+    return bool(_set_clipboard_image_rgb(w, h, rgb))
 
 
 def capture_rgb(x: int = 0, y: int = 0,
