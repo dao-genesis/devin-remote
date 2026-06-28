@@ -5954,6 +5954,59 @@ left undone.
 
 ---
 
+## F190 — a pattern can *lie*: trust ValuePattern only when a read-back confirms it · `uia_set_value` reaches the keyboard floor through a real click
+
+**Friction.** Into the **database** domain, DB Browser for SQLite (Qt). The Execute-SQL
+editor is a **Scintilla** widget; F189's fallback fired on `SetValue` returning *False*, so
+I expected the same path. Instead `uia_set_value` returned **True** and ran *stale* SQL —
+the new text never reached the editor. Two probes told the real story:
+
+```
+_uia_set_value_pattern("SELECT 1;", editEditor)  -> True    # SetValue *claims* success
+uia_get_value(editEditor)                          -> ""      # …yet nothing was written
+uia_focus(editEditor)                              -> True    # SetFocus *claims* focus
+# (keystrokes then land nowhere)
+```
+
+The Scintilla control's **ValuePattern.SetValue returns success while writing nothing**, and
+its **UIA SetFocus returns success without taking the caret**. Both lie. F189 trusted the
+`SetValue` return code; a lying *True* slipped straight past the fallback and the verb
+reported a write that never happened — worse than an honest failure.
+
+**Primitive hardened — believe the read-back, not the return code; reach focus by a click.**
+`uia_set_value` now trusts the pattern **only when `uia_get_value` reads the value back**.
+Absent that proof — pattern refused (wx, F189), or faked it (Scintilla) — it reaches for the
+**keyboard floor**, and takes focus the one way that cannot lie: a **real click on the
+field's centre** (the widget under the pixels gets the caret), select-all, type. UIA
+`SetFocus` is kept only as a last resort for a field with no on-screen rect; if neither
+click nor focus is possible the pattern's own claim stands. One read-back gate, one click,
+every toolkit:
+
+```python
+pattern_ok = SetValue(value)
+if pattern_ok and uia_get_value(...) == value:   # proof, not a promise
+    return True
+click(centre_of(field)); select_all(); type(value)   # the floor that cannot lie
+```
+
+**Live (this VM), by meaning.** `_probe_dbexec.py` runs **7/7 green** on real DB Browser: the
+raw pattern is shown to *claim* success yet leave the editor empty; `uia_set_value` then
+writes three different `SELECT`s by meaning, and each runs — `alpha`, `42`, `DAO`, and
+`dao 2026 | FLOOR` appear in the results grid (the **computed cell is the oracle** that the
+text truly reached Scintilla). **No regression** — `_probe_wxset.py` 7/7 (wx still falls back
+on an honest False), `_probe_winverbs.py` 15/15 (WPF SetValue succeeds *and* its read-back
+confirms, so it never enters the fallback), `_probe_appfloor.py` 8/8, `_probe_ctxmenu.py`
+7/7, `_probe_qttabs.py` 7/7, `_probe_vcl.py` 9/9. Pure stdlib.
+
+**Lesson (道法自然).** 信言不美，美言不信 — a control's `True` is a *美言*, a smooth word; the
+read-back is the plain truth. A verb that believes return codes is deceived by the toolkits
+that flatter; a verb that asks the field to *show* what it holds cannot be. 為而弗恃 — act,
+but do not lean on the actor's own report of acting; lean on what is. The keyboard floor
+reached through a real click is the bedrock under every lying pattern: pixels do not lie
+about where the caret went.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
