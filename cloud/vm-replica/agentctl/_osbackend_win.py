@@ -300,6 +300,31 @@ def list_windows() -> list:
     return out
 
 
+def menu_windows() -> list:
+    """Enumerate open **native popup menus** as ``[{"id","title","class"}, …]``.
+
+    A right-click context menu (and a classic Win32 menubar dropdown) opens in a
+    window of the standard class ``#32768`` that carries **no title** — so
+    :func:`list_windows`, which keeps only *titled* top-levels, never returns it, and
+    a ``uia_find`` has no window id to search. (Qt/wx menus are titled child windows
+    and *do* show up; this is specifically the titleless native popup.) This is the
+    eye that sees a menu the moment it pops, by its window *class* rather than a
+    title, so the menu's items can be reached by meaning like anything else."""
+    out = []
+
+    def cb(hwnd, _lparam):
+        if user32.IsWindowVisible(hwnd):
+            cls = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, cls, 256)
+            if cls.value == "#32768":
+                out.append({"id": int(hwnd), "title": window_text(int(hwnd)),
+                            "class": cls.value})
+        return True
+
+    user32.EnumWindows(_WNDENUMPROC(cb), 0)
+    return out
+
+
 def activate_window(win: int) -> bool:
     """Raise and focus a window by id. Defeats Windows' foreground lock by briefly
     attaching to the current foreground thread's input queue (the documented

@@ -45,6 +45,10 @@ _mouse_wheel = _be.mouse_wheel
 # Window addressing (enumerate + activate). Backends expose these; if a backend
 # predates them, fall back to no-ops so import never breaks on an older floor.
 list_windows = getattr(_be, "list_windows", lambda: [])
+# menu_windows: open NATIVE popup menus (class #32768) — context menus and classic
+# Win32 dropdowns — which carry no title, so list_windows never returns them. The
+# eye that sees a menu the moment it pops, so uia_find can search it by meaning.
+menu_windows = getattr(_be, "menu_windows", lambda: [])
 activate_window = getattr(_be, "activate_window", lambda win: False)
 # Window geometry (read where a window is) + move/resize (put it back in view).
 # Raising stacks a window; it cannot rescue one placed *off* the visible screen
@@ -226,38 +230,71 @@ def uia_menu(win: int, *path: str, pause: float = 0.45) -> bool:
     scoped to the app window sees the menubar item but never the items beneath it
     (they materialise in another window only once the menu is open). This walks the
     path the way a human does: open the menubar item, then for each further name find
-    it as a ``menuitem`` in *whatever* top-level window it popped into and click it —
-    opening the next submenu, or, on the last name, firing the action. Returns True
-    iff every name on the path was found and clicked. Composed purely of existing
-    floor verbs (``uia_find`` + ``list_windows`` + ``click``), so it is one
-    implementation for every backend."""
+    it as a ``menuitem`` in *whatever* popup it opened into — a titled Qt/wx window
+    (``list_windows``) or a titleless native ``#32768`` popup (``menu_windows``) — and
+    click it, opening the next submenu or, on the last name, firing the action.
+    Returns True iff every name on the path was found and clicked. Composed purely of
+    existing floor verbs, so it is one implementation for every backend."""
     if not path:
         return False
     tap(0x1B)  # ESC — clear any half-open menu so the walk starts clean
     time.sleep(0.15)
-
-    def _click_center(rect):
-        x, y, w, h = rect
-        click(x + w // 2, y + h // 2)
-
     top = uia_find(win, name=path[0], ctype="menuitem")
     if not top or not top.get("rect"):
         return False
     _click_center(top["rect"])
     time.sleep(pause)
-    for name in path[1:]:
-        hit = None
-        for w in list_windows():
-            f = uia_find(w["id"], name=name, ctype="menuitem")
-            if f and f.get("rect"):
-                hit = f
-                break
+    return _walk_menu_path(path[1:], pause)
+
+
+def _click_center(rect):
+    x, y, w, h = rect
+    click(x + w // 2, y + h // 2)
+
+
+def _find_menuitem(name: str):
+    """Find a ``menuitem`` by meaning across *every* place a menu can pop: titled
+    top-level windows (Qt/wx) and titleless native ``#32768`` popups."""
+    for w in list_windows() + menu_windows():
+        f = uia_find(w["id"], name=name, ctype="menuitem")
+        if f and f.get("rect"):
+            return f
+    return None
+
+
+def _walk_menu_path(names, pause: float) -> bool:
+    for name in names:
+        hit = _find_menuitem(name)
         if hit is None:
             tap(0x1B)
             return False
         _click_center(hit["rect"])
         time.sleep(pause)
     return True
+
+
+def uia_context(win: int, target: str, *path: str, ctype=None, pause: float = 0.45) -> bool:
+    """Right-click an element by meaning, then pick from its **context menu** by
+    meaning — ``uia_context(win, "report.pdf", "Open with", "Notepad")``.
+
+    The context menu is the other half of the menu story (F185): a right-click opens
+    a native ``#32768`` popup that carries *no title*, so ``list_windows`` never sees
+    it and ``uia_find`` has no window to search — the menu is on screen yet
+    unaddressable. This finds ``target`` in ``win`` (``ctype`` narrows it), right-clicks
+    its centre, then walks ``path`` through ``menu_windows()`` exactly as
+    :func:`uia_menu` walks a menubar. Returns True iff the target was found and every
+    name on the path was clicked. One implementation, every backend."""
+    if not path:
+        return False
+    el = uia_find(win, name=target, ctype=ctype)
+    if not el or not el.get("rect"):
+        return False
+    tap(0x1B)
+    time.sleep(0.1)
+    x, y, w, h = el["rect"]
+    click(x + w // 2, y + h // 2, right=True)
+    time.sleep(pause)
+    return _walk_menu_path(path, pause)
 
 
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
