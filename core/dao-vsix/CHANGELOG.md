@@ -2,6 +2,11 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.56
+- **根治自更新闭环静默失败(真因: CLI 不在 PATH 找不到)**。`selfUpdateFindCli()` 旧法仅靠 `where devin/code/windsurf` 在 PATH 查 CLI; 但 VSCode 系发行版(本机 Devin = `E:\Windsurf\Devin.exe`)的安装命令行在 `<安装根>\bin\*.cmd`(如 `E:\Windsurf\bin\windsurf.cmd` / `devin-desktop.cmd`), **默认不进 PATH** → `where` 全空 → `--install-extension` 永不执行 → v3.50.46~54 一个都没自动装上(这正是"更新闭环没生效·机器一直跑老码"的根)。
+  - 改为**先按 `path.dirname(process.execPath)` 推导 `bin/*.cmd|exe`**(覆盖 `<根>/bin`、`<根>/../bin`、`<根>`; 名单含 `devin-desktop`), 再退路 `where`/`which`。跨平台(win 用 where、*nix 用 which)。
+  - 经此活机已实测从 v3.50.53 → v3.50.55 安装成功并重载生效。
+
 ## 3.50.55
 - **根治代理检测误判(项⑥·多级网页搜索「网络不可达/站点拒绝代理」真因)**。旧 `detectProxyPort` 用 `net.Socket.connect()` 同步探口, 但 connect 是**非阻塞**的——`try/catch` 捕不到「连接被拒」, 故不论端口是否在监听都「成功」→ 永久误设 `detectedProxyPort=7890`。若用户 Clash/V2Ray 不在 7890(或未开), 代理赛道 CONNECT 必败 → 被墙站(google/stackoverflow 等)直连黑洞 + 代理误判 → 直出错误页。
   - 改为**异步真实 TCP 探活**(等 connect/error 事件·350ms/口超时·逐口短路), 端口实测在监听才采纳; 同步入口只查环境变量/配置(不阻塞事件循环), 端口实探交后台异步。
