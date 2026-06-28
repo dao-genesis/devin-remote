@@ -68,7 +68,11 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   canvases — JOURNAL F179), so invoke-by-meaning answers for *any* visible control.
 - `uia_click` — the union made explicit: locate by meaning, deliver a real click.
 - `uia_get_value` / `uia_set_value` / `uia_focus` — read/write a field's text and
-  give it keyboard focus, by meaning.
+  give it keyboard focus, by meaning. `uia_set_value` writes via the UIA ValuePattern,
+  and **falls back to the keyboard floor** (focus → select-all → type) when a control
+  exposes ValuePattern for *reading* but rejects `SetValue` — e.g. wxWidgets number
+  fields — so "set this field" holds whether the toolkit models a writable pattern or
+  only lets a person type (JOURNAL F189).
 - `uia_toggle` / `uia_toggle_state` — flip and read a checkbox/switch.
 - `uia_select` / `uia_is_selected` — pick a list/tab/radio item and read whether
   it is chosen. `uia_select` tries `SelectionItemPattern` first, then **falls back to

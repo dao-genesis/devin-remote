@@ -161,7 +161,32 @@ uia_find_all = getattr(_be, "uia_find_all", lambda win, name=None, ctype=None, m
 # set_window_text); uia_get_value reads it back; uia_invoke presses a button/link
 # by what it means (UIA analogue of invoke_menu) — no mouse, no pixels. False / ""
 # where UIA or the pattern is unavailable, with the pixel/keystroke floor as fallback.
-uia_set_value = getattr(_be, "uia_set_value", lambda win, value, name=None, ctype=None: False)
+_uia_set_value_pattern = getattr(_be, "uia_set_value", lambda win, value, name=None, ctype=None: False)
+
+
+def uia_set_value(win, value, name=None, ctype=None) -> bool:
+    """Set a field's text by meaning. Tries the UIA **ValuePattern** first — the clean,
+    focus-free write (modern-app dual of ``set_window_text``). But a control can expose
+    ValuePattern for *reading* while rejecting ``SetValue``: wxWidgets edit fields (and
+    some custom/validated inputs) read back fine yet their SetValue is a silent no-op.
+    So when the pattern write fails, this falls back to the **keyboard floor** — focus
+    the field, select-all, clear, type — exactly what a human does. "Set this field"
+    then means the same whether the toolkit models a writable ValuePattern or only lets
+    a person type. Composed of existing leaves (:func:`uia_focus` + the key floor), so
+    one implementation serves every backend; returns False only if the field can be
+    neither written nor focused."""
+    if _uia_set_value_pattern(win, value, name=name, ctype=ctype):
+        return True
+    if not uia_focus(win, name=name, ctype=ctype):
+        return False
+    time.sleep(0.05)
+    key_down(0x11); tap(0x41); key_up(0x11)   # Ctrl+A — select all
+    tap(0x2E)                                  # Delete — clear the selection
+    time.sleep(0.02)
+    type_unicode(str(value))
+    return True
+
+
 uia_get_value = getattr(_be, "uia_get_value", lambda win, name=None, ctype=None: "")
 uia_invoke = getattr(_be, "uia_invoke", lambda win, name=None, ctype=None: False)
 # UIA click (F179): the explicit union of the semantic and gesture floors — locate a
