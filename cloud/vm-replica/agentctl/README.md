@@ -42,7 +42,7 @@ that matter:
 | `osctl.py` | The floor below the DOM (platform-agnostic): mouse+keys, clipboard, `omnibox_go` (atomic address-bar paste), a screen grab with a dependency-free PNG encoder, the whole gesture + perception (locate/read/template/wait) vocabulary, **and the semantic floor** (`uia_*`) — see below. Includes a **fovea** — `capture_rgb(x,y,w,h)` ROI grab + `foveate()` — a **low-acuity periphery** (`find_color(..., step=n)` coarse scan), a foveated-pursuit `wait_stable`, and a **predictive reach** (`reach()`: acquire→foveate→estimate velocity→click where the target *will be*) for clicking still-moving targets, plus a **closed-loop keyboard servo** (`steer()`: ballistic key-hold→predictive release→rest-then-correct) for driving a *keyboard-moved* momentum control to a perceived goal, and **window addressing** (`list_windows()`/`activate_window()`/`focus_window(name)`: EWMH on X11, `EnumWindows`/`SetForegroundWindow` on Windows) so input reaches the *intended* window among many, not just whatever holds focus — which composes into a **cross-window clipboard relay** (`set_clipboard` → `focus_window(name)` → terminal-paste chord), delivering copied content into a window *by identity*; and **window geometry + move** (`window_geometry(id)` / `move_window(id,x,y,w,h)`) so a window pushed *off* the visible screen — which raising cannot rescue — can be relocated back into reach; and **virtual-desktop addressing** (`num_desktops`/`current_desktop`/`window_desktop`, a `desktop` field on `list_windows`, plus `set_desktop(n)` to *go there* and `move_window_to_desktop(id,n)` to *bring it here*) so a window on another workspace — which has no on-screen pixels at all — can be reached. Selects an OS backend at import. |
 | `_osbackend_win.py` | Windows leaf primitives: `SendInput` mouse/keys, clipboard, GDI `BitBlt` capture (whole screen or a source sub-rectangle), window enumerate/activate (`EnumWindows`/`SetForegroundWindow`), geometry/move (`GetWindowRect`/`SetWindowPos`). |
 | `_osbackend_x11.py` | Linux leaf primitives: X11 + XTEST mouse/keys, selection-owner clipboard, `XGetImage` capture (whole screen or a sub-rectangle; pure `ctypes`, no `python-xlib`), window enumerate/activate (EWMH `_NET_CLIENT_LIST`/`_NET_ACTIVE_WINDOW`), geometry/move (`XGetGeometry`+`XTranslateCoordinates` / EWMH `_NET_MOVERESIZE_WINDOW`), virtual desktops (EWMH `_NET_CURRENT_DESKTOP`/`_NET_NUMBER_OF_DESKTOPS`/`_NET_WM_DESKTOP`), and the **AT-SPI semantic floor** (`libatspi.so.0` bound by pure `ctypes`: map an X window → its accessible frame by `_NET_WM_PID`, walk the toolkit's own control tree). |
-| `_uia_win.py` | Windows semantic floor: the UIAutomation COM tree bound by `ctypes` — the Windows dual of the AT-SPI binding above. Carries the full verb set (toggle/select/expand/range-value/scroll/text) plus `uia_find_item`, which realizes a *virtualized* list item via `ItemContainerPattern` (F183). |
+| `_uia_win.py` | Windows semantic floor: the UIAutomation COM tree bound by `ctypes` — the Windows dual of the AT-SPI binding above. Carries the full verb set (toggle/select/expand/range-value/scroll/text) plus `uia_find_item`, which realizes a *virtualized* list item via `ItemContainerPattern` (F183); `uia_find` matches Name/AutomationId/HelpText and `uia_find_all` reads a whole collection by meaning (F184). |
 | `test_live.py` | End-to-end proof. Drives a real Chrome (and native apps) through every friction family — **~800 live checks across 137 rounds**. |
 
 ## The semantic floor (`uia_*`) — perceive and act by *meaning*
@@ -54,8 +54,15 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
 - `uia_name` / `uia_children` — read a window's accessible name; enumerate the
   *real* controls inside it (what X11 child-window enumeration can never see).
 - `uia_find(win, name=, ctype=)` — locate a control by meaning, returning its
-  screen **rect**: the bridge that turns *meaning* into geometry the pixel floor
-  can act on.
+  screen **rect** (plus `aid`/`help`): the bridge that turns *meaning* into geometry
+  the pixel floor can act on. `name` is matched against the accessible Name **and**
+  the **AutomationId** **and** the **HelpText** (tooltip) — so an *icon* button that
+  leaves its Name empty (paint.net's tool/color strip) is still reachable by its
+  stable semantic handle, e.g. `name="foreColorRectangle"` (F184).
+- `uia_find_all(win, name=, ctype=)` — the **plural** of `uia_find`: every matching
+  descendant as a list. Where `uia_children` sees only *direct* children, this reads
+  a whole **collection** by meaning — a file manager's rows, a result set — that
+  lives far below the top window (F184).
 - `uia_invoke` — fire a control's default action with no pixels; **falls through
   to a real click** on the rect when a control exposes no action (text regions,
   canvases — JOURNAL F179), so invoke-by-meaning answers for *any* visible control.
