@@ -567,8 +567,15 @@ def uia_text(win: int, name=None, ctype=None, max_len: int = 20000) -> str:
     — the proper way to read text *out of* modern documents (a Chrome/Electron page,
     a rich editor) where the ValuePattern returns empty or is absent. The deep read
     dual that reaches where :func:`uia_get_value` (single-line value fields) and the
-    native :func:`window_text` (native HWNDs only) cannot. "" if no element or no
-    TextPattern. ``max_len`` bounds a huge document."""
+    native :func:`window_text` (native HWNDs only) cannot.
+
+    Falls back to the element's accessible **Name** when no TextPattern is present
+    (or it yields empty): a custom-drawn editor that models no TextPattern still
+    publishes its content as its Name — Notepad++/Scintilla exposes the whole buffer
+    on a ``Pane``'s Name, where ``window_text`` (native HWNDs only) is blind and the
+    pattern read is empty (F191). The Name *is* what the accessibility tree reports
+    as that element's text, so the fallback reads truth, not a guess. "" if no element
+    or no text by either channel. ``max_len`` bounds a huge document."""
     uia = _get_uia()
     if not uia:
         return ""
@@ -576,28 +583,32 @@ def uia_text(win: int, name=None, ctype=None, max_len: int = 20000) -> str:
     if not el:
         return ""
     try:
+        s = ""
         tp = _pattern(el, _UIA_TextPatternId)
-        if not tp:
-            return ""
-        try:
-            rng = ctypes.c_void_p()
-            if _vcall(tp, _TEXT_DOCRANGE, ctypes.c_long,
-                      [ctypes.POINTER(ctypes.c_void_p)],
-                      ctypes.byref(rng)) != 0 or not rng.value:
-                return ""
+        if tp:
             try:
-                out = ctypes.c_void_p()
-                if _vcall(rng.value, _RANGE_GETTEXT, ctypes.c_long,
-                          [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
-                          max_len, ctypes.byref(out)) != 0 or not out.value:
-                    return ""
-                s = ctypes.wstring_at(out.value)
-                _oleaut.SysFreeString(out.value)
-                return s
+                rng = ctypes.c_void_p()
+                if _vcall(tp, _TEXT_DOCRANGE, ctypes.c_long,
+                          [ctypes.POINTER(ctypes.c_void_p)],
+                          ctypes.byref(rng)) == 0 and rng.value:
+                    try:
+                        out = ctypes.c_void_p()
+                        if _vcall(rng.value, _RANGE_GETTEXT, ctypes.c_long,
+                                  [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+                                  max_len, ctypes.byref(out)) == 0 and out.value:
+                            s = ctypes.wstring_at(out.value)
+                            _oleaut.SysFreeString(out.value)
+                    finally:
+                        _release(rng.value)
             finally:
-                _release(rng.value)
-        finally:
-            _release(tp)
+                _release(tp)
+        if not s:
+            # No TextPattern (or empty) — a custom editor publishes its buffer as
+            # the element's Name (Scintilla/Notepad++). Read that channel.
+            s = _prop_bstr(el, _UIA_NameProperty)
+            if len(s) > max_len:
+                s = s[:max_len]
+        return s
     finally:
         _release(el)
 

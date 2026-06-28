@@ -92,7 +92,11 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
 - `uia_range_value` / `uia_set_range_value` — read `{value,min,max}` of a slider/
   progress bar and set it to a number with no mouse drag.
 - `uia_scroll_into_view` — bring an element below the fold into the viewport.
-- `uia_text` — read a region's full text (multiline, Unicode) via TextPattern.
+- `uia_text` — read a region's full text (multiline, Unicode) via TextPattern, and
+  **falls back to the element's accessible Name** when no TextPattern is present: a
+  custom-drawn editor (Notepad++/Scintilla) carries no TextPattern and is invisible to
+  the native `window_text`, yet publishes its whole buffer as a `Pane`'s Name — the Name
+  *is* the tree's report of that element's text, so the read is truth, not a guess (F191).
 - `uia_find_item(win, item, container_ctype=)` — reach an item a long **virtualized**
   list (WPF/UWP/WinUI) has not materialized into the tree, where plain `uia_find`
   finds nothing: asks the container (UIA `ItemContainerPattern`) to *realize* it by
@@ -129,6 +133,21 @@ ComboBox-expand) the missing patterns return *truthful empties*, not errors —
 so the floor degrades by control, not by platform. `uia_find_item` is additive and
 Windows-only today; AT-SPI returns `None` until an equivalent realize-verb is
 forced there.
+
+### The backend GUI — operate a window with *zero* pixels
+
+Because the semantic verbs address a control by its provider (identity), not its
+screen geometry, they reach a window that has **no on-screen pixels at all** — one
+that is **minimized** (its rect collapses off-screen to `(-32000,-32000)`). The
+official screenshot→click loop is defined by pixels and cannot touch such a window;
+this floor drives it whole. `_probe_backend.py` runs a WPF fixture **9/9 green while
+minimized** — value write+read-back, toggle, ListBox select, range set, tree expand,
+Invoke (→ `PONG`), multiline-Unicode text read — and asserts the window never left
+minimized, so every act used zero pixels (F192). The honest boundary: any verb that
+falls through to a *real click* (a control exposing no pattern; `uia_set_value`'s
+keyboard-floor fallback for a lying ValuePattern; a collapsed ComboBox whose item is
+realized only by its dropdown popup) needs pixels and stops at the minimized wall —
+the pattern channel reaches through, the pixel channel truthfully cannot.
 
 ## Prerequisites
 

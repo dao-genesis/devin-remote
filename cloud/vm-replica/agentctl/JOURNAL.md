@@ -6059,6 +6059,103 @@ row and header alike.
 
 ---
 
+## F191 — `uia_text` falls back to the accessible **Name** · reading a custom editor (Notepad++/Scintilla) that models no TextPattern
+
+**Friction.** Operating a *real* installed app — Notepad++ — on a fresh Windows VM.
+Type a buffer into it, then read it back *by meaning*: `uia_text(win, ctype="document")`
+returns `""`, and so does `ctype="edit"`/`"pane"`. The text is plainly there — the
+title shows the modified star, the glyphs are on screen — yet the deep-read verb sees
+nothing. The native `window_text` is no help either: Scintilla is a custom-drawn control,
+not a Win32 Edit, so there is no `WM_GETTEXT` text to fetch cross-process.
+
+Walking the tree told the truth: Notepad++'s editor surface is a **`Pane`** whose
+**Name** *is* the whole buffer (`'F191 floor 道法自然 …'`), and it carries **no
+TextPattern at all**. `uia_text` only ever asked the TextPattern (`DocumentRange.GetText`)
+and, finding none, returned the empty default — honest, but blind to where this toolkit
+actually keeps its text.
+
+**Primitive grown — a second channel, not a new verb.** `uia_text` now reads the
+element's accessible **Name** (`_prop_bstr(el, NameProperty)`) whenever the TextPattern
+is absent *or* yields empty:
+
+```python
+s = text_pattern_read(el)          # the proper channel for documents (Chrome, rich edit)
+if not s:                          # a custom editor publishes its buffer as the Name
+    s = name_of(el)                # Scintilla/Notepad++ — truth, not a guess
+```
+
+The Name *is* what the accessibility tree reports as that element's text, so the fallback
+reads what is, never a fabricated value. No new symbol — the existing verb now reaches one
+more honest surface.
+
+**Live (this VM), by meaning.** `_probe_textname.py` runs **2/2 green** on real
+Notepad++: a fresh Unicode buffer is typed in, `uia_text(ctype="pane")` reads it back
+verbatim, and the title's modified star is the independent oracle that the bytes truly
+landed. **No regression** — `_probe_winverbs.py` **15/15** (WPF's read-only TextBox has a
+real TextPattern, so the multiline+Unicode read still goes through `DocumentRange.GetText`,
+never the fallback; Chrome's document likewise reads through TextPattern). Pure stdlib.
+
+**Lesson (道法自然).** 大音希聲 — the great sound is almost soundless; a control that
+models no TextPattern was not *silent*, it was speaking on the channel the verb wasn't
+listening on. 弱也者，道之用 — the way works by yielding: stop insisting on the one
+"proper" pattern and accept the text wherever the toolkit puts it. The verb did not grow
+larger; it grew *quieter and wider* — one more way to hear the same truth.
+
+---
+
+## F192 — drive a **fully minimized** (zero on-screen pixels) window by meaning · the backend-GUI floor
+
+**Friction.** The frontier the user named: the *backend* GUI — a window with no pixels at
+all. The official screenshot→reason→click loop is defined by pixels; a **minimized** window
+has none (its `BoundingRectangle` collapses to an off-screen sentinel, here `(-32000,
+-32000)`), so that loop simply cannot act on it. Can *this* floor still operate such a
+window — not by un-minimizing it (that would defeat the test), but by addressing its
+controls through the accessibility provider, which answers by *identity*, not geometry?
+
+The first naïve modality taught the boundary. Driving a *collapsed* `ComboBox`'s item
+failed — but it failed **whether minimized or restored**, so it is not a backend limit at
+all: a WPF ComboBox realizes its item only when the dropdown *popup* renders, and a popup
+needs a surface to draw on. That is a rendering boundary, recorded and then *kept out of*
+the minimized claim, not papered over it.
+
+**Mechanism (no new primitive).** F190's pattern-first design already does this — the
+proof is to *demonstrate and lock* it, not to invent a leaf. Every pixel-free pattern verb
+addresses a control by its provider while the window sits minimized:
+
+```python
+set_window_state(win, "minimized")        # geometry -> (-32000,-32000); zero pixels
+uia_set_value(win, "…", name="field")      # ValuePattern      — write
+uia_toggle(win, name="agree")              # TogglePattern     — flip
+uia_select(win, name="row-5")              # SelectionItem     — pick (ListBox: no popup)
+uia_set_range_value(win, 73, name="level") # RangeValuePattern — set
+uia_expand(win, name="Root")               # ExpandCollapse    — open a tree node
+uia_invoke(win, name="ping")               # InvokePattern     — fires; field := PONG
+uia_text(win, name="doc")                  # TextPattern       — read multiline+unicode
+assert window_state(win) == "minimized"    # never raised; every act used zero pixels
+```
+
+**Live (this VM), by meaning.** `_probe_backend.py` runs **9/9 green** against a WPF
+fixture driven start-to-finish while **minimized**: value write+read-back, toggle (asserted
+by *change*, fixture-state-independent), ListBox row select, range set to 73, tree expand,
+Invoke → `PONG`, multiline Unicode text read — and the window is confirmed still minimized
+*after* every action, proving no verb silently restored it. **No regression** —
+`_probe_winverbs.py` **15/15** on the same provider, visible. Pure stdlib.
+
+**Two honest boundaries (recorded, not hidden).** (1) A *collapsed ComboBox* item needs
+its dropdown popup rendered, so it is out of reach with zero pixels — and even visible it
+needs the popup handled as a separate window. (2) Any verb that *falls through to a real
+click* (a control exposing no pattern; `uia_set_value`'s keyboard-floor fallback for a
+lying ValuePattern) cannot reach a minimized window — the pattern channel can, the pixel
+channel cannot, and the floor degrades to the truthful boundary rather than faking it.
+
+**Lesson (道法自然).** 視之不足見，聽之不足聞，用之不可既 — what cannot be *seen* can
+still be *used*. The screenshot loop binds action to the visible; meaning unbinds it. 為而
+弗恃 — act, but do not lean on the pixels as proof of acting; the read-back, taken while the
+window has no pixels at all, is the proof. The backend GUI is not a different floor — it is
+the same semantic floor, with the eyes closed.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
@@ -6068,5 +6165,13 @@ will only grow a primitive once a real failure is reproduced.
   rendered by the test itself; reading a *real* canvas control means capturing
   reference glyphs from the page's own rendering (a scratch canvas the app
   exposes, or known on-screen labels) before `read_text` can name unknown runs.
+- **A spreadsheet cell by meaning (LibreOffice Calc / VCL).** Calc exposes the sheet
+  as one `Table "Sheet Sheet1"` but does **not** name or realize individual cells to a
+  cross-process reader (`uia_find("B2")` finds nothing; `uia_find("A1")` wrongly matches
+  the *Name Box*). The Name-Box navigation path is unreliable too: `uia_focus` on the VCL
+  ComboBox returns True yet keyboard focus stays on the sheet (a VCL "SetFocus lies", kin
+  to F190), so a typed `Ctrl+A` selects the whole sheet, not the box. A real cell-realize
+  verb (GridItem/Table patterns, or a click-anchored Name-Box navigation) should only be
+  grown once one approach proves robust against VCL — not forced as a fragile leaf.
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
