@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.43
+- **browser_emulate 据「实践暴露的缺陷」夯实（道法自然·实测驱动）**。v3.50.42 落地后 live 实测发现：设备**视口(width/height)与触摸**经「无状态短连」可跨连接、跨导航持久生效 ✓，但 **UA 覆写与精确 DPR 是 CDP 会话级**——`daoCdpBatch` 连接一断即被 Chrome 清除 → UA 永远回落桌面。
+  - 修法：emulate 改为在同一批次内 `Page.enable` + 设备度量 + 触摸 + 会话级 UA override **再叠加** `Page.addScriptToEvaluateOnNewDocument` 注入「持久客户端覆写脚本」（随 target 跨导航存活），覆写 `navigator.userAgent/appVersion/platform/maxTouchPoints/devicePixelRatio` → 客户端检测(responsive/UA 嗅探)稳定按移动端走。
+  - 注入脚本标识符按 `targetId` 存入进程级 `daoCdpUaScripts`，`reset=true` 时 `Page.removeScriptToEvaluateOnNewDocument` 干净移除并清设备度量/触摸/会话 UA。返回体含 `note` 据实标注「viewport/touch 即时生效；UA/platform/dpr 于下次导航刷新后稳定」；服务端凭请求头判设备的站点仍需持久会话（后续螺旋）。
+  - 自检：`node --check`、`build`、rt-flow 115+35 全过；live 实测 emulate 后导航 → navigator.userAgent/maxTouchPoints 稳定按设备呈现。仅改 `core/dao-vsix/src/extension.ts`。
+
 ## 3.50.42
 - **browser_\* 浏览器板块对齐手机 APK / Playwright·Chrome-MCP（道并行而不相悖·additive）**。browser_\* 经独立 `--user-data-dir` 隔离 Chrome（CDP 9333）运行——与用户主浏览器互不相干，既可操作该实例内「已打开的多标签页」（持久 profile·`browser_targets`/`browser_tabs` 全可寻址、每条工具按 `targetId` 路由并行实例），也可新开多标签后台操作而不干扰用户前台；用户可切到该 Chrome 窗口实时观看全过程。
   - **修复 `browser_upload`（确证缺陷）**：原实现先以一个短连 CDP 会话取元素 `objectId`，再到另一会话调 `DOM.setFileInputFiles` → 因 `objectId` 仅在创建它的会话内有效，必报 `Could not find object with given id`、文件永远设不进去。根治：`daoCdpBatch` 的 `params` 支持「函数」形态——用同一会话内已得结果动态构造下一条命令参数；upload 改为单会话内 `Runtime.evaluate(取节点)` → `DOM.setFileInputFiles(串接 objectId)`，并先以 `exists()` 给出清晰 `element-not-found`。

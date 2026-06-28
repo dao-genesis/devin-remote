@@ -2170,6 +2170,7 @@ function getMirrorPageHtml(): string {
 //   插件已实测的内部处理器(/api/* 与 pcGui* / Chrome CDP), 不重复造轮 (大巧若拙)。
 // ═══════════════════════════════════════════════════════════
 const DAO_CDP_PORT = 9333; // browser_* 专用隔离 Chrome 的远程调试端口 (独立 user-data-dir·并行而不相悖)
+const daoCdpUaScripts = {}; // targetId -> Page.addScriptToEvaluateOnNewDocument 标识符 (browser_emulate 注入的持久客户端 UA 覆写脚本, 供 reset 移除)
 
 function daoMcpSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -2482,7 +2483,7 @@ function daoMcpToolDefs() {
         { name: 'browser_upload', description: '给文件输入框设置文件(本机绝对路径)', inputSchema: S({ ref: { type: 'string' }, selector: { type: 'string' }, files: { type: 'array' }, file: { type: 'string' }, targetId: { type: 'string' } }) },
         { name: 'browser_drag', description: '拖拽(from*→to*·ref/selector/x,y/nx,ny)', inputSchema: S({ fromRef: { type: 'string' }, fromSelector: { type: 'string' }, fromX: { type: 'number' }, fromY: { type: 'number' }, fromNx: { type: 'number' }, fromNy: { type: 'number' }, toRef: { type: 'string' }, toSelector: { type: 'string' }, toX: { type: 'number' }, toY: { type: 'number' }, toNx: { type: 'number' }, toNy: { type: 'number' }, targetId: { type: 'string' } }) },
         { name: 'browser_close', description: '关闭标签页(targetId)', inputSchema: S({ targetId: { type: 'string' } }, ['targetId']) },
-        { name: 'browser_emulate', description: '设备模拟(对照手机·视口/UA/触摸): device=iphone|pixel|ipad 预设, 或自定义 width/height/mobile/deviceScaleFactor/userAgent/touch; reset=true 还原', inputSchema: S({ device: { type: 'string', enum: ['iphone', 'pixel', 'ipad'] }, width: { type: 'number' }, height: { type: 'number' }, mobile: { type: 'boolean' }, deviceScaleFactor: { type: 'number' }, userAgent: { type: 'string' }, touch: { type: 'boolean' }, reset: { type: 'boolean' }, targetId: { type: 'string' } }) },
+        { name: 'browser_emulate', description: '设备模拟(对照手机·视口/UA/触摸): device=iphone|pixel|ipad 预设, 或自定义 width/height/mobile/deviceScaleFactor/userAgent/platform/touch; 视口+触摸即时生效, UA/平台/DPR 注入持久脚本于下次导航后稳定; reset=true 还原', inputSchema: S({ device: { type: 'string', enum: ['iphone', 'pixel', 'ipad'] }, width: { type: 'number' }, height: { type: 'number' }, mobile: { type: 'boolean' }, deviceScaleFactor: { type: 'number' }, userAgent: { type: 'string' }, platform: { type: 'string' }, touch: { type: 'boolean' }, reset: { type: 'boolean' }, targetId: { type: 'string' } }) },
         { name: 'browser_cookies', description: 'Cookie 读写(登录态续用): action=get|set|clear|delete', inputSchema: S({ action: { type: 'string', enum: ['get', 'set', 'clear', 'delete'] }, urls: { type: 'array' }, cookies: { type: 'array' }, name: { type: 'string' }, url: { type: 'string' }, domain: { type: 'string' }, path: { type: 'string' }, targetId: { type: 'string' } }) },
         { name: 'browser_pdf', description: '整页导出 PDF(Page.printToPDF·传 path 落盘)', inputSchema: S({ path: { type: 'string' }, landscape: { type: 'boolean' }, background: { type: 'boolean' }, targetId: { type: 'string' } }) },
         // pc_* 补全 (整机对等)
@@ -2651,22 +2652,43 @@ async function daoMcpCallTool(name, a) {
             return daoMcpText({ uploaded: files });
         }
         case 'browser_emulate': {
-            const t = await daoCdpPickPage(a.targetId);
-            if (a.reset) { await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Emulation.clearDeviceMetricsOverride' }, { method: 'Emulation.setUserAgentOverride', params: { userAgent: '' } }, { method: 'Emulation.setTouchEmulationEnabled', params: { enabled: false } }]); return daoMcpText('reset'); }
+            const t = await daoCdpPickPage(a.targetId); const tid = t.id || a.targetId || '';
+            if (a.reset) {
+                const rc = [{ method: 'Emulation.clearDeviceMetricsOverride' }, { method: 'Emulation.setUserAgentOverride', params: { userAgent: '' } }, { method: 'Emulation.setTouchEmulationEnabled', params: { enabled: false } }, { method: 'Page.enable' }];
+                if (tid && daoCdpUaScripts[tid]) { rc.push({ method: 'Page.removeScriptToEvaluateOnNewDocument', params: { identifier: daoCdpUaScripts[tid] } }); delete daoCdpUaScripts[tid]; }
+                await daoCdpBatch(t.webSocketDebuggerUrl, rc); return daoMcpText('reset');
+            }
             const presets = {
-                iphone: { width: 390, height: 844, deviceScaleFactor: 3, mobile: true, ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' },
-                pixel: { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true, ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36' },
-                ipad: { width: 820, height: 1180, deviceScaleFactor: 2, mobile: true, ua: 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' },
+                iphone: { width: 390, height: 844, deviceScaleFactor: 3, mobile: true, ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1', platform: 'iPhone' },
+                pixel: { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true, ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36', platform: 'Linux armv8l' },
+                ipad: { width: 820, height: 1180, deviceScaleFactor: 2, mobile: true, ua: 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1', platform: 'iPad' },
             };
             const p = (a.device && presets[a.device]) || {};
             const width = Math.round(+(a.width || p.width || 390)); const height = Math.round(+(a.height || p.height || 844));
             const mobile = a.mobile != null ? !!a.mobile : (p.mobile != null ? p.mobile : true);
             const dsf = +(a.deviceScaleFactor || p.deviceScaleFactor || 2); const ua = a.userAgent || p.ua;
-            const calls = [{ method: 'Emulation.setDeviceMetricsOverride', params: { width, height, deviceScaleFactor: dsf, mobile } }];
-            if (ua) calls.push({ method: 'Emulation.setUserAgentOverride', params: { userAgent: ua } });
-            calls.push({ method: 'Emulation.setTouchEmulationEnabled', params: { enabled: mobile || !!a.touch } });
-            await daoCdpBatch(t.webSocketDebuggerUrl, calls);
-            return daoMcpText({ emulated: { device: a.device || null, width, height, mobile, deviceScaleFactor: dsf, ua: ua || null } });
+            const touch = mobile || !!a.touch; const platform = a.platform || p.platform || (mobile ? 'Linux armv8l' : '');
+            // 设备度量(视口)与触摸 经实测可跨「无状态短连」持久; 但 UA/精确 DPR 是 CDP 会话级覆写, 连接一断即失。
+            //   故用 Page.addScriptToEvaluateOnNewDocument 注入「持久客户端覆写脚本」(随 target 跨导航存活), 覆写 navigator.userAgent/platform/maxTouchPoints/devicePixelRatio —
+            //   令客户端检测(responsive/UA 嗅探)稳定按移动端走; 服务端凭请求头判设备的站点仍需持久会话(后续螺旋), 此处据实标注。
+            const calls = [
+                { method: 'Page.enable' },
+                { method: 'Emulation.setDeviceMetricsOverride', params: { width, height, deviceScaleFactor: dsf, mobile } },
+                { method: 'Emulation.setTouchEmulationEnabled', params: { enabled: touch } },
+                { method: 'Emulation.setUserAgentOverride', params: { userAgent: ua || '', platform: platform || undefined } },
+            ];
+            if (tid && daoCdpUaScripts[tid]) { calls.push({ method: 'Page.removeScriptToEvaluateOnNewDocument', params: { identifier: daoCdpUaScripts[tid] } }); }
+            const src = '(function(){try{var D=' + JSON.stringify({ ua: ua || '', platform, mobile, touch, dsf }) + ';'
+                + 'function def(o,k,v){try{Object.defineProperty(o,k,{get:function(){return v;},configurable:true});}catch(e){}}'
+                + 'if(D.ua){def(Navigator.prototype,"userAgent",D.ua);def(Navigator.prototype,"appVersion",D.ua.replace(/^Mozilla\\//,""));}'
+                + 'if(D.platform){def(Navigator.prototype,"platform",D.platform);}'
+                + 'def(Navigator.prototype,"maxTouchPoints",D.touch?5:0);'
+                + 'if(D.dsf){def(window,"devicePixelRatio",D.dsf);}'
+                + '}catch(e){}})();';
+            calls.push({ method: 'Page.addScriptToEvaluateOnNewDocument', params: { source: src } });
+            const r = await daoCdpBatch(t.webSocketDebuggerUrl, calls);
+            if (tid && r && r.identifier) daoCdpUaScripts[tid] = r.identifier;
+            return daoMcpText({ emulated: { device: a.device || null, width, height, mobile, touch, deviceScaleFactor: dsf, ua: ua || null, platform: platform || null }, note: 'viewport/touch 即时生效; UA/platform/dpr 经持久脚本于「下次导航/刷新」后稳定按设备呈现(客户端检测)' });
         }
         case 'browser_cookies': {
             const t = await daoCdpPickPage(a.targetId); const act = a.action || 'get';
