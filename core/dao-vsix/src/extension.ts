@@ -2254,7 +2254,10 @@ function daoCdpBatch(wsUrl, calls, timeoutMs = 20000) {
         const sendNext = () => {
             if (queue.length === 0) { finish(null, results[results.length - 1]); return; }
             cur = queue.shift() || null; curId = ++idc;
-            writeFrame(0x1, Buffer.from(JSON.stringify({ id: curId, method: cur.method, params: cur.params || {} }), 'utf8'));
+            // params 可为函数: 用「已得结果」动态构造下一条命令的参数 → 同一会话内串接
+            //   (CDP objectId/nodeId 仅在创建它的会话内有效, 跨会话即「Could not find object with given id」)。
+            let p; try { p = (cur && typeof cur.params === 'function') ? cur.params(results) : ((cur && cur.params) || {}); } catch (ep) { finish(new Error('cdp-param: ' + (ep && ep.message))); return; }
+            writeFrame(0x1, Buffer.from(JSON.stringify({ id: curId, method: cur.method, params: p }), 'utf8'));
         };
         const onMessage = (txt) => {
             let msg; try { msg = JSON.parse(txt); } catch (e8) { return; }
@@ -2479,6 +2482,9 @@ function daoMcpToolDefs() {
         { name: 'browser_upload', description: '给文件输入框设置文件(本机绝对路径)', inputSchema: S({ ref: { type: 'string' }, selector: { type: 'string' }, files: { type: 'array' }, file: { type: 'string' }, targetId: { type: 'string' } }) },
         { name: 'browser_drag', description: '拖拽(from*→to*·ref/selector/x,y/nx,ny)', inputSchema: S({ fromRef: { type: 'string' }, fromSelector: { type: 'string' }, fromX: { type: 'number' }, fromY: { type: 'number' }, fromNx: { type: 'number' }, fromNy: { type: 'number' }, toRef: { type: 'string' }, toSelector: { type: 'string' }, toX: { type: 'number' }, toY: { type: 'number' }, toNx: { type: 'number' }, toNy: { type: 'number' }, targetId: { type: 'string' } }) },
         { name: 'browser_close', description: '关闭标签页(targetId)', inputSchema: S({ targetId: { type: 'string' } }, ['targetId']) },
+        { name: 'browser_emulate', description: '设备模拟(对照手机·视口/UA/触摸): device=iphone|pixel|ipad 预设, 或自定义 width/height/mobile/deviceScaleFactor/userAgent/touch; reset=true 还原', inputSchema: S({ device: { type: 'string', enum: ['iphone', 'pixel', 'ipad'] }, width: { type: 'number' }, height: { type: 'number' }, mobile: { type: 'boolean' }, deviceScaleFactor: { type: 'number' }, userAgent: { type: 'string' }, touch: { type: 'boolean' }, reset: { type: 'boolean' }, targetId: { type: 'string' } }) },
+        { name: 'browser_cookies', description: 'Cookie 读写(登录态续用): action=get|set|clear|delete', inputSchema: S({ action: { type: 'string', enum: ['get', 'set', 'clear', 'delete'] }, urls: { type: 'array' }, cookies: { type: 'array' }, name: { type: 'string' }, url: { type: 'string' }, domain: { type: 'string' }, path: { type: 'string' }, targetId: { type: 'string' } }) },
+        { name: 'browser_pdf', description: '整页导出 PDF(Page.printToPDF·传 path 落盘)', inputSchema: S({ path: { type: 'string' }, landscape: { type: 'boolean' }, background: { type: 'boolean' }, targetId: { type: 'string' } }) },
         // pc_* 补全 (整机对等)
         { name: 'pc_drag', description: '整机鼠标拖拽(归一化坐标 from→to)', inputSchema: S({ fromNx: { type: 'number' }, fromNy: { type: 'number' }, toNx: { type: 'number' }, toNy: { type: 'number' }, button: { type: 'string' } }, ['fromNx', 'fromNy', 'toNx', 'toNy']) },
         { name: 'pc_key_combo', description: '整机组合键(vks=Windows 虚拟键码数组·依次按下逆序抬起·如 [17,67]=Ctrl+C)', inputSchema: S({ vks: { type: 'array' } }, ['vks']) },
@@ -2628,7 +2634,55 @@ async function daoMcpCallTool(name, a) {
             if (act === 'close') { await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.closeTarget', params: { targetId: a.targetId } }]); return daoMcpText('ok'); }
             return daoMcpErr('unknown action: ' + act);
         }
-        case 'browser_upload': { const t = await daoCdpPickPage(a.targetId); const sel = a.ref || a.selector; if (!sel) return daoMcpErr('ref|selector required'); const files = Array.isArray(a.files) ? a.files : (a.file ? [a.file] : []); if (!files.length) return daoMcpErr('files required'); const objId = await daoCdpEvalObj(t, daoBExpr('window.__daoB.el(' + JSON.stringify(sel) + ')')); if (!objId) return daoMcpErr('element-not-found: ' + sel); await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'DOM.enable' }, { method: 'DOM.setFileInputFiles', params: { files, objectId: objId } }]); return daoMcpText({ uploaded: files }); }
+        case 'browser_upload': {
+            const t = await daoCdpPickPage(a.targetId); const sel = a.ref || a.selector;
+            if (!sel) return daoMcpErr('ref|selector required');
+            const files = Array.isArray(a.files) ? a.files : (a.file ? [a.file] : []);
+            if (!files.length) return daoMcpErr('files required');
+            const exists = await daoCdpEvalT(t, daoBExpr('window.__daoB.exists(' + JSON.stringify(sel) + ')'));
+            if (!exists) return daoMcpErr('element-not-found: ' + sel);
+            // 解析节点 objectId 与 setFileInputFiles 必须同一 CDP 会话(否则 objectId 失效→"Could not find object with given id")。
+            //   故用 params 函数把第 2 条 eval 拿到的 objectId 串接给第 3 条, 全在一个 ws 内完成。
+            await daoCdpBatch(t.webSocketDebuggerUrl, [
+                { method: 'DOM.enable' },
+                { method: 'Runtime.evaluate', params: { expression: daoBExpr('window.__daoB.el(' + JSON.stringify(sel) + ')'), returnByValue: false } },
+                { method: 'DOM.setFileInputFiles', params: (res) => ({ files, objectId: (res[1] && res[1].result && res[1].result.objectId) || '' }) },
+            ]);
+            return daoMcpText({ uploaded: files });
+        }
+        case 'browser_emulate': {
+            const t = await daoCdpPickPage(a.targetId);
+            if (a.reset) { await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Emulation.clearDeviceMetricsOverride' }, { method: 'Emulation.setUserAgentOverride', params: { userAgent: '' } }, { method: 'Emulation.setTouchEmulationEnabled', params: { enabled: false } }]); return daoMcpText('reset'); }
+            const presets = {
+                iphone: { width: 390, height: 844, deviceScaleFactor: 3, mobile: true, ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' },
+                pixel: { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true, ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36' },
+                ipad: { width: 820, height: 1180, deviceScaleFactor: 2, mobile: true, ua: 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' },
+            };
+            const p = (a.device && presets[a.device]) || {};
+            const width = Math.round(+(a.width || p.width || 390)); const height = Math.round(+(a.height || p.height || 844));
+            const mobile = a.mobile != null ? !!a.mobile : (p.mobile != null ? p.mobile : true);
+            const dsf = +(a.deviceScaleFactor || p.deviceScaleFactor || 2); const ua = a.userAgent || p.ua;
+            const calls = [{ method: 'Emulation.setDeviceMetricsOverride', params: { width, height, deviceScaleFactor: dsf, mobile } }];
+            if (ua) calls.push({ method: 'Emulation.setUserAgentOverride', params: { userAgent: ua } });
+            calls.push({ method: 'Emulation.setTouchEmulationEnabled', params: { enabled: mobile || !!a.touch } });
+            await daoCdpBatch(t.webSocketDebuggerUrl, calls);
+            return daoMcpText({ emulated: { device: a.device || null, width, height, mobile, deviceScaleFactor: dsf, ua: ua || null } });
+        }
+        case 'browser_cookies': {
+            const t = await daoCdpPickPage(a.targetId); const act = a.action || 'get';
+            if (act === 'get') { const r = await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Network.enable' }, { method: 'Network.getCookies', params: Array.isArray(a.urls) ? { urls: a.urls } : {} }]); return daoMcpText((r && r.cookies) || []); }
+            if (act === 'set') { const list = Array.isArray(a.cookies) ? a.cookies : (a.cookie ? [a.cookie] : []); if (!list.length) return daoMcpErr('cookies required (数组·每项含 name/value, 及 url 或 domain+path)'); await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Network.enable' }, { method: 'Network.setCookies', params: { cookies: list } }]); return daoMcpText({ set: list.length }); }
+            if (act === 'clear') { await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Network.enable' }, { method: 'Network.clearBrowserCookies' }]); return daoMcpText('cleared'); }
+            if (act === 'delete') { if (!a.name) return daoMcpErr('name required'); await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Network.enable' }, { method: 'Network.deleteCookies', params: { name: a.name, url: a.url, domain: a.domain, path: a.path } }]); return daoMcpText('deleted'); }
+            return daoMcpErr('unknown action: ' + act);
+        }
+        case 'browser_pdf': {
+            const t = await daoCdpPickPage(a.targetId);
+            const r = await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Page.enable' }, { method: 'Page.printToPDF', params: { printBackground: a.background !== false, landscape: !!a.landscape, preferCSSPageSize: true } }], 60000);
+            if (!r || !r.data) return daoMcpErr('pdf-empty');
+            if (a.path) { try { const buf = Buffer.from(r.data, 'base64'); fs.writeFileSync(a.path, buf); return daoMcpText({ saved: a.path, bytes: buf.length }); } catch (e) { return daoMcpErr('write: ' + (e && e.message)); } }
+            return daoMcpText({ base64Len: r.data.length, hint: '传 path 可直接落盘为 PDF' });
+        }
         case 'browser_drag': {
             const t = await daoCdpPickPage(a.targetId);
             const from = await daoBResolveXY(t, { ref: a.fromRef, selector: a.fromSelector, x: a.fromX, y: a.fromY, nx: a.fromNx, ny: a.fromNy });
