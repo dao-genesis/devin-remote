@@ -11896,7 +11896,10 @@ async function genericWebProxy(targetUrl, depth = 0) {
             }
             let html = body.toString('utf8');
             const pBase = 'http://127.0.0.1:' + (ws && ws.port ? ws.port : DEFAULT_PORT) + '/__web?u=';
+            const _oh = u.origin.replace(/"/g, '&quot;');
             const inj = '<base href="' + (u.origin + '/').replace(/"/g, '&quot;') + '">'
+                // 预连接源站 → 提前完成 DNS/TCP/TLS 握手, 内嵌网页/搜索页的子资源(图/样式/脚本)更快到位 (对齐浏览器级首屏)。
+                + '<link rel="preconnect" href="' + _oh + '" crossorigin><link rel="dns-prefetch" href="' + _oh + '">'
                 + '<script>(function(){'
                 + 'var PB=' + JSON.stringify(pBase) + ';'
                 + 'var P=((location.origin&&/^https?:/i.test(location.origin))?location.origin+"/__web?u=":PB),B=' + JSON.stringify(u.href) + ';'
