@@ -163,11 +163,15 @@ ok(rStale.ok === false && /ref_stale/.test(rStale.error), "失效 ref → ref_st
   "browseSnapshot", "browseClickRef", "browseTypeRef", "browseHoverRef",
   "browseSelectRef", "browsePressKey", "browseGetText", "browseConsoleEnable", "browseConsole",
   "browseNetworkEnable", "browseNetwork", "browseWait", "browseDragRef",
+  "browseScrollToRef", "browseUploadRef", "browseSetCookie", "browseSetStorage",
 ].forEach((c) => ok(new RegExp(c + ":\\s*async function").test(src), "源级: CMDS 含命令 " + c));
 ok(/Accessibility\.getFullAXTree/.test(src), "源级: cdp facade 映射 Accessibility.getFullAXTree→快照");
 ok(/Input\.dispatchKeyEvent/.test(src), "源级: cdp facade 含 Input.dispatchKeyEvent");
-ok(/命令列表 \(33\)/.test(src), "源级: 浏览器模块文档命令数升至 33");
+ok(/命令列表 \(37\)/.test(src), "源级: 浏览器模块文档命令数升至 37");
 ok(/if\(op==='drag'\)/.test(src), "源级: __daoAct 含 drag 操作(ref→ref 拖拽序列)");
+ok(/if\(op==='scrollto'\)/.test(src), "源级: __daoAct 含 scrollto 操作(按 ref 滚动入视)");
+ok(/if\(op==='upload'\)/.test(src), "源级: __daoAct 含 upload 操作(File+DataTransfer 注入)");
+ok(/tag==='iframe'/.test(src), "源级: snapshot 含同源 iframe 递归");
 
 console.log(failures === 0 ? "\nbrowse-snapshot: ALL PASS" : "\nbrowse-snapshot: " + failures + " FAIL");
 process.exit(failures === 0 ? 0 : 1);
