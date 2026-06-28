@@ -5907,6 +5907,53 @@ of its names and you spend forever collecting names.
 
 ---
 
+## F189 — write by meaning even where ValuePattern reads but won't write (wxWidgets) · `uia_set_value` falls back to the keyboard floor
+
+**Friction.** Into the **audio** domain, Audacity (wxWidgets). `uia_menu("Generate","Tone…")`
+opened the Tone dialog (wx menus — F185 toolkit already covered). The dialog's Frequency
+field reads back fine — `uia_get_value(...) == "440"` — but filling it fails:
+
+```
+uia_set_value(tone, "432", name="Frequency (Hz):", ctype="edit")  -> False   # value stays 440
+uia_get_value(tone,          name="Frequency (Hz):", ctype="edit")  -> "440"   # read still works
+```
+
+The control exposes **ValuePattern for *reading*** yet its **`SetValue` is a silent no-op** —
+a wxWidgets number field (and some validated/custom inputs) model the read but not the
+write. So the floor could *read* a field it could not *fill*: a half verb. Binding "set this
+field" to ValuePattern.SetValue alone mistook one mechanism for the intent.
+
+**Primitive widened — yield to the keyboard floor when the pattern won't write.**
+`uia_set_value` now tries ValuePattern.SetValue first (the clean, focus-free path — WPF and
+Win32 edits take it unchanged), and when that fails it falls back to the **keyboard floor**:
+`uia_focus` the field → Ctrl+A select-all → Delete → `type` the value — exactly what a human
+does. It is **composed of existing leaves** (`uia_focus` + the key floor already proven in
+F169), so one implementation serves every backend; it returns False only if the field can be
+neither written nor focused. This is the same shape of fix as F187 (`uia_select` → Invoke):
+the verb stops insisting on one mechanism and bends to whatever the control offers.
+
+```python
+uia_set_value(tone, "432", name="Frequency (Hz):", ctype="edit")  # -> True
+uia_get_value(tone,          name="Frequency (Hz):", ctype="edit")  # -> "432"  (write landed)
+```
+
+**Live (this VM), by meaning.** `_probe_wxset.py` runs **7/7 green** on real Audacity: the wx
+field reads via ValuePattern, its raw SetValue is proven to fail (value unchanged), then
+`uia_set_value("432")` lands and **reads back "432"** (the read-back is the oracle); OK
+generates a tone and a track appears, read by meaning as `1 Audio 1`. **No regression** —
+`_probe_winverbs.py` 15/15 (WPF ValuePattern write still succeeds on the *first* try, never
+reaching the fallback), `_probe_appfloor.py` 8/8, `_probe_ctxmenu.py` 7/7, `_probe_qttabs.py`
+7/7, `_probe_vcl.py` 9/9. Pure stdlib.
+
+**Lesson (道法自然).** 弱也者道之用 — the way works by yielding. A field's *meaning* is "this is
+where the value goes"; ValuePattern.SetValue is merely one road in, and some toolkits pave
+only the read direction. The verb that demands that one road reaches half the fields; the
+verb that yields — pattern if it writes, else focus-and-type — reaches them all by demanding
+less. 上德無為而無以為 — the higher way acts without forcing one mechanism, and so nothing is
+left undone.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
