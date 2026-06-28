@@ -5383,6 +5383,84 @@ makes that friction bite.)
 
 ---
 
+## F181 — operate a native OpenGL canvas app by meaning (`locate_labels`) · Blender
+
+**Friction (反者道之動 — push into the hardest GUI, let the floor's blindness show).**
+Installed Blender (3D modelling, a self-drawn OpenGL viewport — no toolkit widgets)
+and tried to operate it with the floor. Two senses failed in succession:
+- **Semantic floor is blind here, and says so.** `uia_name(blender)` → `''`,
+  `uia_children(blender)` → `[]`. Blender paints its whole UI on one GL canvas; it
+  exposes no AT-SPI tree. Honest empty, not a crash — but no control has a name.
+- **The OCR path cannot help either.** Every reader since F103 (`read_text`,
+  `locate_word`) needs an *atlas* of the target font's glyphs, and the only atlas
+  the floor can build is rendered by **itself on a browser scratch canvas** — a
+  font Blender does not use. Harvesting an atlas from Blender's *own* rendering
+  founders one rung lower, on **glyph segmentation**: its ~9px proportional
+  anti-aliased labels fuse and split unreliably (`"File"` happens to cut into 4,
+  but `"Render"` shatters into 12). Per-glyph reading is simply lost on small
+  native type. So the floor could not act on Blender at all.
+
+**Mechanism (the seam that was missing).** You do not need to *read* a menu to
+*act* on it. A menu bar / dropdown / toolbar is an **ordered sequence of *known*
+labels parted by wide blank space**, and the item-level gaps are far larger and
+far more reliable than the inter-letter gaps that defeat glyph OCR. If you already
+know *which* labels are there and *in what order* (you do — you wrote "Add → Mesh →
+Cube"), you never have to recognise a glyph; you only have to *count runs* and pair
+them to your list in reading order. 瞽者善聽，聾者善視 — blind to glyphs, the floor
+sees by the one source it can trust: the rhythm of blank space between items.
+
+**Primitive grown — `locate_labels(rgb,size,bbox,labels,fg,axis)` → {label: rect}.**
+Maps an ordered known-label list to click-rects with **no atlas**. Two segmenters,
+fast then count-driven:
+- *Fast path* — one fixed-`gap` blank-run cut (`segment_run` on `x`, the new
+  `_segment_rows` on `y`). Nails *uniform* strips (the menu bar, a plain dropdown)
+  in a single pass.
+- *Count-driven path* (`_segment_rows_n` / `_segment_cols_n` / `_ink_runs_cut`) —
+  a real menu is rarely uniform: Blender's File menu interleaves shortcut text,
+  submenu arrows and several separator rules, so **no single `gap` yields the right
+  band count** (too small splits a separator, too large fuses two items). This
+  borrows the exact discipline of `split_run` (which parts *touching glyphs* once
+  told the glyph count `n`): given the *label* count, cut the ink profile at its
+  `n-1` **widest** blank valleys — ranking gaps *relatively* instead of by an
+  absolute threshold, so it parts items whose spacing is uneven.
+- *Honest degradation, two ways.* It commits only when it can form exactly
+  `len(labels)` bands (a hidden/extra item → `{}`, never a mispairing). And because
+  a spurious valley (shortcut/icon ink) can make the count *match* while a cut is
+  *displaced* — leaving a band hugging a 2–3px sliver — `_reject_thin` rejects any
+  segmentation whose thinnest band collapses on its cross-axis (`{}` rather than a
+  confident-but-wrong map). The File menu honestly returns `{}`; the clean Add/Mesh
+  menus map exactly.
+
+**Live (this VM, recorded + headless oracle).**
+- **Add a Cube to Blender entirely by meaning**: top header `Add` (horizontal,
+  `axis=x`) → `Add` dropdown `Mesh` (`axis=y`, 17 items) → `Mesh` submenu `Cube`
+  (`axis=y`, 10 items). No pixel target was hard-coded; every click was a label
+  located by run-segmentation. Repeated for `Add → Mesh → Monkey`.
+- **Independent oracle the floor cannot fake**: saved the scene through the floor
+  (Ctrl+S — `'S'` is VK `0x53`, A–Z map by formula — then the file browser's name
+  field typed and confirmed by the floor) and re-opened it in a **headless**
+  Blender that never saw the GUI: `ORACLE_MESH_OBJECTS=3 ['Cube','Cube.001',
+  'Suzanne']` — the default cube plus the two the floor added by meaning.
+- **Count-driven correctness, positively**: with the fast path deliberately broken
+  (`gap=1`) on the clean Add menu, the count-driven path recovered the *identical*
+  17-way mapping (`Mesh` at the same rect) — it produces correct maps, not just
+  honest refusals. And the messy File menu → `{}` (honest).
+- **No regression**: `test_live.py` 799/800 — the one fail is the F139 pixel-
+  centroid jitter present since F177, outside this change (which only *adds*
+  `locate_labels` and helpers; no existing path is touched).
+
+**Lesson (道法自然).** 大音希聲，大象無形 — the loudest control needs no sound, the
+plainest form no outline: the floor stopped trying to *read* the canvas and instead
+*counted the silence between things it already knew*. 絕利一源，用師十倍 — cut off
+to the one source you can trust (the rhythm of blank space) and you gain tenfold.
+And 知止不殆: the primitive grows only as far as the count guarantees it, and where
+the menu's own clutter breaks that guarantee it stops and says `{}` — knowing where
+to halt is what keeps it from ever lying. (Known, deliberately un-pre-solved: a
+menu *whose label set you do not know* still needs the atlas path — `locate_labels`
+acts on the known, it does not read the unknown.)
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
