@@ -104,6 +104,12 @@ ok(/function _convNameOf\(a\)/.test(switchSrc),
 ok(/_bigAlert\("⚠ "\+_convNameOf\(a\)\+" 额度仅/.test(switchSrc),
    "源级: 低额提醒以对话名为主体(不前缀账号名)");
 
+// 设备态刷新: 已移出金库的号连墓碑一并清除 → _trk 号数与金库恒等(不积陈迹·知止不殆)
+ok(/loadAcc\(\)\.forEach\(function\(a\)\{ var k=String\(\(a&&\(a\.email\|\|a\.id\)\)\|\|""\)\.toLowerCase\(\)/.test(switchSrc),
+   "源级: _deviceRecentRefresh 以金库邮箱集为准");
+ok(/if\(_vn && !_vault\[e\] && !fresh\[e\]\)\{ delete _trk\[e\]; return; \}/.test(switchSrc),
+   "源级: _trk 中不在金库且本轮无 active 的陈迹号被剪除(号数与金库齐平)");
+
 // ── 公网单网页 ≈ APK 数据齐平: 四处收口护栏 (本轮 v0.37.100) ──────────────────
 const cloudSrc  = fs.readFileSync(path.join(ENGINE, "devin-cloud.js"), "utf8");
 const engineSrc = fs.readFileSync(path.join(ENGINE, "engine.html"), "utf8");
