@@ -2,6 +2,9 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.54
+- **同步 vendored rt-flow(补 3.50.53 漏)**。`core/dao-vsix/rtflow/extension.js` 是 dao-vsix 运行期实际加载的 rt-flow 副本(非 gitignored 构建产物, 须手动随源同步)。3.50.53 漏同步 → 切号面板 `__wamRebuild` 的 rt-flow 侧 15s 节流未随 VSIX 落地(仅 dao-vsix 侧 10s 节流生效)。本次补齐, 双层节流完整。
+
 ## 3.50.53
 - **切号板块三大修复(根治「面板自动跳顶 + 新账号初始化没配好 + 归零清理不生效」)**。
   - **面板自动跳顶根治**: `__wamRebuild` 双层节流(rt-flow 15s + dao-vsix 10s), 大批量验号期间不再每几秒重挂 iframe → 用户可正常滚动和操作。

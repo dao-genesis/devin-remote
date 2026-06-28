@@ -9438,6 +9438,7 @@ function updateStatusBar() {
 //     纯时间滴答 (重置倒计时/"min前切"/采样龄/封禁秒/使用中秒) 不进签名 → 不再触发任何重建。
 //   结构未变时只增量刷新对话追踪区 (_broadcastConvSection 自带签名去抖) → 永不整页闪。
 let _panelStructSig = null;
+let _wamRebuildThrottleTs = 0;
 function _computePanelStructSig() {
   if (!_store) return "init";
   const store = _store;
@@ -9504,8 +9505,12 @@ function _broadcastUI() {
       } catch {}
     }
     // 归一 · 内嵌「切号」: 结构性变化 → 整页重渲推回宿主 → 六板 iframe 重挂 (__wamRebuild)
+    // v4.26.4 · 节流 15s: 大批量验号期间结构签名高频变化, 不至于每几秒重挂 iframe(滚动跳顶·无法操作)
     if (_hostPost) {
-      try { _hostPost({ type: "__wamRebuild", html: _rebuilt || buildHtml() }); } catch {}
+      if (Date.now() - _wamRebuildThrottleTs >= 15000) {
+        _wamRebuildThrottleTs = Date.now();
+        try { _hostPost({ type: "__wamRebuild", html: _rebuilt || buildHtml() }); } catch {}
+      }
     }
     updateStatusBar();
   }, _debMs);
