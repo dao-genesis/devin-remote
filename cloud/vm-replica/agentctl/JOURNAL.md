@@ -5657,6 +5657,85 @@ nothing — only a *real* reach (the file list below the window) grew a real ver
 
 ---
 
+## F185 — the menu lives in another window: `uia_menu` walks a menu path by meaning · FreeCAD / KiCad / Shotcut
+
+**Friction.** The user pushed the floor into the *heavy* domains — **Blender** (3D),
+**FreeCAD** (CAD/Qt), **KiCad** (EDA/wxWidgets), **Shotcut** (video/Qt). These are not
+toy apps; they are driven almost entirely by their **menus**. So the first thing the
+floor reached for was `Edit → Preferences`, and the first thing it hit was a wall:
+
+```
+uia_invoke(freecad, name="Edit", ctype="menuitem")     # -> True
+uia_find_all(freecad, ctype="menuitem")
+#   -> ['File','Edit','View','Tools','Macro','Sketch','PartDesign','Help']   (just the BAR)
+#      'Preferences','Undo','Cut'…  are NOWHERE in the window's tree
+```
+
+The dropdown items simply were not in the window. Watching `list_windows()` while the
+menu opened told the truth: **a dropdown menu is a separate top-level *popup window*.**
+
+```
+before = {w['id'] for w in list_windows()}
+# open Edit (Alt+E, or a click on the bar item's rect)
+new = [w for w in list_windows() if w['id'] not in before]
+#   -> [(1508184, 'FreeCAD')]                      a NEW top window
+uia_find_all(1508184, ctype='menuitem')
+#   -> ['Undo','Redo','Cut','Copy','Paste',…,'Preferences']   the items live HERE
+```
+
+Qt, wx and Win32 all do this — the menu "tears off" into its own HWND/UIA tree the
+moment it opens. Every `uia_find` the floor had was scoped to *one* window, so it could
+see the menubar item but never a single thing beneath it. A whole, universal modality —
+the menu, the primary way these apps are driven — was unreachable by meaning.
+
+**Primitive grown — `uia_menu(win, *path)`.** Invoke a menu path by meaning across the
+popup windows menus open into:
+
+```python
+uia_menu(freecad, "Edit", "Preferences")          # -> True; the Preferences dialog opens
+uia_menu(kicad,   "Help", "About KiCad")           # -> True; the About box opens
+uia_menu(shotcut, "Help", "About Shotcut")         # -> True
+uia_menu(shotcut, "File", "No Such Item ZZZ")      # -> False (clean miss, ESC closes the menu)
+```
+
+It walks the path the way a human does: open the menubar item (click its `uia_find`
+rect), then for each further name find it as a `menuitem` in **whatever** top-level
+window it popped into and click it — opening the next submenu, or, on the last name,
+firing the action. It is **composed purely of floor verbs already present**
+(`uia_find` + `list_windows` + `click`), so it is *one* implementation that holds for
+every backend, and it lives in `osctl` (the composition layer) rather than in a
+platform binding. The read side (F184's `uia_find` across Name/AutomationId/HelpText)
+is what lets each popup item be named; this is its natural action-side complement.
+
+**Live (this VM), by meaning, no pixel hunting.** `_probe_menuapps.py` runs **8/8 green**
+against the real installed apps, each using the *dialog the menu opens* as its oracle:
+- **FreeCAD** (Qt) — `uia_menu("Edit","Preferences")` opened the **Preferences** window.
+- **KiCad** (wxWidgets) — `uia_menu("Help","About KiCad")` opened the **About KiCad** box.
+- **Shotcut** (Qt) — `uia_menu("Help","About Shotcut")` opened the **About** box.
+- a bogus path returned **False** without hanging or leaving a menu half-open.
+
+**Honest environment finding (not a floor bug).** This VM has **no GPU** — it exposes
+only **OpenGL 1.1** (software). FreeCAD warned (needs 2.0) but ran its Qt shell fine, so
+the floor drove it; **Blender refuses to start its UI at all** (it requires OpenGL 4.3).
+The floor *reached and read* Blender's "OpenGL 4.3 … required" dialog by meaning — but
+there is no Blender UI behind it to drive. That is the environment's gap, not the
+floor's; on a GPU host the same `uia_menu` would drive Blender's menus too. Recorded as
+proof of the boundary, honestly: 為而弗恃 — the floor claims only what is really there.
+
+**No regression.** `_probe_appfloor.py` 8/8 (F184) and `_probe_winverbs.py` 15/15
+(F183) both still green. `uia_menu` is additive, pure stdlib, no new deps.
+
+**Lesson (道法自然).** 大方無隅 — the great square has no corners. A fixture has a single
+tidy tree; a real app's most-used surface, its menus, is not even in the same window you
+were looking at. The floor did not learn this by design — it tried the obvious thing,
+the obvious thing failed, and *watching what actually happened* (`list_windows` growing
+by one) showed where the meaning had gone. 反也者道之動 — the way moves by turning back:
+the answer was not a deeper API but to widen the *scope of the search* from one window to
+all of them, which the floor could already do. The verb only names a path the floor was
+always able to walk.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

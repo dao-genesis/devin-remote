@@ -82,6 +82,13 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   list (WPF/UWP/WinUI) has not materialized into the tree, where plain `uia_find`
   finds nothing: asks the container (UIA `ItemContainerPattern`) to *realize* it by
   name, scrolls it into view, and returns its now-visible rect (JOURNAL F183).
+- `uia_menu(win, *path)` — invoke a **menu path** by meaning, e.g.
+  `uia_menu(win, "Edit", "Preferences")`. A dropdown opens as a *separate top-level
+  popup window* (Qt/wx/Win32), so its items are invisible to a `uia_find` scoped to the
+  app window; this opens the menubar item then finds each further name as a `menuitem`
+  in **whatever** window it popped into and clicks it (opening a submenu, or firing the
+  action on the last). Composed of `uia_find`+`list_windows`+`click`, so one
+  implementation serves every backend. Proven on FreeCAD/KiCad/Shotcut (JOURNAL F185).
 
 Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
 `invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:

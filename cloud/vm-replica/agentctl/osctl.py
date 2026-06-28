@@ -216,6 +216,50 @@ uia_set_range_value = getattr(_be, "uia_set_range_value", lambda win, value, nam
 # by name, scrolls it into view, and returns its now-visible {"name","type","rect"}
 # so the pixel floor can reach it and the other uia_* verbs see the realized element.
 uia_find_item = getattr(_be, "uia_find_item", lambda win, item, container_name=None, container_ctype="list", max_scan=6000: None)
+
+
+def uia_menu(win: int, *path: str, pause: float = 0.45) -> bool:
+    """Invoke a menu path by **meaning** — ``uia_menu(win, "Edit", "Preferences")``.
+
+    A dropdown menu does not live inside the window that owns its menubar: Qt, wx
+    and Win32 all open it as a *separate top-level popup window*, so ``uia_find``
+    scoped to the app window sees the menubar item but never the items beneath it
+    (they materialise in another window only once the menu is open). This walks the
+    path the way a human does: open the menubar item, then for each further name find
+    it as a ``menuitem`` in *whatever* top-level window it popped into and click it —
+    opening the next submenu, or, on the last name, firing the action. Returns True
+    iff every name on the path was found and clicked. Composed purely of existing
+    floor verbs (``uia_find`` + ``list_windows`` + ``click``), so it is one
+    implementation for every backend."""
+    if not path:
+        return False
+    tap(0x1B)  # ESC — clear any half-open menu so the walk starts clean
+    time.sleep(0.15)
+
+    def _click_center(rect):
+        x, y, w, h = rect
+        click(x + w // 2, y + h // 2)
+
+    top = uia_find(win, name=path[0], ctype="menuitem")
+    if not top or not top.get("rect"):
+        return False
+    _click_center(top["rect"])
+    time.sleep(pause)
+    for name in path[1:]:
+        hit = None
+        for w in list_windows():
+            f = uia_find(w["id"], name=name, ctype="menuitem")
+            if f and f.get("rect"):
+                hit = f
+                break
+        if hit is None:
+            tap(0x1B)
+            return False
+        _click_center(hit["rect"])
+        time.sleep(pause)
+    return True
+
+
 # Virtual desktops (workspaces). A window on another workspace has no on-screen
 # pixels — addressing it needs more than focus/stack/position: either *go there*
 # (set_desktop) or *bring it here* (move_window_to_desktop). Read side lets the
