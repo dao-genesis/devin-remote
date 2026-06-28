@@ -89,6 +89,16 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   in **whatever** window it popped into and clicks it (opening a submenu, or firing the
   action on the last). Composed of `uia_find`+`list_windows`+`click`, so one
   implementation serves every backend. Proven on FreeCAD/KiCad/Shotcut (JOURNAL F185).
+- `menu_windows()` — enumerate open **native popup menus** (class `#32768`). A
+  right-click context menu / classic Win32 dropdown opens in a *titleless* window, so
+  `list_windows` (titled top-levels only) never returns it; this finds it by window
+  *class*, so its items can be read and clicked by meaning (JOURNAL F186).
+- `uia_context(win, target, *path)` — right-click an element by meaning, then pick from
+  its **context menu** by meaning, e.g. `uia_context(win, "report.pdf", "Open with",
+  "Notepad")`. Finds `target` in `win`, right-clicks it, and walks `path` through
+  `menu_windows()` exactly as `uia_menu` walks a menubar. The two menu verbs share one
+  walk that searches `list_windows()`+`menu_windows()`, so both native and Qt/wx menus,
+  menubar and context, are driven by one code path (JOURNAL F186).
 
 Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
 `invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:

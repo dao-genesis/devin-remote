@@ -5736,6 +5736,65 @@ always able to walk.
 
 ---
 
+## F186 — the other menu: a right-click `#32768` popup has no title, so the floor was blind to it · `menu_windows` + `uia_context`
+
+**Friction.** "继续推进到底 …所有领域所有软件全方位推进实践." So the floor went at the *other*
+menu — the **right-click context menu**, the densest single surface in a file manager,
+an editor, a browser. In 7-Zip it right-clicked a row and reached for `Open`:
+
+```
+click(row_rect, right=True)                      # the menu IS on screen (visible)
+[w for w in list_windows() if w['id'] not in before]   # -> []   NOTHING new
+uia_find_all(any_window, ctype='menuitem')             # -> []   the items are nowhere
+```
+
+The menu was plainly drawn on screen, yet **every floor verb was blind to it.** F185's
+trick — scan `list_windows()` for the popup — found nothing this time. The reason is one
+property: a native Windows context menu opens in a window of class **`#32768`** that has
+**no title**, and `list_windows` keeps only *titled* top-levels (it filters on
+`GetWindowTextLength > 0`, by design — an untitled top-level is usually noise). F185's
+Qt/wx dropdowns were *titled* child windows, so they slipped through; the native popup
+does not. The most common menu on the system was the one the floor could not see.
+
+**Primitives grown — `menu_windows()` + `uia_context(win, target, *path)`.**
+
+```python
+menu_windows()
+#  -> [{'id': 525216, 'title': '', 'class': '#32768'}]      the popup, found by CLASS not title
+uia_find_all(525216, ctype='menuitem')
+#  -> ['Open','Open Inside','Rename','Delete','Properties', …]   its items, by meaning
+
+uia_context(sevenzip, "Computer", "Open")   # right-click target, pick from its menu
+#  -> True; the file list changes  ['Computer','Documents',…] -> ['C:','D:']   the change is the oracle
+uia_context(sevenzip, "Computer", "No Such Item ZZZ")   # -> False (clean miss, ESC closes the menu)
+```
+
+`menu_windows()` is the missing *eye*: it enumerates open native popups by their window
+**class** (`#32768`) instead of a title, so a menu is addressable the instant it pops.
+`uia_context` is the *hand*: find the target by meaning, right-click its centre, then walk
+the path through the popup exactly as `uia_menu` walks a menubar. The two menu verbs were
+then **unified** — a shared `_walk_menu_path` searches `list_windows() + menu_windows()`,
+so `uia_menu` now also drives *classic Win32* menubars (titleless dropdowns) it previously
+could not, and `uia_context` handles Qt/wx context menus (titled) for free. One code path,
+every toolkit, both gestures.
+
+**Live (this VM), by meaning, no pixel hunting.** `_probe_ctxmenu.py` runs **7/7 green**
+on real 7-Zip: the right-click opens *no* titled window (proving `list_windows` is blind);
+`menu_windows()` sees the `#32768` popup; its items read by meaning; `uia_context("Computer",
+"Open")` navigates and the file list flips to the drives (oracle), reversibly; a bogus item
+returns False without hanging. **No regression** — `_probe_menuapps.py` 8/8 (F185),
+`_probe_appfloor.py` 8/8 (F184), `_probe_winverbs.py` 15/15 (F183) all still green. Pure
+stdlib, additive.
+
+**Lesson (道法自然).** 道隱無名 — the way hides in the nameless. The menu was not missing;
+it was *nameless* — a window with no title, and the floor had been looking for things by
+title. The fix was not to reach harder but to recognise the thing by *what it is* (its
+class) rather than by a name it never had. 天下萬物生於有，有生於無 — and once seen, the
+nameless popup is just another window the existing verbs read straight through. The verb
+did not add power; it removed a blindness.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
