@@ -6544,10 +6544,74 @@ same floor reaches all three.
 
 ---
 
+## F201 — a window with **pixels but no meaning**: perceive semantic opacity, then operate by pixels+keys (Inkscape / GTK-on-Windows)
+
+**Friction (forward practice, a real app).** F192/F199/F200 found windows with *meaning but no
+pixels*. Driving **Inkscape** (GTK3) cold surfaced the exact **inverse**, and a sharper one: a window
+with *pixels but no meaning*. Inkscape's canvas window exposes a UIA tree of **only 7 elements — all
+window-frame chrome**: one `Pane` for the *entire* client area, the `TitleBar`, the `System` menu, and
+the OS caption buttons (Minimize/Restore/Close). Every **application** control — the File/Edit menubar,
+the toolbox, the colour palette, the Fill&Stroke panel — is **invisible** to the meaning floor:
+`uia_find(ink, "File")` → `None`, `window_menu` → `[]` (the menubar is GTK-drawn, not a Win32 menu),
+`child_windows` → `0`. GTK on Windows bridges *nothing* below the toplevel into UIA. The friction is
+not "Inkscape is hard" — it is that **`uia_find → None` is ambiguous**: it means *either* "wrong name,
+try another" *or* "this whole window has no semantic surface — stop searching by meaning". An agent
+that cannot tell these apart burns its turns guessing control names at a wall.
+
+**Mechanism — give the floor a way to *know* it has hit a meaning-wall, so it switches channels.**
+A small, cross-platform read composed from `uia_find_all`:
+
+```python
+window_opaque(win) -> bool   # True ⟺ the a11y tree holds NO operable app control, only OS frame chrome
+```
+
+It scans the tree and returns True iff every element is window-frame scaffolding — discounting the
+caption buttons / `System` menu by name (`close`/`minimize`/`maximize`/`restore`/`system`/…) and keying
+on *operable* control types (Button, MenuItem, Edit, ComboBox, Tab, …). The point is the **discipline
+it encodes**: opacity is about *operable controls*, not raw element count (an opaque window still has
+its 6–7 chrome elements — UIA is not broken, the *toolkit* is mute). When `window_opaque` is True the
+floor stops asking for meaning and drives by the **pixel+keyboard** channel it already owns
+(`screenshot`/`find_color`/`pixel` + `tap`/`drag`/`click`) — no new operating verb is owed, only the
+*perception* that selects the right channel. 知止不殆: knowing where the meaning-floor stops is itself
+part of operating it.
+
+**Honest boundary.** `window_opaque` is a heuristic over the a11y tree, not an oracle. It discounts
+controls whose names match the OS frame, so a real app whose *only* actionable control were named
+exactly "Close" could misread as opaque (vanishingly rare for a genuinely operable window). The frame
+names are English on this VM; a localized Windows would need its own set. Recorded, not papered.
+
+**Live (this VM).** Two halves, both green. (a) **Real Inkscape, by hand:** focus the canvas (a click —
+`activate_window` raises but GTK tool shortcuts need *keyboard* focus on the canvas, itself a noted
+friction), press `r` (rectangle tool), drag → a rectangle appears (page centre white→black), then click
+the meaning-blind palette's red swatch (a pixel located by colour) → fill `#FF0000`, page centre
+verified `(255,0,0)` — an app whose every control is UIA-invisible, driven end-to-end by pixels+keys;
+`window_opaque(ink)` correctly **True**. (b) **Deterministic proof** — `_probe_opaque.py` **7/7**: a
+rich WPF window reads **not** opaque and `uia_find('field')` works; a synthetic opaque fixture (one
+`Border` that repaints red on click, no controls) reads **opaque**, `uia_find` for any app control is
+`None`, *yet* a pixel click drives it white→red; and the opaque window is shown to still carry its frame
+chrome (so the signal is *operable-control absence*, not UIA failure). **No regression** —
+`_probe_winverbs.py` **15/15**, `_probe_tray.py` **8/8**, `_probe_vdesk.py` **8/8**. Pure stdlib.
+
+**Lesson (道法自然).** 明道如費，夷道如類 — the floor's brightest verbs (the whole `uia_*` vocabulary) go
+*dark* against a mute toolkit, and pretending otherwise (guessing names forever) is the failure. 知人者
+智，自知者明: the deeper capability is not another way to *act* but the floor *knowing its own blind
+spot* and choosing pixels over meaning without being told. F192/F199/F200 taught it to act where there
+are no pixels; F201 teaches it to recognise where there is no meaning — 一陰一陽之謂道, the two are one
+discipline: match the channel to what the window actually offers, neither more nor less.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
+
+- **A window with *pixels but no meaning* — a semantically-opaque toolkit (GTK-on-Windows). — SOLVED, F201.**
+  The inverse of the zero-pixel frontier: Inkscape's canvas window exposes only 7 UIA elements, all
+  window-frame chrome — File/Edit/toolbox/palette are invisible. `window_opaque(win)` lets the floor
+  *recognise* this (no operable control in the a11y tree) and switch to the pixel+keyboard channel it
+  already owns. Proven `_probe_opaque.py` 7/7 + live on real Inkscape (rectangle drawn & filled #FF0000
+  by keys+pixels). Kept here as a pointer.
 
 - **An app with *no top-level window at all* — resident entirely in the system tray. — SOLVED, F200.**
   The deepest zero-pixel surface: a window minimized to the notification area is absent from

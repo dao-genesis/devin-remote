@@ -160,6 +160,14 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   `tray_context` right-clicks an icon by meaning then walks its `#32768` context menu via the
   same `menu_windows()` path as `uia_context`. Proven `_probe_tray.py` 8/8 on a hidden-Form
   NotifyIcon fixture (JOURNAL F200). `[]`/no-op on a backend with no Windows tray.
+- `window_opaque(win)` — True when a window has **pixels but no operable meaning**: its a11y
+  tree exposes only the OS window frame (caption buttons + System menu), no application control.
+  The inverse of the zero-pixel frontier — a GTK app on Windows (Inkscape's whole client area is
+  one opaque UIA `Pane`; File/Edit/the palette are invisible), a game, a bare `<canvas>`. It
+  disambiguates `uia_find → None` ("wrong name" vs "no semantic surface here"), so the floor can
+  *switch channels deliberately* — drive by **pixels+keyboard** (`screenshot`/`find_color`/`pixel`
+  + `tap`/`drag`/`click`) where meaning is absent. Proven `_probe_opaque.py` 7/7 (and live on real
+  Inkscape: rectangle drawn + filled #FF0000 entirely by keys+pixels) (JOURNAL F201).
 
 Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
 `invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:

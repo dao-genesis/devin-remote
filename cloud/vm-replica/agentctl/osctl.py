@@ -373,6 +373,50 @@ def tray_context(name: str, *path: str, pause: float = 0.45) -> bool:
     return _walk_menu_path(path, pause)
 
 
+# A window's UIA tree always carries its *frame* even when the toolkit inside
+# exposes nothing: the OS-drawn caption buttons and the system menu. These names
+# (and the structural control types) are scaffolding, never an app's operable
+# control, so window_opaque discounts them when asking "is there any meaning here?"
+_OPAQUE_CHROME_NAMES = frozenset(
+    {"minimize", "maximize", "restore", "close", "system",
+     "application", "move", "size"})
+_OPAQUE_ACTIONABLE = frozenset(
+    {"Button", "MenuItem", "Edit", "Document", "CheckBox", "RadioButton",
+     "ComboBox", "Tab", "TabItem", "Hyperlink", "ListItem", "TreeItem",
+     "Slider", "Spinner", "SplitButton", "DataItem", "Text", "List", "Tree"})
+
+
+def window_opaque(win: int, max_scan: int = 1500) -> bool:
+    """True when a window has **pixels but no operable meaning** — its UIA/AT-SPI
+    tree exposes no application control, only the OS window frame (the caption
+    buttons + system menu). Such a window must be driven by the **pixel+keyboard**
+    channel, not by meaning: a GTK app on Windows (Inkscape exposes its whole client
+    area as a single opaque ``Pane`` — File/Edit/the toolbox/the palette are all
+    invisible to UIA), a game, a video surface, a bare ``<canvas>``.
+
+    The friction this dissolves (F201): ``uia_find(win, name=…) → None`` is
+    *ambiguous* — it means **either** "that control isn't here, try another name"
+    **or** "this whole window has no semantic surface, stop searching by meaning".
+    An agent that cannot tell them apart wastes its turns guessing names at a wall.
+    ``window_opaque`` answers the second question directly, so the floor can *switch
+    channels deliberately*: meaning where it exists, pixels+keys where it does not —
+    知止不殆, knowing where the meaning-floor stops is itself part of operating it.
+
+    Honest boundary: this is a heuristic over the a11y tree, not an oracle. It
+    discounts controls whose names match the OS frame (``Close``/``Minimize``/… and
+    the ``System`` menu), so a *real* app whose **only** actionable control happens
+    to be named exactly "Close" could read as opaque — vanishingly rare for a
+    genuinely operable window, and recorded rather than papered over. Frame names
+    are English here; a localized OS frame would need its own name set."""
+    if not window_exists(win):
+        return False
+    for e in uia_find_all(win, max_scan=max_scan):
+        if (e.get("type") in _OPAQUE_ACTIONABLE
+                and (e.get("name") or "").strip().lower() not in _OPAQUE_CHROME_NAMES):
+            return False
+    return True
+
+
 def uia_menu(win: int, *path: str, pause: float = 0.45) -> bool:
     """Invoke a menu path by **meaning** — ``uia_menu(win, "Edit", "Preferences")``.
 
