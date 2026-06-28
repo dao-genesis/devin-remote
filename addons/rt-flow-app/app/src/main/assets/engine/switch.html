@@ -854,6 +854,14 @@ function _liveSig(s){
   var st = s.status_enum||s.status||"";
   return [t,acu,mc,st].join("|");
 }
+// 会话「近期活跃」时间戳(毫秒): 取最新更新/消息/创建时间, 字符串则 Date.parse。用于「该账号最新对话名」择取。
+function _sessTs(s){
+  if(!s) return 0;
+  var t = s.updated_at_ms || s.last_updated_at || s.updated_at || s.last_message_at || s.last_message_sent_at
+        || s.last_event_at || s.last_activity_at || s.modified_at || s.created_at_ms || s.created_at || s.timestamp || 0;
+  if(typeof t==="string"){ var p=Date.parse(t); t=isNaN(p)?0:p; }
+  return (+t)||0;
+}
 async function refineStuck(a, item){
   var uuid=item.uuid; if(!uuid) return;
   var now=Date.now();
@@ -963,15 +971,15 @@ function paintRowRun(){
 function _repushTabsFromTrk(){
   try{ loadAcc().forEach(function(a){
     var st=_trk[(a.email||"").toLowerCase()];
-    if(!st || Date.now()-(st.ts||0)>TRK_HOLD_MS || (st.total|0)<=0) return;
+    if(!st || Date.now()-(st.ts||0)>TRK_HOLD_MS) return;
     var items=st.items||[];
     var top=items.filter(function(x){return x.cls==="exhausted";})[0]
           || items.filter(function(x){return x.cls==="blocked";})[0]
           || items.filter(function(x){return x.cls==="awaiting";})[0]
           || items.filter(function(x){return x.cls==="running";})[0] || null;
-    if(!top) return;
-    var nm=top.title||"";
-    var stt=(top.cls==="blocked"||top.cls==="exhausted"||top.cls==="awaiting")?"blocked":"running";
+    var nm, stt;
+    if(top){ nm=top.title||""; stt=(top.cls==="blocked"||top.cls==="exhausted"||top.cls==="awaiting")?"blocked":"running"; }
+    else { nm=st.latest||""; stt="finished"; if(!nm) return; }   // 空闲账号: 用缓存的最新对话名(finished·无点)即刻重显, 不回退账号名
     if(N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }
   }); }catch(e){}
 }
@@ -980,20 +988,22 @@ var _trkBusy=false;
 async function _pollOneAcc(a, realNo){
   var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)return;
   var running=0,awaiting=0,blocked=0,exhausted=0,items=[];
-  (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var ssr=sessStatus(s); var cls=ssr[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked"&&cls!=="exhausted")return; items.push({cls:cls,title:s.title||s.name||"",uuid:uuid,fsig:_liveSig(s),_stuck:(cls==="blocked"?(ssr[2]||"action"):(cls==="exhausted"?"quota":undefined))}); });
+  // 该账号「最新对话名」(按近期活跃时间戳择取·与状态无关): 用户要求——只要账号有对话就显示其最新对话名, 无对话才回退账号名。
+  var latestName="", latestTs=-1;
+  (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var tt=s.title||s.name||""; if(tt){ var ts=_sessTs(s); if(ts>=latestTs){ latestTs=ts; latestName=tt; } } var ssr=sessStatus(s); var cls=ssr[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked"&&cls!=="exhausted")return; items.push({cls:cls,title:tt,uuid:uuid,fsig:_liveSig(s),_stuck:(cls==="blocked"?(ssr[2]||"action"):(cls==="exhausted"?"quota":undefined))}); });
   // 逆流兜底: running 项抓事件流判定 等你/额度/报错/停滞 → 转 卡住/额度耗尽
   for(var k=0;k<items.length;k++){ if(items[k].cls==="running"){ try{ await refineStuck(a, items[k]); }catch(e){} } }
   items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="exhausted")exhausted++; else if(it.cls==="blocked")blocked++; });
   var total=running+awaiting+blocked+exhausted;
-  if(total>0){ _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,exhausted:exhausted,total:total,items:items,ts:Date.now()}; if(exhausted>0) _quotaAlert(a,exhausted); }
-  else _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:0,awaiting:0,blocked:0,exhausted:0,total:0,items:[],ts:Date.now()};   // 墓碑(非删除): 转空闲也带新 ts → 经金库跨设备同步熄灯, 显示侧 total<=0 一律按无活跃处理
+  if(total>0){ _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,exhausted:exhausted,total:total,items:items,latest:latestName,ts:Date.now()}; if(exhausted>0){ var exq=items.filter(function(x){return x.cls==="exhausted";})[0]; _quotaAlert(a,exhausted,(exq&&exq.title)||latestName); } }
+  else _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:0,awaiting:0,blocked:0,exhausted:0,total:0,items:[],latest:latestName,ts:Date.now()};   // 墓碑(非删除): 转空闲也带新 ts → 经金库跨设备同步熄灯, 显示侧 total<=0 一律按无活跃处理
   // 推送该账号"最需关注对话名+状态"到顶部标签 (卡住/待你>待输入>运行优先, 让需你处理的浮上来)
   try{
     var top=items.filter(function(x){return x.cls==="exhausted";})[0]
           || items.filter(function(x){return x.cls==="blocked";})[0]
           || items.filter(function(x){return x.cls==="awaiting";})[0]
           || items.filter(function(x){return x.cls==="running";})[0] || null;
-    var nm = top ? (top.title||"") : "";
+    var nm = top ? (top.title||"") : latestName;   // 无需关注对话 → 显示该账号最新对话名(finished·无点); 仍空(零对话)才由原生回退账号名
     var stt = top ? ((top.cls==="blocked"||top.cls==="exhausted"||top.cls==="awaiting")?"blocked":"running") : "finished";
     if(N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }
     _pushTabDol(DaoCore.findAcc(a.id)||a);   // 金额与状态同推: 凡有状态更新的页签必同时带上其(缓存)金额, 杜绝「有🟢对话名却无 $」
@@ -1201,13 +1211,23 @@ function _bigAlert(msg){
   b.textContent=msg; b.className="bigalert show"; clearTimeout(b._t);
   b._t=setTimeout(function(){ b.className="bigalert"; }, 4600);
 }
+// 该账号「消息主体名」: 优先缓存 _trk 里最需关注对话名(卡住>待你>运行) > 最新对话名 > 账号名。
+//   用户要求: 通知/提醒一律以对话名为主体(有则不前缀账号名), 便于快速定位对应对话。
+function _convNameOf(a){
+  var st=_trk[(a.email||"").toLowerCase()]; var items=(st&&st.items)||[];
+  var top=items.filter(function(x){return x.cls==="exhausted";})[0]
+        || items.filter(function(x){return x.cls==="blocked";})[0]
+        || items.filter(function(x){return x.cls==="awaiting";})[0]
+        || items.filter(function(x){return x.cls==="running";})[0] || null;
+  return String((top&&top.title) || (st&&st.latest) || "").trim() || String(a.email||a.id).split("@")[0];
+}
 // 额度<$3 提醒: 仅当该账号"有进行中对话"时才提醒 (无对话不打扰), 放大 + 震动。
 function _balAlert(a){
   var q=a.quota; if(!q||typeof q.dPct!=="number"||typeof q.overageDollars!=="number") return;  // 美金未知 → 不据 $0 误报
   if(!_hasLiveConv(a)) return;                       // 无进行中对话 → 不提醒
   var bal=ovDollars(q);
   if(bal<3){ var t=_balAlertTs[a.id]||0; if(Date.now()-t>300000){ _balAlertTs[a.id]=Date.now();
-    _bigAlert("⚠ "+String(a.email||a.id).split("@")[0]+" 额度仅 $"+bal.toFixed(2)+" · 对话进行中, 请尽快处理");
+    _bigAlert("⚠ "+_convNameOf(a)+" 额度仅 $"+bal.toFixed(2)+" · 对话进行中, 请尽快处理");
     _vib(70);
   } }
 }
@@ -1215,11 +1235,12 @@ function _balAlert(a){
 //   根治「额度耗尽被误显示为对话已完成、不发通知」—— 现 sessStatus/refineStuck 单列 exhausted,
 //   一旦出现即触发, 不再静默当"完成"。节流 5 分钟一号, 避免反复刷屏 (无为·不扰民)。
 var _quotaAlertTs = {};
-function _quotaAlert(a, cnt){
+function _quotaAlert(a, cnt, convName){
   if(!a||!(cnt>0)) return;
   var t=_quotaAlertTs[a.id]||0; if(Date.now()-t<=300000) return;
   _quotaAlertTs[a.id]=Date.now();
-  var who=String(a.email||a.id).split("@")[0];
+  // 通知主体优先用「近期最新对话名」(用户要求: 有对话名则以对话名为消息主体, 不再前缀账号名, 便于快速定位); 无对话名才回退账号名。
+  var who=String(convName||"").trim() || String(a.email||a.id).split("@")[0];
   var msg="🛑 "+who+" 额度已耗尽 · "+cnt+" 个对话因配额耗尽休眠, 请尽快充值/切号";
   _bigAlert(msg); _vib(120);
   try{ if(N.notify) N.notify("额度耗尽 · "+who, cnt+" 个对话因配额耗尽休眠, 请尽快处理"); }catch(e){}
