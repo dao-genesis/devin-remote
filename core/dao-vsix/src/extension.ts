@@ -2192,6 +2192,20 @@ function daoMcpText(v) { return { content: [{ type: 'text', text: typeof v === '
 function daoMcpImage(b64, mime) { return { content: [{ type: 'image', data: b64, mimeType: mime || 'image/jpeg' }] }; }
 function daoMcpErr(msg) { return { content: [{ type: 'text', text: 'ERROR: ' + msg }], isError: true }; }
 function daoClamp(v, lo, hi, dflt) { const n = parseInt(String(v), 10); if (!isFinite(n)) return dflt; return Math.max(lo, Math.min(hi, n)); }
+// ── pc_ui_tree / pc_activate 底座 · UI Automation 控件树 + 窗口激活(帛书·「执大象·天下往」) ──
+//   PowerShell 脚本以 base64 内嵌(规避 JS 字面量转义), 运行时按需自写 ~/.dao 并经 execFileSync(-File) 同步执行。
+function daoWriteB64Script(name, b64) {
+    const fp = path.join(DAO_DIR, name);
+    try { const want = Buffer.from(b64, 'base64'); let cur = null; try { cur = fs.readFileSync(fp); } catch (e) { /* 守柔 */ }
+        if (!cur || !cur.equals(want)) { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(fp, want); } } catch (e) { /* 守柔 */ }
+    return fp;
+}
+function daoRunPwshFile(file, args, timeoutMs) {
+    const a = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file].concat(args || []);
+    return String(childProcess.execFileSync(pcGuiPwshExe(), a, { encoding: 'utf8', timeout: timeoutMs || 20000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }));
+}
+const PC_UIA_TREE_PS_B64 = 'cGFyYW0oW3N0cmluZ10kdGl0bGU9IiIsW2ludF0kcGlkXz0wLFtpbnRdJGRlcHRoPTQsW2ludF0kY2FwPTIwMCkNCiRFcnJvckFjdGlvblByZWZlcmVuY2U9J1N0b3AnDQpBZGQtVHlwZSAtQXNzZW1ibHlOYW1lIFVJQXV0b21hdGlvbkNsaWVudCxVSUF1dG9tYXRpb25UeXBlcyxXaW5kb3dzQmFzZSB8IE91dC1OdWxsDQppZigtbm90ICgnRGFvLkZnJyAtYXMgW3R5cGVdKSl7IEFkZC1UeXBlIC1OYW1lc3BhY2UgRGFvIC1OYW1lIEZnIC1NZW1iZXJEZWZpbml0aW9uICdbRGxsSW1wb3J0KCJ1c2VyMzIuZGxsIildIHB1YmxpYyBzdGF0aWMgZXh0ZXJuIFN5c3RlbS5JbnRQdHIgR2V0Rm9yZWdyb3VuZFdpbmRvdygpOycgfCBPdXQtTnVsbCB9DQokQUU9W1N5c3RlbS5XaW5kb3dzLkF1dG9tYXRpb24uQXV0b21hdGlvbkVsZW1lbnRdOyAkVFM9W1N5c3RlbS5XaW5kb3dzLkF1dG9tYXRpb24uVHJlZVNjb3BlXTsgJFdBTEs9W1N5c3RlbS5XaW5kb3dzLkF1dG9tYXRpb24uVHJlZVdhbGtlcl06OkNvbnRyb2xWaWV3V2Fsa2VyDQokcm9vdD0kQUU6OlJvb3RFbGVtZW50DQojIHBpY2sgdGFyZ2V0IHdpbmRvdw0KJHRhcmdldD0kbnVsbA0KJHdpbnM9JHJvb3QuRmluZEFsbCgkVFM6OkNoaWxkcmVuLFtTeXN0ZW0uV2luZG93cy5BdXRvbWF0aW9uLkNvbmRpdGlvbl06OlRydWVDb25kaXRpb24pDQpmb3JlYWNoKCR3IGluICR3aW5zKXsgdHJ5ew0KICBpZigkcGlkXyAtZ3QgMCAtYW5kICR3LkN1cnJlbnQuUHJvY2Vzc0lkIC1lcSAkcGlkXyl7JHRhcmdldD0kdzticmVha30NCiAgaWYoJHRpdGxlIC1uZSAiIiAtYW5kICR3LkN1cnJlbnQuTmFtZSAtbGlrZSAiKiR0aXRsZSoiKXskdGFyZ2V0PSR3O2JyZWFrfQ0KfWNhdGNoe30gfQ0KaWYoLW5vdCAkdGFyZ2V0KXsgIyBmb3JlZ3JvdW5kDQogICRmZz1bRGFvLkZnXTo6R2V0Rm9yZWdyb3VuZFdpbmRvdygpOyBmb3JlYWNoKCR3IGluICR3aW5zKXsgdHJ5eyBpZihbU3lzdGVtLkludFB0cl0kdy5DdXJyZW50Lk5hdGl2ZVdpbmRvd0hhbmRsZSAtZXEgJGZnKXskdGFyZ2V0PSR3O2JyZWFrfSB9Y2F0Y2h7fSB9DQp9DQppZigtbm90ICR0YXJnZXQpeyBXcml0ZS1PdXRwdXQgJ3siZXJyb3IiOiJubyB0YXJnZXQgd2luZG93In0nOyBleGl0IH0NCiRzY3JpcHQ6bj0wDQpmdW5jdGlvbiBOb2RlKCRlbCwkZCl7DQogIGlmKCRzY3JpcHQ6biAtZ2UgJGNhcCAtb3IgJGQgLWx0IDApe3JldHVybiAkbnVsbH0NCiAgJHNjcmlwdDpuKysNCiAgJGM9JGVsLkN1cnJlbnQNCiAgJHI9JGMuQm91bmRpbmdSZWN0YW5nbGUNCiAgJG89W29yZGVyZWRdQHtuYW1lPSRjLk5hbWU7dHlwZT0kYy5Db250cm9sVHlwZS5Qcm9ncmFtbWF0aWNOYW1lIC1yZXBsYWNlICdDb250cm9sVHlwZVwuJywnJzthaWQ9JGMuQXV0b21hdGlvbklkO3g9W2ludF0kci5YO3k9W2ludF0kci5ZO3c9W2ludF0kci5XaWR0aDtoPVtpbnRdJHIuSGVpZ2h0fQ0KICAka2lkcz1AKCkNCiAgaWYoJGQgLWd0IDApeyAkY2g9JFdBTEsuR2V0Rmlyc3RDaGlsZCgkZWwpOyB3aGlsZSgkY2ggLWFuZCAkc2NyaXB0Om4gLWx0ICRjYXApeyAka249Tm9kZSAkY2ggKCRkLTEpOyBpZigka24peyRraWRzKz0ka259OyAkY2g9JFdBTEsuR2V0TmV4dFNpYmxpbmcoJGNoKSB9IH0NCiAgaWYoJGtpZHMuQ291bnQpeyRvLmNoaWxkcmVuPSRraWRzfQ0KICByZXR1cm4gJG8NCn0NCiR0cmVlPU5vZGUgJHRhcmdldCAkZGVwdGgNCltwc2N1c3RvbW9iamVjdF1Ae3dpbmRvdz0kdGFyZ2V0LkN1cnJlbnQuTmFtZTtwaWQ9JHRhcmdldC5DdXJyZW50LlByb2Nlc3NJZDtub2Rlcz0kc2NyaXB0Om47dHJlZT0kdHJlZX0gfCBDb252ZXJ0VG8tSnNvbiAtRGVwdGggMzAgLUNvbXByZXNzDQo=';
+const PC_ACTIVATE_PS_B64 = 'cGFyYW0oW3N0cmluZ10kdGl0bGU9IiIsW2ludF0kcGlkXz0wKQ0KJEVycm9yQWN0aW9uUHJlZmVyZW5jZT0nU3RvcCcNCmlmKC1ub3QgKCdEYW9XaW4nIC1hcyBbdHlwZV0pKXsgQWRkLVR5cGUgQCcNCnVzaW5nIFN5c3RlbTt1c2luZyBTeXN0ZW0uUnVudGltZS5JbnRlcm9wU2VydmljZXM7dXNpbmcgU3lzdGVtLlRleHQ7DQpwdWJsaWMgY2xhc3MgRGFvV2luew0KIFtEbGxJbXBvcnQoInVzZXIzMi5kbGwiKV0gcHVibGljIHN0YXRpYyBleHRlcm4gYm9vbCBTZXRGb3JlZ3JvdW5kV2luZG93KEludFB0ciBoKTsNCiBbRGxsSW1wb3J0KCJ1c2VyMzIuZGxsIildIHB1YmxpYyBzdGF0aWMgZXh0ZXJuIGJvb2wgU2hvd1dpbmRvdyhJbnRQdHIgaCxpbnQgbik7DQogW0RsbEltcG9ydCgidXNlcjMyLmRsbCIpXSBwdWJsaWMgc3RhdGljIGV4dGVybiBib29sIElzV2luZG93VmlzaWJsZShJbnRQdHIgaCk7DQogW0RsbEltcG9ydCgidXNlcjMyLmRsbCIpXSBwdWJsaWMgc3RhdGljIGV4dGVybiBpbnQgR2V0V2luZG93VGV4dChJbnRQdHIgaCxTdHJpbmdCdWlsZGVyIHMsaW50IG4pOw0KIFtEbGxJbXBvcnQoInVzZXIzMi5kbGwiKV0gcHVibGljIHN0YXRpYyBleHRlcm4gYm9vbCBFbnVtV2luZG93cyhFbnVtUHJvYyBjYixJbnRQdHIgbCk7DQogW0RsbEltcG9ydCgidXNlcjMyLmRsbCIpXSBwdWJsaWMgc3RhdGljIGV4dGVybiB1aW50IEdldFdpbmRvd1RocmVhZFByb2Nlc3NJZChJbnRQdHIgaCxvdXQgdWludCBwaWQpOw0KIHB1YmxpYyBkZWxlZ2F0ZSBib29sIEVudW1Qcm9jKEludFB0ciBoLEludFB0ciBsKTsNCn0NCidAIH0NCiRmb3VuZD1bSW50UHRyXTo6WmVybzsgJGZvdW5kVGl0bGU9IiINCiRjYj1bRGFvV2luK0VudW1Qcm9jXXsgcGFyYW0oJGgsJGwpDQogIGlmKC1ub3QgW0Rhb1dpbl06OklzV2luZG93VmlzaWJsZSgkaCkpe3JldHVybiAkdHJ1ZX0NCiAgJHNiPU5ldy1PYmplY3QgVGV4dC5TdHJpbmdCdWlsZGVyIDUxMjsgW0Rhb1dpbl06OkdldFdpbmRvd1RleHQoJGgsJHNiLDUxMil8T3V0LU51bGw7ICR0PSRzYi5Ub1N0cmluZygpDQogIGlmKCR0IC1lcSAiIil7cmV0dXJuICR0cnVlfQ0KICAkcD0wOyBbRGFvV2luXTo6R2V0V2luZG93VGhyZWFkUHJvY2Vzc0lkKCRoLFtyZWZdJHApfE91dC1OdWxsDQogIGlmKCgkcGlkXyAtZ3QgMCAtYW5kICRwIC1lcSAkcGlkXykgLW9yICgkdGl0bGUgLW5lICIiIC1hbmQgJHQgLWxpa2UgIiokdGl0bGUqIikpeyAkc2NyaXB0OmZvdW5kPSRoOyAkc2NyaXB0OmZvdW5kVGl0bGU9JHQ7IHJldHVybiAkZmFsc2UgfQ0KICByZXR1cm4gJHRydWUNCn0NCltEYW9XaW5dOjpFbnVtV2luZG93cygkY2IsW0ludFB0cl06Olplcm8pfE91dC1OdWxsDQppZigkZm91bmQgLWVxIFtJbnRQdHJdOjpaZXJvKXsgV3JpdGUtT3V0cHV0ICd7Im9rIjpmYWxzZSwiZXJyb3IiOiJ3aW5kb3cgbm90IGZvdW5kIn0nOyBleGl0IH0NCltEYW9XaW5dOjpTaG93V2luZG93KCRmb3VuZCw5KXxPdXQtTnVsbCAgIyBTV19SRVNUT1JFDQokb2s9W0Rhb1dpbl06OlNldEZvcmVncm91bmRXaW5kb3coJGZvdW5kKQ0KW3BzY3VzdG9tb2JqZWN0XUB7b2s9JG9rO3RpdGxlPSRzY3JpcHQ6Zm91bmRUaXRsZX0gfCBDb252ZXJ0VG8tSnNvbiAtQ29tcHJlc3MNCg==';
 
 // ── browser_* · Chrome DevTools Protocol (CDP) ──
 function daoCdpHttpGet(p) {
@@ -2333,6 +2347,77 @@ async function daoCdpPickPage(targetId) {
     return pages[0];
 }
 
+// ── browser_* 升级 · Playwright/Chrome-DevTools-MCP 级能力 (CDP 原生·零依赖) ──
+//   页内注入轻量助手 __daoB: 无障碍/可交互元素快照(带 ref) + ref/selector 定位 + 取文/取 HTML
+//   + console/network 钩子。点击/输入/拖拽走 CDP 原生可信输入事件(Input.*), 与「我操作自己浏览器」对等。
+const DAO_B_FACTORY = `window.__daoB=(function(){
+  var B={s:0,m:new Map(),logs:[],net:[]};
+  function vis(el){var r=el.getBoundingClientRect();if(r.width<=0||r.height<=0)return false;var s=getComputedStyle(el);if(s.visibility==='hidden'||s.display==='none'||parseFloat(s.opacity)===0)return false;return true;}
+  function nameOf(el){var n=el.getAttribute&&(el.getAttribute('aria-label')||el.getAttribute('placeholder')||el.getAttribute('title')||el.getAttribute('alt')||el.getAttribute('name'));if(!n){var t=(el.innerText||el.textContent||'').trim();if(t)n=t;}if(!n&&el.value!=null)n=String(el.value);return (n||'').replace(/\\s+/g,' ').trim();}
+  function roleOf(el){var r=el.getAttribute&&el.getAttribute('role');if(r)return r;var tag=el.tagName.toLowerCase();if(tag==='a')return 'link';if(tag==='button')return 'button';if(tag==='input')return (el.type||'text').toLowerCase();if(tag==='textarea')return 'textbox';if(tag==='select')return 'combobox';return tag;}
+  B.el=function(k){if(!k)return null;if(/^e\\d+$/.test(k)){var e=B.m.get(k);if(e&&e.isConnected)return e;var q=document.querySelector('[data-dao-ref="'+k+'"]');if(q)return q;}try{return document.querySelector(k);}catch(e){return null;}};
+  B.snapshot=function(){B.m.clear();B.s=0;var sel='a,button,input,textarea,select,[role],[onclick],[tabindex],summary,[contenteditable="true"]';var els=document.querySelectorAll(sel);var out=[];for(var i=0;i<els.length;i++){var el=els[i];if(!vis(el))continue;var ref='e'+(++B.s);B.m.set(ref,el);try{el.setAttribute('data-dao-ref',ref);}catch(e){}var r=el.getBoundingClientRect();var o={ref:ref,role:roleOf(el),name:nameOf(el).slice(0,160),x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)};if(el.value!=null&&String(el.value)!=='')o.value=String(el.value).slice(0,80);var hr=el.getAttribute&&el.getAttribute('href');if(hr)o.href=hr;if(el.disabled||(el.getAttribute&&el.getAttribute('aria-disabled')==='true'))o.disabled=true;out.push(o);}return {url:location.href,title:document.title,scrollY:Math.round(scrollY),count:out.length,elements:out};};
+  B.center=function(k){var el=B.el(k);if(!el)return null;try{el.scrollIntoView({block:'center',inline:'center'});}catch(e){}var r=el.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2),tag:el.tagName.toLowerCase()};};
+  B.focus=function(k){var el=B.el(k);if(!el)return false;try{el.focus();}catch(e){}return document.activeElement===el;};
+  B.setValue=function(k,val){var el=B.el(k);if(!el)return false;try{el.focus();}catch(e){}try{var proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;var d=Object.getOwnPropertyDescriptor(proto,'value');if(d&&d.set){d.set.call(el,val);}else{el.value=val;}}catch(e){try{el.value=val;}catch(e2){}}el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));return true;};
+  B.selectOption=function(k,values){var el=B.el(k);if(!el||el.tagName!=='SELECT')return false;var set={};for(var j=0;j<values.length;j++)set[values[j]]=1;var n=0;for(var i=0;i<el.options.length;i++){var op=el.options[i];var on=!!(set[op.value]||set[op.label]||set[op.text]);op.selected=on;if(on)n++;}el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));return n;};
+  B.text=function(k){var el=k?B.el(k):document.body;return el?(el.innerText||el.textContent||''):'';};
+  B.html=function(k,outer){var el=k?B.el(k):document.documentElement;if(!el)return '';return outer?el.outerHTML:el.innerHTML;};
+  B.exists=function(k){return !!B.el(k);};
+  if(!B._hooked){B._hooked=true;['log','info','warn','error','debug'].forEach(function(lv){var orig=console[lv];console[lv]=function(){try{B.logs.push({level:lv,text:Array.prototype.map.call(arguments,function(x){try{return typeof x==='string'?x:JSON.stringify(x);}catch(e){return String(x);}}).join(' ').slice(0,500),t:Date.now()});if(B.logs.length>300)B.logs.shift();}catch(e){}return orig.apply(console,arguments);};});window.addEventListener('error',function(e){try{B.logs.push({level:'error',text:String((e&&e.message)||(e&&e.error)||e).slice(0,500),t:Date.now()});}catch(_){}});try{var of=window.fetch;if(of){window.fetch=function(){var u=(arguments[0]&&arguments[0].url)?arguments[0].url:String(arguments[0]);var m=(arguments[1]&&arguments[1].method)||'GET';var rec={url:String(u).slice(0,300),method:m,t:Date.now()};B.net.push(rec);if(B.net.length>300)B.net.shift();return of.apply(this,arguments).then(function(resp){rec.status=resp.status;return resp;}).catch(function(err){rec.error=String(err).slice(0,120);throw err;});};}}catch(e){}try{var oo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){this.__dao={url:String(u).slice(0,300),method:m,t:Date.now()};try{this.addEventListener('loadend',function(){try{this.__dao.status=this.status;B.net.push(this.__dao);if(B.net.length>300)B.net.shift();}catch(e){}});}catch(e){}return oo.apply(this,arguments);};}catch(e){}}
+  return B;
+})();`;
+function daoBExpr(retExpr) { return '(function(){ if(!window.__daoB){' + DAO_B_FACTORY + '} return (' + retExpr + '); })()'; }
+async function daoCdpEvalT(t, expr) {
+    const r = await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Runtime.evaluate', params: { expression: expr, returnByValue: true, awaitPromise: true } }]);
+    if (r && r.exceptionDetails) throw new Error('eval: ' + JSON.stringify(r.exceptionDetails));
+    return r && r.result ? r.result.value : undefined;
+}
+async function daoCdpEvalObj(t, expr) {
+    const r = await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Runtime.evaluate', params: { expression: expr, returnByValue: false } }]);
+    if (r && r.exceptionDetails) throw new Error('eval: ' + JSON.stringify(r.exceptionDetails));
+    return r && r.result ? r.result.objectId : undefined;
+}
+const DAO_BTN_MASK = { left: 1, right: 2, middle: 4 };
+async function daoCdpMouse(t, type, x, y, opts) {
+    await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Input.dispatchMouseEvent', params: Object.assign({ type, x, y }, opts || {}) }]);
+}
+async function daoCdpClickXY(t, x, y, button, clickCount) {
+    const b = button || 'left'; const mask = DAO_BTN_MASK[b] || 1; const cc = clickCount || 1;
+    await daoCdpBatch(t.webSocketDebuggerUrl, [
+        { method: 'Input.dispatchMouseEvent', params: { type: 'mouseMoved', x, y } },
+        { method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', x, y, button: b, buttons: mask, clickCount: cc } },
+        { method: 'Input.dispatchMouseEvent', params: { type: 'mouseReleased', x, y, button: b, buttons: 0, clickCount: cc } },
+    ]);
+}
+// 解析点击目标坐标: x,y 直给 | ref/selector 取元素中心 | nx,ny 视口比例
+async function daoBResolveXY(t, a) {
+    if (a.x !== undefined && a.y !== undefined) return { x: +a.x, y: +a.y };
+    if (a.ref || a.selector) {
+        const c = await daoCdpEvalT(t, daoBExpr('window.__daoB.center(' + JSON.stringify(a.ref || a.selector) + ')'));
+        if (!c) throw new Error('element-not-found: ' + (a.ref || a.selector));
+        return { x: c.x, y: c.y };
+    }
+    if (a.nx !== undefined && a.ny !== undefined) {
+        const vp = await daoCdpEvalT(t, '({w:innerWidth,h:innerHeight})');
+        return { x: Math.round((+a.nx) * ((vp && vp.w) || 1)), y: Math.round((+a.ny) * ((vp && vp.h) || 1)) };
+    }
+    throw new Error('need ref|selector|x,y|nx,ny');
+}
+const DAO_KEYMAP = {
+    Enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' }, Tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 },
+    Escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, Backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 },
+    Delete: { key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46 }, ArrowUp: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 },
+    ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 }, ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 },
+    ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 }, Home: { key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 },
+    End: { key: 'End', code: 'End', windowsVirtualKeyCode: 35 }, PageUp: { key: 'PageUp', code: 'PageUp', windowsVirtualKeyCode: 33 },
+    PageDown: { key: 'PageDown', code: 'PageDown', windowsVirtualKeyCode: 34 }, Space: { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, text: ' ' },
+};
+async function daoCdpKey(t, keyName) {
+    const k = DAO_KEYMAP[keyName]; if (!k) throw new Error('unsupported key: ' + keyName + ' (printable text → browser_type)');
+    await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Input.dispatchKeyEvent', params: Object.assign({ type: 'keyDown' }, k) }, { method: 'Input.dispatchKeyEvent', params: Object.assign({ type: 'keyUp' }, k) }]);
+}
+
 // 工具清单 — 名称严格对齐知识库《DAO Bridge MCP 使用文档(四大模块)》。
 function daoMcpToolDefs() {
     const S = (props, required) => ({ type: 'object', properties: props, required: required || [] });
@@ -2372,6 +2457,37 @@ function daoMcpToolDefs() {
         { name: 'vscode_definitions', description: '跳转定义', inputSchema: S({ file: { type: 'string' }, line: { type: 'number' }, char: { type: 'number' } }, ['file', 'line', 'char']) },
         { name: 'vscode_references', description: '查找引用', inputSchema: S({ file: { type: 'string' }, line: { type: 'number' }, char: { type: 'number' } }, ['file', 'line', 'char']) },
         { name: 'vscode_symbols', description: '工作区符号搜索', inputSchema: S({ query: { type: 'string' } }, ['query']) },
+        { name: 'vscode_open', description: 'IDE 内打开文件并定位(可选 line/char·与我操作自己编辑器对等)', inputSchema: S({ file: { type: 'string' }, line: { type: 'number' }, char: { type: 'number' } }, ['file']) },
+        { name: 'vscode_active', description: '读取当前活动编辑器(文件/语言/选区/可见范围/选中文本)', inputSchema: S({}) },
+        // browser_* 升级 · Playwright/Chrome-DevTools-MCP 级 (CDP 原生)
+        { name: 'browser_snapshot', description: '页面可交互元素快照(带 ref·供后续 click/type 定位·Playwright 式)', inputSchema: S({ targetId: { type: 'string' } }) },
+        { name: 'browser_click', description: '点击(ref|selector|x,y|nx,ny·CDP 可信事件)', inputSchema: S({ ref: { type: 'string' }, selector: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, nx: { type: 'number' }, ny: { type: 'number' }, button: { type: 'string', enum: ['left', 'right', 'middle'] }, clickCount: { type: 'number' }, doubleClick: { type: 'boolean' }, targetId: { type: 'string' } }) },
+        { name: 'browser_type', description: '输入文本到元素(ref|selector;clear 先清空;submit 回车)', inputSchema: S({ text: { type: 'string' }, ref: { type: 'string' }, selector: { type: 'string' }, clear: { type: 'boolean' }, submit: { type: 'boolean' }, targetId: { type: 'string' } }, ['text']) },
+        { name: 'browser_hover', description: '悬停到元素/坐标', inputSchema: S({ ref: { type: 'string' }, selector: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, nx: { type: 'number' }, ny: { type: 'number' }, targetId: { type: 'string' } }) },
+        { name: 'browser_select', description: '下拉框选项(ref|selector + values[])', inputSchema: S({ ref: { type: 'string' }, selector: { type: 'string' }, values: { type: 'array' }, value: { type: 'string' }, targetId: { type: 'string' } }) },
+        { name: 'browser_press_key', description: '按特殊键(Enter/Tab/Escape/Arrow*/Backspace/Delete/Home/End/PageUp/PageDown/Space)', inputSchema: S({ key: { type: 'string' }, targetId: { type: 'string' } }, ['key']) },
+        { name: 'browser_scroll', description: '滚动(ref|selector|nx,ny 定位点·dx/dy 像素)', inputSchema: S({ dx: { type: 'number' }, dy: { type: 'number' }, ref: { type: 'string' }, selector: { type: 'string' }, nx: { type: 'number' }, ny: { type: 'number' }, targetId: { type: 'string' } }) },
+        { name: 'browser_wait', description: '等待(selector 出现/消失 | text 出现 | ms 固定;timeout 上限)', inputSchema: S({ selector: { type: 'string' }, text: { type: 'string' }, ms: { type: 'number' }, gone: { type: 'boolean' }, timeout: { type: 'number' }, targetId: { type: 'string' } }) },
+        { name: 'browser_back', description: '后退', inputSchema: S({ targetId: { type: 'string' } }) },
+        { name: 'browser_forward', description: '前进', inputSchema: S({ targetId: { type: 'string' } }) },
+        { name: 'browser_reload', description: '刷新(hard 忽略缓存)', inputSchema: S({ hard: { type: 'boolean' }, targetId: { type: 'string' } }) },
+        { name: 'browser_get_text', description: '取页面/元素可见文本(innerText)', inputSchema: S({ selector: { type: 'string' }, max: { type: 'number' }, targetId: { type: 'string' } }) },
+        { name: 'browser_get_html', description: '取页面/元素 HTML(outer 取 outerHTML)', inputSchema: S({ selector: { type: 'string' }, outer: { type: 'boolean' }, max: { type: 'number' }, targetId: { type: 'string' } }) },
+        { name: 'browser_console', description: '取页面 console 日志(钩子缓冲·clear 清空)', inputSchema: S({ limit: { type: 'number' }, clear: { type: 'boolean' }, targetId: { type: 'string' } }) },
+        { name: 'browser_network', description: '取页面网络请求(fetch/XHR 钩子缓冲·clear 清空)', inputSchema: S({ limit: { type: 'number' }, clear: { type: 'boolean' }, targetId: { type: 'string' } }) },
+        { name: 'browser_tabs', description: '标签页 list/new/select/close', inputSchema: S({ action: { type: 'string', enum: ['list', 'new', 'select', 'close'] }, url: { type: 'string' }, targetId: { type: 'string' } }) },
+        { name: 'browser_upload', description: '给文件输入框设置文件(本机绝对路径)', inputSchema: S({ ref: { type: 'string' }, selector: { type: 'string' }, files: { type: 'array' }, file: { type: 'string' }, targetId: { type: 'string' } }) },
+        { name: 'browser_drag', description: '拖拽(from*→to*·ref/selector/x,y/nx,ny)', inputSchema: S({ fromRef: { type: 'string' }, fromSelector: { type: 'string' }, fromX: { type: 'number' }, fromY: { type: 'number' }, fromNx: { type: 'number' }, fromNy: { type: 'number' }, toRef: { type: 'string' }, toSelector: { type: 'string' }, toX: { type: 'number' }, toY: { type: 'number' }, toNx: { type: 'number' }, toNy: { type: 'number' }, targetId: { type: 'string' } }) },
+        { name: 'browser_close', description: '关闭标签页(targetId)', inputSchema: S({ targetId: { type: 'string' } }, ['targetId']) },
+        // pc_* 补全 (整机对等)
+        { name: 'pc_drag', description: '整机鼠标拖拽(归一化坐标 from→to)', inputSchema: S({ fromNx: { type: 'number' }, fromNy: { type: 'number' }, toNx: { type: 'number' }, toNy: { type: 'number' }, button: { type: 'string' } }, ['fromNx', 'fromNy', 'toNx', 'toNy']) },
+        { name: 'pc_key_combo', description: '整机组合键(vks=Windows 虚拟键码数组·依次按下逆序抬起·如 [17,67]=Ctrl+C)', inputSchema: S({ vks: { type: 'array' } }, ['vks']) },
+        { name: 'pc_clipboard', description: '剪贴板读/写(给 text 即写, 否则读)', inputSchema: S({ text: { type: 'string' } }) },
+        { name: 'pc_ui_tree', description: '整机窗口 UI Automation 控件树 JSON(name/type/aid/坐标)·缺省取前台窗口·可指定 title(模糊)或 pid·depth 深度·cap 节点上限', inputSchema: S({ title: { type: 'string' }, pid: { type: 'number' }, depth: { type: 'number' }, cap: { type: 'number' } }) },
+        { name: 'pc_activate', description: '激活/前置整机窗口(SW_RESTORE+SetForegroundWindow)·按 title(模糊)或 pid', inputSchema: S({ title: { type: 'string' }, pid: { type: 'number' } }) },
+        // plugin_* 补全 (软件本体·公开所有端口 + 热修)
+        { name: 'plugin_api', description: '直通插件任意 /api/* 端点(公开所有端口·route 必以 /api/ 开头)', inputSchema: S({ route: { type: 'string' }, method: { type: 'string' }, body: { type: 'object' }, query: { type: 'object' } }, ['route']) },
+        { name: 'plugin_reload', description: '热修: 重载扩展宿主窗口(慎用·会重启当前 IDE 窗口加载新码)', inputSchema: S({ confirm: { type: 'boolean' } }) },
     ];
 }
 
@@ -2466,6 +2582,114 @@ async function daoMcpCallTool(name, a) {
             const r = await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Page.enable' }, { method: 'Page.captureScreenshot', params }]);
             if (!r || !r.data) return daoMcpErr('screenshot-empty');
             return daoMcpImage(r.data, fmt === 'png' ? 'image/png' : 'image/jpeg');
+        }
+        // ── browser_* 升级 (CDP 原生·Playwright/Chrome-MCP 级) ──
+        case 'browser_snapshot': { const t = await daoCdpPickPage(a.targetId); return daoMcpText(await daoCdpEvalT(t, daoBExpr('window.__daoB.snapshot()'))); }
+        case 'browser_click': { const t = await daoCdpPickPage(a.targetId); const xy = await daoBResolveXY(t, a); const cc = a.clickCount || (a.doubleClick ? 2 : 1); await daoCdpClickXY(t, xy.x, xy.y, a.button, cc); return daoMcpText({ clicked: xy, clickCount: cc }); }
+        case 'browser_type': {
+            const t = await daoCdpPickPage(a.targetId); const sel = a.ref || a.selector;
+            if (sel) { if (a.clear) await daoCdpEvalT(t, daoBExpr('window.__daoB.setValue(' + JSON.stringify(sel) + ',"")')); const ok = await daoCdpEvalT(t, daoBExpr('window.__daoB.focus(' + JSON.stringify(sel) + ')')); if (!ok) return daoMcpErr('element-not-found/focusable: ' + sel); }
+            await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Input.insertText', params: { text: String(a.text == null ? '' : a.text) } }]);
+            if (a.submit) await daoCdpKey(t, 'Enter');
+            return daoMcpText('ok');
+        }
+        case 'browser_hover': { const t = await daoCdpPickPage(a.targetId); const xy = await daoBResolveXY(t, a); await daoCdpMouse(t, 'mouseMoved', xy.x, xy.y); return daoMcpText({ hover: xy }); }
+        case 'browser_select': { const t = await daoCdpPickPage(a.targetId); const sel = a.ref || a.selector; if (!sel) return daoMcpErr('ref|selector required'); const vals = Array.isArray(a.values) ? a.values : (a.value != null ? [a.value] : []); const n = await daoCdpEvalT(t, daoBExpr('window.__daoB.selectOption(' + JSON.stringify(sel) + ',' + JSON.stringify(vals) + ')')); return daoMcpText({ selected: n }); }
+        case 'browser_press_key': { const t = await daoCdpPickPage(a.targetId); if (!a.key) return daoMcpErr('key required'); await daoCdpKey(t, String(a.key)); return daoMcpText('ok'); }
+        case 'browser_scroll': { const t = await daoCdpPickPage(a.targetId); let xy; if (a.ref || a.selector || a.x !== undefined || a.nx !== undefined) { xy = await daoBResolveXY(t, a); } else { const vp = await daoCdpEvalT(t, '({w:innerWidth,h:innerHeight})'); xy = { x: Math.round(((vp && vp.w) || 600) / 2), y: Math.round(((vp && vp.h) || 600) / 2) }; } await daoCdpMouse(t, 'mouseWheel', xy.x, xy.y, { deltaX: +(a.dx || 0), deltaY: +(a.dy || 0) }); return daoMcpText('ok'); }
+        case 'browser_wait': {
+            const t = await daoCdpPickPage(a.targetId);
+            if (a.ms !== undefined) { await daoMcpSleep(daoClamp(a.ms, 0, 60000, 0)); return daoMcpText('waited'); }
+            const to = daoClamp(a.timeout, 100, 60000, 8000); const start = Date.now();
+            while (Date.now() - start < to) {
+                let ok = false;
+                if (a.selector) { const ex = await daoCdpEvalT(t, daoBExpr('window.__daoB.exists(' + JSON.stringify(a.selector) + ')')); ok = a.gone ? !ex : !!ex; }
+                else if (a.text) { const tx = await daoCdpEvalT(t, '(document.body&&document.body.innerText||"")'); const has = String(tx).indexOf(a.text) >= 0; ok = a.gone ? !has : has; }
+                else return daoMcpErr('need selector|text|ms');
+                if (ok) return daoMcpText('ok');
+                await daoMcpSleep(250);
+            }
+            return daoMcpErr('wait-timeout');
+        }
+        case 'browser_back': { const t = await daoCdpPickPage(a.targetId); await daoCdpEvalT(t, 'history.back()'); return daoMcpText('ok'); }
+        case 'browser_forward': { const t = await daoCdpPickPage(a.targetId); await daoCdpEvalT(t, 'history.forward()'); return daoMcpText('ok'); }
+        case 'browser_reload': { const t = await daoCdpPickPage(a.targetId); await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Page.enable' }, { method: 'Page.reload', params: { ignoreCache: !!a.hard } }]); return daoMcpText('ok'); }
+        case 'browser_get_text': { const t = await daoCdpPickPage(a.targetId); const tx = await daoCdpEvalT(t, daoBExpr('window.__daoB.text(' + JSON.stringify(a.selector || '') + ')')); return daoMcpText(String(tx || '').slice(0, daoClamp(a.max, 100, 200000, 20000))); }
+        case 'browser_get_html': { const t = await daoCdpPickPage(a.targetId); const h = await daoCdpEvalT(t, daoBExpr('window.__daoB.html(' + JSON.stringify(a.selector || '') + ',' + (a.outer ? 'true' : 'false') + ')')); return daoMcpText(String(h || '').slice(0, daoClamp(a.max, 100, 500000, 50000))); }
+        case 'browser_console': { const t = await daoCdpPickPage(a.targetId); const logs = await daoCdpEvalT(t, daoBExpr('(window.__daoB.logs||[]).slice(-' + daoClamp(a.limit, 1, 300, 80) + ')')); if (a.clear) await daoCdpEvalT(t, daoBExpr('(window.__daoB.logs.length=0),"ok"')); return daoMcpText(logs); }
+        case 'browser_network': { const t = await daoCdpPickPage(a.targetId); const net = await daoCdpEvalT(t, daoBExpr('(window.__daoB.net||[]).slice(-' + daoClamp(a.limit, 1, 300, 80) + ')')); if (a.clear) await daoCdpEvalT(t, daoBExpr('(window.__daoB.net.length=0),"ok"')); return daoMcpText(net); }
+        case 'browser_tabs': {
+            const act = a.action || 'list';
+            if (act === 'list') { await daoCdpEnsureChrome(); const list = await daoCdpHttpGet('/json/list') || []; return daoMcpText(list.filter((x) => x.type === 'page').map((x) => ({ id: x.id, title: x.title, url: x.url }))); }
+            const ver = await daoCdpEnsureChrome();
+            if (act === 'new') { const r = await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.createTarget', params: { url: a.url || 'about:blank' } }]); return daoMcpText({ targetId: r && r.targetId }); }
+            if (!a.targetId) return daoMcpErr('targetId required for ' + act);
+            if (act === 'select') { await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.activateTarget', params: { targetId: a.targetId } }]); return daoMcpText('ok'); }
+            if (act === 'close') { await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.closeTarget', params: { targetId: a.targetId } }]); return daoMcpText('ok'); }
+            return daoMcpErr('unknown action: ' + act);
+        }
+        case 'browser_upload': { const t = await daoCdpPickPage(a.targetId); const sel = a.ref || a.selector; if (!sel) return daoMcpErr('ref|selector required'); const files = Array.isArray(a.files) ? a.files : (a.file ? [a.file] : []); if (!files.length) return daoMcpErr('files required'); const objId = await daoCdpEvalObj(t, daoBExpr('window.__daoB.el(' + JSON.stringify(sel) + ')')); if (!objId) return daoMcpErr('element-not-found: ' + sel); await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'DOM.enable' }, { method: 'DOM.setFileInputFiles', params: { files, objectId: objId } }]); return daoMcpText({ uploaded: files }); }
+        case 'browser_drag': {
+            const t = await daoCdpPickPage(a.targetId);
+            const from = await daoBResolveXY(t, { ref: a.fromRef, selector: a.fromSelector, x: a.fromX, y: a.fromY, nx: a.fromNx, ny: a.fromNy });
+            const to = await daoBResolveXY(t, { ref: a.toRef, selector: a.toSelector, x: a.toX, y: a.toY, nx: a.toNx, ny: a.toNy });
+            await daoCdpMouse(t, 'mouseMoved', from.x, from.y);
+            await daoCdpMouse(t, 'mousePressed', from.x, from.y, { button: 'left', buttons: 1, clickCount: 1 });
+            const steps = 8; for (let i = 1; i <= steps; i++) { await daoCdpMouse(t, 'mouseMoved', Math.round(from.x + (to.x - from.x) * i / steps), Math.round(from.y + (to.y - from.y) * i / steps), { buttons: 1 }); await daoMcpSleep(20); }
+            await daoCdpMouse(t, 'mouseReleased', to.x, to.y, { button: 'left', buttons: 0, clickCount: 1 });
+            return daoMcpText({ from, to });
+        }
+        case 'browser_close': { if (!a.targetId) return daoMcpErr('targetId required'); const ver = await daoCdpEnsureChrome(); await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.closeTarget', params: { targetId: a.targetId } }]); return daoMcpText('ok'); }
+        // ── pc_* 补全 ──
+        case 'pc_drag': {
+            if (a.fromNx == null || a.fromNy == null || a.toNx == null || a.toNy == null) return daoMcpErr('fromNx,fromNy,toNx,toNy required');
+            const btn = a.button || 'left';
+            pcGuiInput({ op: 'move', nx: a.fromNx, ny: a.fromNy }); pcGuiInput({ op: 'btn', nx: a.fromNx, ny: a.fromNy, button: btn, action: 'down' });
+            const steps = 8; for (let i = 1; i <= steps; i++) { pcGuiInput({ op: 'move', nx: a.fromNx + (a.toNx - a.fromNx) * i / steps, ny: a.fromNy + (a.toNy - a.fromNy) * i / steps }); await daoMcpSleep(20); }
+            const ok = pcGuiInput({ op: 'btn', nx: a.toNx, ny: a.toNy, button: btn, action: 'up' });
+            return ok ? daoMcpText('ok') : daoMcpErr('gui-unavailable');
+        }
+        case 'pc_key_combo': {
+            const vks = Array.isArray(a.vks) ? a.vks.map((x) => parseInt(String(x), 10)).filter((n) => isFinite(n)) : [];
+            if (!vks.length) return daoMcpErr('vks (array of windows VK codes) required');
+            for (const vk of vks) pcGuiInput({ op: 'key', vk, down: true });
+            let ok = true; for (let i = vks.length - 1; i >= 0; i--) { ok = pcGuiInput({ op: 'key', vk: vks[i], down: false }) && ok; }
+            return ok ? daoMcpText('ok') : daoMcpErr('gui-unavailable');
+        }
+        case 'pc_clipboard': { if (a.text !== undefined) { await vscode.env.clipboard.writeText(String(a.text)); return daoMcpText('ok'); } return daoMcpText(await vscode.env.clipboard.readText()); }
+        case 'pc_ui_tree': {
+            const f = daoWriteB64Script('dao-uia-tree.ps1', PC_UIA_TREE_PS_B64);
+            const args = [];
+            if (a.title) args.push('-title', String(a.title));
+            if (a.pid) args.push('-pid_', String(parseInt(a.pid, 10) || 0));
+            args.push('-depth', String(daoClamp(a.depth, 1, 12, 4)));
+            args.push('-cap', String(daoClamp(a.cap, 10, 1000, 200)));
+            try { const out = daoRunPwshFile(f, args, 25000); try { return daoMcpText(JSON.parse(out)); } catch (eP) { return daoMcpText(out.trim()); } }
+            catch (e) { return daoMcpErr('pc_ui_tree: ' + (e && e.message || e)); }
+        }
+        case 'pc_activate': {
+            if (!a.title && !a.pid) return daoMcpErr('pc_activate: title 或 pid 必填');
+            const f = daoWriteB64Script('dao-activate.ps1', PC_ACTIVATE_PS_B64);
+            const args = [];
+            if (a.title) args.push('-title', String(a.title));
+            if (a.pid) args.push('-pid_', String(parseInt(a.pid, 10) || 0));
+            try { const out = daoRunPwshFile(f, args, 12000); try { return daoMcpText(JSON.parse(out)); } catch (eP) { return daoMcpText(out.trim()); } }
+            catch (e) { return daoMcpErr('pc_activate: ' + (e && e.message || e)); }
+        }
+        // ── plugin_* 补全 (软件本体·公开所有端口 + 热修) ──
+        case 'plugin_api': { const route = String(a.route || ''); if (!route.startsWith('/api/')) return daoMcpErr('route must start with /api/'); const m = (a.method || (a.body !== undefined ? 'POST' : 'GET')).toUpperCase(); const body = a.body !== undefined ? a.body : (m === 'POST' ? {} : null); return daoMcpText(await daoMcpInvoke(route, body, a.query)); }
+        case 'plugin_reload': { if (!a.confirm) return daoMcpErr('plugin_reload 会重启当前 IDE 窗口·须传 {confirm:true} 明确确认'); setTimeout(() => { try { vscode.commands.executeCommand('workbench.action.reloadWindow'); } catch (e) { /* 守柔 */ } }, 400); return daoMcpText('reload-scheduled (400ms)'); }
+        // ── vscode_* 补全 (与我操作自己编辑器对等) ──
+        case 'vscode_open': {
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(a.file));
+            const ed = await vscode.window.showTextDocument(doc, { preview: false });
+            if (a.line != null) { const pos = new vscode.Position(Math.max(0, a.line | 0), Math.max(0, (a.char | 0))); ed.selection = new vscode.Selection(pos, pos); ed.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter); }
+            return daoMcpText({ opened: a.file, lineCount: doc.lineCount, languageId: doc.languageId });
+        }
+        case 'vscode_active': {
+            const ed = vscode.window.activeTextEditor; if (!ed) return daoMcpText({ active: null });
+            const sel = ed.selection; const vr = ed.visibleRanges && ed.visibleRanges[0];
+            return daoMcpText({ file: ed.document.uri.fsPath, languageId: ed.document.languageId, lineCount: ed.document.lineCount, selection: { start: { line: sel.start.line, char: sel.start.character }, end: { line: sel.end.line, char: sel.end.character } }, selectedText: ed.document.getText(sel).slice(0, 2000), visibleRange: vr ? { start: vr.start.line, end: vr.end.line } : null });
         }
         default: return daoMcpErr('unknown tool: ' + name);
     }
@@ -4102,41 +4326,55 @@ function bridgeGenerateCloudMd(): string {
 // 道法自然 · MCP 使用文档 (四大模块) — 反向注入为第三篇知识。讲清四大模块 MCP「是什么/怎么用」,
 //   日常整机直连仍走简版内网穿透 MD; 需要更深层专业操作时, Agent 转用本 MCP。
 function bridgeGenerateMcpUsageMd(): string {
-    let mcpUrl = '', mcpTok = '';
-    try { const ep = daoResolveMcpEndpoint(); if (ep) { mcpUrl = ep.url; mcpTok = ep.token; } } catch { /* 守柔 */ }
-    const urlLine = mcpUrl || '(随隧道动态生成，已自动注入到账号 MCP 列表)';
+    let mcpUrl = '';
+    try { const ep = daoResolveMcpEndpoint(); if (ep) { mcpUrl = ep.url; } } catch { /* 守柔 */ }
+    const endpoint = mcpUrl || '(随隧道动态生成·已自动注入到账号 MCP 列表)';
+    // 软编码: 工具按前缀归组, 数量/名称全由 daoMcpToolDefs() 实时生成 → 永不与实际 /mcp 走样(为变所适)。
+    const groups: { [k: string]: string[] } = {}; const order: string[] = [];
+    try {
+        for (const t of daoMcpToolDefs()) {
+            const g = (String(t.name).split('_')[0] || 'misc') + '_*';
+            if (!groups[g]) { groups[g] = []; order.push(g); }
+            groups[g].push(t.name);
+        }
+    } catch { /* 守柔 */ }
+    const meta: { [k: string]: string } = {
+        'pc_*': '操作整机(鼠键/截屏/执行/文件/剪贴板·对等你操作自己电脑)',
+        'browser_*': '把插件当浏览器(Chrome CDP·Playwright/Chrome-MCP 级·对等你操作自己浏览器)',
+        'plugin_*': '软件本体(公开所有 /api 端口·读写/编辑/搜索/终端/git/热修)',
+        'vscode_*': 'IDE 对等(命令/诊断/定义/引用/符号/打开/活动编辑器)',
+    };
+    let total = 0;
+    const rows = order.map(g => { total += groups[g].length; return '| `' + g + '` | ' + (meta[g] || '') + ' | ' + groups[g].length + ' · ' + groups[g].join(' / ') + ' |'; });
+    const host = os.hostname();
+    const wsName = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0] && vscode.workspace.workspaceFolders[0].name) || '';
     return [
-        '# ☯ DAO Bridge MCP · 综合归一 MCP 使用文档',
+        '# ☯ DAO Bridge MCP · 归一 MCP 使用文档',
         '',
-        '> 五大模块(浏览器 / 整机 GUI / 插件本体 / VSCode / Windows 多 RDP)整合归一为单一综合 MCP，以 **MCP(Model Context Protocol)** 形态对外开放。',
-        '> 已作为自定义 MCP **反向注入到账号**(HTTP 传输，无需手动配置)；Agent 直接以 MCP 工具调用即可。',
-        '> 日常「整机直连(读写文件/执行命令)」走另一篇内网穿透文档；需要更深层专业操作时用本 MCP。',
+        '> 一个公网 MCP 端点统摄四模块——把你的电脑 / 浏览器 / IDE / 插件本体当作我自己的来操作(对等·浑然一体)。',
+        '> 已作为自定义 MCP **反向注入到账号**(HTTP/Streamable·无需手动配置)；先 `tools/list` 再 `tools/call`。',
         '',
-        '## 是什么',
+        '## 接入',
         '',
-        '- 名称：`DAO Bridge MCP`(HTTP 传输 / Streamable HTTP)。',
-        '- 端点：' + urlLine,
-        '- 鉴权：' + (mcpTok ? '`Authorization: Bearer <已随注入下发>`' : '(无 token 或随注入下发)'),
-        '- 本质：把本机已实测的计算机控制底座 + 二合一插件操作面，统一代理为一个公网 MCP 端点。',
+        '- 端点：' + endpoint,
+        '- 鉴权：`Authorization: Bearer <已随注入下发>`',
+        '- 本机：' + host + (wsName ? ' · 工作区 ' + wsName : '') + ' · 插件 v' + EXT_VERSION + ' · 工具 ' + total + ' 个',
         '',
-        '## 五大模块工具组(综合归一·不分而治之)',
+        '## 四模块工具(归一·软编码实时自生成)',
         '',
-        '| 工具组 | 模块 | 能力 |',
+        '| 组 | 模块 | 工具 |',
         '|---|---|---|',
-        '| `pc_*` | 操作整机 | exec / screenshot / 鼠键(click/type/key/drag/scroll) / 文件读写 / 窗口枚举 / `pc_ui_tree` 控件级定位 / activate |',
-        '| `browser_*` | 浏览器 | Chrome CDP：launch / navigate / eval / screenshot / targets |',
-        '| `plugin_*` | 插件本体/工作区 | health / exec / ls / file / write / edit / search / terminal / git / tools |',
-        '| `vscode_*` | VSCode 暴露 | command / commands / diagnostics / definitions / references / symbols |',
-        '| `vm_*` | Windows 多 RDP | 每账号隔离会话 create/attach/destroy/snapshot + 会话内整机面(与 `pc_*` 同构·带 `vm` 目标) |',
+        ...rows,
         '',
-        '## 怎么用',
+        '## 断线零人工自愈(务必先读·与内穿文档同源)',
         '',
-        '1. 在账号的 MCP 列表里确认 `DAO Bridge MCP` 已启用(由反向注入自动写入)。',
-        '2. 以标准 MCP 工具调用：先 `tools/list` 看可用工具，再 `tools/call` 传 `{name, arguments}`。',
-        '3. 例：`browser_navigate {"url":"https://app.devin.ai"}`、`pc_screenshot {}`、`plugin_exec {"cmd":"hostname"}`、`vscode_command {"command":"workbench.action.files.save"}`。',
+        '> 端点随隧道重启而变。插件已自带闭环：**自动识别 → 打不通自动刷新 → 自动把新地址反向注入回本条目**。',
         '',
-        '> **归一·单隧道自愈**：MCP 已蹭在常驻桥(DAO Bridge)的耐用隧道上(`<桥URL>/mcp`)，不再自起第二条快速隧道。',
-        '> 桥隧道地址重启会变，但插件探测到旧地址打不通即刷新并重注新地址；因此账号里 MCP 的 URL 始终指向当前可达的端点，无需手动维护。',
+        '1. 用上面端点调 `tools/list`。**2xx=活** → 直接 `tools/call`。',
+        '2. 若 5xx/超时/DNS 失败=隧道已轮换：**不要问用户**，重读本知识条目拿当前可达 `/mcp`(看「本机」行时效)。',
+        '3. 重读仍旧址(插件正在重建)：每 30s 重读一次、最多约 5 分钟；新址出现且 `tools/list` 通即接管。',
+        '',
+        '> 设备 / IDE / 工具集 / 版本任一变化，插件即重生成本文并反向注入 → 你每次连上读到的恒是最新。',
         '',
         '*道法自然 · 无为而无不为*',
     ].join('\n');
@@ -4485,7 +4723,10 @@ async function bridgeLivenessTick(): Promise<void> {
                 try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ }
                 bridgeScheduleReinject('liveness-effectiveness');
             } else {
-                daoLoopLog('tunnel', 'probe ALIVE+EFFECTIVE (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 保持');
+                daoLoopLog('tunnel', 'probe ALIVE+EFFECTIVE (bridge=' + bridgeOk + ' mcp=' + mcpOk + ') → 保持·态签名核对');
+                // 端点稳态但「设备/IDE/工作区/工具集/版本」可能已变 → 签名守柔重注(签名未变即空转·省网),
+                //   令 MCP/内穿两篇知识恒随用户各设备与 IDE 整体状态实时刷新(与内穿同逻辑·闻道者日损)。
+                bridgeScheduleReinject('liveness-state');
             }
             return;
         }
@@ -10564,7 +10805,13 @@ function bridgeCurrentSig(): string {
     try { const c = bridgeReadPublishedConn(); if (c) { if (c.url) url = c.url; } } catch { /* 守柔 */ }
     let mcpUrl = '', mcpTok = '';
     try { const ep = daoResolveMcpEndpoint(); if (ep) { mcpUrl = ep.url; mcpTok = ep.token; } } catch { /* 守柔 */ }
-    return [url, tok, String(ws.port || ''), mcpUrl, mcpTok].join('|');
+    // 软编码·实时态: 设备/IDE/工作区/工具集/版本任一变即翻签名 → 反向注入随之刷新(不含易变时间戳, 杜绝无谓 churn)。
+    //   令 MCP/内穿两篇知识恒随「用户各设备与 IDE 整体状态」更新, 你每次连上读到的都是最新(与内穿同逻辑)。
+    const host = os.hostname();
+    const wsName = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0] && vscode.workspace.workspaceFolders[0].name) || '';
+    const root = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0] && vscode.workspace.workspaceFolders[0].uri.fsPath) || '';
+    let toolN = 0; try { toolN = daoMcpToolDefs().length; } catch { /* 守柔 */ }
+    return [url, tok, String(ws.port || ''), mcpUrl, mcpTok, host, wsName, root, EXT_VERSION, String(toolN)].join('|');
 }
 async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: number; changed: boolean }> {
     if (_bridgeReinjectInflight) return { injected: 0, changed: false };
@@ -10646,6 +10893,8 @@ function bridgeWatchForReinject(context: vscode.ExtensionContext): void {
             context.subscriptions.push({ dispose: () => { try { w.close(); } catch { /* 守柔 */ } } });
         } catch { /* 守柔 */ }
     }
+    // IDE 整体状态变更即时反注(签名守柔·未变即空转): 工作区文件夹增删 → 知识库「本机/工作区」行随之刷新。
+    try { context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => bridgeScheduleReinject('ws-change'))); } catch { /* 守柔 */ }
 }
 // ═══════════════════════════════════════════════════════════
 // 账号库实时检测 + 全池反向注入闭环 — 帛书·「周行而不殆·独立而不改」

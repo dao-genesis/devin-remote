@@ -2,6 +2,33 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.39
+- **归一补全 · `pc_ui_tree` + `pc_activate` 回归(59 工具全量·与知识库文档逐字对齐·大成若缺其用不敝)**。
+  - 3.50.37 大升级时 `pc_*` 仅补到 13(drag/key_combo/clipboard),漏掉线上既有的 `pc_ui_tree`(整机窗口 UI Automation 控件树·name/type/aid/坐标)与 `pc_activate`(SW_RESTORE+SetForegroundWindow 按 title/pid 前置窗口)两件,致 `/mcp` 由 59 退化为 57、与「DAO Bridge MCP 使用文档」所载 15 个 `pc_*` 不符。本次按线上 3.50.33 实现原样归位:PowerShell 脚本以 base64 内嵌(`PC_UIA_TREE_PS_B64`/`PC_ACTIVATE_PS_B64`·规避 JS 字面量转义),经 `daoWriteB64Script` 自写 `~/.dao` + `daoRunPwshFile`(execFileSync `-File`)同步执行。
+  - 复得 `pc_*`=15、四模块合计 `/mcp`=59,恒与知识库文档/`tools/list` 一致。
+  - 自检: `node --check`(src+out)、dao-vsix 构建、render_check、rt-flow 测试(115+35)全过、rtflow 源↔vendored 一致、内嵌 base64 构建后解码回 1841/1627 字节合法 PowerShell。
+
+## 3.50.38
+- **MCP 知识库归一 · 与内穿同源的「实时反向注入 + 断线零人工自愈」(闻道者日损)**。
+  - **MCP 使用文档(第三篇知识)精简 + 软编码**: `bridgeGenerateMcpUsageMd()` 重写——
+工具表不再硬编码,改由 `daoMcpToolDefs()` 按前缀(`pc_`/`browser_`/`plugin_`/`vscode_`)
+**实时归组自生成**(数量/名称恒与实际 `/mcp` 一致·为变所适·永不走样);删去过时的 `vm_*`
+虚列;补上与内穿文档同源的「断线零人工自愈」配方(端点死→重读本条目拿当前可达 `/mcp`);
+正文「本机」行实时回显 主机/工作区/插件版本/工具数。最小描述撬动最大能力。
+  - **实时反向注入随状态刷新**: `bridgeCurrentSig()` 签名扩入「主机 / 工作区名 / 根目录
+/ 插件版本 / 工具数」(不含易变时间戳·杜绝无谓 churn) → 设备/IDE/工具集/版本任一变化即翻
+签名,存活探测环每跳(≤30s)以签名守柔重注(`liveness-state`),`onDidChangeWorkspaceFolders`
+即时触发——令 MCP/内穿两篇知识恒随用户各设备与 IDE 整体状态实时刷新,你每次连上读到的都是最新。
+  - 自检: `node --check`(src+out)、dao-vsix/dao-one 构建、render_check、rt-flow 测试全过、
+rtflow 源↔vendored 一致。
+
+## 3.50.37
+- **核心 MCP 板块大升级 · 浏览器模块对齐 Playwright/Chrome-DevTools-MCP(把插件当浏览器用·与「我操作自己浏览器」对等)**。`browser_*` 由原 5 工具(launch/navigate/eval/screenshot/targets)扩为完整一套(CDP 原生·零 npm 依赖): `browser_snapshot`(页内注入 `__daoB` 助手·产可交互元素「无障碍快照」带 `ref`·Playwright 杀手锏)、`browser_click/type/hover/select/press_key/scroll/drag`(走 CDP `Input.*` **可信输入事件**·ref|selector|x,y|nx,ny 多种定位)、`browser_wait`(selector 出现/消失|text|ms)、`browser_back/forward/reload`、`browser_get_text/get_html`、`browser_console/network`(页内 console+fetch/XHR 钩子缓冲)、`browser_tabs`(list/new/select/close)、`browser_upload`(`DOM.setFileInputFiles`)、`browser_close`。
+- **软件本体「公开所有端口」**: 新增 `plugin_api`(直通任意 `/api/*`·route 必以 /api/ 开头) + `plugin_reload`(热修·须 `{confirm:true}` 才重启窗口)。
+- **VSCode 对等**: `vscode_open`(打开+定位 line/char) + `vscode_active`(读活动编辑器/选区/可见范围/选中文本)。
+- **整机对等**: `pc_drag`(归一化拖拽) + `pc_key_combo`(组合键·依次按下逆序抬起) + `pc_clipboard`(`vscode.env.clipboard` 读写)。
+- 全部新增工具委托既有内部处理器/`vscode` API/CDP, 不引重依赖(大巧若拙)。自检: `node --check`(src+out)、dao-vsix/dao-one 构建、render_check、rt-flow 测试全过、rtflow 源↔vendored 一致。
+
 ## 3.50.36
 - **公网「诡异网页」/shell 路由官网对话掉登录之根治(踩坑 6 · webapp_host=null 漏改)**。实测从公网隧道打开 `…/?dao_acct=<号>` 的 `/sessions` 已登录正常,但进 `/org/<slug>` 即**硬跳真站 `app.devin.ai/login?next=…&internal_org=…`**逃出隧道→掉登录。CDP 抓包定位: Devin SPA 引导调 `/api/users/post-auth` 返回 `"webapp_host":null`,SPA(`useEnterprisePrimaryOrgNavigation`)据此**回落默认主机 app.devin.ai** 做组织跳转。同源反代的 `webapp_host` 改写正则**仅匹配带引号字符串值**(`"webapp_host":"…"`),**漏改 `null`** → 保留 null → SPA 逃逸。
   - **修法**: 把 `webapp_host`/`webappHost` 的改写正则扩为同时匹配字符串值与 `null` 字面量,一并归一为本次请求 Host(隧道域/localhost 自适应)。落地三处: `src/extension.ts`(HTML 内联引导态 + JSON API 响应 `devinCloudProxyRoute`)、`core/rt-flow/devin_proxy.js`(IDE 内多实例反代)及其 vendored 副本 `core/dao-vsix/rtflow/devin_proxy.js`。
