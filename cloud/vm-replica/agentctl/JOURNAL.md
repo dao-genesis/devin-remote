@@ -6197,7 +6197,8 @@ through the floor's **keyboard** channel, not by meaning — because reaching in
 hits a *second*, distinct wall (recorded as a frontier below): UIA's `FindAll` traverses the
 **whole** subtree, and the dialog's virtualised shell list view stalls that walk. The two
 findings are kept separate: F193 is "Invoke must not block the agent" (fixed, proven); the
-FindAll-walk stall is "a read must not block the agent either" (diagnosed, not yet fixed).
+FindAll-walk stall is "a read must not block the agent either" — **now fixed in F194**, by
+generalising this very worker-thread mechanism to every read verb.
 The floor completes the task today by using the channel that *does* work — meaning to summon
 the modal, keys to fill it — and degrades to the truthful boundary rather than faking a reach.
 
@@ -6209,23 +6210,56 @@ you in the room.
 
 ---
 
+## F194 — a *read* must not hang the agent either: every locate/read verb runs on an abandonable worker · UIA
+
+**Friction.** F193 stopped *Invoke* from freezing the agent on a modal. The same
+single-thread trap swallows **reads**. Driving the modal F193 summons — DB Browser's native
+*"Choose a filename to save under"* dialog — `uia_get_value(dlg, ctype="edit")`, `uia_find`,
+`uia_text` **never return**. The dialog embeds a *virtualised shell list view* (the file
+browser), and a descendant search across it **wedges inside a single COM call**.
+
+**Why the obvious fixes don't work (measured on this VM, not assumed).**
+- *Scope the search by a ControlType condition.* No — a condition filters the *results*, not
+  the *traversal*; `FindAll(TreeScope_Descendants)` still realises the whole subtree. Tried,
+  still hangs.
+- *Replace FindAll with a hand-rolled bounded TreeWalker* (`RawViewWalker` GetFirstChild /
+  GetNextSibling, capped by a node budget **and** a wall-clock deadline). Also no — it hung
+  too. The block is **inside one `GetFirstChildElement`/`GetNextSiblingElement` call**, so a
+  deadline checked *between* steps never fires. This refutes the lighter fix outright: the
+  pathology is a single wedging COM call, not an expensive aggregate that a budget could trim.
+
+**The fix — generalise F193 from invoke to all reads.** `_get_uia` is now **thread-local**
+(each thread builds its own STA apartment + UIA instance, since UIA objects cannot cross
+apartments). A `_hangproof(default)` decorator runs an element-resolving verb on a **daemon
+worker** with that per-thread UIA, joined with `_FIND_TIMEOUT`: a wedged worker is
+**abandoned** and the verb returns its empty default; a worker that completes tears its own
+UIA down so nothing leaks. The verb bodies are **untouched** — the decorator wraps them — so
+the common path is unchanged in behaviour, only made un-freezable. Applied to every locate /
+read / act verb (`uia_find`, `uia_find_all`, `uia_get_value`, `uia_text`, `uia_set_value`,
+`uia_focus`, `uia_toggle`/`_state`, `uia_select`/`uia_is_selected`, `uia_expand`/`collapse`/
+`_state`, `uia_scroll_into_view`, `uia_range_value`/`set`, `uia_find_item`). `uia_invoke`
+keeps its own bespoke worker — it must return *True* on a modal-block, not the empty default.
+
+**Live (this VM).** `_probe_hangproof.py` **6/6 green** against real DB Browser: a normal
+`uia_find("New Database")` still resolves in **0.05 s**; on the wedging dialog
+`uia_get_value`/`uia_find`/`uia_text` each **return empty in ~8.0 s** (the timeout) instead of
+never; and the agent is **still alive afterward** — a re-read of the main window comes back in
+**0.02 s**. **No regression** — `_probe_winverbs.py` **15/15** (every verb now runs through a
+worker and still returns its real result, fast).
+
+**Lesson (道法自然).** 知止不殆 — knowing where to stop is safety: a read that cannot stop is
+a read that can trap you, so bound it. 為學者日益，聞道者日損 — I added two clever fixes (a
+scoped condition, a bounded walk) and the Tao took both away; what remained after the
+subtraction was the one mechanism already proven on Invoke — run it on a thread you may walk
+away from. The proof is not that the call returns, but that the agent **keeps moving** whether
+it returns or not.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
-
-- **A read must not hang on a pathological provider either (the FindAll-walk stall).**
-  `_find_ptr` (under `uia_find` / `uia_get_value` / `uia_text` / every locate verb) calls
-  `IUIAutomationElement::FindAll(TreeScope_Descendants, …)`, which **realises the entire
-  subtree** before returning. On a native Win32 file dialog that subtree contains a
-  virtualised shell list view, and the walk **stalls indefinitely** — `uia_get_value(dlg,
-  ctype="edit")` never returns. Scoping the search by a **ControlType property condition**
-  was tried and **does not help**: a condition filters the *results*, not the *traversal*,
-  so FindAll still walks the world (verified on this VM — still hangs). The real fix is to
-  generalise F193 — run the whole locate-and-read on a **timed daemon thread with its own
-  STA+UIA** so it returns a sentinel instead of freezing the agent — but that is a refactor
-  across every read verb and will only be grown once the worker-find is proven not to
-  regress the fast path. Until then the floor reaches such dialogs by the keyboard channel.
 
 - **R-next: an atlas built from the live page, not a fixture** — F103's atlas is
   rendered by the test itself; reading a *real* canvas control means capturing
