@@ -300,25 +300,56 @@ def list_windows() -> list:
     return out
 
 
+_GWL_STYLE = -16
+_WS_POPUP = 0x80000000
+_WS_CAPTION = 0x00C00000  # WS_BORDER | WS_DLGFRAME — a titled frame
+_GW_OWNER = 4
+user32.GetWindow.restype = wintypes.HWND
+user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+
+
 def menu_windows() -> list:
-    """Enumerate open **native popup menus** as ``[{"id","title","class"}, …]``.
+    """Enumerate open **popup menus** as ``[{"id","title","class"}, …]``.
 
     A right-click context menu (and a classic Win32 menubar dropdown) opens in a
-    window of the standard class ``#32768`` that carries **no title** — so
-    :func:`list_windows`, which keeps only *titled* top-levels, never returns it, and
-    a ``uia_find`` has no window id to search. (Qt/wx menus are titled child windows
-    and *do* show up; this is specifically the titleless native popup.) This is the
-    eye that sees a menu the moment it pops, by its window *class* rather than a
-    title, so the menu's items can be reached by meaning like anything else."""
+    top-level window that carries **no title**, so :func:`list_windows` — which keeps
+    only *titled* top-levels — never returns it, and a ``uia_find`` has no window id to
+    search. The first cut (F186) recognised only the native ``#32768`` class; but each
+    GUI toolkit pops its own menu in its own window class — LibreOffice/VCL uses
+    ``SALTMPSUBFRAME``, Qt/wx use theirs — so a class allow-list is endless and
+    toolkit-specific. What every popup menu shares is not a class but a *shape*: it is
+    a **titleless ``WS_POPUP`` window** (a popup with no caption bar). This recognises a
+    menu by that shape, so one eye sees the popup of any toolkit. A bare ``WS_POPUP``
+    also describes persistent shell furniture (the taskbar, the IME bar), so this keeps
+    only popups that are **owned** by another window — a context/dropdown menu is spawned
+    *by* an app window and owned by it, whereas shell windows stand alone (no owner). The
+    native ``#32768`` class is admitted unconditionally, since it is unambiguously a menu.
+    The menu *walk* (osctl ``_find_menuitem``) then keeps only windows that actually hold
+    a ``menuitem``, so any remaining stray popup contributes nothing."""
     out = []
 
     def cb(hwnd, _lparam):
-        if user32.IsWindowVisible(hwnd):
-            cls = ctypes.create_unicode_buffer(256)
-            user32.GetClassNameW(hwnd, cls, 256)
-            if cls.value == "#32768":
-                out.append({"id": int(hwnd), "title": window_text(int(hwnd)),
-                            "class": cls.value})
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        # has a title? then list_windows already covers it — not a bare popup menu.
+        if user32.GetWindowTextLengthW(hwnd) > 0:
+            return True
+        cls = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, cls, 256)
+        if cls.value != "#32768":
+            style = user32.GetWindowLongW(hwnd, _GWL_STYLE) & 0xFFFFFFFF
+            if not (style & _WS_POPUP) or (style & _WS_CAPTION) == _WS_CAPTION:
+                return True
+            # owned popup => spawned by an app (a menu); unowned => shell furniture.
+            if not user32.GetWindow(hwnd, _GW_OWNER):
+                return True
+            rect = wintypes.RECT()
+            if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return True
+            if rect.right - rect.left <= 0 or rect.bottom - rect.top <= 0:
+                return True  # zero-area shadow/sentinel, not a menu
+        out.append({"id": int(hwnd), "title": window_text(int(hwnd)),
+                    "class": cls.value})
         return True
 
     user32.EnumWindows(_WNDENUMPROC(cb), 0)

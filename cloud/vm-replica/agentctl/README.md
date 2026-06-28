@@ -91,7 +91,11 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   in **whatever** window it popped into and clicks it (opening a submenu, or firing the
   action on the last). Composed of `uia_find`+`list_windows`+`click`, so one
   implementation serves every backend. Proven on FreeCAD/KiCad/Shotcut (JOURNAL F185).
-- `menu_windows()` — enumerate open **native popup menus** (class `#32768`). A
+- `menu_windows()` — enumerate open **popup menus** of *any* toolkit. A popup menu is
+  recognised by its **shape** — a titleless, owned `WS_POPUP` window (plus the native
+  `#32768` class) — not by a per-toolkit class allow-list, so it sees Win32 `#32768`,
+  LibreOffice/VCL `SALTMPSUBFRAME`, Qt/wx popups alike; ownership filters out shell
+  furniture like the taskbar (JOURNAL F188). A
   right-click context menu / classic Win32 dropdown opens in a *titleless* window, so
   `list_windows` (titled top-levels only) never returns it; this finds it by window
   *class*, so its items can be read and clicked by meaning (JOURNAL F186).
