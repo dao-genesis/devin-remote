@@ -2,6 +2,15 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.42
+- **browser_\* 浏览器板块对齐手机 APK / Playwright·Chrome-MCP（道并行而不相悖·additive）**。browser_\* 经独立 `--user-data-dir` 隔离 Chrome（CDP 9333）运行——与用户主浏览器互不相干，既可操作该实例内「已打开的多标签页」（持久 profile·`browser_targets`/`browser_tabs` 全可寻址、每条工具按 `targetId` 路由并行实例），也可新开多标签后台操作而不干扰用户前台；用户可切到该 Chrome 窗口实时观看全过程。
+  - **修复 `browser_upload`（确证缺陷）**：原实现先以一个短连 CDP 会话取元素 `objectId`，再到另一会话调 `DOM.setFileInputFiles` → 因 `objectId` 仅在创建它的会话内有效，必报 `Could not find object with given id`、文件永远设不进去。根治：`daoCdpBatch` 的 `params` 支持「函数」形态——用同一会话内已得结果动态构造下一条命令参数；upload 改为单会话内 `Runtime.evaluate(取节点)` → `DOM.setFileInputFiles(串接 objectId)`，并先以 `exists()` 给出清晰 `element-not-found`。
+  - **新增 `browser_emulate`（对照手机·设备模拟）**：`device=iphone|pixel|ipad` 预设或自定义 `width/height/mobile/deviceScaleFactor/userAgent/touch`，经 `Emulation.setDeviceMetricsOverride`+`setUserAgentOverride`+`setTouchEmulationEnabled` 让内嵌页以手机视口/UA/触摸态呈现；`reset=true` 还原。
+  - **新增 `browser_cookies`（登录态续用）**：`get/set/clear/delete`，`Network.getCookies`/`setCookies`/`clearBrowserCookies`/`deleteCookies`。
+  - **新增 `browser_pdf`**：`Page.printToPDF` 整页导出，传 `path` 直接落盘。
+  - 工具面 59→**62**（browser 24→27）；插件按工具集变化自动重生成并反向注入知识库文档。
+  - 自检：`node --check`（dao-vsix out）、`build`、rt-flow 测试（115+35）全过；live 经公网 `/mcp` 实测 upload 落值成功、emulate/cookies/pdf 均通。仅改 `core/dao-vsix/src/extension.ts`（不涉 rt-flow re-vendor）。
+
 ## 3.50.41
 - **站内搜索/外链内嵌提速 + 关于说明归正（无为·additive·不破坏既有反代）**。
   - **内嵌网页/搜索首屏提速**：`genericWebProxy` 注入页在 `<base>` 之后追加 `<link rel="preconnect"/dns-prefetch href=源站 origin>`，浏览器提前完成源站 DNS/TCP/TLS 握手，搜索结果页/外链页的子资源（图/样式/脚本，经 base href 直取源站）更快到位，逼近系统浏览器级首屏。纯增量、不改请求/改写逻辑。
