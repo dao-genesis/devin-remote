@@ -202,6 +202,13 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   expressed in meaning not pixels. Pure composition of `uia_find`; `None`/`False` (never raises) without
   UIA so a caller can fall back to a pixel wait. Proven `_probe_waitctl.py` 5/5 against a window that
   mutates after it is up (JOURNAL F206).
+- `uia_set_value(win, value, name=, ctype=)` — sets a field **by meaning**, hardened by F207 (forward
+  practice on a real Notepad++ Replace dialog whose label+combo+edit were all named `"Replace with:"`):
+  when no `ctype` is pinned it now targets the **actionable** control, not its same-named static caption,
+  and the keyboard-floor fallback is held to a **read-back proof** — it returns `False` (rather than a
+  data-destroying false success) when a write into a read-only/label target changes nothing, while staying
+  optimistic only for fields whose value cannot be read back at all. Proven `_probe_setvalue.py` 5/5
+  (JOURNAL F207).
 
 Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
 `invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:

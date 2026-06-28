@@ -6829,6 +6829,52 @@ things to arrive is to be stuck whenever the gate is something departing.
 
 ---
 
+## F207 — `uia_set_value` must hit the editable field, not its same-named caption — and never lie
+
+**Friction (forward practice, real Notepad++).** Driving NPP end-to-end through the floor —
+`wait_window` → `screen_observe` → open Replace (Ctrl+H) → `wait_control("Replace All")` → set the two
+fields by meaning → invoke — the result was *wrong*: every `alpha` was **deleted** instead of replaced by
+`omega`. Inspecting the live dialog showed why: its label, ComboBox and Edit are **all three named
+`"Replace with:"`** (and the two Edits even share `AutomationId 1001`). Two floor bugs compounded:
+1. `_find_ptr` returned the **static Text caption** (first in tree order), so the write aimed at an
+   uneditable label;
+2. when the write was then attempted, `uia_set_value` **reported success having changed nothing** — its
+   keyboard-floor fallback clicks the rect and types, then returned `True` unconditionally; typing into a
+   read-only/label control is a no-op. So `Replace with` stayed empty and *Replace All* ran with an empty
+   replacement.
+
+**Mechanism — prefer the actionable twin, and prove the write.**
+- `_find_ptr` (the shared matcher): when the caller did **not** pin a `ctype`, an exact-name match on a
+  `Text` control is now held only as a *fallback* — an actionable (non-`Text`) control with the same exact
+  name wins. A field's caption almost always shares the field's accessible name (it `LabeledBy`s it), and
+  one virtually never wants to *act on the caption*. Explicit `ctype` still returns that type immediately.
+- `uia_set_value` (osctl) now holds the **keyboard-floor path to the same read-back proof** the pattern
+  path already used: trust the typed write only if the value became `value` or at least *changed* from
+  before; stay optimistic **only** when the field's value cannot be read back at all (a Scintilla editor
+  exposes none), so a genuinely-unobservable-but-working field is not wrongly failed. The UIA
+  ValuePattern leaf also now refuses a `CurrentIsReadOnly` target rather than returning `SetValue`'s
+  hollow `S_OK`.
+
+**Honest boundary.** The read-back oracle can only *contradict* success when the value is observable and
+unchanged; for write-only/unreadable fields the verb stays optimistic (unchanged behaviour). A field that
+legitimately normalises input (`5`→`5.00`) still counts as success because it *changed*.
+
+**Live (this VM).** Real **Notepad++** Replace now yields `'omega beta omega gamma omega'` (was the
+data-destroying `' beta  gamma '`). `_probe_setvalue.py` **5/5** on a fixture reproducing the collision (a
+`TextBlock` + `TextBox` both named `email`, a read-only `TextBox` named `locked`, a unique `solo`): writes
+into the *field* not the label; find-by-name returns the actionable control; a read-only target returns
+`False` and is left unchanged; unambiguous fields still settable; explicit `ctype` still works.
+**No regression** — `_probe_winverbs.py` **15/15**, `_probe_opaque.py` **7/7**, `_probe_focus.py` **5/5**,
+`_probe_observe.py` **6/6**, `_probe_waitctl.py` **5/5**. Pure stdlib.
+
+**Lesson (道法自然).** 信言不美 — a verb that *says* it set a field but did not is worse than one that admits
+it cannot: the lie propagated into deleted text. The cure is the floor's oldest law, applied once more —
+*the change is the oracle*: don't believe the return code, read the result back. And 名可名也，非恒名也:
+a name is not a unique handle on a thing — three controls wore `"Replace with:"`; meaning had to be
+refined by *role* (act on the field, not its caption) to pick the one that can actually receive.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

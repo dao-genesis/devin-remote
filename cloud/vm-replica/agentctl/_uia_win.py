@@ -120,6 +120,7 @@ _UIA_ValuePatternId = 10002
 _INVOKE = 3        # IUIAutomationInvokePattern::Invoke
 _VALUE_SET = 3     # IUIAutomationValuePattern::SetValue
 _VALUE_GET = 4     # IUIAutomationValuePattern::get_CurrentValue
+_VALUE_READONLY = 5  # IUIAutomationValuePattern::get_CurrentIsReadOnly
 
 # Control-type ids → readable names (the common ones).
 _CONTROL_TYPES = {
@@ -413,7 +414,15 @@ def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
     substring match is kept only as a fallback. ``name`` is tested against the
     accessible Name *and* the AutomationId (exact on either wins) and, as a last
     resort, a substring of Name/AutomationId/HelpText — so icon controls that leave
-    Name empty but carry a semantic AutomationId/tooltip stay reachable."""
+    Name empty but carry a semantic AutomationId/tooltip stay reachable.
+
+    One further preference, learned from a real Replace dialog (Notepad++): a field's
+    **caption** is a static ``Text`` carrying the *same* accessible name as the input
+    it labels (label, ComboBox and Edit were all ``"Replace with:"``). The label sits
+    first in tree order, so a naive exact match returns the *uneditable caption* and a
+    later write silently no-ops. When the caller did not pin a ``ctype``, an exact
+    match on a ``Text`` control is therefore held as a fallback only: an actionable
+    (non-``Text``) control with the same exact name, if one exists, wins."""
     el = _element(uia, win)
     if not el:
         return None
@@ -421,6 +430,7 @@ def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
     arr = ctypes.c_void_p()
     nl = name.lower() if name else None
     fuzzy = None  # first substring match, kept if no exact match is found
+    label = None  # exact match on a static Text caption, kept only as a fallback
     try:
         if _vcall(uia, _CTRUE, ctypes.c_long, [ctypes.POINTER(ctypes.c_void_p)],
                   ctypes.byref(cond)) != 0:
@@ -447,14 +457,26 @@ def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
             nm = (_prop_bstr(ce.value, _UIA_NameProperty) or "").lower()
             aid = (_prop_bstr(ce.value, _UIA_AutomationIdProperty) or "").lower()
             if nm == nl or aid == nl:
+                if ctype is None and t == "Text":
+                    if label is None:
+                        label = ce.value  # caption fallback, keep scanning
+                    else:
+                        _release(ce.value)
+                    continue
                 if fuzzy:
                     _release(fuzzy)
-                return ce.value  # exact Name or AutomationId always wins
+                if label:
+                    _release(label)
+                return ce.value  # exact, actionable Name/AutomationId match wins
             ht = (_prop_bstr(ce.value, _UIA_HelpTextProperty) or "").lower()
             if fuzzy is None and (nl in nm or nl in aid or nl in ht):
                 fuzzy = ce.value  # keep as fallback, do not release
             else:
                 _release(ce.value)
+        if label:
+            if fuzzy:
+                _release(fuzzy)
+            return label
         return fuzzy
     finally:
         _release(cond.value)
@@ -728,9 +750,23 @@ def uia_set_value(win: int, value: str, name=None, ctype=None) -> bool:
         if not vp:
             return False
         try:
+            ro = ctypes.c_int(0)
+            if _vcall(vp, _VALUE_READONLY, ctypes.c_long,
+                      [ctypes.POINTER(ctypes.c_int)], ctypes.byref(ro)) == 0 and ro.value:
+                return False  # read-only target (e.g. a static caption): SetValue
+                              # would return S_OK yet write nothing — refuse honestly
+            before = _value_pattern_text(el)
             bstr = _oleaut.SysAllocString(value)
             hr = _vcall(vp, _VALUE_SET, ctypes.c_long, [ctypes.c_void_p], bstr)
-            return hr == 0
+            after = _value_pattern_text(el)
+            if hr != 0:
+                return False
+            # SetValue can return S_OK yet write nothing (a read-only field whose
+            # IsReadOnly the provider under-reports). Treat the write as successful
+            # only if the value actually became what we asked, or at least changed
+            # from before (a field that normalises its input still counts).
+            after = _value_pattern_text(el)
+            return after == value or after != before
         finally:
             _release(vp)
     finally:

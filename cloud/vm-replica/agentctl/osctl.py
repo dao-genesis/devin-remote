@@ -210,11 +210,31 @@ def uia_set_value(win, value, name=None, ctype=None) -> bool:
     field" holds whether the toolkit models a truthful ValuePattern, a lying one, or only
     lets a person type. Composed of existing leaves (``uia_find`` + the click/key floor).
     Returns True once the value is written or typed; falls back to the pattern's own claim
-    only when the field can be neither clicked nor focused (e.g. off-screen)."""
+    only when the field can be neither clicked nor focused (e.g. off-screen).
+
+    The keyboard floor can lie too: typing into a **read-only** field (a caption, a
+    disabled box, a log view) changes nothing, yet a click+type would blindly report
+    success — exactly the bug a real Notepad++ Replace dialog exposed, where the label,
+    combo and edit all shared one name. So the typed path is held to the *same* proof as
+    the pattern path: a read-back. The write is trusted only when the value actually
+    became ``value`` or at least *changed* from before; it stays optimistic only when the
+    field's value cannot be read back at all (a Scintilla editor exposes no value), so a
+    truly-unobservable-but-working field is not wrongly failed."""
     value = str(value)
+    before = uia_get_value(win, name=name, ctype=ctype)
     pattern_ok = _uia_set_value_pattern(win, value, name=name, ctype=ctype)
     if pattern_ok and uia_get_value(win, name=name, ctype=ctype) == value:
         return True  # pattern wrote it and a read-back proves it
+
+    def _landed() -> bool:
+        after = uia_get_value(win, name=name, ctype=ctype)
+        if after == value:
+            return True              # exact: the value took
+        if after != before:
+            return True              # changed (a field that normalises its input)
+        return before == "" and after == ""  # unobservable value → stay optimistic;
+        #                                       readable and unchanged → it did not land
+
     # Unconfirmed: pattern refused, or claimed success without a confirming read-back.
     el = uia_find(win, name=name, ctype=ctype)
     if el and el.get("rect"):
@@ -222,10 +242,10 @@ def uia_set_value(win, value, name=None, ctype=None) -> bool:
         if w > 0 and h > 0:
             click(x + w // 2, y + h // 2)  # a real click cannot lie about focus
             _type_into_focused(value)
-            return True
+            return _landed()
     if uia_focus(win, name=name, ctype=ctype):
         _type_into_focused(value)
-        return True
+        return _landed()
     return pattern_ok  # cannot reach the keyboard floor — trust the pattern's claim
 
 
