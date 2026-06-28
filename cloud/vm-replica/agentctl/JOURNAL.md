@@ -5110,6 +5110,64 @@ reach / **magnitude**.
 
 ---
 
+## F177 — the keyboard floor crosses to its own ground: X11 truncation + the unmapped key (R137)
+
+**Ground: Ubuntu 22.04, X11 (KDE Plasma), 64-bit. The agent's *own* VM — not the
+Windows host reached over the bridge, but the machine it actually runs on.**
+
+**Friction.** F157–F159 grew the keyboard/mouse read floor and proved it on
+Windows Server 2022. Run end-to-end on *this* ground for the first time, the live
+suite did not fail a check — it **died**: a bare `Segmentation fault`, exit 139,
+the whole process gone, taking every later round with it. Re-run, it died at a
+*different* round (R115 once, R118 the next) — the signature of memory corruption,
+not a logic bug. And once that was past, a second, different death: `X Error …
+BadValue … XTEST … keycode 0x0`, exit 1 — a fatal protocol error on a key *press*.
+Two crashes hiding in primitives that were "green" on the other ground.
+
+**Mechanism (two, both pointer-deep).**
+1. `key_state` calls `XQueryKeymap` and `XkbGetState`. Every *other* X call in the
+   backend declares its `argtypes`, so the 64-bit `Display*` (held as a Python int
+   since `XOpenDisplay.restype = c_void_p`) is widened correctly. These two had no
+   `argtypes` — so `ctypes` defaulted the first argument to a 32-bit `c_int` and
+   **truncated the pointer**; libX11 then dereferenced a garbage half-address →
+   SIGSEGV. Non-deterministic in *where* it killed the suite because the corruption
+   landed wherever the heap happened to put things that run.
+2. The VK→keysym table (`_VK_KEYSYM`) carried no entry for CapsLock (`0x14`) or
+   NumLock (`0x90`). `key_state` could *read* their locked-mod latch, but
+   `_vk_keysym` fell through to `return vk`, `XKeysymToKeycode` could not resolve
+   the bogus keysym and returned **keycode 0**, and `XTestFakeKeyEvent(_, 0, …)` is
+   a fatal `BadValue` — the default Xlib error handler calls `exit()`. So the
+   keyboard could read the lock but never actuate it, and *trying* to killed the
+   process. 知人者智，自知者明 — the self-knowing (read) had outrun the self-acting
+   (write); the two had to be made whole on this ground too.
+
+**Fix (no new verb — the existing ones made true here).**
+- Declare `XQueryKeymap`/`XkbGetState` `argtypes` (`Display*` as `c_void_p`) so the
+  pointer crosses intact. The read no longer corrupts memory.
+- Add `0x14→XK_Caps_Lock`, `0x90→XK_Num_Lock` to `_VK_KEYSYM` — the write side can
+  now actuate the very latches the read side already saw.
+- Guard `key_down`/`key_up`: an unmapped keysym yields keycode 0, and the honest
+  floor **does nothing** with it rather than handing XTEST a fatal value. A press
+  that cannot be expressed is a no-op, never a crash.
+
+**Live (this VM):** `_probe_keystate.py` — Shift up→held→released reads
+`down` False→True→False; CapsLock read→toggle→toggle-back reads `toggled`
+False→True→False (5/5). `_probe_mousestate.py` 5/5, `_probe_pixel.py` 3/3. And the
+whole suite, which before could not *reach* its own end on Linux, now runs to
+completion end-to-end.
+
+**Lesson (道法自然).** 上士聞道，堇而行之 — a floor is only known when it is *walked*,
+and walked on its own ground. Every primitive here was "proven" — on Windows. The
+Way moved the moment the same code touched the earth it actually stands on: 反也者，
+道之動也. The deepest faults were not in the grand verbs but in the smallest
+crossing — a pointer's width, a key with no name on this keymap — invisible until
+the ground itself pushed back. 圖難於其易，為大於其細：the segfault that looked like
+chaos was one missing line of intent (`argtypes`), and the fatal error one missing
+pair of names. To operate *its own machine* the agent first had to stop killing
+itself on it.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
