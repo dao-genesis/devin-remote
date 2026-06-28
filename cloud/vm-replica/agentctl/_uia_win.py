@@ -14,6 +14,7 @@ Everything is best-effort: any failure yields empty results so the backend never
 breaks, and callers fall back to the Win32 / pixel floor.
 """
 import ctypes
+import functools
 import threading
 from ctypes import wintypes
 
@@ -129,8 +130,7 @@ _CONTROL_TYPES = {
     50035: "HeaderItem", 50036: "Table", 50037: "TitleBar", 50038: "Separator",
 }
 
-_uia = None  # cached IUIAutomation pointer (per process)
-_init_failed = False
+_tls = threading.local()  # per-thread UIA instance + COM apartment (see _get_uia)
 
 
 def _vcall(ptr, idx, restype, argtypes, *args):
@@ -149,9 +149,13 @@ def _release(ptr):
 
 
 def _get_uia():
-    global _uia, _init_failed
-    if _uia is not None or _init_failed:
-        return _uia
+    """The IUIAutomation instance for the *calling thread*. Each thread gets its own
+    STA apartment + UIA instance (UIA objects cannot cross apartments), so a verb can
+    be run on an abandonable worker thread (:func:`_hangproof`) without poisoning the
+    main thread's instance. Cached per thread; None on init failure so callers fall
+    back to the Win32 / pixel floor."""
+    if getattr(_tls, "uia", None) is not None or getattr(_tls, "failed", False):
+        return getattr(_tls, "uia", None)
     try:
         _ole32.CoInitializeEx(None, 0x2)  # COINIT_APARTMENTTHREADED (idempotent)
         pp = ctypes.c_void_p()
@@ -159,12 +163,60 @@ def _get_uia():
                                      ctypes.byref(_IID_IUIAutomation),
                                      ctypes.byref(pp))
         if hr != 0 or not pp.value:
-            _init_failed = True
+            _tls.failed = True
             return None
-        _uia = pp.value
+        _tls.uia = pp.value
     except Exception:
-        _init_failed = True
-    return _uia
+        _tls.failed = True
+    return getattr(_tls, "uia", None)
+
+
+def _teardown_uia():
+    """Release the calling thread's UIA instance and leave its COM apartment. Run
+    when a :func:`_hangproof` worker finishes so the fresh-per-call worker leaks
+    nothing; a worker abandoned mid-hang (rare) leaks only its one instance."""
+    u = getattr(_tls, "uia", None)
+    if u:
+        _release(u)
+    _tls.uia = None
+    _tls.failed = False
+    try:
+        _ole32.CoUninitialize()
+    except Exception:
+        pass
+
+
+_FIND_TIMEOUT = 8.0  # seconds a single locate/read/act verb may run before abandon
+
+
+def _hangproof(default):
+    """Run an element-resolving verb on a daemon worker with its own COM apartment +
+    UIA, joined with a timeout. Generalises F193 from *invoke* to *every* locate /
+    read / act verb: a provider that blocks a single COM call deep in a descendant
+    search (a native file dialog's virtualised shell list view wedges both FindAll
+    and a hand-rolled TreeWalker step, F194) can no longer freeze the agent. The
+    worker is abandoned and the verb returns ``default``; a completed worker tears
+    down its own UIA so nothing leaks. The timeout fires only on a true block — a
+    missing element returns ``default`` fast — so it never truncates a normal call."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrap(*a, **kw):
+            box = [default]
+            done = threading.Event()
+
+            def run():
+                try:
+                    box[0] = fn(*a, **kw)
+                except Exception:
+                    box[0] = default
+                finally:
+                    _teardown_uia()
+                    done.set()
+
+            threading.Thread(target=run, daemon=True).start()
+            return box[0] if done.wait(_FIND_TIMEOUT) else default
+        return wrap
+    return deco
 
 
 def _prop_bstr(el, prop):
@@ -281,6 +333,7 @@ def uia_children(win: int) -> list:
         _release(el)
 
 
+@_hangproof(None)
 def uia_find(win: int, name=None, ctype=None, max_scan: int = 6000):
     """Find a descendant element of ``win`` by its *meaning* — accessible name
     (case-insensitive substring) and/or control type (e.g. ``"Button"``,
@@ -370,6 +423,7 @@ def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
         _release(el)
 
 
+@_hangproof([])
 def uia_find_all(win: int, name=None, ctype=None, max_scan: int = 6000) -> list:
     """The *plural* of :func:`uia_find` — every descendant of ``win`` matching the
     given meaning, as ``[{"name","type","aid","help","rect"}, …]``. Where
@@ -438,6 +492,7 @@ def _pattern(el, pattern_id):
     return p.value
 
 
+@_hangproof(False)
 def uia_set_value(win: int, value: str, name=None, ctype=None) -> bool:
     """Write ``value`` into an element found by meaning (name/type), via the UIA
     ValuePattern — the modern-app-capable write, the UIA dual of the native
@@ -501,6 +556,7 @@ def _legacy_value_text(el) -> str:
         _release(lp)
 
 
+@_hangproof("")
 def uia_get_value(win: int, name=None, ctype=None) -> str:
     """Read the value of an element found by meaning — the read dual of
     :func:`uia_set_value`, reaching inside modern apps. Tries the ValuePattern first;
@@ -582,6 +638,7 @@ def uia_invoke(win: int, name=None, ctype=None, timeout: float = 6.0) -> bool:
     return True  # dispatched but still blocked in a modal handler — do not hang
 
 
+@_hangproof(False)
 def uia_focus(win: int, name=None, ctype=None) -> bool:
     """Move keyboard focus to an element found by meaning (name/type) via the UIA
     ``SetFocus`` — the bridge from semantic *locate* to the keystroke floor. Some
@@ -601,6 +658,7 @@ def uia_focus(win: int, name=None, ctype=None) -> bool:
         _release(el)
 
 
+@_hangproof("")
 def uia_text(win: int, name=None, ctype=None, max_len: int = 20000) -> str:
     """Read an element's full text via the UIA TextPattern (DocumentRange.GetText)
     — the proper way to read text *out of* modern documents (a Chrome/Electron page,
@@ -652,6 +710,7 @@ def uia_text(win: int, name=None, ctype=None, max_len: int = 20000) -> str:
         _release(el)
 
 
+@_hangproof("")
 def uia_toggle_state(win: int, name=None, ctype=None) -> str:
     """Read the toggle state of an element found by meaning (a checkbox, a toggle
     switch) via the UIA TogglePattern: "on" / "off" / "indeterminate", or "" if the
@@ -678,6 +737,7 @@ def uia_toggle_state(win: int, name=None, ctype=None) -> str:
         _release(el)
 
 
+@_hangproof(False)
 def uia_toggle(win: int, name=None, ctype=None) -> bool:
     """Toggle an element found by meaning (a checkbox / toggle switch) via the UIA
     TogglePattern — the semantic state-flip inside native and modern apps alike, no
@@ -704,6 +764,7 @@ def uia_toggle(win: int, name=None, ctype=None) -> bool:
         _release(el)
 
 
+@_hangproof(False)
 def uia_select(win: int, name=None, ctype=None) -> bool:
     """Select an item found by meaning (a radio button, a list option, a tab) via the
     UIA SelectionItemPattern — the semantic *choose-one* verb, no mouse, no pixels.
@@ -742,6 +803,7 @@ def uia_select(win: int, name=None, ctype=None) -> bool:
         _release(el)
 
 
+@_hangproof(None)
 def uia_is_selected(win: int, name=None, ctype=None):
     """Read whether an item found by meaning is selected, via the UIA
     SelectionItemPattern — the read dual of :func:`uia_select`. Returns True/False, or
@@ -768,6 +830,7 @@ def uia_is_selected(win: int, name=None, ctype=None):
         _release(el)
 
 
+@_hangproof(False)
 def _ec_act(win, name, ctype, vidx):
     uia = _get_uia()
     if not uia:
@@ -800,6 +863,7 @@ def uia_collapse(win: int, name=None, ctype=None) -> bool:
     return _ec_act(win, name, ctype, _EC_COLLAPSE)
 
 
+@_hangproof("")
 def uia_expand_state(win: int, name=None, ctype=None) -> str:
     """Read the expand/collapse state of an element found by meaning:
     "collapsed"/"expanded"/"partial"/"leaf", or "" if no ExpandCollapsePattern. The
@@ -826,6 +890,7 @@ def uia_expand_state(win: int, name=None, ctype=None) -> str:
         _release(el)
 
 
+@_hangproof(False)
 def uia_scroll_into_view(win: int, name=None, ctype=None) -> bool:
     """Scroll an element found by meaning into the visible viewport via the UIA
     ScrollItemPattern — the modern-content "bring into reach", the element-level dual
@@ -851,6 +916,7 @@ def uia_scroll_into_view(win: int, name=None, ctype=None) -> bool:
         _release(el)
 
 
+@_hangproof(None)
 def uia_range_value(win: int, name=None, ctype=None):
     """Read a ranged control (a slider, a progress bar, a scrollbar) found by meaning
     via the UIA RangeValuePattern. Returns a dict {"value", "min", "max"} (floats), or
@@ -881,6 +947,7 @@ def uia_range_value(win: int, name=None, ctype=None):
         _release(el)
 
 
+@_hangproof(None)
 def uia_find_item(win: int, item: str, container_name=None,
                   container_ctype: str = "list", max_scan: int = 6000):
     """Find a *virtualized* item by meaning and realize it — the bridge that
@@ -935,6 +1002,7 @@ def uia_find_item(win: int, item: str, container_name=None,
         _release(cont)
 
 
+@_hangproof(False)
 def uia_set_range_value(win: int, value: float, name=None, ctype=None) -> bool:
     """Set a ranged control (a slider, a scrollbar) found by meaning to ``value`` via
     the UIA RangeValuePattern SetValue — set a slider to a number by meaning, no mouse
