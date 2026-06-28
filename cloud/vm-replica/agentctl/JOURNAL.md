@@ -6733,6 +6733,57 @@ later keystroke be deliberate.
 
 ---
 
+## F205 — `screen_observe()`: the one per-step observation a GUI agent reasons over (reverse-logic)
+
+**Friction (reverse-logic round).** Reading the public AI-GUI frameworks from their *outcomes* back to
+their essence — UFO's per-app **control inventory**, OmniParser / Agent-S's **set-of-marks** of
+labelled, clickable regions — the one loop they all share is: *each step, take a single structured
+snapshot of the screen* (the foreground app, its actionable controls with boxes, where focus is), then
+decide. Our floor already had every ingredient (`list_windows`, `active_window`, `window_geometry`,
+`window_opaque`, `uia_find_all`, `uia_focused`) but **no single call that assembles them** — an agent
+had to hand-stitch six reads every step and re-derive which channel each window needs. The friction is
+the *absence of the observation primitive itself*: the floor had the verbs of action and of perception,
+but not the one read that turns a screen into a decision-ready state.
+
+**Mechanism — compose, don't invent.**
+
+```python
+screen_observe(deep=False) -> {
+    "active":  hwnd | None,                       # foreground window
+    "focus":   {name,type,aid,rect,pid} | None,   # where keystrokes land (F204)
+    "windows": [ {"id","title","rect","active","opaque","actions":[{name,type,aid,rect}…]} … ],
+}
+```
+
+Each window carries its frame `rect` and an `opaque` flag (F201), and — for the **foreground** window
+by default — its list of *actionable* controls only (the F201 control types minus OS frame chrome), so
+the snapshot is decision-ready rather than a raw tree dump. Scanning every window's full a11y tree each
+step is costly and rarely needed (an agent acts in the foreground window), so background windows are
+listed (id/title/rect) without an action scan unless `deep=True`. It is **pure composition** of existing
+floor reads: it speaks *meaning* where a window offers it and flags `opaque` where the agent must drop
+to pixels — the floor's own F201/F204 discipline, surfaced as one call. No new OS binding.
+
+**Honest boundary.** On a backend without UIA, `actions` is `[]` and `opaque` `False` (the pixel floor
+still applies); the window list, geometry and focus remain truthful. `max_actions` caps total controls
+returned so a pathological tree cannot bloat the observation.
+
+**Live (this VM).** `_probe_observe.py` **6/6**: returns the structured shape (5 windows); marks the
+foreground fixture active + not opaque and inventories its actionable controls by meaning (the `field`
+Edit + the `ping`/echo Buttons, 29 controls, each with a rect); folds in live focus consistent with
+`uia_focused`; leaves the 4 background windows action-empty by default (efficiency); and `deep=True`
+keeps the active inventory while scanning all 5 windows (1→5 scanned). **No regression** —
+`_probe_winverbs.py` **15/15**, `_probe_opaque.py` **7/7**, `_probe_focus.py` **5/5**. Pure stdlib.
+
+**Lesson (道法自然).** 大制無割 — studying others' finished systems backward, the deep lesson was not a
+missing capability but a missing *cut*: the floor's many small reads were the whole observation already,
+waiting to be seen as one. 樸散則為器：the uncarved primitives become a usable instrument only when
+assembled, yet the assembly *adds nothing new* — `為而弗恃`, it composes what is there and claims no new
+power. The frameworks' "perception model" is, at root, this one disciplined read; building it from the
+floor's own verbs is the reverse-logic payoff — understanding another's essence well enough to find it
+already present in one's own ground.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

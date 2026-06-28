@@ -188,6 +188,13 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   focus move landed (clicked the right field, Tab went where intended, no dialog stole focus, and via
   `pid` that focus is in the target app) *before* committing input. Pure read. Proven `_probe_focus.py`
   5/5 (focus tracked field→button, pid = owner, typing lands where it points) (JOURNAL F204).
+- `screen_observe(deep=False)` — **one structured per-step observation**: `{active, focus, windows:[{id,
+  title,rect,active,opaque,actions:[{name,type,aid,rect}…]}]}`. The perception primitive the public
+  AI-GUI frameworks are built around (UFO's control inventory, OmniParser/Agent-S's set-of-marks),
+  assembled purely from `list_windows`+`active_window`+`window_geometry`+`window_opaque`+`uia_find_all`+
+  `uia_focused`. Inventories the **foreground** window's actionable controls by default (background
+  windows listed without a scan unless `deep=True`); flags `opaque` windows so the agent knows to use
+  pixels. No new OS binding. Proven `_probe_observe.py` 6/6 (JOURNAL F205).
 
 Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
 `invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:

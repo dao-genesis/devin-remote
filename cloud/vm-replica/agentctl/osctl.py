@@ -434,6 +434,67 @@ def window_opaque(win: int, max_scan: int = 1500) -> bool:
     return True
 
 
+def _actionable(elems: list) -> list:
+    """Keep only the elements an agent could act on — the F201 actionable control
+    types, minus the OS window-frame chrome — so an observation is decision-ready
+    rather than raw a11y noise."""
+    out = []
+    for e in elems:
+        if (e.get("type") in _OPAQUE_ACTIONABLE
+                and (e.get("name") or "").strip().lower() not in _OPAQUE_CHROME_NAMES):
+            out.append({"name": e.get("name") or "", "type": e.get("type"),
+                        "aid": e.get("aid") or "", "rect": e.get("rect")})
+    return out
+
+
+def screen_observe(deep: bool = False, max_actions: int = 400,
+                   max_scan: int = 4000) -> dict:
+    """One structured snapshot of the whole screen — the per-step *observation* a
+    GUI agent reasons over — composed from the floor's own reads:
+
+        {
+          "active":  <hwnd or None>,             # the foreground window's id
+          "focus":   {name,type,aid,rect,pid} | None,   # where keystrokes land now
+          "windows": [ {"id","title","rect","active","opaque","actions":[…]}, … ],
+        }
+
+    Each window carries its frame ``rect`` and an ``opaque`` flag (F201: pixels but
+    no operable meaning), and — for the **foreground** window by default — its list
+    of *actionable* controls (`{name,type,aid,rect}`, the F201 control types minus
+    frame chrome), so the snapshot is decision-ready, not raw tree dump. The active
+    window is the one an agent almost always acts in; scanning every window's full
+    a11y tree each step is costly and rarely needed, so background windows are listed
+    (id/title/rect/opaque) without an action scan unless ``deep=True``.
+
+    This is the perception primitive the public AI-GUI frameworks are built around —
+    UFO's per-app *control inventory*, OmniParser / Agent-S's *set-of-marks* of
+    labelled, clickable regions: one call that answers "what is on screen and what can
+    I do right now?" Here it is assembled from `list_windows` + `active_window` +
+    `window_geometry` + `window_opaque` + `uia_find_all` + `uia_focused`, so it speaks
+    *meaning* where a window offers it and flags ``opaque`` where the agent must drop
+    to the pixel+keyboard channel — the floor's own discipline, surfaced as one read.
+    On a backend without UIA, ``actions`` is ``[]`` and ``opaque`` ``False`` (the
+    pixel floor still applies); the window list and geometry remain truthful."""
+    act = active_window()
+    obs = {"active": act, "focus": uia_focused(), "windows": []}
+    budget = max_actions
+    for w in list_windows():
+        wid = w.get("id")
+        entry = {"id": wid, "title": w.get("title") or "",
+                 "rect": None, "active": wid == act, "opaque": False, "actions": []}
+        geo = window_geometry(wid)
+        if geo:
+            entry["rect"] = (geo["x"], geo["y"], geo["w"], geo["h"])
+        if deep or wid == act:
+            entry["opaque"] = window_opaque(wid, max_scan=max_scan)
+            if not entry["opaque"] and budget > 0:
+                acts = _actionable(uia_find_all(wid, max_scan=max_scan))
+                entry["actions"] = acts[:budget]
+                budget -= len(entry["actions"])
+        obs["windows"].append(entry)
+    return obs
+
+
 def uia_menu(win: int, *path: str, pause: float = 0.45) -> bool:
     """Invoke a menu path by **meaning** — ``uia_menu(win, "Edit", "Preferences")``.
 
