@@ -164,27 +164,50 @@ uia_find_all = getattr(_be, "uia_find_all", lambda win, name=None, ctype=None, m
 _uia_set_value_pattern = getattr(_be, "uia_set_value", lambda win, value, name=None, ctype=None: False)
 
 
-def uia_set_value(win, value, name=None, ctype=None) -> bool:
-    """Set a field's text by meaning. Tries the UIA **ValuePattern** first — the clean,
-    focus-free write (modern-app dual of ``set_window_text``). But a control can expose
-    ValuePattern for *reading* while rejecting ``SetValue``: wxWidgets edit fields (and
-    some custom/validated inputs) read back fine yet their SetValue is a silent no-op.
-    So when the pattern write fails, this falls back to the **keyboard floor** — focus
-    the field, select-all, clear, type — exactly what a human does. "Set this field"
-    then means the same whether the toolkit models a writable ValuePattern or only lets
-    a person type. Composed of existing leaves (:func:`uia_focus` + the key floor), so
-    one implementation serves every backend; returns False only if the field can be
-    neither written nor focused."""
-    if _uia_set_value_pattern(win, value, name=name, ctype=ctype):
-        return True
-    if not uia_focus(win, name=name, ctype=ctype):
-        return False
-    time.sleep(0.05)
+def _type_into_focused(value: str) -> None:
+    """Replace the focused field's contents with ``value`` via the keyboard floor."""
+    time.sleep(0.08)
     key_down(0x11); tap(0x41); key_up(0x11)   # Ctrl+A — select all
     tap(0x2E)                                  # Delete — clear the selection
     time.sleep(0.02)
-    type_unicode(str(value))
-    return True
+    type_unicode(value)
+
+
+def uia_set_value(win, value, name=None, ctype=None) -> bool:
+    """Set a field's text by meaning. Tries the UIA **ValuePattern** first — the clean,
+    focus-free write (modern-app dual of ``set_window_text``) — but trusts it **only when
+    a read-back confirms** it, because the pattern lies two different ways:
+
+    * it can **refuse** the write (wxWidgets number fields return ``SetValue`` failure),
+    * or it can **fake** it — a Qt Scintilla code editor returns ``SetValue`` *success*
+      yet writes nothing, so a verb that believed the return code would report a write
+      that never happened.
+
+    A read-back that equals ``value`` is the only proof the write landed. Absent that,
+    this reaches for the **keyboard floor**, which cannot lie: give the field focus and
+    type. Focus too is taken the human way — a **real click on the field's centre** —
+    since UIA ``SetFocus`` likewise *reports* success on custom widgets without moving the
+    real caret; a click on the rect puts the caret where the pixels are. So "set this
+    field" holds whether the toolkit models a truthful ValuePattern, a lying one, or only
+    lets a person type. Composed of existing leaves (``uia_find`` + the click/key floor).
+    Returns True once the value is written or typed; falls back to the pattern's own claim
+    only when the field can be neither clicked nor focused (e.g. off-screen)."""
+    value = str(value)
+    pattern_ok = _uia_set_value_pattern(win, value, name=name, ctype=ctype)
+    if pattern_ok and uia_get_value(win, name=name, ctype=ctype) == value:
+        return True  # pattern wrote it and a read-back proves it
+    # Unconfirmed: pattern refused, or claimed success without a confirming read-back.
+    el = uia_find(win, name=name, ctype=ctype)
+    if el and el.get("rect"):
+        x, y, w, h = el["rect"]
+        if w > 0 and h > 0:
+            click(x + w // 2, y + h // 2)  # a real click cannot lie about focus
+            _type_into_focused(value)
+            return True
+    if uia_focus(win, name=name, ctype=ctype):
+        _type_into_focused(value)
+        return True
+    return pattern_ok  # cannot reach the keyboard floor — trust the pattern's claim
 
 
 uia_get_value = getattr(_be, "uia_get_value", lambda win, name=None, ctype=None: "")
