@@ -2,6 +2,14 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.55
+- **根治代理检测误判(项⑥·多级网页搜索「网络不可达/站点拒绝代理」真因)**。旧 `detectProxyPort` 用 `net.Socket.connect()` 同步探口, 但 connect 是**非阻塞**的——`try/catch` 捕不到「连接被拒」, 故不论端口是否在监听都「成功」→ 永久误设 `detectedProxyPort=7890`。若用户 Clash/V2Ray 不在 7890(或未开), 代理赛道 CONNECT 必败 → 被墙站(google/stackoverflow 等)直连黑洞 + 代理误判 → 直出错误页。
+  - 改为**异步真实 TCP 探活**(等 connect/error 事件·350ms/口超时·逐口短路), 端口实测在监听才采纳; 同步入口只查环境变量/配置(不阻塞事件循环), 端口实探交后台异步。
+  - 新增 **Windows 系统代理(注册表 Internet Settings·ProxyServer)** 退路探测; 环境变量匹配兼容 `localhost`(此前仅 `127.0.0.1`)。
+  - **周期重探**: 命中后 60s、未命中后 15s 重探 → 代理在插件启动后才开/重启换端口也能自动接管。
+- **HTTP 站点补齐代理赛道**。此前 `isHttps?proxy:0` 致 HTTP 站点根本不走代理(直连必败即报错)。`fetchViaTunnel` 增 HTTP 分支: 标准代理「整 URL 作请求行」(GET http://host/path), 与 HTTPS 的 CONNECT 隧道并存。
+- **错误页文案区分**: 「未检测到本地代理(请确认 Clash/V2Ray 已启动)」vs「代理连接失败(直连与代理均不可达)」, 不再一律含糊「站点拒绝代理」。
+
 ## 3.50.54
 - **同步 vendored rt-flow(补 3.50.53 漏)**。`core/dao-vsix/rtflow/extension.js` 是 dao-vsix 运行期实际加载的 rt-flow 副本(非 gitignored 构建产物, 须手动随源同步)。3.50.53 漏同步 → 切号面板 `__wamRebuild` 的 rt-flow 侧 15s 节流未随 VSIX 落地(仅 dao-vsix 侧 10s 节流生效)。本次补齐, 双层节流完整。
 
