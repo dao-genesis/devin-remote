@@ -42,7 +42,7 @@ that matter:
 | `osctl.py` | The floor below the DOM (platform-agnostic): mouse+keys, clipboard, `omnibox_go` (atomic address-bar paste), a screen grab with a dependency-free PNG encoder, the whole gesture + perception (locate/read/template/wait) vocabulary, **and the semantic floor** (`uia_*`) — see below. Includes a **fovea** — `capture_rgb(x,y,w,h)` ROI grab + `foveate()` — a **low-acuity periphery** (`find_color(..., step=n)` coarse scan), a foveated-pursuit `wait_stable`, and a **predictive reach** (`reach()`: acquire→foveate→estimate velocity→click where the target *will be*) for clicking still-moving targets, plus a **closed-loop keyboard servo** (`steer()`: ballistic key-hold→predictive release→rest-then-correct) for driving a *keyboard-moved* momentum control to a perceived goal, and **window addressing** (`list_windows()`/`activate_window()`/`focus_window(name)`: EWMH on X11, `EnumWindows`/`SetForegroundWindow` on Windows) so input reaches the *intended* window among many, not just whatever holds focus — which composes into a **cross-window clipboard relay** (`set_clipboard` → `focus_window(name)` → terminal-paste chord), delivering copied content into a window *by identity*; and **window geometry + move** (`window_geometry(id)` / `move_window(id,x,y,w,h)`) so a window pushed *off* the visible screen — which raising cannot rescue — can be relocated back into reach; and **virtual-desktop addressing** (`num_desktops`/`current_desktop`/`window_desktop`, a `desktop` field on `list_windows`, plus `set_desktop(n)` to *go there* and `move_window_to_desktop(id,n)` to *bring it here*) so a window on another workspace — which has no on-screen pixels at all — can be reached. Selects an OS backend at import. |
 | `_osbackend_win.py` | Windows leaf primitives: `SendInput` mouse/keys, clipboard, GDI `BitBlt` capture (whole screen or a source sub-rectangle), window enumerate/activate (`EnumWindows`/`SetForegroundWindow`), geometry/move (`GetWindowRect`/`SetWindowPos`). |
 | `_osbackend_x11.py` | Linux leaf primitives: X11 + XTEST mouse/keys, selection-owner clipboard, `XGetImage` capture (whole screen or a sub-rectangle; pure `ctypes`, no `python-xlib`), window enumerate/activate (EWMH `_NET_CLIENT_LIST`/`_NET_ACTIVE_WINDOW`), geometry/move (`XGetGeometry`+`XTranslateCoordinates` / EWMH `_NET_MOVERESIZE_WINDOW`), virtual desktops (EWMH `_NET_CURRENT_DESKTOP`/`_NET_NUMBER_OF_DESKTOPS`/`_NET_WM_DESKTOP`), and the **AT-SPI semantic floor** (`libatspi.so.0` bound by pure `ctypes`: map an X window → its accessible frame by `_NET_WM_PID`, walk the toolkit's own control tree). |
-| `_uia_win.py` | Windows semantic floor: the UIAutomation COM tree bound by `ctypes` — the Windows dual of the AT-SPI binding above. |
+| `_uia_win.py` | Windows semantic floor: the UIAutomation COM tree bound by `ctypes` — the Windows dual of the AT-SPI binding above. Carries the full verb set (toggle/select/expand/range-value/scroll/text) plus `uia_find_item`, which realizes a *virtualized* list item via `ItemContainerPattern` (F183). |
 | `test_live.py` | End-to-end proof. Drives a real Chrome (and native apps) through every friction family — **~800 live checks across 137 rounds**. |
 
 ## The semantic floor (`uia_*`) — perceive and act by *meaning*
@@ -62,11 +62,30 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
 - `uia_click` — the union made explicit: locate by meaning, deliver a real click.
 - `uia_get_value` / `uia_set_value` / `uia_focus` — read/write a field's text and
   give it keyboard focus, by meaning.
+- `uia_toggle` / `uia_toggle_state` — flip and read a checkbox/switch.
+- `uia_select` / `uia_is_selected` — pick a list/tab/radio item and read whether
+  it is chosen.
+- `uia_expand` / `uia_collapse` / `uia_expand_state` — open/close a combobox or
+  tree node and read its state.
+- `uia_range_value` / `uia_set_range_value` — read `{value,min,max}` of a slider/
+  progress bar and set it to a number with no mouse drag.
+- `uia_scroll_into_view` — bring an element below the fold into the viewport.
+- `uia_text` — read a region's full text (multiline, Unicode) via TextPattern.
+- `uia_find_item(win, item, container_ctype=)` — reach an item a long **virtualized**
+  list (WPF/UWP/WinUI) has not materialized into the tree, where plain `uia_find`
+  finds nothing: asks the container (UIA `ItemContainerPattern`) to *realize* it by
+  name, scrolls it into view, and returns its now-visible rect (JOURNAL F183).
 
-Live on Linux today: `name`, `children`, `find`, `invoke`, `click`, `focus`,
-`get_value`, `set_value`. The richer Windows verbs (`uia_toggle`/`uia_select`/
-`uia_expand`/`uia_range_value`/`uia_scroll_into_view`/`uia_text`) degrade to
-truthful no-ops on a ground that has not yet been forced to grow them.
+Proven live on **both** grounds. On Linux/AT-SPI: `name`, `children`, `find`,
+`invoke`, `click`, `focus`, `get_value`, `set_value` (F177–F182). On Windows/UIA:
+the full set above is exercised end-to-end against a first-class UIA provider —
+`_probe_winverbs.py` drives a WPF fixture **15/15 green** (F183). The verbs report
+what a control *is* and never crash on what it lacks: against a poorer provider
+(e.g. WinForms, whose legacy-MSAA→UIA bridge omits RangeValue/ScrollItem/Text/
+ComboBox-expand) the missing patterns return *truthful empties*, not errors —
+so the floor degrades by control, not by platform. `uia_find_item` is additive and
+Windows-only today; AT-SPI returns `None` until an equivalent realize-verb is
+forced there.
 
 ## Prerequisites
 

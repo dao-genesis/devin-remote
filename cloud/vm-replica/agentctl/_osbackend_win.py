@@ -290,7 +290,10 @@ def list_windows() -> list:
             if n > 0:
                 buf = ctypes.create_unicode_buffer(n + 1)
                 user32.GetWindowTextW(hwnd, buf, n + 1)
-                out.append({"id": int(hwnd) if hwnd else 0, "title": buf.value})
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                out.append({"id": int(hwnd) if hwnd else 0, "title": buf.value,
+                            "pid": int(pid.value) or None})
         return True
 
     user32.EnumWindows(_WNDENUMPROC(cb), 0)
@@ -784,7 +787,7 @@ try:
                           uia_text, uia_toggle, uia_toggle_state,
                           uia_select, uia_is_selected,
                           uia_expand, uia_collapse, uia_expand_state,
-                          uia_scroll_into_view,
+                          uia_scroll_into_view, uia_find_item,
                           uia_range_value, uia_set_range_value)
 except Exception:  # pragma: no cover - UIA unavailable
     def uia_name(win: int) -> str:
@@ -840,3 +843,7 @@ except Exception:  # pragma: no cover - UIA unavailable
 
     def uia_set_range_value(win: int, value, name=None, ctype=None) -> bool:
         return False
+
+    def uia_find_item(win: int, item, container_name=None,
+                      container_ctype: str = "list", max_scan: int = 6000):
+        return None
