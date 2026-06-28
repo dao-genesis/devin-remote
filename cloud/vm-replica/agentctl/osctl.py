@@ -2543,6 +2543,285 @@ def locate_word(rgb: bytes, size: tuple[int, int],
     return None
 
 
+def locate_labels(rgb: bytes, size: tuple[int, int],
+                  bbox: tuple[int, int, int, int],
+                  labels: list[str], fg: tuple[int, int, int],
+                  tol: int = 60, gap: int = 4, axis: str = "x",
+                  min_w: int = 4) -> dict[str, tuple[int, int, int, int]]:
+    """Map an ordered list of *known* labels to their rects by run-segmentation
+    alone — no glyph atlas (F181).
+
+    Every reader from F103 on (:func:`read_text`, :func:`locate_word`) needs an
+    ``atlas`` of the target font's glyphs, and the only way the floor could build
+    one was rendering reference glyphs *itself* on a browser scratch canvas — so
+    it stayed literate only on the web and blind to every *native* canvas app
+    (Blender, a CAD viewport, a video timeline) whose font it cannot reproduce.
+    Harvesting an atlas from the app's *own* rendering founders one rung lower, on
+    *glyph* segmentation: a ~9px proportional anti-aliased label fuses or splits
+    its letters unreliably (``"File"`` cuts into four, ``"Render"`` shatters into
+    twelve), so per-character reading is lost — that is the named boundary of the
+    atlas path on small native type.
+
+    But you do not need to *read* a menu bar / dropdown / toolbar / tab strip to
+    *act* on it: it is an *ordered sequence of known labels* parted by *wide* blank
+    space, and item-level gaps are far larger and far more reliable than the
+    inter-letter gaps that defeat glyph segmentation. With ``axis="x"`` this
+    :func:`segment_run`-s ``bbox`` by the foreground colour ``fg`` into
+    blank-*column*-separated runs (a horizontal bar/tab strip); with ``axis="y"``
+    it parts the region into blank-*row*-separated bands (a vertical dropdown — the
+    even more reliable case, since menu rows are spaced wider than letters are
+    tall). Either way, *only when* the run count equals ``len(labels)`` it returns
+    ``{label: rect}`` pairing each label to its run in reading order — a click
+    target for every label, located by meaning, in the screen frame
+    :func:`capture_rgb` and :func:`click` share, independent of pixel coordinates,
+    window position or theme. Hand any rect's centre to :func:`click` to press the
+    label you named.
+
+    Honest boundary: it commits only when it can form *exactly* ``len(labels)``
+    bands; if it cannot, it returns ``{}`` rather than risk pairing a label to the
+    wrong box. It locates *known* labels in *known* order; it does not read unknown
+    text (that is the atlas path, bounded above). Choose ``fg`` as the label ink
+    colour; ``gap`` only seeds the fast path below.
+
+    Two segmenters, fast then count-driven (F181). The fast path is a single fixed
+    ``gap`` blank-run cut (:func:`segment_run` on ``x``, :func:`_segment_rows` on
+    ``y``) — it nails *uniform* strips (a menu bar, a plain dropdown) in one pass.
+    But a real menu is rarely uniform: the File menu interleaves shortcut text,
+    submenu arrows and several separator rules, so *no* single ``gap`` yields the
+    right band count (too small splits a separator in two, too large fuses two
+    items). The robust path borrows the exact discipline of :func:`split_run`,
+    which parts *touching glyphs* by cutting at the ``n-1`` deepest valleys once it
+    is told the glyph count ``n``: here the honest extra knowledge is the *label*
+    count, so when the fast path's band count ≠ ``len(labels)`` we cut the ink
+    profile at its ``len(labels)-1`` **widest blank valleys** — exactly enough cuts
+    to make exactly that many bands, robust to uneven item spacing because it ranks
+    gaps relatively instead of thresholding them absolutely. It still degrades
+    honestly: if there are fewer than ``len(labels)-1`` interior gaps, or any band
+    comes out empty, it yields ``{}`` rather than a mispairing."""
+    if axis == "y":
+        cells = [c for c in _segment_rows(rgb, size, bbox, fg, tol, gap)
+                 if c[3] - c[1] + 1 >= min_w]
+        if len(cells) != len(labels):
+            cells = _reject_thin(
+                _segment_rows_n(rgb, size, bbox, fg, len(labels), tol),
+                cross="x", min_w=min_w)
+    else:
+        cells = [c for c in segment_run(rgb, size, bbox, fg, tol, gap)
+                 if c[2] - c[0] + 1 >= min_w]
+        if len(cells) != len(labels):
+            cells = _reject_thin(
+                _segment_cols_n(rgb, size, bbox, fg, len(labels), tol),
+                cross="y", min_w=min_w)
+    if len(cells) != len(labels):
+        return {}
+    return {lab: cells[i] for i, lab in enumerate(labels)}
+
+
+def _reject_thin(cells: list[tuple[int, int, int, int]], cross: str,
+                 min_w: int, frac: float = 0.2) -> list[tuple[int, int, int, int]]:
+    """Guard the count-driven path against a *count match with bad alignment*
+    (F181). When :func:`_ink_runs_cut` is fed a profile with a spurious extra
+    valley (e.g. shortcut text or an icon column in the File menu), it can still
+    return the requested band count but with one cut displaced — leaving a band
+    that hugs a 2–3px sliver of stray ink instead of a real label. Such a band is
+    betrayed by its *cross-axis* extent (a real menu label is wide on ``y`` / tall
+    on ``x``); if the thinnest band falls below both ``min_w`` and ``frac`` of the
+    widest, the segmentation is untrustworthy, so this returns ``[]`` (→ caller
+    yields ``{}``) rather than hand back a confident-but-wrong mapping."""
+    if not cells:
+        return cells
+    ext = [(c[3] - c[1] + 1) if cross == "y" else (c[2] - c[0] + 1)
+           for c in cells]
+    floor = max(min_w, int(frac * max(ext)))
+    return [] if min(ext) < floor else cells
+
+
+def _segment_rows(rgb: bytes, size: tuple[int, int],
+                  bbox: tuple[int, int, int, int],
+                  fg: tuple[int, int, int], tol: int = 60,
+                  gap: int = 4) -> list[tuple[int, int, int, int]]:
+    """Split a vertical stack into one bbox per row — the transpose of
+    :func:`segment_run` (F181). A row is *inked* if any pixel in it is within
+    ``tol`` of ``fg``; rows are opened at the first inked row and closed once
+    ``gap`` consecutive blank rows prove the inter-item space, then each band is
+    tightened to its inked columns so the rect hugs the label. Returns bands in
+    top-to-bottom reading order."""
+    w, _h = size
+    x0, y0, x1, y1 = bbox
+    tr, tg, tb = fg
+
+    def inked_row(y: int) -> bool:
+        base = y * w * 3
+        for x in range(x0, x1 + 1):
+            j = base + x * 3
+            if (abs(rgb[j] - tr) <= tol and abs(rgb[j + 1] - tg) <= tol
+                    and abs(rgb[j + 2] - tb) <= tol):
+                return True
+        return False
+
+    rows = [inked_row(y) for y in range(y0, y1 + 1)]
+    bands: list[tuple[int, int]] = []
+    start: int | None = None
+    blanks = 0
+    for i, ink in enumerate(rows):
+        if ink:
+            if start is None:
+                start = i
+            blanks = 0
+        elif start is not None:
+            blanks += 1
+            if blanks >= gap:
+                bands.append((y0 + start, y0 + i - blanks))
+                start = None
+                blanks = 0
+    if start is not None:
+        bands.append((y0 + start, y0 + len(rows) - 1 - blanks))
+
+    out: list[tuple[int, int, int, int]] = []
+    for ry0, ry1 in bands:
+        minx, maxx = 1 << 30, -1
+        for y in range(ry0, ry1 + 1):
+            base = y * w * 3
+            for x in range(x0, x1 + 1):
+                j = base + x * 3
+                if (abs(rgb[j] - tr) <= tol and abs(rgb[j + 1] - tg) <= tol
+                        and abs(rgb[j + 2] - tb) <= tol):
+                    if x < minx:
+                        minx = x
+                    if x > maxx:
+                        maxx = x
+        if maxx >= 0:
+            out.append((minx, ry0, maxx, ry1))
+    return out
+
+
+def _ink_runs_cut(inked: list[bool], n: int) -> list[tuple[int, int]]:
+    """Cut the inked extent of ``inked`` into exactly ``n`` index-bands at its
+    ``n-1`` *widest* interior blank runs (F181). This is the 1-D heart of the
+    count-driven path shared by :func:`_segment_rows_n` / :func:`_segment_cols_n`,
+    and the direct analogue of :func:`split_run` for glyphs: given the count ``n``
+    it ranks gaps *relatively* (widest first) instead of thresholding them by an
+    absolute ``gap``, so it parts items whose spacing is uneven (separators next to
+    tight rows). Cuts land in the *middle* of each chosen blank run so each band
+    keeps its item's ink. Returns ``[]`` when the inked span holds fewer than
+    ``n-1`` interior gaps — honest 'cannot part into n' rather than a guess."""
+    idx = [i for i, v in enumerate(inked) if v]
+    if not idx:
+        return []
+    lo, hi = idx[0], idx[-1]
+    if n <= 1:
+        return [(lo, hi)]
+    runs: list[tuple[int, int]] = []
+    s: int | None = None
+    for i in range(lo, hi + 1):
+        if not inked[i]:
+            if s is None:
+                s = i
+        elif s is not None:
+            runs.append((s, i - 1))
+            s = None
+    if len(runs) < n - 1:
+        return []
+    ordered = sorted(runs, key=lambda r: r[1] - r[0] + 1, reverse=True)
+    widest, rest = ordered[:n - 1], ordered[n - 1:]
+    # Honest separation guard: the n-1 cuts may only be trusted if the *narrowest
+    # chosen* gap is clearly wider than the *widest rejected* one. Otherwise the
+    # cut is ambiguous — e.g. asking for one band too many on a uniform menu bar
+    # forces a cut at an inter-*letter* gap no wider than the ones left uncut, which
+    # would split a word. When item-gaps do not stand out from letter-gaps, refuse
+    # (→ ``[]`` → caller yields ``{}``) rather than fabricate a band boundary.
+    if rest:
+        narrow_cut = widest[-1][1] - widest[-1][0] + 1
+        wide_skip = rest[0][1] - rest[0][0] + 1
+        if narrow_cut < 1.6 * wide_skip:
+            return []
+    mids = sorted((r[0] + r[1]) // 2 for r in widest)
+    bands: list[tuple[int, int]] = []
+    start = lo
+    for m in mids:
+        bands.append((start, m))
+        start = m + 1
+    bands.append((start, hi))
+    return bands
+
+
+def _segment_rows_n(rgb: bytes, size: tuple[int, int],
+                    bbox: tuple[int, int, int, int],
+                    fg: tuple[int, int, int], n: int,
+                    tol: int = 60) -> list[tuple[int, int, int, int]]:
+    """Count-driven row split (F181): part ``bbox`` into exactly ``n`` row-bands
+    by :func:`_ink_runs_cut` over the inked-row profile, then tighten each band to
+    its inked pixels. Returns fewer than ``n`` rects (→ caller yields ``{}``) when
+    the region cannot honestly be parted into ``n`` non-empty bands."""
+    w, _h = size
+    x0, y0, x1, y1 = bbox
+    tr, tg, tb = fg
+
+    def inked_row(y: int) -> bool:
+        base = y * w * 3
+        for x in range(x0, x1 + 1):
+            j = base + x * 3
+            if (abs(rgb[j] - tr) <= tol and abs(rgb[j + 1] - tg) <= tol
+                    and abs(rgb[j + 2] - tb) <= tol):
+                return True
+        return False
+
+    rows = [inked_row(y) for y in range(y0, y1 + 1)]
+    out: list[tuple[int, int, int, int]] = []
+    for i0, i1 in _ink_runs_cut(rows, n):
+        minx, maxx, miny, maxy = 1 << 30, -1, 1 << 30, -1
+        for y in range(y0 + i0, y0 + i1 + 1):
+            base = y * w * 3
+            for x in range(x0, x1 + 1):
+                j = base + x * 3
+                if (abs(rgb[j] - tr) <= tol and abs(rgb[j + 1] - tg) <= tol
+                        and abs(rgb[j + 2] - tb) <= tol):
+                    minx = x if x < minx else minx
+                    maxx = x if x > maxx else maxx
+                    miny = y if y < miny else miny
+                    maxy = y if y > maxy else maxy
+        if maxx >= 0:
+            out.append((minx, miny, maxx, maxy))
+    return out
+
+
+def _segment_cols_n(rgb: bytes, size: tuple[int, int],
+                    bbox: tuple[int, int, int, int],
+                    fg: tuple[int, int, int], n: int,
+                    tol: int = 60) -> list[tuple[int, int, int, int]]:
+    """Count-driven column split (F181) — the ``x`` transpose of
+    :func:`_segment_rows_n`: part ``bbox`` into exactly ``n`` column-bands at the
+    ``n-1`` widest blank columns, then tighten each to its inked pixels."""
+    w, _h = size
+    x0, y0, x1, y1 = bbox
+    tr, tg, tb = fg
+
+    def inked_col(x: int) -> bool:
+        for y in range(y0, y1 + 1):
+            j = (y * w + x) * 3
+            if (abs(rgb[j] - tr) <= tol and abs(rgb[j + 1] - tg) <= tol
+                    and abs(rgb[j + 2] - tb) <= tol):
+                return True
+        return False
+
+    cols = [inked_col(x) for x in range(x0, x1 + 1)]
+    out: list[tuple[int, int, int, int]] = []
+    for i0, i1 in _ink_runs_cut(cols, n):
+        minx, maxx, miny, maxy = 1 << 30, -1, 1 << 30, -1
+        for x in range(x0 + i0, x0 + i1 + 1):
+            for y in range(y0, y1 + 1):
+                j = (y * w + x) * 3
+                if (abs(rgb[j] - tr) <= tol and abs(rgb[j + 1] - tg) <= tol
+                        and abs(rgb[j + 2] - tb) <= tol):
+                    minx = x if x < minx else minx
+                    maxx = x if x > maxx else maxx
+                    miny = y if y < miny else miny
+                    maxy = y if y > maxy else maxy
+        if maxx >= 0:
+            out.append((minx, miny, maxx, maxy))
+    return out
+
+
 def locate_block_word(rgb: bytes, size: tuple[int, int],
                       bbox: tuple[int, int, int, int],
                       atlas: dict[str, list[int]], target: str,

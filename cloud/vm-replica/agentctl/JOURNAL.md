@@ -5316,6 +5316,151 @@ not forcing every control into one mechanism, every control is operable.
 
 ---
 
+## F180 — the semantic floor survives a *living* tree: walk in an ephemeral body
+
+**Ground: Ubuntu 22.04, X11 (KDE Plasma). The agent's own VM.**
+
+**Friction (a real app, found by using it).** Installed `gnome-calculator` (GTK)
+and drove arithmetic purely by meaning: `uia_invoke('7'), ('+'), ('5'), ('=')` —
+every press returned `True`. Then read the answer back by walking the tree
+again — and the **whole floor process segfaulted** (exit 139), each time after a
+flurry of GLib screams: `invalid unclassed pointer in cast to 'AtspiObject'`,
+`g_object_unref: assertion 'old_ref > 0' failed`. The arithmetic worked; *seeing
+its result* killed the floor. KWrite (F178/F179, 314–347 controls) never did
+this — the difference is that a calculator **rebuilds its accessible tree on
+every `=`**, and its tree is large and volatile (407→422 nodes, 325 of them menu
+items that pop in and out).
+
+**Mechanism (the deepest pointer fault yet — not ours alone).** Every
+synchronous AT-SPI call pumps libatspi's own GLib event loop while it waits for
+the D-Bus reply. During that pump, libatspi processes the app's
+*children-changed / defunct* events and **force-finalizes** any node whose remote
+peer just died — *regardless of the ref we hold*. So a long-lived walker that
+collects child refs and unrefs them as it recurses will, on a mutating tree,
+eventually call `g_object_unref` on an object libatspi already freed → the
+`old_ref > 0` double-free → SIGSEGV. Three escalating fixes proved the diagnosis:
+a `STATE_DEFUNCT` guard before touching a node *reduced* the crash but lost the
+TOCTOU race; fetching children **one at a time** (never holding a fistful of
+sibling refs) reduced it further but still lost; making `_unref` a **no-op
+(leak)** ran 15/15 hard cycles spotless — proving the fatal call is precisely our
+unref of a node the toolkit's own event loop already reclaimed.
+
+**Fix (grow the smallest robust primitive — give the volatile work its own
+ephemeral body).** Not unref'ing is crash-proof but leaks in a long-lived floor.
+Both horns dissolve at once if the walk runs in a **short-lived worker process**:
+- `_atspi_call(verb, win, **kw)` spawns `python3 _osbackend_x11.py
+  __atspi_worker__ <req>`; the child sets `_LEAK_REFS = True`, runs the one verb,
+  prints a tagged JSON result, and `os._exit(0)`.
+- In that ephemeral body **leaking is free** — the OS reclaims every byte the
+  instant it exits — so the walk *never unrefs a dead node and never crashes*.
+- The long-lived parent floor never touches the fragile tree, so it can **neither
+  crash nor leak**. A worker that dies anyway on a truly pathological tree just
+  yields the verb's honest empty (`""`, `[]`, `None`, `False`) — degradation, not
+  death. The eight `uia_*` verbs are unchanged; only *where* they run moved
+  (`uia_X` → thin wrapper → `_atspi_call` → `_impl_uia_X` in the child).
+
+**Live (this VM, `_probe_atspi_calc.py`, 2/2).**
+- **Arithmetic by meaning, checked against the app's own readout**: `123 × 8`
+  driven entirely through `uia_invoke`, and `uia_children` reads `984` straight
+  off the calculator's own display — an oracle the floor cannot fake.
+- **The mutation race is gone**: 12 interleaved `press(7,+,9,=)` + full re-walk
+  cycles on the live, rebuilding tree — **no segfault**, every walk returns. The
+  exact sequence that killed the floor now runs to completion.
+- **No regression**: KWrite `uia_name/children/find` and the F179 invoke→click→
+  type→`get_value` round-trip (CJK and all) still pass through the new isolation;
+  `find`'s rect survives the JSON crossing as a tuple.
+
+**Lesson (道法自然).** 出生入死 — what lives also dies; the accessible tree is
+not a fixture but a *living* thing that is born and torn down under your hand. To
+read a living thing safely, do not grip it in a body that must outlive it; lend
+it a body that dies with the reading. 夫唯不爭，故天下莫能與之爭 — by *not*
+contending to free what the toolkit already freed, the floor cannot be made to
+crash. 無有入於無間: the formless worker enters the volatile tree, takes what it
+needs, and dissolves, leaving the long-lived floor untouched — 生而弗有，為而弗恃.
+(Known, deliberately un-pre-solved: the per-call spawn costs latency; a persistent
+recycling worker is the next optimization, to be grown only when a real workload
+makes that friction bite.)
+
+---
+
+## F181 — operate a native OpenGL canvas app by meaning (`locate_labels`) · Blender
+
+**Friction (反者道之動 — push into the hardest GUI, let the floor's blindness show).**
+Installed Blender (3D modelling, a self-drawn OpenGL viewport — no toolkit widgets)
+and tried to operate it with the floor. Two senses failed in succession:
+- **Semantic floor is blind here, and says so.** `uia_name(blender)` → `''`,
+  `uia_children(blender)` → `[]`. Blender paints its whole UI on one GL canvas; it
+  exposes no AT-SPI tree. Honest empty, not a crash — but no control has a name.
+- **The OCR path cannot help either.** Every reader since F103 (`read_text`,
+  `locate_word`) needs an *atlas* of the target font's glyphs, and the only atlas
+  the floor can build is rendered by **itself on a browser scratch canvas** — a
+  font Blender does not use. Harvesting an atlas from Blender's *own* rendering
+  founders one rung lower, on **glyph segmentation**: its ~9px proportional
+  anti-aliased labels fuse and split unreliably (`"File"` happens to cut into 4,
+  but `"Render"` shatters into 12). Per-glyph reading is simply lost on small
+  native type. So the floor could not act on Blender at all.
+
+**Mechanism (the seam that was missing).** You do not need to *read* a menu to
+*act* on it. A menu bar / dropdown / toolbar is an **ordered sequence of *known*
+labels parted by wide blank space**, and the item-level gaps are far larger and
+far more reliable than the inter-letter gaps that defeat glyph OCR. If you already
+know *which* labels are there and *in what order* (you do — you wrote "Add → Mesh →
+Cube"), you never have to recognise a glyph; you only have to *count runs* and pair
+them to your list in reading order. 瞽者善聽，聾者善視 — blind to glyphs, the floor
+sees by the one source it can trust: the rhythm of blank space between items.
+
+**Primitive grown — `locate_labels(rgb,size,bbox,labels,fg,axis)` → {label: rect}.**
+Maps an ordered known-label list to click-rects with **no atlas**. Two segmenters,
+fast then count-driven:
+- *Fast path* — one fixed-`gap` blank-run cut (`segment_run` on `x`, the new
+  `_segment_rows` on `y`). Nails *uniform* strips (the menu bar, a plain dropdown)
+  in a single pass.
+- *Count-driven path* (`_segment_rows_n` / `_segment_cols_n` / `_ink_runs_cut`) —
+  a real menu is rarely uniform: Blender's File menu interleaves shortcut text,
+  submenu arrows and several separator rules, so **no single `gap` yields the right
+  band count** (too small splits a separator, too large fuses two items). This
+  borrows the exact discipline of `split_run` (which parts *touching glyphs* once
+  told the glyph count `n`): given the *label* count, cut the ink profile at its
+  `n-1` **widest** blank valleys — ranking gaps *relatively* instead of by an
+  absolute threshold, so it parts items whose spacing is uneven.
+- *Honest degradation, two ways.* It commits only when it can form exactly
+  `len(labels)` bands (a hidden/extra item → `{}`, never a mispairing). And because
+  a spurious valley (shortcut/icon ink) can make the count *match* while a cut is
+  *displaced* — leaving a band hugging a 2–3px sliver — `_reject_thin` rejects any
+  segmentation whose thinnest band collapses on its cross-axis (`{}` rather than a
+  confident-but-wrong map). The File menu honestly returns `{}`; the clean Add/Mesh
+  menus map exactly.
+
+**Live (this VM, recorded + headless oracle).**
+- **Add a Cube to Blender entirely by meaning**: top header `Add` (horizontal,
+  `axis=x`) → `Add` dropdown `Mesh` (`axis=y`, 17 items) → `Mesh` submenu `Cube`
+  (`axis=y`, 10 items). No pixel target was hard-coded; every click was a label
+  located by run-segmentation. Repeated for `Add → Mesh → Monkey`.
+- **Independent oracle the floor cannot fake**: saved the scene through the floor
+  (Ctrl+S — `'S'` is VK `0x53`, A–Z map by formula — then the file browser's name
+  field typed and confirmed by the floor) and re-opened it in a **headless**
+  Blender that never saw the GUI: `ORACLE_MESH_OBJECTS=3 ['Cube','Cube.001',
+  'Suzanne']` — the default cube plus the two the floor added by meaning.
+- **Count-driven correctness, positively**: with the fast path deliberately broken
+  (`gap=1`) on the clean Add menu, the count-driven path recovered the *identical*
+  17-way mapping (`Mesh` at the same rect) — it produces correct maps, not just
+  honest refusals. And the messy File menu → `{}` (honest).
+- **No regression**: `test_live.py` 799/800 — the one fail is the F139 pixel-
+  centroid jitter present since F177, outside this change (which only *adds*
+  `locate_labels` and helpers; no existing path is touched).
+
+**Lesson (道法自然).** 大音希聲，大象無形 — the loudest control needs no sound, the
+plainest form no outline: the floor stopped trying to *read* the canvas and instead
+*counted the silence between things it already knew*. 絕利一源，用師十倍 — cut off
+to the one source you can trust (the rhythm of blank space) and you gain tenfold.
+And 知止不殆: the primitive grows only as far as the count guarantees it, and where
+the menu's own clutter breaks that guarantee it stops and says `{}` — knowing where
+to halt is what keeps it from ever lying. (Known, deliberately un-pre-solved: a
+menu *whose label set you do not know* still needs the atlas path — `locate_labels`
+acts on the known, it does not read the unknown.)
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
