@@ -258,6 +258,10 @@ function pxAuthBridge(prefix, auth) {
     "var oX=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var nu=(typeof u==='string')?__pf(u):u;" +
     "var r=oX.apply(this,[m,nu].concat([].slice.call(arguments,2)));if(needAuth(nu)){try{this.setRequestHeader('Authorization','Bearer '+__a1);this.setRequestHeader('x-cog-org-id',__org);}catch(e){}}return r;};" +
     "try{var _ES=window.EventSource;if(_ES){var nES=function(u,o){return new _ES(__pf(u),o);};nES.prototype=_ES.prototype;try{nES.CONNECTING=_ES.CONNECTING;nES.OPEN=_ES.OPEN;nES.CLOSED=_ES.CLOSED;}catch(e){}window.EventSource=nES;}}catch(e){}" +
+    // WebSocket 同源化: SPA 实时通道(会话事件流)用 new WebSocket(wss://…) 直连真站, 浏览器原生 WS 无法带 auth
+    //   且跨源被 CSP/同源策略拦 → 「一直连接中/Reconnecting」之根。改写为本前缀同源 WS: 同源主机直接补前缀;
+    //   异源 wss 主机 → /i/<acc>/__wsx/<b64源URL>, 由边缘 Worker 出站代理并注入 Authorization(根治鉴权)。
+    "try{var _OWS=window.WebSocket;if(_OWS){var __wsf=function(u){try{u=String(u);var abs;if(/^wss?:\\/\\//i.test(u)){abs=u;}else{abs=new URL(u,location.href).href.replace(/^http/i,'ws');}var hu=new URL(abs.replace(/^ws/i,'http'));var sch=(location.protocol==='https:'?'wss://':'ws://');if(hu.host===location.host){var p=hu.pathname+hu.search;if(__pfx&&p.indexOf(__pfx)!==0)p=__pfx+(p.charAt(0)==='/'?p:'/'+p);return sch+location.host+p;}var b=btoa(abs).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');return sch+location.host+__pfx+'/__wsx/'+b;}catch(e){return u;}};var __WS=function(u,pr){var nu=__wsf(u);return (pr!==undefined)?new _OWS(nu,pr):new _OWS(nu);};__WS.prototype=_OWS.prototype;try{__WS.CONNECTING=_OWS.CONNECTING;__WS.OPEN=_OWS.OPEN;__WS.CLOSING=_OWS.CLOSING;__WS.CLOSED=_OWS.CLOSED;}catch(e){}window.WebSocket=__WS;}}catch(e){}" +
     "}catch(e){}})();</script>";
 }
 // 第三方站轻量桥接: 仅运行时前缀化动态构造的根绝对/绝对 URL (无账号注入)。
@@ -298,6 +302,55 @@ async function pxProxy(req, opts) {
     }
   } catch (e) { /* 缓存失败不影响返回 */ }
   return resp;
+}
+
+// WebSocket 边缘反代 (Path A·补全·根治「一直连接中/Reconnecting」): /i/<acc>/ 下的 WS 升级请求 —— Devin
+//   实时通道(会话事件流)经此打到上游。浏览器原生 WS 无法附带鉴权头, 故由 Worker 出站 fetch 注入
+//   Authorization/org → 上游接受握手, 双向逐帧转发。同源 WS(/i/<acc>/<path>)按 pxResolveUpstream 解析;
+//   桥接垫片把异源 wss 主机改写成 /i/<acc>/__wsx/<b64源URL> → 此处解出真实上游。仅 Devin 前缀启用。
+async function pxWsProxy(req, opts) {
+  const rp = opts.restPath || "/";
+  const qi = rp.indexOf("?");
+  const pathOnly = qi >= 0 ? rp.slice(0, qi) : rp;
+  const query = qi >= 0 ? rp.slice(qi) : "";
+  let target = "";
+  if (pathOnly.indexOf("/__wsx/") === 0) {
+    const b64 = pathOnly.slice("/__wsx/".length);
+    try { target = atob(b64.replace(/-/g, "+").replace(/_/g, "/")); } catch (e) { target = ""; }
+    if (target && query) target += target.indexOf("?") >= 0 ? ("&" + query.slice(1)) : query;
+  } else {
+    const up = pxResolveUpstream(pathOnly);
+    target = up.base.replace(/^http/i, "ws") + up.path + query;
+  }
+  if (!/^wss?:\/\//i.test(target)) { try { target = String(target).replace(/^http/i, "ws"); } catch (e) {} }
+  if (!/^wss?:\/\//i.test(target)) return new Response("bad_ws_target", { status: 400 });
+
+  const fwd = new Headers();
+  fwd.set("Upgrade", "websocket");
+  fwd.set("Connection", "Upgrade");
+  fwd.set("User-Agent", PX_UA);
+  const proto = req.headers.get("sec-websocket-protocol"); if (proto) fwd.set("Sec-WebSocket-Protocol", proto);
+  const auth = opts.auth || {};
+  if (auth.auth1) fwd.set("Authorization", "Bearer " + auth.auth1);
+  if (auth.orgId) fwd.set("x-cog-org-id", auth.orgId);
+
+  let up;
+  try { up = await fetch(target.replace(/^ws/i, "http"), { headers: fwd }); }
+  catch (e) { return new Response("ws_upstream_failed: " + String((e && e.message) || e), { status: 502 }); }
+  const upWs = up.webSocket;
+  if (!upWs) return new Response("ws_upstream_no_socket (" + up.status + ")", { status: 502 });
+  upWs.accept();
+  const pair = new WebSocketPair();
+  const client = pair[0], server = pair[1];
+  server.accept();
+  const closeBoth = function () { try { upWs.close(); } catch (e) {} try { server.close(); } catch (e) {} };
+  server.addEventListener("message", function (e) { try { upWs.send(e.data); } catch (x) {} });
+  upWs.addEventListener("message", function (e) { try { server.send(e.data); } catch (x) {} });
+  server.addEventListener("close", closeBoth);
+  upWs.addEventListener("close", closeBoth);
+  server.addEventListener("error", closeBoth);
+  upWs.addEventListener("error", closeBoth);
+  return new Response(null, { status: 101, webSocket: client });
 }
 
 // 单请求边缘反代: Worker 直取上游 → 剥安全头 → HTML 注桥/前缀化 / JS·CSS·JSON 改写 / SSE 直通 / 余透传。
@@ -730,6 +783,10 @@ export default {
       }
       if (!auth || !auth.auth1) {
         return new Response("<!doctype html><meta charset=utf-8><body style='font:15px system-ui;padding:24px;color:#c9d1d9;background:#0d1117'><h3>会话已过期</h3><p>请回控台重新打开此 Devin 实例。</p>", { status: 401, headers: { "content-type": "text/html; charset=utf-8" } });
+      }
+      // WS 升级请求(Devin 实时通道) → 边缘 WS 反代(注入鉴权·双向逐帧) → 根治网页内「一直连接中」。
+      if (String(req.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
+        return pxWsProxy(req, { prefix: prefix, restPath: restPath, auth: auth });
       }
       const iResp = await pxProxy(req, { prefix: prefix, restPath: restPath, auth: auth, host: url.host });
       // 仅首个无 cookie 的页面导航(非不可变资源)补种同站 cookie → 之后 iframe 内同站子请求自带、无需再取库。

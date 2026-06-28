@@ -1138,24 +1138,41 @@
     var QUOTA_THROTTLE = 30*60*1000;              // 同账号「已耗尽」通知 >=30 分钟一次 (仍耗尽则定时提醒一次, 不扰民)
     var QLOW_THROTTLE = 6*3600*1000;              // 同账号「即将耗尽」预警 >=6 小时一次
     var QLOW_PCT = 10;                            // 日额度剩余 <= 此值且无 extra usage 缓冲 -> 即将耗尽
+    var LKEY = "rtflow.convwatch.latest";         // email -> {name, ts}  最近对话名缓存
     function _ls(k){ try{ return JSON.parse(localStorage.getItem(k)||"{}")||{}; }catch(e){ return {}; } }
     function _ss(k,o){ try{ localStorage.setItem(k, JSON.stringify(o)); }catch(e){} }
+    // 最近对话名缓存: 凡本轮见到某号一条对话名即记下(带 ts), 供额度类通知优先显示「对话名」而非账号名;
+    //   90 天未更新即剪枝。即便本轮该号无活跃对话(只剩额度低/历史), 仍能回忆其最近对话名。
+    function _updLatest(titleByAcct, now){
+      try{ var c=_ls(LKEY), ch=false;
+        Object.keys(titleByAcct).forEach(function(e){ var nm=titleByAcct[e]; if(!nm)return; var p=c[e]; if(!p||p.name!==nm){ c[e]={name:nm,ts:now}; ch=true; } else { p.ts=now; ch=true; } });
+        Object.keys(c).forEach(function(e){ if(now-((c[e]&&c[e].ts)||0) > 90*864e5){ delete c[e]; ch=true; } });
+        if(ch) _ss(LKEY, c);
+      }catch(e){}
+    }
+    function _latestName(email){ try{ var p=_ls(LKEY)[email]; return (p&&p.name)||""; }catch(e){ return ""; } }
+    // 通知主体名: 优先「本轮该号当前对话名」→ 其次「最近对话名缓存」→ 仅当确无任何对话(全新账号)才回退账号名。
+    function _acctConvName(email, preferred){
+      var nm = String(preferred||"").trim(); if(nm) return nm;
+      nm = _latestName(email); if(nm) return nm;
+      return String(email||"").split("@")[0];
+    }
     // 额度耗尽: 按账号聚合 N 个休眠对话, 跃迁(从无到有/数目增加)或超节流窗即真推送一次; 恢复(本轮无)即清, 下次再耗尽立报。
-    function quotaWatch(byAcct, now){
+    function quotaWatch(byAcct, titleByAcct, now){
       var q = _ls(QKEY), nq = {};
       Object.keys(byAcct).forEach(function(email){
         var cnt = byAcct[email]|0; if(cnt<=0) return;
         var p = q[email], transition = !p || (p.cnt|0) < cnt, stale = p && (now - (p.ts||0) >= QUOTA_THROTTLE);
         if (transition || stale) {
-          var who = String(email).split("@")[0];
-          notify("quota-" + email, "\uD83D\uDED1 " + who + " \u989d\u5ea6\u5df2\u8017\u5c3d", cnt + " \u4e2a\u5bf9\u8bdd\u56e0\u914d\u989d\u8017\u5c3d\u4f11\u7720, \u8bf7\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+          var subj = _acctConvName(email, titleByAcct && titleByAcct[email]);   // 主体优先用该号额度耗尽对话名(用户要求: 有对话即显示对话名, 不再显示账号名)
+          notify("quota-" + email, "\uD83D\uDED1 " + subj + " \u989d\u5ea6\u5df2\u8017\u5c3d", cnt + " \u4e2a\u5bf9\u8bdd\u56e0\u914d\u989d\u8017\u5c3d\u4f11\u7720, \u8bf7\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
           nq[email] = { ts: now, cnt: cnt };
         } else { nq[email] = { ts: (p&&p.ts)||now, cnt: cnt }; }
       });
       _ss(QKEY, nq);   // 未出现在本轮的账号自动清出 -> 视为恢复
     }
     // 额度即将耗尽: 主动预警 (仅当 quota.dPct 为数值且 ∈(0,阈值] 且无 extra usage 美金缓冲 -> 杜绝 stale/未知误报)。
-    function quotaLowWatch(accs, now){
+    function quotaLowWatch(accs, titleByAcct, now){
       var s = _ls(QLKEY), ns = {};
       accs.forEach(function(a){
         var qd = a.quota; if(!qd || typeof qd.dPct !== "number") return;
@@ -1163,8 +1180,8 @@
         if(pct>0 && pct<=QLOW_PCT && ovg<=0){
           var p = s[a.email], last = (p&&p.ts)||0;
           if(now-last >= QLOW_THROTTLE){
-            var who = String(a.email||a.id).split("@")[0];
-            notify("qlow-" + a.email, "\u26a0\ufe0f " + who + " \u989d\u5ea6\u5373\u5c06\u8017\u5c3d", "\u65e5\u989d\u5ea6\u4ec5\u5269 " + pct + "%, \u5efa\u8bae\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+            var subj = _acctConvName(a.email, titleByAcct && titleByAcct[a.email]);   // 主体优先用该号最近对话名, 仅全新无对话账号才回退账号名
+            notify("qlow-" + a.email, "\u26a0\ufe0f " + subj + " \u989d\u5ea6\u5373\u5c06\u8017\u5c3d", "\u65e5\u989d\u5ea6\u4ec5\u5269 " + pct + "%, \u5efa\u8bae\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
             ns[a.email] = { ts: now };
           } else ns[a.email] = { ts: last };
         }
@@ -1179,14 +1196,17 @@
       if (!r || !r.ok || !Array.isArray(r.sessions)) return;
       var prev = loadPrev(), next = {}, now = Date.now();
       // 本轮 active(running/awaiting) 与 attention(action_required/blocked) 集合
-      var cur = Object.create(null), quotaByAcct = Object.create(null);
+      var cur = Object.create(null), quotaByAcct = Object.create(null), quotaTitleByAcct = Object.create(null), titleByAcct = Object.create(null);
       r.sessions.forEach(function(s){
         var sid = s.sid; if (!sid) return;
+        var ttl = s.title || "";
+        if (s.email && ttl && !titleByAcct[s.email]) titleByAcct[s.email] = ttl;   // 该号一条当前对话名 → 供额度类通知显示对话名而非账号名
         // 额度耗尽单独聚合 (仍登记进 cur·phase=quota -> 既不误判「已结束」, 又不触发卡住通知)。
-        if (s.reason === "quota") { cur[sid] = { phase: "quota", title: s.title || sid, email: s.email || "" }; var k = s.email || "?"; quotaByAcct[k] = (quotaByAcct[k]||0) + 1; return; }
+        if (s.reason === "quota") { cur[sid] = { phase: "quota", title: s.title || sid, email: s.email || "" }; var k = s.email || "?"; quotaByAcct[k] = (quotaByAcct[k]||0) + 1; if (ttl && !quotaTitleByAcct[k]) quotaTitleByAcct[k] = ttl; return; }
         var phase = (s.reason === "action_required" || s.reason === "blocked" || s.reason === "awaiting") ? "stuck" : "active";
         cur[sid] = { phase: phase, title: s.title || sid, email: s.email || "", reason: s.reason, label: s.actionLabel };
       });
+      _updLatest(titleByAcct, now);   // 更新最近对话名缓存(供额度类通知优先显示对话名)
       // 跃迁判定
       Object.keys(cur).forEach(function(sid){
         var c = cur[sid], p = prev[sid];
@@ -1204,8 +1224,8 @@
       });
       savePrev(next);
       // 额度通知 (真·系统推送, 与对话卡座同款): 已耗尽聚合 + 即将耗尽预警。
-      try { quotaWatch(quotaByAcct, now); } catch(e){}
-      try { quotaLowWatch(accs, now); } catch(e){}
+      try { quotaWatch(quotaByAcct, quotaTitleByAcct, now); } catch(e){}
+      try { quotaLowWatch(accs, titleByAcct, now); } catch(e){}
     }
     setTimeout(function(){ tick(); setInterval(tick, POLL_MS); }, FIRST_DELAY);
     log("convwatch armed (对话追踪·全局通知, 轮询 " + (POLL_MS/1000) + "s)");

@@ -141,3 +141,34 @@ test("repairUvJs: 无 __uv.$get 的源码原样返回 (快路径)", () => {
   const s = "export const a=1; for(;;){continue;}";
   assert.strictEqual(repairUvJs(s), s);
 });
+
+// —— /i/ 反代 WebSocket 升级代理(根治网页内 Devin「一直连接中/Reconnecting」) ——
+const workerSrc = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
+
+test("pxWsProxy: 存在且解 /__wsx/<b64> 与 pxResolveUpstream 两路上游", () => {
+  assert.ok(/async function pxWsProxy\(req, opts\)/.test(workerSrc), "pxWsProxy 函数存在");
+  assert.ok(/pathOnly\.indexOf\("\/__wsx\/"\) === 0/.test(workerSrc), "异源 wss → /__wsx/<b64> 解码路径");
+  assert.ok(/pxResolveUpstream\(pathOnly\)/.test(workerSrc), "同源路径 → pxResolveUpstream 解析上游");
+});
+
+test("pxWsProxy: 出站注入 Authorization(浏览器原生 WS 无法带鉴权头) + 返回 101 webSocket", () => {
+  assert.ok(/fwd\.set\("Upgrade", "websocket"\)/.test(workerSrc), "出站带 Upgrade: websocket");
+  assert.ok(/if \(auth\.auth1\) fwd\.set\("Authorization", "Bearer " \+ auth\.auth1\)/.test(workerSrc), "注入 Bearer 鉴权");
+  assert.ok(/new WebSocketPair\(\)/.test(workerSrc) && /status: 101, webSocket: client/.test(workerSrc), "WebSocketPair + 101 升级返回");
+  assert.ok(/upWs\.send\(e\.data\)/.test(workerSrc) && /server\.send\(e\.data\)/.test(workerSrc), "双向逐帧转发");
+});
+
+test("/i/ 处理器: Upgrade:websocket 请求路由到 pxWsProxy", () => {
+  assert.ok(/String\(req\.headers\.get\("Upgrade"\) \|\| ""\)\.toLowerCase\(\) === "websocket"/.test(workerSrc), "检测 WS 升级头");
+  assert.ok(/return pxWsProxy\(req, \{ prefix: prefix, restPath: restPath, auth: auth \}\);/.test(workerSrc), "升级请求转 pxWsProxy");
+});
+
+test("pxAuthBridge: override window.WebSocket 同源化(同源补前缀·异源经 /__wsx/)", () => {
+  assert.ok(/var _OWS=window\.WebSocket/.test(workerSrc), "保存原生 WebSocket");
+  assert.ok(/window\.WebSocket=__WS/.test(workerSrc), "替换 window.WebSocket");
+  assert.ok(/__pfx\+'\/__wsx\/'\+b/.test(workerSrc), "异源 wss → 本前缀 /__wsx/<b64> 代理");
+});
+
+test("VERSION 标记含 WS 反代(部署后 /health 可核)", () => {
+  assert.ok(/i-ws-proxy/.test(VERSION) || /ws/i.test(VERSION), "VERSION 体现 /i/ WS 代理");
+});
