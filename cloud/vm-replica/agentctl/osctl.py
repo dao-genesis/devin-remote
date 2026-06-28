@@ -155,6 +155,12 @@ uia_find = getattr(_be, "uia_find", lambda win, name=None, ctype=None: None)
 uia_set_value = getattr(_be, "uia_set_value", lambda win, value, name=None, ctype=None: False)
 uia_get_value = getattr(_be, "uia_get_value", lambda win, name=None, ctype=None: "")
 uia_invoke = getattr(_be, "uia_invoke", lambda win, name=None, ctype=None: False)
+# UIA click (F179): the explicit union of the semantic and gesture floors — locate a
+# control by name/role, then land a real click on its screen rect. Answers for ANY
+# visible control (text regions, canvases, custom widgets) regardless of whether the
+# toolkit exposed an Action; uia_invoke falls through to this when a match is not
+# actionable. False if no element / accessibility unavailable.
+uia_click = getattr(_be, "uia_click", lambda win, name=None, ctype=None: False)
 # UIA focus (F169): the bridge from semantic LOCATE to the keystroke floor. Some
 # modern inputs (rich text, contenteditable, custom canvases) expose no ValuePattern
 # to write through, but CAN be focused through the accessibility tree; once focused,

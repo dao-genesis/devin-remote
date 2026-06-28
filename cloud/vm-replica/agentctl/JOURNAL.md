@@ -5257,6 +5257,62 @@ finds, it acts — 無為而無不為.
 
 ---
 
+## F179 — the two floors become one: invoke falls through to a real click (`uia_click`)
+
+**Ground: Ubuntu 22.04, X11 (KDE Plasma). The agent's own VM.**
+
+**Friction.** F178 ended on a promise: *where a toolkit's Action is incomplete,
+`uia_find`'s rect is the universal fallback — meaning → geometry → the gesture
+floor*. The promise was not yet kept in code. Walk KWrite's accessible tree and
+**347** controls carry a screen rect; exactly **one** of them — the editor text
+region itself (`role=text`, rect `(81,98,998,743)`) — exposes **no Action
+interface at all**. It is the most important surface in the whole window, and
+`uia_invoke` found it and then had nothing to fire: `get_action_iface → NULL →
+return False`. A toolkit wires *some* controls for accessibility (buttons, menu
+items) and leaves the content surfaces (a text canvas, a drawing area, a custom
+widget) to be *clicked* like a human would. The semantic floor could **name**
+that region but could not **act** on it — a second, narrower blindness exactly
+where the work matters most.
+
+**Mechanism.** There was never a missing capability here — only a missing
+*join*. The pixel/gesture floor (move + XTEST click) already lands a click
+anywhere on screen; the semantic floor already turns a name/role into a screen
+rect (`uia_find`). The two were strangers. The bridge is one function:
+`_click_rect(win, rect)` — raise the owning window so the click reaches it, aim
+at the rect's centre, press/release through the *same* XTEST path every other
+click uses. Semantics choose *what*; pixels deliver the *where*.
+
+**Fix (grow the smallest joining primitive).**
+- `uia_click(win, name, ctype)` — the join made explicit: locate a control purely
+  by meaning, then land a real click on its rect. Answers for **any** visible
+  control regardless of whether the toolkit made it actionable.
+- `uia_invoke` now **falls through** to that same path: try `Action.do_action(0)`
+  first (the clean, no-pixel route when a control offers it); only if there is no
+  Action, or it refuses, locate the rect and click it. So invoke-by-meaning is
+  total — a button fires through its Action, a text region answers through a
+  click, and the caller need not know which.
+
+**Live (this VM, `_probe_atspi_click.py`, 2/2).**
+- **Invoke-fallback on the no-Action region**: cursor parked outside at
+  `(76,93)`; `uia_invoke(ctype="text")` now returns `True` and the cursor lands
+  at `(580,469)` — *inside* the rect meaning located. The verb that had nothing
+  to fire now acts.
+- **Click + type round-trip**: `uia_click(ctype="text")` places the caret by
+  meaning; the universal keyboard floor types `F179 union-of-floors 道法自然`
+  (CJK and all); the toolkit's *own* text reads straight back through the
+  semantic floor (`uia_get_value → 'F179 union-of-floors 道法自然'`). Located by
+  meaning, acted by gesture, confirmed by meaning — the loop closes on itself.
+
+**Lesson (道法自然).** 天下之至柔，馳騁於天下之致堅；無有入於無間 — the softest
+(meaning) rides through the hardest (an opaque content surface the toolkit never
+wired); the formless enters where there is no gap. The floor stops being two
+separate organs — an eye that sees meaning, a hand that strikes pixels — and
+becomes one body where the eye guides the hand without a seam. 大成若缺，其用不敝:
+the whole is complete precisely by keeping the humble fallback. 無為而無不為 — by
+not forcing every control into one mechanism, every control is operable.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
