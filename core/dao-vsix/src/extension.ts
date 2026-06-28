@@ -2367,6 +2367,7 @@ const DAO_B_FACTORY = `window.__daoB=(function(){
   B.text=function(k){var el=k?B.el(k):document.body;return el?(el.innerText||el.textContent||''):'';};
   B.html=function(k,outer){var el=k?B.el(k):document.documentElement;if(!el)return '';return outer?el.outerHTML:el.innerHTML;};
   B.exists=function(k){return !!B.el(k);};
+  B.fillForm=function(items){items=items||[];var out=[];for(var i=0;i<items.length;i++){var it=items[i]||{};var k=it.ref||it.selector;var el=B.el(k);if(!el){out.push({field:k,ok:false,error:'not-found'});continue;}var tag=el.tagName.toLowerCase();var type=(el.type||'').toLowerCase();try{el.scrollIntoView({block:'center'});}catch(e){}if(tag==='select'){var vals=Array.isArray(it.value)?it.value:[it.value];out.push({field:k,ok:true,kind:'select',selected:B.selectOption(k,vals)});}else if(type==='checkbox'||type==='radio'){var want;if(type==='radio'&&it.value!=null&&it.value!==true&&it.value!==false){want=(String(el.value)===String(it.value));}else{want=(it.value===true||it.value==='true'||it.value==='on'||it.value==='checked'||it.value===1||it.value==='1');}try{el.focus();}catch(e){}el.checked=want;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));out.push({field:k,ok:true,kind:type,checked:want});}else{B.setValue(k,(it.value==null?'':String(it.value)));out.push({field:k,ok:true,kind:'text'});}}return {filled:out.filter(function(o){return o.ok;}).length,total:items.length,results:out};};
   if(!B._hooked){B._hooked=true;['log','info','warn','error','debug'].forEach(function(lv){var orig=console[lv];console[lv]=function(){try{B.logs.push({level:lv,text:Array.prototype.map.call(arguments,function(x){try{return typeof x==='string'?x:JSON.stringify(x);}catch(e){return String(x);}}).join(' ').slice(0,500),t:Date.now()});if(B.logs.length>300)B.logs.shift();}catch(e){}return orig.apply(console,arguments);};});window.addEventListener('error',function(e){try{B.logs.push({level:'error',text:String((e&&e.message)||(e&&e.error)||e).slice(0,500),t:Date.now()});}catch(_){}});try{var of=window.fetch;if(of){window.fetch=function(){var u=(arguments[0]&&arguments[0].url)?arguments[0].url:String(arguments[0]);var m=(arguments[1]&&arguments[1].method)||'GET';var rec={url:String(u).slice(0,300),method:m,t:Date.now()};B.net.push(rec);if(B.net.length>300)B.net.shift();return of.apply(this,arguments).then(function(resp){rec.status=resp.status;return resp;}).catch(function(err){rec.error=String(err).slice(0,120);throw err;});};}}catch(e){}try{var oo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){this.__dao={url:String(u).slice(0,300),method:m,t:Date.now()};try{this.addEventListener('loadend',function(){try{this.__dao.status=this.status;B.net.push(this.__dao);if(B.net.length>300)B.net.shift();}catch(e){}});}catch(e){}return oo.apply(this,arguments);};}catch(e){}}
   return B;
 })();`;
@@ -2485,6 +2486,7 @@ function daoMcpToolDefs() {
         { name: 'browser_emulate', description: '设备视口模拟(对照手机·responsive 布局): device=iphone|pixel|ipad 预设, 或自定义 width/height/mobile/deviceScaleFactor/touch; 视口+触摸持久生效(含跨导航), 完整 UA/请求头模拟需常驻会话暂未提供; reset=true 还原', inputSchema: S({ device: { type: 'string', enum: ['iphone', 'pixel', 'ipad'] }, width: { type: 'number' }, height: { type: 'number' }, mobile: { type: 'boolean' }, deviceScaleFactor: { type: 'number' }, touch: { type: 'boolean' }, reset: { type: 'boolean' }, targetId: { type: 'string' } }) },
         { name: 'browser_cookies', description: 'Cookie 读写(登录态续用): action=get|set|clear|delete', inputSchema: S({ action: { type: 'string', enum: ['get', 'set', 'clear', 'delete'] }, urls: { type: 'array' }, cookies: { type: 'array' }, name: { type: 'string' }, url: { type: 'string' }, domain: { type: 'string' }, path: { type: 'string' }, targetId: { type: 'string' } }) },
         { name: 'browser_pdf', description: '整页导出 PDF(Page.printToPDF·传 path 落盘)', inputSchema: S({ path: { type: 'string' }, landscape: { type: 'boolean' }, background: { type: 'boolean' }, targetId: { type: 'string' } }) },
+        { name: 'browser_fill_form', description: '批量填表单(一发填多字段·对照 Chrome-DevTools-MCP fill_form·省去逐字段 type): fields=[{ref|selector,value}] — 文本框写值/复选框勾选(value 真/假)/单选选中(value=该项 value)/下拉选项(value 字串或数组); 可选 submit=在首字段处回车提交', inputSchema: S({ fields: { type: 'array' }, submit: { type: 'boolean' }, targetId: { type: 'string' } }, ['fields']) },
         // pc_* 补全 (整机对等)
         { name: 'pc_drag', description: '整机鼠标拖拽(归一化坐标 from→to)', inputSchema: S({ fromNx: { type: 'number' }, fromNy: { type: 'number' }, toNx: { type: 'number' }, toNy: { type: 'number' }, button: { type: 'string' } }, ['fromNx', 'fromNy', 'toNx', 'toNy']) },
         { name: 'pc_key_combo', description: '整机组合键(vks=Windows 虚拟键码数组·依次按下逆序抬起·如 [17,67]=Ctrl+C)', inputSchema: S({ vks: { type: 'array' } }, ['vks']) },
@@ -2696,6 +2698,14 @@ async function daoMcpCallTool(name, a) {
             if (!r || !r.data) return daoMcpErr('pdf-empty');
             if (a.path) { try { const buf = Buffer.from(r.data, 'base64'); fs.writeFileSync(a.path, buf); return daoMcpText({ saved: a.path, bytes: buf.length }); } catch (e) { return daoMcpErr('write: ' + (e && e.message)); } }
             return daoMcpText({ base64Len: r.data.length, hint: '传 path 可直接落盘为 PDF' });
+        }
+        case 'browser_fill_form': {
+            const t = await daoCdpPickPage(a.targetId);
+            const fields = Array.isArray(a.fields) ? a.fields : [];
+            if (!fields.length) return daoMcpErr('fields required (数组·每项含 ref|selector + value)');
+            const res = await daoCdpEvalT(t, daoBExpr('window.__daoB.fillForm(' + JSON.stringify(fields) + ')'));
+            if (a.submit) { const first = fields[0] || {}; const sel = first.ref || first.selector; if (sel) { await daoCdpEvalT(t, daoBExpr('window.__daoB.focus(' + JSON.stringify(sel) + ')')); await daoCdpKey(t, 'Enter'); } }
+            return daoMcpText(res);
         }
         case 'browser_drag': {
             const t = await daoCdpPickPage(a.targetId);
