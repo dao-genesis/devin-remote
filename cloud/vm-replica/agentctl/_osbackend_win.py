@@ -838,7 +838,7 @@ def capture_rgb(x: int = 0, y: int = 0,
 # Best-effort raw-COM UIA in pure ctypes; any failure degrades to empty results
 # so the backend still imports and callers fall back to the Win32 / pixel floor.
 try:
-    from _uia_win import (uia_name, uia_children, uia_find, uia_find_all,
+    from _uia_win import (uia_name, uia_children, uia_find, uia_find_all, uia_rows,
                           uia_set_value, uia_get_value, uia_invoke, uia_focus,
                           uia_text, uia_toggle, uia_toggle_state,
                           uia_select, uia_is_selected,
@@ -856,6 +856,10 @@ except Exception:  # pragma: no cover - UIA unavailable
         return None
 
     def uia_find_all(win: int, name=None, ctype=None, max_scan: int = 6000) -> list:
+        return []
+
+    def uia_rows(win: int, container_name=None, container_ctype="list",
+                 cell_ctypes=("edit", "text", "dataitem", "listitem"), y_tol=8) -> list:
         return []
 
     def uia_set_value(win: int, value, name=None, ctype=None) -> bool:
