@@ -586,7 +586,36 @@
     return 0;
   }
 
+  // ── 会话状态分类 (单一真源·正本清源) ──────────────────────────────────────
+  //   切号面板 switch.html 与 全服通 daopan.html / 设备聚合 engine.recentConvAll 共用此判定,
+  //   保证「公网单网页」显示的对话最终状态与手机 APK 完全一致 (问题: 网页端状态与 APK 有差距)。
+  //   优先级(逆流官方各底层标识): ①额度耗尽 > ②需你处理(action required) > ③卡住/报错 >
+  //                                ④待输入 > ⑤完成(终态·已排除耗尽) > ⑥运行 > 空闲。
+  //   返回 [cls, label, reasonKey?]: cls∈{exhausted,blocked,awaiting,finished,running,idle}
+  var QUOTA_RE = /out_of_quota|usage_limit|insufficient|overage|exceeded|\bquota\b|out of (acu|credit)|credit.*exhaust|no.*credit/i;
+  function _lscOf(s) { var x = s && s.latest_status_contents; if (!x) return null; if (typeof x === "object") return x; try { return JSON.parse(x); } catch (e) { return null; } }
+  function sessStatus(s) {
+    var lsc = _lscOf(s) || {};
+    var reason = String(lsc.reason || "").toLowerCase();
+    var uar = lsc.user_action_required;
+    var en = String(lsc.enum || s.status_enum || s.status || s.statusClass || "").toLowerCase();
+    var status = String(s.status || "").toLowerCase();
+    var act = String(s.activity_status || "").toLowerCase();
+    var cur = String(s.current_activity || "").toLowerCase();
+    if (QUOTA_RE.test(reason)) return ["exhausted", "额度耗尽", "quota"];
+    if (uar !== undefined && uar !== null && uar !== "" && uar !== false && uar !== "null") return ["blocked", "待处理", "action"];
+    if (/error|failed|crash|stuck/.test(reason) || /block|stuck|fail|error/.test(en)) return ["blocked", "卡住", "error"];
+    if (/await|wait|ask|question|input|need|user/.test(en)) return ["awaiting", "待输入"];
+    if (/finish|complet|expired|suspend|stopped|archiv|cancel|exited|deleted/.test(en + " " + status)) {
+      if (QUOTA_RE.test(reason + " " + status + " " + act + " " + cur)) return ["exhausted", "额度耗尽", "quota"];
+      return ["finished", "完成"];
+    }
+    if (/run|working|active|execut|in_progress|streaming|coding|planning|testing|thinking|busy|resumed|started/.test(en + " " + act + " " + cur)) return ["running", "运行"];
+    return (en || status) ? ["running", "运行"] : ["idle", "空闲"];
+  }
+
   root.DaoCloud = {
+    QUOTA_RE: QUOTA_RE, sessStatus: sessStatus,
     buildZip: buildZip, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
     buildAccessGuide: buildAccessGuide,
     purgeSession: purgeSession, sessTs: sessTs,

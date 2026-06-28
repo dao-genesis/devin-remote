@@ -296,6 +296,32 @@
       var need=hits.filter(function(h){return h.reason==="action_required"||h.reason==="blocked";});
       return {ok:true, count:hits.length, actionRequired:need.length, needAttention:need, sessions:hits};
     },
+    // 全服通·近期对话 跨号聚合 (设备原生一次返回, 供公网单网页一个 RPC 取齐 → 与 APK 数据一致, 不再逐号穿透卡 0/N)。
+    //  公网 daopan.html(IS_WEB) 调本命令: 设备原生 6 路并发 listSessions(无 CORS/无 mesh 逐号往返) → 按时效降序去重 →
+    //  每条带 canonical sessStatus 的 [cls,label] (与切号面板/APK 同一真源) → 网页端秒出且最终状态完全齐平。
+    recentConvAll: async function(a){
+      a=a||{}; var perAcc=a.perAcc||6, max=a.max||40, conc=Math.max(1, a.conc||6);
+      var accs=loadAcc(), unlocked=[];
+      for(var i=0;i<accs.length;i++){ if(accs[i].auth1&&accs[i].orgId) unlocked.push({a:accs[i],no:i+1}); }
+      var all=[], idx=0;
+      async function worker(){ while(idx<unlocked.length){ var u=unlocked[idx++];
+        try{ var r=await DaoCloud.listSessions(u.a, perAcc);
+          if(r&&r.ok&&r.sessions){ r.sessions.forEach(function(s){
+            var st=(DaoCloud.sessStatus?DaoCloud.sessStatus(s):["",""]);
+            var sid=s.devin_id||s.session_id||s.id||"";
+            all.push({ accId:(u.a.id||u.a.email||""), accEmail:(u.a.email||u.a.id||""), no:u.no,
+              sid:sid, title:(s.title||s.name||s.prompt||sid),
+              cls:st[0]||"", label:st[1]||"", status:String(s.status_enum||s.status||s.state||""),
+              t:(DaoCloud.sessTs?DaoCloud.sessTs(s):0) });
+          }); }
+        }catch(e){}
+      } }
+      var ws=[], cc=Math.min(conc, unlocked.length||1); for(var c=0;c<cc;c++) ws.push(worker()); await Promise.all(ws);
+      all.sort(function(x,y){ return y.t-x.t; });
+      var seen=Object.create(null), out=[];
+      for(var j=0;j<all.length;j++){ var id=all[j].sid; if(id&&seen[id])continue; if(id)seen[id]=1; out.push(all[j]); }
+      return { ok:true, total:unlocked.length, accounts:accs.length, list: out.slice(0,max) };
+    },
     refreshAll: async function(){
       var accs=loadAcc(), ok=0; for(var i=0;i<accs.length;i++){ if(!accs[i].auth1)continue; try{ var r=await DaoCore.refreshQuotaFor(accs[i].id); if(r.ok)ok++; }catch(e){} }
       return {ok:true, refreshed:ok};
