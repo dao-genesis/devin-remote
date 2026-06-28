@@ -4643,7 +4643,7 @@ async function bridgeInjectKnowledge(): Promise<boolean> {
     let okFlag = false;
     await withOrgInjectLock(orgId, async () => {
         // 知识③ MCP 使用文档(四大模块) 一并幂等回写到当前账号 (守 manual 锁由批量框架统一处理)
-        try { await devinUpsertKnowledge(orgId, DAO_MCP_KB_NAME, bridgeGenerateMcpUsageMd(), DAO_MCP_KB_TRIGGER, auth1); } catch { /* 守柔 */ }
+        try { await devinUpsertKnowledge(orgId, DAO_MCP_KB_NAME, bridgeGenerateMcpUsageMd(), DAO_MCP_KB_TRIGGER, auth1, true); } catch { /* 守柔 */ }
         // 幂等回写 (帛书·「少则得·多则惑」): 保留首个规范条目 → 原地 PATCH 更新, 多余重复全删 →
         // 收敛为唯一条目。杜绝旧法「删后建」在多窗口/最终一致下竞态堆积出几十条重复。
         //   注意: 收敛只针对内穿文档(同前缀), 必须排除 MCP 使用文档(独立一篇), 否则会被误删后再造成 flap。
@@ -9403,7 +9403,18 @@ async function devinUpsertSecret(orgId: string, name: string, value: string, aut
     return r;
 }
 
-async function devinUpsertKnowledge(orgId: string, name: string, body: string, triggerDescription: string, auth1: string): Promise<{ ok: boolean }> {
+// 收口点下沉 (道并行而不相悖·彻底): 把 per-org 并发锁收口到 upsert 本体 — 任何路径(手动单注
+//   /api·webview·档案整池·内穿自愈·批量)并发 upsert 同一 org, 均经同一 per-org 锁串行化,
+//   令「list→删多余→PATCH/建」全程原子。实测病灶: /api/devin/knowledge/inject 旧未收口,
+//   6 路并发 → 6 条翻倍; 收口后恒收敛单条。locked=true 供已在锁内的调用方(bridgeInjectKnowledge
+//   /applyInjectProfileToOrgInner)旁路, 免同进程重入自锁(O_EXCL 自死锁)。
+async function devinUpsertKnowledge(orgId: string, name: string, body: string, triggerDescription: string, auth1: string, locked: boolean = false): Promise<{ ok: boolean }> {
+    if (locked) return devinUpsertKnowledgeInner(orgId, name, body, triggerDescription, auth1);
+    let result: { ok: boolean } = { ok: false };
+    await withOrgInjectLock(orgId, async () => { result = await devinUpsertKnowledgeInner(orgId, name, body, triggerDescription, auth1); });
+    return result;
+}
+async function devinUpsertKnowledgeInner(orgId: string, name: string, body: string, triggerDescription: string, auth1: string): Promise<{ ok: boolean }> {
     // 帛书·「反者道之动也」根因收敛: 任何路径(含旧版插件/种入/批量)若把哨兵占位符当正文推上云端,
     // 在唯一出云口实时展开为完整 MD — 杜绝账号云端知识库出现 `__DAO_BRIDGE_*_MD__` 空壳。
     body = expandKbSentinel(name, body);
@@ -9430,8 +9441,14 @@ async function devinUpsertKnowledge(orgId: string, name: string, body: string, t
     return await devinInjectKnowledge(orgId, name, body, triggerDescription, auth1);
 }
 
-async function devinUpsertPlaybook(orgId: string, title: string, body: string, auth1: string): Promise<{ ok: boolean }> {
-    // Find existing by title → delete → create
+async function devinUpsertPlaybook(orgId: string, title: string, body: string, auth1: string, locked: boolean = false): Promise<{ ok: boolean }> {
+    if (locked) return devinUpsertPlaybookInner(orgId, title, body, auth1);
+    let result: { ok: boolean } = { ok: false };
+    await withOrgInjectLock(orgId, async () => { result = await devinUpsertPlaybookInner(orgId, title, body, auth1); });
+    return result;
+}
+async function devinUpsertPlaybookInner(orgId: string, title: string, body: string, auth1: string): Promise<{ ok: boolean }> {
+    // 删尽同标题→建; 在 per-org 锁内串行化后此「删→建」即原子, 并发不翻倍(留单条)。
     const list = await devinListPlaybooks(orgId, auth1);
     if (list.ok && list.playbooks) {
         for (const p of list.playbooks) {
@@ -11473,9 +11490,9 @@ async function applyInjectProfileToOrgInner(orgId: string, auth1: string, p: Inj
                 }
             } catch { /* 守柔 */ }
         }
-        try { await devinUpsertKnowledge(orgId, k.name, kb, k.trigger || 'Always', auth1); } catch { /* 守柔 */ }
+        try { await devinUpsertKnowledge(orgId, k.name, kb, k.trigger || 'Always', auth1, true); } catch { /* 守柔 */ }
     }
-    for (const pb of p.playbooks) { if (pb && pb.title && !isManualLocked(orgId, 'playbooks', pb.title)) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1); } catch { /* 守柔 */ } } }
+    for (const pb of p.playbooks) { if (pb && pb.title && !isManualLocked(orgId, 'playbooks', pb.title)) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1, true); } catch { /* 守柔 */ } } }
     for (const a of (p.automations || [])) { if (a && a.name) { try { await devinUpsertAutomation(orgId, a, auth1); } catch { /* 守柔 */ } } }
     // 钉住的 MCP — 幂等: 已存在(按 slug)则跳过, 否则追录到该 org
     if (p.mcps && p.mcps.length) {

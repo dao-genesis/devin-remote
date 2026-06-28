@@ -946,9 +946,13 @@ function test(name, fn) {
   // 病灶: 多窗口/多IDE 同号并发注入 → devinUpsertKnowledge 旧「list→删同名→建」非原子,
   //   两路各自删后各自建 = 同名知识/内穿MD 翻倍(实测3条→6条)。
   // 护栏: ① applyInjectProfileToOrg 须经 withOrgInjectLock(跨进程文件锁)+ in-flight 合流串行化;
-  //       ② devinUpsertKnowledge 须 PATCH 原地更新(devinUpdateKnowledge), 不再无脑删尽再建。
+  //       ② 收口点须下沉到 devinUpsertKnowledge 本体 — 任何路径(/api 手动单注·webview·档案整池·
+  //          内穿自愈)并发 upsert 同一 org 均经 per-org 锁串行化(实测 /api/devin/knowledge/inject
+  //          未收口时 6 路并发→6 条; 下沉后恒收敛单条);
+  //       ③ Inner 须 PATCH 原地更新(devinUpdateKnowledge), 不再无脑删尽再建;
+  //       ④ 已在锁内的嵌套调用须传 locked=true 旁路, 免 O_EXCL 同进程自死锁。
   console.log("\n[反向注入·道并行而不相悖·并发收口]");
-  test("dao-vsix: 反向注入须经 per-org 锁 + 知识幂等 PATCH (源级护栏·防翻倍)", () => {
+  test("dao-vsix: 反向注入须经 per-org 锁 + upsert 收口下沉 + 幂等 PATCH (源级护栏·防翻倍)", () => {
     const fs = require("fs"), path = require("path");
     const ts = fs.readFileSync(path.join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts"), "utf8");
     // ① per-org 并发收口: in-flight 合流 + 跨进程文件锁
@@ -957,9 +961,17 @@ function test(name, fn) {
     assert.ok(/fs\.openSync\(lockPath, 'wx'\)/.test(ts), "extension.ts: 文件锁须用 O_EXCL('wx') 原子创建");
     assert.ok(/function applyInjectProfileToOrg\(orgId[^]*?withOrgInjectLock\(key, \(\) => applyInjectProfileToOrgInner/.test(ts),
       "extension.ts: applyInjectProfileToOrg 须经 withOrgInjectLock 包裹 Inner");
-    // ② 知识 upsert 须 PATCH 原地幂等, 不得退回到「删尽同名→直接新建」的非原子老路
-    assert.ok(/async function devinUpsertKnowledge\(orgId[^]*?devinUpdateKnowledge\(orgId, String\(sameName\[0\]\.id\)/.test(ts),
-      "extension.ts: devinUpsertKnowledge 须原地 PATCH(devinUpdateKnowledge)首条同名条目");
+    // ② 收口点下沉: devinUpsertKnowledge 包装层须 locked 旁路 + 非锁路径经 withOrgInjectLock 串行化
+    assert.ok(/async function devinUpsertKnowledge\(orgId[^]*?locked: boolean = false[^]*?withOrgInjectLock\(orgId, async/.test(ts),
+      "extension.ts: devinUpsertKnowledge 须把并发收口下沉到本体(withOrgInjectLock 包裹 Inner, locked 旁路)");
+    assert.ok(/async function devinUpsertPlaybook\(orgId[^]*?locked: boolean = false[^]*?withOrgInjectLock\(orgId, async/.test(ts),
+      "extension.ts: devinUpsertPlaybook 同样须经 per-org 锁收口");
+    // ③ Inner 须 PATCH 原地幂等, 不得退回到「删尽同名→直接新建」的非原子老路
+    assert.ok(/async function devinUpsertKnowledgeInner\(orgId[^]*?devinUpdateKnowledge\(orgId, String\(sameName\[0\]\.id\)/.test(ts),
+      "extension.ts: devinUpsertKnowledgeInner 须原地 PATCH(devinUpdateKnowledge)首条同名条目");
+    // ④ 已在锁内的嵌套调用须 locked=true 旁路(防 O_EXCL 同进程自死锁)
+    assert.ok(/devinUpsertKnowledge\(orgId, k\.name, kb, k\.trigger \|\| 'Always', auth1, true\)/.test(ts),
+      "extension.ts: applyInjectProfileToOrgInner 内的 upsert 须传 locked=true 旁路");
   });
 
   // ── 汇总 ──────────────────────────────────────────────────────────────────
