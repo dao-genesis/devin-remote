@@ -6351,5 +6351,27 @@ will only grow a primitive once a real failure is reproduced.
   `Ctrl+A` selects the whole sheet, not the box. Today the floor reaches an arbitrary cell by
   `Ctrl+Home` + arrow steps (deterministic) or a pixel click on the Name Box; a clean
   navigate-by-reference verb should only be grown once one approach proves robust against VCL.
+- **Drawn document text is the F188/canvas family across *every* office toolkit — and F195 is the
+  general answer.** This round confirmed it on three more surfaces (this VM): SumatraPDF renders a
+  PDF page as pixels (`uia_text(document)` empty; only the toolbar's `Page:`/`Next Page` are in the
+  tree, so navigation is by meaning but the page body is not); LibreOffice **Writer** renders the
+  document body the same way Calc renders its grid — `uia_text(document)` returns only the doc's
+  *name* (`"Untitled 3 - LibreOffice Document"`), never the typed text, yet `read_selection`
+  (Ctrl+A + copy) reads back `道法自然 floor F197 probe` exactly. No new verb is owed here: F195 already
+  is the cross-toolkit read for drawn text; the frontier is only *positioning* a selection by
+  meaning where the toolkit also hides the cursor model (the Calc cell-reference item above).
+- **A dialog field with no Name, no AutomationId, and no in-tree label has no semantic anchor —
+  and that is provider opacity, not a missing verb.** paint.net's Adjustments dialogs
+  (.NET, e.g. *Brightness / Contrast*) expose the two numeric edits with `name=''` *and* `aid=''`,
+  and the "Brightness"/"Contrast" captions are *drawn*, absent from the tree (`text(0)` inside the
+  dialog) — so nothing in the accessibility tree distinguishes the two fields; only geometry does
+  (top edit = Brightness, set to `60` by position, read back `60`). A label-pairing verb (pair a
+  nameless field to its nearest in-tree caption, like `uia_rows` but label→field) was considered and
+  **deliberately not built**: it cannot help paint.net (the captions are not in the tree at all),
+  and it is unnecessary for the dialogs that *do* expose captions — 7-Zip's *Add to archive* dialog,
+  the obvious classic-Win32 candidate, already gives every control the caption as its **Name** (the
+  password `edit` is `name="Enter password:"`, the `Dictionary size:` combobox is named in full), so
+  it is wholly meaning-operable as-is. With no surface where pairing both *applies* and *helps*, the
+  honest floor for unlabeled drawn-caption fields is geometry/pixel. 知止不殆.
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
