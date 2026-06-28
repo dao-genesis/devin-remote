@@ -6376,15 +6376,62 @@ verb only once one approach proves robust against VCL" — is now met.
 
 ---
 
+## F198 — learn the font from a *known* rendering, then read the unknown · `learn_glyphs` closes the atlas frontier
+
+**Friction (the longest-open frontier, R-next).** The perception ladder — `read_glyph` → `read_text`
+→ `read_block` → `read_region` — reads text a page *drew* (no DOM node, no tree element) by matching
+each glyph against an `atlas` of `{char: edge_signature}`. But nothing in the floor ever *built* an
+atlas: every probe hand-rolled one from a fixture the test itself rendered (spaced magenta swatches
+located by `find_color_blobs`, zipped with the known string) — the same idiom copy-pasted ~25 times
+across `test_live.py`. So the readers could only read a font the test had first drawn itself. Reading
+a *real* canvas control was out of reach: there was no way to turn an actual on-screen rendering into
+the atlas the readers need.
+
+**The fix — a teacher: known truth begets read truth.** `learn_glyphs(rgb, size, bbox, label, fg=None)`
+takes a patch of real on-screen text whose string you *do* know — a label whose caption the UIA tree
+reports, a cell you just typed, any run you can name another way — `segment_run`s it into one cell per
+non-space character (falling back to `split_run` with the known glyph count when letters touch), and
+returns `{char: edge_signature(cell)}`: exactly the atlas the readers consume, captured from the live
+rendering instead of a fixture. The ink colour may be omitted and is recovered from the pixels by
+`detect_fg` (F109). It refuses to mislead: if the run cannot be aligned to its label one-cell-per-char
+(too few cells even after `split_run`, an over-long label), it returns `{}` rather than zip a shifted
+alignment that would poison every later read. With this rung the loop closes — *learn* a font from
+known live text, then *read* unknown drawn text rendered in that same font, all from pixels.
+
+**Live (this VM).** `_probe_learnglyphs.py` **5/5**, stable across runs, against a real Chrome
+`<canvas>` (text the browser draws with **no DOM node** — the exact "drawn, not in the tree" target):
+the atlas is learned *only* from the teacher run `DAOFLOOR2197` (10 unique glyphs); `read_text` then
+reads the *different*, never-taught student run `ROOF1729` **exactly** from pixels; omitting `fg`
+(auto `detect_fg`) gives the identical read; `read_text_conf` on `ZONE17` *marks* the untaught
+`Z`/`N` as `?` rather than fabricate them; and an over-long label is refused (`{}`, no mislabeled
+atlas). Regression `_probe_winverbs.py` **15/15** unchanged.
+
+**日損 (same stroke, subtracted).** `learn_glyphs` is the canonical form of the
+`{chars[i]: edge_signature(…, blob[i].bbox)}` idiom hand-rolled ~25× across the probes — and it also
+accepts pre-cut `cells`, so a caller that already isolated each glyph (the old colour-blob fixture)
+folds onto the same verb. A primitive added (日益) that subsumes a duplicated idiom (日損): the floor
+grows a capability while giving the scattered copies one home.
+
+**Lesson (道法自然).** 不言之教 — the teaching without words: a rendering the system already understands
+*is* the lesson that lets it read the renderings it does not. We did not build a universal font
+database or bolt on an OCR engine (聞道者日損 — we add the smallest rung, not the largest machine); we
+let known truth on the screen teach the reader the rest, and we made the teacher decline to teach what
+it cannot align with certainty. 知止不殆: a teacher that refuses a doubtful alignment never poisons the
+student.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
 will only grow a primitive once a real failure is reproduced.
 
-- **R-next: an atlas built from the live page, not a fixture** — F103's atlas is
-  rendered by the test itself; reading a *real* canvas control means capturing
-  reference glyphs from the page's own rendering (a scratch canvas the app
-  exposes, or known on-screen labels) before `read_text` can name unknown runs.
+- **R-next: an atlas built from the live page, not a fixture. — SOLVED, F198.**
+  `learn_glyphs` turns a patch of real on-screen text whose string is *known* (a tree-reported
+  caption, a cell just typed, a canvas run named another way) into the `{char: edge_signature}`
+  atlas the readers consume — captured from the live rendering, no fixture — so `read_text` can then
+  name *unknown* runs drawn in that same font. Proven on a real Chrome `<canvas>`: learn `DAOFLOOR2197`,
+  read the never-taught `ROOF1729` exactly from pixels. Kept here only as a pointer to the entry above.
 - **Addressing an *arbitrary* spreadsheet cell by its reference (LibreOffice Calc / VCL). — SOLVED, F197.**
   *Reading* a cell by meaning is solved (F195: position the selection, read the copy channel),
   writing works by focusing the grid by meaning + typing, and now *navigating to a named cell* like

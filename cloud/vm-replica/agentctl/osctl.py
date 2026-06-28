@@ -2467,6 +2467,59 @@ def detect_fg(rgb: bytes, size: tuple[int, int],
     return bg, None
 
 
+def learn_glyphs(rgb: bytes, size: tuple[int, int],
+                 bbox: tuple[int, int, int, int],
+                 label: str, fg: tuple[int, int, int] | None = None,
+                 tol: int = 60, gap: int = 2,
+                 nw: int = 48, nh: int = 48, thr: int = 24,
+                 cells: list[tuple[int, int, int, int]] | None = None
+                 ) -> dict[str, list[int]]:
+    """Build a glyph ``atlas`` from a region whose text is *already known* (F198).
+
+    Every reader below — :func:`read_glyph`, :func:`read_text`, :func:`read_region` —
+    consumes an ``atlas`` of ``{label: edge_signature(...)}``, yet nothing here *built*
+    one: each probe hand-rolled it from a fixture the test itself rendered (spaced
+    swatches located by colour, zipped with the known string). That kept the whole
+    perception ladder tethered to a fixture — you could only read a font you had first
+    drawn yourself on a scratch canvas. The missing rung is the *teacher*: turn a patch
+    of real on-screen text whose string you *do* know — a label whose caption the UIA
+    tree reports, a cell you just typed, a word the app drew that you can name another
+    way — into the atlas that then reads the *unknown* drawn text rendered in that same
+    font. Truth begets truth: a known rendering teaches the reader to read the rest.
+
+    Given the region's pixels and its true ``label``, this segments the run into one
+    cell per non-space character (:func:`segment_run` by ``fg``; when the glyphs touch
+    and yield too few cells it falls back to :func:`split_run` with the known count) and
+    returns ``{char: edge_signature(cell)}`` — exactly the atlas the readers want,
+    captured from the live rendering rather than a fixture. ``fg`` (the ink colour) may
+    be omitted and is then recovered from the pixels by :func:`detect_fg`. A caller that
+    has *already* cut the run may pass ``cells`` to skip segmentation (e.g. one isolated
+    swatch per glyph). Repeated characters collapse to their last rendering (the same
+    glyph, so harmless); spaces in ``label`` are skipped (they ink no cell).
+
+    Honest only where the run can be *aligned* to its label: if segmentation cannot
+    produce exactly one cell per non-space character — touching glyphs :func:`split_run`
+    still cannot part, or stray ink — it returns ``{}`` rather than mislabel cells by a
+    wrong-length zip (a shifted alignment would poison every later read). Empty ink or
+    no recoverable ``fg`` likewise yields ``{}``. It teaches only what it can align with
+    certainty; what it cannot, it declines to teach."""
+    chars = [c for c in label if not c.isspace()]
+    if not chars:
+        return {}
+    if cells is None:
+        if fg is None:
+            _bg, fg = detect_fg(rgb, size, bbox)
+            if fg is None:
+                return {}
+        cells = segment_run(rgb, size, bbox, fg, tol, gap)
+        if len(cells) < len(chars):
+            cells = split_run(rgb, size, bbox, fg, len(chars), tol)
+    if len(cells) != len(chars):
+        return {}
+    return {ch: edge_signature(rgb, size, c, nw, nh, thr)
+            for ch, c in zip(chars, cells)}
+
+
 def palette(rgb: bytes, size: tuple[int, int],
             bbox: tuple[int, int, int, int],
             q: int = 16, min_pop: float = 0.002, min_dist: int = 96
