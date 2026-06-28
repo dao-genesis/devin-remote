@@ -6332,6 +6332,50 @@ bootstrap removed — the floor grew a capability while shrinking its code.
 
 ---
 
+## F197 — navigate to an arbitrary spreadsheet cell *by reference*, verified · `goto_cell` defeats a VCL "SetFocus lie"
+
+**Friction.** The longest-standing entry on the frontier: *reaching* an arbitrary cell like `B2` in
+LibreOffice Calc purely by meaning. The grid is one drawn canvas with no per-cell element, so
+`uia_find("B2")` finds nothing; the natural anchor is the **Name Box** (the cell-reference box
+top-left), but it is a VCL ComboBox whose `uia_focus` returns True while keyboard focus stays on the
+sheet — a "SetFocus lies" of the F190 family — so a typed reference lands in a cell, not the box.
+Reading a cell was solved (F195) and writing works by typing into the focused grid; only *go to X*
+remained.
+
+**The fix — click the meaning-found box where SetFocus lied, then let the box be its own oracle.**
+`goto_cell(win, "B2")` finds the Name Box, clicks its centre (a *real* click focuses it where the
+API lied — the same meaning-anchored-geometry pattern as `uia_menu`/`uia_context`), `Ctrl+A`s,
+types the reference and presses Enter. The Name Box then *displays the new active cell*, so the same
+control is the verification oracle: read its Name back, accept only an exact match, else `Esc` the
+stray edit and retry. Two robustness lessons came straight from real failures on this VM, not from
+imagination:
+- **Identify the box by meaning, recover by geometry.** The Name Box is normally found *by meaning*
+  — it is the one ComboBox whose displayed Name *is* a cell reference. But a rejected or half-typed
+  reference **stays in the box**, so its Name stops looking like a cell reference and the meaning
+  match goes blind — wedging every later call. So when the meaning match fails, fall back to the
+  geometry the provider always reports (leftmost ComboBox of the formula-bar row); finding it that
+  way lets the click+`Ctrl+A` *overwrite* the bad text and self-heal.
+- **Reject a non-reference up front.** Asking for `not-a-ref` made the box echo `not-a-ref`, which
+  naïvely "matched" the request — a fooled oracle. A target that is not a single-cell reference is
+  meaningless, so it is refused before the box is ever touched (and so never poisoned).
+A leading `Esc` cancels any ambient in-cell edit so the walk starts clean. Composed of hang-proof
+finds + click + keys — no new COM, cannot itself hang.
+
+**Live (this VM).** `_probe_gotocell.py` **5/5**, stable across repeated runs, on the real Calc
+window: near cell `B2` (active cell becomes `B2`); far cell `AA30` (many columns/rows away, no
+per-cell element — the canvas defeats every approach but this one); recovery from a half-typed
+in-cell edit to reach `D4`; a non-reference returns False in ~0.0s without hanging or poisoning;
+and the landed cell is real and editable — typing `F197道` into `C7` and reading it back through
+F195's `read_selection` round-trips exactly. Regression `_probe_winverbs.py` **15/15** unchanged.
+
+**Lesson (道法自然).** 知其雄，守其雌 — hold the elegant meaning-anchor, but keep the humble geometric
+fallback beneath it; the system that knows its own failure mode (a self-poisoning identity) and
+keeps a lower, stabler footing is the one that does not wedge. 知止不殆: validate the request before
+acting, so an impossible ask costs nothing and harms nothing. The frontier's caution — "grow the
+verb only once one approach proves robust against VCL" — is now met.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
@@ -6341,16 +6385,12 @@ will only grow a primitive once a real failure is reproduced.
   rendered by the test itself; reading a *real* canvas control means capturing
   reference glyphs from the page's own rendering (a scratch canvas the app
   exposes, or known on-screen labels) before `read_text` can name unknown runs.
-- **Addressing an *arbitrary* spreadsheet cell by its reference (LibreOffice Calc / VCL).**
+- **Addressing an *arbitrary* spreadsheet cell by its reference (LibreOffice Calc / VCL). — SOLVED, F197.**
   *Reading* a cell by meaning is solved (F195: position the selection, read the copy channel),
-  and writing works by focusing the grid by meaning + typing. What remains is *navigating to a
-  named cell* like `B2` purely by meaning: Calc exposes the sheet as one `Table "Sheet Sheet1"`
-  with no per-cell element (`uia_find("B2")` finds nothing; `uia_find("A1")` wrongly matches the
-  *Name Box*), and the Name-Box path is unreliable — `uia_focus` on the VCL ComboBox returns
-  True yet keyboard focus stays on the sheet (a VCL "SetFocus lies", kin to F190), so a typed
-  `Ctrl+A` selects the whole sheet, not the box. Today the floor reaches an arbitrary cell by
-  `Ctrl+Home` + arrow steps (deterministic) or a pixel click on the Name Box; a clean
-  navigate-by-reference verb should only be grown once one approach proves robust against VCL.
+  writing works by focusing the grid by meaning + typing, and now *navigating to a named cell* like
+  `B2` is solved by `goto_cell` (F197): click the meaning-found Name Box where `uia_focus` lied,
+  type the reference, and verify via the box's own readback — with a geometry fallback that
+  self-heals a box poisoned by a rejected reference. Kept here only as a pointer to the entry above.
 - **Drawn document text is the F188/canvas family across *every* office toolkit — and F195 is the
   general answer.** This round confirmed it on three more surfaces (this VM): SumatraPDF renders a
   PDF page as pixels (`uia_text(document)` empty; only the toolbar's `Page:`/`Next Page` are in the
