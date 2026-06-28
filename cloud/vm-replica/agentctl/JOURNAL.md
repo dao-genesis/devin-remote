@@ -5461,6 +5461,66 @@ acts on the known, it does not read the unknown.)
 
 ---
 
+## F182 — one app, two frames: name the *right* accessible by geometry · KiCad
+
+**Friction (反者道之動 — a new domain reveals a gap the old apps hid).** Installed
+KiCad/eeschema (PCB/EDA — wxWidgets on GTK) and drove it by meaning. Its chrome is
+richly accessible (the floor read and dismissed three first-run dialogs purely by
+`uia_invoke('OK')` / `uia_invoke('Yes')`), but the create-file prompt stopped the
+floor cold: `uia_find('Yes')` → `None`, `uia_invoke('Yes')` → `False`, and
+`uia_name(win)` for that window returned `'[no schematic loaded] — Schematic
+Editor'` with **129 children** — the *main window's* menu tree. The floor was
+reading the wrong window.
+
+**Mechanism (why title alone misses).** `_atspi_frame_for` crosses the X world to
+the AT-SPI world by process id, then disambiguates *which* of an app's top-level
+accessibles a window is by an **exact title match**. That held for every earlier
+app because each owned a single frame (KWrite, gnome-calculator) or its dialogs'
+titles matched their frame names. KiCad breaks it: one pid (`eeschema`) exposes
+**two** accessibles at once — a `frame` named `[no schematic…]` at `(0,0,1600,1156)`
+and an `alert` named **`"Question"`** at `(474,536,652,141)` — while the modal's
+*X window title* is **`"Confirmation"`**. WM title ≠ accessible frame name, so the
+title compare missed and the code fell back to the first same-pid frame (the main
+window). Every `uia_*` verb then operated on the wrong frame.
+
+**Primitive grown — disambiguate by *screen geometry* (`_iou` + a `>=0.25` gate).**
+A frame's accessible extents and the X window's rect are two reports of *the same
+pixels*; when the title can't decide, the frame whose extents best overlap the
+window is unambiguously the one those pixels belong to. `_atspi_frame_for` now: (1)
+keeps the exact-title fast path (cheapest, surest when names align — single-frame
+apps are unchanged); (2) otherwise picks the same-pid frame of maximum
+intersection-over-union with the window rect, but **only if IoU ≥ 0.25**; (3) else
+falls back to the first same-pid frame, exactly as before. Geometry never lies
+about whose pixels are whose, so it resolves what a name mismatch cannot.
+
+**Live (this VM) + independent oracle.**
+- **The fix unblocks the live dialog**: after the change, `uia_name` of the X
+  window "Confirmation" reads `'Question'` (4 kids), `uia_find('Yes')` →
+  `{push button, rect (800,643,326,34)}`, and `uia_invoke('Yes')` creates the
+  schematic. Measured IoU(window, alert)=**0.794** vs IoU(window, main)=**0.039** —
+  not a close call (probe `_probe_kicad_frames.py` pins both numbers, PASS).
+- **A resistor placed by meaning**: opened the symbol chooser (`A`), typed the
+  filter `Device:R` into its one `text` field located by meaning, confirmed with
+  `uia_invoke('OK')`, dropped the part on the canvas with a real click (the gesture
+  floor — a schematic canvas has no per-part accessible), and **saved by meaning**
+  via `uia_invoke('Save', 'menu item')` (the menu action fired with no pixels; the
+  title lost its `*`). The saved `f182.kicad_sch` — KiCad's own text, the floor
+  cannot fake — carries `(symbol (lib_id "Device:R") (at 128.27 74.93 0) …)`.
+- **No regression**: single-frame apps resolve exactly as before — KWrite 314
+  controls + `Save` found, calculator 434 kids (F180 isolation intact), Blender
+  still honest `''`/`[]`. `test_live.py` 799/800 (the lone fail is the F139 centroid
+  jitter present since F177; this change only touches frame *selection*).
+
+**Lesson (道法自然).** 知人者智，自知者明 — a thing's *name* is what others call it,
+but its *place* is what it is; when the two disagree, trust the place. The floor
+already held both reports (an accessible's extents, a window's rect) and only
+needed to believe geometry over a label. 反者道之動: a fourth app did not need a new
+sense — it exposed that an old correlation (pid + title) was too weak, and the
+remedy was to lean on a measure (overlap) the floor had carried since the pixel
+days. Single-frame apps never felt it; it took an app that shows two faces at once.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
