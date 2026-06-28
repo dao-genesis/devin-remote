@@ -1226,11 +1226,12 @@ BAR.addEventListener('wheel',function(e){if(e.deltaY&&Math.abs(e.deltaY)>=Math.a
 function _clearDragMark(){var ts=BAR.querySelectorAll('.tab');for(var i=0;i<ts.length;i++){ts[i].classList.remove('dh-l');ts[i].classList.remove('dh-r');}}
 function reorderTab(src,dst,before){if(!src||!dst||src===dst)return;var si=order.indexOf(src),di=order.indexOf(dst);if(si<0||di<0)return;order.splice(si,1);di=order.indexOf(dst);order.splice(before?di:di+1,0,src);var sb=tabs[src].btn,db=tabs[dst].btn;if(before)BAR.insertBefore(sb,db);else BAR.insertBefore(sb,db.nextSibling);schedPersist();}
 function enableTabDnD(btn,id){btn.draggable=true;
-  btn.addEventListener('dragstart',function(e){_dragId=id;try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',id);}catch(x){}
+  btn.addEventListener('dragstart',function(e){_dragId=id;try{e.dataTransfer.effectAllowed='copyMove';e.dataTransfer.setData('text/plain',id);}catch(x){}
     // 标签拖出到网页 → 携该会话 MD (对齐手机 APK·拖标签=拖该号最新对话 MD)。仅账号会话标签具备 email+sid。
-    try{var _tt=tabs[id],_tm=(_tt&&_tt.meta)||{};var _te=_tm.email||(_tt&&_tt.email)||'',_ts=String(_tm.devinId||_tm.sid||'').replace(/^devin-/,'');if(_te&&_ts){e.dataTransfer.setData('application/x-dao-conv',JSON.stringify({email:_te,sid:_ts,title:_tm.label||_tm.title||''}));}}catch(x){}
+    // 拖标签同时点亮 #convdrop 上传层(此前缺这步致「电脑端拖标签无落点」), 落在网页区=上传该对话, 落在标签栏=重排, 各得其所。
+    try{var _tt=tabs[id],_tm=(_tt&&_tt.meta)||{};var _te=_tm.email||(_tt&&_tt.email)||'',_ts=String(_tm.devinId||_tm.sid||'').replace(/^devin-/,'');if(_te&&_ts){var _ti=_tm.label||_tm.title||'';e.dataTransfer.setData('application/x-dao-conv',JSON.stringify({email:_te,sid:_ts,title:_ti}));_uploadDrag={kind:'conv',email:_te,sid:_ts,title:_ti};_convDragActive=true;_showUploadDrop('⬆ 松开 · 把此标签的对话上传到当前网页');}}catch(x){}
     btn.classList.add('dragging');});
-  btn.addEventListener('dragend',function(){_dragId=null;btn.classList.remove('dragging');_clearDragMark();});
+  btn.addEventListener('dragend',function(){_dragId=null;btn.classList.remove('dragging');_clearDragMark();_convDragActive=false;_uploadDrag=null;_hideUploadDrop();});
   btn.addEventListener('dragover',function(e){if(!_dragId)return;e.preventDefault();try{e.dataTransfer.dropEffect='move';}catch(x){}var r=btn.getBoundingClientRect();var before=(e.clientX<r.left+r.width/2);_clearDragMark();btn.classList.add(before?'dh-l':'dh-r');});
   btn.addEventListener('drop',function(e){if(!_dragId)return;e.preventDefault();e.stopPropagation();var r=btn.getBoundingClientRect();var before=(e.clientX<r.left+r.width/2);reorderTab(_dragId,id,before);_clearDragMark();_dragId=null;});}
 var TCTX=document.getElementById('tabctx');
