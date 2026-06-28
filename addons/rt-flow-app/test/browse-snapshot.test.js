@@ -173,5 +173,31 @@ ok(/if\(op==='scrollto'\)/.test(src), "源级: __daoAct 含 scrollto 操作(按 
 ok(/if\(op==='upload'\)/.test(src), "源级: __daoAct 含 upload 操作(File+DataTransfer 注入)");
 ok(/tag==='iframe'/.test(src), "源级: snapshot 含同源 iframe 递归");
 
+// ── 接入文档一致性: getCloudMd / tunnel.html 必须宣告完整 ref 命令集 + 多实例契约 ──
+const tunnelSrc = fs.readFileSync(
+  path.join(__dirname, "../app/src/main/assets/engine/tunnel.html"),
+  "utf8",
+);
+[
+  ["engine.html getCloudMd", src],
+  ["tunnel.html 接入文档", tunnelSrc],
+].forEach(([name, doc]) => {
+  [
+    "browseSnapshot",
+    "browseClickRef",
+    "browseTypeRef",
+    "browseUploadRef",
+    "browseScrollToRef",
+    "browseSetCookie",
+    "browseSetStorage",
+  ].forEach((c) =>
+    ok(doc.indexOf(c) >= 0, "接入文档一致性: " + name + " 已收录 " + c),
+  );
+  ok(
+    /多实例|不干扰|绝不调|activateTab/.test(doc),
+    "接入文档一致性: " + name + " 含多实例·不干扰契约",
+  );
+});
+
 console.log(failures === 0 ? "\nbrowse-snapshot: ALL PASS" : "\nbrowse-snapshot: " + failures + " FAIL");
 process.exit(failures === 0 ? 0 : 1);
