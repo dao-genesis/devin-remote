@@ -5849,6 +5849,64 @@ how a given toolkit happens to spell it.
 
 ---
 
+## F188 — a popup menu is a *shape*, not a class · `menu_windows` sees any toolkit's menu; an honest GTK boundary
+
+**Friction.** Pushing into the **office** domain, LibreOffice Calc. F186 had taught the
+floor to see a titleless context-menu window — but only by the native Win32 class
+`#32768`. Right-clicking a Calc cell, the menu was on screen yet invisible again:
+
+```
+right-click cell → menu_windows() → []        # F186's eye is blind here
+```
+
+The popup was real — its class is **`SALTMPSUBFRAME`** (LibreOffice/VCL draws its own menu
+window), titleless like `#32768` but a *different class*, so `list_windows` (titled only)
+and the F186 `menu_windows` (`#32768` only) both missed it. Every GUI toolkit pops its menu
+in its *own* class — VCL one, Qt another, wx another — so a class allow-list is endless and
+forever one toolkit behind.
+
+**Primitive generalised — recognise the menu by its *shape*.** What every popup menu shares
+is not a class but a **shape**: a titleless **`WS_POPUP`** window (a popup with no caption).
+`menu_windows` now admits any window of that shape, plus `#32768` unconditionally. One
+catch: a bare `WS_POPUP` also describes persistent shell furniture (the taskbar
+`Shell_TrayWnd`, the IME bar) — which first leaked in. The clean discriminator is
+**ownership**: a context/dropdown menu is *spawned by* an app window and is **owned** by it
+(`GetWindow(GW_OWNER) != 0`), whereas shell windows stand alone. So the rule is: titleless,
+`WS_POPUP`, non-zero area, **owned** — or `#32768`. The menu *walk* still keeps only windows
+that actually contain a `menuitem`, so anything spurious contributes nothing. One eye, every
+toolkit.
+
+```python
+# right-click the (named) sheet tab, walk the VCL context menu by meaning:
+uia_context(calc, "Sheet1", "Insert Sheet...", ctype="tabitem")  # -> True; dialog opens
+uia_menu(calc, "Help", "About LibreOffice")                      # -> True; About opens
+```
+
+**Live (this VM), by meaning.** `_probe_vcl.py` runs **9/9 green** on real LibreOffice:
+`menu_windows` sees the open `SALTMPSUBFRAME` popup (titleless, not `#32768`), its items read
+by meaning (Insert/Rename/Duplicate Sheet…), and it is **empty the moment the menu closes**
+(no taskbar leakage); `uia_context("Sheet1","Insert Sheet…")` opens the Insert Sheet dialog
+(a new window is the oracle); `uia_menu("Help","About LibreOffice")` opens About — proving
+the menu story now covers a **4th** GUI toolkit (Qt/wx/Win32 → **VCL**). **No regression** —
+`_probe_ctxmenu.py` 7/7 (the `#32768` path), `_probe_winverbs.py` 15/15, `_probe_appfloor.py`
+8/8, `_probe_qttabs.py` 7/7. Pure stdlib.
+
+**An honest boundary, recorded (not papered over).** Inkscape (GTK) is found as a window
+with a real name, yet its accessibility tree has **0 descendants** — GTK on Windows ships no
+UIA/MSAA bridge, so there is genuinely *nothing modelled* to reach by meaning. The floor
+reports the truth: where an app draws its UI without an a11y tree (GTK here, as GL-only
+Blender before it, F185), the semantic floor reaches nothing, and only a pixel/OCR floor
+could. The probe asserts this boundary explicitly so it stays honest.
+
+**Lesson (道法自然).** 大方無隅 — the great square has no corners. F186 drew a corner around the
+menu — the `#32768` class — and the next toolkit's menu fell outside it. The way was not to
+draw more corners (one per toolkit) but to stop drawing them: name the menu by the *shape*
+all menus share (a titleless owned popup), and the boundary dissolves. 同於道者，道亦得之 —
+recognise a thing by what it *is* and every instance of it comes to you; recognise it by one
+of its names and you spend forever collecting names.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
