@@ -45,6 +45,13 @@ _x.XFlush.argtypes = [ctypes.c_void_p]
 _x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
 _x.XKeysymToKeycode.restype = ctypes.c_ubyte
 _x.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+# F177: without these, ctypes defaults the Display* arg to a 32-bit c_int and
+# truncates the 64-bit pointer -> libX11 dereferences garbage -> SIGSEGV. The
+# read side of the keyboard (key_state) is the only place these two are used.
+_x.XQueryKeymap.restype = ctypes.c_int
+_x.XQueryKeymap.argtypes = [ctypes.c_void_p, ctypes.c_char * 32]
+_x.XkbGetState.restype = ctypes.c_int
+_x.XkbGetState.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p]
 _x.XQueryPointer.restype = ctypes.c_int
 _x.XQueryPointer.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
                              ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
@@ -251,6 +258,8 @@ _VK_KEYSYM = {
     0x12: 0xFFE9, 0x1B: 0xFF1B, 0x20: 0x20, 0x21: 0xFF55, 0x22: 0xFF56,
     0x23: 0xFF57, 0x24: 0xFF50, 0x25: 0xFF51, 0x26: 0xFF52, 0x27: 0xFF53,
     0x28: 0xFF54, 0x2E: 0xFFFF,
+    0x14: 0xFFE5, 0x90: 0xFF7F,  # F177: CapsLock / NumLock — key_state could
+    # READ these latches but key_down/up had no keysym to actuate them.
 }
 
 
@@ -266,6 +275,8 @@ def _vk_keysym(vk: int) -> int:
 
 def key_down(vk: int) -> None:
     kc = _x.XKeysymToKeycode(_dpy, _vk_keysym(vk))
+    if not kc:  # F177: keysym unmapped here. XTEST with keycode 0 is a fatal
+        return  # BadValue (kills the process); a no-op press is the honest floor.
     with _lock:
         _xt.XTestFakeKeyEvent(_dpy, kc, 1, 0)
         _x.XFlush(_dpy)
@@ -273,6 +284,8 @@ def key_down(vk: int) -> None:
 
 def key_up(vk: int) -> None:
     kc = _x.XKeysymToKeycode(_dpy, _vk_keysym(vk))
+    if not kc:  # F177: see key_down — never hand keycode 0 to XTEST.
+        return
     with _lock:
         _xt.XTestFakeKeyEvent(_dpy, kc, 0, 0)
         _x.XFlush(_dpy)
