@@ -4590,7 +4590,11 @@ async function bridgeAutoPersist(): Promise<void> {
 //   逻辑(用户述): 打得通就保持稳定(不折腾、不重注); 打不通就刷新(重读已发布连接/重起隧道并把新 URL 重注各账号)。
 //   守柔: 直连探测(绕过代理), 只有"死"才动手; "活"则什么也不做, 杜绝无谓 churn。
 const BRIDGE_LIVENESS_INTERVAL_MS = 30 * 1000;
-let _bridgeLivenessTimer: ReturnType<typeof setInterval> | null = null;
+// 自适应自愈节律: 隧道一旦探死/未 settle, 8s 一探直至恢复(端口断了≤8s即重探/重起/重注 →
+//   根治用户述「端口都断了根本连不上, 账号信息全没更新」的滞留); 恢复稳态后回落 30s 省网。
+const BRIDGE_LIVENESS_FAST_MS = 8 * 1000;
+let _bridgeLivenessTimer: ReturnType<typeof setTimeout> | null = null;
+let _bridgeLivenessStopped = false;
 let _bridgeLastAliveMs = 0;
 let _bridgeLivenessFail = 0;
 // 三环自检 · 统一审计日志 — 帛书·「自知者明」: 让隧道环/额度环的每次「识别→决策」可见可验(环① 另有 dao-pool-reconcile.log)。
@@ -4846,8 +4850,18 @@ async function bridgeLivenessTick(): Promise<void> {
 }
 function startBridgeLivenessLoop(context: vscode.ExtensionContext): void {
     if (_bridgeLivenessTimer) return;
-    _bridgeLivenessTimer = setInterval(() => { bridgeLivenessTick().catch(() => { /* 守柔 */ }); }, BRIDGE_LIVENESS_INTERVAL_MS);
-    context.subscriptions.push({ dispose: () => { if (_bridgeLivenessTimer) { clearInterval(_bridgeLivenessTimer); _bridgeLivenessTimer = null; } } });
+    _bridgeLivenessStopped = false;
+    // 自适应自重排: 每探完按健康度定下一拍 — 失败(端口死/重起中)→ 8s 快探直到恢复; 稳态 → 30s 省网。
+    const schedule = (ms: number) => {
+        if (_bridgeLivenessStopped) return;
+        _bridgeLivenessTimer = setTimeout(async () => {
+            try { await bridgeLivenessTick(); } catch { /* 守柔 */ }
+            schedule(_bridgeLivenessFail > 0 ? BRIDGE_LIVENESS_FAST_MS : BRIDGE_LIVENESS_INTERVAL_MS);
+        }, ms);
+    };
+    // 启动即首探(2s 后·让端口/账号池先就绪), 不再空等整 30s 才发现死隧道/滞留旧址。
+    schedule(2000);
+    context.subscriptions.push({ dispose: () => { _bridgeLivenessStopped = true; if (_bridgeLivenessTimer) { clearTimeout(_bridgeLivenessTimer); _bridgeLivenessTimer = null; } } });
 }
 
 // ═══ 单会话上限 · 额度跟随环 — 帛书·「反者道之动」 ═══
