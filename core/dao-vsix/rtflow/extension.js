@@ -5587,7 +5587,6 @@ ${_autoBackupDone ? '<span style="color:#4ec9b0;font-size:9px">&#10003; 已自�
 </div>
 <div class="conv-backup-path" title="${_esc(backupDir)}">Cascade备份: ${_esc(backupDir)}</div>
 ${_dvBackupPanelHtml()}
-${_dvAllConversationsHtml()}
 </div></div>`;
   }
 
@@ -5834,7 +5833,6 @@ ${backupStatus}
 </div>
 <div class="conv-backup-path" title="${_esc(backupDir)}">Cascade备份: ${_esc(backupDir)}</div>
 ${_dvBackupPanelHtml()}
-${_dvAllConversationsHtml()}
 </div></div>`;
 }
 // v4.7.8 · 同步短睡 (rename 退避用) · Atomics.wait 优先 · 退化忙等兜底 (≤数百 ms·仅锁冲突时触发)
@@ -11601,54 +11599,9 @@ function _dvBackupPanelHtml() {
     "</div>"
   );
 }
-// v4.9.11: 跨账号对话级列表 — 按时间排列近期所有对话(不分账号)
-function _dvAllConversationsHtml() {
-  const dir = _cfg("devinCloudBackupDir", "") || (devinCloud.paths && devinCloud.paths.DC_BACKUP_DEFAULT) || "";
-  if (!dir) return "";
-  let tree;
-  try { tree = devinCloud.listBackups(dir); } catch { return ""; }
-  if (!tree || !tree.accounts || !tree.accounts.length) return "";
-  const all = [];
-  for (const a of tree.accounts) {
-    const acctEmail = a.email || a.account || "";
-    const pw = "";
-    const acctNo = a.accountNo || "";
-    for (const c of (a.conversations || [])) {
-      all.push({
-        title: c.title || c.name || "(无题)",
-        email: acctEmail,
-        accountNo: acctNo,
-        password: pw,
-        devinId: c.devinId || (c.name || "").replace(/^.*_/, "").replace(/\.zip$/i, ""),
-        mtime: c.mtime || 0,
-        type: c.type || "folder",
-        path: c.path || "",
-        hasHtml: !!c.hasHtml,
-        htmlPath: c.htmlPath || "",
-      });
-    }
-  }
-  if (!all.length) return "";
-  all.sort((a, b) => b.mtime - a.mtime);
-  const RECENT_MAX = 50; // v4.17.0 · 仅展示最近 ~50 条 (4000+ 全量仅留文件夹·按需解锁), 对齐 APK 近期列表
-  const show = all.slice(0, RECENT_MAX);
-  let h = '<div class="dv-trk-section" style="margin-top:8px">';
-  h += '<div class="dv-trk-hd" style="cursor:pointer" onclick="var b=this.nextElementSibling;b.style.display=b.style.display===\'none\'?\'block\':\'none\'">&#128172; 近期对话(跨账号) · ' + all.length + ' 条 <span style="color:#888;font-size:10px">[点击展开/收起]</span></div>';
-  h += '<div style="display:none">';
-  for (const c of show) {
-    const dt = c.mtime ? new Date(c.mtime).toISOString().replace("T", " ").slice(0, 16) : "";
-    const no = c.accountNo ? "#" + c.accountNo + " " : "";
-    h += '<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid #222;font-size:12px">';
-    h += '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%" title="' + _esc(c.title) + " · " + _esc(c.devinId) + '">';
-    h += '<b>' + _esc(c.title) + '</b></span>';
-    h += '<span style="color:#888;font-size:10px;white-space:nowrap;margin-left:6px" title="' + _esc(c.email) + '">' + no + _esc(c.email.split("@")[0]) + '</span>';
-    h += '<span style="color:#555;font-size:10px;white-space:nowrap;margin-left:6px">' + dt + '</span>';
-    h += '</div>';
-  }
-  if (all.length > RECENT_MAX) h += '<div style="color:#8b949e;font-size:11px;padding:4px 0">… 共 ' + all.length + ' 条,仅展示最近 ' + RECENT_MAX + ' 条(全量备份在文件夹内·解锁时按需取)</div>';
-  h += '</div></div>';
-  return h;
-}
+// v4.26.2: 「近期对话(跨账号)·数千条下拉」已从对话追踪面板移除 —— 该列表对用户是负担,
+//   且与悬浮窗「💬对话备份」板块(近期对话=API 限量·对话记录=全量按号分层)职责重复。
+//   近期速查走悬浮窗对话记录板块, 全量在备份文件夹。此处不再内嵌跨账号全量清单。
 
 const _dvRunningMemo = new Map(); // email → Set(devinId) 上轮运行集合
 const _dvRunningDetail = new Map(); // devinId → session obj (上轮详情, 供终报使用)
