@@ -942,6 +942,26 @@ function test(name, fn) {
     assert.ok(/getStandaloneShellHtml\(\{ token: ws\.token, port: ws\.port, mobile \}\)/.test(ts), "src/extension.ts: 须把 mobile 传入 getStandaloneShellHtml");
   });
 
+  // ── 反向注入「道并行而不相悖」并发收口 (跨窗口/多IDE/多账号知识库不翻倍) ──
+  // 病灶: 多窗口/多IDE 同号并发注入 → devinUpsertKnowledge 旧「list→删同名→建」非原子,
+  //   两路各自删后各自建 = 同名知识/内穿MD 翻倍(实测3条→6条)。
+  // 护栏: ① applyInjectProfileToOrg 须经 withOrgInjectLock(跨进程文件锁)+ in-flight 合流串行化;
+  //       ② devinUpsertKnowledge 须 PATCH 原地更新(devinUpdateKnowledge), 不再无脑删尽再建。
+  console.log("\n[反向注入·道并行而不相悖·并发收口]");
+  test("dao-vsix: 反向注入须经 per-org 锁 + 知识幂等 PATCH (源级护栏·防翻倍)", () => {
+    const fs = require("fs"), path = require("path");
+    const ts = fs.readFileSync(path.join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts"), "utf8");
+    // ① per-org 并发收口: in-flight 合流 + 跨进程文件锁
+    assert.ok(/const _orgInjectInflight = new Map/.test(ts), "extension.ts: 须有 _orgInjectInflight 进程内合流表");
+    assert.ok(/async function withOrgInjectLock\(/.test(ts), "extension.ts: 须有 withOrgInjectLock 跨进程锁封装");
+    assert.ok(/fs\.openSync\(lockPath, 'wx'\)/.test(ts), "extension.ts: 文件锁须用 O_EXCL('wx') 原子创建");
+    assert.ok(/function applyInjectProfileToOrg\(orgId[^]*?withOrgInjectLock\(key, \(\) => applyInjectProfileToOrgInner/.test(ts),
+      "extension.ts: applyInjectProfileToOrg 须经 withOrgInjectLock 包裹 Inner");
+    // ② 知识 upsert 须 PATCH 原地幂等, 不得退回到「删尽同名→直接新建」的非原子老路
+    assert.ok(/async function devinUpsertKnowledge\(orgId[^]*?devinUpdateKnowledge\(orgId, String\(sameName\[0\]\.id\)/.test(ts),
+      "extension.ts: devinUpsertKnowledge 须原地 PATCH(devinUpdateKnowledge)首条同名条目");
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
