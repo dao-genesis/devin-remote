@@ -5586,6 +5586,77 @@ row) grew a new primitive.
 
 ---
 
+## F184 — walk into the real apps: address by AutomationId, read a collection by meaning · paint.net / 7-Zip
+
+**Friction.** F183 stood the floor on a *fixture* — a WPF dialog built to expose one
+of every control. A fixture is honest but obliging: every control there has a clean
+accessible `Name`. The user asked for the harder ground — *large third-party apps,
+across domains, driven entirely by meaning, let the friction surface itself*
+(無為而無不為). So the floor walked into **paint.net** (a graphics editor), **7-Zip**
+(a file manager), **VLC**, **SumatraPDF**. Two real frictions surfaced almost at once.
+
+**What the standing exposed.**
+- **Meaning is not always in the Name.** paint.net's tool and color strip are
+  *icon* buttons — owner-drawn, captioned by a glyph, not a word. UIA reports their
+  `Name` as `''`, so `uia_find(name=…)` could never reach them. But the meaning had
+  not vanished; it sat one property over: the **AutomationId** — `foreColorRectangle`,
+  `backColorRectangle`, `documentListButton`, `moreLessButton` — stable, developer-
+  assigned, *semantic* handles. (Some apps put the human word in **HelpText**, the
+  tooltip, instead.) The floor was matching on a single property when meaning lives
+  across several.
+- **A collection lives below the window, where `uia_children` is blind.**
+  `uia_children` sees only the *direct* children of the top window — for 7-Zip that
+  is `[ToolBar, Pane, TitleBar, MenuBar]`, not a single file. The file list — the
+  whole point of a file manager — is `ListItem`s many levels down. `uia_find` could
+  surface *one*; there was no way to read the *set* by meaning.
+- **Provider depth, honestly.** paint.net's *pure* tool icons (and its Layers rows)
+  carry **no** Name, **no** AutomationId, **no** HelpText — they are drawn, not
+  modeled, and remain unreachable through the a11y tree. That is paint.net's gap, not
+  the floor's: where a provider models nothing, the floor truthfully finds nothing.
+
+**Primitives grown.**
+- **`uia_find` now matches Name *and* AutomationId *and* HelpText.** Exact equality on
+  Name or AutomationId wins outright; otherwise a substring of Name/AutomationId/
+  HelpText is the fallback — the same precedence that already kept `'Add'` from
+  matching `'Memory add'`, widened across the three properties. `uia_find`/`uia_children`
+  now also *return* `aid` and `help`, so a caller can see the handle it just used.
+  This is still operating by **meaning**: an AutomationId is a name a developer chose,
+  not a pixel.
+- **`uia_find_all` — the plural of `uia_find`.** One Descendants walk, every match
+  collected as `[{name,type,aid,help,rect}, …]`. This is how you read a *collection*
+  by meaning: the rows of a list, the items of a result set — the subtree
+  `uia_children` cannot see.
+
+**Live (this VM), driven by meaning, no pixel hunting.** `_probe_appfloor.py` runs
+**8/8 green** against the *real installed apps*:
+- paint.net — `uia_find` resolves three icon buttons whose `Name` is empty purely by
+  their **AutomationId** (and returns their rect for the pixel actuator); a bogus id
+  returns `None`; the resolved control's `Name` is confirmed genuinely empty, proving
+  the AutomationId path was *required*, not decorative.
+- 7-Zip — `uia_find_all` reads the file-list rows `['Computer','Documents','Network',
+  '\\.']` that `uia_children` cannot see; `uia_find` addresses the `Computer` row by
+  meaning; a double-click on its returned rect navigates *into* it; and `uia_find_all`
+  read **back** the new contents `['C:','D:']` — the change is the oracle. A whole
+  file-manager step performed and verified through the a11y tree.
+- (VLC's first-run privacy modal was dismissed the same way — `uia_invoke(name=
+  'Continue')` found the button by meaning though it was nested below the dialog's
+  direct children — incidental proof the descendant find reaches where `uia_children`
+  stops. Its transport `Play` is addressable by meaning too.)
+
+**No regression.** Both growths are additive and exposed through the same `getattr`
+fallback (X11 returns `[]`/`None` until an equivalent is forced there); the WPF
+fixture still runs 15/15 (`_probe_winverbs.py`). Pure stdlib, no new deps.
+
+**Lesson (道法自然).** 道隱無名 — the way hides in the nameless. paint.net's buttons
+had no Name and the floor was briefly blind to them; the remedy was not to look harder
+at pixels but to notice the meaning had only *moved* — to the AutomationId, to the
+tooltip — and to widen what "by meaning" reads. 大方無隅: the larger the surface, the
+fewer its clean edges; a fixture has corners, a real app does not, and the floor grew
+to hold the formless. 為而弗恃: where paint.net models nothing, the floor claims
+nothing — only a *real* reach (the file list below the window) grew a real verb.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

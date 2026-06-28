@@ -100,6 +100,8 @@ _ARR_GET = 4    # GetElement
 _UIA_NameProperty = 30005
 _UIA_ControlTypeProperty = 30003
 _UIA_BoundingRectangleProperty = 30001
+_UIA_AutomationIdProperty = 30011   # stable developer-assigned id (semantic handle)
+_UIA_HelpTextProperty = 30013       # tooltip / accessible help string
 _TreeScope_Children = 2
 _TreeScope_Descendants = 4
 
@@ -266,7 +268,9 @@ def uia_children(win: int) -> list:
             try:
                 t = _prop_int(ce.value, _UIA_ControlTypeProperty)
                 out.append({"name": _prop_bstr(ce.value, _UIA_NameProperty),
-                            "type": _CONTROL_TYPES.get(t, str(t))})
+                            "type": _CONTROL_TYPES.get(t, str(t)),
+                            "aid": _prop_bstr(ce.value, _UIA_AutomationIdProperty),
+                            "help": _prop_bstr(ce.value, _UIA_HelpTextProperty)})
             finally:
                 _release(ce.value)
         return out
@@ -280,8 +284,12 @@ def uia_find(win: int, name=None, ctype=None, max_scan: int = 6000):
     """Find a descendant element of ``win`` by its *meaning* — accessible name
     (case-insensitive substring) and/or control type (e.g. ``"Button"``,
     ``"Tab"``, ``"Edit"``) — and report *where it is*:
-    ``{"name","type","rect":(x,y,w,h)}`` in screen coordinates, or None. The UIA
-    analogue of :func:`find_control`, but it works *inside modern apps* (the
+    ``{"name","type","aid","help","rect":(x,y,w,h)}`` in screen coordinates, or None.
+    ``name`` is matched not only against the accessible Name but also the
+    **AutomationId** and **HelpText** (tooltip): icon-only toolbars (paint.net's
+    tools, many WinUI apps) leave Name empty yet carry a stable, *semantic* handle
+    in AutomationId (e.g. ``"foreColorRectangle"``) the floor can still address by.
+    The UIA analogue of :func:`find_control`, but it works *inside modern apps* (the
     accessibility tree, not native child HWNDs), and returning the rect closes the
     loop back to the pixel actuator: a semantic search in Chrome/Electron/UWP hands
     the mouse a target to click — no visual scanning. ``max_scan`` bounds the walk
@@ -295,6 +303,8 @@ def uia_find(win: int, name=None, ctype=None, max_scan: int = 6000):
     try:
         return {"name": _prop_bstr(el, _UIA_NameProperty),
                 "type": _CONTROL_TYPES.get(_prop_int(el, _UIA_ControlTypeProperty)),
+                "aid": _prop_bstr(el, _UIA_AutomationIdProperty),
+                "help": _prop_bstr(el, _UIA_HelpTextProperty),
                 "rect": _prop_rect(el)}
     finally:
         _release(el)
@@ -307,7 +317,10 @@ def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
     over a mere substring: driving the calculator showed substring matching picks
     ``'Memory add'`` when you asked for ``'Add'`` (it appears earlier in the tree),
     so an exact name, if one exists anywhere in scope, always wins; the first
-    substring match is kept only as a fallback."""
+    substring match is kept only as a fallback. ``name`` is tested against the
+    accessible Name *and* the AutomationId (exact on either wins) and, as a last
+    resort, a substring of Name/AutomationId/HelpText — so icon controls that leave
+    Name empty but carry a semantic AutomationId/tooltip stay reachable."""
     el = _element(uia, win)
     if not el:
         return None
@@ -338,16 +351,77 @@ def _find_ptr(uia, win, name=None, ctype=None, max_scan: int = 6000):
             if nl is None:
                 fuzzy = ce.value  # type-only search: first match wins
                 break
-            cand = (_prop_bstr(ce.value, _UIA_NameProperty) or "").lower()
-            if cand == nl:
+            nm = (_prop_bstr(ce.value, _UIA_NameProperty) or "").lower()
+            aid = (_prop_bstr(ce.value, _UIA_AutomationIdProperty) or "").lower()
+            if nm == nl or aid == nl:
                 if fuzzy:
                     _release(fuzzy)
-                return ce.value  # exact match always wins
-            if nl in cand and fuzzy is None:
+                return ce.value  # exact Name or AutomationId always wins
+            ht = (_prop_bstr(ce.value, _UIA_HelpTextProperty) or "").lower()
+            if fuzzy is None and (nl in nm or nl in aid or nl in ht):
                 fuzzy = ce.value  # keep as fallback, do not release
             else:
                 _release(ce.value)
         return fuzzy
+    finally:
+        _release(cond.value)
+        _release(arr.value)
+        _release(el)
+
+
+def uia_find_all(win: int, name=None, ctype=None, max_scan: int = 6000) -> list:
+    """The *plural* of :func:`uia_find` — every descendant of ``win`` matching the
+    given meaning, as ``[{"name","type","aid","help","rect"}, …]``. Where
+    :func:`uia_children` sees only the *direct* children of a window, this reaches
+    the whole subtree, which is how you read a *collection* by meaning: the rows of
+    a file list (7-Zip), the layers of an image (paint.net), a page of search hits —
+    things that live many levels below the top window and that a single
+    :func:`uia_find` can only surface one of. ``ctype``/``name`` filter exactly as
+    in :func:`uia_find` (name tested against Name/AutomationId/HelpText); omit both
+    to enumerate everything. ``max_scan`` bounds the walk."""
+    uia = _get_uia()
+    if not uia:
+        return []
+    el = _element(uia, win)
+    if not el:
+        return []
+    cond = ctypes.c_void_p()
+    arr = ctypes.c_void_p()
+    nl = name.lower() if name else None
+    cl = ctype.lower() if ctype else None
+    out = []
+    try:
+        if _vcall(uia, _CTRUE, ctypes.c_long, [ctypes.POINTER(ctypes.c_void_p)],
+                  ctypes.byref(cond)) != 0:
+            return []
+        if _vcall(el, _FINDALL, ctypes.c_long,
+                  [ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)],
+                  _TreeScope_Descendants, cond, ctypes.byref(arr)) != 0 or not arr.value:
+            return []
+        n = ctypes.c_int()
+        _vcall(arr.value, _ARR_LEN, ctypes.c_long,
+               [ctypes.POINTER(ctypes.c_int)], ctypes.byref(n))
+        for i in range(min(n.value, max_scan)):
+            ce = ctypes.c_void_p()
+            if _vcall(arr.value, _ARR_GET, ctypes.c_long,
+                      [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+                      i, ctypes.byref(ce)) != 0 or not ce.value:
+                continue
+            try:
+                t = _CONTROL_TYPES.get(_prop_int(ce.value, _UIA_ControlTypeProperty))
+                if cl is not None and (t or "").lower() != cl:
+                    continue
+                nm = _prop_bstr(ce.value, _UIA_NameProperty)
+                aid = _prop_bstr(ce.value, _UIA_AutomationIdProperty)
+                ht = _prop_bstr(ce.value, _UIA_HelpTextProperty)
+                if nl is not None and nl not in (nm or "").lower() \
+                   and nl not in (aid or "").lower() and nl not in (ht or "").lower():
+                    continue
+                out.append({"name": nm, "type": t, "aid": aid, "help": ht,
+                            "rect": _prop_rect(ce.value)})
+            finally:
+                _release(ce.value)
+        return out
     finally:
         _release(cond.value)
         _release(arr.value)

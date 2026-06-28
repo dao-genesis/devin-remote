@@ -146,6 +146,11 @@ uia_children = getattr(_be, "uia_children", lambda win: [])
 # the rect closes the loop to the mouse — a semantic search yields a pixel target
 # to click, no visual scanning. None if not found / UIA unavailable.
 uia_find = getattr(_be, "uia_find", lambda win, name=None, ctype=None: None)
+# uia_find_all (F184): the plural of uia_find — every descendant matching the meaning,
+# as a list. uia_children sees only direct children; this reaches the whole subtree to
+# read a COLLECTION by meaning (a file list's rows, an image's layers, search hits) that
+# live far below the top window. name matches Name/AutomationId/HelpText, ctype filters.
+uia_find_all = getattr(_be, "uia_find_all", lambda win, name=None, ctype=None, max_scan=6000: [])
 # UIA action (F167): operate elements found by MEANING through the accessibility
 # tree, reaching INSIDE modern apps (Chrome/Electron/UWP) that have no native HWND
 # to write to or click. uia_set_value writes a field's value (modern-app dual of
