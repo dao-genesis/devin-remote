@@ -2,6 +2,16 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.40
+- **归一面板（多实例标签栏）对齐手机 APK · 标签状态实时化（守柔·不破坏既有窗口）**。
+  - **状态指示灯实时化**：标签状态点（🟢running / 🟠awaiting·待输入 / 🟠blocked·卡住额度耗尽 / 🔵finished / 默认灰）由仅「开标签那一刻」升级为 20s 轮询实时刷新——宿主 `_multiTabStatusTick()` 仅对「已打开的少量标签」按账号一次 `listRunningSessions` 命中即分类（`devin_cloud.classifySession`），经新 `tabUpdate` 消息回推前端更新状态点。
+  - **有对话显示对话名**：轮询命中活跃会话即回填对话标题（替代「账号名 · sid8」回退），与手机端一致。
+  - **金额移到左侧 + 指示灯左置**：标签 DOM 由 `[点][#号][名][$额]` 改为 `[点][$额][#号][名]`，金额与状态灯同处最左。
+  - **标签宽度砍半**：`.tab` max-width 250px→160px、gap/padding 收窄，便于多页并联；`.lbl` 加 `flex:1;min-width:0` 保证省略号截断。
+  - **状态通知**：标签转入「卡住/额度耗尽」或「待输入」时前端 toast 提醒（对齐手机消息通知）。
+  - 状态字符串→类名归一：前端 `_dotCls` 与宿主 `_classStr` 同构，兼容原始 status 串与已分类 statusClass。持久化标签新增 `statusClass`。
+  - 自检：`node --check`（rt-flow 源 + vendored）、render_check、rt-flow 测试 115 全过、rtflow 源↔vendored 逐字一致。仅改 `core/rt-flow/extension.js`（+ re-vendor）。
+
 ## 3.50.39
 - **归一补全 · `pc_ui_tree` + `pc_activate` 回归(59 工具全量·与知识库文档逐字对齐·大成若缺其用不敝)**。
   - 3.50.37 大升级时 `pc_*` 仅补到 13(drag/key_combo/clipboard),漏掉线上既有的 `pc_ui_tree`(整机窗口 UI Automation 控件树·name/type/aid/坐标)与 `pc_activate`(SW_RESTORE+SetForegroundWindow 按 title/pid 前置窗口)两件,致 `/mcp` 由 59 退化为 57、与「DAO Bridge MCP 使用文档」所载 15 个 `pc_*` 不符。本次按线上 3.50.33 实现原样归位:PowerShell 脚本以 base64 内嵌(`PC_UIA_TREE_PS_B64`/`PC_ACTIVATE_PS_B64`·规避 JS 字面量转义),经 `daoWriteB64Script` 自写 `~/.dao` + `daoRunPwshFile`(execFileSync `-File`)同步执行。

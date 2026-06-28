@@ -357,7 +357,7 @@ function _saveMultiTabs() {
     if (_ctx && _ctx.globalState) {
       const arr = Array.from(_multiTabs.values()).map((t) => ({
         email: t.email, devinId: t.devinId, accNo: t.accNo,
-        dollars: t.dollars, title: t.title, status: t.status,
+        dollars: t.dollars, title: t.title, status: t.status, statusClass: t.statusClass,
       }));
       _ctx.globalState.update("dao.multiTabs", arr);
     }
@@ -580,14 +580,14 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 #eng{height:25px;background:#21262d;border:1px solid #30363d;color:#9aa4b2;border-radius:6px;font-size:11px;cursor:pointer}
 #zlbl{min-width:40px;text-align:center;color:#9aa4b2;font-size:11px;cursor:pointer;user-select:none}
 #tabs{display:flex;align-items:stretch;height:30px;background:#11151b;border-bottom:1px solid #21262d;overflow-x:auto;overflow-y:hidden;white-space:nowrap;flex:0 0 auto}
-.tab{display:inline-flex;align-items:center;gap:6px;padding:0 8px;max-width:250px;border-right:1px solid #21262d;cursor:pointer;color:#9aa4b2;font-size:12px;user-select:none;flex:0 0 auto}
+.tab{display:inline-flex;align-items:center;gap:5px;padding:0 7px;max-width:160px;border-right:1px solid #21262d;cursor:pointer;color:#9aa4b2;font-size:12px;user-select:none;flex:0 0 auto}
 .tab:hover{background:#1b212b}
 .tab.on{background:#0e1116;color:#e6edf3;box-shadow:inset 0 -2px 0 #1f6feb}
 .tab.on2{background:#0e1116;color:#e6edf3;box-shadow:inset 0 -2px 0 #3fb950}
 .tab .dot{width:7px;height:7px;border-radius:50%;background:#6e7681;flex:0 0 auto}
 .tab .dot.running{background:#3fb950}.tab .dot.finished{background:#58a6ff}.tab .dot.blocked{background:#f0883e}.tab .dot.expired{background:#f85149}.tab .dot.awaiting{background:#d29922}
 .tab .no{min-width:16px;height:15px;line-height:15px;text-align:center;font-size:10px;font-weight:800;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:4px;padding:0 3px;flex:0 0 auto}
-.tab .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tab .lbl{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tab .amt{color:#3fb950;font-weight:700;flex:0 0 auto}
 .tab .x{opacity:.5;font-size:14px;padding:0 2px;border-radius:3px;flex:0 0 auto}
 .tab .x:hover{opacity:1;background:#3a3a3a}
@@ -853,10 +853,10 @@ function schedLazyLoad(){clearTimeout(_lazyT);_lazyT=setTimeout(_lazyLoadVisible
 function closeTab(id){var t=tabs[id];if(!t)return;_clrLoadTO(t);if(id===splitId)splitId=null;if(t.btn.parentNode)t.btn.parentNode.removeChild(t.btn);if(t.frame.parentNode)t.frame.parentNode.removeChild(t.frame);delete tabs[id];order=order.filter(function(x){return x!==id;});if(id.indexOf('board:')===0){var _bt=id.slice(6);var _b=BOARDS[_bt];if(_b){if(_b.url){try{URL.revokeObjectURL(_b.url)}catch(e){}}delete BOARDS[_bt];}}else{vscode.postMessage({type:'closed',id:id});}if(active===id){active=null;if(order.length)setActive(order[order.length-1]);}sync();schedPersist();}
 function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[id].url=m.url;tabs[id]._loaded=false;}setActive(id);return;}
   var btn=document.createElement('div');btn.className='tab';
-  var dot=document.createElement('span');dot.className='dot'+(m.status?(' '+m.status):'');btn.appendChild(dot);
-  if(m.accNo){var no=document.createElement('span');no.className='no';no.textContent='#'+m.accNo;btn.appendChild(no);}
+  var dot=document.createElement('span');dot.className='dot'+_dotCls(m.statusClass||m.status);btn.appendChild(dot);
+  var am=document.createElement('span');am.className='amt';am.textContent=m.dollars?('$'+m.dollars):'';am.style.display=m.dollars?'':'none';btn.appendChild(am);
+  var no=document.createElement('span');no.className='no';if(m.accNo){no.textContent='#'+m.accNo;}else{no.style.display='none';}btn.appendChild(no);
   var lb=document.createElement('span');lb.className='lbl';lb.textContent=m.label||'Devin';btn.appendChild(lb);
-  if(m.dollars){var am=document.createElement('span');am.className='amt';am.textContent='$'+m.dollars;btn.appendChild(am);}
   var x=document.createElement('span');x.className='x';x.textContent='×';btn.appendChild(x);
   btn.onclick=function(e){if(e.target===x)return;setActive(id);};
   btn.ondblclick=function(e){if(e.target===x)return;vscode.postMessage({type:'copyCred',id:id});};
@@ -867,8 +867,23 @@ function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[
   var fr=document.createElement('iframe');fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.display='none';
   fr.addEventListener('load',function(){setLoading(id,false);});fr.addEventListener('error',function(){setLoading(id,false);});
   S.appendChild(fr);
-  tabs[id]={btn:btn,frame:fr,url:m.url,email:m.email||'',zoom:1,meta:m,loading:false,_loaded:false};order.push(id);applyZoom(tabs[id]);setActive(id);sync();schedPersist();
+  tabs[id]={btn:btn,frame:fr,url:m.url,email:m.email||'',zoom:1,meta:m,loading:false,_loaded:false,_dot:dot,_lbl:lb,_amt:am};order.push(id);applyZoom(tabs[id]);setActive(id);sync();schedPersist();
   vscode.postMessage({type:'histPush',url:m.url,label:m.label||'Devin',kind:'acc'});}
+// 归一 · 状态字符串 → 状态点类名(对齐 devin_cloud.classifySession · 软兜底): 空=idle灰, 余映射 running/awaiting/blocked/finished。
+function _dotCls(s){s=String(s==null?'':s).toLowerCase().trim();if(!s)return '';
+  if(s==='idle')return '';
+  if(s==='running'||s==='finished'||s==='blocked'||s==='awaiting'||s==='expired')return ' '+s;
+  if(/await|waiting|needs_input|user_input|ask_user|action_required/.test(s))return ' awaiting';
+  if(/out_of_quota|usage_limit|insufficient|overage|credit|billing|exceeded|quota|error|failed|stuck|crash|blocked/.test(s))return ' blocked';
+  if(/finished|completed|done|stopped|suspend|expired|exited|archived|deleted/.test(s))return ' finished';
+  if(/running|working|in_progress|streaming|active|started|resumed|busy|thinking|executing|coding|planning|testing/.test(s))return ' running';
+  return ' running';}
+// 归一 · 标签状态实时刷新(对齐手机端): 宿主轮询会话状态 → 更新状态点/对话名/额度, 并在转入「卡住/待输入」时提示。
+function updateTab(m){var t=tabs[m.id];if(!t)return;var mt=t.meta||(t.meta={});
+  if(m.statusClass!=null){var prev=mt.statusClass||'';mt.statusClass=m.statusClass;if(t._dot)t._dot.className='dot'+_dotCls(m.statusClass);
+    if(m.statusClass!==prev&&(m.statusClass==='blocked'||m.statusClass==='awaiting')){try{daoToast((m.statusClass==='blocked'?'⚠ 卡住/额度耗尽 · ':'⏳ 待输入 · ')+(mt.label||'Devin'),m.statusClass==='blocked');}catch(e){}}}
+  if(m.label){mt.label=m.label;if(t._lbl)t._lbl.textContent=m.label;}
+  if(m.dollars!=null){mt.dollars=m.dollars;if(t._amt){t._amt.textContent=m.dollars?('$'+m.dollars):'';t._amt.style.display=m.dollars?'':'none';}}}
 // 归一 · 状态续接(对齐手机端会话保持): 持久化当前打开的标签集 → 宿主 globalState;
 //   重开 /shell 时宿主在 ready 回推 restoreTabs, 逐个还原(老用户停在原网页·新用户落主页)。
 var _persistT=null;
@@ -1254,6 +1269,7 @@ window.addEventListener('drop',function(e){if(_dragId||_convDragActive){DROP.cla
 window.addEventListener('message',function(ev){var m=ev.data||{};
   if(m.__cwRelay){vscode.postMessage({type:'cloudRelay',msg:m.__cwRelay,board:m.__board||''});return;}
   if(m.type==='open'){mkTab(m);}
+  else if(m.type==='tabUpdate'){try{updateTab(m);}catch(e){}}
   else if(m.type==='closeAll'){var ks=order.slice();for(var i=0;i<ks.length;i++)closeTab(ks[i]);vscode.postMessage({type:'closeAllAck'});}
   else if(m.type==='favs'){favs=m.list||[];syncStar();if(OV.className&&OVT.textContent.indexOf('书签')>=0)showFavs();}
   else if(m.type==='history'){history=m.list||history;if(OV.className&&OVT.textContent.indexOf('历史')>=0)showHistory();}
@@ -2199,7 +2215,7 @@ function _wireMultiPanel(panel) {
       if (m.type === "toast" && m.msg) { _toast(m.msg); return; }
     } catch (e) { try { log("[multi] msg err: " + (e && e.message)); } catch (x) {} }
   });
-  panel.onDidDispose(() => { _multiPanel = null; _multiReady = false; _multiQueue.length = 0; try { _cloudProvider && _cloudProvider.setHostPost(null); } catch (e) {} });
+  panel.onDidDispose(() => { _multiPanel = null; _multiReady = false; _multiQueue.length = 0; if (_multiStatusTimer) { clearInterval(_multiStatusTimer); _multiStatusTimer = null; } try { _cloudProvider && _cloudProvider.setHostPost(null); } catch (e) {} });
   _multiPanel = panel;
 }
 function _ensureMultiPanel() {
@@ -2211,6 +2227,7 @@ function _ensureMultiPanel() {
   );
   panel.webview.html = _multiShellHtml();
   _wireMultiPanel(panel);
+  if (!_multiStatusTimer) _multiStatusTimer = setInterval(() => { _multiTabStatusTick().catch(() => {}); }, 20000);
   return panel;
 }
 async function _resolveAuthForEmail(email, password) {
@@ -2228,6 +2245,47 @@ async function _resolveAuthForEmail(email, password) {
     if (pw) { const r = await devinCloud.getAuth(email, pw); if (r && r.ok) auth = r; }
   }
   return auth;
+}
+// 归一 · 状态字符串 → 状态点类名(宿主侧·与前端 _dotCls 同构): 供首开标签即上色。
+function _classStr(s){s=String(s==null?'':s).toLowerCase().trim();if(!s)return '';
+  if(/await|waiting|needs_input|user_input|ask_user|action_required/.test(s))return 'awaiting';
+  if(/out_of_quota|usage_limit|insufficient|overage|credit|billing|exceeded|quota|error|failed|stuck|crash|blocked/.test(s))return 'blocked';
+  if(/finished|completed|done|stopped|suspend|expired|exited|archived|deleted/.test(s))return 'finished';
+  if(/running|working|in_progress|streaming|active|started|resumed|busy|thinking|executing|coding|planning|testing/.test(s))return 'running';
+  return 'running';}
+// 归一 · 多实例标签状态实时轮询(对齐手机端·仅打开中的少量标签·每账号一次 listSessions):
+//   命中活跃会话 → running/awaiting/blocked + 回填对话名; 未命中 → finished。并回填实时额度。
+let _multiStatusTimer = null;
+async function _multiTabStatusTick() {
+  if (!_multiPanel || !_multiReady) return;
+  const list = Array.from(_multiTabs.values()).filter((t) => t && t.devinId);
+  if (!list.length) return;
+  const byEmail = new Map();
+  for (const t of list) { const e = String(t.email || '').toLowerCase(); if (!e) continue; if (!byEmail.has(e)) byEmail.set(e, []); byEmail.get(e).push(t); }
+  for (const [email, tabsForEmail] of byEmail) {
+    try {
+      const auth = devinCloud.getCachedAuth(email);
+      if (!auth || !auth.auth1) continue;
+      let active = [];
+      try { active = await devinCloud.listRunningSessions(auth); } catch (e) {}
+      const amap = new Map();
+      for (const s of (active || [])) { const id = String(s.devinId || '').replace(/^devin-/, ''); if (id) amap.set(id, s); }
+      let dollars = null;
+      try { const h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+      for (const t of tabsForEmail) {
+        const sid = String(t.devinId || '').replace(/^devin-/, '');
+        const hit = amap.get(sid);
+        const cls = hit ? (hit.statusClass || 'running') : 'finished';
+        const upd = { type: 'tabUpdate', id: t.id, statusClass: cls };
+        const title = hit && String(hit.title || '').trim();
+        if (title && title !== '(未命名)' && title !== t.title) { t.title = title; t.label = title; upd.label = title; }
+        if (dollars != null && dollars !== t.dollars) { t.dollars = dollars; upd.dollars = dollars; }
+        t.status = cls; t.statusClass = cls;
+        _postMulti(upd);
+      }
+    } catch (e) {}
+  }
+  try { _saveMultiTabs(); } catch (e) {}
 }
 // 归一入口: 在统一多实例面板里为某账号(可带具体对话)开/聚焦一个标签。
 async function openMultiInstance(opts) {
@@ -2265,12 +2323,13 @@ async function openMultiInstance(opts) {
   const pageLabel = String(opts.label || '').trim();
   const label = title || (short + (pagePath ? (' · ' + (pageLabel || pagePath)) : (sid ? (' · ' + sid.slice(0, 8)) : (fresh ? ' · 新对话' : ''))));
   const status = String(opts.status || '').trim();
-  const meta = { id, label, url, email, devinId: sid, accNo, dollars, title, status, path: pagePath, pageLabel };
+  const statusClass = String(opts.statusClass || '').trim() || _classStr(status);
+  const meta = { id, label, url, email, devinId: sid, accNo, dollars, title, status, statusClass, path: pagePath, pageLabel };
   _multiTabs.set(id, meta);
   _saveMultiTabs();
   _ensureMultiPanel();
   try { _multiPanel.reveal(vscode.ViewColumn.Active); } catch (e) {}
-  _postMulti({ type: 'open', id, label, url, accNo, dollars, status, email, devinId: sid });
+  _postMulti({ type: 'open', id, label, url, accNo, dollars, status, statusClass, email, devinId: sid });
   _routeDbg("openMultiInstance OK email=" + email + " url=" + url + " panel=" + (_multiPanel ? "yes" : "no"));
   return { ok: true };
 }
@@ -2369,7 +2428,7 @@ async function _resumePersistedTabs() {
   //   下面的 openMultiInstance 即命中缓存秒开 · 不再逐个串行慢登录)。
   try { await _prewarmAuthThrottled(saved.map((t) => t && t.email)); } catch (e) {}
   for (const t of saved) {
-    try { await openMultiInstance({ email: t.email, devinId: t.devinId, title: t.title, status: t.status, path: t.path, label: t.pageLabel }); }
+    try { await openMultiInstance({ email: t.email, devinId: t.devinId, title: t.title, status: t.status, statusClass: t.statusClass, path: t.path, label: t.pageLabel }); }
     catch (e) { try { log("[multi] resume err: " + (e && e.message)); } catch (x) {} }
   }
 }
