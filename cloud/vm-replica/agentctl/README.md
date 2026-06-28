@@ -67,6 +67,12 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   to a real click** on the rect when a control exposes no action (text regions,
   canvases — JOURNAL F179), so invoke-by-meaning answers for *any* visible control.
 - `uia_click` — the union made explicit: locate by meaning, deliver a real click.
+- `uia_drag` — the held-stroke dual of `uia_click`: locate a *source* and a *target*
+  control by meaning and run a genuine press-glide-release between them (reorder a
+  track, move a list row). The grip is the item's **leading edge**, not its centre —
+  a track's centre is its body, where a press means *select*, not *move* (JOURNAL
+  F190b). In-process drags land; a header that only sorts, or an OLE file-drop target,
+  is named as out of reach (synthetic motion can't speak the OLE protocol).
 - `uia_get_value` / `uia_set_value` / `uia_focus` — read/write a field's text and
   give it keyboard focus, by meaning. `uia_set_value` writes via the UIA ValuePattern
   but **trusts it only when a read-back confirms the value**, because the pattern lies

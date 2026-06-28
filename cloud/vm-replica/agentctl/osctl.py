@@ -218,6 +218,48 @@ uia_invoke = getattr(_be, "uia_invoke", lambda win, name=None, ctype=None: False
 # toolkit exposed an Action; uia_invoke falls through to this when a match is not
 # actionable. False if no element / accessibility unavailable.
 uia_click = getattr(_be, "uia_click", lambda win, name=None, ctype=None: False)
+
+
+def uia_drag(win, name=None, ctype=None, to_name=None, to_ctype=None,
+             steps: int = 40, hold: float = 0.2) -> bool:
+    """Drag one control onto another **by meaning** — the gesture dual of
+    :func:`uia_click` (locate-then-click) carried to the held stroke of :func:`drag`
+    (F190b). Both ends are found in the accessibility tree by name/role; the press,
+    glide and release land on real screen pixels, so a drag-aware target (a track to
+    reorder, a list row to move, a header to shuffle) sees a genuine mouse path.
+
+    The grip is **not** the element centre. A real reorder handle sits at the item's
+    leading edge — a track's control-panel header, a row's drag-dots, a card's title
+    bar — while the centre is usually the *body* (a waveform, a cell), where a press
+    means "select", not "move". So this grips a point just inside the **top-left** of
+    each element (a small inset), which lands on the handle for list/track/row items
+    and still falls inside the frame for a plain item. It performs the stroke and
+    returns True once both ends are located; like every floor verb it does not assert
+    the app *honoured* the drag — the caller confirms by reading the new order back
+    (the change is the oracle). Returns False only when either end cannot be found or
+    has no on-screen rect.
+
+    Two honest limits, by nature not by bug: a target that turns a drag into a click
+    (a header that only sorts) does nothing visible, and an **OLE** drop target (file
+    drag between Explorer and an app) ignores synthetic mouse motion entirely — those
+    need the platform drag-drop protocol, not a pointer path."""
+    src = uia_find(win, name=name, ctype=ctype)
+    dst = uia_find(win, name=to_name, ctype=to_ctype)
+    if not (src and dst):
+        return False
+    rs, rd = src.get("rect"), dst.get("rect")
+    if not (rs and rd) or rs[2] <= 0 or rs[3] <= 0 or rd[2] <= 0 or rd[3] <= 0:
+        return False
+
+    def handle(r):  # a point just inside the leading (top-left) edge — where handles live
+        x, y, w, h = r
+        return x + min(40, w // 2), y + min(12, h // 2)
+
+    (sx, sy), (dx, dy) = handle(rs), handle(rd)
+    drag(sx, sy, dx, dy, steps=steps, hold=hold)
+    return True
+
+
 # UIA focus (F169): the bridge from semantic LOCATE to the keystroke floor. Some
 # modern inputs (rich text, contenteditable, custom canvases) expose no ValuePattern
 # to write through, but CAN be focused through the accessibility tree; once focused,
