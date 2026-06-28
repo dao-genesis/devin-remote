@@ -5795,6 +5795,60 @@ did not add power; it removed a blindness.
 
 ---
 
+## F187 — "choose me" without a SelectionItemPattern: a Qt tab is *invoked*, not *selected* · `uia_select` falls back to Invoke
+
+**Friction.** New domains this round — office, audio, **database**, vector. DB Browser
+for SQLite (Qt) holds a real grid of rows behind a tab strip, so the floor reached for
+the obvious semantic verb to switch tabs:
+
+```
+uia_select(dbbrowser, name="Browse Data", ctype="tabitem")   # -> False   (won't switch)
+uia_is_selected(dbbrowser, name="Browse Data", ctype="tabitem")  # -> None  (no read either)
+```
+
+A tab that plainly *means* "choose this page" could not be chosen. The cause is a
+toolkit truth: a Qt `QTabBar` tab models **only InvokePattern** — switching the page is
+an *invoke*, not a *select* — so it exposes no `SelectionItemPattern` at all (hence the
+`None` read). `uia_select` spoke exactly one pattern (`SelectionItemPattern.Select`) and
+gave up when it was absent, blind to a whole class of real controls (Qt tabs, some custom
+lists) where the same human gesture lives under a different UIA name.
+
+**Primitive widened — `uia_select` now falls back to Invoke.** Try `SelectionItemPattern.
+Select` first (unchanged for WPF radios/list items); if the pattern is absent or its
+Select fails, **invoke** the element instead — clicking the tab is what a human does, and
+InvokePattern *is* that gesture. One element pointer, two patterns tried in meaning-order,
+no new verb surface:
+
+```python
+uia_select(dbbrowser, "Execute SQL",  ctype="tabitem")   # -> True; the grid disappears
+uia_select(dbbrowser, "Browse Data",  ctype="tabitem")   # -> True; the grid returns
+uia_select(dbbrowser, "No Such Tab",  ctype="tabitem")   # -> False (clean miss)
+```
+
+**An honest non-gap, noted.** The same DB grid's *cells* were already reachable —
+`uia_find_all(ctype="dataitem")` returns `['1','Laozi','无为而无不为','2','Zhuangzi',…]`
+and `uia_find(name="Laozi")` lands a `DataItem` with a rect. Reading a data grid by
+meaning needed **no** new primitive; only the *select* verb was too narrow. The floor
+should grow only where practice actually broke it — and here only one verb did.
+
+**Live (this VM), by meaning.** `_probe_qttabs.py` runs **7/7 green** on real DB Browser:
+the tab is confirmed to expose no SelectionItemPattern (`uia_is_selected` → None);
+`uia_select("Execute SQL")` then `("Browse Data")` switch pages, with the `sages` grid's
+cell `Laozi` appearing/disappearing as the oracle; the grid is read by meaning; a bogus
+tab returns False. **No regression** — `_probe_winverbs.py` 15/15 (the WPF fixture still
+drives *real* SelectionItemPattern tabs and radios through the unchanged primary path),
+`_probe_appfloor.py` 8/8, `_probe_menuapps.py` 8/8, `_probe_ctxmenu.py` 7/7. Pure stdlib.
+
+**Lesson (道法自然).** 大音希聲 — the great note is faint. The verb's name said *select*,
+but the meaning the user holds is "choose this" — and a Qt tab honours that meaning
+through *invoke*. Binding the verb to one UIA pattern mistook the **name** of the action
+for the **action**. 弱也者道之用 — the way works by yielding: the verb stopped insisting on
+its one pattern and bent to whatever pattern the control actually offers, and so reaches
+more by demanding less. The intent — choose one — is the constant; the pattern is just
+how a given toolkit happens to spell it.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each

@@ -71,7 +71,9 @@ it on both grounds (UIA on Windows, AT-SPI on Linux) behind one vocabulary:
   give it keyboard focus, by meaning.
 - `uia_toggle` / `uia_toggle_state` — flip and read a checkbox/switch.
 - `uia_select` / `uia_is_selected` — pick a list/tab/radio item and read whether
-  it is chosen.
+  it is chosen. `uia_select` tries `SelectionItemPattern` first, then **falls back to
+  Invoke** for controls that mean "choose me" but model only InvokePattern — e.g. a Qt
+  `QTabBar` tab, which is *invoked*, not *selected* (JOURNAL F187).
 - `uia_expand` / `uia_collapse` / `uia_expand_state` — open/close a combobox or
   tree node and read its state.
 - `uia_range_value` / `uia_set_range_value` — read `{value,min,max}` of a slider/
