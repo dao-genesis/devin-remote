@@ -6007,6 +6007,58 @@ about where the caret went.
 
 ---
 
+## F190b — `uia_drag`: drag one control onto another *by meaning* · the grip is the handle, not the centre
+
+**Friction.** Into the **drag-and-drop** modality. The floor had `drag(x0,y0,x1,y1)` — a real
+press-glide-release over *pixels* — but no way to say "drag *this* control onto *that* one".
+To reorder Audacity's tracks I had to pull both rects out of `uia_find` by hand and compute
+points. That is exactly the gap `uia_click` already closed for the tap (locate-by-meaning →
+real click); the held stroke had no such dual.
+
+The first naive shape — drag from the **centre** of the source element to the centre of the
+target — failed, and taught the real lesson. A track's UIA element spans the whole row; its
+centre is the **waveform**, and a press there means *select a time region*, not *move the
+track*. The reorder handle lives at the item's **leading edge** (the control-panel header).
+A column header taught the mirror lesson: dragging DB Browser's "name" column collapsed into
+a **click that only sorted** — the grid never enabled section-move, so the drag had nowhere
+to go.
+
+**Primitive grown — `uia_drag(win, name, ctype, to_name, to_ctype)`.** Find both ends by
+meaning, then grip a point just inside each element's **top-left** (where titlebars, drag-dots
+and track headers sit) and run the existing `drag` stroke between them:
+
+```python
+src, dst = uia_find(name), uia_find(to_name)
+grip = lambda r: (r.x + min(40, r.w//2), r.y + min(12, r.h//2))   # the handle, not the body
+drag(*grip(src), *grip(dst))      # a genuine press → glide → release
+```
+
+Like every floor verb it does not *assert* the app honoured the gesture — the caller reads
+the new order back (the change is the oracle), the same discipline F190 forced for writes.
+
+**Live (this VM), by meaning.** `_probe_drag.py` runs **7/7 green** on real Audacity: three
+mono tracks `Audio 1/2/3`; `uia_drag` drags the **bottom** track onto the **top** one purely
+by name; the order read back shows it moved up into the top region with **no track lost**;
+Audacity's own status line confirms *"Drag up or down to change track order."* A bogus source
+returns False cleanly. **No regression** — `_probe_wxset.py` 7/7, `_probe_dbexec.py` 7/7,
+`_probe_winverbs.py` 15/15, `_probe_appfloor.py` 8/8, `_probe_ctxmenu.py` 7/7,
+`_probe_qttabs.py` 7/7, `_probe_vcl.py` 9/9. Pure stdlib.
+
+**Two honest boundaries (recorded, not hidden).** A target that turns a drag into a click (a
+header that only sorts) does nothing visible — truthful inaction, not a floor bug. And an
+**OLE** drop target — a file dragged from Explorer into an app — ignores synthetic mouse
+motion entirely; that is the platform's drag-drop *protocol*, reachable only by speaking it,
+not by moving a pointer. The pointer path reaches every *in-process* drag; the OLE wall is
+named, not papered over.
+
+**Lesson (道法自然).** 大方無隅 — the great square has no corners; the thing you grab has no
+single canonical point. A verb that insisted on the centre reached the waveform and missed the
+handle; yielding to *where the handle actually is* (the leading edge) reached the move. 弱也者
+道之用 — the way works by yielding: demand less about *where*, and the one stroke serves track,
+row and header alike.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
