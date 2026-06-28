@@ -4637,33 +4637,40 @@ async function bridgeInjectKnowledge(): Promise<boolean> {
     const md = bridgeGenerateCloudMd();
     const knowledgeName = DAO_BRIDGE_KB_NAME;
     const trigger = DAO_BRIDGE_KB_TRIGGER;
-    // 知识③ MCP 使用文档(四大模块) 一并幂等回写到当前账号 (守 manual 锁由批量框架统一处理)
-    try { await devinUpsertKnowledge(ws.devinOrgId, DAO_MCP_KB_NAME, bridgeGenerateMcpUsageMd(), DAO_MCP_KB_TRIGGER, ws.devinAuth1); } catch { /* 守柔 */ }
-    // 幂等回写 (帛书·「少则得·多则惑」): 保留首个规范条目 → 原地 PATCH 更新, 多余重复全删 →
-    // 收敛为唯一条目。杜绝旧法「删后建」在多窗口/最终一致下竞态堆积出几十条重复。
-    //   注意: 收敛只针对内穿文档(同前缀), 必须排除 MCP 使用文档(独立一篇), 否则会被误删后再造成 flap。
-    try {
-        const listResult = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1);
-        let matches: any[] = [];
-        if (listResult.ok && listResult.learnings) {
-            matches = listResult.learnings.filter((k: any) => typeof k.name === 'string' && k.name !== DAO_MCP_KB_NAME && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作用户本地电脑')));
-        }
-        if (matches.length) {
-            // 取最早(稳定锚点)为留存条目; 其余重复删除。
-            const keep = matches.find((k: any) => k && k.id) || matches[0];
-            for (const k of matches) {
-                if (k && k.id && k.id !== keep.id) { try { await devinDeleteKnowledge(ws.devinOrgId, k.id, ws.devinAuth1); } catch { /* 守柔 */ } }
+    const orgId = ws.devinOrgId, auth1 = ws.devinAuth1;
+    // 道并行而不相悖: 与切号自循环/整池注入(applyInjectProfileToOrg)共用同一 org 车道,
+    //   内穿自愈的回写与档案注入永不交错跑各自的 list→删→建 → 杜绝竞态堆积。
+    let okFlag = false;
+    await withOrgInjectLock(orgId, async () => {
+        // 知识③ MCP 使用文档(四大模块) 一并幂等回写到当前账号 (守 manual 锁由批量框架统一处理)
+        try { await devinUpsertKnowledge(orgId, DAO_MCP_KB_NAME, bridgeGenerateMcpUsageMd(), DAO_MCP_KB_TRIGGER, auth1); } catch { /* 守柔 */ }
+        // 幂等回写 (帛书·「少则得·多则惑」): 保留首个规范条目 → 原地 PATCH 更新, 多余重复全删 →
+        // 收敛为唯一条目。杜绝旧法「删后建」在多窗口/最终一致下竞态堆积出几十条重复。
+        //   注意: 收敛只针对内穿文档(同前缀), 必须排除 MCP 使用文档(独立一篇), 否则会被误删后再造成 flap。
+        try {
+            const listResult = await devinListKnowledge(orgId, auth1);
+            let matches: any[] = [];
+            if (listResult.ok && listResult.learnings) {
+                matches = listResult.learnings.filter((k: any) => typeof k.name === 'string' && k.name !== DAO_MCP_KB_NAME && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作用户本地电脑')));
             }
-            if (keep && keep.id) {
-                const up = await devinUpdateKnowledge(ws.devinOrgId, keep.id, knowledgeName, md, trigger, ws.devinAuth1);
-                if (up.ok) return true;
-                // PATCH 不被后端支持时退回「删旧建新」(自愈)
-                try { await devinDeleteKnowledge(ws.devinOrgId, keep.id, ws.devinAuth1); } catch { /* 守柔 */ }
+            if (matches.length) {
+                // 取最早(稳定锚点)为留存条目; 其余重复删除。
+                const keep = matches.find((k: any) => k && k.id) || matches[0];
+                for (const k of matches) {
+                    if (k && k.id && k.id !== keep.id) { try { await devinDeleteKnowledge(orgId, k.id, auth1); } catch { /* 守柔 */ } }
+                }
+                if (keep && keep.id) {
+                    const up = await devinUpdateKnowledge(orgId, keep.id, knowledgeName, md, trigger, auth1);
+                    if (up.ok) { okFlag = true; return; }
+                    // PATCH 不被后端支持时退回「删旧建新」(自愈)
+                    try { await devinDeleteKnowledge(orgId, keep.id, auth1); } catch { /* 守柔 */ }
+                }
             }
-        }
-        const r = await devinInjectKnowledge(ws.devinOrgId, knowledgeName, md, trigger, ws.devinAuth1);
-        return r.ok;
-    } catch { return false; }
+            const r = await devinInjectKnowledge(orgId, knowledgeName, md, trigger, auth1);
+            okFlag = r.ok;
+        } catch { okFlag = false; }
+    });
+    return okFlag;
 }
 
 // 读取"已发布"的桥连接文件 — 帛书·「以本为精」: 常驻桥(OS 级)每次重建隧道都把最新 URL 回写到约定文件,
@@ -9400,12 +9407,25 @@ async function devinUpsertKnowledge(orgId: string, name: string, body: string, t
     // 帛书·「反者道之动也」根因收敛: 任何路径(含旧版插件/种入/批量)若把哨兵占位符当正文推上云端,
     // 在唯一出云口实时展开为完整 MD — 杜绝账号云端知识库出现 `__DAO_BRIDGE_*_MD__` 空壳。
     body = expandKbSentinel(name, body);
-    // Find existing by name → delete → create
+    // 道·机权相忘 (幂等收口·根治「3条→6条」翻倍): 不再「删尽同名→新建」(那是非原子的
+    //   读-改-写, 多窗口/多IDE/多机并发各自删后各自建 → 同名翻倍)。改为「原地更新(PATCH)
+    //   保留的首条 + 删除多余同名」: ① 并发两路都只是 PATCH 同一既存条目 → 收敛同一份, 不增殖;
+    //   ② 顺手自愈历史已堆积的重复(每次注入即收敛回单条)。仅当确无同名时才新建。
     const list = await devinListKnowledge(orgId, auth1);
-    if (list.ok && list.learnings) {
+    const sameName: any[] = [];
+    if (list.ok && Array.isArray(list.learnings)) {
         for (const k of list.learnings) {
-            if (k.name === name && k.id) await devinDeleteKnowledge(orgId, String(k.id), auth1);
+            // 守柔: 跳过 Cognition 内置/只读条目(删不动·非本系统注入物)
+            if (k && k.name === name && k.id && k.can_write !== false && k.is_default_note !== true) sameName.push(k);
         }
+    }
+    if (sameName.length) {
+        // 多余同名先删, 仅留首条原地更新
+        for (let i = 1; i < sameName.length; i++) { try { await devinDeleteKnowledge(orgId, String(sameName[i].id), auth1); } catch { /* 守柔 */ } }
+        const up = await devinUpdateKnowledge(orgId, String(sameName[0].id), name, body, triggerDescription, auth1);
+        if (up.ok) return { ok: true };
+        // 后端不支持 PATCH → 退回删建(此时同名已仅剩这一条)
+        try { await devinDeleteKnowledge(orgId, String(sameName[0].id), auth1); } catch { /* 守柔 */ }
     }
     return await devinInjectKnowledge(orgId, name, body, triggerDescription, auth1);
 }
@@ -11360,7 +11380,75 @@ async function resetOrgInjectables(orgId: string, auth1: string, p: InjectProfil
     } catch { /* 守柔 */ }
     return removed;
 }
-async function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
+// ═══════════════════════════════════════════════════════════
+// 道并行而不相悖 · 反向注入并发收口 (跨窗口 / 跨IDE / 跨实例 / 跨账号互不串台)
+// 病灶 (实测): 多窗口/多IDE 同时开插件 → 各自的 dao-vsix 宿主(独立进程·共享 ~/.dao)
+//   对同一活动号并发跑 applyInjectProfileToOrg。devinUpsert* 旧逻辑「list→删同名→建」
+//   非原子, 两路并发各自 list(见1条)→各自删→各自建 = 同名知识/内穿MD 翻倍(实测3→6,
+//   且不同窗口端口各异的内穿MD 还互相覆盖)。
+// 修法 (机权相忘·各归其位):
+//   ① 进程内 in-flight 合流(_orgInjectInflight): 同宿主多触发器(切号/watch/周期校正)合为一次跑;
+//   ② 跨进程文件锁(~/.dao/locks/inject-<org>.lock·O_EXCL 原子建 + 陈旧偷锁): 多窗口/多IDE
+//      对同一 org 串行化, 各 org 各占一条车道、互不串号; 锁短命(单趟注入);
+//   ③ devinUpsertKnowledge 已改 PATCH 原地幂等 → 即便跨机并发也收敛单条, 不增殖。
+// ═══════════════════════════════════════════════════════════
+const DAO_LOCK_DIR = path.join(DAO_DIR, 'locks');
+const INJECT_LOCK_STALE_MS = 120000;   // 持锁进程崩溃/卡死 ≤2min 后允许偷锁
+const INJECT_LOCK_WAIT_MS = 45000;     // 等待他实例释放锁的上限
+const _orgInjectInflight = new Map<string, Promise<void>>();
+function orgInjectLockPath(orgId: string): string {
+    const safe = String(orgId || 'unknown').replace(/[^A-Za-z0-9_.-]/g, '_');
+    return path.join(DAO_LOCK_DIR, 'inject-' + safe + '.lock');
+}
+function tryAcquireInjectLock(lockPath: string): number | null {
+    try { fs.mkdirSync(path.dirname(lockPath), { recursive: true }); } catch { /* 守柔 */ }
+    try {
+        const fd = fs.openSync(lockPath, 'wx');  // O_EXCL: 原子创建, 已存在即抛 EEXIST
+        try { fs.writeSync(fd, JSON.stringify({ pid: process.pid, ts: Date.now() })); } catch { /* 守柔 */ }
+        return fd;
+    } catch (e: any) {
+        if (e && e.code === 'EEXIST') {
+            // 陈旧偷锁: 持锁者早已超 STALE_MS 未更新(崩溃/卡死) → 删旧锁重试一次
+            try {
+                const st = fs.statSync(lockPath);
+                if (Date.now() - st.mtimeMs > INJECT_LOCK_STALE_MS) {
+                    try { fs.unlinkSync(lockPath); } catch { /* 守柔 */ }
+                    try { const fd2 = fs.openSync(lockPath, 'wx'); fs.writeSync(fd2, JSON.stringify({ pid: process.pid, ts: Date.now() })); return fd2; } catch { /* 守柔 */ }
+                }
+            } catch { /* 守柔 */ }
+        }
+        return null;
+    }
+}
+function releaseInjectLock(lockPath: string, fd: number | null): void {
+    try { if (fd != null) fs.closeSync(fd); } catch { /* 守柔 */ }
+    try { fs.unlinkSync(lockPath); } catch { /* 守柔 */ }
+}
+async function withOrgInjectLock(orgId: string, fn: () => Promise<void>): Promise<void> {
+    const lockPath = orgInjectLockPath(orgId);
+    const deadline = Date.now() + INJECT_LOCK_WAIT_MS;
+    let fd: number | null = null;
+    while (Date.now() < deadline) {
+        fd = tryAcquireInjectLock(lockPath);
+        if (fd != null) break;
+        await new Promise((r) => setTimeout(r, 200 + Math.floor(Math.random() * 250)));
+    }
+    // 超时仍未拿到(他实例长占): 守柔放行 — 注入本身幂等(PATCH 原地·收口去重), 不阻塞主流程。
+    try { await fn(); }
+    finally { releaseInjectLock(lockPath, fd); }
+}
+// 对外恒名 — 所有注入路径(切号自循环/整池/批量/内穿自愈)经此并发收口, 不必各处加锁。
+function applyInjectProfileToOrg(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
+    const key = String(orgId || '');
+    // 同进程同 org 并发合流: 已在跑则复用同一 Promise, 不重复跑(亦不重复抢文件锁)。
+    const inflight = _orgInjectInflight.get(key);
+    if (inflight) return inflight;
+    const run = withOrgInjectLock(key, () => applyInjectProfileToOrgInner(orgId, auth1, p))
+        .finally(() => { if (_orgInjectInflight.get(key) === run) _orgInjectInflight.delete(key); });
+    _orgInjectInflight.set(key, run);
+    return run;
+}
+async function applyInjectProfileToOrgInner(orgId: string, auth1: string, p: InjectProfile): Promise<void> {
     if (getInjectReset()) { try { await resetOrgInjectables(orgId, auth1, p); } catch { /* 守柔 */ } }
     for (const s of p.secrets) { if (s && s.name && !isManualLocked(orgId, 'secrets', s.name)) { try { await devinUpsertSecret(orgId, s.name, s.value || '', auth1); } catch { /* 守柔 */ } } }
     for (const k of p.knowledge) {
