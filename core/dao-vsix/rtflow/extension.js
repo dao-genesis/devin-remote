@@ -1123,11 +1123,17 @@ function daoRenderBackup(){var box=_dEl('dwBackup');if(!box)return;if(!_bkTree){
     rows.sort(function(x,y){return (+y.mtime||0)-(+x.mtime||0);}); // 号内对话按最新时间降序
     if(!rows.length)continue;na++;nc+=rows.length;
     var key=String(a.account||em||i).toLowerCase();var open=q?true:!!_bkOpen[key];
-    body+='<div class="bkacc" data-bkacc="'+esc(key)+'" style="display:flex;align-items:center;gap:7px;margin-top:7px;padding:8px 10px;background:#11161d;border:1px solid #232a33;border-radius:7px;cursor:pointer;user-select:none">'
+    // 最活跃 = 号内最新对话标题(rows 已按 mtime 降序), 作为账号副标签, 一眼知该号在忙什么。
+    var topC=rows[0]||{};var topT=String(topC.title||topC.name||topC.devinId||'').trim();
+    body+='<div class="bkacc" data-bkacc="'+esc(key)+'" data-bkemail="'+esc(em)+'" title="双击复制账号+密码" style="display:flex;align-items:center;gap:7px;margin-top:7px;padding:8px 10px;background:#11161d;border:1px solid #232a33;border-radius:7px;cursor:pointer;user-select:none">'
       +'<span style="width:12px;flex:none;color:#7d8794;font-size:11px">'+(open?'▾':'▸')+'</span>'
       +'<span style="flex:none">📁</span>'
-      +'<span style="flex:1;min-width:0;font-size:12.5px;color:#cdd3de;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(em)+'">'+esc(em||'(未命名账号)')+'</span>'
+      +'<span style="flex:1;min-width:0">'
+        +'<span style="display:block;font-size:12.5px;color:#cdd3de;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(em)+'">'+esc(em||'(未命名账号)')+'</span>'
+        +(topT?'<span style="display:block;font-size:10.5px;color:#7d8794;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px" title="最活跃对话: '+esc(topT)+'">🗨 '+esc(topT.slice(0,46))+'</span>':'')
+      +'</span>'
       +'<span style="flex:none;font-size:11px;color:#8b94a2;background:#1b2129;border:1px solid #2a313b;border-radius:10px;padding:1px 8px">'+rows.length+' 对话</span>'
+      +'<span class="b" data-bkcopy="'+esc(em)+'" title="复制账号+密码">📋</span>'
       +'<span class="b" data-reveal="'+esc(a.dir||'')+'" title="打开账号文件夹">📂</span></div>';
     if(open){body+='<div style="padding-left:6px;border-left:2px solid #232a33;margin:2px 0 4px 6px">';
       for(var k=0;k<rows.length;k++){var c=rows[k];
@@ -1137,13 +1143,16 @@ function daoRenderBackup(){var box=_dEl('dwBackup');if(!box)return;if(!_bkTree){
   box.innerHTML=body||'<div class="empty">无备份记录 · 先在「💬对话备份」板块备份或开启自动备份</div>';
   var ttl=_dEl('dwTitle');if(ttl)ttl.textContent='下载 / 备份库 ('+na+'账号·'+nc+'对话'+(q?'·已筛':'')+')';}
 // 事件委托(CSP 安全): 所有悬浮窗内点击统一在 #daowin 上处理
-_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal],[data-bkacc]');if(!el)return;
+_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal],[data-bkcopy],[data-bkacc]');if(!el)return;
+  var bcp=el.getAttribute('data-bkcopy');if(bcp!=null){e.stopPropagation();vscode.postMessage({type:'copyCredEmail',email:bcp});return;}
   var bk=el.getAttribute('data-bkacc');if(bk!=null){_bkOpen[bk]=!_bkOpen[bk];daoRenderBackup();return;}
   var a=el.getAttribute('data-act');if(a){var idx=+el.getAttribute('data-idx');if(a==='view')daoView(idx);else if(a==='enter')daoEnter(idx);else if(a==='md')daoMd(idx);else if(a==='zip')daoZip(idx);else if(a==='up'){var _it=DAO_REC[idx];if(_it){if(_daoUploadToActive({kind:'conv',email:_it.email,sid:_it.sid,title:_it.title})){daoToast('⏳ 上传此对话到当前网页 · '+String(_it.title||_it.sid||'').slice(0,24));try{daoClose();}catch(_e){}}}}return;}
   var cv=el.getAttribute('data-cv');if(cv){var ci=+el.getAttribute('data-i');if(cv==='act')daoActCv(ci);else if(cv==='close'){e.stopPropagation();daoCloseCv(ci);}return;}
   var cva=el.getAttribute('data-cvact');if(cva){var cj=+el.getAttribute('data-i');if(cva==='md')daoCvMd(cj);else daoCvZip(cj);return;}
   var op=el.getAttribute('data-open');if(op){vscode.postMessage({type:'shellOpenFile',path:op});return;}
   var rv=el.getAttribute('data-reveal');if(rv){vscode.postMessage({type:'shellRevealFile',path:rv});return;}});
+// 备份库账号行双击 → 复制账号+密码(对齐手机版双击复制); 双击同时触发两次单击=展开再收起, 净无副作用。
+_dEl('daowin').addEventListener('dblclick',function(e){var el=e.target.closest&&e.target.closest('[data-bkemail]');if(!el)return;var em=el.getAttribute('data-bkemail');if(em){e.preventDefault();vscode.postMessage({type:'copyCredEmail',email:em});}});
 // ── 归一 · 拖拽上传到当前网页 (下载文件 / 近期对话 MD → 投递当前账号网页上传框) ──
 //   外壳同源可靠接住 drop(#convdrop 覆盖网页区)→ postMessage 命令该标签内嵌桥(/__daobridge.js)
 //   fetch /__dlfile|/__convmd 取字节 → feed 落上传框。不依赖跨 iframe 原生 DnD(webview 跨源 iframe 不稳)。
@@ -2021,6 +2030,17 @@ function _wireMultiPanel(panel) {
         } catch (e) {}
         const text = t.email + (pw ? "\t" + pw : "");
         try { await vscode.env.clipboard.writeText(text); _toast("📋 已复制账号" + (pw ? "+密码" : "") + " · " + String(t.email).split("@")[0]); } catch (e) {}
+        return;
+      }
+      // 备份库账号行「双击/📋 复制账号+密码」(对齐手机版): 按 email 直接查账号池, 不依赖已开标签。
+      if (m.type === "copyCredEmail" && m.email) {
+        let pw = "";
+        try {
+          const acc = ((_store && _store.accounts) || []).find((a) => String(a.email).toLowerCase() === String(m.email).toLowerCase());
+          if (acc) pw = acc.password || "";
+        } catch (e) {}
+        const text = String(m.email) + (pw ? "\t" + pw : "");
+        try { await vscode.env.clipboard.writeText(text); _toast("📋 已复制账号" + (pw ? "+密码" : "(密码未在账号池)") + " · " + String(m.email).split("@")[0]); } catch (e) {}
         return;
       }
       if (m.type === "clip" && m.text) {
