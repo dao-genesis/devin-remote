@@ -1090,3 +1090,422 @@ def _clip_serve() -> None:
                           target=req.target, property=prop, time=req.time)
         _x.XSendEvent(d, req.requestor, 0, 0, ctypes.byref(note))
         _x.XFlush(d)
+
+
+# ---- semantic floor: AT-SPI (the Linux dual of Windows UIA) --------------- #
+# F178. window_text/child_windows are honest about their ceiling: on X11 a
+# toolkit paints its OWN widgets, so the X server only ever sees window-level
+# names and opaque sub-windows — the buttons, menu items and edit fields inside
+# a modern app are invisible to it. UIA gives Windows that reach; its Linux dual
+# is AT-SPI (the at-spi2 accessibility bus). We bind libatspi directly by ctypes
+# — same discipline as libX11/libXTst, no pyatspi/gi — and light up the very
+# same uia_* verbs osctl already speaks, so the floor is one and only the ground
+# differs. If the a11y bus is absent (atspi_init fails), every verb degrades to
+# its empty default and never crashes — an unseen floor, never a broken one.
+
+import threading as _threading
+
+_atspi_lock = _threading.RLock()
+_atspi_state = {"tried": False, "ok": False, "at": None, "g": None, "go": None}
+
+
+class _AtspiRect(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_int), ("y", ctypes.c_int),
+                ("width", ctypes.c_int), ("height", ctypes.c_int)]
+
+
+_ATSPI_COORD_SCREEN = 0
+
+# A control-type word the floor speaks -> the AT-SPI role name it means.
+_ROLE_ALIAS = {
+    "button": "push button", "edit": "text", "textbox": "text", "entry": "text",
+    "checkbox": "check box", "menuitem": "menu item", "combobox": "combo box",
+    "listitem": "list item", "radio": "radio button", "tab": "page tab",
+    "cell": "table cell", "link": "link",
+}
+
+
+def _atspi():
+    """Lazily load + init libatspi once. Returns the lib handle or None. Loading
+    is deferred (not at import) so the backend stays importable where no a11y
+    stack exists; a failure here simply leaves the semantic floor dark."""
+    st = _atspi_state
+    if st["tried"]:
+        return st["at"] if st["ok"] else None
+    st["tried"] = True
+    try:
+        at = ctypes.CDLL("libatspi.so.0")
+        g = ctypes.CDLL("libglib-2.0.so.0")
+        go = ctypes.CDLL("libgobject-2.0.so.0")
+        at.atspi_init.restype = ctypes.c_int
+        at.atspi_get_desktop.restype = ctypes.c_void_p
+        at.atspi_get_desktop.argtypes = [ctypes.c_int]
+        at.atspi_accessible_get_child_count.restype = ctypes.c_int
+        at.atspi_accessible_get_child_count.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_accessible_get_child_at_index.restype = ctypes.c_void_p
+        at.atspi_accessible_get_child_at_index.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        at.atspi_accessible_get_name.restype = ctypes.c_void_p
+        at.atspi_accessible_get_name.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_accessible_get_role_name.restype = ctypes.c_void_p
+        at.atspi_accessible_get_role_name.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_accessible_get_process_id.restype = ctypes.c_uint
+        at.atspi_accessible_get_process_id.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_accessible_get_component_iface.restype = ctypes.c_void_p
+        at.atspi_accessible_get_component_iface.argtypes = [ctypes.c_void_p]
+        at.atspi_component_get_extents.restype = ctypes.c_void_p   # AtspiRect*
+        at.atspi_component_get_extents.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p]
+        at.atspi_component_grab_focus.restype = ctypes.c_int
+        at.atspi_component_grab_focus.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_accessible_get_action_iface.restype = ctypes.c_void_p
+        at.atspi_accessible_get_action_iface.argtypes = [ctypes.c_void_p]
+        at.atspi_action_do_action.restype = ctypes.c_int
+        at.atspi_action_do_action.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        at.atspi_accessible_get_text_iface.restype = ctypes.c_void_p
+        at.atspi_accessible_get_text_iface.argtypes = [ctypes.c_void_p]
+        at.atspi_text_get_character_count.restype = ctypes.c_int
+        at.atspi_text_get_character_count.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_text_get_text.restype = ctypes.c_void_p
+        at.atspi_text_get_text.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+        at.atspi_accessible_get_editable_text_iface.restype = ctypes.c_void_p
+        at.atspi_accessible_get_editable_text_iface.argtypes = [ctypes.c_void_p]
+        at.atspi_editable_text_set_text_contents.restype = ctypes.c_int
+        at.atspi_editable_text_set_text_contents.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
+        at.atspi_accessible_get_value_iface.restype = ctypes.c_void_p
+        at.atspi_accessible_get_value_iface.argtypes = [ctypes.c_void_p]
+        at.atspi_value_get_current_value.restype = ctypes.c_double
+        at.atspi_value_get_current_value.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_rect_free.restype = None
+        at.atspi_rect_free.argtypes = [ctypes.c_void_p]
+        g.g_free.argtypes = [ctypes.c_void_p]
+        go.g_object_unref.argtypes = [ctypes.c_void_p]
+        if at.atspi_init() not in (0, 1):  # 0 = newly inited, 1 = already
+            return None
+        st["at"], st["g"], st["go"], st["ok"] = at, g, go, True
+        return at
+    except OSError:
+        return None
+
+
+def _gstr(ptr):
+    if not ptr:
+        return ""
+    s = ctypes.string_at(ptr).decode("utf-8", "replace")
+    _atspi_state["g"].g_free(ptr)
+    return s
+
+
+def _unref(acc):
+    if acc:
+        _atspi_state["go"].g_object_unref(acc)
+
+
+def _acc_name(at, acc):
+    return _gstr(at.atspi_accessible_get_name(acc, None))
+
+
+def _acc_role(at, acc):
+    return _gstr(at.atspi_accessible_get_role_name(acc, None))
+
+
+def _acc_children(at, acc):
+    n = at.atspi_accessible_get_child_count(acc, None)
+    out = []
+    for i in range(n):
+        c = at.atspi_accessible_get_child_at_index(acc, i, None)
+        if c:
+            out.append(c)
+    return out
+
+
+def _acc_rect(at, acc):
+    comp = at.atspi_accessible_get_component_iface(acc)
+    if not comp:
+        return None
+    rp = at.atspi_component_get_extents(comp, _ATSPI_COORD_SCREEN, None)
+    _unref(comp)
+    if not rp:
+        return None
+    r = ctypes.cast(rp, ctypes.POINTER(_AtspiRect)).contents
+    rect = (r.x, r.y, r.width, r.height)
+    at.atspi_rect_free(rp)
+    if rect[2] <= 0 or rect[3] <= 0:
+        return None
+    return rect
+
+
+def _atspi_frame_for(at, win):
+    """Map an X window id to its AT-SPI frame accessible. Identity crosses the
+    two worlds by process id (EWMH _NET_WM_PID == atspi app pid); the window
+    title disambiguates when one app owns several frames. Caller owns the
+    returned ref (must _unref)."""
+    pid = window_pid(win)
+    title = (window_text(win) or "").strip()
+    desk = at.atspi_get_desktop(0)
+    if not desk:
+        return None
+    best = None
+    try:
+        for app in _acc_children(at, desk):
+            app_pid = at.atspi_accessible_get_process_id(app, None)
+            pid_match = pid is not None and app_pid == pid
+            for fr in _acc_children(at, app):
+                role = _acc_role(at, fr).lower()
+                if role not in ("frame", "window", "dialog", "alert"):
+                    _unref(fr)
+                    continue
+                nm = _acc_name(at, fr).strip()
+                if title and nm == title:
+                    _unref(best) if best else None
+                    _unref(app)
+                    _unref(desk)
+                    return fr
+                if pid_match and best is None:
+                    best = fr            # keep as fallback, don't unref
+                else:
+                    _unref(fr)
+            _unref(app)
+    finally:
+        _unref(desk)
+    return best
+
+
+def _match(at, acc, name, ctype):
+    if name is not None:
+        nm = _acc_name(at, acc).lower()
+        if name.lower() != nm and name.lower() not in nm:
+            return False
+    if ctype is not None:
+        want = ctype.lower()
+        want = _ROLE_ALIAS.get(want, want)
+        rl = _acc_role(at, acc).lower()
+        if want != rl and want not in rl:
+            return False
+    return True
+
+
+def _walk(at, acc, fn, depth=0, _budget=None):
+    """Depth-first visit. fn(acc) may return a truthy value to stop early (that
+    value is returned). Bounded by depth and a node budget so a pathological
+    tree can never hang the floor."""
+    if _budget is None:
+        _budget = [4000]
+    if depth > 40 or _budget[0] <= 0:
+        return None
+    _budget[0] -= 1
+    hit = fn(acc, depth)
+    if hit:
+        return hit
+    for c in _acc_children(at, acc):
+        r = _walk(at, c, fn, depth + 1, _budget)
+        if r is not None:
+            # Each accessible holds its own ref (get_child_at_index is transfer
+            # full), so unref'ing an ancestor never frees the match. Only skip
+            # the unref when the match IS this child — then its ref passes to
+            # the caller (used by _find_acc, which returns a live accessible).
+            if r is not c:
+                _unref(c)
+            return r
+        _unref(c)
+    return None
+
+
+def uia_name(win: int) -> str:
+    """The accessible name a window carries at the a11y layer — its frame name
+    as the toolkit reports it (often richer/cleaner than the raw WM title). The
+    semantic dual of window_text that reads from the app's own accessibility,
+    not the X server's WM hints. '' if no a11y."""
+    at = _atspi()
+    if not at:
+        return ""
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return ""
+        try:
+            return _acc_name(at, fr)
+        finally:
+            _unref(fr)
+
+
+def uia_children(win: int) -> list:
+    """Enumerate the *real controls inside* a window as
+    ``[{"name","ctype","rect"}, …]`` — the buttons, menu items, fields and
+    labels the toolkit painted, which child_windows (opaque sub-windows) could
+    never name. This is the floor finally seeing *inside* a modern Linux app,
+    the dual of UIA control enumeration. Named/actionable nodes only, bounded."""
+    at = _atspi()
+    if not at:
+        return []
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return []
+        out = []
+
+        def visit(acc, depth):
+            nm = _acc_name(at, acc)
+            rl = _acc_role(at, acc)
+            if depth > 0 and (nm or rl in ("push button", "menu item", "check box",
+                                           "radio button", "text", "page tab",
+                                           "combo box", "link", "slider")):
+                out.append({"name": nm, "ctype": rl, "rect": _acc_rect(at, acc)})
+            return None
+
+        try:
+            _walk(at, fr, visit)
+        finally:
+            _unref(fr)
+        return out
+
+
+def uia_find(win: int, name=None, ctype=None):
+    """Locate one control inside a window by meaning — by accessible name and/or
+    role — and return ``{"name","ctype","rect":(x,y,w,h)}`` (screen rect) or
+    None. The crucial bridge: semantics in, geometry out, so the pixel/input
+    floor can then click the centre of a control it found by *what it is*."""
+    at = _atspi()
+    if not at:
+        return None
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return None
+
+        def visit(acc, depth):
+            if depth > 0 and _match(at, acc, name, ctype):
+                return {"name": _acc_name(at, acc), "ctype": _acc_role(at, acc),
+                        "rect": _acc_rect(at, acc)}
+            return None
+
+        try:
+            return _walk(at, fr, visit)
+        finally:
+            _unref(fr)
+
+
+def _find_acc(at, fr, name, ctype):
+    """DFS for the matching accessible itself (caller must _unref the result)."""
+    def visit(acc, depth):
+        if depth > 0 and _match(at, acc, name, ctype):
+            return acc
+        return None
+    return _walk(at, fr, visit)
+
+
+def uia_invoke(win: int, name=None, ctype=None) -> bool:
+    """Press a control by meaning — fire its default action (Action.do_action 0)
+    on the element matched by name/role. The semantic dual of a mouse click that
+    needs no pixels: a button, menu item or link actuated by *what it is*."""
+    at = _atspi()
+    if not at:
+        return False
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return False
+        try:
+            acc = _find_acc(at, fr, name, ctype)
+            if not acc:
+                return False
+            try:
+                action = at.atspi_accessible_get_action_iface(acc)
+                if not action:
+                    return False
+                ok = bool(at.atspi_action_do_action(action, 0, None))
+                _unref(action)
+                return ok
+            finally:
+                _unref(acc)
+        finally:
+            _unref(fr)
+
+
+def uia_get_value(win: int, name=None, ctype=None) -> str:
+    """Read a control's text content by meaning — the full text of the matched
+    element (Text interface), or its numeric Value as a string when it carries
+    no text. The read dual of uia_set_value; reaches inside the widget the X
+    server only saw as an opaque sub-window."""
+    at = _atspi()
+    if not at:
+        return ""
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return ""
+        try:
+            acc = _find_acc(at, fr, name, ctype)
+            if not acc:
+                return ""
+            try:
+                text = at.atspi_accessible_get_text_iface(acc)
+                if text:
+                    n = at.atspi_text_get_character_count(text, None)
+                    s = _gstr(at.atspi_text_get_text(text, 0, n, None))
+                    _unref(text)
+                    return s
+                val = at.atspi_accessible_get_value_iface(acc)
+                if val:
+                    v = at.atspi_value_get_current_value(val, None)
+                    _unref(val)
+                    return repr(v)
+                return ""
+            finally:
+                _unref(acc)
+        finally:
+            _unref(fr)
+
+
+def uia_set_value(win: int, value: str, name=None, ctype=None) -> bool:
+    """Write a control's text by meaning — replace the matched editable field's
+    contents (EditableText.set_text_contents) with no keystroke stream at all.
+    The write dual of uia_get_value; the toolkit's own text, set directly."""
+    at = _atspi()
+    if not at:
+        return False
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return False
+        try:
+            acc = _find_acc(at, fr, name, ctype)
+            if not acc:
+                return False
+            try:
+                et = at.atspi_accessible_get_editable_text_iface(acc)
+                if not et:
+                    return False
+                ok = bool(at.atspi_editable_text_set_text_contents(
+                    et, value.encode("utf-8"), None))
+                _unref(et)
+                return ok
+            finally:
+                _unref(acc)
+        finally:
+            _unref(fr)
+
+
+def uia_focus(win: int, name=None, ctype=None) -> bool:
+    """Give keyboard focus to a control by meaning (Component.grab_focus) — so a
+    field found semantically can then receive the keyboard floor's typing."""
+    at = _atspi()
+    if not at:
+        return False
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return False
+        try:
+            acc = _find_acc(at, fr, name, ctype)
+            if not acc:
+                return False
+            try:
+                comp = at.atspi_accessible_get_component_iface(acc)
+                if not comp:
+                    return False
+                ok = bool(at.atspi_component_grab_focus(comp, None))
+                _unref(comp)
+                return ok
+            finally:
+                _unref(acc)
+        finally:
+            _unref(fr)

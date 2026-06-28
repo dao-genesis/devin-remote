@@ -5168,6 +5168,95 @@ itself on it.
 
 ---
 
+## F178 — the semantic floor opens its eyes on Linux: AT-SPI, the dual of UIA
+
+**Ground: Ubuntu 22.04, X11 (KDE Plasma). The agent's own VM.**
+
+**Friction.** F165 grew `uia_name`/`uia_children`/`uia_find`/`uia_invoke`/
+`uia_get_value`/`uia_set_value` — the semantic layer that reaches *inside* a
+modern app where Win32 child-window enumeration is blind. It was proven on
+Windows through UIA. On *this* ground the X11 backend supplied **none** of those
+verbs, so `osctl` bound every one to its no-op fallback (`uia_name → ""`,
+`uia_children → []`, `uia_invoke → False`). `window_text`/`child_windows` say so
+in their own docstrings: on X11 a toolkit paints its **own** widgets, so the X
+server sees only a window title and opaque sub-windows — the buttons, menu items
+and edit fields *inside* a real app are invisible to it. The floor could move a
+mouse and read pixels, but it could not name a single control of the very
+applications it was meant to operate. 瞽者善聽 — it heard (pixels) but did not
+see (meaning). The whole point — to surpass screenshot-and-click — was missing
+its other half on Linux.
+
+**Mechanism.** The Linux dual of Windows UIA is **AT-SPI** (the at-spi2
+accessibility bus): a session-bus service through which a toolkit exposes its
+accessible tree — role, name, geometry, and the Action/Text/EditableText/Value
+interfaces. The capability was *present but dark*: `libatspi.so.0` ships the
+whole client API, but the registry daemon (`at-spi2-core`) was not installed,
+and no process had asked the toolkits to expose themselves. Nothing was broken —
+the floor simply had no organ for this sense yet.
+
+**Fix (grow the organ, same discipline as libX11/libXtst — pure ctypes, no gi).**
+- Bind `libatspi.so.0` directly by `ctypes`, lazily and once (`_atspi()`), every
+  call declaring `argtypes`/`restype` (the F177 lesson: a 64-bit handle silently
+  truncated is a segfault waiting — and it bit again here, see below). If the
+  a11y bus is absent, init fails *quietly* and every verb returns its empty
+  default. An unseen floor, never a broken one.
+- Map an X window → its AT-SPI frame by **process id** (`_NET_WM_PID` ==
+  `atspi_accessible_get_process_id`), the title disambiguating multiple frames —
+  identity crossing two worlds that share no handle.
+- Implement the **same `uia_*` verbs** on this ground so the floor is *one* and
+  only the earth differs: `uia_name` (frame's accessible name), `uia_children`
+  (every real control inside, with role + screen rect — what `child_windows`
+  could never see), `uia_find` (locate by name/role → screen rect: the bridge
+  that turns *meaning* into geometry the pixel/input floor can click),
+  `uia_invoke` (fire a control's default Action), `uia_get_value`/`uia_set_value`
+  (read/write a field's text via Text/EditableText), `uia_focus`.
+
+**Friction inside the fix (反也者，道之動也, twice over).** First live call:
+`Segmentation fault` again — `atspi_rect_free` had no `argtypes`, so the
+`AtspiRect*` returned by `get_extents` was truncated to 32 bits and freed as
+garbage. The *identical* pointer-width fault as F177, in a new library: declare
+its `argtypes` and it is gone. Second: the depth-first search that returns a live
+accessible was unref'ing the very node it found — a tree-walk that frees its own
+answer — because the "don't double-free" guard (`r is not c`) fired on the match
+itself. Each accessible holds an independent ref (`get_child_at_index` is
+transfer-full), so the rule is exact: unref every child *except* the one the
+match came through. 圖難於其易 — the deep fault was again in the smallest
+crossing (a pointer's width; one identity comparison).
+
+**Live (this VM).** Two grounds, two toolkits, no pixels and no keystrokes:
+- **Qt / KWrite** (`_probe_atspi.py`, 5/5): `uia_name` → `'atspi_demo.txt '`;
+  `uia_children` sees **314** real controls incl `File`/`Edit`/`Save`/`Open...`;
+  `uia_find('Save', button)` → screen rect `(648,376,72,29)`; `uia_invoke('New')`
+  presses it by meaning and a fresh **`Untitled — KWrite`** window appears,
+  observed independently through the window manager.
+- **GTK / zenity** (`_probe_atspi_gtk.py`, 4/4): `uia_set_value` types
+  `'operated purely by meaning'` into the entry, `uia_get_value` reads it back,
+  `uia_invoke('OK')` submits — and zenity's **own stdout** prints exactly that
+  string: independent proof the dialog was driven entirely by meaning.
+
+Capability is honestly toolkit-dependent (KWrite's editor exposes `Text` but not
+`EditableText`; a disabled button's Action no-ops) — and the floor degrades to a
+truthful `False`/`""` rather than pretending or crashing. Where a toolkit's
+Action is incomplete, `uia_find`'s rect is the universal fallback: meaning →
+geometry → the existing gesture floor.
+
+**Runtime note.** Needs `at-spi2-core` installed and the process to carry
+`DBUS_SESSION_BUS_ADDRESS` of the live desktop session (the a11y bus is then
+auto-discovered). Both belong in the environment blueprint so future sessions
+inherit the sense.
+
+**Lesson (道法自然).** 知人者智，自知者明 — to know others is wit; to know
+oneself is light. The agent already saw the *outside* of its machine (pixels) and
+the *inside* of the browser (CDP); AT-SPI is how it finally sees the inside of
+every other app — by meaning, not by reading rendered light. 視之不足見，聽之不足
+聞，用之不可既：the accessible tree was always there, emitting nothing to the eye;
+the floor grew the organ to receive it. 無有入於無間 — the formless (meaning)
+enters where there is no gap, reaching inside a window the X server held as one
+opaque rectangle. The floor is now whole on its own ground: it perceives, it
+finds, it acts — 無為而無不為.
+
+---
+
 ## Frontier (next honest rounds)
 
 These are *not yet built* — they are the next real surfaces to push into. Each
