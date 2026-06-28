@@ -1047,6 +1047,7 @@ function renderDownloads(){if(!_bkTree){showOverlay('⬇ 下载','<div class="em
   showOverlay('⬇ 下载 ('+all.length+')',body);_bkBindActions();}
 // ── 归一 · 下载/备份悬浮窗(复刻手机端 APK daopan.html) · CSP 安全(事件委托·无内联 onclick) ──
 var DAO_REC=[],CV_TABS=[],CV_ACT=-1,_daoBkQ='',_convDrag=null,_convDragActive=false,_bkOpen={};
+var DAO_REC_VIEW_MAX=34; // 近期对话(☁)无搜索时只显示最近此条数(对齐手机 APK·精简);全量按号分层在「🗂 对话记录(备份)」
 function _dEl(id){return document.getElementById(id);}
 function daoToast(msg,bad){var t=_dEl('daotoast');if(!t)return;t.textContent=msg;t.className='dtoast show'+(bad?' fail':' ok');clearTimeout(t._tm);t._tm=setTimeout(function(){t.className='dtoast';},2200);}
 function daoAgo(ms){if(!ms)return'';var d=Date.now()-ms;if(d<0)d=0;var mn=Math.floor(d/60000);if(mn<1)return'刚刚';if(mn<60)return mn+'分钟前';var h=Math.floor(mn/60);if(h<24)return h+'小时前';var dd=Math.floor(h/24);if(dd<30)return dd+'天前';try{return new Date(ms).toLocaleDateString();}catch(e){return'';}}
@@ -1084,11 +1085,15 @@ function daoOnRecent(m){
   if(!m.partial){try{localStorage.setItem(DAO_REC_CK,JSON.stringify({ts:Date.now(),list:DAO_REC.slice(0,80)}));}catch(e){}}}
 function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),box=_dEl('dwRecent');
   if(!DAO_REC.length){box.innerHTML='<div class="empty">暂无近期对话 · 先在 🔀切号 面板登录账号</div>';return;}
-  var html='';DAO_REC.forEach(function(it,idx){
+  // 无搜索时只渲染最近 DAO_REC_VIEW_MAX 条(DAO_REC 已按 updatedAt 降序;slice 自头取保留原 idx 映射);
+  // 有搜索时跨全量匹配。全量历史在「🗂 对话记录(备份)」按号分层。
+  var src=q?DAO_REC:DAO_REC.slice(0,DAO_REC_VIEW_MAX);
+  var html='';src.forEach(function(it,idx){
     if(q){var hay=((it.email||'')+' '+it.title+' '+it.sid+' '+it.accNo).toLowerCase();if(hay.indexOf(q)<0)return;}
     html+='<div class="rc" draggable="true" data-cdrag="1" data-email="'+esc(it.email||'')+'" data-sid="'+esc(it.sid||'')+'" data-title="'+esc(it.title||'')+'"><div class="r1"><span class="acc-no">#'+esc(String(it.accNo))+'</span><span class="st '+esc(it.statusClass||'')+'" title="'+esc(it.status||'')+'"></span><span class="ti" title="'+esc(it.title)+'">'+esc(String(it.title).slice(0,70))+'</span></div>'+
       '<div class="meta"><span>'+esc(String(it.email||'').split('@')[0])+'</span>'+(it.status?'<span>'+esc(it.status)+'</span>':'')+(it.updatedAt?'<span>'+daoAgo(it.updatedAt)+'</span>':'')+'</div>'+
       '<div class="acts"><span class="b" data-act="view" data-idx="'+idx+'">👁 查看</span><span class="b" data-act="enter" data-idx="'+idx+'" title="切到该账号并在网页端打开此对话">🌐 进入</span><span class="b" data-act="md" data-idx="'+idx+'">⬇ MD</span><span class="b pri" data-act="zip" data-idx="'+idx+'">📦 全部文件</span><span class="b" data-act="up" data-idx="'+idx+'" title="上传此对话内容(MD)到当前打开的网页上传框(对齐手机 APK·免拖拽)">⬆ 传网页</span></div></div>';});
+  if(!q&&DAO_REC.length>DAO_REC_VIEW_MAX){html+='<div class="empty" style="padding:8px 4px;line-height:1.5">仅显示最近 '+DAO_REC_VIEW_MAX+' 条 · 共 '+DAO_REC.length+' 条<br>搜索可跨全部 · 全量历史见 🗂 对话记录(备份)</div>';}
   box.innerHTML=html||'<div class="empty">无匹配 · 清空搜索查看全部</div>';}
 function daoEnter(idx){var it=DAO_REC[idx];if(!it)return;vscode.postMessage({type:'openCloudPage',path:'sessions/'+String(it.sid||'').replace(/^devin-/,''),label:it.title});daoToast('已请求打开 · '+String(it.email||'').split('@')[0]);}
 function daoMd(idx){var it=DAO_REC[idx];if(!it)return;daoToast('下载 MD…');vscode.postMessage({type:'dlExportMd',email:it.email,sid:it.sid,title:it.title,save:true});}

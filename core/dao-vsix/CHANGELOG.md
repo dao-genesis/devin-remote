@@ -2,6 +2,9 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.57
+- **项③ 近期对话精简(对齐手机 APK·随附 rt-flow v4.26.5)**。悬浮窗「☁ 近期对话」tab 此前无上限渲染整份近期对话列表(宿主已限 80 条),过长成负担。改为无搜索时只显示最近 `DAO_REC_VIEW_MAX=34` 条(已按 updatedAt 降序),底部提示「仅显示最近 N 条·共 M 条」;搜索时仍跨全量匹配;全量历史按号分层保留在「🗂 对话记录(备份)」tab。同步捆绑 `rtflow/extension.js`。
+
 ## 3.50.56
 - **根治自更新闭环静默失败(真因: CLI 不在 PATH 找不到)**。`selfUpdateFindCli()` 旧法仅靠 `where devin/code/windsurf` 在 PATH 查 CLI; 但 VSCode 系发行版(本机 Devin = `E:\Windsurf\Devin.exe`)的安装命令行在 `<安装根>\bin\*.cmd`(如 `E:\Windsurf\bin\windsurf.cmd` / `devin-desktop.cmd`), **默认不进 PATH** → `where` 全空 → `--install-extension` 永不执行 → v3.50.46~54 一个都没自动装上(这正是"更新闭环没生效·机器一直跑老码"的根)。
   - 改为**先按 `path.dirname(process.execPath)` 推导 `bin/*.cmd|exe`**(覆盖 `<根>/bin`、`<根>/../bin`、`<根>`; 名单含 `devin-desktop`), 再退路 `where`/`which`。跨平台(win 用 where、*nix 用 which)。
