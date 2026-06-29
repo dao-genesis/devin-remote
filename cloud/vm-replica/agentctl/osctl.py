@@ -566,6 +566,10 @@ def _find_menuitem(name: str, prefer_wid: int = 0):
     items with ``rect=None`` (GTK context menus) paired with their window id so
     callers can fall back to ``uia_invoke``.
 
+    F229: GIMP uses compound menu names ("Blur / Sharpen" for "Blur") and
+    exposes them with ``rect=None``.  Without a substring-no-rect fallback
+    the item is invisible to the walker.
+
     ``prefer_wid``: when set, search that window first — if it yields an exact
     match with a rect, return immediately without scanning other windows."""
     targets = menu_windows() + list_windows()
@@ -576,8 +580,14 @@ def _find_menuitem(name: str, prefer_wid: int = 0):
     nl = name.lower()
     best_sub = None         # first substring hit with rect
     best_exact_norect = None  # exact match but rect=None (GTK context menu)
+    best_sub_norect = None  # F229: substring hit without rect (GIMP compound names)
     for w in targets:
-        all_items = uia_find_all(w["id"], name=name, ctype="menuitem", max_scan=600)
+        # F229: GIMP submenus (Filters > Blur) are type "menu", not "menuitem".
+        # Search both types so submenu entries are found.  GIMP's AT-SPI tree
+        # is deeply nested (469+ elements); submenu entries need max_scan≥800.
+        scan = 1000
+        all_items = uia_find_all(w["id"], name=name, ctype="menuitem", max_scan=scan)
+        all_items += uia_find_all(w["id"], name=name, ctype="menu", max_scan=scan)
         for it in all_items:
             it["_wid"] = w["id"]  # carry window id for invoke fallback
             exact = it.get("name", "").lower() == nl
@@ -588,7 +598,9 @@ def _find_menuitem(name: str, prefer_wid: int = 0):
                 best_exact_norect = it
             if has_rect and best_sub is None:
                 best_sub = it
-    return best_exact_norect or best_sub
+            if not exact and not has_rect and best_sub_norect is None:
+                best_sub_norect = it
+    return best_exact_norect or best_sub or best_sub_norect
 
 
 def _walk_menu_path(names, pause: float, prefer_wid: int = 0) -> bool:
