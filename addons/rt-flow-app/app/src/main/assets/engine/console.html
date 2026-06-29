@@ -1852,6 +1852,24 @@
   try{ setTimeout(_learnDirect, 4500); setInterval(_learnDirect, 90000); }catch(e){}
   // 首屏 switch 画完后, 空闲预热其余板块 → 切板秒开。
   if(SESSION && TOKEN){ (window.requestIdleCallback||function(f){setTimeout(f,2000);})(prefetchBoards); }
+
+  // ── 外壳版本自愈(道法自然·开即最新): 若浏览器拿到陈旧缓存壳, 自行检测并 reload 到最新 ──
+  //   CDN max-age=600 后浏览器应重验, 但部分移动浏览器(三星/QQ/UC)不严格遵守 → 用户永远开到旧壳。
+  //   本机制: 首屏后异步 fetch 自身 URL(no-store), 比对版本标记; 若 CDN 返回的标记不同 → 强制 reload。
+  //   幂等: reload 后拿到新版, 版本匹配, 不再 reload。仅 http(s) 源触发(APK 内 file:// 跳过)。
+  var _CONSOLE_STAMP = "20260629T0951Z";  // 每次发版递增(与 git commit 对齐)
+  (function _selfHeal(){
+    if(!/^https?:/.test(location.protocol)) return;
+    setTimeout(function(){
+      var u = location.href.split("#")[0];
+      u += (u.indexOf("?")>=0?"&":"?") + "_ck=" + Date.now();
+      fetch(u, {cache:"no-store",redirect:"follow"}).then(function(r){ return r.ok?r.text():null; }).then(function(t){
+        if(!t) return;
+        var m = t.match(/_CONSOLE_STAMP\s*=\s*"([^"]+)"/);
+        if(m && m[1] !== _CONSOLE_STAMP){ location.reload(); }
+      }).catch(function(){});
+    }, 6000);   // 首屏 6s 后检查, 不阻塞首次渲染
+  })();
 })();
 </script>
 </body>

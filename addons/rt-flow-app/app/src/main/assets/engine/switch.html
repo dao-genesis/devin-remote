@@ -874,15 +874,11 @@ function _deviceRecentRefresh(force){
   //   (正是「久不识别/滞后」之根)。故设独立硬期限, 到点无条件解锁, 保刷新永不被单次悬挂永久拖死。
   var _rbWatch=setTimeout(function(){ _devRecentBusy=false; try{ _restoreTrkFromVault(); }catch(_e){} }, 22000);
   function _rbDone(){ try{ clearTimeout(_rbWatch); }catch(_e){} _devRecentBusy=false; }
-  // perAcc=6 与显示侧每号 items 上限一致; max=200 覆盖近期活跃对话, 超此的历史号由金库镜像兜底;
-  //   轻量化避免长时间占住串行队列导致镜像行/金库读取全部饿死(用户「第二行消失/对话追踪空」之根)。
-  P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:6, max:200, conc:6 }, 18000).then(function(res){
-    _rbDone();
-    var b=res&&res.body; if(!b||!b.ok||!Array.isArray(b.list)){ try{ _restoreTrkFromVault(); }catch(_e){} return; }
+  // 渐进式轻量化(道法自然·轻则通·重则滞):
+  //   首选 max:30 perAcc:2 (仅活跃对话·响应 <5KB 适穿中继/mesh); 若中继 413(载荷过大) 再降级 max:10。
+  //   解决「recentConvAll 200 条响应超中继限→413→回退过期金库→无活跃对话」之根。
+  function _applyFresh(b){
     var fresh=_buildTrkFromRecent(b.list), now=Date.now();
-    // 设备端权威态: 本轮聚合出的号 → 写入; 既有 _trk 中本轮无 active 的号 → 写空闲墓碑(熄灯) → 与手机逐一一致。
-    //   金库镜像(_restoreTrkFromVault·新 ts 胜)仍可叠加手机更鲜的深度态, 二者同源不冲突。
-    // 已移出金库的号(在 APK 删除/归零移出): 连墓碑一并清除, _trk 不积陈迹(知止不殆) → 号数与金库恒等。
     var _vault=Object.create(null), _vn=0; loadAcc().forEach(function(a){ var k=String((a&&(a.email||a.id))||"").toLowerCase(); if(k){ _vault[k]=1; _vn++; } });
     Object.keys(_trk).forEach(function(e){
       if(_vn && !_vault[e] && !fresh[e]){ delete _trk[e]; return; }
@@ -891,6 +887,21 @@ function _deviceRecentRefresh(force){
     Object.keys(fresh).forEach(function(e){ _trk[e]=fresh[e]; });
     try{ _saveTrkLocalOnly(); }catch(_e){}
     try{ paintTrk(); paintRowRun(); _repushTabsFromTrk(); }catch(_e){}
+  }
+  P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:2, max:30, conc:4 }, 15000).then(function(res){
+    var b=res&&res.body;
+    if(res && res.status===413){
+      // 载荷仍过大 → 再次降级: 仅取 10 条(约 2KB, 穿越任何中继)
+      P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:1, max:10, conc:2 }, 12000).then(function(r2){
+        _rbDone(); var b2=r2&&r2.body;
+        if(!b2||!b2.ok||!Array.isArray(b2.list)){ _restoreTrkFromVault(); return; }
+        _applyFresh(b2);
+      }, function(){ _rbDone(); _restoreTrkFromVault(); });
+      return;
+    }
+    _rbDone();
+    if(!b||!b.ok||!Array.isArray(b.list)){ try{ _restoreTrkFromVault(); }catch(_e){} return; }
+    _applyFresh(b);
   }, function(){ _rbDone(); try{ _restoreTrkFromVault(); }catch(_e){} });
 }
 // 并发池: 以账号为中心同时(默认6路)拉取会话, 把 72 号的串行等待压成并行 → 跨设备运行近实时识别。
