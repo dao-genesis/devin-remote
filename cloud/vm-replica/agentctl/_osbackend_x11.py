@@ -1055,6 +1055,18 @@ def set_clipboard(text: str) -> None:
 
 
 def get_clipboard() -> str:
+    # F226: query the real X CLIPBOARD, not just the local cache.
+    # If another app (KWrite, gedit, etc.) did Ctrl+C, _clip_text is stale.
+    # Use xclip to read the current CLIPBOARD selection from whoever owns it.
+    try:
+        r = subprocess.run(
+            ["xclip", "-o", "-selection", "clipboard"],
+            capture_output=True, timeout=2,
+        )
+        if r.returncode == 0:
+            return r.stdout.decode("utf-8", errors="replace")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
     return _clip_text
 
 

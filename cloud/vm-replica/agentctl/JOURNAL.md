@@ -7303,4 +7303,165 @@ KDE Save As (KWrite) → file created ✓.  GIMP Open (GTK) → image loaded ✓
 
 ---
 
+### F226 — `get_clipboard()` reads only local cache, blind to text copied by other X apps
+
+| date | 2026-06-29 |
+|---|---|
+| surface | `chord(0x11, 0x41); chord(0x11, 0x43); get_clipboard()` returns empty — text IS in X CLIPBOARD |
+| root cause | `get_clipboard()` returned `_clip_text` (only what `set_clipboard()` stored); never queried the real X CLIPBOARD selection from other owners |
+
+**Friction.** After the user types text in KWrite, `chord(Ctrl+A)` / `chord(Ctrl+C)` copies text to the X clipboard — verified by `xclip -o -selection clipboard`. But `get_clipboard()` returned the empty `_clip_text`, because it never asked the X server who currently owns CLIPBOARD and what they're serving.
+
+**Root cause.** X11 has no global clipboard buffer. Each application *owns* the CLIPBOARD selection and hands data to each requester via `SelectionRequest` events. `get_clipboard()` was reading a Python variable, not the X selection.
+
+**Fix.** `get_clipboard()` now shells out to `xclip -o -selection clipboard` (already installed as a dependency) with a 2-second timeout. If the owner responds, the real clipboard text is returned. Falls back to `_clip_text` only if xclip fails.
+
+```python
+def get_clipboard() -> str:
+    try:
+        r = subprocess.run(
+            ["xclip", "-o", "-selection", "clipboard"],
+            capture_output=True, timeout=2,
+        )
+        if r.returncode == 0:
+            return r.stdout.decode("utf-8", errors="replace")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return _clip_text
+```
+
+**Proof.** 4/4:
+- Read clipboard after KWrite `Ctrl+A`/`Ctrl+C` → `"CHORD_TEST_DATAHello chord test"` ✓
+- `set_clipboard("test_道法自然"); get_clipboard()` → `"test_道法自然"` ✓
+- gedit `Ctrl+A`/`Ctrl+C` → full text readable ✓
+- Round-trip: set_clipboard → Ctrl+V in app → Ctrl+A/C → get_clipboard ✓
+
+---
+
+### F227 — GTK3/Xfce file dialogs: `uia_file_dialog_set_path` fails — location bar needs Ctrl+L, not `/`
+
+| date | 2026-06-29 |
+|---|---|
+| surface | Mousepad/gedit/Inkscape Save As: `uia_file_dialog_set_path` fails to set filename |
+| root cause | GTK3 GNOME / Xfce file dialogs activate location bar via Ctrl+L; the `/` key only works in older GTK2 dialogs |
+
+**Friction.** F223 added the `/` key to activate GTK file dialog location bars. But GNOME GTK3 (gedit) and Xfce (Mousepad) file dialogs don't respond to `/` — they need `Ctrl+L` to switch to the path-entry mode.  Additionally, Inkscape's GTK file dialog reports 299 AT-SPI elements but ALL have `rect=None`, making semantic clicking impossible.
+
+**Fix.** `uia_file_dialog_set_path` now has three tiers:
+1. KDE: `uia_set_value(name="File name:", ctype="edit")`
+2. Ctrl+L (GNOME GTK3 / Xfce / Inkscape): `chord(0x11, 0x4C)` → `uia_set_value(ctype="edit")`
+3. `/` key (GTK2): `tap(0xBF)` → `uia_set_value(ctype="edit")`
+4. Last resort: `Ctrl+A` + `paste_text`
+
+**Proof.** Full save chains tested on 5 apps:
+- KWrite Save As (KDE): file created ✓ (tier 1)
+- gedit Save As (GTK3): file created via Ctrl+Shift+S → Ctrl+L → type path → Enter ✓
+- Mousepad Save As (Xfce): file created via Ctrl+Shift+S → Ctrl+L → type path → Enter ✓
+- Inkscape Save As (GTK): file created via Ctrl+Shift+S → Ctrl+L → type path → Enter ✓
+- GIMP Export As (GTK): PNG exported via Ctrl+Shift+E → dialog → Export ✓
+
+**Boundary.**
+- Inkscape's GTK file dialog AT-SPI elements all have `rect=None` — semantic clicking is impossible; must use keyboard (Ctrl+L + type path) or coordinate-based fallback.
+- LO Calc still has 0 AT-SPI elements — VCL toolkit boundary remains.
+
+---
+
+## F228 — `uia_file_dialog_set_path` types into document area on Xfce/GTK dialogs
+
+**Friction.**  Mousepad (Xfce) and gedit (GTK3) Save As dialogs expose the
+**parent window's** AT-SPI tree, not the dialog's own elements.  After Ctrl+L
+opens the location bar, `uia_set_value(dialog, path, ctype='edit')` finds the
+document text area (height > 300px) and types the file path into the document
+content instead of the filename field.  For gedit, `paste_text` (Ctrl+V)
+landed in the Name field rather than the focused location bar.
+
+**Root cause.**  Xfce GTK file dialogs don't register their own elements in
+AT-SPI; the tree-walk returns the parent window's tree.  The only Edit element
+with a rect is the main document editor (h=449 for Mousepad, h=673 for gedit),
+not the location-bar entry.
+
+**Fix** (`osctl.py`).  Added `_has_small_edit()` height check (h < 200 = real
+filename entry vs h > 300 = document area).  When no small edit exists after
+Ctrl+L, use `type_unicode(path)` (key events to focused widget) instead of
+`uia_set_value` or `paste_text`:
+
+```python
+def _has_small_edit(wid):
+    els = uia_find_all(wid, max_scan=400)
+    return any(e.get("type") == "Edit" and e.get("rect")
+               and e["rect"][3] < 200 for e in els)
+
+# After Ctrl+L:
+if _has_small_edit(dialog_wid):
+    uia_set_value(dialog_wid, path, ctype="edit")
+else:
+    chord(0x11, 0x41)    # Ctrl+A to clear
+    type_unicode(path)    # key events to focused location bar
+```
+
+**Proof.**  5/5 dialogs pass after fix:
+- KWrite (KDE `File name:` entry): ✓ `/tmp/f228v2_kwrite.txt` (90 bytes)
+- gedit (GTK3 location bar): ✓ `/tmp/f228v2_gedit.txt` (90 bytes)
+- Mousepad (Xfce location bar): ✓ `/tmp/f228v2_mousepad.txt` (58 bytes)
+- GIMP Export As: ✓ `/tmp/f228v2_gimp.png` (9050 bytes)
+- Inkscape Save As: ✓ `/tmp/f228v2_inkscape.svg` (1400 bytes)
+
+---
+
+## F229 — `_find_menuitem` fails on GIMP 3-level menus (type=Menu + scan depth)
+
+**Friction.**  `uia_menu(gi, 'Filters', 'Blur', 'Gaussian Blur...')` returns
+False.  GIMP's 3-level filter menus (Filters → Blur → Gaussian Blur...) are
+unreachable.
+
+**Root cause (dual).**
+
+1. GIMP submenus ("Blur" under Filters) are AT-SPI type `Menu`, not
+   `MenuItem`.  `_find_menuitem` only searched `ctype="menuitem"`, so the
+   "Blur" submenu entry (with `rect=(570,250,293,25)`) was invisible.
+2. GIMP has 469+ AT-SPI elements.  The old `max_scan=600` reached "Blur /
+   Sharpen" (MenuItem, rect=None) but not the deeper "Blur" (Menu, with rect).
+   At `max_scan=800` the correct element first appears.
+
+**Fix** (`osctl.py`).  In `_find_menuitem`:
+- Search both `ctype="menuitem"` AND `ctype="menu"` (two `uia_find_all` calls)
+- Increase `max_scan` from 600 → 1000
+- Add `best_sub_norect` fallback for compound names (e.g. "Blur / Sharpen")
+  that have no rect
+
+**Proof.**  4/4 pass:
+- Filters > Blur > Gaussian Blur... (3-level): ✓ dialog opens
+- Filters > Distorts > Lens Distortion... (3-level): ✓ dialog opens
+- Edit > Preferences (2-level regression): ✓
+- KWrite File > New (cross-app regression): ✓
+
+---
+
+## F230 — GTK3 autocomplete corrupts filenames in Save As dialogs
+
+**Friction.**  Inkscape Save As with path `/tmp/regr_inkscape_edge.svg` produces
+file `/tmp/rer__inkscape_edge.svg` — the `g` is eaten, the `_` doubled.
+Mousepad also fails with longer filenames.
+
+**Root cause.**  GTK3's file-chooser location bar has aggressive inline
+autocomplete.  `type_unicode` types at ~32 ms/char; each keystroke triggers
+autocomplete which overwrites the next character, corrupting the filename.
+
+**Fix** (`osctl.py`).  Split the path in `uia_file_dialog_set_path`'s F228
+fallback branch:
+1. Ctrl+L → type **directory** + `/` → Enter (navigates; short directory names
+   are autocomplete-safe)
+2. After navigation, the Name field regains focus
+3. Ctrl+A → type **just the basename** (no directory = no autocomplete on
+   path separators)
+
+**Proof.**  5/5 pass:
+- KWrite (KDE): ✓ `/tmp/f230_kwrite_final.txt` (28 bytes)
+- gedit (GTK3): ✓ `/tmp/f230_gedit_final.txt` (6 bytes)
+- Mousepad (Xfce): ✓ `/tmp/f230_mousepad_final.txt` (18 bytes)
+- Inkscape (GTK3): ✓ `/tmp/f230_inkscape_final.svg` (1826 bytes)
+- GIMP Export As: ✓ `/tmp/f230_gimp_final.png` (5703 bytes)
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

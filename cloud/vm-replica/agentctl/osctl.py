@@ -566,6 +566,10 @@ def _find_menuitem(name: str, prefer_wid: int = 0):
     items with ``rect=None`` (GTK context menus) paired with their window id so
     callers can fall back to ``uia_invoke``.
 
+    F229: GIMP uses compound menu names ("Blur / Sharpen" for "Blur") and
+    exposes them with ``rect=None``.  Without a substring-no-rect fallback
+    the item is invisible to the walker.
+
     ``prefer_wid``: when set, search that window first — if it yields an exact
     match with a rect, return immediately without scanning other windows."""
     targets = menu_windows() + list_windows()
@@ -576,8 +580,14 @@ def _find_menuitem(name: str, prefer_wid: int = 0):
     nl = name.lower()
     best_sub = None         # first substring hit with rect
     best_exact_norect = None  # exact match but rect=None (GTK context menu)
+    best_sub_norect = None  # F229: substring hit without rect (GIMP compound names)
     for w in targets:
-        all_items = uia_find_all(w["id"], name=name, ctype="menuitem", max_scan=600)
+        # F229: GIMP submenus (Filters > Blur) are type "menu", not "menuitem".
+        # Search both types so submenu entries are found.  GIMP's AT-SPI tree
+        # is deeply nested (469+ elements); submenu entries need max_scan≥800.
+        scan = 1000
+        all_items = uia_find_all(w["id"], name=name, ctype="menuitem", max_scan=scan)
+        all_items += uia_find_all(w["id"], name=name, ctype="menu", max_scan=scan)
         for it in all_items:
             it["_wid"] = w["id"]  # carry window id for invoke fallback
             exact = it.get("name", "").lower() == nl
@@ -588,7 +598,9 @@ def _find_menuitem(name: str, prefer_wid: int = 0):
                 best_exact_norect = it
             if has_rect and best_sub is None:
                 best_sub = it
-    return best_exact_norect or best_sub
+            if not exact and not has_rect and best_sub_norect is None:
+                best_sub_norect = it
+    return best_exact_norect or best_sub or best_sub_norect
 
 
 def _walk_menu_path(names, pause: float, prefer_wid: int = 0) -> bool:
@@ -634,19 +646,29 @@ def uia_context(win: int, target: str, *path: str, ctype=None, pause: float = 0.
 
 
 def uia_file_dialog_set_path(dialog_wid: int, path: str, pause: float = 0.5) -> bool:
-    """Set the file path in an open/save file dialog, handling both KDE and GTK
-    toolkits automatically.
+    """Set the file path in an open/save file dialog, handling KDE, GTK, and
+    Xfce toolkits automatically.
 
     F223: GTK file choosers (GIMP, LibreOffice, gedit) don't expose a file-name
     entry by default — the entry only appears after pressing ``/`` (slash) which
     switches to the location-bar mode.  KDE file dialogs (KWrite, Kate, Dolphin)
     expose ``name='File name:'`` with ``ctype='edit'`` directly.
 
+    F227: GNOME GTK3 file dialogs use Ctrl+L for the location bar (not ``/``).
+    Xfce/Mousepad file dialogs have an unnamed Name field at the dialog top.
+
+    F228: Xfce GTK dialogs (Mousepad) expose the **parent window's** AT-SPI
+    tree, not the dialog's own elements.  ``uia_set_value`` after Ctrl+L
+    therefore targets the document text area instead of the location bar
+    entry.  Fix: after Ctrl+L, type directly into the focused location bar
+    via ``paste_text`` instead of searching for an Edit element.
+
     Strategy:
     1. Try KDE: ``uia_set_value(dialog, path, name='File name:', ctype='edit')``
-    2. If no KDE edit found, try GTK: ``tap(0xBF)`` (``/``) to activate location
-       bar, then ``uia_set_value(dialog, path, ctype='edit')``
-    3. Falls back to ``paste_text`` if ``uia_set_value`` fails.
+    2. Try Ctrl+L (GNOME GTK3) → ``uia_set_value`` on a *small* edit field
+    3. If no small edit found, Ctrl+L again → ``paste_text`` directly
+    4. Try ``/`` (older GTK) → same approach
+    5. Falls back to ``paste_text`` in the focused field.
 
     Returns True iff the path was set (caller should press Enter or click
     Open/Save to commit)."""
@@ -655,21 +677,49 @@ def uia_file_dialog_set_path(dialog_wid: int, path: str, pause: float = 0.5) -> 
     if ok:
         return True
 
-    # GTK file dialog: activate location bar with "/" key
-    # (tap 0xBF = VK_OEM_2 = "/" on US layout, mapped by F223)
-    tap(0xBF)
+    # F228: Detect whether the dialog has its own *small* Edit element
+    # (a filename entry, not a huge document text area).  A location-bar
+    # entry is typically < 200 px tall; a document editor is > 300 px.
+    def _has_small_edit(wid: int) -> bool:
+        els = uia_find_all(wid, max_scan=400)
+        for e in els:
+            if e.get("type") == "Edit" and e.get("rect"):
+                _, _, _, h = e["rect"]
+                if h < 200:
+                    return True
+        return False
+
+    # F227: Try Ctrl+L (GNOME GTK3 / Xfce location bar activation)
+    chord(0x11, 0x4C)  # Ctrl+L
     time.sleep(pause)
-
-    # After "/", a new Edit field should appear
-    ok2 = uia_set_value(dialog_wid, path, ctype="edit")
-    if ok2:
-        return True
-
-    # Last resort: Ctrl+A then paste
-    chord(0xA2, 0x41)
-    time.sleep(0.1)
-    paste_text(path)
-    time.sleep(0.2)
+    if _has_small_edit(dialog_wid):
+        ok2 = uia_set_value(dialog_wid, path, ctype="edit")
+        if ok2:
+            return True
+    # F228 + F230: No small edit → the dialog's location bar isn't in
+    # AT-SPI.  Ctrl+L opened the breadcrumb location bar.  GTK3
+    # autocomplete can corrupt long paths typed character-by-character,
+    # so split into directory navigation + filename entry:
+    #   1. Type directory in the Ctrl+L bar → Enter (navigates)
+    #   2. The Name field re-gains focus after navigation
+    #   3. Ctrl+A + type just the basename
+    import posixpath
+    dirname = posixpath.dirname(path)
+    basename = posixpath.basename(path)
+    if dirname:
+        chord(0x11, 0x41)  # Ctrl+A
+        time.sleep(0.05)
+        tap(0x2E)  # Delete
+        time.sleep(0.1)
+        type_unicode(dirname + "/")
+        time.sleep(0.3)
+        tap(0x0D)  # Enter → navigate to directory
+        time.sleep(0.8)
+    # Type filename into the Name field (gets focus after navigation)
+    chord(0x11, 0x41)  # Ctrl+A
+    time.sleep(0.05)
+    type_unicode(basename)
+    time.sleep(0.3)
     return True
 
 
