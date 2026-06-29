@@ -7212,4 +7212,33 @@ opens → `uia_set_value(dlg, '/tmp/test_open_file.txt', name='File name:', ctyp
 
 ---
 
+### F222 — Context menus: exact-match priority + rect=None invoke fallback
+
+| date | 2026-06-29 |
+|---|---|
+| surface | `_find_menuitem("Copy")` returns "Save Copy As..." from another window's menubar |
+| root cause 1 | `_match` uses substring matching; "Copy" ∈ "Save Copy As..." |
+| root cause 2 | `menu_windows()` is unimplemented on X11 → `lambda: []`; GTK context menu items have `rect=None` |
+
+**Friction.** After right-click on LibreOffice Calc, `_find_menuitem("Copy")`
+scanned all windows and returned the first substring hit — KWrite's menubar
+"Save Copy As..." — instead of the context menu's "Copy".  Two interacting
+issues: (1) substring matching gave false positives on partial name overlap,
+(2) GTK context menu items existed in the AT-SPI tree but with `rect=None`,
+so they were invisible to the rect-requiring search.
+
+**Fix 1.** `_find_menuitem` now uses `uia_find_all` per window and prefers
+**exact** name matches (case-insensitive) over substring hits.  Priority:
+exact+rect > exact+no-rect > substring+rect.
+
+**Fix 2.** `_walk_menu_path` falls back to `uia_invoke(wid, name=..., ctype='menuitem')`
+when the found item has `rect=None`.  GTK/LibreOffice context menu items
+respond correctly to AT-SPI Action invocation even without screen coordinates.
+
+**Proven.** LO Calc right-click > Copy via invoke: clipboard = "道法自然 Context Copy" ✓.
+KWrite right-click > Copy via rect-click: clipboard = "KWrite context test" ✓.
+Menu chain regression 4/4: GIMP, VLC, KWrite, Inkscape all pass.
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

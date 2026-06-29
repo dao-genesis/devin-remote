@@ -559,12 +559,29 @@ def _click_center(rect):
 
 def _find_menuitem(name: str):
     """Find a ``menuitem`` by meaning across *every* place a menu can pop: titled
-    top-level windows (Qt/wx) and titleless native ``#32768`` popups."""
-    for w in list_windows() + menu_windows():
-        f = uia_find(w["id"], name=name, ctype="menuitem")
-        if f and f.get("rect"):
-            return f
-    return None
+    top-level windows (Qt/wx) and titleless native ``#32768`` popups.
+
+    F222: prefer *exact* name matches over substring hits so that "Copy" finds
+    the context-menu "Copy" rather than a menubar "Save Copy As…".  Also returns
+    items with ``rect=None`` (GTK context menus) paired with their window id so
+    callers can fall back to ``uia_invoke``."""
+    targets = menu_windows() + list_windows()
+    nl = name.lower()
+    best_sub = None         # first substring hit with rect
+    best_exact_norect = None  # exact match but rect=None (GTK context menu)
+    for w in targets:
+        all_items = uia_find_all(w["id"], name=name, ctype="menuitem", max_scan=600)
+        for it in all_items:
+            it["_wid"] = w["id"]  # carry window id for invoke fallback
+            exact = it.get("name", "").lower() == nl
+            has_rect = it.get("rect") is not None
+            if exact and has_rect:
+                return it
+            if exact and best_exact_norect is None:
+                best_exact_norect = it
+            if has_rect and best_sub is None:
+                best_sub = it
+    return best_exact_norect or best_sub
 
 
 def _walk_menu_path(names, pause: float) -> bool:
@@ -573,7 +590,14 @@ def _walk_menu_path(names, pause: float) -> bool:
         if hit is None:
             tap(0x1B)
             return False
-        _click_center(hit["rect"])
+        # F222: GTK context menu items have rect=None; use uia_invoke instead.
+        if hit.get("rect"):
+            _click_center(hit["rect"])
+        elif hit.get("_wid"):
+            uia_invoke(hit["_wid"], name=hit.get("name"), ctype="menuitem")
+        else:
+            tap(0x1B)
+            return False
         time.sleep(pause)
     return True
 
