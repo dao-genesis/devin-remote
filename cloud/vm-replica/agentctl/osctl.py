@@ -545,11 +545,11 @@ def uia_menu(win: int, *path: str, pause: float = 0.45) -> bool:
     # menubar entry; the AT-SPI Action interface ("click" action) is needed.
     # If no submenu items appeared after the rect-click, retry with uia_invoke.
     if len(path) > 1:
-        probe = _find_menuitem(path[1])
+        probe = _find_menuitem(path[1], prefer_wid=win)
         if not probe:
             uia_invoke(win, name=path[0], ctype="menu")
             time.sleep(pause)
-    return _walk_menu_path(path[1:], pause)
+    return _walk_menu_path(path[1:], pause, prefer_wid=win)
 
 
 def _click_center(rect):
@@ -557,15 +557,22 @@ def _click_center(rect):
     click(x + w // 2, y + h // 2)
 
 
-def _find_menuitem(name: str):
+def _find_menuitem(name: str, prefer_wid: int = 0):
     """Find a ``menuitem`` by meaning across *every* place a menu can pop: titled
     top-level windows (Qt/wx) and titleless native ``#32768`` popups.
 
     F222: prefer *exact* name matches over substring hits so that "Copy" finds
     the context-menu "Copy" rather than a menubar "Save Copy As…".  Also returns
     items with ``rect=None`` (GTK context menus) paired with their window id so
-    callers can fall back to ``uia_invoke``."""
+    callers can fall back to ``uia_invoke``.
+
+    ``prefer_wid``: when set, search that window first — if it yields an exact
+    match with a rect, return immediately without scanning other windows."""
     targets = menu_windows() + list_windows()
+    # Put prefer_wid first so its exact matches win.
+    if prefer_wid:
+        targets = [w for w in targets if w["id"] == prefer_wid] + \
+                  [w for w in targets if w["id"] != prefer_wid]
     nl = name.lower()
     best_sub = None         # first substring hit with rect
     best_exact_norect = None  # exact match but rect=None (GTK context menu)
@@ -584,9 +591,9 @@ def _find_menuitem(name: str):
     return best_exact_norect or best_sub
 
 
-def _walk_menu_path(names, pause: float) -> bool:
+def _walk_menu_path(names, pause: float, prefer_wid: int = 0) -> bool:
     for name in names:
-        hit = _find_menuitem(name)
+        hit = _find_menuitem(name, prefer_wid=prefer_wid)
         if hit is None:
             tap(0x1B)
             return False
@@ -623,7 +630,7 @@ def uia_context(win: int, target: str, *path: str, ctype=None, pause: float = 0.
     x, y, w, h = el["rect"]
     click(x + w // 2, y + h // 2, right=True)
     time.sleep(pause)
-    return _walk_menu_path(path, pause)
+    return _walk_menu_path(path, pause, prefer_wid=win)
 
 
 _CELLREF = re.compile(r"^\$?[A-Za-z]{1,3}\$?[0-9]{1,7}$")
