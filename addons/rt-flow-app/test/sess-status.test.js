@@ -227,5 +227,13 @@ ok(/}\s*else if\(_fireDrop\(win, doc, file\)\)\{/.test(consoleSrc),
 ok(/if\(tabs\[active\]!==t\)\{ try\{ selectTab\(t\.id\)/.test(consoleSrc),
    "源级: 注入前切到目标标签让用户看见落入 (全服通悬浮窗覆盖切号面板时仍准)");
 
+// ⑤ SWR 热刷新: 后台重验内容变化时自动重建板块 iframe (开即最新·根治「更新后仍坏」)
+ok(/var ASSET_REVAL_MS\s*=\s*5\*1000/.test(consoleSrc),
+   "源级: console.html ASSET_REVAL_MS = 5s (缩短重验阈值·快速检测部署更新)");
+ok(/function _hotReloadBoard\(file\)/.test(consoleSrc),
+   "源级: console.html 存在 _hotReloadBoard (重验发现变化时就地热刷板块 iframe)");
+ok(/if\(prev!=null && prev!==txt\) _hotReloadBoard\(name\)/.test(consoleSrc),
+   "源级: _netAsset 重验后比对内容·变化时触发热刷 (道法自然·更新后开即新)");
+
 if (failures) { console.error("\n" + failures + " 项失败 ✗"); process.exit(1); }
 console.log("\n全部通过 ✓");

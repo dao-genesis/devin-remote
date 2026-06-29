@@ -828,17 +828,20 @@
   // ── 持久资源缓存 (stale-while-revalidate): 暖启动秒开 + 后台静默重验保鲜 ────────────
   //   旧瓶颈: 每次冷启动都 no-store 重取板块 HTML+JS 依赖近 200KB → 「启动非常慢」。
   //   板块是静态死文件、只随部署变 → 以 localStorage 持久缓存即时上屏(暖启动 0 网络),
-  //   再后台重验取真源更新缓存(下次开即新)。重验阈值 60s 防频繁重开狂刷; 手动「重载」强制取最新。
+  //   再后台重验取真源更新缓存; 若内容变化就地热刷已挂载 iframe(开即新)。阈值 5s 防极短时间狂刷。
   //   不会重蹈 #515 旧板病: 重验始终发生 → 单次开后即新鲜, 陈旧窗口仅首帧且有界(非 jsDelivr 的 ~12h)。
-  var ASSET_REVAL_MS = 60*1000;
+  var ASSET_REVAL_MS = 5*1000;
   function _ckey(name){ return "rtflow.console.ac."+name; }
   function cacheGet(name){ try{ var s=localStorage.getItem(_ckey(name)); if(!s) return null; var o=JSON.parse(s);
     return (o && typeof o.v==="string") ? o : null; }catch(e){ return null; } }
   function cachePut(name, text){ try{ localStorage.setItem(_ckey(name), JSON.stringify({t:Date.now(), v:text})); }catch(e){} }
   function cacheClearAll(){ try{ for(var i=localStorage.length-1;i>=0;i--){ var k=localStorage.key(i); if(k&&k.indexOf("rtflow.console.ac.")===0) localStorage.removeItem(k); } }catch(e){} }
   function _netAsset(name){
+    var prev=ASSETS[name];
     return assetFromCdn(name).catch(function(){ return assetFromPhone(name); })
-      .then(function(txt){ ASSETS[name]=txt; cachePut(name, txt); return txt; });
+      .then(function(txt){ ASSETS[name]=txt; cachePut(name, txt);
+        if(prev!=null && prev!==txt) _hotReloadBoard(name);
+        return txt; });
   }
   function asset(name){
     if(ASSETS[name]!=null) return Promise.resolve(ASSETS[name]);
@@ -916,6 +919,24 @@
   var tabs=[], active=-1, seq=0;
   var strip=document.getElementById("strip"), plus=document.getElementById("plus");
   var frames=document.getElementById("frames"), addr=document.getElementById("addr");
+
+  // ── 重验发现板块内容变化 → 就地热刷该板块 iframe (开即最新·不必手动二次刷新) ──
+  //   SWR 暖启动先用缓存秒开, 后台重验若 CDN 内容已变(部署新版), 自动重建受影响板块的 blob iframe,
+  //   用户无感知地从旧版平滑过渡到新版(道法自然·更新后开即新·根治「更新后仍坏」)。
+  //   不仅匹配板块 HTML 自身, 也匹配其 <script src> 依赖(如 devin-cloud.js 变则含它的板块均热刷)。
+  function _hotReloadBoard(file){
+    for(var i=0;i<tabs.length;i++){
+      var t=tabs[i]; if(!t.pageKey || !t.fr || !t.ready) continue;
+      var p=pageByKey(t.pageKey); if(!p) continue;
+      buildSrcdoc(p.file).then((function(t){ return function(html){
+        try{
+          var blob=new Blob([html],{type:"text/html;charset=utf-8"});
+          if(t.blobUrl){ try{ URL.revokeObjectURL(t.blobUrl); }catch(e){} }
+          t.blobUrl=URL.createObjectURL(blob); t.fr.src=t.blobUrl;
+        }catch(e){ t.fr.srcdoc=html; }
+      }; })(t)).catch(function(){});
+    }
+  }
 
   function host(u){ try{ return new URL(u, location.href).host; }catch(e){ return u; } }
 
