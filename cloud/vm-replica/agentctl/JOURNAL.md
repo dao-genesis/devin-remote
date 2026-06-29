@@ -6979,4 +6979,88 @@ will only grow a primitive once a real failure is reproduced.
   it is wholly meaning-operable as-is. With no surface where pairing both *applies* and *helps*, the
   honest floor for unlabeled drawn-caption fields is geometry/pixel. 知止不殆.
 
+---
+
+## F213 — `uia_find_all` absent on the Linux/AT-SPI backend: the semantic floor is blind
+
+**Friction (reproduced).**  On the Linux X11 backend `uia_find_all(win)` always
+returned `[]` — not because the AT-SPI tree was empty (it wasn't; `uia_find` and
+`uia_children` both worked fine on kwrite/gedit/Inkscape/LibreOffice), but because
+the verb was **never implemented** in `_osbackend_x11.py`.  `osctl.py` fell back to
+`lambda …: []`.  Every caller that depended on the plural walk — `window_opaque`,
+`_actionable`, `screen_observe`, `goto_cell` — was dead on Linux.
+
+**Root cause.**  The Windows backend had `uia_find_all` (a `FindAll(Descendants,
+TrueCondition)` walk bounded by `max_scan`); the X11 backend never got a dual.
+
+**Fix.**  `_impl_uia_find_all` walks the AT-SPI tree (same `_walk` DFS, same crash
+isolation via ephemeral worker) collecting every matching descendant up to
+`max_scan`, with `name`/`ctype` filtering matching `uia_find`'s semantics.
+Registered in `_WORKER_IMPL`/`_WORKER_DEFAULT`; public `uia_find_all` shim added.
+
+**Proof.** `_probe_find_all_x11.py` — 11/11 live checks on kwrite:
+`uia_find_all` returns 376 elements, element schema correct, filters work.
+
+---
+
+## F214 — AT-SPI role names ≠ UIA type names: `window_opaque` / `screen_observe` blind on Linux
+
+**Friction (reproduced).**  `window_opaque(kwrite)` returned `True` (opaque — no
+meaning) even though the AT-SPI tree had 376 controls.  `screen_observe` reported
+0 actions for the active window.  Why: AT-SPI role names are lowercase with spaces
+(`"push button"`, `"menu item"`, `"combo box"`), but `_OPAQUE_ACTIONABLE` expected
+Windows UIA PascalCase names (`"Button"`, `"MenuItem"`, `"ComboBox"`).
+
+**Root cause.**  Two naming vocabularies, no translation layer.
+
+**Fix.**  `_ROLE_TO_UIA` map (60+ entries) translates every known AT-SPI role to
+its UIA ControlType equivalent at the `uia_find_all` output boundary.  Callers
+see a single cross-platform vocabulary; no per-backend branching needed.
+
+**Proof.** After fix: `window_opaque(kwrite)` → `False`; `screen_observe` →
+308 actions for kwrite.  `_probe_find_all_x11.py` check 3 verifies no raw AT-SPI
+role names leak into the `"type"` field.
+
+---
+
+## F215 — AT-SPI reports `INT32_MIN` screen rects for off-screen / hidden-tab controls
+
+**Friction (reproduced).**  Inkscape's Welcome dialog has controls on non-active
+tabs whose `atspi_component_get_extents` returns `(-2147483648, -2147483648, w, h)`
+— i.e. `x = y = INT32_MIN`.  `uia_click` aimed the cursor at this nonsense
+coordinate; the click went nowhere useful.
+
+**Root cause.**  GTK widgets on a hidden notebook page report their extents at
+`INT32_MIN` rather than `(0,0,0,0)` or refusing the query.
+
+**Fix.**  `_acc_rect` now rejects any rect with `x < -30000` or `y < -30000`,
+returning `None` — same as for zero-sized rects.  Callers (uia_click, uia_find_all,
+screen_observe) already handle `None` gracefully.
+
+**Proof.** Inkscape `uia_find_all` no longer reports nonsense rects;
+`uia_click(wid, name='New Document')` on the hidden-tab button correctly returns
+`False` (no rect → no click) instead of spraying the cursor at `INT_MIN`.
+
+---
+
+## Frontier (next honest rounds)
+
+These are *not yet built* — they are the next real surfaces to push into. Each
+will only grow a primitive once a real failure is reproduced.
+
+- **A window with *pixels but no meaning* — a semantically-opaque toolkit (GTK-on-Windows). — SOLVED, F201.**
+  The inverse of the zero-pixel frontier: Inkscape's canvas window exposes only 7 UIA elements, all
+  window-frame chrome — File/Edit/toolbox/palette are invisible. `window_opaque(win)` lets the floor
+  *recognise* this (no operable control in the a11y tree) and switch to the pixel+keyboard channel it
+  already owns. Proven `_probe_opaque.py` 7/7 + live on real Inkscape (rectangle drawn & filled #FF0000
+  by keys+pixels). Kept here as a pointer.
+
+- **An app with *no top-level window at all* — resident entirely in the system tray. — SOLVED, F200.**
+  The deepest zero-pixel surface: a window minimized to the notification area is absent from
+  `list_windows` (its only presence is a `NotifyIcon` inside the untitled `Shell_TrayWnd`). `tray_icons()`
+  enumerates the tray *by meaning* (scoped to the notification-area toolbars + overflow flyout, excluding
+  taskbar buttons), and `tray_context()` reuses F186's `#32768` menu walk to operate it. Proven
+  `_probe_tray.py` 8/8: a hidden-Form NotifyIcon fixture, absent from `list_windows`, is discovered by its
+  tooltip and driven through its context menu (effects verified via a sentinel file). Kept here as a pointer.
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
