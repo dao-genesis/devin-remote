@@ -21,6 +21,9 @@ function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { fai
 const seg = switchSrc.match(/function _lscOf\(s\)\{[\s\S]*?(?=function sessId)/);
 if (!seg) { console.error("FAIL: 未找到 _lscOf/sessStatus 区段"); process.exit(1); }
 const sessStatus = eval("(function(){\n" + seg[0] + "\nreturn sessStatus;})()");
+// 同段已含账号级额度对账 quotaLive + sessStatusA (插于 sessStatus 与 sessId 之间)
+const quotaLive  = eval("(function(){\n" + seg[0] + "\nreturn quotaLive;})()");
+const sessStatusA = eval("(function(){\n" + seg[0] + "\nreturn sessStatusA;})()");
 
 // ── 问题② 核心: 额度耗尽必须单列 exhausted, 绝不当「完成」 ──
 {
@@ -67,6 +70,46 @@ const sessStatus = eval("(function(){\n" + seg[0] + "\nreturn sessStatus;})()");
   ok(sessStatus({ latest_status_contents: JSON.stringify({ reason: "out_of_quota" }) })[0] === "exhausted",
      "latest_status_contents 是 JSON 字符串也能解析 → exhausted");
 }
+
+// ══ 账号级额度对账 (本轮根因·根治「满额号被陈旧会话 reason=out_of_quota 误标额度耗尽」) ══
+// quotaLive: 实时额度判活
+{
+  ok(quotaLive({ dPct: 100, overageDollars: 68.57 }) === true, "dPct=100 满额 + $68.57 → 有额度(true)");
+  ok(quotaLive({ dPct: 100, overageDollars: 0 }) === true, "dPct=100 (日免费配额满) 即便 $0 → 有额度(true·可用免费配额)");
+  ok(quotaLive({ dPct: 0, wPct: 30, overageDollars: 0 }) === true, "日配额耗尽但周配额 30% 余 → 有额度(true)");
+  ok(quotaLive({ dPct: 0, wPct: 0, overageDollars: 12.5 }) === true, "日/周配额耗尽但 $12.5 余 → 有额度(true)");
+  ok(quotaLive({ dPct: 0, wPct: 0, overageDollars: 0 }) === false, "日/周配额=0 且 $0 → 确无额度(false·真耗尽)");
+  ok(quotaLive({ dPct: 0 }) === null, "dPct=0 但美金未知 → 不确定(null·保守)");
+  ok(quotaLive({}) === null, "无任何额度字段 → 不确定(null)");
+  ok(quotaLive(null) === null, "quota 缺失 → null");
+}
+// sessStatusA: 账号实时额度纠偏陈旧会话原因
+{
+  const sleptConv = { status: "suspended", latest_status_contents: { reason: "out_of_quota" } };
+  ok(sessStatus(sleptConv)[0] === "exhausted", "前提: 该会话裸判(无账号上下文) = exhausted");
+  ok(sessStatusA(sleptConv, { quota: { dPct: 100, overageDollars: 68.57 } })[0] === "finished",
+     "核心: 满额$68的号·会话历史 out_of_quota → 对账降级为 finished (不误标额度耗尽)");
+  ok(sessStatusA(sleptConv, { quota: { dPct: 100, overageDollars: 0 } })[0] === "finished",
+     "dPct=100 日免费配额满 → 降级 finished (即便 $0)");
+  ok(sessStatusA(sleptConv, { quota: { dPct: 0, wPct: 0, overageDollars: 0 } })[0] === "exhausted",
+     "真耗尽号(日/周=0·$0) → 保留 exhausted 额度耗尽");
+  ok(sessStatusA(sleptConv, { quota: { dPct: 0 } })[0] === "exhausted",
+     "额度未知(null·保守) → 保留官方 exhausted 信号");
+  ok(sessStatusA(sleptConv, null)[0] === "exhausted", "无账号上下文 → 保留 exhausted");
+  // 非耗尽分类不受影响
+  ok(sessStatusA({ latest_status_contents: { enum: "running" } }, { quota: { dPct: 100 } })[0] === "running",
+     "running 会话不受额度对账影响");
+  ok(sessStatusA({ latest_status_contents: { user_action_required: "respond" } }, { quota: { dPct: 100 } })[0] === "blocked",
+     "blocked/待处理 不受额度对账影响");
+}
+// 源级护栏: 各聚合站点确实走账号级对账 (满额号绝不误报)
+ok(/function quotaLive\(q\)\{/.test(switchSrc) && /function sessStatusA\(s,acct\)\{/.test(switchSrc),
+   "源级: switch.html 内联 quotaLive + sessStatusA 账号级对账");
+ok(/var c=sessStatusA\(s,a\)\[0\]/.test(switchSrc),
+   "源级: dvOverviewHtml 统计走 sessStatusA(账号级对账)");
+ok(/var ssr=sessStatusA\(s,a\);/.test(switchSrc),
+   "源级: _pollOneAcc(通知源) 走 sessStatusA → 满额号不触发 _quotaAlert");
+// (devin-cloud.js / engine.html 的账号级对账源级护栏在文件末尾 cloudSrc/engineSrc 声明后断言)
 
 // ── 源级护栏: 状态传播链完整 ──
 ok(/cls!=="running"&&cls!=="awaiting"&&cls!=="blocked"&&cls!=="exhausted"/.test(switchSrc),
@@ -126,6 +169,22 @@ const consoleSrc= fs.readFileSync(path.join(ENGINE, "console.html"), "utf8");
 // ① canonical sessStatus 为共享单一真源 (web/device 共用 → 与 APK 完全一致)
 ok(/function sessStatus\(s\)/.test(cloudSrc) && /sessStatus:\s*sessStatus/.test(cloudSrc),
    "源级: devin-cloud.js 导出 canonical sessStatus (单一真源)");
+// ①' 账号级额度对账跨文件护栏 (本轮根因·此处 cloudSrc/engineSrc 已声明)
+ok(/function quotaLive\(q\)/.test(cloudSrc) && /quotaLive:\s*quotaLive,\s*sessStatusA:\s*sessStatusA/.test(cloudSrc),
+   "源级: devin-cloud.js 导出 canonical quotaLive + sessStatusA");
+ok(/DaoCloud\.sessStatusA\?DaoCloud\.sessStatusA\(s,u\.a\)/.test(engineSrc),
+   "源级: engine.html recentConvAll 每条走账号级对账 sessStatusA(满额号不误标耗尽)");
+ok(/var _qLive=\(DaoCloud\.quotaLive\?DaoCloud\.quotaLive\(accs\[i\]\.quota\)/.test(engineSrc) &&
+   /QUOTA_RE\.test\(qsig\) && _qLive!==true/.test(engineSrc),
+   "源级: engine.html trackStuck 满额号(quotaLive===true)不计 quota 耗尽");
+{
+  const seg3 = cloudSrc.match(/function quotaLive\(q\)[\s\S]*?\n\s*(?=root\.DaoCloud)/);
+  if (!seg3) { console.error("FAIL: devin-cloud.js 未找到 quotaLive/sessStatusA 区段"); process.exit(1); }
+  const cloudQuotaLive = eval("(function(){\n" + seg3[0] + "\nreturn quotaLive;})()");
+  ok(cloudQuotaLive({ dPct: 100, overageDollars: 68.57 }) === true, "devin-cloud.quotaLive: 满额 → true");
+  ok(cloudQuotaLive({ dPct: 0, wPct: 0, overageDollars: 0 }) === false, "devin-cloud.quotaLive: 真耗尽 → false");
+  ok(cloudQuotaLive({ dPct: 0 }) === null, "devin-cloud.quotaLive: 美金未知 → null (保守)");
+}
 {
   const seg2 = cloudSrc.match(/var QUOTA_RE\s*=[\s\S]*?\n\s*(?=root\.DaoCloud)/);
   if (!seg2) { console.error("FAIL: devin-cloud.js 未找到 sessStatus 区段"); process.exit(1); }

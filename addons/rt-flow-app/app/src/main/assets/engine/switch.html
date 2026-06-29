@@ -604,10 +604,23 @@ function sessStatus(s){
   if(/run|working|active|execut|in_progress|streaming|coding|planning|testing|thinking|busy|resumed|started/.test(en+" "+act+" "+cur)) return ["running","运行"];
   return (en||status)?["running","运行"]:["idle","空闲"];
 }
+// 账号实时额度判活 (与 devin-cloud.js 同源·正本清源): 根治「满额号被陈旧会话 reason=out_of_quota 误标额度耗尽」。
+//   单条会话的 reason 只是它「当时」触顶休眠的瞬时原因; 日/周配额会重置、Extra Usage 美金可续 → 账号此刻是否真耗尽
+//   须以实时额度为准。返回 true=当前确有可用额度; false=确无; null=未知(保守·信官方信号)。
+function quotaLive(q){
+  if(!q||typeof q!=="object") return null;
+  if(typeof q.dPct==="number"&&q.dPct>0) return true;
+  if(typeof q.wPct==="number"&&q.wPct>0) return true;
+  if(typeof q.overageDollars==="number") return q.overageDollars>0;
+  if(typeof q.dPct==="number"||typeof q.wPct==="number") return null;
+  return null;
+}
+// 账号级对账: sessStatus 判 exhausted 且账号此刻确有额度 → 归「完成(休眠)」, 不计耗尽、不发通知。
+function sessStatusA(s,acct){ var st=sessStatus(s); if(st[0]==="exhausted"&&quotaLive(acct&&acct.quota)===true) return ["finished","完成"]; return st; }
 function sessId(s){ return s.devin_id||s.session_id||s.id||""; }
 function dvOverviewHtml(a,i,sess,kn,pb,sc,git){
   var running=0,awaiting=0,blocked=0,exhausted=0;
-  sess.forEach(function(s){ var c=sessStatus(s)[0]; if(c==="running")running++; else if(c==="awaiting")awaiting++; else if(c==="blocked")blocked++; else if(c==="exhausted")exhausted++; });
+  sess.forEach(function(s){ var c=sessStatusA(s,a)[0]; if(c==="running")running++; else if(c==="awaiting")awaiting++; else if(c==="blocked")blocked++; else if(c==="exhausted")exhausted++; });
   var q=a.quota||{};
   // 余额未知(billing 瞬时失败) → 不显 $0.00, 显 $-- (问题①: 不误判已用完)
   var credits = (typeof q.dPct!=="number") ? "" : (typeof q.overageDollars!=="number" ? "额度 $--" : (ovDollars(q)>0 ? ("额度 $"+ovDollars(q).toFixed(2)) : "额度 $0.00"));
@@ -636,7 +649,7 @@ function dvOverviewHtml(a,i,sess,kn,pb,sc,git){
   if(!sess.length) h+='<div style="color:#666">（无对话）</div>';
   var limit=sess.slice(0,40);
   for(var si=0;si<limit.length;si++){
-    var s=limit[si]; var ss=sessStatus(s); var did=_esc(sessId(s)); var title=s.title||s.name||did;
+    var s=limit[si]; var ss=sessStatusA(s,a); var did=_esc(sessId(s)); var title=s.title||s.name||did;
     h+='<div class="dv-sess" data-did="'+did+'">'+
        '<input type="checkbox" class="dvc-chk" data-i="'+i+'" data-did="'+did+'" onclick="dvcSync('+i+')">'+
        '<span class="st '+ss[0]+'">'+ss[1]+'</span>'+
@@ -1045,7 +1058,7 @@ async function _pollOneAcc(a, realNo){
   var running=0,awaiting=0,blocked=0,exhausted=0,items=[];
   // 该账号「最新对话名」(按近期活跃时间戳择取·与状态无关): 用户要求——只要账号有对话就显示其最新对话名, 无对话才回退账号名。
   var latestName="", latestTs=-1;
-  (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var tt=s.title||s.name||""; if(tt){ var ts=_sessTs(s); if(ts>=latestTs){ latestTs=ts; latestName=tt; } } var ssr=sessStatus(s); var cls=ssr[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked"&&cls!=="exhausted")return; items.push({cls:cls,title:tt,uuid:uuid,fsig:_liveSig(s),_stuck:(cls==="blocked"?(ssr[2]||"action"):(cls==="exhausted"?"quota":undefined))}); });
+  (r.sessions||[]).forEach(function(s){ var uuid=s.devin_id||s.session_id||s.id||""; if(_untrackedUuids.has(uuid))return; var tt=s.title||s.name||""; if(tt){ var ts=_sessTs(s); if(ts>=latestTs){ latestTs=ts; latestName=tt; } } var ssr=sessStatusA(s,a); var cls=ssr[0]; if(cls!=="running"&&cls!=="awaiting"&&cls!=="blocked"&&cls!=="exhausted")return; items.push({cls:cls,title:tt,uuid:uuid,fsig:_liveSig(s),_stuck:(cls==="blocked"?(ssr[2]||"action"):(cls==="exhausted"?"quota":undefined))}); });
   // 逆流兜底: running 项抓事件流判定 等你/额度/报错/停滞 → 转 卡住/额度耗尽
   for(var k=0;k<items.length;k++){ if(items[k].cls==="running"){ try{ await refineStuck(a, items[k]); }catch(e){} } }
   items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="exhausted")exhausted++; else if(it.cls==="blocked")blocked++; });
