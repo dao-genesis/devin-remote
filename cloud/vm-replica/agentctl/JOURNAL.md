@@ -7119,4 +7119,97 @@ backend for all core semantic operations.
 
 ---
 
+### F218 — ComboBox commit boundary: `uia_select` highlights, `uia_click` commits
+
+| date | 2026-06-28 |
+|---|---|
+| surface | Calculator combo box "Programmer" item selected via `uia_select` but mode unchanged |
+| root cause | AT-SPI `Selection` only *highlights* (pre-selects); the combo collapses on click |
+
+**Boundary.** `uia_select` moves the highlight in a combo's dropdown, but the
+combo commits only when the user presses Enter or clicks the item — "highlight ≠
+commit".  The floor does not auto-commit because some workflows deliberately
+browse without committing (keyboard → arrow → ESC to cancel).
+
+**Pattern.**  `uia_expand(combo)` → `uia_click(item)` to commit; `uia_select` for
+preview-without-commit.  Documented as known boundary, not a bug.
+
+---
+
+### F219 — Label-shadow rect preference + GTK menubar type fallback
+
+| date | 2026-06-28 |
+|---|---|
+| surface | `uia_click(name='Filters')` on GIMP returns False; `uia_menu('Help','About')` fails |
+| root cause 1 | DFS finds a label node (rect=None) before the operable menu node |
+| root cause 2 | GIMP menubar entries are type "Menu", not "MenuItem" (Qt/KDE convention) |
+
+**Friction 1.** `_impl_uia_find` / `_find_acc` returned the first DFS match
+unconditionally.  Label/text nodes share names with operable controls but carry
+`rect=None`.  All rect-clicking callers (uia_click, uia_invoke, uia_menu) failed.
+
+**Fix 1.** DFS now tracks `first_any` but prefers the first match whose
+`_acc_rect` is not None.  Falls back to `first_any` only if no rect-valid match
+exists → labels are still findable for read-only queries.
+
+**Friction 2.** `uia_menu` hard-coded `ctype="menuitem"` for the top-level
+menubar entry.  GIMP (GTK) exposes those as `"menu"`, not `"menuitem"`.
+
+**Fix 2.** Try `"menuitem"` first; if not found or rect=None, try `"menu"`.
+
+**Proof.** GIMP `uia_click(name='Filters')` → True.
+GIMP `uia_menu('Help','About GIMP')` → True.
+
+---
+
+### F220 — Ellipsis mismatch: `_match` rejects "Preferences..." vs "Preferences"
+
+| date | 2026-06-29 |
+|---|---|
+| surface | Inkscape `uia_menu('Edit', 'Preferences...')` fails — item named "Preferences" |
+| root cause | `_match` substring check: "preferences..." ∉ "preferences" |
+
+**Friction.** The user (or AI) naturally writes `"Preferences..."` because the
+menu label shows an ellipsis.  But the AT-SPI accessible name is `"Preferences"`
+(no dots).  Since `"preferences..."` is *not* a substring of `"preferences"`,
+`_match` rejects it.  The reverse works (`"Preferences"` ∈ `"Preferences..."`)
+but is fragile and unintuitive.
+
+**Fix.** `_strip_ellipsis(s)` strips trailing `...` / `…` (U+2026) and whitespace;
+`_match` tries the exact/substring test first, then falls back to
+stripped-vs-stripped.  Bidirectional: `"Preferences..."` ↔ `"Preferences"`.
+
+**Also:** `uia_menu` now retries with `uia_invoke` when the rect-click on a
+menubar entry fails to produce visible submenu items — wxWidgets menus (Audacity)
+need the AT-SPI Action interface to open.
+
+**Proof.** After fix: Inkscape `uia_menu('Edit','Preferences...')` → True (was
+False). VLC `uia_menu('Media','Open File')` → True (matches "Open File...").
+KWrite `uia_menu('File','Open')` → True (matches "Open..."). 8/8 tests pass.
+
+---
+
+### F221 — `ctype='edit'` matches text *labels*, not editable fields
+
+| date | 2026-06-29 |
+|---|---|
+| surface | KDE file dialog `uia_find(name='File name:', ctype='edit')` returns the static label |
+| root cause | `_ROLE_ALIAS` maps `"edit"→"text"`, AT-SPI uses role `"text"` for BOTH labels AND input fields |
+
+**Friction.** In the KDE Open dialog, "File name:" appears twice in the AT-SPI
+tree: once as a label (not editable, rect 491,693) and once as the actual input
+field (editable, rect 574,693).  Both have role="text".  `uia_find(ctype='edit')`
+hit the label first in DFS → click/paste went to a non-editable widget.
+
+**Fix.** When the caller asked for `ctype` ∈ `{edit, textbox, entry}` and the
+element's AT-SPI role is "text", additionally check `STATE_EDITABLE` (state
+constant 8).  Non-editable "text" nodes are rejected → the actual input field
+is returned.
+
+**Also proven.** Full file-dialog chain: `uia_menu('File','Open')` → dialog
+opens → `uia_set_value(dlg, '/tmp/test_open_file.txt', name='File name:', ctype='edit')`
+→ Enter → KWrite loads file with correct content.  9/9 regression pass.
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

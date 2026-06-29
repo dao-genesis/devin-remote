@@ -541,6 +541,14 @@ def uia_menu(win: int, *path: str, pause: float = 0.45) -> bool:
         return False
     _click_center(top["rect"])
     time.sleep(pause)
+    # F220: wxWidgets (Audacity) menus don't open from a rect-click on the
+    # menubar entry; the AT-SPI Action interface ("click" action) is needed.
+    # If no submenu items appeared after the rect-click, retry with uia_invoke.
+    if len(path) > 1:
+        probe = _find_menuitem(path[1])
+        if not probe:
+            uia_invoke(win, name=path[0], ctype="menu")
+            time.sleep(pause)
     return _walk_menu_path(path[1:], pause)
 
 
