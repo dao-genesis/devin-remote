@@ -6287,6 +6287,17 @@ function _getRevproxy() {
   }
   return _revproxyMod;
 }
+// 把上游真观测到的付费配额态(ok/exhausted)回灌 revproxy → 面板着色绿/红。
+function _signalPremiumQuota(state) {
+  if (state !== "ok" && state !== "exhausted") return;
+  try {
+    const m = _getRevproxy();
+    if (m && m.setPremiumQuota && m.getPremiumQuota && m.getPremiumQuota() !== state) {
+      m.setPremiumQuota(state);
+      log("[revproxy] premiumQuota ← " + state + " (上游实测)");
+    }
+  } catch (_) {}
+}
 // ── 官方直通·捕帧复用 ─────────────────────────────────────────────────────
 //   反者道之动·闭环自举: 捕最近一帧真 GetChatMessage 请求, 换入新 user turn 后
 //   真转云端官方推理链, 解码回包文本。免费档(swe-1-6 等)即便付费配额耗尽仍可出包。
@@ -6304,24 +6315,77 @@ function _captureChatFrame(req, body) {
     headers: hdr,
     at: Date.now(),
   };
+  try {
+    if (fs.existsSync(path.join(__dirname, "_dump_chatframe"))) {
+      fs.writeFileSync("/tmp/_chatframe_dump.bin", _lastChatFrame.body);
+      fs.writeFileSync(
+        "/tmp/_chatframe_dump.json",
+        JSON.stringify({ url: req.url, len: _lastChatFrame.body.length, headers: hdr }, null, 2),
+      );
+      log("[revproxy][dump] chat frame → /tmp/_chatframe_dump.bin " + _lastChatFrame.body.length + "B url=" + req.url);
+    }
+  } catch (_) {}
 }
 
-// 取捕获帧, 把「最近一条消息内容」换成 newText → 返回新 Connect 帧 Buffer。
+// 取捕获帧最末一条消息正文 → 换成 newText → 返回新 Connect 帧 Buffer。
+// 道·schema 自适应: 消息数组随 cascade_wire 演化(老 V2=field2/content2,
+//   新 wire=field3/content3)。不写死字段号——在候选数组里挑「末条目能解析且
+//   内含字符串正文」者为消息数组, 末条目内取「最长字符串子字段」为正文(即 user turn 文本)。
+// 取某消息条目里「最长 UTF-8 字符串子字段」= 正文。返回 {field, text}; 无则 {field:null,text:""}。
+function _msgContentInfo(entry) {
+  const raw = entry && entry.b !== undefined ? entry.b : entry;
+  if (!raw) return { field: null, text: "" };
+  let sub;
+  try {
+    sub = parseProto(Buffer.isBuffer(raw) ? raw : Buffer.from(raw));
+  } catch (_) {
+    return { field: null, text: "" };
+  }
+  let bestField = null;
+  let best = "";
+  for (const k of Object.keys(sub)) {
+    const e0 = sub[k] && sub[k][0];
+    if (e0 && e0.w === 2 && e0.b && e0.b.length) {
+      const s = Buffer.from(e0.b).toString("utf8");
+      if (s.length > best.length) {
+        best = s;
+        bestField = Number(k);
+      }
+    }
+  }
+  return { field: bestField, text: best };
+}
+// 在候选字段里挑「末条目能解析且含字符串正文」者为消息数组, 返回 {field, arr}。
+function _findMsgsArray(top) {
+  for (const fn of [3, 2, 10, 17]) {
+    const cand = top[fn];
+    if (!cand || !cand.length) continue;
+    if (!cand.every((e) => e.w === 2)) continue;
+    if (_msgContentInfo(cand[cand.length - 1]).text) return { field: fn, arr: cand };
+  }
+  return null;
+}
+// 把捕获帧「最末一条消息的正文子字段」整体换成 newText, 其余字节逐一原样保留。
+// 用 _pbRebuildField 沿 path 重算长度前缀(消息数组末项 → 该项内正文子字段),
+// 不靠 _pbCloneSwapStrings(其仅换 <200B 纯 ASCII 短串, 不适合多行长正文)。
 function _swapLastUserMsg(capturedBody, newText) {
   const frames = parseFrames(capturedBody);
   if (!frames.length) return null;
   const payload = frames[0].payload; // 已在 parseFrames 内解压
   const top = parseProto(payload);
-  const fn = findMsgsField(top);
-  const arr = top[fn];
-  if (!arr || !arr.length) return null;
-  const last = arr[arr.length - 1];
-  let oldText = "";
-  try {
-    oldText = extractMsgContent(parseProto(Buffer.from(last.b)));
-  } catch (_) {}
-  if (!oldText) return null;
-  const swapped = _pbCloneSwapStrings(payload, { [oldText]: newText });
+  const found = _findMsgsArray(top);
+  if (!found) return null;
+  const msgsField = found.field;
+  const total = found.arr.length;
+  const info = _msgContentInfo(found.arr[total - 1]);
+  if (!info.field || !info.text) return null;
+  const newBuf = Buffer.from(String(newText), "utf8");
+  let seen = 0;
+  const swapped = _pbRebuildField(payload, msgsField, (entry) => {
+    seen++;
+    if (seen !== total) return entry; // 仅改最末一条消息
+    return _pbRebuildField(entry, info.field, () => newBuf);
+  });
   if (!swapped || !swapped.length || !_pbParseOk(swapped)) return null;
   return buildFrame(0, swapped);
 }
@@ -6366,6 +6430,9 @@ function _officialChatReplay(target, norm, sink) {
       if (!H1_CONN_HEADERS.has(k)) headers[k] = v;
     delete headers["content-length"];
     headers["content-length"] = String(newBody.length);
+    // buildFrame 恒输出 uncompressed → 必须摘掉 gzip 声明, 否则上游误按 gzip 解致 400。
+    delete headers["connect-content-encoding"];
+    delete headers["grpc-encoding"];
     let session;
     try {
       session = _getH2Session(route.host);
@@ -6398,18 +6465,46 @@ function _officialChatReplay(target, norm, sink) {
         const buf = Buffer.concat(chunks);
         if (status && status >= 400) {
           const txt = buf.toString("utf8").slice(0, 300);
+          const exhausted = /quota|exhaust|governor|precondition|Authentication Fails/i.test(txt);
+          if (exhausted) _signalPremiumQuota("exhausted");
           sink.onError &&
             sink.onError("官方上游 " + status + ": " + txt);
           return resolve({
             ok: false,
-            quota: /quota|exhaust|governor|Authentication Fails/i.test(txt)
-              ? "exhausted"
-              : undefined,
+            quota: exhausted ? "exhausted" : undefined,
           });
         }
-        const strs = extractUtf8StringsFromGrpcBody(buf, { minLen: 1 }) || [];
+        // Connect 流式回包 = 若干 data 帧 (proto · 含助手增量文本) + 末尾一个
+        // end-stream 帧 (flags bit1=0x02, 载荷为 JSON: {} 正常 / {"error":{code,message}})。
+        // HTTP 200 也可能在 end-stream 帧里带 quota 错误(此处即配额信号真源)。
+        const frames = parseFrames(buf); // 已按需解 gzip
+        let streamErr = null;
+        const dataStrs = [];
+        for (const f of frames) {
+          if (f.flags & 0x80) continue; // grpc-web trailer
+          if (f.flags & 0x02) {
+            // Connect end-stream: JSON
+            try {
+              const j = JSON.parse(f.payload.toString("utf8").trim() || "{}");
+              if (j && j.error) streamErr = j.error;
+            } catch (_) {}
+            continue;
+          }
+          // data 帧: 按 proto 收集 UTF-8 串
+          try {
+            _gatherUtf8Strings(parseProto(f.payload), dataStrs, 0, 12, 1);
+          } catch (_) {}
+        }
+        if (streamErr) {
+          const blob = (streamErr.code || "") + " " + (streamErr.message || "");
+          const exhausted = /quota|exhaust|governor|precondition|Authentication Fails/i.test(blob);
+          if (exhausted) _signalPremiumQuota("exhausted");
+          sink.onError &&
+            sink.onError("官方上游错误: " + (streamErr.message || streamErr.code || blob));
+          return resolve({ ok: false, quota: exhausted ? "exhausted" : undefined });
+        }
         // 拼接增量文本: 去除明显的元数据短串(模型名/uid/枚举)
-        const text = strs
+        const text = dataStrs
           .filter(
             (s) =>
               s &&
@@ -6417,13 +6512,15 @@ function _officialChatReplay(target, norm, sink) {
               !/^[A-Z_]{3,}$/.test(s),
           )
           .join("");
-        const out = text || strs.join("");
+        const out = text || dataStrs.join("");
         if (!out) {
           sink.onError && sink.onError("官方回包解码为空(可能为纯工具调用流)");
           return resolve({ ok: false });
         }
         sink.onText && sink.onText(out);
         sink.onEnd && sink.onEnd();
+        // 仅付费档真出包才可证明付费配额尚存; 免费档成功不代表付费可用。
+        if (target && !target.free) _signalPremiumQuota("ok");
         resolve({ ok: true, quota: "ok" });
       } catch (e) {
         sink.onError && sink.onError("官方回包解码异常: " + e.message);
@@ -7369,5 +7466,11 @@ module.exports = {
     _pbEncVarint,
     _PRO_BADGE,
     _loadFullModelCatalog,
+    _pbRebuildField,
+    _swapLastUserMsg,
+    _findMsgsArray,
+    _msgContentInfo,
+    parseFrames,
+    parseProto,
   },
 };

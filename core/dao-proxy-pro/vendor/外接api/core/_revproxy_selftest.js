@@ -361,6 +361,62 @@ let KEY = "";
   );
   ok("预热提示经错误流回传", /预热|officialChat|未就绪/.test(r.body));
 
+  console.log("[12] 官方直通捕获帧解析: 末条消息正文整体换为 newText(逐字节保形)");
+  {
+    const SRC = require("../../bundled-origin/source.js")._test;
+    const { _pbTag, _pbEncVarint, _swapLastUserMsg, parseFrames, parseProto, _findMsgsArray, _msgContentInfo } = SRC;
+    const strF = (f, s) => {
+      const b = Buffer.from(s, "utf8");
+      return Buffer.concat([_pbTag(f, 2), _pbEncVarint(b.length), b]);
+    };
+    const varF = (f, v) => Buffer.concat([_pbTag(f, 0), _pbEncVarint(v)]);
+    const wrap = (f, body) => Buffer.concat([_pbTag(f, 2), _pbEncVarint(body.length), body]);
+    const frameOf = (payload) => {
+      const h = Buffer.alloc(5);
+      h[0] = 0;
+      h.writeUInt32BE(payload.length, 1);
+      return Buffer.concat([h, payload]);
+    };
+    const lastContent = (frame) => {
+      const top = parseProto(parseFrames(frame)[0].payload);
+      const fnd = _findMsgsArray(top);
+      return _msgContentInfo(fnd.arr[fnd.arr.length - 1]).text;
+    };
+    // 新 wire: 消息数组=field3, 每条 role=field2(varint) + content=field3(string)
+    const longTxt = "<additional_metadata>\nNOTE: open files\n" + "x".repeat(300) + "\n用户问题";
+    const newWire = Buffer.concat([
+      wrap(3, Buffer.concat([varF(2, 1), strF(3, "old user A")])),
+      wrap(3, Buffer.concat([varF(2, 1), strF(3, longTxt)])),
+    ]);
+    const f1 = _swapLastUserMsg(frameOf(newWire), "PINGPONG_NEW");
+    ok("新wire(field3)末条正文被换", f1 && lastContent(f1) === "PINGPONG_NEW");
+    ok("新wire首条正文保持原样", f1 && /old user A/.test(f1.toString("utf8")) && !/x{300}/.test(f1.toString("utf8")));
+    // 老 wire: 消息数组=field2, content=field2
+    const oldWire = Buffer.concat([
+      wrap(2, Buffer.concat([varF(1, 1), strF(2, "first turn")])),
+      wrap(2, Buffer.concat([varF(1, 1), strF(2, "second turn long " + "y".repeat(250))])),
+    ]);
+    const f2 = _swapLastUserMsg(frameOf(oldWire), "PINGPONG_OLD");
+    ok("老wire(field2)末条正文被换", f2 && lastContent(f2) === "PINGPONG_OLD");
+    // 空/坏帧不崩
+    ok("空帧返回 null 不崩", _swapLastUserMsg(Buffer.alloc(0), "x") === null);
+
+    // 回包解码: Connect end-stream 帧(gzip)载 JSON quota 错误 → parseFrames 解压 + JSON.parse 取 error
+    const zlib = require("zlib");
+    const errJson = JSON.stringify({ error: { code: "failed_precondition", message: "Your daily usage quota has been exhausted." } });
+    const gz = zlib.gzipSync(Buffer.from(errJson, "utf8"));
+    const esHdr = Buffer.alloc(5);
+    esHdr[0] = 0x03; // bit0=compressed + bit1=end-stream
+    esHdr.writeUInt32BE(gz.length, 1);
+    const esFrame = Buffer.concat([esHdr, gz]);
+    const dec = parseFrames(esFrame);
+    ok("end-stream gzip 帧被解压", dec.length === 1 && /quota has been exhausted/.test(dec[0].payload.toString("utf8")));
+    let parsedErr = null;
+    try { parsedErr = JSON.parse(dec[0].payload.toString("utf8")).error; } catch (_) {}
+    ok("end-stream JSON error 可解析", parsedErr && parsedErr.code === "failed_precondition");
+    ok("quota 信号正则命中 exhausted", /quota|exhaust|precondition/i.test((parsedErr.code || "") + " " + (parsedErr.message || "")));
+  }
+
   revproxy.setPremiumQuota("unknown");
   mock.close();
   console.log(failures === 0 ? "\nALL PASS" : "\n" + failures + " FAIL");

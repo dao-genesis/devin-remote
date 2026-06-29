@@ -2,6 +2,33 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.325 · 官方直通回包解码归一(配额信号真源 · Connect end-stream gzip 解)
+: 修复 ④ 模型反代「官方直通」实测：捕获帧已能正确改写并真转上游(v9.9.324),但回包恒报
+「官方回包解码为空」。真因：上游 Connect 流式回包的**收尾帧 = gzip 压缩的 end-stream 帧**
+(flags bit0=compressed + bit1=end-stream, 载荷为 JSON `{}`/`{"error":{code,message}}`),旧解码把
+gzip 字节直喂 `parseProto` 取串 → 必空;且 HTTP 200 也会在此帧内携带 quota 错误(**此处才是
+配额信号真源**)。
+- `_officialChatReplay` 回包处理重写：经 `parseFrames` 解 gzip 后,**按帧型分流**——end-stream
+  帧(bit1)按 JSON 解析取 `error`;data 帧按 proto 收集助手增量文本。检出 `quota/exhaust/
+  governor/precondition` → `_signalPremiumQuota("exhausted")` → 付费档实时转红、免费档恒绿。
+- 实测(账号当日配额已尽)：付费 claude-sonnet 经反代真转上游 → 解出真·上游报文
+  「Your daily usage quota has been exhausted…」→ premiumQuota 翻 exhausted → 119 模型即时
+  **18 绿(8 免费+10 渠道) / 101 红 / 0 琥珀**,与渠道配置同源全量着色一致。
+- 自检 [12] 扩充：end-stream gzip 帧解压 + JSON error 解析 + quota 正则命中,共 32 断言全过。
+
+v9.9.324 · 官方直通捕获帧解析归一(反者道之动 · schema 自适应 · 逐字节保形)
+: 修复 ④ 模型反代「官方直通」实测报「捕获帧解析失败」。真因：新版 Cascade GetChatMessage
+wire 已将**消息数组从 field2 迁到 field3、正文从 sub-field2 迁到 sub-field3**，旧 `findMsgsField`
+误把 field2(15883B 系统提示长串·`looksLikeUtf8Text` 命中)当消息数组、且 `_pbCloneSwapStrings`
+仅换 <200B 纯 ASCII 短串、容不下多行长正文 → 解析必败。
+- `_swapLastUserMsg` 重写为 **schema 自适应**：候选 [3,2,10,17] 里挑「末条目可解析且含字符串正文」
+  者为消息数组，末条目内取「最长 UTF-8 子字段」为正文，经 `_pbRebuildField` 沿 path 逐字节重算
+  长度前缀替换（只改末条、其余原样保形），不再依赖短串白名单。
+- `_officialChatReplay` 摘除 `connect-content-encoding/grpc-encoding` 头（`buildFrame` 恒输出
+  uncompressed，留 gzip 声明会被上游误解致 400）。
+- 自检新增 [12] 捕获帧解析回归：新wire(field3)/老wire(field2)末条正文换入 + 首条保形 + 空帧不崩。
+  revproxy 自检 29 断言全过。
+
 v9.9.323 · 模型反代「全量呈现 + 配额着色 + 官方直通」(道法自然 · 万物并育而不相害)
 : ④ 模型反代不再只列已接通的若干模型，而是像「② 渠道配置」一样**全量呈现一切可反代之模型**——
 官方全量目录(108)+ 运行时官方家族 + 模型路由表 + 渠道显式 models，去重并育于一张列表。
