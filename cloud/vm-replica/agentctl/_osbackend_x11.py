@@ -1286,6 +1286,8 @@ def _atspi():
         at.atspi_rect_free.argtypes = [ctypes.c_void_p]
         g.g_free.argtypes = [ctypes.c_void_p]
         go.g_object_unref.argtypes = [ctypes.c_void_p]
+        go.g_object_ref.restype = ctypes.c_void_p
+        go.g_object_ref.argtypes = [ctypes.c_void_p]
         if at.atspi_init() not in (0, 1):  # 0 = newly inited, 1 = already
             return None
         st["at"], st["g"], st["go"], st["ok"] = at, g, go, True
@@ -1307,6 +1309,11 @@ def _gstr(ptr):
 # touches — leaking is free and the OS reclaims every byte on exit, while not
 # unref'ing is what makes the walk crash-proof against a live, mutating tree.
 _LEAK_REFS = False
+
+
+def _ref(acc):
+    if acc and not _LEAK_REFS:
+        _atspi_state["go"].g_object_ref(acc)
 
 
 def _unref(acc):
@@ -1615,7 +1622,14 @@ def _impl_uia_find(win: int, name=None, ctype=None):
     """Locate one control inside a window by meaning — by accessible name and/or
     role — and return ``{"name","ctype","rect":(x,y,w,h)}`` (screen rect) or
     None. The crucial bridge: semantics in, geometry out, so the pixel/input
-    floor can then click the centre of a control it found by *what it is*."""
+    floor can then click the centre of a control it found by *what it is*.
+
+    F219: prefer the first match that has a valid screen rect.  Labels / text
+    nodes often share a name with the operable control they describe but carry
+    rect=None (INT32_MIN filtered by F215); returning those would make every
+    caller (uia_menu, uia_context, …) unable to click.  We DFS for the first
+    match with a rect; if none has one we still return the first match (the
+    caller can decide what to do with a rect-less element)."""
     at = _atspi()
     if not at:
         return None
@@ -1624,25 +1638,50 @@ def _impl_uia_find(win: int, name=None, ctype=None):
         if not fr:
             return None
 
+        first_any = [None]
+
         def visit(acc, depth):
             if depth > 0 and _match(at, acc, name, ctype):
-                return {"name": _acc_name(at, acc), "ctype": _acc_role(at, acc),
-                        "rect": _acc_rect(at, acc)}
+                r = _acc_rect(at, acc)
+                entry = {"name": _acc_name(at, acc), "ctype": _acc_role(at, acc),
+                         "rect": r}
+                if first_any[0] is None:
+                    first_any[0] = entry
+                if r is not None:
+                    return entry          # preferred: has screen rect
             return None
 
         try:
-            return _walk(at, fr, visit)
+            hit = _walk(at, fr, visit)
+            return hit if hit else first_any[0]
         finally:
             _unref(fr)
 
 
 def _find_acc(at, fr, name, ctype):
-    """DFS for the matching accessible itself (caller must _unref the result)."""
+    """DFS for the matching accessible itself (caller must _unref the result).
+
+    F219: prefer the first match whose screen rect is valid (not None / not
+    INT32_MIN-filtered).  Label/text shadows share a name with the operable
+    control but carry no rect; returning them makes click/invoke always fail."""
+    first_any = [None]
+
     def visit(acc, depth):
         if depth > 0 and _match(at, acc, name, ctype):
-            return acc
+            if first_any[0] is None:
+                first_any[0] = acc
+                _ref(acc)
+            r = _acc_rect(at, acc)
+            if r is not None:
+                return acc            # preferred: has screen rect
         return None
-    return _walk(at, fr, visit)
+
+    hit = _walk(at, fr, visit)
+    if hit:
+        if first_any[0] and first_any[0] != hit:
+            _unref(first_any[0])
+        return hit
+    return first_any[0]
 
 
 def _click_rect(win: int, rect) -> bool:

@@ -532,7 +532,11 @@ def uia_menu(win: int, *path: str, pause: float = 0.45) -> bool:
         return False
     tap(0x1B)  # ESC — clear any half-open menu so the walk starts clean
     time.sleep(0.15)
+    # F219: menubar entries may be either "menuitem" (Qt/KDE) or "menu" (GTK/GIMP);
+    # try both before giving up.
     top = uia_find(win, name=path[0], ctype="menuitem")
+    if not top or not top.get("rect"):
+        top = uia_find(win, name=path[0], ctype="menu")
     if not top or not top.get("rect"):
         return False
     _click_center(top["rect"])
