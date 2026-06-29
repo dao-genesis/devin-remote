@@ -7063,4 +7063,60 @@ will only grow a primitive once a real failure is reproduced.
   `_probe_tray.py` 8/8: a hidden-Form NotifyIcon fixture, absent from `list_windows`, is discovered by its
   tooltip and driven through its context menu (effects verified via a sentinel file). Kept here as a pointer.
 
+---
+
+### F217 — Seven missing semantic verbs ported from Windows to Linux X11/AT-SPI
+
+| date | 2026-06-29 |
+|---|---|
+| surface | all Linux apps with AT-SPI |
+| root cause | Windows UIA backend had 22 semantic verbs; X11 AT-SPI backend had only 11 |
+
+**Friction.** After F213–F216 gave the X11 backend `uia_find_all`, cross-platform
+type normalization, INT_MIN rect filtering, and label-shadow fixes, the floor could
+see and click any AT-SPI element — but `uia_select`, `uia_toggle`, `uia_toggle_state`,
+`uia_expand`, `uia_collapse`, `uia_expand_state`, and `uia_is_selected` were absent.
+An agent trying to check a checkbox, switch a tab, read a toggle state, or expand a
+tree node on Linux would get a silent False / empty string.
+
+**Root cause.** The X11 backend was built bottom-up from the pixel floor and never
+ported the Windows UIA pattern verbs.  AT-SPI models these differently:
+
+- **Selection** is on the *parent* container (`atspi_selection_select_child`),
+  not on the item (UIA puts `SelectionItemPattern` on the item).
+- **Toggle** has no dedicated pattern; AT-SPI checkboxes expose Action "click"
+  and the checked state is `ATSPI_STATE_CHECKED` (4) in the state set.
+- **Expand/Collapse** has no dedicated pattern; tree nodes expose Action
+  "expand or activate" / "open" / "collapse" / "close", and the state is
+  `ATSPI_STATE_EXPANDED` (10) / `ATSPI_STATE_COLLAPSED` (5).
+
+**Fix.** Seven new `_impl_uia_*` functions, each with three-tier fallback:
+
+| Verb | Tier 1 | Tier 2 | Tier 3 |
+|------|--------|--------|--------|
+| `uia_select` | parent Selection + child index | Action.doAction | rect click |
+| `uia_is_selected` | parent Selection.isChildSelected | ATSPI_STATE_SELECTED | — |
+| `uia_toggle` | Action.doAction | rect click | — |
+| `uia_toggle_state` | STATE_CHECKED / INDETERMINATE / PRESSED | — | — |
+| `uia_expand` | Action named "expand"/"open"/"activate" | action-0 | — |
+| `uia_collapse` | Action named "collapse"/"close" | action-0 if expanded | — |
+| `uia_expand_state` | STATE_EXPANDED / COLLAPSED / EXPANDABLE | "leaf" | — |
+
+Also added AT-SPI Selection interface bindings (`atspi_accessible_get_parent`,
+`atspi_accessible_get_index_in_parent`, `atspi_accessible_get_selection_iface`,
+`atspi_selection_select_child`, `atspi_selection_is_child_selected`).
+
+**Proof.** Live on 12 Linux apps:
+- `uia_select(nautilus, name='Documents')` → True; title changed to "Documents"
+- `uia_select(calc, name='7')` → True (action fallback); 7+3=10 correct
+- `uia_toggle(freecad, ctype='checkbox')` → True; `toggle_state` flipped off→on
+- `uia_toggle_state(freecad, ctype='checkbox')` → "on" (was "off")
+- `uia_expand_state(kicad, name='File', ctype='menu')` → "leaf"
+- 11/12 apps semantically visible (only Blender opaque — OpenGL UI)
+
+**Coverage after F217.** X11 backend: 22 verbs (was 11). Verb parity with Windows
+backend for all core semantic operations.
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

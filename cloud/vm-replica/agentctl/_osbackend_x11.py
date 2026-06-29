@@ -1272,6 +1272,16 @@ def _atspi():
         at.atspi_accessible_get_state_set.argtypes = [ctypes.c_void_p]
         at.atspi_state_set_contains.restype = ctypes.c_int
         at.atspi_state_set_contains.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        at.atspi_accessible_get_parent.restype = ctypes.c_void_p
+        at.atspi_accessible_get_parent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_accessible_get_index_in_parent.restype = ctypes.c_int
+        at.atspi_accessible_get_index_in_parent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_accessible_get_selection_iface.restype = ctypes.c_void_p
+        at.atspi_accessible_get_selection_iface.argtypes = [ctypes.c_void_p]
+        at.atspi_selection_select_child.restype = ctypes.c_int
+        at.atspi_selection_select_child.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        at.atspi_selection_is_child_selected.restype = ctypes.c_int
+        at.atspi_selection_is_child_selected.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
         at.atspi_rect_free.restype = None
         at.atspi_rect_free.argtypes = [ctypes.c_void_p]
         g.g_free.argtypes = [ctypes.c_void_p]
@@ -1812,6 +1822,316 @@ def _impl_uia_click(win: int, name=None, ctype=None) -> bool:
             _unref(fr)
 
 
+# AT-SPI state constants
+_ATSPI_STATE_CHECKED = 4
+_ATSPI_STATE_COLLAPSED = 5
+_ATSPI_STATE_EXPANDED = 10
+_ATSPI_STATE_FOCUSED = 12
+_ATSPI_STATE_INDETERMINATE = 16
+_ATSPI_STATE_PRESSED = 22
+_ATSPI_STATE_SELECTED = 26
+
+
+def _impl_uia_toggle(win: int, name=None, ctype=None) -> bool:
+    """Toggle a checkbox or switch by meaning — the AT-SPI dual of Windows UIA
+    TogglePattern.Toggle.  AT-SPI checkboxes expose Action "toggle" or "click";
+    we invoke the first action.  Falls back to a rect click (F217)."""
+    at = _atspi()
+    if not at:
+        return False
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return False
+        try:
+            result = [False]
+            def visit(acc, depth):
+                if depth <= 0 or not _match(at, acc, name, ctype):
+                    return None
+                action = at.atspi_accessible_get_action_iface(acc)
+                if action:
+                    ok = bool(at.atspi_action_do_action(action, 0, None))
+                    _unref(action)
+                    if ok:
+                        result[0] = True
+                        return "STOP"
+                r = _acc_rect(at, acc)
+                if r:
+                    result[0] = r
+                    return "STOP"
+                return None
+            _walk(at, fr, visit)
+            if result[0] is True:
+                return True
+            if result[0] and result[0] is not False:
+                return _click_rect(win, result[0])
+            return False
+        finally:
+            _unref(fr)
+
+
+def _impl_uia_toggle_state(win: int, name=None, ctype=None) -> str:
+    """Read the toggle state of a checkbox or switch: "on"/"off"/"indeterminate",
+    or "" if not found.  Uses ATSPI_STATE_CHECKED / INDETERMINATE / PRESSED (F217)."""
+    at = _atspi()
+    if not at:
+        return ""
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return ""
+        try:
+            result = [""]
+            def visit(acc, depth):
+                if depth <= 0 or not _match(at, acc, name, ctype):
+                    return None
+                ss = at.atspi_accessible_get_state_set(acc)
+                if not ss:
+                    return "STOP"
+                if at.atspi_state_set_contains(ss, _ATSPI_STATE_INDETERMINATE):
+                    result[0] = "indeterminate"
+                elif (at.atspi_state_set_contains(ss, _ATSPI_STATE_CHECKED) or
+                      at.atspi_state_set_contains(ss, _ATSPI_STATE_PRESSED)):
+                    result[0] = "on"
+                else:
+                    result[0] = "off"
+                _unref(ss)
+                return "STOP"
+            _walk(at, fr, visit)
+            return result[0]
+        finally:
+            _unref(fr)
+
+
+def _impl_uia_expand(win: int, name=None, ctype=None) -> bool:
+    """Expand a tree node, combo box, or disclosure by meaning.  AT-SPI tree
+    nodes / combo boxes expose Action "expand or activate" or "open"; we look
+    for an action whose name contains "expand" or "open" or "activate", else
+    fall back to action-0.  Also checks ATSPI_STATE_EXPANDABLE (F217)."""
+    at = _atspi()
+    if not at:
+        return False
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return False
+        try:
+            result = [False]
+            def visit(acc, depth):
+                if depth <= 0 or not _match(at, acc, name, ctype):
+                    return None
+                action = at.atspi_accessible_get_action_iface(acc)
+                if action:
+                    n = at.atspi_action_get_n_actions(action, None)
+                    best = -1
+                    for i in range(n):
+                        an_ptr = at.atspi_action_get_name(action, i, None)
+                        an = _gstr(an_ptr) if an_ptr else ""
+                        al = an.lower()
+                        if "expand" in al or "open" in al or "activate" in al:
+                            best = i
+                            break
+                    if best < 0 and n > 0:
+                        best = 0
+                    if best >= 0:
+                        ok = bool(at.atspi_action_do_action(action, best, None))
+                        _unref(action)
+                        if ok:
+                            result[0] = True
+                            return "STOP"
+                    else:
+                        _unref(action)
+                return None
+            _walk(at, fr, visit)
+            return result[0]
+        finally:
+            _unref(fr)
+
+
+def _impl_uia_collapse(win: int, name=None, ctype=None) -> bool:
+    """Collapse a tree node or disclosure by meaning.  Looks for an action named
+    "collapse" or "close"; falls back to action-0 if the element is currently
+    expanded (F217)."""
+    at = _atspi()
+    if not at:
+        return False
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return False
+        try:
+            result = [False]
+            def visit(acc, depth):
+                if depth <= 0 or not _match(at, acc, name, ctype):
+                    return None
+                action = at.atspi_accessible_get_action_iface(acc)
+                if action:
+                    n = at.atspi_action_get_n_actions(action, None)
+                    best = -1
+                    for i in range(n):
+                        an_ptr = at.atspi_action_get_name(action, i, None)
+                        an = _gstr(an_ptr) if an_ptr else ""
+                        al = an.lower()
+                        if "collapse" in al or "close" in al:
+                            best = i
+                            break
+                    if best < 0 and n > 0:
+                        ss = at.atspi_accessible_get_state_set(acc)
+                        if ss and at.atspi_state_set_contains(ss, _ATSPI_STATE_EXPANDED):
+                            best = 0
+                        if ss:
+                            _unref(ss)
+                    if best >= 0:
+                        ok = bool(at.atspi_action_do_action(action, best, None))
+                        _unref(action)
+                        if ok:
+                            result[0] = True
+                            return "STOP"
+                    else:
+                        _unref(action)
+                return None
+            _walk(at, fr, visit)
+            return result[0]
+        finally:
+            _unref(fr)
+
+
+def _impl_uia_expand_state(win: int, name=None, ctype=None) -> str:
+    """Read the expand/collapse state: "expanded"/"collapsed"/"leaf"/"", using
+    ATSPI_STATE_EXPANDABLE / EXPANDED / COLLAPSED (F217)."""
+    at = _atspi()
+    if not at:
+        return ""
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return ""
+        try:
+            result = [""]
+            def visit(acc, depth):
+                if depth <= 0 or not _match(at, acc, name, ctype):
+                    return None
+                ss = at.atspi_accessible_get_state_set(acc)
+                if not ss:
+                    return "STOP"
+                expandable = at.atspi_state_set_contains(ss, 9)  # EXPANDABLE
+                expanded = at.atspi_state_set_contains(ss, _ATSPI_STATE_EXPANDED)
+                collapsed = at.atspi_state_set_contains(ss, _ATSPI_STATE_COLLAPSED)
+                _unref(ss)
+                if expanded:
+                    result[0] = "expanded"
+                elif collapsed:
+                    result[0] = "collapsed"
+                elif expandable:
+                    result[0] = "collapsed"
+                else:
+                    result[0] = "leaf"
+                return "STOP"
+            _walk(at, fr, visit)
+            return result[0]
+        finally:
+            _unref(fr)
+
+
+def _impl_uia_select(win: int, name=None, ctype=None) -> bool:
+    """Select an item by meaning — the AT-SPI dual of Windows UIA
+    SelectionItemPattern.Select.  AT-SPI models selection on the *parent*
+    container (``atspi_accessible_get_selection_iface`` on the parent, then
+    ``atspi_selection_select_child(parent, child_index)``).  When the parent
+    has no Selection interface, falls back to Action.doAction (the same
+    gesture as invoking a Qt tab, for instance), then to a rect click — the
+    same three-tier strategy the Windows verb uses (F217)."""
+    at = _atspi()
+    if not at:
+        return False
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return False
+        try:
+            result = [False]
+            def visit(acc, depth):
+                if depth <= 0 or not _match(at, acc, name, ctype):
+                    return None
+                # Tier 1: parent's Selection interface
+                parent = at.atspi_accessible_get_parent(acc, None)
+                if parent:
+                    sel = at.atspi_accessible_get_selection_iface(parent)
+                    if sel:
+                        idx = at.atspi_accessible_get_index_in_parent(acc, None)
+                        if idx >= 0:
+                            ok = bool(at.atspi_selection_select_child(sel, idx, None))
+                            _unref(sel)
+                            if ok:
+                                _unref(parent)
+                                result[0] = True
+                                return "STOP"
+                        else:
+                            _unref(sel)
+                    _unref(parent)
+                # Tier 2: Action.doAction (Qt tabs, custom lists)
+                action = at.atspi_accessible_get_action_iface(acc)
+                if action:
+                    ok = bool(at.atspi_action_do_action(action, 0, None))
+                    _unref(action)
+                    if ok:
+                        result[0] = True
+                        return "STOP"
+                # Tier 3: click rect (last resort)
+                r = _acc_rect(at, acc)
+                if r:
+                    result[0] = r
+                    return "STOP"
+                return None
+            _walk(at, fr, visit)
+            if result[0] is True:
+                return True
+            if result[0] and result[0] is not False:
+                return _click_rect(win, result[0])
+            return False
+        finally:
+            _unref(fr)
+
+
+def _impl_uia_is_selected(win: int, name=None, ctype=None):
+    """Read whether an item is selected — the AT-SPI dual of Windows UIA
+    SelectionItemPattern.CurrentIsSelected.  Returns True/False, or None if
+    the parent has no Selection interface (F217)."""
+    at = _atspi()
+    if not at:
+        return None
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return None
+        try:
+            result = [None]
+            def visit(acc, depth):
+                if depth <= 0 or not _match(at, acc, name, ctype):
+                    return None
+                parent = at.atspi_accessible_get_parent(acc, None)
+                if parent:
+                    sel = at.atspi_accessible_get_selection_iface(parent)
+                    if sel:
+                        idx = at.atspi_accessible_get_index_in_parent(acc, None)
+                        if idx >= 0:
+                            result[0] = bool(at.atspi_selection_is_child_selected(
+                                sel, idx, None))
+                        _unref(sel)
+                    _unref(parent)
+                if result[0] is None:
+                    # No Selection on parent — check ATSPI_STATE_SELECTED (26)
+                    ss = at.atspi_accessible_get_state_set(acc)
+                    if ss:
+                        result[0] = bool(at.atspi_state_set_contains(ss, 26))
+                        _unref(ss)
+                return "STOP"
+            _walk(at, fr, visit)
+            return result[0]
+        finally:
+            _unref(fr)
+
+
 # ── The semantic floor, isolated ────────────────────────────────────────────
 # Each verb above walks the accessible tree of a *live* app — one that rebuilds
 # its tree while we read it. libatspi force-finalizes a node the instant its
@@ -1834,10 +2154,20 @@ _WORKER_IMPL = {
     "set_value": _impl_uia_set_value,
     "focus": _impl_uia_focus,
     "click": _impl_uia_click,
+    "select": _impl_uia_select,
+    "is_selected": _impl_uia_is_selected,
+    "toggle": _impl_uia_toggle,
+    "toggle_state": _impl_uia_toggle_state,
+    "expand": _impl_uia_expand,
+    "collapse": _impl_uia_collapse,
+    "expand_state": _impl_uia_expand_state,
 }
 _WORKER_DEFAULT = {
     "name": "", "children": [], "find_all": [], "find": None, "invoke": False,
     "get_value": "", "set_value": False, "focus": False, "click": False,
+    "select": False, "is_selected": None,
+    "toggle": False, "toggle_state": "", "expand": False, "collapse": False,
+    "expand_state": "",
 }
 _WORKER_PATH = os.path.abspath(__file__)
 _RESULT_TAG = "\x01ATSPI_RESULT\x01"
@@ -1919,6 +2249,34 @@ def uia_focus(win: int, name=None, ctype=None) -> bool:
 
 def uia_click(win: int, name=None, ctype=None) -> bool:
     return _atspi_call("click", win, name=name, ctype=ctype)
+
+
+def uia_select(win: int, name=None, ctype=None) -> bool:
+    return _atspi_call("select", win, name=name, ctype=ctype)
+
+
+def uia_is_selected(win: int, name=None, ctype=None):
+    return _atspi_call("is_selected", win, name=name, ctype=ctype)
+
+
+def uia_toggle(win: int, name=None, ctype=None) -> bool:
+    return _atspi_call("toggle", win, name=name, ctype=ctype)
+
+
+def uia_toggle_state(win: int, name=None, ctype=None) -> str:
+    return _atspi_call("toggle_state", win, name=name, ctype=ctype)
+
+
+def uia_expand(win: int, name=None, ctype=None) -> bool:
+    return _atspi_call("expand", win, name=name, ctype=ctype)
+
+
+def uia_collapse(win: int, name=None, ctype=None) -> bool:
+    return _atspi_call("collapse", win, name=name, ctype=ctype)
+
+
+def uia_expand_state(win: int, name=None, ctype=None) -> str:
+    return _atspi_call("expand_state", win, name=name, ctype=ctype)
 
 
 def _atspi_worker_main(req_b64: str) -> None:
