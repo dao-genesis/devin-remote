@@ -11777,8 +11777,10 @@ function _dvStopAuto() {
   }
 }
 async function _dvAutoBackupRun() {
-  const emails = devinCloud.cachedEmails();
-  if (!emails.length) return;
+  // v4.10.0 · 修复: 不再仅依赖 cachedEmails(12h TTL), 改为遍历全池逐号按需登录 (同 devinCleanupZeroQuota 模式)
+  //   旧逻辑: cachedEmails() 只返回 12h 内活跃账号 → 闲置(恰好需要清理的)账号永远被跳过 → 归零清理「根本没有用」。
+  //   新逻辑: 遍历 _store.accounts, 用 _dvAuthFor(i) 按需登录, 登录失败(无密码/凭证坏)才跳过。
+  if (!_store.accounts.length) return;
   const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
   const mode = _cfg("devinCloudBackupMode", "folder");
   const threshold = Math.max(0, +_cfg("devinCloudAutoBackupThreshold", 3) || 3);
@@ -11789,9 +11791,14 @@ async function _dvAutoBackupRun() {
   const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", true);
   const removeThreshold = Math.max(0, +_cfg("devinCloudAutoRemoveThreshold", 0) || 0);
   const removeEmails = [];
-  for (const acc of _store.accounts) {
-    if (!emails.includes((acc.email || "").toLowerCase())) continue;
-    const auth = devinCloud.getCachedAuth(acc.email);
+  for (let _abIdx = 0; _abIdx < _store.accounts.length; _abIdx++) {
+    const acc = _store.accounts[_abIdx];
+    if (!acc || !acc.email) continue;
+    // v4.10.0: 按需登录 — 缓存有效直接用, 过期则 _dvAuthFor 重新登录(需密码), 无密码/登录失败 → 跳过
+    let auth = devinCloud.getCachedAuth(acc.email);
+    if (!auth) {
+      try { const r = await _dvAuthFor(_abIdx); if (r && r.ok) auth = r; } catch {}
+    }
     if (!auth) continue;
     // 编号(同步 WAM)+ 密码 写入备份目录命名 (账号+密码表层·编号 1:1)
     const naming = { accountNo: _dvAccountNo(acc.email), password: acc.password || "" };
@@ -13444,7 +13451,7 @@ async function handleWebviewMessage(msg) {
         if (!idx.length) { _toast("\u2717 请先勾选账号"); break; }
         const sharedPat = (msg.pat && String(msg.pat).trim()) || "";
         _toast("\u23F3 批量连 Git " + idx.length + " 账号 → 同一 GitHub …");
-        let ok = 0, fail = 0, warn = 0; const fails = [];
+        let ok = 0, fail = 0, warn = 0, secOk = 0; const fails = [];
         for (const i of idx) {
           const r = await _dvAuthFor(i);
           if (!r.ok) { fail++; fails.push((r.email || "?") + ":登录失败"); continue; }
@@ -13453,19 +13460,30 @@ async function handleWebviewMessage(msg) {
           try {
             const res = await devinGit.connectWithPat(r.auth, pat);
             if (res.appConn) {
-              warn++; fails.push(r.email + ":连到别的身份@" + res.appConn.name + "(需上官网移除App后归一)");
+              // v4.10.0 · PAT双流: 连仓库失败(appConn/ghost)时, 仍注入 PAT 为 GITHUB_PAT 密钥 → 对话可用
+              warn++;
+              try { await devinGit.ensureGithubPatSecret(r.auth, pat); secOk++; } catch (e2) {}
+              fails.push(r.email + ":仓库连别身份@" + res.appConn.name + "(已注密钥·对话可用)");
             } else if (res.ok) {
               ok++;
               _toast("\u23F3 [" + (ok + fail + warn) + "/" + idx.length + "] " + r.email.split("@")[0] + " → @" + (res.login || "?") + " " + res.repoCount + "仓");
             } else if (res.ghost) {
-              fail++; fails.push(r.email + ":平台孤儿态(已注册无连接·需上官网移除GitHub后重连)");
-            } else { fail++; fails.push(r.email + ":" + (res.invalidPat ? "PAT无效" : (res.error || "未生效"))); }
+              // v4.10.0 · PAT双流: 孤儿态无法连仓库, 但 PAT 密钥仍可注入 → 对话正常
+              warn++;
+              try { await devinGit.ensureGithubPatSecret(r.auth, pat); secOk++; } catch (e2) {}
+              fails.push(r.email + ":孤儿态(已注密钥·对话可用·如需仓库请上官网操作)");
+            } else if (res.invalidPat) {
+              fail++; fails.push(r.email + ":PAT无效");
+            } else {
+              // v4.10.0 · 连接未生效但不致命 → 尝试注入密钥兜底
+              try { await devinGit.ensureGithubPatSecret(r.auth, pat); secOk++; warn++; fails.push(r.email + ":仓库未生效(已注密钥兜底)"); } catch (e2) { fail++; fails.push(r.email + ":" + (res.error || "未生效")); }
+            }
           } catch (e) { fail++; fails.push(r.email + ":" + String((e && e.message) || e)); }
           _dvOverviewCache.delete(r.email.toLowerCase());
         }
-        _toast((fail || warn ? "\u26A0" : "\u2713") + " 批量连 Git: 归一 " + ok + " · 异身份 " + warn + " · 失败 " + fail + "/" + idx.length);
-        _notify("info", "批量归一连接 GitHub: 归一到本 PAT 主 " + ok + " · 连到别的身份 " + warn + " · 失败 " + fail + "/" + idx.length + (fails.length ? ("\n明细: " + fails.join("; ")) : ""));
-        log("[git] batch-connect ok=" + ok + " warn=" + warn + " fail=" + fail + (fails.length ? "\n  " + fails.join("\n  ") : ""));
+        _toast((fail ? "\u26A0" : "\u2713") + " 批量连 Git: 归一 " + ok + " · 密钥兜底 " + secOk + " · 失败 " + fail + "/" + idx.length);
+        _notify("info", "批量归一连接 GitHub: 归一到本PAT主 " + ok + " · 密钥兜底(对话可用) " + secOk + " · 失败 " + fail + "/" + idx.length + (fails.length ? ("\n明细: " + fails.join("; ")) : ""));
+        log("[git] batch-connect ok=" + ok + " warn=" + warn + " secOk=" + secOk + " fail=" + fail + (fails.length ? "\n  " + fails.join("\n  ") : ""));
         _broadcastMsg({ type: "gitBatchDone" });
         break;
       }
