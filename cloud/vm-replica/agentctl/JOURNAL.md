@@ -7763,3 +7763,12 @@ Regression after the change: `test_live.py --offline` 701/719 — no new failure
 ---
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
+
+## F240 — colour segmentation needed an ROI window to stay cheap and local
+
+While pushing Mahjongg deeper, I used the intended `colour -> template` flow to
+find tile faces. `match_template()` already takes `search=...`, but
+`find_color()` / `find_color_blobs()` scanned the whole desktop and could pull
+in same-coloured blobs from other windows. I added the same ROI window to both
+primitives and clamped the scan to that region. On the same Mahjongg frame,
+the white-blob query dropped from 275 full-screen blobs to 93 ROI blobs.
