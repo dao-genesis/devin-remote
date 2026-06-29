@@ -732,9 +732,10 @@
   //   本页同时发起的多路 RPC (镜像轮询 / 下载列表 / 金库 history+history_devin 双取 / claim / ping)
   //   一旦并发涌入就互相挤占 → 后到者迟迟轮不到 → 8~12s 超时 / 504 → 历史半页空、镜像第二行消失、
   //   下载列表空。实测: 三路 vaultLoad 并发 → 仅 1 路 200, 余 2 路 abort/504; 改串行后逐路皆 200。
-  //   修法: 所有 relay() 进单通道 FIFO (并发上限 1), 每帧超时从"真正派发(出队)"起算 —— 排队期间
-  //   不计时, 杜绝"还没轮到就先超时"。成功路径与旧版逐字节一致, 仅去除自相挤占。
-  var _rqQueue=[], _rqInFlight=0, _RQ_MAX=1;
+  //   修法: 所有 relay() 进单通道 FIFO (并发上限 2), 每帧超时从"真正派发(出队)"起算 —— 排队期间
+  //   不计时, 杜绝"还没轮到就先超时"。P2P 可真并行; HTTP 第二帧排在手机队列上, 不比浏览器排更差。
+  //   上限 2 而非 1: 避免重 RPC(recentConvAll 等)独占通道致镜像/金库读取全部饿死 → 第二行消失/对话追踪空。
+  var _rqQueue=[], _rqInFlight=0, _RQ_MAX=2;
   function _rqPump(){
     while(_rqInFlight<_RQ_MAX && _rqQueue.length){
       var j=_rqQueue.shift(); _rqInFlight++;
@@ -1194,9 +1195,10 @@
     _mirrorBusy=true;
     relay("/api/rpc", { cmd:"browseListTabs" }, 12000).then(function(res){
       if(res && res.status===200 && res.body && res.body.ok){ _mirrorEverLoaded=true; APK_TABS=res.body.tabs||[]; renderMirror(); claimFront(); }
-    }).catch(function(){}).finally(function(){ _mirrorBusy=false; });
+      else { renderMirror(); }   // 非200也渲染行(显示「正在同步/暂无」), 绝不让第二行塌陷消失
+    }).catch(function(){ renderMirror(); }).finally(function(){ _mirrorBusy=false; });
   }
-  function startMirror(){ if(_mirrorPollT) return; pollApkTabs(); _mirrorPollT=setInterval(pollApkTabs, 3500); }
+  function startMirror(){ if(_mirrorPollT) return; renderMirror(); pollApkTabs(); _mirrorPollT=setInterval(pollApkTabs, 3500); }
   document.addEventListener("visibilitychange", function(){ if(!document.hidden){ pollApkTabs(); broadcastLiveAccts(true); } });
   startMirror();
 

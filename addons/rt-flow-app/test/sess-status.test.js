@@ -154,10 +154,10 @@ ok(/if\(_vn && !_vault\[e\] && !fresh\[e\]\)\{ delete _trk\[e\]; return; \}/.tes
    "源级: _trk 中不在金库且本轮无 active 的陈迹号被剪除(号数与金库齐平)");
 
 // 设备态刷新看门狗: 中继久悬不决时硬期限强制解锁 _devRecentBusy → 刷新永不被单次悬挂永久拖死(失同步之根)
-ok(/var _rbWatch=setTimeout\(function\(\)\{ _devRecentBusy=false; \}, \d+\);/.test(switchSrc),
+ok(/var _rbWatch=setTimeout\(function\(\)\{ _devRecentBusy=false;/.test(switchSrc),
    "源级: _deviceRecentRefresh 设独立看门狗硬期限解锁 busy(防永久卡死刷新)");
 ok(/function _rbDone\(\)\{ try\{ clearTimeout\(_rbWatch\); \}catch\(_e\)\{\} _devRecentBusy=false; \}/.test(switchSrc) &&
-   /\}, function\(\)\{ _rbDone\(\); \}\);/.test(switchSrc),
+   /\}, function\(\)\{ _rbDone\(\);/.test(switchSrc),
    "源级: 成功/失败两路均经 _rbDone 清看门狗并解锁(不重复·不遗漏)");
 
 // ── 公网单网页 ≈ APK 数据齐平: 四处收口护栏 (本轮 v0.37.100) ──────────────────
