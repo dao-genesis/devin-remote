@@ -7464,4 +7464,62 @@ fallback branch:
 
 ---
 
+## F231 — self-drawn surfaces have geometry but no value; the atlas cold-start
+
+**Friction.**  gnome-mines exposes 64 anonymous AT-SPI `Button`s — exact cell
+geometry (`rect`) but **no name, no value, no state**.  Whether a cell is
+unrevealed, empty, a 1–8, or flagged is *pixels only*.  This is every
+self-drawing surface: OpenGL/SDL games, `<canvas>`, custom toolkits — the
+semantic channel goes blind exactly where the board lives.
+
+**What the floor already had (不為而成).**  The pixel channel was *not* blind:
+the F058/F103–F108 ladder — `edge_signature` → `read_glyph`/`read_glyph_conf`
+→ `segment_run`/`split_run` → `read_text`/`read_words`/`read_block` — already
+reads canvas text **dependency-free**, by matching each glyph's scale-free edge
+signature against a reference *atlas*.  Verified live: a 3-entry atlas built from
+three labelled cells reads the rest of the gnome-mines board exactly
+(`read_glyph` → 3,2,1,2 ✓).  So for the *warm* path the floor was already
+capable, and that path stays the runtime reader (no third-party dep, scale-free,
+honest about unknowns — 大器免成).
+
+**The real gap — cold start.**  `read_glyph` needs an atlas, and the atlas is
+built from *labelled* reference glyphs.  An agent dropped into a game it has
+never seen cannot label a glyph without first reading it — a chicken-and-egg the
+atlas readers cannot break on their own.  That, precisely, is the uncovered
+friction: **bootstrapping the first labels for an unknown font.**
+
+**Fix** (`osctl.py`).  New *optional* engine-backed reader `ocr_text(region,
+whitelist, psm, scale, invert, rgb, size)` — the cold-start complement to the
+atlas ladder:
+- grabs `region` (or whole screen), greyscales, optional invert (light-on-dark),
+  nearest-neighbour upscale (small glyphs OCR poorly at native size), pipes a
+  hand-rolled PNG to `tesseract` and returns the recognised text, stripped.
+- `whitelist` constrains the alphabet (biggest accuracy win on short
+  fixed-charset readouts); `psm` picks segmentation (7=line, 10=char, 6=block);
+  `rgb`/`size` reuse one capture across many regions.
+- tesseract is resolved once via `_ocr_engine` and is **optional**: the floor
+  imports and runs without it, and the dependency-free atlas ladder remains the
+  default reader.  `ocr_text` reads glyphs with *zero* prior atlas — so it can
+  label reference cells, from which a fast `read_glyph` atlas is built for the
+  rest of the session.  Engine for the cold start, structure for the warm path.
+
+**The hybrid (道生二).**  AT-SPI gives *where* (cell rects), the pixel reader
+gives *what* (the digit) — neither alone drives the board, together they do.
+Driver `_game_mines.py` reads the full 8×8 state, then a constraint solver
+(single-cell rule + subset elimination + global mine-count endgame + lowest-risk
+guess) plays via XTEST left/right clicks.
+
+**Proof.**
+- `ocr_text` reads the self-drawn "4/10" flag counter (no AT-SPI value) and
+  individual cell digits (verified against screenshot: 2,3,2 ✓).
+- dependency-free `read_glyph` reads the same digits from a 3-glyph atlas
+  (3,2,1,2 ✓) — the warm path the floor already owned.
+- Full-board read in 3.5 s: digits **and** flags ('F', detected by corner colour
+  staying on the unrevealed tile) all match the rendered board.
+- Solver flagged 5/10 mines correctly and opened safe cells purely from pixel
+  perception; refused to guess when no deterministic move existed (knows what it
+  doesn't know).
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
