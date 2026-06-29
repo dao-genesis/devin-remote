@@ -7622,4 +7622,65 @@ self-drawn avatar that neither colour nor frame-diff could pin down.  Full
 
 ---
 
+## F234 — appearance matching is swamped by the *background* baked into a crop
+
+**Friction.**  With F233 making `match_template` fast, the next practice step was
+to actually *track* Tux as he walks the SuperTux worldmap.  A tight crop of him
+on the snow scored 0 at rest — perfect — but the instant he stepped to the
+adjacent node the same template's best score jumped to **34 483** and the
+arg-min wandered off him (and, with several snowball/penguin look-alikes and a
+dark brown path on the map, sometimes locked onto the wrong thing entirely).
+The localiser that was exact one frame ago became unreliable the next.
+
+**Root cause — the crop is mostly *not the sprite*.**  A 40×48 bounding box of a
+penguin is ~1 400 background pixels (snow) and only ~500 sprite pixels.  SAD
+weights every pixel equally, so the score is dominated by whether the *snow*
+under the template still matches — which it does at the original node and does
+*not* one node over (different snow/path/water mix).  The matcher was, in
+effect, tracking the scenery inside Tux's bounding box, not Tux.  This is the
+mirror of F233: F233 made the channel *fast*, F234 is about making it *see the
+right thing*.
+
+**Fix** (`osctl.py`, `match_template`).  One optional argument, no change to the
+default path:
+
+```python
+match_template(patch, pw, ph, ..., mask=None)   # mask: pw*ph bytes, !=0 = foreground
+```
+
+A non-zero mask byte marks a sprite pixel to score; a zero byte is skipped.
+Implemented by precomputing, per row, the tuple of foreground columns — when
+`mask is None` that tuple is the full row, so the slide stays **bit-identical**
+to the F233 path (verified: rest score still 0, the `template matched every
+candidate` regression still passes).  With a silhouette mask only the sprite's
+own pixels enter the SAD, so a changing background no longer swamps it.  This is
+the human channel — track the *shape*, ignore the scenery (少則得: score less,
+match better).
+
+**Proof (deterministic, isolates background from animation noise).**  A
+synthetic search image: the real Tux foreground pasted on a brown path field at
+x≈60, and a plain snow block (matching the template's own snow background) at
+x≈270.
+
+| matcher | picks | score | verdict |
+|---------|-------|------:|---------|
+| unmasked | x≈284 (the snow decoy) | 41 588 | **wrong** — background dominates |
+| masked   | x≈60 (the real Tux)    | **0**  | **right** — silhouette only |
+
+**Honest limit (not over-claimed).**  Masking removes *background domination*,
+not every ambiguity: on the live worldmap Tux also *idle-animates* (the static
+template drifts as he bobs/blinks) and a coarse dark-luma silhouette still has
+some affinity for dark path/tree clutter.  Robust closed-loop tracking of an
+animated sprite among look-alikes is a further problem (a multi-frame template
+or a tighter alpha mask would help) and is deliberately left open rather than
+forced.  What F234 fixes at the root is the *background-in-the-crop* error,
+proven above; the primitive now scores what you tell it is the sprite.
+
+Regression after the change: `test_live.py --offline` 699/719 — no new failures
+(the ~20 are the standing no-window-manager focus/clipboard/Z-order tests and
+OCR glyph-atlas misreads, e.g. `RED`→`LED`; count fluctuates run-to-run as those
+are nondeterministic; the `template matched every candidate` check passes).
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
