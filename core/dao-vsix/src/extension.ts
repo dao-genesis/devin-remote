@@ -12231,7 +12231,7 @@ function _unwrapSearchRedirect(u) {
                 while (raw.length % 4) raw += '=';
                 let dec = '';
                 try { dec = Buffer.from(raw, 'base64').toString('utf8'); } catch (e) { dec = ''; }
-                if (dec) { try { return new URL(dec, u.origin).href; } catch (e) { /* 守柔 */ } }
+                if (dec && (/^https?:\/\//i.test(dec) || dec.startsWith('/'))) { try { return new URL(dec, u.origin).href; } catch (e) { /* 守柔 */ } }
             }
         }
         if (/(^|\.)google\.[a-z.]+$/.test(host) && /^\/url$/i.test(path)) {
