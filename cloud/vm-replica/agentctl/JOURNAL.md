@@ -8082,3 +8082,52 @@ F245 (don't read what you won't look at) and F246 (don't recompute what hasn't
 changed) are the two halves of the same 損之又損 on the polling loop: the grab and
 the diff. Together a poll over a still region went from a 1600x1200 grab + 137k-px
 Python diff to a foveal sub-rect read + a `memcmp`.
+
+---
+
+> 大制無割。 A board is one lattice, not two hundred lonely reads. Give the floor
+> the verb for the whole grid, and let it look only where each cell lives.
+
+## F247 — every grid game hand-rolls the cell loop; the floor had no grid verb
+
+F245/F246 made the *waiters* cheap; this turns to the other dominant perception
+shape. Tetris, mines, sudoku, a chess board, a mahjongg layer — a recurring GUI
+is a fixed lattice of equal cells and the question is *what is in every cell*. But
+the floor only had `sample_color` (one region), so each of those games re-derives
+the same geometry and runs the same double loop, one `sample_color` (or crop) per
+cell. Two costs paid every frame: the caller recomputes the grid, and each call
+crops a fresh buffer and averages the **whole** cell. Measured on quadrapassel's
+10x20 playfield: reading the board cell-by-cell is **17.7 ms/frame** — which a
+real-time game (a piece falling, sampled and steered per tick) cannot spend.
+
+**Fix** — `osctl.sample_grid(bbox, cols, rows, inset=0.25)`: the grid
+generalisation of `sample_color`. Divides `bbox` into `cols`x`rows` equal cells
+and returns a `rows`x`cols` array of `{r,g,b,count}` means from ONE capture. Two
+losses cut (損之又損): it indexes straight into the single capture instead of
+allocating a crop per cell, and `inset` averages only each cell's central window
+(default 0.25 keeps the central half per axis, ~a quarter of the pixels) — which
+both **skips the grid lines / borders between cells** so a separator never
+pollutes a cell's colour, and reads far fewer pixels. For a uniform cell the
+centre mean equals the whole-cell mean.
+
+**Proof.** *Synthetic* (`_test_f247.py`, pure-Python 10x20 lattice, each cell a
+bright border over a distinct centre): every cell resolves to its *centre* colour
+exactly — border ignored — and equal to a centred `sample_color`; `inset=0`
+instead reads the whole cell and the border pulls the mean off the centre (proving
+it really samples the centre window); arg validation (`cols/rows>=1`,
+`0<=inset<0.5`, `rgb` needs `size`); **2.8x** faster than the per-cell whole-cell
+loop. *Live* (quadrapassel, board `(564,326,838,876)`, 10x20): `sample_grid`
+**6.1 ms** vs the per-cell loop's **17.7 ms** = **2.9x**, and its occupancy map is
+**byte-for-byte identical** to the per-cell read on a clean board (the yellow
+S-piece read at rgb ~(238,219,60) in the right cells). *Closed loop* (perceive →
+act → verify, all through `sample_grid`): fresh game, piece at top with min column
+4; `tap(Left)`x3 (held so the self-drawn canvas samples each rising edge, F232);
+re-read — min column **4 → 1**, an exact three-cell leftward shift, with the piece
+one row lower. The grid was perceived, steered, and confirmed by the new verb
+alone.
+
+Honest attribution: the speedup is the *inset* (reading each cell's centre, not
+its whole area); batching itself is roughly neutral against a per-cell centre
+loop — its gift is the API, the single capture, and the geometry the caller no
+longer repeats. `sample_color` maps one place→colour; `sample_grid` maps a whole
+lattice→colour, the read a grid GUI actually asks for.

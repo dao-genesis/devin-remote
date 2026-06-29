@@ -1962,6 +1962,78 @@ def sample_color(bbox: tuple[int, int, int, int], rgb: bytes | None = None,
     return {"r": sr // n, "g": sg // n, "b": sb // n, "count": n}
 
 
+def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
+                rgb: bytes | None = None, size: tuple[int, int] | None = None,
+                inset: float = 0.25) -> list[list[dict]]:
+    """Classify a regular ``cols``x``rows`` grid of cells by colour, from ONE
+    capture — the grid generalisation of :func:`sample_color` (F247).
+
+    Tetris, mines, sudoku, a chess board, a mahjongg layer: a recurring GUI is a
+    fixed lattice of equal cells, and the question is *what is in every cell*.
+    The floor only had :func:`sample_color`, which reads one region — so each of
+    those games hand-rolls the same double loop, calling ``sample_color`` (or
+    cropping) once per cell. That is two avoidable costs paid on every frame:
+    the geometry is recomputed by every caller, and each call crops a fresh
+    buffer and then averages the *whole* cell — hundreds of cells x hundreds of
+    pixels of pure-Python summation, ~18 ms for a 10x20 board — which a real-time
+    game (a falling piece) cannot spend per tick.
+
+    This divides ``bbox`` into ``cols``x``rows`` equal cells and returns a
+    ``rows``x``cols`` list of ``{r, g, b, count}`` cell means. Two losses are cut
+    (損之又損): it indexes straight into the one capture instead of allocating a
+    crop per cell, and it averages only each cell's central window — ``inset`` is
+    the fraction trimmed off every side (default ``0.25`` keeps the central half
+    in each axis, ~a quarter of the pixels), which both skips the grid lines /
+    borders between cells (so a separator never pollutes a cell's colour) and
+    reads far fewer pixels. For a solid-filled cell the centre mean equals the
+    whole-cell mean; ``inset`` only changes which pixels are summed, not the
+    coordinate or packing convention, so each cell matches a centred
+    ``sample_color``. Pass an existing ``rgb``/``size`` to reuse a capture (pair
+    with :func:`capture_patch` to read just the board)."""
+    if cols < 1 or rows < 1:
+        raise ValueError("cols and rows must be >= 1")
+    if not 0.0 <= inset < 0.5:
+        raise ValueError("inset must be in [0.0, 0.5)")
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    x0, y0, x1, y1 = bbox
+    cw = (x1 - x0 + 1) / cols
+    ch = (y1 - y0 + 1) / rows
+    grid = []
+    for r in range(rows):
+        cy0 = y0 + r * ch
+        iy0 = int(cy0 + ch * inset)
+        iy1 = int(cy0 + ch * (1.0 - inset))
+        if iy1 <= iy0:
+            iy1 = iy0 + 1
+        iy0 = max(0, min(iy0, h - 1))
+        iy1 = max(iy0 + 1, min(iy1, h))
+        row = []
+        for c in range(cols):
+            cx0 = x0 + c * cw
+            ix0 = int(cx0 + cw * inset)
+            ix1 = int(cx0 + cw * (1.0 - inset))
+            if ix1 <= ix0:
+                ix1 = ix0 + 1
+            ix0 = max(0, min(ix0, w - 1))
+            ix1 = max(ix0 + 1, min(ix1, w))
+            sr = sg = sb = n = 0
+            for yy in range(iy0, iy1):
+                base = (yy * w + ix0) * 3
+                for k in range(0, (ix1 - ix0) * 3, 3):
+                    sr += rgb[base + k]
+                    sg += rgb[base + k + 1]
+                    sb += rgb[base + k + 2]
+                    n += 1
+            row.append({"r": sr // n, "g": sg // n, "b": sb // n, "count": n})
+        grid.append(row)
+    return grid
+
+
 def locate_change(before: bytes, after: bytes, size: tuple[int, int],
                   tol: int = 12, min_count: int = 30,
                   search: tuple[int, int, int, int] | None = None) -> dict | None:
