@@ -7408,4 +7408,33 @@ else:
 
 ---
 
+## F229 — `_find_menuitem` fails on GIMP 3-level menus (type=Menu + scan depth)
+
+**Friction.**  `uia_menu(gi, 'Filters', 'Blur', 'Gaussian Blur...')` returns
+False.  GIMP's 3-level filter menus (Filters → Blur → Gaussian Blur...) are
+unreachable.
+
+**Root cause (dual).**
+
+1. GIMP submenus ("Blur" under Filters) are AT-SPI type `Menu`, not
+   `MenuItem`.  `_find_menuitem` only searched `ctype="menuitem"`, so the
+   "Blur" submenu entry (with `rect=(570,250,293,25)`) was invisible.
+2. GIMP has 469+ AT-SPI elements.  The old `max_scan=600` reached "Blur /
+   Sharpen" (MenuItem, rect=None) but not the deeper "Blur" (Menu, with rect).
+   At `max_scan=800` the correct element first appears.
+
+**Fix** (`osctl.py`).  In `_find_menuitem`:
+- Search both `ctype="menuitem"` AND `ctype="menu"` (two `uia_find_all` calls)
+- Increase `max_scan` from 600 → 1000
+- Add `best_sub_norect` fallback for compound names (e.g. "Blur / Sharpen")
+  that have no rect
+
+**Proof.**  4/4 pass:
+- Filters > Blur > Gaussian Blur... (3-level): ✓ dialog opens
+- Filters > Distorts > Lens Distortion... (3-level): ✓ dialog opens
+- Edit > Preferences (2-level regression): ✓
+- KWrite File > New (cross-app regression): ✓
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
