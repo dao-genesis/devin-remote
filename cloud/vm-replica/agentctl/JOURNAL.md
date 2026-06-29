@@ -7683,4 +7683,83 @@ are nondeterministic; the `template matched every candidate` check passes).
 
 ---
 
+## F235 — `ocr_text` silently drops round digits at the single-glyph page modes
+
+**Practice that exposed it.**  Driving **gnome-sudoku** end-to-end (read the 9×9
+board → solve → type the answers back).  AT-SPI exposes the toolbar but *not* the
+81 cells or their digits, so the board is read purely by vision — the exact
+cold-start the F231 `ocr_text` reader exists for.  First pass on an Easy puzzle
+read **66/81** cells: every blank was right, but the *givens* `4 6 8 9` came back
+empty or wrong while `1 2 3 7` read fine.  A reader that drops a third of the
+non-blanks cannot close a constraint loop.
+
+**Two false trails, then the root.**  My first driver hard-binarised each cell to
+1-bit before OCR and called tesseract with `--psm 10` ("one character" — the
+obvious mode for a lone digit).  Both were wrong:
+
+* **Binarising throws away tesseract's signal.**  `ocr_text` already greyscales;
+  feeding a hard 0/255 threshold on top destroys the anti-aliased edges the
+  recogniser keys on.  The round glyphs, whose identity lives in their curves,
+  were the first to go.
+* **`psm=10`/`psm=7` segmentation silently discards a tight isolated glyph.**
+  Measured on the ten hardest live cells (greyscale, correct geometry):
+
+  | psm | reads of `6 9 5 5 6 8 8 4 4 9` | drops |
+  |-----|------------------------------|------:|
+  | 10 (one char)  | `6 _ 5 5 6 8 8 _ _ _` | 4 |
+  | 7 (one line, **default**) | `6 _ 5 5 6 8 8 _ _ _` | 3 |
+  | **6 (block)**  | `6 9 5 5 6 8 8 4 4 9` | **0** |
+
+  Block mode (6) reads every digit; the "single character" modes treat a tight,
+  isolated round glyph as stray ink and emit *nothing*.  With greyscale + `psm=6`
+  the same board read **81/81** through the unchanged primitive — there was no
+  bug in the floor's recognition, only in how the mode was chosen.
+
+**Fix** (`osctl.py`, `ocr_text`).  Keep `psm` as the caller's choice, but when a
+**whitelisted** read returns empty *and the crop actually holds ink*, retry once
+in `fallback_psm` (block, 6) before giving up:
+
+```python
+res = _run(psm)
+if not res and whitelist and fallback_psm and fallback_psm != psm:
+    bg = max(g); ink = sum(1 for v in g if v < bg - 40)   # g = greyscale crop
+    if ink >= max(8, (rw*rh)*3//200):                     # something is there
+        res = _run(fallback_psm)
+```
+
+It only fires on an *empty* result, so it never overrides a hit; it is gated on
+*ink present*, so a genuinely blank region still returns `''` and a
+`' '`-means-empty caller (the F231 minesweeper driver) is untouched.  The
+docstring's old hint ("10 = one character") is corrected — it steered toward the
+mode that drops digits — and the greyscale-not-binarised rule is written down.
+
+**Proof (deterministic, on an unseen Medium puzzle).**  Read every given cell at
+the *default* `psm=7`, fallback off vs on:
+
+| reader | givens read | recovered |
+|--------|------------:|-----------|
+| psm=7, no fallback | 24 | — |
+| psm=7, ink-gated psm=6 fallback | **30** | `(0,3)=4 (1,4)=9 (3,1)=4 (4,2)=9 (5,7)=4 (6,1)=9` |
+
+Every recovered cell is a `4` or a `9` — exactly the round glyphs the line mode
+dropped — and the recovered board is solvable.  Full closed loop recorded:
+`detect_board` recovers grid geometry from the heavy 3×3 box-border lines (no
+hard-coded pixels), `ocr_text` reads the givens, backtracking solves, and
+`click`+`type_unicode` fill all 54 empties → gnome-sudoku shows *"Well done, you
+completed the puzzle"*.  Driver: `_game_sudoku.py`.
+
+**Honest limit.**  The fallback rescues glyphs a single page-mode drops; it is
+not a font-independent OCR.  Very low-contrast or overlapping glyphs can still
+defeat both modes, in which case the warm path (label a few cells, build a
+`read_glyph` atlas, F058) is the deterministic answer.  What F235 fixes at the
+root is the *silent single-glyph drop* — a whitelisted cell that holds ink now
+gets a second, reliable reading instead of an empty string.
+
+Regression after the change: `test_live.py --offline` 701/719 — no new failures
+(the standing ~18 are the no-window-manager focus/Z-order tests, the
+`read_region` atlas misreads `RED`→`LED` which use the edge-signature ladder not
+`ocr_text`, and the `locate_change` timing flake; count fluctuates run-to-run).
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
