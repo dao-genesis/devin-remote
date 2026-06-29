@@ -8131,3 +8131,65 @@ its whole area); batching itself is roughly neutral against a per-cell centre
 loop — its gift is the API, the single capture, and the geometry the caller no
 longer repeats. `sample_color` maps one place→colour; `sample_grid` maps a whole
 lattice→colour, the read a grid GUI actually asks for.
+
+---
+
+> 既得其母，以知其子。 Find the lattice first; then every cell follows. The grid
+> verb (F247) reads the cells — but only once the caller has *told* it the
+> lattice. Give the floor the verb that finds the lattice itself.
+
+## F248 — sample_grid must be told the lattice; the floor had no verb to find it
+
+F247 reads a whole grid in one call, but it must be handed the lattice — `bbox`,
+`cols`, `rows`. Where does that come from today? Each ruled-grid game re-derives
+it by hand with screen-specific magic: `_game_sudoku.detect_board` scans fixed
+pixel ranges (280..920, 420..1160) for "mostly dark over the board span" columns,
+takes the first/last as the border, and **hard-codes `/9`** for the cell count.
+That is unportable (the magic ranges are this window at this size) and it cannot
+even *count* — it assumes 9. A generic table / board has nowhere to turn. This is
+the companion gap to F247: a verb that *finds* a regular lattice.
+
+What recurring structure does a ruled grid actually present? **Periodic edges** —
+its cell separators are equally spaced lines, so the per-column / per-row edge
+energy (`|Δluma|` summed across the other axis) spikes at every boundary and
+nowhere else. The catch: cell *content* also makes edges (a digit, a glyph, a
+piece), so a naive "peak spacing" reading is polluted. The principled fix is to
+treat it as periodic-structure recovery: take the boundary candidates (gradient
+peaks, clustered to centres) and fit the **longest evenly-spaced chain** through
+them — the real lattice votes as one comb (cols+1 teeth at a constant pitch),
+while stray content edges fall off the comb and are skipped. The cell count then
+drops out of the chain length; it is *measured*, not assumed.
+
+**Fix** — `osctl.detect_grid(search, ...)`: returns
+`{bbox,(x0,y0,x1,y1), cols, rows, cw, ch, xs, ys}` — feed `bbox`/`cols`/`rows`
+straight to `sample_grid` — or `None` when no regular lattice of `min_cells` per
+axis is present. `search` narrows the scan (the F240 ROI discipline again).
+
+Honest scope. This keys on the *separators* being the dominant periodic edge,
+which holds for ruled grids — sudoku, spreadsheets, calendars, go / bordered
+boards. Probing it live exposed the boundary cleanly: on a fresh **gnome-chess**
+board the rank/file edges are real, but the pieces' silhouettes inject as many
+strong edges as the squares, and the longest chain no longer recovers 8x8. So
+`detect_grid` is deliberately *not* the tool for boards whose cells carry no
+separators (a Tetris well — find its bbox by colour) or where cell content
+out-weighs the lines (a chess mid-game); those find geometry another way and pass
+their known dims to `sample_grid`. The finding itself matters: grid-geometry
+detection does not reduce to one universal cue — it is separator-periodicity here,
+colour-step there, AT-SPI rects elsewhere — and the floor should own the one
+clean, broad case (ruled separators) rather than pretend universality.
+
+**Proof.** *Synthetic* (`_test_f248.py`, pure-Python ruled grids): exact recovery
+of origin/pitch/dims across several geometries; **robust to off-comb content** —
+filling four cells with solid colour does not shift the recovered 9x9 lattice
+(the chain skips their edges); it then **composes with `sample_grid`**, whose
+read of those cells returns the planted colours; and it **rejects** a blank region
+and a 2x2 (< `min_cells`) and validates args. *Live* (gnome-sudoku, Easy board):
+`detect_grid((480,290,1110,900))` returns **9x9 @ (511,312,1089,890), cw 64.22** —
+matching the hand-rolled `detect_board` to within 1 px on origin and exactly on
+pitch, while additionally **recovering the count 9 that detect_board hard-codes**.
+Fed straight into `sample_grid`, the detected lattice classifies the board's
+given / empty cells. Cost is a one-shot **183 ms** over a 630x610 search at
+stride 2 — paid once at calibration, not per frame (then `sample_grid` runs the
+hot path); raise `stride` to trade accuracy for speed. `sample_grid` answers
+"what is in each cell"; `detect_grid` answers "where are the cells" — together the
+floor reads a ruled grid end to end without the caller hand-coding geometry.

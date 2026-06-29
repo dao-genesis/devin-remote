@@ -2034,6 +2034,113 @@ def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
     return grid
 
 
+def detect_grid(search: tuple[int, int, int, int],
+                rgb: bytes | None = None, size: tuple[int, int] | None = None,
+                stride: int = 2, k: float = 0.8, pmin: int = 8, tol: int = 5,
+                min_cells: int = 3) -> dict | None:
+    """Find a regular lattice — origin, cell pitch, and *how many* cells —
+    inside ``search``, the companion that feeds :func:`sample_grid` (F248).
+
+    :func:`sample_grid` answers "what is in every cell" but must be *told* the
+    lattice (``bbox``, ``cols``, ``rows``). Every ruled-grid game re-derives that
+    by hand with screen-specific magic — sudoku scans fixed pixel ranges for dark
+    box-borders and hard-codes ``/9``; a generic table/board has nowhere to turn.
+    The recurring structure a ruled grid actually presents is *periodic edges*:
+    its cell separators are equally spaced lines, so the per-column / per-row edge
+    energy spikes at every boundary. This finds those boundaries and fits the
+    longest evenly-spaced chain through them — the lattice votes as one comb while
+    stray edges (a digit, a glyph) fall off the comb and are skipped — then reads
+    the cell count straight out of the chain length instead of assuming it.
+
+    Returns ``{'bbox':(x0,y0,x1,y1), 'cols', 'rows', 'cw', 'ch', 'xs', 'ys'}`` —
+    feed ``bbox``/``cols``/``rows`` straight to :func:`sample_grid` — or ``None``
+    when no regular lattice of at least ``min_cells`` per axis is present.
+
+    Scope (honest): this keys on the *separators* being the dominant periodic
+    edge, which holds for ruled grids — sudoku, spreadsheets, calendars, go /
+    bordered boards. It is **not** the tool for boards whose cells carry no
+    separators (a Tetris well — find its bbox by colour) or where cell *content*
+    out-weighs the lines (a chess mid-game, pieces drowning the rank/file edges);
+    those supply geometry another way and pass their known dims to sample_grid.
+    Pass ``rgb``/``size`` to reuse a capture; ``search`` narrows the scan (F240)."""
+    x0, y0, x1, y1 = search
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    x0 = max(1, x0); y0 = max(1, y0); x1 = min(x1, w - 1); y1 = min(y1, h - 1)
+    if x1 - x0 < 2 * pmin or y1 - y0 < 2 * pmin:
+        return None
+
+    def _lum(j: int) -> int:
+        return (rgb[j] * 299 + rgb[j + 1] * 587 + rgb[j + 2] * 114) // 1000
+
+    def _boundaries(axis: str) -> list[int]:
+        # edge energy per line: |Δluma| across the boundary, summed over the
+        # other axis (strided), then peaks (mean + k·std) clustered to centres.
+        prof = []
+        if axis == "x":
+            for x in range(x0, x1 + 1):
+                s = 0
+                for y in range(y0, y1, stride):
+                    base = (y * w + x) * 3
+                    s += abs(_lum(base) - _lum(base - 3))
+                prof.append((x, s))
+        else:
+            row = w * 3
+            for y in range(y0, y1 + 1):
+                s = 0
+                for x in range(x0, x1, stride):
+                    base = (y * w + x) * 3
+                    s += abs(_lum(base) - _lum(base - row))
+                prof.append((y, s))
+        vals = [v for _, v in prof]
+        n = len(vals)
+        mean = sum(vals) / n
+        var = sum((v - mean) ** 2 for v in vals) / n
+        thr = mean + k * (var ** 0.5)
+        peaks = [p for p, v in prof if v > thr]
+        runs: list[list[int]] = []
+        for i in peaks:
+            if runs and i - runs[-1][-1] <= 3:
+                runs[-1].append(i)
+            else:
+                runs.append([i])
+        return [sum(r) // len(r) for r in runs]
+
+    def _chain(c: list[int]) -> list[int]:
+        # longest arithmetic progression (common difference within tol) through
+        # the boundary candidates: the real lattice, robust to off-comb strays.
+        best: list[int] = []
+        for i in range(len(c)):
+            for j in range(i + 1, len(c)):
+                p = c[j] - c[i]
+                if p < pmin:
+                    continue
+                chain = [c[i], c[j]]
+                expect = c[j] + p
+                for ct in c[j + 1:]:
+                    if abs(ct - expect) <= tol:
+                        chain.append(ct)
+                        expect = ct + p
+                    elif ct > expect + tol:
+                        break
+                if len(chain) > len(best):
+                    best = chain
+        return best
+
+    xs, ys = _chain(_boundaries("x")), _chain(_boundaries("y"))
+    if len(xs) - 1 < min_cells or len(ys) - 1 < min_cells:
+        return None
+    cols, rows = len(xs) - 1, len(ys) - 1
+    return {"bbox": (xs[0], ys[0], xs[-1], ys[-1]),
+            "cols": cols, "rows": rows,
+            "cw": (xs[-1] - xs[0]) / cols, "ch": (ys[-1] - ys[0]) / rows,
+            "xs": xs, "ys": ys}
+
+
 def locate_change(before: bytes, after: bytes, size: tuple[int, int],
                   tol: int = 12, min_count: int = 30,
                   search: tuple[int, int, int, int] | None = None) -> dict | None:
