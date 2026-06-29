@@ -264,6 +264,20 @@ _VK_KEYSYM = {
     0x28: 0xFF54, 0x2E: 0xFFFF,
     0x14: 0xFFE5, 0x90: 0xFF7F,  # F177: CapsLock / NumLock — key_state could
     # READ these latches but key_down/up had no keysym to actuate them.
+    # F223: VK_OEM punctuation codes -> X keysyms (ASCII).  Windows uses
+    # layout-dependent VK_OEM_* codes for punctuation; X keysyms for the
+    # US-QWERTY default are simply the ASCII code points.
+    0xBA: 0x003B,  # VK_OEM_1  ;:
+    0xBB: 0x003D,  # VK_OEM_PLUS  =+
+    0xBC: 0x002C,  # VK_OEM_COMMA  ,<
+    0xBD: 0x002D,  # VK_OEM_MINUS  -_
+    0xBE: 0x002E,  # VK_OEM_PERIOD  .>
+    0xBF: 0x002F,  # VK_OEM_2  /?
+    0xC0: 0x0060,  # VK_OEM_3  `~
+    0xDB: 0x005B,  # VK_OEM_4  [{
+    0xDC: 0x005C,  # VK_OEM_5  \|
+    0xDD: 0x005D,  # VK_OEM_6  ]}
+    0xDE: 0x0027,  # VK_OEM_7  '"
 }
 
 
@@ -274,6 +288,8 @@ def _vk_keysym(vk: int) -> int:
         return vk
     if 0x41 <= vk <= 0x5A:        # 'A'-'Z' VK -> lowercase keysym = the physical key
         return vk + 0x20
+    if 0x70 <= vk <= 0x87:        # F223: VK_F1..VK_F24 -> XK_F1..XK_F24
+        return 0xFFBE + (vk - 0x70)
     return vk
 
 

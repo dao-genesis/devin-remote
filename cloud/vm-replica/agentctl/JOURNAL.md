@@ -7241,4 +7241,32 @@ Menu chain regression 4/4: GIMP, VLC, KWrite, Inkscape all pass.
 
 ---
 
+### F223 — VK_OEM punctuation + function keys unmapped on X11; GTK file dialog inaccessible
+
+| date | 2026-06-29 |
+|---|---|
+| surface | `tap(0xBF)` does nothing — GTK file chooser location bar never activates |
+| root cause | `_VK_KEYSYM` lacked VK_OEM_* (0xBA-0xDE) and VK_F1-F24 (0x70-0x87) mappings; fallback `return vk` gave wrong keysyms (191 ≠ slash keysym 0x2F) |
+
+**Friction.** GIMP's File > Open produces a GTK file chooser dialog.  The file list
+data items expose **no names** via AT-SPI (GtkTreeView cell renderers are
+inaccessible).  The only way to type a path is to press `/` to activate the
+location entry bar — but `tap(0xBF)` (VK_OEM_2 = `/?`) was silently producing
+keysym 191 instead of `/` (keysym 0x2F), so the location bar never opened.
+
+**Fix.** Added 11 VK_OEM punctuation mappings (`;=,-./ \`[]\\'`) and VK_F1..VK_F24
+→ XK_F1..XK_F24 range to `_VK_KEYSYM` / `_vk_keysym()`.
+
+**Proven.** GIMP File > Open > `tap(0xBF)` activates location bar > `uia_set_value`
+sets path > Enter > image opened.  Full chain: 8/8 regression (4 menu chains +
+clipboard + GIMP file open + LO context menu + Nautilus sidebar).
+
+**Boundary (documented, not fixed).**
+- GTK file chooser data items have no accessible names → cannot select files
+  by meaning; must use location bar path entry.
+- `goto_cell` on LO Calc: Name Box not exposed via AT-SPI; pixel-click workaround
+  exists but not semantic.
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
