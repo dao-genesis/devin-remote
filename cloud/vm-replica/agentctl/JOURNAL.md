@@ -8280,3 +8280,17 @@ patch-local bbox `(0, 0, pw-1, ph-1)`, not the screen bbox. Mixing the two
 and reads them identical. Documented here rather than papered over with more API;
 the common path (`sample_grid(bbox)` with no rgb, full-screen capture) is
 unaffected.
+
+### F250 end-to-end payoff (mines solver wired to read_delta)
+
+Wired the gnome-mines player to F250: `read_full` once, then every round
+`read_delta` re-classifies only the cells `grid_changes` flags and copies the
+rest. Live 8x8 run (80 rounds): **127 cell-classifies total vs 5184** a
+full-re-read-each-round would cost — **98% fewer**, because most rounds change
+one cell (a flag toggle / a single open) or nothing at all, and the old reader
+paid 64 OCR-classifies every round regardless. Faithfulness checked two ways: a
+no-op delta (static board between captures) reclassifies **0**, and the
+delta-tracked board matches a fresh full ground-truth read **0/64 mismatches** —
+the saving is from not redoing unchanged work, not from missing changes. (The
+solver still hits the round cap without a full clear; convergence is solver logic,
+not a floor gap — F250 is purely about not re-reading what didn't move.)
