@@ -6,6 +6,10 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
+import android.graphics.Color;
+import android.media.AudioAttributes;
+import android.media.RingtoneManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -29,7 +33,11 @@ import java.nio.charset.StandardCharsets;
  */
 public class RelayService extends Service {
     public static final String CH = "rtflow-relay";
-    public static final String CONV_CH = "rtflow-conv";   // 对话追踪·全局通知频道 (高优先, 可锁屏/后台弹)
+    // 对话追踪·全局通知频道。⚠️ Android 通知渠道「不可变」: 渠道一旦创建, 其 importance/震动/铃声
+    //   无法再被代码升级 (只有用户能在系统设置里改)。早期版本若以低优先级首建了 rtflow-conv,
+    //   后续即便写 IMPORTANCE_HIGH 也不弹横幅/不震动。故升 id → 强制重建为 HIGH 渠道, 绕开旧缓存。
+    public static final String CONV_CH = "rtflow-conv-hi2";   // 对话追踪·全局通知频道 (高优先·弹窗 heads-up·震动·锁屏可见)
+    public static final String CONV_CH_OLD = "rtflow-conv";   // 旧渠道 (低优先残留) — 启动时清除, 防双份/旧设置干扰
     public static volatile String lastStatus = "{\"connected\":false}";
     public static volatile RelayService instance;
 
@@ -1985,10 +1993,26 @@ public class RelayService extends Service {
         try {
             NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             if (nm == null) return;
+            long[] vib = new long[]{0, 400, 200, 400};   // 震动节奏 (明显双脉冲)
             if (Build.VERSION.SDK_INT >= 26) {
+                // 旧低优先渠道清除 (不影响新 id 渠道; 仅去除残留的静默条目)。
+                try { nm.deleteNotificationChannel(CONV_CH_OLD); } catch (Exception ignore) {}
                 NotificationChannel ch = new NotificationChannel(CONV_CH, "对话追踪提醒", NotificationManager.IMPORTANCE_HIGH);
+                ch.setDescription("会话卡住/待处理/额度/结束提醒 — 弹窗横幅 + 震动");
                 ch.setShowBadge(true);
                 ch.enableVibration(true);
+                ch.setVibrationPattern(vib);
+                ch.enableLights(true);
+                ch.setLightColor(Color.CYAN);
+                ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);   // 锁屏完整可见
+                try {
+                    Uri snd = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                    AudioAttributes aa = new AudioAttributes.Builder()
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                            .build();
+                    ch.setSound(snd, aa);
+                } catch (Exception ignore) {}
                 nm.createNotificationChannel(ch);
             }
             PendingIntent pi = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class),
@@ -1999,8 +2023,17 @@ public class RelayService extends Service {
                     .setStyle(new Notification.BigTextStyle().bigText(text == null ? "" : text))
                     .setSmallIcon(android.R.drawable.stat_notify_chat)
                     .setAutoCancel(true)
+                    .setCategory(Notification.CATEGORY_MESSAGE)
+                    .setVisibility(Notification.VISIBILITY_PUBLIC)
                     .setContentIntent(pi);
-            if (Build.VERSION.SDK_INT < 26) b.setPriority(Notification.PRIORITY_HIGH);
+            // <26: 靠 builder 自身的优先级/震动/铃声/灯触发 heads-up; >=26 由渠道控制, 但同时设也无害。
+            b.setVibrate(vib);
+            b.setLights(Color.CYAN, 500, 1500);
+            try { b.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)); } catch (Exception ignore) {}
+            if (Build.VERSION.SDK_INT < 26) {
+                b.setPriority(Notification.PRIORITY_MAX);
+                b.setDefaults(Notification.DEFAULT_ALL);
+            }
             int id = 0x7000_0000 | ((tag == null ? "" : tag).hashCode() & 0x0FFF_FFFF);
             nm.notify(id, b.build());
         } catch (Exception e) { android.util.Log.w("RTFlowEngine", "postConvNotification err " + e); }
