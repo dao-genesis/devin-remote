@@ -2,6 +2,21 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.326 · ④ 模型反代档位热切换(朴散则为器 · 家族归组 + 档位热切 + 别名直调)
+: 把 Devin Desktop 的「选档」底层逻辑迁入 ④ 模型反代——同族多档(none/low/medium/high/xhigh/max,
++thinking/+fast)按**家族归组**呈现,行内一个**档位下拉**可热切该族「当前活跃档」,热生效无需重启。
+- 后端 `revproxy.js` 新增家族·档位归一: `buildFamilyIndex`(从官方目录按 modelFamilyUid 归组)、
+  `_familyActiveUid`(默认择档通用规则: **免费档优先** → 家族默认档 → 中档 → 首档·"免费即默认主力")、
+  `familySummary`(每族活跃档 + 各档独立配额色)、`_resolveFamilyAlias`(干净家族名/familyUid → 当前活跃档)。
+- 新增控制面 `POST /origin/revproxy/tier {familyUid,modelUid}` 热切档位落盘 `revproxy.json.tiers`;
+  `/origin/revproxy/status` 回传 `families[]`+`tiers`;`/v1/models` 额外暴露**家族别名**(如 `gpt-5.4`)
+  供外部以干净家族名调当前活跃档,显式档位 uid 仍精确直达不被改写。
+- `resolveTarget` 前置家族别名解析: 外接客户端用 `glm-5.1` 即拿当前活跃档,`gpt-5-4-high` 仍精确指定。
+- 前端 ④ 面板 `_rpRenderList` 重构为按家族归组: 多档族一行 family + 档位下拉(每档带 🟢/🔴/🟡 实时配额色),
+  单档族保持原样;切档即 POST tier 热生效并刷新。图例增 `N族(M族多档可热切)`;一键自测下拉按家族 optgroup。
+- 通用适配全部 16 个多档家族(GLM/GPT/Claude 各档),非仅 GLM;每档保留独立红绿配额色(非家族继承)。
+- 自检 [13] 新增: 家族归组 + 默认择档 + 别名解析 + 热切生效 + 缺参 400,revproxy 自检扩至 45 断言全过。
+
 v9.9.325 · 官方直通回包解码归一(配额信号真源 · Connect end-stream gzip 解)
 : 修复 ④ 模型反代「官方直通」实测：捕获帧已能正确改写并真转上游(v9.9.324),但回包恒报
 「官方回包解码为空」。真因：上游 Connect 流式回包的**收尾帧 = gzip 压缩的 end-stream 帧**

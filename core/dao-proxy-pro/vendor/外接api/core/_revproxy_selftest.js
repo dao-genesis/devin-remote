@@ -417,6 +417,70 @@ let KEY = "";
     ok("quota 信号正则命中 exhausted", /quota|exhaust|precondition/i.test((parsedErr.code || "") + " " + (parsedErr.message || "")));
   }
 
+  console.log("[13] 档位热切换: 家族归组 + 默认择档 + 别名解析 + 热切生效");
+  {
+    const tierCat = [
+      { modelUid: "gpt-x-low", label: "GPT-X Low", provider: "MODEL_PROVIDER_OPENAI", creditMultiplier: 2, modelCostTier: "MODEL_COST_TIER_LOW", modelInfo: { modelFamilyUid: "gpt-x" }, modelFamilyMetadata: { modelFamilyLabel: "GPT-X" } },
+      { modelUid: "gpt-x-medium", label: "GPT-X Medium", provider: "MODEL_PROVIDER_OPENAI", creditMultiplier: 4, modelCostTier: "MODEL_COST_TIER_MEDIUM", isDefaultModelInFamily: true, modelInfo: { modelFamilyUid: "gpt-x" }, modelFamilyMetadata: { modelFamilyLabel: "GPT-X" } },
+      { modelUid: "gpt-x-high", label: "GPT-X High", provider: "MODEL_PROVIDER_OPENAI", creditMultiplier: 8, modelCostTier: "MODEL_COST_TIER_HIGH", modelInfo: { modelFamilyUid: "gpt-x" }, modelFamilyMetadata: { modelFamilyLabel: "GPT-X" } },
+      { modelUid: "glm-x", label: "GLM-X", provider: "MODEL_PROVIDER_ZHIPU", creditMultiplier: 0, modelCostTier: "MODEL_COST_TIER_FREE", modelInfo: { modelFamilyUid: "glm-x" }, modelFamilyMetadata: { modelFamilyLabel: "GLM-X" } },
+    ];
+    // 隔离配置(清 tiers)
+    const c0 = revproxy.loadConfig();
+    c0.tiers = {};
+    revproxy.saveConfig(c0);
+    const depsTier = Object.assign({}, deps, {
+      getModelCatalog: () => tierCat,
+      getOfficialFamilies: () => [],
+      cfg: revproxy.loadConfig(),
+    });
+    revproxy.setPremiumQuota("ok");
+
+    const idx = revproxy.buildFamilyIndex(depsTier);
+    ok("家族索引: 含 gpt-x/glm-x 两族", idx.families.has("gpt-x") && idx.families.has("glm-x"));
+    ok("gpt-x 收 3 档", idx.families.get("gpt-x").members.length === 3);
+
+    const models = revproxy.listModels(depsTier);
+    const fams = revproxy.familySummary(depsTier, models);
+    const fGpt = fams.find((f) => f.familyUid === "gpt-x");
+    ok("gpt-x 多档(multi)", fGpt && fGpt.multi === true);
+    ok("gpt-x 默认择档=家族默认 medium", fGpt && fGpt.activeUid === "gpt-x-medium");
+    const fGlm = fams.find((f) => f.familyUid === "glm-x");
+    ok("glm-x 单档·免费=绿", fGlm && fGlm.members[0].color === "green" && fGlm.members[0].free);
+
+    // 每档独立着色: 多档族各档均着色(配额 ok → 付费档绿)
+    const tierEntries = models.filter((m) => m.familyUid === "gpt-x");
+    ok("每档保留独立配额色", tierEntries.length === 3 && tierEntries.every((m) => m.color));
+
+    // 别名解析: 干净家族名 → 当前活跃档(默认 medium); 显式 uid 不改
+    ok("别名 gpt-x → medium", revproxy._resolveFamilyAlias("gpt-x", depsTier) === "gpt-x-medium");
+    ok("别名 GPT-X(label slug) → medium", revproxy._resolveFamilyAlias("GPT-X", depsTier) === "gpt-x-medium");
+    ok("显式档位 uid 不被改写", revproxy._resolveFamilyAlias("gpt-x-high", depsTier) === null);
+
+    // /v1/models 暴露家族别名
+    let rm = await call("GET", "/v1/models", null, depsTier);
+    let jm = JSON.parse(rm.body);
+    const alias = jm.data.find((m) => m.id === "gpt-x" && m.dao_family);
+    ok("/v1/models 含家族别名 gpt-x", !!alias && alias.dao_active_tier === "gpt-x-medium");
+
+    // 热切换: 经 /origin/revproxy/tier 设 gpt-x → high · 热生效(无需重启)
+    let rt = await call("POST", "/origin/revproxy/tier", { familyUid: "gpt-x", modelUid: "gpt-x-high" }, depsTier);
+    ok("tier 端点回 ok", JSON.parse(rt.body).ok === true);
+    depsTier.cfg = revproxy.loadConfig(); // 模拟下次请求重读配置(热加载)
+    ok("热切后别名 gpt-x → high", revproxy._resolveFamilyAlias("gpt-x", depsTier) === "gpt-x-high");
+    const fams2 = revproxy.familySummary(depsTier, revproxy.listModels(depsTier));
+    ok("热切后 familySummary 活跃档=high", fams2.find((f) => f.familyUid === "gpt-x").activeUid === "gpt-x-high");
+
+    // 缺参 → 400
+    let rb = await call("POST", "/origin/revproxy/tier", { familyUid: "gpt-x" }, depsTier);
+    ok("tier 缺 modelUid → 400", rb._status === 400);
+
+    // 复位
+    const cz = revproxy.loadConfig();
+    cz.tiers = {};
+    revproxy.saveConfig(cz);
+  }
+
   revproxy.setPremiumQuota("unknown");
   mock.close();
   console.log(failures === 0 ? "\nALL PASS" : "\n" + failures + " FAIL");
