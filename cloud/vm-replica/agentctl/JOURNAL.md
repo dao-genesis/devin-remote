@@ -7269,4 +7269,38 @@ clipboard + GIMP file open + LO context menu + Nautilus sidebar).
 
 ---
 
+### F224 — Left/right modifier VK codes unmapped; chord(0xA2, 0x41) sends `¢a` not Ctrl+A
+
+| date | 2026-06-29 |
+|---|---|
+| surface | `chord(0xA2, 0x41)` types "¢a" in LO VCL dialog instead of selecting all |
+| root cause | `VK_LCONTROL` (0xA2), `VK_RCONTROL` (0xA3), `VK_LSHIFT` (0xA0), `VK_RSHIFT` (0xA1), `VK_LMENU` (0xA4), `VK_RMENU` (0xA5), `VK_LWIN` (0x5B), `VK_RWIN` (0x5C) all fell through to raw `return vk` giving wrong X keysyms |
+
+**Friction.**  Windows agents commonly use `VK_LCONTROL` (0xA2) in `chord()` calls
+rather than the generic `VK_CONTROL` (0x11).  On the X11 backend, `_vk_keysym(0xA2)`
+returned 0xA2 = keysym for `¢` (cent sign), so `chord(0xA2, 0x41)` pressed `¢` then
+`a` instead of `Ctrl+A`.  Every `chord` with left/right-specific modifiers was broken.
+
+**Fix.**  Added 8 left/right-specific modifier mappings to `_VK_KEYSYM`:
+VK_L/RSHIFT → Shift_L/R, VK_L/RCONTROL → Control_L/R, VK_L/RMENU → Alt_L/R,
+VK_L/RWIN → Super_L/R.
+
+**Also.**  Added `uia_file_dialog_set_path(dialog_wid, path)` in `osctl.py` — a
+unified helper that auto-detects KDE (edit field "File name:") vs GTK (press `/` to
+activate location bar) file dialogs.
+
+**Proven.**  gedit Ctrl+A/C with `chord(0xA2, ...)` now works (clipboard verified).
+5/6 regression: VLC menu + KWrite menu + Inkscape menu + gedit chord + clipboard.
+KDE Save As (KWrite) → file created ✓.  GIMP Open (GTK) → image loaded ✓.
+
+**Boundary (documented, not fixed).**
+- LO Calc VCL internal file dialog: `uia_find_all` returns 297 elements but all are
+  Menu/MenuItem/Separator — no Edit or Button with name/rect.  The VCL Name field is
+  visible but not AT-SPI-accessible; pixel-click + paste_text workaround partially
+  works but the dialog's error handling is fragile.
+- LO should be switched to use native GTK file dialogs (env `SAL_USE_VCLPLUGIN=gtk3`)
+  for proper AT-SPI integration — a deployment-level fix, not a code fix.
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

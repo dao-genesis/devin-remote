@@ -264,6 +264,13 @@ _VK_KEYSYM = {
     0x28: 0xFF54, 0x2E: 0xFFFF,
     0x14: 0xFFE5, 0x90: 0xFF7F,  # F177: CapsLock / NumLock — key_state could
     # READ these latches but key_down/up had no keysym to actuate them.
+    # F224: left/right-specific modifier VK codes.  osctl.chord() and the
+    # Windows UIA layer commonly use VK_LCONTROL (0xA2) etc.; the generic
+    # VK_CONTROL (0x11) above is only one alias.  Map both L and R variants.
+    0xA0: 0xFFE1, 0xA1: 0xFFE2,  # VK_LSHIFT / VK_RSHIFT
+    0xA2: 0xFFE3, 0xA3: 0xFFE4,  # VK_LCONTROL / VK_RCONTROL
+    0xA4: 0xFFE9, 0xA5: 0xFFEA,  # VK_LMENU / VK_RMENU (Alt)
+    0x5B: 0xFFEB, 0x5C: 0xFFEC,  # VK_LWIN / VK_RWIN (Super)
     # F223: VK_OEM punctuation codes -> X keysyms (ASCII).  Windows uses
     # layout-dependent VK_OEM_* codes for punctuation; X keysyms for the
     # US-QWERTY default are simply the ASCII code points.

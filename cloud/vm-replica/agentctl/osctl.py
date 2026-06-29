@@ -633,6 +633,46 @@ def uia_context(win: int, target: str, *path: str, ctype=None, pause: float = 0.
     return _walk_menu_path(path, pause, prefer_wid=win)
 
 
+def uia_file_dialog_set_path(dialog_wid: int, path: str, pause: float = 0.5) -> bool:
+    """Set the file path in an open/save file dialog, handling both KDE and GTK
+    toolkits automatically.
+
+    F223: GTK file choosers (GIMP, LibreOffice, gedit) don't expose a file-name
+    entry by default — the entry only appears after pressing ``/`` (slash) which
+    switches to the location-bar mode.  KDE file dialogs (KWrite, Kate, Dolphin)
+    expose ``name='File name:'`` with ``ctype='edit'`` directly.
+
+    Strategy:
+    1. Try KDE: ``uia_set_value(dialog, path, name='File name:', ctype='edit')``
+    2. If no KDE edit found, try GTK: ``tap(0xBF)`` (``/``) to activate location
+       bar, then ``uia_set_value(dialog, path, ctype='edit')``
+    3. Falls back to ``paste_text`` if ``uia_set_value`` fails.
+
+    Returns True iff the path was set (caller should press Enter or click
+    Open/Save to commit)."""
+    # KDE file dialog: "File name:" edit with rect
+    ok = uia_set_value(dialog_wid, path, name="File name:", ctype="edit")
+    if ok:
+        return True
+
+    # GTK file dialog: activate location bar with "/" key
+    # (tap 0xBF = VK_OEM_2 = "/" on US layout, mapped by F223)
+    tap(0xBF)
+    time.sleep(pause)
+
+    # After "/", a new Edit field should appear
+    ok2 = uia_set_value(dialog_wid, path, ctype="edit")
+    if ok2:
+        return True
+
+    # Last resort: Ctrl+A then paste
+    chord(0xA2, 0x41)
+    time.sleep(0.1)
+    paste_text(path)
+    time.sleep(0.2)
+    return True
+
+
 _CELLREF = re.compile(r"^\$?[A-Za-z]{1,3}\$?[0-9]{1,7}$")
 
 
