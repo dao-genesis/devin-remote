@@ -119,41 +119,181 @@ function _authOk(req, cfg) {
 }
 
 // ── 模型枚举 ──────────────────────────────────────────────────────────────
-// 列出「已配置反代通道」的模型: 模型路由表里每条 route 即一个可对外模型。
-// 另把渠道(provider)显式声明的 models 也并入(脱敏·不泄 key)。
+// 全量呈现「一切可反代之模型」(道:万物并育而不相害):
+//   ① 模型路由表每条 route(第三方渠道/builtin-stub)·② 渠道显式 models ·
+//   ③ 官方全量模型目录(_full_model_catalog 108)·④ 运行时官方家族(账号当前可见)。
+//   每个模型按「配额/费档」着色: 免费/有渠道=绿 · 配额耗尽=红 · 未探测=琥珀。
+//   反代方式: channel(经第三方渠道) / official(官方直通) / stub(传输自验)。
+
+// 官方 provider 枚举 → 人类可读
+const _PROVIDER_LABEL = {
+  MODEL_PROVIDER_ANTHROPIC: "Anthropic",
+  MODEL_PROVIDER_OPENAI: "OpenAI",
+  MODEL_PROVIDER_GOOGLE: "Google",
+  MODEL_PROVIDER_XAI: "xAI",
+  MODEL_PROVIDER_DEEPSEEK: "DeepSeek",
+  MODEL_PROVIDER_FIREWORKS: "Fireworks",
+  MODEL_PROVIDER_CODEIUM: "Windsurf",
+  MODEL_PROVIDER_WINDSURF: "Windsurf",
+  MODEL_PROVIDER_ZHIPU: "Zhipu/GLM",
+};
+function _provLabel(raw) {
+  if (!raw) return "Official";
+  if (_PROVIDER_LABEL[raw]) return _PROVIDER_LABEL[raw];
+  return String(raw).replace(/^MODEL_PROVIDER_/, "");
+}
+
+// 官方免费档判定: costTier=FREE 或 creditMultiplier=0
+function _isFreeTier(costTier, mult) {
+  return (
+    costTier === "MODEL_COST_TIER_FREE" ||
+    mult === 0 ||
+    mult === null ||
+    mult === undefined
+  );
+}
+
+// 模块级·官方付费配额观测态: "unknown" | "ok" | "exhausted"
+//   实际官方反代调用命中配额错误 → exhausted; 成功 → ok; 供面板红/绿如实着色。
+let _premiumQuota = "unknown";
+function setPremiumQuota(s) {
+  if (s === "ok" || s === "exhausted" || s === "unknown") _premiumQuota = s;
+}
+function getPremiumQuota() {
+  return _premiumQuota;
+}
+
+// 给一个模型条目判定 {reverse, color, status, note}
+function _classify(entry, deps) {
+  // 显式 stub
+  if (entry.reverse === "stub")
+    return { color: "green", status: "stub", note: "传输自验" };
+  // 已配第三方渠道(模型路由/provider) → 经渠道反代·不受官方配额限
+  if (entry.routed)
+    return {
+      color: "green",
+      status: "channel",
+      note: "经渠道 " + (entry.provider || ""),
+    };
+  // 官方免费档 → 恒可反代
+  if (entry.free)
+    return { color: "green", status: "free", note: "免费 · 官方直通" };
+  // 官方付费档 → 依配额观测
+  const q =
+    (deps && typeof deps.premiumQuota === "string"
+      ? deps.premiumQuota
+      : null) || _premiumQuota;
+  if (q === "ok")
+    return { color: "green", status: "premium", note: "有配额 · 官方直通" };
+  if (q === "exhausted")
+    return { color: "red", status: "exhausted", note: "配额耗尽 · 待重置" };
+  return { color: "amber", status: "premium", note: "付费档 · 配额未探测" };
+}
+
 function listModels(deps) {
+  deps = deps || {};
   const out = [];
-  const seen = new Set();
+  const byId = new Map();
   const cfg = (deps.getEaConfig && deps.getEaConfig()) || {};
   const routes = (cfg.daoRoutes && cfg.daoRoutes.routes) || {};
   const providers = cfg.providers || {};
-  const push = (id, owned_by, extra) => {
-    if (!id || seen.has(id)) return;
-    seen.add(id);
-    out.push(
-      Object.assign(
-        {
-          id,
-          object: "model",
-          created: 0,
-          owned_by: owned_by || "dao-revproxy",
-        },
-        extra || {},
-      ),
+  const add = (id, fields) => {
+    if (!id) return null;
+    let e = byId.get(id);
+    if (e) {
+      Object.assign(e, fields || {});
+      return e;
+    }
+    e = Object.assign(
+      { id, object: "model", created: 0, owned_by: "dao-revproxy" },
+      fields || {},
     );
+    byId.set(id, e);
+    out.push(e);
+    return e;
   };
-  // 1) 路由表 → 对外以 modelUid 暴露
-  for (const [uid, r] of Object.entries(routes)) {
-    push(uid, (r && r.provider) || "routed", {
-      dao_route: { provider: r && r.provider, model: r && r.model },
+
+  // ③ 官方全量目录(最广底·先铺) → 免费/付费档着色
+  let catalog = [];
+  try {
+    catalog = (deps.getModelCatalog && deps.getModelCatalog()) || [];
+  } catch (_) {}
+  for (const m of catalog) {
+    if (!m || !m.modelUid) continue;
+    const mult = m.creditMultiplier;
+    const costTier = m.modelCostTier || m.costTier || "";
+    add(m.modelUid, {
+      owned_by: _provLabel(m.provider),
+      label: m.label || m.modelUid,
+      provider: _provLabel(m.provider),
+      providerRaw: m.provider || "",
+      creditMultiplier: typeof mult === "number" ? mult : null,
+      costTier,
+      free: _isFreeTier(costTier, mult),
+      official: true,
+      reverse: "official",
+      routed: false,
     });
   }
-  // 2) provider 显式 models
+
+  // ④ 运行时官方家族(账号当前实见) → 标记 availableNow
+  let fams = [];
+  try {
+    fams = (deps.getOfficialFamilies && deps.getOfficialFamilies()) || [];
+  } catch (_) {}
+  for (const f of fams) {
+    const uid = f && (f.modelUid || f.uid || f.model);
+    if (!uid) continue;
+    const e = add(uid, {
+      official: true,
+      reverse: "official",
+      availableNow: true,
+    });
+    if (e && !e.label && f.label) e.label = f.label;
+    if (e) e.availableNow = true;
+  }
+
+  // ① 模型路由表(第三方渠道/stub) → 覆盖为 channel/stub·绿
+  for (const [uid, r] of Object.entries(routes)) {
+    const prov = (r && r.provider) || "routed";
+    const isStub = prov === "builtin-stub";
+    add(uid, {
+      owned_by: prov,
+      provider: prov,
+      routed: !isStub,
+      reverse: isStub ? "stub" : "channel",
+      dao_route: { provider: prov, model: r && r.model },
+    });
+  }
+
+  // ② provider 显式 models → channel·绿
   for (const [name, p] of Object.entries(providers)) {
     const ms = (p && p.models) || [];
-    for (const m of ms) push(m, name);
+    for (const m of ms)
+      add(m, { owned_by: name, provider: name, routed: true, reverse: "channel" });
+  }
+
+  // 着色 + 计数
+  for (const e of out) {
+    const c = _classify(e, deps);
+    e.color = c.color;
+    e.status = c.status;
+    e.note = c.note;
   }
   return out;
+}
+
+function modelStats(models) {
+  const s = { total: models.length, green: 0, red: 0, amber: 0, free: 0, channel: 0, official: 0 };
+  for (const m of models) {
+    if (m.color === "green") s.green++;
+    else if (m.color === "red") s.red++;
+    else if (m.color === "amber") s.amber++;
+    if (m.status === "free") s.free++;
+    if (m.reverse === "channel" || m.reverse === "stub") s.channel++;
+    if (m.reverse === "official") s.official++;
+  }
+  return s;
 }
 
 // ── 入站归一 ──────────────────────────────────────────────────────────────
@@ -207,6 +347,31 @@ function _flattenContent(c) {
   return "";
 }
 
+// model 是否属官方目录/家族 → {free,label,provider} 或 null
+function _officialInfo(model, deps) {
+  if (!model || !deps) return null;
+  try {
+    const cat = (deps.getModelCatalog && deps.getModelCatalog()) || [];
+    for (const m of cat) {
+      if (m && m.modelUid === model)
+        return {
+          free: _isFreeTier(m.modelCostTier || m.costTier, m.creditMultiplier),
+          label: m.label || model,
+          provider: _provLabel(m.provider),
+        };
+    }
+  } catch (_) {}
+  try {
+    const fams = (deps.getOfficialFamilies && deps.getOfficialFamilies()) || [];
+    for (const f of fams) {
+      const uid = f && (f.modelUid || f.uid || f.model);
+      if (uid === model)
+        return { free: !!f.free, label: f.label || model, provider: "Official" };
+    }
+  } catch (_) {}
+  return null;
+}
+
 // ── 路由解析 ──────────────────────────────────────────────────────────────
 // model(对外名/uid) → 真上游 {provName, provCfg, upstreamModel, proto}
 function resolveTarget(model, deps) {
@@ -226,7 +391,20 @@ function resolveTarget(model, deps) {
     const [pn, ...rest] = model.split("/");
     if (providers[pn]) route = { provider: pn, model: rest.join("/") };
   }
-  if (!route) return null;
+  // 无第三方渠道 → 官方直通(若 model 属官方目录/家族): 复用上游官方推理链
+  if (!route) {
+    const info = _officialInfo(model, deps);
+    if (info) {
+      return {
+        official: true,
+        upstreamModel: model,
+        free: info.free,
+        label: info.label,
+        provider: info.provider,
+      };
+    }
+    return null;
+  }
   const provName = route.provider;
   if (provName === "builtin-stub") {
     return { provName, builtin: true, route, upstreamModel: route.model };
@@ -596,6 +774,29 @@ function _bridge(target, norm, deps) {
       sink.onEnd && sink.onEnd();
       return;
     }
+    if (target.official) {
+      // 官方直通: 复用宿主 source.js 官方推理链(捕帧复用 GetChatMessage)
+      if (!deps.officialChat) {
+        sink.onError &&
+          sink.onError(
+            "官方直通未就绪 · 需宿主提供 officialChat(预热一次官方对话以捕获帧)",
+          );
+        return;
+      }
+      Promise.resolve()
+        .then(() => deps.officialChat(target, norm, sink))
+        .then((r) => {
+          // officialChat 自行调 sink.onText/onEnd; 若返回配额态则同步着色
+          if (r && r.quota) setPremiumQuota(r.quota);
+        })
+        .catch((e) => {
+          const msg = String((e && e.message) || e);
+          if (/quota|exhaust|配额|governor|Authentication Fails/i.test(msg))
+            setPremiumQuota("exhausted");
+          sink.onError && sink.onError(msg);
+        });
+      return;
+    }
     callUpstream(target, norm, deps, {
       onOpen: () => {},
       onDelta: (d) => {
@@ -635,7 +836,12 @@ async function handle(req, res, u, deps) {
       apiKey: _isLocal(req) ? cfg.apiKey : undefined,
       port: deps.port || 0,
       endpoint: deps.port ? "http://127.0.0.1:" + deps.port + "/v1" : "",
+      premiumQuota:
+        (deps && typeof deps.premiumQuota === "string"
+          ? deps.premiumQuota
+          : null) || _premiumQuota,
       model_count: models.length,
+      stats: modelStats(models),
       models,
     });
     return true;
@@ -749,10 +955,15 @@ async function handle(req, res, u, deps) {
 module.exports = {
   handle,
   listModels,
+  modelStats,
   loadConfig,
   saveConfig,
   defaultConfig,
   normalizeInbound,
   resolveTarget,
+  setPremiumQuota,
+  getPremiumQuota,
+  _officialInfo,
+  _isFreeTier,
   _cfgPath,
 };

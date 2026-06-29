@@ -6287,6 +6287,157 @@ function _getRevproxy() {
   }
   return _revproxyMod;
 }
+// ── 官方直通·捕帧复用 ─────────────────────────────────────────────────────
+//   反者道之动·闭环自举: 捕最近一帧真 GetChatMessage 请求, 换入新 user turn 后
+//   真转云端官方推理链, 解码回包文本。免费档(swe-1-6 等)即便付费配额耗尽仍可出包。
+let _lastChatFrame = null; // { body:Buffer, url, method, headers, at }
+function _captureChatFrame(req, body) {
+  const hdr = {};
+  try {
+    for (const [k, v] of Object.entries(req.headers || {}))
+      if (!k.startsWith(":")) hdr[k] = v;
+  } catch (_) {}
+  _lastChatFrame = {
+    body: Buffer.isBuffer(body) ? Buffer.from(body) : Buffer.from(body),
+    url: req.url,
+    method: req.method || "POST",
+    headers: hdr,
+    at: Date.now(),
+  };
+}
+
+// 取捕获帧, 把「最近一条消息内容」换成 newText → 返回新 Connect 帧 Buffer。
+function _swapLastUserMsg(capturedBody, newText) {
+  const frames = parseFrames(capturedBody);
+  if (!frames.length) return null;
+  const payload = frames[0].payload; // 已在 parseFrames 内解压
+  const top = parseProto(payload);
+  const fn = findMsgsField(top);
+  const arr = top[fn];
+  if (!arr || !arr.length) return null;
+  const last = arr[arr.length - 1];
+  let oldText = "";
+  try {
+    oldText = extractMsgContent(parseProto(Buffer.from(last.b)));
+  } catch (_) {}
+  if (!oldText) return null;
+  const swapped = _pbCloneSwapStrings(payload, { [oldText]: newText });
+  if (!swapped || !swapped.length || !_pbParseOk(swapped)) return null;
+  return buildFrame(0, swapped);
+}
+
+// 官方直通: revproxy 经此真转云端、解码回包。sink: {onText,onEnd,onError}。
+function _officialChatReplay(target, norm, sink) {
+  return new Promise((resolve) => {
+    if (!_lastChatFrame || !_lastChatFrame.body) {
+      sink.onError &&
+        sink.onError(
+          "官方直通需预热: 请在 Cascade 内先与任一官方模型对话一次(以捕获请求帧), 再经反代调用",
+        );
+      return resolve({ ok: false });
+    }
+    // 取最后一条 user 消息文本
+    let userText = "";
+    try {
+      const msgs = (norm && norm.messages) || [];
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i] && msgs[i].role !== "assistant" && msgs[i].content) {
+          userText = String(msgs[i].content);
+          break;
+        }
+      }
+    } catch (_) {}
+    if (!userText) userText = "你好";
+    const newBody = _swapLastUserMsg(_lastChatFrame.body, userText);
+    if (!newBody) {
+      sink.onError &&
+        sink.onError("官方直通: 捕获帧解析失败, 请重新预热一次官方对话");
+      return resolve({ ok: false });
+    }
+    let route;
+    try {
+      route = routeUpstream(_lastChatFrame.url);
+    } catch (e) {
+      sink.onError && sink.onError("官方直通路由失败: " + e.message);
+      return resolve({ ok: false });
+    }
+    const headers = {};
+    for (const [k, v] of Object.entries(_lastChatFrame.headers || {}))
+      if (!H1_CONN_HEADERS.has(k)) headers[k] = v;
+    delete headers["content-length"];
+    headers["content-length"] = String(newBody.length);
+    let session;
+    try {
+      session = _getH2Session(route.host);
+    } catch (e) {
+      sink.onError && sink.onError("官方直通 H2 会话失败: " + e.message);
+      return resolve({ ok: false });
+    }
+    const up = session.request({
+      ":method": "POST",
+      ":path": route.path,
+      ":authority": route.host,
+      ":scheme": "https",
+      ...headers,
+    });
+    const chunks = [];
+    let status = 0;
+    up.on("response", (h) => {
+      status = (h && h[":status"]) || 0;
+    });
+    up.setTimeout(180000, () => {
+      try {
+        up.close(http2.constants.NGHTTP2_CANCEL);
+      } catch (_) {}
+      sink.onError && sink.onError("官方直通超时(180s)");
+      resolve({ ok: false });
+    });
+    up.on("data", (c) => chunks.push(c));
+    up.on("end", () => {
+      try {
+        const buf = Buffer.concat(chunks);
+        if (status && status >= 400) {
+          const txt = buf.toString("utf8").slice(0, 300);
+          sink.onError &&
+            sink.onError("官方上游 " + status + ": " + txt);
+          return resolve({
+            ok: false,
+            quota: /quota|exhaust|governor|Authentication Fails/i.test(txt)
+              ? "exhausted"
+              : undefined,
+          });
+        }
+        const strs = extractUtf8StringsFromGrpcBody(buf, { minLen: 1 }) || [];
+        // 拼接增量文本: 去除明显的元数据短串(模型名/uid/枚举)
+        const text = strs
+          .filter(
+            (s) =>
+              s &&
+              !/^MODEL_|^[a-z0-9-]{1,40}$/i.test(s) &&
+              !/^[A-Z_]{3,}$/.test(s),
+          )
+          .join("");
+        const out = text || strs.join("");
+        if (!out) {
+          sink.onError && sink.onError("官方回包解码为空(可能为纯工具调用流)");
+          return resolve({ ok: false });
+        }
+        sink.onText && sink.onText(out);
+        sink.onEnd && sink.onEnd();
+        resolve({ ok: true, quota: "ok" });
+      } catch (e) {
+        sink.onError && sink.onError("官方回包解码异常: " + e.message);
+        resolve({ ok: false });
+      }
+    });
+    up.on("error", (e) => {
+      sink.onError && sink.onError("官方直通传输错误: " + e.message);
+      resolve({ ok: false });
+    });
+    up.end(newBody);
+  });
+}
+
 function _revproxyDeps() {
   return {
     getEaConfig: () =>
@@ -6294,6 +6445,43 @@ function _revproxyDeps() {
         ? _eaRuntimeMod.hotGetConfig()
         : {},
     getAvailableModels: _getAvailableModels,
+    getModelCatalog: () => {
+      try {
+        return _fullModelCatalog || _loadFullModelCatalog() || [];
+      } catch (_) {
+        return [];
+      }
+    },
+    getOfficialFamilies: () => {
+      try {
+        // 展开家族 members → 扁平官方 uid 列表 {modelUid,label,free}
+        const fams = _getOfficialFamilies() || [];
+        const out = [];
+        for (const f of fams) {
+          const members = (f && (f.members || f.entries)) || [];
+          if (members.length) {
+            for (const m of members)
+              out.push({
+                modelUid: m.uid || m.modelUid,
+                label: m.label || f.label,
+                free: !!(m.free || f.free),
+              });
+          } else if (f && (f.modelUid || f.uid)) {
+            out.push({
+              modelUid: f.modelUid || f.uid,
+              label: f.label,
+              free: !!f.free,
+            });
+          }
+        }
+        return out;
+      } catch (_) {
+        return [];
+      }
+    },
+    officialChat: (target, norm, sink) =>
+      _officialChatReplay(target, norm, sink),
+    hasChatFrame: () => !!(_lastChatFrame && _lastChatFrame.body),
     resolveRoute: (uid) => {
       try {
         const r = _ea ? _ea.getRouter() : null;
@@ -6647,6 +6835,15 @@ const _mainHandler = async (req, res) => {
         }
         log("#" + rid + " [外接api] err: " + e.message + " → 回退官方");
       }
+    }
+
+    // 模型反代·官方直通: 捕获最近一帧真实 GetChatMessage 请求(原始 body+路由+头)
+    //   供 revproxy officialChat 复用——换入新 user turn 后真转云端、解码回包。
+    //   道义: 反者道之动·闭环自举; 仅留最近一帧, 不留历史(利而不害)。
+    if (kind === "CHAT_PROTO" && body && body.length > 0) {
+      try {
+        _captureChatFrame(req, body);
+      } catch (_) {}
     }
 
     // 5+6. v9.9.30 印 162 · 观察记录后置 setImmediate · 请求转发先行
