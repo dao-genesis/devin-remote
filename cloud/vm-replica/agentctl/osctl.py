@@ -2154,7 +2154,7 @@ def wait_for_color_gone(target: tuple[int, int, int], tol: int = 24,
 def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
                    size: tuple[int, int] | None = None,
                    search: tuple[int, int, int, int] | None = None,
-                   step: int = 1) -> dict | None:
+                   step: int = 1, mask: bytes | None = None) -> dict | None:
     """Locate a reference patch by *appearance*, not colour (F053).
 
     ``find_color``/``find_color_blobs`` see only hue, so two regions that share
@@ -2171,7 +2171,17 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
     by a few pixels — to keep the slide cheap; raise ``step`` for a coarse pass.
     The idiom is colour to narrow the field, appearance to choose within it
     (少則得): segment by colour, then ``match_template`` each candidate and take
-    the lowest score."""
+    the lowest score.
+
+    ``mask`` (F234): an optional ``pw*ph`` byte buffer where a non-zero byte marks
+    a *foreground* pixel to score and a zero byte is ignored. A sprite cropped
+    from one background carries that background in its bounding box; against a
+    *different* background the background pixels dominate the SAD (a template that
+    scored 0 at rest jumped to tens of thousands one node over and could lock onto
+    a look-alike). Masking the patch to the sprite's own silhouette scores only
+    what is actually the sprite, so it relocates across changing backgrounds —
+    the human channel of tracking a shape and ignoring the scenery. ``score`` then
+    scales with the foreground pixel count, so compare scores only at equal masks."""
     if rgb is None:
         w, h, rgb = capture_rgb()
     else:
@@ -2191,6 +2201,16 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
     for i in range(pw * ph):
         pl[i] = (patch[i * 3] * 299 + patch[i * 3 + 1] * 587
                  + patch[i * 3 + 2] * 114) // 1000
+    # Per-row foreground columns (F234). With no mask every column counts, so this
+    # is just ``tuple(range(pw))`` per row and the slide stays bit-identical to the
+    # F233 path; with a mask only the sprite's own pixels are summed, so a changing
+    # background no longer swamps the score. Precomputed once, the inner loop is
+    # the same bare subtract over a flat tuple either way.
+    if mask is None:
+        cols = [tuple(range(pw))] * ph
+    else:
+        cols = [tuple(px for px in range(pw) if mask[py * pw + px])
+                for py in range(ph)]
     # Precompute source luma over the search area *once* (F233). The first cut
     # recomputed each source pixel's luma inside the innermost loop, so every
     # overlapping window re-derived the same luma — ``area x patch_area`` luma
@@ -2213,7 +2233,7 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
             for py in range(ph):
                 abase = (oy + py) * aw + ox
                 pbase = py * pw
-                for px in range(pw):
+                for px in cols[py]:
                     d = al[abase + px] - pl[pbase + px]
                     s += d if d >= 0 else -d
                 # Early abandon (branch-and-bound): SAD only accumulates, so the
