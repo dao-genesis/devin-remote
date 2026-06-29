@@ -7845,3 +7845,70 @@ After the cache:
 The first call still pays the cold-start OCR cost, but the second pass reuses
 the exact same crops and returns from cache, which is the steady-state path the
 solver wants when the board geometry is unchanged.
+
+## F239 — `_game_sudoku.py` assumed the puzzle board was already open
+
+**Symptom.**  `python3 _game_sudoku.py` failed on a freshly launched
+`gnome-sudoku` session because the app starts on a “Select Difficulty” dialog,
+not on the board itself.  The script jumped straight into `detect_board()`, so
+the first read saw no grid and crashed:
+
+```text
+RuntimeError: board borders not found: vx=[498, 1103] hy=[834]
+```
+
+When the dialog was present, AT-SPI exposed the `Easy` / `Medium` / `Hard`
+choices, and clicking `Easy` started a normal puzzle.
+
+**Fix** (`_game_sudoku.py`).  Detect the start dialog and click `Easy` before
+constructing `Board`:
+
+```python
+def _ensure_started():
+    for w in osctl.list_windows():
+        if (w.get('title') or '') != 'Select Difficulty':
+            continue
+        for e in osctl.uia_find_all(w['id'], max_scan=2000):
+            if e.get('name') == 'Easy':
+                x, y, w0, h0 = e['rect']
+                osctl.click(x + w0 // 2, y + h0 // 2)
+                time.sleep(1.5)
+                return
+```
+
+`play()` now calls `_ensure_started()` first, so the same command works from a
+fresh launch without a manual click.
+
+**Proof.**
+
+Before the patch:
+
+```text
+RuntimeError: board borders not found: vx=[498, 1103] hy=[834]
+```
+
+After the patch:
+
+```text
+READ:
+3.274...5
+...5.28..
+.6..1...3
+.2.....96
+9.6...3.8
+84.....2.
+5...2..8.
+..19.8...
+2...671.9
+SOLUTION:
+382746915
+719532864
+465819273
+127384596
+956271348
+843695721
+594123687
+671958432
+238467159
+filled 49 cells
+```
