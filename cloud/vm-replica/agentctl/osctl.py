@@ -1865,22 +1865,31 @@ def crop_rgb(rgb: bytes, size: tuple[int, int], bbox: tuple[int, int, int, int]
 
 
 def wait_until_stable(bbox: tuple[int, int, int, int], settle: int = 3,
-                      interval: float = 0.08, timeout: float = 6.0
+                      interval: float = 0.08, timeout: float = 6.0,
+                      tol: int = 0, min_count: int = 1
                       ) -> dict:
-    """Wait until a screen region stops changing, by pixels (F132).
+    """Wait until a screen region stops changing, by pixels (F132, F244).
 
     ``wait_for_phrase`` waits for *text* to appear, but much of a GUI moves
     without ever spelling anything: a panel slides in, a spinner turns, a list
     reflows, a fade settles. Act mid-transition and the target is still in
     flight — the click lands where the thing *was*, not where it comes to rest.
     Nothing in the pixel channel waited for *motion to end*. This re-captures the
-    ``bbox`` region every ``interval`` and compares it byte-for-byte to the last
-    capture; once ``settle`` consecutive captures are identical, the region is
-    judged at rest. Returns ``{stable, changes, captures, elapsed}`` — ``stable``
-    is whether it settled before ``timeout``, ``changes`` how many times the
-    region differed (proof it really was moving), so the caller can both wait and
-    confirm something happened. The visual twin of ``wait_for_phrase``: one waits
-    for a word, the other for stillness."""
+    ``bbox`` region every ``interval`` and compares it to the last capture; once
+    ``settle`` consecutive captures match, the region is judged at rest. Returns
+    ``{stable, changes, captures, elapsed}`` — ``stable`` is whether it settled
+    before ``timeout``, ``changes`` how many times the region differed (proof it
+    really was moving), so the caller can both wait and confirm something
+    happened. The visual twin of ``wait_for_phrase``: one waits for a word, the
+    other for stillness.
+
+    Sameness is measured through :func:`region_diff` with ``tol``/``min_count``
+    (F244): two captures *match* when fewer than ``min_count`` pixels differ by
+    more than ``tol`` per channel. The defaults ``tol=0, min_count=1`` are exact
+    byte-equality — identical to the original behaviour — but raising them lets a
+    region settle past sub-pixel render jitter, a blinking caret, or a hover
+    ring that would otherwise reset the ``settle`` counter forever. The same
+    tolerant equality :func:`region_diff` was written to give the waits."""
     deadline = time.time() + timeout
     start = time.time()
     prev: bytes | None = None
@@ -1889,7 +1898,9 @@ def wait_until_stable(bbox: tuple[int, int, int, int], settle: int = 3,
         w, h, rgb = capture_rgb()
         patch, _pw, _ph = crop_rgb(rgb, (w, h), bbox)
         captures += 1
-        if prev is not None and patch == prev:
+        same = prev is not None and (
+            region_diff(patch, prev, tol=tol)["pixels"] < min_count)
+        if same:
             stable += 1
             if stable >= settle:
                 return {"stable": True, "changes": changes,
@@ -2118,9 +2129,10 @@ def region_diff(a: bytes, b: bytes, tol: int = 0) -> dict:
 
 def wait_for_change(bbox: tuple[int, int, int, int],
                     baseline: bytes | None = None,
-                    interval: float = 0.05, timeout: float = 5.0
+                    interval: float = 0.05, timeout: float = 5.0,
+                    tol: int = 0, min_count: int = 1
                     ) -> dict:
-    """Wait until a screen region *first differs* from a baseline (F133).
+    """Wait until a screen region *first differs* from a baseline (F133, F244).
 
     ``wait_until_stable`` waits for motion to *end*; ``wait_for_phrase`` waits for
     a *known word*. But the most common post-action wait is neither: after a
@@ -2130,11 +2142,23 @@ def wait_for_change(bbox: tuple[int, int, int, int],
     immediately races the change and sees the old frame, so the agent concludes
     nothing happened and acts twice. This captures (or accepts) a ``baseline``
     snapshot of the region, then re-captures every ``interval`` until a capture
-    differs from it. Returns ``{changed, captures, elapsed}`` — ``changed`` is
-    whether the onset arrived before ``timeout``. The idiom is
+    differs from it. Returns ``{changed, pixels, captures, elapsed}`` —
+    ``changed`` is whether the onset arrived before ``timeout`` and ``pixels``
+    how many differed at that moment. The idiom is
     ``baseline = crop; act(); wait_for_change(bbox, baseline)`` then optionally
     ``wait_until_stable``: catch the change beginning, then its coming to rest.
-    The onset twin of ``wait_until_stable``'s cessation."""
+    The onset twin of ``wait_until_stable``'s cessation.
+
+    Difference is measured through :func:`region_diff` with ``tol``/``min_count``
+    (F244): the onset fires only once at least ``min_count`` pixels differ by
+    more than ``tol`` per channel. The defaults ``tol=0, min_count=1`` are exact
+    byte-equality — identical to the original behaviour — but raising them is
+    what makes this a *meaningful*-change waiter rather than a *any-pixel* one:
+    a blinking caret, a hover ring, a one-bit antialiasing wobble, or the mouse
+    cursor passing through the region no longer counts as "it happened". This is
+    the onset's half of the same tolerant equality :func:`region_diff` was
+    written to give the waits — now ``wait_for_change`` is as robust to noise as
+    ``locate_change``/``locate_change_blobs`` already are."""
     start = time.time()
     if baseline is None:
         w, h, rgb = capture_rgb()
@@ -2145,11 +2169,12 @@ def wait_for_change(bbox: tuple[int, int, int, int],
         w, h, rgb = capture_rgb()
         patch, _pw, _ph = crop_rgb(rgb, (w, h), bbox)
         captures += 1
-        if patch != baseline:
-            return {"changed": True, "captures": captures,
+        pixels = region_diff(patch, baseline, tol=tol)["pixels"]
+        if pixels >= min_count:
+            return {"changed": True, "pixels": pixels, "captures": captures,
                     "elapsed": time.time() - start}
         time.sleep(interval)
-    return {"changed": False, "captures": captures,
+    return {"changed": False, "pixels": 0, "captures": captures,
             "elapsed": time.time() - start}
 
 
