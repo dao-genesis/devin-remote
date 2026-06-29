@@ -119,17 +119,17 @@ function loadSignal() {
     assert.deepStrictEqual(c._candBases(), ["https://ep"]);
   });
 
-  // ── 3. 中继 FIFO 单飞 (并发上限 1) ────────────────────────────────────────
-  console.log("\n[relay FIFO 单飞]");
-  await test("_RQ_MAX === 1", () => assert.strictEqual(C.RQ_MAX, 1));
-  await test("并发 relay() 串行执行 (峰值在飞 ≤ 1)", async () => {
+  // ── 3. 中继 FIFO (并发上限 2·抗饿死) ────────────────────────────────────────
+  console.log("\n[relay FIFO 抗饿死]");
+  await test("_RQ_MAX === 2", () => assert.strictEqual(C.RQ_MAX, 2));
+  await test("并发 relay() 受限执行 (峰值在飞 ≤ 2)", async () => {
     let cur = 0, max = 0;
     const c = makeConsole({ fetch: function () {
       cur++; max = Math.max(max, cur);
       return new Promise((res) => setTimeout(() => res({ status: 200, text: () => { cur--; return Promise.resolve("{\"ok\":true}"); } }), 5));
     } });
     await Promise.all([c.relay("/api/rpc", {}), c.relay("/api/rpc", {}), c.relay("/api/rpc", {})]);
-    assert.strictEqual(max, 1, "三路并发应串行, 峰值在飞=1");
+    assert.strictEqual(max, 2, "三路并发应受限, 峰值在飞=2");
   });
 
   // ── 4. _relayDirect: P2P 优先 + 失败零代价回退 HTTP ───────────────────────
