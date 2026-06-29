@@ -1,8 +1,8 @@
 {
   "name": "dao-proxy-pro",
   "displayName": "道Agent Pro · 外接API · 反者道之动",
-  "description": "道Agent Pro · 外接 API 渠道接入：选一个渠道、填一个 API Key 即用，自动识别可用模型。支持 OpenAI/DeepSeek/智谱GLM/Kimi 等 OpenAI 兼容接口及 Anthropic、Gemini，内置用量统计与配置原子保存/备份。",
-  "version": "9.9.320",
+  "description": "在 dao-proxy-min 反代/提示词隔离之上，新增外接第三方 API：多 Key/多端点加权负载均衡 + 故障转移、按渠道/模型用量与成本可见、配置原子写+备份轮转、四面板（本源观照/渠道配置/模型路由/模型反代）、只填 API Key 自动识别模型。模型反代(反者道之动)把已接通模型反向暴露为标准 OpenAI(/v1/chat/completions)与 Anthropic(/v1/messages)本地端点，脱离 Devin Desktop 供智能家居/本地设备直调。完整版本历史见 CHANGELOG。",
+  "version": "9.9.322",
   "publisher": "dao-agi",
   "license": "Apache-2.0",
   "engines": {
@@ -10,9 +10,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/zhouyoukang/windsurf-assistant.git"
+    "url": "https://github.com/zhouyoukang1234-spec/windsurf-assistant.git",
+    "directory": "plugins/dao-proxy-pro"
   },
-  "homepage": "https://github.com/zhouyoukang/windsurf-assistant",
+  "homepage": "https://github.com/zhouyoukang1234-spec/windsurf-assistant",
   "icon": "media/icon.png",
   "categories": [
     "AI",
@@ -103,6 +104,11 @@
         "category": "道Agent Pro"
       },
       {
+        "command": "dao.restoreOfficial",
+        "title": "道Agent Pro: 复原官方直连 (卸载善后/解锚 · 卡死自救)",
+        "category": "道Agent Pro"
+      },
+      {
         "command": "dao.term.exec",
         "title": "道Agent Pro: 终端会话池 · exec (七层一招治 · 零第三方)",
         "category": "道Agent Pro"
@@ -125,6 +131,16 @@
       {
         "command": "dao.modelUnlock.status",
         "title": "道Agent Pro: 模型解锁 状态 (查看全量模型目录)",
+        "category": "道Agent Pro"
+      },
+      {
+        "command": "dao.revproxy.toggle",
+        "title": "道Agent Pro: 模型反代 开关 (反者道之动 · 标准 OpenAI/Anthropic 本地端点)",
+        "category": "道Agent Pro"
+      },
+      {
+        "command": "dao.revproxy.status",
+        "title": "道Agent Pro: 模型反代 状态 (端点/Key/可反代模型)",
         "category": "道Agent Pro"
       }
     ],
@@ -167,6 +183,11 @@
           "type": "boolean",
           "default": true,
           "description": "模型解锁 · 执大象天下往 · 拦截GetUserSettings响应注入全量109模型目录 · 突破账号权限限制 · 前端显示所有模型"
+        },
+        "dao.revproxy.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "模型反代 · 反者道之动 · 把『渠道配置/模型路由』已接通模型反向暴露为标准 OpenAI(/v1/chat/completions,/v1/models)与 Anthropic(/v1/messages)本地端点 · 脱离 Devin Desktop · 供智能家居/本地脚本/其他设备以标准 SDK 直调. 配置落 ~/.codeium/dao-byok/revproxy.json. 默认关 · 在④模型反代面板开启."
         }
       }
     }
@@ -176,6 +197,7 @@
     "test:quick": "node vendor/外接api/core/dao-test.js --quick",
     "test:e2e": "node vendor/外接api/core/dao-test.js --e2e",
     "test:protocol": "node vendor/外接api/core/dao-test.js --protocol",
+    "test:revproxy": "node vendor/外接api/core/_revproxy_selftest.js",
     "package": "vsce package --no-dependencies --allow-missing-repository"
   },
   "devDependencies": {

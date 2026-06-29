@@ -3086,6 +3086,9 @@ function handleControl(req, res) {
           last_unlock4: _unlockStats.last_unlock4,
           last_at: _unlockStats.last_at,
           last_bytes: _unlockStats.last_bytes,
+          last_total: _unlockStats.last_total,
+          last_available: _unlockStats.last_available,
+          schema: _unlockStats.schema,
         },
         // v9.9.21 · 唯变所适 · 让位标志 · ext-host 见 quitted=true 不再 require 起
         quitted: _quitSignaled,
@@ -4895,13 +4898,59 @@ function _buildStaticFamilies() {
   return order.map((k) => fams.get(k));
 }
 
+// ★ 救生索恒显 (利而不害·只增不减): swe-1-6-slow 是 Windsurf 在官方不可达时
+//   仍保留的唯一可选档(救生索), 但官方 catalog 无其独立项 → ③左侧从不显示它,
+//   用户便无从把它连到第三方 → 官方一挂即彻底卡死。
+//   治: 左侧官方家族恒补一项「SWE-1.6 Slow」(familyUid=swe-1.6-slow·member=swe-1-6-slow),
+//       与已有「SWE-1.6 Fast」对称 → 始终可见·始终可连第三方 (连族即覆盖全档·见 dao_router familyTierExtend)
+//   道义: 二十七章「善救物·故无弃物」· 四十章「反者道之动」· 万物并育而不相害
+function _ensureLifelineFamilies(fams) {
+  try {
+    const list = Array.isArray(fams) ? fams : [];
+    const hasSlow = list.some(
+      (f) =>
+        f &&
+        (String(f.familyUid || "").toLowerCase() === "swe-1.6-slow" ||
+          (f.members || []).some((m) => m && m.modelUid === "swe-1-6-slow")),
+    );
+    if (hasSlow) return list;
+    const slowFam = {
+      familyUid: "swe-1.6-slow",
+      label: "SWE-1.6 Slow",
+      provider: "MODEL_PROVIDER_WINDSURF",
+      isRecommended: true,
+      isNew: true,
+      members: [
+        {
+          modelUid: "swe-1-6-slow",
+          label: "SWE-1.6 Slow",
+          tier: "base",
+          isDefault: false,
+        },
+      ],
+      _lifeline: true,
+    };
+    // 紧随 swe-1.6-fast / swe-1.6 之后插入 · 视觉成组 (无锚则末尾追加)
+    let anchor = -1;
+    for (let i = 0; i < list.length; i++) {
+      const fu = String((list[i] && list[i].familyUid) || "").toLowerCase();
+      if (fu === "swe-1.6-fast" || fu === "swe-1.6") anchor = i;
+    }
+    if (anchor >= 0) list.splice(anchor + 1, 0, slowFam);
+    else list.push(slowFam);
+    return list;
+  } catch {
+    return Array.isArray(fams) ? fams : [];
+  }
+}
+
 // ★ v9.9.275 · 利而不害·只增不减: 左侧官方模型恒以全量静态目录为底,
 //   活捕新鲜时并入实捕(命中则标记 live·补全档位; 实捕独有则追加),
 //   绝不因活捕而令左侧官方模型变少 · 万物并育而不相害
 function _getOfficialFamilies() {
   const staticFams = _buildStaticFamilies();
   const live = _liveFresh() ? _liveModelCapture.families || [] : [];
-  if (!live.length) return staticFams;
+  if (!live.length) return _ensureLifelineFamilies(staticFams);
   const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const out = staticFams.map((f) =>
     Object.assign({}, f, { members: f.members.slice() }),
@@ -4929,7 +4978,7 @@ function _getOfficialFamilies() {
       if (nf.label) idx.set(norm(nf.label), at);
     }
   }
-  return out;
+  return _ensureLifelineFamilies(out);
 }
 
 function _isModelUnlockEnabled() {
@@ -4949,7 +4998,7 @@ function _isModelUnlockEnabled() {
 //   零依赖 protobuf 改写: 仅丢弃含徽标之 field 33 · 余皆原样回灌
 // ═══════════════════════════════════════════════════════════
 const _PRO_BADGE = Buffer.from("Upgrade to Pro");
-const _unlockStats = { calls: 0, dropped_total: 0, last_dropped: 0, unlock4_total: 0, last_unlock4: 0, last_at: 0, last_bytes: "" };
+const _unlockStats = { calls: 0, dropped_total: 0, last_dropped: 0, unlock4_total: 0, last_unlock4: 0, last_at: 0, last_bytes: "", last_total: 0, last_available: 0, schema: "" };
 function _pbReadVarint(buf, i) {
   let shift = 0,
     result = 0;
@@ -5463,6 +5512,88 @@ function _pbCloneSwapStrings(buf, map) {
   return Buffer.concat(out);
 }
 
+// ═══════════════════════════════════════════════════════════
+// ★ v9.9.319 · 新架构解锁 · 反者道之动 · 损之又损以至无为
+//   新版 Windsurf GetUserStatus 已弃 "Upgrade to Pro" 徽标
+//   模型可用性改由每模型 field 20 (varint=1) 标记: 免费层仅 SWE 系有之
+//   → 旧徽标解锁在新架构下无锁可去 (calls=0) · 只剩 SWE 系可选
+//   治法 (利而不害·只增不改): 沿 top.f1.f33.f1[] 为每个真模型项补 field20=1
+//   → 全模型与免费 SWE 同标 · picker 全可选 · 不删任何字段·不破坏原结构
+// ═══════════════════════════════════════════════════════════
+function _pbRebuildField(buf, targetField, fn) {
+  const out = [];
+  let i = 0;
+  const n = buf.length;
+  while (i < n) {
+    let tag;
+    [tag, i] = _pbReadVarint(buf, i);
+    const field = tag >> 3;
+    const wt = tag & 7;
+    if (wt === 0) {
+      let v;
+      [v, i] = _pbReadVarint(buf, i);
+      out.push(_pbTag(field, 0), _pbEncVarint(v));
+    } else if (wt === 2) {
+      let ln;
+      [ln, i] = _pbReadVarint(buf, i);
+      let sub = buf.slice(i, i + ln);
+      i += ln;
+      if (field === targetField) sub = fn(sub);
+      out.push(_pbTag(field, 2), _pbEncVarint(sub.length), sub);
+    } else if (wt === 5) {
+      out.push(_pbTag(field, 5), buf.slice(i, i + 4));
+      i += 4;
+    } else if (wt === 1) {
+      out.push(_pbTag(field, 1), buf.slice(i, i + 8));
+      i += 8;
+    } else {
+      return buf;
+    }
+  }
+  return Buffer.concat(out);
+}
+function _pbHasField(buf, targetField) {
+  let i = 0;
+  const n = buf.length;
+  try {
+    while (i < n) {
+      let tag;
+      [tag, i] = _pbReadVarint(buf, i);
+      const field = tag >> 3;
+      const wt = tag & 7;
+      if (field === targetField) return true;
+      if (wt === 0) {
+        let v;
+        [v, i] = _pbReadVarint(buf, i);
+      } else if (wt === 2) {
+        let ln;
+        [ln, i] = _pbReadVarint(buf, i);
+        i += ln;
+      } else if (wt === 5) i += 4;
+      else if (wt === 1) i += 8;
+      else return false;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+// 沿 top.f1(用户记录).f33(模型容器).f1[](模型项) 为缺 field20 之真模型项补 field20=1
+function _pbEnsureModelsAvailable(data, stats) {
+  return _pbRebuildField(data, 1, (userRec) =>
+    _pbRebuildField(userRec, 33, (container) =>
+      _pbRebuildField(container, 1, (entry) => {
+        // 仅认含 field22(modelUid 串)+field23(详情子消息) 之真模型项
+        if (!_pbHasField(entry, 22) || !_pbHasField(entry, 23)) return entry;
+        stats.total = (stats.total || 0) + 1;
+        if (_pbHasField(entry, 20)) { stats.already = (stats.already || 0) + 1; return entry; }
+        stats.added += 1;
+        return Buffer.concat([entry, _pbTag(20, 0), _pbEncVarint(1)]);
+      }),
+    ),
+  );
+}
+
 // 入口: 对 gzip(proto) GetUserStatus body 做真解锁 · 失败则原样返回 (利而不害)
 function _unlockUserStatusBody(bodyBuf, contentEncoding, rid) {
   try {
@@ -5476,7 +5607,27 @@ function _unlockUserStatusBody(bodyBuf, contentEncoding, rid) {
         log(`#${rid} [dump] GetUserStatus proto 落盘 ${data.length}B`);
       }
     } catch {}
-    if (data.indexOf(_PRO_BADGE) < 0) return null; // 无锁可解
+    if (data.indexOf(_PRO_BADGE) < 0) {
+      // ★ v9.9.319 · 新架构 (无 "Upgrade to Pro" 徽标): 补 field20 可用标记解锁
+      const ns = { added: 0 };
+      const nsOut = _pbEnsureModelsAvailable(data, ns);
+      if (ns.added > 0 && _pbParseOk(nsOut) && nsOut.length >= data.length) {
+        const finalBuf = isGz ? zlib.gzipSync(nsOut) : nsOut;
+        _unlockStats.calls += 1;
+        _unlockStats.dropped_total += ns.added;
+        _unlockStats.last_dropped = ns.added;
+        _unlockStats.last_at = Date.now();
+        _unlockStats.last_bytes = `NS ${data.length}->${nsOut.length} gz ${bodyBuf.length}->${finalBuf.length}`;
+        _unlockStats.last_total = ns.total || 0;
+        _unlockStats.last_available = (ns.already || 0) + ns.added;
+        _unlockStats.schema = "new(field20)";
+        log(
+          `#${rid} [真解锁·新架构] GetUserStatus 补 field20 可用标记 ${ns.added} 项 · ${data.length}→${nsOut.length}B (gz ${bodyBuf.length}→${finalBuf.length})`,
+        );
+        return finalBuf;
+      }
+      return null; // 无锁可解 (新架构亦无模型项)
+    }
     // 一遍·基线解锁(去徽标+去field4) · 不注入 · 必有效则用之
     const stats = { dropped: 0, unlock4: 0, models: [] };
     const out1 = _pbDropProBadge(data, stats);
@@ -5530,6 +5681,9 @@ function _unlockUserStatusBody(bodyBuf, contentEncoding, rid) {
     _unlockStats.last_injected = injectedCount;
     _unlockStats.last_at = Date.now();
     _unlockStats.last_bytes = `${data.length}->${out.length} gz ${bodyBuf.length}->${finalBuf.length}`;
+    _unlockStats.last_total = stats.models ? stats.models.length : 0;
+    _unlockStats.last_available = _unlockStats.last_total;
+    _unlockStats.schema = "old(badge)";
     log(
       `#${rid} [真解锁] GetUserStatus 去 Pro锁(field4) ${stats.unlock4} 项 + 去徽标 ${stats.dropped} 项 + 注入全量 ${injectedCount} 项 · ${data.length}→${out.length}B (gz ${bodyBuf.length}→${finalBuf.length})`,
     );
@@ -5542,6 +5696,148 @@ function _unlockUserStatusBody(bodyBuf, contentEncoding, rid) {
 
 // 初始加载
 _loadFullModelCatalog();
+
+/**
+ * ★ v9.9.260+ · 模型解锁代理 · 执大象 天下往
+ *
+ * 拦截 GetUserSettings / GetCascadeModelConfigs → 注入全量模型目录
+ *
+ * 响应格式 (Connect-JSON):
+ *   {"userSettings":{"cachedCascadeModelConfigs":[...]}}
+ *
+ * 注入策略 (v2 · 往而不害):
+ *   1. 先请求LS原始响应 → 获取用户BYOK等原有模型
+ *   2. 合并: 保留原有 + 补充目录中缺失的模型 (modelUid去重)
+ *   3. 强制解锁: 所有模型 disabled=false → 突破账号权限限制
+ *   4. 排序: isRecommended/isNew 优先 → creditMultiplier 升序
+ *
+ * 道义: 三十五章「往而不害」· 补充不破坏 · 原有模型保留
+ *       「执大象 天下往」· 全量模型即大象 · 执之则天下往
+ */
+function proxyToCloudWithModelUnlock(req, res, rid) {
+  const rpcName = (req.url || "").split("/").pop() || "?";
+  const unlockEnabled = _isModelUnlockEnabled();
+  const catalog = _fullModelCatalog || _loadFullModelCatalog();
+
+  if (!unlockEnabled || !catalog) {
+    log(
+      `#${rid} [model-unlock] 退化为透传 (enabled=${unlockEnabled}, catalog=${!!catalog})`,
+    );
+    proxyToCloud(req, res, undefined, rid);
+    return;
+  }
+
+  log(`#${rid} [model-unlock] 拦截 ${rpcName} → 合并全量模型目录`);
+
+  // ★ v2: 先收集请求body → 转发LS获取原始响应 → 合并
+  let reqBody = [];
+  req.on("data", (c) => reqBody.push(c));
+  req.on("end", () => {
+    reqBody = Buffer.concat(reqBody);
+    _proxyAndInject(req, res, rid, rpcName, catalog, reqBody);
+  });
+}
+
+/**
+ * ★ v2 · 先请求LS原始响应 → 合并全量目录 → 强制解锁
+ *
+ * 流程:
+ *   1. 转发请求到LS → 获取原始GetUserSettings响应
+ *   2. 解析原始模型列表 → 保留用户BYOK等
+ *   3. 合并全量目录 → modelUid去重
+ *   4. 强制 disabled=false → 突破权限
+ *   5. 返回合并后的响应
+ *
+ * 降级: 如果LS请求失败 → 直接返回全量目录 (往而不害)
+ */
+function _proxyAndInject(req, res, rid, rpcName, catalog, reqBody) {
+  const route = routeUpstream(req.url);
+  const lsPort = route.port || CLOUD_PORT;
+  const lsHost = route.host || CLOUD_HOST;
+
+  // 构造转发请求
+  const headers = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (!k.startsWith(":") && !H1_CONN_HEADERS.has(k)) headers[k] = v;
+  }
+  if (reqBody.length > 0) {
+    headers["content-length"] = String(reqBody.length);
+  }
+
+  const opts = {
+    hostname: "127.0.0.1",
+    port: lsPort,
+    path: req.url,
+    method: req.method,
+    headers,
+    timeout: 8000,
+  };
+
+  const lsReq = http.request(opts, (lsRes) => {
+    let body = [];
+    lsRes.on("data", (c) => body.push(c));
+    lsRes.on("end", () => {
+      body = Buffer.concat(body);
+      const status = lsRes.statusCode;
+
+      if (status !== 200) {
+        // LS返回非200 → 降级为直接返回全量目录
+        log(`#${rid} [model-unlock] LS返回${status} → 降级直接返回全量目录`);
+        _respondWithCatalog(res, catalog, rid);
+        return;
+      }
+
+      try {
+        const orig = JSON.parse(body.toString("utf8"));
+        // 递归查找 cachedCascadeModelConfigs
+        const existing = _extractModelConfigs(orig);
+        if (existing) {
+          // ★ 合并: 保留原有 + 补充缺失 + 强制解锁
+          _mergeAndUnlock(existing, catalog);
+          const outBody = JSON.stringify(orig);
+          res.writeHead(200, {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(outBody),
+          });
+          res.end(outBody);
+          log(
+            `#${rid} [model-unlock] 合并完成: ${existing.length} models (${outBody.length} bytes)`,
+          );
+        } else {
+          // 无cachedCascadeModelConfigs → 直接注入
+          _injectCatalogIntoResponse(orig, catalog);
+          const outBody = JSON.stringify(orig);
+          res.writeHead(200, {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(outBody),
+          });
+          res.end(outBody);
+          log(
+            `#${rid} [model-unlock] 注入完成: ${catalog.length} models (${outBody.length} bytes)`,
+          );
+        }
+      } catch (e) {
+        // JSON解析失败 → 降级
+        log(`#${rid} [model-unlock] LS响应解析失败: ${e.message} → 降级`);
+        _respondWithCatalog(res, catalog, rid);
+      }
+    });
+  });
+
+  lsReq.on("error", (e) => {
+    log(`#${rid} [model-unlock] LS请求失败: ${e.message} → 降级`);
+    _respondWithCatalog(res, catalog, rid);
+  });
+
+  lsReq.on("timeout", () => {
+    lsReq.destroy();
+    log(`#${rid} [model-unlock] LS请求超时 → 降级`);
+    _respondWithCatalog(res, catalog, rid);
+  });
+
+  if (reqBody.length > 0) lsReq.write(reqBody);
+  lsReq.end();
+}
 
 /**
  * 递归查找响应中的 cachedCascadeModelConfigs 数组
@@ -5619,6 +5915,23 @@ function _injectCatalogIntoResponse(obj, catalog) {
       _injectCatalogIntoResponse(obj[key], catalog);
     }
   }
+}
+
+/**
+ * 降级: 直接返回全量目录
+ */
+function _respondWithCatalog(res, catalog, rid) {
+  const models = Array.isArray(catalog) ? catalog : catalog.models || [];
+  const response = { userSettings: { cachedCascadeModelConfigs: models } };
+  const body = JSON.stringify(response);
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(body),
+  });
+  res.end(body);
+  log(
+    `#${rid} [model-unlock] 降级返回: ${models.length} models, ${body.length} bytes`,
+  );
 }
 
 // (旧 _injectModelCatalog / _mergeModelCatalog 已由 v2 _extractModelConfigs / _mergeAndUnlock 替代)
@@ -5790,73 +6103,6 @@ function proxyToCloud(req, res, overrideBody, _rid) {
           return; // 已接管 · 不再 pipe
         }
       }
-      // ★ 模型解锁 · GetUserSettings/GetCascadeModelConfigs(JSON) 缓冲加性合并 · 往而不害
-      //   与上 GetUserStatus(proto) 对称: 复用真实上游响应 → 合并全量目录 → 写回
-      //   任何异常一律原样透传真实响应 (从不伪造 · 绝不丢弃真实 userSettings)
-      {
-        const _rpcPathS = route.path || req.url || "";
-        const _ctS = (h2resHeaders && h2resHeaders["content-type"]) || "";
-        const _ceS = (h2resHeaders && h2resHeaders["content-encoding"]) || "";
-        if (
-          _isModelUnlockEnabled() &&
-          status === 200 &&
-          /(GetUserSettings|GetCascadeModelConfigs)/i.test(_rpcPathS) &&
-          /json/i.test(_ctS)
-        ) {
-          const _catS = _fullModelCatalog || _loadFullModelCatalog();
-          if (_catS) {
-            let _sb = [],
-              _sn = 0;
-            const _sbMax = 4 * 1024 * 1024;
-            upStream.on("data", (c) => {
-              if (_sn < _sbMax) {
-                _sb.push(c);
-                _sn += c.length;
-              }
-            });
-            upStream.on("end", () => {
-              const orig = Buffer.concat(_sb);
-              let outBuf = orig; // 默认原样透传 · 往而不害
-              try {
-                const isGz =
-                  /gzip/i.test(_ceS) ||
-                  (orig.length > 2 && orig[0] === 0x1f && orig[1] === 0x8b);
-                const jsonBuf = isGz ? zlib.gunzipSync(orig) : orig;
-                const obj = JSON.parse(jsonBuf.toString("utf8"));
-                const existing = _extractModelConfigs(obj);
-                if (existing) _mergeAndUnlock(existing, _catS);
-                else _injectCatalogIntoResponse(obj, _catS);
-                const merged = Buffer.from(JSON.stringify(obj), "utf8");
-                outBuf = isGz ? zlib.gzipSync(merged) : merged;
-                log(
-                  `#${_rid} [model-unlock] GetUserSettings 加性合并 ${existing ? existing.length : (Array.isArray(_catS) ? _catS.length : 0)} 模型 · ${orig.length}→${outBuf.length}B`,
-                );
-              } catch (e) {
-                outBuf = orig; // 失败即原样透传 · 绝不伪造
-                log(
-                  `#${_rid} [model-unlock] GetUserSettings 合并异常→原样透传: ${e.message}`,
-                );
-              }
-              try {
-                const h = { ...resHeaders };
-                delete h["content-length"];
-                h["content-length"] = String(outBuf.length);
-                res.writeHead(status, h);
-                res.end(outBuf);
-              } catch (e2) {
-                log(`#${_rid} [model-unlock] 写回失败 → 502: ${e2.message}`);
-                try {
-                  if (!res.headersSent) {
-                    res.writeHead(502);
-                    res.end();
-                  }
-                } catch {}
-              }
-            });
-            return; // 已接管 · 不再 pipe
-          }
-        }
-      }
       try {
         res.writeHead(status, resHeaders);
       } catch (e) {
@@ -6022,6 +6268,80 @@ function _buildAllFieldEntry(c, mode) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════
+// 模型反代 (Model Reverse Proxy) · 反者道之动
+//   把 渠道配置/模型路由 已接通的模型反向暴露为标准 OpenAI(/v1/chat/completions,
+//   /v1/models) 与 Anthropic(/v1/messages) 本地端点 · 脱离 Devin Desktop 直调。
+//   控制面: /origin/revproxy/{status,config}。逻辑独立于 vendor/外接api/core/revproxy.js。
+// ═══════════════════════════════════════════════════════════
+let _revproxyMod = null;
+function _getRevproxy() {
+  if (_revproxyMod) return _revproxyMod;
+  try {
+    _revproxyMod = require(
+      path.join(__dirname, "..", "外接api", "core", "revproxy.js"),
+    );
+  } catch (e) {
+    log("[revproxy] load fail: " + (e && e.message));
+    _revproxyMod = null;
+  }
+  return _revproxyMod;
+}
+function _revproxyDeps() {
+  return {
+    getEaConfig: () =>
+      _eaRuntimeMod && _eaRuntimeMod.hotGetConfig
+        ? _eaRuntimeMod.hotGetConfig()
+        : {},
+    getAvailableModels: _getAvailableModels,
+    resolveRoute: (uid) => {
+      try {
+        const r = _ea ? _ea.getRouter() : null;
+        return r && r.resolveRoute ? r.resolveRoute(uid) : null;
+      } catch (_) {
+        return null;
+      }
+    },
+    invertSP,
+    getProxyAgent: _originGetProxyAgent,
+    log,
+    version: ORIGIN_VERSION,
+    port: _actualPort,
+  };
+}
+async function _maybeRevproxy(req, res) {
+  if (
+    !req.url ||
+    (!req.url.startsWith("/v1/") && !req.url.startsWith("/origin/revproxy"))
+  )
+    return false;
+  const mod = _getRevproxy();
+  if (!mod) return false;
+  const u = url.parse(req.url, true);
+  // CORS · 与 handleControl 同策(webview/本地客户端直连)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, x-api-key",
+  );
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return true;
+  }
+  try {
+    return await mod.handle(req, res, u, _revproxyDeps());
+  } catch (e) {
+    log("[revproxy] handle err: " + (e && e.message));
+    try {
+      res.statusCode = 500;
+      res.end(JSON.stringify({ error: { message: String(e && e.message) } }));
+    } catch (_) {}
+    return true;
+  }
+}
+
 // v7.8 反者道之动: TCP 层协议复用 (HTTP/1.1 + HTTP/2 h2c 同端口)
 // Go gRPC (h2c) 入 → h2 server; HTTP/1.1 (mgmt/control) → h1 server
 const _mainHandler = async (req, res) => {
@@ -6030,6 +6350,13 @@ const _mainHandler = async (req, res) => {
   req.on("error", (e) => log(`#${rid} req err: ${e.message}`));
   res.on("error", (e) => log(`#${rid} res err: ${e.message}`));
   try {
+    // 0. 模型反代 (标准 OpenAI/Anthropic 本地端点 + 其控制面)
+    if (
+      req.url &&
+      (req.url.startsWith("/v1/") || req.url.startsWith("/origin/revproxy"))
+    ) {
+      if (await _maybeRevproxy(req, res)) return;
+    }
     // 1. 控制面
     if (req.url && req.url.startsWith("/origin/")) {
       if (handleControl(req, res)) return;
@@ -6049,13 +6376,11 @@ const _mainHandler = async (req, res) => {
       return;
     }
 
-    // ★ 模型解锁 · 往而不害 · 复用真实上游 · 响应侧加性合并
-    //   GetUserSettings/GetCascadeModelConfigs 透传至真实上游 (server.codeium.com)
-    //   → 拿到真实 userSettings → 在 H2 响应回调里加性合并全量模型目录
-    //   (见 proxyToCloud 内 GetUserSettings JSON 分支) · 从不伪造 · 失败即原样透传
+    // ★ v9.9.260 · 模型解锁 · 反者道之动 · 执大象 天下往
+    //   GetUserSettings 响应注入全量模型目录 · 突破账号权限限制
     //   道义: 三十五章「执大象 天下往 往而不害 安平太」
     if (kind === "MODEL_UNLOCK") {
-      proxyToCloud(req, res, undefined, rid);
+      proxyToCloudWithModelUnlock(req, res, rid);
       return;
     }
 
