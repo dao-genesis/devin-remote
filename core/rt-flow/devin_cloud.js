@@ -2423,7 +2423,10 @@ function isCleanupReady(email, cooldownMs) {
   if (sinceBk < cd) return { ready: false, reason: "cooldown", remaining: cd - sinceBk };
   if (st.lastConvUpdateAt && (now - st.lastConvUpdateAt) < cd)
     return { ready: false, reason: "recent_update", remaining: cd - (now - st.lastConvUpdateAt) };
-  if (st.cleanedAt) return { ready: false, reason: "already_cleaned" };
+  // v4.10.0: 允许再次清理 — 旧逻辑 cleanedAt>0 就永远阻断, 导致账号充值后再归零无法再清。
+  //   新逻辑: 仅当 cleanedAt 晚于 backupCompletedAt 时阻断 (备份是在上次清理之前做的, 不能再用旧备份清)。
+  //   若 backupCompletedAt > cleanedAt 则说明清理后有新的全量备份 → 允许新一轮清理。
+  if (st.cleanedAt && st.cleanedAt >= st.backupCompletedAt) return { ready: false, reason: "already_cleaned" };
   return { ready: true };
 }
 
