@@ -2,6 +2,19 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.324 · 官方直通捕获帧解析归一(反者道之动 · schema 自适应 · 逐字节保形)
+: 修复 ④ 模型反代「官方直通」实测报「捕获帧解析失败」。真因：新版 Cascade GetChatMessage
+wire 已将**消息数组从 field2 迁到 field3、正文从 sub-field2 迁到 sub-field3**，旧 `findMsgsField`
+误把 field2(15883B 系统提示长串·`looksLikeUtf8Text` 命中)当消息数组、且 `_pbCloneSwapStrings`
+仅换 <200B 纯 ASCII 短串、容不下多行长正文 → 解析必败。
+- `_swapLastUserMsg` 重写为 **schema 自适应**：候选 [3,2,10,17] 里挑「末条目可解析且含字符串正文」
+  者为消息数组，末条目内取「最长 UTF-8 子字段」为正文，经 `_pbRebuildField` 沿 path 逐字节重算
+  长度前缀替换（只改末条、其余原样保形），不再依赖短串白名单。
+- `_officialChatReplay` 摘除 `connect-content-encoding/grpc-encoding` 头（`buildFrame` 恒输出
+  uncompressed，留 gzip 声明会被上游误解致 400）。
+- 自检新增 [12] 捕获帧解析回归：新wire(field3)/老wire(field2)末条正文换入 + 首条保形 + 空帧不崩。
+  revproxy 自检 29 断言全过。
+
 v9.9.323 · 模型反代「全量呈现 + 配额着色 + 官方直通」(道法自然 · 万物并育而不相害)
 : ④ 模型反代不再只列已接通的若干模型，而是像「② 渠道配置」一样**全量呈现一切可反代之模型**——
 官方全量目录(108)+ 运行时官方家族 + 模型路由表 + 渠道显式 models，去重并育于一张列表。
