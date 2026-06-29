@@ -7839,3 +7839,46 @@ committed as `_game_mahjongg.py` (`auto_clear` runs the full loop). Honest limit
 full-board `step=1` classification is still ~11 s/seed; the intended cheap path
 is the F240 idiom — `find_color_blobs(search=ROI)` to a small band, then match
 within it — which this primitive composes with directly.
+
+---
+
+> 知止所以不殆。 The change is everywhere the frame answered; knowing *where to
+> stop looking* is what makes the one move you care about legible.
+
+## F242 — the change channel needed the same ROI window colour got in F240
+
+Pushing into a turn-based, modal GUI (gnome-chess) to read moves **purely from
+pixels**: act, then ask `locate_change_blobs(before, after)` *where* the board
+answered — the from-square empties, the to-square fills, two blobs, done. But a
+live app answers an action in more places than the board. Playing Black's `exd4`
+and diffing the whole frame returned **seven** changed regions: the real `e5`
+and `d4`, tangled with the status line ("White to Move"), the move-history list,
+and the window title — the extra four mis-bin as phantom rank-1/rank-8 squares.
+`locate_change` folds them all into one centroid that lands in dead space;
+`locate_change_blobs` emits spurious clickable targets. The reader could not
+tell the move from the chrome.
+
+The fix already existed one channel over. F240 gave `find_color`/`find_color_blobs`
+a `search=(minx,miny,maxx,maxy)` ROI so colour segmentation stays cheap and
+local; the **change** primitives never got it, so callers had to diff the whole
+screen and post-filter by geometry — exactly the error-prone step that mis-binned
+status text as board squares. This is the same friction (F052→F240) met a third
+time, now on change itself.
+
+**Fix** (`osctl.py`). Added the identical `search=` ROI to `locate_change` and
+`locate_change_blobs`: same `(minx,miny,maxx,maxy)` screen window, same clamp
+(`max(0,·)` / `min(w-1,·)`, `min(h-1,·)`), scan loops bounded to it. For the
+blob variant the union-find now runs over **only the ROI's** changed pixels — the
+4-connectivity neighbour checks (`(key-1) in parent`, `(up_base+x) in parent`)
+already gate on membership, so pixels outside the ROI are simply never enrolled
+and the component labelling stays correct at the ROI edge with no extra code.
+
+**Proof (live gnome-chess + synthetic).**  Same `exd4`, same two captures:
+whole-frame `locate_change_blobs` → `['c1','d1','d4','e1','e5','e8','f8']` in
+0.42 s; `search=BOARD` → exactly `['d4','e5']` (the move, read from pixels alone)
+in **0.04 s** — ~10× faster, because the union-find no longer walks the whole
+screen's change. A synthetic two-region case (one inside the ROI, one outside)
+confirms the default whole-frame path is byte-for-byte unchanged (both regions,
+count 50 / 2 blobs) while `search=` returns only the inside region (count 25 /
+1 blob @ the right centroid). `narrow the field first` now holds on all three
+channels — colour, template, and change.

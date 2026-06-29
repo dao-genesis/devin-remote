@@ -1935,7 +1935,8 @@ def sample_color(bbox: tuple[int, int, int, int], rgb: bytes | None = None,
 
 
 def locate_change(before: bytes, after: bytes, size: tuple[int, int],
-                  tol: int = 12, min_count: int = 30) -> dict | None:
+                  tol: int = 12, min_count: int = 30,
+                  search: tuple[int, int, int, int] | None = None) -> dict | None:
     """Find *where* the screen changed between two captures (F135).
 
     ``find_color`` needs the colour, ``locate_phrase`` needs the words — both
@@ -1949,17 +1950,31 @@ def locate_change(before: bytes, after: bytes, size: tuple[int, int],
     *screen* coordinates, exactly what :func:`click` consumes — or ``None`` if
     nothing changed past ``min_count`` pixels. It closes the loop the read stack
     left open: act, see *where* the world answered, then act there — without ever
-    naming the target. The localiser to :func:`region_diff`'s counter."""
+    naming the target. The localiser to :func:`region_diff`'s counter.
+
+    ``search`` (F242): an optional ``(minx, miny, maxx, maxy)`` window (screen
+    coordinates, clamped to the capture) to diff, mirroring :func:`find_color`.
+    A live GUI answers an action in more places than the one you care about —
+    after a chess move the board's two squares change, but so do the status line,
+    the move-history list and the title; whole-frame change folds them all into
+    one centroid. Bound the diff to the region that matters and only its change
+    is reported — the *narrow-the-field-first* discipline F240 gave colour."""
     w, h = size
     if len(before) != len(after):
         raise ValueError("captures differ in size")
+    if search is None:
+        bx0, by0, bx1, by1 = 0, 0, w - 1, h - 1
+    else:
+        bx0, by0, bx1, by1 = search
+        bx0, by0 = max(0, bx0), max(0, by0)
+        bx1, by1 = min(w - 1, bx1), min(h - 1, by1)
     sx = sy = n = 0
     minx = miny = 1 << 30
     maxx = maxy = -1
     stride = w * 3
-    for y in range(h):
+    for y in range(by0, by1 + 1):
         row = y * stride
-        for x in range(w):
+        for x in range(bx0, bx1 + 1):
             i = row + x * 3
             if (abs(before[i] - after[i]) > tol
                     or abs(before[i + 1] - after[i + 1]) > tol
@@ -1982,7 +1997,8 @@ def locate_change(before: bytes, after: bytes, size: tuple[int, int],
 
 
 def locate_change_blobs(before: bytes, after: bytes, size: tuple[int, int],
-                        tol: int = 12, min_count: int = 30) -> list[dict]:
+                        tol: int = 12, min_count: int = 30,
+                        search: tuple[int, int, int, int] | None = None) -> list[dict]:
     """Segment screen change into its *separate* regions (F136).
 
     :func:`locate_change` collapses every changed pixel into one centroid — fine
@@ -1995,10 +2011,24 @@ def locate_change_blobs(before: bytes, after: bytes, size: tuple[int, int],
     returns one ``{x, y, count, bbox}`` per region in *screen* coordinates,
     sorted by pixel count (largest first). Each centroid is a real, clickable
     target; regions smaller than ``min_count`` are dropped. The same friction
-    (F052) once met on a static colour, now met on change itself."""
+    (F052) once met on a static colour, now met on change itself.
+
+    ``search`` (F242): an optional ``(minx, miny, maxx, maxy)`` window (screen
+    coordinates, clamped to the capture) to segment, mirroring :func:`find_color`
+    and :func:`locate_change`. Confining the diff to the region of interest is
+    what makes a move *legible*: a chess move read over the whole frame returns
+    the two moved squares tangled with the status line, history list and title;
+    confined to the board it returns exactly the from- and to-squares — and the
+    union-find runs over only the ROI's changed pixels, not the screen's."""
     w, h = size
     if len(before) != len(after):
         raise ValueError("captures differ in size")
+    if search is None:
+        bx0, by0, bx1, by1 = 0, 0, w - 1, h - 1
+    else:
+        bx0, by0, bx1, by1 = search
+        bx0, by0 = max(0, bx0), max(0, by0)
+        bx1, by1 = min(w - 1, bx1), min(h - 1, by1)
     stride = w * 3
     parent: dict[int, int] = {}
 
@@ -2015,11 +2045,11 @@ def locate_change_blobs(before: bytes, after: bytes, size: tuple[int, int],
         if ra != rb:
             parent[rb] = ra
 
-    for y in range(h):
+    for y in range(by0, by1 + 1):
         row = y * stride
         base = y * w
         up_base = base - w
-        for x in range(w):
+        for x in range(bx0, bx1 + 1):
             i = row + x * 3
             if (abs(before[i] - after[i]) > tol
                     or abs(before[i + 1] - after[i + 1]) > tol
