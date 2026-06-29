@@ -7303,4 +7303,67 @@ KDE Save As (KWrite) → file created ✓.  GIMP Open (GTK) → image loaded ✓
 
 ---
 
+### F226 — `get_clipboard()` reads only local cache, blind to text copied by other X apps
+
+| date | 2026-06-29 |
+|---|---|
+| surface | `chord(0x11, 0x41); chord(0x11, 0x43); get_clipboard()` returns empty — text IS in X CLIPBOARD |
+| root cause | `get_clipboard()` returned `_clip_text` (only what `set_clipboard()` stored); never queried the real X CLIPBOARD selection from other owners |
+
+**Friction.** After the user types text in KWrite, `chord(Ctrl+A)` / `chord(Ctrl+C)` copies text to the X clipboard — verified by `xclip -o -selection clipboard`. But `get_clipboard()` returned the empty `_clip_text`, because it never asked the X server who currently owns CLIPBOARD and what they're serving.
+
+**Root cause.** X11 has no global clipboard buffer. Each application *owns* the CLIPBOARD selection and hands data to each requester via `SelectionRequest` events. `get_clipboard()` was reading a Python variable, not the X selection.
+
+**Fix.** `get_clipboard()` now shells out to `xclip -o -selection clipboard` (already installed as a dependency) with a 2-second timeout. If the owner responds, the real clipboard text is returned. Falls back to `_clip_text` only if xclip fails.
+
+```python
+def get_clipboard() -> str:
+    try:
+        r = subprocess.run(
+            ["xclip", "-o", "-selection", "clipboard"],
+            capture_output=True, timeout=2,
+        )
+        if r.returncode == 0:
+            return r.stdout.decode("utf-8", errors="replace")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return _clip_text
+```
+
+**Proof.** 4/4:
+- Read clipboard after KWrite `Ctrl+A`/`Ctrl+C` → `"CHORD_TEST_DATAHello chord test"` ✓
+- `set_clipboard("test_道法自然"); get_clipboard()` → `"test_道法自然"` ✓
+- gedit `Ctrl+A`/`Ctrl+C` → full text readable ✓
+- Round-trip: set_clipboard → Ctrl+V in app → Ctrl+A/C → get_clipboard ✓
+
+---
+
+### F227 — GTK3/Xfce file dialogs: `uia_file_dialog_set_path` fails — location bar needs Ctrl+L, not `/`
+
+| date | 2026-06-29 |
+|---|---|
+| surface | Mousepad/gedit/Inkscape Save As: `uia_file_dialog_set_path` fails to set filename |
+| root cause | GTK3 GNOME / Xfce file dialogs activate location bar via Ctrl+L; the `/` key only works in older GTK2 dialogs |
+
+**Friction.** F223 added the `/` key to activate GTK file dialog location bars. But GNOME GTK3 (gedit) and Xfce (Mousepad) file dialogs don't respond to `/` — they need `Ctrl+L` to switch to the path-entry mode.  Additionally, Inkscape's GTK file dialog reports 299 AT-SPI elements but ALL have `rect=None`, making semantic clicking impossible.
+
+**Fix.** `uia_file_dialog_set_path` now has three tiers:
+1. KDE: `uia_set_value(name="File name:", ctype="edit")`
+2. Ctrl+L (GNOME GTK3 / Xfce / Inkscape): `chord(0x11, 0x4C)` → `uia_set_value(ctype="edit")`
+3. `/` key (GTK2): `tap(0xBF)` → `uia_set_value(ctype="edit")`
+4. Last resort: `Ctrl+A` + `paste_text`
+
+**Proof.** Full save chains tested on 5 apps:
+- KWrite Save As (KDE): file created ✓ (tier 1)
+- gedit Save As (GTK3): file created via Ctrl+Shift+S → Ctrl+L → type path → Enter ✓
+- Mousepad Save As (Xfce): file created via Ctrl+Shift+S → Ctrl+L → type path → Enter ✓
+- Inkscape Save As (GTK): file created via Ctrl+Shift+S → Ctrl+L → type path → Enter ✓
+- GIMP Export As (GTK): PNG exported via Ctrl+Shift+E → dialog → Export ✓
+
+**Boundary.**
+- Inkscape's GTK file dialog AT-SPI elements all have `rect=None` — semantic clicking is impossible; must use keyboard (Ctrl+L + type path) or coordinate-based fallback.
+- LO Calc still has 0 AT-SPI elements — VCL toolkit boundary remains.
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
