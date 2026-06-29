@@ -1213,8 +1213,26 @@ def mod_scroll(dy: int = 0, dx: int = 0, *mods: int,
 
 
 # ---- keyboard ------------------------------------------------------------- #
-def tap(vk: int) -> None:
+def tap(vk: int, hold: float = 0.0) -> None:
+    """Press and release a key.
+
+    ``hold`` (seconds) keeps the key down in between. Leave it ``0`` for
+    event-driven toolkit widgets — Qt/GTK/wx menus, text fields, accelerators —
+    which latch on the X ``KeyPress`` event itself, so a zero-duration press is
+    seen (this is the historical behaviour, unchanged).
+
+    But self-drawing surfaces — SDL/OpenGL games, emulators, custom canvases —
+    don't act on the event; they sample key *state* once per frame and act on the
+    rising edge they observe at a tick. A press whose down and up land between two
+    ticks is never sampled and is silently dropped (F232: a zero-hold ``tap`` of
+    Return/arrows moved nothing in SuperTux, while a held press did). Pass
+    ``hold>=~0.1`` there so the press spans at least one input tick and is
+    observed; one such press still yields one discrete action (the menu's repeat
+    debounce caps it). For *sustained* input — walking a character, charging —
+    use :func:`key_hold`, whose longer default integrates time-in-state."""
     key_down(vk)
+    if hold > 0:
+        time.sleep(hold)
     key_up(vk)
 
 
