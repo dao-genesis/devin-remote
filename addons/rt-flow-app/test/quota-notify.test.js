@@ -18,15 +18,16 @@ function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { fai
 // ── 源级护栏: trackStuck 必须逆流额度信号并单列 reason=quota (最高优先) ──
 ok(/var QUOTA_RE=\/out_of_quota\|usage_limit/.test(engineSrc),
    "源级: trackStuck 内含 QUOTA_RE 额度信号正则 (与 switch.html 同源)");
-ok(/if\(QUOTA_RE\.test\(qsig\) && _qLive!==true\) reason="quota";\s*\n\s*else if\(actionReq\)/.test(engineSrc),
-   "源级: trackStuck 额度信号最高优先(且经账号实时额度对账·满额号不计耗尽)");
+ok(/if\(QUOTA_RE\.test\(qsig\) && qLive!==true\) return "quota";\s*\n\s*if\(actionReq\) return "action_required";/.test(engineSrc),
+   "源级: convReasonOf 额度信号最高优先(且经账号实时额度对账·满额号不计耗尽)");
 ok(/var _qLive=\(DaoCloud\.quotaLive\?DaoCloud\.quotaLive\(acc\.quota\)/.test(engineSrc),
    "源级: trackStuck 用账号实时额度 quotaLive 纠偏陈旧会话 reason (根治满额号误报)");
 // 根因护栏: trackStuck 必须 6 路并发池(非逐号串行) → 200+ 账号时 convwatch tick 仍在 POLL_MS 内完成,
 //   否则 tick 永不返回 → 系统通知饿死(用户「消息提示都没有」根因)。绝不可回退串行 for 循环。
 ok(/conc=Math\.min\(6, accs\.length/.test(engineSrc) && /await Promise\.all\(ws\)/.test(engineSrc),
    "源级: trackStuck 6 路并发池(非串行)→ convwatch tick 不饿死(消息提示/通知根因)");
-ok(/qsig=String\(\(o&&o\.reason\)\|\|""\)\+" "\+String\(s\.status/.test(engineSrc),
+ok(/var rs=String\(\(o&&o\.reason\)\|\|""\)\.toLowerCase\(\);/.test(engineSrc) &&
+   /qsig=rs\+" "\+String\(s\.status\|\|""\)\+" "\+en\+" "\+String\(s\.activity_status\|\|""\)\+" "\+String\(s\.current_activity/.test(engineSrc),
    "源级: qsig 汇各底层字段(reason/status/enum/activity/current) 核额度 (反者道之动)");
 
 // ── 源级护栏: convwatch 真·系统通知通道 + 节流键 ──

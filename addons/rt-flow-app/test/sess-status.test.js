@@ -220,8 +220,8 @@ ok(/function quotaLive\(q\)/.test(cloudSrc) && /quotaLive:\s*quotaLive,\s*sessSt
 ok(/DaoCloud\.sessStatusA\?DaoCloud\.sessStatusA\(s,u\.a\)/.test(engineSrc),
    "源级: engine.html recentConvAll 每条走账号级对账 sessStatusA(满额号不误标耗尽)");
 ok(/var _qLive=\(DaoCloud\.quotaLive\?DaoCloud\.quotaLive\(acc\.quota\)/.test(engineSrc) &&
-   /QUOTA_RE\.test\(qsig\) && _qLive!==true/.test(engineSrc),
-   "源级: engine.html trackStuck 满额号(quotaLive===true)不计 quota 耗尽");
+   /QUOTA_RE\.test\(qsig\) && qLive!==true/.test(engineSrc),
+   "源级: engine.html convReasonOf 满额号(quotaLive===true)不计 quota 耗尽");
 {
   const seg3 = cloudSrc.match(/function quotaLive\(q\)[\s\S]*?\n\s*(?=root\.DaoCloud)/);
   if (!seg3) { console.error("FAIL: devin-cloud.js 未找到 quotaLive/sessStatusA 区段"); process.exit(1); }
@@ -286,6 +286,91 @@ ok(/function _hotReloadBoard\(file\)/.test(consoleSrc),
    "源级: console.html 存在 _hotReloadBoard (重验发现变化时就地热刷板块 iframe)");
 ok(/if\(prev!=null && prev!==txt\) _hotReloadBoard\(name\)/.test(consoleSrc),
    "源级: _netAsset 重验后比对内容·变化时触发热刷 (道法自然·更新后开即新)");
+
+// ══ 对话生命周期分类器 (本轮根因·纯函数单测·正本清源) ══════════════════════════
+//   engine.html 新增 convReasonOf(活跃 reason 或 "")/convTerminalOf(精确终态), 切片哨兵 _convClassifyEnd 之前。
+//   切出函数体 eval, 断言: 活跃判分(quota/action_required/blocked/awaiting/running) 与 switch.html sessStatus 同源;
+//   终态判分(interrupted/expired/suspended/stopped/archived/finished) 精确分流 → tick 据此发不同「已结束」通知。
+{
+  const segC = engineSrc.match(/function convReasonOf\(s, o, qLive\)\{[\s\S]*?(?=function _convClassifyEnd)/);
+  if (!segC) { console.error("FAIL: engine.html 未找到 convReasonOf/convTerminalOf 区段"); process.exit(1); }
+  const convReasonOf   = eval("(function(){\n" + segC[0] + "\nreturn convReasonOf;})()");
+  const convTerminalOf = eval("(function(){\n" + segC[0] + "\nreturn convTerminalOf;})()");
+
+  // —— 活跃态分类 (返回 reason 非空 → 仍在追踪) ——
+  ok(convReasonOf({ status:"finished" }, { enum:"finished", reason:"out_of_quota" }, false) === "quota",
+     "convReasonOf: reason=out_of_quota + 账号无实时额度 → quota");
+  ok(convReasonOf({ status:"finished" }, { enum:"finished", reason:"out_of_quota" }, true) === "",
+     "convReasonOf: reason=out_of_quota 但账号满额(qLive=true) → 不计 quota(返回 '')");
+  ok(convReasonOf({}, { user_action_required:"respond" }, null) === "action_required",
+     "convReasonOf: user_action_required 非空 → action_required");
+  ok(convReasonOf({}, { reason:"fatal error occurred" }, null) === "blocked",
+     "convReasonOf: reason 含 error → blocked");
+  ok(convReasonOf({}, { reason:"session interrupted by user" }, null) === "blocked",
+     "convReasonOf: reason 含 interrupt → blocked");
+  ok(convReasonOf({}, { enum:"awaiting_user_input" }, null) === "awaiting",
+     "convReasonOf: enum=awaiting → awaiting");
+  ok(convReasonOf({}, { reason:"waiting for user input" }, null) === "awaiting",
+     "convReasonOf: reason 待输入 → awaiting");
+  ok(convReasonOf({ status:"working" }, { enum:"running" }, null) === "running",
+     "convReasonOf: enum=running → running");
+  ok(convReasonOf({}, { enum:"blocked" }, null) === "blocked",
+     "convReasonOf: enum=blocked + reason 空 → blocked 兜底");
+  // 终态/空 → 返回 ""(非活跃·交 convTerminalOf 判终态)
+  ok(convReasonOf({ status:"finished" }, { enum:"finished", reason:"task_completed" }, null) === "",
+     "convReasonOf: 正常完成(无活跃信号) → '' (转终态判定)");
+  ok(convReasonOf({ status:"expired" }, { enum:"expired" }, null) === "",
+     "convReasonOf: expired → '' (转终态判定)");
+  ok(convReasonOf({}, {}, null) === "", "convReasonOf: 空 → ''");
+
+  // —— 终态精确分流 (convReasonOf 返回 '' 后调用) ——
+  ok(convTerminalOf({ status:"finished" }, { enum:"finished", reason:"crashed unexpectedly" }) === "interrupted",
+     "convTerminalOf: reason 含 crash → interrupted 中断");
+  ok(convTerminalOf({ status:"finished" }, { reason:"connection timeout" }) === "interrupted",
+     "convTerminalOf: reason 含 timeout → interrupted");
+  ok(convTerminalOf({ status:"expired" }, { enum:"expired" }) === "expired",
+     "convTerminalOf: status/enum=expired → expired 过期");
+  ok(convTerminalOf({ status:"suspended" }, { reason:"user_inactivity" }) === "suspended",
+     "convTerminalOf: suspended/user_inactivity → suspended 挂起");
+  ok(convTerminalOf({ is_archived:true }, { enum:"finished" }) === "archived",
+     "convTerminalOf: is_archived=true → archived 归档");
+  ok(convTerminalOf({ status:"finished" }, { reason:"cancelled by user" }) === "stopped",
+     "convTerminalOf: reason 含 cancel → stopped 停止");
+  ok(convTerminalOf({ status:"finished" }, { enum:"finished", reason:"task_completed" }) === "finished",
+     "convTerminalOf: 正常完成 → finished");
+  ok(convTerminalOf({}, {}) === "finished", "convTerminalOf: 无信号 → finished 兜底");
+  // 优先级: 中断 > 过期 > 挂起 > 归档 > 停止 > 完成
+  ok(convTerminalOf({ status:"expired" }, { reason:"crashed" }) === "interrupted",
+     "convTerminalOf: 中断信号优先于 expired 顶层");
+}
+
+// ── 源级护栏: trackStuck 闭环结束反馈 (ended/scanned 返回·watchSids 入参) ──
+ok(/trackStuck:\s*async function\(opt\)/.test(engineSrc),
+   "源级: trackStuck 接受 opt 入参");
+ok(/var watch=Object\.create\(null\); \(opt&&opt\.watchSids\|\|\[\]\)\.forEach/.test(engineSrc),
+   "源级: trackStuck 从 opt.watchSids 建上轮追踪 sid 集(只对其登记终态)");
+ok(/var ended=\[\], scanned=Object\.create\(null\)/.test(engineSrc),
+   "源级: trackStuck 维护 ended(曾追踪→终态) + scanned(本轮扫描成功账号)");
+ok(/scanned\[String\(acc\.email\|\|""\)\.toLowerCase\(\)\]=1/.test(engineSrc),
+   "源级: scanAcc 成功即登记 scanned (供 tick 结束判定门控·防扫描失败误报)");
+ok(/var reason=convReasonOf\(s, o, _qLive\)/.test(engineSrc),
+   "源级: scanAcc 用 convReasonOf 判活跃 reason");
+ok(/\} else if\(watch\[sid\]\)\{[\s\S]*?ended\.push\(\{[\s\S]*?term:convTerminalOf\(s,o\)\}\)/.test(engineSrc),
+   "源级: 上轮追踪、本轮非活跃 → ended.push 精确终态 convTerminalOf");
+ok(/return \{ok:true, count:hits\.length, actionRequired:need\.length, needAttention:need, sessions:hits, ended:ended, scanned:Object\.keys\(scanned\)\}/.test(engineSrc),
+   "源级: trackStuck 返回 sessions + ended + scanned");
+
+// ── 源级护栏: tick 闭环 (新对话/新内容/精确终态/扫描门控) ──
+ok(/var coldStart = !prev \|\| !Object\.keys\(prev\)\.length/.test(engineSrc),
+   "源级: tick 冷启判定(prev 空只播种·不刷屏「新对话」)");
+ok(/CMDS\.trackStuck\(\{ watchSids: Object\.keys\(prev\) \}\)/.test(engineSrc),
+   "源级: tick 把上轮 sid 集作为 watchSids 传入 trackStuck");
+ok(/\(r\.scanned\|\|\[\]\)\.forEach\(function\(e\)\{ scanned\[String\(e\)\.toLowerCase\(\)\]=1; \}\)/.test(engineSrc),
+   "源级: tick 提取 r.scanned 成功账号集(门控结束判定)");
+ok(/if \(!p && !coldStart && c\.phase === "active"\)/.test(engineSrc),
+   "源级: tick 检测新对话(上轮无·本轮活跃·非冷启) → 🆕 通知");
+ok(/🆕 新对话/.test(engineSrc),
+   "源级: tick 新对话通知文案 🆕");
 
 if (failures) { console.error("\n" + failures + " 项失败 ✗"); process.exit(1); }
 console.log("\n全部通过 ✓");
