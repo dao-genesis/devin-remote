@@ -903,7 +903,7 @@ function restoreTabs(arr){if(!arr||!arr.length)return;for(var i=0;i<arr.length;i
 // 归一 · 站内新标签开任意网页/搜索(复刻手机端 APK · 不再弹外部系统浏览器):
 //   经本地 HTTP 代理 /__web?u= 直出(剥 XFO/CSP · 注入 base + 链接/表单拦截), 当 iframe 挂一张站内标签。
 function openWebTab(u,label){if(!u)return;vscode.postMessage({type:'openWebTab',url:u,label:(label||u).slice(0,60),hist:1});}
-function navigate(v){v=(v||'').trim();if(!v)return;var isU=/^https?:\\/\\//i.test(v);var t=tabs[active];
+function navigate(v){v=(v||'').trim();if(!v)return;var isU=/^https?:\\/\\//i.test(v);if(!isU&&/^([\\w-]+\\.)+[a-z]{2,}(:\\d+)?([\\/?#]\\S*)?$/i.test(v)){v='https://'+v;isU=true;}var t=tabs[active];
   if(isBoard()||!t){
     if(isU){openWebTab(v,v);}
     else if(v.charAt(0)==='/'){vscode.postMessage({type:'openCloudPage',path:v});}
@@ -1393,7 +1393,7 @@ const SHELL_HTTP_SHIM = "(function(){"
   + "function apply(m){if(!m)return;if(typeof m._q==='number'){if(m._q<=lastSeq)return;lastSeq=m._q;}gotAny=true;"
   + "if(m.type==='__copy'){try{navigator.clipboard.writeText(m.text||'');}catch(e){}return;}"
   + "try{window.postMessage(m,'*');}catch(e){}}"
-  + "function pollLoop(){fetch('/api/shell/poll?sid='+encodeURIComponent(SID)+'&after='+lastSeq).then(function(r){return r.json();}).then(function(j){if(j&&j.msgs){j.msgs.forEach(apply);}setTimeout(pollLoop,40);}).catch(function(){setTimeout(pollLoop,2000);});}"
+  + "function pollLoop(){fetch('/api/shell/poll?sid='+encodeURIComponent(SID)+'&after='+lastSeq).then(function(r){return r.json();}).then(function(j){if(j){if(typeof j.last==='number'&&j.last<lastSeq){lastSeq=0;}if(j.msgs){j.msgs.forEach(apply);}}setTimeout(pollLoop,40);}).catch(function(){setTimeout(pollLoop,2000);});}"
   + "function startPoll(){if(polling)return;polling=true;pollLoop();}"
   + "window.acquireVsCodeApi=function(){return{postMessage:function(m){try{"
   + "if(m&&m.type==='openExternal'&&m.url){window.open(m.url,'_blank');return;}"
