@@ -1142,6 +1142,82 @@ _ROLE_ALIAS = {
     "cell": "table cell", "link": "link",
 }
 
+# AT-SPI role name → Windows UIA ControlType name, so uia_find_all output uses
+# a single cross-platform vocabulary that osctl callers (window_opaque,
+# _actionable, screen_observe) understand without per-backend branching (F214).
+_ROLE_TO_UIA = {
+    "push button": "Button", "toggle button": "Button",
+    "menu item": "MenuItem", "check menu item": "MenuItem",
+    "radio menu item": "MenuItem",
+    "text": "Edit", "password text": "Edit",
+    "check box": "CheckBox",
+    "radio button": "RadioButton",
+    "combo box": "ComboBox",
+    "page tab": "TabItem", "page tab list": "Tab",
+    "link": "Hyperlink",
+    "list item": "ListItem",
+    "tree item": "TreeItem",
+    "slider": "Slider",
+    "spin button": "Spinner",
+    "split button": "SplitButton",
+    "table cell": "DataItem",
+    "label": "Text",
+    "list": "List",
+    "tree": "Tree",
+    "tree table": "Tree",
+    "menu bar": "MenuBar",
+    "tool bar": "ToolBar",
+    "scroll bar": "ScrollBar",
+    "status bar": "StatusBar",
+    "separator": "Separator",
+    "panel": "Pane",
+    "filler": "Pane",
+    "document web": "Document", "document frame": "Document",
+    "image": "Image",
+    "icon": "Image",
+    "info bar": "StatusBar",
+    "table column header": "HeaderItem",
+    "column header": "HeaderItem",
+    "row header": "HeaderItem",
+    "dialog": "Window",
+    "alert": "Window",
+    "frame": "Window",
+    "window": "Window",
+    "canvas": "Pane",
+    "drawing area": "Pane",
+    "viewport": "Pane",
+    "section": "Group",
+    "form": "Group",
+    "heading": "Text",
+    "paragraph": "Text",
+    "block quote": "Text",
+    "autocomplete": "ComboBox",
+    "embedded": "Pane",
+    "animation": "Image",
+    "progress bar": "ProgressBar",
+    "menu": "Menu",
+    "root pane": "Pane",
+    "table": "Table",
+    "document spreadsheet": "Document",
+    "document text": "Document",
+    "document presentation": "Document",
+    "document email": "Document",
+    "layered pane": "Pane",
+    "glass pane": "Pane",
+    "option pane": "Pane",
+    "internal frame": "Pane",
+    "desktop frame": "Pane",
+    "file chooser": "Pane",
+    "tool tip": "ToolTip",
+    "color chooser": "Pane",
+    "date editor": "Edit",
+    "spin box": "Spinner",
+    "font chooser": "Pane",
+    "content deletion": "Text",
+    "content insertion": "Text",
+    "notification": "StatusBar",
+}
+
 
 def _atspi():
     """Lazily load + init libatspi once. Returns the lib handle or None. Loading
@@ -1276,6 +1352,11 @@ def _acc_rect(at, acc):
     rect = (r.x, r.y, r.width, r.height)
     at.atspi_rect_free(rp)
     if rect[2] <= 0 or rect[3] <= 0:
+        return None
+    # F215: AT-SPI reports INT32_MIN for controls that exist semantically but have
+    # no on-screen position (hidden tabs, off-viewport items). Reject any rect
+    # whose origin is wildly off-screen so click/observe never aim at nonsense.
+    if rect[0] < -30000 or rect[1] < -30000:
         return None
     return rect
 
@@ -1460,6 +1541,61 @@ def _impl_uia_children(win: int) -> list:
 
         try:
             _walk(at, fr, visit)
+        finally:
+            _unref(fr)
+        return out
+
+
+def _impl_uia_find_all(win: int, name=None, ctype=None, max_scan=6000) -> list:
+    """The *plural* of :func:`uia_find` — every descendant of ``win`` matching
+    the given meaning, as ``[{"name","type","aid","help","rect"}, …]``.
+    ``ctype``/``name`` filter exactly as in :func:`uia_find`; omit both to
+    enumerate everything actionable.  ``max_scan`` bounds the walk so a
+    pathological tree can never hang the floor.  The AT-SPI dual of the
+    Windows UIA ``FindAll(TreeScope_Descendants, TrueCondition)`` (F213)."""
+    at = _atspi()
+    if not at:
+        return []
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return []
+        out = []
+        budget = [max_scan]
+
+        def visit(acc, depth):
+            if budget[0] <= 0:
+                return "STOP"
+            budget[0] -= 1
+            if depth == 0:
+                return None
+            nm = _acc_name(at, acc)
+            rl = _acc_role(at, acc)
+            if name is not None:
+                nl = name.lower()
+                if nl != nm.lower() and nl not in nm.lower():
+                    return None
+            if ctype is not None:
+                want = ctype.lower()
+                want = _ROLE_ALIAS.get(want, want)
+                if want != rl.lower() and want not in rl.lower():
+                    return None
+            if name is None and ctype is None:
+                if not nm and rl not in ("push button", "menu item", "check box",
+                                         "radio button", "text", "page tab",
+                                         "combo box", "link", "slider", "toggle button",
+                                         "tool bar", "menu bar", "scroll bar",
+                                         "tree item", "list item", "table cell",
+                                         "panel", "label", "separator", "status bar",
+                                         "filler", "image", "icon"):
+                    return None
+            uia_type = _ROLE_TO_UIA.get(rl.lower(), rl)
+            out.append({"name": nm, "type": uia_type, "aid": "", "help": "",
+                        "rect": _acc_rect(at, acc)})
+            return None
+
+        try:
+            _walk(at, fr, visit, _budget=[max_scan])
         finally:
             _unref(fr)
         return out
@@ -1691,6 +1827,7 @@ def _impl_uia_click(win: int, name=None, ctype=None) -> bool:
 _WORKER_IMPL = {
     "name": _impl_uia_name,
     "children": _impl_uia_children,
+    "find_all": _impl_uia_find_all,
     "find": _impl_uia_find,
     "invoke": _impl_uia_invoke,
     "get_value": _impl_uia_get_value,
@@ -1699,7 +1836,7 @@ _WORKER_IMPL = {
     "click": _impl_uia_click,
 }
 _WORKER_DEFAULT = {
-    "name": "", "children": [], "find": None, "invoke": False,
+    "name": "", "children": [], "find_all": [], "find": None, "invoke": False,
     "get_value": "", "set_value": False, "focus": False, "click": False,
 }
 _WORKER_PATH = os.path.abspath(__file__)
@@ -1715,7 +1852,7 @@ def _retuple(verb, res):
         return d
     if verb == "find" and isinstance(res, dict):
         return fix(res)
-    if verb == "children" and isinstance(res, list):
+    if verb in ("children", "find_all") and isinstance(res, list):
         return [fix(d) for d in res]
     return res
 
@@ -1754,6 +1891,10 @@ def uia_name(win: int) -> str:
 
 def uia_children(win: int) -> list:
     return _atspi_call("children", win)
+
+
+def uia_find_all(win: int, name=None, ctype=None, max_scan: int = 6000) -> list:
+    return _atspi_call("find_all", win, name=name, ctype=ctype, max_scan=max_scan)
 
 
 def uia_find(win: int, name=None, ctype=None):
