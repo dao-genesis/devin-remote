@@ -219,7 +219,7 @@ ok(/function quotaLive\(q\)/.test(cloudSrc) && /quotaLive:\s*quotaLive,\s*sessSt
    "源级: devin-cloud.js 导出 canonical quotaLive + sessStatusA");
 ok(/DaoCloud\.sessStatusA\?DaoCloud\.sessStatusA\(s,u\.a\)/.test(engineSrc),
    "源级: engine.html recentConvAll 每条走账号级对账 sessStatusA(满额号不误标耗尽)");
-ok(/var _qLive=\(DaoCloud\.quotaLive\?DaoCloud\.quotaLive\(accs\[i\]\.quota\)/.test(engineSrc) &&
+ok(/var _qLive=\(DaoCloud\.quotaLive\?DaoCloud\.quotaLive\(acc\.quota\)/.test(engineSrc) &&
    /QUOTA_RE\.test\(qsig\) && _qLive!==true/.test(engineSrc),
    "源级: engine.html trackStuck 满额号(quotaLive===true)不计 quota 耗尽");
 {
