@@ -182,6 +182,41 @@
     ];
   }
 
+  // ── 道法自然·对话生命周期分类器 (纯函数·可单测·正本清源) ─────────────────────────
+  //   逆流 Devin 官方 latest_status_contents(lsc) + 顶层字段, 把一条会话判成两类:
+  //     · 活跃态 reason ∈ {quota, action_required, blocked, awaiting, running}  → 仍在追踪
+  //     · 终态   term   ∈ {interrupted, expired, suspended, stopped, archived, finished} → 闭环结束反馈
+  //   convReasonOf 与 switch.html sessStatus 同源(reason 优先·en 兜底), 返回活跃 reason 或 ""(非活跃)。
+  //   convTerminalOf 仅在非活跃时调用, 精确区分 中断/过期/挂起(不活动)/停止/归档/正常完成 → 结束通知文案据此分流。
+  function convReasonOf(s, o, qLive){
+    var QUOTA_RE=/out_of_quota|usage_limit|insufficient|overage|exceeded|\bquota\b|out of (acu|credit)|credit.*exhaust|no.*credit/i;
+    var uar=o&&o.user_action_required;
+    var actionReq=(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null");
+    var en=String((o&&o.enum)||s.status_enum||s.status||"").toLowerCase();
+    var rs=String((o&&o.reason)||"").toLowerCase();
+    var qsig=rs+" "+String(s.status||"")+" "+en+" "+String(s.activity_status||"")+" "+String(s.current_activity||"");
+    if(QUOTA_RE.test(qsig) && qLive!==true) return "quota";
+    if(actionReq) return "action_required";
+    if(/error|failed|crash|stuck|interrupt|abort|disconnect|timeout/.test(rs)) return "blocked";
+    if(/limit.*reach|cap.*reach|no.*remain|depleted|no.*available|allowance/.test(rs)) return "quota";
+    if(/await|wait|ask|question|input|need/.test(en) || /wait.*input|wait.*user|need.*input|user.*action|await|asking/.test(rs)) return "awaiting";
+    if(/block|stuck|fail|error|interrupt|abort|disconnect|timeout/.test(en)) return "blocked";
+    if(/run|working|active|execut/.test(en) && !/finish|complet|suspend|stopped|expired|archiv|cancel/.test(en)) return "running";
+    return "";
+  }
+  function convTerminalOf(s, o){
+    var en=String((o&&o.enum)||s.status_enum||s.status||"").toLowerCase();
+    var rs=String((o&&o.reason)||"").toLowerCase();
+    var top=String(s.status||"").toLowerCase();
+    if(/error|crash|abort|interrupt|disconnect|timeout|fail/.test(rs)) return "interrupted";
+    if(top==="expired"||/expired/.test(en)) return "expired";
+    if(top==="suspended"||/user_inactiv|inactiv/.test(rs)||/suspend/.test(en)) return "suspended";
+    if(s.is_archived===true||s.is_archived==="true") return "archived";
+    if(/cancel|stopped|terminat/.test(en)||/cancel|stopped|terminat/.test(rs)) return "stopped";
+    return "finished";
+  }
+  function _convClassifyEnd(){ return null; }   // 单测切片哨兵(勿删): 上面两纯函数到此为止
+
   // ── 25+ RPC + 管理命令 dispatch (与扩展同名, 行为按 APP 适配) ──────────────
   var CMDS = {
     getState: async function(){
@@ -272,33 +307,37 @@
     // 对话追踪: 扫所有已登录账号, 即时识别"需你处理(action required)/卡住/待输入/运行"会话。
     //  关键: v2sessions 每条自带 latest_status_contents(JSON) → 内含真实 enum + user_action_required;
     //  仅看顶层 status(常年 suspended/RUNNING) 会漏掉 Devin 官方"需你处理"信号, 导致已卡住对话被判正常。
-    trackStuck: async function(){
+    trackStuck: async function(opt){
       function lsc(s){ var x=s&&s.latest_status_contents; if(!x)return null; if(typeof x==="object")return x; try{return JSON.parse(x);}catch(e){return null;} }
-      // 额度耗尽官方信号 (逆流 latest_status_contents.reason, 与 switch.html QUOTA_RE 同源·正本清源)
-      var QUOTA_RE=/out_of_quota|usage_limit|insufficient|overage|exceeded|\bquota\b|out of (acu|credit)|credit.*exhaust|no.*credit/i;
       var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var hits=[];
+      // 闭环结束反馈所需: watch=上轮在追踪的 sid 集(只对它们登记终态, 不淹没全部历史完成会话);
+      //   ended=本轮观测到「曾追踪→已终态」的会话; scanned=本轮扫描成功的账号(供 tick 结束判定门控·防误报)。
+      var watch=Object.create(null); (opt&&opt.watchSids||[]).forEach(function(x){ if(x) watch[x]=1; });
+      var ended=[], scanned=Object.create(null);
       // 单账号会话扫描 → 推入 hits (与 switch.html _pollOneAcc 同构, 供并发池调用)。
       async function scanAcc(acc){
         var r; try{ r=await DaoCloud.listSessions(acc, 50); }catch(e){ return; }
         if(!r||!r.ok) return;
+        scanned[String(acc.email||"").toLowerCase()]=1;   // 本轮该号扫描成功 → tick 据此门控结束判定(扫描失败的号不判「已结束」, 根治误报)
+        // 账号级额度对账: 单条会话历史 reason=out_of_quota 只是其当时休眠原因; 账号此刻仍有可用额度(quotaLive===true)
+        //   → 不算耗尽(归完成·不报警·不通知)。真耗尽/未知才保留官方信号。根治满额号被误报「额度已耗尽」。
+        var _qLive=(DaoCloud.quotaLive?DaoCloud.quotaLive(acc.quota):null);
         (r.sessions||[]).forEach(function(s){
-          var o=lsc(s); var uar=o&&o.user_action_required;
-          var actionReq=(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null");
-          var en=String((o&&o.enum)||s.status_enum||s.status||"").toLowerCase();
-          // 额度耗尽信号最高优先 (即便 finished/suspended 也单列, 绝不混入完成/卡住; 反者道之动核各底层字段)
-          var qsig=String((o&&o.reason)||"")+" "+String(s.status||"")+" "+en+" "+String(s.activity_status||"")+" "+String(s.current_activity||"");
-          var reason="";
-          // 账号级额度对账: 单条会话历史 reason=out_of_quota 只是其当时休眠原因; 账号此刻仍有可用额度(quotaLive===true)
-          //   → 不算耗尽(归完成·不报警·不通知)。真耗尽/未知才保留官方信号。根治满额号被误报「额度已耗尽」。
-          var _qLive=(DaoCloud.quotaLive?DaoCloud.quotaLive(acc.quota):null);
-          if(QUOTA_RE.test(qsig) && _qLive!==true) reason="quota";
-          else if(actionReq) reason="action_required";
-          else if(/error|failed|crash|stuck|interrupt|abort|disconnect|timeout/.test(String((o&&o.reason)||"").toLowerCase())) reason="blocked";
-          else if(/limit.*reach|cap.*reach|no.*remain|depleted|no.*available|allowance/i.test(String((o&&o.reason)||""))) reason="quota";
-          else if(/await|wait|ask|question|input|need/.test(en) || /wait.*input|wait.*user|need.*input|user.*action|await|asking/i.test(String((o&&o.reason)||""))) reason="awaiting";
-          else if(/block|stuck|fail|error|interrupt|abort|disconnect|timeout/.test(en)) reason="blocked";
-          else if(/run|working|active|execut/.test(en) && !/finish|complet|suspend|stopped|expired|archiv|cancel/.test(en)) reason="running";
-          if(reason){ hits.push({email:acc.email,sid:s.devin_id||s.session_id||s.id,title:(s.title||"").slice(0,50),status:en,reason:reason,actionRequired:actionReq,actionLabel:(actionReq&&typeof uar==="string")?uar:undefined}); }
+          var o=lsc(s);
+          var sid=s.devin_id||s.session_id||s.id;
+          var reason=convReasonOf(s, o, _qLive);
+          if(reason){
+            var uar=o&&o.user_action_required;
+            var actionReq=(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null");
+            var en=String((o&&o.enum)||s.status_enum||s.status||"").toLowerCase();
+            hits.push({email:acc.email,sid:sid,title:(s.title||"").slice(0,50),status:en,reason:reason,
+              actionRequired:actionReq,actionLabel:(actionReq&&typeof uar==="string")?uar:undefined,
+              msgId:String(s.latest_message_event_id||s.latest_message_event_at||""),
+              unread:(s.is_unread===true||s.is_unread==="true")});
+          } else if(watch[sid]){
+            // 上轮在追踪、本轮已非活跃 → 登记精确终态(中断/过期/挂起/停止/归档/完成), 供 tick 发结束通知闭环。
+            ended.push({email:acc.email,sid:sid,title:(s.title||"").slice(0,50),term:convTerminalOf(s,o)});
+          }
         });
       }
       // 道法自然·并发池(6路, 与 switch.html pollTrk / recentConvAll 同源): 200+ 账号若逐号串行
@@ -308,7 +347,7 @@
       async function worker(){ while(idx<accs.length){ var acc=accs[idx++]; try{ await scanAcc(acc); }catch(e){} } }
       var ws=[]; for(var w=0;w<conc;w++) ws.push(worker()); await Promise.all(ws);
       var need=hits.filter(function(h){return h.reason==="action_required"||h.reason==="blocked";});
-      return {ok:true, count:hits.length, actionRequired:need.length, needAttention:need, sessions:hits};
+      return {ok:true, count:hits.length, actionRequired:need.length, needAttention:need, sessions:hits, ended:ended, scanned:Object.keys(scanned)};
     },
     // 全服通·近期对话 跨号聚合 (设备原生一次返回, 供公网单网页一个 RPC 取齐 → 与 APK 数据一致, 不再逐号穿透卡 0/N)。
     //  公网 daopan.html(IS_WEB) 调本命令: 设备原生 6 路并发 listSessions(无 CORS/无 mesh 逐号往返) → 按时效降序去重 →
@@ -1206,13 +1245,61 @@
       });
       _ss(QLKEY, ns);
     }
+    // ── 常驻后台·权威金库刷新 (道法自然·正本清源·一号不漏) ──────────────────────────────
+    //   引擎后台 tick 已 6 路并发全扫全部 156 号、得「全账号活跃对话」真相(通知即据此); 顺手把它写进
+    //   共享金库 rtflow.trk(与 switch.html _trkSlim 完全同格式) → 即便用户当下不在切号板(过去金库仅
+    //   切号板 pollTrk 才刷→可陈旧 20+ 分钟), 网页镜像/跨设备亦恒得 ≤60s 鲜活权威态。
+    //   据此, recentConvAll 采样窗口漏采的远端活跃号, 一律由本金库补齐 → 根治网页间歇"无活跃对话"/陈旧。
+    var TRK_HOLD_MS_BG = 1800000;   // 与 switch.html TRK_HOLD_MS 同(30min 显示保留窗)
+    var ENDED_HOLD_MS = 900000;   // 最近结束闭环显示保留窗(15min) — 网页/跨设备「最近结束」板据此渲染
+    function _mirrorTickToVault(sessions, now, ended){
+      try{
+        if(!N.vaultSave) return;
+        var full=[]; try{ full=loadAcc(); }catch(e){ return; }
+        var noOf=Object.create(null); full.forEach(function(x,ix){ var k=String((x&&(x.email||x.id))||"").toLowerCase(); if(k) noOf[k]=ix+1; });
+        var unlocked=Object.create(null);
+        full.forEach(function(x){ if(x&&x.auth1&&x.orgId){ var k=String((x.email||x.id)||"").toLowerCase(); if(k) unlocked[k]=1; } });
+        var agg=Object.create(null);
+        (sessions||[]).forEach(function(s){
+          var e=String(s.email||"").toLowerCase(); if(!e) return;
+          var cls = s.reason==="quota" ? "exhausted"
+                  : (s.reason==="action_required"||s.reason==="blocked") ? "blocked"
+                  : s.reason==="awaiting" ? "awaiting"
+                  : s.reason==="running" ? "running" : "";
+          if(!cls) return;
+          var rec=agg[e]; if(!rec){ rec=agg[e]={no:noOf[e]||0, who:((e.split("@")[0])||e), running:0,awaiting:0,blocked:0,exhausted:0,total:0,items:[]}; }
+          if(cls==="running")rec.running++; else if(cls==="awaiting")rec.awaiting++; else if(cls==="blocked")rec.blocked++; else if(cls==="exhausted")rec.exhausted++;
+          rec.total++;
+          // unread: 该会话有未读新内容(is_unread) → 网页/卡座可据此标「新」徽标(实时新内容监测·不发刷屏通知)
+          if(rec.items.length<6) rec.items.push({ uuid:s.sid||"", title:String(s.title||"").slice(0,48), cls:cls, unread:!!s.unread, _stuck:(cls==="blocked"?"action":(cls==="exhausted"?"quota":undefined)) });
+        });
+        var vault={}; try{ var raw=N.vaultLoad?N.vaultLoad("rtflow.trk"):null; if(raw) vault=JSON.parse(raw)||{}; }catch(e){}
+        // 本轮已扫的全部合法号: 有活跃→写活跃; 无活跃→写熄灯墓碑(total:0·新 ts) → 与 switch.html 跨设备同步熄灯
+        Object.keys(unlocked).forEach(function(e){
+          if(agg[e]){ agg[e].ts=now; vault[e]=agg[e]; }
+          else { vault[e]={ total:0, ts:now }; }
+        });
+        Object.keys(vault).forEach(function(e){ var v=vault[e]; if(!v||now-(v.ts||0)>=TRK_HOLD_MS_BG) delete vault[e]; });   // 过期墓碑剔除, 金库不肿
+        N.vaultSave("rtflow.trk", JSON.stringify(vault));
+        // 最近结束闭环 → 独立金库键 rtflow.trk.ended (不污染活跃聚合; 网页/跨设备「最近结束」板可选渲染终态文案)。
+        if(ended && ended.length){
+          var ev={}; try{ var raw2=N.vaultLoad?N.vaultLoad("rtflow.trk.ended"):null; if(raw2) ev=JSON.parse(raw2)||{}; }catch(e){}
+          ended.forEach(function(x){ if(x&&x.sid) ev[x.sid]={ title:String(x.title||"").slice(0,48), term:x.term||"finished", email:x.email||"", ts:now }; });
+          Object.keys(ev).forEach(function(k){ if(now-((ev[k]&&ev[k].ts)||0)>=ENDED_HOLD_MS) delete ev[k]; });
+          N.vaultSave("rtflow.trk.ended", JSON.stringify(ev));
+        }
+      }catch(e){}
+    }
     async function tick(){
       if (!watchEnabled()) return;
       var accs = []; try { accs = loadAcc().filter(function(x){ return x.auth1 && x.orgId; }); } catch(e){}
       if (!accs.length) return;
-      var r; try { r = await CMDS.trackStuck(); } catch(e){ return; }
-      if (!r || !r.ok || !Array.isArray(r.sessions)) return;
       var prev = loadPrev(), next = {}, now = Date.now();
+      var coldStart = !prev || !Object.keys(prev).length;   // 冷启(prev 空): 只播种, 不对全部既有活跃会话刷屏「新对话」
+      // watchSids=上轮在追踪的全部 sid → trackStuck 据此精确登记终态(中断/挂起/完成…)·并回报本轮扫描成功的账号。
+      var r; try { r = await CMDS.trackStuck({ watchSids: Object.keys(prev) }); } catch(e){ return; }
+      if (!r || !r.ok || !Array.isArray(r.sessions)) return;
+      var scanned = Object.create(null); (r.scanned||[]).forEach(function(e){ scanned[String(e).toLowerCase()]=1; });   // 本轮扫描成功的账号(门控结束判定)
       // 本轮 active(running/awaiting) 与 attention(action_required/blocked) 集合
       var cur = Object.create(null), quotaByAcct = Object.create(null), quotaTitleByAcct = Object.create(null), titleByAcct = Object.create(null);
       r.sessions.forEach(function(s){
@@ -1220,27 +1307,54 @@
         var ttl = s.title || "";
         if (s.email && ttl && !titleByAcct[s.email]) titleByAcct[s.email] = ttl;   // 该号一条当前对话名 → 供额度类通知显示对话名而非账号名
         // 额度耗尽单独聚合 (仍登记进 cur·phase=quota -> 既不误判「已结束」, 又不触发卡住通知)。
-        if (s.reason === "quota") { cur[sid] = { phase: "quota", title: s.title || sid, email: s.email || "" }; var k = s.email || "?"; quotaByAcct[k] = (quotaByAcct[k]||0) + 1; if (ttl && !quotaTitleByAcct[k]) quotaTitleByAcct[k] = ttl; return; }
+        if (s.reason === "quota") { cur[sid] = { phase: "quota", title: ttl || sid, email: s.email || "", msgId: s.msgId||"" }; var k = s.email || "?"; quotaByAcct[k] = (quotaByAcct[k]||0) + 1; if (ttl && !quotaTitleByAcct[k]) quotaTitleByAcct[k] = ttl; return; }
         var phase = (s.reason === "action_required" || s.reason === "blocked" || s.reason === "awaiting") ? "stuck" : "active";
-        cur[sid] = { phase: phase, title: s.title || sid, email: s.email || "", reason: s.reason, label: s.actionLabel };
+        cur[sid] = { phase: phase, title: ttl || sid, email: s.email || "", reason: s.reason, label: s.actionLabel, msgId: s.msgId||"", unread: !!s.unread };
       });
       _updLatest(titleByAcct, now);   // 更新最近对话名缓存(供额度类通知优先显示对话名)
-      // 跃迁判定
+      // 跃迁判定: 新对话(🆕) / 卡住·待处理·等待输入(⚠️⛔⏳)
       Object.keys(cur).forEach(function(sid){
         var c = cur[sid], p = prev[sid];
-        next[sid] = { phase: c.phase, title: c.title, email: c.email, ts: now };
+        next[sid] = { phase: c.phase, title: c.title, email: c.email, ts: now, msgId: c.msgId, reason: c.reason };
+        if (!p && !coldStart && c.phase === "active") {
+          // 全新对话(上轮无·本轮活跃且非卡住·非冷启) → 开播通知(实时新对话监测)
+          notify("conv-" + sid, "🆕 新对话: " + c.title, (c.email ? c.email + " · " : "") + "Devin 已开始执行");
+        }
         if (c.phase === "stuck" && (!p || p.phase !== "stuck")) {
           var head = c.reason === "action_required" ? "⚠️ 待你处理" : (c.reason === "blocked" ? "⛔ 卡住/失败" : "⏳ 等待输入");
           notify("conv-" + sid, head + ": " + c.title, (c.email ? c.email + " · " : "") + (c.label || "Devin 需要你回应") );
         }
       });
-      // 结束判定: 上轮在追踪(active/stuck)、本轮已不在 active/stuck 列表 → 视为结束
+      // 结束闭环①·精确终态: trackStuck 已观测到「曾追踪→已终态」的会话, 按 中断/过期/挂起/停止/归档/完成 分流文案。
+      var endedSid = Object.create(null), TERM = {
+        interrupted: ["⛔ 已中断", "执行被中断/失败"],
+        expired:     ["⌛ 已过期", "会话超时过期"],
+        suspended:   ["💤 已挂起", "长时间无活动·已休眠"],
+        stopped:     ["🛑 已停止", "对话已被停止"],
+        archived:    ["🗄 已归档", "对话已归档"],
+        finished:    ["✅ 已完成", "对话正常完成"]
+      };
+      (r.ended||[]).forEach(function(ev){
+        var sid = ev && ev.sid; if (!sid) return; var p = prev[sid]; if (!p) return;
+        if (p.phase !== "active" && p.phase !== "stuck" && p.phase !== "quota") return;
+        endedSid[sid] = 1;
+        var m = TERM[ev.term] || TERM.finished;
+        notify("conv-" + sid, m[0] + ": " + (ev.title || p.title || sid), (p.email ? p.email + " · " : "") + m[1]);
+      });
+      // 结束闭环②·兜底: 上轮在追踪、本轮既不在活跃也未登记终态 → 仅当其账号本轮扫描成功才判「已结束」;
+      //   账号本轮扫描失败(不在 scanned) → 不判结束·原样保留追踪态(根治个别号扫描失败误报「已结束」)。
       Object.keys(prev).forEach(function(sid){
-        if (!cur[sid] && (prev[sid].phase === "active" || prev[sid].phase === "stuck")) {
-          notify("conv-" + sid, "✅ 已结束: " + (prev[sid].title || sid), (prev[sid].email ? prev[sid].email + " · " : "") + "对话已完成/停止");
+        if (cur[sid] || endedSid[sid]) return;
+        var p = prev[sid]; if (p.phase !== "active" && p.phase !== "stuck" && p.phase !== "quota") return;
+        var em = String(p.email || "").toLowerCase();
+        if (scanned[em]) {
+          notify("conv-" + sid, "✅ 已结束: " + (p.title || sid), (p.email ? p.email + " · " : "") + "对话已完成/停止");
+        } else {
+          next[sid] = { phase: p.phase, title: p.title, email: p.email, ts: p.ts || now, msgId: p.msgId, reason: p.reason, carried: true };
         }
       });
       savePrev(next);
+      try { _mirrorTickToVault(r.sessions, now, r.ended); } catch(e){}   // 常驻后台权威态写入共享金库(含最近结束闭环) → 网页/跨设备对话追踪恒鲜(≤60s)·一号不漏
       // 额度通知 (真·系统推送, 与对话卡座同款): 已耗尽聚合 + 即将耗尽预警。
       try { quotaWatch(quotaByAcct, quotaTitleByAcct, now); } catch(e){}
       try { quotaLowWatch(accs, titleByAcct, now); } catch(e){}
