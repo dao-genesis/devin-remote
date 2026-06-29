@@ -2277,7 +2277,8 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
              whitelist: "str | None" = None, psm: int = 7,
              scale: int = 3, invert: bool = False,
              rgb: "bytes | None" = None,
-             size: "tuple[int, int] | None" = None) -> str:
+             size: "tuple[int, int] | None" = None,
+             fallback_psm: int = 6) -> str:
     """Read *text* off the screen by pixels with **zero prior atlas** — the
     cold-start reader for UIs that draw their own glyphs (canvas, OpenGL/SDL
     games, custom toolkits) where AT-SPI exposes geometry but no value (F231).
@@ -2303,7 +2304,19 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
     (7 = one text line, 10 = one character, 6 = a block). ``invert`` handles
     light-on-dark text. Pass an existing ``rgb``/``size`` to OCR several regions
     from one capture. Pairs with AT-SPI for *where* + OCR for *what* — the hybrid
-    that drives self-drawn surfaces a semantic tree cannot describe."""
+    that drives self-drawn surfaces a semantic tree cannot describe.
+
+    A caller's instinct on a lone digit is ``psm=10`` ("one character") — but on
+    a tight, isolated glyph tesseract's line/char segmentation (7 and 10) treats
+    the round digits ``4 6 8 9`` as stray ink and emits *nothing*, while block
+    mode (6) reads them; a sudoku board that scored 66/81 under per-cell psm=10
+    read 81/81 under psm=6 (F235). So when a ``whitelist`` read comes back empty
+    yet the crop *holds ink*, this retries once in ``fallback_psm`` (block, 6) —
+    turning a silent drop into a read without ever overriding a hit, and skipping
+    genuinely blank cells so a ' '-means-empty caller (minesweeper) is unaffected.
+    Feed the *greyscale* crop, never a hard 1-bit threshold: the anti-aliased
+    edges are tesseract's signal, and binarising first is what drops those glyphs.
+    Set ``fallback_psm=0`` to disable the retry."""
     import subprocess
     engine = _ocr_engine()
     if region is None:
@@ -2341,11 +2354,26 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
             j = drow + xx * 3
             up[j] = up[j + 1] = up[j + 2] = v
     png = _png(bw, bh, bytes(up))
-    cmd = [engine, "stdin", "stdout", "--psm", str(psm)]
-    if whitelist:
-        cmd += ["-c", "tessedit_char_whitelist=" + whitelist]
-    out = subprocess.run(cmd, input=png, capture_output=True, timeout=20)
-    return out.stdout.decode(errors="ignore").strip()
+
+    def _run(p: int) -> str:
+        cmd = [engine, "stdin", "stdout", "--psm", str(p)]
+        if whitelist:
+            cmd += ["-c", "tessedit_char_whitelist=" + whitelist]
+        out = subprocess.run(cmd, input=png, capture_output=True, timeout=20)
+        return out.stdout.decode(errors="ignore").strip()
+
+    res = _run(psm)
+    # F235: line/char modes (7, 10) silently drop round glyphs on a tight crop;
+    # block mode (6) reads them. Retry once when a whitelisted read came back
+    # empty *and* the crop holds ink — never overriding a hit, and leaving a
+    # genuinely blank cell empty (``g`` is the pre-upscale greyscale; ``bg`` is
+    # its brightest = background, so a count of clearly-darker pixels is ink).
+    if (not res and whitelist and fallback_psm and fallback_psm != psm):
+        bg = max(g) if g else 0
+        ink = sum(1 for v in g if v < bg - 40)
+        if ink >= max(8, (rw * rh) * 3 // 200):
+            res = _run(fallback_psm)
+    return res
 
 
 def wait_stable(target: tuple[int, int, int], tol: int = 24, move_tol: int = 3,
