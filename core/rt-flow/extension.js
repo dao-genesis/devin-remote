@@ -628,6 +628,9 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 #convdrop.on{display:flex;pointer-events:auto}
 .rc[draggable=true]{cursor:grab}
 .rc.cdragging{opacity:.5}
+.rc[data-cdrag],.rc[data-dldrag]{cursor:grab}
+.pdghost{position:fixed;z-index:100000;pointer-events:none;background:#1f6feb;color:#fff;font-size:12px;font-weight:600;padding:5px 11px;border-radius:7px;box-shadow:0 8px 24px rgba(0,0,0,.55);max-width:280px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;opacity:.97;left:-9999px;top:-9999px}
+body.pdragging,body.pdragging *{cursor:grabbing!important;user-select:none!important}
 /* 归一·手机版模式 (UA 自动识别 / ?m=1): 不依赖视口宽度, 强制移动端布局 — 触控放大·菜单底部抽屉 */
 html.m #tb{flex-wrap:wrap;height:auto;min-height:40px;padding:5px 6px;gap:4px}
 html.m #eng{display:none}
@@ -1062,7 +1065,7 @@ function dlLoad(){if(!DAO_DL.length)_dEl('dlList').innerHTML='<div class="empty"
 function dlRender(){var box=_dEl('dlList');if(!box)return;
   if(!DAO_DL.length){box.innerHTML='<div class="empty">暂无下载 · 在网页中下载文件后会自动出现在这里</div>';var t=_dEl('dlTitle');if(t)t.textContent='下载';return;}
   var h='';for(var i=0;i<DAO_DL.length;i++){var d=DAO_DL[i];var host='';try{host=new URL(d.url||'').host;}catch(e){}
-    h+='<div class="rc" draggable="true" data-dldrag="'+esc(d.path||'')+'" data-dlname="'+esc(d.name||'')+'" title="拖拽此文件可上传/发送"><div class="ti" title="'+esc(d.name||'')+'">'+esc(d.name||'(未命名)')+'</div>'+
+    h+='<div class="rc" draggable="false" data-dldrag="'+esc(d.path||'')+'" data-dlname="'+esc(d.name||'')+'" title="拖拽此文件可上传/发送"><div class="ti" title="'+esc(d.name||'')+'">'+esc(d.name||'(未命名)')+'</div>'+
       '<div class="meta"><span>'+_fsize(d.size)+'</span>'+(host?'<span>'+esc(host)+'</span>':'')+(d.time?'<span>'+daoAgo(d.time)+'</span>':'')+'</div>'+
       '<div class="acts"><span class="b pri" data-dlup="'+esc(d.path||'')+'" data-dlupname="'+esc(d.name||'')+'" title="上传此文件到当前打开的网页上传框(对齐手机 APK·免拖拽)">⬆ 传网页</span><span class="b" data-dlopen="'+esc(d.path||'')+'">打开</span><span class="b" data-dlrev="'+esc(d.path||'')+'">所在文件夹</span><span class="b" data-dldel="'+esc(d.path||'')+'">删除</span></div></div>';}
   box.innerHTML=h;var tt=_dEl('dlTitle');if(tt)tt.textContent='下载 ('+DAO_DL.length+')';}
@@ -1077,24 +1080,33 @@ function daoLoadRecent(){
   if(!DAO_REC.length){try{var c=JSON.parse(localStorage.getItem(DAO_REC_CK)||'null');if(c&&c.list&&c.list.length){DAO_REC=c.list;daoRenderRecent();}}catch(e){}}
   if(!DAO_REC.length)_dEl('dwRecent').innerHTML='<div class="empty">加载中…(跨账号近期对话)</div>';
   vscode.postMessage({type:'dlRecent'});}
+var _recRenderT=null;
+function _recRenderThrottled(){if(_recRenderT)return;_recRenderT=setTimeout(function(){_recRenderT=null;daoRenderRecent();},150);}
 function daoOnRecent(m){
   // 兼容老形态(直接传 list)与新形态(带 partial/done/total 的增量包)。
   if(Array.isArray(m)){DAO_REC=m||[];daoRenderRecent();return;}
-  m=m||{};DAO_REC=m.list||[];daoRenderRecent();
-  if(m.partial&&m.total){var b=_dEl('dwRecent');if(b&&!DAO_REC.length)b.innerHTML='<div class="empty">加载中… '+(m.done||0)+'/'+m.total+' 账号</div>';}
-  if(!m.partial){try{localStorage.setItem(DAO_REC_CK,JSON.stringify({ts:Date.now(),list:DAO_REC.slice(0,80)}));}catch(e){}}}
-function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),box=_dEl('dwRecent');
+  m=m||{};DAO_REC=m.list||[];
+  // 防跳伞: 流式增量包期间节流重绘(最多 ~150ms 一次)并保留滚动位置, 避免每包全量重绘造成「跳一大堆」闪烁; 完成包才落地最终渲染。
+  if(m.partial){
+    if(!DAO_REC.length){var b=_dEl('dwRecent');if(b&&(!b.firstChild||b.querySelector('.empty')))b.innerHTML='<div class="empty">加载中… '+(m.done||0)+'/'+(m.total||'?')+' 账号</div>';}
+    else _recRenderThrottled();
+  }else{
+    if(_recRenderT){clearTimeout(_recRenderT);_recRenderT=null;}
+    daoRenderRecent();
+    try{localStorage.setItem(DAO_REC_CK,JSON.stringify({ts:Date.now(),list:DAO_REC.slice(0,80)}));}catch(e){}
+  }}
+function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),box=_dEl('dwRecent');var _sc=box?box.scrollTop:0;
   if(!DAO_REC.length){box.innerHTML='<div class="empty">暂无近期对话 · 先在 🔀切号 面板登录账号</div>';return;}
   // 无搜索时只渲染最近 DAO_REC_VIEW_MAX 条(DAO_REC 已按 updatedAt 降序;slice 自头取保留原 idx 映射);
   // 有搜索时跨全量匹配。全量历史在「🗂 对话记录(备份)」按号分层。
   var src=q?DAO_REC:DAO_REC.slice(0,DAO_REC_VIEW_MAX);
   var html='';src.forEach(function(it,idx){
     if(q){var hay=((it.email||'')+' '+it.title+' '+it.sid+' '+it.accNo).toLowerCase();if(hay.indexOf(q)<0)return;}
-    html+='<div class="rc" draggable="true" data-cdrag="1" data-email="'+esc(it.email||'')+'" data-sid="'+esc(it.sid||'')+'" data-title="'+esc(it.title||'')+'"><div class="r1"><span class="acc-no">#'+esc(String(it.accNo))+'</span><span class="st '+esc(it.statusClass||'')+'" title="'+esc(it.status||'')+'"></span><span class="ti" title="'+esc(it.title)+'">'+esc(String(it.title).slice(0,70))+'</span></div>'+
+    html+='<div class="rc" draggable="false" data-cdrag="1" data-email="'+esc(it.email||'')+'" data-sid="'+esc(it.sid||'')+'" data-title="'+esc(it.title||'')+'"><div class="r1"><span class="acc-no">#'+esc(String(it.accNo))+'</span><span class="st '+esc(it.statusClass||'')+'" title="'+esc(it.status||'')+'"></span><span class="ti" title="'+esc(it.title)+'">'+esc(String(it.title).slice(0,70))+'</span></div>'+
       '<div class="meta"><span>'+esc(String(it.email||'').split('@')[0])+'</span>'+(it.status?'<span>'+esc(it.status)+'</span>':'')+(it.updatedAt?'<span>'+daoAgo(it.updatedAt)+'</span>':'')+'</div>'+
       '<div class="acts"><span class="b" data-act="view" data-idx="'+idx+'">👁 查看</span><span class="b" data-act="enter" data-idx="'+idx+'" title="切到该账号并在网页端打开此对话">🌐 进入</span><span class="b" data-act="md" data-idx="'+idx+'">⬇ MD</span><span class="b pri" data-act="zip" data-idx="'+idx+'">📦 全部文件</span><span class="b" data-act="up" data-idx="'+idx+'" title="上传此对话内容(MD)到当前打开的网页上传框(对齐手机 APK·免拖拽)">⬆ 传网页</span></div></div>';});
   if(!q&&DAO_REC.length>DAO_REC_VIEW_MAX){html+='<div class="empty" style="padding:8px 4px;line-height:1.5">仅显示最近 '+DAO_REC_VIEW_MAX+' 条 · 共 '+DAO_REC.length+' 条<br>搜索可跨全部 · 全量历史见 🗂 对话记录(备份)</div>';}
-  box.innerHTML=html||'<div class="empty">无匹配 · 清空搜索查看全部</div>';}
+  box.innerHTML=html||'<div class="empty">无匹配 · 清空搜索查看全部</div>';try{box.scrollTop=_sc;}catch(e){}}
 function daoEnter(idx){var it=DAO_REC[idx];if(!it)return;vscode.postMessage({type:'openCloudPage',path:'sessions/'+String(it.sid||'').replace(/^devin-/,''),label:it.title});daoToast('已请求打开 · '+String(it.email||'').split('@')[0]);}
 function daoMd(idx){var it=DAO_REC[idx];if(!it)return;daoToast('下载 MD…');vscode.postMessage({type:'dlExportMd',email:it.email,sid:it.sid,title:it.title,save:true});}
 function daoZip(idx){var it=DAO_REC[idx];if(!it)return;daoToast('打包全部文件…(增量补全·稍候定位)');vscode.postMessage({type:'dlZip',email:it.email,sid:it.sid,title:it.title});}
@@ -1142,7 +1154,7 @@ function daoRenderBackup(){var box=_dEl('dwBackup');if(!box)return;if(!_bkTree){
       +'<span class="b" data-reveal="'+esc(a.dir||'')+'" title="打开账号文件夹">📂</span></div>';
     if(open){body+='<div style="padding-left:6px;border-left:2px solid #232a33;margin:2px 0 4px 6px">';
       for(var k=0;k<rows.length;k++){var c=rows[k];
-        body+='<div class="rc" draggable="true" data-cdrag="1" data-email="'+esc(em)+'" data-sid="'+esc(c.devinId||'')+'" data-title="'+esc(c.title||c.name||c.devinId||'')+'"><div class="r1"><span class="ti" title="'+esc(c.title||c.name||c.devinId||'')+'">'+esc(c.title||c.name||c.devinId||'(未命名)')+'</span></div><div class="meta"><span>'+_bkWhen(c.mtime)+(c.eventCount?(' · '+c.eventCount+' 事件'):'')+'</span></div>'+
+        body+='<div class="rc" draggable="false" data-cdrag="1" data-email="'+esc(em)+'" data-sid="'+esc(c.devinId||'')+'" data-title="'+esc(c.title||c.name||c.devinId||'')+'"><div class="r1"><span class="ti" title="'+esc(c.title||c.name||c.devinId||'')+'">'+esc(c.title||c.name||c.devinId||'(未命名)')+'</span></div><div class="meta"><span>'+_bkWhen(c.mtime)+(c.eventCount?(' · '+c.eventCount+' 事件'):'')+'</span></div>'+
           '<div class="acts">'+(c.hasHtml?'<span class="b pri" data-open="'+esc(c.htmlPath||'')+'">打开正文</span>':'')+'<span class="b" data-reveal="'+esc(c.path||c.htmlPath||a.dir||'')+'">文件夹</span></div></div>';}
       body+='</div>';}}
   box.innerHTML=body||'<div class="empty">无备份记录 · 先在「💬对话备份」板块备份或开启自动备份</div>';
@@ -1167,8 +1179,44 @@ function _activeFrameWin(){try{var t=tabs[active];return (t&&t.frame&&t.frame.co
 function _daoUploadToActive(p){if(!p)return false;var w=_activeFrameWin();if(!w){daoToast('请先打开一个账号网页标签再拖入上传',true);return false;}try{w.postMessage({__daoUpload:p},'*');return true;}catch(e){return false;}}
 function _showUploadDrop(txt){var cd=_dEl('convdrop');if(cd){cd.textContent=txt||'⬆ 松开 · 上传到当前网页';cd.className='on';}}
 function _hideUploadDrop(){var cd=_dEl('convdrop');if(cd)cd.className='';}
-_dEl('daowin').addEventListener('dragstart',function(e){var el=e.target.closest&&e.target.closest('.rc[data-cdrag]');if(!el)return;var email=el.getAttribute('data-email')||'',sid=el.getAttribute('data-sid')||'',title=el.getAttribute('data-title')||'';if(!email||!sid){try{e.preventDefault();}catch(x){}daoToast('该对话暂无可定位会话, 无法拖入网页',true);return;}_uploadDrag={kind:'conv',email:email,sid:sid,title:title};_convDragActive=true;el.classList.add('cdragging');try{e.dataTransfer.effectAllowed='copy';e.dataTransfer.setData('text/plain',title||sid);e.dataTransfer.setData('application/x-dao-conv',JSON.stringify({email:email,sid:sid,title:title}));}catch(x){}_showUploadDrop('⬆ 松开 · 上传此对话内容到当前网页');});
-_dEl('daowin').addEventListener('dragend',function(){_convDragActive=false;_uploadDrag=null;_hideUploadDrop();var dg=_dEl('daowin').querySelector('.rc.cdragging');if(dg)dg.classList.remove('cdragging');});
+// ═══ 道并行 · 指针拖拽引擎(取代 webview 跨源 iframe 不可靠的原生 HTML5 DnD) ═══
+// 原生 dragstart/drop 在 webview 内拖经子 iframe 时会丢事件(上游已注释其不稳)。改用
+// mousedown→mousemove→mouseup 自管: 拖拽期把所有子 iframe pointer-events:none(同 #splitbar
+// 手法)令父文档恒收到 move/up; 落点按坐标判定——落网页区=上传当前网页, 落标签栏=标签重排。
+// 任何 IDE(VSCode/Cursor/Windsurf)/任何 webview 一致可用, 不依赖原生 DnD。
+var _PD=null;
+function _pdFramesPE(off){var k;for(k in tabs){try{tabs[k].frame.style.pointerEvents=off?'none':'';}catch(e){}}for(k in BOARDS){try{if(BOARDS[k]&&BOARDS[k].frame)BOARDS[k].frame.style.pointerEvents=off?'none':'';}catch(e){}}}
+function _rectHit(el,x,y){if(!el)return false;var r=el.getBoundingClientRect();return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;}
+function _pdInBar(x,y){return _rectHit(BAR,x,y);}
+function _pdInPage(x,y){return _rectHit(_dEl('body'),x,y)&&!_pdInBar(x,y);}
+function _tabIdOf(btn){for(var k in tabs){if(tabs[k].btn===btn)return k;}return null;}
+function _pdTabAt(x){var ts=BAR.querySelectorAll('.tab');for(var i=0;i<ts.length;i++){var r=ts[i].getBoundingClientRect();if(x>=r.left-4&&x<=r.right+4)return{btn:ts[i],before:(x<r.left+r.width/2)};}return null;}
+function _endPDrag(){_clearDragMark();_hideUploadDrop();_pdFramesPE(false);_convDragActive=false;document.body.classList.remove('pdragging');try{var d1=BAR.querySelector('.tab.dragging');if(d1)d1.classList.remove('dragging');}catch(e){}try{var d2=document.querySelector('.rc.cdragging');if(d2)d2.classList.remove('cdragging');}catch(e){}if(_PD&&_PD.ghost&&_PD.ghost.parentNode)_PD.ghost.parentNode.removeChild(_PD.ghost);_PD=null;}
+function startPDrag(downEvt,opt){if(downEvt.button!=null&&downEvt.button!==0)return;if(_PD)_endPDrag();
+  var sx=downEvt.clientX,sy=downEvt.clientY,started=false;
+  function begin(){started=true;_convDragActive=true;_PD={payload:opt.payload||null,reorderId:opt.reorderId||null};
+    var g=document.createElement('div');g.className='pdghost';g.textContent=opt.label||'拖拽…';document.body.appendChild(g);_PD.ghost=g;
+    _pdFramesPE(true);document.body.classList.add('pdragging');
+    if(_PD.reorderId&&tabs[_PD.reorderId]){try{tabs[_PD.reorderId].btn.classList.add('dragging');}catch(e){}}
+    if(opt.srcEl){try{opt.srcEl.classList.add('cdragging');}catch(e){}}
+    if(_PD.payload)_showUploadDrop(opt.dropHint||'⬆ 松开到网页 = 上传到当前网页');}
+  function mv(e){if(!started){if(Math.abs(e.clientX-sx)+Math.abs(e.clientY-sy)<6)return;begin();}
+    e.preventDefault();
+    if(_PD.ghost){_PD.ghost.style.left=(e.clientX+14)+'px';_PD.ghost.style.top=(e.clientY+12)+'px';}
+    _clearDragMark();
+    if(_PD.reorderId&&_pdInBar(e.clientX,e.clientY)){var t=_pdTabAt(e.clientX);if(t)t.btn.classList.add(t.before?'dh-l':'dh-r');}}
+  function up(e){document.removeEventListener('mousemove',mv,true);document.removeEventListener('mouseup',up,true);
+    if(started){var x=e.clientX,y=e.clientY,done=false;
+      if(_PD.reorderId&&_pdInBar(x,y)){var t=_pdTabAt(x);if(t){var dst=_tabIdOf(t.btn);if(dst&&dst!==_PD.reorderId)reorderTab(_PD.reorderId,dst,t.before);}done=true;}
+      if(!done&&_PD.payload&&_pdInPage(x,y)){if(_daoUploadToActive(_PD.payload)){daoToast('⏳ 正在上传到当前网页 · '+String((_PD.payload.title||_PD.payload.name||_PD.payload.sid)||'').slice(0,24));try{daoClose();}catch(_1){}try{dlClose();}catch(_2){}}}}
+    _endPDrag();}
+  document.addEventListener('mousemove',mv,true);document.addEventListener('mouseup',up,true);}
+// 近期对话 / 备份卡片 → 指针拖拽上传(点卡片按钮不触发拖拽)
+_dEl('daowin').addEventListener('mousedown',function(e){if(e.button!==0)return;var el=e.target.closest&&e.target.closest('.rc[data-cdrag]');if(!el)return;
+  if(e.target.closest&&e.target.closest('.b,.acts,[data-act],[data-open],[data-reveal],[data-bkcopy],[data-bkacc]'))return;
+  var email=el.getAttribute('data-email')||'',sid=el.getAttribute('data-sid')||'',title=el.getAttribute('data-title')||'';
+  if(!email||!sid)return;
+  startPDrag(e,{srcEl:el,label:'💬 '+String(title||sid).slice(0,28),payload:{kind:'conv',email:email,sid:sid,title:title},dropHint:'⬆ 松开到网页 = 上传此对话内容到当前网页'});});
 (function(){var cd=_dEl('convdrop');if(!cd)return;cd.addEventListener('dragover',function(e){if(!_convDragActive)return;e.preventDefault();try{e.dataTransfer.dropEffect='copy';}catch(x){}});cd.addEventListener('drop',function(e){e.preventDefault();e.stopPropagation();cd.className='';_convDragActive=false;var p=_uploadDrag;try{var sc=e.dataTransfer.getData('application/x-dao-conv');if(sc){var o=JSON.parse(sc);p={kind:'conv',email:o.email,sid:o.sid,title:o.title};}else{var sf=e.dataTransfer.getData('application/x-dao-file');if(sf){var of=JSON.parse(sf);p={kind:'file',path:of.path,name:of.name};}}}catch(x){}if(_daoUploadToActive(p)){daoToast('⏳ 正在上传到当前网页 · '+String((p&&(p.title||p.name||p.sid))||'').slice(0,24));try{daoClose();}catch(_1){}try{dlClose();}catch(_2){}}_uploadDrag=null;});})();
 _dEl('dwClose').onclick=daoClose;
 _dEl('dwTabR').onclick=function(){daoTab('recent');};
@@ -1191,6 +1239,12 @@ _dEl('dlFolder').onclick=function(){if(DAO_DL[0]&&DAO_DL[0].path)vscode.postMess
 var _dlDrag=null;
 _dEl('dlwin').addEventListener('dragstart',function(e){var el=e.target.closest&&e.target.closest('.rc[data-dldrag]');if(!el)return;var p=el.getAttribute('data-dldrag')||'',nm=el.getAttribute('data-dlname')||'';if(!p){try{e.preventDefault();}catch(x){}daoToast('该文件无本地路径, 无法拖拽',true);return;}_dlDrag={path:p,name:nm};_uploadDrag={kind:'file',path:p,name:nm};_convDragActive=true;el.classList.add('cdragging');try{var uri='file:///'+String(p).replace(/\\\\/g,'/').replace(/^\\/+/,'');e.dataTransfer.effectAllowed='copyLink';e.dataTransfer.setData('text/uri-list',uri);e.dataTransfer.setData('text/plain',p);try{e.dataTransfer.setData('DownloadURL','application/octet-stream:'+nm+':'+uri);}catch(x2){}try{e.dataTransfer.setData('application/x-dao-file',JSON.stringify({path:p,name:nm}));}catch(x3){}}catch(x){}_showUploadDrop('⬆ 松开 · 上传此文件到当前网页');});
 _dEl('dlwin').addEventListener('dragend',function(){_dlDrag=null;_uploadDrag=null;_convDragActive=false;_hideUploadDrop();var dg=_dEl('dlwin').querySelector('.rc.cdragging');if(dg)dg.classList.remove('cdragging');});
+// 下载文件卡片 → 指针拖拽上传(点按钮不触发拖拽; 原生 dragstart 在 draggable=false 后不再触发)
+_dEl('dlwin').addEventListener('mousedown',function(e){if(e.button!==0)return;var el=e.target.closest&&e.target.closest('.rc[data-dldrag]');if(!el)return;
+  if(e.target.closest&&e.target.closest('.b,.acts,[data-dlup],[data-dlopen],[data-dlrev],[data-dldel]'))return;
+  var p=el.getAttribute('data-dldrag')||'',nm=el.getAttribute('data-dlname')||'';
+  if(!p)return;
+  startPDrag(e,{srcEl:el,label:'📄 '+String(nm||p).slice(0,28),payload:{kind:'file',path:p,name:nm},dropHint:'⬆ 松开到网页 = 上传此文件到当前网页'});});
 _dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-dlopen],[data-dlrev],[data-dldel],[data-dlup]');if(!el)return;
   var op=el.getAttribute('data-dlopen');if(op){vscode.postMessage({type:'shellOpenFile',path:op});return;}
   var rv=el.getAttribute('data-dlrev');if(rv){vscode.postMessage({type:'shellRevealFile',path:rv});return;}
@@ -1230,15 +1284,13 @@ var _dragId=null;
 BAR.addEventListener('wheel',function(e){if(e.deltaY&&Math.abs(e.deltaY)>=Math.abs(e.deltaX||0)){BAR.scrollLeft+=e.deltaY;e.preventDefault();}},{passive:false});
 function _clearDragMark(){var ts=BAR.querySelectorAll('.tab');for(var i=0;i<ts.length;i++){ts[i].classList.remove('dh-l');ts[i].classList.remove('dh-r');}}
 function reorderTab(src,dst,before){if(!src||!dst||src===dst)return;var si=order.indexOf(src),di=order.indexOf(dst);if(si<0||di<0)return;order.splice(si,1);di=order.indexOf(dst);order.splice(before?di:di+1,0,src);var sb=tabs[src].btn,db=tabs[dst].btn;if(before)BAR.insertBefore(sb,db);else BAR.insertBefore(sb,db.nextSibling);schedPersist();}
-function enableTabDnD(btn,id){btn.draggable=true;
-  btn.addEventListener('dragstart',function(e){_dragId=id;try{e.dataTransfer.effectAllowed='copyMove';e.dataTransfer.setData('text/plain',id);}catch(x){}
-    // 标签拖出到网页 → 携该会话 MD (对齐手机 APK·拖标签=拖该号最新对话 MD)。仅账号会话标签具备 email+sid。
-    // 拖标签同时点亮 #convdrop 上传层(此前缺这步致「电脑端拖标签无落点」), 落在网页区=上传该对话, 落在标签栏=重排, 各得其所。
-    try{var _tt=tabs[id],_tm=(_tt&&_tt.meta)||{};var _te=_tm.email||(_tt&&_tt.email)||'',_ts=String(_tm.devinId||_tm.sid||'').replace(/^devin-/,'');if(_te&&_ts){var _ti=_tm.label||_tm.title||'';e.dataTransfer.setData('application/x-dao-conv',JSON.stringify({email:_te,sid:_ts,title:_ti}));_uploadDrag={kind:'conv',email:_te,sid:_ts,title:_ti};_convDragActive=true;_showUploadDrop('⬆ 松开 · 把此标签的对话上传到当前网页');}}catch(x){}
-    btn.classList.add('dragging');});
-  btn.addEventListener('dragend',function(){_dragId=null;btn.classList.remove('dragging');_clearDragMark();_convDragActive=false;_uploadDrag=null;_hideUploadDrop();});
-  btn.addEventListener('dragover',function(e){if(!_dragId)return;e.preventDefault();try{e.dataTransfer.dropEffect='move';}catch(x){}var r=btn.getBoundingClientRect();var before=(e.clientX<r.left+r.width/2);_clearDragMark();btn.classList.add(before?'dh-l':'dh-r');});
-  btn.addEventListener('drop',function(e){if(!_dragId)return;e.preventDefault();e.stopPropagation();var r=btn.getBoundingClientRect();var before=(e.clientX<r.left+r.width/2);reorderTab(_dragId,id,before);_clearDragMark();_dragId=null;});}
+function enableTabDnD(btn,id){btn.draggable=false;btn.setAttribute('data-tabid',id);
+  // 道并行: 标签拖拽改指针式(原生 DnD 在 webview 跨 iframe 丢事件)。落标签栏=重排, 落网页区=上传该标签对话。
+  btn.addEventListener('mousedown',function(e){if(e.button!==0)return;
+    var _tt=tabs[id],_tm=(_tt&&_tt.meta)||{};var _te=_tm.email||(_tt&&_tt.email)||'',_ts=String(_tm.devinId||_tm.sid||'').replace(/^devin-/,'');
+    var payload=null,label='🔖 '+String((_tt&&(_tt.title||_tt.label))||id).slice(0,28);
+    if(_te&&_ts){var _ti=_tm.label||_tm.title||'';payload={kind:'conv',email:_te,sid:_ts,title:_ti};label='💬 '+String(_ti||_ts).slice(0,28);}
+    startPDrag(e,{reorderId:id,payload:payload,label:label,dropHint:'⬆ 网页=上传此标签对话 · 标签栏=重排'});});}
 var TCTX=document.getElementById('tabctx');
 function _closeOthers(id){var ids=order.slice();for(var i=0;i<ids.length;i++)if(ids[i]!==id)closeTab(ids[i]);}
 function _closeRight(id){var i=order.indexOf(id);if(i<0)return;var ids=order.slice(i+1);for(var j=0;j<ids.length;j++)closeTab(ids[j]);}

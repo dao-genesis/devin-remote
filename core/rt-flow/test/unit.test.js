@@ -974,6 +974,34 @@ function test(name, fn) {
       "extension.ts: applyInjectProfileToOrgInner 内的 upsert 须传 locked=true 旁路");
   });
 
+  // ── 12. 拖拽·指针式收口(原生 HTML5 DnD 在 webview 跨 iframe 丢事件 → 三拖拽全失效) ──
+  console.log("\n[webview 拖拽·指针式·道并行]");
+  {
+    const _fs = require("fs"), _path = require("path");
+    const src = _fs.readFileSync(_path.join(__dirname, "..", "extension.js"), "utf8");
+    test("拖拽改指针式: startPDrag 引擎 + 拖拽期子 iframe pointer-events:none", () => {
+      assert.ok(/function startPDrag\(/.test(src), "须有 startPDrag 指针拖拽引擎");
+      assert.ok(/function _pdFramesPE\(off\)/.test(src), "须有 _pdFramesPE(拖拽期子 iframe pointer-events 切换)");
+      assert.ok(/style\.pointerEvents=off\?'none':''/.test(src), "拖拽期须把子 iframe pointer-events 置 none, 令父文档恒收 move/up");
+    });
+    test("三拖拽全改指针式 mousedown(不再依赖原生 draggable/dragstart)", () => {
+      assert.ok(/_dEl\('daowin'\)\.addEventListener\('mousedown'/.test(src), "近期/备份卡片须经 mousedown 指针拖拽");
+      assert.ok(/_dEl\('dlwin'\)\.addEventListener\('mousedown'/.test(src), "下载列表须经 mousedown 指针拖拽");
+      assert.ok(/function enableTabDnD\(btn,id\)\{btn\.draggable=false/.test(src), "标签须 draggable=false 改指针拖拽(原生 DnD 不稳)");
+      assert.ok(!/draggable="true" data-cdrag/.test(src) && !/draggable="true" data-dldrag/.test(src), "拖拽卡片不得再用原生 draggable=true(防回退)");
+    });
+    test("加载防跳伞: 流式增量节流重绘 + 渲染保留滚动位置", () => {
+      assert.ok(/function _recRenderThrottled\(\)/.test(src), "须有 _recRenderThrottled 节流(防每包全量重绘跳伞)");
+      assert.ok(/var _sc=box\?box\.scrollTop:0/.test(src), "daoRenderRecent 须捕获滚动位置");
+      assert.ok(/box\.scrollTop=_sc/.test(src), "渲染后须还原滚动位置(防跳)");
+    });
+    test("vendor 同步: dao-vsix/rtflow 含指针拖拽收口(源↔打包一致)", () => {
+      const ven = _fs.readFileSync(_path.join(__dirname, "..", "..", "dao-vsix", "rtflow", "extension.js"), "utf8");
+      assert.ok(/function startPDrag\(/.test(ven), "打包副本须含 startPDrag(vendor 未脱钩)");
+      assert.ok(/function _recRenderThrottled\(\)/.test(ven), "打包副本须含防跳伞节流");
+    });
+  }
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
