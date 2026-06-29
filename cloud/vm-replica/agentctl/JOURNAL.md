@@ -7437,4 +7437,31 @@ unreachable.
 
 ---
 
+## F230 — GTK3 autocomplete corrupts filenames in Save As dialogs
+
+**Friction.**  Inkscape Save As with path `/tmp/regr_inkscape_edge.svg` produces
+file `/tmp/rer__inkscape_edge.svg` — the `g` is eaten, the `_` doubled.
+Mousepad also fails with longer filenames.
+
+**Root cause.**  GTK3's file-chooser location bar has aggressive inline
+autocomplete.  `type_unicode` types at ~32 ms/char; each keystroke triggers
+autocomplete which overwrites the next character, corrupting the filename.
+
+**Fix** (`osctl.py`).  Split the path in `uia_file_dialog_set_path`'s F228
+fallback branch:
+1. Ctrl+L → type **directory** + `/` → Enter (navigates; short directory names
+   are autocomplete-safe)
+2. After navigation, the Name field regains focus
+3. Ctrl+A → type **just the basename** (no directory = no autocomplete on
+   path separators)
+
+**Proof.**  5/5 pass:
+- KWrite (KDE): ✓ `/tmp/f230_kwrite_final.txt` (28 bytes)
+- gedit (GTK3): ✓ `/tmp/f230_gedit_final.txt` (6 bytes)
+- Mousepad (Xfce): ✓ `/tmp/f230_mousepad_final.txt` (18 bytes)
+- Inkscape (GTK3): ✓ `/tmp/f230_inkscape_final.svg` (1826 bytes)
+- GIMP Export As: ✓ `/tmp/f230_gimp_final.png` (5703 bytes)
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
