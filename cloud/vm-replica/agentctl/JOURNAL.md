@@ -8235,3 +8235,48 @@ placing 7/10 correct flags and clearing most of the board through perceive →
 deduce → click, with no crash and no mine hit (it reached the round cap before a
 full clear; convergence is solver logic, separate from this floor fix). The read
 primitive no longer has a small-cell cliff.
+
+---
+
+> 為學者日益，聞道者日損。 The reader that re-reads every cell each step is
+> learning by addition; the floor's way is subtraction — read once, then touch
+> only what moved.
+
+## F250 — grid_changes: re-read only the lattice cells that actually moved
+
+Driving gnome-mines through the floor's player stalled at the round cap, and the
+profile was unambiguous: each round re-reads all 64 cells (64 OCR calls) just to
+learn that a move touched two of them. The same waste F245/F246 cut for the pixel
+waiters — redoing work on pixels that did not change — was never cut for grids.
+`sample_grid` (F247) reads the whole lattice in one capture, but an incremental
+grid game (mines reveals a few, sudoku fills one, a chess move touches two) wants
+the *delta*, not the whole board, every step.
+
+**New verb** `osctl.grid_changes(prev, cur, bbox, cols, rows, size, inset, tol,
+min_count) -> [(row, col), ...]` — the per-cell `locate_change` for grids. Given
+two captures and the *same* geometry you hand `sample_grid`, it compares only
+each cell's central window and returns the cells where more than `min_count`
+pixels differ by more than `tol`. The caller then re-classifies only those and
+reuses its prior reading for the rest. Geometry (cell windows, bounds clamping,
+`inset` meaning) is byte-identical to `sample_grid`, so the `(r,c)` indices line
+up one-to-one; and like F246 each cell stops counting the instant the verdict is
+in (損之又損). `tol=0, min_count=1` is exact.
+
+**Proof.** *Synthetic* (`_test_f250.py`): nothing-changed → `[]`; flipping two
+cells → exactly those two in row-major order; `tol` hides a sub-threshold wobble;
+`min_count` gates a single-pixel change; the flagged set equals the set of cells
+whose `sample_grid` mean moved (one-to-one indexing); args validated. *Live*
+(gnome-sudoku Easy): captured the board, filled one empty cell, and
+`grid_changes` returned exactly the cells that moved — the newly-filled cell
+**and** the previously-selected cell whose blue highlight cleared when focus left
+it (both genuine pixel changes; an incremental reader re-checks both cheaply and
+keeps the other 79 cells from its prior read).
+
+**Honest edge found while validating.** `capture_patch` (F245) returns a
+*patch-local* buffer, but `sample_grid`/`grid_changes` take a bbox in whatever
+frame the buffer is in — so composing them on a foveal patch requires passing a
+patch-local bbox `(0, 0, pw-1, ph-1)`, not the screen bbox. Mixing the two
+(screen bbox against a patch buffer) silently clamps every cell to the patch edge
+and reads them identical. Documented here rather than papered over with more API;
+the common path (`sample_grid(bbox)` with no rgb, full-screen capture) is
+unaffected.

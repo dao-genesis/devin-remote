@@ -2034,6 +2034,81 @@ def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
     return grid
 
 
+def grid_changes(prev: bytes, cur: bytes, bbox: tuple[int, int, int, int],
+                 cols: int, rows: int, size: tuple[int, int],
+                 inset: float = 0.25, tol: int = 0,
+                 min_count: int = 1) -> list[tuple[int, int]]:
+    """Return the ``(row, col)`` cells of a ``cols``x``rows`` lattice that changed
+    between two captures — the per-cell :func:`locate_change` for grids (F250).
+
+    Incremental grid games move one or a few cells per step: mines reveals a
+    handful, sudoku fills one, a chess move touches two. Yet the reader
+    (:func:`sample_grid` + a per-cell classify/OCR) re-reads *every* cell every
+    step — for mines that is 64 OCR calls a round to learn that two cells moved,
+    the dominant cost of driving the board (the round-cap stall seen live). That
+    is the same waste F245/F246 cut for the pixel waiters — re-doing work on
+    pixels that did not change — not yet cut for grids.
+
+    Given the ``prev`` and ``cur`` captures (both packed RGB of ``size`` ``(w,h)``,
+    e.g. two :func:`capture_patch` of the same board) and the *same*
+    ``bbox``/``cols``/``rows``/``inset`` you pass :func:`sample_grid`, this
+    compares only each cell's central window and returns the cells where more
+    than ``min_count`` pixels differ by more than ``tol`` on any channel. The
+    caller then re-classifies *only those* cells and reuses its prior reading for
+    the rest. ``tol=0, min_count=1`` is exact (any single differing byte marks a
+    cell); raise them to ignore a blinking cursor or anti-alias shimmer. The
+    geometry — cell windows, bounds clamping, ``inset`` meaning — is identical to
+    :func:`sample_grid`, so the ``(row, col)`` indices line up one-to-one; and
+    like F246 each cell stops counting the instant the verdict is in
+    (損之又損)."""
+    if cols < 1 or rows < 1:
+        raise ValueError("cols and rows must be >= 1")
+    if not 0.0 <= inset < 0.5:
+        raise ValueError("inset must be in [0.0, 0.5)")
+    if min_count < 1:
+        raise ValueError("min_count must be >= 1")
+    w, h = size
+    if len(prev) != len(cur):
+        raise ValueError("prev and cur must be the same length")
+    x0, y0, x1, y1 = bbox
+    cw = (x1 - x0 + 1) / cols
+    ch = (y1 - y0 + 1) / rows
+    changed = []
+    for r in range(rows):
+        cy0 = y0 + r * ch
+        iy0 = int(cy0 + ch * inset)
+        iy1 = int(cy0 + ch * (1.0 - inset))
+        if iy1 <= iy0:
+            iy1 = iy0 + 1
+        iy0 = max(0, min(iy0, h - 1))
+        iy1 = max(iy0 + 1, min(iy1, h))
+        for c in range(cols):
+            cx0 = x0 + c * cw
+            ix0 = int(cx0 + cw * inset)
+            ix1 = int(cx0 + cw * (1.0 - inset))
+            if ix1 <= ix0:
+                ix1 = ix0 + 1
+            ix0 = max(0, min(ix0, w - 1))
+            ix1 = max(ix0 + 1, min(ix1, w))
+            n = 0
+            hit = False
+            for yy in range(iy0, iy1):
+                base = (yy * w + ix0) * 3
+                for k in range(0, (ix1 - ix0) * 3, 3):
+                    if (abs(prev[base + k] - cur[base + k]) > tol
+                            or abs(prev[base + k + 1] - cur[base + k + 1]) > tol
+                            or abs(prev[base + k + 2] - cur[base + k + 2]) > tol):
+                        n += 1
+                        if n >= min_count:
+                            hit = True
+                            break
+                if hit:
+                    break
+            if hit:
+                changed.append((r, c))
+    return changed
+
+
 def detect_grid(search: tuple[int, int, int, int],
                 rgb: bytes | None = None, size: tuple[int, int] | None = None,
                 stride: int = 2, k: float = 0.8, pmin: int = 8, tol: int = 5,
