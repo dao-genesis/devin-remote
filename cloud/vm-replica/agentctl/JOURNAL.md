@@ -7366,4 +7366,46 @@ def get_clipboard() -> str:
 
 ---
 
+## F228 — `uia_file_dialog_set_path` types into document area on Xfce/GTK dialogs
+
+**Friction.**  Mousepad (Xfce) and gedit (GTK3) Save As dialogs expose the
+**parent window's** AT-SPI tree, not the dialog's own elements.  After Ctrl+L
+opens the location bar, `uia_set_value(dialog, path, ctype='edit')` finds the
+document text area (height > 300px) and types the file path into the document
+content instead of the filename field.  For gedit, `paste_text` (Ctrl+V)
+landed in the Name field rather than the focused location bar.
+
+**Root cause.**  Xfce GTK file dialogs don't register their own elements in
+AT-SPI; the tree-walk returns the parent window's tree.  The only Edit element
+with a rect is the main document editor (h=449 for Mousepad, h=673 for gedit),
+not the location-bar entry.
+
+**Fix** (`osctl.py`).  Added `_has_small_edit()` height check (h < 200 = real
+filename entry vs h > 300 = document area).  When no small edit exists after
+Ctrl+L, use `type_unicode(path)` (key events to focused widget) instead of
+`uia_set_value` or `paste_text`:
+
+```python
+def _has_small_edit(wid):
+    els = uia_find_all(wid, max_scan=400)
+    return any(e.get("type") == "Edit" and e.get("rect")
+               and e["rect"][3] < 200 for e in els)
+
+# After Ctrl+L:
+if _has_small_edit(dialog_wid):
+    uia_set_value(dialog_wid, path, ctype="edit")
+else:
+    chord(0x11, 0x41)    # Ctrl+A to clear
+    type_unicode(path)    # key events to focused location bar
+```
+
+**Proof.**  5/5 dialogs pass after fix:
+- KWrite (KDE `File name:` entry): ✓ `/tmp/f228v2_kwrite.txt` (90 bytes)
+- gedit (GTK3 location bar): ✓ `/tmp/f228v2_gedit.txt` (90 bytes)
+- Mousepad (Xfce location bar): ✓ `/tmp/f228v2_mousepad.txt` (58 bytes)
+- GIMP Export As: ✓ `/tmp/f228v2_gimp.png` (9050 bytes)
+- Inkscape Save As: ✓ `/tmp/f228v2_inkscape.svg` (1400 bytes)
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
