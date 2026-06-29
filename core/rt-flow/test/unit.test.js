@@ -567,6 +567,34 @@ function test(name, fn) {
       assert.ok(/window\.location\.replace=function\(u\)\{return _rpl\(wrap\(u\)\)\}/.test(ext), "须包裹 location.replace 经代理");
       assert.ok(/var _asn=window\.location\.assign\.bind\(window\.location\);/.test(ext), "_nav 须用原始 assign(绕开自身改写防自陷)");
     });
+    test("搜索结果跳转解包: genericWebProxy 入口命中 _unwrapSearchRedirect 即以真实目标递归(点结果不白屏)", () => {
+      assert.ok(/function _unwrapSearchRedirect\(u\) \{/.test(ext), "须有 _unwrapSearchRedirect 解包器");
+      assert.ok(/const _redir = _unwrapSearchRedirect\(u\);/.test(ext), "genericWebProxy 须调用解包器");
+      assert.ok(/if \(_redir && _redir !== u\.href && _redir !== targetUrl\) return await genericWebProxy\(_redir, depth \+ 1\);/.test(ext), "命中须以真实目标递归(防自环)");
+      assert.ok(/bing\\.com\$\/\.test\(host\) && \/\^\\\/ck\\\/a/.test(ext), "须解 Bing /ck/a 包装");
+      assert.ok(/google\\\.\[a-z\.\]\+\$\/\.test\(host\) && \/\^\\\/url\$/.test(ext), "须解 Google /url 包装");
+      assert.ok(/duckduckgo\\.com\$\/\.test\(host\) && \/\^\\\/l\\\/\?\$/.test(ext), "须解 DuckDuckGo /l/ 包装");
+    });
+    test("搜索结果跳转解包·功能实测: Bing /ck/a(u=a1<b64url>) 还原绝对/相对目标, Google/DDG 取 q/uddg", () => {
+      const m = ext.match(/function _unwrapSearchRedirect\(u\) \{[\s\S]*?\n\}/);
+      assert.ok(m, "须能抽取 _unwrapSearchRedirect 函数体");
+      // eslint-disable-next-line no-eval
+      const fn = eval("(" + m[0] + ")");
+      const b64url = (s) => Buffer.from(s, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      // 绝对外站目标
+      const ck1 = new URL("https://www.bing.com/ck/a?ptn=3&u=a1" + b64url("https://openai.com/news/") + "&ntb=1");
+      assert.strictEqual(fn(ck1), "https://openai.com/news/", "Bing ck/a 须还原绝对外站目标");
+      // 相对目标(图片标签) → 回落 bing 自身
+      const ck2 = new URL("https://www.bing.com/ck/a?u=a1" + b64url("/images/search?q=x"));
+      assert.strictEqual(fn(ck2), "https://www.bing.com/images/search?q=x", "Bing ck/a 相对目标须回落引擎自身");
+      // Google /url?q=
+      assert.strictEqual(fn(new URL("https://www.google.com/url?q=https://example.com/a&sa=U")), "https://example.com/a", "Google /url 须取 q");
+      // DuckDuckGo /l/?uddg=
+      assert.strictEqual(fn(new URL("https://duckduckgo.com/l/?uddg=" + encodeURIComponent("https://example.org/b"))), "https://example.org/b", "DDG /l/ 须取 uddg");
+      // 非跳转页不动(普通站点返回 null)
+      assert.strictEqual(fn(new URL("https://openai.com/news/")), null, "普通站点不解包");
+      assert.strictEqual(fn(new URL("https://www.bing.com/search?q=x")), null, "Bing 搜索页本身不解包");
+    });
   }
 
   // ── 11. 备份命名/结构 + listBackups (v4.8.3 编号·账号+密码表层·对话/账号信息分明) ──

@@ -12215,6 +12215,36 @@ function daoDropBridgeJs() {
     ].join("");
 }
 
+// 归一 · 搜索引擎结果链接「跳转包装」解包 — 各大引擎结果均非直链, 而是经自家跟踪跳转中转:
+//   Bing  /ck/a?...&u=a1<base64url(dest)>  · Google /url?q=<dest> · DuckDuckGo /l/?uddg=<dest>。
+//   不解包则点击结果经代理取到的是跳转中转页(JS/meta refresh) → webview 内白屏(用户「搜索没做好」根因)。
+//   解出真实目标(绝对=直达原站, 相对=回落引擎自身如 bing /images 标签页) → 点击结果即正常进站。
+function _unwrapSearchRedirect(u) {
+    try {
+        const host = (u.hostname || '').toLowerCase();
+        const path = u.pathname || '';
+        if (/(^|\.)bing\.com$/.test(host) && /^\/ck\/a/i.test(path)) {
+            let raw = u.searchParams.get('u') || '';
+            if (raw) {
+                if (/^a1/i.test(raw)) raw = raw.slice(2);
+                raw = raw.replace(/-/g, '+').replace(/_/g, '/');
+                while (raw.length % 4) raw += '=';
+                let dec = '';
+                try { dec = Buffer.from(raw, 'base64').toString('utf8'); } catch (e) { dec = ''; }
+                if (dec) { try { return new URL(dec, u.origin).href; } catch (e) { /* 守柔 */ } }
+            }
+        }
+        if (/(^|\.)google\.[a-z.]+$/.test(host) && /^\/url$/i.test(path)) {
+            const q = u.searchParams.get('q') || u.searchParams.get('url') || '';
+            if (/^https?:\/\//i.test(q)) return q;
+        }
+        if (/(^|\.)duckduckgo\.com$/.test(host) && /^\/l\/?$/i.test(path)) {
+            const q = u.searchParams.get('uddg') || '';
+            if (/^https?:\/\//i.test(q)) return q;
+        }
+    } catch (e) { /* 守柔 */ }
+    return null;
+}
 async function genericWebProxy(targetUrl, depth = 0) {
     const errPage = (msg, href) => {
         const safeHref = (href || '').replace(/"/g, '&quot;');
@@ -12239,6 +12269,9 @@ async function genericWebProxy(targetUrl, depth = 0) {
     let u;
     try { u = new URL(targetUrl); } catch (e360) { return errPage('非法网址', targetUrl); }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return errPage('仅支持 http/https', targetUrl);
+    // 道·解包搜索引擎结果跳转(点结果不再白屏): 命中即以真实目标递归(depth 守门防环)。
+    const _redir = _unwrapSearchRedirect(u);
+    if (_redir && _redir !== u.href && _redir !== targetUrl) return await genericWebProxy(_redir, depth + 1);
     return await new Promise((resolve) => {
         let done = false;
         let proxyReq = null;
