@@ -696,14 +696,29 @@ def uia_file_dialog_set_path(dialog_wid: int, path: str, pause: float = 0.5) -> 
         ok2 = uia_set_value(dialog_wid, path, ctype="edit")
         if ok2:
             return True
-    # F228: No small edit → the dialog's location bar isn't in AT-SPI.
-    # Ctrl+L gave it focus, so type directly into the focused widget.
-    # Use type_unicode (key events) rather than paste_text (Ctrl+V) to
-    # ensure keystrokes reach the focused location-bar entry, not the
-    # Name field or file-browser area.
-    chord(0x11, 0x41)  # Ctrl+A to select any pre-filled text
-    time.sleep(0.1)
-    type_unicode(path)
+    # F228 + F230: No small edit → the dialog's location bar isn't in
+    # AT-SPI.  Ctrl+L opened the breadcrumb location bar.  GTK3
+    # autocomplete can corrupt long paths typed character-by-character,
+    # so split into directory navigation + filename entry:
+    #   1. Type directory in the Ctrl+L bar → Enter (navigates)
+    #   2. The Name field re-gains focus after navigation
+    #   3. Ctrl+A + type just the basename
+    import posixpath
+    dirname = posixpath.dirname(path)
+    basename = posixpath.basename(path)
+    if dirname:
+        chord(0x11, 0x41)  # Ctrl+A
+        time.sleep(0.05)
+        tap(0x2E)  # Delete
+        time.sleep(0.1)
+        type_unicode(dirname + "/")
+        time.sleep(0.3)
+        tap(0x0D)  # Enter → navigate to directory
+        time.sleep(0.8)
+    # Type filename into the Name field (gets focus after navigation)
+    chord(0x11, 0x41)  # Ctrl+A
+    time.sleep(0.05)
+    type_unicode(basename)
     time.sleep(0.3)
     return True
 
