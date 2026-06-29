@@ -7990,3 +7990,49 @@ settle under `tol=24, min_count=30`. (Honest caveat: this VM's capture path does
 not composite the software cursor, so a static board shows 0 jitter here — the
 noise-rejection benefit is shown synthetically; live confirms the positive
 async-reply path.)
+
+---
+
+> 為學者日益，聞道者日損。損之又損，以至於無為。 The waits read the whole desktop
+> every tick to look at one fixed rectangle. Take away what was never needed.
+
+## F245 — the pixel waiters grabbed the whole screen to watch one small region
+
+F244 made `wait_for_change`/`wait_until_stable` *correct* about noise; profiling
+the live async-reply loop next exposed a *cost* gap on the same two waiters. They
+poll a fixed `bbox` many times a second, but each tick did
+`capture_rgb()` — a full **1600x1200** `XGetImage` of the root window — and then
+`crop_rgb` threw ~93% of it away. Watching a chess board (`361x381`, ~7% of the
+screen) for a 25 s engine reply meant ~300–500 whole-desktop grabs, ~5.76 MB
+read and discarded each time. The backend already had the cheaper read: F142's
+foveal `capture_rgb(x, y, w, h)` asks `XGetImage` for **only** that rectangle.
+The waiters simply never used it — the floor had the part, the consumers polled
+the wasteful way.
+
+**Fix** (`osctl.capture_patch` + the two waiters). New `capture_patch(bbox)`
+returns `(patch, pw, ph)` for the inclusive `(minx,miny,maxx,maxy)` rectangle via
+one foveal `capture_rgb(x0, y0, x1-x0+1, y1-y0+1)`. For any in-bounds bbox it is
+**byte-for-byte identical** to `crop_rgb(capture_rgb()…, bbox)` (the bbox
+convention and packing match exactly), so the waiters' behaviour — including
+F244's `tol`/`min_count` semantics and any caller-supplied `baseline` taken via
+the old crop path — is unchanged; only the read shrinks. Both waiters now call
+`capture_patch(bbox)` instead of full-grab-then-crop.
+
+**Proof.** *Live, board ROI `(595,378,955,758)`*: `capture_patch(BOARD)` is
+`== crop(capture_rgb(), BOARD)` byte-for-byte (`361x381`); the per-poll grab
+drops **7.9x** (`7.22 ms` full-grab+crop → `0.91 ms` foveal, ~6.3 ms saved/poll,
+reading 7% of the bytes). *Closed loop with the now-foveal waiters*: White plays
+`2.c4`, `wait_for_change(BOARD, tol=24, min_count=30)` catches Stockfish's
+**asynchronous reply** (`changed=True, pixels=1105`, `1.91 s`, 25 polls) and
+`wait_until_stable` confirms it settled in `0.39 s`; the move list reads
+*"2b. Black pawn moves from e7 to e6"* — exactly the reply detected, end-to-end
+in `2.3 s`. *Synthetic* (`_test_f245.py`, pure-Python, faked screen): for five
+bboxes (incl. degenerate 1-px and screen-edge), `capture_patch` equals
+full-grab+crop byte-for-byte **and** issues a single foveal sub-rect grab of the
+inclusive `(w,h)`, never a whole-screen one.
+
+**Honest boundary.** The foveal grab removes the IO/memory waste (7.9x cheaper
+read, 93% less data per poll), but `region_diff` itself — pure-Python over
+`361x381` ≈ 137k pixels at ~26 ms — now dominates each poll's wall-clock. That is
+a *different* axis (the comparison loop, not the capture) and the next thread to
+pull, not part of F245.

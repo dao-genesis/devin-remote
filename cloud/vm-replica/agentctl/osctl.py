@@ -1864,6 +1864,24 @@ def crop_rgb(rgb: bytes, size: tuple[int, int], bbox: tuple[int, int, int, int]
     return bytes(out), pw, ph
 
 
+def capture_patch(bbox: tuple[int, int, int, int]) -> tuple[bytes, int, int]:
+    """Grab *only* ``bbox`` as ``(patch, pw, ph)`` — a foveal :func:`capture_rgb`
+    of just that inclusive ``(minx, miny, maxx, maxy)`` rectangle (F245).
+
+    For an in-bounds ``bbox`` this is byte-for-byte identical to
+    ``crop_rgb(capture_rgb()..., bbox)`` — but it asks ``XGetImage`` for the
+    rectangle alone instead of the whole desktop, so it reads roughly the
+    rectangle's fraction of the pixels (a board ROI is ~7% of a 1600x1200
+    screen, measured ~14x faster per read). The high-rate pixel waiters
+    (:func:`wait_for_change`, :func:`wait_until_stable`) poll a fixed region many
+    times a second; grabbing the whole screen each tick just to throw away 93% of
+    it is the avoidable cost (損之又損). This is the one read they should make."""
+    x0, y0, x1, y1 = bbox
+    pw, ph = x1 - x0 + 1, y1 - y0 + 1
+    _w, _h, patch = capture_rgb(x0, y0, pw, ph)
+    return patch, pw, ph
+
+
 def wait_until_stable(bbox: tuple[int, int, int, int], settle: int = 3,
                       interval: float = 0.08, timeout: float = 6.0,
                       tol: int = 0, min_count: int = 1
@@ -1895,8 +1913,7 @@ def wait_until_stable(bbox: tuple[int, int, int, int], settle: int = 3,
     prev: bytes | None = None
     stable = changes = captures = 0
     while time.time() < deadline:
-        w, h, rgb = capture_rgb()
-        patch, _pw, _ph = crop_rgb(rgb, (w, h), bbox)
+        patch, _pw, _ph = capture_patch(bbox)
         captures += 1
         same = prev is not None and (
             region_diff(patch, prev, tol=tol)["pixels"] < min_count)
@@ -2161,13 +2178,11 @@ def wait_for_change(bbox: tuple[int, int, int, int],
     ``locate_change``/``locate_change_blobs`` already are."""
     start = time.time()
     if baseline is None:
-        w, h, rgb = capture_rgb()
-        baseline, _pw, _ph = crop_rgb(rgb, (w, h), bbox)
+        baseline, _pw, _ph = capture_patch(bbox)
     deadline = start + timeout
     captures = 0
     while time.time() < deadline:
-        w, h, rgb = capture_rgb()
-        patch, _pw, _ph = crop_rgb(rgb, (w, h), bbox)
+        patch, _pw, _ph = capture_patch(bbox)
         captures += 1
         pixels = region_diff(patch, baseline, tol=tol)["pixels"]
         if pixels >= min_count:

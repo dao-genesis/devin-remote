@@ -22,8 +22,10 @@ def frame(changes):
 
 
 def fake_stream(frames):
+    # The bbox under test is the whole WxH frame, so a foveal capture_rgb(0,0,W,H)
+    # (what capture_patch issues, F245) returns that frame; accept the args.
     it = itertools.cycle(frames)
-    osctl.capture_rgb = lambda: (W, H, next(it))
+    osctl.capture_rgb = lambda x=0, y=0, w=None, h=None: (W, H, next(it))
 
 
 BBOX = (0, 0, W - 1, H - 1)
