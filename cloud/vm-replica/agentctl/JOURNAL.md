@@ -7464,4 +7464,112 @@ fallback branch:
 
 ---
 
+## F231 — self-drawn surfaces have geometry but no value; the atlas cold-start
+
+**Friction.**  gnome-mines exposes 64 anonymous AT-SPI `Button`s — exact cell
+geometry (`rect`) but **no name, no value, no state**.  Whether a cell is
+unrevealed, empty, a 1–8, or flagged is *pixels only*.  This is every
+self-drawing surface: OpenGL/SDL games, `<canvas>`, custom toolkits — the
+semantic channel goes blind exactly where the board lives.
+
+**What the floor already had (不為而成).**  The pixel channel was *not* blind:
+the F058/F103–F108 ladder — `edge_signature` → `read_glyph`/`read_glyph_conf`
+→ `segment_run`/`split_run` → `read_text`/`read_words`/`read_block` — already
+reads canvas text **dependency-free**, by matching each glyph's scale-free edge
+signature against a reference *atlas*.  Verified live: a 3-entry atlas built from
+three labelled cells reads the rest of the gnome-mines board exactly
+(`read_glyph` → 3,2,1,2 ✓).  So for the *warm* path the floor was already
+capable, and that path stays the runtime reader (no third-party dep, scale-free,
+honest about unknowns — 大器免成).
+
+**The real gap — cold start.**  `read_glyph` needs an atlas, and the atlas is
+built from *labelled* reference glyphs.  An agent dropped into a game it has
+never seen cannot label a glyph without first reading it — a chicken-and-egg the
+atlas readers cannot break on their own.  That, precisely, is the uncovered
+friction: **bootstrapping the first labels for an unknown font.**
+
+**Fix** (`osctl.py`).  New *optional* engine-backed reader `ocr_text(region,
+whitelist, psm, scale, invert, rgb, size)` — the cold-start complement to the
+atlas ladder:
+- grabs `region` (or whole screen), greyscales, optional invert (light-on-dark),
+  nearest-neighbour upscale (small glyphs OCR poorly at native size), pipes a
+  hand-rolled PNG to `tesseract` and returns the recognised text, stripped.
+- `whitelist` constrains the alphabet (biggest accuracy win on short
+  fixed-charset readouts); `psm` picks segmentation (7=line, 10=char, 6=block);
+  `rgb`/`size` reuse one capture across many regions.
+- tesseract is resolved once via `_ocr_engine` and is **optional**: the floor
+  imports and runs without it, and the dependency-free atlas ladder remains the
+  default reader.  `ocr_text` reads glyphs with *zero* prior atlas — so it can
+  label reference cells, from which a fast `read_glyph` atlas is built for the
+  rest of the session.  Engine for the cold start, structure for the warm path.
+
+**The hybrid (道生二).**  AT-SPI gives *where* (cell rects), the pixel reader
+gives *what* (the digit) — neither alone drives the board, together they do.
+Driver `_game_mines.py` reads the full 8×8 state, then a constraint solver
+(single-cell rule + subset elimination + global mine-count endgame + lowest-risk
+guess) plays via XTEST left/right clicks.
+
+**Proof.**
+- `ocr_text` reads the self-drawn "4/10" flag counter (no AT-SPI value) and
+  individual cell digits (verified against screenshot: 2,3,2 ✓).
+- dependency-free `read_glyph` reads the same digits from a 3-glyph atlas
+  (3,2,1,2 ✓) — the warm path the floor already owned.
+- Full-board read in 3.5 s: digits **and** flags ('F', detected by corner colour
+  staying on the unrevealed tile) all match the rendered board.
+- Solver flagged 5/10 mines correctly and opened safe cells purely from pixel
+  perception; refused to guess when no deterministic move existed (knows what it
+  doesn't know).
+
+## F232 — a zero-hold key tap is invisible to a frame-polled game
+
+**Friction.**  With SuperTux v0.6.3 (SDL2/OpenGL, **0 AT-SPI elements**) up and
+correctly holding X input focus (`xdotool getwindowfocus` → "SuperTux v0.6.3"),
+`osctl.tap(VK_RETURN)` on the main menu did **nothing** — "Start Game" never
+activated.  Four taps of `VK_DOWN` (and the same via `xdotool key Down`, also
+XTEST) moved the highlight **zero** rows.  The floor's keyboard path was not
+broken — the identical primitives type into KWrite/gedit and walk Qt/GTK menus
+every regression run — yet the game ignored them completely.
+
+**Root cause — event-latched widgets vs. state-polled surfaces.**  `tap` is
+`key_down`+`key_up` *in the same breath*: the key is down for ~0 ms.  A toolkit
+widget latches on the X `KeyPress` **event** itself, so a zero-duration press is
+always seen.  A self-drawing game does not act on the event — it samples key
+*state* once per frame and acts on the rising edge it sees **at a tick**.  A
+press whose down and up both land between two ticks is never sampled → silently
+dropped.  Measured on SuperTux (held `key_down`→sleep→`key_up`, one screenshot
+per step):
+
+| hold (ms) | menu highlight moved |
+|----------:|----------------------|
+| 0 (`tap`) | no (×4, incl. xdotool) |
+| 25        | no |
+| 100       | **yes — exactly one row** |
+| 120       | yes — one row |
+| 400       | yes — **still one** (repeat debounce caps it) |
+
+So the press must span ≥ ~1 input tick to be observed, and one observed press is
+one discrete action (the menu's own repeat-delay debounce prevents a long hold
+from running away).  This is *every* SDL/OpenGL game, emulator and custom canvas
+— the exact surfaces where AT-SPI is already blind (F231), so input and
+perception go dark **together**.
+
+**Fix** (`osctl.py`).  `tap(vk, hold=0.0)` gains an optional `hold` (seconds).
+Default `0.0` is byte-for-byte the old behaviour (zero regression — toolkit apps
+keep their instant tap), but on a polled surface you pass `tap(vk, hold=0.12)` so
+the press crosses a tick and is observed.  The knob lives exactly where the trap
+is, and the docstring states the rule: event-driven widget → `hold=0`; game/
+emulator discrete press → `hold≈0.1`; sustained movement (walk, charge) →
+`key_hold` (F127), whose longer default integrates *time-in-state*.  No new
+top-level name — the floor already owned `key_hold` for the sustained case; this
+just makes the *discrete* case expressible on the primitive callers already use.
+
+**Proof.**  With the fix, held presses drove SuperTux end-to-end through the
+zero-AT-SPI UI purely via the floor: main menu → "Start Game" → "Story Mode" →
+worldmap, and on the worldmap a held `VK_DOWN` walked Tux one node along the path
+(confirmed by capturing the penguin sprite's new position — the real-time
+perceive→act loop on an OpenGL surface).  `tap(hold=0)` reproduces the original
+dead input on the same menu; `tap(hold=0.12)` activates it every time.
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

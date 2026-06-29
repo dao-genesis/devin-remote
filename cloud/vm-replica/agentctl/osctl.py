@@ -1213,8 +1213,26 @@ def mod_scroll(dy: int = 0, dx: int = 0, *mods: int,
 
 
 # ---- keyboard ------------------------------------------------------------- #
-def tap(vk: int) -> None:
+def tap(vk: int, hold: float = 0.0) -> None:
+    """Press and release a key.
+
+    ``hold`` (seconds) keeps the key down in between. Leave it ``0`` for
+    event-driven toolkit widgets — Qt/GTK/wx menus, text fields, accelerators —
+    which latch on the X ``KeyPress`` event itself, so a zero-duration press is
+    seen (this is the historical behaviour, unchanged).
+
+    But self-drawing surfaces — SDL/OpenGL games, emulators, custom canvases —
+    don't act on the event; they sample key *state* once per frame and act on the
+    rising edge they observe at a tick. A press whose down and up land between two
+    ticks is never sampled and is silently dropped (F232: a zero-hold ``tap`` of
+    Return/arrows moved nothing in SuperTux, while a held press did). Pass
+    ``hold>=~0.1`` there so the press spans at least one input tick and is
+    observed; one such press still yields one discrete action (the menu's repeat
+    debounce caps it). For *sustained* input — walking a character, charging —
+    use :func:`key_hold`, whose longer default integrates time-in-state."""
     key_down(vk)
+    if hold > 0:
+        time.sleep(hold)
     key_up(vk)
 
 
@@ -2193,6 +2211,99 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
     score, tx, ty = best
     return {"x": tx + pw // 2, "y": ty + ph // 2, "score": score,
             "bbox": (tx, ty, tx + pw - 1, ty + ph - 1)}
+
+
+_OCR_ENGINE: "str | None" = None
+
+
+def _ocr_engine() -> str:
+    """Resolve the OCR engine binary once. Tesseract is an *optional* perception
+    extension — the floor imports and runs without it; only OCR calls need it."""
+    global _OCR_ENGINE
+    if _OCR_ENGINE is None:
+        import shutil
+        _OCR_ENGINE = shutil.which("tesseract") or ""
+    if not _OCR_ENGINE:
+        raise RuntimeError(
+            "ocr_text needs the 'tesseract' binary on PATH "
+            "(install: apt-get install tesseract-ocr). It is an optional "
+            "perception extension; the rest of the floor runs without it.")
+    return _OCR_ENGINE
+
+
+def ocr_text(region: "tuple[int, int, int, int] | None" = None,
+             whitelist: "str | None" = None, psm: int = 7,
+             scale: int = 3, invert: bool = False,
+             rgb: "bytes | None" = None,
+             size: "tuple[int, int] | None" = None) -> str:
+    """Read *text* off the screen by pixels with **zero prior atlas** — the
+    cold-start reader for UIs that draw their own glyphs (canvas, OpenGL/SDL
+    games, custom toolkits) where AT-SPI exposes geometry but no value (F231).
+
+    The floor already reads canvas text dependency-free via the
+    :func:`read_glyph`/:func:`read_text` atlas ladder, but that ladder needs a
+    reference *atlas* — labelled glyphs — and an agent facing a font it has never
+    seen cannot label one without first reading it. This breaks that chicken-and-
+    egg: tesseract reads arbitrary glyphs with no atlas, so its output can label
+    reference cells from which a fast :func:`read_glyph` atlas is built for the
+    rest of the session (engine for the cold start, structure for the warm path).
+    It is an *optional* extension (see :func:`_ocr_engine`) — the floor imports
+    and runs without it, and the atlas ladder stays the default reader.
+
+    Grabs ``region`` ``(x, y, w, h)`` (whole screen if ``None``), upscales by
+    ``scale`` and greyscales it (small glyphs OCR poorly at native size), then
+    pipes a hand-rolled PNG to tesseract and returns the recognised text,
+    stripped.
+
+    ``whitelist`` constrains the alphabet (e.g. ``"0123456789"`` for a score, or
+    ``"12345678"`` for a minesweeper cell) — the single biggest accuracy win on
+    short fixed-charset readouts. ``psm`` is tesseract's page-segmentation mode
+    (7 = one text line, 10 = one character, 6 = a block). ``invert`` handles
+    light-on-dark text. Pass an existing ``rgb``/``size`` to OCR several regions
+    from one capture. Pairs with AT-SPI for *where* + OCR for *what* — the hybrid
+    that drives self-drawn surfaces a semantic tree cannot describe."""
+    import subprocess
+    engine = _ocr_engine()
+    if region is None:
+        w, h, buf = capture_rgb()
+        rx, ry = 0, 0
+        rw, rh = w, h
+    elif rgb is not None:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        fw, fh = size
+        rx, ry, rw, rh = region
+        buf = bytearray(rw * rh * 3)
+        for yy in range(rh):
+            src = ((ry + yy) * fw + rx) * 3
+            buf[yy * rw * 3:(yy + 1) * rw * 3] = rgb[src:src + rw * 3]
+        buf = bytes(buf)
+    else:
+        rx, ry, rw, rh = region
+        _w, _h, buf = capture_rgb(rx, ry, rw, rh)
+        rw, rh = _w, _h
+    # greyscale + optional invert + nearest-neighbour upscale
+    g = bytearray(rw * rh)
+    for i in range(rw * rh):
+        lum = (buf[i * 3] * 299 + buf[i * 3 + 1] * 587
+               + buf[i * 3 + 2] * 114) // 1000
+        g[i] = 255 - lum if invert else lum
+    s = max(1, int(scale))
+    bw, bh = rw * s, rh * s
+    up = bytearray(bw * bh * 3)
+    for yy in range(bh):
+        srow = (yy // s) * rw
+        drow = yy * bw * 3
+        for xx in range(bw):
+            v = g[srow + xx // s]
+            j = drow + xx * 3
+            up[j] = up[j + 1] = up[j + 2] = v
+    png = _png(bw, bh, bytes(up))
+    cmd = [engine, "stdin", "stdout", "--psm", str(psm)]
+    if whitelist:
+        cmd += ["-c", "tessedit_char_whitelist=" + whitelist]
+    out = subprocess.run(cmd, input=png, capture_output=True, timeout=20)
+    return out.stdout.decode(errors="ignore").strip()
 
 
 def wait_stable(target: tuple[int, int, int], tol: int = 24, move_tol: int = 3,
