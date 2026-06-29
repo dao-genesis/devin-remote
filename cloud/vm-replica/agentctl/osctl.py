@@ -2257,6 +2257,18 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
 
 _OCR_ENGINE: "str | None" = None
 
+# Content-addressed OCR cache (F238). tesseract is spawned as a subprocess per
+# call (~50 ms here), so a grid reader that re-reads every revealed cell each
+# round pays that cost again for pixels that never changed (gnome-mines: a
+# revealed number is immutable, yet read_board re-OCR'd all 59 of them every
+# round → 3.1 s/round). The recognised text is a pure function of the exact
+# greyscale crop + the parameters that reach tesseract, so memoising on that
+# content hash is correctness-preserving: identical pixels and flags can only
+# yield the identical string. Keyed on content (not coordinates), it also
+# survives the whole region scrolling by one cell.
+_OCR_CACHE: "dict[bytes, str]" = {}
+_OCR_CACHE_MAX = 4096
+
 
 def _ocr_engine() -> str:
     """Resolve the OCR engine binary once. Tesseract is an *optional* perception
@@ -2317,6 +2329,7 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
     Feed the *greyscale* crop, never a hard 1-bit threshold: the anti-aliased
     edges are tesseract's signal, and binarising first is what drops those glyphs.
     Set ``fallback_psm=0`` to disable the retry."""
+    import hashlib
     import subprocess
     engine = _ocr_engine()
     if region is None:
@@ -2354,6 +2367,19 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
             j = drow + xx * 3
             up[j] = up[j + 1] = up[j + 2] = v
     png = _png(bw, bh, bytes(up))
+    key = hashlib.blake2b(
+        b"\0".join((
+            png,
+            str(psm).encode(),
+            str(scale).encode(),
+            (whitelist or "").encode(),
+            b"1" if invert else b"0",
+        )),
+        digest_size=16,
+    ).digest()
+    cached = _OCR_CACHE.get(key)
+    if cached is not None:
+        return cached
 
     def _run(p: int) -> str:
         cmd = [engine, "stdin", "stdout", "--psm", str(p)]
@@ -2373,6 +2399,9 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
         ink = sum(1 for v in g if v < bg - 40)
         if ink >= max(8, (rw * rh) * 3 // 200):
             res = _run(fallback_psm)
+    if len(_OCR_CACHE) >= _OCR_CACHE_MAX:
+        _OCR_CACHE.pop(next(iter(_OCR_CACHE)))
+    _OCR_CACHE[key] = res
     return res
 
 

@@ -7814,3 +7814,34 @@ read in 0.15s
 ```
 
 > 复杂 GUI 实操继续向前：先让可测、可读、可解，再谈更深的自动化。
+
+## F238 — `ocr_text` re-spawned tesseract for every identical Mines crop
+
+**Symptom.**  After F237, `gnome-mines` became readable again, but a full board
+read still took about 3 seconds because `read_board()` re-OCR'd every revealed
+cell on every pass.  On this VM a single `ocr_text()` call costs roughly
+`0.058s`; a board with 59 revealed cells therefore spent most of its time
+spawning identical tesseract jobs for pixels that never changed.
+
+**Fix** (`osctl.py`).  Add a content-addressed OCR cache keyed on the exact
+upsampled OCR crop plus the OCR parameters.  Identical pixels and flags now
+return the cached string instead of spawning tesseract again.
+
+**Proof.**
+
+Before the cache:
+
+```text
+read_board 3.13s, revealed(non-dot) cells=59, grid=8x8
+```
+
+After the cache:
+
+```text
+0 read_board 0.815 revealed 59
+1 read_board 0.142 revealed 59
+```
+
+The first call still pays the cold-start OCR cost, but the second pass reuses
+the exact same crops and returns from cache, which is the steady-state path the
+solver wants when the board geometry is unchanged.
