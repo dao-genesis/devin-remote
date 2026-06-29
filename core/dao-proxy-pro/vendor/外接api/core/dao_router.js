@@ -681,6 +681,12 @@ async function _errorToCascade(res, w, modelUid, isJSON, errText) {
 const _healthCache = {}; // providerName → { alive: bool, ts: timestamp }
 const HEALTH_TTL = 30000; // 30秒缓存
 let _cfgWatcher = null; // 配置.json fs.watch 句柄
+// ★ 自写抑制: 记录最近一次本进程写盘的内容 · 监听回调据此区分「自写」与「外部手改」
+//   根因: 每次热保存(加渠道/解模型)都改写配置.json → 触发 fs.watch → init() 全量重载 →
+//         _providers 被替换为新对象 · 与正在进行的「解模型→探活」内存改写打架 →
+//         解出的 models 不落、探活退化用渠道名当模型 → 首次添加必失败、须重启+手点探测。
+//   修正: 自写内容与磁盘一致时跳过热重载 · 仅外部手改方重载 (道法自然·不扰己流)。
+let _lastSelfWriteData = null;
 
 // ★ v9.9.81 · 服务端工具补充 · init() 中填充
 //   LSP 不发这些工具但官方后端知道 → DeepSeek 需要才能调用
@@ -1177,7 +1183,13 @@ function init({ log, configPath }) {
       _routes[uid] = t;
     }
 
-    // 免费基础档不预置任何连线 · 未在路由表中的模型一律官方透传(官方/第三方并存)
+    // ★ v9.9.316 · 免费模型并存修复 · 不再播种 MODEL_SWE_1_6 → builtin-stub
+    //   道义: 二章「为而弗恃」· 四十八章「损之又损 以至于无为」· 损去多余之桩
+    //   实证(VM): 播种基础档 → builtin-stub 后 · 用户选免费 SWE-1.6 收到固定桩文本
+    //     (「stub响应正常」) 而非官方真实回复 → 免费模型无法与 Proxy Pro 并存
+    //   根因: 基础档被桩占据 → shouldRoute 命中桩路由 → 官方透传被劫持
+    //   修复: 基础档不入路由表 → shouldRoute 返回 false → 回落官方上游(免费原生)
+    //     仅 SWE 1.6 Fast 按配置路由(deepseek) · 未填 apiKey 时亦回落官方
 
     // 加载 providers
     _providers = _cfg.providers || {};
@@ -1270,7 +1282,15 @@ function init({ log, configPath }) {
           if (_cfgDebounce) clearTimeout(_cfgDebounce);
           _cfgDebounce = setTimeout(() => {
             _cfgDebounce = null;
-            _log("[dao-router] 配置.json 变化检测 · 自动热重载...");
+            // ★ 自写抑制: 若磁盘内容与本进程刚写入的内容一致 → 是自写 · 跳过热重载
+            //   根除「加渠道/解模型 → 触发 watch → init() 重载 → 内存改写被冲掉」的竞态
+            try {
+              const _cur = fs.readFileSync(configPath, "utf8");
+              if (_lastSelfWriteData !== null && _cur === _lastSelfWriteData) {
+                return;
+              }
+            } catch {}
+            _log("[dao-router] 配置.json 外部变化检测 · 自动热重载...");
             try {
               const reResult = init({ log: _log, configPath });
               if (reResult.ready) {
@@ -3275,10 +3295,25 @@ async function _unaryOaToCascade(
           !(lspToolNames && lspToolNames.has(_rawName)),
       };
     });
+    // ★ v10.1 · 修法⑰ (同 _flushTools) · ask_user_question 独占一轮 (终止性交互)
+    //   非流式/缓冲路径同样隔离: 含 ask_user_question 即只保留它, 丢弃同轮兄弟
+    //   工具 → 对齐官方"单发即停" → 弹窗正常弹出. 详见 _flushTools 处实证记述.
+    let _emitCalls = mappedCalls;
+    const _askI = mappedCalls.findIndex((c) => c.name === "ask_user_question");
+    if (_askI >= 0 && mappedCalls.length > 1) {
+      const _dropped = mappedCalls
+        .filter((c) => c.name !== "ask_user_question")
+        .map((c) => c.name);
+      _emitCalls = [mappedCalls[_askI]];
+      _routeDiag(
+        "buffered tool_calls: ask_user_question 独占本轮 (终止性交互) → 丢弃同轮工具=" +
+          _dropped.join(","),
+      );
+    }
     if (w.encodeChatToolCall) {
       const inner = Buffer.concat([
         _hdr(), // ★ message_id + timestamp
-        ...mappedCalls.map((tc) =>
+        ..._emitCalls.map((tc) =>
           w.encodeMessage(w.RSP.DELTA_TOOL_CALLS, w.encodeChatToolCall(tc)),
         ),
       ]);
@@ -3419,6 +3454,36 @@ function _streamOaToCascade(
       _dedupedCalls.push({ ...tc, argumentsJson: _validArgs });
     }
 
+    // ★ v10.1 · 修法⑰ · ask_user_question 独占一轮 (终止性交互 · 对齐官方)
+    //   逆向实证 (zhoumac Pro 机 · D:\Devin\...\windsurf\dist\extension.js):
+    //     官方弹窗由 LSP 把 chat 层 ask_user_question 工具调用转为 cortex 层
+    //     RequestedInteraction{ask_user_question: CascadeAskUserQuestionInteractionSpec}
+    //     (CortexStep field no:56 requested_interaction) → 渲染阻塞式弹窗.
+    //   官方模型问问题时 *单发* ask_user_question 即停 (终止性, 问完等用户);
+    //   外接模型常把它与 multi_edit/read_file 等同轮打包发出 (实证 _router_diag:
+    //     "_flushTools total=2 names=ask_user_question,multi_edit") → LSP 把整批
+    //   当普通工具执行, ask_user_question 不触发弹窗, 对话无感继续 → 用户实测
+    //   "外接 API 弹不出弹窗, 只有官方模型才行" 之根因.
+    //   故: 本轮一旦含 ask_user_question, 只保留它, 丢弃同轮兄弟工具, 令其独占
+    //   成终止性交互 → 对齐官方"单发即停"路径 → 弹窗正常弹出. 被丢弃的工具不
+    //   重放: 用户应答后模型自会重新规划 (官方语义本即 ask 为终止步, 不并骛).
+    //   道义: 二十四章「企者不立 跨者不行」· 一事一时 · 问则专问.
+    const _askIdx = _dedupedCalls.findIndex(
+      (c) => c.name === "ask_user_question",
+    );
+    if (_askIdx >= 0 && _dedupedCalls.length > 1) {
+      const _askCall = _dedupedCalls[_askIdx];
+      const _dropped = _dedupedCalls
+        .filter((c) => c.name !== "ask_user_question")
+        .map((c) => c.name);
+      _dedupedCalls.length = 0;
+      _dedupedCalls.push(_askCall);
+      _routeDiag(
+        "_flushTools: ask_user_question 独占本轮 (终止性交互) → 丢弃同轮工具=" +
+          _dropped.join(","),
+      );
+    }
+
     // ★ v9.9.93 · 修法⑧ · 工具分类: LSP有执行器 → 透传 · 仅代理 → 拦截
     //   旧逻辑: _serverToolNames.has(name) && !lspToolNames.has(name)
     //   问题: trajectory_search 在 _serverToolNames 但 LSP 有执行器 → 被错误拦截
@@ -3511,7 +3576,52 @@ function _streamOaToCascade(
   let _sseEventType = ""; // ★ Anthropic/Responses SSE event type 追踪
 
   return new Promise((resolve, reject) => {
+    // ★ v10.2 · 修法⑧ · 主流式空闲保活 (对齐重试路径 keepalive · 防"无征兆中断")
+    //   逆向实证 (zhoumac Pro 机): 主流式 _streamOaToCascade 仅在收到上游数据时写帧.
+    //   若外接模型中途静默 >~10s (慢推理 / token 间隙 / 网络抖动但 socket 未报错),
+    //   则无帧可写, agRes 'error' 不触发, LSP 客户端约 10s 无新数据即 abort →
+    //   "对话毫无征兆中断" (他用户反馈) 之潜在根因. 上游 *报错* 已由 agRes.on('error')
+    //   优雅 STOP_END 兜底; 此处补的是上游 *静默不报错* 的缺口. 与重试路径
+    //   (setInterval 5s DELTA_THINKING) 同法: 空闲达阈值即补发一帧 thinking 保活,
+    //   收到真实数据即复位; 流结束/出错即清除. unref 不阻进程退出.
+    //   道义: 五十二章「守柔曰强」· 守流不绝则不断.
+    let _lastUpstreamTs = Date.now();
+    const _IDLE_KEEPALIVE_MS = Number(process.env.DAO_IDLE_KEEPALIVE_MS) || 5000;
+    const _IDLE_CHECK_MS = Math.max(
+      200,
+      Math.min(2000, Math.floor(_IDLE_KEEPALIVE_MS / 2)),
+    );
+    const _idleKeepalive = setInterval(() => {
+      try {
+        if (res.writableEnded) return;
+        if (Date.now() - _lastUpstreamTs < _IDLE_KEEPALIVE_MS) return;
+        const kaParts = [_hdr()];
+        if (!_sentMetadata) {
+          _sentMetadata = true;
+          kaParts.push(w.encodeString(w.RSP.ACTUAL_MODEL_UID, _actualModelUid));
+          kaParts.push(w.encodeString(w.RSP.OUTPUT_ID, _outputId));
+          kaParts.push(w.encodeString(w.RSP.REQUEST_ID, _requestId));
+        }
+        kaParts.push(w.encodeString(w.RSP.DELTA_THINKING, " "));
+        const kaFr = w.buildFrame(0, Buffer.concat(kaParts));
+        if (kaFr && kaFr.length && !res.writableEnded) res.write(kaFr);
+        _lastUpstreamTs = Date.now();
+        _routeDiag("_streamOaToCascade idle-keepalive: thinking frame sent");
+      } catch (_kaErr) {
+        _routeDiag(
+          "_streamOaToCascade idle-keepalive FAILED: " + _kaErr.message,
+        );
+      }
+    }, _IDLE_CHECK_MS);
+    if (_idleKeepalive.unref) _idleKeepalive.unref();
+    const _clearIdleKeepalive = () => {
+      try {
+        clearInterval(_idleKeepalive);
+      } catch {}
+    };
+
     agRes.on("data", (chunk) => {
+      _lastUpstreamTs = Date.now(); // ★ v10.2 · 收到上游数据 → 复位空闲计时
       buf += chunk.toString("utf8");
       const lines = buf.split("\n");
       buf = lines.pop();
@@ -3770,6 +3880,7 @@ function _streamOaToCascade(
     });
 
     agRes.on("end", () => {
+      _clearIdleKeepalive(); // ★ v10.2 · 流结束 → 停保活
       // 兜底: 未发 finish_reason 时冲工具
       _flushTools();
 
@@ -3895,6 +4006,7 @@ function _streamOaToCascade(
     });
 
     agRes.on("error", (e) => {
+      _clearIdleKeepalive(); // ★ v10.2 · 出错 → 停保活
       _flushTools();
       // ★ 道法自然 · 优雅中断恢复 (修「对话对一半就断、无法继续」核心)
       //   上游 socket 中途断流(ECONNRESET/代理超时/proxy premature close)时,
@@ -4347,8 +4459,22 @@ function classifyChannelResponse(status, text) {
  */
 function _verifyProviderChat(name, cfg) {
   return new Promise((resolve) => {
+    // ★ 探活用模型必须是渠道「真实模型」· 绝不退化用渠道名当模型
+    //   旧法 `|| name`: 无 models 时把渠道名(如 deepseek)当模型发 → 上游 400
+    //   「The supported API model names are ... but you passed <渠道名>」→ 误判探活失败。
+    //   今: 无真实模型则明确返回「需先拉取模型」· 名实相符 (调用方 probeAllProviders 已先解模型)。
     const model =
-      (Array.isArray(cfg.models) && cfg.models[0]) || cfg.model || name;
+      (Array.isArray(cfg.models) && cfg.models[0]) ||
+      cfg.model ||
+      cfg.defaultModel ||
+      null;
+    if (!model) {
+      return resolve({
+        alive: false,
+        reason: "无可用模型 · 请先拉取模型(↻全部模型)",
+        model: null,
+      });
+    }
     const proto =
       cfg.protocol ||
       (cfg.type === "anthropic" ? "anthropic" : "") ||
@@ -4462,7 +4588,19 @@ async function probeAllProviders() {
       _healthCache[name] = { alive: false, reason: "disabled", ts: Date.now() };
       continue;
     }
-    const v = await _verifyProviderChat(name, cfg);
+    // ★ 探活前先确保有「真实模型」可发 · 无则先拉取一次 (refresh)
+    //   根因: 首次添加渠道时 models 尚空 → 直接探活会无模型可用 → 误判失败 · 须重启+手点。
+    //   今: 探活统一入口先解模型再验 → 首次添加即可一步到位 (含启动自动探活·无需手点)。
+    let probeCfg = cfg;
+    if (!(Array.isArray(cfg.models) && cfg.models.length > 0)) {
+      try {
+        const pm = await hotListProviderModels(name, { refresh: true });
+        if (pm && pm.ok && Array.isArray(pm.models) && pm.models.length > 0) {
+          probeCfg = { ...(_providers[name] || cfg), models: pm.models };
+        }
+      } catch {}
+    }
+    const v = await _verifyProviderChat(name, probeCfg);
     results[name] = {
       alive: v.alive,
       reason: v.reason || (v.alive ? "通" : "不通"),
@@ -4850,6 +4988,8 @@ function _hotSaveConfig() {
       if (!k.startsWith("_")) clean[k] = v;
     }
     const data = JSON.stringify(clean, null, 2);
+    // ★ 记录自写内容 · 供 fs.watch 回调区分「自写」(跳过热重载) 与「外部手改」(重载)
+    _lastSelfWriteData = data;
     // ★ v9.9.301 · 原子写 + 备份轮转 · 防写入中途被杀损坏配置.json
     //   道义: 六十四章「为之于未有 治之于未乱」· 临时文件+rename 原子落盘 · 旧本留痕
     _atomicSaveWithBackup(configPath, data);

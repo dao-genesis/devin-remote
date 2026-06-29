@@ -154,6 +154,50 @@ const SC = {
     ],
     finishReason: "tool_calls",
   },
+  // ★ v10.1 · 修法⑰ 实证场景: ask_user_question 与可执行工具同轮打包
+  //   (外接模型常见行为) → 验证代理将其隔离为终止性独占交互, 丢弃同轮兄弟工具
+  ask_user_question_batched: {
+    thinking: "Ask the user, and also edit & read files in the same turn.",
+    toolCalls: [
+      {
+        id: "c_aqb1",
+        name: "ask_user_question",
+        arguments: JSON.stringify({
+          question: "Which framework?",
+          options: [
+            { label: "React", description: "React framework" },
+            { label: "Vue", description: "Vue framework" },
+          ],
+          allowMultiple: false,
+        }),
+      },
+      {
+        id: "c_aqb2",
+        name: "multi_edit",
+        arguments: JSON.stringify({ file_path: "/home/user/a.js", edits: [] }),
+      },
+      {
+        id: "c_aqb3",
+        name: "read_file",
+        arguments: JSON.stringify({ file_path: "/home/user/b.js" }),
+      },
+    ],
+    finishReason: "tool_calls",
+  },
+  // ★ v10.2 · 修法⑱ 实证场景: 上游中途静默 (慢推理/网络抖动但 socket 未报错)
+  //   → 验证主流式空闲保活 (idle-keepalive) 在静默期补发 thinking 帧, 防 LSP 超时断开
+  keepalive_stall: {
+    text: "thinking before the stall...",
+    stallMs: 500,
+    toolCalls: [
+      {
+        id: "c_ka1",
+        name: "read_file",
+        arguments: JSON.stringify({ file_path: "/home/user/after-stall.js" }),
+      },
+    ],
+    finishReason: "tool_calls",
+  },
   thinking: {
     thinking:
       "Complex question. Let me analyze step by step. First, understand the architecture. Then, consider trade-offs. Finally, recommend.",

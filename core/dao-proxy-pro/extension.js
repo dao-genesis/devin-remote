@@ -1,4 +1,7 @@
-// extension.js · dao-proxy-pro v9.9.269 · 道法自然 · ACP适配 · 反者道之动 · 印222
+// extension.js · dao-proxy-pro v9.9.314 · 道法自然 · ACP适配 · 反者道之动 · 印226
+// v9.9.314 · 卸载归零 · 复归于无物: 真卸载侦测(读 .obsolete) → 越 30s 智能保锚门限无条件清锚 +
+//            系统级残留归零(_dao_ls_port.txt/dao-certs/MITM 证书/CODEIUM_LANGUAGE_SERVER_BIN 环变)
+//            + 独立 reset 脚本(scripts/dao-reset.ps1|.sh · 不依赖扩展存活). 卸载即彻底还官方直连.
 // v9.9.260 · 同步Min v9.9.60提示词策略 · 繁体化 · 损之又损(去嘱留经) · 经文自足
 // v9.9.267 · ③模型路由 模板字面量内正则反斜杠折叠修复(字符类替代 \/ \s)
 // v9.9.268 · 三模块面板 window.confirm/alert 被 webview 屏蔽 → 自带 _daoConfirm/_daoToast 弹层
@@ -170,6 +173,10 @@ let _proxyHealthy = false; // 仅当本地/远端 dao 反代确认存活时为 t
 let _livePort = null; // 实际绑定端口 (软编码 · 可能为 OS 分配的空闲端口)
 let _extContext = null; // 扩展上下文 · 用于推导本实例 settings.json 路径 (跨产品名)
 let _lastLsRestart = 0; // LS 重启去抖时间戳 · 防多实例重启风暴
+// ★ 解锁自愈追踪 · 治"新用户只剩 SWE-1.6 Slow·其余全灰"之莫名顽疾
+let _lsSpawnSeen = false; // 本会话是否见过 language_server spawn
+let _lsRewroteCount = 0; // spawn hook 成功改写 LS 端口的次数 (>0 即 LS 经反代)
+let _unlockHealDone = false; // 解锁自愈仅一次 · 不连环杀 LS
 
 // ═══════════════════════════ ACP 模式 (印222) ═══════════════════════════
 // v9.9.200 · 道法自然 · 反者道之动 · 新版 Devin Desktop 架构适配
@@ -271,6 +278,7 @@ function maybeRewriteLsArgs(command, args) {
     !Array.isArray(args)
   )
     return false;
+  _lsSpawnSeen = true; // ★ 见到 LS spawn (无论反代健康与否) · 供解锁自愈判据
   // ★ v9.9.261 · ACP 模式下也重写 LS args · 反者道之动
   // 印222原判: Chat 走 ACP/stdio → HTTP MITM 无用 → 不重写 LS
   // 实证推翻: session/new + session/prompt 走 gRPC CascadeService
@@ -307,6 +315,7 @@ function maybeRewriteLsArgs(command, args) {
       rewrote++;
     }
   }
+  if (rewrote > 0) _lsRewroteCount += 1; // ★ LS 已经反代 · 解锁链路通
   return rewrote > 0;
 }
 
@@ -583,7 +592,7 @@ function findSourceJs() {
 }
 
 // v9.9.21 · 唯变所适 · 让位机制
-// v9.9.320 · 治本 · 不杀同道: 从路径抽 semver 比较, 仅远端严格更旧才判旧/让位
+// 从 self_file 路径中提取 dao-proxy-{pro,min}-X.Y.Z 之 [X,Y,Z]
 function _verFromPath(p) {
   try {
     const m = String(p).match(/dao-proxy-[a-z]+-(\d+)\.(\d+)\.(\d+)/i);
@@ -598,7 +607,16 @@ function _cmpVer(a, b) {
   }
   return 0;
 }
-// _isRemoteStale: 远端 self_file 是否非最新版 dao-proxy-* 之 source.js
+
+// v9.9.320 · 治本 · 不杀同道 · 七十六章「兵强则不胜·强大居下·柔弱微细居上」
+// _isRemoteStale: 远端 self_file 是否「严格旧于」本地最新版
+//   病(本源·间歇断连): 旧逻辑按 source.js 路径全等判定旧否 · 多实例并发下
+//       不同安装目录(pro vs min · 不同根 · ephemeral 绑定)即便「同版」亦路径不等
+//       → 误判旧 → 启动期与 watchdog 每周期反复 POST /_quit 杀「正在服务活动 LS
+//       的健康反代」→ 那一刻 LS 报「connection to server is erroring · Shutting
+//       down server」→ ~30s 后 watchdog 重起自愈 → 表现为反复掉线
+//   药: 路径全等→必不旧(快路径); 否则比对从路径抽取之 semver ·
+//       远端版本 >= 本地最新 → 不旧(同版/更新不杀·不与争); 仅远端严格更旧才让位升级
 function _isRemoteStale(remoteSelfFile) {
   if (!remoteSelfFile || typeof remoteSelfFile !== "string") return false;
   const best = _scanLatestVendorDir();
@@ -655,6 +673,8 @@ async function _ephemeralBind(srcPath, mode) {
 //   真治: 不只看 self_file · 直接探 ea 能力 · 不兼容则不复用 · 自绑全功能后端 (柔弱胜刚强)
 async function _remoteServesEa(port) {
   // v9.9.320 · 治本 · 探针容错 · 防高负载下 ea/status 瞬时超时被误判「无 ea」
+  //   误判「无 ea」→ _remoteIncompatible=true → 启动期 POST /_quit 杀健康反代
+  //   (与 _isRemoteStale 同为「反复让位」之本源) · 故提高超时 + 重试一次
   for (let i = 0; i < 2; i++) {
     try {
       const r = await httpGetJson(
@@ -969,6 +989,393 @@ function _writeSettingsJson(fp, json) {
   }
 }
 
+// ★ v9.9.320 · 治本 · 读「本实例 settings.json 真正锚定的本地端口」
+//   即 language_server 被实际以 --api_server_url http://127.0.0.1:<port> 启动的那个端口.
+//   病(本源·过几小时必卡死·须卸载): 多实例(Devin / Devin-i1 / Devin-i2 ...)各有独立
+//     %APPDATA%\<IDE>\User\settings.json · FNV 同名同算同端口(8937) · 但同刻仅一进程能绑.
+//     启动竞态下落败者 _ephemeralBind 到空闲端口(8938/8939/9627...)并写进「自己的」settings ·
+//     其属主 ext-host 一退出/重载 → 该端口随之死 → 该实例 LS 永指死端口 → 「Connecting to server」.
+//   旧 watchdog 只 ping「自算 FNV 端口 _cachedPort」· 它(被别窗占着)恰好健康 → 「安心」早返 ·
+//     从不校验「本实例 settings 真正锚的那个端口」是否还活 → 分裂永不收敛 → 必卸载才复原.
+//   药: 看门狗以「真实锚定端口」为准校验 · 死则收敛(见 watchdog).
+//   返回: 127.0.0.1 锚点端口号; 无锚/非本地/空 → null.
+function _readAnchoredPort() {
+  try {
+    const json = _readSettingsJson(_settingsJsonPath());
+    if (!json) return null;
+    const u = json["codeium.apiServerUrl"];
+    if (typeof u !== "string") return null;
+    const m = u.match(/^https?:\/\/(?:127\.0\.0\.1|localhost):(\d+)/i);
+    if (!m) return null;
+    const p = parseInt(m[1], 10);
+    return Number.isFinite(p) && p >= 1 && p <= 65535 ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+// ★ LS 外置重定向键 · 把官方语言服务器(Cascade LSP)指向本地外置端点 ·
+//   一旦代理/扩展不在(卸载·停用), 这些键仍指向死端口 → 官方语言服务器连不上 → 卡死中间态.
+//   本扩展从不写这些键(它走 Connect-RPC 层 apiServerUrl), 但旧世代/同族残留会留之.
+//   故卸载/停用/手动复原时须无条件清除 · 还官方自连 (清之无写风暴: 本扩展永不再写).
+const LS_REDIRECT_KEYS = [
+  "codeiumDev.externalLanguageServerAddress",
+  "codeiumDev.externalLanguageServerLspPort",
+];
+
+// 候选 settings.json: 本实例(ctx 上溯) + 各 IDE User 目录 · 去重 · 仅返回存在者
+function _allSettingsJsonPaths() {
+  const out = [];
+  const push = (p) => {
+    if (p && !out.includes(p)) out.push(p);
+  };
+  push(_settingsJsonFromCtx());
+  let base;
+  const plat = process.platform;
+  if (plat === "win32") base = process.env.APPDATA;
+  else if (plat === "darwin")
+    base = path.join(os.homedir(), "Library", "Application Support");
+  else base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+  if (base) {
+    for (const ide of ["devin", "Windsurf", "Code", "VSCodium"]) {
+      push(path.join(base, ide, "User", "settings.json"));
+    }
+  }
+  return out.filter((p) => {
+    try {
+      return fs.existsSync(p);
+    } catch {
+      return false;
+    }
+  });
+}
+
+// 复原前留痕: <dir>/.dao-settings-backups/<name>.<ts>.bak · 轮转保留最近 5 份
+function _backupSettingsFile(sp) {
+  try {
+    const dir = path.join(path.dirname(sp), ".dao-settings-backups");
+    fs.mkdirSync(dir, { recursive: true });
+    const base = path.basename(sp);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    fs.copyFileSync(sp, path.join(dir, `${base}.${stamp}.bak`));
+    const baks = fs
+      .readdirSync(dir)
+      .filter((f) => f.startsWith(base + ".") && f.endsWith(".bak"))
+      .sort();
+    while (baks.length > 5) {
+      try {
+        fs.unlinkSync(path.join(dir, baks.shift()));
+      } catch {}
+    }
+  } catch {}
+}
+
+// ★ 复原官方直连: 跨所有候选 settings.json 清除「重定向键」· 还官方自连.
+//   includeAnchor=true: 连 codeium.apiServerUrl 系一并清 (完全复原 · 卸载/手动复原).
+//   includeAnchor=false: 仅清 LS 外置重定向 (每次停用兜底 · 本扩展从不写之 · 无写风暴).
+function _restoreOfficialDirect(opts) {
+  const includeAnchor = !!(opts && opts.includeAnchor);
+  const keys = includeAnchor
+    ? [
+        ...LS_REDIRECT_KEYS,
+        "codeium.apiServerUrl",
+        "codeium.inferenceApiServerUrl",
+        BACKUP_KEY_API,
+        BACKUP_KEY_INFER,
+      ]
+    : [...LS_REDIRECT_KEYS];
+  let total = 0;
+  for (const sp of _allSettingsJsonPaths()) {
+    try {
+      const json = _readSettingsJson(sp);
+      if (!json) continue;
+      const hit = keys.filter((k) => k in json);
+      if (hit.length === 0) continue;
+      _backupSettingsFile(sp);
+      for (const k of hit) delete json[k];
+      if (_writeSettingsJson(sp, json)) {
+        total += hit.length;
+        L.info("restore", `${sp} 清 ${hit.length} 键: ${hit.join(",")}`);
+      }
+    } catch (e) {
+      L.warn("restore", `${sp} 复原失败: ${e.message}`);
+    }
+  }
+  _cachedAnchored = false;
+  return total;
+}
+
+// ═══════════════════════════ 卸载归零 (v9.9.314) ═══════════════════════════
+// 印 226 · 复归于无物 · 第十四章「复归于无物 · 是谓无状之状」· 道法自然
+// 真因(用户实证): 卸载+重启 IDE 仍跳「connection to server is erroring · Unable to connect」.
+//   两源: ① deactivate 智能保锚 30s 门限是为「重载」防写风暴而设, 但「卸载」后扩展永逝 ·
+//          无下一个 ext-host 来 auto-restore → codeium.apiServerUrl=http://127.0.0.1:<死端口>
+//          被永留 → 重启后 Cascade 连死端口 → 卡死. deactivate 须能区分「重载」与「卸载」.
+//       ② settings.json 之外的系统级残留卸载根本不碰: ~/.codeium/_dao_ls_port.txt(死端口) ·
+//          dao-certs/ + 信任区自签 MITM 证书 · CODEIUM_LANGUAGE_SERVER_BIN 持久化环变.
+// 治: 真卸载侦测(读 .obsolete) → 无条件清锚 + 系统级残留归零 · 还官方语言服务器自连.
+
+// ★ 真卸载侦测 · 区分「卸载」与「重载/禁用」:
+//   VS Code/Windsurf/Devin 卸载流程: 先写 <extensions-root>/.obsolete[本目录]=true → 再 deactivate
+//   → 下次启动物理删目录. 故 deactivate 时 .obsolete 已含本目录 ⇒ 可靠判定为卸载.
+//   多信号兜底: .obsolete 命中 本目录 / 本族任一版本目录, 或本扩展已不在注册表中.
+function _isSelfUninstalling() {
+  try {
+    const extPath =
+      _extContext && _extContext.extensionPath ? _extContext.extensionPath : null;
+    if (extPath) {
+      const selfDir = path.basename(extPath);
+      const obs = path.join(path.dirname(extPath), ".obsolete");
+      if (fs.existsSync(obs)) {
+        let j = null;
+        try {
+          j = JSON.parse(fs.readFileSync(obs, "utf8") || "{}");
+        } catch {}
+        if (j && typeof j === "object") {
+          if (j[selfDir] === true) return true;
+          for (const k of Object.keys(j)) {
+            if (j[k] === true && SELF_EXT_DIR_REGEX.test(k)) return true;
+          }
+        }
+      }
+    }
+  } catch {}
+  // 兜底信号: deactivate 时本扩展已从注册表移除 ⇒ 卸载 (重载/禁用时仍在)
+  try {
+    if (!vscode.extensions.getExtension(SELF_EXT_ID)) return true;
+  } catch {}
+  return false;
+}
+
+// ~/.codeium 根 · dao 系统级状态所在
+function _codeiumHome() {
+  return path.join(os.homedir(), ".codeium");
+}
+
+// ★ 系统级残留归零 · 不依赖任何 settings.json · 卸载/手动复原时还官方语言服务器自连.
+//   清: ① _dao_ls_port.txt(还原 .dao_backup 之官方原值, 无则删) ② dao-certs/ 目录
+//       ③ 信任区自签 MITM 证书 (server/inference.codeium.com·localhost) ④ CODEIUM_LANGUAGE_SERVER_BIN
+//          / VSCODE_DEV 持久化用户环变 ⑤ _dao_csrf_token.txt
+//   不动: dao-byok(主公 key) · dao/(Cascade 记忆/上下文) · 已装扩展. 返回所清项计数.
+function _purgeDaoLsResidue() {
+  let n = 0;
+  const home = _codeiumHome();
+  // ① _dao_ls_port.txt · 还原 .dao_backup(被 dao 覆盖前的原值) 或直接删 · 还官方 LS 自寻端口
+  try {
+    const portFile = path.join(home, "_dao_ls_port.txt");
+    const bak = portFile + ".dao_backup";
+    if (fs.existsSync(bak)) {
+      const orig = fs.readFileSync(bak, "utf8");
+      fs.writeFileSync(portFile, orig, "utf8");
+      fs.unlinkSync(bak);
+      n++;
+      L.info("purge", `_dao_ls_port.txt 还原 .dao_backup → ${orig.trim()}`);
+    } else if (fs.existsSync(portFile)) {
+      fs.unlinkSync(portFile);
+      n++;
+      L.info("purge", "_dao_ls_port.txt 删除 (无 backup)");
+    }
+  } catch (e) {
+    L.warn("purge", `_dao_ls_port 处理失败: ${e && e.message}`);
+  }
+  // ② dao-certs/ 目录 (自签 MITM 证书材料)
+  try {
+    const certDir = path.join(home, "dao-certs");
+    if (fs.existsSync(certDir)) {
+      fs.rmSync(certDir, { recursive: true, force: true });
+      n++;
+      L.info("purge", "dao-certs/ 删除");
+    }
+  } catch (e) {
+    L.warn("purge", `dao-certs 删除失败: ${e && e.message}`);
+  }
+  // ③ _dao_csrf_token.txt (孤儿令牌文件)
+  try {
+    const csrf = path.join(home, "_dao_csrf_token.txt");
+    if (fs.existsSync(csrf)) {
+      fs.unlinkSync(csrf);
+      n++;
+    }
+  } catch {}
+  // ④ 信任区自签 MITM 证书 + 持久化 LS 环变 · 需外部工具 · detached 子进程 (卸载后独立跑完)
+  try {
+    _untrustDaoCertsAndClearEnvAsync();
+  } catch (e) {
+    L.warn("purge", `cert/env 异步清理调度失败: ${e && e.message}`);
+  }
+  // ⑤ 还原 IDE 内置 windsurf 扩展被就地打补丁的死端口 (dist/extension.js · 卸载扩展不碰此文件 → 卡死本源)
+  try {
+    n += _revertBundledExtensionPatch();
+  } catch (e) {
+    L.warn("purge", `内置扩展补丁还原调度失败: ${e && e.message}`);
+  }
+  return n;
+}
+
+// 还原 IDE 自带的 windsurf 扩展 (resources/app/extensions/windsurf/dist/extension.js) 被 dao 就地打的补丁.
+//   本源: dao 把死本地端口硬编码进 IDE 自带 dist/extension.js → 卸载本扩展根本不碰此文件 →
+//         重启后官方 LS 仍被 `--api_server_url http://127.0.0.1:<死端口>` 指向死端口 → 「Unable to connect」.
+//   注入签名 (端口任意 \d+) → 还原为官方云端:
+//     restart(A){A="http://127.0.0.1:P",this.apiServerUrl=A   → restart(A){this.apiServerUrl=A  (用调用方真实地址)
+//     getApiServerUrlFromContext=A=>{return"http://127.0.0.1:P"} → 返 https://server.codeium.com
+//     const i="http://127.0.0.1:P"  (inference)               → const i="https://inference.codeium.com"
+//   仅命中签名才改 · 改前备份 .dao_patched_backup · 改后下次启动生效. 返回所改文件数.
+function _revertBundledExtensionPatch() {
+  let n = 0;
+  try {
+    const rel = path.join("extensions", "windsurf", "dist", "extension.js");
+    const cands = new Set();
+    const push = (root) => {
+      if (!root) return;
+      const p = path.join(root, rel);
+      try {
+        if (fs.existsSync(p)) cands.add(p);
+      } catch {}
+    };
+    try {
+      push(vscode.env.appRoot);
+    } catch {}
+    if (process.env.VSCODE_APPROOT) push(process.env.VSCODE_APPROOT);
+    if (process.execPath)
+      push(path.join(path.dirname(process.execPath), "resources", "app"));
+    if (process.platform === "win32") {
+      push("E:\\Windsurf\\resources\\app");
+      push("C:\\Windsurf\\resources\\app");
+      push("D:\\Devin\\resources\\app");
+      if (process.env.LOCALAPPDATA) {
+        push(
+          path.join(
+            process.env.LOCALAPPDATA,
+            "Programs",
+            "Windsurf",
+            "resources",
+            "app",
+          ),
+        );
+        push(
+          path.join(
+            process.env.LOCALAPPDATA,
+            "Programs",
+            "devin",
+            "resources",
+            "app",
+          ),
+        );
+      }
+      if (process.env.PROGRAMFILES)
+        push(
+          path.join(process.env.PROGRAMFILES, "Windsurf", "resources", "app"),
+        );
+    } else {
+      for (const up of [
+        "/usr/share/windsurf/resources/app",
+        "/opt/windsurf/resources/app",
+        "/snap/windsurf/current/resources/app",
+        path.join(os.homedir(), ".windsurf", "resources", "app"),
+      ])
+        push(up);
+      if (process.platform === "darwin")
+        for (const a of [
+          "/Applications/Windsurf.app/Contents/Resources/app",
+          "/Applications/Devin.app/Contents/Resources/app",
+        ])
+          push(a);
+    }
+    const reApi =
+      /restart\(A\)\{A="http:\/\/127\.0\.0\.1:\d+",this\.apiServerUrl=A/g;
+    const reCtx =
+      /getApiServerUrlFromContext=A=>\{return"http:\/\/127\.0\.0\.1:\d+"\}/g;
+    const reInf = /const i="http:\/\/127\.0\.0\.1:\d+"/g;
+    for (const f of cands) {
+      try {
+        const raw = fs.readFileSync(f, "utf8");
+        let s = raw;
+        s = s.replace(reApi, "restart(A){this.apiServerUrl=A");
+        s = s.replace(
+          reCtx,
+          'getApiServerUrlFromContext=A=>{return"https://server.codeium.com"}',
+        );
+        s = s.replace(reInf, 'const i="https://inference.codeium.com"');
+        if (s !== raw) {
+          const bak = f + ".dao_patched_backup";
+          try {
+            if (!fs.existsSync(bak)) fs.writeFileSync(bak, raw);
+          } catch {}
+          fs.writeFileSync(f, s);
+          n++;
+          L.info("purge", `内置扩展补丁还原 → ${f}`);
+        }
+      } catch (e) {
+        L.warn("purge", `内置扩展还原失败 ${f}: ${e && e.message}`);
+      }
+    }
+  } catch (e) {
+    L.warn("purge", `内置扩展还原异常: ${e && e.message}`);
+  }
+  return n;
+}
+
+// 平台相关 · 解信任自签 MITM 证书 + 清持久化 LS 环变 · detached 子进程脱离 ext-host 生命周期
+//   (卸载致 ext-host 被杀亦能跑完). 仅删「自签且域名匹配 codeium/localhost」者, 不碰公信 CA.
+function _untrustDaoCertsAndClearEnvAsync() {
+  const plat = process.platform;
+  const spawnDetached = (file, args) => {
+    try {
+      const ch = cp.spawn(file, args, {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      ch.unref();
+    } catch (e) {
+      L.warn("purge", `spawn ${file} 失败: ${e && e.message}`);
+    }
+  };
+  if (plat === "win32") {
+    const ps = [
+      "$ErrorActionPreference='SilentlyContinue';",
+      "Get-ChildItem Cert:\\CurrentUser\\Root | Where-Object { $_.Subject -eq $_.Issuer -and $_.Subject -match 'CN=(server\\.codeium\\.com|inference\\.codeium\\.com|\\*\\.codeium\\.com|localhost|127\\.0\\.0\\.1)$' } | Remove-Item -Force;",
+      "foreach($v in @('CODEIUM_LANGUAGE_SERVER_BIN','VSCODE_DEV')){ if(Get-ItemProperty -Path 'HKCU:\\Environment' -Name $v -EA SilentlyContinue){ Remove-ItemProperty -Path 'HKCU:\\Environment' -Name $v -Force -EA SilentlyContinue } }",
+    ].join(" ");
+    spawnDetached("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      ps,
+    ]);
+  } else if (plat === "darwin") {
+    const sh =
+      "for n in server.codeium.com inference.codeium.com; do security delete-certificate -c \"$n\" ~/Library/Keychains/login.keychain-db >/dev/null 2>&1; done; true";
+    spawnDetached("/bin/sh", ["-c", sh]);
+  }
+  // linux: dao 证书多由扩展自管 · 无系统信任注入 · 跳过
+}
+
+// ★ 手动复原官方直连 (卸载善后/解锚) · 命令面板可调 · 已卡死亦可一键自救:
+//   完全清除重定向(含 apiServerUrl 与 LS 外置) + 系统级残留归零 → 停本地代理 → 提示 Reload Window.
+async function cmdRestoreOfficial() {
+  let n = 0;
+  let m = 0;
+  try {
+    n = _restoreOfficialDirect({ includeAnchor: true });
+  } catch {}
+  try {
+    m = _purgeDaoLsResidue();
+  } catch {}
+  try {
+    removeSpawnHook();
+  } catch {}
+  try {
+    await proxyStop();
+  } catch {}
+  const tail = "请 Reload Window · 官方语言服务器将自连 (无需本插件)";
+  vscode.window.showInformationMessage(
+    n > 0 || m > 0
+      ? `道Agent · 已复原官方直连 · 清除 ${n} 处重定向 + ${m} 项系统级残留 · ${tail}`
+      : `道Agent · 未发现残留 · 已是官方直连 · ${tail}`,
+  );
+}
+
 async function setAnchor(port) {
   // ★ v9.9.272 · 失败安全 · 仅当反代确认健康时才锚定 · 否则清锚(还官方直通)
   if (!_proxyHealthy) {
@@ -977,6 +1384,28 @@ async function setAnchor(port) {
       await clearAnchor();
     } catch {}
     return;
+  }
+  // ★ v9.9.320 · 治本 · 写前实证 · _proxyHealthy 旗标曾仅启动时置 true·从不复核·
+  //   一旦据此把「实际已死的端口」写进 settings.json → LS 永指死端口卡死.
+  //   故落锚前必当场 ping /origin/ping 确认该端口此刻真活·死则不写·改 fail-safe 还官方.
+  {
+    const ping = await httpGetJson(
+      `http://127.0.0.1:${port}/origin/ping`,
+      2000,
+    ).catch(() => null);
+    const alive =
+      ping && ping.ok && (ping.mode === "invert" || ping.mode === "passthrough");
+    if (!alive) {
+      L.warn(
+        "anchor",
+        `落锚前 ping :${port} 未响应/非dao反代 → 拒绝锚定死端口 · 改清锚(官方直通 fail-safe)`,
+      );
+      _proxyHealthy = false;
+      try {
+        await clearAnchor();
+      } catch {}
+      return;
+    }
   }
   const url = `http://127.0.0.1:${port}`;
 
@@ -1975,6 +2404,85 @@ async function cmdModelUnlockStatus() {
     });
   } catch (e) {
     vscode.window.showErrorMessage(`模型状态查询失败: ${e.message}`);
+  }
+}
+
+// ★ v9.9.322 · 模型反代命令 · 反者道之动
+async function cmdRevproxyToggle() {
+  const port = _cachedPort;
+  if (!port) {
+    vscode.window.showErrorMessage("道Agent Pro: 反代未运行 · 无法切换模型反代");
+    return;
+  }
+  try {
+    const status = await httpGetJson(
+      `http://127.0.0.1:${port}/origin/revproxy/status`,
+      2000,
+    );
+    const next = !(status && status.enabled);
+    const result = await httpPostJson(
+      `http://127.0.0.1:${port}/origin/revproxy/config`,
+      { enabled: next },
+      2000,
+    );
+    if (result && result.ok) {
+      vscode.window.showInformationMessage(
+        `模型反代: ${next ? "✅ 启用" : "❌ 禁用"} · 标准本地端点 http://127.0.0.1:${port}/v1 · 反者道之动`,
+      );
+    } else {
+      vscode.window.showErrorMessage(
+        `模型反代切换失败: ${(result && result.error) || "unknown"}`,
+      );
+    }
+  } catch (e) {
+    vscode.window.showErrorMessage(`模型反代切换失败: ${e.message}`);
+  }
+}
+
+async function cmdRevproxyStatus() {
+  const port = _cachedPort;
+  if (!port) {
+    vscode.window.showErrorMessage("道Agent Pro: 反代未运行 · 无法查看模型反代");
+    return;
+  }
+  try {
+    const d = await httpGetJson(
+      `http://127.0.0.1:${port}/origin/revproxy/status`,
+      3000,
+    );
+    if (!d || !d.ok) {
+      vscode.window.showErrorMessage(
+        `模型反代状态加载失败: ${(d && d.error) || "unknown"}`,
+      );
+      return;
+    }
+    const models = d.models || [];
+    const items = [
+      {
+        label: `状态: ${d.enabled ? "● 已启用" : "○ 未启用"}`,
+        detail: `端点 ${d.endpoint || ""} · ${d.model_count || 0} 模型可反代 · 本源观照入站=${d.applyInvert ? "开" : "关"}`,
+      },
+      {
+        label: `API Key: ${d.apiKey || (d.hasKey ? "(已设置)" : "(未设置·仅本机)")}`,
+        detail: "调用 Header: Authorization: Bearer <API Key>",
+      },
+      {
+        label: "── 可反代模型 ──",
+        kind: vscode.QuickPickItemKind.Separator,
+      },
+    ];
+    for (const m of models) {
+      const via = m.dao_route
+        ? `${m.dao_route.provider} / ${m.dao_route.model || ""}`
+        : m.owned_by || "";
+      items.push({ label: m.id, description: `→ ${via}` });
+    }
+    await vscode.window.showQuickPick(items, {
+      placeHolder: `模型反代 · 标准 OpenAI/Anthropic 本地端点 · ${models.length} 模型`,
+      canPickMany: false,
+    });
+  } catch (e) {
+    vscode.window.showErrorMessage(`模型反代状态查询失败: ${e.message}`);
   }
 }
 
@@ -3285,6 +3793,71 @@ async function autoModelUnlock(port, attempt) {
   }
 }
 
+// ★ 解锁自愈 · 反者道之动 · 治"新用户只剩 SWE-1.6 Slow·其余全灰"之莫名顽疾
+//   真因: LS 常在 proxy 就绪/锚定(15s)之前被 Windsurf spawn → 直连官方服务器
+//         → GetUserStatus 不经反代 → Pro 锁(proto field 4/33)未剥 → picker 仅
+//         免费 SWE-1.6 Slow 可选·其余全灰。旧法靠用户"重启几次"撞上 proxy 先就绪
+//         方愈 → 故时灵时不灵·有的设备装上从不犯·有的永久卡死。
+//   真治: proxy 健康(失败安全门已过)后, 查"LS 是否真经反代":
+//         判据 = spawn hook 改写计数 _lsRewroteCount + 反代 GetUserStatus 拦截
+//         计数 real_unlock.calls。二者皆 0 且确有 LS spawn → LS 必为直连 →
+//         一次性 forceRestartLS, 令 LS 重生。此时 proxy 健康+锚定已就位 →
+//         新 LS 经反代 → GetUserStatus 被拦 → 全模型解锁自现。
+//   守度: 仅"有据可证未解锁"且"proxy 健康"时触发且只一次 · 不扰已正常者 · 不连环杀
+//   道义: 三十七章「侯王若能守之 万物将自化」· 六十四章「其安易持·为之于未有」
+let _unlockHealStartTs = 0;
+async function ensureUnlockFlowing(attempt) {
+  attempt = attempt || 0;
+  if (_unlockHealDone) return;
+  if (!_unlockHealStartTs) _unlockHealStartTs = Date.now();
+  const port = _cachedPort;
+  // proxy 未健康 → 失败安全门未过 · 不能重生 LS (否则指向死端口) · 等
+  if (!_proxyHealthy || !port) {
+    if (attempt < 12) setTimeout(() => ensureUnlockFlowing(attempt + 1), 5000);
+    return;
+  }
+  // LS 已被 spawn hook 改写过 → 必经反代 · 解锁链路通 · 不必自愈
+  if (_lsRewroteCount > 0) {
+    _unlockHealDone = true;
+    L.info("unlock-heal", `LS 经反代 (改写 ${_lsRewroteCount} 次) · 解锁链路通 · 不复行`);
+    return;
+  }
+  try {
+    const ping = await httpGetJson(
+      `http://127.0.0.1:${port}/origin/ping`,
+      2000,
+    ).catch(() => null);
+    const calls =
+      ping && ping.real_unlock ? ping.real_unlock.calls || 0 : 0;
+    if (calls > 0) {
+      // 反代已见 GetUserStatus (经锚定路由) · 解锁在行 · 不必重生 LS
+      _unlockHealDone = true;
+      L.info("unlock-heal", `GetUserStatus 经反代 calls=${calls} · 解锁在行 · 不复行`);
+      return;
+    }
+    // 尚未见 LS spawn 且开机未久 → 再等 (LS 可能稍后才起)
+    if (!_lsSpawnSeen && Date.now() - _unlockHealStartTs < 45000) {
+      if (attempt < 12) setTimeout(() => ensureUnlockFlowing(attempt + 1), 5000);
+      return;
+    }
+    // proxy 健康 · 但改写=0 且 GetUserStatus=0 → LS 必为直连(漏改写) → 一次性重生
+    _unlockHealDone = true;
+    L.warn(
+      "unlock-heal",
+      `proxy 健康但 LS 未经反代 (改写=0·GetUserStatus=0) → forceRestartLS 一次 · 令其重生经反代解锁`,
+    );
+    await forceRestartLS();
+    _lastLsRestart = Date.now();
+    L.info("unlock-heal", `forceRestartLS 毕 · LS 将经反代重连 · 全模型解锁自现`);
+  } catch (e) {
+    if (attempt < 12) {
+      setTimeout(() => ensureUnlockFlowing(attempt + 1), 5000);
+    } else {
+      L.warn("unlock-heal", `自愈探测未成 (${attempt}): ${e && e.message}`);
+    }
+  }
+}
+
 // ★ 状态栏入口刷新 · 显模式/端口 · 点击开三模块中央面板
 function refreshStatusBar() {
   if (!_statusBarItem) return;
@@ -3454,6 +4027,8 @@ function activate(ctx) {
       ),
       // ★ v9.9.90 · 外接api 热配置面板 · 五十七章「我无为也 而民自化」
       vscode.commands.registerCommand("dao.eaConfig", cmdEaConfig),
+      // ★ 复原官方直连 (卸载善后/解锚) · 卡死中间态一键自救
+      vscode.commands.registerCommand("dao.restoreOfficial", cmdRestoreOfficial),
       // v9.9.29 · 印 160 · 终端会话池 (反者道之动 · 七层污染一招治)
       vscode.commands.registerCommand("dao.term.exec", cmdTermExec),
       vscode.commands.registerCommand("dao.term.list", cmdTermList),
@@ -3467,6 +4042,9 @@ function activate(ctx) {
         "dao.modelUnlock.status",
         cmdModelUnlockStatus,
       ),
+      // ★ v9.9.322 · 模型反代 · 反者道之动
+      vscode.commands.registerCommand("dao.revproxy.toggle", cmdRevproxyToggle),
+      vscode.commands.registerCommand("dao.revproxy.status", cmdRevproxyStatus),
     );
 
     // 注册 webview
@@ -3510,6 +4088,12 @@ function activate(ctx) {
       autoModelUnlock(_cachedPort);
       refreshStatusBar();
     }, 8000);
+
+    // ★ 解锁自愈 · 渡过 proxy 就绪(8s)+ 文件锚定(15s)+ LS 首发 GetUserStatus 之窗后
+    //   核查 LS 是否真经反代 · 未经则一次性重生 LS · 根治"装后仅 SWE-1.6 Slow"
+    setTimeout(() => {
+      ensureUnlockFlowing();
+    }, 22000);
 
     // v9.4.2 · 自 focus dao-container · 强制 resolveWebviewView 触发 · SSR 帛书立现
     // 三十七章: 道恒无名 · 侯王若能守之 · 万物将自化
@@ -3669,6 +4253,57 @@ function activate(ctx) {
         try {
           if (Date.now() - _activateTs < 20000) return; // v9.9.36 · 渡过启动危窗 · 20s 内不检
           if (!_cachedAnchored && !_proxyHandle) return; // 未锚 · 不主动起
+
+          // ── ★ v9.9.320 · 治本 · 端口锚点漂移自愈 (本会话最深本源) ──
+          // 以「本实例 settings.json 真正锚定的那个端口」为准校验 · 而非自算 FNV 端口.
+          // 多实例竞态致落败窗锚到空闲端口(8938/8939/9627...) · 其属主一退出端口即死 ·
+          // LS 永指死端口 → 「Connecting to server」· 旧看门狗只看 FNV(被别窗占着·恰健康)
+          // → 「安心」早返 · 分裂永不收敛 → 必卸载才复原. 此处主动收敛之.
+          const anchoredPort = _readAnchoredPort();
+          if (anchoredPort) {
+            const ap = await httpGetJson(
+              `http://127.0.0.1:${anchoredPort}/origin/ping`,
+              2000,
+            ).catch(() => null);
+            const anchorAlive =
+              ap && ap.ok && (ap.mode === "invert" || ap.mode === "passthrough");
+            if (!anchorAlive) {
+              L.warn(
+                "watchdog",
+                `锚定端口 :${anchoredPort} 已死/非dao反代 · LS 卡死中 · 触收敛`,
+              );
+              // 强制重建 · 不被「锁定端口」误导 · 回 FNV 规范端口重判
+              // (proxyStart 内含多窗口复用 _reusePublishedProxy → 收敛至单一活反代)
+              _proxyHandle = null;
+              _proxyHealthy = false;
+              _cachedPort = resolvePort();
+              const hh = await proxyStart(
+                _cachedPort,
+                _cachedMode || "invert",
+              ).catch((e) => {
+                L.error("watchdog", `收敛重起 fail: ${e.message}`);
+                return null;
+              });
+              if (hh) {
+                proxySetMode(_cachedMode || "invert");
+                // setAnchor: 值变(:anchoredPort→:活端口)→ 写 settings + _maybeRestartLS(收敛 LS)
+                await setAnchor(_cachedPort).catch(() => {});
+                L.info(
+                  "watchdog",
+                  `锚点漂移收敛 · :${anchoredPort}→:${_cachedPort} · 重启 LS`,
+                );
+              } else {
+                L.warn(
+                  "watchdog",
+                  "无可用 dao 反代 · 清锚还官方(fail-safe) · 重启 LS",
+                );
+                _proxyHealthy = false;
+                await clearAnchor().catch(() => {}); // 内含 _maybeRestartLS → 官方直通
+              }
+              return; // 本周期已处理漂移 · 不再走下方 FNV 自检
+            }
+          }
+
           const port = _cachedPort;
           const ping = await httpGetJson(
             `http://127.0.0.1:${port}/origin/ping`,
@@ -3883,7 +4518,41 @@ async function deactivate() {
   // 道义: 七十六「兵强则不胜 · 木强则折」· 强清反害 · 柔保则安
   //       二十二「曲则金 · 枉则定」· 不争 · 故莫能与之争
   // ════════════════════════════════════════════════════════════
-  if (isLocal && lifetime > 30000) {
+  // ★ LS 外置重定向键无条件清除 · 跨所有 IDE settings.json · 还官方语言服务器自连.
+  //   根因(用户实证): 原生卸载后 codeiumDev.externalLanguageServerAddress 仍指向死端口
+  //   → 官方 LSP 连不上 → 卡死中间态. 本扩展从不写此键 · 清之无写风暴 · 故不受 30s 门限约束.
+  try {
+    const n = _restoreOfficialDirect({ includeAnchor: false });
+    if (n > 0)
+      L.info("deactivate", `复原官方直连 · 清除 ${n} 处 LS 外置重定向`);
+  } catch (e) {
+    L.warn("deactivate", `复原官方直连失败: ${e && e.message}`);
+  }
+
+  // ★ v9.9.314 · 真卸载须无条件归零 · 越过智能保锚 30s 门限 (无下一个 ext-host 来 auto-restore)
+  //   根因(用户实证): 卸载+重启 → apiServerUrl 仍指 http://127.0.0.1:<死端口> → Cascade 卡死.
+  //   智能保锚门限仅为「重载」防写风暴而设 · 卸载场景必须越之 · 否则锚永留 → 「unable to connect」.
+  const uninstalling = _isSelfUninstalling();
+  if (uninstalling) {
+    try {
+      const n = _restoreOfficialDirect({ includeAnchor: true });
+      L.info(
+        "deactivate",
+        `卸载侦测 → 无条件清锚 + 复原官方直连 · 清 ${n} 处 settings 键`,
+      );
+    } catch (e) {
+      L.warn("deactivate", `卸载清锚失败: ${e && e.message}`);
+    }
+    try {
+      const m = _purgeDaoLsResidue();
+      L.info(
+        "deactivate",
+        `卸载侦测 → 系统级残留归零 · 清 ${m} 项 (端口文件/证书/环变)`,
+      );
+    } catch (e) {
+      L.warn("deactivate", `系统级残留归零失败: ${e && e.message}`);
+    }
+  } else if (isLocal && lifetime > 30000) {
     _clearAnchorFileSync();
     L.info(
       "deactivate",
@@ -4063,6 +4732,9 @@ function getEaConfigHtml(port, nonce) {
   }
   .dao-pane { display: none; flex-direction: column; flex: 1; min-height: 0; }
   .dao-pane.active { display: flex; }
+  /* ── 模型反代 (④) ── */
+  .rp-switch { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; user-select: none; }
+  #paneRevproxy code { font-family: var(--vscode-editor-font-family, monospace); }
   /* ── 本源观照 (①) ── */
   .essence-card {
     padding: 14px; border-radius: 6px; margin-bottom: 10px;
@@ -4195,6 +4867,7 @@ function getEaConfigHtml(port, nonce) {
     <button class="dao-tab active" data-pane="paneEssence">① 本源观照</button>
     <button class="dao-tab" data-pane="paneProvider">② 渠道配置</button>
     <button class="dao-tab" data-pane="paneRouter">③ 模型路由</button>
+    <button class="dao-tab" data-pane="paneRevproxy">④ 模型反代</button>
   </div>
 
   <!-- ① 本源观照 (IDE 左侧复刻 · 道/官/编 + 经文 + 本源体池 · 与左侧完全一致) -->
@@ -4253,7 +4926,8 @@ function getEaConfigHtml(port, nonce) {
       <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
         <span style="font-weight:600;font-size:11px">📄 Agent 交接指挥文档</span>
         <span style="font-size:10px;opacity:0.55">实时反映当前渠道/路由状态 · 交给官方/任意 Agent 即可热配置一切</span>
-        <button class="btn add" id="btnDownloadHandoff" style="margin-left:auto" title="下载 dao-proxy-pro-handoff.md">⬇ 下载 MD</button>
+        <button class="btn add" id="btnCopyHandoff" style="margin-left:auto" title="一键复制最新交接文档到剪贴板 · 直接粘给本地任意 Agent 即可接管配置">📋 复制最新状态</button>
+        <button class="btn" id="btnDownloadHandoff" title="下载 dao-proxy-pro-handoff.md">⬇ 下载 MD</button>
         <button class="btn" id="btnPreviewHandoff" title="预览/刷新文档">预览</button>
       </div>
       <pre id="handoffPreview" style="display:none;max-height:200px;overflow:auto;margin:6px 0 0;padding:8px;font-size:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));border-radius:4px"></pre>
@@ -4278,6 +4952,64 @@ function getEaConfigHtml(port, nonce) {
         <div id="externalModels"></div>
       </div>
       <svg class="wire-svg" id="wireSvg"></svg>
+    </div>
+  </div>
+
+  <!-- ④ 模型反代 (反者道之动 · 把已接通模型反向暴露为标准本地端点 · 脱离 Devin Desktop 直调) -->
+  <div class="dao-pane" id="paneRevproxy">
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 2px;border-bottom:1px solid rgba(128,128,128,0.18);flex-wrap:wrap">
+      <label class="rp-switch" title="开启后本地标准端点对外提供服务">
+        <input type="checkbox" id="rpEnabled"> <b>启用模型反代</b>
+      </label>
+      <label class="rp-switch" title="对入站 system 施『本源观照』(剥官方着相归本源) · 默认关=透传你自己的提示">
+        <input type="checkbox" id="rpInvert"> 本源观照入站提示
+      </label>
+      <span id="rpStat" style="font-size:10px;opacity:0.65;margin-left:auto">加载中…</span>
+    </div>
+
+    <div style="font-size:11px;line-height:1.6;padding:6px 2px;opacity:0.85">
+      把「② 渠道配置 / ③ 模型路由」里已接通的模型，<b>反向</b>暴露为标准 <b>OpenAI</b> 与
+      <b>Anthropic(Claude Code)</b> 本地端点，脱离 Devin Desktop，供智能家居 / 本地脚本 /
+      其他设备以标准 SDK 直接调用。<span style="opacity:0.6">反者道之动。</span>
+    </div>
+
+    <!-- 端点信息 -->
+    <div style="border:1px solid rgba(128,128,128,0.22);border-radius:6px;padding:8px;margin:4px 2px">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span style="font-weight:600;font-size:11px">本地端点 Base URL</span>
+        <code id="rpEndpoint" style="font-size:11px;background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));padding:2px 6px;border-radius:3px">—</code>
+        <button class="btn" id="rpCopyEndpoint" title="复制 Base URL">复制</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px">
+        <span style="font-weight:600;font-size:11px">API Key</span>
+        <code id="rpKey" style="font-size:11px;background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));padding:2px 6px;border-radius:3px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</code>
+        <button class="btn" id="rpCopyKey" title="复制 API Key">复制</button>
+        <button class="btn" id="rpRegenKey" title="重新生成 API Key (旧 key 立即失效)">↻ 重置</button>
+      </div>
+      <div style="font-size:10px;opacity:0.6;margin-top:6px">
+        调用: <code>POST {Base URL}/v1/chat/completions</code> (OpenAI) ·
+        <code>POST {Base URL}/v1/messages</code> (Anthropic) ·
+        <code>GET {Base URL}/v1/models</code> · Header: <code>Authorization: Bearer {API Key}</code>
+      </div>
+    </div>
+
+    <!-- 可反代模型列表 -->
+    <div style="display:flex;align-items:center;gap:6px;padding:6px 2px 2px">
+      <span style="font-weight:600;font-size:11px">可反代模型</span>
+      <span id="rpModelCount" style="font-size:10px;opacity:0.6"></span>
+      <button class="btn" id="rpRefresh" style="margin-left:auto" title="刷新可反代模型 + 状态">刷新</button>
+    </div>
+    <div id="rpModelList" style="flex:1;overflow-y:auto;margin:2px;font-size:11px"></div>
+
+    <!-- 一键测试 (GLM 等免费模型全链路自测) -->
+    <div style="border-top:1px solid rgba(128,128,128,0.2);margin-top:6px;padding-top:6px">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span style="font-weight:600;font-size:11px">一键自测</span>
+        <select id="rpTestModel" style="flex:1;min-width:120px;font-size:11px;padding:2px 4px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-dropdown-background,rgba(0,0,0,0.2));color:var(--vscode-dropdown-foreground,var(--vscode-foreground));outline:none;font-family:inherit"></select>
+        <input id="rpTestPrompt" placeholder="测试提示词 (默认: 你好)" style="flex:1.4;min-width:120px">
+        <button class="btn add" id="rpTestRun" title="经本地端点发一次标准 OpenAI 请求 · 验证全链路">▶ 测试</button>
+      </div>
+      <pre id="rpTestOut" style="display:none;max-height:200px;overflow:auto;margin:6px 0 0;padding:8px;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));border-radius:4px"></pre>
     </div>
   </div>
 
@@ -5213,8 +5945,87 @@ function getEaConfigHtml(port, nonce) {
         else { panes[j].classList.remove('active'); }
       }
       if (pane === 'paneRouter') { _scheduleWires(); }
+      if (pane === 'paneRevproxy') { _rpRefresh(); }
     });
   }
+
+  // ═══ ④ 模型反代 (反者道之动 · 标准本地端点) ═══
+  function _rpEl(id) { return document.getElementById(id); }
+  var _rpStatus = null;
+  function _rpSetText(id, t) { var e = _rpEl(id); if (e) e.textContent = t; }
+  function _rpRefresh() {
+    fJson('/origin/revproxy/status').then(function(d) {
+      _rpStatus = d || {};
+      var en = _rpEl('rpEnabled'); if (en) en.checked = !!d.enabled;
+      var iv = _rpEl('rpInvert'); if (iv) iv.checked = !!d.applyInvert;
+      _rpSetText('rpStat', (d.enabled ? '● 已启用' : '○ 未启用') + ' · ' + (d.model_count || 0) + ' 模型可反代');
+      _rpSetText('rpEndpoint', d.endpoint || ('http://127.0.0.1:' + _PORT + '/v1'));
+      _rpSetText('rpKey', d.apiKey || (d.hasKey ? '(已设置·仅本机可见)' : '(未设置·仅 localhost 放行)'));
+      _rpSetText('rpModelCount', '(' + (d.model_count || 0) + ')');
+      var list = _rpEl('rpModelList');
+      var sel = _rpEl('rpTestModel');
+      var models = d.models || [];
+      if (list) {
+        if (!models.length) {
+          list.innerHTML = '<div style="opacity:0.55;padding:8px">暂无可反代模型 · 请先在「② 渠道配置 / ③ 模型路由」接通至少一个渠道(如免费 GLM)。</div>';
+        } else {
+          var html = '';
+          for (var i = 0; i < models.length; i++) {
+            var m = models[i];
+            var via = m.dao_route ? (m.dao_route.provider + ' / ' + (m.dao_route.model || '')) : (m.owned_by || '');
+            html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
+              + '<code style="font-weight:600">' + _rpEsc(m.id) + '</code>'
+              + '<span style="opacity:0.55;font-size:10px;margin-left:auto">→ ' + _rpEsc(via) + '</span></div>';
+          }
+          list.innerHTML = html;
+        }
+      }
+      if (sel) {
+        var prev = sel.value;
+        sel.innerHTML = '';
+        for (var k = 0; k < models.length; k++) {
+          var o = document.createElement('option');
+          o.value = models[k].id; o.textContent = models[k].id;
+          sel.appendChild(o);
+        }
+        if (prev) sel.value = prev;
+      }
+    }).catch(function(e) { _rpSetText('rpStat', '状态加载失败: ' + e.message); });
+  }
+  function _rpEsc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, function(c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
+  function _rpSaveCfg(patch) {
+    return fPost('/origin/revproxy/config', patch).then(function() { _rpRefresh(); }).catch(function(e) { _rpSetText('rpStat', '保存失败: ' + e.message); });
+  }
+  (function _rpWire() {
+    var en = _rpEl('rpEnabled'); if (en) en.addEventListener('change', function() { _rpSaveCfg({ enabled: en.checked }); });
+    var iv = _rpEl('rpInvert'); if (iv) iv.addEventListener('change', function() { _rpSaveCfg({ applyInvert: iv.checked }); });
+    var rf = _rpEl('rpRefresh'); if (rf) rf.addEventListener('click', _rpRefresh);
+    var rk = _rpEl('rpRegenKey'); if (rk) rk.addEventListener('click', function() { _rpSaveCfg({ regenerateKey: true }); });
+    var ce = _rpEl('rpCopyEndpoint'); if (ce) ce.addEventListener('click', function() { _rpClip(_rpEl('rpEndpoint').textContent); });
+    var ck = _rpEl('rpCopyKey'); if (ck) ck.addEventListener('click', function() { _rpClip((_rpStatus && _rpStatus.apiKey) || _rpEl('rpKey').textContent); });
+    var tr = _rpEl('rpTestRun'); if (tr) tr.addEventListener('click', _rpTest);
+  })();
+  function _rpClip(t) { try { navigator.clipboard.writeText(t); _rpSetText('rpStat', '已复制'); } catch (e) {} }
+  function _rpTest() {
+    var sel = _rpEl('rpTestModel'); var out = _rpEl('rpTestOut');
+    var model = sel && sel.value;
+    if (!model) { if (out) { out.style.display = 'block'; out.textContent = '无可测模型 · 请先接通渠道'; } return; }
+    if (!_rpStatus || !_rpStatus.enabled) { if (out) { out.style.display = 'block'; out.textContent = '请先勾选「启用模型反代」'; } return; }
+    var prompt = (_rpEl('rpTestPrompt').value || '你好').trim();
+    var key = (_rpStatus && _rpStatus.apiKey) || '';
+    if (out) { out.style.display = 'block'; out.textContent = '请求中… (POST /v1/chat/completions · model=' + model + ')'; }
+    fetch(_BASE + '/v1/chat/completions', {
+      method: 'POST', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+      body: JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }], stream: false })
+    }).then(function(r) { return r.json().then(function(j) { return { status: r.status, j: j }; }); })
+      .then(function(res) {
+        if (res.status >= 400) { out.textContent = '✖ HTTP ' + res.status + '\\n' + JSON.stringify(res.j, null, 2); return; }
+        var c = res.j && res.j.choices && res.j.choices[0] && res.j.choices[0].message ? res.j.choices[0].message.content : '';
+        out.textContent = '✔ 全链路通 (标准 OpenAI 响应)\\n\\n模型: ' + (res.j.model || model) + '\\n回复:\\n' + c + '\\n\\n— 原始 —\\n' + JSON.stringify(res.j, null, 2);
+      }).catch(function(e) { if (out) out.textContent = '✖ 网络/解析异常: ' + e.message; });
+  }
+
   // ═══ ① 本源观照 · IDE 左侧复刻 (道/官/编 + 经文 + 本源体池 · 与左侧同源) ═══
   function _e1El(id) { return document.getElementById(id); }
   var _e1Mode = 'invert';
@@ -5307,6 +6118,20 @@ function getEaConfigHtml(port, nonce) {
   }
   var _ocj = _e1El('btnOpenCfgJson');
   if (_ocj) _ocj.addEventListener('click', function() { postMsg('openConfigJson'); });
+  var _ch = _e1El('btnCopyHandoff');
+  if (_ch) _ch.addEventListener('click', function() {
+    var self = this; var _orig = self.textContent; self.textContent = '取最新…';
+    _fetchHandoff().then(function(md) {
+      // 优先浏览器剪贴板 API · 不可用(webview 权限/非安全上下文)则交宿主 vscode.env.clipboard
+      function _viaHost() { if (_vscode) _vscode.postMessage({ type: 'copyHandoff', content: md }); }
+      var done = function() { self.textContent = '✓ 已复制'; setTimeout(function() { self.textContent = _orig; }, 1800); };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(md).then(done, function() { _viaHost(); done(); });
+        } else { _viaHost(); done(); }
+      } catch (_e) { _viaHost(); done(); }
+    }).catch(function(e) { self.textContent = _orig; try { _daoToast('复制失败: ' + e.message); } catch (_) {} });
+  });
   var _dh = _e1El('btnDownloadHandoff'), _ph = _e1El('btnPreviewHandoff');
   if (_dh) _dh.addEventListener('click', function() {
     _fetchHandoff().then(function(md) {
@@ -5361,6 +6186,19 @@ async function _saveHandoffDoc(content) {
     );
   } catch (e) {
     vscode.window.showErrorMessage(`交接文档保存失败: ${e && e.message}`);
+  }
+}
+
+// ★ 一键复制 Agent 交接指挥文档到系统剪贴板 (webview 复制按钮 · 浏览器剪贴板不可用时的宿主兜底)
+//   道义: 用户一点即得最新状态 · 直接粘给本地任意 Agent 即可接管热配置一切
+async function _copyHandoffDoc(content) {
+  try {
+    await vscode.env.clipboard.writeText(String(content || ""));
+    vscode.window.showInformationMessage(
+      "交接文档已复制到剪贴板 · 直接粘给本地任意 Agent 即可接管配置",
+    );
+  } catch (e) {
+    vscode.window.showErrorMessage(`交接文档复制失败: ${e && e.message}`);
   }
 }
 
@@ -5441,6 +6279,7 @@ class EaRouterProvider {
         else if (msg.type === "openPreview") cmdOpenPreview();
         else if (msg.type === "modelStatus") cmdModelUnlockStatus();
         else if (msg.type === "saveHandoff") _saveHandoffDoc(msg.content || "");
+        else if (msg.type === "copyHandoff") _copyHandoffDoc(msg.content || "");
         else if (msg.type === "openConfigJson") _openConfigJson();
         else if (msg.type === "openExternal" && msg.url) _openExternalUrl(msg.url);
       } catch (e) { L.warn("router", `msg handle fail: ${e && e.message}`); }
@@ -5480,6 +6319,8 @@ async function cmdEaConfig() {
           cmdModelUnlockStatus();
         } else if (msg.type === "saveHandoff") {
           _saveHandoffDoc(msg.content || "");
+        } else if (msg.type === "copyHandoff") {
+          _copyHandoffDoc(msg.content || "");
         } else if (msg.type === "openConfigJson") {
           _openConfigJson();
         } else if (msg.type === "openExternal" && msg.url) {

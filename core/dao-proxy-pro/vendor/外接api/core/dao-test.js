@@ -475,13 +475,15 @@ async function runNormalizeCheck() {
   } catch {}
 }
 
-// ─── L2.6: 自动播种基础桩不得吞并兄弟档位 (v9.9.280) ──
-//   init() 幂等补 MODEL_SWE_1_6 → builtin-stub(_seeded) · 基础测试通道
-//   关键: swe-1-6-slow 未显式连线 → 保持官方透传(免费原生) · 不被 _seeded 桩兜底吞并
+// ─── L2.6: 基础档不被桩占据 · 免费模型并存 (v9.9.316) ──
+//   修复前: init() 幂等补 MODEL_SWE_1_6 → builtin-stub(_seeded) · 桩占基础档
+//     → shouldRoute(swe-1-6)=true → 官方透传被劫持 → 免费模型无法与 Proxy Pro 并存
+//   修复后: 基础档不入路由表 → shouldRoute(swe-1-6)=false → 回落官方上游(免费原生)
+//   关键: swe-1-6 / swe-1-6-slow 均未显式连线 → 保持官方透传(免费原生)
 //   ★ v9.9.298: familyTierExtend 默关 → 未显式连线之档位变体(如 claude-...-thinking)亦保持官方透传
 async function runSeededBaseCheck() {
   console.log(header("\n═══════════════════════════════════════════"));
-  console.log(header("  L2.6 · 播种桩不吞档位 (slow守官方)"));
+  console.log(header("  L2.6 · 基础档守官方·免费并存 (不播桩)"));
   console.log(header("═══════════════════════════════════════════\n"));
 
   const os = require("os");
@@ -496,7 +498,7 @@ async function runSeededBaseCheck() {
     return;
   }
 
-  // 配置: 显式连 fast + claude 族基名 · 不连 MODEL_SWE_1_6 (留给 init 自动播种桩)
+  // 配置: 显式连 fast + claude 族基名 · 不连 MODEL_SWE_1_6 (基础档应回落官方·不再播桩)
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dao-seed-"));
   const cfgPath = path.join(tmpDir, "配置.json");
   fs.writeFileSync(
@@ -534,7 +536,7 @@ async function runSeededBaseCheck() {
   }
 
   const cases = [
-    ["swe-1-6", false, "base passthrough to official (free coexist; not stub-hijacked)"],
+    ["swe-1-6", false, "基础版→官方透传(不再播种桩·免费模型并存)"],
     ["swe-1-6-fast", true, "Fast→deepseek(显式连线)"],
     ["swe-1-6-slow", false, "Slow→官方透传(未连线·播种桩不吞)"],
     ["claude-sonnet-4-6", true, "Claude族基名→deepseek(显式)"],

@@ -46,7 +46,7 @@ class MockLLM {
       ? this.sc.get("after_tool_result") || this.sc.get("default")
       : this._m(msg, tools);
     if (q.url?.includes("/v1/messages")) this._ant(s, sc, tools);
-    else this._oai(s, sc, tools);
+    else this._oai(s, sc, tools).catch(() => {});
   }
   _extractTools(o) {
     return (o.tools || [])
@@ -65,6 +65,12 @@ class MockLLM {
   }
   _m(msg, tools) {
     const sc = this.sc;
+    // ★ v10.1 · 修法⑰ 实证: ask_user_question 同轮打包场景 (须先于通用 ask 匹配)
+    if (/batched|isolate/i.test(msg) && sc.has("ask_user_question_batched"))
+      return sc.get("ask_user_question_batched");
+    // ★ v10.2 · 修法⑧ 实证: 上游中途静默 → 验证主流式空闲保活 (须先于通用匹配)
+    if (/keepalive|stall/i.test(msg) && sc.has("keepalive_stall"))
+      return sc.get("keepalive_stall");
     // ★ 匹配优先级: 更具体的模式在前 · 通用模式在后
     //   1. trajectory → 在 search 之前
     //   2. code_search → 在 search 之前
@@ -163,7 +169,7 @@ class MockLLM {
       return tc;
     });
   }
-  _oai(res, sc, tools) {
+  async _oai(res, sc, tools) {
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     const id = `s${Date.now()}`,
       mo = sc.model || "deepseek-reasoner";
@@ -176,6 +182,8 @@ class MockLLM {
       res.write(
         `data:${JSON.stringify({ id, model: mo, choices: [{ delta: { role: "assistant", content: sc.text } }] })}\n\n`,
       );
+    // ★ v10.2 · 模拟上游中途静默 (发首块后暂停) → 验证代理空闲保活补帧
+    if (sc.stallMs) await new Promise((r) => setTimeout(r, sc.stallMs));
     if (tcs.length)
       for (let i = 0; i < tcs.length; i++) {
         const t = tcs[i];
