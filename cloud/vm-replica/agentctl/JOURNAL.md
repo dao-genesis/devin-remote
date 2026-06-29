@@ -7570,6 +7570,56 @@ worldmap, and on the worldmap a held `VK_DOWN` walked Tux one node along the pat
 perceive→act loop on an OpenGL surface).  `tap(hold=0)` reproduces the original
 dead input on the same menu; `tap(hold=0.12)` activates it every time.
 
+## F233 — appearance localisation was correct but too slow to track a sprite
+
+**Friction.**  On the same SuperTux worldmap (0 AT-SPI), once Tux *moves* the
+floor must answer "where is he now?".  Colour keying fails — his anti-aliased
+sprite has no single dominant hue against snow/water, and the warm pixels are
+swamped by red level nodes and the brown path (`find_color_blobs((25,25,28))`
+returned only a strip of UI text).  Frame differencing fails too — pressing a
+direction makes the **camera follow**, so the whole background scrolls and
+`locate_change` lights up the entire viewport (269 001 px changed on one step),
+localising the scrolling world rather than the screen-centred avatar.  The right
+channel is the one the floor already owns for *appearance* — `match_template`
+(F053) — and it did find Tux exactly (score 0 at his true position).  But it was
+**unusably slow**: a full-frame search took ~3 min, and even a tightly scoped
+240×240 window around his last-known position took **33.3 s**.  A localiser that
+takes half a minute cannot track a thing that moves.
+
+**Root cause — source luma recomputed once per overlap.**  SAD template matching
+slides the patch over every offset and sums |Δluma|.  The first cut converted
+each *source* pixel to luma **inside the innermost loop**, so a pixel covered by
+N overlapping windows had its luma (3 multiplies + a divide) recomputed N times —
+the cost was `area × patch_area` luma conversions, almost all redundant.
+
+| search          | before | after | result |
+|-----------------|-------:|------:|--------|
+| scoped 240×240  | 33.3 s | **5.1 s** | identical (score 0 @ same px) |
+| full frame      | ~180 s | **41 s**  | identical |
+| full, `step=2`  |  ~50 s | **19 s**  | identical |
+
+**Fix** (`osctl.py`, `match_template`).  Two surgical changes, no signature or
+result change (the returned arg-min is bit-identical — verified above):
+1. **Precompute the search-area luma once** (`aw*ah` conversions) into a flat
+   buffer; the inner loop becomes a bare integer subtract + abs.
+2. **Early-abandon** (branch-and-bound): SAD only accumulates, so the instant a
+   partial score reaches the best full score so far, that offset can never win —
+   stop scoring it.  Once a good match is in hand almost every other offset
+   aborts after a row or two.  Exact, because only provably-worse offsets are
+   skipped.
+
+The win is "少則得": no new primitive, no approximation — the same appearance
+channel, with its wasted work removed at the root, is now fast enough to relocate
+a moving sprite between frames (and faster still with a smaller patch or a coarse
+`step` pre-pass, both already expressible).
+
+**Proof.**  Tux cropped to a 47×58 template; after the fix `match_template`
+relocates him at score 0 in 5.1 s scoped / 41 s full-frame — the same pixel the
+33 s version found, 6.5× faster — so the floor's vision channel localises a
+self-drawn avatar that neither colour nor frame-diff could pin down.  Full
+`test_live.py --offline` regression after the change: 703/719, no new failures
+(the 16 are the standing no-window-manager focus tests and glyph-atlas misreads).
+
 ---
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.

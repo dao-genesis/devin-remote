@@ -2191,24 +2191,46 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
     for i in range(pw * ph):
         pl[i] = (patch[i * 3] * 299 + patch[i * 3 + 1] * 587
                  + patch[i * 3 + 2] * 114) // 1000
-    best: tuple[int, int, int] | None = None
+    # Precompute source luma over the search area *once* (F233). The first cut
+    # recomputed each source pixel's luma inside the innermost loop, so every
+    # overlapping window re-derived the same luma — ``area x patch_area`` luma
+    # multiplies. A tightly scoped 240x240 search still cost ~33s, far too slow
+    # to track a moving sprite frame-to-frame. One luma pass over the area
+    # (``aw*ah`` pixels) collapses the inner loop to a bare integer subtract.
+    al = bytearray(aw * ah)
+    for ry in range(ah):
+        src = ((sy0 + ry) * w + sx0) * 3
+        dst = ry * aw
+        for rx in range(aw):
+            j = src + rx * 3
+            al[dst + rx] = (rgb[j] * 299 + rgb[j + 1] * 587
+                            + rgb[j + 2] * 114) // 1000
+    best_s: int | None = None
+    best_xy: tuple[int, int] | None = None
     for oy in range(0, ah - ph + 1, step):
         for ox in range(0, aw - pw + 1, step):
             s = 0
             for py in range(ph):
-                base = ((sy0 + oy + py) * w + (sx0 + ox)) * 3
+                abase = (oy + py) * aw + ox
                 pbase = py * pw
                 for px in range(pw):
-                    j = base + px * 3
-                    lum = (rgb[j] * 299 + rgb[j + 1] * 587
-                           + rgb[j + 2] * 114) // 1000
-                    d = lum - pl[pbase + px]
+                    d = al[abase + px] - pl[pbase + px]
                     s += d if d >= 0 else -d
-            if best is None or s < best[0]:
-                best = (s, sx0 + ox, sy0 + oy)
-    if best is None:
+                # Early abandon (branch-and-bound): SAD only accumulates, so the
+                # moment a partial score reaches the best full score this offset
+                # can no longer win — stop scoring it. The arg-min is unchanged
+                # (only provably-worse offsets are skipped), and once a good
+                # match is in hand almost every other offset aborts after a row
+                # or two — the order-of-magnitude win that makes real-time
+                # sprite tracking practical.
+                if best_s is not None and s >= best_s:
+                    break
+            else:
+                if best_s is None or s < best_s:
+                    best_s, best_xy = s, (sx0 + ox, sy0 + oy)
+    if best_xy is None:
         return None
-    score, tx, ty = best
+    score, tx, ty = best_s, best_xy[0], best_xy[1]
     return {"x": tx + pw // 2, "y": ty + ph // 2, "score": score,
             "bbox": (tx, ty, tx + pw - 1, ty + ph - 1)}
 
