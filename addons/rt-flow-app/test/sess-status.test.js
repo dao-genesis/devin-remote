@@ -65,6 +65,27 @@ const sessStatusA = eval("(function(){\n" + seg[0] + "\nreturn sessStatusA;})()"
   ok(sessStatus({ latest_status_contents: { reason: "connection aborted" } })[0] === "blocked", "reason 含 abort → blocked");
 }
 
+// ── 根因修复: en="blocked" 不得在 ③ 处短路, 须让 reason 决定精确分类 ──
+//   旧版 ③ 把 reason 报错 与 en 卡住 合在同一 || 中: en="blocked" 命中即返回 blocked,
+//   致 ③b(额度二次) 与 ④(待输入) 永远跑不到 → 阻塞中实为「待输入/额度耗尽」者被误标「卡住」。
+{
+  // en=blocked + reason 揭示额度 → 应 exhausted (不是 blocked)
+  ok(sessStatus({ status_enum: "blocked", latest_status_contents: { enum: "blocked", reason: "credit limit reached" } })[0] === "exhausted",
+     "en=blocked + reason='credit limit reached' → exhausted (③b 不被 en 短路)");
+  ok(sessStatus({ status_enum: "blocked", latest_status_contents: { enum: "blocked", reason: "allowance depleted" } })[0] === "exhausted",
+     "en=blocked + reason='allowance depleted' → exhausted");
+  // en=blocked + reason 揭示待输入 → 应 awaiting (不是 blocked)
+  ok(sessStatus({ status_enum: "blocked", latest_status_contents: { enum: "blocked", reason: "waiting for user input" } })[0] === "awaiting",
+     "en=blocked + reason='waiting for user input' → awaiting (④ 不被 en 短路)");
+  ok(sessStatus({ status_enum: "blocked", latest_status_contents: { enum: "blocked", reason: "asking the user a question" } })[0] === "awaiting",
+     "en=blocked + reason='asking the user a question' → awaiting");
+  // en=blocked + reason 空 / 无具体分类 → 仍兜底 blocked (③c)
+  ok(sessStatus({ status_enum: "blocked", latest_status_contents: { enum: "blocked" } })[0] === "blocked",
+     "en=blocked + reason 空 → blocked 兜底(③c)");
+  ok(sessStatus({ status_enum: "blocked", latest_status_contents: { enum: "blocked", reason: "internal error" } })[0] === "blocked",
+     "en=blocked + reason='internal error' → blocked (③ reason 报错)");
+}
+
 // ── 反者道之动: 终态但额度信号藏在 status/activity/current_activity ──
 {
   ok(sessStatus({ status: "suspended out_of_quota", latest_status_contents: { enum: "suspended" } })[0] === "exhausted",
@@ -219,6 +240,13 @@ ok(/var _qLive=\(DaoCloud\.quotaLive\?DaoCloud\.quotaLive\(accs\[i\]\.quota\)/.t
      "devin-cloud.sessStatus: user_action_required → blocked");
   ok(ss({ latest_status_contents:{ enum:"running" } })[0] === "running",
      "devin-cloud.sessStatus: enum=running → running");
+  // 同根因修复: en=blocked 不短路, reason 决定精确分类
+  ok(ss({ latest_status_contents:{ enum:"blocked", reason:"credit limit reached" } })[0] === "exhausted",
+     "devin-cloud.sessStatus: en=blocked + reason 额度 → exhausted (不被 en 短路)");
+  ok(ss({ latest_status_contents:{ enum:"blocked", reason:"waiting for user input" } })[0] === "awaiting",
+     "devin-cloud.sessStatus: en=blocked + reason 待输入 → awaiting");
+  ok(ss({ latest_status_contents:{ enum:"blocked" } })[0] === "blocked",
+     "devin-cloud.sessStatus: en=blocked + reason 空 → blocked 兜底");
 }
 
 // ② engine.html 设备命令 recentConvAll: 原生 6 路并发聚合一次返回, 每条带 canonical [cls,label]

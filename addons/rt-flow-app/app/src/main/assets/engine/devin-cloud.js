@@ -604,8 +604,14 @@
     var cur = String(s.current_activity || "").toLowerCase();
     if (QUOTA_RE.test(reason)) return ["exhausted", "额度耗尽", "quota"];
     if (uar !== undefined && uar !== null && uar !== "" && uar !== false && uar !== "null") return ["blocked", "待处理", "action"];
-    if (/error|failed|crash|stuck/.test(reason) || /block|stuck|fail|error/.test(en)) return ["blocked", "卡住", "error"];
-    if (/await|wait|ask|question|input|need|user/.test(en)) return ["awaiting", "待输入"];
+    // ③ reason-only 报错 (不含 en — 防 en="blocked" 短路致 ③b/④ 跑不到)
+    if (/error|failed|crash|stuck|interrupt|abort|disconnect|timed? ?out|timeout/.test(reason)) return ["blocked", "卡住", "error"];
+    // ③b 额度相关二次检测
+    if (/limit.*reach|cap.*reach|no.*remain|depleted|no.*available|allowance/i.test(reason)) return ["exhausted", "额度耗尽", "quota"];
+    // ④ 待输入 — en 或 reason 命中 (en="blocked"+reason="waiting for user input" 亦走此路)
+    if (/await|wait|ask|question|input|need|user/.test(en) || /wait.*input|wait.*user|need.*input|user.*action|await|asking/i.test(reason)) return ["awaiting", "待输入"];
+    // ③c en-only 卡住兜底 — reason 无具体分类时 en 的 block/stuck/error 才兜底
+    if (/block|stuck|fail|error|interrupt|abort|disconnect|timeout/.test(en)) return ["blocked", "卡住", "error"];
     if (/finish|complet|expired|suspend|stopped|archiv|cancel|exited|deleted/.test(en + " " + status)) {
       if (QUOTA_RE.test(reason + " " + status + " " + act + " " + cur)) return ["exhausted", "额度耗尽", "quota"];
       return ["finished", "完成"];
