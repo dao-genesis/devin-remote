@@ -6465,7 +6465,7 @@ function _officialChatReplay(target, norm, sink) {
         const buf = Buffer.concat(chunks);
         if (status && status >= 400) {
           const txt = buf.toString("utf8").slice(0, 300);
-          const exhausted = /quota|exhaust|governor|Authentication Fails/i.test(txt);
+          const exhausted = /quota|exhaust|governor|precondition|Authentication Fails/i.test(txt);
           if (exhausted) _signalPremiumQuota("exhausted");
           sink.onError &&
             sink.onError("官方上游 " + status + ": " + txt);
@@ -6474,9 +6474,37 @@ function _officialChatReplay(target, norm, sink) {
             quota: exhausted ? "exhausted" : undefined,
           });
         }
-        const strs = extractUtf8StringsFromGrpcBody(buf, { minLen: 1 }) || [];
+        // Connect 流式回包 = 若干 data 帧 (proto · 含助手增量文本) + 末尾一个
+        // end-stream 帧 (flags bit1=0x02, 载荷为 JSON: {} 正常 / {"error":{code,message}})。
+        // HTTP 200 也可能在 end-stream 帧里带 quota 错误(此处即配额信号真源)。
+        const frames = parseFrames(buf); // 已按需解 gzip
+        let streamErr = null;
+        const dataStrs = [];
+        for (const f of frames) {
+          if (f.flags & 0x80) continue; // grpc-web trailer
+          if (f.flags & 0x02) {
+            // Connect end-stream: JSON
+            try {
+              const j = JSON.parse(f.payload.toString("utf8").trim() || "{}");
+              if (j && j.error) streamErr = j.error;
+            } catch (_) {}
+            continue;
+          }
+          // data 帧: 按 proto 收集 UTF-8 串
+          try {
+            _gatherUtf8Strings(parseProto(f.payload), dataStrs, 0, 12, 1);
+          } catch (_) {}
+        }
+        if (streamErr) {
+          const blob = (streamErr.code || "") + " " + (streamErr.message || "");
+          const exhausted = /quota|exhaust|governor|precondition|Authentication Fails/i.test(blob);
+          if (exhausted) _signalPremiumQuota("exhausted");
+          sink.onError &&
+            sink.onError("官方上游错误: " + (streamErr.message || streamErr.code || blob));
+          return resolve({ ok: false, quota: exhausted ? "exhausted" : undefined });
+        }
         // 拼接增量文本: 去除明显的元数据短串(模型名/uid/枚举)
-        const text = strs
+        const text = dataStrs
           .filter(
             (s) =>
               s &&
@@ -6484,13 +6512,14 @@ function _officialChatReplay(target, norm, sink) {
               !/^[A-Z_]{3,}$/.test(s),
           )
           .join("");
-        const out = text || strs.join("");
+        const out = text || dataStrs.join("");
         if (!out) {
           sink.onError && sink.onError("官方回包解码为空(可能为纯工具调用流)");
           return resolve({ ok: false });
         }
         sink.onText && sink.onText(out);
         sink.onEnd && sink.onEnd();
+        // 仅付费档真出包才可证明付费配额尚存; 免费档成功不代表付费可用。
         if (target && !target.free) _signalPremiumQuota("ok");
         resolve({ ok: true, quota: "ok" });
       } catch (e) {

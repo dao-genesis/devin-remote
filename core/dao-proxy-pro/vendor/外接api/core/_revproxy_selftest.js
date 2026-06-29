@@ -400,6 +400,21 @@ let KEY = "";
     ok("老wire(field2)末条正文被换", f2 && lastContent(f2) === "PINGPONG_OLD");
     // 空/坏帧不崩
     ok("空帧返回 null 不崩", _swapLastUserMsg(Buffer.alloc(0), "x") === null);
+
+    // 回包解码: Connect end-stream 帧(gzip)载 JSON quota 错误 → parseFrames 解压 + JSON.parse 取 error
+    const zlib = require("zlib");
+    const errJson = JSON.stringify({ error: { code: "failed_precondition", message: "Your daily usage quota has been exhausted." } });
+    const gz = zlib.gzipSync(Buffer.from(errJson, "utf8"));
+    const esHdr = Buffer.alloc(5);
+    esHdr[0] = 0x03; // bit0=compressed + bit1=end-stream
+    esHdr.writeUInt32BE(gz.length, 1);
+    const esFrame = Buffer.concat([esHdr, gz]);
+    const dec = parseFrames(esFrame);
+    ok("end-stream gzip 帧被解压", dec.length === 1 && /quota has been exhausted/.test(dec[0].payload.toString("utf8")));
+    let parsedErr = null;
+    try { parsedErr = JSON.parse(dec[0].payload.toString("utf8")).error; } catch (_) {}
+    ok("end-stream JSON error 可解析", parsedErr && parsedErr.code === "failed_precondition");
+    ok("quota 信号正则命中 exhausted", /quota|exhaust|precondition/i.test((parsedErr.code || "") + " " + (parsedErr.message || "")));
   }
 
   revproxy.setPremiumQuota("unknown");
