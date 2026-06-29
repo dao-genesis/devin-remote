@@ -5009,7 +5009,7 @@ function getEaConfigHtml(port, nonce) {
 
     <!-- 可反代模型列表 (全量呈现·绿=可用/免费 · 红=配额耗尽 · 琥珀=付费未探测) -->
     <div style="display:flex;align-items:center;gap:6px;padding:6px 2px 2px;flex-wrap:wrap">
-      <span style="font-weight:600;font-size:11px">可反代模型 (全量)</span>
+      <span style="font-weight:600;font-size:11px">可反代模型 (全量·按家族归组)</span>
       <span id="rpModelCount" style="font-size:10px;opacity:0.6"></span>
       <span id="rpLegend" style="font-size:10px;opacity:0.8;margin-left:6px"></span>
       <button class="btn" id="rpRefresh" style="margin-left:auto" title="刷新可反代模型 + 状态">刷新</button>
@@ -5991,7 +5991,9 @@ function getEaConfigHtml(port, nonce) {
       _rpSetText('rpKey', d.apiKey || (d.hasKey ? '(已设置·仅本机可见)' : '(未设置·仅 localhost 放行)'));
       _rpSetText('rpModelCount', '(' + (d.model_count || 0) + ')');
       var q = d.premiumQuota === 'ok' ? '付费配额·有' : (d.premiumQuota === 'exhausted' ? '付费配额·耗尽' : '付费配额·未探测');
-      _rpSetText('rpLegend', '🟢 ' + (st.green || 0) + ' · 🔴 ' + (st.red || 0) + ' · 🟡 ' + (st.amber || 0) + ' · 免费 ' + (st.free || 0) + ' · ' + q);
+      var nFam = (d.families || []).length;
+      var nMulti = (d.families || []).filter(function(f){ return f.multi; }).length;
+      _rpSetText('rpLegend', '🟢 ' + (st.green || 0) + ' · 🔴 ' + (st.red || 0) + ' · 🟡 ' + (st.amber || 0) + ' · 免费 ' + (st.free || 0) + ' · ' + nFam + '族(' + nMulti + '族多档可热切) · ' + q);
       _rpRenderList();
       _rpFillSelect();
     }).catch(function(e) { _rpSetText('rpStat', '状态加载失败: ' + e.message); });
@@ -6008,6 +6010,26 @@ function getEaConfigHtml(port, nonce) {
     }
     return true;
   }
+  // 按家族归组 (一族一项·各档收于 members·活跃档单列) · 朴散则为器
+  function _rpGroup() {
+    var groups = [];
+    var byFam = {};
+    for (var i = 0; i < _rpModels.length; i++) {
+      var m = _rpModels[i];
+      var fu = m.familyUid || ('__solo__' + m.id);
+      if (!byFam[fu]) {
+        byFam[fu] = { familyUid: fu, familyLabel: m.familyLabel || m.label || m.id, members: [], active: null };
+        groups.push(byFam[fu]);
+      }
+      byFam[fu].members.push(m);
+      if (m.activeTier) byFam[fu].active = m;
+    }
+    for (var g = 0; g < groups.length; g++)
+      if (!groups[g].active) groups[g].active = groups[g].members[0];
+    return groups;
+  }
+  function _rpDot(c) { return c === 'green' ? '🟢' : (c === 'red' ? '🔴' : '🟡'); }
+  function _rpTierName(m) { return (m.tier && m.tier !== 'base') ? m.tier : m.id; }
   function _rpRenderList() {
     var list = _rpEl('rpModelList');
     if (!list) return;
@@ -6015,37 +6037,88 @@ function getEaConfigHtml(port, nonce) {
       list.innerHTML = '<div style="opacity:0.55;padding:8px">暂无模型 · 反代未运行或目录未加载。</div>';
       return;
     }
+    var groups = _rpGroup();
     var html = '';
-    var shown = 0;
-    for (var i = 0; i < _rpModels.length; i++) {
-      var m = _rpModels[i];
-      if (!_rpMatch(m)) continue;
-      shown++;
-      var dot = _RP_DOT[m.color] || '#888';
-      var via = m.dao_route ? ('→ ' + m.dao_route.provider + ' / ' + (m.dao_route.model || '')) : (m.reverse === 'official' ? '官方直通' : (m.owned_by || ''));
-      var tier = m.costTier ? String(m.costTier).replace('MODEL_COST_TIER_', '') : '';
-      var badge = m.free ? '<span style="font-size:9px;color:#3fb950;border:1px solid #3fb950;border-radius:3px;padding:0 3px;margin-left:4px">免费</span>' : (tier ? '<span style="font-size:9px;opacity:0.6;margin-left:4px">' + _rpEsc(tier) + '</span>' : '');
-      html += '<div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
-        + '<span title="' + _rpEsc(m.note || '') + '" style="flex:none;width:8px;height:8px;border-radius:50%;background:' + dot + '"></span>'
-        + '<code style="font-weight:600">' + _rpEsc(m.id) + '</code>' + badge
-        + '<span style="opacity:0.55;font-size:10px">· ' + _rpEsc(m.provider || m.owned_by || '') + '</span>'
-        + '<span style="opacity:0.5;font-size:10px;margin-left:auto;white-space:nowrap">' + _rpEsc(via) + '</span></div>';
+    var shownFams = 0;
+    var shownModels = 0;
+    for (var i = 0; i < groups.length; i++) {
+      var f = groups[i];
+      var matched = [];
+      for (var j = 0; j < f.members.length; j++)
+        if (_rpMatch(f.members[j])) matched.push(f.members[j]);
+      if (!matched.length) continue;
+      shownFams++;
+      shownModels += f.members.length;
+      var multi = f.members.length > 1;
+      if (multi) {
+        var act = f.active;
+        var dot = _RP_DOT[act.color] || '#888';
+        var via = act.dao_route ? ('→ ' + act.dao_route.provider) : (act.reverse === 'official' ? '官方直通' : (act.owned_by || ''));
+        var opts = '';
+        for (var k = 0; k < f.members.length; k++) {
+          var mb = f.members[k];
+          opts += '<option value="' + _rpEsc(mb.id) + '"' + (mb === act ? ' selected' : '') + '>'
+            + _rpDot(mb.color) + ' ' + _rpEsc(_rpTierName(mb)) + (mb.free ? ' · 免费' : '') + '</option>';
+        }
+        html += '<div style="display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
+          + '<span title="' + _rpEsc(act.note || '') + '" style="flex:none;width:8px;height:8px;border-radius:50%;background:' + dot + '"></span>'
+          + '<b style="font-size:11px">' + _rpEsc(f.familyLabel) + '</b>'
+          + '<span style="opacity:0.45;font-size:9px">' + f.members.length + '档</span>'
+          + '<select class="rp-tier" data-fam="' + _rpEsc(f.familyUid) + '" title="热切换该家族当前反代档位" style="flex:1;min-width:90px;max-width:200px;font-size:10px;padding:1px 3px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-dropdown-background,rgba(0,0,0,0.2));color:var(--vscode-dropdown-foreground,var(--vscode-foreground));outline:none">' + opts + '</select>'
+          + '<span style="opacity:0.45;font-size:9px;margin-left:auto;white-space:nowrap">' + _rpEsc(via) + '</span></div>';
+      } else {
+        var m = f.members[0];
+        var d1 = _RP_DOT[m.color] || '#888';
+        var via1 = m.dao_route ? ('→ ' + m.dao_route.provider + ' / ' + (m.dao_route.model || '')) : (m.reverse === 'official' ? '官方直通' : (m.owned_by || ''));
+        var tier = m.costTier ? String(m.costTier).replace('MODEL_COST_TIER_', '') : '';
+        var badge = m.free ? '<span style="font-size:9px;color:#3fb950;border:1px solid #3fb950;border-radius:3px;padding:0 3px;margin-left:4px">免费</span>' : (tier ? '<span style="font-size:9px;opacity:0.6;margin-left:4px">' + _rpEsc(tier) + '</span>' : '');
+        html += '<div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
+          + '<span title="' + _rpEsc(m.note || '') + '" style="flex:none;width:8px;height:8px;border-radius:50%;background:' + d1 + '"></span>'
+          + '<code style="font-weight:600">' + _rpEsc(m.id) + '</code>' + badge
+          + '<span style="opacity:0.55;font-size:10px">· ' + _rpEsc(m.provider || m.owned_by || '') + '</span>'
+          + '<span style="opacity:0.5;font-size:10px;margin-left:auto;white-space:nowrap">' + _rpEsc(via1) + '</span></div>';
+      }
     }
-    _rpSetText('rpModelCount', '(' + shown + '/' + _rpModels.length + ')');
+    _rpSetText('rpModelCount', '(' + shownFams + '族/' + shownModels + '档)');
     list.innerHTML = html || '<div style="opacity:0.55;padding:8px">无匹配模型。</div>';
+    var sels = list.querySelectorAll('.rp-tier');
+    for (var s = 0; s < sels.length; s++) {
+      (function (el) {
+        el.addEventListener('change', function () { _rpSetTier(el.getAttribute('data-fam'), el.value); });
+      })(sels[s]);
+    }
+  }
+  function _rpSetTier(fam, uid) {
+    if (!fam || !uid) return;
+    _rpSetText('rpStat', '切换档位…');
+    fPost('/origin/revproxy/tier', { familyUid: fam, modelUid: uid }).then(function () { _rpRefresh(); }).catch(function (e) { _rpSetText('rpStat', '档位切换失败: ' + e.message); });
   }
   function _rpFillSelect() {
     var sel = _rpEl('rpTestModel');
     if (!sel) return;
     var prev = sel.value;
     sel.innerHTML = '';
-    for (var k = 0; k < _rpModels.length; k++) {
-      var m = _rpModels[k];
-      var o = document.createElement('option');
-      o.value = m.id;
-      var dot = m.color === 'green' ? '🟢' : (m.color === 'red' ? '🔴' : '🟡');
-      o.textContent = dot + ' ' + m.id + (m.free ? ' (免费)' : '');
-      sel.appendChild(o);
+    var groups = _rpGroup();
+    for (var i = 0; i < groups.length; i++) {
+      var f = groups[i];
+      if (f.members.length > 1) {
+        var og = document.createElement('optgroup');
+        og.label = f.familyLabel;
+        for (var k = 0; k < f.members.length; k++) {
+          var m = f.members[k];
+          var o = document.createElement('option');
+          o.value = m.id;
+          o.textContent = _rpDot(m.color) + ' ' + _rpTierName(m) + (m === f.active ? ' ★活跃' : '') + (m.free ? ' (免费)' : '');
+          og.appendChild(o);
+        }
+        sel.appendChild(og);
+      } else {
+        var m0 = f.members[0];
+        var o0 = document.createElement('option');
+        o0.value = m0.id;
+        o0.textContent = _rpDot(m0.color) + ' ' + m0.id + (m0.free ? ' (免费)' : '');
+        sel.appendChild(o0);
+      }
     }
     if (prev) sel.value = prev;
   }
