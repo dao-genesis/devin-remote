@@ -306,8 +306,10 @@
       a=a||{}; var perAcc=a.perAcc||6, max=a.max||40, conc=Math.max(1, a.conc||6);
       var accs=loadAcc(), unlocked=[];
       for(var i=0;i<accs.length;i++){ if(accs[i].auth1&&accs[i].orgId) unlocked.push({a:accs[i],no:i+1}); }
-      var all=[], idx=0;
-      async function worker(){ while(idx<unlocked.length){ var u=unlocked[idx++];
+      // 道法自然·轻则通: 早退机制 — 已收集足够活跃对话即停(max×2 为安全余量含去重),
+      //   避免 200+ 账号全遍历(每号一次 API 调用, conc:4 → 50+ 轮 → 远超中继 15s 超时)。
+      var all=[], idx=0, _stop=false;
+      async function worker(){ while(!_stop && idx<unlocked.length){ var u=unlocked[idx++];
         try{ var r=await DaoCloud.listSessions(u.a, perAcc);
           if(r&&r.ok&&r.sessions){ r.sessions.forEach(function(s){
             // 账号级额度对账(单一真源·正本清源): 用账号实时额度纠偏陈旧会话原因, 满额号绝不误标额度耗尽。
@@ -319,6 +321,7 @@
               t:(DaoCloud.sessTs?DaoCloud.sessTs(s):0) });
           }); }
         }catch(e){}
+        if(all.length >= max*2) _stop=true;
       } }
       var ws=[], cc=Math.min(conc, unlocked.length||1); for(var c=0;c<cc;c++) ws.push(worker()); await Promise.all(ws);
       all.sort(function(x,y){ return y.t-x.t; });

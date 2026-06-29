@@ -872,7 +872,7 @@ function _deviceRecentRefresh(force){
   // 看门狗(知止不殆·绝利一源): 中继若久悬不决(promise 既不 resolve 也不 reject·弱网/手机后台积压所致),
   //   _devRecentBusy 会永卡 true → 此后每轮刷新在第 855 行直接 return → _trk 冻结, 网页与手机彻底失同步
   //   (正是「久不识别/滞后」之根)。故设独立硬期限, 到点无条件解锁, 保刷新永不被单次悬挂永久拖死。
-  var _rbWatch=setTimeout(function(){ _devRecentBusy=false; try{ _restoreTrkFromVault(); }catch(_e){} }, 22000);
+  var _rbWatch=setTimeout(function(){ _devRecentBusy=false; try{ _restoreTrkFromVault(); }catch(_e){} }, 30000);
   function _rbDone(){ try{ clearTimeout(_rbWatch); }catch(_e){} _devRecentBusy=false; }
   // 渐进式轻量化(道法自然·轻则通·重则滞):
   //   首选 max:30 perAcc:2 (仅活跃对话·响应 <5KB 适穿中继/mesh); 若中继 413(载荷过大) 再降级 max:10。
@@ -888,11 +888,11 @@ function _deviceRecentRefresh(force){
     try{ _saveTrkLocalOnly(); }catch(_e){}
     try{ paintTrk(); paintRowRun(); _repushTabsFromTrk(); }catch(_e){}
   }
-  P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:2, max:30, conc:4 }, 15000).then(function(res){
+  P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:2, max:30, conc:6 }, 25000).then(function(res){
     var b=res&&res.body;
     if(res && res.status===413){
       // 载荷仍过大 → 再次降级: 仅取 10 条(约 2KB, 穿越任何中继)
-      P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:1, max:10, conc:2 }, 12000).then(function(r2){
+      P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:1, max:10, conc:2 }, 18000).then(function(r2){
         _rbDone(); var b2=r2&&r2.body;
         if(!b2||!b2.ok||!Array.isArray(b2.list)){ _restoreTrkFromVault(); return; }
         _applyFresh(b2);
