@@ -745,6 +745,8 @@ html.m #hint{font-size:14px;padding:18px}
       <option value="https://www.google.com/search?q=">Google</option>
       <option value="https://duckduckgo.com/?q=">DuckDuckGo</option>
       <option value="https://www.baidu.com/s?wd=">百度</option>
+      <option value="https://search.yahoo.com/search?p=">Yahoo</option>
+      <option value="https://www.sogou.com/web?query=">搜狗</option>
     </select>
     <button class="tbtn" id="bZo" title="缩小">A−</button>
     <span id="zlbl" title="点击复位 100%">100%</span>
