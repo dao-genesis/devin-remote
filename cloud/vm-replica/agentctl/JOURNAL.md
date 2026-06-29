@@ -7882,3 +7882,54 @@ confirms the default whole-frame path is byte-for-byte unchanged (both regions,
 count 50 / 2 blobs) while `search=` returns only the inside region (count 25 /
 1 blob @ the right centroid). `narrow the field first` now holds on all three
 channels — colour, template, and change.
+
+---
+
+> 名與身孰親。 A window's *name* is the cheapest way to know it, but when the
+> name is empty and the coordinates lie, only its *size* still tells the truth.
+
+## F243 — a modal dialog was unreachable because its accessible extents lied
+
+Stress-testing a turn-based, **modal** GUI (gnome-chess): play a move, then hit
+Ctrl+N — gnome-chess raises a *"Save this game before starting a new one?"*
+dialog with `Cancel / Abandon game / Save game for later`. A closed-loop agent
+must read that dialog and press a button to proceed. `list_windows` showed the
+dialog as a new top-level (id `…043`, empty title), but every semantic verb on
+it lied: `uia_children(dialog)` returned the **main board's** tree (`ChessView`,
+`White to Move`, the move-history combobox), `uia_find(dialog, name='Abandon
+game')` returned `None`, and a scan of *every* window's accessible tree for the
+button names found **nothing**. The blocking modal was invisible to the entire
+semantic layer — an agent could only fall back to blind pixels.
+
+The cause is in `_atspi_frame_for` (the X-window→AT-SPI-frame bridge). One app
+(gnome-chess, one pid) owns two frames — the `frame "White to Move"` and the
+`dialog ""` — and the resolver disambiguates same-pid frames by *screen-geometry
+IoU* between the X window's rect and each frame's accessible extents. But
+gnome-chess reports **both** frames' extents at window-local origin `(0,0)`
+(main `(0,0,700,550)`, dialog `(0,0,489,60)`) even though `_acc_rect` asks for
+`ATSPI_COORD_SCREEN` — a real CSD/compositor quirk. So IoU is `0` for every
+frame, the geometry signal collapses, and the resolver fell through to its blind
+fallback: `cands[0]` — the *first* same-pid frame, i.e. the main board. The
+dialog query silently read the wrong window.
+
+**Fix** (`_osbackend_x11._atspi_frame_for`). When IoU can't decide (best `< 0.25`),
+disambiguate by **size** before the blind fallback: the X window's `(w,h)` still
+matches its accessible frame's `(w,h)` even when the origin is bogus (a `489×60`
+dialog window vs a `700×550` main frame). Pick the frame whose `(w,h)` is closest
+to the X window's, accepting it only within a tolerance (`max(16, dim·0.12)`, so
+window-manager decoration offsets are absorbed). The IoU path and the exact-title
+short-circuit are untouched, so well-behaved apps are unaffected.
+
+**Proof.**  *Live gnome-chess*, same open modal, after the fix:
+`uia_children(dialog)` returns the label *"Save this game before starting a new
+one?"* and the three push buttons; `uia_find(dialog, name='Cancel')` →
+`rect (17,31,…)`; `uia_find(dialog, name='Abandon game')` → `rect (180,31,…)`;
+`uia_invoke(dialog, name='Cancel')` → `True` and the dialog window vanishes —
+the modal is now driven end-to-end through the semantic floor. The main window
+still resolves to the board (no regression). *Synthetic* (`_test_f243.py`,
+pure-Python, no live AT-SPI): models one pid with a `700×550` main and a
+`489×60` dialog frame both at origin `(0,0)`; asserts the dialog window resolves
+to the dialog frame and the main window to the main frame; a second scenario
+with real screen-coord extents confirms the IoU path still wins, and a third
+confirms the exact-title short-circuit still fires. Without the fix the
+dialog-window assertion fails (it resolves to `cands[0]`, the board).
