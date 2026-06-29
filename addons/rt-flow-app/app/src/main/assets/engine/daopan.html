@@ -92,7 +92,7 @@ var CONV_ACTIVE = -1;
 var _busy = false, _bkLoaded = false;
 var _accSess = Object.create(null); // accId -> [item] 每账号最近会话缓存(增量合并)
 var _rot = 0, _seeded = false;
-var CONC = 6, PERACC = 6, BATCH = 16, MAXREC = 40, CACHE_KEY = "rtflow.recentConv", CACHE_TTL = 45000;
+var CONC = 6, PERACC = 6, BATCH = 16, MAXREC = 40, MAXREC_STEP = 40, CACHE_KEY = "rtflow.recentConv", CACHE_TTL = 45000;
 function _accId(a){ return (a&&(a.id||a.email))||""; }
 function _statusOf(s){ try{ if(window.DaoCloud&&DaoCloud.sessStatus) return DaoCloud.sessStatus(s); }catch(e){} return ["",""]; }
 function _itemOf(a,no,s){ var st=_statusOf(s); return { acc:a, no:no, sid:sidOf(s), title:titleOf(s), status:(s.status_enum||s.status||s.state||""), cls:st[0]||"", label:st[1]||"", t:recencyMs(s), s:s }; }
@@ -103,12 +103,17 @@ async function _pool(items, conc, fn){
   var ws=[]; for(var c=0;c<conc;c++) ws.push(w()); await Promise.all(ws);
 }
 // 重建 REC: 平铺所有账号缓存 → 按时间降序 → 按 sid 去重 → 取前 MAXREC
+var _totalAvail=0; // 去重后总可用条数(用于判断是否还有更多)
 function _rebuild(){
   var all=[]; for(var k in _accSess){ var arr=_accSess[k]; if(arr) for(var i=0;i<arr.length;i++) all.push(arr[i]); }
   all.sort(function(x,y){ return y.t-x.t; });
   var seen=Object.create(null), out=[];
   for(var j=0;j<all.length;j++){ var id=all[j].sid; if(id&&seen[id])continue; if(id)seen[id]=1; out.push(all[j]); }
+  _totalAvail=out.length;
   REC=out.slice(0, MAXREC);
+}
+function loadMore(){
+  MAXREC+=MAXREC_STEP; _rebuild(); renderRecent(); _saveCache();
 }
 function _saveCache(){
   try{ localStorage.setItem(CACHE_KEY, JSON.stringify({ ts:Date.now(), list:REC.slice(0,MAXREC).map(function(it){ return {accId:_accId(it.acc),accEmail:(it.acc&&it.acc.email)||"",no:it.no,sid:it.sid,title:it.title,status:it.status,cls:it.cls,label:it.label,t:it.t}; }) })); }catch(e){}
@@ -262,6 +267,10 @@ function renderRecent(){
         '<span class="b pri" onclick="dlZip('+idx+')">&#128230; 全部文件</span>'+
       '</div></div>';
   });
+  // 翻页: 当去重后总数 > 当前 MAXREC 且未过滤时, 显示「加载更多」按钮
+  if(!q && _totalAvail > MAXREC){
+    html+='<div style="text-align:center;padding:12px 0"><button class="mini" onclick="loadMore()" style="padding:8px 18px;font-size:13px">加载更多 (当前 '+REC.length+' / 共 '+_totalAvail+')</button></div>';
+  }
   box.innerHTML = html || '<div class="empty">无匹配 · 清空搜索查看全部</div>';
   bindCards();
 }
@@ -359,6 +368,7 @@ function openAcc(idx){
   try{
     if(N.openAccountSession){ N.openAccountSession(JSON.stringify(it.acc), it.sid); }
     else if(N.openEntryNewTab){ N.openEntryNewTab(JSON.stringify(it.acc), web); }
+    else if(IS_WEB){ parent.postMessage({__rtflow:"openDevin", url:web, acct:it.acc.email||it.acc.id||"", title:it.title||it.sid}, "*"); }
     else { toast("当前版本不支持 · 请更新 APK",true); return; }
     toast("已切到 "+((it.acc.email||it.acc.id||"").split("@")[0])+" · 打开网页对话");
   }catch(e){ toast("打开失败",true); }
@@ -402,21 +412,35 @@ function renderConvTabs(){
 }
 function cvDl(ti){ var t=CONV_TABS[ti]; if(!t){ toast("无内容",true); return; }
   if(!t.md){ toast("对话为空, 重新提取…"); loadConvMd(ti).then(function(){ if(CONV_TABS[ti]&&CONV_TABS[ti].md) cvDl(ti); else toast("提取失败",true); }); return; }
-  try{ if(!N.saveTextFile){ toast("当前版本不支持下载 · 请更新 APK",true); return; }
-    var p=N.saveTextFile(safeName(t.title||t.sid)+".md", t.md);
-    toast(p?"✓ 已存入系统「下载/DevinCloud」, 文件管理器可见":"下载失败", !p);
+  var fn=safeName(t.title||t.sid)+".md";
+  try{
+    if(N.saveTextFile){ var p=N.saveTextFile(fn, t.md); toast(p?"✓ 已存入系统「下载/DevinCloud」, 文件管理器可见":"下载失败", !p); }
+    else if(IS_WEB){ _webSaveText(fn, t.md||"")?toast("✓ 已下载: "+fn):toast("下载失败",true); }
+    else { toast("当前版本不支持下载 · 请更新 APK",true); }
   }catch(e){ toast("下载失败",true); } }
 function cvZip(ti){ var t=CONV_TABS[ti]; if(!t) return; var idx=-1; for(var i=0;i<REC.length;i++){ if(REC[i].sid===t.sid){ idx=i; break; } } if(idx>=0) dlZip(idx); else toast("该对话已不在近期列表",true); }
 
+// 网页端 blob 下载兜底 (APK 用 N.saveTextFile, 网页端用 <a> blob 触发浏览器下载)
+function _webSaveText(fn, text){
+  try{ var b=new Blob([text],{type:"text/plain;charset=utf-8"}); var u=URL.createObjectURL(b);
+    var a=document.createElement("a"); a.href=u; a.download=fn; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u); return true;
+  }catch(e){ return false; }
+}
+function _webSaveBase64(fn, b64, mime){
+  try{ var s=atob(b64); var u8=new Uint8Array(s.length); for(var i=0;i<s.length;i++) u8[i]=s.charCodeAt(i);
+    var b=new Blob([u8],{type:mime||"application/octet-stream"}); var u=URL.createObjectURL(b);
+    var a=document.createElement("a"); a.href=u; a.download=fn; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u); return true;
+  }catch(e){ return false; }
+}
 async function dlMd(idx){
   var it=REC[idx]; if(!it) return; toast("下载 MD…");
   try{
     var r=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
     if(!r.ok){ toast("提取失败: "+(r.error||""),true); return; }
     var fn=it.no+"_"+safeName(it.acc.email||it.acc.id)+"_"+safeName(r.title||it.sid)+".md";
-    if(!N.saveTextFile){ toast("当前版本不支持下载 · 请更新 APK",true); return; }
-    var p=N.saveTextFile(fn, r.md);
-    toast(p?"✓ 已存入系统「下载/DevinCloud」, 文件管理器可见":"下载失败", !p);
+    if(N.saveTextFile){ var p=N.saveTextFile(fn, r.md); toast(p?"✓ 已存入系统「下载/DevinCloud」, 文件管理器可见":"下载失败", !p); }
+    else if(IS_WEB){ _webSaveText(fn, r.md||"")?toast("✓ 已下载: "+fn):toast("下载失败",true); }
+    else { toast("当前版本不支持下载 · 请更新 APK",true); }
   }catch(e){ toast("异常: "+e,true); }
 }
 async function dlZip(idx){
@@ -441,7 +465,10 @@ async function dlZip(idx){
     var zipName=it.no+"_"+safeName(it.acc.email||it.acc.id)+"_"+safeName(it.title||it.sid)+".zip";
     var b64=window.buildZipBase64(files);
     var path=""; try{ path=N.saveBase64File ? N.saveBase64File(zipName, b64) : ""; }catch(e){}
-    if(!path){ files.forEach(function(f){ if(f.data==null)return; try{ N.saveTextFile && N.saveTextFile(safeName(it.title||it.sid)+"_"+f.name.replace(/\//g,"_"), f.data); }catch(e){} }); toast("✓ 已下载 "+files.length+" 个文件(逐个)"); }
+    if(!path && IS_WEB){
+      if(_webSaveBase64(zipName, b64, "application/zip")) toast("✓ 已打包 "+files.length+" 文件 → "+zipName);
+      else { files.forEach(function(f){ if(f.data==null)return; _webSaveText(safeName(it.title||it.sid)+"_"+f.name.replace(/\//g,"_"), f.data); }); toast("✓ 已下载 "+files.length+" 个文件(逐个)"); }
+    } else if(!path){ files.forEach(function(f){ if(f.data==null)return; try{ N.saveTextFile && N.saveTextFile(safeName(it.title||it.sid)+"_"+f.name.replace(/\//g,"_"), f.data); }catch(e){} }); toast("✓ 已下载 "+files.length+" 个文件(逐个)"); }
     else toast("✓ 已打包 "+files.length+" 文件 → "+zipName);
   }catch(e){ toast("打包异常: "+e,true); }
 }
