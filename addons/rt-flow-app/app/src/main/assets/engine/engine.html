@@ -277,7 +277,10 @@
       // 额度耗尽官方信号 (逆流 latest_status_contents.reason, 与 switch.html QUOTA_RE 同源·正本清源)
       var QUOTA_RE=/out_of_quota|usage_limit|insufficient|overage|exceeded|\bquota\b|out of (acu|credit)|credit.*exhaust|no.*credit/i;
       var accs=loadAcc().filter(function(x){return x.auth1&&x.orgId;}); var hits=[];
-      for(var i=0;i<accs.length;i++){ try{ var r=await DaoCloud.listSessions(accs[i], 50); if(!r.ok)continue;
+      // 单账号会话扫描 → 推入 hits (与 switch.html _pollOneAcc 同构, 供并发池调用)。
+      async function scanAcc(acc){
+        var r; try{ r=await DaoCloud.listSessions(acc, 50); }catch(e){ return; }
+        if(!r||!r.ok) return;
         (r.sessions||[]).forEach(function(s){
           var o=lsc(s); var uar=o&&o.user_action_required;
           var actionReq=(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null");
@@ -287,7 +290,7 @@
           var reason="";
           // 账号级额度对账: 单条会话历史 reason=out_of_quota 只是其当时休眠原因; 账号此刻仍有可用额度(quotaLive===true)
           //   → 不算耗尽(归完成·不报警·不通知)。真耗尽/未知才保留官方信号。根治满额号被误报「额度已耗尽」。
-          var _qLive=(DaoCloud.quotaLive?DaoCloud.quotaLive(accs[i].quota):null);
+          var _qLive=(DaoCloud.quotaLive?DaoCloud.quotaLive(acc.quota):null);
           if(QUOTA_RE.test(qsig) && _qLive!==true) reason="quota";
           else if(actionReq) reason="action_required";
           else if(/error|failed|crash|stuck|interrupt|abort|disconnect|timeout/.test(String((o&&o.reason)||"").toLowerCase())) reason="blocked";
@@ -295,9 +298,15 @@
           else if(/await|wait|ask|question|input|need/.test(en) || /wait.*input|wait.*user|need.*input|user.*action|await|asking/i.test(String((o&&o.reason)||""))) reason="awaiting";
           else if(/block|stuck|fail|error|interrupt|abort|disconnect|timeout/.test(en)) reason="blocked";
           else if(/run|working|active|execut/.test(en) && !/finish|complet|suspend|stopped|expired|archiv|cancel/.test(en)) reason="running";
-          if(reason){ hits.push({email:accs[i].email,sid:s.devin_id||s.session_id||s.id,title:(s.title||"").slice(0,50),status:en,reason:reason,actionRequired:actionReq,actionLabel:(actionReq&&typeof uar==="string")?uar:undefined}); }
+          if(reason){ hits.push({email:acc.email,sid:s.devin_id||s.session_id||s.id,title:(s.title||"").slice(0,50),status:en,reason:reason,actionRequired:actionReq,actionLabel:(actionReq&&typeof uar==="string")?uar:undefined}); }
         });
-      }catch(e){} }
+      }
+      // 道法自然·并发池(6路, 与 switch.html pollTrk / recentConvAll 同源): 200+ 账号若逐号串行
+      //   (每号一次 listSessions)→ 50+ 轮远超中继超时, 且 engine 后台 convwatch tick 永不在 POLL_MS 内完成
+      //   → 系统通知饿死(用户「消息提示都没有」之根因)。全账号仍全扫(通知一号都不可漏), 完成时延降一个量级。
+      var idx=0, conc=Math.min(6, accs.length||1);
+      async function worker(){ while(idx<accs.length){ var acc=accs[idx++]; try{ await scanAcc(acc); }catch(e){} } }
+      var ws=[]; for(var w=0;w<conc;w++) ws.push(worker()); await Promise.all(ws);
       var need=hits.filter(function(h){return h.reason==="action_required"||h.reason==="blocked";});
       return {ok:true, count:hits.length, actionRequired:need.length, needAttention:need, sessions:hits};
     },
