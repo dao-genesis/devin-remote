@@ -634,19 +634,22 @@ def uia_context(win: int, target: str, *path: str, ctype=None, pause: float = 0.
 
 
 def uia_file_dialog_set_path(dialog_wid: int, path: str, pause: float = 0.5) -> bool:
-    """Set the file path in an open/save file dialog, handling both KDE and GTK
-    toolkits automatically.
+    """Set the file path in an open/save file dialog, handling KDE, GTK, and
+    Xfce toolkits automatically.
 
     F223: GTK file choosers (GIMP, LibreOffice, gedit) don't expose a file-name
     entry by default — the entry only appears after pressing ``/`` (slash) which
     switches to the location-bar mode.  KDE file dialogs (KWrite, Kate, Dolphin)
     expose ``name='File name:'`` with ``ctype='edit'`` directly.
 
+    F227: GNOME GTK3 file dialogs use Ctrl+L for the location bar (not ``/``).
+    Xfce/Mousepad file dialogs have an unnamed Name field at the dialog top.
+
     Strategy:
     1. Try KDE: ``uia_set_value(dialog, path, name='File name:', ctype='edit')``
-    2. If no KDE edit found, try GTK: ``tap(0xBF)`` (``/``) to activate location
-       bar, then ``uia_set_value(dialog, path, ctype='edit')``
-    3. Falls back to ``paste_text`` if ``uia_set_value`` fails.
+    2. Try Ctrl+L (GNOME GTK3) to activate location bar, then type path
+    3. Try ``/`` (older GTK) to activate location bar
+    4. Falls back to ``paste_text`` in the focused field.
 
     Returns True iff the path was set (caller should press Enter or click
     Open/Save to commit)."""
@@ -655,17 +658,22 @@ def uia_file_dialog_set_path(dialog_wid: int, path: str, pause: float = 0.5) -> 
     if ok:
         return True
 
-    # GTK file dialog: activate location bar with "/" key
-    # (tap 0xBF = VK_OEM_2 = "/" on US layout, mapped by F223)
-    tap(0xBF)
+    # F227: Try Ctrl+L (GNOME GTK3 / Xfce location bar activation)
+    chord(0x11, 0x4C)  # Ctrl+L
     time.sleep(pause)
-
-    # After "/", a new Edit field should appear
     ok2 = uia_set_value(dialog_wid, path, ctype="edit")
     if ok2:
         return True
 
-    # Last resort: Ctrl+A then paste
+    # GTK file dialog: activate location bar with "/" key
+    # (tap 0xBF = VK_OEM_2 = "/" on US layout, mapped by F223)
+    tap(0xBF)
+    time.sleep(pause)
+    ok3 = uia_set_value(dialog_wid, path, ctype="edit")
+    if ok3:
+        return True
+
+    # Last resort: Ctrl+A then paste into whatever is focused
     chord(0xA2, 0x41)
     time.sleep(0.1)
     paste_text(path)
