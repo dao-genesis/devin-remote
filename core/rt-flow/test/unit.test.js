@@ -936,6 +936,9 @@ function test(name, fn) {
       assert.ok(/function pollLoop\(\)/.test(src) && /function startPoll\(\)/.test(src), r + ": 客户端须有 pollLoop/startPoll 回退");
       assert.ok(/\/api\/shell\/poll\?sid=/.test(src), r + ": 客户端须打 /api/shell/poll?sid=");
       assert.ok(/if\(m\._q<=lastSeq\)return;lastSeq=m\._q;/.test(src), r + ": 客户端须按 _q 跨通道去重");
+      // 宿主重启 → _q 归零 → 客户端 lastSeq 远超 → 旧逻辑恒丢新消息致整页假死。
+      // 正法: pollLoop 见服务端 j.last < lastSeq(序号回退=宿主重启) → lastSeq=0 重同步。
+      assert.ok(/if\(typeof j\.last==='number'&&j\.last<lastSeq\)\{lastSeq=0;\}/.test(src), r + ": pollLoop 须检测序号回退(宿主重启)并重置 lastSeq=0 (防整页假死)");
       assert.ok(/if\(!gotAny\)startPoll\(\)/.test(src), r + ": SSE 无字节须自动转长轮询");
       // 导出: shellAttach (SSE) + shellPoll (长轮询)
       assert.ok(/shellPoll: _shellPoll/.test(src), r + ": 须导出 shellPoll");
