@@ -645,11 +645,18 @@ def uia_file_dialog_set_path(dialog_wid: int, path: str, pause: float = 0.5) -> 
     F227: GNOME GTK3 file dialogs use Ctrl+L for the location bar (not ``/``).
     Xfce/Mousepad file dialogs have an unnamed Name field at the dialog top.
 
+    F228: Xfce GTK dialogs (Mousepad) expose the **parent window's** AT-SPI
+    tree, not the dialog's own elements.  ``uia_set_value`` after Ctrl+L
+    therefore targets the document text area instead of the location bar
+    entry.  Fix: after Ctrl+L, type directly into the focused location bar
+    via ``paste_text`` instead of searching for an Edit element.
+
     Strategy:
     1. Try KDE: ``uia_set_value(dialog, path, name='File name:', ctype='edit')``
-    2. Try Ctrl+L (GNOME GTK3) to activate location bar, then type path
-    3. Try ``/`` (older GTK) to activate location bar
-    4. Falls back to ``paste_text`` in the focused field.
+    2. Try Ctrl+L (GNOME GTK3) → ``uia_set_value`` on a *small* edit field
+    3. If no small edit found, Ctrl+L again → ``paste_text`` directly
+    4. Try ``/`` (older GTK) → same approach
+    5. Falls back to ``paste_text`` in the focused field.
 
     Returns True iff the path was set (caller should press Enter or click
     Open/Save to commit)."""
@@ -658,26 +665,34 @@ def uia_file_dialog_set_path(dialog_wid: int, path: str, pause: float = 0.5) -> 
     if ok:
         return True
 
+    # F228: Detect whether the dialog has its own *small* Edit element
+    # (a filename entry, not a huge document text area).  A location-bar
+    # entry is typically < 200 px tall; a document editor is > 300 px.
+    def _has_small_edit(wid: int) -> bool:
+        els = uia_find_all(wid, max_scan=400)
+        for e in els:
+            if e.get("type") == "Edit" and e.get("rect"):
+                _, _, _, h = e["rect"]
+                if h < 200:
+                    return True
+        return False
+
     # F227: Try Ctrl+L (GNOME GTK3 / Xfce location bar activation)
     chord(0x11, 0x4C)  # Ctrl+L
     time.sleep(pause)
-    ok2 = uia_set_value(dialog_wid, path, ctype="edit")
-    if ok2:
-        return True
-
-    # GTK file dialog: activate location bar with "/" key
-    # (tap 0xBF = VK_OEM_2 = "/" on US layout, mapped by F223)
-    tap(0xBF)
-    time.sleep(pause)
-    ok3 = uia_set_value(dialog_wid, path, ctype="edit")
-    if ok3:
-        return True
-
-    # Last resort: Ctrl+A then paste into whatever is focused
-    chord(0xA2, 0x41)
+    if _has_small_edit(dialog_wid):
+        ok2 = uia_set_value(dialog_wid, path, ctype="edit")
+        if ok2:
+            return True
+    # F228: No small edit → the dialog's location bar isn't in AT-SPI.
+    # Ctrl+L gave it focus, so type directly into the focused widget.
+    # Use type_unicode (key events) rather than paste_text (Ctrl+V) to
+    # ensure keystrokes reach the focused location-bar entry, not the
+    # Name field or file-browser area.
+    chord(0x11, 0x41)  # Ctrl+A to select any pre-filled text
     time.sleep(0.1)
-    paste_text(path)
-    time.sleep(0.2)
+    type_unicode(path)
+    time.sleep(0.3)
     return True
 
 
