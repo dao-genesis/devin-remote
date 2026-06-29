@@ -2686,6 +2686,25 @@ def _ocr_engine() -> str:
     return _OCR_ENGINE
 
 
+def _clamp_region(rx: int, ry: int, rw: int, rh: int,
+                  fw: int, fh: int, orig) -> "tuple[int, int, int, int]":
+    """Clamp ``(rx,ry,rw,rh)`` to the ``fw``x``fh`` frame; raise on an empty one.
+
+    A crop computed by insetting a cell by a fixed margin can run off the frame
+    (a margin wider than a small cell makes width negative, the F237 trap) or
+    sit past a screen edge. Trim it to what is actually on the frame and reject
+    only a region with nothing left, with a message that names the offender —
+    never a downstream ``bytearray(negative)`` crash."""
+    x0 = min(max(rx, 0), fw)
+    y0 = min(max(ry, 0), fh)
+    x1 = min(max(rx + rw, 0), fw)
+    y1 = min(max(ry + rh, 0), fh)
+    if x1 <= x0 or y1 <= y0:
+        raise ValueError(
+            f"ocr_text region is empty after clamping to {fw}x{fh}: {orig!r}")
+    return x0, y0, x1 - x0, y1 - y0
+
+
 def ocr_text(region: "tuple[int, int, int, int] | None" = None,
              whitelist: "str | None" = None, psm: int = 7,
              scale: int = 3, invert: bool = False,
@@ -2741,6 +2760,10 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
             raise ValueError("size required when rgb is provided")
         fw, fh = size
         rx, ry, rw, rh = region
+        # A computed crop (a cell inset by a fixed margin) can land partly or
+        # wholly off the frame — clamp to the frame and reject only a truly
+        # empty region with a clear message, never crash on a negative bytearray.
+        rx, ry, rw, rh = _clamp_region(rx, ry, rw, rh, fw, fh, region)
         buf = bytearray(rw * rh * 3)
         for yy in range(rh):
             src = ((ry + yy) * fw + rx) * 3
@@ -2748,6 +2771,9 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
         buf = bytes(buf)
     else:
         rx, ry, rw, rh = region
+        if rw <= 0 or rh <= 0:
+            raise ValueError(
+                f"ocr_text region must have positive width/height, got {region!r}")
         _w, _h, buf = capture_rgb(rx, ry, rw, rh)
         rw, rh = _w, _h
     # greyscale + optional invert + nearest-neighbour upscale

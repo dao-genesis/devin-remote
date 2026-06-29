@@ -8193,3 +8193,45 @@ stride 2 — paid once at calibration, not per frame (then `sample_grid` runs th
 hot path); raise `stride` to trade accuracy for speed. `sample_grid` answers
 "what is in each cell"; `detect_grid` answers "where are the cells" — together the
 floor reads a ruled grid end to end without the caller hand-coding geometry.
+
+---
+
+> 大成若缺。 A read primitive that dies on a small cell is not finished. The crop
+> a caller computes can run past the cell or the frame — clamp it, name the empty
+> one, and never let the floor crash on a negative bytearray.
+
+## F249 — ocr_text crashes opaquely on a degenerate / off-frame crop
+
+Driving gnome-mines through the floor's own player surfaced this on the very
+first read: `read_board` crashed with `ValueError: negative count` from inside
+`bytearray(rw*rh*3)`. Root: the cell-digit crop is computed by insetting a
+*fixed* pixel margin — `(cx+25, cy+20, cw-50, ch-40)` — and the live board's
+cells are **48 px**, so `cw-50 = -2`: a negative width fed straight into a
+`bytearray`. This is the F237 trap resurfacing at the floor boundary — a fixed
+margin is unportable across cell sizes, and worse, `ocr_text` met the bad region
+with an *opaque* internal crash instead of a clear contract error. Any vision
+caller that computes a crop near a frame edge or from a small cell hits this.
+
+**Fix (two layers).** *Floor*: `ocr_text` now routes every explicit region
+through `_clamp_region` — it trims the crop to the frame (a crop hanging past the
+right/bottom edge, or starting at a negative origin, reads the visible remainder
+instead of a wrong/short slice) and raises a **named** `ValueError` ("region is
+empty after clamping ...", or "must have positive width/height" on the capture
+path) only when nothing is left — never the downstream `negative count`. *Caller*
+(`_game_mines._classify`): the digit crop is inset by a *fraction* of the cell
+(`max(2,int(cw*0.25))` / `*0.20`) instead of a fixed 25/20 px, so it stays a
+sensible centred window at any cell size.
+
+**Proof.** *Synthetic* (`_test_f249.py`, pure-Python, no tesseract): a
+fully-inside region passes through unchanged; the F237 cell (48px inset 25 →
+width −2) and other non-positive crops raise a clear "empty" error instead of
+crashing; partly-off-frame crops clamp to the on-frame remainder
+(`(190,0,30,10)` on a 200-wide frame → `(190,0,10,10)`); fully-off-frame raises;
+and `ocr_text`'s capture branch rejects a non-positive region up front with
+"positive width/height" before any tesseract call. *Live* (gnome-mines, 8x8 @
+48px cells): `read_board` went from **crashing on the first cell** to reading the
+full board in ~3 s, and the floor's mines solver then **played it end to end** —
+placing 7/10 correct flags and clearing most of the board through perceive →
+deduce → click, with no crash and no mine hit (it reached the round cap before a
+full clear; convergence is solver logic, separate from this floor fix). The read
+primitive no longer has a small-cell cliff.

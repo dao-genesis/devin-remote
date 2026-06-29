@@ -50,7 +50,10 @@ def _classify(rgb, W, cx, cy, cw, ch):
     cr, cg, cb = _avg(rgb, W, cx + 4, cy + 4, cx + cw // 4, cy + ch // 4)
     if _is_unrevealed(cr, cg, cb):
         return 'F'
-    digit = osctl.ocr_text((cx + 25, cy + 20, cw - 50, ch - 40),
+    # inset the digit crop by a fraction of the cell, not a fixed pixel margin:
+    # a fixed 25/20px margin goes negative on a small (e.g. 48px) cell (F237).
+    ix = max(2, int(cw * 0.25)); iy = max(2, int(ch * 0.20))
+    digit = osctl.ocr_text((cx + ix, cy + iy, cw - 2 * ix, ch - 2 * iy),
                            whitelist='12345678', psm=10, scale=2,
                            rgb=rgb, size=(W, _CUR_H))
     digit = ''.join(c for c in digit if c.isdigit())
