@@ -591,12 +591,14 @@ function sessStatus(s){
   if(QUOTA_RE.test(reason)) return ["exhausted","额度耗尽","quota"];
   // ② 需你处理 (user_action_required 非空) — 官方权威信号, 标红醒目
   if(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null") return ["blocked","待处理","action"];
-  // ③ 卡住/报错/中断 (reason 或 enum 命中) — 补充检测: interrupted/timeout/disconnected/aborted 等中断态
-  if(/error|failed|crash|stuck|interrupt|abort|disconnect|timed? ?out|timeout/.test(reason)||/block|stuck|fail|error|interrupt|abort|disconnect|timeout/.test(en)) return ["blocked","卡住","error"];
+  // ③ reason-only 报错/中断 (仅 reason, 不含 en — 防 en="blocked" 在此处短路, 致 ③b/④ 永远跑不到)
+  if(/error|failed|crash|stuck|interrupt|abort|disconnect|timed? ?out|timeout/.test(reason)) return ["blocked","卡住","error"];
   // ③b 额度相关二次检测(reason 里写 limit/cap 但不命中主 QUOTA_RE 的变体)
   if(/limit.*reach|cap.*reach|no.*remain|depleted|no.*available|allowance/i.test(reason)) return ["exhausted","额度耗尽","quota"];
-  // ④ 待输入
-  if(/await|wait|ask|question|input|need|user/.test(en)) return ["awaiting","待输入"];
+  // ④ 待输入 — en 或 reason 命中等待/输入模式 (en="blocked"+reason="waiting for user input" 亦走此路)
+  if(/await|wait|ask|question|input|need|user/.test(en) || /wait.*input|wait.*user|need.*input|user.*action|await|asking/i.test(reason)) return ["awaiting","待输入"];
+  // ③c en-only 卡住兜底 — 仅当 reason 未命中任何具体分类时, en 的 block/stuck/error 才兜底判卡住
+  if(/block|stuck|fail|error|interrupt|abort|disconnect|timeout/.test(en)) return ["blocked","卡住","error"];
   // ⑤ 终态完成 — 再核底层各字段里是否藏额度信号(反者道之动), 命中则仍判耗尽
   if(/finish|complet|expired|suspend|stopped|archiv|cancel|exited|deleted/.test(en+" "+status)){
     if(QUOTA_RE.test(reason+" "+status+" "+act+" "+cur)) return ["exhausted","额度耗尽","quota"];
