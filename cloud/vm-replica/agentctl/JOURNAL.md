@@ -7763,3 +7763,54 @@ Regression after the change: `test_live.py --offline` 701/719 — no new failure
 ---
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
+
+## F237 — `gnome-mines` board OCR used a fixed crop that went negative on 48×48 cells
+
+**Symptom.**  On a fresh `gnome-mines` board, `_game_mines.py read` crashed before it
+could print the grid:
+
+```text
+ValueError: negative count
+```
+
+The driver was calling `ocr_text((cx + 25, cy + 20, cw - 50, ch - 40), ...)`.
+On this VM the GTK mine cells are `48×48`, so `cw - 50` and `ch - 40` underflow
+the crop.  The issue appeared only after tesseract was installed; before that the
+reader stopped earlier with the missing-binary error.
+
+**Fix** (`_game_mines.py`).  Use a crop that scales with the actual cell size:
+
+```python
+pad_x = max(4, cw // 6)
+pad_y = max(4, ch // 6)
+digit = osctl.ocr_text((cx + pad_x, cy + pad_y,
+                        max(1, cw - 2 * pad_x), max(1, ch - 2 * pad_y)),
+                       whitelist='12345678', psm=10, scale=2,
+                       rgb=rgb, size=(W, _CUR_H))
+```
+
+That keeps the OCR window safely inside the tile for both `48×48` and larger
+board geometries, and the same `read` command now prints the 8×8 grid instead of
+crashing.
+
+**Proof.**  Before the patch:
+
+```text
+ValueError: negative count
+```
+
+After the patch:
+
+```text
+. . . . . . . .
+. . .   . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+read in 0.15s
+```
+
+> 复杂 GUI 实操继续向前：先让可测、可读、可解，再谈更深的自动化。
