@@ -591,8 +591,10 @@ function sessStatus(s){
   if(QUOTA_RE.test(reason)) return ["exhausted","额度耗尽","quota"];
   // ② 需你处理 (user_action_required 非空) — 官方权威信号, 标红醒目
   if(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null") return ["blocked","待处理","action"];
-  // ③ 卡住/报错 (reason 或 enum 命中)
-  if(/error|failed|crash|stuck/.test(reason)||/block|stuck|fail|error/.test(en)) return ["blocked","卡住","error"];
+  // ③ 卡住/报错/中断 (reason 或 enum 命中) — 补充检测: interrupted/timeout/disconnected/aborted 等中断态
+  if(/error|failed|crash|stuck|interrupt|abort|disconnect|timed? ?out|timeout/.test(reason)||/block|stuck|fail|error|interrupt|abort|disconnect|timeout/.test(en)) return ["blocked","卡住","error"];
+  // ③b 额度相关二次检测(reason 里写 limit/cap 但不命中主 QUOTA_RE 的变体)
+  if(/limit.*reach|cap.*reach|no.*remain|depleted|no.*available|allowance/i.test(reason)) return ["exhausted","额度耗尽","quota"];
   // ④ 待输入
   if(/await|wait|ask|question|input|need|user/.test(en)) return ["awaiting","待输入"];
   // ⑤ 终态完成 — 再核底层各字段里是否藏额度信号(反者道之动), 命中则仍判耗尽
@@ -872,7 +874,7 @@ function _deviceRecentRefresh(force){
   // 看门狗(知止不殆·绝利一源): 中继若久悬不决(promise 既不 resolve 也不 reject·弱网/手机后台积压所致),
   //   _devRecentBusy 会永卡 true → 此后每轮刷新在第 855 行直接 return → _trk 冻结, 网页与手机彻底失同步
   //   (正是「久不识别/滞后」之根)。故设独立硬期限, 到点无条件解锁, 保刷新永不被单次悬挂永久拖死。
-  var _rbWatch=setTimeout(function(){ _devRecentBusy=false; try{ _restoreTrkFromVault(); }catch(_e){} }, 30000);
+  var _rbWatch=setTimeout(function(){ _devRecentBusy=false; try{ _restoreTrkFromVault(); }catch(_e){} }, 15000);   // 旧 30s → 15s: 中继悬挂时更快释放, 下一轮能及时重试
   function _rbDone(){ try{ clearTimeout(_rbWatch); }catch(_e){} _devRecentBusy=false; }
   // 渐进式轻量化(道法自然·轻则通·重则滞):
   //   首选 max:30 perAcc:2 (仅活跃对话·响应 <5KB 适穿中继/mesh); 若中继 413(载荷过大) 再降级 max:10。
@@ -884,15 +886,27 @@ function _deviceRecentRefresh(force){
       if(_vn && !_vault[e] && !fresh[e]){ delete _trk[e]; return; }
       if(!fresh[e]){ var c=_trk[e]; if(c && (c.total|0)>0) _trk[e]={ no:c.no, who:c.who, running:0,awaiting:0,blocked:0,exhausted:0,total:0,items:[],latest:c.latest||"",ts:now }; }
     });
+    // 状态变化即时通知(网页镜像端): 对比之前的 _trk 与 fresh, 新出现的 blocked/exhausted 立即通知
+    Object.keys(fresh).forEach(function(e){
+      var nSt=fresh[e]; if(!nSt) return;
+      var oSt=_trk[e];
+      (nSt.items||[]).forEach(function(it){
+        if(it.cls==="blocked"||it.cls==="exhausted"){
+          // 只有新出现的才通知(旧 _trk 里该 uuid 没有此状态)
+          var wasBlocked=false; if(oSt&&oSt.items) oSt.items.forEach(function(old){ if(old.uuid===it.uuid && (old.cls==="blocked"||old.cls==="exhausted")) wasBlocked=true; });
+          if(!wasBlocked) try{ _stateChangeAlert({id:e,email:e}, it); }catch(_e2){}
+        }
+      });
+    });
     Object.keys(fresh).forEach(function(e){ _trk[e]=fresh[e]; });
     try{ _saveTrkLocalOnly(); }catch(_e){}
     try{ paintTrk(); paintRowRun(); _repushTabsFromTrk(); }catch(_e){}
   }
-  P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:2, max:30, conc:6 }, 25000).then(function(res){
+  P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:3, max:40, conc:6 }, 12000).then(function(res){
     var b=res&&res.body;
     if(res && res.status===413){
       // 载荷仍过大 → 再次降级: 仅取 10 条(约 2KB, 穿越任何中继)
-      P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:1, max:10, conc:2 }, 18000).then(function(r2){
+      P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:1, max:10, conc:2 }, 10000).then(function(r2){
         _rbDone(); var b2=r2&&r2.body;
         if(!b2||!b2.ok||!Array.isArray(b2.list)){ _restoreTrkFromVault(); return; }
         _applyFresh(b2);
@@ -918,8 +932,8 @@ async function _pool(items, conc, fn){
 //   ④ 事件签名(数量+末时间)在 STUCK_MS 内无任何增量 → 长期停滞卡住
 //   事件流探测按 PROBE_MS 节流、每轮限额 _probeBudget, 结果缓存在 _sigMap。
 var _sigMap = {};            // uuid → {sig,since,probeTs,wait,reason,probed,esig}
-var STUCK_MS = 180000;       // 运行中且 3 分钟"零进度"(列表+事件流双签名均无变化) → 真停滞卡住
-var PROBE_MS = 60000;        // 单会话事件流探测节流
+var STUCK_MS = 60000;        // 运行中且 1 分钟"零进度"(列表+事件流双签名均无变化) → 真停滞卡住 (旧 180s 太慢·用户反馈~2min 才识别)
+var PROBE_MS = 20000;        // 单会话事件流探测节流 (旧 60s → 20s: 更快识别卡住/额度耗尽/报错)
 var _probeBudget = 0;        // 每轮 pollTrk 的事件探测配额 (控开销)
 function _evMsgText(ev){ try{ var m=ev.message; if(m&&typeof m==="object") m=m.text||m.message||JSON.stringify(m); return String(m||ev.content||ev.text||ev.status||"").toLowerCase(); }catch(e){ return ""; } }
 // 零成本「活性签名」: 列表项任一时间戳/计数/状态变化即说明 working 有进度 → 不算停滞。
@@ -972,9 +986,10 @@ async function refineStuck(a, item){
         rec.wait=false; rec.reason=(wasReason==="stall"?"":wasReason);
         if(last){
           var lm=_evMsgText(last);
-          if(/额度|余额|acu|credit|insufficient|out of (acu|credit)|quota|exceed/.test(lm)){ rec.wait=true; rec.reason="quota"; }
+          if(/额度|余额|acu|credit|insufficient|out of (acu|credit)|quota|exceed|usage.*limit|no.*credit|depleted|allowance/.test(lm)){ rec.wait=true; rec.reason="quota"; }
           else if(last.type==="devin_message"){ rec.wait=true; rec.reason="await"; }       // 说完在等你
-          else if(/error|failed|失败|报错|exception|timed? ?out|超时/.test(String(last.type||"")+" "+lm)){ rec.wait=true; rec.reason="error"; }
+          else if(/error|failed|失败|报错|exception|timed? ?out|超时|中断|interrupt|abort|disconnect|crash|panic/.test(String(last.type||"")+" "+lm)){ rec.wait=true; rec.reason="error"; }
+          else if(last.type==="session_ended"||last.type==="session_stopped"||last.type==="session_interrupted"){ rec.wait=true; rec.reason="error"; }
         }
       }
     }catch(e){}
@@ -1073,6 +1088,8 @@ async function _pollOneAcc(a, realNo){
   // 逆流兜底: running 项抓事件流判定 等你/额度/报错/停滞 → 转 卡住/额度耗尽
   for(var k=0;k<items.length;k++){ if(items[k].cls==="running"){ try{ await refineStuck(a, items[k]); }catch(e){} } }
   items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="exhausted")exhausted++; else if(it.cls==="blocked")blocked++; });
+  // 状态变化即时通知(道法自然·及时): 卡住/报错/停滞的对话立即弹通知, 不再默默等用户手动刷新才看到
+  items.forEach(function(it){ if(it.cls==="blocked"||it.cls==="exhausted") try{ _stateChangeAlert(a,it); }catch(e){} });
   var total=running+awaiting+blocked+exhausted;
   if(total>0){ _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,exhausted:exhausted,total:total,items:items,latest:latestName,ts:Date.now()}; if(exhausted>0){ var exq=items.filter(function(x){return x.cls==="exhausted";})[0]; _quotaAlert(a,exhausted,(exq&&exq.title)||latestName); } }
   else _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:0,awaiting:0,blocked:0,exhausted:0,total:0,items:[],latest:latestName,ts:Date.now()};   // 墓碑(非删除): 转空闲也带新 ts → 经金库跨设备同步熄灯, 显示侧 total<=0 一律按无活跃处理
@@ -1094,7 +1111,7 @@ async function pollTrk(force){
   if(window.__rnReady){ _deviceRecentRefresh(force); return; }
   if(!force && _notVisible()) return;     // 性能: 板块隐藏/后台 → 停轮询, 不再无谓轰网络(消除"刷新很忙"); force=用户点刷新, 不受门控
   if(_trkBusy)return; _trkBusy=true;
-  _probeBudget=12; // 每轮事件流探测配额, 控网络开销
+  _probeBudget=24; // 每轮事件流探测配额 (旧 12 → 24: 在跑对话多时也能每轮都探到)
   var dot=document.getElementById("monDot"), mstat=document.getElementById("monStat");
   try{
     var full=loadAcc();                       // 全量列表(编号基准): 真正编号=在全量列表中的位置, 不受"是否已登录"影响
@@ -1312,6 +1329,25 @@ function _balAlert(a){
     _bigAlert("⚠ "+_convNameOf(a)+" 额度仅 $"+bal.toFixed(2)+" · 对话进行中, 请尽快处理");
     _vib(70);
   } }
+}
+// ── 状态变化通知 (道法自然·及时反馈): 任一对话状态变化立即通知, 不再默默等 ──
+//   用户反馈: "对话中断/结束/额度耗尽后要过~2分钟才反馈", 核心是检测到变化后没通知, 此处补全。
+//   通知层级: 额度耗尽 > 卡住/报错 > 停滞 > 待输入(不通知·太频繁)。节流: 同一对话同一状态 2 分钟不重复。
+var _stateAlertTs = {};   // uuid+cls → lastAlertTs
+function _stateChangeAlert(a, item){
+  if(!a || !item) return;
+  var cls=item.cls; if(!cls || cls==="running" || cls==="awaiting") return;   // 运行中/待输入不通知(太频繁)
+  var uuid=item.uuid||""; var key=(a.id||"")+"_"+uuid+"_"+cls;
+  var t=_stateAlertTs[key]||0; if(Date.now()-t<=120000) return;   // 2 分钟节流
+  _stateAlertTs[key]=Date.now();
+  var convName=String(item.title||"").trim();
+  var who=convName || String(a.email||a.id).split("@")[0];
+  if(cls==="exhausted") return;   // 额度耗尽由专门的 _quotaAlert 处理(含原生推送)
+  var reason=item._stuck||"";
+  var lbl=(reason==="stall")?"停滞无进度":(reason==="error")?"运行报错":(reason==="await")?"等待回复":(reason==="action")?"需你处理":"对话卡住";
+  var msg="⚠ "+who+" · "+lbl;
+  _bigAlert(msg); _vib(80);
+  try{ if(N.notify) N.notify(lbl+" · "+who, "对话需要关注, 请及时处理"); }catch(e){}
 }
 // 额度耗尽提醒(问题②): 检测到该号有对话因配额耗尽休眠时主动弹横幅 + 震动 + 原生推送。
 //   根治「额度耗尽被误显示为对话已完成、不发通知」—— 现 sessStatus/refineStuck 单列 exhausted,
@@ -1641,13 +1677,13 @@ window.addEventListener("resize", function(){ if(!_notVisible() && _renderDirty)
 setInterval(render, 6000);
 // 自调度 + 抖动: 让 pollTrk / autoQuota / autoBackup 三个心跳错峰, 不在同一刻一起轰网络 (消除并发卡顿)。
 function _loop(fn, base, jitter){ (function tick(){ setTimeout(function(){ try{ fn(); }catch(e){} tick(); }, base + Math.floor(Math.random()*jitter)); })(); }
-setInterval(pollTrk, 10000);   // 30s→15s→12s→10s: 更快侦测有对话的号 → 其额度更快进入高频刷新(主心跳仍稳定)
+setInterval(pollTrk, 8000);    // 30s→15s→12s→10s→8s: 更快侦测状态变化(用户反馈~2min才识别·加快轮询+探测双管齐下)
 // ── 网页镜像·持续回拉手机金库 (道法自然·二者同源·实时一致) ────────────────────────────────
 //   手机(原生外壳)才是对话追踪权威: 它原生快轮全量账号, _trk 写入共享金库。网页外壳(__rn 垫片)若只靠
 //   自身经桥逐号轮询, 对 100+ 账号既慢又易被限流 → 面板长时间空/滞后, 与手机不一致。故网页端持续(~4s)
 //   回拉金库的 rtflow.trk / rtflow.untracked / accounts → 对话追踪/已停追踪/账号库近实时镜像手机权威态,
 //   不空等自身慢轮即刻"完全同步完全一致"。仅网页镜像(__rnReady)启用; 原生手机自身即权威, 无需回拉。
-if(window.__rnReady){ _loop(function(){ try{ _restoreTrkFromVault(); }catch(e){} try{ _restoreUntrackedFromVault(); }catch(e){} try{ if(typeof restoreAccountsFromVault==="function") restoreAccountsFromVault(); }catch(e){} }, 4000, 1500); }
+if(window.__rnReady){ _loop(function(){ try{ _restoreTrkFromVault(); }catch(e){} try{ _restoreUntrackedFromVault(); }catch(e){} try{ if(typeof restoreAccountsFromVault==="function") restoreAccountsFromVault(); }catch(e){} }, 2500, 1000); }   // 旧 4s+1.5s抖动 → 2.5s+1s: 更快镜像手机金库状态(减少满后感知延迟)
 // 美刀额度: 冷启动尽快全量刷一遍(消除死数据); 之后每 ~12s 一轮, 错开 pollTrk 半个周期 + 抖动, 避免与状态轮询同刻并发
 setTimeout(autoQuotaTick, 1200);
 setTimeout(function(){ _loop(autoQuotaTick, 8000, 2000); }, 6000);   // 11s→8s: 全量额度轮更快; 6s 相位偏移与 pollTrk 错峰

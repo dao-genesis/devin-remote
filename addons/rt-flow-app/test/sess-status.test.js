@@ -46,9 +46,23 @@ const sessStatusA = eval("(function(){\n" + seg[0] + "\nreturn sessStatusA;})()"
   ok(sessStatus({ latest_status_contents: { user_action_required: "needs_input" } })[1] === "待处理", "user_action_required → 标签 待处理");
   ok(sessStatus({ latest_status_contents: { enum: "error" } })[0] === "blocked", "enum=error → blocked 卡住");
   ok(sessStatus({ latest_status_contents: { reason: "fatal error occurred" } })[0] === "blocked", "reason 含 error → blocked");
+  ok(sessStatus({ latest_status_contents: { reason: "session interrupted by user" } })[0] === "blocked", "reason 含 interrupt → blocked 中断");
+  ok(sessStatus({ latest_status_contents: { reason: "connection timed out" } })[0] === "blocked", "reason 含 timed out → blocked 超时");
+  ok(sessStatus({ latest_status_contents: { reason: "session disconnected" } })[0] === "blocked", "reason 含 disconnect → blocked 断连");
+  ok(sessStatus({ latest_status_contents: { reason: "aborted by system" } })[0] === "blocked", "reason 含 abort → blocked 中止");
+  ok(sessStatus({ latest_status_contents: { enum: "timeout" } })[0] === "blocked", "enum=timeout → blocked 超时");
+  ok(sessStatus({ latest_status_contents: { reason: "limit reached for this period" } })[0] === "exhausted", "reason 含 limit.*reach → exhausted");
+  ok(sessStatus({ latest_status_contents: { reason: "no credits remaining" } })[0] === "exhausted", "reason 含 no.*remain → exhausted (二次检测)");
   ok(sessStatus({ latest_status_contents: { enum: "awaiting_user_input" } })[0] === "awaiting", "enum=awaiting → awaiting 待输入");
   ok(sessStatus({ status: "finished" })[0] === "finished", "status=finished → finished");
   ok(sessStatus({})[0] === "idle", "空对象 → idle 空闲");
+}
+
+// ── 新增: 中断/超时/断连 等非正常终止检测 (用户反馈: 对话中断后很久才识别) ──
+{
+  ok(sessStatus({ latest_status_contents: { enum: "interrupted" } })[0] === "blocked", "enum=interrupted → blocked");
+  ok(sessStatus({ latest_status_contents: { reason: "timeout while waiting for response" } })[0] === "blocked", "reason 含 timeout → blocked");
+  ok(sessStatus({ latest_status_contents: { reason: "connection aborted" } })[0] === "blocked", "reason 含 abort → blocked");
 }
 
 // ── 反者道之动: 终态但额度信号藏在 status/activity/current_activity ──
@@ -110,6 +124,16 @@ ok(/var c=sessStatusA\(s,a\)\[0\]/.test(switchSrc),
 ok(/var ssr=sessStatusA\(s,a\);/.test(switchSrc),
    "源级: _pollOneAcc(通知源) 走 sessStatusA → 满额号不触发 _quotaAlert");
 // (devin-cloud.js / engine.html 的账号级对账源级护栏在文件末尾 cloudSrc/engineSrc 声明后断言)
+
+// ── 源级护栏: 状态变化即时通知 (对话中断/卡住/额度耗尽即时弹通知) ──
+ok(/function _stateChangeAlert\(a, item\)/.test(switchSrc),
+   "源级: 存在 _stateChangeAlert 状态变化即时通知函数");
+ok(/_stateAlertTs\[key\]/.test(switchSrc),
+   "源级: _stateChangeAlert 按 uuid+cls 节流 (2分钟不重复)");
+ok(/items\.forEach\(function\(it\)\{ if\(it\.cls==="blocked"\|\|it\.cls==="exhausted"\) try\{ _stateChangeAlert/.test(switchSrc),
+   "源级: _pollOneAcc 对 blocked/exhausted 项即时触发 _stateChangeAlert");
+ok(/if\(!wasBlocked\) try\{ _stateChangeAlert/.test(switchSrc),
+   "源级: _applyFresh(网页镜像端) 新出现的 blocked/exhausted 触发 _stateChangeAlert");
 
 // ── 源级护栏: 状态传播链完整 ──
 ok(/cls!=="running"&&cls!=="awaiting"&&cls!=="blocked"&&cls!=="exhausted"/.test(switchSrc),
