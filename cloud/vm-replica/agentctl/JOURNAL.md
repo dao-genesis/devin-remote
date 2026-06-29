@@ -8036,3 +8036,49 @@ read, 93% less data per poll), but `region_diff` itself — pure-Python over
 `361x381` ≈ 137k pixels at ~26 ms — now dominates each poll's wall-clock. That is
 a *different* axis (the comparison loop, not the capture) and the next thread to
 pull, not part of F245.
+
+---
+
+> 絕利一源，用師十倍。 The waits diff a board-sized patch every tick — but while
+> nothing has changed yet the two patches are *identical*. Compare the bytes, not
+> the pixels.
+
+## F246 — region_diff counted every pixel even when the patches were identical
+
+F245 cut the *capture* waste in the two pixel waiters; profiling the same loop
+then showed the *comparison* had become the floor of each poll. `region_diff`
+(F134) walks the patch pixel-by-pixel in pure Python — ~26 ms over a board-sized
+`361x381` (~137k px) patch. The waiters poll a fixed region many times a second,
+and **almost every one of those polls happens while nothing has changed yet**:
+during an engine's think the watched board is dead still, so capture after
+capture comes back byte-for-byte identical (measured: `True` on this VM, no
+cursor compositing). Yet `region_diff` still ran the full per-pixel loop on two
+identical buffers — spending tens of ms to (re)discover `pixels == 0`. A 25 s
+wait did ~480 such polls, each paying the full count for a foregone answer.
+
+**Fix** (`osctl.region_diff`). One exact short-circuit at the top: if `a == b`
+the patches are byte-identical, so *no* pixel can differ by more than any
+`tol >= 0` — return `{pixels:0, total, frac:0.0}` immediately. This is the
+verdict, not an approximation: byte-equality ⟹ zero pixels over threshold for
+every tol. The bytes compare is a single C-level `memcmp` (microseconds); only a
+poll where the region *actually* changed falls through to the per-pixel loop, so
+the reported `pixels` stays exact whenever it is non-zero. No API change; the
+two waiters and `region_diff`'s other callers are untouched.
+
+**Proof.** *Synthetic* (`_test_f246.py`, pure-Python): for `tol` in
+`{0,8,24,255}` identical buffers return `{pixels:0,...}`; the differing-patch
+counts (`noise@tol0=N`, `noise@tol2=0`, `sig@tol8=50`, `sig@tol0=50`) are all
+unchanged; the identical case times ~2000x faster than the differing one.
+*Live* (board ROI `(595,378,955,758)`, ~137k px): an idle poll (`a==b`) drops to
+`0.008 ms` from the full count's `31.17 ms` — **~4080x** — so a 25 s wait over a
+static board did `487` polls at near-zero CPU each (vs ~26 ms each before).
+*Closed loop with both F245 foveal grab and the F246 fast path live*: White
+`b2-b4`, `wait_for_change(BOARD, tol=24, min_count=30)` caught Stockfish's
+**asynchronous reply** (`changed=True, pixels=860`, `1.98 s`, 39 polls),
+`wait_until_stable` settled it in `0.65 s`; the move list read *"3b. Black knight
+moves from b8 to c6"* — exactly the reply detected, end-to-end in `2.63 s`.
+
+F245 (don't read what you won't look at) and F246 (don't recompute what hasn't
+changed) are the two halves of the same 損之又損 on the polling loop: the grab and
+the diff. Together a poll over a still region went from a 1600x1200 grab + 137k-px
+Python diff to a foveal sub-rect read + a `memcmp`.
