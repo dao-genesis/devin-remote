@@ -545,11 +545,11 @@ def uia_menu(win: int, *path: str, pause: float = 0.45) -> bool:
     # menubar entry; the AT-SPI Action interface ("click" action) is needed.
     # If no submenu items appeared after the rect-click, retry with uia_invoke.
     if len(path) > 1:
-        probe = _find_menuitem(path[1])
+        probe = _find_menuitem(path[1], prefer_wid=win)
         if not probe:
             uia_invoke(win, name=path[0], ctype="menu")
             time.sleep(pause)
-    return _walk_menu_path(path[1:], pause)
+    return _walk_menu_path(path[1:], pause, prefer_wid=win)
 
 
 def _click_center(rect):
@@ -557,23 +557,54 @@ def _click_center(rect):
     click(x + w // 2, y + h // 2)
 
 
-def _find_menuitem(name: str):
+def _find_menuitem(name: str, prefer_wid: int = 0):
     """Find a ``menuitem`` by meaning across *every* place a menu can pop: titled
-    top-level windows (Qt/wx) and titleless native ``#32768`` popups."""
-    for w in list_windows() + menu_windows():
-        f = uia_find(w["id"], name=name, ctype="menuitem")
-        if f and f.get("rect"):
-            return f
-    return None
+    top-level windows (Qt/wx) and titleless native ``#32768`` popups.
+
+    F222: prefer *exact* name matches over substring hits so that "Copy" finds
+    the context-menu "Copy" rather than a menubar "Save Copy As…".  Also returns
+    items with ``rect=None`` (GTK context menus) paired with their window id so
+    callers can fall back to ``uia_invoke``.
+
+    ``prefer_wid``: when set, search that window first — if it yields an exact
+    match with a rect, return immediately without scanning other windows."""
+    targets = menu_windows() + list_windows()
+    # Put prefer_wid first so its exact matches win.
+    if prefer_wid:
+        targets = [w for w in targets if w["id"] == prefer_wid] + \
+                  [w for w in targets if w["id"] != prefer_wid]
+    nl = name.lower()
+    best_sub = None         # first substring hit with rect
+    best_exact_norect = None  # exact match but rect=None (GTK context menu)
+    for w in targets:
+        all_items = uia_find_all(w["id"], name=name, ctype="menuitem", max_scan=600)
+        for it in all_items:
+            it["_wid"] = w["id"]  # carry window id for invoke fallback
+            exact = it.get("name", "").lower() == nl
+            has_rect = it.get("rect") is not None
+            if exact and has_rect:
+                return it
+            if exact and best_exact_norect is None:
+                best_exact_norect = it
+            if has_rect and best_sub is None:
+                best_sub = it
+    return best_exact_norect or best_sub
 
 
-def _walk_menu_path(names, pause: float) -> bool:
+def _walk_menu_path(names, pause: float, prefer_wid: int = 0) -> bool:
     for name in names:
-        hit = _find_menuitem(name)
+        hit = _find_menuitem(name, prefer_wid=prefer_wid)
         if hit is None:
             tap(0x1B)
             return False
-        _click_center(hit["rect"])
+        # F222: GTK context menu items have rect=None; use uia_invoke instead.
+        if hit.get("rect"):
+            _click_center(hit["rect"])
+        elif hit.get("_wid"):
+            uia_invoke(hit["_wid"], name=hit.get("name"), ctype="menuitem")
+        else:
+            tap(0x1B)
+            return False
         time.sleep(pause)
     return True
 
@@ -599,7 +630,47 @@ def uia_context(win: int, target: str, *path: str, ctype=None, pause: float = 0.
     x, y, w, h = el["rect"]
     click(x + w // 2, y + h // 2, right=True)
     time.sleep(pause)
-    return _walk_menu_path(path, pause)
+    return _walk_menu_path(path, pause, prefer_wid=win)
+
+
+def uia_file_dialog_set_path(dialog_wid: int, path: str, pause: float = 0.5) -> bool:
+    """Set the file path in an open/save file dialog, handling both KDE and GTK
+    toolkits automatically.
+
+    F223: GTK file choosers (GIMP, LibreOffice, gedit) don't expose a file-name
+    entry by default — the entry only appears after pressing ``/`` (slash) which
+    switches to the location-bar mode.  KDE file dialogs (KWrite, Kate, Dolphin)
+    expose ``name='File name:'`` with ``ctype='edit'`` directly.
+
+    Strategy:
+    1. Try KDE: ``uia_set_value(dialog, path, name='File name:', ctype='edit')``
+    2. If no KDE edit found, try GTK: ``tap(0xBF)`` (``/``) to activate location
+       bar, then ``uia_set_value(dialog, path, ctype='edit')``
+    3. Falls back to ``paste_text`` if ``uia_set_value`` fails.
+
+    Returns True iff the path was set (caller should press Enter or click
+    Open/Save to commit)."""
+    # KDE file dialog: "File name:" edit with rect
+    ok = uia_set_value(dialog_wid, path, name="File name:", ctype="edit")
+    if ok:
+        return True
+
+    # GTK file dialog: activate location bar with "/" key
+    # (tap 0xBF = VK_OEM_2 = "/" on US layout, mapped by F223)
+    tap(0xBF)
+    time.sleep(pause)
+
+    # After "/", a new Edit field should appear
+    ok2 = uia_set_value(dialog_wid, path, ctype="edit")
+    if ok2:
+        return True
+
+    # Last resort: Ctrl+A then paste
+    chord(0xA2, 0x41)
+    time.sleep(0.1)
+    paste_text(path)
+    time.sleep(0.2)
+    return True
 
 
 _CELLREF = re.compile(r"^\$?[A-Za-z]{1,3}\$?[0-9]{1,7}$")

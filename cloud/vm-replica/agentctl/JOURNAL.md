@@ -7212,4 +7212,95 @@ opens → `uia_set_value(dlg, '/tmp/test_open_file.txt', name='File name:', ctyp
 
 ---
 
+### F222 — Context menus: exact-match priority + rect=None invoke fallback
+
+| date | 2026-06-29 |
+|---|---|
+| surface | `_find_menuitem("Copy")` returns "Save Copy As..." from another window's menubar |
+| root cause 1 | `_match` uses substring matching; "Copy" ∈ "Save Copy As..." |
+| root cause 2 | `menu_windows()` is unimplemented on X11 → `lambda: []`; GTK context menu items have `rect=None` |
+
+**Friction.** After right-click on LibreOffice Calc, `_find_menuitem("Copy")`
+scanned all windows and returned the first substring hit — KWrite's menubar
+"Save Copy As..." — instead of the context menu's "Copy".  Two interacting
+issues: (1) substring matching gave false positives on partial name overlap,
+(2) GTK context menu items existed in the AT-SPI tree but with `rect=None`,
+so they were invisible to the rect-requiring search.
+
+**Fix 1.** `_find_menuitem` now uses `uia_find_all` per window and prefers
+**exact** name matches (case-insensitive) over substring hits.  Priority:
+exact+rect > exact+no-rect > substring+rect.
+
+**Fix 2.** `_walk_menu_path` falls back to `uia_invoke(wid, name=..., ctype='menuitem')`
+when the found item has `rect=None`.  GTK/LibreOffice context menu items
+respond correctly to AT-SPI Action invocation even without screen coordinates.
+
+**Proven.** LO Calc right-click > Copy via invoke: clipboard = "道法自然 Context Copy" ✓.
+KWrite right-click > Copy via rect-click: clipboard = "KWrite context test" ✓.
+Menu chain regression 4/4: GIMP, VLC, KWrite, Inkscape all pass.
+
+---
+
+### F223 — VK_OEM punctuation + function keys unmapped on X11; GTK file dialog inaccessible
+
+| date | 2026-06-29 |
+|---|---|
+| surface | `tap(0xBF)` does nothing — GTK file chooser location bar never activates |
+| root cause | `_VK_KEYSYM` lacked VK_OEM_* (0xBA-0xDE) and VK_F1-F24 (0x70-0x87) mappings; fallback `return vk` gave wrong keysyms (191 ≠ slash keysym 0x2F) |
+
+**Friction.** GIMP's File > Open produces a GTK file chooser dialog.  The file list
+data items expose **no names** via AT-SPI (GtkTreeView cell renderers are
+inaccessible).  The only way to type a path is to press `/` to activate the
+location entry bar — but `tap(0xBF)` (VK_OEM_2 = `/?`) was silently producing
+keysym 191 instead of `/` (keysym 0x2F), so the location bar never opened.
+
+**Fix.** Added 11 VK_OEM punctuation mappings (`;=,-./ \`[]\\'`) and VK_F1..VK_F24
+→ XK_F1..XK_F24 range to `_VK_KEYSYM` / `_vk_keysym()`.
+
+**Proven.** GIMP File > Open > `tap(0xBF)` activates location bar > `uia_set_value`
+sets path > Enter > image opened.  Full chain: 8/8 regression (4 menu chains +
+clipboard + GIMP file open + LO context menu + Nautilus sidebar).
+
+**Boundary (documented, not fixed).**
+- GTK file chooser data items have no accessible names → cannot select files
+  by meaning; must use location bar path entry.
+- `goto_cell` on LO Calc: Name Box not exposed via AT-SPI; pixel-click workaround
+  exists but not semantic.
+
+---
+
+### F224 — Left/right modifier VK codes unmapped; chord(0xA2, 0x41) sends `¢a` not Ctrl+A
+
+| date | 2026-06-29 |
+|---|---|
+| surface | `chord(0xA2, 0x41)` types "¢a" in LO VCL dialog instead of selecting all |
+| root cause | `VK_LCONTROL` (0xA2), `VK_RCONTROL` (0xA3), `VK_LSHIFT` (0xA0), `VK_RSHIFT` (0xA1), `VK_LMENU` (0xA4), `VK_RMENU` (0xA5), `VK_LWIN` (0x5B), `VK_RWIN` (0x5C) all fell through to raw `return vk` giving wrong X keysyms |
+
+**Friction.**  Windows agents commonly use `VK_LCONTROL` (0xA2) in `chord()` calls
+rather than the generic `VK_CONTROL` (0x11).  On the X11 backend, `_vk_keysym(0xA2)`
+returned 0xA2 = keysym for `¢` (cent sign), so `chord(0xA2, 0x41)` pressed `¢` then
+`a` instead of `Ctrl+A`.  Every `chord` with left/right-specific modifiers was broken.
+
+**Fix.**  Added 8 left/right-specific modifier mappings to `_VK_KEYSYM`:
+VK_L/RSHIFT → Shift_L/R, VK_L/RCONTROL → Control_L/R, VK_L/RMENU → Alt_L/R,
+VK_L/RWIN → Super_L/R.
+
+**Also.**  Added `uia_file_dialog_set_path(dialog_wid, path)` in `osctl.py` — a
+unified helper that auto-detects KDE (edit field "File name:") vs GTK (press `/` to
+activate location bar) file dialogs.
+
+**Proven.**  gedit Ctrl+A/C with `chord(0xA2, ...)` now works (clipboard verified).
+5/6 regression: VLC menu + KWrite menu + Inkscape menu + gedit chord + clipboard.
+KDE Save As (KWrite) → file created ✓.  GIMP Open (GTK) → image loaded ✓.
+
+**Boundary (documented, not fixed).**
+- LO Calc VCL internal file dialog: `uia_find_all` returns 297 elements but all are
+  Menu/MenuItem/Separator — no Edit or Button with name/rect.  The VCL Name field is
+  visible but not AT-SPI-accessible; pixel-click + paste_text workaround partially
+  works but the dialog's error handling is fragile.
+- LO should be switched to use native GTK file dialogs (env `SAL_USE_VCLPLUGIN=gtk3`)
+  for proper AT-SPI integration — a deployment-level fix, not a code fix.
+
+---
+
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
