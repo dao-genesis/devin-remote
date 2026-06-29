@@ -4373,7 +4373,7 @@ function bridgeGenerateCloudMd(): string {
     // ① 反向注入自愈: 公网URL 取「进程内隧道 ∪ 常驻桥已发布连接」的有效值, 不再只认进程内 bridgeUrl。
     //   独立 dao-bridge 常驻桥持有隧道时, 进程内 bridgeUrl 恒空 → 旧法注入「(未连接)」害云端找不到端口; 此处回归活地址。
     const url = bridgeEffectiveUrl() || '(未连接)';
-    const port = ws.port || DEFAULT_PORT;
+    const port = bridgeMachinePort() || ws.port || DEFAULT_PORT;
     // 道法自然 · 回归本源 (dao-bridge 初始形态): 内网穿透文档只讲「整机直连」——
     //   接入信息 + 基础整机端点 + Python SDK。四大模块的深层操作已独立为 DAO Bridge MCP
     //   (见「MCP 使用文档」), 本文档不再内联四大模块, 保持简明、日常即用。
@@ -4828,8 +4828,42 @@ function bridgeEffectiveUrl(): string {
 //   根治本源脱钩(错误认知): 旧法对外发布易变 bridgeToken, 重载/轮换即与 checkAuth 主令牌脱钩 →
 //   云端按知识库读到的令牌已与服务端真验源失配 → 401。两令牌 checkAuth 皆放行, 但唯 ws.token 跨
 //   重载恒稳 → 以其为「配源」即令「已发布令牌」永不因轮换失效, 无需被动等 URL 变才反注入。
+// 公网隧道恒绑 leader 实例端点; 其令牌即 dao-conn-current.json/.token(活 leader)或 ~/.dao/api-token
+//   (机器级恒稳·无工作区实例写)。带工作区的窗口实例 ws.token 可能是它自己的工作区私牌, 与公网端点
+//   实际校验的 leader 牌脱钩 → 若以 ws.token 发布知识库, 必现「URL 对而 Token 错」(URL 由活探解析刷新,
+//   Token 却是该窗口私牌)→ 云端按库读到的 Token 打公网端点 401。故权威令牌恒以「磁盘上 leader 真相」为准。
+function bridgeMachineToken(): string {
+    try {
+        const j = JSON.parse(fs.readFileSync(DAO_CONN_CURRENT, 'utf8'));
+        const t = String((j && j.token) || '').trim();
+        if (t && t.length >= 16) return t;
+    } catch { /* 守柔 */ }
+    try {
+        const g = fs.readFileSync(path.join(DAO_DIR, 'api-token'), 'utf8').trim();
+        if (g && g.length >= 16) return g;
+    } catch { /* 守柔 */ }
+    return '';
+}
 function bridgeAuthoritativeToken(): string {
-    return ws.token || bridgeToken || '';
+    return bridgeMachineToken() || ws.token || bridgeToken || '';
+}
+// 同理: 内穿文档「本地端口/Local URL」须指 leader 实例端口(公网隧道实际代理到的那个),
+//   而非恰好执行 reinject 的窗口实例自身 ws.port(否则 9921 窗口会把文档写成指向它自己)。
+function bridgeMachinePort(): number {
+    try {
+        const j = JSON.parse(fs.readFileSync(DAO_CONN_CURRENT, 'utf8'));
+        const p = Number((j && j.port) || 0);
+        if (p >= 1 && p <= 65535) return p;
+    } catch { /* 守柔 */ }
+    return 0;
+}
+// 机器级内穿/ MCP 文档恒由 leader(端口最小活实例)统一维护 → 杜绝多窗口实例彼此覆盖致文档抖动
+//   (实测两实例 9920↔9921 轮流把文档改写成各自 端口/令牌, 时间戳每轮翻动·徒增网络 churn,
+//    且非 leader 写入自身私牌时窗内云端读到必 401)。未知 leader(冷启/单实例)守柔放行。
+function bridgeIsLeaderInstance(): boolean {
+    const lp = bridgeMachinePort();
+    if (!lp) return true;
+    return lp === (ws.port || 0);
 }
 function bridgeEffectiveToken(): string {
     return bridgeAuthoritativeToken();
@@ -11158,10 +11192,12 @@ function bridgeCurrentSig(): string {
     const wsName = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0] && vscode.workspace.workspaceFolders[0].name) || '';
     const root = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0] && vscode.workspace.workspaceFolders[0].uri.fsPath) || '';
     let toolN = 0; try { toolN = daoMcpToolDefs().length; } catch { /* 守柔 */ }
-    return [url, tok, String(ws.port || ''), mcpUrl, mcpTok, host, wsName, root, EXT_VERSION, String(toolN)].join('|');
+    return [url, tok, String(bridgeMachinePort() || ws.port || ''), mcpUrl, mcpTok, host, wsName, root, EXT_VERSION, String(toolN)].join('|');
 }
 async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: number; changed: boolean }> {
     if (_bridgeReinjectInflight) return { injected: 0, changed: false };
+    // 机器级文档单一维护者 = leader: 非 leader 实例不写, 杜绝多窗口互相覆盖抖动(URL/Token/端口由 leader 一锤定音)。
+    if (!bridgeIsLeaderInstance()) { daoLoopLog('tunnel', 'reinject SKIP(' + reason + '): 非 leader 实例, 机器级内穿/MCP 文档由 leader 统一维护'); return { injected: 0, changed: false }; }
     const sig = bridgeCurrentSig();
     if (sig === _lastBridgeReinjectSig) return { injected: 0, changed: false }; // 无变化·守柔不重注·省网
     _bridgeReinjectInflight = true;
