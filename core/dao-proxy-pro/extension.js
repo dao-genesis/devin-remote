@@ -2457,28 +2457,42 @@ async function cmdRevproxyStatus() {
       return;
     }
     const models = d.models || [];
+    const st = d.stats || {};
+    const qLabel =
+      d.premiumQuota === "ok"
+        ? "付费配额·有"
+        : d.premiumQuota === "exhausted"
+          ? "付费配额·耗尽"
+          : "付费配额·未探测";
     const items = [
       {
         label: `状态: ${d.enabled ? "● 已启用" : "○ 未启用"}`,
-        detail: `端点 ${d.endpoint || ""} · ${d.model_count || 0} 模型可反代 · 本源观照入站=${d.applyInvert ? "开" : "关"}`,
+        detail: `端点 ${d.endpoint || ""} · ${d.model_count || 0} 模型 · 🟢${st.green || 0} 🔴${st.red || 0} 🟡${st.amber || 0} · 免费${st.free || 0} · ${qLabel} · 本源观照入站=${d.applyInvert ? "开" : "关"}`,
       },
       {
         label: `API Key: ${d.apiKey || (d.hasKey ? "(已设置)" : "(未设置·仅本机)")}`,
         detail: "调用 Header: Authorization: Bearer <API Key>",
       },
       {
-        label: "── 可反代模型 ──",
+        label: "── 可反代模型 (全量·绿可用/红无配额/黄未探测) ──",
         kind: vscode.QuickPickItemKind.Separator,
       },
     ];
+    const dot = (c) => (c === "green" ? "🟢" : c === "red" ? "🔴" : "🟡");
     for (const m of models) {
       const via = m.dao_route
         ? `${m.dao_route.provider} / ${m.dao_route.model || ""}`
-        : m.owned_by || "";
-      items.push({ label: m.id, description: `→ ${via}` });
+        : m.reverse === "official"
+          ? "官方直通"
+          : m.owned_by || "";
+      items.push({
+        label: `${dot(m.color)} ${m.id}${m.free ? " · 免费" : ""}`,
+        description: `${m.provider || m.owned_by || ""} → ${via}`,
+        detail: m.note || "",
+      });
     }
     await vscode.window.showQuickPick(items, {
-      placeHolder: `模型反代 · 标准 OpenAI/Anthropic 本地端点 · ${models.length} 模型`,
+      placeHolder: `模型反代 · ${models.length} 模型 · 🟢${st.green || 0} 🔴${st.red || 0} 🟡${st.amber || 0}`,
       canPickMany: false,
     });
   } catch (e) {
@@ -4993,13 +5007,22 @@ function getEaConfigHtml(port, nonce) {
       </div>
     </div>
 
-    <!-- 可反代模型列表 -->
-    <div style="display:flex;align-items:center;gap:6px;padding:6px 2px 2px">
-      <span style="font-weight:600;font-size:11px">可反代模型</span>
+    <!-- 可反代模型列表 (全量呈现·绿=可用/免费 · 红=配额耗尽 · 琥珀=付费未探测) -->
+    <div style="display:flex;align-items:center;gap:6px;padding:6px 2px 2px;flex-wrap:wrap">
+      <span style="font-weight:600;font-size:11px">可反代模型 (全量)</span>
       <span id="rpModelCount" style="font-size:10px;opacity:0.6"></span>
+      <span id="rpLegend" style="font-size:10px;opacity:0.8;margin-left:6px"></span>
       <button class="btn" id="rpRefresh" style="margin-left:auto" title="刷新可反代模型 + 状态">刷新</button>
     </div>
-    <div id="rpModelList" style="flex:1;overflow-y:auto;margin:2px;font-size:11px"></div>
+    <div style="display:flex;align-items:center;gap:4px;padding:2px;flex-wrap:wrap">
+      <button class="btn rp-f" data-f="all" title="全部模型">全部</button>
+      <button class="btn rp-f" data-f="green" title="可反代(绿)">🟢可用</button>
+      <button class="btn rp-f" data-f="red" title="配额耗尽(红)">🔴无配额</button>
+      <button class="btn rp-f" data-f="free" title="免费档·恒可反代">免费</button>
+      <button class="btn rp-f" data-f="channel" title="经第三方渠道">渠道</button>
+      <input id="rpFilter" placeholder="搜索模型 (uid / 名称 / 厂商)" style="flex:1;min-width:120px;font-size:11px;padding:2px 6px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-input-background,rgba(0,0,0,0.2));color:var(--vscode-input-foreground,var(--vscode-foreground))">
+    </div>
+    <div id="rpModelList" style="flex:1;overflow-y:auto;margin:2px;font-size:11px;min-height:120px"></div>
 
     <!-- 一键测试 (GLM 等免费模型全链路自测) -->
     <div style="border-top:1px solid rgba(128,128,128,0.2);margin-top:6px;padding-top:6px">
@@ -5952,45 +5975,79 @@ function getEaConfigHtml(port, nonce) {
   // ═══ ④ 模型反代 (反者道之动 · 标准本地端点) ═══
   function _rpEl(id) { return document.getElementById(id); }
   var _rpStatus = null;
+  var _rpModels = [];
+  var _rpFilter = 'all';
   function _rpSetText(id, t) { var e = _rpEl(id); if (e) e.textContent = t; }
+  var _RP_DOT = { green: '#3fb950', red: '#f85149', amber: '#d29922' };
   function _rpRefresh() {
     fJson('/origin/revproxy/status').then(function(d) {
       _rpStatus = d || {};
+      _rpModels = (d && d.models) || [];
       var en = _rpEl('rpEnabled'); if (en) en.checked = !!d.enabled;
       var iv = _rpEl('rpInvert'); if (iv) iv.checked = !!d.applyInvert;
+      var st = d.stats || {};
       _rpSetText('rpStat', (d.enabled ? '● 已启用' : '○ 未启用') + ' · ' + (d.model_count || 0) + ' 模型可反代');
       _rpSetText('rpEndpoint', d.endpoint || ('http://127.0.0.1:' + _PORT + '/v1'));
       _rpSetText('rpKey', d.apiKey || (d.hasKey ? '(已设置·仅本机可见)' : '(未设置·仅 localhost 放行)'));
       _rpSetText('rpModelCount', '(' + (d.model_count || 0) + ')');
-      var list = _rpEl('rpModelList');
-      var sel = _rpEl('rpTestModel');
-      var models = d.models || [];
-      if (list) {
-        if (!models.length) {
-          list.innerHTML = '<div style="opacity:0.55;padding:8px">暂无可反代模型 · 请先在「② 渠道配置 / ③ 模型路由」接通至少一个渠道(如免费 GLM)。</div>';
-        } else {
-          var html = '';
-          for (var i = 0; i < models.length; i++) {
-            var m = models[i];
-            var via = m.dao_route ? (m.dao_route.provider + ' / ' + (m.dao_route.model || '')) : (m.owned_by || '');
-            html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
-              + '<code style="font-weight:600">' + _rpEsc(m.id) + '</code>'
-              + '<span style="opacity:0.55;font-size:10px;margin-left:auto">→ ' + _rpEsc(via) + '</span></div>';
-          }
-          list.innerHTML = html;
-        }
-      }
-      if (sel) {
-        var prev = sel.value;
-        sel.innerHTML = '';
-        for (var k = 0; k < models.length; k++) {
-          var o = document.createElement('option');
-          o.value = models[k].id; o.textContent = models[k].id;
-          sel.appendChild(o);
-        }
-        if (prev) sel.value = prev;
-      }
+      var q = d.premiumQuota === 'ok' ? '付费配额·有' : (d.premiumQuota === 'exhausted' ? '付费配额·耗尽' : '付费配额·未探测');
+      _rpSetText('rpLegend', '🟢 ' + (st.green || 0) + ' · 🔴 ' + (st.red || 0) + ' · 🟡 ' + (st.amber || 0) + ' · 免费 ' + (st.free || 0) + ' · ' + q);
+      _rpRenderList();
+      _rpFillSelect();
     }).catch(function(e) { _rpSetText('rpStat', '状态加载失败: ' + e.message); });
+  }
+  function _rpMatch(m) {
+    if (_rpFilter === 'green' && m.color !== 'green') return false;
+    if (_rpFilter === 'red' && m.color !== 'red') return false;
+    if (_rpFilter === 'free' && !m.free) return false;
+    if (_rpFilter === 'channel' && !(m.reverse === 'channel' || m.reverse === 'stub')) return false;
+    var kw = (_rpEl('rpFilter') && _rpEl('rpFilter').value || '').trim().toLowerCase();
+    if (kw) {
+      var hay = (m.id + ' ' + (m.label || '') + ' ' + (m.provider || '') + ' ' + (m.owned_by || '')).toLowerCase();
+      if (hay.indexOf(kw) < 0) return false;
+    }
+    return true;
+  }
+  function _rpRenderList() {
+    var list = _rpEl('rpModelList');
+    if (!list) return;
+    if (!_rpModels.length) {
+      list.innerHTML = '<div style="opacity:0.55;padding:8px">暂无模型 · 反代未运行或目录未加载。</div>';
+      return;
+    }
+    var html = '';
+    var shown = 0;
+    for (var i = 0; i < _rpModels.length; i++) {
+      var m = _rpModels[i];
+      if (!_rpMatch(m)) continue;
+      shown++;
+      var dot = _RP_DOT[m.color] || '#888';
+      var via = m.dao_route ? ('→ ' + m.dao_route.provider + ' / ' + (m.dao_route.model || '')) : (m.reverse === 'official' ? '官方直通' : (m.owned_by || ''));
+      var tier = m.costTier ? String(m.costTier).replace('MODEL_COST_TIER_', '') : '';
+      var badge = m.free ? '<span style="font-size:9px;color:#3fb950;border:1px solid #3fb950;border-radius:3px;padding:0 3px;margin-left:4px">免费</span>' : (tier ? '<span style="font-size:9px;opacity:0.6;margin-left:4px">' + _rpEsc(tier) + '</span>' : '');
+      html += '<div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
+        + '<span title="' + _rpEsc(m.note || '') + '" style="flex:none;width:8px;height:8px;border-radius:50%;background:' + dot + '"></span>'
+        + '<code style="font-weight:600">' + _rpEsc(m.id) + '</code>' + badge
+        + '<span style="opacity:0.55;font-size:10px">· ' + _rpEsc(m.provider || m.owned_by || '') + '</span>'
+        + '<span style="opacity:0.5;font-size:10px;margin-left:auto;white-space:nowrap">' + _rpEsc(via) + '</span></div>';
+    }
+    _rpSetText('rpModelCount', '(' + shown + '/' + _rpModels.length + ')');
+    list.innerHTML = html || '<div style="opacity:0.55;padding:8px">无匹配模型。</div>';
+  }
+  function _rpFillSelect() {
+    var sel = _rpEl('rpTestModel');
+    if (!sel) return;
+    var prev = sel.value;
+    sel.innerHTML = '';
+    for (var k = 0; k < _rpModels.length; k++) {
+      var m = _rpModels[k];
+      var o = document.createElement('option');
+      o.value = m.id;
+      var dot = m.color === 'green' ? '🟢' : (m.color === 'red' ? '🔴' : '🟡');
+      o.textContent = dot + ' ' + m.id + (m.free ? ' (免费)' : '');
+      sel.appendChild(o);
+    }
+    if (prev) sel.value = prev;
   }
   function _rpEsc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, function(c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
   function _rpSaveCfg(patch) {
@@ -6004,6 +6061,18 @@ function getEaConfigHtml(port, nonce) {
     var ce = _rpEl('rpCopyEndpoint'); if (ce) ce.addEventListener('click', function() { _rpClip(_rpEl('rpEndpoint').textContent); });
     var ck = _rpEl('rpCopyKey'); if (ck) ck.addEventListener('click', function() { _rpClip((_rpStatus && _rpStatus.apiKey) || _rpEl('rpKey').textContent); });
     var tr = _rpEl('rpTestRun'); if (tr) tr.addEventListener('click', _rpTest);
+    var fbtns = document.querySelectorAll('.rp-f');
+    for (var i = 0; i < fbtns.length; i++) {
+      (function(b) {
+        b.addEventListener('click', function() {
+          _rpFilter = b.getAttribute('data-f') || 'all';
+          var all = document.querySelectorAll('.rp-f');
+          for (var j = 0; j < all.length; j++) all[j].classList.toggle('add', all[j] === b);
+          _rpRenderList();
+        });
+      })(fbtns[i]);
+    }
+    var ff = _rpEl('rpFilter'); if (ff) ff.addEventListener('input', _rpRenderList);
   })();
   function _rpClip(t) { try { navigator.clipboard.writeText(t); _rpSetText('rpStat', '已复制'); } catch (e) {} }
   function _rpTest() {

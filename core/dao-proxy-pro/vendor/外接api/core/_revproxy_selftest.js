@@ -285,6 +285,83 @@ let KEY = "";
     ok("bad key 401", res._status === 401);
   }
 
+  // ── 全量枚举 + 绿红着色 + 官方直通 ───────────────────────────────
+  const catalog = [
+    {
+      modelUid: "swe-1-6",
+      label: "SWE-1.6",
+      provider: "MODEL_PROVIDER_WINDSURF",
+      creditMultiplier: 0.5,
+      modelCostTier: "MODEL_COST_TIER_FREE",
+    },
+    {
+      modelUid: "claude-opus-4-7-medium",
+      label: "Claude Opus 4.7 Medium",
+      provider: "MODEL_PROVIDER_ANTHROPIC",
+      creditMultiplier: 10,
+      modelCostTier: "MODEL_COST_TIER_MEDIUM",
+    },
+  ];
+  const depsFull = Object.assign({}, deps, {
+    getModelCatalog: () => catalog,
+    getOfficialFamilies: () => [],
+  });
+
+  console.log("[8] 全量枚举: 官方目录并入 + 绿红着色");
+  revproxy.setPremiumQuota("exhausted");
+  r = await call("GET", "/v1/models", null, depsFull);
+  j = JSON.parse(r.body);
+  const mFree = j.data.find((m) => m.id === "swe-1-6");
+  const mPrem = j.data.find((m) => m.id === "claude-opus-4-7-medium");
+  const mChan = j.data.find((m) => m.id === "glm-test");
+  ok("枚举含官方免费 swe-1-6", !!mFree);
+  ok("免费档=绿(免费·官方直通)", mFree && mFree.color === "green" && mFree.status === "free");
+  ok("付费档配额耗尽=红", mPrem && mPrem.color === "red" && mPrem.status === "exhausted");
+  ok("已配渠道=绿(channel)", mChan && mChan.color === "green" && mChan.status === "channel");
+  const rs = await call("GET", "/origin/revproxy/status", null, depsFull);
+  const js = JSON.parse(rs.body);
+  ok("status 含统计 stats.green/red", typeof js.stats.green === "number" && js.stats.red >= 1);
+  ok("status 回传 premiumQuota", js.premiumQuota === "exhausted");
+
+  console.log("[9] 付费配额=ok 时官方付费转绿");
+  revproxy.setPremiumQuota("ok");
+  r = await call("GET", "/v1/models", null, depsFull);
+  j = JSON.parse(r.body);
+  ok(
+    "配额 ok → 付费档绿",
+    j.data.find((m) => m.id === "claude-opus-4-7-medium").color === "green",
+  );
+
+  console.log("[10] 官方直通: 未配渠道的官方模型不再 no_route");
+  let officialCalled = null;
+  const depsOfficial = Object.assign({}, depsFull, {
+    officialChat: (target, norm, sink) => {
+      officialCalled = { model: target.upstreamModel, free: target.free };
+      sink.onText("官方直通回包·得一");
+      sink.onEnd();
+      return Promise.resolve({ ok: true, quota: "ok" });
+    },
+  });
+  r = await call(
+    "POST",
+    "/v1/chat/completions",
+    { model: "swe-1-6", messages: [{ role: "user", content: "测试免费模型反代" }] },
+    depsOfficial,
+  );
+  j = JSON.parse(r.body);
+  ok("免费官方模型经 officialChat", !!officialCalled && officialCalled.free === true);
+  ok("官方直通回包内容", /官方直通回包/.test(j.choices[0].message.content));
+
+  console.log("[11] 无 officialChat 时官方模型返回明确预热提示(非伪成功)");
+  r = await call(
+    "POST",
+    "/v1/chat/completions",
+    { model: "swe-1-6", stream: true, messages: [{ role: "user", content: "hi" }] },
+    depsFull,
+  );
+  ok("预热提示经错误流回传", /预热|officialChat|未就绪/.test(r.body));
+
+  revproxy.setPremiumQuota("unknown");
   mock.close();
   console.log(failures === 0 ? "\nALL PASS" : "\n" + failures + " FAIL");
   process.exit(failures === 0 ? 1 - 1 : 1);
