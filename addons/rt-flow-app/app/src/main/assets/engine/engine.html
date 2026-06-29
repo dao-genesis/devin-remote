@@ -285,7 +285,10 @@
           // 额度耗尽信号最高优先 (即便 finished/suspended 也单列, 绝不混入完成/卡住; 反者道之动核各底层字段)
           var qsig=String((o&&o.reason)||"")+" "+String(s.status||"")+" "+en+" "+String(s.activity_status||"")+" "+String(s.current_activity||"");
           var reason="";
-          if(QUOTA_RE.test(qsig)) reason="quota";
+          // 账号级额度对账: 单条会话历史 reason=out_of_quota 只是其当时休眠原因; 账号此刻仍有可用额度(quotaLive===true)
+          //   → 不算耗尽(归完成·不报警·不通知)。真耗尽/未知才保留官方信号。根治满额号被误报「额度已耗尽」。
+          var _qLive=(DaoCloud.quotaLive?DaoCloud.quotaLive(accs[i].quota):null);
+          if(QUOTA_RE.test(qsig) && _qLive!==true) reason="quota";
           else if(actionReq) reason="action_required";
           else if(/block|stuck|fail|error/.test(en)) reason="blocked";
           else if(/await|wait|ask|question|input|need/.test(en)) reason="awaiting";
@@ -307,7 +310,8 @@
       async function worker(){ while(idx<unlocked.length){ var u=unlocked[idx++];
         try{ var r=await DaoCloud.listSessions(u.a, perAcc);
           if(r&&r.ok&&r.sessions){ r.sessions.forEach(function(s){
-            var st=(DaoCloud.sessStatus?DaoCloud.sessStatus(s):["",""]);
+            // 账号级额度对账(单一真源·正本清源): 用账号实时额度纠偏陈旧会话原因, 满额号绝不误标额度耗尽。
+            var st=(DaoCloud.sessStatusA?DaoCloud.sessStatusA(s,u.a):(DaoCloud.sessStatus?DaoCloud.sessStatus(s):["",""]));
             var sid=s.devin_id||s.session_id||s.id||"";
             all.push({ accId:(u.a.id||u.a.email||""), accEmail:(u.a.email||u.a.id||""), no:u.no,
               sid:sid, title:(s.title||s.name||s.prompt||sid),

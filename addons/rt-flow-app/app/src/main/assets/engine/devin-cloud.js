@@ -614,8 +614,30 @@
     return (en || status) ? ["running", "运行"] : ["idle", "空闲"];
   }
 
+  // ── 账号实时额度判活 (正本清源·根治「满额号被误标额度耗尽」) ──────────────────
+  //   关键认知: 单条会话的 latest_status_contents.reason=out_of_quota/usage_limit 只是该会话「当时」
+  //   触顶休眠的瞬时原因——日/周免费配额会按周期重置、Extra Usage 美金可续。故账号「此刻」是否真耗尽,
+  //   必须以实时额度 quota 为准, 绝不能被一条陈旧会话原因永久误判 (实测: dPct=100 满额、余额 $68 的号
+  //   仍因最近一条历史会话 reason=out_of_quota 被整号标「额度耗尽」, 即用户反馈「额度根本没耗尽却乱标」)。
+  //   返回: true=账号当前确有可用额度(日/周配额>0 或 美金余额>0); false=确无; null=未知(billing 未取到→保守, 信官方信号)。
+  function quotaLive(q) {
+    if (!q || typeof q !== "object") return null;
+    if (typeof q.dPct === "number" && q.dPct > 0) return true;   // 日配额仍有余 → 可运行
+    if (typeof q.wPct === "number" && q.wPct > 0) return true;   // 周配额仍有余
+    if (typeof q.overageDollars === "number") return q.overageDollars > 0;  // 配额耗尽看 Extra Usage 美金余额
+    if (typeof q.dPct === "number" || typeof q.wPct === "number") return null; // 配额=0 但美金未取到 → 不确定
+    return null;
+  }
+  // 账号级对账: sessStatus 判为 exhausted 时, 若该账号此刻确有可用额度(quotaLive===true) → 归「完成(休眠)」,
+  //   不计额度耗尽; 真耗尽(false)或额度未知(null)则保留官方耗尽信号。其余分类不动。供 recentConvAll/切号面板/通知共用。
+  function sessStatusA(s, acct) {
+    var st = sessStatus(s);
+    if (st[0] === "exhausted" && quotaLive(acct && acct.quota) === true) return ["finished", "完成"];
+    return st;
+  }
+
   root.DaoCloud = {
-    QUOTA_RE: QUOTA_RE, sessStatus: sessStatus,
+    QUOTA_RE: QUOTA_RE, sessStatus: sessStatus, quotaLive: quotaLive, sessStatusA: sessStatusA,
     buildZip: buildZip, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
     buildAccessGuide: buildAccessGuide,
     purgeSession: purgeSession, sessTs: sessTs,

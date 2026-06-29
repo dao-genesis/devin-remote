@@ -3,6 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<!-- 防陈旧缓存(开即最新): 外壳本身是动态控台·不可被浏览器/CDN 长缓存。否则用户开到旧壳(如「第二行没了/对话追踪空」皆陈旧壳),
+     而内层板块虽有 60s 重验自更新、外壳却不更新 → 表象「更新后仍坏」。子页/数据各自有自己的 SWR 与重验, 外壳一律 no-store。 -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Devin Cloud · 手机版 (网页)</title>
 <!-- ─────────────────────────────────────────────────────────────────────────
   道法自然·从根本底层换架构 (v0.37.0): 网页控台不再「截图投屏」, 改为「浏览器原生直渲」。
