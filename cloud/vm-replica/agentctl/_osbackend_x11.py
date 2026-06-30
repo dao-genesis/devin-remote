@@ -1483,6 +1483,23 @@ def _atspi_frame_for(at, win):
             fr, ext = max(cands, key=lambda c: _iou(wrect, c[1]))
             if _iou(wrect, ext) >= 0.25:
                 best = fr
+        if best is None and wrect is not None:
+            # Some toolkits report a frame's accessible extents in *window-local*
+            # coordinates — origin (0,0) — so screen-IoU is 0 for every frame and
+            # cannot tell a modal dialog from its main window (F243, gnome-chess'
+            # "save before new game?" dialog: main frame 700x550 and dialog frame
+            # 489x60 both at (0,0), so the dialog query silently read the board).
+            # The X window's *size* still matches its accessible frame's size, so
+            # when IoU can't decide, pick the frame whose (w,h) is closest — a
+            # near-exact size match is as good as overlap for one-window-per-frame.
+            ww, wh = wrect[2], wrect[3]
+            sized = [c for c in cands if c[1]]
+            if sized:
+                fr, ext = min(sized,
+                              key=lambda c: abs(c[1][2] - ww) + abs(c[1][3] - wh))
+                if (abs(ext[2] - ww) <= max(16, ww * 0.12)
+                        and abs(ext[3] - wh) <= max(16, wh * 0.12)):
+                    best = fr
         if best is None:
             best = cands[0][0]          # honest fallback: first same-pid frame
     for fr, _ in cands:
