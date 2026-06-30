@@ -4142,6 +4142,103 @@ def consensus_affine(votes, min_votes: int = 8, max_iter: int = 4,
             "support": support, "inliers": inl, "n": n, "rms": rms}
 
 
+def flow_residual(votes, field: "dict | None" = None, min_resid: float = 6.0,
+                  cluster_radius: float = 40.0, min_cluster: int = 3,
+                  min_votes: int = 8) -> "dict | None":
+    """Find what moves *independently of the camera* — the seeds whose
+    displacement disagrees with the global flow field, clustered into objects
+    (F268).
+
+    :func:`consensus_affine` (F267) fits the camera's egomotion as a global
+    affine flow and *discards* the seeds that disagree with it as outliers. But
+    those discarded seeds are not noise — under a moving camera they are the
+    signal: a strafing bot, a thrown grenade, a lift, anything moving in the
+    world rather than merely swept by the camera. Practice pins the gap:
+    :func:`locate_change_blobs` segments raw frame change, but while the camera
+    pans *every* pixel changes, so it floods — it cannot tell a moving object
+    from the moving world. Subtracting a single :func:`consensus_shift`
+    translation only works when the world's flow is one shift (it is not, for a
+    yaw — F267). Nothing in the floor turned "motion relative to the modelled
+    flow field" into "here is an object moving on its own, at this position,
+    this fast."
+
+    ``votes`` is an iterable of ``(x, y, dx, dy)`` (seed position + measured
+    displacement, e.g. each a :func:`match_unique` hit) — the same input
+    :func:`consensus_affine` takes. ``field`` is a fitted-affine result to
+    subtract; when ``None`` it is fit here from ``votes`` (so the global model
+    and the residual come from one call). Each seed's residual is its
+    displacement minus the field's prediction at its position; seeds whose
+    residual magnitude is at least ``min_resid`` px survive, and survivors are
+    grouped by single-link spatial proximity (within ``cluster_radius`` px, the
+    :func:`cluster_boxes` idiom) into objects. Each cluster of at least
+    ``min_cluster`` seeds is reported as one independently-moving object
+    ``{x, y, rdx, rdy, speed, n, bbox}``: ``x``/``y`` the residual-seed
+    centroid (a clickable/aim point), ``rdx``/``rdy`` the mean residual velocity
+    (its motion *after* the camera's is removed), ``speed`` its magnitude.
+
+    Returns ``None`` when fewer than ``min_votes`` valid votes survive or the
+    field cannot be fit (degenerate geometry). Otherwise returns
+    ``{field, objects, n_resid, n}``: ``objects`` sorted by seed count (largest
+    first), possibly empty — an honest "the whole scene is just the camera
+    moving, nothing moves on its own", which is the correct answer for a pan
+    over a static map and exactly what frame-diff cannot say."""
+    pts = [(float(x), float(y), float(dx), float(dy))
+           for (x, y, dx, dy) in votes
+           if x is not None and y is not None and dx is not None and dy is not None]
+    n = len(pts)
+    if n < min_votes:
+        return None
+    if field is None:
+        field = consensus_affine(pts, min_votes=min_votes)
+        if field is None:
+            return None
+    ax, ay = field["ax"], field["ay"]
+    resid = []
+    for (x, y, dx, dy) in pts:
+        px = ax[0] + ax[1] * x + ax[2] * y
+        py = ay[0] + ay[1] * x + ay[2] * y
+        rdx, rdy = dx - px, dy - py
+        if (rdx * rdx + rdy * rdy) ** 0.5 >= min_resid:
+            resid.append((x, y, rdx, rdy))
+    # single-link spatial clustering of the residual seeds (leader/union by radius)
+    m = len(resid)
+    parent = list(range(m))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    r2 = cluster_radius * cluster_radius
+    for i in range(m):
+        xi, yi = resid[i][0], resid[i][1]
+        for j in range(i + 1, m):
+            dxx = xi - resid[j][0]
+            dyy = yi - resid[j][1]
+            if dxx * dxx + dyy * dyy <= r2:
+                parent[find(i)] = find(j)
+    groups: "dict[int, list[int]]" = {}
+    for i in range(m):
+        groups.setdefault(find(i), []).append(i)
+    objects = []
+    for members in groups.values():
+        if len(members) < min_cluster:
+            continue
+        k = len(members)
+        sx = sum(resid[i][0] for i in members) / k
+        sy = sum(resid[i][1] for i in members) / k
+        srdx = sum(resid[i][2] for i in members) / k
+        srdy = sum(resid[i][3] for i in members) / k
+        xs = [resid[i][0] for i in members]
+        ys = [resid[i][1] for i in members]
+        objects.append({"x": sx, "y": sy, "rdx": srdx, "rdy": srdy,
+                        "speed": (srdx * srdx + srdy * srdy) ** 0.5, "n": k,
+                        "bbox": (min(xs), min(ys), max(xs), max(ys))})
+    objects.sort(key=lambda o: o["n"], reverse=True)
+    return {"field": field, "objects": objects, "n_resid": m, "n": n}
+
+
 _OCR_ENGINE: "str | None" = None
 
 # Content-addressed OCR cache (F238). tesseract is spawned as a subprocess per
