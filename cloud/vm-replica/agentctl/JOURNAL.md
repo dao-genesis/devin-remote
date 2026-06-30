@@ -8739,3 +8739,68 @@ to `empty_label`; an off-library sprite is `unknown` under `max_score` and force
 to its nearest label without; and `classify_boxes` **agrees with `classify_grid`**
 label-for-label on the same cells (the shared-core guarantee). All twelve floor
 friction tests pass (F254 plus the prior eleven), no regressions.
+
+### F255 — ocr_grid(invert="auto"): the board that mixes ink polarities
+
+**Friction.** Driving gnome-tetravex broke the OCR reader on a kind of board the
+floor had not met: one where the *ink polarity flips within a single board*. A
+tetravex tile is quartered by its diagonals into four triangles, each carrying a
+digit, and the triangles are painted in saturated colours — so the same digit
+"3" is **white on a dark-red triangle** in one cell and **black on a yellow one**
+in the next. `ocr_grid` took `invert` as a single bool applied to every cell, and
+tesseract only reads dark-on-light: with `invert=False` the white-on-dark digits
+came back **empty**, with `invert=True` the black-on-light ones did. There is no
+one bool that reads the board — the caller would have to pre-sort cells by colour
+and call `ocr_grid` twice with disjoint masks, re-rolling per game the very thing
+the grid reader exists to spare them. (Empirically the wall was sharp: a single
+global polarity read **21/36** tile digits; the misses were exactly the
+wrong-polarity cells reading nothing.)
+
+**A discarded hypothesis (worth recording).** The first instinct was that this
+was a *template* problem — that a luma sprite of a white "3" is the photographic
+inverse of a black "3", so `classify_*` should score a cell against both a
+template and its inverse and keep the better. That is true but it does not fix
+*this* board: tetravex digits are small glyphs on busy multi-colour triangles cut
+by diagonal edges, and a polarity-invariant template still keys on the triangle's
+colour and diagonal, not the digit — both polarities scored ~15/36, no better
+than chance-adjacent. The honest reader for small glyphs is OCR, and the friction
+is OCR's, so the fix belongs in `ocr_grid`, not in the template scorer. Following
+the symptom to the wrong layer would have shipped a primitive that proved nothing.
+
+**Solution.** Add `invert="auto"` to `ocr_grid`. The per-cell ink gate already
+measures each cell's mean luma and the pixels that deviate past `ink_tol` (the
+glyph ink) — the very statistic that decides polarity. So `auto` reuses it: if a
+cell's ink is *brighter* than its mean the glyph is light-on-dark and the cell is
+read inverted, otherwise upright; and if the chosen polarity reads nothing, the
+opposite is tried before the cell is given up. No new measurement, no second
+capture, no caller-side colour masking — the gate that already runs per cell now
+also chooses that cell's polarity, so a board that mixes polarities reads in one
+call. The bool path is untouched (and keeps its early-out on the ink count; only
+`auto`, which needs the ink's brightness, sums it).
+
+**Lesson (architecture).** The reader's job is to *normalise away* a board's
+incidental presentation so the recogniser sees something canonical — and polarity
+is presentation, not content. The floor already made the ink *gate*
+polarity-agnostic (it fires on deviation, either sign); F255 finishes the thought
+by making the *read* polarity-adaptive too, per cell rather than per board. The
+unit of adaptation is the cell, because that is the unit at which a real board's
+appearance actually varies — the same reason `ocr_grid` reads per-cell edges
+(F251) and `classify_boxes` reads per-box (F254). Push the adaptation down to the
+grain at which the world varies, and the caller stops pre-sorting the world to fit
+the tool.
+
+**Proof.** *Live, gnome-tetravex (3×3 stock, 36 triangle digits, mixed polarity)*:
+a single global polarity reads **21/36**; `ocr_grid(invert="auto")` reads
+**35/36** — every white-on-dark and black-on-light digit but one, the lone miss a
+genuine tesseract `8`→`3` glyph confusion (not a polarity error). The annotated
+frame overlays each auto-read digit on its triangle: the magenta labels track the
+glyphs across saturated reds, navies and purples (white ink) and yellows, oranges
+and light-blues (black ink) alike. *Synthetic* (`_test_f255.py`, no display, OCR
+engine stubbed to mimic tesseract's dark-on-light requirement): on a board mixing
+both polarities, `invert=False` reads only the dark-on-light cells and
+`invert=True` only the light-on-dark, while `invert="auto"` reads **every** cell;
+auto picks the matching polarity first try (one OCR call per cell when its guess
+is right); it retries the opposite polarity on an empty read; a blank cell is
+still gated out before OCR even under `auto`; and a non-bool/non-"auto" `invert`
+is rejected. All thirteen floor friction tests pass (F255 plus the prior twelve),
+no regressions.
