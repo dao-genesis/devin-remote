@@ -8586,3 +8586,45 @@ engine replied `c7c5` — re-read the new position **perfectly** (e4 white pawn,
 black pawn, e2/c7 empty, 0 unknowns), proving it classifies an *arbitrary* board,
 not just the memorised start. With a tight `max_score=45` the just-moved
 highlighted `e4` square is correctly flagged `?`, the knob behaving as designed.
+
+### F251 follow-up — sudoku reader hardened onto detect_grid (kill the bespoke scan)
+
+**Friction.** Recording the floor play a *full* gnome-sudoku round surfaced a
+latent brittleness in the player, not the floor. `_game_sudoku.detect_board`
+hand-rolled its geometry: it scanned a **hard-coded screen rectangle**
+(`x 420..1160, y 280..920`) for the four heavy 3×3 box-border lines. That window
+was tuned to one particular launch position/size. On this VM the default board
+runs to `y≈1040` and a maximised board fills the screen — both fall outside the
+scan box, so `detect_board` raised `board borders not found` and the player could
+not even start. The reader was sound (`ocr_grid` reads the digits fine); the
+**locator** was the weak link, and its own docstring already *claimed* "no
+hard-coded pixels" — aspirational, not true.
+
+**Fix.** Delete the bespoke scan (`_lum`/`_runs`/`DARK` and the fixed ranges) and
+locate the lattice with the floor primitive built for exactly this — `detect_grid`
+— **scoped to the live window rect** from `window_geometry`: find the `Sudoku`
+window, take its interior (below the ~44px header), and let `detect_grid` return
+the true `bbox`/`xs`/`ys`. `Board` now reads off those detected edges (uneven
+pitch tolerated) and computes cell centres from `xs`/`ys` midpoints. The
+docstring's "no hard-coded pixels" is now *literally* true, and the reader
+survives the window being moved or resized.
+
+**Lesson (architecture).** Every game player that hand-rolls "find the board"
+geometry is a brittle re-implementation of `detect_grid`. The friction was not a
+missing verb — `detect_grid` already existed (F-series) — but a *caller* that
+predated it and never adopted it. Eating bespoke locators back into the primitive
+is the same flow→primitive consolidation as F250/F251, applied to the call site.
+One caller-side caveat worth recording: a search box that *clips* the board makes
+`detect_grid` return a smaller-but-valid lattice (a clipped top read 9×7 with no
+error), so the caller must hand it a generous, board-containing region — here the
+whole window interior — rather than a tight guess.
+
+**Proof.** *Live, default window*: the hardened reader detects `bbox=(511,312,
+1089,890)` 9×9 and reads **32/32 givens**, solver returns a complete solution.
+*Live, maximised window* (the exact case the old scan crashed on): detection now
+*adapts* — `bbox=(271,73,1328,1130)` 9×9 located, no crash (OCR at ~2× cell size
+drops a few, a separate accuracy matter; detection itself is robust). *End-to-end
+recording*: the floor read → solved → filled all **49 empty cells** via
+`click`+`type_unicode`, and gnome-sudoku put up **"Well done, you completed the
+puzzle in 4 minutes!"** — a complete autonomous round. All ten synthetic friction
+tests (F243–F252) still pass, no regressions.
