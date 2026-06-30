@@ -7560,14 +7560,28 @@ class Store {
     const newOnes = parsed.accounts;
     const tokens = parsed.tokens || [];
     let added = 0,
-      duplicate = 0;
+      duplicate = 0,
+      updated = 0;
     const addedEmails = []; // v2.4.3 · 返新加 email 给 webview handler 即时 verify
+    const updatedEmails = []; // 返改密 email · 同样即时 verify (清陈旧 health 后令其重验)
     for (const a of newOnes) {
       const exists = this.accounts.find(
         (x) => x.email.toLowerCase() === a.email.toLowerCase(),
       );
       if (exists) {
-        duplicate++;
+        // 重复邮箱 · 密码不同 → 更新密码 (修正错误密码的唯一面板入口)
+        //   清陈旧 health/blacklist 令其按新密码重新验证 (旧密码缓存导致"未验"假象的根治)
+        if (a.password && exists.password !== a.password) {
+          exists.password = a.password;
+          const k = exists.email.toLowerCase();
+          delete this.health[k];
+          delete this.blacklist[k];
+          delete this.inUseUntil[k];
+          updatedEmails.push(exists.email);
+          updated++;
+        } else {
+          duplicate++;
+        }
         continue;
       }
       this.accounts.push({
@@ -7578,8 +7592,8 @@ class Store {
       addedEmails.push(a.email);
       added++;
     }
-    if (added > 0) this._persistAccountsToMd();
-    return { added, duplicate, tokens, addedEmails };
+    if (added > 0 || updated > 0) this._persistAccountsToMd();
+    return { added, duplicate, updated, tokens, addedEmails, updatedEmails };
   }
   remove(idx) {
     if (idx < 0 || idx >= this.accounts.length) return false;
@@ -10649,7 +10663,7 @@ ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanS
 <div class="add-body${_uiAddOpen ? " open" : ""}" id="addBody">
 <textarea id="addInput" placeholder="万法识号 v2.7 · 任意格式·一文混万法·自动识号：&#10;email password   /   email:password   /   email----password&#10;email|password   /   email,password   /   email\tpassword&#10;邮箱:x@y.com / 账号:x / 卡号1:x   (多行标签·支持数字编号·全角:也行)&#10;密码:abc123 / 卡密1:abc / 口令:abc   (含@亦无碍·守一不退)&#10;{&quot;email&quot;:&quot;x&quot;,&quot;password&quot;:&quot;y&quot;}   (JSON)&#10;devin-session-token$xxx / eyJ…JWT / auth1_…   (直接登录)&#10;微信发货消息原文亦可粘 (自动剥(去掉点)·跳订单/账号管理器)"></textarea>
 <div class="add-actions"><button onclick="doAdd()">添加</button><button onclick="copyAll()" style="background:#333;color:var(--blue);margin-left:auto">&#128203; 一键导出</button></div>
-<div class="add-hint">万法识号 v2.7 · 守道反者 · 卡号/卡密/微信发货/含@密码 皆通 · 原始 token 自动直登 · 重复跳过</div>
+<div class="add-hint">万法识号 v2.7 · 守道反者 · 卡号/卡密/微信发货/含@密码 皆通 · 原始 token 自动直登 · 重复邮箱·密码不同→改密重验·相同→跳过</div>
 </div></div>
 <div class="sec"><span>&#9660; 账号列表 (${stats.pwCount})</span></div>
 <div class="dv-tb">
@@ -12741,6 +12755,7 @@ async function handleWebviewMessage(msg) {
         const r = _store.addBatch(msg.text || "");
         const tks = r.tokens || [];
         let info = "添加 " + r.added + " 个";
+        if (r.updated > 0) info += " · 改密 " + r.updated;
         if (r.duplicate > 0) info += " · 跳重 " + r.duplicate;
         if (tks.length > 0) info += " · " + tks.length + " token (注入中…)";
         _toast(info); // ← 立即告知 · 不等 injectToken
@@ -12768,12 +12783,17 @@ async function handleWebviewMessage(msg) {
               log("addBatch token直登 ✗ " + (inj.note || ""));
             }
           }
-          if (r.added > 0 && r.addedEmails && r.addedEmails.length > 0) {
-            const newEmails = [...r.addedEmails];
+          const newEmails = [
+            ...(r.addedEmails || []),
+            ...(r.updatedEmails || []), // 改密账号同样即时重验 (清陈旧 health 后按新密码验证)
+          ];
+          if (newEmails.length > 0) {
             const _vq = [...newEmails]; // 共享队列 · 3 worker 竞争消费
             log(
               "addBatch · 新加 " +
-                newEmails.length +
+                (r.addedEmails || []).length +
+                " · 改密 " +
+                (r.updatedEmails || []).length +
                 " 号 · 并行 verify 3 workers · 零等待",
             );
             // 并行 verify worker · 共享 _vq 队列
@@ -15266,7 +15286,7 @@ async function activate(context) {
               });
         if (!text) return;
         const r = _store.addBatch(text);
-        let info = "添加 " + r.added + " 个 · 跳重 " + r.duplicate;
+        let info = "添加 " + r.added + " 个" + (r.updated > 0 ? " · 改密 " + r.updated : "") + " · 跳重 " + r.duplicate;
         const tks = r.tokens || [];
         if (tks.length > 0) {
           const inj = await injectToken(tks[0]);
