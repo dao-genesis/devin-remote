@@ -9051,3 +9051,65 @@ selects threats (2) vs wins (4) vs singletons (1); `directions` selects axes;
 `background` (single or set) bounds runs and is never itself a run; deterministic
 order and re-run identity; args validated. All seventeen floor friction tests pass
 (F259 plus the prior sixteen), no regressions.
+
+### F260 — react_pixel: the reflex wait_pixel couldn't be, where the act is the score
+
+**Friction.** I went looking for the floor's realtime ceiling and opened the Human
+Benchmark **Reaction Time** test — a box sits red ("wait for green"), turns green at a
+random instant, and the site scores the *milliseconds* from the green frame to your
+click. Every turn-based game the floor has played so far measures nothing about *when*
+you act; this game measures only that. So I played it the idiomatic way: `move` to the
+box, `wait_pixel(center, GREEN, interval=0)` to watch the one pixel, then `click` the
+instant it returns. The site read **34-38 ms**. Good — until I read where those
+milliseconds went. Two leaks, both structural, neither about the screen:
+
+1. **`wait_pixel` watches but cannot act.** It returns a *bool*, so the reflex is two
+   verbs: the watch returns into my Python, my Python decides, my Python calls `click`.
+   The detection edge and the action are separated by a whole round-trip back through
+   the caller — exactly the seam a reflex must not have.
+2. **`click` re-homes the pointer every time.** `click(x,y)` does `move(x,y)` then
+   `time.sleep(0.02)` (let the cursor land) *then* presses. In a reaction game the
+   cursor is already on the box — I put it there to start — so that move + **20 ms**
+   settle is pure dead latency that the game scores against me. Measured: of the
+   34-38 ms, ~20 ms was the settle alone. The floor had a patient *watch* (`wait_pixel`)
+   and a careful *click*, but no **reflex** — no way to fire on the same edge the eye
+   sees, in place, now.
+
+**Solution.** `react_pixel(x, y, rgb, tol=24, timeout=5.0, interval=0.0, act="click")`
+— the reactive twin of `wait_pixel`. It spin-reads the one pixel (a single-pixel grab
+is the floor's cheapest read, ~0.03 ms, so `interval=0.0` polls at tens of kHz) until
+within `tol` of `rgb`, then performs `act` **in the same breath**, with no return to
+the caller in between: `"click"`/`"press"` press+release the left button *where the
+cursor already sits* — no move, no settle; `"none"` just detects (a `wait_pixel` that
+reports latency instead of a bool); a zero-argument *callable* fires once at the
+detection instant (tap a key, click elsewhere, anything). It returns `{matched,
+wait_ms, act_ms, polls, rgb}` — `wait_ms` is call→detect, `act_ms` is
+detect→action-returned: the very gap the verb exists to crush, now reported so you can
+see it is gone. Pre-position with `move(x,y)` and the press path costs nothing the game
+can measure.
+
+**Lesson (architecture).** The floor's waiting verbs were all *observers* — they watch
+a state and hand a verdict back to the caller, who then acts. That seam is invisible
+when the deadline is "before the human notices" but it *is* the score when the deadline
+is the next monitor frame. The fix is not a faster `click`; it is collapsing
+perceive→decide→act into one primitive so there is no seam to leak through, and
+exposing the latency it removes (`act_ms`) so the saving is measurable rather than
+asserted. `wait_pixel` is to `react_pixel` what a glance is to a reflex: the same watch,
+but the hand moves on the same edge the eye sees. This is the first floor verb whose
+*whole value is temporal* — the realtime dual of the spatial reducers (`label_regions`,
+`line_runs`): those say *where*, this says *when*, and acts there.
+
+**Proof.** *Live, Human Benchmark Reaction Time*: a driver (`_game_reaction.py`)
+pre-positions the cursor and uses `react_pixel(center, GREEN, act="press")` as its whole
+reflex; across rounds it spun ~95k-135k times over the random 2-3 s red, then fired with
+`act_ms` of **0.2-1.9 ms** (versus `click`'s fixed 20 ms settle) and scored as low as
+**18 ms** on the site — against the human median of 273 ms shown on the same screen
+(the residual 18 ms is browser render + monitor latency, no longer the floor). The same
+driver plays one round the old `wait_pixel`+`click` way for contrast. *Synthetic*
+(`_test_f260.py`, no display — the screen and mouse are stubbed): the button fires
+exactly once, on the poll that first matches and never on any earlier one; `act="none"`
+detects mouse-free; a callable fires once at the detection instant; `timeout` returns
+`matched=False` having fired nothing; per-channel `tol` gates a near-miss so an
+anti-aliased edge won't false-fire; and `{wait_ms, act_ms, polls, rgb}` report the
+budget. All eighteen floor friction tests pass (F260 plus the prior seventeen), no
+regressions.

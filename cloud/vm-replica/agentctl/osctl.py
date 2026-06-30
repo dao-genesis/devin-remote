@@ -1463,6 +1463,76 @@ def wait_pixel(x: int, y: int, rgb: "tuple[int, int, int]", tol: int = 12,
         time.sleep(interval)
 
 
+def react_pixel(x: int, y: int, rgb: "tuple[int, int, int]", tol: int = 24,
+                timeout: float = 5.0, interval: float = 0.0,
+                act="click") -> dict:
+    """Spin-watch the pixel at ``(x, y)`` and fire an action the *instant* it comes
+    within ``tol`` of ``rgb`` — the reactive twin of :func:`wait_pixel` (F260).
+
+    ``wait_pixel`` watches and returns a bool; the caller must then call
+    :func:`click`, and ``click`` *moves* the cursor and sleeps 20 ms to let it land
+    before pressing. In a reaction game the cursor is already on the target, so that
+    move + settle is pure dead latency that the game scores against you — measured on
+    the reaction-time test, a tight watch + ``click`` read 34-38 ms, ~20 ms of it the
+    settle alone. Two costs hide here: the perceive→act handoff crosses back into the
+    caller (a second verb call), and ``click`` always re-homes the pointer.
+
+    This fuses perceive and act so there is *no* gap between them. It reads ``(x, y)``
+    every ``interval`` seconds (``0.0`` = spin at full rate; a single-pixel read is the
+    floor's cheapest grab, ~0.03 ms) until within ``tol`` of ``rgb``, then performs
+    ``act`` in the same breath:
+
+    - ``"click"`` / ``"press"`` — press+release the left button **where the cursor
+      already sits**, with no move and no settle (pre-position with ``move(x, y)``
+      before calling: this is the whole point — the reaction case);
+    - ``"none"`` — only detect (``wait_pixel`` with a latency report instead of a bool);
+    - a zero-argument *callable* — invoked once, at the detection instant (tap a key,
+      click elsewhere, anything).
+
+    Returns ``{matched, wait_ms, act_ms, polls, rgb}``: ``wait_ms`` is call→detect,
+    ``act_ms`` is detect→action-returned (the gap this verb exists to crush), ``polls``
+    the number of reads, ``rgb`` the colour last seen. On ``timeout`` it returns
+    ``matched=False`` having fired nothing. It is to ``wait_pixel`` what a reflex is to
+    a glance: the same watch, but the hand moves on the same edge the eye sees."""
+    if not (isinstance(rgb, (tuple, list)) and len(rgb) == 3):
+        raise ValueError("rgb must be an (r, g, b) triple")
+    if timeout < 0 or interval < 0:
+        raise ValueError("timeout and interval must be >= 0")
+    if callable(act):
+        fire = act
+    elif act in ("click", "press"):
+        def fire():
+            _mouse_button("left", True)
+            _mouse_button("left", False)
+    elif act == "none":
+        fire = None
+    else:
+        raise ValueError("act must be 'click', 'press', 'none' or a callable")
+    tr, tg, tb = rgb
+    t0 = time.monotonic()
+    deadline = t0 + timeout
+    polls = 0
+    last = (0, 0, 0)
+    while True:
+        last = pixel(x, y)
+        polls += 1
+        r, g, b = last
+        if abs(r - tr) <= tol and abs(g - tg) <= tol and abs(b - tb) <= tol:
+            t_det = time.monotonic()
+            if fire is not None:
+                fire()
+            t_act = time.monotonic()
+            return {"matched": True, "wait_ms": (t_det - t0) * 1000.0,
+                    "act_ms": (t_act - t_det) * 1000.0, "polls": polls,
+                    "rgb": last}
+        now = time.monotonic()
+        if now >= deadline:
+            return {"matched": False, "wait_ms": (now - t0) * 1000.0,
+                    "act_ms": 0.0, "polls": polls, "rgb": last}
+        if interval > 0:
+            time.sleep(interval)
+
+
 def screenshot(path: str) -> str:
     """Capture the whole virtual desktop to a PNG via GDI BitBlt."""
     w, h, rgb = capture_rgb()
