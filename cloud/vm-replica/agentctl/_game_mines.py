@@ -75,6 +75,40 @@ def read_board():
     return board, xs, ys, cw, ch
 
 
+def _grid_bbox(xs, ys, cw, ch):
+    return (xs[0], ys[0], xs[-1] + cw - 1, ys[-1] + ch - 1)
+
+
+def read_full(xs, ys, cw, ch):
+    """Classify the whole board from one capture; also return that capture so a
+    later :func:`read_delta` can diff against it. Returns ``(board, rgb, size)``."""
+    global _CUR_H
+    W, H, rgb = osctl.capture_rgb()
+    _CUR_H = H
+    board = [[_classify(rgb, W, cx, cy, cw, ch) for cx in xs] for cy in ys]
+    return board, rgb, (W, H)
+
+
+def read_delta(prev_board, prev_rgb, xs, ys, cw, ch):
+    """Re-classify only the cells that changed since ``prev_rgb`` (F250).
+
+    A mines move reveals a handful of cells (a flood-fill region) or toggles one
+    flag; re-OCRing all 64 every round is the waste F250 removes. ``grid_changes``
+    flags the moved cells from the two captures and we re-run ``_classify`` on
+    those alone, copying the rest from ``prev_board``. Returns
+    ``(board, rgb, size, n_reclassified)``."""
+    global _CUR_H
+    W, H, rgb = osctl.capture_rgb()
+    _CUR_H = H
+    bbox = _grid_bbox(xs, ys, cw, ch)
+    changed = osctl.grid_changes(prev_rgb, rgb, bbox, len(xs), len(ys),
+                                 (W, H), inset=0.18, tol=24, min_count=10)
+    board = [row[:] for row in prev_board]
+    for (r, c) in changed:
+        board[r][c] = _classify(rgb, W, xs[c], ys[r], cw, ch)
+    return board, rgb, (W, H), len(changed)
+
+
 def print_board(board):
     for row in board:
         print(' '.join(row))
@@ -173,40 +207,51 @@ def _best_guess(board, flagged, total_mines):
 
 
 def solve(max_rounds=60, total_mines=10):
-    """Play until win/loss/stuck. Returns ('win'|'lost'|'stuck', rounds)."""
+    """Play until win/loss/stuck. Returns ('win'|'lost'|'stuck'|'maxrounds',
+    rounds, board).
+
+    The board is read in full once; every later read is a F250 delta that
+    re-classifies only the cells a move actually changed, instead of all R*C
+    every round. ``solve.last_reclassified`` / ``solve.last_full`` report the
+    cells re-classified vs the count a full re-read each round would have cost."""
+    wid, xs, ys, cw, ch = grid_geometry()
+    R, C = len(ys), len(xs)
     flagged = set()
+    board, prev_rgb, _ = read_full(xs, ys, cw, ch)
+    reclassified = R * C          # the initial full read
+    full_equiv = R * C
     for rnd in range(max_rounds):
-        board, xs, ys, cw, ch = read_board()
-        R, C = len(board), len(board[0])
+        b = [row[:] for row in board]
         for (r, c) in flagged:
-            board[r][c] = 'F'
-        to_flag, to_open = _deduce(board, flagged, total_mines)
+            b[r][c] = 'F'
+        to_flag, to_open = _deduce(b, flagged, total_mines)
         to_open -= flagged
         if not to_flag and not to_open:
-            # No deterministic move. Guess the frontier cell with the lowest
-            # estimated mine probability (least-risk progress).
-            guess = _best_guess(board, flagged, total_mines)
+            guess = _best_guess(b, flagged, total_mines)
             if guess is None:
-                return 'stuck', rnd, board
+                solve.last_reclassified = reclassified; solve.last_full = full_equiv
+                return 'stuck', rnd, b
             click_cell(xs, ys, cw, ch, guess[0], guess[1], right=False)
             time.sleep(0.7)
-            continue
-        for (r, c) in to_flag:
-            if (r, c) not in flagged:
-                click_cell(xs, ys, cw, ch, r, c, right=True)
-                flagged.add((r, c)); time.sleep(0.12)
-        for (r, c) in to_open:
-            click_cell(xs, ys, cw, ch, r, c, right=False)
-            time.sleep(0.12)
-        time.sleep(0.6)
-        # win check: flags == mine count and no '.' left except flagged
-        b2, *_ = read_board()
+        else:
+            for (r, c) in to_flag:
+                if (r, c) not in flagged:
+                    click_cell(xs, ys, cw, ch, r, c, right=True)
+                    flagged.add((r, c)); time.sleep(0.12)
+            for (r, c) in to_open:
+                click_cell(xs, ys, cw, ch, r, c, right=False)
+                time.sleep(0.12)
+            time.sleep(0.6)
+        board, prev_rgb, _, n = read_delta(board, prev_rgb, xs, ys, cw, ch)
+        reclassified += n; full_equiv += R * C
+        b2 = [row[:] for row in board]
         for (r, c) in flagged:
             b2[r][c] = 'F'
-        remaining = sum(row.count('.') for row in b2)
-        if remaining == 0:
+        if sum(row.count('.') for row in b2) == 0:
+            solve.last_reclassified = reclassified; solve.last_full = full_equiv
             return 'win', rnd, b2
-    return 'maxrounds', max_rounds, None
+    solve.last_reclassified = reclassified; solve.last_full = full_equiv
+    return 'maxrounds', max_rounds, board
 
 
 if __name__ == '__main__':
