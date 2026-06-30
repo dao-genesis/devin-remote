@@ -2838,7 +2838,6 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
     Set ``fallback_psm=0`` to disable the retry."""
     import hashlib
     import subprocess
-    engine = _ocr_engine()
     if region is None:
         w, h, buf = capture_rgb()
         rx, ry = 0, 0
@@ -2894,6 +2893,8 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
     cached = _OCR_CACHE.get(key)
     if cached is not None:
         return cached
+
+    engine = _ocr_engine()
 
     def _run(p: int) -> str:
         cmd = [engine, "stdin", "stdout", "--psm", str(p)]
