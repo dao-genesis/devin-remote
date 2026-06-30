@@ -773,9 +773,24 @@ export async function activate(context: vscode.ExtensionContext) {
                     vscode.window.showInformationMessage('Bridge 接入信息已复制 (URL + Token)');
                     return { ok: !!(url || tok) };
                 }
-                if (c === 'bridgeStart') { await bridgeStartTunnel(false); vscode.window.showInformationMessage('隧道已启动'); return { ok: true }; }
+                if (c === 'bridgeStart') {
+                    const r = await bridgeStartTunnel(false);
+                    if (r.ok) vscode.window.showInformationMessage('隧道已启动');
+                    else vscode.window.showWarningMessage(r.reason === 'cloudflared-not-found'
+                        ? '未找到 cloudflared：无法启动公网隧道。请装 cloudflared 到 PATH 或 ~/.dao/bin/，或改用命名隧道。'
+                        : '公网隧道启动失败（cloudflared 无法运行）。');
+                    return r;
+                }
                 if (c === 'bridgeStop') { bridgeStopTunnel(); vscode.window.showInformationMessage('隧道已停止'); return { ok: true }; }
-                if (c === 'bridgeRestart') { const wasNamed = !!bridgeReadNamedToken(); bridgeStopTunnel(); await bridgeStartTunnel(wasNamed); vscode.window.showInformationMessage('隧道已重启'); return { ok: true }; }
+                if (c === 'bridgeRestart') {
+                    const wasNamed = !!bridgeReadNamedToken(); bridgeStopTunnel();
+                    const r = await bridgeStartTunnel(wasNamed);
+                    if (r.ok) vscode.window.showInformationMessage('隧道已重启');
+                    else vscode.window.showWarningMessage(r.reason === 'cloudflared-not-found'
+                        ? '未找到 cloudflared：无法重启公网隧道。请装 cloudflared 或改用命名隧道。'
+                        : '公网隧道重启失败（cloudflared 无法运行）。');
+                    return r;
+                }
                 if (c === 'bridgeRefreshToken') {
                     if (!bridgeUrl) { vscode.window.showWarningMessage('当前为常驻桥持久化连接 · Token 由常驻服务管理。请先「启动隧道」再刷新。'); return { ok: false }; }
                     // 帛书·「知常曰明」: 对外令牌恒等机器级恒稳源 ws.token(永不再漂)。
@@ -4253,7 +4268,8 @@ function bridgeHubApi(p: string): Promise<{ status: number; text: string }> {
 
 function bridgeFindCloudflared(): string {
     const { execSync } = require('child_process');
-    // 1. 已知位置优先(直接 .exe, 不走 npm wrapper 等间接脚本)
+    const isWin = process.platform === 'win32';
+    // 1. 已知位置优先(直接二进制, 不走 npm wrapper 等间接脚本)
     const candidates = [
         path.join(os.homedir(), '.dao', 'bin', 'cloudflared.exe'),
         path.join(os.homedir(), '.dao', 'bin', 'cloudflared'),
@@ -4261,19 +4277,27 @@ function bridgeFindCloudflared(): string {
         'C:\\cloudflared\\cloudflared.exe',
         '/usr/local/bin/cloudflared',
         '/usr/bin/cloudflared',
+        '/opt/homebrew/bin/cloudflared',
     ];
     for (const c of candidates) {
         if (fs.existsSync(c)) return c;
     }
-    // 2. PATH fallback(仅取 .exe 结尾的真实二进制, 跳过 npm wrapper 等脚本)
+    // 2. PATH 解析(跨平台)。根治(同 selfUpdateFindCli 旧坑): 旧版仅用 Windows 专属 `where`
+    //    → 非 Win 恒失败; 且兜底返回字面量 'cloudflared' → 缺二进制时 spawn ENOENT 被吞,
+    //    上层却报「隧道已启动」(臆造成功)。改为按平台解析, 找不到则返回空串由调用方诚实报错。
     try {
-        const lines = execSync('where cloudflared', { encoding: 'utf8', timeout: 5000 }).trim().split('\n');
-        for (const l of lines) { const p = l.trim(); if (p && /\.exe$/i.test(p) && fs.existsSync(p)) return p; }
-    } catch {}
-    return 'cloudflared'; // fallback to PATH
+        if (isWin) {
+            const lines = execSync('where cloudflared', { encoding: 'utf8', timeout: 5000 }).trim().split('\n');
+            for (const l of lines) { const p = l.trim(); if (p && /\.exe$/i.test(p) && fs.existsSync(p)) return p; }
+        } else {
+            const p = execSync('command -v cloudflared', { encoding: 'utf8', timeout: 5000 }).trim();
+            if (p && fs.existsSync(p)) return p;
+        }
+    } catch { /* 守柔 */ }
+    return ''; // 未找到: 返回空串(不再返回字面量制造假成功)
 }
 
-async function bridgeStartTunnel(named: boolean) {
+async function bridgeStartTunnel(named: boolean): Promise<{ ok: boolean; reason?: string; url?: string; reused?: boolean }> {
     const { spawn } = require('child_process');
     bridgeEnsureDir();
     // 帛书·「知常曰明」: 对外令牌恒等机器级恒稳源 ws.token(載盤即復·永不再漂);
@@ -4293,7 +4317,7 @@ async function bridgeStartTunnel(named: boolean) {
                 bridgeWriteArtifacts();
                 refreshDaoCloudMiddlePanel();
                 bridgeStartUrlPoll();
-                return;
+                return { ok: true, reused: true, url: u };
             }
         }
     }
@@ -4302,6 +4326,8 @@ async function bridgeStartTunnel(named: boolean) {
     const staleOrphan = cfPidAlive();
     if (staleOrphan) { try { process.kill(staleOrphan); } catch {} }
     const cfPath = bridgeFindCloudflared();
+    // 守柔·不臆造成功: 缺 cloudflared 二进制时不假装已启动, 诚实回报由调用方提示用户。
+    if (!cfPath) { return { ok: false, reason: 'cloudflared-not-found' }; }
     const targetPort = ws.port || DEFAULT_PORT;
     const localUrl = `http://127.0.0.1:${targetPort}`;
     let args: string[];
@@ -4320,12 +4346,21 @@ async function bridgeStartTunnel(named: boolean) {
     try {
         bridgeProc = spawn(cfPath, args, { stdio: ['ignore', out, out], detached: true });
     } catch {
-        bridgeProc = spawn(cfPath, args, { stdio: 'ignore', detached: true });
+        try { bridgeProc = spawn(cfPath, args, { stdio: 'ignore', detached: true }); }
+        catch { bridgeProc = null; }
     }
-    try { if (bridgeProc && bridgeProc.pid) fs.writeFileSync(CF_PID, String(bridgeProc.pid)); } catch {}
+    // ENOENT 等 spawn 失败在 *nix 多以异步 'error' 事件呈现(pid 为空)。挂监听避免未捕获 'error' 掀翻宿主,
+    //   并据 pid 判定是否真起来(无 pid → 诚实回报失败, 不再静默假成功)。
+    if (!bridgeProc || !bridgeProc.pid) {
+        if (bridgeProc) { try { bridgeProc.on('error', () => { bridgeProc = null; }); } catch {} }
+        return { ok: false, reason: 'spawn-failed' };
+    }
+    try { fs.writeFileSync(CF_PID, String(bridgeProc.pid)); } catch {}
     try { bridgeProc.unref(); } catch {}
     bridgeStartUrlPoll();
+    bridgeProc.on('error', () => { bridgeProc = null; refreshDaoCloudMiddlePanel(); });
     bridgeProc.on('exit', () => { bridgeProc = null; refreshDaoCloudMiddlePanel(); });
+    return { ok: true };
 }
 
 function bridgeStopTunnel() {
