@@ -31,6 +31,18 @@ def _grab():
     W, H, RGB = osctl.capture_rgb(0, 0, 1600, 1200)
 
 
+def _ensure_started():
+    for w in osctl.list_windows():
+        if (w.get('title') or '') != 'Select Difficulty':
+            continue
+        for e in osctl.uia_find_all(w['id'], max_scan=2000):
+            if e.get('name') == 'Easy':
+                x, y, w0, h0 = e['rect']
+                osctl.click(x + w0 // 2, y + h0 // 2)
+                time.sleep(1.5)
+                return
+
+
 def _lum(x, y):
     i = (y * W + x) * 3
     return (RGB[i] * 299 + RGB[i + 1] * 587 + RGB[i + 2] * 114) // 1000
@@ -124,6 +136,7 @@ def solve(g):
 
 
 def play(verbose=True):
+    _ensure_started()
     b = Board()
     given = b.read()
     if verbose:

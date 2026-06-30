@@ -50,7 +50,10 @@ def _classify(rgb, W, cx, cy, cw, ch):
     cr, cg, cb = _avg(rgb, W, cx + 4, cy + 4, cx + cw // 4, cy + ch // 4)
     if _is_unrevealed(cr, cg, cb):
         return 'F'
-    digit = osctl.ocr_text((cx + 25, cy + 20, cw - 50, ch - 40),
+    pad_x = max(4, cw // 6)
+    pad_y = max(4, ch // 6)
+    digit = osctl.ocr_text((cx + pad_x, cy + pad_y,
+                            max(1, cw - 2 * pad_x), max(1, ch - 2 * pad_y)),
                            whitelist='12345678', psm=10, scale=2,
                            rgb=rgb, size=(W, _CUR_H))
     digit = ''.join(c for c in digit if c.isdigit())

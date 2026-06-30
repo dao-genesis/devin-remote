@@ -2,6 +2,63 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.326 · ④ 模型反代档位热切换(朴散则为器 · 家族归组 + 档位热切 + 别名直调)
+: 把 Devin Desktop 的「选档」底层逻辑迁入 ④ 模型反代——同族多档(none/low/medium/high/xhigh/max,
++thinking/+fast)按**家族归组**呈现,行内一个**档位下拉**可热切该族「当前活跃档」,热生效无需重启。
+- 后端 `revproxy.js` 新增家族·档位归一: `buildFamilyIndex`(从官方目录按 modelFamilyUid 归组)、
+  `_familyActiveUid`(默认择档通用规则: **免费档优先** → 家族默认档 → 中档 → 首档·"免费即默认主力")、
+  `familySummary`(每族活跃档 + 各档独立配额色)、`_resolveFamilyAlias`(干净家族名/familyUid → 当前活跃档)。
+- 新增控制面 `POST /origin/revproxy/tier {familyUid,modelUid}` 热切档位落盘 `revproxy.json.tiers`;
+  `/origin/revproxy/status` 回传 `families[]`+`tiers`;`/v1/models` 额外暴露**家族别名**(如 `gpt-5.4`)
+  供外部以干净家族名调当前活跃档,显式档位 uid 仍精确直达不被改写。
+- `resolveTarget` 前置家族别名解析: 外接客户端用 `glm-5.1` 即拿当前活跃档,`gpt-5-4-high` 仍精确指定。
+- 前端 ④ 面板 `_rpRenderList` 重构为按家族归组: 多档族一行 family + 档位下拉(每档带 🟢/🔴/🟡 实时配额色),
+  单档族保持原样;切档即 POST tier 热生效并刷新。图例增 `N族(M族多档可热切)`;一键自测下拉按家族 optgroup。
+- 通用适配全部 16 个多档家族(GLM/GPT/Claude 各档),非仅 GLM;每档保留独立红绿配额色(非家族继承)。
+- 自检 [13] 新增: 家族归组 + 默认择档 + 别名解析 + 热切生效 + 缺参 400,revproxy 自检扩至 45 断言全过。
+
+v9.9.325 · 官方直通回包解码归一(配额信号真源 · Connect end-stream gzip 解)
+: 修复 ④ 模型反代「官方直通」实测：捕获帧已能正确改写并真转上游(v9.9.324),但回包恒报
+「官方回包解码为空」。真因：上游 Connect 流式回包的**收尾帧 = gzip 压缩的 end-stream 帧**
+(flags bit0=compressed + bit1=end-stream, 载荷为 JSON `{}`/`{"error":{code,message}}`),旧解码把
+gzip 字节直喂 `parseProto` 取串 → 必空;且 HTTP 200 也会在此帧内携带 quota 错误(**此处才是
+配额信号真源**)。
+- `_officialChatReplay` 回包处理重写：经 `parseFrames` 解 gzip 后,**按帧型分流**——end-stream
+  帧(bit1)按 JSON 解析取 `error`;data 帧按 proto 收集助手增量文本。检出 `quota/exhaust/
+  governor/precondition` → `_signalPremiumQuota("exhausted")` → 付费档实时转红、免费档恒绿。
+- 实测(账号当日配额已尽)：付费 claude-sonnet 经反代真转上游 → 解出真·上游报文
+  「Your daily usage quota has been exhausted…」→ premiumQuota 翻 exhausted → 119 模型即时
+  **18 绿(8 免费+10 渠道) / 101 红 / 0 琥珀**,与渠道配置同源全量着色一致。
+- 自检 [12] 扩充：end-stream gzip 帧解压 + JSON error 解析 + quota 正则命中,共 32 断言全过。
+
+v9.9.324 · 官方直通捕获帧解析归一(反者道之动 · schema 自适应 · 逐字节保形)
+: 修复 ④ 模型反代「官方直通」实测报「捕获帧解析失败」。真因：新版 Cascade GetChatMessage
+wire 已将**消息数组从 field2 迁到 field3、正文从 sub-field2 迁到 sub-field3**，旧 `findMsgsField`
+误把 field2(15883B 系统提示长串·`looksLikeUtf8Text` 命中)当消息数组、且 `_pbCloneSwapStrings`
+仅换 <200B 纯 ASCII 短串、容不下多行长正文 → 解析必败。
+- `_swapLastUserMsg` 重写为 **schema 自适应**：候选 [3,2,10,17] 里挑「末条目可解析且含字符串正文」
+  者为消息数组，末条目内取「最长 UTF-8 子字段」为正文，经 `_pbRebuildField` 沿 path 逐字节重算
+  长度前缀替换（只改末条、其余原样保形），不再依赖短串白名单。
+- `_officialChatReplay` 摘除 `connect-content-encoding/grpc-encoding` 头（`buildFrame` 恒输出
+  uncompressed，留 gzip 声明会被上游误解致 400）。
+- 自检新增 [12] 捕获帧解析回归：新wire(field3)/老wire(field2)末条正文换入 + 首条保形 + 空帧不崩。
+  revproxy 自检 29 断言全过。
+
+v9.9.323 · 模型反代「全量呈现 + 配额着色 + 官方直通」(道法自然 · 万物并育而不相害)
+: ④ 模型反代不再只列已接通的若干模型，而是像「② 渠道配置」一样**全量呈现一切可反代之模型**——
+官方全量目录(108)+ 运行时官方家族 + 模型路由表 + 渠道显式 models，去重并育于一张列表。
+
+① 配额着色(绿/红/琥珀) — 每个模型按「配额/费档」实时着色：免费档(swe-1-6 等 7 个 FREE)与已接通渠道
+**恒绿**；官方付费档随付费配额观测态着色——有配额=绿、配额耗尽=**红**、未探测=琥珀。面板含图例统计
+(🟢N 🔴N 🟡N · 免费N · 付费配额态) + 状态过滤(全部/可用/无配额/免费/渠道) + 关键词搜索。
+
+② 官方直通(免费模型脱离配额) — `revproxy.js` 新增官方直通分支：未映射第三方渠道的官方模型经
+`source.js` 捕获最近一帧真 GetChatMessage 请求、换入新 user turn 后真转云端官方推理链、解码回包
+(`_officialChatReplay`)。免费档即便付费配额耗尽仍可反代出包。未预热时返回明确提示(非伪成功)。
+
+③ 接口 — `/origin/revproxy/status` 与 `/v1/models` 现回传全量模型 + `color/status/note/free/costTier`
+及 `stats`、`premiumQuota`；命令面板「查看模型反代」与 ④ 面板均按此着色。自检 revproxy 25 断言全过。
+
 v9.9.322 · 新增第四面板「模型反代」(反者道之动 · 脱离 Devin Desktop · 标准本地端点)
 : 在原三面板(①本源观照 ②渠道配置 ③模型路由)之上新增 **④ 模型反代**。把「②渠道配置/③模型路由」
 里已接通的模型(免费 GLM、官方家族映射、任意 OpenAI·Anthropic 兼容渠道)**反向**暴露为标准本地端点，

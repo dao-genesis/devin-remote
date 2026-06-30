@@ -657,7 +657,10 @@ async function sendMessage(auth, devinId, message, opts) {
 
 // 事件流 (SSE/ndjson/json 混合) → 去重排序后的事件数组
 async function getEventStream(auth, devinId) {
-  const url = CFG.apiBase + "/events/" + devinId + "/stream";
+  // /events/<id>/{stream,first-load} 要求 devin- 前缀 (无前缀 → 403 → 0 事件 → 空 MD)。
+  // 归一: 内部强制补前缀, 兼容 resolveConvMd 等剥前缀的调用方与已带前缀的调用方。
+  const _eid = "devin-" + String(devinId || "").replace(/^devin-/, "");
+  const url = CFG.apiBase + "/events/" + _eid + "/stream";
   let resp;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -677,7 +680,7 @@ async function getEventStream(auth, devinId) {
   }
   if (resp == null) {
     // first-load 兜底
-    const r = await jsonRequest("GET", CFG.apiBase + "/events/first-load/" + devinId, authHeaders(auth));
+    const r = await jsonRequest("GET", CFG.apiBase + "/events/first-load/" + _eid, authHeaders(auth));
     return asArray(r.json, "result", "events");
   }
   const merged = new Map();

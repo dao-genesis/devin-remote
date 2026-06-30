@@ -285,6 +285,203 @@ let KEY = "";
     ok("bad key 401", res._status === 401);
   }
 
+  // ── 全量枚举 + 绿红着色 + 官方直通 ───────────────────────────────
+  const catalog = [
+    {
+      modelUid: "swe-1-6",
+      label: "SWE-1.6",
+      provider: "MODEL_PROVIDER_WINDSURF",
+      creditMultiplier: 0.5,
+      modelCostTier: "MODEL_COST_TIER_FREE",
+    },
+    {
+      modelUid: "claude-opus-4-7-medium",
+      label: "Claude Opus 4.7 Medium",
+      provider: "MODEL_PROVIDER_ANTHROPIC",
+      creditMultiplier: 10,
+      modelCostTier: "MODEL_COST_TIER_MEDIUM",
+    },
+  ];
+  const depsFull = Object.assign({}, deps, {
+    getModelCatalog: () => catalog,
+    getOfficialFamilies: () => [],
+  });
+
+  console.log("[8] 全量枚举: 官方目录并入 + 绿红着色");
+  revproxy.setPremiumQuota("exhausted");
+  r = await call("GET", "/v1/models", null, depsFull);
+  j = JSON.parse(r.body);
+  const mFree = j.data.find((m) => m.id === "swe-1-6");
+  const mPrem = j.data.find((m) => m.id === "claude-opus-4-7-medium");
+  const mChan = j.data.find((m) => m.id === "glm-test");
+  ok("枚举含官方免费 swe-1-6", !!mFree);
+  ok("免费档=绿(免费·官方直通)", mFree && mFree.color === "green" && mFree.status === "free");
+  ok("付费档配额耗尽=红", mPrem && mPrem.color === "red" && mPrem.status === "exhausted");
+  ok("已配渠道=绿(channel)", mChan && mChan.color === "green" && mChan.status === "channel");
+  const rs = await call("GET", "/origin/revproxy/status", null, depsFull);
+  const js = JSON.parse(rs.body);
+  ok("status 含统计 stats.green/red", typeof js.stats.green === "number" && js.stats.red >= 1);
+  ok("status 回传 premiumQuota", js.premiumQuota === "exhausted");
+
+  console.log("[9] 付费配额=ok 时官方付费转绿");
+  revproxy.setPremiumQuota("ok");
+  r = await call("GET", "/v1/models", null, depsFull);
+  j = JSON.parse(r.body);
+  ok(
+    "配额 ok → 付费档绿",
+    j.data.find((m) => m.id === "claude-opus-4-7-medium").color === "green",
+  );
+
+  console.log("[10] 官方直通: 未配渠道的官方模型不再 no_route");
+  let officialCalled = null;
+  const depsOfficial = Object.assign({}, depsFull, {
+    officialChat: (target, norm, sink) => {
+      officialCalled = { model: target.upstreamModel, free: target.free };
+      sink.onText("官方直通回包·得一");
+      sink.onEnd();
+      return Promise.resolve({ ok: true, quota: "ok" });
+    },
+  });
+  r = await call(
+    "POST",
+    "/v1/chat/completions",
+    { model: "swe-1-6", messages: [{ role: "user", content: "测试免费模型反代" }] },
+    depsOfficial,
+  );
+  j = JSON.parse(r.body);
+  ok("免费官方模型经 officialChat", !!officialCalled && officialCalled.free === true);
+  ok("官方直通回包内容", /官方直通回包/.test(j.choices[0].message.content));
+
+  console.log("[11] 无 officialChat 时官方模型返回明确预热提示(非伪成功)");
+  r = await call(
+    "POST",
+    "/v1/chat/completions",
+    { model: "swe-1-6", stream: true, messages: [{ role: "user", content: "hi" }] },
+    depsFull,
+  );
+  ok("预热提示经错误流回传", /预热|officialChat|未就绪/.test(r.body));
+
+  console.log("[12] 官方直通捕获帧解析: 末条消息正文整体换为 newText(逐字节保形)");
+  {
+    const SRC = require("../../bundled-origin/source.js")._test;
+    const { _pbTag, _pbEncVarint, _swapLastUserMsg, parseFrames, parseProto, _findMsgsArray, _msgContentInfo } = SRC;
+    const strF = (f, s) => {
+      const b = Buffer.from(s, "utf8");
+      return Buffer.concat([_pbTag(f, 2), _pbEncVarint(b.length), b]);
+    };
+    const varF = (f, v) => Buffer.concat([_pbTag(f, 0), _pbEncVarint(v)]);
+    const wrap = (f, body) => Buffer.concat([_pbTag(f, 2), _pbEncVarint(body.length), body]);
+    const frameOf = (payload) => {
+      const h = Buffer.alloc(5);
+      h[0] = 0;
+      h.writeUInt32BE(payload.length, 1);
+      return Buffer.concat([h, payload]);
+    };
+    const lastContent = (frame) => {
+      const top = parseProto(parseFrames(frame)[0].payload);
+      const fnd = _findMsgsArray(top);
+      return _msgContentInfo(fnd.arr[fnd.arr.length - 1]).text;
+    };
+    // 新 wire: 消息数组=field3, 每条 role=field2(varint) + content=field3(string)
+    const longTxt = "<additional_metadata>\nNOTE: open files\n" + "x".repeat(300) + "\n用户问题";
+    const newWire = Buffer.concat([
+      wrap(3, Buffer.concat([varF(2, 1), strF(3, "old user A")])),
+      wrap(3, Buffer.concat([varF(2, 1), strF(3, longTxt)])),
+    ]);
+    const f1 = _swapLastUserMsg(frameOf(newWire), "PINGPONG_NEW");
+    ok("新wire(field3)末条正文被换", f1 && lastContent(f1) === "PINGPONG_NEW");
+    ok("新wire首条正文保持原样", f1 && /old user A/.test(f1.toString("utf8")) && !/x{300}/.test(f1.toString("utf8")));
+    // 老 wire: 消息数组=field2, content=field2
+    const oldWire = Buffer.concat([
+      wrap(2, Buffer.concat([varF(1, 1), strF(2, "first turn")])),
+      wrap(2, Buffer.concat([varF(1, 1), strF(2, "second turn long " + "y".repeat(250))])),
+    ]);
+    const f2 = _swapLastUserMsg(frameOf(oldWire), "PINGPONG_OLD");
+    ok("老wire(field2)末条正文被换", f2 && lastContent(f2) === "PINGPONG_OLD");
+    // 空/坏帧不崩
+    ok("空帧返回 null 不崩", _swapLastUserMsg(Buffer.alloc(0), "x") === null);
+
+    // 回包解码: Connect end-stream 帧(gzip)载 JSON quota 错误 → parseFrames 解压 + JSON.parse 取 error
+    const zlib = require("zlib");
+    const errJson = JSON.stringify({ error: { code: "failed_precondition", message: "Your daily usage quota has been exhausted." } });
+    const gz = zlib.gzipSync(Buffer.from(errJson, "utf8"));
+    const esHdr = Buffer.alloc(5);
+    esHdr[0] = 0x03; // bit0=compressed + bit1=end-stream
+    esHdr.writeUInt32BE(gz.length, 1);
+    const esFrame = Buffer.concat([esHdr, gz]);
+    const dec = parseFrames(esFrame);
+    ok("end-stream gzip 帧被解压", dec.length === 1 && /quota has been exhausted/.test(dec[0].payload.toString("utf8")));
+    let parsedErr = null;
+    try { parsedErr = JSON.parse(dec[0].payload.toString("utf8")).error; } catch (_) {}
+    ok("end-stream JSON error 可解析", parsedErr && parsedErr.code === "failed_precondition");
+    ok("quota 信号正则命中 exhausted", /quota|exhaust|precondition/i.test((parsedErr.code || "") + " " + (parsedErr.message || "")));
+  }
+
+  console.log("[13] 档位热切换: 家族归组 + 默认择档 + 别名解析 + 热切生效");
+  {
+    const tierCat = [
+      { modelUid: "gpt-x-low", label: "GPT-X Low", provider: "MODEL_PROVIDER_OPENAI", creditMultiplier: 2, modelCostTier: "MODEL_COST_TIER_LOW", modelInfo: { modelFamilyUid: "gpt-x" }, modelFamilyMetadata: { modelFamilyLabel: "GPT-X" } },
+      { modelUid: "gpt-x-medium", label: "GPT-X Medium", provider: "MODEL_PROVIDER_OPENAI", creditMultiplier: 4, modelCostTier: "MODEL_COST_TIER_MEDIUM", isDefaultModelInFamily: true, modelInfo: { modelFamilyUid: "gpt-x" }, modelFamilyMetadata: { modelFamilyLabel: "GPT-X" } },
+      { modelUid: "gpt-x-high", label: "GPT-X High", provider: "MODEL_PROVIDER_OPENAI", creditMultiplier: 8, modelCostTier: "MODEL_COST_TIER_HIGH", modelInfo: { modelFamilyUid: "gpt-x" }, modelFamilyMetadata: { modelFamilyLabel: "GPT-X" } },
+      { modelUid: "glm-x", label: "GLM-X", provider: "MODEL_PROVIDER_ZHIPU", creditMultiplier: 0, modelCostTier: "MODEL_COST_TIER_FREE", modelInfo: { modelFamilyUid: "glm-x" }, modelFamilyMetadata: { modelFamilyLabel: "GLM-X" } },
+    ];
+    // 隔离配置(清 tiers)
+    const c0 = revproxy.loadConfig();
+    c0.tiers = {};
+    revproxy.saveConfig(c0);
+    const depsTier = Object.assign({}, deps, {
+      getModelCatalog: () => tierCat,
+      getOfficialFamilies: () => [],
+      cfg: revproxy.loadConfig(),
+    });
+    revproxy.setPremiumQuota("ok");
+
+    const idx = revproxy.buildFamilyIndex(depsTier);
+    ok("家族索引: 含 gpt-x/glm-x 两族", idx.families.has("gpt-x") && idx.families.has("glm-x"));
+    ok("gpt-x 收 3 档", idx.families.get("gpt-x").members.length === 3);
+
+    const models = revproxy.listModels(depsTier);
+    const fams = revproxy.familySummary(depsTier, models);
+    const fGpt = fams.find((f) => f.familyUid === "gpt-x");
+    ok("gpt-x 多档(multi)", fGpt && fGpt.multi === true);
+    ok("gpt-x 默认择档=家族默认 medium", fGpt && fGpt.activeUid === "gpt-x-medium");
+    const fGlm = fams.find((f) => f.familyUid === "glm-x");
+    ok("glm-x 单档·免费=绿", fGlm && fGlm.members[0].color === "green" && fGlm.members[0].free);
+
+    // 每档独立着色: 多档族各档均着色(配额 ok → 付费档绿)
+    const tierEntries = models.filter((m) => m.familyUid === "gpt-x");
+    ok("每档保留独立配额色", tierEntries.length === 3 && tierEntries.every((m) => m.color));
+
+    // 别名解析: 干净家族名 → 当前活跃档(默认 medium); 显式 uid 不改
+    ok("别名 gpt-x → medium", revproxy._resolveFamilyAlias("gpt-x", depsTier) === "gpt-x-medium");
+    ok("别名 GPT-X(label slug) → medium", revproxy._resolveFamilyAlias("GPT-X", depsTier) === "gpt-x-medium");
+    ok("显式档位 uid 不被改写", revproxy._resolveFamilyAlias("gpt-x-high", depsTier) === null);
+
+    // /v1/models 暴露家族别名
+    let rm = await call("GET", "/v1/models", null, depsTier);
+    let jm = JSON.parse(rm.body);
+    const alias = jm.data.find((m) => m.id === "gpt-x" && m.dao_family);
+    ok("/v1/models 含家族别名 gpt-x", !!alias && alias.dao_active_tier === "gpt-x-medium");
+
+    // 热切换: 经 /origin/revproxy/tier 设 gpt-x → high · 热生效(无需重启)
+    let rt = await call("POST", "/origin/revproxy/tier", { familyUid: "gpt-x", modelUid: "gpt-x-high" }, depsTier);
+    ok("tier 端点回 ok", JSON.parse(rt.body).ok === true);
+    depsTier.cfg = revproxy.loadConfig(); // 模拟下次请求重读配置(热加载)
+    ok("热切后别名 gpt-x → high", revproxy._resolveFamilyAlias("gpt-x", depsTier) === "gpt-x-high");
+    const fams2 = revproxy.familySummary(depsTier, revproxy.listModels(depsTier));
+    ok("热切后 familySummary 活跃档=high", fams2.find((f) => f.familyUid === "gpt-x").activeUid === "gpt-x-high");
+
+    // 缺参 → 400
+    let rb = await call("POST", "/origin/revproxy/tier", { familyUid: "gpt-x" }, depsTier);
+    ok("tier 缺 modelUid → 400", rb._status === 400);
+
+    // 复位
+    const cz = revproxy.loadConfig();
+    cz.tiers = {};
+    revproxy.saveConfig(cz);
+  }
+
+  revproxy.setPremiumQuota("unknown");
   mock.close();
   console.log(failures === 0 ? "\nALL PASS" : "\n" + failures + " FAIL");
   process.exit(failures === 0 ? 1 - 1 : 1);
