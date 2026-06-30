@@ -882,15 +882,19 @@ function _deviceRecentRefresh(force){
   //   首选 max:30 perAcc:2 (仅活跃对话·响应 <5KB 适穿中继/mesh); 若中继 413(载荷过大) 再降级 max:10。
   //   解决「recentConvAll 200 条响应超中继限→413→回退过期金库→无活跃对话」之根。
   function _applyFresh(b){
-    var fresh=_buildTrkFromRecent(b.list), now=Date.now();
+    var fresh=_buildTrkFromRecent(b.list);
     var _vault=Object.create(null), _vn=0; loadAcc().forEach(function(a){ var k=String((a&&(a.email||a.id))||"").toLowerCase(); if(k){ _vault[k]=1; _vn++; } });
+    // 网页镜像端·只增不减(道法自然·正本清源·一号不漏): recentConvAll 是「全账号近期对话」采样 —— 引擎端 max*2 早退 +
+    //   按时间戳裁顶 max(实测单 RPC 无法在中继 12s 内全扫 156 号·全扫 ≈29s/413), 故必然漏采位于早退边界外、或被新近
+    //   finished 挤出 top 的远端活跃号(实测金库权威态=9 活跃/156 号, 而本采样常回 0 活跃)。据此清零 = 用户实测的间歇
+    //   "无活跃对话"之真因。故此处绝不据采样把金库活跃号清零: 降级/熄灯只认金库墓碑(_restoreTrkFromVault·手机后台全扫写新 ts),
+    //   本轮采样仅做「正向」叠加 —— 确实扫到的活跃号即刻上屏(可能比金库更鲜) + 刷新已知号的最新对话名。
     Object.keys(_trk).forEach(function(e){
-      if(_vn && !_vault[e] && !fresh[e]){ delete _trk[e]; return; }
-      if(!fresh[e]){ var c=_trk[e]; if(c && (c.total|0)>0) _trk[e]={ no:c.no, who:c.who, running:0,awaiting:0,blocked:0,exhausted:0,total:0,items:[],latest:c.latest||"",ts:now }; }
+      if(_vn && !_vault[e] && !fresh[e]){ delete _trk[e]; return; }   // 仅清理已不在账号库的非法历史号; 合法号一律不在采样路径清零
     });
     // 状态变化即时通知(网页镜像端): 对比之前的 _trk 与 fresh, 新出现的 blocked/exhausted 立即通知
     Object.keys(fresh).forEach(function(e){
-      var nSt=fresh[e]; if(!nSt) return;
+      var nSt=fresh[e]; if(!nSt||(nSt.total|0)<=0) return;   // 仅活跃号触发通知
       var oSt=_trk[e];
       (nSt.items||[]).forEach(function(it){
         if(it.cls==="blocked"||it.cls==="exhausted"){
@@ -900,7 +904,11 @@ function _deviceRecentRefresh(force){
         }
       });
     });
-    Object.keys(fresh).forEach(function(e){ _trk[e]=fresh[e]; });
+    Object.keys(fresh).forEach(function(e){
+      var nSt=fresh[e]; if(!nSt) return;
+      if((nSt.total|0)>0){ _trk[e]=nSt; }                                  // 本轮扫到活跃 → 即刻上屏(比金库可能更鲜)
+      else { var c=_trk[e]; if(c && nSt.latest){ c.latest=nSt.latest; } }  // 采样仅见 finished → 不动活跃计数(降级交金库墓碑), 仅刷新最新对话名
+    });
     try{ _saveTrkLocalOnly(); }catch(_e){}
     try{ paintTrk(); paintRowRun(); _repushTabsFromTrk(); }catch(_e){}
   }
@@ -911,13 +919,15 @@ function _deviceRecentRefresh(force){
       P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:1, max:10, conc:2 }, 10000).then(function(r2){
         _rbDone(); var b2=r2&&r2.body;
         if(!b2||!b2.ok||!Array.isArray(b2.list)){ _restoreTrkFromVault(); return; }
-        _applyFresh(b2);
+        _applyFresh(b2); try{ _restoreTrkFromVault(); }catch(_e){}
       }, function(){ _rbDone(); _restoreTrkFromVault(); });
       return;
     }
     _rbDone();
     if(!b||!b.ok||!Array.isArray(b.list)){ try{ _restoreTrkFromVault(); }catch(_e){} return; }
     _applyFresh(b);
+    // 采样叠加后立即并入金库权威全量(手机后台全扫·含本轮采样必然漏采的远端活跃号) → 采样窗口永不能单方面判"无活跃"。
+    try{ _restoreTrkFromVault(); }catch(_e){}
   }, function(){ _rbDone(); try{ _restoreTrkFromVault(); }catch(_e){} });
 }
 // 并发池: 以账号为中心同时(默认6路)拉取会话, 把 72 号的串行等待压成并行 → 跨设备运行近实时识别。

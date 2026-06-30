@@ -7764,6 +7764,155 @@ Regression after the change: `test_live.py --offline` 701/719 — no new failure
 
 > 為學者日益，聞道者日損。 We add primitives only by subtracting frictions.
 
+## F237 — `gnome-mines` board OCR used a fixed crop that went negative on 48×48 cells
+
+**Symptom.**  On a fresh `gnome-mines` board, `_game_mines.py read` crashed before it
+could print the grid:
+
+```text
+ValueError: negative count
+```
+
+The driver was calling `ocr_text((cx + 25, cy + 20, cw - 50, ch - 40), ...)`.
+On this VM the GTK mine cells are `48×48`, so `cw - 50` and `ch - 40` underflow
+the crop.  The issue appeared only after tesseract was installed; before that the
+reader stopped earlier with the missing-binary error.
+
+**Fix** (`_game_mines.py`).  Use a crop that scales with the actual cell size:
+
+```python
+pad_x = max(4, cw // 6)
+pad_y = max(4, ch // 6)
+digit = osctl.ocr_text((cx + pad_x, cy + pad_y,
+                        max(1, cw - 2 * pad_x), max(1, ch - 2 * pad_y)),
+                       whitelist='12345678', psm=10, scale=2,
+                       rgb=rgb, size=(W, _CUR_H))
+```
+
+That keeps the OCR window safely inside the tile for both `48×48` and larger
+board geometries, and the same `read` command now prints the 8×8 grid instead of
+crashing.
+
+**Proof.**  Before the patch:
+
+```text
+ValueError: negative count
+```
+
+After the patch:
+
+```text
+. . . . . . . .
+. . .   . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+read in 0.15s
+```
+
+> 复杂 GUI 实操继续向前：先让可测、可读、可解，再谈更深的自动化。
+
+## F238 — `ocr_text` re-spawned tesseract for every identical Mines crop
+
+**Symptom.**  After F237, `gnome-mines` became readable again, but a full board
+read still took about 3 seconds because `read_board()` re-OCR'd every revealed
+cell on every pass.  On this VM a single `ocr_text()` call costs roughly
+`0.058s`; a board with 59 revealed cells therefore spent most of its time
+spawning identical tesseract jobs for pixels that never changed.
+
+**Fix** (`osctl.py`).  Add a content-addressed OCR cache keyed on the exact
+upsampled OCR crop plus the OCR parameters.  Identical pixels and flags now
+return the cached string instead of spawning tesseract again.
+
+**Proof.**
+
+Before the cache:
+
+```text
+read_board 3.13s, revealed(non-dot) cells=59, grid=8x8
+```
+
+After the cache:
+
+```text
+0 read_board 0.815 revealed 59
+1 read_board 0.142 revealed 59
+```
+
+The first call still pays the cold-start OCR cost, but the second pass reuses
+the exact same crops and returns from cache, which is the steady-state path the
+solver wants when the board geometry is unchanged.
+
+## F239 — `_game_sudoku.py` assumed the puzzle board was already open
+
+**Symptom.**  `python3 _game_sudoku.py` failed on a freshly launched
+`gnome-sudoku` session because the app starts on a “Select Difficulty” dialog,
+not on the board itself.  The script jumped straight into `detect_board()`, so
+the first read saw no grid and crashed:
+
+```text
+RuntimeError: board borders not found: vx=[498, 1103] hy=[834]
+```
+
+When the dialog was present, AT-SPI exposed the `Easy` / `Medium` / `Hard`
+choices, and clicking `Easy` started a normal puzzle.
+
+**Fix** (`_game_sudoku.py`).  Detect the start dialog and click `Easy` before
+constructing `Board`:
+
+```python
+def _ensure_started():
+    for w in osctl.list_windows():
+        if (w.get('title') or '') != 'Select Difficulty':
+            continue
+        for e in osctl.uia_find_all(w['id'], max_scan=2000):
+            if e.get('name') == 'Easy':
+                x, y, w0, h0 = e['rect']
+                osctl.click(x + w0 // 2, y + h0 // 2)
+                time.sleep(1.5)
+                return
+```
+
+`play()` now calls `_ensure_started()` first, so the same command works from a
+fresh launch without a manual click.
+
+**Proof.**
+
+Before the patch:
+
+```text
+RuntimeError: board borders not found: vx=[498, 1103] hy=[834]
+```
+
+After the patch:
+
+```text
+READ:
+3.274...5
+...5.28..
+.6..1...3
+.2.....96
+9.6...3.8
+84.....2.
+5...2..8.
+..19.8...
+2...671.9
+SOLUTION:
+382746915
+719532864
+465819273
+127384596
+956271348
+843695721
+594123687
+671958432
+238467159
+filled 49 cells
+```
+
 ## F240 — colour segmentation needed an ROI window to stay cheap and local
 
 While pushing Mahjongg deeper, I used the intended `colour -> template` flow to

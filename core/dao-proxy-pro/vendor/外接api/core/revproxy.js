@@ -61,6 +61,8 @@ function defaultConfig() {
     // 是否允许局域网(0.0.0.0)其他设备访问 · 仅状态标记, 实际监听仍由 source.js 决定
     exposeLan: false,
     defaultMaxTokens: 4096,
+    // 反代档位热切换: familyUid → 当前活跃档 modelUid (空=按默认规则·免费档优先)
+    tiers: {},
   };
 }
 
@@ -119,41 +121,348 @@ function _authOk(req, cfg) {
 }
 
 // ── 模型枚举 ──────────────────────────────────────────────────────────────
-// 列出「已配置反代通道」的模型: 模型路由表里每条 route 即一个可对外模型。
-// 另把渠道(provider)显式声明的 models 也并入(脱敏·不泄 key)。
-function listModels(deps) {
+// 全量呈现「一切可反代之模型」(道:万物并育而不相害):
+//   ① 模型路由表每条 route(第三方渠道/builtin-stub)·② 渠道显式 models ·
+//   ③ 官方全量模型目录(_full_model_catalog 108)·④ 运行时官方家族(账号当前可见)。
+//   每个模型按「配额/费档」着色: 免费/有渠道=绿 · 配额耗尽=红 · 未探测=琥珀。
+//   反代方式: channel(经第三方渠道) / official(官方直通) / stub(传输自验)。
+
+// 官方 provider 枚举 → 人类可读
+const _PROVIDER_LABEL = {
+  MODEL_PROVIDER_ANTHROPIC: "Anthropic",
+  MODEL_PROVIDER_OPENAI: "OpenAI",
+  MODEL_PROVIDER_GOOGLE: "Google",
+  MODEL_PROVIDER_XAI: "xAI",
+  MODEL_PROVIDER_DEEPSEEK: "DeepSeek",
+  MODEL_PROVIDER_FIREWORKS: "Fireworks",
+  MODEL_PROVIDER_CODEIUM: "Windsurf",
+  MODEL_PROVIDER_WINDSURF: "Windsurf",
+  MODEL_PROVIDER_ZHIPU: "Zhipu/GLM",
+};
+function _provLabel(raw) {
+  if (!raw) return "Official";
+  if (_PROVIDER_LABEL[raw]) return _PROVIDER_LABEL[raw];
+  return String(raw).replace(/^MODEL_PROVIDER_/, "");
+}
+
+// 官方免费档判定: costTier=FREE 或 creditMultiplier=0
+function _isFreeTier(costTier, mult) {
+  return (
+    costTier === "MODEL_COST_TIER_FREE" ||
+    mult === 0 ||
+    mult === null ||
+    mult === undefined
+  );
+}
+
+// ── 家族·档位归一 (反代档位热切换 · 朴散则为器·大制无割) ─────────────────────
+//   119 档本是「家族 + 档位」: 同族多档(none/low/medium/high/xhigh/max,+thinking/+fast)
+//   各为独立 modelUid。此处按家族归组,保留各档 uid,供前端档位热切换 + 外部以
+//   干净家族名(如 glm-5.1)调用「当前活跃档」。与 Devin Desktop 选档同一底层逻辑。
+function _slug(s) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9.\-]/g, "");
+}
+// 整 label 去家族前缀 → 余下即档位名(Medium / Low Thinking / High Fast …)
+function _tierFromLabel(label, famLabel) {
+  let t = String(label || "");
+  if (famLabel && t.indexOf(famLabel) === 0) t = t.slice(famLabel.length).trim();
+  return t || "base";
+}
+// 档位强弱排序(供默认择档·中档兜底): none<minimal<low<medium<high<xhigh<max
+const _TIER_RANK = {
+  none: 0,
+  "no thinking": 0,
+  minimal: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+  "x-high": 5,
+  max: 6,
+};
+function _tierRank(tier) {
+  const t = String(tier || "").toLowerCase();
+  for (const k of Object.keys(_TIER_RANK))
+    if (t.indexOf(k) >= 0) return _TIER_RANK[k];
+  return 3;
+}
+// 从官方目录构建家族索引: {byUid: uid→meta, families: familyUid→{members:[uid]}}
+function buildFamilyIndex(deps) {
+  const byUid = new Map();
+  const families = new Map();
+  let cat = [];
+  try {
+    cat = (deps && deps.getModelCatalog && deps.getModelCatalog()) || [];
+  } catch (_) {}
+  for (const m of cat) {
+    if (!m || !m.modelUid) continue;
+    const mi = m.modelInfo || {};
+    const fmeta = m.modelFamilyMetadata || {};
+    const famUid =
+      mi.modelFamilyUid || fmeta.modelFamilyLabel || "__solo__" + m.modelUid;
+    const famLabel = fmeta.modelFamilyLabel || m.label || m.modelUid;
+    const tier = _tierFromLabel(m.label, famLabel);
+    byUid.set(m.modelUid, {
+      familyUid: famUid,
+      familyLabel: famLabel,
+      tier,
+      tierRank: _tierRank(tier),
+      isDefault: !!m.isDefaultModelInFamily,
+      free: _isFreeTier(m.modelCostTier || m.costTier, m.creditMultiplier),
+    });
+    if (!families.has(famUid))
+      families.set(famUid, {
+        familyUid: famUid,
+        familyLabel: famLabel,
+        aliasSlug: _slug(famLabel),
+        provider: _provLabel(m.provider),
+        members: [],
+      });
+    families.get(famUid).members.push(m.modelUid);
+  }
+  return { byUid, families };
+}
+// 一族的「当前活跃档」: 已选(cfg.tiers)优先, 否则 免费档→家族默认档→中档→首档
+//   ("免费即默认主力" 通用规则·GLM 等免费档自动成默认)
+function _familyActiveUid(fam, idx, cfg) {
+  const tiers = (cfg && cfg.tiers) || {};
+  const set = tiers[fam.familyUid];
+  if (set && fam.members.indexOf(set) >= 0) return set;
+  let freeM = null,
+    defM = null,
+    midM = null;
+  for (const uid of fam.members) {
+    const info = idx.byUid.get(uid) || {};
+    if (info.free && !freeM) freeM = uid;
+    if (info.isDefault && !defM) defM = uid;
+    if (info.tierRank === 3 && !midM) midM = uid;
+  }
+  return freeM || defM || midM || fam.members[0];
+}
+// 家族别名/familyUid → 当前活跃档 modelUid (对外干净名解析); 已是具体档 uid 则返 null
+function _resolveFamilyAlias(model, deps) {
+  if (!model) return null;
+  try {
+    const idx = buildFamilyIndex(deps);
+    if (idx.byUid.has(model)) return null; // 已是精确档位 · 不改
+    const want = String(model).toLowerCase();
+    const cfg = (deps && deps.cfg) || loadConfig();
+    for (const [fu, fam] of idx.families) {
+      if (
+        fam.aliasSlug === want ||
+        String(fu).toLowerCase() === want ||
+        _slug(fam.familyLabel) === want
+      )
+        return _familyActiveUid(fam, idx, cfg);
+    }
+  } catch (_) {}
+  return null;
+}
+// 家族归组摘要(供状态面 + /v1/models 别名): 每族活跃档 + 各档色/免费态
+function familySummary(deps, models) {
+  const idx = buildFamilyIndex(deps);
+  const cfg = (deps && deps.cfg) || loadConfig();
+  const mById = new Map((models || []).map((m) => [m.id, m]));
   const out = [];
-  const seen = new Set();
+  for (const [fu, fam] of idx.families) {
+    const members = fam.members
+      .filter((u) => mById.has(u))
+      .map((u) => {
+        const m = mById.get(u);
+        const info = idx.byUid.get(u) || {};
+        return {
+          id: u,
+          tier: info.tier,
+          label: m.label,
+          color: m.color,
+          free: !!m.free,
+          note: m.note,
+        };
+      });
+    if (!members.length) continue;
+    let activeUid = _familyActiveUid(fam, idx, cfg);
+    if (!members.some((x) => x.id === activeUid)) activeUid = members[0].id;
+    out.push({
+      familyUid: fu,
+      familyLabel: fam.familyLabel,
+      aliasSlug: fam.aliasSlug,
+      provider: fam.provider,
+      activeUid,
+      multi: members.length > 1,
+      members,
+    });
+  }
+  return out;
+}
+
+// 模块级·官方付费配额观测态: "unknown" | "ok" | "exhausted"
+//   实际官方反代调用命中配额错误 → exhausted; 成功 → ok; 供面板红/绿如实着色。
+let _premiumQuota = "unknown";
+function setPremiumQuota(s) {
+  if (s === "ok" || s === "exhausted" || s === "unknown") _premiumQuota = s;
+}
+function getPremiumQuota() {
+  return _premiumQuota;
+}
+
+// 给一个模型条目判定 {reverse, color, status, note}
+function _classify(entry, deps) {
+  // 显式 stub
+  if (entry.reverse === "stub")
+    return { color: "green", status: "stub", note: "传输自验" };
+  // 已配第三方渠道(模型路由/provider) → 经渠道反代·不受官方配额限
+  if (entry.routed)
+    return {
+      color: "green",
+      status: "channel",
+      note: "经渠道 " + (entry.provider || ""),
+    };
+  // 官方免费档 → 恒可反代
+  if (entry.free)
+    return { color: "green", status: "free", note: "免费 · 官方直通" };
+  // 官方付费档 → 依配额观测
+  const q =
+    (deps && typeof deps.premiumQuota === "string"
+      ? deps.premiumQuota
+      : null) || _premiumQuota;
+  if (q === "ok")
+    return { color: "green", status: "premium", note: "有配额 · 官方直通" };
+  if (q === "exhausted")
+    return { color: "red", status: "exhausted", note: "配额耗尽 · 待重置" };
+  return { color: "amber", status: "premium", note: "付费档 · 配额未探测" };
+}
+
+function listModels(deps) {
+  deps = deps || {};
+  const out = [];
+  const byId = new Map();
   const cfg = (deps.getEaConfig && deps.getEaConfig()) || {};
   const routes = (cfg.daoRoutes && cfg.daoRoutes.routes) || {};
   const providers = cfg.providers || {};
-  const push = (id, owned_by, extra) => {
-    if (!id || seen.has(id)) return;
-    seen.add(id);
-    out.push(
-      Object.assign(
-        {
-          id,
-          object: "model",
-          created: 0,
-          owned_by: owned_by || "dao-revproxy",
-        },
-        extra || {},
-      ),
+  const add = (id, fields) => {
+    if (!id) return null;
+    let e = byId.get(id);
+    if (e) {
+      Object.assign(e, fields || {});
+      return e;
+    }
+    e = Object.assign(
+      { id, object: "model", created: 0, owned_by: "dao-revproxy" },
+      fields || {},
     );
+    byId.set(id, e);
+    out.push(e);
+    return e;
   };
-  // 1) 路由表 → 对外以 modelUid 暴露
-  for (const [uid, r] of Object.entries(routes)) {
-    push(uid, (r && r.provider) || "routed", {
-      dao_route: { provider: r && r.provider, model: r && r.model },
+
+  // ③ 官方全量目录(最广底·先铺) → 免费/付费档着色
+  let catalog = [];
+  try {
+    catalog = (deps.getModelCatalog && deps.getModelCatalog()) || [];
+  } catch (_) {}
+  for (const m of catalog) {
+    if (!m || !m.modelUid) continue;
+    const mult = m.creditMultiplier;
+    const costTier = m.modelCostTier || m.costTier || "";
+    add(m.modelUid, {
+      owned_by: _provLabel(m.provider),
+      label: m.label || m.modelUid,
+      provider: _provLabel(m.provider),
+      providerRaw: m.provider || "",
+      creditMultiplier: typeof mult === "number" ? mult : null,
+      costTier,
+      free: _isFreeTier(costTier, mult),
+      official: true,
+      reverse: "official",
+      routed: false,
     });
   }
-  // 2) provider 显式 models
+
+  // ④ 运行时官方家族(账号当前实见) → 标记 availableNow
+  let fams = [];
+  try {
+    fams = (deps.getOfficialFamilies && deps.getOfficialFamilies()) || [];
+  } catch (_) {}
+  for (const f of fams) {
+    const uid = f && (f.modelUid || f.uid || f.model);
+    if (!uid) continue;
+    const e = add(uid, {
+      official: true,
+      reverse: "official",
+      availableNow: true,
+    });
+    if (e && !e.label && f.label) e.label = f.label;
+    if (e) e.availableNow = true;
+  }
+
+  // ① 模型路由表(第三方渠道/stub) → 覆盖为 channel/stub·绿
+  for (const [uid, r] of Object.entries(routes)) {
+    const prov = (r && r.provider) || "routed";
+    const isStub = prov === "builtin-stub";
+    add(uid, {
+      owned_by: prov,
+      provider: prov,
+      routed: !isStub,
+      reverse: isStub ? "stub" : "channel",
+      dao_route: { provider: prov, model: r && r.model },
+    });
+  }
+
+  // ② provider 显式 models → channel·绿
   for (const [name, p] of Object.entries(providers)) {
     const ms = (p && p.models) || [];
-    for (const m of ms) push(m, name);
+    for (const m of ms)
+      add(m, { owned_by: name, provider: name, routed: true, reverse: "channel" });
   }
+
+  // 着色 + 计数
+  for (const e of out) {
+    const c = _classify(e, deps);
+    e.color = c.color;
+    e.status = c.status;
+    e.note = c.note;
+  }
+  // 家族·档位标注 (供前端按家族归组 + 档位热切换 · 每档保留独立配额色)
+  try {
+    const idx = buildFamilyIndex(deps);
+    const cfg = (deps && deps.cfg) || loadConfig();
+    const active = {};
+    for (const [fu, fam] of idx.families)
+      active[fu] = _familyActiveUid(fam, idx, cfg);
+    for (const e of out) {
+      const info = idx.byUid.get(e.id);
+      if (info) {
+        e.familyUid = info.familyUid;
+        e.familyLabel = info.familyLabel;
+        e.tier = info.tier;
+        e.activeTier = active[info.familyUid] === e.id;
+      } else {
+        // 渠道/路由独有 uid → 自成一族(单档)
+        e.familyUid = "__solo__" + e.id;
+        e.familyLabel = e.label || e.id;
+        e.tier = "base";
+        e.activeTier = true;
+      }
+    }
+  } catch (_) {}
   return out;
+}
+
+function modelStats(models) {
+  const s = { total: models.length, green: 0, red: 0, amber: 0, free: 0, channel: 0, official: 0 };
+  for (const m of models) {
+    if (m.color === "green") s.green++;
+    else if (m.color === "red") s.red++;
+    else if (m.color === "amber") s.amber++;
+    if (m.status === "free") s.free++;
+    if (m.reverse === "channel" || m.reverse === "stub") s.channel++;
+    if (m.reverse === "official") s.official++;
+  }
+  return s;
 }
 
 // ── 入站归一 ──────────────────────────────────────────────────────────────
@@ -207,12 +516,40 @@ function _flattenContent(c) {
   return "";
 }
 
+// model 是否属官方目录/家族 → {free,label,provider} 或 null
+function _officialInfo(model, deps) {
+  if (!model || !deps) return null;
+  try {
+    const cat = (deps.getModelCatalog && deps.getModelCatalog()) || [];
+    for (const m of cat) {
+      if (m && m.modelUid === model)
+        return {
+          free: _isFreeTier(m.modelCostTier || m.costTier, m.creditMultiplier),
+          label: m.label || model,
+          provider: _provLabel(m.provider),
+        };
+    }
+  } catch (_) {}
+  try {
+    const fams = (deps.getOfficialFamilies && deps.getOfficialFamilies()) || [];
+    for (const f of fams) {
+      const uid = f && (f.modelUid || f.uid || f.model);
+      if (uid === model)
+        return { free: !!f.free, label: f.label || model, provider: "Official" };
+    }
+  } catch (_) {}
+  return null;
+}
+
 // ── 路由解析 ──────────────────────────────────────────────────────────────
 // model(对外名/uid) → 真上游 {provName, provCfg, upstreamModel, proto}
 function resolveTarget(model, deps) {
   const cfg = (deps.getEaConfig && deps.getEaConfig()) || {};
   const routes = (cfg.daoRoutes && cfg.daoRoutes.routes) || {};
   const providers = cfg.providers || {};
+  // 家族别名(如 glm-5.1) / familyUid → 当前活跃档 modelUid (档位热切换之对外干净名)
+  const aliased = _resolveFamilyAlias(model, deps);
+  if (aliased) model = aliased;
   let route = routes[model];
   // 经 router.resolveRoute 解析同族档位(与正向推理同一张表)
   if (!route && deps.resolveRoute) {
@@ -226,7 +563,20 @@ function resolveTarget(model, deps) {
     const [pn, ...rest] = model.split("/");
     if (providers[pn]) route = { provider: pn, model: rest.join("/") };
   }
-  if (!route) return null;
+  // 无第三方渠道 → 官方直通(若 model 属官方目录/家族): 复用上游官方推理链
+  if (!route) {
+    const info = _officialInfo(model, deps);
+    if (info) {
+      return {
+        official: true,
+        upstreamModel: model,
+        free: info.free,
+        label: info.label,
+        provider: info.provider,
+      };
+    }
+    return null;
+  }
   const provName = route.provider;
   if (provName === "builtin-stub") {
     return { provName, builtin: true, route, upstreamModel: route.model };
@@ -596,6 +946,29 @@ function _bridge(target, norm, deps) {
       sink.onEnd && sink.onEnd();
       return;
     }
+    if (target.official) {
+      // 官方直通: 复用宿主 source.js 官方推理链(捕帧复用 GetChatMessage)
+      if (!deps.officialChat) {
+        sink.onError &&
+          sink.onError(
+            "官方直通未就绪 · 需宿主提供 officialChat(预热一次官方对话以捕获帧)",
+          );
+        return;
+      }
+      Promise.resolve()
+        .then(() => deps.officialChat(target, norm, sink))
+        .then((r) => {
+          // officialChat 自行调 sink.onText/onEnd; 若返回配额态则同步着色
+          if (r && r.quota) setPremiumQuota(r.quota);
+        })
+        .catch((e) => {
+          const msg = String((e && e.message) || e);
+          if (/quota|exhaust|配额|governor|Authentication Fails/i.test(msg))
+            setPremiumQuota("exhausted");
+          sink.onError && sink.onError(msg);
+        });
+      return;
+    }
     callUpstream(target, norm, deps, {
       onOpen: () => {},
       onDelta: (d) => {
@@ -635,9 +1008,39 @@ async function handle(req, res, u, deps) {
       apiKey: _isLocal(req) ? cfg.apiKey : undefined,
       port: deps.port || 0,
       endpoint: deps.port ? "http://127.0.0.1:" + deps.port + "/v1" : "",
+      premiumQuota:
+        (deps && typeof deps.premiumQuota === "string"
+          ? deps.premiumQuota
+          : null) || _premiumQuota,
       model_count: models.length,
+      stats: modelStats(models),
       models,
+      families: familySummary(deps, models),
+      tiers: cfg.tiers || {},
     });
+    return true;
+  }
+  // 档位热切换: 设某家族当前活跃档 (热生效·无需重启) ──
+  if (p === "/origin/revproxy/tier" && req.method === "POST") {
+    if (!_isLocal(req)) {
+      _json(res, 403, { ok: false, error: "localhost only" });
+      return true;
+    }
+    let body = {};
+    try {
+      body = await _readBody(req);
+    } catch (_) {}
+    const fu = body.familyUid;
+    const mu = body.modelUid;
+    if (!fu || !mu) {
+      _json(res, 400, { ok: false, error: "familyUid + modelUid required" });
+      return true;
+    }
+    const next = Object.assign(loadConfig(), {});
+    next.tiers = Object.assign({}, next.tiers || {});
+    next.tiers[fu] = mu;
+    saveConfig(next);
+    _json(res, 200, { ok: true, tiers: next.tiers });
     return true;
   }
   if (p === "/origin/revproxy/config" && req.method === "POST") {
@@ -656,6 +1059,8 @@ async function handle(req, res, u, deps) {
     if (typeof body.exposeLan === "boolean") next.exposeLan = body.exposeLan;
     if (typeof body.defaultMaxTokens === "number")
       next.defaultMaxTokens = body.defaultMaxTokens;
+    if (body.tiers && typeof body.tiers === "object")
+      next.tiers = Object.assign({}, next.tiers || {}, body.tiers);
     if (body.regenerateKey === true)
       next.apiKey = "dao-local-" + crypto.randomBytes(12).toString("hex");
     else if (typeof body.apiKey === "string") next.apiKey = body.apiKey;
@@ -682,7 +1087,29 @@ async function handle(req, res, u, deps) {
   }
 
   if (p === "/v1/models" && req.method === "GET") {
-    _json(res, 200, { object: "list", data: listModels(deps) });
+    const models = listModels(deps);
+    const data = models.slice();
+    // 家族别名: 外部可用干净家族名(如 glm-5.1)调用「当前活跃档」· 一族一别名
+    try {
+      const fams = familySummary(deps, models);
+      for (const f of fams) {
+        if (!f.aliasSlug || f.aliasSlug === f.activeUid) continue;
+        if (models.some((m) => m.id === f.aliasSlug)) continue;
+        const act = models.find((m) => m.id === f.activeUid) || {};
+        data.push({
+          id: f.aliasSlug,
+          object: "model",
+          created: 0,
+          owned_by: "dao-revproxy",
+          label: f.familyLabel,
+          dao_family: true,
+          dao_active_tier: f.activeUid,
+          color: act.color,
+          free: !!act.free,
+        });
+      }
+    } catch (_) {}
+    _json(res, 200, { object: "list", data });
     return true;
   }
 
@@ -749,10 +1176,19 @@ async function handle(req, res, u, deps) {
 module.exports = {
   handle,
   listModels,
+  modelStats,
   loadConfig,
   saveConfig,
   defaultConfig,
   normalizeInbound,
   resolveTarget,
+  setPremiumQuota,
+  getPremiumQuota,
+  _officialInfo,
+  _isFreeTier,
+  buildFamilyIndex,
+  familySummary,
+  _familyActiveUid,
+  _resolveFamilyAlias,
   _cfgPath,
 };
