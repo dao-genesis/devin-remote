@@ -11988,13 +11988,17 @@ async function _dvConvCapTick() {
     //   仅在 cap 较上轮变化时回写(幂等·避免无谓并发请求, 不重蹈批量并发卡网覆辙)。
     let injectedCap = prev.injectedCap;
     if (_cfg("devinCloudConvInjectLimit", true) && Number.isFinite(cap) && cap >= 0) {
-      const changed = typeof prev.injectedCap !== "number" || Math.abs(prev.injectedCap - cap) >= 0.01;
-      if (changed) {
-        try {
-          const sr = await devinCloud.setMessageLimit(auth, cap);
-          if (sr.ok) { injectedCap = cap; log("conv-cap: 反注消息上限 " + key.split("@")[0] + " → $" + cap.toFixed(2) + (drain ? "(抽干)" : "")); }
-          else log("conv-cap: 反注消息上限失败 " + key.split("@")[0] + " status=" + sr.status);
-        } catch (e) { log("conv-cap inject-limit err: " + (e.message || e)); }
+      const capInt = devinCloud.messageLimitInt(cap); // 服务端 max_credits 须为整数≥1·向下取整·不可设则 null
+      if (capInt !== null) {
+        // 幂等按「实际下发的整数」比对(旧版按浮点比对·每轮微抖即误判变化→空写刷屏)
+        const changed = typeof prev.injectedCap !== "number" || Math.floor(prev.injectedCap) !== capInt;
+        if (changed) {
+          try {
+            const sr = await devinCloud.setMessageLimit(auth, capInt);
+            if (sr.ok) { injectedCap = capInt; log("conv-cap: 反注消息上限 " + key.split("@")[0] + " → " + capInt + (drain ? "(抽干)" : "")); }
+            else log("conv-cap: 反注消息上限失败 " + key.split("@")[0] + " status=" + sr.status);
+          } catch (e) { log("conv-cap inject-limit err: " + (e.message || e)); }
+        }
       }
     }
     _dvConvCap.set(key, { balance, cap, drain, injectedCap, lastBalance: prev.balance, inUse, ts: Date.now(), stopped: prev.stopped });
