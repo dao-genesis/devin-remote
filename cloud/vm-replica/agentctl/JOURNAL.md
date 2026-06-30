@@ -8525,3 +8525,64 @@ floor gap — no fix made. (2) **detect_grid undercount**: it returned 8x8 for t
 9x9 sudoku, but only because the search box clipped the board's outer rule;
 widened to contain the border it returns 9x9 exactly (last line at x=880). Both
 are recorded so the next reader doesn't re-chase them.
+
+## F252 — classify_grid: read a lattice of sprites against a template library
+
+The next board exercised live was gnome-chess. Reading it broke every reader the
+floor had. Whole-board `ocr_text` reads nothing — the pieces are *vector glyphs*,
+not text. `sample_grid` (F247) sees a cell's mean colour and so tells *piece
+present and its shade* but **not its type**: the black back rank `R N B Q K B N R`
+sampled to luma `[56,37,92,56,69,79,44,49]` — rook `56` and queen `56` are
+*identical*, so colour cannot separate a rook from a queen. `ocr_grid` (F251) is
+the right shape but the wrong channel (there is no text to read). The only verb
+that keys on *appearance* was `match_template` (F053) — but it **locates one
+patch**, so reading 64 squares meant hand-rolling the per-cell loop: crop the
+cell, score it against every candidate sprite, take the argmin, and gate out the
+empties. That is the same orchestration `sample_grid`/`ocr_grid` already absorbed
+for colour and text, missing for sprites.
+
+**New verb** `osctl.classify_grid(bbox, cols, rows, templates, rgb, size, inset,
+ink_tol, ink_min, norm, empty_label, unknown_label, max_score, xs, ys) -> [[str,
+...], ...]` — the appearance grid that `sample_grid` is for colour and `ocr_grid`
+for text. It divides the board with the *exact* `sample_grid`/`ocr_grid` geometry
+(same `inset`, same clamping, optional `detect_grid` `xs`/`ys` edges, so the
+`[r][c]` indices line up one-to-one) and, for each cell: gates on ink exactly as
+`ocr_grid` does (a cell with fewer than `ink_min` pixels deviating more than
+`ink_tol` from its own mean is blank → `empty_label`, never scored), then
+resamples the cell to a fixed `norm`×`norm` luma signature and scores it against
+each `(label, patch, pw, ph)` template by **mean-absolute-difference per pixel**.
+The lowest mean-diff label wins. Templates are harvested once from a known frame
+(the chess start position gives all twelve pieces at known squares) with
+`crop_rgb`, then every later board is one call.
+
+**Two design points the live board forced out.** (1) **Shade-invariance via the
+shared `inset`.** First cut resampled the *whole* cell and scored raw luma → the
+checkerboard wrecked it (3/64): a bishop on a light square differs from a bishop
+harvested on a dark square mostly in *background shade*, and that swamps the SAD.
+The fix is to score only the **inset central window** — glyph-dominated, so the
+score keys on the sprite, not the square behind it — and to inset the *template*
+patch by the same fraction so the two windows are commensurate. With that the
+live start position read **0/64**. (2) **Size-invariance via the resample.** A raw
+SAD favours whichever sprite covers fewer pixels, and on an uneven `xs`/`ys` pitch
+no two cells are even the same size; resampling every cell *and* every template to
+one `norm`×`norm` grid makes the mean-diff comparable across templates and across
+unequal cells. (3) **`max_score` as a strictness knob.** The argmin always returns
+*some* label; when `max_score` is set and even the best mean-diff exceeds it the
+cell is `unknown_label` — so an off-nominal cell (a highlighted last-move square, a
+piece mid-animation) is *flagged*, not silently mislabelled.
+
+**Proof.** *Synthetic* (`_test_f252.py`, no display — `classify_grid` is
+self-contained pixel maths): a lattice of painted sprites is classified against a
+harvested library with blanks gated to `empty_label` and only placed cells
+labelled; the **shade-invariance** is asserted directly (the same sprite over a
+much darker background still matches the light-background template); `max_score`
+flags an off-library sprite as unknown yet a `None` threshold forces the nearest
+label; an uneven `xs`/`ys` pitch classifies off the true edges; args validated
+(bad cols/rows/inset/ink_min/norm, empty library, bad patch length, negative
+`max_score`, wrong `xs`/`ys` length, rgb-without-size). *Live* (gnome-chess):
+`classify_grid` off twelve start-position templates read the **full start board
+0/64 in 0.06s**, then — after the floor played `e2e4` by `click`+`click` and the
+engine replied `c7c5` — re-read the new position **perfectly** (e4 white pawn, c5
+black pawn, e2/c7 empty, 0 unknowns), proving it classifies an *arbitrary* board,
+not just the memorised start. With a tight `max_score=45` the just-moved
+highlighted `e4` square is correctly flagged `?`, the knob behaving as designed.
