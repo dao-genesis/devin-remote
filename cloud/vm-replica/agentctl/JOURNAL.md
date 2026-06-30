@@ -8675,3 +8675,67 @@ ragged depths off pile height with `card_h`/`pitch` inferred, empty columns flag
 (bottom hugs the pile bottom, height ≈ `card_h`, starts below the pile top when
 depth>1), `bg` auto-detected, and args validated. All eleven floor friction tests
 pass (F253 plus the prior ten), no regressions.
+
+### F254 — classify_boxes: reading the boards that aren't a lattice
+
+**Friction.** Widening the practice surface to gnome-mahjongg surfaced the dual
+of F253. `find_color_blobs` already *segments* the board fine — keyed on the
+cream face colour it returns one ~71×98 box per fully-exposed tile (the only
+tiles a player can ever click), occluded slivers falling out as smaller blobs.
+So *where* the tiles are was never the wall. *What* each one is was: the floor's
+only sprite reader, `classify_grid`, demands a `cols`×`rows` **lattice**, and a
+mahjongg layout is tiles stacked in offset 3-D layers — no lattice exists. The
+same gap reappears wherever the targets aren't ruled: `detect_cascade`'s seven
+`faceup` boxes (ragged depths), `locate_change_blobs`'s change regions (wherever
+they fell). Every such caller re-rolled the *identical* loop `classify_grid`
+already owns — crop, ink-gate, resample, argmin, threshold — just over its own
+boxes instead of a grid.
+
+**Fix — `classify_boxes`, the lattice-free sibling of `classify_grid`.** Pull
+that loop's pixel core out (`_classify_lib` resamples the template library once;
+`_classify_box` insets / ink-gates / resamples / scores one box) and let *both*
+entry points call it: `classify_grid` over the cells it derives from a `bbox`,
+`classify_boxes` over an explicit box list. `detect_*` answers *where*; this
+answers *what*. One library, harvested once, now reads both a grid and a
+scatter. `classify_grid` is unchanged behaviourally (its F252 test passes
+untouched) — it is now a thin lattice-geometry shell over the shared core.
+
+**The 1-px lesson.** The first cut returned `?` even when a tile was scored
+against a template harvested from *itself*. Cause: `crop_rgb` and every `*_blobs`
+`bbox` are **inclusive** (`minx..maxx`, width `x1−x0+1`), but the cell-rect
+arithmetic `classify_grid` feeds the core is **half-open** (width `x1−x0`). A
+template harvested 71-px wide, read back 70-px wide, shifts the inset window one
+pixel — and on a sharp glyph a one-pixel shift misaligns the strokes enough to
+blow the mean-abs-diff clean past threshold (the live diff histogram is a hard
+gap: identical tiles at **0.0**, the next-nearest distinct tile at **8.4**, so a
+1-px self-mismatch is fatal, not noise). The fix is to make `classify_boxes`
+speak the convention its box sources actually emit: boxes are inclusive, mapped
+`(x0,y0,x1+1,y1+1)` before the half-open core — so a box segmented one frame and
+its library harvested another line up to the pixel.
+
+**Lesson (architecture).** The read stack is now a clean *where × what* product.
+**Where:** `detect_grid` (uniform tiling), `detect_cascade` (ragged stack),
+`find_color_blobs` / `locate_change_blobs` (free scatter). **What:** `sample_grid`
+(colour), `ocr_grid` (text), `classify_grid` (sprite-on-a-lattice), and now
+`classify_boxes` (sprite-anywhere). `classify_grid` and `classify_boxes` sharing
+one pixel core is the point — the lattice was never essential to *reading* a
+sprite, only to *locating* it, so the two concerns split and the reader stopped
+caring about board shape. Consolidation, not a new algorithm: the friction was
+that geometry and recognition were fused, and prising them apart let one library
+serve every board the floor can segment.
+
+**Proof.** *Live, gnome-mahjongg "Easy" (the turtle)*: `find_color_blobs` on the
+face colour yields **81** fully-exposed tile boxes; clustering them with
+`classify_boxes` (seed the library on first sight, `max_score=4`) collapses them
+to **58 tile types** with multiplicities up to 3 — **41** faces fall into a type
+seen ≥2× and re-classifying every box against the harvested library is **stable**
+(round-trips to the same labels). The annotated frame shows matched tiles sharing
+an outline colour (the two 三萬, the two 東 east-winds, the 伍萬 pairs, the dot
+tiles), i.e. visually-identical faces read to one label across the scattered,
+occluded board. *Synthetic* (`_test_f254.py`, no display): sprites scattered at
+irregular positions read back in input order; a `crop_rgb`-harvested box
+self-matches at near-zero cost (the inclusive-box regression guard); blanks gate
+to `empty_label`; an off-library sprite is `unknown` under `max_score` and forced
+to its nearest label without; and `classify_boxes` **agrees with `classify_grid`**
+label-for-label on the same cells (the shared-core guarantee). All twelve floor
+friction tests pass (F254 plus the prior eleven), no regressions.
