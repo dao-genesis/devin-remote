@@ -1473,7 +1473,8 @@ def screenshot(path: str) -> str:
 
 def find_color(target: tuple[int, int, int], tol: int = 24,
                rgb: bytes | None = None, size: tuple[int, int] | None = None,
-               step: int = 1) -> dict | None:
+               step: int = 1,
+               search: tuple[int, int, int, int] | None = None) -> dict | None:
     """Locate a colour on the desktop purely by pixels (no DOM).
 
     Scans for pixels within ``tol`` (per-channel) of ``target`` and returns the
@@ -1490,23 +1491,41 @@ def find_color(target: tuple[int, int, int], tol: int = 24,
     (the centroid of a uniform blob is unbiased under regular subsampling); then
     re-locate at full acuity in a small window (see :func:`foveate`) to refine.
     ``count`` is the number of *matched samples* (≈ area/step²), so a threshold
-    on ``count`` must account for ``step``. ``bbox`` is rounded to the sample grid."""
+    on ``count`` must account for ``step``. ``bbox`` is rounded to the sample grid.
+
+    ``search`` (F240): an optional ``(minx, miny, maxx, maxy)`` window (screen
+    coordinates, clamped to the capture) to scan, mirroring
+    :func:`match_template`. ``match_template``'s own docstring prescribes the
+    idiom "segment by colour to narrow the field, then match_template within it",
+    yet without a window the colour step had to scan the whole desktop — so on a
+    multi-window desktop it pulled in same-coloured blobs from other windows and
+    chrome (a white Mahjongg tile face is also every white pixel of the side
+    panel and neighbouring apps) and paid a full-screen scan for a board that
+    occupies a fraction of it. Bounding the scan to the known region of interest
+    makes the colour pre-filter both correct and cheap. Returned coordinates stay
+    absolute regardless of the window."""
     if rgb is None:
         w, h, rgb = capture_rgb()
     else:
         if size is None:
             raise ValueError("size required when rgb is provided")
         w, h = size
+    if search is None:
+        bx0, by0, bx1, by1 = 0, 0, w - 1, h - 1
+    else:
+        bx0, by0, bx1, by1 = search
+        bx0, by0 = max(0, bx0), max(0, by0)
+        bx1, by1 = min(w - 1, bx1), min(h - 1, by1)
     tr, tg, tb = target
     s = max(1, int(step))
     sx = sy = n = 0
     minx = miny = 1 << 30
     maxx = maxy = -1
     xstep = 3 * s
-    for y in range(0, h, s):
+    for y in range(by0, by1 + 1, s):
         row = y * w * 3
-        i = row
-        for x in range(0, w, s):
+        i = row + bx0 * 3
+        for x in range(bx0, bx1 + 1, s):
             if (abs(rgb[i] - tr) <= tol and abs(rgb[i + 1] - tg) <= tol
                     and abs(rgb[i + 2] - tb) <= tol):
                 sx += x
@@ -1530,7 +1549,8 @@ def find_color(target: tuple[int, int, int], tol: int = 24,
 def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
                      rgb: bytes | None = None,
                      size: tuple[int, int] | None = None,
-                     min_count: int = 1) -> list[dict]:
+                     min_count: int = 1,
+                     search: tuple[int, int, int, int] | None = None) -> list[dict]:
     """Segment a colour into its *separate* regions (F052).
 
     ``find_color`` collapses every matching pixel into one centroid — fine for a
@@ -1540,13 +1560,26 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
     pixels, so cost scales with the colour's area, not the screen) and returns
     one ``{x, y, count, bbox}`` per region in *screen* coordinates, sorted by
     pixel count (largest first). Pick by size or position; each centroid is a
-    real, clickable target. Regions smaller than ``min_count`` are dropped."""
+    real, clickable target. Regions smaller than ``min_count`` are dropped.
+
+    ``search`` (F240): an optional ``(minx, miny, maxx, maxy)`` window (screen
+    coordinates, clamped to the capture) to scan, mirroring :func:`find_color`
+    and :func:`match_template`. Bounding the colour segmentation to the known
+    region of interest stops same-coloured regions in other windows/chrome from
+    appearing as spurious blobs and avoids a whole-screen scan when the target
+    occupies only a fraction of it. Returned coordinates stay absolute."""
     if rgb is None:
         w, h, rgb = capture_rgb()
     else:
         if size is None:
             raise ValueError("size required when rgb is provided")
         w, h = size
+    if search is None:
+        bx0, by0, bx1, by1 = 0, 0, w - 1, h - 1
+    else:
+        bx0, by0, bx1, by1 = search
+        bx0, by0 = max(0, bx0), max(0, by0)
+        bx1, by1 = min(w - 1, bx1), min(h - 1, by1)
     tr, tg, tb = target
     stride = w * 3
     parent: dict[int, int] = {}
@@ -1564,11 +1597,11 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
         if ra != rb:
             parent[rb] = ra
 
-    for y in range(h):
+    for y in range(by0, by1 + 1):
         row = y * stride
         base = y * w
         up_base = base - w
-        for x in range(w):
+        for x in range(bx0, bx1 + 1):
             i = row + x * 3
             if (abs(rgb[i] - tr) <= tol and abs(rgb[i + 1] - tg) <= tol
                     and abs(rgb[i + 2] - tb) <= tol):

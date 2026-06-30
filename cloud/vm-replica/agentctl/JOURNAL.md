@@ -7912,3 +7912,12 @@ SOLUTION:
 238467159
 filled 49 cells
 ```
+
+## F240 — colour segmentation needed an ROI window to stay cheap and local
+
+While pushing Mahjongg deeper, I used the intended `colour -> template` flow to
+find tile faces. `match_template()` already takes `search=...`, but
+`find_color()` / `find_color_blobs()` scanned the whole desktop and could pull
+in same-coloured blobs from other windows. I added the same ROI window to both
+primitives and clamped the scan to that region. On the same Mahjongg frame,
+the white-blob query dropped from 275 full-screen blobs to 93 ROI blobs.
