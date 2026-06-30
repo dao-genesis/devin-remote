@@ -9689,3 +9689,45 @@ wrong. All twenty-five floor friction tests still pass; no code changed.
 
 道法自然：去彼取此 — drop the flower of cleverness, keep the fruit of what the
 measurement actually said.
+
+
+## F270 — link_tracks: what disagreed coherently over time
+
+F269's negative left a positive pointer: a single frame-pair cannot tell a real
+mover from a deterministic match artifact (both make a residual cluster), but
+TIME can — a real mover persists across consecutive frames and translates
+coherently, a transient mismatch flickers (one frame), a camera-locked overlay
+persists but stays pinned. I probed it before building (`_probe_f270.py`): a slow
+live pan produced 17 single-pair `flow_residual` detections; linking them across
+the sequence collapsed them to 2 persistent translating tracks and 15 one-frame
+flickers, while the still-camera weapon band showed up as a single PINNED track
+(span 7 px). Persistence is a real discriminator. So the primitive is warranted.
+
+`link_tracks(frames, max_gap, max_skip, min_len)`: greedy nearest-neighbour data
+association, resolved per step in ascending-distance order so each detection and
+each open track is used at most once; a detection joins the nearest open track
+whose last point is within `max_gap` px and at most `max_skip+1` steps back (so
+`max_skip=1` bridges a one-frame drop-out), else it opens a new track. Each track
+reports `{points, length, span, net, bbox}`. The caller reads the gate the floor
+could not give from one pair: `length==1` is a flicker (drop it); `length>1` with
+`span≈0` is a pinned overlay (HUD/weapon); persistent *and* translating is a
+genuine mover. Inputs are dicts (`x`,`y`, any extra keys preserved under `det`)
+or `(x,y)` tuples — so it links `flow_residual` objects, `match_unique` hits, or
+any point detector's output.
+
+Proof. `_test_f270.py` (17 assertions, no display): a straight-line mover into
+one track with correct net translation; a constant point into one pinned track
+(span≈0); a lone detection as a length-1 flicker; a one-frame drop-out bridged at
+`max_skip=1` and split at `0`; two separated movers into two tracks; a contested
+step resolved one-to-one (nearest wins, the other opens its own); a >`max_gap`
+teleport not linked; `min_len`; payload preservation; tuple input; empty frames.
+Live `_game_f270.py` (panning ioquake3): **20 single-pair detections → 4
+persistent translating tracks, 11 flickers dropped by time** — the noise no
+single pair could reject, rejected. All twenty-six floor friction tests pass.
+
+The chain now closes a loop in time as well as space: `react_pixel` (when) ·
+`move_rel` (how much) · `servo` (gain) · `match_unique` (is this lock
+trustworthy) · `lead` (where it is going) · `consensus_shift` (one shift, or
+none) · `consensus_affine` (the camera's flow field) · `flow_residual` (what
+disagrees with that field *now*) · `link_tracks` (what disagreed *coherently
+over time* — the real mover the single frame could only suspect). 道法自然.

@@ -4239,6 +4239,92 @@ def flow_residual(votes, field: "dict | None" = None, min_resid: float = 6.0,
     return {"field": field, "objects": objects, "n_resid": m, "n": n}
 
 
+def link_tracks(frames, max_gap: float = 60.0, max_skip: int = 1,
+                min_len: int = 1) -> "list[dict]":
+    """Associate per-frame point detections into temporal tracks (F270).
+
+    F269 proved that a single frame-pair cannot tell a real mover from a
+    deterministic match artifact — both make a residual cluster. The
+    discriminator the data pointed at is time: a real mover persists across
+    consecutive frames and translates coherently; a transient mismatch appears
+    once and is gone; a camera-locked overlay (a HUD, the weapon) persists but
+    stays pinned at a fixed screen position. :func:`flow_residual` says "what
+    disagrees with the world *this frame*"; nothing in the floor said "what
+    disagreed *coherently over time*". This is that verb.
+
+    ``frames`` is a list — one entry per time step — of detection lists; each
+    detection is a mapping with at least ``x`` and ``y`` (any other keys are
+    preserved untouched) or an ``(x, y)`` pair. Linking is greedy
+    nearest-neighbour, resolved per step in ascending-distance order so each
+    detection and each open track is used at most once: a detection joins the
+    nearest still-open track whose last point lies within ``max_gap`` px and at
+    most ``max_skip + 1`` steps back (so ``max_skip=1`` bridges a one-frame
+    drop-out), otherwise it starts a new track. Returns the tracks with at
+    least ``min_len`` points, sorted longest-first, each::
+
+        {"points": [{"t", "x", "y", "det"}, ...],
+         "length": int,                 # how many frames it survived
+         "span": float,                 # net start->end displacement (px)
+         "net": (dx, dy),               # net screen translation
+         "bbox": (minx, miny, maxx, maxy)}
+
+    The caller reads persistence and span as the gate the floor could not give
+    from one pair: ``length == 1`` is a flicker (transient noise); ``length > 1``
+    with ``span`` near zero is a pinned overlay (camera-locked HUD/weapon);
+    persistent *and* translating is a genuine independent mover. Live (panning
+    OpenArena): linking collapsed 17 single-pair detections to 2 persistent
+    tracks, dropping 15 flickers, and tagged the weapon band pinned."""
+    def xy(d):
+        if isinstance(d, dict):
+            return float(d["x"]), float(d["y"])
+        return float(d[0]), float(d[1])
+
+    g2 = max_gap * max_gap
+    tracks: "list[dict]" = []   # each: {"points": [...], "_last_t": int}
+    for t, dets in enumerate(frames):
+        norm = [(xy(d), d) for d in dets]
+        # candidate (dist^2, det_index, track_index) over still-linkable tracks
+        cands = []
+        for di, ((dx, dy), _d) in enumerate(norm):
+            for ti, tr in enumerate(tracks):
+                if t - tr["_last_t"] > max_skip + 1:
+                    continue
+                lp = tr["points"][-1]
+                dd = (dx - lp["x"]) ** 2 + (dy - lp["y"]) ** 2
+                if dd <= g2:
+                    cands.append((dd, di, ti))
+        cands.sort(key=lambda c: c[0])
+        used_d: "set[int]" = set()
+        used_t: "set[int]" = set()
+        for dd, di, ti in cands:
+            if di in used_d or ti in used_t:
+                continue
+            (dx, dy), d = norm[di]
+            tracks[ti]["points"].append({"t": t, "x": dx, "y": dy, "det": d})
+            tracks[ti]["_last_t"] = t
+            used_d.add(di)
+            used_t.add(ti)
+        for di, ((dx, dy), d) in enumerate(norm):
+            if di in used_d:
+                continue
+            tracks.append({"points": [{"t": t, "x": dx, "y": dy, "det": d}],
+                           "_last_t": t})
+    out = []
+    for tr in tracks:
+        pts = tr["points"]
+        if len(pts) < min_len:
+            continue
+        xs = [p["x"] for p in pts]
+        ys = [p["y"] for p in pts]
+        ndx, ndy = xs[-1] - xs[0], ys[-1] - ys[0]
+        out.append({"points": pts, "length": len(pts),
+                    "span": (ndx * ndx + ndy * ndy) ** 0.5,
+                    "net": (ndx, ndy),
+                    "bbox": (min(xs), min(ys), max(xs), max(ys))})
+    out.sort(key=lambda tr: tr["length"], reverse=True)
+    return out
+
+
 _OCR_ENGINE: "str | None" = None
 
 # Content-addressed OCR cache (F238). tesseract is spawned as a subprocess per
