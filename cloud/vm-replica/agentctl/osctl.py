@@ -1777,7 +1777,8 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
                      rgb: bytes | None = None,
                      size: tuple[int, int] | None = None,
                      min_count: int = 1,
-                     search: tuple[int, int, int, int] | None = None) -> list[dict]:
+                     search: tuple[int, int, int, int] | None = None,
+                     step: int = 1) -> list[dict]:
     """Segment a colour into its *separate* regions (F052).
 
     ``find_color`` collapses every matching pixel into one centroid — fine for a
@@ -1794,7 +1795,22 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
     and :func:`match_template`. Bounding the colour segmentation to the known
     region of interest stops same-coloured regions in other windows/chrome from
     appearing as spurious blobs and avoids a whole-screen scan when the target
-    occupies only a fraction of it. Returned coordinates stay absolute."""
+    occupies only a fraction of it. Returned coordinates stay absolute.
+
+    ``step`` (F271): *acuity*, exactly as :func:`find_color` already has it but the
+    multi-region segmenter never did. With ``step=1`` every pixel is examined; with
+    ``step=n`` only every n-th pixel on every n-th row is sampled, so the scan does
+    ``~1/n²`` the work and connectivity is judged on the *sample lattice* (a matched
+    sample unions with the matched sample ``n`` to its left / ``n`` above). A solid
+    blob's centroid is unbiased under regular subsampling, so a coarse pass finds
+    *where* separate targets are for a fraction of the cost — the same trade
+    ``find_color`` offers a lone target, now for *several*. ``count`` is matched
+    *samples* (≈ area/n²), so a ``min_count`` threshold must account for ``step``,
+    and ``bbox`` is rounded to the sample grid; re-locate at ``step=1`` in a small
+    window (see :func:`foveate`) when a blob needs pixel-exact extents. A tight
+    perceive→act loop over *distinct* same-coloured targets had to pay a full-
+    resolution segmentation every frame (measured ~130 ms on a 1.5 MP field, ~6×
+    the move+click it gated); ``step`` is how that loop buys back its rate."""
     if rgb is None:
         w, h, rgb = capture_rgb()
     else:
@@ -1808,6 +1824,7 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
         bx0, by0 = max(0, bx0), max(0, by0)
         bx1, by1 = min(w - 1, bx1), min(h - 1, by1)
     tr, tg, tb = target
+    s = max(1, int(step))
     stride = w * 3
     parent: dict[int, int] = {}
 
@@ -1824,19 +1841,19 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
         if ra != rb:
             parent[rb] = ra
 
-    for y in range(by0, by1 + 1):
+    for y in range(by0, by1 + 1, s):
         row = y * stride
         base = y * w
-        up_base = base - w
-        for x in range(bx0, bx1 + 1):
+        up_base = base - s * w
+        for x in range(bx0, bx1 + 1, s):
             i = row + x * 3
             if (abs(rgb[i] - tr) <= tol and abs(rgb[i + 1] - tg) <= tol
                     and abs(rgb[i + 2] - tb) <= tol):
                 key = base + x
                 parent[key] = key
-                if x > 0 and (key - 1) in parent:
-                    union(key - 1, key)
-                if y > 0 and (up_base + x) in parent:
+                if x - s >= bx0 and (key - s) in parent:
+                    union(key - s, key)
+                if y - s >= by0 and (up_base + x) in parent:
                     union(up_base + x, key)
 
     agg: dict[int, dict] = {}

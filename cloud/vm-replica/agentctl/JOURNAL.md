@@ -9731,3 +9731,44 @@ trustworthy) · `lead` (where it is going) · `consensus_shift` (one shift, or
 none) · `consensus_affine` (the camera's flow field) · `flow_residual` (what
 disagrees with that field *now*) · `link_tracks` (what disagreed *coherently
 over time* — the real mover the single frame could only suspect). 道法自然.
+
+## F271 — find_color_blobs gains `step`: the acuity find_color always had, finally for *several* targets
+
+The motion arc (F260–F270) gave the floor a clock and an ego-motion model; this
+turns back to the oldest verb in the spatial family and pays a debt. Playing the
+Human Benchmark **Aim Trainer** — 30 targets pop one at a time on a blue field,
+scored as average ms/target — the idiomatic reflex is purely spatial: segment the
+target's light-blue fill into blobs, take the largest, click its centroid, repeat.
+I probed where the per-target time went (`_probe_f271.py`): the **scan dominated**.
+A full-resolution `find_color_blobs` over the ~1.5 MP field measured **~70–130 ms**,
+versus **~20 ms** for the move+click it gated — the eye, not the hand, set the pace.
+
+The fix is not a new verb but a debt repaid. `find_color` has carried a `step`
+*acuity* knob since F144: sample every n-th pixel on every n-th row, do ~1/n² the
+work, and a solid blob's centroid is unbiased under regular subsampling — coarse
+to find *where*, then refine in a fovea. The *multi-region* segmenter never got
+it, so any tight perceive→act loop over **distinct** same-coloured targets had to
+pay full resolution every frame. F271 gives `find_color_blobs(..., step=n)` the
+same trade, with the one wrinkle a segmenter adds: connectivity is judged on the
+**sample lattice** — a matched sample unions with the matched sample `n` to its
+left / `n` above (a cross-row wrap guard keeps the left edge from joining the
+previous row's tail). `count` is now matched *samples* (≈ area/n²) so a `min_count`
+threshold must scale with `step`; `bbox` rounds to the sample grid. `step=1` is
+byte-identical to before (the default), so nothing downstream moves.
+
+Proof. `_test_f271.py` (8 checks, no display): `step=1` reproduces the old result
+exactly; at `step=4` two well-separated blobs keep their centroids (±2 px) for a
+quarter… a sixteenth of the samples; `min_count` reads in sample units; a 1-px
+line is the documented acuity casualty (skipped when its row isn't sampled); a
+gap wider than `step` splits and one narrower bridges (lattice connectivity); no
+cross-row union wrap; `step≤0` clamps to 1. Live `_game_f271.py` (the Aim Trainer):
+the same target found in **4.5 ms at step=4 vs 68.6 ms at step=1** (~15×), and the
+floor cleared all **30/30 targets at a site-scored 106 ms/target** — against the
+~400 ms human peak on the same page's histogram. The reflex is now bounded by the
+hand, not the eye.
+
+Lesson: when a knob proves itself on the single-target finder, the multi-target
+finder is not automatically richer for ignoring it — generality means the *whole*
+family carries the trade, or the loop that needs several targets quietly pays the
+price the loop that needs one stopped paying long ago. `find_color` · step (one
+centroid, cheap) → `find_color_blobs` · step (every centroid, just as cheap). 道法自然.
