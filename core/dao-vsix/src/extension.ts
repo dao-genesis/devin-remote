@@ -1242,17 +1242,35 @@ function readBody(req: any): Promise<string> {
     });
 }
 
-async function waitForFile(filePath: string, timeoutMs: number): Promise<string> {
+// 终端捕获命令构造: 子shell分组 + 完成哨兵。
+//   根因(已修): 旧式 `${cmd} > file 2>&1` 的重定向只绑定 cmd 中「最后一条」子命令,
+//   `a; b; c` 仅 c 落文件、a/b 散逸终端丢失 → 多行/复合命令输出被截成最后一段。
+//   修法: `( cmd ; echo MARK ) > file 2>&1` 统一捕获全部输出(bash/zsh/PowerShell·Win 默认终端通行),
+//   并以 MARK 哨兵标识「命令真完成」→ 读端等到哨兵再返回(杜绝边写边读截断 + 空输出误判超时)。
+function daoExecCaptureCmd(cmd: string, tmpFile: string, marker: string): string {
+    return `( ${cmd} ; echo ${marker} ) > "${tmpFile}" 2>&1`;
+}
+async function waitForExecOutput(filePath: string, marker: string, timeoutMs: number): Promise<{ output: string; done: boolean }> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
         try {
             const content = fs.readFileSync(filePath, 'utf8');
-            if (content.length > 0) return content;
-        } catch {}
-        await new Promise(r => setTimeout(r, 200));
+            const idx = content.lastIndexOf(marker);
+            if (idx >= 0) {
+                let out = content.slice(0, idx);
+                if (out.endsWith('\r\n')) out = out.slice(0, -2);
+                else if (out.endsWith('\n')) out = out.slice(0, -1);
+                return { output: out, done: true };
+            }
+        } catch { /* 文件尚未生成 */ }
+        await new Promise(r => setTimeout(r, 150));
     }
-    return '[timeout waiting for output]';
+    // 超时: 尽力返回已捕获部分(不谎报完成)
+    let partial = '';
+    try { partial = fs.readFileSync(filePath, 'utf8'); } catch { /* 守柔 */ }
+    return { output: partial || '[timeout waiting for output]', done: false };
 }
+function daoExecMarker(): string { return `__DAO_DONE_${Math.random().toString(36).slice(2, 10)}__`; }
 
 async function executeTool(tool: string, args: any): Promise<any> {
     switch (tool) {
@@ -1293,14 +1311,12 @@ async function executeTool(tool: string, args: any): Promise<any> {
             const term = vscode.window.createTerminal('dao-tool');
             term.show(false);
             const tmpFile = path.join(os.tmpdir(), `dao-tool-${Date.now()}.txt`);
-            const captureCmd = process.platform === 'win32'
-                ? `${args.command} > "${tmpFile}" 2>&1`
-                : `${args.command} > "${tmpFile}" 2>&1`;
-            term.sendText(captureCmd);
-            const output = await waitForFile(tmpFile, 30000);
+            const marker = daoExecMarker();
+            term.sendText(daoExecCaptureCmd(args.command, tmpFile, marker));
+            const r = await waitForExecOutput(tmpFile, marker, 30000);
             try { fs.unlinkSync(tmpFile); } catch {}
             setTimeout(() => term.dispose(), 1000);
-            return { output };
+            return { output: r.output };
         }
         default:
             return { error: `unknown tool: ${tool}` };
@@ -3218,13 +3234,13 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             const term = vscode.window.createTerminal({ name: 'dao-exec', cwd: cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath });
             term.show(false);
             const tmpFile = path.join(os.tmpdir(), `dao-exec-${Date.now()}.txt`);
-            const captureCmd = process.platform === 'win32' ? `${cmd} > "${tmpFile}" 2>&1` : `${cmd} > "${tmpFile}" 2>&1`;
-            term.sendText(captureCmd);
+            const marker = daoExecMarker();
+            term.sendText(daoExecCaptureCmd(cmd, tmpFile, marker));
             const waitMs = Math.min(tmout || 20000, 60000);
-            const output = await waitForFile(tmpFile, waitMs);
+            const r = await waitForExecOutput(tmpFile, marker, waitMs);
             try { fs.unlinkSync(tmpFile); } catch {}
             setTimeout(() => term.dispose(), 1000);
-            return { status: 'completed', stdout: output, exitCode: 0, command: cmd };
+            return { status: r.done ? 'completed' : 'timeout', stdout: r.output, exitCode: r.done ? 0 : null, command: cmd };
         }
         case '/api/command': {
             const body: any = JSON.parse(await readBody(req));
