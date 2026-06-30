@@ -8935,3 +8935,59 @@ class apart (within-class spread collapses under mode, stays large under mean);
 nothing when there is nothing to be immune to); the default stays mean
 (backward-compatible); args validated. All fifteen floor friction tests pass
 (F257 plus the prior fourteen), no regressions.
+
+### F258 — label_regions: the labels→objects layer (connected components)
+
+**Friction.** Every reader the floor grew answers *what is in each cell* —
+`sample_grid` a colour, `ocr_grid` text, `classify_grid`/`cluster_boxes` a type.
+But a *thing* in a game is rarely one cell. swell-foop made this unavoidable: its
+entire mechanic is "click a **connected group** of same-colour tiles", and the
+move does not exist at the cell level — it is a property of the *group*. Reading
+the 6x5 board with `sample_grid(stat="mode")` (F257 paid off immediately — each
+tile is a coloured fill under a bevel/symbol mark, and the mode reads the fill
+cleanly) gives a clean label grid, and then... there was nothing. To find the
+groups I hand-wrote a flood fill over the grid — the exact flood fill a mines
+player would write to find an opened pocket, a klotski player to find a piece
+spanning cells, a tetris player to find a settled tetromino, a five-or-more player
+to find a line. The readers stop one layer too early: they hand you labelled
+cells and leave "which cells are the same object" to every caller.
+
+**Solution.** `label_regions(grid, background=None, connectivity=4)` — the flood
+fill made a primitive. It consumes *any* reader's `rows`x`cols` label grid and
+returns its objects: a list of `{label, cells, size, bbox}`, regions ordered by
+first row-major appearance (deterministic), each `cells` row-major sorted so
+`cells[0]` is always a real in-region cell — a safe click target for any shape,
+unlike a bbox centre which can fall in a concavity/hole. `background` (one label
+or a set) is never grouped — swell-foop's cleared cells, mines' covered cells.
+`connectivity` is 4 or 8 (a five-or-more diagonal line, a king's reach). The flood
+uses an explicit stack, never recursion, so a board larger than Python's recursion
+limit is fine. It depends on no pixels — it is pure grid topology — which is the
+point: perception now splits cleanly into *read the cells* (a reader) then
+*assemble cells into objects* (this), and the two compose without either knowing
+the other.
+
+**Lesson (architecture).** The floor had been growing *readers* (pixels → labels)
+and *geometry* (where the cells are: `detect_grid`, `detect_cascade`,
+`find_color_blobs`), but the rung between "I have a labelled grid" and "I have the
+game's objects" was missing, so it was re-implemented per game as a private flood
+fill. Naming that rung as one primitive is the same 損之又損 move as the readers:
+the shared structure (group adjacent equal cells) is extracted once, and each game
+keeps only its *own* logic (swell-foop: click the biggest group; five-or-more:
+keep groups that are collinear runs ≥5; mines: a pocket's frontier). A reader says
+*what*, `label_regions` says *which together* — and most board games' "legal move"
+or "win" predicate is a function of the second, not the first.
+
+**Proof.** *Live, gnome-mines theme aside — gnome-swell-foop 6x5*: read with
+`sample_grid(stat="mode")`, snap each cell to {B,G,Y}, `label_regions(grid,
+connectivity=4)` → **12 regions, 6 of them clickable (size ≥ 2)**, largest a
+9-cell blue group `[(1,3),(2,3),(2,4),(2,5),(3,2),(3,3),(4,1),(4,2),(4,3)]`.
+Clicking that group's `cells[0]` (mapped to its pixel centre) cleared it and the
+board reflowed — **17 of 30 cells changed** in one move (9 removed + gravity drop),
+i.e. the primitive selected and drove a real, legal swell-foop move end to end.
+*Synthetic* (`_test_f258.py`, no display): a swell-foop-like grid plus targeted
+shapes verify every cell lands in exactly one region and sizes sum to the cell
+count; a same-label run does not leak across a different label between it; 4- vs
+8-connectivity splits/joins a diagonal contact; `cells[0]` is in-region while a
+ring's bbox centre is the hole; background labels (single or set) never form
+regions; deterministic first-appearance order and re-run identity. All sixteen
+floor friction tests pass (F258 plus the prior fifteen), no regressions.
