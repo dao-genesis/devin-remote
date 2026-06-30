@@ -8804,3 +8804,70 @@ is right); it retries the opposite polarity on an empty read; a blank cell is
 still gated out before OCR even under `auto`; and a non-bool/non-"auto" `invert`
 is rejected. All thirteen floor friction tests pass (F255 plus the prior twelve),
 no regressions.
+
+### F256 — cluster_boxes: reading a board whose alphabet you don't know yet
+
+**Friction.** `classify_grid`/`classify_boxes` answer *what* each cell is — but
+only after you have harvested a labelled template per class. Driving gnome-chess
+made the precondition the problem: to read the start position you would harvest
+the twelve pieces from… the start position, which is circular, and a *mid-game*
+board (or an unfamiliar mahjongg tileset, or the change-regions of a never-seen
+game) gives no known frame to crop labels from at all. Worse, F254 had already
+*hand-rolled the escape* inline for mahjongg — seed a one-tile library on first
+sight, start a new entry whenever the best match exceeds a radius — i.e. the
+floor kept re-deriving an unsupervised grouping loop per game, the exact
+boilerplate the `classify_*` primitives exist to retire.
+
+**A discarded framing (worth recording).** The first instinct on chess was a
+different friction: the same piece sits on both light and dark squares, so maybe
+`classify_grid`'s whole-cell luma signature confuses a piece by its *background*
+and needs a foreground/background separation primitive. Measured, the worry
+evaporated: a white pawn on a light vs a dark square differs by **22** per-pixel
+mean-abs-diff, while a pawn vs a rook on the *same* square differs by **75–87** —
+the inset window is glyph-dominated, so `classify_grid` already reads chess with a
+wide margin (F252's "a bishop on a light square matches one harvested from a dark
+one" was true all along). The real gap was not separating fore from back; it was
+not needing a labelled library in the first place.
+
+**Solution.** `cluster_boxes(boxes, max_score=…)` — the unsupervised sibling of
+`classify_boxes`. It factors the per-box pixel core out of `_classify_box` into a
+shared `_box_signature` (inset to the glyph-dominated centre, ink-gate, resample
+to a norm×norm luma signature) and groups the boxes by single-pass *leader
+clustering*: each box joins the nearest existing cluster whose exemplar is within
+`max_score` mean-abs-diff per pixel, else founds a new cluster and becomes its
+exemplar. Ids are assigned in first-appearance order (deterministic, order-stable),
+blanks gate to a sentinel and never cluster. Because the signature core is the
+*same* one `classify_boxes` uses, the workflow composes: cluster to discover the
+alphabet, label the few exemplars once, then `classify_boxes` with them — and the
+labels reproduce the clustering pixel-for-pixel.
+
+**Lesson (architecture).** The `classify_*` family assumed the alphabet is known
+and the question is *recognition*; but the prior, cheaper question is *typing* —
+"which of these are the same?" — and it needs no labels, just the metric. Reading
+splits into two stages the floor had been fusing: **discover** the equivalence
+classes from the board itself (`cluster_boxes`), then optionally **name** them
+(`classify_boxes`). Supervised recognition is the special case where stage one was
+done off-board by a human harvesting templates. Exposing the unsupervised stage as
+its own primitive is what stops every new game from re-rolling the leader loop —
+the same move F251–F254 made for the per-cell read loops. `max_score` is the one
+knob, in the same luma units as the classify threshold: too tight and a class
+over-splits on incidental variation (a piece's square colour), too loose and
+classes merge; there is a wide plateau between, so the knob is forgiving.
+
+**Proof.** *Live, gnome-chess start position*: the 32 occupied squares cluster, at
+`max_score` anywhere in **28–48**, into exactly **12** classes — sizes
+`[8,8,2,2,2,2,2,2,1,1,1,1]` — and the assignment is structurally correct: the
+black back rank reads `[0,1,2,3,4,2,1,0]` (rook, knight, bishop, queen, king,
+bishop, knight, rook — symmetric), the white back rank `[7,8,9,10,11,9,8,7]`
+(distinct ids — white pieces never merge with black), and each side's eight pawns
+fall in one cluster. No template was supplied. Tightening to `max_score=18`
+over-splits to 14 (the cross-background variation splitting two piece types),
+confirming the radius is the only knob and 28–48 a stable plateau. *Synthetic*
+(`_test_f256.py`, no display): two each of three shapes drawn on alternating
+background shades cluster to `[0,1,2,0,1,2]` (grouped by shape, background
+ignored) on the default radius; a too-tight radius over-splits each onto its own
+background; a blank box gates to the (configurable) sentinel without consuming a
+cluster id; the result is deterministic; and feeding one exemplar per discovered
+cluster back to `classify_boxes` as a labelled library reproduces the grouping
+exactly. All fourteen floor friction tests pass (F256 plus the prior thirteen),
+no regressions.
