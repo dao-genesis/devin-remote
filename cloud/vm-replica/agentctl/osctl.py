@@ -2131,15 +2131,28 @@ def region_diff(a: bytes, b: bytes, tol: int = 0) -> dict:
     returning ``{pixels, total, frac}``. With ``tol=0`` it is the exact compare;
     raise ``tol`` to look past sensor/render noise and see only real change. It
     is the measured form of equality the two waits assumed — the foundation a
-    robust change/settle test stands on."""
+    robust change/settle test stands on.
+
+    Fast path (F246): if ``a == b`` the two patches are byte-identical, so *no*
+    pixel can differ by more than any ``tol >= 0`` — the answer is ``0`` without
+    inspecting a single channel. This is exact, not an approximation, and it is
+    the case the pixel waiters spend almost all their polls in: while an action
+    is pending the watched region holds still, capture after capture comes back
+    identical, and the bytes compare (a C-level ``memcmp``, microseconds) settles
+    it instead of the ~per-pixel Python loop (tens of ms over a board-sized
+    patch). Only the poll where something *actually* changed pays the full count
+    — so the reported ``pixels`` stays exact while the idle polls cost nothing
+    (損之又損: the diff the waits never needed to compute)."""
     if len(a) != len(b):
         raise ValueError("patches differ in size")
+    total = len(a) // 3
+    if a == b:
+        return {"pixels": 0, "total": total, "frac": 0.0}
     n = 0
     for i in range(0, len(a), 3):
         if (abs(a[i] - b[i]) > tol or abs(a[i + 1] - b[i + 1]) > tol
                 or abs(a[i + 2] - b[i + 2]) > tol):
             n += 1
-    total = len(a) // 3
     return {"pixels": n, "total": total,
             "frac": (n / total if total else 0.0)}
 
