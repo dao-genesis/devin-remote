@@ -8082,3 +8082,60 @@ to the dialog frame and the main window to the main frame; a second scenario
 with real screen-coord extents confirms the IoU path still wins, and a third
 confirms the exact-title short-circuit still fires. Without the fix the
 dialog-window assertion fails (it resolves to `cands[0]`, the board).
+
+---
+
+> 大成若缺，其用不敝。 The tolerant equality already existed; the waits it was
+> written for never used it. Completing the wiring, not adding a part.
+
+## F244 — the two waits never adopted the tolerant equality made for them
+
+Stress-testing the deepest interconnected case — an **asynchronous opponent**:
+play White, let gnome-chess's Stockfish engine *think* for an unknown time, then
+reply. A closed-loop agent must detect *the reply* (not its own move's
+animation, and not before the reply lands). The canonical idiom is
+`baseline = crop(board); my_move(); wait_for_change(board, baseline)` then
+`wait_until_stable(board)` — catch the onset of the reply, then its settling.
+
+But reading the two waits closely surfaced a latent structural gap. `region_diff`
+(F134) was written *explicitly* to give the waits a tolerant notion of equality
+— its own docstring says `wait_until_stable` and `wait_for_change` "judge
+sameness by exact byte-equality — and that is brittle … a shift of +2 per channel
+is invisible to the eye yet makes an exact compare report every pixel as changed,
+so 'did it change?' fires on noise and 'has it settled?' never settles." Yet the
+primitive was never wired in: `wait_for_change` still did `patch != baseline` and
+`wait_until_stable` still did `patch == prev` — **byte-exact**. So a blinking
+caret, a focus ring, a hover highlight, a one-bit antialiasing wobble, or the
+mouse cursor passing through the bbox would trip the onset waiter spuriously
+("it happened" when nothing did) and reset the settle counter forever ("never at
+rest" while perfectly still). The whole *spatial* change family (`locate_change`,
+`locate_change_blobs`) already takes `tol`/`min_count`; the *temporal* waiters,
+the ones `region_diff` was authored for, were the only change consumers still
+byte-exact. The same "narrow the field / look past noise" discipline F240–F242
+gave colour/template/change, applied to the time axis.
+
+**Fix** (`osctl.wait_for_change`, `wait_until_stable`). Both now measure sameness
+through `region_diff(tol=…)["pixels"]` against a `min_count` threshold:
+`wait_for_change` fires when `pixels >= min_count`, `wait_until_stable` counts a
+capture "at rest" when `pixels < min_count`. The defaults `tol=0, min_count=1`
+are exact byte-equality — `pixels >= 1 ⟺ patch != baseline` and
+`pixels < 1 ⟺ patch == prev` — so existing callers are byte-for-byte unchanged.
+Raising them makes the onset waiter a *meaningful*-change detector and lets a
+region settle past sub-threshold jitter. `wait_for_change` now also returns
+`pixels` (how many differed at the firing capture).
+
+**Proof.**  *Live gnome-chess vs Stockfish*: White pawn move, then
+`wait_for_change(BOARD, baseline, tol=24, min_count=30)` caught the engine's
+**asynchronous reply** — `changed=True, pixels=610` after `1.73 s` of engine
+thinking (21 polls) — and `wait_until_stable(BOARD, tol=24, min_count=30)` then
+confirmed it settled in `0.80 s`; the move list read *"1b. Black knight moves
+from g8 to f6"*, i.e. exactly the reply that was detected, end-to-end in 2.53 s.
+*Synthetic* (`_test_f244.py`, pure-Python, faked capture stream): with defaults,
+`wait_for_change` fires on a single changed pixel (old behaviour); with
+`tol=24` a uniform +2 wobble is ignored; with `min_count=30` a 10-pixel flicker
+is ignored but a 40-pixel block fires. For `wait_until_stable`, a strictly
+alternating 10-pixel flicker never settles under the exact default but *does*
+settle under `tol=24, min_count=30`. (Honest caveat: this VM's capture path does
+not composite the software cursor, so a static board shows 0 jitter here — the
+noise-rejection benefit is shown synthetically; live confirms the positive
+async-reply path.)
