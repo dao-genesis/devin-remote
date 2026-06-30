@@ -551,6 +551,51 @@ let KEY = "";
     revproxy.saveConfig(cz);
   }
 
+  // ── 上游错误归类 + 一致错误信令(回归护栏) ──────────────────────────
+  // 病灶: 长链路/并发下官方上游回「Reached message rate limit … Resets in: 1h30m0s」,
+  //   旧实现 unary 一律 502、stream 把错误塞进 assistant content 伪装成正文 → 客户端
+  //   把报错当回复(即"对话突然中断却收到一段奇怪文字")。正法: 速率限制→429+Retry-After,
+  //   stream 以 error 对象如实下发(绝不混入 content)。
+  {
+    const rl =
+      "官方上游错误: Reached message rate limit for this model. Please try again later. Resets in: 1h30m0s (trace ID: abc)";
+    const cRl = revproxy._classifyUpstreamError(rl);
+    ok("速率限制 → 429", cRl.status === 429 && cRl.code === "rate_limit_exceeded");
+    ok("Retry-After 解析 1h30m0s=5400s", cRl.retryAfter === 5400);
+    const cQ = revproxy._classifyUpstreamError("quota has been exhausted");
+    ok("配额耗尽 → 429 insufficient_quota", cQ.status === 429 && cQ.code === "insufficient_quota");
+    const cE = revproxy._classifyUpstreamError("socket hang up");
+    ok("其余上游故障 → 502", cE.status === 502 && cE.retryAfter === 0);
+
+    // unary: 429 + Retry-After 头 + 结构化错误
+    const ru = fakeRes();
+    revproxy._emitOpenAIUnary(ru, "glm-5-2", (sink) => sink.onError(rl));
+    const ju = JSON.parse(ru.body);
+    ok("unary 速率限制 → HTTP 429", ru._status === 429);
+    ok("unary 带 Retry-After 头", ru._headers["Retry-After"] === "5400");
+    ok("unary error.type=rate_limit_error", ju.error && ju.error.type === "rate_limit_error");
+
+    // stream: 200(SSE) + error 对象, 不把错误伪装成 content
+    const rs = fakeRes();
+    revproxy._emitOpenAIStream(rs, "glm-5-2", (sink) => sink.onError(rl));
+    ok("stream 错误不再伪装成 content", !/\[dao-revproxy error\]/.test(rs.body));
+    let sawErr = false;
+    for (const line of rs.body.split("\n")) {
+      const s = line.trim();
+      if (!s.startsWith("data:")) continue;
+      const j = s.slice(5).trim();
+      if (j === "[DONE]") continue;
+      try {
+        const o = JSON.parse(j);
+        if (o.error && o.error.type === "rate_limit_error") sawErr = true;
+        // 绝不应有 assistant content 携带上游报错文本
+        const dc = o.choices && o.choices[0] && o.choices[0].delta && o.choices[0].delta.content;
+        if (dc && /rate limit/i.test(dc)) ok("stream content 夹带报错(应为假)", false);
+      } catch (_) {}
+    }
+    ok("stream 下发 error 对象(rate_limit_error)", sawErr);
+  }
+
   revproxy.setPremiumQuota("unknown");
   mock.close();
   console.log(failures === 0 ? "\nALL PASS" : "\n" + failures + " FAIL");

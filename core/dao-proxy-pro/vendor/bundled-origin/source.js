@@ -6315,16 +6315,6 @@ function _captureChatFrame(req, body) {
     headers: hdr,
     at: Date.now(),
   };
-  try {
-    if (fs.existsSync(path.join(__dirname, "_dump_chatframe"))) {
-      fs.writeFileSync("/tmp/_chatframe_dump.bin", _lastChatFrame.body);
-      fs.writeFileSync(
-        "/tmp/_chatframe_dump.json",
-        JSON.stringify({ url: req.url, len: _lastChatFrame.body.length, headers: hdr }, null, 2),
-      );
-      log("[revproxy][dump] chat frame → /tmp/_chatframe_dump.bin " + _lastChatFrame.body.length + "B url=" + req.url);
-    }
-  } catch (_) {}
 }
 
 // 取捕获帧最末一条消息正文 → 换成 newText → 返回新 Connect 帧 Buffer。
@@ -6479,20 +6469,34 @@ function _officialChatReplay(target, norm, sink) {
         // HTTP 200 也可能在 end-stream 帧里带 quota 错误(此处即配额信号真源)。
         const frames = parseFrames(buf); // 已按需解 gzip
         let streamErr = null;
-        const dataStrs = [];
+        // 官方 GetChatMessageResponse 流帧 schema (cascade_wire RSP):
+        //   顶层 field 3 = DELTA_TEXT (文本增量) · field 9 = DELTA_THINKING (思考增量)
+        //   field 5 = STOP_REASON · field 6 = DELTA_TOOL_CALLS · field 28 = 响应统计
+        //   field 7 = 元数据(内含 x-request-id) · field 17 = uuid
+        // 旧实现 _gatherUtf8Strings 递归收一切 wire-type=2 串 → 误收 field 7 的
+        //   "x-request-id chatcmpl-…" 与 field 28 统计标签("Response Statistics /
+        //   Token Usage / output_tokens …"); 且其后 weak filter 把 field 3 的短文本
+        //   增量(如 "ZUL"/"U-")当成 uid/枚举滤掉 → 正文丢失、垃圾留存 = 乱码回包。
+        // 正法(原汤化原食): 仅取顶层 field 3 文本增量逐帧拼接; 思考(field 9)单列不混正文。
+        let deltaText = "";
+        let deltaThinking = "";
         for (const f of frames) {
           if (f.flags & 0x80) continue; // grpc-web trailer
           if (f.flags & 0x02) {
-            // Connect end-stream: JSON
+            // Connect end-stream: JSON {} 正常 / {"error":{code,message}}
             try {
               const j = JSON.parse(f.payload.toString("utf8").trim() || "{}");
               if (j && j.error) streamErr = j.error;
             } catch (_) {}
             continue;
           }
-          // data 帧: 按 proto 收集 UTF-8 串
           try {
-            _gatherUtf8Strings(parseProto(f.payload), dataStrs, 0, 12, 1);
+            const top = parseProto(f.payload);
+            for (const e of top[3] || [])
+              if (e.w === 2 && e.b) deltaText += Buffer.from(e.b).toString("utf8");
+            for (const e of top[9] || [])
+              if (e.w === 2 && e.b)
+                deltaThinking += Buffer.from(e.b).toString("utf8");
           } catch (_) {}
         }
         if (streamErr) {
@@ -6503,16 +6507,7 @@ function _officialChatReplay(target, norm, sink) {
             sink.onError("官方上游错误: " + (streamErr.message || streamErr.code || blob));
           return resolve({ ok: false, quota: exhausted ? "exhausted" : undefined });
         }
-        // 拼接增量文本: 去除明显的元数据短串(模型名/uid/枚举)
-        const text = dataStrs
-          .filter(
-            (s) =>
-              s &&
-              !/^MODEL_|^[a-z0-9-]{1,40}$/i.test(s) &&
-              !/^[A-Z_]{3,}$/.test(s),
-          )
-          .join("");
-        const out = text || dataStrs.join("");
+        const out = deltaText || deltaThinking;
         if (!out) {
           sink.onError && sink.onError("官方回包解码为空(可能为纯工具调用流)");
           return resolve({ ok: false });
