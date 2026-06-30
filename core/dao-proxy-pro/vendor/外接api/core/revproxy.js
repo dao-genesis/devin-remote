@@ -919,6 +919,37 @@ function _json(res, code, obj) {
   res.end(s);
 }
 
+function _html(res, code, html) {
+  const s = String(html);
+  res.writeHead(code, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": String(Buffer.byteLength(s)),
+    "Cache-Control": "no-cache",
+  });
+  res.end(s);
+}
+
+// ── 网页对话台 (web chat console) · 同源单页 ──────────────────────────────
+//   反者道之动: 把「调用一切反代模型 + 管理(档位热切) + AI 测试验证」收束为一张
+//   自包含网页, 与 /v1 同源。本机直开或经内网穿透远程任意环境浏览器皆可达 ——
+//   页面静态零鉴权, 真正的模型调用仍由 /v1 的 Bearer key 把关。
+let _consoleHtmlCache = null;
+function consoleHtml() {
+  if (_consoleHtmlCache != null) return _consoleHtmlCache;
+  try {
+    _consoleHtmlCache = fs.readFileSync(
+      path.join(__dirname, "revproxy_console.html"),
+      "utf8",
+    );
+  } catch (e) {
+    _consoleHtmlCache =
+      '<!DOCTYPE html><meta charset="utf-8"><title>dao 反代对话台</title>' +
+      '<body style="font:14px sans-serif;background:#0e1116;color:#d6dde7;padding:24px">' +
+      "网页对话台资源缺失 (revproxy_console.html 未随插件打包)。</body>";
+  }
+  return _consoleHtmlCache;
+}
+
 function _readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -995,6 +1026,18 @@ async function handle(req, res, u, deps) {
   deps.cfg = cfg;
   const log = deps.log || (() => {});
 
+  // ── 网页对话台 (远程任意环境浏览器直开 · 同源单页·零鉴权) ──────────────
+  if (
+    req.method === "GET" &&
+    (p === "/origin/revproxy/console" ||
+      p === "/origin/revproxy/chat" ||
+      p === "/origin/revproxy" ||
+      p === "/origin/revproxy/")
+  ) {
+    _html(res, 200, consoleHtml());
+    return true;
+  }
+
   // ── 控制面 (webview 用·本机) ──────────────────────────────────
   if (p === "/origin/revproxy/status" && req.method === "GET") {
     const models = listModels(deps);
@@ -1022,8 +1065,12 @@ async function handle(req, res, u, deps) {
   }
   // 档位热切换: 设某家族当前活跃档 (热生效·无需重启) ──
   if (p === "/origin/revproxy/tier" && req.method === "POST") {
-    if (!_isLocal(req)) {
-      _json(res, 403, { ok: false, error: "localhost only" });
+    // 远程管理: 本机直放行; 远程需持有效 Bearer key (与 /v1 同一把关)。
+    if (!_isLocal(req) && !_authOk(req, cfg)) {
+      _json(res, 403, {
+        ok: false,
+        error: "需本机或有效 Bearer key (远程管理)",
+      });
       return true;
     }
     let body = {};
@@ -1191,4 +1238,5 @@ module.exports = {
   _familyActiveUid,
   _resolveFamilyAlias,
   _cfgPath,
+  consoleHtml,
 };
