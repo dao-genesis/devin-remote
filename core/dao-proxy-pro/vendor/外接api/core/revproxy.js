@@ -779,7 +779,13 @@ function _emitOpenAIStream(res, model, gen) {
       res.end();
     },
     onError: (msg) => {
-      send({ content: "\n[dao-revproxy error] " + msg }, "stop");
+      // SSE 头已以 200 下发, 无法再改状态码 → 以「错误对象」如实下发,
+      // 绝不再把上游错误伪装成 assistant content(否则客户端把报错当正文,
+      // 即长链路下"对话突然中断却收到一段奇怪文字"的根因)。
+      const c = _classifyUpstreamError(msg);
+      const errObj = { message: String(msg), type: c.type, code: c.code };
+      if (c.retryAfter) errObj.retry_after = c.retryAfter;
+      res.write("data: " + JSON.stringify({ error: errObj }) + "\n\n");
       res.write("data: [DONE]\n\n");
       res.end();
     },
@@ -819,7 +825,15 @@ function _emitOpenAIUnary(res, model, gen) {
       };
       _json(res, 200, body);
     },
-    onError: (msg) => _json(res, 502, { error: { message: msg } }),
+    onError: (msg) => {
+      const c = _classifyUpstreamError(msg);
+      _json(
+        res,
+        c.status,
+        { error: { message: String(msg), type: c.type, code: c.code } },
+        c.retryAfter ? { "Retry-After": String(c.retryAfter) } : undefined,
+      );
+    },
   });
 }
 
@@ -869,13 +883,15 @@ function _emitAnthropicStream(res, model, gen) {
       res.end();
     },
     onError: (msg) => {
-      ev("content_block_delta", {
-        type: "content_block_delta",
-        index: 0,
-        delta: { type: "text_delta", text: "\n[dao-revproxy error] " + msg },
+      // Anthropic SSE 错误以 `event: error` 如实下发, 不混入 text_delta 正文。
+      const c = _classifyUpstreamError(msg);
+      ev("error", {
+        type: "error",
+        error: {
+          type: c.status === 429 ? "rate_limit_error" : "api_error",
+          message: String(msg),
+        },
       });
-      ev("content_block_stop", { type: "content_block_stop", index: 0 });
-      ev("message_stop", { type: "message_stop" });
       res.end();
     },
   });
@@ -905,18 +921,67 @@ function _emitAnthropicUnary(res, model, gen) {
         },
       });
     },
-    onError: (msg) =>
-      _json(res, 502, { type: "error", error: { message: msg } }),
+    onError: (msg) => {
+      const c = _classifyUpstreamError(msg);
+      _json(
+        res,
+        c.status,
+        {
+          type: "error",
+          error: {
+            type: c.status === 429 ? "rate_limit_error" : "api_error",
+            message: String(msg),
+          },
+        },
+        c.retryAfter ? { "Retry-After": String(c.retryAfter) } : undefined,
+      );
+    },
   });
 }
 
-function _json(res, code, obj) {
+function _json(res, code, obj, extraHeaders) {
   const s = JSON.stringify(obj);
-  res.writeHead(code, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Content-Length": String(Buffer.byteLength(s)),
-  });
+  res.writeHead(
+    code,
+    Object.assign(
+      {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Length": String(Buffer.byteLength(s)),
+      },
+      extraHeaders || {},
+    ),
+  );
   res.end(s);
+}
+
+// 上游错误归类: 把官方上游错误如实映射为正确的 HTTP 语义,
+// 杜绝「速率限制/配额耗尽」被笼统当成 502(网关错误)误导客户端重试。
+//   速率限制(官方按模型限频, 形如 "Reached message rate limit ... Resets in: 1h30m0s")
+//     → 429 Too Many Requests + Retry-After(秒); 客户端据此退避而非狂重试。
+//   配额耗尽 → 429 insufficient_quota。
+//   其余上游故障 → 502 upstream_error。
+function _classifyUpstreamError(msg) {
+  const s = String(msg || "");
+  const rateLimited = /rate limit|Resets in|too many requests|\b429\b/i.test(s);
+  const quota = /quota|exhaust|governor|precondition|insufficient|Authentication Fails/i.test(
+    s,
+  );
+  if (rateLimited || quota) {
+    let retryAfter = 0;
+    const m = s.match(/Resets in:\s*(?:(\d+)\s*h)?(?:(\d+)\s*m)?(?:(\d+)\s*s)?/i);
+    if (m)
+      retryAfter =
+        parseInt(m[1] || 0, 10) * 3600 +
+        parseInt(m[2] || 0, 10) * 60 +
+        parseInt(m[3] || 0, 10);
+    return {
+      status: 429,
+      type: "rate_limit_error",
+      code: rateLimited ? "rate_limit_exceeded" : "insufficient_quota",
+      retryAfter,
+    };
+  }
+  return { status: 502, type: "upstream_error", code: "upstream_error", retryAfter: 0 };
 }
 
 function _html(res, code, html) {
@@ -1239,4 +1304,7 @@ module.exports = {
   _resolveFamilyAlias,
   _cfgPath,
   consoleHtml,
+  _classifyUpstreamError,
+  _emitOpenAIStream,
+  _emitOpenAIUnary,
 };
