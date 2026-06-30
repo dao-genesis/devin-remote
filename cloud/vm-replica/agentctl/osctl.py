@@ -2112,7 +2112,7 @@ def grid_changes(prev: bytes, cur: bytes, bbox: tuple[int, int, int, int],
 def ocr_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
              rgb: bytes | None = None, size: tuple[int, int] | None = None,
              inset: float = 0.18, whitelist: "str | None" = None,
-             psm: int = 6, scale: int = 4, invert: bool = False,
+             psm: int = 6, scale: int = 4, invert: "bool | str" = False,
              ink_tol: int = 50, ink_min: int = 6,
              xs: "list[int] | None" = None,
              ys: "list[int] | None" = None) -> list[list[str]]:
@@ -2159,13 +2159,28 @@ def ocr_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
 
     The ink gate is polarity-agnostic (it measures deviation from the cell's own
     mean, so it fires for dark-on-light *and* light-on-dark without ``invert``);
-    ``invert`` still controls what :func:`ocr_text` sees for the read itself."""
+    ``invert`` still controls what :func:`ocr_text` sees for the read itself.
+
+    ``invert`` is normally a bool, applied to every cell alike. But one board can
+    mix polarities *within itself* — a tetravex tile carries white digits on its
+    dark triangles and black digits on its light ones, a themed grid flips ink per
+    chip — and then no single bool reads them all: tesseract wants dark-on-light,
+    so the wrong-polarity cells come back empty (F255). Pass ``invert="auto"`` to
+    decide per cell: the gate already measured the cell's mean and its ink pixels
+    (those deviating past ``ink_tol``); if that ink is *brighter* than the mean the
+    glyph is light-on-dark, so the cell is read inverted, otherwise upright — and
+    if the chosen polarity reads nothing, the opposite is tried before giving up.
+    So a mixed-polarity board reads in one call without the caller pre-sorting
+    cells by colour."""
     if cols < 1 or rows < 1:
         raise ValueError("cols and rows must be >= 1")
     if not 0.0 <= inset < 0.5:
         raise ValueError("inset must be in [0.0, 0.5)")
     if ink_min < 1:
         raise ValueError("ink_min must be >= 1")
+    auto = isinstance(invert, str)
+    if auto and invert != "auto":
+        raise ValueError("invert must be a bool or \"auto\"")
     if xs is not None and len(xs) != cols + 1:
         raise ValueError(f"xs must have cols+1={cols + 1} entries, got {len(xs)}")
     if ys is not None and len(ys) != rows + 1:
@@ -2211,18 +2226,31 @@ def ocr_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
             n = len(lums)
             mean = sum(lums) // n if n else 0
             ink = 0
+            ink_sum = 0          # luma of the deviating (ink) pixels, for auto
             for v in lums:
                 if abs(v - mean) > ink_tol:
                     ink += 1
-                    if ink >= ink_min:
-                        break
+                    ink_sum += v
+                    if ink >= ink_min and not auto:
+                        break    # gate satisfied; auto needs the full ink stats
             if ink < ink_min:
                 row.append("")
                 continue
-            text = ocr_text((ix0, iy0, ix1 - ix0, iy1 - iy0),
-                            whitelist=whitelist, psm=psm, scale=scale,
-                            invert=invert, rgb=rgb, size=(w, h))
-            row.append(text.strip())
+            if auto:
+                # ink brighter than the cell mean => light-on-dark => read inverted.
+                cell_inv = (ink_sum / ink) > mean
+                text = ocr_text((ix0, iy0, ix1 - ix0, iy1 - iy0),
+                                whitelist=whitelist, psm=psm, scale=scale,
+                                invert=cell_inv, rgb=rgb, size=(w, h)).strip()
+                if not text:     # wrong guess (or faint glyph) -> try the other
+                    text = ocr_text((ix0, iy0, ix1 - ix0, iy1 - iy0),
+                                    whitelist=whitelist, psm=psm, scale=scale,
+                                    invert=not cell_inv, rgb=rgb, size=(w, h)).strip()
+            else:
+                text = ocr_text((ix0, iy0, ix1 - ix0, iy1 - iy0),
+                                whitelist=whitelist, psm=psm, scale=scale,
+                                invert=invert, rgb=rgb, size=(w, h)).strip()
+            row.append(text)
         grid.append(row)
     return grid
 
