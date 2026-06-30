@@ -3824,6 +3824,68 @@ def match_template_all(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
     return kept
 
 
+def match_unique(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
+                 size: tuple[int, int] | None = None,
+                 search: tuple[int, int, int, int] | None = None,
+                 step: int = 1, mask: bytes | None = None,
+                 min_margin: float = 0.18, max_score: int | None = None,
+                 require_unique: bool = True) -> dict | None:
+    """Locate a patch, but only trust a match that is *distinctively* the best (F263).
+
+    ``match_template`` returns the single lowest-SAD offset — always *a* point,
+    with the same confidence whether the patch occurs once or many times, and no
+    way to tell which. On a *periodic* surface that is a trap: a brick wall, a row
+    of identical list items, a grid of like icons, a board of identical tiles all
+    repeat, and which copy wins the arg-min is then decided by sub-pixel noise. A
+    tracker that re-locates each frame silently jumps onto the wrong copy (a false
+    lock), and downstream :func:`servo`/aim chases a phantom — and the single-best
+    primitive cannot even report that the match was ambiguous. (Honesty note: in
+    OpenArena the live walls/floor were *not* periodic enough to tie the real
+    fine-step matcher — it located every sampled patch correctly; the measured gap
+    was the missing *confidence*, with live margins ranging 0.15 on a busy floor to
+    1.0 on a unique feature. The outright false-lock is reproduced where the motif
+    truly repeats: a live patch tiled into a periodic strip.)
+
+    This judges *trustworthiness* before returning a point. It scans for every
+    instance (:func:`match_template_all`, one pass, NMS so each copy yields one
+    hit), takes the best, and finds the best **rival** — the next instance at
+    least a patch-size away. The match is unique only if that rival is clearly
+    worse: ``margin = (rival.score - best.score) / rival.score`` in ``[0, 1)``,
+    where ~0 means the rival is just as good (ambiguous) and larger means the
+    winner stands alone. With ``require_unique`` (the default) an ambiguous match
+    returns ``None`` — turning a silent false-lock into an honest "I cannot
+    uniquely place this" — so it is a safe drop-in for ``match_template`` inside
+    a tracking loop. With ``require_unique=False`` it always returns the dict so
+    the caller can inspect ``unique``/``margin``/``rival`` and decide.
+
+    Returns ``{x, y, score, bbox, margin, unique, rival}`` (screen coords,
+    centred on the match; ``rival`` is the rival's ``{x, y, score}`` or ``None``
+    when the patch occurs only once — then ``margin`` is ``1.0``). ``min_margin``
+    is the distinctiveness threshold; ``max_score`` / ``search`` / ``step`` /
+    ``mask`` behave as in :func:`match_template_all`. Cost is one
+    ``match_template_all`` slide — constrain ``search`` for real-time use."""
+    if not 0.0 <= min_margin < 1.0:
+        raise ValueError("min_margin must be in [0, 1)")
+    hits = match_template_all(patch, pw, ph, rgb=rgb, size=size, search=search,
+                              step=step, mask=mask, max_score=max_score,
+                              min_sep=(pw, ph), limit=8)
+    if not hits:
+        return None
+    best = hits[0]
+    rival = hits[1] if len(hits) > 1 else None
+    if rival is None:
+        margin = 1.0
+    else:
+        margin = (rival["score"] - best["score"]) / max(rival["score"], 1)
+    unique = margin >= min_margin
+    if require_unique and not unique:
+        return None
+    return {"x": best["x"], "y": best["y"], "score": best["score"],
+            "bbox": best["bbox"], "margin": margin, "unique": unique,
+            "rival": ({"x": rival["x"], "y": rival["y"], "score": rival["score"]}
+                      if rival else None)}
+
+
 _OCR_ENGINE: "str | None" = None
 
 # Content-addressed OCR cache (F238). tesseract is spawned as a subprocess per

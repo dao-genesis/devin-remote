@@ -9225,3 +9225,64 @@ already-on-target as a zero-move hit, `max_step` clamping every emitted step, co
 under a locally-nonlinear scale, bounded error while *tracking* a drifting target across
 repeated calls, and argument validation. All twenty floor friction tests pass (F262 plus the
 prior nineteen), no regressions.
+
+### F263 — match_unique: the lock match_template couldn't be sure of, where a tie is a trap
+
+**Friction (and an honest correction).** Chasing F262's servo onto a *moving* bot,
+I expected the next wall to be prediction — leading a target the loop only knows the
+past of. Practice said otherwise, and then practice corrected *me*. Re-locating a
+patch frame-to-frame in OpenArena, I first ran a quick, *coarse* (4×-subsampled,
+`step=6`) SAD probe and it reported the global best landing on a *different* wall
+instance than the one I cut from — a textbook false-lock, with a runner-up scoring
+within ~1 % of the winner. It was a tidy story. It was also wrong: when I measured
+again with the *real* `match_template` at fine step, every one of 18 sampled
+surfaces — many wall angles and the tiled floor — located back at its true spot
+(max error 8 px). OpenArena's software-GL surfaces are simply not periodic enough
+to tie the arg-min. The "false-lock" was an artifact of my lossy probe, not the
+primitive. The lesson landed twice: *a coarse measurement manufactures the very
+ambiguity it claims to find*, and the honest gap is not "the matcher is wrong" but
+"the matcher cannot tell you **how sure** it is."
+
+Because the trap is real wherever a surface *is* periodic — a brick wall, a list of
+identical rows, a grid of like icons, a board of identical tiles — and there
+`match_template` returns *a* point with the same confidence it returns the *only*
+point. A tracker built on it cannot distinguish "the unique match" from "one of
+five copies the noise happened to pick," and silently jumps copies.
+
+**Solution.** `match_unique(patch, pw, ph, ..., min_margin=0.18, require_unique=True)`
+— it judges *trustworthiness* before returning a point. It scans for every instance
+(`match_template_all`, one pass, NMS so each copy yields one hit), takes the best and
+its strongest **rival** at least a patch-size away, and scores distinctiveness as
+`margin = (rival.score - best.score) / rival.score ∈ [0, 1)` — ~0 means a near-tie
+(ambiguous), 1.0 means the patch occurs once. With `require_unique` (default) an
+ambiguous match returns `None` — turning a silent false-lock into an honest "I can't
+uniquely place this," a safe drop-in for `match_template` inside a tracking loop.
+With `require_unique=False` it returns `{x, y, score, bbox, margin, unique, rival}`
+so a caller can read the confidence and decide.
+
+**Lesson (architecture).** Every locator the floor had — `find_color`, `match_template`,
+`detect_grid` — answered *where* with total confidence and no notion of *how sure*.
+That is fine on a unique feature and a trap on a repeated one, and GUIs are full of
+repeated ones. `match_unique` is the floor's first **ambiguity gate**: a locator that
+can say "not uniquely," converting a silent wrong-lock into an honest refusal. It is
+the perceptual analogue of `servo`'s honesty (which measures rather than assumes its
+gain) — here perception measures rather than assumes its own certainty. It sits under
+any tracker on any repetitive surface, FPS or filing cabinet.
+
+**Proof.** *Live, OpenArena* (`_game_f263.py`): across 18 sampled surfaces the real
+matcher never false-locked (max locate-error 8 px), while `match_unique` reported a
+graded distinctiveness margin from **1.00** (a patch that occurs once) down to
+**0.15** on a busy floor region — two frames it flagged *ambiguous* (`unique=False`),
+i.e. one near-tie away from the wrong region, a warning `match_template` cannot emit.
+Then, to show the failure where it genuinely bites, one live patch is tiled ×5 into a
+periodic strip (a brick wall / list / icon grid built from real game pixels):
+`match_template` confidently returns one of the five identical copies (chosen by
+noise), and `match_unique` *refuses* it (`margin=0.000`, `None`). *Synthetic*
+(`_test_f263.py`, no display — ambiguous and distinctive motifs on a fabricated
+canvas): the default refuses an ambiguous motif and trusts a distinctive one with
+correct coordinates and a large margin; `require_unique=False` exposes the margin and
+rival; the `min_margin` knob accepts a tie at `0.0` and still trusts a truly-alone
+match at a high threshold; a locality `search` window around one copy makes it unique
+again; a search smaller than the patch finds nothing; a coarse `step` still locates;
+and `min_margin` outside `[0, 1)` raises. All twenty-one floor friction tests pass
+(F263 plus the prior twenty), no regressions.
