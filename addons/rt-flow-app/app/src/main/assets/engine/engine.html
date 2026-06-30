@@ -192,8 +192,11 @@
     var QUOTA_RE=/out_of_quota|usage_limit|insufficient|overage|exceeded|\bquota\b|out of (acu|credit)|credit.*exhaust|no.*credit/i;
     var uar=o&&o.user_action_required;
     var actionReq=(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null");
-    var en=String((o&&o.enum)||s.status_enum||s.status||"").toLowerCase();
+    var en=String((o&&o.enum)||s.status_enum||s.status||s.statusClass||"").toLowerCase();
     var rs=String((o&&o.reason)||"").toLowerCase();
+    var top=String(s.status||"").toLowerCase();
+    var act=String(s.activity_status||"").toLowerCase();
+    var cur=String(s.current_activity||"").toLowerCase();
     var qsig=rs+" "+String(s.status||"")+" "+en+" "+String(s.activity_status||"")+" "+String(s.current_activity||"");
     if(QUOTA_RE.test(qsig) && qLive!==true) return "quota";
     if(actionReq) return "action_required";
@@ -201,8 +204,12 @@
     if(/limit.*reach|cap.*reach|no.*remain|depleted|no.*available|allowance/.test(rs)) return "quota";
     if(/await|wait|ask|question|input|need/.test(en) || /wait.*input|wait.*user|need.*input|user.*action|await|asking/.test(rs)) return "awaiting";
     if(/block|stuck|fail|error|interrupt|abort|disconnect|timeout/.test(en)) return "blocked";
-    if(/run|working|active|execut/.test(en) && !/finish|complet|suspend|stopped|expired|archiv|cancel/.test(en)) return "running";
-    return "";
+    // ⑤ 终态(完成/过期/挂起/停止/归档/取消…) → 非活跃, 交由 convTerminalOf 精确分流
+    if(/finish|complet|expired|suspend|stopped|archiv|cancel|exited|deleted/.test(en+" "+top)) return "";
+    // ⑥ 进行中: enum/活动字段命中(含 续跑/思考/流式/规划… → 根治「对话续跑却不亮绿灯」·与 sessStatus 同源)
+    if(/run|working|active|execut|in_progress|streaming|coding|planning|testing|thinking|busy|resumed|started/.test(en+" "+act+" "+cur)) return "running";
+    // ⑦ 有状态但未归类 → 视为运行(宁可实时亮灯·与 sessStatus 末行同源); 真空状态才不追踪
+    return (en||top) ? "running" : "";
   }
   function convTerminalOf(s, o){
     var en=String((o&&o.enum)||s.status_enum||s.status||"").toLowerCase();
@@ -1282,10 +1289,14 @@
         Object.keys(vault).forEach(function(e){ var v=vault[e]; if(!v||now-(v.ts||0)>=TRK_HOLD_MS_BG) delete vault[e]; });   // 过期墓碑剔除, 金库不肿
         N.vaultSave("rtflow.trk", JSON.stringify(vault));
         // 最近结束闭环 → 独立金库键 rtflow.trk.ended (不污染活跃聚合; 网页/跨设备「最近结束」板可选渲染终态文案)。
-        if(ended && ended.length){
-          var ev={}; try{ var raw2=N.vaultLoad?N.vaultLoad("rtflow.trk.ended"):null; if(raw2) ev=JSON.parse(raw2)||{}; }catch(e){}
-          ended.forEach(function(x){ if(x&&x.sid) ev[x.sid]={ title:String(x.title||"").slice(0,48), term:x.term||"finished", email:x.email||"", ts:now }; });
-          Object.keys(ev).forEach(function(k){ if(now-((ev[k]&&ev[k].ts)||0)>=ENDED_HOLD_MS) delete ev[k]; });
+        //   续跑复活(道·反者道之动): 本轮重新活跃的会话, 若曾登记「最近结束」→ 立即撤销其终态, 不再残留"已结束"
+        //   直到 15min 窗满 → 根治「对话续跑、标签仍显示已结束/不亮绿灯」。无论本轮 ended 是否为空都执行此剪枝。
+        var activeSids=Object.create(null); (sessions||[]).forEach(function(s){ if(s&&s.sid) activeSids[s.sid]=1; });
+        var ev=null; try{ var raw2=N.vaultLoad?N.vaultLoad("rtflow.trk.ended"):null; if(raw2) ev=JSON.parse(raw2)||{}; }catch(e){}
+        if(ev || (ended && ended.length)){
+          ev=ev||{};
+          (ended||[]).forEach(function(x){ if(x&&x.sid && !activeSids[x.sid]) ev[x.sid]={ title:String(x.title||"").slice(0,48), term:x.term||"finished", email:x.email||"", ts:now }; });
+          Object.keys(ev).forEach(function(k){ if(activeSids[k] || now-((ev[k]&&ev[k].ts)||0)>=ENDED_HOLD_MS) delete ev[k]; });   // 复活的会话即刻撤销终态; 过期亦剪
           N.vaultSave("rtflow.trk.ended", JSON.stringify(ev));
         }
       }catch(e){}
@@ -1312,13 +1323,25 @@
         cur[sid] = { phase: phase, title: ttl || sid, email: s.email || "", reason: s.reason, label: s.actionLabel, msgId: s.msgId||"", unread: !!s.unread };
       });
       _updLatest(titleByAcct, now);   // 更新最近对话名缓存(供额度类通知优先显示对话名)
-      // 跃迁判定: 新对话(🆕) / 卡住·待处理·等待输入(⚠️⛔⏳)
+      // 续跑复活探测: 上轮已登记「最近结束」的会话, 本轮又活跃 → 是「续跑」而非「全新」, 文案/绿灯据此区分。
+      var endedV = {}; try { var rawE = N.vaultLoad ? N.vaultLoad("rtflow.trk.ended") : null; if (rawE) endedV = JSON.parse(rawE) || {}; } catch(e){}
+      // 跃迁判定: 续跑复活(🟢) / 全新对话(🆕) / 新内容(💬) / 卡住·待处理·等待输入(⚠️⛔⏳)
       Object.keys(cur).forEach(function(sid){
         var c = cur[sid], p = prev[sid];
         next[sid] = { phase: c.phase, title: c.title, email: c.email, ts: now, msgId: c.msgId, reason: c.reason };
+        var resurrected = !p && !!endedV[sid];   // 上轮已登记终态、本轮又活跃 → 续跑复活
         if (!p && !coldStart && c.phase === "active") {
-          // 全新对话(上轮无·本轮活跃且非卡住·非冷启) → 开播通知(实时新对话监测)
-          notify("conv-" + sid, "🆕 新对话: " + c.title, (c.email ? c.email + " · " : "") + "Devin 已开始执行");
+          if (resurrected) {
+            // 已结束的对话又被发了新消息·续跑 → 实时反映·亮绿灯(根治「续跑不亮绿灯·状态死板」)
+            notify("conv-" + sid, "🟢 对话继续: " + c.title, (c.email ? c.email + " · " : "") + "已结束的对话收到新消息·已恢复运行");
+          } else {
+            // 全新对话(上轮无·本轮活跃且非卡住·非冷启) → 开播通知(实时新对话监测)
+            notify("conv-" + sid, "🆕 新对话: " + c.title, (c.email ? c.email + " · " : "") + "Devin 已开始执行");
+          }
+        } else if (p && !coldStart && c.phase === "active" && p.phase !== "active" && c.msgId && p.msgId && c.msgId !== p.msgId) {
+          // 由「待输入/卡住/额度」转回活跃且有新消息 → 实时新内容监测(你回复后 Devin 又动起来)。
+          //   不刷屏: 仅状态跃迁(非持续运行)时一次, 避免运行中会话每 60s 因 msgId 变化反复弹。
+          notify("conv-" + sid, "💬 已继续: " + c.title, (c.email ? c.email + " · " : "") + "对话收到新消息·已继续运行");
         }
         if (c.phase === "stuck" && (!p || p.phase !== "stuck")) {
           var head = c.reason === "action_required" ? "⚠️ 待你处理" : (c.reason === "blocked" ? "⛔ 卡住/失败" : "⏳ 等待输入");
