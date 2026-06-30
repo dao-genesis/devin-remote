@@ -9425,3 +9425,73 @@ support; ~zero with high support standing still; refusal on scattered votes with
 no dominance, on too few votes, and on all-`None` votes; `None` components dropped;
 input/argument hygiene. 21 assertions; all twenty-three floor friction tests pass
 (F265 plus the prior twenty-two), no regressions.
+
+## F266 — `distinctive` (refuted): self-similarity is the wrong frame to ask about trackability
+
+**反者道之动 — chase the residual, and find the hypothesis was the flower of the
+Way.** F265 left a loose thread: `consensus_shift` recovers the camera pan by
+out-voting periodic mislocks, but *which* blocks mislock? The tidy story was that
+a patch cut from the repeating ice field is intrinsically untrackable — it has
+identical twins one tile over, so any matcher hands it to the wrong twin — and
+that this could be judged from **one frame**, before a second frame even exists,
+by how alone the patch is in its own neighbourhood. I built that judge:
+`distinctive(rgb, size, box, radius, min_rival)` slides the patch over its own
+surroundings with `match_template_all` and reports `rival_per_px`, the SAD/px to
+the nearest non-self twin; a low rival means a periodic, un-seedable patch. A
+hand-picked probe (`_probe_f266b`) looked like a clean win: on chosen patches the
+rival distance separated a busy-but-periodic ice tile (twin at ~0 SAD/px) from a
+faint snow-cap edge (no twin within radius, ~18 SAD/px), and — the seductive part
+— luma *variance* did not (a var≈3050 tile was hopelessly periodic, a var≈139 edge
+was unique). It even passed a synthetic suite. The华 (flower) was beautiful.
+
+**Then the live grid refuted it — three times, decisively.** Taken off
+hand-picked patches and run across a real grid of SuperTux seeds during a pan,
+the rival score has **no monotonic relationship** to whether a seed actually
+tracks. `_probe_f266c` (156 seeds, 4 pairs) sorted seeds by rival and bucketed
+correctness (a seed is "correct" iff `match_unique` finds it AND its displacement
+equals the known pan): the two lowest quartiles were **both** `rival=0.0`, yet one
+tracked **0 %** and the other **100 %** — identical self-similarity, opposite
+outcomes — and the **most distinctive** quartile (rival 2.6–43) tracked the
+**worst** (62 %). As a downstream block-flow pre-gate the score was no better:
+across two runs it flipped from "ambiguous mislock 1.3× more" to "distinctive
+mislock *more*", i.e. noise. The single-frame self-similarity score simply does
+not predict live trackability.
+
+**Why — the F263 lesson, reincarnated.** What dooms a track is not whether a twin
+exists *somewhere in the same frame's neighbourhood*; it is whether the patch's
+true match is ambiguous *across frames, inside the bounded search window* the
+tracker actually looks in. A patch with an identical twin 32 px away in frame A
+tracks perfectly when the A→B search is bounded to ±16 px around the predicted
+spot and the true match dominates *there*. That cross-frame, search-local
+dominance is exactly what `match_unique` (F263) already measures. `distinctive`
+asks about ambiguity in the wrong frame and the wrong scope — the same mistake as
+F263's coarse probe that "manufactured the ambiguity it claimed to find", wearing
+a single-frame disguise. The clean separation on hand-picked patches was a
+selection artifact, not a law.
+
+**And the real failure mode is not per-seed at all.** `_probe_f266c`'s failures
+clustered in pair-sized blocks; `_probe_f266d` caught only clean pairs and tracked
+**100 %** in every quartile of both x-gradient energy and Shi-Tomasi cornerness
+(so the aperture-problem hypothesis is, here, untestable for lack of failures);
+`_probe_f266e` (8 pairs) showed every clean translational pair tracks 97–100 % at
+87–90 % consensus support, regardless of seed structure. In a clean pan,
+`match_unique` + `consensus_shift` already track essentially every
+variance-passing seed — **no per-seed quality gate earns its keep.** Failures,
+when they come, are global/pair-level (a non-rigid frame, a snap, a death frame),
+which `consensus_shift`'s support fraction already flags. There was no gap for a
+new primitive to fill.
+
+**Outcome — ship nothing; this is the deliverable.** Per 前識者，道之華也，而愚之
+首也 — foreknowledge is the flower of the Way and the beginning of folly — the
+clever single-frame gate is discarded rather than dressed up and shipped. `osctl.py`
+is unchanged; the floor gains no `distinctive`. What it gains is a sharpened, tested
+law: **trackability lives in the cross-frame match's bounded-window dominance
+(`match_unique`), not in a patch's single-frame self-similarity, and not, in clean
+pans, in any per-seed structure measure at all.** The proof scripts remain as the
+record (`_probe_f266c/d/e`, `_game_f266.py`); the synthetic-only test and the
+primitive were removed because a primitive whose live proof fails must not ship —
+that is the floor's standing rule (synthetic *and* live), honoured here by saying
+no. The next honest direction is pair-level: when a frame pair is *not* a clean
+rigid translation, name it (deformation / cut / occlusion), rather than gating the
+seeds within a pair that already tracks fine. All twenty-three floor friction tests
+(F243–F265) pass unchanged; no regressions.
