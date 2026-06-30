@@ -182,6 +182,28 @@ function test(name, fn) {
     assert.deepStrictEqual(cloud.computeConvCap(NaN, 3, true, 0.1), { cap: 0, drain: false });
   });
 
+  // ── 7b. 消息额度上限归一 (messageLimitInt · 服务端要求整数≥1) ──────────────
+  //   根因: 旧 setMessageLimit 发 +cap.toFixed(2)(浮点)→ 服务端 422(int_from_float);
+  //   cap<1 → 400("must be at least 1")。实测 overage_credits=2.18 等真实余额必为浮点。
+  console.log("\n[messageLimitInt]");
+  test("浮点 cap 向下取整为整数 (2.18 → 2 · 防 422 int_from_float)", () => {
+    assert.strictEqual(cloud.messageLimitInt(2.18), 2);
+    assert.strictEqual(cloud.messageLimitInt(66.99), 66);
+  });
+  test("整数 cap 原样保留 (67 → 67)", () => {
+    assert.strictEqual(cloud.messageLimitInt(67), 67);
+  });
+  test("cap<1 → null (服务端最小 1·不发请求避免 400)", () => {
+    assert.strictEqual(cloud.messageLimitInt(0.9), null);
+    assert.strictEqual(cloud.messageLimitInt(0), null);
+    assert.strictEqual(cloud.messageLimitInt(-5), null);
+  });
+  test("非法值 → null", () => {
+    assert.strictEqual(cloud.messageLimitInt(null), null);
+    assert.strictEqual(cloud.messageLimitInt(NaN), null);
+    assert.strictEqual(cloud.messageLimitInt(undefined), null);
+  });
+
   // ── 8. 低余额预警 (lowBalanceVerdict · v4.7.5) ───────────────────────────
   console.log("\n[lowBalanceVerdict]");
   test("余额≤阈值且上轮未警 → 本轮发警·置已警", () => {

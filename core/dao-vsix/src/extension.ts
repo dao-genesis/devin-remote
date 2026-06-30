@@ -10073,8 +10073,11 @@ async function devinListMcpServers(orgId: string, auth1: string): Promise<{ ok: 
 // 调整单条会话/消息的额度上限 (Usage & limits 页那个可调数字)
 async function devinSetMessageLimit(orgId: string, maxCredits: number, auth1: string): Promise<{ ok: boolean; status?: number }> {
     const bareOrgId = orgId.replace(/^org-/, '');
+    // 服务端要求 max_credits 为整数且 ≥1: 浮点→422(int_from_float), <1→400。向下取整·低于 1 不发请求。
+    const intMc = Math.floor(Number(maxCredits));
+    if (!Number.isFinite(intMc) || intMc < 1) return { ok: false, status: 0 };
     const r = await devinJsonPost(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/usage/limits',
-        { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId }, { max_credits: maxCredits });
+        { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId }, { max_credits: intMc });
     return { ok: r.status === 200 || r.status === 201 || r.status === 204, status: r.status };
 }
 
