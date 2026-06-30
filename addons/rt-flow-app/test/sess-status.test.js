@@ -383,19 +383,15 @@ ok(/CMDS\.trackStuck\(\{ watchSids: Object\.keys\(prev\) \}\)/.test(engineSrc),
    "源级: tick 把上轮 sid 集作为 watchSids 传入 trackStuck");
 ok(/\(r\.scanned\|\|\[\]\)\.forEach\(function\(e\)\{ scanned\[String\(e\)\.toLowerCase\(\)\]=1; \}\)/.test(engineSrc),
    "源级: tick 提取 r.scanned 成功账号集(门控结束判定)");
-ok(/if \(!p && !coldStart && c\.phase === "active"\)/.test(engineSrc),
-   "源级: tick 检测新对话(上轮无·本轮活跃·非冷启) → 🆕 通知");
-ok(/🆕 新对话/.test(engineSrc),
-   "源级: tick 新对话通知文案 🆕");
-// 续跑复活 (本轮根因②: 已结束对话又被发新消息→续跑·亮绿灯)
-ok(/var resurrected = !p && !!endedV\[sid\]/.test(engineSrc),
-   "源级: tick 用 rtflow.trk.ended 探测续跑复活(上轮终态·本轮又活跃)");
-ok(/🟢 对话继续/.test(engineSrc),
-   "源级: tick 续跑复活通知文案 🟢 对话继续");
-ok(/💬 已继续/.test(engineSrc),
-   "源级: tick 待输入/卡住转回活跃且有新消息 → 💬 已继续(实时新内容·状态跃迁才发·不刷屏)");
-ok(/c\.phase === "active" && p\.phase !== "active" && c\.msgId && p\.msgId && c\.msgId !== p\.msgId/.test(engineSrc),
-   "源级: 新内容通知仅在「非活跃→活跃且 msgId 变化」时触发(防运行中会话每轮刷屏)");
+// 新对话/续跑/新内容 → 仅追踪+标签变绿·不发消息提示(用户要求·静默)。next[sid] 登记状态供金库/网页镜像。
+ok(/next\[sid\] = \{ phase: c\.phase, title: c\.title, email: c\.email, ts: now, msgId: c\.msgId, reason: c\.reason \}/.test(engineSrc),
+   "源级: tick 仍登记 next[sid] 状态(驱动标签变绿·与通知解耦)");
+ok(!/🆕 新对话/.test(engineSrc),
+   "源级: 新对话静默·不发 🆕 通知(用户要求·只追踪+变绿)");
+ok(!/🟢 对话继续/.test(engineSrc),
+   "源级: 续跑复活静默·不发 🟢 通知(状态反映由 next[sid]+金库复活剪枝承担)");
+ok(!/💬 已继续/.test(engineSrc),
+   "源级: 新内容静默·不发 💬 通知(用户要求·不刷屏)");
 // 金库续跑剪枝: 复活会话即刻从「最近结束」撤销
 ok(/var activeSids=Object\.create\(null\); \(sessions\|\|\[\]\)\.forEach\(function\(s\)\{ if\(s&&s\.sid\) activeSids\[s\.sid\]=1; \}\)/.test(engineSrc),
    "源级: _mirrorTickToVault 收集本轮活跃 sid 集(供续跑剪枝)");
