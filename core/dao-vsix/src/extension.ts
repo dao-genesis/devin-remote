@@ -6478,7 +6478,9 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     const relayMsg = msg.msg || {};
                     if ((relayMsg.type === 'gitConnectBatch' || relayMsg.type === 'gitInjectSecretBatch') && relayMsg.pat) {
                         const pat = String(relayMsg.pat).trim();
-                        if (pat && pat.startsWith('ghp_')) {
+                        // GitHub PAT 双形态: 经典 ghp_ 与细粒度 github_pat_ (gh CLI/OAuth gho_/ghu_ 亦放行)。
+                        //   旧式仅认 ghp_ → 细粒度 PAT 能连 Git 却被静默漏注 profile.secrets, 后续新号自动注入不带 GITHUB_PAT。
+                        if (isGitHubPat(pat)) {
                             const profile = loadInjectProfile();
                             const existing = (profile.secrets || []).find((s: any) => s.name === 'GITHUB_PAT');
                             if (!existing) {
@@ -11275,6 +11277,12 @@ function daoMigrateKnowledgeTrinity(): void {
         } catch { /* 守柔 */ }
         if (changed) saveInjectProfile(p);
     } catch { /* 守柔 */ }
+}
+// GitHub PAT 形态识别(归一): 经典 ghp_ · 细粒度 github_pat_ · OAuth gho_ · App 用户 ghu_。
+//   仅认 ghp_ 会把日益默认的细粒度 PAT(github_pat_)误判非 PAT → 漏注密钥。
+function isGitHubPat(s: string): boolean {
+    const t = String(s || '').trim();
+    return /^(ghp_|github_pat_|gho_|ghu_)/.test(t);
 }
 // secret=PAT · 把用户填入的 GitHub PAT(dao.githubPat / DAO_GITHUB_PAT)作为一个 secret 写入注入档案,
 // 经反向注入路径(applyInjectProfileToOrg→devinUpsertSecret)同步到所有账号。
