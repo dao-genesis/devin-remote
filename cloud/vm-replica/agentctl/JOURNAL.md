@@ -9168,3 +9168,60 @@ into `<= steps` events that sum *exactly* to the target with monotonic drift-fre
 progress, zero-noise sub-events are skipped, a leaf-less backend raises instead of
 silently freezing, and arguments are validated. All nineteen floor friction tests pass
 (F261 plus the prior eighteen), no regressions.
+
+### F262 — servo: the loop move_rel couldn't close, where one shot can't aim
+
+**Friction.** With `move_rel` (F261) the AssaultCube camera finally *turned*, so I tried the
+obvious next thing: point at something. Lock `match_template` onto a feature, compute how
+far it is from the crosshair, turn that far, done — the way `move(x,y)` clicks a button in
+one shot. It does not work, and it cannot. `move(x,y)` lands on pixel `(x,y)` because the
+unit *is* the pixel; `move_rel` speaks mouse **counts**, and how many pixels a feature then
+slides depends on the field of view and the surface's own sensitivity — a number the floor
+does not know and cannot assume. I measured it live: near the crosshair AssaultCube slid the
+world ~1.3 px per count, but a count large enough to "snap" the feature to centre overshot
+and carried it clean out of the search window (the match score jumped from ~2200 to ~8800 —
+tracking lost). So the scale is both *unknown a priori* and *only locally linear*. There is
+no single delta to compute. Every realtime aim task hit this same wall: F260 (`react_pixel`)
+says *when* to act, F261 (`move_rel`) says *turn*, but nothing closed the loop between
+*seeing where a thing is* and *steering it where it belongs* — and without that loop the
+relative actuator is a hand that can move but not reach.
+
+**Solution.** `servo(locate, target, actuate=move_rel, *, gain=None, probe=30, tol=4,
+max_iter=16, damping=0.6, max_step=400, settle=0.03)` — the perceive→act loop itself, and
+nothing smaller. `locate()` returns the feature's current `(x,y)` (a `find_color` centroid,
+a `match_template` match) or `None` if lost; `target` is where it should end up; `actuate`
+emits a relative motion (defaults to `move_rel`). With `gain` unknown it first **calibrates**
+— one small `probe` nudge per axis, measuring the resulting pixel displacement to learn
+*signed* units-per-pixel, the sign too, so it is never told that turning the view right
+slides the world left. Then it steers proportionally, `step = error * gain * damping`,
+clamped to `max_step` so a rough estimate cannot fling the feature out of sight, re-locating
+after each move until the feature is within `tol` of `target` or `max_iter` runs out.
+`damping < 1` makes the loop converge geometrically instead of ringing. It returns
+`{hit, iters, err, gain, pos, start, reason}`; the learned `gain` is the reusable part —
+feed it back to skip re-probing, or call `servo` repeatedly to *track* a mover, each call a
+fresh closed-loop correction.
+
+**Lesson (architecture).** The floor's actuators were all *open-loop and self-calibrated*:
+`move` knew its own units (pixels), so acting was a single feed-forward write. A relative
+actuator severs that — it acts in units whose mapping to the world is unknown and
+non-constant — and the only honest response is to *measure by acting and watching*, then
+correct, repeatedly. That is the difference between a hand that moves and a hand that
+reaches. `servo` is the floor's first **closed-loop** primitive: it makes perception and
+action a single feedback verb rather than two open-loop ones the caller must stitch, and it
+sits over *any* locator and *any* relative actuator (FPS aim, 3D orbit framing, a
+Pointer-Lock canvas, a slider whose pixels-per-unit you don't know) — the general shape of
+controlling a world you can see but whose controls you must learn.
+
+**Proof.** *Live, AssaultCube* (`_game_servo.py`): `match_template` locks onto a wall
+feature placed **174.9 px** off the crosshair; `servo` measures the unknown scale
+(gain ≈ `(-0.78, -0.74)` counts/px — negative, learned, never told) and drives the feature
+onto the crosshair to within **5.7 px in 4 steps**, `hit=True` (before/after frames captured;
+the compass rotates and the recessed patch ends under the crosshair). *Synthetic*
+(`_test_f262.py`, no display — a fake world slides a feature opposite each actuation at an
+unknown, anisotropic, optionally nonlinear scale): convergence from off-target, learned gain
+sign and magnitude, anisotropic axes, pre-supplied gain skipping calibration, lost-at-start
+and lost-mid-flight handling, a zero-displacement probe raising rather than spinning,
+already-on-target as a zero-move hit, `max_step` clamping every emitted step, convergence
+under a locally-nonlinear scale, bounded error while *tracking* a drifting target across
+repeated calls, and argument validation. All twenty floor friction tests pass (F262 plus the
+prior nineteen), no regressions.

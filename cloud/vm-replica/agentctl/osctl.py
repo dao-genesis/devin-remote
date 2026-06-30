@@ -877,6 +877,117 @@ def move_rel(dx: float, dy: float, steps: int = 1, delay: float = 0.0) -> "tuple
     return (tx, ty)
 
 
+def servo(locate, target: "tuple[float, float]", actuate=None, *,
+          gain: "tuple[float, float] | None" = None, probe: float = 30.0,
+          tol: float = 4.0, max_iter: int = 16, damping: float = 0.6,
+          max_step: float = 400.0, settle: float = 0.03) -> dict:
+    """Drive a *located* feature onto a *target* point through a relative actuator
+    of **unknown scale** — closing the perceive→act loop (F262).
+
+    F261 gave :func:`move_rel`: a relative actuator that turns an FPS camera (or
+    pans a Pointer-Lock canvas, orbits a 3D view) by emitting motion deltas. But a
+    relative actuator hides the one number absolute :func:`move` always knew — *how
+    far one unit travels on screen*. ``move(x, y)`` lands on pixel ``(x, y)``; one
+    ``move_rel`` count turns the camera by an angle, and how many **pixels** the
+    target then slides depends on the field of view and the surface's own
+    sensitivity — unknown to the floor, and (measured live in AssaultCube) only
+    locally linear: ~1.3 px/count near centre, but a count large enough to "snap"
+    overshoots and the feature leaves the window entirely. So a relative actuator
+    *cannot* aim in one shot the way :func:`move` clicks in one shot: there is no
+    delta to compute without first knowing the scale, and the scale must be
+    *measured*, not assumed. Every realtime target task hit this same wall — react
+    (F260) says *when*, move_rel (F261) says *turn*, but nothing *closed the loop*
+    between seeing where a thing is and steering it where it should be.
+
+    This is that loop, and nothing smaller is. ``locate()`` returns the feature's
+    current ``(x, y)`` (e.g. a :func:`find_color` centroid or a :func:`match_template`
+    match) or ``None`` if lost; ``target`` is where it should end up (e.g. the
+    crosshair / viewport centre); ``actuate(dx, dy)`` emits a relative motion of
+    ``dx, dy`` actuator units (defaults to :func:`move_rel`). With ``gain`` unknown
+    (the common case) it first **calibrates**: one small ``probe`` nudge per axis,
+    measuring the resulting pixel displacement to learn signed units-per-pixel —
+    the sign too, so it never has to be told that turning the view right slides the
+    world left. Then it steers proportionally — ``step = error * gain * damping``,
+    clamped to ``max_step`` so a rough estimate cannot fling the feature out of
+    sight — re-locating after each move (``settle`` lets the frame render) until the
+    feature is within ``tol`` pixels of ``target`` or ``max_iter`` steps run out.
+    ``damping`` < 1 keeps it from overshooting on an approximate gain (the loop
+    converges geometrically rather than ringing).
+
+    Returns ``{hit, iters, err, gain, pos, start, reason}``: ``hit`` True when the
+    feature settled within ``tol``; ``err`` the final pixel distance; ``gain`` the
+    ``(kx, ky)`` units-per-pixel used (the calibration is the reusable part — pass
+    it back as ``gain`` to skip re-probing once learned); ``reason`` is ``"hit"``,
+    ``"max_iter"``, or ``"lost"``. Call it once to snap onto a still target; call it
+    repeatedly to *track* a moving one (each call a fresh closed-loop correction).
+    It is to :func:`move_rel` what :func:`react_pixel` is to :func:`wait_pixel`: the
+    same motion, but with the eyes open and the loop closed."""
+    if probe == 0:
+        raise ValueError("probe must be non-zero")
+    if max_iter < 1:
+        raise ValueError("max_iter must be >= 1")
+    if damping <= 0:
+        raise ValueError("damping must be > 0")
+    if actuate is None:
+        actuate = lambda dx, dy: move_rel(dx, dy)
+    tx, ty = float(target[0]), float(target[1])
+
+    def _clamp(v: float) -> int:
+        return int(round(max(-max_step, min(max_step, v))))
+
+    start = locate()
+    if start is None:
+        return {"hit": False, "iters": 0, "err": float("inf"), "gain": gain,
+                "pos": None, "start": None, "reason": "lost"}
+
+    if gain is None:
+        # Calibrate: one probe per axis, measure the pixel displacement it causes.
+        # The feature slides opposite the view turn, so the learned units-per-pixel
+        # carries the correct sign and the steering below needs no sign convention.
+        p0 = start
+        actuate(probe, 0); time.sleep(settle)
+        p1 = locate()
+        if p1 is None:
+            return {"hit": False, "iters": 0, "err": float("inf"), "gain": None,
+                    "pos": None, "start": start, "reason": "lost"}
+        actuate(0, probe); time.sleep(settle)
+        p2 = locate()
+        if p2 is None:
+            return {"hit": False, "iters": 0, "err": float("inf"), "gain": None,
+                    "pos": None, "start": start, "reason": "lost"}
+        ddx, ddy = p1[0] - p0[0], p2[1] - p1[1]
+        if ddx == 0 or ddy == 0:
+            raise ValueError("could not calibrate gain: probe produced no "
+                             "displacement (feature occluded, or probe too small)")
+        gain = (probe / ddx, probe / ddy)
+
+    kx, ky = gain
+    iters = 0
+    pos = locate()
+    err = float("inf")
+    for _ in range(max_iter):
+        if pos is None:
+            return {"hit": False, "iters": iters, "err": float("inf"),
+                    "gain": gain, "pos": None, "start": start, "reason": "lost"}
+        ex, ey = tx - pos[0], ty - pos[1]
+        err = (ex * ex + ey * ey) ** 0.5
+        if err <= tol:
+            return {"hit": True, "iters": iters, "err": err, "gain": gain,
+                    "pos": pos, "start": start, "reason": "hit"}
+        sx, sy = _clamp(ex * kx * damping), _clamp(ey * ky * damping)
+        if sx == 0 and sy == 0:
+            # Sub-pixel residual the actuator's integer resolution cannot close.
+            return {"hit": err <= tol, "iters": iters, "err": err, "gain": gain,
+                    "pos": pos, "start": start, "reason": "hit" if err <= tol
+                    else "max_iter"}
+        actuate(sx, sy); time.sleep(settle)
+        iters += 1
+        pos = locate()
+    return {"hit": err <= tol, "iters": iters, "err": err, "gain": gain,
+            "pos": pos, "start": start, "reason": "hit" if err <= tol
+            else "max_iter"}
+
+
 def focus_window(match: str, settle: float = 0.25) -> dict | None:
     """Bring the window whose title contains ``match`` to the front, by name (F146).
 
