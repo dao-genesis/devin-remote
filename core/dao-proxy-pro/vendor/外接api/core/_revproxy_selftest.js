@@ -481,6 +481,76 @@ let KEY = "";
     revproxy.saveConfig(cz);
   }
 
+  console.log("[14] 网页对话台: 三个别名路由直出 HTML · 含对话台标记");
+  for (const cp of [
+    "/origin/revproxy/console",
+    "/origin/revproxy/chat",
+    "/origin/revproxy",
+  ]) {
+    const rc = await call("GET", cp, null, deps);
+    ok(
+      "console " + cp + " 回 HTML",
+      rc._status === 200 &&
+        /text\/html/.test(rc._headers["Content-Type"] || "") &&
+        /网页对话台/.test(rc.body),
+    );
+  }
+  ok("consoleHtml 导出非空", revproxy.consoleHtml().length > 500);
+
+  console.log("[15] 远程管理: 档位热切支持「本机或有效 key」, 无 key 远程 403");
+  {
+    const cfgT = revproxy.loadConfig();
+    cfgT.enabled = true;
+    revproxy.saveConfig(cfgT);
+    const depsR = Object.assign({}, deps, {
+      getModelCatalog: () => [
+        { modelUid: "gpt-y-low", label: "GPT-Y Low", provider: "MODEL_PROVIDER_OPENAI", creditMultiplier: 2, modelCostTier: "MODEL_COST_TIER_LOW", modelInfo: { modelFamilyUid: "gpt-y" }, modelFamilyMetadata: { modelFamilyLabel: "GPT-Y" } },
+        { modelUid: "gpt-y-high", label: "GPT-Y High", provider: "MODEL_PROVIDER_OPENAI", creditMultiplier: 8, modelCostTier: "MODEL_COST_TIER_HIGH", modelInfo: { modelFamilyUid: "gpt-y" }, modelFamilyMetadata: { modelFamilyLabel: "GPT-Y" } },
+      ],
+      getOfficialFamilies: () => [],
+      cfg: revproxy.loadConfig(),
+    });
+    // 远程 + 持有效 key → 放行
+    {
+      const res = fakeRes();
+      const u = require("url").parse("/origin/revproxy/tier", true);
+      const okReq = {
+        method: "POST",
+        url: "/origin/revproxy/tier",
+        headers: { authorization: "Bearer " + revproxy.loadConfig().apiKey, "content-type": "application/json" },
+        socket: { remoteAddress: "203.0.113.9" },
+        on(ev, cb) {
+          if (ev === "data") process.nextTick(() => cb(Buffer.from(JSON.stringify({ familyUid: "gpt-y", modelUid: "gpt-y-high" }))));
+          if (ev === "end") process.nextTick(cb);
+          return this;
+        },
+      };
+      await revproxy.handle(okReq, res, u, depsR);
+      ok("远程持有效 key 切档 → ok", res._status !== 403 && JSON.parse(res.body).ok === true);
+    }
+    // 远程 + 无 key → 403
+    {
+      const res = fakeRes();
+      const u = require("url").parse("/origin/revproxy/tier", true);
+      const noReq = {
+        method: "POST",
+        url: "/origin/revproxy/tier",
+        headers: { "content-type": "application/json" },
+        socket: { remoteAddress: "203.0.113.9" },
+        on(ev, cb) {
+          if (ev === "data") process.nextTick(() => cb(Buffer.from(JSON.stringify({ familyUid: "gpt-y", modelUid: "gpt-y-high" }))));
+          if (ev === "end") process.nextTick(cb);
+          return this;
+        },
+      };
+      await revproxy.handle(noReq, res, u, depsR);
+      ok("远程无 key 切档 → 403", res._status === 403);
+    }
+    const cz = revproxy.loadConfig();
+    cz.tiers = {};
+    revproxy.saveConfig(cz);
+  }
+
   revproxy.setPremiumQuota("unknown");
   mock.close();
   console.log(failures === 0 ? "\nALL PASS" : "\n" + failures + " FAIL");
