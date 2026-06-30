@@ -447,6 +447,44 @@
     "disabled": false
   },
   {
+    "label": "Kimi K2.7",
+    "modelUid": "kimi-k2-7",
+    "pricingType": "MODEL_PRICING_TYPE_STATIC_CREDIT",
+    "supportsImages": true,
+    "provider": "MODEL_PROVIDER_MOONSHOT",
+    "isRecommended": true,
+    "isNew": true,
+    "maxTokens": 262144,
+    "modelInfo": {
+      "modelUid": "kimi-k2-7",
+      "modelType": "MODEL_TYPE_CHAT",
+      "maxTokens": 262144,
+      "tokenizerType": "LLAMA_WITH_SPECIAL",
+      "modelFeatures": {
+        "zeroShotCapable": true,
+        "supportsImages": true,
+        "supportsToolCalls": true,
+        "supportsThinking": true,
+        "interleaveThinking": true
+      },
+      "maxOutputTokens": 8192,
+      "inferenceServerUrl": "https://server.codeium.com",
+      "harnessUids": [
+        "strawberry-pancake"
+      ],
+      "arenaConfig": {
+        "tokensPerSecond": 185
+      },
+      "modelFamilyUid": "kimi-k2.7",
+      "displayOption": 0
+    },
+    "modelCostTier": "MODEL_COST_TIER_LOW",
+    "modelFamilyMetadata": {
+      "modelFamilyLabel": "Kimi K2.7"
+    },
+    "disabled": false
+  },
+  {
     "label": "Kimi K2.6",
     "modelUid": "kimi-k2-6",
     "pricingType": "MODEL_PRICING_TYPE_STATIC_CREDIT",
@@ -487,6 +525,72 @@
       "modelFamilyLabel": "Kimi K2.6"
     },
     "disabled": false
+  },
+  {
+    "label": "GLM-5.2",
+    "modelUid": "glm-5-2",
+    "creditMultiplier": 1.5,
+    "pricingType": "MODEL_PRICING_TYPE_STATIC_CREDIT",
+    "isRecommended": true,
+    "isNew": true,
+    "maxTokens": 200000,
+    "modelInfo": {
+      "modelUid": "glm-5-2",
+      "modelType": "MODEL_TYPE_CHAT",
+      "maxTokens": 200000,
+      "tokenizerType": "LLAMA_WITH_SPECIAL",
+      "modelFeatures": {
+        "zeroShotCapable": true,
+        "supportsToolCalls": true,
+        "supportsThinking": true,
+        "interleaveThinking": true
+      },
+      "maxOutputTokens": 128000,
+      "inferenceServerUrl": "https://server.codeium.com",
+      "harnessUids": [
+        "strawberry-pancake"
+      ],
+      "arenaConfig": {
+        "tokensPerSecond": 55
+      },
+      "modelFamilyUid": "glm-5.2",
+      "displayOption": 0
+    },
+    "modelCostTier": "MODEL_COST_TIER_LOW",
+    "modelFamilyMetadata": {
+      "modelFamilyLabel": "GLM-5.2"
+    },
+    "modelDimensions": [
+      {
+        "label": "Input",
+        "value": 1.4,
+        "denominator": "1M tokens",
+        "minRange": 0.1,
+        "maxRange": 5,
+        "kind": "MODEL_DIMENSION_KIND_COST",
+        "info": "Reasoning models consume more tokens"
+      },
+      {
+        "label": "Cached input",
+        "value": 0.26,
+        "denominator": "1M tokens",
+        "minRange": 0.02,
+        "maxRange": 1.25,
+        "kind": "MODEL_DIMENSION_KIND_COST",
+        "info": "Reasoning models consume more tokens"
+      },
+      {
+        "label": "Output",
+        "value": 4.4,
+        "denominator": "1M tokens",
+        "minRange": 0.5,
+        "maxRange": 30,
+        "kind": "MODEL_DIMENSION_KIND_COST",
+        "info": "Reasoning models consume more tokens"
+      }
+    ],
+    "disabled": false,
+    "supportsImages": true
   },
   {
     "label": "GLM-5.1",

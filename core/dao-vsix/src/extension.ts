@@ -1953,11 +1953,14 @@ function revproxyApiKey(): string {
     } catch (e) { /* 守柔 · Origin 未配 key 则空 (本机直放) */ }
     return '';
 }
-// /origin/revproxy/* 全量 + /v1 标准推理面 (精确匹配, 不抢官网 SPA 其余根路径)
+// 本源 Origin 自有命名空间「全量直达」— /origin/* 与 /v1/* 整段皆属 dao-proxy-pro 本源 Origin,
+//   非官网 SPA 路由。逆流到底·解构一切: 凡用户能操作/调用/使用的 Origin 能力 (对话台 /origin/revproxy/*
+//   + 模型目录/解锁 /origin/model_*·/origin/ea/* + 工具服务 /origin/api_server/* + 标准推理面 /v1/*)
+//   一律经本体单隧道透明反代直达, 令远程任意环境皆可列出·调用·管理一切模型与内容 (帛书「無有入於無間」)。
 function isRevproxyRoute(route: string): boolean {
-    if (route === '/origin/revproxy' || route.startsWith('/origin/revproxy/')) return true;
-    return route === '/v1/chat/completions' || route === '/v1/messages' || route === '/v1/models'
-        || route === '/v1/completions' || route === '/v1/embeddings';
+    if (route === '/origin' || route.startsWith('/origin/')) return true;
+    if (route === '/v1' || route.startsWith('/v1/')) return true;
+    return false;
 }
 // 网页对话台外壳页 (静态 HTML) 免 token — 令远程浏览器先打开页面, 再在页内填 Bearer 调 API。
 function isRevproxyConsoleShell(route: string): boolean {
