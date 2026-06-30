@@ -37,7 +37,9 @@
   /* 第二行: 缩放滑块 + 收藏/刷新/下载/全服通 (复刻原生 btnRow) */
   #bar2{display:flex;align-items:center;gap:6px;padding:1px 8px 4px;background:var(--bar);
         border-bottom:1px solid var(--border);flex:0 0 auto}
+  #bar2.collapsed{display:none}
   #bar2 .act{font-size:15px;padding:0 12px}
+  #bar2 #trBtn{font-size:14px}
   #zicon{flex:0 0 auto;font-size:14px;color:#8b949e;cursor:pointer;padding:0 1px;user-select:none}
   #zoom{flex:1 1 auto;min-width:40px;height:26px;accent-color:var(--green);cursor:pointer}
   #zlabel{flex:0 0 auto;min-width:40px;text-align:center;font-size:13px;color:var(--fg)}
@@ -196,7 +198,7 @@
   <div id="bar">
     <button id="menuBtn" title="菜单">&#9776;</button>
     <input id="addr" inputmode="url" autocomplete="off" spellcheck="false" placeholder="输入网址 / 搜索">
-    <button id="trBtn" title="翻译整页">译</button>
+    <button id="toolToggle" title="收起/展开第二行">&#9660;</button>
     <button id="go" title="前往">&#8594;</button>
   </div>
   <div id="bar2">
@@ -204,6 +206,7 @@
     <input id="zoom" type="range" min="50" max="170" value="100" title="整页缩放">
     <span id="zlabel">100%</span>
     <button id="starBtn" class="act" title="收藏本页">&#9734;</button>
+    <button id="trBtn" class="act" title="翻译整页">译</button>
     <button id="reload" class="act" title="重载">&#8635;</button>
     <button id="dlBtn" class="act" title="下载管理">&#128229;</button>
     <button id="daoBtn" class="act" title="全服通">&#128450;</button>
@@ -1236,6 +1239,21 @@
 
   // ── 译 翻译 (板块均为内部中文页 → 与原生「内部页不可翻译」一致) ──
   document.getElementById("trBtn").onclick=function(){ toast("板块为内部中文页, 无需翻译; Devin 对话经手机反代在本页内原生打开"); };
+
+  // ── ▼ 第一行下拉开关: 收起/展开第二行(缩放+动作键) — 与手机 APK toolToggle 同款·默认展开·状态持久 ──
+  (function(){
+    var bar2=document.getElementById("bar2"), tg=document.getElementById("toolToggle");
+    if(!bar2||!tg) return;
+    function apply(collapsed){
+      bar2.classList.toggle("collapsed", collapsed);
+      tg.innerHTML = collapsed ? "&#9654;" : "&#9660;";
+      tg.title = collapsed ? "展开第二行" : "收起第二行";
+    }
+    var saved="0"; try{ saved=localStorage.getItem("rtflow.console.bar2Collapsed")||"0"; }catch(e){}
+    apply(saved==="1");
+    tg.onclick=function(){ var c=!bar2.classList.contains("collapsed"); apply(c);
+      try{ localStorage.setItem("rtflow.console.bar2Collapsed", c?"1":"0"); }catch(e){} };
+  })();
 
   // ── 金库读写 (Promise 版): 与手机 APK 同一份金库, 同键同义 → 历史/书签/收藏跨端一致 ──
   //   APK 内 Android 把 Native 注入外壳 WebView → 走 N.vaultLoad/Save; 纯网页外壳无 Native →
