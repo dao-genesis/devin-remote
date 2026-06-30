@@ -7921,3 +7921,70 @@ find tile faces. `match_template()` already takes `search=...`, but
 in same-coloured blobs from other windows. I added the same ROI window to both
 primitives and clamped the scan to that region. On the same Mahjongg frame,
 the white-blob query dropped from 275 full-screen blobs to 93 ROI blobs.
+
+---
+
+> 道生一，一生二。 The single best match is `match_template`; all of them is its
+> natural complement — one primitive begets the many.
+
+## F241 — repeated-element GUIs need *all* matches, not the one best
+
+Pushing Mahjongg to a real closed loop (perceive → pair → click → verify, until
+the board clears) exposed a **structural** gap, not a per-game quirk. The whole
+class of repeated-element GUIs — a Mahjongg layout with many copies of each tile
+face, a card game repeating ranks, a match-3 / inventory grid tiling one icon
+dozens of times — asks "where is *every* copy of this appearance?". The floor
+could only answer "where is the *one* closest copy" (`match_template`, whose
+arg-min early-abandon is built to crown a single winner). The only way to get
+the rest was to blank each hit and rescan: O(hits) full slides plus a
+caller-managed mask. That is the friction: the foundational verb was missing.
+
+**Fix** (`osctl.py`, new `match_template_all`).  Same SAD-on-luma scorer as
+`match_template` (honours `mask`/`step`/`search`), but it keeps every offset at
+or below a ceiling, then runs non-maximum suppression (`min_sep`, default the
+patch size) so each real instance yields one hit, not a cluster. Returns
+`[{x, y, score, bbox}, ...]` sorted by ascending score. When `max_score` is
+omitted the ceiling is **relative** — `best + 0.04*255*scored_px` — so a board
+with no second copy still gets a sane bound and genuine anti-aliased/shadowed
+copies survive while different faces are rejected.
+
+**少則得 — and it must stay cheap.**  The first cut scored every pixel of every
+offset (no early-abandon, since "keep all below ceiling" has no running best to
+prune against) — a full-board `step=1` scan cost ~14 s, and a whole solver round
+ran ~16 min. The fix is to abandon any offset whose partial SAD exceeds
+`best_so_far + margin`: the bound only ever *tightens* as a better best is found,
+so a true hit (`s ≤ best_final + margin ≤ best_seen + margin`) is never wrongly
+abandoned, while doomed offsets bail after a row or two. Stale candidates kept
+while `best` was still high are dropped by the final ceiling. Verified
+**byte-identical** results to a brute-force fixed ceiling across several live
+seeds (a lone face → 1 hit, a true pair → 2, a low-detail face → 16), at ~11 s
+instead of ~14 s — the same arg-min discipline that makes `match_template` fast.
+
+**Closed-loop discipline this surfaced (caller-side, not floor bugs).**  Driving
+the loop end to end forced three corrections that are worth writing down because
+they are the difference between "looks like it worked" and "verifiably worked":
+
+1. **Free-ness is *change*, not colour.**  A tile is removable only if clicking
+   it raises the selection highlight. The highlight is blue — but bamboo/dot
+   tile *faces* are blue too, so an absolute-hue oracle marks blocked blue tiles
+   as free. The honest oracle clicks and reads the **before/after diff** in the
+   tile's bbox; content can never fake a change that isn't there.
+2. **Alignment must come from the slide, not the guess.**  Classifying free
+   tiles by directly comparing crops at *guessed* centres fails — a few px of
+   drift between two identical faces is enough SAD to miss. `match_template_all`
+   self-aligns (it slides), so seeding it with a rough centre still finds the
+   exact copies.
+3. **Verify on the invariant, not the chatty signal.**  `Moves Left` shares its
+   title with a running clock, so a string compare always looks changed; the
+   count itself is *available moves*, not tiles. A true removal is confirmed by
+   **both faces vanishing** (both bboxes change vs the resting board) — a
+   non-matching click only bounces the selection to the second tile.
+
+**Proof (live gnome-mahjongg).**  `match_template_all` found the 中 pair at
+score 0 and a dots triple at score 0; the closed loop then removed real pairs
+with the diff-oracle + both-vanish check (e.g. a 發 pair, Moves Left 19→17,
+revealing the 三萬 beneath; and a second pair at a later board). Reusable driver
+committed as `_game_mahjongg.py` (`auto_clear` runs the full loop). Honest limit:
+full-board `step=1` classification is still ~11 s/seed; the intended cheap path
+is the F240 idiom — `find_color_blobs(search=ROI)` to a small band, then match
+within it — which this primitive composes with directly.

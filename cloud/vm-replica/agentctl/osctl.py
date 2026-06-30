@@ -2288,6 +2288,124 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
             "bbox": (tx, ty, tx + pw - 1, ty + ph - 1)}
 
 
+def match_template_all(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
+                       size: tuple[int, int] | None = None,
+                       search: tuple[int, int, int, int] | None = None,
+                       step: int = 1, mask: bytes | None = None,
+                       max_score: int | None = None,
+                       min_sep: tuple[int, int] | None = None,
+                       limit: int = 64) -> list[dict]:
+    """Locate *every* occurrence of a reference patch, not just the best (F241).
+
+    ``match_template`` answers "where is the one closest match" — its arg-min
+    early-abandon is built to find a single winner. But a repeated-element GUI
+    asks the opposite: a mahjongg board has many copies of each tile face, a
+    card layout repeats ranks, an inventory/match-3 grid tiles one icon dozens
+    of times. To pair or count them you need *all* the places an appearance
+    occurs, and the only way to get them from the single-best primitive was to
+    blank each hit and rescan — O(hits) full slides and a caller-managed mask.
+
+    This scores every offset (same SAD-on-luma as ``match_template``, honouring
+    ``mask``/``step``/``search``), keeps those at or below ``max_score``, then
+    applies non-maximum suppression so each real instance yields one hit instead
+    of a cluster of near-identical offsets. Returns a list of
+    ``{x, y, score, bbox}`` (screen coords, centred on each match) sorted by
+    ascending score, at most ``limit`` entries.
+
+    ``max_score`` is the absolute SAD ceiling; when ``None`` it is derived from
+    the best score as ``best + 0.04 * 255 * scored_pixels`` — i.e. tolerate ~4%
+    average luma drift per pixel beyond the closest match, which keeps genuine
+    anti-aliased/shadowed copies while rejecting different faces. ``min_sep``
+    ``(dx, dy)`` is the NMS exclusion box (default the patch size) so two hits
+    cannot overlap. Same costing as ``match_template`` (``search_area x
+    patch_area``); constrain ``search`` to a ``find_color_blobs`` bbox."""
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    if search is None:
+        sx0, sy0, sx1, sy1 = 0, 0, w - 1, h - 1
+    else:
+        sx0, sy0, sx1, sy1 = search
+        sx0, sy0 = max(0, sx0), max(0, sy0)
+        sx1, sy1 = min(w - 1, sx1), min(h - 1, sy1)
+    aw, ah = sx1 - sx0 + 1, sy1 - sy0 + 1
+    if aw < pw or ah < ph:
+        return []
+    pl = bytearray(pw * ph)
+    for i in range(pw * ph):
+        pl[i] = (patch[i * 3] * 299 + patch[i * 3 + 1] * 587
+                 + patch[i * 3 + 2] * 114) // 1000
+    if mask is None:
+        cols = [tuple(range(pw))] * ph
+        scored = pw * ph
+    else:
+        cols = [tuple(px for px in range(pw) if mask[py * pw + px])
+                for py in range(ph)]
+        scored = sum(len(c) for c in cols)
+    al = bytearray(aw * ah)
+    for ry in range(ah):
+        src = ((sy0 + ry) * w + sx0) * 3
+        dst = ry * aw
+        for rx in range(aw):
+            j = src + rx * 3
+            al[dst + rx] = (rgb[j] * 299 + rgb[j + 1] * 587
+                            + rgb[j + 2] * 114) // 1000
+    # Single pass with the same arg-min early-abandon as ``match_template`` so
+    # finding *all* hits costs no more per offset than finding the best one.
+    # When ``max_score`` is absent the ceiling is relative (best + margin); the
+    # abort bound tracks ``best_so_far + margin`` and only ever tightens, so a
+    # true hit (s <= best_final + margin <= best_seen + margin) is never aborted,
+    # while doomed offsets bail after a row or two instead of summing every pixel.
+    # Stale candidates kept while ``best`` was higher are filtered by final ceil.
+    margin = int(0.04 * 255 * scored)
+    fixed_ceil = max_score is not None
+    ceil = max_score
+    hits: list[tuple[int, int, int]] = []
+    best_s: int | None = None
+    for oy in range(0, ah - ph + 1, step):
+        for ox in range(0, aw - pw + 1, step):
+            s = 0
+            abort = ceil if fixed_ceil else (
+                best_s + margin if best_s is not None else None)
+            for py in range(ph):
+                abase = (oy + py) * aw + ox
+                pbase = py * pw
+                for px in cols[py]:
+                    d = al[abase + px] - pl[pbase + px]
+                    s += d if d >= 0 else -d
+                if abort is not None and s > abort:
+                    break
+            else:
+                if best_s is None or s < best_s:
+                    best_s = s
+                if ceil is None or s <= ceil:
+                    hits.append((s, sx0 + ox, sy0 + oy))
+    if best_s is None:
+        return []
+    if not fixed_ceil:
+        ceil = best_s + margin
+        hits = [ht for ht in hits if ht[0] <= ceil]
+    hits.sort(key=lambda t: t[0])
+    if min_sep is None:
+        sepx, sepy = pw, ph
+    else:
+        sepx, sepy = min_sep
+    kept: list[dict] = []
+    for s, tx, ty in hits:
+        cx, cy = tx + pw // 2, ty + ph // 2
+        if any(abs(cx - k["x"]) < sepx and abs(cy - k["y"]) < sepy
+               for k in kept):
+            continue
+        kept.append({"x": cx, "y": cy, "score": s,
+                     "bbox": (tx, ty, tx + pw - 1, ty + ph - 1)})
+        if len(kept) >= limit:
+            break
+    return kept
+
+
 _OCR_ENGINE: "str | None" = None
 
 # Content-addressed OCR cache (F238). tesseract is spawned as a subprocess per
