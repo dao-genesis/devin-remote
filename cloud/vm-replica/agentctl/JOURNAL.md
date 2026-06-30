@@ -9640,3 +9640,52 @@ The closed-loop chain now reads: `react_pixel` (when) · `move_rel` (how much) �
 going) · `consensus_shift` (one shift, or honestly none) · `consensus_affine`
 (the rotational/perspective field) · `flow_residual` (what moves *against* that
 field — the world model's leftover is the foreground). 道法自然.
+
+
+## F269 — an honest double-negative, and a correction to F268
+
+反者道之動 sent me to the friction F268 named for itself: under a pan,
+`flow_residual` reported objects that were byte-identical across trials (not
+bots). F268's entry attributed them to "perspective curvature at the frame
+edges that a first-order affine field under-fits", and proposed F269 = a
+residual gate normalised by local flow magnitude (curvature error should scale
+with flow). I went to measure it before building it (the whole session's
+lesson). The measurement refused both the theory and my own F268 words.
+
+`_probe_f269.py` (live OpenArena pan, 3 trials): bin every seed's residual by the
+local field flow magnitude |field(x,y)|. If curvature were the cause, median
+residual would rise with flow. It did not — median residual is **flat at ~1.5 px
+across all four flow quartiles** (flow 2→46 px), and the field's rms is ~1.5 px
+everywhere. **The affine field fits uniformly well.** So the F268 attribution was
+wrong: the panning false-positives are NOT field curvature, and a flow-normalised
+gate has nothing to normalise. 前識者，道之華也 — including when the 前識 is one's
+own prior entry; the honest record corrects it rather than hiding it.
+
+`_probe_f269b.py`: the one principled gate left — drop residual seeds whose
+*predicted correspondence leaves the captured frame* (boundary mismatch). It
+changed nothing (gated objects == raw objects, all 3 trials): the ~20–44 px flow
+never carries a match out of frame, so boundary loss is not the source either.
+Refuted.
+
+What the data actually shows: the false-positives are **scene-specific and
+deterministic** — a small left-edge cluster @(81,330) reproduced identically in
+all three trials, plus the camera-locked weapon/HUD band. They repeat because the
+pan is identical and the map is static, so the same features mismatch the same
+way every time. There is no clean single-frame geometric signal (flow magnitude,
+frame boundary) that separates them from a real mover — both produce a residual
+cluster. The genuine discriminator the data points to is **temporal**: a real
+mover moves *coherently across consecutive frames*, while a deterministic artifact
+repeats under identical camera motion and flickers under live play. That is a
+multi-frame validation, kin to `lead` (F264, the floor's time-domain estimator),
+not a single-pair gate.
+
+Decision (無為): ship no primitive. `flow_residual` (F268) stands — it correctly
+reports motion relative to the modelled world; its single-pair output simply
+should not be over-trusted under a pan, and the honest next step is temporal
+persistence, to be *probed* (F270) before any claim. The deliverable here is the
+correction and the archived refutations (`_probe_f269.py`, `_probe_f269b.py`),
+which is itself progress: the map of the territory is now true where it was
+wrong. All twenty-five floor friction tests still pass; no code changed.
+
+道法自然：去彼取此 — drop the flower of cleverness, keep the fruit of what the
+measurement actually said.
