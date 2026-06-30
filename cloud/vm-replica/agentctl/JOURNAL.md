@@ -8628,3 +8628,50 @@ recording*: the floor read → solved → filled all **49 empty cells** via
 `click`+`type_unicode`, and gnome-sudoku put up **"Well done, you completed the
 puzzle in 4 minutes!"** — a complete autonomous round. All ten synthetic friction
 tests (F243–F252) still pass, no regressions.
+
+### F253 — detect_cascade: the ragged overlapping pile detect_grid can't see
+
+**Friction.** Driving the floor over a fresh GUI — gnome-aisleriot (Klondike) —
+to widen the practice surface surfaced a shape the read stack had no answer for.
+`detect_grid` fits a *uniform* lattice: the right tool for a ruled board, and it
+even "succeeds" on a tableau (it returns a 7×11 grid by reading the deepest pile's
+overlap strips as rows). But that lattice is a lie. A solitaire tableau is seven
+**piles of overlapping cards** that run to *different* depths — column 1 holds one
+card, column 7 holds seven — and only the **bottom** card of each is fully shown.
+The uniform 7×11 grid's cells mostly land on nothing (a shallow column is felt
+below its single card) or on the wrong thing (a strip of a covered card, not a
+readable face). Every cascade game would then hand-roll its own pile walk, exactly
+the kind of bespoke geometry F-series exists to eat.
+
+**Fix — a new perception primitive, `detect_cascade`.** Rather than a uniform
+lattice, return per column the **face-up (bottom) card** — the thing you actually
+read and click. The temptation is to segment *every* overlapped card, but that is
+theme-brittle: a card back's pattern and a court card's inner frame both fake
+full-width "card-top" lines, and the first cut at this (count dark full-width
+edges) over-counted a 1-card pile as six. The robust invariant is coarser and
+sufficient: **a pile is one contiguous non-felt run** (cards touch, no felt
+between), so its top/bottom are unambiguous from a felt-vs-card test alone, and the
+face-up card is the **bottom `card_h` px** of that run (it is drawn on top, fully
+visible, felt just below it). Depth needn't be segmented at all — piles one card
+apart differ in height by one overlap `pitch` — so `depth ≈ round((height −
+card_h)/pitch) + 1`, and **`card_h`/`pitch` are inferred from the columns
+themselves** (the shortest pile is a lone card → `card_h`; the modal positive step
+between sorted pile heights → `pitch`). A fresh deal needs no magic numbers.
+
+**Lesson (architecture).** `detect_grid` and `detect_cascade` are the two board
+*shapes* the floor now perceives — a **uniform tiling** vs a **ragged overlapping
+stack** — the same way `sample_grid`/`ocr_grid`/`classify_grid` are the three cell
+*contents* (colour / text / sprite). The win came from refusing the brittle "read
+every card" framing and keeping only the invariant that actually holds across
+themes (contiguous run + height→depth), which is why it survived a back-pattern
+and court-card frames that defeated the first attempt.
+
+**Proof.** *Live, default Klondike deal*: `detect_cascade` returns depths
+**`[1,2,3,4,5,6,7]`** — exactly the deal — with `card_h=152`/`pitch=30` inferred,
+and the seven `faceup` boxes land on Q♦/5♣/6♥/8♥/8♠/2♥/3♣ (verified: suit-colour
+read off those boxes is **7/7** correct). *Synthetic* (`_test_f253.py`, no display):
+ragged depths off pile height with `card_h`/`pitch` inferred, empty columns flagged
+`present=False` (no phantom pile), the face-up box pinned to the bottom card
+(bottom hugs the pile bottom, height ≈ `card_h`, starts below the pile top when
+depth>1), `bg` auto-detected, and args validated. All eleven floor friction tests
+pass (F253 plus the prior ten), no regressions.
