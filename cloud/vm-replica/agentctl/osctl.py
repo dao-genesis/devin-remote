@@ -2498,6 +2498,139 @@ def detect_grid(search: tuple[int, int, int, int],
             "xs": xs, "ys": ys}
 
 
+def detect_cascade(search: tuple[int, int, int, int], cols: int,
+                   rgb: bytes | None = None, size: tuple[int, int] | None = None,
+                   xs: list[int] | None = None, bg: tuple[int, int, int] | None = None,
+                   bg_tol: int = 60, fill: float = 0.5, gap: int = 6,
+                   card_h: int | None = None, pitch: int | None = None,
+                   inset: float = 0.18) -> dict | None:
+    """Locate, per column, the **face-up (bottom) card** of an *overlapping*
+    cascade pile — the thing you actually read and click — which
+    :func:`detect_grid`'s uniform lattice cannot represent.
+
+    :func:`detect_grid` answers ruled grids whose cells tile a rectangle at one
+    pitch. A solitaire tableau is the opposite shape: ``cols`` piles of cards
+    that *overlap* and run to *different* depths (one pile holds 1 card, another
+    7), only the bottom card of each fully shown. Forcing a lattice on it yields
+    a phantom ``cols × maxdepth`` grid whose cells mostly miss real cards, so
+    every cascade game hand-rolls its own pile walk.
+
+    Trying to segment *every* overlapped card is theme-brittle (back patterns and
+    court-card frames mimic card-top lines). The robust invariant is coarser and
+    enough: a pile is one **contiguous non-felt run** (cards touch, no felt
+    between), so per column the run's top/bottom are unambiguous, and the
+    **face-up card is the bottom ``card_h`` px** of that run (it is drawn on top,
+    fully visible — felt lies just below it). Depth needn't be segmented: piles
+    that differ by one card differ in height by one overlap ``pitch``, so
+    ``depth ≈ round((height − card_h) / pitch) + 1``. With neither known they are
+    inferred from the columns themselves — ``card_h`` = the shortest pile (a lone
+    face-up card) and ``pitch`` = the modal positive gap between sorted pile
+    heights — so a fresh deal needs no magic numbers.
+
+    Per column returns ``{'present', 'top', 'bottom', 'height', 'depth',
+    'faceup':(x0,y0,x1,y1)}`` (``faceup`` is the bottom card's clickable/readable
+    box); plus top-level ``{'cols', 'xs', 'bg', 'card_h', 'pitch', 'cells':[...]}``
+    — or ``None`` when ``search`` is degenerate. ``xs`` (e.g. straight from
+    :func:`detect_grid`) reuses known column edges, else columns evenly split
+    ``search``; ``bg`` defaults to the modal colour over ``search`` (the felt
+    dominates the area). A row counts as card when ``>= fill`` of an inset centre
+    band differs from ``bg`` by more than ``bg_tol``; runs bridge up to ``gap``
+    felt rows so a thin separator never splits a pile, and the *longest* run per
+    column is taken (a detached status bar / score line is ignored)."""
+    x0, y0, x1, y1 = search
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    if cols < 1:
+        raise ValueError("cols must be >= 1")
+    x0 = max(0, x0); y0 = max(0, y0); x1 = min(x1, w - 1); y1 = min(y1, h - 1)
+    if x1 - x0 < cols or y1 - y0 < 4:
+        return None
+
+    def _px(x: int, y: int) -> tuple[int, int, int]:
+        j = (y * w + x) * 3
+        return rgb[j], rgb[j + 1], rgb[j + 2]
+
+    if xs is None:
+        xs = [x0 + round(c * (x1 - x0) / cols) for c in range(cols + 1)]
+    if len(xs) != cols + 1:
+        raise ValueError("xs must hold cols+1 edges")
+
+    if bg is None:
+        # modal quantised colour over a strided sample: the felt dominates area
+        hist: dict[tuple[int, int, int], int] = {}
+        for y in range(y0, y1 + 1, 4):
+            for x in range(x0, x1 + 1, 4):
+                r, g, b = _px(x, y)
+                q = (r >> 4, g >> 4, b >> 4)
+                hist[q] = hist.get(q, 0) + 1
+        qr, qg, qb = max(hist, key=hist.get)
+        bg = (qr << 4 | 8, qg << 4 | 8, qb << 4 | 8)
+
+    def _unlike_bg(r: int, g: int, b: int) -> bool:
+        return abs(r - bg[0]) + abs(g - bg[1]) + abs(b - bg[2]) > bg_tol
+
+    def _pile(c: int) -> tuple[int, int] | None:
+        # the column's longest contiguous card run (felt rows < gap bridged)
+        a, b = xs[c], xs[c + 1]
+        pad = int((b - a) * inset)
+        bxa, bxb = a + pad, b - pad
+        if bxb - bxa < 2:
+            bxa, bxb = a, b
+        step = max(1, (bxb - bxa) // 24)
+        cols_n = len(range(bxa, bxb, step))
+        runs: list[list[int]] = []
+        miss = gap + 1
+        for y in range(y0, y1 + 1):
+            card = sum(1 for x in range(bxa, bxb, step)
+                       if _unlike_bg(*_px(x, y))) / cols_n >= fill
+            if card:
+                if miss > gap:
+                    runs.append([y, y])
+                else:
+                    runs[-1][1] = y
+                miss = 0
+            else:
+                miss += 1
+        if not runs:
+            return None
+        return tuple(max(runs, key=lambda r: r[1] - r[0]))
+
+    piles = [_pile(c) for c in range(cols)]
+    heights = sorted(p[1] - p[0] + 1 for p in piles if p)
+    if card_h is None:
+        card_h = heights[0] if heights else 0
+    if pitch is None:
+        diffs: dict[int, int] = {}
+        for i in range(1, len(heights)):
+            d = heights[i] - heights[i - 1]
+            if d > 0:
+                diffs[d] = diffs.get(d, 0) + 1
+        pitch = max(diffs, key=diffs.get) if diffs else (card_h or 1)
+    pitch = max(1, pitch)
+
+    cells = []
+    for c in range(cols):
+        p = piles[c]
+        if not p:
+            cells.append({"present": False, "top": None, "bottom": None,
+                          "height": 0, "depth": 0, "faceup": None})
+            continue
+        top, bottom = p
+        height = bottom - top + 1
+        depth = max(1, round((height - card_h) / pitch) + 1)
+        fy0 = max(top, bottom - card_h + 1)
+        cells.append({"present": True, "top": top, "bottom": bottom,
+                      "height": height, "depth": depth,
+                      "faceup": (xs[c], fy0, xs[c + 1], bottom)})
+
+    return {"cols": cols, "xs": xs, "bg": bg,
+            "card_h": card_h, "pitch": pitch, "cells": cells}
+
+
 def locate_change(before: bytes, after: bytes, size: tuple[int, int],
                   tol: int = 12, min_count: int = 30,
                   search: tuple[int, int, int, int] | None = None) -> dict | None:
